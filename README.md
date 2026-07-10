@@ -22,19 +22,42 @@ EIMOS 产品平台「**配置报价管理(CPQ) → 报价管理**」菜单的新
 | `cpq_data/*.json` | 早期模拟数据,**已弃用**(现改为查 `quote_bom.db`),保留仅作参考。 |
 | `open-claude/` | open-claude 引擎副本(Agent 运行时,未修改)。 |
 | `报价业务流程.xlsx` | 报价业务流程说明(需求资料)。 |
-| `serve.py` | 纯标准库静态服务:根路径 `/` 即返回 `报价首页(1).html`,供 EIMOS iframe 内嵌。 |
+| `cpq_suite_server.py` | **一体化服务(推荐)**:单端口(默认 8010)同时提供**静态前端 + 三个智能体 API**。原样 import 三个 agent 模块并各建 Bridge,把 `/agents/quote|config|rule/api/*` 前缀剥掉后直接交给对应模块的 Handler(SSE/历史/设置/导入数据库全部复用原实现,各自的 settings/history 文件不变);其余路径按 serve.py 逻辑发静态文件(`/`→报价首页),并**拒绝下载** settings(API Key)/history/database/.py 等敏感文件。EIMOS iframe 地址不变。 |
+| `serve.py` | 纯静态服务(旧,已被 cpq_suite_server.py 取代,保留可单独用):根路径 `/` 即返回 `报价首页(1).html`,供 EIMOS iframe 内嵌。 |
 
 ## 启动
+
+**方式一(推荐)——一体化服务,一条命令全起**:
+
+```bash
+cd 配置报价CPQ
+open-claude/.venv/Scripts/python cpq_suite_server.py            # 默认端口 8010
+# 或指定端口: open-claude/.venv/Scripts/python cpq_suite_server.py --port 8020
+```
+
+- 首页 `http://127.0.0.1:8010/`(EIMOS iframe 地址不变);三个智能体 API 在同端口
+  `/agents/quote/api/*`(报价)、`/agents/config/api/*`(配置)、`/agents/rule/api/*`(规则)。
+- 页面默认**同源**访问这些前缀;`localStorage['cpq:agentUrl'/'xbom:agentUrl'/'cpq:ruleAgentUrl']` 仍可覆盖成任意地址。
+- 必须用 `open-claude/.venv` 里的 Python(依赖 anthropic/openai/pdfplumber 等都在这个 venv)。
+
+**方式二——四个进程分开跑(旧,仍可用,页面用 file:// 打开时也走这些端口)**:
 
 ```bash
 cd 配置报价CPQ
 python serve.py                 # 静态页面,默认端口 8010 -> http://127.0.0.1:8010/
-python cpq_agent_server.py      # 报价助手 Agent,默认端口 47292(需 ~/.claude/config.json 或环境变量里的 API Key)
+python cpq_agent_server.py      # 报价助手 Agent,默认端口 47292(需 API Key)
 python xbom_agent_server.py     # 配置助手 Agent,默认端口 47294
+python rule_agent_server.py     # 规则助手 Agent,默认端口 47296
 ```
 
-根路径 `http://127.0.0.1:8010/` 直接渲染报价首页(URL 不含中文文件名,便于 iframe)。
-「确认需求解析结果」页默认连 `http://127.0.0.1:47292`,可用 `localStorage['cpq:agentUrl']` 覆盖。
+注意:分开跑时页面是从 serve.py(8010) 加载的、默认仍连同源 `/agents/*`,需要设置
+`localStorage['cpq:agentUrl']='http://127.0.0.1:47292'` 等覆盖(或直接改用方式一)。
+
+## 版本管理(git)
+
+本目录已是独立 git 仓库(main 分支)。`.gitignore` 已排除:各助手 settings(**含 API Key 明文,勿入库**)、
+history 会话、`open-claude/`(它是独立仓库 <https://github.com/tianzj890107/open-claude> agentic 分支,
+克隆本仓库后需自行放到 `open-claude/` 并在其中建 `.venv`)、SQLite WAL 临时文件。
 
 ## 附件识别(PDF / Word / Excel)
 
