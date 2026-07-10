@@ -26,3 +26,7 @@ open-claude/
 # SQLite WAL/共享内存临时文件（运行时产物）
 *.sqlite-shm
 *.sqlite-wal
+
+# Claude Code 本地会话产物（权限白名单等，仅本机）
+.claude/settings.local.json
+.agents/
