@@ -1,0 +1,28 @@
+# ---- 本地运行时产物（不入库）----
+# 注意：git 的 .gitignore 不支持行尾注释，规则必须独占一行
+
+# 模型/参数设置（可能含各 provider 的 API Key 明文，仅本地）
+cpq_settings.json
+xbom_settings.json
+rule_settings.json
+
+# 各助手的本地历史会话（每个会话一个 JSON）
+cpq_history/
+xbom_history/
+rule_history/
+
+# quote_bom.db 的时间戳备份
+*.db.bak_*
+
+# Python / Office 临时产物
+__pycache__/
+*.pyc
+~$*.xlsx
+
+# open-claude 引擎是独立 git 仓库，不并入本仓库
+# 克隆本仓库后需自行放入：git clone https://github.com/tianzj890107/open-claude.git（agentic 分支），并在其内建 .venv
+open-claude/
+
+# SQLite WAL/共享内存临时文件（运行时产物）
+*.sqlite-shm
+*.sqlite-wal

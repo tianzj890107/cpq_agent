@@ -1,0 +1,5546 @@
+{
+  "summary": {
+    "bi_rows": 306,
+    "bi_unique_attributes": 224,
+    "bi_logic_entities": 23,
+    "actual_tables": 18,
+    "actual_columns": 186,
+    "da_fields": 343,
+    "da_realized_physical_fields": 65,
+    "da_unrealized_physical_fields": 63,
+    "bi_attrs_in_da": 163,
+    "bi_attrs_not_in_da": 61,
+    "bi_rows_realized_as_physical_fields": 9,
+    "bi_rows_in_da_but_not_physical": 219,
+    "bi_rows_not_in_da": 78,
+    "bi_rows_directly_equal_actual_column_name": 0
+  },
+  "bi_entity_counts": {
+    "测算基本信息": 43,
+    "产品技术参数": 30,
+    "交期分解信息": 23,
+    "报价基本信息": 22,
+    "价格偏差": 20,
+    "价格发布数据.价格基本信息": 17,
+    "加价规则.规则基本信息": 16,
+    "目的地信息": 14,
+    "产品PV调价参考信息": 14,
+    "价格发布数据.价格发布明细": 14,
+    "产品信息": 13,
+    "整单PV调价参考信息": 12,
+    "产品加价汇总": 9,
+    "加价基础数据.明细信息": 9,
+    "加价基础数据.加价基本信息": 8,
+    "整单加价汇总": 7,
+    "备品备件专用工具": 6,
+    "加价规则.表达式": 6,
+    "付款信息": 5,
+    "物流信息": 5,
+    "价格发布数据.基础加价明细": 5,
+    "加价明细": 4,
+    "加价规则.规则参数信息": 4
+  },
+  "actual_tables": [
+    "CLM_BASE_INFO",
+    "CLM_LINE_INFO",
+    "config_assistant_fields",
+    "config_rule_insert_import_metadata",
+    "da_entity_catalog",
+    "da_fields",
+    "da_metadata",
+    "md_clm_distribution_rule",
+    "md_clm_material_price_rule",
+    "md_clm_pricing_factor",
+    "md_clm_pricing_surcharge_factor",
+    "quote_assistant_fields",
+    "quote_bom_direct_import_metadata",
+    "quote_bom_rule_import_metadata",
+    "rule_assistant_fields",
+    "sample_power_bom_import_metadata",
+    "sample_power_bom_lines",
+    "sample_power_bom_orders"
+  ],
+  "actual_columns": [
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "bom_header_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "bom_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "product_item_id",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "product_item_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "product_item_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "product_item_spec",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "basis_quantity",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "bom_version",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "delete_flag",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "creation_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "created_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "last_update_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_BASE_INFO",
+      "column": "last_updated_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "bom_line_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "seq_num",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_id",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_spec",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_quantity",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "component_item_uom_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "effective_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "disable_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "ref_bom_header_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "creation_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "created_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "last_update_date",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "CLM_LINE_INFO",
+      "column": "last_updated_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "source_row",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "business_object",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "logic_entity",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "physical_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "attribute_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "field_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "is_primary_key",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "config_assistant_fields",
+      "column": "foreign_key",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "config_rule_insert_import_metadata",
+      "column": "source_file",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "config_rule_insert_import_metadata",
+      "column": "imported_table",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "config_rule_insert_import_metadata",
+      "column": "imported_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "config_rule_insert_import_metadata",
+      "column": "imported_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "assistant",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "business_object",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "logic_entity",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "physical_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "field_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "primary_key_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_entity_catalog",
+      "column": "foreign_key_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "assistant",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "source_sheet",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "source_row",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "business_object",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "logic_entity",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "physical_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "attribute_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "field_type",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "field_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "is_primary_key",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_fields",
+      "column": "foreign_key",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_metadata",
+      "column": "source_file",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_metadata",
+      "column": "output_file",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "da_metadata",
+      "column": "sheet_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_metadata",
+      "column": "field_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "da_metadata",
+      "column": "entity_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "md_clm_distribution_rule_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "rule_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "rule_desc",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "rule_expression_view",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "rule_expression",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "updated_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "updated_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "effective_status",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "created_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "created_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "is_deleted",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "deleted_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "deleted_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "effective_start_time",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "effective_end_time",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "corp_id",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "system_version",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_distribution_rule",
+      "column": "owner_org_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "md_clm_material_price_rule_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_classification",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_desc",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_expression",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "rule_expression_view",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "business_class",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "apply_scope",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "expression_mode",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "source_status",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "updated_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "updated_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "effective_status",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "created_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "created_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "is_deleted",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "deleted_by",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "deleted_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "effective_start_time",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "effective_end_time",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "corp_id",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "system_version",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "owner_org_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "source_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_material_price_rule",
+      "column": "source_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "md_clm_pricing_factor_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "linked_price_rule_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "apply_scope",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "surcharge_category",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "effective_start",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "is_active",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "surcharge_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "surcharge_factor",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "factor_value",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "surcharge_amount",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "surcharge_unit",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "source_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_factor",
+      "column": "source_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "md_clm_pricing_surcharge_factor_id",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "linked_price_rule_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "apply_scope",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "surcharge_category",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "effective_start",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "is_active",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "surcharge_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "surcharge_factor",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "factor_value",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "surcharge_amount",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "surcharge_unit",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "extra_unit",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "source_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "md_clm_pricing_surcharge_factor",
+      "column": "source_id",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "quote_assistant_fields",
+      "column": "source_row",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "quote_assistant_fields",
+      "column": "business_object",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "quote_assistant_fields",
+      "column": "logic_entity",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "quote_assistant_fields",
+      "column": "attribute_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "quote_assistant_fields",
+      "column": "field_type",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "quote_bom_direct_import_metadata",
+      "column": "source_db",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "quote_bom_direct_import_metadata",
+      "column": "imported_table",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "quote_bom_direct_import_metadata",
+      "column": "imported_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "quote_bom_direct_import_metadata",
+      "column": "imported_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "quote_bom_rule_import_metadata",
+      "column": "source_db",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "quote_bom_rule_import_metadata",
+      "column": "imported_table",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "quote_bom_rule_import_metadata",
+      "column": "imported_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "quote_bom_rule_import_metadata",
+      "column": "imported_at",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "source_row",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "business_object",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "logic_entity",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "physical_table",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "attribute_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "field_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "is_primary_key",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "rule_assistant_fields",
+      "column": "foreign_key",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_import_metadata",
+      "column": "source_file",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_import_metadata",
+      "column": "order_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_import_metadata",
+      "column": "line_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "order_code",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "local_line_no",
+      "type": "INTEGER",
+      "pk": true
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "parent_local_line_no",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "source_row",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "level",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "level_tag",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "item_type",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "item_code",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "item_name",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "quantity",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_lines",
+      "column": "raw_text",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "order_code",
+      "type": "TEXT",
+      "pk": true
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "sequence_no",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "capacity_kwh",
+      "type": "REAL",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "cooling_method",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "rated_current",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "box_spec",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "low_temp_heating",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "cloud_comm",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "module_count",
+      "type": "INTEGER",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "order_description",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "header_text",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "header_order_label",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "header_description",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "summary_text",
+      "type": "TEXT",
+      "pk": false
+    },
+    {
+      "table": "sample_power_bom_orders",
+      "column": "source_sheet",
+      "type": "TEXT",
+      "pk": false
+    }
+  ],
+  "bi_realized": [
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "产品名称",
+      "示例": "红外热像仪_TIS55+_福禄克",
+      "physical_matches": [
+        {
+          "assistant": "config",
+          "physical_table": "CLM_BASE_INFO",
+          "field_code": "product_item_name"
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "加价明细",
+      "业务属性名称": "序号",
+      "示例": "1/1.1、1.2......",
+      "physical_matches": [
+        {
+          "assistant": "config",
+          "physical_table": "CLM_LINE_INFO",
+          "field_code": "seq_num"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "生效开始时间",
+      "示例": "46174",
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_distribution_rule",
+          "field_code": "effective_start_time"
+        },
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "effective_start_time"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "是否生效",
+      "示例": "是/否",
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_distribution_rule",
+          "field_code": "effective_status"
+        },
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "effective_status"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则分类",
+      "示例": "规则中心/加价规则/集中式加价规则/非标加价",
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "rule_classification"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则名称",
+      "示例": "边框材质加价",
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_distribution_rule",
+          "field_code": "rule_name"
+        },
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "rule_name"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则描述",
+      "示例": null,
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_distribution_rule",
+          "field_code": "rule_desc"
+        },
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "rule_desc"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "序号",
+      "示例": "23",
+      "physical_matches": [
+        {
+          "assistant": "config",
+          "physical_table": "CLM_LINE_INFO",
+          "field_code": "seq_num"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "系统版本号",
+      "示例": "18",
+      "physical_matches": [
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_distribution_rule",
+          "field_code": "system_version"
+        },
+        {
+          "assistant": "rule",
+          "physical_table": "md_clm_material_price_rule",
+          "field_code": "system_version"
+        }
+      ]
+    }
+  ],
+  "bi_in_da_but_not_physical": [
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "测算单号",
+      "示例": "UC202603160001",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "测算类型",
+      "示例": "简易询盘、询盘、投标、合同、合同变更/PO",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "所属组织",
+      "示例": "隆基绿能/高增长市场业务中心/拉美地区部/战略客户部",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "是否调价",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "关联商机编号",
+      "示例": "特变电工国际工程有限公司-PhilippinesEastern VisayasLeyte Island-62.37MW",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "关联合同号",
+      "示例": "LGi-UG-Sal-2406-0242-C012-260619-01",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "合同版本",
+      "示例": "V2",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "客户",
+      "示例": "特变电工国际工程有限公司",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "项目名称",
+      "示例": "项目规模（MW）",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "出厂时间",
+      "示例": "2026/7-2026/9",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "币种",
+      "示例": "美元",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "税率",
+      "示例": "0.13",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "海外税率",
+      "示例": "0.22",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "投标服务费",
+      "示例": "20000",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "采购服务费",
+      "示例": "0",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "Co-marketing费",
+      "示例": "1000",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "检测服务费",
+      "示例": "3000",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "销售代理服务费",
+      "示例": "0.012",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "其他商务费用",
+      "示例": "0.003",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "质量专控要求",
+      "示例": "无/2502SDM1、2502SDM2C、SDM2F-WK",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "是否碳足迹组件",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "是否征收塑料税",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "WEEE",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "质量保险要求",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "商业综合责任险",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "信用保险要求",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "赊销比例（信保）",
+      "示例": "0.3",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "预付款保函要求",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "预付款保函金额比例",
+      "示例": "0.2",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "预付款保函期限（月）",
+      "示例": "3",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "履约保函要求",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "履约保函金额比例",
+      "示例": "0.2",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "履约保函期限（月）",
+      "示例": "6",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "质保保函要求",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "质保保函金额比例",
+      "示例": "0.05",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "质保保函期限（月）",
+      "示例": "12",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "物流测算区域",
+      "示例": "国际/国内",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "贸易术语",
+      "示例": "国内：送货上门/客户自提；\n国际：FOB(装运港船上交货)/DDP(完税后交货)/EXW(工厂交货)......",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "运输类型",
+      "示例": "点对点/按距离",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "物流费用调整",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "物流询价状态",
+      "示例": "未询价",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "测算状态",
+      "示例": "草稿/测算中/测算完成",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "测算基本信息",
+      "业务属性名称": "审核状态",
+      "示例": "未提交/审核中/审核完成",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "发运地类型",
+      "示例": "工厂/仓库",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "发运地",
+      "示例": "中国工厂/荷兰仓/比利时仓",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "发运国家",
+      "示例": "中国",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "起运港",
+      "示例": "上海港",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "目的港国家",
+      "示例": "波兰",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "目的港",
+      "示例": "格但斯坦",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "国家/地区",
+      "示例": "波兰",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "省",
+      "示例": "MaĹopolskie",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "市",
+      "示例": "Warsaw West County",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "区/县",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "邮编",
+      "示例": "GX",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "贸易术语",
+      "示例": "CIF",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "发货工厂",
+      "示例": "咸阳基地",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "目的地信息",
+      "业务属性名称": "距离",
+      "示例": "1000km",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "产品系列",
+      "示例": "Hi-MO7",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "版本扩展",
+      "示例": "V2R",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "方案描述",
+      "示例": "基准",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "单件瓦数(W)",
+      "示例": "620",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "数量（WM）",
+      "示例": "0.8928",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "预计报价",
+      "示例": "0.1030EUR/W",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "折扣",
+      "示例": "0.8",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "产品系列",
+      "示例": "Hi-MO7",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "版本扩展",
+      "示例": "V2R",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "边框尺寸",
+      "示例": "30mm",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "单件瓦数(W)",
+      "示例": "620",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "发运地类型",
+      "示例": "工厂/仓库",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "发运地",
+      "示例": "中国工厂/荷兰仓/比利时仓",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "发运国家",
+      "示例": "中国",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "起运港",
+      "示例": "上海港",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "目的港国家",
+      "示例": "波兰",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "目的港",
+      "示例": "格但斯坦",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "国家/地区",
+      "示例": "波兰",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "省",
+      "示例": "MaĹopolskie",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "市",
+      "示例": "Warsaw West County",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "区/县",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "邮编",
+      "示例": "GX",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "贸易术语",
+      "示例": "CIF",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "发货工厂",
+      "示例": "咸阳基地",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "距离",
+      "示例": "1000km",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "出厂时间",
+      "示例": "46235",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "数量（WM）",
+      "示例": "0.2",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "规格",
+      "示例": "/",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "数量",
+      "示例": "1",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "产品系列",
+      "示例": "Hi-MO7",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "版本扩展",
+      "示例": "V2R",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "方案描述",
+      "示例": "基准",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "组件产品编码",
+      "示例": "80BC2A2058",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "电量",
+      "示例": "140kWh/280kWh",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "冷却方式",
+      "示例": "风冷/液冷",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "附加功能",
+      "示例": "低温加热/云端通讯",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "边框尺寸",
+      "示例": "30mm",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "边框颜色",
+      "示例": "白框 /灰框/黑框",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "边框材质",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "接线盒",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "边框孔数",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "边框膜厚",
+      "示例": "AA10/AA12",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "胶膜方案",
+      "示例": "POE+EVA /双POE",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "胶膜克重",
+      "示例": "双ECA（400+380）",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "连接端子",
+      "示例": "PV-LR5",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "平均线长（米）",
+      "示例": "0.3",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "正极线长（米）",
+      "示例": "0.4",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "负极线长（米）",
+      "示例": "0.2",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "标签",
+      "示例": "防震标签/RFID标签/隆基标准",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "防尘塞",
+      "示例": "无/防尘塞",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "电流分档",
+      "示例": "中间档位按0.1A分档/中间档位按0.15A分档/中间档位按0.2A分档",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "良率损失",
+      "示例": "0.02",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "EL全检要求",
+      "示例": "EL全检，接受不高于1%漏检不翻箱",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "运输保障方案",
+      "示例": "加厚包装/标准运输",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "重量",
+      "示例": "33.5",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "付款信息",
+      "业务属性名称": "阶段名称",
+      "示例": "预付款/备料款/发货款/到货款/验收款/质保金",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "付款信息",
+      "业务属性名称": "资金占用天数",
+      "示例": "60",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "付款信息",
+      "业务属性名称": "计划收付款比例",
+      "示例": "0.3",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "付款信息",
+      "业务属性名称": "回款维度",
+      "示例": "合同/批次",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "付款信息",
+      "业务属性名称": "货前款",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "物流信息",
+      "业务属性名称": "物流计算类型",
+      "示例": "优选/指定",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "物流信息",
+      "业务属性名称": "物流类型",
+      "示例": "快递运输/陆运运输/铁运运输/水运运输",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "物流信息",
+      "业务属性名称": "车型",
+      "示例": "9.6米",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "物流信息",
+      "业务属性名称": "最大可进车型",
+      "示例": "13米",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "物流信息",
+      "业务属性名称": "柜型",
+      "示例": "20GP/40HQ",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "单件瓦数(W)",
+      "示例": "620",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "出厂时间",
+      "示例": "46235",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "数量（WM）",
+      "示例": "0.8928",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "报价",
+      "示例": "82",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "EXW加价",
+      "示例": "1.312",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "EXW价格",
+      "示例": "80.688",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "建议报价",
+      "示例": "70.8406",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "建议报价加价",
+      "示例": "1.283",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "地区部指导价",
+      "示例": "69.5576",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "地区部价格底线",
+      "示例": "68.1937",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "地区部价格底线偏差",
+      "示例": "12.4943",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "地区部价格底线偏差额",
+      "示例": "857.4588204",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "地区部价格底线偏差率",
+      "示例": "0.1832",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "BG底价",
+      "示例": "68.1937",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "BG底价偏差",
+      "示例": "12.4943",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "BG底价偏差额",
+      "示例": "857.4588204",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "BG底价偏差率",
+      "示例": "0.1832",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "价格组织",
+      "示例": "集中式事业群",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "价格偏差",
+      "业务属性名称": "价格生效日期",
+      "示例": "20260622",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "加价明细",
+      "业务属性名称": "加价项名称",
+      "示例": "基础加价/质量专控要求加价、碳足迹加价、防尘塞加价",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "加价明细",
+      "业务属性名称": "EXW加价",
+      "示例": "0.012",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "加价明细",
+      "业务属性名称": "建议报价加价",
+      "示例": "0.012",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "基础加价",
+      "示例": "0.0241",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "非标加价",
+      "示例": "0.005",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "财务商务加价",
+      "示例": "0.2107",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "物流加价",
+      "示例": "0.1211",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "物流费用调整",
+      "示例": "0",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "其他加价",
+      "示例": "1.6013",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单加价汇总",
+      "业务属性名称": "加价合计",
+      "示例": "1.9622",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "单件瓦数(W)",
+      "示例": "620",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "基础加价",
+      "示例": "0.0241",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "非标加价",
+      "示例": "0.005",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "财务商务加价",
+      "示例": "0.2107",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "物流加价",
+      "示例": "0.1211",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "物流费用调整",
+      "示例": "0",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "其他加价",
+      "示例": "1.6013",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品加价汇总",
+      "业务属性名称": "加价合计",
+      "示例": "1.9622",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "建议报价加价",
+      "示例": "1.283",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "单件瓦数(W)",
+      "示例": "620",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "建议报价加价",
+      "示例": "1.283",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "单据编号",
+      "示例": "MU2026052701",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "应用范围",
+      "示例": "集中式事业群",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "加价项分类",
+      "示例": "非标加价项",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "是否有新增项",
+      "示例": "是/否",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "附件",
+      "示例": "《关于2026年第6次签批的组件订单非标项目价格差异指导方案的通知》.pdf",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.加价基本信息",
+      "业务属性名称": "审核状态",
+      "示例": "审核完成",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "加价项名称",
+      "示例": "连接端子加价",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "加价因子",
+      "示例": "连接端子",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "加价因子取值",
+      "示例": "EVO2A/EVO2/PVLR5",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "人民币加价",
+      "示例": "586",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "人民币加价单位",
+      "示例": "分/块；分/瓦",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "美元加价",
+      "示例": "87.97",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "美元加价单位",
+      "示例": "美分/块；分/瓦",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "欧元加价",
+      "示例": "/",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价基础数据",
+      "逻辑实体": "加价基础数据.明细信息",
+      "业务属性名称": "欧元加价单位",
+      "示例": "/",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "标签",
+      "示例": "批次类/产品类",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "应用范围",
+      "示例": "集中式事业群",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则参数信息",
+      "业务属性名称": "名称",
+      "示例": "/",
+      "da_candidates": [
+        {
+          "assistant": "rule",
+          "physical_table": "bd_clm_feature",
+          "field_code": "name"
+        }
+      ]
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "名称",
+      "示例": "边框材质加价",
+      "da_candidates": [
+        {
+          "assistant": "rule",
+          "physical_table": "bd_clm_feature",
+          "field_code": "name"
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价单号",
+      "示例": "QUO202607020003",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价单名称",
+      "示例": "三一硅能赞比亚项目-报价单",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "关联测算单号",
+      "示例": "UC202607020006",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价形式",
+      "示例": "1.综合单价\n2.组件、物流\n3.组件、备件、物流\n4.组件",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价类型",
+      "示例": "询盘报价/多轮子投标",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价模板",
+      "示例": "隆基报价单中文版-综合单价",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价有效天数",
+      "示例": "14",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "是否用印",
+      "示例": "是",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "关联商机编号",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "币种",
+      "示例": "人民币",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "签约主体",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "签约主体地址",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "签约主体社会信用代码",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价联系人",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价联系人电话",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价联系人部门",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "申请日期",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "客户",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "客户地址",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "客户联系人",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "客户联系方式",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "报价单",
+      "逻辑实体": "报价基本信息",
+      "业务属性名称": "报价说明",
+      "示例": null,
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "所属组织",
+      "示例": "隆基绿能/集中式事业群",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "应用范围",
+      "示例": "隆基绿能/集中式事业群",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "产品系列",
+      "示例": "Hi-MO7",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "产品型号",
+      "示例": "LR8-66HGD",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "版本扩展",
+      "示例": "V2R",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "币种",
+      "示例": "人民币/美元/欧元",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.基础加价明细",
+      "业务属性名称": "加价项名称",
+      "示例": "产品类型加价",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        },
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.基础加价明细",
+      "业务属性名称": "人民币加价",
+      "示例": "3",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.基础加价明细",
+      "业务属性名称": "美元加价",
+      "示例": "0.46",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.基础加价明细",
+      "业务属性名称": "欧元加价",
+      "示例": "0.39",
+      "da_candidates": [
+        {
+          "assistant": "quote",
+          "physical_table": null,
+          "field_code": null
+        }
+      ]
+    }
+  ],
+  "bi_not_in_da": [
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "数量（块）",
+      "示例": "1400"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "赠送功率（W/块）",
+      "示例": null
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "备件数量（W）",
+      "示例": null
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "赠品数量（W）",
+      "示例": null
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品信息",
+      "业务属性名称": "产品大类",
+      "示例": "常规产品/库存品"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "备件数量（W）",
+      "示例": "620"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "交期分解信息",
+      "业务属性名称": "赠品数量（W）",
+      "示例": "620"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "类型",
+      "示例": "备品/备件/专用工具"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "单位",
+      "示例": "台"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "备品备件专用工具",
+      "业务属性名称": "成本价",
+      "示例": "513.27"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "组件类型",
+      "示例": "双面/单面"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "光伏玻璃",
+      "示例": null
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品技术参数",
+      "业务属性名称": "其他非标加价（USD cent/W）",
+      "示例": "0"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "报价调价",
+      "示例": "82"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价EXW加价",
+      "示例": "1.312"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价EXW价格",
+      "示例": "80.688"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线",
+      "示例": "68.1937"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差",
+      "示例": "12.4943"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差额",
+      "示例": "857.4588204"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差率",
+      "示例": "0.1832"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价BG底价",
+      "示例": "68.1937"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差",
+      "示例": "12.4943"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差额",
+      "示例": "857.4588204"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "整单PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差率",
+      "示例": "0.1832"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "报价调价",
+      "示例": "82"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价EXW加价",
+      "示例": "1.312"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价EXW价格",
+      "示例": "80.688"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线",
+      "示例": "68.1937"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差",
+      "示例": "12.4943"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差额",
+      "示例": "857.4588204"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价地区部价格底线偏差率",
+      "示例": "0.1832"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价BG底价",
+      "示例": "68.1937"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差",
+      "示例": "12.4943"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差额",
+      "示例": "857.4588204"
+    },
+    {
+      "业务对象": "价格测算单",
+      "逻辑实体": "产品PV调价参考信息",
+      "业务属性名称": "调价BG底价偏差率",
+      "示例": "0.1832"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则业务对象",
+      "示例": "集中式BG测算单"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "业务分类",
+      "示例": "价格测算/物流测算/PV调价测算"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则引用函数",
+      "示例": "查询数据库单一值"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "规则引用属性",
+      "示例": "集中式BG测算产品信息.边框材质"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "状态",
+      "示例": "已发布"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "生效时间",
+      "示例": "45561"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "失效时间",
+      "示例": "46037"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "全局变量",
+      "示例": null
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则基本信息",
+      "业务属性名称": "测算入参",
+      "示例": null
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则参数信息",
+      "业务属性名称": "配置类型",
+      "示例": "输出参数/全局参数/输入参数"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则参数信息",
+      "业务属性名称": "参数类型",
+      "示例": "数组/结构体/整数/浮点数/字符串"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.规则参数信息",
+      "业务属性名称": "编码",
+      "示例": "/"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "编码",
+      "示例": "C20240927004250700001"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "描述",
+      "示例": null
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "规则条件",
+      "示例": "1"
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "表达式内容",
+      "示例": null
+    },
+    {
+      "业务对象": "加价规则",
+      "逻辑实体": "加价规则.表达式",
+      "业务属性名称": "表达式内容模式",
+      "示例": "拖拽模式/专家模式/数据查询向导模式"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "价格发布编号",
+      "示例": "JMB-260624001"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "产品大类",
+      "示例": "常规产品"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "版本号",
+      "示例": "UBGP2026062402"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "文号",
+      "示例": "隆集价字【2026】第11号"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "生效时间",
+      "示例": "46197"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "发布类型",
+      "示例": "全量发布/增量发布"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "汇率批次",
+      "示例": "2026年6月加价汇率录入"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "线下已审批/仅汇率调整",
+      "示例": "是/仅汇率调整"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "已审批文件",
+      "示例": null
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "发布组织",
+      "示例": "隆基绿能/集中式事业群"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "发布时间",
+      "示例": "2026-06-26 09:22:24"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "发布状态",
+      "示例": "是"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "审批状态",
+      "示例": "审批完成"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "生效状态",
+      "示例": "已生效"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "是否二次发布",
+      "示例": "否"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格基本信息",
+      "业务属性名称": "价格政策说明",
+      "示例": null
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "区域类型",
+      "示例": "非双反区/其他受限区域-台湾"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "价格类型",
+      "示例": "BG价格底线"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "电池产品资源需求",
+      "示例": "海外电池"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "组件产品资源需求",
+      "示例": "马来工厂组件"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "产品大类",
+      "示例": "常规产品"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "计价单位",
+      "示例": "分/瓦"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "是否含税",
+      "示例": "含税/不含税"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "月份",
+      "示例": "2026 - 06"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.价格发布明细",
+      "业务属性名称": "价格",
+      "示例": "88"
+    },
+    {
+      "业务对象": "价格发布数据",
+      "逻辑实体": "价格发布数据.基础加价明细",
+      "业务属性名称": "加价说明",
+      "示例": "产品类型加价 HiMO9 V3 (LR9-66HYD)版型在HiMO9 V2 (LR8-66HYD)版型基础上加价"
+    }
+  ],
+  "bi_direct_column_name": [],
+  "da_physical_not_created": [
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "主键ID",
+      "field_code": "md_clm_material_cost_cnf_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "物料id",
+      "field_code": "material_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "物料编码",
+      "field_code": "material_code"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "物料名称",
+      "field_code": "material_name"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "生效日期",
+      "field_code": "price_validity_date"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "失效日期",
+      "field_code": "price_expiration_date"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "材料单价",
+      "field_code": "material_unit_price"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "直接人工单价",
+      "field_code": "direct_labor_unit_price"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "间接人工单价",
+      "field_code": "indirect_labor_unit_price"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "机器费用",
+      "field_code": "machine_cost"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "其他制费",
+      "field_code": "other_charge"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "更新者",
+      "field_code": "updated_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "更新时间",
+      "field_code": "updated_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "是否生效",
+      "field_code": "effective_status"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "创建者",
+      "field_code": "created_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "创建时间",
+      "field_code": "created_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "是否删除",
+      "field_code": "is_deleted"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "删除者",
+      "field_code": "deleted_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "删除时间",
+      "field_code": "deleted_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "生效开始时间",
+      "field_code": "effective_start_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "生效结束时间",
+      "field_code": "effective_end_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "企业ID",
+      "field_code": "corp_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "系统版本号",
+      "field_code": "system_version"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料成本配置-\nmd_clm_material_cost_cnf",
+      "physical_table": "md_clm_material_cost_cnf",
+      "attribute_name": "数据所属组织",
+      "field_code": "owner_org_code"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "主键ID",
+      "field_code": "md_clm_material_feature_cnf_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "物料成本配置ID",
+      "field_code": "md_clm_material_cost_cnf_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "物料id",
+      "field_code": "material_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "物料编码",
+      "field_code": "material_code"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "物料名称",
+      "field_code": "material_name"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "特征",
+      "field_code": "features"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "特征值",
+      "field_code": "feature_value"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "更新者",
+      "field_code": "updated_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "更新时间",
+      "field_code": "updated_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "是否生效",
+      "field_code": "effective_status"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "创建者",
+      "field_code": "created_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "创建时间",
+      "field_code": "created_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "是否删除",
+      "field_code": "is_deleted"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "删除者",
+      "field_code": "deleted_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "删除时间",
+      "field_code": "deleted_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "生效开始时间",
+      "field_code": "effective_start_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "生效结束时间",
+      "field_code": "effective_end_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "企业ID",
+      "field_code": "corp_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "系统版本号",
+      "field_code": "system_version"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "物料特征配置-md_clm_material_feature_cnf",
+      "physical_table": "md_clm_material_feature_cnf",
+      "attribute_name": "数据所属组织",
+      "field_code": "owner_org_code"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "主键ID",
+      "field_code": "bd_clm_feature_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "名称",
+      "field_code": "name"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "数据值类型",
+      "field_code": "value_type_enum"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "数值约束",
+      "field_code": "value_constraint"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "数值单位",
+      "field_code": "unit"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "规则描述",
+      "field_code": "desc"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "更新者",
+      "field_code": "updated_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "更新时间",
+      "field_code": "updated_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "是否生效",
+      "field_code": "effective_status"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "创建者",
+      "field_code": "created_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "创建时间",
+      "field_code": "created_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "是否删除",
+      "field_code": "is_deleted"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "删除者",
+      "field_code": "deleted_by"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "删除时间",
+      "field_code": "deleted_at"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "生效开始时间",
+      "field_code": "effective_start_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "生效结束时间",
+      "field_code": "effective_end_time"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "企业ID",
+      "field_code": "corp_id"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "系统版本号",
+      "field_code": "system_version"
+    },
+    {
+      "assistant": "rule",
+      "business_object": "规则配置",
+      "logic_entity": "基础特征库-\nbd_clm_feature",
+      "physical_table": "bd_clm_feature",
+      "attribute_name": "数据所属组织",
+      "field_code": "owner_org_code"
+    }
+  ]
+}

@@ -1,0 +1,1887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>确认需求解析结果 - 报价单工作流程</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.24.0/dist/tabler-icons.min.css">
+  <style>
+    :root {
+      --color-primary: #6366f1;
+      --color-secondary: #8b5cf6;
+      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-success: #10B981;
+      --color-warning: #f59e0b;
+      --color-danger: #ef4444;
+      --bg-page: #ffffff;
+      --bg-secondary: #f7f7f8;
+      --bg-tertiary: #ececf1;
+      --border-color: #e7e7ea;
+      --border-secondary: #d9d9e3;
+      --text-primary: #1f2023;
+      --text-secondary: #62636d;
+      --text-tertiary: #9a9ba6;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 12px;
+      --space-lg: 16px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'PingFang SC', -apple-system, Inter, sans-serif;
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .main-container {
+      display: grid;
+      grid-template-columns: 56px 460px 1fr;
+      height: 100vh;
+      overflow: hidden;
+      border: 0.5px solid var(--border-color);
+    }
+
+    /* ---------- 左侧导航 ---------- */
+    .nav-panel {
+      background: var(--bg-secondary);
+      border-right: 0.5px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 10px;
+      gap: 5px;
+      width: 56px;
+    }
+    .nav-logo {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: var(--gradient-ai);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 8px; cursor: pointer;
+    }
+    .nav-logo svg { width: 22px; height: 22px; }
+    .nav-divider { width: 32px; height: 1px; background: var(--border-color); margin: var(--space-sm) 0; }
+    .nav-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: background 0.15s;
+      color: var(--text-secondary); position: relative;
+    }
+    .nav-icon:hover, .nav-icon.active { background: var(--bg-tertiary); color: var(--color-primary); }
+    .nav-icon .ti { font-size: 20px; }
+    .nav-icon .nav-tooltip {
+      position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+      margin-left: 8px; padding: 6px 10px; background: #1f2023; color: white;
+      font-size: 12px; border-radius: 6px; white-space: nowrap;
+      opacity: 0; visibility: hidden; transition: opacity 0.15s; pointer-events: none; z-index: 100;
+    }
+    .nav-icon:hover .nav-tooltip { opacity: 1; visibility: visible; }
+
+    /* ---------- 中间对话区域 ---------- */
+    .chat-panel {
+      background: var(--bg-page);
+      border-right: 0.5px solid var(--border-color);
+      display: flex; flex-direction: column;
+      height: 100vh; overflow: hidden;
+    }
+    .chat-header {
+      padding: 14px 16px;
+      border-bottom: 0.5px solid var(--border-color);
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .chat-title {
+      font-size: 14px; font-weight: 600; color: var(--text-primary);
+      display: flex; align-items: center; gap: var(--space-sm);
+    }
+    .chat-title .ti { font-size: 20px; color: var(--color-secondary); }
+    .ai-badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 9999px;
+      background: var(--gradient-ai); color: white;
+    }
+    .conn-status { font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 5px; }
+    .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); }
+    .conn-dot.ok { background: var(--color-success); }
+    .conn-dot.err { background: var(--color-danger); }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 3px; }
+
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .message { display: flex; flex-direction: column; max-width: 92%; }
+    .message-ai {
+      align-self: flex-start;
+      background: var(--bg-secondary);
+      border: 0.5px solid var(--border-color);
+      border-radius: 14px; border-bottom-left-radius: 4px;
+      padding: 11px 14px;
+    }
+    .message-label {
+      font-size: 11px; color: var(--color-secondary); font-weight: 500;
+      margin-bottom: var(--space-xs);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .message-label::before {
+      content: ''; width: 6px; height: 6px;
+      background: var(--gradient-ai); border-radius: 50%; flex-shrink: 0;
+    }
+    .message-text { font-size: 14px; color: var(--text-primary); line-height: 1.7; word-break: break-word; }
+    .message-text p { margin: 4px 0; }
+    .message-text ul, .message-text ol { margin: 4px 0 4px 20px; }
+    .message-text code {
+      background: var(--bg-tertiary); border-radius: 4px;
+      padding: 1px 5px; font-size: 12.5px;
+      font-family: Consolas, Menlo, monospace;
+    }
+    .message-user {
+      align-self: flex-end;
+      background: var(--gradient-ai); color: white;
+      border-radius: 14px; border-bottom-right-radius: 4px;
+      padding: 11px 14px;
+    }
+    .message-user .message-label { color: rgba(255,255,255,0.85); flex-direction: row-reverse; }
+    .message-user .message-label::before { background: rgba(255,255,255,0.7); }
+    .message-user .message-text { color: white; white-space: pre-wrap; }
+    .message-error .message-text { color: var(--color-danger); }
+
+    .tool-activity {
+      align-self: flex-start;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-tertiary);
+      padding: 2px 6px;
+    }
+    .tool-activity .ti { font-size: 14px; }
+
+    .typing-dots { display: inline-flex; gap: 3px; align-items: center; }
+    .typing-dots i {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--text-tertiary); display: inline-block;
+      animation: blink 1.2s infinite;
+    }
+    .typing-dots i:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots i:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 35% { opacity: 1; } }
+
+    .chat-input-area { padding: 10px 16px; border-top: 0.5px solid var(--border-color); flex-shrink: 0; }
+    .chat-input-wrapper { display: flex; gap: var(--space-sm); align-items: center; }
+    .chat-input {
+      flex: 1; padding: 9px 10px;
+      border: 0.5px solid var(--border-secondary);
+      border-radius: 11px; background: var(--bg-secondary);
+      font-size: 14px; font-family: inherit; resize: none; outline: none;
+    }
+    .chat-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+    .chat-send {
+      width: 38px; height: 38px; border: none; border-radius: 11px;
+      background: var(--gradient-ai); color: white; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .chat-send:disabled { opacity: 0.45; cursor: not-allowed; }
+    .chat-send .ti { font-size: 18px; color: white; }
+
+    /* ---------- 右侧区域 ---------- */
+    .right-panel { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg-page); }
+    .project-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px; background: var(--bg-page);
+      border-bottom: 0.5px solid var(--border-color); flex-shrink: 0;
+    }
+    .project-selector { display: flex; align-items: center; gap: 8px; }
+    .project-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+    .project-name { font-size: 14px; font-weight: 500; }
+    .project-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); }
+    .status-dot { width: 8px; height: 8px; background: var(--color-success); border-radius: 50%; }
+
+    .progress-bar {
+      display: flex; align-items: center;
+      background: var(--bg-page); padding: 14px 16px;
+      border-bottom: 0.5px solid var(--border-color);
+      flex-shrink: 0; overflow-x: auto;
+    }
+    .progress-step { display: flex; align-items: center; flex-shrink: 0; cursor: default; }
+    .progress-step.clickable { cursor: pointer; }
+    .progress-step.clickable:hover .step-node { transform: scale(1.08); }
+    .progress-step.clickable:hover .step-label { color: var(--color-primary); }
+    .step-node {
+      width: 30px; height: 30px; border-radius: 9999px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-size: 13px; flex-shrink: 0; transition: transform 0.15s;
+    }
+    .step-node.completed { background: var(--color-primary); color: white; }
+    .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(99,102,241,0.15); }
+    .step-node.pending { background: var(--bg-tertiary); color: var(--text-tertiary); border: 0.5px solid var(--border-color); }
+    /* 正在查看（非当前步骤）的节点：描边提示 */
+    .step-node.viewing { box-shadow: 0 0 0 3px rgba(139,92,246,0.35); }
+    .step-node .ti { font-size: 15px; }
+    .step-label { margin-left: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+    .progress-step.active .step-label { color: var(--color-primary); font-weight: 600; }
+
+    /* 聊天快捷动作条 */
+    .quick-actions {
+      display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px;
+    }
+    .quick-action-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 11px; border-radius: 9999px; font-size: 12.5px; font-weight: 500; cursor: pointer;
+      border: 0.5px solid var(--border-secondary); background: var(--bg-page); color: var(--text-primary);
+      transition: all 0.15s;
+    }
+    .quick-action-btn:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); background: var(--bg-secondary); }
+    .quick-action-btn.primary { background: var(--gradient-ai); color: white; border: none; }
+    .quick-action-btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
+    .quick-action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .quick-action-btn .ti { font-size: 14px; }
+    /* Agent 动态建议动作（气泡内） */
+    .msg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+    /* 查看历史步骤时的提示条 */
+    .view-bar {
+      display: none; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 8px 16px; background: rgba(139,92,246,0.07);
+      border-top: 0.5px solid var(--border-color); flex-shrink: 0; font-size: 12.5px;
+    }
+    .view-bar.show { display: flex; }
+    .view-bar .vb-text { color: var(--color-secondary); display: flex; align-items: center; gap: 6px; }
+    .view-bar .vb-actions { display: flex; gap: 8px; }
+    .progress-line { width: 14px; height: 2px; background: var(--border-color); margin: 0 4px; flex-shrink: 0; }
+    .progress-line.completed { background: var(--color-primary); }
+
+    .results-area {
+      background: var(--bg-page);
+      border: 0.5px solid var(--border-color);
+      display: flex; flex-direction: column;
+      flex: 1; overflow: hidden;
+      margin: var(--space-lg);
+      border-radius: var(--radius-lg);
+    }
+    .results-header {
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 0.5px solid var(--border-color);
+      display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+    }
+    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); }
+    .section-badge { font-size: 11px; padding: 3px 10px; border-radius: 9999px; font-weight: 500; }
+    .badge-active { background: rgba(99, 102, 241, 0.12); color: var(--color-primary); }
+    .results-content { padding: var(--space-lg); flex: 1; overflow-y: auto; }
+
+    .panel-placeholder {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; color: var(--text-tertiary); padding: 60px 20px; text-align: center;
+    }
+    .panel-placeholder .ti { font-size: 34px; color: var(--border-secondary); }
+
+    /* 可折叠区块 */
+    .collapse-block {
+      background: var(--bg-secondary);
+      border: 0.5px solid var(--border-color);
+      border-radius: var(--radius-md);
+      margin-bottom: 10px;
+    }
+    .collapse-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; cursor: pointer; user-select: none;
+    }
+    .collapse-header:hover { background: var(--bg-tertiary); }
+    .collapse-title {
+      font-size: 14px; font-weight: 600; color: var(--text-primary);
+      display: flex; align-items: center; gap: var(--space-sm);
+    }
+    .collapse-title .num {
+      min-width: 24px; height: 24px; padding: 0 6px; border-radius: 6px;
+      background: var(--gradient-ai); color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 600;
+    }
+    .readonly-chip {
+      font-size: 10px; color: var(--text-tertiary);
+      border: 0.5px solid var(--border-secondary); border-radius: 9999px;
+      padding: 1px 7px; font-weight: 400;
+    }
+    .collapse-arrow { font-size: 16px; color: var(--text-tertiary); transition: transform 0.2s; }
+    .collapse-block.open .collapse-arrow { transform: rotate(180deg); }
+    .collapse-content {
+      display: none; padding: 8px 14px 12px 14px;
+      border-top: 0.5px solid var(--border-color); background: white;
+      overflow-x: auto;
+    }
+    .collapse-block.open .collapse-content { display: block; }
+
+    /* 子步骤状态徽标 */
+    .sec-status {
+      font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 9999px; margin-left: 2px;
+    }
+    .sec-status.active { background: rgba(99,102,241,0.14); color: var(--color-primary); }
+    .sec-status.done { background: rgba(16,185,129,0.14); color: var(--color-success); }
+    /* 无依据的推测值：琥珀色高亮，让用户一眼看出哪些是猜的 */
+    .info-table input.guessed, .list-table input.guessed, .info-table span.guessed, .list-table td.guessed {
+      background: #FEF3C7; border-color: var(--color-warning); color: #92400e; font-weight: 500;
+    }
+    .sec-source {
+      font-size: 11px; color: var(--text-tertiary); margin: 2px 0 8px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .sec-source .ti { font-size: 13px; color: var(--color-secondary); }
+
+    /* 数据来源 / 操作轨迹（比原「更新工作台」更具体） */
+    .tool-activity.trace { color: var(--text-secondary); background: var(--bg-secondary);
+      border: 0.5px solid var(--border-color); border-radius: 8px; padding: 5px 9px; gap: 7px; }
+    .tool-activity.trace .ti { color: var(--color-secondary); }
+    .tool-activity.trace .ti-check { color: var(--color-success); }
+    .tool-activity.trace .src { color: var(--text-tertiary); }
+
+    /* 聊天附件 */
+    .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .attach-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--bg-secondary); border: 0.5px solid var(--border-secondary);
+      border-radius: 9999px; padding: 3px 8px; font-size: 12px; color: var(--text-secondary);
+    }
+    .attach-chip .ti { font-size: 13px; color: var(--color-secondary); }
+    .attach-chip .rm { cursor: pointer; color: var(--text-tertiary); font-size: 13px; }
+    .attach-chip .rm:hover { color: var(--color-danger); }
+    .chat-attach-btn {
+      width: 38px; height: 38px; border: 0.5px solid var(--border-secondary); border-radius: 11px;
+      background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .chat-attach-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .chat-attach-btn .ti { font-size: 18px; }
+
+    /* 键值表单 */
+    .info-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .info-table tr { border-bottom: 1px solid var(--border-color); }
+    .info-table tr:last-child { border-bottom: none; }
+    .info-table .label {
+      width: 150px; padding: var(--space-sm) var(--space-md);
+      color: var(--text-secondary); font-weight: 500;
+      vertical-align: top; white-space: nowrap;
+    }
+    .info-table .label .required { color: #ef4444; margin-right: 2px; }
+    .info-table .value { padding: var(--space-sm) var(--space-md); color: var(--text-primary); }
+    .info-table input, .info-table select, .info-table textarea {
+      width: 100%; border: 1px solid var(--border-color); border-radius: 6px;
+      padding: 6px 10px; font-size: 13px; font-family: inherit;
+      color: var(--text-primary); background: white; outline: none;
+    }
+    .info-table input:focus, .info-table select:focus, .info-table textarea:focus {
+      border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+    }
+    .info-table textarea { resize: vertical; min-height: 48px; }
+
+    /* 列表表格 */
+    .list-table { width: 100%; border-collapse: collapse; font-size: 13px; border: 0.5px solid var(--border-color); }
+    .list-table thead { background: var(--bg-secondary); }
+    .list-table th {
+      padding: 8px 10px; text-align: left; font-weight: 600;
+      color: var(--text-secondary); border-bottom: 0.5px solid var(--border-color);
+      white-space: nowrap; font-size: 12px;
+    }
+    .list-table td { padding: 6px 10px; border-bottom: 0.5px solid var(--border-color); vertical-align: middle; white-space: nowrap; }
+    .list-table tbody tr:last-child td { border-bottom: none; }
+    .list-table tbody tr:hover { background: var(--bg-secondary); }
+    .list-table input {
+      min-width: 70px; width: 100%;
+      border: 1px solid var(--border-color); border-radius: 4px;
+      padding: 4px 6px; font-size: 13px; font-family: inherit;
+      color: var(--text-primary); background: white; outline: none;
+    }
+    .list-table input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1); }
+    .btn-delete {
+      padding: 4px 6px; background: transparent; color: var(--text-tertiary);
+      border: none; border-radius: 4px; cursor: pointer; transition: all 0.15s;
+    }
+    .btn-delete:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+    .btn-delete .ti { font-size: 14px; }
+    .list-toolbar { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+    .list-add-link {
+      display: inline-flex; align-items: center; gap: 4px;
+      color: var(--color-primary); font-size: 13px; cursor: pointer; text-decoration: none;
+    }
+    .list-add-link:hover { color: var(--color-secondary); }
+    .list-add-link .ti { font-size: 14px; }
+    .list-footer-info { font-size: 12px; color: var(--text-tertiary); }
+    .list-footer-info .count { color: var(--text-secondary); font-weight: 500; }
+    .table-footer-note { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
+
+    /* 文档（报价单） */
+    .doc-body { font-size: 13.5px; line-height: 1.8; color: var(--text-primary); padding: 4px 2px; }
+    .doc-body h1 { font-size: 19px; margin: 10px 0; text-align: center; }
+    .doc-body h2 { font-size: 15px; margin: 14px 0 6px; border-left: 3px solid var(--color-primary); padding-left: 8px; }
+    .doc-body h3 { font-size: 14px; margin: 10px 0 4px; }
+    .doc-body p { margin: 4px 0; }
+    .doc-body hr { border: none; border-top: 1px solid var(--border-color); margin: 10px 0; }
+    .doc-body table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 8px 0; }
+    .doc-body th, .doc-body td { border: 0.5px solid var(--border-secondary); padding: 6px 8px; text-align: left; }
+    .doc-body th { background: var(--bg-secondary); font-weight: 600; }
+    .doc-body ul, .doc-body ol { margin: 4px 0 4px 22px; }
+
+    /* 底部导航 */
+    .bottom-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px;
+      border-top: 0.5px solid var(--border-color); flex-shrink: 0;
+    }
+    .bottom-bar .btn {
+      padding: 9px 20px; font-size: 14px; font-weight: 500;
+      border-radius: 10px; min-width: 110px; justify-content: center;
+      transition: all 0.15s;
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+    }
+    .bottom-bar .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-secondary { background: var(--bg-page); color: var(--text-primary); border: 0.5px solid var(--border-secondary); }
+    .btn-secondary:hover:not(:disabled) { background: var(--bg-secondary); border-color: var(--color-primary); }
+    .btn-primary {
+      background: var(--gradient-ai); color: white; border: none;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+    .bottom-bar .btn .ti { font-size: 16px; }
+
+    @media (max-width: 1024px) { .main-container { grid-template-columns: 56px 340px 1fr; } }
+
+    /* ---------- 历史抽屉 / 设置弹窗 ---------- */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(15,16,25,0.35);
+      opacity: 0; visibility: hidden; transition: opacity 0.18s; z-index: 900;
+    }
+    .overlay.show { opacity: 1; visibility: visible; }
+
+    .drawer {
+      position: fixed; top: 0; left: 0; height: 100vh; width: 340px;
+      background: var(--bg-page); border-right: 0.5px solid var(--border-color);
+      box-shadow: 4px 0 24px rgba(15,16,25,0.12);
+      transform: translateX(-104%); transition: transform 0.22s ease; z-index: 950;
+      display: flex; flex-direction: column;
+    }
+    .drawer.show { transform: translateX(0); }
+    .drawer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px; border-bottom: 0.5px solid var(--border-color); flex-shrink: 0;
+    }
+    .drawer-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .drawer-title .ti { font-size: 18px; color: var(--color-secondary); }
+    .icon-btn {
+      width: 30px; height: 30px; border: none; background: transparent; cursor: pointer;
+      border-radius: 8px; color: var(--text-secondary); display: flex; align-items: center; justify-content: center;
+    }
+    .icon-btn:hover { background: var(--bg-secondary); color: var(--color-primary); }
+    .icon-btn .ti { font-size: 17px; }
+    .drawer-actions {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-bottom: 0.5px solid var(--border-color); flex-shrink: 0;
+    }
+    .btn-mini {
+      display: inline-flex; align-items: center; gap: 5px; flex: 1; justify-content: center;
+      padding: 8px 10px; border-radius: 9px; font-size: 13px; font-weight: 500; cursor: pointer;
+      border: 0.5px solid var(--border-secondary); background: var(--bg-page); color: var(--text-primary);
+    }
+    .btn-mini.primary { background: var(--gradient-ai); color: white; border: none; }
+    .btn-mini .ti { font-size: 15px; }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
+
+    .hist-item {
+      border: 0.5px solid var(--border-color); border-radius: 10px;
+      padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg-page);
+      transition: border-color 0.15s, box-shadow 0.15s; position: relative;
+    }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
+    .hist-item.current { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
+    .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .hist-item .h-chip { background: var(--bg-tertiary); border-radius: 9999px; padding: 1px 7px; color: var(--text-secondary); }
+    .hist-item .h-del {
+      position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border: none;
+      background: transparent; color: var(--text-tertiary); cursor: pointer; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .hist-item .h-del:hover { background: rgba(239,68,68,0.1); color: var(--color-danger); }
+    .hist-item .h-del .ti { font-size: 14px; }
+    .hist-empty { text-align: center; color: var(--text-tertiary); padding: 40px 16px; font-size: 13px; }
+
+    .modal {
+      position: fixed; inset: 0; z-index: 960; display: none; align-items: center; justify-content: center;
+    }
+    .modal.show { display: flex; }
+    .modal-card {
+      position: relative; width: 460px; max-width: calc(100vw - 32px); max-height: calc(100vh - 64px);
+      background: var(--bg-page); border-radius: 16px; box-shadow: 0 20px 60px rgba(15,16,25,0.28);
+      display: flex; flex-direction: column; z-index: 1;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 18px; border-bottom: 0.5px solid var(--border-color);
+    }
+    .modal-body { padding: 16px 18px; overflow-y: auto; }
+    .modal-body label { display: block; font-size: 12.5px; font-weight: 500; color: var(--text-secondary);
+      margin: 14px 0 6px; }
+    .modal-body label:first-child { margin-top: 0; }
+    .modal-body select, .modal-body input[type="text"], .modal-body input[type="password"],
+    .modal-body input[type="number"] {
+      width: 100%; border: 1px solid var(--border-secondary); border-radius: 8px;
+      padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text-primary);
+      background: white; outline: none;
+    }
+    .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
+    .modal-body .hint.warn { color: var(--color-warning); }
+    .modal-body .hint.ok { color: var(--color-success); }
+    .field-row { display: flex; align-items: center; gap: 10px; }
+    .field-row input[type="range"] { flex: 1; }
+    .check-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--text-primary); cursor: pointer; }
+    .check-row input { width: auto; }
+    .modal-footer {
+      display: flex; justify-content: flex-end; gap: 10px;
+      padding: 14px 18px; border-top: 0.5px solid var(--border-color);
+    }
+    .modal-footer .btn { min-width: 92px; }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <!-- 最左侧导航 -->
+    <div class="nav-panel">
+      <div class="nav-logo" title="报价管理">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="8" stroke="white" stroke-width="1.5"/>
+          <circle cx="12" cy="12" r="3" fill="white"/>
+          <path d="M12 4V8M12 16V20M4 12H8M16 12H20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="nav-icon active" onclick="restartSession()">
+        <i class="ti ti-plus"></i>
+        <span class="nav-tooltip">新对话（重置流程）</span>
+      </div>
+      <div class="nav-icon" onclick="openHistory()">
+        <i class="ti ti-history"></i>
+        <span class="nav-tooltip">历史记录</span>
+      </div>
+      <div class="nav-icon" onclick="location.href='报价首页(1).html'">
+        <i class="ti ti-home"></i>
+        <span class="nav-tooltip">返回报价首页</span>
+      </div>
+      <div style="flex:1"></div>
+      <div class="nav-icon" onclick="openSettings()">
+        <i class="ti ti-settings"></i>
+        <span class="nav-tooltip">设置</span>
+      </div>
+    </div>
+
+    <!-- 中间对话区域 -->
+    <div class="chat-panel">
+      <div class="chat-header">
+        <div class="chat-title">
+          <i class="ti ti-sparkles"></i>
+          报价单智能体
+          <span class="ai-badge">AI</span>
+        </div>
+        <div class="conn-status">
+          <span class="conn-dot" id="connDot"></span>
+          <span id="connText">连接中…</span>
+        </div>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-area">
+        <div class="quick-actions" id="quickActions">
+          <button class="quick-action-btn primary" id="qaFillStep" onclick="fillStepRecommend()"><i class="ti ti-wand"></i> 强行填满本步骤</button>
+          <button class="quick-action-btn" id="qaStep" onclick="confirmStep()"><i class="ti ti-arrow-right"></i> 进入下一大步骤</button>
+          <button class="quick-action-btn" id="qaPrev" onclick="goPrev()"><i class="ti ti-arrow-left"></i> 上一步</button>
+        </div>
+        <div class="attach-chips" id="attachChips"></div>
+        <div class="chat-input-wrapper">
+          <button class="chat-attach-btn" id="chatAttachBtn" title="上传需求文档（Word/PDF/表格/图片/文本）">
+            <i class="ti ti-paperclip"></i>
+          </button>
+          <input id="chatFileInput" type="file" multiple hidden
+            accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
+          <textarea class="chat-input" id="chatInput" rows="2" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="chat-send" id="chatSend" onclick="sendFromInput()">
+            <i class="ti ti-send"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧区域 -->
+    <div class="right-panel">
+      <div class="project-header">
+        <div class="project-selector">
+          <span class="project-label">当前项目</span>
+          <span class="project-name" id="projectName">未命名报价项目</span>
+        </div>
+        <div class="project-status">
+          <span class="status-dot"></span>
+          <span>报价测算流程</span>
+          <span id="modelInfo"></span>
+        </div>
+      </div>
+
+      <div class="progress-bar" id="progressBar"></div>
+
+      <div class="results-area">
+        <div class="results-header">
+          <div class="results-title">
+            <span id="stepTitle">确认需求配置</span>
+            <span class="section-badge badge-active" id="stepBadge">等待开始</span>
+          </div>
+        </div>
+        <div class="results-content" id="resultsContent">
+          <div class="panel-placeholder" id="panelPlaceholder">
+            <i class="ti ti-loader-2"></i>
+            <div>正在连接报价助手并解析客户需求…<br>解析完成后，需求结构化信息将展示在这里。</div>
+          </div>
+        </div>
+        <div class="bottom-bar" id="bottomBar">
+          <button class="btn btn-secondary" id="btnPrev" onclick="goPrev()" disabled>
+            <i class="ti ti-arrow-left"></i>上一步
+          </button>
+          <button class="btn btn-secondary" id="btnExport" onclick="exportDocx()" style="display:none">
+            <i class="ti ti-file-download"></i>生成报价单(Word)
+          </button>
+          <button class="btn btn-primary" id="btnNext" onclick="confirmStep()" disabled>
+            <span id="btnNextText">确认，进入下一步</span>
+            <i class="ti ti-arrow-right"></i>
+          </button>
+        </div>
+        <div class="view-bar" id="viewBar">
+          <span class="vb-text"><i class="ti ti-eye"></i> <span id="viewBarText">正在查看历史步骤（可编辑）</span></span>
+          <div class="vb-actions">
+            <button class="btn btn-secondary" style="padding:7px 14px;min-width:0" onclick="backToCurrentStep()">回到当前步骤</button>
+            <button class="btn btn-primary" style="padding:7px 14px;min-width:0" onclick="saveStepEdits()"><i class="ti ti-device-floppy"></i> 保存修改并重算</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 遮罩 + 历史抽屉 + 设置弹窗 -->
+  <div class="overlay" id="overlay" onclick="closeOverlays()"></div>
+
+  <aside class="drawer" id="historyDrawer">
+    <div class="drawer-header">
+      <div class="drawer-title"><i class="ti ti-history"></i> 历史报价</div>
+      <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="drawer-actions">
+      <button class="btn-mini primary" onclick="startNewQuote()"><i class="ti ti-plus"></i> 新建报价</button>
+      <button class="icon-btn" onclick="loadHistoryList()" title="刷新"><i class="ti ti-refresh"></i></button>
+    </div>
+    <div class="drawer-body" id="historyList">
+      <div class="hist-empty">加载中…</div>
+    </div>
+  </aside>
+
+  <div class="modal" id="settingsModal" onclick="if(event.target===this)closeOverlays()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="drawer-title"><i class="ti ti-settings"></i> 模型设置</div>
+        <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <label>模型</label>
+        <select id="setModel" onchange="onModelChange()"></select>
+        <div class="hint" id="modelHint"></div>
+
+        <label id="apiKeyLabel">API Key（当前模型所属提供方，仅保存在本地）</label>
+        <input id="setApiKey" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
+
+        <label class="check-row" style="margin-top:16px">
+          <input type="checkbox" id="setTempEnable" onchange="onTempEnableChange()">
+          自定义 Temperature（不勾选则用模型默认）
+        </label>
+        <div class="field-row" style="margin-top:8px">
+          <input type="range" id="setTemp" min="0" max="1" step="0.05" value="0.3" oninput="$('tempVal').textContent=this.value">
+          <span id="tempVal" style="font-size:12px;color:var(--text-secondary);min-width:30px;text-align:right">0.30</span>
+        </div>
+
+        <label>最大输出 Tokens（留空用默认 16384）</label>
+        <input id="setMaxTokens" type="number" min="256" max="64000" placeholder="16384">
+
+        <label class="check-row">
+          <input type="checkbox" id="setThinking" onchange="onThinkingChange()">
+          扩展思考（仅 Claude 系列生效）
+        </label>
+        <div id="thinkBudgetRow" style="display:none">
+          <label>思考预算 Tokens</label>
+          <input id="setThinkBudget" type="number" min="1024" max="32000" placeholder="8000">
+        </div>
+
+        <div class="hint" id="settingsMsg"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeOverlays()">取消</button>
+        <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    /* ================= 配置 ================= */
+    // 报价助手 Agent 服务。可用 localStorage['cpq:agentUrl'] 覆盖。
+    // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
+    const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
+    const STEPS = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价测算复核', '报价方案', '输出报价单'];
+    let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
+
+    /* ================= 状态 ================= */
+    let currentStep = 1;            // Agent 实际所在步骤
+    let shownStep = 1;              // 右侧面板当前展示的步骤（可点进度条查看历史步骤）
+    let maxStep = 1;                // 已到达过的最大步骤（决定哪些步骤可点）
+    let busy = false;               // 一轮对话进行中
+    let currentSessionId = null;    // 当前会话 id（用于历史列表高亮）
+    // section_id -> {step, kind, title, el, columns, editable}
+    const sections = new Map();
+
+    const $ = (id) => document.getElementById(id);
+    const chatEl = $('chatMessages');
+
+    /* ================= 工具函数 ================= */
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // 轻量 Markdown 渲染（标题/表格/粗体/代码/列表/分隔线），输入先整体转义
+    function renderMarkdown(md) {
+      const lines = String(md || '').split('\n');
+      const out = [];
+      let inTable = false, inList = false;
+      const flushTable = () => { if (inTable) { out.push('</tbody></table>'); inTable = false; } };
+      const flushList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+      const inline = (s) => escapeHtml(s)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const t = line.trim();
+        if (/^\|.*\|$/.test(t)) {
+          const cells = t.slice(1, -1).split('|').map(c => c.trim());
+          if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue; // 分隔行
+          if (!inTable) {
+            flushList();
+            out.push('<table><thead><tr>' + cells.map(c => '<th>' + inline(c) + '</th>').join('') + '</tr></thead><tbody>');
+            inTable = true;
+            // 跳过下一行的分隔行由上面的 continue 处理
+          } else {
+            out.push('<tr>' + cells.map(c => '<td>' + inline(c) + '</td>').join('') + '</tr>');
+          }
+          continue;
+        }
+        flushTable();
+        if (/^#{1,3}\s/.test(t)) {
+          flushList();
+          const level = t.match(/^#+/)[0].length;
+          out.push(`<h${level}>` + inline(t.replace(/^#+\s*/, '')) + `</h${level}>`);
+        } else if (/^(-{3,}|\*{3,})$/.test(t)) {
+          flushList();
+          out.push('<hr>');
+        } else if (/^[-*]\s+/.test(t)) {
+          if (!inList) { out.push('<ul>'); inList = true; }
+          out.push('<li>' + inline(t.replace(/^[-*]\s+/, '')) + '</li>');
+        } else if (t === '') {
+          flushList();
+        } else {
+          flushList();
+          out.push('<p>' + inline(line) + '</p>');
+        }
+      }
+      flushTable(); flushList();
+      return out.join('\n');
+    }
+
+    /* ================= 聊天渲染 ================= */
+    function addUserBubble(text) {
+      const div = document.createElement('div');
+      div.className = 'message message-user';
+      div.innerHTML = '<div class="message-label">我</div><div class="message-text"></div>';
+      div.querySelector('.message-text').textContent = text;
+      chatEl.appendChild(div);
+      scrollChat();
+    }
+
+    let streamBubble = null, streamBuf = '';
+    function ensureStreamBubble() {
+      if (!streamBubble) {
+        streamBubble = document.createElement('div');
+        streamBubble.className = 'message message-ai';
+        streamBubble.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+        chatEl.appendChild(streamBubble);
+        streamBuf = '';
+      }
+      return streamBubble;
+    }
+    function appendStreamText(t) {
+      const b = ensureStreamBubble();
+      streamBuf += t;
+      b.querySelector('.message-text').textContent = streamBuf;
+      scrollChat();
+    }
+    function finishStreamBubble() {
+      if (streamBubble && streamBuf.trim()) {
+        streamBubble.querySelector('.message-text').innerHTML = renderMarkdown(streamBuf);
+      } else if (streamBubble) {
+        streamBubble.remove();
+      }
+      streamBubble = null; streamBuf = '';
+      scrollChat();
+    }
+    function addErrorBubble(text) {
+      const div = document.createElement('div');
+      div.className = 'message message-ai message-error';
+      div.innerHTML = '<div class="message-label">系统</div><div class="message-text"></div>';
+      div.querySelector('.message-text').textContent = text;
+      chatEl.appendChild(div);
+      scrollChat();
+    }
+    function addToolActivity(main, source) {
+      finishStreamBubble(); // 工具调用把当前文本气泡截断
+      const div = document.createElement('div');
+      div.className = 'tool-activity trace';
+      const i = document.createElement('i'); i.className = 'ti ti-loader-2';
+      const s = document.createElement('span'); s.textContent = main;
+      div.appendChild(i); div.appendChild(s);
+      if (source) {
+        const sp = document.createElement('span');
+        sp.className = 'src';
+        sp.textContent = ' · 来源：' + source;
+        div.appendChild(sp);
+      }
+      chatEl.appendChild(div);
+      scrollChat();
+      return div;
+    }
+    // 一次性追加一条已完成的 AI 气泡（历史回放用）
+    function addAiBubble(md) {
+      const div = document.createElement('div');
+      div.className = 'message message-ai';
+      div.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+      div.querySelector('.message-text').innerHTML = renderMarkdown(md);
+      chatEl.appendChild(div);
+      scrollChat();
+    }
+    // 把一次工具调用翻译成“操作轨迹 + 数据来源”文案（实时与历史回放共用）
+    function describeTool(name, inp) {
+      inp = inp || {};
+      let main, source;
+      if (name === 'cpq_ui') {
+        const a = inp.action;
+        const t = inp.title || inp.section_id || '';
+        if (a === 'set_step') main = '进入步骤 ' + inp.step + '：' + (STEPS[(inp.step || 1) - 1] || '');
+        else if (a === 'render_document') main = '生成报价单文档';
+        else if (a === 'focus_section') main = '聚焦「' + t + '」，请在右侧核对';
+        else if (a === 'render_form') main = '生成 / 更新「' + t + '」表单';
+        else if (a === 'render_table') main = '生成 / 更新「' + t + '」表格';
+        else main = '更新工作台';
+        source = inp.source;
+      } else if (name === 'sql_query') {
+        main = '查询知识库 亿纬锂能_da.sqlite';
+        source = String(inp.sql || '').replace(/\s+/g, ' ').trim();
+        if (source.length > 180) source = source.slice(0, 177) + '…';
+      } else if (name === 'Read') {
+        main = '读取数据源';
+        source = String(inp.file_path || '').split(/[\\/]/).pop();
+      } else if (name === 'Glob' || name === 'Grep') {
+        main = '检索数据…';
+      } else {
+        main = '调用 ' + name + '…';
+      }
+      return { main, source };
+    }
+    let typingEl = null;
+    function showTyping() {
+      if (typingEl) return;
+      typingEl = document.createElement('div');
+      typingEl.className = 'tool-activity';
+      typingEl.innerHTML = '<span class="typing-dots"><i></i><i></i><i></i></span><span>思考中…</span>';
+      chatEl.appendChild(typingEl);
+      scrollChat();
+    }
+    function hideTyping() { if (typingEl) { typingEl.remove(); typingEl = null; } }
+    function scrollChat() { chatEl.scrollTop = chatEl.scrollHeight; }
+
+    /* ================= 进度条（可点击查看/编辑历史步骤） ================= */
+    function renderProgressBar() {
+      const bar = $('progressBar');
+      bar.innerHTML = '';
+      STEPS.forEach((name, i) => {
+        const n = i + 1;
+        const step = document.createElement('div');
+        const clickable = n <= maxStep;                 // 已到达过的步骤可点
+        const viewing = (n === shownStep && shownStep !== currentStep);
+        step.className = 'progress-step' + (n === currentStep ? ' active' : '') + (clickable ? ' clickable' : '');
+        const state = n < currentStep ? 'completed' : (n === currentStep ? 'active' : 'pending');
+        step.innerHTML =
+          `<div class="step-node ${state}${viewing ? ' viewing' : ''}">` +
+          (state === 'completed' ? '<i class="ti ti-check"></i>' : n) +
+          `</div><span class="step-label">${escapeHtml(name)}</span>`;
+        if (clickable) step.onclick = () => showStep(n);
+        bar.appendChild(step);
+        if (n < STEPS.length) {
+          const line = document.createElement('div');
+          line.className = 'progress-line' + (n < currentStep ? ' completed' : '');
+          bar.appendChild(line);
+        }
+      });
+    }
+
+    // 预渲染某步的固定分区骨架（写死的表结构；Agent 只负责后续填值，不再实时造结构）
+    function prerenderStep(n) {
+      if (!FORMS.length) return;
+      FORMS.filter(f => f.step === n).forEach(f => {
+        if (sections.has(f.section_id)) return; // 已有（可能 Agent 已填过）
+        const ui = { step: f.step, section_id: f.section_id, title: f.title, editable: f.editable };
+        if (f.kind === 'form') {
+          ui.action = 'render_form';
+          ui.fields = (f.fields || []).map(x => ({ key: x.key, label: x.label, type: 'text', value: '' }));
+          renderFormSection(ui);
+        } else {
+          ui.action = 'render_table';
+          ui.columns = f.columns || [];
+          ui.rows = [];
+          renderTableSection(ui);
+        }
+      });
+    }
+
+    // Agent 推进到某步：更新“当前步骤”并展示它（先把该步固定骨架预渲染出来）
+    function setStep(step) {
+      currentStep = step;
+      if (step > maxStep) maxStep = step;
+      prerenderStep(step);
+      showStep(step);
+    }
+
+    // 只切换右侧面板展示的步骤（不通知 Agent）；用于点进度条查看/编辑历史步骤
+    function showStep(n) {
+      shownStep = n;
+      renderProgressBar();
+      $('stepTitle').textContent = STEPS[n - 1];
+      const viewingPast = (n !== currentStep);
+      $('stepBadge').textContent = viewingPast ? '查看 / 编辑' : '进行中';
+      sections.forEach(sec => { sec.el.style.display = (sec.step === n) ? '' : 'none'; });
+      const placeholder = $('panelPlaceholder');
+      if (placeholder) placeholder.style.display = 'none';
+      $('resultsContent').scrollTop = 0;
+      // 底部：当前步骤用「上一步/确认下一步」；查看历史步骤用「保存修改/回到当前」
+      const bottomBar = $('bottomBar'), viewBar = $('viewBar');
+      if (viewingPast) {
+        if (bottomBar) bottomBar.style.display = 'none';
+        if (viewBar) viewBar.classList.add('show');
+        $('viewBarText').textContent = `正在查看第 ${n} 步「${STEPS[n - 1]}」（可编辑）—— 当前进行到第 ${currentStep} 步`;
+      } else {
+        if (bottomBar) bottomBar.style.display = '';
+        if (viewBar) viewBar.classList.remove('show');
+        $('btnPrev').disabled = busy || n <= 1;
+        $('btnNext').disabled = busy;
+        $('btnNextText').textContent = n >= 7 ? '流程完成' : '确认，进入下一步';
+      }
+      // 最后一步显示「生成报价单(Word)」按钮
+      const be = $('btnExport'); if (be) be.style.display = (n >= 7 && !viewingPast) ? '' : 'none';
+    }
+
+    function backToCurrentStep() { showStep(currentStep); }
+
+    // 收集各步分区数据 → 让后端生成报价单 Word 并下载
+    async function exportDocx() {
+      const be = $('btnExport');
+      const stepsData = [];
+      for (let n = 1; n <= 7; n++) {
+        const secs = [];
+        sections.forEach((sec) => {
+          if (sec.step !== n) return;
+          if (sec.kind === 'form') {
+            const d = {};
+            sec.el.querySelectorAll('.info-table [data-key]').forEach(el => {
+              d[el.dataset.key] = ('value' in el) ? el.value : (el.dataset.value ?? el.textContent);
+            });
+            secs.push({ title: sec.title, kind: 'form', data: d });
+          } else if (sec.kind === 'table') {
+            const cols = (sec.columns || []).map(c => c.key);
+            const rows = [];
+            sec.el.querySelectorAll('.list-table tbody tr').forEach(tr => {
+              const r = {};
+              tr.querySelectorAll('[data-key]').forEach(el => {
+                r[el.dataset.key] = ('value' in el && el.tagName === 'INPUT') ? el.value : (el.dataset.value ?? el.textContent);
+              });
+              rows.push(r);
+            });
+            secs.push({ title: sec.title, kind: 'table', columns: cols, data: rows });
+          } else if (sec.kind === 'document') {
+            secs.push({ title: sec.title, kind: 'document', markdown: sec.markdown || '' });
+          }
+        });
+        if (secs.length) stepsData.push({ step: n, name: STEPS[n - 1], sections: secs });
+      }
+      if (!stepsData.length) { alert('还没有可导出的内容。'); return; }
+      const payload = {
+        projectName: ($('projectName') && $('projectName').textContent) || '报价单',
+        customer: '', projectCode: '', steps: stepsData,
+      };
+      if (be) be.disabled = true;
+      try {
+        const resp = await fetch(AGENT_URL + '/api/export/docx', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        if (!resp.ok) { const t = await resp.json().catch(() => ({})); throw new Error(t.error || ('HTTP ' + resp.status)); }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '报价单_' + (payload.projectName || '') + '.docx';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('生成 Word 失败：' + (e.message || e));
+      } finally {
+        if (be) be.disabled = false;
+      }
+    }
+
+    // 在“查看历史步骤”时保存用户对该步的修改，回传 Agent 重算
+    function saveStepEdits() {
+      if (busy) return;
+      const n = shownStep;
+      const data = collectStepData(n);
+      const stepName = STEPS[n - 1];
+      addUserBubble(`修改第 ${n} 步「${stepName}」并保存。`);
+      sendToAgent(
+        `【表单修改】用户在第 ${n} 步「${stepName}」修改了工作台数据(JSON)如下：\n` +
+        JSON.stringify(data, null, 1) +
+        `\n请以该数据为准更新该步分区（重新渲染 render_form/render_table），说明改了什么、对后续步骤的影响；` +
+        `不要改变当前所在步骤（当前在第 ${currentStep} 步）。`,
+        { echo: false, display: `修改第 ${n} 步并保存` }
+      );
+    }
+
+    /* ================= 工作台分区渲染 ================= */
+    function statusChipHtml(status) {
+      if (status === 'active') return '<span class="sec-status active">待确认</span>';
+      if (status === 'done') return '<span class="sec-status done">已确认</span>';
+      return '';
+    }
+
+    function sectionShell(ui, kindIcon) {
+      // 创建/复用 collapse-block 外壳，返回 content 容器
+      let sec = sections.get(ui.section_id);
+      const isNew = !sec;
+      if (isNew) {
+        const block = document.createElement('div');
+        block.className = 'collapse-block open';
+        $('resultsContent').insertBefore(block, null);
+        sec = { el: block };
+        sections.set(ui.section_id, sec);
+      }
+      sec.step = ui.step;
+      sec.title = ui.title || sec.title || ui.section_id;
+      // 右侧一律可编辑：用户可点击任意分区修改（含系统计算项）
+      sec.editable = true;
+      if (ui.status) sec.status = ui.status;
+      if (ui.source) sec.source = ui.source;
+      const seq = [...sections.values()].filter(s => s.step === ui.step).indexOf(sec) + 1;
+      sec.el.innerHTML =
+        `<div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+          <div class="collapse-title">
+            <span class="num">${seq}</span>${escapeHtml(sec.title)}
+            ${ui.editable === false ? '<span class="readonly-chip">系统计算·可改</span>' : ''}
+            ${statusChipHtml(sec.status)}
+          </div>
+          <i class="ti ti-chevron-down collapse-arrow"></i>
+        </div>
+        <div class="collapse-content"></div>`;
+      const content = sec.el.querySelector('.collapse-content');
+      if (sec.source) {
+        const src = document.createElement('div');
+        src.className = 'sec-source';
+        src.innerHTML = '<i class="ti ti-database"></i><span></span>';
+        src.querySelector('span').textContent = '数据来源：' + sec.source;
+        content.appendChild(src);
+      }
+      sec.el.style.display = (ui.step === shownStep) ? '' : 'none';
+      return sec;
+    }
+
+    // 展开某分区（不再做“高光选择”，仅确保它是打开的）
+    function activateSection(id) {
+      const sec = sections.get(id);
+      if (sec) sec.el.classList.add('open');
+    }
+
+    function setSectionStatus(id, status) {
+      const sec = sections.get(id);
+      if (!sec) return;
+      sec.status = status;
+      const title = sec.el.querySelector('.collapse-title');
+      if (!title) return;
+      let chip = title.querySelector('.sec-status');
+      if (!status || status === 'pending') { if (chip) chip.remove(); return; }
+      if (!chip) { chip = document.createElement('span'); title.appendChild(chip); }
+      chip.className = 'sec-status ' + status;
+      chip.textContent = status === 'done' ? '已确认' : '待确认';
+    }
+
+    function renderFormSection(ui) {
+      const sec = sectionShell(ui);
+      sec.kind = 'form';
+      const content = sec.el.querySelector('.collapse-content');
+      const table = document.createElement('table');
+      table.className = 'info-table';
+      const fields = ui.fields || [];
+      for (let i = 0; i < fields.length; i += 2) {
+        const tr = document.createElement('tr');
+        for (const f of [fields[i], fields[i + 1]]) {
+          if (!f) { tr.insertAdjacentHTML('beforeend', '<td class="label"></td><td class="value"></td>'); continue; }
+          const label = document.createElement('td');
+          label.className = 'label';
+          label.innerHTML = (f.required ? '<span class="required">*</span>' : '') + escapeHtml(f.label);
+          const value = document.createElement('td');
+          value.className = 'value';
+          value.appendChild(makeFieldInput(f, sec.editable));
+          tr.appendChild(label); tr.appendChild(value);
+        }
+        table.appendChild(tr);
+      }
+      content.appendChild(table);
+    }
+
+    const GUESS_RE = /[（(](推测|推荐|推断|估计|假设|待定|待补充|默认)[)）]/;
+    function markGuess(el, val) { if (GUESS_RE.test(String(val || ''))) el.classList.add('guessed'); }
+    function makeFieldInput(f, editable) {
+      const val = f.value == null ? '' : String(f.value);
+      if (!editable) {
+        const span = document.createElement('span');
+        span.textContent = val || '—';
+        span.dataset.key = f.key;
+        markGuess(span, val);
+        return span;
+      }
+      let el;
+      if (f.type === 'select' && Array.isArray(f.options)) {
+        el = document.createElement('select');
+        for (const opt of f.options) {
+          const o = document.createElement('option');
+          o.value = o.textContent = opt;
+          if (opt === val) o.selected = true;
+          el.appendChild(o);
+        }
+        if (val && !f.options.includes(val)) {
+          const o = document.createElement('option');
+          o.value = o.textContent = val; o.selected = true;
+          el.appendChild(o);
+        }
+      } else if (f.type === 'textarea') {
+        el = document.createElement('textarea');
+        el.value = val;
+      } else {
+        el = document.createElement('input');
+        el.type = 'text';
+        el.value = val;
+      }
+      el.dataset.key = f.key;
+      markGuess(el, val);
+      return el;
+    }
+
+    function renderTableSection(ui) {
+      const sec = sectionShell(ui);
+      sec.kind = 'table';
+      sec.columns = ui.columns || [];
+      const content = sec.el.querySelector('.collapse-content');
+      const table = document.createElement('table');
+      table.className = 'list-table';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr>' + sec.columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('') +
+        (sec.editable ? '<th>操作</th>' : '') + '</tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      for (const row of (ui.rows || [])) tbody.appendChild(makeTableRow(sec, row));
+      table.appendChild(tbody);
+      content.appendChild(table);
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'list-toolbar';
+      toolbar.innerHTML =
+        (sec.editable ? '<a class="list-add-link" href="javascript:;"><i class="ti ti-plus"></i>新增</a>' : '<span></span>') +
+        `<span class="list-footer-info">共 <span class="count">${(ui.rows || []).length}</span> 条</span>`;
+      if (sec.editable) {
+        toolbar.querySelector('.list-add-link').onclick = () => {
+          const blank = {};
+          sec.columns.forEach(c => blank[c.key] = '');
+          tbody.appendChild(makeTableRow(sec, blank));
+          updateRowCount(sec);
+        };
+      }
+      content.appendChild(toolbar);
+      if (ui.footer) {
+        const note = document.createElement('div');
+        note.className = 'table-footer-note';
+        note.textContent = ui.footer;
+        content.appendChild(note);
+      }
+    }
+
+    function makeTableRow(sec, row) {
+      const tr = document.createElement('tr');
+      for (const c of sec.columns) {
+        const td = document.createElement('td');
+        const val = row[c.key] == null ? '' : String(row[c.key]);
+        if (sec.editable) {
+          const input = document.createElement('input');
+          input.value = val;
+          input.dataset.key = c.key;
+          markGuess(input, val);
+          td.appendChild(input);
+        } else {
+          td.textContent = val;
+          td.dataset.key = c.key;
+          td.dataset.value = val;
+          markGuess(td, val);
+        }
+        tr.appendChild(td);
+      }
+      if (sec.editable) {
+        const td = document.createElement('td');
+        td.innerHTML = '<button class="btn-delete"><i class="ti ti-trash"></i></button>';
+        td.querySelector('button').onclick = () => {
+          const tbody = tr.parentElement;
+          if (tbody.rows.length > 1) { tr.remove(); updateRowCount(sec); }
+        };
+        tr.appendChild(td);
+      }
+      return tr;
+    }
+
+    function updateRowCount(sec) {
+      const tbody = sec.el.querySelector('.list-table tbody');
+      const counter = sec.el.querySelector('.list-footer-info .count');
+      if (tbody && counter) counter.textContent = tbody.rows.length;
+    }
+
+    function renderDocumentSection(ui) {
+      const sec = sectionShell(ui);
+      sec.kind = 'document';
+      sec.markdown = ui.markdown || '';   // 存原文，供导出 Word
+      const content = sec.el.querySelector('.collapse-content');
+      const doc = document.createElement('div');
+      doc.className = 'doc-body';
+      doc.innerHTML = renderMarkdown(ui.markdown || '');
+      content.appendChild(doc);
+    }
+
+    function applyUiEvent(ui) {
+      try {
+        if (ui.action === 'set_step') { setStep(ui.step); return; }
+        if (ui.action === 'focus_section') {
+          // 仅更新“待确认/已确认”徽标并展开该分区，不再做高光选择
+          if (ui.status) setSectionStatus(ui.section_id, ui.status);
+          activateSection(ui.section_id);
+          return;
+        }
+        if (ui.action === 'render_form') renderFormSection(ui);
+        else if (ui.action === 'render_table') renderTableSection(ui);
+        else if (ui.action === 'render_document') renderDocumentSection(ui);
+      } catch (e) {
+        console.error('applyUiEvent failed', ui, e);
+      }
+    }
+
+    /* ================= 表单数据采集（回传 Agent） ================= */
+    function collectStepData(step) {
+      const data = {};
+      sections.forEach((sec, id) => {
+        if (sec.step !== step) return;
+        if (sec.kind === 'form') {
+          const obj = {};
+          sec.el.querySelectorAll('[data-key]').forEach(el => {
+            obj[el.dataset.key] = ('value' in el) ? el.value : (el.dataset.value ?? el.textContent);
+          });
+          data[id] = { 标题: sec.title, 数据: obj };
+        } else if (sec.kind === 'table') {
+          const rows = [];
+          sec.el.querySelectorAll('.list-table tbody tr').forEach(tr => {
+            const row = {};
+            tr.querySelectorAll('[data-key]').forEach(el => {
+              row[el.dataset.key] = ('value' in el && el.tagName === 'INPUT') ? el.value : (el.dataset.value ?? el.textContent);
+            });
+            rows.push(row);
+          });
+          data[id] = { 标题: sec.title, 数据: rows };
+        }
+      });
+      return data;
+    }
+
+    /* ================= 与 Agent 的通信 ================= */
+    function setBusy(v) {
+      busy = v;
+      $('chatSend').disabled = v;
+      $('btnNext').disabled = v;
+      $('btnPrev').disabled = v || currentStep <= 1;
+      if (!v) $('btnNext').disabled = false;
+      const qfs = $('qaFillStep'), qs = $('qaStep'), qp = $('qaPrev');
+      if (qfs) qfs.disabled = v;
+      if (qs) qs.disabled = v;
+      if (qp) qp.disabled = v || currentStep <= 1;
+    }
+
+    let turnGotContent = false; // 本轮是否收到任何文本/工具/UI 事件
+    let turnHadError = false;
+
+    async function sendToAgent(text, { echo = true, display } = {}) {
+      if (busy) return;
+      if (echo) addUserBubble(text);
+      setBusy(true);
+      showTyping();
+      turnGotContent = false;
+      turnHadError = false;
+      // display 决定“历史回放里的用户气泡”：echo=true 用 text；echo=false 用传入的 display（'' 表示不记气泡）
+      const body = { message: text };
+      if (display !== undefined) body.display = display;
+      else if (!echo) body.display = '';
+      try {
+        const resp = await fetch(AGENT_URL + '/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        setConn(true);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (chunk.startsWith('data:')) {
+              let ev;
+              try { ev = JSON.parse(chunk.slice(5)); } catch { continue; }
+              handleAgentEvent(ev);
+            }
+          }
+        }
+      } catch (e) {
+        turnHadError = true;
+        setConn(false);
+        addErrorBubble('无法连接报价助手服务（' + AGENT_URL + '）。请先运行：python cpq_agent_server.py，然后刷新页面重试。');
+      } finally {
+        hideTyping();
+        finishStreamBubble();
+        // 清理转圈图标
+        chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+        // 偶发：服务连上了但本轮无任何内容（模型空回/瞬时过载）—— 给出可重试提示
+        if (!turnHadError && !turnGotContent) {
+          addErrorBubble('助手本轮没有返回内容（可能是服务瞬时繁忙）。请在下方重新发送一次，或点「确认，进入下一步」重试。');
+        }
+        setBusy(false);
+      }
+    }
+
+    function handleAgentEvent(ev) {
+      if (ev.type === 'text' || ev.type === 'tool_use' || ev.type === 'ui') turnGotContent = true;
+      switch (ev.type) {
+        case 'text':
+          hideTyping();
+          appendStreamText(ev.text);
+          break;
+        case 'tool_use': {
+          hideTyping();
+          const d = describeTool(ev.name, ev.input || {});
+          addToolActivity(d.main, d.source);
+          showTyping();
+          break;
+        }
+        case 'ui':
+          applyUiEvent(ev.ui || {});
+          break;
+        case 'tool_result':
+          if (ev.is_error) console.warn('tool error:', ev.content);
+          break;
+        case 'error':
+          turnHadError = true;
+          hideTyping();
+          finishStreamBubble();
+          addErrorBubble('出错了：' + ev.error);
+          break;
+        case 'done':
+          if (ev.model) $('modelInfo').textContent = ' · ' + ev.model;
+          break;
+      }
+    }
+
+    function setConn(ok) {
+      $('connDot').className = 'conn-dot ' + (ok ? 'ok' : 'err');
+      $('connText').textContent = ok ? '已连接' : '未连接';
+    }
+
+    /* ================= 聊天附件上传（PDF / Word / Excel / 文本 均可解析） ================= */
+    // 文本类浏览器直接读；PDF/Word/Excel 交后端 /api/extract 提取文字；其它类型只带文件名。
+    let chatFiles = []; // { name, text|null, status:'parsing'|'ok'|'err', err, truncated }
+    const TEXT_EXT = /\.(txt|md|csv|tsv|json|log)$/i;   // 浏览器可直接读
+    const DOC_EXT = /\.(pdf|docx|xlsx)$/i;               // 交后端提取
+    const MAX_EMBED = 200000;
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.onerror = () => reject(new Error('read error'));
+        r.readAsDataURL(file);
+      });
+    }
+    async function extractFileText(file) {
+      if (TEXT_EXT.test(file.name)) {
+        try { return { text: (await file.text()).slice(0, MAX_EMBED), err: null }; }
+        catch (e) { return { text: null, err: '读取失败' }; }
+      }
+      if (DOC_EXT.test(file.name)) {
+        try {
+          const b64 = await fileToBase64(file);
+          const r = await fetch(AGENT_URL + '/api/extract', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: file.name, data: b64 }),
+          });
+          const d = await r.json();
+          if (d && d.ok) return { text: d.text, err: null, truncated: d.truncated };
+          return { text: null, err: (d && d.error) || '解析失败' };
+        } catch (e) { return { text: null, err: '无法连接解析服务（请确认 Agent 已启动）' }; }
+      }
+      return { text: null, err: '该类型暂不支持提取文字' };
+    }
+
+    function renderAttachChips() {
+      const box = $('attachChips');
+      box.innerHTML = '';
+      chatFiles.forEach((f, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'attach-chip';
+        let icon = 'ti-paperclip';
+        if (f.status === 'parsing') icon = 'ti-loader-2';
+        else if (f.status === 'err') { icon = 'ti-alert-triangle'; chip.style.borderColor = 'var(--color-warning)'; }
+        else if (f.status === 'ok') icon = 'ti-file-check';
+        chip.innerHTML = '<i class="ti ' + icon + '"></i><span></span><i class="ti ti-x rm" title="移除"></i>';
+        chip.querySelector('span').textContent = f.name;
+        chip.title = f.status === 'parsing' ? (f.name + '（解析中…）')
+          : f.status === 'err' ? (f.name + '（' + (f.err || '解析失败') + '）')
+          : (f.name + '（已解析 ' + (f.text ? f.text.length : 0) + ' 字' + (f.truncated ? '，已截断' : '') + '）');
+        chip.querySelector('.rm').onclick = () => { chatFiles.splice(i, 1); renderAttachChips(); };
+        box.appendChild(chip);
+      });
+    }
+
+    $('chatAttachBtn').onclick = () => $('chatFileInput').click();
+    $('chatFileInput').addEventListener('change', async () => {
+      const files = Array.from($('chatFileInput').files || []);
+      for (const file of files) {
+        const entry = { name: file.name, text: null, status: 'parsing', err: null };
+        chatFiles.push(entry);
+        renderAttachChips();
+        const res = await extractFileText(file);
+        entry.text = res.text; entry.err = res.err; entry.truncated = res.truncated;
+        entry.status = res.text ? 'ok' : 'err';
+        renderAttachChips();
+      }
+      $('chatFileInput').value = '';
+    });
+
+    function buildAttachMessage(userText) {
+      if (!chatFiles.length) return userText;
+      const names = chatFiles.map(f => f.name).join('、');
+      let msg = (userText ? userText + '\n\n' : '') + '【上传附件】' + names + '\n';
+      for (const f of chatFiles.filter(f => f.text)) {
+        msg += '\n--- 文件《' + f.name + '》内容' + (f.truncated ? '（内容较长，已截断）' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---\n';
+      }
+      const failed = chatFiles.filter(f => !f.text);
+      if (failed.length) {
+        msg += '\n（以下附件未能提取文字：' +
+          failed.map(f => f.name + (f.err ? '（' + f.err + '）' : '')).join('、') +
+          '，请据文件名与用户确认关键信息）';
+      }
+      return msg;
+    }
+
+    /* ================= 用户操作入口 ================= */
+    function sendFromInput() {
+      const input = $('chatInput');
+      const text = input.value.trim();
+      if ((!text && !chatFiles.length) || busy) return;
+      if (chatFiles.some(f => f.status === 'parsing')) { alert('附件正在解析中，请稍候…'); return; }
+      const echo = text || ('（上传附件：' + chatFiles.map(f => f.name).join('、') + '）');
+      const payload = buildAttachMessage(text);
+      input.value = '';
+      chatFiles = [];
+      renderAttachChips();
+      addUserBubble(echo);          // 聊天里显示用户的话/附件说明
+      sendToAgent(payload, { echo: false, display: echo }); // 实际发送可能更长（含文件内容）
+    }
+
+    $('chatInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromInput(); }
+    });
+
+    // 快捷动作：强行把本大步骤所有表单/表格【填满】——查不到的也用知识+推理补上，无依据的标"（推测）"
+    function fillStepRecommend() {
+      if (busy) return;
+      const n = currentStep;
+      const name = STEPS[n - 1] || '';
+      addUserBubble('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
+      sendToAgent(
+        '【强行推荐】用户要求把当前第 ' + n + ' 步「' + name + '」的**所有固定分区的每一个字段/单元格都填满、绝不留空**：\n' +
+        '1) 能从需求文档拿到的先填文档值；2) 文档没有的用 sql_query 查数据库补；3) 文档和库都没有的，' +
+        '**用你的行业知识 + 合理推理强行推断一个值填上**（不许留空、不许写"待补充/待定/无"）。\n' +
+        '**凡是靠推理/推测得到、没有文档或数据库依据的值，必须在该值末尾加"（推测）"标记**（例如「液冷（推测）」「40HQ（推测）」）。\n' +
+        '用 render_form(values)/render_table(rows) 把结果全部填进右侧对应分区；' +
+        '并在聊天里给出【推理过程】、并**单独列出哪些字段是无依据的推测**。不要 set_step 跳步。',
+        { echo: false, display: '强行填满本步骤（含推测标记）' }
+      );
+    }
+
+    function confirmStep() {
+      if (busy) return;
+      if (shownStep !== currentStep) showStep(currentStep); // 确认前先回到当前步骤
+      const cur = currentStep;
+      if (cur >= 7) {
+        const done = '报价流程已完成。';
+        addUserBubble(done);
+        sendToAgent('【流程完成】用户确认结束本次报价流程，请做简短总结。', { echo: false, display: done });
+        return;
+      }
+      const data = collectStepData(cur);
+      const stepName = STEPS[cur - 1];
+      const next = cur + 1;
+      const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。`;
+      addUserBubble(bubble);
+      setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
+      sendToAgent(
+        `【表单确认】第 ${cur} 步「${stepName}」用户已确认，工作台最新数据(JSON)如下：\n` +
+        JSON.stringify(data, null, 1) +
+        `\n用户已进入第 ${next} 步「${STEPS[next - 1]}」。请直接开始第 ${next} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
+        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${next} 步的固定分区（边做边说），最后给小结。`,
+        { echo: false, display: bubble }
+      );
+    }
+
+    function goPrev() {
+      if (busy || currentStep <= 1) return;
+      const prev = currentStep - 1;
+      addUserBubble('返回第 ' + prev + ' 步「' + STEPS[prev - 1] + '」。');
+      setStep(prev); // 前端直接回退，右边立刻切换
+      sendToAgent(`【返回上一步】用户回到第 ${prev} 步「${STEPS[prev - 1]}」，等待用户查看/修改。`, { echo: false, display: '返回第 ' + prev + ' 步' });
+    }
+
+    // 开一张全新的空白报价（清掉从首页带来的旧需求，再让后端新建会话）
+    async function startNewQuote() {
+      if (busy) return;
+      try {
+        ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer']
+          .forEach(k => sessionStorage.removeItem(k));
+      } catch {}
+      try { await fetch(AGENT_URL + '/api/new', { method: 'POST' }); } catch {}
+      location.reload();
+    }
+    // 兼容旧入口（导航「新对话」）
+    function restartSession() { startNewQuote(); }
+
+    /* ================= 历史记录 ================= */
+    function closeOverlays() {
+      $('overlay').classList.remove('show');
+      $('historyDrawer').classList.remove('show');
+      $('settingsModal').classList.remove('show');
+    }
+    function openHistory() {
+      $('overlay').classList.add('show');
+      $('historyDrawer').classList.add('show');
+      loadHistoryList();
+    }
+    async function loadHistoryList() {
+      const box = $('historyList');
+      box.innerHTML = '<div class="hist-empty">加载中…</div>';
+      let sessions = [];
+      try {
+        const r = await fetch(AGENT_URL + '/api/sessions').then(r => r.json());
+        sessions = r.sessions || [];
+      } catch (e) {
+        box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。</div>';
+        return;
+      }
+      if (!sessions.length) {
+        box.innerHTML = '<div class="hist-empty">还没有历史报价。<br>完成一次对话后会自动保存在这里。</div>';
+        return;
+      }
+      box.innerHTML = '';
+      sessions.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'hist-item' + (s.id === currentSessionId ? ' current' : '');
+        const stepName = STEPS[(s.step || 1) - 1] || '';
+        item.innerHTML =
+          `<div class="h-title"></div>
+           <div class="h-meta">
+             <span class="h-chip"></span>
+             <span></span>
+           </div>
+           <button class="h-del" title="删除"><i class="ti ti-trash"></i></button>`;
+        item.querySelector('.h-title').textContent = s.title || '未命名报价';
+        item.querySelector('.h-chip').textContent = '步骤' + (s.step || 1) + '·' + stepName;
+        item.querySelector('.h-meta span:last-child').textContent =
+          (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
+        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s.id); };
+        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.title); };
+        box.appendChild(item);
+      });
+    }
+    async function openSession(id) {
+      if (busy) { alert('请等当前回合结束再切换历史。'); return; }
+      let data;
+      try {
+        data = await fetch(AGENT_URL + '/api/session/open', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        }).then(r => r.ok ? r.json() : null);
+      } catch (e) { data = null; }
+      if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
+      currentSessionId = data.id;
+      closeOverlays();
+      replaySession(data);
+    }
+    async function deleteSession(id, title) {
+      if (!confirm('删除历史报价「' + (title || id) + '」？此操作不可恢复。')) return;
+      try {
+        await fetch(AGENT_URL + '/api/session/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+      } catch (e) {}
+      loadHistoryList();
+    }
+    // 用历史事件流重建聊天 + 工作台
+    function replaySession(data) {
+      chatEl.innerHTML = '';
+      sections.clear();
+      $('resultsContent').innerHTML = '';
+      currentStep = data.step || 1;
+      renderProgressBar();
+      (data.events || []).forEach(ev => {
+        if (ev.type === 'user') addUserBubble(ev.text);
+        else if (ev.type === 'text') addAiBubble(ev.text);
+        else if (ev.type === 'tool_use') {
+          const d = describeTool(ev.name, ev.input || {});
+          const el = addToolActivity(d.main, d.source);
+          const ic = el.querySelector('.ti-loader-2');
+          if (ic) ic.className = 'ti ti-check';
+        } else if (ev.type === 'ui') {
+          applyUiEvent(ev.ui || {});
+        }
+      });
+      setStep(currentStep);
+      $('stepBadge').textContent = '历史记录';
+      setBusy(false);
+      const info = addToolActivity('已载入历史报价「' + (data.title || '') + '」，可继续对话补充或修改。');
+      const ii = info.querySelector('.ti-loader-2');
+      if (ii) ii.className = 'ti ti-history';
+    }
+
+    /* ================= 设置（模型 / 参数 / API Key） ================= */
+    let MODELS = [];
+    function openSettings() {
+      $('overlay').classList.add('show');
+      $('settingsModal').classList.add('show');
+      $('settingsMsg').textContent = '';
+      loadModels();
+    }
+    async function loadModels() {
+      const sel = $('setModel');
+      sel.innerHTML = '';
+      let cur = null;
+      try {
+        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        MODELS = r.models || [];
+        cur = r.current;
+      } catch (e) { MODELS = []; }
+      // 按 provider 分组
+      const groups = {};
+      MODELS.forEach(m => { (groups[m.provider_label] = groups[m.provider_label] || []).push(m); });
+      Object.keys(groups).forEach(gl => {
+        const og = document.createElement('optgroup');
+        og.label = gl;
+        groups[gl].forEach(m => {
+          const o = document.createElement('option');
+          o.value = m.id;
+          o.textContent = m.label + (m.configured ? '' : '（未配置 Key）');
+          o.dataset.provider = m.provider;
+          o.dataset.providerLabel = m.provider_label;
+          o.dataset.configured = m.configured ? '1' : '';
+          og.appendChild(o);
+        });
+        sel.appendChild(og);
+      });
+      // 载入当前设置
+      let st = {};
+      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      if (st.model) sel.value = st.model;
+      else if (cur) sel.value = cur;
+      const hasTemp = st.temperature !== null && st.temperature !== undefined;
+      $('setTempEnable').checked = hasTemp;
+      $('setTemp').value = hasTemp ? st.temperature : 0.3;
+      $('tempVal').textContent = Number($('setTemp').value).toFixed(2);
+      $('setTemp').disabled = !hasTemp;
+      $('setMaxTokens').value = (st.max_tokens != null ? st.max_tokens : '');
+      $('setThinking').checked = !!st.thinking;
+      $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
+      $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
+      onModelChange();
+    }
+    function selectedModelOption() {
+      const sel = $('setModel');
+      return sel.options[sel.selectedIndex] || null;
+    }
+    function onModelChange() {
+      const o = selectedModelOption();
+      if (!o) return;
+      const pl = o.dataset.providerLabel || '';
+      const configured = o.dataset.configured === '1';
+      $('apiKeyLabel').textContent = pl + ' 的 API Key（仅保存在本地 cpq_settings.json）';
+      const hint = $('modelHint');
+      if (configured) {
+        hint.className = 'hint ok';
+        hint.textContent = '提供方：' + pl + ' · 已配置 API Key，可直接使用。';
+      } else {
+        hint.className = 'hint warn';
+        hint.textContent = '提供方：' + pl + ' · 尚未配置 API Key，请在下方填写后再保存，否则发送会失败。';
+      }
+    }
+    function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
+    function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
+    async function saveSettings() {
+      const o = selectedModelOption();
+      const payload = {
+        model: $('setModel').value,
+        temperature: $('setTempEnable').checked ? Number($('setTemp').value) : null,
+        max_tokens: $('setMaxTokens').value === '' ? null : Number($('setMaxTokens').value),
+        thinking: $('setThinking').checked,
+        thinking_budget: $('setThinkBudget').value === '' ? 8000 : Number($('setThinkBudget').value),
+      };
+      const key = $('setApiKey').value.trim();
+      if (key && o) { payload.api_key = key; payload.provider = o.dataset.provider; }
+      const msg = $('settingsMsg');
+      msg.className = 'hint';
+      msg.textContent = '保存中…';
+      $('saveSettingsBtn').disabled = true;
+      try {
+        const r = await fetch(AGENT_URL + '/api/settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).then(r => r.json());
+        $('setApiKey').value = '';
+        $('modelInfo').textContent = ' · ' + (r.model || payload.model);
+        if (r.configured === false) {
+          msg.className = 'hint warn';
+          msg.textContent = '已保存，但「' + (r.provider_label || '该提供方') + '」仍未配置可用的 API Key，发送会失败。';
+        } else {
+          msg.className = 'hint ok';
+          msg.textContent = '已保存并生效：' + (r.model || payload.model) + '。下一条消息起使用新设置。';
+          setTimeout(closeOverlays, 900);
+        }
+      } catch (e) {
+        msg.className = 'hint warn';
+        msg.textContent = '保存失败：' + e;
+      } finally {
+        $('saveSettingsBtn').disabled = false;
+      }
+    }
+    // Esc 关闭浮层
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
+
+    /* ================= 启动 ================= */
+    async function boot() {
+      renderProgressBar();
+      $('stepBadge').textContent = '等待开始';
+
+      let requirement = '', files = [], fileContents = [];
+      let projectName = '', projectCode = '', customer = '';
+      try {
+        requirement = sessionStorage.getItem('cpq:requirement') || '';
+        files = JSON.parse(sessionStorage.getItem('cpq:files') || '[]');
+        fileContents = JSON.parse(sessionStorage.getItem('cpq:fileContents') || '[]');
+        projectName = sessionStorage.getItem('cpq:projectName') || '';
+        projectCode = sessionStorage.getItem('cpq:projectCode') || '';
+        customer = sessionStorage.getItem('cpq:customer') || '';
+      } catch {}
+      // 顶部「当前项目」用用户填写的项目名（不再写死波兰项目）
+      if ($('projectName')) $('projectName').textContent = projectName || '未命名报价项目';
+
+      // 探测服务 & 重置会话
+      try {
+        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        setConn(true);
+        FORMS = meta.forms || []; // 写死的表结构（用于预渲染骨架）
+        if (meta.model) $('modelInfo').textContent = ' · ' + meta.model;
+        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        currentSessionId = nw.id || meta.session_id || null;
+        // 从首页「历史记录」点进来的：直接载入该会话，跳过新对话
+        let openId = '';
+        try { openId = sessionStorage.getItem('cpq:openSession') || ''; sessionStorage.removeItem('cpq:openSession'); } catch {}
+        if (openId) { await openSession(openId); return; }
+      } catch {
+        setConn(false);
+        $('panelPlaceholder').innerHTML =
+          '<i class="ti ti-plug-x"></i><div>未连接到报价助手服务。<br>请在 配置报价CPQ 目录运行 <code>python cpq_agent_server.py</code> 后刷新本页。</div>';
+        addErrorBubble('无法连接报价助手服务（' + AGENT_URL + '）。请先运行：python cpq_agent_server.py，然后刷新页面。');
+        return;
+      }
+
+      const projLine = '项目名称：' + (projectName || '（未填）') + '｜项目编码：' + (projectCode || '（未填）') + '｜客户名称：' + (customer || '（未填）');
+      let kickoffBubble = '';
+      const bubbleParts = [];
+      if (projectName || customer) bubbleParts.push('项目：' + (projectName || '-') + '（客户：' + (customer || '-') + '）');
+      if (requirement) bubbleParts.push(requirement);
+      if (files.length) bubbleParts.push('附件：' + files.join('、'));
+      if (bubbleParts.length) { kickoffBubble = bubbleParts.join('\n'); addUserBubble(kickoffBubble); }
+
+      // 右侧表结构写死、已预渲染出空骨架；进第 1 步即可看到 6 个固定分区
+      setStep(1);
+      const hasInput = requirement || fileContents.length || files.length;
+      const kickoff =
+        '【会话开始】用户从报价首页进入报价流程。\n' +
+        projLine + '\n' +
+        '（以上项目名称/编码/客户是用户在弹框里填写的权威值，请直接用于第 1 步「测算基本信息」的 客户、项目名称 等字段，不要另行臆造。）\n' +
+        '需求描述：' + (requirement || '（空——用户未上传需求文档，也未填写需求描述）') + '\n' +
+        '附件：' + (files.length ? files.join('、') : '无') + '\n' +
+        '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构已预渲染成【空骨架】在右侧，字段固定、你不用造结构；' +
+        '但**右侧现在是空的，值必须你主动调用 cpq_ui 的 render_form(values)/render_table(rows) 填进去**——不 render 右侧就一直空着。\n' +
+        (hasInput
+          ? 'set_step 1，然后**逐个调用 render_form/render_table 把这 6 个固定分区都填上值**（客户/项目名称/项目编码用上面的权威值，其余从需求文档填、没有就留空），再请用户核对。' +
+            '在用户点「进入下一大步骤」之前，不要 set_step 2、不要做定价/BOM/加价。'
+          : '用户开了「新对话」，还没有任何需求文档/描述。**先不要往表里填值**，只在聊天里友好地请用户：① 点回形针上传需求文档，或 ② 直接输入需求描述。' +
+            '等用户提供需求后，你再逐个 render_form/render_table 把值填进右侧的 6 个空骨架。不要臆造任何数据。');
+      let kickoffFull = kickoff;
+      for (const f of fileContents) {
+        if (f && f.text) {
+          kickoffFull += '\n\n--- 附件《' + f.name + '》内容' + (f.truncated ? '（内容较长，已截断）' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---';
+        }
+      }
+      sendToAgent(kickoffFull, { echo: false, display: kickoffBubble });
+    }
+
+    boot();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>规则助手 - 规则配置</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.24.0/dist/tabler-icons.min.css">
+  <style>
+    :root {
+      --color-primary: #6366f1;
+      --color-secondary: #8b5cf6;
+      --color-success: #10b981;
+      --color-warning: #f59e0b;
+      --color-danger: #ef4444;
+      --bg-page: #fff;
+      --bg-soft: #f7f7f8;
+      --bg-hover: #ececf1;
+      --border: #e7e7ea;
+      --border-strong: #d9d9e3;
+      --text-primary: #1f2023;
+      --text-secondary: #62636d;
+      --text-tertiary: #9a9ba6;
+      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .main-container {
+      display: grid;
+      grid-template-columns: 56px 520px 1fr;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .nav-panel {
+      background: var(--bg-soft);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 10px;
+      gap: 6px;
+    }
+
+    .nav-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--gradient-ai);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .nav-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+    }
+
+    .nav-icon.active,
+    .nav-icon:hover {
+      background: var(--bg-hover);
+      color: var(--color-primary);
+    }
+
+    .nav-icon .ti,
+    .nav-logo .ti {
+      font-size: 20px;
+    }
+
+    .chat-panel {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-page);
+    }
+
+    .chat-header,
+    .rule-header {
+      height: 56px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .chat-title,
+    .rule-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chat-title .ti,
+    .rule-title .ti {
+      font-size: 20px;
+      color: var(--color-primary);
+    }
+
+    .ai-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--gradient-ai);
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .chat-messages {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .message {
+      max-width: 88%;
+      padding: 11px 14px;
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .message-ai {
+      align-self: flex-start;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+
+    .message-user {
+      align-self: flex-end;
+      background: var(--gradient-ai);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message-label {
+      font-size: 11px;
+      color: var(--color-secondary);
+      font-weight: 500;
+    }
+
+    .message-user .message-label {
+      color: rgba(255,255,255,.82);
+    }
+
+    .message-text {
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .process-card {
+      width: 100%;
+      max-width: 100%;
+      align-self: stretch;
+      padding: 0;
+      background: var(--bg-page);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .process-head {
+      padding: 12px 16px;
+      background: var(--bg-soft);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .process-body {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 10px;
+    }
+
+    .step-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--color-primary);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+
+    .step-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .step-desc {
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    .tag-row {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag {
+      padding: 4px 9px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-soft);
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .tag.blue {
+      color: var(--color-primary);
+      background: rgba(99,102,241,.1);
+      border-color: rgba(99,102,241,.28);
+    }
+
+    .tag.green {
+      color: var(--color-success);
+      background: rgba(16,185,129,.1);
+      border-color: rgba(16,185,129,.28);
+    }
+
+    .tag.orange {
+      color: var(--color-warning);
+      background: rgba(245,158,11,.1);
+      border-color: rgba(245,158,11,.28);
+    }
+
+    .chat-input-area {
+      padding: 12px 16px 16px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .chat-input-wrapper {
+      max-width: 820px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chat-attach {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      color: var(--text-secondary);
+      background: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .chat-attach:hover {
+      color: var(--color-primary);
+      border-color: var(--color-primary);
+      background: rgba(99,102,241,.08);
+    }
+
+    .chat-input {
+      flex: 1;
+      resize: none;
+      border: 1px solid var(--border-strong);
+      border-radius: 11px;
+      padding: 9px 10px;
+      font: inherit;
+      outline: none;
+      background: var(--bg-soft);
+    }
+
+    .chat-input:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+    }
+
+    .chat-send,
+    .btn {
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .chat-send {
+      width: 38px;
+      height: 38px;
+      color: #fff;
+      background: var(--gradient-ai);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .rule-panel {
+      height: 100vh;
+      border-left: 1px solid var(--border);
+      background: var(--bg-page);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .rule-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .section {
+      margin-bottom: 18px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .section-title .ti {
+      color: var(--color-primary);
+      font-size: 16px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 12px;
+      padding: 14px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+
+    .form-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .form-item.full {
+      grid-column: 1 / -1;
+    }
+
+    .form-label {
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+
+    .form-input,
+    .form-select,
+    .form-textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 7px 9px;
+      background: #fff;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .form-textarea {
+      min-height: 70px;
+      resize: vertical;
+    }
+
+    .rule-preview {
+      padding: 12px;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: var(--radius-md);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .formula-box {
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      color: #1f2937;
+    }
+
+    .rule-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 560px;
+    }
+
+    .rule-table th,
+    .rule-table td {
+      padding: 8px 9px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .rule-table th {
+      color: var(--text-secondary);
+      background: var(--bg-soft);
+      font-weight: 600;
+    }
+
+    /* 两步式规则表单 */
+    .section-hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 4px 0 10px;
+      line-height: 1.5;
+    }
+    #importTable td { white-space: normal; vertical-align: top; }
+    #importTable input.imp-cell,
+    #importTable textarea.imp-cell {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-family: inherit;
+      background: var(--bg-page, #fff);
+      color: var(--text-primary);
+      outline: none;
+      resize: vertical;
+    }
+    #importTable textarea.imp-cell { min-height: 34px; }
+    .imp-del {
+      border: none; background: transparent; cursor: pointer;
+      color: var(--text-secondary); font-size: 13px; padding: 2px 4px;
+    }
+    .imp-del:hover { color: var(--color-danger, #e5484d); }
+    .import-empty {
+      font-size: 12px; color: var(--text-secondary);
+      padding: 14px; text-align: center;
+      border: 1px dashed var(--border); border-radius: 8px; margin-top: 6px;
+    }
+    .add-row-link { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--color-primary); }
+    .groovy-wrap { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .groovy-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .groovy-card .gc-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 7px 10px; background: var(--bg-soft); font-size: 12px; font-weight: 600;
+    }
+    .groovy-card .gc-lib { font-weight: 400; color: var(--text-secondary); font-size: 11px; }
+    .groovy-card pre {
+      margin: 0; padding: 10px; font-size: 12px; line-height: 1.5;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      white-space: pre-wrap; word-break: break-word; color: var(--text-primary);
+    }
+    .groovy-card .gc-evi { padding: 0 10px 9px; font-size: 11px; color: var(--text-secondary); }
+    #btnGenGroovy { margin-bottom: 4px; }
+    .footer-note { font-size: 12px; color: var(--text-secondary); }
+
+    .status {
+      display: inline-flex;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+    }
+
+    .status.enabled {
+      background: rgba(16,185,129,.12);
+      color: var(--color-success);
+    }
+
+    .status.draft {
+      background: var(--bg-soft);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+
+    .status.review {
+      background: rgba(245,158,11,.12);
+      color: var(--color-warning);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+
+    .rule-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      padding: 8px 14px;
+      border: 1px solid var(--border-strong);
+      background: #fff;
+      color: var(--text-secondary);
+    }
+
+    .btn.primary {
+      color: #fff;
+      border-color: transparent;
+      background: var(--gradient-ai);
+    }
+
+    .nav-icon {
+      cursor: pointer;
+      position: relative;
+    }
+
+    .nav-icon .nav-tooltip {
+      position: absolute;
+      left: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-left: 8px;
+      padding: 6px 10px;
+      background: #1f2023;
+      color: white;
+      font-size: 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s;
+      pointer-events: none;
+      z-index: 1000;
+    }
+
+    .nav-icon:hover .nav-tooltip {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .conn-status {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+    }
+
+    .conn-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      display: inline-block;
+    }
+
+    .conn-dot.ok { background: var(--color-success); }
+    .conn-dot.err { background: var(--color-danger); }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15,16,25,0.35);
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.18s;
+      z-index: 900;
+    }
+
+    .overlay.show {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      width: 340px;
+      background: var(--bg-page);
+      border-right: 1px solid var(--border);
+      box-shadow: 4px 0 24px rgba(15,16,25,0.12);
+      transform: translateX(-104%);
+      transition: transform 0.22s ease;
+      z-index: 950;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .drawer.show { transform: translateX(0); }
+
+    .drawer-header,
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .drawer-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .drawer-title .ti {
+      font-size: 18px;
+      color: var(--color-secondary);
+    }
+
+    .drawer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+    }
+
+    .icon-btn {
+      width: 30px;
+      height: 30px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .icon-btn:hover {
+      background: var(--bg-soft);
+      color: var(--color-primary);
+    }
+
+    .btn-mini {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 1;
+      justify-content: center;
+      padding: 8px 10px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-page);
+      color: var(--text-primary);
+    }
+
+    .btn-mini.primary {
+      background: var(--gradient-ai);
+      color: white;
+      border: none;
+    }
+
+    .hist-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      background: var(--bg-page);
+      transition: border-color 0.15s, box-shadow 0.15s;
+      position: relative;
+    }
+
+    .hist-item:hover {
+      border-color: var(--color-primary);
+      box-shadow: 0 2px 10px rgba(99,102,241,0.12);
+    }
+
+    .hist-item.current {
+      border-color: var(--color-primary);
+      background: rgba(99,102,241,0.05);
+    }
+
+    .hist-item .h-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-right: 22px;
+    }
+
+    .hist-item .h-meta {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .hist-item .h-chip {
+      background: var(--bg-hover);
+      border-radius: 999px;
+      padding: 1px 7px;
+      color: var(--text-secondary);
+    }
+
+    .hist-item .h-del {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 22px;
+      height: 22px;
+      border: none;
+      background: transparent;
+      color: var(--text-tertiary);
+      cursor: pointer;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hist-item .h-del:hover {
+      background: rgba(239,68,68,0.1);
+      color: var(--color-danger);
+    }
+
+    .hist-empty {
+      text-align: center;
+      color: var(--text-tertiary);
+      padding: 40px 16px;
+      font-size: 13px;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 960;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal.show { display: flex; }
+
+    .modal-card {
+      position: relative;
+      width: 460px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 64px);
+      background: var(--bg-page);
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(15,16,25,0.28);
+      display: flex;
+      flex-direction: column;
+      z-index: 1;
+    }
+
+    .modal-body {
+      padding: 16px 18px;
+      overflow-y: auto;
+    }
+
+    .modal-body label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin: 14px 0 6px;
+    }
+
+    .modal-body label:first-child { margin-top: 0; }
+
+    .modal-body select,
+    .modal-body input[type="text"],
+    .modal-body input[type="password"],
+    .modal-body input[type="number"] {
+      width: 100%;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--text-primary);
+      background: white;
+      outline: none;
+    }
+
+    .modal-body select:focus,
+    .modal-body input:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+    }
+
+    .hint {
+      font-size: 11.5px;
+      color: var(--text-tertiary);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    .hint.warn { color: var(--color-warning); }
+    .hint.ok { color: var(--color-success); }
+
+    .field-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .field-row input[type="range"] { flex: 1; }
+
+    .check-row {
+      display: flex !important;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px !important;
+      font-size: 13px !important;
+      color: var(--text-primary) !important;
+      cursor: pointer;
+    }
+
+    .check-row input { width: auto; }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+    }
+
+    .modal-footer .btn { min-width: 92px; }
+
+    /* ===== 右侧规则表（参考 报价规则.html） ===== */
+    .right-panel {
+      display: flex; flex-direction: column; height: 100vh;
+      overflow: hidden; background: var(--bg-page);
+      border-left: 1px solid var(--border);
+    }
+    .results-area {
+      background: var(--bg-page); border: 0.5px solid var(--border);
+      display: flex; flex-direction: column; flex: 1; overflow: hidden;
+      margin: 16px; border-radius: var(--radius-lg);
+    }
+    .results-header {
+      padding: 12px 16px; border-bottom: 0.5px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+    }
+    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .results-title .ti { font-size: 18px; color: var(--color-secondary); }
+    .results-sub { font-size: 12px; color: var(--text-tertiary); }
+    .results-content { padding: 16px; flex: 1; overflow-y: auto; }
+
+    .data-table { border: 0.5px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-size: 13px; }
+    .rules-table .table-header,
+    .rules-table .table-row { grid-template-columns: 36px 74px 130px 1.1fr 300px; }
+    .table-header { display: grid; gap: 1px; background: var(--bg-soft); }
+    .table-header .th {
+      padding: 8px 12px; font-weight: 600; font-size: 13px; color: var(--text-secondary);
+      text-align: center; white-space: nowrap;
+    }
+    .table-row { display: grid; gap: 1px; background: var(--bg-page); border-top: 0.5px solid var(--border); }
+    .table-row:hover { background: var(--bg-soft); }
+    .table-row .td {
+      padding: 8px 10px; color: var(--text-primary); text-align: center;
+      border-right: 1px solid var(--border); min-height: 40px;
+      display: flex; align-items: center; justify-content: center; font-size: 13px;
+    }
+    .table-row .td:last-child { border-right: none; }
+    .table-row .td.wrap-cell {
+      flex-direction: column; text-align: center; line-height: 1.4;
+      word-break: break-word; white-space: normal;
+    }
+    .table-row .td input {
+      width: 100%; border: 1px solid transparent; background: transparent; text-align: center;
+      font-size: 13px; color: var(--text-primary); padding: 6px 4px; outline: none;
+      border-radius: 4px; transition: border-color .15s, background .15s; font-family: inherit;
+    }
+    .table-row .td input:hover { border-color: var(--border); background: #fff; }
+    .table-row .td input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .table-row .td.groovy-td { padding: 6px 8px; align-items: stretch; }
+    .code-display {
+      display: block; width: 100%; font-family: 'Courier New', monospace; font-size: 11px;
+      line-height: 1.6; color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+      background: var(--bg-soft); border-radius: 4px; padding: 8px; border: 1px solid transparent;
+      min-height: 40px; text-align: left; resize: vertical; outline: none;
+    }
+    .code-display:hover { border-color: var(--color-primary); background: #f0f4ff; }
+    .code-display:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .code-display.placeholder { color: var(--text-tertiary); font-family: inherit; font-style: italic; }
+    .checkbox { width: 15px; height: 15px; cursor: pointer; accent-color: var(--color-primary); }
+    .add-row { padding: 9px 12px; color: var(--color-primary); font-size: 13px; cursor: pointer; background: var(--bg-page); border-top: 0.5px solid var(--border); }
+    .add-row:hover { text-decoration: underline; }
+    .rules-empty { font-size: 12px; color: var(--text-secondary); padding: 16px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; margin-top: 10px; line-height: 1.6; }
+
+    .results-footer {
+      padding: 14px 16px; border-top: 0.5px solid var(--border);
+      display: flex; gap: 8px; justify-content: space-between; flex-shrink: 0;
+    }
+    .results-footer .btn {
+      padding: 8px 16px; font-size: 13px; font-weight: 500; border-radius: 9px;
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    }
+    .results-footer .btn .ti { font-size: 15px; }
+    .btn-secondary { background: var(--bg-page); color: var(--text-primary); }
+    .btn-secondary:hover { background: var(--bg-soft); border-color: var(--color-primary); }
+    .btn-danger { background: var(--bg-page); color: var(--color-danger); border-color: var(--color-danger); }
+    .btn-danger:hover { background: rgba(239,68,68,.08); }
+    .btn-primary { background: var(--gradient-ai); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(99,102,241,.3); }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-success { background: var(--color-success); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(16,185,129,.3); }
+    .btn-success:hover { filter: brightness(1.06); }
+
+    @media (max-width: 1100px) {
+      .main-container {
+        grid-template-columns: 56px 1fr;
+      }
+      .rule-panel, .right-panel {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <div class="nav-panel">
+      <div class="nav-logo"><i class="ti ti-sparkles"></i></div>
+      <div class="nav-icon active" onclick="startNewRule()">
+        <i class="ti ti-plus"></i>
+        <span class="nav-tooltip">新对话</span>
+      </div>
+      <div class="nav-icon" onclick="openHistory()">
+        <i class="ti ti-history"></i>
+        <span class="nav-tooltip">历史记录</span>
+      </div>
+      <div class="nav-icon"><i class="ti ti-search"></i><span class="nav-tooltip">搜索</span></div>
+      <div style="flex:1"></div>
+      <div class="nav-icon" onclick="openSettings()">
+        <i class="ti ti-settings"></i>
+        <span class="nav-tooltip">设置</span>
+      </div>
+    </div>
+
+    <div class="chat-panel">
+      <div class="chat-header">
+        <div class="chat-title">
+          <i class="ti ti-scale"></i>
+          规则助手
+          <span class="ai-badge">AI</span>
+        </div>
+        <div class="conn-status">
+          <span class="conn-dot" id="connDot"></span>
+          <span id="connText">连接中...</span><span id="modelInfo"></span>
+        </div>
+      </div>
+
+      <div class="chat-messages">
+        <div class="message message-ai">
+          <div class="message-label">规则助手</div>
+          <div class="message-text" id="introMessage">已进入规则助手。你可以上传规则说明文档，或直接输入文字说明，我会生成对应公式和规则表单行。</div>
+        </div>
+
+        <div class="message message-ai process-card">
+          <div class="process-head">
+            <i class="ti ti-route" style="color: var(--color-primary);"></i>
+            规则助手能力
+          </div>
+          <div class="process-body">
+            <div class="step">
+              <div class="step-icon"><i class="ti ti-check"></i></div>
+              <div>
+                <div class="step-title">1. 导入规则说明文档</div>
+                <div class="step-desc">上传 Word、PDF、Excel 或文本后，提取文档中的规则说明、触发条件和结果描述。</div>
+                <div class="tag-row">
+                  <span class="tag blue">文档导入</span>
+                  <span class="tag blue">规则说明提取</span>
+                </div>
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-icon"><i class="ti ti-check"></i></div>
+              <div>
+                <div class="step-title">2. 生成公式和规则行</div>
+                <div class="step-desc">把文字说明转换成可维护公式，并按规则类型写入对应规则库的表单行。</div>
+                <div class="tag-row">
+                  <span class="tag green">IF 条件 THEN 结果</span>
+                  <span class="tag green">生成规则表单行</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-area">
+        <div class="chat-input-wrapper">
+          <button class="chat-attach" id="ruleUploadBtn" title="上传规则说明文档"><i class="ti ti-paperclip"></i></button>
+          <input id="ruleFileInput" type="file" multiple hidden
+            accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
+          <textarea class="chat-input" rows="2" placeholder="输入规则配置需求..."></textarea>
+          <button class="chat-send"><i class="ti ti-send"></i></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="results-area">
+        <div class="results-header">
+          <div class="results-title"><i class="ti ti-adjustments"></i> 规则配置</div>
+          <div class="results-sub" id="ruleCount">共 0 条规则</div>
+        </div>
+        <div class="results-content">
+          <div class="data-table rules-table">
+            <div class="table-header">
+              <div class="th"><input type="checkbox" class="checkbox" id="selectAll" onchange="toggleSelectAll()"></div>
+              <div class="th">规则ID</div>
+              <div class="th">规则名称</div>
+              <div class="th">规则描述</div>
+              <div class="th">Groovy规则公式</div>
+            </div>
+            <div id="rulesBody"></div>
+            <div class="add-row" id="addRuleRow">+ 新增规则</div>
+          </div>
+          <div class="rules-empty" id="rulesEmpty">还没有规则。<br>第一步：上传规则文档，我会把文档里的规则录入到这张表（规则ID / 名称 / 描述）；<br>第二步：点「生成 Groovy 公式」，用数据库参数 + 规则描述生成 Groovy 公式并回填到最后一列。</div>
+        </div>
+        <div class="results-footer">
+          <button class="btn btn-danger" onclick="batchDelete()"><i class="ti ti-trash"></i> 批量删除</button>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-secondary" onclick="validateFormulas()"><i class="ti ti-check"></i> 公式校验</button>
+            <button class="btn btn-primary" id="btnGenGroovy"><i class="ti ti-bolt"></i> 生成 Groovy 公式</button>
+            <button class="btn btn-success" id="btnImportDb" onclick="importToDb()"><i class="ti ti-database-import"></i> 导入数据库</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay" onclick="closeOverlays()"></div>
+
+  <aside class="drawer" id="historyDrawer">
+    <div class="drawer-header">
+      <div class="drawer-title"><i class="ti ti-history"></i> 历史规则</div>
+      <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="drawer-actions">
+      <button class="btn-mini primary" onclick="startNewRule()"><i class="ti ti-plus"></i> 新建规则</button>
+      <button class="icon-btn" onclick="loadHistoryList()" title="刷新"><i class="ti ti-refresh"></i></button>
+    </div>
+    <div class="drawer-body" id="historyList">
+      <div class="hist-empty">加载中...</div>
+    </div>
+  </aside>
+
+  <div class="modal" id="settingsModal" onclick="if(event.target===this)closeOverlays()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="drawer-title"><i class="ti ti-settings"></i> 模型设置</div>
+        <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <label>模型</label>
+        <select id="setModel" onchange="onModelChange()"></select>
+        <div class="hint" id="modelHint"></div>
+
+        <label id="apiKeyLabel">API Key（当前模型所属提供方，仅保存在本地）</label>
+        <input id="setApiKey" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
+
+        <label class="check-row">
+          <input type="checkbox" id="setTempEnable" onchange="onTempEnableChange()">
+          自定义 Temperature（不勾选则用模型默认）
+        </label>
+        <div class="field-row" style="margin-top:8px">
+          <input type="range" id="setTemp" min="0" max="1" step="0.05" value="0.3" oninput="document.getElementById('tempVal').textContent=Number(this.value).toFixed(2)">
+          <span id="tempVal" style="font-size:12px;color:var(--text-secondary);min-width:34px;text-align:right">0.30</span>
+        </div>
+
+        <label>最大输出 Tokens（留空用默认 16384）</label>
+        <input id="setMaxTokens" type="number" min="256" max="64000" placeholder="16384">
+
+        <label class="check-row">
+          <input type="checkbox" id="setThinking" onchange="onThinkingChange()">
+          扩展思考（仅 Claude 系列生效）
+        </label>
+        <div id="thinkBudgetRow" style="display:none">
+          <label>思考预算 Tokens</label>
+          <input id="setThinkBudget" type="number" min="1024" max="32000" placeholder="8000">
+        </div>
+
+        <div class="hint" id="settingsMsg"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeOverlays()">取消</button>
+        <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 默认同源 /agents/rule（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47296。
+    const AGENT_URL = (localStorage.getItem('cpq:ruleAgentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47296' : '/agents/rule')).replace(/\/$/, '');
+    const RULE_KIND_META = {
+      product_config: {
+        label: '产品配置规则',
+        library: 'md_clm_distribution_rule',
+        scope: '全局',
+        defaultType: '产品配置规则',
+        guide: '该规则会进入产品配单/配置规则库，用于约束选配、互斥、数量匹配。'
+      },
+      pricing: {
+        label: '定价规则',
+        library: 'md_clm_material_price_rule',
+        scope: 'BOM行',
+        defaultType: '定价规则',
+        guide: '该规则会进入产品定价规则库，用于输出定价系数、成本或价格公式。'
+      },
+      quote: {
+        label: '报价规则',
+        library: 'md_clm_pricing_surcharge_factor',
+        scope: '报价单',
+        defaultType: '报价规则',
+        guide: '该规则会进入报价/加价因子规则库，用于输出报价加价、折扣、费用。'
+      },
+    };
+
+    let MODELS = [];
+    let busy = false;
+    let currentSessionId = null;
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function setConn(ok, text) {
+      const dot = $('connDot');
+      const label = $('connText');
+      if (dot) dot.className = 'conn-dot ' + (ok ? 'ok' : 'err');
+      if (label) label.textContent = text || (ok ? '已连接' : '未连接');
+    }
+
+    function setBusy(v) {
+      busy = !!v;
+      if (chatSend) chatSend.disabled = busy;
+      if (chatInput) chatInput.disabled = busy;
+    }
+
+    function closeOverlays() {
+      $('overlay')?.classList.remove('show');
+      $('historyDrawer')?.classList.remove('show');
+      $('settingsModal')?.classList.remove('show');
+    }
+
+    function openHistory() {
+      $('overlay')?.classList.add('show');
+      $('historyDrawer')?.classList.add('show');
+      loadHistoryList();
+    }
+
+    function openSettings() {
+      $('overlay')?.classList.add('show');
+      $('settingsModal')?.classList.add('show');
+      if ($('settingsMsg')) $('settingsMsg').textContent = '';
+      loadModels();
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeOverlays();
+    });
+
+    function appendMessage(role, text) {
+      const messages = document.querySelector('.chat-messages');
+      if (!messages || !text) return;
+      const el = document.createElement('div');
+      el.className = role === 'user' ? 'message message-user' : 'message message-ai';
+      el.innerHTML = `
+        <div class="message-label">${role === 'user' ? '我' : '规则助手'}</div>
+        <div class="message-text"></div>
+      `;
+      el.querySelector('.message-text').textContent = text;
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function readPayload() {
+      let files = [];
+      let fileContents = [];
+      try { files = JSON.parse(sessionStorage.getItem('cpq:files') || '[]'); } catch (e) {}
+      try { fileContents = JSON.parse(sessionStorage.getItem('cpq:fileContents') || '[]'); } catch (e) {}
+      const ruleKind = sessionStorage.getItem('cpq:ruleKind') || '';
+      return {
+        requirement: (sessionStorage.getItem('cpq:requirement') || '').trim(),
+        files: Array.isArray(files) ? files : [],
+        fileContents: Array.isArray(fileContents) ? fileContents : [],
+        ruleKind,
+        ruleTypeLabel: sessionStorage.getItem('cpq:ruleTypeLabel') || '',
+        ruleLibrary: sessionStorage.getItem('cpq:ruleLibrary') || '',
+      };
+    }
+
+    function inferRuleKind(text) {
+      const t = text || '';
+      if (/(报价|加价|费用|折扣|客户等级|质量专控|电流分档|保函|投标服务费)/.test(t)) return 'quote';
+      if (/(定价|价格|成本|单价|物料成本|材料|人工|机器费用|溢价|市场调节)/.test(t)) return 'pricing';
+      return 'product_config';
+    }
+
+    function firstLine(text) {
+      return (text || '').split(/\n|。|；|;/).map(s => s.trim()).find(Boolean) || '';
+    }
+    function normalizeRuleKind(rule) {
+      const text = [rule.rule_type, rule.target_table, rule.rule_name, rule.rule_desc].filter(Boolean).join(' ');
+      if (/加价|报价|surcharge|pricing_surcharge/i.test(text)) return 'quote';
+      if (/定价|price|material_price/i.test(text)) return 'pricing';
+      return 'product_config';
+    }
+    function metaFor(rule) { return RULE_KIND_META[normalizeRuleKind(rule)] || RULE_KIND_META.product_config; }
+    function libraryFor(rule) { return rule.target_table || metaFor(rule).library; }
+    function typeFor(rule) { return rule.rule_type || metaFor(rule).defaultType; }
+    function esc(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+    // ===== 右侧规则表（参考 报价规则.html）：第一步导入填 ID/名称/描述，第二步回填 Groovy =====
+    function rulesEmptyCheck() {
+      const n = document.querySelectorAll('#rulesBody .table-row').length;
+      const empty = document.getElementById('rulesEmpty');
+      if (empty) empty.style.display = n > 0 ? 'none' : '';
+      const cnt = document.getElementById('ruleCount');
+      if (cnt) cnt.textContent = '共 ' + n + ' 条规则';
+    }
+    function nextRuleId() {
+      let max = 0;
+      document.querySelectorAll('#rulesBody .r-id').forEach(i => {
+        const m = /^R(\d+)$/.exec((i.value || '').trim());
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      });
+      return 'R' + String(max + 1).padStart(3, '0');
+    }
+    function setGroovyCell(cell, code) {
+      if (code) { cell.classList.remove('placeholder'); cell.textContent = code; }
+      else { cell.classList.add('placeholder'); cell.textContent = '待生成'; }
+    }
+    function addRuleRow(rule) {
+      rule = rule || {};
+      const body = document.getElementById('rulesBody');
+      const row = document.createElement('div');
+      row.className = 'table-row';
+      const rid = rule.rule_code || rule.rule_id || nextRuleId();
+      row.innerHTML =
+        '<div class="td"><input type="checkbox" class="checkbox row-checkbox"></div>' +
+        '<div class="td wrap-cell"><input class="r-id" value="' + esc(rid) + '"></div>' +
+        '<div class="td wrap-cell"><input class="r-name" placeholder="规则名称"></div>' +
+        '<div class="td wrap-cell"><input class="r-desc" placeholder="规则描述"></div>' +
+        '<div class="td groovy-td"><div class="code-display placeholder" contenteditable="true" spellcheck="false"></div></div>';
+      row.querySelector('.r-name').value = rule.rule_name || '';
+      row.querySelector('.r-desc').value = rule.rule_desc || '';
+      if (rule.rule_name || rule.rule_desc) row.dataset.target = libraryFor(rule);
+      const cell = row.querySelector('.code-display');
+      setGroovyCell(cell, rule.groovy_code || rule.groovy_formula || rule.rule_expression || '');
+      cell.addEventListener('focus', () => { if (cell.classList.contains('placeholder')) { cell.textContent = ''; cell.classList.remove('placeholder'); } });
+      cell.addEventListener('blur', () => { if (!cell.textContent.trim()) setGroovyCell(cell, ''); });
+      body.appendChild(row);
+      rulesEmptyCheck();
+      return row;
+    }
+    function findRowByName(name) {
+      name = (name || '').trim();
+      if (!name) return null;
+      let matched = null;
+      document.querySelectorAll('#rulesBody .table-row').forEach(row => {
+        const n = row.querySelector('.r-name');
+        if (n && n.value.trim() === name) matched = row;
+      });
+      return matched;
+    }
+    function upsertRuleRow(rule, stage) {
+      const row = findRowByName(rule.rule_name) || addRuleRow(rule.rule_name ? { rule_name: rule.rule_name } : {});
+      if (rule.rule_name) row.querySelector('.r-name').value = rule.rule_name;
+      if (rule.rule_desc) row.querySelector('.r-desc').value = rule.rule_desc;
+      if (rule.target_table) row.dataset.target = libraryFor(rule);
+      if (stage === 'groovy' || stage === 'final') {
+        const code = rule.groovy_code || rule.groovy_formula || rule.rule_expression || '';
+        if (code) setGroovyCell(row.querySelector('.code-display'), code);
+      }
+      return row;
+    }
+    function collectRules() {
+      const out = [];
+      document.querySelectorAll('#rulesBody .table-row').forEach(row => {
+        const name = (row.querySelector('.r-name').value || '').trim();
+        const desc = (row.querySelector('.r-desc').value || '').trim();
+        if (!name && !desc) return;
+        const cell = row.querySelector('.code-display');
+        out.push({
+          rule_id: (row.querySelector('.r-id').value || '').trim(),
+          rule_name: name,
+          rule_desc: desc,
+          target_table: row.dataset.target || '',
+          groovy_formula: cell.classList.contains('placeholder') ? '' : cell.textContent.trim(),
+        });
+      });
+      return out;
+    }
+    function resetRulesTable() {
+      document.getElementById('rulesBody').innerHTML = '';
+      const sa = document.getElementById('selectAll'); if (sa) sa.checked = false;
+      rulesEmptyCheck();
+    }
+
+    function applyRuleResult(result, source) {
+      const stage = (result && result.stage) || 'import';
+      const rules = (result && result.rules) || [];
+      if (!rules.length) return false;
+      rules.forEach(r => upsertRuleRow(r, stage));
+      return true;
+    }
+
+    function generateGroovy() {
+      if (busy) return;
+      const rules = collectRules();
+      if (!rules.length) { appendMessage('ai', '还没有规则。请先上传规则文档或点「+ 新增规则」，再生成 Groovy。'); return; }
+      const payload = rules.map((r, i) => `${i + 1}. 规则名称：${r.rule_name || '(未命名)'}｜目标库：${r.target_table || ''}｜描述：${r.rule_desc || ''}`).join('\n');
+      sendToAgent('【第二步·生成公式】请结合数据库参数（先用 sql_query 查字段字典/既有规则/样例BOM/加价因子）与下面每条规则的描述，为每条规则生成 Groovy 公式和代码（rule_name 与下方保持一致，回填到「Groovy规则公式」列）：\n' + payload, {
+        echo: false,
+        display: '生成 Groovy 公式（' + rules.length + ' 条规则）',
+      });
+    }
+
+    // 全选 / 批量删除 / 公式校验 / 新增
+    function toggleSelectAll() {
+      const all = document.getElementById('selectAll').checked;
+      document.querySelectorAll('#rulesBody .row-checkbox').forEach(cb => cb.checked = all);
+    }
+    function batchDelete() {
+      const checked = document.querySelectorAll('#rulesBody .row-checkbox:checked');
+      if (!checked.length) { alert('请先勾选要删除的规则。'); return; }
+      if (!confirm('确定删除选中的 ' + checked.length + ' 条规则？')) return;
+      checked.forEach(cb => cb.closest('.table-row').remove());
+      const sa = document.getElementById('selectAll'); if (sa) sa.checked = false;
+      rulesEmptyCheck();
+    }
+    function validateFormulas() {
+      const rules = collectRules();
+      if (!rules.length) { appendMessage('ai', '暂无规则可校验。'); return; }
+      const missing = rules.filter(r => !r.groovy_formula).map(r => r.rule_name || '(未命名)');
+      const noDesc = rules.filter(r => !r.rule_desc).map(r => r.rule_name || '(未命名)');
+      let msg = '已校验 ' + rules.length + ' 条规则。';
+      if (missing.length) msg += '\n· 还没有 Groovy 公式：' + missing.join('、') + '（可点「生成 Groovy 公式」）。';
+      if (noDesc.length) msg += '\n· 规则描述为空：' + noDesc.join('、') + '。';
+      if (!missing.length && !noDesc.length) msg += ' 每条都已有描述与公式。';
+      appendMessage('ai', msg);
+    }
+
+    async function importToDb() {
+      const rules = collectRules();
+      if (!rules.length) { appendMessage('ai', '暂无规则可导入。请先录入规则并生成 Groovy 公式。'); return; }
+      const noFormula = rules.filter(r => !r.groovy_formula).map(r => r.rule_name || '(未命名)');
+      let confirmMsg = '确定把当前 ' + rules.length + ' 条规则导入数据库？';
+      if (noFormula.length) confirmMsg += '\n注意：以下规则还没有 Groovy 公式，将以空公式入库：' + noFormula.join('、');
+      if (!confirm(confirmMsg)) return;
+      const btn = document.getElementById('btnImportDb');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch(AGENT_URL + '/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules }),
+        }).then(r => r.json());
+        if (res && res.ok) {
+          appendMessage('ai', '✅ 已导入数据库：' + res.count + ' 条规则写入 ' + (res.table || 'rule_agent_rules') + '（批次 ' + (res.batch_id || '') + '，' + (res.created_at || '') + '）。');
+        } else {
+          appendMessage('ai', '导入失败：' + ((res && res.error) || '未知错误') + '。');
+        }
+      } catch (e) {
+        appendMessage('ai', '无法连接规则助手服务，导入失败。请确认 rule_agent_server.py 正在运行。');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function initFromHomepage() {
+      const payload = readPayload();
+      const meta = RULE_KIND_META[payload.ruleKind || inferRuleKind(payload.requirement)] || RULE_KIND_META.product_config;
+      const summary = [
+        payload.ruleTypeLabel ? `规则类型：${payload.ruleTypeLabel}` : `规则类型：${meta.label}`,
+        `目标规则库：${payload.ruleLibrary || meta.library}`,
+        payload.requirement ? `规则配置需求：${payload.requirement}` : '',
+        payload.files.length ? `附件：${payload.files.join('、')}` : '',
+      ].filter(Boolean).join('；');
+      if (summary) {
+        appendMessage('user', summary);
+        document.getElementById('introMessage').textContent = '已接收规则配置需求。规则助手分两步：① 把文档里的规则录入右侧规则表（ID/名称/描述）；② 用数据库参数 + 规则描述生成 Groovy 公式并回填到最后一列。';
+        const fileText = payload.fileContents.map(f => `【${f.name}】\n${f.text || ''}`).join('\n\n');
+        const text = [payload.requirement, fileText].filter(Boolean).join('\n\n');
+        if (text) {
+          sendToAgent('【第一步·导入规则文档】请只把下列内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，另判定目标规则库），本步不要生成 Groovy：\n' + text, {
+            echo: false,
+            display: '从首页进入规则助手：' + (payload.requirement || payload.files.join('、')),
+          });
+        }
+      } else {
+        document.getElementById('introMessage').textContent = '请上传规则说明文档或输入规则文字。我会先把规则录入右侧规则表，再由你点「生成 Groovy 公式」，用数据库参数 + 规则描述生成公式并回填到最后一列。';
+      }
+    }
+
+    document.getElementById('addRuleRow').addEventListener('click', () => addRuleRow());
+    document.getElementById('btnGenGroovy').addEventListener('click', generateGroovy);
+    rulesEmptyCheck();
+
+    const chatInput = document.querySelector('.chat-input');
+    const chatSend = document.querySelector('.chat-send');
+    const ruleUploadBtn = document.getElementById('ruleUploadBtn');
+    const ruleFileInput = document.getElementById('ruleFileInput');
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(new Error('read error'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function extractRuleFile(file) {
+      if (/\.(txt|md|csv|tsv|json|log)$/i.test(file.name)) {
+        return await file.text();
+      }
+      try {
+        const b64 = await fileToBase64(file);
+        const res = await fetch(AGENT_URL + '/api/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: file.name, data: b64 }),
+        });
+        const data = await res.json();
+        if (data && data.ok) return data.text || '';
+      } catch (e) {}
+      return '';
+    }
+
+    function createAiBubble(label = '规则助手') {
+      const messages = document.querySelector('.chat-messages');
+      const el = document.createElement('div');
+      el.className = 'message message-ai';
+      el.innerHTML = `<div class="message-label">${label}</div><div class="message-text"></div>`;
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+      return el.querySelector('.message-text');
+    }
+
+    async function sendToAgent(text, { echo = true, display, fallback = true } = {}) {
+      if (!text || busy) return false;
+      if (echo) appendMessage('user', display || text);
+      setBusy(true);
+      setConn(true, '生成中');
+      let aiText = null;
+      let receivedRule = false;
+      let receivedAnything = false;
+
+      try {
+        const resp = await fetch(AGENT_URL + '/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, display }),
+        });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop() || '';
+          for (const chunk of chunks) {
+            const line = chunk.split('\n').find(x => x.startsWith('data:'));
+            if (!line) continue;
+            let ev;
+            try { ev = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+            if (ev.type === 'text') {
+              receivedAnything = true;
+              if (!aiText) aiText = createAiBubble();
+              aiText.textContent += ev.text || '';
+              const messages = document.querySelector('.chat-messages');
+              messages.scrollTop = messages.scrollHeight;
+            } else if (ev.type === 'rule_result') {
+              receivedAnything = true;
+              receivedRule = applyRuleResult(ev.result, '规则 Agent') || receivedRule;
+            } else if (ev.type === 'tool_use') {
+              receivedAnything = true;
+            } else if (ev.type === 'error') {
+              throw new Error(ev.error || '规则 Agent 调用失败');
+            } else if (ev.type === 'done') {
+              if (ev.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + ev.model;
+            }
+          }
+        }
+        setConn(true, '已连接');
+        if (!receivedAnything) {
+          appendMessage('ai', '规则 Agent 未返回内容，请重试或检查模型配置。');
+        }
+        return receivedRule;
+      } catch (e) {
+        setConn(false, '未连接');
+        appendMessage('ai', '无法连接规则助手服务（' + AGENT_URL + '）。请先运行：python cpq_suite_server.py（或独立的 rule_agent_server.py --port 47296），再重试。');
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    if (ruleUploadBtn && ruleFileInput) {
+      ruleUploadBtn.addEventListener('click', () => ruleFileInput.click());
+      ruleFileInput.addEventListener('change', async () => {
+        const files = Array.from(ruleFileInput.files || []);
+        if (!files.length) return;
+        appendMessage('user', '上传规则说明文档：' + files.map(f => f.name).join('、'));
+        let merged = '';
+        for (const file of files) {
+          const text = await extractRuleFile(file);
+          merged += `\n\n【${file.name}】\n${text || file.name}`;
+        }
+        ruleFileInput.value = '';
+        sendToAgent('【第一步·导入规则文档】请只把以下文件内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步不要生成 Groovy；公式留到用户点「生成 Groovy 公式」时再做：' + merged, {
+          echo: false,
+          display: '上传规则说明文档：' + files.map(f => f.name).join('、'),
+        });
+      });
+    }
+
+    function submitMessage() {
+      const text = (chatInput.value || '').trim();
+      if (!text) {
+        chatInput.focus();
+        return;
+      }
+      appendMessage('user', text);
+      chatInput.value = '';
+      sendToAgent('【第一步·导入规则】请把下面的规则说明整理成规则行录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步先不生成 Groovy；如需公式请点右侧「生成 Groovy 公式」：\n' + text, {
+        echo: false,
+        display: text,
+      });
+    }
+    chatSend.addEventListener('click', submitMessage);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitMessage();
+      }
+    });
+
+    async function startNewRule() {
+      if (busy) return;
+      closeOverlays();
+      try {
+        const r = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json());
+        currentSessionId = r.id || null;
+      } catch (e) {}
+      const messages = document.querySelector('.chat-messages');
+      messages.innerHTML = '';
+      appendMessage('ai', '已新建规则对话。第一步：上传规则说明文档，我会把规则录入右侧规则表；第二步：点「生成 Groovy 公式」用数据库参数生成公式并回填最后一列。');
+      resetRulesTable();
+    }
+
+    async function loadHistoryList() {
+      const box = $('historyList');
+      if (!box) return;
+      box.innerHTML = '<div class="hist-empty">加载中...</div>';
+      let sessions = [];
+      try {
+        const res = await fetch(AGENT_URL + '/api/sessions').then(r => r.json());
+        sessions = res.sessions || [];
+      } catch (e) {
+        box.innerHTML = '<div class="hist-empty">无法连接规则助手服务，暂时读不到历史。</div>';
+        return;
+      }
+      if (!sessions.length) {
+        box.innerHTML = '<div class="hist-empty">还没有历史规则。<br>完成一次规则对话后会自动保存在这里。</div>';
+        return;
+      }
+      box.innerHTML = '';
+      sessions.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'hist-item' + (s.id === currentSessionId ? ' current' : '');
+        item.innerHTML = '<div class="h-title"></div><div class="h-meta"><span class="h-chip"></span><span></span></div><button class="h-del" title="删除"><i class="ti ti-trash"></i></button>';
+        item.querySelector('.h-title').textContent = s.title || '未命名规则';
+        item.querySelector('.h-chip').textContent = s.model || '规则会话';
+        item.querySelector('.h-meta span:last-child').textContent = (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
+        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s.id); };
+        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.title); };
+        box.appendChild(item);
+      });
+    }
+
+    async function openSession(id) {
+      if (busy) {
+        alert('请等当前回合结束再切换历史。');
+        return;
+      }
+      let data = null;
+      try {
+        data = await fetch(AGENT_URL + '/api/session/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        }).then(r => r.ok ? r.json() : null);
+      } catch (e) {}
+      if (!data || !data.id) {
+        alert('无法打开该历史记录。');
+        return;
+      }
+      currentSessionId = data.id;
+      closeOverlays();
+      replaySession(data);
+    }
+
+    async function deleteSession(id, title) {
+      if (!confirm('删除历史规则「' + (title || id) + '」？此操作不可恢复。')) return;
+      try {
+        await fetch(AGENT_URL + '/api/session/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+      } catch (e) {}
+      loadHistoryList();
+    }
+
+    function replaySession(data) {
+      const messages = document.querySelector('.chat-messages');
+      messages.innerHTML = '';
+      resetRulesTable();
+      (data.events || []).forEach(ev => {
+        if (ev.type === 'user') appendMessage('user', ev.text);
+        else if (ev.type === 'text') appendMessage('ai', ev.text);
+        else if (ev.type === 'rule_result') applyRuleResult(ev.result, '历史记录');
+      });
+      appendMessage('ai', '已载入历史规则「' + (data.title || '') + '」，可以继续补充或修改。');
+      if (data.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + data.model;
+      setBusy(false);
+    }
+
+    async function loadModels() {
+      const sel = $('setModel');
+      if (!sel) return;
+      sel.innerHTML = '';
+      let current = null;
+      try {
+        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        MODELS = r.models || [];
+        current = r.current;
+      } catch (e) {
+        MODELS = [];
+      }
+      const groups = {};
+      MODELS.forEach(m => { (groups[m.provider_label] = groups[m.provider_label] || []).push(m); });
+      Object.keys(groups).forEach(label => {
+        const group = document.createElement('optgroup');
+        group.label = label;
+        groups[label].forEach(m => {
+          const option = document.createElement('option');
+          option.value = m.id;
+          option.textContent = m.label + (m.configured ? '' : '（未配置 Key）');
+          option.dataset.provider = m.provider;
+          option.dataset.providerLabel = m.provider_label;
+          option.dataset.configured = m.configured ? '1' : '';
+          group.appendChild(option);
+        });
+        sel.appendChild(group);
+      });
+
+      let st = {};
+      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      if (st.model) sel.value = st.model; else if (current) sel.value = current;
+      const hasTemp = st.temperature !== null && st.temperature !== undefined;
+      $('setTempEnable').checked = hasTemp;
+      $('setTemp').value = hasTemp ? st.temperature : 0.3;
+      $('tempVal').textContent = Number($('setTemp').value).toFixed(2);
+      $('setTemp').disabled = !hasTemp;
+      $('setMaxTokens').value = st.max_tokens != null ? st.max_tokens : '';
+      $('setThinking').checked = !!st.thinking;
+      $('setThinkBudget').value = st.thinking_budget != null ? st.thinking_budget : 8000;
+      $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
+      onModelChange();
+    }
+
+    function selectedModelOption() {
+      const sel = $('setModel');
+      return sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex] : null;
+    }
+
+    function onModelChange() {
+      const option = selectedModelOption();
+      if (!option) return;
+      const providerLabel = option.dataset.providerLabel || '';
+      const configured = option.dataset.configured === '1';
+      $('apiKeyLabel').textContent = providerLabel + ' 的 API Key（仅保存在本地 rule_settings.json）';
+      const hint = $('modelHint');
+      if (configured) {
+        hint.className = 'hint ok';
+        hint.textContent = '提供方：' + providerLabel + ' · 已配置 API Key，可直接使用。';
+      } else {
+        hint.className = 'hint warn';
+        hint.textContent = '提供方：' + providerLabel + ' · 尚未配置 API Key，请填写后保存，否则发送会失败。';
+      }
+    }
+
+    function onTempEnableChange() {
+      $('setTemp').disabled = !$('setTempEnable').checked;
+    }
+
+    function onThinkingChange() {
+      $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none';
+    }
+
+    async function saveSettings() {
+      const option = selectedModelOption();
+      const payload = {
+        model: $('setModel').value,
+        temperature: $('setTempEnable').checked ? Number($('setTemp').value) : null,
+        max_tokens: $('setMaxTokens').value === '' ? null : Number($('setMaxTokens').value),
+        thinking: $('setThinking').checked,
+        thinking_budget: $('setThinkBudget').value === '' ? 8000 : Number($('setThinkBudget').value),
+      };
+      const key = $('setApiKey').value.trim();
+      if (key && option) {
+        payload.api_key = key;
+        payload.provider = option.dataset.provider;
+      }
+      const msg = $('settingsMsg');
+      msg.className = 'hint';
+      msg.textContent = '保存中...';
+      $('saveSettingsBtn').disabled = true;
+      try {
+        const r = await fetch(AGENT_URL + '/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).then(r => r.json());
+        $('setApiKey').value = '';
+        if ($('modelInfo')) $('modelInfo').textContent = ' · ' + (r.model || payload.model);
+        if (r.configured === false) {
+          msg.className = 'hint warn';
+          msg.textContent = '已保存，但当前提供方仍未配置可用 API Key，发送会失败。';
+        } else {
+          msg.className = 'hint ok';
+          msg.textContent = '已保存并生效：' + (r.model || payload.model) + '。下一条消息起使用新设置。';
+          setTimeout(closeOverlays, 900);
+        }
+      } catch (e) {
+        msg.className = 'hint warn';
+        msg.textContent = '保存失败：' + e;
+      } finally {
+        $('saveSettingsBtn').disabled = false;
+      }
+    }
+
+    async function initAgentMeta() {
+      try {
+        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        setConn(true, '已连接');
+        if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + meta.model;
+        currentSessionId = meta.session_id || currentSessionId;
+      } catch (e) {
+        setConn(false, '未连接');
+      }
+    }
+
+    initAgentMeta();
+    initFromHomepage();
+  </script>
+</body>
+</html>

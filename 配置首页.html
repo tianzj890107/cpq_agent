@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 配置系统</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.24.0/dist/tabler-icons.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --color-primary: #6366f1;
+      --color-primary-hover: #4f46e5;
+      --color-primary-light: #eef2ff;
+      --color-purple: #8b5cf6;
+      --color-purple-light: #f5f3ff;
+      --color-green: #10B981;
+      --color-green-light: #ECFDF5;
+      --color-warning: #F59E0B;
+      --color-warning-light: #FFFBEB;
+      --color-red: #EF4444;
+      --color-orange: #F97316;
+      --color-orange-light: #FFF7ED;
+
+      --bg-page: #F5F5F5;
+      --bg-card: #FFFFFF;
+      --bg-hover: #F9FAFB;
+
+      --text-primary: #1F2937;
+      --text-secondary: #6B7280;
+      --text-tertiary: #9CA3AF;
+
+      --border-color: #E5E7EB;
+      --border-light: #F3F4F6;
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 12px;
+      --space-lg: 16px;
+      --space-xl: 20px;
+      --space-2xl: 24px;
+
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-full: 999px;
+
+      --transition-fast: 150ms ease;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', 'PingFang SC', -apple-system, sans-serif;
+      background: linear-gradient(135deg, #f5f3ff 0%, #eff6ff 100%);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* 左侧导航容器 */
+    .nav-container {
+      position: fixed;
+      left: 0;
+      top: 0;
+      height: 100vh;
+      z-index: 100;
+      display: flex;
+    }
+
+    /* 收起时的窄导航 */
+    .nav-collapsed {
+      width: 56px;
+      height: 100vh;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 10px;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .nav-collapsed.hidden {
+      display: none;
+    }
+
+    .nav-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .nav-logo:hover {
+      transform: scale(1.05);
+    }
+
+    .nav-logo i {
+      font-size: 18px;
+      color: white;
+    }
+
+    .nav-divider {
+      width: 32px;
+      height: 1px;
+      background: var(--border-color);
+      margin: var(--space-sm) 0;
+    }
+
+    .nav-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition-fast);
+      color: var(--text-secondary);
+      position: relative;
+    }
+
+    .nav-icon:hover {
+      background: var(--bg-hover);
+      color: var(--color-primary);
+    }
+
+    .nav-icon.active {
+      background: var(--color-primary-light);
+      color: var(--color-primary);
+    }
+
+    .nav-icon i {
+      font-size: 20px;
+    }
+
+    .nav-icon .nav-tooltip {
+      position: absolute;
+      left: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-left: 8px;
+      padding: 6px 10px;
+      background: var(--text-primary);
+      color: white;
+      font-size: 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity var(--transition-fast);
+      pointer-events: none;
+    }
+
+    .nav-icon:hover .nav-tooltip {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* 展开时的侧边栏面板 */
+    .nav-expanded {
+      width: 240px;
+      height: 100vh;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border-color);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .nav-expanded.open {
+      display: flex;
+    }
+
+    /* 搜索框 */
+    .nav-search {
+      padding: 12px;
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .search-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-page);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
+    .search-input-wrapper i {
+      font-size: 16px;
+      color: var(--text-tertiary);
+    }
+
+    .search-input-wrapper span {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      flex: 1;
+    }
+
+    .search-input-wrapper .shortcut {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      background: var(--bg-card);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+    }
+
+    /* 用户信息 */
+    .nav-user {
+      padding: 16px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .user-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    /* 快捷入口 */
+    .nav-quick-actions {
+      padding: 8px 12px;
+    }
+
+    .quick-action {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: background var(--transition-fast);
+    }
+
+    .quick-action:hover {
+      background: var(--bg-hover);
+    }
+
+    .quick-action.active {
+      background: var(--color-primary-light);
+    }
+
+    .quick-action i {
+      font-size: 18px;
+      color: var(--text-secondary);
+    }
+
+    .quick-action.active i {
+      color: var(--color-primary);
+    }
+
+    .quick-action span {
+      font-size: 14px;
+      color: var(--text-primary);
+      flex: 1;
+    }
+
+    .quick-action .arrow {
+      font-size: 14px;
+      color: var(--text-tertiary);
+    }
+
+    /* 分割线标题 */
+    .nav-section-title {
+      padding: 12px 16px 8px;
+      font-size: 12px;
+      color: var(--text-tertiary);
+      font-weight: 500;
+    }
+
+    /* 历史对话列表 */
+    .nav-history {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 12px;
+    }
+
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: background var(--transition-fast);
+    }
+
+    .history-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .history-item.active {
+      background: var(--color-primary-light);
+    }
+
+    .history-item i {
+      font-size: 16px;
+      color: var(--text-secondary);
+    }
+
+    .history-item.active i {
+      color: var(--color-primary);
+    }
+
+    .history-item span {
+      font-size: 13px;
+      color: var(--text-primary);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 用户信息底部 */
+    .nav-footer {
+      padding: 12px;
+      border-top: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .nav-footer:hover {
+      background: var(--bg-hover);
+    }
+
+    .nav-footer .user-avatar {
+      width: 28px;
+      height: 28px;
+      font-size: 12px;
+    }
+
+    .nav-footer span {
+      font-size: 13px;
+      color: var(--text-secondary);
+      flex: 1;
+    }
+
+    .nav-footer i {
+      font-size: 14px;
+      color: var(--text-tertiary);
+    }
+
+    .page-container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 100px var(--space-2xl) var(--space-xl) 72px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ===== Main Chat Area ===== */
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Greeting */
+    .greeting {
+      text-align: center;
+      margin-bottom: var(--space-xl);
+    }
+
+    .greeting-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: var(--space-sm);
+    }
+
+    .greeting-title .highlight {
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .greeting-subtitle {
+      font-size: 16px;
+      color: var(--text-secondary);
+    }
+
+    /* Category Tags */
+    .category-tags {
+      display: flex;
+      justify-content: center;
+      gap: var(--space-sm);
+      flex-wrap: wrap;
+      margin-bottom: var(--space-xl);
+    }
+
+    .category-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-sm) var(--space-lg);
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-full);
+      font-size: 13px;
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .category-tag:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background-color: var(--color-primary-light);
+    }
+
+    .category-tag.active {
+      background-color: var(--color-primary);
+      border-color: var(--color-primary);
+      color: white;
+    }
+
+    /* Unified Input Card */
+    .unified-input-card {
+      background-color: var(--bg-card);
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      padding: 24px;
+      margin-bottom: 30px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .unified-content {
+      margin-bottom: 16px;
+    }
+
+    .unified-intro {
+      font-size: 15px;
+      color: var(--text-primary);
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+
+    .unified-textarea {
+      width: 100%;
+      padding: 12px 0;
+      border: none;
+      outline: none;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text-primary);
+      resize: none;
+      line-height: 1.6;
+      background: transparent;
+    }
+
+    .unified-textarea::placeholder {
+      color: var(--text-tertiary);
+    }
+
+    .unified-input-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-light);
+    }
+
+    .upload-section {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--color-primary);
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .upload-section:hover {
+      color: var(--color-primary-hover);
+    }
+
+    .upload-section i {
+      font-size: 18px;
+    }
+
+    .char-counter {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+
+    .send-btn {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      border: none;
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 150ms ease;
+    }
+
+    .send-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+    }
+
+    .send-btn i {
+      font-size: 18px;
+      color: white;
+    }
+
+    /* ===== List Section ===== */
+    .list-section {
+      background-color: var(--bg-card);
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      padding: 14px;
+    }
+
+    .list-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .list-tabs {
+      display: flex;
+      gap: 20px;
+    }
+
+    .list-tab {
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      position: relative;
+      padding-bottom: 6px;
+    }
+
+    .list-tab.active {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .list-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background-color: var(--text-primary);
+    }
+
+    .search-box {
+      display: flex;
+      gap: 6px;
+    }
+
+    .search-input {
+      padding: 6px 10px;
+      background-color: var(--bg-page);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 12px;
+      width: 180px;
+    }
+
+    .search-btn {
+      padding: 6px 12px;
+      background-color: var(--bg-page);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .new-quote-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 12px;
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      color: white;
+      cursor: pointer;
+    }
+
+    .new-quote-btn i {
+      font-size: 14px;
+      color: white;
+    }
+
+    /* Card Grid */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .request-card {
+      background-color: var(--bg-page);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 12px;
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+
+    .request-card:hover {
+      border-color: var(--color-primary);
+      box-shadow: var(--shadow-md);
+    }
+
+    .request-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .request-id {
+      color: var(--color-primary);
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .request-status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 500;
+      margin-left: auto;
+    }
+
+    /* Status Styles */
+    .status-draft {
+      background-color: var(--bg-page);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-color);
+    }
+
+    .status-reviewing {
+      background-color: var(--color-warning-light);
+      color: var(--color-warning);
+    }
+
+    .status-confirmed {
+      background-color: var(--color-green-light);
+      color: var(--color-green);
+    }
+
+    .request-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .request-info {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .request-info span {
+      color: var(--text-tertiary);
+    }
+
+    .request-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-light);
+    }
+
+    .request-creator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .creator-avatar {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 500;
+    }
+
+    .request-detail {
+      font-size: 11px;
+      color: var(--color-primary);
+      cursor: pointer;
+    }
+
+    .request-detail:hover {
+      text-decoration: underline;
+    }
+
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-light);
+    }
+
+    .pagination-info {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .pagination-controls {
+      display: flex;
+      gap: 4px;
+    }
+
+    .page-btn {
+      padding: 4px 8px;
+      background-color: var(--bg-page);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .page-btn.active {
+      background-color: var(--color-primary);
+      border-color: var(--color-primary);
+      color: white;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .card-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- 左侧导航 -->
+  <div class="nav-container">
+    <!-- 收起时的窄导航 -->
+    <div class="nav-collapsed" id="navCollapsed">
+      <div class="nav-logo" onclick="toggleNav()">
+        <i class="ti ti-sparkles"></i>
+      </div>
+
+      <div class="nav-icon">
+        <i class="ti ti-file-invoice"></i>
+        <span class="nav-tooltip">报价</span>
+      </div>
+
+      <div class="nav-icon active">
+        <i class="ti ti-settings"></i>
+        <span class="nav-tooltip">配置</span>
+      </div>
+
+      <div class="nav-icon">
+        <i class="ti ti-plus"></i>
+        <span class="nav-tooltip">新对话</span>
+      </div>
+
+      <div class="nav-icon">
+        <i class="ti ti-history"></i>
+        <span class="nav-tooltip">历史记录</span>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-icon">
+        <i class="ti ti-layout-grid"></i>
+        <span class="nav-tooltip">分类</span>
+      </div>
+
+      <div class="nav-icon">
+        <i class="ti ti-search"></i>
+        <span class="nav-tooltip">搜索</span>
+      </div>
+
+      <div style="flex:1"></div>
+
+      <div class="nav-icon">
+        <i class="ti ti-settings"></i>
+        <span class="nav-tooltip">设置</span>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-icon">
+        <i class="ti ti-moon"></i>
+        <span class="nav-tooltip">深色模式</span>
+      </div>
+    </div>
+
+    <!-- 展开时的侧边栏面板 -->
+    <div class="nav-expanded" id="navExpanded">
+      <!-- 搜索框 -->
+      <div class="nav-search">
+        <div class="search-input-wrapper">
+          <i class="ti ti-search"></i>
+          <span>搜索...</span>
+          <span class="shortcut">⌘K</span>
+        </div>
+      </div>
+
+      <!-- 用户信息 -->
+      <div class="nav-user">
+        <div class="user-avatar">
+          <i class="ti ti-user" style="font-size: 16px;"></i>
+        </div>
+        <span class="user-name">智能助手</span>
+      </div>
+
+      <!-- 快捷入口 -->
+      <div class="nav-quick-actions">
+        <div class="quick-action active">
+          <i class="ti ti-plus"></i>
+          <span>新对话</span>
+          <span class="shortcut">⌘K</span>
+        </div>
+        <div class="quick-action">
+          <i class="ti ti-browser"></i>
+          <span>AI 浏览器</span>
+          <i class="ti ti-chevron-right arrow"></i>
+        </div>
+        <div class="quick-action">
+          <i class="ti ti-photo"></i>
+          <span>AI 创作</span>
+          <i class="ti ti-chevron-right arrow"></i>
+        </div>
+        <div class="quick-action">
+          <i class="ti ti-folder"></i>
+          <span>云盘</span>
+          <i class="ti ti-chevron-right arrow"></i>
+        </div>
+        <div class="quick-action">
+          <i class="ti ti-dots"></i>
+          <span>更多</span>
+          <i class="ti ti-chevron-right arrow"></i>
+        </div>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <!-- 历史对话 -->
+      <div class="nav-section-title">历史对话</div>
+      <div class="nav-history">
+        <div class="history-item active">
+          <i class="ti ti-message-circle"></i>
+          <span>主对话</span>
+        </div>
+        <div class="history-item">
+          <i class="ti ti-message-circle"></i>
+          <span>选择建议</span>
+        </div>
+        <div class="history-item">
+          <i class="ti ti-message-circle"></i>
+          <span>行程安排</span>
+        </div>
+        <div class="history-item">
+          <i class="ti ti-message-circle"></i>
+          <span>周报模板</span>
+        </div>
+        <div class="history-item">
+          <i class="ti ti-message-circle"></i>
+          <span>UI样式更新设计</span>
+        </div>
+        <div class="history-item">
+          <i class="ti ti-message-circle"></i>
+          <span>课程费用对比</span>
+        </div>
+      </div>
+
+      <!-- 底部用户信息 -->
+      <div class="nav-footer">
+        <div class="user-avatar">
+          <i class="ti ti-user" style="font-size: 12px;"></i>
+        </div>
+        <span>用户911444</span>
+        <i class="ti ti-chevron-right"></i>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-container">
+    <!-- Chat Container -->
+    <div class="chat-container">
+      <!-- Greeting -->
+      <div class="greeting">
+        <h1 class="greeting-title">
+          <span class="highlight">创作无限可能</span>，智能助手
+        </h1>
+        <p class="greeting-subtitle">今天我能帮你做些什么？</p>
+      </div>
+
+      <!-- Category Tags -->
+      <div class="category-tags">
+        <span class="category-tag"><i class="ti ti-brain"></i> 报价助手</span>
+        <span class="category-tag active"><i class="ti ti-settings"></i> 配置助手</span>
+        <span class="category-tag"><i class="ti ti-scale"></i> 规则助手</span>
+      </div>
+
+      <!-- Unified Input + Introduction Card -->
+      <div class="unified-input-card">
+        <div class="unified-content">
+          <p class="unified-intro">请上传某款产品的历史BOM，我们可以根据历史BOM协助你生成此产品的超级BOM。</p>
+        </div>
+        <textarea class="unified-textarea" placeholder="请输入你的问题或需求描述..." rows="3"></textarea>
+        <div class="unified-input-area">
+          <div class="upload-section">
+            <i class="ti ti-upload"></i>
+            <span>上传文件</span>
+          </div>
+          <div class="char-counter">0/500</div>
+          <button class="send-btn">
+            <i class="ti ti-send"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- List Section -->
+      <div class="list-section">
+        <div class="list-header">
+          <div class="list-tabs">
+            <div class="list-tab active">我的配置</div>
+            <div class="list-tab">全部配置</div>
+          </div>
+          <div class="search-box">
+            <input type="text" class="search-input" placeholder="支持通过名称&创建人搜索">
+            <button class="search-btn">查询</button>
+            <button class="new-quote-btn">
+              <i class="ti ti-plus"></i>
+              创建配置
+            </button>
+          </div>
+        </div>
+
+        <!-- Card Grid -->
+        <div class="card-grid">
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607001</span>
+              <span class="request-status status-draft">草稿</span>
+            </div>
+            <div class="request-title">锂电池生产线配置方案</div>
+            <div class="request-info">产品型号：<span>INR18650-35E</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">张</div>
+                张三 · 2026-07-01
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607002</span>
+              <span class="request-status status-reviewing">审核中</span>
+            </div>
+            <div class="request-title">储能系统PACK配置</div>
+            <div class="request-info">产品型号：<span>LFP-100Ah</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">李</div>
+                李四 · 2026-06-28
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607003</span>
+              <span class="request-status status-confirmed">已完成</span>
+            </div>
+            <div class="request-title">动力电池模组配置</div>
+            <div class="request-info">产品型号：<span>NCM-75Ah</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">王</div>
+                王五 · 2026-06-25
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607004</span>
+              <span class="request-status status-confirmed">已完成</span>
+            </div>
+            <div class="request-title">48V微混系统配置</div>
+            <div class="request-info">产品型号：<span>MHB-48V</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">赵</div>
+                赵六 · 2026-06-20
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607005</span>
+              <span class="request-status status-reviewing">审核中</span>
+            </div>
+            <div class="request-title">固态电池试验线配置</div>
+            <div class="request-info">产品型号：<span>SSB-试验</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">孙</div>
+                孙七 · 2026-06-18
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+
+          <div class="request-card">
+            <div class="request-card-header">
+              <span class="request-id">PZ202607006</span>
+              <span class="request-status status-draft">草稿</span>
+            </div>
+            <div class="request-title">超快充电池系统配置</div>
+            <div class="request-info">产品型号：<span>SFC-6C</span></div>
+            <div class="request-footer">
+              <div class="request-creator">
+                <div class="creator-avatar">钱</div>
+                钱八 · 2026-06-15
+              </div>
+              <span class="request-detail">详情</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination">
+          <div class="pagination-info">共 36 个结果，当前显示 1–6</div>
+          <div class="pagination-controls">
+            <button class="page-btn">‹</button>
+            <button class="page-btn active">1</button>
+            <button class="page-btn">2</button>
+            <button class="page-btn">3</button>
+            <button class="page-btn">...</button>
+            <button class="page-btn">6</button>
+            <button class="page-btn">›</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 导航展开/收起
+    function toggleNav() {
+      const collapsed = document.getElementById('navCollapsed');
+      const expanded = document.getElementById('navExpanded');
+      collapsed.classList.toggle('hidden');
+      expanded.classList.toggle('open');
+    }
+
+    // 点击展开面板外部关闭
+    document.addEventListener('click', function(e) {
+      const container = document.querySelector('.nav-container');
+      const collapsed = document.getElementById('navCollapsed');
+      const expanded = document.getElementById('navExpanded');
+      if (!container.contains(e.target) && expanded.classList.contains('open')) {
+        collapsed.classList.remove('hidden');
+        expanded.classList.remove('open');
+      }
+    });
+
+    // Category tag switching
+    document.querySelectorAll('.category-tag').forEach(tag => {
+      tag.addEventListener('click', function() {
+        document.querySelectorAll('.category-tag').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+
+    // List tab switching
+    document.querySelectorAll('.list-tab').forEach(tab => {
+      tab.addEventListener('click', function() {
+        document.querySelectorAll('.list-tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+
+    // Character counter
+    const textarea = document.querySelector('.unified-textarea');
+    const counter = document.querySelector('.char-counter');
+    if (textarea && counter) {
+      textarea.addEventListener('input', function() {
+        const len = this.value.length;
+        counter.textContent = len + '/500';
+        if (len > 500) {
+          counter.style.color = 'var(--color-red)';
+        } else {
+          counter.style.color = 'var(--text-tertiary)';
+        }
+      });
+    }
+  </script>
+</body>
+</html>

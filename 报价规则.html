@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>报价规则</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.24.0/dist/tabler-icons.min.css">
+  <style>
+    :root {
+      --color-primary: #6366f1;
+      --color-secondary: #8b5cf6;
+      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-success: #10B981;
+      --color-warning: #f59e0b;
+      --color-danger: #ef4444;
+      --bg-page: #ffffff;
+      --bg-secondary: #f7f7f8;
+      --bg-tertiary: #ececf1;
+      --border-color: #e7e7ea;
+      --border-secondary: #d9d9e3;
+      --text-primary: #1f2023;
+      --text-secondary: #62636d;
+      --text-tertiary: #9a9ba6;
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 12px;
+      --space-lg: 16px;
+      --space-xl: 20px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 14px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Inter, 'PingFang SC', -apple-system, sans-serif;
+      background-color: var(--bg-page);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* 主布局 */
+    .main-container {
+      display: grid;
+      grid-template-columns: 56px 520px 1fr;
+      gap: 0;
+      height: 100vh;
+      overflow: hidden;
+      border: 0.5px solid var(--border-color);
+    }
+
+    /* 左侧导航 */
+    .nav-panel {
+      background: var(--bg-secondary);
+      border-right: 0.5px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 10px;
+      gap: 5px;
+      width: 56px;
+    }
+
+    .nav-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 8px;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+    }
+
+    .nav-logo svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .nav-divider {
+      width: 32px;
+      height: 1px;
+      background: var(--border-color);
+      margin: var(--space-sm) 0;
+    }
+
+    .nav-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-action-item {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s;
+      color: var(--text-secondary);
+      position: relative;
+    }
+
+    .nav-action-item:hover {
+      background: var(--bg-tertiary);
+      color: var(--color-primary);
+    }
+
+    .nav-action-item.active {
+      background: var(--bg-tertiary);
+      color: var(--color-primary);
+    }
+
+    .nav-action-item .ti {
+      font-size: 20px;
+    }
+
+    .nav-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s;
+      color: var(--text-secondary);
+      position: relative;
+    }
+
+    .nav-icon:hover {
+      background: var(--bg-tertiary);
+      color: var(--color-primary);
+    }
+
+    .nav-icon.active {
+      background: var(--bg-tertiary);
+      color: var(--color-primary);
+    }
+
+    .nav-icon .ti {
+      font-size: 20px;
+    }
+
+    /* 中间对话区域 */
+    .chat-panel {
+      background: var(--bg-page);
+      border-right: 0.5px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 14px 16px;
+      border-bottom: 0.5px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .chat-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .chat-title .ti {
+      font-size: 20px;
+      color: var(--color-secondary);
+    }
+
+    .ai-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--gradient-ai);
+      color: white;
+    }
+
+    /* 滚动条样式 */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #D1D5DB;
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #9CA3AF;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message {
+      display: flex;
+      flex-direction: column;
+      max-width: 88%;
+    }
+
+    .message-ai {
+      align-self: flex-start;
+      background: var(--bg-secondary);
+      border: 0.5px solid var(--border-color);
+      border-radius: 14px;
+      border-bottom-left-radius: 4px;
+      padding: 11px 14px;
+    }
+
+    .message-label {
+      font-size: 11px;
+      color: var(--color-secondary);
+      font-weight: 500;
+      margin-bottom: var(--space-xs);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .message-label::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      background: var(--gradient-ai);
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .message-text {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.7;
+    }
+
+    .message-user {
+      align-self: flex-end;
+      background: var(--gradient-ai);
+      color: white;
+      border-radius: 14px;
+      border-bottom-right-radius: 4px;
+      padding: 11px 14px;
+    }
+
+    .message-user .message-label {
+      color: rgba(255,255,255,0.85);
+      flex-direction: row-reverse;
+    }
+
+    .message-user .message-label::before {
+      background: rgba(255,255,255,0.7);
+    }
+
+    .message-user .message-text {
+      color: white;
+    }
+
+    .chat-input-area {
+      padding: 10px 16px;
+      border-top: 0.5px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .chat-input-wrapper {
+      display: flex;
+      gap: var(--space-sm);
+      align-items: center;
+    }
+
+    .chat-input {
+      flex: 1;
+      padding: 9px 10px;
+      border: 0.5px solid var(--border-secondary);
+      border-radius: 11px;
+      background: var(--bg-secondary);
+      font-size: 14px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .chat-input:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+    }
+
+    .chat-send {
+      width: 38px;
+      height: 38px;
+      border: none;
+      border-radius: 11px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      flex-shrink: 0;
+    }
+
+    .chat-send:hover {
+      filter: brightness(1.06);
+    }
+
+    .chat-send:active {
+      filter: brightness(0.96);
+    }
+
+    .chat-send .ti {
+      font-size: 18px;
+      color: white;
+    }
+
+    /* 上传按钮 */
+    .chat-upload {
+      width: 38px;
+      height: 38px;
+      border: none;
+      border-radius: 11px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      border: 0.5px solid var(--border-color);
+      transition: all 0.15s;
+    }
+
+    .chat-upload:hover {
+      background: var(--bg-tertiary);
+      color: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+
+    .chat-upload .ti {
+      font-size: 18px;
+    }
+
+    /* 右侧区域 */
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-page);
+    }
+
+    /* 项目选择器 */
+    .project-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 16px;
+      background: var(--bg-page);
+      border-bottom: 0.5px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .project-selector {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: relative;
+    }
+
+    .project-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .project-select {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      padding: 6px 24px 6px 6px;
+      border-radius: var(--radius-sm);
+      appearance: none;
+      min-width: 280px;
+    }
+
+    .project-select:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .project-select:focus {
+      outline: none;
+      background: var(--bg-tertiary);
+    }
+
+    .project-selector .ti-chevron-down {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 16px;
+      color: var(--text-tertiary);
+      pointer-events: none;
+    }
+
+    .project-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--color-success);
+      border-radius: 50%;
+    }
+
+    .status-divider {
+      color: var(--border-secondary);
+    }
+
+    /* 右侧结果区域 */
+    .results-area {
+      background: var(--bg-page);
+      border: 0.5px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      margin: var(--space-lg);
+      border-radius: var(--radius-lg);
+    }
+
+    .results-header {
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 0.5px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .results-title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .results-content {
+      padding: var(--space-lg);
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    /* 数据表格 */
+    .data-table {
+      border: 0.5px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      font-size: 13px;
+    }
+
+    /* 规则表格 */
+    .rules-table .table-header,
+    .rules-table .table-row {
+      grid-template-columns: 40px 80px 100px 1fr 200px;
+    }
+
+    .table-header {
+      display: grid;
+      gap: 1px;
+      background: var(--bg-secondary);
+    }
+
+    .table-header .th {
+      padding: var(--space-sm) var(--space-md);
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .table-row {
+      display: grid;
+      gap: 1px;
+      background: var(--bg-page);
+      border-top: 0.5px solid var(--border-color);
+    }
+
+    .table-row:hover {
+      background: var(--bg-secondary);
+    }
+
+    .table-row .td {
+      padding: var(--space-sm) var(--space-md);
+      color: var(--text-primary);
+      text-align: center;
+      border-right: 1px solid var(--border-color);
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .table-row .td:last-child {
+      border-right: none;
+    }
+
+    /* 可折行的单元格 */
+    .table-row .td.wrap-cell {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      line-height: 1.4;
+      word-break: break-all;
+      white-space: normal;
+    }
+
+    .table-row .td.wrap-cell input {
+      width: 100%;
+      text-align: center;
+      word-break: break-all;
+      white-space: normal;
+    }
+
+    .table-row .td input,
+    .table-row .td select {
+      width: 100%;
+      border: 1px solid transparent;
+      background: transparent;
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-primary);
+      padding: 6px 4px;
+      outline: none;
+      border-radius: 4px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .table-row .td input:hover,
+    .table-row .td select:hover {
+      border-color: var(--border-color);
+      background: white;
+    }
+
+    .table-row .td input:focus,
+    .table-row .td select:focus {
+      border-color: var(--color-primary);
+      background: white;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+    }
+
+    /* Groovy表达式样式 */
+    .groovy-cell {
+      max-width: 200px;
+      overflow: visible;
+      text-overflow: wrap;
+      white-space: normal;
+      word-break: break-all;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .groovy-cell input {
+      display: none;
+    }
+
+    /* 可视化表达式块 */
+    .expr-block {
+      display: none;
+    }
+
+    .expr-input-wrapper {
+      display: block;
+      width: 100%;
+    }
+
+    .expr-input-wrapper textarea {
+      width: 100%;
+      min-height: 80px;
+      border: 1px solid var(--color-primary);
+      background: white;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      outline: none;
+      resize: vertical;
+    }
+
+    .expr-input-wrapper textarea:focus {
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+    }
+
+    /* 代码展示样式 */
+    .code-display {
+      display: block;
+      width: 100%;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: #f8f9fa;
+      border-radius: 4px;
+      padding: 8px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      min-height: 90px;
+      text-align: left;
+    }
+
+    .code-display:hover {
+      border-color: var(--color-primary);
+      background: #f0f4ff;
+    }
+
+    .code-display .keyword {
+      color: #3b82f6;
+      font-weight: 500;
+    }
+
+    .code-display .string {
+      color: #10B981;
+    }
+
+    .code-display .comment {
+      color: #9CA3AF;
+      font-style: italic;
+    }
+
+    .code-display .brace {
+      color: #8b5cf6;
+    }
+
+    .code-display .return {
+      color: #ec4899;
+      font-weight: 500;
+    }
+
+    .add-row {
+      padding: var(--space-sm) var(--space-md);
+      color: var(--color-primary);
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .add-row:hover {
+      text-decoration: underline;
+    }
+
+    /* 复选框样式 */
+    .checkbox-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      min-height: 36px;
+    }
+
+    .checkbox {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: var(--color-primary);
+    }
+
+    /* 规则分类标签 */
+    .category-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .category-tag.discount {
+      background: rgba(99, 102, 241, 0.12);
+      color: var(--color-primary);
+    }
+
+    .category-tag.cost {
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--color-success);
+    }
+
+    .category-tag.margin {
+      background: rgba(245, 158, 11, 0.12);
+      color: var(--color-warning);
+    }
+
+    /* 操作按钮 */
+    .action-btn {
+      padding: 4px 8px;
+      font-size: 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+
+    .action-btn.delete {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--color-danger);
+    }
+
+    .action-btn.delete:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
+
+    /* 按钮样式 */
+    .btn {
+      padding: 9px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 10px;
+      justify-content: center;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-secondary {
+      background: var(--bg-page);
+      color: var(--text-primary);
+      border: 0.5px solid var(--border-secondary);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-secondary);
+      border-color: var(--color-primary);
+    }
+
+    .btn-danger {
+      background: var(--bg-page);
+      color: var(--color-danger);
+      border: 0.5px solid var(--color-danger);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      border: none;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    }
+
+    .btn-primary:hover {
+      filter: brightness(1.06);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn .ti {
+      font-size: 16px;
+    }
+
+    .add-row {
+      padding: var(--space-sm) var(--space-md);
+      color: var(--color-primary);
+      font-size: 13px;
+      cursor: pointer;
+      display: inline-block;
+    }
+
+    .add-row:hover {
+      text-decoration: underline;
+    }
+
+    /* 响应式 */
+    @media (max-width: 1024px) {
+      .main-container {
+        grid-template-columns: 56px 360px 1fr;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .main-container {
+        grid-template-columns: 56px;
+      }
+      .chat-panel,
+      .right-panel {
+        display: none;
+      }
+    }
+
+    /* Tooltip */
+    .nav-action-item .nav-tooltip,
+    .nav-icon .nav-tooltip {
+      position: absolute;
+      left: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-left: 8px;
+      padding: 6px 10px;
+      background: #1f2023;
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s;
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    .nav-action-item .nav-tooltip::before,
+    .nav-icon .nav-tooltip::before {
+      content: '';
+      position: absolute;
+      right: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      border: 6px solid transparent;
+      border-right-color: #1f2023;
+    }
+
+    .nav-action-item:hover .nav-tooltip,
+    .nav-icon:hover .nav-tooltip {
+      opacity: 1;
+      visibility: visible;
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <!-- 最左侧导航 -->
+    <div class="nav-panel">
+      <div class="nav-logo">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="12" cy="12" r="8" stroke="white" stroke-width="1.5"/>
+          <circle cx="12" cy="12" r="3" fill="white"/>
+          <path d="M12 4V8M12 16V20M4 12H8M16 12H20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="12" cy="4" r="1" fill="white"/>
+          <circle cx="12" cy="20" r="1" fill="white"/>
+          <circle cx="4" cy="12" r="1" fill="white"/>
+          <circle cx="20" cy="12" r="1" fill="white"/>
+        </svg>
+      </div>
+      <div class="nav-actions">
+        <div class="nav-action-item active">
+          <i class="ti ti-plus"></i>
+          <span class="nav-tooltip">新对话</span>
+        </div>
+        <div class="nav-action-item">
+          <i class="ti ti-history"></i>
+          <span class="nav-tooltip">历史记录</span>
+        </div>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-icon">
+        <i class="ti ti-layout-grid"></i>
+        <span class="nav-tooltip">分类</span>
+      </div>
+      <div class="nav-icon">
+        <i class="ti ti-search"></i>
+        <span class="nav-tooltip">搜索</span>
+      </div>
+      <div style="flex:1"></div>
+      <div class="nav-icon">
+        <i class="ti ti-settings"></i>
+        <span class="nav-tooltip">设置</span>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <div class="nav-icon">
+        <i class="ti ti-moon"></i>
+        <span class="nav-tooltip">深色模式</span>
+      </div>
+    </div>
+
+    <!-- 中间对话区域 -->
+    <div class="chat-panel">
+      <div class="chat-header">
+        <div class="chat-title">
+          <i class="ti ti-sparkles"></i>
+          报价规则
+          <span class="ai-badge">AI</span>
+        </div>
+      </div>
+      <div class="chat-messages">
+        <div class="message message-ai">
+          <div class="message-label">报价规则助手</div>
+          <div class="message-text">您好！我是报价规则助手。我可以帮助您管理报价规则，包括折扣规则、成本加成规则、毛利规则等。通过Groovy表达式，您可以灵活定义各种报价逻辑。</div>
+        </div>
+        <div class="message message-ai">
+          <div class="message-label">报价规则助手</div>
+          <div class="message-text">我可以帮您完成以下工作：<br>• 创建和编辑报价规则<br>• 配置Groovy表达式逻辑<br>• 设置规则分类和描述<br>• 批量管理规则<br><br>请告诉我您需要创建或修改哪种类型的报价规则？</div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-input-wrapper">
+          <textarea class="chat-input" rows="2" placeholder="输入您的消息..."></textarea>
+          <label class="chat-upload">
+            <input type="file" style="display: none;" onchange="handleFileUpload(this)">
+            <i class="ti ti-paperclip"></i>
+          </label>
+          <button class="chat-send">
+            <i class="ti ti-send"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧区域 -->
+    <div class="right-panel">
+      <!-- 右侧结果区域 -->
+      <div class="results-area">
+        <div class="results-header">
+          <div class="results-title">
+            <span>报价规则配置</span>
+          </div>
+        </div>
+        <div class="results-content">
+          <!-- 规则表格 -->
+          <div class="data-table rules-table">
+            <div class="table-header">
+              <div class="th" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox" id="selectAll" onchange="toggleSelectAll()"></div>
+              <div class="th">规则ID</div>
+              <div class="th">规则名称</div>
+              <div class="th">规则描述</div>
+              <div class="th">Groovy规则公式</div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ001"></div>
+              <div class="td wrap-cell"><input type="text" value="加价金额计算"></div>
+              <div class="td wrap-cell"><input type="text" value="根据追溯路径计算加价金额"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">def 加价金额 = 0
+if(追溯路径 == "2502SDM1"){
+  加价金额 = 0.28
+}else if(追溯路径 == "2502SDM2C"){
+  加价金额 = 1.9
+}else if(追溯路径 == "SDM2F-WK"){
+  加价金额 = 6.17
+}
+基础价格 + 加价金额</div>
+              </div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ002"></div>
+              <div class="td wrap-cell"><input type="text" value="材料成本加成"></div>
+              <div class="td wrap-cell"><input type="text" value="材料成本基础上加15%毛利"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">materialCost * 1.15 + processingCost</div>
+              </div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ003"></div>
+              <div class="td wrap-cell"><input type="text" value="区域差异化报价"></div>
+              <div class="td wrap-cell"><input type="text" value="华东95折、华南93折、华北96折"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">regionFactor = [
+  "华东": 0.95,
+  "华南": 0.93,
+  "华北": 0.96
+]</div>
+              </div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ004"></div>
+              <div class="td wrap-cell"><input type="text" value="最低毛利保护"></div>
+              <div class="td wrap-cell"><input type="text" value="确保单笔订单毛利不低于20%"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">if(margin < 0.2){
+  price = cost / 0.8
+}</div>
+              </div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ005"></div>
+              <div class="td wrap-cell"><input type="text" value="紧急订单加价"></div>
+              <div class="td wrap-cell"><input type="text" value="紧急订单加收10%加急费"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">if(urgent){
+  price * 1.1
+}</div>
+              </div>
+            </div>
+            <div class="table-row">
+              <div class="td" style="display: flex; align-items: center; justify-content: center;"><input type="checkbox" class="checkbox row-checkbox"></div>
+              <div class="td wrap-cell"><input type="text" value="BJ006"></div>
+              <div class="td wrap-cell"><input type="text" value="代理折扣规则"></div>
+              <div class="td wrap-cell"><input type="text" value="根据代理等级给予不同折扣"></div>
+              <div class="td" style="padding: 6px 8px;">
+                <div class="code-display">agentDiscount = [
+  "金牌": 0.88,
+  "银牌": 0.92,
+  "铜牌": 0.95
+]</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="padding: 16px; border-top: 0.5px solid var(--border-color); display: flex; gap: 8px; justify-content: space-between; flex-shrink: 0;">
+          <button class="btn btn-danger" onclick="batchDelete()">
+            <i class="ti ti-trash"></i>
+            批量删除
+          </button>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="validateFormulas()">
+              <i class="ti ti-check"></i>
+              公式校验
+            </button>
+            <button class="btn btn-primary">
+              <i class="ti ti-device-floppy"></i>
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 全选/取消全选
+    function toggleSelectAll() {
+      const selectAllCheckbox = document.getElementById('selectAll');
+      const rowCheckboxes = document.querySelectorAll('.row-checkbox');
+      rowCheckboxes.forEach(cb => cb.checked = selectAllCheckbox.checked);
+    }
+
+    // 批量删除
+    function batchDelete() {
+      const checkedBoxes = document.querySelectorAll('.row-checkbox:checked');
+      if (checkedBoxes.length === 0) {
+        alert('请先选择要删除的规则');
+        return;
+      }
+      if (confirm(`确定要删除选中的 ${checkedBoxes.length} 条规则吗？`)) {
+        checkedBoxes.forEach(cb => {
+          const row = cb.closest('.table-row');
+          row.remove();
+        });
+        // 重新编号
+        renumberRows();
+      }
+    }
+
+    // 新增规则
+    function addNewRule() {
+      const table = document.querySelector('.rules-table');
+      const rows = table.querySelectorAll('.table-row');
+      const newId = 'DJ' + String(rows.length + 1).padStart(3, '0');
+
+      const newRow = document.createElement('div');
+      newRow.className = 'table-row';
+      newRow.innerHTML = `
+        <div class="td"><div class="checkbox-wrapper"><input type="checkbox" class="checkbox row-checkbox"></div></div>
+        <div class="td">${newId}</div>
+        <div class="td"><input type="text" value="新规则" placeholder="请输入规则名称"></div>
+        <div class="td"><span class="category-tag discount">折扣规则</span></div>
+        <div class="td"><input type="text" value="" placeholder="请输入规则描述"></div>
+        <div class="td"><div class="groovy-cell"><input type="text" value="" placeholder="请输入Groovy公式"></div></div>
+      `;
+      table.appendChild(newRow);
+    }
+
+    // 重新编号
+    function renumberRows() {
+      const rows = document.querySelectorAll('.rules-table .table-row');
+      rows.forEach((row, index) => {
+        const idCell = row.querySelector('td:nth-child(2)');
+        if (idCell && idCell.textContent.match(/^DJ\d+$/)) {
+          idCell.textContent = 'DJ' + String(index + 1).padStart(3, '0');
+        }
+      });
+    }
+
+    // 文件上传处理
+    function handleFileUpload(input) {
+      const file = input.files[0];
+      if (file) {
+        const chatInput = document.querySelector('.chat-input');
+        chatInput.value += `[已上传文件: ${file.name}]`;
+        chatInput.focus();
+      }
+    }
+  </script>
+</body>
+</html>
