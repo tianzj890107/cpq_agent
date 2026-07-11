@@ -1422,6 +1422,7 @@
     const STEP_DESC = ['反向推断导致物料/数量变化的核心参数及取值范围', '区分可配置/通用模块，标记可配组件',
       '物料挂到对应模块并打标签', '全局约束 → 模块规则 → BOM 行规则', '模块层级 + 全量物料归集 + 三层规则', '确认后的配置BOM'];
     let busy = false, currentSessionId = null, bomColumns = [];
+    let manualMode = false; // 「无模型」模式：不调大模型，人工编辑 BOM 表 + 导入数据库
     const $ = (id) => document.getElementById(id);
     const chatEl = () => $('chatMessages');
 
@@ -1664,6 +1665,7 @@
       const rows = collectBom(), params = collectParams(), rules = collectRules();
       addUserBubble('确认配置BOM（' + rows.length + ' 行物料，' + rules.length + ' 条规则）。');
       const btn = $('btnImportDb'); if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = '导入数据库'; }
+      if (manualMode) { addAiBubble('已确认配置BOM（' + rows.length + ' 行）。点「导入数据库」完成入库。'); return; }
       sendToAgent('【确认配置】用户确认了配置，最新数据(JSON)如下：\n' +
         JSON.stringify({ 参数: params, 配置BOM: rows, 已选规则: rules }, null, 1) +
         '\n以此为准。若用户改了参数，据参数重算 BOM 并重渲；否则简短总结本次配置BOM + 每行规则的完成情况。',
@@ -1792,7 +1794,8 @@
       if ($('configPanelTitle') && projectName) $('configPanelTitle').textContent = '配置BOM - ' + projectName;
       try {
         const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json()); setConn(true);
-        if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + meta.model;
+        manualMode = !!(meta.settings && meta.settings.model === 'none');
+        if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || null;
         let openId=''; try{ openId=sessionStorage.getItem('xbom:openSession')||''; sessionStorage.removeItem('xbom:openSession'); }catch{}
@@ -1810,8 +1813,20 @@
       let kick = '【会话开始】用户从首页进入配置助手。\n' + proj + '\n需求描述：' + (requirement || '（空）') + '\n附件：' + (files.length ? files.join('、') : '无') + '\n' +
         (hasInput ? '请依次跑第 1–5 步（每步 set_step running→step_result→done，并在聊天给思考/规划/执行/结果），第 6 步 render_bom 渲染可编辑配置BOM。'
                   : '用户还没上传变体BOM/需求。先不要 set_step、不要渲染，只在聊天里友好请用户上传变体BOM Excel或需求文档（回形针）或直接描述产品与配置需求，然后停下等待。不要臆造。');
+      if (manualMode) {
+        // 无模型模式：不发 kickoff，直接给一张可人工编辑的空 BOM 表
+        addAiBubble('当前为「无模型」模式（不调用大模型）。右侧已给出空白配置BOM表：请人工逐行填写物料（点「+ 新增行」加行、每行可选配置规则），完成后点「导入数据库」。');
+        enterManualBom();
+        return;
+      }
       for (const f of fileContents) if (f && f.text) kick += '\n\n--- 附件《' + f.name + '》内容' + (f.truncated ? '(截断)' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---';
       sendToAgent(kick, { echo: false, display: bubble });
+    }
+    // 无模型模式：渲染空白可编辑 BOM 表 + 显示导入按钮
+    function enterManualBom() {
+      renderParams([]);
+      renderBom('', null, [{}]);
+      const btn = $('btnImportDb'); if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = '导入数据库'; }
     }
 
     /* ================= 历史记录 / 设置（连 xbom_agent_server） ================= */
@@ -1826,24 +1841,49 @@
       $('historyDrawer').classList.add('show');
       loadHistoryList();
     }
+    // 三个助手的历史打通：任一页面都能看到 报价/配置/规则 的全部历史并跳转打开
+    function peerBase(lsKey, name, port) {
+      return (localStorage.getItem(lsKey) || (location.protocol === 'file:'
+        ? 'http://127.0.0.1:' + port : '/agents/' + name)).replace(/\/$/, '');
+    }
+    const HIST_SOURCES = [
+      { agent: 'config', label: '配置', base: AGENT_URL, self: true },
+      { agent: 'quote', label: '报价', base: peerBase('cpq:agentUrl', 'quote', 47292), page: '确认需求解析结果.html', key: 'cpq:openSession' },
+      { agent: 'rule', label: '规则', base: peerBase('cpq:ruleAgentUrl', 'rule', 47296), page: '规则助手-规则配置.html', key: 'rule:openSession' },
+    ];
     async function loadHistoryList() {
       const box = $('historyList');
       box.innerHTML = '<div class="hist-empty">加载中…</div>';
-      let sessions = [];
-      try { const r = await fetch(AGENT_URL + '/api/sessions').then(r => r.json()); sessions = r.sessions || []; }
-      catch (e) { box.innerHTML = '<div class="hist-empty">无法连接配置助手服务，暂时读不到历史。</div>'; return; }
-      if (!sessions.length) { box.innerHTML = '<div class="hist-empty">还没有历史配置。<br>完成一次对话后会自动保存在这里。</div>'; return; }
+      const sessions = [];
+      let anyOk = false;
+      await Promise.all(HIST_SOURCES.map(async src => {
+        try {
+          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          anyOk = true;
+          (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
+        } catch (e) {}
+      }));
+      if (!anyOk) { box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。</div>'; return; }
+      if (!sessions.length) { box.innerHTML = '<div class="hist-empty">还没有历史记录。<br>完成一次对话后会自动保存在这里。</div>'; return; }
+      sessions.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
       box.innerHTML = '';
       sessions.forEach(s => {
         const item = document.createElement('div');
-        item.className = 'hist-item' + (s.id === currentSessionId ? ' current' : '');
+        item.className = 'hist-item' + (s._src.self && s.id === currentSessionId ? ' current' : '');
         const stepName = STEPS[(s.step || 1) - 1] || '';
         item.innerHTML = '<div class="h-title"></div><div class="h-meta"><span class="h-chip"></span><span></span></div><button class="h-del" title="删除"><i class="ti ti-trash"></i></button>';
-        item.querySelector('.h-title').textContent = s.title || '未命名配置';
-        item.querySelector('.h-chip').textContent = '步骤' + (s.step || 1) + '·' + stepName;
+        item.querySelector('.h-title').textContent = s.title || '未命名会话';
+        item.querySelector('.h-chip').textContent = s._src.self
+          ? s._src.label + '·步骤' + (s.step || 1) + '·' + stepName
+          : s._src.label + '助手';
         item.querySelector('.h-meta span:last-child').textContent = (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
-        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s.id); };
-        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.title); };
+        item.onclick = (e) => {
+          if (e.target.closest('.h-del')) return;
+          if (s._src.self) { openSession(s.id); return; }
+          try { sessionStorage.setItem(s._src.key, s.id); } catch (err) {}
+          location.href = encodeURI(s._src.page);
+        };
+        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s._src, s.id, s.title); };
         box.appendChild(item);
       });
     }
@@ -1855,9 +1895,9 @@
       if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
       currentSessionId = data.id; closeOverlays(); replaySession(data);
     }
-    async function deleteSession(id, title) {
-      if (!confirm('删除历史配置「' + (title || id) + '」？此操作不可恢复。')) return;
-      try { await fetch(AGENT_URL + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
+    async function deleteSession(src, id, title) {
+      if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
+      try { await fetch((src && src.base || AGENT_URL) + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
       loadHistoryList();
     }
     function replaySession(data) {
@@ -1919,9 +1959,14 @@
       const msg = $('settingsMsg'); msg.className = 'hint'; msg.textContent = '保存中…'; $('saveSettingsBtn').disabled = true;
       try {
         const r = await fetch(AGENT_URL + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
-        $('setApiKey').value = ''; if ($('modelInfo')) $('modelInfo').textContent = ' · ' + (r.model || payload.model);
+        $('setApiKey').value = '';
+        const wasManual = manualMode;
+        manualMode = (r.model || payload.model) === 'none';
+        if ($('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : (r.model || payload.model));
+        if (manualMode && !wasManual) { addAiBubble('已切换到「无模型」模式：请人工编辑右侧配置BOM表，完成后点「导入数据库」。'); enterManualBom(); }
+        else if (!manualMode && wasManual) { addAiBubble('已切换到模型 ' + (r.model || payload.model) + '：对话与自动配置功能恢复。'); }
         if (r.configured === false) { msg.className = 'hint warn'; msg.textContent = '已保存，但「' + (r.provider_label || '该提供方') + '」仍未配置可用的 API Key，发送会失败。'; }
-        else { msg.className = 'hint ok'; msg.textContent = '已保存并生效：' + (r.model || payload.model) + '。'; setTimeout(closeOverlays, 900); }
+        else { msg.className = 'hint ok'; msg.textContent = '已保存并生效：' + (manualMode ? '无模型（人工填写）' : (r.model || payload.model)) + '（三个助手同步生效）。'; setTimeout(closeOverlays, 900); }
       } catch (e) { msg.className = 'hint warn'; msg.textContent = '保存失败：' + e; }
       finally { $('saveSettingsBtn').disabled = false; }
     }

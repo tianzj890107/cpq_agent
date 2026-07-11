@@ -1993,48 +1993,64 @@
       $('historyDrawer').classList.add('show');
       loadHistoryList();
     }
+    // 三个助手的历史打通：首页也能看到 报价/配置/规则 的全部历史并跳转打开
+    function peerBase(lsKey, name, port) {
+      return (localStorage.getItem(lsKey) || (location.protocol === 'file:'
+        ? 'http://127.0.0.1:' + port : '/agents/' + name)).replace(/\/$/, '');
+    }
+    const HIST_SOURCES = [
+      { agent: 'quote', label: '报价', base: AGENT_URL, page: '确认需求解析结果.html', key: 'cpq:openSession' },
+      { agent: 'config', label: '配置', base: peerBase('xbom:agentUrl', 'config', 47294), page: 'XBOM智能体-配置BOM生成.html', key: 'xbom:openSession' },
+      { agent: 'rule', label: '规则', base: peerBase('cpq:ruleAgentUrl', 'rule', 47296), page: '规则助手-规则配置.html', key: 'rule:openSession' },
+    ];
     async function loadHistoryList() {
       const box = $('historyList');
       box.innerHTML = '<div class="hist-empty">加载中…</div>';
-      let sessions = [];
-      try {
-        const r = await fetch(AGENT_URL + '/api/sessions').then(r => r.json());
-        sessions = r.sessions || [];
-      } catch (e) {
-        box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。<br>请先启动 cpq_agent_server.py。</div>';
+      const sessions = [];
+      let anyOk = false;
+      await Promise.all(HIST_SOURCES.map(async src => {
+        try {
+          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          anyOk = true;
+          (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
+        } catch (e) {}
+      }));
+      if (!anyOk) {
+        box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。<br>请先启动 cpq_suite_server.py。</div>';
         return;
       }
       if (!sessions.length) {
-        box.innerHTML = '<div class="hist-empty">还没有历史报价。<br>完成一次对话后会自动保存在这里。</div>';
+        box.innerHTML = '<div class="hist-empty">还没有历史记录。<br>完成一次对话后会自动保存在这里。</div>';
         return;
       }
+      sessions.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
       box.innerHTML = '';
       sessions.forEach(s => {
         const item = document.createElement('div');
         item.className = 'hist-item';
-        const stepName = STEP_NAMES[(s.step || 1) - 1] || '';
         item.innerHTML =
           `<div class="h-title"></div>
            <div class="h-meta"><span class="h-chip"></span><span></span></div>
            <button class="h-del" title="删除"><i class="ti ti-trash"></i></button>`;
-        item.querySelector('.h-title').textContent = s.title || '未命名报价';
-        item.querySelector('.h-chip').textContent = '步骤' + (s.step || 1) + '·' + stepName;
+        item.querySelector('.h-title').textContent = s.title || '未命名会话';
+        const stepName = s._src.agent === 'quote' ? (STEP_NAMES[(s.step || 1) - 1] || '') : '';
+        item.querySelector('.h-chip').textContent = s._src.label + '助手' + (stepName ? '·步骤' + (s.step || 1) + '·' + stepName : '');
         item.querySelector('.h-meta span:last-child').textContent =
           (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
-        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s.id); };
-        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.title); };
+        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s._src, s.id); };
+        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s._src, s.id, s.title); };
         box.appendChild(item);
       });
     }
-    // 首页打开历史 = 跳到工作台并自动载入该会话
-    function openSession(id) {
-      try { sessionStorage.setItem('cpq:openSession', id); } catch (e) {}
-      window.location.href = '确认需求解析结果.html';
+    // 首页打开历史 = 跳到对应助手页面并自动载入该会话
+    function openSession(src, id) {
+      try { sessionStorage.setItem(src.key, id); } catch (e) {}
+      window.location.href = encodeURI(src.page);
     }
-    async function deleteSession(id, title) {
-      if (!confirm('删除历史报价「' + (title || id) + '」？此操作不可恢复。')) return;
+    async function deleteSession(src, id, title) {
+      if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch(AGENT_URL + '/api/session/delete', {
+        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });

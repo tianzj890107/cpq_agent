@@ -523,7 +523,14 @@ if _SCHEMA_DOC:
 # ---------------------------------------------------------------------------
 
 HISTORY_DIR = os.path.join(SCRIPT_DIR, "xbom_history")
-SETTINGS_PATH = os.path.join(SCRIPT_DIR, "xbom_settings.json")
+# 三个助手共享同一份设置（模型/参数/Key）：cpq_settings.json 为唯一权威文件；
+# 旧的 xbom_settings.json 仅作迁移兜底读取，不再写入。
+SETTINGS_PATH = os.path.join(SCRIPT_DIR, "cpq_settings.json")
+LEGACY_SETTINGS_PATH = os.path.join(SCRIPT_DIR, "xbom_settings.json")
+
+# 「无模型」伪模型 id：选中后不调用大模型，工作台全流程由人工填写+下一步完成
+NO_MODEL_ID = "none"
+NO_MODEL_HINT = "当前为「无模型」模式：不调用大模型。请直接在右侧人工填写各步骤内容，完成后点「下一步」。"
 
 
 def _now_iso() -> str:
@@ -551,12 +558,15 @@ def _to_int_or_none(v):
 # --- 设置（模型 / 采样参数 / 各 provider 的 API Key） ------------------------
 
 def load_settings() -> dict:
-    try:
-        with open(SETTINGS_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    for path in (SETTINGS_PATH, LEGACY_SETTINGS_PATH):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                return data
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {}
 
 
 def save_settings(s: dict):
@@ -593,10 +603,19 @@ def _pick_model_by_available_key(current: str) -> str:
 
 
 def models_catalog() -> list:
-    """可选模型清单（含 Qwen / DeepSeek），标注每个 provider 是否已配置 Key。"""
-    out = []
+    """可选模型清单（Qwen / DeepSeek 等，POC 部署不提供 Claude 系列），
+    标注每个 provider 是否已配置 Key；首项为「无模型」（人工填写模式）。"""
+    out = [{
+        "id": NO_MODEL_ID,
+        "label": "无模型（人工填写）",
+        "provider": "none",
+        "provider_label": "无模型",
+        "configured": True,
+    }]
     for m in AVAILABLE_MODELS:
         prov = m.get("provider", "anthropic")
+        if prov == "anthropic":
+            continue
         out.append({
             "id": m["id"],
             "label": m["label"],
@@ -791,12 +810,17 @@ class Bridge:
 
     def current_settings(self) -> dict:
         prof = self.conv.profile
-        prov = get_model_provider(self.conv.model)
+        if self.conv.model == NO_MODEL_ID:
+            prov, prov_label, configured = "none", "无模型", True
+        else:
+            prov = get_model_provider(self.conv.model)
+            prov_label = PROVIDERS.get(prov, {}).get("label", prov)
+            configured = bool(get_api_key_for(prov))
         return {
             "model": self.conv.model,
             "provider": prov,
-            "provider_label": PROVIDERS.get(prov, {}).get("label", prov),
-            "configured": bool(get_api_key_for(prov)),
+            "provider_label": prov_label,
+            "configured": configured,
             "temperature": prof.temperature,
             "max_tokens": prof.max_tokens,
             "thinking": prof.thinking,
@@ -808,7 +832,8 @@ class Bridge:
         s = s or {}
         prof = self.conv.profile
         if s.get("model"):
-            mid = _sanitize_model(resolve_model(s["model"]))
+            raw = str(s["model"]).strip()
+            mid = raw if raw == NO_MODEL_ID else _sanitize_model(resolve_model(raw))
             if mid:
                 self.conv.model = mid
                 os.environ["CLAUDE_MODEL"] = mid
@@ -881,6 +906,13 @@ class Bridge:
                 self.events.append({"type": "user", "text": bubble})
                 if not self.title and bubble.strip() and not bubble.startswith("【"):
                     self.title = bubble.strip().replace("\n", " ")[:24]
+            if conv.model == NO_MODEL_ID:
+                # 无模型模式：不调用大模型，直接回提示（前端会切人工填写流程）
+                emit({"type": "text", "text": NO_MODEL_HINT})
+                self.events.append({"type": "text", "text": NO_MODEL_HINT})
+                self._persist()
+                emit({"type": "done", "model": conv.model, "cost": 0.0})
+                return
             conv.add_user_message(text)
             try:
                 for _ in range(max(1, conv.profile.max_iterations)):
@@ -1053,9 +1085,9 @@ def pool_drop(sid: str):
         _BRIDGES.pop((sid or "").strip(), None)
 
 
-def pool_apply_settings(data: dict) -> dict:
-    """设置是全局的：默认 bridge 应用并持久化一次，池内所有会话同步应用（不回写）。"""
-    res = bridge.apply_settings(data)
+def pool_apply_settings(data: dict, persist: bool = True) -> dict:
+    """设置是全局的：默认 bridge 应用（可持久化），池内所有会话同步应用（不回写）。"""
+    res = bridge.apply_settings(data, persist=persist)
     with _POOL_LOCK:
         others = list(_BRIDGES.values())
     for b in others:
@@ -1064,6 +1096,19 @@ def pool_apply_settings(data: dict) -> dict:
         except Exception:
             traceback.print_exc()
     return res
+
+
+# 跨助手设置同步：一体化服务(cpq_suite_server)启动时把另外两个 Agent 模块的
+# pool_apply_settings(persist=False) 挂进来；本模块 /api/settings 应用后逐个广播。
+SETTINGS_PEERS: list = []
+
+
+def broadcast_settings(data: dict):
+    for peer in SETTINGS_PEERS:
+        try:
+            peer(data)
+        except Exception:
+            traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -1082,7 +1127,7 @@ _INTENT_SYS = (
 
 def classify_intent(text: str):
     """用一次轻量大模型调用做意图识别；失败返回 None（前端会退回关键词兜底）。"""
-    if not text or bridge is None:
+    if not text or bridge is None or bridge.conv.model == NO_MODEL_ID:
         return None
     try:
         from open_claude.api import complete
@@ -1424,7 +1469,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             data = self._read_body()
             try:
-                self._send_json(pool_apply_settings(data))
+                res = pool_apply_settings(data)
+                broadcast_settings(data)  # 同步到另外两个助手（一体化服务下）
+                self._send_json(res)
             except Exception as e:
                 traceback.print_exc()
                 self._send_json({"error": str(e)}, status=500)

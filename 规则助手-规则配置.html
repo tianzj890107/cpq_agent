@@ -1183,6 +1183,7 @@
     let MODELS = [];
     let busy = false;
     let currentSessionId = null;
+    let manualMode = false; // 「无模型」模式：不调大模型，人工录入规则行+填公式+导入数据库
 
     function $(id) {
       return document.getElementById(id);
@@ -1372,6 +1373,7 @@
 
     function generateGroovy() {
       if (busy) return;
+      if (manualMode) { appendMessage('ai', '当前为「无模型」模式，无法自动生成公式。请直接点击最后一列「Groovy规则公式」单元格人工填写，完成后点「导入数据库」。'); return; }
       const rules = collectRules();
       if (!rules.length) { appendMessage('ai', '还没有规则。请先上传规则文档或点「+ 新增规则」，再生成 Groovy。'); return; }
       const payload = rules.map((r, i) => `${i + 1}. 规则名称：${r.rule_name || '(未命名)'}｜目标库：${r.target_table || ''}｜描述：${r.rule_desc || ''}`).join('\n');
@@ -1448,6 +1450,10 @@
         const fileText = payload.fileContents.map(f => `【${f.name}】\n${f.text || ''}`).join('\n\n');
         const text = [payload.requirement, fileText].filter(Boolean).join('\n\n');
         if (text) {
+          if (manualMode) {
+            appendMessage('ai', '当前为「无模型」模式，不能自动抽取规则。请对照需求内容，点「+ 新增规则」逐条人工录入，完成后点「导入数据库」。');
+            return;
+          }
           sendToAgent('【第一步·导入规则文档】请只把下列内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，另判定目标规则库），本步不要生成 Groovy：\n' + text, {
             echo: false,
             display: '从首页进入规则助手：' + (payload.requirement || payload.files.join('、')),
@@ -1578,6 +1584,10 @@
           merged += `\n\n【${file.name}】\n${text || file.name}`;
         }
         ruleFileInput.value = '';
+        if (manualMode) {
+          appendMessage('ai', '当前为「无模型」模式，无法自动从文档抽取规则。请对照文档内容，点「+ 新增规则」逐条人工录入（名称/描述/公式均可直接点击编辑）。');
+          return;
+        }
         sendToAgent('【第一步·导入规则文档】请只把以下文件内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步不要生成 Groovy；公式留到用户点「生成 Groovy 公式」时再做：' + merged, {
           echo: false,
           display: '上传规则说明文档：' + files.map(f => f.name).join('、'),
@@ -1593,6 +1603,10 @@
       }
       appendMessage('user', text);
       chatInput.value = '';
+      if (manualMode) {
+        appendMessage('ai', '当前为「无模型」模式，不能自动整理规则。请点「+ 新增规则」人工逐条录入（各列均可直接点击编辑），完成后点「导入数据库」。');
+        return;
+      }
       sendToAgent('【第一步·导入规则】请把下面的规则说明整理成规则行录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步先不生成 Groovy；如需公式请点右侧「生成 Groovy 公式」：\n' + text, {
         echo: false,
         display: text,
@@ -1619,32 +1633,53 @@
       resetRulesTable();
     }
 
+    // 三个助手的历史打通：任一页面都能看到 报价/配置/规则 的全部历史并跳转打开
+    function peerBase(lsKey, name, port) {
+      return (localStorage.getItem(lsKey) || (location.protocol === 'file:'
+        ? 'http://127.0.0.1:' + port : '/agents/' + name)).replace(/\/$/, '');
+    }
+    const HIST_SOURCES = [
+      { agent: 'rule', label: '规则', base: AGENT_URL, self: true },
+      { agent: 'quote', label: '报价', base: peerBase('cpq:agentUrl', 'quote', 47292), page: '确认需求解析结果.html', key: 'cpq:openSession' },
+      { agent: 'config', label: '配置', base: peerBase('xbom:agentUrl', 'config', 47294), page: 'XBOM智能体-配置BOM生成.html', key: 'xbom:openSession' },
+    ];
     async function loadHistoryList() {
       const box = $('historyList');
       if (!box) return;
       box.innerHTML = '<div class="hist-empty">加载中...</div>';
-      let sessions = [];
-      try {
-        const res = await fetch(AGENT_URL + '/api/sessions').then(r => r.json());
-        sessions = res.sessions || [];
-      } catch (e) {
-        box.innerHTML = '<div class="hist-empty">无法连接规则助手服务，暂时读不到历史。</div>';
+      const sessions = [];
+      let anyOk = false;
+      await Promise.all(HIST_SOURCES.map(async src => {
+        try {
+          const res = await fetch(src.base + '/api/sessions').then(r => r.json());
+          anyOk = true;
+          (res.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
+        } catch (e) {}
+      }));
+      if (!anyOk) {
+        box.innerHTML = '<div class="hist-empty">无法连接助手服务，暂时读不到历史。</div>';
         return;
       }
       if (!sessions.length) {
-        box.innerHTML = '<div class="hist-empty">还没有历史规则。<br>完成一次规则对话后会自动保存在这里。</div>';
+        box.innerHTML = '<div class="hist-empty">还没有历史记录。<br>完成一次对话后会自动保存在这里。</div>';
         return;
       }
+      sessions.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
       box.innerHTML = '';
       sessions.forEach(s => {
         const item = document.createElement('div');
-        item.className = 'hist-item' + (s.id === currentSessionId ? ' current' : '');
+        item.className = 'hist-item' + (s._src.self && s.id === currentSessionId ? ' current' : '');
         item.innerHTML = '<div class="h-title"></div><div class="h-meta"><span class="h-chip"></span><span></span></div><button class="h-del" title="删除"><i class="ti ti-trash"></i></button>';
-        item.querySelector('.h-title').textContent = s.title || '未命名规则';
-        item.querySelector('.h-chip').textContent = s.model || '规则会话';
+        item.querySelector('.h-title').textContent = s.title || '未命名会话';
+        item.querySelector('.h-chip').textContent = s._src.self ? s._src.label + '·' + (s.model || '规则会话') : s._src.label + '助手';
         item.querySelector('.h-meta span:last-child').textContent = (s.updated ? s.updated.replace('T', ' ').slice(5, 16) : '') + ' · ' + (s.turns || 0) + ' 轮';
-        item.onclick = (e) => { if (!e.target.closest('.h-del')) openSession(s.id); };
-        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.title); };
+        item.onclick = (e) => {
+          if (e.target.closest('.h-del')) return;
+          if (s._src.self) { openSession(s.id); return; }
+          try { sessionStorage.setItem(s._src.key, s.id); } catch (err) {}
+          location.href = encodeURI(s._src.page);
+        };
+        item.querySelector('.h-del').onclick = (e) => { e.stopPropagation(); deleteSession(s._src, s.id, s.title); };
         box.appendChild(item);
       });
     }
@@ -1671,10 +1706,10 @@
       replaySession(data);
     }
 
-    async function deleteSession(id, title) {
-      if (!confirm('删除历史规则「' + (title || id) + '」？此操作不可恢复。')) return;
+    async function deleteSession(src, id, title) {
+      if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch(AGENT_URL + '/api/session/delete', {
+        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
@@ -1795,13 +1830,17 @@
           body: JSON.stringify(payload),
         }).then(r => r.json());
         $('setApiKey').value = '';
-        if ($('modelInfo')) $('modelInfo').textContent = ' · ' + (r.model || payload.model);
+        const wasManual = manualMode;
+        manualMode = (r.model || payload.model) === 'none';
+        if ($('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : (r.model || payload.model));
+        if (manualMode && !wasManual) appendMessage('ai', '已切换到「无模型」模式：请点「+ 新增规则」人工录入规则（各列可直接点击编辑），完成后点「导入数据库」。');
+        else if (!manualMode && wasManual) appendMessage('ai', '已切换到模型 ' + (r.model || payload.model) + '：文档抽取与公式生成功能恢复。');
         if (r.configured === false) {
           msg.className = 'hint warn';
           msg.textContent = '已保存，但当前提供方仍未配置可用 API Key，发送会失败。';
         } else {
           msg.className = 'hint ok';
-          msg.textContent = '已保存并生效：' + (r.model || payload.model) + '。下一条消息起使用新设置。';
+          msg.textContent = '已保存并生效：' + (manualMode ? '无模型（人工填写）' : (r.model || payload.model)) + '（三个助手同步生效）。';
           setTimeout(closeOverlays, 900);
         }
       } catch (e) {
@@ -1816,17 +1855,22 @@
       try {
         const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true, '已连接');
-        if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + meta.model;
+        manualMode = !!(meta.settings && meta.settings.model === 'none');
+        if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         // 每个打开的页面申请自己的会话 id（会话隔离，多人同时用互不串扰）
         const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || currentSessionId;
+        // 从其他页面「历史记录」点进来的：直接载入该会话
+        let openId = '';
+        try { openId = sessionStorage.getItem('rule:openSession') || ''; sessionStorage.removeItem('rule:openSession'); } catch (e) {}
+        if (openId) await openSession(openId);
       } catch (e) {
         setConn(false, '未连接');
       }
     }
 
-    initAgentMeta();
-    initFromHomepage();
+    // 先取 meta（含 manualMode 判定）再处理首页带入的需求，保证无模型模式判定生效
+    initAgentMeta().then(initFromHomepage);
   </script>
 </body>
 </html>

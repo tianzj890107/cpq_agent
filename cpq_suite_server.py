@@ -190,7 +190,8 @@ def _init_agent(name: str, mod):
             os.environ["CLAUDE_MODEL"] = mod._sanitize_model(eff)
             print(f"[cpq-suite] {AGENT_LABELS[name]}: 默认模型无可用 Key，已切换到 {eff}")
     mod.bridge = mod.Bridge(mod.SCRIPT_DIR)
-    if not mod.get_api_key_for(mod.get_model_provider(mod.bridge.conv.model)):
+    if (mod.bridge.conv.model != mod.NO_MODEL_ID
+            and not mod.get_api_key_for(mod.get_model_provider(mod.bridge.conv.model))):
         print(
             f"[cpq-suite] 警告: {AGENT_LABELS[name]} 当前模型 {mod.bridge.conv.model} "
             f"未配置 API Key，可在该页面「设置」里填写。",
@@ -208,6 +209,14 @@ def main():
     print(f"[cpq-suite] 工作目录 {SCRIPT_DIR}")
     for name, mod in AGENTS.items():
         _init_agent(name, mod)
+
+    # 跨助手设置同步：任一助手 /api/settings 保存后，广播到另外两个模块
+    # （三个模块共用 cpq_settings.json，权威文件只由发起方写一次，其余只应用不回写）
+    def _peer(m):
+        return lambda data: m.pool_apply_settings(data, persist=False)
+
+    for name, mod in AGENTS.items():
+        mod.SETTINGS_PEERS = [_peer(m) for n, m in AGENTS.items() if n != name]
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[cpq-suite] 首页  : http://{args.host}:{args.port}/   ->  {HOME_PAGE}")
