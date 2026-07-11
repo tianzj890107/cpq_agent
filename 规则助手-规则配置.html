@@ -499,7 +499,6 @@
       white-space: pre-wrap; word-break: break-word; color: var(--text-primary);
     }
     .groovy-card .gc-evi { padding: 0 10px 9px; font-size: 11px; color: var(--text-secondary); }
-    #btnGenGroovy { margin-bottom: 4px; }
     .footer-note { font-size: 12px; color: var(--text-secondary); }
 
     .status {
@@ -983,6 +982,10 @@
   <div class="main-container">
     <div class="nav-panel">
       <div class="nav-logo"><i class="ti ti-sparkles"></i></div>
+      <div class="nav-icon" onclick="location.href='报价首页(1).html'">
+        <i class="ti ti-home"></i>
+        <span class="nav-tooltip">返回首页</span>
+      </div>
       <div class="nav-icon active" onclick="startNewRule()">
         <i class="ti ti-plus"></i>
         <span class="nav-tooltip">新对话</span>
@@ -1079,13 +1082,12 @@
             <div id="rulesBody"></div>
             <div class="add-row" id="addRuleRow">+ 新增规则</div>
           </div>
-          <div class="rules-empty" id="rulesEmpty">还没有规则。<br>第一步：上传规则文档，我会把文档里的规则录入到这张表（规则ID / 名称 / 描述）；<br>第二步：点「生成 Groovy 公式」，用数据库参数 + 规则描述生成 Groovy 公式并回填到最后一列。</div>
+          <div class="rules-empty" id="rulesEmpty">还没有规则。<br>第一步：上传规则文档，我会把文档里的规则录入到这张表（规则ID / 名称 / 描述）；<br>第二步：系统自动用数据库参数 + 规则描述生成 Groovy 公式并回填到最后一列。</div>
         </div>
         <div class="results-footer">
           <button class="btn btn-danger" onclick="batchDelete()"><i class="ti ti-trash"></i> 批量删除</button>
           <div style="display:flex;gap:8px;">
             <button class="btn btn-secondary" onclick="validateFormulas()"><i class="ti ti-check"></i> 公式校验</button>
-            <button class="btn btn-primary" id="btnGenGroovy"><i class="ti ti-bolt"></i> 生成 Groovy 公式</button>
             <button class="btn btn-success" id="btnImportDb" onclick="importToDb()"><i class="ti ti-database-import"></i> 导入数据库</button>
           </div>
         </div>
@@ -1379,7 +1381,8 @@
       const payload = rules.map((r, i) => `${i + 1}. 规则名称：${r.rule_name || '(未命名)'}｜目标库：${r.target_table || ''}｜描述：${r.rule_desc || ''}`).join('\n');
       sendToAgent('【第二步·生成公式】请结合数据库参数（先用 sql_query 查字段字典/既有规则/样例BOM/加价因子）与下面每条规则的描述，为每条规则生成 Groovy 公式和代码（rule_name 与下方保持一致，回填到「Groovy规则公式」列）：\n' + payload, {
         echo: false,
-        display: '生成 Groovy 公式（' + rules.length + ' 条规则）',
+        display: '自动生成 Groovy 公式（' + rules.length + ' 条规则）',
+        noAutoGroovy: true, // 第二步本身不再触发自动链，避免循环
       });
     }
 
@@ -1402,7 +1405,7 @@
       const missing = rules.filter(r => !r.groovy_formula).map(r => r.rule_name || '(未命名)');
       const noDesc = rules.filter(r => !r.rule_desc).map(r => r.rule_name || '(未命名)');
       let msg = '已校验 ' + rules.length + ' 条规则。';
-      if (missing.length) msg += '\n· 还没有 Groovy 公式：' + missing.join('、') + '（可点「生成 Groovy 公式」）。';
+      if (missing.length) msg += '\n· 还没有 Groovy 公式：' + missing.join('、') + '（提交规则后会自动生成，也可点击单元格人工填写）。';
       if (noDesc.length) msg += '\n· 规则描述为空：' + noDesc.join('、') + '。';
       if (!missing.length && !noDesc.length) msg += ' 每条都已有描述与公式。';
       appendMessage('ai', msg);
@@ -1465,12 +1468,11 @@
           });
         }
       } else {
-        document.getElementById('introMessage').textContent = '请上传规则说明文档或输入规则文字。我会先把规则录入右侧规则表，再由你点「生成 Groovy 公式」，用数据库参数 + 规则描述生成公式并回填到最后一列。';
+        document.getElementById('introMessage').textContent = '请上传规则说明文档或输入规则文字。我会先把规则录入右侧规则表，然后自动用数据库参数 + 规则描述生成 Groovy 公式并回填到最后一列。';
       }
     }
 
     document.getElementById('addRuleRow').addEventListener('click', () => addRuleRow());
-    document.getElementById('btnGenGroovy').addEventListener('click', generateGroovy);
     rulesEmptyCheck();
 
     const chatInput = document.querySelector('.chat-input');
@@ -1514,7 +1516,7 @@
       return el.querySelector('.message-text');
     }
 
-    async function sendToAgent(text, { echo = true, display, fallback = true } = {}) {
+    async function sendToAgent(text, { echo = true, display, fallback = true, noAutoGroovy = false } = {}) {
       if (!text || busy) return false;
       if (echo) appendMessage('user', display || text);
       setBusy(true);
@@ -1567,6 +1569,14 @@
         if (!receivedAnything && !manualMode) {
           appendMessage('ai', '规则 Agent 未返回内容，请重试或检查模型配置。');
         }
+        // 第一步录入了规则且还有行缺公式 → 自动进入第二步生成 Groovy（不再需要人点按钮）
+        if (receivedRule && !noAutoGroovy && !manualMode) {
+          const pending = collectRules().filter(r => !r.groovy_formula);
+          if (pending.length) {
+            appendMessage('ai', '规则已录入，' + pending.length + ' 条待生成公式 —— 正在自动生成 Groovy 公式…');
+            setTimeout(generateGroovy, 150); // 等本轮 busy 释放后自动进入第二步
+          }
+        }
         return receivedRule;
       } catch (e) {
         setConn(false, '未连接');
@@ -1593,7 +1603,7 @@
           appendMessage('ai', '当前为「无模型」模式，无法自动从文档抽取规则。请对照文档内容，点「+ 新增规则」逐条人工录入（名称/描述/公式均可直接点击编辑）。');
           return;
         }
-        sendToAgent('【第一步·导入规则文档】请只把以下文件内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步不要生成 Groovy；公式留到用户点「生成 Groovy 公式」时再做：' + merged, {
+        sendToAgent('【第一步·导入规则文档】请只把以下文件内容里的规则条目忠实抽取、录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步不要生成 Groovy；公式由系统在下一步自动生成：' + merged, {
           echo: false,
           display: '上传规则说明文档：' + files.map(f => f.name).join('、'),
         });
@@ -1612,7 +1622,7 @@
         appendMessage('ai', '当前为「无模型」模式，不能自动整理规则。请点「+ 新增规则」人工逐条录入（各列均可直接点击编辑），完成后点「导入数据库」。');
         return;
       }
-      sendToAgent('【第一步·导入规则】请把下面的规则说明整理成规则行录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步先不生成 Groovy；如需公式请点右侧「生成 Groovy 公式」：\n' + text, {
+      sendToAgent('【第一步·导入规则】请把下面的规则说明整理成规则行录入右侧规则表（规则名称、规则描述，并判定目标规则库），本步先不生成 Groovy；公式由系统在下一步自动生成：\n' + text, {
         echo: false,
         display: text,
       });
@@ -1634,7 +1644,7 @@
       } catch (e) {}
       const messages = document.querySelector('.chat-messages');
       messages.innerHTML = '';
-      appendMessage('ai', '已新建规则对话。第一步：上传规则说明文档，我会把规则录入右侧规则表；第二步：点「生成 Groovy 公式」用数据库参数生成公式并回填最后一列。');
+      appendMessage('ai', '已新建规则对话。第一步：上传规则说明文档，我会把规则录入右侧规则表；第二步：系统自动用数据库参数生成 Groovy 公式并回填最后一列。');
       resetRulesTable();
     }
 

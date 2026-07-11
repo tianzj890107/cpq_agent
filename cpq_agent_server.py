@@ -1373,16 +1373,19 @@ def broadcast_settings(data: dict):
 
 _INTENT_SYS = (
     "你是「配置报价」系统的意图分类器。用户会说一句话，请判断他的目标属于下面哪一类，"
-    "只输出一个英文单词，不要标点、不要解释、不要多余内容：\n"
-    "quote  —— 报价 / 价格测算 / 生成报价单 / 询价 / 折扣 / 价格 等\n"
-    "config —— 产品配置 / 选配 / 配置 BOM / 物料配置 / 生成配置清单 / 配一台设备 等\n"
-    "rule   —— 规则配置 / 定价规则 / 加价规则 / 规则维护 / 规则中心 等\n"
-    "只能输出 quote、config、rule 三者之一。"
+    "只输出一个标记，不要标点、不要解释、不要多余内容：\n"
+    "quote        —— 做报价 / 价格测算 / 生成报价单 / 询价 / 谈折扣价格 等\n"
+    "config       —— 产品配置 / 选配 / 配置 BOM / 物料配置 / 生成配置清单 / 配一台设备 等\n"
+    "rule_product —— 维护「产品配置规则」：选配约束 / 配置校验 / BOM 构成规则 / 强制搭配 等\n"
+    "rule_pricing —— 维护「定价规则」：物料成本 / 材料价格 / 人工机器费用 / 成本核算 / 溢价 等\n"
+    "rule_quote   —— 维护「报价规则」：报价加价项 / 折扣规则 / 客户等级 / 费用因子 / 投标服务费 等\n"
+    "只能输出 quote、config、rule_product、rule_pricing、rule_quote 五者之一。"
 )
 
 
 def classify_intent(text: str):
-    """用一次轻量大模型调用做意图识别；失败返回 None（前端会退回关键词兜底）。"""
+    """用一次轻量大模型调用做意图识别；返回 {"intent": quote|config|rule,
+    "rule_kind": product_config|pricing|quote|None}；失败返回 None（前端关键词兜底）。"""
     if not text or bridge is None or bridge.conv.model == NO_MODEL_ID:
         return None
     try:
@@ -1392,7 +1395,7 @@ def classify_intent(text: str):
             [{"role": "user", "content": text[:2000]}],
             _INTENT_SYS,
             model=bridge.conv.model,
-            max_tokens=8,
+            max_tokens=16,
         )
         out = "".join(b.get("text", "") for b in res.get("content", [])).strip().lower()
     except Exception as e:
@@ -1400,9 +1403,17 @@ def classify_intent(text: str):
         print(f"[cpq-agent] 意图识别调用失败（已回退关键词）：{e.__class__.__name__}: {e}",
               file=sys.stderr)
         return None
-    for k in ("config", "rule", "quote"):
-        if k in out:
-            return k
+    # 注意顺序：rule_* 里包含 quote/product 等子串，必须先判 rule_*
+    if "rule_pricing" in out:
+        return {"intent": "rule", "rule_kind": "pricing"}
+    if "rule_quote" in out:
+        return {"intent": "rule", "rule_kind": "quote"}
+    if "rule_product" in out or "rule" in out:
+        return {"intent": "rule", "rule_kind": "product_config"}
+    if "config" in out:
+        return {"intent": "config", "rule_kind": None}
+    if "quote" in out:
+        return {"intent": "quote", "rule_kind": None}
     return None
 
 
@@ -1764,7 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": delete_history(sid)})
         elif path == "/api/intent":
             data = self._read_body()
-            self._send_json({"intent": classify_intent((data.get("text") or "").strip())})
+            res = classify_intent((data.get("text") or "").strip()) or {}
+            self._send_json({"intent": res.get("intent"), "rule_kind": res.get("rule_kind")})
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()

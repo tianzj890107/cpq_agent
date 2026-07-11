@@ -1663,7 +1663,8 @@
       if (/(报价|价格|测算|报价单|询价|折扣|单价)/.test(t)) return 'quote';
       return null;
     }
-    // 意图识别：先问大模型（更准），失败退回关键词，再退回当前选中模式
+    // 意图识别：先问大模型（更准，含规则子类型 产品配置/定价/报价 规则），
+    // 失败退回关键词，再退回当前选中模式
     async function detectIntent(text) {
       try {
         const ctrl = new AbortController();
@@ -1673,9 +1674,13 @@
           body: JSON.stringify({ text }), signal: ctrl.signal,
         });
         clearTimeout(timer);
-        if (r.ok) { const d = await r.json(); if (d && d.intent) return d.intent; }
+        if (r.ok) {
+          const d = await r.json();
+          if (d && d.intent) return { intent: d.intent, ruleKind: d.rule_kind || null };
+        }
       } catch (e) { /* 超时 / 服务未启动 —— 走关键词兜底 */ }
-      return keywordIntent(text);
+      const kw = keywordIntent(text);
+      return kw ? { intent: kw, ruleKind: null } : null;
     }
 
     // 跳转前先弹信息确认框；不同助手使用不同命名字段，再真正跳转
@@ -1735,10 +1740,13 @@
         document.getElementById('pjMsg').textContent = '';
       });
     })();
-    function requestNavigate(intent, requirement) {
+    function requestNavigate(intent, requirement, ruleKindHint) {
       const page = PAGES[intent];
       if (!page) { alert('「' + MODES[intent].tag + '」页面正在开发中，敬请期待。'); return; }
-      const ruleKind = intent === 'rule' ? detectRuleKind(requirement || '') : null;
+      // 规则类型：优先用大模型判定的子类型，取不到再走关键词兜底（弹框里仍可手改）
+      const ruleKind = intent === 'rule'
+        ? (RULE_KIND_META[ruleKindHint] ? ruleKindHint : detectRuleKind(requirement || ''))
+        : null;
       _pendingNav = { intent, ruleKind };
       const label = intent === 'config' ? '新建配置' : (intent === 'rule' ? '新建规则' : '新建报价');
       document.getElementById('projectModalTitle').textContent = label + ' · 信息确认';
@@ -1843,14 +1851,15 @@
       const text = (textarea && textarea.value.trim()) || '';
       if (!text && !pickedFiles.length) { if (textarea) textarea.focus(); return; }
       if (homeParsing) { alert('附件正在解析中，请稍候…'); return; }
-      // 有文字 → 大模型意图识别；只有附件 / 无文字 → 用当前选中的助手模式
-      let intent = currentMode;
+      // 有文字 → 大模型意图识别（含规则子类型）；只有附件 / 无文字 → 用当前选中的助手模式
+      let intent = currentMode, ruleKind = null;
       if (text) {
         if (sendBtn) { sendBtn.style.opacity = '0.6'; sendBtn.style.pointerEvents = 'none'; }
-        intent = (await detectIntent(text)) || currentMode;
+        const det = await detectIntent(text);
+        if (det) { intent = det.intent || currentMode; ruleKind = det.ruleKind; }
         if (sendBtn) { sendBtn.style.opacity = ''; sendBtn.style.pointerEvents = ''; }
       }
-      requestNavigate(intent, text); // 先弹项目信息确认框（附件用全局 pickedFiles）
+      requestNavigate(intent, text, ruleKind); // 先弹项目信息确认框（附件用全局 pickedFiles）
     }
     if (sendBtn) sendBtn.addEventListener('click', submitRequirement);
     if (textarea) textarea.addEventListener('keydown', (e) => {
