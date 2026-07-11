@@ -319,6 +319,19 @@ def _extract_values(ti: dict) -> dict:
     return vals
 
 
+# 值末尾的推荐/推测标记：显示时去掉文字、只保留“推荐值”标志（前端用颜色高亮）
+_RECO_SUFFIX_RE = re.compile(r"[（\(]\s*(推荐|推测|推断|估计)\s*[）\)]\s*$")
+
+
+def _strip_reco(v):
+    """去掉值末尾的（推荐）/（推测）标记文字，返回 (纯值, 是否推荐值)。"""
+    s = "" if v is None else str(v)
+    m = _RECO_SUFFIX_RE.search(s)
+    if m:
+        return s[:m.start()].rstrip(), True
+    return s, False
+
+
 def _enforce_fixed_template(ti: dict) -> dict:
     """把 render_form/render_table 强制套到固定模板上：字段/列固定，只保留模型填的值。"""
     tpl = _fixed_template(ti.get("section_id"))
@@ -334,11 +347,15 @@ def _enforce_fixed_template(ti: dict) -> dict:
         ti["fields"] = []
         for f in tpl["fields"]:
             v = _pick(vals, f["key"], nvals)
-            ti["fields"].append({
+            val, reco = _strip_reco(v)
+            fld = {
                 "key": f["key"], "label": f["label"], "type": "text",
-                "value": "" if v is None else str(v),
+                "value": val,
                 "placeholder": f.get("example", ""),
-            })
+            }
+            if reco:
+                fld["reco"] = True  # 推荐值：前端只做颜色高亮，不显示标记文字
+            ti["fields"].append(fld)
         ti.pop("columns", None); ti.pop("rows", None); ti.pop("values", None)
     else:
         ti["action"] = "render_table"
@@ -356,9 +373,15 @@ def _enforce_fixed_template(ti: dict) -> dict:
                 continue
             nr = {_norm_key(k): v for k, v in r.items()}
             row = {}
+            reco_cols = []
             for k in keys:
                 v = _pick(r, k, nr)
-                row[k] = "" if v is None else str(v)
+                val, reco = _strip_reco(v)
+                row[k] = val
+                if reco:
+                    reco_cols.append(k)
+            if reco_cols:
+                row["_reco"] = reco_cols  # 推荐值所在列：前端据此高亮，不作为数据列
             out_rows.append(row)
         ti["rows"] = out_rows
         ti.pop("fields", None); ti.pop("values", None)
@@ -420,7 +443,7 @@ def _log_write(raw: dict, ti: dict):
         elif act == "render_table":
             raw_rows = raw.get("rows") if isinstance(raw.get("rows"), list) else []
             out_rows = ti.get("rows") or []
-            ne = sum(1 for r in out_rows for v in r.values() if str(v or "").strip())
+            ne = sum(1 for r in out_rows for k, v in r.items() if k != "_reco" and str(v or "").strip())
             rk = list(raw_rows[0].keys())[:10] if (raw_rows and isinstance(raw_rows[0], dict)) else []
             cols = [c.get("key") for c in (ti.get("columns") or [])]
             print(f"[cpq-write] render_table {sid}: 模型传 {len(raw_rows)} 行(首行键{rk}) 固定列{cols[:10]} "
@@ -464,7 +487,7 @@ def _handle_cpq_ui(tool_input: dict) -> str:
         return msg
     if action == "render_table":
         rows = ti.get("rows") or []
-        nonempty = sum(1 for r in rows for v in r.values() if str(v or "").strip())
+        nonempty = sum(1 for r in rows for k, v in r.items() if k != "_reco" and str(v or "").strip())
         msg = f"已渲染表 {ti.get('section_id')}：{len(rows)} 行、{nonempty} 个非空单元格。"
         if rows and nonempty == 0:
             msg += " ⚠️ 所有单元格都空！检查 rows 里每行的键是否与该分区固定列名一致，然后重填。"
@@ -608,13 +631,19 @@ SYSTEM_PROMPT = """\
 - **第 3 步｜定价-利润加成**（L5：确认定价过程及结果）。s3_pricing
   （表·固定列 产品编码/产品名称/基础成本/技术溢价/市场调节/定价，元/W）。**利润加成 = 技术溢价 + 市场调节**（如 +1.5 -0.2 = 利润加成 +1.3）。
 - **第 4 步｜报价-其他加价项**（L5：确认加价过程及结果）。s4_detail（表·加价明细）、
-  s4_prod_sum（表·产品加价汇总）。匹配报价规则算其他加价（如 +0.8）。
-- **第 5 步｜报价测算复核**（L5：复核报价测算结果）。s5_deviation（表·价格偏差：报价/EXW加价/
-  EXW价格/建议报价/地区部指导价/地区部价格底线/BG底价/偏差·偏差额·偏差率…）、s5_order_sum（表单·整单加价汇总）。
+  s4_prod_sum（表·产品加价汇总，固定列 测算单id/产品行id/**产品型号**/单件瓦数(W)/基础加价/
+  非标加价/财务商务加价/物流加价/物流费用调整/其他加价/加价合计）。匹配报价规则算其他加价（如 +0.8）。
+- **第 5 步｜报价测算复核**（L5：复核报价测算结果）。s5_deviation（表·价格偏差，固定列
+  测算单id/产品行id/**产品型号**/单件瓦数(W)/数量（WM）/报价/EXW加价/EXW价格/建议报价/建议报价加价/
+  地区部指导价/地区部价格底线/地区部价格底线偏差/地区部价格底线偏差额/地区部价格底线偏差率/
+  BG底价/BG底价偏差/BG底价偏差额/BG底价偏差率/价格组织/价格生效日期）、s5_order_sum（表单·整单加价汇总）。
   **预计报价 = 基础成本 + 利润加成 + 其他加价**（如 5.6 + 1.3 + 0.8 = 7.7）。
 - **第 6 步｜报价方案**（L5：生成报价单）。s6_basic（表单·报价基本信息）、
-  s6_detail（表·报价明细：综合单价/组件单价/物流报价/备品备件单价/数量/折扣/金额）。
+  s6_detail（表·报价明细，固定列 **产品型号**/综合单价/组件单价/物流报价/备品备件单价/数量/折扣/金额）。
   **报价 = 预计报价 × 折扣**（如 7.7 × 0.9 = 6.93）。
+- **⚠️ 产品型号贯穿全流程**：s4_prod_sum、s5_deviation、s6_detail 的每一行 rows 都**必须带「产品型号」键**，
+  值沿用**第 1 步 s1_products（产品信息列表）里该产品的"产品型号"原值**——不要换成产品编码/产品名称、
+  不要留空、键名必须写"产品型号"（写"型号/产品名称"会匹配不上被丢弃）。
 - **第 7 步｜输出报价单**（L5：报价单审批）。render_document 渲染报价单文档（section_id=s7_doc），
   再 s7_bpm（表·BPM 审批流环节：环节/角色/状态/处理意见），告知用户流程完成。
 
@@ -632,8 +661,9 @@ SYSTEM_PROMPT = """\
   ② **数据库 sql_query**——**第 1 步也要查库**：按产品编码/型号查 `CLM_BASE_INFO`（拿产品名称/规格）、
      查该产品的标准 BOM/技术参数来**补全并推荐**「产品信息列表」「产品技术参数」；测算类型/所属组织/币种等给合理取值。
      第 2–6 步的 BOM/料工费/定价/加价/偏差**必须查库**。查库前先看提示词末尾的《Schema 说明》判断查哪张表、哪个字段。
-  ③ **你的推荐**——文档没给、库里也没有的字段，基于已知信息+行业常识**给出合理推荐值**，并在 source 里注明"（推荐）"；
-     **不要大片留空、也不要只是把文档里的话原样搬进去**，该推断的要推断、该算的要算。
+  ③ **你的推荐**——文档没给、库里也没有的字段，基于已知信息+行业常识**给出合理推荐值**，
+     **并在该值末尾加「（推荐）」标记**（系统会自动去掉这几个字、只用颜色高亮显示，表格里不会出现标记文字），
+     source 里也注明来源是推荐；**不要大片留空、也不要只是把文档里的话原样搬进去**，该推断的要推断、该算的要算。
 
 # 数据来源（两端，每步都要说清依据）
 
@@ -688,7 +718,8 @@ SYSTEM_PROMPT = """\
 - 收到「【强行推荐】」时（用户点了「强行填满本步骤」）：把当前大步骤所有固定分区的**每一个字段/单元格都填满、绝不留空**——
   ① 能从需求文档拿的先填；② 文档没有的用 sql_query 查库补；③ 都没有的**用行业知识+推理强行推断一个值填上**
   （不许写"待补充/待定/无/N.A."）。**凡是靠推理、没有文档或数据库依据的值，必须在值末尾加"（推测）"标记**
-  （如「液冷（推测）」）。全部用 render_form(values)/render_table(rows) 填入右侧；聊天里给【推理过程】并单独列出哪些是无依据推测。
+  （如「液冷（推测）」；系统会自动去掉标记文字、只用颜色高亮显示）。
+  全部用 render_form(values)/render_table(rows) 填入右侧；聊天里给【推理过程】并单独列出哪些是无依据推测。
 
 # 严格顺序（重点，别再跳步）
 

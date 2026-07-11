@@ -1161,14 +1161,22 @@
     }
 
     const GUESS_RE = /[（(](推测|推荐|推断|估计|假设|待定|待补充|默认)[)）]/;
-    function markGuess(el, val) { if (GUESS_RE.test(String(val || ''))) el.classList.add('guessed'); }
+    // 推荐值高亮：后端已把值末尾的（推荐）/（推测）文字剥掉并给 reco 标志，
+    // 这里只上颜色不显示文字；GUESS_RE 作为兜底（历史数据/非固定分区值里仍带标记文字时）。
+    function markGuess(el, val, reco) {
+      if (reco || GUESS_RE.test(String(val || ''))) el.classList.add('guessed');
+      // 用户手改过就取消高亮（不再是推荐值）
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+        el.addEventListener('input', () => el.classList.remove('guessed'), { once: true });
+      }
+    }
     function makeFieldInput(f, editable) {
       const val = f.value == null ? '' : String(f.value);
       if (!editable) {
         const span = document.createElement('span');
         span.textContent = val || '—';
         span.dataset.key = f.key;
-        markGuess(span, val);
+        markGuess(span, val, f.reco);
         return span;
       }
       let el;
@@ -1194,7 +1202,7 @@
         el.value = val;
       }
       el.dataset.key = f.key;
-      markGuess(el, val);
+      markGuess(el, val, f.reco);
       return el;
     }
 
@@ -1238,20 +1246,22 @@
 
     function makeTableRow(sec, row) {
       const tr = document.createElement('tr');
+      const recoCols = Array.isArray(row._reco) ? row._reco : []; // 后端标出的推荐值列
       for (const c of sec.columns) {
         const td = document.createElement('td');
         const val = row[c.key] == null ? '' : String(row[c.key]);
+        const reco = recoCols.includes(c.key);
         if (sec.editable) {
           const input = document.createElement('input');
           input.value = val;
           input.dataset.key = c.key;
-          markGuess(input, val);
+          markGuess(input, val, reco);
           td.appendChild(input);
         } else {
           td.textContent = val;
           td.dataset.key = c.key;
           td.dataset.value = val;
-          markGuess(td, val);
+          markGuess(td, val, reco);
         }
         tr.appendChild(td);
       }
