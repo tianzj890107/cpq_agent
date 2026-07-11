@@ -1351,6 +1351,7 @@
       turnHadError = false;
       // display 决定“历史回放里的用户气泡”：echo=true 用 text；echo=false 用传入的 display（'' 表示不记气泡）
       const body = { message: text };
+      if (currentSessionId) body.sid = currentSessionId; // 会话隔离：路由到本会话专属 Bridge
       if (display !== undefined) body.display = display;
       else if (!echo) body.display = '';
       try {
@@ -1595,7 +1596,7 @@
         ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer']
           .forEach(k => sessionStorage.removeItem(k));
       } catch {}
-      try { await fetch(AGENT_URL + '/api/new', { method: 'POST' }); } catch {}
+      // 会话隔离后无需预先重置后端：刷新页面时 init 会 /api/new 拿到全新会话
       location.reload();
     }
     // 兼容旧入口（导航「新对话」）

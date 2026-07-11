@@ -1699,7 +1699,8 @@
     async function sendToAgent(text, { echo = true, display } = {}) {
       if (busy) return; if (echo) addUserBubble(text);
       setBusy(true); showTyping(); turnGot = false; turnErr = false;
-      const body = { message: text }; if (display !== undefined) body.display = display; else if (!echo) body.display = '';
+      const body = { message: text }; if (currentSessionId) body.sid = currentSessionId; // 会话隔离：路由到本会话专属 Bridge
+      if (display !== undefined) body.display = display; else if (!echo) body.display = '';
       try {
         const resp = await fetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
@@ -1774,7 +1775,7 @@
     async function startNewConfig() {
       if (busy) return;
       try { ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer'].forEach(k => sessionStorage.removeItem(k)); } catch {}
-      try { await fetch(AGENT_URL + '/api/new', { method: 'POST' }); } catch {}
+      // 会话隔离后无需预先重置后端：刷新页面时 boot 会 /api/new 拿到全新会话
       location.reload();
     }
 

@@ -1516,7 +1516,7 @@
         const resp = await fetch(AGENT_URL + '/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, display }),
+          body: JSON.stringify({ message: text, display, sid: currentSessionId || undefined }), // sid：会话隔离，路由到本会话专属 Bridge
         });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
 
@@ -1817,7 +1817,9 @@
         const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true, '已连接');
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + meta.model;
-        currentSessionId = meta.session_id || currentSessionId;
+        // 每个打开的页面申请自己的会话 id（会话隔离，多人同时用互不串扰）
+        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        currentSessionId = nw.id || currentSessionId;
       } catch (e) {
         setConn(false, '未连接');
       }

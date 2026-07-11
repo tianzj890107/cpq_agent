@@ -25,6 +25,7 @@ import threading
 import traceback
 import uuid
 import zipfile
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -347,7 +348,16 @@ def _handle_sql_query(tool_input: dict) -> str:
     return head + ":\n" + "\n".join(lines)
 
 
-_RULE_EVENTS: list[dict] = []
+# rule_result 事件队列。线程本地：工具在各自会话回合的请求线程里同步执行，
+# 线程隔离即会话隔离，多个会话并发跑回合时结果事件不会互相串。
+_RULE_TLS = threading.local()
+
+
+def _rule_events() -> list:
+    lst = getattr(_RULE_TLS, "events", None)
+    if lst is None:
+        lst = _RULE_TLS.events = []
+    return lst
 
 
 def _handle_rule_result(tool_input: dict) -> str:
@@ -356,7 +366,7 @@ def _handle_rule_result(tool_input: dict) -> str:
     rules = tool_input.get("rules") or []
     if not isinstance(rules, list):
         return "rules 必须是数组"
-    _RULE_EVENTS.append(tool_input)
+    _rule_events().append(tool_input)
     return f"已接收 {len(rules)} 条规则行，stage={tool_input.get('stage') or ''}"
 
 
@@ -695,13 +705,23 @@ class Bridge:
             self.created = data.get("created") or _now_iso()
             self.conv.messages[:] = data.get("messages", [])
             self.conv.session = SessionStore(self.cwd)
-            _RULE_EVENTS.clear()
+            _rule_events().clear()
         return {
             "id": self.session_id,
             "title": self.title,
             "model": data.get("model"),
             "events": self.events,
         }
+
+    def snapshot(self) -> dict:
+        """当前会话的回放数据（结构同 open_session 的返回，供已在池中的会话复用）。"""
+        with self.lock:
+            return {
+                "id": self.session_id,
+                "title": self.title,
+                "model": self.conv.model,
+                "events": list(self.events),
+            }
 
     def current_settings(self) -> dict:
         prof = self.conv.profile
@@ -779,7 +799,7 @@ class Bridge:
             self.conv.messages.clear()
             self.conv.session = SessionStore(self.cwd)
             self.conv.cost_tracker.__init__()
-            _RULE_EVENTS.clear()
+            _rule_events().clear()
             self._new_session()
 
     def stream_turn(self, text: str, emit, display=None):
@@ -796,12 +816,12 @@ class Bridge:
                     conv._maybe_compact()
                     stop_reason = self._stream_once(conv, emit)
                     if stop_reason == "tool_use":
-                        _RULE_EVENTS.clear()
+                        _rule_events().clear()
                         conv._execute_pending_tools()
-                        for ev in _RULE_EVENTS:
+                        for ev in _rule_events():
                             emit({"type": "rule_result", "result": ev})
                             self.events.append({"type": "rule_result", "result": ev})
-                        _RULE_EVENTS.clear()
+                        _rule_events().clear()
                         last = conv.messages[-1] if conv.messages else None
                         if last and last.get("role") == "user" and isinstance(last.get("content"), list):
                             for block in last["content"]:
@@ -1055,6 +1075,85 @@ def _extract_text(name: str, raw: bytes):
         return None, f"解析失败: {e}"
 
 
+bridge: Bridge = None  # 默认 Bridge（兼容不带 sid 的旧请求），main() 或 suite 里构建
+
+
+# ---------------------------------------------------------------------------
+# 会话级 Bridge 池：每个会话一个独立 Conversation，多用户并发互不串扰。
+# 会话状态每回合都会 _persist() 落盘，被挤出池后随时可从历史重新装载。
+# ---------------------------------------------------------------------------
+
+_BRIDGES: "OrderedDict[str, Bridge]" = OrderedDict()
+_POOL_LOCK = threading.Lock()
+_POOL_MAX = 16  # 内存中最多保留的活跃会话数
+
+
+def _pool_put(sid: str, nb: Bridge) -> Bridge:
+    """入池；并发下同 id 已存在则复用已有的。超限按 LRU 挤出未在跑回合的会话。"""
+    with _POOL_LOCK:
+        cur = _BRIDGES.get(sid)
+        if cur is not None and cur is not nb:
+            return cur
+        _BRIDGES[sid] = nb
+        _BRIDGES.move_to_end(sid)
+        while len(_BRIDGES) > _POOL_MAX:
+            victim = None
+            for k, b in _BRIDGES.items():
+                if k != sid and not b.lock.locked():
+                    victim = k
+                    break
+            if victim is None:
+                break
+            _BRIDGES.pop(victim)
+    return nb
+
+
+def bridge_for(sid: str, create: bool = True):
+    """按会话 id 取专属 Bridge：命中池直接用；有历史则装载；没历史则（可选）新建并
+    采纳该 id。sid 为空/非法回退默认 bridge（兼容旧前端）。"""
+    sid = (sid or "").strip()
+    if not sid or not _safe_sid(sid):
+        return bridge
+    with _POOL_LOCK:
+        b = _BRIDGES.get(sid)
+        if b is not None:
+            _BRIDGES.move_to_end(sid)
+            return b
+    if load_history(sid) is not None:
+        nb = Bridge(SCRIPT_DIR)
+        nb.open_session(sid)
+        return _pool_put(sid, nb)
+    if not create:
+        return None
+    nb = Bridge(SCRIPT_DIR)
+    nb.session_id = sid
+    return _pool_put(sid, nb)
+
+
+def pool_new() -> Bridge:
+    """新建一个会话专属 Bridge 并入池（/api/new）。"""
+    nb = Bridge(SCRIPT_DIR)
+    return _pool_put(nb.session_id, nb)
+
+
+def pool_drop(sid: str):
+    with _POOL_LOCK:
+        _BRIDGES.pop((sid or "").strip(), None)
+
+
+def pool_apply_settings(data: dict) -> dict:
+    """设置是全局的：默认 bridge 应用并持久化一次，池内所有会话同步应用（不回写）。"""
+    res = bridge.apply_settings(data)
+    with _POOL_LOCK:
+        others = list(_BRIDGES.values())
+    for b in others:
+        try:
+            b.apply_settings(data, persist=False)
+        except Exception:
+            traceback.print_exc()
+    return res
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1128,18 +1227,23 @@ class Handler(BaseHTTPRequestHandler):
             res = _import_rules(self._read_body())
             self._send_json(res, status=200 if res.get("ok") else 400)
         elif path == "/api/new":
-            bridge.reset()
-            self._send_json({"ok": True, "id": bridge.session_id})
+            nb = pool_new()
+            self._send_json({"ok": True, "id": nb.session_id})
         elif path == "/api/session/open":
             data = self._read_body()
-            res = bridge.open_session((data.get("id") or "").strip())
-            self._send_json(res) if res else self.send_error(404)
+            b = bridge_for((data.get("id") or "").strip(), create=False)
+            if b is not None and b is not bridge:
+                self._send_json(b.snapshot())
+            else:
+                self.send_error(404)
         elif path == "/api/session/delete":
             data = self._read_body()
-            self._send_json({"ok": delete_history((data.get("id") or "").strip())})
+            sid = (data.get("id") or "").strip()
+            pool_drop(sid)
+            self._send_json({"ok": delete_history(sid)})
         elif path == "/api/settings":
             try:
-                self._send_json(bridge.apply_settings(self._read_body()))
+                self._send_json(pool_apply_settings(self._read_body()))
             except Exception as e:
                 traceback.print_exc()
                 self._send_json({"error": str(e)}, status=500)
@@ -1169,6 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self._read_body()
         text = (data.get("message") or "").strip()
         display = data.get("display")
+        b = bridge_for(data.get("sid"))  # 带 sid 走会话专属 Bridge，缺省回退全局
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1189,7 +1294,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            bridge.stream_turn(text, emit, display=display)
+            b.stream_turn(text, emit, display=display)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -1208,7 +1313,8 @@ class Handler(BaseHTTPRequestHandler):
             elif obj.get("type") == "rule_result":
                 rule_results.append(obj.get("result") or {})
 
-        bridge.stream_turn(text, emit, display=data.get("display"))
+        b = bridge_for(data.get("sid"))  # 带 sid 走会话专属 Bridge，缺省回退全局
+        b.stream_turn(text, emit, display=data.get("display"))
         self._send_json({"ok": True, "text": "".join(collected), "rule_results": rule_results})
 
 

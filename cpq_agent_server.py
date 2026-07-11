@@ -35,6 +35,7 @@ import sys
 import threading
 import traceback
 import uuid
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -393,7 +394,16 @@ def fixed_forms_catalog() -> list:
 
 
 # 每个会话轮次中，cpq_ui 调用产生的 UI 事件先入队，工具批次执行完后随 SSE 下发。
-_UI_EVENTS: list = []
+# 线程本地：工具在各自会话回合的请求线程里同步执行，线程隔离即会话隔离，
+# 多个会话并发跑回合时 UI 事件不会互相串。
+_UI_TLS = threading.local()
+
+
+def _ui_events() -> list:
+    lst = getattr(_UI_TLS, "events", None)
+    if lst is None:
+        lst = _UI_TLS.events = []
+    return lst
 
 
 def _log_write(raw: dict, ti: dict):
@@ -440,7 +450,7 @@ def _handle_cpq_ui(tool_input: dict) -> str:
         action = ti.get("action", action)
         fixed = _fixed_template(ti.get("section_id")) is not None
         _log_write(raw, ti)
-    _UI_EVENTS.append(ti)
+    _ui_events().append(ti)
     if action == "set_step":
         return f"工作台已切换到步骤 {step}（{STEPS[step - 1]}）"
     if action == "focus_section":
@@ -974,7 +984,7 @@ class Bridge:
             self.step = data.get("step", 1)
             self.conv.messages[:] = data.get("messages", [])
             self.conv.session = SessionStore(self.cwd)
-            _UI_EVENTS.clear()
+            _ui_events().clear()
         return {
             "id": self.session_id,
             "title": self.title,
@@ -982,6 +992,17 @@ class Bridge:
             "model": data.get("model"),
             "events": self.events,
         }
+
+    def snapshot(self) -> dict:
+        """当前会话的回放数据（结构同 open_session 的返回，供已在池中的会话复用）。"""
+        with self.lock:
+            return {
+                "id": self.session_id,
+                "title": self.title,
+                "step": self.step,
+                "model": self.conv.model,
+                "events": list(self.events),
+            }
 
     # -- 设置 -----------------------------------------------------------------
 
@@ -1062,7 +1083,7 @@ class Bridge:
             self.conv.messages.clear()
             self.conv.session = SessionStore(self.cwd)
             self.conv.cost_tracker.__init__()
-            _UI_EVENTS.clear()
+            _ui_events().clear()
             self._new_session()
 
     def stream_turn(self, text: str, emit, display=None):
@@ -1085,15 +1106,15 @@ class Bridge:
                     stop_reason = self._stream_once(conv, emit)
 
                     if stop_reason == "tool_use":
-                        _UI_EVENTS.clear()
+                        _ui_events().clear()
                         conv._execute_pending_tools()
                         # cpq_ui 调用产生的工作台事件
-                        for ev in _UI_EVENTS:
+                        for ev in _ui_events():
                             emit({"type": "ui", "ui": ev})
                             self.events.append({"type": "ui", "ui": ev})
                             if ev.get("action") == "set_step" and isinstance(ev.get("step"), int):
                                 self.step = ev["step"]
-                        _UI_EVENTS.clear()
+                        _ui_events().clear()
                         # 普通工具结果（前端主要用于显示活动/错误）
                         last = conv.messages[-1] if conv.messages else None
                         if last and last.get("role") == "user" and isinstance(last.get("content"), list):
@@ -1185,7 +1206,83 @@ class Bridge:
 # HTTP 层（含 CORS：页面由 serve.py:8010 提供，跨端口调用本服务）
 # ---------------------------------------------------------------------------
 
-bridge: Bridge = None  # set in main()
+bridge: Bridge = None  # 默认 Bridge（兼容不带 sid 的旧请求 / 意图识别用），main() 或 suite 里构建
+
+
+# ---------------------------------------------------------------------------
+# 会话级 Bridge 池：每个会话一个独立 Conversation，多用户并发互不串扰。
+# 会话状态每回合都会 _persist() 落盘，被挤出池后随时可从历史重新装载。
+# ---------------------------------------------------------------------------
+
+_BRIDGES: "OrderedDict[str, Bridge]" = OrderedDict()
+_POOL_LOCK = threading.Lock()
+_POOL_MAX = 16  # 内存中最多保留的活跃会话数
+
+
+def _pool_put(sid: str, nb: Bridge) -> Bridge:
+    """入池；并发下同 id 已存在则复用已有的。超限按 LRU 挤出未在跑回合的会话。"""
+    with _POOL_LOCK:
+        cur = _BRIDGES.get(sid)
+        if cur is not None and cur is not nb:
+            return cur
+        _BRIDGES[sid] = nb
+        _BRIDGES.move_to_end(sid)
+        while len(_BRIDGES) > _POOL_MAX:
+            victim = None
+            for k, b in _BRIDGES.items():
+                if k != sid and not b.lock.locked():
+                    victim = k
+                    break
+            if victim is None:
+                break
+            _BRIDGES.pop(victim)
+    return nb
+
+
+def bridge_for(sid: str, create: bool = True):
+    """按会话 id 取专属 Bridge：命中池直接用；有历史则装载；没历史则（可选）新建并
+    采纳该 id。sid 为空/非法回退默认 bridge（兼容旧前端）。"""
+    sid = (sid or "").strip()
+    if not sid or not _safe_sid(sid):
+        return bridge
+    with _POOL_LOCK:
+        b = _BRIDGES.get(sid)
+        if b is not None:
+            _BRIDGES.move_to_end(sid)
+            return b
+    if load_history(sid) is not None:
+        nb = Bridge(SCRIPT_DIR)
+        nb.open_session(sid)
+        return _pool_put(sid, nb)
+    if not create:
+        return None
+    nb = Bridge(SCRIPT_DIR)
+    nb.session_id = sid
+    return _pool_put(sid, nb)
+
+
+def pool_new() -> Bridge:
+    """新建一个会话专属 Bridge 并入池（/api/new）。"""
+    nb = Bridge(SCRIPT_DIR)
+    return _pool_put(nb.session_id, nb)
+
+
+def pool_drop(sid: str):
+    with _POOL_LOCK:
+        _BRIDGES.pop((sid or "").strip(), None)
+
+
+def pool_apply_settings(data: dict) -> dict:
+    """设置是全局的：默认 bridge 应用并持久化一次，池内所有会话同步应用（不回写）。"""
+    res = bridge.apply_settings(data)
+    with _POOL_LOCK:
+        others = list(_BRIDGES.values())
+    for b in others:
+        try:
+            b.apply_settings(data, persist=False)
+        except Exception:
+            traceback.print_exc()
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1569,18 +1666,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/send":
             self._handle_send()
         elif path == "/api/new":
-            bridge.reset()
-            self._send_json({"ok": True, "id": bridge.session_id})
+            nb = pool_new()
+            self._send_json({"ok": True, "id": nb.session_id})
         elif path == "/api/session/open":
             data = self._read_body()
-            res = bridge.open_session((data.get("id") or "").strip())
-            if res:
-                self._send_json(res)
+            b = bridge_for((data.get("id") or "").strip(), create=False)
+            if b is not None and b is not bridge:
+                self._send_json(b.snapshot())
             else:
                 self.send_error(404)
         elif path == "/api/session/delete":
             data = self._read_body()
-            self._send_json({"ok": delete_history((data.get("id") or "").strip())})
+            sid = (data.get("id") or "").strip()
+            pool_drop(sid)
+            self._send_json({"ok": delete_history(sid)})
         elif path == "/api/intent":
             data = self._read_body()
             self._send_json({"intent": classify_intent((data.get("text") or "").strip())})
@@ -1606,7 +1705,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             data = self._read_body()
             try:
-                self._send_json(bridge.apply_settings(data))
+                self._send_json(pool_apply_settings(data))
             except Exception as e:
                 traceback.print_exc()
                 self._send_json({"error": str(e)}, status=500)
@@ -1636,6 +1735,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self._read_body()
         text = (data.get("message") or "").strip()
         display = data.get("display")  # None=用 text 作气泡；''=不记气泡
+        b = bridge_for(data.get("sid"))  # 带 sid 走会话专属 Bridge，缺省回退全局
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1657,7 +1757,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            bridge.stream_turn(text, emit, display=display)
+            b.stream_turn(text, emit, display=display)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # 客户端断开
 
