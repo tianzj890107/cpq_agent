@@ -1425,6 +1425,11 @@
         }).then(r => r.json());
         if (res && res.ok) {
           appendMessage('ai', '✅ 已导入数据库：' + res.count + ' 条规则写入 ' + (res.table || 'rule_agent_rules') + '（批次 ' + (res.batch_id || '') + '，' + (res.created_at || '') + '）。');
+          if (manualMode) {
+            // 无模型模式下会话本身没有对话内容：导入成功时落一条档，让本次工作进入历史/首页卡片
+            sendToAgent('【人工导入】' + res.count + ' 条规则已人工录入并导入数据库（批次 ' + (res.batch_id || '') + '）。',
+              { echo: false, display: '导入数据库：' + res.count + ' 条规则' });
+          }
         } else {
           appendMessage('ai', '导入失败：' + ((res && res.error) || '未知错误') + '。');
         }
@@ -1559,7 +1564,7 @@
           }
         }
         setConn(true, '已连接');
-        if (!receivedAnything) {
+        if (!receivedAnything && !manualMode) {
           appendMessage('ai', '规则 Agent 未返回内容，请重试或检查模型配置。');
         }
         return receivedRule;
@@ -1860,6 +1865,10 @@
         // 每个打开的页面申请自己的会话 id（会话隔离，多人同时用互不串扰）
         const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || currentSessionId;
+        try { // 记入「我的规则」（首页「我的」标签按本机创建的会话过滤）
+          const mine = JSON.parse(localStorage.getItem('rule:mySessions') || '[]');
+          if (nw.id && mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('rule:mySessions', JSON.stringify(mine.slice(-200))); }
+        } catch (e) {}
         // 从其他页面「历史记录」点进来的：直接载入该会话
         let openId = '';
         try { openId = sessionStorage.getItem('rule:openSession') || ''; sessionStorage.removeItem('rule:openSession'); } catch (e) {}

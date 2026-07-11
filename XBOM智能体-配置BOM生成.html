@@ -1665,7 +1665,12 @@
       const rows = collectBom(), params = collectParams(), rules = collectRules();
       addUserBubble('确认配置BOM（' + rows.length + ' 行物料，' + rules.length + ' 条规则）。');
       const btn = $('btnImportDb'); if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = '导入数据库'; }
-      if (manualMode) { addAiBubble('已确认配置BOM（' + rows.length + ' 行）。点「导入数据库」完成入库。'); return; }
+      if (manualMode) {
+        addAiBubble('已确认配置BOM（' + rows.length + ' 行）。点「导入数据库」完成入库。');
+        sendToAgent('【人工确认·配置BOM】共 ' + rows.length + ' 行、规则 ' + rules.length + ' 条。数据(JSON)：\n' + JSON.stringify({ 参数: params, 配置BOM: rows }),
+          { echo: false, display: '确认配置BOM（' + rows.length + ' 行物料）', step: 6 });
+        return;
+      }
       sendToAgent('【确认配置】用户确认了配置，最新数据(JSON)如下：\n' +
         JSON.stringify({ 参数: params, 配置BOM: rows, 已选规则: rules }, null, 1) +
         '\n以此为准。若用户改了参数，据参数重算 BOM 并重渲；否则简短总结本次配置BOM + 每行规则的完成情况。',
@@ -1698,10 +1703,11 @@
     /* ---------- SSE 通信 ---------- */
     function setBusy(v) { busy = v; $('chatSend').disabled = v; }
     let turnGot = false, turnErr = false;
-    async function sendToAgent(text, { echo = true, display } = {}) {
+    async function sendToAgent(text, { echo = true, display, step } = {}) {
       if (busy) return; if (echo) addUserBubble(text);
       setBusy(true); showTyping(); turnGot = false; turnErr = false;
       const body = { message: text }; if (currentSessionId) body.sid = currentSessionId; // 会话隔离：路由到本会话专属 Bridge
+      if (step) body.step = step; // 人工模式下上报本地进度（用于历史/首页卡片状态）
       if (display !== undefined) body.display = display; else if (!echo) body.display = '';
       try {
         const resp = await fetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1715,7 +1721,7 @@
       } catch (e) { turnErr = true; setConn(false); addErrorBubble('无法连接配置助手服务（' + AGENT_URL + '）。请先运行：python xbom_agent_server.py'); }
       finally { hideTyping(); finishStream();
         chatEl().querySelectorAll('.ti-loader-2').forEach(i => { if (i.closest('.step-icon')) return; i.className = 'ti ti-check'; i.style.color = 'var(--color-success)'; });
-        if (!turnErr && !turnGot) addErrorBubble('本轮没有返回内容（可能瞬时繁忙），请重发一次。'); setBusy(false); }
+        if (!turnErr && !turnGot && !manualMode) addErrorBubble('本轮没有返回内容（可能瞬时繁忙），请重发一次。'); setBusy(false); }
     }
     function handleEvent(ev) {
       if (ev.type === 'text' || ev.type === 'tool_use' || ev.type === 'ui') turnGot = true;
@@ -1798,6 +1804,10 @@
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || null;
+        try { // 记入「我的配置」（首页「我的」标签按本机创建的会话过滤）
+          const mine = JSON.parse(localStorage.getItem('xbom:mySessions') || '[]');
+          if (nw.id && mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('xbom:mySessions', JSON.stringify(mine.slice(-200))); }
+        } catch (e) {}
         let openId=''; try{ openId=sessionStorage.getItem('xbom:openSession')||''; sessionStorage.removeItem('xbom:openSession'); }catch{}
         if(openId){ await openSession(openId); return; }
       } catch { setConn(false); addErrorBubble('未连接配置助手服务（' + AGENT_URL + '）。请运行 python xbom_agent_server.py 后刷新。'); return; }
@@ -1814,9 +1824,10 @@
         (hasInput ? '请依次跑第 1–5 步（每步 set_step running→step_result→done，并在聊天给思考/规划/执行/结果），第 6 步 render_bom 渲染可编辑配置BOM。'
                   : '用户还没上传变体BOM/需求。先不要 set_step、不要渲染，只在聊天里友好请用户上传变体BOM Excel或需求文档（回形针）或直接描述产品与配置需求，然后停下等待。不要臆造。');
       if (manualMode) {
-        // 无模型模式：不发 kickoff，直接给一张可人工编辑的空 BOM 表
+        // 无模型模式：不发 kickoff，直接给一张可人工编辑的空 BOM 表；落一条档进历史/首页卡片
         addAiBubble('当前为「无模型」模式（不调用大模型）。右侧已给出空白配置BOM表：请人工逐行填写物料（点「+ 新增行」加行、每行可选配置规则），完成后点「导入数据库」。');
         enterManualBom();
+        sendToAgent('【会话开始·人工模式】' + proj, { echo: false, display: bubble || '新建配置（人工模式）', step: 1 });
         return;
       }
       for (const f of fileContents) if (f && f.text) kick += '\n\n--- 附件《' + f.name + '》内容' + (f.truncated ? '(截断)' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---';

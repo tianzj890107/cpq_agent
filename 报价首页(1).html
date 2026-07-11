@@ -733,6 +733,7 @@
       margin-bottom: 12px;
     }
 
+    .cards-empty { grid-column: 1 / -1; text-align: center; color: var(--text-tertiary); font-size: 13.5px; line-height: 1.9; padding: 44px 12px; }
     .request-card {
       background-color: var(--bg-page);
       border: 1px solid var(--border-color);
@@ -1241,117 +1242,15 @@
           </div>
         </div>
 
-        <!-- Card Grid -->
-        <div class="card-grid">
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607001</span>
-              <span class="request-status status-draft">草稿</span>
-            </div>
-            <div class="request-title">晶圆搬运吸嘴组件总成</div>
-            <div class="request-info">客户名称：<span>中芯国际</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">张</div>
-                张三 · 2026-07-01
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607002</span>
-              <span class="request-status status-reviewing">复核中</span>
-            </div>
-            <div class="request-title">SMT贴片机设备采购</div>
-            <div class="request-info">客户名称：<span>华为技术</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">李</div>
-                李四 · 2026-06-28
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607003</span>
-              <span class="request-status status-confirmed">复核完成</span>
-            </div>
-            <div class="request-title">半导体测试治具</div>
-            <div class="request-info">客户名称：<span>长江存储</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">王</div>
-                王五 · 2026-06-25
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607004</span>
-              <span class="request-status status-confirmed">复核完成</span>
-            </div>
-            <div class="request-title">精密模具开发项目</div>
-            <div class="request-info">客户名称：<span>比亚迪</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">赵</div>
-                赵六 · 2026-06-20
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607005</span>
-              <span class="request-status status-reviewing">复核中</span>
-            </div>
-            <div class="request-title">电子元器件采购</div>
-            <div class="request-info">客户名称：<span>小米科技</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">孙</div>
-                孙七 · 2026-06-18
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-
-          <div class="request-card">
-            <div class="request-card-header">
-              <span class="request-id">BJD202607006</span>
-              <span class="request-status status-draft">草稿</span>
-            </div>
-            <div class="request-title">工业自动化设备</div>
-            <div class="request-info">客户名称：<span>富士康</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">钱</div>
-                钱八 · 2026-06-15
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
+        <!-- Card Grid（真实数据：当前助手的历史会话，由 JS 渲染） -->
+        <div class="card-grid" id="cardGrid">
+          <div class="cards-empty">加载中…</div>
         </div>
 
         <!-- Pagination -->
         <div class="pagination">
-          <div class="pagination-info">共 48 个结果，当前显示 1–6</div>
-          <div class="pagination-controls">
-            <button class="page-btn">‹</button>
-            <button class="page-btn active">1</button>
-            <button class="page-btn">2</button>
-            <button class="page-btn">3</button>
-            <button class="page-btn">...</button>
-            <button class="page-btn">8</button>
-            <button class="page-btn">›</button>
-          </div>
+          <div class="pagination-info"></div>
+          <div class="pagination-controls"></div>
         </div>
       </div>
     </div>
@@ -1532,43 +1431,135 @@
     const MODES = {
       quote:  { tag: '报价助手', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
                 ph: '请输入需求描述…（例如：帮我给××客户的储能项目做报价）', newBtn: '新建报价',
-                tabs: ['我的报价', '全部报价'], activeTab: 1, searchPh: '支持通过客户名&创建人搜索',
-                title: '<span class="highlight">创作无限可能</span>，智能报价', total: 48 },
+                tabs: ['我的报价', '全部报价'], activeTab: 1, searchPh: '支持通过客户名&项目名搜索',
+                title: '<span class="highlight">创作无限可能</span>，智能报价' },
       config: { tag: '配置助手', intro: '请上传某款产品的历史BOM，我们可以根据历史BOM协助你生成此产品的超级BOM。',
                 ph: '请输入你的问题或需求描述...', newBtn: '创建配置',
-                tabs: ['我的配置', '全部配置'], activeTab: 0, searchPh: '支持通过名称&创建人搜索',
-                title: '<span class="highlight">创作无限可能</span>，智能助手', total: 36 },
+                tabs: ['我的配置', '全部配置'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
+                title: '<span class="highlight">创作无限可能</span>，智能助手' },
       rule:   { tag: '规则助手', intro: '请输入规则配置需求，智能帮你完成需求配单规则、物料成本配置、定价规则等设置。',
                 ph: '请输入你的问题或需求描述...', newBtn: '创建',
-                tabs: ['产品配置规则', '定价规则', '报价规则'], activeTab: 0, searchPh: '支持通过名称&创建人搜索',
-                title: '<span class="highlight">创作无限可能</span>，智能助手', total: 36 },
+                tabs: ['我的规则', '全部规则'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
+                title: '<span class="highlight">创作无限可能</span>，智能助手' },
     };
-    const CARD_DATA = {
-      quote: [
-        { id: 'BJD202607001', status: '草稿', statusClass: 'status-draft', title: '晶圆搬运吸嘴组件总成', infoLabel: '客户名称', info: '中芯国际', creator: '张三', avatar: '张', date: '2026-07-01' },
-        { id: 'BJD202607002', status: '复核中', statusClass: 'status-reviewing', title: 'SMT贴片机设备采购', infoLabel: '客户名称', info: '华为技术', creator: '李四', avatar: '李', date: '2026-06-28' },
-        { id: 'BJD202607003', status: '复核完成', statusClass: 'status-confirmed', title: '半导体测试治具', infoLabel: '客户名称', info: '长江存储', creator: '王五', avatar: '王', date: '2026-06-25' },
-        { id: 'BJD202607004', status: '复核完成', statusClass: 'status-confirmed', title: '精密模具开发项目', infoLabel: '客户名称', info: '比亚迪', creator: '赵六', avatar: '赵', date: '2026-06-20' },
-        { id: 'BJD202607005', status: '复核中', statusClass: 'status-reviewing', title: '电子元器件采购', infoLabel: '客户名称', info: '小米科技', creator: '孙七', avatar: '孙', date: '2026-06-18' },
-        { id: 'BJD202607006', status: '草稿', statusClass: 'status-draft', title: '工业自动化设备', infoLabel: '客户名称', info: '富士康', creator: '钱八', avatar: '钱', date: '2026-06-15' },
-      ],
-      config: [
-        { id: 'PZ202607001', status: '草稿', statusClass: 'status-draft', title: '锂电池生产线配置方案', infoLabel: '产品型号', info: 'INR18650-35E', creator: '张三', avatar: '张', date: '2026-07-01' },
-        { id: 'PZ202607002', status: '审核中', statusClass: 'status-reviewing', title: '储能系统PACK配置', infoLabel: '产品型号', info: 'LFP-100Ah', creator: '李四', avatar: '李', date: '2026-06-28' },
-        { id: 'PZ202607003', status: '已完成', statusClass: 'status-confirmed', title: '动力电池模组配置', infoLabel: '产品型号', info: 'NCM-75Ah', creator: '王五', avatar: '王', date: '2026-06-25' },
-        { id: 'PZ202607004', status: '已完成', statusClass: 'status-confirmed', title: '48V微混系统配置', infoLabel: '产品型号', info: 'MHB-48V', creator: '赵六', avatar: '赵', date: '2026-06-20' },
-        { id: 'PZ202607005', status: '审核中', statusClass: 'status-reviewing', title: '固态电池试验线配置', infoLabel: '产品型号', info: 'SSB-试验', creator: '孙七', avatar: '孙', date: '2026-06-18' },
-        { id: 'PZ202607006', status: '草稿', statusClass: 'status-draft', title: '超快充电池系统配置', infoLabel: '产品型号', info: 'SFC-6C', creator: '钱八', avatar: '钱', date: '2026-06-15' },
-      ],
-      rule: [
-        { id: 'RULE202607001', status: '启用', statusClass: 'status-enabled', title: '标准订单优先级规则', infoLabel: '规则类型', info: '产品配置规则', creator: '张三', avatar: '张', date: '2026-07-01' },
-        { id: 'RULE202607002', status: '启用', statusClass: 'status-enabled', title: '锂电池原材料成本核算', infoLabel: '规则类型', info: '定价规则', creator: '李四', avatar: '李', date: '2026-06-28' },
-        { id: 'RULE202607003', status: '禁用', statusClass: 'status-disabled', title: '大客户阶梯定价规则', infoLabel: '规则类型', info: '报价规则', creator: '王五', avatar: '王', date: '2026-06-25' },
-        { id: 'RULE202607004', status: '启用', statusClass: 'status-enabled', title: '紧急订单快速响应规则', infoLabel: '规则类型', info: '产品配置规则', creator: '赵六', avatar: '赵', date: '2026-06-20' },
-        { id: 'RULE202607005', status: '禁用', statusClass: 'status-disabled', title: '电芯原材料成本核算', infoLabel: '规则类型', info: '定价规则', creator: '孙七', avatar: '孙', date: '2026-06-18' },
-        { id: 'RULE202607006', status: '启用', statusClass: 'status-enabled', title: '区域代理折扣规则', infoLabel: '规则类型', info: '报价规则', creator: '钱八', avatar: '钱', date: '2026-06-15' },
-      ],
-    };
+
+    // ===== 首页卡片：真实数据（三个助手的历史会话），不再使用演示假数据 =====
+    const SESSIONS = { quote: [], config: [], rule: [] };   // mode -> 会话列表；null=服务不可达
+    const MY_KEYS = { quote: 'cpq:mySessions', config: 'xbom:mySessions', rule: 'rule:mySessions' };
+    const OPEN_KEYS = { quote: 'cpq:openSession', config: 'xbom:openSession', rule: 'rule:openSession' };
+    const NUM_PREFIX = { quote: 'BJD', config: 'PZ', rule: 'GZ' };
+    const PAGE_SIZE = 6;
+    let PAGE = 1;
+
+    function modeBase(mode) {
+      if (mode === 'quote') return AGENT_URL;
+      if (mode === 'config') return peerBase('xbom:agentUrl', 'config', 47294);
+      return peerBase('cpq:ruleAgentUrl', 'rule', 47296);
+    }
+    function mySessionSet(mode) {
+      try { return new Set(JSON.parse(localStorage.getItem(MY_KEYS[mode]) || '[]')); } catch (e) { return new Set(); }
+    }
+    function escH(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    // 展示用单号：前缀 + 创建日期 + 会话 id 前 4 位（真实、可追溯到会话）
+    function quoteNo(mode, s) {
+      const d = (s.created || s.updated || '').slice(0, 10).replace(/-/g, '');
+      return NUM_PREFIX[mode] + d + '-' + String(s.id || '').slice(0, 4).toUpperCase();
+    }
+    // 状态由真实进度推导：报价 7 步 / 配置 6 步；规则按是否已有内容
+    function statusOf(mode, s) {
+      if (mode === 'rule') return (s.turns || 0) > 0 ? ['已录入', 'status-confirmed'] : ['草稿', 'status-draft'];
+      const doneStep = mode === 'quote' ? 7 : 6;
+      const st = s.step || 1;
+      if (st >= doneStep) return ['已完成', 'status-confirmed'];
+      if (st > 1) return ['第' + st + '步·' + (mode === 'quote' ? '测算中' : '配置中'), 'status-reviewing'];
+      return ['草稿', 'status-draft'];
+    }
+    function cardHtml(mode, s) {
+      const st = statusOf(mode, s);
+      const info = mode === 'quote'
+        ? '客户名称：<span>' + escH(s.customer || '—') + '</span>'
+        : mode === 'config'
+          ? '项目名称：<span>' + escH(s.project || '—') + '</span>'
+          : '使用模型：<span>' + escH(s.model || '—') + '</span>';
+      const title = s.title || '未命名会话';
+      const date = (s.updated || s.created || '').replace('T', ' ').slice(0, 16);
+      return '<div class="request-card" data-id="' + escH(s.id) + '">' +
+        '<div class="request-card-header"><span class="request-id">' + escH(quoteNo(mode, s)) + '</span>' +
+        '<span class="request-status ' + st[1] + '">' + escH(st[0]) + '</span></div>' +
+        '<div class="request-title">' + escH(title) + '</div>' +
+        '<div class="request-info">' + info + '</div>' +
+        '<div class="request-footer"><div class="request-creator">' +
+        '<div class="creator-avatar">' + escH(String(title).charAt(0) || '—') + '</div>' +
+        escH(date) + ' · ' + (Number(s.turns) || 0) + ' 轮</div>' +
+        '<span class="request-detail">详情</span></div></div>';
+    }
+    async function loadCards(mode) {
+      if (!cardGrid) return;
+      cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
+      try {
+        const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
+        SESSIONS[mode] = r.sessions || [];
+      } catch (e) {
+        SESSIONS[mode] = null;
+      }
+      PAGE = 1;
+      renderCards();
+    }
+    function renderCards() {
+      if (!cardGrid) return;
+      const mode = currentMode;
+      const rows = SESSIONS[mode];
+      const info = document.querySelector('.pagination-info');
+      const ctrl = document.querySelector('.pagination-controls');
+      if (rows === null) {
+        cardGrid.innerHTML = '<div class="cards-empty">无法连接助手服务，读不到数据。<br>请先启动 cpq_suite_server.py 后刷新。</div>';
+        if (info) info.textContent = '';
+        if (ctrl) ctrl.innerHTML = '';
+        return;
+      }
+      const q = ((searchInput && searchInput.value) || '').trim().toLowerCase();
+      const mineOnly = currentTab().indexOf('我的') === 0;
+      const my = mySessionSet(mode);
+      const filtered = (rows || []).filter(s => {
+        if (mineOnly && !my.has(s.id)) return false;
+        if (!q) return true;
+        const hay = ((s.title || '') + ' ' + (s.customer || '') + ' ' + (s.project || '') + ' ' + quoteNo(mode, s)).toLowerCase();
+        return hay.indexOf(q) >= 0;
+      });
+      const total = filtered.length;
+      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (PAGE > pages) PAGE = pages;
+      if (!total) {
+        const emptyMsg = q ? '没有匹配「' + escH(q) + '」的结果。'
+          : mineOnly ? '本机还没有创建过记录。点右上角「' + MODES[mode].newBtn + '」开始。'
+          : '还没有数据。点右上角「' + MODES[mode].newBtn + '」创建第一条。';
+        cardGrid.innerHTML = '<div class="cards-empty">' + emptyMsg + '</div>';
+      } else {
+        cardGrid.innerHTML = filtered.slice((PAGE - 1) * PAGE_SIZE, PAGE * PAGE_SIZE).map(s => cardHtml(mode, s)).join('');
+        cardGrid.querySelectorAll('.request-card').forEach(card => {
+          card.addEventListener('click', () => {
+            try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e) {}
+            window.location.href = encodeURI(PAGES[mode]);
+          });
+        });
+      }
+      if (info) info.textContent = total ? ('共 ' + total + ' 条，第 ' + PAGE + ' / ' + pages + ' 页') : '共 0 条';
+      if (ctrl) {
+        let html = '<button class="page-btn" data-pg="prev">‹</button>';
+        for (let i = 1; i <= pages && i <= 8; i++) html += '<button class="page-btn' + (i === PAGE ? ' active' : '') + '" data-pg="' + i + '">' + i + '</button>';
+        html += '<button class="page-btn" data-pg="next">›</button>';
+        ctrl.innerHTML = html;
+        ctrl.querySelectorAll('.page-btn').forEach(b => b.onclick = () => {
+          const v = b.dataset.pg;
+          if (v === 'prev') PAGE = Math.max(1, PAGE - 1);
+          else if (v === 'next') PAGE = Math.min(pages, PAGE + 1);
+          else PAGE = Number(v) || 1;
+          renderCards();
+        });
+      }
+    }
     let currentMode = 'quote';
 
     const fileInput = document.getElementById('fileInput');
@@ -1656,55 +1647,7 @@
         searchInput.placeholder = m.searchPh;
         searchInput.value = '';
       }
-      renderCards(mode);
-      if (typeof applyFilter === 'function') applyFilter();
-    }
-    function renderCards(mode) {
-      if (!cardGrid) return;
-      const rows = CARD_DATA[mode] || [];
-      if (mode === 'rule') {
-        cardGrid.innerHTML = rows.map((item) => `
-          <div class="rule-card" data-mode="${mode}" data-id="${item.id}" data-info="${item.info}" data-creator="${item.creator}">
-            <div class="rule-card-header">
-              <div class="rule-title">${item.title}</div>
-              <span class="rule-status ${item.statusClass}">${item.status}</span>
-            </div>
-            <div class="rule-info">${item.infoLabel}：<span>${item.info}</span></div>
-            <div class="rule-footer">
-              <div class="rule-creator">
-                <div class="creator-avatar">${item.avatar}</div>
-                ${item.creator} · ${item.date}
-              </div>
-              <span class="rule-detail">详情</span>
-            </div>
-          </div>
-        `).join('');
-      } else {
-        cardGrid.innerHTML = rows.map((item) => `
-          <div class="request-card" data-mode="${mode}" data-id="${item.id}">
-            <div class="request-card-header">
-              <span class="request-id">${item.id}</span>
-              <span class="request-status ${item.statusClass}">${item.status}</span>
-            </div>
-            <div class="request-title">${item.title}</div>
-            <div class="request-info">${item.infoLabel}：<span>${item.info}</span></div>
-            <div class="request-footer">
-              <div class="request-creator">
-                <div class="creator-avatar">${item.avatar}</div>
-                ${item.creator} · ${item.date}
-              </div>
-              <span class="request-detail">详情</span>
-            </div>
-          </div>
-        `).join('');
-      }
-      cardGrid.querySelectorAll('.request-card, .rule-card').forEach((card) => {
-        card.addEventListener('click', () => {
-          const item = rows.find((row) => row.id === card.dataset.id);
-          const requirement = item ? `${item.title}，${item.infoLabel}：${item.info}` : '';
-          goToAssistant(mode, requirement, []);
-        });
-      });
+      loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
     }
 
     // 顶部标签点击 = 切换助手模式；发送 / 新建 / 卡片详情进入对应页面
@@ -1917,28 +1860,17 @@
     if (newQuoteBtn) newQuoteBtn.addEventListener('click', () => requestNavigate(currentMode, ''));
 
     /* ===== 已有报价单查询（客户名 / 创建人 / 标题 / 单号）+ 我的/全部 切换 ===== */
-    const CURRENT_USER = '张三'; // 当前登录人（demo）；「我的报价」按创建人过滤
     const searchInput = document.querySelector('.search-input');
     const searchBtn = document.querySelector('.search-btn');
-    const paginationInfo = document.querySelector('.pagination-info');
-    const paginationCtrl = document.querySelector('.pagination-controls');
 
     function wireListTabs() {
       document.querySelectorAll('.list-tab').forEach(tab => {
         tab.addEventListener('click', function() {
           document.querySelectorAll('.list-tab').forEach(t => t.classList.remove('active'));
           this.classList.add('active');
-          if (typeof applyFilter === 'function') applyFilter();
+          applyFilter();
         });
       });
-    }
-
-    function cardText(card) {
-      const id = (card.querySelector('.request-id')?.textContent || card.dataset.id || '');
-      const title = (card.querySelector('.request-title')?.textContent || card.querySelector('.rule-title')?.textContent || '');
-      const info = (card.querySelector('.request-info span')?.textContent || card.querySelector('.rule-info span')?.textContent || '');
-      const creator = (card.querySelector('.request-creator')?.textContent || card.querySelector('.rule-creator')?.textContent || '');
-      return { id, title, info, creator, all: (id + ' ' + title + ' ' + info + ' ' + creator).toLowerCase() };
     }
 
     function currentTab() {
@@ -1947,27 +1879,10 @@
       return active ? active.textContent.trim() : m.tabs[m.activeTab];
     }
 
+    // 搜索 / 切换「我的·全部」标签：基于真实会话数据重新过滤 + 回到第 1 页
     function applyFilter() {
-      const q = (searchInput?.value || '').trim().toLowerCase();
-      const mine = currentMode === 'quote' && currentTab() === '我的报价';
-      const cards = Array.from(document.querySelectorAll('.request-card, .rule-card'));
-      const totalCount = MODES[currentMode].total || (CARD_DATA[currentMode] || []).length;
-      let shown = 0;
-      cards.forEach((card) => {
-        const t = cardText(card);
-        const okText = !q || t.all.includes(q);
-        const okTab = !mine || t.creator.includes(CURRENT_USER);
-        const show = okText && okTab;
-        card.style.display = show ? '' : 'none';
-        if (show) shown++;
-      });
-      const filtered = q || mine;
-      if (paginationInfo) {
-        paginationInfo.textContent = filtered
-          ? `筛选结果：共 ${shown} 个`
-          : `共 ${totalCount} 个结果，当前显示 1–${Math.min(6, totalCount)}`;
-      }
-      if (paginationCtrl) paginationCtrl.style.display = filtered ? 'none' : '';
+      PAGE = 1;
+      renderCards();
     }
 
     if (searchBtn) searchBtn.addEventListener('click', applyFilter);
@@ -1975,7 +1890,9 @@
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
-    setMode('quote'); // 初始化为报价助手
+    setMode('quote'); // 初始化为报价助手（并拉取真实数据）
+    // 从工作台返回（含 bfcache）时刷新卡片，让新建/推进的单据立即出现
+    window.addEventListener('pageshow', (e) => { if (e.persisted) loadCards(currentMode); });
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);

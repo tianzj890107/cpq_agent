@@ -880,6 +880,7 @@ def list_history(limit: int = 200) -> list:
         if not data:
             continue
         events = data.get("events", [])
+        info = _kickoff_info(data)
         out.append({
             "id": data.get("id"),
             "title": data.get("title") or "未命名报价",
@@ -888,9 +889,43 @@ def list_history(limit: int = 200) -> list:
             "step": data.get("step", 1),
             "model": data.get("model"),
             "turns": sum(1 for e in events if e.get("type") == "user"),
+            "project": info.get("project", ""),
+            "customer": info.get("customer", ""),
         })
     out.sort(key=lambda x: x.get("updated") or "", reverse=True)
     return out[:limit]
+
+
+# kickoff 消息里固定格式的 项目名称/客户名称（供首页真实数据卡片展示）
+_KICKOFF_PROJ_RE = re.compile(r"项目名称：([^｜\n]*)")
+_KICKOFF_CUST_RE = re.compile(r"客户名称：([^｜\n]*)")
+
+
+def _kickoff_info(data: dict) -> dict:
+    """从会话前几条用户消息里解析 项目名称/客户名称（kickoff 固定格式）。"""
+    out = {"project": "", "customer": ""}
+    try:
+        seen = 0
+        for m in data.get("messages", []):
+            if m.get("role") != "user":
+                continue
+            txt = m.get("content")
+            if not isinstance(txt, str):
+                continue
+            seen += 1
+            pm = _KICKOFF_PROJ_RE.search(txt)
+            cm = _KICKOFF_CUST_RE.search(txt)
+            if pm and not out["project"]:
+                v = pm.group(1).strip()
+                out["project"] = "" if v in ("（未填）", "(未填)") else v
+            if cm and not out["customer"]:
+                v = cm.group(1).strip()
+                out["customer"] = "" if v in ("（未填）", "(未填)") else v
+            if (out["project"] and out["customer"]) or seen >= 3:
+                break
+    except Exception:
+        pass
+    return out
 
 
 def delete_history(sid: str) -> bool:
@@ -1106,11 +1141,12 @@ class Bridge:
             _ui_events().clear()
             self._new_session()
 
-    def stream_turn(self, text: str, emit, display=None):
+    def stream_turn(self, text: str, emit, display=None, step=None):
         """跑完整一轮（含工具循环），emit(dict) 逐事件下发。
 
         display：用于本地历史回放的“用户气泡”文案（与实际发给模型的 text 不同，
         例如 text 是含文件内容的长 payload、或【会话开始】等系统消息）。传空串表示不记气泡。
+        step：无模型（人工）模式下前端本地推进步骤时上报，用于会话/首页卡片的真实进度。
         """
         with self.lock:
             conv = self.conv
@@ -1120,9 +1156,15 @@ class Bridge:
                 if not self.title and bubble.strip() and not bubble.startswith("【"):
                     self.title = bubble.strip().replace("\n", " ")[:24]
             if conv.model == NO_MODEL_ID:
-                # 无模型模式：不调用大模型，直接回提示（前端会切人工填写流程）
-                emit({"type": "text", "text": NO_MODEL_HINT})
-                self.events.append({"type": "text", "text": NO_MODEL_HINT})
+                # 无模型模式：不调用大模型，仅记录（【…】开头的系统消息静默入档；
+                # 用户手打的聊天给一句提示），并采纳前端上报的人工进度。
+                # 消息仍写入 messages：历史列表可解析 项目/客户，切回真实模型也有上下文
+                conv.add_user_message(text)
+                if isinstance(step, int) and 1 <= step <= 7:
+                    self.step = step
+                if not text.startswith("【"):
+                    emit({"type": "text", "text": NO_MODEL_HINT})
+                    self.events.append({"type": "text", "text": NO_MODEL_HINT})
                 self._persist()
                 emit({"type": "done", "model": conv.model, "cost": 0.0})
                 return
@@ -1777,6 +1819,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self._read_body()
         text = (data.get("message") or "").strip()
         display = data.get("display")  # None=用 text 作气泡；''=不记气泡
+        step = data.get("step") if isinstance(data.get("step"), int) else None
         b = bridge_for(data.get("sid"))  # 带 sid 走会话专属 Bridge，缺省回退全局
         self.close_connection = True
         self.send_response(200)
@@ -1799,7 +1842,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            b.stream_turn(text, emit, display=display)
+            b.stream_turn(text, emit, display=display, step=step)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # 客户端断开
 

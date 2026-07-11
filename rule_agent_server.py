@@ -832,9 +832,12 @@ class Bridge:
                 if not self.title and bubble.strip() and not bubble.startswith("【"):
                     self.title = bubble.strip().replace("\n", " ")[:32]
             if conv.model == NO_MODEL_ID:
-                # 无模型模式：不调用大模型，直接回提示（前端会切人工填写流程）
-                emit({"type": "text", "text": NO_MODEL_HINT})
-                self.events.append({"type": "text", "text": NO_MODEL_HINT})
+                # 无模型模式：不调用大模型，仅记录（【…】开头的系统消息静默入档；
+                # 用户手打的聊天给一句提示）。消息仍写入 messages 备切回模型时有上下文
+                conv.add_user_message(text)
+                if not text.startswith("【"):
+                    emit({"type": "text", "text": NO_MODEL_HINT})
+                    self.events.append({"type": "text", "text": NO_MODEL_HINT})
                 self._persist()
                 emit({"type": "done", "model": conv.model, "cost": 0.0})
                 return
