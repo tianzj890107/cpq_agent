@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>硕磐智能中心</title>
+  <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+  <!-- 离线部署：Inter 网络字体已移除，回退系统字体 -->
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', 'PingFang SC', -apple-system, sans-serif;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* 渐变背景 */
+    .gradient-bg {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #3b82f6 0%, #6366f1 25%, #8b5cf6 50%, #a78bfa 75%, #60a5fa 100%);
+      z-index: 0;
+    }
+
+    /* 光晕效果 */
+    .glow-orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(60px);
+      opacity: 0.5;
+      animation: pulse 8s infinite ease-in-out;
+    }
+
+    .glow-orb-1 {
+      width: 300px;
+      height: 300px;
+      background: rgba(99, 102, 241, 0.6);
+      top: -50px;
+      right: 20%;
+      animation-delay: 0s;
+    }
+
+    .glow-orb-2 {
+      width: 250px;
+      height: 250px;
+      background: rgba(139, 92, 246, 0.6);
+      bottom: -30px;
+      left: 10%;
+      animation-delay: -4s;
+    }
+
+    .glow-orb-3 {
+      width: 200px;
+      height: 200px;
+      background: rgba(167, 139, 250, 0.5);
+      top: 40%;
+      left: 30%;
+      animation-delay: -2s;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.5; }
+      50% { transform: scale(1.2); opacity: 0.7; }
+    }
+
+    /* 动态粒子效果 */
+    .particles {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      z-index: 1;
+    }
+
+    .particle {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.15);
+      animation: float 20s infinite ease-in-out;
+    }
+
+    .particle:nth-child(1) { width: 80px; height: 80px; top: 10%; left: 10%; animation-delay: 0s; }
+    .particle:nth-child(2) { width: 120px; height: 120px; top: 60%; left: 5%; animation-delay: -3s; }
+    .particle:nth-child(3) { width: 60px; height: 60px; top: 30%; left: 40%; animation-delay: -6s; }
+    .particle:nth-child(4) { width: 100px; height: 100px; top: 70%; left: 30%; animation-delay: -9s; }
+    .particle:nth-child(5) { width: 50px; height: 50px; top: 20%; left: 70%; animation-delay: -12s; }
+    .particle:nth-child(6) { width: 90px; height: 90px; top: 50%; left: 60%; animation-delay: -15s; }
+
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) rotate(0deg); }
+      25% { transform: translate(20px, -30px) rotate(90deg); }
+      50% { transform: translate(-10px, 20px) rotate(180deg); }
+      75% { transform: translate(30px, 10px) rotate(270deg); }
+    }
+
+    /* 网格线装饰 */
+    .grid-lines {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-image: 
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      z-index: 1;
+    }
+
+    /* 主体容器 */
+    .main-container {
+      display: flex;
+      min-height: 100vh;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* 左侧功能区域 */
+    .feature-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 60px;
+      color: white;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 50px;
+    }
+
+    .logo-icon {
+      width: 60px;
+      height: 60px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #3b82f6 0%, #6366f1 33%, #8b5cf6 66%, #a78bfa 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 32px rgba(99, 102, 241, 0.3);
+    }
+
+    .logo-icon i {
+      font-size: 28px;
+      color: white;
+    }
+
+    .logo-text {
+      font-size: 28px;
+      font-weight: 700;
+      color: white;
+    }
+
+    .feature-title {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 16px;
+    }
+
+    .feature-desc {
+      font-size: 16px;
+      opacity: 0.9;
+      line-height: 1.6;
+      margin-bottom: 40px;
+    }
+
+    /* 功能卡片 */
+    .功能-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .功能卡片 {
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .功能卡片:hover {
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateX(8px);
+      border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .功能图标 {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .功能图标.purple {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    }
+
+    .功能图标.blue {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+    }
+
+    .功能图标 i {
+      font-size: 24px;
+      color: white;
+    }
+
+    .功能信息 {
+      flex: 1;
+    }
+
+    .功能标题 {
+      font-size: 16px;
+      font-weight: 600;
+      color: white;
+      margin-bottom: 4px;
+    }
+
+    .功能描述 {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .功能箭头 {
+      font-size: 20px;
+      color: rgba(255, 255, 255, 0.5);
+      transition: all 0.2s;
+    }
+
+    .功能卡片:hover .功能箭头 {
+      color: white;
+      transform: translateX(4px);
+    }
+
+    /* 右侧登录区域 */
+    .login-section {
+      width: 480px;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 60px;
+    }
+
+    .login-card {
+      max-width: 360px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .login-title {
+      font-size: 26px;
+      font-weight: 700;
+      color: #1f2023;
+      margin-bottom: 8px;
+    }
+
+    .login-desc {
+      font-size: 14px;
+      color: #62636d;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #1f2023;
+      margin-bottom: 8px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #9ca3af;
+      font-size: 18px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 14px 14px 14px 44px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #1f2023;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+
+    .form-input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+    .form-input::placeholder {
+      color: #9ca3af;
+    }
+
+    .password-toggle {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: #9ca3af;
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .password-toggle:hover {
+      color: #62636d;
+    }
+
+    .form-options {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+
+    .remember-me {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .remember-me input {
+      width: 16px;
+      height: 16px;
+      accent-color: #6366f1;
+      cursor: pointer;
+    }
+
+    .remember-me span {
+      font-size: 13px;
+      color: #62636d;
+    }
+
+    .forgot-password {
+      font-size: 13px;
+      color: #6366f1;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .forgot-password:hover {
+      text-decoration: underline;
+    }
+
+    .login-btn {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      color: white;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .login-btn i {
+      font-size: 18px;
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 28px 0;
+    }
+
+    .divider-line {
+      flex: 1;
+      height: 1px;
+      background: #e5e7eb;
+    }
+
+    .divider-text {
+      padding: 0 16px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    .register-hint {
+      text-align: center;
+      padding: 20px;
+      background: #f7f7f8;
+      border-radius: 10px;
+      margin-bottom: 24px;
+    }
+
+    .register-hint-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: rgba(99, 102, 241, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+    }
+
+    .register-hint-icon i {
+      font-size: 20px;
+      color: #6366f1;
+    }
+
+    .register-hint-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2023;
+      margin-bottom: 4px;
+    }
+
+    .register-hint-desc {
+      font-size: 13px;
+      color: #62636d;
+      line-height: 1.5;
+    }
+
+    .contact-admin-btn {
+      width: 100%;
+      padding: 12px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #62636d;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .contact-admin-btn:hover {
+      border-color: #6366f1;
+      color: #6366f1;
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .contact-admin-btn i {
+      font-size: 16px;
+    }
+
+    .login-footer {
+      margin-top: 40px;
+      text-align: center;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    /* 响应式 */
+    @media (max-width: 900px) {
+      .main-container {
+        flex-direction: column;
+      }
+
+      .feature-section {
+        padding: 40px;
+        flex: none;
+      }
+
+      .feature-title {
+        font-size: 24px;
+      }
+
+      .login-section {
+        width: 100%;
+        padding: 40px 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- 渐变背景 -->
+  <div class="gradient-bg"></div>
+  
+  <!-- 光晕效果 -->
+  <div class="glow-orb glow-orb-1"></div>
+  <div class="glow-orb glow-orb-2"></div>
+  <div class="glow-orb glow-orb-3"></div>
+  
+  <!-- 动态粒子 -->
+  <div class="particles">
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+    <div class="particle"></div>
+  </div>
+  
+  <!-- 网格线 -->
+  <div class="grid-lines"></div>
+
+  <!-- 主体容器 -->
+  <div class="main-container">
+    <!-- 左侧功能区域 -->
+    <div class="feature-section">
+      <div class="brand-logo">
+        <div class="logo-icon">
+          <i class="ti ti-sparkles"></i>
+        </div>
+        <span class="logo-text">硕磐智能中心</span>
+      </div>
+
+      <h1 class="feature-title">让智能配置<br>更简单高效</h1>
+      <p class="feature-desc">一站式产品配置管理平台，选择下方功能开始工作</p>
+
+      <div class="功能-list">
+        <!-- Agent 智能体：进入三个智能体整合首页（报价/配置/规则） -->
+        <div class="功能卡片" onclick="location.href=encodeURI('报价首页(1).html')">
+          <div class="功能图标 purple">
+            <i class="ti ti-robot"></i>
+          </div>
+          <div class="功能信息">
+            <div class="功能标题">Agent 智能体</div>
+            <div class="功能描述">配置助手 · 报价助手 · 规则助手</div>
+          </div>
+          <i class="ti ti-chevron-right 功能箭头"></i>
+        </div>
+
+        <!-- 数据可视化 -->
+        <div class="功能卡片" onclick="alert('数据可视化功能开发中')">
+          <div class="功能图标 blue">
+            <i class="ti ti-chart-bar"></i>
+          </div>
+          <div class="功能信息">
+            <div class="功能标题">数据可视化</div>
+            <div class="功能描述">配置数据统计与分析</div>
+          </div>
+          <i class="ti ti-chevron-right 功能箭头"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧登录区域 -->
+    <div class="login-section">
+      <div class="login-card">
+        <div class="login-header">
+          <h2 class="login-title">欢迎回来</h2>
+          <p class="login-desc">请登录您的账户继续</p>
+        </div>
+
+        <form onsubmit="handleLogin(event)">
+          <div class="form-group">
+            <label class="form-label">用户名</label>
+            <div class="input-wrapper">
+              <i class="ti ti-user input-icon"></i>
+              <input type="text" class="form-input" id="username" placeholder="请输入用户名" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">密码</label>
+            <div class="input-wrapper">
+              <i class="ti ti-lock input-icon"></i>
+              <input type="password" class="form-input" id="password" placeholder="请输入密码" required>
+              <button type="button" class="password-toggle" onclick="togglePassword()">
+                <i class="ti ti-eye" id="eyeIcon"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-options">
+            <label class="remember-me">
+              <input type="checkbox">
+              <span>记住我</span>
+            </label>
+            <a class="forgot-password">忘记密码？</a>
+          </div>
+
+          <button type="submit" class="login-btn">
+            <i class="ti ti-login"></i>
+            登录
+          </button>
+        </form>
+
+        <div class="divider">
+          <div class="divider-line"></div>
+          <span class="divider-text">温馨提示</span>
+          <div class="divider-line"></div>
+        </div>
+
+        <div class="register-hint">
+          <div class="register-hint-icon">
+            <i class="ti ti-user-plus"></i>
+          </div>
+          <div class="register-hint-title">需要开通账户？</div>
+          <div class="register-hint-desc">请联系管理员分配账户权限</div>
+        </div>
+
+        <button class="contact-admin-btn" onclick="contactAdmin()">
+          <i class="ti ti-message"></i>
+          联系管理员
+        </button>
+
+        <div class="login-footer">
+          © 2024 硕磐智能中心 · 隐私政策 · 服务条款
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function togglePassword() {
+      const passwordInput = document.getElementById('password');
+      const eyeIcon = document.getElementById('eyeIcon');
+      
+      if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        eyeIcon.className = 'ti ti-eye-off';
+      } else {
+        passwordInput.type = 'password';
+        eyeIcon.className = 'ti ti-eye';
+      }
+    }
+
+    function handleLogin(event) {
+      event.preventDefault();
+      alert('登录成功！');
+    }
+
+    function contactAdmin() {
+      alert('请联系系统管理员：\n\n邮箱：admin@poc.com\n电话：400-888-8888');
+    }
+  </script>
+</body>
+</html>

@@ -58,7 +58,7 @@ AGENT_LABELS = {"quote": "报价助手", "config": "配置助手", "rule": "规�
 _AGENT_RE = re.compile(r"^/agents/(quote|config|rule)(/.*)?$")
 
 # ---------------------------------------------------------------- 静态文件
-HOME_PAGE = "报价首页(1).html"
+HOME_PAGE = "首页.html"  # 登录/入口页；点「Agent 智能体」进入 报价首页(1).html（三智能体整合页）
 
 MIME = {
     ".html": "text/html; charset=utf-8",

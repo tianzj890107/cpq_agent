@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BOM 层级结构</title>
+  <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+  <!-- 离线部署：Inter 网络字体已移除，回退系统字体 -->
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', 'PingFang SC', -apple-system, sans-serif;
+      background: #f5f7fa;
+      color: #1f2023;
+      font-size: 14px;
+    }
+
+    /* 顶部导航 */
+    .header {
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo i {
+      font-size: 16px;
+      color: white;
+    }
+
+    .title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2023;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-outline {
+      background: white;
+      border: 1px solid #e5e7eb;
+      color: #62636d;
+    }
+
+    .btn-outline:hover {
+      border-color: #6366f1;
+      color: #6366f1;
+    }
+
+    .btn-primary {
+      background: #6366f1;
+      border: none;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #4f46e5;
+    }
+
+    .btn i {
+      font-size: 16px;
+    }
+
+    /* 主体内容 */
+    .main-content {
+      padding: 24px;
+    }
+
+    /* 工具栏 */
+    .toolbar {
+      background: white;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid #e5e7eb;
+    }
+
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toolbar-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2023;
+    }
+
+    .toolbar-info {
+      font-size: 12px;
+      color: #9ca3af;
+      background: #f3f4f6;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 6px 12px;
+    }
+
+    .search-box i {
+      font-size: 16px;
+      color: #9ca3af;
+    }
+
+    .search-box input {
+      border: none;
+      background: transparent;
+      outline: none;
+      font-size: 13px;
+      color: #1f2023;
+      width: 180px;
+    }
+
+    .search-box input::placeholder {
+      color: #9ca3af;
+    }
+
+    /* 表格容器 */
+    .table-container {
+      background: white;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      overflow-x: auto;
+    }
+
+    /* 表格 - 自动布局 */
+    .bom-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .bom-table th {
+      text-align: center;
+      padding: 12px 16px;
+      background: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+      font-weight: 600;
+      font-size: 12px;
+      color: #62636d;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .bom-table th.col-level {
+      text-align: left;
+    }
+
+    .bom-table td {
+      padding: 10px 16px;
+      border-bottom: 1px solid #f3f4f6;
+      font-size: 13px;
+      color: #1f2023;
+      vertical-align: middle;
+      text-align: center;
+    }
+
+    .bom-table td.col-level {
+      text-align: left;
+    }
+
+    .bom-table tr:hover td {
+      background: #f9fafb;
+    }
+
+    /* 列宽 - 固定宽度确保对齐 */
+    .col-level { width: 400px; }
+    .col-qty { width: 100px; text-align: center; }
+    .col-unit { width: 100px; text-align: center; }
+    .col-source { width: 200px; }
+
+    /* 层级单元格 */
+    .level-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    /* 不同层级的缩进 */
+    .indent-1 { padding-left: 0; }
+    .indent-2 { padding-left: 28px; }
+    .indent-3 { padding-left: 56px; }
+    .indent-4 { padding-left: 84px; }
+
+    .expand-btn {
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #9ca3af;
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+
+    .expand-btn:hover {
+      color: #6366f1;
+    }
+
+    .expand-btn.expanded {
+      transform: rotate(90deg);
+    }
+
+    .expand-btn i {
+      font-size: 12px;
+    }
+
+    .level-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    .level-badge.l1 {
+      background: #eef2ff;
+      color: #6366f1;
+    }
+
+    .level-badge.l2 {
+      background: rgba(99, 102, 241, 0.1);
+      color: #6366f1;
+    }
+
+    .level-badge.l3 {
+      background: #f3f4f6;
+      color: #62636d;
+    }
+
+    .level-badge.l4 {
+      background: #f9fafb;
+      color: #9ca3af;
+    }
+
+    .level-badge.standard {
+      background: rgba(249, 115, 22, 0.1);
+      color: #f97316;
+    }
+
+    .level-code {
+      font-weight: 500;
+      color: #1f2023;
+    }
+
+    .level-name {
+      color: #62636d;
+    }
+
+    .level-l4 .level-name {
+      color: #9ca3af;
+    }
+
+    .level-l4.standard .level-name {
+      color: #f97316;
+      font-style: italic;
+    }
+
+    /* 可编辑单元格 - 统一样式 */
+    .editable-cell {
+      padding: 4px 8px;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      background: white;
+      font-size: 13px;
+      color: #1f2023;
+      cursor: text;
+      transition: all 0.2s;
+      display: inline-block;
+      white-space: nowrap;
+      min-width: 60px;
+    }
+
+    .editable-cell:hover {
+      border-color: #6366f1;
+    }
+
+    .editable-cell:focus {
+      outline: none;
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+    }
+
+    /* 隐藏子行 */
+    .bom-table .child-row {
+      display: none;
+    }
+
+    .bom-table .child-row.visible {
+      display: table-row;
+    }
+
+    /* 数量列 */
+    .qty-cell {
+      text-align: center;
+    }
+
+    .qty-input {
+      width: 70px;
+      padding: 4px 8px;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      text-align: center;
+      font-size: 13px;
+      color: #1f2023;
+      outline: none;
+      transition: all 0.2s;
+      background: white;
+    }
+
+    .qty-input:hover {
+      border-color: #6366f1;
+    }
+
+    .qty-input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+    }
+
+    /* 单位列 */
+    .unit-cell {
+      text-align: center;
+    }
+
+    .unit-cell .editable-cell {
+      min-width: 60px;
+      color: #9ca3af;
+    }
+
+    /* 数据来源列 */
+    .source-cell {
+      text-align: left;
+    }
+
+    .source-cell .editable-cell {
+      min-width: 100px;
+    }
+
+    /* 统计行 */
+    .summary-row td {
+      background: #f9fafb;
+      font-weight: 500;
+      color: #62636d;
+      font-size: 12px;
+    }
+
+    /* 空状态 */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #9ca3af;
+    }
+
+    .empty-state i {
+      font-size: 48px;
+      margin-bottom: 16px;
+      display: block;
+    }
+
+    .empty-state p {
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <i class="ti ti-sparkles"></i>
+      </div>
+      <span class="title">BOM 层级结构</span>
+    </div>
+    <div class="header-right">
+      <button class="btn btn-outline">
+        <i class="ti ti-download"></i>
+        导出
+      </button>
+      <button class="btn btn-primary">
+        <i class="ti ti-plus"></i>
+        新增
+      </button>
+    </div>
+  </header>
+
+  <!-- 主体内容 -->
+  <main class="main-content">
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-title">BAT-PACK-CV-001 电池包</span>
+        <span class="toolbar-info">共 62 项物料</span>
+      </div>
+      <div class="toolbar-right">
+        <div class="search-box">
+          <i class="ti ti-search"></i>
+          <input type="text" placeholder="搜索物料...">
+        </div>
+        <button class="btn btn-outline" onclick="toggleAll()">
+          <i class="ti ti-arrows-exchange"></i>
+          全部展开/收起
+        </button>
+      </div>
+    </div>
+
+    <!-- 表格 -->
+    <div class="table-container">
+      <table class="bom-table">
+        <thead>
+          <tr>
+            <th class="col-level">层级</th>
+            <th class="col-qty">数量</th>
+            <th class="col-unit">单位</th>
+            <th class="col-source">数据来源</th>
+          </tr>
+        </thead>
+        <tbody id="bomTableBody">
+          <!-- L1 -->
+          <tr class="parent-row" data-level="1">
+            <td class="col-level">
+              <div class="level-cell indent-1">
+                <div class="expand-btn expanded" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l1">L1</span>
+                <span class="editable-cell" contenteditable="true">BAT-PACK-CV-0001</span>
+                <span class="level-name editable-cell" contenteditable="true">电池包</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn expanded" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">MOD-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">电芯模组系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L3 -->
+          <tr class="parent-row child-row visible" data-level="3">
+            <td class="col-level">
+              <div class="level-cell indent-3">
+                <div class="expand-btn expanded" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l3">L3</span>
+                <span class="editable-cell" contenteditable="true">MOD-35S16</span>
+                <span class="level-name editable-cell" contenteditable="true">标准电芯模组</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L4 -->
+          <tr class="child-row visible" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">CELL-280Ah</span>
+                <span class="level-name editable-cell" contenteditable="true">磷酸铁锂电芯单体</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="16">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row visible" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">END-PLATE-001</span>
+                <span class="level-name editable-cell" contenteditable="true">模组端板</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="2">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row visible" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">INSULATOR-001</span>
+                <span class="level-name editable-cell" contenteditable="true">模组绝缘片</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="2">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row visible" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4 standard">L4 标准件</span>
+                <span class="editable-cell" contenteditable="true">BOLT-M8-20</span>
+                <span class="level-name editable-cell" contenteditable="true">模组紧固螺栓</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="8">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L3 -->
+          <tr class="parent-row child-row visible" data-level="3">
+            <td class="col-level">
+              <div class="level-cell indent-3">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l3">L3</span>
+                <span class="editable-cell" contenteditable="true">BUS-MAIN-001</span>
+                <span class="level-name editable-cell" contenteditable="true">主汇流排</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">BUS-POS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">总正铜排</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">BUS-NEG-001</span>
+                <span class="level-name editable-cell" contenteditable="true">总负铜排</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">TMS-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">热管理系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L3 -->
+          <tr class="parent-row child-row visible" data-level="3">
+            <td class="col-level">
+              <div class="level-cell indent-3">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l3">L3</span>
+                <span class="editable-cell" contenteditable="true">COL-LIQ-001</span>
+                <span class="level-name editable-cell" contenteditable="true">液冷组件</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">PLATE-LIQ-001</span>
+                <span class="level-name editable-cell" contenteditable="true">液冷板本体</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <tr class="child-row" data-level="4">
+            <td class="col-level">
+              <div class="level-cell indent-4">
+                <span class="level-badge l4">L4</span>
+                <span class="editable-cell" contenteditable="true">PUMP-001</span>
+                <span class="level-name editable-cell" contenteditable="true">电子水泵</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">PDU-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">高压配电系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">BMS-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">电池管理系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">BOX-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">箱体结构系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+          <!-- L2 -->
+          <tr class="parent-row child-row visible" data-level="2">
+            <td class="col-level">
+              <div class="level-cell indent-2">
+                <div class="expand-btn" onclick="toggleChildren(this)">
+                  <i class="ti ti-chevron-right"></i>
+                </div>
+                <span class="level-badge l2">L2</span>
+                <span class="editable-cell" contenteditable="true">AUX-SYS-001</span>
+                <span class="level-name editable-cell" contenteditable="true">低压辅件系统</span>
+              </div>
+            </td>
+            <td class="col-qty">
+              <input type="text" class="qty-input" value="1">
+            </td>
+            <td class="col-unit unit-cell"><span class="editable-cell" contenteditable="true">pcs</span></td>
+            <td class="col-source source-cell"><span class="editable-cell" contenteditable="true">系统生成</span></td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    // 展开/收起子项 - 基于层级数字的简单逻辑
+    function toggleChildren(btn) {
+      const row = btn.closest('tr');
+      const currentLevel = parseInt(row.dataset.level);
+      const nextRow = row.nextElementSibling;
+      
+      if (!nextRow) return;
+      
+      const isExpanded = btn.classList.contains('expanded');
+      
+      if (isExpanded) {
+        // 收起：隐藏所有level更高的行
+        btn.classList.remove('expanded');
+        let currentRow = nextRow;
+        while (currentRow && parseInt(currentRow.dataset.level) > currentLevel) {
+          currentRow.classList.remove('visible');
+          // 递归收起子按钮
+          const childBtn = currentRow.querySelector('.expand-btn');
+          if (childBtn) childBtn.classList.remove('expanded');
+          currentRow = currentRow.nextElementSibling;
+        }
+      } else {
+        // 展开：只显示直接子行（level = currentLevel + 1）
+        btn.classList.add('expanded');
+        let currentRow = nextRow;
+        while (currentRow && parseInt(currentRow.dataset.level) > currentLevel) {
+          // 只显示直接子级
+          if (parseInt(currentRow.dataset.level) === currentLevel + 1) {
+            currentRow.classList.add('visible');
+          }
+          currentRow = currentRow.nextElementSibling;
+        }
+      }
+    }
+
+    // 全部展开/收起
+    function toggleAll() {
+      const allExpandBtns = document.querySelectorAll('.expand-btn');
+      const hasExpanded = Array.from(allExpandBtns).some(btn => btn.classList.contains('expanded'));
+      
+      if (hasExpanded) {
+        // 全部收起
+        allExpandBtns.forEach(btn => btn.classList.remove('expanded'));
+        document.querySelectorAll('.child-row').forEach(row => row.classList.remove('visible'));
+      } else {
+        // 全部展开
+        allExpandBtns.forEach(btn => btn.classList.add('expanded'));
+        document.querySelectorAll('.child-row').forEach(row => row.classList.add('visible'));
+      }
+    }
+
+    // 搜索功能
+    document.querySelector('.search-box input').addEventListener('input', function(e) {
+      const keyword = e.target.value.toLowerCase();
+      const rows = document.querySelectorAll('.bom-table tbody tr');
+      
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        if (text.includes(keyword)) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    });
+  </script>
+</body>
+</html>
