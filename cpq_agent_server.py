@@ -628,11 +628,24 @@ SYSTEM_PROMPT = """\
      LEFT JOIN CLM_BASE_INFO h2 ON h2.product_item_code=l.component_item_code WHERE ex.level<4)
    SELECT level,code,name,qty,uom FROM ex`
   把**每一行**写进 s2_bom 的 rows（层级=level、组件编码=code、组件名称=name、数量=qty、单位=uom）。
+  **⚠️ 本步必须调用「产品配单规则」**：
+  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_distribution_rule WHERE is_deleted=0`，
+  逐条对照第 1 步确认的需求配置（电量/冷却方式/附加功能/电芯模组/额定电流/箱体规格等）判断是否命中并**执行规则语义**
+  （如 280kWh→强制液冷、风冷→禁止低温加热、电量→自动匹配模组数/额定电流/箱体规格），据此校验并修正产品配置与 BOM；
+  聊天小结里必须写明「命中配单规则：规则名 → 结论」，一条都没命中也要写「配单规则均未命中」。
 - **第 3 步｜定价-利润加成**（L5：确认定价过程及结果）。s3_pricing
   （表·固定列 产品编码/产品名称/基础成本/技术溢价/市场调节/定价，元/W）。**利润加成 = 技术溢价 + 市场调节**（如 +1.5 -0.2 = 利润加成 +1.3）。
+  **⚠️ 本步必须调用「产品定价规则·定价类」**：
+  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule WHERE rule_classification='定价' AND is_deleted=0`，
+  按当前配置逐条判断并执行（如 冷却方式=液冷 → 定价系数 1.08），把命中结果计入 技术溢价/市场调节/定价；
+  聊天小结里写明「命中定价规则：规则名 → 取值」或「定价规则均未命中」。
 - **第 4 步｜报价-其他加价项**（L5：确认加价过程及结果）。s4_detail（表·加价明细）、
   s4_prod_sum（表·产品加价汇总，固定列 测算单id/产品行id/**产品型号**/单件瓦数(W)/基础加价/
   非标加价/财务商务加价/物流加价/物流费用调整/其他加价/加价合计）。匹配报价规则算其他加价（如 +0.8）。
+  **⚠️ 本步必须调用「产品定价规则·报价类」**：
+  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule WHERE rule_classification='报价' AND is_deleted=0`，
+  按需求值（客户等级/电流分档/质量专控要求等）逐条判断并执行，命中的加价逐条写进 s4_detail 加价明细并计入汇总；
+  聊天小结里写明「命中报价规则：规则名 → 加价金额」或「报价规则均未命中」。
 - **第 5 步｜报价测算复核**（L5：复核报价测算结果）。s5_deviation（表·价格偏差，固定列
   测算单id/产品行id/**产品型号**/单件瓦数(W)/数量（WM）/报价/EXW加价/EXW价格/建议报价/建议报价加价/
   地区部指导价/地区部价格底线/地区部价格底线偏差/地区部价格底线偏差额/地区部价格底线偏差率/
@@ -675,7 +688,9 @@ SYSTEM_PROMPT = """\
      —— 第 2 步 BOM：用**递归 CTE** 展开完整多层（见上）。
    - `md_clm_pricing_factor`（surcharge_category 技术溢价/市场调节，surcharge_name/factor_value/surcharge_amount/surcharge_unit）—— 第 3 步。
    - `md_clm_pricing_surcharge_factor`（基础/非标/财务商务/物流/其他加价的因子与金额）—— 第 4 步。
-   - `md_clm_material_price_rule` / `md_clm_distribution_rule` —— 规则中心（定价规则 / 配置约束规则）。
+   - `md_clm_distribution_rule` —— **产品配单规则**（第 2 步定价-基础成本必查，校验/修正产品配置与 BOM）。
+   - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：**='定价' 第 3 步用**（定价系数）、
+     **='报价' 第 4 步用**（其他加价）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
 金额单位以库中字段为准；计算必须自洽（合计=分项之和）。部分因子金额可能为空（来源限制），据实处理别硬编。
 
 # 整步一次性推荐（关键交互方式）
