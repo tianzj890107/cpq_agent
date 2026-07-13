@@ -910,7 +910,7 @@
         else main = '更新工作台';
         source = inp.source;
       } else if (name === 'sql_query') {
-        main = '查询知识库 亿纬锂能_da.sqlite';
+        main = '查询知识库（远程 Postgres）';
         source = String(inp.sql || '').replace(/\s+/g, ' ').trim();
         if (source.length > 180) source = source.slice(0, 177) + '…';
       } else if (name === 'Read') {

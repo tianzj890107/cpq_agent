@@ -1522,7 +1522,7 @@
         if (a === 'render_rules') return { main: '载入配单规则候选（每行下拉用）', source: inp.source };
         return { main: '展开配置面板', source: inp.source };
       }
-      if (name === 'sql_query') { let s = String(inp.sql || '').replace(/\s+/g, ' ').trim(); if (s.length > 160) s = s.slice(0, 157) + '…'; return { main: '查询知识库 亿纬锂能_da.sqlite', source: s }; }
+      if (name === 'sql_query') { let s = String(inp.sql || '').replace(/\s+/g, ' ').trim(); if (s.length > 160) s = s.slice(0, 157) + '…'; return { main: '查询知识库（远程 Postgres）', source: s }; }
       return { main: '调用 ' + name + '…' };
     }
 

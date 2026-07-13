@@ -8,7 +8,7 @@
   - 业务流程：按《配置助手.xlsx·智能体配置流程》一次跑完 6 步配置 BOM 生成
     （识别参数 → 识别可配置模块 → 物料归集 → 提取配置规则 → 生成配置BOM → 确认配置BOM）。
     第 1–5 步自动跑；第 6 步起与用户交互（右侧出可编辑的配置BOM表）。
-  - 数据口径：样例变体BOM / 配置BOM / 规则来自 database/亿纬锂能_da.sqlite，Agent 以库 schema 为上下文生成 SQL。
+  - 数据口径：样例变体BOM / 配置BOM / 规则来自远程 Postgres（三助手共用），Agent 以 亿纬锂能DA梳理.xlsx 的库 schema 为上下文生成 SQL。
   - 页面驱动：注入自定义 xbom_ui 工具（set_step / step_result / render_bom / open_panel），
     Agent 用它推进步骤卡、填每步结果、在右侧渲染可编辑配置BOM；本服务把入参作为 `ui` 事件透传给前端（SSE）。
 
@@ -27,7 +27,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import sys
 import threading
 import traceback
@@ -39,39 +38,14 @@ from urllib.parse import parse_qs, urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 
-# 报价知识库（BOM / 定价 / 加价 / 规则 / BI 字段口径 / 流程），Agent 用 sql_query 工具只读查询。
-DB_PATH = os.path.join(SCRIPT_DIR, "database", "亿纬锂能_da.sqlite")
-DB_NAME = os.path.basename(DB_PATH)
+# 报价知识库 = 远程 Postgres（三助手共用），Agent 用 sql_query 工具只读查询。
+# Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「配置助手」sheet（不反射数据库）。
+import cpq_db
+import cpq_msgutil
 
-
-def _build_schema_text() -> str:
-    """从库里生成"表(列, 列, ...)"的紧凑 schema，作为模型生成 SQL 的上下文。"""
-    try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view') "
-                    "AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        lines = []
-        for (n,) in cur.fetchall():
-            cols = [r[1] for r in cur.execute(f"PRAGMA table_info('{n}')").fetchall()]
-            lines.append(f"- {n}({', '.join(cols)})")
-        con.close()
-        return "\n".join(lines)
-    except sqlite3.Error:
-        return ""
-
-
-def _schema_doc_text() -> str:
-    p = os.path.join(SCRIPT_DIR, "database", "数据库Schema说明.md")
-    try:
-        with open(p, encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return ""
-
-
-_DB_SCHEMA_TEXT = _build_schema_text()
-_SCHEMA_DOC = _schema_doc_text()
+DB_NAME = cpq_db.DB_LABEL
+_DB_SCHEMA_TEXT = cpq_db.schema_text("config")
+_SCHEMA_DOC = cpq_db.schema_doc("config")
 
 # Windows 控制台默认 cp1252，rich 打印中文工具结果会崩溃 —— 统一切到 UTF-8。
 for _stream in (sys.stdout, sys.stderr):
@@ -276,25 +250,39 @@ def _patched_execute_tool(tool_name, tool_input, cwd):
 
 oc_repl.execute_tool = _patched_execute_tool
 
+# 控制台日志兜底：print_tool_result 把结果塞进 rich markup，遇 [ ] 乱码抛 MarkupError 炸回合。
+# 日志纯装饰，失败静默。三个 agent 模块共享 oc_repl，_cpq_safe 防重复包装。
+if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
+    _ORIG_PRINT_TOOL_RESULT = oc_repl.print_tool_result
+
+    def _safe_print_tool_result(name, result):
+        try:
+            _ORIG_PRINT_TOOL_RESULT(name, result)
+        except Exception:
+            pass
+
+    _safe_print_tool_result._cpq_safe = True
+    oc_repl.print_tool_result = _safe_print_tool_result
+
 
 # ---------------------------------------------------------------------------
-# sql_query 工具：在亿纬锂能 DA 库（亿纬锂能_da.sqlite）上执行只读 SQL
+# sql_query 工具：在亿纬锂能 DA 库（远程 Postgres）上执行只读 SQL
 # ---------------------------------------------------------------------------
 
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
-        "在配置知识库 亿纬锂能_da.sqlite（SQLite，只读）上执行 SELECT 查询，取 样例BOM / BOM / 规则 / "
+        "在配置知识库（远程 Postgres，只读）上执行 SELECT 查询，取 样例BOM / BOM / 规则 / "
         "字段清单 等数据。**表结构见系统提示词末尾的完整 schema，据它生成 SQL。**"
-        "仅允许单条 SELECT / WITH / PRAGMA table_info 语句，不要带分号或多条语句。"
-        "列名不确定时先 PRAGMA table_info('表名') 或 SELECT * FROM 表 LIMIT 3 探查。"
+        "仅允许单条 SELECT / WITH 语句，不要带分号或多条语句。"
+        "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sql": {"type": "string",
-                    "description": "标准 SQLite 查询语句（单条，不以分号结尾、不含多条语句）"},
+                    "description": "标准 PostgreSQL 查询语句（单条，不以分号结尾、不含多条语句）"},
             "limit": {"type": "integer",
                       "description": "最多返回行数，默认 100，上限 500"},
         },
@@ -302,9 +290,9 @@ SQL_QUERY_SCHEMA = {
     },
 }
 
-_SQL_ALLOWED_PREFIX = ("select", "with", "pragma")
+_SQL_ALLOWED_PREFIX = ("select", "with")
 _SQL_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate)\b",
+    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate|grant|revoke|copy)\b",
     re.IGNORECASE,
 )
 
@@ -318,7 +306,7 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "缺少 sql"
     low = sql.lower()
     if not low.startswith(_SQL_ALLOWED_PREFIX):
-        return "只允许只读查询（以 SELECT / WITH / PRAGMA table_info 开头）"
+        return "只允许只读查询（以 SELECT / WITH 开头）"
     if ";" in sql:
         return "一次只允许一条查询语句（不要包含分号或多条语句）"
     if _SQL_FORBIDDEN.search(sql):
@@ -329,15 +317,8 @@ def _handle_sql_query(tool_input: dict) -> str:
         limit = 100
     limit = max(1, min(limit, 500))
     try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        try:
-            cur = con.cursor()
-            cur.execute(sql)
-            cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(limit + 1)
-        finally:
-            con.close()
-    except sqlite3.Error as e:
+        cols, rows = cpq_db.run_select(sql, limit)
+    except Exception as e:
         return f"SQL 执行失败：{e}"
     more = len(rows) > limit
     rows = rows[:limit]
@@ -345,6 +326,7 @@ def _handle_sql_query(tool_input: dict) -> str:
     def cell(x):
         s = "" if x is None else str(x)
         s = s.replace("\n", " ").replace("|", "/")
+        s = "".join(ch if ch.isprintable() else " " for ch in s)  # 过滤二进制/控制字符乱码
         return s if len(s) <= 80 else s[:77] + "…"
 
     if not cols:
@@ -363,7 +345,7 @@ def _handle_sql_query(tool_input: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _import_config_bom(payload: dict) -> dict:
-    """把用户确认后的配置BOM + 参数 + 每行规则写入数据库（可写连接，仅限本地专用表）。"""
+    """把用户确认后的配置BOM + 参数 + 每行规则写入远程 Postgres（可写连接，专用表）。"""
     if not isinstance(payload, dict):
         return {"ok": False, "error": "入参必须是 JSON 对象"}
     product = (payload.get("product") or payload.get("产品") or "").strip()
@@ -373,53 +355,52 @@ def _import_config_bom(payload: dict) -> dict:
     if not isinstance(rows, list) or not rows:
         return {"ok": False, "error": "没有可导入的 BOM 行"}
     params_json = json.dumps(params, ensure_ascii=False)
+
+    def g(r, *keys):
+        for k in keys:
+            v = r.get(k)
+            if v not in (None, ""):
+                return str(v)
+        return ""
+
+    created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = cpq_db.connect(readonly=False)  # autocommit
         try:
             cur = con.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS xbom_config_bom (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     product TEXT, project TEXT, params_json TEXT,
                     line_count INTEGER, created_at TEXT
                 )""")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS xbom_config_bom_line (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     bom_id INTEGER, seq INTEGER,
                     material_code TEXT, material_name TEXT, level TEXT,
                     qty TEXT, unit TEXT, tag TEXT, rule TEXT
                 )""")
-            created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cur.execute(
                 "INSERT INTO xbom_config_bom (product, project, params_json, line_count, created_at)"
-                " VALUES (?,?,?,?,?)",
+                " VALUES (%s,%s,%s,%s,%s) RETURNING id",
                 (product, project, params_json, len(rows), created))
-            bom_id = cur.lastrowid
-
-            def g(r, *keys):
-                for k in keys:
-                    v = r.get(k)
-                    if v not in (None, ""):
-                        return str(v)
-                return ""
-
+            bom_id = cur.fetchone()[0]
             for i, r in enumerate(rows, 1):
                 if not isinstance(r, dict):
                     continue
                 cur.execute(
                     "INSERT INTO xbom_config_bom_line"
                     " (bom_id, seq, material_code, material_name, level, qty, unit, tag, rule)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (bom_id, i, g(r, "物料编码", "material_code", "code"),
                      g(r, "物料名称", "material_name", "name"),
                      g(r, "层级", "level"), g(r, "数量", "qty"),
                      g(r, "单位", "unit"), g(r, "标签", "tag"),
                      g(r, "规则", "rule")))
-            con.commit()
         finally:
             con.close()
-    except sqlite3.Error as e:
+    except Exception as e:
         return {"ok": False, "error": f"数据库写入失败：{e}"}
     return {"ok": True, "bom_id": bom_id, "lines": len(rows),
             "table": "xbom_config_bom / xbom_config_bom_line", "created_at": created}
@@ -472,12 +453,12 @@ SYSTEM_PROMPT = """\
   · render_rules(rules)：第 6 步渲染【规则选择】——rules=[{code,name,desc,recommended}]，从 `md_clm_distribution_rule`（配置/配单规则）
     和 `md_clm_material_price_rule`（定价/报价规则）查出候选规则；**当前配置该挂的规则设 recommended=true（前端会预勾选=AI 推荐）**，其余 false 供用户搜索勾选。
   · open_panel：展开右侧配置面板。
-- `sql_query`：只读查 `亿纬锂能_da.sqlite`（**以系统提示词末尾的完整 schema 为准生成 SQL**）。不臆造、不读 json。
+- `sql_query`：只读查远程 Postgres（**以系统提示词末尾的完整 schema 为准生成 SQL**）。不臆造、不读 json。
 
 # 数据来源（两端，每步说清依据）
 
 1. **需求文档端**：用户上传的变体 BOM Excel / 需求描述（产品型号、电量、冷却方式、附加功能、数量等）。
-2. **数据库端 亿纬锂能_da.sqlite**（用 sql_query 只读 SELECT）：
+2. **数据库端（远程 Postgres）**（用 sql_query 只读 SELECT）：
    - `sample_power_bom_orders(order_code, capacity_kwh, cooling_method, rated_current, box_spec, low_temp_heating, cloud_comm, module_count, order_description, ...)`
      —— **20 份变体样例 BOM 的订单头 + 驱动参数**。第 1 步「识别参数」就从这里反推核心参数及取值域（电量/冷却方式/额定电流/箱体规格/低温加热/云端通信/电芯模组数）。
    - `sample_power_bom_lines(order_code, local_line_no, parent_local_line_no, level, level_tag, item_type, item_code, item_name, quantity, raw_text)`
@@ -997,6 +978,8 @@ class Bridge:
         tool_uses = []
         stop_reason = "end_turn"
 
+        # 发给模型前修复 tool_use/tool_result 配对（压缩/中断可能留下孤儿块 → 供方 400）
+        conv.messages[:] = cpq_msgutil.sanitize_tool_pairs(conv.messages)
         gen = stream_message(
             conv.client, conv.messages, conv.system_prompt,
             model=conv.model, tools=conv.tool_schemas,

@@ -5,7 +5,7 @@ CPQ rule assistant Agent service.
 Main responsibilities:
   1. Import rule source text from uploaded files.
   2. Convert natural-language rule descriptions into Groovy formulas and
-     structured rule rows, using database/亿纬锂能_da.sqlite as read-only context.
+     structured rule rows, using remote Postgres (shared by all three assistants) as read-only context.
 
 Run:
     python rule_agent_server.py --port 47296
@@ -19,7 +19,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import sys
 import threading
 import traceback
@@ -32,13 +31,11 @@ from urllib.parse import parse_qs, urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 
-DB_PATH = os.path.join(SCRIPT_DIR, "database", "亿纬锂能_da.sqlite")
-if not os.path.exists(DB_PATH):
-    db_dir = os.path.join(SCRIPT_DIR, "database")
-    for _name in os.listdir(db_dir) if os.path.isdir(db_dir) else []:
-        if _name.endswith(".sqlite"):
-            DB_PATH = os.path.join(db_dir, _name)
-            break
+# 业务数据源 = 远程 Postgres（三助手共用）；Agent 可见 schema 来自 亿纬锂能DA梳理.xlsx「规则助手」sheet。
+import cpq_db
+import cpq_msgutil
+
+DB_NAME = cpq_db.DB_LABEL
 
 # 三个助手共享同一份设置（模型/参数/Key）：cpq_settings.json 为唯一权威文件；
 # 旧的 rule_settings.json 仅作迁移兜底读取，不再写入。
@@ -109,36 +106,29 @@ def _to_int_or_none(v):
 
 
 def _build_schema_text() -> str:
-    try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        tables = [
-            r[0] for r in cur.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
-                "ORDER BY name"
-            ).fetchall()
-        ]
-        lines = []
-        for name in tables:
-            cols = [r[1] for r in cur.execute(f"PRAGMA table_info('{name}')").fetchall()]
-            lines.append(f"- {name}({', '.join(cols)})")
-        con.close()
-        return "\n".join(lines)
-    except sqlite3.Error:
-        return ""
+    # 本体语义层来自 亿纬锂能DA梳理.xlsx「规则助手」sheet（不再反射数据库）。
+    return cpq_db.schema_text("rule")
 
 
-def _select_lines(sql: str, params=(), limit: int = 20) -> list[str]:
+def _select_lines(sql: str, params=(), limit: int = 20, conn=None) -> list[str]:
+    """在远程 Postgres 上执行一条只读查询，格式化成 'k=v | k=v' 行。连不上/出错返回 []。
+    conn 传入时复用（避免逐条重连超时）；否则临时开一条。"""
+    close = conn is None
     try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        cur.execute(sql, params)
-        cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchmany(limit)
-        con.close()
-    except sqlite3.Error:
+        if conn is None:
+            conn = cpq_db.connect(readonly=True)
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d.name for d in cur.description] if cur.description else []
+            rows = cur.fetchmany(limit)
+    except Exception:
         return []
+    finally:
+        if close and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
     out = []
     for row in rows:
         pairs = []
@@ -152,21 +142,13 @@ def _select_lines(sql: str, params=(), limit: int = 20) -> list[str]:
 
 
 def _build_rule_field_context() -> str:
-    """Build compact DB-backed context for the fields the rule assistant must use."""
+    """规则助手可用字段与数据库依据。
+    字段字典来自 亿纬锂能DA梳理.xlsx 三个 sheet（本体语义层）；实时规则/因子样例来自远程
+    Postgres（连不上则整体跳过，不阻塞启动）。"""
     lines = ["# 规则生成可用字段与数据库依据"]
     for field in RULE_FIELDS:
         lines.append(f"\n## {field}")
-        hits = _select_lines(
-            """
-            SELECT assistant, business_object, logic_entity, physical_table,
-                   attribute_name, field_code, field_type
-            FROM da_fields
-            WHERE attribute_name LIKE ? OR field_code LIKE ?
-            ORDER BY assistant, source_row
-            """,
-            (f"%{field}%", f"%{field}%"),
-            limit=8,
-        )
+        hits = cpq_db.search_fields(field, limit=8)
         if hits:
             lines.extend(f"- 字段字典: {h}" for h in hits)
 
@@ -183,58 +165,70 @@ def _build_rule_field_context() -> str:
         "- 电量: 报价字段 quote_assistant_fields.attribute_name=电量；样例 BOM 订单列 sample_power_bom_orders.capacity_kwh。",
     ])
 
-    existing_rule_lines = _select_lines(
-        """
-        SELECT rule_name, rule_desc, rule_expression
-        FROM md_clm_distribution_rule
-        WHERE is_deleted = 0
-        ORDER BY updated_at DESC
-        """,
-        limit=8,
-    )
-    if existing_rule_lines:
-        lines.append("\n# 已有产品配单/配置规则样例")
-        lines.extend(f"- {x}" for x in existing_rule_lines)
+    # 以下为远程 Postgres 实时样例（可选增强）：共用一条连接，连不上则整体跳过。
+    try:
+        conn = cpq_db.connect(readonly=True)
+    except Exception:
+        conn = None
+    if conn is not None:
+        try:
+            existing_rule_lines = _select_lines(
+                """
+                SELECT rule_name, rule_desc, rule_expression
+                FROM md_clm_distribution_rule
+                WHERE is_deleted = 0
+                ORDER BY updated_at DESC
+                """,
+                limit=8, conn=conn,
+            )
+            if existing_rule_lines:
+                lines.append("\n# 已有产品配单/配置规则样例")
+                lines.extend(f"- {x}" for x in existing_rule_lines)
 
-    price_rule_lines = _select_lines(
-        """
-        SELECT rule_name, rule_classification, rule_desc, rule_expression
-        FROM md_clm_material_price_rule
-        WHERE is_deleted = 0
-          AND (rule_name LIKE '%客户%' OR rule_name LIKE '%电流%' OR rule_name LIKE '%质量%' OR rule_name LIKE '%冷却%')
-        ORDER BY updated_at DESC
-        """,
-        limit=10,
-    )
-    if price_rule_lines:
-        lines.append("\n# 已有报价/加价规则样例")
-        lines.extend(f"- {x}" for x in price_rule_lines)
+            price_rule_lines = _select_lines(
+                """
+                SELECT rule_name, rule_classification, rule_desc, rule_expression
+                FROM md_clm_material_price_rule
+                WHERE is_deleted = 0
+                  AND (rule_name LIKE '%客户%' OR rule_name LIKE '%电流%' OR rule_name LIKE '%质量%' OR rule_name LIKE '%冷却%')
+                ORDER BY updated_at DESC
+                """,
+                limit=10, conn=conn,
+            )
+            if price_rule_lines:
+                lines.append("\n# 已有报价/加价规则样例")
+                lines.extend(f"- {x}" for x in price_rule_lines)
 
-    surcharge_lines = _select_lines(
-        """
-        SELECT surcharge_name, surcharge_factor, factor_value, surcharge_amount, surcharge_unit
-        FROM md_clm_pricing_surcharge_factor
-        WHERE is_active = '是'
-        ORDER BY md_clm_pricing_surcharge_factor_id
-        """,
-        limit=30,
-    )
-    if surcharge_lines:
-        lines.append("\n# 加价因子明细")
-        lines.extend(f"- {x}" for x in surcharge_lines)
+            surcharge_lines = _select_lines(
+                """
+                SELECT surcharge_name, surcharge_factor, factor_value, surcharge_amount, surcharge_unit
+                FROM md_clm_pricing_surcharge_factor
+                WHERE is_active = '是'
+                ORDER BY md_clm_pricing_surcharge_factor_id
+                """,
+                limit=30, conn=conn,
+            )
+            if surcharge_lines:
+                lines.append("\n# 加价因子明细")
+                lines.extend(f"- {x}" for x in surcharge_lines)
 
-    order_lines = _select_lines(
-        """
-        SELECT order_code, capacity_kwh, cooling_method, rated_current,
-               box_spec, low_temp_heating, cloud_comm, module_count
-        FROM sample_power_bom_orders
-        ORDER BY sequence_no
-        """,
-        limit=20,
-    )
-    if order_lines:
-        lines.append("\n# 动力电池样例 BOM 参数")
-        lines.extend(f"- {x}" for x in order_lines)
+            order_lines = _select_lines(
+                """
+                SELECT order_code, capacity_kwh, cooling_method, rated_current,
+                       box_spec, low_temp_heating, cloud_comm, module_count
+                FROM sample_power_bom_orders
+                ORDER BY sequence_no
+                """,
+                limit=20, conn=conn,
+            )
+            if order_lines:
+                lines.append("\n# 动力电池样例 BOM 参数")
+                lines.extend(f"- {x}" for x in order_lines)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     return "\n".join(lines)
 
 
@@ -244,8 +238,8 @@ RULE_FIELD_CONTEXT = _build_rule_field_context()
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
-        "在亿纬锂能_da.sqlite 上执行只读 SQLite 查询。用于检索规则字段、既有规则、BOM样例、报价/加价因子。"
-        "只允许单条 SELECT / WITH / PRAGMA table_info，不要包含分号或写操作。"
+        "在远程 Postgres 上执行只读 SQL 查询。用于检索规则字段、既有规则、BOM样例、报价/加价因子。"
+        "只允许单条 SELECT / WITH，不要包含分号或写操作。列名不确定可查 information_schema.columns。"
     ),
     "input_schema": {
         "type": "object",
@@ -302,9 +296,9 @@ RULE_RESULT_SCHEMA = {
     },
 }
 
-_SQL_ALLOWED_PREFIX = ("select", "with", "pragma")
+_SQL_ALLOWED_PREFIX = ("select", "with")
 _SQL_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate)\b",
+    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate|grant|revoke|copy)\b",
     re.IGNORECASE,
 )
 
@@ -317,7 +311,7 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "缺少 sql"
     low = sql.lower()
     if not low.startswith(_SQL_ALLOWED_PREFIX):
-        return "只允许 SELECT / WITH / PRAGMA table_info 开头的只读查询"
+        return "只允许 SELECT / WITH 开头的只读查询"
     if ";" in sql:
         return "一次只允许一条 SQL，不要包含分号"
     if _SQL_FORBIDDEN.search(sql):
@@ -327,13 +321,8 @@ def _handle_sql_query(tool_input: dict) -> str:
     except (TypeError, ValueError):
         limit = 100
     try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        cur.execute(sql)
-        cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchmany(limit + 1)
-        con.close()
-    except sqlite3.Error as e:
+        cols, rows = cpq_db.run_select(sql, limit)
+    except Exception as e:
         return f"SQL 执行失败: {e}"
     more = len(rows) > limit
     rows = rows[:limit]
@@ -343,6 +332,7 @@ def _handle_sql_query(tool_input: dict) -> str:
     def cell(x):
         s = "" if x is None else str(x)
         s = s.replace("\n", " ").replace("|", "/")
+        s = "".join(ch if ch.isprintable() else " " for ch in s)  # 过滤二进制/控制字符乱码
         return s if len(s) <= 120 else s[:117] + "..."
 
     lines = [" | ".join(cols), " | ".join("---" for _ in cols)]
@@ -394,54 +384,55 @@ def _import_rules(payload: dict) -> dict:
     created_at = datetime.datetime.now().replace(microsecond=0).isoformat(sep=" ")
     batch_note = str(payload.get("note") or "").strip()
     try:
-        con = sqlite3.connect(DB_PATH)
-        cur = con.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rule_agent_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                batch_id TEXT,
-                rule_id TEXT,
-                rule_name TEXT,
-                rule_desc TEXT,
-                target_table TEXT,
-                groovy_formula TEXT,
-                note TEXT,
-                created_at TEXT
-            )
-            """
-        )
-        batch_id = uuid.uuid4().hex[:12]
-        saved = 0
-        for r in rules:
-            if not isinstance(r, dict):
-                continue
-            name = str(g(r, "rule_name", "规则名称", "name")).strip()
-            desc = str(g(r, "rule_desc", "规则描述", "desc")).strip()
-            formula = str(g(r, "groovy_formula", "groovy_code", "Groovy规则公式", "formula")).strip()
-            if not (name or desc or formula):
-                continue
+        con = cpq_db.connect(readonly=False)  # autocommit
+        try:
+            cur = con.cursor()
             cur.execute(
                 """
-                INSERT INTO rule_agent_rules
-                    (batch_id, rule_id, rule_name, rule_desc, target_table, groovy_formula, note, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    batch_id,
-                    str(g(r, "rule_id", "规则ID", "id")).strip(),
-                    name,
-                    desc,
-                    str(g(r, "target_table", "目标规则库", "目标库")).strip(),
-                    formula,
-                    batch_note,
-                    created_at,
-                ),
+                CREATE TABLE IF NOT EXISTS rule_agent_rules (
+                    id SERIAL PRIMARY KEY,
+                    batch_id TEXT,
+                    rule_id TEXT,
+                    rule_name TEXT,
+                    rule_desc TEXT,
+                    target_table TEXT,
+                    groovy_formula TEXT,
+                    note TEXT,
+                    created_at TEXT
+                )
+                """
             )
-            saved += 1
-        con.commit()
-        con.close()
-    except sqlite3.Error as e:
+            batch_id = uuid.uuid4().hex[:12]
+            saved = 0
+            for r in rules:
+                if not isinstance(r, dict):
+                    continue
+                name = str(g(r, "rule_name", "规则名称", "name")).strip()
+                desc = str(g(r, "rule_desc", "规则描述", "desc")).strip()
+                formula = str(g(r, "groovy_formula", "groovy_code", "Groovy规则公式", "formula")).strip()
+                if not (name or desc or formula):
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO rule_agent_rules
+                        (batch_id, rule_id, rule_name, rule_desc, target_table, groovy_formula, note, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        batch_id,
+                        str(g(r, "rule_id", "规则ID", "id")).strip(),
+                        name,
+                        desc,
+                        str(g(r, "target_table", "目标规则库", "目标库")).strip(),
+                        formula,
+                        batch_note,
+                        created_at,
+                    ),
+                )
+                saved += 1
+        finally:
+            con.close()
+    except Exception as e:
         return {"ok": False, "error": f"数据库写入失败: {e}"}
     if not saved:
         return {"ok": False, "error": "规则行为空，未写入任何数据"}
@@ -466,6 +457,20 @@ def _patched_execute_tool(tool_name, tool_input, cwd):
 
 
 oc_repl.execute_tool = _patched_execute_tool
+
+# 控制台日志兜底：print_tool_result 把结果塞进 rich markup，遇 [ ] 乱码抛 MarkupError 炸回合。
+# 日志纯装饰，失败静默。三个 agent 模块共享 oc_repl，_cpq_safe 防重复包装。
+if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
+    _ORIG_PRINT_TOOL_RESULT = oc_repl.print_tool_result
+
+    def _safe_print_tool_result(name, result):
+        try:
+            _ORIG_PRINT_TOOL_RESULT(name, result)
+        except Exception:
+            pass
+
+    _safe_print_tool_result._cpq_safe = True
+    oc_repl.print_tool_result = _safe_print_tool_result
 
 SYSTEM_PROMPT = f"""\
 你是「规则助手」，服务于亿纬锂能 CPQ 规则配置页面。左边是与用户的对话，右边是「规则配置表单」。
@@ -509,7 +514,7 @@ return null
 数据库字段上下文：
 {RULE_FIELD_CONTEXT}
 
-完整 SQLite schema：
+完整库 schema（来自 亿纬锂能DA梳理.xlsx「规则助手」sheet，据此生成 PostgreSQL SQL）：
 {DB_SCHEMA_TEXT}
 """
 
@@ -810,7 +815,7 @@ class Bridge:
             "profile": self.conv.profile.name,
             "cwd": self.cwd,
             "session_id": self.session_id,
-            "db": DB_PATH,
+            "db": DB_NAME,
             "rule_fields": RULE_FIELDS,
             "settings": self.current_settings(),
         }
@@ -877,6 +882,8 @@ class Bridge:
         text_buf = []
         tool_uses = []
         stop_reason = "end_turn"
+        # 发给模型前修复 tool_use/tool_result 配对（压缩/中断可能留下孤儿块 → 供方 400）
+        conv.messages[:] = cpq_msgutil.sanitize_tool_pairs(conv.messages)
         gen = stream_message(
             conv.client,
             conv.messages,
@@ -1254,7 +1261,7 @@ class Handler(BaseHTTPRequestHandler):
                 "service": "cpq-rule-agent",
                 "api": "/api/send",
                 "extract": "/api/extract",
-                "db": DB_PATH,
+                "db": DB_NAME,
             })
         else:
             self.send_error(404)
@@ -1394,7 +1401,7 @@ def main():
 
     global bridge
     print(f"[rule-agent] 工作目录 {SCRIPT_DIR}")
-    print(f"[rule-agent] 数据库 {DB_PATH}")
+    print(f"[rule-agent] 数据库 {DB_NAME}")
     bridge = Bridge(SCRIPT_DIR)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

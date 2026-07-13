@@ -15,7 +15,9 @@ EIMOS 产品平台「**配置报价管理(CPQ) → 报价管理**」菜单的新
 | `规则助手-规则配置.html` | **规则助手工作台**(承接首页「规则助手」跳转,布局参考 `报价规则.html`:左 520px 聊天 + 右侧宽表)。右侧是**一张规则表**(列 复选框/规则ID/规则名称/规则描述/Groovy规则公式,行可编辑,Groovy 用可编辑 code-display),底部动作条 批量删除 / 公式校验 / **生成 Groovy 公式** / **导入数据库**(绿色)。两步合到这张表:①上传规则文档→`rule_result(stage="import")` 把每条规则录入行(自动编 R001…、名称、描述、目标库存 `data-target`);②点「生成 Groovy 公式」→后端 `sql_query` 查库参数 + 各行描述→`rule_result(stage="groovy")` 按 rule_name 回填最后一列。全部生成后点**「导入数据库」**(POST `/api/import` → 写独立 `rule_agent_rules` 表)。由 `rule_agent_server.py` 驱动。 |
 | `rule_agent_server.py` | **规则助手 Agent 服务**(端口 47296)。复用 `open-claude/` 引擎,注入 `sql_query`(只读查库)+ `rule_result`(stage=import/groovy/final;import 只需 rule_name,可无公式)。系统提示词=**严格两步**:第一步只忠实抽取文档规则填表(不查库、不生成 Groovy),第二步才查库拿参数依据生成 Groovy(风格贴近库里 rule_expression,变量用业务字段名,db_evidence 注明来源)。接口同 cpq(send/new/meta/models/settings/extract/sessions)+ `/api/convert` + **`/api/import`**(=`_import_rules`,把右侧规则表写入独立 `rule_agent_rules` 表:batch_id/rule_id/rule_name/rule_desc/target_table/groovy_formula/created_at,自动建表、跳过全空行、**不污染业务规则库表**)。历史 `rule_history/`、设置 `rule_settings.json`。 |
 | `cpq_agent_server.py` | **报价助手 Agent 服务**(端口 47292)。复用 `open-claude/` 引擎,注入 `cpq_ui`(工作台)+ `sql_query`(只读查库)两个工具,系统提示词编码 6 步报价流程;SSE 接口 `/api/send`、`/api/new`、`/api/meta`,历史接口 `/api/sessions`、`/api/session`、`/api/session/open`、`/api/session/delete`,设置接口 `/api/models`、`/api/settings`,首页**意图识别** `/api/intent`(一次轻量大模型调用,返回 quote/config/rule),**附件提取** `/api/extract`(PDF/Word/Excel → 文字)(含 CORS)。 |
-| `database/亿纬锂能_da.sqlite` | **当前知识库**(SQLite,报价+配置助手共用):BOM 头/行(CLM_BASE_INFO/CLM_LINE_INFO)、20 份变体样例BOM(sample_power_bom_orders/lines)、定价/加价因子(md_clm_pricing_factor/md_clm_pricing_surcharge_factor)、规则(md_clm_material_price_rule/md_clm_distribution_rule)、字段清单(quote_/config_/rule_assistant_fields)。**Schema 见 `database/数据库Schema说明.md`**;两个 Agent 启动时把库表结构拼进系统提示词,**以 schema 为上下文自行生成 SQL、用 `sql_query` 只读查询**取数。 |
+| `cpq_db.py` | **统一数据访问层(三助手共用)**。① 业务数据源 = **远程 Postgres**(`172.16.5.181:32444`,库 `metabase`/schema `master_data`,`CPQ_PG_*` 环境变量可覆盖);`sql_query` 与「导入数据库」均走这里(只读事务 / 可写事务)。② Agent 可见的库 schema(本体语义层)= `亿纬锂能DA梳理.xlsx` 三 sheet,提供 `schema_text/schema_doc/bi_fields/search_fields`。psycopg 延迟导入,连不上库时 schema 仍离线可用、查询以文本错误回给 Agent 不崩服务。 |
+| `亿纬锂能DA梳理.xlsx` | **本体语义层数据源**:三个 sheet(报价助手 / 配置助手 / 规则助手)= 业务对象 → 逻辑实体(表)→ 属性(字段)。三助手启动时由 `cpq_db.py` 解析成库 schema 拼进系统提示词,**Agent 以此为准生成 PostgreSQL SQL**。 |
+| `database/亿纬锂能_da.sqlite` | **已弃用**(原 SQLite 知识库,数据源已切换到远程 Postgres、schema 已改由 `亿纬锂能DA梳理.xlsx` 提供);保留仅作参考。 |
 | `quote_bom.db` | 旧知识库,**已弃用**(数据已迁入 `database/亿纬锂能_da.sqlite`),保留仅作参考。 |
 | `cpq_history/` | **本地历史报价**(运行时生成,`.gitignore` 忽略)。每个报价会话一个 JSON,含展示事件流(用于回放聊天+工作台)与原始消息(用于续聊)。**存磁盘,重启服务后仍可在页面「历史记录」里找回并继续。** |
 | `cpq_settings.json` | **本地模型设置**(运行时生成,`.gitignore` 忽略,**可能含各 provider 的 API Key 明文,勿入库**)。保存当前模型、采样参数(temperature/max_tokens/thinking)与各 provider 的 API Key;服务启动时自动加载。 |
@@ -39,6 +41,7 @@ open-claude/.venv/Scripts/python cpq_suite_server.py            # 默认端口 8
   `/agents/quote/api/*`(报价)、`/agents/config/api/*`(配置)、`/agents/rule/api/*`(规则)。
 - 页面默认**同源**访问这些前缀;`localStorage['cpq:agentUrl'/'xbom:agentUrl'/'cpq:ruleAgentUrl']` 仍可覆盖成任意地址。
 - 必须用 `open-claude/.venv` 里的 Python(依赖 anthropic/openai/pdfplumber 等都在这个 venv)。
+- **数据源改为远程 Postgres 后需装 `psycopg`**:`open-claude/.venv/Scripts/python -m pip install "psycopg[binary]"`(解析 xlsx 本体的 `openpyxl` 也需在同一 venv)。连接参数默认写在 `cpq_db.py`,可用环境变量覆盖:`CPQ_PG_HOST/CPQ_PG_PORT/CPQ_PG_USER/CPQ_PG_PASSWORD/CPQ_PG_DATABASE/CPQ_PG_SCHEMA`。
 
 **方式二——四个进程分开跑(旧,仍可用,页面用 file:// 打开时也走这些端口)**:
 
@@ -84,9 +87,10 @@ Agent 每步结论都基于两端数据,并在对话里向用户说明依据:
 
 - **需求文档端** —— 用户上传的需求文档 / 对话框描述(客户、产品型号、数量、目的地、交期、
   付款、质量专控、碳足迹、非标要求、贸易术语等具体值)。
-- **数据库端** —— `database/亿纬锂能_da.sqlite`(见上表)。Agent 用 `sql_query` 工具执行**只读 SELECT**
-  (仅允许单条 SELECT/WITH/PRAGMA,写操作被拒),**以系统提示词末尾的完整 schema 为上下文生成 SQL**;字段口径查 `quote_assistant_fields`,
-  BOM 查 `CLM_BASE_INFO/CLM_LINE_INFO`(多层用递归 CTE),加价/定价查 `md_clm_pricing_*`,规则查 `md_clm_material_price_rule/md_clm_distribution_rule`。**不再读任何 json / quote_bom.db**。
+- **数据库端** —— **远程 Postgres**(`172.16.5.181:32444`,库 `metabase`、schema `master_data`,三助手共用;连接参数见 `cpq_db.py`,可用 `CPQ_PG_*` 环境变量覆盖)。Agent 用 `sql_query` 工具执行**只读 SELECT**
+  (仅允许单条 SELECT/WITH,写操作被拒),**以系统提示词末尾的完整 schema 为上下文生成 PostgreSQL SQL**;
+  BOM 查 `CLM_BASE_INFO/CLM_LINE_INFO`(多层用递归 CTE),规则查 `md_clm_material_price_rule/md_clm_distribution_rule`,列名不确定查 `information_schema.columns`。**不再读任何 json / sqlite**。
+  Agent **可见的库 schema(本体语义层)来自 `亿纬锂能DA梳理.xlsx` 三个 sheet(报价助手 / 配置助手 / 规则助手)**,由 `cpq_db.py` 解析后拼进系统提示词,不再反射数据库。
 
 ## 报价助手 Agent(6 步流程)
 
@@ -94,8 +98,8 @@ Agent 每步结论都基于两端数据,并在对话里向用户说明依据:
 Agent 步骤名、是系统解析初稿,不算 Agent 步骤;所以 Agent 第 1 步就是“确认需求配置”)。**从第 1 步开始、
 一步一步走,用户对第 1 步点「确认,进入下一步」前不许跳到定价**(系统提示词强约束)。
 
-**写死的表结构 + 预渲染(不再实时造结构)**:每个分区的字段/列**写死**,来源 = 数据库 `quote_assistant_fields`
-(不读 excel、不带任何示例数据)。后端把固定表单目录经 `/api/meta` 的 `forms` 下发,**前端进第 1 步就把 6 个
+**写死的表结构 + 预渲染(不再实时造结构)**:每个分区的字段/列**写死**,来源 = `亿纬锂能DA梳理.xlsx`「报价助手」sheet 本体
+(经 `cpq_db.py` 解析,不带任何示例数据)。后端把固定表单目录经 `/api/meta` 的 `forms` 下发,**前端进第 1 步就把 6 个
 固定分区的空骨架预渲染出来**(`prerenderStep`);Agent **只往固定分区填值**(render_form 用 `values`、render_table 用 `rows`),
 `_enforce_fixed_template` 兜底强制套结构、丢弃多余字段。分区目录:
 第1步 s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics(6 个,已去掉交期分解/备品备件,

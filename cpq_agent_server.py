@@ -8,8 +8,8 @@
   - 业务流程：按《报价业务流程.xlsx》「亿纬锂能POC（简化）」页的 7 个 Agent 步骤
     引导用户一步步完成报价（确认需求配置 → 定价-基础成本 → 定价-利润加成 →
     报价-其他加价项 → 报价方案 → 输出报价单）。
-  - 数据口径：各步骤字段口径与基础/规则数据来自 database/亿纬锂能_da.sqlite（SQLite），
-    注入一个只读 sql_query 工具，Agent 以库 schema 为上下文自行生成 SQL 查询取数。
+  - 数据口径：各步骤字段口径与基础/规则数据来自远程 Postgres（三助手共用），Agent 以
+    亿纬锂能DA梳理.xlsx 的库 schema（本体语义层）为上下文，通过只读 sql_query 工具生成 SQL 取数。
   - 工作台驱动：注入一个自定义 cpq_ui 工具（set_step / render_form / render_table /
     render_document），Agent 调用它来切换步骤、在页面右侧渲染可编辑表单和表格；
     本服务拦截该工具的执行，把入参作为 `ui` 事件透传给前端（SSE）。
@@ -30,7 +30,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import sys
 import threading
 import traceback
@@ -42,40 +41,14 @@ from urllib.parse import parse_qs, urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 
-# 报价知识库 = 亿纬锂能 CPQ DA 库（BOM / 定价 / 加价 / 规则 / 字段清单 / 样例BOM），Agent 用 sql_query 只读查询。
-DB_PATH = os.path.join(SCRIPT_DIR, "database", "亿纬锂能_da.sqlite")
-DB_NAME = os.path.basename(DB_PATH)
+# 报价知识库 = 远程 Postgres（三助手共用），Agent 用 sql_query 只读查询。
+# Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（不反射数据库）。
+import cpq_db
+import cpq_msgutil
 
-
-def _build_schema_text() -> str:
-    """从库里生成"表(列, 列, ...)"的紧凑 schema，作为模型生成 SQL 的上下文。"""
-    try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view') "
-                    "AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        lines = []
-        for (n,) in cur.fetchall():
-            cols = [r[1] for r in cur.execute(f"PRAGMA table_info('{n}')").fetchall()]
-            lines.append(f"- {n}({', '.join(cols)})")
-        con.close()
-        return "\n".join(lines)
-    except sqlite3.Error:
-        return ""
-
-
-def _schema_doc_text() -> str:
-    """读取 database/数据库Schema说明.md（含各表/字段的业务含义、ER、业务链路），作为取数上下文。"""
-    p = os.path.join(SCRIPT_DIR, "database", "数据库Schema说明.md")
-    try:
-        with open(p, encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return ""
-
-
-_DB_SCHEMA_TEXT = _build_schema_text()
-_SCHEMA_DOC = _schema_doc_text()
+DB_NAME = cpq_db.DB_LABEL
+_DB_SCHEMA_TEXT = cpq_db.schema_text("quote")
+_SCHEMA_DOC = cpq_db.schema_doc("quote")
 
 # Windows 控制台默认 cp1252，rich 打印中文工具结果会崩溃 —— 统一切到 UTF-8。
 for _stream in (sys.stdout, sys.stderr):
@@ -194,31 +167,39 @@ CPQ_UI_SCHEMA = {
 # 只能填值。这样每次跑出来的每个分区都是同一套固定表单，而不是模型临时“动态生成”。
 # ---------------------------------------------------------------------------
 
-# BI 支撑的分区：section_id -> (kind, 标题, (业务对象, 逻辑实体))。字段从 quote_assistant_fields 取。
+# BI 支撑的分区：section_id -> (kind, 标题, (业务对象, 逻辑实体名称), 可编辑)。
+# 字段全部来自 亿纬锂能DA梳理.xlsx「报价助手」sheet，**全量列（已排除 id/主键/外键）**。
+# 各步骤所需表单严格按需求给定：
 _BI_SECTIONS = {
-    "s1_basic":      ("form",  "① 测算基本信息",   ("价格测算单", "测算基本信息")),
-    "s1_dest":       ("form",  "② 目的地信息",     ("价格测算单", "目的地信息")),
-    "s1_products":   ("table", "③ 产品信息列表",   ("价格测算单", "产品信息")),
-    "s1_techparams": ("table", "④ 产品技术参数",   ("价格测算单", "产品技术参数")),
-    "s1_payment":    ("table", "⑤ 付款里程碑信息", ("价格测算单", "付款信息")),
-    "s1_logistics":  ("form",  "⑥ 物流信息",       ("价格测算单", "物流信息")),
-    "s4_detail":     ("table", "加价明细",             ("价格测算单", "加价明细")),
-    "s4_prod_sum":   ("table", "产品加价汇总",         ("价格测算单", "产品加价汇总")),
-    "s5_basic":      ("form",  "报价基本信息",         ("报价单", "报价基本信息")),
+    # —— 第 1 步 确认需求配置 ——
+    "s1_basic":      ("form",  "① 测算基本信息",   ("价格测算单", "测算基本信息"),   True),
+    "s1_dest":       ("form",  "② 目的地信息",     ("价格测算单", "目的地信息"),     True),
+    "s1_products":   ("table", "③ 产品信息",       ("价格测算单", "产品信息"),       True),
+    "s1_techparams": ("table", "④ 产品技术参数",   ("价格测算单", "产品技术参数"),   True),
+    "s1_payment":    ("table", "⑤ 付款信息",       ("价格测算单", "付款信息"),       True),
+    "s1_logistics":  ("form",  "⑥ 物流信息",       ("价格测算单", "物流信息"),       True),
+    # —— 第 2 步 定价-基础成本 —— 产品信息仅展示（沿用第1步）+ 实例BOM头/行
+    "s2_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),       False),
+    "s2_bomhead":    ("table", "实例BOM头信息",           ("价格测算单", "实例BOM头信息"), False),
+    "s2_bomline":    ("table", "实例BOM行信息",           ("价格测算单", "实例BOM行信息"), False),
+    # —— 第 3 步 定价-利润加成 —— 产品信息仅展示 + 加价信息
+    "s3_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),     False),
+    "s3_markup":     ("table", "加价信息",                 ("价格测算单", "加价明细"),     False),
+    # —— 第 4 步 报价-其他加价项 —— 产品信息仅展示 + 加价明细
+    "s4_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),     False),
+    "s4_markup":     ("table", "加价明细",                 ("价格测算单", "加价明细"),     False),
+    # —— 第 5 步 报价方案 —— 报价基本信息 + 报价明细
+    "s5_basic":      ("form",  "报价基本信息",             ("报价单", "报价基本信息"),     True),
+    "s5_detail":     ("table", "报价明细",                 ("报价单", "报价明细"),         True),
 }
 
-# 计算类分区：BI 里没有对应逻辑实体（BOM / 料工费 / 定价过程 / 报价明细 / 审批），列固定写死。
+# 计算类分区：仅第 6 步 BPM 审批流（xlsx 无对应实体，列固定写死）。
 _COMPUTED_SECTIONS = {
-    "s2_cost":    ("table", "料工费与基础成本", ["产品编码", "产品名称", "材料费(元/W)", "人工费(元/W)", "制造费用(元/W)", "基础成本(元/W)"]),
-    "s3_pricing": ("table", "定价过程与结果",   ["产品编码", "产品名称", "基础成本(元/W)", "技术溢价(元/W)", "市场调节(元/W)", "定价(元/W)"]),
-    "s5_detail":  ("table", "报价明细",         ["产品型号", "综合单价", "组件单价", "物流报价", "备品备件单价", "数量", "折扣", "金额"]),
-    "s6_bpm":     ("table", "BPM 审批流环节",   ["环节", "角色", "状态", "处理意见"]),
+    "s6_bpm": ("table", "BPM 审批流环节", ["环节", "角色", "状态", "处理意见"]),
 }
 
-# 前缀匹配（每个产品一张，section_id 带产品编码后缀）：
-_COMPUTED_PREFIX = {
-    "s2_bom_": ("table", "配置 BOM 清单", ["层级", "组件编码", "组件名称", "数量", "单位"]),
-}
+# 前缀匹配分区：已无（旧 s2_bom_ 树形 BOM 由实例BOM头/行表取代）。
+_COMPUTED_PREFIX = {}
 
 FIXED_FORMS: dict = {}  # section_id -> {kind, title, fields:[{key,label,example}], columns:[{key,label}], editable}
 
@@ -228,20 +209,8 @@ _FALLBACK_FIELDS = {}
 
 
 def _bi_fields(business_object: str, logic_entity: str) -> list:
-    """从 quote_assistant_fields 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
-    rows = []
-    try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        cur = con.cursor()
-        cur.execute(
-            "SELECT attribute_name, field_type FROM quote_assistant_fields "
-            "WHERE business_object=? AND logic_entity=? ORDER BY source_row",
-            (business_object, logic_entity),
-        )
-        rows = cur.fetchall()
-        con.close()
-    except sqlite3.Error:
-        rows = []
+    """从 亿纬锂能DA梳理.xlsx「报价助手」sheet 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
+    rows = cpq_db.bi_fields(business_object, logic_entity)
     if not rows:
         return [{"key": a, "label": a, "example": ""} for a in _FALLBACK_FIELDS.get(logic_entity, [])]
     # 一律不带示例数据，只出字段名（表结构写死）
@@ -254,19 +223,19 @@ def _cols_template(cols: list) -> list:
 
 def _init_fixed_forms():
     FIXED_FORMS.clear()
-    for sid, (kind, title, ent) in _BI_SECTIONS.items():
+    for sid, (kind, title, ent, editable) in _BI_SECTIONS.items():
         attrs = _bi_fields(*ent)
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title, "fields": attrs,
             "columns": [{"key": a["key"], "label": a["label"]} for a in attrs],
-            "editable": sid.startswith("s1_") or sid == "s5_basic",
+            "editable": bool(editable),
         }
     for sid, (kind, title, cols) in _COMPUTED_SECTIONS.items():
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title,
             "fields": [{"key": c, "label": c, "example": ""} for c in cols],
             "columns": _cols_template(cols),
-            "editable": sid == "s5_detail",  # 报价明细单价/折扣可改
+            "editable": False,
         }
 
 
@@ -509,25 +478,40 @@ def _patched_execute_tool(tool_name, tool_input, cwd):
 
 oc_repl.execute_tool = _patched_execute_tool
 
+# 控制台日志兜底：repl.print_tool_result 把工具结果直接塞进 rich markup（[dim]{...}[/dim]），
+# 结果里带 [ ] 乱码/二进制时 rich 抛 MarkupError 炸掉整个回合（tool_result 丢失→下轮供方 400）。
+# 日志纯属装饰，失败时静默降级，不影响回合。三个 agent 模块共享 oc_repl，用 _cpq_safe 防重复包装。
+if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
+    _ORIG_PRINT_TOOL_RESULT = oc_repl.print_tool_result
+
+    def _safe_print_tool_result(name, result):
+        try:
+            _ORIG_PRINT_TOOL_RESULT(name, result)
+        except Exception:
+            pass  # rich markup/编码问题只影响控制台显示，吞掉
+
+    _safe_print_tool_result._cpq_safe = True
+    oc_repl.print_tool_result = _safe_print_tool_result
+
 
 # ---------------------------------------------------------------------------
-# sql_query 工具：在亿纬锂能 DA 库（亿纬锂能_da.sqlite）上执行只读 SQL
+# sql_query 工具：在亿纬锂能 DA 库（远程 Postgres）上执行只读 SQL
 # ---------------------------------------------------------------------------
 
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
-        "在报价知识库 亿纬锂能_da.sqlite（SQLite，只读）上执行 SELECT 查询，取 BOM / 定价 / 加价 / "
+        "在报价知识库（远程 Postgres，只读）上执行 SELECT 查询，取 BOM / 定价 / 加价 / "
         "规则 / 字段清单 等基础数据。**表结构见系统提示词末尾的完整 schema，据它生成 SQL。**"
-        "仅允许单条 SELECT / WITH / PRAGMA table_info 语句，不要带分号或多条语句。"
-        "列名不确定时先 PRAGMA table_info('表名') 或 SELECT * FROM 表 LIMIT 3 探查。"
+        "仅允许单条 SELECT / WITH 语句，不要带分号或多条语句。"
+        "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sql": {"type": "string",
-                    "description": "标准 SQLite 查询语句（单条，不以分号结尾、不含多条语句）"},
+                    "description": "标准 PostgreSQL 查询语句（单条，不以分号结尾、不含多条语句）"},
             "limit": {"type": "integer",
                       "description": "最多返回行数，默认 100，上限 500"},
         },
@@ -535,9 +519,9 @@ SQL_QUERY_SCHEMA = {
     },
 }
 
-_SQL_ALLOWED_PREFIX = ("select", "with", "pragma")
+_SQL_ALLOWED_PREFIX = ("select", "with")
 _SQL_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate)\b",
+    r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate|grant|revoke|copy)\b",
     re.IGNORECASE,
 )
 
@@ -551,7 +535,7 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "缺少 sql"
     low = sql.lower()
     if not low.startswith(_SQL_ALLOWED_PREFIX):
-        return "只允许只读查询（以 SELECT / WITH / PRAGMA table_info 开头）"
+        return "只允许只读查询（以 SELECT / WITH 开头）"
     if ";" in sql:
         return "一次只允许一条查询语句（不要包含分号或多条语句）"
     if _SQL_FORBIDDEN.search(sql):
@@ -562,15 +546,8 @@ def _handle_sql_query(tool_input: dict) -> str:
         limit = 100
     limit = max(1, min(limit, 500))
     try:
-        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        try:
-            cur = con.cursor()
-            cur.execute(sql)
-            cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(limit + 1)
-        finally:
-            con.close()
-    except sqlite3.Error as e:
+        cols, rows = cpq_db.run_select(sql, limit)
+    except Exception as e:
         return f"SQL 执行失败：{e}"
     more = len(rows) > limit
     rows = rows[:limit]
@@ -578,6 +555,7 @@ def _handle_sql_query(tool_input: dict) -> str:
     def cell(x):
         s = "" if x is None else str(x)
         s = s.replace("\n", " ").replace("|", "/")
+        s = "".join(ch if ch.isprintable() else " " for ch in s)  # 过滤二进制/控制字符乱码
         return s if len(s) <= 80 else s[:77] + "…"
 
     if not cols:
@@ -598,61 +576,62 @@ def _handle_sql_query(tool_input: dict) -> str:
 SYSTEM_PROMPT = """\
 你是「报价单智能体」，亿纬锂能 CPQ（配置报价）系统的报价助手，嵌在「确认需求解析结果」
 工作台页面中：左侧是与用户（AR/客户经理）的聊天，右侧是你用 cpq_ui 工具驱动的工作台
-（步骤条 + 固定表单/表格分区）。你的任务是**严格按下面 7 步顺序**，引导用户一步一步完成报价。
+（步骤条 + 固定表单/表格分区）。你的任务是**严格按下面 6 步顺序**，引导用户一步一步完成报价。
 
-# 业务流程（严格 7 步，来自〈亿纬锂能POC（简化）〉的“输出 ↔ Agent 步骤名称”对应关系）
+# 业务流程（严格 6 步，来自〈亿纬锂能POC（简化）〉的“输出 ↔ Agent 步骤名称”对应关系）
 
 说明：POC 里“客户需求解析”那一行**没有 Agent 步骤名称**（是系统解析初稿，不是你的步骤），
 所以**跳过它**；你的第 1 步是“确认需求配置”。每步只能用下面列出的**固定 section_id**，
 字段/列都由系统写死（来自《BI 及关键属性》逻辑实体↔业务属性），你只填值、不能增删字段。
 
-- **第 1 步｜确认需求配置**（L5：确认需求解析结果）。固定 6 个分区，顺序渲染并逐项确认：
-  s1_basic（表单·测算基本信息）、s1_dest（表单·目的地信息）、s1_products（表·产品信息列表）、
-  s1_techparams（表·产品技术参数）、s1_payment（表·付款里程碑信息）、s1_logistics（表单·物流信息）。
-- **第 2 步｜定价-基础成本**（L5：确认产品配置及料工费）。每个产品一张 BOM：
-  s2_bom_<产品编码>（表·固定列 层级/组件编码/组件名称/数量/单位）；再 s2_cost
-  （表·固定列 产品编码/产品名称/材料费/人工费/制造费用/基础成本，单位元/W，示例 5.6、5.8）。
-  **BOM 必须带出完整的多层结构**：`CLM_BASE_INFO` 是 BOM 头、`CLM_LINE_INFO` 是 BOM 行
-  （`CLM_LINE_INFO.ref_bom_header_id` → `CLM_BASE_INFO.bom_header_id`；组件若本身又是某个 BOM 头的 product_item_code，则继续往下展开）。
-  用**递归 CTE** 从产品根头逐层展开（示例，按需改）：
-  `WITH RECURSIVE ex(level,code,name,qty,uom,hid) AS (
-     SELECT 1,h.product_item_code,h.product_item_name,1,'',h.bom_header_id FROM CLM_BASE_INFO h WHERE h.product_item_code='<产品编码>'
-     UNION ALL
-     SELECT ex.level+1,l.component_item_code,l.component_item_name,l.component_item_quantity,l.component_item_uom_code,h2.bom_header_id
-     FROM ex JOIN CLM_LINE_INFO l ON l.ref_bom_header_id=ex.hid
-     LEFT JOIN CLM_BASE_INFO h2 ON h2.product_item_code=l.component_item_code WHERE ex.level<4)
-   SELECT level,code,name,qty,uom FROM ex`
-  把**每一行**写进 s2_bom 的 rows（层级=level、组件编码=code、组件名称=name、数量=qty、单位=uom）。
-  **⚠️ 本步必须调用「产品配单规则」**：
-  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_distribution_rule WHERE is_deleted=0`，
-  逐条对照第 1 步确认的需求配置（电量/冷却方式/附加功能/电芯模组/额定电流/箱体规格等）判断是否命中并**执行规则语义**
-  （如 280kWh→强制液冷、风冷→禁止低温加热、电量→自动匹配模组数/额定电流/箱体规格），据此校验并修正产品配置与 BOM；
-  聊天小结里必须写明「命中配单规则：规则名 → 结论」，一条都没命中也要写「配单规则均未命中」。
-- **第 3 步｜定价-利润加成**（L5：确认定价过程及结果）。s3_pricing
-  （表·固定列 产品编码/产品名称/基础成本/技术溢价/市场调节/定价，元/W）。**利润加成 = 技术溢价 + 市场调节**（如 +1.5 -0.2 = 利润加成 +1.3）。
-  **⚠️ 本步必须调用「产品定价规则·定价类」**：
-  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule WHERE rule_classification='定价' AND is_deleted=0`，
-  按当前配置逐条判断并执行（如 冷却方式=液冷 → 定价系数 1.08），把命中结果计入 技术溢价/市场调节/定价；
-  聊天小结里写明「命中定价规则：规则名 → 取值」或「定价规则均未命中」。
-- **第 4 步｜报价-其他加价项**（L5：确认加价过程及结果）。s4_detail（表·加价明细）、
-  s4_prod_sum（表·产品加价汇总，固定列 测算单id/产品行id/**产品型号**/单件瓦数(W)/基础加价/
-  非标加价/财务商务加价/物流加价/物流费用调整/其他加价/加价合计）。匹配报价规则算其他加价（如 +0.8）。
-  **⚠️ 本步必须调用「产品定价规则·报价类」**：
-  `SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule WHERE rule_classification='报价' AND is_deleted=0`，
-  按需求值（客户等级/电流分档/质量专控要求等）逐条判断并执行，命中的加价逐条写进 s4_detail 加价明细并计入汇总；
-  聊天小结里写明「命中报价规则：规则名 → 加价金额」或「报价规则均未命中」。
-- **第 5 步｜报价方案**（L5：生成报价单）。s5_basic（表单·报价基本信息）、
-  s5_detail（表·报价明细，固定列 **产品型号**/综合单价/组件单价/物流报价/备品备件单价/数量/折扣/金额）。
-  **预计报价 = 基础成本 + 利润加成 + 其他加价**（如 5.6 + 1.3 + 0.8 = 7.7）；**报价 = 预计报价 × 折扣**（如 7.7 × 0.9 = 6.93）。
-- **⚠️ 产品型号贯穿全流程**：s4_prod_sum、s5_detail 的每一行 rows 都**必须带「产品型号」键**，
-  值沿用**第 1 步 s1_products（产品信息列表）里该产品的"产品型号"原值**——不要换成产品编码/产品名称、
-  不要留空、键名必须写"产品型号"（写"型号/产品名称"会匹配不上被丢弃）。
-- **第 6 步｜输出报价单**（L5：报价单审批）。render_document 渲染报价单文档（section_id=s6_doc），
-  再 s6_bpm（表·BPM 审批流环节：环节/角色/状态/处理意见），告知用户流程完成。
+每步的分区/列全部来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（已排除所有 id/主键/外键字段），
+你只填值、不能增删字段；每个分区的所有列都要尽量填满。
+
+- **第 1 步｜确认需求配置**。子步骤：①完善和确认测算基本信息（s1_basic）→ ②维护目的地信息（s1_dest）→
+  ③添加产品信息列表（s1_products）→ ④分解付款里程碑信息（s1_payment）→ ⑤填写物流信息（s1_logistics）→
+  ⑥确认并提交测算单。产品技术参数（s1_techparams）随③一起填。
+  **取数逻辑：以用户上传的需求文档/需求描述为准**逐项填入；文档没写、但库里有依据的（如按产品型号补规格/标准技术参数），
+  **按情况用 sql_query 查库补全**；两边都没有的给推荐值（加「（推荐）」标记）。
+- **第 2 步｜定价-基础成本**。分区：s2_products（产品信息·沿用第 1 步·仅展示）、s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息）。
+  **取数逻辑（严格按此顺序）**：
+  ① **读取规则库的配置规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_distribution_rule WHERE is_deleted=0`，
+     根据第 1 步确认的**产品信息、产品技术参数特征**逐条执行规则语义（如 280kWh→强制液冷、风冷→禁止低温加热、
+     电量→自动匹配模组数/额定电流/箱体规格），**输出实例 BOM 清单**（头→s2_bomhead、行→s2_bomline，行含 parent_line_id 多级结构）；
+     聊天小结必须写明「命中配单规则：规则名 → 结论」，一条没命中也要写「配单规则均未命中」。
+  ② **从物料成本表匹配料工费**：按 BOM 行的物料编码/名称查 `md_clm_material_cost_cnf`
+     （material_code/material_name/material_unit_price/direct_labor_unit_price/indirect_labor_unit_price/machine_cost/other_charge，
+     is_deleted=0 且在有效期内），把 材料单价/直接人工单价/间接人工单价/机器费用/其他制费 填进 s2_bomline 对应列。
+  ③ **复核并确认**产品配置清单及料工费，汇总得出**产品基础成本**（写回 s2_products 的「基础成本」列），请用户确认。
+  ④ 用户确认后提交报价测算，进入下一步。
+- **第 3 步｜定价-利润加成**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价信息）。
+  **取数逻辑**：
+  ① **读取规则库的定价规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
+     WHERE rule_classification='定价' AND is_deleted=0`，根据**产品信息、产品技术参数**逐条判断并执行
+     （如 冷却方式=液冷 → 定价系数 1.08），**计算利润加成金额**——命中的每条写成 s3_markup 一行
+     （规则分类=定价、加价项名称=规则名、加价值=金额/系数），并把利润加成写回 s3_products 的「利润加成」列；
+     聊天小结写明「命中定价规则：规则名 → 取值」或「定价规则均未命中」。
+  ② 复核并确认产品定价过程及利润加成金额，用户确认后提交报价测算，进入下一步。
+- **第 4 步｜报价-其他加价项**。分区：s4_products（产品信息·沿用·仅展示）、s4_markup（加价明细）。
+  **取数逻辑**：
+  ① **获取规则库的报价规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
+     WHERE rule_classification='报价' AND is_deleted=0`，根据**测算基本信息、目的地信息、产品信息、产品技术参数、
+     付款信息、物流信息**（第 1 步确认的全部需求值：客户等级/电流分档/质量专控要求等）逐条判断并执行，
+     **计算其他加价金额**——命中的每条写成 s4_markup 一行（规则分类=报价），并把其他加价写回 s4_products 的「其他加价」列；
+     聊天小结写明「命中报价规则：规则名 → 加价金额」或「报价规则均未命中」。
+  ② 复核产品加价项明细及加价金额，用户确认后提交报价测算，进入下一步。
+- **第 5 步｜报价方案**。分区：s5_basic（报价基本信息）、s5_detail（报价明细）。子步骤：
+  ① 填写**报价类型、报价单模板（报价模板）、报价形式**及其余报价单基本信息（s5_basic，来自前面步骤已确认的
+     客户/项目/币种/商机等 + 合理推荐）；
+  ② 填写报价明细（s5_detail）：产品系列/产品型号/版本扩展/方案描述/规格/数量沿用第 1 步 s1_products 原值；
+     **报价 = 基础成本 + 利润加成 + 其他加价**（三项都来自前面步骤的确认值）；**折后价格 = 报价 × 折扣**；
+     总金额 = 折后价格 × 数量；税率/税金按测算基本信息的税率计算。
+  ③ 生成并导入报价单附件（提示用户可点「导出报价单」），提交 BPM 审批，进入下一步。
+- **第 6 步｜输出报价单**。render_document 渲染报价单文档（section_id=s6_doc），再 s6_bpm（表·BPM 审批流环节：
+  环节/角色/状态/处理意见——按 审批报价单 → 回传报价单审批结果 → 报价单用印 三个环节填入），告知用户流程完成。
 
 # 固定表单：结构已预渲染，但你必须主动"填值"（务必遵守）
 
-- 右侧每个分区的**字段/列已经写死并预渲染成空骨架**（结构由系统按 `quote_assistant_fields` 固定），
+- 右侧每个分区的**字段/列已经写死并预渲染成空骨架**（结构由系统按 亿纬锂能DA梳理.xlsx「报价助手」本体固定），
   你**不需要也不能自己定义字段/列**——但这**不代表**右侧已经有数据了。
 - **填值 = 你必须主动调用 cpq_ui 的 render_form / render_table**；这就是唯一的写入方式：
   · render_form：`values` = {业务属性名称: 取值}（键与固定字段名一致）；
@@ -660,10 +639,10 @@ SYSTEM_PROMPT = """\
   **⚠️ 你不调用 render，右侧就一直是空骨架！**（预渲染只给了空表，值必须你 render 才会出现。）
   你传的 fields/columns 会被忽略、结构不变；没有的字段留空即可，**不用任何示例数据**。
 - **值从哪来（三类都要用上，不能只照抄文档）**：
-  ① **需求文档**——客户/型号/数量/目的地/付款/物流等直接取；
-  ② **数据库 sql_query**——**第 1 步也要查库**：按产品编码/型号查 `CLM_BASE_INFO`（拿产品名称/规格）、
-     查该产品的标准 BOM/技术参数来**补全并推荐**「产品信息列表」「产品技术参数」；测算类型/所属组织/币种等给合理取值。
-     第 2–6 步的 BOM/料工费/定价/加价/偏差**必须查库**。查库前先看提示词末尾的《Schema 说明》判断查哪张表、哪个字段。
+  ① **需求文档**——第 1 步的主数据源：客户/型号/数量/目的地/付款/物流等直接取；
+  ② **数据库 sql_query**——只按各步骤「取数逻辑」里点名的表查：第 2 步 配置规则 `md_clm_distribution_rule` +
+     物料成本 `md_clm_material_cost_cnf`；第 3 步 定价规则（rule_classification='定价'）；第 4 步 报价规则
+     （rule_classification='报价'）；第 1 步按情况补查（如按型号补规格/技术参数）。**不要为一个步骤乱查无关的表。**
   ③ **你的推荐**——文档没给、库里也没有的字段，基于已知信息+行业常识**给出合理推荐值**，
      **并在该值末尾加「（推荐）」标记**（系统会自动去掉这几个字、只用颜色高亮显示，表格里不会出现标记文字），
      source 里也注明来源是推荐；**不要大片留空、也不要只是把文档里的话原样搬进去**，该推断的要推断、该算的要算。
@@ -672,14 +651,12 @@ SYSTEM_PROMPT = """\
 
 1. **需求文档端**：用户上传/描述的需求（客户、项目、产品型号、数量、目的地、交期、付款、
    质量专控、碳足迹、非标、贸易术语等具体值）——这是本单的“个性”，填进各分区 values/rows。
-2. **数据库端 亿纬锂能_da.sqlite**（用 sql_query 只读 SELECT，**以系统提示词末尾的完整 schema 为准生成 SQL**，不臆造、不读 json）：
-   - `quote_assistant_fields(business_object, logic_entity, attribute_name, field_type)` —— 各分区的**固定字段名**（决定 values 的键）。
-   - `CLM_BASE_INFO`（BOM 头，product_item_code/bom_header_id）/ `CLM_LINE_INFO`（BOM 行，ref_bom_header_id→bom_header_id，component_item_code/name/quantity/uom_code）
-     —— 第 2 步 BOM：用**递归 CTE** 展开完整多层（见上）。
-   - `md_clm_pricing_factor`（surcharge_category 技术溢价/市场调节，surcharge_name/factor_value/surcharge_amount/surcharge_unit）—— 第 3 步。
-   - `md_clm_pricing_surcharge_factor`（基础/非标/财务商务/物流/其他加价的因子与金额）—— 第 4 步。
-   - `md_clm_distribution_rule` —— **产品配单规则**（第 2 步定价-基础成本必查，校验/修正产品配置与 BOM）。
-   - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：**='定价' 第 3 步用**（定价系数）、
+2. **数据库端（远程 Postgres）**（用 sql_query 只读 SELECT，**以系统提示词末尾的完整 schema 为准生成 SQL**，不臆造、不读 json）：
+   - 各分区的**固定字段名**（values 的键）已由 亿纬锂能DA梳理.xlsx「报价助手」本体写死并预渲染，无需查库；sql_query 只用于取**数据取值**。
+   - `md_clm_distribution_rule` —— **产品配单规则**（第 2 步必查：根据产品信息/技术参数特征生成实例 BOM）。
+   - `md_clm_material_cost_cnf` —— **物料成本表**（第 2 步必查：按物料编码/名称匹配 材料单价/直接人工单价/
+     间接人工单价/机器费用/其他制费，注意 is_deleted=0 与生效/失效日期）。
+   - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：**='定价' 第 3 步用**（利润加成）、
      **='报价' 第 4 步用**（其他加价）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
 金额单位以库中字段为准；计算必须自洽（合计=分项之和）。部分因子金额可能为空（来源限制），据实处理别硬编。
 
@@ -689,11 +666,14 @@ SYSTEM_PROMPT = """\
 不要一项一项来、不要等用户逐项确认、也不要只在聊天里说。具体：
 
 0. **动手前先在聊天里写一两句"计划"**（这一步我要做什么、准备查哪张表、怎么推荐/计算），别一上来就闷头调工具。
-1. set_step {step}，然后**该查库先查库、再一口气把该步的每个分区都 render 出来并带数据**：
-   - 第 1 步：**先 sql_query 查库**（按产品编码/型号查 `CLM_BASE_INFO` 拿产品名/规格、查标准技术参数来补全推荐「产品信息」「产品技术参数」），
-     再渲染 s1_basic、s1_dest、s1_products、s1_techparams、s1_payment、s1_logistics（6 个）：需求文档有的直接填、库里能查到的填、都没有的**给推荐值**（source 注明"推荐"），别大片留空。
-   - 第 2 步：对每个产品渲染 s2_bom_<产品编码>（完整 L1–L4）+ 一张 s2_cost。
-   - 第 3 步：s3_pricing；第 4 步：s4_detail/s4_prod_sum；第 5 步：s5_basic/s5_detail。
+1. set_step {step}，然后**按该步的「取数逻辑」先查库、再一口气把该步的每个分区都 render 出来并带数据**：
+   - 第 1 步：以需求文档为准渲染 s1_basic、s1_dest、s1_products、s1_techparams、s1_payment、s1_logistics（6 个）：
+     文档有的直接填、按情况查库补的填、都没有的**给推荐值**（source 注明"推荐"），别大片留空。
+   - 第 2 步：先把 s2_products（沿用第 1 步、仅展示）填好 → 查配单规则生成实例 BOM 填 s2_bomhead/s2_bomline →
+     查物料成本表把料工费填进 s2_bomline → 汇总基础成本。
+   - 第 3 步：s3_products（沿用·仅展示）+ 查定价规则算利润加成填 s3_markup；
+     第 4 步：s4_products（沿用·仅展示）+ 查报价规则算其他加价填 s4_markup；
+     第 5 步：s5_basic + s5_detail（报价=基础成本+利润加成+其他加价、折后价格=报价×折扣）。
 2. 该查库/套规则的（BOM、定价、加价）**直接查、直接算、直接填**，不用先征求同意；查库前后各写半句说明。
 3. 全部渲染完，在聊天里用 2–4 句话说清依据（数据库端查了哪些表/命中哪些行 ← 需求文档端用了哪些值 ← 哪些是你的推荐），
    并提示：右侧本步已填好，请核对/修改后点「进入下一大步骤」。
@@ -704,8 +684,8 @@ SYSTEM_PROMPT = """\
 进入每一大步骤，**先在聊天里按下面 4 段格式各写一两句，再动手调工具**（不许闷头连调工具、也不许一句话都不说就填表）：
 
   🤔 **思考**：这一步要解决什么、依据是什么（如"电量 280kWh 属大电量，必选液冷"）。
-  📋 **规划**：打算查哪张表、按什么规则算什么（如"查 CLM_BASE_INFO 拿产品名/规格，递归 CTE 展开 BOM，查 md_clm_pricing_factor 算溢价"）。
-  ⚙️ **执行**：一边 sql_query 查库、一边 render_form/render_table 填表，关键动作各写半句（如"正在展开 BAT-PACK-CV-001 的 BOM…已填入 s2_cost"）。
+  📋 **规划**：打算查哪张表、按什么规则算什么（如"查配单规则 md_clm_distribution_rule 生成实例 BOM，再查物料成本表匹配料工费"）。
+  ⚙️ **执行**：一边 sql_query 查库、一边 render_form/render_table 填表，关键动作各写半句（如"配单规则已命中 2 条，实例 BOM 已填入 s2_bomline"）。
   ✅ **结果**：本步结论 + 依据（数据库端查了哪表命中哪行 / 需求文档端用了哪些值 / 哪些是推荐），并提示用户核对后点「进入下一大步骤」。
 
 - 全程口语、简短，每段一两句即可，别长篇；但**这 4 段必须都有**——这是"Agent 的样子"的最低要求。
@@ -713,13 +693,13 @@ SYSTEM_PROMPT = """\
 
 # 结果必须渲染到工作台（重点，解决“对话框有、右边没有 / 两边不一致”）
 
-- **任何算出来/查出来的结构化结果（BOM 清单、料工费、基础成本、定价过程、加价明细、报价明细等）
-  都必须用 cpq_ui `render_table`/`render_form` 渲染到右侧对应分区**（第 2 步 s2_bom_<产品编码>、s2_cost；
-  第 3 步 s3_pricing；第 4 步 s4_*；第 5 步 s5_*）。**绝不允许只把表格写在聊天文字里。**
+- **任何算出来/查出来的结构化结果（产品信息、实例 BOM、加价明细、报价明细等）
+  都必须用 cpq_ui `render_table`/`render_form` 渲染到右侧对应分区**（第 2 步 s2_products/s2_bomhead/s2_bomline；
+  第 3 步 s3_products/s3_markup；第 4 步 s4_products/s4_markup；第 5 步 s5_basic/s5_detail）。**绝不允许只把表格写在聊天文字里。**
 - **聊天里不要贴 Markdown 表格**（不要用 `|---|` 那种）。聊天只写 2–3 句结论/依据/下一步提示；
   数据一律在右侧工作台看。这样右侧表格才是唯一真源，避免“左边一份、右边一份、对不上”。
 - 算完当步就**立刻**调用对应的 render_table 把每一行写进 `rows`（列名用该分区固定列），再在聊天里说一句
-  “已把 X 渲染到右侧 s2_cost，请核对”。不要等用户催。
+  “已把 X 渲染到右侧 s2_bomline，请核对”。不要等用户催。
 - 收到「【强行推荐】」时（用户点了「强行填满本步骤」）：把当前大步骤所有固定分区的**每一个字段/单元格都填满、绝不留空**——
   ① 能从需求文档拿的先填；② 文档没有的用 sql_query 查库补；③ 都没有的**用行业知识+推理强行推断一个值填上**
   （不许写"待补充/待定/无/N.A."）。**凡是靠推理、没有文档或数据库依据的值，必须在值末尾加"（推测）"标记**
@@ -740,7 +720,7 @@ SYSTEM_PROMPT = """\
   · **需求与附件都空（用户开了「新对话」）：先不要 set_step、不要渲染任何分区！**只在聊天里用一两句话友好地请用户：
     ① 点输入框左侧回形针上传需求文档（Word/PDF/Excel/图片/文本），或 ② 直接输入需求描述。然后停下等用户提供。**不要臆造。**
   · 有需求/附件：set_step 1，先从需求文档解析出客户、型号、数量、交期、目的地、付款、质量专控、碳足迹、非标、贸易术语等；
-    用 sql_query 查 quote_assistant_fields 拿到各分区固定字段，把需求值填进 values/rows，**一次性把 6 个分区都渲染好**，再请用户核对。
+    各分区固定字段已由本体预渲染好，把需求值/查库值填进 values/rows，**一次性把 6 个分区都渲染好**，再请用户核对。
 - 「【上传附件】…」/附件内容 / 用户后来补的需求描述：**这就是需求了**——若还没开始第 1 步，立刻 set_step 1 并**一次性渲染并填好 6 个分区**；
   若已在第 1 步，则解析后合并进各分区重新渲染。说明你读到并填了什么。
 - 「【强行推荐】」：把当前大步骤所有分区**每个字段/单元格填满不留空**（文档→查库→行业知识推理，三级兜底），render 填入右侧；**无依据的推测值末尾加"（推测）"**；聊天给推理过程+列出推测项。
@@ -1245,6 +1225,8 @@ class Bridge:
         tool_uses = []
         stop_reason = "end_turn"
 
+        # 发给模型前修复 tool_use/tool_result 配对（压缩/中断可能留下孤儿块 → 供方 400）
+        conv.messages[:] = cpq_msgutil.sanitize_tool_pairs(conv.messages)
         gen = stream_message(
             conv.client, conv.messages, conv.system_prompt,
             model=conv.model, tools=conv.tool_schemas,
