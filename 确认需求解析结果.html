@@ -753,7 +753,7 @@
     // 报价助手 Agent 服务。可用 localStorage['cpq:agentUrl'] 覆盖。
     // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
-    const STEPS = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价测算复核', '报价方案', '输出报价单'];
+    const STEPS = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
 
     /* ================= 状态 ================= */
@@ -1009,10 +1009,10 @@
         if (viewBar) viewBar.classList.remove('show');
         $('btnPrev').disabled = busy || n <= 1;
         $('btnNext').disabled = busy;
-        $('btnNextText').textContent = n >= 7 ? '流程完成' : '确认，进入下一步';
+        $('btnNextText').textContent = n >= STEPS.length ? '流程完成' : '确认，进入下一步';
       }
       // 最后一步显示「生成报价单(Word)」按钮
-      const be = $('btnExport'); if (be) be.style.display = (n >= 7 && !viewingPast) ? '' : 'none';
+      const be = $('btnExport'); if (be) be.style.display = (n >= STEPS.length && !viewingPast) ? '' : 'none';
     }
 
     function backToCurrentStep() { showStep(currentStep); }
@@ -1725,12 +1725,12 @@
       if (busy) return;
       if (shownStep !== currentStep) showStep(currentStep); // 确认前先回到当前步骤
       const cur = currentStep;
-      if (cur >= 7) {
+      if (cur >= STEPS.length) {
         const done = '报价流程已完成。';
         addUserBubble(done);
         if (manualMode) {
           addAiBubble('报价流程已完成。可点「生成报价单(Word)」导出。');
-          sendToAgent('【流程完成·人工模式】报价流程已人工完成。', { echo: false, display: done, step: 7 });
+          sendToAgent('【流程完成·人工模式】报价流程已人工完成。', { echo: false, display: done, step: STEPS.length });
           return;
         }
         sendToAgent('【流程完成】用户确认结束本次报价流程，请做简短总结。', { echo: false, display: done });
@@ -2091,7 +2091,7 @@
             '等用户提供需求后，你再逐个 render_form/render_table 把值填进右侧的 6 个空骨架。不要臆造任何数据。');
       if (manualMode) {
         // 无模型模式：不发 kickoff，直接人工填写；落一条档让本单进入历史/首页卡片
-        addAiBubble('当前为「无模型」模式（不调用大模型）。请直接在右侧各分区人工填写，每步完成后点「确认，进入下一步」；到第 7 步可直接生成报价单（Word）。');
+        addAiBubble('当前为「无模型」模式（不调用大模型）。请直接在右侧各分区人工填写，每步完成后点「确认，进入下一步」；到第 6 步可直接生成报价单（Word）。');
         sendToAgent('【会话开始·人工模式】' + projLine, { echo: false, display: kickoffBubble || '新建报价（人工模式）', step: 1 });
         return;
       }

@@ -7,7 +7,7 @@
 
   - 业务流程：按《报价业务流程.xlsx》「亿纬锂能POC（简化）」页的 7 个 Agent 步骤
     引导用户一步步完成报价（确认需求配置 → 定价-基础成本 → 定价-利润加成 →
-    报价-其他加价项 → 报价测算复核 → 报价方案 → 输出报价单）。
+    报价-其他加价项 → 报价方案 → 输出报价单）。
   - 数据口径：各步骤字段口径与基础/规则数据来自 database/亿纬锂能_da.sqlite（SQLite），
     注入一个只读 sql_query 工具，Agent 以库 schema 为上下文自行生成 SQL 查询取数。
   - 工作台驱动：注入一个自定义 cpq_ui 工具（set_step / render_form / render_table /
@@ -108,7 +108,6 @@ STEPS = [
     "定价-基础成本",
     "定价-利润加成",
     "报价-其他加价项",
-    "报价测算复核",
     "报价方案",
     "输出报价单",
 ]
@@ -134,10 +133,10 @@ CPQ_UI_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": ["set_step", "render_form", "render_table", "render_document", "focus_section"],
-                "description": "set_step=切换当前步骤(1-7)；render_form=渲染键值表单；render_table=渲染行列表格；render_document=渲染文档(报价单)；focus_section=把某个已渲染分区设为“当前处理中”并高亮滚动到它（不改内容）",
+                "description": "set_step=切换当前步骤(1-6)；render_form=渲染键值表单；render_table=渲染行列表格；render_document=渲染文档(报价单)；focus_section=把某个已渲染分区设为“当前处理中”并高亮滚动到它（不改内容）",
             },
-            "step": {"type": "integer", "minimum": 1, "maximum": 7,
-                     "description": "该内容所属的流程步骤（1-7）。所有 action 都必须携带。"},
+            "step": {"type": "integer", "minimum": 1, "maximum": 6,
+                     "description": "该内容所属的流程步骤（1-6）。所有 action 都必须携带。"},
             "section_id": {"type": "string",
                            "description": "分区唯一标识，如 s1_basic。render_* 必填；同 id 重复渲染会覆盖旧内容。"},
             "title": {"type": "string", "description": "分区标题（中文）"},
@@ -205,17 +204,15 @@ _BI_SECTIONS = {
     "s1_logistics":  ("form",  "⑥ 物流信息",       ("价格测算单", "物流信息")),
     "s4_detail":     ("table", "加价明细",             ("价格测算单", "加价明细")),
     "s4_prod_sum":   ("table", "产品加价汇总",         ("价格测算单", "产品加价汇总")),
-    "s5_deviation":  ("table", "价格偏差",             ("价格测算单", "价格偏差")),
-    "s5_order_sum":  ("form",  "整单加价汇总",         ("价格测算单", "整单加价汇总")),
-    "s6_basic":      ("form",  "报价基本信息",         ("报价单", "报价基本信息")),
+    "s5_basic":      ("form",  "报价基本信息",         ("报价单", "报价基本信息")),
 }
 
 # 计算类分区：BI 里没有对应逻辑实体（BOM / 料工费 / 定价过程 / 报价明细 / 审批），列固定写死。
 _COMPUTED_SECTIONS = {
     "s2_cost":    ("table", "料工费与基础成本", ["产品编码", "产品名称", "材料费(元/W)", "人工费(元/W)", "制造费用(元/W)", "基础成本(元/W)"]),
     "s3_pricing": ("table", "定价过程与结果",   ["产品编码", "产品名称", "基础成本(元/W)", "技术溢价(元/W)", "市场调节(元/W)", "定价(元/W)"]),
-    "s6_detail":  ("table", "报价明细",         ["产品型号", "综合单价", "组件单价", "物流报价", "备品备件单价", "数量", "折扣", "金额"]),
-    "s7_bpm":     ("table", "BPM 审批流环节",   ["环节", "角色", "状态", "处理意见"]),
+    "s5_detail":  ("table", "报价明细",         ["产品型号", "综合单价", "组件单价", "物流报价", "备品备件单价", "数量", "折扣", "金额"]),
+    "s6_bpm":     ("table", "BPM 审批流环节",   ["环节", "角色", "状态", "处理意见"]),
 }
 
 # 前缀匹配（每个产品一张，section_id 带产品编码后缀）：
@@ -227,9 +224,7 @@ FIXED_FORMS: dict = {}  # section_id -> {kind, title, fields:[{key,label,example
 
 
 # 新库 quote_assistant_fields 里没有的逻辑实体，用这里的固定字段兜底。
-_FALLBACK_FIELDS = {
-    "整单加价汇总": ["基础加价", "非标加价", "财务商务加价", "物流加价", "物流费用调整", "其他加价", "加价合计"],
-}
+_FALLBACK_FIELDS = {}
 
 
 def _bi_fields(business_object: str, logic_entity: str) -> list:
@@ -264,14 +259,14 @@ def _init_fixed_forms():
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title, "fields": attrs,
             "columns": [{"key": a["key"], "label": a["label"]} for a in attrs],
-            "editable": sid.startswith("s1_") or sid == "s6_basic",
+            "editable": sid.startswith("s1_") or sid == "s5_basic",
         }
     for sid, (kind, title, cols) in _COMPUTED_SECTIONS.items():
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title,
             "fields": [{"key": c, "label": c, "example": ""} for c in cols],
             "columns": _cols_template(cols),
-            "editable": sid == "s6_detail",  # 报价明细单价/折扣可改
+            "editable": sid == "s5_detail",  # 报价明细单价/折扣可改
         }
 
 
@@ -461,8 +456,8 @@ def _handle_cpq_ui(tool_input: dict) -> str:
     if action not in ("set_step", "render_form", "render_table", "render_document", "focus_section"):
         return f"未知 action: {action!r}"
     step = tool_input.get("step")
-    if not isinstance(step, int) or not (1 <= step <= 7):
-        return "step 必须是 1-7 的整数"
+    if not isinstance(step, int) or not (1 <= step <= 6):
+        return "step 必须是 1-6 的整数"
     if action != "set_step" and not tool_input.get("section_id"):
         return "render_*/focus_section 必须提供 section_id"
     raw = dict(tool_input)
@@ -646,19 +641,14 @@ SYSTEM_PROMPT = """\
   `SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule WHERE rule_classification='报价' AND is_deleted=0`，
   按需求值（客户等级/电流分档/质量专控要求等）逐条判断并执行，命中的加价逐条写进 s4_detail 加价明细并计入汇总；
   聊天小结里写明「命中报价规则：规则名 → 加价金额」或「报价规则均未命中」。
-- **第 5 步｜报价测算复核**（L5：复核报价测算结果）。s5_deviation（表·价格偏差，固定列
-  测算单id/产品行id/**产品型号**/单件瓦数(W)/数量（WM）/报价/EXW加价/EXW价格/建议报价/建议报价加价/
-  地区部指导价/地区部价格底线/地区部价格底线偏差/地区部价格底线偏差额/地区部价格底线偏差率/
-  BG底价/BG底价偏差/BG底价偏差额/BG底价偏差率/价格组织/价格生效日期）、s5_order_sum（表单·整单加价汇总）。
-  **预计报价 = 基础成本 + 利润加成 + 其他加价**（如 5.6 + 1.3 + 0.8 = 7.7）。
-- **第 6 步｜报价方案**（L5：生成报价单）。s6_basic（表单·报价基本信息）、
-  s6_detail（表·报价明细，固定列 **产品型号**/综合单价/组件单价/物流报价/备品备件单价/数量/折扣/金额）。
-  **报价 = 预计报价 × 折扣**（如 7.7 × 0.9 = 6.93）。
-- **⚠️ 产品型号贯穿全流程**：s4_prod_sum、s5_deviation、s6_detail 的每一行 rows 都**必须带「产品型号」键**，
+- **第 5 步｜报价方案**（L5：生成报价单）。s5_basic（表单·报价基本信息）、
+  s5_detail（表·报价明细，固定列 **产品型号**/综合单价/组件单价/物流报价/备品备件单价/数量/折扣/金额）。
+  **预计报价 = 基础成本 + 利润加成 + 其他加价**（如 5.6 + 1.3 + 0.8 = 7.7）；**报价 = 预计报价 × 折扣**（如 7.7 × 0.9 = 6.93）。
+- **⚠️ 产品型号贯穿全流程**：s4_prod_sum、s5_detail 的每一行 rows 都**必须带「产品型号」键**，
   值沿用**第 1 步 s1_products（产品信息列表）里该产品的"产品型号"原值**——不要换成产品编码/产品名称、
   不要留空、键名必须写"产品型号"（写"型号/产品名称"会匹配不上被丢弃）。
-- **第 7 步｜输出报价单**（L5：报价单审批）。render_document 渲染报价单文档（section_id=s7_doc），
-  再 s7_bpm（表·BPM 审批流环节：环节/角色/状态/处理意见），告知用户流程完成。
+- **第 6 步｜输出报价单**（L5：报价单审批）。render_document 渲染报价单文档（section_id=s6_doc），
+  再 s6_bpm（表·BPM 审批流环节：环节/角色/状态/处理意见），告知用户流程完成。
 
 # 固定表单：结构已预渲染，但你必须主动"填值"（务必遵守）
 
@@ -703,8 +693,8 @@ SYSTEM_PROMPT = """\
    - 第 1 步：**先 sql_query 查库**（按产品编码/型号查 `CLM_BASE_INFO` 拿产品名/规格、查标准技术参数来补全推荐「产品信息」「产品技术参数」），
      再渲染 s1_basic、s1_dest、s1_products、s1_techparams、s1_payment、s1_logistics（6 个）：需求文档有的直接填、库里能查到的填、都没有的**给推荐值**（source 注明"推荐"），别大片留空。
    - 第 2 步：对每个产品渲染 s2_bom_<产品编码>（完整 L1–L4）+ 一张 s2_cost。
-   - 第 3 步：s3_pricing；第 4 步：s4_detail/s4_prod_sum；第 5 步：s5_deviation/s5_order_sum；第 6 步：s6_basic/s6_detail。
-2. 该查库/套规则的（BOM、定价、加价、底线）**直接查、直接算、直接填**，不用先征求同意；查库前后各写半句说明。
+   - 第 3 步：s3_pricing；第 4 步：s4_detail/s4_prod_sum；第 5 步：s5_basic/s5_detail。
+2. 该查库/套规则的（BOM、定价、加价）**直接查、直接算、直接填**，不用先征求同意；查库前后各写半句说明。
 3. 全部渲染完，在聊天里用 2–4 句话说清依据（数据库端查了哪些表/命中哪些行 ← 需求文档端用了哪些值 ← 哪些是你的推荐），
    并提示：右侧本步已填好，请核对/修改后点「进入下一大步骤」。
 - 每个 render_* 都要带 source（数据库端 / 需求文档端 / 推荐）。**每一步都必须有聊天文字（思考+小结），不能只调工具不说话。**
@@ -723,9 +713,9 @@ SYSTEM_PROMPT = """\
 
 # 结果必须渲染到工作台（重点，解决“对话框有、右边没有 / 两边不一致”）
 
-- **任何算出来/查出来的结构化结果（BOM 清单、料工费、基础成本、定价过程、加价明细、价格偏差、报价明细等）
+- **任何算出来/查出来的结构化结果（BOM 清单、料工费、基础成本、定价过程、加价明细、报价明细等）
   都必须用 cpq_ui `render_table`/`render_form` 渲染到右侧对应分区**（第 2 步 s2_bom_<产品编码>、s2_cost；
-  第 3 步 s3_pricing；第 4 步 s4_*；第 5 步 s5_*；第 6 步 s6_*）。**绝不允许只把表格写在聊天文字里。**
+  第 3 步 s3_pricing；第 4 步 s4_*；第 5 步 s5_*）。**绝不允许只把表格写在聊天文字里。**
 - **聊天里不要贴 Markdown 表格**（不要用 `|---|` 那种）。聊天只写 2–3 句结论/依据/下一步提示；
   数据一律在右侧工作台看。这样右侧表格才是唯一真源，避免“左边一份、右边一份、对不上”。
 - 算完当步就**立刻**调用对应的 render_table 把每一行写进 `rows`（列名用该分区固定列），再在聊天里说一句
@@ -764,7 +754,6 @@ SYSTEM_PROMPT = """\
 - 核心职责是**带用户把这张报价单的各固定表单一步步填好、算准**，不是检索历史报价单。
 - 一次只推进一步、步内只聚焦一项，多与用户确认；数字必须真查出来，不能编。
 - 每完成一项都要给“依据”（数据库端查了哪表命中哪行 + 需求文档端用了哪些字段值）。
-- 第 5 步必须说明报价与地区部价格底线/BG底价的偏差；报价低于底线要提醒需 BG 定价委员会特批。
 - 简体中文，专业简洁；金额与数量必须与工作台渲染一致。
 """
 
@@ -1206,7 +1195,7 @@ class Bridge:
                 # 用户手打的聊天给一句提示），并采纳前端上报的人工进度。
                 # 消息仍写入 messages：历史列表可解析 项目/客户，切回真实模型也有上下文
                 conv.add_user_message(text)
-                if isinstance(step, int) and 1 <= step <= 7:
+                if isinstance(step, int) and 1 <= step <= 6:
                     self.step = step
                 if not text.startswith("【"):
                     emit({"type": "text", "text": NO_MODEL_HINT})

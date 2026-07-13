@@ -1470,7 +1470,7 @@
     // 状态由真实进度推导：报价 7 步 / 配置 6 步；规则按是否已有内容
     function statusOf(mode, s) {
       if (mode === 'rule') return (s.turns || 0) > 0 ? ['已录入', 'status-confirmed'] : ['草稿', 'status-draft'];
-      const doneStep = mode === 'quote' ? 7 : 6;
+      const doneStep = mode === 'quote' ? 6 : 6;
       const st = s.step || 1;
       if (st >= doneStep) return ['已完成', 'status-confirmed'];
       if (st > 1) return ['第' + st + '步·' + (mode === 'quote' ? '测算中' : '配置中'), 'status-reviewing'];
@@ -1905,7 +1905,7 @@
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);
-    const STEP_NAMES = ['确认需求配置', '定价-基础成本', '定价-利润加成', '定价-其他加价项', '报价测算复核', '报价方案', '输出报价单'];
+    const STEP_NAMES = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let MODELS = [];
 
     function closeOverlays() {

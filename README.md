@@ -9,12 +9,12 @@ EIMOS 产品平台「**配置报价管理(CPQ) → 报价管理**」菜单的新
 | `报价首页(1).html` | **当前首页**(报价管理主页面,serve.py 根路径 `/` 返回此页)。顶部三个标签 = 三种助手模式(**报价助手 / 配置助手 / 规则助手**),点击切换引导语、占位符与「新建」按钮。发送需求时先做**意图识别**(大模型 `/api/intent`,失败退回关键词)分辨目标,再跳转对应页面:报价→`确认需求解析结果.html`、产品配置→`XBOM智能体-配置BOM生成.html`、规则→(暂未上线)。**新建报价 / 对话框发送前会先弹「项目信息确认」框**(填 项目名称/项目编码/客户名称 + **需求描述文本框 + 上传文档按钮**),点「确认并进入」才跳转。
 **门槛**:项目名称/客户名称必填;**若既没上传文档也没输入需求描述,会提醒"请上传需求文档或输入需求描述",不放行;一旦有文档或有需求文本即直接开始报价。**这些值经 sessionStorage(`cpq:projectName`/`cpq:projectCode`/`cpq:customer`)带到工作台——工作台顶部「当前项目」显示该项目名(不再写死波兰项目),并作为权威值填入第 1 步测算基本信息的 客户/项目名称。需求文本+附件名经 sessionStorage(`cpq:requirement`/`cpq:files`)带到下一页。左侧导航「历史记录」「设置」**与工作台一致**(同一 Agent 服务:`/api/sessions`、`/api/models`、`/api/settings`);首页点某条历史 → 经 sessionStorage `cpq:openSession` 跳到工作台自动载入该会话。 |
 | `报价首页.html` | 旧版首页(保留备用)。 |
-| `确认需求解析结果.html` | **报价助手工作台**(承接首页跳转)。左侧与报价助手 Agent 对话,右侧步骤条 + 固定表单/表格由 Agent 通过 `cpq_ui` 工具驱动;按「亿纬锂能POC(简化)」7 步引导。**右侧所有分区可点击编辑**(含系统计算项);**进度条各步可点击**回看/修改已完成步骤(改后点「保存修改并重算」回传 Agent);左侧对话框上方有**快捷动作**按钮(确认进入下一步 / 确认并填入推荐 / 上一步);已去掉子步骤高光。 |
+| `确认需求解析结果.html` | **报价助手工作台**(承接首页跳转)。左侧与报价助手 Agent 对话,右侧步骤条 + 固定表单/表格由 Agent 通过 `cpq_ui` 工具驱动;按「亿纬锂能POC(简化)」6 步引导。**右侧所有分区可点击编辑**(含系统计算项);**进度条各步可点击**回看/修改已完成步骤(改后点「保存修改并重算」回传 Agent);左侧对话框上方有**快捷动作**按钮(确认进入下一步 / 确认并填入推荐 / 上一步);已去掉子步骤高光。 |
 | `XBOM智能体-配置BOM生成.html` | **配置助手工作台**(承接首页「配置助手」跳转)。中间聊天(第 6 步起对话框缩窄)+ 「配置BOM生成过程」6 步卡,右侧是放大的**可编辑配置BOM表**:每行末带一个**「配置规则」下拉**(选项池=`md_clm_distribution_rule`,AI 给每行填推荐规则作默认选中,用户可改/选「(无)」)。参数在第 1 步识别、静默保存**不显示**。由 `xbom_agent_server.py` 通过 `xbom_ui` 驱动(`render_rules`=候选池、`render_bom`=行含 `规则` 字段、`render_params`=静默存);「确认配置BOM」回传 `{参数,配置BOM,每行规则}`,确认后出**「导入数据库」**按钮(POST `/api/import` → 写 `xbom_config_bom`/`xbom_config_bom_line`)。 |
 | `xbom_agent_server.py` | **配置助手 Agent 服务**(端口 47294)。复用 `open-claude/` 引擎,注入 `xbom_ui`(步骤卡/配置BOM表)+ `sql_query`(只读查库);系统提示词=《配置助手.xlsx·智能体配置流程》的 6 步(识别参数→识别可配置模块→物料归集→提取配置规则→生成配置BOM→确认配置BOM)。第 1–5 步自动跑并在聊天给「思考/规划/执行/结果」,第 6 步起交互:右侧先 `render_rules`(**只查 `md_clm_distribution_rule` 产品配单规则**做每行下拉候选池)→ 再 `render_bom`(每行 `规则` 字段填该行推荐规则);参数 `render_params` 静默存不显示。接口同 cpq(send/new/meta/models/settings/extract/sessions)**加 `/api/import`**(配置BOM+参数入库到 `xbom_config_bom`/`xbom_config_bom_line`,自动建表,不污染样例/生产表)。 |
 | `规则助手-规则配置.html` | **规则助手工作台**(承接首页「规则助手」跳转,布局参考 `报价规则.html`:左 520px 聊天 + 右侧宽表)。右侧是**一张规则表**(列 复选框/规则ID/规则名称/规则描述/Groovy规则公式,行可编辑,Groovy 用可编辑 code-display),底部动作条 批量删除 / 公式校验 / **生成 Groovy 公式** / **导入数据库**(绿色)。两步合到这张表:①上传规则文档→`rule_result(stage="import")` 把每条规则录入行(自动编 R001…、名称、描述、目标库存 `data-target`);②点「生成 Groovy 公式」→后端 `sql_query` 查库参数 + 各行描述→`rule_result(stage="groovy")` 按 rule_name 回填最后一列。全部生成后点**「导入数据库」**(POST `/api/import` → 写独立 `rule_agent_rules` 表)。由 `rule_agent_server.py` 驱动。 |
 | `rule_agent_server.py` | **规则助手 Agent 服务**(端口 47296)。复用 `open-claude/` 引擎,注入 `sql_query`(只读查库)+ `rule_result`(stage=import/groovy/final;import 只需 rule_name,可无公式)。系统提示词=**严格两步**:第一步只忠实抽取文档规则填表(不查库、不生成 Groovy),第二步才查库拿参数依据生成 Groovy(风格贴近库里 rule_expression,变量用业务字段名,db_evidence 注明来源)。接口同 cpq(send/new/meta/models/settings/extract/sessions)+ `/api/convert` + **`/api/import`**(=`_import_rules`,把右侧规则表写入独立 `rule_agent_rules` 表:batch_id/rule_id/rule_name/rule_desc/target_table/groovy_formula/created_at,自动建表、跳过全空行、**不污染业务规则库表**)。历史 `rule_history/`、设置 `rule_settings.json`。 |
-| `cpq_agent_server.py` | **报价助手 Agent 服务**(端口 47292)。复用 `open-claude/` 引擎,注入 `cpq_ui`(工作台)+ `sql_query`(只读查库)两个工具,系统提示词编码 7 步报价流程;SSE 接口 `/api/send`、`/api/new`、`/api/meta`,历史接口 `/api/sessions`、`/api/session`、`/api/session/open`、`/api/session/delete`,设置接口 `/api/models`、`/api/settings`,首页**意图识别** `/api/intent`(一次轻量大模型调用,返回 quote/config/rule),**附件提取** `/api/extract`(PDF/Word/Excel → 文字)(含 CORS)。 |
+| `cpq_agent_server.py` | **报价助手 Agent 服务**(端口 47292)。复用 `open-claude/` 引擎,注入 `cpq_ui`(工作台)+ `sql_query`(只读查库)两个工具,系统提示词编码 6 步报价流程;SSE 接口 `/api/send`、`/api/new`、`/api/meta`,历史接口 `/api/sessions`、`/api/session`、`/api/session/open`、`/api/session/delete`,设置接口 `/api/models`、`/api/settings`,首页**意图识别** `/api/intent`(一次轻量大模型调用,返回 quote/config/rule),**附件提取** `/api/extract`(PDF/Word/Excel → 文字)(含 CORS)。 |
 | `database/亿纬锂能_da.sqlite` | **当前知识库**(SQLite,报价+配置助手共用):BOM 头/行(CLM_BASE_INFO/CLM_LINE_INFO)、20 份变体样例BOM(sample_power_bom_orders/lines)、定价/加价因子(md_clm_pricing_factor/md_clm_pricing_surcharge_factor)、规则(md_clm_material_price_rule/md_clm_distribution_rule)、字段清单(quote_/config_/rule_assistant_fields)。**Schema 见 `database/数据库Schema说明.md`**;两个 Agent 启动时把库表结构拼进系统提示词,**以 schema 为上下文自行生成 SQL、用 `sql_query` 只读查询**取数。 |
 | `quote_bom.db` | 旧知识库,**已弃用**(数据已迁入 `database/亿纬锂能_da.sqlite`),保留仅作参考。 |
 | `cpq_history/` | **本地历史报价**(运行时生成,`.gitignore` 忽略)。每个报价会话一个 JSON,含展示事件流(用于回放聊天+工作台)与原始消息(用于续聊)。**存磁盘,重启服务后仍可在页面「历史记录」里找回并继续。** |
@@ -88,7 +88,7 @@ Agent 每步结论都基于两端数据,并在对话里向用户说明依据:
   (仅允许单条 SELECT/WITH/PRAGMA,写操作被拒),**以系统提示词末尾的完整 schema 为上下文生成 SQL**;字段口径查 `quote_assistant_fields`,
   BOM 查 `CLM_BASE_INFO/CLM_LINE_INFO`(多层用递归 CTE),加价/定价查 `md_clm_pricing_*`,规则查 `md_clm_material_price_rule/md_clm_distribution_rule`。**不再读任何 json / quote_bom.db**。
 
-## 报价助手 Agent(7 步流程)
+## 报价助手 Agent(6 步流程)
 
 **步骤名严格对应 xlsx「亿纬锂能POC(简化)」页的「输出 ↔ Agent 步骤名称」**(跳过“客户需求解析”那行——它没有
 Agent 步骤名、是系统解析初稿,不算 Agent 步骤;所以 Agent 第 1 步就是“确认需求配置”)。**从第 1 步开始、
@@ -99,9 +99,9 @@ Agent 步骤名、是系统解析初稿,不算 Agent 步骤;所以 Agent 第 1 �
 固定分区的空骨架预渲染出来**(`prerenderStep`);Agent **只往固定分区填值**(render_form 用 `values`、render_table 用 `rows`),
 `_enforce_fixed_template` 兜底强制套结构、丢弃多余字段。分区目录:
 第1步 s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics(6 个,已去掉交期分解/备品备件,
-字段取自 `quote_assistant_fields` 业务对象=价格测算单)、第4步 s4_detail/s4_order_sum/s4_prod_sum、
-第5步 s5_deviation/s5_order_sum、第6步 s6_basic(报价单);计算类分区(第2步 s2_bom_<产品编码>/s2_cost、
-第3步 s3_pricing、第6步 s6_detail、第7步 s7_bpm)列在代码里写死。
+字段取自 `quote_assistant_fields` 业务对象=价格测算单)、第4步 s4_detail/s4_prod_sum、
+第5步 s5_basic(报价单);计算类分区(第2步 s2_bom_<产品编码>/s2_cost、
+第3步 s3_pricing、第5步 s5_detail、第6步 s6_bpm)列在代码里写死。
 
 各步字段口径查 `quote_assistant_fields`:
 
@@ -112,9 +112,8 @@ Agent 步骤名、是系统解析初稿,不算 Agent 步骤;所以 Agent 第 1 �
    BOM/料工费/定价/加价等结果**必须 render 到右侧工作台,聊天里不贴表格**(保证左右一致)。
 3. **定价-利润加成** —— 定价 = 基础成本 + 技术溢价(+1.5) + 市场调节(-0.2) → 6.9 / 7.1。
 4. **报价-其他加价项** —— 基础/非标/财务商务/物流/其他五类加价明细与汇总(旧名"定价-其他加价项",按更新后的 POC 页改名)。
-5. **报价测算复核** —— 价格偏差视图(报价、EXW、建议报价、指导价、价格底线、BG底价、偏差/偏差额/偏差率)。
-6. **报价方案** —— 生成报价单(单号/类型/模板/报价形式/报价明细/折扣)。
-7. **输出报价单** —— 渲染完整报价单文档 + BPM 审批流环节。**最后一步底部有「生成报价单(Word)」按钮**:
+5. **报价方案** —— 生成报价单(单号/类型/模板/报价形式/报价明细/折扣)。预计报价 = 基础成本 + 利润加成 + 其他加价;报价 = 预计报价 × 折扣。
+6. **输出报价单** —— 渲染完整报价单文档 + BPM 审批流环节。**最后一步底部有「生成报价单(Word)」按钮**:
    前端收集各步表单/表格数据 POST `/api/export/docx`，后端用 python-docx 拼成 .docx 下载。
    （第 4 步「报价-其他加价项」已去掉「整单加价汇总」表，只保留 加价明细 + 产品加价汇总。）
 
