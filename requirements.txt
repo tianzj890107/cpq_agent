@@ -1,0 +1,15 @@
+# CPQ suite runtime deps (versions pinned to the verified open-claude/.venv).
+# ASCII-only comments on purpose: pip on a cp1252 Windows console fails to read
+# UTF-8 (CJK) comments and aborts the whole install. Keep this file ASCII.
+# The open_claude engine itself is NOT pip-installed -- each server references
+# the open-claude/ source dir via sys.path.
+anthropic==0.116.0
+openai==2.44.0
+psycopg[binary]==3.3.4
+openpyxl==3.1.5
+pdfplumber==0.11.10
+pypdf==6.14.2
+PyMuPDF==1.26.4
+python-docx==1.2.0
+rich==15.0.0
+prompt_toolkit==3.0.52

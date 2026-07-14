@@ -927,6 +927,15 @@
       cursor: pointer;
     }
 
+    .request-card .card-del {
+      width: 24px; height: 24px; border: none; background: transparent;
+      color: var(--text-tertiary); cursor: pointer; border-radius: 6px;
+      display: inline-flex; align-items: center; justify-content: center;
+      margin-left: 8px; vertical-align: middle;
+    }
+    .request-card .card-del:hover { background: rgba(239,68,68,0.1); color: var(--color-danger); }
+    .request-card .card-del .ti { font-size: 15px; }
+
     .request-detail:hover {
       text-decoration: underline;
     }
@@ -1493,7 +1502,8 @@
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(title).charAt(0) || '—') + '</div>' +
         escH(date) + ' · ' + (Number(s.turns) || 0) + ' 轮</div>' +
-        '<span class="request-detail">详情</span></div></div>';
+        '<span><span class="request-detail">详情</span>' +
+        '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button></span></div></div>';
     }
     async function loadCards(mode) {
       if (!cardGrid) return;
@@ -1537,12 +1547,16 @@
           : '还没有数据。点右上角「' + MODES[mode].newBtn + '」创建第一条。';
         cardGrid.innerHTML = '<div class="cards-empty">' + emptyMsg + '</div>';
       } else {
-        cardGrid.innerHTML = filtered.slice((PAGE - 1) * PAGE_SIZE, PAGE * PAGE_SIZE).map(s => cardHtml(mode, s)).join('');
-        cardGrid.querySelectorAll('.request-card').forEach(card => {
-          card.addEventListener('click', () => {
-            try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e) {}
+        const pageRows = filtered.slice((PAGE - 1) * PAGE_SIZE, PAGE * PAGE_SIZE);
+        cardGrid.innerHTML = pageRows.map(s => cardHtml(mode, s)).join('');
+        cardGrid.querySelectorAll('.request-card').forEach((card, i) => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('.card-del')) return;   // 点删除不进详情
+            try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e2) {}
             window.location.href = encodeURI(PAGES[mode]);
           });
+          const del = card.querySelector('.card-del');
+          if (del) del.onclick = (e) => { e.stopPropagation(); deleteCard(mode, card.dataset.id, (pageRows[i] || {}).title); };
         });
       }
       if (info) info.textContent = total ? ('共 ' + total + ' 条，第 ' + PAGE + ' / ' + pages + ' 页') : '共 0 条';
@@ -1982,6 +1996,21 @@
         });
       } catch (e) {}
       loadHistoryList();
+    }
+    // 首页卡片删除：调对应助手的 /api/session/delete，并清掉本机「我的」标记
+    async function deleteCard(mode, id, title) {
+      if (!confirm('删除「' + (title || id) + '」？会话记录将被删除，此操作不可恢复。')) return;
+      try {
+        await fetch(modeBase(mode) + '/api/session/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        });
+      } catch (e) { alert('删除失败：无法连接助手服务。'); return; }
+      try {
+        const list = JSON.parse(localStorage.getItem(MY_KEYS[mode]) || '[]').filter(x => x !== id);
+        localStorage.setItem(MY_KEYS[mode], JSON.stringify(list));
+      } catch (e) {}
+      loadCards(mode);
     }
 
     function openSettings() {

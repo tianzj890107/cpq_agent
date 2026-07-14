@@ -669,6 +669,9 @@
           <button class="btn btn-secondary" id="btnExport" onclick="exportDocx()" style="display:none">
             <i class="ti ti-file-download"></i>生成报价单(Word)
           </button>
+          <button class="btn btn-secondary" id="btnImportDb" onclick="importQuoteDb()" style="display:none">
+            <i class="ti ti-database-import"></i>导入数据库
+          </button>
           <button class="btn btn-primary" id="btnNext" onclick="confirmStep()" disabled>
             <span id="btnNextText">确认，进入下一步</span>
             <i class="ti ti-arrow-right"></i>
@@ -1013,6 +1016,7 @@
       }
       // 最后一步显示「生成报价单(Word)」按钮
       const be = $('btnExport'); if (be) be.style.display = (n >= STEPS.length && !viewingPast) ? '' : 'none';
+      const bi = $('btnImportDb'); if (bi) bi.style.display = (n >= STEPS.length && !viewingPast) ? '' : 'none';
     }
 
     function backToCurrentStep() { showStep(currentStep); }
@@ -1070,6 +1074,36 @@
         alert('生成 Word 失败：' + (e.message || e));
       } finally {
         if (be) be.disabled = false;
+      }
+    }
+
+    // 导入数据库：把全部分区数据写入目标 Postgres 的 DA 表；每个分区的导入状况显示在左侧聊天里
+    async function importQuoteDb() {
+      const bi = $('btnImportDb');
+      const all = {};
+      for (let n = 1; n <= STEPS.length; n++) Object.assign(all, collectStepData(n));
+      if (!Object.keys(all).length) { alert('还没有可导入的内容。'); return; }
+      if (!confirm('把本次报价的全部表单数据导入目标数据库？')) return;
+      addUserBubble('导入数据库');
+      addAiBubble('🗄️ 开始导入数据库，共 ' + Object.keys(all).length + ' 个分区，逐个写入目标表…');
+      if (bi) { bi.disabled = true; bi.textContent = '导入中…'; }
+      try {
+        const res = await fetch(AGENT_URL + '/api/import', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sections: all, sid: currentSessionId }),
+        }).then(r => r.json());
+        (res.results || []).forEach(r => {
+          if (r.ok) addAiBubble((r.note ? '⏭️' : '✅') + ' **' + r.label + '** → `' + r.table + '`：' + (r.note || ('已写入 ' + r.rows + ' 行')));
+          else addAiBubble('❌ **' + r.label + '** → `' + r.table + '`：导入失败——' + (r.error || '未知错误'));
+        });
+        if (res.error && !(res.results || []).length) addAiBubble('❌ 导入失败：' + res.error);
+        else addAiBubble(res.ok
+          ? ('🎉 导入完成：全部分区成功，共写入 **' + (res.total_rows || 0) + '** 行（' + (res.db || '') + '）。')
+          : ('⚠️ 导入结束：部分分区失败（见上），成功写入 ' + (res.total_rows || 0) + ' 行。可修正后重新导入。'));
+      } catch (e) {
+        addAiBubble('❌ 导入失败：无法连接助手服务（' + (e.message || e) + '）。');
+      } finally {
+        if (bi) { bi.disabled = false; bi.innerHTML = '<i class="ti ti-database-import"></i>导入数据库'; }
       }
     }
 
@@ -1253,8 +1287,10 @@
         }
       }
     }
+    const BOM_TREE_CELL_KEYS = ['层级', '组件编码', '组件名称'];  // 合并进首列树形单元格的键
+    function bomRestCols(sec) { return (sec.columns || []).filter(c => !BOM_TREE_CELL_KEYS.includes(c.key)); }
     function isBomSection(ui) {
-      return /^s2_bom_/.test(ui.section_id || '') &&
+      return /^s2_bom/.test(ui.section_id || '') &&
         (ui.columns || []).some(c => c.key === '层级');
     }
     function renderBomTreeSection(ui) {
@@ -1265,7 +1301,11 @@
       const rows = ui.rows || [];
       const table = document.createElement('table');
       table.className = 'list-table bomtree';
-      table.innerHTML = '<thead><tr><th>层级 / 组件</th><th style="width:90px">数量</th><th style="width:90px">单位</th><th style="width:56px">操作</th></tr></thead>';
+      // 表头：首列=层级/组件（编码+名称），其余列按固定列动态生成（实例BOM行：规格/数量/单位/料工费各单价…）
+      const rest = bomRestCols(sec);
+      table.innerHTML = '<thead><tr><th style="min-width:260px">层级 / 组件</th>' +
+        rest.map(c => '<th>' + escapeHtml(c.label || c.key) + '</th>').join('') +
+        '<th style="width:56px">操作</th></tr></thead>';
       const tbody = document.createElement('tbody');
       rows.forEach((row, i) => {
         const lvl = bomLevelOf(row['层级']);
@@ -1337,7 +1377,8 @@
       cell.appendChild(name);
       td.appendChild(cell);
       tr.appendChild(td);
-      for (const k of ['数量', '单位']) {
+      for (const col of bomRestCols(sec)) {
+        const k = col.key;
         const c = document.createElement('td');
         const input = document.createElement('input');
         input.dataset.key = k;

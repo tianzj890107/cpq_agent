@@ -1371,6 +1371,7 @@
 
       <div class="config-panel-footer">
         <button class="btn btn-outline" onclick="toggleConfigPanel()">收起</button>
+        <button class="btn btn-outline" id="btnRuleDoc" onclick="generateRuleDoc()" style="display:none;"><i class="ti ti-file-text"></i> 生成规则文档</button>
         <button class="btn btn-primary" onclick="confirmBom()">确认配置BOM</button>
         <button class="btn btn-success" id="btnImportDb" onclick="importToDb()" style="display:none;">导入数据库</button>
       </div>
@@ -1520,6 +1521,7 @@
         if (a === 'render_bom') return { main: '生成配置BOM（右侧可编辑）', source: inp.source };
         if (a === 'render_params') return { main: '保存参数（供入库）', source: inp.source };
         if (a === 'render_rules') return { main: '载入配单规则候选（每行下拉用）', source: inp.source };
+        if (a === 'render_reco_rules') return { main: '登记新推荐规则（可生成规则文档）', source: inp.source };
         return { main: '展开配置面板', source: inp.source };
       }
       if (name === 'sql_query') { let s = String(inp.sql || '').replace(/\s+/g, ' ').trim(); if (s.length > 160) s = s.slice(0, 157) + '…'; return { main: '查询知识库（远程 Postgres）', source: s }; }
@@ -1762,6 +1764,51 @@
       return [...set].map(name => ({ name }));
     }
 
+    /* ---------- 新推荐规则 → 生成规则文档（只含新规则，不含命中的已有库规则） ---------- */
+    let recoRules = [];   // [{name,desc,expression,scope}]
+    function setRecoRules(rules) {
+      recoRules = (Array.isArray(rules) ? rules : []).map(r => ({
+        name: (r.name || r.rule_name || '').toString().trim(),
+        desc: (r.desc || r.rule_desc || '').toString().trim(),
+        expression: (r.expression || r.rule_expression || '').toString().trim(),
+        scope: (r.scope || '').toString().trim(),
+      })).filter(r => r.name || r.desc || r.expression);
+      const btn = $('btnRuleDoc');
+      if (btn) btn.style.display = recoRules.length ? '' : 'none';
+      openPanel();
+    }
+    function generateRuleDoc() {
+      if (!recoRules.length) { alert('暂无新推荐规则可导出。'); return; }
+      const now = new Date();
+      const stamp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      const prod = (($('configPanelTitle') && $('configPanelTitle').textContent) || '配置BOM').replace(/^配置BOM\s*-\s*/, '').trim() || '配置BOM';
+      const rows = recoRules.map((r, i) => (
+        '<tr>' +
+        '<td style="text-align:center;">' + (i + 1) + '</td>' +
+        '<td>' + escapeHtml(r.name) + '</td>' +
+        '<td>' + escapeHtml(r.scope || '') + '</td>' +
+        '<td>' + escapeHtml(r.desc || '') + '</td>' +
+        '<td><span style="font-family:Consolas,monospace;">' + escapeHtml(r.expression || '') + '</span></td>' +
+        '</tr>'
+      )).join('');
+      const html =
+        '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8">' +
+        '<title>推荐配置规则文档</title></head><body style="font-family:微软雅黑,Microsoft YaHei,sans-serif;">' +
+        '<h2 style="text-align:center;">推荐配置规则文档</h2>' +
+        '<p>产品：' + escapeHtml(prod) + '　|　生成日期：' + stamp + '　|　共 ' + recoRules.length + ' 条新推荐规则</p>' +
+        '<p style="color:#666;font-size:12px;">说明：本文档仅收录本次由配置助手<strong>新提炼、规则库中尚不存在</strong>的推荐规则；命中的已有规则不在此列。</p>' +
+        '<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%;font-size:13px;">' +
+        '<thead><tr style="background:#f0f2f5;"><th style="width:40px;">序号</th><th style="width:160px;">规则名称</th><th style="width:80px;">作用域</th><th>规则描述</th><th style="width:220px;">规则表达式</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></body></html>';
+      const blob = new Blob(['﻿', html], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = '推荐配置规则_' + prod.replace(/[\\/:*?"<>|\s]+/g, '') + '_' + stamp + '.doc';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      addAiBubble('已生成规则文档（' + recoRules.length + ' 条新推荐规则），开始下载。');
+    }
+
     function confirmBom() {
       if (busy) return;
       const rows = collectBom(), params = collectParams(), rules = collectRules();
@@ -1842,6 +1889,7 @@
         else if (ui.action === 'render_bom') renderBom(ui.product, ui.columns, ui.rows);
         else if (ui.action === 'render_params') renderParams(ui.params);
         else if (ui.action === 'render_rules') renderRules(ui.rules);
+        else if (ui.action === 'render_reco_rules') setRecoRules(ui.reco_rules);
         else if (ui.action === 'open_panel') openPanel();
       } catch (e) { console.error('applyUi', ui, e); }
     }

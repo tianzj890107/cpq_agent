@@ -382,29 +382,18 @@ def _import_rules(payload: dict) -> dict:
         return ""
 
     created_at = datetime.datetime.now().replace(microsecond=0).isoformat(sep=" ")
-    batch_note = str(payload.get("note") or "").strip()
+    batch_id = uuid.uuid4().hex[:12]
+    # 目标表按每行「目标规则库」分流（DA 梳理·规则助手 sheet 的两张规则表）：
+    #  - 含 定价/报价/price → md_clm_material_price_rule（带 rule_classification）
+    #  - 其余（配单/配置/distribution/缺省）→ md_clm_distribution_rule
+    # id 主键：不传，由 PG 默认值自动生成；Groovy 公式 → rule_expression / rule_expression_view。
+    saved = 0
+    fails = []
+    tables_used = set()
     try:
         con = cpq_db.connect(readonly=False)  # autocommit
         try:
-            cur = con.cursor()
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS rule_agent_rules (
-                    id SERIAL PRIMARY KEY,
-                    batch_id TEXT,
-                    rule_id TEXT,
-                    rule_name TEXT,
-                    rule_desc TEXT,
-                    target_table TEXT,
-                    groovy_formula TEXT,
-                    note TEXT,
-                    created_at TEXT
-                )
-                """
-            )
-            batch_id = uuid.uuid4().hex[:12]
-            saved = 0
-            for r in rules:
+            for idx, r in enumerate(rules, 1):
                 if not isinstance(r, dict):
                     continue
                 name = str(g(r, "rule_name", "规则名称", "name")).strip()
@@ -412,37 +401,53 @@ def _import_rules(payload: dict) -> dict:
                 formula = str(g(r, "groovy_formula", "groovy_code", "Groovy规则公式", "formula")).strip()
                 if not (name or desc or formula):
                     continue
-                cur.execute(
-                    """
-                    INSERT INTO rule_agent_rules
-                        (batch_id, rule_id, rule_name, rule_desc, target_table, groovy_formula, note, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        batch_id,
-                        str(g(r, "rule_id", "规则ID", "id")).strip(),
-                        name,
-                        desc,
-                        str(g(r, "target_table", "目标规则库", "目标库")).strip(),
-                        formula,
-                        batch_note,
-                        created_at,
-                    ),
-                )
-                saved += 1
+                target = str(g(r, "target_table", "目标规则库", "目标库")).strip()
+                low = target.lower()
+                row = {
+                    "rule_name": name, "rule_desc": desc,
+                    "rule_expression": formula, "rule_expression_view": formula,
+                    "is_deleted": "0", "effective_status": "1",
+                    "created_by": "rule_agent", "created_at": created_at,
+                    "updated_by": "rule_agent", "updated_at": created_at,
+                }
+                if ("price" in low) or ("定价" in target) or ("报价" in target):
+                    table = "md_clm_material_price_rule"
+                    cls = str(g(r, "rule_classification", "规则分类")).strip()
+                    if not cls:
+                        cls = "报价" if "报价" in target else "定价"
+                    row["rule_classification"] = cls
+                else:
+                    table = "md_clm_distribution_rule"
+                # 主键雪花生成（规则表主键无外键引用，显式生成以对齐 id 生成算法）
+                pk_cols, _ = cpq_db.key_cols("rule", table)
+                if pk_cols:
+                    row[pk_cols[0]] = cpq_db.snow_next_id(con)
+                try:
+                    n = cpq_db.insert_rows(con, table, [row])
+                    if n:
+                        saved += 1
+                        tables_used.add(table)
+                    else:
+                        fails.append(f"第{idx}行「{name}」：无有效列可写入")
+                except Exception as e:
+                    fails.append(f"第{idx}行「{name}」→{table}：{str(e)[:160]}")
         finally:
             con.close()
     except Exception as e:
         return {"ok": False, "error": f"数据库写入失败: {e}"}
     if not saved:
-        return {"ok": False, "error": "规则行为空，未写入任何数据"}
-    return {
-        "ok": True,
+        return {"ok": False, "error": "未写入任何规则" + ("；" + "；".join(fails[:5]) if fails else "")}
+    out = {
+        "ok": not fails,
         "batch_id": batch_id,
         "count": saved,
-        "table": "rule_agent_rules",
+        "table": " / ".join(sorted(tables_used)) or "md_clm_distribution_rule",
         "created_at": created_at,
     }
+    if fails:
+        out["errors"] = fails[:10]
+        out["ok"] = True  # 部分成功也算导入完成，errors 供前端展示
+    return out
 
 
 _ORIG_EXECUTE_TOOL = oc_repl.execute_tool

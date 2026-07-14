@@ -1,0 +1,28 @@
+# 配置报价CPQ 一体化服务（单容器）。用法：docker compose up -d --build
+services:
+  cpq-suite:
+    build: .
+    image: cpq-suite:latest
+    container_name: cpq-suite
+    ports:
+      - "8010:8010"
+    environment:
+      # —— 目标 Postgres（按实际环境改）——
+      CPQ_PG_HOST: "172.16.5.181"
+      CPQ_PG_PORT: "32444"
+      CPQ_PG_USER: "postgres"
+      CPQ_PG_PASSWORD: "postgres"
+      CPQ_PG_DATABASE: "metabase"
+      CPQ_PG_SCHEMA: "master_data"
+      # —— LLM Provider Key（按你使用的模型放开对应一行）——
+      # DEEPSEEK_API_KEY: "sk-xxx"
+      # DASHSCOPE_API_KEY: "sk-xxx"
+      # ANTHROPIC_API_KEY: "sk-ant-xxx"
+      # CLAUDE_MODEL: "deepseek-v4-pro"
+    volumes:
+      # 持久化：模型/参数/Key 设置 + 三助手历史（首次可注释掉，UI 配置后会落盘到这些卷）
+      - ./cpq_settings.json:/app/cpq_settings.json
+      - ./cpq_history:/app/cpq_history
+      - ./xbom_history:/app/xbom_history
+      - ./rule_history:/app/rule_history
+    restart: unless-stopped

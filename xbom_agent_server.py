@@ -114,13 +114,15 @@ XBOM_UI_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["set_step", "step_result", "render_bom", "render_params", "render_rules", "open_panel"],
+                "enum": ["set_step", "step_result", "render_bom", "render_params", "render_rules", "render_reco_rules", "open_panel"],
                 "description": (
                     "set_step=把某一步(1-6)标记为 running/done；"
                     "step_result=往某一步里填结果块(标签/物料树/规则/文本)；"
                     "render_bom=在右侧渲染可编辑的配置BOM表；"
                     "render_params=静默保存第1步识别出的参数(右侧不显示，仅供入库)；"
                     "render_rules=给每行规则下拉提供候选清单(只查 md_clm_distribution_rule)；"
+                    "render_reco_rules=登记**本次新推荐的规则**(不在已有规则库里的、由你新提炼的)，"
+                    "前端据此显示「生成规则文档」按钮，导出这些新规则；用 reco_rules 传；"
                     "open_panel=展开右侧配置面板。"
                 ),
             },
@@ -167,6 +169,15 @@ XBOM_UI_SCHEMA = {
                           "properties": {"code": {"type": "string"}, "name": {"type": "string"},
                                          "desc": {"type": "string"}, "recommended": {"type": "boolean"}}},
             },
+            "reco_rules": {
+                "type": "array",
+                "description": "render_reco_rules 用：**本次新推荐/新提炼的规则**（不在已有规则库 md_clm_distribution_rule 里的），"
+                               "每项 {name(规则名), desc(规则描述), expression(规则表达式/逻辑,可选), scope(作用域:全局/模块/BOM行,可选)}。"
+                               "**只放你新提出的规则，命中的已有库规则不要放进来**。前端会据此显示「生成规则文档」按钮，把这些新规则导出成文档。",
+                "items": {"type": "object",
+                          "properties": {"name": {"type": "string"}, "desc": {"type": "string"},
+                                         "expression": {"type": "string"}, "scope": {"type": "string"}}},
+            },
             "source": {"type": "string", "description": "本次内容来源说明(数据库端/需求文档端)，显示在操作轨迹。"},
         },
         "required": ["action"],
@@ -200,13 +211,15 @@ def _handle_xbom_ui(tool_input: dict) -> str:
     if not isinstance(tool_input, dict):
         return "xbom_ui 入参必须是 JSON 对象"
     action = tool_input.get("action")
-    if action not in ("set_step", "step_result", "render_bom", "render_params", "render_rules", "open_panel"):
+    if action not in ("set_step", "step_result", "render_bom", "render_params",
+                      "render_rules", "render_reco_rules", "open_panel"):
         return f"未知 action: {action!r}"
     ti = dict(tool_input)
     if action in ("set_step", "step_result"):
         step = ti.get("step")
         if not isinstance(step, int) or not (1 <= step <= 6):
             return "step 必须是 1-6 的整数"
+    zero_qty = 0
     if action == "render_bom":
         if not isinstance(ti.get("columns"), list) or not ti["columns"]:
             ti["columns"] = list(_DEFAULT_BOM_COLUMNS)
@@ -218,21 +231,39 @@ def _handle_xbom_ui(tool_input: dict) -> str:
                 nr = {_norm_key(k): v for k, v in r.items()}
                 norm.append({k: ("" if _pick(r, k, nr) is None else str(_pick(r, k, nr))) for k in keys})
         ti["rows"] = norm
+        # 数量为 0 的行统计（除非原文档本就是 0，否则不允许）——回执里提醒模型自查
+        qcol = next((k for k in keys if _norm_key(k) in ("数量", "qty", "quantity")), None)
+        if qcol:
+            for nr in norm:
+                v = str(nr.get(qcol, "")).strip()
+                try:
+                    if v != "" and float(v) == 0:
+                        zero_qty += 1
+                except ValueError:
+                    pass
     if action == "render_params" and not isinstance(ti.get("params"), list):
         ti["params"] = []
     if action == "render_rules" and not isinstance(ti.get("rules"), list):
         ti["rules"] = []
+    if action == "render_reco_rules" and not isinstance(ti.get("reco_rules"), list):
+        ti["reco_rules"] = []
     _ui_events().append(ti)
     if action == "set_step":
         return f"步骤 {ti.get('step')}（{STEPS[ti.get('step', 1) - 1]}）状态 -> {ti.get('status')}"
     if action == "step_result":
         return f"已把结果填入步骤 {ti.get('step')}（{STEPS[ti.get('step', 1) - 1]}）"
     if action == "render_bom":
-        return f"已在右侧渲染配置BOM（{len(ti.get('rows') or [])} 行，可编辑）"
+        msg = f"已在右侧渲染配置BOM（{len(ti.get('rows') or [])} 行，可编辑）"
+        if zero_qty:
+            msg += (f"。⚠️ 有 {zero_qty} 行数量为 0：除非原始变体BOM/需求文档里该物料数量本就是 0，"
+                    "否则必须补成真实正数（按参数/查库算）后重新 render_bom；且不得漏掉任何物料行。")
+        return msg
     if action == "render_params":
         return f"已保存 {len(ti.get('params') or [])} 个参数（右侧不显示，供入库用）"
     if action == "render_rules":
         return f"已载入 {len(ti.get('rules') or [])} 条产品配单规则，作为每行规则下拉的候选"
+    if action == "render_reco_rules":
+        return f"已登记 {len(ti.get('reco_rules') or [])} 条新推荐规则，前端将显示「生成规则文档」按钮供导出"
     return "已展开配置面板"
 
 
@@ -345,16 +376,17 @@ def _handle_sql_query(tool_input: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _import_config_bom(payload: dict) -> dict:
-    """把用户确认后的配置BOM + 参数 + 每行规则写入远程 Postgres（可写连接，专用表）。"""
+    """把用户确认后的配置BOM + 每行规则写入远程 Postgres 的 DA 目标表：
+    头 → CLM_BASE_INFO；行 → CLM_LINE_INFO（ref_bom_header_id 挂头）；
+    行选中的规则 → clm_line_rule_rel（按 rule_name 反查 md_clm_distribution_rule_id）。
+    id 类字段：先让 PG 默认值自动生成（INSERT..RETURNING）；库无默认值时退回自生成 uuid。"""
     if not isinstance(payload, dict):
         return {"ok": False, "error": "入参必须是 JSON 对象"}
     product = (payload.get("product") or payload.get("产品") or "").strip()
     project = (payload.get("project") or payload.get("项目") or "").strip()
-    params = payload.get("params") or payload.get("参数") or []
     rows = payload.get("rows") or payload.get("配置BOM") or []
     if not isinstance(rows, list) or not rows:
         return {"ok": False, "error": "没有可导入的 BOM 行"}
-    params_json = json.dumps(params, ensure_ascii=False)
 
     def g(r, *keys):
         for k in keys:
@@ -364,46 +396,64 @@ def _import_config_bom(payload: dict) -> dict:
         return ""
 
     created = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    warn = []
     try:
         con = cpq_db.connect(readonly=False)  # autocommit
         try:
-            cur = con.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS xbom_config_bom (
-                    id SERIAL PRIMARY KEY,
-                    product TEXT, project TEXT, params_json TEXT,
-                    line_count INTEGER, created_at TEXT
-                )""")
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS xbom_config_bom_line (
-                    id SERIAL PRIMARY KEY,
-                    bom_id INTEGER, seq INTEGER,
-                    material_code TEXT, material_name TEXT, level TEXT,
-                    qty TEXT, unit TEXT, tag TEXT, rule TEXT
-                )""")
-            cur.execute(
-                "INSERT INTO xbom_config_bom (product, project, params_json, line_count, created_at)"
-                " VALUES (%s,%s,%s,%s,%s) RETURNING id",
-                (product, project, params_json, len(rows), created))
-            bom_id = cur.fetchone()[0]
+            # BOM 头：主键 bom_header_id 由雪花算法生成并显式写入（供行外键引用）
+            bom_id = cpq_db.snow_next_id(con)
+            head = {
+                "bom_header_id": bom_id,
+                "bom_name": (product or project or "配置BOM") + " 配置BOM",
+                "product_item_name": product, "product_item_spec": "",
+                "basis_quantity": "1", "bom_version": "V1", "status": "已确认",
+                "creation_date": created, "created_by": "xbom_agent",
+                "last_update_date": created, "last_updated_by": "xbom_agent",
+            }
+            cpq_db.insert_rows(con, "CLM_BASE_INFO", [head])
+            saved = 0
             for i, r in enumerate(rows, 1):
                 if not isinstance(r, dict):
                     continue
-                cur.execute(
-                    "INSERT INTO xbom_config_bom_line"
-                    " (bom_id, seq, material_code, material_name, level, qty, unit, tag, rule)"
-                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (bom_id, i, g(r, "物料编码", "material_code", "code"),
-                     g(r, "物料名称", "material_name", "name"),
-                     g(r, "层级", "level"), g(r, "数量", "qty"),
-                     g(r, "单位", "unit"), g(r, "标签", "tag"),
-                     g(r, "规则", "rule")))
+                line_id = cpq_db.snow_next_id(con)  # 行主键雪花生成（供规则关系外键引用）
+                line = {
+                    "bom_line_id": line_id,
+                    "ref_bom_header_id": bom_id, "seq_num": str(i),  # 外键→BOM头
+                    "component_item_code": g(r, "物料编码", "material_code", "code"),
+                    "component_item_name": g(r, "物料名称", "material_name", "name"),
+                    "component_item_quantity": g(r, "数量", "qty"),
+                    "component_item_uom_code": g(r, "单位", "unit"),
+                    "node_type": g(r, "标签", "tag"),
+                    "creation_date": created, "created_by": "xbom_agent",
+                }
+                cpq_db.insert_rows(con, "CLM_LINE_INFO", [line])
+                saved += 1
+                rule_name = g(r, "规则", "rule")
+                if rule_name and rule_name != "（无）":
+                    try:  # 行规则关系：按规则名反查规则主键，查得到才建关系（查不到只记警告，不失败）
+                        with con.cursor() as cur:
+                            cur.execute(
+                                "SELECT md_clm_distribution_rule_id FROM md_clm_distribution_rule "
+                                "WHERE rule_name = %s AND is_deleted = 0 LIMIT 1", (rule_name,))
+                            hit = cur.fetchone()
+                        if hit:
+                            # 关系表主键 ref_id 也用雪花生成；外键 bom_line_id / rule_id 引用父表主键
+                            cpq_db.insert_rows(con, "clm_line_rule_rel", [{
+                                "ref_id": cpq_db.snow_next_id(con),
+                                "bom_line_id": line_id, "rule_id": str(hit[0])}])
+                        else:
+                            warn.append(f"行{i} 规则「{rule_name}」在规则库未找到，未建关系")
+                    except Exception as e:
+                        warn.append(f"行{i} 规则关系写入失败：{str(e)[:120]}")
         finally:
             con.close()
     except Exception as e:
         return {"ok": False, "error": f"数据库写入失败：{e}"}
-    return {"ok": True, "bom_id": bom_id, "lines": len(rows),
-            "table": "xbom_config_bom / xbom_config_bom_line", "created_at": created}
+    out = {"ok": True, "bom_id": bom_id, "lines": saved,
+           "table": "CLM_BASE_INFO / CLM_LINE_INFO", "created_at": created}
+    if warn:
+        out["warnings"] = warn[:10]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +473,13 @@ SYSTEM_PROMPT = """\
 3. 物料归集 —— 把物料挂到对应模块下，给每个物料打标签（通用件 / 互斥件 / 可选件 / 参数数量件 / 标准件）。
 4. 提取配置规则 —— 顶层全局约束 → 模块级规则 → BOM 行级规则。
    （如：280kWh 必选液冷；风冷不能选低温加热；电量→电芯模组/额定电流/箱体规格 的计算规则等。）
+   **区分两类规则**：①**命中的已有规则**（能在 `md_clm_distribution_rule` 里找到对应的）；
+   ②**你新提炼的推荐规则**（库里没有、由你根据本次变体 BOM 归纳出来的）。
+   **第 ② 类必须调用 `render_reco_rules`** 登记（reco_rules=[{name,desc,expression,scope}]，只放新规则、不要放已有库规则），
+   前端会据此显示「生成规则文档」按钮，把这些新规则导出成文档。
 5. 生成配置BOM —— 模块层级 + 全量物料归集 + 三层规则，组装出完整配置 BOM（含 L1/L2/L3/L4 单层展开、参数自动录入、规则挂到 BOM 头/行）。
+   **⚠️ 必须输出完整 BOM 清单，一条物料都不能漏**：样例/标准 BOM 里的每一个物料行都要出现在配置 BOM 里（通用件、可选件、参数数量件、标准件全都要），不许为了简洁省略。
+   **⚠️ 数量不得为 0**：每行数量必须是真实正数（按参数算或查库得到）；**唯一例外**是原始变体 BOM/需求文档里该物料数量本就是 0 或空——那才可留 0/空，其余一律补齐，绝不出现 0。
 6. 确认配置BOM —— 右侧只放**一张可编辑配置BOM表**，规则做成**每行一个下拉**：
    ① 先 `render_rules`：**只查 `md_clm_distribution_rule`（产品配单规则）**，把该表的规则做成候选清单 [{code,name,desc}]（这是每行下拉的选项池，不再单独占一块面板）；
    ② 再 `render_bom`：每一行**尽量带上一个推荐规则**——在行数据里给 `规则` 字段填该行应挂的 `md_clm_distribution_rule` 规则名（前端会把它设为该行下拉的默认选中，用户可自行改选或选「（无）」）；
@@ -452,6 +508,8 @@ SYSTEM_PROMPT = """\
   · render_params(params)：第 6 步渲染可编辑【参数表】——params=[{name,value}]，就是第 1 步识别出的参数。
   · render_rules(rules)：第 6 步渲染【规则选择】——rules=[{code,name,desc,recommended}]，从 `md_clm_distribution_rule`（配置/配单规则）
     和 `md_clm_material_price_rule`（定价/报价规则）查出候选规则；**当前配置该挂的规则设 recommended=true（前端会预勾选=AI 推荐）**，其余 false 供用户搜索勾选。
+  · render_reco_rules(reco_rules)：登记**本次新提炼、库里没有的推荐规则**——reco_rules=[{name,desc,expression,scope}]。
+    前端据此显示「生成规则文档」按钮，用户可把这些新规则导出成文档（**只含新规则，不含命中的已有库规则**）。第 4 步提取规则后调用。
   · open_panel：展开右侧配置面板。
 - `sql_query`：只读查远程 Postgres（**以系统提示词末尾的完整 schema 为准生成 SQL**）。不臆造、不读 json。
 

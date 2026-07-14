@@ -18,6 +18,8 @@ psycopg（psycopg3）为延迟导入：未装驱动/连不上库时，schema-fro
 from __future__ import annotations
 
 import os
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -246,6 +248,176 @@ def bi_fields(business_object: str, logic_entity_name: str):
 
 
 _AGENT_CN = {"quote": "报价助手", "config": "配置助手", "rule": "规则助手"}
+
+
+def attr_code_map(agent: str, table: str) -> dict:
+    """某实体的 {属性名称(中文): 属性code} 映射（含 id/主外键——导入时若有值要原样存下）。
+    另把 code 本身也映射到自己，允许调用方直接给 code 键。"""
+    try:
+        onto = _load_ontology()[agent]
+    except Exception:
+        return {}
+    for e in onto["entities"]:
+        if e["table"].lower() == (table or "").lower():
+            m = {}
+            for a in e["attrs"]:
+                if a["code"]:
+                    if a["name"]:
+                        m[a["name"]] = a["code"]
+                    m[a["code"]] = a["code"]
+            return m
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# 通用入库（导入数据库）：按 information_schema 列类型做显式 ::cast，
+# 值全部来自前端字符串。空值不插（NULL/由 PG 默认值生成，id 类字段即如此）。
+# ---------------------------------------------------------------------------
+_NUM_TYPES = {"integer", "bigint", "smallint", "numeric", "real", "double precision", "money"}
+_CASTABLE = {"integer", "bigint", "smallint", "numeric", "real", "double precision",
+             "boolean", "date", "timestamp without time zone", "timestamp with time zone", "time without time zone"}
+_CAST_NAME = {"timestamp without time zone": "timestamp", "timestamp with time zone": "timestamptz",
+              "time without time zone": "time"}
+_TRUE_WORDS = {"是", "true", "1", "y", "yes", "真", "on"}
+_FALSE_WORDS = {"否", "false", "0", "n", "no", "假", "off", "无"}
+_NUM_RE = None
+
+
+def table_types(conn, table: str) -> dict:
+    """{列名: data_type}；表不存在返回 {}。表名按 PG 未加引号折叠成小写查询。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = lower(%s)",
+            (PG_SCHEMA or "public", table),
+        )
+        return {r[0]: r[1] for r in cur.fetchall()}
+
+
+def _coerce(value, dtype: str):
+    """把前端字符串值按目标列类型宽松清洗；返回 None 表示该列跳过（存 NULL）。"""
+    global _NUM_RE
+    s = str(value).strip()
+    if s == "":
+        return None
+    if dtype == "boolean":
+        low = s.lower()
+        if low in _TRUE_WORDS:
+            return "true"
+        if low in _FALSE_WORDS:
+            return "false"
+        return None
+    if dtype in _NUM_TYPES:
+        import re
+        if _NUM_RE is None:
+            _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+        m = _NUM_RE.search(s.replace(",", "").replace("，", ""))
+        return m.group(0) if m else None  # 提不出数字（如“推荐”文本）→ 跳过该列
+    return s
+
+
+def _insert_one(cur, table: str, row: dict, types: dict, ret_col: str = None):
+    """插入一行（row 键=列code）。返回 (是否执行, RETURNING 值)。空/清洗失败/表里没有的列不插。"""
+    cols, vals, ph = [], [], []
+    for c, v in row.items():
+        dt = types.get(c)
+        if dt is None:
+            continue  # 目标表没有该列
+        cv = _coerce(v, dt)
+        if cv is None:
+            continue
+        cols.append(c)
+        vals.append(cv)
+        cast = _CAST_NAME.get(dt, dt) if dt in _CASTABLE else None
+        ph.append(f"%s::{cast}" if cast else "%s")
+    if not cols:
+        return False, None
+    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(ph)})"
+    if ret_col:
+        cur.execute(sql + f" RETURNING {ret_col}", vals)
+        r = cur.fetchone()
+        return True, (r[0] if r else None)
+    cur.execute(sql, vals)
+    return True, None
+
+
+def insert_rows(conn, table: str, rows: list) -> int:
+    """批量插入（rows=list[dict code->值]），返回成功行数。表不存在抛错。"""
+    types = table_types(conn, table)
+    if not types:
+        raise RuntimeError(f"目标表 {table} 不存在（information_schema 查不到列）")
+    saved = 0
+    with conn.cursor() as cur:
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            done, _ = _insert_one(cur, table, r, types)
+            if done:
+                saved += 1
+    return saved
+
+
+def insert_returning(conn, table: str, row: dict, ret_col: str):
+    """插入一行并 RETURNING 某列（拿自动生成的 id 供子表外键用）。表不存在抛错。"""
+    types = table_types(conn, table)
+    if not types:
+        raise RuntimeError(f"目标表 {table} 不存在")
+    with conn.cursor() as cur:
+        done, val = _insert_one(cur, table, row, types, ret_col=ret_col)
+        return val if done else None
+
+
+# ---------------------------------------------------------------------------
+# 雪花 ID：主键生成（对齐库函数 public.snow_next_id() 的 PL/pgSQL 实现）
+#   result = (now_ms - our_epoch) << 23 | (shard_id << 10) | (seq % 4096)
+# 导入时：主键(PK)用它生成、外键(FK)按 ER 关系引用父表已生成的 PK；均只存后台、不展示。
+# 优先调用库函数（跨进程共享 assign_id_seq 保唯一）；库函数不可用时回退客户端实现。
+# ---------------------------------------------------------------------------
+_SNOW_EPOCH = 1314220021721
+_SNOW_SHARD = 5
+_snow_lock = threading.Lock()
+_snow_seq = 0
+
+
+def _client_snow_id() -> int:
+    global _snow_seq
+    with _snow_lock:
+        _snow_seq = (_snow_seq + 1) % 4096
+        seq = _snow_seq
+    now_ms = int(time.time() * 1000)
+    return ((now_ms - _SNOW_EPOCH) << 23) | (_SNOW_SHARD << 10) | seq
+
+
+def snow_next_id(conn) -> int:
+    """生成一个雪花主键 ID：优先库函数 snow_next_id()（search_path→public），失败回退客户端实现。"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT snow_next_id()")
+            r = cur.fetchone()
+            if r and r[0] is not None:
+                return int(r[0])
+    except Exception:
+        pass
+    return _client_snow_id()
+
+
+def key_cols(agent: str, table: str):
+    """返回 (主键列code列表, 外键列code列表) —— 来自 DA 本体（xlsx 的主键/外键标记）。"""
+    try:
+        onto = _load_ontology()[agent]
+    except Exception:
+        return [], []
+    for e in onto["entities"]:
+        if e["table"].lower() == (table or "").lower():
+            pk = [a["code"] for a in e["attrs"] if a.get("pk") and a["code"]]
+            fk = [a["code"] for a in e["attrs"] if a.get("fk") and a["code"]]
+            return pk, fk
+    return [], []
+
+
+def table_columns(agent: str, table: str) -> set:
+    """该表全部列 code 集合（来自 DA 本体）。"""
+    return set(attr_code_map(agent, table).values())
 
 
 def search_fields(keyword: str, limit: int = 8):

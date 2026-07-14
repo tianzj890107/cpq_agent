@@ -72,9 +72,10 @@ from open_claude.config import (
 from open_claude.profile import AgentProfile
 from open_claude.sessions import SessionStore
 
-# 报价助手是只读 Agent：隐藏文件写入/命令执行/技能等入口。取数走注入的只读 sql_query 工具，
-# 另保留 Read/Glob/Grep（一般用不到）。
-DISABLED_TOOLS = ("Write", "Edit", "Bash", "Skill", "Agent")
+# 报价助手是只读 Agent：隐藏文件写入/命令执行/技能等入口。取数走注入的只读 sql_query 工具。
+# 本地文件：**禁止读取除 Excel 以外的任何本地文件**——内容检索 Grep、目录列举 Glob 直接禁用；
+# 保留 Read 但在 _patched_execute_tool 里限制为只允许 .xlsx/.xls（其余路径拒绝）。
+DISABLED_TOOLS = ("Write", "Edit", "Bash", "Skill", "Agent", "Grep", "Glob")
 
 STEPS = [
     "确认需求配置",
@@ -95,10 +96,10 @@ CPQ_UI_SCHEMA = {
         "驱动报价工作台（页面右侧面板）。用于切换流程步骤、渲染/更新固定表单和表格、"
         "渲染最终报价单文档。任何展示给用户确认/修改的结构化数据都必须通过本工具渲染，"
         "不要在聊天里贴大表格。同一 section_id 重复渲染即为更新。"
-        "【重要】表单/表格是**固定模板**：字段集与列由系统按《BI 及关键属性》(逻辑实体↔业务属性)"
-        "写死，你**不能增删字段/列**。render_form 只在 values 里按“业务属性名称”填值；"
-        "render_table 只在 rows 里按固定列名填每行值。你传的 fields/columns 会被忽略。"
-        "请只使用系统提示词里列出的固定 section_id。"
+        "【重要】表单/表格是**固定模板**：字段集与列由系统按 亿纬锂能DA梳理.xlsx「报价助手」页"
+        "（逻辑实体↔属性名称）写死，你**不能增删字段/列**。render_form 的 values 键 / render_table 的 rows 列名"
+        "**必须用该页的“属性名称”中文（如 客户等级/项目名称/贸易术语），不要用数据库列 code（如 customer_level）**。"
+        "你传的 fields/columns 会被忽略。请只使用系统提示词里列出的固定 section_id。"
     ),
     "input_schema": {
         "type": "object",
@@ -115,7 +116,7 @@ CPQ_UI_SCHEMA = {
             "title": {"type": "string", "description": "分区标题（中文）"},
             "values": {
                 "type": "object",
-                "description": "render_form（固定分区）填值用：键=业务属性名称（与《BI 及关键属性》一致），值=该字段取值。系统用固定字段集渲染，只取这里的值。缺失字段留空。",
+                "description": "render_form（固定分区）填值用：键=属性名称中文（与 亿纬锂能DA梳理.xlsx「报价助手」页一致，如 客户等级，不是 customer_level），值=该字段取值。系统用固定字段集渲染，只取这里的值。缺失字段留空。",
             },
             "fields": {
                 "type": "array",
@@ -163,7 +164,7 @@ CPQ_UI_SCHEMA = {
 }
 
 # ---------------------------------------------------------------------------
-# 固定表单目录：字段集来自 BI 及关键属性（逻辑实体 ↔ 业务属性），Agent 不能改字段，
+# 固定表单目录：字段集来自 亿纬锂能DA梳理.xlsx「报价助手」页（逻辑实体 ↔ 属性名称），Agent 不能改字段，
 # 只能填值。这样每次跑出来的每个分区都是同一套固定表单，而不是模型临时“动态生成”。
 # ---------------------------------------------------------------------------
 
@@ -171,14 +172,14 @@ CPQ_UI_SCHEMA = {
 # 字段全部来自 亿纬锂能DA梳理.xlsx「报价助手」sheet，**全量列（已排除 id/主键/外键）**。
 # 各步骤所需表单严格按需求给定：
 _BI_SECTIONS = {
-    # —— 第 1 步 确认需求配置 ——
+    # —— 第 1 步 确认需求配置（展示顺序=此定义顺序；目的地/物流是**列表**不是表单）——
     "s1_basic":      ("form",  "① 测算基本信息",   ("价格测算单", "测算基本信息"),   True),
-    "s1_dest":       ("form",  "② 目的地信息",     ("价格测算单", "目的地信息"),     True),
-    "s1_products":   ("table", "③ 产品信息",       ("价格测算单", "产品信息"),       True),
+    "s1_dest":       ("table", "② 目的地信息",     ("价格测算单", "目的地信息"),     True),
+    "s1_products":   ("table", "③ 产品信息列表",   ("价格测算单", "产品信息"),       True),
     "s1_techparams": ("table", "④ 产品技术参数",   ("价格测算单", "产品技术参数"),   True),
-    "s1_payment":    ("table", "⑤ 付款信息",       ("价格测算单", "付款信息"),       True),
-    "s1_logistics":  ("form",  "⑥ 物流信息",       ("价格测算单", "物流信息"),       True),
-    # —— 第 2 步 定价-基础成本 —— 产品信息仅展示（沿用第1步）+ 实例BOM头/行
+    "s1_payment":    ("table", "⑤ 付款里程碑信息", ("价格测算单", "付款信息"),       True),
+    "s1_logistics":  ("table", "⑥ 物流信息",       ("价格测算单", "物流信息"),       True),
+    # —— 第 2 步 定价-基础成本 —— 先产品信息（沿用第1步），产品信息下挂实例BOM（头+行，行按层级树形展示）
     "s2_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),       False),
     "s2_bomhead":    ("table", "实例BOM头信息",           ("价格测算单", "实例BOM头信息"), False),
     "s2_bomline":    ("table", "实例BOM行信息",           ("价格测算单", "实例BOM行信息"), False),
@@ -208,9 +209,16 @@ FIXED_FORMS: dict = {}  # section_id -> {kind, title, fields:[{key,label,example
 _FALLBACK_FIELDS = {}
 
 
+# 按需求隐藏的展示字段（xlsx 里有、但前端各分区不展示）：产品信息不展示这 3 个字段（所有步骤）。
+_HIDDEN_FIELDS = {("价格测算单", "产品信息"): {"备件数量", "赠品数量", "产品大类"}}
+
+
 def _bi_fields(business_object: str, logic_entity: str) -> list:
     """从 亿纬锂能DA梳理.xlsx「报价助手」sheet 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
     rows = cpq_db.bi_fields(business_object, logic_entity)
+    hidden = _HIDDEN_FIELDS.get((business_object, logic_entity))
+    if hidden:
+        rows = [(a, ft) for a, ft in rows if a not in hidden]
     if not rows:
         return [{"key": a, "label": a, "example": ""} for a in _FALLBACK_FIELDS.get(logic_entity, [])]
     # 一律不带示例数据，只出字段名（表结构写死）
@@ -221,10 +229,16 @@ def _cols_template(cols: list) -> list:
     return [{"key": c, "label": c} for c in cols]
 
 
+# 个别分区在 xlsx 属性之外补充的展示列（如 实例BOM行 需要「层级」驱动树形展示）
+_EXTRA_COLS = {"s2_bomline": ["层级"]}
+
+
 def _init_fixed_forms():
     FIXED_FORMS.clear()
     for sid, (kind, title, ent, editable) in _BI_SECTIONS.items():
         attrs = _bi_fields(*ent)
+        extra = [{"key": c, "label": c, "example": ""} for c in _EXTRA_COLS.get(sid, [])]
+        attrs = extra + attrs
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title, "fields": attrs,
             "columns": [{"key": a["key"], "label": a["label"]} for a in attrs],
@@ -364,9 +378,10 @@ def _section_step(sid: str) -> int:
 
 
 def fixed_forms_catalog() -> list:
-    """把固定表单目录（写死的表结构）按分区返回，供前端预渲染骨架。"""
+    """把固定表单目录（写死的表结构）按分区返回，供前端预渲染骨架。
+    同一步骤内按 _BI_SECTIONS/_COMPUTED_SECTIONS 的**定义顺序**（即业务展示顺序），不按 id 字母序。"""
     out = []
-    for sid, tpl in FIXED_FORMS.items():
+    for idx, (sid, tpl) in enumerate(FIXED_FORMS.items()):
         out.append({
             "section_id": sid,
             "step": _section_step(sid),
@@ -375,8 +390,9 @@ def fixed_forms_catalog() -> list:
             "fields": [{"key": f["key"], "label": f["label"]} for f in tpl["fields"]],
             "columns": list(tpl["columns"]),
             "editable": tpl["editable"],
+            "_ord": idx,
         })
-    out.sort(key=lambda x: (x["step"], x["section_id"]))
+    out.sort(key=lambda x: (x["step"], x.pop("_ord")))
     return out
 
 
@@ -468,11 +484,29 @@ def _handle_cpq_ui(tool_input: dict) -> str:
 _ORIG_EXECUTE_TOOL = oc_repl.execute_tool
 
 
+_EXCEL_EXTS = (".xlsx", ".xlsm", ".xls", ".xlsb")
+_FILE_DENY_MSG = (
+    "已拒绝：本 Agent 禁止读取本地文件，仅允许读取 Excel（.xlsx/.xlsm/.xls/.xlsb）。"
+    "业务数据请用 sql_query 从数据库查询，不要读本地文件。"
+)
+
+
+def _is_excel_path(p) -> bool:
+    return isinstance(p, str) and p.strip().lower().endswith(_EXCEL_EXTS)
+
+
 def _patched_execute_tool(tool_name, tool_input, cwd):
     if tool_name == "cpq_ui":
         return _handle_cpq_ui(tool_input)
     if tool_name == "sql_query":
         return _handle_sql_query(tool_input)
+    # 本地文件读取限制：只允许 Read 读取 Excel；其余读文件/检索/列举工具一律拒绝（双保险，
+    # 即使 DISABLED_TOOLS 之外的路径也挡住）。
+    if tool_name == "Read":
+        if not _is_excel_path((tool_input or {}).get("file_path")):
+            return _FILE_DENY_MSG
+    elif tool_name in ("Grep", "Glob", "NotebookRead", "NotebookEdit"):
+        return _FILE_DENY_MSG
     return _ORIG_EXECUTE_TOOL(tool_name, tool_input, cwd)
 
 
@@ -570,6 +604,128 @@ def _handle_sql_query(tool_input: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 导入数据库：把工作台各分区数据写入远程 Postgres 的 DA 目标表（第 6 步「导入数据库」按钮）。
+#  - 中文属性名 → 列 code 由 亿纬锂能DA梳理.xlsx「报价助手」本体映射（含隐藏字段——有值就存）；
+#  - **主键(id)由雪花算法生成**（cpq_db.snow_next_id）；**外键按 ER 关系引用父表已生成的主键**；
+#    这些 id 只存后台、前台不展示，但写库时按下方 ER 关系装配好。
+#  - 逐分区独立提交并回报成败，前端把每个分区的导入状况显示在左侧 Agent 聊天里。
+# ---------------------------------------------------------------------------
+
+# section_id -> (目标表, 说明)。按 ER 依赖顺序排列：父表在前、子表在后。
+# 仅展示类分区（s2/s3/s4_products 沿用第1步）与 BPM/文档不入库。
+_IMPORT_SEQ = [
+    ("s1_basic",     "clm_calc_base_info",    "测算基本信息"),   # 价格测算单根：calc_order_id
+    ("s1_products",  "clm_calc_product",      "产品信息"),       # PK product_line_id（被 tech/bom 引用）
+    ("s1_techparams", "clm_calc_product_tech", "产品技术参数"),
+    ("s1_dest",      "clm_calc_destination",  "目的地信息"),
+    ("s1_payment",   "clm_calc_payment",      "付款信息"),
+    ("s1_logistics", "clm_calc_logistics",    "物流信息"),
+    ("s2_bomhead",   "clm_calc_bom_head",     "实例BOM头信息"),  # PK bom_header_id（被 bomline 引用）
+    ("s2_bomline",   "clm_calc_bom_line",     "实例BOM行信息"),
+    ("s3_markup",    "clm_calc_markup_item",  "加价信息(定价)"),
+    ("s4_markup",    "clm_calc_markup_item",  "加价明细(报价)"),
+    ("s5_basic",     "clm_quote_base_info",   "报价基本信息"),   # 报价单根：quote_order_id
+    ("s5_detail",    "clm_quote_product",     "报价明细"),
+]
+
+
+def _import_quote(payload: dict) -> dict:
+    """按 ER 关系把工作台各分区写入目标 Postgres：主键雪花生成、外键引用父表主键。逐分区回报成败。
+
+    ER 装配：
+      - 价格测算单根 calc_order_id 生成一次 → clm_calc_base_info 主键 + 各子表 calc_order_id 外键；
+      - 报价单根 quote_order_id 生成一次 → clm_quote_base_info 主键 + clm_quote_product 外键；
+      - 每个产品行 product_line_id 雪花主键 → 产品技术参数/BOM头 按「产品型号」匹配引用（单产品直接沿用）；
+      - 每个 BOM 头 bom_header_id 雪花主键 → BOM 行 ref_bom_header_id 引用（单头直接沿用）；
+      - 其余表自身主键：不显式给值，交由 PG 列默认 snow_next_id() 自动生成。
+    """
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "入参必须是 JSON 对象"}
+    sections = payload.get("sections") or {}
+    if not isinstance(sections, dict) or not sections:
+        return {"ok": False, "error": "没有可导入的分区数据"}
+    try:
+        conn = cpq_db.connect(readonly=False)  # autocommit：逐分区独立生效
+    except Exception as e:
+        return {"ok": False, "error": f"无法连接目标数据库：{e}"}
+
+    def _rows_of(sec):
+        data = sec.get("数据", sec.get("data"))
+        rows = [data] if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        return [r for r in rows if isinstance(r, dict) and any(str(v).strip() for v in r.values())]
+
+    results = []
+    # ER 上下文（生成一次的根 id + 父表主键索引）
+    root_calc = None          # 价格测算单 calc_order_id
+    root_quote = None         # 报价单 quote_order_id
+    prod_by_model = {}        # 产品型号 -> product_line_id
+    prod_ids = []             # 全部 product_line_id（顺序）
+    head_ids = []             # 全部 bom_header_id
+    try:
+        for sid, table, label in _IMPORT_SEQ:
+            sec = sections.get(sid)
+            if not isinstance(sec, dict):
+                continue
+            rows = _rows_of(sec)
+            if not rows:
+                results.append({"section": sid, "label": label, "table": table,
+                                "ok": True, "rows": 0, "note": "无数据，跳过"})
+                continue
+            cols = cpq_db.table_columns("quote", table)
+            code_map = cpq_db.attr_code_map("quote", table)
+            saved = 0
+            err = None
+            try:
+                for r in rows:
+                    cr = {code_map[k]: v for k, v in r.items() if k in code_map}
+                    model = str(r.get("产品型号", "")).strip()
+                    # —— 价格测算单根 calc_order_id ——
+                    if "calc_order_id" in cols:
+                        if root_calc is None:
+                            root_calc = cpq_db.snow_next_id(conn)
+                        cr["calc_order_id"] = root_calc
+                    # —— 报价单根 quote_order_id ——
+                    if "quote_order_id" in cols:
+                        if root_quote is None:
+                            root_quote = cpq_db.snow_next_id(conn)
+                        cr["quote_order_id"] = root_quote
+                    # —— 产品主键 & 引用 ——
+                    if table == "clm_calc_product":
+                        pid = cpq_db.snow_next_id(conn)
+                        cr["product_line_id"] = pid
+                        prod_ids.append(pid)
+                        if model:
+                            prod_by_model[model] = pid
+                    elif "product_line_id" in cols:  # tech / bom_head 引用产品
+                        pid = prod_by_model.get(model) or (prod_ids[0] if len(prod_ids) == 1 else (prod_ids[0] if prod_ids else None))
+                        if pid is not None:
+                            cr["product_line_id"] = pid
+                    # —— BOM 头主键 & 行引用 ——
+                    if table == "clm_calc_bom_head":
+                        hid = cpq_db.snow_next_id(conn)
+                        cr["bom_header_id"] = hid
+                        head_ids.append(hid)
+                    if table == "clm_calc_bom_line" and "ref_bom_header_id" in cols:
+                        if head_ids:
+                            cr["ref_bom_header_id"] = head_ids[0]
+                    cpq_db.insert_rows(conn, table, [cr])  # 每行独立，父在前
+                    saved += 1
+                results.append({"section": sid, "label": label, "table": table, "ok": True, "rows": saved})
+            except Exception as e:
+                err = str(e)[:300]
+                results.append({"section": sid, "label": label, "table": table,
+                                "ok": False, "rows": saved, "error": err})
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    ok_all = all(r["ok"] for r in results) and bool(results)
+    total = sum(r.get("rows", 0) for r in results if r["ok"])
+    return {"ok": ok_all, "total_rows": total, "db": DB_NAME, "results": results}
+
+
+# ---------------------------------------------------------------------------
 # 系统提示词：亿纬锂能 POC（简化）7 步报价流程
 # ---------------------------------------------------------------------------
 
@@ -582,27 +738,38 @@ SYSTEM_PROMPT = """\
 
 说明：POC 里“客户需求解析”那一行**没有 Agent 步骤名称**（是系统解析初稿，不是你的步骤），
 所以**跳过它**；你的第 1 步是“确认需求配置”。每步只能用下面列出的**固定 section_id**，
-字段/列都由系统写死（来自《BI 及关键属性》逻辑实体↔业务属性），你只填值、不能增删字段。
+字段/列都由系统写死，你只填值、不能增删字段。
 
-每步的分区/列全部来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（已排除所有 id/主键/外键字段），
-你只填值、不能增删字段；每个分区的所有列都要尽量填满。
+每步的分区/字段/列**全部来自 亿纬锂能DA梳理.xlsx「报价助手」页**（业务对象→逻辑实体→属性名称，
+已排除所有 id/主键/外键字段）。**render 的键/列名必须用该页的“属性名称”中文**
+（例如 s1_basic 用「客户等级」「项目名称」「贸易术语」这类中文名，**不要用数据库列 code**
+如 customer_level/project_name——那是查库写 SQL 用的，不是 render 的键）。字段名不确定时，
+以 `/api/meta` 下发、右侧已预渲染的空骨架列名为准，逐列对着填。每个分区的列都尽量填满。
 
-- **第 1 步｜确认需求配置**。子步骤：①完善和确认测算基本信息（s1_basic）→ ②维护目的地信息（s1_dest）→
-  ③添加产品信息列表（s1_products）→ ④分解付款里程碑信息（s1_payment）→ ⑤填写物流信息（s1_logistics）→
-  ⑥确认并提交测算单。产品技术参数（s1_techparams）随③一起填。
+- **第 1 步｜确认需求配置**。分区按此顺序展示：s1_basic（表单·测算基本信息）→ s1_dest（**表/列表**·目的地信息，
+  可多行）→ s1_products（表·产品信息列表）→ s1_techparams（表·产品技术参数）→ s1_payment（表·付款里程碑信息）→
+  s1_logistics（**表/列表**·物流信息，可多行）。子步骤：①完善和确认测算基本信息 → ②维护目的地信息 →
+  ③添加产品信息列表（技术参数随此一起填）→ ④分解付款里程碑信息 → ⑤填写物流信息 → ⑥确认并提交测算单。
+  ⚠️ s1_dest、s1_logistics 是**列表（render_table，rows=[{…}]）**，不是键值表单。
   **取数逻辑：以用户上传的需求文档/需求描述为准**逐项填入；文档没写、但库里有依据的（如按产品型号补规格/标准技术参数），
   **按情况用 sql_query 查库补全**；两边都没有的给推荐值（加「（推荐）」标记）。
-- **第 2 步｜定价-基础成本**。分区：s2_products（产品信息·沿用第 1 步·仅展示）、s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息）。
+- **第 2 步｜定价-基础成本**。分区顺序：**先 s2_products（产品信息·沿用第 1 步·仅展示），产品信息下挂实例 BOM**——
+  s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息，**按层级树形展示**）。
+  **s2_bomline 每行必须带「层级」键**（1=顶层组件 L1、2=L2、3=L3…，行按树的先序排列：父行后面紧跟其子行），
+  前端会按层级缩进成树（与配置助手的 BOM 清单同样的展示方式）；其余列用实例BOM行的固定列（组件编码/组件名称/
+  组件规格型号/物料清单组件数量/物料用量单位编码/材料单价/直接人工单价/间接人工单价/机器费用/其他制费）。
   **取数逻辑（严格按此顺序）**：
   ① **读取规则库的配置规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_distribution_rule WHERE is_deleted=0`，
      根据第 1 步确认的**产品信息、产品技术参数特征**逐条执行规则语义（如 280kWh→强制液冷、风冷→禁止低温加热、
-     电量→自动匹配模组数/额定电流/箱体规格），**输出实例 BOM 清单**（头→s2_bomhead、行→s2_bomline，行含 parent_line_id 多级结构）；
+     电量→自动匹配模组数/额定电流/箱体规格），**输出实例 BOM 清单**（头→s2_bomhead、行→s2_bomline 带层级）；
      聊天小结必须写明「命中配单规则：规则名 → 结论」，一条没命中也要写「配单规则均未命中」。
   ② **从物料成本表匹配料工费**：按 BOM 行的物料编码/名称查 `md_clm_material_cost_cnf`
      （material_code/material_name/material_unit_price/direct_labor_unit_price/indirect_labor_unit_price/machine_cost/other_charge，
      is_deleted=0 且在有效期内），把 材料单价/直接人工单价/间接人工单价/机器费用/其他制费 填进 s2_bomline 对应列。
-  ③ **复核并确认**产品配置清单及料工费，汇总得出**产品基础成本**（写回 s2_products 的「基础成本」列），请用户确认。
-  ④ 用户确认后提交报价测算，进入下一步。
+  ③ **计算产品基础成本（固定公式）**：**基础成本 = Σ(L1 层级组件) (材料单价 + 直接人工单价 + 间接人工单价 +
+     机器费用 + 其他制费) × 数量**——只汇总层级=1 的组件行（下层成本已含在上层单价里，不重复累加），
+     结果写回 s2_products 的「基础成本」列；聊天里给出每个产品的汇总算式。
+  ④ **复核并确认**产品配置清单及料工费、产品基础成本，用户确认后提交报价测算，进入下一步。
 - **第 3 步｜定价-利润加成**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价信息）。
   **取数逻辑**：
   ① **读取规则库的定价规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
@@ -648,6 +815,9 @@ SYSTEM_PROMPT = """\
      source 里也注明来源是推荐；**不要大片留空、也不要只是把文档里的话原样搬进去**，该推断的要推断、该算的要算。
 
 # 数据来源（两端，每步都要说清依据）
+
+**⚠️ 禁止读取本地文件**：不允许用 Read/Grep/Glob 等去读本地磁盘上的任何文件（json/sqlite/py/csv/txt… 一律不行），
+唯一例外是 Excel（.xlsx/.xls）。业务数据只能走 sql_query 查数据库；需求内容以用户上传/描述的为准。
 
 1. **需求文档端**：用户上传/描述的需求（客户、项目、产品型号、数量、目的地、交期、付款、
    质量专控、碳足迹、非标、贸易术语等具体值）——这是本单的“个性”，填进各分区 values/rows。
@@ -1822,6 +1992,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 traceback.print_exc()
                 self._send_json({"error": str(e)}, status=500)
+        elif path == "/api/import":
+            data = self._read_body()
+            try:
+                self._send_json(_import_quote(data))
+            except Exception as e:
+                traceback.print_exc()
+                self._send_json({"ok": False, "error": str(e)}, status=500)
         elif path == "/api/export/docx":
             data = self._read_body()
             try:

@@ -1,0 +1,46 @@
+# ---- 虚拟环境（Windows 平台、体积大，绝不进镜像；Linux 里重新 pip 装）----
+open-claude/.venv/
+**/.venv/
+**/venv/
+
+# ---- 机密：API Key 明文，绝不烤进镜像（运行时用环境变量或挂载卷）----
+cpq_settings.json
+xbom_settings.json
+rule_settings.json
+rule_settings.json.*
+
+# ---- 运行时数据（历史/本地数据，运行时用卷持久化）----
+cpq_history/
+xbom_history/
+rule_history/
+cpq_data/
+
+# ---- 弃用的 SQLite 知识库（数据源已切远程 Postgres）----
+database/*.sqlite
+database/*.sqlite-shm
+database/*.sqlite-wal
+quote_bom.db
+
+# ---- 仅作参考、运行时不读的大表格（保留 亿纬锂能DA梳理.xlsx —— 本体语义层，必须进镜像）----
+报价业务流程.xlsx
+配置助手.xlsx
+BOM配置逻辑实体.xlsx
+~$*.xlsx
+
+# ---- 缓存 / 版本控制 / 编辑器 ----
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# ---- Docker 自身产物 ----
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# ---- 临时/草稿 ----
+scratch_*
+*.log
