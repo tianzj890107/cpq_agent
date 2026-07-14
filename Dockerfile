@@ -8,16 +8,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=5
 
 WORKDIR /app
 
 # 1) 先装依赖（单独一层，利用缓存）。这些包均有 manylinux wheel，slim 基础镜像即可，无需编译工具链。
-#    国内构建机直连 pypi.org 会超时/被墙，这里默认走清华镜像；可用 --build-arg PIP_INDEX_URL=... 覆盖。
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+#    国内构建机直连 pypi.org 会超时/被墙，镜像源已在上面 ENV(PIP_INDEX_URL) 固定为阿里云，pip 自动读取。
 COPY requirements.txt ./
-RUN pip install -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" -r requirements.txt
+RUN pip install -r requirements.txt
 
 # 2) 再拷应用源码（含 open-claude/ 引擎源码——走 sys.path 引用，不 pip 安装；
 #    .venv / 机密 settings / 历史 / 大表格 已由 .dockerignore 排除）。
