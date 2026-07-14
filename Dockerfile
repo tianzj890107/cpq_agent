@@ -19,7 +19,10 @@ WORKDIR /app
 # 1) 先装依赖（单独一层，利用缓存）。这些包均有 manylinux wheel，slim 基础镜像即可，无需编译工具链。
 #    国内构建机直连 pypi.org 会超时/被墙，镜像源已在上面 ENV(PIP_INDEX_URL) 固定为阿里云，pip 自动读取。
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install \
+      -i https://mirrors.aliyun.com/pypi/simple/ \
+      --trusted-host mirrors.aliyun.com \
+      -r requirements.txt
 
 # 2) 再拷应用源码（含 open-claude/ 引擎源码——走 sys.path 引用，不 pip 安装；
 #    .venv / 机密 settings / 历史 / 大表格 已由 .dockerignore 排除）。
