@@ -420,6 +420,15 @@ def table_columns(agent: str, table: str) -> set:
     return set(attr_code_map(agent, table).values())
 
 
+def sheet_tables(agent: str) -> set:
+    """某助手 sheet（quote/config/rule）在 DA 本体里的全部物理表名（小写）。
+    用于各助手 sql_query 的表访问边界（取不到本体返回空集，调用方需给兜底）。"""
+    try:
+        return {e["table"].lower() for e in _load_ontology()[agent]["entities"] if e.get("table")}
+    except Exception:
+        return set()
+
+
 def search_fields(keyword: str, limit: int = 8):
     """跨三个 sheet 按属性名/字段code 模糊搜索，返回字段字典行（本体语义层，替代旧 da_fields 表）。"""
     kw = (keyword or "").strip()

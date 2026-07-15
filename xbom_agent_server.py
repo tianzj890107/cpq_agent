@@ -42,10 +42,13 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 # Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「配置助手」sheet（不反射数据库）。
 import cpq_db
 import cpq_msgutil
+import cpq_llm
 
 DB_NAME = cpq_db.DB_LABEL
-_DB_SCHEMA_TEXT = cpq_db.schema_text("config")
-_SCHEMA_DOC = cpq_db.schema_doc("config")
+# 表访问边界：配置助手取数只能访问 亿纬锂能DA梳理「规则助手」页内的表（+DA 文档之外的样例 BOM 表），
+# 所以给模型看的 schema 也只下发规则助手页的（报价助手页/配置助手页的表由 sql_query 硬拦截）。
+_DB_SCHEMA_TEXT = cpq_db.schema_text("rule")
+_SCHEMA_DOC = cpq_db.schema_doc("rule")
 
 # Windows 控制台默认 cp1252，rich 打印中文工具结果会崩溃 —— 统一切到 UTF-8。
 for _stream in (sys.stdout, sys.stderr):
@@ -303,8 +306,9 @@ if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
-        "在配置知识库（远程 Postgres，只读）上执行 SELECT 查询，取 样例BOM / BOM / 规则 / "
-        "字段清单 等数据。**表结构见系统提示词末尾的完整 schema，据它生成 SQL。**"
+        "在配置知识库（远程 Postgres，只读）上执行 SELECT 查询，取 样例BOM / 规则 等数据。"
+        "**只能查亿纬锂能DA梳理「规则助手」页内的表（md_clm_*/bd_clm_feature）和样例 BOM 表"
+        "（sample_power_bom_*）；报价助手页、配置助手页的表禁止查询，会被直接拒绝。**"
         "仅允许单条 SELECT / WITH 语句，不要带分号或多条语句。"
         "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
@@ -328,6 +332,36 @@ _SQL_FORBIDDEN = re.compile(
 )
 
 
+def _blocked_tables() -> set:
+    """配置助手的表访问边界：亿纬锂能DA梳理中只能访问「规则助手」页内的表，
+    报价助手页/配置助手页的表一律禁止（DA 文档之外的表如 sample_power_bom_* 不受限）。
+    黑名单 = (报价页 ∪ 配置页) − 规则页，取自 DA 本体；取不到用硬编码兜底。"""
+    quote = cpq_db.sheet_tables("quote")
+    config = cpq_db.sheet_tables("config")
+    rule = cpq_db.sheet_tables("rule")
+    blocked = (quote | config) - rule
+    if blocked:
+        return blocked
+    return {
+        "clm_calc_base_info", "clm_calc_destination", "clm_calc_product", "clm_calc_product_tech",
+        "clm_calc_payment", "clm_calc_logistics", "clm_calc_bom_head", "clm_calc_bom_line",
+        "clm_calc_markup_item", "clm_quote_base_info", "clm_quote_product",
+        "material_info", "product_series_info", "product_series_ref_feature_info",
+        "clm_base_info", "clm_line_info", "clm_base_rule_rel", "clm_line_rule_rel",
+    }
+
+
+_SQL_BLOCKED_TABLES = _blocked_tables()
+
+
+def _find_blocked_table(sql: str):
+    low = sql.lower()
+    for t in _SQL_BLOCKED_TABLES:
+        if re.search(r"\b" + re.escape(t) + r"\b", low):
+            return t
+    return None
+
+
 def _handle_sql_query(tool_input: dict) -> str:
     """只读执行一条 SQL，返回紧凑文本表；拒绝一切写操作/多语句。"""
     if not isinstance(tool_input, dict):
@@ -342,6 +376,12 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "一次只允许一条查询语句（不要包含分号或多条语句）"
     if _SQL_FORBIDDEN.search(sql):
         return "检测到写操作关键字，已拒绝：本知识库为只读"
+    bt = _find_blocked_table(sql)
+    if bt:
+        return ("已拒绝：表 " + bt + " 属于亿纬锂能DA梳理的报价助手页/配置助手页，配置助手取数"
+                "只能访问规则助手页内的表（md_clm_distribution_rule / md_clm_material_price_rule / "
+                "md_clm_material_cost_cnf / md_clm_material_feature_cnf / bd_clm_feature）以及"
+                "样例 BOM 表（sample_power_bom_orders / sample_power_bom_lines）。")
     try:
         limit = int(tool_input.get("limit", 100))
     except (TypeError, ValueError):
@@ -375,11 +415,22 @@ def _handle_sql_query(tool_input: dict) -> str:
 # 配置BOM 入库：写入专用表 xbom_config_bom / xbom_config_bom_line（不污染样例/生产表）
 # ---------------------------------------------------------------------------
 
+def _bom_level(r: dict) -> int:
+    """从行数据里解析层级：'L2'/'2'/2 → 2；解析不出按 1（顶层）。"""
+    v = str(r.get("层级", r.get("level", ""))).strip()
+    m = re.search(r"\d+", v)
+    return int(m.group(0)) if m else 1
+
+
 def _import_config_bom(payload: dict) -> dict:
     """把用户确认后的配置BOM + 每行规则写入远程 Postgres 的 DA 目标表：
     头 → CLM_BASE_INFO；行 → CLM_LINE_INFO（ref_bom_header_id 挂头）；
     行选中的规则 → clm_line_rule_rel（按 rule_name 反查 md_clm_distribution_rule_id）。
-    id 类字段：先让 PG 默认值自动生成（INSERT..RETURNING）；库无默认值时退回自生成 uuid。"""
+
+    **BOM 层级（L1-Ln）用 头/行递归关系落库**（CLM_LINE_INFO.ref_bom_header_id →
+    CLM_BASE_INFO.bom_header_id）：按行数据「层级」列重建树——L1 行挂产品根 BOM 头；
+    每个有子件的行，为它补插一个子 BOM 头（product_item_* 取该组件自身），
+    其子行的 ref_bom_header_id 指向该子头。这是后台实际表内容，与前端展示无关。"""
     if not isinstance(payload, dict):
         return {"ok": False, "error": "入参必须是 JSON 对象"}
     product = (payload.get("product") or payload.get("产品") or "").strip()
@@ -412,13 +463,41 @@ def _import_config_bom(payload: dict) -> dict:
             }
             cpq_db.insert_rows(con, "CLM_BASE_INFO", [head])
             saved = 0
+            sub_heads = 0
+            stack = []      # 层级栈：[{level, head_id(该行的子BOM头,懒建), row}]
+            seq_in_head = {}  # 各 BOM 头下的行序号（seq_num 按头内递增）
             for i, r in enumerate(rows, 1):
                 if not isinstance(r, dict):
                     continue
+                # —— 按「层级」列重建 L1-Ln 树（头/行递归：ref_bom_header_id→bom_header_id）——
+                lvl = _bom_level(r)
+                while stack and stack[-1]["level"] >= lvl:
+                    stack.pop()
+                if stack:  # 有父行：子行挂父行的子 BOM 头（懒建）
+                    parent = stack[-1]
+                    if parent["head_id"] is None:
+                        sub_id = cpq_db.snow_next_id(con)
+                        pr = parent["row"]
+                        cpq_db.insert_rows(con, "CLM_BASE_INFO", [{
+                            "bom_header_id": sub_id,
+                            "bom_name": (g(pr, "物料名称", "material_name", "name") or "子层级") + " BOM",
+                            "product_item_code": g(pr, "物料编码", "material_code", "code"),
+                            "product_item_name": g(pr, "物料名称", "material_name", "name"),
+                            "product_item_spec": "",
+                            "basis_quantity": "1", "bom_version": "V1", "status": "已确认",
+                            "creation_date": created, "created_by": "xbom_agent",
+                            "last_update_date": created, "last_updated_by": "xbom_agent",
+                        }])
+                        parent["head_id"] = sub_id
+                        sub_heads += 1
+                    ref_id = parent["head_id"]
+                else:      # 顶层(L1)行：挂产品根 BOM 头
+                    ref_id = bom_id
+                seq_in_head[ref_id] = seq_in_head.get(ref_id, 0) + 1
                 line_id = cpq_db.snow_next_id(con)  # 行主键雪花生成（供规则关系外键引用）
                 line = {
                     "bom_line_id": line_id,
-                    "ref_bom_header_id": bom_id, "seq_num": str(i),  # 外键→BOM头
+                    "ref_bom_header_id": ref_id, "seq_num": str(seq_in_head[ref_id]),  # 外键→所属BOM头
                     "component_item_code": g(r, "物料编码", "material_code", "code"),
                     "component_item_name": g(r, "物料名称", "material_name", "name"),
                     "component_item_quantity": g(r, "数量", "qty"),
@@ -427,6 +506,7 @@ def _import_config_bom(payload: dict) -> dict:
                     "creation_date": created, "created_by": "xbom_agent",
                 }
                 cpq_db.insert_rows(con, "CLM_LINE_INFO", [line])
+                stack.append({"level": lvl, "head_id": None, "row": r})
                 saved += 1
                 rule_name = g(r, "规则", "rule")
                 if rule_name and rule_name != "（无）":
@@ -449,7 +529,7 @@ def _import_config_bom(payload: dict) -> dict:
             con.close()
     except Exception as e:
         return {"ok": False, "error": f"数据库写入失败：{e}"}
-    out = {"ok": True, "bom_id": bom_id, "lines": saved,
+    out = {"ok": True, "bom_id": bom_id, "lines": saved, "sub_heads": sub_heads,
            "table": "CLM_BASE_INFO / CLM_LINE_INFO", "created_at": created}
     if warn:
         out["warnings"] = warn[:10]
@@ -471,6 +551,11 @@ SYSTEM_PROMPT = """\
    （如：电量、冷却方式、附加功能、电芯模组、额定电流、箱体规格）。
 2. 识别可配置模块 —— 区分「可配置模块 / 通用(不可配置)模块」，标记「可配组件」（L2/L3）。
 3. 物料归集 —— 把物料挂到对应模块下，给每个物料打标签（通用件 / 互斥件 / 可选件 / 参数数量件 / 标准件）。
+   **⚠️ 物料归集检查规则（强制执行，不得偷懒）**：
+   ① 遍历每个实例的**完整 BOM 层级**，不得跳过任何层级（L1→L2→L3→L4 逐层走到底）。
+   ② 对每个 **L2 模块，强制检查是否有 L3/L4 子件**（即使所有实例中完全相同，也要展开列出，不能因为"都一样"就合并省略）。
+   ③ **反向校验**：归集完成后，随机抽取 1-2 个原始实例，逐行比对，确保无一物料遗漏（对不上要回查补齐）。
+   ④ **通用件 / 无变化物料也必须完整展开**，不得因为它是"叶子节点"或"没变化"而省略。
 4. 提取配置规则 —— 顶层全局约束 → 模块级规则 → BOM 行级规则。
    （如：280kWh 必选液冷；风冷不能选低温加热；电量→电芯模组/额定电流/箱体规格 的计算规则等。）
    **区分两类规则**：①**命中的已有规则**（能在 `md_clm_distribution_rule` 里找到对应的）；
@@ -521,11 +606,15 @@ SYSTEM_PROMPT = """\
      —— **20 份变体样例 BOM 的订单头 + 驱动参数**。第 1 步「识别参数」就从这里反推核心参数及取值域（电量/冷却方式/额定电流/箱体规格/低温加热/云端通信/电芯模组数）。
    - `sample_power_bom_lines(order_code, local_line_no, parent_local_line_no, level, level_tag, item_type, item_code, item_name, quantity, raw_text)`
      —— 20 份样例 BOM 的**层级明细**（按 order_code + (parent_local_line_no→local_line_no) 组成树）。第 2/3 步识别可配置模块、物料归集就用它。
-   - `CLM_BASE_INFO`（配置 BOM 头，product_item_code/bom_header_id）/ `CLM_LINE_INFO`（BOM 行，ref_bom_header_id→bom_header_id）
-     —— 标准配置 BOM 结构；第 5/6 步组装配置 BOM 时用（需要多层可用 CLM_LINE_INFO 递归 CTE 展开）。
    - `md_clm_distribution_rule(rule_name, rule_desc, rule_expression_view, rule_expression)` —— **配置/配单规则**（如 280kWh 强制液冷、风冷禁止低温加热）。第 4 步提取配置规则用。
-   - `md_clm_material_price_rule` / `md_clm_pricing_factor` / `md_clm_pricing_surcharge_factor` —— 定价/加价规则（如涉及）。
-   - `config_assistant_fields(business_object, logic_entity, physical_table, attribute_name, field_code)` —— 配置助手字段清单口径。
+   - `md_clm_material_price_rule` —— 定价/报价规则（如涉及）；`md_clm_material_cost_cnf` / `md_clm_material_feature_cnf` /
+     `bd_clm_feature` —— 物料成本/物料特征/基础特征库（按需查）。
+   - **⚠️ 表访问边界（重要规则）**：取数时，亿纬锂能DA梳理文档中你**只能访问「规则助手」页内的表**
+     （即上面的 md_clm_distribution_rule / md_clm_material_price_rule / md_clm_material_cost_cnf /
+     md_clm_material_feature_cnf / bd_clm_feature）；**报价助手页（clm_calc_*/clm_quote_*）和
+     配置助手页（material_info / product_series_* / CLM_BASE_INFO / CLM_LINE_INFO / clm_*_rule_rel）
+     的任何实际表一律禁止查询**（系统会直接拒绝）。样例 BOM 表（sample_power_bom_orders/lines）
+     不在 DA 文档内，可正常使用。配置 BOM 的组装以样例 BOM + 规则 + 用户需求为依据，不查标准配置 BOM 表。
 
 # 页面消息协议
 
@@ -630,6 +719,11 @@ def apply_saved_provider_keys():
         _apply_provider_env(prov, key)
 
 
+# 注册「本地模型」provider + DeepSeek 深度思考补丁（运行时注入，不改 open-claude 包）
+cpq_llm.install()
+cpq_llm.configure(load_settings())
+
+
 def _pick_model_by_available_key(current: str) -> str:
     """当前模型 provider 没配 Key 时，自动挑一个已配 Key 的 provider 的首个模型。
     避免“默认用 Claude，但只配了 Qwen/DeepSeek 的 Key”时一发送就 403/401。"""
@@ -662,6 +756,7 @@ def models_catalog() -> list:
             "provider_label": PROVIDERS.get(prov, {}).get("label", prov),
             "configured": bool(get_api_key_for(prov)),
         })
+    out.append(cpq_llm.catalog_entry())  # 本地模型（OpenAI 兼容网关，手动配置）
     return out
 
 
@@ -899,14 +994,20 @@ class Bridge:
             "max_tokens": prof.max_tokens,
             "thinking": prof.thinking,
             "thinking_budget": prof.thinking_budget,
+            "local": cpq_llm.local_public(),
         }
 
     def apply_settings(self, s: dict, persist: bool = True) -> dict:
         """应用模型 / 采样参数 / API Key（可选持久化）。"""
         s = s or {}
         prof = self.conv.profile
+        # 本地模型连接配置要先应用（选「本地模型」时 model 用它配置的模型名）
+        if isinstance(s.get("local"), dict):
+            cpq_llm.configure_local(s["local"])
         if s.get("model"):
             raw = str(s["model"]).strip()
+            if raw == cpq_llm.LOCAL_SENTINEL:
+                raw = cpq_llm.local_model_id()
             mid = raw if raw == NO_MODEL_ID else _sanitize_model(resolve_model(raw))
             if mid:
                 self.conv.model = mid
@@ -917,6 +1018,7 @@ class Bridge:
             prof.max_tokens = _to_int_or_none(s.get("max_tokens"))
         if "thinking" in s:
             prof.thinking = bool(s.get("thinking"))
+            cpq_llm.set_deepseek_thinking(prof.thinking)  # 同步 DeepSeek 深度思考
         if "thinking_budget" in s:
             prof.thinking_budget = _to_int_or_none(s.get("thinking_budget")) or 8000
         # API Key：既支持 {"api_keys": {provider: key}}，也支持单个 {"api_key": ..., ["provider": ...]}
@@ -939,6 +1041,8 @@ class Bridge:
                 ak = cur.get("api_keys") or {}
                 ak.update(new_keys)
                 cur["api_keys"] = ak
+            if cpq_llm.local_model_id() or cpq_llm.local_public()["base_url"]:
+                cur["local"] = cpq_llm.local_persist()
             save_settings(cur)
         return self.current_settings()
 

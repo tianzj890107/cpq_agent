@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 # 业务数据源 = 远程 Postgres（三助手共用）；Agent 可见 schema 来自 亿纬锂能DA梳理.xlsx「规则助手」sheet。
 import cpq_db
 import cpq_msgutil
+import cpq_llm
 
 DB_NAME = cpq_db.DB_LABEL
 
@@ -235,6 +236,7 @@ def _build_rule_field_context() -> str:
 DB_SCHEMA_TEXT = _build_schema_text()
 RULE_FIELD_CONTEXT = _build_rule_field_context()
 
+# 已停用：规则助手不读数据库（不再注册给模型；execute_tool 里也做了兜底拦截）。保留定义仅供参考。
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
@@ -455,7 +457,9 @@ _ORIG_EXECUTE_TOOL = oc_repl.execute_tool
 
 def _patched_execute_tool(tool_name, tool_input, cwd):
     if tool_name == "sql_query":
-        return _handle_sql_query(tool_input)
+        # 规则助手不读数据库（工具已不注册，这里兜底拦截存量会话的调用）
+        return ("规则助手不读数据库：生成 Groovy 所需的字段字典、既有规则样例、加价因子明细、"
+                "样例 BOM 参数都已内置在系统提示词的「数据库字段上下文」里，请直接依据它生成公式。")
     if tool_name == "rule_result":
         return _handle_rule_result(tool_input)
     return _ORIG_EXECUTE_TOOL(tool_name, tool_input, cwd)
@@ -493,8 +497,9 @@ SYSTEM_PROMPT = f"""\
 
 【第二步 · 用数据库参数 + 规则描述 → 生成 Groovy 公式和代码】
 - 触发：用户点「生成 Groovy 公式」或明确要求生成公式时（消息通常以「【第二步·生成公式…】」开头，并附上第一步的规则列表）。
-- 任务：对每一条规则，结合「规则描述 + 数据库里的真实参数」产出可落库的 Groovy 公式与完整代码。
-- **必须先用 sql_query 查数据库拿参数依据**：字段字典、既有 rule_expression 样例、样例 BOM 订单参数、加价因子明细等。
+- 任务：对每一条规则，结合「规则描述 + 下方内置字段上下文里的真实参数」产出可落库的 Groovy 公式与完整代码。
+- **不查数据库（规则助手不读库、没有 sql_query 工具）**：参数依据直接用本提示词末尾的「数据库字段上下文」——
+  字段字典、既有 rule_expression 样例、样例 BOM 订单参数、加价因子明细都已内置在里面，据此取值即可。
 - 优先使用这些业务字段：{", ".join(RULE_FIELDS)}。
 - 公式风格贴近库里现有 rule_expression：if (条件) {{ return 结果 }} … return null；字符串比较用单引号（如 客户等级 == 'S'）；
   报价/加价规则返回数值，配置/校验规则返回约束字符串或 true/null。
@@ -519,7 +524,7 @@ return null
 数据库字段上下文：
 {RULE_FIELD_CONTEXT}
 
-完整库 schema（来自 亿纬锂能DA梳理.xlsx「规则助手」sheet，据此生成 PostgreSQL SQL）：
+完整库 schema（来自 亿纬锂能DA梳理.xlsx「规则助手」sheet，**仅作字段口径参考——规则助手不读数据库、不要生成/执行 SQL**）：
 {DB_SCHEMA_TEXT}
 """
 
@@ -557,6 +562,11 @@ def apply_saved_provider_keys():
         _apply_provider_env(prov, key)
 
 
+# 注册「本地模型」provider + DeepSeek 深度思考补丁（运行时注入，不改 open-claude 包）
+cpq_llm.install()
+cpq_llm.configure(load_settings())
+
+
 def _pick_model_by_available_key(current: str) -> str:
     if get_api_key_for(get_model_provider(current)):
         return current
@@ -586,6 +596,7 @@ def models_catalog() -> list:
             "provider_label": PROVIDERS.get(prov, {}).get("label", prov),
             "configured": bool(get_api_key_for(prov)),
         })
+    out.append(cpq_llm.catalog_entry())  # 本地模型（OpenAI 兼容网关，手动配置）
     return out
 
 
@@ -765,13 +776,19 @@ class Bridge:
             "max_tokens": prof.max_tokens,
             "thinking": prof.thinking,
             "thinking_budget": prof.thinking_budget,
+            "local": cpq_llm.local_public(),
         }
 
     def apply_settings(self, s: dict, persist: bool = True) -> dict:
         s = s or {}
         prof = self.conv.profile
+        # 本地模型连接配置要先应用（选「本地模型」时 model 用它配置的模型名）
+        if isinstance(s.get("local"), dict):
+            cpq_llm.configure_local(s["local"])
         if s.get("model"):
             raw = str(s["model"]).strip()
+            if raw == cpq_llm.LOCAL_SENTINEL:
+                raw = cpq_llm.local_model_id()
             mid = raw if raw == NO_MODEL_ID else _sanitize_model(resolve_model(raw))
             if mid:
                 self.conv.model = mid
@@ -782,6 +799,7 @@ class Bridge:
             prof.max_tokens = _to_int_or_none(s.get("max_tokens"))
         if "thinking" in s:
             prof.thinking = bool(s.get("thinking"))
+            cpq_llm.set_deepseek_thinking(prof.thinking)  # 同步 DeepSeek 深度思考
         if "thinking_budget" in s:
             prof.thinking_budget = _to_int_or_none(s.get("thinking_budget")) or 8000
         new_keys = {}
@@ -803,13 +821,14 @@ class Bridge:
                 keys = cur.get("api_keys") or {}
                 keys.update(new_keys)
                 cur["api_keys"] = keys
+            if cpq_llm.local_model_id() or cpq_llm.local_public()["base_url"]:
+                cur["local"] = cpq_llm.local_persist()
             save_settings(cur)
         return self.current_settings()
 
     def _inject_tools(self):
+        # 规则助手不读数据库：不注册 sql_query（参数依据全部内置在系统提示词的字段上下文里）。
         names = {s.get("name") for s in self.conv.tool_schemas}
-        if "sql_query" not in names:
-            self.conv.tool_schemas.append(SQL_QUERY_SCHEMA)
         if "rule_result" not in names:
             self.conv.tool_schemas.append(RULE_RESULT_SCHEMA)
 

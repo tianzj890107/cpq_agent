@@ -719,6 +719,20 @@
         <label id="apiKeyLabel">API Key（当前模型所属提供方，仅保存在本地）</label>
         <input id="setApiKey" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
 
+        <div id="localCfgBox" style="display:none;border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
+          <label>本地网关 Base URL（OpenAI 兼容）</label>
+          <input id="setLocalBase" type="text" placeholder="https://ai-pool.evebattery.com/v1" autocomplete="off">
+          <label>模型名称</label>
+          <input id="setLocalModel" type="text" placeholder="Qwen3-235B-A22B-w8a8" autocomplete="off">
+          <label class="check-row">
+            <input type="checkbox" id="setLocalThink">
+            启用思考 enable_thinking（chat_template_kwargs）
+          </label>
+          <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
+          <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
+          <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
+        </div>
+
         <label class="check-row" style="margin-top:16px">
           <input type="checkbox" id="setTempEnable" onchange="onTempEnableChange()">
           自定义 Temperature（不勾选则用模型默认）
@@ -729,11 +743,11 @@
         </div>
 
         <label>最大输出 Tokens（留空用默认 16384）</label>
-        <input id="setMaxTokens" type="number" min="256" max="64000" placeholder="16384">
+        <input id="setMaxTokens" type="number" min="256" max="200000" placeholder="16384">
 
         <label class="check-row">
           <input type="checkbox" id="setThinking" onchange="onThinkingChange()">
-          扩展思考（仅 Claude 系列生效）
+          深度思考（Claude / DeepSeek 线上生效；DeepSeek 自动切换思考版模型）
         </label>
         <div id="thinkBudgetRow" style="display:none">
           <label>思考预算 Tokens</label>
@@ -1984,6 +1998,12 @@
       try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model;
       else if (cur) sel.value = cur;
+      if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
+      const lc = st.local || {};
+      $('setLocalBase').value = lc.base_url || '';
+      $('setLocalModel').value = lc.model || '';
+      $('setLocalThink').checked = !!lc.enable_thinking;
+      $('setLocalTrunc').value = (lc.truncate_prompt_tokens != null ? lc.truncate_prompt_tokens : '');
       const hasTemp = st.temperature !== null && st.temperature !== undefined;
       $('setTempEnable').checked = hasTemp;
       $('setTemp').value = hasTemp ? st.temperature : 0.3;
@@ -2004,9 +2024,14 @@
       if (!o) return;
       const pl = o.dataset.providerLabel || '';
       const configured = o.dataset.configured === '1';
+      const isLocal = o.dataset.provider === 'local';
+      $('localCfgBox').style.display = isLocal ? '' : 'none';
       $('apiKeyLabel').textContent = pl + ' 的 API Key（仅保存在本地 cpq_settings.json）';
       const hint = $('modelHint');
-      if (configured) {
+      if (isLocal) {
+        hint.className = 'hint';
+        hint.textContent = '本地模型：在下方填写 OpenAI 兼容网关的 Base URL 与模型名称（API Key 视网关要求，可留空）。';
+      } else if (configured) {
         hint.className = 'hint ok';
         hint.textContent = '提供方：' + pl + ' · 已配置 API Key，可直接使用。';
       } else {
@@ -2026,7 +2051,22 @@
         thinking_budget: $('setThinkBudget').value === '' ? 8000 : Number($('setThinkBudget').value),
       };
       const key = $('setApiKey').value.trim();
-      if (key && o) { payload.api_key = key; payload.provider = o.dataset.provider; }
+      if (o && o.dataset.provider === 'local') {
+        // 本地模型：base_url / 模型名 必填；api_key 留空=不修改（网关无鉴权可不填）
+        const lb = $('setLocalBase').value.trim(), lm = $('setLocalModel').value.trim();
+        if (!lb || !lm) {
+          const m0 = $('settingsMsg'); m0.className = 'hint warn';
+          m0.textContent = '本地模型需要填写 Base URL 和模型名称。';
+          return;
+        }
+        payload.model = '__local__';
+        payload.local = {
+          base_url: lb, model: lm,
+          enable_thinking: $('setLocalThink').checked,
+          truncate_prompt_tokens: $('setLocalTrunc').value === '' ? null : Number($('setLocalTrunc').value),
+        };
+        if (key) payload.local.api_key = key;
+      } else if (key && o) { payload.api_key = key; payload.provider = o.dataset.provider; }
       const msg = $('settingsMsg');
       msg.className = 'hint';
       msg.textContent = '保存中…';

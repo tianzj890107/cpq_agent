@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 # Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（不反射数据库）。
 import cpq_db
 import cpq_msgutil
+import cpq_llm
 
 DB_NAME = cpq_db.DB_LABEL
 _DB_SCHEMA_TEXT = cpq_db.schema_text("quote")
@@ -538,6 +539,8 @@ SQL_QUERY_SCHEMA = {
         "在报价知识库（远程 Postgres，只读）上执行 SELECT 查询，取 BOM / 定价 / 加价 / "
         "规则 / 字段清单 等基础数据。**表结构见系统提示词末尾的完整 schema，据它生成 SQL。**"
         "仅允许单条 SELECT / WITH 语句，不要带分号或多条语句。"
+        "**只能查配置助手页/规则助手页的表（md_* 主数据表）；报价助手页的业务表（clm_calc_*/clm_quote_*）"
+        "禁止查询，会被直接拒绝**——前面步骤已生成的数据以右侧工作台分区内容为准。"
         "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
     ),
@@ -558,6 +561,9 @@ _SQL_FORBIDDEN = re.compile(
     r"\b(insert|update|delete|drop|alter|attach|detach|create|replace|reindex|vacuum|truncate|grant|revoke|copy)\b",
     re.IGNORECASE,
 )
+# 表访问边界：报价助手做数据提取时，只能查 亿纬锂能DA梳理 配置助手页/规则助手页 的表（md_* 主数据），
+# 报价助手页的实际业务表（clm_calc_* 价格测算单 / clm_quote_* 报价单）是「导入数据库」的写入目标，禁止查询。
+_SQL_BLOCKED_TABLES = re.compile(r"\bclm_(?:calc|quote)_\w+", re.IGNORECASE)
 
 
 def _handle_sql_query(tool_input: dict) -> str:
@@ -574,6 +580,11 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "一次只允许一条查询语句（不要包含分号或多条语句）"
     if _SQL_FORBIDDEN.search(sql):
         return "检测到写操作关键字，已拒绝：本知识库为只读"
+    m = _SQL_BLOCKED_TABLES.search(sql)
+    if m:
+        return ("已拒绝：报价助手页的业务表（如 " + m.group(0) + "）是本流程「导入数据库」的写入目标，"
+                "不允许作为数据来源查询。只能查配置助手页/规则助手页的表（md_* 主数据表）；"
+                "前面步骤已生成的数据请直接沿用右侧工作台各分区内容。")
     try:
         limit = int(tool_input.get("limit", 100))
     except (TypeError, ValueError):
@@ -612,10 +623,11 @@ def _handle_sql_query(tool_input: dict) -> str:
 # ---------------------------------------------------------------------------
 
 # section_id -> (目标表, 说明)。按 ER 依赖顺序排列：父表在前、子表在后。
-# 仅展示类分区（s2/s3/s4_products 沿用第1步）与 BPM/文档不入库。
+# s2/s3/s4_products 各步骤对产品信息的更新在导入前合并进 s1_products（见 _merge_product_rows），
+# 最终把合并后的完整产品信息写入 clm_calc_product；BPM/文档不入库。
 _IMPORT_SEQ = [
     ("s1_basic",     "clm_calc_base_info",    "测算基本信息"),   # 价格测算单根：calc_order_id
-    ("s1_products",  "clm_calc_product",      "产品信息"),       # PK product_line_id（被 tech/bom 引用）
+    ("s1_products",  "clm_calc_product",      "产品信息（含第1-4步更新）"),  # PK product_line_id（被 tech/bom 引用）
     ("s1_techparams", "clm_calc_product_tech", "产品技术参数"),
     ("s1_dest",      "clm_calc_destination",  "目的地信息"),
     ("s1_payment",   "clm_calc_payment",      "付款信息"),
@@ -629,6 +641,58 @@ _IMPORT_SEQ = [
 ]
 
 
+# 产品信息在第 1-4 步都会展示并被 Agent/用户更新（s1 可编辑，s2/s3/s4 每步重渲染带最新值）。
+# 前端导入时会把四个分区都发过来，这里按步骤顺序合并成一份完整的产品信息再入库。
+_PRODUCT_SECTIONS = ("s1_products", "s2_products", "s3_products", "s4_products")
+
+
+def _merge_product_rows(sections: dict) -> list:
+    """合并第 1-4 步的产品信息分区：行优先按「产品型号」对齐（无型号按行号对齐），
+    后面步骤的**非空值覆盖**前面步骤，新出现的字段直接补充；空值不会抹掉先前已填的值。"""
+    def _rows(sid):
+        sec = sections.get(sid)
+        if not isinstance(sec, dict):
+            return []
+        data = sec.get("数据", sec.get("data"))
+        rows = [data] if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        return [r for r in rows if isinstance(r, dict) and any(str(v).strip() for v in r.values())]
+
+    merged: list = []
+    idx_by_model: dict = {}   # 产品型号 -> merged 下标
+    for sid in _PRODUCT_SECTIONS:
+        for i, r in enumerate(_rows(sid)):
+            model = str(r.get("产品型号", "")).strip()
+            j = None
+            if model and model in idx_by_model:
+                j = idx_by_model[model]
+            elif i < len(merged):
+                # 型号缺失或是新型号但行号能对上（如后步型号列没渲染/被改写）时按行号对齐
+                if not model or not str(merged[i].get("产品型号", "")).strip() \
+                        or str(merged[i].get("产品型号", "")).strip() == model:
+                    j = i
+            if j is None:
+                merged.append({})
+                j = len(merged) - 1
+            tgt = merged[j]
+            for k, v in r.items():
+                s = str(v).strip() if v is not None else ""
+                if s and s not in ("-", "—", "/"):
+                    tgt[k] = v
+                elif k not in tgt:
+                    tgt[k] = v
+            m2 = str(tgt.get("产品型号", "")).strip()
+            if m2:
+                idx_by_model[m2] = j
+    return merged
+
+
+def _bom_level(r: dict) -> int:
+    """从行数据里解析层级：'L2'/'2'/2 → 2；解析不出按 1（顶层）。"""
+    v = str(r.get("层级", r.get("level", ""))).strip()
+    m = re.search(r"\d+", v)
+    return int(m.group(0)) if m else 1
+
+
 def _import_quote(payload: dict) -> dict:
     """按 ER 关系把工作台各分区写入目标 Postgres：主键雪花生成、外键引用父表主键。逐分区回报成败。
 
@@ -636,7 +700,10 @@ def _import_quote(payload: dict) -> dict:
       - 价格测算单根 calc_order_id 生成一次 → clm_calc_base_info 主键 + 各子表 calc_order_id 外键；
       - 报价单根 quote_order_id 生成一次 → clm_quote_base_info 主键 + clm_quote_product 外键；
       - 每个产品行 product_line_id 雪花主键 → 产品技术参数/BOM头 按「产品型号」匹配引用（单产品直接沿用）；
-      - 每个 BOM 头 bom_header_id 雪花主键 → BOM 行 ref_bom_header_id 引用（单头直接沿用）；
+      - **BOM 层级（L1-Ln）用 头/行递归关系落库**：行表 ref_bom_header_id → 头表 bom_header_id。
+        按「层级」列重建树——L1 行挂产品根 BOM 头；每个有子件的行，为它补插一个子 BOM 头
+        （product_item_* 取该组件自身），其子行的 ref_bom_header_id 指向该子头；
+        行的 parent_line_id 同时回填父行 bom_line_id（顶层为空）。这是后台实际表内容，与前端展示无关；
       - 其余表自身主键：不显式给值，交由 PG 列默认 snow_next_id() 自动生成。
     """
     if not isinstance(payload, dict):
@@ -644,6 +711,11 @@ def _import_quote(payload: dict) -> dict:
     sections = payload.get("sections") or {}
     if not isinstance(sections, dict) or not sections:
         return {"ok": False, "error": "没有可导入的分区数据"}
+    # 产品信息：合并第 1-4 步的更新，写库用完整版（覆盖 s1_products 原始快照）
+    merged_products = _merge_product_rows(sections)
+    if merged_products:
+        sections = dict(sections)
+        sections["s1_products"] = {"标题": "产品信息（第1-4步更新合并）", "数据": merged_products}
     try:
         conn = cpq_db.connect(readonly=False)  # autocommit：逐分区独立生效
     except Exception as e:
@@ -661,6 +733,9 @@ def _import_quote(payload: dict) -> dict:
     prod_by_model = {}        # 产品型号 -> product_line_id
     prod_ids = []             # 全部 product_line_id（顺序）
     head_ids = []             # 全部 bom_header_id
+    root_head_cr = None       # 第一条 BOM 头的落库行（子层级头沿用它的 calc/product/version）
+    bl_stack = []             # BOM 行层级栈：[{level, line_id, head_id(子头,懒建), row}]
+    sub_heads = 0             # 为中间层级补插的子 BOM 头数量
     try:
         for sid, table, label in _IMPORT_SEQ:
             sec = sections.get(sid)
@@ -705,12 +780,47 @@ def _import_quote(payload: dict) -> dict:
                         hid = cpq_db.snow_next_id(conn)
                         cr["bom_header_id"] = hid
                         head_ids.append(hid)
-                    if table == "clm_calc_bom_line" and "ref_bom_header_id" in cols:
-                        if head_ids:
+                    # —— BOM 行：按「层级」列重建 L1-Ln 树（头/行递归：ref_bom_header_id→bom_header_id）——
+                    if table == "clm_calc_bom_line":
+                        lvl = _bom_level(r)
+                        while bl_stack and bl_stack[-1]["level"] >= lvl:
+                            bl_stack.pop()
+                        if bl_stack:  # 有父行：子行挂父行的子 BOM 头（懒建），并回填 parent_line_id
+                            parent = bl_stack[-1]
+                            if parent["head_id"] is None:
+                                sub_id = cpq_db.snow_next_id(conn)
+                                pr = parent["row"]
+                                sub_head = {
+                                    "bom_header_id": sub_id,
+                                    "bom_name": (str(pr.get("组件名称", "")).strip() or "子层级") + " BOM",
+                                    "product_item_code": str(pr.get("组件编码", "")).strip(),
+                                    "product_item_name": str(pr.get("组件名称", "")).strip(),
+                                    "product_item_spec": str(pr.get("组件规格型号", "")).strip(),
+                                    "basis_quantity": "1",
+                                }
+                                if isinstance(root_head_cr, dict):  # 沿用根头的测算单/产品/版本
+                                    for k in ("calc_order_id", "product_line_id", "bom_version"):
+                                        if root_head_cr.get(k) not in (None, ""):
+                                            sub_head[k] = root_head_cr[k]
+                                cpq_db.insert_rows(conn, "clm_calc_bom_head", [sub_head])
+                                parent["head_id"] = sub_id
+                                sub_heads += 1
+                            cr["ref_bom_header_id"] = parent["head_id"]
+                            if "parent_line_id" in cols:
+                                cr["parent_line_id"] = parent["line_id"]
+                        elif head_ids:  # 顶层(L1)行：挂产品根 BOM 头，parent_line_id 留空
                             cr["ref_bom_header_id"] = head_ids[0]
+                        line_id = cpq_db.snow_next_id(conn)
+                        cr["bom_line_id"] = line_id
+                        bl_stack.append({"level": lvl, "line_id": line_id, "head_id": None, "row": r})
                     cpq_db.insert_rows(conn, table, [cr])  # 每行独立，父在前
                     saved += 1
-                results.append({"section": sid, "label": label, "table": table, "ok": True, "rows": saved})
+                    if table == "clm_calc_bom_head" and root_head_cr is None:
+                        root_head_cr = dict(cr)
+                res = {"section": sid, "label": label, "table": table, "ok": True, "rows": saved}
+                if sid == "s2_bomline" and sub_heads:
+                    res["sub_heads"] = sub_heads  # 另为中间层级补插的子 BOM 头（clm_calc_bom_head）
+                results.append(res)
             except Exception as e:
                 err = str(e)[:300]
                 results.append({"section": sid, "label": label, "table": table,
@@ -828,6 +938,12 @@ SYSTEM_PROMPT = """\
      间接人工单价/机器费用/其他制费，注意 is_deleted=0 与生效/失效日期）。
    - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：**='定价' 第 3 步用**（利润加成）、
      **='报价' 第 4 步用**（其他加价）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
+   - **⚠️ 表访问边界（重要规则）**：做数据提取时，亿纬锂能DA梳理文档里你只能访问**配置助手页、规则助手页**
+     对应的表（如 md_clm_distribution_rule / md_clm_material_cost_cnf / md_clm_material_price_rule 等 md_* 主数据表），
+     **报价助手页对应的任何实际业务表（clm_calc_* 价格测算单各表、clm_quote_* 报价单各表）一律禁止用 sql_query 访问**
+     （系统也会直接拒绝这类查询）——那些表是本流程最后「导入数据库」的**写入目标**，不是数据来源。
+     前面步骤已生成的信息（产品信息、实例 BOM、基础成本、加价等）以**右侧工作台各分区已渲染的内容**为准直接沿用，
+     不要去库里查历史报价/测算数据。
 金额单位以库中字段为准；计算必须自洽（合计=分项之和）。部分因子金额可能为空（来源限制），据实处理别硬编。
 
 # 整步一次性推荐（关键交互方式）
@@ -988,6 +1104,12 @@ def apply_saved_provider_keys():
         _apply_provider_env(prov, key)
 
 
+# 注册「本地模型」provider + DeepSeek 深度思考补丁（运行时注入，不改 open-claude 包），
+# 并按磁盘设置恢复本地连接配置 / thinking 开关。
+cpq_llm.install()
+cpq_llm.configure(load_settings())
+
+
 def _pick_model_by_available_key(current: str) -> str:
     """当前模型 provider 没配 Key 时，自动挑一个已配 Key 的 provider 的首个模型。
     避免“默认用 Claude，但只配了 Qwen/DeepSeek 的 Key”时一发送就 403/401。"""
@@ -1020,6 +1142,7 @@ def models_catalog() -> list:
             "provider_label": PROVIDERS.get(prov, {}).get("label", prov),
             "configured": bool(get_api_key_for(prov)),
         })
+    out.append(cpq_llm.catalog_entry())  # 本地模型（OpenAI 兼容网关，手动配置）
     return out
 
 
@@ -1257,14 +1380,20 @@ class Bridge:
             "max_tokens": prof.max_tokens,
             "thinking": prof.thinking,
             "thinking_budget": prof.thinking_budget,
+            "local": cpq_llm.local_public(),
         }
 
     def apply_settings(self, s: dict, persist: bool = True) -> dict:
         """应用模型 / 采样参数 / API Key（可选持久化）。"""
         s = s or {}
         prof = self.conv.profile
+        # 本地模型连接配置要先应用（选「本地模型」时 model 用它配置的模型名）
+        if isinstance(s.get("local"), dict):
+            cpq_llm.configure_local(s["local"])
         if s.get("model"):
             raw = str(s["model"]).strip()
+            if raw == cpq_llm.LOCAL_SENTINEL:
+                raw = cpq_llm.local_model_id()
             mid = raw if raw == NO_MODEL_ID else _sanitize_model(resolve_model(raw))
             if mid:
                 self.conv.model = mid
@@ -1275,6 +1404,7 @@ class Bridge:
             prof.max_tokens = _to_int_or_none(s.get("max_tokens"))
         if "thinking" in s:
             prof.thinking = bool(s.get("thinking"))
+            cpq_llm.set_deepseek_thinking(prof.thinking)  # 同步 DeepSeek 深度思考
         if "thinking_budget" in s:
             prof.thinking_budget = _to_int_or_none(s.get("thinking_budget")) or 8000
         # API Key：既支持 {"api_keys": {provider: key}}，也支持单个 {"api_key": ..., ["provider": ...]}
@@ -1297,6 +1427,8 @@ class Bridge:
                 ak = cur.get("api_keys") or {}
                 ak.update(new_keys)
                 cur["api_keys"] = ak
+            if cpq_llm.local_model_id() or cpq_llm.local_public()["base_url"]:
+                cur["local"] = cpq_llm.local_persist()
             save_settings(cur)
         return self.current_settings()
 
