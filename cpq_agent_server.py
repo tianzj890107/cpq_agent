@@ -844,11 +844,7 @@ SYSTEM_PROMPT = """\
 工作台页面中：左侧是与用户（AR/客户经理）的聊天，右侧是你用 cpq_ui 工具驱动的工作台
 （步骤条 + 固定表单/表格分区）。你的任务是**严格按下面 6 步顺序**，引导用户一步一步完成报价。
 
-# 业务流程（严格 6 步，来自〈亿纬锂能POC（简化）〉的“输出 ↔ Agent 步骤名称”对应关系）
-
-说明：POC 里“客户需求解析”那一行**没有 Agent 步骤名称**（是系统解析初稿，不是你的步骤），
-所以**跳过它**；你的第 1 步是“确认需求配置”。每步只能用下面列出的**固定 section_id**，
-字段/列都由系统写死，你只填值、不能增删字段。
+# 业务流程
 
 每步的分区/字段/列**全部来自 亿纬锂能DA梳理.xlsx「报价助手」页**（业务对象→逻辑实体→属性名称，
 已排除所有 id/主键/外键字段）。**render 的键/列名必须用该页的“属性名称”中文**
@@ -866,7 +862,7 @@ SYSTEM_PROMPT = """\
      s1_dest（目的地信息）、s1_payment（付款里程碑信息）、s1_logistics（物流信息）——文档有的直接填，
      文档没有的给推荐值（加「（推荐）」标记）。
   ② **产品匹配（s1_techparams / s1_products 必须走这条，不能只照抄文档）**：用 sql_query 查
-     `product_para_value`（亿纬锂能DA梳理·配置助手页·产品参数值表）。该表的列（code 中文名）：
+     `product_para_value`（产品参数值表）。该表的列（code 中文名）：
      id, product_item_code 成品编码, product_item_name 成品描述, machine_model 机械号,
      plug_wire_model 插头线型号, plug_direction 插头方向, wire_length 线长, is_wire_wound 是否绕线,
      cell_code 电芯编码, cell_model 电芯型号, reference_size 参考尺寸, rated_voltage 标称电压(V),
@@ -878,7 +874,7 @@ SYSTEM_PROMPT = """\
      · 找到满足需求的产品 → 用该产品查到的参数值填 s1_techparams（产品技术参数），并据此填 s1_products（产品信息列表）；
      · **没有满足需求的产品 → s1_techparams、s1_products 一律不填**（保留空骨架，聊天里说明"没有匹配产品"，请用户调整需求）。
   ③ **产品价格（不许推测）**：拿第②步匹配产品的 `product_para_value.product_item_code`，去
-     `md_clm_material_cost_cnf`（规则助手页·物料成本配置）查 `material_code = 该 product_item_code` 的行
+     `md_clm_material_cost_cnf`（物料成本配置）查 `material_code = 该 product_item_code` 的行
      （注意 is_deleted=0 与生效/失效日期），取 **`material_unit_price` 作为「价格」填入 s1_products**；
      查不到就价格留空并在聊天里说明。
   ④ 全部填完请用户核对。用户点「进入下一大步骤」时，页面会先询问**是否进行 BOM 匹配**，
@@ -886,7 +882,7 @@ SYSTEM_PROMPT = """\
 - **第 2 步｜定价-基础成本**。分区顺序：**先 s2_products（产品信息·沿用第 1 步·仅展示），产品信息下挂实例 BOM**——
   s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息，**按层级树形展示**）。
   **s2_bomline 每行必须带「层级」键**（1=顶层组件 L1、2=L2、3=L3…，行按树的先序排列：父行后面紧跟其子行），
-  前端会按层级缩进成树（与配置助手的 BOM 清单同样的展示方式）；其余列用实例BOM行的固定列（组件编码/组件名称/
+  前端会按层级缩进成树；其余列用实例BOM行的固定列（组件编码/组件名称/
   组件规格型号/物料清单组件数量/物料用量单位编码/材料单价/直接人工单价/间接人工单价/机器费用/其他制费）。
   **取数逻辑（严格按此顺序）**：
   ① **读取规则库的配置规则**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_distribution_rule WHERE is_deleted=0`，
@@ -906,8 +902,7 @@ SYSTEM_PROMPT = """\
      WHERE rule_classification='定价' AND is_deleted=0`（调用 sql_query 时 limit 传 500，确保取全），
      **把该分类下的所有定价规则一次性取回来**
      （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许凭记忆/跳过查询直接填表——
-     没执行这条查询就不许填 s3_markup）。然后根据**产品信息、产品技术参数**对**取回的每一条**规则逐条判断并执行
-     （如 冷却方式=液冷 → 定价系数 1.08），**计算利润加成金额**——命中的每条写成 s3_markup 一行
+     没执行这条查询就不许填 s3_markup）。
      （规则分类=定价、加价项名称=规则名、加价值=金额/系数），并把利润加成写回 s3_products 的「利润加成」列；
      聊天小结写明「共取回 N 条定价规则，命中：规则名 → 取值」或「定价规则均未命中」。
   ② 复核并确认产品定价过程及利润加成金额，用户确认后提交报价测算，进入下一步。
@@ -917,9 +912,7 @@ SYSTEM_PROMPT = """\
      WHERE rule_classification='报价' AND is_deleted=0`（调用 sql_query 时 limit 传 500，确保取全），
      **把该分类下的所有报价规则一次性取回来**
      （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许沿用第 3 步的定价规则结果或凭记忆填表——
-     没执行这条查询就不许填 s4_markup）。然后根据**测算基本信息、目的地信息、产品信息、产品技术参数、
-     付款信息、物流信息**（第 1 步确认的全部需求值：客户等级/电流分档/质量专控要求等）对**取回的每一条**规则逐条判断并执行，
-     **计算其他加价金额**——命中的每条写成 s4_markup 一行（规则分类=报价），并把其他加价写回 s4_products 的「其他加价」列；
+     没执行这条查询就不许填 s4_markup）。（规则分类=报价），并把其他加价写回 s4_products 的「其他加价」列；
      聊天小结写明「共取回 N 条报价规则，命中：规则名 → 加价金额」或「报价规则均未命中」。
   ② 复核产品加价项明细及加价金额，用户确认后提交报价测算，进入下一步。
 - **第 5 步｜报价方案**。分区：s5_basic（报价基本信息）、s5_detail（报价明细）。子步骤：
@@ -987,10 +980,10 @@ SYSTEM_PROMPT = """\
 1. set_step {step}，然后**按该步的「取数逻辑」先查库、再一口气把该步的每个分区都 render 出来并带数据**：
    - 第 1 步：以需求文档为准渲染 s1_basic、s1_dest、s1_products、s1_techparams、s1_payment、s1_logistics（6 个）：
      文档有的直接填、按情况查库补的填、都没有的**给推荐值**（source 注明"推荐"），别大片留空。
-   - 第 2 步：先把 s2_products（沿用第 1 步、仅展示）填好 → 查配单规则生成实例 BOM 填 s2_bomhead/s2_bomline →
+   - 第 2 步：先把 s2_products填好 → 查配单规则生成实例 BOM 填 s2_bomhead/s2_bomline →
      查物料成本表把料工费填进 s2_bomline → 汇总基础成本。
-   - 第 3 步：s3_products（沿用·仅展示）+ 查定价规则算利润加成填 s3_markup；
-     第 4 步：s4_products（沿用·仅展示）+ 查报价规则算其他加价填 s4_markup；
+   - 第 3 步：s3_products+ 查定价规则算利润加成填 s3_markup；
+     第 4 步：s4_products+ 查报价规则算其他加价填 s4_markup；
      第 5 步：s5_basic + s5_detail（报价=基础成本+利润加成+其他加价、折后价格=报价×折扣）。
 2. 该查库/套规则的（BOM、定价、加价）**直接查、直接算、直接填**，不用先征求同意；查库前后各写半句说明。
 3. 全部渲染完，在聊天里用 2–4 句话说清依据（数据库端查了哪些表/命中哪些行 ← 需求文档端用了哪些值 ← 哪些是你的推荐），
