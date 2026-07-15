@@ -1793,13 +1793,20 @@
       }
       const data = collectStepData(cur);
       const stepName = STEPS[cur - 1];
-      const next = cur + 1;
-      const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。`;
+      let next = cur + 1;
+      let bomChoice = '';
+      if (cur === 1) {
+        // 第 1 步结尾：由用户决定是否进行 BOM 匹配（第 2 步）；选否则跳过第 2 步直接进第 3 步
+        const doBom = confirm('是否进行 BOM 匹配？\n\n「确定」= 进入第 2 步「' + STEPS[1] + '」（实例BOM / 料工费 / 基础成本）\n「取消」= 跳过第 2 步，直接进入第 3 步「' + STEPS[2] + '」（基础成本改用产品信息中的价格）');
+        next = doBom ? 2 : 3;
+        bomChoice = doBom ? '（用户选择：进行BOM匹配）' : '（用户选择：跳过BOM匹配，直接进入第3步）';
+      }
+      const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。` + bomChoice;
       addUserBubble(bubble);
       setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
       if (manualMode) {
         // 无模型模式：本地推进 + 静默落档（进度与数据进入历史/首页卡片，不调模型）
-        sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data),
+        sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data) + (bomChoice ? '\n' + bomChoice : ''),
           { echo: false, display: bubble, step: next });
         return;
       }
@@ -1807,7 +1814,8 @@
         `【表单确认】第 ${cur} 步「${stepName}」用户已确认，工作台最新数据(JSON)如下：\n` +
         JSON.stringify(data, null, 1) +
         `\n用户已进入第 ${next} 步「${STEPS[next - 1]}」。请直接开始第 ${next} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
-        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${next} 步的固定分区（边做边说），最后给小结。`,
+        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${next} 步的固定分区（边做边说），最后给小结。` +
+        (bomChoice ? '\n' + bomChoice : ''),
         { echo: false, display: bubble }
       );
     }
