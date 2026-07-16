@@ -236,7 +236,6 @@ def _build_rule_field_context() -> str:
 DB_SCHEMA_TEXT = _build_schema_text()
 RULE_FIELD_CONTEXT = _build_rule_field_context()
 
-# 已停用：规则助手不读数据库（不再注册给模型；execute_tool 里也做了兜底拦截）。保留定义仅供参考。
 SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
@@ -457,9 +456,7 @@ _ORIG_EXECUTE_TOOL = oc_repl.execute_tool
 
 def _patched_execute_tool(tool_name, tool_input, cwd):
     if tool_name == "sql_query":
-        # 规则助手不读数据库（工具已不注册，这里兜底拦截存量会话的调用）
-        return ("规则助手不读数据库：生成 Groovy 所需的字段字典、既有规则样例、加价因子明细、"
-                "样例 BOM 参数都已内置在系统提示词的「数据库字段上下文」里，请直接依据它生成公式。")
+        return _handle_sql_query(tool_input)
     if tool_name == "rule_result":
         return _handle_rule_result(tool_input)
     return _ORIG_EXECUTE_TOOL(tool_name, tool_input, cwd)
@@ -497,9 +494,9 @@ SYSTEM_PROMPT = f"""\
 
 【第二步 · 用数据库参数 + 规则描述 → 生成 Groovy 公式和代码】
 - 触发：用户点「生成 Groovy 公式」或明确要求生成公式时（消息通常以「【第二步·生成公式…】」开头，并附上第一步的规则列表）。
-- 任务：对每一条规则，结合「规则描述 + 下方内置字段上下文里的真实参数」产出可落库的 Groovy 公式与完整代码。
-- **不查数据库（规则助手不读库、没有 sql_query 工具）**：参数依据直接用本提示词末尾的「数据库字段上下文」——
-  字段字典、既有 rule_expression 样例、样例 BOM 订单参数、加价因子明细都已内置在里面，据此取值即可。
+- 任务：对每一条规则，结合「规则描述 + 数据库里的真实参数」产出可落库的 Groovy 公式与完整代码。
+- **必须先用 sql_query 查数据库拿参数依据**：字段字典、既有 rule_expression 样例、样例 BOM 订单参数、加价因子明细等
+  （下方内置的「数据库字段上下文」可作起点，最新数据以查库为准）。
 - 优先使用这些业务字段：{", ".join(RULE_FIELDS)}。
 - 公式风格贴近库里现有 rule_expression：if (条件) {{ return 结果 }} … return null；字符串比较用单引号（如 客户等级 == 'S'）；
   报价/加价规则返回数值，配置/校验规则返回约束字符串或 true/null。
@@ -524,7 +521,7 @@ return null
 数据库字段上下文：
 {RULE_FIELD_CONTEXT}
 
-完整库 schema（来自 亿纬锂能DA梳理.xlsx「规则助手」sheet，**仅作字段口径参考——规则助手不读数据库、不要生成/执行 SQL**）：
+完整库 schema（来自 亿纬锂能DA梳理.xlsx「规则助手」sheet，据此生成 PostgreSQL SQL）：
 {DB_SCHEMA_TEXT}
 """
 
@@ -827,8 +824,9 @@ class Bridge:
         return self.current_settings()
 
     def _inject_tools(self):
-        # 规则助手不读数据库：不注册 sql_query（参数依据全部内置在系统提示词的字段上下文里）。
         names = {s.get("name") for s in self.conv.tool_schemas}
+        if "sql_query" not in names:
+            self.conv.tool_schemas.append(SQL_QUERY_SCHEMA)
         if "rule_result" not in names:
             self.conv.tool_schemas.append(RULE_RESULT_SCHEMA)
 
