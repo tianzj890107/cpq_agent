@@ -24,7 +24,7 @@ RUN pip install \
       --trusted-host mirrors.aliyun.com \
       -r requirements.txt
 
-# 2) 再拷应用源码（含 open-claude/ 引擎源码——走 sys.path 引用，不 pip 安装；
+# 2) 再拷应用源码（含 open-claude/ 引擎——已编译为 .pyc 的字节码形态（源码保护），走 sys.path 引用，不 pip 安装；
 #    .venv / 机密 settings / 历史 / 大表格 已由 .dockerignore 排除）。
 COPY . .
 

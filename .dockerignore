@@ -31,6 +31,8 @@ BOM配置逻辑实体.xlsx
 **/__pycache__/
 **/*.pyc
 **/*.pyo
+# open-claude 引擎自 2026-07-16 起只以 .pyc 形式存在（源码保护），必须豁免进镜像
+!open-claude/**/*.pyc
 .git/
 .gitignore
 .vscode/
