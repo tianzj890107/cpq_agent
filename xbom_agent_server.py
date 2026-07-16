@@ -474,9 +474,12 @@ def _import_config_bom(payload: dict) -> dict:
                 rid = None
                 try:
                     with con.cursor() as cur:
+                        # is_deleted 实际库里是 boolean（= 0 会报 operator does not exist），
+                        # ::int 兼容 boolean/整型两种建表方式，NULL 视为未删除
                         cur.execute(
                             "SELECT md_clm_distribution_rule_id FROM md_clm_distribution_rule "
-                            "WHERE rule_name = %s AND is_deleted = 0 LIMIT 1", (rule_name,))
+                            "WHERE rule_name = %s AND COALESCE(is_deleted::int, 0) = 0 LIMIT 1",
+                            (rule_name,))
                         hit = cur.fetchone()
                     if hit:
                         rid = str(hit[0])
