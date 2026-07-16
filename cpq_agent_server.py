@@ -881,6 +881,8 @@ SYSTEM_PROMPT = """\
      确认消息里会带上用户的选择（处理方式见「页面消息协议」和「严格顺序」）。
 - **第 2 步｜定价-基础成本**。分区顺序：**先 s2_products（产品信息·沿用第 1 步·仅展示），产品信息下挂实例 BOM**——
   s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息，**按层级树形展示**）。
+  **s2_bomhead（实例BOM头信息）、s2_bomline（实例BOM行信息，这两张表的内容是根据产品技术参数中的product_item_code字段从配置BOM头信息-CLM_BASE_INFO中product_item_code找到对应BOM头，
+  然后在 配置BOM行信息-CLM_LINE_INFO中物料清单头ID ref_bom_header_id 搜索刚才匹配到的BOM头表中的CLM_BASE_INFO.bom_header_id，找到对应的所有BOM行。最后完成以下根据找到的配置规则筛选BOM行。
   **s2_bomline 每行必须带「层级」键**（1=顶层组件 L1、2=L2、3=L3…，行按树的先序排列：父行后面紧跟其子行），
   前端会按层级缩进成树；其余列用实例BOM行的固定列（组件编码/组件名称/
   组件规格型号/物料清单组件数量/物料用量单位编码/材料单价/直接人工单价/间接人工单价/机器费用/其他制费）。

@@ -240,7 +240,11 @@ SQL_QUERY_SCHEMA = {
     "name": "sql_query",
     "description": (
         "在远程 Postgres 上执行只读 SQL 查询。用于检索规则字段、既有规则、BOM样例、报价/加价因子。"
-        "只允许单条 SELECT / WITH，不要包含分号或写操作。列名不确定可查 information_schema.columns。"
+        "只允许单条 SELECT / WITH，不要包含分号或写操作。"
+        "**亿纬锂能DA梳理中只能查规则助手页的表（md_clm_*/bd_clm_feature）；"
+        "报价助手页、配置助手页的表禁止查询，会被直接拒绝**；"
+        "字段字典/样例表（quote_assistant_fields/sample_power_bom_*等）不受限。"
+        "列名不确定可查 information_schema.columns。"
     ),
     "input_schema": {
         "type": "object",
@@ -304,6 +308,38 @@ _SQL_FORBIDDEN = re.compile(
 )
 
 
+def _blocked_tables() -> set:
+    """规则助手的表访问边界：亿纬锂能DA梳理中只能访问「规则助手」页内的表，
+    报价助手页/配置助手页的表一律禁止（DA 文档之外的表如 quote_assistant_fields /
+    sample_power_bom_* 字段字典与样例数据不受限——生成 Groovy 需要）。
+    黑名单 = (报价页 ∪ 配置页) − 规则页，取自 DA 本体；取不到用硬编码兜底。"""
+    quote = cpq_db.sheet_tables("quote")
+    config = cpq_db.sheet_tables("config")
+    rule = cpq_db.sheet_tables("rule")
+    blocked = (quote | config) - rule
+    if blocked:
+        return blocked
+    return {
+        "clm_calc_base_info", "clm_calc_destination", "clm_calc_product", "clm_calc_product_tech",
+        "clm_calc_payment", "clm_calc_logistics", "clm_calc_bom_head", "clm_calc_bom_line",
+        "clm_calc_markup_item", "clm_quote_base_info", "clm_quote_product",
+        "material_info", "product_series_info", "product_series_ref_feature_info",
+        "clm_base_info", "clm_line_info", "clm_base_rule_rel", "clm_line_rule_rel",
+        "product_para_value",
+    }
+
+
+_SQL_BLOCKED_TABLES = _blocked_tables()
+
+
+def _find_blocked_table(sql: str):
+    low = sql.lower()
+    for t in _SQL_BLOCKED_TABLES:
+        if re.search(r"\b" + re.escape(t) + r"\b", low):
+            return t
+    return None
+
+
 def _handle_sql_query(tool_input: dict) -> str:
     if not isinstance(tool_input, dict):
         return "sql_query 入参必须是 JSON 对象"
@@ -317,6 +353,13 @@ def _handle_sql_query(tool_input: dict) -> str:
         return "一次只允许一条 SQL，不要包含分号"
     if _SQL_FORBIDDEN.search(sql):
         return "检测到写操作关键字，已拒绝"
+    bt = _find_blocked_table(sql)
+    if bt:
+        return ("已拒绝：表 " + bt + " 属于亿纬锂能DA梳理的报价助手页/配置助手页，规则助手取数"
+                "只能访问规则助手页内的表（md_clm_distribution_rule / md_clm_material_price_rule / "
+                "md_clm_material_cost_cnf / md_clm_material_feature_cnf / bd_clm_feature）以及"
+                "字段字典/样例表（quote_assistant_fields / md_clm_pricing_surcharge_factor / "
+                "sample_power_bom_orders 等 DA 文档之外的表）。")
     try:
         limit = max(1, min(int(tool_input.get("limit", 100)), 500))
     except (TypeError, ValueError):
@@ -497,6 +540,12 @@ SYSTEM_PROMPT = f"""\
 - 任务：对每一条规则，结合「规则描述 + 数据库里的真实参数」产出可落库的 Groovy 公式与完整代码。
 - **必须先用 sql_query 查数据库拿参数依据**：字段字典、既有 rule_expression 样例、样例 BOM 订单参数、加价因子明细等
   （下方内置的「数据库字段上下文」可作起点，最新数据以查库为准）。
+- **⚠️ 表访问边界**：亿纬锂能DA梳理文档中你只能查**规则助手页**内的表（md_clm_distribution_rule /
+  md_clm_material_price_rule / md_clm_material_cost_cnf / md_clm_material_feature_cnf / bd_clm_feature）；
+  **报价助手页（clm_calc_*/clm_quote_*）和配置助手页（material_info / product_series_* / CLM_BASE_INFO /
+  CLM_LINE_INFO / clm_*_rule_rel / product_para_value）的表一律禁止查询**（系统会直接拒绝）。
+  字段字典/样例表（quote_assistant_fields、md_clm_pricing_surcharge_factor、sample_power_bom_* 等
+  不在 DA 文档内的表）不受限，可正常查。
 - 优先使用这些业务字段：{", ".join(RULE_FIELDS)}。
 - 公式风格贴近库里现有 rule_expression：if (条件) {{ return 结果 }} … return null；字符串比较用单引号（如 客户等级 == 'S'）；
   报价/加价规则返回数值，配置/校验规则返回约束字符串或 true/null。
