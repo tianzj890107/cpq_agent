@@ -1441,8 +1441,9 @@
       });
     }
 
-    // ===== 助手模式（报价 / 产品配置 / 规则配置）+ 意图识别路由 =====
-    // 大模型意图识别走报价助手 Agent 服务；localStorage['cpq:agentUrl'] 可覆盖。
+    // ===== 助手模式（报价 / 产品配置 / 规则配置）=====
+    // 路由只由用户点选的助手标签决定（currentMode），不做对话意图识别跳转（2026-07-16 起取消）。
+    // AGENT_URL = 报价助手服务（会话列表/历史/设置用）；localStorage['cpq:agentUrl'] 可覆盖。
     // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
     // 各助手对应的目标页面
@@ -1683,34 +1684,6 @@
       tag.addEventListener('click', () => setMode(tagToMode(tag.textContent)));
     });
 
-    // 关键词兜底意图识别（大模型服务不可用时用）
-    function keywordIntent(text) {
-      const t = text || '';
-      if (/(配置|选配|BOM|bom|物料|配一台|配一套|产品配置|配置清单|选型)/.test(t)) return 'config';
-      if (/(规则|定价规则|加价规则|规则配置|规则维护|规则中心)/.test(t)) return 'rule';
-      if (/(报价|价格|测算|报价单|询价|折扣|单价)/.test(t)) return 'quote';
-      return null;
-    }
-    // 意图识别：先问大模型（更准，含规则子类型 产品配置/定价/报价 规则），
-    // 失败退回关键词，再退回当前选中模式
-    async function detectIntent(text) {
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 6000); // 6s 超时即回退关键词，避免卡住
-        const r = await fetch(AGENT_URL + '/api/intent', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }), signal: ctrl.signal,
-        });
-        clearTimeout(timer);
-        if (r.ok) {
-          const d = await r.json();
-          if (d && d.intent) return { intent: d.intent, ruleKind: d.rule_kind || null };
-        }
-      } catch (e) { /* 超时 / 服务未启动 —— 走关键词兜底 */ }
-      const kw = keywordIntent(text);
-      return kw ? { intent: kw, ruleKind: null } : null;
-    }
-
     // 跳转前先弹信息确认框；不同助手使用不同命名字段，再真正跳转
     let _pendingNav = null;
     function genProjectCode(intent) {
@@ -1768,13 +1741,11 @@
         document.getElementById('pjMsg').textContent = '';
       });
     })();
-    function requestNavigate(intent, requirement, ruleKindHint) {
+    function requestNavigate(intent, requirement) {
       const page = PAGES[intent];
       if (!page) { alert('「' + MODES[intent].tag + '」页面正在开发中，敬请期待。'); return; }
-      // 规则类型：优先用大模型判定的子类型，取不到再走关键词兜底（弹框里仍可手改）
-      const ruleKind = intent === 'rule'
-        ? (RULE_KIND_META[ruleKindHint] ? ruleKindHint : detectRuleKind(requirement || ''))
-        : null;
+      // 规则类型：按需求文字关键词预填弹框里的单选钮（仅规则助手内的子类型，用户可手改）
+      const ruleKind = intent === 'rule' ? detectRuleKind(requirement || '') : null;
       _pendingNav = { intent, ruleKind };
       const label = intent === 'config' ? '新建配置' : (intent === 'rule' ? '新建规则' : '新建报价');
       document.getElementById('projectModalTitle').textContent = label + ' · 信息确认';
@@ -1879,15 +1850,8 @@
       const text = (textarea && textarea.value.trim()) || '';
       if (!text && !pickedFiles.length) { if (textarea) textarea.focus(); return; }
       if (homeParsing) { alert('附件正在解析中，请稍候…'); return; }
-      // 有文字 → 大模型意图识别（含规则子类型）；只有附件 / 无文字 → 用当前选中的助手模式
-      let intent = currentMode, ruleKind = null;
-      if (text) {
-        if (sendBtn) { sendBtn.style.opacity = '0.6'; sendBtn.style.pointerEvents = 'none'; }
-        const det = await detectIntent(text);
-        if (det) { intent = det.intent || currentMode; ruleKind = det.ruleKind; }
-        if (sendBtn) { sendBtn.style.opacity = ''; sendBtn.style.pointerEvents = ''; }
-      }
-      requestNavigate(intent, text, ruleKind); // 先弹项目信息确认框（附件用全局 pickedFiles）
+      // 路由 = 当前选中的助手标签，不再做对话意图识别跳转
+      requestNavigate(currentMode, text); // 先弹项目信息确认框（附件用全局 pickedFiles）
     }
     if (sendBtn) sendBtn.addEventListener('click', submitRequirement);
     if (textarea) textarea.addEventListener('keydown', (e) => {

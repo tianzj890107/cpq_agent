@@ -31,7 +31,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-HOME_PAGE = "首页.html"  # 登录/入口页；点「Agent 智能体」进入 报价首页(1).html
+HOME_PAGE = "报价首页(1).html"  # 入口直达三智能体整合页（原登录页 首页.html 已弃用，2026-07-16）
 
 MIME = {
     ".html": "text/html; charset=utf-8",

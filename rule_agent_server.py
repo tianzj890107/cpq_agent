@@ -153,19 +153,6 @@ def _build_rule_field_context() -> str:
         if hits:
             lines.extend(f"- 字段字典: {h}" for h in hits)
 
-    lines.extend([
-        "\n# 固定业务映射",
-        "- 客户等级: 报价字段 quote_assistant_fields.attribute_name=客户等级；既有规则在 md_clm_material_price_rule 中。",
-        "- 电流分档: 报价字段 quote_assistant_fields.attribute_name=电流分档；加价明细在 md_clm_pricing_surcharge_factor.surcharge_factor=电流分档。",
-        "- 质量专控要求: 报价字段 quote_assistant_fields.attribute_name=质量专控要求；加价明细在 md_clm_pricing_surcharge_factor 中以 质量专控要求加价/追溯路径 表达。",
-        "- 冷却方式: 报价字段 quote_assistant_fields.attribute_name=冷却方式；样例 BOM 订单列 sample_power_bom_orders.cooling_method。",
-        "- 附加功能: 报价字段 quote_assistant_fields.attribute_name=附加功能；样例 BOM 中低温加热=low_temp_heating、云端通讯=cloud_comm。",
-        "- 箱体规格: 样例 BOM 订单列 sample_power_bom_orders.box_spec；BOM 物料规格列 product_item_spec/component_item_spec。",
-        "- 额定电流: 样例 BOM 订单列 sample_power_bom_orders.rated_current。",
-        "- 电芯模组: 样例 BOM 订单列 sample_power_bom_orders.module_count；BOM 物料中有电芯模组系统。",
-        "- 电量: 报价字段 quote_assistant_fields.attribute_name=电量；样例 BOM 订单列 sample_power_bom_orders.capacity_kwh。",
-    ])
-
     # 以下为远程 Postgres 实时样例（可选增强）：共用一条连接，连不上则整体跳过。
     try:
         conn = cpq_db.connect(readonly=True)
