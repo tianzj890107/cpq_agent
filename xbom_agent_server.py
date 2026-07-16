@@ -428,9 +428,10 @@ def _import_config_bom(payload: dict) -> dict:
     行选中的规则 → clm_line_rule_rel（按 rule_name 反查 md_clm_distribution_rule_id）。
 
     **BOM 层级（L1-Ln）用 头/行递归关系落库**（CLM_LINE_INFO.ref_bom_header_id →
-    CLM_BASE_INFO.bom_header_id）：按行数据「层级」列重建树——L1 行挂产品根 BOM 头；
-    每个有子件的行，为它补插一个子 BOM 头（product_item_* 取该组件自身），
-    其子行的 ref_bom_header_id 指向该子头。这是后台实际表内容，与前端展示无关。"""
+    CLM_BASE_INFO.bom_header_id）：按行数据「层级」列重建树——最高层行（L1）自身
+    直接作为 BOM 头写入（product_item_* 取该行物料编码/名称），**不再为它合成无产品
+    编码的上级头，也不写行记录**（2026-07-16 起）；每个有子件的行，为它补插一个
+    子 BOM 头，其子行的 ref_bom_header_id 指向该子头。这是后台实际表内容，与前端展示无关。"""
     if not isinstance(payload, dict):
         return {"ok": False, "error": "入参必须是 JSON 对象"}
     product = (payload.get("product") or payload.get("产品") or "").strip()
@@ -451,20 +452,11 @@ def _import_config_bom(payload: dict) -> dict:
     try:
         con = cpq_db.connect(readonly=False)  # autocommit
         try:
-            # BOM 头：主键 bom_header_id 由雪花算法生成并显式写入（供行外键引用）
-            bom_id = cpq_db.snow_next_id(con)
-            head = {
-                "bom_header_id": bom_id,
-                "bom_name": (product or project or "配置BOM") + " 配置BOM",
-                "product_item_name": product, "product_item_spec": "",
-                "basis_quantity": "1", "bom_version": "V1", "status": "已确认",
-                "creation_date": created, "created_by": "xbom_agent",
-                "last_update_date": created, "last_updated_by": "xbom_agent",
-            }
-            cpq_db.insert_rows(con, "CLM_BASE_INFO", [head])
+            bom_id = None   # 第一个顶层 BOM 头 id（返回给前端）
             saved = 0
             sub_heads = 0
-            stack = []      # 层级栈：[{level, head_id(该行的子BOM头,懒建), row}]
+            root_heads = 0
+            stack = []      # 层级栈：[{level, head_id(该行作为BOM头的id,顶层即建/子层懒建), row}]
             seq_in_head = {}  # 各 BOM 头下的行序号（seq_num 按头内递增）
             for i, r in enumerate(rows, 1):
                 if not isinstance(r, dict):
@@ -473,26 +465,47 @@ def _import_config_bom(payload: dict) -> dict:
                 lvl = _bom_level(r)
                 while stack and stack[-1]["level"] >= lvl:
                     stack.pop()
-                if stack:  # 有父行：子行挂父行的子 BOM 头（懒建）
-                    parent = stack[-1]
-                    if parent["head_id"] is None:
-                        sub_id = cpq_db.snow_next_id(con)
-                        pr = parent["row"]
-                        cpq_db.insert_rows(con, "CLM_BASE_INFO", [{
-                            "bom_header_id": sub_id,
-                            "bom_name": (g(pr, "物料名称", "material_name", "name") or "子层级") + " BOM",
-                            "product_item_code": g(pr, "物料编码", "material_code", "code"),
-                            "product_item_name": g(pr, "物料名称", "material_name", "name"),
-                            "product_item_spec": "",
-                            "basis_quantity": "1", "bom_version": "V1", "status": "已确认",
-                            "creation_date": created, "created_by": "xbom_agent",
-                            "last_update_date": created, "last_updated_by": "xbom_agent",
-                        }])
-                        parent["head_id"] = sub_id
-                        sub_heads += 1
-                    ref_id = parent["head_id"]
-                else:      # 顶层(L1)行：挂产品根 BOM 头
-                    ref_id = bom_id
+                if not stack:
+                    # 最高层行：自身直接作为 BOM 头写入，不找上级、不写行记录
+                    # （不再合成无产品编码的根 BOM 头）
+                    head_id = cpq_db.snow_next_id(con)
+                    cpq_db.insert_rows(con, "CLM_BASE_INFO", [{
+                        "bom_header_id": head_id,
+                        "bom_name": (g(r, "物料名称", "material_name", "name")
+                                     or product or project or "配置BOM") + " 配置BOM",
+                        "product_item_code": g(r, "物料编码", "material_code", "code"),
+                        "product_item_name": g(r, "物料名称", "material_name", "name") or product,
+                        "product_item_spec": "",
+                        "basis_quantity": g(r, "数量", "qty") or "1",
+                        "bom_version": "V1", "status": "已确认",
+                        "creation_date": created, "created_by": "xbom_agent",
+                        "last_update_date": created, "last_updated_by": "xbom_agent",
+                    }])
+                    if bom_id is None:
+                        bom_id = head_id
+                    root_heads += 1
+                    stack.append({"level": lvl, "head_id": head_id, "row": r})
+                    if g(r, "规则", "rule") not in ("", "（无）"):
+                        warn.append(f"行{i} 为顶层 BOM 头，不写入行表，其规则未建关系")
+                    continue
+                # 有父行：子行挂父行的 BOM 头（子层懒建）
+                parent = stack[-1]
+                if parent["head_id"] is None:
+                    sub_id = cpq_db.snow_next_id(con)
+                    pr = parent["row"]
+                    cpq_db.insert_rows(con, "CLM_BASE_INFO", [{
+                        "bom_header_id": sub_id,
+                        "bom_name": (g(pr, "物料名称", "material_name", "name") or "子层级") + " BOM",
+                        "product_item_code": g(pr, "物料编码", "material_code", "code"),
+                        "product_item_name": g(pr, "物料名称", "material_name", "name"),
+                        "product_item_spec": "",
+                        "basis_quantity": "1", "bom_version": "V1", "status": "已确认",
+                        "creation_date": created, "created_by": "xbom_agent",
+                        "last_update_date": created, "last_updated_by": "xbom_agent",
+                    }])
+                    parent["head_id"] = sub_id
+                    sub_heads += 1
+                ref_id = parent["head_id"]
                 seq_in_head[ref_id] = seq_in_head.get(ref_id, 0) + 1
                 line_id = cpq_db.snow_next_id(con)  # 行主键雪花生成（供规则关系外键引用）
                 line = {
@@ -529,7 +542,10 @@ def _import_config_bom(payload: dict) -> dict:
             con.close()
     except Exception as e:
         return {"ok": False, "error": f"数据库写入失败：{e}"}
+    if bom_id is None:
+        return {"ok": False, "error": "没有可导入的 BOM 行"}
     out = {"ok": True, "bom_id": bom_id, "lines": saved, "sub_heads": sub_heads,
+           "root_heads": root_heads,
            "table": "CLM_BASE_INFO / CLM_LINE_INFO", "created_at": created}
     if warn:
         out["warnings"] = warn[:10]

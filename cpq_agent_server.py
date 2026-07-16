@@ -704,6 +704,9 @@ def _import_quote(payload: dict) -> dict:
         按「层级」列重建树——L1 行挂产品根 BOM 头；每个有子件的行，为它补插一个子 BOM 头
         （product_item_* 取该组件自身），其子行的 ref_bom_header_id 指向该子头；
         行的 parent_line_id 同时回填父行 bom_line_id（顶层为空）。这是后台实际表内容，与前端展示无关；
+      - 加价明细 clm_calc_markup_item：主键 markup_item_id 雪花生成；product_line_id 走通用
+        产品外键回填（按「产品型号」匹配，缺省取首个产品行）；rule_category 缺省按步骤兜底
+        （s3_markup=定价 / s4_markup=报价）；
       - 其余表自身主键：不显式给值，交由 PG 列默认 snow_next_id() 自动生成。
     """
     if not isinstance(payload, dict):
@@ -775,6 +778,12 @@ def _import_quote(payload: dict) -> dict:
                         pid = prod_by_model.get(model) or (prod_ids[0] if len(prod_ids) == 1 else (prod_ids[0] if prod_ids else None))
                         if pid is not None:
                             cr["product_line_id"] = pid
+                    # —— 加价明细：主键雪花生成；规则分类按步骤兜底（DA 枚举 定价/报价）——
+                    if table == "clm_calc_markup_item":
+                        if "markup_item_id" in cols:
+                            cr["markup_item_id"] = cpq_db.snow_next_id(conn)
+                        if "rule_category" in cols and not str(cr.get("rule_category", "")).strip():
+                            cr["rule_category"] = "定价" if sid == "s3_markup" else "报价"
                     # —— BOM 头主键 & 行引用 ——
                     if table == "clm_calc_bom_head":
                         hid = cpq_db.snow_next_id(conn)
