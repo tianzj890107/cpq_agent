@@ -1852,7 +1852,12 @@
           body: JSON.stringify({ product, project, params, rows })
         }).then(r => r.json());
         if (j.ok) {
-          addAiBubble('✅ 已导入数据库：配置BOM **#' + j.bom_id + '**，共 **' + j.lines + '** 行，写入表 `' + j.table + '`。');
+          let msg = '✅ 已导入数据库：配置BOM **#' + j.bom_id + '**，共 **' + j.lines + '** 行';
+          const nRel = (j.head_rules || 0) + (j.line_rules || 0);
+          if (nRel) msg += '，规则关系 **' + nRel + '** 条（头级 ' + (j.head_rules || 0) + ' / 行级 ' + (j.line_rules || 0) + '）';
+          msg += '，写入表 `' + j.table + '`。';
+          if (j.warnings && j.warnings.length) msg += '\n⚠️ ' + j.warnings.join('\n⚠️ ');
+          addAiBubble(msg);
           btn.textContent = '已导入 ✓';
         } else {
           alert('导入失败：' + (j.error || '未知错误')); btn.textContent = old; btn.disabled = false;

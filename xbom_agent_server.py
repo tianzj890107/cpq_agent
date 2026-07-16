@@ -424,8 +424,12 @@ def _bom_level(r: dict) -> int:
 
 def _import_config_bom(payload: dict) -> dict:
     """把用户确认后的配置BOM + 每行规则写入远程 Postgres 的 DA 目标表：
-    头 → CLM_BASE_INFO；行 → CLM_LINE_INFO（ref_bom_header_id 挂头）；
-    行选中的规则 → clm_line_rule_rel（按 rule_name 反查 md_clm_distribution_rule_id）。
+    头 → CLM_BASE_INFO；行 → CLM_LINE_INFO（ref_bom_header_id 挂头）。
+
+    **BOM↔规则关系**（按 rule_name 反查 md_clm_distribution_rule.md_clm_distribution_rule_id，
+    命中才建关系；规则名+id 记录在返回 rule_matches 里）：
+      - L1（顶层，作为 BOM 头写入）选中的规则 → clm_base_rule_rel(ref_id, bom_head_id, rule_id)；
+      - 其他层级（作为 BOM 行写入）选中的规则 → clm_line_rule_rel(ref_id, bom_line_id, rule_id)。
 
     **BOM 层级（L1-Ln）用 头/行递归关系落库**（CLM_LINE_INFO.ref_bom_header_id →
     CLM_BASE_INFO.bom_header_id）：按行数据「层级」列重建树——最高层行（L1）自身
@@ -456,8 +460,33 @@ def _import_config_bom(payload: dict) -> dict:
             saved = 0
             sub_heads = 0
             root_heads = 0
+            head_rules = 0   # 写入 clm_base_rule_rel 的关系数（L1 头级规则）
+            line_rules = 0   # 写入 clm_line_rule_rel 的关系数（其他层行级规则）
+            rule_matches = {}  # 匹配到的规则：rule_name -> md_clm_distribution_rule_id
+            _rule_cache = {}   # rule_name -> id 或 None（未命中）；同名只查一次
             stack = []      # 层级栈：[{level, head_id(该行作为BOM头的id,顶层即建/子层懒建), row}]
             seq_in_head = {}  # 各 BOM 头下的行序号（seq_num 按头内递增）
+
+            def _rule_id_of(rule_name, row_no):
+                """按规则名反查 md_clm_distribution_rule_id（进程内缓存；查不到/出错返回 None 并记警告）。"""
+                if rule_name in _rule_cache:
+                    return _rule_cache[rule_name]
+                rid = None
+                try:
+                    with con.cursor() as cur:
+                        cur.execute(
+                            "SELECT md_clm_distribution_rule_id FROM md_clm_distribution_rule "
+                            "WHERE rule_name = %s AND is_deleted = 0 LIMIT 1", (rule_name,))
+                        hit = cur.fetchone()
+                    if hit:
+                        rid = str(hit[0])
+                        rule_matches[rule_name] = rid
+                    else:
+                        warn.append(f"行{row_no} 规则「{rule_name}」在规则库未找到，未建关系")
+                except Exception as e:
+                    warn.append(f"行{row_no} 规则「{rule_name}」反查失败：{str(e)[:120]}")
+                _rule_cache[rule_name] = rid
+                return rid
             for i, r in enumerate(rows, 1):
                 if not isinstance(r, dict):
                     continue
@@ -485,8 +514,18 @@ def _import_config_bom(payload: dict) -> dict:
                         bom_id = head_id
                     root_heads += 1
                     stack.append({"level": lvl, "head_id": head_id, "row": r})
-                    if g(r, "规则", "rule") not in ("", "（无）"):
-                        warn.append(f"行{i} 为顶层 BOM 头，不写入行表，其规则未建关系")
+                    # L1 头级规则 → 配置BOM头与规则关系表 clm_base_rule_rel
+                    rule_name = g(r, "规则", "rule")
+                    if rule_name and rule_name != "（无）":
+                        rid = _rule_id_of(rule_name, i)
+                        if rid:
+                            try:
+                                cpq_db.insert_rows(con, "clm_base_rule_rel", [{
+                                    "ref_id": cpq_db.snow_next_id(con),
+                                    "bom_head_id": head_id, "rule_id": rid}])
+                                head_rules += 1
+                            except Exception as e:
+                                warn.append(f"行{i} 头级规则关系写入失败：{str(e)[:120]}")
                     continue
                 # 有父行：子行挂父行的 BOM 头（子层懒建）
                 parent = stack[-1]
@@ -521,23 +560,18 @@ def _import_config_bom(payload: dict) -> dict:
                 cpq_db.insert_rows(con, "CLM_LINE_INFO", [line])
                 stack.append({"level": lvl, "head_id": None, "row": r})
                 saved += 1
+                # 行级规则 → 配置BOM行与规则关系表 clm_line_rule_rel（查得到才建关系，查不到只记警告）
                 rule_name = g(r, "规则", "rule")
                 if rule_name and rule_name != "（无）":
-                    try:  # 行规则关系：按规则名反查规则主键，查得到才建关系（查不到只记警告，不失败）
-                        with con.cursor() as cur:
-                            cur.execute(
-                                "SELECT md_clm_distribution_rule_id FROM md_clm_distribution_rule "
-                                "WHERE rule_name = %s AND is_deleted = 0 LIMIT 1", (rule_name,))
-                            hit = cur.fetchone()
-                        if hit:
-                            # 关系表主键 ref_id 也用雪花生成；外键 bom_line_id / rule_id 引用父表主键
+                    rid = _rule_id_of(rule_name, i)
+                    if rid:
+                        try:
                             cpq_db.insert_rows(con, "clm_line_rule_rel", [{
                                 "ref_id": cpq_db.snow_next_id(con),
-                                "bom_line_id": line_id, "rule_id": str(hit[0])}])
-                        else:
-                            warn.append(f"行{i} 规则「{rule_name}」在规则库未找到，未建关系")
-                    except Exception as e:
-                        warn.append(f"行{i} 规则关系写入失败：{str(e)[:120]}")
+                                "bom_line_id": line_id, "rule_id": rid}])
+                            line_rules += 1
+                        except Exception as e:
+                            warn.append(f"行{i} 行级规则关系写入失败：{str(e)[:120]}")
         finally:
             con.close()
     except Exception as e:
@@ -546,7 +580,10 @@ def _import_config_bom(payload: dict) -> dict:
         return {"ok": False, "error": "没有可导入的 BOM 行"}
     out = {"ok": True, "bom_id": bom_id, "lines": saved, "sub_heads": sub_heads,
            "root_heads": root_heads,
-           "table": "CLM_BASE_INFO / CLM_LINE_INFO", "created_at": created}
+           "head_rules": head_rules, "line_rules": line_rules,
+           "rule_matches": rule_matches,  # 匹配到的规则：规则名 -> md_clm_distribution_rule_id
+           "table": "CLM_BASE_INFO / CLM_LINE_INFO / clm_base_rule_rel / clm_line_rule_rel",
+           "created_at": created}
     if warn:
         out["warnings"] = warn[:10]
     return out
