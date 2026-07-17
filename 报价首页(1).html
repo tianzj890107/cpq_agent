@@ -1378,7 +1378,7 @@
         <label>最大输出 Tokens（留空用默认 16384）</label>
         <input id="setMaxTokens" type="number" min="256" max="200000" placeholder="16384">
 
-        <label class="check-row">
+        <label class="check-row" id="thinkRow">
           <input type="checkbox" id="setThinking" onchange="onThinkingChange()">
           深度思考（Claude / DeepSeek 线上生效；DeepSeek 自动切换思考版模型）
         </label>
@@ -2054,6 +2054,8 @@
       const configured = o.dataset.configured === '1';
       const isLocal = o.dataset.provider === 'local';
       $('localCfgBox').style.display = isLocal ? '' : 'none';
+      $('thinkRow').style.display = isLocal ? 'none' : '';   // 本地模型只用「启用思考」，隐藏「深度思考」
+      $('thinkBudgetRow').style.display = (!isLocal && $('setThinking').checked) ? '' : 'none';
       $('apiKeyLabel').textContent = pl + ' 的 API Key（仅保存在本地 cpq_settings.json）';
       const hint = $('modelHint');
       if (isLocal) {
@@ -2087,6 +2089,7 @@
           return;
         }
         payload.model = '__local__';
+        payload.thinking = false;  // 本地模型不用「深度思考」（选项已隐藏），思考只走 local.enable_thinking
         payload.local = {
           base_url: lb, model: lm,
           enable_thinking: $('setLocalThink').checked,

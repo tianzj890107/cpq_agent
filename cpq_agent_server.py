@@ -550,7 +550,7 @@ SQL_QUERY_SCHEMA = {
             "sql": {"type": "string",
                     "description": "标准 PostgreSQL 查询语句（单条，不以分号结尾、不含多条语句）"},
             "limit": {"type": "integer",
-                      "description": "最多返回行数，默认 100，上限 500"},
+                      "description": "最多返回行数，默认 100，上限 500。结果被截断时按「大结果分步取数协议」分批取。"},
         },
         "required": ["sql"],
     },
@@ -596,6 +596,14 @@ def _handle_sql_query(tool_input: dict) -> str:
         return f"SQL 执行失败：{e}"
     more = len(rows) > limit
     rows = rows[:limit]
+    total = None
+    if more:  # 被截断时补查总量（尽力而为），让模型第一批就能定好分片计划
+        try:
+            _, cnt_rows = cpq_db.run_select(f"SELECT COUNT(*) FROM ({sql}) _cpq_cnt", 1)
+            if cnt_rows and cnt_rows[0] and cnt_rows[0][0] is not None:
+                total = int(cnt_rows[0][0])
+        except Exception:
+            pass
 
     def cell(x):
         s = "" if x is None else str(x)
@@ -610,7 +618,10 @@ def _handle_sql_query(tool_input: dict) -> str:
         lines.append(" | ".join(cell(x) for x in r))
     head = f"查询成功，返回 {len(rows)} 行"
     if more:
-        head += "（结果被截断，还有更多；请加 WHERE/聚合/LIMIT 精确查询）"
+        head += (f"（⚠️ 结果被截断：该查询共 {total} 行" if total is not None
+                 else "（⚠️ 结果被截断，实际更多")
+        head += ("，超出单次上限。请按系统提示词「大结果分步取数协议」处理："
+                 "先加 WHERE 收窄；仍超限就分批取（keyset 分页），每批只留候选短名单再取下一批）")
     return head + "：\n" + "\n".join(lines)
 
 
@@ -976,6 +987,20 @@ SYSTEM_PROMPT = """\
      前面步骤已生成的信息（产品信息、实例 BOM、基础成本、加价等）以**右侧工作台各分区已渲染的内容**为准直接沿用，
      不要去库里查历史报价/测算数据。
 金额单位以库中字段为准；计算必须自洽（合计=分项之和）。部分因子金额可能为空（来源限制），据实处理别硬编。
+
+# 大结果分步取数协议（sql_query 返回"结果被截断"时强制执行）
+
+单次 sql_query 最多返回 500 行。当结果头部出现"⚠️ 结果被截断"（会附带总行数），说明候选集超限，
+**禁止**只凭已返回的前 N 行下结论（最优候选可能不在其中）。必须按下面四步走：
+
+1. **探量定计划**：根据截断提示里的总行数（没有就先 `SELECT COUNT(*)`，必要时按关键列 `GROUP BY` 看分布），
+   在【思考】里定切片计划：优先加 WHERE 收窄（用用户参数里最有区分度的条件）；确实收不窄才分批。
+2. **分批取数（keyset 分页）**：按主键顺序取，`WHERE id > 上一批最后一行的id ORDER BY id LIMIT 500`
+   （比 OFFSET 稳定不重不漏）；每批**只 SELECT 判断所需的列**，不要 SELECT *。
+3. **每批即时收敛**：一批查完立刻筛出该批候选短名单（至多 3~5 行关键值 + 一句淘汰理由），
+   然后**丢弃该批原始行**再取下一批——不要把多批原始结果都攒在手里。
+4. **整合**：所有批次跑完后，只用各批短名单做最终比较，选出结果填表；
+   在 ✅结果 里说明"共 X 行、分 Y 批筛完、最终候选 Z 个"，保证覆盖了全量而不是前 500 行。
 
 # 整步一次性推荐（关键交互方式）
 
