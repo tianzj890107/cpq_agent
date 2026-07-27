@@ -8,13 +8,16 @@
   - cpq_wf_task         任务流转（把卡片发给指定角色 / 指定个人 / 公共任务池）
   - cpq_wf_task_event   流转审计日志
 
-存储后端复用 cpq_auth（默认必须是服务器 Postgres 的 cpq_wf schema，见 cpq_auth.BACKEND_MODE），
+  - cpq_wf_message      站内消息（任务流提醒；DA 原清单外的补充表）
+
+存储后端复用 cpq_auth：**只用线上 Postgres 的 cpq_wf schema，无任何本地回落**，
 故本模块必须在 cpq_auth.init() 之后再 init()。
 
 只服务**报价助手**；配置 / 规则 / 技术工艺三个助手不接入。
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import cpq_auth
@@ -71,33 +74,41 @@ def _ddl_pg(schema: str) -> list:
                 project_name     varchar(128),
                 current_step     int         NOT NULL DEFAULT 1,
                 overall_status   varchar(24) NOT NULL DEFAULT 'draft',
-                creator_user_id  bigint,
-                current_owner    bigint,
+                creator_user_id  bigint
+                                 REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
+                current_owner    bigint
+                                 REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
                 created_at       timestamptz NOT NULL DEFAULT now(),
                 updated_at       timestamptz NOT NULL DEFAULT now()
             )""",
         f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_card_step (
                 card_step_id  bigint PRIMARY KEY,
-                card_id       bigint      NOT NULL,
+                card_id       bigint      NOT NULL
+                              REFERENCES {schema}.cpq_wf_card(card_id) ON DELETE CASCADE,
                 step_no       int         NOT NULL,
                 step_name     varchar(64),
                 role_code     varchar(32),
                 status        varchar(16) NOT NULL DEFAULT 'pending',
-                owner_user_id bigint,
-                data_snapshot text,
+                owner_user_id bigint
+                              REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
+                data_snapshot jsonb,
                 started_at    timestamptz,
                 completed_at  timestamptz,
                 UNIQUE (card_id, step_no)
             )""",
         f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_task (
                 task_id            bigint PRIMARY KEY,
-                card_id            bigint      NOT NULL,
-                from_user_id       bigint,
+                card_id            bigint      NOT NULL
+                                   REFERENCES {schema}.cpq_wf_card(card_id) ON DELETE CASCADE,
+                from_user_id       bigint
+                                   REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
                 from_step_no       int,
                 target_type        varchar(12) NOT NULL,
                 target_role_code   varchar(32),
-                target_user_id     bigint,
-                claimed_by_user_id bigint,
+                target_user_id     bigint
+                                   REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
+                claimed_by_user_id bigint
+                                   REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
                 status             varchar(16) NOT NULL DEFAULT 'open',
                 source_label       varchar(255),
                 note               varchar(500),
@@ -107,9 +118,12 @@ def _ddl_pg(schema: str) -> list:
             )""",
         f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_task_event (
                 event_id      bigint PRIMARY KEY,
-                card_id       bigint NOT NULL,
-                task_id       bigint,
-                actor_user_id bigint,
+                card_id       bigint NOT NULL
+                              REFERENCES {schema}.cpq_wf_card(card_id) ON DELETE CASCADE,
+                task_id       bigint
+                              REFERENCES {schema}.cpq_wf_task(task_id) ON DELETE SET NULL,
+                actor_user_id bigint
+                              REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE SET NULL,
                 action        varchar(24) NOT NULL,
                 from_step     int,
                 to_step       int,
@@ -118,12 +132,15 @@ def _ddl_pg(schema: str) -> list:
             )""",
         f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_message (
                 message_id  bigint PRIMARY KEY,
-                user_id     bigint      NOT NULL,
+                user_id     bigint      NOT NULL
+                            REFERENCES {schema}.cpq_wf_user(user_id) ON DELETE CASCADE,
                 msg_type    varchar(24) NOT NULL,
                 title       varchar(255),
                 body        varchar(1000),
-                card_id     bigint,
-                task_id     bigint,
+                card_id     bigint
+                            REFERENCES {schema}.cpq_wf_card(card_id) ON DELETE CASCADE,
+                task_id     bigint
+                            REFERENCES {schema}.cpq_wf_task(task_id) ON DELETE SET NULL,
                 session_id  varchar(32),
                 step_no     int,
                 is_read     boolean     NOT NULL DEFAULT false,
@@ -135,49 +152,11 @@ def _ddl_pg(schema: str) -> list:
         f"CREATE INDEX IF NOT EXISTS idx_wf_msg_user ON {schema}.cpq_wf_message(user_id, is_read)",
     ]
 
-
-_DDL_SQLITE = [
-    """CREATE TABLE IF NOT EXISTS cpq_wf_step_perm (
-            id INTEGER PRIMARY KEY, assistant_type TEXT NOT NULL, step_no INTEGER NOT NULL,
-            step_name TEXT NOT NULL, role_code TEXT NOT NULL,
-            UNIQUE (assistant_type, step_no))""",
-    """CREATE TABLE IF NOT EXISTS cpq_wf_card (
-            card_id INTEGER PRIMARY KEY, session_id TEXT NOT NULL UNIQUE,
-            assistant_type TEXT NOT NULL DEFAULT 'quote', title TEXT, customer TEXT,
-            project_name TEXT, current_step INTEGER NOT NULL DEFAULT 1,
-            overall_status TEXT NOT NULL DEFAULT 'draft', creator_user_id INTEGER,
-            current_owner INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
-    """CREATE TABLE IF NOT EXISTS cpq_wf_card_step (
-            card_step_id INTEGER PRIMARY KEY, card_id INTEGER NOT NULL, step_no INTEGER NOT NULL,
-            step_name TEXT, role_code TEXT, status TEXT NOT NULL DEFAULT 'pending',
-            owner_user_id INTEGER, data_snapshot TEXT, started_at TEXT, completed_at TEXT,
-            UNIQUE (card_id, step_no))""",
-    """CREATE TABLE IF NOT EXISTS cpq_wf_task (
-            task_id INTEGER PRIMARY KEY, card_id INTEGER NOT NULL, from_user_id INTEGER,
-            from_step_no INTEGER, target_type TEXT NOT NULL, target_role_code TEXT,
-            target_user_id INTEGER, claimed_by_user_id INTEGER, status TEXT NOT NULL DEFAULT 'open',
-            source_label TEXT, note TEXT, created_at TEXT NOT NULL, claimed_at TEXT, completed_at TEXT)""",
-    """CREATE TABLE IF NOT EXISTS cpq_wf_task_event (
-            event_id INTEGER PRIMARY KEY, card_id INTEGER NOT NULL, task_id INTEGER,
-            actor_user_id INTEGER, action TEXT NOT NULL, from_step INTEGER, to_step INTEGER,
-            comment TEXT, created_at TEXT NOT NULL)""",
-    """CREATE TABLE IF NOT EXISTS cpq_wf_message (
-            message_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, msg_type TEXT NOT NULL,
-            title TEXT, body TEXT, card_id INTEGER, task_id INTEGER, session_id TEXT,
-            step_no INTEGER, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""",
-    "CREATE INDEX IF NOT EXISTS idx_wf_task_card ON cpq_wf_task(card_id)",
-    "CREATE INDEX IF NOT EXISTS idx_wf_task_status ON cpq_wf_task(status)",
-    "CREATE INDEX IF NOT EXISTS idx_wf_cardstep_card ON cpq_wf_card_step(card_id)",
-    "CREATE INDEX IF NOT EXISTS idx_wf_msg_user ON cpq_wf_message(user_id, is_read)",
-]
-
-
 def init() -> str:
     """建表 + 写入步骤角色种子。须在 cpq_auth.init() 之后调用。"""
     conn = cpq_auth._connect()
     try:
-        ddl = _DDL_SQLITE if cpq_auth._backend == "sqlite" else _ddl_pg(cpq_auth.WF_SCHEMA)
-        for sql in ddl:
+        for sql in _ddl_pg(cpq_auth.WF_SCHEMA):
             cpq_auth._exec(conn, sql)
         # 种子：步骤 -> 负责角色（幂等，按 step_no 校正名称与角色）
         for no, name, role in QUOTE_STEPS:
@@ -194,8 +173,6 @@ def init() -> str:
                     conn, "INSERT INTO cpq_wf_step_perm (id, assistant_type, step_no, step_name, role_code)"
                           " VALUES (%s,%s,%s,%s,%s)",
                     (_new_id(conn), ASSISTANT, no, name, role))
-        if cpq_auth._backend == "sqlite":
-            conn.commit()
         return f"报价工作流表已就绪（{len(QUOTE_STEPS)} 步角色种子）"
     finally:
         conn.close()
@@ -205,8 +182,7 @@ def init() -> str:
 # 小工具
 # ---------------------------------------------------------------------------
 def _new_id(conn) -> int:
-    return (cpq_auth.cpq_db.snow_next_id(conn) if cpq_auth._backend == "pg"
-            else cpq_auth.cpq_db._client_snow_id())
+    return cpq_auth.cpq_db.snow_next_id(conn)
 
 
 def _now():
@@ -218,8 +194,8 @@ def _ts(dt):
 
 
 def _commit(conn):
-    if cpq_auth._backend == "sqlite":
-        conn.commit()
+    """连接是 autocommit，这里留空以保持调用方写法统一。"""
+    return None
 
 
 def _iso(v):
@@ -432,11 +408,21 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
             raise WfError("卡片不存在，请先保存报价会话")
         cid = int(card["card_id"])
         now = _now()
+        # data_snapshot 按 DA 是 jsonb：前端传的是 JSON.stringify 的结果，显式 ::jsonb 转换；
+        # 空串或不是合法 JSON 时存 NULL，不能让一次快照把整步确认搞失败。
+        snap = (snapshot or "").strip()[:200000]
+        if snap:
+            try:
+                json.loads(snap)
+            except ValueError:
+                snap = None
+        else:
+            snap = None
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_card_step SET status = 'done', owner_user_id = %s,"
-                  " data_snapshot = %s, completed_at = %s,"
+                  " data_snapshot = %s::jsonb, completed_at = %s,"
                   " started_at = COALESCE(started_at, %s) WHERE card_id = %s AND step_no = %s",
-            (int(user["user_id"]), (snapshot or "")[:200000], _ts(now), _ts(now), cid, step_no))
+            (int(user["user_id"]), snap, _ts(now), _ts(now), cid, step_no))
         # 下一步归属哪个角色 -> 决定卡片新状态：本人还能继续=in_progress；换人做=awaiting_handoff（待转交）
         done_all = step_no >= LAST_STEP
         nxt = min(step_no + 1, LAST_STEP)
@@ -497,7 +483,7 @@ def _msg(conn, user_id, msg_type, title, body, card_id=None, task_id=None,
               " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (_new_id(conn), int(user_id), msg_type, (title or "")[:255], (body or "")[:1000],
          card_id, task_id, session_id or None, step_no,
-         False if cpq_auth._backend == "pg" else 0, _ts(_now())))
+         False, _ts(_now())))
 
 
 def _recipients(conn, target_type: str, role_code: str, target_user_id, exclude_uid: int) -> list:
@@ -538,7 +524,7 @@ def messages(user: dict, limit: int = 50) -> dict:
             out.append(d)
         cur = cpq_auth._exec(
             conn, "SELECT COUNT(*) FROM cpq_wf_message WHERE user_id = %s AND is_read = %s",
-            (uid, False if cpq_auth._backend == "pg" else 0))
+            (uid, False))
         unread = int((cur.fetchone() or [0])[0])
         return {"messages": out, "unread": unread}
     finally:
@@ -550,8 +536,7 @@ def mark_read(user: dict, message_ids=None) -> int:
     if not user:
         return 0
     uid = int(user["user_id"])
-    read_true = True if cpq_auth._backend == "pg" else 1
-    read_false = False if cpq_auth._backend == "pg" else 0
+    read_true, read_false = True, False
     conn = cpq_auth._connect()
     try:
         ids = [int(x) for x in (message_ids or []) if str(x).isdigit()]

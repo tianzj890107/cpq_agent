@@ -346,7 +346,7 @@ def _blocked_tables() -> set:
         "clm_calc_base_info", "clm_calc_destination", "clm_calc_product", "clm_calc_product_tech",
         "clm_calc_payment", "clm_calc_logistics", "clm_calc_bom_head", "clm_calc_bom_line",
         "clm_calc_markup_item", "clm_quote_base_info", "clm_quote_product",
-        "material_info", "product_series_info", "product_series_ref_feature_info",
+        "md_clm_material_base_info", "product_series_info", "product_series_ref_feature_info",
         "clm_base_info", "clm_line_info", "clm_base_rule_rel", "clm_line_rule_rel",
     }
 
@@ -669,7 +669,7 @@ SYSTEM_PROMPT = """\
    - **⚠️ 表访问边界（重要规则）**：取数时，亿纬锂能DA梳理文档中你**只能访问「规则助手」页内的表**
      （即上面的 md_clm_distribution_rule / md_clm_material_price_rule / md_clm_material_cost_cnf /
      md_clm_material_feature_cnf / bd_clm_feature）；**报价助手页（clm_calc_*/clm_quote_*）和
-     配置助手页（material_info / product_series_* / CLM_BASE_INFO / CLM_LINE_INFO / clm_*_rule_rel）
+     配置助手页（md_clm_material_base_info / product_para_value / product_series_* / CLM_BASE_INFO / CLM_LINE_INFO / clm_*_rule_rel）
      的任何实际表一律禁止查询**（系统会直接拒绝）。样例 BOM 表（sample_power_bom_orders/lines）
      不在 DA 文档内，可正常使用。配置 BOM 的组装以样例 BOM + 规则 + 用户需求为依据，不查标准配置 BOM 表。
 

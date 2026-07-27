@@ -33,7 +33,8 @@ PRODUCT_TABLE = "product_para_value"
 COL_ID = "id"
 COL_CODE = "product_item_code"        # ← 图片文件名用它
 COL_NAME = "product_item_name"
-EXTRA_COLS = ["cell_model", "rated_voltage", "rated_capacity", "application_scope"]
+EXTRA_COLS = ["cell_model", "rated_voltage", "rated_capacity", "application_scope",
+              "service_life", "hermeticity"]
 LIST_LIMIT = int(os.getenv("CPQ_IMAGE_LIST_LIMIT", "3000"))
 
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}

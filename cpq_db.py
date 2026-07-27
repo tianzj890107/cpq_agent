@@ -18,6 +18,7 @@ psycopg（psycopg3）为延迟导入：未装驱动/连不上库时，schema-fro
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from functools import lru_cache
@@ -96,9 +97,26 @@ def _norm(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+_IDENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _is_ident(s: str) -> bool:
+    """是否像物理标识符（表名/列名一定是 ASCII，中文一定不是）。"""
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", (s or "").strip()))
+
+
 def _split_entity(cell: str):
-    """把配置/规则 sheet 的「中文名-表code」拆成 (cn, table)。无 '-' 时 table=cn。"""
+    """把配置/规则 sheet 的「中文名-表code」拆成 (cn, table)。
+
+    表名一律取**末尾那段 ASCII 标识符**：DA 里存在
+    「物料编码信息-物料数据md_clm_material_base_info」这类把中文写进后半段的填法，
+    按 '-' 硬拆会把「物料数据」粘进表名，导致下游 SQL 全部失败。"""
     s = cell.replace("\n", "").strip()
+    m = _IDENT_RE.search(s)
+    if m:
+        table = m.group(0)
+        cn = s[:m.start()].strip().rstrip("-").strip()
+        return (cn or table), table
     if "-" in s:
         cn, code = s.rsplit("-", 1)
         return cn.strip(), code.strip()
@@ -152,9 +170,13 @@ def _load_ontology() -> dict:
         bi_index[(e["business_object"], e["cn"])] = e["attrs"]
     result["quote"] = {"entities": quote_ents, "bi_index": bi_index}
 
-    # ---- 配置助手：业务对象|逻辑实体(名-code)|属性名称|字段编号|主键|外键|备注 ----
+    # 两页列布局不同（配置助手比规则助手多一列「字段类型」），按页显式给出列序号，
+    # 否则主键/外键/备注会整体错位一列。
+    # ---- 配置助手：业务对象|逻辑实体(名-code)|属性名称|字段编号|字段类型|主键|外键|备注 ----
     # ---- 规则助手：业务对象|逻辑实体(名-code)|属性名称|字段编号|主键|外键 ----
-    for agent, ncol in (("config", 7), ("rule", 6)):
+    for agent, ncol, ci_type, ci_pk, ci_fk, ci_note in (
+            ("config", 8, 4, 5, 6, 7),
+            ("rule", 6, None, 4, 5, None)):
         ents = {}
         fbo = fent = ""
         for i, r in enumerate(rows_of(_SHEET[agent])):
@@ -169,10 +191,16 @@ def _load_ontology() -> dict:
             if not table:
                 continue
             e = ents.setdefault(table, {"table": table, "cn": cn, "business_object": fbo, "attrs": []})
-            if r[3]:
-                note = r[6] if ncol >= 7 else ""
-                _add_attr(e, {"code": r[3], "name": r[2], "type": "",
-                              "pk": r[4], "fk": r[5], "note": note})
+            # 「属性名称 / 字段编号」两列在个别表里填反了（如 product_para_value）。
+            # 物理列 code 必然是 ASCII 标识符，据此纠正，避免把中文当成列名喂给模型。
+            code, name = r[3], r[2]
+            if not _is_ident(code) and _is_ident(name):
+                code, name = name, code
+            if code:
+                _add_attr(e, {"code": code, "name": name,
+                              "type": r[ci_type] if ci_type is not None else "",
+                              "pk": r[ci_pk], "fk": r[ci_fk],
+                              "note": r[ci_note] if ci_note is not None else ""})
         result[agent] = {"entities": list(ents.values()), "bi_index": {}}
 
     wb.close()

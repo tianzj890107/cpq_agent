@@ -17,13 +17,8 @@ cpq_history/
 xbom_history/
 rule_history/
 
-# quote_bom.db 的时间戳备份
+# 历史遗留 .db 备份（登录/工作流数据已全部改存线上 Postgres，本地不再有 sqlite）
 *.db.bak_*
-
-# 登录系统本地回落库（含账号口令哈希与会话令牌，绝不入库）
-cpq_auth.db
-cpq_auth.db-shm
-cpq_auth.db-wal
 
 # Python / Office 临时产物
 __pycache__/

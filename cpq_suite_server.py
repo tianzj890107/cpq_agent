@@ -370,10 +370,35 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _dispatch_product_image(self) -> bool:
+        """/product-image/<成品编码> —— 同源取产品图片（复用 8011 的 product_images/ 目录）。
+        报价第 1 步的推荐清单在对话框里点「图片」就走这里，避免跨端口/CORS。"""
+        parsed = urllib.parse.urlparse(self.path)
+        if not parsed.path.startswith("/product-image/"):
+            return False
+        code = urllib.parse.unquote(parsed.path[len("/product-image/"):])
+        fn = cpq_image_server._find_image(code)
+        if not fn:
+            self._safe_send(404, "该产品尚未上传图片".encode("utf-8"))
+            return True
+        full = os.path.join(cpq_image_server.IMAGE_DIR, fn)
+        try:
+            with open(full, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._safe_send(404, b"not found")
+            return True
+        import mimetypes
+        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        self._send_raw(200, data, ctype, length=len(data))
+        return True
+
     def do_GET(self):
         if self._dispatch_agent("do_GET"):
             return
         if self._dispatch_auth():
+            return
+        if self._dispatch_product_image():
             return
         if self._dispatch_wf():
             return
@@ -561,21 +586,15 @@ def main():
     for name, mod in AGENTS.items():
         mod.SETTINGS_PEERS = [_peer(m) for n, m in AGENTS.items() if n != name]
 
-    # 登录与角色系统：账号/卡片/任务/消息统一写服务器 Postgres 的 cpq_wf schema。
-    # 默认连不上就报错（不静默写本地），避免"服务器上查不到注册的人"。
+    # 登录与角色系统：账号/角色/卡片/步骤/任务/消息**只写线上 Postgres 的 cpq_wf schema**，
+    # 没有任何本地存储回落；连不上就让 /auth/* /wf/* 回 503，绝不静默写本地。
     try:
-        note = cpq_auth.init()
-        print(f"[cpq-suite] 登录系统 /auth/*  存储={note}")
+        print(f"[cpq-suite] 登录系统 /auth/*  存储={cpq_auth.init()}")
         print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
-        if cpq_auth._backend != "pg":
-            print("[cpq-suite] " + "!" * 60, file=sys.stderr)
-            print("[cpq-suite] 警告：登录/卡片/任务数据**没有**写入服务器 Postgres，"
-                  "只存在本机文件里，别的机器看不到。", file=sys.stderr)
-            print("[cpq-suite] " + "!" * 60, file=sys.stderr)
     except cpq_auth.BackendUnavailable as e:
         print(f"[cpq-suite] 错误: {e}", file=sys.stderr)
         print("[cpq-suite] 登录与工作流接口将不可用（/auth/* /wf/* 返回 503），"
-              "其余功能正常。", file=sys.stderr)
+              "其余功能正常。请检查网络/VPN 与 CPQ_PG_* 配置。", file=sys.stderr)
     except Exception as e:
         print(f"[cpq-suite] 警告: 登录系统初始化失败：{e}", file=sys.stderr)
 

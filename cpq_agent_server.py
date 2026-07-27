@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 # 报价知识库 = 远程 Postgres（三助手共用），Agent 用 sql_query 只读查询。
 # Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（不反射数据库）。
 import cpq_db
+import cpq_match
 import cpq_msgutil
 import cpq_llm
 
@@ -500,6 +501,8 @@ def _patched_execute_tool(tool_name, tool_input, cwd):
         return _handle_cpq_ui(tool_input)
     if tool_name == "sql_query":
         return _handle_sql_query(tool_input)
+    if tool_name == "match_products":
+        return _handle_match_products(tool_input)
     # 本地文件读取限制：只允许 Read 读取 Excel；其余读文件/检索/列举工具一律拒绝（双保险，
     # 即使 DISABLED_TOOLS 之外的路径也挡住）。
     if tool_name == "Read":
@@ -526,6 +529,78 @@ if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
 
     _safe_print_tool_result._cpq_safe = True
     oc_repl.print_tool_result = _safe_print_tool_result
+
+
+# ---------------------------------------------------------------------------
+# match_products 工具：第 1 步产品匹配（六维加权评分，确定性计算，不由模型估分）
+# ---------------------------------------------------------------------------
+
+MATCH_PRODUCTS_SCHEMA = {
+    "name": "match_products",
+    "description": (
+        "【第 1 步产品匹配专用】按需求参数在 product_para_value（产品参数值表）里做**相似度评分**，"
+        "返回推荐清单 Top3（含六个维度的得分明细、加权总分、告警），并**自动把推荐表格渲染到左侧对话框**"
+        "供用户点选。评分与排序由系统确定性计算——你只负责把需求文档里的参数如实填进来，"
+        "**不要自己估分、不要自己写 SQL 查产品**。\n"
+        "六维权重：尺寸合规25% / 用途场景20% / 温度覆盖20% / 寿命15% / 密封性15% / 其他5%。\n"
+        "最高分低于 70 分会返回「建议转入定制评估」，你要如实转达给用户。\n"
+        "用户选定产品后，再用 sql_query 查 md_clm_material_cost_cnf 取价格填入 s1_products。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "max_dimension": {"type": "string",
+                              "description": "需求最大尺寸(mm)，如 '100*50*20'。没有就留空。"},
+            "dimension_tolerance_pct": {"type": "number",
+                                        "description": "尺寸容差百分比，默认 0。"},
+            "application_scope": {"type": "string", "description": "应用范围/使用场景。"},
+            "operating_temperature": {"type": "string",
+                                      "description": "需求工作温度区间，如 '-20~60'。"},
+            "service_life": {"type": "string", "description": "寿命要求，如 '500次' / '5年'。"},
+            "hermeticity": {"type": "string", "description": "密封性要求，如 'IP67'。"},
+            "top_n": {"type": "integer", "description": "取前几名，默认 3。"},
+        },
+        "required": [],
+    },
+}
+
+
+def _handle_match_products(tool_input: dict) -> str:
+    """执行产品匹配：确定性打分 -> UI 事件渲染到左侧对话框 -> 给模型返回文字摘要。"""
+    if not isinstance(tool_input, dict):
+        return "match_products 入参必须是 JSON 对象"
+    req = {k: tool_input.get(k) for k in
+           ("max_dimension", "dimension_tolerance_pct", "application_scope",
+            "operating_temperature", "service_life", "hermeticity")}
+    try:
+        res = cpq_match.match(req, top_n=tool_input.get("top_n") or 3)
+    except Exception as e:
+        traceback.print_exc()
+        return f"产品匹配失败：{e}"
+    if not res.get("ok"):
+        return res.get("error") or "产品匹配失败"
+
+    # 推荐清单渲染到左侧对话框（前端按 chat_candidates 事件画表格 + 图片/选用按钮）
+    _ui_events().append({
+        "action": "chat_candidates", "step": 1,
+        "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
+        "products": res["products"], "weights": res["weights"],
+        "threshold": res["threshold"], "below_threshold": res["below_threshold"],
+        "advice": res["advice"], "all_count": res["all_count"],
+    })
+
+    lines = [f"已在 {res['all_count']} 个产品中完成六维加权评分，推荐 Top{len(res['products'])}（已渲染到左侧供用户点选）："]
+    for i, p in enumerate(res["products"], 1):
+        ds = "；".join(f"{d['label']}{d['score']:g}" for d in p["detail"].values())
+        lines.append(f"{i}. {p['code']} {p['name']}　总分 {p['total']:g}　（{ds}）")
+        for w in p["warnings"]:
+            lines.append(f"   ⚠ {w}")
+    if res["below_threshold"]:
+        lines.append(f"最高分 {res['products'][0]['total']:g} 低于阈值 {res['threshold']:g}："
+                     f"{res['advice']}")
+    lines.append("请等用户在左侧点「选用」确定产品后，再查 md_clm_material_cost_cnf 取价格填表；"
+                 "**不要替用户擅自选定**。")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -879,22 +954,31 @@ SYSTEM_PROMPT = """\
   ① **文档+推测**：先从用户上传的需求文档/需求描述提取信息，结合合理推测填写 s1_basic（测算基本信息）、
      s1_dest（目的地信息）、s1_payment（付款里程碑信息）、s1_logistics（物流信息）——文档有的直接填，
      文档没有的给推荐值（加「（推荐）」标记）。
-  ② **产品匹配（s1_techparams / s1_products 必须走这条，不能只照抄文档）**：用 sql_query 查
-     `product_para_value`（产品参数值表）。该表的列（code 中文名）：
-     id, product_item_code 成品编码, product_item_name 成品描述, machine_model 机械号,
-     plug_wire_model 插头线型号, plug_direction 插头方向, wire_length 线长, is_wire_wound 是否绕线,
-     cell_code 电芯编码, cell_model 电芯型号, reference_size 参考尺寸, rated_voltage 标称电压(V),
-     rated_capacity 标称容量(mAh), max_continuous_current 最大持续电流(mA), max_pulse_current 最大脉冲电流(mA),
-     operating_temperature 工作温度, max_dimension 最大尺寸(mm), weight 重量(g),
-     storage_temperature 存储温度, application_scope 应用范围。
-     **按用户文档给出的参数（电压/容量/最大持续或脉冲电流/电芯型号/插头线型号/线长/工作温度等）
-     筛选出能满足需求的对应产品（product_item_code）**：
-     · 找到满足需求的产品 → 用该产品查到的参数值填 s1_techparams（产品技术参数），并据此填 s1_products（产品信息列表）；
-     · **没有满足需求的产品 → s1_techparams、s1_products 一律不填**（保留空骨架，聊天里说明"没有匹配产品"，请用户调整需求）。
-  ③ **产品价格（不许推测）**：拿第②步匹配产品的 `product_para_value.product_item_code`，去
-     `md_clm_material_cost_cnf`（物料成本配置）查 `material_code = 该 product_item_code` 的行
-     （注意 is_deleted=0 与生效/失效日期），取 **`material_unit_price` 作为「价格」填入 s1_products**；
-     查不到就价格留空并在聊天里说明。
+  ② **产品匹配（必须调 match_products 工具，禁止自己写 SQL 查 product_para_value、禁止自己估分）**：
+     从需求文档里提取这几项，作为参数调用 **match_products**：
+       · max_dimension 最大尺寸(mm)　· dimension_tolerance_pct 尺寸容差%（文档没写就不传）
+       · application_scope 应用范围/使用场景　· operating_temperature 工作温度区间
+       · service_life 寿命要求　· hermeticity 密封性(IP等级)
+     工具会在全部产品里按**六维加权评分**（尺寸25% / 场景20% / 温度20% / 寿命15% / 密封15% / 其他5%）
+     算出相似度，取 **Top3**，并**自动把推荐清单表格渲染到左侧对话框**（含各维度得分、总分、告警、
+     「图片」与「选用」按钮）。你在聊天里只需**简述**每个候选的优劣与告警，**不要再贴一遍表格**。
+     · 工具返回「最高分低于阈值 70」时，**必须原话转达**：「无高度匹配标品，建议转入定制评估」，
+       并请用户确认是继续选用次优品还是转定制。
+     · **此时绝对不要填 s1_products / s1_techparams，也不要替用户选定产品**——等用户在左侧点「选用」。
+  ③ **用户选定后**（你会收到「【选定产品】…」消息）：
+     · 用该 product_item_code 的参数填 **s1_techparams**（产品技术参数）；
+     · **产品价格（不许推测）**：用 sql_query 查 `md_clm_material_cost_cnf`（物料成本配置）
+       `material_code = 该 product_item_code` 的行（注意 is_deleted=0 与生效/失效日期），
+       取 **`material_unit_price` 作为「价格」填入 s1_products**；查不到就价格留空并在聊天里说明。
+     · 需要产品明细参数时才查 `product_para_value`（如补 s1_techparams 的字段），列清单见下。
+     `product_para_value` 的列（code 中文名）：id, product_item_code 成品编码,
+     product_item_name 成品描述, machine_model 机械号, plug_wire_model 插头线型号,
+     plug_direction 插头方向, wire_length 线长, is_wire_wound 是否绕线, cell_code 电芯编码,
+     cell_model 电芯型号, reference_size 参考尺寸, rated_voltage 标称电压(V),
+     rated_capacity 标称容量(mAh), max_continuous_current 最大持续电流(mA),
+     max_pulse_current 最大脉冲电流(mA), operating_temperature 工作温度,
+     max_dimension 最大尺寸(mm), weight 重量(g), storage_temperature 存储温度,
+     application_scope 应用范围, service_life 使用寿命, hermeticity 密封性。
   ④ 全部填完请用户核对。用户点「进入下一大步骤」后进入第 2 步「工艺确认」（人工核对，你不参与，见下）。
 - **第 2 步｜工艺确认（人工核对步骤，你不参与）**。分区：s2_products（产品信息列表·沿用第 1 步·仅展示）、
   s2_techparams（产品技术参数·沿用第 1 步·仅展示）。
@@ -1470,6 +1554,8 @@ class Bridge:
             self.conv.tool_schemas.append(CPQ_UI_SCHEMA)
         if "sql_query" not in names:
             self.conv.tool_schemas.append(SQL_QUERY_SCHEMA)
+        if "match_products" not in names:
+            self.conv.tool_schemas.append(MATCH_PRODUCTS_SCHEMA)
 
     def meta(self) -> dict:
         return {

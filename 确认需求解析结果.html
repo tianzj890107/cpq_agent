@@ -154,6 +154,45 @@
     .message-user .message-text { color: white; white-space: pre-wrap; }
     .message-error .message-text { color: var(--color-danger); }
 
+    /* ===== 第1步 产品推荐清单（对话框内） ===== */
+    .cand-block .message-text { max-width: 100%; }
+    .cand-head { font-size: 12px; margin-bottom: 4px; }
+    .cand-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.6; margin-bottom: 8px; }
+    .cand-warn { background: rgba(239,68,68,.10); color: #b91c1c; border: 1px solid rgba(239,68,68,.25);
+      border-radius: 6px; padding: 7px 10px; font-size: 12px; margin-bottom: 8px; }
+    .cand-scroll { overflow-x: auto; }
+    .cand-table { border-collapse: collapse; font-size: 12px; width: 100%; min-width: 620px; }
+    .cand-table th, .cand-table td { border: 1px solid var(--border-color); padding: 5px 7px; text-align: center; }
+    .cand-table th { background: var(--bg-secondary); font-weight: 600; font-size: 11px; line-height: 1.35; }
+    .cand-w { color: var(--text-tertiary); font-weight: 400; font-size: 10px; }
+    .cand-rank { font-weight: 700; color: var(--color-primary); }
+    .cand-code { font-weight: 600; text-align: left; }
+    .cand-name { color: var(--text-secondary); font-size: 11px; text-align: left; }
+    .cand-total { font-weight: 700; font-size: 14px; cursor: pointer; }
+    .cand-total.ok { color: #16a34a; }
+    .cand-total.low { color: #f59e0b; }
+    .cand-cell { cursor: help; }
+    .cand-score { display: inline-block; min-width: 26px; padding: 1px 5px; border-radius: 10px; font-size: 11px; }
+    .cand-score.s3 { background: rgba(16,185,129,.14); color: #047857; }
+    .cand-score.s2 { background: rgba(245,158,11,.16); color: #b45309; }
+    .cand-score.s1 { background: rgba(239,68,68,.13); color: #b91c1c; }
+    .cand-ops { white-space: nowrap; }
+    .cand-btn { border: 1px solid var(--border-color); background: var(--bg-page); color: var(--text-secondary);
+      border-radius: 6px; padding: 3px 7px; font-size: 11px; cursor: pointer; margin: 0 2px; }
+    .cand-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .cand-btn.pick { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+    .cand-btn.pick.picked { background: #16a34a; border-color: #16a34a; }
+    .cand-btn:disabled { opacity: .5; cursor: default; }
+    .cand-why, .cand-imgrow { display: none; }
+    .cand-why.show, .cand-imgrow.show { display: table-row; }
+    .cand-why td { text-align: left; background: var(--bg-secondary); }
+    .cand-why-item { font-size: 11px; color: var(--text-secondary); line-height: 1.7; }
+    .cand-why-warn { font-size: 11px; color: #b91c1c; margin-top: 3px; }
+    .cand-img-box { text-align: center; padding: 6px; }
+    .cand-img-box img { max-width: 260px; max-height: 200px; border-radius: 6px; border: 1px solid var(--border-color); }
+    .cand-img-tip { font-size: 11px; color: var(--text-tertiary); }
+    .cand-tip { font-size: 11px; color: var(--text-tertiary); margin-top: 7px; line-height: 1.6; }
+
     .tool-activity {
       align-self: flex-start;
       display: flex; align-items: center; gap: 6px;
@@ -1606,9 +1645,131 @@
       content.appendChild(doc);
     }
 
+    /* ============ 第 1 步：产品推荐清单（渲染在左侧对话框，供用户点选） ============
+       六维加权评分由后端 match_products 确定性算出，这里只负责展示：
+       每行给出总分 + 各维度分，「图片」按需展开（点了才加载），「选用」把选择回传给智能体。 */
+    function renderCandidates(ui) {
+      const list = ui.products || [];
+      const div = document.createElement('div');
+      div.className = 'message message-ai cand-block';
+      const reqTxt = Object.entries(ui.requirement || {})
+        .map(([k, v]) => CAND_REQ_LABEL[k] || k).length
+        ? Object.entries(ui.requirement || {}).map(([k, v]) =>
+            (CAND_REQ_LABEL[k] || k) + '：' + escapeHtml(v)).join('　')
+        : '（需求未给限定条件）';
+      const dims = list.length ? Object.keys(list[0].detail || {}) : [];
+
+      let html = '<div class="message-label">产品推荐</div><div class="message-text">' +
+        '<div class="cand-head"><b>匹配需求</b>　' + reqTxt + '</div>' +
+        '<div class="cand-sub">共评估 ' + (ui.all_count || 0) + ' 个产品，按加权总分取 Top' + list.length +
+        '。权重：' +
+        Object.entries(ui.weights || {}).map(([k, v]) => escapeHtml(k) + ' ' + escapeHtml(v)).join('、') +
+        '</div>';
+
+      if (ui.below_threshold) {
+        html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 最高分低于阈值 ' +
+          ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
+      }
+
+      html += '<div class="cand-scroll"><table class="cand-table"><thead><tr>' +
+        '<th>#</th><th>成品编码 / 描述</th><th>总分</th>' +
+        dims.map(d => '<th>' + escapeHtml(list[0].detail[d].label) + '<br><span class="cand-w">' +
+          list[0].detail[d].weight + '%</span></th>').join('') +
+        '<th>操作</th></tr></thead><tbody>';
+
+      list.forEach((p, i) => {
+        html += '<tr data-code="' + escapeHtml(p.code) + '">' +
+          '<td class="cand-rank">' + (i + 1) + '</td>' +
+          '<td><div class="cand-code">' + escapeHtml(p.code) + '</div>' +
+          '<div class="cand-name">' + escapeHtml(p.name || '—') + '</div></td>' +
+          '<td class="cand-total ' + (p.total >= ui.threshold ? 'ok' : 'low') + '">' + p.total + '</td>' +
+          dims.map(d => {
+            const c = p.detail[d];
+            return '<td class="cand-cell" title="' + escapeHtml(c.reason) + '">' +
+              '<span class="cand-score s' + (c.score >= 100 ? '3' : c.score >= 60 ? '2' : '1') + '">' +
+              c.score + '</span></td>';
+          }).join('') +
+          '<td class="cand-ops">' +
+          '<button class="cand-btn img" data-img="' + escapeHtml(p.code) + '"><i class="ti ti-photo"></i>图片</button>' +
+          '<button class="cand-btn pick" data-pick="' + i + '"><i class="ti ti-check"></i>选用</button>' +
+          '</td></tr>';
+        // 逐维度说明 + 告警（默认折叠在第二行，点总分展开）
+        html += '<tr class="cand-why" data-why="' + escapeHtml(p.code) + '"><td></td><td colspan="' +
+          (dims.length + 2) + '">' +
+          dims.map(d => '<div class="cand-why-item"><b>' + escapeHtml(p.detail[d].label) + ' ' +
+            p.detail[d].score + '分</b>（加权 ' + p.detail[d].weighted + '）：' +
+            escapeHtml(p.detail[d].reason) + '</div>').join('') +
+          (p.warnings && p.warnings.length
+            ? '<div class="cand-why-warn">⚠ ' + p.warnings.map(escapeHtml).join('；') + '</div>' : '') +
+          '</td></tr>';
+        html += '<tr class="cand-imgrow" data-imgrow="' + escapeHtml(p.code) + '"><td></td><td colspan="' +
+          (dims.length + 2) + '"><div class="cand-img-box"></div></td></tr>';
+      });
+      html += '</tbody></table></div>' +
+        '<div class="cand-tip">点「图片」查看产品照片，点「选用」确定该产品（随后会自动带出价格）。' +
+        '鼠标悬停各维度分数可看评分依据，点总分展开完整说明。</div></div>';
+      div.innerHTML = html;
+      chatEl.appendChild(div);
+
+      // 图片：点了才加载（未上传则提示）
+      div.querySelectorAll('[data-img]').forEach(btn => {
+        btn.onclick = () => {
+          const code = btn.dataset.img;
+          const row = div.querySelector('[data-imgrow="' + CSS.escape(code) + '"]');
+          if (!row) return;
+          const box = row.querySelector('.cand-img-box');
+          if (row.classList.contains('show')) { row.classList.remove('show'); return; }
+          row.classList.add('show');
+          if (!box.dataset.loaded) {
+            box.dataset.loaded = '1';
+            box.innerHTML = '<span class="cand-img-tip">加载中…</span>';
+            const img = new Image();
+            img.onload = () => { box.innerHTML = ''; box.appendChild(img); };
+            img.onerror = () => {
+              box.innerHTML = '<span class="cand-img-tip">该产品尚未上传图片（可在产品图片维护 :8011 补传）。</span>';
+            };
+            img.alt = code;
+            img.src = '/product-image/' + encodeURIComponent(code);
+          }
+        };
+      });
+      // 展开评分说明
+      div.querySelectorAll('.cand-total').forEach(td => {
+        td.onclick = () => {
+          const code = td.closest('tr').dataset.code;
+          const w = div.querySelector('[data-why="' + CSS.escape(code) + '"]');
+          if (w) w.classList.toggle('show');
+        };
+      });
+      // 选用：把选择回传给智能体，由它查价格并填表
+      div.querySelectorAll('[data-pick]').forEach(btn => {
+        btn.onclick = () => {
+          const p = list[Number(btn.dataset.pick)];
+          if (!p) return;
+          div.querySelectorAll('[data-pick]').forEach(b => { b.disabled = true; });
+          btn.classList.add('picked');
+          btn.innerHTML = '<i class="ti ti-check"></i>已选用';
+          sendToAgent(
+            '【选定产品】用户从推荐清单里选定：' + p.code + '（' + (p.name || '') + '），' +
+            '加权总分 ' + p.total + '。请据此：① 用该 product_item_code 的参数填 s1_techparams（产品技术参数）；' +
+            '② 用 sql_query 查 md_clm_material_cost_cnf（material_code = 该编码，is_deleted=0 且在有效期内）' +
+            '取 material_unit_price 作为「价格」，连同型号/数量等填入 s1_products（产品信息列表）；' +
+            '③ 简述选定理由与需要注意的告警项。',
+            { echo: false, display: '选用产品：' + p.code });
+        };
+      });
+      scrollChat();
+    }
+    const CAND_REQ_LABEL = {
+      max_dimension: '最大尺寸', dimension_tolerance_pct: '尺寸容差%',
+      application_scope: '应用范围', operating_temperature: '工作温度',
+      service_life: '寿命', hermeticity: '密封性',
+    };
+
     function applyUiEvent(ui) {
       try {
         if (ui.action === 'set_step') { setStep(ui.step); return; }
+        if (ui.action === 'chat_candidates') { renderCandidates(ui); return; }
         if (ui.action === 'focus_section') {
           // 仅更新“待确认/已确认”徽标并展开该分区，不再做高光选择
           if (ui.status) setSectionStatus(ui.section_id, ui.status);

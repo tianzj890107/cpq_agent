@@ -26,10 +26,7 @@ tech_app/**/*.pyc
 database/*.sqlite
 database/*.sqlite-shm
 database/*.sqlite-wal
-quote_bom.db
-cpq_auth.db
-cpq_auth.db-shm
-cpq_auth.db-wal
+*.db
 
 # ---- 仅作参考、运行时不读的大表格（保留 亿纬锂能DA梳理.xlsx —— 本体语义层，必须进镜像）----
 报价业务流程.xlsx
