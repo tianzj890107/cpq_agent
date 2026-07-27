@@ -244,19 +244,24 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if not path.startswith("/auth"):
             return False
-        if cpq_auth._backend is None:      # 后端没起来（连不上 Postgres）：明确回 503，不装作能用
+        m = self.command
+        # 角色字典是代码里的静态常量、当前登录态查询也能安全降级，二者都**不依赖数据库**，
+        # 必须放在下面的 503 守卫之前——否则库一断，注册表单的角色下拉会是空的、根本没法选。
+        if path == "/auth/roles" and m == "GET":
+            self._send_json(200, {"roles": [{"role_code": k, "role_name": v}
+                                            for k, v in cpq_auth.ROLES.items()],
+                                  "ready": cpq_auth._backend is not None})
+            return True
+        if path == "/auth/me" and m == "GET":
+            self._send_json(200, {"user": cpq_auth.whoami(self._token()),
+                                  "storage": cpq_auth.backend_info()})
+            return True
+        if cpq_auth._backend is None:      # 需要落库的接口：后端没起来就明确回 503，不装作能用
             self._send_json(503, {"ok": False, "error":
                                   "登录系统未就绪：未能连接服务器 Postgres，请联系管理员检查网络与数据库配置。"})
             return True
-        m = self.command
         try:
-            if path == "/auth/roles" and m == "GET":
-                self._send_json(200, {"roles": [{"role_code": k, "role_name": v}
-                                                for k, v in cpq_auth.ROLES.items()]})
-            elif path == "/auth/me" and m == "GET":
-                user = cpq_auth.whoami(self._token())
-                self._send_json(200, {"user": user, "storage": cpq_auth.backend_info()})
-            elif path == "/auth/register" and m == "POST":
+            if path == "/auth/register" and m == "POST":
                 d = self._read_json()
                 user = cpq_auth.register(d.get("username", ""), d.get("password", ""),
                                          d.get("display_name", ""), d.get("role_code", ""),

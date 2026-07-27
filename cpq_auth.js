@@ -13,7 +13,7 @@
   'use strict';
 
   var TOKEN_KEY = 'cpq_auth_token';
-  var state = { user: null, roles: [], loaded: false };
+  var state = { user: null, roles: [], loaded: false, ready: true };
 
   function token() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
   function setToken(t) {
@@ -129,6 +129,9 @@
   }
 
   function roleOptions(sel) {
+    if (!state.roles.length) {
+      return '<option value="" disabled selected>（无法获取角色列表，服务未就绪）</option>';
+    }
     return state.roles.map(function (r) {
       return '<option value="' + esc(r.role_code) + '"' + (r.role_code === sel ? ' selected' : '') + '>' +
         esc(r.role_name) + '</option>';
@@ -153,7 +156,9 @@
       '<div class="cpq-auth-tab' + (isLogin ? '' : ' on') + '" data-tab="register">注册</div>' +
       '</div>' +
       '<div class="cpq-auth-bd">' + body + '</div>' +
-      '<div class="cpq-auth-msg" id="cpqAuthMsg"></div>' +
+      (state.ready === false
+        ? '<div class="cpq-auth-msg">登录服务未就绪：未能连接数据库，注册与登录暂不可用，请联系管理员。</div>'
+        : '<div class="cpq-auth-msg" id="cpqAuthMsg"></div>') +
       '<div class="cpq-auth-ft">' +
       '<button class="cpq-auth-btn ghost" id="cpqAuthCancel">取消</button>' +
       '<button class="cpq-auth-btn primary" id="cpqAuthOk">' + (isLogin ? '登录' : '注册并登录') + '</button>' +
@@ -245,7 +250,10 @@
   /* ---------------- 启动：拉角色字典 + 当前登录态 ---------------- */
   function refresh() {
     return Promise.all([
-      api('/auth/roles').then(function (d) { state.roles = d.roles || []; }).catch(function () {}),
+      api('/auth/roles').then(function (d) {
+        state.roles = d.roles || [];
+        state.ready = d.ready !== false;      // 后端能否落库（false=连不上数据库，注册/登录会失败）
+      }).catch(function () { state.roles = []; state.ready = false; }),
       api('/auth/me').then(function (d) { state.user = d.user || null; }).catch(function () { state.user = null; }),
     ]).then(function () {
       state.loaded = true;

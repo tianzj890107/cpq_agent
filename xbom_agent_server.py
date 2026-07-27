@@ -311,6 +311,7 @@ SQL_QUERY_SCHEMA = {
         "（sample_power_bom_*）；报价助手页、配置助手页的表禁止查询，会被直接拒绝。**"
         "仅允许单条 SELECT / WITH 语句，不要带分号或多条语句。"
         "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
+        "⚠️ **布尔列必须用 true/false，不能用 0/1**（如 is_deleted = false）——Postgres 会直接报 operator does not exist: boolean = integer。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
     ),
     "input_schema": {

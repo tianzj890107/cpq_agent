@@ -164,7 +164,7 @@ def _build_rule_field_context() -> str:
                 """
                 SELECT rule_name, rule_desc, rule_expression
                 FROM md_clm_distribution_rule
-                WHERE is_deleted = 0
+                WHERE is_deleted = false
                 ORDER BY updated_at DESC
                 """,
                 limit=8, conn=conn,
@@ -177,7 +177,7 @@ def _build_rule_field_context() -> str:
                 """
                 SELECT rule_name, rule_classification, rule_desc, rule_expression
                 FROM md_clm_material_price_rule
-                WHERE is_deleted = 0
+                WHERE is_deleted = false
                   AND (rule_name LIKE '%客户%' OR rule_name LIKE '%电流%' OR rule_name LIKE '%质量%' OR rule_name LIKE '%冷却%')
                 ORDER BY updated_at DESC
                 """,

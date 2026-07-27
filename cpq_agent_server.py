@@ -544,7 +544,9 @@ MATCH_PRODUCTS_SCHEMA = {
         "**不要自己估分、不要自己写 SQL 查产品**。\n"
         "六维权重：尺寸合规25% / 用途场景20% / 温度覆盖20% / 寿命15% / 密封性15% / 其他5%。\n"
         "最高分低于 70 分会返回「建议转入定制评估」，你要如实转达给用户。\n"
-        "用户选定产品后，再用 sql_query 查 md_clm_material_cost_cnf 取价格填入 s1_products。"
+        "用户在左侧点「选用」后，系统会**自动用纯 SQL** 取该编码的参数与价格"
+        "（md_clm_material_cost_cnf.material_code → material_unit_price）并填好 "
+        "s1_techparams / s1_products —— 你不用查价、也不用填这两张表。"
     ),
     "input_schema": {
         "type": "object",
@@ -563,6 +565,119 @@ MATCH_PRODUCTS_SCHEMA = {
         "required": [],
     },
 }
+
+
+def _ppv_cn_map() -> dict:
+    """product_para_value 的 {列code: 中文名}（来自 DA 本体，随 xlsx 自动更新）。"""
+    out = {}
+    try:
+        onto = cpq_db._load_ontology()["config"]
+        for e in onto["entities"]:
+            if e["table"] == cpq_match.PRODUCT_TABLE:
+                for a in e["attrs"]:
+                    if a.get("code"):
+                        out[a["code"]] = a.get("name") or a["code"]
+    except Exception:
+        pass
+    return out
+
+
+def pick_product(code: str) -> dict:
+    """选定产品后的**确定性**取数（不经大模型）：
+
+      ① 按 product_item_code 取 product_para_value 整行参数；
+      ② 用同一个成品编码去 md_clm_material_cost_cnf 匹配 material_code，
+         取 material_unit_price 作为价格（is_deleted = false，且在生效/失效日期内）；
+      ③ 按固定分区的列名（中文）拼好 s1_techparams / s1_products 两行，前端直接渲染。
+    """
+    code = (code or "").strip()
+    if not code:
+        return {"ok": False, "error": "缺少成品编码"}
+
+    # ① 产品参数
+    try:
+        cols, rows = cpq_db.run_select(
+            "SELECT * FROM {} WHERE {} = '{}'".format(
+                cpq_match.PRODUCT_TABLE, cpq_match.COL_CODE, code.replace("'", "''")), 2)
+    except Exception as e:
+        return {"ok": False, "error": f"查询产品参数失败：{str(e).splitlines()[0][:160]}"}
+    if not rows:
+        return {"ok": False, "error": f"产品参数值表里找不到成品编码 {code}"}
+    idx = {c: i for i, c in enumerate(cols)}
+    prow = {c: ("" if rows[0][idx[c]] is None else str(rows[0][idx[c]])) for c in cols}
+
+    # ② 价格：成品编码 -> md_clm_material_cost_cnf.material_code -> material_unit_price
+    price, price_note = "", ""
+    try:
+        pc, pr = cpq_db.run_select(
+            "SELECT material_unit_price, price_validity_date, price_expiration_date"
+            " FROM md_clm_material_cost_cnf"
+            " WHERE material_code = '{}' AND is_deleted = false"
+            " ORDER BY price_validity_date DESC NULLS LAST".format(code.replace("'", "''")), 20)
+        pidx = {c: i for i, c in enumerate(pc)}
+        today = datetime.date.today()
+
+        def _d(v):
+            if v is None or v == "":
+                return None
+            if isinstance(v, datetime.datetime):
+                return v.date()
+            if isinstance(v, datetime.date):
+                return v
+            try:
+                return datetime.date.fromisoformat(str(v)[:10])
+            except ValueError:
+                return None
+
+        hit = None
+        for r in pr:
+            s, e = _d(r[pidx.get("price_validity_date", 0)]), _d(r[pidx.get("price_expiration_date", 0)])
+            if (s is None or s <= today) and (e is None or e >= today):
+                hit = r
+                break
+        if hit is None and pr:
+            hit = pr[0]
+            price_note = "（该编码无当前生效价，取最近一条）"
+        if hit is not None:
+            v = hit[pidx.get("material_unit_price", 0)]
+            price = "" if v is None else str(v)
+        else:
+            price_note = "物料成本配置里没有该编码的价格记录"
+    except Exception as e:
+        price_note = f"价格查询失败：{str(e).splitlines()[0][:120]}"
+
+    # ③ 按固定列名（中文）装配两行：ppv 的中文名与固定列名对得上就填
+    cn = _ppv_cn_map()
+    by_norm = {}
+    for c, v in prow.items():
+        name = cn.get(c, c)
+        by_norm[_norm_key(name)] = v
+        by_norm.setdefault(_norm_key(c), v)
+
+    def _row_for(section_id: str) -> dict:
+        tpl = FIXED_FORMS.get(section_id) or {}
+        row = {}
+        for col in tpl.get("columns", []):
+            k = col["key"]
+            v = by_norm.get(_norm_key(k), "")
+            if v:
+                row[k] = v
+        return row
+
+    tech_row = _row_for("s1_techparams")
+    prod_row = _row_for("s1_products")
+    # 价格列名以固定列为准（DA 里叫「价格」），只有查到才写
+    if price:
+        for col in (FIXED_FORMS.get("s1_products") or {}).get("columns", []):
+            if _norm_key(col["key"]) == _norm_key("价格"):
+                prod_row[col["key"]] = price
+                break
+
+    return {"ok": True, "code": code,
+            "name": prow.get(cpq_match.COL_NAME, ""),
+            "price": price, "price_note": price_note,
+            "techparams_row": tech_row, "products_row": prod_row,
+            "params": prow}
 
 
 def _handle_match_products(tool_input: dict) -> str:
@@ -616,6 +731,7 @@ SQL_QUERY_SCHEMA = {
         "**只能查配置助手页/规则助手页的表（md_* 主数据表）；报价助手页的业务表（clm_calc_*/clm_quote_*）"
         "禁止查询，会被直接拒绝**——前面步骤已生成的数据以右侧工作台分区内容为准。"
         "列名不确定时先 SELECT * FROM 表 LIMIT 3，或查 information_schema.columns 探查。"
+        "⚠️ **布尔列必须用 true/false，不能用 0/1**（如 is_deleted = false）——Postgres 会直接报 operator does not exist: boolean = integer。"
         "所有展示/推荐给用户的“数据库端”依据都必须通过本工具真实查出来，不要臆造。"
     ),
     "input_schema": {
@@ -965,12 +1081,12 @@ SYSTEM_PROMPT = """\
      · 工具返回「最高分低于阈值 70」时，**必须原话转达**：「无高度匹配标品，建议转入定制评估」，
        并请用户确认是继续选用次优品还是转定制。
      · **此时绝对不要填 s1_products / s1_techparams，也不要替用户选定产品**——等用户在左侧点「选用」。
-  ③ **用户选定后**（你会收到「【选定产品】…」消息）：
-     · 用该 product_item_code 的参数填 **s1_techparams**（产品技术参数）；
-     · **产品价格（不许推测）**：用 sql_query 查 `md_clm_material_cost_cnf`（物料成本配置）
-       `material_code = 该 product_item_code` 的行（注意 is_deleted=0 与生效/失效日期），
-       取 **`material_unit_price` 作为「价格」填入 s1_products**；查不到就价格留空并在聊天里说明。
-     · 需要产品明细参数时才查 `product_para_value`（如补 s1_techparams 的字段），列清单见下。
+  ③ **用户选定产品后：这一步不需要你做任何事**。系统会自动用纯 SQL 完成——
+     按成品编码取 product_para_value 全部参数，并用同一编码匹配
+     `md_clm_material_cost_cnf.material_code` 取 `material_unit_price` 作为价格，
+     直接把 **s1_techparams（产品技术参数）与 s1_products（产品信息列表）填好**。
+     **不要重复查价、不要重复填这两张表**；若用户问起，右侧工作台内容即为准。
+     只有用户明确要求补充/修改某些字段时，你才去查 `product_para_value`（列清单见下）。
      `product_para_value` 的列（code 中文名）：id, product_item_code 成品编码,
      product_item_name 成品描述, machine_model 机械号, plug_wire_model 插头线型号,
      plug_direction 插头方向, wire_length 线长, is_wire_wound 是否绕线, cell_code 电芯编码,
@@ -988,7 +1104,7 @@ SYSTEM_PROMPT = """\
 - **第 3 步｜定价-利润加成**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价信息）。
   **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
   ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
-     WHERE rule_classification='定价' AND is_deleted=0`（调用 sql_query 时 limit 传 500，确保取全），
+     WHERE rule_classification='定价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
      **把该分类下的所有定价规则一次性取回来**
      （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许凭记忆/跳过查询直接填表——
      没执行这条查询就不许填 s3_markup）。
@@ -998,7 +1114,7 @@ SYSTEM_PROMPT = """\
 - **第 4 步｜报价-其他加价项**。分区：s4_products（产品信息·沿用·仅展示）、s4_markup（加价明细）。
   **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
   ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
-     WHERE rule_classification='报价' AND is_deleted=0`（调用 sql_query 时 limit 传 500，确保取全），
+     WHERE rule_classification='报价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
      **把该分类下的所有报价规则一次性取回来**
      （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许沿用第 3 步的定价规则结果或凭记忆填表——
      没执行这条查询就不许填 s4_markup）。（规则分类=报价），并把其他加价写回 s4_products 的「其他加价」列；
@@ -1043,7 +1159,7 @@ SYSTEM_PROMPT = """\
    - 各分区的**固定字段名**（values 的键）已由 亿纬锂能DA梳理.xlsx「报价助手」本体写死并预渲染，无需查库；sql_query 只用于取**数据取值**。
    - `product_para_value` —— **产品参数值表**（配置助手页）：第 1 步产品匹配用（完整列清单/筛选方式见「业务流程」第 1 步②）。
    - `md_clm_material_cost_cnf` —— **物料成本表**：第 1 步取产品价格（取法见「业务流程」
-     对应步骤；注意 is_deleted=0 与生效/失效日期）。
+     对应步骤；注意 is_deleted = false 与生效/失效日期）。
    - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：'定价' 第 3 步用、'报价' 第 4 步用
      （必须取全后逐条匹配，见「业务流程」）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
    - **⚠️ 表访问边界（重要规则）**：做数据提取时，亿纬锂能DA梳理文档里你只能访问**配置助手页、规则助手页**
@@ -2185,6 +2301,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"models": models_catalog(), "current": bridge.conv.model})
         elif path == "/api/settings":
             self._send_json(bridge.current_settings())
+        elif path == "/api/product/pick":
+            # 选定产品：确定性取参数 + 查价（成品编码 -> md_clm_material_cost_cnf.material_code
+            # -> material_unit_price），不经大模型
+            code = (parse_qs(parsed.query).get("code") or [""])[0]
+            self._send_json(pick_product(code))
         elif path in ("/", "/index.html"):
             self._send_json({"service": "cpq-quote-agent", "steps": STEPS,
                              "hint": "工作台页面由 serve.py(:8010) 提供，本服务只出 API。"})
