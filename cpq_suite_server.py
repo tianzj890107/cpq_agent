@@ -244,6 +244,10 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if not path.startswith("/auth"):
             return False
+        if cpq_auth._backend is None:      # 后端没起来（连不上 Postgres）：明确回 503，不装作能用
+            self._send_json(503, {"ok": False, "error":
+                                  "登录系统未就绪：未能连接服务器 Postgres，请联系管理员检查网络与数据库配置。"})
+            return True
         m = self.command
         try:
             if path == "/auth/roles" and m == "GET":
@@ -293,6 +297,10 @@ class Handler(BaseHTTPRequestHandler):
             return False
         q = urllib.parse.parse_qs(parsed.query)
         arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+        if cpq_auth._backend is None:      # 同上：工作流与登录共用同一后端
+            self._send_json(503, {"ok": False, "error":
+                                  "工作流未就绪：未能连接服务器 Postgres。"})
+            return True
         m = self.command
         try:
             user = cpq_auth.whoami(self._token())
@@ -553,10 +561,21 @@ def main():
     for name, mod in AGENTS.items():
         mod.SETTINGS_PEERS = [_peer(m) for n, m in AGENTS.items() if n != name]
 
-    # 登录与角色系统：建表（Postgres cpq_wf schema，连不上时自动回落本地 SQLite）
+    # 登录与角色系统：账号/卡片/任务/消息统一写服务器 Postgres 的 cpq_wf schema。
+    # 默认连不上就报错（不静默写本地），避免"服务器上查不到注册的人"。
     try:
-        print(f"[cpq-suite] 登录系统 /auth/*  存储={cpq_auth.init()}")
+        note = cpq_auth.init()
+        print(f"[cpq-suite] 登录系统 /auth/*  存储={note}")
         print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
+        if cpq_auth._backend != "pg":
+            print("[cpq-suite] " + "!" * 60, file=sys.stderr)
+            print("[cpq-suite] 警告：登录/卡片/任务数据**没有**写入服务器 Postgres，"
+                  "只存在本机文件里，别的机器看不到。", file=sys.stderr)
+            print("[cpq-suite] " + "!" * 60, file=sys.stderr)
+    except cpq_auth.BackendUnavailable as e:
+        print(f"[cpq-suite] 错误: {e}", file=sys.stderr)
+        print("[cpq-suite] 登录与工作流接口将不可用（/auth/* /wf/* 返回 503），"
+              "其余功能正常。", file=sys.stderr)
     except Exception as e:
         print(f"[cpq-suite] 警告: 登录系统初始化失败：{e}", file=sys.stderr)
 

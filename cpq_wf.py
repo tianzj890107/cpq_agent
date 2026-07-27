@@ -8,7 +8,7 @@
   - cpq_wf_task         任务流转（把卡片发给指定角色 / 指定个人 / 公共任务池）
   - cpq_wf_task_event   流转审计日志
 
-存储后端复用 cpq_auth（Postgres cpq_wf schema，连不上时回落本地 SQLite），
+存储后端复用 cpq_auth（默认必须是服务器 Postgres 的 cpq_wf schema，见 cpq_auth.BACKEND_MODE），
 故本模块必须在 cpq_auth.init() 之后再 init()。
 
 只服务**报价助手**；配置 / 规则 / 技术工艺三个助手不接入。
@@ -579,8 +579,16 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         raise WfError("派发方式无效")
     if target_type == "role" and target_role_code not in ROLES:
         raise WfError("请选择目标角色")
-    if target_type == "user" and not target_user_id:
-        raise WfError("请选择目标人员")
+    # 只有「指派给某人」才用得上 target_user_id；其余方式一律忽略，避免脏值写进库/抛 500
+    if target_type == "user":
+        try:
+            target_user_id = int(str(target_user_id).strip())
+        except (TypeError, ValueError):
+            raise WfError("请选择目标人员")
+    else:
+        target_user_id = None
+    if target_type != "role":
+        target_role_code = None
     conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
@@ -607,7 +615,7 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
                   " target_type, target_role_code, target_user_id, status, source_label, note,"
                   " created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,'open',%s,%s,%s)",
             (tid, cid, int(user["user_id"]), from_step, target_type,
-             target_role_code or None, int(target_user_id) if target_user_id else None,
+             target_role_code, target_user_id,
              label, (note or "")[:500], _ts(_now())))
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_card SET overall_status = 'handoff_pending', updated_at = %s"

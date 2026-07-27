@@ -1956,6 +1956,8 @@
        与登录系统联动：每步只有对应角色能确认（第2步工艺确认=工艺经理，其余=销售经理）；
        完成一步后可把卡片作为任务发给某角色/某人/公共任务池。接口见 /wf/*。 */
     let WF = { card: null, steps: [], canEdit: true, needRole: '', loaded: false };
+    // 新建报价时暂存的 kickoff（含需求/附件正文）：登录后要等用户点「开始」才发给智能体
+    let PENDING_KICKOFF = null;
 
     function wfUser() { return (window.cpqAuth && cpqAuth.user()) || null; }
 
@@ -1982,8 +1984,20 @@
       } catch (e) { /* 未登录/服务未就绪：不打断报价流程 */ }
     }
 
+    /* 卡片才是「当前第几步」的权威来源。
+       智能体会话 JSON 里的 step 只有在模型 set_step 时才动；而交接时我们特意不通知模型，
+       它会一直停在旧步骤 —— 接手人打开卡片就会从第 1 步重来。这里以卡片为准纠正。 */
+    function wfApplyCardStep() {
+      if (!wfUser() || !WF.card) return;
+      const s = parseInt(WF.card.current_step, 10);
+      if (!(s >= 1 && s <= STEPS.length) || s === currentStep) return;
+      if (s > maxStep) maxStep = s;
+      setStep(s);
+    }
+
     // 拉取卡片状态 + 当前步骤的角色权限，并刷新页面提示
-    async function wfRefresh() {
+    // syncStep=true 时用卡片的 current_step 纠正本地步骤（打开已有卡片时用）
+    async function wfRefresh(syncStep) {
       if (!wfUser() || !currentSessionId) { WF.loaded = false; wfRenderBar(); return; }
       try {
         const d = await wfApi('/wf/card?session_id=' + encodeURIComponent(currentSessionId));
@@ -1995,6 +2009,7 @@
         WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
         WF.loaded = !!d.card;
       } catch (e) { WF.loaded = false; }
+      if (syncStep) wfApplyCardStep();   // 先把步骤纠正到卡片的真实位置，再渲染提示
       wfRenderBar();
       wfMaybePromptStart();
     }
@@ -2010,11 +2025,14 @@
       const div = document.createElement('div');
       div.className = 'message message-ai';
       div.id = 'wfStartPrompt';
+      const isNew = !!PENDING_KICKOFF;
       div.innerHTML =
         '<div class="message-label">流程</div><div class="message-text">' +
-        '<div style="margin-bottom:8px">这张报价卡片当前在<b>第 ' + currentStep + ' 步「' +
-        escapeHtml(STEPS[currentStep - 1]) + '」</b>，由<b>' + escapeHtml(WF.needRole) +
-        '</b>负责，正好是你。是否现在开始本步骤？</div>' +
+        '<div style="margin-bottom:8px">' +
+        (isNew ? '已为这次报价建卡。' : '这张报价卡片当前在') +
+        '<b>第 ' + currentStep + ' 步「' + escapeHtml(STEPS[currentStep - 1]) + '」</b>，由<b>' +
+        escapeHtml(WF.needRole) + '</b>负责，正好是你（' + escapeHtml(wfUser().role_name) +
+        '）。确认后开始本步骤。</div>' +
         '<button id="wfStartBtn" style="padding:7px 16px;border:none;border-radius:8px;' +
         'background:var(--color-primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer">' +
         '<i class="ti ti-player-play"></i> 开始第 ' + currentStep + ' 步</button>' +
@@ -2040,6 +2058,13 @@
       const el = $('wfStartPrompt');
       if (el) el.remove();
       if (opts.silent) return true;         // 同一人顺流程推进：调用方已自行通知智能体
+      // 新建报价：把暂存的 kickoff（含需求描述与附件正文）发出去，等同于原来的自动开始
+      if (PENDING_KICKOFF) {
+        const k = PENDING_KICKOFF;
+        PENDING_KICKOFF = null;
+        sendToAgent(k.text, { echo: false, display: k.display });
+        return true;
+      }
       const name = STEPS[step - 1];
       addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
       if (step === 2) {
@@ -2049,14 +2074,16 @@
           `【开始步骤】用户已接手并开始第 2 步「工艺确认」——这是人工核对步骤，` +
           `产品信息列表与产品技术参数已由前端沿用第 1 步的数据只读展示，你无需查库或填表，` +
           `只用一句话提示用户核对后点「进入下一大步骤」即可。`,
-          { echo: false, display: '开始第 2 步' });
+          { echo: false, display: '开始第 2 步', step: 2 });
         return true;
       }
       sendToAgent(
         `【开始步骤】用户已接手这张报价卡片并开始第 ${step} 步「${name}」。` +
+        `之前各步已由其他同事完成，右侧工作台已载入既有数据，**不要从第 1 步重做**。` +
         `请直接开始第 ${step} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
         `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${step} 步的固定分区（边做边说），最后给小结。`,
-        { echo: false, display: '开始第 ' + step + ' 步' });
+        // 带上 step：同时把会话 JSON 的进度也校正过来，避免与卡片再次脱节
+        { echo: false, display: '开始第 ' + step + ' 步', step: step });
       return true;
     }
 
@@ -2389,7 +2416,9 @@
       currentSessionId = data.id;
       closeOverlays();
       replaySession(data);
-      wfRefresh();   // 打开历史卡片：按该卡片当前步骤重算我的操作权限
+      // 以卡片为准纠正步骤（交接过来的卡片，会话 JSON 里的 step 可能还停在上一步），
+      // 再按该步骤重算我的操作权限、决定是否询问「开始本步骤」
+      wfRefresh(true);
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
@@ -2690,10 +2719,7 @@
         try { openId = sessionStorage.getItem('cpq:openSession') || ''; sessionStorage.removeItem('cpq:openSession'); } catch {}
         if (openId) { await openSession(openId); return; }
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
-        // 新建报价是用户主动发起的，第 1 步直接开工（不再多问一次「是否开始」）；
-        // 若当前角色做不了第 1 步，这里会被后端拒绝，转由提示条引导推送。
-        await wfStartStep(1, { silent: true });
-        await wfRefresh();
+        await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
       } catch {
         setConn(false);
         $('panelPlaceholder').innerHTML =
@@ -2737,6 +2763,13 @@
         if (f && f.text) {
           kickoffFull += '\n\n--- 附件《' + f.name + '》内容' + (f.truncated ? '（内容较长，已截断）' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---';
         }
+      }
+      // 登录后不再自动开工：先匹配角色，由用户点「开始第 1 步」再把 kickoff 发给智能体。
+      // 未登录（无角色体系）时保持原有行为，直接开始。
+      if (wfUser() && WF.loaded) {
+        PENDING_KICKOFF = { text: kickoffFull, display: kickoffBubble };
+        wfMaybePromptStart();
+        return;
       }
       sendToAgent(kickoffFull, { echo: false, display: kickoffBubble });
     }

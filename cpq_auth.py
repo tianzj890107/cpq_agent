@@ -5,11 +5,16 @@
   - cpq_wf_user           内置账号（含角色 role_code、口令哈希）
   - cpq_wf_login_session  登录会话令牌
 
-存储后端（双后端，自动选择）：
-  1) **Postgres**（首选，按 DA 决策放在业务库的独立 schema `cpq_wf`，与业务数据解耦）
-     连接参数复用 cpq_db 的 CPQ_PG_* 环境变量；schema 名可用 CPQ_WF_SCHEMA 覆盖。
-  2) **SQLite**（回落）：本机连不上 Postgres / 未装 psycopg 时自动使用 cpq_auth.db，
-     表结构与 Postgres 等价，保证本地开发与离线演示可用。启动时会打印实际后端。
+存储后端：**账号、注册、卡片、任务、消息一律写服务器 Postgres**
+（按 DA 决策放在业务库的独立 schema `cpq_wf`，与业务数据解耦；连接参数复用 cpq_db 的
+CPQ_PG_* 环境变量，schema 名可用 CPQ_WF_SCHEMA 覆盖）。
+
+用 CPQ_AUTH_BACKEND 控制连不上 Postgres 时的行为：
+  - "pg"（**默认**）：必须连上 Postgres，连不上直接报错、不启动登录系统——
+    避免账号被悄悄写进本地文件、造成"服务器上查不到人"的数据分裂。
+  - "auto"：连不上时回落本地 SQLite(cpq_auth.db) 并**大声告警**，仅供离线开发/演示。
+  - "sqlite"：强制本地 SQLite。
+启动日志会明确打印实际使用的后端。
 
 口令只存 pbkdf2-sha256 加盐哈希（stdlib，无第三方依赖），绝不存明文、绝不出网。
 """
@@ -36,6 +41,9 @@ ROLES = {
 }
 
 SESSION_DAYS = int(os.getenv("CPQ_SESSION_DAYS", "7"))
+
+# pg=必须连上服务器 Postgres（默认）；auto=连不上回落 SQLite 并告警；sqlite=强制本地
+BACKEND_MODE = (os.getenv("CPQ_AUTH_BACKEND", "pg") or "pg").strip().lower()
 
 _backend = None            # 'pg' | 'sqlite'，init() 时确定
 _backend_note = ""
@@ -153,10 +161,34 @@ _DDL_SQLITE = [
 ]
 
 
-def init() -> str:
-    """确定后端并建表。返回后端说明（用于启动日志）。失败不抛异常，返回错误说明。"""
+class BackendUnavailable(RuntimeError):
+    """要求用 Postgres，但连不上（默认模式下直接抛出，不静默回落）。"""
+
+
+def _init_sqlite(note: str) -> str:
     global _backend, _backend_note
-    # 先试 Postgres（按 DA 决策的首选存储）
+    _backend = "sqlite"
+    conn = _sqlite_connect()
+    try:
+        for sql in _DDL_SQLITE:
+            conn.execute(sql)
+        conn.commit()
+    finally:
+        conn.close()
+    _backend_note = f"SQLite {os.path.basename(SQLITE_PATH)}{note}"
+    return _backend_note
+
+
+def init() -> str:
+    """确定后端并建表，返回后端说明（用于启动日志）。
+
+    默认 BACKEND_MODE='pg'：连不上服务器 Postgres 就抛 BackendUnavailable，
+    宁可让登录系统起不来，也不把账号悄悄写进本地文件。"""
+    global _backend, _backend_note
+
+    if BACKEND_MODE == "sqlite":
+        return _init_sqlite("（CPQ_AUTH_BACKEND=sqlite 强制本地，数据不会进服务器）")
+
     try:
         import psycopg  # noqa: F401
         _backend = "pg"
@@ -170,20 +202,18 @@ def init() -> str:
         _backend_note = (f"Postgres {cpq_db.PG_HOST}:{cpq_db.PG_PORT}/"
                          f"{cpq_db.PG_DATABASE}（schema={WF_SCHEMA}）")
         return _backend_note
+    except ImportError:
+        pg_err = "未安装 psycopg 驱动（pip install \"psycopg[binary]\"）"
     except Exception as e:
-        pg_err = str(e).splitlines()[0][:120] if str(e) else e.__class__.__name__
+        pg_err = str(e).splitlines()[0][:160] if str(e) else e.__class__.__name__
 
-    # 回落 SQLite（本机无驱动/连不上库时仍可登录，表结构等价）
-    _backend = "sqlite"
-    conn = _sqlite_connect()
-    try:
-        for sql in _DDL_SQLITE:
-            conn.execute(sql)
-        conn.commit()
-    finally:
-        conn.close()
-    _backend_note = f"SQLite {os.path.basename(SQLITE_PATH)}（Postgres 不可用：{pg_err}）"
-    return _backend_note
+    _backend = None
+    if BACKEND_MODE == "auto":
+        return _init_sqlite(f"  ⚠ 未接入服务器 Postgres（{pg_err}）——账号与卡片只存本机！")
+    raise BackendUnavailable(
+        f"登录系统要求写入服务器 Postgres {cpq_db.PG_HOST}:{cpq_db.PG_PORT}/"
+        f"{cpq_db.PG_DATABASE}（schema={WF_SCHEMA}），但连接失败：{pg_err}。\n"
+        f"          请检查网络/VPN 与 CPQ_PG_* 配置；确需离线开发可设 CPQ_AUTH_BACKEND=auto。")
 
 
 def backend_info() -> dict:
