@@ -1,0 +1,13 @@
+{
+  "api_key": "sk-demo",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "vision_models": [
+    "qwen-vl-max"
+  ],
+  "text_models": [
+    "qwen-plus"
+  ],
+  "web_search_models": [
+    "qwen-plus"
+  ]
+}

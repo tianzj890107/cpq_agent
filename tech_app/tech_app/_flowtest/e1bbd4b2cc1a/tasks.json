@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "task_id": "1cab7f6326c3",
+      "project_id": "e1bbd4b2cc1a",
+      "kind": "requirement_document_extract",
+      "status": "failed",
+      "progress": "失败",
+      "created_at": "2026-07-23 15:34:59",
+      "started_at": "2026-07-23 15:34:59",
+      "finished_at": "2026-07-23 15:35:49",
+      "result": null,
+      "error": "Qwen 调用失败 HTTP 状态码: 无；原因判断: 网络、代理、TLS 或百炼服务异常。 服务端详情: Connection error."
+    }
+  ]
+}

@@ -13,3 +13,21 @@ PyMuPDF==1.26.4
 python-docx==1.2.0
 rich==15.0.0
 prompt_toolkit==3.0.52
+
+# ---- tech_app: embedded process_drawing full-chain FastAPI app -------------
+# The 4th assistant ("tech process") is the process_drawing app under tech_app/,
+# launched by cpq_suite_server as a uvicorn subprocess and reverse-proxied on 8010.
+# Extra deps below are what it needs on top of the CPQ suite. anthropic / openai /
+# pypdf are already pinned above and satisfy tech_app's floors (>=0.69 / >=2.45 /
+# >=5,<7), so they are NOT duplicated here (one version per package).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+sqlalchemy==2.0.36
+python-dotenv==1.0.1
+pydantic==2.10.4
+# cadquery drives geometry generation (STEP/STL) only. It is heavy and needs OCCT
+# runtime libs (libgl1 libglu1-mesa libxrender1 libxext6 libsm6). The LLM-driven
+# process-evaluation / drawing-parse / report chain works without it (guarded:
+# generate-geometry returns 503 when absent). Uncomment + add OCCT libs to enable.
+# cadquery==2.5.2

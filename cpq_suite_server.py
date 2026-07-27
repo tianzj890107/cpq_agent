@@ -9,13 +9,13 @@
   - rule_agent_server.py 规则助手 Agent (原 :47296)  ->  /agents/rule/api/*
 
 设计：
-  - 单端口（默认 8010，与原 serve.py 一致，EIMOS iframe 地址不变）。
+  - 单端口（默认 8010，与原 serve.py 一致）。根路径 / 直接返回首页。
   - 三个 Agent 模块原样 import（不复制逻辑）：本文件只做路由——把
     /agents/<name>/... 前缀剥掉后，直接调用对应模块 Handler 的 do_GET/do_POST，
     SSE 流式、历史、设置、导入数据库等接口全部复用原实现。
   - 各 Agent 仍使用各自的设置/历史文件（cpq_settings.json + cpq_history/、
     xbom_settings.json + xbom_history/、rule_settings.json + rule_history/），互不干扰。
-  - 静态部分等价 serve.py（/ -> 报价首页(1).html），并额外**拒绝**下载
+  - 静态部分等价 serve.py（/ -> 报价首页.html），并额外**拒绝**下载
     settings/history/database/源码 等敏感文件。
   - 原三个独立服务脚本保留，仍可单独运行（前端 localStorage 可覆盖 Agent 地址）。
 
@@ -25,6 +25,7 @@
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -47,6 +48,9 @@ os.environ["OC_READONLY_FS"] = "1"
 import cpq_agent_server as quote_agent    # noqa: E402
 import xbom_agent_server as config_agent  # noqa: E402
 import rule_agent_server as rule_agent    # noqa: E402
+import cpq_auth                            # noqa: E402  登录与角色系统（/auth/*）
+import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
+import cpq_image_server                    # noqa: E402  产品图片维护服务（独立端口，见下）
 
 AGENTS = {
     "quote": quote_agent,
@@ -57,8 +61,25 @@ AGENT_LABELS = {"quote": "报价助手", "config": "配置助手", "rule": "规�
 
 _AGENT_RE = re.compile(r"^/agents/(quote|config|rule)(/.*)?$")
 
+# ---------------------------------------------------------------- 技术工艺 App（反向代理）
+# 第四个助手「技术工艺」= 照搬 process_drawing 的 FastAPI 全链路（tech_app/），由本服务
+# 作为子进程在 127.0.0.1:TECH_PORT 拉起 uvicorn，并把 /api/* /apps/* 及其前端页面反向代理
+# 过去（本服务 root 不使用 /api，互不冲突）。大模型走 tech_app_launch.py 复用的 CPQ 网关。
+import http.client  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+TECH_HOST = "127.0.0.1"
+TECH_PORT = int(os.getenv("TECH_APP_PORT", "8020"))
+# 产品图片维护服务：独立端口（默认 8011），与本服务同进程、后台线程启动
+IMAGE_PORT = int(os.getenv("CPQ_IMAGE_PORT", "8011"))
+_tech_proc = None
+# 反向代理到 tech_app 的路径前缀（root 的 /api、/apps 归 tech_app；本服务 root 只用 /agents 和静态文件）
+_TECH_PREFIXES = ("/api/", "/apps/", "/api", "/apps")
+
 # ---------------------------------------------------------------- 静态文件
-HOME_PAGE = "报价首页(1).html"  # 入口直达三智能体整合页（原登录页 首页.html 已弃用，2026-07-16）
+HOME_PAGE = "报价首页.html"  # 入口直达三智能体整合页（原登录页 首页.html 已弃用，2026-07-16）
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -80,11 +101,11 @@ MIME = {
 
 # 不允许通过 HTTP 下载的内容（settings 里有 API Key 明文；history/库/源码也不该暴露）
 _BLOCKED_DIRS = {
-    "cpq_history", "xbom_history", "rule_history",
-    "database", "open-claude", "cpq_data", "__pycache__", ".git",
+    "cpq_history", "xbom_history", "rule_history", "tech_history",
+    "database", "open-claude", "cpq_data", "tech_app", "__pycache__", ".git",
 }
 _BLOCKED_EXTS = {".py", ".pyc", ".sqlite", ".db"}
-_BLOCKED_FILES = {"cpq_settings.json", "xbom_settings.json", "rule_settings.json"}
+_BLOCKED_FILES = {"cpq_settings.json", "xbom_settings.json", "rule_settings.json", "tech_settings.json"}
 
 
 def _resolve_static(path: str):
@@ -127,28 +148,278 @@ class Handler(BaseHTTPRequestHandler):
             self.__class__ = Handler
         return True
 
+    # ------------------------------------------------------------ 技术工艺 App 反向代理
+    def _is_tech_path(self) -> bool:
+        p = self.path.split("?", 1)[0]
+        return p.startswith(_TECH_PREFIXES)
+
+    def _proxy_tech(self):
+        """把当前请求整体转发到 tech_app（127.0.0.1:TECH_PORT），响应原样回传。
+        用于 /api/* /apps/*（所有方法）以及 root 上非本服务静态文件的前端页面（GET）。
+        tech_app 未就绪/断开时回 502，且吞掉写回客户端时的断链异常，避免污染日志。"""
+        # 无论成败都要读掉请求体，否则 keep-alive 连接错位
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else None
+        # 透传除 Host/连接管理外的请求头
+        headers = {k: v for k, v in self.headers.items()
+                   if k.lower() not in ("host", "connection", "keep-alive",
+                                        "proxy-connection", "transfer-encoding")}
+        headers["Host"] = f"{TECH_HOST}:{TECH_PORT}"
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(TECH_HOST, TECH_PORT, timeout=600)
+            conn.request(self.command, self.path, body=body, headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+            status = resp.status
+            hdrs = [(k, v) for k, v in resp.getheaders()
+                    if k.lower() not in ("connection", "keep-alive", "transfer-encoding",
+                                         "content-length", "proxy-connection")]
+        except Exception:
+            # tech_app 未启动（本机缺 fastapi/uvicorn 或还在启动中）或中途断开：干净回 502
+            self._safe_send(502, "技术工艺服务暂不可用：tech_app 未就绪。"
+                            "本机调试需在运行 cpq_suite_server 的同一 Python 里安装 "
+                            "fastapi uvicorn[standard] python-multipart sqlalchemy python-dotenv pydantic。"
+                            .encode("utf-8"))
+            return
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        try:
+            self.send_response(status)
+            for k, v in hdrs:
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # 客户端已断开（常见于页面跳转），忽略
+
+    def _safe_send(self, code, body):
+        try:
+            self._send_raw(code, body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    # ------------------------------------------------------------ 登录与角色系统 /auth/*
+    def _send_json(self, code: int, obj: dict):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8")) or {}
+        except Exception:
+            return {}
+
+    def _token(self) -> str:
+        """令牌来自 Authorization: Bearer <token>（前端存 localStorage，
+        用 header 而非 Cookie，不受 SameSite 限制，跨源/内嵌场景同样可用）。"""
+        auth = self.headers.get("Authorization", "") or ""
+        return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+    def _client_ip(self) -> str:
+        fwd = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        return (fwd or self.client_address[0] or "")[:45]
+
+    def _dispatch_auth(self) -> bool:
+        """/auth/* 登录与角色接口。命中返回 True。"""
+        # 注意：根路径 "/" 去掉尾斜杠后是空串，绝不能兜底成 "/auth"，否则首页会被当成认证接口而 404
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if not path.startswith("/auth"):
+            return False
+        m = self.command
+        try:
+            if path == "/auth/roles" and m == "GET":
+                self._send_json(200, {"roles": [{"role_code": k, "role_name": v}
+                                                for k, v in cpq_auth.ROLES.items()]})
+            elif path == "/auth/me" and m == "GET":
+                user = cpq_auth.whoami(self._token())
+                self._send_json(200, {"user": user, "storage": cpq_auth.backend_info()})
+            elif path == "/auth/register" and m == "POST":
+                d = self._read_json()
+                user = cpq_auth.register(d.get("username", ""), d.get("password", ""),
+                                         d.get("display_name", ""), d.get("role_code", ""),
+                                         d.get("email", ""))
+                # 注册成功直接发放会话，免去再登录一次
+                out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
+                self._send_json(200, {"ok": True, "user": user, "token": out["token"]})
+            elif path == "/auth/login" and m == "POST":
+                d = self._read_json()
+                out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
+                self._send_json(200, {"ok": True, "user": out["user"], "token": out["token"]})
+            elif path == "/auth/logout" and m == "POST":
+                cpq_auth.logout(self._token())
+                self._send_json(200, {"ok": True})
+            elif path == "/auth/users" and m == "GET":
+                # 供后续「按角色搜索并派发任务」使用；需登录
+                if not cpq_auth.whoami(self._token()):
+                    self._send_json(401, {"ok": False, "error": "未登录"})
+                else:
+                    q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    self._send_json(200, {"users": cpq_auth.list_users((q.get("role") or [""])[0])})
+            else:
+                self._send_json(404, {"ok": False, "error": "未知接口"})
+        except cpq_auth.AuthError as e:
+            self._send_json(400, {"ok": False, "error": str(e)})
+        except Exception as e:
+            print(f"[cpq-suite] /auth 出错: {e}", file=sys.stderr)
+            self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})
+        return True
+
+    # ------------------------------------------------------------ 报价工作流 /wf/*
+    def _dispatch_wf(self) -> bool:
+        """/wf/* 卡片 / 步骤状态 / 任务流转（仅报价助手）。命中返回 True。"""
+        parsed = urllib.parse.urlparse(self.path)
+        # 同上：根路径不能兜底成 "/wf"
+        path = parsed.path.rstrip("/") or "/"
+        if not path.startswith("/wf"):
+            return False
+        q = urllib.parse.parse_qs(parsed.query)
+        arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+        m = self.command
+        try:
+            user = cpq_auth.whoami(self._token())
+            if path == "/wf/steps" and m == "GET":
+                self._send_json(200, {"steps": cpq_wf.step_perms(),
+                                      "role_code": (user or {}).get("role_code", "")})
+                return True
+            # 以下接口都要求登录
+            if not user:
+                self._send_json(401, {"ok": False, "error": "请先登录"})
+                return True
+            if path == "/wf/cards" and m == "GET":
+                self._send_json(200, {"cards": cpq_wf.my_cards(user)})
+            elif path == "/wf/tasks" and m == "GET":
+                self._send_json(200, {"tasks": cpq_wf.inbox(user)})
+            elif path == "/wf/card" and m == "GET":
+                self._send_json(200, cpq_wf.card_detail(arg("session_id"), user))
+            elif path == "/wf/card/sync" and m == "POST":
+                d = self._read_json()
+                card = cpq_wf.sync_card(d.get("session_id", ""), user, d.get("title", ""),
+                                        d.get("customer", ""), d.get("project_name", ""),
+                                        d.get("current_step"))
+                self._send_json(200, {"ok": True, "card": card})
+            elif path == "/wf/card/step-start" and m == "POST":
+                d = self._read_json()
+                card = cpq_wf.start_step(d.get("session_id", ""), d.get("step_no"), user)
+                self._send_json(200, {"ok": True, "card": card})
+            elif path == "/wf/card/step-done" and m == "POST":
+                d = self._read_json()
+                out = cpq_wf.complete_step(d.get("session_id", ""), d.get("step_no"), user,
+                                           d.get("snapshot", ""))
+                self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/task/send" and m == "POST":
+                d = self._read_json()
+                out = cpq_wf.send_task(d.get("session_id", ""), user, d.get("target_type", ""),
+                                       d.get("target_role_code", ""), d.get("target_user_id", ""),
+                                       d.get("note", ""))
+                self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/messages" and m == "GET":
+                self._send_json(200, cpq_wf.messages(user, int(arg("limit") or 50)))
+            elif path == "/wf/messages/read" and m == "POST":
+                d = self._read_json()
+                self._send_json(200, {"ok": True, "updated": cpq_wf.mark_read(user, d.get("ids"))})
+            elif path == "/wf/task/claim" and m == "POST":
+                d = self._read_json()
+                out = cpq_wf.claim_task(d.get("task_id", ""), user)
+                self._send_json(200, {"ok": True, **out})
+            else:
+                self._send_json(404, {"ok": False, "error": "未知接口"})
+        except cpq_wf.WfError as e:
+            self._send_json(400, {"ok": False, "error": str(e)})
+        except Exception as e:
+            print(f"[cpq-suite] /wf 出错: {e}", file=sys.stderr)
+            self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})
+        return True
+
     def do_OPTIONS(self):
         if self._dispatch_agent("do_OPTIONS"):
             return
+        if self._is_tech_path():
+            self._proxy_tech()
+            return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
-        if not self._dispatch_agent("do_GET"):
+        if self._dispatch_agent("do_GET"):
+            return
+        if self._dispatch_auth():
+            return
+        if self._dispatch_wf():
+            return
+        if self._is_tech_path():
+            self._proxy_tech()
+            return
+        # 本服务自己的静态文件优先；命不中则交给 tech_app 前端（home.html/*.js/*.css 等）
+        full = _resolve_static(self.path)
+        if full and os.path.isfile(full):
             self._serve_static()
+        else:
+            self._proxy_tech()
 
     def do_HEAD(self):
         if _AGENT_RE.match(self.path):
             self.send_error(405)
-        else:
+            return
+        if self._is_tech_path():
+            self._proxy_tech()
+            return
+        full = _resolve_static(self.path)
+        if full and os.path.isfile(full):
             self._serve_static(head=True)
+        else:
+            self._proxy_tech()
 
     def do_POST(self):
-        if not self._dispatch_agent("do_POST"):
+        if self._dispatch_agent("do_POST"):
+            return
+        if self._dispatch_auth():
+            return
+        if self._dispatch_wf():
+            return
+        if self._is_tech_path():
+            self._proxy_tech()
+            return
+        self.send_error(404)
+
+    def do_PUT(self):
+        if self._is_tech_path():
+            self._proxy_tech()
+        else:
+            self.send_error(404)
+
+    def do_DELETE(self):
+        if self._is_tech_path():
+            self._proxy_tech()
+        else:
+            self.send_error(404)
+
+    def do_PATCH(self):
+        if self._is_tech_path():
+            self._proxy_tech()
+        else:
             self.send_error(404)
 
     def _serve_static(self, head: bool = False):
@@ -170,11 +441,75 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(length if length is not None else len(body)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        # 允许被 EIMOS(不同端口)以 iframe 内嵌
+        # 允许跨源读取/内嵌
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         if body:
             self.wfile.write(body)
+
+
+# ---------------------------------------------------------------- HTTP 服务器
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """吞掉客户端断链造成的噪音 traceback，其余错误照常打印。
+
+    浏览器关闭 keep-alive 空闲连接（切页/刷新/关标签页）时，服务端正阻塞在
+    handle_one_request 的 readline 上，会抛 ConnectionAbortedError(WinError 10053) /
+    ConnectionResetError。这类异常发生在“等待下一个请求”阶段，没有请求失败、
+    也没有响应丢失，但 socketserver 默认会打整段 traceback，把真正的错误淹没掉。
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError,
+                            BrokenPipeError, TimeoutError)):
+            return  # 正常的客户端断开，静默忽略
+        super().handle_error(request, client_address)
+
+
+# ---------------------------------------------------------------- 技术工艺 App 子进程
+def _start_tech_app():
+    """拉起 tech_app（FastAPI/uvicorn）子进程；缺依赖/缺目录则跳过（前端访问时代理回 502）。"""
+    global _tech_proc
+    launcher = os.path.join(SCRIPT_DIR, "tech_app_launch.py")
+    if not os.path.isdir(os.path.join(SCRIPT_DIR, "tech_app")) or not os.path.isfile(launcher):
+        print("[cpq-suite] 未找到 tech_app/，技术工艺 App 未启动。")
+        return
+    try:
+        _tech_proc = subprocess.Popen(
+            [sys.executable, launcher, "--host", TECH_HOST, "--port", str(TECH_PORT)],
+            cwd=SCRIPT_DIR,
+        )
+    except Exception as e:
+        print(f"[cpq-suite] 技术工艺 App 启动失败：{e}", file=sys.stderr)
+        return
+
+    def _probe():
+        for _ in range(60):  # 最多等 ~30s
+            time.sleep(0.5)
+            try:
+                c = http.client.HTTPConnection(TECH_HOST, TECH_PORT, timeout=2)
+                c.request("GET", "/api/health")
+                if c.getresponse().status < 500:
+                    print(f"[cpq-suite] 技术工艺 App 就绪  http://{TECH_HOST}:{TECH_PORT}  "
+                          f"(经 /home.html /api/* 反向代理)")
+                    return
+            except Exception:
+                continue
+        print("[cpq-suite] 警告: 技术工艺 App 30s 内未就绪（可能在装依赖或缺 fastapi）。", file=sys.stderr)
+
+    threading.Thread(target=_probe, daemon=True).start()
+
+
+def _stop_tech_app():
+    if _tech_proc is not None:
+        try:
+            _tech_proc.terminate()
+            _tech_proc.wait(timeout=5)
+        except Exception:
+            try:
+                _tech_proc.kill()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------- 初始化
@@ -218,15 +553,31 @@ def main():
     for name, mod in AGENTS.items():
         mod.SETTINGS_PEERS = [_peer(m) for n, m in AGENTS.items() if n != name]
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    # 登录与角色系统：建表（Postgres cpq_wf schema，连不上时自动回落本地 SQLite）
+    try:
+        print(f"[cpq-suite] 登录系统 /auth/*  存储={cpq_auth.init()}")
+        print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
+    except Exception as e:
+        print(f"[cpq-suite] 警告: 登录系统初始化失败：{e}", file=sys.stderr)
+
+    _start_tech_app()  # 技术工艺 App（tech_app/ FastAPI 全链路）子进程 + 反向代理
+
+    # 产品图片维护（独立端口 8011，同进程后台线程；失败只告警不影响主服务）
+    if cpq_image_server.start_in_thread(args.host, IMAGE_PORT):
+        print(f"[cpq-suite] 产品图片: http://{args.host}:{IMAGE_PORT}/   "
+              f"图片目录 {os.path.basename(cpq_image_server.IMAGE_DIR)}/")
+
+    server = QuietThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[cpq-suite] 首页  : http://{args.host}:{args.port}/   ->  {HOME_PAGE}")
     print(f"[cpq-suite] Agent : http://{args.host}:{args.port}/agents/{{quote|config|rule}}/api/send")
-    print("[cpq-suite] EIMOS iframe 仍指向上面的首页地址即可。Ctrl+C 停止。")
+    print(f"[cpq-suite] 技术工艺: http://{args.host}:{args.port}/home.html  (代理 tech_app :{TECH_PORT})")
+    print("[cpq-suite] Ctrl+C 停止。")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[cpq-suite] 已停止")
     finally:
+        _stop_tech_app()
         for mod in AGENTS.values():
             try:
                 mod.bridge.conv.mcp.shutdown()

@@ -1,0 +1,26 @@
+{
+  "project_id": "e1bbd4b2cc1a",
+  "requirement_no": "REQ-E1BBD4B2CC1A",
+  "title": "45钢法兰盘工艺评估",
+  "status": "draft",
+  "data": {
+    "title": "45钢法兰盘工艺评估",
+    "description": "主页测试",
+    "file_roles": {
+      "technical_spec": [
+        "req.txt"
+      ]
+    }
+  },
+  "created_by": "system",
+  "created_at": "2026-07-23 15:34:58",
+  "confirmed_by": null,
+  "confirmed_at": null,
+  "confirmation_note": "",
+  "ai_check": {},
+  "reviewed_by": null,
+  "reviewed_at": null,
+  "review_note": "",
+  "history": [],
+  "updated_at": "2026-07-23 15:34:58"
+}

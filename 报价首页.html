@@ -661,6 +661,20 @@
       gap: 20px;
     }
 
+    /* 待办任务卡片上的标记：时间 / 来源 / 步骤 */
+    .wf-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+    .wf-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 7px; border-radius: 20px; font-size: 11px;
+      background: var(--bg-tertiary); color: var(--text-secondary);
+    }
+    .wf-chip .ti { font-size: 12px; }
+    .wf-task-note {
+      margin: 6px 0 0; padding: 6px 9px; border-radius: 6px; font-size: 12px;
+      background: rgba(99,102,241,.08); color: var(--text-secondary);
+    }
+    .request-card.wf-task { border-left: 3px solid var(--color-primary); }
+
     .list-tab {
       font-size: 13px;
       color: var(--text-secondary);
@@ -1093,6 +1107,11 @@
 
       <div style="flex:1"></div>
 
+      <!-- 消息（任务流提醒）：位于设置与账号之上 -->
+      <div class="nav-icon" id="cpqMsgBtn" onclick="cpqMsg.open()">
+        <i class="ti ti-bell"></i>
+        <span class="nav-tooltip">消息</span>
+      </div>
       <div class="nav-icon" onclick="openSettings()">
         <i class="ti ti-settings"></i>
         <span class="nav-tooltip">设置</span>
@@ -1100,9 +1119,10 @@
 
       <div class="nav-divider"></div>
 
-      <div class="nav-icon">
-        <i class="ti ti-moon"></i>
-        <span class="nav-tooltip">深色模式</span>
+      <!-- 登录 / 账号信息（未登录=登录入口，已登录=账号信息+退出） -->
+      <div class="nav-icon" id="cpqAuthBtn" onclick="cpqAuth.open()">
+        <i class="ti ti-login"></i>
+        <span class="nav-tooltip">登录</span>
       </div>
     </div>
 
@@ -1212,6 +1232,7 @@
         <span class="category-tag active"><i class="ti ti-brain"></i> 报价助手</span>
         <span class="category-tag"><i class="ti ti-settings"></i> 配置助手</span>
         <span class="category-tag"><i class="ti ti-scale"></i> 规则助手</span>
+        <span class="category-tag"><i class="ti ti-tools"></i> 技术工艺</span>
       </div>
 
       <!-- Unified Input + Introduction Card -->
@@ -1226,6 +1247,19 @@
             <span id="uploadLabel">上传文件</span>
             <input id="fileInput" type="file" multiple hidden
               accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.png,.jpg,.jpeg">
+          </div>
+          <!-- 技术工艺：图纸 / 需求文档 分开上传（仅 tech 模式显示） -->
+          <div class="upload-section" id="techUploadDraw" style="display:none">
+            <i class="ti ti-photo"></i>
+            <span id="techDrawLabel">上传图纸</span>
+            <input id="techDrawInput" type="file" multiple hidden
+              accept="image/*,.pdf,.dwg,.dxf,.step,.stp,.sldprt,.stl,.sat">
+          </div>
+          <div class="upload-section" id="techUploadReq" style="display:none">
+            <i class="ti ti-file-text"></i>
+            <span id="techReqLabel">上传需求文档</span>
+            <input id="techReqInput" type="file" multiple hidden
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.json,image/*">
           </div>
           <div class="char-counter">0/500</div>
           <button class="send-btn">
@@ -1366,6 +1400,96 @@
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
         </div>
 
+        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
+          <label style="font-weight:600">技术工艺 · 多模态模型（图纸识别）</label>
+          <div class="hint">技术工艺助手解析图纸/文档所用模型；OpenAI 兼容网关（云端聚合网关或本地网关皆可）。选「本地模型」时视觉/文本模型名改为手动填写；图纸识别需选真·多模态模型。文本与视觉共用同一网关与 Key。</div>
+          <label>网关 Base URL（OpenAI 兼容）</label>
+          <input id="setTechBase" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off">
+          <label>模型来源</label>
+          <select id="setTechMode" onchange="onTechModeChange()">
+            <option value="cloud">云模型（下拉选择）</option>
+            <option value="local">本地模型（手动填模型名/参数）</option>
+          </select>
+          <label>视觉模型（多模态，识别图纸）</label>
+          <select id="setTechVision" onchange="onTechVisionChange()">
+            <optgroup label="Anthropic Claude">
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+            </optgroup>
+            <optgroup label="OpenAI GPT">
+              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            </optgroup>
+            <optgroup label="智谱 GLM">
+              <option value="glm-5.2">GLM 5.2</option>
+              <option value="glm-5.1">GLM 5.1</option>
+            </optgroup>
+            <optgroup label="Kimi Moonshot">
+              <option value="kimi-k3">Kimi 3</option>
+              <option value="kimi-k2.7">Kimi 2.7</option>
+            </optgroup>
+            <optgroup label="通义千问 Qwen">
+              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
+              <option value="qwen3.7-max">Qwen3.7 Max</option>
+              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
+            </optgroup>
+            <optgroup label="MiniMax">
+              <option value="MiniMax-M3">MiniMax M3</option>
+            </optgroup>
+            <option value="__custom__">自定义（手动输入…）</option>
+          </select>
+          <input id="setTechVisionCustom" type="text" placeholder="自定义视觉模型名称" autocomplete="off" style="display:none;margin-top:6px">
+          <label>文本模型（工艺推荐/报告，留空则复用视觉模型）</label>
+          <select id="setTechText" onchange="onTechTextChange()">
+            <option value="">（复用视觉模型）</option>
+            <optgroup label="Anthropic Claude">
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+            </optgroup>
+            <optgroup label="OpenAI GPT">
+              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            </optgroup>
+            <optgroup label="智谱 GLM">
+              <option value="glm-5.2">GLM 5.2</option>
+              <option value="glm-5.1">GLM 5.1</option>
+            </optgroup>
+            <optgroup label="Kimi Moonshot">
+              <option value="kimi-k3">Kimi 3</option>
+              <option value="kimi-k2.7">Kimi 2.7</option>
+            </optgroup>
+            <optgroup label="通义千问 Qwen">
+              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
+              <option value="qwen3.7-max">Qwen3.7 Max</option>
+              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
+            </optgroup>
+            <optgroup label="MiniMax">
+              <option value="MiniMax-M3">MiniMax M3</option>
+            </optgroup>
+            <option value="__custom__">自定义（手动输入…）</option>
+          </select>
+          <input id="setTechTextCustom" type="text" placeholder="自定义文本模型名称" autocomplete="off" style="display:none;margin-top:6px">
+          <label>API Key（留空表示不修改已保存的 Key）</label>
+          <input id="setTechKey" type="password" placeholder="技术工艺网关的 API Key" autocomplete="off">
+          <div class="hint" id="techLlmMsg"></div>
+        </div>
+
         <label class="check-row" style="margin-top:16px">
           <input type="checkbox" id="setTempEnable" onchange="onTempEnableChange()">
           自定义 Temperature（不勾选则用模型默认）
@@ -1451,11 +1575,12 @@
       quote: '确认需求解析结果.html',
       config: 'XBOM智能体-配置BOM生成.html',
       rule: '规则助手-规则配置.html',
+      tech: 'requirement-create.html',  // 技术工艺进入 process_drawing 步骤页（图纸+需求文档分开上传→下一步），8010 反向代理
     };
     const MODES = {
       quote:  { tag: '报价助手', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
                 ph: '请输入需求描述…（例如：帮我给××客户的储能项目做报价）', newBtn: '新建报价',
-                tabs: ['我的报价', '全部报价'], activeTab: 1, searchPh: '支持通过客户名&项目名搜索',
+                tabs: ['我的报价', '待办任务', '全部报价'], activeTab: 2, searchPh: '支持通过客户名&项目名搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能报价' },
       config: { tag: '配置助手', intro: '请上传某款产品的历史BOM，我们可以根据历史BOM协助你生成此产品的超级BOM。',
                 ph: '请输入你的问题或需求描述...', newBtn: '创建配置',
@@ -1465,23 +1590,103 @@
                 ph: '请输入你的问题或需求描述...', newBtn: '创建',
                 tabs: ['我的规则', '全部规则'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能助手' },
+      tech:   { tag: '技术工艺助手', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
+                ph: '请输入零件与工艺评估需求…（例如：45钢法兰盘，批量500，关键面Ra1.6，评估加工工艺路线）', newBtn: '新建工艺评估',
+                tabs: ['我的评估', '全部评估'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
+                title: '<span class="highlight">创作无限可能</span>，智能工艺' },
     };
 
     // ===== 首页卡片：真实数据（三个助手的历史会话），不再使用演示假数据 =====
-    const SESSIONS = { quote: [], config: [], rule: [] };   // mode -> 会话列表；null=服务不可达
-    const MY_KEYS = { quote: 'cpq:mySessions', config: 'xbom:mySessions', rule: 'rule:mySessions' };
-    const OPEN_KEYS = { quote: 'cpq:openSession', config: 'xbom:openSession', rule: 'rule:openSession' };
-    const NUM_PREFIX = { quote: 'BJD', config: 'PZ', rule: 'GZ' };
+    const SESSIONS = { quote: [], config: [], rule: [], tech: [] };   // mode -> 会话列表；null=服务不可达
+    const MY_KEYS = { quote: 'cpq:mySessions', config: 'xbom:mySessions', rule: 'rule:mySessions', tech: 'tech:mySessions' };
+    const OPEN_KEYS = { quote: 'cpq:openSession', config: 'xbom:openSession', rule: 'rule:openSession', tech: 'tech:openSession' };
+    const NUM_PREFIX = { quote: 'BJD', config: 'PZ', rule: 'GZ', tech: 'GY' };
     const PAGE_SIZE = 6;
     let PAGE = 1;
 
     function modeBase(mode) {
       if (mode === 'quote') return AGENT_URL;
       if (mode === 'config') return peerBase('xbom:agentUrl', 'config', 47294);
+      if (mode === 'tech') return '';  // tech_app /api 由 8010 反向代理在同源 root
       return peerBase('cpq:ruleAgentUrl', 'rule', 47296);
     }
     function mySessionSet(mode) {
       try { return new Set(JSON.parse(localStorage.getItem(MY_KEYS[mode]) || '[]')); } catch (e) { return new Set(); }
+    }
+
+    /* ===== 报价工作流：登录后「我的报价」按账号归属、「待办任务」是别人转交给我的卡片 ===== */
+    const WF = { cards: [], tasks: [], loaded: false };
+    function wfUser() { return (window.cpqAuth && cpqAuth.user()) || null; }
+
+    async function wfLoad() {
+      if (!wfUser()) { WF.cards = []; WF.tasks = []; WF.loaded = false; wfBadge(); return; }
+      try {
+        const [c, t] = await Promise.all([cpqAuth.api('/wf/cards'), cpqAuth.api('/wf/tasks')]);
+        WF.cards = c.cards || []; WF.tasks = t.tasks || []; WF.loaded = true;
+      } catch (e) { WF.cards = []; WF.tasks = []; WF.loaded = false; }
+      wfBadge();
+    }
+
+    // 「待办任务」标签上的红点计数
+    function wfBadge() {
+      const tabs = document.querySelectorAll('.list-tab');
+      tabs.forEach(t => {
+        if (t.textContent.trim().indexOf('待办任务') !== 0) return;
+        const n = WF.tasks.length;
+        t.textContent = n ? '待办任务 (' + n + ')' : '待办任务';
+      });
+    }
+
+    function wfCardOf(sessionId) {
+      return WF.cards.find(c => c.session_id === sessionId) || null;
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso).replace('T', ' ').slice(0, 16);
+      const diff = (Date.now() - d.getTime()) / 1000;
+      if (diff < 60) return '刚刚';
+      if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+      if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+      if (diff < 604800) return Math.floor(diff / 86400) + ' 天前';
+      const p = n => (n < 10 ? '0' : '') + n;
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    // 待办任务卡片：带时间 / 来源 / 步骤标记
+    function taskCardHtml(t) {
+      const claimed = t.status === 'claimed';
+      const way = t.target_type === 'public' ? '公共任务'
+        : t.target_type === 'role' ? '定向角色' : '指派给我';
+      return '<div class="request-card wf-task" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) + '">' +
+        '<div class="request-card-header"><span class="request-id">' + escH(way) + '</span>' +
+        '<span class="request-status ' + (claimed ? 'status-reviewing' : 'status-draft') + '">' +
+        (claimed ? '进行中' : '待领取') + '</span></div>' +
+        '<div class="request-title">' + escH(t.title || '未命名报价') + '</div>' +
+        '<div class="request-info">客户名称：<span>' + escH(t.customer || '—') + '</span></div>' +
+        '<div class="wf-task-meta">' +
+        '<span class="wf-chip"><i class="ti ti-clock"></i>' + escH(fmtTime(t.created_at)) + '</span>' +
+        '<span class="wf-chip"><i class="ti ti-user-share"></i>来自 ' + escH(t.from_display_name || '—') +
+        '（' + escH(t.from_role_name || '') + '）</span>' +
+        '<span class="wf-chip"><i class="ti ti-list-check"></i>第 ' + t.next_step_no + ' 步 · ' +
+        escH(t.next_step_name) + '</span>' +
+        '</div>' +
+        (t.note ? '<div class="wf-task-note">“' + escH(t.note) + '”</div>' : '') +
+        '<div class="request-footer"><div class="request-creator">' +
+        '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
+        escH(t.next_role_name) + '负责</div>' +
+        '<span class="request-detail">' + (claimed ? '继续处理' : '领取并继续') + '</span></div></div>';
+    }
+
+    // 领取任务并进入报价工作台
+    async function wfClaimAndOpen(taskId, sessionId, claimed) {
+      try {
+        if (!claimed) await cpqAuth.api('/wf/task/claim', { method: 'POST', body: { task_id: taskId } });
+        if (window.cpqMsg) cpqMsg.ping();   // 领取会给转交人发消息，本地也同步一下未读
+      } catch (e) { alert(e.message || '领取失败'); return; }
+      try { sessionStorage.setItem(OPEN_KEYS.quote, sessionId); } catch (e) {}
+      window.location.href = encodeURI(PAGES.quote);
     }
     function escH(v) {
       return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1494,6 +1699,22 @@
     // 状态由真实进度推导：报价 7 步 / 配置 6 步；规则按是否已有内容
     function statusOf(mode, s) {
       if (mode === 'rule') return (s.turns || 0) > 0 ? ['已录入', 'status-confirmed'] : ['草稿', 'status-draft'];
+      if (mode === 'tech') { const m = { draft: ['待提交', 'status-draft'], pending_confirmation: ['待确认', 'status-reviewing'], pending_review: ['待审核', 'status-reviewing'], approved: ['已通过', 'status-confirmed'], published: ['已完成', 'status-confirmed'], rejected: ['已退回', 'status-reviewing'], uploaded: ['待图纸解析', 'status-draft'], parsed: ['图纸已解析', 'status-reviewing'], tech_record: ['工艺已录入', 'status-confirmed'] }; return m[s.status] || ['处理中', 'status-draft']; }
+      // 报价：登录后优先用卡片的流转状态（待转交 / 已转交待领取 …），比"第N步"更能说明现在卡在哪
+      if (mode === 'quote') {
+        const c = wfCardOf(s.id);
+        if (c) {
+          const map = {
+            draft: ['草稿', 'status-draft'],
+            in_progress: ['第' + (c.current_step || 1) + '步·测算中', 'status-reviewing'],
+            awaiting_handoff: ['待转交', 'status-reviewing'],
+            handoff_pending: ['已转交·待领取', 'status-reviewing'],
+            completed: ['已完成', 'status-confirmed'],
+            archived: ['已归档', 'status-draft'],
+          };
+          if (map[c.overall_status]) return map[c.overall_status];
+        }
+      }
       const doneStep = mode === 'quote' ? 6 : 6;
       const st = s.step || 1;
       if (st >= doneStep) return ['已完成', 'status-confirmed'];
@@ -1506,7 +1727,9 @@
         ? '客户名称：<span>' + escH(s.customer || '—') + '</span>'
         : mode === 'config'
           ? '项目名称：<span>' + escH(s.project || '—') + '</span>'
-          : '使用模型：<span>' + escH(s.model || '—') + '</span>';
+          : mode === 'tech'
+            ? '评估对象：<span>' + escH(s.project || s.title || '—') + '</span>'
+            : '使用模型：<span>' + escH(s.model || '—') + '</span>';
       const title = s.title || '未命名会话';
       const date = (s.updated || s.created || '').replace('T', ' ').slice(0, 16);
       return '<div class="request-card" data-id="' + escH(s.id) + '">' +
@@ -1518,20 +1741,57 @@
         '<div class="creator-avatar">' + escH(String(title).charAt(0) || '—') + '</div>' +
         escH(date) + ' · ' + (Number(s.turns) || 0) + ' 轮</div>' +
         '<span><span class="request-detail">详情</span>' +
-        '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button></span></div></div>';
+        (mode === 'tech' ? '' : '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button>') + '</span></div></div>';
     }
     async function loadCards(mode) {
       if (!cardGrid) return;
       cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
       try {
-        const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
-        SESSIONS[mode] = r.sessions || [];
+        if (mode === 'tech') {
+          // 技术工艺 = 内嵌 process_drawing：列表来自 tech_app /api/projects（同源 8010 反向代理）
+          const arr = await fetch('/api/projects').then(r => r.json());
+          SESSIONS.tech = (Array.isArray(arr) ? arr : []).map(pp => ({
+            id: pp.project_id,
+            title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
+            project: pp.project_name || pp.device_name || pp.source_filename || '',
+            created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
+            status: pp.status || '', turns: 0,
+          }));
+        } else {
+          const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
+          SESSIONS[mode] = r.sessions || [];
+        }
       } catch (e) {
         SESSIONS[mode] = null;
       }
+      if (mode === 'quote') await wfLoad();   // 报价：同时拉取我的卡片与待办任务
       PAGE = 1;
       renderCards();
     }
+    // 「待办任务」标签内容：未登录提示登录；已登录列出转交给我的任务卡片
+    function renderTaskTab(q, info, ctrl) {
+      if (info) info.textContent = '';
+      if (ctrl) ctrl.innerHTML = '';
+      if (!wfUser()) {
+        cardGrid.innerHTML = '<div class="cards-empty">登录后可查看同事转交给你的报价任务。' +
+          '<br><a href="javascript:;" onclick="cpqAuth.open()">去登录</a></div>';
+        return;
+      }
+      const list = WF.tasks.filter(t => !q ||
+        ((t.title || '') + (t.customer || '') + (t.from_display_name || '')).toLowerCase().indexOf(q) >= 0);
+      if (!list.length) {
+        cardGrid.innerHTML = '<div class="cards-empty">' +
+          (q ? '没有匹配「' + escH(q) + '」的任务。' : '暂时没有分派给你的报价任务。') + '</div>';
+        return;
+      }
+      cardGrid.innerHTML = list.map(taskCardHtml).join('');
+      cardGrid.querySelectorAll('.wf-task').forEach((el, i) => {
+        el.addEventListener('click', () =>
+          wfClaimAndOpen(el.dataset.task, el.dataset.session, list[i].status === 'claimed'));
+      });
+      if (info) info.textContent = '共 ' + list.length + ' 条待办';
+    }
+
     function renderCards() {
       if (!cardGrid) return;
       const mode = currentMode;
@@ -1545,10 +1805,30 @@
         return;
       }
       const q = ((searchInput && searchInput.value) || '').trim().toLowerCase();
-      const mineOnly = currentTab().indexOf('我的') === 0;
+      const tab = currentTab();
+
+      // 报价「待办任务」：别人转交给我的卡片（登录后可用）
+      if (mode === 'quote' && tab.indexOf('待办任务') === 0) {
+        renderTaskTab(q, info, ctrl);
+        return;
+      }
+
+      const mineOnly = tab.indexOf('我的') === 0;
+      // 「我的报价」严格按登录账号归属（我创建 / 我持有 / 我领取过），不再用本机 localStorage 兜底：
+      // 未登录时不展示任何单据，直接引导登录，避免"换个人登录还看到别人的单子"。
+      if (mode === 'quote' && mineOnly && !wfUser()) {
+        cardGrid.innerHTML = '<div class="cards-empty">「我的报价」按登录账号归属显示。' +
+          '<br><a href="javascript:;" onclick="cpqAuth.open()">请先登录</a></div>';
+        if (info) info.textContent = '';
+        if (ctrl) ctrl.innerHTML = '';
+        return;
+      }
+      const wfMine = (mode === 'quote' && mineOnly)
+        ? new Set((WF.cards || []).map(c => c.session_id)) : null;
       const my = mySessionSet(mode);
       const filtered = (rows || []).filter(s => {
-        if (mineOnly && !my.has(s.id)) return false;
+        if (mineOnly && mode === 'quote') { if (!wfMine.has(s.id)) return false; }
+        else if (mineOnly && mode !== 'tech' && !my.has(s.id)) return false;
         if (!q) return true;
         const hay = ((s.title || '') + ' ' + (s.customer || '') + ' ' + (s.project || '') + ' ' + quoteNo(mode, s)).toLowerCase();
         return hay.indexOf(q) >= 0;
@@ -1558,6 +1838,8 @@
       if (PAGE > pages) PAGE = pages;
       if (!total) {
         const emptyMsg = q ? '没有匹配「' + escH(q) + '」的结果。'
+          : (mineOnly && mode === 'quote')
+            ? '你名下还没有报价单。点右上角「' + MODES[mode].newBtn + '」开始，或到「待办任务」领取同事转交的卡片。'
           : mineOnly ? '本机还没有创建过记录。点右上角「' + MODES[mode].newBtn + '」开始。'
           : '还没有数据。点右上角「' + MODES[mode].newBtn + '」创建第一条。';
         cardGrid.innerHTML = '<div class="cards-empty">' + emptyMsg + '</div>';
@@ -1567,6 +1849,7 @@
         cardGrid.querySelectorAll('.request-card').forEach((card, i) => {
           card.addEventListener('click', (e) => {
             if (e.target.closest('.card-del')) return;   // 点删除不进详情
+            if (mode === 'tech') { window.location.href = 'requirement-detail.html?project=' + encodeURIComponent(card.dataset.id); return; }
             try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e2) {}
             window.location.href = encodeURI(PAGES[mode]);
           });
@@ -1651,7 +1934,89 @@
       });
     }
 
+    // ===== 技术工艺：图纸 / 需求文档 分开上传（tech 模式专用） =====
+    let techDrawFiles = [];   // 图纸（第一张作为项目源图 file，其余进 attachments）
+    let techReqFiles = [];    // 需求/工艺说明文档（全部进 attachments）
+    const techUploadDraw = document.getElementById('techUploadDraw');
+    const techUploadReq = document.getElementById('techUploadReq');
+    const techDrawInput = document.getElementById('techDrawInput');
+    const techReqInput = document.getElementById('techReqInput');
+    const techDrawLabel = document.getElementById('techDrawLabel');
+    const techReqLabel = document.getElementById('techReqLabel');
+    function wireTechSlot(section, input, label, store, emptyText) {
+      if (!section || !input) return;
+      section.addEventListener('click', () => input.click());
+      input.addEventListener('change', () => {
+        store.length = 0;
+        Array.from(input.files || []).forEach(f => store.push(f));
+        if (label) label.textContent = store.length
+          ? (store.length === 1 ? store[0].name : `已选 ${store.length} 个`) : emptyText;
+      });
+    }
+    wireTechSlot(techUploadDraw, techDrawInput, techDrawLabel, techDrawFiles, '上传图纸');
+    wireTechSlot(techUploadReq, techReqInput, techReqLabel, techReqFiles, '上传需求文档');
+    function resetTechUpload() {
+      techDrawFiles.length = 0; techReqFiles.length = 0;
+      if (techDrawInput) techDrawInput.value = '';
+      if (techReqInput) techReqInput.value = '';
+      if (techDrawLabel) techDrawLabel.textContent = '上传图纸';
+      if (techReqLabel) techReqLabel.textContent = '上传需求文档';
+    }
+    // tech 模式切到「图纸 / 需求文档」两个槽，隐藏通用「上传文件」；离开 tech 时还原。
+    function applyUploadMode(mode) {
+      const isTech = mode === 'tech';
+      if (uploadSection) uploadSection.style.display = isTech ? 'none' : '';
+      if (techUploadDraw) techUploadDraw.style.display = isTech ? '' : 'none';
+      if (techUploadReq) techUploadReq.style.display = isTech ? '' : 'none';
+      if (isTech) resetTechUpload();
+    }
+    // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入 requirement-create（图纸已关联）。
+    async function techCreateAndGo() {
+      if (!techDrawFiles.length) {
+        // 没传图纸 → 直接进入需求页现场分开上传
+        window.location.href = 'requirement-create.html';
+        return;
+      }
+      const sendBtnEl = document.querySelector('.send-btn');
+      if (sendBtnEl) sendBtnEl.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', techDrawFiles[0]);                 // 2D 工程图作为项目源图
+        fd.append('note', (textarea && textarea.value.trim()) || '');
+        for (let i = 1; i < techDrawFiles.length; i++) fd.append('attachments', techDrawFiles[i]);
+        for (const f of techReqFiles) fd.append('attachments', f);
+        const created = await fetch('/api/projects', { method: 'POST', body: fd }).then(r => r.json());
+        const pid = created && created.project_id;
+        if (!pid) throw new Error('返回无 project_id');
+        // 关键：建项目后立即存一版需求草稿，否则 requirement-create 里点「AI 解析」会因
+        // 「无已保存需求单」而 404「请先保存需求单」。文档已作为 attachments 存好，草稿一存即可解析。
+        const note = (textarea && textarea.value.trim()) || '';
+        const reqNames = techReqFiles.map(f => f.name);
+        const title = (note.split(/\n|。|；|;/)[0] || '').slice(0, 40) || '工艺评估需求单';
+        try {
+          await fetch('/api/projects/' + encodeURIComponent(pid) + '/requirement', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project_id: pid, requirement_no: '', title, status: 'draft',
+              data: {
+                title, description: note,
+                // 需求文档挂到「技术规格说明书」角色，便于 3.4 展示为已关联（提取按全部附件读取，与角色无关）
+                file_roles: reqNames.length ? { technical_spec: reqNames } : {},
+              },
+            }),
+          });
+        } catch (e) { /* 草稿存失败不阻断跳转：用户可在页内「保存草稿」后再解析 */ }
+        window.location.href = 'requirement-create.html?project=' + encodeURIComponent(pid);
+      } catch (e) {
+        alert('技术工艺项目创建失败：' + (e && e.message || e) + '。将进入需求页，请在该页手动上传。');
+        window.location.href = 'requirement-create.html';
+      } finally {
+        if (sendBtnEl) sendBtnEl.disabled = false;
+      }
+    }
+
     function tagToMode(label) {
+      if (label.includes('工艺') || label.includes('技术')) return 'tech';
       return label.includes('配置') ? 'config' : (label.includes('规则') ? 'rule' : 'quote');
     }
     // 切换助手模式：更新高亮 + 引导语 + 输入框占位 + 「新建」按钮文案
@@ -1676,6 +2041,7 @@
         searchInput.placeholder = m.searchPh;
         searchInput.value = '';
       }
+      applyUploadMode(mode); // tech 模式显示「图纸/需求文档」两个上传槽，其它模式用通用上传
       loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
     }
 
@@ -1690,7 +2056,7 @@
       const d = new Date();
       const ym = '' + d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0');
       const rnd = String(Math.floor(Math.random() * 900) + 100);
-      const pre = intent === 'config' ? 'BOM' : (intent === 'rule' ? 'RULE' : 'BJD');
+      const pre = intent === 'config' ? 'BOM' : (intent === 'rule' ? 'RULE' : (intent === 'tech' ? 'GY' : 'BJD'));
       return pre + ym + rnd;
     }
     const RULE_KIND_META = {
@@ -1742,24 +2108,28 @@
       });
     })();
     function requestNavigate(intent, requirement) {
+      // 技术工艺：不走 CPQ 项目确认框。用首页「图纸/需求文档」两槽上传的文件在 tech_app 建项目，
+      // 再进入 process_drawing 的「接受工艺评估需求」页（图纸已关联，可继续补充/下一步）。
+      if (intent === 'tech') { techCreateAndGo(); return; }
       const page = PAGES[intent];
       if (!page) { alert('「' + MODES[intent].tag + '」页面正在开发中，敬请期待。'); return; }
       // 规则类型：按需求文字关键词预填弹框里的单选钮（仅规则助手内的子类型，用户可手改）
       const ruleKind = intent === 'rule' ? detectRuleKind(requirement || '') : null;
       _pendingNav = { intent, ruleKind };
-      const label = intent === 'config' ? '新建配置' : (intent === 'rule' ? '新建规则' : '新建报价');
+      const label = intent === 'config' ? '新建配置' : (intent === 'rule' ? '新建规则' : (intent === 'tech' ? '新建工艺评估' : '新建报价'));
       document.getElementById('projectModalTitle').textContent = label + ' · 信息确认';
       const nameLabel = document.getElementById('pjNameLabel');
       const nameInput = document.getElementById('pjName');
       const customerLabel = document.getElementById('pjCustomerLabel');
       const customerInput = document.getElementById('pjCustomer');
-      const nameText = intent === 'config' ? 'BOM配置名称' : (intent === 'rule' ? '规则命名' : '项目名称');
+      const nameText = intent === 'config' ? 'BOM配置名称' : (intent === 'rule' ? '规则命名' : (intent === 'tech' ? '评估名称' : '项目名称'));
       if (nameLabel) nameLabel.innerHTML = nameText + ' <span style="color:var(--color-red)">*</span>';
       if (nameInput) {
         nameInput.value = '';
         nameInput.placeholder = intent === 'config'
           ? '例如：280kWh液冷电池包BOM配置'
-          : (intent === 'rule' ? '例如：280kWh强制液冷配置规则' : '例如：波兰格但斯克光储项目');
+          : (intent === 'rule' ? '例如：280kWh强制液冷配置规则'
+            : (intent === 'tech' ? '例如：45钢法兰盘加工工艺评估' : '例如：波兰格但斯克光储项目'));
       }
       document.getElementById('pjCode').value = genProjectCode(intent);
       if (customerLabel) customerLabel.style.display = intent === 'quote' ? '' : 'none';
@@ -1786,7 +2156,7 @@
       const cust = document.getElementById('pjCustomer').value.trim();
       const req = document.getElementById('pjReq').value.trim();
       const intent = _pendingNav.intent;
-      const nameText = intent === 'config' ? 'BOM配置名称' : (intent === 'rule' ? '规则命名' : '项目名称');
+      const nameText = intent === 'config' ? 'BOM配置名称' : (intent === 'rule' ? '规则命名' : (intent === 'tech' ? '评估名称' : '项目名称'));
       if (!name || (intent === 'quote' && !cust)) {
         msg.className = 'hint warn';
         msg.textContent = intent === 'quote'
@@ -1891,13 +2261,21 @@
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
-    setMode('quote'); // 初始化为报价助手（并拉取真实数据）
+    // 初始化：URL ?assistant=tech（从技术工艺子页「返回技术工艺首页」带回来）可直接进入对应助手，否则默认报价助手
+    (function initAssistantMode() {
+      let m = 'quote';
+      try { const a = new URLSearchParams(location.search).get('assistant'); if (a && MODES[a]) m = a; } catch (e) {}
+      setMode(m);
+    })();
     // 从工作台返回（含 bfcache）时刷新卡片，让新建/推进的单据立即出现
     window.addEventListener('pageshow', (e) => { if (e.persisted) loadCards(currentMode); });
+    // 登录/登出后重拉「我的报价」与「待办任务」（两者都按账号归属）
+    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
+    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);
-    const STEP_NAMES = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
+    const STEP_NAMES = ['确认需求配置', '工艺确认', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let MODELS = [];
 
     function closeOverlays() {
@@ -2042,6 +2420,35 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
+      // 技术工艺多模态模型：读 tech_app 运行时设置（同源 /api/llm/settings 反代到 tech_app）
+      try {
+        const _tl = await fetch('/api/llm/settings').then(r => r.ok ? r.json() : null);
+        if (_tl) {
+          if ($('setTechBase')) $('setTechBase').value = _tl.base_url || '';
+          if ($('setTechVision')) {
+            const _vm = (_tl.vision_models && _tl.vision_models[0]) || '';
+            const _sel = $('setTechVision');
+            const _has = Array.from(_sel.options).some(o => o.value === _vm && o.value !== '__custom__');
+            if (_vm && _has) { if ($('setTechMode')) $('setTechMode').value = 'cloud'; _sel.value = _vm; }
+            else if (_vm) { if ($('setTechMode')) $('setTechMode').value = 'local'; if ($('setTechVisionCustom')) $('setTechVisionCustom').value = _vm; }
+            if ($('setTechText')) {
+              const _tm = (_tl.text_models && _tl.text_models[0]) || '';
+              const _localMode = $('setTechMode') && $('setTechMode').value === 'local';
+              const _tsel = $('setTechText');
+              const _thas = Array.from(_tsel.options).some(o => o.value === _tm && o.value !== '__custom__' && o.value !== '');
+              if (_localMode) { if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
+              else if (_tm && _thas) { _tsel.value = _tm; }
+              else if (_tm) { _tsel.value = '__custom__'; if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
+              else { _tsel.value = ''; }
+            }
+            if (typeof onTechModeChange === 'function') onTechModeChange();
+            onTechVisionChange();
+            if (typeof onTechTextChange === 'function') onTechTextChange();
+          }
+          if ($('setTechText')) $('setTechText').value = (_tl.text_models && _tl.text_models[0]) || '';
+          if ($('techLlmMsg')) $('techLlmMsg').textContent = _tl.api_key_configured ? '当前技术工艺网关已配置 Key。' : '技术工艺网关尚未配置 Key。';
+        }
+      } catch (e) {}
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -2071,7 +2478,57 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
+    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
+    function onTechModeChange() {
+      const local = $('setTechMode') && $('setTechMode').value === 'local';
+      // 视觉模型
+      if ($('setTechVision')) $('setTechVision').style.display = local ? 'none' : '';
+      const vc = $('setTechVisionCustom');
+      if (vc) {
+        vc.placeholder = local ? '本地视觉模型名称（与网关一致）' : '自定义视觉模型名称';
+        vc.style.display = local ? '' : (($('setTechVision') && $('setTechVision').value === '__custom__') ? '' : 'none');
+      }
+      // 文本模型（与视觉同一来源）
+      if ($('setTechText')) $('setTechText').style.display = local ? 'none' : '';
+      const tc = $('setTechTextCustom');
+      if (tc) {
+        tc.placeholder = local ? '本地文本模型名称（留空复用视觉模型）' : '自定义文本模型名称';
+        tc.style.display = local ? '' : (($('setTechText') && $('setTechText').value === '__custom__') ? '' : 'none');
+      }
+    }
+    function onTechVisionChange() {
+      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
+      const sel = $('setTechVision'), cust = $('setTechVisionCustom');
+      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
+    }
+    function onTechTextChange() {
+      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
+      const sel = $('setTechText'), cust = $('setTechTextCustom');
+      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
+    }
+    async function saveTechLlm() {
+      const base = ($('setTechBase') && $('setTechBase').value.trim()) || '';
+      const _techLocal = $('setTechMode') && $('setTechMode').value === 'local';
+      let vision = _techLocal
+        ? (($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '')
+        : (($('setTechVision') && $('setTechVision').value.trim()) || '');
+      if (!_techLocal && vision === '__custom__') vision = ($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '';
+      let text = _techLocal
+        ? (($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '')
+        : (($('setTechText') && $('setTechText').value.trim()) || '');
+      if (!_techLocal && text === '__custom__') text = ($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '';
+      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
+      if (!base && !vision && !text && !key) return;   // 未填写则不推送
+      const body = { base_url: base, vision_models: vision ? [vision] : [], text_models: text ? [text] : (vision ? [vision] : []) };
+      if (key) body.api_key = key;
+      try {
+        const r = await fetch('/api/llm/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status); }
+        else { if ($('setTechKey')) $('setTechKey').value = ''; if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺多模态模型已保存并生效。'; }
+      } catch (e) { if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：tech_app 未就绪。'; }
+    }
     async function saveSettings() {
+      await saveTechLlm();
       const o = selectedModelOption();
       const payload = {
         model: $('setModel').value,
@@ -2124,5 +2581,7 @@
     }
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
   </script>
+  <script src="cpq_auth.js"></script>
+  <script src="cpq_msg.js"></script>
 </body>
 </html>

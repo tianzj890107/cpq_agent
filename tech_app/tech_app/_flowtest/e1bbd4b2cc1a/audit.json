@@ -1,0 +1,32 @@
+[
+  {
+    "ts": "2026-07-23 15:34:58",
+    "action": "create_project",
+    "detail": {
+      "source": "draw.png",
+      "owner": "system"
+    }
+  },
+  {
+    "ts": "2026-07-23 15:34:58",
+    "action": "add_attachment",
+    "detail": {
+      "file": "req.txt"
+    }
+  },
+  {
+    "ts": "2026-07-23 15:34:59",
+    "action": "save_requirement",
+    "detail": {
+      "by": "system",
+      "status": "draft"
+    }
+  },
+  {
+    "ts": "2026-07-23 15:34:59",
+    "action": "workflow:requirement_saved",
+    "detail": {
+      "requirement_no": "REQ-E1BBD4B2CC1A"
+    }
+  }
+]

@@ -587,14 +587,27 @@
         <i class="ti ti-history"></i>
         <span class="nav-tooltip">历史记录</span>
       </div>
-      <div class="nav-icon" onclick="location.href='报价首页(1).html'">
+      <div class="nav-icon" onclick="location.href='报价首页.html'">
         <i class="ti ti-home"></i>
         <span class="nav-tooltip">返回报价首页</span>
       </div>
       <div style="flex:1"></div>
+      <!-- 消息（任务流提醒）：位于设置与账号之上 -->
+      <div class="nav-icon" id="cpqMsgBtn" onclick="cpqMsg.open()">
+        <i class="ti ti-bell"></i>
+        <span class="nav-tooltip">消息</span>
+      </div>
       <div class="nav-icon" onclick="openSettings()">
         <i class="ti ti-settings"></i>
         <span class="nav-tooltip">设置</span>
+      </div>
+
+      <div class="nav-divider"></div>
+
+      <!-- 登录 / 账号信息（未登录=登录入口，已登录=账号信息+退出） -->
+      <div class="nav-icon" id="cpqAuthBtn" onclick="cpqAuth.open()">
+        <i class="ti ti-login"></i>
+        <span class="nav-tooltip">登录</span>
       </div>
     </div>
 
@@ -617,6 +630,7 @@
           <button class="quick-action-btn primary" id="qaFillStep" onclick="fillStepRecommend()"><i class="ti ti-wand"></i> 强行填满本步骤</button>
           <button class="quick-action-btn" id="qaStep" onclick="confirmStep()"><i class="ti ti-arrow-right"></i> 进入下一大步骤</button>
           <button class="quick-action-btn" id="qaPrev" onclick="goPrev()"><i class="ti ti-arrow-left"></i> 上一步</button>
+          <button class="quick-action-btn" id="qaSend" onclick="wfOpenSend()"><i class="ti ti-send"></i> 转交任务</button>
         </div>
         <div class="attach-chips" id="attachChips"></div>
         <div class="chat-input-wrapper">
@@ -733,6 +747,96 @@
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
         </div>
 
+        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
+          <label style="font-weight:600">技术工艺 · 多模态模型（图纸识别）</label>
+          <div class="hint">技术工艺助手解析图纸/文档所用模型；OpenAI 兼容网关（云端聚合网关或本地网关皆可）。选「本地模型」时视觉/文本模型名改为手动填写；图纸识别需选真·多模态模型。文本与视觉共用同一网关与 Key。</div>
+          <label>网关 Base URL（OpenAI 兼容）</label>
+          <input id="setTechBase" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off">
+          <label>模型来源</label>
+          <select id="setTechMode" onchange="onTechModeChange()">
+            <option value="cloud">云模型（下拉选择）</option>
+            <option value="local">本地模型（手动填模型名/参数）</option>
+          </select>
+          <label>视觉模型（多模态，识别图纸）</label>
+          <select id="setTechVision" onchange="onTechVisionChange()">
+            <optgroup label="Anthropic Claude">
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+            </optgroup>
+            <optgroup label="OpenAI GPT">
+              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            </optgroup>
+            <optgroup label="智谱 GLM">
+              <option value="glm-5.2">GLM 5.2</option>
+              <option value="glm-5.1">GLM 5.1</option>
+            </optgroup>
+            <optgroup label="Kimi Moonshot">
+              <option value="kimi-k3">Kimi 3</option>
+              <option value="kimi-k2.7">Kimi 2.7</option>
+            </optgroup>
+            <optgroup label="通义千问 Qwen">
+              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
+              <option value="qwen3.7-max">Qwen3.7 Max</option>
+              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
+            </optgroup>
+            <optgroup label="MiniMax">
+              <option value="MiniMax-M3">MiniMax M3</option>
+            </optgroup>
+            <option value="__custom__">自定义（手动输入…）</option>
+          </select>
+          <input id="setTechVisionCustom" type="text" placeholder="自定义视觉模型名称" autocomplete="off" style="display:none;margin-top:6px">
+          <label>文本模型（工艺推荐/报告，留空则复用视觉模型）</label>
+          <select id="setTechText" onchange="onTechTextChange()">
+            <option value="">（复用视觉模型）</option>
+            <optgroup label="Anthropic Claude">
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+            </optgroup>
+            <optgroup label="OpenAI GPT">
+              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+            </optgroup>
+            <optgroup label="智谱 GLM">
+              <option value="glm-5.2">GLM 5.2</option>
+              <option value="glm-5.1">GLM 5.1</option>
+            </optgroup>
+            <optgroup label="Kimi Moonshot">
+              <option value="kimi-k3">Kimi 3</option>
+              <option value="kimi-k2.7">Kimi 2.7</option>
+            </optgroup>
+            <optgroup label="通义千问 Qwen">
+              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
+              <option value="qwen3.7-max">Qwen3.7 Max</option>
+              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
+            </optgroup>
+            <optgroup label="MiniMax">
+              <option value="MiniMax-M3">MiniMax M3</option>
+            </optgroup>
+            <option value="__custom__">自定义（手动输入…）</option>
+          </select>
+          <input id="setTechTextCustom" type="text" placeholder="自定义文本模型名称" autocomplete="off" style="display:none;margin-top:6px">
+          <label>API Key（留空表示不修改已保存的 Key）</label>
+          <input id="setTechKey" type="password" placeholder="技术工艺网关的 API Key" autocomplete="off">
+          <div class="hint" id="techLlmMsg"></div>
+        </div>
+
         <label class="check-row" style="margin-top:16px">
           <input type="checkbox" id="setTempEnable" onchange="onTempEnableChange()">
           自定义 Temperature（不勾选则用模型默认）
@@ -770,7 +874,7 @@
     // 报价助手 Agent 服务。可用 localStorage['cpq:agentUrl'] 覆盖。
     // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
-    const STEPS = ['确认需求配置', '定价-基础成本', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
+    const STEPS = ['确认需求配置', '工艺确认', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
 
     /* ================= 状态 ================= */
@@ -1776,12 +1880,19 @@
       );
     }
 
-    function confirmStep() {
+    async function confirmStep() {
       if (busy) return;
       if (shownStep !== currentStep) showStep(currentStep); // 确认前先回到当前步骤
       const cur = currentStep;
+      // 角色限步：登录后，本步必须由对应角色确认（第2步工艺确认=工艺经理，其余=销售经理）
+      if (wfUser() && WF.loaded && !WF.canEdit) {
+        alert('第 ' + cur + ' 步「' + STEPS[cur - 1] + '」需要「' + WF.needRole + '」完成。\n' +
+              '你当前角色是「' + wfUser().role_name + '」，可点「转交任务」把卡片发给对方。');
+        return;
+      }
       if (cur >= STEPS.length) {
         const done = '报价流程已完成。';
+        if (!(await wfCompleteStep(cur, collectStepData(cur)))) return;
         addUserBubble(done);
         if (manualMode) {
           addAiBubble('报价流程已完成。可点「生成报价单(Word)」导出。');
@@ -1793,31 +1904,380 @@
       }
       const data = collectStepData(cur);
       const stepName = STEPS[cur - 1];
-      let next = cur + 1;
-      let bomChoice = '';
-      if (cur === 1) {
-        // 第 1 步结尾：由用户决定是否进行 BOM 匹配（第 2 步）；选否则跳过第 2 步直接进第 3 步
-        const doBom = confirm('是否进行 BOM 匹配？\n\n「确定」= 进入第 2 步「' + STEPS[1] + '」（实例BOM / 料工费 / 基础成本）\n「取消」= 跳过第 2 步，直接进入第 3 步「' + STEPS[2] + '」（基础成本改用产品信息中的价格）');
-        next = doBom ? 2 : 3;
-        bomChoice = doBom ? '（用户选择：进行BOM匹配）' : '（用户选择：跳过BOM匹配，直接进入第3步）';
+      const next = cur + 1;
+      // 登录状态下先把本步落库（角色不符会被后端拒绝，拒绝则不推进）
+      if (!(await wfCompleteStep(cur, data))) return;
+      // 下一步不归我：右侧进度如实前进到下一步，但**左侧不开工**——只提醒推送，等接手人自己开始
+      if (WF.pendingHandoff) {
+        const h = WF.pendingHandoff;
+        addUserBubble(`确认第 ${cur} 步「${stepName}」。`);
+        setStep(next);
+        if (next === 2) syncStep2FromStep1();
+        await wfRefresh();
+        addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n下一步「第 ' + h.next_step_no + ' 步 · ' +
+          h.next_step_name + '」需要**' + h.next_role_name + '**完成，你无法继续。\n\n' +
+          '请把这张卡片**推送**给对方（指派给某人 / 发布到公共任务池），对方领取后会在自己的工作台确认开始该步骤。');
+        setTimeout(() => wfOpenSend(true), 300);
+        return;   // ← 关键：不通知智能体开始下一步
       }
-      const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。` + bomChoice;
+      const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。`;
       addUserBubble(bubble);
       setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
+      // 第 2 步「工艺确认」：把第 1 步已确认的产品信息/技术参数原样沿用过来，只读展示供人工核对（不调用智能体）
+      if (next === 2) syncStep2FromStep1();
+      // 同一人顺流程继续做下一步：静默标记开工（无需再问一次「是否开始」）
+      wfStartStep(next, { silent: true }).then(wfRefresh);
       if (manualMode) {
         // 无模型模式：本地推进 + 静默落档（进度与数据进入历史/首页卡片，不调模型）
-        sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data) + (bomChoice ? '\n' + bomChoice : ''),
+        sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data),
           { echo: false, display: bubble, step: next });
+        return;
+      }
+      if (next === 2) {
+        // 工艺确认为人工核对步骤：告知智能体无需查库/填表，只提示用户核对
+        sendToAgent(
+          `【表单确认】第 ${cur} 步「${stepName}」用户已确认。用户已进入第 2 步「工艺确认」——这是人工核对步骤，` +
+          `产品信息列表与产品技术参数已由前端沿用第 1 步的数据只读展示，你无需查库或填表，` +
+          `只用一句话提示用户核对产品信息与技术参数后点「进入下一大步骤」即可。`,
+          { echo: false, display: bubble }
+        );
         return;
       }
       sendToAgent(
         `【表单确认】第 ${cur} 步「${stepName}」用户已确认，工作台最新数据(JSON)如下：\n` +
         JSON.stringify(data, null, 1) +
         `\n用户已进入第 ${next} 步「${STEPS[next - 1]}」。请直接开始第 ${next} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
-        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${next} 步的固定分区（边做边说），最后给小结。` +
-        (bomChoice ? '\n' + bomChoice : ''),
+        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${next} 步的固定分区（边做边说），最后给小结。`,
         { echo: false, display: bubble }
       );
+    }
+
+    /* ================= 报价工作流：卡片 / 角色限步 / 任务流转 =================
+       与登录系统联动：每步只有对应角色能确认（第2步工艺确认=工艺经理，其余=销售经理）；
+       完成一步后可把卡片作为任务发给某角色/某人/公共任务池。接口见 /wf/*。 */
+    let WF = { card: null, steps: [], canEdit: true, needRole: '', loaded: false };
+
+    function wfUser() { return (window.cpqAuth && cpqAuth.user()) || null; }
+
+    async function wfApi(path, opts) {
+      if (!window.cpqAuth) throw new Error('未加载登录模块');
+      return cpqAuth.api(path, opts);
+    }
+
+    // 把当前会话同步成一张卡片（登录后才建；未登录时静默跳过，不影响原有流程）
+    async function wfSyncCard(step) {
+      if (!wfUser() || !currentSessionId) return;
+      try {
+        const d = await wfApi('/wf/card/sync', {
+          method: 'POST',
+          body: {
+            session_id: currentSessionId,
+            title: (($('projectName') && $('projectName').textContent) || '').trim(),
+            customer: (sessionStorage.getItem('cpq:customer') || ''),
+            project_name: (sessionStorage.getItem('cpq:projectName') || ''),
+            current_step: step || currentStep,
+          },
+        });
+        WF.card = d.card;
+      } catch (e) { /* 未登录/服务未就绪：不打断报价流程 */ }
+    }
+
+    // 拉取卡片状态 + 当前步骤的角色权限，并刷新页面提示
+    async function wfRefresh() {
+      if (!wfUser() || !currentSessionId) { WF.loaded = false; wfRenderBar(); return; }
+      try {
+        const d = await wfApi('/wf/card?session_id=' + encodeURIComponent(currentSessionId));
+        WF.card = d.card; WF.steps = d.steps || [];
+        WF.canEdit = !!d.can_edit; WF.needRole = d.need_role_name || '';
+        WF.awaiting = !!d.awaiting_handoff;      // 本步已完成、还没推送出去
+        WF.pendingTask = d.pending_task || null; // 已推送、等人领取
+        WF.statusLabel = d.status_label || '';
+        WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
+        WF.loaded = !!d.card;
+      } catch (e) { WF.loaded = false; }
+      wfRenderBar();
+      wfMaybePromptStart();
+    }
+
+    /* ---------------- 接手任务后：先问「是否开始本步骤」，确认了智能体才开工 ----------------
+       避免卡片一转交过来就自动跑起来。同一人连续做下一步时不问（那是他自己点的「进入下一步」）。 */
+    function wfMaybePromptStart() {
+      const u = wfUser();
+      const el = $('wfStartPrompt');
+      const need = u && WF.loaded && WF.canEdit && !WF.stepStarted && !WF.awaiting && !WF.pendingTask;
+      if (!need) { if (el) el.remove(); return; }
+      if (el) return;                       // 已经在问了，别重复插气泡
+      const div = document.createElement('div');
+      div.className = 'message message-ai';
+      div.id = 'wfStartPrompt';
+      div.innerHTML =
+        '<div class="message-label">流程</div><div class="message-text">' +
+        '<div style="margin-bottom:8px">这张报价卡片当前在<b>第 ' + currentStep + ' 步「' +
+        escapeHtml(STEPS[currentStep - 1]) + '」</b>，由<b>' + escapeHtml(WF.needRole) +
+        '</b>负责，正好是你。是否现在开始本步骤？</div>' +
+        '<button id="wfStartBtn" style="padding:7px 16px;border:none;border-radius:8px;' +
+        'background:var(--color-primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer">' +
+        '<i class="ti ti-player-play"></i> 开始第 ' + currentStep + ' 步</button>' +
+        '</div>';
+      chatEl.appendChild(div);
+      scrollChat();
+      $('wfStartBtn').onclick = () => wfStartStep(currentStep);
+    }
+
+    // 标记本步开工；notify=true 时同时让智能体真正开始做这一步
+    async function wfStartStep(step, opts) {
+      opts = opts || {};
+      if (!wfUser() || !currentSessionId) return true;
+      try {
+        await wfApi('/wf/card/step-start', {
+          method: 'POST', body: { session_id: currentSessionId, step_no: step },
+        });
+        WF.stepStarted = true;
+      } catch (e) {
+        if (!opts.silent) alert(e.message || '无法开始本步骤');
+        return false;
+      }
+      const el = $('wfStartPrompt');
+      if (el) el.remove();
+      if (opts.silent) return true;         // 同一人顺流程推进：调用方已自行通知智能体
+      const name = STEPS[step - 1];
+      addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
+      if (step === 2) {
+        // 工艺确认是人工核对：沿用第 1 步数据只读展示，不调智能体
+        syncStep2FromStep1();
+        sendToAgent(
+          `【开始步骤】用户已接手并开始第 2 步「工艺确认」——这是人工核对步骤，` +
+          `产品信息列表与产品技术参数已由前端沿用第 1 步的数据只读展示，你无需查库或填表，` +
+          `只用一句话提示用户核对后点「进入下一大步骤」即可。`,
+          { echo: false, display: '开始第 2 步' });
+        return true;
+      }
+      sendToAgent(
+        `【开始步骤】用户已接手这张报价卡片并开始第 ${step} 步「${name}」。` +
+        `请直接开始第 ${step} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
+        `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${step} 步的固定分区（边做边说），最后给小结。`,
+        { echo: false, display: '开始第 ' + step + ' 步' });
+      return true;
+    }
+
+    // 顶部提示条：当前步骤该谁做 / 我能不能做
+    function wfRenderBar() {
+      let bar = $('wfBar');
+      const u = wfUser();
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'wfBar';
+        bar.style.cssText = 'display:none;margin:0 0 10px;padding:8px 12px;border-radius:8px;' +
+          'font-size:12px;line-height:1.5;border:1px solid var(--border-color);';
+        const host = $('resultsContent');
+        if (host && host.parentElement) host.parentElement.insertBefore(bar, host);
+      }
+      if (!u) {
+        bar.style.display = 'block';
+        bar.style.background = 'rgba(148,163,184,.12)';
+        bar.style.color = 'var(--text-secondary)';
+        bar.innerHTML = '<i class="ti ti-login"></i> 未登录：当前为本机试用模式，' +
+          '登录后可按角色分工协作、把报价卡片作为任务转交他人。' +
+          '<a href="javascript:;" onclick="cpqAuth.open()" style="margin-left:6px">去登录</a>';
+        return;
+      }
+      if (!WF.loaded) { bar.style.display = 'none'; return; }
+      bar.style.display = 'block';
+      // 待转交：本步已完成、下一步归别人，卡片必须推送出去才算交接完成
+      if (WF.awaiting) {
+        bar.style.background = 'rgba(239,68,68,.10)';
+        bar.style.color = '#b91c1c';
+        bar.innerHTML = '<i class="ti ti-send"></i> <b>待转交</b>：第 ' + currentStep + ' 步「' +
+          escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
+          '</b>完成。请把卡片<a href="javascript:;" onclick="wfOpenSend(true)" style="margin:0 4px">推送给某人或发布到公共任务池</a>。';
+        return;
+      }
+      // 已推送、等待对方领取
+      if (WF.pendingTask) {
+        bar.style.background = 'rgba(99,102,241,.10)';
+        bar.style.color = '#4338ca';
+        bar.innerHTML = '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
+          escapeHtml(WF.pendingTask.source_label || '') + '。对方领取后即可继续第 ' +
+          WF.pendingTask.next_step_no + ' 步。';
+        return;
+      }
+      if (WF.canEdit) {
+        bar.style.background = 'rgba(34,197,94,.10)';
+        bar.style.color = '#15803d';
+        bar.innerHTML = '<i class="ti ti-user-check"></i> 第 ' + currentStep + ' 步「' +
+          escapeHtml(STEPS[currentStep - 1]) + '」由<b>' + escapeHtml(WF.needRole) +
+          '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。';
+      } else {
+        bar.style.background = 'rgba(234,179,8,.12)';
+        bar.style.color = '#a16207';
+        bar.innerHTML = '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
+          escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
+          '</b>完成，你是' + escapeHtml(u.role_name) + '，只能查看。' +
+          '可点下方「转交任务」把卡片发给' + escapeHtml(WF.needRole) + '。';
+      }
+    }
+
+    // 完成当前步骤：登录后写入卡片步骤状态（角色不符会被后端拒绝）
+    // 返回 false = 未完成（不推进）；完成后若下一步归别人，置 WF.pendingHandoff 由调用方拉起推送框
+    async function wfCompleteStep(step, data) {
+      WF.pendingHandoff = null;
+      if (!wfUser() || !currentSessionId) return true;   // 未登录：保持原有本机流程
+      try {
+        await wfSyncCard(step);
+        const d = await wfApi('/wf/card/step-done', {
+          method: 'POST',
+          body: { session_id: currentSessionId, step_no: step, snapshot: JSON.stringify(data || {}) },
+        });
+        if (d.need_handoff) WF.pendingHandoff = d;   // 下一步换人做 -> 必须推送任务流
+        return true;
+      } catch (e) {
+        alert(e.message || '无法完成该步骤');
+        return false;
+      }
+    }
+
+    /* ---------------- 推送任务流弹窗 ----------------
+       forced=本步已完成、下一步归别的角色：必须选「指派给某人」或「发布到公共」才能把卡片交出去。 */
+    async function wfOpenSend(forced) {
+      const u = wfUser();
+      if (!u) { cpqAuth.open(); return; }
+      if (!currentSessionId) { alert('请先开始一次报价。'); return; }
+      await wfSyncCard(currentStep);
+      const hand = forced ? (WF.pendingHandoff || {}) : {};
+      const needRole = hand.next_role_code || '';
+      const needRoleName = hand.next_role_name || '';
+      let roles = [], users = [];
+      try {
+        roles = (await wfApi('/auth/roles')).roles || [];
+        users = (await wfApi('/auth/users')).users || [];
+      } catch (e) {}
+      const nextStep = Math.min(hand.next_step_no || currentStep, STEPS.length);
+      const mask = document.createElement('div');
+      mask.id = 'wfSendMask';
+      mask.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;' +
+        'align-items:center;justify-content:center;z-index:99999;';
+      const optUser = '<option value="user">指派给某个人</option>';
+      const optPublic = '<option value="public">发布到公共任务池（' +
+        (needRoleName ? escapeHtml(needRoleName) + '都能领取' : '谁都能领取') + '）</option>';
+      const optRole = '<option value="role">发给某个角色（该角色的人都能领取）</option>';
+      mask.innerHTML =
+        '<div style="width:400px;max-width:92vw;background:var(--bg-primary, #fff);border-radius:14px;' +
+        'box-shadow:0 24px 60px rgba(0,0,0,.28);overflow:hidden;font-size:13px;">' +
+        '<div style="padding:18px 22px 4px"><h3 style="margin:0;font-size:16px">' +
+        (forced ? '本步已完成，请推送任务' : '转交任务') + '</h3>' +
+        '<p style="margin:6px 0 0;font-size:12px;color:var(--text-secondary)">' +
+        (forced
+          ? '下一步「第 ' + nextStep + ' 步 · ' + escapeHtml(STEPS[nextStep - 1]) + '」需要<b>' +
+            escapeHtml(needRoleName) + '</b>完成，你无法继续，请把卡片推送出去。'
+          : '把当前报价卡片（第 ' + nextStep + ' 步「' + escapeHtml(STEPS[nextStep - 1]) + '」）交给他人继续') +
+        '</p></div>' +
+        '<div style="padding:14px 22px 4px">' +
+        '<div style="margin-bottom:12px"><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:5px">推送方式</label>' +
+        '<select id="wfTargetType" style="width:100%;padding:9px 11px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary, #fff);color:var(--text-primary)">' +
+        (forced ? optUser + optPublic : optRole + optUser + optPublic) +
+        '</select></div>' +
+        '<div style="margin-bottom:12px;display:' + (forced ? 'none' : '') + '" id="wfRoleRow">' +
+        '<label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:5px">目标角色</label>' +
+        '<select id="wfRole" style="width:100%;padding:9px 11px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary, #fff);color:var(--text-primary)">' +
+        roles.map(r => '<option value="' + r.role_code + '"' + (r.role_code === needRole ? ' selected' : '') +
+          '>' + escapeHtml(r.role_name) + '</option>').join('') +
+        '</select></div>' +
+        '<div style="margin-bottom:12px;display:none" id="wfUserRow"><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:5px">目标人员（按姓名 / 角色搜索）</label>' +
+        (needRole ? '<label style="display:flex;align-items:center;gap:5px;font-size:12px;margin-bottom:6px;color:var(--text-secondary)">' +
+          '<input type="checkbox" id="wfOnlyNeed" checked>只看' + escapeHtml(needRoleName) + '（只有该角色能完成这一步）</label>' : '') +
+        '<input id="wfUserSearch" placeholder="输入姓名/角色筛选" style="width:100%;box-sizing:border-box;padding:8px 11px;margin-bottom:6px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary, #fff);color:var(--text-primary)">' +
+        '<select id="wfUser" size="5" style="width:100%;padding:6px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary, #fff);color:var(--text-primary)"></select></div>' +
+        '<div style="margin-bottom:12px"><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:5px">备注（可选）</label>' +
+        '<input id="wfNote" placeholder="给接手人的说明" style="width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-primary, #fff);color:var(--text-primary)"></div>' +
+        '</div><div id="wfSendMsg" style="min-height:18px;padding:0 22px;font-size:12px;color:#dc2626"></div>' +
+        '<div style="display:flex;gap:10px;padding:8px 22px 20px">' +
+        '<button id="wfCancel" style="flex:1;padding:9px 0;border:none;border-radius:8px;background:var(--bg-tertiary);color:var(--text-secondary);font-weight:600;cursor:pointer">' +
+        (forced ? '稍后再说' : '取消') + '</button>' +
+        '<button id="wfSend" style="flex:1;padding:9px 0;border:none;border-radius:8px;background:var(--color-primary);color:#fff;font-weight:600;cursor:pointer">' +
+        (forced ? '推送任务' : '发送') + '</button>' +
+        '</div></div>';
+      document.body.appendChild(mask);
+      // 强制交接时不允许点遮罩糊弄过去，必须走「稍后再说」按钮（会留下醒目提示条）
+      if (!forced) mask.addEventListener('mousedown', e => { if (e.target === mask) mask.remove(); });
+
+      const fillUsers = () => {
+        const q = ($('wfUserSearch').value || '').trim().toLowerCase();
+        const onlyNeed = $('wfOnlyNeed') && $('wfOnlyNeed').checked;
+        const sel = $('wfUser');
+        sel.innerHTML = users
+          .filter(x => x.user_id !== u.user_id)
+          .filter(x => !(onlyNeed && needRole) || x.role_code === needRole)
+          .filter(x => !q || (x.display_name + x.role_name + x.username).toLowerCase().indexOf(q) >= 0)
+          .map(x => '<option value="' + x.user_id + '">' + escapeHtml(x.display_name) +
+            '（' + escapeHtml(x.role_name) + '）</option>').join('') ||
+          '<option value="" disabled>没有匹配的人员</option>';
+      };
+      const syncRows = () => {
+        const v = $('wfTargetType').value;
+        $('wfRoleRow').style.display = (!forced && v === 'role') ? '' : 'none';
+        $('wfUserRow').style.display = v === 'user' ? '' : 'none';
+      };
+      syncRows();
+      fillUsers();
+      $('wfUserSearch').oninput = fillUsers;
+      if ($('wfOnlyNeed')) $('wfOnlyNeed').onchange = fillUsers;
+      $('wfTargetType').onchange = syncRows;
+      $('wfCancel').onclick = () => {
+        mask.remove();
+        if (forced) wfRefresh();   // 保持「待转交」提示条，卡片不会悄悄悬空
+      };
+      $('wfSend').onclick = async () => {
+        const t = $('wfTargetType').value;
+        const body = { session_id: currentSessionId, target_type: t, note: $('wfNote').value.trim() };
+        if (t === 'role') body.target_role_code = $('wfRole').value;
+        if (t === 'user') {
+          body.target_user_id = $('wfUser').value;
+          if (!body.target_user_id) { $('wfSendMsg').textContent = '请选择目标人员'; return; }
+        }
+        $('wfSend').disabled = true;
+        try {
+          const d = await wfApi('/wf/task/send', { method: 'POST', body });
+          mask.remove();
+          WF.pendingHandoff = null;   // 已交接，解除「待转交」
+          addAiBubble('✅ 已推送：' + d.source_label + '。对方可在报价首页「待办任务」里领取继续。');
+          wfRefresh();
+          if (window.cpqMsg) cpqMsg.ping();   // 自己发出的任务立刻记入消息列表
+        } catch (e) {
+          $('wfSendMsg').textContent = e.message || '发送失败';
+          $('wfSend').disabled = false;
+        }
+      };
+    }
+
+    // 从某分区（表格）读回当前渲染的行数据 [{列key: 值}]
+    function extractSectionRows(sectionId) {
+      const sec = sections.get(sectionId);
+      if (!sec || sec.kind !== 'table') return [];
+      const rows = [];
+      sec.el.querySelectorAll('.list-table tbody tr').forEach(tr => {
+        const row = {};
+        tr.querySelectorAll('[data-key]').forEach(el => {
+          row[el.dataset.key] = ('value' in el && el.tagName === 'INPUT') ? el.value : (el.dataset.value ?? el.textContent);
+        });
+        rows.push(row);
+      });
+      return rows;
+    }
+
+    // 工艺确认（第2步）：把第1步的产品信息列表 s1_products / 产品技术参数 s1_techparams
+    // 原样搬到第2步 s2_products / s2_techparams 展示（前端本地完成，不依赖智能体）
+    function syncStep2FromStep1() {
+      [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']].forEach(([src, dst]) => {
+        const f = FORMS.find(x => x.section_id === dst);
+        if (!f) return;
+        const rows = extractSectionRows(src);
+        renderTableSection({
+          action: 'render_table', step: f.step, section_id: dst,
+          title: f.title, editable: f.editable, columns: f.columns || [], rows,
+        });
+      });
+      // 若第2步当前正显示，确保切换后可见
+      if (shownStep === 2) sections.forEach(sec => { if (sec.step === 2) sec.el.style.display = ''; });
     }
 
     function goPrev() {
@@ -1929,6 +2389,7 @@
       currentSessionId = data.id;
       closeOverlays();
       replaySession(data);
+      wfRefresh();   // 打开历史卡片：按该卡片当前步骤重算我的操作权限
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
@@ -2022,6 +2483,35 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
+      // 技术工艺多模态模型：读 tech_app 运行时设置（同源 /api/llm/settings 反代到 tech_app）
+      try {
+        const _tl = await fetch('/api/llm/settings').then(r => r.ok ? r.json() : null);
+        if (_tl) {
+          if ($('setTechBase')) $('setTechBase').value = _tl.base_url || '';
+          if ($('setTechVision')) {
+            const _vm = (_tl.vision_models && _tl.vision_models[0]) || '';
+            const _sel = $('setTechVision');
+            const _has = Array.from(_sel.options).some(o => o.value === _vm && o.value !== '__custom__');
+            if (_vm && _has) { if ($('setTechMode')) $('setTechMode').value = 'cloud'; _sel.value = _vm; }
+            else if (_vm) { if ($('setTechMode')) $('setTechMode').value = 'local'; if ($('setTechVisionCustom')) $('setTechVisionCustom').value = _vm; }
+            if ($('setTechText')) {
+              const _tm = (_tl.text_models && _tl.text_models[0]) || '';
+              const _localMode = $('setTechMode') && $('setTechMode').value === 'local';
+              const _tsel = $('setTechText');
+              const _thas = Array.from(_tsel.options).some(o => o.value === _tm && o.value !== '__custom__' && o.value !== '');
+              if (_localMode) { if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
+              else if (_tm && _thas) { _tsel.value = _tm; }
+              else if (_tm) { _tsel.value = '__custom__'; if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
+              else { _tsel.value = ''; }
+            }
+            if (typeof onTechModeChange === 'function') onTechModeChange();
+            onTechVisionChange();
+            if (typeof onTechTextChange === 'function') onTechTextChange();
+          }
+          if ($('setTechText')) $('setTechText').value = (_tl.text_models && _tl.text_models[0]) || '';
+          if ($('techLlmMsg')) $('techLlmMsg').textContent = _tl.api_key_configured ? '当前技术工艺网关已配置 Key。' : '技术工艺网关尚未配置 Key。';
+        }
+      } catch (e) {}
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -2051,7 +2541,57 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
+    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
+    function onTechModeChange() {
+      const local = $('setTechMode') && $('setTechMode').value === 'local';
+      // 视觉模型
+      if ($('setTechVision')) $('setTechVision').style.display = local ? 'none' : '';
+      const vc = $('setTechVisionCustom');
+      if (vc) {
+        vc.placeholder = local ? '本地视觉模型名称（与网关一致）' : '自定义视觉模型名称';
+        vc.style.display = local ? '' : (($('setTechVision') && $('setTechVision').value === '__custom__') ? '' : 'none');
+      }
+      // 文本模型（与视觉同一来源）
+      if ($('setTechText')) $('setTechText').style.display = local ? 'none' : '';
+      const tc = $('setTechTextCustom');
+      if (tc) {
+        tc.placeholder = local ? '本地文本模型名称（留空复用视觉模型）' : '自定义文本模型名称';
+        tc.style.display = local ? '' : (($('setTechText') && $('setTechText').value === '__custom__') ? '' : 'none');
+      }
+    }
+    function onTechVisionChange() {
+      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
+      const sel = $('setTechVision'), cust = $('setTechVisionCustom');
+      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
+    }
+    function onTechTextChange() {
+      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
+      const sel = $('setTechText'), cust = $('setTechTextCustom');
+      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
+    }
+    async function saveTechLlm() {
+      const base = ($('setTechBase') && $('setTechBase').value.trim()) || '';
+      const _techLocal = $('setTechMode') && $('setTechMode').value === 'local';
+      let vision = _techLocal
+        ? (($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '')
+        : (($('setTechVision') && $('setTechVision').value.trim()) || '');
+      if (!_techLocal && vision === '__custom__') vision = ($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '';
+      let text = _techLocal
+        ? (($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '')
+        : (($('setTechText') && $('setTechText').value.trim()) || '');
+      if (!_techLocal && text === '__custom__') text = ($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '';
+      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
+      if (!base && !vision && !text && !key) return;
+      const body = { base_url: base, vision_models: vision ? [vision] : [], text_models: text ? [text] : (vision ? [vision] : []) };
+      if (key) body.api_key = key;
+      try {
+        const r = await fetch('/api/llm/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status); }
+        else { if ($('setTechKey')) $('setTechKey').value = ''; if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺多模态模型已保存并生效。'; }
+      } catch (e) { if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：tech_app 未就绪。'; }
+    }
     async function saveSettings() {
+      await saveTechLlm();
       const o = selectedModelOption();
       const payload = {
         model: $('setModel').value,
@@ -2141,7 +2681,7 @@
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || meta.session_id || null;
-        try { // 记入「我的报价」（首页「我的」标签按本机创建的会话过滤）
+        try { // 记入「我的报价」（未登录时首页「我的」标签仍按本机会话过滤）
           const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
           if (nw.id && mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('cpq:mySessions', JSON.stringify(mine.slice(-200))); }
         } catch (e) {}
@@ -2149,6 +2689,11 @@
         let openId = '';
         try { openId = sessionStorage.getItem('cpq:openSession') || ''; sessionStorage.removeItem('cpq:openSession'); } catch {}
         if (openId) { await openSession(openId); return; }
+        await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
+        // 新建报价是用户主动发起的，第 1 步直接开工（不再多问一次「是否开始」）；
+        // 若当前角色做不了第 1 步，这里会被后端拒绝，转由提示条引导推送。
+        await wfStartStep(1, { silent: true });
+        await wfRefresh();
       } catch {
         setConn(false);
         $('panelPlaceholder').innerHTML =
@@ -2196,7 +2741,13 @@
       sendToAgent(kickoffFull, { echo: false, display: kickoffBubble });
     }
 
+    // 登录态就绪/变化时重算工作流权限（cpq_auth.js 在本脚本之后加载，事件保证时序正确）
+    document.addEventListener('cpq-auth-ready', () => { wfSyncCard(currentStep).then(wfRefresh); });
+    document.addEventListener('cpq-auth-change', () => { wfSyncCard(currentStep).then(wfRefresh); });
+
     boot();
   </script>
+  <script src="cpq_auth.js"></script>
+  <script src="cpq_msg.js"></script>
 </body>
 </html>

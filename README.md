@@ -6,7 +6,7 @@ EIMOS 产品平台「**配置报价管理(CPQ) → 报价管理**」菜单的新
 
 | 文件 | 说明 |
 | --- | --- |
-| `报价首页(1).html` | **当前首页**(报价管理主页面,serve.py 根路径 `/` 返回此页)。顶部三个标签 = 三种助手模式(**报价助手 / 配置助手 / 规则助手**),点击切换引导语、占位符与「新建」按钮。发送需求时先做**意图识别**(大模型 `/api/intent`,失败退回关键词)分辨目标,再跳转对应页面:报价→`确认需求解析结果.html`、产品配置→`XBOM智能体-配置BOM生成.html`、规则→(暂未上线)。**新建报价 / 对话框发送前会先弹「项目信息确认」框**(填 项目名称/项目编码/客户名称 + **需求描述文本框 + 上传文档按钮**),点「确认并进入」才跳转。
+| `报价首页.html` | **当前首页**(报价管理主页面,serve.py 根路径 `/` 返回此页)。顶部三个标签 = 三种助手模式(**报价助手 / 配置助手 / 规则助手**),点击切换引导语、占位符与「新建」按钮。发送需求时先做**意图识别**(大模型 `/api/intent`,失败退回关键词)分辨目标,再跳转对应页面:报价→`确认需求解析结果.html`、产品配置→`XBOM智能体-配置BOM生成.html`、规则→(暂未上线)。**新建报价 / 对话框发送前会先弹「项目信息确认」框**(填 项目名称/项目编码/客户名称 + **需求描述文本框 + 上传文档按钮**),点「确认并进入」才跳转。
 **门槛**:项目名称/客户名称必填;**若既没上传文档也没输入需求描述,会提醒"请上传需求文档或输入需求描述",不放行;一旦有文档或有需求文本即直接开始报价。**这些值经 sessionStorage(`cpq:projectName`/`cpq:projectCode`/`cpq:customer`)带到工作台——工作台顶部「当前项目」显示该项目名(不再写死波兰项目),并作为权威值填入第 1 步测算基本信息的 客户/项目名称。需求文本+附件名经 sessionStorage(`cpq:requirement`/`cpq:files`)带到下一页。左侧导航「历史记录」「设置」**与工作台一致**(同一 Agent 服务:`/api/sessions`、`/api/models`、`/api/settings`);首页点某条历史 → 经 sessionStorage `cpq:openSession` 跳到工作台自动载入该会话。 |
 | `报价首页.html` | 旧版首页(保留备用)。 |
 | `确认需求解析结果.html` | **报价助手工作台**(承接首页跳转)。左侧与报价助手 Agent 对话,右侧步骤条 + 固定表单/表格由 Agent 通过 `cpq_ui` 工具驱动;按「亿纬锂能POC(简化)」6 步引导。**右侧所有分区可点击编辑**(含系统计算项);**进度条各步可点击**回看/修改已完成步骤(改后点「保存修改并重算」回传 Agent);左侧对话框上方有**快捷动作**按钮(确认进入下一步 / 确认并填入推荐 / 上一步);已去掉子步骤高光。 |
@@ -24,8 +24,8 @@ EIMOS 产品平台「**配置报价管理(CPQ) → 报价管理**」菜单的新
 | `cpq_data/*.json` | 早期模拟数据,**已弃用**(现改为查 `quote_bom.db`),保留仅作参考。 |
 | `open-claude/` | open-claude 引擎副本(Agent 运行时,未修改)。 |
 | `报价业务流程.xlsx` | 报价业务流程说明(需求资料)。 |
-| `cpq_suite_server.py` | **一体化服务(推荐)**:单端口(默认 8010)同时提供**静态前端 + 三个智能体 API**。原样 import 三个 agent 模块并各建 Bridge,把 `/agents/quote|config|rule/api/*` 前缀剥掉后直接交给对应模块的 Handler(SSE/历史/设置/导入数据库全部复用原实现,各自的 settings/history 文件不变);其余路径按 serve.py 逻辑发静态文件(`/`→报价首页),并**拒绝下载** settings(API Key)/history/database/.py 等敏感文件。EIMOS iframe 地址不变。 |
-| `serve.py` | 纯静态服务(旧,已被 cpq_suite_server.py 取代,保留可单独用):根路径 `/` 即返回 `报价首页(1).html`,供 EIMOS iframe 内嵌。 |
+| `cpq_suite_server.py` | **一体化服务(推荐)**:单端口(默认 8010)同时提供**静态前端 + 三个智能体 API**。原样 import 三个 agent 模块并各建 Bridge,把 `/agents/quote|config|rule/api/*` 前缀剥掉后直接交给对应模块的 Handler(SSE/历史/设置/导入数据库全部复用原实现,各自的 settings/history 文件不变);其余路径按 serve.py 逻辑发静态文件(`/`→报价首页),并**拒绝下载** settings(API Key)/history/database/.py 等敏感文件。 |
+| `serve.py` | 纯静态服务(旧,已被 cpq_suite_server.py 取代,保留可单独用):根路径 `/` 即返回 `报价首页.html`。 |
 
 ## 启动
 
@@ -37,7 +37,7 @@ open-claude/.venv/Scripts/python cpq_suite_server.py            # 默认端口 8
 # 或指定端口: open-claude/.venv/Scripts/python cpq_suite_server.py --port 8020
 ```
 
-- 首页 `http://127.0.0.1:8010/`(EIMOS iframe 地址不变);三个智能体 API 在同端口
+- 首页 `http://127.0.0.1:8010/`(根路径直接返回 `报价首页.html`);三个智能体 API 在同端口
   `/agents/quote/api/*`(报价)、`/agents/config/api/*`(配置)、`/agents/rule/api/*`(规则)。
 - 页面默认**同源**访问这些前缀;`localStorage['cpq:agentUrl'/'xbom:agentUrl'/'cpq:ruleAgentUrl']` 仍可覆盖成任意地址。
 - 必须用 `open-claude/.venv` 里的 Python(依赖 anthropic/openai/pdfplumber 等都在这个 venv)。
@@ -158,4 +158,4 @@ Agent 以回传数据为准重算并推进;用户改数会触发受影响分区�
 2. `process.env.CPQ_QUOTE_URL` —— 构建期注入
 3. `http://127.0.0.1:8010/` —— 默认(本 `serve.py`)
 
-生产环境把 `报价首页(1).html` 部署到任意静态站点,再用 `CPQ_QUOTE_URL` 指向该地址即可。
+生产环境把 `报价首页.html` 部署到任意静态站点,再用 `CPQ_QUOTE_URL` 指向该地址即可。

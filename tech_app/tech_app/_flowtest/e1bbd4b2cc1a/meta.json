@@ -1,0 +1,16 @@
+{
+  "project_id": "e1bbd4b2cc1a",
+  "source_filename": "draw.png",
+  "source_path": "source.png",
+  "note": "主页测试：45钢法兰盘工艺评估",
+  "owner": "system",
+  "owner_display_name": "系统",
+  "attachments": [
+    "req.txt"
+  ],
+  "created_at": "2026-07-23 15:34:57",
+  "stages": {
+    "uploaded": "2026-07-23 15:34:57",
+    "requirement": "2026-07-23 15:34:58"
+  }
+}

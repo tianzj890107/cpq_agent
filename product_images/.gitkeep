@@ -1,0 +1,3 @@
+# 产品图片目录
+# 文件名 = product_para_value.product_item_code（成品编码），扩展名沿用上传时的原扩展名。
+# 由 cpq_image_server.py（:8011）读写；此文件仅用于让空目录进入 git。

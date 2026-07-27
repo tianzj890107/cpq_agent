@@ -3,10 +3,10 @@
 配置报价 CPQ —— 报价首页静态服务
 
 把本文件夹(配置报价CPQ)下的「报价首页.html」及配套静态资源通过 HTTP 暴露出来,
-供 EIMOS 产品平台「配置报价管理(CPQ) → 报价管理」菜单以 iframe 内嵌。
+提供 CPQ 前端页面的纯静态访问。
 
 设计:
-  - 根路径 "/" 直接返回「报价首页.html」,这样 EIMOS iframe 只需指向
+  - 根路径 "/" 直接返回「报价首页.html」,这样只需指向
     http://127.0.0.1:8010/ ,不必在 URL 里出现中文文件名。
   - 其余路径按文件名在本目录内取静态文件(确认需求解析结果.html 等)。
   - 统一 UTF-8、禁用缓存,便于改完页面刷新即见最新效果。
@@ -31,7 +31,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-HOME_PAGE = "报价首页(1).html"  # 入口直达三智能体整合页（原登录页 首页.html 已弃用，2026-07-16）
+HOME_PAGE = "报价首页.html"  # 入口直达三智能体整合页（原登录页 首页.html 已弃用，2026-07-16）
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -69,7 +69,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        # 允许被 EIMOS(不同端口)以 iframe 内嵌
+        # 允许跨源读取/内嵌
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         if self.command != "HEAD":
@@ -102,7 +102,6 @@ def main():
     print("配置报价 CPQ · 报价首页 服务已启动")
     print("  目录 : %s" % BASE_DIR)
     print("  首页 : http://127.0.0.1:%d/   ->  %s" % (port, HOME_PAGE))
-    print("  在 EIMOS「配置报价管理(CPQ) → 报价管理」中以 iframe 内嵌该地址。")
     print("  Ctrl+C 停止。")
     try:
         httpd.serve_forever()

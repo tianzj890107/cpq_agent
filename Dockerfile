@@ -24,8 +24,15 @@ RUN pip install \
       --trusted-host mirrors.aliyun.com \
       -r requirements.txt
 
+# 1b) 技术工艺 App（内嵌 process_drawing 全链路 FastAPI）依赖已并入上面的 requirements.txt
+#     （fastapi/uvicorn/python-multipart/sqlalchemy/python-dotenv/pydantic；openai/anthropic/pypdf 共用）。
+#     几何生成用的 cadquery(OpenCASCADE) 体积大且为可选（未装时仅「生成几何/STEP/STL」返回 503，
+#     工艺评估/图纸解析/报告的 LLM 全链路不受影响）。如需几何能力，在 requirements.txt 取消 cadquery 注释
+#     并加装 OCCT 运行时库(libgl1 libglu1-mesa libxrender1 libxext6 libsm6)。
+
 # 2) 再拷应用源码（含 open-claude/ 引擎——已编译为 .pyc 的字节码形态（源码保护），走 sys.path 引用，不 pip 安装；
-#    .venv / 机密 settings / 历史 / 大表格 已由 .dockerignore 排除）。
+#    也含 tech_app/（技术工艺全链路，由 cpq_suite_server 拉起 uvicorn 子进程并 8010 反向代理）；
+#    .venv / 机密 settings / 历史 / 大表格 / tech_app 运行时数据 已由 .dockerignore 排除）。
 COPY . .
 
 # 3) 业务数据源 = 远程 Postgres，默认取需求给定值，均可用环境变量覆盖。
