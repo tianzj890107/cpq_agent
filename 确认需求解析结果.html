@@ -1111,6 +1111,8 @@
     // 只切换右侧面板展示的步骤（不通知 Agent）；用于点进度条查看/编辑历史步骤
     function showStep(n) {
       shownStep = n;
+      // 第 2 步「工艺确认」的两张表沿用第 1 步：任何路径切到第 2 步都补齐一次（已有内容不覆盖）
+      if (n === 2) maybeSyncStep2();
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
@@ -1961,6 +1963,24 @@
 
     function wfUser() { return (window.cpqAuth && cpqAuth.user()) || null; }
 
+    /* 等登录态出结果再走流程。
+       cpq_auth.js 是在本内联脚本之后加载的，boot() 一开跑时 window.cpqAuth 还不存在——
+       不等它就会误判成「未登录」，从而跳过角色匹配、直接把 kickoff 发给智能体（抢跑）。
+       登录服务不可用时 cpq_auth.js 也会照常派发 ready 事件，所以正常不会等满超时。 */
+    function waitForAuth(timeoutMs) {
+      const done = () => window.cpqAuth && window.cpqAuth.ready && window.cpqAuth.ready();
+      if (done()) return Promise.resolve();
+      return new Promise(resolve => {
+        let fired = false;
+        const fin = () => { if (!fired) { fired = true; clearInterval(iv); resolve(); } };
+        document.addEventListener('cpq-auth-ready', fin, { once: true });
+        const t0 = Date.now();
+        const iv = setInterval(() => {
+          if (done() || Date.now() - t0 > (timeoutMs || 3000)) fin();
+        }, 40);
+      });
+    }
+
     async function wfApi(path, opts) {
       if (!window.cpqAuth) throw new Error('未加载登录模块');
       return cpqAuth.api(path, opts);
@@ -2298,6 +2318,7 @@
         const f = FORMS.find(x => x.section_id === dst);
         if (!f) return;
         const rows = extractSectionRows(src);
+        if (!rows.length) return;   // 第1步这张表本来就是空的：保留空骨架，别把已有内容抹掉
         renderTableSection({
           action: 'render_table', step: f.step, section_id: dst,
           title: f.title, editable: f.editable, columns: f.columns || [], rows,
@@ -2305,6 +2326,19 @@
       });
       // 若第2步当前正显示，确保切换后可见
       if (shownStep === 2) sections.forEach(sec => { if (sec.step === 2) sec.el.style.display = ''; });
+    }
+
+    /* 进入/显示第 2 步时自愈：只要第 2 步两张表还是空的、而第 1 步有数据，就自动沿用过来。
+       覆盖所有进入路径——接手人打开卡片被纠正到第 2 步、点进度条回看、刷新页面、
+       以及未登录（没有「开始本步骤」按钮）的情况；confirmStep / wfStartStep 里的显式调用保留，
+       用于交接当下强制按第 1 步最新值刷新。 */
+    function maybeSyncStep2() {
+      if (!FORMS.length) return;
+      if (extractSectionRows('s2_products').length ||
+          extractSectionRows('s2_techparams').length) return;   // 已有内容，不覆盖
+      if (!extractSectionRows('s1_products').length &&
+          !extractSectionRows('s1_techparams').length) return;   // 第1步没数据，无从沿用
+      syncStep2FromStep1();
     }
 
     function goPrev() {
@@ -2687,6 +2721,7 @@
     async function boot() {
       renderProgressBar();
       $('stepBadge').textContent = '等待开始';
+      await waitForAuth();   // 先拿到登录态，后面才能正确匹配角色、决定是否等用户点「开始」
 
       let requirement = '', files = [], fileContents = [];
       let projectName = '', projectCode = '', customer = '';
@@ -2768,7 +2803,15 @@
       // 未登录（无角色体系）时保持原有行为，直接开始。
       if (wfUser() && WF.loaded) {
         PENDING_KICKOFF = { text: kickoffFull, display: kickoffBubble };
-        wfMaybePromptStart();
+        if (WF.canEdit) {
+          wfMaybePromptStart();     // 角色匹配 -> 出现「开始第 1 步」按钮
+        } else {
+          // 角色不匹配：不能开工，也不要把需求悄悄丢掉，明确告诉用户下一步怎么走
+          addAiBubble('第 1 步「' + STEPS[0] + '」由**' + WF.needRole + '**负责，你是' +
+            wfUser().role_name + '，无法开始。\n\n' +
+            '你填写/上传的需求已随本卡片保存。请点下方「转交任务」把卡片推送给' + WF.needRole +
+            '，对方开始第 1 步时即可继续。');
+        }
         return;
       }
       sendToAgent(kickoffFull, { echo: false, display: kickoffBubble });

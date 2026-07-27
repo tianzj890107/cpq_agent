@@ -262,6 +262,8 @@
     close: close,
     refresh: refresh,
     user: function () { return state.user; },
+    /** 首次登录态查询是否已完成（页面要等它出结果再决定流程走向，避免抢跑） */
+    ready: function () { return state.loaded; },
     token: token,
     /** 带登录态的 fetch 封装，供后续任务流接口调用 */
     api: api,
