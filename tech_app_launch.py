@@ -2,13 +2,13 @@
 """
 技术工艺 App（照搬自 process_drawing 的 FastAPI 全链路）启动器。
 
-由 cpq_suite_server.py 作为子进程拉起：在 127.0.0.1:8020 跑 uvicorn，8010 一体化服务
+由 cpq_suite_server.py 作为子进程拉起：在 127.0.0.1:8012 跑 uvicorn，8010 一体化服务
 反向代理 /api/* /apps/* 与其前端页面到这里。大模型调用**复用 CPQ 的模型网关**——
 读取 cpq_settings.json 的「local」一节（OpenAI 兼容网关），映射成 process_drawing 的
 Qwen(OpenAI 兼容) provider，从而与四个助手用同一个模型端点。
 
 单独运行调试：
-    python tech_app_launch.py --port 8020
+    python tech_app_launch.py --port 8012
 """
 import argparse
 import json
@@ -74,7 +74,7 @@ def _apply_llm_env():
 def main():
     parser = argparse.ArgumentParser(description="技术工艺 App 启动器（uvicorn）")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8020)
+    parser.add_argument("--port", type=int, default=8012)
     args = parser.parse_args()
 
     _apply_llm_env()

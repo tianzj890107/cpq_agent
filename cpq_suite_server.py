@@ -71,7 +71,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 
 TECH_HOST = "127.0.0.1"
-TECH_PORT = int(os.getenv("TECH_APP_PORT", "8020"))
+TECH_PORT = int(os.getenv("TECH_APP_PORT", "8012"))
 # 产品图片维护服务：独立端口（默认 8011），与本服务同进程、后台线程启动
 IMAGE_PORT = int(os.getenv("CPQ_IMAGE_PORT", "8011"))
 _tech_proc = None
