@@ -2307,6 +2307,11 @@
         );
         return;
       }
+      if (next === 4) {
+        // 报价方案：纯前端用前面步骤的数据直接填写两张表，不调用智能体、不做推荐
+        fillStep4FromData();
+        return;
+      }
       sendToAgent(
         `【表单确认】第 ${cur} 步「${stepName}」用户已确认，工作台最新数据(JSON)如下：\n` +
         JSON.stringify(data, null, 1) +
@@ -2545,7 +2550,19 @@
           { echo: false, display: '开始第 2 步', step: 2 });
         return true;
       }
-      // 第 3/4 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
+      if (step === 4) {
+        // 报价方案：纯前端填写（不调用智能体）。接手人本地可能没数据，先把前面步骤恢复齐：
+        // ① 第 1 步快照（s1_basic 税率/币种等）→ ② 工艺确认后的产品沿用到第 3 步 →
+        // ③ 第 3 步确认快照（含其他加价）覆盖 —— 顺序保证工艺经理改选后的产品是权威版本
+        if (!extractSectionRows('s1_products').length) await wfRestoreStepData(1);
+        if (!extractSectionRows('s3_products').length) {
+          await ensureCarryData(3);
+          await wfRestoreStepData(3);
+        }
+        fillStep4FromData();
+        return true;
+      }
+      // 第 3 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
       if (CARRY_MAP[step]) await ensureCarryData(step);
       const picked = extractSectionRows('s1_products')
         .map(r => r['成品编码']).filter(Boolean).join('、');
@@ -2906,6 +2923,82 @@
       carryProducts(step);
     }
     function maybeSyncStep2() { maybeCarry(2); }                 // 兼容旧调用名
+
+    /* ================= 第 4 步「报价方案」：纯前端填写（不调用智能体、不做推荐） =================
+       s4_basic（报价基本信息）：同名字段直接抄第 1 步测算基本信息（客户/币种/关联商机编号…），
+         另加映射 关联测算单号←测算单号；没有来源的字段留空由人工填。
+       s4_detail（报价明细）：行取第 3 步确认后的产品信息（s3_products，缺则 s1_products），
+         同名列直接抄；计算列按固定公式：报价=价格+其他加价；折后价格=报价×折扣（无折扣按 1）；
+         总金额=折后价格×数量（无数量按 1）；税率抄测算基本信息；税金=总金额×税率。 */
+    function _numOf(v) {
+      const m = String(v == null ? '' : v).replace(/[,，\s]/g, '').match(/-?\d+(\.\d+)?/);
+      return m ? parseFloat(m[0]) : null;
+    }
+    function _fmtNum(n) { return String(Math.round(n * 100) / 100); }
+    function fillStep4FromData() {
+      if (!FORMS.length) return false;
+      const basicF = FORMS.find(x => x.section_id === 's4_basic');
+      const detailF = FORMS.find(x => x.section_id === 's4_detail');
+      const d1 = collectStepData(1) || {};
+      const src1 = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
+      // ① 报价基本信息：同名字段直接抄 + 别名映射
+      if (basicF) {
+        const alias = { '关联测算单号': '测算单号', '报价单名称': '项目名称' };
+        const fields = (basicF.fields || []).map(x => {
+          let v = src1[x.key];
+          if ((v == null || !String(v).trim()) && alias[x.key]) v = src1[alias[x.key]];
+          return { key: x.key, label: x.label, type: 'text', value: (v != null ? String(v) : '') };
+        });
+        renderFormSection({
+          action: 'render_form', step: basicF.step, section_id: 's4_basic',
+          title: basicF.title, editable: basicF.editable, fields: fields,
+        });
+      }
+      // ② 报价明细：逐产品行同名抄 + 固定公式计算
+      let rows = [];
+      if (detailF) {
+        const prows = extractSectionRows('s3_products');
+        const srcRows = prows.length ? prows : extractSectionRows('s1_products');
+        const taxRaw = src1['税率'];
+        rows = srcRows.map(r => {
+          const row = {};
+          (detailF.columns || []).forEach(c => {
+            const v = r[c.key];
+            if (v != null && String(v).trim()) row[c.key] = v;
+          });
+          const price = _numOf(r['价格']) != null ? _numOf(r['价格']) : _numOf(r['基础成本']);
+          const extra = _numOf(r['其他加价']) || 0;
+          if (price != null) {
+            const quote = price + extra;
+            row['报价'] = _fmtNum(quote);
+            const disc = _numOf(r['折扣']);
+            const after = disc != null ? quote * (disc > 1 ? disc / 100 : disc) : quote;
+            row['折后价格'] = _fmtNum(after);
+            const qty = _numOf(r['数量']);
+            const total = after * (qty != null ? qty : 1);
+            row['总金额'] = _fmtNum(total);
+            const tr = _numOf(taxRaw);
+            if (tr != null) {
+              row['税率'] = String(taxRaw);
+              row['税金'] = _fmtNum(total * (tr > 1 ? tr / 100 : tr));
+            }
+          }
+          return row;
+        }).filter(r => Object.keys(r).length);
+        if (rows.length) {
+          renderTableSection({
+            action: 'render_table', step: detailF.step, section_id: 's4_detail',
+            title: detailF.title, editable: detailF.editable, columns: detailF.columns || [], rows,
+          });
+        }
+      }
+      addAiBubble('📄 第 4 步「报价方案」已由系统直接用前面步骤的数据填写（不调用智能体、无推荐值）：\n' +
+        '· 报价基本信息：同名字段抄自第 1 步测算基本信息（其余留空，请人工补充）\n' +
+        '· 报价明细：' + (rows.length ? rows.length + ' 行，' : '') +
+        '报价=价格+其他加价；折后价格=报价×折扣（未填折扣按不打折）；总金额=折后价格×数量；税金=总金额×税率\n\n' +
+        '请在右侧核对，可直接修改，然后点「进入下一大步骤」。');
+      return true;
+    }
 
     function goPrev() {
       if (busy || currentStep <= 1) return;
