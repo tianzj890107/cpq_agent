@@ -329,6 +329,10 @@ class Handler(BaseHTTPRequestHandler):
                                         d.get("customer", ""), d.get("project_name", ""),
                                         d.get("current_step"))
                 self._send_json(200, {"ok": True, "card": card})
+            elif path == "/wf/card/step-data" and m == "GET":
+                # 某一步确认时的表单快照：接手人用它恢复前面步骤的表格
+                self._send_json(200, {"ok": True,
+                                      "data": cpq_wf.step_snapshot(arg("session_id"), arg("step_no"))})
             elif path == "/wf/card/step-start" and m == "POST":
                 d = self._read_json()
                 card = cpq_wf.start_step(d.get("session_id", ""), d.get("step_no"), user)

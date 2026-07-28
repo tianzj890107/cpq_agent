@@ -388,6 +388,32 @@ def start_step(session_id: str, step_no: int, user: dict) -> dict:
         conn.close()
 
 
+def step_snapshot(session_id: str, step_no: int):
+    """取某一步确认时存下的表单快照（card_step.data_snapshot）。
+
+    交接过来的卡片，接手人本地 DOM 里没有前面各步的数据——尤其第 1 步的产品信息/技术参数
+    是前端直接填的、不在智能体事件流里，只能从这里恢复。"""
+    conn = cpq_auth._connect()
+    try:
+        cur = cpq_auth._exec(
+            conn, "SELECT s.data_snapshot FROM cpq_wf_card_step s"
+                  " JOIN cpq_wf_card c ON c.card_id = s.card_id"
+                  " WHERE c.session_id = %s AND s.step_no = %s",
+            (session_id, int(step_no or 0)))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row or row[0] is None:
+        return None
+    v = row[0]
+    if isinstance(v, (dict, list)):      # psycopg 会把 jsonb 直接反序列化
+        return v
+    try:
+        return json.loads(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "") -> dict:
     """把某一步标记为完成（角色不符会被拒绝）。
 

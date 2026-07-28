@@ -2233,7 +2233,14 @@
         WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
         WF.loaded = !!d.card;
       } catch (e) { WF.loaded = false; }
-      if (syncStep) wfApplyCardStep();   // 先把步骤纠正到卡片的真实位置，再渲染提示
+      if (syncStep) {
+        wfApplyCardStep();               // 先把步骤纠正到卡片的真实位置
+        // 交接过来的卡片：本地没有前面步骤的数据，从快照恢复（第 2 步还要据此沿用两张表）
+        if (currentStep === 2) await ensureStep2Data();
+        else if (currentStep > 1 && !extractSectionRows('s1_products').length) {
+          await wfRestoreStepData(1);
+        }
+      }
       wfRenderBar();
       wfMaybePromptStart();
     }
@@ -2361,7 +2368,8 @@
       addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
       if (step === 2) {
         // 工艺确认是人工核对：沿用第 1 步数据只读展示，不调智能体
-        syncStep2FromStep1();
+        // （本地没有第 1 步数据时先从卡片快照恢复——交接过来的卡片就是这种情况）
+        await ensureStep2Data();
         sendToAgent(
           `【开始步骤】用户已接手并开始第 2 步「工艺确认」——这是人工核对步骤，` +
           `产品信息列表与产品技术参数已由前端沿用第 1 步的数据只读展示，你无需查库或填表，` +
@@ -2604,6 +2612,60 @@
        覆盖所有进入路径——接手人打开卡片被纠正到第 2 步、点进度条回看、刷新页面、
        以及未登录（没有「开始本步骤」按钮）的情况；confirmStep / wfStartStep 里的显式调用保留，
        用于交接当下强制按第 1 步最新值刷新。 */
+    /* 从卡片的步骤快照恢复某一步的表格。
+       交接过来的卡片，接手人本地没有前面步骤的数据——第 1 步的产品信息/技术参数是
+       「选用产品」时前端直接填的，不在智能体事件流里，replaySession 重放不出来，
+       只能从 card_step.data_snapshot 读回。 */
+    async function wfRestoreStepData(step) {
+      if (!wfUser() || !currentSessionId || !FORMS.length) return false;
+      let snap = null;
+      try {
+        const d = await wfApi('/wf/card/step-data?session_id=' +
+          encodeURIComponent(currentSessionId) + '&step_no=' + step);
+        snap = d && d.data;
+      } catch (e) { return false; }
+      if (!snap || typeof snap !== 'object') return false;
+      let restored = false;
+      Object.keys(snap).forEach(sid => {
+        const f = FORMS.find(x => x.section_id === sid);
+        if (!f) return;
+        const payload = snap[sid] || {};
+        const data = payload['数据'] !== undefined ? payload['数据'] : payload.data;
+        if (data === undefined || data === null) return;
+        if (Array.isArray(data)) {
+          if (!data.length) return;
+          renderTableSection({
+            action: 'render_table', step: f.step, section_id: sid, title: f.title,
+            editable: f.editable, columns: f.columns || [], rows: data,
+          });
+          restored = true;
+        } else if (typeof data === 'object') {
+          const vals = Object.keys(data).filter(k => String(data[k] || '').trim());
+          if (!vals.length) return;
+          renderFormSection({
+            action: 'render_form', step: f.step, section_id: sid, title: f.title,
+            editable: f.editable,
+            fields: (f.fields || []).map(x => ({
+              key: x.key, label: x.label, type: 'text', value: data[x.key] || '',
+            })),
+          });
+          restored = true;
+        }
+      });
+      return restored;
+    }
+
+    // 进入第 2 步前确保第 1 步数据在手：本地没有就从快照恢复，然后再沿用到第 2 步
+    async function ensureStep2Data() {
+      if (extractSectionRows('s2_products').length ||
+          extractSectionRows('s2_techparams').length) return;   // 已有内容
+      if (!extractSectionRows('s1_products').length &&
+          !extractSectionRows('s1_techparams').length) {
+        await wfRestoreStepData(1);                             // 交接过来的卡片：先恢复第 1 步
+      }
+      maybeSyncStep2();
+    }
+
     function maybeSyncStep2() {
       if (!FORMS.length) return;
       if (extractSectionRows('s2_products').length ||
