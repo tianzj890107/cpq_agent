@@ -1379,6 +1379,10 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
+        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
+          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
+          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
+        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -1515,7 +1519,7 @@
       </div>
       <div class="modal-footer">
         <button class="modal-btn secondary" onclick="closeOverlays()">取消</button>
-        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
+        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存</button>
       </div>
     </div>
   </div>
@@ -2506,6 +2510,58 @@
       const sel = $('setTechText'), cust = $('setTechTextCustom');
       if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
     }
+    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
+    let SETTINGS_TAB = 'agents';
+    function switchSettingsTab(which) {
+      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
+      const body = document.querySelector('#settingsModal .modal-body');
+      if (body) {
+        Array.from(body.children).forEach(ch => {
+          if (ch.id === 'setTabs') return;
+          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
+          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
+          ch.style.display = SETTINGS_TAB === 'agents'
+            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
+            : 'none';
+        });
+      }
+      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
+        const b = $(id);
+        if (!b) return;
+        const on = SETTINGS_TAB === w;
+        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
+        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
+      });
+      const sb = $('saveSettingsBtn');
+      if (sb) {
+        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
+        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
+      }
+      if (SETTINGS_TAB === 'agents') {
+        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
+        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
+      }
+    }
+    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
+    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
+    if (typeof onModelChange === 'function') {
+      const _omcOrig = onModelChange;
+      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
+    }
+    if (typeof onThinkingChange === 'function') {
+      const _otcOrig = onThinkingChange;
+      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
+    }
+    async function saveActiveSettings() {
+      if (SETTINGS_TAB === 'tech') {
+        const m = $('techLlmMsg');
+        if (m) m.textContent = '保存中…';
+        await saveTechLlm();
+      } else {
+        await saveSettings();
+      }
+    }
+    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
     async function saveTechLlm() {
       const base = ($('setTechBase') && $('setTechBase').value.trim()) || '';
       const _techLocal = $('setTechMode') && $('setTechMode').value === 'local';
@@ -2528,7 +2584,6 @@
       } catch (e) { if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：tech_app 未就绪。'; }
     }
     async function saveSettings() {
-      await saveTechLlm();
       const o = selectedModelOption();
       const payload = {
         model: $('setModel').value,
