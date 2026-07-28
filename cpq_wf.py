@@ -27,10 +27,9 @@ from cpq_auth import ROLES
 QUOTE_STEPS = [
     (1, "确认需求配置", "sales_mgr"),
     (2, "工艺确认", "process_mgr"),
-    (3, "定价-利润加成", "sales_mgr"),
-    (4, "报价-其他加价项", "sales_mgr"),
-    (5, "报价方案", "sales_mgr"),
-    (6, "输出报价单", "sales_mgr"),
+    (3, "报价-加价项", "sales_mgr"),
+    (4, "报价方案", "sales_mgr"),
+    (5, "输出报价单", "sales_mgr"),
 ]
 ASSISTANT = "quote"
 LAST_STEP = len(QUOTE_STEPS)

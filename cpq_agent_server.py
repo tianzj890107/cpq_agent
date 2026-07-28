@@ -6,8 +6,8 @@
 「确认需求解析结果」页面所需的报价助手能力：
 
   - 业务流程：按《报价业务流程.xlsx》「亿纬锂能POC（简化）」页的 7 个 Agent 步骤
-    引导用户一步步完成报价（确认需求配置 → 工艺确认 → 定价-利润加成 →
-    报价-其他加价项 → 报价方案 → 输出报价单）。
+    引导用户一步步完成报价（确认需求配置 → 工艺确认 → 报价-加价项 →
+    报价方案 → 输出报价单）。
   - 数据口径：各步骤字段口径与基础/规则数据来自远程 Postgres（三助手共用），Agent 以
     亿纬锂能DA梳理.xlsx 的库 schema（本体语义层）为上下文，通过只读 sql_query 工具生成 SQL 取数。
   - 工作台驱动：注入一个自定义 cpq_ui 工具（set_step / render_form / render_table /
@@ -83,8 +83,7 @@ DISABLED_TOOLS = ("Write", "Edit", "Bash", "Skill", "Agent", "Grep", "Glob")
 STEPS = [
     "确认需求配置",
     "工艺确认",
-    "定价-利润加成",
-    "报价-其他加价项",
+    "报价-加价项",
     "报价方案",
     "输出报价单",
 ]
@@ -110,10 +109,10 @@ CPQ_UI_SCHEMA = {
             "action": {
                 "type": "string",
                 "enum": ["set_step", "render_form", "render_table", "render_document", "focus_section"],
-                "description": "set_step=切换当前步骤(1-6)；render_form=渲染键值表单；render_table=渲染行列表格；render_document=渲染文档(报价单)；focus_section=把某个已渲染分区设为“当前处理中”并高亮滚动到它（不改内容）",
+                "description": "set_step=切换当前步骤(1-5)；render_form=渲染键值表单；render_table=渲染行列表格；render_document=渲染文档(报价单)；focus_section=把某个已渲染分区设为“当前处理中”并高亮滚动到它（不改内容）",
             },
             "step": {"type": "integer", "minimum": 1, "maximum": 6,
-                     "description": "该内容所属的流程步骤（1-6）。所有 action 都必须携带。"},
+                     "description": "该内容所属的流程步骤（1-5）。所有 action 都必须携带。"},
             "section_id": {"type": "string",
                            "description": "分区唯一标识，如 s1_basic。render_* 必填；同 id 重复渲染会覆盖旧内容。"},
             "title": {"type": "string", "description": "分区标题（中文）"},
@@ -185,20 +184,17 @@ _BI_SECTIONS = {
     # —— 第 2 步 工艺确认 —— 人工核对产品信息列表 + 产品技术参数（沿用第1步，仅展示确认），不调用智能体
     "s2_products":   ("table", "产品信息列表（沿用·仅确认）", ("价格测算单", "产品信息"),     False),
     "s2_techparams": ("table", "产品技术参数（沿用·仅确认）", ("价格测算单", "产品技术参数"), False),
-    # —— 第 3 步 定价-利润加成 —— 产品信息仅展示 + 加价信息
+    # —— 第 3 步 报价-加价项 —— 产品信息仅展示 + 加价明细（原第 3 步定价-利润加成已取消）
     "s3_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),     False),
-    "s3_markup":     ("table", "加价信息",                 ("价格测算单", "加价明细"),     False),
-    # —— 第 4 步 报价-其他加价项 —— 产品信息仅展示 + 加价明细
-    "s4_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),     False),
-    "s4_markup":     ("table", "加价明细",                 ("价格测算单", "加价明细"),     False),
-    # —— 第 5 步 报价方案 —— 报价基本信息 + 报价明细
-    "s5_basic":      ("form",  "报价基本信息",             ("报价单", "报价基本信息"),     True),
-    "s5_detail":     ("table", "报价明细",                 ("报价单", "报价明细"),         True),
+    "s3_markup":     ("table", "加价明细",                 ("价格测算单", "加价明细"),     False),
+    # —— 第 4 步 报价方案 —— 报价基本信息 + 报价明细
+    "s4_basic":      ("form",  "报价基本信息",             ("报价单", "报价基本信息"),     True),
+    "s4_detail":     ("table", "报价明细",                 ("报价单", "报价明细"),         True),
 }
 
-# 计算类分区：仅第 6 步 BPM 审批流（xlsx 无对应实体，列固定写死）。
+# 计算类分区：仅第 5 步 BPM 审批流（xlsx 无对应实体，列固定写死）。
 _COMPUTED_SECTIONS = {
-    "s6_bpm": ("table", "BPM 审批流环节", ["环节", "角色", "状态", "处理意见"]),
+    "s5_bpm": ("table", "BPM 审批流环节", ["环节", "角色", "状态", "处理意见"]),
 }
 
 # 前缀匹配分区：已无（旧 s2_bom_ 树形 BOM 由实例BOM头/行表取代）。
@@ -258,9 +254,8 @@ _EXTRA_COLS = {}
 
 # 展示名覆盖：只改前端表头文字，**不动 key**——key 仍是 DA 里的属性名，
 # 入库映射（clm_calc_product.price）、取价填表、历史快照都靠它对齐，改了就断。
-_LABEL_OVERRIDE = {
-    ("价格测算单", "产品信息"): {"价格": "成本"},
-}
+# （产品信息的「价格」列曾改显示为「成本」，现已按需求改回原名，故当前无覆盖项。）
+_LABEL_OVERRIDE = {}
 
 
 def _init_fixed_forms():
@@ -472,7 +467,7 @@ def _log_write(raw: dict, ti: dict):
 # 产品分区一律受控：s1 由 match_products+选用产生；s2/s3/s4 只能沿用第 1 步的产品，
 # 模型若在后续步骤里"重新选品"塞进库里不存在的编码，同样直接拦下。
 _PRODUCT_GUARDED = ("s1_products", "s1_techparams",
-                    "s2_products", "s2_techparams", "s3_products", "s4_products")
+                    "s2_products", "s2_techparams", "s3_products")
 
 
 def _unknown_product_codes(ti: dict) -> list:
@@ -516,8 +511,8 @@ def _handle_cpq_ui(tool_input: dict) -> str:
     if action not in ("set_step", "render_form", "render_table", "render_document", "focus_section"):
         return f"未知 action: {action!r}"
     step = tool_input.get("step")
-    if not isinstance(step, int) or not (1 <= step <= 6):
-        return "step 必须是 1-6 的整数"
+    if not isinstance(step, int) or not (1 <= step <= len(STEPS)):
+        return f"step 必须是 1-{len(STEPS)} 的整数"
     if action != "set_step" and not tool_input.get("section_id"):
         return "render_*/focus_section 必须提供 section_id"
     raw = dict(tool_input)
@@ -1104,7 +1099,7 @@ def _handle_sql_query(tool_input: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 导入数据库：把工作台各分区数据写入远程 Postgres 的 DA 目标表（第 6 步「导入数据库」按钮）。
+# 导入数据库：把工作台各分区数据写入远程 Postgres 的 DA 目标表（第 5 步「导入数据库」按钮）。
 #  - 中文属性名 → 列 code 由 亿纬锂能DA梳理.xlsx「报价助手」本体映射（含隐藏字段——有值就存）；
 #  - **主键(id)由雪花算法生成**（cpq_db.snow_next_id）；**外键按 ER 关系引用父表已生成的主键**；
 #    这些 id 只存后台、前台不展示，但写库时按下方 ER 关系装配好。
@@ -1112,7 +1107,7 @@ def _handle_sql_query(tool_input: dict) -> str:
 # ---------------------------------------------------------------------------
 
 # section_id -> (目标表, 说明)。按 ER 依赖顺序排列：父表在前、子表在后。
-# s2/s3/s4_products 各步骤对产品信息的更新在导入前合并进 s1_products（见 _merge_product_rows），
+# s2/s3_products 各步骤对产品信息的更新在导入前合并进 s1_products（见 _merge_product_rows），
 # 最终把合并后的完整产品信息写入 clm_calc_product；BPM/文档不入库。
 _IMPORT_SEQ = [
     ("s1_basic",     "clm_calc_base_info",    "测算基本信息"),   # 价格测算单根：calc_order_id
@@ -1122,16 +1117,15 @@ _IMPORT_SEQ = [
     ("s1_payment",   "clm_calc_payment",      "付款信息"),
     ("s1_logistics", "clm_calc_logistics",    "物流信息"),
     # 第2步已改为「工艺确认」（仅人工核对产品信息/技术参数，不新增入库数据；技术参数由 s1_techparams 入库）
-    ("s3_markup",    "clm_calc_markup_item",  "加价信息(定价)"),
-    ("s4_markup",    "clm_calc_markup_item",  "加价明细(报价)"),
-    ("s5_basic",     "clm_quote_base_info",   "报价基本信息"),   # 报价单根：quote_order_id
-    ("s5_detail",    "clm_quote_product",     "报价明细"),
+    ("s3_markup",    "clm_calc_markup_item",  "加价明细(报价)"),
+    ("s4_basic",     "clm_quote_base_info",   "报价基本信息"),   # 报价单根：quote_order_id
+    ("s4_detail",    "clm_quote_product",     "报价明细"),
 ]
 
 
 # 产品信息在第 1-4 步都会展示并被 Agent/用户更新（s1 可编辑，s2/s3/s4 每步重渲染带最新值）。
 # 前端导入时会把四个分区都发过来，这里按步骤顺序合并成一份完整的产品信息再入库。
-_PRODUCT_SECTIONS = ("s1_products", "s2_products", "s3_products", "s4_products")
+_PRODUCT_SECTIONS = ("s1_products", "s2_products", "s3_products")
 
 
 def _merge_product_rows(sections: dict) -> list:
@@ -1194,7 +1188,7 @@ def _import_quote(payload: dict) -> dict:
         行的 parent_line_id 同时回填父行 bom_line_id（顶层为空）。这是后台实际表内容，与前端展示无关；
       - 加价明细 clm_calc_markup_item：主键 markup_item_id 雪花生成；product_line_id 走通用
         产品外键回填（按「产品型号」匹配，缺省取首个产品行）；rule_category 缺省按步骤兜底
-        （s3_markup=定价 / s4_markup=报价）；
+        （定价-利润加成步骤已取消，s3_markup 一律=报价）；
       - 其余表自身主键：不显式给值，交由 PG 列默认 snow_next_id() 自动生成。
     """
     if not isinstance(payload, dict):
@@ -1271,7 +1265,7 @@ def _import_quote(payload: dict) -> dict:
                         if "markup_item_id" in cols:
                             cr["markup_item_id"] = cpq_db.snow_next_id(conn)
                         if "rule_category" in cols and not str(cr.get("rule_category", "")).strip():
-                            cr["rule_category"] = "定价" if sid == "s3_markup" else "报价"
+                            cr["rule_category"] = "报价"   # 定价-利润加成步骤已取消，只剩报价加价项
                     # —— BOM 头主键 & 行引用 ——
                     if table == "clm_calc_bom_head":
                         hid = cpq_db.snow_next_id(conn)
@@ -1392,42 +1386,31 @@ SYSTEM_PROMPT = """\
   **这一步无需你做任何事**：不查库、不套规则、不算成本、不调用任何 cpq_ui 工具。两张表由前端自动沿用第 1 步已确认的
   产品信息与产品技术参数、以只读方式展示，交由**工艺经理**人工核对确认。你收到「进入第 2 步」的消息时，
   只在聊天里用一句话说明「工艺确认为人工核对产品信息与技术参数，请核对后点『进入下一大步骤』」即可，然后停下等用户。
-- **第 3 步｜定价-利润加成**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价信息）。
+- **第 3 步｜报价-加价项**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价明细）。
   ⚠️ **产品早已在第 1 步选定、第 2 步经工艺经理确认——本步及以后一律沿用，绝不允许重新匹配/更换产品，
-  绝不允许调用 match_products（它只属于第 1 步）**。s3_products 由前端自动带入第 1 步的产品行；
-  你只把算出的利润加成写回该表的「利润加成」列（render_table 时保持原有行与成品编码原样不动，
+  绝不允许调用 match_products（它只属于第 1 步）**。s3_products 由前端自动带入前面步骤确认的产品行；
+  你只写回「其他加价」列（render_table 时保持原有行与成品编码原样不动，
   库里不存在的编码会被系统直接拒绝）。
-  **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
-  ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
-     WHERE rule_classification='定价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
-     **把该分类下的所有定价规则一次性取回来**
-     （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许凭记忆/跳过查询直接填表——
-     没执行这条查询就不许填 s3_markup）。
-     （规则分类=定价、加价项名称=规则名、加价值=金额/系数），并把利润加成写回 s3_products 的「利润加成」列；
-     聊天小结写明「共取回 N 条定价规则，命中：规则名 → 取值」或「定价规则均未命中」。
-  ② 复核并确认产品定价过程及利润加成金额，用户确认后提交报价测算，进入下一步。
-- **第 4 步｜报价-其他加价项**。分区：s4_products（产品信息·沿用·仅展示）、s4_markup（加价明细）。
-  ⚠️ **产品沿用规则同第 3 步：只用第 1 步选定的产品，禁止重新匹配/更换、禁止 match_products**；
-  s4_products 由前端自动带入，你只写回「其他加价」列。
   **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
   ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
      WHERE rule_classification='报价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
      **把该分类下的所有报价规则一次性取回来**
-     （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许沿用第 3 步的定价规则结果或凭记忆填表——
-     没执行这条查询就不许填 s4_markup）。（规则分类=报价），并把其他加价写回 s4_products 的「其他加价」列；
+     （就用这条 SQL，不要加 LIMIT、不要加别的过滤条件、更不许凭记忆/跳过查询直接填表——
+     没执行这条查询就不许填 s3_markup）。（规则分类=报价、加价项名称=规则名、加价值=金额/系数），
+     并把其他加价写回 s3_products 的「其他加价」列；
      聊天小结写明「共取回 N 条报价规则，命中：规则名 → 加价金额」或「报价规则均未命中」。
   ② 复核产品加价项明细及加价金额，用户确认后提交报价测算，进入下一步。
-- **第 5 步｜报价方案**。分区：s5_basic（报价基本信息）、s5_detail（报价明细）。子步骤：
-  ① 填写**报价类型、报价单模板（报价模板）、报价形式**及其余报价单基本信息（s5_basic，来自前面步骤已确认的
+- **第 4 步｜报价方案**。分区：s4_basic（报价基本信息）、s4_detail（报价明细）。子步骤：
+  ① 填写**报价类型、报价单模板（报价模板）、报价形式**及其余报价单基本信息（s4_basic，来自前面步骤已确认的
      客户/项目/币种/商机等 + 合理推荐）；
-  ② 填写报价明细（s5_detail）：产品系列/产品型号/版本扩展/方案描述/规格/数量沿用第 1 步 s1_products 原值；
-     **报价 = 基础成本 + 利润加成 + 其他加价**（利润加成/其他加价来自第 3、4 步确认值；
-     **基础成本取第 1 步 s1_products 的「成本」列**（该列 key 仍是「价格」，界面显示为「成本」，
-     值来自 md_clm_material_cost_cnf.material_unit_price）——第 2 步已改为工艺确认，不再计算 BOM 基础成本）；
+  ② 填写报价明细（s4_detail）：产品系列/产品型号/版本扩展/方案描述/规格/数量沿用第 1 步 s1_products 原值；
+     **报价 = 基础成本 + 其他加价**（其他加价来自第 3 步确认值；
+     **基础成本取第 1 步 s1_products 的「价格」列**（值来自 md_clm_material_cost_cnf.material_unit_price）
+     ——第 2 步为工艺确认，不计算 BOM 基础成本；定价-利润加成步骤已取消，无利润加成项）；
      **折后价格 = 报价 × 折扣**；
      总金额 = 折后价格 × 数量；税率/税金按测算基本信息的税率计算。
   ③ 生成并导入报价单附件（提示用户可点「导出报价单」），提交 BPM 审批，进入下一步。
-- **第 6 步｜输出报价单**。render_document 渲染报价单文档（section_id=s6_doc），再 s6_bpm（表·BPM 审批流环节：
+- **第 5 步｜输出报价单**。render_document 渲染报价单文档（section_id=s5_doc），再 s5_bpm（表·BPM 审批流环节：
   环节/角色/状态/处理意见——按 审批报价单 → 回传报价单审批结果 → 报价单用印 三个环节填入），告知用户流程完成。
 
 # 固定表单：结构已预渲染，但你必须主动"填值"（务必遵守）
@@ -1459,8 +1442,8 @@ SYSTEM_PROMPT = """\
    - `product_para_value` —— **产品参数值表**（配置助手页）：第 1 步产品匹配用（完整列清单/筛选方式见「业务流程」第 1 步②）。
    - `md_clm_material_cost_cnf` —— **物料成本表**：第 1 步取产品价格（取法见「业务流程」
      对应步骤；注意 is_deleted = false 与生效/失效日期）。
-   - `md_clm_material_price_rule` —— **产品定价规则**，按 `rule_classification` 分流：'定价' 第 3 步用、'报价' 第 4 步用
-     （必须取全后逐条匹配，见「业务流程」）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
+   - `md_clm_material_price_rule` —— **产品定价规则**：只用 `rule_classification`='报价' 的规则（第 3 步加价项；
+     '定价' 分类随定价-利润加成步骤取消，本流程不再使用；必须取全后逐条匹配，见「业务流程」）。`rule_expression` 是伪代码，按其语义人工判断执行，不要照抄进表格。
    - **⚠️ 表访问边界（重要规则）**：做数据提取时，亿纬锂能DA梳理文档里你只能访问**配置助手页、规则助手页**
      对应的表（如 md_clm_distribution_rule / md_clm_material_cost_cnf / md_clm_material_price_rule 等 md_* 主数据表），
      **报价助手页对应的任何实际业务表（clm_calc_* 价格测算单各表、clm_quote_* 报价单各表）一律禁止用 sql_query 访问**
@@ -1502,8 +1485,8 @@ SYSTEM_PROMPT = """\
 进入每一大步骤，**先在聊天里按下面 4 段格式各写一两句，再动手调工具**（不许闷头连调工具、也不许一句话都不说就填表）：
 
   🤔 **思考**：这一步要解决什么、依据是什么（如"电量 280kWh 属大电量，必选液冷"）。
-  📋 **规划**：打算查哪张表、按什么规则算什么（如"查定价规则 md_clm_material_price_rule 算利润加成，写回 s3_markup"）。
-  ⚙️ **执行**：一边 sql_query 查库、一边 render_form/render_table 填表，关键动作各写半句（如"定价规则命中 2 条，利润加成已填入 s3_markup"）。
+  📋 **规划**：打算查哪张表、按什么规则算什么（如"查报价规则 md_clm_material_price_rule 算加价项，写回 s3_markup"）。
+  ⚙️ **执行**：一边 sql_query 查库、一边 render_form/render_table 填表，关键动作各写半句（如"报价规则命中 2 条，其他加价已填入 s3_markup"）。
   ✅ **结果**：本步结论 + 依据（数据库端查了哪表命中哪行 / 需求文档端用了哪些值 / 哪些是推荐），并提示用户核对后点「进入下一大步骤」。
 
 - 全程口语、简短，每段一两句即可，别长篇；但**这 4 段必须都有**——这是"Agent 的样子"的最低要求。
@@ -1513,7 +1496,7 @@ SYSTEM_PROMPT = """\
 
 - **任何算出来/查出来的结构化结果（产品信息、加价明细、报价明细等）
   都必须用 cpq_ui `render_table`/`render_form` 渲染到右侧对应分区**（第 2 步为工艺确认·人工核对·你不渲染；
-  第 3 步 s3_products/s3_markup；第 4 步 s4_products/s4_markup；第 5 步 s5_basic/s5_detail）。**绝不允许只把表格写在聊天文字里。**
+  第 3 步 s3_products/s3_markup；第 4 步 s4_basic/s4_detail）。**绝不允许只把表格写在聊天文字里。**
 - **聊天里不要贴 Markdown 表格**（不要用 `|---|` 那种）。聊天只写 2–3 句结论/依据/下一步提示；
   数据一律在右侧工作台看。这样右侧表格才是唯一真源，避免“左边一份、右边一份、对不上”。
 - 算完当步就**立刻**调用对应的 render_table 把每一行写进 `rows`（列名用该分区固定列），再在聊天里说一句

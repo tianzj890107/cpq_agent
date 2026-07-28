@@ -920,7 +920,7 @@
     // 报价助手 Agent 服务。可用 localStorage['cpq:agentUrl'] 覆盖。
     // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
-    const STEPS = ['确认需求配置', '工艺确认', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
+    const STEPS = ['确认需求配置', '工艺确认', '报价-加价项', '报价方案', '输出报价单'];
     let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
 
     /* ================= 状态 ================= */
@@ -1699,7 +1699,7 @@
       if (opts.repick && opts.picked) {
         html += '<div class="cand-sub" style="color:var(--color-primary,#4f46e5)">' +
           '<i class="ti ti-user-check"></i> 销售经理已选：<b>' + escapeHtml(opts.picked) +
-          '</b>。如工艺上需要变更，点其他产品的「改选此产品」，右侧参数与成本会自动更新。</div>';
+          '</b>。如工艺上需要变更，点其他产品的「改选此产品」，右侧参数与价格会自动更新。</div>';
       }
 
       html += '<div class="cand-scroll"><table class="cand-table"><thead><tr>' +
@@ -1823,8 +1823,8 @@
       else if (inStep2) showStep(2);
 
       const priceTxt = d.price
-        ? '成本 ' + d.price + '（取自 md_clm_material_cost_cnf.material_unit_price）' + (d.price_note || '')
-        : '⚠ 未取到成本' + (d.price_note ? '：' + d.price_note : '') + '，请人工填写';
+        ? '价格 ' + d.price + '（取自 md_clm_material_cost_cnf.material_unit_price）' + (d.price_note || '')
+        : '⚠ 未取到价格' + (d.price_note ? '：' + d.price_note : '') + '，请人工填写';
       addAiBubble((inStep2
           ? '✅ 工艺确认改选为 **' + p.code + '**（' + (d.name || p.name || '') + '），加权总分 ' + p.total + '。\n\n' +
             '· 右侧产品信息列表与产品技术参数已**更新为新选产品**（第 1、2 步同步替换）\n· '
@@ -1912,7 +1912,7 @@
         ((d.products || []).length) + '（见上表）。';
       if (d.comment) md += '\n\n**评估**：' + d.comment;
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
-      md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与成本）。';
+      md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
     }
 
@@ -2521,7 +2521,7 @@
         PENDING_KICKOFF = null;
         if (k.manual) {
           addAiBubble('当前为「无模型」模式（不调用大模型）。请直接在右侧各分区人工填写，' +
-            '每步完成后点「确认，进入下一步」；到第 6 步可直接生成报价单（Word）。');
+            '每步完成后点「确认，进入下一步」；到第 5 步可直接生成报价单（Word）。');
           sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
           return true;
         }
@@ -2554,7 +2554,7 @@
         `【开始步骤】用户已接手这张报价卡片并开始第 ${step} 步「${name}」。` +
         `之前各步已由其他同事完成，右侧工作台已载入既有数据，**不要从第 1 步重做**。` +
         (picked ? `**产品已在第 1 步选定并经工艺确认：${picked}——只能沿用，禁止重新匹配/更换产品、禁止调用 match_products**；` +
-                  `该步的产品分区已由前端自动带入，你只需把本步计算列（利润加成/其他加价）写回。` : '') +
+                  `该步的产品分区已由前端自动带入，你只需把本步计算列（其他加价）写回。` : '') +
         `请直接开始第 ${step} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
         `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${step} 步的固定分区（边做边说），最后给小结。`,
         // 带上 step：同时把会话 JSON 的进度也校正过来，避免与卡片再次脱节
@@ -2780,7 +2780,6 @@
     const CARRY_MAP = {
       2: [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']],
       3: [['s1_products', 's3_products']],
-      4: [['s1_products', 's4_products']],
     };
 
     function carryProducts(step) {
