@@ -2309,7 +2309,7 @@
       }
       if (next === 4) {
         // 报价方案：纯前端用前面步骤的数据直接填写两张表，不调用智能体、不做推荐
-        fillStep4FromData();
+        fillStep4();
         return;
       }
       sendToAgent(
@@ -2559,7 +2559,7 @@
           await ensureCarryData(3);
           await wfRestoreStepData(3);
         }
-        fillStep4FromData();
+        fillStep4();
         return true;
       }
       // 第 3 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
@@ -2935,7 +2935,70 @@
       return m ? parseFloat(m[0]) : null;
     }
     function _fmtNum(n) { return String(Math.round(n * 100) / 100); }
-    function fillStep4FromData() {
+    /* 第 4 步快速通道：只调**一次**大模型把两张表填好（不进智能体循环、不查库、不推荐无依据字段），
+       金额列由后端按固定公式确定性重算。模型调不通/解析失败时退回下面的纯本地填写。 */
+    async function fillStep4() {
+      if (!FORMS.length) return false;
+      if (manualMode) return fillStep4Local();
+      const basicF = FORMS.find(x => x.section_id === 's4_basic');
+      const detailF = FORMS.find(x => x.section_id === 's4_detail');
+      const d1 = collectStepData(1) || {};
+      const src1 = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
+      const prows = extractSectionRows('s3_products');
+      const products = prows.length ? prows : extractSectionRows('s1_products');
+      if (!products.length) return fillStep4Local();
+
+      setBusy(true);
+      const act = addToolActivity('报价方案：用前面步骤已确认的数据一次性生成报价基本信息与报价明细',
+        '报价=价格+其他加价；折后价格=报价×折扣；总金额=折后价格×数量；税金=总金额×税率');
+      showTyping();
+      let d;
+      try {
+        d = await fetch(AGENT_URL + '/api/step4/fill', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sid: currentSessionId, s1_basic: src1, products: products,
+            markup: extractSectionRows('s3_markup'),
+          }),
+        }).then(r => r.json());
+      } catch (e) {
+        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
+      }
+      hideTyping();
+      setBusy(false);
+      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      if (!d || !d.ok) {
+        addErrorBubble('报价方案自动填写失败：' + ((d && d.error) || '未知错误') + '，已改用本地规则填写。');
+        return fillStep4Local();
+      }
+      if (basicF && d.basic) {
+        renderFormSection({
+          action: 'render_form', step: basicF.step, section_id: 's4_basic',
+          title: basicF.title, editable: basicF.editable,
+          fields: (basicF.fields || []).map(x => ({
+            key: x.key, label: x.label, type: 'text',
+            value: (d.basic[x.key] != null ? String(d.basic[x.key]) : ''),
+          })),
+        });
+      }
+      if (detailF && (d.detail || []).length) {
+        renderTableSection({
+          action: 'render_table', step: detailF.step, section_id: 's4_detail',
+          title: detailF.title, editable: detailF.editable,
+          columns: detailF.columns || [], rows: d.detail,
+        });
+      }
+      addAiBubble('📄 第 4 步「报价方案」已生成（一次模型调用完成填表，未做无依据的推荐）：\n' +
+        '· 报价基本信息：' + Object.keys(d.basic || {}).length + ' 个字段取自前面步骤已确认的数据，' +
+        '没有依据的字段留空，请人工补充\n' +
+        '· 报价明细：' + (d.detail || []).length + ' 行；金额按固定公式计算——' +
+        '报价=价格+其他加价，折后价格=报价×折扣（未填折扣按不打折），总金额=折后价格×数量，税金=总金额×税率\n\n' +
+        '请在右侧核对，可直接修改，然后点「进入下一大步骤」。');
+      return true;
+    }
+
+    /* 纯本地兜底填写（无模型模式 / 接口不可用时）：同名字段直接抄 + 同样的公式。 */
+    function fillStep4Local() {
       if (!FORMS.length) return false;
       const basicF = FORMS.find(x => x.section_id === 's4_basic');
       const detailF = FORMS.find(x => x.section_id === 's4_detail');
@@ -2992,7 +3055,7 @@
           });
         }
       }
-      addAiBubble('📄 第 4 步「报价方案」已由系统直接用前面步骤的数据填写（不调用智能体、无推荐值）：\n' +
+      addAiBubble('📄 第 4 步「报价方案」已由系统用前面步骤的数据本地填写（未调用模型、无推荐值）：\n' +
         '· 报价基本信息：同名字段抄自第 1 步测算基本信息（其余留空，请人工补充）\n' +
         '· 报价明细：' + (rows.length ? rows.length + ' 行，' : '') +
         '报价=价格+其他加价；折后价格=报价×折扣（未填折扣按不打折）；总金额=折后价格×数量；税金=总金额×税率\n\n' +

@@ -1000,6 +1000,168 @@ def _handle_step1_match(data: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 第 4 步「报价方案」快速通道：一次大模型调用填两张表，金额列由本函数确定性重算。
+# 不进智能体回合循环、不查库、不做无依据的推荐——模型只负责把前面步骤已有的值
+# 对应/搬运到报价单字段上，填不了的一律留空。
+# ---------------------------------------------------------------------------
+
+_STEP4_SYS = (
+    "你是报价系统第 4 步「报价方案」的填表器。输入是前面步骤已确认的数据："
+    "测算基本信息、产品信息（含价格与其他加价）、加价明细。\n"
+    "任务：把这些已有数据对应/搬运到「报价基本信息」与「报价明细」两张表的字段上。\n"
+    "**铁律**：\n"
+    "1. 只能用输入里真实出现的值（可做同义字段对应，如 测算单号→关联测算单号、项目名称→报价单名称、"
+    "客户/币种/关联商机编号/税率 等同名直接搬）。\n"
+    "2. **输入里没有依据的字段一律留空字符串**——绝对不要推荐、不要猜测、不要编造"
+    "（如报价单号、签约主体、联系人、地址、报价有效天数等没给就留空）。\n"
+    "3. 报价明细每个产品一行，必须带上「成品编码」用于对齐。\n"
+    "4. **不要计算 报价 / 折后价格 / 总金额 / 税金**——这四列由系统按固定公式算，你填了也会被覆盖。\n"
+    "**只输出一个 JSON 对象，不要输出任何其他文字**，格式：\n"
+    '{"basic": {"字段名": "值", …}, "detail": [{"成品编码": "…", "列名": "值", …}, …]}'
+)
+
+
+def _extract_json_obj(out: str):
+    """从模型输出里抠出第一个可解析的 JSON 对象（容忍思考段/代码围栏/前后废话）。"""
+    s = (out or "").strip()
+    s = re.sub(r"<think>.*?(?:</think>|$)", "", s, flags=re.S).strip()
+    s = re.sub(r"```[a-zA-Z]*", "", s).strip()
+    cands, depth, start = [], 0, None
+    for i, ch in enumerate(s):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                cands.append(s[start:i + 1])
+    for c in reversed(cands):
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _num(v):
+    """从任意值里取数字（容忍 '13%'、'1,234.5'、'￥100'）；取不到返回 None。"""
+    m = re.search(r"-?\d+(?:\.\d+)?", str(v if v is not None else "").replace(",", "").replace("，", ""))
+    return float(m.group(0)) if m else None
+
+
+def _fmt_num(x) -> str:
+    return str(int(x)) if float(x).is_integer() else str(round(float(x), 2))
+
+
+def _ratio(v):
+    """折扣/税率归一化：13 或 '13%' -> 0.13；0.13 -> 0.13；取不到返回 None。"""
+    n = _num(v)
+    if n is None:
+        return None
+    return n / 100.0 if n > 1 else n
+
+
+def _step4_compute(rows: list, src_by_code: dict, tax_raw) -> list:
+    """确定性重算金额列（模型算的一律覆盖）：
+       报价 = 价格 + 其他加价；折后价格 = 报价 × 折扣（无折扣=不打折）；
+       总金额 = 折后价格 × 数量（无数量=1）；税金 = 总金额 × 税率。"""
+    tax = _ratio(tax_raw)
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        row = {k: ("" if v is None else str(v)) for k, v in r.items()}
+        src = src_by_code.get(str(row.get("成品编码", "")).strip()) or {}
+        price = _num(src.get("价格"))
+        if price is None:
+            price = _num(src.get("基础成本"))
+        extra = _num(src.get("其他加价")) or 0.0
+        if price is not None:
+            quote = price + extra
+            row["报价"] = _fmt_num(quote)
+            disc = _ratio(row.get("折扣") or src.get("折扣"))
+            after = quote * disc if disc is not None else quote
+            row["折后价格"] = _fmt_num(after)
+            qty = _num(row.get("数量") or src.get("数量"))
+            total = after * (qty if qty is not None else 1)
+            row["总金额"] = _fmt_num(total)
+            if tax is not None:
+                if not str(row.get("税率", "")).strip():
+                    row["税率"] = str(tax_raw)
+                row["税金"] = _fmt_num(total * tax)
+        out.append(row)
+    return out
+
+
+def _handle_step4_fill(data: dict) -> dict:
+    """POST /api/step4/fill —— 第 4 步一次性填表（单次大模型调用 + 确定性金额重算）。"""
+    t0 = time.perf_counter()
+
+    def _trace(msg):
+        print(f"[step4] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
+
+    basic_src = data.get("s1_basic") if isinstance(data.get("s1_basic"), dict) else {}
+    products = [r for r in (data.get("products") or []) if isinstance(r, dict)]
+    markup = [r for r in (data.get("markup") or []) if isinstance(r, dict)]
+    if not products:
+        return {"ok": False, "error": "前面步骤没有产品信息，无法生成报价明细。"}
+
+    basic_tpl = [f["key"] for f in (FIXED_FORMS.get("s4_basic") or {}).get("fields", [])]
+    detail_tpl = [c["key"] for c in (FIXED_FORMS.get("s4_detail") or {}).get("columns", [])]
+    src_by_code = {str(r.get("成品编码", "")).strip(): r for r in products if str(r.get("成品编码", "")).strip()}
+
+    b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
+    if b is None or b.conv.model == NO_MODEL_ID:
+        return {"ok": False, "stage": "llm",
+                "error": "当前为「无模型」模式，无法自动填写报价方案；请在右侧人工填写。"}
+
+    prompt = (
+        "【报价基本信息·字段清单】\n" + "、".join(basic_tpl) +
+        "\n\n【报价明细·列清单】\n" + "、".join(detail_tpl) +
+        "\n\n【第 1 步·测算基本信息】\n" + json.dumps(basic_src, ensure_ascii=False) +
+        "\n\n【产品信息（含价格/其他加价，报价明细按此逐行生成）】\n" +
+        json.dumps(products, ensure_ascii=False) +
+        ("\n\n【加价明细】\n" + json.dumps(markup, ensure_ascii=False) if markup else "")
+    )
+    _trace(f"调大模型 {b.conv.model}：{len(products)} 个产品，入参 {len(prompt)} 字，等待返回…")
+    t = time.perf_counter()
+    try:
+        from open_claude.api import complete
+        res = complete(b.conv.client, [{"role": "user", "content": prompt}], _STEP4_SYS,
+                       model=b.conv.model, max_tokens=4000)
+        out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
+    except Exception as e:
+        _trace(f"大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
+        return {"ok": False, "stage": "llm",
+                "error": f"报价方案填写失败：{e.__class__.__name__}: {str(e)[:160]}"}
+    _trace(f"大模型返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
+
+    obj = _extract_json_obj(out)
+    if obj is None:
+        _trace("输出不是有效 JSON，放弃。原文前 400 字：" + out[:400].replace("\n", "⏎"))
+        return {"ok": False, "stage": "llm",
+                "error": "报价方案填写结果无法解析（不是有效 JSON），请重试或人工填写。"}
+
+    # 只保留固定字段/列，杜绝模型自造字段；basic 值全部转字符串
+    raw_basic = obj.get("basic") if isinstance(obj.get("basic"), dict) else {}
+    basic = {k: ("" if raw_basic.get(k) is None else str(raw_basic.get(k)))
+             for k in basic_tpl if str(raw_basic.get(k) or "").strip()}
+    raw_detail = obj.get("detail") if isinstance(obj.get("detail"), list) else []
+    if not raw_detail:                      # 模型没给明细：按产品行兜底，公式照算
+        raw_detail = [{"成品编码": c} for c in src_by_code]
+    detail = _step4_compute(raw_detail, src_by_code, basic_src.get("税率"))
+    detail = [{k: v for k, v in r.items() if k in detail_tpl and str(v).strip()} for r in detail]
+    detail = [r for r in detail if r]
+
+    _trace(f"完成：基本信息 {len(basic)} 个字段、明细 {len(detail)} 行；"
+           f"总耗时 {time.perf_counter() - t0:.2f}s")
+    return {"ok": True, "basic": basic, "detail": detail}
+
+
+# ---------------------------------------------------------------------------
 # sql_query 工具：在亿纬锂能 DA 库（远程 Postgres）上执行只读 SQL
 # ---------------------------------------------------------------------------
 
@@ -2620,6 +2782,14 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_body()
             res = classify_intent((data.get("text") or "").strip()) or {}
             self._send_json({"intent": res.get("intent"), "rule_kind": res.get("rule_kind")})
+        elif path == "/api/step4/fill":
+            # 第 4 步报价方案：一次大模型调用填两张表 + 后端确定性重算金额列（不进智能体循环）
+            data = self._read_body()
+            try:
+                self._send_json(_handle_step4_fill(data))
+            except Exception as e:
+                traceback.print_exc()
+                self._send_json({"ok": False, "error": str(e)}, status=500)
         elif path == "/api/step1/match":
             # 第 1 步快速通道：查库 + 一次大模型评估 + 确定性六维打分（不进智能体循环）
             data = self._read_body()
