@@ -465,8 +465,23 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
             (_ts(now), cid, int(user["user_id"])))
         _log(conn, cid, None, int(user["user_id"]), "step_done", step_no, nxt,
              f"{user.get('display_name')} 完成第 {step_no} 步")
+        # 自动回传：这张卡当初是别人转交给我的（如销售经理把第 2 步工艺确认发给工艺经理），
+        # 且那个人的角色恰好能做下一步 -> 确认后直接把任务自动发回给他，不再让用户手动选择推送。
+        auto_target = None
+        if need_handoff:
+            cur = cpq_auth._exec(
+                conn, "SELECT t.from_user_id, u.display_name, u.role_code FROM cpq_wf_task t"
+                      " JOIN cpq_wf_user u ON u.user_id = t.from_user_id"
+                      " WHERE t.card_id = %s AND t.claimed_by_user_id = %s"
+                      "   AND t.from_user_id <> %s AND u.status = 'active'"
+                      " ORDER BY t.created_at DESC, t.task_id DESC LIMIT 1",
+                (cid, int(user["user_id"]), int(user["user_id"])))
+            row = cur.fetchone()
+            if row and row[2] == next_role:
+                auto_target = {"user_id": int(row[0]), "display_name": row[1] or "",
+                               "role_code": row[2]}
         _commit(conn)
-        return {
+        result = {
             "card": _fetch_card(conn, session_id),
             "need_handoff": need_handoff,
             "next_step_no": None if done_all else nxt,
@@ -476,6 +491,27 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
         }
     finally:
         conn.close()
+    if auto_target:
+        # 用独立连接走标准 send_task（消息、审计、状态流转全套照旧）；失败就退回手动推送
+        step_name = dict((s[0], s[1]) for s in QUOTE_STEPS).get(step_no, "")
+        try:
+            st = send_task(session_id, user, "user",
+                           target_user_id=str(auto_target["user_id"]),
+                           note=f"第 {step_no} 步「{step_name}」已确认，系统自动回传")
+            result["auto_handoff"] = {
+                "target_user_id": str(auto_target["user_id"]),
+                "target_name": auto_target["display_name"],
+                "target_role_name": ROLES.get(auto_target["role_code"], auto_target["role_code"]),
+                "task_id": st.get("task_id"),
+            }
+            conn2 = cpq_auth._connect()   # 卡片状态已被 send_task 更新，重新取一份返回
+            try:
+                result["card"] = _fetch_card(conn2, session_id)
+            finally:
+                conn2.close()
+        except Exception:
+            pass
+    return result
 
 
 # ---------------------------------------------------------------------------

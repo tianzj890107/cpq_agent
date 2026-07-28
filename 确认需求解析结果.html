@@ -1815,6 +1815,24 @@
       service_life: '寿命', hermeticity: '密封性',
     };
 
+    /* 新建报价弹框里的 项目名称/客户名称 -> 直接填进 s1_basic「测算基本信息」的
+       「项目名称」「客户」两个字段（确定性带入，不经大模型；其余字段留空骨架）。 */
+    function fillBasicFromProject(projectName, customer) {
+      const want = { '项目名称': (projectName || '').trim(), '客户': (customer || '').trim() };
+      if (!want['项目名称'] && !want['客户']) return;
+      const f = FORMS.find(x => x.section_id === 's1_basic');
+      if (!f) return;
+      const fields = (f.fields || []).map(x => ({
+        key: x.key, label: x.label, type: 'text',
+        value: want[x.key] != null ? want[x.key] : (want[x.label] != null ? want[x.label] : ''),
+      }));
+      if (!fields.some(x => x.value)) return;
+      renderFormSection({
+        action: 'render_form', step: f.step, section_id: 's1_basic',
+        title: f.title, editable: f.editable, fields: fields,
+      });
+    }
+
     /* 第 1 步快速通道（新建报价的首轮匹配）：不走智能体循环 ——
        ① 后端纯 SQL 取 product_para_value 的五个匹配参数；
        ② 一次大模型调用：从需求文本提取匹配参数并给一句评估（无思考循环）；
@@ -2187,6 +2205,18 @@
         setStep(next);
         if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
         await wfRefresh();
+        // 自动回传：卡片当初是别人转交给我的（如工艺经理收到的工艺确认任务），
+        // 后端确认本步时已把任务自动发回给原转交人 -> 不再弹推送窗口
+        if (h.auto_handoff) {
+          WF.pendingHandoff = null;   // 已自动交接，解除「待转交」
+          const a = h.auto_handoff;
+          addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n本卡片由 **' +
+            (a.target_role_name || '') + '·' + (a.target_name || '') +
+            '** 转交给你，系统已把下一步「第 ' + h.next_step_no + ' 步 · ' + h.next_step_name +
+            '」的任务**自动回传**给对方，无需手动推送。对方领取后会在自己的工作台继续。');
+          if (window.cpqMsg && cpqMsg.ping) cpqMsg.ping();   // 刷新消息铃铛（发出任务的站内信）
+          return;   // ← 不弹推送窗口、不通知智能体开始下一步
+        }
         addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n下一步「第 ' + h.next_step_no + ' 步 · ' +
           h.next_step_name + '」需要**' + h.next_role_name + '**完成，你无法继续。\n\n' +
           '请把这张卡片**推送**给对方（指派给某人 / 发布到公共任务池），对方领取后会在自己的工作台确认开始该步骤。');
@@ -2392,7 +2422,12 @@
       const el = $('wfStartPrompt');
       const need = u && WF.loaded && WF.canEdit && !WF.stepStarted && !WF.awaiting && !WF.pendingTask;
       if (!need) { if (el) el.remove(); return; }
-      if (el) return;                       // 已经在问了，别重复插气泡
+      if (el) {
+        // 已经在问了：若后面又追加了新气泡（如新建报价时用户的需求提问），把提醒挪到最下面，
+        // 保证「用户问题在上、开始第 N 步提醒在下」的阅读顺序
+        if (el !== chatEl.lastElementChild) { chatEl.appendChild(el); scrollChat(); }
+        return;
+      }
       const div = document.createElement('div');
       div.className = 'message message-ai';
       div.id = 'wfStartPrompt';
@@ -3206,6 +3241,9 @@
 
       // 右侧表结构写死、已预渲染出空骨架；进第 1 步即可看到 6 个固定分区
       setStep(1);
+      // 建卡弹框里填的项目名称/客户名称是权威值：直接带入「测算基本信息」的 项目名称 / 客户，
+      // 不依赖大模型（首轮快速通道也不再填这些分区）
+      fillBasicFromProject(projectName, customer);
       const hasInput = requirement || fileContents.length || files.length;
       const kickoff =
         '【会话开始】用户从报价首页进入报价流程。\n' +
