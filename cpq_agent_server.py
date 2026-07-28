@@ -785,6 +785,120 @@ def _handle_match_products(tool_input: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 第 1 步快速通道：新建报价的首轮匹配不进智能体回合循环 ——
+# ① 纯 SQL 先取 product_para_value（五个匹配参数所在表）；
+# ② 一次大模型调用：从需求文本提取匹配参数 + 一句评估（无思考循环、无工具）；
+# ③ cpq_match 按既有六维加权规则确定性打分出 Top3（规则与原来完全一致）。
+# 用户点「选用」之后的流程不变（/api/product/pick 纯 SQL 取参数与价格）。
+# ---------------------------------------------------------------------------
+
+_STEP1_EVAL_SYS = (
+    "你是报价系统第 1 步的需求评估器。输入是一份需求文本和产品库 product_para_value 里各产品的"
+    "五个匹配参数摘要（max_dimension 最大尺寸(mm) / application_scope 应用范围 / "
+    "operating_temperature 工作温度 / service_life 寿命 / hermeticity 密封性）。\n"
+    "任务：从需求文本里提取匹配参数，并结合产品库给一句简短评估。"
+    "**只输出一个 JSON 对象，不要输出任何其他文字**，格式：\n"
+    '{"max_dimension": "如 100*50*20，需求没提就空字符串", "dimension_tolerance_pct": 0, '
+    '"application_scope": "", "operating_temperature": "如 -20~60", '
+    '"service_life": "如 500次 / 5年", "hermeticity": "如 IP67", '
+    '"comment": "对需求与产品库匹配情况的一句话评估"}\n'
+    "参数必须忠实于需求文本，没提到的留空字符串，**不要编造**；"
+    "相似度打分由系统按固定的六维加权规则计算，你不用打分、不要给出分数。"
+)
+
+_STEP1_ROWS_FOR_LLM = 60      # 给大模型看的产品行数上限（只作评估参考，打分用全量）
+
+
+def _step1_rows_digest(cols, rows) -> str:
+    """产品库摘要（给大模型看）：编码 + 五个匹配参数，最多 _STEP1_ROWS_FOR_LLM 行。"""
+    idx = {c: i for i, c in enumerate(cols)}
+    keep = [cpq_match.COL_CODE, "max_dimension", "application_scope",
+            "operating_temperature", "service_life", "hermeticity"]
+    lines = [" | ".join(keep)]
+    for r in rows[:_STEP1_ROWS_FOR_LLM]:
+        vals = []
+        for c in keep:
+            i = idx.get(c)
+            v = "" if i is None or r[i] is None else str(r[i])
+            vals.append(v.replace("\n", " ")[:40])
+        lines.append(" | ".join(vals))
+    if len(rows) > _STEP1_ROWS_FOR_LLM:
+        lines.append(f"…（共 {len(rows)} 行，其余略）")
+    return "\n".join(lines)
+
+
+def _parse_step1_json(out: str):
+    """解析大模型的一次性评估输出；失败返回 (None, '')。"""
+    s = (out or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", s).strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        return None, ""
+    try:
+        obj = json.loads(s[i:j + 1])
+    except json.JSONDecodeError:
+        return None, ""
+    if not isinstance(obj, dict):
+        return None, ""
+    req = {k: obj.get(k) for k in ("max_dimension", "dimension_tolerance_pct",
+                                   "application_scope", "operating_temperature",
+                                   "service_life", "hermeticity")}
+    return req, str(obj.get("comment") or "").strip()
+
+
+def _handle_step1_match(data: dict) -> dict:
+    """POST /api/step1/match —— 第 1 步产品匹配快速通道（新建报价 kickoff 用）。"""
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "缺少需求文本"}
+
+    # ① 先查库（纯 SQL，不经大模型）
+    sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
+    try:
+        cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
+    except Exception as e:
+        return {"ok": False, "stage": "db",
+                "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
+                         f"{str(e).splitlines()[0][:160]}"}
+    if not rows:
+        return {"ok": False, "stage": "db",
+                "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
+
+    # ② 一次大模型评估（提取需求参数；失败就如实报错，绝不编造推荐）
+    b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
+    if b is None or b.conv.model == NO_MODEL_ID:
+        return {"ok": False, "stage": "llm",
+                "error": "当前为「无模型」模式，无法做需求参数评估；"
+                         "请在设置里配置模型，或在右侧人工填写。"}
+    try:
+        from open_claude.api import complete
+        res = complete(
+            b.conv.client,
+            [{"role": "user", "content":
+                "【需求文本】\n" + text[:8000] +
+                "\n\n【产品库五参数摘要】\n" + _step1_rows_digest(cols, rows)}],
+            _STEP1_EVAL_SYS,
+            model=b.conv.model,
+            max_tokens=500,
+        )
+        out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
+    except Exception as e:
+        return {"ok": False, "stage": "llm",
+                "error": f"大模型评估调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
+    req, comment = _parse_step1_json(out)
+    if req is None:
+        return {"ok": False, "stage": "llm",
+                "error": "大模型评估输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
+
+    # ③ 确定性六维评分（复用 ① 已取回的数据，规则不变）
+    match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
+    match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
+    match_res["comment"] = comment
+    return match_res
+
+
+# ---------------------------------------------------------------------------
 # sql_query 工具：在亿纬锂能 DA 库（远程 Postgres）上执行只读 SQL
 # ---------------------------------------------------------------------------
 
@@ -1132,12 +1246,15 @@ SYSTEM_PROMPT = """\
   s1_logistics（**表/列表**·物流信息，可多行）。子步骤：①完善和确认测算基本信息 → ②维护目的地信息 →
   ③添加产品信息列表（技术参数随此一起填）→ ④分解付款里程碑信息 → ⑤填写物流信息 → ⑥确认并提交测算单。
   ⚠️ s1_dest、s1_logistics 是**列表（render_table，rows=[{…}]）**，不是键值表单。
-  **取数逻辑（⚠️ 按此顺序执行）**：
-  ① **文档+推测**：先从用户上传的需求文档/需求描述提取信息，结合合理推测填写 s1_basic（测算基本信息）、
-     s1_dest（目的地信息）、s1_payment（付款里程碑信息）、s1_logistics（物流信息）——文档有的直接填，
-     文档没有的给推荐值（加「（推荐）」标记）。
-  ② **产品匹配（必须调 match_products 工具，禁止自己写 SQL 查 product_para_value、禁止自己估分）**：
-     从需求文档里提取这几项，作为参数调用 **match_products**：
+  **取数逻辑（⚠️ 新建报价的首轮匹配不经过你）**：
+  ① **首轮匹配由系统自动完成**：新建报价时，系统先用纯 SQL 查 product_para_value 取五个匹配参数，
+     再做一次大模型评估，并把六维加权 Top3 推荐清单直接渲染到左侧对话框——**这一轮没有你的事**：
+     不要重复匹配、不要解析需求往 s1_basic / s1_dest / s1_payment / s1_logistics 等分区自动填内容。
+     这些分区由用户人工填写；只有用户**主动要求**你帮忙填时，才按用户提供的信息/需求文本填写
+     （文档没有的给推荐值，加「（推荐）」标记）。
+  ② **重新匹配（仅当用户在聊天里调整需求参数、明确要求重新匹配时）——必须调 match_products 工具，
+     禁止自己写 SQL 查 product_para_value、禁止自己估分**：
+     从用户给的需求信息里提取这几项，作为参数调用 **match_products**：
        · max_dimension 最大尺寸(mm)　· dimension_tolerance_pct 尺寸容差%（文档没写就不传）
        · application_scope 应用范围/使用场景　· operating_temperature 工作温度区间
        · service_life 寿命要求　· hermeticity 密封性(IP等级)
@@ -2415,6 +2532,14 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_body()
             res = classify_intent((data.get("text") or "").strip()) or {}
             self._send_json({"intent": res.get("intent"), "rule_kind": res.get("rule_kind")})
+        elif path == "/api/step1/match":
+            # 第 1 步快速通道：查库 + 一次大模型评估 + 确定性六维打分（不进智能体循环）
+            data = self._read_body()
+            try:
+                self._send_json(_handle_step1_match(data))
+            except Exception as e:
+                traceback.print_exc()
+                self._send_json({"ok": False, "error": str(e)}, status=500)
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()

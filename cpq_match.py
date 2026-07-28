@@ -238,20 +238,25 @@ def score_row(req: dict, row: dict) -> dict:
     return {"detail": detail, "total": round(total, 1), "warnings": warnings}
 
 
-def match(req: dict, top_n: int = 3, drop_oversize: bool = True) -> dict:
+def match(req: dict, top_n: int = 3, drop_oversize: bool = True, data=None) -> dict:
     """按需求给出推荐清单。
 
     req —— 需求参数（max_dimension / application_scope / operating_temperature /
            service_life / hermeticity / dimension_tolerance_pct）
+    data —— 可选 (cols, rows)：调用方已经取回的 product_para_value 数据，传入则不再查库
+            （第 1 步快速通道先查库再评估，共用同一次取数）。
     返回 {ok, products(TopN), all_count, threshold, below_threshold, advice, error}
     """
     sql = f"SELECT * FROM {PRODUCT_TABLE}"
-    try:
-        cols, rows = cpq_db.run_select(sql, FETCH_LIMIT)
-    except Exception as e:
-        return {"ok": False, "error": f"读取 {PRODUCT_TABLE} 失败：{str(e).splitlines()[0][:160]}",
-                "products": [], "all_count": 0,
-                "source": {"db": cpq_db.DB_LABEL, "table": PRODUCT_TABLE, "sql": sql, "rows": 0}}
+    if data is not None:
+        cols, rows = data
+    else:
+        try:
+            cols, rows = cpq_db.run_select(sql, FETCH_LIMIT)
+        except Exception as e:
+            return {"ok": False, "error": f"读取 {PRODUCT_TABLE} 失败：{str(e).splitlines()[0][:160]}",
+                    "products": [], "all_count": 0,
+                    "source": {"db": cpq_db.DB_LABEL, "table": PRODUCT_TABLE, "sql": sql, "rows": 0}}
     # 取数出处：前端「操作轨迹」与推荐清单都要显示，让用户看得见确实查了库
     source = {"db": cpq_db.DB_LABEL, "table": PRODUCT_TABLE, "sql": sql, "rows": len(rows)}
 

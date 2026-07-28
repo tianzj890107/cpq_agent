@@ -1815,6 +1815,46 @@
       service_life: '寿命', hermeticity: '密封性',
     };
 
+    /* 第 1 步快速通道（新建报价的首轮匹配）：不走智能体循环 ——
+       ① 后端纯 SQL 取 product_para_value 的五个匹配参数；
+       ② 一次大模型调用：从需求文本提取匹配参数并给一句评估（无思考循环）；
+       ③ 后端按原六维加权规则确定性打分出 Top3。用户点「选用」之后的流程不变。 */
+    async function step1FastMatch(text) {
+      setBusy(true);
+      const act = addToolActivity('产品匹配：查询产品参数值表（远程 Postgres）→ 一次大模型评估 → 六维加权评分',
+        'SELECT * FROM product_para_value');
+      showTyping();
+      let d;
+      try {
+        d = await fetch(AGENT_URL + '/api/step1/match', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, sid: currentSessionId }),
+        }).then(r => r.json());
+      } catch (e) {
+        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
+      }
+      hideTyping();
+      setBusy(false);
+      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      if (!d || !d.ok) {
+        addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
+        return;
+      }
+      renderCandidates({
+        action: 'chat_candidates', step: 1,
+        requirement: d.requirement || {}, products: d.products || [],
+        weights: d.weights || {}, threshold: d.threshold,
+        below_threshold: d.below_threshold, advice: d.advice,
+        all_count: d.all_count, source: d.source || {},
+      });
+      let md = '🔎 已查库并完成六维加权评分：共评估 ' + (d.all_count || 0) + ' 个产品，推荐 Top' +
+        ((d.products || []).length) + '（见上表）。';
+      if (d.comment) md += '\n\n**评估**：' + d.comment;
+      if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
+      md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与成本）。';
+      addAiBubble(md);
+    }
+
     function applyUiEvent(ui) {
       try {
         if (ui.action === 'set_step') { setStep(ui.step); return; }
@@ -2389,15 +2429,20 @@
       const el = $('wfStartPrompt');
       if (el) el.remove();
       if (opts.silent) return true;         // 同一人顺流程推进：调用方已自行通知智能体
-      // 新建报价：把暂存的 kickoff（含需求描述与附件正文）发出去，等同于原来的自动开始
+      // 新建报价：把暂存的 kickoff（含需求描述与附件正文）派发出去
       if (PENDING_KICKOFF) {
         const k = PENDING_KICKOFF;
         PENDING_KICKOFF = null;
         if (k.manual) {
           addAiBubble('当前为「无模型」模式（不调用大模型）。请直接在右侧各分区人工填写，' +
             '每步完成后点「确认，进入下一步」；到第 6 步可直接生成报价单（Word）。');
+          sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
+          return true;
         }
-        sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
+        // 第 1 步快速通道：不进智能体思考/填表/推荐循环 ——
+        // 后端先纯 SQL 查 product_para_value 五参数，再做一次大模型评估，
+        // 六维加权评分规则不变；用户「选用」之后的流程不变。
+        step1FastMatch(k.text);
         return true;
       }
       const name = STEPS[step - 1];
