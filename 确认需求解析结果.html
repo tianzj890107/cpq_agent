@@ -1162,8 +1162,8 @@
     // 只切换右侧面板展示的步骤（不通知 Agent）；用于点进度条查看/编辑历史步骤
     function showStep(n) {
       shownStep = n;
-      // 第 2 步「工艺确认」的两张表沿用第 1 步：任何路径切到第 2 步都补齐一次（已有内容不覆盖）
-      if (n === 2) maybeSyncStep2();
+      // 第 2/3/4 步的产品表沿用第 1 步：任何路径切到这些步骤都补齐一次（已有内容不覆盖）
+      if (CARRY_MAP[n]) maybeCarry(n);
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
@@ -2145,7 +2145,7 @@
         const h = WF.pendingHandoff;
         addUserBubble(`确认第 ${cur} 步「${stepName}」。`);
         setStep(next);
-        if (next === 2) syncStep2FromStep1();
+        if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
         await wfRefresh();
         addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n下一步「第 ' + h.next_step_no + ' 步 · ' +
           h.next_step_name + '」需要**' + h.next_role_name + '**完成，你无法继续。\n\n' +
@@ -2157,7 +2157,7 @@
       addUserBubble(bubble);
       setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
       // 第 2 步「工艺确认」：把第 1 步已确认的产品信息/技术参数原样沿用过来，只读展示供人工核对（不调用智能体）
-      if (next === 2) syncStep2FromStep1();
+      if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
       // 同一人顺流程继续做下一步：静默标记开工（无需再问一次「是否开始」）
       // 注意别写成 .then(wfRefresh)：那会把 wfStartStep 的返回值(true/false)当成 syncStep 传进去，
       // 误触发「按卡片纠正步骤 + 快照恢复」，把刚推进的步骤又拉回去、表格被旧快照覆盖。
@@ -2270,7 +2270,7 @@
       if (syncStep) {
         wfApplyCardStep();               // 先把步骤纠正到卡片的真实位置
         // 交接过来的卡片：本地没有前面步骤的数据，从快照恢复（第 2 步还要据此沿用两张表）
-        if (currentStep === 2) await ensureStep2Data();
+        if (CARRY_MAP[currentStep]) await ensureCarryData(currentStep);
         else if (currentStep > 1 && !extractSectionRows('s1_products').length) {
           await wfRestoreStepData(1);
         }
@@ -2413,9 +2413,15 @@
           { echo: false, display: '开始第 2 步', step: 2 });
         return true;
       }
+      // 第 3/4 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
+      if (CARRY_MAP[step]) await ensureCarryData(step);
+      const picked = extractSectionRows('s1_products')
+        .map(r => r['成品编码']).filter(Boolean).join('、');
       sendToAgent(
         `【开始步骤】用户已接手这张报价卡片并开始第 ${step} 步「${name}」。` +
         `之前各步已由其他同事完成，右侧工作台已载入既有数据，**不要从第 1 步重做**。` +
+        (picked ? `**产品已在第 1 步选定并经工艺确认：${picked}——只能沿用，禁止重新匹配/更换产品、禁止调用 match_products**；` +
+                  `该步的产品分区已由前端自动带入，你只需把本步计算列（利润加成/其他加价）写回。` : '') +
         `请直接开始第 ${step} 步：先【思考】要做什么、【规划】查哪张表/怎么算，` +
         `再【执行】用 sql_query 查库 + render_form(values)/render_table(rows) 把值填进第 ${step} 步的固定分区（边做边说），最后给小结。`,
         // 带上 step：同时把会话 JSON 的进度也校正过来，避免与卡片再次脱节
@@ -2629,8 +2635,16 @@
 
     // 工艺确认（第2步）：把第1步的产品信息列表 s1_products / 产品技术参数 s1_techparams
     // 原样搬到第2步 s2_products / s2_techparams 展示（前端本地完成，不依赖智能体）
-    function syncStep2FromStep1() {
-      [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']].forEach(([src, dst]) => {
+    /* 各步骤的「沿用第 1 步」映射：第 2 步带产品信息+技术参数；第 3/4 步带产品信息。
+       产品在第 1 步选定、第 2 步工艺确认后即固定——后续步骤只能沿用，绝不允许重新选择。 */
+    const CARRY_MAP = {
+      2: [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']],
+      3: [['s1_products', 's3_products']],
+      4: [['s1_products', 's4_products']],
+    };
+
+    function carryProducts(step) {
+      (CARRY_MAP[step] || []).forEach(([src, dst]) => {
         const f = FORMS.find(x => x.section_id === dst);
         if (!f) return;
         const rows = extractSectionRows(src);
@@ -2640,9 +2654,10 @@
           title: f.title, editable: f.editable, columns: f.columns || [], rows,
         });
       });
-      // 若第2步当前正显示，确保切换后可见
-      if (shownStep === 2) sections.forEach(sec => { if (sec.step === 2) sec.el.style.display = ''; });
+      // 若该步当前正显示，确保切换后可见
+      if (shownStep === step) sections.forEach(sec => { if (sec.step === step) sec.el.style.display = ''; });
     }
+    function syncStep2FromStep1() { carryProducts(2); }   // 兼容旧调用名
 
     /* 进入/显示第 2 步时自愈：只要第 2 步两张表还是空的、而第 1 步有数据，就自动沿用过来。
        覆盖所有进入路径——接手人打开卡片被纠正到第 2 步、点进度条回看、刷新页面、
@@ -2691,25 +2706,28 @@
       return restored;
     }
 
-    // 进入第 2 步前确保第 1 步数据在手：本地没有就从快照恢复，然后再沿用到第 2 步
-    async function ensureStep2Data() {
-      if (extractSectionRows('s2_products').length ||
-          extractSectionRows('s2_techparams').length) return;   // 已有内容
+    // 进入第 2/3/4 步前确保第 1 步数据在手：本地没有就从卡片快照恢复，再沿用到该步
+    async function ensureCarryData(step) {
+      const map = CARRY_MAP[step];
+      if (!map) return;
+      if (map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容
       if (!extractSectionRows('s1_products').length &&
           !extractSectionRows('s1_techparams').length) {
         await wfRestoreStepData(1);                             // 交接过来的卡片：先恢复第 1 步
       }
-      maybeSyncStep2();
+      maybeCarry(step);
     }
+    async function ensureStep2Data() { return ensureCarryData(2); }   // 兼容旧调用名
 
-    function maybeSyncStep2() {
-      if (!FORMS.length) return;
-      if (extractSectionRows('s2_products').length ||
-          extractSectionRows('s2_techparams').length) return;   // 已有内容，不覆盖
+    function maybeCarry(step) {
+      const map = CARRY_MAP[step];
+      if (!map || !FORMS.length) return;
+      if (map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容，不覆盖
       if (!extractSectionRows('s1_products').length &&
           !extractSectionRows('s1_techparams').length) return;   // 第1步没数据，无从沿用
-      syncStep2FromStep1();
+      carryProducts(step);
     }
+    function maybeSyncStep2() { maybeCarry(2); }                 // 兼容旧调用名
 
     function goPrev() {
       if (busy || currentStep <= 1) return;

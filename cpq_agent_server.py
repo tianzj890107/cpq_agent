@@ -444,7 +444,10 @@ def _log_write(raw: dict, ti: dict):
         pass
 
 
-_PRODUCT_GUARDED = ("s1_products", "s1_techparams")
+# 产品分区一律受控：s1 由 match_products+选用产生；s2/s3/s4 只能沿用第 1 步的产品，
+# 模型若在后续步骤里"重新选品"塞进库里不存在的编码，同样直接拦下。
+_PRODUCT_GUARDED = ("s1_products", "s1_techparams",
+                    "s2_products", "s2_techparams", "s3_products", "s4_products")
 
 
 def _unknown_product_codes(ti: dict) -> list:
@@ -592,7 +595,8 @@ if not getattr(oc_repl.print_tool_result, "_cpq_safe", False):
 MATCH_PRODUCTS_SCHEMA = {
     "name": "match_products",
     "description": (
-        "【第 1 步产品匹配专用】按需求参数在 product_para_value（产品参数值表）里做**相似度评分**，"
+        "【仅限第 1 步、且仅在用户尚未选定产品时使用】第 2 步及以后产品已锁定，只能沿用，"
+        "**再调用本工具属于严重错误**。按需求参数在 product_para_value（产品参数值表）里做**相似度评分**，"
         "返回推荐清单 Top3（含六个维度的得分明细、加权总分、告警），并**自动把推荐表格渲染到左侧对话框**"
         "供用户点选。评分与排序由系统确定性计算——你只负责把需求文档里的参数如实填进来，"
         "**不要自己估分、不要自己写 SQL 查产品**。\n"
@@ -1164,6 +1168,10 @@ SYSTEM_PROMPT = """\
   产品信息与产品技术参数、以只读方式展示，交由**工艺经理**人工核对确认。你收到「进入第 2 步」的消息时，
   只在聊天里用一句话说明「工艺确认为人工核对产品信息与技术参数，请核对后点『进入下一大步骤』」即可，然后停下等用户。
 - **第 3 步｜定价-利润加成**。分区：s3_products（产品信息·沿用·仅展示）、s3_markup（加价信息）。
+  ⚠️ **产品早已在第 1 步选定、第 2 步经工艺经理确认——本步及以后一律沿用，绝不允许重新匹配/更换产品，
+  绝不允许调用 match_products（它只属于第 1 步）**。s3_products 由前端自动带入第 1 步的产品行；
+  你只把算出的利润加成写回该表的「利润加成」列（render_table 时保持原有行与成品编码原样不动，
+  库里不存在的编码会被系统直接拒绝）。
   **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
   ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
      WHERE rule_classification='定价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
@@ -1174,6 +1182,8 @@ SYSTEM_PROMPT = """\
      聊天小结写明「共取回 N 条定价规则，命中：规则名 → 取值」或「定价规则均未命中」。
   ② 复核并确认产品定价过程及利润加成金额，用户确认后提交报价测算，进入下一步。
 - **第 4 步｜报价-其他加价项**。分区：s4_products（产品信息·沿用·仅展示）、s4_markup（加价明细）。
+  ⚠️ **产品沿用规则同第 3 步：只用第 1 步选定的产品，禁止重新匹配/更换、禁止 match_products**；
+  s4_products 由前端自动带入，你只写回「其他加价」列。
   **取数逻辑（⚠️ 强制，匹配规则必须满足）**：
   ① **必须先用 sql_query 执行**：`SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule
      WHERE rule_classification='报价' AND is_deleted = false`（调用 sql_query 时 limit 传 500，确保取全），
