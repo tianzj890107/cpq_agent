@@ -2307,8 +2307,13 @@
         );
         return;
       }
+      if (next === 3) {
+        // 报价-加价项：两条固定报价规则由前端直接执行，完全不调模型
+        runStep3Rules();
+        return;
+      }
       if (next === 4) {
-        // 报价方案：纯前端用前面步骤的数据直接填写两张表，不调用智能体、不做推荐
+        // 报价方案：一次大模型调用填两张表（金额列后端按公式重算），不进智能体循环
         fillStep4();
         return;
       }
@@ -2564,6 +2569,14 @@
       }
       // 第 3 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
       if (CARRY_MAP[step]) await ensureCarryData(step);
+      if (step === 3) {
+        // 报价-加价项：两条固定规则本地执行，不调模型（技术参数/测算基本信息本地缺失时先补齐）
+        if (!extractSectionRows('s1_techparams').length &&
+            !extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
+        if (!Object.keys((collectStepData(1) || {}).s1_basic || {}).length) await wfRestoreStepData(1);
+        runStep3Rules();
+        return true;
+      }
       const picked = extractSectionRows('s1_products')
         .map(r => r['成品编码']).filter(Boolean).join('、');
       sendToAgent(
@@ -2935,6 +2948,115 @@
       return m ? parseFloat(m[0]) : null;
     }
     function _fmtNum(n) { return String(Math.round(n * 100) / 100); }
+    /* ================= 第 3 步「报价-加价项」：固定规则本地执行（完全不调模型） =================
+       两条写死的报价规则（规则分类=报价），既展示在加价明细里，也直接用代码执行：
+         · 插头方向加价：插头方向=='反向' → 2.8；=='正向' → 2.1
+         · 物流费用加价：物流测算区域=='国内' → 1.9；=='国外' → 3.5
+       取值来源：插头方向=产品技术参数（product_para_value.plug_direction）；
+                物流测算区域=第 1 步测算基本信息。
+       结果：加价明细逐条列出命中值；产品信息的「其他加价」= 两条规则之和
+             （「价格」保持数据库原值不动，第 4 步按 报价=价格+其他加价 计算）。 */
+    const STEP3_RULES = [
+      {
+        name: '插头方向加价', field: '插头方向', from: 'techparams',
+        table: { '反向': 2.8, '正向': 2.1 },
+        groovy: "if (插头方向 == '反向') {\n    return 2.8\n}else if(插头方向 == '正向') {\n    return 2.1\n}",
+      },
+      {
+        name: '物流费用加价', field: '物流测算区域', from: 'basic',
+        table: { '国内': 1.9, '国外': 3.5 },
+        groovy: "if (物流测算区域 == '国内') {\n    return 1.9\n}else if (物流测算区域 == '国外') \n{ \n    return 3.5\n}",
+      },
+    ];
+
+    function _ruleHit(rule, raw) {
+      const s = String(raw == null ? '' : raw).trim();
+      if (!s) return { value: null, matched: '' };
+      if (rule.table[s] !== undefined) return { value: rule.table[s], matched: s };
+      const k = Object.keys(rule.table).find(x => s.indexOf(x) >= 0);   // 容忍「国内运输」这类写法
+      return k ? { value: rule.table[k], matched: k } : { value: null, matched: '' };
+    }
+
+    function runStep3Rules() {
+      if (!FORMS.length) return false;
+      const prodF = FORMS.find(x => x.section_id === 's3_products');
+      const mkF = FORMS.find(x => x.section_id === 's3_markup');
+      const prows = extractSectionRows('s3_products');
+      const products = prows.length ? prows : extractSectionRows('s1_products');
+      if (!products.length) {
+        addErrorBubble('第 3 步无法执行加价规则：前面步骤还没有产品信息。');
+        return false;
+      }
+      const d1 = collectStepData(1) || {};
+      const basic = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
+      const tprows = extractSectionRows('s2_techparams').length
+        ? extractSectionRows('s2_techparams') : extractSectionRows('s1_techparams');
+      const tpByCode = {};
+      tprows.forEach(r => { const c = String(r['成品编码'] || '').trim(); if (c) tpByCode[c] = r; });
+
+      const multi = products.length > 1;
+      const mkRows = [];
+      const lines = [];
+      let seq = 0;
+      const outProducts = products.map(p => {
+        const code = String(p['成品编码'] || '').trim();
+        const tp = tpByCode[code] || tprows[0] || {};
+        let sum = 0, any = false;
+        STEP3_RULES.forEach(rule => {
+          const raw = rule.from === 'basic' ? basic[rule.field] : tp[rule.field];
+          const hit = _ruleHit(rule, raw);
+          seq += 1;
+          mkRows.push({
+            '规则分类': '报价', '序号': String(seq),
+            '加价项名称': rule.name + (multi && code ? '（' + code + '）' : ''),
+            '加价值': hit.value != null ? String(hit.value) : '',
+          });
+          if (hit.value != null) { sum += hit.value; any = true; }
+          lines.push('· **' + rule.name + '**' + (multi && code ? '（' + code + '）' : '') + '：' +
+            rule.field + '=' + (String(raw || '').trim() || '（空）') +
+            (hit.value != null ? ' → 加价 ' + hit.value : ' → 未命中，不加价'));
+        });
+        const row = Object.assign({}, p);
+        if (any) row['其他加价'] = String(Math.round(sum * 100) / 100);
+        if (!String(row['基础成本'] || '').trim() && String(row['价格'] || '').trim()) {
+          row['基础成本'] = row['价格'];      // 基础成本=数据库原价，便于第 4 步核对
+        }
+        return row;
+      });
+
+      if (prodF) {
+        renderTableSection({
+          action: 'render_table', step: prodF.step, section_id: 's3_products',
+          title: prodF.title, editable: prodF.editable,
+          columns: prodF.columns || [], rows: outProducts,
+        });
+      }
+      if (mkF) {
+        renderTableSection({
+          action: 'render_table', step: mkF.step, section_id: 's3_markup',
+          title: mkF.title, editable: mkF.editable,
+          columns: mkF.columns || [], rows: mkRows,
+        });
+      }
+      if (shownStep !== 3 && currentStep === 3) showStep(3);
+
+      const priceLines = outProducts.map(r => {
+        const base = _numOf(r['价格']);
+        const add = _numOf(r['其他加价']) || 0;
+        return '· ' + (r['成品编码'] || r['产品型号'] || '产品') + '：价格 ' +
+          (base != null ? base : '—') + ' + 其他加价 ' + add +
+          (base != null ? ' → 第 4 步报价 ' + _fmtNum(base + add) : '');
+      });
+      addAiBubble('⚙️ 第 3 步「报价-加价项」已按**两条固定报价规则**本地执行完成（未调用模型）：\n\n' +
+        '**规则 1 · 插头方向加价**（规则分类：报价）\n```groovy\n' + STEP3_RULES[0].groovy + '\n```\n' +
+        '**规则 2 · 物流费用加价**（规则分类：报价）\n```groovy\n' + STEP3_RULES[1].groovy + '\n```\n' +
+        '**命中情况**\n' + lines.join('\n') + '\n\n' +
+        '**加价后价格**\n' + priceLines.join('\n') + '\n\n' +
+        '右侧「加价明细」已列出各条规则取值，「产品信息」的其他加价已更新（价格列保持数据库原值）。' +
+        '核对后点「进入下一大步骤」。');
+      return true;
+    }
+
     /* 第 4 步快速通道：只调**一次**大模型把两张表填好（不进智能体循环、不查库、不推荐无依据字段），
        金额列由后端按固定公式确定性重算。模型调不通/解析失败时退回下面的纯本地填写。 */
     async function fillStep4() {
