@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 import uuid
 from collections import OrderedDict
@@ -849,18 +850,27 @@ def _parse_step1_json(out: str):
 
 def _handle_step1_match(data: dict) -> dict:
     """POST /api/step1/match —— 第 1 步产品匹配快速通道（新建报价 kickoff 用）。"""
+    t0 = time.perf_counter()
+
+    def _trace(msg):
+        print(f"[step1] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
+
     text = (data.get("text") or "").strip()
     if not text:
         return {"ok": False, "error": "缺少需求文本"}
+    _trace(f"开始：需求文本 {len(text)} 字")
 
     # ① 先查库（纯 SQL，不经大模型）
     sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
+    t = time.perf_counter()
     try:
         cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
     except Exception as e:
+        _trace(f"① 查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
         return {"ok": False, "stage": "db",
                 "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
                          f"{str(e).splitlines()[0][:160]}"}
+    _trace(f"① 查库 {cpq_match.PRODUCT_TABLE} 完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
     if not rows:
         return {"ok": False, "stage": "db",
                 "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
@@ -871,30 +881,39 @@ def _handle_step1_match(data: dict) -> dict:
         return {"ok": False, "stage": "llm",
                 "error": "当前为「无模型」模式，无法做需求参数评估；"
                          "请在设置里配置模型，或在右侧人工填写。"}
+    digest = _step1_rows_digest(cols, rows)
+    prompt = ("【需求文本】\n" + text[:8000] +
+              "\n\n【产品库五参数摘要】\n" + digest)
+    _trace(f"② 调大模型 {b.conv.model}：入参 {len(prompt)} 字"
+           f"（需求 {min(len(text), 8000)} + 摘要 {len(digest)}），等待返回…")
+    t = time.perf_counter()
     try:
         from open_claude.api import complete
         res = complete(
             b.conv.client,
-            [{"role": "user", "content":
-                "【需求文本】\n" + text[:8000] +
-                "\n\n【产品库五参数摘要】\n" + _step1_rows_digest(cols, rows)}],
+            [{"role": "user", "content": prompt}],
             _STEP1_EVAL_SYS,
             model=b.conv.model,
             max_tokens=500,
         )
         out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
+        _trace(f"② 大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
         return {"ok": False, "stage": "llm",
                 "error": f"大模型评估调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
+    _trace(f"② 大模型返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
     req, comment = _parse_step1_json(out)
     if req is None:
+        _trace("② 输出不是有效 JSON，放弃")
         return {"ok": False, "stage": "llm",
                 "error": "大模型评估输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
 
     # ③ 确定性六维评分（复用 ① 已取回的数据，规则不变）
+    t = time.perf_counter()
     match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
     match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
     match_res["comment"] = comment
+    _trace(f"③ 六维评分完成，耗时 {time.perf_counter() - t:.2f}s；总耗时 {time.perf_counter() - t0:.2f}s")
     return match_res
 
 
