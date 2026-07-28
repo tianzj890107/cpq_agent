@@ -434,6 +434,42 @@ def _log_write(raw: dict, ti: dict):
         pass
 
 
+_PRODUCT_GUARDED = ("s1_products", "s1_techparams")
+
+
+def _unknown_product_codes(ti: dict) -> list:
+    """产品分区里出现的、数据库中查不到的成品编码。
+
+    产品只能来自 product_para_value 的真实匹配。模型受「整步填满/强行推荐」的驱使
+    很容易顺手编一个型号出来，光靠提示词挡不住——这里直接对库校验，编造的一律拦下。
+    库不可达时返回空（不拦），避免网络问题把正常流程卡死。"""
+    if ti.get("section_id") not in _PRODUCT_GUARDED or ti.get("action") != "render_table":
+        return []
+    key = None
+    for col in (ti.get("columns") or []):
+        if _norm_key(col.get("key")) == _norm_key("成品编码"):
+            key = col.get("key")
+            break
+    if not key:
+        return []
+    codes = []
+    for r in (ti.get("rows") or []):
+        v = str((r or {}).get(key) or "").strip()
+        if v and v not in codes:
+            codes.append(v)
+    if not codes:
+        return []
+    quoted = ", ".join("'" + c.replace("'", "''") + "'" for c in codes[:50])
+    try:
+        _, rows = cpq_db.run_select(
+            f"SELECT {cpq_match.COL_CODE} FROM {cpq_match.PRODUCT_TABLE}"
+            f" WHERE {cpq_match.COL_CODE} IN ({quoted})", len(codes) + 5)
+    except Exception:
+        return []                       # 查不了库就不拦，别让网络问题挡住正常流程
+    known = {str(r[0]).strip() for r in rows if r and r[0] is not None}
+    return [c for c in codes if c not in known]
+
+
 def _handle_cpq_ui(tool_input: dict) -> str:
     """执行 cpq_ui：校验、套固定模板、入队 UI 事件，给模型返回简短回执。"""
     if not isinstance(tool_input, dict):
@@ -454,6 +490,14 @@ def _handle_cpq_ui(tool_input: dict) -> str:
         action = ti.get("action", action)
         fixed = _fixed_template(ti.get("section_id")) is not None
         _log_write(raw, ti)
+        bad = _unknown_product_codes(ti)
+        if bad:
+            # 确定性兜底：产品只能来自数据库真实匹配，编造的成品编码一律拒绝落到工作台
+            print(f"[cpq-write] 拒绝 {ti.get('section_id')}：库里不存在的成品编码 {bad}", file=sys.stderr)
+            return (f"❌ 已拒绝渲染 {ti.get('section_id')}：成品编码 {('、'.join(bad))} "
+                    f"在 product_para_value（产品参数值表）里不存在——**产品不能凭需求文档或行业知识编造**。"
+                    f"请改用 match_products 工具从数据库真实匹配，把推荐清单给用户点选；"
+                    f"用户点「选用」后系统会自动把这两张表填好，你不需要自己填。")
     _ui_events().append(ti)
     if action == "set_step":
         return f"工作台已切换到步骤 {step}（{STEPS[step - 1]}）"
@@ -693,18 +737,26 @@ def _handle_match_products(tool_input: dict) -> str:
         traceback.print_exc()
         return f"产品匹配失败：{e}"
     if not res.get("ok"):
-        return res.get("error") or "产品匹配失败"
+        return (f"❌ {res.get('error') or '产品匹配失败'}\n"
+                f"**不要凭需求文档或行业知识编造产品**。请如实告诉用户"
+                f"「产品库读取失败，暂时无法给出推荐清单」，并请他联系管理员检查数据库连接。")
+    if not res.get("products"):
+        return (f"产品参数值表里没有可匹配的产品（共扫描 {res.get('all_count', 0)} 条）。"
+                f"**不要编造产品**，请如实告诉用户没有可选标品，建议转入定制评估。")
 
     # 推荐清单渲染到左侧对话框（前端按 chat_candidates 事件画表格 + 图片/选用按钮）
+    src = res.get("source") or {}
     _ui_events().append({
         "action": "chat_candidates", "step": 1,
         "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
         "products": res["products"], "weights": res["weights"],
         "threshold": res["threshold"], "below_threshold": res["below_threshold"],
         "advice": res["advice"], "all_count": res["all_count"],
+        "source": src,          # 取数出处：库、表、SQL、行数（前端展示，便于核对确实查了库）
     })
 
-    lines = [f"已在 {res['all_count']} 个产品中完成六维加权评分，推荐 Top{len(res['products'])}（已渲染到左侧供用户点选）："]
+    lines = [f"🔎 已查库：{src.get('sql', '')} —— {src.get('db', '')}，取回 {src.get('rows', 0)} 行。",
+             f"已在 {res['all_count']} 个产品中完成六维加权评分，推荐 Top{len(res['products'])}（已渲染到左侧供用户点选）："]
     for i, p in enumerate(res["products"], 1):
         ds = "；".join(f"{d['label']}{d['score']:g}" for d in p["detail"].values())
         lines.append(f"{i}. {p['code']} {p['name']}　总分 {p['total']:g}　（{ds}）")
@@ -1191,7 +1243,10 @@ SYSTEM_PROMPT = """\
 
 1. set_step {step}，然后**按「业务流程」该步的「取数逻辑」先查库、再一口气把该步的每个分区都 render 出来并带数据**：
    文档有的直接填、该查库的查库、两边都没有的**给推荐值**（source 注明"推荐"），别大片留空。
-2. 该查库/套规则的（BOM、定价、加价）**直接查、直接算、直接填**，不用先征求同意。
+2. 该查库/套规则的（定价、加价）**直接查、直接算、直接填**，不用先征求同意。
+   ⚠️ **唯一例外：第 1 步的 s1_products（产品信息列表）和 s1_techparams（产品技术参数）不适用本条**——
+   产品必须由 `match_products` 从数据库真实匹配、并由用户点「选用」后**由系统自动填入**。
+   在用户选定之前这两张表**就该是空的**，不许"别大片留空"这条规则去填它、更不许凭需求文档或行业知识编产品。
 3. 全部渲染完，按「思考-规划-执行-结果」的 ✅结果 段给小结，并提示：右侧本步已填好，请核对/修改后点「进入下一大步骤」。
 - 每个 render_* 都要带 source（数据库端 / 需求文档端 / 推荐）。
 
@@ -1240,6 +1295,9 @@ SYSTEM_PROMPT = """\
   若已在第 1 步，则解析后合并进各分区重新渲染。说明你读到并填了什么。
 - 「【强行推荐】」（用户点了「强行填满本步骤」）：把当前大步骤所有分区**每个字段/单元格填满、绝不留空**——
   ①需求文档 → ②sql_query 查库 → ③行业知识+推理 三级兜底（不许写"待补充/待定/无/N.A."）；
+  ⚠️ **但 s1_products / s1_techparams 除外**：产品只能来自数据库真实匹配（match_products + 用户选用），
+  **绝不允许用行业知识"推测"出一个产品型号/成品编码**。用户在第 1 步点「强行填满」时，
+  若还没选定产品，就只填其余分区，并提示他先在推荐清单里选用产品。
   **凡无文档/数据库依据的推测值，末尾加"（推测）"标记**（如「液冷（推测）」，系统会去掉标记文字、只用颜色高亮）；
   全部 render 填入右侧，聊天里给【推理过程】并单独列出推测项。
 - 「【表单确认】第 N 步…数据：{JSON}」：用户点了「进入下一大步骤」→ 以 JSON 为准，set_step N+1，并按「整步一次性推荐」把第 N+1 步整步填好。

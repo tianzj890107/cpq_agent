@@ -158,6 +158,9 @@
     .cand-block .message-text { max-width: 100%; }
     .cand-head { font-size: 12px; margin-bottom: 4px; }
     .cand-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.6; margin-bottom: 8px; }
+    .cand-src { font-size: 11px; color: var(--color-primary); background: rgba(99,102,241,.07);
+      border-radius: 6px; padding: 5px 8px; margin: 4px 0 6px; word-break: break-all; }
+    .cand-src .ti { font-size: 12px; }
     .cand-warn { background: rgba(239,68,68,.10); color: #b91c1c; border: 1px solid rgba(239,68,68,.25);
       border-radius: 6px; padding: 7px 10px; font-size: 12px; margin-bottom: 8px; }
     .cand-scroll { overflow-x: auto; }
@@ -1073,6 +1076,15 @@
         main = '查询知识库（远程 Postgres）';
         source = String(inp.sql || '').replace(/\s+/g, ' ').trim();
         if (source.length > 180) source = source.slice(0, 177) + '…';
+      } else if (name === 'match_products') {
+        // 这个工具内部直接查 Postgres（不经 sql_query），轨迹里要显式写明取数出处，
+        // 否则只显示「调用 match_products…」，看不出到底有没有查库。
+        main = '产品匹配：查询产品参数值表（远程 Postgres）并做六维加权评分';
+        const cond = ['max_dimension', 'application_scope', 'operating_temperature',
+                      'service_life', 'hermeticity']
+          .filter(k => String(inp[k] || '').trim())
+          .map(k => (CAND_REQ_LABEL[k] || k) + '=' + inp[k]).join('，');
+        source = 'SELECT * FROM product_para_value' + (cond ? '　｜匹配条件：' + cond : '');
       } else if (name === 'Read') {
         main = '读取数据源';
         source = String(inp.file_path || '').split(/[\\/]/).pop();
@@ -1661,6 +1673,11 @@
 
       let html = '<div class="message-label">产品推荐</div><div class="message-text">' +
         '<div class="cand-head"><b>匹配需求</b>　' + reqTxt + '</div>' +
+        (ui.source && ui.source.sql
+          ? '<div class="cand-src"><i class="ti ti-database"></i> 数据来源：' +
+            escapeHtml(ui.source.sql) + '　—— ' + escapeHtml(ui.source.db || '') +
+            '，取回 ' + (ui.source.rows || 0) + ' 行</div>'
+          : '') +
         '<div class="cand-sub">共评估 ' + (ui.all_count || 0) + ' 个产品，按加权总分取 Top' + list.length +
         '。权重：' +
         Object.entries(ui.weights || {}).map(([k, v]) => escapeHtml(k) + ' ' + escapeHtml(v)).join('、') +
@@ -1864,6 +1881,16 @@
       }
       const att = $('chatAttachBtn');
       if (att) att.disabled = GATE_BLOCKED;
+      // 自愈：一轮结束时若仍被锁着、但其实已登录，说明是之前某次状态拉取失败留下的陈旧锁，
+      // 重新拉一次并复评，避免「智能体干完了、页面却动不了」。
+      if (!v && GATE_BLOCKED && wfUser()) healGate();
+    }
+
+    let _healing = false;
+    function healGate() {
+      if (_healing) return;
+      _healing = true;
+      wfRefresh().then(wfGate).catch(() => {}).then(() => { _healing = false; });
     }
 
     let turnGotContent = false; // 本轮是否收到任何文本/工具/UI 事件
@@ -2132,7 +2159,9 @@
       // 第 2 步「工艺确认」：把第 1 步已确认的产品信息/技术参数原样沿用过来，只读展示供人工核对（不调用智能体）
       if (next === 2) syncStep2FromStep1();
       // 同一人顺流程继续做下一步：静默标记开工（无需再问一次「是否开始」）
-      wfStartStep(next, { silent: true }).then(wfRefresh);
+      // 注意别写成 .then(wfRefresh)：那会把 wfStartStep 的返回值(true/false)当成 syncStep 传进去，
+      // 误触发「按卡片纠正步骤 + 快照恢复」，把刚推进的步骤又拉回去、表格被旧快照覆盖。
+      wfStartStep(next, { silent: true }).then(() => wfRefresh());
       if (manualMode) {
         // 无模型模式：本地推进 + 静默落档（进度与数据进入历史/首页卡片，不调模型）
         sendToAgent('【人工确认】第 ' + cur + ' 步「' + stepName + '」已人工填写确认，进入第 ' + next + ' 步。数据(JSON)：\n' + JSON.stringify(data),
@@ -2222,7 +2251,7 @@
     // 拉取卡片状态 + 当前步骤的角色权限，并刷新页面提示
     // syncStep=true 时用卡片的 current_step 纠正本地步骤（打开已有卡片时用）
     async function wfRefresh(syncStep) {
-      if (!wfUser() || !currentSessionId) { WF.loaded = false; wfRenderBar(); return; }
+      if (!wfUser() || !currentSessionId) { WF.loaded = false; WF.fetchFailed = false; wfRenderBar(); return; }
       try {
         const d = await wfApi('/wf/card?session_id=' + encodeURIComponent(currentSessionId));
         WF.card = d.card; WF.steps = d.steps || [];
@@ -2232,7 +2261,12 @@
         WF.statusLabel = d.status_label || '';
         WF.stepStarted = !!d.step_started;       // 本步是否已按下「开始本步骤」
         WF.loaded = !!d.card;
-      } catch (e) { WF.loaded = false; }
+        WF.fetchFailed = false;
+      } catch (e) {
+        // 请求失败 ≠ 卡片不存在：切角色/瞬时繁忙都可能失败一次。
+        // 这里**保留上一次的状态**，只标记本次没取到——否则一次抖动就会把界面永久锁死。
+        WF.fetchFailed = true;
+      }
       if (syncStep) {
         wfApplyCardStep();               // 先把步骤纠正到卡片的真实位置
         // 交接过来的卡片：本地没有前面步骤的数据，从快照恢复（第 2 步还要据此沿用两张表）
@@ -2255,8 +2289,10 @@
       if (!u) {
         GATE_BLOCKED = true;
         showGateBubble('login');
-      } else if (!WF.loaded) {
-        // 登录了但卡片没建起来（登录/工作流服务异常）：同样不放行，避免流程跑在没有归属的状态下
+      } else if (!WF.loaded && PENDING_KICKOFF) {
+        // 只在「流程还没开工」时硬拦：卡片建不出来就不该起步。
+        // 已经在跑的流程绝不因为一次请求失败而锁死——那只是暂时取不到状态，
+        // 后端在 step-done / 转交时仍会做角色校验，安全性不依赖前端这把锁。
         GATE_BLOCKED = true;
         showGateBubble('unavailable');
       } else {

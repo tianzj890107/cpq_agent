@@ -245,11 +245,15 @@ def match(req: dict, top_n: int = 3, drop_oversize: bool = True) -> dict:
            service_life / hermeticity / dimension_tolerance_pct）
     返回 {ok, products(TopN), all_count, threshold, below_threshold, advice, error}
     """
+    sql = f"SELECT * FROM {PRODUCT_TABLE}"
     try:
-        cols, rows = cpq_db.run_select(f"SELECT * FROM {PRODUCT_TABLE}", FETCH_LIMIT)
+        cols, rows = cpq_db.run_select(sql, FETCH_LIMIT)
     except Exception as e:
         return {"ok": False, "error": f"读取 {PRODUCT_TABLE} 失败：{str(e).splitlines()[0][:160]}",
-                "products": [], "all_count": 0}
+                "products": [], "all_count": 0,
+                "source": {"db": cpq_db.DB_LABEL, "table": PRODUCT_TABLE, "sql": sql, "rows": 0}}
+    # 取数出处：前端「操作轨迹」与推荐清单都要显示，让用户看得见确实查了库
+    source = {"db": cpq_db.DB_LABEL, "table": PRODUCT_TABLE, "sql": sql, "rows": len(rows)}
 
     idx = {c: i for i, c in enumerate(cols)}
     scored = []
@@ -284,6 +288,7 @@ def match(req: dict, top_n: int = 3, drop_oversize: bool = True) -> dict:
     below = best < RECOMMEND_THRESHOLD
     return {
         "ok": True,
+        "source": source,
         "products": top,
         "all_count": len(scored),
         "pool_count": len(pool),
