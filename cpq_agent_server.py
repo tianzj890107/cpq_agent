@@ -828,24 +828,60 @@ def _step1_rows_digest(cols, rows) -> str:
     return "\n".join(lines)
 
 
+_STEP1_REQ_KEYS = ("max_dimension", "dimension_tolerance_pct", "application_scope",
+                   "operating_temperature", "service_life", "hermeticity")
+
+
 def _parse_step1_json(out: str):
-    """解析大模型的一次性评估输出；失败返回 (None, '')。"""
+    """解析大模型的一次性评估输出；失败返回 (None, '')。
+
+    尽量宽容：剥掉 <think> 思考段与 ``` 代码围栏、在全文里找所有配平的 {...} 逐个试解析
+    （取最后一个含预期键的），最后再对「被 max_tokens 截断的 JSON」做补右括号抢救。"""
     s = (out or "").strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", s).strip()
-    i, j = s.find("{"), s.rfind("}")
-    if i < 0 or j <= i:
-        return None, ""
-    try:
-        obj = json.loads(s[i:j + 1])
-    except json.JSONDecodeError:
-        return None, ""
-    if not isinstance(obj, dict):
-        return None, ""
-    req = {k: obj.get(k) for k in ("max_dimension", "dimension_tolerance_pct",
-                                   "application_scope", "operating_temperature",
-                                   "service_life", "hermeticity")}
-    return req, str(obj.get("comment") or "").strip()
+    s = re.sub(r"<think>.*?(?:</think>|$)", "", s, flags=re.S).strip()
+    s = re.sub(r"```[a-zA-Z]*", "", s).strip()
+
+    def _accept(obj):
+        if not isinstance(obj, dict) or not any(k in obj for k in _STEP1_REQ_KEYS):
+            return None
+        req = {k: obj.get(k) for k in _STEP1_REQ_KEYS}
+        return req, str(obj.get("comment") or "").strip()
+
+    # 全文扫描所有配平的顶层 {...}，从后往前试（答案通常在思考/说明之后）
+    candidates, depth, start = [], 0, None
+    for i, ch in enumerate(s):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(s[start:i + 1])
+    for cand in reversed(candidates):
+        try:
+            got = _accept(json.loads(cand))
+        except json.JSONDecodeError:
+            got = None
+        if got:
+            return got
+    # 括号没配平：多半是被 max_tokens 截断，从第一个 { 起补齐右括号抢救
+    i = s.find("{")
+    if i >= 0 and depth > 0:
+        frag = s[i:].rstrip().rstrip(",")
+        bases = [frag]
+        k = frag.rfind(",")
+        if k > 0:                      # 截在键/值中间：丢掉最后一个不完整的键值对再试
+            bases.append(frag[:k])
+        for base in bases:
+            for tail in ("", '"', '""'):
+                try:
+                    got = _accept(json.loads(base + tail + "}" * depth))
+                except json.JSONDecodeError:
+                    got = None
+                if got:
+                    return got
+    return None, ""
 
 
 def _handle_step1_match(data: dict) -> dict:
@@ -894,7 +930,7 @@ def _handle_step1_match(data: dict) -> dict:
             [{"role": "user", "content": prompt}],
             _STEP1_EVAL_SYS,
             model=b.conv.model,
-            max_tokens=500,
+            max_tokens=2000,   # 思考型模型的思考段也占 tokens，给太小 JSON 会被截断
         )
         out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
@@ -902,9 +938,14 @@ def _handle_step1_match(data: dict) -> dict:
         return {"ok": False, "stage": "llm",
                 "error": f"大模型评估调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
     _trace(f"② 大模型返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
+    if not out:
+        _trace("② 大模型返回为空（可能只有思考段/被网关过滤）")
+        return {"ok": False, "stage": "llm",
+                "error": "大模型评估返回为空，请重试或人工填写需求参数。"}
     req, comment = _parse_step1_json(out)
     if req is None:
-        _trace("② 输出不是有效 JSON，放弃")
+        _trace("② 输出不是有效 JSON，放弃。原文前 400 字：" +
+               out[:400].replace("\n", "⏎"))
         return {"ok": False, "stage": "llm",
                 "error": "大模型评估输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
 
