@@ -1841,7 +1841,10 @@
        ① 后端纯 SQL 取 product_para_value 的五个匹配参数；
        ② 一次大模型调用：从需求文本提取匹配参数并给一句评估（无思考循环）；
        ③ 后端按原六维加权规则确定性打分出 Top3。用户点「选用」之后的流程不变。 */
+    let STEP1_LAST_REQ = '';     // 最近一次送去匹配的需求全文（意图门槛未过时等待补充合并）
+    let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新匹配
     async function step1FastMatch(text) {
+      STEP1_LAST_REQ = text || '';
       setBusy(true);
       const act = addToolActivity('产品匹配：查询产品参数值表（远程 Postgres）→ 一次大模型评估 → 六维加权评分',
         'SELECT * FROM product_para_value');
@@ -1858,10 +1861,24 @@
       hideTyping();
       setBusy(false);
       if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      // 意图识别门槛：尺寸/应用范围/工作温度缺一不可——不开始匹配，请用户补需求
+      if (d && d.stage === 'intent') {
+        STEP1_REINPUT = true;
+        const have = Object.entries(d.requirement || {})
+          .map(([k, v]) => (CAND_REQ_LABEL[k] || k) + '：' + v).join('　');
+        addAiBubble('⚠ **暂不开始产品匹配**——需求里缺少必备参数：**' +
+          (d.missing || []).join('、') + '**。\n\n' +
+          (have ? '已识别到：' + have + '\n\n' : '') +
+          '产品匹配必须同时给出 **尺寸、应用范围/使用场景、工作温度** 三项。' +
+          '请直接在下方输入框补充缺失的参数（例如「尺寸约13*20，用于水表，工作温度28℃」），' +
+          '发送后会自动与已有需求合并并重新匹配。');
+        return;
+      }
       if (!d || !d.ok) {
         addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
         return;
       }
+      STEP1_REINPUT = false;
       renderCandidates({
         action: 'chat_candidates', step: 1,
         requirement: d.requirement || {}, products: d.products || [],
@@ -2150,6 +2167,15 @@
       chatFiles = [];
       renderAttachChips();
       addUserBubble(echo);          // 聊天里显示用户的话/附件说明
+      // 意图识别门槛未过（缺尺寸/应用范围/工作温度）：这条输入按「补充需求」处理，
+      // 与原需求合并后重新走第 1 步快速匹配通道，不发给智能体
+      if (STEP1_REINPUT && currentStep === 1) {
+        const merged = STEP1_LAST_REQ
+          ? STEP1_LAST_REQ + '\n【用户补充】' + payload
+          : payload;
+        step1FastMatch(merged);
+        return;
+      }
       sendToAgent(payload, { echo: false, display: echo }); // 实际发送可能更长（含文件内容）
     }
 

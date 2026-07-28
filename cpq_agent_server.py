@@ -215,6 +215,27 @@ _FALLBACK_FIELDS = {}
 _HIDDEN_FIELDS = {("价格测算单", "产品信息"): {"备件数量", "赠品数量", "产品大类"}}
 
 
+# 产品技术参数分区：列不再取「报价助手」页的产品技术参数实体，而是直接取
+# 亿纬锂能DA梳理「配置助手」页的 product_para_value（产品参数值表）字段（不含 id）——
+# 页面展示与数据库实际参数一一对应，第 1 步选用产品后整行原样填入。
+_PPV_SECTIONS = {"s1_techparams", "s2_techparams"}
+
+
+def _ppv_fields() -> list:
+    """product_para_value 的展示字段（中文属性名，按 DA 录入顺序，排除 id）。"""
+    try:
+        onto = cpq_db._load_ontology()["config"]
+        for e in onto["entities"]:
+            if e["table"] == cpq_match.PRODUCT_TABLE:
+                return [{"key": a["name"], "label": a["name"], "example": ""}
+                        for a in e["attrs"]
+                        if a.get("name") and str(a.get("code") or "").lower() != "id"
+                        and str(a["name"]).lower() != "id"]
+    except Exception:
+        pass
+    return []
+
+
 def _bi_fields(business_object: str, logic_entity: str) -> list:
     """从 亿纬锂能DA梳理.xlsx「报价助手」sheet 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
     rows = cpq_db.bi_fields(business_object, logic_entity)
@@ -245,7 +266,10 @@ _LABEL_OVERRIDE = {
 def _init_fixed_forms():
     FIXED_FORMS.clear()
     for sid, (kind, title, ent, editable) in _BI_SECTIONS.items():
-        attrs = _bi_fields(*ent)
+        if sid in _PPV_SECTIONS:
+            attrs = _ppv_fields() or _bi_fields(*ent)   # 拿不到本体时退回报价助手页字段
+        else:
+            attrs = _bi_fields(*ent)
         extra = [{"key": c, "label": c, "example": ""} for c in _EXTRA_COLS.get(sid, [])]
         attrs = extra + attrs
         ov = _LABEL_OVERRIDE.get(ent) or {}
@@ -746,6 +770,12 @@ def _handle_match_products(tool_input: dict) -> str:
     req = {k: tool_input.get(k) for k in
            ("max_dimension", "dimension_tolerance_pct", "application_scope",
             "operating_temperature", "service_life", "hermeticity")}
+    # 意图识别门槛：尺寸/应用范围/工作温度缺一不可，缺了不匹配
+    missing = _step1_missing(req)
+    if missing:
+        return ("❌ 需求缺少必备匹配参数：" + "、".join(missing) +
+                "。**不允许开始匹配，也不要编造参数**。请提醒用户补充需求"
+                "（尺寸、应用范围/使用场景、工作温度三项必须齐全），补齐后再重新匹配。")
     try:
         res = cpq_match.match(req, top_n=tool_input.get("top_n") or 3)
     except Exception as e:
@@ -830,6 +860,16 @@ def _step1_rows_digest(cols, rows) -> str:
 
 _STEP1_REQ_KEYS = ("max_dimension", "dimension_tolerance_pct", "application_scope",
                    "operating_temperature", "service_life", "hermeticity")
+
+# 意图识别硬性门槛：这三项缺一不可，缺了就提醒用户补需求，不开始匹配
+_STEP1_REQUIRED = (("max_dimension", "尺寸"),
+                   ("application_scope", "应用范围/使用场景"),
+                   ("operating_temperature", "工作温度"))
+
+
+def _step1_missing(req: dict) -> list:
+    return [label for key, label in _STEP1_REQUIRED
+            if not str((req or {}).get(key) or "").strip()]
 
 
 def _parse_step1_json(out: str):
@@ -948,6 +988,14 @@ def _handle_step1_match(data: dict) -> dict:
                out[:400].replace("\n", "⏎"))
         return {"ok": False, "stage": "llm",
                 "error": "大模型评估输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
+
+    # ②.5 意图识别门槛：尺寸 / 应用范围 / 工作温度 三项必须齐全，缺了不匹配、提醒补需求
+    missing = _step1_missing(req)
+    if missing:
+        _trace("②.5 意图识别：需求缺少 " + "、".join(missing) + "，不开始匹配")
+        return {"ok": False, "stage": "intent", "missing": missing,
+                "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
+                "error": "需求缺少必备匹配参数：" + "、".join(missing)}
 
     # ③ 确定性六维评分（复用 ① 已取回的数据，规则不变）
     t = time.perf_counter()
