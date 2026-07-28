@@ -234,12 +234,22 @@ def _cols_template(cols: list) -> list:
 _EXTRA_COLS = {}
 
 
+# 展示名覆盖：只改前端表头文字，**不动 key**——key 仍是 DA 里的属性名，
+# 入库映射（clm_calc_product.price）、取价填表、历史快照都靠它对齐，改了就断。
+_LABEL_OVERRIDE = {
+    ("价格测算单", "产品信息"): {"价格": "成本"},
+}
+
+
 def _init_fixed_forms():
     FIXED_FORMS.clear()
     for sid, (kind, title, ent, editable) in _BI_SECTIONS.items():
         attrs = _bi_fields(*ent)
         extra = [{"key": c, "label": c, "example": ""} for c in _EXTRA_COLS.get(sid, [])]
         attrs = extra + attrs
+        ov = _LABEL_OVERRIDE.get(ent) or {}
+        if ov:
+            attrs = [dict(a, label=ov.get(a["key"], a["label"])) for a in attrs]
         FIXED_FORMS[sid] = {
             "kind": kind, "title": title, "fields": attrs,
             "columns": [{"key": a["key"], "label": a["label"]} for a in attrs],
@@ -1177,7 +1187,9 @@ SYSTEM_PROMPT = """\
      客户/项目/币种/商机等 + 合理推荐）；
   ② 填写报价明细（s5_detail）：产品系列/产品型号/版本扩展/方案描述/规格/数量沿用第 1 步 s1_products 原值；
      **报价 = 基础成本 + 利润加成 + 其他加价**（利润加成/其他加价来自第 3、4 步确认值；
-     **基础成本取第 1 步 s1_products 的「价格」**——第 2 步已改为工艺确认，不再计算 BOM 基础成本）；**折后价格 = 报价 × 折扣**；
+     **基础成本取第 1 步 s1_products 的「成本」列**（该列 key 仍是「价格」，界面显示为「成本」，
+     值来自 md_clm_material_cost_cnf.material_unit_price）——第 2 步已改为工艺确认，不再计算 BOM 基础成本）；
+     **折后价格 = 报价 × 折扣**；
      总金额 = 折后价格 × 数量；税率/税金按测算基本信息的税率计算。
   ③ 生成并导入报价单附件（提示用户可点「导出报价单」），提交 BPM 审批，进入下一步。
 - **第 6 步｜输出报价单**。render_document 渲染报价单文档（section_id=s6_doc），再 s6_bpm（表·BPM 审批流环节：
