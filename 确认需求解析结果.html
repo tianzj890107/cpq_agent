@@ -3057,130 +3057,156 @@
       return true;
     }
 
-    /* 第 4 步快速通道：只调**一次**大模型把两张表填好（不进智能体循环、不查库、不推荐无依据字段），
-       金额列由后端按固定公式确定性重算。模型调不通/解析失败时退回下面的纯本地填写。 */
-    async function fillStep4() {
+    /* ================= 第 4 步「报价方案」：本地填表 + 类 Excel 联动计算（完全不调模型） ====
+       报价明细各列关系（改其一，其余自动重算）：
+         数量（默认 1）、报价 = 价格 + 其他加价、折扣（默认 1）、折后价格 = 报价 × 折扣、
+         总金额 = 数量 × 折后价格、税率（默认 0.13）、税金 = 总金额 × 税率。
+       可编辑输入列：数量 / 报价 / 折扣 / 税率（及产品描述类列）；
+       派生列（折后价格 / 总金额 / 税金）只读，随输入即时刷新。 */
+    const S4_DEFAULTS = { '数量': '1', '折扣': '1', '税率': '0.13' };
+    const S4_DERIVED = ['折后价格', '总金额', '税金'];
+
+    function _s4Cell(tr, key) {
+      return tr.querySelector('[data-key="' + CSS.escape(key) + '"]');
+    }
+    function _s4Get(tr, key) {
+      const el = _s4Cell(tr, key);
+      if (!el) return '';
+      return ('value' in el && el.tagName === 'INPUT') ? el.value : (el.dataset.value ?? el.textContent);
+    }
+    function _s4Set(tr, key, v) {
+      const el = _s4Cell(tr, key);
+      if (!el) return;
+      if ('value' in el && el.tagName === 'INPUT') el.value = v;
+      else { el.textContent = v; el.dataset.value = v; }
+    }
+
+    // 单行重算：折后价格 = 报价 × 折扣 → 总金额 = 数量 × 折后价格 → 税金 = 总金额 × 税率
+    function s4RecalcRow(tr) {
+      const quote = _numOf(_s4Get(tr, '报价'));
+      if (quote == null) { S4_DERIVED.forEach(k => _s4Set(tr, k, '')); return; }
+      const disc = _numOf(_s4Get(tr, '折扣'));
+      const qty = _numOf(_s4Get(tr, '数量'));
+      const rate = _numOf(_s4Get(tr, '税率'));
+      const after = quote * (disc == null ? 1 : disc);
+      const total = after * (qty == null ? 1 : qty);
+      _s4Set(tr, '折后价格', _fmtNum(after));
+      _s4Set(tr, '总金额', _fmtNum(total));
+      _s4Set(tr, '税金', rate == null ? '' : _fmtNum(total * rate));
+    }
+
+    /* 把 s4_detail 变成联动表：输入列监听 input 即时重算；派生列只读并置灰。
+       renderTableSection 每次重渲染都新建 DOM，所以渲染后调用一次即可。 */
+    function s4BindLiveCalc() {
+      const sec = sections.get('s4_detail');
+      if (!sec || !sec.el) return;
+      const tbody = sec.el.querySelector('.list-table tbody');
+      if (!tbody) return;
+      const bindRow = tr => {
+        if (tr.dataset.s4bound) return;
+        tr.dataset.s4bound = '1';
+        S4_DERIVED.forEach(k => {
+          const el = _s4Cell(tr, k);
+          if (el && el.tagName === 'INPUT') {
+            el.readOnly = true;
+            el.title = '公式列，由数量/报价/折扣/税率自动计算';
+            el.style.background = 'var(--bg-secondary, #f6f7f9)';
+            el.style.color = 'var(--text-secondary, #555)';
+          }
+        });
+        tr.querySelectorAll('input[data-key]').forEach(el => {
+          if (S4_DERIVED.indexOf(el.dataset.key) >= 0) return;
+          el.addEventListener('input', () => s4RecalcRow(tr));
+        });
+        s4RecalcRow(tr);
+      };
+      Array.from(tbody.rows).forEach(bindRow);
+      // 用户点「新增」加的行也要联动（MutationObserver，避免改动通用渲染逻辑）
+      if (!tbody.dataset.s4observed) {
+        tbody.dataset.s4observed = '1';
+        new MutationObserver(muts => {
+          muts.forEach(m => Array.from(m.addedNodes).forEach(n => {
+            if (n.tagName !== 'TR') return;
+            Object.keys(S4_DEFAULTS).forEach(k => {
+              const el = _s4Cell(n, k);
+              if (el && 'value' in el && !String(el.value).trim()) el.value = S4_DEFAULTS[k];
+            });
+            bindRow(n);
+          }));
+        }).observe(tbody, { childList: true });
+      }
+    }
+
+    /* 第 4 步填表：全部取自前面步骤已确认的数据，不调用模型、不做无依据的推荐。 */
+    function fillStep4() {
       if (!FORMS.length) return false;
-      if (manualMode) return fillStep4Local();
       const basicF = FORMS.find(x => x.section_id === 's4_basic');
       const detailF = FORMS.find(x => x.section_id === 's4_detail');
       const d1 = collectStepData(1) || {};
       const src1 = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
-      const prows = extractSectionRows('s3_products');
-      const products = prows.length ? prows : extractSectionRows('s1_products');
-      if (!products.length) return fillStep4Local();
-
-      setBusy(true);
-      const act = addToolActivity('报价方案：用前面步骤已确认的数据一次性生成报价基本信息与报价明细',
-        '报价=价格+其他加价；折后价格=报价×折扣；总金额=折后价格×数量；税金=总金额×税率');
-      showTyping();
-      let d;
-      try {
-        d = await fetch(AGENT_URL + '/api/step4/fill', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sid: currentSessionId, s1_basic: src1, products: products,
-            markup: extractSectionRows('s3_markup'),
-          }),
-        }).then(r => r.json());
-      } catch (e) {
-        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
-      }
-      hideTyping();
-      setBusy(false);
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
-      if (!d || !d.ok) {
-        addErrorBubble('报价方案自动填写失败：' + ((d && d.error) || '未知错误') + '，已改用本地规则填写。');
-        return fillStep4Local();
-      }
-      if (basicF && d.basic) {
+      // ① 报价基本信息：同名字段直接抄 + 少量别名映射；没有依据的字段留空
+      if (basicF) {
+        const alias = { '关联测算单号': '测算单号', '报价单名称': '项目名称' };
         renderFormSection({
           action: 'render_form', step: basicF.step, section_id: 's4_basic',
           title: basicF.title, editable: basicF.editable,
-          fields: (basicF.fields || []).map(x => ({
-            key: x.key, label: x.label, type: 'text',
-            value: (d.basic[x.key] != null ? String(d.basic[x.key]) : ''),
-          })),
+          fields: (basicF.fields || []).map(x => {
+            let v = src1[x.key];
+            if ((v == null || !String(v).trim()) && alias[x.key]) v = src1[alias[x.key]];
+            return { key: x.key, label: x.label, type: 'text', value: (v != null ? String(v) : '') };
+          }),
         });
       }
-      if (detailF && (d.detail || []).length) {
-        renderTableSection({
-          action: 'render_table', step: detailF.step, section_id: 's4_detail',
-          title: detailF.title, editable: detailF.editable,
-          columns: detailF.columns || [], rows: d.detail,
-        });
-      }
-      addAiBubble('📄 第 4 步「报价方案」已生成（一次模型调用完成填表，未做无依据的推荐）：\n' +
-        '· 报价基本信息：' + Object.keys(d.basic || {}).length + ' 个字段取自前面步骤已确认的数据，' +
-        '没有依据的字段留空，请人工补充\n' +
-        '· 报价明细：' + (d.detail || []).length + ' 行；金额按固定公式计算——' +
-        '报价=价格+其他加价，折后价格=报价×折扣（未填折扣按不打折），总金额=折后价格×数量，税金=总金额×税率\n\n' +
-        '请在右侧核对，可直接修改，然后点「进入下一大步骤」。');
-      return true;
-    }
-
-    /* 纯本地兜底填写（无模型模式 / 接口不可用时）：同名字段直接抄 + 同样的公式。 */
-    function fillStep4Local() {
-      if (!FORMS.length) return false;
-      const basicF = FORMS.find(x => x.section_id === 's4_basic');
-      const detailF = FORMS.find(x => x.section_id === 's4_detail');
-      const d1 = collectStepData(1) || {};
-      const src1 = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
-      // ① 报价基本信息：同名字段直接抄 + 别名映射
-      if (basicF) {
-        const alias = { '关联测算单号': '测算单号', '报价单名称': '项目名称' };
-        const fields = (basicF.fields || []).map(x => {
-          let v = src1[x.key];
-          if ((v == null || !String(v).trim()) && alias[x.key]) v = src1[alias[x.key]];
-          return { key: x.key, label: x.label, type: 'text', value: (v != null ? String(v) : '') };
-        });
-        renderFormSection({
-          action: 'render_form', step: basicF.step, section_id: 's4_basic',
-          title: basicF.title, editable: basicF.editable, fields: fields,
-        });
-      }
-      // ② 报价明细：逐产品行同名抄 + 固定公式计算
+      // ② 报价明细：逐产品一行，同名列直接抄 + 默认值 + 公式计算
       let rows = [];
       if (detailF) {
         const prows = extractSectionRows('s3_products');
         const srcRows = prows.length ? prows : extractSectionRows('s1_products');
-        const taxRaw = src1['税率'];
+        const taxRaw = String(src1['税率'] || '').trim();
         rows = srcRows.map(r => {
           const row = {};
           (detailF.columns || []).forEach(c => {
             const v = r[c.key];
-            if (v != null && String(v).trim()) row[c.key] = v;
+            if (v != null && String(v).trim()) row[c.key] = String(v);
           });
+          // 报价 = 价格 + 其他加价（价格缺失时退回基础成本）
           const price = _numOf(r['价格']) != null ? _numOf(r['价格']) : _numOf(r['基础成本']);
           const extra = _numOf(r['其他加价']) || 0;
-          if (price != null) {
-            const quote = price + extra;
-            row['报价'] = _fmtNum(quote);
-            const disc = _numOf(r['折扣']);
-            const after = disc != null ? quote * (disc > 1 ? disc / 100 : disc) : quote;
+          if (price != null) row['报价'] = _fmtNum(price + extra);
+          // 默认值：数量 1、折扣 1、税率 0.13（第 1 步填了税率就用它，13/13% 归一为 0.13）
+          if (!String(row['数量'] || '').trim()) row['数量'] = S4_DEFAULTS['数量'];
+          if (!String(row['折扣'] || '').trim()) row['折扣'] = S4_DEFAULTS['折扣'];
+          if (!String(row['税率'] || '').trim()) {
+            const t = _numOf(taxRaw);
+            row['税率'] = t != null ? String(t > 1 ? t / 100 : t) : S4_DEFAULTS['税率'];
+          }
+          // 派生列先算一遍（渲染后 s4BindLiveCalc 会再校一次）
+          const q = _numOf(row['报价']);
+          if (q != null) {
+            const dc = _numOf(row['折扣']), qt = _numOf(row['数量']), rt = _numOf(row['税率']);
+            const after = q * (dc == null ? 1 : dc);
+            const total = after * (qt == null ? 1 : qt);
             row['折后价格'] = _fmtNum(after);
-            const qty = _numOf(r['数量']);
-            const total = after * (qty != null ? qty : 1);
             row['总金额'] = _fmtNum(total);
-            const tr = _numOf(taxRaw);
-            if (tr != null) {
-              row['税率'] = String(taxRaw);
-              row['税金'] = _fmtNum(total * (tr > 1 ? tr / 100 : tr));
-            }
+            if (rt != null) row['税金'] = _fmtNum(total * rt);
           }
           return row;
         }).filter(r => Object.keys(r).length);
         if (rows.length) {
           renderTableSection({
             action: 'render_table', step: detailF.step, section_id: 's4_detail',
-            title: detailF.title, editable: detailF.editable, columns: detailF.columns || [], rows,
+            title: detailF.title, editable: detailF.editable,
+            columns: detailF.columns || [], rows,
           });
+          s4BindLiveCalc();   // 挂上联动：改数量/报价/折扣/税率，派生列即时刷新
         }
       }
-      addAiBubble('📄 第 4 步「报价方案」已由系统用前面步骤的数据本地填写（未调用模型、无推荐值）：\n' +
-        '· 报价基本信息：同名字段抄自第 1 步测算基本信息（其余留空，请人工补充）\n' +
-        '· 报价明细：' + (rows.length ? rows.length + ' 行，' : '') +
-        '报价=价格+其他加价；折后价格=报价×折扣（未填折扣按不打折）；总金额=折后价格×数量；税金=总金额×税率\n\n' +
+      if (currentStep === 4 && shownStep !== 4) showStep(4);
+      addAiBubble('📄 第 4 步「报价方案」已用前面步骤的数据填好（未调用模型、无推荐值）：\n' +
+        '· 报价基本信息：同名字段取自第 1 步测算基本信息，没有依据的字段留空，请人工补充\n' +
+        '· 报价明细：' + rows.length + ' 行，**改数量 / 报价 / 折扣 / 税率会自动重算**——\n' +
+        '　报价 = 价格 + 其他加价　｜　折后价格 = 报价 × 折扣　｜　总金额 = 数量 × 折后价格　｜　税金 = 总金额 × 税率\n' +
+        '　（默认：数量 1、折扣 1、税率 0.13；折后价格 / 总金额 / 税金为公式列，不可直接编辑）\n\n' +
         '请在右侧核对，可直接修改，然后点「进入下一大步骤」。');
       return true;
     }
