@@ -1669,7 +1669,12 @@
     let STEP1_MATCH = { text: '', ui: null, picked: '' };
     function renderCandidates(ui, opts) {
       opts = opts || {};
-      if (!opts.replay) { STEP1_MATCH.ui = ui; if (STEP1_LAST_REQ) STEP1_MATCH.text = STEP1_LAST_REQ; }
+      if (!opts.replay) {
+        STEP1_MATCH.ui = ui;
+        // 第 2 步回显只存用户实际输入的文字（不带附件正文/系统指令）
+        const t = STEP1_LAST_DISPLAY || STEP1_LAST_REQ;
+        if (t) STEP1_MATCH.text = t;
+      }
       const list = ui.products || [];
       const div = document.createElement('div');
       div.className = 'message message-ai cand-block';
@@ -1863,10 +1868,12 @@
        ① 后端纯 SQL 取 product_para_value 的五个匹配参数；
        ② 一次大模型调用：从需求文本提取匹配参数并给一句评估（无思考循环）；
        ③ 后端按原六维加权规则确定性打分出 Top3。用户点「选用」之后的流程不变。 */
-    let STEP1_LAST_REQ = '';     // 最近一次送去匹配的需求全文（意图门槛未过时等待补充合并）
+    let STEP1_LAST_REQ = '';     // 最近一次送去匹配的需求全文（含附件正文，意图门槛未过时等待补充合并）
+    let STEP1_LAST_DISPLAY = ''; // 用户实际输入的文字内容（第 2 步回显只用这个，不带附件正文/系统指令）
     let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新匹配
-    async function step1FastMatch(text) {
+    async function step1FastMatch(text, displayText) {
       STEP1_LAST_REQ = text || '';
+      STEP1_LAST_DISPLAY = displayText || STEP1_LAST_DISPLAY || text || '';
       setBusy(true);
       const act = addToolActivity('产品匹配：查询产品参数值表（远程 Postgres）→ 一次大模型评估 → 六维加权评分',
         'SELECT * FROM product_para_value');
@@ -2195,7 +2202,8 @@
         const merged = STEP1_LAST_REQ
           ? STEP1_LAST_REQ + '\n【用户补充】' + payload
           : payload;
-        step1FastMatch(merged);
+        const mergedDisplay = (STEP1_LAST_DISPLAY ? STEP1_LAST_DISPLAY + '\n' : '') + text;
+        step1FastMatch(merged, mergedDisplay);
         return;
       }
       sendToAgent(payload, { echo: false, display: echo }); // 实际发送可能更长（含文件内容）
@@ -2466,37 +2474,27 @@
       scrollChat();
     }
 
-    /* ---------------- 接手任务后：先问「是否开始本步骤」，确认了智能体才开工 ----------------
-       避免卡片一转交过来就自动跑起来。同一人连续做下一步时不问（那是他自己点的「进入下一步」）。 */
+    /* ---------------- 角色匹配即自动开始本步骤（不再弹「开始第 N 步」确认按钮） ----------------
+       条件与原来一致：已登录、卡片已载入、本步归我的角色、且尚未开工。
+       BOOT_PENDING：boot() 里 kickoff（需求全文）还没暂存好之前不许抢跑，
+       否则新建报价会在没有需求内容的情况下开始第 1 步。 */
+    let BOOT_PENDING = true;
+    const WF_AUTO = { inflight: false, failedFor: '' };
     function wfMaybePromptStart() {
-      const u = wfUser();
       const el = $('wfStartPrompt');
+      if (el) el.remove();               // 旧版确认气泡（若有残留）一律清掉
+      const u = wfUser();
       const need = u && WF.loaded && WF.canEdit && !WF.stepStarted && !WF.awaiting && !WF.pendingTask;
-      if (!need) { if (el) el.remove(); return; }
-      if (el) {
-        // 已经在问了：若后面又追加了新气泡（如新建报价时用户的需求提问），把提醒挪到最下面，
-        // 保证「用户问题在上、开始第 N 步提醒在下」的阅读顺序
-        if (el !== chatEl.lastElementChild) { chatEl.appendChild(el); scrollChat(); }
-        return;
-      }
-      const div = document.createElement('div');
-      div.className = 'message message-ai';
-      div.id = 'wfStartPrompt';
-      const isNew = !!PENDING_KICKOFF;
-      div.innerHTML =
-        '<div class="message-label">流程</div><div class="message-text">' +
-        '<div style="margin-bottom:8px">' +
-        (isNew ? '已为这次报价建卡。' : '这张报价卡片当前在') +
-        '<b>第 ' + currentStep + ' 步「' + escapeHtml(STEPS[currentStep - 1]) + '」</b>，由<b>' +
-        escapeHtml(WF.needRole) + '</b>负责，正好是你（' + escapeHtml(wfUser().role_name) +
-        '）。确认后开始本步骤。</div>' +
-        '<button id="wfStartBtn" style="padding:7px 16px;border:none;border-radius:8px;' +
-        'background:var(--color-primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer">' +
-        '<i class="ti ti-player-play"></i> 开始第 ' + currentStep + ' 步</button>' +
-        '</div>';
-      chatEl.appendChild(div);
-      scrollChat();
-      $('wfStartBtn').onclick = () => wfStartStep(currentStep);
+      if (!need || BOOT_PENDING || busy) return;
+      const key = (currentSessionId || '') + '#' + currentStep;
+      if (WF_AUTO.inflight || WF_AUTO.failedFor === key) return;   // 失败过就不无限重试
+      WF_AUTO.inflight = true;
+      addAiBubble('▶ 第 ' + currentStep + ' 步「' + STEPS[currentStep - 1] + '」由**' +
+        (WF.needRole || '') + '**负责，与你的角色匹配，自动开始本步骤。');
+      wfStartStep(currentStep).then(ok => {
+        WF_AUTO.inflight = false;
+        if (!ok) WF_AUTO.failedFor = key;
+      });
     }
 
     // 标记本步开工；notify=true 时同时让智能体真正开始做这一步
@@ -2528,7 +2526,8 @@
         // 第 1 步快速通道：不进智能体思考/填表/推荐循环 ——
         // 后端先纯 SQL 查 product_para_value 五参数，再做一次大模型评估，
         // 六维加权评分规则不变；用户「选用」之后的流程不变。
-        step1FastMatch(k.text);
+        // display=用户实际填写的内容（项目/客户/需求/附件名），第 2 步回显用它、不带附件正文
+        step1FastMatch(k.text, k.display);
         return true;
       }
       const name = STEPS[step - 1];
@@ -3370,7 +3369,7 @@
         // 从首页「历史记录」点进来的：直接载入该会话，跳过新对话
         let openId = '';
         try { openId = sessionStorage.getItem('cpq:openSession') || ''; sessionStorage.removeItem('cpq:openSession'); } catch {}
-        if (openId) { await openSession(openId); return; }
+        if (openId) { BOOT_PENDING = false; await openSession(openId); return; }
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
         await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
       } catch {
@@ -3414,6 +3413,7 @@
           text: '【会话开始·人工模式】' + projLine,
           display: kickoffBubble || '新建报价（人工模式）', step: 1, manual: true,
         };
+        BOOT_PENDING = false;   // kickoff 已暂存，允许自动开始
         wfGate();
         return;
       }
@@ -3423,9 +3423,10 @@
           kickoffFull += '\n\n--- 附件《' + f.name + '》内容' + (f.truncated ? '（内容较长，已截断）' : '') + ' ---\n' + f.text + '\n--- 文件结束 ---';
         }
       }
-      // 一律不自动开工：把 kickoff 暂存，交给准入闸门判定——
-      // 未登录 -> 拦住并要求登录；登录后按角色 -> 请他点「开始第 1 步」或要求转交。
+      // 把 kickoff 暂存，交给准入闸门判定——未登录 -> 拦住并要求登录；
+      // 登录后角色匹配 -> 自动开始第 1 步；角色不符 -> 要求转交。
       PENDING_KICKOFF = { text: kickoffFull, display: kickoffBubble };
+      BOOT_PENDING = false;   // kickoff 已暂存，允许自动开始
       wfGate();
     }
 
