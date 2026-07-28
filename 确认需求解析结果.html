@@ -1664,7 +1664,12 @@
     /* ============ 第 1 步：产品推荐清单（渲染在左侧对话框，供用户点选） ============
        六维加权评分由后端 match_products 确定性算出，这里只负责展示：
        每行给出总分 + 各维度分，「图片」按需展开（点了才加载），「选用」把选择回传给智能体。 */
-    function renderCandidates(ui) {
+    /* 第 1 步匹配上下文（需求全文 + Top3 推荐 + 销售经理选了谁）：
+       随第 1 步快照落库（_match 键），第 2 步工艺经理开始时回显并支持改选 */
+    let STEP1_MATCH = { text: '', ui: null, picked: '' };
+    function renderCandidates(ui, opts) {
+      opts = opts || {};
+      if (!opts.replay) { STEP1_MATCH.ui = ui; if (STEP1_LAST_REQ) STEP1_MATCH.text = STEP1_LAST_REQ; }
       const list = ui.products || [];
       const div = document.createElement('div');
       div.className = 'message message-ai cand-block';
@@ -1691,6 +1696,11 @@
         html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 最高分低于阈值 ' +
           ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
       }
+      if (opts.repick && opts.picked) {
+        html += '<div class="cand-sub" style="color:var(--color-primary,#4f46e5)">' +
+          '<i class="ti ti-user-check"></i> 销售经理已选：<b>' + escapeHtml(opts.picked) +
+          '</b>。如工艺上需要变更，点其他产品的「改选此产品」，右侧参数与成本会自动更新。</div>';
+      }
 
       html += '<div class="cand-scroll"><table class="cand-table"><thead><tr>' +
         '<th>#</th><th>成品编码 / 描述</th><th>总分</th>' +
@@ -1712,7 +1722,11 @@
           }).join('') +
           '<td class="cand-ops">' +
           '<button class="cand-btn img" data-img="' + escapeHtml(p.code) + '"><i class="ti ti-photo"></i>图片</button>' +
-          '<button class="cand-btn pick" data-pick="' + i + '"><i class="ti ti-check"></i>选用</button>' +
+          ((opts.picked && p.code === opts.picked)
+            ? '<button class="cand-btn pick picked" disabled><i class="ti ti-check"></i>' +
+              (opts.repick ? '销售经理已选' : '已选用') + '</button>'
+            : '<button class="cand-btn pick" data-pick="' + i + '">' +
+              (opts.repick ? '<i class="ti ti-refresh"></i>改选此产品' : '<i class="ti ti-check"></i>选用') + '</button>') +
           '</td></tr>';
         // 逐维度说明 + 告警（默认折叠在第二行，点总分展开）
         html += '<tr class="cand-why" data-why="' + escapeHtml(p.code) + '"><td></td><td colspan="' +
@@ -1791,9 +1805,13 @@
       }
       btn.classList.add('picked');
       btn.innerHTML = '<i class="ti ti-check"></i>已选用';
+      STEP1_MATCH.picked = p.code;
+      const inStep2 = currentStep === 2;   // 工艺确认中改选：右侧第 1、2 步的表都要换成新产品
 
-      // 直接把两张固定表填上（第 1 步的产品技术参数 + 产品信息列表）
-      [['s1_techparams', d.techparams_row], ['s1_products', d.products_row]].forEach(([sid, row]) => {
+      // 直接把固定表填上（第 1 步的产品技术参数 + 产品信息列表；工艺确认改选时连同第 2 步两张沿用表）
+      const targets = [['s1_techparams', d.techparams_row], ['s1_products', d.products_row]];
+      if (inStep2) targets.push(['s2_techparams', d.techparams_row], ['s2_products', d.products_row]);
+      targets.forEach(([sid, row]) => {
         const f = FORMS.find(x => x.section_id === sid);
         if (!f || !row || !Object.keys(row).length) return;
         renderTableSection({
@@ -1802,12 +1820,16 @@
         });
       });
       if (currentStep === 1) showStep(1);
+      else if (inStep2) showStep(2);
 
       const priceTxt = d.price
-        ? '价格 ' + d.price + '（取自 md_clm_material_cost_cnf.material_unit_price）' + (d.price_note || '')
-        : '⚠ 未取到价格' + (d.price_note ? '：' + d.price_note : '') + '，请人工填写';
-      addAiBubble('✅ 已选用 **' + p.code + '**（' + (d.name || p.name || '') + '），加权总分 ' + p.total + '。\n\n' +
-        '· 产品技术参数、产品信息列表已按数据库实际值填入右侧工作台\n· ' + priceTxt +
+        ? '成本 ' + d.price + '（取自 md_clm_material_cost_cnf.material_unit_price）' + (d.price_note || '')
+        : '⚠ 未取到成本' + (d.price_note ? '：' + d.price_note : '') + '，请人工填写';
+      addAiBubble((inStep2
+          ? '✅ 工艺确认改选为 **' + p.code + '**（' + (d.name || p.name || '') + '），加权总分 ' + p.total + '。\n\n' +
+            '· 右侧产品信息列表与产品技术参数已**更新为新选产品**（第 1、2 步同步替换）\n· '
+          : '✅ 已选用 **' + p.code + '**（' + (d.name || p.name || '') + '），加权总分 ' + p.total + '。\n\n' +
+            '· 产品技术参数、产品信息列表已按数据库实际值填入右侧工作台\n· ') + priceTxt +
         (p.warnings && p.warnings.length ? '\n· ⚠ 注意：' + p.warnings.join('；') : '') +
         '\n\n请核对右侧内容，如需调整可直接修改，然后点「进入下一大步骤」。');
       scrollChat();
@@ -2235,15 +2257,14 @@
         setStep(next);
         if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
         await wfRefresh();
-        // 自动回传：卡片当初是别人转交给我的（如工艺经理收到的工艺确认任务），
-        // 后端确认本步时已把任务自动发回给原转交人 -> 不再弹推送窗口
+        // 自动推送：下一步换角色时后端已把任务直接发给项目创建人 -> 不再弹推送窗口
         if (h.auto_handoff) {
           WF.pendingHandoff = null;   // 已自动交接，解除「待转交」
           const a = h.auto_handoff;
-          addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n本卡片由 **' +
+          addAiBubble('✅ 第 ' + cur + ' 步已完成。\n\n系统已把下一步「第 ' + h.next_step_no +
+            ' 步 · ' + h.next_step_name + '」的任务**自动推送给项目创建人 ' +
             (a.target_role_name || '') + '·' + (a.target_name || '') +
-            '** 转交给你，系统已把下一步「第 ' + h.next_step_no + ' 步 · ' + h.next_step_name +
-            '」的任务**自动回传**给对方，无需手动推送。对方领取后会在自己的工作台继续。');
+            '**，无需手动选择推送。对方领取后会在自己的工作台继续。');
           if (window.cpqMsg && cpqMsg.ping) cpqMsg.ping();   // 刷新消息铃铛（发出任务的站内信）
           return;   // ← 不弹推送窗口、不通知智能体开始下一步
         }
@@ -2513,13 +2534,15 @@
       const name = STEPS[step - 1];
       addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
       if (step === 2) {
-        // 工艺确认是人工核对：沿用第 1 步数据只读展示，不调智能体
+        // 工艺确认是人工核对：沿用第 1 步数据展示，不调智能体
         // （本地没有第 1 步数据时先从卡片快照恢复——交接过来的卡片就是这种情况）
         await ensureStep2Data();
+        // 开场回显：第 1 步客户需求描述 + Top3 推荐表（标出销售经理已选，支持改选）
+        await showStep2Review();
         sendToAgent(
           `【开始步骤】用户已接手并开始第 2 步「工艺确认」——这是人工核对步骤，` +
-          `产品信息列表与产品技术参数已由前端沿用第 1 步的数据只读展示，你无需查库或填表，` +
-          `只用一句话提示用户核对后点「进入下一大步骤」即可。`,
+          `第 1 步的需求描述与产品推荐表已回显在左侧、产品信息列表与产品技术参数已沿用到右侧，` +
+          `你无需查库或填表，只用一句话提示用户核对（如工艺上有问题可在左侧改选产品）后点「进入下一大步骤」即可。`,
           { echo: false, display: '开始第 2 步', step: 2 });
         return true;
       }
@@ -2603,6 +2626,13 @@
       if (!wfUser() || !currentSessionId) return true;   // 未登录：保持原有本机流程
       try {
         await wfSyncCard(step);
+        // 第 1 步快照额外带上匹配上下文（需求全文 + Top3 推荐 + 已选编码）：
+        // 工艺经理开始第 2 步时据此回显推荐表并支持改选。恢复端按 FORMS 过滤，_match 不影响表格恢复。
+        if (step === 1 && (STEP1_MATCH.ui || STEP1_MATCH.text)) {
+          data = Object.assign({}, data || {}, {
+            _match: { text: STEP1_MATCH.text, ui: STEP1_MATCH.ui, picked: STEP1_MATCH.picked },
+          });
+        }
         const d = await wfApi('/wf/card/step-done', {
           method: 'POST',
           body: { session_id: currentSessionId, step_no: step, snapshot: JSON.stringify(data || {}) },
@@ -2821,6 +2851,20 @@
       const map = CARRY_MAP[step];
       if (!map) return;
       if (map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容
+      // 第 3 步及以后：第 2 步工艺确认后的产品才是权威版本（工艺经理可能改选过）——
+      // 优先用第 2 步快照回写本地第 1 步两张表，再沿用；本地（销售经理机器上）的旧选择会被覆盖
+      if (step >= 3) {
+        await wfRestoreStepData(2);
+        [['s2_products', 's1_products'], ['s2_techparams', 's1_techparams']].forEach(([src, dst]) => {
+          const rows = extractSectionRows(src);
+          const f = FORMS.find(x => x.section_id === dst);
+          if (!rows.length || !f) return;
+          renderTableSection({
+            action: 'render_table', step: f.step, section_id: dst,
+            title: f.title, editable: f.editable, columns: f.columns || [], rows,
+          });
+        });
+      }
       if (!extractSectionRows('s1_products').length &&
           !extractSectionRows('s1_techparams').length) {
         await wfRestoreStepData(1);                             // 交接过来的卡片：先恢复第 1 步
@@ -2828,6 +2872,32 @@
       maybeCarry(step);
     }
     async function ensureStep2Data() { return ensureCarryData(2); }   // 兼容旧调用名
+
+    /* 第 2 步工艺确认开场回显：第 1 步的客户需求描述 + Top3 产品推荐表（含各维评分），
+       标出销售经理已选的产品，其余候选给「改选此产品」按键；改选走 pickProduct（currentStep=2
+       时会把第 1、2 步的产品信息/技术参数一并替换为新选产品）。 */
+    async function showStep2Review() {
+      let m = (STEP1_MATCH.ui || STEP1_MATCH.text) ? STEP1_MATCH : null;
+      if (!m) {   // 交接过来的卡片：本地没有第 1 步上下文，从第 1 步快照的 _match 取
+        try {
+          const d = await wfApi('/wf/card/step-data?session_id=' +
+            encodeURIComponent(currentSessionId) + '&step_no=1');
+          const mm = d && d.data && d.data._match;
+          if (mm && (mm.ui || mm.text)) {
+            m = mm;
+            STEP1_MATCH = { text: mm.text || '', ui: mm.ui || null, picked: mm.picked || '' };
+          }
+        } catch (e) {}
+      }
+      if (!m) return false;
+      if (m.text) {
+        addAiBubble('📋 **第 1 步客户需求描述**（供工艺确认参考）：\n\n' + m.text);
+      }
+      if (m.ui && (m.ui.products || []).length) {
+        renderCandidates(m.ui, { picked: m.picked || STEP1_MATCH.picked, repick: true, replay: true });
+      }
+      return true;
+    }
 
     function maybeCarry(step) {
       const map = CARRY_MAP[step];

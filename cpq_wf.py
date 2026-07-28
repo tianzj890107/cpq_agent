@@ -465,21 +465,23 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
             (_ts(now), cid, int(user["user_id"])))
         _log(conn, cid, None, int(user["user_id"]), "step_done", step_no, nxt,
              f"{user.get('display_name')} 完成第 {step_no} 步")
-        # 自动回传：这张卡当初是别人转交给我的（如销售经理把第 2 步工艺确认发给工艺经理），
-        # 且那个人的角色恰好能做下一步 -> 确认后直接把任务自动发回给他，不再让用户手动选择推送。
+        # 自动推送：下一步换角色时（如工艺经理确认完第 2 步），不弹推送选择，
+        # 直接把任务自动发给**项目创建人**（卡片 creator_user_id，即发起这单报价的销售经理）。
+        # 创建人就是自己 / 账号失效 / 角色与下一步不匹配时才退回手动推送。
         auto_target = None
         if need_handoff:
-            cur = cpq_auth._exec(
-                conn, "SELECT t.from_user_id, u.display_name, u.role_code FROM cpq_wf_task t"
-                      " JOIN cpq_wf_user u ON u.user_id = t.from_user_id"
-                      " WHERE t.card_id = %s AND t.claimed_by_user_id = %s"
-                      "   AND t.from_user_id <> %s AND u.status = 'active'"
-                      " ORDER BY t.created_at DESC, t.task_id DESC LIMIT 1",
-                (cid, int(user["user_id"]), int(user["user_id"])))
-            row = cur.fetchone()
-            if row and row[2] == next_role:
-                auto_target = {"user_id": int(row[0]), "display_name": row[1] or "",
-                               "role_code": row[2]}
+            try:
+                creator_id = int(card.get("creator_user_id") or 0)
+            except (TypeError, ValueError):
+                creator_id = 0
+            if creator_id and creator_id != int(user["user_id"]):
+                cur = cpq_auth._exec(
+                    conn, "SELECT display_name, role_code FROM cpq_wf_user"
+                          " WHERE user_id = %s AND status = 'active'", (creator_id,))
+                row = cur.fetchone()
+                if row and row[1] == next_role:
+                    auto_target = {"user_id": creator_id, "display_name": row[0] or "",
+                                   "role_code": row[1]}
         _commit(conn)
         result = {
             "card": _fetch_card(conn, session_id),
@@ -497,7 +499,7 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
         try:
             st = send_task(session_id, user, "user",
                            target_user_id=str(auto_target["user_id"]),
-                           note=f"第 {step_no} 步「{step_name}」已确认，系统自动回传")
+                           note=f"第 {step_no} 步「{step_name}」已确认，系统自动推送给项目创建人")
             result["auto_handoff"] = {
                 "target_user_id": str(auto_target["user_id"]),
                 "target_name": auto_target["display_name"],
