@@ -819,46 +819,24 @@ def _handle_match_products(tool_input: dict) -> str:
 _STEP1_JSON_MARK = "===JSON==="
 
 _STEP1_EVAL_SYS = (
-    "你是报价系统第 1 步的需求评估器。输入是一份需求文本和产品库 product_para_value 里各产品的"
-    "五个匹配参数摘要（max_dimension 最大尺寸(mm) / application_scope 应用范围 / "
-    "operating_temperature 工作温度 / service_life 寿命 / hermeticity 密封性）。\n"
+    "你是报价系统第 1 步的**需求意图识别器**。输入只有用户的需求文本。\n"
+    "你的唯一任务：从需求文本里提取五个匹配参数，判断信息是否齐全。"
+    "**不要做任何别的事**——不查数据库、不推荐产品、不填任何表单、不给建议方案。\n"
     "**输出分两段**：\n"
-    "第一段：用 2~4 句话说明你从需求里读到的关键参数、以及与产品库的匹配情况"
-    "（这段会实时展示给用户，请用自然中文，不要写 JSON、不要列表格）。\n"
+    "第一段：用 1~3 句话说明你从需求里读到了哪些参数、还缺哪些"
+    "（这段会实时展示给用户，用自然中文，不要写 JSON、不要列表格、不要提具体产品）。\n"
     "第二段：另起一行只写 " + _STEP1_JSON_MARK + " ，然后输出一个 JSON 对象，格式：\n"
     '{"max_dimension": "如 100*50*20，需求没提就空字符串", "dimension_tolerance_pct": 0, '
     '"application_scope": "", "operating_temperature": "如 -20~60", '
     '"service_life": "如 500次 / 5年", "hermeticity": "如 IP67", '
-    '"comment": "一句话总结（可与第一段重复）"}\n'
-    "参数必须忠实于需求文本，没提到的留空字符串，**不要编造**；"
-    "相似度打分由系统按固定的六维加权规则计算，你不用打分、不要给出分数。"
+    '"comment": "一句话说明识别结果"}\n'
+    "参数必须忠实于需求文本，没提到的一律留空字符串，**绝对不要编造或推测**。"
 )
-
-_STEP1_ROWS_FOR_LLM = 60      # 给大模型看的产品行数上限（只作评估参考，打分用全量）
-
-
-def _step1_rows_digest(cols, rows) -> str:
-    """产品库摘要（给大模型看）：编码 + 五个匹配参数，最多 _STEP1_ROWS_FOR_LLM 行。"""
-    idx = {c: i for i, c in enumerate(cols)}
-    keep = [cpq_match.COL_CODE, "max_dimension", "application_scope",
-            "operating_temperature", "service_life", "hermeticity"]
-    lines = [" | ".join(keep)]
-    for r in rows[:_STEP1_ROWS_FOR_LLM]:
-        vals = []
-        for c in keep:
-            i = idx.get(c)
-            v = "" if i is None or r[i] is None else str(r[i])
-            vals.append(v.replace("\n", " ")[:40])
-        lines.append(" | ".join(vals))
-    if len(rows) > _STEP1_ROWS_FOR_LLM:
-        lines.append(f"…（共 {len(rows)} 行，其余略）")
-    return "\n".join(lines)
-
 
 _STEP1_REQ_KEYS = ("max_dimension", "dimension_tolerance_pct", "application_scope",
                    "operating_temperature", "service_life", "hermeticity")
 
-# 意图识别硬性门槛：这三项缺一不可，缺了就提醒用户补需求，不开始匹配
+# 意图识别硬性门槛：这三项缺一不可，缺了就提醒用户补需求，不查库/不推荐/不填表
 _STEP1_REQUIRED = (("max_dimension", "尺寸"),
                    ("application_scope", "应用范围/使用场景"),
                    ("operating_temperature", "工作温度"))
@@ -935,10 +913,15 @@ def _step1_visible_text(raw: str) -> str:
 
 
 def _handle_step1_match(data: dict, emit=None) -> dict:
-    """第 1 步产品匹配快速通道。
+    """第 1 步：**先意图识别，齐全后才查库推荐**。
 
-    emit 不为 None 时走流式：把模型的评估文字实时 emit 给前端
-    （{"type":"text"} / {"type":"stage"}），最终仍返回同样的结果字典。
+    ① 意图识别：一次大模型调用，只从需求文本提取五个参数并判断完整性——
+       这一阶段不查库、不填表、不推荐产品；缺 尺寸/应用范围/工作温度 任一项就直接返回
+       stage="intent"，请用户补充需求。
+    ② 参数齐全后才查 product_para_value，并按六维加权规则确定性评分出 Top3。
+    （表单填写由前端在拿到推荐结果后再交给智能体，见 step1FastMatch。）
+
+    emit 不为 None 时走流式：模型的识别文字实时 emit 给前端。
     """
     t0 = time.perf_counter()
 
@@ -957,38 +940,19 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         return {"ok": False, "error": "缺少需求文本"}
     _trace(f"开始：需求文本 {len(text)} 字")
 
-    # ① 先查库（纯 SQL，不经大模型）
-    sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
-    t = time.perf_counter()
-    try:
-        cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
-    except Exception as e:
-        _trace(f"① 查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
-        return {"ok": False, "stage": "db",
-                "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
-                         f"{str(e).splitlines()[0][:160]}"}
-    _trace(f"① 查库 {cpq_match.PRODUCT_TABLE} 完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
-    _say({"type": "stage", "text": f"已查库 {cpq_match.PRODUCT_TABLE}：取回 {len(rows)} 行"})
-    if not rows:
-        return {"ok": False, "stage": "db",
-                "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
-
-    # ② 一次大模型评估（提取需求参数；失败就如实报错，绝不编造推荐）
+    # ① 意图识别（只看需求文本；不查库、不填表、不推荐）
     b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
     if b is None or b.conv.model == NO_MODEL_ID:
         return {"ok": False, "stage": "llm",
-                "error": "当前为「无模型」模式，无法做需求参数评估；"
+                "error": "当前为「无模型」模式，无法做需求识别；"
                          "请在设置里配置模型，或在右侧人工填写。"}
-    digest = _step1_rows_digest(cols, rows)
-    prompt = ("【需求文本】\n" + text[:8000] +
-              "\n\n【产品库五参数摘要】\n" + digest)
-    _trace(f"② 调大模型 {b.conv.model}：入参 {len(prompt)} 字"
-           f"（需求 {min(len(text), 8000)} + 摘要 {len(digest)}），等待返回…")
+    _say({"type": "stage", "text": "意图识别：检查需求信息是否齐全"})
+    prompt = "【需求文本】\n" + text[:8000]
+    _trace(f"① 意图识别，调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
     t = time.perf_counter()
     out = ""
     try:
         if emit:
-            # 流式：逐块 emit 分隔符之前的可读文本（JSON 段不外露）
             shown = 0
             for ev in stream_message(
                     b.conv.client, [{"role": "user", "content": prompt}], _STEP1_EVAL_SYS,
@@ -1005,40 +969,51 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         else:
             from open_claude.api import complete
             res = complete(
-                b.conv.client,
-                [{"role": "user", "content": prompt}],
-                _STEP1_EVAL_SYS,
-                model=b.conv.model,
-                max_tokens=2000,   # 思考型模型的思考段也占 tokens，给太小 JSON 会被截断
-            )
+                b.conv.client, [{"role": "user", "content": prompt}], _STEP1_EVAL_SYS,
+                model=b.conv.model, max_tokens=2000)
             out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
-        _trace(f"② 大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
+        _trace(f"① 大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
         return {"ok": False, "stage": "llm",
-                "error": f"大模型评估调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
-    _trace(f"② 大模型返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
+                "error": f"需求识别调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
+    _trace(f"① 意图识别返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
     if not out:
-        _trace("② 大模型返回为空（可能只有思考段/被网关过滤）")
         return {"ok": False, "stage": "llm",
-                "error": "大模型评估返回为空，请重试或人工填写需求参数。"}
+                "error": "需求识别返回为空，请重试或人工填写需求参数。"}
     req, comment = _parse_step1_json(out)
     if req is None:
-        _trace("② 输出不是有效 JSON，放弃。原文前 400 字：" +
-               out[:400].replace("\n", "⏎"))
+        _trace("① 输出不是有效 JSON，放弃。原文前 400 字：" + out[:400].replace("\n", "⏎"))
         return {"ok": False, "stage": "llm",
-                "error": "大模型评估输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
+                "error": "需求识别输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
 
-    # ②.5 意图识别门槛：尺寸 / 应用范围 / 工作温度 三项必须齐全，缺了不匹配、提醒补需求
+    # ①.5 完整性门槛：尺寸 / 应用范围 / 工作温度 缺一不可 —— 缺了就到此为止，**不查库**
     missing = _step1_missing(req)
     if missing:
-        _trace("②.5 意图识别：需求缺少 " + "、".join(missing) + "，不开始匹配")
+        _trace("① 意图识别：需求缺少 " + "、".join(missing) + "，不查库、不推荐、不填表")
         return {"ok": False, "stage": "intent", "missing": missing,
                 "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
+                "comment": comment,
                 "error": "需求缺少必备匹配参数：" + "、".join(missing)}
 
-    # ③ 确定性六维评分（复用 ① 已取回的数据，规则不变）
+    # ② 参数齐全 -> 查库（纯 SQL）
+    sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
+    _say({"type": "stage", "text": "需求信息齐全，开始查询产品参数值表（远程 Postgres）"})
     t = time.perf_counter()
-    _say({"type": "stage", "text": "正在按六维加权规则评分…"})
+    try:
+        cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
+    except Exception as e:
+        _trace(f"② 查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
+        return {"ok": False, "stage": "db",
+                "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
+                         f"{str(e).splitlines()[0][:160]}"}
+    _trace(f"② 查库 {cpq_match.PRODUCT_TABLE} 完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
+    _say({"type": "stage", "text": f"已查库：取回 {len(rows)} 行，正在按六维加权规则评分…"})
+    if not rows:
+        return {"ok": False, "stage": "db",
+                "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
+
+    # ③ 确定性六维评分（规则不变）
+    t = time.perf_counter()
     match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
     match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
     match_res["comment"] = comment

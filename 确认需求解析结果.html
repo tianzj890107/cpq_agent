@@ -1871,12 +1871,13 @@
     let STEP1_LAST_REQ = '';     // 最近一次送去匹配的需求全文（含附件正文，意图门槛未过时等待补充合并）
     let STEP1_LAST_DISPLAY = ''; // 用户实际输入的文字内容（第 2 步回显只用这个，不带附件正文/系统指令）
     let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新匹配
+    // 待办的「填表」任务（需求全文）：只有意图识别通过、产品推荐给出后才触发，避免信息不全就乱填
+    let STEP1_FORM_TASK = null;
     async function step1FastMatch(text, displayText) {
       STEP1_LAST_REQ = text || '';
       STEP1_LAST_DISPLAY = displayText || STEP1_LAST_DISPLAY || text || '';
       setBusy(true);
-      const act = addToolActivity('产品匹配：查询产品参数值表（远程 Postgres）→ 一次大模型评估 → 六维加权评分',
-        'SELECT * FROM product_para_value');
+      const act = addToolActivity('第 1 步：意图识别（检查需求是否齐全）→ 齐全后查库匹配产品');
       showTyping();
       // SSE 流式：评估文字边生成边显示；stage 是阶段提示；result 是最终结果
       let d = null;
@@ -1919,17 +1920,18 @@
       setBusy(false);
       chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
       if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
-      // 意图识别门槛：尺寸/应用范围/工作温度缺一不可——不开始匹配，请用户补需求
+      // 意图识别门槛：尺寸/应用范围/工作温度缺一不可 ——
+      // 到此为止：不查库、不推荐产品、不填表，等用户把需求补齐
       if (d && d.stage === 'intent') {
         STEP1_REINPUT = true;
         const have = Object.entries(d.requirement || {})
           .map(([k, v]) => (CAND_REQ_LABEL[k] || k) + '：' + v).join('　');
-        addAiBubble('⚠ **暂不开始产品匹配**——需求里缺少必备参数：**' +
+        addAiBubble('⚠ **需求信息不齐，暂不进行任何操作**（不查库、不推荐产品、不填表）——缺少：**' +
           (d.missing || []).join('、') + '**。\n\n' +
           (have ? '已识别到：' + have + '\n\n' : '') +
           '产品匹配必须同时给出 **尺寸、应用范围/使用场景、工作温度** 三项。' +
           '请直接在下方输入框补充缺失的参数（例如「尺寸约13*20，用于水表，工作温度28℃」），' +
-          '发送后会自动与已有需求合并并重新匹配。');
+          '发送后会自动与已有需求合并并重新识别。');
         return;
       }
       if (!d || !d.ok) {
@@ -1950,6 +1952,12 @@
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
+      // 产品推荐已给出 -> 现在才开始第三段：交给智能体把其余四个分区填满
+      if (STEP1_FORM_TASK) {
+        const task = STEP1_FORM_TASK;
+        STEP1_FORM_TASK = null;
+        sendToAgent(task, { echo: false, display: '', step: 1 });
+      }
     }
 
     function applyUiEvent(ui) {
@@ -2562,14 +2570,14 @@
           sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
           return true;
         }
-        // 第 1 步分两路并行：
-        //  ① 产品匹配走确定性快速通道（纯 SQL 查 product_para_value + 一次评估 + 六维加权评分），
-        //     推荐清单渲染到左侧，产品两张表等用户点「选用」后由系统填；
-        //  ② 智能体解析需求，把其余四个分区（测算基本信息/目的地/付款里程碑/物流）推荐填满。
+        // 第 1 步严格分三段（信息不齐时到第一段为止）：
+        //  ① 意图识别：只判断需求信息是否齐全，不查库、不推荐、不填表；
+        //  ② 齐全后查 product_para_value + 六维加权评分，推荐清单渲染到左侧；
+        //  ③ 最后才交给智能体把其余四个分区（测算基本信息/目的地/付款里程碑/物流）填满。
+        // 后两段由 step1FastMatch 在门槛通过后依次触发（见 STEP1_FORM_TASK）。
         // display=用户实际填写的内容（项目/客户/需求/附件名），第 2 步回显用它、不带附件正文
-        step1FastMatch(k.text, k.display).then(() => sendToAgent(k.text, {
-          echo: false, display: '', step: 1,
-        }));
+        STEP1_FORM_TASK = k.text;
+        step1FastMatch(k.text, k.display);
         return true;
       }
       const name = STEPS[step - 1];
@@ -3784,7 +3792,7 @@
         '附件：' + (files.length ? files.join('、') : '无') + '\n' +
         '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构已预渲染成【空骨架】在右侧，字段固定、你不用造结构；' +
         '但**右侧现在是空的，值必须你主动调用 cpq_ui 的 render_form(values)/render_table(rows) 填进去**——不 render 右侧就一直空着。\n' +
-        '⚠️ **分工**：产品匹配已由系统并行完成（六维加权评分的 Top3 推荐清单已渲染在左侧供用户点选），' +
+        '⚠️ **分工**：需求信息已通过完整性校验，产品匹配也已由系统完成（六维加权评分的 Top3 推荐清单已渲染在左侧供用户点选），' +
         '**你不要做产品匹配、不要调 match_products、不要填 s1_products / s1_techparams**' +
         '（这两张表等用户点「选用」后由系统用纯 SQL 自动填）。**你负责其余四个分区：' +
         's1_basic（测算基本信息）、s1_dest（目的地信息·可多行）、s1_payment（付款里程碑信息）、s1_logistics（物流信息·可多行）**。\n' +
