@@ -1961,7 +1961,11 @@
     }
 
     /* 第 1 步四个非产品分区（测算基本信息/目的地/付款里程碑/物流）：
-       一次流式大模型调用直接拿到结构化结果并渲染，不进智能体多轮工具循环（快很多）。 */
+       一次流式大模型调用**补空缺**——把当前已填的值一起发过去，模型只回补充项，
+       前端按「已有值优先」合并回填，绝不覆盖用户/系统已填的内容（如项目名称、客户）。
+       产品信息与产品技术参数不在此列（由匹配 + 选用决定）。 */
+    const STEP1_FORM_SECTIONS = ['s1_basic', 's1_dest', 's1_payment', 's1_logistics'];
+
     async function fillStep1Forms(text) {
       if (manualMode || !FORMS.length) return false;
       let auth = {};
@@ -1972,14 +1976,24 @@
           客户: sessionStorage.getItem('cpq:customer') || '',
         };
       } catch (e) {}
+      // 当前各分区已有内容（让模型知道哪些不用再填）
+      const d1 = collectStepData(1) || {};
+      const current = {};
+      STEP1_FORM_SECTIONS.forEach(sid => {
+        const s = d1[sid];
+        if (!s) return;
+        const data = s['数据'] !== undefined ? s['数据'] : s.data;
+        if (data && (Array.isArray(data) ? data.length : Object.keys(data).length)) current[sid] = data;
+      });
+
       setBusy(true);
-      const act = addToolActivity('填写第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息');
+      const act = addToolActivity('补全第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息');
       showTyping();
       let d = null, gotText = false;
       try {
         const resp = await fetch(AGENT_URL + '/api/step1/forms', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, sid: currentSessionId, authoritative: auth }),
+          body: JSON.stringify({ text: text, sid: currentSessionId, authoritative: auth, current: current }),
         });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
         const reader = resp.body.getReader();
@@ -2018,29 +2032,68 @@
         addErrorBubble('第 1 步表单自动填写失败：' + ((d && d.error) || '未知错误') + '，请在右侧人工填写。');
         return false;
       }
+
       const secs = d.sections || {};
-      const names = [];
-      Object.keys(secs).forEach(sid => {
+      const filled = [];
+      STEP1_FORM_SECTIONS.forEach(sid => {
         const f = FORMS.find(x => x.section_id === sid);
         const s = secs[sid];
         if (!f || !s) return;
+        const title = (f.title || sid).replace(/^[①-⑨]\s*/, '');
         if (s.kind === 'form') {
+          // 合并：已有值优先，模型只补空缺
+          const old = (current[sid] && !Array.isArray(current[sid])) ? current[sid] : {};
+          const add = s.values || {};
+          const reco = s.reco || [];
+          let n = 0;
+          const fields = (f.fields || []).map(x => {
+            const had = String(old[x.key] || '').trim();
+            const val = had || String(add[x.key] || '');
+            if (!had && val) n++;
+            return { key: x.key, label: x.label, type: 'text', value: val,
+                     reco: !had && reco.indexOf(x.key) >= 0 };
+          });
+          if (!n) return;
           renderFormSection({
             action: 'render_form', step: f.step, section_id: sid, title: f.title,
-            editable: f.editable, fields: s.fields || [],
+            editable: f.editable, fields: fields,
           });
+          filled.push(title + ' ' + n + ' 项');
         } else {
+          // 列表：逐行按列合并（已有单元格不动），模型多给的行追加在后面
+          const old = Array.isArray(current[sid]) ? current[sid] : [];
+          const add = s.rows || [];
+          const rows = [];
+          const len = Math.max(old.length, add.length);
+          for (let k = 0; k < len; k++) {
+            const o = old[k] || {}, a = add[k] || {};
+            const row = Object.assign({}, o);
+            const reco = [];
+            (f.columns || []).forEach(c => {
+              if (!String(row[c.key] || '').trim() && String(a[c.key] || '').trim()) {
+                row[c.key] = a[c.key];
+                if ((a._reco || []).indexOf(c.key) >= 0) reco.push(c.key);
+              }
+            });
+            if (reco.length) row._reco = reco;
+            if (Object.keys(row).length) rows.push(row);
+          }
+          if (!rows.length) return;
           renderTableSection({
             action: 'render_table', step: f.step, section_id: sid, title: f.title,
-            editable: f.editable, columns: f.columns || [], rows: s.rows || [],
+            editable: f.editable, columns: f.columns || [], rows: rows,
           });
+          filled.push(title + ' ' + rows.length + ' 行');
         }
-        names.push(f.title.replace(/^[①-⑨]\s*/, ''));
       });
       if (currentStep === 1) showStep(1);
-      addAiBubble('📝 已填好第 1 步的' + (names.length ? '「' + names.join('」「') + '」' : '各项') +
-        '（浅色标记的是推荐值，可直接修改）。\n\n' +
-        '产品请在上方推荐清单点「选用」确定；全部核对无误后点「进入下一大步骤」。');
+      addAiBubble(filled.length
+        ? '📝 已补全第 1 步表单：' + filled.join('、') +
+          '（浅色标记的是按行业惯例推荐的值，可直接修改）。\n\n' +
+          '需求里没提、也无惯例可循的字段保持留空，请按实际情况人工补充；' +
+          '产品请在上方推荐清单点「选用」确定。全部核对无误后点「进入下一大步骤」。'
+        : '📝 第 1 步表单没有可自动补充的内容（需求信息有限），请在右侧人工填写；' +
+          '产品请在上方推荐清单点「选用」确定。');
       return true;
     }
 

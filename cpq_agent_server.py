@@ -1069,17 +1069,21 @@ def _extract_json_obj(out: str):
 STEP1_FORM_SECTIONS = ("s1_basic", "s1_dest", "s1_payment", "s1_logistics")
 
 _STEP1_FORMS_SYS = (
-    "你是报价系统第 1 步的填表器。输入是用户的需求文本（可能含附件正文）与几个权威值，"
-    "以及四个分区的固定字段清单。\n"
-    "任务：把需求里的信息填进这四个分区；需求没写的，基于行业常识给**合理推荐值**，"
-    "并在该值末尾加「（推荐）」标记。\n"
+    "你是报价系统第 1 步的填表助手。输入是用户的需求文本、几个权威值，以及四个分区的字段清单"
+    "（已经填了值的字段会标出当前值）。\n"
+    "任务：**只补空缺**——把需求文本里能读出来的、或按行业惯例能合理推断的字段补上。\n"
     "**铁律**：\n"
-    "1. 字段名必须用给定清单里的原文，**不要新增、改名或翻译字段**。\n"
-    "2. 客户 / 项目名称 / 项目编码 等权威值直接用给定的，不要另行臆造。\n"
-    "3. 目的地信息、物流信息、付款里程碑信息是**列表**，可以多行；确实无从判断就给空数组。\n"
-    "4. **不要涉及任何产品选型**（产品由系统单独匹配），不要输出产品编码/型号/价格。\n"
+    "1. **四个分区都要出现在 JSON 里**（s1_basic / s1_dest / s1_payment / s1_logistics），"
+    "确实无内容可补就给空对象 {} 或空数组 []。**不要只填第一个分区就结束**。\n"
+    "2. **不必填满**：没有依据、也无行业惯例可循的字段**直接省略不输出**"
+    "（宁可少填，也不要瞎猜编造）。\n"
+    "3. 标有当前值的字段**不要重复输出**，除非你有更准确的依据要覆盖它。\n"
+    "4. 字段名必须用清单里的原文，不要新增/改名/翻译。\n"
+    "5. 按行业惯例推断出来的值，在值末尾加「（推荐）」标记；直接来自需求文本的不加。\n"
+    "6. **不要涉及任何产品选型**（产品由系统单独匹配），不输出产品编码/型号/价格。\n"
+    "7. 输出要紧凑：每个分区只列你真正要填的字段，别把整张表的字段名都抄一遍。\n"
     "**输出分两段**：\n"
-    "第一段：用 2~4 句话说明你从需求里读到什么、哪些是推荐值"
+    "第一段：用 2~4 句话说明补了哪些内容、哪些是按惯例推荐的、哪些确实无从判断留空"
     "（这段会实时展示给用户，用自然中文，不要写 JSON、不要贴表格）。\n"
     "第二段：另起一行只写 " + _JSON_MARK + " ，然后输出一个 JSON 对象：\n"
     '{"s1_basic": {"字段名": "值"}, "s1_dest": [{"列名": "值"}], '
@@ -1088,7 +1092,10 @@ _STEP1_FORMS_SYS = (
 
 
 def _handle_step1_forms(data: dict, emit=None) -> dict:
-    """POST /api/step1/forms —— 第 1 步四个非产品分区的一次性填写（流式）。"""
+    """POST /api/step1/forms —— 第 1 步四个非产品分区「补空缺」（一次流式调用）。
+
+    只返回**需要补充**的字段，不回传已有值，避免前端合并时把用户/系统已填的值覆盖掉。
+    """
     t0 = time.perf_counter()
 
     def _trace(msg):
@@ -1109,23 +1116,36 @@ def _handle_step1_forms(data: dict, emit=None) -> dict:
         return {"ok": False, "stage": "llm",
                 "error": "当前为「无模型」模式，无法自动填表；请在右侧人工填写。"}
 
-    # 字段清单（来自固定表单目录，模型只能填这些）
+    cur = data.get("current") if isinstance(data.get("current"), dict) else {}
+
+    # 字段清单（模型只能填这些）；已有值直接标在字段后面，让模型别重复填
     spec, tpl = [], {}
     for sid in STEP1_FORM_SECTIONS:
         f = FIXED_FORMS.get(sid) or {}
         keys = [c["key"] for c in (f.get("columns") or f.get("fields") or [])]
         if not keys:
             continue
-        tpl[sid] = {"kind": f.get("kind", "table"), "keys": keys, "title": f.get("title", sid)}
-        spec.append("【{}｜{}｜{}】\n{}".format(
+        kind = f.get("kind", "table")
+        tpl[sid] = {"kind": kind, "keys": keys, "title": f.get("title", sid)}
+        have = cur.get(sid)
+        marks = []
+        for k in keys:
+            v = ""
+            if kind == "form" and isinstance(have, dict):
+                v = str(have.get(k) or "").strip()
+            marks.append(f"{k}（已填：{v[:20]}）" if v else k)
+        note = ""
+        if kind != "form" and isinstance(have, list) and have:
+            note = f"（已有 {len(have)} 行，只补缺失的列或追加新行）"
+        spec.append("【{}｜{}｜{}{}】\n{}".format(
             sid, f.get("title", sid),
-            "表单(单条)" if f.get("kind") == "form" else "列表(可多行)", "、".join(keys)))
+            "表单(单条)" if kind == "form" else "列表(可多行)", note, "、".join(marks)))
 
     auth = data.get("authoritative") or {}
     prompt = ("【需求文本】\n" + text[:12000] +
-              ("\n\n【权威值（直接使用）】\n" + json.dumps(auth, ensure_ascii=False) if auth else "") +
-              "\n\n【四个分区的固定字段清单】\n" + "\n".join(spec))
-    _say({"type": "stage", "text": "按需求填写测算基本信息 / 目的地 / 付款里程碑 / 物流信息"})
+              ("\n\n【权威值（已填入，不要改）】\n" + json.dumps(auth, ensure_ascii=False) if auth else "") +
+              "\n\n【四个分区的字段清单（标「已填」的不用再给）】\n" + "\n\n".join(spec))
+    _say({"type": "stage", "text": "补全第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息"})
     _trace(f"调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
     t = time.perf_counter()
     out = ""
@@ -1133,7 +1153,7 @@ def _handle_step1_forms(data: dict, emit=None) -> dict:
         shown = 0
         for ev in stream_message(
                 b.conv.client, [{"role": "user", "content": prompt}], _STEP1_FORMS_SYS,
-                model=b.conv.model, tools=[], max_tokens=4000):
+                model=b.conv.model, tools=[], max_tokens=6000):
             if ev.get("type") == "text_delta":
                 out += ev.get("text", "")
                 if emit:
@@ -1156,20 +1176,27 @@ def _handle_step1_forms(data: dict, emit=None) -> dict:
         return {"ok": False, "stage": "llm",
                 "error": "表单填写结果无法解析（不是有效 JSON），请重试或人工填写。"}
 
-    # 规范化：只保留固定字段；剥掉「（推荐）」文字并给出 reco 标志（前端只上色不显示文字）
-    out_secs = {}
+    # 规范化：只保留固定字段、只保留**有值**的项；剥掉「（推荐）」文字并给出 reco 标志
+    out_secs, stat = {}, []
     for sid, meta in tpl.items():
         raw = obj.get(sid)
         if meta["kind"] == "form":
             vals = raw if isinstance(raw, dict) else {}
-            fields, reco = [], []
+            have = cur.get(sid) if isinstance(cur.get(sid), dict) else {}
+            values, reco = {}, []
             for k in meta["keys"]:
+                if k not in vals:
+                    continue
+                if str(have.get(k) or "").strip():
+                    continue          # 已填的不动（前端也会「已有值优先」，这里先剔除减少噪音）
                 v, is_reco = _strip_reco(vals.get(k))
-                fields.append({"key": k, "label": k, "value": v, "reco": bool(is_reco)})
-                if is_reco:
-                    reco.append(k)
-            if any(f["value"] for f in fields):
-                out_secs[sid] = {"kind": "form", "title": meta["title"], "fields": fields}
+                if str(v).strip():
+                    values[k] = v
+                    if is_reco:
+                        reco.append(k)
+            if values:
+                out_secs[sid] = {"kind": "form", "values": values, "reco": reco}
+                stat.append(f"{meta['title']} {len(values)} 项")
         else:
             rows_in = raw if isinstance(raw, list) else ([raw] if isinstance(raw, dict) else [])
             rows = []
@@ -1188,9 +1215,13 @@ def _handle_step1_forms(data: dict, emit=None) -> dict:
                         row["_reco"] = reco
                     rows.append(row)
             if rows:
-                out_secs[sid] = {"kind": "table", "title": meta["title"], "rows": rows}
+                out_secs[sid] = {"kind": "table", "rows": rows}
+                stat.append(f"{meta['title']} {len(rows)} 行")
 
-    _trace(f"完成：填好 {len(out_secs)} 个分区；总耗时 {time.perf_counter() - t0:.2f}s")
+    missed = [tpl[s]["title"] for s in tpl if s not in out_secs]
+    _trace(f"完成：{('；'.join(stat)) or '无可补内容'}"
+           + (f"；未给出内容的分区：{'、'.join(missed)}" if missed else "")
+           + f"；总耗时 {time.perf_counter() - t0:.2f}s")
     return {"ok": True, "sections": out_secs}
 
 
