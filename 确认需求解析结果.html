@@ -1868,33 +1868,29 @@
       });
     }
 
-    /* 第 1 步快速通道（新建报价的首轮匹配）：不走智能体循环 ——
-       ① 后端纯 SQL 取 product_para_value 的五个匹配参数；
-       ② 一次大模型调用：从需求文本提取匹配参数并给一句评估（无思考循环）；
-       ③ 后端按原六维加权规则确定性打分出 Top3。用户点「选用」之后的流程不变。 */
-    let STEP1_LAST_REQ = '';     // 最近一次送去匹配的需求全文（含附件正文，意图门槛未过时等待补充合并）
-    let STEP1_LAST_DISPLAY = ''; // 用户实际输入的文字内容（第 2 步回显只用这个，不带附件正文/系统指令）
-    let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新匹配
-    // 待办的「填表」任务（需求全文）：只有意图识别通过、产品推荐给出后才触发，避免信息不全就乱填
-    let STEP1_FORM_TASK = null;
-    async function step1FastMatch(text, displayText) {
-      STEP1_LAST_REQ = text || '';
-      STEP1_LAST_DISPLAY = displayText || STEP1_LAST_DISPLAY || text || '';
-      setBusy(true);
-      const act = addToolActivity('第 1 步：意图识别（检查需求是否齐全）→ 齐全后查库匹配产品');
-      showTyping();
-      // SSE 流式：评估文字边生成边显示；stage 是阶段提示；result 是最终结果
-      let d = null;
+    /* ================= 第 1 步：三段串行（严格按顺序，不并行） =================
+         ① 意图识别：**一次**大模型调用，只判断需求信息是否齐全（不查库/不推荐/不填表）；
+            缺 尺寸/应用范围/工作温度 任一项就停下，等用户补充。
+         ② 表单填写与推荐：交给**智能体**（open-claude）按 cpq_ui 渲染四个非产品分区。
+         ③ 产品匹配：拿 ① 已提取的参数纯查库 + 六维加权评分，**不再调模型**
+            （所以整个第 1 步的匹配链路只花一次大模型调用）。 */
+    let STEP1_LAST_REQ = '';     // 最近一次的需求全文（含附件正文；门槛未过时等待补充合并）
+    let STEP1_LAST_DISPLAY = ''; // 用户实际输入的文字（第 2 步回显用，不带附件正文/系统指令）
+    let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新识别
+    let STEP1_FORM_TASK = null;  // 待办的「智能体填表」任务（需求全文），识别通过后才发出
+
+    // SSE 读取：把 text 事件流式写进气泡，stage 事件记成轨迹，返回最终 result
+    async function _sseCall(url, body) {
+      let d = null, gotText = false;
       try {
-        const resp = await fetch(AGENT_URL + '/api/step1/match', {
+        const resp = await fetch(url, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, sid: currentSessionId }),
+          body: JSON.stringify(body),
         });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
-        let gotText = false;
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -1919,14 +1915,25 @@
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
       }
+      return d;
+    }
+
+    // ① 意图识别（一次大模型调用）；通过返回 requirement，否则返回 null
+    async function step1Intent(text, displayText) {
+      STEP1_LAST_REQ = text || '';
+      STEP1_LAST_DISPLAY = displayText || STEP1_LAST_DISPLAY || text || '';
+      setBusy(true);
+      const act = addToolActivity('第 1 步 · 意图识别：检查需求信息是否齐全');
+      showTyping();
+      const d = await _sseCall(AGENT_URL + '/api/step1/match',
+        { phase: 'intent', text: text, sid: currentSessionId });
       hideTyping();
-      finishStreamBubble();   // 把流式评估定稿成一条气泡
+      finishStreamBubble();
       setBusy(false);
       chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
       if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
-      // 意图识别门槛：尺寸/应用范围/工作温度缺一不可 ——
-      // 到此为止：不查库、不推荐产品、不填表，等用户把需求补齐
-      if (d && d.stage === 'intent') {
+
+      if (d && d.stage === 'intent') {     // 信息不齐：到此为止
         STEP1_REINPUT = true;
         const have = Object.entries(d.requirement || {})
           .map(([k, v]) => (CAND_REQ_LABEL[k] || k) + '：' + v).join('　');
@@ -1936,13 +1943,33 @@
           '产品匹配必须同时给出 **尺寸、应用范围/使用场景、工作温度** 三项。' +
           '请直接在下方输入框补充缺失的参数（例如「尺寸约13*20，用于水表，工作温度28℃」），' +
           '发送后会自动与已有需求合并并重新识别。');
-        return;
+        return null;
       }
       if (!d || !d.ok) {
-        addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
-        return;
+        addErrorBubble('需求识别失败：' + ((d && d.error) || '未知错误'));
+        return null;
       }
       STEP1_REINPUT = false;
+      return { requirement: d.requirement || {}, comment: d.comment || '' };
+    }
+
+    // ③ 产品匹配（纯查库 + 六维加权评分，不调模型）
+    async function step1Match(req, comment) {
+      setBusy(true);
+      const act = addToolActivity('第 1 步 · 产品匹配：查询产品参数值表（远程 Postgres）→ 六维加权评分',
+        'SELECT * FROM product_para_value');
+      showTyping();
+      const d = await _sseCall(AGENT_URL + '/api/step1/match',
+        { phase: 'match', requirement: req, comment: comment || '', sid: currentSessionId });
+      hideTyping();
+      finishStreamBubble();
+      setBusy(false);
+      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      if (!d || !d.ok) {
+        addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
+        return false;
+      }
       renderCandidates({
         action: 'chat_candidates', step: 1,
         requirement: d.requirement || {}, products: d.products || [],
@@ -1950,155 +1977,26 @@
         below_threshold: d.below_threshold, advice: d.advice,
         all_count: d.all_count, source: d.source || {},
       });
-      // 评估文字已在上面流式输出过，这里不重复，只给结论
       let md = '🔎 已查库并完成六维加权评分：共评估 ' + (d.all_count || 0) + ' 个产品，推荐 Top' +
         ((d.products || []).length) + '（见上表）。';
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
-      // 产品推荐已给出 -> 现在才开始第三段：一次调用把其余四个分区填满
+      return true;
+    }
+
+    /* 第 1 步总编排：识别 →（智能体填表推荐）→ 产品匹配，三段严格串行。 */
+    async function runStep1(text, displayText) {
+      const got = await step1Intent(text, displayText);
+      if (!got) return false;                       // 信息不齐，等用户补充后再来
+      // ② 表单填写与推荐：智能体（open-claude）按 cpq_ui 渲染四个非产品分区
       if (STEP1_FORM_TASK) {
         const task = STEP1_FORM_TASK;
         STEP1_FORM_TASK = null;
-        fillStep1Forms(task);
+        await sendToAgent(task, { echo: false, display: '', step: 1 });
       }
-    }
-
-    /* 第 1 步四个非产品分区（测算基本信息/目的地/付款里程碑/物流）：
-       一次流式大模型调用**补空缺**——把当前已填的值一起发过去，模型只回补充项，
-       前端按「已有值优先」合并回填，绝不覆盖用户/系统已填的内容（如项目名称、客户）。
-       产品信息与产品技术参数不在此列（由匹配 + 选用决定）。 */
-    const STEP1_FORM_SECTIONS = ['s1_basic', 's1_dest', 's1_payment', 's1_logistics'];
-
-    async function fillStep1Forms(text) {
-      if (manualMode || !FORMS.length) return false;
-      let auth = {};
-      try {
-        auth = {
-          项目名称: sessionStorage.getItem('cpq:projectName') || '',
-          项目编码: sessionStorage.getItem('cpq:projectCode') || '',
-          客户: sessionStorage.getItem('cpq:customer') || '',
-        };
-      } catch (e) {}
-      // 当前各分区已有内容（让模型知道哪些不用再填）
-      const d1 = collectStepData(1) || {};
-      const current = {};
-      STEP1_FORM_SECTIONS.forEach(sid => {
-        const s = d1[sid];
-        if (!s) return;
-        const data = s['数据'] !== undefined ? s['数据'] : s.data;
-        if (data && (Array.isArray(data) ? data.length : Object.keys(data).length)) current[sid] = data;
-      });
-
-      setBusy(true);
-      const act = addToolActivity('补全第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息');
-      showTyping();
-      let d = null, gotText = false;
-      try {
-        const resp = await fetch(AGENT_URL + '/api/step1/forms', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: text, sid: currentSessionId, authoritative: auth, current: current }),
-        });
-        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf('\n\n')) >= 0) {
-            const chunk = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 2);
-            if (!chunk.startsWith('data:')) continue;
-            let ev;
-            try { ev = JSON.parse(chunk.slice(5)); } catch { continue; }
-            if (ev.type === 'text') {
-              if (!gotText) { hideTyping(); gotText = true; }
-              appendStreamText(ev.text || '');
-            } else if (ev.type === 'stage') {
-              addToolActivity(ev.text || '');
-            } else if (ev.type === 'result') {
-              d = ev.result;
-            }
-          }
-        }
-      } catch (e) {
-        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
-      }
-      hideTyping();
-      finishStreamBubble();
-      setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
-      if (!d || !d.ok) {
-        addErrorBubble('第 1 步表单自动填写失败：' + ((d && d.error) || '未知错误') + '，请在右侧人工填写。');
-        return false;
-      }
-
-      const secs = d.sections || {};
-      const filled = [];
-      STEP1_FORM_SECTIONS.forEach(sid => {
-        const f = FORMS.find(x => x.section_id === sid);
-        const s = secs[sid];
-        if (!f || !s) return;
-        const title = (f.title || sid).replace(/^[①-⑨]\s*/, '');
-        if (s.kind === 'form') {
-          // 合并：已有值优先，模型只补空缺
-          const old = (current[sid] && !Array.isArray(current[sid])) ? current[sid] : {};
-          const add = s.values || {};
-          const reco = s.reco || [];
-          let n = 0;
-          const fields = (f.fields || []).map(x => {
-            const had = String(old[x.key] || '').trim();
-            const val = had || String(add[x.key] || '');
-            if (!had && val) n++;
-            return { key: x.key, label: x.label, type: 'text', value: val,
-                     reco: !had && reco.indexOf(x.key) >= 0 };
-          });
-          if (!n) return;
-          renderFormSection({
-            action: 'render_form', step: f.step, section_id: sid, title: f.title,
-            editable: f.editable, fields: fields,
-          });
-          filled.push(title + ' ' + n + ' 项');
-        } else {
-          // 列表：逐行按列合并（已有单元格不动），模型多给的行追加在后面
-          const old = Array.isArray(current[sid]) ? current[sid] : [];
-          const add = s.rows || [];
-          const rows = [];
-          const len = Math.max(old.length, add.length);
-          for (let k = 0; k < len; k++) {
-            const o = old[k] || {}, a = add[k] || {};
-            const row = Object.assign({}, o);
-            const reco = [];
-            (f.columns || []).forEach(c => {
-              if (!String(row[c.key] || '').trim() && String(a[c.key] || '').trim()) {
-                row[c.key] = a[c.key];
-                if ((a._reco || []).indexOf(c.key) >= 0) reco.push(c.key);
-              }
-            });
-            if (reco.length) row._reco = reco;
-            if (Object.keys(row).length) rows.push(row);
-          }
-          if (!rows.length) return;
-          renderTableSection({
-            action: 'render_table', step: f.step, section_id: sid, title: f.title,
-            editable: f.editable, columns: f.columns || [], rows: rows,
-          });
-          filled.push(title + ' ' + rows.length + ' 行');
-        }
-      });
-      if (currentStep === 1) showStep(1);
-      addAiBubble(filled.length
-        ? '📝 已补全第 1 步表单：' + filled.join('、') +
-          '（浅色标记的是按行业惯例推荐的值，可直接修改）。\n\n' +
-          '需求里没提、也无惯例可循的字段保持留空，请按实际情况人工补充；' +
-          '产品请在上方推荐清单点「选用」确定。全部核对无误后点「进入下一大步骤」。'
-        : '📝 第 1 步表单没有可自动补充的内容（需求信息有限），请在右侧人工填写；' +
-          '产品请在上方推荐清单点「选用」确定。');
-      return true;
+      // ③ 智能体填完之后，才做产品匹配
+      return step1Match(got.requirement, got.comment);
     }
 
     function applyUiEvent(ui) {
@@ -2381,7 +2279,7 @@
           ? STEP1_LAST_REQ + '\n【用户补充】' + payload
           : payload;
         const mergedDisplay = (STEP1_LAST_DISPLAY ? STEP1_LAST_DISPLAY + '\n' : '') + text;
-        step1FastMatch(merged, mergedDisplay);
+        runStep1(merged, mergedDisplay);
         return;
       }
       sendToAgent(payload, { echo: false, display: echo }); // 实际发送可能更长（含文件内容）
@@ -2709,14 +2607,13 @@
           sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
           return true;
         }
-        // 第 1 步严格分三段（信息不齐时到第一段为止）：
-        //  ① 意图识别：只判断需求信息是否齐全，不查库、不推荐、不填表；
-        //  ② 齐全后查 product_para_value + 六维加权评分，推荐清单渲染到左侧；
-        //  ③ 最后才交给智能体把其余四个分区（测算基本信息/目的地/付款里程碑/物流）填满。
-        // 后两段由 step1FastMatch 在门槛通过后依次触发（见 STEP1_FORM_TASK）。
+        // 第 1 步严格三段串行（信息不齐时到第一段为止）：
+        //  ① 意图识别（一次大模型调用，只判断齐不齐）；
+        //  ② 智能体（open-claude）填写并推荐四个非产品分区；
+        //  ③ 智能体填完后才做产品匹配（复用 ① 的参数，不再调模型）。
         // display=用户实际填写的内容（项目/客户/需求/附件名），第 2 步回显用它、不带附件正文
         STEP1_FORM_TASK = k.text;
-        step1FastMatch(k.text, k.display);
+        runStep1(k.text, k.display);
         return true;
       }
       const name = STEPS[step - 1];
@@ -3999,10 +3896,11 @@
         '附件：' + (files.length ? files.join('、') : '无') + '\n' +
         '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构已预渲染成【空骨架】在右侧，字段固定、你不用造结构；' +
         '但**右侧现在是空的，值必须你主动调用 cpq_ui 的 render_form(values)/render_table(rows) 填进去**——不 render 右侧就一直空着。\n' +
-        '⚠️ **分工**：需求信息已通过完整性校验，产品匹配也已由系统完成（六维加权评分的 Top3 推荐清单已渲染在左侧供用户点选），' +
-        '**你不要做产品匹配、不要调 match_products、不要填 s1_products / s1_techparams**' +
-        '（这两张表等用户点「选用」后由系统用纯 SQL 自动填）。**你负责其余四个分区：' +
+        '⚠️ **分工**：需求信息已通过完整性校验。**你只负责这四个分区：' +
         's1_basic（测算基本信息）、s1_dest（目的地信息·可多行）、s1_payment（付款里程碑信息）、s1_logistics（物流信息·可多行）**。\n' +
+        '**产品匹配由系统在你填完之后自动做**（六维加权评分出 Top3 推荐清单供用户点选）——' +
+        '所以**你不要做产品匹配、不要调 match_products、不要填 s1_products / s1_techparams**' +
+        '（这两张表等用户点「选用」后由系统用纯 SQL 自动填）。\n' +
         (hasInput
           ? '现在就**逐个调用 render_form/render_table 把这四个分区一次性填满**（客户/项目名称/项目编码用上面的权威值；' +
             '需求文档里有的直接填，没有的给合理推荐值并在值末尾加「（推荐）」标记，别大片留空），再请用户核对。' +

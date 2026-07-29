@@ -918,20 +918,21 @@ def _step1_visible_text(raw: str) -> str:
 
 
 def _handle_step1_match(data: dict, emit=None) -> dict:
-    """第 1 步：**先意图识别，齐全后才查库推荐**。
+    """第 1 步，分两段调用（phase）：
 
-    ① 意图识别：一次大模型调用，只从需求文本提取五个参数并判断完整性——
-       这一阶段不查库、不填表、不推荐产品；缺 尺寸/应用范围/工作温度 任一项就直接返回
-       stage="intent"，请用户补充需求。
-    ② 参数齐全后才查 product_para_value，并按六维加权规则确定性评分出 Top3。
-    （表单填写由前端在拿到推荐结果后再交给智能体，见 step1FastMatch。）
+      phase="intent"（默认）—— **一次**大模型调用：只从需求文本提取五个参数并判断完整性。
+          不查库、不推荐、不填表。缺 尺寸/应用范围/工作温度 任一项返回 stage="intent"。
+          通过则返回 requirement，供随后的 match 段直接复用。
+      phase="match" —— 拿着 intent 段给的 requirement **纯查库 + 六维加权评分**，
+          不再调用大模型（所以整个第 1 步的产品匹配总共只花一次模型调用）。
 
-    emit 不为 None 时走流式：模型的识别文字实时 emit 给前端。
+    这样表单填写（智能体 open-claude 那套）可以插在两段中间：识别 → 填表 → 匹配。
     """
     t0 = time.perf_counter()
+    phase = (data.get("phase") or "intent").strip()
 
     def _trace(msg):
-        print(f"[step1] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
+        print(f"[step1:{phase}] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
 
     def _say(obj):
         if emit:
@@ -940,12 +941,39 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
             except Exception:
                 pass
 
+    # ===================== ② 匹配段：不调模型 =====================
+    if phase == "match":
+        req = data.get("requirement")
+        if not isinstance(req, dict) or not req:
+            return {"ok": False, "error": "缺少需求参数（requirement），无法匹配"}
+        sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
+        _say({"type": "stage", "text": "查询产品参数值表（远程 Postgres）"})
+        t = time.perf_counter()
+        try:
+            cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
+        except Exception as e:
+            _trace(f"查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
+            return {"ok": False, "stage": "db",
+                    "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
+                             f"{str(e).splitlines()[0][:160]}"}
+        _trace(f"查库完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
+        _say({"type": "stage", "text": f"已取回 {len(rows)} 行，正在按六维加权规则评分…"})
+        if not rows:
+            return {"ok": False, "stage": "db",
+                    "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
+        t = time.perf_counter()
+        match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
+        match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
+        match_res["comment"] = data.get("comment") or ""
+        _trace(f"六维评分完成，耗时 {time.perf_counter() - t:.2f}s；总耗时 {time.perf_counter() - t0:.2f}s")
+        return match_res
+
+    # ===================== ① 识别段：一次大模型调用 =====================
     text = (data.get("text") or "").strip()
     if not text:
         return {"ok": False, "error": "缺少需求文本"}
     _trace(f"开始：需求文本 {len(text)} 字")
 
-    # ① 意图识别（只看需求文本；不查库、不填表、不推荐）
     b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
     if b is None or b.conv.model == NO_MODEL_ID:
         return {"ok": False, "stage": "llm",
@@ -953,7 +981,7 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
                          "请在设置里配置模型，或在右侧人工填写。"}
     _say({"type": "stage", "text": "意图识别：检查需求信息是否齐全"})
     prompt = "【需求文本】\n" + text[:8000]
-    _trace(f"① 意图识别，调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
+    _trace(f"调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
     t = time.perf_counter()
     out = ""
     try:
@@ -978,251 +1006,29 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
                 model=b.conv.model, max_tokens=2000)
             out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
-        _trace(f"① 大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
+        _trace(f"大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
         return {"ok": False, "stage": "llm",
                 "error": f"需求识别调用失败：{e.__class__.__name__}: {str(e)[:160]}"}
-    _trace(f"① 意图识别返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
+    _trace(f"识别返回：{len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
     if not out:
         return {"ok": False, "stage": "llm",
                 "error": "需求识别返回为空，请重试或人工填写需求参数。"}
     req, comment = _parse_step1_json(out)
     if req is None:
-        _trace("① 输出不是有效 JSON，放弃。原文前 400 字：" + out[:400].replace("\n", "⏎"))
+        _trace("输出不是有效 JSON，放弃。原文前 400 字：" + out[:400].replace("\n", "⏎"))
         return {"ok": False, "stage": "llm",
                 "error": "需求识别输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
 
-    # ①.5 完整性门槛：尺寸 / 应用范围 / 工作温度 缺一不可 —— 缺了就到此为止，**不查库**
     missing = _step1_missing(req)
     if missing:
-        _trace("① 意图识别：需求缺少 " + "、".join(missing) + "，不查库、不推荐、不填表")
+        _trace("需求缺少 " + "、".join(missing) + "，不查库、不推荐、不填表")
         return {"ok": False, "stage": "intent", "missing": missing,
                 "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
                 "comment": comment,
                 "error": "需求缺少必备匹配参数：" + "、".join(missing)}
 
-    # ② 参数齐全 -> 查库（纯 SQL）
-    sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
-    _say({"type": "stage", "text": "需求信息齐全，开始查询产品参数值表（远程 Postgres）"})
-    t = time.perf_counter()
-    try:
-        cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
-    except Exception as e:
-        _trace(f"② 查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
-        return {"ok": False, "stage": "db",
-                "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
-                         f"{str(e).splitlines()[0][:160]}"}
-    _trace(f"② 查库 {cpq_match.PRODUCT_TABLE} 完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
-    _say({"type": "stage", "text": f"已查库：取回 {len(rows)} 行，正在按六维加权规则评分…"})
-    if not rows:
-        return {"ok": False, "stage": "db",
-                "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
-
-    # ③ 确定性六维评分（规则不变）
-    t = time.perf_counter()
-    match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
-    match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
-    match_res["comment"] = comment
-    _trace(f"③ 六维评分完成，耗时 {time.perf_counter() - t:.2f}s；总耗时 {time.perf_counter() - t0:.2f}s")
-    return match_res
-
-
-def _num(v):
-    """从任意值里取数字（容忍 '13%'、'1,234.5'、'￥100'）；取不到返回 None。"""
-    m = re.search(r"-?\d+(?:\.\d+)?", str(v if v is not None else "").replace(",", "").replace("，", ""))
-    return float(m.group(0)) if m else None
-
-
-def _fmt_num(x) -> str:
-    return str(int(x)) if float(x).is_integer() else str(round(float(x), 2))
-
-
-def _extract_json_obj(out: str):
-    """从模型输出里抠出可解析的 JSON 对象（容忍思考段/代码围栏/前后废话）。"""
-    s = (out or "").strip()
-    s = re.sub(r"<think>.*?(?:</think>|$)", "", s, flags=re.S).strip()
-    s = re.sub(r"```[a-zA-Z]*", "", s).strip()
-    cands, depth, start = [], 0, None
-    for i, ch in enumerate(s):
-        if ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}" and depth > 0:
-            depth -= 1
-            if depth == 0 and start is not None:
-                cands.append(s[start:i + 1])
-    for c in reversed(cands):
-        try:
-            obj = json.loads(c)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            return obj
-    return None
-
-
-# ---------------------------------------------------------------------------
-# 第 1 步表单填写：一次流式大模型调用把四个非产品分区填满（不进智能体回合循环）。
-# 产品两张表不在此列——它们由 match_products 推荐 + 用户「选用」后纯 SQL 填。
-# ---------------------------------------------------------------------------
-
-STEP1_FORM_SECTIONS = ("s1_basic", "s1_dest", "s1_payment", "s1_logistics")
-
-_STEP1_FORMS_SYS = (
-    "你是报价系统第 1 步的填表助手。输入是用户的需求文本、几个权威值，以及四个分区的字段清单"
-    "（已经填了值的字段会标出当前值）。\n"
-    "任务：**只补空缺**——把需求文本里能读出来的、或按行业惯例能合理推断的字段补上。\n"
-    "**铁律**：\n"
-    "1. **四个分区都要出现在 JSON 里**（s1_basic / s1_dest / s1_payment / s1_logistics），"
-    "确实无内容可补就给空对象 {} 或空数组 []。**不要只填第一个分区就结束**。\n"
-    "2. **不必填满**：没有依据、也无行业惯例可循的字段**直接省略不输出**"
-    "（宁可少填，也不要瞎猜编造）。\n"
-    "3. 标有当前值的字段**不要重复输出**，除非你有更准确的依据要覆盖它。\n"
-    "4. 字段名必须用清单里的原文，不要新增/改名/翻译。\n"
-    "5. 按行业惯例推断出来的值，在值末尾加「（推荐）」标记；直接来自需求文本的不加。\n"
-    "6. **不要涉及任何产品选型**（产品由系统单独匹配），不输出产品编码/型号/价格。\n"
-    "7. 输出要紧凑：每个分区只列你真正要填的字段，别把整张表的字段名都抄一遍。\n"
-    "**输出分两段**：\n"
-    "第一段：用 2~4 句话说明补了哪些内容、哪些是按惯例推荐的、哪些确实无从判断留空"
-    "（这段会实时展示给用户，用自然中文，不要写 JSON、不要贴表格）。\n"
-    "第二段：另起一行只写 " + _JSON_MARK + " ，然后输出一个 JSON 对象：\n"
-    '{"s1_basic": {"字段名": "值"}, "s1_dest": [{"列名": "值"}], '
-    '"s1_payment": [{"列名": "值"}], "s1_logistics": [{"列名": "值"}]}'
-)
-
-
-def _handle_step1_forms(data: dict, emit=None) -> dict:
-    """POST /api/step1/forms —— 第 1 步四个非产品分区「补空缺」（一次流式调用）。
-
-    只返回**需要补充**的字段，不回传已有值，避免前端合并时把用户/系统已填的值覆盖掉。
-    """
-    t0 = time.perf_counter()
-
-    def _trace(msg):
-        print(f"[step1-forms] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
-
-    def _say(obj):
-        if emit:
-            try:
-                emit(obj)
-            except Exception:
-                pass
-
-    text = (data.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "error": "缺少需求文本"}
-    b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
-    if b is None or b.conv.model == NO_MODEL_ID:
-        return {"ok": False, "stage": "llm",
-                "error": "当前为「无模型」模式，无法自动填表；请在右侧人工填写。"}
-
-    cur = data.get("current") if isinstance(data.get("current"), dict) else {}
-
-    # 字段清单（模型只能填这些）；已有值直接标在字段后面，让模型别重复填
-    spec, tpl = [], {}
-    for sid in STEP1_FORM_SECTIONS:
-        f = FIXED_FORMS.get(sid) or {}
-        keys = [c["key"] for c in (f.get("columns") or f.get("fields") or [])]
-        if not keys:
-            continue
-        kind = f.get("kind", "table")
-        tpl[sid] = {"kind": kind, "keys": keys, "title": f.get("title", sid)}
-        have = cur.get(sid)
-        marks = []
-        for k in keys:
-            v = ""
-            if kind == "form" and isinstance(have, dict):
-                v = str(have.get(k) or "").strip()
-            marks.append(f"{k}（已填：{v[:20]}）" if v else k)
-        note = ""
-        if kind != "form" and isinstance(have, list) and have:
-            note = f"（已有 {len(have)} 行，只补缺失的列或追加新行）"
-        spec.append("【{}｜{}｜{}{}】\n{}".format(
-            sid, f.get("title", sid),
-            "表单(单条)" if kind == "form" else "列表(可多行)", note, "、".join(marks)))
-
-    auth = data.get("authoritative") or {}
-    prompt = ("【需求文本】\n" + text[:12000] +
-              ("\n\n【权威值（已填入，不要改）】\n" + json.dumps(auth, ensure_ascii=False) if auth else "") +
-              "\n\n【四个分区的字段清单（标「已填」的不用再给）】\n" + "\n\n".join(spec))
-    _say({"type": "stage", "text": "补全第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息"})
-    _trace(f"调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
-    t = time.perf_counter()
-    out = ""
-    try:
-        shown = 0
-        for ev in stream_message(
-                b.conv.client, [{"role": "user", "content": prompt}], _STEP1_FORMS_SYS,
-                model=b.conv.model, tools=[], max_tokens=6000):
-            if ev.get("type") == "text_delta":
-                out += ev.get("text", "")
-                if emit:
-                    vis = _markup_visible_text(out)
-                    if len(vis) > shown:
-                        _say({"type": "text", "text": vis[shown:]})
-                        shown = len(vis)
-            elif ev.get("type") == "error":
-                raise RuntimeError(ev.get("error") or "stream error")
-        out = out.strip()
-    except Exception as e:
-        _trace(f"调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
-        return {"ok": False, "stage": "llm",
-                "error": f"表单填写失败：{e.__class__.__name__}: {str(e)[:160]}"}
-    _trace(f"返回 {len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
-
-    obj = _extract_json_obj(out)
-    if obj is None:
-        _trace("输出不是有效 JSON。原文前 400 字：" + out[:400].replace("\n", "⏎"))
-        return {"ok": False, "stage": "llm",
-                "error": "表单填写结果无法解析（不是有效 JSON），请重试或人工填写。"}
-
-    # 规范化：只保留固定字段、只保留**有值**的项；剥掉「（推荐）」文字并给出 reco 标志
-    out_secs, stat = {}, []
-    for sid, meta in tpl.items():
-        raw = obj.get(sid)
-        if meta["kind"] == "form":
-            vals = raw if isinstance(raw, dict) else {}
-            have = cur.get(sid) if isinstance(cur.get(sid), dict) else {}
-            values, reco = {}, []
-            for k in meta["keys"]:
-                if k not in vals:
-                    continue
-                if str(have.get(k) or "").strip():
-                    continue          # 已填的不动（前端也会「已有值优先」，这里先剔除减少噪音）
-                v, is_reco = _strip_reco(vals.get(k))
-                if str(v).strip():
-                    values[k] = v
-                    if is_reco:
-                        reco.append(k)
-            if values:
-                out_secs[sid] = {"kind": "form", "values": values, "reco": reco}
-                stat.append(f"{meta['title']} {len(values)} 项")
-        else:
-            rows_in = raw if isinstance(raw, list) else ([raw] if isinstance(raw, dict) else [])
-            rows = []
-            for r in rows_in:
-                if not isinstance(r, dict):
-                    continue
-                row, reco = {}, []
-                for k in meta["keys"]:
-                    v, is_reco = _strip_reco(r.get(k))
-                    if str(v).strip():
-                        row[k] = v
-                        if is_reco:
-                            reco.append(k)
-                if row:
-                    if reco:
-                        row["_reco"] = reco
-                    rows.append(row)
-            if rows:
-                out_secs[sid] = {"kind": "table", "rows": rows}
-                stat.append(f"{meta['title']} {len(rows)} 行")
-
-    missed = [tpl[s]["title"] for s in tpl if s not in out_secs]
-    _trace(f"完成：{('；'.join(stat)) or '无可补内容'}"
-           + (f"；未给出内容的分区：{'、'.join(missed)}" if missed else "")
-           + f"；总耗时 {time.perf_counter() - t0:.2f}s")
-    return {"ok": True, "sections": out_secs}
+    _trace(f"识别通过，参数齐全；总耗时 {time.perf_counter() - t0:.2f}s")
+    return {"ok": True, "stage": "intent_ok", "requirement": req, "comment": comment}
 
 
 # ---------------------------------------------------------------------------
@@ -1754,9 +1560,10 @@ SYSTEM_PROMPT = """\
   ① **你负责填这四个分区**：s1_basic（测算基本信息）、s1_dest（目的地信息）、s1_payment（付款里程碑信息）、
      s1_logistics（物流信息）——从用户上传的需求文档/需求描述提取信息，结合合理推测**一次性 render 填满**：
      文档有的直接填；文档没有的给推荐值，并在值末尾加「（推荐）」标记。
-     ⚠️ **产品匹配由系统并行完成，不用你管**：新建报价时系统会用纯 SQL 查 product_para_value、
-     做六维加权评分，把 Top3 推荐清单渲染到左侧供用户点选。**你不要重复匹配、不要调 match_products、
+     ⚠️ **产品匹配由系统在你填完之后自动做，不用你管**：系统会用纯 SQL 查 product_para_value、
+     做六维加权评分，把 Top3 推荐清单渲染到左侧供用户点选。**你不要做产品匹配、不要调 match_products、
      绝对不要填 s1_products / s1_techparams**（那两张表等用户点「选用」后由系统自动填）。
+     填完这四个分区就停下等用户，**不要 set_step 2**。
   ② **重新匹配（仅当用户在聊天里调整需求参数、明确要求重新匹配时）——必须调 match_products 工具，
      禁止自己写 SQL 查 product_para_value、禁止自己估分**：
      从用户给的需求信息里提取这几项，作为参数调用 **match_products**：
@@ -3027,9 +2834,6 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/markup/fill":
             # 第 3/4 步加价计算：SQL 取规则 + 一次大模型调用（**流式**）
             self._handle_markup_stream()
-        elif path == "/api/step1/forms":
-            # 第 1 步四个非产品分区：一次大模型调用填满（**流式**）
-            self._handle_sse(_handle_step1_forms)
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()
