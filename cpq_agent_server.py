@@ -820,7 +820,8 @@ def _handle_match_products(tool_input: dict) -> str:
 # 用户点「选用」之后的流程不变（/api/product/pick 纯 SQL 取参数与价格）。
 # ---------------------------------------------------------------------------
 
-_STEP1_JSON_MARK = "===JSON==="
+# 两段式输出的分隔符：分隔符之前是给用户看的说明，之后是结构化 JSON
+_JSON_MARK = "===JSON==="
 
 _STEP1_EVAL_SYS = (
     "你是报价系统第 1 步的**需求意图识别器**。输入只有用户的需求文本。\n"
@@ -829,7 +830,7 @@ _STEP1_EVAL_SYS = (
     "**输出分两段**：\n"
     "第一段：用 1~3 句话说明你从需求里读到了哪些参数、还缺哪些"
     "（这段会实时展示给用户，用自然中文，不要写 JSON、不要列表格、不要提具体产品）。\n"
-    "第二段：另起一行只写 " + _STEP1_JSON_MARK + " ，然后输出一个 JSON 对象，格式：\n"
+    "第二段：另起一行只写 " + _JSON_MARK + " ，然后输出一个 JSON 对象，格式：\n"
     '{"max_dimension": "如 100*50*20，需求没提就空字符串", "dimension_tolerance_pct": 0, '
     '"application_scope": "", "operating_temperature": "如 -20~60", '
     '"service_life": "如 500次 / 5年", "hermeticity": "如 IP67", '
@@ -906,7 +907,7 @@ def _parse_step1_json(out: str):
 def _step1_visible_text(raw: str) -> str:
     """流式输出里应展示给用户的部分：===JSON=== 之前的散文（并剥掉思考段）。"""
     s = re.sub(r"<think>.*?(?:</think>|$)", "", raw or "", flags=re.S)
-    cut = s.find(_STEP1_JSON_MARK)
+    cut = s.find(_JSON_MARK)
     if cut >= 0:
         s = s[:cut]
     # 模型偶尔不写分隔符直接给 JSON：遇到裸的 { 就截断，别把 JSON 喷给用户
@@ -1080,7 +1081,7 @@ _STEP1_FORMS_SYS = (
     "**输出分两段**：\n"
     "第一段：用 2~4 句话说明你从需求里读到什么、哪些是推荐值"
     "（这段会实时展示给用户，用自然中文，不要写 JSON、不要贴表格）。\n"
-    "第二段：另起一行只写 " + _MARKUP_JSON_MARK + " ，然后输出一个 JSON 对象：\n"
+    "第二段：另起一行只写 " + _JSON_MARK + " ，然后输出一个 JSON 对象：\n"
     '{"s1_basic": {"字段名": "值"}, "s1_dest": [{"列名": "值"}], '
     '"s1_payment": [{"列名": "值"}], "s1_logistics": [{"列名": "值"}]}'
 )
@@ -1216,9 +1217,6 @@ _CTX_LABEL = {
     "techparams": "产品技术参数", "payment": "付款里程碑信息", "logistics": "物流信息",
 }
 
-_MARKUP_JSON_MARK = "===JSON==="
-
-
 def _markup_sys(cfg: dict) -> str:
     col = cfg["column"]
     return (
@@ -1233,7 +1231,7 @@ def _markup_sys(cfg: dict) -> str:
         "**输出分两段**：\n"
         "第一段：用 2~5 句话说明取回多少条规则、命中了哪几条、依据什么数据、各算出多少"
         "（这段会实时展示给用户，用自然中文，不要写 JSON、不要贴表格）。\n"
-        f"第二段：另起一行只写 {_MARKUP_JSON_MARK} ，然后输出一个 JSON 对象：\n"
+        f"第二段：另起一行只写 {_JSON_MARK} ，然后输出一个 JSON 对象：\n"
         '{"markup": [{"序号": "1", "加价项名称": "命中的规则名", "加价值": "金额或系数"}], '
         f'"products": [{{"成品编码": "…", "{col}": "金额"}}]}}\n'
         "markup 逐条列出**命中**的规则；products 每个产品一行，金额用纯数字字符串。"
@@ -1242,7 +1240,7 @@ def _markup_sys(cfg: dict) -> str:
 
 def _markup_visible_text(raw: str) -> str:
     s = re.sub(r"<think>.*?(?:</think>|$)", "", raw or "", flags=re.S)
-    cut = s.find(_MARKUP_JSON_MARK)
+    cut = s.find(_JSON_MARK)
     if cut >= 0:
         s = s[:cut]
     brace = s.find("{")
