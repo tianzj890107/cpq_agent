@@ -1878,17 +1878,46 @@
       const act = addToolActivity('产品匹配：查询产品参数值表（远程 Postgres）→ 一次大模型评估 → 六维加权评分',
         'SELECT * FROM product_para_value');
       showTyping();
-      let d;
+      // SSE 流式：评估文字边生成边显示；stage 是阶段提示；result 是最终结果
+      let d = null;
       try {
-        d = await fetch(AGENT_URL + '/api/step1/match', {
+        const resp = await fetch(AGENT_URL + '/api/step1/match', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: text, sid: currentSessionId }),
-        }).then(r => r.json());
+        });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let gotText = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (!chunk.startsWith('data:')) continue;
+            let ev;
+            try { ev = JSON.parse(chunk.slice(5)); } catch { continue; }
+            if (ev.type === 'text') {
+              if (!gotText) { hideTyping(); gotText = true; }
+              appendStreamText(ev.text || '');
+            } else if (ev.type === 'stage') {
+              addToolActivity(ev.text || '');
+            } else if (ev.type === 'result') {
+              d = ev.result;
+            }
+          }
+        }
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
       }
       hideTyping();
+      finishStreamBubble();   // 把流式评估定稿成一条气泡
       setBusy(false);
+      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
       if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
       // 意图识别门槛：尺寸/应用范围/工作温度缺一不可——不开始匹配，请用户补需求
       if (d && d.stage === 'intent') {
@@ -1915,9 +1944,9 @@
         below_threshold: d.below_threshold, advice: d.advice,
         all_count: d.all_count, source: d.source || {},
       });
+      // 评估文字已在上面流式输出过，这里不重复，只给结论
       let md = '🔎 已查库并完成六维加权评分：共评估 ' + (d.all_count || 0) + ' 个产品，推荐 Top' +
         ((d.products || []).length) + '（见上表）。';
-      if (d.comment) md += '\n\n**评估**：' + d.comment;
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
@@ -2533,11 +2562,14 @@
           sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
           return true;
         }
-        // 第 1 步快速通道：不进智能体思考/填表/推荐循环 ——
-        // 后端先纯 SQL 查 product_para_value 五参数，再做一次大模型评估，
-        // 六维加权评分规则不变；用户「选用」之后的流程不变。
+        // 第 1 步分两路并行：
+        //  ① 产品匹配走确定性快速通道（纯 SQL 查 product_para_value + 一次评估 + 六维加权评分），
+        //     推荐清单渲染到左侧，产品两张表等用户点「选用」后由系统填；
+        //  ② 智能体解析需求，把其余四个分区（测算基本信息/目的地/付款里程碑/物流）推荐填满。
         // display=用户实际填写的内容（项目/客户/需求/附件名），第 2 步回显用它、不带附件正文
-        step1FastMatch(k.text, k.display);
+        step1FastMatch(k.text, k.display).then(() => sendToAgent(k.text, {
+          echo: false, display: '', step: 1,
+        }));
         return true;
       }
       const name = STEPS[step - 1];
@@ -3752,11 +3784,16 @@
         '附件：' + (files.length ? files.join('、') : '无') + '\n' +
         '第 1 步的 6 个固定分区（s1_basic/s1_dest/s1_products/s1_techparams/s1_payment/s1_logistics）表结构已预渲染成【空骨架】在右侧，字段固定、你不用造结构；' +
         '但**右侧现在是空的，值必须你主动调用 cpq_ui 的 render_form(values)/render_table(rows) 填进去**——不 render 右侧就一直空着。\n' +
+        '⚠️ **分工**：产品匹配已由系统并行完成（六维加权评分的 Top3 推荐清单已渲染在左侧供用户点选），' +
+        '**你不要做产品匹配、不要调 match_products、不要填 s1_products / s1_techparams**' +
+        '（这两张表等用户点「选用」后由系统用纯 SQL 自动填）。**你负责其余四个分区：' +
+        's1_basic（测算基本信息）、s1_dest（目的地信息·可多行）、s1_payment（付款里程碑信息）、s1_logistics（物流信息·可多行）**。\n' +
         (hasInput
-          ? 'set_step 1，然后**逐个调用 render_form/render_table 把这 6 个固定分区都填上值**（客户/项目名称/项目编码用上面的权威值，其余从需求文档填、没有就留空），再请用户核对。' +
-            '在用户点「进入下一大步骤」之前，不要 set_step 2、不要做定价/BOM/加价。'
+          ? '现在就**逐个调用 render_form/render_table 把这四个分区一次性填满**（客户/项目名称/项目编码用上面的权威值；' +
+            '需求文档里有的直接填，没有的给合理推荐值并在值末尾加「（推荐）」标记，别大片留空），再请用户核对。' +
+            '不要 set_step（系统已在第 1 步）；在用户点「进入下一大步骤」之前，不要做加价/报价方案。'
           : '用户开了「新对话」，还没有任何需求文档/描述。**先不要往表里填值**，只在聊天里友好地请用户：① 点回形针上传需求文档，或 ② 直接输入需求描述。' +
-            '等用户提供需求后，你再逐个 render_form/render_table 把值填进右侧的 6 个空骨架。不要臆造任何数据。');
+            '等用户提供需求后，你再逐个 render_form/render_table 把值填进上述四个分区。不要臆造任何数据。');
       if (manualMode) {
         // 无模型模式同样要过闸门：人工填写也得先登录，由角色决定谁来填
         PENDING_KICKOFF = {

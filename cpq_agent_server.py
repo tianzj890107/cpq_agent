@@ -816,16 +816,20 @@ def _handle_match_products(tool_input: dict) -> str:
 # 用户点「选用」之后的流程不变（/api/product/pick 纯 SQL 取参数与价格）。
 # ---------------------------------------------------------------------------
 
+_STEP1_JSON_MARK = "===JSON==="
+
 _STEP1_EVAL_SYS = (
     "你是报价系统第 1 步的需求评估器。输入是一份需求文本和产品库 product_para_value 里各产品的"
     "五个匹配参数摘要（max_dimension 最大尺寸(mm) / application_scope 应用范围 / "
     "operating_temperature 工作温度 / service_life 寿命 / hermeticity 密封性）。\n"
-    "任务：从需求文本里提取匹配参数，并结合产品库给一句简短评估。"
-    "**只输出一个 JSON 对象，不要输出任何其他文字**，格式：\n"
+    "**输出分两段**：\n"
+    "第一段：用 2~4 句话说明你从需求里读到的关键参数、以及与产品库的匹配情况"
+    "（这段会实时展示给用户，请用自然中文，不要写 JSON、不要列表格）。\n"
+    "第二段：另起一行只写 " + _STEP1_JSON_MARK + " ，然后输出一个 JSON 对象，格式：\n"
     '{"max_dimension": "如 100*50*20，需求没提就空字符串", "dimension_tolerance_pct": 0, '
     '"application_scope": "", "operating_temperature": "如 -20~60", '
     '"service_life": "如 500次 / 5年", "hermeticity": "如 IP67", '
-    '"comment": "对需求与产品库匹配情况的一句话评估"}\n'
+    '"comment": "一句话总结（可与第一段重复）"}\n'
     "参数必须忠实于需求文本，没提到的留空字符串，**不要编造**；"
     "相似度打分由系统按固定的六维加权规则计算，你不用打分、不要给出分数。"
 )
@@ -917,12 +921,36 @@ def _parse_step1_json(out: str):
     return None, ""
 
 
-def _handle_step1_match(data: dict) -> dict:
-    """POST /api/step1/match —— 第 1 步产品匹配快速通道（新建报价 kickoff 用）。"""
+def _step1_visible_text(raw: str) -> str:
+    """流式输出里应展示给用户的部分：===JSON=== 之前的散文（并剥掉思考段）。"""
+    s = re.sub(r"<think>.*?(?:</think>|$)", "", raw or "", flags=re.S)
+    cut = s.find(_STEP1_JSON_MARK)
+    if cut >= 0:
+        s = s[:cut]
+    # 模型偶尔不写分隔符直接给 JSON：遇到裸的 { 就截断，别把 JSON 喷给用户
+    brace = s.find("{")
+    if brace >= 0:
+        s = s[:brace]
+    return s
+
+
+def _handle_step1_match(data: dict, emit=None) -> dict:
+    """第 1 步产品匹配快速通道。
+
+    emit 不为 None 时走流式：把模型的评估文字实时 emit 给前端
+    （{"type":"text"} / {"type":"stage"}），最终仍返回同样的结果字典。
+    """
     t0 = time.perf_counter()
 
     def _trace(msg):
         print(f"[step1] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
+
+    def _say(obj):
+        if emit:
+            try:
+                emit(obj)
+            except Exception:
+                pass
 
     text = (data.get("text") or "").strip()
     if not text:
@@ -940,6 +968,7 @@ def _handle_step1_match(data: dict) -> dict:
                 "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
                          f"{str(e).splitlines()[0][:160]}"}
     _trace(f"① 查库 {cpq_match.PRODUCT_TABLE} 完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
+    _say({"type": "stage", "text": f"已查库 {cpq_match.PRODUCT_TABLE}：取回 {len(rows)} 行"})
     if not rows:
         return {"ok": False, "stage": "db",
                 "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
@@ -956,16 +985,33 @@ def _handle_step1_match(data: dict) -> dict:
     _trace(f"② 调大模型 {b.conv.model}：入参 {len(prompt)} 字"
            f"（需求 {min(len(text), 8000)} + 摘要 {len(digest)}），等待返回…")
     t = time.perf_counter()
+    out = ""
     try:
-        from open_claude.api import complete
-        res = complete(
-            b.conv.client,
-            [{"role": "user", "content": prompt}],
-            _STEP1_EVAL_SYS,
-            model=b.conv.model,
-            max_tokens=2000,   # 思考型模型的思考段也占 tokens，给太小 JSON 会被截断
-        )
-        out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
+        if emit:
+            # 流式：逐块 emit 分隔符之前的可读文本（JSON 段不外露）
+            shown = 0
+            for ev in stream_message(
+                    b.conv.client, [{"role": "user", "content": prompt}], _STEP1_EVAL_SYS,
+                    model=b.conv.model, tools=[], max_tokens=2000):
+                if ev.get("type") == "text_delta":
+                    out += ev.get("text", "")
+                    vis = _step1_visible_text(out)
+                    if len(vis) > shown:
+                        _say({"type": "text", "text": vis[shown:]})
+                        shown = len(vis)
+                elif ev.get("type") == "error":
+                    raise RuntimeError(ev.get("error") or "stream error")
+            out = out.strip()
+        else:
+            from open_claude.api import complete
+            res = complete(
+                b.conv.client,
+                [{"role": "user", "content": prompt}],
+                _STEP1_EVAL_SYS,
+                model=b.conv.model,
+                max_tokens=2000,   # 思考型模型的思考段也占 tokens，给太小 JSON 会被截断
+            )
+            out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
         _trace(f"② 大模型调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
         return {"ok": False, "stage": "llm",
@@ -992,6 +1038,7 @@ def _handle_step1_match(data: dict) -> dict:
 
     # ③ 确定性六维评分（复用 ① 已取回的数据，规则不变）
     t = time.perf_counter()
+    _say({"type": "stage", "text": "正在按六维加权规则评分…"})
     match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
     match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
     match_res["comment"] = comment
@@ -1346,12 +1393,13 @@ SYSTEM_PROMPT = """\
   s1_logistics（**表/列表**·物流信息，可多行）。子步骤：①完善和确认测算基本信息 → ②维护目的地信息 →
   ③添加产品信息列表（技术参数随此一起填）→ ④分解付款里程碑信息 → ⑤填写物流信息 → ⑥确认并提交测算单。
   ⚠️ s1_dest、s1_logistics 是**列表（render_table，rows=[{…}]）**，不是键值表单。
-  **取数逻辑（⚠️ 新建报价的首轮匹配不经过你）**：
-  ① **首轮匹配由系统自动完成**：新建报价时，系统先用纯 SQL 查 product_para_value 取五个匹配参数，
-     再做一次大模型评估，并把六维加权 Top3 推荐清单直接渲染到左侧对话框——**这一轮没有你的事**：
-     不要重复匹配、不要解析需求往 s1_basic / s1_dest / s1_payment / s1_logistics 等分区自动填内容。
-     这些分区由用户人工填写；只有用户**主动要求**你帮忙填时，才按用户提供的信息/需求文本填写
-     （文档没有的给推荐值，加「（推荐）」标记）。
+  **取数逻辑（⚠️ 分工：产品两张表归系统，其余四个分区归你）**：
+  ① **你负责填这四个分区**：s1_basic（测算基本信息）、s1_dest（目的地信息）、s1_payment（付款里程碑信息）、
+     s1_logistics（物流信息）——从用户上传的需求文档/需求描述提取信息，结合合理推测**一次性 render 填满**：
+     文档有的直接填；文档没有的给推荐值，并在值末尾加「（推荐）」标记。
+     ⚠️ **产品匹配由系统并行完成，不用你管**：新建报价时系统会用纯 SQL 查 product_para_value、
+     做六维加权评分，把 Top3 推荐清单渲染到左侧供用户点选。**你不要重复匹配、不要调 match_products、
+     绝对不要填 s1_products / s1_techparams**（那两张表等用户点「选用」后由系统自动填）。
   ② **重新匹配（仅当用户在聊天里调整需求参数、明确要求重新匹配时）——必须调 match_products 工具，
      禁止自己写 SQL 查 product_para_value、禁止自己估分**：
      从用户给的需求信息里提取这几项，作为参数调用 **match_products**：
@@ -2614,13 +2662,8 @@ class Handler(BaseHTTPRequestHandler):
             res = classify_intent((data.get("text") or "").strip()) or {}
             self._send_json({"intent": res.get("intent"), "rule_kind": res.get("rule_kind")})
         elif path == "/api/step1/match":
-            # 第 1 步快速通道：查库 + 一次大模型评估 + 确定性六维打分（不进智能体循环）
-            data = self._read_body()
-            try:
-                self._send_json(_handle_step1_match(data))
-            except Exception as e:
-                traceback.print_exc()
-                self._send_json({"ok": False, "error": str(e)}, status=500)
+            # 第 1 步快速通道：查库 + 一次大模型评估（**流式**）+ 确定性六维打分（不进智能体循环）
+            self._handle_step1_stream()
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()
@@ -2677,6 +2720,32 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(blob)
         else:
             self.send_error(404)
+
+    def _handle_step1_stream(self):
+        """第 1 步匹配的 SSE 端点：评估文字实时流出，最后一条 result 带推荐清单。"""
+        data = self._read_body()
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self._cors()
+        self.end_headers()
+
+        def emit(obj):
+            self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            res = _handle_step1_match(data, emit=emit)
+        except Exception as e:
+            traceback.print_exc()
+            res = {"ok": False, "error": str(e)}
+        try:
+            emit({"type": "result", "result": res})
+            emit({"type": "done"})
+        except OSError:
+            pass
 
     def _handle_send(self):
         data = self._read_body()
