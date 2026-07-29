@@ -1061,6 +1061,139 @@ def _extract_json_obj(out: str):
 
 
 # ---------------------------------------------------------------------------
+# 第 1 步表单填写：一次流式大模型调用把四个非产品分区填满（不进智能体回合循环）。
+# 产品两张表不在此列——它们由 match_products 推荐 + 用户「选用」后纯 SQL 填。
+# ---------------------------------------------------------------------------
+
+STEP1_FORM_SECTIONS = ("s1_basic", "s1_dest", "s1_payment", "s1_logistics")
+
+_STEP1_FORMS_SYS = (
+    "你是报价系统第 1 步的填表器。输入是用户的需求文本（可能含附件正文）与几个权威值，"
+    "以及四个分区的固定字段清单。\n"
+    "任务：把需求里的信息填进这四个分区；需求没写的，基于行业常识给**合理推荐值**，"
+    "并在该值末尾加「（推荐）」标记。\n"
+    "**铁律**：\n"
+    "1. 字段名必须用给定清单里的原文，**不要新增、改名或翻译字段**。\n"
+    "2. 客户 / 项目名称 / 项目编码 等权威值直接用给定的，不要另行臆造。\n"
+    "3. 目的地信息、物流信息、付款里程碑信息是**列表**，可以多行；确实无从判断就给空数组。\n"
+    "4. **不要涉及任何产品选型**（产品由系统单独匹配），不要输出产品编码/型号/价格。\n"
+    "**输出分两段**：\n"
+    "第一段：用 2~4 句话说明你从需求里读到什么、哪些是推荐值"
+    "（这段会实时展示给用户，用自然中文，不要写 JSON、不要贴表格）。\n"
+    "第二段：另起一行只写 " + _MARKUP_JSON_MARK + " ，然后输出一个 JSON 对象：\n"
+    '{"s1_basic": {"字段名": "值"}, "s1_dest": [{"列名": "值"}], '
+    '"s1_payment": [{"列名": "值"}], "s1_logistics": [{"列名": "值"}]}'
+)
+
+
+def _handle_step1_forms(data: dict, emit=None) -> dict:
+    """POST /api/step1/forms —— 第 1 步四个非产品分区的一次性填写（流式）。"""
+    t0 = time.perf_counter()
+
+    def _trace(msg):
+        print(f"[step1-forms] {msg}（累计 {time.perf_counter() - t0:.2f}s）", flush=True)
+
+    def _say(obj):
+        if emit:
+            try:
+                emit(obj)
+            except Exception:
+                pass
+
+    text = (data.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "缺少需求文本"}
+    b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
+    if b is None or b.conv.model == NO_MODEL_ID:
+        return {"ok": False, "stage": "llm",
+                "error": "当前为「无模型」模式，无法自动填表；请在右侧人工填写。"}
+
+    # 字段清单（来自固定表单目录，模型只能填这些）
+    spec, tpl = [], {}
+    for sid in STEP1_FORM_SECTIONS:
+        f = FIXED_FORMS.get(sid) or {}
+        keys = [c["key"] for c in (f.get("columns") or f.get("fields") or [])]
+        if not keys:
+            continue
+        tpl[sid] = {"kind": f.get("kind", "table"), "keys": keys, "title": f.get("title", sid)}
+        spec.append("【{}｜{}｜{}】\n{}".format(
+            sid, f.get("title", sid),
+            "表单(单条)" if f.get("kind") == "form" else "列表(可多行)", "、".join(keys)))
+
+    auth = data.get("authoritative") or {}
+    prompt = ("【需求文本】\n" + text[:12000] +
+              ("\n\n【权威值（直接使用）】\n" + json.dumps(auth, ensure_ascii=False) if auth else "") +
+              "\n\n【四个分区的固定字段清单】\n" + "\n".join(spec))
+    _say({"type": "stage", "text": "按需求填写测算基本信息 / 目的地 / 付款里程碑 / 物流信息"})
+    _trace(f"调大模型 {b.conv.model}：入参 {len(prompt)} 字，等待返回…")
+    t = time.perf_counter()
+    out = ""
+    try:
+        shown = 0
+        for ev in stream_message(
+                b.conv.client, [{"role": "user", "content": prompt}], _STEP1_FORMS_SYS,
+                model=b.conv.model, tools=[], max_tokens=4000):
+            if ev.get("type") == "text_delta":
+                out += ev.get("text", "")
+                if emit:
+                    vis = _markup_visible_text(out)
+                    if len(vis) > shown:
+                        _say({"type": "text", "text": vis[shown:]})
+                        shown = len(vis)
+            elif ev.get("type") == "error":
+                raise RuntimeError(ev.get("error") or "stream error")
+        out = out.strip()
+    except Exception as e:
+        _trace(f"调用失败，耗时 {time.perf_counter() - t:.2f}s：{e.__class__.__name__}: {str(e)[:120]}")
+        return {"ok": False, "stage": "llm",
+                "error": f"表单填写失败：{e.__class__.__name__}: {str(e)[:160]}"}
+    _trace(f"返回 {len(out)} 字，耗时 {time.perf_counter() - t:.2f}s")
+
+    obj = _extract_json_obj(out)
+    if obj is None:
+        _trace("输出不是有效 JSON。原文前 400 字：" + out[:400].replace("\n", "⏎"))
+        return {"ok": False, "stage": "llm",
+                "error": "表单填写结果无法解析（不是有效 JSON），请重试或人工填写。"}
+
+    # 规范化：只保留固定字段；剥掉「（推荐）」文字并给出 reco 标志（前端只上色不显示文字）
+    out_secs = {}
+    for sid, meta in tpl.items():
+        raw = obj.get(sid)
+        if meta["kind"] == "form":
+            vals = raw if isinstance(raw, dict) else {}
+            fields, reco = [], []
+            for k in meta["keys"]:
+                v, is_reco = _strip_reco(vals.get(k))
+                fields.append({"key": k, "label": k, "value": v, "reco": bool(is_reco)})
+                if is_reco:
+                    reco.append(k)
+            if any(f["value"] for f in fields):
+                out_secs[sid] = {"kind": "form", "title": meta["title"], "fields": fields}
+        else:
+            rows_in = raw if isinstance(raw, list) else ([raw] if isinstance(raw, dict) else [])
+            rows = []
+            for r in rows_in:
+                if not isinstance(r, dict):
+                    continue
+                row, reco = {}, []
+                for k in meta["keys"]:
+                    v, is_reco = _strip_reco(r.get(k))
+                    if str(v).strip():
+                        row[k] = v
+                        if is_reco:
+                            reco.append(k)
+                if row:
+                    if reco:
+                        row["_reco"] = reco
+                    rows.append(row)
+            if rows:
+                out_secs[sid] = {"kind": "table", "title": meta["title"], "rows": rows}
+
+    _trace(f"完成：填好 {len(out_secs)} 个分区；总耗时 {time.perf_counter() - t0:.2f}s")
+    return {"ok": True, "sections": out_secs}
+
+
+# ---------------------------------------------------------------------------
 # 第 3/4 步加价计算：一次流式大模型调用完成（不进智能体回合循环）
 #   第 3 步 定价-利润加成：md_clm_material_price_rule 里 rule_classification='定价' 的规则，
 #           依据 产品信息 + 产品技术参数 算「利润加成」；
@@ -2861,6 +2994,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/markup/fill":
             # 第 3/4 步加价计算：SQL 取规则 + 一次大模型调用（**流式**）
             self._handle_markup_stream()
+        elif path == "/api/step1/forms":
+            # 第 1 步四个非产品分区：一次大模型调用填满（**流式**）
+            self._handle_sse(_handle_step1_forms)
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()
@@ -2944,8 +3080,8 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
-    def _handle_markup_stream(self):
-        """第 3/4 步加价计算的 SSE 端点：计算说明实时流出，最后一条 result 带结果。"""
+    def _handle_sse(self, fn):
+        """通用 SSE 端点：fn(data, emit) 边算边推文本，最后一条 result 带结果。"""
         data = self._read_body()
         self.close_connection = True
         self.send_response(200)
@@ -2960,7 +3096,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            res = _handle_markup_fill(data, emit=emit)
+            res = fn(data, emit=emit)
         except Exception as e:
             traceback.print_exc()
             res = {"ok": False, "error": str(e)}
@@ -2969,6 +3105,9 @@ class Handler(BaseHTTPRequestHandler):
             emit({"type": "done"})
         except OSError:
             pass
+
+    def _handle_markup_stream(self):
+        self._handle_sse(_handle_markup_fill)
 
     def _handle_send(self):
         data = self._read_body()

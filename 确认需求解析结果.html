@@ -1952,12 +1952,96 @@
       if (d.below_threshold) md += '\n\n⚠ ' + (d.advice || '无高度匹配标品，建议转入定制评估。');
       md += '\n\n请在上方表格点「选用」确定产品（随后会自动带出参数与价格）。';
       addAiBubble(md);
-      // 产品推荐已给出 -> 现在才开始第三段：交给智能体把其余四个分区填满
+      // 产品推荐已给出 -> 现在才开始第三段：一次调用把其余四个分区填满
       if (STEP1_FORM_TASK) {
         const task = STEP1_FORM_TASK;
         STEP1_FORM_TASK = null;
-        sendToAgent(task, { echo: false, display: '', step: 1 });
+        fillStep1Forms(task);
       }
+    }
+
+    /* 第 1 步四个非产品分区（测算基本信息/目的地/付款里程碑/物流）：
+       一次流式大模型调用直接拿到结构化结果并渲染，不进智能体多轮工具循环（快很多）。 */
+    async function fillStep1Forms(text) {
+      if (manualMode || !FORMS.length) return false;
+      let auth = {};
+      try {
+        auth = {
+          项目名称: sessionStorage.getItem('cpq:projectName') || '',
+          项目编码: sessionStorage.getItem('cpq:projectCode') || '',
+          客户: sessionStorage.getItem('cpq:customer') || '',
+        };
+      } catch (e) {}
+      setBusy(true);
+      const act = addToolActivity('填写第 1 步表单：测算基本信息 / 目的地 / 付款里程碑 / 物流信息');
+      showTyping();
+      let d = null, gotText = false;
+      try {
+        const resp = await fetch(AGENT_URL + '/api/step1/forms', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text, sid: currentSessionId, authoritative: auth }),
+        });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (!chunk.startsWith('data:')) continue;
+            let ev;
+            try { ev = JSON.parse(chunk.slice(5)); } catch { continue; }
+            if (ev.type === 'text') {
+              if (!gotText) { hideTyping(); gotText = true; }
+              appendStreamText(ev.text || '');
+            } else if (ev.type === 'stage') {
+              addToolActivity(ev.text || '');
+            } else if (ev.type === 'result') {
+              d = ev.result;
+            }
+          }
+        }
+      } catch (e) {
+        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
+      }
+      hideTyping();
+      finishStreamBubble();
+      setBusy(false);
+      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      if (!d || !d.ok) {
+        addErrorBubble('第 1 步表单自动填写失败：' + ((d && d.error) || '未知错误') + '，请在右侧人工填写。');
+        return false;
+      }
+      const secs = d.sections || {};
+      const names = [];
+      Object.keys(secs).forEach(sid => {
+        const f = FORMS.find(x => x.section_id === sid);
+        const s = secs[sid];
+        if (!f || !s) return;
+        if (s.kind === 'form') {
+          renderFormSection({
+            action: 'render_form', step: f.step, section_id: sid, title: f.title,
+            editable: f.editable, fields: s.fields || [],
+          });
+        } else {
+          renderTableSection({
+            action: 'render_table', step: f.step, section_id: sid, title: f.title,
+            editable: f.editable, columns: f.columns || [], rows: s.rows || [],
+          });
+        }
+        names.push(f.title.replace(/^[①-⑨]\s*/, ''));
+      });
+      if (currentStep === 1) showStep(1);
+      addAiBubble('📝 已填好第 1 步的' + (names.length ? '「' + names.join('」「') + '」' : '各项') +
+        '（浅色标记的是推荐值，可直接修改）。\n\n' +
+        '产品请在上方推荐清单点「选用」确定；全部核对无误后点「进入下一大步骤」。');
+      return true;
     }
 
     function applyUiEvent(ui) {
@@ -2607,17 +2691,20 @@
         fillStep5();
         return true;
       }
-      // 第 3 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
-      if (CARRY_MAP[step]) await ensureCarryData(step);
       if (step === 3 || step === 4) {
-        // 定价/加价：一次流式大模型调用（本地缺技术参数或测算基本信息时先从快照补齐）
+        // 定价/加价：一次流式大模型调用。
+        // ⚠️ 顺序要紧：**先**把上一步的产品快照恢复回来，**再**沿用到本步 ——
+        // 反过来的话第 4 步会从第 1 步的原始行带入，把第 3 步算出的利润加成丢掉。
         if (!extractSectionRows('s1_techparams').length &&
             !extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
         if (!Object.keys((collectStepData(1) || {}).s1_basic || {}).length) await wfRestoreStepData(1);
         if (step === 4 && !extractSectionRows('s3_products').length) await wfRestoreStepData(3);
+        if (CARRY_MAP[step]) await ensureCarryData(step);
         runMarkupStep(step);
         return true;
       }
+      // 其余步骤：接手人本地可能没有前面步骤的数据，先恢复并把选定产品带入该步的产品表
+      if (CARRY_MAP[step]) await ensureCarryData(step);
       const picked = extractSectionRows('s1_products')
         .map(r => r['成品编码']).filter(Boolean).join('、');
       sendToAgent(
@@ -2848,17 +2935,27 @@
     /* 各步骤的「沿用第 1 步」映射：第 2 步带产品信息+技术参数；第 3/4 步带产品信息。
        产品在第 1 步选定、第 2 步工艺确认后即固定——后续步骤只能沿用，绝不允许重新选择。 */
     const CARRY_MAP = {
-      2: [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']],
-      3: [['s1_products', 's3_products']],
-      4: [['s1_products', 's4_products']],
+      2: [[['s1_products'], 's2_products'], [['s1_techparams'], 's2_techparams']],
+      3: [[['s2_products', 's1_products'], 's3_products']],
+      // 第 4 步必须从第 3 步的产品行带入（含利润加成），否则重算价格时会把利润加成丢掉
+      4: [[['s3_products', 's2_products', 's1_products'], 's4_products']],
     };
+
+    // 从候选来源里取第一个有数据的分区
+    function _firstRows(srcs) {
+      for (const s of (Array.isArray(srcs) ? srcs : [srcs])) {
+        const rows = extractSectionRows(s);
+        if (rows.length) return rows;
+      }
+      return [];
+    }
 
     function carryProducts(step) {
       (CARRY_MAP[step] || []).forEach(([src, dst]) => {
         const f = FORMS.find(x => x.section_id === dst);
         if (!f) return;
-        const rows = extractSectionRows(src);
-        if (!rows.length) return;   // 第1步这张表本来就是空的：保留空骨架，别把已有内容抹掉
+        const rows = _firstRows(src);
+        if (!rows.length) return;   // 来源本来就是空的：保留空骨架，别把已有内容抹掉
         renderTableSection({
           action: 'render_table', step: f.step, section_id: dst,
           title: f.title, editable: f.editable, columns: f.columns || [], rows,
