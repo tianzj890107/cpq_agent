@@ -1815,6 +1815,7 @@
       btn.classList.add('picked');
       btn.innerHTML = '<i class="ti ti-check"></i>已选用';
       STEP1_MATCH.picked = p.code;
+      STEP2_SYNCED = false;   // 产品变了：后续步骤要按新版本重新沿用
       const inStep2 = currentStep === 2;   // 工艺确认中改选：右侧第 1、2 步的表都要换成新产品
 
       // 直接把固定表填上（第 1 步的产品技术参数 + 产品信息列表；工艺确认改选时连同第 2 步两张沿用表）
@@ -2983,39 +2984,59 @@
     }
 
     async function ensureStep1Context(force) {
-      if (STEP1_CTX_READY && !force) return true;
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
-      const missing = STEP1_ALL_SECTIONS.filter(sid => !_sectionHasData(sid));
-      if (!missing.length) { STEP1_CTX_READY = true; return true; }
-      const ok = await wfRestoreStepData(1);   // 从卡片快照把第 1 步整步恢复回来
-      STEP1_CTX_READY = true;                  // 恢复过就不再反复拉（避免每次切步都请求）
+      let ok = true;
+      if (!STEP1_CTX_READY || force) {
+        const missing = STEP1_ALL_SECTIONS.filter(sid => !_sectionHasData(sid));
+        if (missing.length) ok = await wfRestoreStepData(1);   // 从快照恢复第 1 步整步
+        STEP1_CTX_READY = true;                 // 恢复过就不再反复拉（避免每次切步都请求）
+      }
+      // 工艺经理可能在第 2 步改过产品：那一版才是权威的，覆盖回第 1 步
+      await syncProductsFromStep2();
       return ok;
+    }
+
+    /* 第 2 步「工艺确认」可以改选产品 —— 确认后的产品/技术参数才是权威版本。
+       把它回写到第 1 步的两张表，这样：
+         · 用户点进度条回看第 1 步，看到的是工艺确认后的产品；
+         · 第 3、4 步沿用与计算也都基于这一版（CARRY_MAP 也优先取 s2_products）。 */
+    let STEP2_SYNCED = false;
+    async function syncProductsFromStep2() {
+      if (!wfUser() || !currentSessionId || !FORMS.length) return false;
+      if (currentStep < 2 && shownStep < 2) return false;      // 还没走到第 2 步
+      if (!extractSectionRows('s2_products').length && !STEP2_SYNCED) {
+        STEP2_SYNCED = true;
+        await wfRestoreStepData(2);                            // 交接过来的卡片：先取第 2 步快照
+      }
+      let changed = false;
+      [['s2_products', 's1_products'], ['s2_techparams', 's1_techparams']].forEach(([src, dst]) => {
+        const rows = extractSectionRows(src);
+        const f = FORMS.find(x => x.section_id === dst);
+        if (!rows.length || !f) return;
+        if (JSON.stringify(extractSectionRows(dst)) === JSON.stringify(rows)) return;  // 没变化
+        renderTableSection({
+          action: 'render_table', step: f.step, section_id: dst,
+          title: f.title, editable: f.editable, columns: f.columns || [], rows,
+        });
+        changed = true;
+      });
+      return changed;
     }
 
     // 进入第 2/3/4 步前确保第 1 步数据在手：本地没有就从卡片快照恢复，再沿用到该步
     async function ensureCarryData(step) {
       const map = CARRY_MAP[step];
       if (!map) return;
-      if (map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容
-      // 第 3 步及以后：第 2 步工艺确认后的产品才是权威版本（工艺经理可能改选过）——
-      // 优先用第 2 步快照回写本地第 1 步两张表，再沿用；本地（销售经理机器上）的旧选择会被覆盖
-      if (step >= 3) {
-        await wfRestoreStepData(2);
-        [['s2_products', 's1_products'], ['s2_techparams', 's1_techparams']].forEach(([src, dst]) => {
-          const rows = extractSectionRows(src);
-          const f = FORMS.find(x => x.section_id === dst);
-          if (!rows.length || !f) return;
-          renderTableSection({
-            action: 'render_table', step: f.step, section_id: dst,
-            title: f.title, editable: f.editable, columns: f.columns || [], rows,
-          });
-        });
-      }
+      // ⚠️ 先回写工艺确认后的产品（要放在下面的「已有内容就跳过」守卫之前，
+      // 否则本步产品表只要有旧内容，就永远拿不到第 2 步改选后的版本）
+      const changed = (step >= 3) ? await syncProductsFromStep2() : false;
+      if (!changed && map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容
       if (!extractSectionRows('s1_products').length &&
           !extractSectionRows('s1_techparams').length) {
         await wfRestoreStepData(1);                             // 交接过来的卡片：先恢复第 1 步
       }
-      maybeCarry(step);
+      if (changed) carryProducts(step);   // 产品换过：强制按新版本重新沿用
+      else maybeCarry(step);
     }
     async function ensureStep2Data() { return ensureCarryData(2); }   // 兼容旧调用名
 

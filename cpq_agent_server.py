@@ -1032,6 +1032,46 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 通用小工具：数值解析 / JSON 抠取（第 1、3、4 步的两段式输出共用）
+# ---------------------------------------------------------------------------
+
+def _num(v):
+    """从任意值里取数字（容忍 '13%'、'1,234.5'、'￥100'）；取不到返回 None。"""
+    m = re.search(r"-?\d+(?:\.\d+)?",
+                  str(v if v is not None else "").replace(",", "").replace("，", ""))
+    return float(m.group(0)) if m else None
+
+
+def _fmt_num(x) -> str:
+    return str(int(x)) if float(x).is_integer() else str(round(float(x), 2))
+
+
+def _extract_json_obj(out: str):
+    """从模型输出里抠出可解析的 JSON 对象（容忍思考段 / 代码围栏 / 前后废话）。"""
+    s = (out or "").strip()
+    s = re.sub(r"<think>.*?(?:</think>|$)", "", s, flags=re.S).strip()
+    s = re.sub(r"```[a-zA-Z]*", "", s).strip()
+    cands, depth, start = [], 0, None
+    for i, ch in enumerate(s):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                cands.append(s[start:i + 1])
+    for c in reversed(cands):
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 第 3/4 步加价计算：一次流式大模型调用完成（不进智能体回合循环）
 #   第 3 步 定价-利润加成：md_clm_material_price_rule 里 rule_classification='定价' 的规则，
 #           依据 产品信息 + 产品技术参数 算「利润加成」；
