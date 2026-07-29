@@ -1168,6 +1168,10 @@
       shownStep = n;
       // 第 2/3/4 步的产品表沿用第 1 步：任何路径切到这些步骤都补齐一次（已有内容不覆盖）
       if (CARRY_MAP[n]) maybeCarry(n);
+      // 回看第 1 步时若本地是空的（交接过来的卡片），异步从快照补回来
+      if (n === 1 && !STEP1_CTX_READY) {
+        ensureStep1Context().then(ok => { if (ok && shownStep === 1) showStep(1); }).catch(() => {});
+      }
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
@@ -2583,10 +2587,8 @@
       if (syncStep) {
         wfApplyCardStep();               // 先把步骤纠正到卡片的真实位置
         // 交接过来的卡片：本地没有前面步骤的数据，从快照恢复（第 2 步还要据此沿用两张表）
+        if (currentStep > 1) await ensureStep1Context();   // 第 1 步整步先在手
         if (CARRY_MAP[currentStep]) await ensureCarryData(currentStep);
-        else if (currentStep > 1 && !extractSectionRows('s1_products').length) {
-          await wfRestoreStepData(1);
-        }
       }
       wfRenderBar();
       wfMaybePromptStart();
@@ -2722,6 +2724,7 @@
       if (step === 2) {
         // 工艺确认是人工核对：沿用第 1 步数据展示，不调智能体
         // （本地没有第 1 步数据时先从卡片快照恢复——交接过来的卡片就是这种情况）
+        await ensureStep1Context();   // 第 1 步全部分区（含基本信息/目的地/付款/物流）都带过来
         await ensureStep2Data();
         // 开场回显：第 1 步客户需求描述 + Top3 推荐表（标出销售经理已选，支持改选）
         await showStep2Review();
@@ -2735,7 +2738,7 @@
       if (step === 5) {
         // 报价方案：纯前端填写（不调用智能体）。接手人本地可能没数据，先把前面步骤恢复齐：
         // ① 第 1 步快照（s1_basic 税率/币种等）→ ② 产品沿用 → ③ 第 3/4 步确认快照（含加价）覆盖
-        if (!extractSectionRows('s1_products').length) await wfRestoreStepData(1);
+        await ensureStep1Context();
         if (!extractSectionRows('s4_products').length) {
           await ensureCarryData(4);
           await wfRestoreStepData(3);
@@ -2746,11 +2749,10 @@
       }
       if (step === 3 || step === 4) {
         // 定价/加价：一次流式大模型调用。
-        // ⚠️ 顺序要紧：**先**把上一步的产品快照恢复回来，**再**沿用到本步 ——
+        // ⚠️ 顺序要紧：先把第 1 步整步上下文与上一步的产品快照恢复回来，**再**沿用到本步 ——
         // 反过来的话第 4 步会从第 1 步的原始行带入，把第 3 步算出的利润加成丢掉。
-        if (!extractSectionRows('s1_techparams').length &&
-            !extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
-        if (!Object.keys((collectStepData(1) || {}).s1_basic || {}).length) await wfRestoreStepData(1);
+        await ensureStep1Context();                       // 测算基本信息/目的地/付款/物流…
+        if (!extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
         if (step === 4 && !extractSectionRows('s3_products').length) await wfRestoreStepData(3);
         if (CARRY_MAP[step]) await ensureCarryData(step);
         runMarkupStep(step);
@@ -3066,6 +3068,33 @@
       return restored;
     }
 
+    /* 第 1 步的全部分区（不止产品两张表）——后续每一步都要能拿到：
+       · 第 3/4 步计算加价时要把这些当上下文发给模型；
+       · 用户点进度条回看第 1 步时也要能看到内容。
+       交接过来的卡片本地什么都没有，统一从第 1 步快照恢复一次。 */
+    const STEP1_ALL_SECTIONS = ['s1_basic', 's1_dest', 's1_products',
+                                's1_techparams', 's1_payment', 's1_logistics'];
+    let STEP1_CTX_READY = false;
+
+    function _sectionHasData(sid) {
+      const sec = sections.get(sid);
+      if (!sec) return false;
+      if (sec.kind === 'table') return extractSectionRows(sid).length > 0;
+      const d = collectStepData(1)[sid];
+      const v = d ? (d['数据'] !== undefined ? d['数据'] : d.data) : null;
+      return !!(v && Object.keys(v).some(k => String(v[k] || '').trim()));
+    }
+
+    async function ensureStep1Context(force) {
+      if (STEP1_CTX_READY && !force) return true;
+      if (!wfUser() || !currentSessionId || !FORMS.length) return false;
+      const missing = STEP1_ALL_SECTIONS.filter(sid => !_sectionHasData(sid));
+      if (!missing.length) { STEP1_CTX_READY = true; return true; }
+      const ok = await wfRestoreStepData(1);   // 从卡片快照把第 1 步整步恢复回来
+      STEP1_CTX_READY = true;                  // 恢复过就不再反复拉（避免每次切步都请求）
+      return ok;
+    }
+
     // 进入第 2/3/4 步前确保第 1 步数据在手：本地没有就从卡片快照恢复，再沿用到该步
     async function ensureCarryData(step) {
       const map = CARRY_MAP[step];
@@ -3161,6 +3190,7 @@
     async function runMarkupStep(step) {
       const cfg = MARKUP_CFG[step];
       if (!cfg || !FORMS.length) return false;
+      await ensureStep1Context();   // 上下文兜底：确保第 1 步各表都在手，别把信息丢了
       const sec = 's' + step;
       const prodF = FORMS.find(x => x.section_id === sec + '_products');
       const mkF = FORMS.find(x => x.section_id === sec + '_markup');
@@ -3176,17 +3206,17 @@
         const s = d1[sid];
         return s ? (s['数据'] !== undefined ? s['数据'] : s.data) : null;
       };
+      // 上下文：第 1 步的全部信息都带上（第 3 步按规则主要用产品与技术参数，
+      // 但基本信息等一并给出，避免规则需要时取不到）
       const body = {
         step: step, sid: currentSessionId, products: products,
         techparams: extractSectionRows('s2_techparams').length
           ? extractSectionRows('s2_techparams') : extractSectionRows('s1_techparams'),
+        basic: pick('s1_basic') || {},
+        dest: extractSectionRows('s1_dest'),
+        payment: extractSectionRows('s1_payment'),
+        logistics: extractSectionRows('s1_logistics'),
       };
-      if (step === 4) {
-        body.basic = pick('s1_basic') || {};
-        body.dest = extractSectionRows('s1_dest');
-        body.payment = extractSectionRows('s1_payment');
-        body.logistics = extractSectionRows('s1_logistics');
-      }
 
       setBusy(true);
       const act = addToolActivity(

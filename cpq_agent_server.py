@@ -1234,13 +1234,16 @@ def _handle_step1_forms(data: dict, emit=None) -> dict:
 #   规则取数走纯 SQL（确定性），模型只负责按规则语义算金额并说明命中过程。
 # ---------------------------------------------------------------------------
 
+# context = 发给模型的上下文分区。前面步骤的信息一律带全（缺了规则就算不出来），
+# 只是各步的**主依据**不同：第 3 步看产品与技术参数，第 4 步还要看基本信息/目的地/付款/物流。
+_ALL_CTX = ("basic", "dest", "products", "techparams", "payment", "logistics")
 MARKUP_STEPS = {
     3: {"classification": "定价", "column": "利润加成", "section": "s3",
-        "label": "定价-利润加成",
-        "context": ("products", "techparams")},
+        "label": "定价-利润加成", "context": _ALL_CTX,
+        "basis": "产品信息、产品技术参数"},
     4: {"classification": "报价", "column": "其他加价", "section": "s4",
-        "label": "报价-其他加价项",
-        "context": ("basic", "dest", "products", "techparams", "payment", "logistics")},
+        "label": "报价-其他加价项", "context": _ALL_CTX,
+        "basis": "测算基本信息、目的地信息、产品信息、产品技术参数、付款里程碑信息、物流信息"},
 }
 
 _CTX_LABEL = {
@@ -1253,7 +1256,8 @@ def _markup_sys(cfg: dict) -> str:
     return (
         f"你是报价系统「{cfg['label']}」步骤的计算器。输入是：规则库中"
         f"`rule_classification='{cfg['classification']}'` 的全部规则，以及本单前面步骤已确认的数据。\n"
-        f"任务：逐条判断规则是否命中，算出每个产品的**{col}**金额。\n"
+        f"任务：逐条判断规则是否命中，算出每个产品的**{col}**金额——"
+        f"主要依据 {cfg['basis']}；其余分区作为补充信息，规则用得上就用。\n"
         "**铁律**：\n"
         "1. 只能用给定的规则和数据，规则表达式（rule_expression 是伪代码）按其语义人工判断执行，"
         "**不要照抄表达式、不要编造规则、不要臆造数据**。\n"
