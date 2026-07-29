@@ -920,7 +920,7 @@
     // 报价助手 Agent 服务。可用 localStorage['cpq:agentUrl'] 覆盖。
     // 默认同源 /agents/quote（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47292。
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
-    const STEPS = ['确认需求配置', '工艺确认', '报价-加价项', '报价方案', '输出报价单'];
+    const STEPS = ['确认需求配置', '工艺确认', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
 
     /* ================= 状态 ================= */
@@ -2344,14 +2344,14 @@
         );
         return;
       }
-      if (next === 3) {
-        // 报价-加价项：两条固定报价规则由前端直接执行，完全不调模型
-        runStep3Rules();
+      if (next === 3 || next === 4) {
+        // 定价-利润加成 / 报价-其他加价项：各一次流式大模型调用（规则取自数据库），不进智能体循环
+        runMarkupStep(next);
         return;
       }
-      if (next === 4) {
-        // 报价方案：一次大模型调用填两张表（金额列后端按公式重算），不进智能体循环
-        fillStep4();
+      if (next === 5) {
+        // 报价方案：纯前端用前面步骤的数据填两张表（报价明细为联动计算表），不调模型
+        fillStep5();
         return;
       }
       sendToAgent(
@@ -2566,7 +2566,7 @@
         PENDING_KICKOFF = null;
         if (k.manual) {
           addAiBubble('当前为「无模型」模式（不调用大模型）。请直接在右侧各分区人工填写，' +
-            '每步完成后点「确认，进入下一步」；到第 5 步可直接生成报价单（Word）。');
+            '每步完成后点「确认，进入下一步」；到第 6 步可直接生成报价单（Word）。');
           sendToAgent(k.text, { echo: false, display: k.display, step: k.step });
           return true;
         }
@@ -2595,26 +2595,27 @@
           { echo: false, display: '开始第 2 步', step: 2 });
         return true;
       }
-      if (step === 4) {
+      if (step === 5) {
         // 报价方案：纯前端填写（不调用智能体）。接手人本地可能没数据，先把前面步骤恢复齐：
-        // ① 第 1 步快照（s1_basic 税率/币种等）→ ② 工艺确认后的产品沿用到第 3 步 →
-        // ③ 第 3 步确认快照（含其他加价）覆盖 —— 顺序保证工艺经理改选后的产品是权威版本
+        // ① 第 1 步快照（s1_basic 税率/币种等）→ ② 产品沿用 → ③ 第 3/4 步确认快照（含加价）覆盖
         if (!extractSectionRows('s1_products').length) await wfRestoreStepData(1);
-        if (!extractSectionRows('s3_products').length) {
-          await ensureCarryData(3);
+        if (!extractSectionRows('s4_products').length) {
+          await ensureCarryData(4);
           await wfRestoreStepData(3);
+          await wfRestoreStepData(4);
         }
-        fillStep4();
+        fillStep5();
         return true;
       }
       // 第 3 步：接手人本地可能没有第 1 步数据，先恢复并把选定产品带入该步的产品表
       if (CARRY_MAP[step]) await ensureCarryData(step);
-      if (step === 3) {
-        // 报价-加价项：两条固定规则本地执行，不调模型（技术参数/测算基本信息本地缺失时先补齐）
+      if (step === 3 || step === 4) {
+        // 定价/加价：一次流式大模型调用（本地缺技术参数或测算基本信息时先从快照补齐）
         if (!extractSectionRows('s1_techparams').length &&
             !extractSectionRows('s2_techparams').length) await wfRestoreStepData(2);
         if (!Object.keys((collectStepData(1) || {}).s1_basic || {}).length) await wfRestoreStepData(1);
-        runStep3Rules();
+        if (step === 4 && !extractSectionRows('s3_products').length) await wfRestoreStepData(3);
+        runMarkupStep(step);
         return true;
       }
       const picked = extractSectionRows('s1_products')
@@ -2849,6 +2850,7 @@
     const CARRY_MAP = {
       2: [['s1_products', 's2_products'], ['s1_techparams', 's2_techparams']],
       3: [['s1_products', 's3_products']],
+      4: [['s1_products', 's4_products']],
     };
 
     function carryProducts(step) {
@@ -2977,179 +2979,203 @@
     }
     function maybeSyncStep2() { maybeCarry(2); }                 // 兼容旧调用名
 
-    /* ================= 第 4 步「报价方案」：纯前端填写（不调用智能体、不做推荐） =================
-       s4_basic（报价基本信息）：同名字段直接抄第 1 步测算基本信息（客户/币种/关联商机编号…），
-         另加映射 关联测算单号←测算单号；没有来源的字段留空由人工填。
-       s4_detail（报价明细）：行取第 3 步确认后的产品信息（s3_products，缺则 s1_products），
-         同名列直接抄；计算列按固定公式：报价=价格+其他加价；折后价格=报价×折扣（无折扣按 1）；
-         总金额=折后价格×数量（无数量按 1）；税率抄测算基本信息；税金=总金额×税率。 */
+    /* 数值解析/格式化小工具：第 3~5 步的加价与金额计算共用 */
     function _numOf(v) {
       const m = String(v == null ? '' : v).replace(/[,，\s]/g, '').match(/-?\d+(\.\d+)?/);
       return m ? parseFloat(m[0]) : null;
     }
     function _fmtNum(n) { return String(Math.round(n * 100) / 100); }
-    /* ================= 第 3 步「报价-加价项」：固定规则本地执行（完全不调模型） =================
-       两条写死的报价规则（规则分类=报价），既展示在加价明细里，也直接用代码执行：
-         · 插头方向加价：插头方向=='反向' → 2.8；=='正向' → 2.1
-         · 物流费用加价：物流测算区域=='国内' → 1.9；=='国外' → 3.5
-       取值来源：插头方向=产品技术参数（product_para_value.plug_direction）；
-                物流测算区域=第 1 步测算基本信息。
-       结果：加价明细逐条列出命中值；产品信息的「其他加价」= 两条规则之和
-             （「价格」保持数据库原值不动，第 4 步按 报价=价格+其他加价 计算）。 */
-    const STEP3_RULES = [
-      {
-        name: '插头方向加价', field: '插头方向', from: 'techparams',
-        table: { '反向': 2.8, '正向': 2.1 },
-        groovy: "if (插头方向 == '反向') {\n    return 2.8\n}else if(插头方向 == '正向') {\n    return 2.1\n}",
-      },
-      {
-        name: '物流费用加价', field: '物流测算区域', from: 'basic',
-        table: { '国内': 1.9, '国外': 3.5 },
-        groovy: "if (物流测算区域 == '国内') {\n    return 1.9\n}else if (物流测算区域 == '国外') \n{ \n    return 3.5\n}",
-      },
-    ];
+    /* ============ 第 3/4 步：加价计算（各一次流式大模型调用，不进智能体循环） ============
+       第 3 步 定价-利润加成：取 md_clm_material_price_rule 里「定价」分类规则，
+                依据 产品信息 + 产品技术参数 算「利润加成」；
+       第 4 步 报价-其他加价项：取「报价」分类规则，依据 测算基本信息 + 目的地 + 产品信息 +
+                产品技术参数 + 付款里程碑 + 物流信息 算「其他加价」。
+       规则取数是纯 SQL；模型只按规则语义算金额。结果写入该步的规则表与产品信息表，
+       并把「价格」重算为 基础成本 + 利润加成 + 其他加价（幂等，重复执行不会累加）。 */
+    const MARKUP_CFG = {
+      3: { column: '利润加成', label: '定价-利润加成', cls: '定价' },
+      4: { column: '其他加价', label: '报价-其他加价项', cls: '报价' },
+    };
 
-    function _ruleHit(rule, raw) {
-      const s = String(raw == null ? '' : raw).trim();
-      if (!s) return { value: null, matched: '' };
-      if (rule.table[s] !== undefined) return { value: rule.table[s], matched: s };
-      const k = Object.keys(rule.table).find(x => s.indexOf(x) >= 0);   // 容忍「国内运输」这类写法
-      return k ? { value: rule.table[k], matched: k } : { value: null, matched: '' };
+    // 价格 = 基础成本 + 利润加成 + 其他加价（基础成本第一次执行时从原价固化）
+    function _recalcProductPrice(row) {
+      const base = _numOf(row['基础成本']) != null ? _numOf(row['基础成本']) : _numOf(row['价格']);
+      if (base == null) return row;
+      row['基础成本'] = _fmtNum(base);
+      const profit = _numOf(row['利润加成']) || 0;
+      const other = _numOf(row['其他加价']) || 0;
+      row['价格'] = _fmtNum(base + profit + other);
+      return row;
     }
 
-    function runStep3Rules() {
-      if (!FORMS.length) return false;
-      const prodF = FORMS.find(x => x.section_id === 's3_products');
-      const mkF = FORMS.find(x => x.section_id === 's3_markup');
-      const prows = extractSectionRows('s3_products');
-      const products = prows.length ? prows : extractSectionRows('s1_products');
+    async function runMarkupStep(step) {
+      const cfg = MARKUP_CFG[step];
+      if (!cfg || !FORMS.length) return false;
+      const sec = 's' + step;
+      const prodF = FORMS.find(x => x.section_id === sec + '_products');
+      const mkF = FORMS.find(x => x.section_id === sec + '_markup');
+      let products = extractSectionRows(sec + '_products');
+      if (!products.length) products = extractSectionRows('s3_products');
+      if (!products.length) products = extractSectionRows('s1_products');
       if (!products.length) {
-        addErrorBubble('第 3 步无法执行加价规则：前面步骤还没有产品信息。');
+        addErrorBubble('第 ' + step + ' 步无法计算' + cfg.column + '：前面步骤还没有产品信息。');
         return false;
       }
       const d1 = collectStepData(1) || {};
-      const basic = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
-      const tprows = extractSectionRows('s2_techparams').length
-        ? extractSectionRows('s2_techparams') : extractSectionRows('s1_techparams');
-      const tpByCode = {};
-      tprows.forEach(r => { const c = String(r['成品编码'] || '').trim(); if (c) tpByCode[c] = r; });
+      const pick = sid => {
+        const s = d1[sid];
+        return s ? (s['数据'] !== undefined ? s['数据'] : s.data) : null;
+      };
+      const body = {
+        step: step, sid: currentSessionId, products: products,
+        techparams: extractSectionRows('s2_techparams').length
+          ? extractSectionRows('s2_techparams') : extractSectionRows('s1_techparams'),
+      };
+      if (step === 4) {
+        body.basic = pick('s1_basic') || {};
+        body.dest = extractSectionRows('s1_dest');
+        body.payment = extractSectionRows('s1_payment');
+        body.logistics = extractSectionRows('s1_logistics');
+      }
 
-      const multi = products.length > 1;
-      const mkRows = [];
-      const lines = [];
-      let seq = 0;
-      const outProducts = products.map(p => {
-        const code = String(p['成品编码'] || '').trim();
-        const tp = tpByCode[code] || tprows[0] || {};
-        let sum = 0, any = false;
-        STEP3_RULES.forEach(rule => {
-          const raw = rule.from === 'basic' ? basic[rule.field] : tp[rule.field];
-          const hit = _ruleHit(rule, raw);
-          seq += 1;
-          mkRows.push({
-            '规则分类': '报价', '序号': String(seq),
-            '加价项名称': rule.name + (multi && code ? '（' + code + '）' : ''),
-            '加价值': hit.value != null ? String(hit.value) : '',
-          });
-          if (hit.value != null) { sum += hit.value; any = true; }
-          lines.push('· **' + rule.name + '**' + (multi && code ? '（' + code + '）' : '') + '：' +
-            rule.field + '=' + (String(raw || '').trim() || '（空）') +
-            (hit.value != null ? ' → 加价 ' + hit.value : ' → 未命中，不加价'));
+      setBusy(true);
+      const act = addToolActivity(
+        '第 ' + step + ' 步「' + cfg.label + '」：查询规则库（远程 Postgres）→ 按规则计算' + cfg.column,
+        "SELECT rule_name, rule_desc, rule_expression FROM md_clm_material_price_rule" +
+        " WHERE rule_classification = '" + cfg.cls + "' AND is_deleted = false");
+      showTyping();
+      let d = null, gotText = false;
+      try {
+        const resp = await fetch(AGENT_URL + '/api/markup/fill', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
         });
-        // 「基础成本」= 数据库原价（只在第一次执行时固化，保证重复执行不会重复加价）；
-        // 「其他加价」= 两条规则之和；「价格」= 基础成本 + 其他加价，即加价后的价格
-        // （第 4 步的报价直接取这个价格，不再另行相加）。
-        const row = Object.assign({}, p);
-        const base = _numOf(row['基础成本']) != null ? _numOf(row['基础成本']) : _numOf(row['价格']);
-        if (base != null) row['基础成本'] = _fmtNum(base);
-        if (any) row['其他加价'] = _fmtNum(sum);
-        if (base != null) row['价格'] = _fmtNum(base + (any ? sum : 0));
-        return row;
-      });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (!chunk.startsWith('data:')) continue;
+            let ev;
+            try { ev = JSON.parse(chunk.slice(5)); } catch { continue; }
+            if (ev.type === 'text') {
+              if (!gotText) { hideTyping(); gotText = true; }
+              appendStreamText(ev.text || '');
+            } else if (ev.type === 'stage') {
+              addToolActivity(ev.text || '');
+            } else if (ev.type === 'result') {
+              d = ev.result;
+            }
+          }
+        }
+      } catch (e) {
+        d = { ok: false, error: '无法连接报价助手服务：' + e.message };
+      }
+      hideTyping();
+      finishStreamBubble();
+      setBusy(false);
+      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      if (!d || !d.ok) {
+        addErrorBubble('第 ' + step + ' 步' + cfg.column + '计算失败：' + ((d && d.error) || '未知错误'));
+        return false;
+      }
 
+      // 规则表
+      if (mkF && (d.markup || []).length) {
+        renderTableSection({
+          action: 'render_table', step: mkF.step, section_id: sec + '_markup',
+          title: mkF.title, editable: mkF.editable,
+          columns: mkF.columns || [], rows: d.markup,
+        });
+      }
+      // 产品信息：写回本步的加价列，并重算价格
+      const add = d.product_markup || {};
+      const outRows = products.map(p => {
+        const row = Object.assign({}, p);
+        const code = String(row['成品编码'] || '').trim();
+        if (add[code] != null) row[cfg.column] = String(add[code]);
+        return _recalcProductPrice(row);
+      });
       if (prodF) {
         renderTableSection({
-          action: 'render_table', step: prodF.step, section_id: 's3_products',
+          action: 'render_table', step: prodF.step, section_id: sec + '_products',
           title: prodF.title, editable: prodF.editable,
-          columns: prodF.columns || [], rows: outProducts,
+          columns: prodF.columns || [], rows: outRows,
         });
       }
-      if (mkF) {
-        renderTableSection({
-          action: 'render_table', step: mkF.step, section_id: 's3_markup',
-          title: mkF.title, editable: mkF.editable,
-          columns: mkF.columns || [], rows: mkRows,
-        });
-      }
-      if (shownStep !== 3 && currentStep === 3) showStep(3);
+      if (currentStep === step && shownStep !== step) showStep(step);
 
-      const priceLines = outProducts.map(r => {
-        const base = _numOf(r['基础成本']);
-        const add = _numOf(r['其他加价']) || 0;
-        return '· ' + (r['成品编码'] || r['产品型号'] || '产品') + '：基础成本 ' +
-          (base != null ? base : '—') + ' + 其他加价 ' + add +
-          ' → **价格 ' + (r['价格'] || '—') + '**';
-      });
-      addAiBubble('⚙️ 第 3 步「报价-加价项」已按**两条固定报价规则**本地执行完成（未调用模型）：\n\n' +
-        '**规则 1 · 插头方向加价**（规则分类：报价）\n```groovy\n' + STEP3_RULES[0].groovy + '\n```\n' +
-        '**规则 2 · 物流费用加价**（规则分类：报价）\n```groovy\n' + STEP3_RULES[1].groovy + '\n```\n' +
-        '**命中情况**\n' + lines.join('\n') + '\n\n' +
-        '**加价后价格**\n' + priceLines.join('\n') + '\n\n' +
-        '右侧「加价明细」已列出各条规则取值，「产品信息」的**价格已更新为加价后的价格**' +
-        '（基础成本列保留数据库原价备查），第 4 步的报价直接取该价格。核对后点「进入下一大步骤」。');
+      const lines = outRows.map(r => '· ' + (r['成品编码'] || r['产品型号'] || '产品') +
+        '：基础成本 ' + (r['基础成本'] || '—') +
+        '　利润加成 ' + (r['利润加成'] || '0') + '　其他加价 ' + (r['其他加价'] || '0') +
+        ' → **价格 ' + (r['价格'] || '—') + '**');
+      addAiBubble('⚙️ 第 ' + step + ' 步「' + cfg.label + '」已完成（一次模型调用，规则取自数据库）：\n' +
+        '· 规则库共取回 ' + (d.rule_count || 0) + ' 条' + cfg.cls + '规则，命中 ' +
+        ((d.markup || []).length) + ' 条（见右侧规则表）\n' +
+        '· 各产品' + cfg.column + '已写入产品信息表\n\n' +
+        '**当前价格**\n' + lines.join('\n') + '\n\n' +
+        '（价格 = 基础成本 + 利润加成 + 其他加价）核对后点「进入下一大步骤」。');
       return true;
     }
 
-    /* ================= 第 4 步「报价方案」：本地填表 + 类 Excel 联动计算（完全不调模型） ====
+    /* ================= 第 5 步「报价方案」：本地填表 + 类 Excel 联动计算（完全不调模型） ====
        报价明细各列关系（改其一，其余自动重算）：
          数量（默认 1）、报价 = 价格 + 其他加价、折扣（默认 1）、折后价格 = 报价 × 折扣、
          总金额 = 数量 × 折后价格、税率（默认 0.13）、税金 = 总金额 × 税率。
        可编辑输入列：数量 / 报价 / 折扣 / 税率（及产品描述类列）；
        派生列（折后价格 / 总金额 / 税金）只读，随输入即时刷新。 */
-    const S4_DEFAULTS = { '数量': '1', '折扣': '1', '税率': '0.13' };
-    const S4_DERIVED = ['折后价格', '总金额', '税金'];
+    const S5_DEFAULTS = { '数量': '1', '折扣': '1', '税率': '0.13' };
+    const S5_DERIVED = ['折后价格', '总金额', '税金'];
 
-    function _s4Cell(tr, key) {
+    function _s5Cell(tr, key) {
       return tr.querySelector('[data-key="' + CSS.escape(key) + '"]');
     }
-    function _s4Get(tr, key) {
-      const el = _s4Cell(tr, key);
+    function _s5Get(tr, key) {
+      const el = _s5Cell(tr, key);
       if (!el) return '';
       return ('value' in el && el.tagName === 'INPUT') ? el.value : (el.dataset.value ?? el.textContent);
     }
-    function _s4Set(tr, key, v) {
-      const el = _s4Cell(tr, key);
+    function _s5Set(tr, key, v) {
+      const el = _s5Cell(tr, key);
       if (!el) return;
       if ('value' in el && el.tagName === 'INPUT') el.value = v;
       else { el.textContent = v; el.dataset.value = v; }
     }
 
     // 单行重算：折后价格 = 报价 × 折扣 → 总金额 = 数量 × 折后价格 → 税金 = 总金额 × 税率
-    function s4RecalcRow(tr) {
-      const quote = _numOf(_s4Get(tr, '报价'));
-      if (quote == null) { S4_DERIVED.forEach(k => _s4Set(tr, k, '')); return; }
-      const disc = _numOf(_s4Get(tr, '折扣'));
-      const qty = _numOf(_s4Get(tr, '数量'));
-      const rate = _numOf(_s4Get(tr, '税率'));
+    function s5RecalcRow(tr) {
+      const quote = _numOf(_s5Get(tr, '报价'));
+      if (quote == null) { S5_DERIVED.forEach(k => _s5Set(tr, k, '')); return; }
+      const disc = _numOf(_s5Get(tr, '折扣'));
+      const qty = _numOf(_s5Get(tr, '数量'));
+      const rate = _numOf(_s5Get(tr, '税率'));
       const after = quote * (disc == null ? 1 : disc);
       const total = after * (qty == null ? 1 : qty);
-      _s4Set(tr, '折后价格', _fmtNum(after));
-      _s4Set(tr, '总金额', _fmtNum(total));
-      _s4Set(tr, '税金', rate == null ? '' : _fmtNum(total * rate));
+      _s5Set(tr, '折后价格', _fmtNum(after));
+      _s5Set(tr, '总金额', _fmtNum(total));
+      _s5Set(tr, '税金', rate == null ? '' : _fmtNum(total * rate));
     }
 
-    /* 把 s4_detail 变成联动表：输入列监听 input 即时重算；派生列只读并置灰。
+    /* 把 s5_detail 变成联动表：输入列监听 input 即时重算；派生列只读并置灰。
        renderTableSection 每次重渲染都新建 DOM，所以渲染后调用一次即可。 */
-    function s4BindLiveCalc() {
-      const sec = sections.get('s4_detail');
+    function s5BindLiveCalc() {
+      const sec = sections.get('s5_detail');
       if (!sec || !sec.el) return;
       const tbody = sec.el.querySelector('.list-table tbody');
       if (!tbody) return;
       const bindRow = tr => {
-        if (tr.dataset.s4bound) return;
-        tr.dataset.s4bound = '1';
-        S4_DERIVED.forEach(k => {
-          const el = _s4Cell(tr, k);
+        if (tr.dataset.s5bound) return;
+        tr.dataset.s5bound = '1';
+        S5_DERIVED.forEach(k => {
+          const el = _s5Cell(tr, k);
           if (el && el.tagName === 'INPUT') {
             el.readOnly = true;
             el.title = '公式列，由数量/报价/折扣/税率自动计算';
@@ -3158,21 +3184,21 @@
           }
         });
         tr.querySelectorAll('input[data-key]').forEach(el => {
-          if (S4_DERIVED.indexOf(el.dataset.key) >= 0) return;
-          el.addEventListener('input', () => s4RecalcRow(tr));
+          if (S5_DERIVED.indexOf(el.dataset.key) >= 0) return;
+          el.addEventListener('input', () => s5RecalcRow(tr));
         });
-        s4RecalcRow(tr);
+        s5RecalcRow(tr);
       };
       Array.from(tbody.rows).forEach(bindRow);
       // 用户点「新增」加的行也要联动（MutationObserver，避免改动通用渲染逻辑）
-      if (!tbody.dataset.s4observed) {
-        tbody.dataset.s4observed = '1';
+      if (!tbody.dataset.s5observed) {
+        tbody.dataset.s5observed = '1';
         new MutationObserver(muts => {
           muts.forEach(m => Array.from(m.addedNodes).forEach(n => {
             if (n.tagName !== 'TR') return;
-            Object.keys(S4_DEFAULTS).forEach(k => {
-              const el = _s4Cell(n, k);
-              if (el && 'value' in el && !String(el.value).trim()) el.value = S4_DEFAULTS[k];
+            Object.keys(S5_DEFAULTS).forEach(k => {
+              const el = _s5Cell(n, k);
+              if (el && 'value' in el && !String(el.value).trim()) el.value = S5_DEFAULTS[k];
             });
             bindRow(n);
           }));
@@ -3181,7 +3207,7 @@
     }
 
     // 报价单号：QUO + 年月(YYYYMM) + 3 位流水；流水按月在本机递增（同一张卡片只生成一次）
-    function s4QuoteNo() {
+    function s5QuoteNo() {
       const d = new Date();
       const ym = String(d.getFullYear()) + String(d.getMonth() + 1).padStart(2, '0');
       let map = {};
@@ -3191,38 +3217,38 @@
       try { localStorage.setItem('cpq:quoteNoSeq', JSON.stringify(map)); } catch (e) {}
       return 'QUO' + ym + String(n).padStart(3, '0');
     }
-    function s4Today() {
+    function s5Today() {
       const d = new Date();
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
         '-' + String(d.getDate()).padStart(2, '0');
     }
 
     /* 第 4 步填表：全部取自前面步骤已确认的数据，不调用模型、不做无依据的推荐。 */
-    function fillStep4() {
+    function fillStep5() {
       if (!FORMS.length) return false;
-      const basicF = FORMS.find(x => x.section_id === 's4_basic');
-      const detailF = FORMS.find(x => x.section_id === 's4_detail');
+      const basicF = FORMS.find(x => x.section_id === 's5_basic');
+      const detailF = FORMS.find(x => x.section_id === 's5_detail');
       const d1 = collectStepData(1) || {};
       const src1 = (d1.s1_basic && (d1.s1_basic['数据'] || d1.s1_basic.data)) || {};
       // ① 报价基本信息：同名字段直接抄（客户/币种/关联商机编号…）+ 别名映射 + 下列自动生成规则；
       //    其余没有依据的字段留空。已有值（如从快照恢复的报价单号）一律保留，不重新生成。
       if (basicF) {
         const alias = { '关联测算单号': '测算单号', '报价单名称': '项目名称' };
-        const d4 = collectStepData(4) || {};
-        const old4 = (d4.s4_basic && (d4.s4_basic['数据'] || d4.s4_basic.data)) || {};
+        const d5 = collectStepData(5) || {};
+        const old5 = (d5.s5_basic && (d5.s5_basic['数据'] || d5.s5_basic.data)) || {};
         const u = wfUser() || {};
         const auto = {
-          '报价单号': old4['报价单号'] || s4QuoteNo(),           // QUO+年月+3位流水
+          '报价单号': old5['报价单号'] || s5QuoteNo(),           // QUO+年月+3位流水
           '报价有效天数': '14',                                  // 默认 14 天
           '币种': '人民币',                                      // 默认人民币
           '报价联系人': (u.display_name || u.username || ''),    // 登录人姓名
-          '申请日期': s4Today(),                                 // 默认当天
+          '申请日期': s5Today(),                                 // 默认当天
         };
         renderFormSection({
-          action: 'render_form', step: basicF.step, section_id: 's4_basic',
+          action: 'render_form', step: basicF.step, section_id: 's5_basic',
           title: basicF.title, editable: basicF.editable,
           fields: (basicF.fields || []).map(x => {
-            let v = old4[x.key];                                  // ① 本步已填/已恢复的值优先
+            let v = old5[x.key];                                  // ① 本步已填/已恢复的值优先
             if (v == null || !String(v).trim()) v = src1[x.key];   // ② 第 1 步同名字段带入
             if ((v == null || !String(v).trim()) && alias[x.key]) v = src1[alias[x.key]];
             if ((v == null || !String(v).trim()) && auto[x.key] != null) v = auto[x.key];  // ③ 自动生成/默认值
@@ -3233,7 +3259,8 @@
       // ② 报价明细：逐产品一行，同名列直接抄 + 默认值 + 公式计算
       let rows = [];
       if (detailF) {
-        const prows = extractSectionRows('s3_products');
+        let prows = extractSectionRows('s4_products');
+        if (!prows.length) prows = extractSectionRows('s3_products');
         const srcRows = prows.length ? prows : extractSectionRows('s1_products');
         const taxRaw = String(src1['税率'] || '').trim();
         // 产品技术参数：成品描述等字段在产品信息表里为空时从这里补
@@ -3254,17 +3281,17 @@
           if (!String(row['成品描述'] || '').trim() && String(tp['成品描述'] || '').trim()) {
             row['成品描述'] = String(tp['成品描述']);
           }
-          // 报价 ← 第 3 步产品信息表的「价格」（该价格在第 3 步已按加价规则更新，这里不再相加）
+          // 报价 ← 第 4 步产品信息表的「价格」（该价格在第 3 步已按加价规则更新，这里不再相加）
           const price = _numOf(r['价格']) != null ? _numOf(r['价格']) : _numOf(r['基础成本']);
           if (price != null) row['报价'] = _fmtNum(price);
           // 默认值：数量 1、折扣 1、税率 0.13（第 1 步填了税率就用它，13/13% 归一为 0.13）
-          if (!String(row['数量'] || '').trim()) row['数量'] = S4_DEFAULTS['数量'];
-          if (!String(row['折扣'] || '').trim()) row['折扣'] = S4_DEFAULTS['折扣'];
+          if (!String(row['数量'] || '').trim()) row['数量'] = S5_DEFAULTS['数量'];
+          if (!String(row['折扣'] || '').trim()) row['折扣'] = S5_DEFAULTS['折扣'];
           if (!String(row['税率'] || '').trim()) {
             const t = _numOf(taxRaw);
-            row['税率'] = t != null ? String(t > 1 ? t / 100 : t) : S4_DEFAULTS['税率'];
+            row['税率'] = t != null ? String(t > 1 ? t / 100 : t) : S5_DEFAULTS['税率'];
           }
-          // 派生列先算一遍（渲染后 s4BindLiveCalc 会再校一次）
+          // 派生列先算一遍（渲染后 s5BindLiveCalc 会再校一次）
           const q = _numOf(row['报价']);
           if (q != null) {
             const dc = _numOf(row['折扣']), qt = _numOf(row['数量']), rt = _numOf(row['税率']);
@@ -3278,18 +3305,18 @@
         }).filter(r => Object.keys(r).length);
         if (rows.length) {
           renderTableSection({
-            action: 'render_table', step: detailF.step, section_id: 's4_detail',
+            action: 'render_table', step: detailF.step, section_id: 's5_detail',
             title: detailF.title, editable: detailF.editable,
             columns: detailF.columns || [], rows,
           });
-          s4BindLiveCalc();   // 挂上联动：改数量/报价/折扣/税率，派生列即时刷新
+          s5BindLiveCalc();   // 挂上联动：改数量/报价/折扣/税率，派生列即时刷新
         }
       }
-      if (currentStep === 4 && shownStep !== 4) showStep(4);
-      addAiBubble('📄 第 4 步「报价方案」已用前面步骤的数据填好（未调用模型、无推荐值）：\n' +
+      if (currentStep === 5 && shownStep !== 5) showStep(5);
+      addAiBubble('📄 第 5 步「报价方案」已用前面步骤的数据填好（未调用模型、无推荐值）：\n' +
         '· 报价基本信息：报价单号自动生成（QUO+年月+3位流水）、报价有效天数 14 天、币种人民币、' +
         '报价联系人取登录人、申请日期取当天，客户等其余字段取自第 1 步；没有依据的字段留空，请人工补充\n' +
-        '· 报价明细：' + rows.length + ' 行，成品编码/成品描述/报价取自第 3 步产品信息（报价=其中已含加价的价格），' +
+        '· 报价明细：' + rows.length + ' 行，成品编码/成品描述/报价取自第 4 步产品信息（报价=其中已含加价的价格），' +
         '**改数量 / 报价 / 折扣 / 税率会自动重算**——\n' +
         '　折后价格 = 报价 × 折扣　｜　总金额 = 数量 × 折后价格　｜　税金 = 总金额 × 税率\n' +
         '　（默认：数量 1、折扣 1、税率 0.13；折后价格 / 总金额 / 税金为公式列，不可直接编辑）\n\n' +
