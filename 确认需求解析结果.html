@@ -3000,13 +3000,15 @@
        把它回写到第 1 步的两张表，这样：
          · 用户点进度条回看第 1 步，看到的是工艺确认后的产品；
          · 第 3、4 步沿用与计算也都基于这一版（CARRY_MAP 也优先取 s2_products）。 */
-    let STEP2_SYNCED = false;
+    let STEP2_SYNCED = false;   // 本次打开卡片是否已取过第 2 步快照（openSession/改选时重置）
     async function syncProductsFromStep2() {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
       if (currentStep < 2 && shownStep < 2) return false;      // 还没走到第 2 步
-      if (!extractSectionRows('s2_products').length && !STEP2_SYNCED) {
+      // ⚠️ 必须**无条件**取一次第 2 步快照，不能因为 s2_products 已有内容就跳过 ——
+      // 本地的 s2_products 可能是历史重放或早期沿用留下的旧产品，那样就永远拿不到改选后的版本。
+      if (!STEP2_SYNCED && currentStep >= 2) {
         STEP2_SYNCED = true;
-        await wfRestoreStepData(2);                            // 交接过来的卡片：先取第 2 步快照
+        await wfRestoreStepData(2);                            // 第 2 步快照 = 工艺确认后的权威版本
       }
       let changed = false;
       [['s2_products', 's1_products'], ['s2_techparams', 's1_techparams']].forEach(([src, dst]) => {
@@ -3020,6 +3022,10 @@
         });
         changed = true;
       });
+      if (changed) {
+        // 产品变了：把下游各步的产品表按新版本强制重新沿用（别等守卫判断）
+        [3, 4].forEach(n => { if (CARRY_MAP[n] && _carryStale(n)) carryProducts(n); });
+      }
       return changed;
     }
 
@@ -3551,6 +3557,9 @@
       if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
       currentSessionId = data.id;
       closeOverlays();
+      // 换了一张卡片：上下文/第 2 步快照都要重新拉一次（历史重放出来的可能是旧产品）
+      STEP1_CTX_READY = false;
+      STEP2_SYNCED = false;
       replaySession(data);
       // 以卡片为准纠正步骤（交接过来的卡片，会话 JSON 里的 step 可能还停在上一步），
       // 再按该步骤重算我的操作权限、决定是否询问「开始本步骤」
