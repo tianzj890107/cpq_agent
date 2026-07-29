@@ -3027,16 +3027,15 @@
     async function ensureCarryData(step) {
       const map = CARRY_MAP[step];
       if (!map) return;
-      // ⚠️ 先回写工艺确认后的产品（要放在下面的「已有内容就跳过」守卫之前，
-      // 否则本步产品表只要有旧内容，就永远拿不到第 2 步改选后的版本）
-      const changed = (step >= 3) ? await syncProductsFromStep2() : false;
-      if (!changed && map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容
+      // ⚠️ 先把工艺确认后的产品回写第 1 步（必须在沿用之前）
+      if (step >= 3) await syncProductsFromStep2();
       if (!extractSectionRows('s1_products').length &&
           !extractSectionRows('s1_techparams').length) {
         await wfRestoreStepData(1);                             // 交接过来的卡片：先恢复第 1 步
       }
-      if (changed) carryProducts(step);   // 产品换过：强制按新版本重新沿用
-      else maybeCarry(step);
+      // 是否需要沿用由「产品指纹」判定（目标为空、或产品被改过都要重新沿用），
+      // 不能只看目标表空不空——重放历史会把旧产品填进去。
+      maybeCarry(step);
     }
     async function ensureStep2Data() { return ensureCarryData(2); }   // 兼容旧调用名
 
@@ -3066,12 +3065,34 @@
       return true;
     }
 
-    function maybeCarry(step) {
+    /* 产品身份指纹：成品编码 + 利润加成。
+       只比"空不空"是不够的——接手卡片时 replaySession 会把**旧产品**重放进本步的产品表，
+       那时目标表非空，旧的沿用守卫就直接跳过了，工艺确认改选后的产品永远进不来。
+       所以改成比对来源与目标的指纹：不一致就说明本步的产品过期了，必须重新沿用。 */
+    function _prodKey(rows, withProfit) {
+      return (rows || []).map(r => String(r['成品编码'] || '') +
+        (withProfit ? '#' + String(r['利润加成'] || '') : '')).join('|');
+    }
+
+    /* 本步产品表是否与权威来源脱节（空 / 产品被改过 / 上一步的利润加成更新过）。
+       ⚠️ 只比对**来源真正定义的**字段：来源没有「利润加成」列时（如第 2 步的产品表）
+       就只比成品编码，否则会把本步刚算出来的利润加成误判成"不一致"而覆盖掉。 */
+    function _carryStale(step) {
       const map = CARRY_MAP[step];
-      if (!map || !FORMS.length) return;
-      if (map.some(([, dst]) => extractSectionRows(dst).length)) return;   // 已有内容，不覆盖
-      if (!extractSectionRows('s1_products').length &&
-          !extractSectionRows('s1_techparams').length) return;   // 第1步没数据，无从沿用
+      if (!map || !FORMS.length) return false;
+      return map.some(([srcs, dst]) => {
+        const s = _firstRows(srcs);
+        if (!s.length) return false;                 // 来源没数据，无从沿用
+        const d = extractSectionRows(dst);
+        if (!d.length) return true;                  // 目标是空的
+        const withProfit = s.some(r => String(r['利润加成'] || '').trim());
+        return _prodKey(s, withProfit) !== _prodKey(d, withProfit);
+      });
+    }
+
+    function maybeCarry(step) {
+      if (!CARRY_MAP[step] || !FORMS.length) return;
+      if (!_carryStale(step)) return;                // 已经是最新的，不覆盖（保住本步已算的列）
       carryProducts(step);
     }
     function maybeSyncStep2() { maybeCarry(2); }                 // 兼容旧调用名
