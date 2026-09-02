@@ -28,7 +28,9 @@ database/*.sqlite-shm
 database/*.sqlite-wal
 *.db
 
-# ---- 仅作参考、运行时不读的大表格（保留 亿纬锂能DA梳理.xlsx —— 本体语义层，必须进镜像）----
+# ---- 仅作参考、运行时不读的大表格 ----
+# 亿纬锂能DA梳理.md（本体语义层）必须进镜像 —— 运行时读的是它，模型也读它。
+# 同名 .xlsx 是它的事实源，一并留着：cpq_ontology.py --check 要拿它对账。
 报价业务流程.xlsx
 配置助手.xlsx
 BOM配置逻辑实体.xlsx

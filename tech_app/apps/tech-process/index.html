@@ -167,16 +167,13 @@
           nameLabel: '工艺名称',
           // 2.1 直接嵌入 process_drawing(AI 图纸拆解平台);null 表示无嵌入步骤。
           drawingStep: '2.1 图纸解析',
-          // 该步骤为「材料定性与供应链拆解」,调用 /api/* 真实数据;null 表示无此步骤。
-          materialStep: '2.2 材料定性',
-          // 该步骤为「制造工艺路径规划和BOM编制」,调用 /api/* 真实数据。
-          manufacturingStep: '2.3 工艺路径',
-          // 该步骤为「清洗与洁净度管控方案制定」,调用 /api/* 真实数据。
-          cleaningStep: '2.4 洁净管控',
-          // 该步骤为「组装与检测方案制定」,调用 /api/* 真实数据。
-          assemblyStep: '2.5 组装检测',
-          // 该步骤为「产线匹配与产能评估」,调用 /api/* 真实数据。
-          productionStep: '2.6 产能评估',
+          // 【CPQ 定制】2.2–2.6 已从流程中移除（2.1 的下一步直接是 3.1 汇总结果）。
+          // 这些字段各处都以 `CFG.xxxStep && ...` 取用，置 null 即表示无此步骤。
+          materialStep: null,
+          manufacturingStep: null,
+          cleaningStep: null,
+          assemblyStep: null,
+          productionStep: null,
           // 该步骤为「技术工艺总结」,汇总各步 + 可编辑 + 导出文档。
           summaryStep: '技术工艺总结',
           // 最终确认并录入放在「技术工艺总结」页末尾，不再占用独立结束步骤。
@@ -188,11 +185,6 @@
           approvalStep: null,
           steps: [
             '2.1 图纸解析',
-            '2.2 材料定性',
-            '2.3 工艺路径',
-            '2.4 洁净管控',
-            '2.5 组装检测',
-            '2.6 产能评估',
             '技术工艺总结',
           ],
         },
@@ -3195,7 +3187,7 @@
           );
         };
         const processSubCurrent = current < 6 ? current : -1;
-        const processSubsteps = ['2.1 图纸解析', '2.2 材料定性', '2.3 工艺路径', '2.4 洁净管控', '2.5 组装检测', '2.6 产能评估'];
+        const processSubsteps = ['2.1 图纸解析'];
         const outputUrl = projectId ? `/summary.html?project=${encodeURIComponent(projectId)}` : '/summary.html';
 
         return (

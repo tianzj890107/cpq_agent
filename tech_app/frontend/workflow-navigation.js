@@ -7,12 +7,16 @@
 
   const stages = {
     1: ['1.1 创建', '1.2 确认', '1.3 审核'],
-    2: [],
+    // 【CPQ 定制】技术工艺阶段保留 2.1 图纸解析与 2.2 组装与整合；上游的 2.3–2.6
+    // （材料定性/清洗/组装检测/产能）不在 CPQ 的流程内。本表是流程栏、跳转和门禁的
+    // 唯一事实源。后端报告送审门禁另有一份口径（backend/config.py 的 TECH_SUBSTEPS），
+    // 那里管的是上游那六个子步骤，2.2 不在其中 —— 它是 CPQ 自己新增的一步，
+    // 有意不做成 3.1 的硬前置：老项目没有 2.2 的结果，挡住就没法出报告了。
+    2: ['2.1 图纸解析', '2.2 组装与整合'],
     3: ['3.1 汇总结果', '3.2 审核报告', '3.3 发布报告'],
   };
   const stepKey = {
-    '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing',
-    '2.2':'material', '2.3':'manufacturing', '2.4':'cleaning', '2.5':'assembly', '2.6':'production',
+    '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing', '2.2':'integration',
     '3.1':'summary', '3.2':'reportReview', '3.3':'publish',
   };
   let cachedProject = null;
@@ -37,7 +41,7 @@
   function labelCode(label) { return String(label || '').match(/([123]\.[123456])/u)?.[1] || ''; }
   function stageOfCode(code) { return Number(String(code).split('.')[0]) || 0; }
   function activeStage(root) {
-    const active = root.querySelector('.workflow-step.active,.main-step.active,.tp-flow-step.active,.detail-step.active');
+    const active = root.querySelector('.workflow-step.active,.main-step.active,.tp-flow-step.active,.detail-step.active,.workflow-nav-link.active,.sub-label.active,.tp-flow-substep.active');
     const code = active ? stageOfCode(active.textContent) : 0;
     if (code) return code;
     const text = active?.textContent || '';
@@ -74,6 +78,16 @@
     return b;
   }
   function populateSubsteps(container, stage, variant) {
+    // 【CPQ 定制】页面里写死的流程栏可能还残留 2.2–2.6；stages 是唯一事实源，
+    // 多出来的小步骤连同它前面的箭头一起移除，免得点进去无处可去。
+    const allowed = new Set(stages[stage].map(labelCode));
+    [...container.children].forEach((node) => {
+      const code = labelCode(node.textContent);
+      if (!code || allowed.has(code)) return;
+      const prev = node.previousElementSibling;
+      if (prev && prev.textContent.trim() === '→') prev.remove();
+      node.remove();
+    });
     const current = [...container.children];
     const codeNodes = current.filter((node) => labelCode(node.textContent));
     codeNodes.forEach((node) => {
@@ -185,6 +199,13 @@
     const timing = value.timing || {};
     return timing.completed === true || timing.status === 'done' || Object.keys(value).some((k) => !['timing', 'project_id', 'updated_at', 'history'].includes(k) && value[k]);
   }
+  // 2.2 组装与整合：参数/工艺/成本三样都有产出才算做完。
+  function integrationDone(progress) {
+    const doc = progress?.aggregate?.steps?.integration;
+    if (!doc || typeof doc !== 'object') return false;
+    return Boolean(doc.params?.params?.length) && Boolean(doc.process?.steps?.length)
+      && Boolean(doc.cost?.items?.length);
+  }
   function stepFinished(progress, key) {
     const timing = progress?.aggregate?.steps?.[key]?.timing || {};
     return timing.completed === true || timing.status === 'done';
@@ -205,8 +226,9 @@
     const reqStatus = req.status || '';
     const pageStage = activeStage(root);
     const drawingDone = Boolean(progress.aggregate?.ir?.parts?.length);
-    const techDone = Boolean(summary.confirmed) || stepFinished(progress, 'production');
-    const techStarted = drawingDone || ['material', 'manufacturing', 'cleaning', 'assembly', 'production'].some((key) => hasStepData(progress, key));
+    // 【CPQ 定制】2.x 只剩 2.1：技术工艺阶段的开始与完成都以图纸解析出零件 IR 为准。
+    const techDone = Boolean(summary.confirmed) || drawingDone;
+    const techStarted = drawingDone;
     const reportExists = Boolean(report.status);
     // 兼容早期已发布项目：旧数据可能没有 requirement/summary 文档，
     // 但既然已经生成报告，前序阶段在业务上必然已完成。
@@ -214,7 +236,7 @@
     const technicalDone = techDone || reportExists;
     const stageStates = {
       1: requirementDone ? 'done' : reqStatus ? 'active' : pageStage === 1 ? 'active' : 'pending',
-      2: technicalDone ? 'done' : techStarted ? 'active' : pageStage === 2 ? 'active' : 'pending',
+      2: technicalDone || pageStage >= 2 ? 'done' : techStarted ? 'active' : 'pending',
       3: report.status === 'published' ? 'done' : reportExists ? 'active' : pageStage === 3 ? 'active' : 'pending',
     };
     const doneCodes = new Set();
@@ -223,14 +245,11 @@
       if (reqStatus && reqStatus !== 'draft') doneCodes.add('1.1');
       if (['pending_review', 'approved'].includes(reqStatus)) doneCodes.add('1.2');
     }
-    if (technicalDone) ['2.1', '2.2', '2.3', '2.4', '2.5', '2.6'].forEach((code) => doneCodes.add(code));
-    else {
-      if (drawingDone) doneCodes.add('2.1');
-      if (stepFinished(progress, 'material')) doneCodes.add('2.2');
-      if (stepFinished(progress, 'manufacturing')) doneCodes.add('2.3');
-      if (stepFinished(progress, 'cleaning')) doneCodes.add('2.4');
-      if (stepFinished(progress, 'assembly')) doneCodes.add('2.5');
-    }
+    if (technicalDone || drawingDone) doneCodes.add('2.1');
+    // 2.2 以"三个环节都有产出"为完成，不要求人工点确认 —— 确认与否是 2.2 页面自己的事，
+    // 流程栏只回答"这一步做没做"。这里不能用 hasStepData：只要在 2.2 存过一次
+    // 整合需求，文档里就有 quantity 之类的非空字段，那套通用判据会直接判成已完成。
+    if (integrationDone(progress)) doneCodes.add('2.2');
     if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('3.1');
     if (['approved', 'published'].includes(report.status)) doneCodes.add('3.2');
     if (report.status === 'published') doneCodes.add('3.3');
@@ -258,24 +277,19 @@
     const readyReq = ['pending_confirmation', 'pending_review', 'approved'].includes(status);
     const readyConfirm = ['pending_review', 'approved'].includes(status);
     const readyDrawing = approved || Boolean(progress?.aggregate?.ir?.parts?.length);
-    const readyMaterial = readyDrawing;
-    const readyManufacturing = hasStepData(progress, 'material');
-    const readyCleaning = hasStepData(progress, 'manufacturing');
-    const readyAssembly = hasStepData(progress, 'cleaning');
-    const readyProduction = hasStepData(progress, 'assembly');
-    const readySummary = Boolean(progress?.aggregate?.ir?.parts?.length) || Boolean(summary?.confirmed_at) || Boolean(report?.id || report?.status);
+    // 【CPQ 定制】3.1 的前置从「2.6 产能评估」改成「2.1 图纸解析已出结果」。
+    const readySummary = Boolean(progress?.aggregate?.ir?.parts?.length)
+      || Boolean(summary?.confirmed_at) || Boolean(report?.id || report?.status);
     const readyReview = ['in_review', 'approved', 'published'].includes(report.status);
     const readyPublish = ['approved', 'published'].includes(report.status);
     const checks = {
       '1.1': [true, ''], '1.2': [readyReq, '请先在 1.1 创建中保存并提交工艺评估需求。'],
       '1.3': [readyConfirm, '请先在 1.2 确认工艺评估需求后再进入审核。'],
       '2.1': [readyDrawing, '请先完成 1.3 审核并通过工艺评估需求。'],
-      '2.2': [readyMaterial, '请先完成 2.1 图纸解析并生成解析结果。'],
-      '2.3': [readyManufacturing, '请先完成并确认 2.2 材料定性。'],
-      '2.4': [readyCleaning, '请先完成并确认 2.3 工艺路径。'],
-      '2.5': [readyAssembly, '请先完成并确认 2.4 洁净管控。'],
-      '2.6': [readyProduction, '请先完成并确认 2.5 组装检测。'],
-      '3.1': [readySummary, '请先完成 2 解析技术工艺过程（图纸解析）后再输出结果。'],
+      // 2.2 要的是"零件已经拆出来了"，光有需求审批没用 —— 组装是把 2.1 的零件装回整机。
+      '2.2': [Boolean(progress?.aggregate?.ir?.parts?.length),
+              '请先完成 2.1 图纸解析并生成零件清单，2.2 要把这些零件装回整机。'],
+      '3.1': [readySummary, '请先完成 2.1 图纸解析并生成解析结果。'],
       '3.2': [readyReview, '请先在 3.1 汇总结果中保存并提交评估报告。'],
       '3.3': [readyPublish, '请先完成 3.2 审核报告并获得通过。'],
     };
@@ -285,12 +299,8 @@
     const q = id ? `?project=${encodeURIComponent(id)}` : '';
     const routes = {
       '1.1': `/requirement-create.html${q}`, '1.2': `/requirement-confirm.html${q}`, '1.3': `/requirement-review.html${q}`,
-      '2.1': `/index.html${q}`, '3.1': `/summary.html${q}`, '3.2': `/report-review.html${q}`, '3.3': `/report-publish.html${q}`,
+      '2.1': `/index.html${q}`, '2.2': `/assembly-integration.html${q}`, '3.1': `/summary.html${q}`, '3.2': `/report-review.html${q}`, '3.3': `/report-publish.html${q}`,
     };
-    if (code.startsWith('2.') && code !== '2.1') {
-      const techStep = Number(code.split('.')[1]) - 1;
-      return `/apps/tech-process/?biz=tech${id ? `&project=${encodeURIComponent(id)}` : ''}&step=${techStep}`;
-    }
     return routes[code] || '/home.html';
   }
   async function navigate(code) {

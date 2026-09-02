@@ -1,0 +1,716 @@
+{
+  "source": {
+    "file": "亿纬锂能DA梳理.xlsx",
+    "sheet": "报价助手",
+    "business_object": "价格测算单",
+    "table": "clm_calc_product_tech",
+    "note": "本文件由 tools/build_quote_product_params.py 生成，不要手改；改分组/必填/单位请改脚本里的 CURATION 后重跑。"
+  },
+  "families": [
+    {
+      "key": "li_primary",
+      "name": "锂原电池 / 电池组",
+      "hint": "一次电池（锂亚 ER、锂锰 CR 等）及其带线组件"
+    },
+    {
+      "key": "li_ion_pack",
+      "name": "锂离子电池包 / 模组",
+      "hint": "可充电电芯（18650、方形铝壳、软包等）成组后的电池包"
+    },
+    {
+      "key": "ess",
+      "name": "储能系统 / 电池柜",
+      "hint": "集装箱式或柜式储能，按 kWh 计"
+    },
+    {
+      "key": "pv_module",
+      "name": "光伏组件",
+      "hint": "晶硅组件，含边框、胶膜、接线盒"
+    },
+    {
+      "key": "other",
+      "name": "其他成品",
+      "hint": "不属于上述四类时使用，只填通用与结构参数"
+    }
+  ],
+  "groups": [
+    {
+      "key": "identity",
+      "name": "成品标识",
+      "families": [
+        "li_primary",
+        "li_ion_pack",
+        "ess",
+        "pv_module",
+        "other"
+      ]
+    },
+    {
+      "key": "cell",
+      "name": "电芯与电性能",
+      "families": [
+        "li_primary",
+        "li_ion_pack"
+      ]
+    },
+    {
+      "key": "structure",
+      "name": "结构与外形",
+      "families": [
+        "li_primary",
+        "li_ion_pack",
+        "ess",
+        "pv_module",
+        "other"
+      ]
+    },
+    {
+      "key": "wiring",
+      "name": "引出线与接插件",
+      "families": [
+        "li_primary",
+        "li_ion_pack"
+      ]
+    },
+    {
+      "key": "environment",
+      "name": "环境与应用",
+      "families": [
+        "li_primary",
+        "li_ion_pack",
+        "ess",
+        "other"
+      ]
+    },
+    {
+      "key": "ess",
+      "name": "储能系统配置",
+      "families": [
+        "ess"
+      ]
+    },
+    {
+      "key": "pv",
+      "name": "光伏组件配置",
+      "families": [
+        "pv_module"
+      ]
+    },
+    {
+      "key": "pv_cable",
+      "name": "线缆与连接器",
+      "families": [
+        "pv_module"
+      ]
+    },
+    {
+      "key": "packaging",
+      "name": "包装与运输",
+      "families": [
+        "li_primary",
+        "li_ion_pack",
+        "ess",
+        "pv_module",
+        "other"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "code": "product_series",
+      "name": "产品系列",
+      "da_name": "产品系列",
+      "group": "identity",
+      "unit": "",
+      "type": "枚举",
+      "required": true,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "product_model",
+      "name": "产品型号",
+      "da_name": "产品型号",
+      "group": "identity",
+      "unit": "",
+      "type": "文本",
+      "required": true,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "product_item_code",
+      "name": "成品编码",
+      "da_name": "成品编码",
+      "group": "identity",
+      "unit": "",
+      "type": "文本/关联对象",
+      "required": true,
+      "options": [],
+      "example": "91008277"
+    },
+    {
+      "code": "product_item_name",
+      "name": "成品描述",
+      "da_name": "成品描述",
+      "group": "identity",
+      "unit": "",
+      "type": "文本",
+      "required": true,
+      "options": [],
+      "example": "锂亚电池F0041W-LF,ER14250/W15,MOLEX5264反，陆运"
+    },
+    {
+      "code": "scheme_desc",
+      "name": "方案描述",
+      "da_name": "方案描述",
+      "group": "identity",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "version_ext",
+      "name": "版本扩展",
+      "da_name": "版本扩展",
+      "group": "identity",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "cell_code",
+      "name": "电芯编码",
+      "da_name": "电芯编码",
+      "group": "cell",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "81005049"
+    },
+    {
+      "code": "cell_model",
+      "name": "电芯型号",
+      "da_name": "电芯型号",
+      "group": "cell",
+      "unit": "",
+      "type": "文本",
+      "required": true,
+      "options": [],
+      "example": "ER14250V1.3"
+    },
+    {
+      "code": "reference_size",
+      "name": "参考尺寸",
+      "da_name": "参考尺寸",
+      "group": "cell",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "1/2AA"
+    },
+    {
+      "code": "rated_voltage",
+      "name": "标称电压",
+      "da_name": "标趁电压（V）",
+      "group": "cell",
+      "unit": "V",
+      "type": "数值/浮点",
+      "required": true,
+      "options": [],
+      "example": "3.6"
+    },
+    {
+      "code": "rated_capacity",
+      "name": "标称容量",
+      "da_name": "标称容量（mAh）",
+      "group": "cell",
+      "unit": "mAh",
+      "type": "数值/浮点",
+      "required": true,
+      "options": [],
+      "example": "1200"
+    },
+    {
+      "code": "max_continuous_current",
+      "name": "最大持续电流",
+      "da_name": "最大持续电流（mA）",
+      "group": "cell",
+      "unit": "mA",
+      "type": "数值/浮点",
+      "required": true,
+      "options": [],
+      "example": "35"
+    },
+    {
+      "code": "max_pulse_current",
+      "name": "最大脉冲电流",
+      "da_name": "最大脉冲电流（mA）",
+      "group": "cell",
+      "unit": "mA",
+      "type": "数值/浮点",
+      "required": false,
+      "options": [],
+      "example": "50"
+    },
+    {
+      "code": "machine_model",
+      "name": "机械号",
+      "da_name": "机械号",
+      "group": "structure",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "F0041W-LF"
+    },
+    {
+      "code": "max_dimension",
+      "name": "最大尺寸",
+      "da_name": "最大尺寸(mm)",
+      "group": "structure",
+      "unit": "mm",
+      "type": "文本",
+      "required": true,
+      "options": [],
+      "example": "14.5x25.4"
+    },
+    {
+      "code": "weight",
+      "name": "重量",
+      "da_name": "重量（g）",
+      "group": "structure",
+      "unit": "g",
+      "type": "数值/浮点",
+      "required": true,
+      "options": [],
+      "example": "10"
+    },
+    {
+      "code": "plug_wire_model",
+      "name": "插头线型号",
+      "da_name": "插头线型号",
+      "group": "wiring",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "5264-2P"
+    },
+    {
+      "code": "plug_direction",
+      "name": "插头方向",
+      "da_name": "插头方向",
+      "group": "wiring",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "反向",
+        "正向"
+      ],
+      "example": "反向/正向"
+    },
+    {
+      "code": "wire_length",
+      "name": "线长",
+      "da_name": "线长",
+      "group": "wiring",
+      "unit": "mm",
+      "type": "数值/浮点",
+      "required": false,
+      "options": [],
+      "example": "16"
+    },
+    {
+      "code": "is_wire_wound",
+      "name": "是否绕线",
+      "da_name": "是否绕线",
+      "group": "wiring",
+      "unit": "",
+      "type": "布尔",
+      "required": false,
+      "options": [
+        "是",
+        "否"
+      ],
+      "example": "否"
+    },
+    {
+      "code": "operating_temperature",
+      "name": "工作温度",
+      "da_name": "工作温度",
+      "group": "environment",
+      "unit": "℃",
+      "type": "文本",
+      "required": true,
+      "options": [],
+      "example": "-55-+85℃"
+    },
+    {
+      "code": "storage_temperature",
+      "name": "存储温度",
+      "da_name": "存储温度",
+      "group": "environment",
+      "unit": "℃",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "+30℃"
+    },
+    {
+      "code": "application_scope",
+      "name": "应用范围",
+      "da_name": "应用范围",
+      "group": "environment",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": "公共仪表、警报\\安全设备、记忆备份、追踪设备、汽车电子、专业电子、实时时钟、等"
+    },
+    {
+      "code": "capacity",
+      "name": "电量",
+      "da_name": "电量",
+      "group": "ess",
+      "unit": "kWh",
+      "type": "枚举",
+      "required": true,
+      "options": [
+        "140kWh",
+        "280kWh"
+      ],
+      "example": "140kWh/280kWh"
+    },
+    {
+      "code": "cooling_type",
+      "name": "冷却方式",
+      "da_name": "冷却方式",
+      "group": "ess",
+      "unit": "",
+      "type": "枚举",
+      "required": true,
+      "options": [
+        "风冷",
+        "液冷"
+      ],
+      "example": "风冷/液冷"
+    },
+    {
+      "code": "extra_function",
+      "name": "附加功能",
+      "da_name": "附加功能",
+      "group": "ess",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "低温加热",
+        "云端通讯"
+      ],
+      "example": "低温加热/云端通讯"
+    },
+    {
+      "code": "component_product_code",
+      "name": "组件产品编码",
+      "da_name": "组件产品编码",
+      "group": "pv",
+      "unit": "",
+      "type": "文本",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "frame_size",
+      "name": "边框尺寸",
+      "da_name": "边框尺寸",
+      "group": "pv",
+      "unit": "mm",
+      "type": "枚举",
+      "required": true,
+      "options": [
+        "30mm",
+        "40mm"
+      ],
+      "example": "30mm、40mm"
+    },
+    {
+      "code": "frame_color",
+      "name": "边框颜色",
+      "da_name": "边框颜色",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "白框",
+        "灰框",
+        "黑框"
+      ],
+      "example": "白框 /灰框/黑框"
+    },
+    {
+      "code": "frame_material",
+      "name": "边框材质",
+      "da_name": "边框材质",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "frame_hole_count",
+      "name": "边框孔数",
+      "da_name": "边框孔数",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "frame_film_thickness",
+      "name": "边框膜厚",
+      "da_name": "边框膜厚",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "AA10",
+        "AA12"
+      ],
+      "example": "AA10/AA12"
+    },
+    {
+      "code": "junction_box",
+      "name": "接线盒",
+      "da_name": "接线盒",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "film_scheme",
+      "name": "胶膜方案",
+      "da_name": "胶膜方案",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": true,
+      "options": [
+        "POE+EVA",
+        "双POE"
+      ],
+      "example": "POE+EVA /双POE"
+    },
+    {
+      "code": "film_weight",
+      "name": "胶膜克重",
+      "da_name": "胶膜克重",
+      "group": "pv",
+      "unit": "g/m²",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": "双ECA（400+380）"
+    },
+    {
+      "code": "label",
+      "name": "标签",
+      "da_name": "标签",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "防震标签",
+        "RFID标签",
+        "隆基标准"
+      ],
+      "example": "防震标签/RFID标签/隆基标准"
+    },
+    {
+      "code": "dust_plug",
+      "name": "防尘塞",
+      "da_name": "防尘塞",
+      "group": "pv",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "无",
+        "防尘塞"
+      ],
+      "example": "无/防尘塞"
+    },
+    {
+      "code": "current_bin",
+      "name": "电流分档",
+      "da_name": "电流分档",
+      "group": "pv",
+      "unit": "A",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "中间档位按0.1A分档",
+        "中间档位按0.15A分档",
+        "中间档位按0.2A分档"
+      ],
+      "example": "中间档位按0.1A分档/中间档位按0.15A分档/中间档位按0.2A分档"
+    },
+    {
+      "code": "yield_loss",
+      "name": "良率损失",
+      "da_name": "良率损失",
+      "group": "pv",
+      "unit": "%",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "el_full_inspect_req",
+      "name": "EL全检要求",
+      "da_name": "EL全检要求",
+      "group": "pv",
+      "unit": "%",
+      "type": "数值/比例",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "connector",
+      "name": "连接端子",
+      "da_name": "连接端子",
+      "group": "pv_cable",
+      "unit": "",
+      "type": "枚举",
+      "required": true,
+      "options": [],
+      "example": "PV-LR5"
+    },
+    {
+      "code": "avg_cable_length",
+      "name": "平均线长",
+      "da_name": "平均线长（米）",
+      "group": "pv_cable",
+      "unit": "m",
+      "type": "枚举",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "positive_cable_length",
+      "name": "正极线长",
+      "da_name": "正极线长（米）",
+      "group": "pv_cable",
+      "unit": "m",
+      "type": "数值",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "negative_cable_length",
+      "name": "负极线长",
+      "da_name": "负极线长（米）",
+      "group": "pv_cable",
+      "unit": "m",
+      "type": "数值",
+      "required": false,
+      "options": [],
+      "example": ""
+    },
+    {
+      "code": "transport_scheme",
+      "name": "运输保障方案",
+      "da_name": "运输保障方案",
+      "group": "packaging",
+      "unit": "",
+      "type": "枚举",
+      "required": false,
+      "options": [
+        "加厚包装",
+        "标准运输"
+      ],
+      "example": "加厚包装/标准运输"
+    },
+    {
+      "code": "other_nonstd_markup",
+      "name": "其他非标加价",
+      "da_name": "其他非标加价",
+      "group": "packaging",
+      "unit": "元",
+      "type": "数值",
+      "required": false,
+      "options": [],
+      "example": ""
+    }
+  ],
+  "aliases": {
+    "整机外形尺寸": "max_dimension",
+    "外形尺寸": "max_dimension",
+    "最大外形尺寸": "max_dimension",
+    "整机尺寸": "max_dimension",
+    "产品尺寸": "max_dimension",
+    "整备质量": "weight",
+    "整机重量": "weight",
+    "净重": "weight",
+    "质量": "weight",
+    "标称电压": "rated_voltage",
+    "额定电压": "rated_voltage",
+    "工作电压": "rated_voltage",
+    "标称容量": "rated_capacity",
+    "额定容量": "rated_capacity",
+    "电池容量": "rated_capacity",
+    "最大持续放电电流": "max_continuous_current",
+    "持续放电电流": "max_continuous_current",
+    "最大持续电流": "max_continuous_current",
+    "脉冲电流": "max_pulse_current",
+    "最大脉冲放电电流": "max_pulse_current",
+    "工作温度范围": "operating_temperature",
+    "使用温度": "operating_temperature",
+    "存储温度范围": "storage_temperature",
+    "储存温度": "storage_temperature",
+    "应用领域": "application_scope",
+    "适用场景": "application_scope",
+    "电芯规格": "cell_model",
+    "电芯": "cell_model",
+    "电芯型号规格": "cell_model",
+    "产品型号": "product_model",
+    "成品型号": "product_model",
+    "成品名称": "product_item_name",
+    "产品名称": "product_item_name",
+    "产品描述": "product_item_name",
+    "出线方式": "plug_direction",
+    "插头朝向": "plug_direction",
+    "导线长度": "wire_length",
+    "引线长度": "wire_length",
+    "连接器": "connector",
+    "接插件": "connector",
+    "冷却方式": "cooling_type",
+    "散热方式": "cooling_type",
+    "系统电量": "capacity",
+    "额定电量": "capacity",
+    "包装方案": "transport_scheme",
+    "运输方案": "transport_scheme"
+  }
+}

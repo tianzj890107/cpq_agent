@@ -12,23 +12,41 @@ from ..models.cost import CostAnalysis, WebSource
 from ..models.ir import DesignIR, Part
 from . import llm_client as claude_client
 
-SYSTEM_PROMPT = """你是资深机械零件成本工程师(应成本/报价)。给定一个零件的结构化设计意图
+_PROMPT_HEAD = """你是资深机械零件成本工程师(应成本/报价)。给定一个零件的结构化设计意图
 (特征、材料、尺寸、公差、工艺角色)与可选的几何属性(体积/质量),请做**专业的成本拆解**。
 
 要求:
-1. **联网检索当前行情**:用 web_search 工具查当前的原材料价格(如 Q235/45 钢、6061 铝、304
+"""
+
+# 联网那一条是**有条件**的。不联网时还留着"用 web_search 工具查行情、填 url"这类措辞，
+# 等于让模型去用一个它根本没有的工具，然后为了满足要求编造网址和价格。
+_PROMPT_WEB = """1. **联网检索当前行情**:用 web_search 工具查当前的原材料价格(如 Q235/45 钢、6061 铝、304
    不锈钢的现货价 元/吨 或 元/kg)、外购标准件价格、表面/热处理与机加工费率等,作为估算依据。
    把检索到的关键价格写进 price_references,**每条尽量给出 source(出处网站) 与 url(可点击的
    具体网页链接) 与 date(价格时间)** —— 让依据可核查、可追溯。分项 items 的 source 字段也尽量
    写明出处。没有检索到链接的价格,请明确标注为"估算"并降低置信度,不要编造网址。
-2. 按成本类别拆分 items:材料费、机加工费(工时×费率)、标准件/外购、热处理、表面处理、
+"""
+_PROMPT_LIBRARY_ONLY = """1. **本次不联网**:企业成本库已给出主材价格与车间费率,直接用它们作为依据,
+   在 items 的 source 与 price_references 里写明来自企业库的哪一条(价格编号/费率类型)。
+   **不得**声称检索过网站、不得给出 url、不得编造行情价。库里没有的项按工程经验估算,
+   明确标注为"估算"并降低置信度,同时写入 open_questions。
+"""
+_PROMPT_TAIL = """2. 按成本类别拆分 items:材料费、机加工费(工时×费率)、标准件/外购、热处理、表面处理、
    焊接、装配、检验、工装摊销、物流、管理费、利润等(按零件实际涉及的项给出,不要硬凑)。
 3. 每个分项尽量给出: 计算依据 basis、数量 quantity、单位 unit、单价 unit_price、金额 amount、
    价格来源 source、置信度 confidence。材料费应基于零件体积/质量×材料密度×单价估算并计损耗。
 4. 给出 summary(成本构成与定价思路)、unit_cost(单件成本估算)、assumptions(批量/损耗率/
    费率等关键假设)。凡缺尺寸/材料/批量而影响报价精度的,写进 open_questions 并降低相应置信度。
-5. 金额单位统一为人民币元(currency=CNY)。**不要臆造**精确单价 —— 没检索到就标注为估算并降置信度。
+5. 金额单位统一为人民币元(currency=CNY)。**不要臆造**精确单价 —— 没依据就标注为估算并降置信度。
 6. 全程用中文填写各字段。"""
+
+
+def system_prompt(use_web: bool) -> str:
+    return _PROMPT_HEAD + (_PROMPT_WEB if use_web else _PROMPT_LIBRARY_ONLY) + _PROMPT_TAIL
+
+
+# 兼容既有引用（测试/文档）：默认口径仍是联网版。
+SYSTEM_PROMPT = system_prompt(True)
 
 
 def _part_prompt(part: Part, overall: Optional[DesignIR], geom: Optional[dict], quantity: int) -> str:
@@ -65,19 +83,55 @@ def _part_prompt(part: Part, overall: Optional[DesignIR], geom: Optional[dict], 
     if overall and overall.device_name:
         lines.append(f"\n所属设备: {overall.device_name}")
 
-    lines.append("\n请先联网检索相关材料/外购/加工的当前行情,再做成本拆解,"
-                 "调用工具输出结构化 CostAnalysis。")
+    # 联不联网由调用方按库内缺口决定（见 needs_web_search）。这里的措辞不能写死
+    # "请先联网检索"——不联网时那句话会诱导模型编造行情价和 URL。
+    lines.append("\n请做成本拆解，调用工具输出结构化 CostAnalysis。"
+                 "企业库给出的价格与费率优先于任何行情价。")
     return "\n".join(lines)
+
+
+def needs_web_search(lookup: Optional[dict]) -> bool:
+    """库内依据够不够？够就别联网。
+
+    每次 web_search 都是一个完整往返（模型发查询 → 抓取 → 回传 → 继续），
+    上限 5 次，是成本测算最大的耗时来源：实测 cost 任务 267s，而同样调模型、
+    不联网的工艺推荐只要 41s；产出里 search_sources 有 22 条，说明次数是用满的。
+
+    判据只看**行情价缺口**（market_gaps）：物料不在库、或库内无有效价。
+    不能拿总的 gaps 判 —— 那里面大多是费率与计价系数缺失（人工费率、设备折旧…），
+    那些是企业财务内部数据，**网上根本不存在**。实测那次 267s 的成本测算，
+    三个缺口全是 equipment_dep 设备折旧费率，为它们跑 5 次联网检索是纯粹白等。
+
+    企业合同价本来就优先于行情价，这也是 analyze_cost 文档里原本写明的意图，
+    只是实现一直无条件开着联网。
+    """
+    if not lookup:
+        return True                                  # 没有任何库内依据，只能靠联网
+    summary = lookup.get("summary") or {}
+    if not summary.get("has_price"):
+        return True                                  # 主材没价，必须去外面找
+    if "market_gaps" in summary:
+        return bool(summary["market_gaps"])
+    # 旧报告没有这个字段：退回保守口径，宁可慢也不要用错的价。
+    return bool(lookup.get("gaps"))
 
 
 def analyze_cost(
     part: Part, overall: Optional[DesignIR] = None, geom: Optional[dict] = None,
     quantity: int = 1, web: bool = True, note: str = "",
     attachments: Optional[List[Tuple[str, bytes]]] = None,
+    library: str = "",
 ) -> CostAnalysis:
+    """library 是调用前从成本库检索出的价格/费率摘要（cost_lookup.as_prompt）。
+
+    它排在联网检索之前给出：企业自己的合同价和车间费率优先于行情价，
+    联网只用来补库内缺的那几项。
+    """
     use_web = web and claude_client.WEB_SEARCH_AVAILABLE
     prompt = _part_prompt(part, overall, geom, quantity)
     content = [claude_client.text_block(prompt), claude_client.text_block(claude_client.web_search_notice(use_web))]
+    if library.strip():
+        content.append(claude_client.text_block(library.strip()))
     if note and note.strip():
         content.append(claude_client.text_block(f"【用户补充说明(请优先采用)】\n{note.strip()}"))
     content.extend(claude_client.attachment_blocks(attachments))
@@ -85,7 +139,8 @@ def analyze_cost(
     extra_tools = claude_client.web_search_tools(use_web)
     sources: list = []
     analysis = claude_client.run(
-        SYSTEM_PROMPT, content, CostAnalysis, extra_tools=extra_tools, sources_out=sources,
+        system_prompt(use_web), content, CostAnalysis,
+        extra_tools=extra_tools, sources_out=sources,
     )
     # 确定性归一: 锚定 part_id/name/批量;并把平台收集的检索来源合并进 search_sources(去重)
     analysis.part_id = part.part_id
@@ -124,7 +179,10 @@ def compute(analysis: dict) -> dict:
                     f"分项「{it.get('name')}」金额 {amt} 与 数量×单价 ({calc}) 不符")
         if isinstance(amt, (int, float)):
             total += amt
-            cat = it.get("category", "other")
+            # category 可能是 CostCategory 枚举成员（model_dump 的 python 模式），
+            # 直接当 key 会让同一个类别在 JSON 里出现两种写法，前端的标签表也对不上。
+            raw = it.get("category", "other")
+            cat = str(getattr(raw, "value", raw) or "other")
             by_category[cat] = round(by_category.get(cat, 0.0) + amt, 2)
 
     computed_total = round(total, 2) if items else None

@@ -1,0 +1,97 @@
+/* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
+ *
+ * 技术工艺 2.1 / 2.2 的左侧导航条 —— 与 CPQ 各助手（报价首页.html、确认需求解析结果.html
+ * 里的 .nav-panel）以及技术工艺首页（home-layout.css 的 .cpq-nav-collapsed）同一条
+ * 56px 图标栏：36px 渐变 logo、40px 图标、悬停出黑底提示条、底部分隔线 + 状态。
+ *
+ * 原来这两页左边是一张 208px 的浮动卡片（.oc-dock-left），跟平台里其他任何一页都不像：
+ * 同一套产品，走到 2.1 左边突然变成一张飘着的卡片，回首页又变回竖栏。
+ *
+ * 尺寸与配色刻意照抄 CPQ 那份，不引 CPQ 的 CSS 变量 —— 那套变量定义在各 HTML 里，
+ * 技术工艺这边取不到，照抄字面值反而不会在某一页悄悄失配。
+ */
+
+.oc-rail {
+  position: sticky; top: 0; z-index: 1150; align-self: flex-start;
+  display: flex; flex: 0 0 56px; width: 56px; height: 100vh; box-sizing: border-box;
+  flex-direction: column; align-items: center; gap: 5px; padding: 12px 10px;
+  background: #fff; border-right: .5px solid #e5e7eb;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.oc-rail-logo {
+  display: grid; position: relative; place-items: center;
+  width: 36px; height: 36px; flex: 0 0 36px; margin-bottom: 8px;
+  border: 0; border-radius: 10px; padding: 0;
+  background: linear-gradient(135deg, #7c3aed, #3b82f6); color: #fff;
+}
+.oc-rail-logo .ti { font-size: 20px; }
+
+.oc-rail-icon {
+  display: grid; position: relative; place-items: center;
+  width: 40px; height: 40px; flex: 0 0 40px; padding: 0;
+  border: 0; border-radius: 10px; background: transparent; color: #6b7280;
+  font: inherit; text-decoration: none; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.oc-rail-icon .ti { font-size: 20px; }
+.oc-rail-icon:hover, .oc-rail-icon.active { background: #eff6ff; color: #3b82f6; }
+.oc-rail-icon.active { box-shadow: inset 2px 0 0 #3b82f6; }
+.oc-rail-icon:disabled { opacity: .45; cursor: not-allowed; }
+.oc-rail-icon:disabled:hover { background: transparent; color: #6b7280; }
+
+/* 环节做完打一个绿点。左栏收成图标之后，"哪几步已经跑过"只剩这一处可看，
+   不能像卡片那样靠一个 ✓ 字符，太小的图标上它会糊成一团。 */
+.oc-rail-icon.done::after {
+  content: ''; position: absolute; top: 6px; right: 6px;
+  width: 6px; height: 6px; border-radius: 50%; background: #15803d;
+}
+
+/* 状态那一格不是按钮，只提供悬停信息，别给它按钮的手势与高亮。 */
+.oc-rail-state { cursor: default; }
+.oc-rail-state:hover { background: transparent; color: #6b7280; }
+
+.oc-rail-tip {
+  position: absolute; left: 100%; top: 50%; z-index: 1300; transform: translateY(-50%);
+  margin-left: 8px; padding: 6px 10px; border-radius: 6px;
+  background: #1f2023; color: #fff; font: 12px/1.45 inherit; white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s;
+  text-align: left;
+}
+.oc-rail-tip b { display: block; font-weight: 600; }
+.oc-rail-tip span { display: block; color: #c9cad1; font-size: 11px; }
+.oc-rail-icon:hover .oc-rail-tip, .oc-rail-logo:hover .oc-rail-tip { opacity: 1; visibility: visible; }
+
+.oc-rail-divider { display: block; width: 32px; height: 1px; flex: 0 0 1px; margin: 6px 0; background: #e5e7eb; }
+.oc-rail-grow { flex: 1 1 auto; }
+
+/* 四个环节自成一组：aiRender 按 #aiStepBody [data-ai-tab] 找它们打 active/done。 */
+.oc-rail-steps { display: flex; flex: 0 0 auto; flex-direction: column; align-items: center; gap: 5px; }
+/* 挂小面板的格子：面板要相对图标定位，又不能塞进 <button> 里。 */
+.oc-rail-slot { display: flex; position: relative; flex: 0 0 auto; }
+
+/* 挂在图标右侧的小面板（核算批量）。模型设置复用 agent-chat.css 的 .oc-pop，
+   那个是 JS 定位的浮层；这个只有一个输入框，直接跟着图标走更稳。 */
+.oc-rail-pop {
+  position: absolute; left: calc(100% + 8px); top: 0; z-index: 1300; width: 168px;
+  padding: 10px 12px; border: .5px solid #d9d9e3; border-radius: 12px; background: #fff;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .16); text-align: left; cursor: default;
+}
+.oc-rail-pop[hidden] { display: none; }
+.oc-rail-pop > b { display: block; margin-bottom: 6px; color: #62636d; font: 11px/1.5 inherit; font-weight: 600; }
+
+/* 左侧不再有浮动小窗，工作区把那 236px 收回来；右窗仍是浮动的，右边距保留。
+   这条要压住 agent-chat.css 里三个断点的 padding-left —— 媒体查询不加特异性，
+   同选择器靠加载顺序决胜，本文件在它之后。 */
+.oc-shell .page-container { padding-left: 24px; }
+@media (max-width: 1100px) { .oc-shell .page-container { padding-left: 16px; } }
+
+/* home-link.js 的「返回」固定在 left:20px，正好压在导航条上。 */
+.global-back-link { left: 76px; }
+@media (max-width: 700px) { .global-back-link { left: 66px; } }
+
+/* 窄屏：CPQ 那条栏本身就不再收窄，这里同样保持 56px，只把提示条压到不出界。 */
+@media (max-width: 1100px) {
+  .oc-rail-tip { max-width: 46vw; white-space: normal; }
+}

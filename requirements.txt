@@ -4,7 +4,9 @@
 # The open_claude engine itself is NOT pip-installed -- each server references
 # the open-claude/ source dir via sys.path.
 anthropic==0.116.0
-openai==2.44.0
+# Bumped 2.44.0 -> 2.45.0: tech_app's requirements declare openai>=2.45.0 and both
+# share one interpreter, so 2.44 left the image below the declared floor.
+openai==2.45.0
 psycopg[binary]==3.3.4
 openpyxl==3.1.5
 pdfplumber==0.11.10
@@ -26,6 +28,12 @@ python-multipart==0.0.20
 sqlalchemy==2.0.36
 python-dotenv==1.0.1
 pydantic==2.10.4
+# qwen_client now builds its own httpx.Client (proxy / trust_env control), so httpx
+# is a direct dependency rather than something inherited from the SDKs.
+httpx>=0.27,<1
+# backend/time_utils.py resolves ZoneInfo("Asia/Shanghai"); the slim base image has
+# no system tz database, so without this every timestamped record raises at import.
+tzdata>=2025.1
 # cadquery drives geometry generation (STEP/STL) only. It is heavy and needs OCCT
 # runtime libs (libgl1 libglu1-mesa libxrender1 libxext6 libsm6). The LLM-driven
 # process-evaluation / drawing-parse / report chain works without it (guarded:

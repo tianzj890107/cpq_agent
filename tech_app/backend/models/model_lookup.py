@@ -1,6 +1,6 @@
 """2.1 图纸解析中的外购件/型号联网核验结果。
 
-该结果是对 CAD IR 的独立补充证据，绝不自动改写零件、BOM 或几何。
+该结果先作为独立补充证据保存；经人工确认后才写入零件/BOM，不自动改写几何。
 """
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from .coercion import StrList
 from .cost import WebSource
 
 
@@ -72,7 +73,7 @@ class ProcessDesignProposal(BaseModel):
     name: str = Field(..., description="工艺/技术方案名称")
     related_component: str = Field("", description="关联候选部件")
     design_summary: str = Field("", description="公开资料支持的工艺或设计要点")
-    key_controls: List[str] = Field(default_factory=list, description="需工程确认的关键控制点")
+    key_controls: StrList = Field(default_factory=list, description="需工程确认的关键控制点")
     confidence: float = Field(0.5, description="公开资料支持强度 0~1")
     requires_confirmation: bool = Field(True)
 
@@ -85,14 +86,14 @@ class ProcessDesignProposal(BaseModel):
 class ModelLookupResult(BaseModel):
     summary: str = ""
     identifications: List[ModelIdentification] = Field(default_factory=list)
-    open_questions: List[str] = Field(default_factory=list)
+    open_questions: StrList = Field(default_factory=list)
     search_sources: List[WebSource] = Field(default_factory=list)
     search_count: int = 0
     model: str = ""
     generated_at: str = ""
     confirmations: dict[str, dict] = Field(default_factory=dict)
-    applied_changes: List[dict] = Field(default_factory=list, description="本次核验自动同步到 IR/BOM 的变更明细")
-    auto_sync_attempted_at: str = Field("", description="已有核验结果自动同步到 IR/BOM 的尝试时间")
+    applied_changes: List[dict] = Field(default_factory=list, description="人工确认后同步到 IR/BOM 的变更明细")
+    auto_sync_attempted_at: str = Field("", description="旧数据兼容字段；当前流程不再自动同步")
     product_summary: str = Field("", description="产品级联网资料综合判断，不等同于图纸直接识别")
     proposed_components: List[ProductComponentProposal] = Field(default_factory=list)
     process_designs: List[ProcessDesignProposal] = Field(default_factory=list)

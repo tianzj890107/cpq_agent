@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -50,6 +51,7 @@ import xbom_agent_server as config_agent  # noqa: E402
 import rule_agent_server as rule_agent    # noqa: E402
 import cpq_auth                            # noqa: E402  登录与角色系统（/auth/*）
 import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
+import cpq_tech_bridge                     # noqa: E402  技术工艺回调：写主数据 / 推送到报价
 import cpq_image_server                    # noqa: E402  产品图片维护服务（独立端口，见下）
 
 AGENTS = {
@@ -170,11 +172,18 @@ class Handler(BaseHTTPRequestHandler):
             conn = http.client.HTTPConnection(TECH_HOST, TECH_PORT, timeout=600)
             conn.request(self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()
-            data = resp.read()
             status = resp.status
             hdrs = [(k, v) for k, v in resp.getheaders()
                     if k.lower() not in ("connection", "keep-alive", "transfer-encoding",
                                          "content-length", "proxy-connection")]
+            # 2.1 图纸解析的 Agent 对话是 SSE（/api/projects/*/agent/send）。整包
+            # resp.read() 会一直读到流结束才回，页面在整轮对话期间是空白的 ——
+            # 必须边收边转发，且不能带 Content-Length。
+            if resp.getheader("Content-Type", "").split(";")[0].strip() == "text/event-stream":
+                self._proxy_stream(status, hdrs, resp, conn)
+                conn = None            # 所有权已交给 _proxy_stream
+                return
+            data = resp.read()
         except Exception:
             # tech_app 未启动（本机缺 fastapi/uvicorn 或还在启动中）或中途断开：干净回 502
             self._safe_send(502, "技术工艺服务暂不可用：tech_app 未就绪。"
@@ -198,6 +207,38 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # 客户端已断开（常见于页面跳转），忽略
+
+    def _proxy_stream(self, status, hdrs, resp, conn):
+        """把 tech_app 的 SSE 响应边收边转发（用于 Agent 对话）。
+
+        本服务是 HTTP/1.1 keep-alive，而流式响应事先不知道长度：不发
+        Content-Length 就必须换一种定界方式。这里用 `Connection: close`
+        （读到连接关闭为止）——比手写 chunked 少一处易错的编码，SSE 客户端
+        都支持。每片都要 flush，否则又变回"攒够缓冲区才吐"。
+        """
+        try:
+            self.close_connection = True
+            self.send_response(status)
+            for k, v in hdrs:
+                self.send_header(k, v)
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            while True:
+                # read1 = 拿"当前已到达的一段"就返回；read(n) 会阻塞到凑满 n 个字节，
+                # 那等于又把流攒成了整包。
+                chunk = resp.read1(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass                               # 客户端中途关闭对话框，正常
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _safe_send(self, code, body):
         try:
@@ -346,8 +387,14 @@ class Handler(BaseHTTPRequestHandler):
                 d = self._read_json()
                 out = cpq_wf.send_task(d.get("session_id", ""), user, d.get("target_type", ""),
                                        d.get("target_role_code", ""), d.get("target_user_id", ""),
-                                       d.get("note", ""))
+                                       d.get("note", ""),
+                                       d.get("task_kind") or cpq_wf.TASK_KIND_HANDOFF,
+                                       d.get("payload") or None)
                 self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/task" and m == "GET":
+                # 单条任务（含 payload）。技术工艺凭任务编号取需求正文与文档摘要。
+                self._send_json(200, {"ok": True,
+                                      "task": cpq_wf.task_detail(arg("task_id"), user)})
             elif path == "/wf/messages" and m == "GET":
                 self._send_json(200, cpq_wf.messages(user, int(arg("limit") or 50)))
             elif path == "/wf/messages/read" and m == "POST":
@@ -357,13 +404,40 @@ class Handler(BaseHTTPRequestHandler):
                 d = self._read_json()
                 out = cpq_wf.claim_task(d.get("task_id", ""), user)
                 self._send_json(200, {"ok": True, **out})
+            # ---- 技术工艺（tech_app :8012）回调：写主数据 / 推送到报价 ----
+            # 放在 /wf 下是因为它们和报价卡片、业务库是同一套依赖；tech_app 自己
+            # 不连 Postgres，与登录（cpq_sso）保持同一个分工。
+            elif path == "/wf/tech/material" and m == "POST":
+                d = self._read_json()
+                out = cpq_tech_bridge.write_material(
+                    user, d.get("product_name", ""), d.get("unit_price"),
+                    d.get("breakdown") or {}, d.get("spec", ""))
+                self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/tech/handoff" and m == "POST":
+                d = self._read_json()
+                out = cpq_tech_bridge.send_to_quote(
+                    user, d.get("session_id", ""), d.get("title", ""),
+                    d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
+                    d.get("source_task_id", ""), d.get("result") or {})
+                self._send_json(200, {"ok": True, **out})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
+        except cpq_tech_bridge.BridgeError as e:
+            self._send_json(400, {"ok": False, "error": str(e)})
         except cpq_wf.WfError as e:
             self._send_json(400, {"ok": False, "error": str(e)})
         except Exception as e:
-            print(f"[cpq-suite] /wf 出错: {e}", file=sys.stderr)
-            self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})
+            # 完整堆栈进服务端日志；技术工艺那两条回调把**原因**也回给调用方 ——
+            # 它们写的是业务主数据（缺表、没权限、连不上库都可能），只回一句
+            # "服务异常，请稍后重试" 等于让人对着一个黑盒猜，现场根本查不下去。
+            traceback.print_exc()
+            print(f"[cpq-suite] /wf 出错: {path} {type(e).__name__}: {e}", file=sys.stderr)
+            detail = f"{type(e).__name__}: {str(e).splitlines()[0][:300]}" if str(e) \
+                else type(e).__name__
+            self._send_json(500, {
+                "ok": False,
+                "error": detail if path.startswith("/wf/tech/") else "服务异常，请稍后重试",
+            })
         return True
 
     def do_OPTIONS(self):
@@ -509,17 +583,24 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
 
 
 # ---------------------------------------------------------------- 技术工艺 App 子进程
-def _start_tech_app():
-    """拉起 tech_app（FastAPI/uvicorn）子进程；缺依赖/缺目录则跳过（前端访问时代理回 502）。"""
+def _start_tech_app(suite_port: int = 8010):
+    """拉起 tech_app（FastAPI/uvicorn）子进程；缺依赖/缺目录则跳过（前端访问时代理回 502）。
+
+    suite_port 是本服务自己的监听端口：技术工艺的登录接入 CPQ（cpq_sso），验票要回调
+    本服务的 /auth/me，所以必须把真实端口告诉子进程 —— 写死 8010 的话，用
+    `--port 9000` 起服务时技术工艺会认证失败，且失败点在子进程里，很难查。
+    """
     global _tech_proc
     launcher = os.path.join(SCRIPT_DIR, "tech_app_launch.py")
     if not os.path.isdir(os.path.join(SCRIPT_DIR, "tech_app")) or not os.path.isfile(launcher):
         print("[cpq-suite] 未找到 tech_app/，技术工艺 App 未启动。")
         return
+    env = dict(os.environ)
+    env.setdefault("CPQ_AUTH_BASE_URL", f"http://{TECH_HOST}:{suite_port}")
     try:
         _tech_proc = subprocess.Popen(
             [sys.executable, launcher, "--host", TECH_HOST, "--port", str(TECH_PORT)],
-            cwd=SCRIPT_DIR,
+            cwd=SCRIPT_DIR, env=env,
         )
     except Exception as e:
         print(f"[cpq-suite] 技术工艺 App 启动失败：{e}", file=sys.stderr)
@@ -607,7 +688,9 @@ def main():
     except Exception as e:
         print(f"[cpq-suite] 警告: 登录系统初始化失败：{e}", file=sys.stderr)
 
-    _start_tech_app()  # 技术工艺 App（tech_app/ FastAPI 全链路）子进程 + 反向代理
+    # 技术工艺 App（tech_app/ FastAPI 全链路）子进程 + 反向代理。
+    # 它的登录接入上面这套 /auth/*，因此要把本服务的端口传下去用于验票回调。
+    _start_tech_app(args.port)
 
     # 产品图片维护（独立端口 8011，同进程后台线程；失败只告警不影响主服务）
     if cpq_image_server.start_in_thread(args.host, IMAGE_PORT):

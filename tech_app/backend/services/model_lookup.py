@@ -1,6 +1,6 @@
 """型号候选 -> Qwen 联网检索 -> 可人工确认的零件识别证据。
 
-不修改 DesignIR：联网资料只能作为外购件/标准件识别的补充，必须由用户确认。
+联网资料先独立保存；只有用户明确确认的匹配结果才写入新的 DesignIR/BOM 版本。
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _SKIP_TOKENS = re.compile(r"^(?:P-?\d+|A-?\d+|M\d+(?:X\d+)?|ISO[-\s]?\d+|GB/?T|Q
 _MAX_CANDIDATES = 12
 _MAX_DOCUMENT_CONTEXT = 18000
 
-_SYSTEM_PROMPT = """你是机械/半导体设备外购件型号核验工程师。根据项目中明确出现的型号候选，
+_SYSTEM_PROMPT = """你是通用工业产品与设备外购件型号核验工程师。根据项目中明确出现的型号候选，
 使用联网搜索核验其对应的零件或产品。
 
 严格规则：
@@ -41,6 +41,37 @@ _SYSTEM_PROMPT = """你是机械/半导体设备外购件型号核验工程师�
    - process_designs 只概括公开资料提到的技术/工艺路线及待工程确认的控制点，不能伪装成已验证的制造工艺卡；
    - 这两类内容可使用产品名/技术名，不受 candidate_model 的“原文完整出现”限制。
 7. 只输出一个合法 JSON 对象，不要 Markdown、解释或代码块。"""
+
+
+def _lookup_with_search(prompt: dict, *, max_tokens: int):
+    """按当前选中的语言模型走对应提供商的联网检索。
+
+    百炼有自己的原生搜索 API（会返回可核验的来源），Anthropic / OpenAI 则用各自的
+    hosted web search 工具。之前这里写死走百炼，换成别的模型就会报
+    "Qwen 调用失败"。
+    """
+    from . import llm_client, llm_settings
+
+    provider = llm_settings.provider_of(llm_settings.selected_model(vision=False))
+    if provider == "qwen":
+        return qwen_client.complete_to_model_with_web_search(
+            _SYSTEM_PROMPT, prompt, ModelLookupResult, max_tokens=max_tokens)
+
+    sources: list = []
+    result = llm_client.run(
+        _SYSTEM_PROMPT,
+        [llm_client.text_block(str(prompt)),
+         llm_client.text_block(llm_client.web_search_notice(True))],
+        ModelLookupResult,
+        extra_tools=llm_client.web_search_tools(True),
+        max_tokens=max_tokens,
+        sources_out=sources,
+    )
+    return result, {
+        "sources": sources,
+        "search_count": len(sources),
+        "model": llm_client.last_used_model() or "",
+    }
 
 
 def _valid_token(value: str) -> bool:
@@ -138,19 +169,37 @@ def identify_models(ir: DesignIR, attachments: Iterable[tuple[str, bytes]]) -> M
         "project_identification_text": ir_text,
         "task": "先自行判断哪些术语值得联网检索，再仅输出有工程意义的型号/产品标识核验结论；不要为了凑数量而输出每个提示词。",
     }
-    result, metadata = qwen_client.complete_to_model_with_web_search(
-        _SYSTEM_PROMPT, prompt, ModelLookupResult, max_tokens=2600,
-    )
+    # 型号核验可能同时返回识别、产品级候选部件与工艺推演，使用完整文本预算，
+    # 避免结果在 proposals 中间被截断。
+    result, metadata = _lookup_with_search(prompt, max_tokens=12000)
     result.search_sources = metadata["sources"]
     result.search_count = metadata["search_count"]
     result.model = metadata["model"]
     result.generated_at = now_cst_str()
+    candidate_parts = {
+        str(item.get("candidate_model") or "").strip().upper(): item.get("related_part_id")
+        for item in candidates if item.get("related_part_id")
+    }
+    for item in result.identifications:
+        # 模型可能漏回 related_part_id；候选提取阶段已有精确零件来源时由本地补回，
+        # 让用户清楚确认后会写入哪个零件，也避免后续按型号回退匹配到错误实体。
+        if not item.related_part_id:
+            item.related_part_id = candidate_parts.get(item.candidate_model.strip().upper())
     # 防止模型返回项目资料中不存在的型号，保证每项都可追溯到图纸/BOM/技术文档。
     project_corpus = (document_text + "\n" + ir_text).upper()
-    result.identifications = [
-        item for item in result.identifications
-        if item.candidate_model.strip() and item.candidate_model.strip().upper() in project_corpus
-    ][:_MAX_CANDIDATES]
+    # 确认接口以候选型号为稳定键；模型偶尔重复返回同一候选时只保留第一项，
+    # 避免一次人工确认同时作用于多个相互矛盾的识别结论。
+    filtered = []
+    seen_models: set[str] = set()
+    for item in result.identifications:
+        key = item.candidate_model.strip().upper()
+        if not key or key not in project_corpus or key in seen_models:
+            continue
+        seen_models.add(key)
+        filtered.append(item)
+        if len(filtered) >= _MAX_CANDIDATES:
+            break
+    result.identifications = filtered
     if not result.identifications:
         result.open_questions.append("联网服务未对项目中的型号候选返回可用结论，请人工核验。")
     return result

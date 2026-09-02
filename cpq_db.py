@@ -125,6 +125,24 @@ def _split_entity(cell: str):
 
 @lru_cache(maxsize=1)
 def _load_ontology() -> dict:
+    """本体语义层。优先读 亿纬锂能DA梳理.md，读不到再回落到 xlsx。
+
+    .md 由 cpq_ontology.py 从 xlsx 生成（`--check` 可对账）。运行时读它有两个好处：
+    不依赖 openpyxl，且与报价助手模型看到的是**同一份**文本 —— 模型讲的表结构和
+    服务端拿来渲染固定表单的表结构，从此不会是两个来源。
+    """
+    try:
+        import cpq_ontology
+
+        parsed = cpq_ontology.load_md()
+    except Exception:
+        parsed = None
+    if parsed and any((parsed.get(key) or {}).get("entities") for key in ("quote", "config", "rule")):
+        return parsed
+    return _load_ontology_xlsx()
+
+
+def _load_ontology_xlsx() -> dict:
     """解析三个 sheet，返回 {agent: {"entities":[...], "bi_index":{(bo,name):[(attr_name,type)]}}}。
 
     entity = {"table","cn","business_object","attrs":[{code,name,type,pk,fk,note}]}
@@ -312,14 +330,28 @@ _NUM_RE = None
 
 
 def table_types(conn, table: str) -> dict:
-    """{列名: data_type}；表不存在返回 {}。表名按 PG 未加引号折叠成小写查询。"""
+    """{列名: data_type}；表不存在返回 {}。表名按 PG 未加引号折叠成小写查询。
+
+    **按连接的 search_path 找，而不是只认配置的那个 schema**：connect() 设的是
+    `search_path = <PG_SCHEMA>, public`，读（run_select）和写（INSERT INTO 不带
+    schema 前缀）都按这条路解析。这里若只查 PG_SCHEMA，表建在 public 时就会得出
+    "目标表不存在"——同一张表读得到、写不进去，而错误信息还指向一个不存在的问题。
+    优先取 PG_SCHEMA 里的那张（同名时以配置为准）。
+    """
+    schemas = [s for s in (PG_SCHEMA, "public") if s]
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_schema = %s AND table_name = lower(%s)",
-            (PG_SCHEMA or "public", table),
+            "SELECT table_schema, column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = ANY(%s) AND table_name = lower(%s)",
+            (schemas or ["public"], table),
         )
-        return {r[0]: r[1] for r in cur.fetchall()}
+        found: dict = {}
+        for schema, column, dtype in cur.fetchall():
+            found.setdefault(schema, {})[column] = dtype
+    for schema in schemas or ["public"]:
+        if found.get(schema):
+            return found[schema]
+    return next(iter(found.values()), {})
 
 
 def _coerce(value, dtype: str):
@@ -373,7 +405,8 @@ def insert_rows(conn, table: str, rows: list) -> int:
     """批量插入（rows=list[dict code->值]），返回成功行数。表不存在抛错。"""
     types = table_types(conn, table)
     if not types:
-        raise RuntimeError(f"目标表 {table} 不存在（information_schema 查不到列）")
+        raise RuntimeError(
+            f"目标表 {table} 不存在（在 schema {PG_SCHEMA} 与 public 里都查不到它的列）")
     saved = 0
     with conn.cursor() as cur:
         for r in rows:

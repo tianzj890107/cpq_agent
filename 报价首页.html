@@ -1261,6 +1261,17 @@
             <input id="techReqInput" type="file" multiple hidden
               accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.json,image/*">
           </div>
+          <!-- 技术工艺：行业模板（仅 tech 模式显示）。它决定需求单「三、产品技术规格」
+               整段用哪套字段（半导体/电池/电器各一套），所以必须在建单前选。 -->
+          <div class="upload-section" id="techIndustryBox" style="display:none" title="决定需求单产品技术规格用哪套字段">
+            <i class="ti ti-category-2"></i>
+            <select id="techIndustry" aria-label="行业模板"
+              style="border:none;background:transparent;color:inherit;font-size:13px;font-weight:600;cursor:pointer;outline:none">
+              <option value="semiconductor">半导体</option>
+              <option value="battery">电池</option>
+              <option value="appliance">电器</option>
+            </select>
+          </div>
           <div class="char-counter">0/500</div>
           <button class="send-btn">
             <i class="ti ti-send"></i>
@@ -1405,92 +1416,30 @@
         </div>
 
         <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 多模态模型（图纸识别）</label>
-          <div class="hint">技术工艺助手解析图纸/文档所用模型；OpenAI 兼容网关（云端聚合网关或本地网关皆可）。选「本地模型」时视觉/文本模型名改为手动填写；图纸识别需选真·多模态模型。文本与视觉共用同一网关与 Key。</div>
-          <label>网关 Base URL（OpenAI 兼容）</label>
-          <input id="setTechBase" type="text" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off">
-          <label>模型来源</label>
-          <select id="setTechMode" onchange="onTechModeChange()">
-            <option value="cloud">云模型（下拉选择）</option>
-            <option value="local">本地模型（手动填模型名/参数）</option>
-          </select>
-          <label>视觉模型（多模态，识别图纸）</label>
-          <select id="setTechVision" onchange="onTechVisionChange()">
-            <optgroup label="Anthropic Claude">
-              <option value="claude-opus-4-8">Claude Opus 4.8</option>
-              <option value="claude-fable-5">Claude Fable 5</option>
-              <option value="claude-sonnet-5">Claude Sonnet 5</option>
-              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-            </optgroup>
-            <optgroup label="OpenAI GPT">
-              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
-              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
-            </optgroup>
-            <optgroup label="DeepSeek">
-              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            </optgroup>
-            <optgroup label="智谱 GLM">
-              <option value="glm-5.2">GLM 5.2</option>
-              <option value="glm-5.1">GLM 5.1</option>
-            </optgroup>
-            <optgroup label="Kimi Moonshot">
-              <option value="kimi-k3">Kimi 3</option>
-              <option value="kimi-k2.7">Kimi 2.7</option>
-            </optgroup>
-            <optgroup label="通义千问 Qwen">
-              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
-              <option value="qwen3.7-max">Qwen3.7 Max</option>
-              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
-            </optgroup>
-            <optgroup label="MiniMax">
-              <option value="MiniMax-M3">MiniMax M3</option>
-            </optgroup>
-            <option value="__custom__">自定义（手动输入…）</option>
-          </select>
-          <input id="setTechVisionCustom" type="text" placeholder="自定义视觉模型名称" autocomplete="off" style="display:none;margin-top:6px">
-          <label>文本模型（工艺推荐/报告，留空则复用视觉模型）</label>
-          <select id="setTechText" onchange="onTechTextChange()">
-            <option value="">（复用视觉模型）</option>
-            <optgroup label="Anthropic Claude">
-              <option value="claude-opus-4-8">Claude Opus 4.8</option>
-              <option value="claude-fable-5">Claude Fable 5</option>
-              <option value="claude-sonnet-5">Claude Sonnet 5</option>
-              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-            </optgroup>
-            <optgroup label="OpenAI GPT">
-              <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
-              <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-              <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-              <option value="gpt-5.5-pro">GPT-5.5 Pro</option>
-            </optgroup>
-            <optgroup label="DeepSeek">
-              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            </optgroup>
-            <optgroup label="智谱 GLM">
-              <option value="glm-5.2">GLM 5.2</option>
-              <option value="glm-5.1">GLM 5.1</option>
-            </optgroup>
-            <optgroup label="Kimi Moonshot">
-              <option value="kimi-k3">Kimi 3</option>
-              <option value="kimi-k2.7">Kimi 2.7</option>
-            </optgroup>
-            <optgroup label="通义千问 Qwen">
-              <option value="qwen3.7-plus">Qwen3.7 Plus</option>
-              <option value="qwen3.7-max">Qwen3.7 Max</option>
-              <option value="qwen3.5-plus">Qwen3.5 Plus</option>
-            </optgroup>
-            <optgroup label="MiniMax">
-              <option value="MiniMax-M3">MiniMax M3</option>
-            </optgroup>
-            <option value="__custom__">自定义（手动输入…）</option>
-          </select>
-          <input id="setTechTextCustom" type="text" placeholder="自定义文本模型名称" autocomplete="off" style="display:none;margin-top:6px">
-          <label>API Key（留空表示不修改已保存的 Key）</label>
-          <input id="setTechKey" type="password" placeholder="技术工艺网关的 API Key" autocomplete="off">
+          <label style="font-weight:600">技术工艺 · 模型设置</label>
+          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
+            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
+            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
+          <label>多模态模型（图纸识别）</label>
+          <select id="setTechVision"></select>
+          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
+          <select id="setTechText"></select>
+          <div class="field-row" style="margin-top:8px">
+            <div style="flex:1">
+              <label>Temperature（留空＝模型默认）</label>
+              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
+            </div>
+            <div style="flex:1">
+              <label>最大输出 Tokens（留空＝默认）</label>
+              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
+            </div>
+          </div>
+          <label class="check-row" style="margin-top:8px">
+            <input type="checkbox" id="setTechThinking"> 开启思考
+          </label>
+          <label>API Key（按提供商分别保存；留空表示不修改）</label>
+          <select id="setTechKeyProvider"></select>
+          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
           <div class="hint" id="techLlmMsg"></div>
         </div>
 
@@ -1661,10 +1610,15 @@
     // 待办任务卡片：带时间 / 来源 / 步骤标记
     function taskCardHtml(t) {
       const claimed = t.status === 'claimed';
-      const way = t.target_type === 'public' ? '公共任务'
+      const techNew = t.task_kind === 'tech_new_product';
+      const way = techNew ? '新增工艺'
+        : t.target_type === 'public' ? '公共任务'
         : t.target_type === 'role' ? '定向角色' : '指派给我';
-      return '<div class="request-card wf-task" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) + '">' +
-        '<div class="request-card-header"><span class="request-id">' + escH(way) + '</span>' +
+      return '<div class="request-card wf-task' + (techNew ? ' wf-task-technew' : '') +
+        '" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) +
+        '" data-kind="' + escH(t.task_kind || 'handoff') + '">' +
+        '<div class="request-card-header"><span class="request-id">' + escH(way) +
+        (techNew && t.task_no ? ' · ' + escH(t.task_no) : '') + '</span>' +
         '<span class="request-status ' + (claimed ? 'status-reviewing' : 'status-draft') + '">' +
         (claimed ? '进行中' : '待领取') + '</span></div>' +
         '<div class="request-title">' + escH(t.title || '未命名报价') + '</div>' +
@@ -1680,15 +1634,25 @@
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
         escH(t.next_role_name) + '负责</div>' +
-        '<span class="request-detail">' + (claimed ? '继续处理' : '领取并继续') + '</span></div></div>';
+        '<span class="request-detail">' +
+        (techNew ? (claimed ? '继续新增工艺' : '领取并去技术工艺')
+                 : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
     }
 
-    // 领取任务并进入报价工作台
-    async function wfClaimAndOpen(taskId, sessionId, claimed) {
+    // 领取任务并打开对应的工作台。
+    // 「新增工艺」去的是技术工艺的任务专属页（带任务编号），不是报价工作台 —— 那条支线
+    // 要做的是图纸解析与工艺测算，不是继续填报价。专属页里任务编码、客户需求、需求文档、
+    // 图纸上传、建单一屏闭环，不再把这些塞进技术工艺首页。
+    async function wfClaimAndOpen(taskId, sessionId, claimed, kind) {
+      let claim = null;
       try {
-        if (!claimed) await cpqAuth.api('/wf/task/claim', { method: 'POST', body: { task_id: taskId } });
+        if (!claimed) claim = await cpqAuth.api('/wf/task/claim', { method: 'POST', body: { task_id: taskId } });
         if (window.cpqMsg) cpqMsg.ping();   // 领取会给转交人发消息，本地也同步一下未读
       } catch (e) { alert(e.message || '领取失败'); return; }
+      if ((claim && claim.task_kind) === 'tech_new_product' || kind === 'tech_new_product') {
+        window.location.href = '/tech-task.html?tech_task=' + encodeURIComponent(taskId);
+        return;
+      }
       try { sessionStorage.setItem(OPEN_KEYS.quote, sessionId); } catch (e) {}
       window.location.href = encodeURI(PAGES.quote);
     }
@@ -1791,7 +1755,8 @@
       cardGrid.innerHTML = list.map(taskCardHtml).join('');
       cardGrid.querySelectorAll('.wf-task').forEach((el, i) => {
         el.addEventListener('click', () =>
-          wfClaimAndOpen(el.dataset.task, el.dataset.session, list[i].status === 'claimed'));
+          wfClaimAndOpen(el.dataset.task, el.dataset.session,
+                         list[i].status === 'claimed', el.dataset.kind));
       });
       if (info) info.textContent = '共 ' + list.length + ' 条待办';
     }
@@ -1966,19 +1931,39 @@
       if (techDrawLabel) techDrawLabel.textContent = '上传图纸';
       if (techReqLabel) techReqLabel.textContent = '上传需求文档';
     }
-    // tech 模式切到「图纸 / 需求文档」两个槽，隐藏通用「上传文件」；离开 tech 时还原。
+    // tech 模式切到「图纸 / 需求文档」两个槽 + 行业模板，隐藏通用「上传文件」；离开 tech 时还原。
     function applyUploadMode(mode) {
       const isTech = mode === 'tech';
       if (uploadSection) uploadSection.style.display = isTech ? 'none' : '';
       if (techUploadDraw) techUploadDraw.style.display = isTech ? '' : 'none';
       if (techUploadReq) techUploadReq.style.display = isTech ? '' : 'none';
+      const ib = document.getElementById('techIndustryBox');
+      if (ib) ib.style.display = isTech ? '' : 'none';
       if (isTech) resetTechUpload();
     }
+    /* 行业模板：记住上次选择——同一个人通常连着建同一行业的单子，
+       每次都退回「半导体」等于每次都要重选。 */
+    const TECH_INDUSTRY_KEY = 'cpq:tech:industry';
+    const TECH_INDUSTRIES = ['semiconductor', 'battery', 'appliance'];
+    function techIndustry() {
+      const el = document.getElementById('techIndustry');
+      const v = (el && el.value) || '';
+      return TECH_INDUSTRIES.includes(v) ? v : 'semiconductor';
+    }
+    (function initTechIndustry() {
+      const el = document.getElementById('techIndustry');
+      if (!el) return;
+      const saved = localStorage.getItem(TECH_INDUSTRY_KEY);
+      if (TECH_INDUSTRIES.includes(saved)) el.value = saved;
+      el.addEventListener('change', () => localStorage.setItem(TECH_INDUSTRY_KEY, el.value));
+    })();
     // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入 requirement-create（图纸已关联）。
     async function techCreateAndGo() {
+      const industry = techIndustry();
       if (!techDrawFiles.length) {
-        // 没传图纸 → 直接进入需求页现场分开上传
-        window.location.href = 'requirement-create.html';
+        // 没传图纸 → 直接进入需求页现场分开上传。行业用 URL 带过去，否则这里选的
+        // 「电池」到了需求页会静默变回默认的「半导体」。
+        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
         return;
       }
       const sendBtnEl = document.querySelector('.send-btn');
@@ -2004,6 +1989,10 @@
               project_id: pid, requirement_no: '', title, status: 'draft',
               data: {
                 title, description: note,
+                // 行业模板：决定需求单 Section C 的字段集，也决定 AI 抽取按哪套字段抽。
+                // industry_selection = 用户选的；industry = 实际生效的（AI 解析后可能给出
+                // 不同判断，后端在 industry_assessment 里留痕）。
+                industry, industry_selection: industry,
                 // 需求文档挂到「技术规格说明书」角色，便于 3.4 展示为已关联（提取按全部附件读取，与角色无关）
                 file_roles: reqNames.length ? { technical_spec: reqNames } : {},
               },
@@ -2013,7 +2002,7 @@
         window.location.href = 'requirement-create.html?project=' + encodeURIComponent(pid);
       } catch (e) {
         alert('技术工艺项目创建失败：' + (e && e.message || e) + '。将进入需求页，请在该页手动上传。');
-        window.location.href = 'requirement-create.html';
+        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
       } finally {
         if (sendBtnEl) sendBtnEl.disabled = false;
       }
@@ -2049,9 +2038,18 @@
       loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
     }
 
-    // 顶部标签点击 = 切换助手模式；发送 / 新建 / 卡片详情进入对应页面
+    /* 顶部标签点击 = 切换助手模式；发送 / 新建 / 卡片详情进入对应页面。
+       「技术工艺」是例外：它整套工作台（需求单/图纸解析/工艺路径/…）是内嵌的
+       tech_app，有自己的首页，所以这里不切内嵌标签，直接跳过去。
+       走 /home.html 而不是写死 127.0.0.1:8012 —— 8010 会把它反代到 tech_app，
+       同源、同一套登录，换机器或进 Docker 也不用改。 */
+    const TECH_HOME_URL = '/home.html';
     document.querySelectorAll('.category-tag').forEach((tag) => {
-      tag.addEventListener('click', () => setMode(tagToMode(tag.textContent)));
+      tag.addEventListener('click', () => {
+        const mode = tagToMode(tag.textContent);
+        if (mode === 'tech') { window.location.href = TECH_HOME_URL; return; }
+        setMode(mode);
+      });
     });
 
     // 跳转前先弹信息确认框；不同助手使用不同命名字段，再真正跳转
@@ -2265,7 +2263,10 @@
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
-    // 初始化：URL ?assistant=tech（从技术工艺子页「返回技术工艺首页」带回来）可直接进入对应助手，否则默认报价助手
+    // 初始化：URL ?assistant=quote|config|rule（技术工艺首页的顶部标签跳回来时带）
+    // 可直接进入对应助手，否则默认报价助手。
+    // 注：?assistant=tech 仍能打开下面那套内嵌的技术工艺标签页，但已没有任何入口指向它 ——
+    // 技术工艺现在有自己的首页（/home.html，即 tech_app），点顶部标签直接跳过去。
     (function initAssistantMode() {
       let m = 'quote';
       try { const a = new URLSearchParams(location.search).get('assistant'); if (a && MODES[a]) m = a; } catch (e) {}
@@ -2424,35 +2425,7 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      // 技术工艺多模态模型：读 tech_app 运行时设置（同源 /api/llm/settings 反代到 tech_app）
-      try {
-        const _tl = await fetch('/api/llm/settings').then(r => r.ok ? r.json() : null);
-        if (_tl) {
-          if ($('setTechBase')) $('setTechBase').value = _tl.base_url || '';
-          if ($('setTechVision')) {
-            const _vm = (_tl.vision_models && _tl.vision_models[0]) || '';
-            const _sel = $('setTechVision');
-            const _has = Array.from(_sel.options).some(o => o.value === _vm && o.value !== '__custom__');
-            if (_vm && _has) { if ($('setTechMode')) $('setTechMode').value = 'cloud'; _sel.value = _vm; }
-            else if (_vm) { if ($('setTechMode')) $('setTechMode').value = 'local'; if ($('setTechVisionCustom')) $('setTechVisionCustom').value = _vm; }
-            if ($('setTechText')) {
-              const _tm = (_tl.text_models && _tl.text_models[0]) || '';
-              const _localMode = $('setTechMode') && $('setTechMode').value === 'local';
-              const _tsel = $('setTechText');
-              const _thas = Array.from(_tsel.options).some(o => o.value === _tm && o.value !== '__custom__' && o.value !== '');
-              if (_localMode) { if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
-              else if (_tm && _thas) { _tsel.value = _tm; }
-              else if (_tm) { _tsel.value = '__custom__'; if ($('setTechTextCustom')) $('setTechTextCustom').value = _tm; }
-              else { _tsel.value = ''; }
-            }
-            if (typeof onTechModeChange === 'function') onTechModeChange();
-            onTechVisionChange();
-            if (typeof onTechTextChange === 'function') onTechTextChange();
-          }
-          if ($('setTechText')) $('setTechText').value = (_tl.text_models && _tl.text_models[0]) || '';
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = _tl.api_key_configured ? '当前技术工艺网关已配置 Key。' : '技术工艺网关尚未配置 Key。';
-        }
-      } catch (e) {}
+      await loadTechLlm();
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -2483,32 +2456,95 @@
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
     // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    function onTechModeChange() {
-      const local = $('setTechMode') && $('setTechMode').value === 'local';
-      // 视觉模型
-      if ($('setTechVision')) $('setTechVision').style.display = local ? 'none' : '';
-      const vc = $('setTechVisionCustom');
-      if (vc) {
-        vc.placeholder = local ? '本地视觉模型名称（与网关一致）' : '自定义视觉模型名称';
-        vc.style.display = local ? '' : (($('setTechVision') && $('setTechVision').value === '__custom__') ? '' : 'none');
+    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
+       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
+                                  temperature,max_tokens,thinking,providers[],editable}
+       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
+       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
+       选了一个后端不认的 id，保存时才报错。 */
+    let TECH_LLM = null;
+    function _techFillSelect(sel, options, current) {
+      if (!sel) return;
+      sel.innerHTML = '';
+      (options || []).forEach(o => {
+        const el = document.createElement('option');
+        el.value = o.id;
+        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
+        sel.appendChild(el);
+      });
+      if (current) sel.value = current;
+    }
+    async function loadTechLlm() {
+      try {
+        const r = await fetch('/api/llm/settings');
+        if (!r.ok) throw new Error(r.status);
+        TECH_LLM = await r.json();
+      } catch (e) {
+        TECH_LLM = null;
+        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
+        return;
       }
-      // 文本模型（与视觉同一来源）
-      if ($('setTechText')) $('setTechText').style.display = local ? 'none' : '';
-      const tc = $('setTechTextCustom');
-      if (tc) {
-        tc.placeholder = local ? '本地文本模型名称（留空复用视觉模型）' : '自定义文本模型名称';
-        tc.style.display = local ? '' : (($('setTechText') && $('setTechText').value === '__custom__') ? '' : 'none');
+      const t = TECH_LLM;
+      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
+      _techFillSelect($('setTechText'), t.text_options, t.text_model);
+      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
+      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
+      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
+      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
+      const kp = $('setTechKeyProvider');
+      if (kp) {
+        kp.innerHTML = '';
+        (t.providers || []).forEach(p => {
+          const el = document.createElement('option');
+          el.value = p.provider;
+          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
+          kp.appendChild(el);
+        });
+      }
+      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
+      if ($('techLlmMsg')) {
+        $('techLlmMsg').textContent = miss.length
+          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
+          : '当前所选模型的 Key 均已配置。';
       }
     }
-    function onTechVisionChange() {
-      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
-      const sel = $('setTechVision'), cust = $('setTechVisionCustom');
-      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
-    }
-    function onTechTextChange() {
-      if ($('setTechMode') && $('setTechMode').value === 'local') return; // 本地模式恒手动输入
-      const sel = $('setTechText'), cust = $('setTechTextCustom');
-      if (sel && cust) cust.style.display = sel.value === '__custom__' ? '' : 'none';
+    async function saveTechLlm() {
+      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
+      const body = {};
+      const v = $('setTechVision') && $('setTechVision').value;
+      const x = $('setTechText') && $('setTechText').value;
+      if (v) body.vision_model = v;
+      if (x) body.text_model = x;
+      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
+      body.temperature = tp === '' ? null : Number(tp);
+      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
+      body.max_tokens = mt === '' ? null : Number(mt);
+      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
+      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
+      if (key) {
+        body.api_key = key;
+        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
+        if (!body.api_key_provider) {
+          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
+          return;
+        }
+      }
+      try {
+        const r = await fetch('/api/llm/settings', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
+          return;
+        }
+        if ($('setTechKey')) $('setTechKey').value = '';
+        TECH_LLM = await r.json().catch(() => null);
+        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
+        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
+      } catch (e) {
+        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
+      }
     }
     /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
     let SETTINGS_TAB = 'agents';
@@ -2562,27 +2598,6 @@
       }
     }
     switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
-    async function saveTechLlm() {
-      const base = ($('setTechBase') && $('setTechBase').value.trim()) || '';
-      const _techLocal = $('setTechMode') && $('setTechMode').value === 'local';
-      let vision = _techLocal
-        ? (($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '')
-        : (($('setTechVision') && $('setTechVision').value.trim()) || '');
-      if (!_techLocal && vision === '__custom__') vision = ($('setTechVisionCustom') && $('setTechVisionCustom').value.trim()) || '';
-      let text = _techLocal
-        ? (($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '')
-        : (($('setTechText') && $('setTechText').value.trim()) || '');
-      if (!_techLocal && text === '__custom__') text = ($('setTechTextCustom') && $('setTechTextCustom').value.trim()) || '';
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (!base && !vision && !text && !key) return;   // 未填写则不推送
-      const body = { base_url: base, vision_models: vision ? [vision] : [], text_models: text ? [text] : (vision ? [vision] : []) };
-      if (key) body.api_key = key;
-      try {
-        const r = await fetch('/api/llm/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (!r.ok) { const e = await r.json().catch(() => ({})); if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status); }
-        else { if ($('setTechKey')) $('setTechKey').value = ''; if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺多模态模型已保存并生效。'; }
-      } catch (e) { if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：tech_app 未就绪。'; }
-    }
     async function saveSettings() {
       const o = selectedModelOption();
       const payload = {

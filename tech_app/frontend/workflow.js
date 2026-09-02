@@ -19,12 +19,27 @@ const authHeaders = () => {
   const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token');
   return token ? {Authorization: `Bearer ${token}`} : {};
 };
+/* FastAPI 的 422 里 detail 是一个**数组**（每个不合法字段一条），直接塞进 Error
+   会变成 "[object Object]" —— 屏幕上只剩"创建失败"四个字，谁也不知道差了哪个字段。
+   这里把字段名和原因摊开。其余状态码的 detail 是字符串，原样用。 */
+function apiError(data, status) {
+  const detail = data && data.detail;
+  if (Array.isArray(detail)) {
+    const lines = detail.map(item => {
+      const field = (item.loc || []).filter(x => x !== 'body').join('.');
+      return field ? `${field}: ${item.msg}` : item.msg;
+    }).filter(Boolean);
+    if (lines.length) return `提交的数据不合法（${lines.join('；')}）`;
+  }
+  if (typeof detail === 'string' && detail) return detail;
+  return (data && data.message) || `请求失败 (${status})`;
+}
 async function api(url, options = {}) {
   const headers = {...authHeaders(), ...(options.headers || {})};
   if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const res = await fetch(url, {...options, headers});
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || `请求失败 (${res.status})`);
+  if (!res.ok) throw new Error(apiError(data, res.status));
   return data;
 }
 function esc(value) { return String(value ?? '').replace(/[&<>'"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s])); }
@@ -40,7 +55,7 @@ function workflow(active, sub = '') {
   return `<section class="workflow card"><div class="workflow-main">
     <div class="workflow-group"><div class="workflow-step ${c(a1,done1)}"><i>1</i>接受工艺评估需求</div><div class="workflow-sub"><span class="${sub==='1.1'?'active':''}">1.1 创建</span> → <span class="${sub==='1.2'?'active':''}">1.2 确认</span> → <span class="${sub==='1.3'?'active':''}">1.3 审核</span></div></div>
     <i class="workflow-connector ${active>=2?'active':''}"></i>
-    <div class="workflow-group"><div class="workflow-step ${c(a2,done2)}"><i>2</i>解析技术工艺过程</div><div class="workflow-sub"></div></div>
+    <div class="workflow-group"><div class="workflow-step ${c(a2,done2)}"><i>2</i>解析技术工艺过程</div><div class="workflow-sub"><span class="${sub==='2.1'?'active':''}">2.1 图纸解析</span></div></div>
     <i class="workflow-connector ${active>=3?'active':''}"></i>
     <div class="workflow-group"><div class="workflow-step ${c(a3,false)}"><i>3</i>输出工艺评估结果</div><div class="workflow-sub"><span class="${sub==='3.1'?'active':''}">3.1 汇总</span> → <span class="${sub==='3.2'?'active':''}">3.2 审核</span> → <span class="${sub==='3.3'?'active':''}">3.3 发布</span></div></div>
   </div></section>`;

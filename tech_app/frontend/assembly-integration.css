@@ -1,0 +1,175 @@
+/* 2.2 组装与整合。只补这一页独有的几块：页签、动作条、图纸行、提示条。
+   卡片、表格、工序行全部沿用 inline-analysis.css —— 与 2.1 的工艺/成本面板是同一套。 */
+
+.ai-tabs { display: flex; gap: 4px; margin-left: auto; }
+.ai-tabs button {
+  padding: 5px 12px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 999px;
+  background: transparent; color: var(--oc-text-2, #4b5563); font-size: 12.5px; cursor: pointer;
+}
+.ai-tabs button:hover { background: var(--oc-bg-3, #f3f4f6); }
+.ai-tabs button.active {
+  border-color: transparent; background: var(--oc-accent, #2563eb); color: #fff; font-weight: 600;
+}
+
+.ai-actions {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 16px 0;
+}
+.ai-actions .inline-action:disabled { opacity: .6; cursor: wait; }
+.ai-hint { color: var(--oc-text-3, #9ca3af); font-size: 12px; line-height: 1.6; }
+
+.ai-status { padding: 8px 16px 0; color: var(--oc-text-3, #9ca3af); font-size: 12px; min-height: 18px; }
+.ai-status.error { color: #b91c1c; }
+
+/* 不自己开滚动条：.center-panel 已经是 overflow-y:auto，再套一层会出现两根滚动条，
+   而且里层那根在 sticky 表头下面，看上去像内容被截断了。 */
+.ai-body { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 20px; }
+
+/* 整合图纸一行：文件名 + 上传时间/说明 + 移除。 */
+.ai-drawing {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 10px;
+  margin-top: 6px;
+}
+.ai-drawing a { color: var(--oc-accent, #2563eb); font-size: 13px; text-decoration: none; }
+.ai-drawing a:hover { text-decoration: underline; }
+.ai-drawing small { color: var(--oc-text-3, #9ca3af); font-size: 11.5px; }
+.ai-drawing .inline-action { margin-left: auto; }
+
+/* 整合需求输入框：它是参数推荐的第一路输入，给足高度，别让人写两行就滚。 */
+.ai-requirement {
+  width: 100%; margin: 8px 0; padding: 9px 11px; box-sizing: border-box;
+  border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 10px;
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
+  font-family: inherit; font-size: 13px; line-height: 1.7; resize: vertical;
+}
+.ai-requirement:focus { outline: none; border-color: var(--oc-accent, #2563eb); }
+
+.ai-qty { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
+.ai-qty input {
+  width: 74px; padding: 4px 8px; border: .5px solid var(--oc-border-3, #e2e5ea);
+  border-radius: 8px; font-size: 12.5px;
+}
+.ai-qty span { color: var(--oc-text-3, #9ca3af); font-size: 12px; }
+
+/* 左侧四个环节：做完的打勾，当前的高亮。 */
+.oc-citem.done::after { content: '✓'; margin-left: auto; color: #15803d; font-size: 12px; }
+.oc-citem.active { background: var(--oc-bg-3, #f3f4f6); font-weight: 600; }
+
+/* 报价成品参数表：分组行 + 缺口高亮。行是字典定的，缺的必须一眼看得见。 */
+.ai-group-row td {
+  padding: 7px 10px !important; background: var(--oc-bg-3, #f3f4f6);
+  color: var(--oc-text-2, #4b5563); font-size: 12px; font-weight: 600;
+}
+tr.ai-missing td { background: #fff7ed; }
+tr.ai-missing td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+.ai-req {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: #fef3c7; color: #92400e; font-size: 10.5px; font-weight: 600;
+}
+.ai-blank { color: #b45309; font-size: 12px; }
+.ai-off {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: #fef3c7; color: #92400e; font-size: 10.5px;
+}
+.inline-cost-table code {
+  padding: 1px 5px; border-radius: 5px; background: var(--oc-bg-3, #f3f4f6);
+  color: var(--oc-text-2, #4b5563); font-size: 11.5px;
+}
+.inline-cost-table td .ai-hint { display: block; margin-top: 2px; font-size: 11px; }
+
+/* 本步产出的两个对外动作：置底常驻，夹在对话流与输入框之间。
+   原来它是对话流里的一张卡片，聊几轮就被顶到看不见的地方 —— 而这两件事是本步的终点。 */
+.ai-ops-bar {
+  flex: 0 0 auto; padding: 10px 14px 8px;
+  border-top: .5px solid var(--oc-border-3, #e2e5ea);
+  background: var(--oc-bg-2, #f9fafb);
+}
+.ai-ops-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.ai-ops-row .ai-op-field { flex: 1 1 220px; margin: 0; }
+.ai-ops-row .ai-op-cost { margin: 0 0 2px; }
+
+.ai-op-field { display: block; margin: 8px 0 4px; color: var(--oc-text-3, #9ca3af); font-size: 12px; }
+.ai-op-field input {
+  width: 100%; margin-top: 5px; padding: 7px 11px; box-sizing: border-box;
+  border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 9px;
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
+  font-family: inherit; font-size: 13px;
+}
+.ai-op-field input:focus { outline: none; border-color: var(--oc-accent, #2563eb); }
+
+/* 为什么点不了：贴在按钮正下方，用警示色，别让人去下面的说明里找。 */
+.ai-op-why {
+  margin-top: 6px; padding: 5px 9px; border-radius: 7px;
+  background: #fef3c7; color: #92400e; font-size: 11.5px; line-height: 1.6;
+}
+.ai-op-why[hidden] { display: none; }
+.ai-op-hint { margin-top: 6px; color: var(--oc-text-3, #9ca3af); font-size: 11px; line-height: 1.6; }
+
+.ai-op-cost {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 2px;
+  color: var(--oc-text-2, #4b5563); font-size: 12.5px;
+}
+.ai-op-cost span { display: inline-flex; align-items: baseline; gap: 5px; }
+.ai-op-cost i { color: var(--oc-text-3, #9ca3af); font-size: 11.5px; font-style: normal; }
+.ai-op-cost .total { font-weight: 650; color: var(--oc-text-1, #111827); }
+
+.ai-ops { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.ai-op-btn {
+  flex: 1 1 auto; padding: 9px 14px; border: .5px solid var(--oc-border-3, #e2e5ea);
+  border-radius: 9px; background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
+  font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.ai-op-btn:hover:not(:disabled) { background: var(--oc-bg-3, #f3f4f6); }
+.ai-op-btn.primary { border-color: transparent; background: var(--oc-accent, #2563eb); color: #fff; font-weight: 600; }
+.ai-op-btn:disabled { opacity: .5; cursor: not-allowed; }
+.ai-op-done { color: #15803d; font-size: 11.5px; line-height: 1.75; }
+
+/* 增删行：加行按钮在卡片底部，删行按钮跟着行走，都不抢主操作的视觉 */
+.inline-card > .inline-action { margin-top: 10px; }
+.ai-row-del {
+  margin-top: 8px; padding: 4px 10px; border-color: #fecaca; color: #b91c1c;
+  background: transparent; font-size: 12px;
+}
+.ai-row-del:hover { background: #fef2f2; }
+.inline-cost-table .ai-row-del { margin-top: 0; white-space: nowrap; }
+
+/* 右侧「任务文件」里的需求正文：这不是文件行，是一段可能很长的文字，
+   给它一个框、允许换行、超高了自己滚，别把整条小窗撑长。 */
+.oc-file-text {
+  margin-top: 4px; padding: 8px 10px; max-height: 150px; overflow: auto;
+  border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 8px;
+  background: var(--oc-bg-2, #f9fafb); color: var(--oc-text-2, #4b5563);
+  font-size: 11.5px; line-height: 1.7; white-space: pre-wrap;
+}
+
+/* 智能补全填进来的建议：必须一眼看出"这是 AI 猜的，还没保存"。 */
+tr.ai-suggested td { background: #f5f3ff; }
+tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
+.ai-sug {
+  display: block; margin-top: 3px; color: #6d28d9; font-size: 10.5px; line-height: 1.5;
+}
+
+/* Agent 对话：工具调用一行一条，和正文区分开；流式中的气泡给个光标提示。 */
+.ai-tool {
+  display: flex; align-items: center; gap: 6px; margin: 4px 0;
+  color: var(--oc-text-3, #9ca3af); font-size: 11.5px;
+}
+.ai-tool-dot { color: var(--oc-accent, #2563eb); font-size: 9px; }
+.oc-atxt.oc-streaming::after {
+  content: '▍'; margin-left: 2px; color: var(--oc-text-3, #9ca3af);
+  animation: ai-blink 1s steps(2) infinite;
+}
+.oc-atxt.err { color: #b91c1c; }
+@keyframes ai-blink { 50% { opacity: 0; } }
+
+.ai-toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 9999;
+  padding: 10px 18px; border-radius: 10px; background: #111827; color: #fff;
+  font-size: 13px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+.ai-toast.error { background: #b91c1c; }
+
+/* 参数表的编辑态输入框：与 inline-cost-table 的编辑态保持一致的紧凑度。 */
+.inline-cost-table td input,
+.inline-cost-table td select { width: 100%; box-sizing: border-box; }

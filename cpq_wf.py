@@ -37,6 +37,19 @@ LAST_STEP = len(QUOTE_STEPS)
 
 TARGET_TYPES = ("role", "user", "public")
 
+# 任务类型。第 1 步匹配不到合适标品（cpq_match 最高分低于 70）时，销售经理不是把
+# 卡片交给下一步，而是请工艺经理去技术工艺**新建一个产品** —— 那是一条支线，
+# 报价卡片留在原步骤等新产品出来，所以它不能走 handoff 那套推进步骤的逻辑。
+TASK_KIND_HANDOFF = "handoff"
+TASK_KIND_TECH_NEW = "tech_new_product"
+TASK_KINDS = (TASK_KIND_HANDOFF, TASK_KIND_TECH_NEW)
+TASK_KIND_LABELS = {
+    TASK_KIND_HANDOFF: "转交工艺确认",
+    TASK_KIND_TECH_NEW: "新增工艺",
+}
+# 新增工艺固定发给工艺经理：这件事只有他能做，让销售再选一次角色只会选错。
+TECH_NEW_ROLE = "process_mgr"
+
 # 卡片总状态（awaiting_handoff = 本步已完成、下一步归别人，正等着推送任务流）
 STATUS_LABELS = {
     "draft": "草稿",
@@ -146,6 +159,14 @@ def _ddl_pg(schema: str) -> list:
                 is_read     boolean     NOT NULL DEFAULT false,
                 created_at  timestamptz NOT NULL DEFAULT now()
             )""",
+        # 任务类型与随任务带走的资料。老库已经建过 cpq_wf_task，CREATE TABLE IF NOT EXISTS
+        # 不会补列，所以这两条必须是显式的 ADD COLUMN IF NOT EXISTS（PG 9.6+ 支持，幂等）。
+        #   task_kind = handoff          转交下一步（原有行为，默认值保证老数据不变）
+        #             = tech_new_product 新增工艺：标品匹配不上，转技术工艺新建产品
+        #   payload   = 随任务带过去的需求正文/文档摘要/匹配结果（jsonb）
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS"
+        f" task_kind varchar(24) NOT NULL DEFAULT 'handoff'",
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS payload jsonb",
         f"CREATE INDEX IF NOT EXISTS idx_wf_task_card ON {schema}.cpq_wf_task(card_id)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_task_status ON {schema}.cpq_wf_task(status)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_cardstep_card ON {schema}.cpq_wf_card_step(card_id)",
@@ -620,10 +641,23 @@ def mark_read(user: dict, message_ids=None) -> int:
 
 
 def send_task(session_id: str, user: dict, target_type: str, target_role_code: str = "",
-              target_user_id: str = "", note: str = "") -> dict:
-    """把卡片作为任务发出：定向角色 / 定向个人 / 公共任务池。"""
+              target_user_id: str = "", note: str = "", task_kind: str = TASK_KIND_HANDOFF,
+              payload: dict = None) -> dict:
+    """把卡片作为任务发出：定向角色 / 定向个人 / 公共任务池。
+
+    task_kind=tech_new_product 时是「新增工艺」支线：固定发给工艺经理，卡片**不推进
+    步骤、不置待转交** —— 报价还停在第 1 步等新产品，把它标成已转交会让销售以为
+    这单已经交出去了。payload 是随任务带给工艺经理的需求正文与文档摘要。
+    """
     if not user:
         raise WfError("请先登录")
+    if task_kind not in TASK_KINDS:
+        raise WfError("任务类型无效")
+    # 新增工艺与转交一样支持三种派发方式，也能指定到人；TECH_NEW_ROLE 只是**没指定
+    # 目标时**的默认收件角色，不是限制。早先在这里强制成 role/process_mgr，界面上
+    # 就没法给这条支线选人了。
+    if task_kind == TASK_KIND_TECH_NEW and not target_type:
+        target_type, target_role_code = "role", TECH_NEW_ROLE
     if target_type not in TARGET_TYPES:
         raise WfError("派发方式无效")
     if target_type == "role" and target_role_code not in ROLES:
@@ -656,35 +690,47 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         else:
             whom = "发布为公共任务"
         step_name = dict((s[0], s[1]) for s in QUOTE_STEPS).get(from_step, "")
-        label = (f"{user.get('role_name')}·{user.get('display_name')} 转交 · "
-                 f"待办第 {from_step} 步「{step_name}」 · {whom}")
+        is_tech_new = task_kind == TASK_KIND_TECH_NEW
+        what = ("请到技术工艺新增产品" if is_tech_new
+                else f"待办第 {from_step} 步「{step_name}」")
+        label = (f"{user.get('role_name')}·{user.get('display_name')} "
+                 f"{'发起「新增工艺」' if is_tech_new else '转交'} · {what} · {whom}")
         tid = _new_id(conn)
         cpq_auth._exec(
             conn, "INSERT INTO cpq_wf_task (task_id, card_id, from_user_id, from_step_no,"
                   " target_type, target_role_code, target_user_id, status, source_label, note,"
-                  " created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,'open',%s,%s,%s)",
+                  " created_at, task_kind, payload)"
+                  " VALUES (%s,%s,%s,%s,%s,%s,%s,'open',%s,%s,%s,%s,%s::jsonb)",
             (tid, cid, int(user["user_id"]), from_step, target_type,
              target_role_code, target_user_id,
-             label, (note or "")[:500], _ts(_now())))
-        cpq_auth._exec(
-            conn, "UPDATE cpq_wf_card SET overall_status = 'handoff_pending', updated_at = %s"
-                  " WHERE card_id = %s", (_ts(_now()), cid))
-        _log(conn, cid, tid, int(user["user_id"]), "send", from_step, None, label)
+             label, (note or "")[:500], _ts(_now()), task_kind,
+             json.dumps(payload, ensure_ascii=False) if payload else None))
+        # 新增工艺是支线：报价还停在第 1 步等新产品，不能把卡片标成"已转交待领取"，
+        # 否则销售在「我的报价」里会以为这单已经交出去、不用管了。
+        if not is_tech_new:
+            cpq_auth._exec(
+                conn, "UPDATE cpq_wf_card SET overall_status = 'handoff_pending', updated_at = %s"
+                      " WHERE card_id = %s", (_ts(_now()), cid))
+        _log(conn, cid, tid, int(user["user_id"]),
+             "tech_new" if is_tech_new else "send", from_step, None, label)
 
         # 消息系统：自己留一条「我发出的任务」，相关人各收一条「收到新任务」
         title = card.get("title") or "未命名报价"
         note_txt = ("；备注：" + note.strip()) if (note or "").strip() else ""
-        _msg(conn, int(user["user_id"]), "task_sent", f"你已转交「{title}」",
-             f"{whom}，待办第 {from_step} 步「{step_name}」{note_txt}",
-             cid, tid, session_id, from_step)
+        _msg(conn, int(user["user_id"]),
+             "task_sent", f"你已{'发起新增工艺' if is_tech_new else '转交'}「{title}」",
+             f"{whom}，{what}{note_txt}", cid, tid, session_id, from_step)
         for rid in _recipients(conn, target_type, target_role_code,
                                target_user_id, int(user["user_id"])):
             _msg(conn, rid, "task_received", f"收到新任务：「{title}」",
-                 f"{user.get('role_name')}·{user.get('display_name')} 转交，"
-                 f"待办第 {from_step} 步「{step_name}」{note_txt}",
+                 f"{user.get('role_name')}·{user.get('display_name')} "
+                 + ("发起「新增工艺」：标品匹配不足，请到技术工艺新建产品"
+                    if is_tech_new else f"转交，待办第 {from_step} 步「{step_name}」")
+                 + note_txt,
                  cid, tid, session_id, from_step)
         _commit(conn)
-        return {"task_id": str(tid), "source_label": label}
+        return {"task_id": str(tid), "source_label": label,
+                "task_kind": task_kind, "task_no": task_no(tid)}
     finally:
         conn.close()
 
@@ -693,11 +739,22 @@ _TASK_SELECT = (
     "t.task_id, t.card_id, t.from_user_id, t.from_step_no, t.target_type, t.target_role_code,"
     " t.target_user_id, t.claimed_by_user_id, t.status, t.source_label, t.note, t.created_at,"
     " t.claimed_at, c.session_id, c.title, c.customer, c.current_step, c.overall_status,"
-    " fu.display_name, fu.role_code")
+    " fu.display_name, fu.role_code, t.task_kind, t.payload")
 _TASK_KEYS = ("task_id", "card_id", "from_user_id", "from_step_no", "target_type",
               "target_role_code", "target_user_id", "claimed_by_user_id", "status",
               "source_label", "note", "created_at", "claimed_at", "session_id", "title",
-              "customer", "current_step", "overall_status", "from_display_name", "from_role_code")
+              "customer", "current_step", "overall_status", "from_display_name", "from_role_code",
+              "task_kind", "payload")
+
+
+def task_no(task_id) -> str:
+    """展示用任务编码。技术工艺那边要显示它，得是个人能念、能搜的短码。
+
+    取雪花 ID 的后 8 位：全局唯一性由 task_id 本身保证，这里只是个门面；
+    真正用于查询的仍然是 task_id（同时回给前端）。
+    """
+    digits = "".join(ch for ch in str(task_id or "") if ch.isdigit())
+    return f"TP-{digits[-8:]}" if digits else ""
 
 
 def _task_row(row) -> dict:
@@ -707,13 +764,60 @@ def _task_row(row) -> dict:
     for k in ("created_at", "claimed_at"):
         d[k] = _iso(d[k])
     d["from_role_name"] = ROLES.get(d.get("from_role_code"), d.get("from_role_code"))
+    d["task_kind"] = d.get("task_kind") or TASK_KIND_HANDOFF
+    d["task_kind_label"] = TASK_KIND_LABELS.get(d["task_kind"], d["task_kind"])
+    d["task_no"] = task_no(d.get("task_id"))
+    # payload 是 jsonb，psycopg 已经解成 dict；老数据是 NULL。
+    if not isinstance(d.get("payload"), dict):
+        d["payload"] = {}
     # from_step_no = 转交时卡片所处的步骤，也就是接手人要做的那一步（不要再 +1）
     nxt = min(max(int(d.get("from_step_no") or 1), 1), LAST_STEP)
     d["next_step_no"] = nxt
     d["next_step_name"] = dict((s[0], s[1]) for s in QUOTE_STEPS).get(nxt, "")
     d["next_role_code"] = role_of_step(nxt)
     d["next_role_name"] = ROLES.get(d["next_role_code"], d["next_role_code"])
+    if d["task_kind"] == TASK_KIND_TECH_NEW:
+        # 新增工艺不是"做第 N 步"，而是去技术工艺建新产品；沿用 next_step_* 会让
+        # 待办卡片显示成"第 1 步 确认需求配置"，接手人以为是要他去改报价。
+        d["next_step_name"] = "技术工艺 · 新增产品"
+        d["next_role_code"] = TECH_NEW_ROLE
+        d["next_role_name"] = ROLES.get(TECH_NEW_ROLE, TECH_NEW_ROLE)
     return d
+
+
+def task_detail(task_id: str, user: dict) -> dict:
+    """按任务号取一条任务（含 payload）。技术工艺凭任务编码拉需求时用。"""
+    if not user:
+        raise WfError("请先登录")
+    try:
+        tid = int(str(task_id).strip())
+    except (TypeError, ValueError):
+        raise WfError("任务编号无效")
+    conn = cpq_auth._connect()
+    try:
+        cur = cpq_auth._exec(
+            conn,
+            f"SELECT {_TASK_SELECT} FROM cpq_wf_task t"
+            " JOIN cpq_wf_card c ON c.card_id = t.card_id"
+            " LEFT JOIN cpq_wf_user fu ON fu.user_id = t.from_user_id"
+            " WHERE t.task_id = %s", (tid,))
+        row = cur.fetchone()
+        if not row:
+            raise WfError("任务不存在")
+        task = _task_row(row)
+        uid = int(user["user_id"])
+        role = user.get("role_code") or ""
+        # 可见性与 inbox 一致，外加发起人自己（他要能回看自己发出去的任务）
+        visible = (task["target_type"] == "public"
+                   or (task["target_type"] == "role" and task["target_role_code"] == role)
+                   or (task["target_type"] == "user" and str(task["target_user_id"] or "") == str(uid))
+                   or str(task["claimed_by_user_id"] or "") == str(uid)
+                   or str(task["from_user_id"] or "") == str(uid))
+        if not visible:
+            raise WfError("你没有查看该任务的权限")
+        return task
+    finally:
+        conn.close()
 
 
 def inbox(user: dict) -> list:
@@ -750,11 +854,13 @@ def claim_task(task_id: str, user: dict) -> dict:
     try:
         cur = cpq_auth._exec(
             conn, "SELECT card_id, status, target_type, target_role_code, target_user_id,"
-                  " from_step_no, from_user_id FROM cpq_wf_task WHERE task_id = %s", (int(task_id),))
+                  " from_step_no, from_user_id, task_kind FROM cpq_wf_task WHERE task_id = %s",
+            (int(task_id),))
         row = cur.fetchone()
         if not row:
             raise WfError("任务不存在")
-        cid, status, ttype, trole, tuser, from_step, from_uid = row
+        cid, status, ttype, trole, tuser, from_step, from_uid, kind = row
+        kind = kind or TASK_KIND_HANDOFF
         if status == "claimed":
             raise WfError("该任务已被他人领取")
         if status != "open":
@@ -769,11 +875,15 @@ def claim_task(task_id: str, user: dict) -> dict:
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_task SET status = 'claimed', claimed_by_user_id = %s,"
                   " claimed_at = %s WHERE task_id = %s", (uid, _ts(now), int(task_id)))
-        cpq_auth._exec(
-            conn, "UPDATE cpq_wf_card SET current_owner = %s, overall_status = 'in_progress',"
-                  " updated_at = %s WHERE card_id = %s", (uid, _ts(now), cid))
+        # 新增工艺是支线：领取它不代表接管这张报价卡片，卡片仍归销售经理。
+        # 改了持有人的话，销售在「我的报价」里会发现自己的单子姓了别人的名字。
+        if kind != TASK_KIND_TECH_NEW:
+            cpq_auth._exec(
+                conn, "UPDATE cpq_wf_card SET current_owner = %s, overall_status = 'in_progress',"
+                      " updated_at = %s WHERE card_id = %s", (uid, _ts(now), cid))
         _log(conn, cid, int(task_id), uid, "claim", from_step, None,
-             f"{user.get('display_name')} 领取任务")
+             f"{user.get('display_name')} 领取"
+             + ("「新增工艺」任务" if kind == TASK_KIND_TECH_NEW else "任务"))
         cur = cpq_auth._exec(conn, "SELECT session_id, title FROM cpq_wf_card WHERE card_id = %s", (cid,))
         r = cur.fetchone()
         sid, ctitle = (r[0], r[1]) if r else ("", "")
@@ -783,7 +893,9 @@ def claim_task(task_id: str, user: dict) -> dict:
                  f"{user.get('role_name')}·{user.get('display_name')} 领取了你转交的任务，"
                  f"正在处理第 {from_step} 步", cid, int(task_id), sid, from_step)
         _commit(conn)
-        return {"session_id": sid}
+        # task_kind 决定前端跳哪儿：handoff 进报价工作台，
+        # tech_new_product 进技术工艺的任务专属页（/tech-task.html?tech_task=…）。
+        return {"session_id": sid, "task_kind": kind, "task_no": task_no(task_id)}
     finally:
         conn.close()
 

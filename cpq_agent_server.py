@@ -9,7 +9,8 @@
     引导用户一步步完成报价（确认需求配置 → 工艺确认 → 定价-利润加成 →
     报价-其他加价项 → 报价方案 → 输出报价单）。
   - 数据口径：各步骤字段口径与基础/规则数据来自远程 Postgres（三助手共用），Agent 以
-    亿纬锂能DA梳理.xlsx 的库 schema（本体语义层）为上下文，通过只读 sql_query 工具生成 SQL 取数。
+    DA 本体（亿纬锂能DA梳理.md，由同名 xlsx 生成，见 cpq_ontology.py）的库 schema
+    为上下文，通过只读 sql_query 工具生成 SQL 取数。
   - 工作台驱动：注入一个自定义 cpq_ui 工具（set_step / render_form / render_table /
     render_document），Agent 调用它来切换步骤、在页面右侧渲染可编辑表单和表格；
     本服务拦截该工具的执行，把入参作为 `ui` 事件透传给前端（SSE）。
@@ -37,15 +38,18 @@ import traceback
 import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "open-claude"))
 
 # 报价知识库 = 远程 Postgres（三助手共用），Agent 用 sql_query 只读查询。
-# Agent 可见的库 schema（本体语义层）来自 亿纬锂能DA梳理.xlsx「报价助手」sheet（不反射数据库）。
+# Agent 可见的库 schema（本体语义层）来自 DA 本体「报价助手」一节（不反射数据库）。
+# 载体是 亿纬锂能DA梳理.md —— 由 cpq_ontology.py 从 xlsx 生成，模型与服务端读的是同一份。
 import cpq_db
 import cpq_match
+import cpq_ontology
 import cpq_msgutil
 import cpq_llm
 
@@ -99,7 +103,7 @@ CPQ_UI_SCHEMA = {
         "驱动报价工作台（页面右侧面板）。用于切换流程步骤、渲染/更新固定表单和表格、"
         "渲染最终报价单文档。任何展示给用户确认/修改的结构化数据都必须通过本工具渲染，"
         "不要在聊天里贴大表格。同一 section_id 重复渲染即为更新。"
-        "【重要】表单/表格是**固定模板**：字段集与列由系统按 亿纬锂能DA梳理.xlsx「报价助手」页"
+        "【重要】表单/表格是**固定模板**：字段集与列由系统按 DA 本体「报价助手」页"
         "（逻辑实体↔属性名称）写死，你**不能增删字段/列**。render_form 的 values 键 / render_table 的 rows 列名"
         "**必须用该页的“属性名称”中文（如 客户等级/项目名称/贸易术语），不要用数据库列 code（如 customer_level）**。"
         "你传的 fields/columns 会被忽略。请只使用系统提示词里列出的固定 section_id。"
@@ -119,7 +123,7 @@ CPQ_UI_SCHEMA = {
             "title": {"type": "string", "description": "分区标题（中文）"},
             "values": {
                 "type": "object",
-                "description": "render_form（固定分区）填值用：键=属性名称中文（与 亿纬锂能DA梳理.xlsx「报价助手」页一致，如 客户等级，不是 customer_level），值=该字段取值。系统用固定字段集渲染，只取这里的值。缺失字段留空。",
+                "description": "render_form（固定分区）填值用：键=属性名称中文（与 DA 本体「报价助手」页一致，如 客户等级，不是 customer_level），值=该字段取值。系统用固定字段集渲染，只取这里的值。缺失字段留空。",
             },
             "fields": {
                 "type": "array",
@@ -167,12 +171,12 @@ CPQ_UI_SCHEMA = {
 }
 
 # ---------------------------------------------------------------------------
-# 固定表单目录：字段集来自 亿纬锂能DA梳理.xlsx「报价助手」页（逻辑实体 ↔ 属性名称），Agent 不能改字段，
+# 固定表单目录：字段集来自 DA 本体「报价助手」页（逻辑实体 ↔ 属性名称），Agent 不能改字段，
 # 只能填值。这样每次跑出来的每个分区都是同一套固定表单，而不是模型临时“动态生成”。
 # ---------------------------------------------------------------------------
 
 # BI 支撑的分区：section_id -> (kind, 标题, (业务对象, 逻辑实体名称), 可编辑)。
-# 字段全部来自 亿纬锂能DA梳理.xlsx「报价助手」sheet，**全量列（已排除 id/主键/外键）**。
+# 字段全部来自 DA 本体「报价助手」sheet，**全量列（已排除 id/主键/外键）**。
 # 各步骤所需表单严格按需求给定：
 _BI_SECTIONS = {
     # —— 第 1 步 确认需求配置（展示顺序=此定义顺序；目的地/物流是**列表**不是表单）——
@@ -235,7 +239,7 @@ def _ppv_fields() -> list:
 
 
 def _bi_fields(business_object: str, logic_entity: str) -> list:
-    """从 亿纬锂能DA梳理.xlsx「报价助手」sheet 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
+    """从 DA 本体「报价助手」sheet 取某逻辑实体的固定字段（按录入顺序）；查不到用兜底。"""
     rows = cpq_db.bi_fields(business_object, logic_entity)
     hidden = _HIDDEN_FIELDS.get((business_object, logic_entity))
     if hidden:
@@ -564,15 +568,23 @@ def _handle_cpq_ui(tool_input: dict) -> str:
 _ORIG_EXECUTE_TOOL = oc_repl.execute_tool
 
 
-_EXCEL_EXTS = (".xlsx", ".xlsm", ".xls", ".xlsb")
+# 唯一允许 Read 的东西：本体信息（业务对象 / 逻辑实体 / 属性）。
+# 它以前是 xlsx —— 每次都要把一个二进制表格塞进上下文，读得慢、读不全，合并单元格
+# 还常常串行。现在是 cpq_ontology.py 从 xlsx 生成的 Markdown，纯文本、有表头、按实体
+# 分节；服务端渲染固定表单也读同一份（cpq_db._load_ontology），两边不会各说各话。
+_ONTOLOGY_MD_NAME = cpq_ontology.MD_PATH.name
 _FILE_DENY_MSG = (
-    "已拒绝：本 Agent 禁止读取本地文件，仅允许读取 Excel（.xlsx/.xlsm/.xls/.xlsb）。"
-    "业务数据请用 sql_query 从数据库查询，不要读本地文件。"
+    f"已拒绝：本 Agent 禁止读取本地文件。只有本体信息可以读（{_ONTOLOGY_MD_NAME}）。"
+    "业务数据请用 sql_query 从数据库查询，不要读本地文件；"
+    "本体的 xlsx 原件已不再直接读取，请改读同名的 .md。"
 )
 
 
-def _is_excel_path(p) -> bool:
-    return isinstance(p, str) and p.strip().lower().endswith(_EXCEL_EXTS)
+def _is_ontology_path(p) -> bool:
+    """是不是那份本体 Markdown。按文件名匹配 —— 相对路径、绝对路径都认。"""
+    if not isinstance(p, str):
+        return False
+    return Path(p.strip().replace("\\", "/")).name.lower() == _ONTOLOGY_MD_NAME.lower()
 
 
 def _patched_execute_tool(tool_name, tool_input, cwd):
@@ -585,8 +597,10 @@ def _patched_execute_tool(tool_name, tool_input, cwd):
     # 本地文件读取限制：只允许 Read 读取 Excel；其余读文件/检索/列举工具一律拒绝（双保险，
     # 即使 DISABLED_TOOLS 之外的路径也挡住）。
     if tool_name == "Read":
-        if not _is_excel_path((tool_input or {}).get("file_path")):
+        if not _is_ontology_path((tool_input or {}).get("file_path")):
             return _FILE_DENY_MSG
+        # 路径钉死在本目录：文件名对上就行，不接受调用方给的目录。
+        tool_input = dict(tool_input or {}, file_path=str(cpq_ontology.MD_PATH))
     elif tool_name in ("Grep", "Glob", "NotebookRead", "NotebookEdit"):
         return _FILE_DENY_MSG
     return _ORIG_EXECUTE_TOOL(tool_name, tool_input, cwd)
@@ -1237,13 +1251,20 @@ def _handle_markup_fill(data: dict, emit=None) -> dict:
         if code and code in codes:
             v = _num(r.get(col))
             prod_add[code] = _fmt_num(v) if v is not None else "0"
+    matched = len(prod_add)
     for c in codes:                       # 模型漏给的产品补 0，避免空列
         prod_add.setdefault(c, "0")
+    # 加价是**按成品编码**落到产品行上的：没有编码的产品行永远拿不到加价值，
+    # 最终价格 = 基础成本，既没有利润也没有加价 —— 而且这事以前是静默发生的，
+    # 界面上照样显示"已完成"。把两个数量回给前端，让它据实提示。
+    no_code = sum(1 for p in products if not str(p.get("成品编码", "")).strip())
 
     _trace(f"③ 完成：命中 {len(markup)} 条规则，{len(prod_add)} 个产品的{col}；"
            f"总耗时 {time.perf_counter() - t0:.2f}s")
     return {"ok": True, "step": step, "column": col, "markup": markup,
             "product_markup": prod_add, "rule_count": len(rules),
+            "matched_products": matched, "no_code_products": no_code,
+            "product_count": len(products),
             "source": {"db": cpq_db.DB_LABEL, "table": "md_clm_material_price_rule",
                        "sql": sql, "rows": len(rules)}}
 
@@ -1347,7 +1368,7 @@ def _handle_sql_query(tool_input: dict) -> str:
 
 # ---------------------------------------------------------------------------
 # 导入数据库：把工作台各分区数据写入远程 Postgres 的 DA 目标表（第 6 步「导入数据库」按钮）。
-#  - 中文属性名 → 列 code 由 亿纬锂能DA梳理.xlsx「报价助手」本体映射（含隐藏字段——有值就存）；
+#  - 中文属性名 → 列 code 由 DA 本体「报价助手」本体映射（含隐藏字段——有值就存）；
 #  - **主键(id)由雪花算法生成**（cpq_db.snow_next_id）；**外键按 ER 关系引用父表已生成的主键**；
 #    这些 id 只存后台、前台不展示，但写库时按下方 ER 关系装配好。
 #  - 逐分区独立提交并回报成败，前端把每个分区的导入状况显示在左侧 Agent 聊天里。
@@ -1585,7 +1606,7 @@ SYSTEM_PROMPT = """\
 
 # 业务流程
 
-每步的分区/字段/列**全部来自 亿纬锂能DA梳理.xlsx「报价助手」页**（业务对象→逻辑实体→属性名称，
+每步的分区/字段/列**全部来自 DA 本体「报价助手」页**（业务对象→逻辑实体→属性名称，
 已排除所有 id/主键/外键字段）。**render 的键/列名必须用该页的“属性名称”中文**
 （例如 s1_basic 用「客户等级」「项目名称」「贸易术语」这类中文名，**不要用数据库列 code**
 如 customer_level/project_name——那是查库写 SQL 用的，不是 render 的键）。字段名不确定时，
@@ -1657,7 +1678,7 @@ SYSTEM_PROMPT = """\
 
 # 固定表单：结构已预渲染，但你必须主动"填值"（务必遵守）
 
-- 右侧每个分区的**字段/列已经写死并预渲染成空骨架**（结构由系统按 亿纬锂能DA梳理.xlsx「报价助手」本体固定），
+- 右侧每个分区的**字段/列已经写死并预渲染成空骨架**（结构由系统按 DA 本体「报价助手」本体固定），
   你**不需要也不能自己定义字段/列**——但这**不代表**右侧已经有数据了。
 - **填值 = 你必须主动调用 cpq_ui 的 render_form / render_table**；这就是唯一的写入方式：
   · render_form：`values` = {业务属性名称: 取值}（键与固定字段名一致）；
@@ -1674,13 +1695,16 @@ SYSTEM_PROMPT = """\
 
 # 数据来源（两端，每步都要说清依据）
 
-**⚠️ 禁止读取本地文件**：不允许用 Read/Grep/Glob 等去读本地磁盘上的任何文件（json/sqlite/py/csv/txt… 一律不行），
-唯一例外是 Excel（.xlsx/.xls）。业务数据只能走 sql_query 查数据库；需求内容以用户上传/描述的为准。
+**⚠️ 禁止读取本地文件**：不允许用 Read/Grep/Glob 等去读本地磁盘上的任何文件（json/sqlite/py/csv/txt/xlsx… 一律不行）。
+唯一例外是**本体信息**——业务对象 / 逻辑实体 / 属性的定义，用 Read 读 `亿纬锂能DA梳理.md`
+（Markdown：一节一个助手，`### 表名` 起一个逻辑实体，下面一张属性表）。
+业务数据只能走 sql_query 查数据库；需求内容以用户上传/描述的为准。
+提到它时就说「本体信息」，不要说成"读文件"或报文件名 —— 对用户而言那是一份语义定义，不是磁盘上的东西。
 
 1. **需求文档端**：用户上传/描述的需求（客户、项目、产品型号、数量、目的地、交期、付款、
    质量专控、碳足迹、非标、贸易术语等具体值）——这是本单的“个性”，填进各分区 values/rows。
 2. **数据库端（远程 Postgres）**（用 sql_query 只读 SELECT，**以系统提示词末尾的完整 schema 为准生成 SQL**，不臆造、不读 json）：
-   - 各分区的**固定字段名**（values 的键）已由 亿纬锂能DA梳理.xlsx「报价助手」本体写死并预渲染，无需查库；sql_query 只用于取**数据取值**。
+   - 各分区的**固定字段名**（values 的键）已由 DA 本体「报价助手」本体写死并预渲染，无需查库；sql_query 只用于取**数据取值**。
    - `product_para_value` —— **产品参数值表**（配置助手页）：第 1 步产品匹配用（完整列清单/筛选方式见「业务流程」第 1 步②）。
    - `md_clm_material_cost_cnf` —— **物料成本表**：第 1 步取产品价格（取法见「业务流程」
      对应步骤；注意 is_deleted = false 与生效/失效日期）。

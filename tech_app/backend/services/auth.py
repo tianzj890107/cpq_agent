@@ -26,24 +26,62 @@ from ..config import (
 )
 from ..time_utils import now_cst_str
 
-ROLES = ("viewer", "engineer", "process_manager", "reviewer", "process_director", "admin")
+ROLES = (
+    "viewer", "engineer", "sales_manager", "process_manager", "reviewer", "process_director",
+    "sales_director", "finance_manager", "general_manager", "admin",
+)
 ROLE_LABEL = {
     "viewer": "只读用户",
     "engineer": "工艺工程师",
+    "sales_manager": "销售经理",
     "process_manager": "工艺技术经理",
     "reviewer": "校核人员（历史角色）",
     "process_director": "工艺技术总监",
+    "sales_director": "销售总监",
+    "finance_manager": "财务负责人",
+    "general_manager": "总经理/董事长",
     "admin": "系统管理员",
 }
 
 WRITE_ROLES = {"engineer", "process_manager", "admin"}  # 建模/改参/生成
 MANAGER_ROLES = {"process_manager", "admin"}               # 需求与评估报告主责
+SALES_MANAGER_ROLES = {"sales_manager"}                      # 客户信用等销售主数据录入
 REVIEW_ROLES = {"reviewer", "process_director", "admin"}  # 通用校核
 DIRECTOR_ROLES = {"process_director", "admin"}              # 需求/评估报告终审
+FINANCE_ROLES = {"finance_manager", "admin"}
+QUOTE_APPROVAL_ROLES = {"sales_director", "finance_manager", "general_manager", "admin"}
+QUOTE_NODE_BY_ROLE = {
+    "sales_director": "销售总监",
+    "finance_manager": "财务负责人",
+    "general_manager": "总经理/董事长",
+}
 ADMIN_ROLES = {"admin"}
+# 全局模型设置（选模型、调温度/长度/思考开关）。这是日常运维，不是系统管理：
+# 图纸解析该用哪个多模态模型、报告生成用哪个文本模型，判断的人就是工艺经理。
+# 原来它和「改 API Key」共用 admin 一道门，CPQ 单点登录下（只有销售经理/工艺经理，
+# 压根没有 admin）就变成了谁也改不了。API Key 仍然只给 ADMIN_ROLES，见 llm_settings.update。
+LLM_SETTINGS_ROLES = {"admin", "process_manager"}
 
 # 鉴权关闭时使用的隐式用户(保持旧行为)
 SYSTEM_USER = {"username": "system", "role": "admin", "display_name": "系统"}
+
+
+def enable_cpq_single_manager() -> None:
+    """【CPQ 定制】把技术工艺的全部环节授予工艺经理。
+
+    CPQ 的登录系统只有两个角色：销售经理、工艺经理（cpq_auth.ROLES）。技术工艺这边
+    3.2 审核报告要 REVIEW_ROLES、3.3 发布报告要 DIRECTOR_ROLES，都指向 process_director
+    ——而 CPQ 里根本没有这个角色。不做这步，登录进来的工艺经理能汇总却发布不了，
+    报告卡死在 3.2。
+
+    **代价要说清楚**：这样一来 3.1 汇总 → 3.2 审核 → 3.3 发布 会由同一个人完成，
+    原设计里的三级职责分离在 CPQ 模式下不成立。要恢复分离，得先在 CPQ 侧加出
+    "工艺技术总监"角色，再把它加进 cpq_sso.ROLE_MAP，并关掉 CPQ_MANAGER_FULL_TECH。
+
+    只加不减：admin 等既有角色的权限一个不动。
+    """
+    for group in (WRITE_ROLES, MANAGER_ROLES, REVIEW_ROLES, DIRECTOR_ROLES):
+        group.add("process_manager")
 
 
 # --------------------------------------------------------------------------- #

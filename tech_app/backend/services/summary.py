@@ -23,7 +23,7 @@ SECTIONS: List[dict] = [
         "fields": [("body.selected", "选定主体材料"), ("body.rationale", "选材理由"),
                    ("metallization.rationale", "金属化方案"), ("supply.conclusion", "供应商结论")],
         "tables": [
-            ("陶瓷主体材料候选", "body.candidates",
+            ("主体材料候选", "body.candidates",
              [("material", "材料"), ("thermal_conductivity", "热导率"), ("cte", "CTE"),
               ("cost_level", "成本"), ("recommended", "推荐")]),
             ("电极浆料", "metallization.paste",
@@ -74,6 +74,30 @@ SECTIONS: List[dict] = [
         ],
     },
     {
+        # CPQ 2.2。整机参数/连接/BOM 与组装工艺都要进 3.1 的汇总报告 —— 不然
+        # 报告里只有一堆零件，看不出装出来的是什么、装配环节花了多少。
+        "key": "integration", "title": "组装与整合",
+        "fields": [("params.assembly_name", "整机/总成"), ("params.product_family", "产品族"),
+                   ("params.summary", "整合思路"),
+                   ("process.summary", "组装工艺思路"), ("cost.summary", "整机成本构成")],
+        "tables": [
+            # param_code 是报价成品参数字典（亿纬锂能DA梳理 · clm_calc_product_tech）的字段编码。
+            # 报告里带上它，报价那边才知道这一行该落到哪个字段。
+            ("整机参数（报价成品参数）", "params.params",
+             [("param_code", "字段编码"), ("name", "参数"), ("value", "值"), ("unit", "单位"),
+              ("basis", "依据"), ("source", "来源")]),
+            ("零件间连接", "params.interfaces",
+             [("name", "接口"), ("method", "方式"), ("spec", "规格"), ("control", "控制要点")]),
+            ("整机BOM(单台用量)", "params.part_refs",
+             [("part_id", "零件编号"), ("name", "名称"), ("quantity", "用量"), ("role", "作用")]),
+            ("组装工艺", "process.steps",
+             [("step_no", "#"), ("name", "工序"), ("equipment", "设备"), ("duration_min", "工时(分)")]),
+            ("整机成本明细", "cost.items",
+             [("category", "类别"), ("name", "分项"), ("basis", "计算依据"),
+              ("quantity", "数量"), ("unit_price", "单价"), ("amount", "金额")]),
+        ],
+    },
+    {
         "key": "production", "title": "产线匹配与产能评估",
         "fields": [("capacity_summary", "产能评估"), ("conclusion", "结论")],
         "tables": [
@@ -93,6 +117,7 @@ _LOADERS = {
     "manufacturing": store.load_manufacturing,
     "cleaning": store.load_cleaning,
     "assembly": store.load_assembly,
+    "integration": store.load_integration,
     "production": store.load_production,
 }
 
