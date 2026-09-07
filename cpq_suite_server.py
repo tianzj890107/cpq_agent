@@ -413,12 +413,28 @@ class Handler(BaseHTTPRequestHandler):
                     user, d.get("product_name", ""), d.get("unit_price"),
                     d.get("breakdown") or {}, d.get("spec", ""))
                 self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/tech/finance" and m == "POST":
+                d = self._read_json()
+                out = cpq_tech_bridge.send_to_finance(
+                    user, d.get("session_id", ""), d.get("title", ""),
+                    d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
+                    d.get("payload") or {}, d.get("target_type", ""),
+                    d.get("target_role_code", ""), d.get("target_user_id", ""))
+                self._send_json(200, {"ok": True, **out})
+            elif path == "/wf/tech/return-process" and m == "POST":
+                d = self._read_json()
+                out = cpq_tech_bridge.return_to_process(
+                    user, d.get("session_id", ""), d.get("title", ""),
+                    d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
+                    d.get("payload") or {}, d.get("target_user_id", ""))
+                self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/handoff" and m == "POST":
                 d = self._read_json()
                 out = cpq_tech_bridge.send_to_quote(
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
-                    d.get("source_task_id", ""), d.get("result") or {})
+                    d.get("source_task_id", ""), d.get("result") or {},
+                    d.get("source_session_id", ""))
                 self._send_json(200, {"ok": True, **out})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})

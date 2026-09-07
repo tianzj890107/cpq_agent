@@ -1,0 +1,71 @@
+/* 【CPQ 定制】左栏底部三格「消息 / 设置 / 登录」的统一样式。
+ *
+ * 四个 CPQ 页面（报价首页、确认需求解析结果、配置助手、规则助手）各自带一份内联
+ * 样式表，这三格的结构本来就一致：消息 → 设置 → 分隔线 → 登录，40px 格子、tabler
+ * 图标、未读红点由 cpq_msg.js 自己贴。唯一与技术工艺不同的是**悬浮提示条**：
+ * 那边是白卡片（描边 + 投影），CPQ 原来是深色气泡。
+ *
+ * 这里只改这三格，不动同一条栏上方的首页/搜索/历史 —— 那是明确要求的范围。
+ * 抽成共享文件而不是往四份内联样式里各贴一遍：贴四遍必然漂移，而这三格恰恰是
+ * 「哪个页面都长一样」才有意义的东西（cpq_msg.js / cpq_auth.js 也是这么共享的）。
+ *
+ * 用法：给这三格加 class="nav-icon cpq-nav-bottom"，页面里 <link> 本文件。
+ */
+
+/* 白卡片提示条：与 tech_app/frontend/home-layout.css 里 .cpq-nav-icon>.nav-tooltip 同参数。
+   选择器多一层 .nav-icon 提高特异性，压过页面内联样式里那条深色气泡规则。 */
+.nav-icon.cpq-nav-bottom > .nav-tooltip {
+  position: absolute;
+  z-index: 150;
+  left: calc(100% + 10px);
+  top: 50%;
+  margin-left: 0;
+  padding: 7px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .12);
+  font: 500 12px/1.2 Inter, "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-50%);
+  transition: opacity .15s;
+  pointer-events: none;
+}
+
+.nav-icon.cpq-nav-bottom:hover > .nav-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 图标与未读红点：与技术工艺钉成同一组数值。这两条本来就一致，写出来是为了
+   将来某个页面改了自己的 .nav-icon i 字号时，这三格不会跟着走样。 */
+.nav-icon.cpq-nav-bottom > .ti {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.nav-icon.cpq-nav-bottom > .cpq-msg-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* 已登录时 cpq_auth.js 会给按钮加 .active —— 与技术工艺同一组蓝。 */
+.nav-icon.cpq-nav-bottom.active {
+  background: #eff6ff;
+  color: #3b82f6;
+}

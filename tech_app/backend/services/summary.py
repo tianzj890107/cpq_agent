@@ -118,6 +118,8 @@ _LOADERS = {
     "cleaning": store.load_cleaning,
     "assembly": store.load_assembly,
     "integration": store.load_integration,
+    # 2.3 成本测算（财务经理）的评审状态。流程栏据它判断这一步做没做完。
+    "cost_review": store.load_cost_review,
     "production": store.load_production,
 }
 

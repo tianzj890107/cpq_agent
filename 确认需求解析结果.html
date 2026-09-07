@@ -609,6 +609,7 @@
     }
     .modal-footer .btn { min-width: 92px; }
   </style>
+  <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
 <body>
   <div class="main-container">
@@ -635,11 +636,11 @@
       </div>
       <div style="flex:1"></div>
       <!-- 消息（任务流提醒）：位于设置与账号之上 -->
-      <div class="nav-icon" id="cpqMsgBtn" onclick="cpqMsg.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqMsgBtn" onclick="cpqMsg.open()">
         <i class="ti ti-bell"></i>
         <span class="nav-tooltip">消息</span>
       </div>
-      <div class="nav-icon" onclick="openSettings()">
+      <div class="nav-icon cpq-nav-bottom" onclick="openSettings()">
         <i class="ti ti-settings"></i>
         <span class="nav-tooltip">设置</span>
       </div>
@@ -647,7 +648,7 @@
       <div class="nav-divider"></div>
 
       <!-- 登录 / 账号信息（未登录=登录入口，已登录=账号信息+退出） -->
-      <div class="nav-icon" id="cpqAuthBtn" onclick="cpqAuth.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqAuthBtn" onclick="cpqAuth.open()">
         <i class="ti ti-login"></i>
         <span class="nav-tooltip">登录</span>
       </div>
@@ -991,6 +992,29 @@
       scrollChat();
       return div;
     }
+    /* 进度轨迹：一条原地更新的行，专门显示"模型正在做什么、等了多久"。
+       和 addToolActivity 的区别是它**只有一条**、随时被后面的 stage 覆盖，
+       不会把等待过程刷成十几行；本轮结束时由 clearStage 收掉。 */
+    let stageEl = null;
+    function showStage(text) {
+      if (!stageEl) {
+        finishStreamBubble();
+        stageEl = document.createElement("div");
+        stageEl.className = "tool-activity trace";
+        const i = document.createElement("i");
+        i.className = "ti ti-loader-2";
+        const sp = document.createElement("span");
+        stageEl.appendChild(i);
+        stageEl.appendChild(sp);
+        chatEl.appendChild(stageEl);
+      }
+      stageEl.querySelector("span").textContent = text;
+      scrollChat();
+    }
+    function clearStage() {
+      if (stageEl) { stageEl.remove(); stageEl = null; }
+    }
+
     // 一次性追加一条已完成的 AI 气泡（历史回放用）
     function addAiBubble(md) {
       const div = document.createElement('div');
@@ -1934,6 +1958,32 @@
       return true;
     }
 
+    /* 第 1 步交给智能体的任务文本。
+
+       为什么要在这里把字段清单拼进去：这四个分区的字段本来就由服务端按同一份 DA 本体
+       预渲染成了空骨架（/api/meta 的 forms），模型只需要填值。但系统提示词里写着「本体
+       信息用 Read 读 亿纬锂能DA梳理.md」，模型为了稳妥往往先读一遍 —— 那是一次纯粹多余
+       的模型往返，而且 2 万多字符的本体从此**每一轮都要重发**。把它要的那几行字段名
+       直接给它（几百字），这次往返和后续的重发就都省掉了。 */
+    function step1FormTask(text) {
+      const wanted = ['s1_basic', 's1_dest', 's1_payment', 's1_logistics'];
+      const lines = wanted.map(id => {
+        const f = (FORMS || []).find(x => x.section_id === id);
+        if (!f) return '';
+        const names = f.kind === 'form'
+          ? (f.fields || []).map(x => x.label || x.key)
+          : (f.columns || []);
+        if (!names.length) return '';
+        return `- ${id}（${f.kind === 'form' ? '表单' : '列表'}·${f.title}）：` + names.join('、');
+      }).filter(Boolean);
+      if (!lines.length) return text;          // 拿不到骨架就按原样发，别把任务弄丢
+      return text
+        + '\n\n【本步要填的分区与字段（已按本体给出，无需再读本体）】\n'
+        + lines.join('\n')
+        + '\n请一次性把这四个分区 render 填满：文档里有的直接填，没有的给推荐值并在值末尾加「（推荐）」。'
+        + '不要读本体文件，不要查产品表，不要填 s1_products / s1_techparams。';
+    }
+
     /* 第 1 步总编排：识别 →（智能体填表推荐）→ 产品匹配，三段严格串行。 */
     async function runStep1(text, displayText) {
       // 留一份客户需求原文：标品接不住时要随「新增工艺」任务带给工艺经理，
@@ -2077,6 +2127,7 @@
         addErrorBubble('无法连接报价助手服务（' + AGENT_URL + '）。请先运行：python cpq_agent_server.py，然后刷新页面重试。');
       } finally {
         hideTyping();
+        clearStage();
         finishStreamBubble();
         // 清理转圈图标
         chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
@@ -2094,16 +2145,23 @@
       switch (ev.type) {
         case 'text':
           hideTyping();
+          clearStage();
           appendStreamText(ev.text);
           break;
         case 'tool_use': {
           hideTyping();
+          clearStage();
           const d = describeTool(ev.name, ev.input || {});
           addToolActivity(d.main, d.source);
           showTyping();
           break;
         }
+        case 'stage':
+          // 等待期的心跳与「开始调用工具」：只更新那一条轨迹，不算本轮内容
+          showStage(ev.text || '处理中…');
+          break;
         case 'ui':
+          clearStage();
           applyUiEvent(ev.ui || {});
           break;
         case 'tool_result':
@@ -2564,7 +2622,7 @@
         //  ② 智能体（open-claude）填写并推荐四个非产品分区；
         //  ③ 智能体填完后才做产品匹配（复用 ① 的参数，不再调模型）。
         // display=用户实际填写的内容（项目/客户/需求/附件名），第 2 步回显用它、不带附件正文
-        STEP1_FORM_TASK = k.text;
+        STEP1_FORM_TASK = step1FormTask(k.text);
         runStep1(k.text, k.display);
         return true;
       }

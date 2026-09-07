@@ -1,0 +1,18 @@
+/* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
+   2.3 成本测算独有的几块。表格、卡片、工序行沿用 inline-analysis.css，
+   置底动作条沿用 assembly-integration.css —— 与 2.1/2.2 是同一套视觉。 */
+
+/* 四项拆解挤在一格里：小标签 + 数字，成对排开，不换行成两行。 */
+.cr-breakdown { min-width: 220px; }
+.cr-part {
+  display: inline-flex; align-items: baseline; gap: 4px; margin-right: 10px;
+  color: var(--oc-text-2, #4b5563); font-size: 12px; white-space: nowrap;
+}
+.cr-part i { color: var(--oc-text-3, #9ca3af); font-size: 11px; font-style: normal; }
+
+/* 汇总表里"整机成本"是对外口径，要一眼区分于零件合计。 */
+tr.cr-final td { background: #eff6ff; font-weight: 600; }
+tr.cr-final td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
+
+/* 成本行的四项在只读态也要能横着看完 */
+.inline-cost-table td .number { font-variant-numeric: tabular-nums; }

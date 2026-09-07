@@ -173,3 +173,42 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
 /* 参数表的编辑态输入框：与 inline-cost-table 的编辑态保持一致的紧凑度。 */
 .inline-cost-table td input,
 .inline-cost-table td select { width: 100%; box-sizing: border-box; }
+
+/* 「发送至财务」的派发弹窗。与报价助手的「转交任务」是同一件事：
+   发给某个角色 / 指派给某个人 / 发布到公共任务池 —— 所以字段与措辞照它来，
+   只是长在技术工艺这一侧，用本页的颜色变量。 */
+.ai-send-mask {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, .45);
+}
+.ai-send-box {
+  width: 400px; max-width: 92vw; overflow: hidden;
+  border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .28);
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827); font-size: 13px;
+}
+.ai-send-box h3 { margin: 0; font-size: 16px; }
+.ai-send-head { padding: 18px 22px 4px; }
+.ai-send-head p { margin: 6px 0 0; font-size: 12px; color: var(--oc-text-3, #9ca3af); line-height: 1.6; }
+.ai-send-body { padding: 14px 22px 4px; }
+.ai-send-row { margin-bottom: 12px; }
+.ai-send-row > label { display: block; margin-bottom: 5px; font-size: 12px; color: var(--oc-text-3, #9ca3af); }
+.ai-send-row select, .ai-send-row input {
+  width: 100%; box-sizing: border-box; padding: 9px 11px;
+  border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 8px;
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
+  font-family: inherit; font-size: 13px;
+}
+.ai-send-row select[size] { padding: 6px; }
+.ai-send-row[hidden] { display: none; }
+.ai-send-only { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; font-size: 12px; color: var(--oc-text-3, #9ca3af); }
+.ai-send-only input { width: auto; }
+.ai-send-msg { min-height: 18px; padding: 0 22px; font-size: 12px; color: #dc2626; }
+.ai-send-foot { display: flex; gap: 10px; padding: 8px 22px 20px; }
+.ai-send-foot button {
+  flex: 1; padding: 9px 0; border: none; border-radius: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ai-send-foot .cancel { background: var(--oc-bg-3, #f3f4f6); color: var(--oc-text-2, #4b5563); }
+.ai-send-foot .send { background: var(--oc-accent, #2563eb); color: #fff; }
+.ai-send-foot button:disabled { opacity: .6; cursor: not-allowed; }

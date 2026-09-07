@@ -292,6 +292,19 @@ class QuoteHandoff(BaseModel):
     sent_by: Optional[str] = None
 
 
+class FinanceHandoff(BaseModel):
+    """2.2 → 财务经理（2.3 成本测算）的留痕。"""
+    task_id: Optional[str] = None
+    task_no: str = ""
+    target_role_name: str = "财务经理"
+    # 派发方式与落点：role（某个角色都能领）/ user（指派到人）/ public（公共任务池）。
+    # 只记不判 —— 界面要能说清"这单交给谁了"，而不是只说"已发送"。
+    target_type: str = "role"
+    target_name: str = ""
+    sent_at: Optional[str] = None
+    sent_by: Optional[str] = None
+
+
 class IntegrationPlan(BaseModel):
     project_id: Optional[str] = None
     requirement_note: str = Field("", description="用户在 2.2 输入的整合需求(参与参数推荐)")
@@ -305,6 +318,11 @@ class IntegrationPlan(BaseModel):
     params_confirmed: bool = Field(False, description="参数推荐已确认")
     params_confirmed_by: Optional[str] = None
     params_confirmed_at: Optional[str] = None
+    # 组装工艺的确认是本步的闸门：确认之后才允许把任务推给财务经理去 2.3 算成本。
+    # 工序与用量没定稿，算出来的成本没有意义。
+    process_confirmed: bool = Field(False, description="组装工艺已确认")
+    process_confirmed_by: Optional[str] = None
+    process_confirmed_at: Optional[str] = None
     # 「整合参数」环节：成本测算之后的收口，确认报价要的成品参数都填齐了。
     # 单独一个标记而不是"必填都非空"就算完成 —— 补填是人做的判断，得有人按下确认，
     # 才谈得上"这份参数可以交给报价"。
@@ -318,6 +336,9 @@ class IntegrationPlan(BaseModel):
     # 所以重复写入会得到多个编码，只留最后一个就查不清历史了。
     material_writes: List[MaterialWrite] = Field(default_factory=list, description="历次写入主数据")
     quote_handoff: Optional[QuoteHandoff] = Field(None, description="最近一次发送至报价")
+    # 成本测算改由财务经理做（2.3），所以 2.2 的出口是"发给财务"，不是直接发报价。
+    finance_handoff: Optional[FinanceHandoff] = Field(
+        None, description="最近一次确认工艺并发送至财务做成本测算")
     timing: Timing = Field(default_factory=Timing)
     updated_at: Optional[str] = None
 

@@ -63,6 +63,18 @@
 .oc-rail-tip span { display: block; color: #c9cad1; font-size: 11px; }
 .oc-rail-icon:hover .oc-rail-tip, .oc-rail-logo:hover .oc-rail-tip { opacity: 1; visibility: visible; }
 
+/* 消息与登录这两格由 cpq_msg.js / cpq_auth.js 驱动，它们认的是 .nav-tooltip
+   （与报价助手同一份 markup 契约）。样式跟着 .oc-rail-tip 走，视觉上是同一种提示条。 */
+.oc-rail-icon .nav-tooltip {
+  position: absolute; left: 100%; top: 50%; z-index: 1300; transform: translateY(-50%);
+  margin-left: 8px; padding: 6px 10px; border-radius: 6px;
+  background: #1f2023; color: #fff; font: 12px/1.45 inherit; white-space: nowrap;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .15s;
+}
+.oc-rail-icon:hover .nav-tooltip { opacity: 1; visibility: visible; }
+/* 已登录时 cpq_auth.js 会给按钮加 active，与报价助手一样高亮。 */
+.oc-rail-icon.active { background: #eff6ff; color: #3b82f6; }
+
 .oc-rail-divider { display: block; width: 32px; height: 1px; flex: 0 0 1px; margin: 6px 0; background: #e5e7eb; }
 .oc-rail-grow { flex: 1 1 auto; }
 

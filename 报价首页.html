@@ -661,19 +661,11 @@
       gap: 20px;
     }
 
-    /* 待办任务卡片上的标记：时间 / 来源 / 步骤 */
-    .wf-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
-    .wf-chip {
-      display: inline-flex; align-items: center; gap: 3px;
-      padding: 2px 7px; border-radius: 20px; font-size: 11px;
-      background: var(--bg-tertiary); color: var(--text-secondary);
-    }
-    .wf-chip .ti { font-size: 12px; }
-    .wf-task-note {
-      margin: 6px 0 0; padding: 6px 9px; border-radius: 6px; font-size: 12px;
-      background: rgba(99,102,241,.08); color: var(--text-secondary);
-    }
+    /* 待办任务卡片：除了左侧那条蓝边，其余与另外三个助手的卡片完全一样。
+       它以前多一排 chip 和一块备注，同一行里卡片就高矮不齐、长文本还会顶出边框。 */
     .request-card.wf-task { border-left: 3px solid var(--color-primary); }
+    /* 备注那一行没内容时也占位，四张卡的页脚才对得齐（空时填 &nbsp;）。 */
+    .request-note { font-style: italic; color: var(--text-tertiary); }
 
     .list-tab {
       font-size: 13px;
@@ -755,7 +747,16 @@
       padding: 12px;
       cursor: pointer;
       transition: all 150ms ease;
+      /* 三列网格里，长客户名/长标题会把格子撑宽、把内容顶出边框 —— min-width:0
+         才让它按列宽收缩，overflow:hidden 兜住任何漏网的长串。
+         纵向用 flex + footer margin-top:auto：同一行的卡片页脚永远对齐，
+         内容多一行少一行都不会看起来"大小不一"。 */
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
     }
+    .request-card > * { min-width: 0; }
 
     .request-card:hover {
       border-color: var(--color-primary);
@@ -857,15 +858,22 @@
       color: var(--color-primary);
       font-weight: 600;
       font-size: 12px;
+      /* 「新增工艺 · TP-90A1B2C3」这类编号比状态徽章长得多，不截断会把徽章挤出卡片 */
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .request-status {
       display: inline-block;
+      flex: 0 0 auto;
       padding: 2px 8px;
       border-radius: 20px;
       font-size: 10px;
       font-weight: 500;
       margin-left: auto;
+      white-space: nowrap;
     }
 
     /* Status Styles */
@@ -899,6 +907,10 @@
       font-size: 11px;
       color: var(--text-secondary);
       margin-bottom: 4px;
+      /* 客户名/项目名/备注都可能很长：截断，不换行 —— 换行就意味着这张卡比同行的高。 */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .request-info span {
@@ -909,7 +921,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-top: 8px;
+      gap: 8px;
+      margin-top: auto;          /* 页脚贴底：同一行的卡片页脚对齐 */
       padding-top: 8px;
       border-top: 1px solid var(--border-light);
     }
@@ -918,13 +931,20 @@
       display: flex;
       align-items: center;
       gap: 6px;
+      min-width: 0;
       font-size: 11px;
       color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+
+    .request-footer > span { flex: 0 0 auto; white-space: nowrap; }
 
     .creator-avatar {
       width: 18px;
       height: 18px;
+      flex: 0 0 18px;
       border-radius: 50%;
       background: linear-gradient(135deg, var(--color-purple), var(--color-primary));
       color: white;
@@ -1068,6 +1088,7 @@
     .rule-kind-name { font-weight: 600; color: var(--text-primary); }
     .rule-kind-db { margin-top: 2px; font-size: 12px; color: var(--text-tertiary); }
   </style>
+  <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
 <body>
   <!-- 左侧导航 -->
@@ -1108,11 +1129,11 @@
       <div style="flex:1"></div>
 
       <!-- 消息（任务流提醒）：位于设置与账号之上 -->
-      <div class="nav-icon" id="cpqMsgBtn" onclick="cpqMsg.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqMsgBtn" onclick="cpqMsg.open()">
         <i class="ti ti-bell"></i>
         <span class="nav-tooltip">消息</span>
       </div>
-      <div class="nav-icon" onclick="openSettings()">
+      <div class="nav-icon cpq-nav-bottom" onclick="openSettings()">
         <i class="ti ti-settings"></i>
         <span class="nav-tooltip">设置</span>
       </div>
@@ -1120,7 +1141,7 @@
       <div class="nav-divider"></div>
 
       <!-- 登录 / 账号信息（未登录=登录入口，已登录=账号信息+退出） -->
-      <div class="nav-icon" id="cpqAuthBtn" onclick="cpqAuth.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqAuthBtn" onclick="cpqAuth.open()">
         <i class="ti ti-login"></i>
         <span class="nav-tooltip">登录</span>
       </div>
@@ -1611,32 +1632,34 @@
     function taskCardHtml(t) {
       const claimed = t.status === 'claimed';
       const techNew = t.task_kind === 'tech_new_product';
-      const way = techNew ? '新增工艺'
-        : t.target_type === 'public' ? '公共任务'
-        : t.target_type === 'role' ? '定向角色' : '指派给我';
+      // 支线任务用任务类型本身作标题，比"定向角色"有信息量得多。
+      const side = { tech_new_product: '新增工艺', tech_cost: '成本测算',
+                     tech_cost_return: '成本结果复核' }[t.task_kind];
+      const way = side || (t.target_type === 'public' ? '公共任务'
+        : t.target_type === 'role' ? '定向角色' : '指派给我');
       return '<div class="request-card wf-task' + (techNew ? ' wf-task-technew' : '') +
         '" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) +
         '" data-kind="' + escH(t.task_kind || 'handoff') + '">' +
         '<div class="request-card-header"><span class="request-id">' + escH(way) +
-        (techNew && t.task_no ? ' · ' + escH(t.task_no) : '') + '</span>' +
+        (side && t.task_no ? ' · ' + escH(t.task_no) : '') + '</span>' +
         '<span class="request-status ' + (claimed ? 'status-reviewing' : 'status-draft') + '">' +
         (claimed ? '进行中' : '待领取') + '</span></div>' +
         '<div class="request-title">' + escH(t.title || '未命名报价') + '</div>' +
+        /* 与另外三个助手的卡片同一套骨架：标题 → 两行 request-info → footer。
+           原来这里多了一排 wf-chip 和一块备注，行数随内容变，同一行里卡片高矮不一，
+           长备注还会顶出边框。信息一条没少，只是改成同样会截断的单行。 */
         '<div class="request-info">客户名称：<span>' + escH(t.customer || '—') + '</span></div>' +
-        '<div class="wf-task-meta">' +
-        '<span class="wf-chip"><i class="ti ti-clock"></i>' + escH(fmtTime(t.created_at)) + '</span>' +
-        '<span class="wf-chip"><i class="ti ti-user-share"></i>来自 ' + escH(t.from_display_name || '—') +
-        '（' + escH(t.from_role_name || '') + '）</span>' +
-        '<span class="wf-chip"><i class="ti ti-list-check"></i>第 ' + t.next_step_no + ' 步 · ' +
-        escH(t.next_step_name) + '</span>' +
-        '</div>' +
-        (t.note ? '<div class="wf-task-note">“' + escH(t.note) + '”</div>' : '') +
+        '<div class="request-info">来自 <span>' + escH(t.from_display_name || '—') +
+        '（' + escH(t.from_role_name || '') + '）</span> · 第 ' + escH(t.next_step_no) +
+        ' 步 <span>' + escH(t.next_step_name) + '</span></div>' +
+        '<div class="request-info request-note">' +
+        (t.note ? '“' + escH(t.note) + '”' : '&nbsp;') + '</div>' +
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
-        escH(t.next_role_name) + '负责</div>' +
+        escH(fmtTime(t.created_at)) + ' · ' + escH(t.next_role_name) + '负责</div>' +
         '<span class="request-detail">' +
-        (techNew ? (claimed ? '继续新增工艺' : '领取并去技术工艺')
-                 : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
+        (side ? (claimed ? '继续处理' : '领取并去技术工艺')
+              : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
     }
 
     // 领取任务并打开对应的工作台。
@@ -1649,8 +1672,16 @@
         if (!claimed) claim = await cpqAuth.api('/wf/task/claim', { method: 'POST', body: { task_id: taskId } });
         if (window.cpqMsg) cpqMsg.ping();   // 领取会给转交人发消息，本地也同步一下未读
       } catch (e) { alert(e.message || '领取失败'); return; }
-      if ((claim && claim.task_kind) === 'tech_new_product' || kind === 'tech_new_product') {
+      const k = (claim && claim.task_kind) || kind;
+      if (k === 'tech_new_product') {
         window.location.href = '/tech-task.html?tech_task=' + encodeURIComponent(taskId);
+        return;
+      }
+      // 成本测算（财务经理）与成本结果复核（工艺经理）都在技术工艺里做，
+      // 项目号就是卡片的 session_id —— 直接落到对应的那一步。
+      if (k === 'tech_cost' || k === 'tech_cost_return') {
+        const page = k === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
+        window.location.href = page + '?project=' + encodeURIComponent(sessionId || '');
         return;
       }
       try { sessionStorage.setItem(OPEN_KEYS.quote, sessionId); } catch (e) {}

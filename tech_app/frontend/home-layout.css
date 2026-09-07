@@ -71,3 +71,29 @@
 .home-nav-project-copy strong{overflow:hidden;color:#374151;font-size:12px;font-weight:600;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
 .home-nav-empty{margin:10px 4px;color:#9ca3af;font-size:12px;text-align:center}
 .home-nav-project-marker{font-size:0;line-height:1}
+
+/* 折叠侧栏底部三格：消息 / 设置 / 登录 —— 与报价助手 .nav-panel 同一份 markup 与图标
+   （cpq_msg.js、cpq_auth.js 按 id 接管它们）。这里只补两件事：
+   ① tabler 图标要有字号 —— 原来这一格放的是 24px SVG，`.cpq-nav-icon>span{font-size:36px}`
+      是给那套 SVG 写的，会把提示条文字撑成 36px，必须压回来；
+   ② .nav-tooltip 的浮层样式（原来的提示条走的是 <b>）。 */
+.cpq-nav-icon>.ti{font-size:20px;line-height:1}
+/* 未读数：cpq_msg.js 往按钮里 append 一个 <span class="cpq-msg-dot">N</span>，
+   靠 position:absolute 贴在图标右上角。可是上面那条 `.cpq-nav-icon>span{font-size:36px}`
+   （给旧的 24px SVG 写的）特异性更高，会把这个数字撑成 36px —— 徽章包不住，看上去
+   就成了图标旁边/下面孤零零一个大数字。这里按 cpq_msg.js 的原始尺寸钉回去，
+   与报价助手完全一致。 */
+.cpq-nav-icon>.cpq-msg-dot{
+  position:absolute;top:4px;right:4px;min-width:15px;height:15px;padding:0 3px;
+  border-radius:9px;background:#ef4444;color:#fff;
+  font-size:10px;font-weight:700;line-height:15px;text-align:center;box-sizing:border-box}
+.cpq-nav-icon>.nav-tooltip{
+  position:absolute;z-index:150;left:calc(100% + 10px);top:50%;
+  padding:7px 10px;border:1px solid #e5e7eb;border-radius:8px;
+  background:#fff;color:#374151;box-shadow:0 6px 18px rgba(15,23,42,.12);
+  font:500 12px/1.2 Inter,"PingFang SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  white-space:nowrap;opacity:0;visibility:hidden;transform:translateY(-50%);
+  transition:opacity .15s;pointer-events:none}
+.cpq-nav-icon:hover>.nav-tooltip{opacity:1;visibility:visible}
+/* 已登录时 cpq_auth.js 会给按钮加 .active，与报价助手一致 */
+.cpq-nav-bottom-icons .cpq-nav-icon.active{background:#eff6ff;color:#3b82f6}

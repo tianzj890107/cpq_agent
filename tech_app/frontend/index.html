@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
   <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="tech-rail.css?v=rail1" />
+  <link rel="stylesheet" href="tech-rail.css?v=rail2" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
   <!-- three 必须走本地副本，不能挂公网 CDN。app.js 是 ES module，import 没解析完
        它一行都不跑：按钮、图纸、任务文件全停在 HTML 初始态，界面看上去就像
@@ -31,7 +31,7 @@
   <script type="importmap">
   {"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}
   </script>
-  <script src="cpq-sso.js?v=sso1"></script>
+  <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
   <div class="oc-app">
@@ -40,9 +40,14 @@
          id 全部保留 —— agent-chat.js 按 id 绑事件、按 [data-model-name] 写模型名、
          按 [data-open-drawer] 开抽屉，换皮不该动那些逻辑。 -->
     <nav class="oc-rail" id="ocAgentDock" aria-label="本步骤导航">
+      <!-- 工作区与会话状态收进 logo 的提示条：底部三个格子要与报价助手一致
+           （消息/设置/登录）。#ocSideCwd / #ocSideProfile 必须留着 —— agent-chat.js
+           的 loadMeta() 会往里写。 -->
       <div class="oc-rail-logo">
         <i class="ti ti-sparkles" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>2.1 图纸解析</b><span>AI 工艺平台</span></span>
+        <span class="oc-rail-tip"><b>2.1 图纸解析</b><span
+          class="oc-side-cwd" id="ocSideCwd">项目工作区</span><span
+          class="oc-side-profile" id="ocSideProfile">连接中…</span></span>
       </div>
       <button class="oc-rail-icon" id="ocNewChat" type="button" aria-label="本次任务从头开始">
         <i class="ti ti-refresh" aria-hidden="true"></i>
@@ -66,15 +71,22 @@
         <span class="oc-rail-tip"><b>版本与校核审查</b><span>版本对比、送审、AI 校核</span></span>
       </button>
       <span class="oc-rail-grow"></span>
-      <button class="oc-rail-icon" id="ocModelPill" type="button" aria-haspopup="dialog" aria-label="模型参数设置">
+      <!-- 底部三格与报价助手完全一致：消息 → 设置 → 分隔线 → 登录。
+           id 与 .nav-tooltip 是 cpq_msg.js / cpq_auth.js 认的契约，不能改名。 -->
+      <div class="oc-rail-icon" id="cpqMsgBtn" role="button" tabindex="0"
+           onclick="window.cpqMsg && cpqMsg.open()" aria-label="消息">
+        <i class="ti ti-bell" aria-hidden="true"></i>
+        <span class="nav-tooltip">消息</span>
+      </div>
+      <button class="oc-rail-icon" id="ocModelPill" type="button" aria-haspopup="dialog" aria-label="设置">
         <i class="ti ti-settings" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>模型参数设置</b><span data-model-name>连接中…</span></span>
+        <span class="oc-rail-tip"><b>设置</b><span data-model-name>连接中…</span></span>
       </button>
       <i class="oc-rail-divider" aria-hidden="true"></i>
-      <div class="oc-rail-icon oc-rail-state">
-        <i class="ti ti-user-circle" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b class="oc-side-cwd" id="ocSideCwd">项目工作区</b><span
-          class="oc-side-profile" id="ocSideProfile">连接中…</span></span>
+      <div class="oc-rail-icon" id="cpqAuthBtn" role="button" tabindex="0"
+           onclick="window.cpqAuth && cpqAuth.open()" aria-label="登录">
+        <i class="ti ti-login" aria-hidden="true"></i>
+        <span class="nav-tooltip">登录</span>
       </div>
     </nav>
 
@@ -164,7 +176,7 @@
 
           <div class="center-panel">
             <div class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="report-btn" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button></div></div></div>
-            <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（工艺推荐/成本测算）。
+            <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（零件工艺推荐）。
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
               <div id="viewer" class="view-3d-content"></div>
@@ -172,7 +184,7 @@
               <!-- 可收起的分区一律默认展开：收起状态会让「已经算出来的结果」看起来没算。 -->
               <details class="parameter-panel" open><summary>查看并编辑零件参数（专家模式）</summary><div id="parameterEditor">选择零件后可查看参数。</div></details>
             </div>
-            <!-- 工艺推荐 / 成本测算：原来渲染在左侧零件行下面，又窄又要滚动，
+            <!-- 零件工艺推荐：原来渲染在左侧零件行下面，又窄又要滚动，
                  而它们本来就是这一步的主要产出。现在占满右侧工作区。 -->
             <section id="analysisPanel" class="analysis-panel" hidden aria-label="零件分析">
               <div class="analysis-panel-bar">
@@ -246,6 +258,6 @@
   <div id="loginOverlay" class="login-overlay" style="display:none"><form id="loginForm" class="login-card"><h2>登录</h2><div class="login-sub">图纸解析与生成平台 · 私有化部署</div><input id="loginUser" placeholder="用户名" autocomplete="username" /><input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" /><div id="loginErr" class="login-err"></div><button type="submit">登 录</button></form></div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-  <script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260819-flat5"></script><script type="module" src="app.js?v=20260819-show1"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260819-match1"></script><script src="home-link.js?v=home6"></script>
+  <script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260819-flat5"></script><script type="module" src="app.js?v=20260819-show1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260819-match1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>

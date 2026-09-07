@@ -11,12 +11,9 @@
  */
 const aiPid = new URLSearchParams(location.search).get('project')
   || localStorage.getItem('cad_engine_project_id') || '';
-const AI_TABS = {
-  drawings: '整合图纸', params: '参数推荐', process: '组装工艺', cost: '成本测算',
-  // 第五个环节不调模型：成本算完之后，把报价要的成品参数逐项收口，缺的人工补上。
-  // 它是 2.2 与报价之间的验收口径 —— 必填缺一格，报价测算单上就是一格空白。
-  finalize: '整合参数',
-};
+// 2.2 只剩三个环节：成本测算与整合参数都搬去了 2.3（财务经理的步骤）。
+// 工艺经理在这里交的是**工艺、参数与用量**，成本的数字不由他给。
+const AI_TABS = { drawings: '整合图纸', params: '参数推荐', process: '组装工艺' };
 const AI_TYPE_LABEL = {
   blank: '下料/备料', turning: '车', milling: '铣', drilling: '钻', boring: '镗',
   grinding: '磨', bench: '钳工', sheet_metal: '钣金', welding: '焊接',
@@ -35,7 +32,7 @@ let aiData = null;          // 后端 payload：plan / status / *_validation / *
 let aiParts = [];
 let aiTab = 'drawings';
 let aiBusy = false;
-const aiEditing = { params: false, process: false, cost: false };
+const aiEditing = { params: false, process: false };
 
 const $ai = id => document.getElementById(id);
 const aiUrl = (suffix = '') => `/api/projects/${encodeURIComponent(aiPid)}/integration${suffix}`;
@@ -118,8 +115,6 @@ function aiBlocker(tab) {
   const state = aiData?.status || {};
   if (tab === 'params') return '';
   if (tab === 'process' && !state.has_params) return '请先完成「参数推荐」：组装工序要按整机 BOM 与连接关系来排。';
-  if (tab === 'cost' && !state.has_process) return '请先完成「组装工艺」：组装成本要按工序工时逐道算。';
-  if (tab === 'finalize' && !state.has_cost) return '请先完成「成本测算」：整合参数是本步最后的收口。';
   return '';
 }
 
@@ -186,31 +181,20 @@ function aiRenderActions() {
     $ai('aiUploadBtn').onclick = () => $ai('aiDrawingInput').click();
     return;
   }
-  if (aiTab === 'finalize') {
-    // 这一步不从零推参数，只补缺口：智能补全给建议、人过目、保存、确认。
-    const state = aiData?.status || {};
-    const missing = state.required_missing || 0;
-    host.innerHTML =
-      `<button type="button" class="inline-action primary start-parse-btn" id="aiAutofill" ${aiBusy ? 'disabled' : ''}>`
-      + (aiBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>智能补全中…</span>` : '✦ 智能补全')
-      + `</button>`
-      + `<button type="button" class="inline-action save" id="aiFinalSave" ${aiBusy ? 'disabled' : ''}>保存补填</button>`
-      + `<button type="button" class="inline-action" id="aiFinalConfirm" ${aiBusy ? 'disabled' : ''}>`
-      + `${state.params_final ? '重新确认' : '确认参数已齐'}</button>`
-      + `<span class="ai-hint">${missing
-          ? `还差 ${missing} 项报价必填参数。「智能补全」按 2.1 零件、已排工艺与已算成本给建议值，填完再确认。`
-          : state.params_final ? '已确认，可以发送至报价。' : '必填项都有值了，确认后即可发送至报价。'}</span>`;
-    $ai('aiAutofill').onclick = () => aiAutofill();
-    $ai('aiFinalSave').onclick = () => aiFinalize(false);
-    $ai('aiFinalConfirm').onclick = () => aiFinalize(true);
-    return;
-  }
-  const has = { params: aiData?.status?.has_params, process: aiData?.status?.has_process, cost: aiData?.status?.has_cost }[aiTab];
+  const has = { params: aiData?.status?.has_params, process: aiData?.status?.has_process }[aiTab];
   // 参数推荐这一环节也要有人按下确认：整机参数、连接关系与 BOM 是后面工艺与成本的输入，
   // 没人点过头就往下走，错的口径会一路带到报价。
+  // 参数推荐与组装工艺各有一个确认键。组装工艺那个是闸门：确认之后才允许把任务
+  // 推给财务经理去 2.3 测算成本 —— 工序和用量没定稿，算出来的成本没有意义。
   const confirmBtn = aiTab === 'params'
     ? `<button type="button" class="inline-action" id="aiParamsConfirm" ${!has || aiBusy ? 'disabled' : ''}>`
       + `${aiData?.status?.params_confirmed ? '重新确认' : '确认参数推荐'}</button>`
+    : aiTab === 'process'
+    ? `<button type="button" class="inline-action" id="aiProcessConfirm" ${!has || aiBusy ? 'disabled' : ''}>`
+      + `${aiData?.status?.process_confirmed ? '重新确认' : '确认组装工艺'}</button>`
+      + `<span class="ai-hint">${aiData?.status?.process_confirmed
+          ? '已确认，可以在左边把任务发给财务经理做成本测算。'
+          : '确认后才能把任务推给财务经理 —— 工序与用量定稿了，成本才算得准。'}</span>`
     : '';
   const label = `${has ? '重新生成' : '生成'}${AI_TABS[aiTab]}`;
   // 参数表始终可填：它的行是报价字典定死的，模型没推出来的那些正是要人工补的。
@@ -223,10 +207,12 @@ function aiRenderActions() {
     + `<button type="button" class="inline-action" id="aiEdit" ${alwaysEditable || !has || aiEditing[aiTab] || aiBusy ? 'hidden' : ''}>编辑</button>`
     + `<button type="button" class="inline-action save" id="aiSave" ${alwaysEditable || aiEditing[aiTab] ? '' : 'hidden'} ${aiBusy ? 'disabled' : ''}>保存参数</button>`
     + confirmBtn
-    + (aiTab === 'cost' ? `<label class="inline-analysis-qty"><span>批量</span><input id="aiCostQty" type="number" min="1" value="${aiPlan().quantity || 1}" /></label>` : '');
+;
   $ai('aiGenerate').onclick = () => aiGenerate(aiTab);
   const paramsConfirm = $ai('aiParamsConfirm');
-  if (paramsConfirm) paramsConfirm.onclick = () => aiConfirmParams();
+  if (paramsConfirm) paramsConfirm.onclick = () => aiConfirmStep('params');
+  const processConfirm = $ai('aiProcessConfirm');
+  if (processConfirm) processConfirm.onclick = () => aiConfirmStep('process');
   const edit = $ai('aiEdit');
   if (edit) edit.onclick = () => { aiEditing[aiTab] = true; aiRender(); };
   const save = $ai('aiSave');
@@ -238,9 +224,7 @@ function aiGenerate(tab) {
   const form = new FormData();
   const note = $ai('aiRequirement')?.value.trim() || '';
   if (note) form.append('note', note);
-  const quantity = tab === 'cost'
-    ? Math.max(1, parseInt($ai('aiCostQty')?.value, 10) || aiPlan().quantity || 1) : 0;
-  return aiPost(tab, { form, quantity });
+  return aiPost(tab, { form });
 }
 
 // --------------------------------------------------------------------------- 面板：整合图纸
@@ -302,8 +286,8 @@ function aiRenderParams() {
   if (params.summary) html += `<div class="inline-row"><b>整合思路</b>${esc(params.summary)}</div>`;
   html += `</section>`;
 
-  html += aiQuoteParamCard(checklist, editing);
-  html += aiExtraParamCard(params, checklist, editing);
+  html += QuoteParams.card(checklist, editing);
+  html += QuoteParams.extraCard(params, checklist, editing);
 
   html += `<section class="inline-card"><div class="inline-card-title">零件间连接</div>`;
   if (!(params.interfaces || []).length) html += `<div class="inline-hint">未识别出连接关系。</div>`;
@@ -332,190 +316,27 @@ function aiRenderParams() {
   return html + aiOpenQuestionsCard(params.assumptions, params.open_questions);
 }
 
-/*
- * 报价成品参数表。这张表的**行是字典定的**（亿纬锂能 DA 梳理 · 产品技术参数），
- * 不是模型输出多少就显示多少 —— 报价那头按字段取数，少一项就是报价单上一个空格，
- * 只列"模型给了什么"的话，缺了哪几项永远看不出来。
- */
-function aiQuoteParamCard(checklist, editing) {
-  if (!checklist || !checklist.groups.length) {
-    return `<section class="inline-card"><div class="inline-card-title">报价成品参数</div>`
-      + `<div class="inline-hint">未加载到报价成品参数字典（agent_knowledge/rules/quote_product_params.json），`
-      + `本次只展示模型自由给出的参数。</div></section>`;
-  }
-  const stat = checklist.summary;
-  const shortfall = stat.required_total - stat.required_filled;
-  let html = `<section class="inline-card"><div class="inline-card-title">报价成品参数 · ${esc(checklist.family_name)}</div>`
-    + `<div class="inline-hint">来自亿纬锂能 DA 梳理（报价助手 · 产品技术参数）。`
-    + `报价测算单上的成品行按这些字段取数。</div>`
-    + `<div class="inline-totals"><span><strong>${stat.filled}</strong>/${stat.total} 已给出</span>`
-    + `<span><strong>${stat.required_filled}</strong>/${stat.required_total} 报价必填</span></div>`;
-  if (!stat.filled) {
-    html += `<div class="inline-warn">⚠ 本次模型一条参数都没给出。下表的行是报价字典定的，`
-      + `<b>可以直接在「值」列里逐项填写</b>，填完点上方「保存参数」；`
-      + `也可以补充整合需求或上传更清楚的图纸后重新生成。</div>`;
-  } else if (shortfall > 0) {
-    html += `<div class="inline-warn">⚠ 还有 ${shortfall} 项报价必填参数没有值，`
-      + `这台成品现在进不了报价测算单。可以直接在下表「值」列里补，或补充需求后重新生成。</div>`;
-  }
-  const mismatched = checklist.groups.flatMap(group => group.fields).filter(field => field.unit_mismatch);
-  if (mismatched.length) {
-    html += `<div class="inline-warn">⚠ ${mismatched.length} 项的单位与字典不一致，数值需要换算后再改：`
-      + mismatched.map(field => `${esc(field.name)}（写的是 ${esc(field.given_unit)}，字段单位 ${esc(field.unit)}）`).join('、')
-      + `。平台不会替你换算 —— 直接改单位会把数值改错一个量级。</div>`;
-  }
-  html += `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>字段编码</th><th>参数</th><th>值</th><th>单位</th><th>依据</th><th>来源</th>`
-    + `</tr></thead><tbody>`;
-  checklist.groups.forEach(group => {
-    html += `<tr class="ai-group-row"><td colspan="6">${esc(group.name)}</td></tr>`;
-    group.fields.forEach(field => { html += aiQuoteParamRow(field, editing); });
-  });
-  return html + `</tbody></table></div></section>`;
-}
-
-function aiQuoteParamRow(field, editing) {
-  const flag = field.required && !field.filled && !field.generated ? ' ai-missing' : '';
-  // 平台生成项（成品编码）不给输入框：这一格由「写入数据库」产生 92022xxx，
-  // 手填一个号进去，报价那边按它去匹配规则只会匹配到不存在的产品。
-  if (field.generated) {
-    const label = `<code>${esc(field.code)}</code>`;
-    // 没写过库却有值 = 早先被人工/模型填进来的号，主数据里并不存在。
-    // 报价按成品编码匹配定价规则，拿这种号过去只会匹配到一个不存在的产品。
-    const unverified = field.filled && !aiData?.status?.has_material_code;
-    const value = field.filled
-      ? `<span class="number">${esc(field.value)}</span>`
-        + (unverified ? `<span class="ai-off">主数据里没有这个号，写库时会用真实编码覆盖</span>` : '')
-      : `<span class="ai-blank">由系统生成（点「写入数据库」或直接发送至报价时）</span>`;
-    return `<tr><td>${label}</td>`
-      + `<td>${esc(field.name)}<span class="ai-req">必填</span>`
-      + `<small class="ai-hint">由平台生成，不用手填</small></td>`
-      + `<td>${value}</td><td>${esc(field.unit)}</td>`
-      + `<td class="source">${esc(field.basis || '写入主数据时生成')}</td>`
-      + `<td class="source">${esc(field.source || '')}</td></tr>`;
-  }
-  const label = `<code>${esc(field.code)}</code>`;
-  const name = esc(field.name) + (field.required ? `<span class="ai-req">必填</span>` : '');
-  const hint = field.options.length ? `取值：${esc(field.options.join(' / '))}`
-    : field.example ? `示例：${esc(field.example.slice(0, 40))}` : '';
-  // 校验提示在编辑态同样要给：取值越界、单位不符，正是填的时候最该看见的东西。
-  // 早先只在只读态渲染，改成常驻编辑后这两条提示就整个消失了。
-  const flags = (field.off_option ? `<span class="ai-off">不在字典取值内</span>` : '')
-    + (field.unit_mismatch
-        ? `<span class="ai-off">按 ${esc(field.given_unit)} 写的，字段单位是 ${esc(field.unit)}，请换算</span>`
-        : '')
-    + (field.required && !field.filled ? `<span class="ai-blank">必填未给出</span>` : '');
-  if (editing) {
-    return `<tr class="${flag.trim()}" data-ai-qp="${aiAttr(field.code)}" data-ai-name="${aiAttr(field.name)}" data-ai-unit="${aiAttr(field.unit)}">`
-      + `<td>${label}</td><td>${name}${hint ? `<small class="ai-hint">${hint}</small>` : ''}</td>`
-      + `<td><input data-f="value" value="${aiAttr(field.value)}" placeholder="${aiAttr(field.options[0] || '')}"/>${flags}</td>`
-      + `<td>${esc(field.unit)}</td>`
-      + `<td><input data-f="basis" value="${aiAttr(field.basis || '')}"/></td>`
-      + `<td class="source">${esc(field.source || '')}</td></tr>`;
-  }
-  const value = field.filled
-    ? `<span class="number">${esc(field.value)}</span>`
-      + (field.off_option ? `<span class="ai-off">不在字典取值内</span>` : '')
-      + (field.unit_mismatch ? `<span class="ai-off">按 ${esc(field.given_unit)} 写的，字段单位是 ${esc(field.unit)}，请换算</span>` : '')
-    : `<span class="ai-blank">未给出</span>`;
-  return `<tr class="${flag.trim()}"><td>${label}</td>`
-    + `<td>${name}${hint && !field.filled ? `<small class="ai-hint">${hint}</small>` : ''}</td>`
-    + `<td>${value}</td><td>${esc(field.unit)}</td>`
-    + `<td class="source">${esc(field.basis || '')}</td>`
-    + `<td class="source">${esc(field.source || '')}</td></tr>`;
-}
-
-/** 字典之外的参数。留一张独立的表，免得和报价字段混成一锅。 */
-function aiExtraParamCard(params, checklist, editing) {
-  const rows = (params.params || [])
-    .map((row, index) => ({ row, index }))
-    .filter(item => !item.row.param_code);
-  if (!rows.length) return '';   // 没有字典外参数时不摆一张空表
-  let html = `<section class="inline-card"><div class="inline-card-title">补充参数（字典之外）</div>`
-    + `<div class="inline-hint">对本产品重要、但不在报价成品参数字典里的参数。`
-    + `它们不会进报价测算单的成品行。</div>`
-    + `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>参数</th><th>值</th><th>单位</th><th>依据</th><th>来源</th><th>置信</th>`
-    + `</tr></thead><tbody>`;
-  rows.forEach(({ row, index }) => {
-    if (editing) {
-      html += `<tr data-ai-xp="${index}"><td><input data-f="name" value="${aiAttr(row.name || '')}"/></td>`
-        + `<td><input data-f="value" value="${aiAttr(row.value || '')}"/></td>`
-        + `<td><input data-f="unit" value="${aiAttr(row.unit || '')}"/></td>`
-        + `<td><input data-f="basis" value="${aiAttr(row.basis || '')}"/></td>`
-        + `<td><input data-f="source" value="${aiAttr(row.source || '')}"/></td>`
-        + `<td>${Math.floor(Number(row.confidence || 0) * 100)}%</td></tr>`;
-    } else {
-      html += `<tr><td>${esc(row.name)}</td><td class="number">${esc(row.value)}</td>`
-        + `<td>${esc(row.unit || '')}</td><td class="source">${esc(row.basis || '')}</td>`
-        + `<td class="source">${esc(row.source || '')}</td>`
-        + `<td class="number">${Math.floor(Number(row.confidence || 0) * 100)}%</td></tr>`;
-    }
-  });
-  return html + `</tbody></table></div></section>`;
-}
-
-/* --------------------------------------------------------------- 面板：整合参数
- * 本步最后一个环节，也是唯一一个不调模型的：报价测算单按 DA 字段取数，
- * 前面几步推出来的参数难免有缺口，这里逐项收口，缺的人工补上再确认。
- */
-function aiRenderFinalize() {
-  const checklist = aiData?.param_checklist;
-  const state = aiData?.status || {};
-  const plan = aiPlan();
-  if (!checklist) {
-    return `<div class="inline-empty">还没有整机参数。请先完成「参数推荐」，`
-      + `再回到这一步把报价要的字段补齐。</div>`;
-  }
-  const stat = checklist.summary;
-  const missing = state.required_missing || 0;
-  let html = `<section class="inline-card"><div class="inline-card-title">交给报价前的收口</div>`
-    + `<div class="inline-hint">报价测算单上的成品行按下面这些 DA 字段取数。`
-    + `确认之后，「确认工艺并发送至报价」会把它们连同成品编码与成本一起带回报价。</div>`
-    + `<div class="inline-totals"><span><strong>${stat.filled}</strong>/${stat.total} 已给出</span>`
-    + `<span><strong>${stat.required_filled}</strong>/${stat.required_total} 报价必填</span>`
-    + `<span class="total">${plan.params_final ? '已确认' : missing ? `还缺 ${missing} 项` : '待确认'}</span></div>`;
-  if (missing) {
-    html += `<div class="inline-warn">⚠ 还有 ${missing} 项报价必填参数没有值。`
-      + `可以直接在下表「值」列里补填，填完点上方「保存补填」，都齐了再点「确认参数已齐」。`
-      + `<b>没确认之前不能发送至报价</b> —— 缺的那几格到了报价那头就是空白。</div>`;
-  } else if (plan.params_final) {
-    html += `<div class="inline-row"><b>已确认</b>${esc(plan.params_final_by || '')}`
-      + ` · ${esc(plan.params_final_at || '')}</div>`;
-  } else {
-    html += `<div class="inline-hint">必填项都有值了。核对无误后点「确认参数已齐」。</div>`;
-  }
-  html += `</section>`;
-  html += aiQuoteParamCard(checklist, true);
-  html += aiExtraParamCard(plan.params, checklist, false);
-  return html;
-}
-
-/** 收口这一步只回传「值」：依据/来源这些由后端按"人工补填"统一标注。 */
-function aiCollectFinalizeValues() {
-  const values = {};
-  document.querySelectorAll('[data-ai-qp]').forEach(row => {
-    const input = row.querySelector('[data-f="value"]');
-    if (!input) return;
-    values[row.dataset.aiQp] = { value: input.value.trim() };
-  });
-  return values;
-}
-
-/** 确认「参数推荐」这一环节。缺口不拦（型号未定的方案也要能往下走），但要说出来。 */
-async function aiConfirmParams() {
+/** 确认某个环节。参数推荐缺口不拦（型号未定的方案也要能往下走），但要说出来；
+    组装工艺的确认是把任务推给财务的前提。 */
+async function aiConfirmStep(step) {
   if (aiBusy) return;
   aiBusy = true;
   aiRenderActions();
+  const label = AI_TABS[step];
   try {
-    aiData = await api(aiUrl('/params/confirm'), { method: 'POST' });
+    aiData = await api(aiUrl(`/${step}/confirm`), { method: 'POST' });
     const missing = aiData?.status?.required_missing || 0;
-    aiStatus('参数推荐已确认');
-    aiToast('参数推荐已确认');
-    aiSay(missing
-      ? `参数推荐已确认。注意还有 ${missing} 项报价必填的成品参数没有值，`
-        + `到第五步「整合参数」可以用「智能补全」给建议，或直接手填。`
-      : '参数推荐已确认，可以继续排组装工艺了。');
+    aiStatus(`${label}已确认`);
+    aiToast(`${label}已确认`);
+    if (step === 'process') {
+      aiSay('组装工艺已确认。现在可以点左边「确认工艺并发送至财务做成本测算」，'
+        + '把任务交给财务经理 —— 他会在 2.3 逐件算零件成本与组装成本。');
+    } else {
+      aiSay(missing
+        ? `参数推荐已确认。注意还有 ${missing} 项报价必填的成品参数没有值 —— `
+          + `它们由财务经理在 2.3「整合参数」里补齐（那里有智能补全）。`
+        : '参数推荐已确认，可以继续排组装工艺了。');
+    }
   } catch (error) {
     aiStatus(`确认失败：${error.message}`, true);
     aiToast(error.message || '确认失败', true);
@@ -525,88 +346,8 @@ async function aiConfirmParams() {
   }
 }
 
-/* 智能补全：只补还缺的格子，给的是**建议**不是结论。
-   结果直接填进表格的输入框并标出来，由人逐项过目后再点「保存补填」——
-   补全里必然混着靠常识凑的值，直接落库的话报价那头分不清哪些是算出来的、哪些是猜的。 */
-async function aiAutofill() {
-  if (aiBusy) return;
-  aiBusy = true;
-  aiRenderActions();
-  const card = aiProcessCard('整合参数 · 智能补全');
-  aiStatus('智能补全中…');
-  try {
-    const form = new FormData();
-    const note = $ai('aiRequirement')?.value.trim() || '';
-    if (note) form.append('note', note);
-    const submitted = await api(aiUrl('/params/autofill'), { method: 'POST', body: form });
-    const result = await aiPollTask(submitted.task_id, card);
-    const fills = result?.fills || [];
-    const unresolved = result?.unresolved || [];
-    aiBusy = false;
-    aiRender();                       // 先把表格画回来，再往输入框里填
-    const applied = aiApplyFills(fills);
-    card.done(true);
-    aiStatus(`智能补全给出 ${applied} 项建议`);
-    aiSay(applied
-      ? `已为 ${applied} 项参数填入建议值（表格里标了「AI 建议」）。`
-        + `**这是建议不是结论** —— 请逐项核对，改完点「保存补填」才会写进参数表。`
-        + (unresolved.length ? `\n另有 ${unresolved.length} 项确实推不出来：${unresolved.join('、')}，需要人工确定。` : '')
-      : `没有可以推出来的参数${unresolved.length ? `：${unresolved.join('、')} 都需要人工确定。` : '。'}`);
-  } catch (error) {
-    card.done(false, error.message || '失败');
-    aiStatus(`智能补全失败：${error.message}`, true);
-    aiToast(error.message || '智能补全失败', true);
-    aiBusy = false;
-    aiRender();
-  }
-}
-
-/** 把建议值填进表格的输入框，并在行上标出来（不写库）。返回填了几项。 */
-function aiApplyFills(fills) {
-  let applied = 0;
-  fills.forEach(fill => {
-    const row = document.querySelector(`[data-ai-qp="${CSS.escape(fill.code)}"]`);
-    const input = row && row.querySelector('[data-f="value"]');
-    if (!input || input.value.trim()) return;   // 已经有值的格子不覆盖
-    input.value = fill.value;
-    const basis = row.querySelector('[data-f="basis"]');
-    if (basis && !basis.value.trim()) basis.value = fill.basis || 'AI 建议';
-    row.classList.add('ai-suggested');
-    const cell = input.parentElement;
-    if (cell && !cell.querySelector('.ai-sug')) {
-      cell.insertAdjacentHTML('beforeend',
-        `<span class="ai-sug">AI 建议 · 置信度 ${Math.round((fill.confidence ?? 0.5) * 100)}%</span>`);
-    }
-    applied += 1;
-  });
-  return applied;
-}
-
-async function aiFinalize(confirm) {
-  if (aiBusy) return;
-  aiBusy = true;
-  aiRenderActions();
-  aiStatus(confirm ? '确认整合参数…' : '保存补填…');
-  try {
-    aiData = await api(aiUrl('/params/finalize'), {
-      method: 'POST',
-      body: JSON.stringify({ values: aiCollectFinalizeValues(), confirm: !!confirm }),
-    });
-    aiStatus(confirm ? '整合参数已确认' : '补填已保存');
-    if (confirm) {
-      aiSay('整合参数已确认，报价必填的成品参数都有值了。'
-        + '现在可以点左侧「确认工艺并发送至报价」，参数会跟着一起回到报价那边。');
-    }
-    aiToast(confirm ? '整合参数已确认' : '已保存');
-  } catch (error) {
-    aiStatus(`${confirm ? '确认' : '保存'}失败：${error.message}`, true);
-    aiToast(error.message || '操作失败', true);
-  } finally {
-    aiBusy = false;
-    aiRender();
-  }
-}
-
+/** 把参数表里改过的值收回成 IntegrationParamPlan。2.3 的「整合参数」走的是另一条
+    （只回传值，由后端按"人工补填"标注），这里要连依据与来源一起存。 */
 function aiCollectParams() {
   const params = JSON.parse(JSON.stringify(aiPlan().params || {}));
   params.params = params.params || [];
@@ -791,165 +532,6 @@ function aiProcessLibraryCard(report) {
   return html + `</section>`;
 }
 
-// --------------------------------------------------------------------------- 面板：成本测算
-function aiRenderCost() {
-  const analysis = aiPlan().cost;
-  if (!analysis) {
-    return `<div class="inline-empty">尚未生成整机成本。平台会以 <strong>2.1 各零件已测算的单件成本</strong>为底，`
-      + `按组装工艺逐道工序叠加人工与设备费率，再套用库内计价系数 —— 零件成本原样引用，不重新估价。</div>`;
-  }
-  const summary = aiData?.cost_summary || {};
-  const editing = aiEditing.cost;
-  const currency = summary.currency || analysis.currency || 'CNY';
-  let html = `<div class="inline-cost-content"><section class="inline-card"><div class="inline-card-title">整机成本概览</div>`
-    + `<div class="inline-cost-total"><strong>${aiMoney(summary.computed_total)}</strong>`
-    + `<span>元 / 台（${esc(currency)}）</span><em>核算批量 ${analysis.quantity || 1} 台</em></div>`;
-  if (analysis.summary) html += `<div class="inline-row">${esc(analysis.summary)}</div>`;
-  const byCategory = summary.by_category || {};
-  const categories = Object.keys(byCategory).sort((a, b) => byCategory[b] - byCategory[a]);
-  const max = Math.max(1, ...Object.values(byCategory).map(Number));
-  if (categories.length) {
-    html += `<div class="inline-cat-bars">`;
-    categories.forEach(category => {
-      html += `<div class="inline-cat-bar"><div><span>${esc(AI_CAT_LABEL[category] || category)}</span>`
-        + `<span>${aiMoney(byCategory[category])} 元</span></div>`
-        + `<i><b style="width:${Math.floor(Number(byCategory[category]) / max * 100)}%"></b></i></div>`;
-    });
-    html += `</div>`;
-  }
-  (summary.warnings || []).forEach(warning => { html += `<div class="inline-warn">⚠ ${esc(warning)}</div>`; });
-  html += `</section>`;
-  html += aiCostModelCard(analysis.cost_model);
-
-  html += `<section class="inline-card"><div class="inline-card-title">成本明细</div>`;
-  if (!(analysis.items || []).length) {
-    html += `<div class="inline-warn">⚠ 本次没有算出任何成本明细。点上方「编辑」可以<b>手工添加材料行</b>；`
-      + `人工/制造费用/加工费用会按材料成本自动推导，不用自己填。</div>`;
-  }
-  html += `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>类别</th><th>分项</th><th>计算依据</th><th>数量</th><th>单位</th><th>单价</th><th>金额(元)</th><th>来源</th>`
-    + (editing ? `<th></th>` : '')
-    + `</tr></thead><tbody>`;
-  (analysis.items || []).forEach((item, index) => {
-    if (editing) {
-      const options = Object.keys(AI_CAT_LABEL).map(cat =>
-        `<option value="${cat}"${cat === item.category ? ' selected' : ''}>${AI_CAT_LABEL[cat]}</option>`).join('');
-      html += `<tr data-ai-cost data-i="${index}"><td><select data-f="category">${options}</select></td>`
-        + `<td><input data-f="name" value="${aiAttr(item.name || '')}"/></td>`
-        + `<td><input data-f="basis" value="${aiAttr(item.basis || '')}"/></td>`
-        + `<td><input data-f="quantity" type="number" step="any" value="${item.quantity != null ? aiAttr(item.quantity) : ''}"/></td>`
-        + `<td><input data-f="unit" value="${aiAttr(item.unit || '')}"/></td>`
-        + `<td><input data-f="unit_price" type="number" step="any" value="${item.unit_price != null ? aiAttr(item.unit_price) : ''}"/></td>`
-        + `<td><input data-f="amount" type="number" step="any" value="${item.amount != null ? aiAttr(item.amount) : ''}"/></td>`
-        + `<td><input data-f="source" value="${aiAttr(item.source || '')}"/></td>`
-        + `<td><button type="button" class="inline-action ai-row-del" data-ai-del-cost="${index}">删除</button></td></tr>`;
-    } else {
-      html += `<tr><td><span class="inline-cat-tag">${esc(AI_CAT_LABEL[item.category] || item.category)}</span></td>`
-        + `<td>${esc(item.name)}</td><td class="source">${esc(item.basis || '')}</td>`
-        + `<td class="number">${item.quantity != null ? esc(item.quantity) : ''}</td><td>${esc(item.unit || '')}</td>`
-        + `<td class="number">${item.unit_price != null ? aiMoney(item.unit_price) : ''}</td>`
-        + `<td class="number amount">${item.amount != null ? aiMoney(item.amount) : ''}</td>`
-        + `<td class="source">${esc(item.source || '')}</td></tr>`;
-    }
-  });
-  html += `</tbody></table></div>`
-    + (editing
-        ? `<button type="button" class="inline-action" id="aiAddCost">＋ 添加成本项</button>`
-          + `<div class="inline-hint">提示：保存后平台会按数量×单价重算金额，`
-          + `并按企业口径重新推导人工/制费/加工与合计。</div>`
-        : '')
-    + `</section>`;
-  html += aiCostLibraryCard(aiData?.cost_lookup);
-  if ((analysis.search_sources || []).length) {
-    html += `<section class="inline-card"><div class="inline-card-title">检索来源（可点击核查）</div>`;
-    analysis.search_sources.forEach(source => {
-      html += `<div class="inline-source">🔗 <a href="${aiAttr(source.url)}" target="_blank" rel="noopener">${esc(source.title || source.url)}</a></div>`;
-    });
-    html += `</section>`;
-  }
-  return html + aiOpenQuestionsCard(analysis.assumptions, analysis.open_questions) + `</div>`;
-}
-
-function aiMutateCost(mutate) {
-  const analysis = aiCollectCost();
-  mutate(analysis);
-  aiData.plan.cost = analysis;
-  aiRender();
-}
-
-function aiAddCostItem() {
-  // 只让加材料行：人工/制费/加工由后端按材料成本推导，手填了也会被覆盖。
-  aiMutateCost(analysis => analysis.items.push({
-    category: 'material', name: '', basis: '', quantity: null, unit: '',
-    unit_price: null, amount: null, source: '人工填写', confidence: 1,
-  }));
-}
-
-function aiCollectCost() {
-  const analysis = JSON.parse(JSON.stringify(aiPlan().cost || {}));
-  analysis.items = analysis.items || [];
-  document.querySelectorAll('[data-ai-cost][data-i]').forEach(row => {
-    const item = analysis.items[Number(row.dataset.i)];
-    if (!item) return;
-    row.querySelectorAll('[data-f]').forEach(input => {
-      const field = input.dataset.f;
-      const value = input.value;
-      if (['quantity', 'unit_price', 'amount'].includes(field)) item[field] = value.trim() === '' ? null : parseFloat(value);
-      else item[field] = value.trim() === '' ? (field === 'category' ? 'other' : null) : value;
-    });
-  });
-  return analysis;
-}
-
-/* 企业成本口径的四项。这张卡回答的是「合计这个数怎么来的」：材料逐项累加，
-   另外三项由材料乘固定系数 —— 系数写在明面上，报价那头才核得动。 */
-function aiCostModelCard(model) {
-  if (!model) return '';
-  const constants = model.constants || {};
-  const rows = [
-    ['材料', model.material, '明细逐项累加（数量 × 单价）'],
-    ['人工', model.labor, `材料 / ${constants.tax_divisor} / ${constants.material_share} × ((1 - ${constants.material_share}) × ${constants.labor_ratio})`],
-    ['制造费用', model.overhead, `材料 / ${constants.tax_divisor} / ${constants.material_share} × ((1 - ${constants.material_share}) × ${constants.overhead_ratio})`],
-    ['加工费用', model.machining, `材料 / ${constants.tax_divisor} / ${constants.material_share} × ((1 - ${constants.material_share}) × ${constants.processing_ratio})`],
-  ];
-  let html = `<section class="inline-card"><div class="inline-card-title">成本口径 · 材料 / 人工 / 制费 / 加工</div>`
-    + `<div class="inline-hint">写入物料成本配置的 material_unit_price 就是这四项的合计。</div>`
-    + `<div class="inline-cost-table-wrap"><table class="inline-cost-table"><thead><tr>`
-    + `<th>项目</th><th>金额(元)</th><th>计算依据</th></tr></thead><tbody>`;
-  rows.forEach(([label, amount, basis]) => {
-    html += `<tr><td>${esc(label)}</td><td class="number amount">${aiMoney(amount)}</td>`
-      + `<td class="source">${esc(basis)}</td></tr>`;
-  });
-  html += `<tr class="ai-group-row"><td>合计</td><td class="number amount">${aiMoney(model.total)}</td>`
-    + `<td>材料 + 人工 + 制造费用 + 加工费用</td></tr>`;
-  return html + `</tbody></table></div></section>`;
-}
-
-function aiCostLibraryCard(report) {
-  if (!report) return '';
-  const material = report.material || {};
-  const price = material.price;
-  let html = `<section class="inline-card inline-library"><div class="inline-card-title">库内依据 · 成本库</div>`
-    + `<div class="inline-hint">取价时点 ${esc(report.priced_at || '')} · 核算批量 ${report.quantity || 1}</div>`;
-  if (price) {
-    html += `<div class="inline-row"><b>整机层物料价</b>${esc(material.material_code || '')} ${esc(material.name || '')}`
-      + ` — <strong>${aiMoney(price.price)}</strong> ${esc(price.currency || '')}/${esc(price.unit || '')}</div>`;
-  }
-  (report.rates || []).forEach(rate => {
-    html += `<div class="inline-lib-step${rate.fallback ? ' extra' : ''}"><code>${esc(rate.rate_code)}</code> ${esc(rate.name || rate.rate_type)}`
-      + ` — ${aiMoney(rate.value)} ${esc(rate.unit || '')}`
-      + (rate.fallback ? `<small>库内无 ${esc(rate.requested_scope || '')} 作用域费率，已回退全厂通用值</small>` : '')
-      + `</div>`;
-  });
-  if ((report.factors || []).length) {
-    html += `<div class="inline-row"><b>计价系数</b>`
-      + report.factors.map(factor => `${esc(factor.factor_type)}=${esc(String(factor.value))}`).join('、') + `</div>`;
-  }
-  (report.gaps || []).forEach(gap => { html += `<div class="inline-warn">⚠ ${esc(gap)}</div>`; });
-  return html + `</section>`;
-}
-
-// --------------------------------------------------------------------------- 公共卡片
 function aiOpenQuestionsCard(assumptions, questions) {
   const list = questions || [];
   const notes = assumptions || [];
@@ -966,8 +548,7 @@ function aiOpenQuestionsCard(assumptions, questions) {
 // --------------------------------------------------------------------------- 渲染入口
 function aiRender() {
   const renderers = {
-    drawings: aiRenderDrawings, params: aiRenderParams,
-    process: aiRenderProcess, cost: aiRenderCost, finalize: aiRenderFinalize,
+    drawings: aiRenderDrawings, params: aiRenderParams, process: aiRenderProcess,
   };
   $ai('aiPanelTitle').textContent = AI_TABS[aiTab];
   document.querySelectorAll('#aiTabs [data-ai-tab]').forEach(button => {
@@ -975,8 +556,8 @@ function aiRender() {
   });
   const blocked = aiBlocker(aiTab);
   const state = aiData?.status || {};
-  const done = { drawings: state.drawings > 0, params: state.has_params, process: state.has_process,
-                 cost: state.has_cost, finalize: state.params_final };
+  const done = { drawings: state.drawings > 0, params: state.params_confirmed,
+                 process: state.process_confirmed };
   document.querySelectorAll('#aiStepBody [data-ai-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.aiTab === aiTab);
     button.classList.toggle('done', Boolean(done[button.dataset.aiTab]));
@@ -987,11 +568,9 @@ function aiRender() {
   aiRenderOps();
   aiBindBody();
   const stat = aiData?.param_checklist?.summary;
-  // 批量收进了小面板，平时看不见；把它写进图标的悬停提示，免得改过之后无从确认。
-  $ai('aiQtyTip').textContent = `${aiPlan().quantity || 1} 台`;
   $ai('aiSideState').textContent =
     `图纸 ${state.drawings || 0} · 参数 ${stat ? `${stat.filled}/${stat.total}` : '—'}`
-    + ` · 工艺 ${state.has_process ? '✓' : '—'} · 成本 ${state.has_cost ? '✓' : '—'}`;
+    + ` · 工艺 ${state.process_confirmed ? '已确认' : state.has_process ? '待确认' : '—'}`;
   const name = aiPlan().params?.assembly_name;
   $ai('aiTitle').textContent = name ? `组装与整合 · ${name}` : '组装与整合';
 }
@@ -1001,45 +580,35 @@ function aiRender() {
  * （远程 Postgres 与报价工作流都在那一侧）。成本没算完一律不给点 —— 写进主数据的
  * 单价是要拿去报价的，宁可拦住，也不要写一个 0 进去。
  */
-const AI_COST_LABEL = { material: '材料', labor: '人工', overhead: '制造费用', machining: '加工费用' };
 
 function aiRenderOps() {
   const plan = aiPlan();
-  const model = plan.cost?.cost_model;
-  const box = $ai('aiOpCost');
+  const state = aiData?.status || {};
   const nameInput = $ai('aiProductName');
   if (nameInput && !nameInput.value && plan.params?.assembly_name) {
     nameInput.value = plan.params.assembly_name;
   }
-  if (model) {
-    box.innerHTML = Object.keys(AI_COST_LABEL)
-      .map(key => `<span><i>${AI_COST_LABEL[key]}</i>${aiMoney(model[key])}</span>`).join('')
-      + `<span class="total"><i>合计</i>${aiMoney(model.total)} 元/台</span>`;
-  } else {
-    box.textContent = '完成成本测算后显示成品成本';
-  }
-  const state = aiData?.status || {};
-  const ready = Boolean(model) && !aiBusy;
-  // 写库只要成本；发报价还要参数收口 —— 回传给报价的就是那份参数，缺一格都不该发。
-  const missing = state.required_missing || 0;
-  // 成品编码只能由系统生成，但**不构成前置操作**：发送时若还没有编码，后端会顺手
-  // 生成一个再发（main.py::integration_send_to_quote）。所以这两个按钮各自独立，
-  // 「写入数据库」只是想单独写库时才点。
-  const noCode = !(state.has_material_code ?? (plan.material_writes || []).length);
-  const writeBtn = $ai('aiWriteDb');
-  const quoteBtn = $ai('aiToQuote');
-  writeBtn.disabled = !ready;
-  quoteBtn.disabled = !ready || missing > 0;
-  // 灰按钮必须自己说得出为什么灰。原来原因只写在下面那段说明里，一旦上面有
-  // 「✓ 已写入主数据」之类的完成记录，说明整段被顶掉，按钮就成了一个哑的黑块。
-  const why = !Boolean(model) ? '请先完成成本测算'
-    : aiBusy ? '正在处理…'
-    : missing > 0 ? `还差 ${missing} 项报价必填参数（见「整合参数」）`
+  // 2.2 不再显示成品成本 —— 成本是 2.3 的产出。这里只说工艺交到哪一步了。
+  const box = $ai('aiOpCost');
+  const finance = plan.finance_handoff;
+  box.textContent = finance
+    ? `已交给${finance.target_role_name || '财务经理'}（任务 ${finance.task_no || ''}）`
+    : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本';
+
+  const financeBtn = $ai('aiToFinance');
+  // 闸门：参数与工艺都**确认过**才允许推给财务 —— 工序和用量没定稿，算出来的成本没意义。
+  const ready = Boolean(state.params_confirmed && state.process_confirmed) && !aiBusy;
+  if (financeBtn) financeBtn.disabled = !ready;
+
+  const why = aiBusy ? '正在处理…'
+    : !state.has_params ? '请先完成参数推荐'
+    : !state.has_process ? '请先完成组装工艺'
+    : !state.params_confirmed ? '请先在「参数推荐」里点「确认参数推荐」'
+    : !state.process_confirmed ? '请先在「组装工艺」里点「确认组装工艺」'
     : '';
-  quoteBtn.title = why || (noCode
-    ? '会先自动生成成品编码，再把整机参数与成本一并送回报价'
-    : '把整机参数、成品编码与成本一并送回报价');
-  writeBtn.title = ready ? '单独写一次主数据（发送至报价时也会自动生成编码）' : '请先完成成本测算';
+  if (financeBtn) {
+    financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 2.3 测算成本';
+  }
   const badge = $ai('aiOpsWhy');
   if (badge) {
     badge.textContent = why;
@@ -1047,99 +616,155 @@ function aiRenderOps() {
   }
 
   const done = [];
+  if (finance) {
+    done.push(`已${esc(aiHandoffWhom(finance))}`
+      + (finance.task_no ? ` · 任务 ${esc(finance.task_no)}` : '')
+      + ` · ${esc(finance.sent_at || '')}`);
+  }
   (plan.material_writes || []).forEach(item => {
     done.push(`已写入主数据：<b>${esc(item.number)}</b> ${esc(item.name)}`
       + ` · 单价 ${aiMoney(item.material_unit_price)} 元 · ${esc(item.written_at || '')}`);
   });
-  if (plan.quote_handoff) {
-    const handoff = plan.quote_handoff;
-    const whom = handoff.returned_to_sender
-      ? `已退回给${esc(handoff.target_name || '发起人')}`
-        + (handoff.target_role_name ? `（${esc(handoff.target_role_name)}）` : '')
-        + (handoff.source_task_no ? ` · 来源任务 ${esc(handoff.source_task_no)}` : '')
-      : handoff.target_role_name ? `已通知${esc(handoff.target_role_name)}` : '已推送任务';
-    done.push(`已发送至报价：卡片进入第 ${handoff.next_step_no || 3} 步`
-      + `「${esc(handoff.next_step_name || '定价-利润加成')}」 · ${whom}`
-      + ((handoff.returned_sections || []).length
-          ? ` · 整机参数已写回报价第 2 步（${handoff.returned_sections.length} 张表）` : '')
-      + ` · ${esc(handoff.sent_at || '')}`);
-  }
-  // 「为什么还不能发」要一直说得出来 —— 早先它只在没有任何已完成动作时才显示，
-  // 于是写完库之后提示条整个换成"✓ 已写入主数据"，发报价按钮灰着却没人知道为什么。
-  const blockers = [];
-  if (missing) {
-    blockers.push(`<b>还差 ${missing} 项报价必填参数</b>，请先在「整合参数」环节补齐并确认。`);
-  }
-  const hint = $ai('aiOpsHint');
+  const hint = $cr_hint();
   hint.innerHTML = (done.length
     ? done.map(line => `<div class="ai-op-done">✓ ${line}</div>`).join('')
-      + `<div style="margin-top:6px">再次点击会新建一个成品编码。</div>`
-    : '写入数据库：新建成品编码，写入物料主数据与物料成本配置。<br/>'
-      + '发送至报价：任务退回给当初发起「新增工艺」的人，卡片推进到「定价-利润加成」，'
-      + '整机参数（含成品编码）随任务一起带回。'
-      + (noCode ? '<br/>两者互不依赖：直接发送时会先自动生成一个成品编码。' : ''))
-    + (blockers.length ? `<div style="margin-top:6px">${blockers.join('<br/>')}</div>` : '');
+      + `<div style="margin-top:6px">再点一次可以换个派发方式重发（旧任务会被作废）。</div>`
+    : '工艺与整机参数在这一步定稿；<strong>成本由财务经理在 2.3 测算</strong>，'
+      + '写入数据库与发送至报价也都移到了那一步。')
+    + (why ? '' : '');
 }
 
-async function aiRunOp(kind) {
+/** 说明区节点。抽出来只是为了上面那段读起来短一点。 */
+function $cr_hint() { return $ai('aiOpsHint'); }
+
+/** 这条任务交到哪儿了 —— 三种派发方式各有各的说法，别一律写成"已发送至财务经理"。 */
+function aiHandoffWhom(finance) {
+  const name = finance.target_name || finance.target_role_name || '财务经理';
+  if (finance.target_type === 'public') return '发布到公共任务池（谁都能领取）';
+  if (finance.target_type === 'user') return `指派给${name}`;
+  return `发给${name}（该角色的人都能领取）`;
+}
+
+/* 「发送至财务」的派发弹窗 —— 与报价助手的「转交任务」同构。
+   成本测算的默认收件角色是财务经理，但公司里做这件事的往往不止一个人：
+   点一下就自动群发给整个角色，等于替发起人做了他本来要做的选择。
+   三种方式都给：发给某个角色 / 指派给某个人 / 发布到公共任务池。 */
+const AI_FINANCE_ROLE = 'finance_mgr';
+
+async function aiWfApi(path) {
+  if (!window.cpqAuth || !window.cpqAuth.api) throw new Error('未加载登录模块');
+  return window.cpqAuth.api(path);
+}
+
+async function aiOpenFinanceDialog() {
   if (aiBusy) return;
-  const labels = { 'material-write': '写入数据库', 'send-to-quote': '确认工艺并发送至报价' };
+  // 名单取不到也要能发：那时只剩「发给财务经理」这一种，与改造前的行为一致。
+  let roles = [];
+  let users = [];
+  let listError = '';
+  try {
+    roles = (await aiWfApi('/auth/roles')).roles || [];
+    users = (await aiWfApi('/auth/users')).users || [];
+  } catch (error) {
+    listError = error.message || '读取人员名单失败';
+  }
+  const me = (window.cpqAuth && window.cpqAuth.user && window.cpqAuth.user()) || {};
+  const roleNameOf = code =>
+    (roles.find(r => r.role_code === code) || {}).role_name || '财务经理';
+
+  const mask = document.createElement('div');
+  mask.className = 'ai-send-mask';
+  mask.id = 'aiSendMask';
+  mask.innerHTML =
+    `<div class="ai-send-box">
+      <div class="ai-send-head"><h3>发送至财务做成本测算</h3>
+        <p>工艺、整机参数与用量在这一步定稿。接手人会在技术工艺 2.3 逐件测算零件成本、
+           组装成本并汇总，再决定写入数据库、发送至报价，或退回给你复核。</p></div>
+      <div class="ai-send-body">
+        <div class="ai-send-row"><label for="aiSendWay">推送方式</label>
+          <select id="aiSendWay">
+            <option value="role">发给某个角色（该角色的人都能领取）</option>
+            <option value="user">指派给某个人</option>
+            <option value="public">发布到公共任务池（谁都能领取）</option>
+          </select></div>
+        <div class="ai-send-row" id="aiSendRoleRow"><label for="aiSendRole">目标角色</label>
+          <select id="aiSendRole">${
+            (roles.length ? roles : [{ role_code: AI_FINANCE_ROLE, role_name: '财务经理' }])
+              .map(r => `<option value="${aiAttr(r.role_code)}"${
+                r.role_code === AI_FINANCE_ROLE ? ' selected' : ''}>${esc(r.role_name)}</option>`)
+              .join('')}</select></div>
+        <div class="ai-send-row" id="aiSendUserRow" hidden>
+          <label for="aiSendUser">目标人员（按姓名 / 角色搜索）</label>
+          <label class="ai-send-only"><input type="checkbox" id="aiSendOnly" checked />只看${esc(roleNameOf(AI_FINANCE_ROLE))}</label>
+          <input id="aiSendSearch" placeholder="输入姓名/角色筛选" />
+          <select id="aiSendUser" size="5"></select></div>
+        <div class="ai-send-row"><label for="aiSendNote">备注（可选）</label>
+          <input id="aiSendNote" maxlength="200" placeholder="给财务的说明，如核算批量、特殊工艺" /></div>
+      </div>
+      <div class="ai-send-msg" id="aiSendMsg">${listError ? esc(listError) + '：只能按角色发送。' : ''}</div>
+      <div class="ai-send-foot">
+        <button type="button" class="cancel" id="aiSendCancel">取消</button>
+        <button type="button" class="send" id="aiSendGo">发送</button>
+      </div>
+    </div>`;
+  document.body.append(mask);
+  mask.addEventListener('mousedown', event => { if (event.target === mask) mask.remove(); });
+
+  const fillUsers = () => {
+    const q = ($ai('aiSendSearch').value || '').trim().toLowerCase();
+    const onlyFinance = $ai('aiSendOnly').checked;
+    $ai('aiSendUser').innerHTML = users
+      .filter(x => String(x.user_id) !== String(me.user_id))
+      .filter(x => !onlyFinance || x.role_code === AI_FINANCE_ROLE)
+      .filter(x => !q || `${x.display_name}${x.role_name}${x.username}`.toLowerCase().includes(q))
+      .map(x => `<option value="${aiAttr(x.user_id)}">${esc(x.display_name)}（${esc(x.role_name)}）</option>`)
+      .join('') || '<option value="" disabled>没有匹配的人员</option>';
+  };
+  const syncRows = () => {
+    const way = $ai('aiSendWay').value;
+    $ai('aiSendRoleRow').hidden = way !== 'role';
+    $ai('aiSendUserRow').hidden = way !== 'user';
+    if (way === 'user') fillUsers();
+  };
+  syncRows();
+  $ai('aiSendWay').onchange = syncRows;
+  $ai('aiSendSearch').oninput = fillUsers;
+  $ai('aiSendOnly').onchange = fillUsers;
+  $ai('aiSendCancel').onclick = () => mask.remove();
+  $ai('aiSendGo').onclick = () => {
+    const way = $ai('aiSendWay').value;
+    const dispatch = { target_type: way, note: $ai('aiSendNote').value.trim() };
+    if (way === 'role') dispatch.target_role_code = $ai('aiSendRole').value;
+    if (way === 'user') {
+      dispatch.target_user_id = $ai('aiSendUser').value;
+      if (!dispatch.target_user_id) { $ai('aiSendMsg').textContent = '请选择目标人员'; return; }
+    }
+    mask.remove();
+    aiRunOp('send-to-finance', dispatch);
+  };
+}
+
+async function aiRunOp(kind, dispatch) {
+  if (aiBusy) return;
+  const labels = { 'send-to-finance': '确认工艺并发送至财务做成本测算' };
   aiBusy = true;
   aiRenderOps();
   aiRenderActions();
   const card = aiProcessCard(labels[kind]);
   aiStatus(`${labels[kind]}中…`);
   try {
-    const payload = { product_name: $ai('aiProductName')?.value.trim() || '' };
-    const data = await api(aiUrl(`/${kind}`), { method: 'POST', body: JSON.stringify(payload) });
-    aiData = data;
-    if (kind === 'material-write') {
-      const written = data.written || {};
-      card.log([`成品编码 ${written.number}`,
-        `  产品名称 ${written.name}`,
-        `  材料单价（四项合计）${written.material_unit_price} 元`,
-        `  已写入 ${(written.tables || []).join('、')}`]);
-      aiSay(`已写入数据库：成品编码 ${written.number}「${written.name}」，`
-        + `材料单价 ${written.material_unit_price} 元（材料+人工+制费+加工）。`);
-    } else {
-      const handoff = data.handoff || {};
-      // 没写过库时后端会顺手生成一个编码再发。主数据里确实多了一行，必须说出来。
-      const auto = data.auto_written;
-      // 主数据写不进去（库连不上/没权限）时改用本地临时号 —— 更要说，
-      // 否则人会以为已经入库了，回头对不上账。
-      const fallback = data.code_fallback;
-      if (auto) {
-        card.log([`自动生成成品编码 ${auto.number}`,
-          `  产品名称 ${auto.name}`,
-          `  材料单价（四项合计）${auto.material_unit_price} 元`,
-          `  已写入 ${(auto.tables || []).join('、')}`]);
-      } else if (fallback) {
-        card.log([`使用临时成品编码 ${fallback.number}（未写入主数据）`,
-          `  原因：${fallback.reason}`,
-          `  报价的定价与加价按产品行里的编码匹配，临时号照样能算；`,
-          `  等业务库恢复后请点「写入数据库」补写`]);
-      }
-      const whom = handoff.returned_to_sender
-        ? `${handoff.target_name || '发起人'}（${handoff.target_role_name || ''}）`
-        : (handoff.target_role_name || '销售经理');
-      card.log([`报价卡片进入第 ${handoff.next_step_no || 3} 步「${handoff.next_step_name || '定价-利润加成'}」`,
-        `  ${handoff.returned_to_sender ? '已退回给' : '已通知'}${whom}`
-        + (handoff.source_task_no ? `（来源任务 ${handoff.source_task_no}）` : ''),
-        ...((handoff.returned_sections || []).length
-            ? [`  整机参数已写回报价第 2 步：${handoff.returned_sections.join('、')}`] : [])]);
-      aiSay((auto ? `已自动生成成品编码 ${auto.number}「${auto.name}」并写入主数据。\n` : '')
-        + (fallback ? `⚠ 主数据暂时写不进去（${fallback.reason}），`
-            + `本次改用**临时成品编码 ${fallback.number}**继续发送 —— 报价的定价与加价是按`
-            + `产品行里的编码匹配的，所以那边照样算得出来；等业务库恢复后请回来点`
-            + `「写入数据库」补写主数据。\n` : '')
-        + `工艺已确认并发送至报价：卡片进入「${handoff.next_step_name || '定价-利润加成'}」，`
-        + (handoff.returned_to_sender
-            ? `任务已**退回给当初发起「新增工艺」的 ${whom}**`
-            : `${whom}会在报价助手里收到这条任务`)
-        + (handoff.returned_sections?.length
-            ? `；整机参数（成品编码、技术参数、单件成本）已一并带回，他打开卡片就能直接定价。`
-            : `。`));
-    }
+    const payload = Object.assign(
+      { product_name: $ai('aiProductName')?.value.trim() || '' }, dispatch || {});
+    aiData = await api(aiUrl(`/${kind}`), { method: 'POST', body: JSON.stringify(payload) });
+    const finance = aiData.finance || {};
+    const whom = aiHandoffWhom(finance);
+    card.log([`任务 ${finance.task_no || ''} 已${whom}`,
+      `  他将在技术工艺 2.3 逐件测算零件成本与组装成本`,
+      `  整合参数、写入数据库与发送至报价都在那一步完成`]);
+    aiSay(`工艺已确认，任务 ${finance.task_no || ''} 已${whom}做成本测算。
+`
+      + `他会在 2.3 逐个零件加整机算完成本、补齐报价参数，然后选择写入数据库、发送至报价，`
+      + `或把结果退回给你复核工艺与用量。`);
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
   } catch (error) {
@@ -1162,12 +787,7 @@ function aiBindBody() {
     button.onclick = () => aiMutateProcess(
       plan => plan.steps.splice(Number(button.dataset.aiDelStep), 1));
   });
-  const addCost = $ai('aiAddCost');
-  if (addCost) addCost.onclick = aiAddCostItem;
-  document.querySelectorAll('[data-ai-del-cost]').forEach(button => {
-    button.onclick = () => aiMutateCost(
-      analysis => analysis.items.splice(Number(button.dataset.aiDelCost), 1));
-  });
+  // 成本明细的增删行随成本一起搬去了 2.3（cost-review），这里不再绑。
 }
 
 /* 右侧「任务文件」。与 2.1 同一个清单接口 —— 那边分散在各步骤里的产出（原图、技术
@@ -1235,7 +855,6 @@ async function aiSaveEdits(tab) {
   const payloads = {
     params: () => ['/params', aiCollectParams(), '整机参数已保存'],
     process: () => ['/process', aiCollectProcess(), '组装工艺已保存'],
-    cost: () => ['/cost', aiCollectCost(), '整机成本已保存'],
   };
   const [path, payload, message] = payloads[tab]();
   aiEditing[tab] = false;
@@ -1276,39 +895,18 @@ async function aiRunAll() {
     body: JSON.stringify({ requirement_note: note, quantity: aiPlan().quantity || 1 }),
   }).then(data => { aiData = data; }).catch(() => {});
   aiSay('开始整合分析：参数推荐 → 组装工艺 → 成本测算，三步依次进行。');
-  for (const step of ['params', 'process', 'cost']) {
+  for (const step of ['params', 'process']) {
     await aiGenerate(step);
-    if (!aiData?.status?.[{ params: 'has_params', process: 'has_process', cost: 'has_cost' }[step]]) {
+    if (!aiData?.status?.[{ params: 'has_params', process: 'has_process' }[step]]) {
       aiSay(`「${AI_TABS[step]}」没有产出结果，后面两步依赖它，先停在这里。`);
       return;
     }
   }
-  // 第五个环节不代跑：它要人核对、补填、按下确认，自动跑没有意义。
-  aiTab = 'finalize';
+  // 确认不代跑：那是人对结果点头，自动点等于没确认。
+  aiTab = 'process';
   aiRender();
-  const missing = aiData?.status?.required_missing || 0;
-  aiSay(missing
-    ? `三个环节都已完成。最后一步「整合参数」：还有 ${missing} 项报价必填的成品参数没有值，`
-      + `在这一页逐项补填后点「确认参数已齐」，才能发送至报价。`
-    : '三个环节都已完成，报价必填的成品参数也齐了。到「整合参数」核对一遍并点「确认参数已齐」，'
-      + '就可以发送至报价了。');
-}
-
-/** 核算批量：导航条收窄之后它进了图标旁边的小面板，开合状态跟着 aria-expanded 走。 */
-function aiToggleQty(force) {
-  const pop = $ai('aiQtyPop');
-  const open = force === undefined ? pop.hidden : force;
-  pop.hidden = !open;
-  $ai('aiQtyBtn').setAttribute('aria-expanded', String(open));
-  if (open) {
-    // 点空白处收起。与模型设置弹层是同一套做法，两个面板互不打架。
-    setTimeout(() => document.addEventListener('click', aiCloseQty), 0);
-    $ai('aiQuantity').focus();
-  }
-}
-function aiCloseQty() {
-  aiToggleQty(false);
-  document.removeEventListener('click', aiCloseQty);
+  aiSay('参数推荐与组装工艺都已生成。逐项核对后，分别点「确认参数推荐」与「确认组装工艺」，'
+    + '再把任务发给财务经理做成本测算（2.3）。');
 }
 
 /* ------------------------------------------------------- 模型参数设置
@@ -1383,24 +981,18 @@ function aiBindShell() {
   };
   $ai('aiModelPill').onclick = event => { event.stopPropagation(); aiOpenSettings(event.currentTarget); };
   $ai('aiFilesRefresh').onclick = () => aiLoadManifest();
-  // 初始状态由 JS 定死，不靠 HTML 上那个 hidden 属性 —— markup 改错了这里也能兜住。
-  aiToggleQty(false);
-  $ai('aiQtyBtn').onclick = event => { event.stopPropagation(); aiToggleQty(); };
-  // 面板里点击（改数字、按上下箭头）不该把它自己关掉。
-  $ai('aiQtyPop').onclick = event => event.stopPropagation();
   $ai('aiDrawingInput').onchange = event => {
     aiUploadDrawings(event.target.files);
     event.target.value = '';
   };
   $ai('aiPlus').onclick = () => $ai('aiDrawingInput').click();
   $ai('aiStart').onclick = () => aiRunAll();
-  $ai('aiWriteDb').onclick = () => aiRunOp('material-write');
-  $ai('aiToQuote').onclick = () => aiRunOp('send-to-quote');
+  // 不直接发：先让人选派发方式（角色 / 指定人 / 公共任务池），和报价助手一致。
+  $ai('aiToFinance').onclick = () => aiOpenFinanceDialog();
   $ai('aiSend').onclick = () => aiSendNote();
   $ai('aiInput').onkeydown = event => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); aiSendNote(); }
   };
-  $ai('aiQuantity').onchange = () => aiSaveSettings();
   $ai('aiRequirement').onchange = () => aiSaveSettings();
   $ai('aiPrev').onclick = () => window.CadWorkflowNavigation?.navigate('2.1');
   $ai('aiNext').onclick = () => window.CadWorkflowNavigation?.navigate('3.1');
@@ -1410,11 +1002,11 @@ function aiBindShell() {
 async function aiSaveSettings() {
   const body = {
     requirement_note: $ai('aiRequirement').value.trim(),
-    quantity: Math.max(1, parseInt($ai('aiQuantity').value, 10) || 1),
+    // 核算批量搬去 2.3 了（成本才用得上它），这里原样保留当前值。
+    quantity: aiPlan().quantity || 1,
   };
   try {
     aiData = await api(aiUrl(''), { method: 'PUT', body: JSON.stringify(body) });
-    $ai('aiQtyTip').textContent = `${body.quantity} 台`;
     aiStatus('整合需求已保存');
   } catch (error) { aiToast(error.message || '保存失败', true); }
 }
@@ -1607,11 +1199,9 @@ async function aiStart() {
     aiData = payload;
     aiParts = parts;
     $ai('aiRequirement').value = aiPlan().requirement_note || '';
-    $ai('aiQuantity').value = aiPlan().quantity || 1;
     const state = aiData.status || {};
-    // 成本算完但参数还没收口时直接落在「整合参数」——那才是此刻待办的事。
-    aiTab = state.has_cost ? (state.params_final ? 'cost' : 'finalize')
-      : state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
+    // 落在"下一件该做的事"上。
+    aiTab = state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
     aiRender();
     aiStatus(state.confirmed ? '本步已确认' : '就绪');
     if (!parts.length) aiSay('还没有拿到 2.1 的零件清单。请先完成 2.1 图纸解析 —— 2.2 是把那些零件装回整机。');

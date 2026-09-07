@@ -68,13 +68,46 @@ def write_material(token: str, product_name: str, unit_price: float,
     })
 
 
+def send_to_finance(token: str, session_id: str, title: str, customer: str = "",
+                    project_name: str = "", note: str = "",
+                    payload: Optional[dict] = None, target_type: str = "",
+                    target_role_code: str = "", target_user_id: str = "") -> dict:
+    """2.2 → 财务：工艺与参数定稿，请到 2.3 做成本测算。
+
+    派发方式与报价助手的「转交任务」一致：role / user / public 三选一。留空则由
+    报价那边落到默认角色（成本测算=财务经理），保持老调用方不用改。
+    """
+    return _post("/wf/tech/finance", token, {
+        "session_id": session_id, "title": title, "customer": customer,
+        "project_name": project_name, "note": note, "payload": payload or {},
+        "target_type": target_type, "target_role_code": target_role_code,
+        "target_user_id": target_user_id,
+    })
+
+
+def return_to_process(token: str, session_id: str, title: str, customer: str = "",
+                      project_name: str = "", note: str = "",
+                      payload: Optional[dict] = None, target_user_id: str = "") -> dict:
+    """2.3 → 工艺经理：成本测完了，请复核工艺与用量。"""
+    return _post("/wf/tech/return-process", token, {
+        "session_id": session_id, "title": title, "customer": customer,
+        "project_name": project_name, "note": note, "payload": payload or {},
+        "target_user_id": target_user_id,
+    })
+
+
 def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
                   project_name: str = "", note: str = "",
-                  source_task_id: str = "", result: Optional[dict] = None) -> dict:
+                  source_task_id: str = "", result: Optional[dict] = None,
+                  source_session_id: str = "") -> dict:
     """确认工艺（报价第 2 步）并把卡片推进到第 3 步定价，通知销售经理。
 
     source_task_id 是当初那条「新增工艺」任务：给了它，一体化服务会回到**原来那张
     报价卡片**、把任务退回给当初发起的那个人，而不是新开一张卡片群发给销售角色。
+    source_session_id 是同一份需求单里记着的原报价会话号 —— 任务行被删或被后来的
+    任务顶掉时，它是唯一还能认回原卡片的线索。两个都给不出来才会新建卡片，而新建
+    的卡片在报价那边没有会话历史（销售点开会看到"无法打开该历史记录"），所以返回值
+    里的 linked_by / new_card 要一路带回界面说明白。
     result 是随任务带回去的整机结论（成品编码、四项成本、按 DA 字段拉平的参数）。
     """
     return _post("/wf/tech/handoff", token, {
@@ -84,5 +117,6 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
         "project_name": project_name,
         "note": note,
         "source_task_id": source_task_id,
+        "source_session_id": source_session_id,
         "result": result or {},
     })

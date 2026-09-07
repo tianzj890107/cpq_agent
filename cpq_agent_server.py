@@ -82,7 +82,11 @@ from open_claude.sessions import SessionStore
 # 报价助手是只读 Agent：隐藏文件写入/命令执行/技能等入口。取数走注入的只读 sql_query 工具。
 # 本地文件：**禁止读取除 Excel 以外的任何本地文件**——内容检索 Grep、目录列举 Glob 直接禁用；
 # 保留 Read 但在 _patched_execute_tool 里限制为只允许 .xlsx/.xls（其余路径拒绝）。
-DISABLED_TOOLS = ("Write", "Edit", "Bash", "Skill", "Agent", "Grep", "Glob")
+# Task* 四个（待办清单）在报价流程里没有用武之地：每一步该做什么由系统提示词的
+# 「业务流程」写死，模型不需要自己规划。留着只有两个后果 —— schema 白占上下文，
+# 以及模型偶尔先花一轮去建待办再干活，等于凭空多一次往返。
+DISABLED_TOOLS = ("Write", "Edit", "Bash", "Skill", "Agent", "Grep", "Glob",
+                  "TaskCreate", "TaskUpdate", "TaskList", "TaskGet")
 
 STEPS = [
     "确认需求配置",
@@ -2277,6 +2281,8 @@ class Bridge:
                 emit({"type": "done", "model": conv.model, "cost": 0.0})
                 return
             conv.add_user_message(text)
+            self._turn_no = 0          # 每次用户输入重新计数：一次交互跑了几趟模型，一眼看得见
+            turn_start = time.perf_counter()
             try:
                 for _ in range(max(1, conv.profile.max_iterations)):
                     conv._maybe_compact()
@@ -2310,6 +2316,8 @@ class Bridge:
                 emit({"type": "error", "error": str(e)})
             finally:
                 self._persist()
+                print(f"[turn] 本次交互共 {getattr(self, '_turn_no', 0)} 趟模型调用，"
+                      f"合计 {time.perf_counter() - turn_start:.2f}s", flush=True)
                 cost = getattr(conv.cost_tracker, "total_cost_usd", 0.0)
                 emit({"type": "done", "model": conv.model, "cost": round(cost, 5)})
 
@@ -2317,6 +2325,11 @@ class Bridge:
         text_buf = []
         tool_uses = []
         stop_reason = "end_turn"
+        # 慢在哪：一次回合的等待 = 发过去多少字 × 模型吞吐 + 往返次数。三个数都要能看见，
+        # 否则只能凭感觉猜。turn_no 从 1 起，工具循环每转一圈算一回合。
+        self._turn_no = getattr(self, "_turn_no", 0) + 1
+        turn_t0 = time.perf_counter()
+        first_at = [None]
 
         # 发给模型前修复 tool_use/tool_result 配对（压缩/中断可能留下孤儿块 → 供方 400）
         conv.messages[:] = cpq_msgutil.sanitize_tool_pairs(conv.messages)
@@ -2327,11 +2340,53 @@ class Bridge:
             temperature=conv.profile.temperature,
             thinking_budget=conv.profile.thinking_budget if conv.profile.thinking else None,
         )
+        sys_chars = len(conv.system_prompt or "")
+        hist_chars = len(json.dumps(conv.messages, ensure_ascii=False))
+        tool_chars = len(json.dumps(conv.tool_schemas, ensure_ascii=False))
+        print(f"[turn {self._turn_no}] 发出 {sys_chars + hist_chars + tool_chars} 字符"
+              f"（系统提示 {sys_chars} + 对话 {hist_chars} + 工具 {tool_chars}）"
+              f"，{len(conv.messages)} 条消息，模型 {conv.model}", flush=True)
+        # 等第一条事件的这段时间里，界面上必须有东西在动：不然用户看到的就是
+        # 一个静止的输入框，分不清"在算"还是"挂了"。心跳只在没收到任何事件时发。
+        stop_beat = threading.Event()
+        raw_first = [None]
+        kinds = {}
+
+        def _beat():
+            waited = 0
+            while not stop_beat.wait(5):
+                waited += 5
+                try:
+                    emit({"type": "stage",
+                          "text": f"第 {self._turn_no} 趟模型调用已等待 {waited}s…"})
+                except Exception:
+                    return
+
+        beat = threading.Thread(target=_beat, daemon=True)
+        beat.start()
+        try:
+            emit({"type": "stage",
+                  "text": f"第 {self._turn_no} 趟模型调用（发出 "
+                          f"{sys_chars + hist_chars + tool_chars} 字符）…"})
+        except Exception:
+            pass
         for ev in gen:
             t = ev["type"]
+            # 第一条**任何**事件的到达时间：它和首个文本差得远，说明模型在想
+            # （思考/工具参数流），网关并没有卡住；两者一样晚才是真的沉默。
+            if raw_first[0] is None:
+                raw_first[0] = time.perf_counter()
+                stop_beat.set()
+            kinds[t] = kinds.get(t, 0) + 1
             if t == "text_delta":
+                if first_at[0] is None:
+                    first_at[0] = time.perf_counter()
                 text_buf.append(ev["text"])
                 emit({"type": "text", "text": ev["text"]})
+            elif t == "tool_use_start":
+                # 参数还在生成中：先说一声"开始调用"，别让界面空等到 end。
+                emit({"type": "stage",
+                      "text": f"模型开始调用 {ev.get('name') or '工具'}（参数生成中…）"})
             elif t == "tool_use_end":
                 tool_uses.append({
                     "type": "tool_use", "id": ev["id"],
@@ -2378,6 +2433,18 @@ class Bridge:
             conv.messages.append(msg)
             conv.session.append_message(msg)
 
+        # 首字节 = 模型开始吐字前的等待（含排队与 prefill）；全轮 = 到停止为止。
+        # 两者差得远说明是生成慢，差不多说明卡在 prefill/排队 —— 优化方向完全不同。
+        stop_beat.set()
+        wait = (first_at[0] - turn_t0) if first_at[0] else None
+        raw = (raw_first[0] - turn_t0) if raw_first[0] else None
+        print(f"[turn {self._turn_no}] 首个事件 "
+              f"{('%.2fs' % raw) if raw is not None else '（一条都没有）'}"
+              f"，首个文本 {('%.2fs' % wait) if wait is not None else '（无文本输出）'}"
+              f"，全轮 {time.perf_counter() - turn_t0:.2f}s，停止原因 {stop_reason}"
+              f"，事件 {kinds}"
+              + (f"，工具 {[t['name'] for t in tool_uses]}" if tool_uses else ""),
+              flush=True)
         return stop_reason
 
 
@@ -3024,10 +3091,15 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+        # 等待期的心跳从后台线程发，与模型流的写入并发 —— 两边共用一把锁，
+        # 否则两条 SSE 记录会交错成半行，前端 JSON.parse 直接失败。
+        write_lock = threading.Lock()
+
         def emit(obj):
             payload = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
-            self.wfile.write(payload.encode("utf-8"))
-            self.wfile.flush()
+            with write_lock:
+                self.wfile.write(payload.encode("utf-8"))
+                self.wfile.flush()
 
         if not text:
             try:

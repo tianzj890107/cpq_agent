@@ -73,6 +73,24 @@
         + '</details>').join('') + '</div>';
   }
 
+  /* 行业模板。报价那边转过来的「新增工艺」几乎都是电池业务，而平台默认是半导体
+     （industry_templates.DEFAULT_INDUSTRY）—— 这一页原来根本没给选择，建出来的单
+     一律是半导体模板：1.1 的产品技术规格问的是晶圆尺寸、静电吸盘类型，2.x 取的也是
+     半导体那套物料与费率，等发现时已经填了一整张表。所以这里显式给出选择，默认电池。 */
+  const TT_INDUSTRIES = [['battery', '电池'], ['semiconductor', '半导体'], ['appliance', '电器']];
+  const TT_INDUSTRY_KEY = 'cpq:tech:industry';
+  const TT_DEFAULT_INDUSTRY = 'battery';
+
+  /** 当前选中的行业：优先读页面上的下拉，其次上次选过的，最后默认电池。 */
+  function industryChoice() {
+    const picked = document.getElementById('ttIndustry');
+    const codes = TT_INDUSTRIES.map(item => item[0]);
+    if (picked && codes.includes(picked.value)) return picked.value;
+    let saved = '';
+    try { saved = localStorage.getItem(TT_INDUSTRY_KEY) || ''; } catch (error) { saved = ''; }
+    return codes.includes(saved) ? saved : TT_DEFAULT_INDUSTRY;
+  }
+
   function render() {
     const payload = task.payload || {};
     const match = payload.match || {};
@@ -114,6 +132,13 @@
       + 'accept="image/*,.pdf,.txt,.md,.csv,.doc,.docx"></label>'
       + '</div>'
       + '<div class="tt-files" id="ttFiles"></div>'
+      + '<label class="tt-field"><span>行业模板</span>'
+      + '<select id="ttIndustry">'
+      + TT_INDUSTRIES.map(item => '<option value="' + item[0] + '"'
+          + (item[0] === industryChoice() ? ' selected' : '') + '>' + item[1] + '</option>').join('')
+      + '</select>'
+      + '<i class="tt-hint">决定需求单「三、产品技术规格」用哪套字段，以及 2.x 取哪套'
+      + '物料/工序/费率。建单后要改得回 1.1 改。</i></label>'
       + '<label class="tt-field"><span>需求描述</span>'
       + '<textarea id="ttNote" rows="5" placeholder="客户需求、技术要求、交期等"></textarea></label>'
       + '<div class="tt-actions">'
@@ -125,6 +150,9 @@
     document.getElementById('ttModel').onchange = event => addFiles(event, modelFiles);
     document.getElementById('ttDocs').onchange = event => addFiles(event, documentFiles);
     document.getElementById('ttCreate').onclick = create;
+    document.getElementById('ttIndustry').onchange = event => {
+      try { localStorage.setItem(TT_INDUSTRY_KEY, event.target.value); } catch (error) { /* 隐私模式 */ }
+    };
     // 报价原文可能很长，这里不像首页那样限 200 字：需求单本身没有这个限制。
     document.getElementById('ttNote').value = (payload.requirement_text || '').trim();
     renderFiles();
@@ -166,6 +194,7 @@
     const file = modelFiles[0];
     if (!file) { toast('请先上传至少一份模型图纸，再创建工艺需求。', true); return; }
     const description = document.getElementById('ttNote').value.trim();
+    const industry = industryChoice();
     const button = document.getElementById('ttCreate');
     button.disabled = true;
     button.textContent = '正在创建…';
@@ -179,13 +208,16 @@
       // 图纸已经安全落盘了。写报价来源失败不该把人困在这一页：那只是一条溯源信息，
       // 1.1 照样能继续填。把原因说出来，然后照常进 1.1。
       try {
-        await linkProject(created.project_id, description, file.name);
+        await linkProject(created.project_id, description, file.name, industry);
       } catch (linkError) {
         toast(`项目已创建，但报价来源没写进需求单：${linkError.message}`, true);
         await new Promise(resolve => setTimeout(resolve, 1200));
       }
       setProject(created.project_id);
-      location.href = `requirement-create.html?project=${encodeURIComponent(created.project_id)}`;
+      // industry 也挂在 URL 上：万一上面那次写入失败，1.1 还能靠 cpq-industry.js
+      // 用它渲染并在首次保存时补写，不至于又退回默认的半导体。
+      location.href = `requirement-create.html?project=${encodeURIComponent(created.project_id)}`
+        + `&industry=${encodeURIComponent(industry)}`;
     } catch (error) {
       toast(error.message || '创建需求失败', true);
       button.disabled = false;
@@ -194,7 +226,7 @@
   }
 
   /** 需求单里写清"这条技术工艺是哪张报价任务带来的"，1.1 之后每一步都能追回去。 */
-  async function linkProject(projectId, description, filename) {
+  async function linkProject(projectId, description, filename, industry) {
     const payload = task.payload || {};
     const title = (task.title || filename.replace(/\.[^.]+$/, '') || '新增工艺需求').slice(0, 80);
     const doc = await api(`/api/projects/${encodeURIComponent(projectId)}/requirement`)
@@ -208,6 +240,8 @@
       source_task_no: task.task_no || '',
       source_session_id: (payload.quote || {}).session_id || task.session_id || '',
       customer_name: task.customer || (doc && doc.data && doc.data.customer_name) || '',
+      // industry = 实际生效的；industry_selection = 人选的。与首页建单写的是同一对键。
+      industry, industry_selection: industry,
     });
     await api(`/api/projects/${encodeURIComponent(projectId)}/requirement`, {
       method: 'PUT',

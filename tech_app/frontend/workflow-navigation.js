@@ -7,16 +7,18 @@
 
   const stages = {
     1: ['1.1 创建', '1.2 确认', '1.3 审核'],
-    // 【CPQ 定制】技术工艺阶段保留 2.1 图纸解析与 2.2 组装与整合；上游的 2.3–2.6
+    // 【CPQ 定制】技术工艺阶段：2.1 图纸解析、2.2 组装与整合、2.3 成本测算（财务经理）；上游的
     // （材料定性/清洗/组装检测/产能）不在 CPQ 的流程内。本表是流程栏、跳转和门禁的
     // 唯一事实源。后端报告送审门禁另有一份口径（backend/config.py 的 TECH_SUBSTEPS），
     // 那里管的是上游那六个子步骤，2.2 不在其中 —— 它是 CPQ 自己新增的一步，
     // 有意不做成 3.1 的硬前置：老项目没有 2.2 的结果，挡住就没法出报告了。
-    2: ['2.1 图纸解析', '2.2 组装与整合'],
+    2: ['2.1 图纸解析', '2.2 组装与整合', '2.3 成本测算'],
     3: ['3.1 汇总结果', '3.2 审核报告', '3.3 发布报告'],
   };
   const stepKey = {
     '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing', '2.2':'integration',
+    // 2.3 成本测算：财务经理的步骤（工艺经理在 2.2 末尾把项目交过来）
+    '2.3':'costReview',
     '3.1':'summary', '3.2':'reportReview', '3.3':'publish',
   };
   let cachedProject = null;
@@ -92,7 +94,10 @@
     const codeNodes = current.filter((node) => labelCode(node.textContent));
     codeNodes.forEach((node) => {
       if (node.tagName === 'BUTTON') { node.dataset.workflowCode = labelCode(node.textContent); return; }
-      const replacement = linkMarkup(container, node.textContent.trim(), variant);
+      // 文案也以 stages 为准：2.2/2.3 这两个号在上游是「材料定性 / 工艺路径」，
+      // 我们换成了「组装与整合 / 成本测算」。只按号留下节点会把旧名字留在栏里。
+      const canonical = stages[stage].find(label => labelCode(label) === labelCode(node.textContent));
+      const replacement = linkMarkup(container, (canonical || node.textContent).trim(), variant);
       replacement.className = `${replacement.className} ${node.className || ''}`;
       node.replaceWith(replacement);
     });
@@ -199,12 +204,12 @@
     const timing = value.timing || {};
     return timing.completed === true || timing.status === 'done' || Object.keys(value).some((k) => !['timing', 'project_id', 'updated_at', 'history'].includes(k) && value[k]);
   }
-  // 2.2 组装与整合：参数/工艺/成本三样都有产出才算做完。
+  // 2.2 组装与整合：参数与组装工艺都有产出才算做完。
+  // **不再要求成本** —— 成本从 2.2 拆出去了，归财务经理在 2.3 做。
   function integrationDone(progress) {
     const doc = progress?.aggregate?.steps?.integration;
     if (!doc || typeof doc !== 'object') return false;
-    return Boolean(doc.params?.params?.length) && Boolean(doc.process?.steps?.length)
-      && Boolean(doc.cost?.items?.length);
+    return Boolean(doc.params?.params?.length) && Boolean(doc.process?.steps?.length);
   }
   function stepFinished(progress, key) {
     const timing = progress?.aggregate?.steps?.[key]?.timing || {};
@@ -250,6 +255,8 @@
     // 流程栏只回答"这一步做没做"。这里不能用 hasStepData：只要在 2.2 存过一次
     // 整合需求，文档里就有 quantity 之类的非空字段，那套通用判据会直接判成已完成。
     if (integrationDone(progress)) doneCodes.add('2.2');
+    // 2.3 以"财务确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
+    if (progress?.aggregate?.steps?.cost_review?.confirmed) doneCodes.add('2.3');
     if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('3.1');
     if (['approved', 'published'].includes(report.status)) doneCodes.add('3.2');
     if (report.status === 'published') doneCodes.add('3.3');
@@ -289,6 +296,9 @@
       // 2.2 要的是"零件已经拆出来了"，光有需求审批没用 —— 组装是把 2.1 的零件装回整机。
       '2.2': [Boolean(progress?.aggregate?.ir?.parts?.length),
               '请先完成 2.1 图纸解析并生成零件清单，2.2 要把这些零件装回整机。'],
+      // 2.3 要的是"工艺与整机参数已定稿"：成本按 2.2 的 BOM 与工序算。
+      '2.3': [Boolean(progress?.aggregate?.steps?.integration?.process?.steps?.length),
+              '请先完成 2.2 组装与整合：成本要按整机 BOM 与组装工序来算。'],
       '3.1': [readySummary, '请先完成 2.1 图纸解析并生成解析结果。'],
       '3.2': [readyReview, '请先在 3.1 汇总结果中保存并提交评估报告。'],
       '3.3': [readyPublish, '请先完成 3.2 审核报告并获得通过。'],
@@ -299,7 +309,8 @@
     const q = id ? `?project=${encodeURIComponent(id)}` : '';
     const routes = {
       '1.1': `/requirement-create.html${q}`, '1.2': `/requirement-confirm.html${q}`, '1.3': `/requirement-review.html${q}`,
-      '2.1': `/index.html${q}`, '2.2': `/assembly-integration.html${q}`, '3.1': `/summary.html${q}`, '3.2': `/report-review.html${q}`, '3.3': `/report-publish.html${q}`,
+      '2.1': `/index.html${q}`, '2.2': `/assembly-integration.html${q}`,
+      '2.3': `/cost-review.html${q}`, '3.1': `/summary.html${q}`, '3.2': `/report-review.html${q}`, '3.3': `/report-publish.html${q}`,
     };
     return routes[code] || '/home.html';
   }

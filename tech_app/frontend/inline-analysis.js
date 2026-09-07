@@ -72,7 +72,7 @@
       <div class="inline-analysis-title"><span class="inline-analysis-icon">${icon}</span><div><strong>${title}</strong><small>${esc(context.part.part_id)} · ${esc(partName)}</small></div></div>
         <button type="button" class="inline-analysis-close" data-inline-close>返回零件详情</button>
       </div>
-      <div class="inline-analysis-tabs"><button type="button" data-inline-mode="process" class="${mode === "process" ? "active" : ""}">工艺推荐</button><button type="button" data-inline-mode="cost" class="${mode === "cost" ? "active" : ""}">成本测算</button></div>
+      ${mode === "cost" ? `<div class="inline-analysis-tabs"><button type="button" data-inline-mode="process">工艺推荐</button><button type="button" data-inline-mode="cost" class="active">成本测算</button></div>` : ""}
       <div class="inline-analysis-inputs"><textarea data-inline-note rows="2" placeholder="${notePlaceholder}"></textarea>${quantity}<label class="inline-file-picker"><input data-inline-files type="file" multiple accept="image/*,.txt,.md,.csv,.json,.pdf,.yaml,.yml" /><span>选择补充文件</span><em data-inline-files-name>未选择文件</em></label></div>
       <div class="inline-analysis-actions"><button type="button" class="inline-action primary start-parse-btn" data-inline-generate>${mode === "process" ? "生成工艺推荐" : "生成成本测算"}</button><button type="button" class="inline-action" data-inline-edit disabled>编辑</button><button type="button" class="inline-action save" data-inline-save hidden>保存</button></div>
       <div class="inline-analysis-status" data-inline-status></div>

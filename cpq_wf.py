@@ -42,13 +42,30 @@ TARGET_TYPES = ("role", "user", "public")
 # 报价卡片留在原步骤等新产品出来，所以它不能走 handoff 那套推进步骤的逻辑。
 TASK_KIND_HANDOFF = "handoff"
 TASK_KIND_TECH_NEW = "tech_new_product"
-TASK_KINDS = (TASK_KIND_HANDOFF, TASK_KIND_TECH_NEW)
+# 技术工艺 2.2 做完工艺与参数之后，成本不归工艺经理算 —— 交给财务经理去 2.3 测算。
+# 和「新增工艺」一样是支线：报价卡片留在原处等成本，不推进步骤。
+TASK_KIND_TECH_COST = "tech_cost"
+# 财务测完把结果退回工艺经理复核（工艺有问题要他改工序/用量，不是财务改）。
+TASK_KIND_TECH_COST_RETURN = "tech_cost_return"
+TASK_KINDS = (TASK_KIND_HANDOFF, TASK_KIND_TECH_NEW,
+              TASK_KIND_TECH_COST, TASK_KIND_TECH_COST_RETURN)
 TASK_KIND_LABELS = {
     TASK_KIND_HANDOFF: "转交工艺确认",
     TASK_KIND_TECH_NEW: "新增工艺",
+    TASK_KIND_TECH_COST: "成本测算",
+    TASK_KIND_TECH_COST_RETURN: "成本结果复核",
 }
-# 新增工艺固定发给工艺经理：这件事只有他能做，让销售再选一次角色只会选错。
+# 支线任务的默认收件角色：这几件事各自只有一个角色能做，让人再选一次只会选错。
 TECH_NEW_ROLE = "process_mgr"
+TECH_COST_ROLE = "finance_mgr"
+TECH_COST_RETURN_ROLE = "process_mgr"
+_KIND_DEFAULT_ROLE = {
+    TASK_KIND_TECH_NEW: TECH_NEW_ROLE,
+    TASK_KIND_TECH_COST: TECH_COST_ROLE,
+    TASK_KIND_TECH_COST_RETURN: TECH_COST_RETURN_ROLE,
+}
+# 这几类都是支线：卡片不推进步骤、也不置"待转交"。
+SIDE_TASK_KINDS = (TASK_KIND_TECH_NEW, TASK_KIND_TECH_COST, TASK_KIND_TECH_COST_RETURN)
 
 # 卡片总状态（awaiting_handoff = 本步已完成、下一步归别人，正等着推送任务流）
 STATUS_LABELS = {
@@ -435,17 +452,30 @@ def step_snapshot(session_id: str, step_no: int):
         return None
 
 
-def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "") -> dict:
+def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
+                  on_behalf_of: str = "") -> dict:
     """把某一步标记为完成（角色不符会被拒绝）。
 
     返回 {card, need_handoff, next_step_no, next_step_name, next_role_code/name}：
-    下一步若归属别的角色，卡片置为 awaiting_handoff（待转交），前端据此强制走推送任务流。"""
+    下一步若归属别的角色，卡片置为 awaiting_handoff（待转交），前端据此强制走推送任务流。
+
+    on_behalf_of：**代技术侧完成**。第 2 步「工艺确认」归工艺经理，但成本测算拆给
+    财务之后，这一步的收尾动作（技术工艺 2.3「发送至报价」）是财务经理点的 ——
+    他做完成本才轮到报价定价。他不是在报价界面上冒名点"完成第 2 步"，而是走
+    cpq_tech_bridge 那条集成通道，那里已经按自己的规则鉴过权（finance_mgr /
+    process_mgr）。所以这里只认一件事：代办的角色必须**正是这一步的归属角色**，
+    否则一律拒绝 —— 它是给集成通道用的定向豁免，不是一把万能钥匙。
+    """
     if not user:
         raise WfError("请先登录")
     step_no = int(step_no or 0)
     if not (1 <= step_no <= LAST_STEP):
         raise WfError("步骤号无效")
-    if not can_do_step(user, step_no):
+    stand_in = str(on_behalf_of or "").strip()
+    if stand_in and stand_in != role_of_step(step_no):
+        raise WfError(f"不能以「{ROLES.get(stand_in, stand_in)}」的名义完成第 {step_no} 步")
+    stand_in_used = bool(stand_in) and not can_do_step(user, step_no)
+    if not can_do_step(user, step_no) and not stand_in:
         need = ROLES.get(role_of_step(step_no), "指定角色")
         raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
     conn = cpq_auth._connect()
@@ -484,8 +514,12 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "")
             conn, "UPDATE cpq_wf_task SET status = 'completed', completed_at = %s"
                   " WHERE card_id = %s AND claimed_by_user_id = %s AND status = 'claimed'",
             (_ts(now), cid, int(user["user_id"])))
+        # 代办要写进留痕：卡片上这一步显示"已完成"，但完成的人不是它的归属角色，
+        # 事后追溯必须看得出是谁、以什么名义做的。
         _log(conn, cid, None, int(user["user_id"]), "step_done", step_no, nxt,
-             f"{user.get('display_name')} 完成第 {step_no} 步")
+             f"{user.get('display_name')} 完成第 {step_no} 步"
+             + (f"（{user.get('role_name')} 代「{ROLES.get(stand_in, stand_in)}」，"
+                f"技术工艺 2.3 成本测算后回传）" if stand_in_used else ""))
         # 自动推送：下一步换角色时（如工艺经理确认完第 2 步），不弹推送选择，
         # 直接把任务自动发给**项目创建人**（卡片 creator_user_id，即发起这单报价的销售经理）。
         # 创建人就是自己 / 账号失效 / 角色与下一步不匹配时才退回手动推送。
@@ -656,8 +690,8 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
     # 新增工艺与转交一样支持三种派发方式，也能指定到人；TECH_NEW_ROLE 只是**没指定
     # 目标时**的默认收件角色，不是限制。早先在这里强制成 role/process_mgr，界面上
     # 就没法给这条支线选人了。
-    if task_kind == TASK_KIND_TECH_NEW and not target_type:
-        target_type, target_role_code = "role", TECH_NEW_ROLE
+    if task_kind in _KIND_DEFAULT_ROLE and not target_type:
+        target_type, target_role_code = "role", _KIND_DEFAULT_ROLE[task_kind]
     if target_type not in TARGET_TYPES:
         raise WfError("派发方式无效")
     if target_type == "role" and target_role_code not in ROLES:
@@ -690,11 +724,15 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         else:
             whom = "发布为公共任务"
         step_name = dict((s[0], s[1]) for s in QUOTE_STEPS).get(from_step, "")
-        is_tech_new = task_kind == TASK_KIND_TECH_NEW
-        what = ("请到技术工艺新增产品" if is_tech_new
-                else f"待办第 {from_step} 步「{step_name}」")
+        is_side = task_kind in SIDE_TASK_KINDS
+        what = {
+            TASK_KIND_TECH_NEW: "请到技术工艺新增产品",
+            TASK_KIND_TECH_COST: "请到技术工艺 2.3 做成本测算",
+            TASK_KIND_TECH_COST_RETURN: "成本已测算，请复核工艺与用量",
+        }.get(task_kind, f"待办第 {from_step} 步「{step_name}」")
+        kind_label = TASK_KIND_LABELS.get(task_kind, task_kind)
         label = (f"{user.get('role_name')}·{user.get('display_name')} "
-                 f"{'发起「新增工艺」' if is_tech_new else '转交'} · {what} · {whom}")
+                 f"{f'发起「{kind_label}」' if is_side else '转交'} · {what} · {whom}")
         tid = _new_id(conn)
         cpq_auth._exec(
             conn, "INSERT INTO cpq_wf_task (task_id, card_id, from_user_id, from_step_no,"
@@ -705,27 +743,27 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
              target_role_code, target_user_id,
              label, (note or "")[:500], _ts(_now()), task_kind,
              json.dumps(payload, ensure_ascii=False) if payload else None))
-        # 新增工艺是支线：报价还停在第 1 步等新产品，不能把卡片标成"已转交待领取"，
-        # 否则销售在「我的报价」里会以为这单已经交出去、不用管了。
-        if not is_tech_new:
+        # 支线任务（新增工艺、成本测算、成本复核）都不夺卡片持有人：报价还停在原来
+        # 那一步等结果，标成"已转交待领取"会让销售以为这单已经交出去、不用管了。
+        if not is_side:
             cpq_auth._exec(
                 conn, "UPDATE cpq_wf_card SET overall_status = 'handoff_pending', updated_at = %s"
                       " WHERE card_id = %s", (_ts(_now()), cid))
         _log(conn, cid, tid, int(user["user_id"]),
-             "tech_new" if is_tech_new else "send", from_step, None, label)
+             (task_kind if is_side else "send"), from_step, None, label)
 
         # 消息系统：自己留一条「我发出的任务」，相关人各收一条「收到新任务」
         title = card.get("title") or "未命名报价"
         note_txt = ("；备注：" + note.strip()) if (note or "").strip() else ""
         _msg(conn, int(user["user_id"]),
-             "task_sent", f"你已{'发起新增工艺' if is_tech_new else '转交'}「{title}」",
+             "task_sent", f"你已{f'发起{kind_label}' if is_side else '转交'}「{title}」",
              f"{whom}，{what}{note_txt}", cid, tid, session_id, from_step)
         for rid in _recipients(conn, target_type, target_role_code,
                                target_user_id, int(user["user_id"])):
             _msg(conn, rid, "task_received", f"收到新任务：「{title}」",
                  f"{user.get('role_name')}·{user.get('display_name')} "
-                 + ("发起「新增工艺」：标品匹配不足，请到技术工艺新建产品"
-                    if is_tech_new else f"转交，待办第 {from_step} 步「{step_name}」")
+                 + (f"发起「{kind_label}」：{what}"
+                    if is_side else f"转交，待办第 {from_step} 步「{step_name}」")
                  + note_txt,
                  cid, tid, session_id, from_step)
         _commit(conn)
@@ -776,11 +814,15 @@ def _task_row(row) -> dict:
     d["next_step_name"] = dict((s[0], s[1]) for s in QUOTE_STEPS).get(nxt, "")
     d["next_role_code"] = role_of_step(nxt)
     d["next_role_name"] = ROLES.get(d["next_role_code"], d["next_role_code"])
-    if d["task_kind"] == TASK_KIND_TECH_NEW:
-        # 新增工艺不是"做第 N 步"，而是去技术工艺建新产品；沿用 next_step_* 会让
+    if d["task_kind"] in SIDE_TASK_KINDS:
+        # 支线任务不是"做第 N 步"，而是去技术工艺做一件事；沿用 next_step_* 会让
         # 待办卡片显示成"第 1 步 确认需求配置"，接手人以为是要他去改报价。
-        d["next_step_name"] = "技术工艺 · 新增产品"
-        d["next_role_code"] = TECH_NEW_ROLE
+        d["next_step_name"] = {
+            TASK_KIND_TECH_NEW: "技术工艺 · 新增产品",
+            TASK_KIND_TECH_COST: "技术工艺 2.3 · 成本测算",
+            TASK_KIND_TECH_COST_RETURN: "技术工艺 · 复核工艺与用量",
+        }[d["task_kind"]]
+        d["next_role_code"] = _KIND_DEFAULT_ROLE[d["task_kind"]]
         d["next_role_name"] = ROLES.get(TECH_NEW_ROLE, TECH_NEW_ROLE)
     return d
 
@@ -877,13 +919,13 @@ def claim_task(task_id: str, user: dict) -> dict:
                   " claimed_at = %s WHERE task_id = %s", (uid, _ts(now), int(task_id)))
         # 新增工艺是支线：领取它不代表接管这张报价卡片，卡片仍归销售经理。
         # 改了持有人的话，销售在「我的报价」里会发现自己的单子姓了别人的名字。
-        if kind != TASK_KIND_TECH_NEW:
+        if kind not in SIDE_TASK_KINDS:
             cpq_auth._exec(
                 conn, "UPDATE cpq_wf_card SET current_owner = %s, overall_status = 'in_progress',"
                       " updated_at = %s WHERE card_id = %s", (uid, _ts(now), cid))
         _log(conn, cid, int(task_id), uid, "claim", from_step, None,
              f"{user.get('display_name')} 领取"
-             + ("「新增工艺」任务" if kind == TASK_KIND_TECH_NEW else "任务"))
+             + (f"「{TASK_KIND_LABELS[kind]}」任务" if kind in SIDE_TASK_KINDS else "任务"))
         cur = cpq_auth._exec(conn, "SELECT session_id, title FROM cpq_wf_card WHERE card_id = %s", (cid,))
         r = cur.fetchone()
         sid, ctitle = (r[0], r[1]) if r else ("", "")

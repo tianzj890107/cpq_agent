@@ -1199,7 +1199,9 @@ function buildPartSubActions(part) {
 
   const row = document.createElement("div");
   row.className = "part-nav part-subactions-row";   // 复用原右侧按钮的既有样式
-  [["process", "工艺推荐", processWrenchNavIcon], ["cost", "成本测算", costNavIcon]]
+  // 2.1 只出工艺，不出成本 —— 成本测算已拆成 2.3，由财务经理做（services/cost_review.py）。
+  // 工艺经理在这里交的是工序与用量，成本的数字不该由他给。
+  [["process", "工艺推荐", processWrenchNavIcon]]
     .forEach(([mode, label, icon]) => {
       const button = document.createElement("button");
       button.type = "button";

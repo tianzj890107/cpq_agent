@@ -253,8 +253,22 @@ function renderHome() {
     <button class="cpq-nav-icon" id="homeNavHistory">${homeNavIcon(3)}<b>历史对话</b></button>
     <i class="cpq-nav-grow"></i>
     <div class="cpq-nav-bottom-icons">
-      <button class="cpq-nav-icon" id="homeNavSettings">${homeNavIcon(6)}<b>模型设置</b></button>
-      <a class="cpq-nav-icon" href="account.html">${homeNavIcon(7)}<b>用户设置</b></a>
+      <!-- 底部三格与报价助手一模一样：消息 → 设置 → 分隔线 → 登录。
+           id 与 .nav-tooltip 是 cpq_msg.js / cpq_auth.js 认的契约（未读红点、
+           登录态图标与文案都由它们自己维护），照抄那份 markup，不能改名。
+           图标也用同一套 tabler：ti-bell / ti-settings / ti-login。 -->
+      <div class="cpq-nav-icon" id="cpqMsgBtn" role="button" tabindex="0"
+           onclick="window.cpqMsg && cpqMsg.open()" aria-label="消息">
+        <i class="ti ti-bell"></i><span class="nav-tooltip">消息</span>
+      </div>
+      <button class="cpq-nav-icon" id="homeNavSettings" aria-label="设置">
+        <i class="ti ti-settings"></i><span class="nav-tooltip">设置</span>
+      </button>
+      <i class="cpq-nav-divider"></i>
+      <div class="cpq-nav-icon" id="cpqAuthBtn" role="button" tabindex="0"
+           onclick="window.cpqAuth && cpqAuth.open()" aria-label="登录">
+        <i class="ti ti-login"></i><span class="nav-tooltip">登录</span>
+      </div>
     </div>
   </div>
   <div class="cpq-nav-expanded" id="homeNavExpanded">

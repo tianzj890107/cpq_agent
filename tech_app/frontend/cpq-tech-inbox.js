@@ -106,15 +106,17 @@
   function taskCard(t) {
     const claimed = t.status === 'claimed';
     const techNew = t.task_kind === 'tech_new_product';
-    const way = techNew ? '新增工艺'
-      : t.target_type === 'public' ? '公共任务'
-      : t.target_type === 'role' ? '定向角色' : '指派给我';
+    // 支线任务用任务类型本身作标题，比"定向角色"有信息量得多。
+    const side = { tech_new_product: '新增工艺', tech_cost: '成本测算',
+                   tech_cost_return: '成本结果复核' }[t.task_kind];
+    const way = side || (t.target_type === 'public' ? '公共任务'
+      : t.target_type === 'role' ? '定向角色' : '指派给我');
     return `<article class="request-card cpq-inbox-card${techNew ? ' technew' : ''}" data-inbox-task="${esc(t.task_id)}">
       <div class="request-card-header"><span class="request-id">${esc(way)}</span>
         <span class="request-status ${claimed ? 'status-reviewing' : 'status-draft'}">${claimed ? '进行中' : '待领取'}</span></div>
       <div class="request-title" title="${esc(t.title || '')}">${esc(t.title || '未命名报价')}</div>
       <div class="cpq-inbox-meta">
-        ${techNew && t.task_no ? `<span class="cpq-inbox-chip no">${esc(t.task_no)}</span>` : ''}
+        ${side && t.task_no ? `<span class="cpq-inbox-chip no">${esc(t.task_no)}</span>` : ''}
         <span class="cpq-inbox-chip">${esc(t.next_step_name || '')}</span>
         <span class="cpq-inbox-chip">客户 ${esc(t.customer || '—')}</span>
         <span class="cpq-inbox-chip">${esc(fmtTime(t.created_at))}</span>
@@ -170,6 +172,13 @@
       location.href = '/tech-task.html?tech_task=' + encodeURIComponent(task.task_id);
       return;
     }
+    // 成本测算（财务经理）→ 2.3；成本结果复核（工艺经理）→ 2.2 改工序/用量。
+    // 这两条支线的 session_id 就是技术工艺的项目号。
+    if (kind === 'tech_cost' || kind === 'tech_cost_return') {
+      const page = kind === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
+      location.href = page + '?project=' + encodeURIComponent(task.session_id || '');
+      return;
+    }
     // 工艺确认这一步是在报价工作台里做的（回显第 1 步需求 + 产品推荐表），不在技术工艺。
     try { sessionStorage.setItem('cpq:openSession', task.session_id || ''); } catch (e) {}
     location.href = QUOTE_PAGE;
@@ -209,24 +218,21 @@
     }, true);
   }
 
+  /* 消息与登录两格**不再由这里注入** —— home.js 的 renderHome() 已经按报价助手那份
+     markup 原样渲染了它们（消息 / 设置 / 分隔线 / 登录）。两边都建的结果是侧栏底部
+     排了四格：这里插的「消息 / 登录」+ 首页自己的「模型设置 / 用户设置」。
+     留一层守卫：万一 home.js 那份没渲染出来（旧缓存），至少把消息补回去。 */
   function mountNavButtons() {
-    const rail = document.querySelector('.cpq-nav-bottom-icons') || document.querySelector('.home-nav-rail');
+    const rail = document.querySelector('.cpq-nav-bottom-icons');
     if (!rail || document.getElementById('cpqMsgBtn')) return;
-    const bell = document.createElement('button');
+    const bell = document.createElement('div');
     bell.className = 'cpq-nav-icon';
     bell.id = 'cpqMsgBtn';
-    bell.type = 'button';
-    bell.innerHTML = '<i class="ti ti-bell"></i><b>消息</b>';
+    bell.setAttribute('role', 'button');
+    bell.tabIndex = 0;
+    bell.innerHTML = '<i class="ti ti-bell"></i><span class="nav-tooltip">消息</span>';
     bell.onclick = () => (window.cpqMsg ? window.cpqMsg.open()
       : (window.homeToast && homeToast('消息模块未加载（需经 8010 一体化服务访问）', true)));
-    // 账号按钮：cpq_auth.js 靠它显示当前登录人；没有它，登录态在这一页看不见。
-    const account = document.createElement('button');
-    account.className = 'cpq-nav-icon';
-    account.id = 'cpqAuthBtn';
-    account.type = 'button';
-    account.innerHTML = '<i class="ti ti-login"></i><b class="nav-tooltip">登录</b>';
-    account.onclick = () => window.cpqAuth && window.cpqAuth.open();
-    rail.insertBefore(account, rail.firstChild);
     rail.insertBefore(bell, rail.firstChild);
   }
 

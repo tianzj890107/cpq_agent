@@ -10,15 +10,34 @@
  *      一行不用改就自动带上了正确的 Authorization。
  *   ② 未登录时挡住页面，并把人送去 CPQ 的登录框（不是技术工艺自己的 auth.html
  *      —— 那套在 SSO 模式下已经停用）。
- *   ③ 不是工艺经理时标成只读：顶部横幅说清楚，并拦下所有写请求。
+ *   ③ 不是工艺经理时标成只读：顶部横幅说清楚，并拦下写请求。
  *      真正的权限判定始终在后端；这里只是别让人白点一遍再吃 403。
+ *
+ *      **注意别拦过头**：2.3 成本测算归财务经理（他在工艺侧确实只读）。
+ *      这里原来只看 can_write（=工艺侧写权限），于是财务经理点「测算」时请求
+ *      根本发不出去，前端自己伪造了一个 403，还带着"仅限工艺经理"的文案 ——
+ *      后端权限改对了也没用。现在按**能力**分别放行：can_write 管工艺侧，
+ *      can_cost 管成本相关接口。
  */
 (function () {
   'use strict';
 
   var CPQ_TOKEN_KEY = 'cpq_auth_token';
   var MIRROR_KEYS = ['authToken', 'cad_engine_token'];
-  var state = { enabled: false, user: null, canWrite: false, roleName: '', checked: false };
+  var state = { enabled: false, user: null, canWrite: false, canCost: false,
+                roleName: '', checked: false };
+
+  /* 成本相关接口：2.3 本体，以及零件/整机成本与整合参数（都随成本搬去了 2.3）。
+     只列**写**接口的路径特征，判定仍以后端 COST_ROLES 为准。 */
+  var COST_URL_PATTERNS = [
+    /\/cost-review(\/|$|\?)/,
+    /\/parts\/[^/]+\/cost(\/|$|\?)/,
+    /\/integration\/cost(\/|$|\?)/,
+    /\/integration\/params\/(autofill|finalize)(\/|$|\?)/,
+  ];
+  function isCostUrl(url) {
+    return COST_URL_PATTERNS.some(function (re) { return re.test(url); });
+  }
 
   function ls(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
   function setLs(key, value) {
@@ -137,8 +156,11 @@
     var bar = document.createElement('div');
     bar.className = 'cpq-sso-bar';
     bar.innerHTML = '<span>当前以 <b>' + esc(state.roleName || '非工艺经理') +
-      '</b> 身份登录，技术工艺为<b>只读</b>：可以查看项目与结果，' +
-      '解析、生成、保存、确认、发布等操作仅限工艺经理。</span>' +
+      '</b> 身份登录，' + (state.canCost
+        ? '你负责 <b>2.3 成本测算</b>：那一步可以测算、确认并对外发送；' +
+          '2.1 图纸解析与 2.2 组装整合归工艺经理，这里是只读。'
+        : '技术工艺为<b>只读</b>：可以查看项目与结果，' +
+          '解析、生成、保存、确认、发布等操作仅限工艺经理。') + '</span>' +
       '<button type="button">切换账号</button>';
     bar.querySelector('button').onclick = openCpqLogin;
     document.body.insertBefore(bar, document.body.firstChild);
@@ -158,9 +180,14 @@
     var url = typeof input === 'string' ? input : (input && input.url) || '';
     var method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
     var isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/api/') !== -1;
-    if (isWrite && state.enabled && state.checked && !state.canWrite) {
-      var detail = '技术工艺的操作仅限工艺经理；' + (state.roleName || '当前账号') +
-        '只能浏览，不能执行本操作';
+    // 有对应能力就放行，让后端逐接口判定：拦截只是省一次往返，不是权限本身。
+    var allowed = state.canWrite || (state.canCost && isCostUrl(url));
+    if (isWrite && state.enabled && state.checked && !allowed) {
+      var detail = state.canCost
+        ? '这一步归工艺经理；' + (state.roleName || '当前账号') +
+          '负责的是 2.3 成本测算，其余步骤只读'
+        : '技术工艺的操作仅限工艺经理；' + (state.roleName || '当前账号') +
+          '只能浏览，不能执行本操作';
       toast(detail);
       return Promise.resolve(new Response(JSON.stringify({ detail: detail }), {
         status: 403, headers: { 'Content-Type': 'application/json' },
@@ -188,6 +215,7 @@
     state.enabled = !!sso.enabled;
     state.user = (data && data.user) || null;
     state.canWrite = !!sso.can_write;
+    state.canCost = !!sso.can_cost;
     state.roleName = sso.role_name || '';
     state.checked = true;
     // 身份已确认：无论此前因为未登录还是登录服务故障挂了遮罩，这里都要收掉。

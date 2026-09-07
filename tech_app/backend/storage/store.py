@@ -671,6 +671,17 @@ def load_integration(project_id: str) -> Optional[dict]:
     return _meta().get_doc(project_id, "integration")
 
 
+def save_cost_review(project_id: str, review: dict, author: str = "system") -> None:
+    """2.3 成本测算的评审状态（财务经理的环节）。成本数字仍在 cost / integration 里。"""
+    _meta().put_doc(project_id, "cost_review", review)
+    _touch_stage(project_id, "cost_review")
+    audit(project_id, "save_cost_review", {"by": author})
+
+
+def load_cost_review(project_id: str) -> Optional[dict]:
+    return _meta().get_doc(project_id, "cost_review")
+
+
 def save_integration_drawing(project_id: str, filename: str, data: bytes,
                              author: str = "system") -> str:
     """整合图纸单独存 {pid}/integration/ 下，不并入项目附件。

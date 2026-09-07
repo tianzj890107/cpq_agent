@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="tech-rail.css?v=rail1" />
+  <link rel="stylesheet" href="tech-rail.css?v=rail2" />
   <link rel="stylesheet" href="assembly-integration.css?v=ai5" />
   <!-- 与 2.1 同样把未捕获异常写进状态徽章：脚本一挂，页面看上去只是"按钮全灰"，
        屏幕上没有任何线索。 -->
@@ -24,7 +24,7 @@
          + ":" + event.lineno + "）" : "");
   });
   </script>
-  <script src="cpq-sso.js?v=sso1"></script>
+  <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
   <div class="oc-app">
@@ -32,9 +32,14 @@
          四个环节仍然常驻可见（这是本页的步骤追踪），做完的打绿点、当前的高亮 ——
          收成图标之后它是唯一还能看出"跑到哪一步"的地方，不能收进抽屉。 -->
     <nav class="oc-rail" id="aiStepDock" aria-label="本步骤环节">
+      <!-- 项目与进度收进 logo 的提示条：底部三个格子要与报价助手一致（消息/设置/登录），
+           腾不出位置常驻显示它们；但 #aiSideProject / #aiSideState 这两个节点必须留着 ——
+           aiStart 与 aiRender 会往里写。 -->
       <div class="oc-rail-logo">
         <i class="ti ti-sparkles" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>2.2 组装与整合</b><span>AI 工艺平台</span></span>
+        <span class="oc-rail-tip"><b>2.2 组装与整合</b><span
+          class="oc-side-cwd" id="aiSideProject">项目工作区</span><span
+          class="oc-side-profile" id="aiSideState">读取中…</span></span>
       </div>
       <div class="oc-rail-steps" id="aiStepBody">
         <button class="oc-rail-icon" type="button" data-ai-tab="drawings" aria-label="整合图纸">
@@ -49,39 +54,25 @@
           <i class="ti ti-route" aria-hidden="true"></i>
           <span class="oc-rail-tip"><b>③ 组装工艺</b><span>整机组装线工序</span></span>
         </button>
-        <button class="oc-rail-icon" type="button" data-ai-tab="cost" aria-label="成本测算">
-          <i class="ti ti-currency-yuan" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>④ 成本测算</b><span>以零件已测算成本为底</span></span>
-        </button>
-        <button class="oc-rail-icon" type="button" data-ai-tab="finalize" aria-label="整合参数">
-          <i class="ti ti-checkup-list" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>⑤ 整合参数</b><span>报价必填参数收口，可人工补填</span></span>
-        </button>
-      </div>
-      <i class="oc-rail-divider" aria-hidden="true"></i>
-      <!-- 小面板是按钮的**兄弟**而不是子节点：button 里不能再放输入框。
-           输入框常驻 DOM（只是藏起来）—— aiStart 要给它赋初值、aiBindShell 要绑
-           onchange，用完即弃的浮层会让这两处拿到 null。 -->
-      <div class="oc-rail-slot">
-        <button class="oc-rail-icon" id="aiQtyBtn" type="button" aria-label="核算批量"
-                aria-expanded="false" aria-controls="aiQtyPop">
-          <i class="ti ti-scale" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>核算批量</b><span id="aiQtyTip">1 台</span></span>
-        </button>
-        <div class="oc-rail-pop" id="aiQtyPop" hidden><b>核算批量</b>
-          <label class="ai-qty"><input id="aiQuantity" type="number" min="1" value="1" /><span>台</span></label>
-        </div>
       </div>
       <span class="oc-rail-grow"></span>
-      <button class="oc-rail-icon" id="aiModelPill" type="button" aria-haspopup="dialog" aria-label="模型参数设置">
+      <!-- 底部三格与报价助手完全一致：消息 → 设置 → 分隔线 → 登录。
+           id 与 .nav-tooltip 是 cpq_msg.js / cpq_auth.js 认的契约（它们会自己挂未读红点、
+           按登录态换图标与文案），所以这里照抄那份 markup，不能改名。 -->
+      <div class="oc-rail-icon" id="cpqMsgBtn" role="button" tabindex="0"
+           onclick="window.cpqMsg && cpqMsg.open()" aria-label="消息">
+        <i class="ti ti-bell" aria-hidden="true"></i>
+        <span class="nav-tooltip">消息</span>
+      </div>
+      <button class="oc-rail-icon" id="aiModelPill" type="button" aria-haspopup="dialog" aria-label="设置">
         <i class="ti ti-settings" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>模型参数设置</b><span data-model-name>连接中…</span></span>
+        <span class="oc-rail-tip"><b>设置</b><span data-model-name>连接中…</span></span>
       </button>
       <i class="oc-rail-divider" aria-hidden="true"></i>
-      <div class="oc-rail-icon oc-rail-state">
-        <i class="ti ti-user-circle" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b class="oc-side-cwd" id="aiSideProject">项目工作区</b><span
-          class="oc-side-profile" id="aiSideState">读取中…</span></span>
+      <div class="oc-rail-icon" id="cpqAuthBtn" role="button" tabindex="0"
+           onclick="window.cpqAuth && cpqAuth.open()" aria-label="登录">
+        <i class="ti ti-login" aria-hidden="true"></i>
+        <span class="nav-tooltip">登录</span>
       </div>
     </nav>
 
@@ -110,7 +101,7 @@
             <div class="main-connector active"></div>
             <div class="main-step-wrapper" data-step="parse">
               <div class="main-step completed"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div>
-              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span><span class="sub-label-arrow">→</span><span class="sub-label active">2.2 组装与整合</span></div>
+              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span><span class="sub-label-arrow">→</span><span class="sub-label active">2.2 组装与整合</span><span class="sub-label-arrow">→</span><span class="sub-label">2.3 成本测算</span></div>
             </div>
             <div class="main-connector"></div>
             <div class="main-step-wrapper" data-step="generate"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div>
@@ -141,7 +132,7 @@
                 <div class="oc-empty" id="aiEmpty">
                   <div style="font-size:30px;">✦</div>
                   <div style="font-size:14px;">组装与整合助手</div>
-                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，最后以零件已测算成本为底算出整机成本。</div>
+                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，两项都确认后把任务交给财务经理在 2.3 测算成本。</div>
                 </div>
               </div>
             </div>
@@ -156,19 +147,20 @@
                   <input id="aiProductName" type="text" maxlength="120"
                          placeholder="例如：836kWh 分体式储能模块柜" />
                 </label>
-                <div class="ai-op-cost" id="aiOpCost">完成成本测算后显示成品成本</div>
+                <div class="ai-op-cost" id="aiOpCost">确认参数推荐与组装工艺后，把任务交给财务经理测算成本</div>
               </div>
-              <!-- 两个动作互不依赖：发送至报价时若还没有成品编码，后端会先自动生成一个
-                   （编码只能由系统产生，但不该逼人先去点另一个按钮）。 -->
+              <!-- 2.2 的出口是**发给财务**：成本不归工艺经理算，他交的是工艺、参数与
+                   用量，成本的数字由财务经理在 2.3 负责（写库与发报价也移到那一步）。
+                   点它先开派发弹窗：发给角色 / 指派到人 / 公共任务池，与报价助手一致。 -->
               <div class="ai-ops">
-                <button id="aiWriteDb" class="ai-op-btn" type="button" disabled>⛁ 写入数据库</button>
-                <button id="aiToQuote" class="ai-op-btn primary" type="button" disabled>✓ 确认工艺并发送至报价</button>
+                <button id="aiToFinance" class="ai-op-btn primary" type="button" disabled>
+                  ✓ 确认工艺并发送至财务做成本测算…</button>
               </div>
               <!-- 按钮为什么是灰的，就贴在按钮下面 —— 不要让人去下面那段说明里找。 -->
               <div class="ai-op-why" id="aiOpsWhy" hidden></div>
               <div class="ai-op-hint" id="aiOpsHint">
-                写入数据库：新建成品编码，写入物料主数据与物料成本配置。<br/>
-                发送至报价：报价卡片推进到「定价-利润加成」，销售经理收到任务。
+                工艺与整机参数在这一步定稿；<strong>成本由财务经理在 2.3 测算</strong>，
+                写入数据库与发送至报价也都移到了那一步。
               </div>
             </div>
 
@@ -191,8 +183,6 @@
                 <button type="button" data-ai-tab="drawings" class="active">整合图纸</button>
                 <button type="button" data-ai-tab="params">参数推荐</button>
                 <button type="button" data-ai-tab="process">组装工艺</button>
-                <button type="button" data-ai-tab="cost">成本测算</button>
-                <button type="button" data-ai-tab="finalize">整合参数</button>
               </div>
             </div>
             <div class="ai-actions" id="aiActions"></div>
@@ -215,8 +205,12 @@
   <input id="aiDrawingInput" type="file" multiple accept="image/*,.pdf" hidden />
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
   <script src="workflow.js?v=workflow1"></script>
+  <!-- 左下角的消息与登录：与报价助手同一份实现，未读红点、登录态图标都由它们自己维护 -->
+  <script src="/cpq_auth.js"></script>
+  <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set1"></script>
-  <script src="assembly-integration.js?v=ai7"></script>
+  <script src="quote-params-table.js?v=qp1"></script>
+  <script src="assembly-integration.js?v=ai9"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

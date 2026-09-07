@@ -49,6 +49,10 @@ SALES_MANAGER_ROLES = {"sales_manager"}                      # 客户信用等�
 REVIEW_ROLES = {"reviewer", "process_director", "admin"}  # 通用校核
 DIRECTOR_ROLES = {"process_director", "admin"}              # 需求/评估报告终审
 FINANCE_ROLES = {"finance_manager", "admin"}
+# 2.3 成本测算：只有财务经理能改数、能对外发。工艺经理在这一步是只读的 ——
+# 他交的是工艺与用量，成本的数字由财务负责。刻意**不**并进 WRITE_ROLES：
+# 那会让工艺工程师又能改成本，等于这次拆分白做。
+COST_ROLES = {"finance_manager", "admin"}
 QUOTE_APPROVAL_ROLES = {"sales_director", "finance_manager", "general_manager", "admin"}
 QUOTE_NODE_BY_ROLE = {
     "sales_director": "销售总监",

@@ -1269,6 +1269,7 @@
     }
     .modal-footer .btn { min-width: 92px; }
   </style>
+  <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
 <body>
   <div class="main-container" id="mainContainer">
@@ -1306,11 +1307,11 @@
       </div>
       <div style="flex:1"></div>
       <!-- 消息（任务流提醒）：位于设置与账号之上 -->
-      <div class="nav-icon" id="cpqMsgBtn" onclick="cpqMsg.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqMsgBtn" onclick="cpqMsg.open()">
         <i class="ti ti-bell"></i>
         <span class="nav-tooltip">消息</span>
       </div>
-      <div class="nav-icon" onclick="openSettings()">
+      <div class="nav-icon cpq-nav-bottom" onclick="openSettings()">
         <i class="ti ti-settings"></i>
         <span class="nav-tooltip">设置</span>
       </div>
@@ -1318,7 +1319,7 @@
       <div class="nav-divider"></div>
 
       <!-- 登录 / 账号信息（未登录=登录入口，已登录=账号信息+退出） -->
-      <div class="nav-icon" id="cpqAuthBtn" onclick="cpqAuth.open()">
+      <div class="nav-icon cpq-nav-bottom" id="cpqAuthBtn" onclick="cpqAuth.open()">
         <i class="ti ti-login"></i>
         <span class="nav-tooltip">登录</span>
       </div>

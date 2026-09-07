@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 工艺 - 2.3 成本测算</title>
+  <link rel="stylesheet" href="workbench.css?v=20260819-pane1" />
+  <link rel="stylesheet" href="inline-analysis.css?v=20260819-flat5" />
+  <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
+  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
+  <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
+  <link rel="stylesheet" href="tech-rail.css?v=rail2" />
+  <link rel="stylesheet" href="assembly-integration.css?v=ai5" />
+  <link rel="stylesheet" href="cost-review.css?v=cr1" />
+  <script>
+  window.addEventListener("error", function (event) {
+    var badge = document.getElementById("status");
+    if (!badge || badge.dataset.fatal) return;
+    badge.dataset.fatal = "1";
+    badge.textContent = "页面脚本出错，功能不可用：" + (event.message || "未知错误")
+      + (event.filename ? "（" + String(event.filename).split("/").pop()
+         + ":" + event.lineno + "）" : "");
+  });
+  </script>
+  <script src="cpq-sso.js?v=sso2"></script>
+</head>
+<body>
+  <div class="oc-app">
+    <!-- 左侧导航条：与 2.1 / 2.2 / 报价助手同一条 56px 图标栏。 -->
+    <nav class="oc-rail" id="crRail" aria-label="本步骤导航">
+      <div class="oc-rail-logo">
+        <i class="ti ti-sparkles" aria-hidden="true"></i>
+        <span class="oc-rail-tip"><b>2.3 成本测算</b><span
+          class="oc-side-cwd" id="crProject">项目工作区</span><span
+          class="oc-side-profile" id="crState">读取中…</span></span>
+      </div>
+      <div class="oc-rail-steps">
+        <button class="oc-rail-icon" type="button" id="crGoParts" aria-label="零件成本">
+          <i class="ti ti-components" aria-hidden="true"></i>
+          <span class="oc-rail-tip"><b>零件成本</b><span>2.1 拆出来的每个零件</span></span>
+        </button>
+        <button class="oc-rail-icon" type="button" id="crGoAssembly" aria-label="组装成本">
+          <i class="ti ti-route" aria-hidden="true"></i>
+          <span class="oc-rail-tip"><b>组装成本</b><span>整机总成（已含零件成本）</span></span>
+        </button>
+        <button class="oc-rail-icon" type="button" id="crGoTotal" aria-label="汇总">
+          <i class="ti ti-sum" aria-hidden="true"></i>
+          <span class="oc-rail-tip"><b>汇总</b><span>对外口径与四项拆解</span></span>
+        </button>
+        <button class="oc-rail-icon" type="button" id="crGoParams" aria-label="整合参数">
+          <i class="ti ti-checkup-list" aria-hidden="true"></i>
+          <span class="oc-rail-tip"><b>整合参数</b><span>报价必填参数收口，可智能补全</span></span>
+        </button>
+      </div>
+      <span class="oc-rail-grow"></span>
+      <div class="oc-rail-icon" id="cpqMsgBtn" role="button" tabindex="0"
+           onclick="window.cpqMsg && cpqMsg.open()" aria-label="消息">
+        <i class="ti ti-bell" aria-hidden="true"></i>
+        <span class="nav-tooltip">消息</span>
+      </div>
+      <button class="oc-rail-icon" id="crModelPill" type="button" aria-haspopup="dialog" aria-label="设置">
+        <i class="ti ti-settings" aria-hidden="true"></i>
+        <span class="oc-rail-tip"><b>设置</b><span data-model-name>连接中…</span></span>
+      </button>
+      <i class="oc-rail-divider" aria-hidden="true"></i>
+      <div class="oc-rail-icon" id="cpqAuthBtn" role="button" tabindex="0"
+           onclick="window.cpqAuth && cpqAuth.open()" aria-label="登录">
+        <i class="ti ti-login" aria-hidden="true"></i>
+        <span class="nav-tooltip">登录</span>
+      </div>
+    </nav>
+
+    <div class="oc-shell">
+      <div class="page-container">
+        <div class="workflow-section">
+          <div class="main-workflow" id="workflowSteps">
+            <div class="main-step-wrapper" data-step="upload"><div class="main-step completed"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div></div>
+            <div class="main-connector active"></div>
+            <div class="main-step-wrapper" data-step="parse">
+              <div class="main-step completed"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div>
+              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span><span class="sub-label-arrow">→</span><span class="sub-label">2.2 组装与整合</span><span class="sub-label-arrow">→</span><span class="sub-label active">2.3 成本测算</span></div>
+            </div>
+            <div class="main-connector"></div>
+            <div class="main-step-wrapper" data-step="generate"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div>
+          </div>
+        </div>
+
+        <div class="title-section">
+          <div class="title-row"><h1 id="crTitle" class="form-title">2.3 成本测算</h1><span id="status" class="status-badge">读取中…</span></div>
+        </div>
+
+        <div class="oc-work">
+          <section class="oc-agent-pane" aria-label="财务说明与去向">
+            <div class="oc-thread" id="crThread">
+              <div class="oc-tinner" id="crTinner">
+                <div class="oc-amsg">
+                  <div class="oc-aav" aria-hidden="true">¥</div>
+                  <div class="oc-abody">
+                    <div class="oc-intent-card">
+                      <h4>财务补充说明</h4>
+                      <textarea id="crNote" class="ai-requirement" rows="4"
+                        placeholder="写下这次测算要特别考虑的口径，例如「电芯按 12 月长协价 11.8 元/只」「本批不摊模具费」…"></textarea>
+                      <div class="oc-intent-meta">这段说明会作为零件与整机重新测算时的输入。<br/>
+                        本步<strong>不联网</strong>：只依据企业成本库里已有的物料价、费率、系数与工程经验。</div>
+                      <button id="crRunAll" class="start-parse-btn">▶ 逐件测算并汇总</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="oc-empty" id="crEmpty">
+                  <div style="font-size:30px;">¥</div>
+                  <div style="font-size:14px;">成本测算（财务经理）</div>
+                  <div style="font-size:12.5px;">工艺经理已经把工艺、参数与用量交过来了。<br/>
+                    这一步逐个零件加整机算出成本、汇总，再决定它的去向。</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 三个去向：置底常驻，不随说明滚动。 -->
+            <div class="ai-ops-bar" id="crOpsCard">
+              <div class="ai-ops-row">
+                <label class="ai-op-field" for="crProductName">产品名称
+                  <input id="crProductName" type="text" maxlength="120"
+                         placeholder="例如：836kWh 分体式储能模块柜" />
+                </label>
+                <label class="ai-qty" for="crQuantity">核算批量
+                  <input id="crQuantity" type="number" min="1" value="1" /><span>台</span></label>
+                <div class="ai-op-cost" id="crOpCost">完成测算后显示成品成本</div>
+              </div>
+              <div class="ai-ops">
+                <button id="crConfirm" class="ai-op-btn primary" type="button" disabled>✓ 确认成本</button>
+                <button id="crWriteDb" class="ai-op-btn" type="button" disabled>⛁ 写入数据库</button>
+                <button id="crToQuote" class="ai-op-btn" type="button" disabled>➜ 发送至报价</button>
+                <button id="crReturn" class="ai-op-btn" type="button">↩ 退回工艺经理</button>
+              </div>
+              <div class="ai-op-why" id="crWhy" hidden></div>
+              <div class="ai-op-hint" id="crHint">
+                确认成本：三个去向都以确认过的数为准。<br/>
+                退回工艺经理：成本高在工序或用量上时用它 —— 那是工艺的判断，不该由财务改。
+              </div>
+            </div>
+          </section>
+
+          <div class="center-panel">
+            <div class="center-header">
+              <div id="crPanelTitle" class="center-title">成本清单</div>
+              <div class="ai-tabs" id="crTabs">
+                <button type="button" data-cr-tab="parts" class="active">零件成本</button>
+                <button type="button" data-cr-tab="assembly">组装成本</button>
+                <button type="button" data-cr-tab="total">汇总</button>
+                <button type="button" data-cr-tab="params">整合参数</button>
+              </div>
+            </div>
+            <div class="ai-actions" id="crActions"></div>
+            <div class="ai-status" id="crStatus"></div>
+            <div class="ai-body" id="crBody">读取中…</div>
+          </div>
+        </div>
+
+        <div class="footer-bar">
+          <div class="footer-left"><button id="crPrev" class="btn btn-secondary" type="button"><span>上一步</span></button></div>
+          <div class="footer-right">
+            <button id="crNext" class="btn btn-primary" type="button"><span>下一步</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
+  <script src="workflow.js?v=workflow3"></script>
+  <script src="/cpq_auth.js"></script>
+  <script src="/cpq_msg.js"></script>
+  <script src="llm-settings-panel.js?v=llm-set1"></script>
+  <script src="quote-params-table.js?v=qp1"></script>
+  <script src="cost-review.js?v=cr2"></script>
+  <script src="home-link.js?v=home6"></script>
+</body>
+</html>

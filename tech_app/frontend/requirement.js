@@ -13,7 +13,7 @@ async function renderCreate() {
     const values=requirementDataFromForm(form);
     try {
       if(!id) { const file=document.querySelector('#sourceFile').files[0]; if(!file) throw new Error('请先选择原始图纸'); const fd=new FormData(); fd.append('file',file); fd.append('note',values.description||''); const created=await api('/api/projects',{method:'POST',body:fd}); id=created.project_id; setProject(id); }
-      const doc={project_id:id,requirement_no:existing?.requirement_no||'',title:values.title||'',status:'draft',data:values};
+      const doc={project_id:id,requirement_no:existing?.requirement_no||'',title:values.title||'',status:'draft',/* 同 requirement-create.js：合并保留报价来源等非表单键。 */data:Object.assign({},existing?.data||{},values)};
       await api(`/api/projects/${id}/requirement`,{method:'PUT',body:JSON.stringify(doc)});
       if(submit) { await api(`/api/projects/${id}/requirement/submit-confirmation`,{method:'POST',body:JSON.stringify({comment:'需求创建人已提交，等待需求确认。'})}); location.href=href('requirement-confirm.html',id); }
       else { toast('草稿已保存'); history.replaceState(null,'',href('requirement-create.html',id)); }

@@ -35,6 +35,10 @@ from ..config import CPQ_AUTH_BASE_URL, CPQ_AUTH_TIMEOUT_SECONDS
 ROLE_MAP = {
     "process_mgr": "process_manager",
     "sales_mgr": "viewer",
+    # 财务经理：2.3 成本测算是他的步骤。技术工艺里本来就有 finance_manager 这个角色
+    # （auth.ROLES），这里只是把 CPQ 的角色码接上去。他在 2.1/2.2 仍然是只读 ——
+    # 工艺与参数不归他改，他只对成本负责。
+    "finance_mgr": "finance_manager",
 }
 FALLBACK_ROLE = "viewer"
 
@@ -102,6 +106,21 @@ def _fetch(token: str) -> Optional[dict]:
         raise SsoUnavailable("CPQ 登录服务返回的不是 JSON") from exc
     user = payload.get("user")
     return user if isinstance(user, dict) else None
+
+
+# 技术工艺角色 → CPQ 里对应的角色名。403 文案要说"这一步该谁来做"，而人在 CPQ
+# 界面上看到的是「财务经理」，不是技术工艺内部的 finance_manager。
+TECH_ROLE_LABEL = {
+    "process_manager": "工艺经理",
+    "finance_manager": "财务经理",
+    "sales_manager": "销售经理",
+    "viewer": "只读浏览",
+}
+
+
+def cpq_role_label(tech_role: str) -> str:
+    """技术工艺角色码 → CPQ 口径的中文名（认不出来就原样返回，别编一个）。"""
+    return TECH_ROLE_LABEL.get(tech_role, tech_role)
 
 
 def to_tech_user(cpq_user: dict) -> dict:

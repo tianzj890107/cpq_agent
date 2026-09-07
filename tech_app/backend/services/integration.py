@@ -569,6 +569,7 @@ def status(plan: IntegrationPlan) -> dict:
         # 「整合参数」环节：成本之后的收口。required_missing 是硬指标（报价必填还缺几项），
         # params_final 是人按下的确认 —— 两者都给前端，缺口要看得见，确认要有人负责。
         "params_confirmed": bool(plan.params_confirmed),
+        "process_confirmed": bool(plan.process_confirmed),
         "params_final": bool(plan.params_final),
         # 成品编码是「写入数据库」生成的，不算在 required_missing 里（那是给人补的清单），
         # 但它同样是发报价的前提 —— 单独给前端一个标志，按钮才说得清自己为什么是灰的。

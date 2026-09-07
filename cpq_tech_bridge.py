@@ -342,9 +342,108 @@ def _result_note(result: dict, base: str) -> str:
     return " · ".join(parts)
 
 
+def _target_name(target_type: str, role_code: str, target_user_id: str) -> str:
+    """这条任务最终落到谁手里 —— 用来回给前端播报，不参与派发本身。"""
+    if target_type == "user" and str(target_user_id or "").strip():
+        try:
+            for row in cpq_auth.list_users():
+                if str(row.get("user_id")) == str(target_user_id).strip():
+                    who = row.get("display_name") or row.get("username") or ""
+                    return f"{who}（{row.get('role_name') or ''}）"
+        except Exception:
+            pass
+        return "指定人员"
+    if target_type == "public":
+        return "公共任务池"
+    return cpq_wf.ROLES.get(role_code, role_code or "")
+
+
+def _side_task(user: dict, session_id: str, title: str, customer: str, project_name: str,
+               kind: str, note: str, payload: dict, target_user_id: str = "",
+               target_type: str = "", target_role_code: str = "") -> dict:
+    """发一条**支线任务**（不推进报价步骤）。成本测算与成本结果复核都走它。
+
+    卡片是任务的载体：技术工艺自己发起的项目还没有卡片，先按 session_id 建一张
+    （sync_card 幂等）。从报价「新增工艺」过来的项目已经有卡片，session_id 就是
+    原报价会话，任务会挂在那张卡片上 —— 销售在自己的单子里看得见成本正在测。
+    """
+    if not user:
+        raise BridgeError("请先登录")
+    session_id = (session_id or "").strip()
+    if not session_id:
+        raise BridgeError("缺少会话 ID")
+    try:
+        cpq_wf.sync_card(session_id, user, title=title, customer=customer,
+                         project_name=project_name)
+        # 派发方式由调用方（2.2 的「发送至财务」弹窗）决定：role / user / public。
+        # 没给就按老行为走：给了人就是指派，否则留空让 cpq_wf 落到该任务的默认角色。
+        target_type = (target_type or "").strip() or (
+            "user" if str(target_user_id or "").strip() else "")
+        sent = cpq_wf.send_task(
+            session_id, user, target_type, target_role_code=str(target_role_code or ""),
+            target_user_id=str(target_user_id or ""),
+            note=note, task_kind=kind, payload=payload or {})
+    except (BridgeError, cpq_wf.WfError):
+        raise
+    except Exception as exc:
+        raise _db_error("发送任务", exc) from exc
+    # 实际收件角色：定向角色时是选的那个，其余情况仍报该任务的默认角色（谁该干这活）。
+    role = (target_role_code if target_type == "role" and target_role_code
+            else cpq_wf._KIND_DEFAULT_ROLE.get(kind, ""))
+    return {
+        "task_id": sent.get("task_id"),
+        "task_no": cpq_wf.task_no(sent.get("task_id")),
+        "task_kind": kind,
+        "task_kind_label": cpq_wf.TASK_KIND_LABELS.get(kind, kind),
+        "target_role_code": role,
+        "target_role_name": cpq_wf.ROLES.get(role, role),
+        "target_type": target_type or "role",
+        "target_name": _target_name(target_type or "role", role, target_user_id),
+        "source_label": sent.get("source_label", ""),
+        "session_id": session_id,
+    }
+
+
+def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
+                    project_name: str = "", note: str = "", payload: dict = None,
+                    target_type: str = "", target_role_code: str = "",
+                    target_user_id: str = "") -> dict:
+    """技术工艺 2.2 → 财务：工艺与参数已定稿，请到 2.3 做成本测算。
+
+    派发方式与报价助手的转交一致，三种都能选：发给某个角色（默认财务经理）、
+    指派给某个人、发布到公共任务池。默认角色只是**没选时**的落点，不是限制 ——
+    公司里做这件事的可能不止一个人，让人在弹窗里挑。
+    """
+    if user.get("role_code") != "process_mgr":
+        raise BridgeError(
+            f"只有工艺经理能把工艺发给财务测算；当前是「{user.get('role_name')}」")
+    return _side_task(user, session_id, title, customer, project_name,
+                      cpq_wf.TASK_KIND_TECH_COST,
+                      note or "工艺与整机参数已确认，请做成本测算", payload or {},
+                      target_user_id=target_user_id, target_type=target_type,
+                      target_role_code=target_role_code)
+
+
+def return_to_process(user: dict, session_id: str, title: str, customer: str = "",
+                      project_name: str = "", note: str = "", payload: dict = None,
+                      target_user_id: str = "") -> dict:
+    """技术工艺 2.3 → 工艺经理：成本测完了，请复核工艺与用量。
+
+    为什么不是财务自己改：成本高在哪，往往是工序或用量的问题，那是工艺的判断。
+    财务把数和疑点退回去，工艺经理改完再走一遍 —— 各管各的那一段。
+    """
+    if user.get("role_code") != "finance_mgr":
+        raise BridgeError(
+            f"只有财务经理能退回成本结果；当前是「{user.get('role_name')}」")
+    return _side_task(user, session_id, title, customer, project_name,
+                      cpq_wf.TASK_KIND_TECH_COST_RETURN,
+                      note or "成本已测算，请复核工艺与用量", payload or {}, target_user_id)
+
+
 def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
                   project_name: str = "", note: str = "",
-                  source_task_id: str = "", result: dict = None) -> dict:
+                  source_task_id: str = "", result: dict = None,
+                  source_session_id: str = "") -> dict:
     """技术工艺确认完工艺，把报价卡片推进到第 3 步「定价-利润加成」并通知销售经理。
 
     两条路径：
@@ -361,26 +460,44 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
     """
     if not user:
         raise BridgeError("请先登录")
-    if user.get("role_code") != "process_mgr":
-        raise BridgeError(f"只有工艺经理能确认工艺并发送至报价；当前是「{user.get('role_name')}」")
+    # 成本测算改由财务经理做（2.3），所以发报价这一步现在是他的动作；
+    # 工艺经理仍然放行 —— 老流程（没有 2.3 的项目）还得走得通。
+    if user.get("role_code") not in ("finance_mgr", "process_mgr"):
+        raise BridgeError(
+            f"只有财务经理或工艺经理能确认并发送至报价；当前是「{user.get('role_name')}」")
     session_id = (session_id or "").strip()
     if not session_id:
         raise BridgeError("缺少会话 ID")
     result = result or {}
 
     source = None
+    # 结论要送回**哪张报价卡片**。三条线索，按可靠性排序：
+    #   task    —— 当初那条「新增工艺」任务（能连人带卡片一起找到，最完整）；
+    #   session —— 需求单里记着的原报价会话号（任务行被删/被顶掉时的后手）；
+    #   new     —— 都没有：技术工艺自己发起的项目，只能新建一张卡片。
+    # 前两条都落空却走了第三条时，销售点开任务会打不开会话历史（报价助手按会话号
+    # 取历史，技术项目号在那边根本不存在），客户信息也只剩技术侧填过的那点。
+    # 所以这里必须把用了哪条线索**如实回给界面**，不能默默新建。
+    linked_by = "new"
     try:
-        if str(source_task_id or "").strip():
-            conn = cpq_auth._connect()
-            try:
+        conn = cpq_auth._connect()
+        try:
+            if str(source_task_id or "").strip():
                 source = _source_task(conn, source_task_id)
-            finally:
-                conn.close()
-            if source and source.get("session_id"):
-                # 回到原来那张报价卡片：新建一张会让销售那单永远停在第 1 步等新产品。
-                session_id = str(source["session_id"])
+                if source and source.get("session_id"):
+                    # 回到原来那张报价卡片：新建一张会让销售那单永远停在第 1 步等新产品。
+                    session_id = str(source["session_id"])
+                    linked_by = "task"
+            if linked_by == "new":
+                hint = str(source_session_id or "").strip()
+                # 会话号得在报价里真有对应卡片才认，否则等于换了个名字新建。
+                if hint and cpq_wf._fetch_card(conn, hint):
+                    session_id = hint
+                    linked_by = "session"
+        finally:
+            conn.close()
 
-        if not source:
+        if linked_by == "new":
             cpq_wf.sync_card(session_id, user, title=title, customer=customer,
                              project_name=project_name)
 
@@ -401,9 +518,14 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         raise _db_error("推送到报价", exc) from exc
 
     snapshot = _step2_snapshot(result)
+    # 代技术侧完成报价第 2 步「工艺确认」。成本拆给财务之后，点这一下的可能是财务经理
+    # （2.3 测完成本才回传报价），而第 2 步在报价里归工艺经理 —— 本函数开头已经按
+    # 「财务经理 / 工艺经理」鉴过权，这里把代办角色显式写出来，由 cpq_wf 校验它确实
+    # 是该步骤的归属角色，并在留痕里记下是谁代的。
     outcome = cpq_wf.complete_step(
         session_id, TECH_CONFIRM_STEP, user,
-        snapshot=json.dumps(snapshot, ensure_ascii=False) if snapshot else "")
+        snapshot=json.dumps(snapshot, ensure_ascii=False) if snapshot else "",
+        on_behalf_of=cpq_wf.role_of_step(TECH_CONFIRM_STEP))
     outcome["returned_sections"] = sorted(snapshot.keys())
 
     payload = {"tech_result": result}
@@ -435,6 +557,10 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         # 发起人被停用/删号：不能假装退回给了他，界面要照实说。
         outcome["source_sender_unavailable"] = True
     outcome["quote_session_id"] = session_id
+    # 界面据此说清这单落到哪儿了：新建卡片时销售那边既没有会话历史、也没有原始客户信息，
+    # 必须明说，不能让人以为结论回到了他原来那张报价单上。
+    outcome["linked_by"] = linked_by
+    outcome["new_card"] = linked_by == "new"
     return outcome
 
 

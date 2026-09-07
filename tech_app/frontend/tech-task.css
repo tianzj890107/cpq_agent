@@ -53,6 +53,18 @@
   font-family: inherit; font-size: 13px; line-height: 1.7;
 }
 .tt-field textarea:focus { outline: none; border-color: #2563eb; }
+/* 行业模板下拉：与需求描述同宽同风格，别让它看着像个附属控件 —— 选错行业，
+   1.1 的整段产品技术规格和 2.x 取的物料费率都会跟着错。 */
+.tt-field select {
+  width: 100%; box-sizing: border-box; padding: 10px 13px;
+  border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #0f172a;
+  font-family: inherit; font-size: 13px;
+}
+.tt-field select:focus { outline: none; border-color: #2563eb; }
+.tt-field > .tt-hint {
+  display: block; margin-top: 5px; color: #94a3b8; font-size: 11.5px;
+  font-style: normal; line-height: 1.6;
+}
 .tt-uploads { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .tt-upload {
   display: inline-flex; align-items: center; gap: 7px; padding: 9px 15px;

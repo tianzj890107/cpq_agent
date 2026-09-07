@@ -33,6 +33,9 @@ WF_SCHEMA = os.getenv("CPQ_WF_SCHEMA", "cpq_wf")
 ROLES = {
     "sales_mgr": "销售经理",
     "process_mgr": "工艺经理",
+    # 成本测算归财务：工艺经理出工艺与用量，财务经理据此核算成本并对数字负责。
+    # 技术工艺 2.3 是他的步骤（见 tech_app/backend/services/cpq_sso.py 的角色映射）。
+    "finance_mgr": "财务经理",
 }
 
 SESSION_DAYS = int(os.getenv("CPQ_SESSION_DAYS", "7"))
