@@ -18,6 +18,9 @@
 
   // 旧页面 → 工作台 stage（九个固定 stage 的唯一映射表）。
   var STAGE_OF_FILE = {
+    // 「新增工艺」任务专属页不是九个 stage 之一：直达时汇聚到 1.1 创建，
+    // 由统一壳在无 project 时以 embed=1 反向承载它完成建项。
+    'tech-task.html': 'requirement-create',
     'requirement-create.html': 'requirement-create',
     'requirement-confirm.html': 'requirement-confirm',
     'requirement-review.html': 'requirement-review',

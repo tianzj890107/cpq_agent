@@ -53,11 +53,11 @@
     style.id = 'cpqInboxCss';
     style.textContent = [
       '.cpq-inbox-card{cursor:pointer}',
-      '.cpq-inbox-card.technew{border-left:3px solid #1d4ed8}',
+      '.cpq-inbox-card.technew{border-left:3px solid #0067D1}',
       '.cpq-inbox-meta{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}',
       '.cpq-inbox-chip{padding:2px 9px;border-radius:999px;background:var(--bg-page,#f3f4f6);',
       'color:var(--text-secondary,#64748b);font-size:11.5px}',
-      '.cpq-inbox-chip.no{background:#1d4ed8;color:#fff;font-weight:700;letter-spacing:.03em}',
+      '.cpq-inbox-chip.no{background:#0067D1;color:#fff;font-weight:700;letter-spacing:.03em}',
       '.cpq-inbox-note{margin-top:7px;padding:7px 10px;border-radius:8px;',
       'background:var(--bg-page,#f8fafc);color:var(--text-secondary,#64748b);font-size:12px}',
       '.cpq-tab-badge{margin-left:6px;padding:0 6px;border-radius:999px;background:#ef4444;',
@@ -169,14 +169,21 @@
     }
     const kind = (claim && claim.task_kind) || task.task_kind;
     if (kind === 'tech_new_product') {
-      location.href = '/tech-task.html?tech_task=' + encodeURIComponent(task.task_id);
+      // 新增工艺：尚无技术项目，先进统一两栏壳的 1.1，由右侧 tech-task 建项后回写 project。
+      location.href = '/tech-workbench.html?stage=requirement-create&task_id='
+        + encodeURIComponent(task.task_id);
       return;
     }
-    // 成本测算（财务经理）→ 2.3；成本结果复核（工艺经理）→ 2.2 改工序/用量。
-    // 这两条支线的 session_id 就是技术工艺的项目号。
-    if (kind === 'tech_cost' || kind === 'tech_cost_return') {
-      const page = kind === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
-      location.href = page + '?project=' + encodeURIComponent(task.session_id || '');
+    // 成本测算（财务经理）→ stage=cost；成本结果复核（工艺经理）→ stage=process。
+    // 这两条支线的 session_id 就是技术工艺的项目号，task_id 一并带给右侧步骤页。
+    if (kind === 'tech_cost') {
+      location.href = '/tech-workbench.html?stage=cost&project='
+        + encodeURIComponent(task.session_id || '') + '&task_id=' + encodeURIComponent(task.task_id);
+      return;
+    }
+    if (kind === 'tech_cost_return') {
+      location.href = '/tech-workbench.html?stage=process&project='
+        + encodeURIComponent(task.session_id || '') + '&task_id=' + encodeURIComponent(task.task_id);
       return;
     }
     // 工艺确认这一步是在报价工作台里做的（回显第 1 步需求 + 产品推荐表），不在技术工艺。

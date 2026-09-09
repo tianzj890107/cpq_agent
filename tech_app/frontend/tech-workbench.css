@@ -22,37 +22,38 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tech-workbench-layout {
   --twb-border: #dfe3ea;
   --twb-card: #ffffff;
-  --twb-primary: #2563eb;
-  --twb-primary-light: #eff6ff;
+  --twb-primary: #0067D1;
+  --twb-primary-light: #EAF3FC;
   --twb-ok: #16a34a;
   --twb-muted: #6b7280;
   --twb-shadow: 0 1px 3px rgba(15, 23, 42, .08);
 }
 
-/* ---------- 顶部：品牌 + 项目 + 三阶段步骤条 ---------- */
-.tech-workbench-top {
+/* ---------- 右侧工作台卡片：头部（品牌/项目/阶段）+ 三阶段进度栏 ----------
+ * 进度栏只属于右侧卡片，宽度跟随 .tech-workspace-pane，不横跨左侧会话。 */
+.tech-workspace-head {
   flex: 0 0 auto;
-  background: var(--twb-card);
-  border-bottom: 1px solid var(--twb-border);
-  box-shadow: var(--twb-shadow);
-  z-index: 5;
-}
-.tech-wb-head-row {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 8px 16px;
+  padding: 10px 14px;
   border-bottom: 1px solid #f1f3f7;
+  background: var(--twb-card);
 }
 .tech-wb-brand {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   color: var(--text-primary, #1f2937);
   font-weight: 700;
   text-decoration: none;
-  font-size: 14px;
+  font-size: 13px;
   white-space: nowrap;
+}
+.tech-wb-brand > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tech-wb-brand-mark {
   width: 30px;
@@ -61,7 +62,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  background: linear-gradient(135deg, #0067D1, #0057B8);
   color: #fff;
   font-size: 13px;
   font-weight: 800;
@@ -81,10 +82,19 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   white-space: nowrap;
 }
 
+.tech-workspace-progress {
+  flex: 0 0 auto;
+  display: flex;
+  min-width: 0;
+  background: var(--twb-card);
+  border-bottom: 1px solid var(--twb-border);
+}
 .tech-steps-bar {
+  flex: 1 1 auto;
   display: flex;
   align-items: stretch;
   gap: 0;
+  min-width: 0;
   padding: 8px 14px 10px;
   overflow-x: auto;
 }
@@ -287,7 +297,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   border-color: var(--twb-primary);
   color: #fff;
 }
-.tech-wb-btn.primary:hover:not(:disabled) { background: #1d4ed8; }
+.tech-wb-btn.primary:hover:not(:disabled) { background: #0057B8; }
 .tech-wb-btn.plain { background: #fff; color: var(--twb-muted); font-weight: 500; }
 .tech-wb-now {
   font-size: 12.5px;
@@ -312,8 +322,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
     width: 100%;
   }
   #techStageFrame { min-height: 62vh; }
-  .tech-wb-head-row { flex-wrap: wrap; }
-  .tech-wb-phase { margin-left: 0; }
+  .tech-workspace-head { flex-wrap: wrap; }
+  .tech-workspace-head .tech-wb-phase { margin-left: 0; }
   .tech-workbench-bottom { flex-wrap: wrap; }
   .tech-wb-grow { display: none; }
 }

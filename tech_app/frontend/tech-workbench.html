@@ -10,14 +10,6 @@
 </head>
 <body>
   <div class="tech-workbench-app tech-workbench-layout" id="techWorkbenchApp">
-    <header class="tech-workbench-top">
-      <div class="tech-wb-head-row">
-        <a class="tech-wb-brand" href="home.html"><span class="tech-wb-brand-mark">AI</span><span>技术工艺 · 统一工作台</span></a>
-        <span class="tech-wb-project" id="techProjectLabel">加载项目…</span>
-        <span class="tech-wb-phase" id="techPhaseLabel"></span>
-      </div>
-      <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
-    </header>
 
     <div class="tech-workbench-body">
       <!-- 左侧：整个项目生命周期唯一常驻的 Agent 会话宿主。切换 stage 不重建这里。 -->
@@ -51,8 +43,17 @@
         </div>
       </section>
 
-      <!-- 右侧：唯一工作台出口，承载九步业务内容（同源受控 iframe）。 -->
+      <!-- 右侧：唯一工作台出口，承载九步业务内容（同源受控 iframe）。
+           三阶段进度栏放在本卡片内部头部，宽度只跟随右侧卡片，不横跨左侧会话。 -->
       <section class="tech-workspace-pane">
+        <header class="tech-workspace-head">
+          <a class="tech-wb-brand" href="home.html"><span class="tech-wb-brand-mark">AI</span><span>技术工艺 · 统一工作台</span></a>
+          <span class="tech-wb-project" id="techProjectLabel">加载项目…</span>
+          <span class="tech-wb-phase" id="techPhaseLabel"></span>
+        </header>
+        <div class="tech-workspace-progress">
+          <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
+        </div>
         <div id="techWorkspaceOutlet" aria-live="polite">
           <div class="tech-wb-state" id="techStageState">
             <div class="tech-wb-spinner" aria-hidden="true"></div>

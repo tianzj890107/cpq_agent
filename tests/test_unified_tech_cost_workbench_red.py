@@ -59,6 +59,47 @@ class UnifiedTechCostWorkbenchContract(unittest.TestCase):
         self.assertIn("tech-workspace-pane", css)
         self.assertRegex(css, r"@media\s*\([^)]*max-width\s*:\s*900px")
 
+    def test_progress_is_inside_right_workspace_card_not_global_top(self):
+        html = self.read("tech_app/frontend/tech-workbench.html")
+        workspace = html.find('class="tech-workspace-pane')
+        progress = html.find('id="techStepsBar"')
+        outlet = html.find('id="techWorkspaceOutlet"')
+        self.assertGreater(workspace, -1)
+        self.assertGreater(progress, workspace, "进度栏必须放进右侧工作台卡片")
+        self.assertGreater(outlet, progress, "进度栏应位于右侧业务内容上方")
+        before_body = html[:html.find('class="tech-workbench-body')]
+        self.assertNotIn('id="techStepsBar"', before_body, "进度栏不得横跨左右两栏顶部")
+        css = self.read("tech_app/frontend/tech-workbench.css")
+        self.assertIn("tech-workspace-progress", css)
+
+    def assert_unified_entry_file(self, relative, forbidden):
+        text = self.read(relative)
+        self.assertIn("tech-workbench.html", text, f"{relative} 尚未接入统一入口")
+        for target in forbidden:
+            direct = rf"(?:location|window\.location)\.href\s*=\s*[^;\n]*{re.escape(target)}|const\s+page\s*=\s*[^;\n]*{re.escape(target)}"
+            self.assertNotRegex(text, direct, f"{relative} 仍会顶层直达 {target}")
+
+    def test_quote_home_cards_and_tasks_always_use_unified_shell(self):
+        self.assert_unified_entry_file("报价首页.html", [
+            "tech-task.html", "requirement-detail.html", "cost-review.html", "assembly-integration.html",
+        ])
+
+    def test_tech_home_project_list_always_uses_unified_shell(self):
+        self.assert_unified_entry_file("tech_app/frontend/home.js", [
+            "requirement-create.html", "requirement-detail.html", "tech-task.html",
+        ])
+
+    def test_tech_inbox_tasks_always_use_unified_shell(self):
+        self.assert_unified_entry_file("tech_app/frontend/cpq-tech-inbox.js", [
+            "tech-task.html", "cost-review.html", "assembly-integration.html",
+        ])
+
+    def test_task_routes_preserve_task_and_select_expected_stage(self):
+        sources = self.read("报价首页.html") + self.read("tech_app/frontend/cpq-tech-inbox.js")
+        self.assertRegex(sources, r"stage=requirement-create[^\n]*(?:task_id|tech_task)")
+        self.assertRegex(sources, r"stage=cost[^\n]*project")
+        self.assertRegex(sources, r"stage=process[^\n]*project")
+
 
 if __name__ == "__main__":
     unittest.main()

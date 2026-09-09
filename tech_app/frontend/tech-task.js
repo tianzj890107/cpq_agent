@@ -20,7 +20,8 @@
 
   const CPQ_TOKEN_KEY = 'cpq_auth_token';
   const taskId = new URLSearchParams(location.search).get('tech_task')
-    || new URLSearchParams(location.search).get('task') || '';
+    || new URLSearchParams(location.search).get('task')
+    || new URLSearchParams(location.search).get('task_id') || '';
 
   let task = null;
   const modelFiles = [];
@@ -214,6 +215,12 @@
         await new Promise(resolve => setTimeout(resolve, 1200));
       }
       setProject(created.project_id);
+      // 统一工作台内（embed=1）：请父壳切到 1.1 并把真实 project 写回 URL，
+      // 全程留在左会话 + 右工作台的两栏布局，不跳回旧页面顶层。
+      if (window.TechEmbed && window.TechEmbed.embedded) {
+        window.TechEmbed.requestNavigate('requirement-create', created.project_id, taskId || '');
+        return;
+      }
       // industry 也挂在 URL 上：万一上面那次写入失败，1.1 还能靠 cpq-industry.js
       // 用它渲染并在首次保存时补写，不至于又退回默认的半导体。
       location.href = `requirement-create.html?project=${encodeURIComponent(created.project_id)}`

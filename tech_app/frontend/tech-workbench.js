@@ -40,7 +40,7 @@
     'report-publish':      { primary: '#rpPrimary',         primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
   };
 
-  const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'embed', 'embedding']);
+  const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
 
   const state = { stage: '', project: '', taskId: '', progress: null };
 
@@ -49,7 +49,7 @@
   function readFromUrl() {
     const q = params();
     state.project = q.get('project') || '';
-    state.taskId = q.get('task_id') || '';
+    state.taskId = q.get('task_id') || q.get('tech_task') || '';
     state.stage = stages.has(q.get('stage')) ? q.get('stage') : '';
   }
 
@@ -89,7 +89,7 @@
   window.addEventListener('popstate', () => {
     readFromUrl();
     if (!state.stage) state.stage = 'requirement-create';
-    render();
+    renderTop();
     mountStageFrame();
   });
 
@@ -183,7 +183,13 @@
     if (state.taskId) q.set('task_id', state.taskId);
     q.set('embed', '1');
     extraParams().forEach(([key, value]) => q.set(key, value));
-    return `${meta.page}?${q.toString()}`;
+    let page = meta.page;
+    // 新增工艺待办尚无 project：右侧以 embed=1 承载原 tech-task.html 建项流程，
+    // 建项成功后由子页把真实 project 回写统一壳 URL，全程不离开两栏布局。
+    if (stageId === 'requirement-create' && !state.project && state.taskId) {
+      page = 'tech-task.html';
+    }
+    return `${page}?${q.toString()}`;
   }
 
   function mountStageFrame() {
@@ -208,7 +214,9 @@
     if (!state.project) {
       const banner = document.createElement('div');
       banner.className = 'tech-wb-banner';
-      banner.textContent = '尚未绑定项目：请在本步上传 2D 工程图并保存草稿，系统会自动创建项目并绑定到左侧会话。';
+      banner.textContent = state.taskId
+        ? '新增工艺任务：本步承载任务详情与图纸上传；创建项目后将自动进入需求 1.1 并绑定左侧会话。'
+        : '尚未绑定项目：请在本步上传 2D 工程图并保存草稿，系统会自动创建项目并绑定到左侧会话。';
       outlet.append(banner);
     }
     const stateLine = document.createElement('div');
