@@ -3,17 +3,68 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>技术工艺与成本测算工作台</title>
+  <title>技术工艺智能体工作台</title>
+  <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb1" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb3" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
   <div class="tech-workbench-app tech-workbench-layout" id="techWorkbenchApp">
 
     <div class="tech-workbench-body">
-      <!-- 左侧：整个项目生命周期唯一常驻的 Agent 会话宿主。切换 stage 不重建这里。 -->
+      <!-- 56px 左侧导航：与报价单智能体同一套骨架（Logo / 新对话 / 历史 / 主页，
+           底部消息 / 设置 / 账户）。会话区与右侧工作区切换不重建这里。 -->
+      <nav class="tech-nav-panel" aria-label="技术工艺智能体导航">
+        <a class="tech-nav-logo" href="/报价首页.html?assistant=tech" title="返回技术工艺统一主页">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8" stroke="white" stroke-width="1.5"/>
+            <circle cx="12" cy="12" r="3" fill="white"/>
+            <path d="M12 4V8M12 16V20M4 12H8M16 12H20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </a>
+        <button type="button" class="tech-nav-icon" id="techNewChat" title="新对话（重置本次任务，图纸保留）" aria-label="新对话">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>新对话</b><span>重置本次技术工艺任务，图纸与文档保留</span></span>
+        </button>
+        <button type="button" class="tech-nav-icon" id="techHistory" title="历史记录" aria-label="历史记录">
+          <i class="ti ti-history" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>历史记录</b><span>打开技术项目历史并恢复当前步骤</span></span>
+        </button>
+        <a class="tech-nav-icon" href="/报价首页.html?assistant=tech" title="返回技术工艺统一主页" aria-label="返回统一主页">
+          <i class="ti ti-home" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>返回统一主页</b><span>技术工艺主页（与报价助手同一主页壳）</span></span>
+        </a>
+        <span class="tech-nav-grow" aria-hidden="true"></span>
+        <button type="button" class="tech-nav-icon" id="techMsgBtn" title="消息" aria-label="消息">
+          <i class="ti ti-bell" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>消息</b><span>任务流提醒（与报价助手同一消息面板）</span></span>
+        </button>
+        <button type="button" class="tech-nav-icon" id="techSettings" title="设置" aria-label="设置">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>设置</b><span>模型与参数设置</span></span>
+        </button>
+        <i class="tech-nav-divider" aria-hidden="true"></i>
+        <button type="button" class="tech-nav-icon" id="techAuthBtn" title="登录 / 账户" aria-label="登录 / 账户">
+          <i class="ti ti-login" aria-hidden="true"></i>
+          <span class="tech-nav-tip"><b>登录 / 账户</b><span>登录或查看当前账户</span></span>
+        </button>
+      </nav>
+
+      <!-- 中间：整个项目生命周期唯一常驻的技术工艺 Agent 会话宿主。
+           切换 stage 不重建这里，草稿、历史与滚动位置都留在本列。 -->
       <section class="oc-agent-pane tech-chat-pane" id="techChatPane" aria-label="技术工艺 Agent 会话">
+        <header class="tech-chat-header">
+          <div class="tech-chat-title">
+            <i class="ti ti-sparkles" aria-hidden="true"></i>
+            技术工艺智能体
+            <span class="tech-ai-badge">AI</span>
+          </div>
+          <div class="tech-conn-status">
+            <span class="tech-conn-dot" id="techConnDot"></span>
+            <span id="techConnText">连接中…</span>
+          </div>
+        </header>
         <div class="oc-thread" id="ocThread">
           <div class="oc-tinner" id="ocTinner">
             <div class="oc-amsg">
@@ -44,15 +95,22 @@
       </section>
 
       <!-- 右侧：唯一工作台出口，承载九步业务内容（同源受控 iframe）。
-           三阶段进度栏放在本卡片内部头部，宽度只跟随右侧卡片，不横跨左侧会话。 -->
+           项目 / 流程 / 模型信息与三阶段进度栏都在本列内部，不横跨左侧会话。 -->
       <section class="tech-workspace-pane">
-        <header class="tech-workspace-head">
-          <a class="tech-wb-brand" href="home.html"><span class="tech-wb-brand-mark">AI</span><span>技术工艺 · 统一工作台</span></a>
-          <span class="tech-wb-project" id="techProjectLabel">加载项目…</span>
-          <span class="tech-wb-phase" id="techPhaseLabel"></span>
+        <header class="tech-project-header">
+          <div class="tech-project-selector">
+            <span class="tech-project-label">当前项目</span>
+            <span class="tech-project-name" id="techProjectLabel">加载项目…</span>
+          </div>
+          <div class="tech-project-status">
+            <span class="tech-status-dot" aria-hidden="true"></span>
+            <span>技术工艺流程</span>
+            <span id="techModelInfo"></span>
+          </div>
         </header>
         <div class="tech-workspace-progress">
           <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
+          <span class="tech-wb-phase" id="techPhaseLabel"></span>
         </div>
         <div id="techWorkspaceOutlet" aria-live="polite">
           <div class="tech-wb-state" id="techStageState">
@@ -60,22 +118,25 @@
             <div id="techStageMessage">加载工作台…</div>
           </div>
         </div>
+        <footer class="tech-workbench-bottom">
+          <div class="tech-action-left" id="techActionLeft">
+            <button type="button" id="techPrev" class="tech-wb-btn secondary">← 上一步</button>
+            <span class="tech-wb-now" id="techNowLabel"></span>
+            <button type="button" id="techSecondary" class="tech-wb-btn secondary" hidden></button>
+            <button type="button" id="techPrimary" class="tech-wb-btn primary" hidden></button>
+            <button type="button" id="techPanelToggle" class="tech-wb-btn plain" title="展开/收起子页面自身的会话与操作面板">子页面板</button>
+          </div>
+          <div class="tech-action-right" id="techActionRight">
+            <button type="button" id="techNext" class="tech-wb-btn primary">下一步 →</button>
+          </div>
+        </footer>
       </section>
     </div>
-
-    <footer class="tech-workbench-bottom">
-      <button type="button" id="techPrev" class="tech-wb-btn secondary">← 上一步</button>
-      <span class="tech-wb-now" id="techNowLabel"></span>
-      <span class="tech-wb-grow"></span>
-      <button type="button" id="techSecondary" class="tech-wb-btn secondary" hidden></button>
-      <button type="button" id="techPrimary" class="tech-wb-btn primary" hidden></button>
-      <button type="button" id="techPanelToggle" class="tech-wb-btn plain" title="展开/收起子页面自身的会话与操作面板">子页面板</button>
-      <button type="button" id="techNext" class="tech-wb-btn primary">下一步 →</button>
-    </footer>
   </div>
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
-  <script src="tech-workbench.js?v=twb1"></script>
+  <script src="llm-settings-panel.js?v=llm-set1"></script>
+  <script src="tech-workbench.js?v=twb3"></script>
   <script src="agent-chat.js?v=20260819-match1"></script>
 </body>
 </html>

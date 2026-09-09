@@ -63,6 +63,16 @@
 - 新增报价智能体强调控件 Spec 与 Red 测试：顶部 `AI` 徽标、当前“确认需求配置”步骤数字、`强行填满本步骤` 和 `确认，进入下一步` 四处由常驻蓝底白字改为浅色底、品牌蓝字和 1px 品牌边框，仅鼠标悬浮时呈现深蓝底白字。
 - 明确只调整四个目标的视觉状态，保留按钮禁用态、既有 id、点击处理、步骤状态与业务行为，并禁止连带修改其他主按钮；等待 DeepSeek 实现。
 
+## 7. 报价与技术工艺智能体工作台壳一致性（9-9）
+
+- 新增工作台壳一致性 Spec 与 Red 测试：报价单智能体左上 Logo 返回统一主页报价模式；技术工艺工作台对齐报价智能体的 56px 导航、常驻会话、右侧工作区三列骨架，并补齐技术工艺智能体标题、真实连接状态、当前项目、技术工艺流程和运行时模型信息。
+- 技术工艺三列壳实现完成：新增可操作的统一导航、会话标题与真实 Agent 连接状态、项目/技术工艺流程/运行时模型栏；工作区取消外围 gap、padding、圆角和悬浮阴影，步骤操作底栏收进右侧，左侧承载上一步及本步操作，最右只保留下一步。报价单智能体左上 Logo 已可返回统一主页报价模式。
+- 保持九阶段、项目会话、URL 恢复、iframe 同源校验和后端业务逻辑不变；壳一致性测试 8/8 通过。
+- 最终实现（9-9，会话授权直接实现）：`确认需求解析结果.html` 左上 `.nav-logo` 改为 `<a href="/报价首页.html?assistant=quote">`；`tech-workbench.html` 重构为 `56px 导航 + 460px 常驻会话 + 右侧工作区` 三列（`grid-template-columns:56px 460px minmax(0,1fr)`，无 gap/padding/圆角/阴影），导航含 Logo（`/报价首页.html?assistant=tech`）、新对话、历史记录、返回主页、消息、设置、账户；会话列新增“技术工艺智能体 + AI 徽标 + 连接状态（`techConnDot/techConnText`）”，右侧新增“当前项目 / 技术工艺流程 / 运行时模型（`techProjectLabel/techModelInfo`）”。
+- 连接状态与模型名由现有 `agent-chat.js` 的 `/api/projects/{id}/agent/meta` 真实驱动：成功显示“已连接”与 `data.model`，失败或 Agent 不可用显示“未连接”，HTML 不写死模型；项目名优先取 `/api/projects/{id}` 真实名称，未绑定显示“未绑定项目”。
+- 底栏已移入 `.tech-workspace-pane`：`techActionLeft` 承载上一步、当前步骤、次要/主操作代理与子页面板，`techActionRight` 只保留 `techNext`；导航新对话复用 agent-chat 会话重置能力，设置复用同一份模型设置面板（`llm-settings-panel.js`），消息/账户复用 `cpqMsg.open()/cpqAuth.open()`，历史记录打开基于既有 `/api/projects` 的技术项目历史抽屉并按 `/workflow` 恢复当前 stage。
+- 验证：壳一致性测试 8/8 通过；仓库工作流 9/9、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5 通过；全量 `discover -s tests` 47 项中 41 通过、6 失败，失败均为本轮开始前已存在的其他 Spec Red（强调控件悬浮态 2 项、主按钮同色系渐变 4 项），未删除或弱化；`node --check`（tech-workbench.js、agent-chat.js）、`py_compile tests/test_quote_tech_agent_shell_parity_red.py` 与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
+
 ## 9. 推送链路收敛到 GitLab（9-9）
 
 - 日常 `20260909` 拉取与推送链路由 GitHub/GitLab 双端改为仅 GitLab；GitHub 只保留初始历史基线，不再接收开发分支推送。

@@ -43,6 +43,8 @@
   const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
 
   const state = { stage: '', project: '', taskId: '', progress: null };
+  // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
+  const projectNames = new Map();
 
   function params() { return new URLSearchParams(location.search); }
 
@@ -131,14 +133,40 @@
     if (phaseLabel) phaseLabel.textContent = phase ? `当前：${phase}` : '';
     const now = $('techNowLabel');
     if (now) now.textContent = current ? `${current.no} ${current.label}` : '';
-    const projectLabel = $('techProjectLabel');
-    if (projectLabel) {
-      projectLabel.textContent = state.project ? `项目 ${state.project}${state.taskId ? ` · 任务 ${state.taskId}` : ''}` : '未绑定项目';
-    }
+    updateProjectLabel();
     const prev = $('techPrev');
     const next = $('techNext');
     if (prev) prev.disabled = !canNav || currentIdx <= 0;
     if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= STAGES.length - 1;
+  }
+
+  function updateProjectLabel() {
+    const label = $('techProjectLabel');
+    if (!label) return;
+    const project = state.project;
+    if (!project) {
+      label.textContent = '未绑定项目';
+      return;
+    }
+    const suffix = state.taskId ? ` · 任务 ${state.taskId}` : '';
+    const known = projectNames.get(project);
+    if (known) {
+      label.textContent = known + suffix;
+      return;
+    }
+    label.textContent = `项目 ${project}${suffix}`;
+    fetch(`/api/projects/${encodeURIComponent(project)}`, { headers: authHeaders() })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data) return;
+        const name = data.project_name || data.name || data.device_name || data.source_filename || '';
+        if (name && state.project === project) {
+          projectNames.set(project, name);
+          const current = $('techProjectLabel');
+          if (current) current.textContent = name + (state.taskId ? ` · 任务 ${state.taskId}` : '');
+        }
+      })
+      .catch(() => {});
   }
 
   /* ---------------------------------------------------------- 状态区 */
@@ -380,10 +408,164 @@
   }
   setInterval(() => syncActionBar(), 2500);
 
+  /* ---------------------------------------------------------- 左侧导航
+   * Logo / 返回主页是普通链接；新对话复用 agent-chat 的会话重置能力（ocTechAgent），
+   * 消息与账户复用 cpqMsg / cpqAuth，设置复用与报价助手同一份模型设置面板。 */
+  function bindTechNav() {
+    const newChat = $('techNewChat');
+    if (newChat) newChat.addEventListener('click', () => {
+      if (!state.project) {
+        setStateView('error', '尚未绑定项目', '新对话需要先绑定项目：请先在 1.1 创建中上传图纸并保存草稿。');
+        return;
+      }
+      if (window.ocTechAgent && typeof window.ocTechAgent.resetTask === 'function') {
+        window.ocTechAgent.resetTask();
+      } else {
+        setStateView('error', '会话未就绪', '对话组件尚未完成加载，请稍后重试。');
+      }
+    });
+    const history = $('techHistory');
+    if (history) history.addEventListener('click', openTechHistory);
+    const msg = $('techMsgBtn');
+    if (msg) msg.addEventListener('click', () => {
+      if (window.cpqMsg && typeof window.cpqMsg.open === 'function') window.cpqMsg.open();
+    });
+    const settings = $('techSettings');
+    if (settings) settings.addEventListener('click', () => {
+      if (window.ocTechAgent && typeof window.ocTechAgent.openSettings === 'function') {
+        window.ocTechAgent.openSettings(settings);
+      } else {
+        setStateView('error', '设置未就绪', '模型设置面板尚未加载，请稍后重试。');
+      }
+    });
+    const auth = $('techAuthBtn');
+    if (auth) auth.addEventListener('click', () => {
+      if (window.cpqAuth && typeof window.cpqAuth.open === 'function') window.cpqAuth.open();
+    });
+  }
+
+  /* ---------------------------------------------------------- 技术项目历史
+   * “历史记录”打开当前用户的技术项目历史抽屉：项目列表来自既有 /api/projects，
+   * 点击项目后按既有 /workflow 与项目数据换算当前 stage，在同一壳内恢复。 */
+  let historyTimer = 0;
+  function ensureHistoryUi() {
+    if ($('techHistoryDrawer')) return;
+    const mask = document.createElement('div');
+    mask.className = 'tech-history-mask';
+    mask.id = 'techHistoryMask';
+    mask.hidden = true;
+    mask.addEventListener('click', closeTechHistory);
+    const drawer = document.createElement('aside');
+    drawer.className = 'tech-history-drawer';
+    drawer.id = 'techHistoryDrawer';
+    drawer.hidden = true;
+    drawer.setAttribute('aria-label', '技术项目历史');
+    drawer.innerHTML =
+      '<div class="tech-history-head">' +
+      '<span class="tech-history-title"><i class="ti ti-history" aria-hidden="true"></i>技术项目历史</span>' +
+      '<button type="button" class="tech-history-close" aria-label="关闭历史抽屉">×</button>' +
+      '</div>' +
+      '<div class="tech-history-list" id="techHistoryList"></div>';
+    drawer.querySelector('.tech-history-close').addEventListener('click', closeTechHistory);
+    document.body.append(mask, drawer);
+  }
+  function openTechHistory() {
+    ensureHistoryUi();
+    const mask = $('techHistoryMask');
+    const drawer = $('techHistoryDrawer');
+    if (!mask || !drawer) return;
+    mask.hidden = false;
+    drawer.hidden = false;
+    loadTechHistory();
+  }
+  function closeTechHistory() {
+    const mask = $('techHistoryMask');
+    const drawer = $('techHistoryDrawer');
+    if (!mask || !drawer) return;
+    window.clearTimeout(historyTimer);
+    historyTimer = window.setTimeout(() => {
+      mask.hidden = true;
+      drawer.hidden = true;
+    }, 200);
+  }
+  async function loadTechHistory() {
+    ensureHistoryUi();
+    const box = $('techHistoryList');
+    if (!box) return;
+    box.innerHTML = '<div class="tech-history-empty">加载历史项目…</div>';
+    let projects = [];
+    try {
+      const response = await fetch('/api/projects', { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      projects = Array.isArray(data) ? data : (data && Array.isArray(data.projects) ? data.projects : []);
+    } catch (error) {
+      box.innerHTML = `<div class="tech-history-empty error">无法读取技术项目历史：${escH(error.message)}</div>`;
+      return;
+    }
+    if (!projects.length) {
+      box.innerHTML = '<div class="tech-history-empty">还没有技术项目历史。<br/>在技术工艺主页上传图纸或新建工艺评估后，会出现在这里。</div>';
+      return;
+    }
+    const rows = projects.filter((row) => row && (row.project_id || row.id));
+    rows.sort((a, b) => String(b.created_at || b.updated_at || '').localeCompare(String(a.created_at || a.updated_at || '')));
+    box.innerHTML = '';
+    rows.forEach((row) => {
+      const id = row.project_id || row.id;
+      const title = row.project_name || row.device_name || row.source_filename || `PRJ-${id}`;
+      const meta = `PRJ-${id}${row.created_at ? ` · ${String(row.created_at).slice(0, 10)}` : ''}`;
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tech-history-item';
+      item.innerHTML = '<span class="tech-history-item-title"></span><span class="tech-history-item-meta"></span>';
+      item.querySelector('.tech-history-item-title').textContent = title;
+      item.querySelector('.tech-history-item-meta').textContent = meta;
+      item.addEventListener('click', () => techHistoryRestore(id));
+      box.append(item);
+    });
+  }
+  function techStageFromProject(flow, project) {
+    const status = String(((flow.requirement || {}).status) || '').trim();
+    if (status === 'draft' || status === 'rejected') return 'requirement-create';
+    if (status === 'pending_confirmation') return 'requirement-confirm';
+    if (status === 'pending_review') return 'requirement-review';
+    const report = flow.report || null;
+    if (report) {
+      if (report.status === 'in_review') return 'report-review';
+      if (report.status === 'approved' || report.status === 'published') return 'report-publish';
+      return 'summary';
+    }
+    const hasIr = Boolean(
+      (project.ir && project.ir.parts && project.ir.parts.length) ||
+      (project.meta && project.meta.has_ir) || project.has_ir ||
+      (project.stages && project.stages.parsed),
+    );
+    return hasIr ? 'process' : 'drawing';
+  }
+  async function techHistoryRestore(projectId) {
+    if (!projectId) return;
+    closeTechHistory();
+    try {
+      const results = await Promise.all([
+        fetch(`/api/projects/${encodeURIComponent(projectId)}/workflow`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${encodeURIComponent(projectId)}`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+      ]);
+      const stage = techStageFromProject(results[0] || {}, results[1] || {});
+      applyStage(stage, { project: projectId });
+    } catch (error) {
+      setStateView('error', '无法恢复历史项目', `打开项目 ${projectId} 失败：${error.message}`, [
+        { id: 'go-create', label: '去 1.1 创建', stage: 'requirement-create' },
+      ]);
+    }
+  }
+
   /* ---------------------------------------------------------- 启动 */
   readFromUrl();
   if (!state.stage) state.stage = 'requirement-create';
   renderTop();
   mountStageFrame();
+  bindTechNav();
   if (state.project) refreshProgress();
 })();

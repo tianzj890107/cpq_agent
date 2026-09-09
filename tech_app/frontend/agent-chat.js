@@ -162,22 +162,34 @@
   }
 
   // ---------------------------------------------------------------- 元信息
-  function setModelLabel(text) {
-    const pill = $("ocModelPill");
-    if (pill) pill.querySelector("[data-model-name]").textContent = text;
+  // 统一工作台（tech-workbench.html）的会话列头部与右侧项目栏也展示连接/模型：
+  // 有对应 DOM 时同步，旧页面（图纸解析页等）没有这些节点时静默跳过。
+  function techShellConn(text, ok) {
+    const dot = $("techConnDot");
+    const label = $("techConnText");
+    if (dot) {
+      dot.classList.remove("ok", "err");
+      if (ok === true) dot.classList.add("ok");
+      else if (ok === false) dot.classList.add("err");
+    }
+    if (label) label.textContent = text;
   }
   async function loadMeta() {
+    techShellConn("连接中…");
     try {
       const response = await fetch(api("/meta"), { headers: authHeaders() });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
       if (data.available === false) {
+        techShellConn("未连接", false);
+        techShellModel("未连接 / Agent 未就绪");
         setModelLabel("Agent 未就绪");
         pushSystem(`Agent 暂不可用：${data.reason || "未知原因"}。图纸解析等平台功能不受影响。`);
         input.placeholder = "Agent 未就绪，仍可使用「开始解析」按钮";
         return;
       }
       meta = data;
+      techShellConn("已连接", true);
       setModelLabel(data.model || "未知模型");
       const cwd = $("ocSideCwd");
       if (cwd) {
@@ -188,9 +200,23 @@
       // 界面上只说"会话已就绪"，不外露底层运行时的 profile 概念。
       if (profile) profile.textContent = "会话已就绪";
     } catch (error) {
+      techShellConn("未连接", false);
+      techShellModel("未连接 / 读取 Agent 信息失败");
       setModelLabel("未连接");
       pushSystem(`读取 Agent 信息失败：${error.message}`);
     }
+  }
+  function techShellModel(text) {
+    const info = $("techModelInfo");
+    if (!info) return;
+    const value = String(text || "").trim();
+    const stateWord = ["未连接", "未就绪", "未选择", "未知模型", "Agent"].some(word => value.includes(word));
+    info.textContent = stateWord || !value ? value : `· ${value}`;
+  }
+  function setModelLabel(text) {
+    const pill = $("ocModelPill");
+    if (pill) pill.querySelector("[data-model-name]").textContent = text;
+    techShellModel(text);
   }
 
   // ---------------------------------------------------------------- 渲染
@@ -779,7 +805,8 @@
     });
   });
   // 本次任务从头开始：清对话 + 把 2.1 解析的产出退回起点。会丢结果，先确认。
-  $("ocNewChat")?.addEventListener("click", async () => {
+  // 统一工作台左侧 56px 导航的“新对话”通过 window.ocTechAgent.resetTask 复用这里。
+  async function resetTaskFlow() {
     const confirmed = window.confirm(
       "本次任务将从头开始：\n\n"
       + "· 清空 Agent 对话\n"
@@ -803,7 +830,13 @@
     loadFiles();
     // 右侧工作区仍显示旧结果，刷一次才是真的回到起点。
     setTimeout(() => location.reload(), 1200);
-  });
+  }
+  $("ocNewChat")?.addEventListener("click", resetTaskFlow);
+  // 供统一工作台左侧导航复用（新对话 / 设置），旧页面不受影响。
+  window.ocTechAgent = {
+    resetTask: () => resetTaskFlow(),
+    openSettings: (anchor) => settingsPanel(anchor),
+  };
   document.querySelectorAll("[data-open-drawer]").forEach(button => {
     button.addEventListener("click", () => openDrawer(button.dataset.openDrawer));
   });
@@ -815,5 +848,8 @@
   loadFiles();
   renderComponentMatch();
   if (projectId) loadMeta();
-  else setModelLabel("未选择项目");
+  else {
+    techShellConn("未连接", false);
+    setModelLabel("未选择项目");
+  }
 })();

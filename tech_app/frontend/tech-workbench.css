@@ -1,10 +1,11 @@
-/* 技术工艺与成本测算统一双栏工作台样式。
- * 布局对齐报价助手：左 36%~42% 常驻会话，右工作台占剩余宽度，两栏各自滚动。
+/* 技术工艺智能体工作台样式。
+ * 壳布局对齐报价单智能体：56px 左侧导航 + 460px 常驻会话 + 右侧工作区三列贴合，
+ * 无外围间距/圆角/悬浮阴影，允许 0.5px 细分隔线。
  * 子页面（旧步骤页）以 embed=1 的同源 iframe 打开，chrome 折叠规则由 tech-embed.js 注入。 */
 html, body { height: 100%; }
 body {
   margin: 0;
-  background: var(--bg-page, #eef1f5);
+  background: var(--bg-page, #ffffff);
   color: var(--text-primary, #1f2937);
   font: 14px/1.5 Inter, "PingFang SC", -apple-system, "Microsoft YaHei", sans-serif;
   overflow: hidden;
@@ -14,80 +15,231 @@ button { cursor: pointer; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .tech-workbench-app {
-  display: flex;
-  flex-direction: column;
   height: 100vh;
   min-height: 0;
+  overflow: hidden;
 }
 .tech-workbench-layout {
-  --twb-border: #dfe3ea;
+  --twb-border: #e7e7ea;
   --twb-card: #ffffff;
+  --twb-bg-soft: #f7f7f8;
+  --twb-bg-deep: #ececf1;
   --twb-primary: #0067D1;
+  --twb-primary-hover: #0057B8;
+  --twb-primary-active: #004A9F;
   --twb-primary-light: #EAF3FC;
   --twb-ok: #16a34a;
+  --twb-danger: #ef4444;
   --twb-muted: #6b7280;
-  --twb-shadow: 0 1px 3px rgba(15, 23, 42, .08);
+  --twb-text: #1f2023;
 }
 
-/* ---------- 右侧工作台卡片：头部（品牌/项目/阶段）+ 三阶段进度栏 ----------
- * 进度栏只属于右侧卡片，宽度跟随 .tech-workspace-pane，不横跨左侧会话。 */
-.tech-workspace-head {
+/* ---------- 桌面三列贴合骨架（对齐报价智能体 56 / 460 / 1fr） ---------- */
+.tech-workbench-body {
+  display: grid;
+  grid-template-columns: 56px 460px minmax(0, 1fr);
+  grid-template-rows: 100%;
+  height: 100vh;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ---------- 56px 左侧导航栏 ---------- */
+.tech-nav-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-height: 0;
+  padding: 12px 10px;
+  background: var(--twb-bg-soft);
+  border-right: .5px solid var(--twb-border);
+  overflow: hidden;
+}
+.tech-nav-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0067D1, #0057B8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+  color: #fff;
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+.tech-nav-logo svg { width: 22px; height: 22px; }
+.tech-nav-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--twb-muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.tech-nav-icon .ti { font-size: 20px; }
+.tech-nav-icon:hover, .tech-nav-icon:focus-visible { background: var(--twb-bg-deep); color: var(--twb-primary); outline: none; }
+.tech-nav-icon .tech-nav-tip {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 8px;
+  padding: 6px 10px;
+  background: #1f2023;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: nowrap;
+  border-radius: 6px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .15s;
+  pointer-events: none;
+  z-index: 200;
+}
+.tech-nav-icon .tech-nav-tip b { display: block; font-size: 12px; }
+.tech-nav-icon .tech-nav-tip span { display: block; color: #cfd2d8; font-size: 11px; font-weight: 400; }
+.tech-nav-icon:hover .tech-nav-tip { opacity: 1; visibility: visible; }
+.tech-nav-grow { flex: 1 1 auto; min-height: 6px; }
+.tech-nav-divider { width: 32px; height: 1px; background: var(--twb-border); margin: 8px 0 6px; flex: 0 0 auto; }
+
+/* ---------- 中间：技术工艺 Agent 会话列 ---------- */
+#techChatPane.oc-agent-pane,
+.tech-chat-pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--twb-card);
+  border-right: .5px solid var(--twb-border);
+  position: static;
+  top: auto;
+  overflow: hidden;
+}
+.tech-chat-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #f1f3f7;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: .5px solid var(--twb-border);
   background: var(--twb-card);
 }
-.tech-wb-brand {
-  display: inline-flex;
+.tech-chat-title {
+  display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: var(--text-primary, #1f2937);
-  font-weight: 700;
-  text-decoration: none;
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--twb-text);
   white-space: nowrap;
 }
-.tech-wb-brand > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.tech-wb-brand-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.tech-chat-title .ti { font-size: 20px; color: var(--twb-primary); }
+.tech-ai-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 9999px;
   background: linear-gradient(135deg, #0067D1, #0057B8);
   color: #fff;
-  font-size: 13px;
-  font-weight: 800;
+  white-space: nowrap;
 }
-.tech-wb-project {
-  color: var(--twb-muted);
-  font-size: 12.5px;
+.tech-conn-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #9a9ba6;
+  white-space: nowrap;
+}
+.tech-conn-dot { width: 7px; height: 7px; border-radius: 50%; background: #9a9ba6; flex: 0 0 auto; }
+.tech-conn-dot.ok { background: var(--twb-ok); }
+.tech-conn-dot.err { background: var(--twb-danger); }
+
+#techChatPane .oc-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+#techChatPane .oc-tinner { max-width: none; }
+#techChatPane .oc-composer {
+  flex: 0 0 auto;
+  border-top: .5px solid var(--twb-border);
+}
+
+/* ---------- 右侧：技术工艺工作区（项目/流程/模型 + 进度 + 步骤出口） ---------- */
+.tech-workspace-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--twb-card);
+  border: 0;
+  border-left: .5px solid var(--twb-border);
+  border-radius: 0;
+  overflow: hidden;
+  box-shadow: none;
+}
+.tech-project-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 16px;
+  background: var(--twb-card);
+  border-bottom: .5px solid var(--twb-border);
+}
+.tech-project-selector { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tech-project-label { font-size: 13px; color: var(--twb-muted); white-space: nowrap; }
+.tech-project-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--twb-text);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tech-wb-phase {
-  margin-left: auto;
+.tech-project-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
   color: var(--twb-muted);
-  font-size: 12.5px;
   white-space: nowrap;
 }
+.tech-project-status #techModelInfo { color: var(--text-primary, #1f2023); }
+.tech-status-dot { width: 8px; height: 8px; background: var(--twb-ok); border-radius: 50%; flex: 0 0 auto; }
 
 .tech-workspace-progress {
   flex: 0 0 auto;
   display: flex;
+  align-items: center;
   min-width: 0;
   background: var(--twb-card);
-  border-bottom: 1px solid var(--twb-border);
+  border-bottom: .5px solid var(--twb-border);
 }
 .tech-steps-bar {
   flex: 1 1 auto;
@@ -97,6 +249,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   min-width: 0;
   padding: 8px 14px 10px;
   overflow-x: auto;
+}
+.tech-wb-phase {
+  flex: 0 0 auto;
+  padding: 0 14px 0 4px;
+  color: var(--twb-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .tech-step-phase {
   display: flex;
@@ -155,53 +314,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   pointer-events: none;
 }
 
-/* ---------- 主体：左会话 / 右工作台 ---------- */
-.tech-workbench-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: stretch;
-  gap: 14px;
-  padding: 14px 16px;
-}
-
-/* 左会话列。oc-agent-pane 的原始宽度规则这里覆盖为 36%~42% 区间的弹性列。 */
-#techChatPane.oc-agent-pane,
-.tech-chat-pane {
-  flex: 0 0 clamp(330px, 40%, 480px);
-  width: auto;
-  height: auto;
-  max-height: none;
-  min-height: 0;
-  position: static;
-  top: auto;
-  align-self: stretch;
-}
-#techChatPane .oc-thread {
-  min-height: 0;
-}
-#techChatPane .oc-composer {
-  flex: 0 0 auto;
-}
-
-/* 右工作台出口。 */
-.tech-workspace-pane {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--twb-card);
-  border: 1px solid var(--twb-border);
-  border-radius: 14px;
-  overflow: hidden;
-  box-shadow: var(--twb-shadow);
-}
+/* 步骤内容出口 */
 #techWorkspaceOutlet {
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 #techStageFrame {
   width: 100%;
@@ -235,7 +355,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   flex-direction: row;
   justify-content: flex-start;
   gap: 8px;
-  border-bottom: 1px solid #f1f3f7;
+  border-bottom: .5px solid #f1f3f7;
   color: #8a93a2;
 }
 .tech-wb-spinner {
@@ -251,7 +371,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tech-wb-state-title {
   font-size: 15px;
   font-weight: 700;
-  color: var(--text-primary, #1f2937);
+  color: var(--twb-text);
 }
 .tech-wb-state-actions {
   display: flex;
@@ -268,10 +388,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-size: 12.5px;
   background: #fffbeb;
   color: #92400e;
-  border-bottom: 1px solid #fde68a;
+  border-bottom: .5px solid #fde68a;
 }
 
-/* ---------- 底部：上一步 / 次要 / 主操作 / 下一步 ---------- */
+/* ---------- 底栏：只属于右侧工作区，最右侧仅“下一步” ---------- */
 .tech-workbench-bottom {
   flex: 0 0 auto;
   display: flex;
@@ -279,8 +399,21 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   gap: 10px;
   padding: 9px 16px;
   background: var(--twb-card);
-  border-top: 1px solid var(--twb-border);
-  box-shadow: 0 -1px 3px rgba(15, 23, 42, .05);
+  border-top: .5px solid var(--twb-border);
+  z-index: 10;
+}
+.tech-action-left {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tech-action-right {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .tech-wb-btn {
   border-radius: 9px;
@@ -289,8 +422,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
+  background: #fff;
+  color: var(--twb-text);
 }
-.tech-wb-btn.secondary { background: #fff; color: var(--text-primary, #1f2937); }
+.tech-wb-btn.secondary { background: #fff; color: var(--twb-text); }
 .tech-wb-btn.secondary:hover:not(:disabled) { border-color: var(--twb-primary); color: var(--twb-primary); }
 .tech-wb-btn.primary {
   background: var(--twb-primary);
@@ -302,28 +437,142 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tech-wb-now {
   font-size: 12.5px;
   color: var(--twb-muted);
+  white-space: nowrap;
 }
-.tech-wb-grow { flex: 1 1 auto; }
 
-/* ---------- 响应式：小于 900px 上下排列 ---------- */
+/* ---------- 技术项目历史抽屉（沿用报价助手历史抽屉的遮罩交互） ---------- */
+.tech-history-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 16, 25, .35);
+  z-index: 1190;
+}
+.tech-history-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: min(360px, 88vw);
+  height: 100vh;
+  background: var(--twb-card);
+  border-right: .5px solid var(--twb-border);
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 8px 0 24px rgba(15, 16, 25, .10);
+}
+.tech-history-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: .5px solid var(--twb-border);
+}
+.tech-history-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--twb-text);
+}
+.tech-history-title .ti { color: var(--twb-primary); font-size: 18px; }
+.tech-history-close {
+  border: 0;
+  background: transparent;
+  color: var(--twb-muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.tech-history-close:hover { background: var(--twb-bg-deep); color: var(--twb-text); }
+.tech-history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+.tech-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: .5px solid var(--twb-border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--twb-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.tech-history-item:hover { border-color: var(--twb-primary); background: var(--twb-primary-light); }
+.tech-history-item-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tech-history-item-meta { font-size: 11.5px; color: var(--twb-muted); }
+.tech-history-empty {
+  padding: 28px 16px;
+  color: var(--twb-muted);
+  font-size: 13px;
+  text-align: center;
+  line-height: 1.7;
+}
+.tech-history-empty.error { color: var(--twb-danger); }
+
+/* ---------- 中等屏：中间会话列收窄，仍保持三列 ---------- */
+@media (max-width: 1180px) and (min-width: 901px) {
+  .tech-workbench-body { grid-template-columns: 56px 380px minmax(0, 1fr); }
+}
+
+/* ---------- 窄屏：上下排列，导航/会话/工作区均保持可访问 ---------- */
 @media (max-width: 900px) {
   body { overflow: auto; }
-  .tech-workbench-app { height: auto; min-height: 100vh; }
-  .tech-workbench-body { flex-direction: column; overflow: visible; }
-  #techChatPane.oc-agent-pane,
-.tech-chat-pane {
-    flex: 0 0 auto;
+  .tech-workbench-app { height: auto; min-height: 100vh; overflow: visible; }
+  .tech-workbench-body {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  .tech-nav-panel {
+    flex-direction: row;
     width: 100%;
-    height: 46vh;
+    height: auto;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: .5px solid var(--twb-border);
+  }
+  .tech-nav-logo { margin: 0 6px 0 0; flex: 0 0 auto; }
+  .tech-nav-grow { display: none; }
+  .tech-nav-divider { width: 1px; height: 24px; margin: 0 6px; }
+  #techChatPane.oc-agent-pane,
+  .tech-chat-pane {
+    width: 100%;
+    height: 48vh;
     min-height: 300px;
+    border-right: 0;
+    border-bottom: .5px solid var(--twb-border);
   }
   .tech-workspace-pane {
-    min-height: 62vh;
     width: 100%;
+    height: auto;
+    min-height: 62vh;
+    border-left: 0;
   }
   #techStageFrame { min-height: 62vh; }
-  .tech-workspace-head { flex-wrap: wrap; }
-  .tech-workspace-head .tech-wb-phase { margin-left: 0; }
+  .tech-project-header { flex-wrap: wrap; }
+  .tech-project-status { white-space: normal; }
+  .tech-workspace-progress { flex-wrap: wrap; }
+  .tech-wb-phase { display: none; }
   .tech-workbench-bottom { flex-wrap: wrap; }
-  .tech-wb-grow { display: none; }
+  .tech-action-left { flex-wrap: wrap; }
 }

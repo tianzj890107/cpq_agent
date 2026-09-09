@@ -69,6 +69,7 @@
       margin-bottom: 8px; cursor: pointer;
     }
     .nav-logo svg { width: 22px; height: 22px; }
+    a.nav-logo { color: inherit; text-decoration: none; }
     .nav-divider { width: 32px; height: 1px; background: var(--border-color); margin: var(--space-sm) 0; }
     .nav-icon {
       width: 40px; height: 40px; border-radius: 10px;
@@ -638,13 +639,13 @@
   <div class="main-container">
     <!-- 最左侧导航 -->
     <div class="nav-panel">
-      <div class="nav-logo" title="报价管理">
+      <a class="nav-logo" title="报价管理" href="/报价首页.html?assistant=quote">
         <svg viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="8" stroke="white" stroke-width="1.5"/>
           <circle cx="12" cy="12" r="3" fill="white"/>
           <path d="M12 4V8M12 16V20M4 12H8M16 12H20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
-      </div>
+      </a>
       <div class="nav-icon active" onclick="restartSession()">
         <i class="ti ti-plus"></i>
         <span class="nav-tooltip">新对话（重置流程）</span>
