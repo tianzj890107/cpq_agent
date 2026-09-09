@@ -1,0 +1,29 @@
+stages:
+  - test
+  - build
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - when: never
+
+python_contract:
+  stage: test
+  image: python:3.10-slim
+  script:
+    - python -m unittest discover -s tests -p 'test_*.py'
+    - python -m py_compile cpq_suite_server.py cpq_auth.py cpq_wf.py cpq_tech_bridge.py
+
+docker_build:
+  stage: build
+  image: docker:27-cli
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  needs: ["python_contract"]
+  script:
+    - docker build -f Dockerfile -t "cpq-agent:ci-${CI_COMMIT_SHORT_SHA}" .
