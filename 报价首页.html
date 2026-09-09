@@ -8,11 +8,14 @@
   <!-- 离线部署：Inter 网络字体已移除，回退系统字体 -->
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-primary-hover: #4f46e5;
-      --color-primary-light: #eef2ff;
-      --color-purple: #8b5cf6;
-      --color-purple-light: #f5f3ff;
+      --color-primary: #0067D1;
+      --color-primary-hover: #0057B8;
+      --color-primary-light: #EAF3FC;
+      --color-primary-active: #004A9F;
+      --color-primary-page: #F4F9FE;
+      --color-primary-border: #B8D7F4;
+      --color-purple: #0067D1;
+      --color-purple-light: #F4F9FE;
       --color-green: #10B981;
       --color-green-light: #ECFDF5;
       --color-warning: #F59E0B;
@@ -50,7 +53,7 @@
       --transition-fast: 150ms ease;
 
       /* 与工作台一致的别名变量（供历史抽屉/设置弹窗复用） */
-      --gradient-ai: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      --gradient-ai: linear-gradient(135deg, #0067D1, #0057B8);
       --color-secondary: var(--color-purple);
       --color-success: var(--color-green);
       --color-danger: var(--color-red);
@@ -633,7 +636,7 @@
 
     .send-btn:hover {
       transform: scale(1.05);
-      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+      box-shadow: 0 4px 12px rgba(0,103,209,.30);
     }
 
     .send-btn i {
@@ -1031,7 +1034,7 @@
     .btn-mini .ti { font-size: 15px; }
     .drawer-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
     .hist-item { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: #fff; transition: border-color 0.15s, box-shadow 0.15s; position: relative; }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,103,209,.12); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .hist-item .h-chip { background: var(--bg-tertiary); border-radius: 9999px; padding: 1px 7px; color: var(--text-secondary); }
@@ -1047,7 +1050,7 @@
     .modal-body label { display: block; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); margin: 14px 0 6px; }
     .modal-body label:first-child { margin-top: 0; }
     .modal-body select, .modal-body input[type="text"], .modal-body input[type="password"], .modal-body input[type="number"] { width: 100%; border: 1px solid var(--border-secondary); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text-primary); background: white; outline: none; }
-    .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,103,209,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -1062,7 +1065,7 @@
     .modal-btn.primary { background: var(--gradient-ai); color: white; border: none; }
     .modal-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .modal-body textarea { width: 100%; border: 1px solid var(--border-secondary); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text-primary); background: white; outline: none; resize: vertical; }
-    .modal-body textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .modal-body textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,103,209,.12); }
     .pj-upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .pj-upload-row .modal-btn { min-width: 0; padding: 7px 12px; }
     .pj-upload-row .hint { flex: 1; }
@@ -1566,7 +1569,7 @@
                 title: '<span class="highlight">创作无限可能</span>，智能助手' },
       tech:   { tag: '技术工艺助手', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
                 ph: '请输入零件与工艺评估需求…（例如：45钢法兰盘，批量500，关键面Ra1.6，评估加工工艺路线）', newBtn: '新建工艺评估',
-                tabs: ['我的评估', '全部评估'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
+                tabs: ['我的清单', '待办任务', '全部清单'], activeTab: 2, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能工艺' },
     };
 
@@ -1662,10 +1665,50 @@
               : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
     }
 
+    // 技术工艺清单/历史卡片统一入口：按项目真实状态换算 stage，进入左会话+右工作台。
+    function techWorkbenchUrl(stage, projectId, taskId) {
+      let url = 'tech-workbench.html?stage=' + encodeURIComponent(stage)
+        + '&project=' + encodeURIComponent(projectId || '');
+      if (taskId) url += '&task_id=' + encodeURIComponent(taskId);
+      return url;
+    }
+    function techStageFromFlow(flow, projectData) {
+      const req = (flow && flow.requirement) || {};
+      const status = req.status || '';
+      if (!status || status === 'draft' || status === 'rejected') return 'requirement-create';
+      if (status === 'pending_confirmation') return 'requirement-confirm';
+      if (status === 'pending_review') return 'requirement-review';
+      const report = flow && flow.report;
+      if (report) {
+        if (report.status === 'in_review') return 'report-review';
+        if (report.status === 'approved' || report.status === 'published') return 'report-publish';
+        return 'summary';
+      }
+      const ir = (projectData && projectData.ir) || {};
+      const meta = (projectData && projectData.meta) || {};
+      const hasIr = Boolean((ir.parts && ir.parts.length) || meta.has_ir
+        || (meta.stages && meta.stages.parsed));
+      return hasIr ? 'process' : 'drawing';
+    }
+    async function openTechProject(projectId) {
+      if (!projectId) return;
+      let stage = 'requirement-create';
+      try {
+        const [flow, projectData] = await Promise.all([
+          fetch('/api/projects/' + encodeURIComponent(projectId) + '/workflow')
+            .then(r => r.ok ? r.json() : null),
+          fetch('/api/projects/' + encodeURIComponent(projectId))
+            .then(r => r.ok ? r.json() : null),
+        ]);
+        stage = techStageFromFlow(flow, projectData) || stage;
+      } catch (e) { /* 拉不到状态时落 1.1，页内可继续定位 */ }
+      window.location.href = techWorkbenchUrl(stage, projectId);
+    }
+
     // 领取任务并打开对应的工作台。
-    // 「新增工艺」去的是技术工艺的任务专属页（带任务编号），不是报价工作台 —— 那条支线
-    // 要做的是图纸解析与工艺测算，不是继续填报价。专属页里任务编码、客户需求、需求文档、
-    // 图纸上传、建单一屏闭环，不再把这些塞进技术工艺首页。
+    // 「新增工艺」进入统一工作台 1.1（右侧承载带任务编号的建项流程）：那条支线要做的是
+    // 图纸解析与工艺测算，不是继续填报价；成本测算 / 成本结果复核按任务类型落到
+    // stage=cost / stage=process，任务编码、项目与 task_id 全部随 URL 带过去。
     async function wfClaimAndOpen(taskId, sessionId, claimed, kind) {
       let claim = null;
       try {
@@ -1674,14 +1717,21 @@
       } catch (e) { alert(e.message || '领取失败'); return; }
       const k = (claim && claim.task_kind) || kind;
       if (k === 'tech_new_product') {
-        window.location.href = '/tech-task.html?tech_task=' + encodeURIComponent(taskId);
+        // 新增工艺：尚无技术项目，先进统一两栏壳的 1.1，由右侧 tech-task 建项后回写 project。
+        window.location.href = 'tech-workbench.html?stage=requirement-create&task_id='
+          + encodeURIComponent(taskId);
         return;
       }
       // 成本测算（财务经理）与成本结果复核（工艺经理）都在技术工艺里做，
-      // 项目号就是卡片的 session_id —— 直接落到对应的那一步。
-      if (k === 'tech_cost' || k === 'tech_cost_return') {
-        const page = k === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
-        window.location.href = page + '?project=' + encodeURIComponent(sessionId || '');
+      // 项目号就是卡片的 session_id —— 落到统一工作台的 cost / process 步。
+      if (k === 'tech_cost') {
+        window.location.href = 'tech-workbench.html?stage=cost&project='
+          + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
+        return;
+      }
+      if (k === 'tech_cost_return') {
+        window.location.href = 'tech-workbench.html?stage=process&project='
+          + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
         return;
       }
       try { sessionStorage.setItem(OPEN_KEYS.quote, sessionId); } catch (e) {}
@@ -1763,7 +1813,7 @@
       } catch (e) {
         SESSIONS[mode] = null;
       }
-      if (mode === 'quote') await wfLoad();   // 报价：同时拉取我的卡片与待办任务
+      if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
       PAGE = 1;
       renderCards();
     }
@@ -1807,8 +1857,10 @@
       const q = ((searchInput && searchInput.value) || '').trim().toLowerCase();
       const tab = currentTab();
 
-      // 报价「待办任务」：别人转交给我的卡片（登录后可用）
-      if (mode === 'quote' && tab.indexOf('待办任务') === 0) {
+      // 「待办任务」（报价与技术工艺共用）：登录后展示转交给我的卡片。
+      // 技术工艺的 tech_new_product / tech_cost / tech_cost_return 由
+      // wfClaimAndOpen 统一路由到 tech-workbench.html，报价类任务仍回报价工作台。
+      if ((mode === 'quote' || mode === 'tech') && tab.indexOf('待办任务') === 0) {
         renderTaskTab(q, info, ctrl);
         return;
       }
@@ -1849,7 +1901,7 @@
         cardGrid.querySelectorAll('.request-card').forEach((card, i) => {
           card.addEventListener('click', (e) => {
             if (e.target.closest('.card-del')) return;   // 点删除不进详情
-            if (mode === 'tech') { window.location.href = 'requirement-detail.html?project=' + encodeURIComponent(card.dataset.id); return; }
+            if (mode === 'tech') { openTechProject(card.dataset.id); return; }
             try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e2) {}
             window.location.href = encodeURI(PAGES[mode]);
           });
@@ -2067,18 +2119,24 @@
       }
       applyUploadMode(mode); // tech 模式显示「图纸/需求文档」两个上传槽，其它模式用通用上传
       loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
+      syncAssistantUrl(mode); // 用 replaceState 同步 ?assistant=，刷新/分享可恢复同一模式
+    }
+    function syncAssistantUrl(mode) {
+      try {
+        const q = new URLSearchParams(location.search);
+        if (q.get('assistant') === mode) return;
+        q.set('assistant', mode);
+        history.replaceState(null, '', location.pathname + '?' + q.toString());
+      } catch (e) { /* file:// 或受限环境不报错，仅不写地址栏 */ }
     }
 
     /* 顶部标签点击 = 切换助手模式；发送 / 新建 / 卡片详情进入对应页面。
-       「技术工艺」是例外：它整套工作台（需求单/图纸解析/工艺路径/…）是内嵌的
-       tech_app，有自己的首页，所以这里不切内嵌标签，直接跳过去。
-       走 /home.html 而不是写死 127.0.0.1:8012 —— 8010 会把它反代到 tech_app，
-       同源、同一套登录，换机器或进 Docker 也不用改。 */
-    const TECH_HOME_URL = '/home.html';
+       四个助手（报价 / 配置 / 规则 / 技术工艺）共用同一个主页壳：技术工艺不再
+       整页跳转 tech_app 的独立 /home.html，而是在同一页面里 setMode('tech')，
+       保留左侧导航、页面高度、消息/设置/登录按钮与响应式布局。 */
     document.querySelectorAll('.category-tag').forEach((tag) => {
       tag.addEventListener('click', () => {
         const mode = tagToMode(tag.textContent);
-        if (mode === 'tech') { window.location.href = TECH_HOME_URL; return; }
         setMode(mode);
       });
     });
@@ -2294,10 +2352,9 @@
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
-    // 初始化：URL ?assistant=quote|config|rule（技术工艺首页的顶部标签跳回来时带）
-    // 可直接进入对应助手，否则默认报价助手。
-    // 注：?assistant=tech 仍能打开下面那套内嵌的技术工艺标签页，但已没有任何入口指向它 ——
-    // 技术工艺现在有自己的首页（/home.html，即 tech_app），点顶部标签直接跳过去。
+    // 初始化：URL ?assistant=quote|config|rule|tech 可直接进入对应助手，否则默认报价助手。
+    // 技术工艺与其它三个助手共用同一主页壳：?assistant=tech 与点击顶部「技术工艺」
+    // 标签结果一致（都在本页 setMode('tech')，不跳转独立 /home.html）。
     (function initAssistantMode() {
       let m = 'quote';
       try { const a = new URLSearchParams(location.search).get('assistant'); if (a && MODES[a]) m = a; } catch (e) {}
@@ -2306,8 +2363,8 @@
     // 从工作台返回（含 bfcache）时刷新卡片，让新建/推进的单据立即出现
     window.addEventListener('pageshow', (e) => { if (e.persisted) loadCards(currentMode); });
     // 登录/登出后重拉「我的报价」与「待办任务」（两者都按账号归属）
-    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
-    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
+    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote' || currentMode === 'tech') wfLoad().then(renderCards); });
+    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote' || currentMode === 'tech') wfLoad().then(renderCards); });
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);
@@ -2596,7 +2653,7 @@
         const b = $(id);
         if (!b) return;
         const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
+        b.style.background = on ? 'var(--color-primary,#0067D1)' : 'transparent';
         b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
       });
       const sb = $('saveSettingsBtn');

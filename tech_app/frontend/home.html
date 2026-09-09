@@ -1,2 +1,29 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 工艺平台</title><link rel="stylesheet" href="home.css?v=home8"><link rel="stylesheet" href="home-layout.css?v=home-sidebar9"><link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1"><link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css"><style>.list-tab{padding:0 0 6px;border:0;background:transparent;font:13px inherit}</style>  <script src="cpq-sso.js?v=sso2"></script>
-</head><body><div id="app"></div><script src="workflow.js?v=workflow2"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="home.js?v=home26"></script><script src="cpq-home-tabs.js?v=cpq1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="cpq-tech-task.js?v=cpq2"></script><script src="cpq-tech-inbox.js?v=cpq3"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>技术工艺 · 统一主页</title>
+<style>body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f4f6fa;color:#334155;display:flex;min-height:100vh;align-items:center;justify-content:center}.hint{text-align:center;padding:24px;font-size:14px}.hint a{color:#0067D1}</style>
+</head>
+<body>
+<div class="hint">正在进入技术工艺统一主页…<br><noscript><a href="/报价首页.html?assistant=tech">点此进入</a></noscript></div>
+<script>
+(function () {
+  'use strict';
+  // 旧技术工艺独立主页已停用：本页只做轻量兼容汇聚，不再加载 home.css /
+  // home-layout.css / home.js / cpq-home-tabs.js / cpq-tech-inbox.js 等第二套主页
+  // 资源，也不再渲染旧导航；立即 replace 到统一主页的技术工艺模式，避免后退回栈。
+  // project / task_id / tech_task / stage / industry 等既有业务参数原样保留，
+  // assistant 固定为 tech，统一由 报价首页.html 恢复技术工艺模式。
+  try {
+    var params = new URLSearchParams(location.search);
+    params.set('assistant', 'tech');
+    location.replace('/报价首页.html?' + params.toString());
+  } catch (err) {
+    location.replace('/报价首页.html?assistant=tech');
+  }
+})();
+</script>
+</body>
+</html>
