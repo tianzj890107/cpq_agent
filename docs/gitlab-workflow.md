@@ -2,7 +2,7 @@
 
 ## 分支模型
 
-- `20260909`：唯一日常开发分支，同时镜像到 GitHub 和 GitLab。
+- `20260909`：唯一日常开发分支，只推送到 GitLab；GitHub 仅保留初始历史基线。
 - `master`：唯一发布主线，只接受 GitLab Merge Request 合入。
 - MR 固定为 `20260909 → master`，reviewer `tianzijing`，assignee `zhangzhen`。
 
@@ -10,7 +10,7 @@
 
 | 用户指令 | 执行动作 | 不包含 |
 | --- | --- | --- |
-| push / 推送 | commit 后运行双远端推送脚本 | MR、tag、Release、部署 |
+| push / 推送 | commit 后运行 GitLab 推送脚本 | GitHub push、MR、tag、Release、部署 |
 | merge / 合并 | 创建或更新 MR，等待 reviewer 人工合并 | 自动合并、直接 push master |
 | tag | 在 master 已合入提交创建并推送指定 annotated tag | Release、部署 |
 | Release | 基于现有 tag 创建 GitLab Release | 改写 tag、部署 |
@@ -23,7 +23,7 @@ python3 scripts/push_remotes.py --check
 python3 scripts/push_remotes.py
 ```
 
-脚本要求当前位于 `20260909`、工作区干净、远端分支不含本地未知提交；推送后回读两个远端 SHA。禁止 force push。
+脚本要求当前位于 `20260909`、工作区干净、GitLab 远端分支不含本地未知提交；推送后只回读 GitLab SHA。禁止 force push，不推送 GitHub。
 
 ## Merge Request
 

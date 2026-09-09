@@ -63,6 +63,11 @@
 - 新增报价智能体强调控件 Spec 与 Red 测试：顶部 `AI` 徽标、当前“确认需求配置”步骤数字、`强行填满本步骤` 和 `确认，进入下一步` 四处由常驻蓝底白字改为浅色底、品牌蓝字和 1px 品牌边框，仅鼠标悬浮时呈现深蓝底白字。
 - 明确只调整四个目标的视觉状态，保留按钮禁用态、既有 id、点击处理、步骤状态与业务行为，并禁止连带修改其他主按钮；等待 DeepSeek 实现。
 
+## 9. 推送链路收敛到 GitLab（9-9）
+
+- 日常 `20260909` 拉取与推送链路由 GitHub/GitLab 双端改为仅 GitLab；GitHub 只保留初始历史基线，不再接收开发分支推送。
+- `push_remotes.py` 改为只校验、推送并回读 `gitlab/20260909`，仓库规则、工作流文档和自动化契约同步禁止 GitHub push；MR、tag、Release 和部署边界不变。
+
 - 实现完成（9-9，会话授权直接实现）：在 `确认需求解析结果.html` 主样式末尾新增精确选择器规则，仅作用于 `.ai-badge`、`.step-node.active`、`#qaFillStep`、`#btnNext` 四个目标；常态为 `background:var(--color-primary-page)`、`color:var(--color-primary)`、`border:1px solid var(--color-primary-border)`，悬浮为 `background:var(--color-primary-active)`、`color:white`、`border-color:var(--color-primary-active)`，按钮悬浮选择器使用 `:hover:not(:disabled)` 并在该组规则中置 `filter:none` 抵消旧 `brightness(1.06)`，禁用态保留 `opacity/cursor:not-allowed` 反馈。
 - 未改动四元素 DOM id、文案、onclick、步骤计算与禁用逻辑，未触碰其他 `.btn-primary`（设置保存、历史修改等）及任何后端/API/数据库/权限逻辑。
 - 验证：`tests.test_quote_agent_emphasis_hover_red` 4/4 通过；仓库工作流 9/9、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5（共 30 项）全部通过；`py_compile tests/test_quote_agent_emphasis_hover_red.py` 与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
