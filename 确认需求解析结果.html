@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0067D1;
+      --color-secondary: #0067D1;
+      --gradient-ai: linear-gradient(135deg, #0067D1, #0057B8);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #004A9F;
+      --color-primary-page: #F4F9FE;
+      --color-primary-border: #B8D7F4;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -158,7 +161,7 @@
     .cand-block .message-text { max-width: 100%; }
     .cand-head { font-size: 12px; margin-bottom: 4px; }
     .cand-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.6; margin-bottom: 8px; }
-    .cand-src { font-size: 11px; color: var(--color-primary); background: rgba(99,102,241,.07);
+    .cand-src { font-size: 11px; color: var(--color-primary); background: rgba(0,103,209,.08);
       border-radius: 6px; padding: 5px 8px; margin: 4px 0 6px; word-break: break-all; }
     .cand-src .ti { font-size: 12px; }
     .cand-warn { background: rgba(239,68,68,.10); color: #b91c1c; border: 1px solid rgba(239,68,68,.25);
@@ -222,7 +225,7 @@
       border-radius: 11px; background: var(--bg-secondary);
       font-size: 14px; font-family: inherit; resize: none; outline: none;
     }
-    .chat-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+    .chat-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,103,209,.12); }
     .chat-send {
       width: 38px; height: 38px; border: none; border-radius: 11px;
       background: var(--gradient-ai); color: white; cursor: pointer;
@@ -260,10 +263,10 @@
       font-weight: 600; font-size: 13px; flex-shrink: 0; transition: transform 0.15s;
     }
     .step-node.completed { background: var(--color-primary); color: white; }
-    .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(99,102,241,0.15); }
+    .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(0,103,209,.12); }
     .step-node.pending { background: var(--bg-tertiary); color: var(--text-tertiary); border: 0.5px solid var(--border-color); }
     /* 正在查看（非当前步骤）的节点：描边提示 */
-    .step-node.viewing { box-shadow: 0 0 0 3px rgba(139,92,246,0.35); }
+    .step-node.viewing { box-shadow: 0 0 0 3px rgba(0,103,209,.35); }
     .step-node .ti { font-size: 15px; }
     .step-label { margin-left: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
     .progress-step.active .step-label { color: var(--color-primary); font-weight: 600; }
@@ -289,7 +292,7 @@
     /* 查看历史步骤时的提示条 */
     .view-bar {
       display: none; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 8px 16px; background: rgba(139,92,246,0.07);
+      padding: 8px 16px; background: rgba(0,103,209,.08);
       border-top: 0.5px solid var(--border-color); flex-shrink: 0; font-size: 12.5px;
     }
     .view-bar.show { display: flex; }
@@ -313,7 +316,7 @@
     }
     .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); }
     .section-badge { font-size: 11px; padding: 3px 10px; border-radius: 9999px; font-weight: 500; }
-    .badge-active { background: rgba(99, 102, 241, 0.12); color: var(--color-primary); }
+    .badge-active { background: rgba(0,103,209,.12); color: var(--color-primary); }
     .results-content { padding: var(--space-lg); flex: 1; overflow-y: auto; }
 
     .panel-placeholder {
@@ -362,7 +365,7 @@
     .sec-status {
       font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 9999px; margin-left: 2px;
     }
-    .sec-status.active { background: rgba(99,102,241,0.14); color: var(--color-primary); }
+    .sec-status.active { background: rgba(0,103,209,.12); color: var(--color-primary); }
     .sec-status.done { background: rgba(16,185,129,0.14); color: var(--color-success); }
     /* 无依据的推测值：琥珀色高亮，让用户一眼看出哪些是猜的 */
     .info-table input.guessed, .list-table input.guessed, .info-table span.guessed, .list-table td.guessed {
@@ -416,7 +419,7 @@
       color: var(--text-primary); background: white; outline: none;
     }
     .info-table input:focus, .info-table select:focus, .info-table textarea:focus {
-      border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+      border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(0,103,209,.10);
     }
     .info-table textarea { resize: vertical; min-height: 48px; }
 
@@ -437,7 +440,7 @@
       padding: 4px 6px; font-size: 13px; font-family: inherit;
       color: var(--text-primary); background: white; outline: none;
     }
-    .list-table input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1); }
+    .list-table input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(0,103,209,.10); }
     /* BOM 树形显示（参考 BOM层级结构.html）：缩进 + Ln 徽标 + 展开/收起。仅改显示，数据列原样保留 */
     .bomtree .lvl-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
     .bomtree .exp-btn { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #9ca3af; transition: transform .2s; flex-shrink: 0; }
@@ -446,8 +449,8 @@
     .bomtree .exp-btn .ti { font-size: 12px; }
     .bomtree .exp-spacer { width: 18px; flex-shrink: 0; }
     .bomtree .lvl-badge { font-size: 10px; font-weight: 600; padding: 2px 5px; border-radius: 3px; flex-shrink: 0; }
-    .bomtree .lvl-badge.l1 { background: #eef2ff; color: #6366f1; }
-    .bomtree .lvl-badge.l2 { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+    .bomtree .lvl-badge.l1 { background: #EAF3FC; color: #0067D1; }
+    .bomtree .lvl-badge.l2 { background: rgba(0,103,209,.10); color: #0067D1; }
     .bomtree .lvl-badge.l3 { background: #f3f4f6; color: #62636d; }
     .bomtree .lvl-badge.l4 { background: #f9fafb; color: #9ca3af; }
     .bomtree tr.bom-child { display: none; }
@@ -503,9 +506,29 @@
     .btn-secondary:hover:not(:disabled) { background: var(--bg-secondary); border-color: var(--color-primary); }
     .btn-primary {
       background: var(--gradient-ai); color: white; border: none;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,103,209,.30);
     }
     .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+
+    /* 报价智能体强调控件（AI 徽标 / 当前步骤圆点 / 强行填满 / 确认下一步）：
+       常态浅底蓝字描边，仅鼠标悬浮进入深蓝选中态；按钮禁用态不被 hover 覆盖。 */
+    .ai-badge,
+    .step-node.active,
+    #qaFillStep,
+    #btnNext {
+      background: var(--color-primary-page);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
+    }
+    .ai-badge:hover,
+    .step-node.active:hover,
+    #qaFillStep:hover:not(:disabled),
+    #btnNext:hover:not(:disabled) {
+      background: var(--color-primary-active);
+      color: white;
+      border-color: var(--color-primary-active);
+      filter: none;
+    }
     .bottom-bar .btn .ti { font-size: 16px; }
 
     @media (max-width: 1024px) { .main-container { grid-template-columns: 56px 340px 1fr; } }
@@ -555,8 +578,8 @@
       padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg-page);
       transition: border-color 0.15s, box-shadow 0.15s; position: relative;
     }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
-    .hist-item.current { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,103,209,.12); }
+    .hist-item.current { border-color: var(--color-primary); background: rgba(0,103,209,.05); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px;
@@ -595,7 +618,7 @@
       background: white; outline: none;
     }
     .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -1671,7 +1694,7 @@
           ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
       }
       if (opts.repick && opts.picked) {
-        html += '<div class="cand-sub" style="color:var(--color-primary,#4f46e5)">' +
+        html += '<div class="cand-sub" style="color:var(--color-primary,#0067D1)">' +
           '<i class="ti ti-user-check"></i> 销售经理已选：<b>' + escapeHtml(opts.picked) +
           '</b>。如工艺上需要变更，点其他产品的「改选此产品」，右侧参数与价格会自动更新。</div>';
       }
@@ -2715,8 +2738,8 @@
       }
       // 已推送、等待对方领取
       if (WF.pendingTask) {
-        bar.style.background = 'rgba(99,102,241,.10)';
-        bar.style.color = '#4338ca';
+        bar.style.background = 'rgba(0,103,209,.10)';
+        bar.style.color = '#004A9F';
         bar.innerHTML = '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
           escapeHtml(WF.pendingTask.source_label || '') + '。对方领取后即可继续第 ' +
           WF.pendingTask.next_step_no + ' 步。';
@@ -3957,7 +3980,7 @@
         const b = $(id);
         if (!b) return;
         const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
+        b.style.background = on ? 'var(--color-primary,#0067D1)' : 'transparent';
         b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
       });
       const sb = $('saveSettingsBtn');
