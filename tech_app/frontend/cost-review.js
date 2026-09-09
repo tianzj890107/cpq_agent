@@ -657,7 +657,7 @@ function crBind() {
 }
 
 async function crStart() {
-  if (!crPid) { location.href = 'home.html'; return; }
+  if (!crPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
   crBind();
   crUser = (window.cpqAuth && window.cpqAuth.user && window.cpqAuth.user()) || null;
   if (!crUser && window.cpqAuth && window.cpqAuth.refresh) {

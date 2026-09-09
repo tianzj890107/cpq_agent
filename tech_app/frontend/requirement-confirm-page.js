@@ -59,12 +59,12 @@ async function cfAct(kind) {
   const comment = document.querySelector('#confirmationNote').value.trim();
   if (!comment) return cfToast('请填写提交意见。', true);
   if (cfRequirement.status !== 'pending_confirmation') return cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true);
-  try { const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`; await api(url,{method:'POST',body:JSON.stringify({comment})}); location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`; } catch (err) { cfToast(err.message, true); }
+  try { const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`; await api(url,{method:'POST',body:JSON.stringify({comment})}); if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(kind==='confirm'?'requirement-review':'requirement-create',cfPid);}else{location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`;} } catch (err) { cfToast(err.message, true); }
 }
 
 async function cfStart() {
-  if (!cfPid) { location.href = 'home.html'; return; }
-  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfRequirement.ai_check?.engine === 'qwen' ? cfRequirement.ai_check : ruleCheck; cfRender(); }
+  if (!cfPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
+  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfRequirement.ai_check?.engine === 'qwen' ? cfRequirement.ai_check : ruleCheck; cfRender(); }
   catch (err) { document.querySelector('#app').innerHTML = `<div class="page-toast error" style="position:static">页面加载失败：${cfEsc(err.message)}</div>`; }
 }
 cfStart();

@@ -1,3 +1,5 @@
+/* embed=1：本页在技术工艺统一工作台（tech-workbench.html）右侧打开，会话宿主在父壳 techChatPane。 */
+const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === '1';
 // 成本分析页: 读取 ?project=&part=, 生成/展示/编辑该零件的结构化成本拆解(支持联网检索行情)。
 const API = "";
 const authToken = localStorage.getItem("authToken") || "";

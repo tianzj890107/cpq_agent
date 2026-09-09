@@ -322,6 +322,17 @@
     const [allowed, message] = gate(code, progress);
     if (!allowed) { notify(message, true); return; }
     if (id) { localStorage.setItem('cad_engine_project_id', id); localStorage.setItem('currentProject', id); }
+    // 统一工作台嵌入：把切步骤请求转交父壳（父壳校验同源与 stage 白名单后更新 URL/outlet），
+    // 避免 iframe 内部整页跳转破坏父壳的会话与步骤状态。
+    const stageOfCode = {
+      '1.1': 'requirement-create', '1.2': 'requirement-confirm', '1.3': 'requirement-review',
+      '2.1': 'drawing', '2.2': 'process', '2.3': 'cost',
+      '3.1': 'summary', '3.2': 'report-review', '3.3': 'report-publish',
+    };
+    if (window.TechEmbed && window.TechEmbed.embedded && stageOfCode[code]) {
+      window.TechEmbed.requestNavigate(stageOfCode[code], id);
+      return;
+    }
     location.href = urlFor(code, id);
   }
   window.CadWorkflowNavigation = { navigate, refresh: () => { cachedProject = null; findRoots(); } };

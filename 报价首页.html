@@ -1549,7 +1549,7 @@
       quote: '确认需求解析结果.html',
       config: 'XBOM智能体-配置BOM生成.html',
       rule: '规则助手-规则配置.html',
-      tech: 'requirement-create.html',  // 技术工艺进入 process_drawing 步骤页（图纸+需求文档分开上传→下一步），8010 反向代理
+      tech: 'tech-workbench.html',  // 技术工艺统一工作台：左会话 + 右九步工作台（1.1→3.3），同源 8010 反向代理
     };
     const MODES = {
       quote:  { tag: '报价助手', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
@@ -1988,13 +1988,13 @@
       if (TECH_INDUSTRIES.includes(saved)) el.value = saved;
       el.addEventListener('change', () => localStorage.setItem(TECH_INDUSTRY_KEY, el.value));
     })();
-    // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入 requirement-create（图纸已关联）。
+    // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。
     async function techCreateAndGo() {
       const industry = techIndustry();
       if (!techDrawFiles.length) {
-        // 没传图纸 → 直接进入需求页现场分开上传。行业用 URL 带过去，否则这里选的
-        // 「电池」到了需求页会静默变回默认的「半导体」。
-        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
+        // 没传图纸 → 进入统一工作台 1.1，在页面内现场分开上传。行业用 URL 带过去，
+        // 否则这里选的「电池」到了需求页会静默变回默认的「半导体」。
+        window.location.href = 'tech-workbench.html?stage=requirement-create&industry=' + encodeURIComponent(industry);
         return;
       }
       const sendBtnEl = document.querySelector('.send-btn');
@@ -2030,10 +2030,10 @@
             }),
           });
         } catch (e) { /* 草稿存失败不阻断跳转：用户可在页内「保存草稿」后再解析 */ }
-        window.location.href = 'requirement-create.html?project=' + encodeURIComponent(pid);
+        window.location.href = 'tech-workbench.html?stage=requirement-create&project=' + encodeURIComponent(pid);
       } catch (e) {
         alert('技术工艺项目创建失败：' + (e && e.message || e) + '。将进入需求页，请在该页手动上传。');
-        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
+        window.location.href = 'tech-workbench.html?stage=requirement-create&industry=' + encodeURIComponent(industry);
       } finally {
         if (sendBtnEl) sendBtnEl.disabled = false;
       }

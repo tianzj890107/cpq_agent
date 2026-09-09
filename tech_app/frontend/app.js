@@ -1,3 +1,5 @@
+/* embed=1：本页在技术工艺统一工作台（tech-workbench.html）右侧打开，会话宿主在父壳 techChatPane。 */
+const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === '1';
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
@@ -547,7 +549,7 @@ if ($("btnBackToModel")) {
 }
 $("btnPrevious").onclick = () => {
   if (history.length > 1) history.back();
-  else location.href = "index.html";
+  else if (__techEmbedMode__ && window.TechEmbed && window.TechEmbed.embedded) { window.TechEmbed.exitToTechHome(); } else location.href = "index.html";
 };
 $("btnReport").onclick = () => {
   if (!currentProject) {

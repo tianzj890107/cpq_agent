@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>技术工艺与成本测算工作台</title>
+  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb1" />
+  <script src="cpq-sso.js?v=sso2"></script>
+</head>
+<body>
+  <div class="tech-workbench-app tech-workbench-layout" id="techWorkbenchApp">
+    <header class="tech-workbench-top">
+      <div class="tech-wb-head-row">
+        <a class="tech-wb-brand" href="home.html"><span class="tech-wb-brand-mark">AI</span><span>技术工艺 · 统一工作台</span></a>
+        <span class="tech-wb-project" id="techProjectLabel">加载项目…</span>
+        <span class="tech-wb-phase" id="techPhaseLabel"></span>
+      </div>
+      <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
+    </header>
+
+    <div class="tech-workbench-body">
+      <!-- 左侧：整个项目生命周期唯一常驻的 Agent 会话宿主。切换 stage 不重建这里。 -->
+      <section class="oc-agent-pane tech-chat-pane" id="techChatPane" aria-label="技术工艺 Agent 会话">
+        <div class="oc-thread" id="ocThread">
+          <div class="oc-tinner" id="ocTinner">
+            <div class="oc-amsg">
+              <div class="oc-aav" aria-hidden="true">✦</div>
+              <div class="oc-abody">
+                <div class="oc-intent-card">
+                  <h4>技术工艺评估助手</h4>
+                  <div class="oc-intent-meta">左侧会话在整个评估流程中持续存在：可以描述零件与工艺要求、追问图纸解析结果、发起解析，或直接说「开始解析」。</div>
+                </div>
+              </div>
+            </div>
+            <div class="oc-empty" id="ocEmpty">
+              <div style="font-size:30px;">✦</div>
+              <div style="font-size:14px;">工艺评估助手</div>
+              <div style="font-size:12.5px;">它能读取本项目图纸与技术资料、查询解析结果，并按你的要求发起解析。<br/>切换右侧步骤不会清空这里的会话。</div>
+            </div>
+          </div>
+        </div>
+        <div class="oc-composer">
+          <div class="oc-cinner">
+            <div class="oc-inputbox">
+              <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向工艺评估助手描述需求…" aria-label="向工艺评估助手发送消息"></textarea>
+              <button class="oc-send" id="ocSend" type="button" aria-label="发送">↑</button>
+            </div>
+            <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右侧：唯一工作台出口，承载九步业务内容（同源受控 iframe）。 -->
+      <section class="tech-workspace-pane">
+        <div id="techWorkspaceOutlet" aria-live="polite">
+          <div class="tech-wb-state" id="techStageState">
+            <div class="tech-wb-spinner" aria-hidden="true"></div>
+            <div id="techStageMessage">加载工作台…</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="tech-workbench-bottom">
+      <button type="button" id="techPrev" class="tech-wb-btn secondary">← 上一步</button>
+      <span class="tech-wb-now" id="techNowLabel"></span>
+      <span class="tech-wb-grow"></span>
+      <button type="button" id="techSecondary" class="tech-wb-btn secondary" hidden></button>
+      <button type="button" id="techPrimary" class="tech-wb-btn primary" hidden></button>
+      <button type="button" id="techPanelToggle" class="tech-wb-btn plain" title="展开/收起子页面自身的会话与操作面板">子页面板</button>
+      <button type="button" id="techNext" class="tech-wb-btn primary">下一步 →</button>
+    </footer>
+  </div>
+  <script src="/cpq_auth.js"></script>
+  <script src="/cpq_msg.js"></script>
+  <script src="tech-workbench.js?v=twb1"></script>
+  <script src="agent-chat.js?v=20260819-match1"></script>
+</body>
+</html>

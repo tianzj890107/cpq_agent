@@ -20,11 +20,15 @@
 - 增加远端推送校验、MR/Release 工具、版本规范、部署说明与部署脚本；CI 仅用于 MR/master 测试和镜像构建验证，明确不包含生产部署。
 - GitLab 新建 `master` 并以迁移基线 `5c13045` 初始化，设为项目默认分支；分支保护禁止直接 push 和 force push，仅允许 Maintainer 合并。旧 `main` 按用户最终要求保留，但不再作为活动开发、MR 或发布分支。
 
-## 3. 技术工艺与成本测算统一工作台设计（9-9，TDD Red）
+## 3. 技术工艺与成本测算统一工作台（9-9）
 
 - 定义统一双栏工作台 Spec：左侧保持项目级技术工艺会话，右侧承载需求创建/确认/审核、图纸解析、工艺方案、成本测算、汇总、结果审核和发布回传九个 stage；步骤切换、刷新和浏览器历史操作均需保持项目身份和会话上下文。
 - 采用“统一壳 + 同源受控步骤容器”的渐进式方案，复用现有页面与后端 API；明确嵌入模式、旧链接兼容、同源消息校验、角色和数据边界。
-- 新增静态契约红测；红测基线实际运行 `6 failed`，失败项对应统一壳、九阶段注册、同源导航保护、报价入口、旧页面嵌入模式和双栏响应式样式尚未实现。实现提示词只在会话中交付，不在仓库创建 `prompts/`；当前只提交 Spec/Red，未编写业务实现、未部署。
+- 新增静态契约红测；实现前实际运行 `6 failed`，失败项对应统一壳、九阶段注册、同源导航保护、报价入口、旧页面嵌入模式和双栏响应式样式尚未实现。
+- 用户在会话中直接授权实现：新增 `tech_app/frontend/tech-workbench.html/.css/.js` 统一壳与 `tech-embed.js` 嵌入协议；九个 stage 以 `embed=1` 同源 iframe 打开既有页面，左侧 `techChatPane` 复用 agent-chat.js 常驻会话，右侧 `techWorkspaceOutlet` 为唯一业务出口，URL（project/stage/task_id）支持刷新与前进后退恢复，跨域 postMessage 与白名单外 stage 一律拒绝。
+- 旧步骤页直达 URL（无 embed）自动汇聚到统一工作台对应 stage，保留 project/task_id 等参数且不循环；`报价首页.html` 技术工艺入口改为 `tech-workbench.html`；步骤完成态仍取自既有 `/workflow`、`/summary` 数据，不以前端点击冒充完成。
+- 未改动后端 API、数据库 schema、角色权限、成本公式、审批门禁与回传报价逻辑；未删除或清空历史会话/项目/任务/附件数据。
+- 验证：红测 6/6 转绿，`python3 -m unittest discover -s tests -p 'test_*.py'` 15/15 通过，`py_compile cpq_suite_server.py cpq_tech_bridge.py` 与 `git diff --check` 通过；未创建 MR/tag/Release，未部署；浏览器人工验证（九步连走、草稿保留、前进后退、窄屏、伪造跨域消息）尚未执行。
 
 ## 4. Agent 授权与任务终态规则补齐（9-9）
 

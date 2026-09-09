@@ -12,6 +12,7 @@
  *   - 解析完成后，零件清单与待澄清问题以按钮形式出现在对话结果里，点开抽屉查看。
  */
 (() => {
+  if (new URLSearchParams(location.search).has("embed")) return; // 统一工作台内嵌（embed=1）：会话宿主在父壳 techChatPane，子页不再自建/自连会话。
   const projectId = new URLSearchParams(location.search).get("project") || "";
   const $ = id => document.getElementById(id);
   const thread = $("ocThread");

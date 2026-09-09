@@ -1,3 +1,5 @@
+/* embed=1：本页在技术工艺统一工作台（tech-workbench.html）右侧打开，会话宿主在父壳 techChatPane。 */
+const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === '1';
 /*
  * 2.2 组装与整合。
  *
@@ -1188,7 +1190,7 @@ async function aiLoadParts() {
 }
 
 async function aiStart() {
-  if (!aiPid) { location.href = 'home.html'; return; }
+  if (!aiPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
   aiBindShell();
   $ai('aiSideProject').textContent = `项目 ${aiPid}`;
   aiLoadModelLabel();
