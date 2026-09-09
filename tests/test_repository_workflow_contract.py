@@ -36,5 +36,29 @@ class RepositoryWorkflowContract(unittest.TestCase):
         self.assertIn("cpq_settings.json", deploy)
         self.assertIn("curl --fail", deploy)
 
+    def test_continue_cannot_reopen_completed_work(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        self.assertIn("任务终态与“继续”指令（最高优先级）", agents)
+        self.assertIn("不得重开已完成任务", agents)
+        self.assertIn("只回复上一任务已完成并等待具体指令", agents)
+
+    def test_external_actions_require_current_explicit_instruction(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        for action in ("push", "MR", "tag", "Release", "部署"):
+            self.assertIn(action, agents)
+        self.assertIn("历史授权不延续", agents)
+        self.assertIn("本地服务启动/停止", agents)
+
+    def test_prompts_stay_in_conversation(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        self.assertIn("实现提示词只在会话中交付", agents)
+        self.assertFalse((ROOT / "prompts").exists())
+
+    def test_destructive_actions_have_exact_target_guards(self):
+        agents = (ROOT / "AGENTS.md").read_text()
+        self.assertIn("历史会话、业务数据与删除安全（最高优先级）", agents)
+        self.assertIn("空值、未定义变量", agents)
+        self.assertIn("删除前至少执行两项防御检查", agents)
+
 if __name__ == "__main__":
     unittest.main()
