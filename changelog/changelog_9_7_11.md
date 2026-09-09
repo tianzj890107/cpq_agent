@@ -107,3 +107,11 @@
 - 技术工艺会话首条“技术工艺评估助手”开场卡删除左侧 ✦ 圆形头像，卡片只保留标题与说明文字；后续智能体动态消息的头像行为不受影响。
 - 说明：用户提及“报价步骤后面重复出现文字带圈 1-6”的清理项未能在本仓静态代码中定位到第二份渲染副本（进度圆点仅由 `renderProgressBar()` 渲染一次）；对 9-9 两张本地截图（报价页、技术页）做 OCR 坐标校验，报价页仅在顶部进度条出现一行 1-6、技术页仅在步骤条出现一行 1-5，未发现第二行带圈数字，因此未做臆测性删除；若在浏览器旧缓存或智能体会话内容中仍可见，需截图定位后再处理。
 - 验证：全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 55/55 通过；`node --check tech_app/frontend/tech-workbench.js`、`node --check tech_app/frontend/agent-chat.js` 与 `git diff --check` 通过；无头 Chrome 加载本地 `tech-workbench.html` 校验 DOM：顶部渲染五个 `data-major-step`、`#techPhaseLabel` 已不存在、发送按钮为 `ti ti-send`、开场卡内无 `.oc-aav` 节点。浏览器人工视觉验收未执行；未提交、未推送、未创建 MR/tag/Release，未部署。
+
+## 12. 20260909 分支部署（9-9）
+
+- 用户明确指令“提交推送、不建 MR、从这个分支拉起在服务器部署”，本地提交 `c0baba0 技术工艺五大流程导航与报价技术页面视觉对齐` 已推送 GitLab `20260909`（回读 SHA 一致，未创建 MR/tag/Release）。
+- 服务器 172.16.10.34（wugefei，`/home/wugefei/CPQ/cpq_agent`）从 GitLab 拉取并切到 `20260909`（HEAD=c0baba0）；服务器 GitLab SSH 账户被锁定、443 不通，改用 `~/.git-credentials` 中既有 HTTP 凭据拉取并新增 `gitlab` remote（origin 仍为 GitHub 历史基线，未改动）。
+- 部署后重启服务：`cpq_suite_server.py`（0.0.0.0:8010，同进程 8011 产品图片）自动拉起 `tech_app_launch.py`（127.0.0.1:8012 子进程），两个 `/api/health` 均 200。
+- 校验：`报价首页.html`（/ 根页）200 且含 9 处 tech-workbench 入口；`确认需求解析结果.html`（URL 编码访问）200 且含 `color-primary-light` 新 token；`/tech-workbench.html` 与 `/tech-workbench.js` 经代理 200 且含 `MAJOR_STEPS` 五大流程内容。
+- 运行数据与历史未受影响：cpq_history（147 项）、rule_history、cpq_data、tech_app/tech_data、open-claude/.venv、cpq_settings.json 原样保留，服务器工作区 30 个未跟踪文件（备份/日志/open-claude 源码）未改动；未触碰其它业务容器与 8765/47313/47314 等无关服务。
