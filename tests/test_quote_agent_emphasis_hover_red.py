@@ -39,22 +39,29 @@ class QuoteAgentEmphasisHoverContract(unittest.TestCase):
             self.assertIn(token, self.page)
 
     def test_four_targets_are_outlined_in_their_resting_state(self):
-        for selector in (".ai-badge", ".step-node.active", "#qaFillStep", "#btnNext"):
+        for selector in (".ai-badge", ".step-node.active"):
             self.assert_has_declarations(selector, (
                 "background:var(--color-primary-page)",
                 "color:var(--color-primary)",
                 "border:1pxsolidvar(--color-primary-border)",
             ))
+        for selector in ("#qaFillStep", "#btnNext"):
+            self.assert_has_declarations(selector, (
+                "background:var(--gradient-primary-soft)",
+                "color:var(--color-primary)",
+                "border:1pxsolidvar(--color-primary-border)",
+            ))
 
     def test_four_targets_use_deep_blue_and_white_only_on_hover(self):
-        for selector in (
-            ".ai-badge:hover",
-            ".step-node.active:hover",
-            "#qaFillStep:hover:not(:disabled)",
-            "#btnNext:hover:not(:disabled)",
-        ):
+        for selector in (".ai-badge:hover", ".step-node.active:hover"):
             self.assert_has_declarations(selector, (
                 "background:var(--color-primary-active)",
+                "color:white",
+                "border-color:var(--color-primary-active)",
+            ))
+        for selector in ("#qaFillStep:hover:not(:disabled)", "#btnNext:hover:not(:disabled)"):
+            self.assert_has_declarations(selector, (
+                "background:var(--gradient-primary-hover)",
                 "color:white",
                 "border-color:var(--color-primary-active)",
             ))

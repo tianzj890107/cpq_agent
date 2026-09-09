@@ -25,6 +25,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   --twb-bg-soft: #f7f7f8;
   --twb-bg-deep: #ececf1;
   --twb-primary: #0067D1;
+  --gradient-primary: linear-gradient(135deg, #0067D1 0%, #0057B8 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #0057B8 0%, #004A9F 100%);
+  --gradient-primary-soft: linear-gradient(135deg, #FFFFFF 0%, #F4F9FE 100%);
   --twb-primary-hover: #0057B8;
   --twb-primary-active: #004A9F;
   --twb-primary-light: #EAF3FC;
@@ -428,11 +431,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tech-wb-btn.secondary { background: #fff; color: var(--twb-text); }
 .tech-wb-btn.secondary:hover:not(:disabled) { border-color: var(--twb-primary); color: var(--twb-primary); }
 .tech-wb-btn.primary {
-  background: var(--twb-primary);
+  background: var(--gradient-primary);
   border-color: var(--twb-primary);
   color: #fff;
 }
-.tech-wb-btn.primary:hover:not(:disabled) { background: #0057B8; }
+.tech-wb-btn.primary:hover:not(:disabled) {
+  background: var(--gradient-primary-hover);
+}
 .tech-wb-btn.plain { background: #fff; color: var(--twb-muted); font-weight: 500; }
 .tech-wb-now {
   font-size: 12.5px;

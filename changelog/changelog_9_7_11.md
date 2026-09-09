@@ -73,10 +73,24 @@
 - 底栏已移入 `.tech-workspace-pane`：`techActionLeft` 承载上一步、当前步骤、次要/主操作代理与子页面板，`techActionRight` 只保留 `techNext`；导航新对话复用 agent-chat 会话重置能力，设置复用同一份模型设置面板（`llm-settings-panel.js`），消息/账户复用 `cpqMsg.open()/cpqAuth.open()`，历史记录打开基于既有 `/api/projects` 的技术项目历史抽屉并按 `/workflow` 恢复当前 stage。
 - 验证：壳一致性测试 8/8 通过；仓库工作流 9/9、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5 通过；全量 `discover -s tests` 47 项中 41 通过、6 失败，失败均为本轮开始前已存在的其他 Spec Red（强调控件悬浮态 2 项、主按钮同色系渐变 4 项），未删除或弱化；`node --check`（tech-workbench.js、agent-chat.js）、`py_compile tests/test_quote_tech_agent_shell_parity_red.py` 与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
 
+## 8. 主操作按钮同色系渐变（9-9）
+
+- 新增主操作按钮渐变 Spec 与 Red 测试：保持 `#0067D1` 品牌主色不变，填充按钮常态使用 `#0067D1 → #0057B8`，hover 使用 `#0057B8 → #004A9F`；报价智能体的两个描边主操作常态使用 `#FFFFFF → #F4F9FE` 柔和渐变，hover 使用深蓝渐变白字。
+- 范围限定为报价智能体 `强行填满本步骤`、`确认，进入下一步` 以及技术工艺 `.tech-wb-btn.primary`，不改变次要、危险、成功、警告按钮及任何点击、禁用或后端逻辑，等待 DeepSeek 实现。
+- 实现完成（9-9，会话授权直接实现）：`确认需求解析结果.html` 的 `:root` 与 `tech_app/frontend/tech-workbench.css` 的 `.tech-workbench-layout` 增加 `--gradient-primary`（`#0067D1 0% → #0057B8 100%`）、`--gradient-primary-hover`（`#0057B8 0% → #004A9F 100%`）、`--gradient-primary-soft`（`#FFFFFF 0% → #F4F9FE 100%`）三个同色系渐变 token；`#qaFillStep/#btnNext` 拆为独立精确规则，常态 `background:var(--gradient-primary-soft)`、`color:var(--color-primary)`、`border:1px solid var(--color-primary-border)`，`:hover:not(:disabled)` 使用 `var(--gradient-primary-hover)` 白字与深蓝边框；`.ai-badge` 与 `.step-node.active` 继续各自保留浅色描边常态和 `var(--color-primary-active)` 纯色悬浮，未并入按钮规则。
+- 技术工艺统一壳 `.tech-wb-btn.primary`（含 `#techPrimary`、`#techNext`）常态改为 `background:var(--gradient-primary)`，hover 改为 `background:var(--gradient-primary-hover)`，禁用态继续由既有 `:disabled` 规则保护；未改底栏布局、按钮归属与 STAGE_ACTIONS 代理逻辑。
+- 主色保持 `#0067D1`，未引入紫色或竞争蓝；危险、删除、驳回、成功、警告与次要按钮语义色未改；未改 HTML 结构、按钮 id、文案、点击事件、禁用判断与后端业务逻辑。
+- 验证：渐变测试 5/5、强调控件测试 4/4 通过；仓库工作流 9/9、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5、壳一致性 8/8 通过；全量 `discover -s tests` 47/47 通过；`py_compile`（两个红测文件）、`node --check`（tech-workbench.js、agent-chat.js）与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
+
 ## 9. 推送链路收敛到 GitLab（9-9）
 
 - 日常 `20260909` 拉取与推送链路由 GitHub/GitLab 双端改为仅 GitLab；GitHub 只保留初始历史基线，不再接收开发分支推送。
 - `push_remotes.py` 改为只校验、推送并回读 `gitlab/20260909`，仓库规则、工作流文档和自动化契约同步禁止 GitHub push；MR、tag、Release 和部署边界不变。
+
+## 10. 技术工艺五大流程导航（9-9）
+
+- 新增五大流程导航 Spec 与 Red 测试：技术工艺顶部只显示“创建工艺评估需求、图纸解析、工艺方案/组装整合、成本测算、输出工艺评估结果”五个大步骤，九个内部 stage 继续保留并映射聚合，1.2/1.3 与 3.2/3.3 不再作为顶部独立步骤但仍通过底部上一步/下一步正常流转。
+- 约定删除右上角 `当前：1 · 接受工艺评估需求`，保持“技术工艺流程”后紧邻真实运行模型；`#techNext` 对齐报价下一步按钮，常态为柔和浅色渐变蓝字描边，非禁用 hover 才变为深蓝渐变白字，等待 DeepSeek 实现。
 
 - 实现完成（9-9，会话授权直接实现）：在 `确认需求解析结果.html` 主样式末尾新增精确选择器规则，仅作用于 `.ai-badge`、`.step-node.active`、`#qaFillStep`、`#btnNext` 四个目标；常态为 `background:var(--color-primary-page)`、`color:var(--color-primary)`、`border:1px solid var(--color-primary-border)`，悬浮为 `background:var(--color-primary-active)`、`color:white`、`border-color:var(--color-primary-active)`，按钮悬浮选择器使用 `:hover:not(:disabled)` 并在该组规则中置 `filter:none` 抵消旧 `brightness(1.06)`，禁用态保留 `opacity/cursor:not-allowed` 反馈。
 - 未改动四元素 DOM id、文案、onclick、步骤计算与禁用逻辑，未触碰其他 `.btn-primary`（设置保存、历史修改等）及任何后端/API/数据库/权限逻辑。

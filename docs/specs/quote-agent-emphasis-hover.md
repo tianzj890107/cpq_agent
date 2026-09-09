@@ -17,7 +17,7 @@
 
 ### 常态
 
-- 背景使用现有浅色品牌背景 `--color-primary-page`（当前值 `#F4F9FE`）；
+- 背景使用白色到现有浅色品牌背景的柔和同色系渐变 `#FFFFFF → #F4F9FE`；
 - 文字和图标使用 `--color-primary`（当前值 `#0067D1`）；
 - 必须存在清晰边框，使用 `1px solid var(--color-primary-border)`；
 - 不得继续使用 `--gradient-ai`、纯主色或其他深蓝作为常态背景；
@@ -25,7 +25,7 @@
 
 ### 鼠标悬浮
 
-- 四处均使用 `--color-primary-active`（当前值 `#004A9F`）作为深色背景；
+- `AI` 徽标和步骤数字使用 `--color-primary-active`（当前值 `#004A9F`）作为深色背景；两个按钮按后续 `primary-button-blue-gradient.md` 使用 `#0057B8 → #004A9F` 深蓝渐变；
 - 文字和图标变为白色；
 - 边框颜色同步为 `--color-primary-active`，防止边缘残留浅色描边；
 - 按钮仅在非禁用状态下响应悬浮，禁用态继续保留既有不可操作反馈。
