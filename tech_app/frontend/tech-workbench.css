@@ -28,6 +28,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   --gradient-primary: linear-gradient(135deg, #0067D1 0%, #0057B8 100%);
   --gradient-primary-hover: linear-gradient(135deg, #0057B8 0%, #004A9F 100%);
   --gradient-primary-soft: linear-gradient(135deg, #FFFFFF 0%, #F4F9FE 100%);
+  --color-primary-border: #B8D7F4;
+  --color-primary-page: #F4F9FE;
   --twb-primary-hover: #0057B8;
   --twb-primary-active: #004A9F;
   --twb-primary-light: #EAF3FC;
@@ -163,9 +165,15 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 9999px;
-  background: linear-gradient(135deg, #0067D1, #0057B8);
-  color: #fff;
+  background: var(--color-primary-page);
+  color: var(--twb-primary);
+  border: 1px solid var(--color-primary-border);
   white-space: nowrap;
+}
+.tech-ai-badge:hover {
+  background: var(--twb-primary-active);
+  color: #fff;
+  border-color: var(--twb-primary-active);
 }
 .tech-conn-status {
   display: flex;
@@ -247,73 +255,71 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tech-steps-bar {
   flex: 1 1 auto;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 0;
   min-width: 0;
-  padding: 8px 14px 10px;
+  padding: 9px 16px;
   overflow-x: auto;
 }
-.tech-wb-phase {
-  flex: 0 0 auto;
-  padding: 0 14px 0 4px;
-  color: var(--twb-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.tech-step-phase {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-.tech-phase-title {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--twb-muted);
-  letter-spacing: .02em;
-}
-.tech-phase-steps {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.tech-phase-arrow {
-  align-self: center;
-  color: #c6ccd6;
-  font-size: 13px;
-  margin: 0 8px;
-  flex: 0 0 auto;
-}
 .tech-step-btn {
-  border: 1px solid var(--twb-border);
-  background: var(--twb-card);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 12.5px;
   color: var(--twb-muted);
   white-space: nowrap;
-  transition: all .15s ease;
+  cursor: pointer;
+  transition: background .15s, color .15s;
 }
-.tech-step-btn .tech-step-no {
+.tech-step-btn:hover:not(:disabled),
+.tech-step-btn:focus-visible {
+  background: var(--twb-primary-light);
+  color: var(--twb-primary);
+  outline: none;
+}
+.tech-step-node {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
   font-weight: 600;
-  margin-right: 4px;
-  color: #9aa3af;
+  color: var(--twb-muted);
+  background: var(--twb-bg-soft);
+  border: .5px solid var(--twb-border);
+  flex: 0 0 auto;
 }
-.tech-step-btn:hover { border-color: var(--twb-primary); color: var(--twb-primary); }
-.tech-step-btn.active {
-  background: var(--twb-primary);
-  border-color: var(--twb-primary);
-  color: #fff;
+.tech-step-btn .tech-step-node .ti { font-size: 13px; }
+.tech-step-label { font-size: 12.5px; }
+.tech-step-btn.active .tech-step-node {
+  background: var(--twb-card);
+  border-color: var(--color-primary-border);
+  color: var(--twb-primary);
+  box-shadow: 0 0 0 3px rgba(0, 103, 209, .12);
 }
-.tech-step-btn.active .tech-step-no { color: #dbe7ff; }
-.tech-step-btn.done {
-  background: #ecfdf5;
-  border-color: #a7f3d0;
-  color: #047857;
+.tech-step-btn.active .tech-step-label { color: var(--twb-primary); font-weight: 600; }
+.tech-step-btn.done .tech-step-node {
+  background: var(--twb-card);
+  border-color: var(--color-primary-border);
+  color: var(--twb-primary);
 }
-.tech-step-btn.done .tech-step-no { color: #34d399; }
+.tech-step-btn.done .tech-step-label { color: #047857; }
+.tech-step-line {
+  width: 16px;
+  height: 1px;
+  background: var(--twb-border);
+  margin: 0 2px;
+  flex: 0 0 auto;
+}
 .tech-step-btn[disabled] {
-  opacity: .45;
+  opacity: .5;
   pointer-events: none;
 }
 
@@ -439,6 +445,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   background: var(--gradient-primary-hover);
 }
 .tech-wb-btn.plain { background: #fff; color: var(--twb-muted); font-weight: 500; }
+/* #techNext 对齐报价智能体“下一步”：常态柔和浅色描边渐变，非禁用 hover 才深蓝渐变白字 */
+#techNext {
+  background: var(--gradient-primary-soft);
+  color: var(--twb-primary);
+  border: 1px solid var(--color-primary-border);
+}
+#techNext:hover:not(:disabled) {
+  background: var(--gradient-primary-hover);
+  color: #fff;
+  border-color: var(--twb-primary-active);
+}
 .tech-wb-now {
   font-size: 12.5px;
   color: var(--twb-muted);
@@ -577,7 +594,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .tech-project-header { flex-wrap: wrap; }
   .tech-project-status { white-space: normal; }
   .tech-workspace-progress { flex-wrap: wrap; }
-  .tech-wb-phase { display: none; }
   .tech-workbench-bottom { flex-wrap: wrap; }
   .tech-action-left { flex-wrap: wrap; }
 }

@@ -92,6 +92,18 @@
 - 新增五大流程导航 Spec 与 Red 测试：技术工艺顶部只显示“创建工艺评估需求、图纸解析、工艺方案/组装整合、成本测算、输出工艺评估结果”五个大步骤，九个内部 stage 继续保留并映射聚合，1.2/1.3 与 3.2/3.3 不再作为顶部独立步骤但仍通过底部上一步/下一步正常流转。
 - 约定删除右上角 `当前：1 · 接受工艺评估需求`，保持“技术工艺流程”后紧邻真实运行模型；`#techNext` 对齐报价下一步按钮，常态为柔和浅色渐变蓝字描边，非禁用 hover 才变为深蓝渐变白字，等待 DeepSeek 实现。
 
-- 实现完成（9-9，会话授权直接实现）：在 `确认需求解析结果.html` 主样式末尾新增精确选择器规则，仅作用于 `.ai-badge`、`.step-node.active`、`#qaFillStep`、`#btnNext` 四个目标；常态为 `background:var(--color-primary-page)`、`color:var(--color-primary)`、`border:1px solid var(--color-primary-border)`，悬浮为 `background:var(--color-primary-active)`、`color:white`、`border-color:var(--color-primary-active)`，按钮悬浮选择器使用 `:hover:not(:disabled)` 并在该组规则中置 `filter:none` 抵消旧 `brightness(1.06)`，禁用态保留 `opacity/cursor:not-allowed` 反馈。
-- 未改动四元素 DOM id、文案、onclick、步骤计算与禁用逻辑，未触碰其他 `.btn-primary`（设置保存、历史修改等）及任何后端/API/数据库/权限逻辑。
-- 验证：`tests.test_quote_agent_emphasis_hover_red` 4/4 通过；仓库工作流 9/9、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5（共 30 项）全部通过；`py_compile tests/test_quote_agent_emphasis_hover_red.py` 与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
+- 实现完成（9-9，会话授权直接实现）：`tech_app/frontend/tech-workbench.js` 在 `STAGES` 后新增 `MAJOR_STEPS` 五项大流程定义（入口 stage 依次为 `requirement-create/drawing/process/cost/summary`，组内映射 1.1/1.2/1.3 → 大流程 1，2.x → 2/3/4，3.1/3.2/3.3 → 大流程 5）；新增 `currentMajorStep()` 投影当前内部 stage 所属大流程、`isMajorDone()` 按 `/workflow`、`/summary` 真实完成集合聚合组内全部 stage 才算完成。
+- 顶部 `renderTop()` 改用 `MAJOR_STEPS.forEach` 渲染单层大步骤按钮（`data-major-step` + `data-entry`），不再生成 `tech-step-phase/tech-phase-title/tech-phase-steps/tech-phase-arrow` 或 1.1/1.2/3.2/3.3 小步骤按钮；点击大流程进入其入口 stage 并保留无项目保护；九个内部 stage、`#techPrev/#techNext` 九阶段流转、URL/popstate/白名单/嵌入代理逻辑不变，`#techNowLabel` 继续显示真实内部小步骤。
+- `tech-workbench.html` 删除 `#techPhaseLabel`（含 `当前：1 · …` 文案相关读写），右侧“状态点 + 技术工艺流程 + `#techModelInfo`”信息顺序不变，模型仍由现有 Agent meta/设置运行数据写入，不写死模型名；资源版本号升至 `v=twb4`。
+- `tech-workbench.css`：`.tech-workbench-layout` 补充 `--color-primary-border:#B8D7F4` 并沿用三个同色系渐变 token；步骤条改为与报价智能体一致的单层节点+连线的连续大步骤样式；清理 `.tech-wb-phase/.tech-step-phase/.tech-phase-*` 等废弃样式；`#techNext` 精确规则置于 `.tech-wb-btn.primary` 之后，常态 `background:var(--gradient-primary-soft)`、`color:var(--twb-primary)`、`border:1px solid var(--color-primary-border)`，`:hover:not(:disabled)` 才变 `var(--gradient-primary-hover)` 深蓝渐变白字，`#techPrimary` 保持填充型主按钮渐变；未改后端 API/数据库/权限/审批/成本公式/任务流与 iframe 子页面业务。
+- 验证：五大流程 8/8、渐变 5/5、强调控件 4/4、壳一致性 8/8、统一工作台 11/11、技术主页统一 5/5、全局品牌色 5/5、仓库工作流 9/9，全量 `discover -s tests -p 'test_*.py'` 55/55 通过；`node --check tech_app/frontend/tech-workbench.js`、`py_compile`（两个红测文件）与 `git diff --check` 通过。浏览器人工验收未授权执行；未提交、未推送、未创建 MR/tag/Release，未部署。
+
+## 11. 报价与技术工艺页面视觉对齐（9-9）
+
+- 发送按钮对齐：技术工艺工作台左侧会话发送按钮改为与报价助手一致的渐变蓝圆角按钮 + `ti ti-send` 白色图标（`tech-workbench.html` 按钮内部改用图标，`agent-chat.css` 同步调整 `.oc-send` 尺寸与 `.oc-send .ti` 样式），禁用态保留 `opacity/cursor` 反馈，未动其它交互逻辑。
+- 报价智能体六步进度圆点由深色填充改为浅色底 + 品牌蓝数字：`确认需求解析结果.html` 的 `:root` 增加 `--color-primary-light:#EAF3FC`，`.step-node.completed/.step-node.pending` 常态为 `background:var(--color-primary-light)`、`color:var(--color-primary)`、`border:1px solid var(--color-primary-border)`（完成态仍显示对勾）；`.step-node.active` 继续遵循强调控件契约，常态浅底蓝字描边、hover 才转 `#004A9F` 白字。
+- 技术工艺顶部五大流程圆点改为白底蓝字：`tech-workbench.css` 中 `.tech-step-btn.active/.done .tech-step-node` 常态为 `background:var(--twb-card)`、`color:var(--twb-primary)`、`border-color:var(--color-primary-border)`（active 保留淡蓝焦点环），不再深色底白字；按钮 hover 背景沿用 `--twb-primary-light`（#EAF3FC），与报价页浅蓝语义一致。
+- 技术工艺会话标题 AI 徽标与报价 AI 徽标对齐：常态 `background:var(--color-primary-page)`（#F4F9FE）、`color:var(--twb-primary)`、1px 浅蓝边框，hover 才转 `#004A9F` 白字；不再蓝底白字常驻。
+- 技术工艺会话首条“技术工艺评估助手”开场卡删除左侧 ✦ 圆形头像，卡片只保留标题与说明文字；后续智能体动态消息的头像行为不受影响。
+- 说明：用户提及“报价步骤后面重复出现文字带圈 1-6”的清理项未能在本仓静态代码中定位到第二份渲染副本（进度圆点仅由 `renderProgressBar()` 渲染一次）；对 9-9 两张本地截图（报价页、技术页）做 OCR 坐标校验，报价页仅在顶部进度条出现一行 1-6、技术页仅在步骤条出现一行 1-5，未发现第二行带圈数字，因此未做臆测性删除；若在浏览器旧缓存或智能体会话内容中仍可见，需截图定位后再处理。
+- 验证：全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 55/55 通过；`node --check tech_app/frontend/tech-workbench.js`、`node --check tech_app/frontend/agent-chat.js` 与 `git diff --check` 通过；无头 Chrome 加载本地 `tech-workbench.html` 校验 DOM：顶部渲染五个 `data-major-step`、`#techPhaseLabel` 已不存在、发送按钮为 `ti ti-send`、开场卡内无 `.oc-aav` 节点。浏览器人工视觉验收未执行；未提交、未推送、未创建 MR/tag/Release，未部署。

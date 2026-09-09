@@ -26,6 +26,25 @@
   ];
   const stages = new Set(STAGES.map((item) => item.id));
 
+  // 顶部可见的五个大流程：九阶段仍是内部状态与 URL 的事实源，MAJOR_STEPS 只负责
+  // 把 1.1/1.2/1.3 聚合到大流程 1、把 3.1/3.2/3.3 聚合到大流程 5 的顶部投影。
+  const MAJOR_STEPS = [
+    { no: '1', label: '创建工艺评估需求', entry: 'requirement-create', stages: ['requirement-create', 'requirement-confirm', 'requirement-review'] },
+    { no: '2', label: '图纸解析', entry: 'drawing', stages: ['drawing'] },
+    { no: '3', label: '工艺方案/组装整合', entry: 'process', stages: ['process'] },
+    { no: '4', label: '成本测算', entry: 'cost', stages: ['cost'] },
+    { no: '5', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
+  ];
+
+  function currentMajorStep() {
+    return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
+  }
+  // 大流程完成态：组内全部内部 stage 完成（来自 /workflow、/summary 的真实完成集合）才算完成。
+  function isMajorDone(major) {
+    const done = state.progress && state.progress.done;
+    return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
+  }
+
   // 每步“主操作/次要操作”代理：操作仍由右侧子页面自己的 DOM 与 API 执行，
   // 本壳只负责把按钮放到底栏并点击子页面对应控件，不复制业务实现。
   const STAGE_ACTIONS = {
@@ -102,35 +121,33 @@
     const current = stageMeta(state.stage);
     const currentIdx = stageIndex(state.stage);
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
+    const activeMajor = currentMajorStep();
     let html = '';
-    STAGES.forEach((stage, idx) => {
-      if (idx === 0 || STAGES[idx - 1].phase !== stage.phase) {
-        if (idx) html += '<span class="tech-phase-arrow">›</span>';
-        html += `<div class="tech-step-phase"><span class="tech-phase-title">${stage.phaseTitle}</span><div class="tech-phase-steps">`;
-      }
+    MAJOR_STEPS.forEach((major, idx) => {
       const cls = ['tech-step-btn'];
-      if (stage.id === state.stage) cls.push('active');
-      else if (state.progress && state.progress.done && state.progress.done.has(stage.id)) cls.push('done');
-      const allowed = canNav || stage.id === 'requirement-create';
-      html += `<button type="button" class="${cls.join(' ')}" data-stage="${stage.id}" ${allowed ? '' : 'disabled'} title="${stage.no} ${stage.label}">` +
-        `<span class="tech-step-no">${stage.no}</span>${stage.label}</button>`;
-      if (idx === STAGES.length - 1 || STAGES[idx + 1].phase !== stage.phase) html += '</div></div>';
+      const isActive = major === activeMajor;
+      const isDone = !isActive && isMajorDone(major);
+      if (isActive) cls.push('active');
+      else if (isDone) cls.push('done');
+      const allowed = canNav || major.entry === 'requirement-create';
+      const nodeInner = isDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : major.no;
+      html += `<button type="button" class="${cls.join(' ')}" data-major-step="${major.no}" data-entry="${major.entry}" ${allowed ? '' : 'disabled'} title="${major.no} ${major.label}">` +
+        `<span class="tech-step-node">${nodeInner}</span><span class="tech-step-label">${major.label}</span></button>`;
+      if (idx < MAJOR_STEPS.length - 1) html += '<span class="tech-step-line" aria-hidden="true"></span>';
     });
     bar.innerHTML = html;
-    bar.querySelectorAll('[data-stage]').forEach((btn) => {
+    bar.querySelectorAll('[data-major-step]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (state.stage === btn.dataset.stage) return;
-        if (!state.project && btn.dataset.stage !== 'requirement-create') {
+        const step = MAJOR_STEPS.find((item) => item.no === btn.dataset.majorStep) || MAJOR_STEPS[0];
+        if (state.stage === step.entry) return;
+        if (!state.project && step.entry !== 'requirement-create') {
           setStateView('error', '尚未绑定项目', '请先在 1.1 创建中上传图纸并保存草稿创建项目，再进入后续步骤。');
           return;
         }
-        applyStage(btn.dataset.stage, { project: state.project });
+        applyStage(step.entry, { project: state.project });
       });
     });
 
-    const phase = current ? `${current.phase} · ${current.phaseTitle}` : '';
-    const phaseLabel = $('techPhaseLabel');
-    if (phaseLabel) phaseLabel.textContent = phase ? `当前：${phase}` : '';
     const now = $('techNowLabel');
     if (now) now.textContent = current ? `${current.no} ${current.label}` : '';
     updateProjectLabel();

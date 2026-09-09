@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb3" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout2" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb4" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -68,7 +68,6 @@
         <div class="oc-thread" id="ocThread">
           <div class="oc-tinner" id="ocTinner">
             <div class="oc-amsg">
-              <div class="oc-aav" aria-hidden="true">✦</div>
               <div class="oc-abody">
                 <div class="oc-intent-card">
                   <h4>技术工艺评估助手</h4>
@@ -87,7 +86,7 @@
           <div class="oc-cinner">
             <div class="oc-inputbox">
               <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向工艺评估助手描述需求…" aria-label="向工艺评估助手发送消息"></textarea>
-              <button class="oc-send" id="ocSend" type="button" aria-label="发送">↑</button>
+              <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
             <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
@@ -110,7 +109,6 @@
         </header>
         <div class="tech-workspace-progress">
           <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
-          <span class="tech-wb-phase" id="techPhaseLabel"></span>
         </div>
         <div id="techWorkspaceOutlet" aria-live="polite">
           <div class="tech-wb-state" id="techStageState">
@@ -136,7 +134,7 @@
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set1"></script>
-  <script src="tech-workbench.js?v=twb3"></script>
+  <script src="tech-workbench.js?v=twb4"></script>
   <script src="agent-chat.js?v=20260819-match1"></script>
 </body>
 </html>

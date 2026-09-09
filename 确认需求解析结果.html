@@ -18,6 +18,7 @@
       --color-danger: #ef4444;
       --color-primary-active: #004A9F;
       --color-primary-page: #F4F9FE;
+      --color-primary-light: #EAF3FC;
       --color-primary-border: #B8D7F4;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
@@ -266,9 +267,9 @@
       display: flex; align-items: center; justify-content: center;
       font-weight: 600; font-size: 13px; flex-shrink: 0; transition: transform 0.15s;
     }
-    .step-node.completed { background: var(--color-primary); color: white; }
+    .step-node.completed { background: var(--color-primary-light); color: var(--color-primary); border: 1px solid var(--color-primary-border); }
     .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(0,103,209,.12); }
-    .step-node.pending { background: var(--bg-tertiary); color: var(--text-tertiary); border: 0.5px solid var(--border-color); }
+    .step-node.pending { background: var(--color-primary-light); color: var(--color-primary); border: 1px solid var(--color-primary-border); }
     /* 正在查看（非当前步骤）的节点：描边提示 */
     .step-node.viewing { box-shadow: 0 0 0 3px rgba(0,103,209,.35); }
     .step-node .ti { font-size: 15px; }
