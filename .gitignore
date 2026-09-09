@@ -24,6 +24,7 @@ rule_history/
 __pycache__/
 *.pyc
 ~$*.xlsx
+.DS_Store
 
 # open-claude 引擎已并入本仓库（2026-07-16 起），只含编译后的 .pyc（源码保护）
 # .pyc 需要入库，豁免上面的 *.pyc 规则；.venv 仍不入库
