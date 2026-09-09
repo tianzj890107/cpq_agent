@@ -7,11 +7,14 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
+      --color-primary: #0067D1;
+      --color-secondary: #0067D1;
       --color-success: #10b981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #004A9F;
+      --color-primary-page: #F4F9FE;
+      --color-primary-border: #B8D7F4;
       --bg-page: #fff;
       --bg-soft: #f7f7f8;
       --bg-hover: #ececf1;
@@ -20,7 +23,7 @@
       --text-primary: #1f2023;
       --text-secondary: #62636d;
       --text-tertiary: #9a9ba6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --gradient-ai: linear-gradient(135deg, #0067D1, #0057B8);
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-lg: 12px;
@@ -249,8 +252,8 @@
 
     .tag.blue {
       color: var(--color-primary);
-      background: rgba(99,102,241,.1);
-      border-color: rgba(99,102,241,.28);
+      background: rgba(0,103,209,.10);
+      border-color: rgba(0,103,209,.30);
     }
 
     .tag.green {
@@ -296,7 +299,7 @@
     .chat-attach:hover {
       color: var(--color-primary);
       border-color: var(--color-primary);
-      background: rgba(99,102,241,.08);
+      background: rgba(0,103,209,.08);
     }
 
     .chat-input {
@@ -312,7 +315,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12);
     }
 
     .chat-send,
@@ -725,12 +728,12 @@
 
     .hist-item:hover {
       border-color: var(--color-primary);
-      box-shadow: 0 2px 10px rgba(99,102,241,0.12);
+      box-shadow: 0 2px 10px rgba(0,103,209,.12);
     }
 
     .hist-item.current {
       border-color: var(--color-primary);
-      background: rgba(99,102,241,0.05);
+      background: rgba(0,103,209,.05);
     }
 
     .hist-item .h-title {
@@ -845,7 +848,7 @@
     .modal-body select:focus,
     .modal-body input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12);
     }
 
     .hint {
@@ -934,7 +937,7 @@
       border-radius: 4px; transition: border-color .15s, background .15s; font-family: inherit;
     }
     .table-row .td input:hover { border-color: var(--border); background: #fff; }
-    .table-row .td input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .table-row .td input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(0,103,209,.12); }
     .table-row .td.groovy-td { padding: 6px 8px; align-items: stretch; }
     .code-display {
       display: block; width: 100%; font-family: 'Courier New', monospace; font-size: 11px;
@@ -943,7 +946,7 @@
       min-height: 40px; text-align: left; resize: vertical; outline: none;
     }
     .code-display:hover { border-color: var(--color-primary); background: #f0f4ff; }
-    .code-display:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .code-display:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(0,103,209,.12); }
     .code-display.placeholder { color: var(--text-tertiary); font-family: inherit; font-style: italic; }
     .checkbox { width: 15px; height: 15px; cursor: pointer; accent-color: var(--color-primary); }
     .add-row { padding: 9px 12px; color: var(--color-primary); font-size: 13px; cursor: pointer; background: var(--bg-page); border-top: 0.5px solid var(--border); }
@@ -963,7 +966,7 @@
     .btn-secondary:hover { background: var(--bg-soft); border-color: var(--color-primary); }
     .btn-danger { background: var(--bg-page); color: var(--color-danger); border-color: var(--color-danger); }
     .btn-danger:hover { background: rgba(239,68,68,.08); }
-    .btn-primary { background: var(--gradient-ai); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(99,102,241,.3); }
+    .btn-primary { background: var(--gradient-ai); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(0,103,209,.30); }
     .btn-primary:hover { filter: brightness(1.06); }
     .btn-success { background: var(--color-success); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(16,185,129,.3); }
     .btn-success:hover { filter: brightness(1.06); }
@@ -2004,7 +2007,7 @@
         const b = $(id);
         if (!b) return;
         const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
+        b.style.background = on ? 'var(--color-primary,#0067D1)' : 'transparent';
         b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
       });
       const sb = $('saveSettingsBtn');

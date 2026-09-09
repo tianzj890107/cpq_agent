@@ -5,16 +5,16 @@
 .workflow-nav-link{border:0;background:transparent;color:#9ca3af;font:inherit;cursor:pointer;padding:2px 5px;border-radius:4px}
 /* 小步骤状态与原流程页一致：完成绿、当前蓝、未完成灰。 */
 .workflow-nav-link.done,.workflow-nav-link.completed{color:#10b981}
-.workflow-nav-link.active{background:#eff6ff;color:#3b82f6;font-weight:600}
+.workflow-nav-link.active{background:#EAF3FC;color:#0067D1;font-weight:600}
 .workflow-sub .workflow-nav-link{font-size:11px}
 .sub-labels-row .workflow-nav-link{font-size:10px}
 .tp-flow-substeps .workflow-nav-link{font-size:11px}
-.workflow-nav-link:hover{background:#eff6ff;color:#2563eb}
+.workflow-nav-link:hover{background:#EAF3FC;color:#0057B8}
 .workflow-nav-sub-collapsed{display:none!important}
 .workflow-nav-stage-done{color:#10b981!important}
-.workflow-nav-stage-active{color:#3b82f6!important}
+.workflow-nav-stage-active{color:#0067D1!important}
 .workflow-nav-connector-done{background:#10b981!important}
-.workflow-nav-connector-active{background:#3b82f6!important}
+.workflow-nav-connector-active{background:#0067D1!important}
 .workflow-nav-toast{position:fixed;right:22px;bottom:82px;z-index:10050;max-width:min(420px,calc(100vw - 32px));padding:11px 14px;border-radius:8px;background:#1f2937;color:#fff;font:13px/1.55 Inter,"PingFang SC",sans-serif;box-shadow:0 8px 24px #0003}
 .workflow-nav-toast.error{background:#b45309}
 

@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0067D1;
+      --color-secondary: #0067D1;
+      --gradient-ai: linear-gradient(135deg, #0067D1, #0057B8);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #004A9F;
+      --color-primary-page: #F4F9FE;
+      --color-primary-border: #B8D7F4;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -74,7 +77,7 @@
       width: 36px;
       height: 36px;
       border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0067D1, #0057B8);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -348,7 +351,7 @@
       font-size: 11px;
       padding: 3px 10px;
       border-radius: 9999px;
-      background: rgba(99, 102, 241, 0.12);
+      background: rgba(0,103,209,.12);
       color: var(--color-primary);
       font-weight: 500;
     }
@@ -443,8 +446,8 @@
     }
 
     .tag.blue {
-      background: rgba(99, 102, 241, 0.1);
-      border-color: rgba(99, 102, 241, 0.3);
+      background: rgba(0,103,209,.10);
+      border-color: rgba(0,103,209,.30);
       color: var(--color-primary);
     }
 
@@ -496,12 +499,12 @@
 
     .config-bom-preview:hover {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.05);
+      background: rgba(0,103,209,.05);
     }
 
     .config-bom-preview.active {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(0,103,209,.10);
     }
 
     .config-bom-title {
@@ -619,7 +622,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12);
     }
 
     .chat-send {
@@ -627,7 +630,7 @@
       height: 38px;
       border: none;
       border-radius: 11px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0067D1, #0057B8);
       color: white;
       cursor: pointer;
       display: flex;
@@ -817,7 +820,7 @@
 
     .module-item.selected {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.05);
+      background: rgba(0,103,209,.05);
     }
 
     .module-info {
@@ -912,8 +915,8 @@
 
     .param-tag {
       padding: 2px 8px;
-      background: rgba(99, 102, 241, 0.1);
-      border: 0.5px solid rgba(99, 102, 241, 0.3);
+      background: rgba(0,103,209,.10);
+      border: 0.5px solid rgba(0,103,209,.30);
       border-radius: 4px;
       font-size: 11px;
       color: var(--color-primary);
@@ -997,8 +1000,8 @@
     .bomtree .exp-btn .ti { font-size: 12px; }
     .bomtree .exp-spacer { width: 18px; flex-shrink: 0; }
     .bomtree .lvl-badge { font-size: 10px; font-weight: 600; padding: 2px 5px; border-radius: 3px; flex-shrink: 0; }
-    .bomtree .lvl-badge.l1 { background: #eef2ff; color: #6366f1; }
-    .bomtree .lvl-badge.l2 { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+    .bomtree .lvl-badge.l1 { background: #EAF3FC; color: #0067D1; }
+    .bomtree .lvl-badge.l2 { background: rgba(0,103,209,.10); color: #0067D1; }
     .bomtree .lvl-badge.l3 { background: #f3f4f6; color: #62636d; }
     .bomtree .lvl-badge.l4 { background: #f9fafb; color: #9ca3af; }
     .bomtree tr.bom-child { display: none; }
@@ -1139,15 +1142,15 @@
 
     /* ---- Agent 驱动新增：步骤状态 / 附件 / 可编辑BOM表 ---- */
     .step-icon.pending { background: var(--bg-tertiary, #E5E7EB); color: var(--text-tertiary, #9CA3AF); }
-    .step-icon.running { background: linear-gradient(135deg, var(--color-purple, #8b5cf6), var(--color-primary, #6366f1)); }
-    .step-icon.done { background: var(--color-primary, #6366f1); }
+    .step-icon.running { background: linear-gradient(135deg, var(--color-purple, #0067D1), var(--color-primary, #0067D1)); }
+    .step-icon.done { background: var(--color-primary, #0067D1); }
     @keyframes xspin { to { transform: rotate(360deg); } }
     .step-icon.running .ti-loader-2, .ti-loader-2 { animation: xspin 0.9s linear infinite; }
     .step-result:empty { display: none; }
     .step-result { margin-top: 4px; }
     .attach-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--bg-hover, #F9FAFB);
       border: 0.5px solid var(--border-color, #E5E7EB); border-radius: 9999px; padding: 3px 8px; font-size: 12px; color: var(--text-secondary, #6B7280); }
-    .attach-chip .ti { font-size: 13px; color: var(--color-primary, #6366f1); }
+    .attach-chip .ti { font-size: 13px; color: var(--color-primary, #0067D1); }
     .attach-chip .rm { cursor: pointer; color: var(--text-tertiary, #9CA3AF); }
     .attach-chip .rm:hover { color: var(--color-red, #EF4444); }
     .bom-table .row-del { border: none; background: transparent; color: var(--text-tertiary, #9CA3AF); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
@@ -1164,7 +1167,7 @@
     .rule-count { font-size: 12px; color: var(--text-secondary); margin: 2px 0 8px; }
     .rule-opt { display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
     .rule-opt:hover { border-color: var(--color-primary); }
-    .rule-opt.checked { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .rule-opt.checked { border-color: var(--color-primary); background: rgba(0,103,209,.05); }
     .rule-opt input { margin-top: 3px; flex-shrink: 0; }
     .rule-opt .r-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
     .rule-opt .r-badge { font-size: 10px; background: var(--gradient-ai); color: #fff; border-radius: 9999px; padding: 1px 7px; margin-left: 6px; }
@@ -1215,8 +1218,8 @@
       padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg-page);
       transition: border-color 0.15s, box-shadow 0.15s; position: relative;
     }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
-    .hist-item.current { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,103,209,.12); }
+    .hist-item.current { border-color: var(--color-primary); background: rgba(0,103,209,.05); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px;
@@ -1255,7 +1258,7 @@
       background: white; outline: none;
     }
     .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -2293,7 +2296,7 @@
         const b = $(id);
         if (!b) return;
         const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
+        b.style.background = on ? 'var(--color-primary,#0067D1)' : 'transparent';
         b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
       });
       const sb = $('saveSettingsBtn');

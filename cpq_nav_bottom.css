@@ -66,6 +66,6 @@
 
 /* 已登录时 cpq_auth.js 会给按钮加 .active —— 与技术工艺同一组蓝。 */
 .nav-icon.cpq-nav-bottom.active {
-  background: #eff6ff;
-  color: #3b82f6;
+  background: #EAF3FC;
+  color: #0067D1;
 }

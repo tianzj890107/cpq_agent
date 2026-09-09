@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0067D1;
+      --color-secondary: #0067D1;
+      --gradient-ai: linear-gradient(135deg, #0067D1, #0057B8);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #004A9F;
+      --color-primary-page: #F4F9FE;
+      --color-primary-border: #B8D7F4;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -72,13 +75,13 @@
       width: 36px;
       height: 36px;
       border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0067D1, #0057B8);
       display: flex;
       align-items: center;
       justify-content: center;
       margin-bottom: 8px;
       cursor: pointer;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+      box-shadow: 0 2px 8px rgba(0,103,209,.40);
     }
 
     .nav-logo svg {
@@ -307,7 +310,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 3px rgba(0,103,209,.12);
     }
 
     .chat-send {
@@ -315,13 +318,13 @@
       height: 38px;
       border: none;
       border-radius: 11px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0067D1, #0057B8);
       color: white;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,103,209,.30);
       flex-shrink: 0;
     }
 
@@ -583,7 +586,7 @@
     .table-row .td select:focus {
       border-color: var(--color-primary);
       background: white;
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 2px rgba(0,103,209,.12);
     }
 
     /* Groovy表达式样式 */
@@ -629,7 +632,7 @@
     }
 
     .expr-input-wrapper textarea:focus {
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 2px rgba(0,103,209,.12);
     }
 
     /* 代码展示样式 */
@@ -657,7 +660,7 @@
     }
 
     .code-display .keyword {
-      color: #3b82f6;
+      color: #0067D1;
       font-weight: 500;
     }
 
@@ -671,7 +674,7 @@
     }
 
     .code-display .brace {
-      color: #8b5cf6;
+      color: #475569;
     }
 
     .code-display .return {
@@ -717,7 +720,7 @@
     }
 
     .category-tag.discount {
-      background: rgba(99, 102, 241, 0.12);
+      background: rgba(0,103,209,.12);
       color: var(--color-primary);
     }
 
@@ -787,15 +790,15 @@
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0067D1, #0057B8);
       color: white;
       border: none;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,103,209,.30);
     }
 
     .btn-primary:hover {
       filter: brightness(1.06);
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+      box-shadow: 0 4px 12px rgba(0,103,209,.40);
     }
 
     .btn .ti {

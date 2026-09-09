@@ -100,7 +100,7 @@
       'color:#0f172a;box-shadow:0 24px 60px rgba(0,0,0,.28);font-size:14px;text-align:center;}',
       '.cpq-sso-card h3{margin:0 0 10px;font-size:17px;font-weight:650;}',
       '.cpq-sso-card p{margin:0 0 18px;color:#64748b;font-size:13px;line-height:1.75;}',
-      '.cpq-sso-card button{padding:9px 22px;border:none;border-radius:8px;background:#6366f1;',
+      '.cpq-sso-card button{padding:9px 22px;border:none;border-radius:8px;background:#0067D1;',
       'color:#fff;font-size:13px;font-weight:600;cursor:pointer;}',
       '.cpq-sso-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:99999;',
       'padding:11px 18px;border-radius:10px;background:#b91c1c;color:#fff;font-size:13px;',

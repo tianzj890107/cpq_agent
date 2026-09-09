@@ -10,7 +10,7 @@
   --oc-bg-3: #ececf1;
   --oc-border-3: #e7e7ea;
   --oc-border-2: #d9d9e3;
-  --oc-accent: #8b5cf6;
+  --oc-accent: #0067D1;
   --oc-text-1: #1f2023;
   --oc-text-2: #62636d;
   --oc-text-3: #9a9ba6;
@@ -49,7 +49,7 @@
 .oc-dock-mark {
   display: flex; width: 24px; height: 24px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 8px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-size: 13px;
+  background: linear-gradient(135deg, #0067D1, #0057B8); color: #fff; font-size: 13px;
 }
 .oc-dock-title { flex: 1; font-size: 13px; font-weight: 600; }
 .oc-dock-count {
@@ -156,8 +156,8 @@
 .oc-aav {
   display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  box-shadow: 0 2px 7px rgba(99, 102, 241, .3); color: #fff; font-size: 14px;
+  background: linear-gradient(135deg, #0067D1, #0057B8);
+  box-shadow: 0 2px 7px rgba(0, 103, 209, .3); color: #fff; font-size: 14px;
 }
 .oc-abody { min-width: 0; flex: 1; }
 .oc-atxt { color: var(--oc-text-1); font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
@@ -233,9 +233,9 @@
 /* 解析报告：和前两个按钮并排，但它是"看整份结果"的收口动作，用实心蓝分出层级
    —— 三个长得一模一样的话，用户读不出哪个是终点。 */
 .oc-chip-report {
-  border-color: transparent; background: #2563eb; color: #fff; font-weight: 600;
+  border-color: transparent; background: #0067D1; color: #fff; font-weight: 600;
 }
-.oc-chip-report:hover { border-color: transparent; background: #1d4ed8; }
+.oc-chip-report:hover { border-color: transparent; background: #0057B8; }
 
 /* 任务文件：直接列在右侧小窗里，不用点开弹窗 */
 .oc-files-list { padding-top: 2px; }
@@ -350,7 +350,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   border: .5px solid var(--oc-border-2); border-radius: 16px; background: var(--oc-bg-2);
   transition: border-color .15s, box-shadow .15s;
 }
-.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(0, 103, 209, .12); }
 .oc-inputbox textarea {
   min-width: 0; max-height: 120px; flex: 1; padding: 0; border: 0; background: transparent;
   color: var(--oc-text-1); font: 14px/1.5 inherit; outline: 0; resize: none;
@@ -358,8 +358,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-send {
   display: flex; width: 34px; height: 34px; flex-shrink: 0; align-items: center;
   justify-content: center; border: 0; border-radius: 11px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, .3); color: #fff; font-size: 17px; cursor: pointer;
+  background: linear-gradient(135deg, #0067D1, #0057B8);
+  box-shadow: 0 2px 8px rgba(0, 103, 209, .3); color: #fff; font-size: 17px; cursor: pointer;
 }
 .oc-send:hover { filter: brightness(1.06); }
 .oc-send:disabled { cursor: default; opacity: .5; }

@@ -19,7 +19,7 @@
   font: 12.5px/1.4 inherit;
   outline: 0;
 }
-.llm-set-input:focus { border-color: var(--oc-accent, #8b5cf6); }
+.llm-set-input:focus { border-color: var(--oc-accent, #0067D1); }
 .llm-set-input:disabled { background: var(--oc-bg-2, #f7f7f8); color: var(--oc-text-3, #9a9ba6); }
 .llm-set-check {
   display: flex;
@@ -47,7 +47,7 @@
   font: 12px/1.4 inherit;
   cursor: pointer;
 }
-.llm-set-btn:hover:not(:disabled) { border-color: var(--oc-accent, #8b5cf6); }
+.llm-set-btn:hover:not(:disabled) { border-color: var(--oc-accent, #0067D1); }
 .llm-set-btn:disabled { opacity: .5; cursor: not-allowed; }
 .llm-set-status {
   min-height: 16px;

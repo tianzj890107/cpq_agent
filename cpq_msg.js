@@ -40,7 +40,7 @@
   }
 
   var ICON = {
-    task_sent: ['ti-send', '#6366f1'],
+    task_sent: ['ti-send', '#0067D1'],
     task_received: ['ti-inbox', '#16a34a'],
     task_claimed: ['ti-user-check', '#f59e0b'],
   };
@@ -58,11 +58,11 @@
     'border:1px solid var(--border-color,#e2e8f0);}',
     '.cpq-msg-hd{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;',
     'border-bottom:1px solid var(--border-color,#e2e8f0);font-size:14px;font-weight:650;}',
-    '.cpq-msg-hd a{font-size:12px;font-weight:400;color:var(--color-primary,#6366f1);cursor:pointer;}',
+    '.cpq-msg-hd a{font-size:12px;font-weight:400;color:var(--color-primary,#0067D1);cursor:pointer;}',
     '.cpq-msg-list{overflow-y:auto;padding:4px 0;}',
     '.cpq-msg-item{display:flex;gap:10px;padding:10px 14px;cursor:pointer;border-left:3px solid transparent;}',
     '.cpq-msg-item:hover{background:var(--bg-tertiary,#f1f5f9);}',
-    '.cpq-msg-item.unread{border-left-color:var(--color-primary,#6366f1);background:rgba(99,102,241,.05);}',
+    '.cpq-msg-item.unread{border-left-color:var(--color-primary,#0067D1);background:rgba(0,103,209,.05);}',
     '.cpq-msg-ico{flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;',
     'justify-content:center;background:var(--bg-tertiary,#f1f5f9);font-size:15px;}',
     '.cpq-msg-t{font-size:13px;font-weight:600;margin-bottom:2px;}',
@@ -73,7 +73,7 @@
     'flex-direction:column;gap:8px;}',
     '.cpq-toast{width:300px;background:var(--bg-primary,#fff);color:var(--text-primary,#0f172a);',
     'border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.24);padding:11px 13px;display:flex;gap:10px;',
-    'cursor:pointer;border-left:3px solid var(--color-primary,#6366f1);animation:cpqToastIn .25s ease;}',
+    'cursor:pointer;border-left:3px solid var(--color-primary,#0067D1);animation:cpqToastIn .25s ease;}',
     '@keyframes cpqToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}',
   ].join('');
 

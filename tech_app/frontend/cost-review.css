@@ -11,8 +11,8 @@
 .cr-part i { color: var(--oc-text-3, #9ca3af); font-size: 11px; font-style: normal; }
 
 /* 汇总表里"整机成本"是对外口径，要一眼区分于零件合计。 */
-tr.cr-final td { background: #eff6ff; font-weight: 600; }
-tr.cr-final td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
+tr.cr-final td { background: #EAF3FC; font-weight: 600; }
+tr.cr-final td:first-child { box-shadow: inset 3px 0 0 #0067D1; }
 
 /* 成本行的四项在只读态也要能横着看完 */
 .inline-cost-table td .number { font-variant-numeric: tabular-nums; }

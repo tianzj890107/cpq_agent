@@ -1,10 +1,10 @@
 /* 工艺拆解与成本分析：沿用工作台的浅色卡片、蓝紫主操作与底部操作栏。 */
 :root {
-  --detail-blue: #3b82f6;
-  --detail-blue-dark: #2563eb;
-  --detail-blue-soft: #eff6ff;
-  --detail-purple: #7c3aed;
-  --detail-purple-soft: #f5f3ff;
+  --detail-blue: #0067D1;
+  --detail-blue-dark: #0057B8;
+  --detail-blue-soft: #EAF3FC;
+  --detail-purple: #0067D1;
+  --detail-purple-soft: #F4F9FE;
   --detail-green: #059669;
   --detail-green-soft: #ecfdf5;
   --detail-amber: #b45309;
@@ -125,7 +125,7 @@ body.detail-page .vnode.cat-thermal .vno { background: #f59e0b; }
 body.detail-page .vnode.cat-inspect .vno { background: var(--detail-green); }
 
 body.detail-page .step { padding: 14px; background: #fff; border-color: var(--detail-border); border-radius: 10px; box-shadow: 0 1px 2px rgba(15, 23, 42, .02); }
-body.detail-page .step .sno { background: var(--detail-purple); box-shadow: 0 4px 10px rgba(124, 58, 237, .18); }
+body.detail-page .step .sno { background: var(--detail-purple); box-shadow: 0 4px 10px rgba(0, 103, 209, .20); }
 body.detail-page .step .stitle { color: var(--detail-ink); }
 body.detail-page .step .stype { color: var(--detail-blue); background: var(--detail-blue-soft); }
 body.detail-page .step .sdesc { color: var(--detail-muted); }
