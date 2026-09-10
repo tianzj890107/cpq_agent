@@ -25,6 +25,7 @@ open_claude.repl.execute_tool，命中平台工具就自己处理，否则原样
 from __future__ import annotations
 
 import contextvars
+import ipaddress
 import json
 import os
 import sys
@@ -32,6 +33,7 @@ import threading
 import traceback
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
+from urllib.parse import urlsplit
 
 from ..config import DATA_DIR, ROOT_DIR
 from ..storage import store
@@ -118,6 +120,47 @@ def _provider_env_names(provider: str) -> tuple[str, ...]:
     return tuple(spec.get("env") or ())
 
 
+def _route_host(base_url: str) -> str:
+    """从网关地址里取主机名；解析不出来时返回空串，绝不抛异常。"""
+    try:
+        return (urlsplit(str(base_url or "")).hostname or "").strip()
+    except Exception:                                            # pragma: no cover - 异常输入兜底
+        return ""
+
+
+def _is_loopback_host(host: str) -> bool:
+    """主机名是否指向本机（127.0.0.0/8、::1、localhost）。"""
+    name = (host or "").strip().strip("[]").lower()
+    if not name:
+        return False
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _exclude_loopback_from_proxy(base_url: str) -> None:
+    """把本机网关补进 NO_PROXY / no_proxy，避免被进程级代理拦走。
+
+    OpenAI SDK 底层的 httpx 默认 trust_env=True，建 client 时会读 HTTP_PROXY /
+    HTTPS_PROXY / ALL_PROXY。部署环境设置了企业代理、而 NO_PROXY 没有排除本机时，
+    指向 127.0.0.1 的 CPQ 本地网关请求会被送进代理，本地网关收不到请求（表现为
+    SDK 报 502）。这里只在主机确实是本机时追加缺失条目：既有的运维配置
+    （内网域名、网段）原样保留，重复调用幂等，公网域名与 "*" 一律不写入。
+    """
+    host = _route_host(base_url)
+    if not _is_loopback_host(host):
+        return
+    for env_name in ("NO_PROXY", "no_proxy"):
+        entries = [part.strip() for part in os.environ.get(env_name, "").split(",")]
+        kept = [part for part in entries if part]
+        if any(part.strip("[]").lower() == host.strip("[]").lower() for part in kept):
+            continue
+        os.environ[env_name] = ",".join([*kept, host])
+
+
 def sync_route_environment(route: dict[str, Any]) -> None:
     """把当前路由（模型 / provider / Key / 网关）同步给 open-claude。
 
@@ -136,6 +179,8 @@ def sync_route_environment(route: dict[str, Any]) -> None:
     api_key = str(route["api_key"] or "").strip()
     model = str(route.get("model") or "").strip()
     base_url = str(route["base_url"] or "").strip()
+    # 必须早于任何 client 构造：httpx 只在建 client 时读一次代理环境变量。
+    _exclude_loopback_from_proxy(base_url)
     if model:
         os.environ["CLAUDE_MODEL"] = model
     if provider:
