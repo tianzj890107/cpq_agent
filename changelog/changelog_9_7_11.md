@@ -130,20 +130,34 @@
 - Agent 连接状态与模型展示已彻底分离：`agent-chat.js` 在 `data.available === false` 和 meta 请求失败两条分支上都只更新 `#techConnText` 与连接状态点，不再用“未连接 / Agent 未就绪 / 读取 Agent 信息失败”覆盖模型名；`refreshTechShellModel()` 通过 `LlmSettingsPanel.load()`（回退 `/api/llm/settings`）读取 `text_model` 并按 `text_options` 的 label 显示可读模型名，缺少 label 时退回模型 id，未配置时显示“未配置模型”，未选择项目时显示“未选择项目”。Agent meta 成功返回真实运行模型时才用它刷新右上显示，全链路未写死任何模型名。
 - 业务名称解析已实现：`updateProjectLabel()` 重写为 `resolveProjectNames()`，并行请求 `/api/projects/{id}`、`/api/projects/{id}/requirement` 与 `/wf/task?task_id=`；项目名优先级为 `meta.project_name` → `requirement.title` → `meta.device_name` → `meta.source_filename` → “未命名项目”，任务名优先级为 `title` → `source_label` → `task_kind_label` → `task_no` → “关联任务”，主标题形如“项目名 · 任务名”；原始 project id 与 task id 只放入 `.title` tooltip，接口失败不会覆盖已成功取得的名称，并带 `state.project` / `state.taskId` 竞态校验。URL、导航与查询仍使用原始 project/task 标识，仅展示文案变化。
 - 报价页新增 `initModelInfoFallback()`：在流程事件到达前用 `AGENT_URL + '/api/settings'` 初始化右上模型名，`none` 时显示“无模型（人工填写）”，避免长期为空。
-- 本地验证：`tests.test_quote_tech_header_model_and_names_red` 8/8 通过，`tests.test_tech_assembly_action_button_states_red` 6/6 通过，`tests.test_tech_major_flow_navigation_red` 8/8 通过；全量 `unittest discover` 79 项 73 通过 / 6 失败，6 项失败全部来自本轮之前已存在的 Red（第 15 节“禁用态与 busy 区分”3 项、第 16 节“三流程页签选中态”3 项），非本次回归。`py_compile`、`node --check`（tech-workbench.js、agent-chat.js、报价页内联脚本）与 `git diff --check` 通过。未执行浏览器人工验收、未部署、未提交。
+- 本地验证：`tests.test_quote_tech_header_model_and_names_red` 8/8 通过，`tests.test_tech_assembly_action_button_states_red` 6/6 通过，`tests.test_tech_major_flow_navigation_red` 8/8 通过；`py_compile`、`node --check`（tech-workbench.js、agent-chat.js、报价页内联脚本）与 `git diff --check` 通过。未执行浏览器人工验收、未部署。本批改动已提交为 `2e70ea4` 并推送到 GitLab `20260909`，回读远端 SHA 与本地 HEAD 一致；未创建 MR、未打 tag、未部署。
 
 ## 15. 组装与整合禁用态和处理中状态区分（9-10）
 
-- 新增禁用态/处理中状态 Spec 与 Red 测试：缺少参数推荐或组装工艺而不可确认时，按钮应与“确认工艺并发送财务”的禁用态一致，使用 `not-allowed`，不再显示代表正在运行的等待光标。
-- 约定只有显式 `aria-busy="true"` 的真实异步生成按钮才能使用 `cursor:wait` 和 spinner；普通 disabled 不等于 busy，按钮业务闸门和后端流程保持不变，等待 DeepSeek 实现。
+- `.ai-actions .inline-action:disabled` 的等待光标改为 `cursor: not-allowed`，缺少参数推荐或组装工艺时，`#aiParamsConfirm`、`#aiProcessConfirm` 只表达“业务闸门未通过”，不再伪装成正在运行；两个确认按钮不携带 `aria-busy`，也不显示 spinner。
+- `#aiGenerate` 在 `aiBusy` 期间输出 `disabled aria-busy="true"`，继续显示 `parse-spinner` 与“生成参数推荐中…”／“生成组装工艺中…”；新增 `.ai-actions .inline-action[aria-busy="true"]:disabled { cursor: wait; }` 并置于普通 disabled 规则之后，保证 busy 优先。异步流程在 `finally` 复位 `aiBusy` 后重新渲染，按钮不再带 `aria-busy`，spinner 与等待光标一并消失。
+- 未改动 `has_params` / `has_process` 判定、确认条件、生成顺序、按钮 id 与文案、点击行为及后端逻辑；上传与生成按钮继续保持上一轮的描边常态与非禁用 hover 深蓝渐变。
+- 本地验证：`tests.test_tech_assembly_disabled_vs_busy_red` 3/3 通过。
 
 ## 16. 组装与整合三流程页签选中态（9-10）
 
-- 新增三流程页签选中态 Spec 与 Red 测试：整合图纸、参数推荐、组装工艺的 active 状态由深蓝底白字改为白底、品牌蓝字和 1px 蓝色边框，hover/focus 时也不得变回深色填充。
-- 保留三个页签的 `data-ai-tab`、`aiTab` 切换和业务流程；本项与上一项 disabled/busy 语义区分合并交付 DeepSeek 实现。
+- 整合图纸、参数推荐、组装工艺三个页签的 `.active` 由深蓝底白字改为白底、品牌蓝字（`#0067D1`）、1px 品牌浅蓝边框，保留胶囊圆角与 `font-weight: 600`。
+- 新增精确的 active 状态规则：`.ai-tabs button.active:hover` 与 `.ai-tabs button.active:focus-visible` 仍保持白底蓝字，hover 时只把边框加深为品牌蓝，不会翻成深蓝填充；未选中页签 hover 改为浅蓝底 `#EAF3FC` 加品牌蓝字，并补 `:focus-visible` 2px 半透明品牌蓝轮廓。
+- `data-ai-tab`、`aiTab`、`aiRender()` 中的 `classList.toggle('active', ...)` 单选逻辑与业务流程均未改动。
+- 本地验证：`tests.test_tech_assembly_tab_selected_state_red` 5/5 通过；全量 `unittest discover` 86 项 81 通过 / 5 失败，5 项失败全部来自本轮之前新增、尚未实现的“技术工艺上下文小流程与 iframe 状态行”Red（`tests.test_tech_context_substeps_and_frame_status_red`），与本次两项修正无关。`py_compile`、`node --check`（assembly-integration.js、tech-workbench.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本轮改动未提交。
 
-## 17. 技术工艺上下文小流程与 iframe 状态行（9-10）
+## 17. 技术工艺上下文小流程与步骤控件浅色选中态（9-10）
 
-- 新增上下文小流程与状态行清理 Spec、Red 测试：删除 iframe 上方“1.1 创建 已就绪”一类加载完成提示整行，同时保留 iframe load 后的底栏代理同步和真正异常状态。
-- 大流程 1 在右侧工作区显示“1.1 创建、1.2 确认、1.3 审核”，大流程 5 显示“5.1 汇总结果、5.2 结果审核、5.3 发布并回传报价”；按钮复用父壳 `applyStage()` 切换既有内部 stage，大流程 2–4 不重复生成父壳小流程。
-- 顶部五大流程、流程 1 小流程、流程 3/4 既有内部步骤、流程 5 小流程四组控件统一为选中态白底蓝字蓝边框，hover/focus 也不得变成深色底白字，等待 DeepSeek 实现。
+- 删除 iframe 上方的加载/“已就绪”状态行：`mountStageFrame()` 不再创建 `.tech-wb-state.has-frame` 与 `#techStageMessage`，`tech-workbench.html` 的初始占位也不再使用该 id，iframe 直接占满右侧工作区剩余区域；iframe `load` 后仍执行 `syncActionBar()`，底栏代理同步不受影响，缺项目、未知 stage、无权限、请求失败等 `.tech-wb-state.error` 状态全部保留。
+- 新增父壳上下文小流程：`tech-workbench.html` 增加 `#techSubstepsBar`，大流程 1 渲染「1.1 创建 / 1.2 确认 / 1.3 审核」，大流程 5 渲染「5.1 汇总结果 / 5.2 结果审核 / 5.3 发布并回传报价」；大流程 2–4 隐藏并清空该栏，继续使用子页面自己的页签。点击一律走 `applyStage(target, { project })`，URL、iframe、底栏、popstate 与真实完成度保持同一套状态，无项目时沿用既有导航保护。
+- 展示编号只影响按钮文案，九个内部 stage id、页面文件名、上一步/下一步九阶段流转和历史 URL 均未改动，也不迁移任何数据。
+- 四组步骤控件统一浅色选中态：顶部五大流程与新增小流程均为白底/浅蓝底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover 与 focus-visible 都不会翻成深色填充；`.ai-tabs button.active`（组装与整合、成本测算页签共用）与 `.inline-analysis-tabs button.active` 同步改为白底蓝字蓝边框。完成态只保留对勾与浅绿边框，按钮主体不做深色填充。
+- 资源版本号：`tech-workbench.css/js` → `twb7`，成本测算页引用的 `assembly-integration.css` 对齐到 `ai7`，`inline-analysis.css` → `flat6`。
+- 本地验证：`tests.test_tech_context_substeps_and_frame_status_red` 7/7 通过，组装页签/禁用态/按钮主次/模型入口四组 Red 24/24 通过，全量 `unittest discover` 86/86 通过；`py_compile`、`node --check`（tech-workbench.js、assembly-integration.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本节改动未提交。
+- 后续口径修订：流程 1、5 的小流程按钮移动到与流程 3、4 内部步骤一致的卡片标题位置，不再作为顶部五大流程下方的独立横条；文案去掉 1.1/1.2/1.3 和 5.1/5.2/5.3，只保留“创建/确认/审核”与“汇总结果/结果审核/发布并回传报价”，等待重新实现和验收。
+
+## 18. 技术工艺 Agent 多提供商可用性（9-10）
+
+- 确认 Agent 不可用的根因是 `oc_agent.available()` 硬编码要求 `ANTHROPIC_API_KEY`，与统一模型设置默认 Qwen、支持多 provider 的路由冲突；新增多提供商 Agent readiness Spec 与 Red 测试。
+- 约定 Agent 按 `llm_settings.resolve(vision=False)` 当前语言模型的 provider、base URL 和 Key 判断并实际创建会话；Qwen 已配置时不依赖 Anthropic Key，缺 Key 时提示当前 provider。
+- 本地根 `.env` 与 `tech_app/.env` 均不存在，但 `.env` 在 UI 持久化设置和 CPQ 本地网关注入场景不是必需文件；禁止创建或提交含密钥的 `.env`，仅修订 `.env.example` 的 Anthropic 强制旧口径，等待 DeepSeek 实现。

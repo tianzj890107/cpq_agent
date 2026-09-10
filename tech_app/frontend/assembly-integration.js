@@ -203,7 +203,7 @@ function aiRenderActions() {
   // 藏在「编辑」后面的话，一旦模型一条都没给，按钮连出现的机会都没有。
   const alwaysEditable = aiTab === 'params';
   host.innerHTML =
-    `<button type="button" class="inline-action" id="aiGenerate" ${aiBusy ? 'disabled' : ''}>`
+    `<button type="button" class="inline-action" id="aiGenerate" ${aiBusy ? 'disabled aria-busy="true"' : ''}>`
     + (aiBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>${esc(label)}中…</span>` : esc(label))
     + `</button>`
     + `<button type="button" class="inline-action" id="aiEdit" ${alwaysEditable || !has || aiEditing[aiTab] || aiBusy ? 'hidden' : ''}>编辑</button>`

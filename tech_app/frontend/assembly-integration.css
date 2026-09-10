@@ -6,20 +6,42 @@
   padding: 5px 12px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 999px;
   background: transparent; color: var(--oc-text-2, #4b5563); font-size: 12.5px; cursor: pointer;
 }
-.ai-tabs button:hover { background: var(--oc-bg-3, #f3f4f6); }
+/* 未选中的页签只做浅蓝 hover；选中页签是描边态而不是深色填充：
+   白底 + 品牌蓝字 + 1px 品牌蓝边框，hover / focus 时也不翻成深蓝底白字。 */
+.ai-tabs button:hover:not(.active) {
+  background: var(--color-primary-light, #EAF3FC);
+  color: var(--oc-accent, #0067D1);
+  border-color: var(--color-primary-border, #B8D7F4);
+}
+.ai-tabs button:focus-visible {
+  outline: 2px solid rgba(0, 103, 209, .25);
+  outline-offset: 2px;
+}
 .ai-tabs button.active {
-  border-color: transparent; background: var(--oc-accent, #0067D1); color: #fff; font-weight: 600;
+  background: #fff;
+  color: var(--oc-accent, #0067D1);
+  border: 1px solid var(--color-primary-border, #B8D7F4);
+  font-weight: 600;
+}
+.ai-tabs button.active:hover,
+.ai-tabs button.active:focus-visible {
+  background: #fff;
+  color: var(--oc-accent, #0067D1);
+  border-color: var(--oc-accent, #0067D1);
 }
 
 .ai-actions {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 12px 16px 0;
 }
-.ai-actions .inline-action:disabled { opacity: .6; cursor: wait; }
+.ai-actions .inline-action:disabled { opacity: .6; cursor: not-allowed; }
+/* disabled 只说明业务闸门没过，不代表任务在跑；只有显式 busy 的控件才用等待光标，
+   spinner 也只跟 busy 一起出现。规则放在 disabled 之后，保证 busy 优先。 */
+.ai-actions .inline-action[aria-busy="true"]:disabled { cursor: wait; }
 
 /* 上传整合图纸、生成/重新生成参数推荐与组装工艺：常态为白底/柔和浅蓝底的描边次要操作
    （品牌蓝字 + 1px 品牌浅蓝边框），只有非禁用 hover 才切换成深蓝同色系渐变白字。
-   busy/disabled 仍走 .inline-action:disabled 的透明度与等待态，不响应 hover。 */
+   disabled 时不响应 hover；真正的生成中由 -[aria-busy="true"] 表达。 */
 #aiUploadBtn,
 #aiGenerate {
   background: var(--gradient-primary-soft, linear-gradient(135deg, #FFFFFF 0%, #F4F9FE 100%));

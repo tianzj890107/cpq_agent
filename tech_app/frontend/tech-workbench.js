@@ -36,6 +36,22 @@
     { no: '5', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
   ];
 
+  // 大流程 1、5 内部还有多步，需要在父壳给一排上下文小流程按钮（大流程 2-4 各自
+  // 只有一个内部阶段或已有子页面页签，不在父壳重复生成）。展示编号只影响文案，
+  // stage id、页面文件和九阶段流转都不变。
+  const CONTEXT_SUBSTEPS = {
+    1: [
+      { no: '1.1', stage: 'requirement-create',  label: '1.1 创建' },
+      { no: '1.2', stage: 'requirement-confirm', label: '1.2 确认' },
+      { no: '1.3', stage: 'requirement-review',  label: '1.3 审核' },
+    ],
+    5: [
+      { no: '5.1', stage: 'summary',        label: '5.1 汇总结果' },
+      { no: '5.2', stage: 'report-review',  label: '5.2 结果审核' },
+      { no: '5.3', stage: 'report-publish', label: '5.3 发布并回传报价' },
+    ],
+  };
+
   function currentMajorStep() {
     return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
   }
@@ -155,6 +171,41 @@
     const next = $('techNext');
     if (prev) prev.disabled = !canNav || currentIdx <= 0;
     if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= STAGES.length - 1;
+    renderContextSubsteps();
+  }
+
+  /* 上下文小流程：父壳只生成按钮，点击一律回到 applyStage，URL / iframe / 底栏 /
+     前进后退 / 真实完成度保持同一套状态，不直接改 iframe.src。 */
+  function renderContextSubsteps() {
+    const bar = $('techSubstepsBar');
+    if (!bar) return;
+    const substeps = CONTEXT_SUBSTEPS[currentMajorStep().no] || [];
+    const canNav = Boolean(state.project || state.stage === 'requirement-create');
+    if (!substeps.length) {
+      bar.hidden = true;
+      bar.replaceChildren();
+      return;
+    }
+    bar.hidden = false;
+    bar.innerHTML = substeps.map((step) => {
+      const cls = ['tech-substep-btn'];
+      const done = Boolean(state.progress && state.progress.done && state.progress.done.has(step.stage));
+      if (step.stage === state.stage) cls.push('active');
+      else if (done) cls.push('done');
+      const allowed = canNav || step.stage === 'requirement-create';
+      return `<button type="button" class="${cls.join(' ')}" data-substep="${step.stage}" ${allowed ? '' : 'disabled'}>${step.label}</button>`;
+    }).join('');
+    bar.querySelectorAll('[data-substep]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.substep;
+        if (!stages.has(target) || target === state.stage) return;
+        if (!state.project && target !== 'requirement-create') {
+          setStateView('error', '尚未绑定项目', '请先在 1.1 创建中上传图纸并保存草稿创建项目，再进入后续步骤。');
+          return;
+        }
+        applyStage(target, { project: state.project });
+      });
+    });
   }
 
   // 任务显示优先级：title → source_label → task_kind_label → task_no → 关联任务。
@@ -310,18 +361,12 @@
         : '尚未绑定项目：请在本步上传 2D 工程图并保存草稿，系统会自动创建项目并绑定到左侧会话。';
       outlet.append(banner);
     }
-    const stateLine = document.createElement('div');
-    stateLine.className = 'tech-wb-state has-frame';
-    stateLine.innerHTML = '<div class="tech-wb-spinner" style="width:14px;height:14px;border-width:2px"></div><div id="techStageMessage">正在加载本步页面…</div>';
-    outlet.append(stateLine);
     const iframe = document.createElement('iframe');
     iframe.id = 'techStageFrame';
     iframe.title = `${meta.no} ${meta.label}`;
     iframe.setAttribute('data-stage', state.stage);
     iframe.src = childUrl(state.stage);
     iframe.addEventListener('load', () => {
-      const msg = outlet.querySelector('#techStageMessage');
-      if (msg) msg.textContent = `${meta.no} ${meta.label} 已就绪`;
       syncActionBar();
     });
     outlet.append(iframe);

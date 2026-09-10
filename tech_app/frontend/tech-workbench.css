@@ -329,6 +329,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .tech-step-btn .tech-step-node .ti { font-size: 13px; }
 .tech-step-label { font-size: 12.5px; }
+/* 顶部大流程选中态：按钮本体浅蓝底 + 品牌蓝字，数字节点白底蓝字蓝边框；
+   任何状态都不使用深蓝填充或白字。 */
+.tech-step-btn.active,
+.tech-step-btn.active:hover:not(:disabled),
+.tech-step-btn.active:focus-visible {
+  background: var(--twb-primary-light);
+  color: var(--twb-primary);
+}
 .tech-step-btn.active .tech-step-node {
   background: var(--twb-card);
   border-color: var(--color-primary-border);
@@ -351,6 +359,69 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .tech-step-btn[disabled] {
   opacity: .5;
+  pointer-events: none;
+}
+
+/* 上下文小流程（大流程 1、5）：与顶部大流程同一套浅色选中态，选中项永远是
+   白底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover/focus 也不翻成深色。 */
+.tech-substeps-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: .5px solid var(--twb-border);
+  background: var(--twb-card);
+  overflow-x: auto;
+}
+.tech-substeps-bar[hidden] { display: none; }
+.tech-substep-btn {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border: 1px solid var(--twb-border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--twb-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tech-substep-btn:hover:not(.active):not(:disabled) {
+  background: var(--twb-primary-light);
+  color: var(--twb-primary);
+  border-color: var(--color-primary-border);
+}
+.tech-substep-btn.active {
+  background: var(--twb-card);
+  color: var(--twb-primary);
+  border-color: var(--color-primary-border);
+  font-weight: 600;
+}
+.tech-substep-btn.active:hover,
+.tech-substep-btn.active:focus-visible {
+  background: var(--twb-card);
+  color: var(--twb-primary);
+  border-color: var(--twb-primary);
+}
+.tech-substep-btn:focus-visible {
+  outline: 2px solid rgba(0, 103, 209, .22);
+  outline-offset: 2px;
+}
+/* 完成态只加对勾与浅绿边框，按钮主体不做深色填充。 */
+.tech-substep-btn.done:not(.active) {
+  background: var(--twb-card);
+  border-color: #bbf7d0;
+}
+.tech-substep-btn.done:not(.active)::after {
+  content: '✓';
+  margin-left: 5px;
+  color: #047857;
+  font-weight: 600;
+}
+.tech-substep-btn[disabled] {
+  opacity: .5;
+  cursor: not-allowed;
   pointer-events: none;
 }
 
@@ -387,16 +458,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-size: 13.5px;
   text-align: center;
   padding: 24px;
-}
-.tech-wb-state.has-frame {
-  position: static;
-  padding: 8px 12px;
-  font-size: 12px;
-  flex-direction: row;
-  justify-content: flex-start;
-  gap: 8px;
-  border-bottom: .5px solid #f1f3f7;
-  color: #8a93a2;
 }
 .tech-wb-spinner {
   width: 22px;
