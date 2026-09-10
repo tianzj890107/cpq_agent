@@ -182,6 +182,31 @@
 
 ## 20. 技术工艺五步统一标题行 Spec 与 Red 基线（9-10）
 
-- 新增 `docs/specs/tech-unified-stage-title-row.md`：右侧五个大流程只保留一条统一业务标题行（`工艺评估需求`、`图纸解析`、`组装与整合`、`成本测算`、`工艺评估报告`），标题不得拼接项目/设备名称、内部编号、文件名、动态报告标题或 `创建中`/`就绪`/`读取中…` 等状态徽标；分步骤统一放到标题行右侧同一水平线（流程 2 右侧为空），流程 3、4 的子页面页签由父壳同源代理到同一行，iframe 内不再保留第二份可见标题、状态徽标或页签；active 页签沿用白底蓝字蓝边框。
-- 新增 `tests/test_tech_unified_stage_title_row_red.py` 作为实现前基线：当前 7 项中 4 项通过、3 项预期失败（固定标题映射、标题行对大流程 2–5 恒可见、流程 3/4 页签代理到统一标题行）。测试只做静态契约检查，未删除或弱化任何既有 Red 测试。
-- 该基线尚未实现，全量 `unittest discover` 现为 106 项中 3 项失败（全部来自本节新增 Red），其余 103 项通过（2 跳过）。本节只交付 Spec 与 Red 测试，未改动任何前端实现、后端逻辑、接口或数据。
+- 新增 `docs/specs/tech-unified-stage-title-row.md`：右侧五个大流程的大标题固定为 `工艺评估需求`、`图纸解析`、`组装与整合`、`成本测算`、`工艺评估报告`；分步骤统一放到标题行右侧同一水平线（流程 2 右侧为空），流程 3、4 的子页面页签由父壳同源代理到同一行，iframe 内不再保留第二份大标题或页签；active 页签沿用白底蓝字蓝边框。
+- 需求口径修正：统一的仅是五个大标题名称，`创建中`、`就绪`、`读取中…`、`初稿` 等状态，以及文件名、格式错误和业务提示均允许继续显示，也可以作为独立节点处于标题栏；不得为了统一标题而删除或隐藏这些反馈。Red 相应移除“状态/错误不得出现”和“隐藏状态徽标”的限制。
+- 新增 `tests/test_tech_unified_stage_title_row_red.py` 作为实现前基线，保留固定标题、标题行恒可见、页签位置/代理和浅色选中态契约；测试只做静态契约检查。本节只交付 Spec 与 Red 测试，未改动任何前端实现、后端逻辑、接口或数据。
+
+## 21. 技术工艺满宽看板与唯一 Agent 会话栏 Spec / Red（9-10）
+
+- 新增 `docs/specs/tech-full-width-board-and-single-agent-pane.md`：统一工作台只保留父壳左侧 `#techChatPane`，删除“子页面板”开关与 `.show-child-chat` 临时展开能力；流程 2、3、4 的阶段上下文接入该唯一会话栏，流程 1、5 不增加子页面附加面板。
+- 约束右侧嵌入业务区为真正单列满宽：嵌入模式始终隐藏子页面 `.oc-agent-pane`，清除图纸解析与成本测算遗留的双栏占位、宽度上限和额外间距，使 `.page-container`、`.oc-work`、`.center-panel` 占满 iframe 可用宽度；独立旧页面布局、后端接口与业务流程不变。
+- 新增 `tests/test_tech_full_width_board_and_single_agent_pane_red.py`，覆盖开关/状态彻底移除、子 Agent 栏不可重新展开、嵌入看板单列满宽、仅流程 2/3/4 建立父 Agent 阶段上下文，以及 stage 切换同步唯一会话宿主。当前 5 项均按预期失败，分别命中现存开关、可展开状态、非满宽双栏以及尚缺父 Agent 阶段上下文；该批只交付 Spec 与实现前 Red，等待业务实现。
+
+## 22. 技术工艺满宽看板与唯一 Agent 会话栏（9-10）
+
+- 删除底栏“子页面板”入口：`tech-workbench.html` 移除 `#techPanelToggle`，`tech-workbench.js` 移除 `panelToggle`、点击回调和 `.show-child-chat` 切换；全前端不再存在 `show-child-chat` 状态。嵌入模式下 `tech-embed.js` 改为 `.tech-embed .oc-agent-pane { display:none !important; }`，子页面会话栏永远隐藏、无任何展开入口，键盘 Tab 顺序里也不再出现该按钮。
+- 右侧业务看板满宽（仅 `embed=1`，独立旧页面布局不变）：`tech-embed.js` 注入的嵌入样式补齐 `.oc-shell .page-container`、`.oc-work`、`.oc-work .center-panel` 与 `html/body/.oc-shell` 的 `width:100%`、`min-width:0`、`max-width:none`、左右 `margin:0`，`.oc-work` 改为 `display:block` 单列并去掉双栏 gap，只保留统一工作台的 18px 内边距。这样同时清掉了 `workbench.css` 的 1200px 上限与 `agent-chat.css` 的 1560px 上限、左右各 236/196/78px 双栏留白和自动居中，图纸解析、组装与整合、成本测算三页看板左右边界一致且顶满右侧可用宽度；业务内容、页签与操作按钮全部保留。
+- 左侧唯一会话栏接入阶段上下文：`tech-workbench.js` 新增仅含 `drawing`/`process`/`cost` 的 `STAGE_AGENT_CONTEXT` 与 `syncAgentStageContext()`，把当前 stage、项目、任务、说明和可用操作写进父页唯一的 `#techChatPane`；流程 1、5 传 `null`，只移除子页面附加卡，不重建会话。`agent-chat.js` 新增 `ocStageContext` 上下文区与 `ocTechAgent.setStageContext()`，父壳脚本先执行时通过 `window.ocTechStageContext` 首次承接，`page_context` 由固定“2.1 图纸解析”改为按当前 stage 取值；阶段操作按钮只回传角色，由父壳复用既有 `STAGE_ACTIONS` 代理点击同源 iframe 中的业务按钮，不复制业务逻辑、不跨 iframe 搬运 DOM，也不清空历史消息、草稿、滚动位置与项目绑定。
+- 同步时机覆盖 `applyStage()`、iframe `load`、首次启动与 `popstate`；iframe 未加载、`contentDocument` 不可用或接口抛错时同步函数安全退出，底栏代理照常工作。
+- 契约调整（一次性说明）：`tests/test_quote_tech_agent_shell_parity_red.py` 原先要求底栏左组包含 `techPanelToggle`，与本轮“彻底删除子页面板入口”的新需求直接冲突；按新 Spec 从两处 id 清单移除该按钮并加注原因，其余断言未改，属需求替代而非弱化测试。其余测试文件未改动。
+- 资源版本号：`tech-workbench.js` → `twb9`，`agent-chat.js` → `20260819-match2`，`agent-chat.css` → `20260819-layout3`，各嵌入页 `tech-embed.js` → `twb2`。
+- 本地验证：新增 Red `tests.test_tech_full_width_board_and_single_agent_pane_red` 5/5 通过；`node --check`（tech-workbench.js、tech-embed.js、agent-chat.js）与 `git diff --check` 通过；全量 `unittest discover` 110 项中 3 项失败，全部来自尚未实现的“技术工艺五步统一标题行”Red（`tests.test_tech_unified_stage_title_row_red`，属另一项待办），本次改动未引入新的失败。未启动服务、未做浏览器人工验收，未提交、未推送、未部署。
+
+## 23. 技术工艺五步统一大标题与分步骤位置（9-10）
+
+- 五个大流程新增独立固定大标题：`MAJOR_STEPS[].title` 为 `工艺评估需求`、`图纸解析`、`组装与整合`、`成本测算`、`工艺评估报告`；`#techContextTitle` 只读该 title，不再读 `major.label` 或子页面动态标题，顶部流程导航上的原文 label 保持不变。全前端只有 `renderContextSubsteps()` 会写这个节点，状态刷新无法覆盖它。
+- `#techContextHeader` 改为五个大流程恒显示；流程 2 没有分步骤时只隐藏右侧页签组（`#techSubstepsBar` 清空并 hidden），大标题照常显示。
+- 流程 3、4 分步骤代理到同一标题行右侧：新增 `CHILD_TAB_PROXY`（`'process'` → 整合图纸/参数推荐/组装工艺，`'cost'` → 零件成本/组装成本/汇总/整合参数），父壳只渲染 `data-child-tab` 按钮并转发点击给同源 iframe 里既有的 `#aiTabs [data-ai-tab]` / `#crTabs [data-cr-tab]` 按钮；active 由 `syncChildTabActive()` 从子页面真实状态回读，iframe `load` 后重渲染同步，没有复制业务状态或第二套逻辑。流程 1、5 沿用 `applyStage()` 的 stage 按钮。
+- `tech-embed.js` 只隐藏子页面重复的大标题文字（`.title-section` / `.title-row` 内的 `.form-title`）与阶段页签行（`.ai-tabs`，即 `#aiTabs`、`#crTabs`）；`#status` 状态徽标、度量、文件名、格式错误等业务提示全部保留，内容区 `inline-analysis` 面板自己的切换也保持可见。
+- 样式沿用并复核：`.tech-workspace-context` 为 flex + `justify-content:space-between`，`.tech-substeps-slot` 靠右，active 仍为白底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover/focus 不翻深色，窄屏由 `.tech-substeps-bar` 的 `overflow-x:auto` 横向滚动。
+- 本地验证：`tests.test_tech_unified_stage_title_row_red` 6/6 通过、`tests.test_tech_full_width_board_and_single_agent_pane_red` 5/5 通过，全量 `unittest discover` 110 项全部通过（2 跳过）；`node --check`（tech-workbench.js、tech-embed.js）与 `git diff --check` 通过。未启动服务、未做浏览器人工验收，未提交、未推送、未部署。

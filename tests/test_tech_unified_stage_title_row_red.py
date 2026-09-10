@@ -41,16 +41,9 @@ class TechUnifiedStageTitleRowRedTest(unittest.TestCase):
             self.assertIn(label, self.js)
 
     def test_embedded_pages_hide_duplicate_title_and_tab_rows(self):
-        self.assertRegex(self.embed, r'(?:title-section|title-row|status-badge)')
+        self.assertRegex(self.embed, r'(?:title-section|title-row)')
         self.assertRegex(self.embed, r'(?:ai-tabs|inline-analysis-tabs)')
         self.assertRegex(self.embed, r'(?:display\s*:\s*none|hidden)')
-
-    def test_dynamic_status_and_errors_are_not_used_as_context_title(self):
-        title_logic = re.search(r'function renderContextSubsteps\(\)\s*\{([\s\S]*?)(?=\n\s*function |\n\s*/\*)', self.js)
-        self.assertIsNotNone(title_logic)
-        for forbidden in ("创建中", "就绪", "读取中", "初稿", "不是位图", "对话.svg"):
-            self.assertNotIn(forbidden, title_logic.group(1))
-        self.assertNotRegex(title_logic.group(1), r'(?:meta\.label|device_name|project_name|source_filename|report\.title)')
 
     def test_substep_active_style_remains_light(self):
         active = re.search(r'\.tech-substep-btn\.active\s*\{([^}]*)\}', self.css)

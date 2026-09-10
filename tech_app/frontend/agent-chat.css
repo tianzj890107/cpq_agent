@@ -425,3 +425,27 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    不再依赖媒体查询，那两条规则随之删除。
    这条留着：抽屉窄，成本明细表有 min-width，得允许它自己横向滚动。 */
 .oc-drawer .inline-analysis-host { overflow-x: auto; }
+
+/* ---------- 唯一会话宿主的阶段上下文（统一工作台） ----------
+   父壳 syncAgentStageContext() 只更新这一小块，用来承载原右侧 iframe 步骤页的
+   阶段说明与可用操作；流程 1、5 传 null 时整块移除，会话历史不受影响。 */
+.oc-stage-context {
+  flex: 0 0 auto; padding: 10px 14px 12px; border-bottom: .5px solid var(--oc-border-2);
+  background: var(--oc-bg-2);
+}
+.oc-stage-context-head { display: flex; align-items: center; gap: 8px; }
+.oc-stage-context-title { color: var(--oc-text-1); font: 600 12.5px/1.4 inherit; }
+.oc-stage-context-step {
+  padding: 1px 7px; border: 1px solid #B8D7F4; border-radius: 999px;
+  background: #fff; color: #0067D1; font: 500 11px/1.6 inherit;
+}
+.oc-stage-context-hint { margin-top: 6px; color: var(--oc-text-3); font-size: 12px; line-height: 1.6; }
+.oc-stage-context-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.oc-stage-context-btn {
+  padding: 5px 12px; border: 1px solid #B8D7F4; border-radius: 999px;
+  background: #fff; color: #0067D1; font: 500 12px/1.4 inherit; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.oc-stage-context-btn:hover:not(:disabled) { border-color: #0067D1; background: #EAF3FC; }
+.oc-stage-context-btn:disabled { cursor: not-allowed; opacity: .6; }
+.oc-stage-context-btn:focus-visible { outline: 2px solid rgba(0, 103, 209, .25); outline-offset: 2px; }

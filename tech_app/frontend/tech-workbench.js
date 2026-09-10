@@ -28,12 +28,14 @@
 
   // 顶部可见的五个大流程：九阶段仍是内部状态与 URL 的事实源，MAJOR_STEPS 只负责
   // 把 1.1/1.2/1.3 聚合到大流程 1、把 3.1/3.2/3.3 聚合到大流程 5 的顶部投影。
+  // title 是右侧业务区域唯一的固定大标题（不接受子页面动态标题与状态刷新覆盖）；
+  // label 仍是顶部流程导航上的原文，两者互不影响。
   const MAJOR_STEPS = [
-    { no: '1', label: '创建工艺评估需求', entry: 'requirement-create', stages: ['requirement-create', 'requirement-confirm', 'requirement-review'] },
-    { no: '2', label: '图纸解析', entry: 'drawing', stages: ['drawing'] },
-    { no: '3', label: '工艺方案/组装整合', entry: 'process', stages: ['process'] },
-    { no: '4', label: '成本测算', entry: 'cost', stages: ['cost'] },
-    { no: '5', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
+    { no: '1', title: '工艺评估需求', label: '创建工艺评估需求', entry: 'requirement-create', stages: ['requirement-create', 'requirement-confirm', 'requirement-review'] },
+    { no: '2', title: '图纸解析', label: '图纸解析', entry: 'drawing', stages: ['drawing'] },
+    { no: '3', title: '组装与整合', label: '工艺方案/组装整合', entry: 'process', stages: ['process'] },
+    { no: '4', title: '成本测算', label: '成本测算', entry: 'cost', stages: ['cost'] },
+    { no: '5', title: '工艺评估报告', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
   ];
 
   // 大流程 1、5 内部还有多步，需要在业务卡片标题行给一排上下文小流程按钮（大流程
@@ -50,6 +52,31 @@
       { stage: 'report-review',  label: '结果审核' },
       { stage: 'report-publish', label: '发布并回传报价' },
     ],
+  };
+
+  // 大流程 3、4 的子页面在统一工作台里已经隐藏了自带的页签行：父壳把同一组页签渲染成
+  // data-child-tab 按钮放到统一标题行右侧，点击只转发给同源 iframe 里既有的页签按钮，
+  // active 也从子页面真实状态回读 —— 不复制业务状态，也不新建第二套业务逻辑。
+  const CHILD_TAB_PROXY = {
+    'process': {
+      tabs: [
+        { key: 'drawings', label: '整合图纸', selector: '#aiTabs [data-ai-tab="drawings"]' },
+        { key: 'params', label: '参数推荐', selector: '#aiTabs [data-ai-tab="params"]' },
+        { key: 'process', label: '组装工艺', selector: '#aiTabs [data-ai-tab="process"]' },
+      ],
+      activeSelector: '#aiTabs .active',
+      keyAttr: 'aiTab',
+    },
+    'cost': {
+      tabs: [
+        { key: 'parts', label: '零件成本', selector: '#crTabs [data-cr-tab="parts"]' },
+        { key: 'assembly', label: '组装成本', selector: '#crTabs [data-cr-tab="assembly"]' },
+        { key: 'total', label: '汇总', selector: '#crTabs [data-cr-tab="total"]' },
+        { key: 'params', label: '整合参数', selector: '#crTabs [data-cr-tab="params"]' },
+      ],
+      activeSelector: '#crTabs .active',
+      keyAttr: 'crTab',
+    },
   };
 
   function currentMajorStep() {
@@ -73,6 +100,31 @@
     'summary':             { primary: '#srSubmit',          primaryLabel: '提交审核', secondary: '#srSave', secondaryLabel: '保存' },
     'report-review':       { primary: '#rrPublish',         primaryLabel: '审核通过并发布', secondary: '#rrReject', secondaryLabel: '退回汇总' },
     'report-publish':      { primary: '#rpPrimary',         primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
+  };
+
+  // 大流程 2/3/4 的子页面在统一工作台里没有自己的可见会话栏：它们需要的阶段
+  // 上下文、提示与可用操作统一接入父壳唯一的 #techChatPane。这里只登记这三个
+  // stage；流程 1、5 不登记，父会话栏不出现子页面附加面板。操作只引用底栏已有的
+  // STAGE_ACTIONS 代理角色，不复制任何业务逻辑。
+  const STAGE_AGENT_CONTEXT = {
+    drawing: {
+      pageContext: '2.1 图纸解析',
+      label: '图纸解析',
+      hint: '右侧看板显示解析进度与零件结果；可以在这里追问解析结果，或直接说「开始解析」。',
+      actions: ['primary'],
+    },
+    process: {
+      pageContext: '2.2 组装与整合',
+      label: '组装与整合',
+      hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
+      actions: ['primary', 'secondary'],
+    },
+    cost: {
+      pageContext: '2.3 成本测算',
+      label: '成本测算',
+      hint: '可追问成本构成与零件测算结果；重算与确认成本请用底栏操作。',
+      actions: ['primary', 'secondary'],
+    },
   };
 
   const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
@@ -128,6 +180,7 @@
     if (!state.stage) state.stage = 'requirement-create';
     renderTop();
     mountStageFrame();
+    syncAgentStageContext();
   });
 
   /* ---------------------------------------------------------- 渲染 */
@@ -174,8 +227,30 @@
     renderContextSubsteps();
   }
 
-  /* 上下文小流程：父壳只生成按钮，点击一律回到 applyStage，URL / iframe / 底栏 /
-     前进后退 / 真实完成度保持同一套状态，不直接改 iframe.src。 */
+  /* 同源 iframe 内的元素查询：iframe 未加载、跨源或文档不可用时返回 null，不抛异常。 */
+  function childQuery(selector) {
+    const frame = $('techStageFrame');
+    const doc = frame && frame.contentDocument;
+    if (!doc || !selector) return null;
+    try { return doc.querySelector(selector); } catch (error) { return null; }
+  }
+
+  /* 代理页签的 active 以子页面真实状态为准，父壳只回读选择器，不自建状态。 */
+  function syncChildTabActive(proxy) {
+    const bar = $('techSubstepsBar');
+    if (!bar || !proxy) return;
+    const active = childQuery(proxy.activeSelector);
+    const key = active ? (active.dataset[proxy.keyAttr] || '') : '';
+    bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
+      btn.classList.toggle('active', Boolean(key) && btn.dataset.childTab === key);
+    });
+  }
+
+  /* 统一标题行：大标题只读 MAJOR_STEPS[].title（固定名称，不被子页面动态标题或状态
+     刷新覆盖），五个大流程都显示这一行；右侧同排一组分步骤/子页面页签。
+     流程 1、5 = 父壳自己的 stage 按钮，点击回到 applyStage；
+     流程 3、4 = 代理同源 iframe 中既有页签按钮，active 由子页面回读；
+     流程 2 右侧为空 —— 只隐藏这组按钮，不隐藏大标题行。 */
   function renderContextSubsteps() {
     const bar = $('techSubstepsBar');
     const header = $('techContextHeader');
@@ -183,16 +258,33 @@
     if (!bar) return;
     const major = currentMajorStep();
     const substeps = CONTEXT_SUBSTEPS[major.no] || [];
+    const proxy = CHILD_TAB_PROXY[state.stage] || null;
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
-    if (title) title.textContent = major.label;
-    if (!substeps.length) {
+    if (title) title.textContent = major.title || major.label;
+    if (header) header.hidden = false;
+    if (!substeps.length && !proxy) {
       bar.hidden = true;
       bar.replaceChildren();
-      if (header) header.hidden = true;
       return;
     }
-    if (header) header.hidden = false;
     bar.hidden = false;
+    if (proxy) {
+      bar.innerHTML = proxy.tabs.map((tab) =>
+        `<button type="button" class="tech-substep-btn" data-child-tab="${escH(tab.key)}">${escH(tab.label)}</button>`).join('');
+      bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tab = proxy.tabs.find((item) => item.key === btn.dataset.childTab);
+          if (!tab) return;
+          const target = childQuery(tab.selector);
+          if (target && !target.disabled) {
+            target.click();
+            syncChildTabActive(proxy);
+          }
+        });
+      });
+      syncChildTabActive(proxy);
+      return;
+    }
     bar.innerHTML = substeps.map((step) => {
       const cls = ['tech-substep-btn'];
       const done = Boolean(state.progress && state.progress.done && state.progress.done.has(step.stage));
@@ -374,6 +466,9 @@
     iframe.src = childUrl(state.stage);
     iframe.addEventListener('load', () => {
       syncActionBar();
+      syncAgentStageContext();
+      // 子页面首次渲染完成后回读它真实的页签 active（流程 3、4 的代理页签）。
+      renderContextSubsteps();
     });
     outlet.append(iframe);
     syncActionBar();
@@ -438,6 +533,58 @@
     }
   }
 
+  /* ---------------------------------------------------- 左侧唯一 Agent 会话栏 */
+  /* 阶段上下文只写进父页唯一的 #techChatPane：不克隆子页面 DOM、不清空历史会话、
+     草稿或项目绑定；接口缺失、iframe 未加载或抛错时安全退出，流程切换照常。 */
+  function stageAgentContext() {
+    const context = STAGE_AGENT_CONTEXT[state.stage];
+    if (!context) return null;
+    const routing = STAGE_ACTIONS[state.stage] || {};
+    const actions = (context.actions || []).map((role) => {
+      const selector = role === 'secondary' ? routing.secondary : routing.primary;
+      const label = (role === 'secondary' ? routing.secondaryLabel : routing.primaryLabel) || '';
+      return selector && label ? { role, selector, label } : null;
+    }).filter(Boolean);
+    return {
+      stage: state.stage,
+      project: state.project,
+      taskId: state.taskId,
+      label: context.label,
+      pageContext: context.pageContext,
+      hint: context.hint,
+      actions,
+    };
+  }
+
+  function syncAgentStageContext() {
+    const pane = $('techChatPane');
+    if (!pane) return;
+    let context = null;
+    try { context = stageAgentContext(); } catch (error) { context = null; }
+    // 父页先执行、agent-chat.js 后加载：除直接调用外再留一份全局供其首次承接。
+    window.ocTechStageContext = context;
+    try {
+      const api = window.ocTechAgent;
+      if (api && typeof api.setStageContext === 'function') api.setStageContext(context);
+      window.dispatchEvent(new CustomEvent('cpq:tech-agent:stage-context', { detail: context }));
+    } catch (error) {
+      /* 上下文同步失败不影响会话与流程切换 */
+    }
+  }
+
+  // 左侧上下文里的操作按钮只回传角色，由父壳点同源 iframe 中的既有业务按钮。
+  window.addEventListener('cpq:tech-agent:stage-action', (event) => {
+    const role = ((event.detail || {}).role) || 'primary';
+    const routing = STAGE_ACTIONS[state.stage] || {};
+    const selector = role === 'secondary' ? routing.secondary : routing.primary;
+    const frame = $('techStageFrame');
+    const doc = frame && frame.contentDocument;
+    if (!selector || !doc) return;
+    let target = null;
+    try { target = doc.querySelector(selector); } catch (error) { target = null; }
+    if (target && !target.disabled) target.click();
+  });
+
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
     if (!stages.has(stageId)) {
@@ -451,11 +598,11 @@
     mountStageFrame();
     pushState();
     refreshProgress();
+    syncAgentStageContext();
   }
 
   const prevBtn = $('techPrev');
   const nextBtn = $('techNext');
-  const panelToggle = $('techPanelToggle');
   if (prevBtn) prevBtn.addEventListener('click', () => {
     const idx = stageIndex(state.stage);
     if (idx <= 0) return;
@@ -473,14 +620,6 @@
     }
     applyStage(target.id, { project: state.project });
   });
-  if (panelToggle) panelToggle.addEventListener('click', () => {
-    const frame = $('techStageFrame');
-    if (!frame || !frame.contentDocument) return;
-    const root = frame.contentDocument.documentElement;
-    root.classList.toggle('show-child-chat');
-    panelToggle.textContent = root.classList.contains('show-child-chat') ? '收起子页面板' : '子页面板';
-  });
-
   /* ---------------------------------------------------------- 子页面导航消息 */
   window.addEventListener('message', (event) => {
     if (event.origin !== location.origin) return;              // 只接受同源消息
@@ -768,6 +907,7 @@
   if (!state.stage) state.stage = 'requirement-create';
   renderTop();
   mountStageFrame();
+  syncAgentStageContext();
   bindTechNav();
   refreshTechModelLabel();
   if (state.project) refreshProgress();

@@ -131,7 +131,7 @@
     document.documentElement.classList.add('tech-embed');
     // 折叠整页壳：顶部三阶段步骤条由父工作台顶栏承担；平台返回浮钮、图标导航、
     // 悬浮文件窗、抽屉、固定页脚都属于重复 chrome。子页面自身业务操作由父壳底栏
-    // 代理（同源点击）或通过 .show-child-chat 临时展开使用。
+    // 代理（同源点击），阶段上下文由父壳唯一的 #techChatPane 承载。
     var style = document.createElement('style');
     style.textContent = [
       '.tech-embed .global-home-link, .tech-embed .global-back-link { display:none !important; }',
@@ -139,11 +139,22 @@
       '.tech-embed .oc-rail, .tech-embed .oc-dock, .tech-embed .oc-drawer,',
       '.tech-embed .oc-drawer-backdrop { display:none !important; }',
       '.tech-embed .footer-bar, .tech-embed .proc-actions { display:none !important; }',
-      '.tech-embed:not(.show-child-chat) .oc-agent-pane { display:none !important; }',
-      '.tech-embed .oc-shell .page-container { max-width:none !important; padding-left:18px !important; padding-right:18px !important; }',
-      '.tech-embed .oc-work { min-height:0 !important; }',
+      // 唯一会话栏在父页 #techChatPane：嵌入页的子会话/说明栏永远隐藏，且不再有
+      // 任何展开入口（原“子页面板”开关已从工作台底栏删除）。
+      '.tech-embed .oc-agent-pane { display:none !important; }',
+      // 右侧业务看板满宽：清掉旧页面的 1200/1560px 宽度上限、左右各 236/196/78px
+      // 的双栏留白与自动居中，隐藏子会话栏后 .oc-work 退化为真正的单列。
+      '.tech-embed, .tech-embed body { width:100% !important; max-width:none !important; min-width:0 !important; margin:0 !important; }',
+      '.tech-embed .oc-shell { width:100% !important; max-width:none !important; min-width:0 !important; margin:0 !important; }',
+      '.tech-embed .oc-work { display:block !important; width:100% !important; min-width:0 !important; gap:0 !important; }',
+      '.tech-embed .oc-shell .page-container { width:100% !important; max-width:none !important; min-width:0 !important; margin-left:0 !important; margin-right:0 !important; padding-left:18px !important; padding-right:18px !important; }',
+      '.tech-embed .oc-work .center-panel { width:100% !important; min-width:0 !important; max-width:none !important; flex:1 1 100% !important; max-height:none !important; }',
+      // 子页面不再显示第二份大标题与第二份阶段页签（统一标题行由父壳 #techContextHeader
+      // 承载）。只隐藏标题文字与页签行本身：#status 状态徽标、度量、文件名、错误与业务
+      // 提示都留在原位，内容区里 inline-analysis 面板自己的切换也保持可见。
+      '.tech-embed .title-section .form-title, .tech-embed .title-row .form-title { display:none !important; }',
+      '.tech-embed .ai-tabs { display:none !important; }',
       '.tech-embed body { padding-bottom:18px !important; }',
-      '.tech-embed .oc-work .center-panel { max-height:none !important; }',
     ].join('\n');
     document.head.appendChild(style);
 

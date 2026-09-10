@@ -110,7 +110,9 @@ class QuoteTechAgentShellParityContract(unittest.TestCase):
         footer = next((node for node in self.tree.nodes if "tech-workbench-bottom" in node["attrs"].get("class", "").split()), None)
         self.assertIsNotNone(footer)
         self.assertTrue(TreeParser.has_ancestor(footer, class_name="tech-workspace-pane"))
-        for node_id in ("techPrev", "techNext", "techSecondary", "techPrimary", "techPanelToggle"):
+        # techPanelToggle（“子页面板”）已被 docs/specs/tech-full-width-board-and-single-agent-pane.md
+        # 要求删除：统一工作台只保留父壳 #techChatPane 一个会话宿主，嵌入页不再提供展开入口。
+        for node_id in ("techPrev", "techNext", "techSecondary", "techPrimary"):
             self.assertTrue(TreeParser.has_ancestor(self.tree.by_id(node_id), class_name="tech-workbench-bottom"))
 
     def test_footer_groups_put_only_next_on_the_right(self):
@@ -118,7 +120,7 @@ class QuoteTechAgentShellParityContract(unittest.TestCase):
         right = self.tree.by_id("techActionRight")
         self.assertIsNotNone(left)
         self.assertIsNotNone(right)
-        for node_id in ("techPrev", "techNowLabel", "techSecondary", "techPrimary", "techPanelToggle"):
+        for node_id in ("techPrev", "techNowLabel", "techSecondary", "techPrimary"):
             self.assertTrue(TreeParser.has_ancestor(self.tree.by_id(node_id), node_id="techActionLeft"))
         self.assertTrue(TreeParser.has_ancestor(self.tree.by_id("techNext"), node_id="techActionRight"))
         right_buttons = [
