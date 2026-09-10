@@ -55,27 +55,24 @@
   };
 
   // 大流程 3、4 的子页面在统一工作台里已经隐藏了自带的页签行：父壳把同一组页签渲染成
-  // data-child-tab 按钮放到统一标题行右侧，点击只转发给同源 iframe 里既有的页签按钮，
-  // active 也从子页面真实状态回读 —— 不复制业务状态，也不新建第二套业务逻辑。
+  // data-child-tab 按钮放到统一标题行右侧。这里只登记“视图名 + 文案”，点击通过
+  // TechBoardBridge.navigateView(view) 交给同源 iframe 里注册过的 view 动作，active
+  // 由看板回传的 action-state 决定 —— 父壳不认识任何子页面 id / CSS selector。
   const CHILD_TAB_PROXY = {
     'process': {
       tabs: [
-        { key: 'drawings', label: '整合图纸', selector: '#aiTabs [data-ai-tab="drawings"]' },
-        { key: 'params', label: '参数推荐', selector: '#aiTabs [data-ai-tab="params"]' },
-        { key: 'process', label: '组装工艺', selector: '#aiTabs [data-ai-tab="process"]' },
+        { key: 'drawings', label: '整合图纸', view: 'drawings' },
+        { key: 'params', label: '参数推荐', view: 'params' },
+        { key: 'process', label: '组装工艺', view: 'process' },
       ],
-      activeSelector: '#aiTabs .active',
-      keyAttr: 'aiTab',
     },
     'cost': {
       tabs: [
-        { key: 'parts', label: '零件成本', selector: '#crTabs [data-cr-tab="parts"]' },
-        { key: 'assembly', label: '组装成本', selector: '#crTabs [data-cr-tab="assembly"]' },
-        { key: 'total', label: '汇总', selector: '#crTabs [data-cr-tab="total"]' },
-        { key: 'params', label: '整合参数', selector: '#crTabs [data-cr-tab="params"]' },
+        { key: 'parts', label: '零件成本', view: 'parts' },
+        { key: 'assembly', label: '组装成本', view: 'assembly' },
+        { key: 'total', label: '汇总', view: 'total' },
+        { key: 'params', label: '整合参数', view: 'params' },
       ],
-      activeSelector: '#crTabs .active',
-      keyAttr: 'crTab',
     },
   };
 
@@ -88,18 +85,20 @@
     return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
   }
 
-  // 每步“主操作/次要操作”代理：操作仍由右侧子页面自己的 DOM 与 API 执行，
-  // 本壳只负责把按钮放到底栏并点击子页面对应控件，不复制业务实现。
+  // 每步“主操作/次要操作”代理：这里只登记语义化业务动作名与兜底文案，真正的实现留在
+  // 右侧看板里（页面 JS 通过 TechBoardRuntime.registerActions 注册）。父壳点击底栏时
+  // 调 TechBoardBridge.executeAction(actionName)，按钮的可见 / 可用 / busy 全部来自
+  // 看板回传的 action-state —— 本壳不再查询 iframe DOM，也没有任何 selector。
   const STAGE_ACTIONS = {
-    'requirement-create':  { primary: '#submitRequirement', primaryLabel: '提交确认', secondary: '#saveDraft', secondaryLabel: '保存草稿' },
-    'requirement-confirm': { primary: '#confirmPass',       primaryLabel: '✓ 通过确认', secondary: '#returnDraft', secondaryLabel: '× 驳回' },
-    'requirement-review':  { primary: '#submitReview',      primaryLabel: '提交审核意见', secondary: null, secondaryLabel: '' },
-    'drawing':             { primary: '#btnParse',          primaryLabel: '▶ 开始解析', secondary: null, secondaryLabel: '' },
-    'process':             { primary: '#aiToFinance',       primaryLabel: '✓ 确认工艺并发送财务', secondary: '#aiStart', secondaryLabel: '▶ 开始整合分析' },
-    'cost':                { primary: '#crRunAll',          primaryLabel: '▶ 逐件测算并汇总', secondary: '#crConfirm', secondaryLabel: '✓ 确认成本' },
-    'summary':             { primary: '#srSubmit',          primaryLabel: '提交审核', secondary: '#srSave', secondaryLabel: '保存' },
-    'report-review':       { primary: '#rrPublish',         primaryLabel: '审核通过并发布', secondary: '#rrReject', secondaryLabel: '退回汇总' },
-    'report-publish':      { primary: '#rpPrimary',         primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
+    'requirement-create':  { primary: 'submitRequirement',       primaryLabel: '提交确认', secondary: 'saveRequirementDraft', secondaryLabel: '保存草稿' },
+    'requirement-confirm': { primary: 'confirmRequirement',      primaryLabel: '✓ 通过确认', secondary: 'returnRequirementDraft', secondaryLabel: '× 驳回' },
+    'requirement-review':  { primary: 'submitRequirementReview', primaryLabel: '提交审核意见', secondary: null, secondaryLabel: '' },
+    'drawing':             { primary: 'parseDrawing',            primaryLabel: '▶ 开始解析', secondary: null, secondaryLabel: '' },
+    'process':             { primary: 'sendIntegrationToFinance', primaryLabel: '✓ 确认工艺并发送财务', secondary: 'runIntegration', secondaryLabel: '▶ 开始整合分析' },
+    'cost':                { primary: 'runCostReview',           primaryLabel: '▶ 逐件测算并汇总', secondary: 'confirmCostReview', secondaryLabel: '✓ 确认成本' },
+    'summary':             { primary: 'submitProcessReportReview', primaryLabel: '提交审核', secondary: 'saveProcessReport', secondaryLabel: '保存' },
+    'report-review':       { primary: 'approveProcessReport',    primaryLabel: '审核通过并发布', secondary: 'rejectProcessReport', secondaryLabel: '退回汇总' },
+    'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
   };
 
   // 大流程 2/3/4 的子页面在统一工作台里没有自己的可见会话栏：它们需要的阶段
@@ -227,29 +226,67 @@
     renderContextSubsteps();
   }
 
-  /* 同源 iframe 内的元素查询：iframe 未加载、跨源或文档不可用时返回 null，不抛异常。 */
-  function childQuery(selector) {
-    const frame = $('techStageFrame');
-    const doc = frame && frame.contentDocument;
-    if (!doc || !selector) return null;
-    try { return doc.querySelector(selector); } catch (error) { return null; }
+  /* ---------------------------------------------------- 看板桥（TechBoardBridge）
+   * 父壳与右侧看板之间只有一条同源 postMessage 通道：命令走 executeAction /
+   * navigateView，状态来自看板主动推送的 action-state。这里读不到、也不读 iframe 的
+   * 内部 DOM，没有任何子页面 selector，更不会跨层 click。
+   * 全部读写都做能力探测，桥缺失 / 抛错时退化为“未就绪”，不影响流程导航。 */
+  function boardBridge() {
+    const bridge = window.TechBoardBridge;
+    return bridge && typeof bridge === 'object' ? bridge : null;
+  }
+  function boardSnapshot() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.snapshot !== 'function') return null;
+    try { return bridge.snapshot(); } catch (error) { return null; }
+  }
+  function boardActionState(name) {
+    const snapshot = boardSnapshot();
+    if (!snapshot || !snapshot.actions || !name) return null;
+    return snapshot.actions[name] || null;
+  }
+  function boardActiveView() {
+    const snapshot = boardSnapshot();
+    return (snapshot && snapshot.view && snapshot.view.active) || '';
   }
 
-  /* 代理页签的 active 以子页面真实状态为准，父壳只回读选择器，不自建状态。 */
+  // 看板的失败 / 超时 / 未就绪提示统一写进标题行的独立节点，不污染固定大标题。
+  function setBoardNotice(message) {
+    const notice = $('techContextNotice');
+    if (!notice) return;
+    notice.textContent = message || '';
+    notice.hidden = !message;
+  }
+
+  /* 代理页签的 active 以看板回传的真实视图为准，父壳只渲染，不自建状态。 */
   function syncChildTabActive(proxy) {
     const bar = $('techSubstepsBar');
     if (!bar || !proxy) return;
-    const active = childQuery(proxy.activeSelector);
-    const key = active ? (active.dataset[proxy.keyAttr] || '') : '';
+    const active = boardActiveView();
     bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
-      btn.classList.toggle('active', Boolean(key) && btn.dataset.childTab === key);
+      btn.classList.toggle('active', Boolean(active) && btn.dataset.childTab === active);
+    });
+  }
+
+  /* 看板视图切换（流程 3、4 的页签）：只发语义化 view 名。 */
+  function navigateBoardView(view, label) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.navigateView !== 'function') {
+      setBoardNotice(`${label || view}：看板尚未就绪，请等待右侧步骤加载完成。`);
+      return;
+    }
+    Promise.resolve(bridge.navigateView(view, {})).then(() => {
+      setBoardNotice('');
+      syncChildTabActive(CHILD_TAB_PROXY[state.stage] || null);
+    }).catch((error) => {
+      setBoardNotice((error && error.message) || `切换到「${label || view}」失败`);
     });
   }
 
   /* 统一标题行：大标题只读 MAJOR_STEPS[].title（固定名称，不被子页面动态标题或状态
      刷新覆盖），五个大流程都显示这一行；右侧同排一组分步骤/子页面页签。
      流程 1、5 = 父壳自己的 stage 按钮，点击回到 applyStage；
-     流程 3、4 = 代理同源 iframe 中既有页签按钮，active 由子页面回读；
+     流程 3、4 = 代理同源 iframe 中既有页签对应的语义化 view，active 由看板回传；
      流程 2 右侧为空 —— 只隐藏这组按钮，不隐藏大标题行。 */
   function renderContextSubsteps() {
     const bar = $('techSubstepsBar');
@@ -275,11 +312,7 @@
         btn.addEventListener('click', () => {
           const tab = proxy.tabs.find((item) => item.key === btn.dataset.childTab);
           if (!tab) return;
-          const target = childQuery(tab.selector);
-          if (target && !target.disabled) {
-            target.click();
-            syncChildTabActive(proxy);
-          }
+          navigateBoardView(tab.view, tab.label);
         });
       });
       syncChildTabActive(proxy);
@@ -399,6 +432,7 @@
         `<button type="button" class="tech-wb-btn primary" data-wb-action="${escH(action.id)}">${escH(action.label)}</button>`).join('') + '</div>';
     }
     html += '</div>';
+    detachBoardBridge('state-view');
     outlet.innerHTML = html;
     outlet.querySelectorAll('[data-wb-action]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -435,6 +469,8 @@
   function mountStageFrame() {
     const outlet = $('techWorkspaceOutlet');
     if (!outlet) return;
+    // 换页先断开旧看板：pending 命令作废、状态清空，避免新页面误用上一个 stage 的按钮。
+    detachBoardBridge('stage-change');
     const meta = stageMeta(state.stage);
     if (!meta) {
       setStateView('error', '未知步骤', '当前 stage 不在固定白名单内，已拒绝加载。', [
@@ -465,40 +501,111 @@
     iframe.setAttribute('data-stage', state.stage);
     iframe.src = childUrl(state.stage);
     iframe.addEventListener('load', () => {
+      // iframe load 后挂上看板桥：等它 ready 后按钮状态与页签 active 全部来自
+      // action-state 消息；等待期间底栏按钮保持禁用并给出“未就绪”提示。
+      // 新增工艺待办用 tech-task.html 承载建项流程，它不属于九阶段看板，没有运行时。
+      if (stagePageHasRuntime()) attachBoardBridge(iframe);
+      else setBoardNotice('');
       syncActionBar();
       syncAgentStageContext();
-      // 子页面首次渲染完成后回读它真实的页签 active（流程 3、4 的代理页签）。
       renderContextSubsteps();
     });
     outlet.append(iframe);
+    // detach 后旧看板状态已清空：先按“未就绪”渲染一次标题行与底栏，等 load → ready
+    // 再用看板回传的 action-state 覆盖。
+    renderContextSubsteps();
     syncActionBar();
   }
 
-  /* 底栏主/次操作代理：在子页面 DOM 上找按钮，读状态并转发点击。 */
+  /* 新增工艺待办（无 project、有 task_id）用 tech-task.html 建项，不在看板协议范围内。 */
+  function stagePageHasRuntime() {
+    return !(state.stage === 'requirement-create' && !state.project && state.taskId);
+  }
+
+  /* 挂载 / 卸载看板桥：attach 会主动同步一次状态；失败时只提示，不阻断流程。 */
+  function attachBoardBridge(frame) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.attach !== 'function' || !frame) return;
+    try {
+      Promise.resolve(bridge.attach(frame, {
+        projectId: state.project, stage: state.stage, taskId: state.taskId,
+      })).then(() => {
+        syncActionBar();
+        renderContextSubsteps();
+        syncAgentStageContext();
+      }).catch((error) => {
+        setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。');
+        syncActionBar();
+      });
+    } catch (error) {
+      setBoardNotice('看板尚未就绪，请稍后重试。');
+    }
+  }
+  function detachBoardBridge(reason) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.detach !== 'function') return;
+    try { bridge.detach(reason || 'stage-change'); } catch (error) { /* 忽略：切换流程优先 */ }
+  }
+
+  /* 底栏主/次操作代理：文案、可见、可用、busy 全部来自看板回传的 action-state；点击只
+     发语义化动作名，真正的业务实现留在右侧看板里。看板未就绪时按钮禁用并给出明确提示，
+     超时 / 业务失败也会显示在标题行提示位，绝不无声返回。 */
+  function renderActionButton(button, actionName, fallbackLabel, role) {
+    if (!button) return;
+    if (!actionName) {
+      button.hidden = true;
+      button.disabled = true;
+      button.onclick = null;
+      button.title = '';
+      return;
+    }
+    const snapshot = boardSnapshot();
+    const entry = actionName ? boardActionState(actionName) : null;
+    const label = (entry && entry.label) || fallbackLabel || actionName;
+    button.hidden = Boolean(entry && entry.visible === false);
+    button.textContent = label;
+    button.dataset.actionRole = role;
+    button.disabled = !entry || entry.enabled === false || entry.busy === true || !state.project;
+    button.title = !entry
+      ? '看板尚未就绪，请等待右侧步骤加载完成。'
+      : (entry.busy ? `${label}：正在执行…` : label);
+    button.onclick = () => runBoardAction(actionName, label, role);
+    if (!snapshot || !snapshot.ready) button.title = '看板尚未就绪，请等待右侧步骤加载完成。';
+  }
+
+  function runBoardAction(actionName, label, role) {
+    if (!state.project) return;
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== 'function') {
+      setBoardNotice(`${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`);
+      return;
+    }
+    setBoardNotice('');
+    Promise.resolve(bridge.executeAction(actionName, { label, role }))
+      .then(() => { syncActionBar(); })
+      .catch((error) => {
+        setBoardNotice((error && error.message) || `${label || actionName} 执行失败`);
+        syncActionBar();
+      });
+  }
+
   function syncActionBar() {
     const actions = STAGE_ACTIONS[state.stage] || null;
     const primary = $('techPrimary');
     const secondary = $('techSecondary');
-    // 每次同步先清掉上一轮角色 class，避免切换 stage 或子页面重建后残留。
+    // 每次同步先清掉上一轮角色 class，避免切换 stage 或看板重建后残留。
     if (primary) primary.classList.remove('is-filled', 'is-outline');
     if (secondary) secondary.classList.remove('is-filled', 'is-outline');
     if (!actions) {
-      if (primary) primary.hidden = true;
-      if (secondary) secondary.hidden = true;
+      if (primary) { primary.hidden = true; primary.disabled = true; }
+      if (secondary) { secondary.hidden = true; secondary.disabled = true; }
       return;
     }
-    const frame = $('techStageFrame');
-    const doc = frame && frame.contentDocument;
-    const probe = (selector) => {
-      try { return doc && doc.querySelector(selector); } catch (e) { return null; }
-    };
-    // 2.2「组装与整合」：按子页面真实产出反转主次 —— 参数推荐与组装工艺都已生成时，
-    // 主操作才是「确认工艺并发送财务」；只生成一项、busy、失败或尚未分析时，
-    // 主操作仍是「开始整合分析」。状态来自子页面 dataset，不按按钮文案猜测，
-    // 也不等同于 #aiToFinance 是否可点（确认闸门仍由子页面自己控制）。
+    // 2.2「组装与整合」：按看板真实产出反转主次 —— 参数推荐与组装工艺都已生成时，
+    // 主操作才是「确认工艺并发送财务」；只生成一项、busy 或尚未分析时主操作仍是
+    // 「开始整合分析」。analyzed 来自看板动作状态，父壳不按按钮文案猜测。
     if (state.stage === 'process' && primary && secondary) {
-      const analyzed = Boolean(doc && doc.body && doc.body.dataset
-        && doc.body.dataset.integrationAnalyzed === 'true');
+      const analyzed = Boolean((boardActionState(actions.primary) || {}).analyzed);
       if (analyzed) {
         primary.classList.add('is-filled');
         secondary.classList.add('is-outline');
@@ -507,30 +614,8 @@
         primary.classList.add('is-outline');
       }
     }
-    if (primary) {
-      primary.hidden = !actions.primary;
-      if (actions.primary) {
-        primary.textContent = actions.primaryLabel || '执行';
-        const el = probe(actions.primary);
-        primary.disabled = !el || el.disabled || !state.project;
-        primary.onclick = () => {
-          const current = probe(actions.primary);
-          if (current && !current.disabled) current.click();
-        };
-      }
-    }
-    if (secondary) {
-      secondary.hidden = !actions.secondary;
-      if (actions.secondary) {
-        secondary.textContent = actions.secondaryLabel || '次要操作';
-        const el = probe(actions.secondary);
-        secondary.disabled = !el || el.disabled || !state.project;
-        secondary.onclick = () => {
-          const current = probe(actions.secondary);
-          if (current && !current.disabled) current.click();
-        };
-      }
-    }
+    renderActionButton(primary, actions.primary, actions.primaryLabel, 'primary');
+    renderActionButton(secondary, actions.secondary, actions.secondaryLabel, 'secondary');
   }
 
   /* ---------------------------------------------------- 左侧唯一 Agent 会话栏 */
@@ -541,9 +626,9 @@
     if (!context) return null;
     const routing = STAGE_ACTIONS[state.stage] || {};
     const actions = (context.actions || []).map((role) => {
-      const selector = role === 'secondary' ? routing.secondary : routing.primary;
+      const action = role === 'secondary' ? routing.secondary : routing.primary;
       const label = (role === 'secondary' ? routing.secondaryLabel : routing.primaryLabel) || '';
-      return selector && label ? { role, selector, label } : null;
+      return action && label ? { role, action, label } : null;
     }).filter(Boolean);
     return {
       stage: state.stage,
@@ -572,17 +657,18 @@
     }
   }
 
-  // 左侧上下文里的操作按钮只回传角色，由父壳点同源 iframe 中的既有业务按钮。
+  // 左侧上下文里的操作按钮只回传角色 / 动作名，执行统一走看板桥的同一套命令，
+  // 与底栏按钮共用一条通道、一份状态，不额外复制点击逻辑。
   window.addEventListener('cpq:tech-agent:stage-action', (event) => {
-    const role = ((event.detail || {}).role) || 'primary';
+    const detail = event.detail || {};
+    const role = detail.role || 'primary';
     const routing = STAGE_ACTIONS[state.stage] || {};
-    const selector = role === 'secondary' ? routing.secondary : routing.primary;
-    const frame = $('techStageFrame');
-    const doc = frame && frame.contentDocument;
-    if (!selector || !doc) return;
-    let target = null;
-    try { target = doc.querySelector(selector); } catch (error) { target = null; }
-    if (target && !target.disabled) target.click();
+    const action = detail.action || (role === 'secondary' ? routing.secondary : routing.primary);
+    const label = detail.label
+      || (role === 'secondary' ? routing.secondaryLabel : routing.primaryLabel)
+      || action;
+    if (!action) return;
+    runBoardAction(action, label, role);
   });
 
   /* ---------------------------------------------------------- 步骤切换 */
@@ -677,7 +763,6 @@
     }
     renderTop();
   }
-  setInterval(() => syncActionBar(), 2500);
 
   /* ---------------------------------------------------------- 模型设置
    * 右上角模型文字与左侧「设置」共用同一个打开函数，卡片内容复用
@@ -902,9 +987,28 @@
     }
   }
 
+  /* 看板主动推送的 action-state / selection-changed 是按钮与页签状态的唯一来源：
+     订阅后不再用定时器轮询，也不再探测子页面 DOM。 */
+  function bindBoardBridge() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.subscribe !== 'function') return;
+    bridge.subscribe((event) => {
+      const type = (event && event.type) || '';
+      if (type === 'error') {
+        const message = event && event.payload && event.payload.message;
+        if (message) setBoardNotice(message);
+      }
+      syncActionBar();
+      if (type === 'action-state' || type === 'selection-changed' || type === 'ready') {
+        renderContextSubsteps();
+      }
+    });
+  }
+
   /* ---------------------------------------------------------- 启动 */
   readFromUrl();
   if (!state.stage) state.stage = 'requirement-create';
+  bindBoardBridge();
   renderTop();
   mountStageFrame();
   syncAgentStageContext();

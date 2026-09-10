@@ -78,3 +78,33 @@ cfRender = function () {
   const value = String(cfRequirement?.data?.customer_credit || '').trim() || '—';
   list.insertAdjacentHTML('beforeend', `<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${cfEsc(value)}</span></div>`);
 };
+
+/* 统一看板协议：确认 / 驳回复用既有 cfAct，父壳只发动作名。 */
+(function cfRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let cfBoardBusy = false;
+  function cfButtonState() {
+    const pass = document.querySelector('#confirmPass');
+    const back = document.querySelector('#returnDraft');
+    return { enabled: Boolean(pass && !pass.disabled && !cfBoardBusy), busy: cfBoardBusy, back: Boolean(back && !back.disabled) };
+  }
+  async function cfBoardRun(kind) {
+    if (cfBoardBusy) return { ok: false, error: { code: 'busy', message: '正在提交，请稍候。' } };
+    cfBoardBusy = true;
+    try { await cfAct(kind); return { ok: true }; }
+    catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '提交失败' } }; }
+    finally { cfBoardBusy = false; }
+  }
+  window.TechBoardRuntime.registerActions({
+    confirmRequirement: {
+      label: '✓ 通过确认',
+      run: () => cfBoardRun('confirm'),
+      getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.enabled, busy: state.busy }; },
+    },
+    returnRequirementDraft: {
+      label: '× 驳回',
+      run: () => cfBoardRun('return'),
+      getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.back && !state.busy, busy: state.busy }; },
+    },
+  });
+})();

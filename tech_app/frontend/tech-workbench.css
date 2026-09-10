@@ -427,6 +427,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   color: var(--twb-text);
   white-space: nowrap;
 }
+/* 看板桥的未就绪 / 失败提示：与大标题同排的独立节点，不覆盖固定大标题。 */
+.tech-context-notice {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-red, #d92d20);
+}
+.tech-context-notice[hidden] { display: none; }
 .tech-substeps-slot {
   display: flex;
   align-items: center;

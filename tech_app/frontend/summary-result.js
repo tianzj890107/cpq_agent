@@ -45,3 +45,28 @@ srRead=function(){const report=srBaseRead();report.distribution_scope=document.q
 const srBaseRender=srRender;
 srRender=function(){srBaseRender();const status=srView?.status||'draft';if(!['draft','rejected'].includes(status))return;const footer=document.querySelector('.footer-bar');if(!footer)return;footer.insertAdjacentHTML('beforebegin',`<section class="summary-card distribution-maintain-card"><div class="summary-card-header"><div class="summary-card-title">${srIcon}发布设置</div></div><div style="display:grid;gap:14px;padding:18px 20px"><label style="display:grid;gap:6px;font-size:13px;color:#475569">发布范围（以顿号、逗号或换行分隔）<textarea id="srDistributionScope" class="table-input" rows="3" placeholder="例如：销售部、工艺工程部、质量管理部">${srEsc(srReport?.distribution_scope||'')}</textarea></label><label style="display:grid;gap:6px;font-size:13px;color:#475569">抄送对象（以顿号、逗号或换行分隔）<textarea id="srDistributionCc" class="table-input" rows="2" placeholder="例如：项目经理、客户接口人">${srEsc(srReport?.distribution_cc||'')}</textarea></label><p style="margin:0;color:#94a3b8;font-size:12px">点击本页“保存”或“提交”即可一并保存发布设置。</p></div></section>`);};
 srStart();
+
+/* 统一看板协议：3.1 的保存与提交审核复用既有 srSave，父壳只发动作名。 */
+(function srRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let srBoardBusy = false;
+  async function srBoardRun(submit) {
+    if (srBoardBusy) return { ok: false, error: { code: 'busy', message: '正在保存，请稍候。' } };
+    srBoardBusy = true;
+    try { await srSave(submit); return { ok: true }; }
+    catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '保存失败' } }; }
+    finally { srBoardBusy = false; }
+  }
+  window.TechBoardRuntime.registerActions({
+    saveProcessReport: {
+      label: '保存',
+      run: () => srBoardRun(false),
+      getState: () => ({ visible: Boolean(document.querySelector('#srSave')), enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+    submitProcessReportReview: {
+      label: '提交审核',
+      run: () => srBoardRun(true),
+      getState: () => ({ visible: Boolean(document.querySelector('#srSubmit')), enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+  });
+})();

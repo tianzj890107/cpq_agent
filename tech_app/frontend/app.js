@@ -820,8 +820,10 @@ $("btnUpload").onclick = async () => {
   setWorkflow("parse", "图纸已保存。确认后可开始 AI 解析。");
 };
 
-$("btnParse").onclick = async () => {
-  if (!currentProject) return;
+// 具名函数：原 #btnParse 点击逻辑原样搬过来，按钮和统一看板动作共用同一份实现。
+let parseDrawingError = "";
+async function parseDrawing() {
+  if (!currentProject) { parseDrawingError = "尚未绑定项目，无法开始解析。"; return null; }
   const parseButton = $("btnParse");
   parseButton.disabled = true;
   parseButton.setAttribute("aria-busy", "true");
@@ -851,14 +853,17 @@ $("btnParse").onclick = async () => {
           + `平均置信度 ${avgConfidence(currentIR)}。`,
       },
     }));
-  } catch (e) { status("解析失败: " + e.message); }
+    parseDrawingError = "";
+    return currentIR;
+  } catch (e) { parseDrawingError = e.message; status("解析失败: " + e.message); return null; }
   finally {
     parseButton.disabled = false;
     parseButton.removeAttribute("aria-busy");
     parseButton.setAttribute("aria-label", "开始解析");
     parseButton.textContent = "▶ 开始解析";
   }
-};
+}
+$("btnParse").onclick = parseDrawing;
 
 $("btnModelLookup").onclick = async () => {
   if (!currentProject || !currentIR) return;
@@ -1348,7 +1353,9 @@ function renderIR(ir) {
     }
   }
   loadVersions();
-  // 零件清单/待澄清已重新渲染；通知 Agent 对话框刷新结果按钮的数量。
+  // 零件清单/待澄清已重新渲染：先把解析摘要播给父壳看板桥，再通知 Agent 对话框刷新
+  // 结果按钮的数量。左侧入口的显示 / 计数只认看板播回的解析摘要，不读本页 DOM。
+  publishResultSummary(ir);
   window.dispatchEvent(new CustomEvent("agent:ir-rendered"));
 }
 
@@ -1766,3 +1773,270 @@ init().catch(error => {
   status(`页面初始化失败：${error && error.message || error}。请刷新重试；若持续出现，`
          + "请把这句话反馈给维护者。");
 });
+
+/* 统一看板协议：2.1 的「开始解析」注册成 parseDrawing，父壳底栏 / Agent 只发动作名，
+ * 页面上的原按钮继续走同一个函数，独立打开时行为不变。 */
+if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions === "function") {
+  window.TechBoardRuntime.registerActions({
+    parseDrawing: {
+      label: "开始解析",
+      run: async () => {
+        const button = $("btnParse");
+        if (button && button.disabled) {
+          return { ok: false, error: { code: "not-ready", message: "当前没有可解析的图纸，请先上传 2D 工程图。" } };
+        }
+        // 解析是长任务：先告诉父壳 busy，完成后无论成功失败都恢复。
+        window.TechBoardRuntime.updateActionState("parseDrawing", { busy: true });
+        try {
+          const result = await parseDrawing();
+          return result
+            ? { ok: true }
+            : { ok: false, error: { code: "parse-failed", message: parseDrawingError || "图纸解析未完成。" } };
+        } finally {
+          window.TechBoardRuntime.updateActionState("parseDrawing", { busy: false });
+        }
+      },
+      getState: () => {
+        const button = $("btnParse");
+        return {
+          visible: true,
+          enabled: Boolean(button) && !button.disabled,
+          busy: Boolean(button && button.getAttribute("aria-busy") === "true"),
+        };
+      },
+    },
+  });
+}
+/* --------------------------------------------------------------------------- //
+ * 统一看板视图（技术工艺 Agent 能力恢复第 5 步）
+ * ---------------------------------------------------------------------------
+ * 左侧会话栏的入口只发 navigate-view，真正的呈现留在右侧看板内部：这里把 2.1 页
+ * 既有面板（#secParts / #secQuestions / #secEvidence / #secVersions / #secUpload /
+ * #secImport3d / #verificationDetails / #modelLookupDetails）、既有文件接口与既有
+ * 函数复用进一个看板内容宿主，不复制业务实现、不新建第二套数据源。独立的旧页面
+ * 打开时没有父壳桥，window.TechBoardViews 让同页就地打开同一份面板。
+ * ------------------------------------------------------------------------- */
+
+function boardStageName() {
+  return new URLSearchParams(location.search).get("stage") || (__techEmbedMode__ ? "drawing" : "");
+}
+
+let boardFileManifest = null;
+
+// 解析摘要 → 父壳看板桥。左侧入口的显示 / 计数只来自这条 result-summary。
+function publishResultSummary(ir) {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.emit !== "function") return;
+  const source = ir || currentIR || null;
+  const parts = (source && source.parts) || [];
+  const extras = $("extras");
+  const questions = extras ? extras.querySelectorAll(".extra-item, .standard-item").length : 0;
+  const extrasText = (extras ? extras.textContent || "" : "").trim();
+  const hasQuestions = questions > 0 || Boolean(extrasText && extrasText !== "暂无待澄清问题");
+  const total = Number((boardFileManifest && boardFileManifest.total) || 0);
+  runtime.emit("state", "result-summary", {
+    stage: boardStageName(),
+    parsed: Boolean(source),
+    results: {
+      parts: { available: parts.length > 0, count: parts.length },
+      questions: { available: hasQuestions, count: questions },
+      report: { available: Boolean(source) },
+      files: { available: total > 0, count: total },
+    },
+  });
+}
+
+// 左侧入口 → 看板视图：run 全部复用下面的既有面板 / 既有接口。
+const BOARD_VIEW_SPECS = {
+  parts: { title: "零件清单", sections: ["secParts"] },
+  questions: { title: "待澄清问题", sections: ["secQuestions"] },
+  evidence: { title: "解析视图", sections: ["secEvidence"] },
+  review: { title: "版本与校核", sections: ["secVersions", "verificationDetails", "modelLookupDetails"] },
+  upload: { title: "补充需求图纸", sections: ["secUpload"] },
+  import3d: { title: "导入已有 3D 模型", sections: ["secImport3d"] },
+  files: { title: "任务文件", files: true },
+  report: { title: "解析报告", report: true },
+};
+
+function boardViewHost() {
+  let host = document.getElementById("boardViewHost");
+  if (host) return host;
+  const panel = document.querySelector(".oc-work .center-panel")
+    || document.querySelector(".oc-work") || document.querySelector(".oc-shell") || document.body;
+  host = document.createElement("section");
+  host.id = "boardViewHost";
+  host.className = "board-view-host";
+  host.hidden = true;
+  const head = document.createElement("div");
+  head.className = "board-view-head";
+  const title = document.createElement("div");
+  title.className = "board-view-title";
+  title.id = "boardViewTitle";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "board-view-back";
+  back.textContent = "← 返回 3D 视图";
+  back.addEventListener("click", () => closeBoardView());
+  head.append(title, back);
+  const body = document.createElement("div");
+  body.className = "board-view-body";
+  body.id = "boardViewBody";
+  host.append(head, body);
+  panel.insertBefore(host, panel.firstElementChild);
+  return host;
+}
+
+// 面板节点始终是同一份：切换视图时把不需要的放回抽屉容器，再移入目标面板。
+function resetBoardViewBody(body) {
+  if (!body) return;
+  body.querySelectorAll("[data-board-generated]").forEach((node) => node.remove());
+  const drawerBody = document.getElementById("ocDrawerBody");
+  if (!drawerBody) return;
+  Array.from(body.children).forEach((node) => {
+    if (!node.hasAttribute("data-drawer-section")) return;
+    node.setAttribute("data-drawer-hidden", "true");
+    drawerBody.append(node);
+  });
+}
+
+// 任务文件：复用既有 /files 接口与既有小窗 DOM 语义，正文留在看板内部。
+function renderBoardFiles(body) {
+  const project = currentProject || new URLSearchParams(location.search).get("project") || "";
+  const box = document.createElement("div");
+  box.className = "board-files";
+  box.setAttribute("data-board-generated", "true");
+  box.textContent = "正在读取任务文件…";
+  body.append(box);
+  if (!project) {
+    box.textContent = "还没有选择项目，无法读取任务文件。";
+    return { ok: false, error: { code: "no-project", message: "还没有选择项目。" } };
+  }
+  return fetch(`${API}/api/projects/${encodeURIComponent(project)}/files`)
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((manifest) => {
+      boardFileManifest = manifest || { groups: [], total: 0 };
+      box.replaceChildren();
+      (boardFileManifest.groups || []).forEach((group) => {
+        const section = document.createElement("section");
+        section.className = "board-file-group";
+        const head = document.createElement("div");
+        head.className = "board-file-group-head";
+        const name = document.createElement("span");
+        name.textContent = group.title || "文件";
+        const count = document.createElement("span");
+        count.className = "board-file-count";
+        count.textContent = String((group.files || []).length);
+        head.append(name, count);
+        section.append(head);
+        (group.files || []).forEach((file) => {
+          const link = document.createElement("a");
+          link.className = "board-file-link";
+          link.href = file.url || "#";
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = file.name || "未命名文件";
+          if (file.note) link.title = file.note;
+          section.append(link);
+        });
+        box.append(section);
+      });
+      if (!(boardFileManifest.groups || []).length) {
+        box.append(document.createTextNode(boardFileManifest.note || "还没有任何文件。"));
+      }
+      publishResultSummary();
+      return { ok: true, result: { view: "files", total: boardFileManifest.total || 0 } };
+    })
+    .catch((error) => {
+      box.textContent = `任务文件读取失败：${error.message}`;
+      return { ok: false, error: { code: "files-failed", message: error.message } };
+    });
+}
+
+// 解析报告：复用既有 report.html 入口，但放在看板文档内的 iframe 里 —— 不开新窗口、
+// 不在父层弹层，协议通道保持有效。
+function renderBoardReport(body) {
+  const project = currentProject || new URLSearchParams(location.search).get("project") || "";
+  if (!project) return { ok: false, error: { code: "no-project", message: "还没有选择项目，无法生成解析报告。" } };
+  const frame = document.createElement("iframe");
+  frame.className = "board-report-frame";
+  frame.setAttribute("data-board-generated", "true");
+  frame.title = "图纸解析报告";
+  frame.src = `report.html?project=${encodeURIComponent(project)}`;
+  body.append(frame);
+  return { ok: true, result: { view: "report" } };
+}
+
+function openBoardView(view) {
+  const spec = BOARD_VIEW_SPECS[view];
+  if (!spec) return { ok: false, error: { code: "unknown-action", message: "看板未注册视图：" + view } };
+  const host = boardViewHost();
+  const body = document.getElementById("boardViewBody");
+  resetBoardViewBody(body);
+  const title = document.getElementById("boardViewTitle");
+  if (title) title.textContent = spec.title;
+  let outcome = { ok: true, result: { view: view, title: spec.title } };
+  if (spec.report) outcome = renderBoardReport(body);
+  else if (spec.files) outcome = renderBoardFiles(body);
+  else (spec.sections || []).forEach((id) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.removeAttribute("data-drawer-hidden");
+    if (node.tagName === "DETAILS") node.open = true;
+    body.append(node);
+  });
+  const panes = document.getElementById("modelPanes");
+  const analysis = document.getElementById("analysisPanel");
+  if (panes) panes.hidden = true;
+  if (analysis) analysis.hidden = true;
+  host.hidden = false;
+  return outcome;
+}
+
+function closeBoardView() {
+  const host = document.getElementById("boardViewHost");
+  resetBoardViewBody(document.getElementById("boardViewBody"));
+  if (host) host.hidden = true;
+  const panes = document.getElementById("modelPanes");
+  if (panes) panes.hidden = false;
+  return true;
+}
+
+function runBoardView(view) {
+  try {
+    return openBoardView(view);
+  } catch (error) {
+    return { ok: false, error: { code: "view-failed", message: String((error && error.message) || error) } };
+  }
+}
+
+// 独立 2.1 页没有父壳桥：+ 菜单与结果按钮由 agent-chat.js 调用这里就地打开同一份面板。
+window.TechBoardViews = { open: runBoardView, close: closeBoardView, specs: BOARD_VIEW_SPECS };
+
+/* 看板视图注册：左侧入口只发 navigate-view，这里给出真实的 run 实现（复用上面的既有
+ * 面板与既有接口）。父壳据 runtime 发出的 action-state(view.active) 高亮左侧入口。 */
+if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerViews === "function") {
+  window.TechBoardRuntime.registerViews({
+    parts: { label: "零件清单", run: () => runBoardView("parts") },
+    questions: { label: "待澄清问题", run: () => runBoardView("questions") },
+    report: { label: "解析报告", run: () => runBoardView("report") },
+    evidence: { label: "解析视图", run: () => runBoardView("evidence") },
+    review: { label: "版本与校核", run: () => runBoardView("review") },
+    files: { label: "任务文件", run: () => runBoardView("files") },
+    upload: { label: "补充需求图纸", run: () => runBoardView("upload") },
+    import3d: { label: "导入已有 3D 模型", run: () => runBoardView("import3d") },
+  });
+}
+
+/* 摘要刷新：父壳就绪后会发 refresh-data，这里把当前解析摘要重播一次，保证左侧入口
+ * 的显示 / 计数与看板一致（不新增接口、不新增数据源）。 */
+if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions === "function") {
+  window.TechBoardRuntime.registerActions({
+    refreshData: {
+      label: "刷新看板摘要",
+      run: () => { publishResultSummary(); return { ok: true }; },
+    },
+  });
+}

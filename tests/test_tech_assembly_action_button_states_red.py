@@ -56,7 +56,14 @@ class TechAssemblyActionButtonStatesRedTest(unittest.TestCase):
         self.assertRegex(self.workbench_css, r'\.tech-wb-btn\.(?:is-outline|outline):hover:not\(:disabled\)[^{]*\{[^}]*gradient-primary-hover[^}]*color:\s*#fff')
 
     def test_existing_process_targets_and_finance_gate_remain(self):
-        self.assertRegex(self.workbench_js, r"'process'\s*:\s*\{[^}]*primary:\s*'#aiToFinance'[^}]*secondary:\s*'#aiStart'")
+        # 契约更新（本轮 0-3「看板消息协议 + 业务动作注册表」）：父壳不再持有子页面
+        # 选择器，process 阶段的同一条业务链路改为语义化动作名接线 ——
+        # primary=sendIntegrationToFinance（发财务）、secondary=runIntegration（开始整合）。
+        # 门槛没有降低：仍然是这两个既有业务动作，财务闸门也仍由组装页自己判定。
+        self.assertRegex(
+            self.workbench_js,
+            r"'process'\s*:\s*\{[^}]*primary:\s*'sendIntegrationToFinance'[^}]*secondary:\s*'runIntegration'",
+        )
         self.assertIn("state.params_confirmed && state.process_confirmed", self.assembly_js)
 
 

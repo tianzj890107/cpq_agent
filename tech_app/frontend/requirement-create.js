@@ -205,3 +205,29 @@ rcPersist=async function(submit){
   }
   return rcPersistWithRequiredValidation(submit);
 };
+
+/* 统一看板协议：把本页既有业务函数注册成语义化动作。父壳底栏与 Agent 只发动作名，
+ * 页面上的原按钮继续走同一个 rcPersist，独立打开时行为完全不变。 */
+(function rcRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let rcBoardBusy = false;
+  async function rcBoardRun(submit) {
+    if (rcBoardBusy) return { ok: false, error: { code: 'busy', message: '正在保存，请稍候。' } };
+    rcBoardBusy = true;
+    try { await rcPersist(submit); return { ok: true }; }
+    catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '保存失败' } }; }
+    finally { rcBoardBusy = false; }
+  }
+  window.TechBoardRuntime.registerActions({
+    saveRequirementDraft: {
+      label: '保存草稿',
+      run: () => rcBoardRun(false),
+      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+    },
+    submitRequirement: {
+      label: '提交确认',
+      run: () => rcBoardRun(true),
+      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+    },
+  });
+})();

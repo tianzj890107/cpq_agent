@@ -143,6 +143,12 @@
   font-size: 17px; cursor: pointer; transition: background .15s;
 }
 .oc-ibtn:hover { background: var(--oc-bg-2); color: var(--oc-text-1); }
+.oc-ibtn:focus-visible {
+  outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px;
+  background: var(--oc-bg-2); color: var(--oc-accent);
+}
+.oc-ibtn:disabled { opacity: .45; cursor: not-allowed; }
+.oc-ibtn[aria-expanded="true"] { background: var(--oc-bg-3); color: var(--oc-accent); }
 
 .oc-thread { flex: 1; padding: 18px 16px; overflow-y: auto; }
 .oc-tinner { display: flex; width: 100%; max-width: 640px; margin: 0 auto; flex-direction: column; gap: 16px; }
@@ -224,6 +230,14 @@
   transition: background .15s, border-color .15s;
 }
 .oc-chip:hover { border-color: var(--oc-accent); background: var(--oc-bg-3); }
+.oc-chip:focus-visible {
+  outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px;
+  border-color: var(--oc-accent);
+}
+.oc-chip:disabled {
+  opacity: .5; cursor: not-allowed; border-color: var(--oc-border-2);
+  background: var(--oc-bg-2); color: var(--oc-text-3);
+}
 .oc-chip .oc-chip-count {
   padding: 1px 7px; border-radius: 999px; background: var(--oc-bg-3);
   color: var(--oc-text-2); font-size: 11px; font-weight: 600;
@@ -449,3 +463,103 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-stage-context-btn:hover:not(:disabled) { border-color: #0067D1; background: #EAF3FC; }
 .oc-stage-context-btn:disabled { cursor: not-allowed; opacity: .6; }
 .oc-stage-context-btn:focus-visible { outline: 2px solid rgba(0, 103, 209, .25); outline-offset: 2px; }
+
+/* ---------- 统一父壳左侧会话：输入区工具条与 ＋ 能力菜单 ----------
+   ＋ 菜单是输入区里的固定 DOM（相对 .oc-cinner 定位），不是 body 上的临时浮层，
+   不做 getBoundingClientRect 坐标计算；选中态沿用品牌蓝 + 浅底。 */
+.oc-cinner { position: relative; }
+.oc-input-tools { display: flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.oc-files-action {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+  border: .5px solid var(--oc-border-2); border-radius: 999px; background: var(--oc-bg-1);
+  color: var(--oc-text-2); font: 12.5px/1.2 inherit; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.oc-files-action:hover { border-color: var(--oc-accent); color: var(--oc-accent); background: var(--oc-bg-3); }
+.oc-files-action:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px; border-color: var(--oc-accent); }
+.oc-files-action:disabled { opacity: .5; cursor: not-allowed; border-color: var(--oc-border-2); color: var(--oc-text-3); background: var(--oc-bg-2); }
+.oc-files-action-label { white-space: nowrap; }
+
+.oc-capability-menu {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  display: flex; width: 232px; flex-direction: column; gap: 2px; padding: 6px;
+  border: .5px solid var(--oc-border-2); border-radius: 13px; background: var(--oc-bg-1);
+  box-shadow: 0 8px 26px rgba(15, 23, 42, .14);
+}
+.oc-capability-menu[hidden] { display: none; }
+.oc-capability-item {
+  display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--oc-text-1); font: 13px/1.4 inherit;
+  text-align: left; cursor: pointer; transition: background .15s, color .15s;
+}
+.oc-capability-item:hover { background: var(--oc-bg-2); color: var(--oc-accent); }
+.oc-capability-item:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: -1px; background: var(--oc-bg-2); color: var(--oc-accent); }
+.oc-capability-item:disabled { opacity: .45; cursor: not-allowed; background: transparent; color: var(--oc-text-3); }
+
+/* ---------- 统一父壳左侧会话：任务执行进度（按 taskId 一张卡） ---------- */
+.oc-task-progress { display: flex; flex-direction: column; gap: 10px; }
+.oc-task-progress:empty { display: none; }
+.oc-task-card {
+  padding: 11px 13px; border: .5px solid var(--oc-border-2); border-radius: 12px;
+  background: var(--oc-bg-1);
+}
+.oc-task-head { display: flex; align-items: center; gap: 8px; }
+.oc-task-title { min-width: 0; flex: 1; color: var(--oc-text-1); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-task-state {
+  flex-shrink: 0; padding: 1px 8px; border-radius: 999px; background: var(--oc-bg-3);
+  color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+}
+.oc-task-card.is-queued .oc-task-state { background: var(--oc-bg-3); color: var(--oc-text-2); }
+.oc-task-card.is-running .oc-task-state { background: #e0edff; color: #0057B8; }
+.oc-task-card.is-succeeded .oc-task-state { background: #dcfce7; color: #15803d; }
+.oc-task-card.is-failed .oc-task-state { background: #fee2e2; color: #b91c1c; }
+.oc-task-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.oc-task-steps:empty { display: none; }
+.oc-task-error { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
+
+/* ---------- 统一看板视图宿主（第 5 步）----------
+   左侧入口只发 navigate-view，内容复用既有面板留在右侧看板内部；这里是承载面板的
+   看板内容宿主与任务文件 / 解析报告的呈现样式，不把业务正文搬进父壳。 */
+.board-view-host {
+  display: flex; flex-direction: column; min-height: 0; flex: 1;
+  background: var(--oc-bg-1); border-radius: 12px;
+}
+.board-view-host[hidden] { display: none; }
+.board-view-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: .5px solid var(--oc-border-3); flex-shrink: 0;
+}
+.board-view-title { color: var(--oc-text-1); font-size: 14px; font-weight: 600; }
+.board-view-back {
+  padding: 5px 12px; border: .5px solid var(--oc-border-2); border-radius: 8px;
+  background: var(--oc-bg-1); color: var(--oc-accent); font: 12.5px/1.2 inherit; cursor: pointer;
+}
+.board-view-back:hover { background: var(--oc-bg-2); border-color: var(--oc-accent); }
+.board-view-back:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px; }
+.board-view-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 20px; }
+.board-view-body .panel-section { margin-bottom: 14px; }
+.board-view-body .panel-section[data-drawer-hidden] { display: none; }
+.board-view-body .parts-list,
+.board-view-body .extras { max-height: none; }
+.board-report-frame { width: 100%; min-height: 72vh; border: 0; border-radius: 10px; background: var(--oc-bg-1); }
+.board-files { display: flex; flex-direction: column; gap: 12px; font-size: 12.5px; color: var(--oc-text-1); }
+.board-file-group { display: flex; flex-direction: column; gap: 4px; }
+.board-file-group-head {
+  display: flex; align-items: center; gap: 8px; padding-bottom: 4px;
+  border-bottom: .5px solid var(--oc-border-3); color: var(--oc-text-2); font-weight: 600;
+}
+.board-file-count { color: var(--oc-text-3); font-weight: 400; }
+.board-file-link { color: var(--oc-accent); text-decoration: none; word-break: break-all; }
+.board-file-link:hover { text-decoration: underline; }
+
+/* 左侧入口的高亮只来自看板回传的 view.active：沿用浅色选中态，不用深色底白字。 */
+.oc-chip.is-active,
+.oc-capability-item.is-active {
+  border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);
+}
+.oc-chip.is-active:hover,
+.oc-capability-item.is-active:hover {
+  border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);
+}
+.oc-retry-row { display: flex; order: 1; padding: 2px 0 4px 38px; }
+.oc-chip-retry { padding: 4px 12px; font-size: 12px; }

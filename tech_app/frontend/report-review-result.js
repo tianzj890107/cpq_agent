@@ -22,3 +22,39 @@ async function rrSaveDistributionSettings(quiet=false){const scope=document.quer
 const rrBaseRender=rrRender;
 rrRender=function(){rrBaseRender();if(rrView?.status==='published')return;const footer=document.querySelector('.footer-bar');if(!footer)return;footer.insertAdjacentHTML('beforebegin',`<section class="summary-card distribution-maintain-card"><div class="summary-card-header"><div class="summary-card-title">${rrIcon}发布设置</div></div><div style="display:grid;gap:14px;padding:18px 20px"><label style="display:grid;gap:6px;font-size:13px;color:#475569">发布范围（以顿号、逗号或换行分隔）<textarea id="rrDistributionScope" class="table-input" rows="3" placeholder="例如：销售部、工艺工程部、质量管理部">${rrEsc(rrView.scope||'')}</textarea></label><label style="display:grid;gap:6px;font-size:13px;color:#475569">抄送对象（以顿号、逗号或换行分隔）<textarea id="rrDistributionCc" class="table-input" rows="2" placeholder="例如：项目经理、客户接口人">${rrEsc(rrView.cc||'')}</textarea></label><div><button type="button" id="rrSaveDistribution" class="summary-btn secondary">保存发布设置</button></div></div></section>`);document.querySelector('#rrSaveDistribution').onclick=()=>rrSaveDistributionSettings();const publish=document.querySelector('#rrPublish');if(publish){const replacement=publish.cloneNode(true);publish.replaceWith(replacement);replacement.onclick=async()=>{if(await rrSaveDistributionSettings(true))rrApproveThenPublish();};}const reject=document.querySelector('#rrReject');if(reject){const replacement=reject.cloneNode(true);reject.replaceWith(replacement);replacement.onclick=async()=>{if(await rrSaveDistributionSettings(true))rrReject();};}};
 rrStart();
+
+/* 统一看板协议：3.2 的通过 / 退回复用既有 rrApproveThenPublish 与 rrReject。 */
+(function rrRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let rrBoardBusy = false;
+  window.TechBoardRuntime.registerActions({
+    approveProcessReport: {
+      label: '审核通过并发布',
+      run: async () => {
+        if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
+        rrBoardBusy = true;
+        try { await rrApproveThenPublish(); return { ok: true }; }
+        catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '审核操作失败' } }; }
+        finally { rrBoardBusy = false; }
+      },
+      getState: () => {
+        const button = document.querySelector('#rrPublish');
+        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rrBoardBusy, busy: rrBoardBusy };
+      },
+    },
+    rejectProcessReport: {
+      label: '退回汇总',
+      run: async () => {
+        if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
+        rrBoardBusy = true;
+        try { await rrReject(); return { ok: true }; }
+        catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '退回失败' } }; }
+        finally { rrBoardBusy = false; }
+      },
+      getState: () => {
+        const button = document.querySelector('#rrReject');
+        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rrBoardBusy, busy: rrBoardBusy };
+      },
+    },
+  });
+})();

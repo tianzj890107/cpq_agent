@@ -17,3 +17,33 @@ rrStart();
 // 审核页沿用确认页展示口径，确保信用等级在流程中可追溯。
 const rrRenderWithCustomerCredit=rrRender;
 rrRender=function(){rrRenderWithCustomerCredit();const list=document.querySelector('.info-list');if(!list)return;const value=String(rrRequirement?.data?.customer_credit||'').trim()||'—';list.insertAdjacentHTML('beforeend',`<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${rrEsc(value)}</span></div>`)};
+
+/* 统一看板协议：提交审核复用既有 rrSubmit，父壳只发动作名；校验前置条件后返回结构化结果。 */
+(function rrRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let rrBoardBusy = false;
+  window.TechBoardRuntime.registerActions({
+    submitRequirementReview: {
+      label: '提交审核意见',
+      run: async function submitRequirementReview() {
+        if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在提交，请稍候。' } };
+        const checked = document.querySelector('input[name="opinion"]:checked');
+        if (!checked) return { ok: false, error: { code: 'no-selection', message: '请选择审核意见。' } };
+        if (checked.value === 'reject' && !document.querySelector('#reviewText').value.trim()) {
+          return { ok: false, error: { code: 'missing-comment', message: '如驳回，必填审核说明。' } };
+        }
+        if (rrRequirement && rrRequirement.status !== 'pending_review') {
+          return { ok: false, error: { code: 'invalid-status', message: '当前需求不在待审核状态，请先完成前序确认。' } };
+        }
+        rrBoardBusy = true;
+        try { await rrSubmit(); return { ok: true }; }
+        catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '提交失败' } }; }
+        finally { rrBoardBusy = false; }
+      },
+      getState: () => {
+        const button = document.querySelector('#submitReview');
+        return { visible: true, enabled: Boolean(button) && !rrBoardBusy, busy: rrBoardBusy };
+      },
+    },
+  });
+})();

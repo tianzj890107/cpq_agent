@@ -1219,3 +1219,44 @@ async function aiStart() {
 }
 
 aiStart();
+
+/* 统一看板协议：2.2 的整合分析与发送财务注册成语义化动作，内部页签注册成语义化视图。
+ * 父壳底栏 / 标题行只发动作名 / 视图名，页面上的原按钮继续走同一份实现。 */
+(function aiRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  const aiStatusState = () => (aiData && aiData.status) || {};
+  const aiAnalyzed = () => Boolean(aiStatusState().has_params && aiStatusState().has_process);
+  const aiSetTab = (name) => { aiTab = name; aiRender(); };
+  window.TechBoardRuntime.registerActions({
+    runIntegration: {
+      label: '开始整合分析',
+      run: async () => {
+        const button = $ai('aiStart');
+        if (button && button.disabled) {
+          return { ok: false, error: { code: 'not-ready', message: '当前不能开始整合分析，请先补齐图纸与需求信息。' } };
+        }
+        window.TechBoardRuntime.updateActionState('runIntegration', { busy: true });
+        try { await aiRunAll(); return { ok: true }; }
+        finally { window.TechBoardRuntime.updateActionState('runIntegration', { busy: false }); }
+      },
+      getState: () => {
+        const button = $ai('aiStart');
+        const busy = Boolean(button && button.disabled);
+        return { visible: true, enabled: !busy, busy: busy, analyzed: aiAnalyzed() };
+      },
+    },
+    sendIntegrationToFinance: {
+      label: '确认工艺并发送财务',
+      run: async () => { await aiOpenFinanceDialog(); return { ok: true }; },
+      getState: () => {
+        const button = $ai('aiToFinance');
+        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: false, analyzed: aiAnalyzed() };
+      },
+    },
+  });
+  window.TechBoardRuntime.registerViews({
+    drawings: { run: () => aiSetTab('drawings'), getState: () => ({ active: aiTab === 'drawings' ? 'drawings' : null }) },
+    params: { run: () => aiSetTab('params'), getState: () => ({ active: aiTab === 'params' ? 'params' : null }) },
+    process: { run: () => aiSetTab('process'), getState: () => ({ active: aiTab === 'process' ? 'process' : null }) },
+  });
+})();

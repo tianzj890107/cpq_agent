@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout3" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260910-board5" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
   <link rel="stylesheet" href="tech-workbench.css?v=twb9" />
   <script src="cpq-sso.js?v=sso2"></script>
@@ -81,14 +81,43 @@
               <div style="font-size:14px;">工艺评估助手</div>
               <div style="font-size:12.5px;">它能读取本项目图纸与技术资料、查询解析结果，并按你的要求发起解析。<br/>切换右侧步骤不会清空这里的会话。</div>
             </div>
+            <!-- 解析结果快捷入口：唯一且持久的三颗按钮，默认整组隐藏但绝不从 DOM 删除。
+                 数量与可用状态只来自看板桥回传的解析摘要（父壳不读 iframe DOM、不另拉一份
+                 零件/问题数据）；点开具体内容属于右侧看板，本轮只保留统一分派入口。 -->
+            <div class="oc-result-actions" id="ocResultActions" aria-label="图纸解析结果" role="group" hidden>
+              <button class="oc-chip" id="ocPartsAction" type="button">🧩 零件清单<span class="oc-chip-count" id="ocPartsCount" aria-live="polite">0</span></button>
+              <button class="oc-chip warn" id="ocQuestionsAction" type="button">⚠ 待澄清问题<span class="oc-chip-count" id="ocQuestionsCount" aria-live="polite">0</span></button>
+              <button class="oc-chip oc-chip-report" id="ocReportAction" type="button">解析报告</button>
+            </div>
+            <!-- 任务执行进度宿主：只渲染看板桥播过来的 task-progress / task-completed /
+                 task-failed，按 taskId 去重；父壳不轮询后端、不改后端任务。 -->
+            <div class="oc-task-progress" id="ocTaskProgressHost" aria-live="polite" aria-label="任务执行进度"></div>
           </div>
         </div>
         <div class="oc-composer">
           <div class="oc-cinner">
+            <!-- ＋ 与「任务文件」：统一父壳唯一的输入区入口。＋ 打开固定菜单（不是临时
+                 浮层、不做坐标计算），四项能力只把语义化名字交给看板桥。 -->
             <div class="oc-inputbox">
+              <div class="oc-input-tools">
+                <button class="oc-ibtn" id="ocPlus" type="button" aria-label="补充资料与审查"
+                        aria-haspopup="menu" aria-expanded="false" aria-controls="ocCapabilityMenu">＋</button>
+                <button class="oc-files-action" id="ocFilesAction" type="button">
+                  <i class="ti ti-paperclip" aria-hidden="true"></i>
+                  <span class="oc-files-action-label">任务文件</span>
+                  <span class="oc-chip-count" id="ocFilesCount" aria-live="polite">—</span>
+                </button>
+              </div>
               <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向工艺评估助手描述需求…" aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
+            <nav class="oc-capability-menu" id="ocCapabilityMenu" role="menu"
+                 aria-label="补充资料与审查" hidden>
+              <button class="oc-capability-item" type="button" data-tech-capability="upload" role="menuitem">补充需求图纸</button>
+              <button class="oc-capability-item" type="button" data-tech-capability="evidence" role="menuitem">解析视图</button>
+              <button class="oc-capability-item" type="button" data-tech-capability="import3d" role="menuitem">导入已有 3D 模型</button>
+              <button class="oc-capability-item" type="button" data-tech-capability="review" role="menuitem">版本与校核审查</button>
+            </nav>
             <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
@@ -111,11 +140,12 @@
         <div class="tech-workspace-progress">
           <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
         </div>
-        <!-- 上下文小流程：位于业务卡片标题行内、与大流程 3、4 页面内部页签同一水平
-             位置并靠右排列，只有大流程 1、5 内部还有多步时才出现；其余大流程整行隐藏，
-             不会在顶部五大流程下方多出一条流程条。 -->
+        <!-- 业务卡片标题行：左侧固定大标题，右侧一行上下文小流程（大流程 3、4 渲染成
+             代理页签，active 来自看板 action-state）；#techContextNotice 只放看板桥的
+             未就绪 / 失败提示，不覆盖固定大标题。 -->
         <div class="tech-workspace-context" id="techContextHeader" hidden>
           <div class="tech-context-title" id="techContextTitle"></div>
+          <span class="tech-context-notice" id="techContextNotice" role="status" hidden></span>
           <div class="tech-substeps-slot">
             <nav class="tech-substeps-bar" id="techSubstepsBar" aria-label="当前大流程小流程" hidden></nav>
           </div>
@@ -156,8 +186,10 @@
   </div>
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
+  <!-- 父壳看板桥必须在 workbench 之前：底栏 / 左侧快捷操作都通过它发命令。 -->
+  <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
-  <script src="tech-workbench.js?v=twb10"></script>
-  <script src="agent-chat.js?v=20260819-match3"></script>
+  <script src="tech-workbench.js?v=twb11"></script>
+  <script src="agent-chat.js?v=20260910-board5"></script>
 </body>
 </html>

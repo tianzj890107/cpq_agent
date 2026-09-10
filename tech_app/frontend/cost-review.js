@@ -686,3 +686,40 @@ async function crStart() {
 }
 
 crStart();
+
+/* 统一看板协议：2.3 的测算与确认成本注册成语义化动作，内部页签注册成语义化视图。 */
+(function crRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  const crSetTab = (name) => { crTab = name; crRender(); };
+  window.TechBoardRuntime.registerActions({
+    runCostReview: {
+      label: '逐件测算并汇总',
+      run: async () => {
+        if (crBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
+        window.TechBoardRuntime.updateActionState('runCostReview', { busy: true });
+        try { await crRunAll(); return { ok: true }; }
+        finally { window.TechBoardRuntime.updateActionState('runCostReview', { busy: false }); }
+      },
+      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+    },
+    confirmCostReview: {
+      label: '确认成本',
+      run: async () => {
+        const button = $cr('crConfirm');
+        if (button && button.disabled) return { ok: false, error: { code: 'not-ready', message: '尚未测算完成，暂不能确认成本。' } };
+        await crConfirmCost();
+        return { ok: true };
+      },
+      getState: () => {
+        const button = $cr('crConfirm');
+        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: Boolean(crBusy) };
+      },
+    },
+  });
+  window.TechBoardRuntime.registerViews({
+    parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },
+    assembly: { run: () => crSetTab('assembly'), getState: () => ({ active: crTab === 'assembly' ? 'assembly' : null }) },
+    total: { run: () => crSetTab('total'), getState: () => ({ active: crTab === 'total' ? 'total' : null }) },
+    params: { run: () => crSetTab('params'), getState: () => ({ active: crTab === 'params' ? 'params' : null }) },
+  });
+})();

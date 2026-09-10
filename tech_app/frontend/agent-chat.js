@@ -7,9 +7,11 @@
  * 与页面的关系：
  *   - #intent 与 #btnParse 就在对话第一条消息里，因此 app.js 原有的赋值和点击
  *     绑定不用改动 —— 设计意图天然"出现在对话内容中"，开始解析按钮天然在它下方。
- *   - 补充需求图纸 / 技术文档与视图 / 导入已有模型 / 版本与校核审查 这几组能力的
- *     原始面板仍是 app.js 操作的那些 DOM，只是被移进右侧抽屉，由 ＋ 菜单打开。
- *   - 解析完成后，零件清单与待澄清问题以按钮形式出现在对话结果里，点开抽屉查看。
+ *   - 左侧 ＋ 能力菜单与零件清单 / 待澄清问题 / 解析报告 / 任务文件入口只负责导航：
+ *     统一工作台（tech-workbench.html）里把看板视图名交给 TechBoardBridge.navigateView；
+ *     独立 2.1 页没有父壳桥，由同页看板模块（window.TechBoardViews）就地打开同一份面板。
+ *   - 具体内容一律留在右侧看板内部：零件清单、待澄清问题、解析报告、解析视图、版本
+ *     与校核、任务文件都由看板（app.js）注册成视图后展开，父壳不再持有业务抽屉。
  */
 (() => {
   if (new URLSearchParams(location.search).has("embed")) return; // 统一工作台内嵌（embed=1）：会话宿主在父壳 techChatPane，子页不再自建/自连会话。
@@ -46,47 +48,11 @@
   };
   const scrollDown = () => { thread.scrollTop = thread.scrollHeight; };
 
-  // ---------------------------------------------------------------- 抽屉
-  const drawer = $("ocDrawer");
-  const backdrop = $("ocDrawerBackdrop");
-  const drawerTitle = $("ocDrawerTitle");
-  const drawerBody = $("ocDrawerBody");
-
-  // 抽屉分组：一个入口可能对应多个原有面板。
-  const DRAWER_GROUPS = {
-    upload: { title: "补充需求图纸", sections: ["secUpload"] },
-    evidence: { title: "解析视图", sections: ["secEvidence"] },
-    import3d: { title: "导入已有 3D 模型", sections: ["secImport3d"] },
-    review: { title: "版本与校核审查", sections: ["secVersions", "verificationDetails", "modelLookupDetails"] },
-    parts: { title: "零件清单", sections: ["secParts"] },
-    questions: { title: "待澄清问题", sections: ["secQuestions"] },
-  };
-
-  function openDrawer(key) {
-    const group = DRAWER_GROUPS[key];
-    if (!group || !drawer) return;
-    drawerTitle.textContent = group.title;
-    // 面板始终留在 DOM 里（app.js 持有它们的引用），只切换可见性。
-    drawerBody.querySelectorAll("[data-drawer-section]").forEach(section => {
-      const visible = group.sections.includes(section.id);
-      if (visible) section.removeAttribute("data-drawer-hidden");
-      else section.setAttribute("data-drawer-hidden", "true");
-      if (visible && section.tagName === "DETAILS") section.open = true;
-    });
-    drawer.hidden = false;
-    backdrop.hidden = false;
-    drawer.querySelector("[data-drawer-close]")?.focus();
-  }
-  function closeDrawer() {
-    if (!drawer) return;
-    drawer.hidden = true;
-    backdrop.hidden = true;
-  }
-  drawer?.querySelector("[data-drawer-close]")?.addEventListener("click", closeDrawer);
-  backdrop?.addEventListener("click", closeDrawer);
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape" && drawer && !drawer.hidden) closeDrawer();
-  });
+  // 统一工作台（tech-workbench.html）与独立 2.1 页共用本脚本。父壳只有
+  // #techChatPane 一个会话宿主，右侧九步看板是 iframe：父壳模式必须走持久控件 +
+  // 看板桥（TechBoardBridge）；独立打开 2.1 页时由同页看板模块就地打开同一份面板。
+  // 会话栏不承载任何业务抽屉 —— 零件、问题、报告、任务文件正文全部留在右侧看板。
+  const inUnifiedWorkbench = Boolean($("techChatPane"));
 
   // ---------------------------------------------------------------- 弹层
   let openPop = null;
@@ -155,7 +121,11 @@
         item.type = "button";
         item.append(el("div", null, label));
         item.append(el("div", "d", hint));
-        item.onclick = () => { closePop(); openDrawer(key); };
+        item.onclick = () => {
+          closePop();
+          // 独立 2.1 页没有父壳桥：同一套视图名交给本页看板模块就地打开。
+          boardNavigateView(TECH_BOARD_VIEW_ENTRIES[`capability:${key}`] || key, { label });
+        };
         pop.append(item);
       });
     });
@@ -464,15 +434,25 @@
   // ---------------------------------------------------------------- 解析联动
   // 单一解析入口：始终点 app.js 绑定的 #btnParse，避免出现第二套解析实现。
   function requestParse(origin) {
+    // 统一父壳里没有本页 #btnParse：解析动作属于右侧 2.1 看板，只发业务动作名。
+    if (inUnifiedWorkbench) {
+      if (origin === "Agent") noteInThread("Agent 已请求开始解析，平台流水线正在执行。");
+      const bridge = boardBridge();
+      if (!bridge) { pushSystem("当前还不能解析：右侧看板尚未就绪，请稍后重试。"); return; }
+      bridge.executeAction("parseDrawing", { label: "开始解析" }).catch(error => {
+        pushSystem(`开始解析失败：${(error && error.message) || "右侧看板未响应"}。`);
+      });
+      return;
+    }
     const button = $("btnParse");
     if (!button) return;
     if (button.disabled) {
       pushSystem("当前还不能解析：请先在 ＋ →「补充需求图纸」里上传需求原图并创建评估任务。");
-      openDrawer("upload");
       return;
     }
     if (origin === "Agent") noteInThread("Agent 已请求开始解析，平台流水线正在执行。");
-    button.click();
+    // 不制造第二次点击事件：直接调用 app.js 绑定在按钮上的同一份实现。
+    button.onclick?.();
   }
   function noteInThread(text) {
     clearEmpty();
@@ -505,10 +485,15 @@
   let hasParsedIR = false;
   function refreshResultChips() {
     if (!resultBox) return;
-    const parts = document.querySelectorAll("#tree .part").length;
-    const questions = document.querySelectorAll("#extras .extra-item, #extras .standard-item").length;
+    // 统一父壳：数量与可用状态只来自看板桥播报的解析摘要，不读 iframe DOM、
+    // 也不另拉一份零件 / 问题数据。
+    if (inUnifiedWorkbench) { applyDrawingResultSummary(); return; }
+    const tree = document.getElementById("tree");
+    const extras = document.getElementById("extras");
+    const parts = tree ? tree.querySelectorAll(".part").length : 0;
+    const questions = extras ? extras.querySelectorAll(".extra-item, .standard-item").length : 0;
     const hasTree = parts > 0;
-    const extrasText = ($("extras")?.textContent || "").trim();
+    const extrasText = (extras?.textContent || "").trim();
     const hasQuestions = questions > 0 || (extrasText && extrasText !== "暂无待澄清问题");
     // 只清掉上一轮生成的 chip，保留 #btnReport（原因见上）。
     for (const node of [...resultBox.children]) {
@@ -519,19 +504,21 @@
       resultBox.hidden = true;
       return;
     }
-    if (hasTree) resultBox.append(chip("零件清单", parts, "parts", false));
-    if (hasQuestions) resultBox.append(chip("待澄清问题", questions || "", "questions", true));
+    if (hasTree) resultBox.append(agentResultChip("零件清单", parts, "ocPartsAction", false));
+    if (hasQuestions) resultBox.append(agentResultChip("待澄清问题", questions || "", "ocQuestionsAction", true));
     // 排最后：前两个是"看某一部分结果"，解析报告是"看整份"，读下来是收束关系。
     if (reportButton) resultBox.append(reportButton);
     resultBox.hidden = false;
     tinner.append(resultBox);        // 置底
   }
-  function chip(label, count, drawerKey, warn) {
+  // 独立 2.1 页的结果按钮：仍复用同一张「控件 id ↔ 看板视图名」映射表，点击只发
+  // 看板视图导航，不再打开父壳抽屉。
+  function agentResultChip(label, count, entryKey, warn) {
     const button = el("button", `oc-chip${warn ? " warn" : ""}`);
     button.type = "button";
     button.append(document.createTextNode(label));
     if (count !== "" && count != null) button.append(el("span", "oc-chip-count", String(count)));
-    button.onclick = () => openDrawer(drawerKey);
+    button.onclick = () => boardNavigateView(TECH_BOARD_VIEW_ENTRIES[entryKey], { label });
     return button;
   }
 
@@ -571,6 +558,8 @@
   }
 
   async function loadFiles() {
+    // 统一父壳不读 /files：文件数量由看板桥播报，正文属于右侧看板。
+    if (inUnifiedWorkbench) return;
     if (!filesDock || !projectId) return;
     let manifest = { groups: [], total: 0, note: "" };
     try {
@@ -605,31 +594,58 @@
   // ------------------------------------------------------ Agent 处理过程
   // 解析、检索都跑在后台任务里，进度由 agent:task-progress 播过来；
   // 这里渲染成对话中的一条时间线，让每一步在干什么可见。
-  let processCard = null;
-  function ensureProcessCard(label) {
-    if (processCard && processCard.label === label && !processCard.done) return processCard;
+  // 统一的进度卡：按 taskId 去重，queued / running / succeeded / failed 四态；
+  // progress_log 只从游标增量追加，已经显示的中间步骤不会被覆盖。
+  // 统一父壳渲染进 #ocTaskProgressHost；独立 2.1 页没有该宿主时退回消息流。
+  const taskProgressCards = new Map();
+
+  function taskProgressHost() {
+    return $("ocTaskProgressHost") || tinner;
+  }
+  // 进度只展示业务语义：Key / Authorization / 请求头等敏感字段一律不进 DOM。
+  const SENSITIVE_TASK_KEYS = /^(api[-_]?key|authorization|headers|token|secret|password)$/i;
+  function sanitizeTaskDetail(detail) {
+    const out = {};
+    Object.keys(detail || {}).forEach(key => {
+      if (SENSITIVE_TASK_KEYS.test(key)) return;
+      out[key] = detail[key];
+    });
+    return out;
+  }
+  function taskStatusWord(status) {
+    return { queued: "排队中", running: "进行中", succeeded: "已完成", failed: "失败" }[status] || "进行中";
+  }
+  function ensureTaskCard(taskId, label) {
+    const key = String(taskId || label || "task");
+    const existing = taskProgressCards.get(key);
+    if (existing) return existing;
     clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "✦"));
-    const body = el("div", "oc-abody");
-    const card = el("div", "oc-process-card");
-    const head = el("div", "oc-process-head");
-    head.append(el("span", "oc-process-title", label));
-    const state = el("span", "oc-process-state", "进行中");
+    const host = taskProgressHost();
+    const box = el("div", "oc-task-card is-queued");
+    const head = el("div", "oc-task-head");
+    head.append(el("span", "oc-task-title", label));
+    const state = el("span", "oc-task-state", "排队中");
     head.append(state);
-    const steps = el("div", "oc-process-steps");
-    card.append(head, steps);
-    body.append(card);
-    wrap.append(body);
-    tinner.append(wrap);
+    const steps = el("div", "oc-task-steps");
+    box.append(head, steps);
+    let wrapper = box;
+    if (host === tinner) {
+      wrapper = el("div", "oc-amsg");
+      wrapper.append(el("div", "oc-aav", "✦"));
+      const body = el("div", "oc-abody");
+      body.append(box);
+      wrapper.append(body);
+    }
+    host.append(wrapper);
     scrollDown();
     // cursor：已渲染到 progress_log 的第几条。用下标而不是文本去重 ——
     // 同一句进度（比如两个零件都"库内无同类件"）本来就该出现两次。
-    processCard = { label, card, steps, state, done: false, cursor: 0 };
-    return processCard;
+    const card = { key, label, box, wrapper, steps, state, cursor: 0, status: "queued", done: false };
+    taskProgressCards.set(key, card);
+    return card;
   }
-  function pushProcessStep(text, tone) {
-    if (!processCard || !text) return;
+  function pushTaskStep(card, text, tone) {
+    if (!card || !text) return;
     // 后端用前导空格 + ↳ / · 表示「这一条是上一步的结果或依据」，
     // 前端据此缩进，动作与结果才分得开。
     const raw = String(text);
@@ -639,15 +655,54 @@
     step.append(el("span", "oc-process-dot",
       tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•"));
     step.append(el("span", "oc-process-text", body));
-    processCard.steps.append(step);
+    card.steps.append(step);
     scrollDown();
   }
-  function finishProcessCard(ok, text) {
-    if (!processCard || processCard.done) return;
-    processCard.done = true;
-    processCard.state.textContent = ok ? "已完成" : "失败";
-    processCard.state.classList.add(ok ? "ok" : "err");
-    if (text) pushProcessStep(text, ok ? "" : "err");
+  function setTaskStatus(card, status) {
+    if (!card || !status || card.status === status) return;
+    card.status = status;
+    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed");
+    card.box.classList.add(`is-${status}`);
+    card.state.textContent = taskStatusWord(status);
+  }
+  function renderTaskProgress(raw) {
+    const detail = sanitizeTaskDetail(raw);
+    const taskId = String(detail.taskId || detail.task_id || "");
+    const label = detail.label || "处理中";
+    const requested = String(detail.status || "running");
+    const status = requested === "completed" ? "succeeded" : requested;
+    const card = ensureTaskCard(taskId, label);
+    setTaskStatus(card, status);
+    const log = Array.isArray(detail.log) ? detail.log : [];
+    if (log.length > card.cursor) {
+      for (const entry of log.slice(card.cursor)) {
+        const line = String(entry || "").replace(/\s+$/, "");
+        if (line.trim()) pushTaskStep(card, line, toneOf(line));
+      }
+      card.cursor = log.length;
+    } else if (!log.length) {
+      // 兼容还没有 progress_log 的旧任务记录：退回单条进度。
+      const line = String(detail.progress || "").trim();
+      if (line && line !== card.lastFallback) {
+        card.lastFallback = line;
+        pushTaskStep(card, line, toneOf(line));
+      }
+    }
+    if (status === "succeeded") {
+      card.done = true;
+      refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
+      loadFiles();                   // 几何、2D 图、导出表格都是任务产出
+    }
+    if (status === "failed") {
+      card.done = true;
+      const message = detail.error || "任务失败";
+      if (!card.errorNode) {
+        card.errorNode = el("div", "oc-task-error", message);
+        card.box.append(card.errorNode);
+      } else {
+        card.errorNode.textContent = message;
+      }
+    }
   }
 
   function toneOf(line) {
@@ -668,34 +723,8 @@
   // 这里只负责把新报告画出来 —— 不重新发起检索，避免和后端各跑一遍。
   window.addEventListener("agent:component-match-updated", () => { renderComponentMatch(); });
 
-  window.addEventListener("agent:task-progress", event => {
-    const detail = event.detail || {};
-    const card = ensureProcessCard(detail.label || "处理中");
-    // 后端把进度存成只增不改的日志，这里从上次的游标接着渲染，
-    // 一次轮询里后端走了多少步就补多少步 —— 中间步骤不会因为轮询间隔被吞掉。
-    const log = Array.isArray(detail.log) ? detail.log : [];
-    if (log.length > card.cursor) {
-      for (const raw of log.slice(card.cursor)) {
-        const line = String(raw || "").replace(/\s+$/, "");
-        if (line.trim()) pushProcessStep(line, toneOf(line));
-      }
-      card.cursor = log.length;
-    } else if (!log.length) {
-      // 兼容还没有 progress_log 的旧任务记录：退回单条进度。
-      const line = String(detail.progress || "").trim();
-      if (line && line !== card.lastFallback) {
-        card.lastFallback = line;
-        pushProcessStep(line, toneOf(line));
-      }
-    }
-    if (detail.status === "succeeded") {
-      finishProcessCard(true);
-      refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
-      // 几何、2D 图、导出表格都是任务产出，跑完就该出现在文件小窗里。
-      loadFiles();
-    }
-    if (detail.status === "failed") finishProcessCard(false, detail.error || "任务失败");
-  });
+  // 后端任务进度 → 统一进度卡（统一父壳也由看板桥播报，独立页沿用原有事件）。
+  window.addEventListener("agent:task-progress", event => renderTaskProgress(event.detail || {}));
 
   // ------------------------------------------------------ 零部件库检索结果
   async function renderComponentMatch() {
@@ -804,6 +833,310 @@
     return row;
   }
 
+  // ---------------------------------------------------------------- 看板桥（统一父壳）
+  // 统一父壳里，左侧会话只做汇总与分派：2.1 的零件 / 问题 / 报告 / 文件
+  // 数量全部来自右侧看板经 TechBoardBridge 播回来的 result-summary 与
+  // action-state；父壳不读 iframe DOM，也不另拉一份业务数据。看板阶段（stage）为
+  // 'drawing' 时展示 2.1 的能力与结果入口；其余阶段（流程 1、5 的会话上下文由
+  // 父壳 syncAgentStageContext() 注入）禁用并隐藏这些入口，但卡片节点绝不删除。
+  const CAPABILITY_LABELS = {
+    upload: "补充需求图纸", evidence: "解析视图", import3d: "导入已有 3D 模型",
+    review: "版本与校核审查", parts: "零件清单", questions: "待澄清问题",
+    report: "解析报告", files: "任务文件",
+  };
+  const capabilityMenu = $("ocCapabilityMenu");
+  const capabilityItems = capabilityMenu ? [...capabilityMenu.querySelectorAll("[data-tech-capability]")] : [];
+  const partsActionButton = $("ocPartsAction");
+  const questionsActionButton = $("ocQuestionsAction");
+  const reportActionButton = $("ocReportAction");
+  const filesActionButton = $("ocFilesAction");
+  const boardFilesCount = $("ocFilesCount");
+  // 摘要按 stage 记忆：切换大流程后上一阶段的解析摘要不能继续显示。
+  let boardResultSummary = null;
+  if (capabilityMenu) capabilityMenu.tabIndex = -1;
+
+  function boardBridge() {
+    return (window.TechBoardBridge && typeof window.TechBoardBridge.snapshot === "function")
+      ? window.TechBoardBridge : null;
+  }
+  function boardStage() {
+    const bridge = boardBridge();
+    const snapshot = bridge ? bridge.snapshot() : null;
+    return String((snapshot && snapshot.stage) || "");
+  }
+
+  const plusButton = $("ocPlus");
+
+  function firstEnabledCapability() {
+    return capabilityItems.find(item => !item.disabled && !item.hidden) || null;
+  }
+  function closeCapabilityMenu(restoreFocus) {
+    if (capabilityMenu && !capabilityMenu.hidden) capabilityMenu.hidden = true;
+    if (plusButton) plusButton.setAttribute("aria-expanded", "false");
+    if (restoreFocus && plusButton) plusButton.focus();
+  }
+  function openCapabilityMenu() {
+    if (!capabilityMenu || !plusButton) return;
+    capabilityMenu.hidden = false;
+    plusButton.setAttribute("aria-expanded", "true");
+    // 打开后焦点进入第一个可用菜单项，键盘用户不用再 Tab 才能进菜单。
+    (firstEnabledCapability() || capabilityMenu).focus();
+  }
+  function toggleCapabilityMenu() {
+    if (!capabilityMenu) return;
+    if (capabilityMenu.hidden) openCapabilityMenu();
+    else closeCapabilityMenu(true);
+  }
+
+  // 左侧会话栏的入口 → 看板视图：显式、单一来源的映射表。键就是左侧控件（结果
+  // 按钮 / 任务文件用控件 id），＋ 菜单项用 capability:<name>；值是看板视图名。
+  const TECH_BOARD_VIEW_ENTRIES = {
+    ocPartsAction: 'parts',
+    ocQuestionsAction: 'questions',
+    ocReportAction: 'report',
+    'capability:evidence': 'evidence',
+    'capability:review': 'review',
+    ocFilesAction: 'files',
+  };
+
+  // 独立 2.1 页由同页看板模块（app.js 注册的 window.TechBoardViews）就地打开面板；
+  // 统一父壳里没有它，走 TechBoardBridge。
+  function boardLocalViews() {
+    return (window.TechBoardViews && typeof window.TechBoardViews.open === "function")
+      ? window.TechBoardViews : null;
+  }
+  function boardNavigateBridge() {
+    const bridge = boardBridge();
+    return (bridge && typeof bridge.navigateView === "function") ? bridge : null;
+  }
+  // 当前视图只从看板桥快照读，父壳不建第二份状态副本。
+  function activeBoardView() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.snapshot !== "function") return "";
+    try {
+      const snapshot = bridge.snapshot();
+      return String((snapshot && snapshot.view && snapshot.view.active) || "");
+    } catch (error) { return ""; }
+  }
+  function boardEntryNodes() {
+    const pairs = [
+      ["ocPartsAction", "parts"], ["ocQuestionsAction", "questions"],
+      ["ocReportAction", "report"], ["ocFilesAction", "files"],
+    ].map(([nodeId, fallback]) => [$(nodeId), TECH_BOARD_VIEW_ENTRIES[nodeId] || fallback]);
+    capabilityItems.forEach(item => pairs.push([
+      item, TECH_BOARD_VIEW_ENTRIES[`capability:${item.dataset.techCapability}`] || item.dataset.techCapability,
+    ]));
+    return pairs.filter(([node]) => Boolean(node));
+  }
+  // 左侧入口高亮跟随看板回传的 view.active；active 只来自协议，不自行猜测。
+  function syncBoardViewActive() {
+    const active = activeBoardView();
+    boardEntryNodes().forEach(([node, view]) => {
+      const on = Boolean(active) && view === active;
+      node.classList.toggle("is-active", on);
+      if (on) node.setAttribute("aria-current", "true");
+      else node.removeAttribute("aria-current");
+    });
+  }
+
+  // 失败可见、可重试：把真实原因写进会话，并给一个重发同一视图 / 同一 payload 的按钮。
+  function showBoardNavFailure(view, payload, error) {
+    const label = (payload && payload.label) || CAPABILITY_LABELS[view] || view || "该视图";
+    const reason = (error && error.message) || "看板未响应";
+    noteInThread(`打开「${label}」失败：${reason}。`);
+    const retry = el("button", "oc-chip oc-chip-retry", "重试");
+    retry.type = "button";
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      Promise.resolve(boardNavigateView(view, payload)).finally(() => { retry.disabled = false; });
+    });
+    const row = el("div", "oc-retry-row");
+    row.append(retry);
+    (tinner || thread).append(row);
+    scrollDown();
+  }
+
+  // 唯一导航出口：所有左侧入口都只经这里把看板视图名发出去。桥缺失 / 未就绪 /
+  // 业务失败都给出可见提示，绝不静默失败。
+  function boardNavigateView(view, payload) {
+    if (!view) { pushSystem("无法打开看板视图：缺少视图名。"); return null; }
+    const body = Object.assign(
+      { label: (payload && payload.label) || CAPABILITY_LABELS[view] || view },
+      payload || {});
+    const bridge = boardNavigateBridge();
+    if (bridge) {
+      return Promise.resolve(bridge.navigateView(view, body)).catch(error => {
+        showBoardNavFailure(view, body, error);
+        return null;
+      });
+    }
+    const local = boardLocalViews();
+    if (local) {
+      try {
+        return Promise.resolve(local.open(view, body)).catch(error => {
+          showBoardNavFailure(view, body, error);
+          return null;
+        });
+      } catch (error) { showBoardNavFailure(view, body, error); return null; }
+    }
+    pushSystem(`「${body.label}」暂不可用：看板尚未就绪，请等待右侧步骤加载完成后重试。`);
+    return null;
+  }
+
+  // 统一分派：＋ 的四个能力入口与任务文件按钮只把语义化名字交给同一条导航出口；
+  // 不查找 #secUpload 等旧面板，也不另起一套业务数据。
+  function dispatchDrawingCapability(name, payload) {
+    const label = CAPABILITY_LABELS[name] || name;
+    const view = TECH_BOARD_VIEW_ENTRIES[`capability:${name}`] || name;
+    const bridge = boardBridge();
+    if (bridge && typeof bridge.navigateView !== "function") pushSystem(`「${label}」暂不可用：看板桥不支持视图导航。`);
+    else if (bridge && typeof bridge.isReady === "function" && !bridge.isReady()) pushSystem(`「${label}」暂不可用：右侧看板尚未就绪，请稍后重试。`);
+    return boardNavigateView(view, Object.assign({ capability: name, label }, payload || {}));
+  }
+
+  function setChipCount(node, count) {
+    if (!node) return;
+    // 只改文本，不重建节点，也不抢输入焦点；数字变化可被 aria-live 读屏感知。
+    const next = Number(count) > 0 ? String(Math.floor(Number(count))) : "0";
+    if (node.textContent !== next) node.textContent = next;
+  }
+
+  // 解析摘要 → 左侧结果入口。数量只来自看板桥；没有结果时整组隐藏，
+  // 有结果时把同一个 #ocResultActions 节点 append 到消息流末尾（append 已存在
+  // 节点是“移动”，不会出现第二份）。
+  function applyDrawingResultSummary() {
+    const stage = boardStage();
+    const isDrawing = stage === "drawing";
+    const summary = (boardResultSummary && boardResultSummary.stage === stage) ? boardResultSummary : null;
+    const results = (summary && summary.results) || null;
+    const partInfo = (isDrawing && results && results.parts) || {};
+    const questionInfo = (isDrawing && results && results.questions) || {};
+    const reportInfo = (isDrawing && results && results.report) || {};
+    const fileInfo = (results && results.files) || {};
+    const showParts = partInfo.available === true;
+    const showQuestions = questionInfo.available === true;
+    const showReport = reportInfo.available === true;
+    setChipCount($("ocPartsCount"), partInfo.count);
+    setChipCount($("ocQuestionsCount"), questionInfo.count);
+    if (partsActionButton) partsActionButton.disabled = !showParts;
+    if (questionsActionButton) questionsActionButton.disabled = !showQuestions;
+    if (reportActionButton) reportActionButton.disabled = !showReport;
+    if (boardFilesCount) {
+      const total = Number(fileInfo.count) > 0 ? String(Math.floor(Number(fileInfo.count))) : "—";
+      if (boardFilesCount.textContent !== total) boardFilesCount.textContent = total;
+    }
+    // 能力入口是 2.1 专属：其它阶段关菜单并禁用，切回 drawing 按最新状态恢复。
+    capabilityItems.forEach(item => { item.disabled = !isDrawing; });
+    if (plusButton) plusButton.disabled = !isDrawing;
+    if (!isDrawing) closeCapabilityMenu(false);
+    const resultActions = $("ocResultActions");
+    if (!resultActions) return;
+    const anyResult = isDrawing && (showParts || showQuestions || showReport);
+    resultActions.hidden = !anyResult;
+    if (anyResult && tinner && tinner.lastElementChild !== resultActions) tinner.append(resultActions);
+  }
+
+  function normalizeBoardSummary(payload) {
+    const source = (payload && (payload.summary || payload.results)) || payload || {};
+    const results = source.results || source;
+    const cell = value => (value && typeof value === "object" ? value : {});
+    return {
+      stage: String(source.stage || (payload && payload.stage) || boardStage() || ""),
+      parsed: source.parsed === true,
+      results: {
+        parts: { count: cell(results.parts).count, available: cell(results.parts).available === true },
+        questions: { count: cell(results.questions).count, available: cell(results.questions).available === true },
+        report: { available: cell(results.report).available === true },
+        files: { count: cell(results.files).count, available: cell(results.files).available === true },
+      },
+    };
+  }
+
+  // 看板就绪后主动要一次解析摘要（result-summary）：左侧计数 / 可用态只来自看板，
+  // 而不是父壳自己猜。刷新动作由看板侧注册（app.js 的 refreshData）。
+  function requestBoardSummary() {
+    const bridge = boardNavigateBridge();
+    if (!bridge || typeof bridge.refreshData !== "function") return;
+    try {
+      Promise.resolve(bridge.refreshData({ action: "refreshData", label: "刷新看板摘要" }))
+        .catch(() => { /* 摘要刷新失败不影响会话本体 */ });
+    } catch (error) { /* 桥异常不影响会话本体 */ }
+  }
+
+  // 看板状态驱动左侧：就绪 / 动作状态 / 进度 / 选中 全部来自协议消息，
+  // 父壳不做 setInterval + DOM 探测。无看板桥时安全退出。
+  function bindBoardBridge() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.subscribe !== "function") return;
+    bridge.subscribe(event => {
+      const name = String((event && (event.name || event.type)) || "");
+      const payload = (event && event.payload) || {};
+      if (name === "result-summary" || name === "summary") {
+        boardResultSummary = normalizeBoardSummary(payload);
+        applyDrawingResultSummary();
+        return;
+      }
+      if (name === "task-progress") { renderTaskProgress(payload); return; }
+      if (name === "task-completed") {
+        renderTaskProgress(Object.assign({}, payload, { status: "succeeded" }));
+        return;
+      }
+      if (name === "task-failed") {
+        renderTaskProgress(Object.assign({}, payload, { status: "failed" }));
+        return;
+      }
+      if (name === "attached") { boardResultSummary = null; applyDrawingResultSummary(); return; }
+      if (name === "detached") {
+        boardResultSummary = null;
+        taskProgressCards.clear();
+        applyDrawingResultSummary();
+        return;
+      }
+      if (name === "ready" || name === "action-state" || name === "selection-changed") {
+        applyDrawingResultSummary();
+        syncBoardViewActive();
+        if (name === "ready") requestBoardSummary();
+      }
+    });
+    try { applyDrawingResultSummary(); } catch { /* 看板桥尚未就绪时忽略 */ }
+    try { syncBoardViewActive(); } catch { /* 入口高亮依赖看板快照，失败时忽略 */ }
+    // 父壳可能在本脚本订阅之前就已经 ready：这里补一次摘要请求，避免左侧一直空着。
+    try {
+      const snapshot = bridge && typeof bridge.snapshot === "function" ? bridge.snapshot() : null;
+      if (snapshot && snapshot.attached) requestBoardSummary();
+    } catch { /* 桥快照不可用时忽略 */ }
+  }
+
+  // 上下文菜单与结果按钮统一绑定：只分派语义化能力名，不拆业务。
+  plusButton?.addEventListener("click", event => {
+    event.stopPropagation();
+    if (inUnifiedWorkbench) toggleCapabilityMenu();
+    else plusMenu(event.currentTarget);
+  });
+  capabilityItems.forEach(item => {
+    item.addEventListener("click", () => {
+      closeCapabilityMenu(false);
+      dispatchDrawingCapability(item.dataset.techCapability, {});
+    });
+  });
+  document.addEventListener("click", event => {
+    if (!capabilityMenu || capabilityMenu.hidden) return;
+    if (capabilityMenu.contains(event.target)) return;
+    if (plusButton && plusButton.contains(event.target)) return;
+    closeCapabilityMenu(false);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && capabilityMenu && !capabilityMenu.hidden) closeCapabilityMenu(true);
+  });
+  // 任务文件入口沿用同一张映射表与唯一出口。
+  filesActionButton?.addEventListener("click", () => dispatchDrawingCapability("files", {}));
+  // 三颗结果按钮：控件 id ↔ 看板视图名成对登记，点击只把视图名交给唯一出口。
+  [["ocPartsAction", "parts"], ["ocQuestionsAction", "questions"], ["ocReportAction", "report"]]
+    .forEach(([nodeId, view]) => {
+      const target = TECH_BOARD_VIEW_ENTRIES[nodeId] || view;
+      $(nodeId)?.addEventListener("click", () => boardNavigateView(target, { label: CAPABILITY_LABELS[target] }));
+    });
+
   // ---------------------------------------------------------------- 绑定
   sendBtn.onclick = send;
   input.addEventListener("input", autoSize);
@@ -814,7 +1147,6 @@
     event.stopPropagation();
     settingsPanel(event.currentTarget);
   });
-  $("ocPlus")?.addEventListener("click", event => { event.stopPropagation(); plusMenu(event.currentTarget); });
   // 右侧悬浮小窗能折叠成一条标题栏，让出工作区。左边已换成 56px 导航条
   // （tech-rail.css），本身就不占宽度，没有折叠开关 —— 这里保留可选链，
   // 是因为上游/旧页面里那个开关可能还在。
@@ -842,7 +1174,7 @@
     } catch (error) { pushSystem(`重置任务失败：${error.message}`); return; }
     // 设计意图卡是页面结构的一部分，必须保留，只清消息。
     tinner.querySelectorAll(".oc-amsg, .oc-ubub").forEach(node => node.remove());
-    processCard = null;
+    taskProgressCards.clear();
     hasParsedIR = false;
     resultBox && (resultBox.hidden = true);
     noteInThread(`本次任务已重置（清除 ${(result.cleared || []).length} 项结果）。`
@@ -917,9 +1249,6 @@
     openSettings: (anchor) => settingsPanel(anchor),
     setStageContext: (context) => setStageContext(context),
   };
-  document.querySelectorAll("[data-open-drawer]").forEach(button => {
-    button.addEventListener("click", () => openDrawer(button.dataset.openDrawer));
-  });
 
   $("ocFilesRefresh")?.addEventListener("click", () => loadFiles());
 
@@ -930,6 +1259,8 @@
   refreshTechShellModel();
   // 父壳（tech-workbench.js）先于本脚本执行，其阶段上下文放在全局供这里首次承接。
   setStageContext(window.ocTechStageContext || null);
+  // 父壳模式下订阅看板状态：ready / action-state / result-summary / task-* 驱动左侧入口。
+  if (inUnifiedWorkbench) bindBoardBridge();
   if (projectId) loadMeta();
   else {
     techShellConn("未连接", false);
