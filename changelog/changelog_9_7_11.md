@@ -154,6 +154,11 @@
 - 四组步骤控件统一浅色选中态：顶部五大流程与新增小流程均为白底/浅蓝底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover 与 focus-visible 都不会翻成深色填充；`.ai-tabs button.active`（组装与整合、成本测算页签共用）与 `.inline-analysis-tabs button.active` 同步改为白底蓝字蓝边框。完成态只保留对勾与浅绿边框，按钮主体不做深色填充。
 - 资源版本号：`tech-workbench.css/js` → `twb7`，成本测算页引用的 `assembly-integration.css` 对齐到 `ai7`，`inline-analysis.css` → `flat6`。（第 17 节口径修订时 `tech-workbench.css` 与 `tech-workbench.js` 一并提升到 `twb8`。）
 - 本地验证：`tests.test_tech_context_substeps_and_frame_status_red` 7/7 通过，组装页签/禁用态/按钮主次/模型入口四组 Red 24/24 通过，全量 `unittest discover` 86/86 通过；`py_compile`、`node --check`（tech-workbench.js、assembly-integration.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本节改动未提交。
+
+## 19. 技术工艺五步统一标题行（9-10）
+
+- 新增五步统一标题行 Spec 与 Red 测试：标题固定为“工艺评估需求、图纸解析、组装与整合、成本测算、工艺评估报告”，不再拼接动态项目名、阶段编号、状态徽标、文件名或错误正文。
+- 统一流程 1、3、4、5 的分步骤位置到同一标题行右侧，流程 2 无分步骤；隐藏嵌入子页面重复标题、状态徽标和第二份页签，保留真实状态/错误在内容区及所有原业务交互，等待 DeepSeek 实现。
 - 口径修订（同节内完成）：流程 1、5 的小流程按钮不再作为顶部五大流程下方的独立横条，改为业务卡片标题行 `#techContextHeader` 内与标题同级、靠右排列的 `#techSubstepsBar`，尺寸/间距/胶囊样式与流程 3、4 页面内部页签一致；文案去掉 1.1/1.2/1.3 和 5.1/5.2/5.3，只保留“创建/确认/审核”与“汇总结果/结果审核/发布并回传报价”，按钮与提示文案都不再显示内部小步编号（底栏 `#techNowLabel` 改显示内部步骤名称）。九个内部 stage id、URL、九阶段前后流转与 `applyStage()` 代理逻辑不变。
 
 ## 18. 技术工艺 Agent 多提供商可用性（9-10）
@@ -174,3 +179,9 @@
 - 远端地址校验扩展为逐远端校验推送地址：`origin` 的 pushurl 必须是 GitHub 地址，`gitlab` 必须是 GitLab 地址；本地已清理 `origin` 上重复的 GitLab pushurl（`git remote set-url --delete --push origin git@gitlab.boulderaitech.com...`），使 `git push origin` 只指向 GitHub，双推统一由脚本显式同时推送两个远端。
 - 同步更新工作流契约与文档：`tests/test_repository_workflow_contract.py` 改为校验双远端地址与 `--only` 补推、且脚本不得出现 force push；`AGENTS.md` 的拉取/推送、`push` 动作映射、推送后回读、部分失败补推和最终回复分类口径，以及 `docs/gitlab-workflow.md` 的分支模型与命令说明一并改为双远端口径。第 9 节“推送链路收敛到 GitLab”作为历史记录保留。
 - 本地验证：`tests.test_repository_workflow_contract` 9/9 通过；实际执行 `python3 scripts/push_remotes.py --check` 与双推后，`git ls-remote gitlab refs/heads/20260909` 与 `git ls-remote origin refs/heads/20260909` 均回读到同一 HEAD。未创建 MR/tag/Release，未部署。
+
+## 20. 技术工艺五步统一标题行 Spec 与 Red 基线（9-10）
+
+- 新增 `docs/specs/tech-unified-stage-title-row.md`：右侧五个大流程只保留一条统一业务标题行（`工艺评估需求`、`图纸解析`、`组装与整合`、`成本测算`、`工艺评估报告`），标题不得拼接项目/设备名称、内部编号、文件名、动态报告标题或 `创建中`/`就绪`/`读取中…` 等状态徽标；分步骤统一放到标题行右侧同一水平线（流程 2 右侧为空），流程 3、4 的子页面页签由父壳同源代理到同一行，iframe 内不再保留第二份可见标题、状态徽标或页签；active 页签沿用白底蓝字蓝边框。
+- 新增 `tests/test_tech_unified_stage_title_row_red.py` 作为实现前基线：当前 7 项中 4 项通过、3 项预期失败（固定标题映射、标题行对大流程 2–5 恒可见、流程 3/4 页签代理到统一标题行）。测试只做静态契约检查，未删除或弱化任何既有 Red 测试。
+- 该基线尚未实现，全量 `unittest discover` 现为 106 项中 3 项失败（全部来自本节新增 Red），其余 103 项通过（2 跳过）。本节只交付 Spec 与 Red 测试，未改动任何前端实现、后端逻辑、接口或数据。
