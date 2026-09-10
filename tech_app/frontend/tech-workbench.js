@@ -157,33 +157,79 @@
     if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= STAGES.length - 1;
   }
 
+  // 任务显示优先级：title → source_label → task_kind_label → task_no → 关联任务。
+  function taskDisplayName(task) {
+    if (!task) return '';
+    return String(task.title || task.source_label || task.task_kind_label || task.task_no || '').trim();
+  }
+
+  // 右上角项目区展示业务名称；原始 project / task id 只放进 tooltip，不做主文字。
+  function renderProjectLabel() {
+    const label = $('techProjectLabel');
+    if (!label) return;
+    if (!state.project) {
+      label.textContent = '未绑定项目';
+      label.title = '';
+      return;
+    }
+    const known = projectNames.get(state.project) || {};
+    const projectName = known.project || '未命名项目';
+    const taskName = state.taskId ? (known.task || '') : '';
+    label.textContent = taskName ? `${projectName} · ${taskName}` : projectName;
+    label.title = `project=${state.project}` + (state.taskId ? ` task_id=${state.taskId}` : '');
+  }
+
   function updateProjectLabel() {
     const label = $('techProjectLabel');
     if (!label) return;
     const project = state.project;
+    const taskId = state.taskId;
     if (!project) {
       label.textContent = '未绑定项目';
+      label.title = '';
       return;
     }
-    const suffix = state.taskId ? ` · 任务 ${state.taskId}` : '';
-    const known = projectNames.get(project);
-    if (known) {
-      label.textContent = known + suffix;
+    const cached = projectNames.get(project);
+    if (cached && cached.project && (!taskId || cached.task)) {
+      renderProjectLabel();
       return;
     }
-    label.textContent = `项目 ${project}${suffix}`;
-    fetch(`/api/projects/${encodeURIComponent(project)}`, { headers: authHeaders() })
-      .then((response) => response.ok ? response.json() : null)
-      .then((data) => {
-        if (!data) return;
-        const name = data.project_name || data.name || data.device_name || data.source_filename || '';
-        if (name && state.project === project) {
-          projectNames.set(project, name);
-          const current = $('techProjectLabel');
-          if (current) current.textContent = name + (state.taskId ? ` · 任务 ${state.taskId}` : '');
-        }
-      })
-      .catch(() => {});
+    label.textContent = '加载项目…';
+    label.title = `project=${project}` + (taskId ? ` task_id=${taskId}` : '');
+    resolveProjectNames(project, taskId);
+  }
+
+  // 项目元数据在 /api/projects/{id} 的 meta 里，需求标题在 /requirement.requirement.title，
+  // 任务名称在 /wf/task.task；三者并行取，失败不清掉已拿到的名称。
+  async function resolveProjectNames(project, taskId) {
+    const id = encodeURIComponent(project);
+    const [projectData, requirementData, taskData] = await Promise.all([
+      fetch(`/api/projects/${id}`, { headers: authHeaders() })
+        .then((response) => response.ok ? response.json() : null).catch(() => null),
+      fetch(`/api/projects/${id}/requirement`, { headers: authHeaders() })
+        .then((response) => response.ok ? response.json() : null).catch(() => null),
+      taskId
+        ? fetch(`/wf/task?task_id=${encodeURIComponent(taskId)}`, { headers: authHeaders() })
+          .then((response) => response.ok ? response.json() : null).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    // 竞态：返回时用户可能已经切了项目 / 任务，晚到的结果不能覆盖当前目标。
+    if (state.project !== project || state.taskId !== taskId) return;
+    const entry = projectNames.get(project) || {};
+    const data = projectData || {};
+    const requirement = (requirementData && requirementData.requirement) || {};
+    const projectName = String(
+      (data.meta && data.meta.project_name)
+      || (requirement && requirement.title)
+      || (data.meta && data.meta.device_name)
+      || (data.meta && data.meta.source_filename)
+      || '').trim();
+    if (projectName) entry.project = projectName;
+    const task = (taskData && taskData.task) || null;
+    const taskName = taskDisplayName(task);
+    if (taskName) entry.task = taskName;
+    if (entry.project || entry.task) projectNames.set(project, entry);
+    renderProjectLabel();
   }
 
   /* ---------------------------------------------------------- 状态区 */
@@ -287,6 +333,9 @@
     const actions = STAGE_ACTIONS[state.stage] || null;
     const primary = $('techPrimary');
     const secondary = $('techSecondary');
+    // 每次同步先清掉上一轮角色 class，避免切换 stage 或子页面重建后残留。
+    if (primary) primary.classList.remove('is-filled', 'is-outline');
+    if (secondary) secondary.classList.remove('is-filled', 'is-outline');
     if (!actions) {
       if (primary) primary.hidden = true;
       if (secondary) secondary.hidden = true;
@@ -297,6 +346,21 @@
     const probe = (selector) => {
       try { return doc && doc.querySelector(selector); } catch (e) { return null; }
     };
+    // 2.2「组装与整合」：按子页面真实产出反转主次 —— 参数推荐与组装工艺都已生成时，
+    // 主操作才是「确认工艺并发送财务」；只生成一项、busy、失败或尚未分析时，
+    // 主操作仍是「开始整合分析」。状态来自子页面 dataset，不按按钮文案猜测，
+    // 也不等同于 #aiToFinance 是否可点（确认闸门仍由子页面自己控制）。
+    if (state.stage === 'process' && primary && secondary) {
+      const analyzed = Boolean(doc && doc.body && doc.body.dataset
+        && doc.body.dataset.integrationAnalyzed === 'true');
+      if (analyzed) {
+        primary.classList.add('is-filled');
+        secondary.classList.add('is-outline');
+      } else {
+        secondary.classList.add('is-filled');
+        primary.classList.add('is-outline');
+      }
+    }
     if (primary) {
       primary.hidden = !actions.primary;
       if (actions.primary) {
@@ -425,6 +489,80 @@
   }
   setInterval(() => syncActionBar(), 2500);
 
+  /* ---------------------------------------------------------- 模型设置
+   * 右上角模型文字与左侧「设置」共用同一个打开函数，卡片内容复用
+   * llm-settings-panel.js（与首页、报价助手是同一份表单），不复制第二套。
+   * 保存后立即刷新右上角模型文字；权限只读态由接口的 editable / secrets_editable 决定。 */
+  function techModelLabel(settings) {
+    const options = (settings && settings.text_options) || [];
+    const id = String((settings && settings.text_model) || '').trim();
+    const found = options.find((item) => item && item.id === id);
+    return (found && found.label) || id || '未配置模型';
+  }
+  async function refreshTechModelLabel() {
+    const node = $('techModelInfo');
+    if (!node) return;
+    try {
+      let settings = null;
+      if (window.LlmSettingsPanel && typeof window.LlmSettingsPanel.load === 'function') {
+        settings = await window.LlmSettingsPanel.load();
+      } else {
+        const response = await fetch('/api/llm/settings', { headers: authHeaders() });
+        settings = await response.json().catch(() => ({}));
+      }
+      const label = techModelLabel(settings);
+      node.textContent = label === '未配置模型' ? label : `· ${label}`;
+    } catch (error) {
+      node.textContent = '· 未配置模型';
+    }
+  }
+
+  let techSettingsPop = null;
+  function closeTechSettings() {
+    if (!techSettingsPop) return;
+    techSettingsPop.remove();
+    techSettingsPop = null;
+    document.removeEventListener('click', closeTechSettings);
+    document.removeEventListener('keydown', onTechSettingsKey);
+  }
+  function onTechSettingsKey(event) {
+    if (event.key === 'Escape') closeTechSettings();
+  }
+  function openTechModelSettings(anchor) {
+    if (!window.LlmSettingsPanel || typeof window.LlmSettingsPanel.mount !== 'function') {
+      setStateView('error', '设置未就绪', '模型设置面板尚未加载，请稍后重试。');
+      return;
+    }
+    closeTechSettings();
+    const pop = document.createElement('div');
+    pop.className = 'tech-model-settings';
+    pop.id = 'techModelSettings';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', '技术工艺模型设置');
+    // 点卡片内部（下拉、输入框）不关闭；点外部或按 Esc 关闭。
+    pop.addEventListener('click', (event) => event.stopPropagation());
+    const host = document.createElement('div');
+    host.className = 'llm-set-host';
+    pop.append(host);
+    document.body.append(pop);
+    const rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    const width = pop.offsetWidth || Math.min(420, window.innerWidth - 24);
+    const height = pop.offsetHeight || 420;
+    const left = rect ? Math.max(8, Math.min(rect.left, window.innerWidth - width - 12)) : 24;
+    const below = rect ? rect.bottom + 8 : 24;
+    const top = below + height <= window.innerHeight
+      ? below
+      : Math.max(8, (rect ? rect.top : 24) - height - 8);
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+    techSettingsPop = pop;
+    window.LlmSettingsPanel.mount(host, { onSaved: () => refreshTechModelLabel() });
+    setTimeout(() => {
+      document.addEventListener('click', closeTechSettings);
+      document.addEventListener('keydown', onTechSettingsKey);
+    }, 0);
+  }
+
   /* ---------------------------------------------------------- 左侧导航
    * Logo / 返回主页是普通链接；新对话复用 agent-chat 的会话重置能力（ocTechAgent），
    * 消息与账户复用 cpqMsg / cpqAuth，设置复用与报价助手同一份模型设置面板。 */
@@ -448,13 +586,9 @@
       if (window.cpqMsg && typeof window.cpqMsg.open === 'function') window.cpqMsg.open();
     });
     const settings = $('techSettings');
-    if (settings) settings.addEventListener('click', () => {
-      if (window.ocTechAgent && typeof window.ocTechAgent.openSettings === 'function') {
-        window.ocTechAgent.openSettings(settings);
-      } else {
-        setStateView('error', '设置未就绪', '模型设置面板尚未加载，请稍后重试。');
-      }
-    });
+    if (settings) settings.addEventListener('click', () => openTechModelSettings(settings));
+    const modelTrigger = $('techModelInfo');
+    if (modelTrigger) modelTrigger.addEventListener('click', () => openTechModelSettings(modelTrigger));
     const auth = $('techAuthBtn');
     if (auth) auth.addEventListener('click', () => {
       if (window.cpqAuth && typeof window.cpqAuth.open === 'function') window.cpqAuth.open();
@@ -584,5 +718,6 @@
   renderTop();
   mountStageFrame();
   bindTechNav();
+  refreshTechModelLabel();
   if (state.project) refreshProgress();
 })();

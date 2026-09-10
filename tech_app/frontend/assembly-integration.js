@@ -178,7 +178,7 @@ function aiRenderActions() {
   const host = $ai('aiActions');
   if (!host) return;
   if (aiTab === 'drawings') {
-    host.innerHTML = `<button type="button" class="inline-action primary start-parse-btn" id="aiUploadBtn">上传整合图纸</button>`
+    host.innerHTML = `<button type="button" class="inline-action" id="aiUploadBtn">上传整合图纸</button>`
       + `<span class="ai-hint">装配图 / 爆炸图 / 接线图都可以，支持多选。它们会作为参数推荐与组装工艺的视觉输入。</span>`;
     $ai('aiUploadBtn').onclick = () => $ai('aiDrawingInput').click();
     return;
@@ -203,7 +203,7 @@ function aiRenderActions() {
   // 藏在「编辑」后面的话，一旦模型一条都没给，按钮连出现的机会都没有。
   const alwaysEditable = aiTab === 'params';
   host.innerHTML =
-    `<button type="button" class="inline-action primary start-parse-btn" id="aiGenerate" ${aiBusy ? 'disabled' : ''}>`
+    `<button type="button" class="inline-action" id="aiGenerate" ${aiBusy ? 'disabled' : ''}>`
     + (aiBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>${esc(label)}中…</span>` : esc(label))
     + `</button>`
     + `<button type="button" class="inline-action" id="aiEdit" ${alwaysEditable || !has || aiEditing[aiTab] || aiBusy ? 'hidden' : ''}>编辑</button>`
@@ -558,6 +558,11 @@ function aiRender() {
   });
   const blocked = aiBlocker(aiTab);
   const state = aiData?.status || {};
+  // 父工作台（tech-workbench）process 阶段底栏按“是否已完成整合分析”反转主次：
+  // 唯一判定是参数推荐与组装工艺都已生成，与 #aiToFinance 是否可点无关 —— 只生成
+  // 一项、busy 或失败都不算完成。每次 render 都同步，重新生成 / Agent 改动后同样生效。
+  const analyzed = Boolean(state.has_params && state.has_process);
+  document.body.dataset.integrationAnalyzed = analyzed ? 'true' : 'false';
   const done = { drawings: state.drawings > 0, params: state.params_confirmed,
                  process: state.process_confirmed };
   document.querySelectorAll('#aiStepBody [data-ai-tab]').forEach(button => {

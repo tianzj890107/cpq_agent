@@ -115,3 +115,35 @@
 - 部署后重启服务：`cpq_suite_server.py`（0.0.0.0:8010，同进程 8011 产品图片）自动拉起 `tech_app_launch.py`（127.0.0.1:8012 子进程），两个 `/api/health` 均 200。
 - 校验：`报价首页.html`（/ 根页）200 且含 9 处 tech-workbench 入口；`确认需求解析结果.html`（URL 编码访问）200 且含 `color-primary-light` 新 token；`/tech-workbench.html` 与 `/tech-workbench.js` 经代理 200 且含 `MAJOR_STEPS` 五大流程内容。
 - 运行数据与历史未受影响：cpq_history（147 项）、rule_history、cpq_data、tech_app/tech_data、open-claude/.venv、cpq_settings.json 原样保留，服务器工作区 30 个未跟踪文件（备份/日志/open-claude 源码）未改动；未触碰其它业务容器与 8765/47313/47314 等无关服务。
+
+## 13. 组装与整合操作按钮主次状态（9-10）
+
+- 2.2 组装与整合的上传整合图纸、生成/重新生成参数推荐、生成/重新生成组装工艺不再常驻深蓝填充，常态改为柔和浅蓝渐变底、品牌蓝字、1px 品牌浅蓝边框，只有非禁用 hover 才显示深蓝同色系渐变白字；busy/disabled 仍不可点击且不响应 hover。
+- 统一工作台 process 阶段底栏按真实分析结果显示主次：`status.has_params && status.has_process` 均成立时，“确认工艺并发送财务”为填充主按钮、“开始整合分析”为描边按钮；仅生成一项、分析进行中或失败时保持相反层级。分析完成但尚未人工确认参数/工艺时，“确认工艺并发送财务”可呈填充外观但仍保持 disabled。
+- 子页面在每次 `aiRender()` 后把分析完成状态写入 `document.body.dataset.integrationAnalyzed`，父壳 `syncActionBar()` 仅在 process 阶段读取该状态并在 `is-filled` / `is-outline` 角色间切换，切换前先清理旧角色，2.5 秒轮询与 iframe load 沿用既有同步；不按按钮文案猜测，也不使用 `#aiToFinance.disabled` 代替分析完成判定。
+- `#aiToFinance` 的参数确认与工艺确认闸门（`state.params_confirmed && state.process_confirmed`）、STAGE_ACTIONS 代理目标、按钮 id/文案/点击行为及后端逻辑均未改动。
+- 本地验证：`tests.test_tech_assembly_action_button_states_red` 6/6 通过，全量 `unittest discover` 61/61 通过；`py_compile`、`node --check`（assembly-integration.js、tech-workbench.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署。
+
+## 14. 报价与技术工艺右上模型入口及业务名称（9-10）
+
+- 右上角模型入口已实现：`确认需求解析结果.html` 的 `#modelInfo` 与技术工艺 `tech-workbench.html` 的 `#techModelInfo` 都由 `span` 改为 `type="button"`，带 `aria-label`（“修改报价模型设置” / “修改技术工艺模型设置”）、`title`、`cursor:pointer`、hover 和 `focus-visible`，保持紧凑文本入口，分别调用既有 `openSettings()` 与新增 `openTechModelSettings()`（内部仍是唯一的 `LlmSettingsPanel.mount(...)`，未新建第二套表单）。技术工艺原先只加载了 `llm-settings-panel.js`，本次补上共享 `llm-settings-panel.css`，设置卡片可正常渲染多模态/语言模型、温度、最大 token、深度思考与 API Key，并沿用后端 `editable` / `secrets_editable` 权限。
+- Agent 连接状态与模型展示已彻底分离：`agent-chat.js` 在 `data.available === false` 和 meta 请求失败两条分支上都只更新 `#techConnText` 与连接状态点，不再用“未连接 / Agent 未就绪 / 读取 Agent 信息失败”覆盖模型名；`refreshTechShellModel()` 通过 `LlmSettingsPanel.load()`（回退 `/api/llm/settings`）读取 `text_model` 并按 `text_options` 的 label 显示可读模型名，缺少 label 时退回模型 id，未配置时显示“未配置模型”，未选择项目时显示“未选择项目”。Agent meta 成功返回真实运行模型时才用它刷新右上显示，全链路未写死任何模型名。
+- 业务名称解析已实现：`updateProjectLabel()` 重写为 `resolveProjectNames()`，并行请求 `/api/projects/{id}`、`/api/projects/{id}/requirement` 与 `/wf/task?task_id=`；项目名优先级为 `meta.project_name` → `requirement.title` → `meta.device_name` → `meta.source_filename` → “未命名项目”，任务名优先级为 `title` → `source_label` → `task_kind_label` → `task_no` → “关联任务”，主标题形如“项目名 · 任务名”；原始 project id 与 task id 只放入 `.title` tooltip，接口失败不会覆盖已成功取得的名称，并带 `state.project` / `state.taskId` 竞态校验。URL、导航与查询仍使用原始 project/task 标识，仅展示文案变化。
+- 报价页新增 `initModelInfoFallback()`：在流程事件到达前用 `AGENT_URL + '/api/settings'` 初始化右上模型名，`none` 时显示“无模型（人工填写）”，避免长期为空。
+- 本地验证：`tests.test_quote_tech_header_model_and_names_red` 8/8 通过，`tests.test_tech_assembly_action_button_states_red` 6/6 通过，`tests.test_tech_major_flow_navigation_red` 8/8 通过；全量 `unittest discover` 79 项 73 通过 / 6 失败，6 项失败全部来自本轮之前已存在的 Red（第 15 节“禁用态与 busy 区分”3 项、第 16 节“三流程页签选中态”3 项），非本次回归。`py_compile`、`node --check`（tech-workbench.js、agent-chat.js、报价页内联脚本）与 `git diff --check` 通过。未执行浏览器人工验收、未部署、未提交。
+
+## 15. 组装与整合禁用态和处理中状态区分（9-10）
+
+- 新增禁用态/处理中状态 Spec 与 Red 测试：缺少参数推荐或组装工艺而不可确认时，按钮应与“确认工艺并发送财务”的禁用态一致，使用 `not-allowed`，不再显示代表正在运行的等待光标。
+- 约定只有显式 `aria-busy="true"` 的真实异步生成按钮才能使用 `cursor:wait` 和 spinner；普通 disabled 不等于 busy，按钮业务闸门和后端流程保持不变，等待 DeepSeek 实现。
+
+## 16. 组装与整合三流程页签选中态（9-10）
+
+- 新增三流程页签选中态 Spec 与 Red 测试：整合图纸、参数推荐、组装工艺的 active 状态由深蓝底白字改为白底、品牌蓝字和 1px 蓝色边框，hover/focus 时也不得变回深色填充。
+- 保留三个页签的 `data-ai-tab`、`aiTab` 切换和业务流程；本项与上一项 disabled/busy 语义区分合并交付 DeepSeek 实现。
+
+## 17. 技术工艺上下文小流程与 iframe 状态行（9-10）
+
+- 新增上下文小流程与状态行清理 Spec、Red 测试：删除 iframe 上方“1.1 创建 已就绪”一类加载完成提示整行，同时保留 iframe load 后的底栏代理同步和真正异常状态。
+- 大流程 1 在右侧工作区显示“1.1 创建、1.2 确认、1.3 审核”，大流程 5 显示“5.1 汇总结果、5.2 结果审核、5.3 发布并回传报价”；按钮复用父壳 `applyStage()` 切换既有内部 stage，大流程 2–4 不重复生成父壳小流程。
+- 顶部五大流程、流程 1 小流程、流程 3/4 既有内部步骤、流程 5 小流程四组控件统一为选中态白底蓝字蓝边框，hover/focus 也不得变成深色底白字，等待 DeepSeek 实现。

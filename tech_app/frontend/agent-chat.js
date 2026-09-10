@@ -182,8 +182,6 @@
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
       if (data.available === false) {
         techShellConn("未连接", false);
-        techShellModel("未连接 / Agent 未就绪");
-        setModelLabel("Agent 未就绪");
         pushSystem(`Agent 暂不可用：${data.reason || "未知原因"}。图纸解析等平台功能不受影响。`);
         input.placeholder = "Agent 未就绪，仍可使用「开始解析」按钮";
         return;
@@ -201,21 +199,44 @@
       if (profile) profile.textContent = "会话已就绪";
     } catch (error) {
       techShellConn("未连接", false);
-      techShellModel("未连接 / 读取 Agent 信息失败");
-      setModelLabel("未连接");
       pushSystem(`读取 Agent 信息失败：${error.message}`);
+    }
+  }
+  // 右上角模型文字只表达「模型设置」里的当前语言模型；Agent 会话是否可用是另一件事，
+  // 不能用「未连接 / Agent 未就绪」覆盖真实模型。没有配置时才显示提示。
+  function modelLabelFromSettings(settings) {
+    const options = (settings && settings.text_options) || [];
+    const id = String((settings && settings.text_model) || "").trim();
+    const option = options.find(item => item && item.id === id);
+    return (option && option.label) || id || "未配置模型";
+  }
+  async function refreshTechShellModel() {
+    try {
+      let settings = null;
+      if (window.LlmSettingsPanel && typeof window.LlmSettingsPanel.load === "function") {
+        settings = await window.LlmSettingsPanel.load();
+      } else {
+        const response = await fetch("/api/llm/settings", { headers: authHeaders() });
+        settings = await response.json().catch(() => ({}));
+      }
+      techShellModel(modelLabelFromSettings(settings));
+    } catch (error) {
+      techShellModel("未配置模型");
     }
   }
   function techShellModel(text) {
     const info = $("techModelInfo");
     if (!info) return;
     const value = String(text || "").trim();
-    const stateWord = ["未连接", "未就绪", "未选择", "未知模型", "Agent"].some(word => value.includes(word));
+    const stateWord = ["未连接", "未就绪", "未选择", "未知模型", "未配置", "Agent"].some(word => value.includes(word));
     info.textContent = stateWord || !value ? value : `· ${value}`;
   }
-  function setModelLabel(text) {
+  function setPillLabel(text) {
     const pill = $("ocModelPill");
     if (pill) pill.querySelector("[data-model-name]").textContent = text;
+  }
+  function setModelLabel(text) {
+    setPillLabel(text);
     techShellModel(text);
   }
 
@@ -847,9 +868,10 @@
   refreshResultChips();
   loadFiles();
   renderComponentMatch();
+  refreshTechShellModel();
   if (projectId) loadMeta();
   else {
     techShellConn("未连接", false);
-    setModelLabel("未选择项目");
+    setPillLabel("未选择项目");
   }
 })();

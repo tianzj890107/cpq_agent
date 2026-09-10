@@ -74,7 +74,7 @@ class TechMajorFlowNavigationContract(unittest.TestCase):
     def test_flow_label_is_immediately_followed_by_runtime_model(self):
         self.assertRegex(
             self.html,
-            r"<span>技术工艺流程</span>\s*<span\s+id=['\"]techModelInfo['\"]",
+            r"<span>技术工艺流程</span>\s*<button[^>]+id=['\"]techModelInfo['\"]",
         )
         combined = self.js + (ROOT / "tech_app/frontend/agent-chat.js").read_text(encoding="utf-8")
         self.assertIn("techModelInfo", combined)

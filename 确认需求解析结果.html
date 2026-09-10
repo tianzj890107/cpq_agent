@@ -250,6 +250,15 @@
     .project-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
     .project-name { font-size: 14px; font-weight: 500; }
     .project-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); }
+    /* 右上角模型入口：紧凑文本按钮，点击复用既有设置弹窗（与左侧设置按钮同一份）。 */
+    #modelInfo {
+      border: 0; background: transparent; padding: 0; margin: 0;
+      font: inherit; color: inherit; cursor: pointer; border-radius: 5px;
+    }
+    #modelInfo:hover { color: var(--color-primary); text-decoration: underline; }
+    #modelInfo:focus-visible {
+      outline: 2px solid var(--color-primary-light); outline-offset: 2px; color: var(--color-primary);
+    }
     .status-dot { width: 8px; height: 8px; background: var(--color-success); border-radius: 50%; }
 
     .progress-bar {
@@ -737,7 +746,7 @@
         <div class="project-status">
           <span class="status-dot"></span>
           <span>报价测算流程</span>
-          <span id="modelInfo"></span>
+          <button type="button" id="modelInfo" aria-label="修改报价模型设置" title="点击修改模型设置" onclick="openSettings()"></button>
         </div>
       </div>
 
@@ -3856,6 +3865,23 @@
       onModelChange();
       await loadTechLlm();
     }
+    // 报价模型名不一定等得到流程事件；用既有报价模型配置兜底初始化，避免长期为空。
+    async function initModelInfoFallback() {
+      const node = $('modelInfo');
+      if (!node || node.textContent.trim()) return;
+      try {
+        const st = await fetch(AGENT_URL + '/api/settings').then(r => r.json());
+        if (st && st.model === 'none') {
+          manualMode = true;
+          node.textContent = ' · 无模型（人工填写）';
+          return;
+        }
+        const id = st && st.model;
+        if (!id) return;
+        const found = (MODELS || []).find(m => m.id === id);
+        node.textContent = ' · ' + (found ? found.label : id);
+      } catch (e) {}
+    }
     function selectedModelOption() {
       const sel = $('setModel');
       return sel.options[sel.selectedIndex] || null;
@@ -4108,6 +4134,7 @@
       } catch {}
       // 顶部「当前项目」用用户填写的项目名（不再写死波兰项目）
       if ($('projectName')) $('projectName').textContent = projectName || '未命名报价项目';
+      initModelInfoFallback();
 
       // 探测服务 & 重置会话
       try {

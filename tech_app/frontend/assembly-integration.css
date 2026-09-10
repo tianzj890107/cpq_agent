@@ -16,6 +16,22 @@
   padding: 12px 16px 0;
 }
 .ai-actions .inline-action:disabled { opacity: .6; cursor: wait; }
+
+/* 上传整合图纸、生成/重新生成参数推荐与组装工艺：常态为白底/柔和浅蓝底的描边次要操作
+   （品牌蓝字 + 1px 品牌浅蓝边框），只有非禁用 hover 才切换成深蓝同色系渐变白字。
+   busy/disabled 仍走 .inline-action:disabled 的透明度与等待态，不响应 hover。 */
+#aiUploadBtn,
+#aiGenerate {
+  background: var(--gradient-primary-soft, linear-gradient(135deg, #FFFFFF 0%, #F4F9FE 100%));
+  color: var(--oc-accent, #0067D1);
+  border: 1px solid var(--color-primary-border, #B8D7F4);
+}
+#aiUploadBtn:hover:not(:disabled),
+#aiGenerate:hover:not(:disabled) {
+  background: var(--gradient-primary-hover, linear-gradient(135deg, #0057B8 0%, #004A9F 100%));
+  color: #fff;
+  border-color: var(--color-primary-active, #004A9F);
+}
 .ai-hint { color: var(--oc-text-3, #9ca3af); font-size: 12px; line-height: 1.6; }
 
 .ai-status { padding: 8px 16px 0; color: var(--oc-text-3, #9ca3af); font-size: 12px; min-height: 18px; }
