@@ -5157,10 +5157,6 @@ def _workflow_project(project_id: str) -> dict:
     return meta
 
 
-def _requirement_no(project_id: str) -> str:
-    return f"REQ-{project_id.upper()}"
-
-
 def _report_no(project_id: str, requirement_no: str = "") -> str:
     """报告编号沿用 RPT 前缀，并与项目流水号保持一一对应。"""
     return f"RPT-{project_id.upper()}"
@@ -5174,73 +5170,6 @@ def _workflow_event(action: str, user: dict, comment: str = "") -> WorkflowRevie
         comment=comment or "",
         at=_now_str(),
     )
-
-
-def _is_filled(value) -> bool:
-    """确认页的规则检查：空值与明确标为待确认的数据都需要人工补充。"""
-    if value is None:
-        return False
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    text = str(value).strip()
-    return bool(text) and "待确认" not in text and "系统自动" not in text
-
-
-def _requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
-    """基于已保存需求字段的确定性完整性检查；不调用任何 AI/模型。"""
-    data = doc.data or {}
-    meta = store.load_meta(project_id) or {}
-    industry = str(data.get("industry") or industry_templates.DEFAULT_INDUSTRY).strip().lower()
-    if industry == "flexible":
-        # 历史草稿：规格字段由 AI 动态生成，必填项只能从字段本身读。
-        dynamic_fields = (data.get("flexible_spec") or {}).get("fields") or []
-        required_by_section = {
-            section: [str(field.get("key") or "") for field in dynamic_fields if field.get("section") == section and field.get("required")]
-            for section in ("3.1", "3.2", "3.3")
-        }
-        product_checks = [
-            ("三、产品技术规格（Section C）", [], "灵活行业规格由 AI 根据技术资料生成"),
-            ("3.1 基础参数", required_by_section["3.1"], "AI 生成的基础参数已录入"),
-            ("3.2 精度与性能参数", required_by_section["3.2"], "AI 生成的性能要求已录入"),
-            ("3.3 应用场景", required_by_section["3.3"], "AI 生成的应用场景已录入"),
-        ]
-    else:
-        product_checks = [
-            (label, list(fields), ok_message)
-            for label, fields, ok_message in industry_templates.section_checks(industry)
-        ]
-    checks = [
-        ("一、需求基本信息（Section A）", ["title", "requirement_type", "priority", "bu", "disclosure", "description"], "基础信息完整"),
-        ("二、客户与项目信息（Section B）", ["customer_type", "customer_industry", "final_customer_name", "project_name", "project_code", "product_iteration"], "客户与项目字段完整"),
-        *product_checks,
-        (f"{industry_templates.FILE_BLOCK_SECTION.get(industry, '3.4')} 图纸与技术资料", [], "原始图纸已关联"),
-        ("四、市场与商务信息（Section D）", ["annual_forecast", "first_sample_due", "mass_production_due"], "商务信息已录入"),
-        ("五、项目时间计划（Section E）", ["evaluation_due", "milestones"], "时间节点已录入"),
-        ("六、分类与标签（Section F）", ["category_a", "product_type", "complexity"], "分类清晰"),
-        ("七、备注与附件（Section G）", [], "原始图纸已上传"),
-    ]
-    items = []
-    dynamic_values = {
-        str(field.get("key") or ""): field.get("value")
-        for field in ((data.get("flexible_spec") or {}).get("fields") or [])
-        if isinstance(field, dict)
-    }
-    for label, fields, ok_message in checks:
-        missing = [field for field in fields if not _is_filled(data.get(field, dynamic_values.get(field)))]
-        if label.endswith("图纸与技术资料") or label.startswith("七、"):
-            if not meta.get("source_filename"):
-                missing.append("source")
-        if missing:
-            items.append({"item": label, "status": "need_info", "detail": f"待补充：{', '.join(missing)}"})
-        else:
-            items.append({"item": label, "status": "ok", "detail": ok_message})
-    needs = [row for row in items if row["status"] == "need_info"]
-    generated_note = (
-        "系统完整性检查完成：全部关键字段已具备，可提交审核。"
-        if not needs else
-        "系统完整性检查发现待补充项：" + "；".join(row["item"] + "（" + row["detail"] + "）" for row in needs) + "。"
-    )
-    return {"items": items, "ok": not needs, "generated_note": generated_note, "engine": "deterministic_rules"}
 
 
 _REQUIREMENT_AI_CHECK_SYSTEM = """你是半导体零部件工艺评估需求单的审核工程师。
@@ -5646,6 +5575,14 @@ def get_requirement_pdf(project_id: str, download: bool = False, user: dict = De
     })
 
 
+def _requirement_flow(fn, project_id: str, user: dict, comment: str, *rest):
+    """把共享 service 的业务错误原样映射成 HTTPException（路由只负责这一层）。"""
+    try:
+        return fn(project_id, user, comment, *rest)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/requirement/precheck")
 def precheck_requirement(project_id: str):
     """确认页结构化完整性检查，不发起外部模型请求。"""
@@ -5653,7 +5590,7 @@ def precheck_requirement(project_id: str):
     saved = store.load_requirement(project_id)
     if not saved:
         raise HTTPException(404, "需求单不存在")
-    return _requirement_precheck(project_id, RequirementDoc(**saved))
+    return requirement_service.requirement_precheck(project_id, RequirementDoc(**saved))
 
 
 @app.post("/api/projects/{project_id}/requirement/extract-documents")
@@ -5734,7 +5671,7 @@ def ai_check_requirement(project_id: str, user: dict = Depends(current_user)):
     if not saved:
         raise HTTPException(404, "需求单不存在")
     doc = RequirementDoc(**saved)
-    rule_check = _requirement_precheck(project_id, doc)
+    rule_check = requirement_service.requirement_precheck(project_id, doc)
     payload = json.dumps(
         {"requirement_no": doc.requirement_no, "title": doc.title, "status": doc.status, "data": doc.data},
         ensure_ascii=False, default=str,
@@ -5804,52 +5741,18 @@ def update_requirement_customer_credit(
     return {"requirement": out, "customer_credit": new_value}
 
 
-# 「新增工艺」任务带进需求单的溯源键：丢一个，结论就回不到原来那张报价卡片。
-QUOTE_SOURCE_KEYS = ("source", "source_task_id", "source_task_no",
-                     "source_session_id", "customer_name")
-
-
-def _keep_quote_source(current_data: Optional[dict], incoming: Optional[dict]) -> dict:
-    """保存需求单时，把报价溯源键从旧值里带过来（新值有内容才覆盖）。"""
-    merged = dict(incoming or {})
-    for key in QUOTE_SOURCE_KEYS:
-        if not str(merged.get(key) or "").strip():
-            kept = str((current_data or {}).get(key) or "").strip()
-            if kept:
-                merged[key] = kept
-    return merged
-
-
 @app.put("/api/projects/{project_id}/requirement")
 def save_requirement(project_id: str, doc: RequirementDoc, user: dict = Depends(current_user)):
     """保存/更新需求单草稿。已进入确认或审核的需求不可被静默改写。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    current = store.load_requirement(project_id)
-    if current and current.get("status") not in ("draft", "rejected"):
-        raise HTTPException(409, "需求已提交，不能直接修改；请先退回后再编辑")
-    existing_credit = str(((current or {}).get("data") or {}).get("customer_credit") or "").strip().upper()
-    incoming_credit = str((doc.data or {}).get("customer_credit") or "").strip().upper()
-    if incoming_credit not in {"", "A", "B", "C", "D"}:
-        raise HTTPException(422, "客户信用等级只能为 A、B、C 或 D")
-    if incoming_credit != existing_credit and user.get("role") != "admin":
-        # 销售经理必须走专用接口，确保其无法借整张表单保存改动其它需求字段。
-        raise HTTPException(403, "客户信用等级仅可由销售经理首次录入，或由系统管理员修改")
-    doc.project_id = project_id
-    # 报价来源与客户名是「新增工艺」任务带进来的**非表单键**（tech-task.js 建单时写的）。
-    # 1.1 的表单保存历来是整份替换 data，一存就把它们抹掉 —— 后果要到最后一步才暴露：
-    # 结论送不回原来那张报价卡片，系统另建一张，销售点开是「无法打开该历史记录」，
-    # 客户信息也只剩技术侧填过的。前端已改成合并，这里再兜一道：任何客户端都别想抹掉它们。
-    doc.data = _keep_quote_source((current or {}).get("data"), doc.data)
-    doc.requirement_no = doc.requirement_no or (current or {}).get("requirement_no") or _requirement_no(project_id)
-    doc.created_by = (current or {}).get("created_by") or user.get("username", "system")
-    doc.created_at = (current or {}).get("created_at") or _now_str()
-    doc.status = (current or {}).get("status") if current else (doc.status if doc.status == "draft" else "draft")
-    doc.history = [WorkflowReview(**row) for row in (current or {}).get("history", [])]
-    doc.updated_at = _now_str()
-    saved = doc.model_dump()
-    store.save_requirement(project_id, saved, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_saved", {"requirement_no": doc.requirement_no})
+    # 落盘规则（保留报价溯源键、客户信用等级校验、requirement_no / created_by /
+    # status 继承、历史留痕与审计）统一在 services.requirement_service；2.1 Agent 的
+    # UpdateRequirementFields 调用的是同一份实现，不另写一套写入逻辑。
+    try:
+        saved = requirement_service.save_requirement_draft(project_id, doc, user)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     return {"requirement": saved}
 
 
@@ -5860,19 +5763,12 @@ def submit_requirement_confirmation(
 ):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "请先保存需求单")
-    doc = RequirementDoc(**saved)
-    if doc.status not in ("draft", "rejected"):
-        raise HTTPException(409, "当前需求不在可提交状态")
-    # 1.1 的唯一提交门槛由页面星号必填字段负责；不再用另一套完整性清单拦截。
-    doc.status = "pending_confirmation"
-    doc.history.append(_workflow_event("submit_confirmation", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_submitted", {"comment": body.comment})
+    # 与 Agent 工具 SubmitRequirementConfirmation 共用同一份落盘/校验逻辑，
+    # 人工审批环节没有被绕过：这里只把草稿推进到 pending_confirmation。
+    try:
+        out = requirement_service.submit_requirement_confirmation(project_id, user, body.comment)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     return {"requirement": out}
 
 
@@ -5883,22 +5779,8 @@ def confirm_requirement(
 ):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_confirmation":
-        raise HTTPException(409, "当前需求不在待确认状态")
-    doc.status = "pending_review"
-    doc.confirmed_by = user.get("username", "system")
-    doc.confirmed_at = _now_str()
-    doc.confirmation_note = body.comment
-    doc.history.append(_workflow_event("confirmed", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_confirmed", {"comment": body.comment})
-    return {"requirement": out}
+    return {"requirement": _requirement_flow(
+        requirement_service.confirm_requirement, project_id, user, body.comment)}
 
 
 @app.post("/api/projects/{project_id}/requirement/return-to-draft")
@@ -5909,20 +5791,8 @@ def return_requirement_to_draft(
     """确认人退回需求草稿，供创建人补充后再次提交。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_confirmation":
-        raise HTTPException(409, "当前需求不在待确认状态")
-    doc.status = "draft"
-    doc.confirmation_note = body.comment
-    doc.history.append(_workflow_event("confirmation_returned", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_returned", {"comment": body.comment})
-    return {"requirement": out}
+    return {"requirement": _requirement_flow(
+        requirement_service.return_requirement_to_draft, project_id, user, body.comment)}
 
 
 @app.post("/api/projects/{project_id}/requirement/review")
@@ -5931,24 +5801,8 @@ def review_requirement(
 ):
     _require(user, auth.DIRECTOR_ROLES, "需要工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_review":
-        raise HTTPException(409, "当前需求不在待审核状态")
-    if body.decision not in ("approve", "reject"):
-        raise HTTPException(400, "decision 必须为 approve 或 reject")
-    doc.status = "approved" if body.decision == "approve" else "rejected"
-    doc.reviewed_by = user.get("username", "system")
-    doc.reviewed_at = _now_str()
-    doc.review_note = body.comment
-    doc.history.append(_workflow_event(f"review_{body.decision}", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, f"workflow:requirement_{body.decision}", {"comment": body.comment})
-    return {"requirement": out}
+    return {"requirement": _requirement_flow(
+        requirement_service.review_requirement, project_id, user, body.comment, body.decision)}
 
 
 def _report_prerequisite_issues(project_id: str) -> list[str]:

@@ -517,6 +517,19 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-task-steps:empty { display: none; }
 .oc-task-error { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
 
+/* 1.1 创建需求的「需求解析摘要」（Agent 工具结果驱动，内容留在对话流里） */
+.oc-req-summary {
+  padding: 12px 14px; border: .5px solid var(--oc-border-2); border-radius: 13px;
+  background: var(--oc-bg-2);
+}
+.oc-req-summary h4 {
+  margin: 0 0 9px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em;
+}
+.oc-req-line { color: var(--oc-text-1); font-size: 12.5px; line-height: 1.6; word-break: break-word; }
+.oc-req-line + .oc-req-line { margin-top: 4px; }
+.oc-req-missing { color: #b45309; }
+
 /* ---------- 统一看板视图宿主（第 5 步）----------
    左侧入口只发 navigate-view，内容复用既有面板留在右侧看板内部；这里是承载面板的
    看板内容宿主与任务文件 / 解析报告的呈现样式，不把业务正文搬进父壳。 */

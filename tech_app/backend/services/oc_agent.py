@@ -479,6 +479,90 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "GetRequirementDraft",
+        "description": "读取当前项目 1.1「创建需求」的草稿：需求单号、标题、状态（draft / "
+                       "pending_confirmation / …）、已填字段、附件角色与上一次 AI 解析摘要。"
+                       "回答任何与需求单内容有关的问题前都应先调用它。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateRequirementFields",
+        "description": "补充 1.1 需求单的**空白**字段。**这是会写业务数据的工具**，只在用户"
+                       "明确要求「把…填上 / 补充…」并给出具体值时调用。\n"
+                       "规则：只补空白字段，已有内容（人工或 AI 填写的）一律不覆盖；客户信用等级、"
+                       "报价溯源等受限字段不允许修改；需求一旦进入确认流程就不能再改。\n"
+                       "字段 key 必须来自 GetRequirementDraft 的字段清单；改写会留审计，"
+                       "写完后刷新页面即可看到新值。用户只是问「该怎么填」时不要调用本工具。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "object",
+                    "description": "要补充的字段：{字段 key: 值}；只填当前为空的字段",
+                    "additionalProperties": {"type": "string"},
+                },
+                "reason": {"type": "string", "description": "补充依据，会写进审计"},
+            },
+            "required": ["fields"],
+        },
+    },
+    {
+        "name": "AttachRequirementFiles",
+        "description": "登记 / 读取 1.1 需求单的附件清单（技术规格说明书、3D 模型、BOM 等）。"
+                       "附件正文只能由页面上传接口保存，本工具**不上传文件**；传入已有的文件名"
+                       "与角色时，只把该附件关联到对应区域并留审计。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "已在项目附件里的文件名；留空则只读取清单"},
+                "role": {"type": "string",
+                         "description": "附件角色，如 technical_spec / model_3d / bom_assembly"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ExtractRequirement",
+        "description": "请求平台对已上传的技术文档执行一键解析，自动补齐 1.1 需求单字段并生成"
+                       "AI 推荐默认值。用户说「解析需求」「读一下技术资料」「自动填需求单」时调用。\n"
+                       "注意：本工具只向界面发出请求，真正的提取由平台既有流水线执行并在界面回显"
+                       "进度；调用后不要虚构字段或推荐值，等结果写回后再用 GetRequirementAiFill 回答。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "触发解析的简短理由"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "GetRequirementTask",
+        "description": "读取需求解析任务的真实状态与进度日志。传入 task_id 查单个任务；"
+                       "留空返回本项目最近的需求相关任务。用户问「解析到哪了」「好了没有」时调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string", "description": "任务 id；留空列出最近的解析任务"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "GetRequirementAiFill",
+        "description": "读取 1.1 上一次 AI 解析的结论：AI 从技术资料带入的字段、AI 推荐的"
+                       "默认值及置信度、仍缺失的必填项与待澄清问题。回答「AI 填了什么」「还缺什么」"
+                       "「推荐值靠不靠谱」时调用；没有解析结果时如实说明。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SubmitRequirementConfirmation",
+        "description": "把 1.1 需求草稿提交到 1.2 待确认。用户明确说「提交需求」「提交确认」时"
+                       "调用；只允许从 draft / rejected 进入 pending_confirmation。\n"
+                       "提交后仍由人工在 1.2 确认或退回，本工具不代替审批；权限不足或状态不对时"
+                       "如实返回失败原因，不要谎报已提交。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"comment": {"type": "string", "description": "提交说明，会写进需求单留痕"}},
+            "required": [],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -491,6 +575,10 @@ UI_ACTION_TOOLS = {
     "UpdateIntegrationParams": "refresh-integration",
     "UpdateIntegrationProcess": "refresh-integration",
     "RequestIntegrationStep": "integration-step",
+    # 1.1：一键解析与字段补充都由右侧看板执行（Agent 只发请求），补完刷新 1.1 表单。
+    "ExtractRequirement": "extract-requirement",
+    "UpdateRequirementFields": "refresh-requirement",
+    "AttachRequirementFiles": "refresh-requirement",
 }
 
 
@@ -557,7 +645,279 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
             "note": "已向界面发出请求。生成由平台流水线异步执行，进度与结果显示在对话与"
                     "中间面板；请勿自行编造参数、工序或金额。",
         }, ensure_ascii=False)
+    if name == "GetRequirementDraft":
+        return json.dumps(_requirement_draft(project_id), ensure_ascii=False, indent=2)
+    if name == "UpdateRequirementFields":
+        return json.dumps(_update_requirement_fields(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "AttachRequirementFiles":
+        return json.dumps(_requirement_attachments(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "ExtractRequirement":
+        return json.dumps({
+            "requested": True,
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出需求解析请求。提取由平台既有流水线（技术文档 → 1.1 草稿）"
+                    "异步执行，进度与结果显示在对话与右侧 1.1 看板；请勿自行编造字段或推荐值。",
+        }, ensure_ascii=False)
+    if name == "GetRequirementTask":
+        return json.dumps(_requirement_task(project_id, params), ensure_ascii=False, indent=2)
+    if name == "GetRequirementAiFill":
+        return json.dumps(_requirement_ai_fill(project_id), ensure_ascii=False, indent=2)
+    if name == "SubmitRequirementConfirmation":
+        return json.dumps(_submit_requirement_confirmation(project_id, params),
+                          ensure_ascii=False, indent=2)
     return f"未知的平台工具：{name}"
+
+
+# --------------------------------------------------------------------------- #
+# 1.1 创建需求
+# --------------------------------------------------------------------------- #
+def _requirement_doc(saved: dict):
+    """按需构造需求单模型。
+
+    pydantic 只在这里需要：把 import 留在函数内，oc_agent 才能在只装了轻量依赖的
+    解释器里被导入（loopback / provider readiness 等动态测试依赖这一点）。
+    """
+    from ..models.workflow import RequirementDoc
+
+    return RequirementDoc(**saved)
+
+
+def _actor_user() -> dict:
+    """Agent 工具的调用者。stream_sse 只带用户名，角色回查用户表补齐（与接口同权）。"""
+    username = current_actor()
+    record = store.get_user(username) or {}
+    return {"username": username, "role": str(record.get("role") or "")}
+
+
+def _requirement_industry(data: dict) -> str:
+    from . import industry_templates
+
+    industry = str((data or {}).get("industry_selection")
+                   or (data or {}).get("industry") or "").strip().lower()
+    if industry in (*industry_templates.INDUSTRIES, "flexible"):
+        return industry
+    return industry_templates.DEFAULT_INDUSTRY
+
+
+def _requirement_allowed_fields(data: dict) -> set[str]:
+    """Agent 可补充的字段白名单：直接复用提取服务的 1.1 表单字段表，不另立一份。"""
+    from . import requirement_extract
+
+    return set(requirement_extract._extractable_fields_for_industry(_requirement_industry(data)))
+
+
+def _requirement_draft(project_id: str) -> dict:
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"exists": False,
+                "note": "还没有 1.1 需求单草稿；请先在需求单页面保存草稿，或先上传技术资料。"}
+    data = saved.get("data") or {}
+    meta = store.load_meta(project_id) or {}
+    extraction = data.get("document_extraction") or {}
+    return {
+        "exists": True,
+        "project_id": project_id,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "editable": saved.get("status") in ("draft", "rejected"),
+        "fields": {key: value for key, value in data.items() if not isinstance(value, (dict, list))},
+        "file_roles": data.get("file_roles") or {},
+        "source_filename": meta.get("source_filename", ""),
+        "attachments": meta.get("attachments", []),
+        "document_extraction": {
+            "filled_fields": extraction.get("filled_fields") or [],
+            "recommended_fields": extraction.get("recommended_fields") or [],
+            "extracted_at": extraction.get("extracted_at") or "",
+        },
+    }
+
+
+def _update_requirement_fields(project_id: str, params: dict) -> dict:
+    fields = params.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return {"applied": False, "error": "fields 必须是非空对象：{字段 key: 要补充的值}"}
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"applied": False, "error": "还没有 1.1 需求单草稿，请先在需求单页面保存草稿。"}
+    if saved.get("status") not in ("draft", "rejected"):
+        return {"applied": False, "error": "需求已进入确认流程，不能自动修改；请先退回草稿。"}
+    doc = _requirement_doc(saved)
+    data = dict(doc.data or {})
+    allowed = _requirement_allowed_fields(data)
+    filled: dict[str, str] = {}
+    skipped: dict[str, str] = {}
+    for raw_key, raw_value in fields.items():
+        key = str(raw_key or "").strip()
+        text = str(raw_value if raw_value is not None else "").strip()
+        if not key or not text:
+            continue
+        if key == "customer_credit":
+            skipped[key] = "客户信用等级为受限字段，Agent 不得修改"
+            continue
+        if key == "title":
+            if str(doc.title or "").strip():
+                skipped[key] = "已有内容，不覆盖"
+            else:
+                doc.title = text
+                data[key] = text
+                filled[key] = text
+            continue
+        if key not in allowed:
+            skipped[key] = "不在 1.1 可补字段白名单内"
+            continue
+        if str(data.get(key) or "").strip():
+            skipped[key] = "已有内容，不覆盖"
+            continue
+        data[key] = text
+        filled[key] = text
+    if not filled:
+        return {"applied": False, "filled_fields": [], "skipped_fields": skipped,
+                "note": "没有可补充的空字段；人工已填内容与受限字段都没有改动。"}
+    doc.data = data
+    from . import requirement_service
+
+    try:
+        result = requirement_service.save_requirement_draft(
+            project_id, doc, _actor_user(), current=saved)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    store.audit(project_id, "workflow:requirement_fields_filled_by_agent", {
+        "by": current_actor(), "filled_fields": sorted(filled), "skipped_fields": sorted(skipped),
+    })
+    return {
+        "applied": True,
+        "requirement_no": result.get("requirement_no", ""),
+        "filled_fields": sorted(filled),
+        "skipped_fields": skipped,
+        "note": "只补了空白字段；人工已填内容与客户信用等级等受限字段都没有被覆盖。"
+                "刷新右侧 1.1 看板即可看到新值。",
+    }
+
+
+def _requirement_attachments(project_id: str, params: dict) -> dict:
+    """附件正文由既有上传接口保存；本工具只登记 / 读取附件清单。"""
+    names = [name for name, _ in store.load_attachments(project_id)]
+    saved = store.load_requirement(project_id) or {}
+    data = dict(saved.get("data") or {})
+    meta = store.load_meta(project_id) or {}
+    role = str(params.get("role") or "").strip()
+    filename = str(params.get("filename") or "").strip()
+    registered: list[str] = []
+    if role and filename:
+        if filename not in names:
+            return {"registered": False, "attachments": names,
+                    "error": f"附件 {filename} 尚未上传；请先在 1.1 页面上传，再由本工具登记。"}
+        if not saved:
+            return {"registered": False, "attachments": names,
+                    "error": "还没有 1.1 需求单草稿；请先保存草稿再登记附件。"}
+        file_roles = dict(data.get("file_roles") or {})
+        current = list(file_roles.get(role) or [])
+        if filename not in current:
+            current.append(filename)
+            file_roles[role] = current
+            data["file_roles"] = file_roles
+            doc = _requirement_doc(saved)
+            doc.data = data
+            from . import requirement_service
+
+            try:
+                requirement_service.save_requirement_draft(
+                    project_id, doc, _actor_user(), current=saved)
+            except requirement_service.RequirementSaveError as exc:
+                return {"registered": False, "error": str(exc), "attachments": names}
+            store.audit(project_id, "workflow:requirement_attachment_linked", {
+                "by": current_actor(), "role": role, "file": filename,
+            })
+            registered = [filename]
+    return {
+        "project_id": project_id,
+        "attachments": names,
+        "source_filename": meta.get("source_filename", ""),
+        "file_roles": data.get("file_roles") or {},
+        "registered": registered,
+        "note": "附件只能由既有上传接口保存；本工具只登记 / 读取附件清单，不上传、不改写文件正文。",
+    }
+
+
+def _task_brief(task: dict) -> dict:
+    return {
+        "task_id": task.get("task_id", ""),
+        "kind": task.get("kind", ""),
+        "status": task.get("status", ""),
+        "progress": task.get("progress", ""),
+        "progress_log": list(task.get("progress_log") or [])[-8:],
+        "error": task.get("error") or "",
+        "created_at": task.get("created_at") or "",
+        "finished_at": task.get("finished_at") or "",
+    }
+
+
+def _requirement_task(project_id: str, params: dict) -> dict:
+    task_id = str(params.get("task_id") or "").strip()
+    if task_id:
+        task = store.get_task(project_id, task_id)
+        if not task:
+            return {"found": False, "error": f"没有找到任务 {task_id}"}
+        return {"found": True, "task": _task_brief(task)}
+    rows = [task for task in store.list_tasks(project_id)
+            if "requirement" in str(task.get("kind") or "")]
+    rows.sort(key=lambda task: str(task.get("created_at") or ""), reverse=True)
+    return {"tasks": [_task_brief(task) for task in rows[:5]],
+            "note": "只返回需求相关任务的最近 5 条；没有记录说明还没发起过解析。"}
+
+
+def _requirement_ai_fill(project_id: str) -> dict:
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "note": "还没有 1.1 需求单草稿。"}
+    data = saved.get("data") or {}
+    info = data.get("document_extraction") or {}
+    if not info:
+        return {"available": False,
+                "note": "还没有 AI 解析结果；请先上传技术资料并执行 ExtractRequirement。"}
+    from . import requirement_extract
+
+    recommendations = dict(info.get("recommendations") or {})
+    required = sorted(requirement_extract._required_recommendation_fields_for_industry(
+        _requirement_industry(data)))
+    # 仍缺的必填项：既没有值，也没有 AI 推荐默认值。
+    missing = [key for key in required
+               if not str(data.get(key) or "").strip()
+               and not str(recommendations.get(key) or "").strip()]
+    return {
+        "available": True,
+        "industry": _requirement_industry(data),
+        "model": info.get("model", ""),
+        "extracted_at": info.get("extracted_at", ""),
+        "summary": info.get("summary", ""),
+        "filled_fields": list(info.get("all_filled_fields") or info.get("filled_fields") or []),
+        "recommended_fields": list(info.get("all_recommended_fields")
+                                   or info.get("recommended_fields") or []),
+        "recommendation_confidence": dict(info.get("recommendation_confidence") or {}),
+        "recommendations": recommendations,
+        "missing_required_fields": missing,
+        "open_questions": list(info.get("open_questions") or []),
+    }
+
+
+def _submit_requirement_confirmation(project_id: str, params: dict) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"submitted": False,
+                "error": "提交需求确认需要工艺技术经理或管理员权限；请由对应角色在 1.1 页面提交。"}
+    comment = str(params.get("comment") or "需求创建人已提交，等待需求确认。")
+    try:
+        out = requirement_service.submit_requirement_confirmation(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"submitted": False, "error": str(exc)}
+    return {"submitted": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "已提交到 1.2 待确认；后续仍由人工确认或退回，Agent 不代替审批。"}
 
 
 # --------------------------------------------------------------------------- #

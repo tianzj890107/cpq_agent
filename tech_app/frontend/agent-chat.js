@@ -365,6 +365,10 @@
       // 改零件参数：这个事件在工具**跑之前**发出，当场刷新只会读到旧值，
       // 所以先占个位，等对应的 tool_result 回来再填详情。
       if (event.ui_action === "refresh-ir") pendingEdits.set(event.id, null);
+      // 1.1 创建需求：Agent 请求一键解析 / 刷新需求看板时，只发语义化业务动作名，
+      // 由右侧看板复用既有 extract-documents 流水线执行（左侧绝不直接调用该接口）。
+      if (event.ui_action === "extract-requirement") requestRequirementExtract("Agent");
+      if (event.ui_action === "refresh-requirement") refreshRequirementBoard();
       return;
     }
     if (event.type === "tool_result") {
@@ -372,6 +376,9 @@
       if (pendingEdits.has(event.tool_use_id)) {
         pendingEdits.set(event.tool_use_id, parseEditResult(event));
       }
+      // 1.1 需求提取工具回执里的 document_extraction：抽取成需求解析摘要。
+      const requirementSummary = requirementSummaryFromToolResult(event);
+      if (requirementSummary) renderRequirementSummary(requirementSummary);
       return;
     }
     if (event.type === "error") {
@@ -463,6 +470,98 @@
     if (origin === "Agent") noteInThread("Agent 已请求开始解析，平台流水线正在执行。");
     // 不制造第二次点击事件：直接调用 app.js 绑定在按钮上的同一份实现。
     button.onclick?.();
+  // ---------------------------------------------- 1.1 创建需求：Agent 动作联动
+  // Agent 决定一键解析技术资料 / 刷新需求看板时，与 requestParse 完全同模式：只把
+  // 语义化业务动作名交给右侧 1.1 看板（TechBoardBridge.executeAction）。字段提取仍
+  // 由看板复用既有 extract-documents 流水线执行，左侧不直接调用该接口，也不另写
+  // 第二份提取逻辑。
+  function requestRequirementExtract(origin) {
+    if (origin === "Agent") noteInThread("Agent 已请求 AI 解析技术资料，正在带入 1.1 需求字段。");
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能解析需求：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    const call = bridge.executeAction("extractRequirement", { label: "一键解析需求" });
+    Promise.resolve(call).catch(error => {
+      pushSystem(`需求解析失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  function refreshRequirementBoard() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能刷新需求看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    const call = bridge.executeAction("refreshData", { action: "refreshData", label: "刷新需求看板" });
+    Promise.resolve(call).catch(error => {
+      pushSystem(`刷新需求看板失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  // 工具回执里的需求解析结果：document_extraction（或顶层同名字段）携带
+  // filled_fields / recommended_fields / recommendation_confidence / recommendations，
+  // 左侧据此渲染「需求解析摘要」。数据只来自 Agent 工具结果，父壳不另拉一份。
+  function requirementSummaryFromToolResult(event) {
+    if (event.is_error) return null;
+    const text = String(event.content || "").trim();
+    if (!text || text.charAt(0) !== "{") return null;
+    let data = null;
+    try { data = JSON.parse(text); } catch { return null; }
+    if (!data || typeof data !== "object") return null;
+    const extraction = (data.document_extraction && typeof data.document_extraction === "object")
+      ? data.document_extraction : data;
+    const filled = Array.isArray(extraction.filled_fields) ? extraction.filled_fields : [];
+    const confidence = (extraction.recommendation_confidence && typeof extraction.recommendation_confidence === "object")
+      ? extraction.recommendation_confidence : (data.recommendation_confidence || {});
+    const recommendations = (extraction.recommendations && typeof extraction.recommendations === "object")
+      ? extraction.recommendations : (data.recommendations || {});
+    let recommended = Array.isArray(extraction.recommended_fields) ? extraction.recommended_fields
+      : (Array.isArray(data.recommended_fields) ? data.recommended_fields : []);
+    if (!recommended.length) recommended = Object.keys(recommendations);
+    const missing = Array.isArray(extraction.missing_required_fields) ? extraction.missing_required_fields
+      : (Array.isArray(data.missing_required_fields) ? data.missing_required_fields : []);
+    if (!filled.length && !recommended.length) return null;
+    return { filled, recommended, confidence, recommendations, missing };
+  }
+
+  let lastRequirementSummaryKey = "";
+  function renderRequirementSummary(summary) {
+    if (!summary) return;
+    const signature = JSON.stringify([summary.filled, summary.recommended, summary.missing]);
+    if (signature === lastRequirementSummaryKey) return;
+    lastRequirementSummaryKey = signature;
+    clearEmpty();
+    const wrap = el("div", "oc-amsg");
+    wrap.append(el("div", "oc-aav", "✦"));
+    const body = el("div", "oc-abody");
+    const card = el("div", "oc-req-summary");
+    card.append(el("h4", null, "需求解析摘要"));
+    if (summary.filled.length) {
+      card.append(el("div", "oc-req-line",
+        `AI 已带入 ${summary.filled.length} 个字段：${summary.filled.join("、")}`));
+    }
+    if (summary.recommended.length) {
+      const detail = summary.recommended.map(key => {
+        const value = summary.recommendations[key];
+        const raw = summary.confidence[key];
+        const score = typeof raw === "number" ? `（置信度 ${Math.round(raw * 100)}%）` : "";
+        return value ? `${key}=${value}${score}` : `${key}${score}`;
+      });
+      card.append(el("div", "oc-req-line",
+        `AI 推荐 ${summary.recommended.length} 个默认值：${detail.join("；")}`));
+    }
+    if (summary.missing.length) {
+      card.append(el("div", "oc-req-line oc-req-missing",
+        `仍缺必填项 ${summary.missing.length} 个：${summary.missing.join("、")}`));
+    }
+    body.append(card);
+    wrap.append(body);
+    tinner.append(wrap);
+    scrollDown();
+  }
+
   }
   function noteInThread(text) {
     clearEmpty();
