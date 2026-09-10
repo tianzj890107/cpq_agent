@@ -135,7 +135,7 @@
         return;
       }
       window.LlmSettingsPanel.mount(host, {
-        onSaved: data => setModelLabel(data.agent_model || data.text_model || ""),
+        onSaved: data => setModelLabel(data.model_label || data.model || ""),
       });
     });
   }
@@ -205,25 +205,24 @@
   // 右上角模型文字只表达「模型设置」里的当前语言模型；Agent 会话是否可用是另一件事，
   // 不能用「未连接 / Agent 未就绪」覆盖真实模型。没有配置时才显示提示。
   function modelLabelFromSettings(settings) {
-    const options = (settings && settings.text_options) || [];
-    const id = String((settings && settings.text_model) || "").trim();
+    const options = (settings && settings.options) || [];
+    const id = String((settings && settings.model) || "").trim();
     const option = options.find(item => item && item.id === id);
     return (option && option.label) || id || "未配置模型";
   }
+  // 模型口径统一到唯一事实源：报价的 /api/settings。技术工艺不再有任何独立设置接口，
+  // 读取失败时只回「未配置模型」，不用连接状态或失败状态覆盖真实模型名。
   async function refreshTechShellModel() {
     try {
-      let settings = null;
-      if (window.LlmSettingsPanel && typeof window.LlmSettingsPanel.load === "function") {
-        settings = await window.LlmSettingsPanel.load();
-      } else {
-        const response = await fetch("/api/llm/settings", { headers: authHeaders() });
-        settings = await response.json().catch(() => ({}));
-      }
+      const settings = window.LlmSettingsPanel && typeof window.LlmSettingsPanel.load === "function"
+        ? await window.LlmSettingsPanel.load()
+        : null;
       techShellModel(modelLabelFromSettings(settings));
     } catch (error) {
       techShellModel("未配置模型");
     }
   }
+
   function techShellModel(text) {
     const info = $("techModelInfo");
     if (!info) return;

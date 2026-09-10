@@ -52,6 +52,7 @@ import cpq_match
 import cpq_ontology
 import cpq_msgutil
 import cpq_llm
+import cpq_shared_settings
 
 DB_NAME = cpq_db.DB_LABEL
 _DB_SCHEMA_TEXT = cpq_db.schema_text("quote")
@@ -1867,18 +1868,14 @@ def _to_int_or_none(v):
 # --- 设置（模型 / 采样参数 / 各 provider 的 API Key） ------------------------
 
 def load_settings() -> dict:
-    try:
-        with open(SETTINGS_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    # 唯一配置的读写收敛到 cpq_shared_settings：报价 / 配置 / 规则 / 技术工艺
+    # 四个进程读的是同一份文件，不再各写一套。
+    return cpq_shared_settings.load()
 
 
 def save_settings(s: dict):
     try:
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(s, f, ensure_ascii=False, indent=2)
+        cpq_shared_settings.save(s)
     except OSError:
         pass
 
@@ -2164,6 +2161,34 @@ class Bridge:
             prov = get_model_provider(self.conv.model)
             prov_label = PROVIDERS.get(prov, {}).get("label", prov)
             configured = bool(get_api_key_for(prov))
+        # 统一的「模型设置」卡片（报价 / 配置 / 规则 / 技术工艺同一份表单）只认一个
+        # 模型字段：这里把可选模型和按 provider 的 Key 可见度一起给出，前端不必再
+        # 调 /api/models 拼第二套清单。**只回打码提示，绝不回明文。**
+        saved_keys = cpq_shared_settings.api_keys(load_settings())
+        local_public = cpq_llm.local_public()
+        options, providers, seen = [], [], set()
+        for item in models_catalog():
+            options.append({
+                "id": item["id"],
+                "label": item["label"],
+                "provider": item["provider"],
+                "provider_label": item.get("provider_label") or item["provider"],
+                "configured": bool(item.get("configured")),
+            })
+            name = item.get("provider")
+            if not name or name == "none" or name in seen:
+                continue
+            seen.add(name)
+            base_url = PROVIDERS.get(name, {}).get("base_url") or ""
+            if name == cpq_llm.LOCAL_PROVIDER:
+                base_url = local_public.get("base_url") or ""
+            providers.append({
+                "provider": name,
+                "label": item.get("provider_label") or name,
+                "base_url": base_url,
+                "configured": bool(get_api_key_for(name)),
+                "hint": cpq_shared_settings.mask(saved_keys.get(name, "")),
+            })
         return {
             "model": self.conv.model,
             "provider": prov,
@@ -2173,7 +2198,13 @@ class Bridge:
             "max_tokens": prof.max_tokens,
             "thinking": prof.thinking,
             "thinking_budget": prof.thinking_budget,
-            "local": cpq_llm.local_public(),
+            "local": local_public,
+            "options": options,
+            "keys": providers,
+            # 报价服务本身没有 RBAC（本机/内网部署，登录由 CPQ 统一入口管）；
+            # 技术工艺入口走自己的角色校验后会把这两个字段按角色改写。
+            "editable": True,
+            "secrets_editable": True,
         }
 
     def apply_settings(self, s: dict, persist: bool = True) -> dict:

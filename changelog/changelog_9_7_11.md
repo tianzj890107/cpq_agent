@@ -223,3 +223,26 @@
 - 部署 172.16.10.34（`/home/wugefei/CPQ/cpq_agent`，8010 主进程 + 8012 技术工艺子进程）：`git fetch gitlab 20260909` → `merge --ff-only` 到 `51ad11c` 后重启，并校验重启前后 HEAD 与端口监听。首轮重启只换掉 8010，8012 作为旧父进程遗留的孤儿进程仍在跑旧代码，已修正重启顺序为「先停 8012、再停 8010、等两者都退出后再起 8010（由新主进程重新拉起子进程）」，两个进程均为当日新 PID。可复用脚本保留在服务器 `/tmp/deploy_51ad11c.sh`（HEAD 全量校验、端口释放等待、健康轮询，不使用 kill -9）。
 - 部署后验证：8010 `/` 与 8012 `/api/health` 均 200；`tech-workbench.js?v=twb9`、`assembly-integration.css?v=ai7`，且 `tech-workbench.js` 含 `techSubstepsBar`、`assembly-integration.js` 含 `aria-busy`，说明本轮前端改动已上线；`/`、`tech-workbench.html`、`assembly-integration.html`、`cost.html`、`process.html`、`summary.html`、`report-publish.html`、`tech-embed.js`、`agent-chat.js` 全部 200。
 - 运维现状（非本轮缺陷）：在部署目录按实际配置运行 readiness 探测得到 `provider=qwen model=qwen3.5-plus`，返回 `未配置阿里云百炼 API Key，Agent 无法启动` —— 报错已按当前 provider 提示而非一律指向 Anthropic，且公网网关不写入 `NO_PROXY`；该服务器当前未配置所选模型的 Key，因此 Agent 仍不可用，属配置问题，需在前端模型设置或 provider 环境变量中补齐 Key 后复核，代码路径本身已验证正确。
+
+## 25. 报价与技术工艺统一模型配置 / API Key Spec 与 Red 基线（9-10）
+
+- 新增统一配置 Spec：报价侧 `cpq_settings.json + /api/settings` 为唯一事实源；配置、规则和技术工艺直接使用同一模型、生成参数及按 provider 保存的同一份 API Key，技术工艺不得再持久化 `llm_settings.json` 或要求二次保存，也不得在模型能力不足时静默切换。
+- 统一交互口径为全屏遮罩中的视口居中模态卡片：所有侧栏设置入口和页头模型名称共用一个打开器与一套字段，删除“助手模型 / 技术工艺模型”双页签、技术工艺专属字段及锚点定位浮层，并补充关闭、焦点恢复和敏感信息不回显要求。
+- 新增 `tests/test_unified_model_settings_and_api_keys_red.py`，覆盖唯一 `/api/settings` 前端入口、报价双配置移除、技术工艺居中模态、第二持久化源移除、单一报价模型复用及全局 Key 提交契约。Red 实跑 7/7 按预期失败，失败点与上述缺口逐一对应；`git diff --check` 通过。本节只交付 Spec 与实现前 Red，不修改业务实现，未提交、未推送、未部署。
+
+## 26. 技术工艺 Agent 能力恢复 0–3 Spec / Red 基线（9-10）
+
+- 新增 0–3 基础 Spec：先冻结项目/图纸/零件/工艺/成本/整合/需求/报告/工作流/Agent 的既有后端能力，再建立不可缩水守护；父壳与九阶段 iframe 改用带 namespace、version、requestId、projectId、stage 和同源校验的标准消息协议，彻底禁止父壳按 CSS selector 跨层点击业务按钮。
+- 明确页面所有权：父壳只承载导航、唯一会话和全局功能；零件清单、零件详情、3D/2D、工艺、成本与报告全部在右侧看板内部导航和展开，不得迁到父级 Drawer/Modal。
+- 新增后端能力基线、看板桥协议和九阶段动作注册表三组测试；后端基线用于保护现有实现，协议/注册表 Red 用于暴露当前缺少共享运行时、仍跨 iframe 操作 DOM、业务动作仍绑定 selector 的缺口。本节不实现协议或业务动作，不修改后端与前端业务代码，未提交、未推送、未部署。
+
+## 26. 报价与技术工艺统一模型配置、全局 API Key 与居中设置卡片（9-10）
+
+- 唯一事实源落地：新增仓库根目录共享模块 `cpq_shared_settings.py`（原子写 `cpq_settings.json`、`api_keys` 按 provider 逐项合并、只产出打码提示），`cpq_agent_server.py` 的 `load_settings/save_settings` 改为委托该模块，报价 / 配置 / 规则 / 技术工艺读的是同一份文件、同一把 Key。
+- 技术工艺 `llm_settings.py` 重写为适配层：删除 `tech_data/llm_settings.json` 持久化与独立 `_state["keys"]`，每次调用重新读报价配置，因此报价保存后无需重启即生效；对外仍是 `resolve/selected_model/snapshot/update` 等原接口。新增 `ensure_vision_capable()`：当前报价模型不支持图像时如实报「当前模型 X 不支持图像解析」，不静默降级、不另设多模态模型。`PROVIDERS`/`MODEL_PROVIDERS`/`VISION_MODELS` 与本地网关 `cpq_local` 均保留，模型清单直接来自报价可选模型，不再维护第二份白名单。
+- 接口收敛：`tech_app/backend/main.py` 新增 `GET/PUT /api/settings`，与 `/api/llm/settings` 共用同一实现、同一份配置与同一套角色校验；旧路径只作兼容委托，前端与业务逻辑不再依赖。`LlmSettingsBody` 新增唯一 `model` 字段，旧客户端的 `vision_model`/`text_model` 在服务端归一到同一个 model。`health()` 对 `resolve(vision=True)` 做兜底，能力不匹配由图纸解析步骤报错而不是让健康检查 500。
+- 前端唯一入口：`llm-settings-panel.js` 全量走 `/api/settings`，只保留一个「模型」字段加 Temperature / 最大输出 Tokens / 深度思考 / 当前 provider 的 API Key；Key 输入框保存成功即清空。`确认需求解析结果.html`、`报价首页.html`、`规则助手-规则配置.html`、`XBOM智能体-配置BOM生成.html` 删除「助手模型 / 技术工艺模型」双页签与整块技术工艺专属表单（`setTabTech`/`techVisionBox`/`setTechKey`/`switchSettingsTab`/`saveTechLlm`/`saveActiveSettings`），保存按钮直接走统一的 `saveSettings()`；页面不再出现 `/api/llm/settings`。`agent-chat.js` 与 `tech-workbench.js` 的模型名改读 `settings.model` + `settings.options`。
+- 居中模态：`tech-workbench.html` 新增固定 DOM `#techModelSettingsMask`（`role="presentation"`，全屏遮罩 + flex 居中）与 `#techModelSettings`（`role="dialog"`、`aria-modal`、显式关闭按钮）；`tech-workbench.js` 的 `openTechModelSettings()` 不再做 `getBoundingClientRect` / `style.left` / `style.top` 定位，改为开关固定 DOM、点遮罩或 Escape 关闭、点卡片内部不关闭、打开后焦点进卡片、关闭后焦点回到触发按钮。`tech-workbench.css` 的 `.tech-model-settings` 由锚点浮层改为遮罩内居中卡片，并联动 `#techModelSettings` / `#techModelSettingsClose` 的 focus-visible。
+- 跨进程即时生效：`llm_settings.sync_live_agents()` 比对当前路由（模型 / provider / base_url / Key / native，只做相等判断，不打印 Key），发现变化就对已建 Agent 会话 `apply_settings(..., rebuild_client=True)`；`/api/projects/{id}/agent/meta` 与 `/agent/send` 在可用性检查后各调用一次，因此报价侧在另一个进程里换模型或换 Key 后，技术工艺已有会话的下一次对话就会重建 client，不会继续把新模型发给旧厂商。`update()` 保存后也走同一函数。
+- 测试结果：`tests/test_unified_model_settings_and_api_keys_red.py` 7/7 通过（基线 7/7 失败）；新增 `tests/test_unified_model_settings_backend_dynamic.py` 4/4 通过，覆盖「报价写盘后技术工艺直接解析到」「技术工艺保存写同一份文件且不落第二份」「快照不含明文 Key」「路由变化才重建 client（True/False/True）」。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 129 项通过（3 跳过，均为需 open-claude venv 的端到端用例）；`./open-claude/.venv/bin/python` 同命令 129/129 全通过。`py_compile cpq_agent_server.py cpq_suite_server.py cpq_llm.py tech_app/backend/services/llm_settings.py`、`node --check`（`llm-settings-panel.js` / `tech-workbench.js` / `agent-chat.js` / `tech-embed.js`）与 `git diff --check` 均通过。
+- 未新增 `.env`、未写入任何真实 Key、未创建或提交 `cpq_settings.json`（该文件在 `.gitignore` 内）；未修改 `open-claude` 包内文件，未改后端 API 契约、数据库、任务流与业务数据；本地改动尚未提交、未推送、未部署。

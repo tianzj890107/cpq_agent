@@ -1,78 +1,55 @@
-"""全局大模型配置 —— 首页「模型设置」与 2.1 Agent 小窗共用的唯一真相源。
+"""技术工艺的模型配置 —— 唯一事实源是报价的 cpq_settings.json。
 
-界面上只暴露六项：
+以前技术工艺把「多模态模型 / 语言模型 / API Key」另存进
+`tech_app/tech_data/llm_settings.json`，界面上写着"全局"，实际只有技术工艺自己在用：
+报价换了模型、换了 Key，技术工艺的请求还是老样子。
 
-    多模态模型 · 语言模型 · 温度 · 最大 token · 是否思考 · API Key
+现在本模块只是一个**适配层**：
 
-**按所选模型的提供商走各自的官方网关。** 之前平台把所有请求都发往部署时配的
-那一个 MaaS 兼容端点（ws-…maas.aliyuncs.com），于是选了 opus5 也只是拿这个 id
-去问一个不认识它的网关；再加上失败后静默降级到旧模型池，用户看到的"AI 解析"
-其实出自一个他从没选过的型号。现在：
+  · 读：每次都从根目录 cpq_settings.json（`cpq_shared_settings`）重新解析当前
+        报价 model，报价侧保存后不需要重启、也不需要谁通知，下一次调用就是新值；
+  · 写：把模型 / 推理参数 / 该 provider 的 Key 写回同一份文件，并转告报价侧的
+        /api/settings，让报价、配置、规则三个助手的内存态一起刷新；
+  · 只有一个模型：图纸解析、文档分析、工艺推荐、成本测算和 Agent 对话都解析
+        同一个报价模型，不再有 vision_model / text_model 之分；
+  · 当前模型不支持图像时如实报错（并带上实际模型名），不静默降级、不另设
+        "多模态模型"绕开统一要求。
 
-  · 模型 → 提供商 → 官方 base_url + 该提供商的 Key（PROVIDERS）
-  · 不再有模型池，也没有任何降级链；配的哪个就用哪个，失败就如实报错。
-
-**Agent 对话用的就是这里的「语言模型」**，不单列"对话模型" —— 否则又会变成
-两个模型设置、两处对不上。
-
-密钥按提供商分别保存（选了哪两个模型就只需要哪几把 Key），只写不读：
-接口永远只回「是否已配置」和打码提示。
+密钥安全：Key 只从共享配置取出来交给调用方，本模块不打印、不写日志、不回接口。
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
-from typing import Any, Optional
+import urllib.request
+from pathlib import Path
+from typing import Any
 
-from ..config import DATA_DIR
+from ..config import ROOT_DIR
 
-_PATH = DATA_DIR / "llm_settings.json"
-_lock = threading.RLock()
+# 报价的唯一配置在仓库根目录（tech_app 的上一级），读写都走共享模块。
+REPO_ROOT = Path(ROOT_DIR).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import cpq_shared_settings                                           # noqa: E402
 
 # 后台常量：不进设置界面，但推理时仍然要用。
 THINKING_BUDGET = 8000
 MAX_ITERATIONS = 30
 
-# 可选模型清单（受控白名单）。multimodal 决定它能不能出现在「多模态模型」里；
-# DeepSeek 没有视觉能力，让它可选等于允许把图纸解析配崩。
-MODELS: tuple[dict[str, Any], ...] = (
-    {"id": "claude-opus-5",     "label": "Opus 5",            "provider": "anthropic", "multimodal": True},
-    {"id": "gpt-5.6-sol",       "label": "GPT-5.6 Sol",       "provider": "openai",    "multimodal": True},
-    {"id": "qwen3.5-plus",      "label": "Qwen3.5 Plus",      "provider": "qwen",      "multimodal": True},
-    {"id": "qwen3.8-max",       "label": "Qwen3.8 Max",       "provider": "qwen",      "multimodal": True},
-    {"id": "deepseek-v4-pro",   "label": "DeepSeek V4 Pro",   "provider": "deepseek",  "multimodal": False},
-    {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "provider": "deepseek",  "multimodal": False},
-)
+PARAM_RANGES: dict[str, tuple[float, float]] = {
+    "temperature": (0.0, 1.0),
+    "max_tokens": (256, 64000),
+}
 
-# ——【CPQ 定制】本地网关（配置报价CPQ 一体化服务注入）—————————————————————
-# 本 App 嵌在 CPQ 里时，模型要和另外三个助手走**同一个** OpenAI 兼容端点，
-# 由 tech_app_launch.py 从 cpq_settings.json 的 local 一节读出来注入这三个环境变量。
-# 上游"模型 → 提供商 → 官方 base_url"的规则不变，只是多一个 base_url 来自注入的
-# 提供商；没注入时下面的分支整段不生效，行为与上游完全一致。
-CPQ_LOCAL_PROVIDER = "cpq_local"
-_CPQ_BASE_URL = os.getenv("TECH_LOCAL_BASE_URL", "").strip().rstrip("/")
-_CPQ_MODEL = os.getenv("TECH_LOCAL_MODEL", "").strip()
-_CPQ_TEXT_MODEL = os.getenv("TECH_LOCAL_TEXT_MODEL", "").strip() or _CPQ_MODEL
-CPQ_LOCAL_READY = bool(_CPQ_BASE_URL and _CPQ_MODEL)
+# 报价侧没有配置模型时的默认值（与报价的默认模型一致，不是技术工艺私有默认）。
+DEFAULT_MODEL = "qwen3.5-plus"
 
-if CPQ_LOCAL_READY:
-    # 网关自报的模型 id 直接作为白名单项：它就是这个端点唯一认识的名字。
-    # 视觉能力无法探测，按 CPQ 的既有约定当作多模态（图纸解析要用）。
-    _extra = [{"id": _CPQ_MODEL, "label": f"本地网关 · {_CPQ_MODEL}",
-               "provider": CPQ_LOCAL_PROVIDER, "multimodal": True}]
-    if _CPQ_TEXT_MODEL != _CPQ_MODEL:
-        _extra.append({"id": _CPQ_TEXT_MODEL, "label": f"本地网关 · {_CPQ_TEXT_MODEL}",
-                       "provider": CPQ_LOCAL_PROVIDER, "multimodal": False})
-    MODELS = tuple(_extra) + MODELS          # 排在最前：默认选中的就是它
-
-VISION_MODELS = tuple(item["id"] for item in MODELS if item["multimodal"])
-TEXT_MODELS = tuple(item["id"] for item in MODELS)
-_MODEL_PROVIDER = {item["id"]: item["provider"] for item in MODELS}
-_MODEL_LABEL = {item["id"]: item["label"] for item in MODELS}
-
-# 每个提供商的**官方网关**与密钥环境变量。
-# native=True 表示走该厂商自己的 SDK（Anthropic），其余都是 OpenAI 兼容协议。
+# 每个提供商的官方网关与该商的 Key 环境变量。
+# native=True 表示走厂商自己的 SDK（Anthropic），其余都是 OpenAI 兼容协议。
 PROVIDERS: dict[str, dict[str, Any]] = {
     "anthropic": {
         "label": "Anthropic",
@@ -100,274 +77,386 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     },
 }
 
-if CPQ_LOCAL_READY:   # 【CPQ 定制】base_url 来自注入而非硬编码，其余与其他提供商同构
+# ——【CPQ 定制】本地网关（由 tech_app_launch.py 从 cpq_settings.json 的 local 一节注入）
+# 与另外三个助手共用同一个 OpenAI 兼容端点；没注入时整段不生效。
+CPQ_LOCAL_PROVIDER = "cpq_local"
+CPQ_LOCAL_BASE_URL = os.getenv("TECH_LOCAL_BASE_URL", "").strip()
+CPQ_LOCAL_MODEL = os.getenv("TECH_LOCAL_MODEL", "").strip()
+CPQ_LOCAL_TEXT_MODEL = os.getenv("TECH_LOCAL_TEXT_MODEL", "").strip() or CPQ_LOCAL_MODEL
+CPQ_LOCAL_READY = bool(CPQ_LOCAL_BASE_URL and CPQ_LOCAL_MODEL)
+
+if CPQ_LOCAL_READY:
     PROVIDERS[CPQ_LOCAL_PROVIDER] = {
         "label": "本地网关（CPQ 共用）",
-        "base_url": _CPQ_BASE_URL,
+        "base_url": CPQ_LOCAL_BASE_URL,
         "env": ("TECH_LOCAL_API_KEY",),
         "native": False,
     }
 
-PARAM_RANGES: dict[str, tuple[float, float]] = {
-    "temperature": (0.0, 1.0),
-    "max_tokens": (256, 64000),
+# 显式模型 → 提供商。报价的 model 只会是这里的 id 或本地网关的模型名；
+# 表外的按厂商前缀兜底，兜不住就报错，绝不"猜一个"继续跑。
+MODEL_PROVIDERS: dict[str, str] = {
+    "claude-opus-5": "anthropic",
+    "gpt-5.6-sol": "openai",
+    "qwen3.5-plus": "qwen",
+    "qwen3.8-max": "qwen",
+    "deepseek-v4-pro": "deepseek",
+    "deepseek-v4-flash": "deepseek",
+}
+if CPQ_LOCAL_READY:
+    for _local_model in (CPQ_LOCAL_MODEL, CPQ_LOCAL_TEXT_MODEL):
+        MODEL_PROVIDERS[_local_model] = CPQ_LOCAL_PROVIDER
+
+# 图像能力的显式清单：报价当前模型不在这里、且其 provider 也没有视觉能力时，
+# 图纸解析必须报"当前模型不支持该能力"，而不是偷偷换模型。
+VISION_MODELS = frozenset(
+    model for model, provider in MODEL_PROVIDERS.items()
+    if provider in ("anthropic", "openai", "qwen") or provider == CPQ_LOCAL_PROVIDER
+)
+
+_MODEL_LABEL = {
+    "claude-opus-5": "Opus 5",
+    "gpt-5.6-sol": "GPT-5.6 Sol",
+    "qwen3.5-plus": "Qwen3.5 Plus",
+    "qwen3.8-max": "Qwen3.8 Max",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
 }
 
-_DEFAULTS: dict[str, Any] = {
-    # 【CPQ 定制】注入了本地网关就默认选它——嵌在 CPQ 里时管理员不该被迫先去
-    # 设置页点一遍才能用；没注入时仍是上游的默认值。
-    "vision_model": _CPQ_MODEL if CPQ_LOCAL_READY else "qwen3.5-plus",
-    "text_model": _CPQ_TEXT_MODEL if CPQ_LOCAL_READY else "qwen3.5-plus",
-    "temperature": None,        # None = 用模型默认值
-    "thinking": False,
-    "max_tokens": None,         # None = 用默认值
-}
+_PREFIX_PROVIDERS = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("qwen", "qwen"),
+    ("deepseek", "deepseek"),
+)
+
+_lock = threading.RLock()
+
+# 上一次推给 Agent 会话的路由（模型 / 提供商 / 网关 / Key）。会话是在构造 client 时
+# 就把 provider 与 Key 读进去的：报价侧改了设置、或者运维换了 <PROVIDER>_BASE_URL，
+# 沿用旧 client 会把新模型发给旧厂商。这里只做「有没有变」的比较 —— Key 只以原文存
+# 在内存里做相等判断，不打印、不外传、不落盘。
+_applied_route: dict[str, str] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 共享配置读写
+# --------------------------------------------------------------------------- #
+def _quote_settings() -> dict[str, Any]:
+    """报价的唯一配置。每次调用都重新读盘，报价改完立刻生效，不需要重启。"""
+    data = cpq_shared_settings.load()
+    return data if isinstance(data, dict) else {}
+
+
+def _saved_keys() -> dict[str, str]:
+    return cpq_shared_settings.api_keys(_quote_settings())
+
+
+def current_model_id() -> str:
+    """报价当前选中的模型（唯一模型，技术工艺不再各自选）。"""
+    model = str(_quote_settings().get("model") or "").strip()
+    if not model:
+        return DEFAULT_MODEL
+    if model == "__local__" and CPQ_LOCAL_READY:      # 报价的「本地模型」哨兵
+        return CPQ_LOCAL_MODEL
+    return model
 
 
 def provider_of(model_id: str) -> str:
-    """模型属于哪个提供商。白名单外的一律拒绝，不做前缀猜测。"""
-    provider = _MODEL_PROVIDER.get(str(model_id or "").strip())
-    if not provider:
-        raise ValueError(f"模型 {model_id} 不在可选清单内")
-    return provider
+    """模型属于哪个提供商。表外按厂商前缀兜底；兜不住如实报错。"""
+    model = str(model_id or "").strip()
+    if not model:
+        raise ValueError("未配置语言模型")
+    if model in MODEL_PROVIDERS:
+        return MODEL_PROVIDERS[model]
+    if model in ("none",):
+        raise ValueError("当前为「无模型」模式：技术工艺不调用大模型")
+    lowered = model.lower()
+    for prefix, provider in _PREFIX_PROVIDERS:
+        if lowered.startswith(prefix):
+            return provider
+    raise ValueError(f"模型 {model} 的提供商无法确定，请在「模型设置」里重新选择")
 
 
 def label_of(model_id: str) -> str:
-    return _MODEL_LABEL.get(model_id, model_id)
+    model = str(model_id or "").strip()
+    return _MODEL_LABEL.get(model, model)
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+def base_url_of(provider: str) -> str:
+    """网关地址：部署时的 <PROVIDER>_BASE_URL 优先，其次该商的官方网关。"""
+    spec = PROVIDERS.get(provider) or {}
+    override = os.getenv(f"{provider.upper()}_BASE_URL", "").strip()
+    return (override or str(spec.get("base_url") or "")).rstrip("/")
 
 
-def _mask(secret: str) -> str:
-    secret = (secret or "").strip()
-    if not secret:
-        return ""
-    return f"{secret[:7]}…{secret[-4:]}" if len(secret) > 14 else "已配置"
-
-
-# --------------------------------------------------------------------------- #
-# 持久化
-# --------------------------------------------------------------------------- #
-def _load() -> dict[str, Any]:
-    data = dict(_DEFAULTS)
-    data["keys"] = {}
-    try:
-        saved = json.loads(_PATH.read_text(encoding="utf-8"))
-        if isinstance(saved, dict):
-            for key in _DEFAULTS:
-                if key in saved:
-                    data[key] = saved[key]
-            if isinstance(saved.get("keys"), dict):
-                data["keys"] = {k: str(v) for k, v in saved["keys"].items() if v}
-    except (OSError, json.JSONDecodeError):
-        pass
-    # 【CPQ 定制】存盘里的模型可能已不在白名单里（改了 cpq_settings.json 的本地网关
-    # 模型名之后就会这样）。不校正的话，之后每次 resolve/snapshot 都会抛
-    # "模型 X 不在可选清单内"，整个 App 起来就是坏的——退回默认值即可。
-    if data["vision_model"] not in VISION_MODELS:
-        data["vision_model"] = _DEFAULTS["vision_model"]
-    if data["text_model"] not in TEXT_MODELS:
-        data["text_model"] = _DEFAULTS["text_model"]
-    # 首次启动时把 .env 里已有的 Key 收进来，省得管理员再填一遍。
-    for name, spec in PROVIDERS.items():
-        if data["keys"].get(name):
-            continue
-        for env_name in spec["env"]:
-            value = os.getenv(env_name, "").strip()
-            if value:
-                data["keys"][name] = value
-                break
-    return data
-
-
-_state = _load()
-
-
-def _persist() -> None:
-    _PATH.parent.mkdir(parents=True, exist_ok=True)
-    _PATH.write_text(json.dumps(_state, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        os.chmod(_PATH, 0o600)
-    except OSError:
-        pass
-
-
-def _export_env() -> None:
-    """把密钥同步到环境变量 —— open-claude 的 Agent 就是从那里取的。"""
-    with _lock:
-        keys = dict(_state["keys"])
-    for name, spec in PROVIDERS.items():
-        value = keys.get(name)
+def api_key_of(provider: str, keys: dict[str, str] | None = None) -> str:
+    """同一个 provider 在四个助手和技术工艺里读的是同一把全局 Key。"""
+    saved = _saved_keys() if keys is None else keys
+    key = str(saved.get(provider) or "").strip()
+    if key:
+        return key
+    if provider == CPQ_LOCAL_PROVIDER:
+        key = str(saved.get("local") or "").strip()      # 报价侧本地模型的旧叫法
+        if key:
+            return key
+    for env_name in (PROVIDERS.get(provider) or {}).get("env") or ():
+        value = os.getenv(env_name, "").strip()
         if value:
-            for env_name in spec["env"]:
-                os.environ[env_name] = value
+            return value
+    return ""
 
 
-_export_env()
+def selected_model(*, vision: bool = False) -> str:
+    model = current_model_id()
+    if vision:
+        ensure_vision_capable(model)
+    return model
 
 
-# --------------------------------------------------------------------------- #
-# 读
-# --------------------------------------------------------------------------- #
-def _options(ids: tuple[str, ...]) -> list[dict[str, str]]:
-    return [{"id": item["id"], "label": item["label"], "provider": item["provider"]}
-            for item in MODELS if item["id"] in ids]
-
-
-def selected_model(*, vision: bool) -> str:
-    with _lock:
-        return _state["vision_model"] if vision else _state["text_model"]
+def ensure_vision_capable(model: str | None = None) -> str:
+    """图纸解析这类必须用图像能力的调用先过这里：不支持就带着模型名报错。"""
+    target = str(model or current_model_id()).strip()
+    provider = provider_of(target)
+    if target in VISION_MODELS or provider in ("anthropic", "openai", "qwen"):
+        return target
+    if provider == CPQ_LOCAL_PROVIDER:
+        return target
+    raise ValueError(f"当前模型 {target} 不支持图像解析，请在「模型设置」里改用支持多模态的模型")
 
 
 def resolve(*, vision: bool) -> dict[str, Any]:
-    """把「当前该用哪个模型」解析成一次调用所需的全部信息。
+    """把「报价当前模型」解析成一次调用所需的全部信息。
 
-    调用方不再自己拼 base_url / 取环境变量 —— 那正是之前所有请求都跑去同一个
-    错误网关的原因。
+    调用方不再自己拼 base_url 或取环境变量 —— 那正是以前请求跑去别的网关的原因。
     """
-    model = selected_model(vision=vision)
+    model = current_model_id()
+    if vision:
+        ensure_vision_capable(model)
     provider = provider_of(model)
-    spec = PROVIDERS[provider]
-    with _lock:
-        api_key = _state["keys"].get(provider, "")
+    spec = PROVIDERS.get(provider)
+    if spec is None:
+        raise ValueError(f"模型 {model} 的提供商 {provider} 未配置网关")
     return {
         "model": model,
         "provider": provider,
-        "provider_label": spec["label"],
-        "base_url": spec["base_url"],
-        "native": spec["native"],
-        "api_key": api_key,
+        "provider_label": spec.get("label") or provider,
+        "base_url": base_url_of(provider),
+        "native": bool(spec.get("native")),
+        "api_key": api_key_of(provider),
     }
 
 
 def inference_params() -> dict[str, Any]:
-    """平台自身推理（图纸解析、工艺、成本）要用的参数。
-
-    与 agent_params 读的是同一份状态 —— 温度/最大 token/是否思考对 Agent 对话
-    和平台调用**同时**生效。
-    """
-    with _lock:
-        return {key: _state[key] for key in ("temperature", "thinking", "max_tokens")}
+    """温度 / 最大 token / 深度思考 —— 与报价是同一份配置。"""
+    data = _quote_settings()
+    return {
+        "temperature": data.get("temperature"),
+        "thinking": bool(data.get("thinking")),
+        "max_tokens": data.get("max_tokens"),
+    }
 
 
 def agent_params() -> dict[str, Any]:
-    """Agent 会话要用的参数。对话模型就是这里的「语言模型」。"""
+    """Agent 会话要用的参数：模型与推理参数同样取自报价配置。"""
     params = inference_params()
-    params["agent_model"] = selected_model(vision=False)
-    params["thinking_budget"] = THINKING_BUDGET
+    params["agent_model"] = current_model_id()
+    params["thinking_budget"] = _quote_settings().get("thinking_budget") or THINKING_BUDGET
     params["max_iterations"] = MAX_ITERATIONS
     return params
 
 
-def snapshot(*, can_edit: bool = False, can_edit_secrets: bool = False) -> dict[str, Any]:
-    """两个入口共用的同一份配置。**密钥只回可见度，不回明文。**
-
-    两级权限分开给：
-      can_edit          改模型与生成参数 —— 日常运维，工艺经理就该能调；
-      can_edit_secrets  改 API Key —— 是密钥，门槛照旧只给管理员。
-    原来两件事共用一个 is_admin，于是 CPQ 单点登录下（角色只有销售经理/工艺经理、
-    没有 admin）连换个模型都做不到。
-    """
-    with _lock:
-        state = dict(_state)
-        keys = dict(state["keys"])
-    vision_model = state["vision_model"]
-    text_model = state["text_model"]
-    # 只列当前两个模型实际用到的提供商 —— 没用到的 Key 摆出来只是噪声。
-    used = []
-    for provider in dict.fromkeys([provider_of(vision_model), provider_of(text_model)]):
-        used.append({
+def _options() -> list[dict[str, Any]]:
+    """可选模型清单：报价能选的，技术工艺就能选——不额外维护第二份白名单。"""
+    options: list[dict[str, Any]] = []
+    for model, provider in MODEL_PROVIDERS.items():
+        options.append({
+            "id": model,
+            "label": label_of(model),
             "provider": provider,
-            "label": PROVIDERS[provider]["label"],
-            "base_url": PROVIDERS[provider]["base_url"],
-            "key_set": bool(keys.get(provider)),
-            "key_hint": _mask(keys.get(provider, "")),
+            "provider_label": (PROVIDERS.get(provider) or {}).get("label") or provider,
         })
+    return options
+
+
+def _provider_status(providers: list[str]) -> list[dict[str, Any]]:
+    keys = _saved_keys()
+    out = []
+    for provider in providers:
+        spec = PROVIDERS.get(provider) or {}
+        key = api_key_of(provider, keys)
+        out.append({
+            "provider": provider,
+            "label": spec.get("label") or provider,
+            "base_url": base_url_of(provider),
+            "configured": bool(key),
+            "hint": cpq_shared_settings.mask(key),
+        })
+    return out
+
+
+def snapshot(*, can_edit: bool = False, can_edit_secrets: bool = False) -> dict[str, Any]:
+    """四个入口共用的同一份配置快照。**密钥只回可见度，不回明文。**
+
+    can_edit / can_edit_secrets 由调用方按角色决定：模型与参数是日常运维，
+    API Key 仍只给管理员。
+    """
+    model = current_model_id()
+    try:
+        provider = provider_of(model)
+    except ValueError:
+        provider = ""
+    keys = _provider_status(list(dict.fromkeys(
+        [provider, *(p for p in MODEL_PROVIDERS.values())])))
     return {
         "editable": bool(can_edit),
         "secrets_editable": bool(can_edit_secrets),
-        "vision_model": vision_model,
-        "text_model": text_model,
-        "vision_options": _options(VISION_MODELS),
-        "text_options": _options(TEXT_MODELS),
-        "temperature": state["temperature"],
-        "max_tokens": state["max_tokens"],
-        "thinking": state["thinking"],
-        "providers": used,
+        "model": model,
+        "model_label": label_of(model),
+        "provider": provider,
+        "provider_label": (PROVIDERS.get(provider) or {}).get("label") or "",
+        "configured": bool(api_key_of(provider)) if provider else False,
+        "options": _options(),
+        "keys": keys,
+        "temperature": _quote_settings().get("temperature"),
+        "max_tokens": _quote_settings().get("max_tokens"),
+        "thinking": bool(_quote_settings().get("thinking")),
     }
 
 
 # --------------------------------------------------------------------------- #
 # 写
 # --------------------------------------------------------------------------- #
-EDITABLE_FIELDS = ("vision_model", "text_model", "temperature", "max_tokens",
-                   "thinking", "api_key", "api_key_provider")
+EDITABLE_FIELDS = ("model", "temperature", "max_tokens", "thinking",
+                   "thinking_budget", "api_key", "api_key_provider")
 
 
 def touches_secrets(patch: dict) -> bool:
     return bool(patch.get("api_key"))
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def update(patch: dict, *, can_edit: bool = False,
            can_edit_secrets: bool = False) -> dict[str, Any]:
-    """按传入字段改写全局配置。未传的字段保持不变。
-
-    取值范围在这里夹住，而不是信任前端 —— temperature 传 5 会让整轮请求被
-    上游打回，错误信息还很难懂。
-    """
+    """按传入字段改写**报价的唯一配置**。未传的字段保持不变。"""
     if not can_edit:
         raise PermissionError("修改模型设置需要工艺经理或管理员权限")
-    # 密钥单独一道门：模型/参数是日常运维，Key 是机密，两者不该共用一把权限。
     if touches_secrets(patch) and not can_edit_secrets:
         raise PermissionError("修改 API Key 需要系统管理员权限")
-    with _lock:
-        # 白名单在服务端才真正生效。只靠前端下拉限制，改一次请求就能绕过 ——
-        # 把 DeepSeek 配成多模态模型，图纸解析会直接崩在调用里。
-        if patch.get("vision_model"):
-            model = str(patch["vision_model"]).strip()
-            if model not in VISION_MODELS:
-                raise ValueError(f"模型 {model} 不能用作多模态模型")
-            _state["vision_model"] = model
-        if patch.get("text_model"):
-            model = str(patch["text_model"]).strip()
-            if model not in TEXT_MODELS:
-                raise ValueError(f"模型 {model} 不在可选清单内")
-            _state["text_model"] = model
-        if "temperature" in patch:
-            value = patch["temperature"]
-            _state["temperature"] = None if value is None else _clamp(
-                float(value), *PARAM_RANGES["temperature"])
-        if "thinking" in patch:
-            _state["thinking"] = bool(patch["thinking"])
-        if "max_tokens" in patch:
-            value = patch["max_tokens"]
-            _state["max_tokens"] = None if value in (None, "") else int(
-                _clamp(float(value), *PARAM_RANGES["max_tokens"]))
-        key = str(patch.get("api_key") or "").strip()
-        if key:
-            provider = str(patch.get("api_key_provider") or "").strip()
-            if provider not in PROVIDERS:
-                raise ValueError("保存 API Key 时必须指明提供商")
-            _state["keys"][provider] = key
-        _persist()
-    if key:
-        _export_env()
-    # 已经建好的会话要跟上新配置，否则「全局生效」只对新会话成立。
-    _apply_to_live_agents(rebuild_client=bool(key))
+
+    changes: dict[str, Any] = {}
+    key_written = ""
+    if patch.get("model"):
+        model = str(patch["model"]).strip()
+        provider_of(model)                      # 选不出来的模型直接拒绝，不静默改
+        changes["model"] = model
+    if "temperature" in patch:
+        value = patch["temperature"]
+        changes["temperature"] = None if value in (None, "") else _clamp(
+            float(value), *PARAM_RANGES["temperature"])
+    if "max_tokens" in patch:
+        value = patch["max_tokens"]
+        changes["max_tokens"] = None if value in (None, "") else int(
+            _clamp(float(value), *PARAM_RANGES["max_tokens"]))
+    if "thinking" in patch:
+        changes["thinking"] = bool(patch["thinking"])
+    if "thinking_budget" in patch:
+        value = patch["thinking_budget"]
+        changes["thinking_budget"] = None if value in (None, "") else int(
+            _clamp(float(value), 0, 64000))
+    key_written = str(patch.get("api_key") or "").strip()
+    if key_written:
+        provider = str(patch.get("api_key_provider") or "").strip()
+        if provider not in PROVIDERS:
+            raise ValueError("保存 API Key 时必须指明提供商")
+        keys = _saved_keys()
+        keys[provider] = key_written
+        changes["api_keys"] = keys
+
+    if changes:
+        with _lock:
+            merged = cpq_shared_settings.merge_into(_quote_settings(), changes)
+            cpq_shared_settings.save(merged)
+    # 报价、配置、规则三个助手跑在另一个进程里，改完要转告一声，否则它们的内存态
+    # 还是旧模型 / 旧 Key。失败不影响本地已保存的结果（下一次读盘仍是新值）。
+    if changes:
+        _notify_quote_agents(changes)
+    # 技术工艺与报价是两个进程：报价侧保存后本进程不会收到回调，所以下一次对话
+    # 进到 sync_live_agents() 时再比对一次当前路由，变了就重建 client。
+    sync_live_agents()
     return snapshot(can_edit=can_edit, can_edit_secrets=can_edit_secrets)
 
 
-def _apply_to_live_agents(*, rebuild_client: bool) -> None:
+def _notify_quote_agents(changes: dict[str, Any]) -> None:
+    """把改动同步给报价侧的 /api/settings（一体化服务下由它广播给另外两个助手）。"""
+    base = os.getenv("CPQ_AUTH_BASE_URL", "").strip().rstrip("/")
+    if not base:
+        return
+    payload = {k: v for k, v in changes.items() if k != "api_keys"}
+    if payload:
+        _post_quote_settings(base, payload)
+    # 报价侧一次只接受一个 provider 的 Key；逐个提交，值不回显、不记录。
+    for provider, secret in (changes.get("api_keys") or {}).items():
+        if secret:
+            _post_quote_settings(base, {"api_key": secret, "provider": provider})
+
+
+def _post_quote_settings(base: str, body: dict[str, Any]) -> None:
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}/agents/quote/api/settings", data=data, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:   # noqa: S310 - 固定内网地址
+            response.read()
+    except Exception:                                               # pragma: no cover - 报价侧没起时忽略
+        pass
+
+
+def _route_matches_applied(route: dict[str, Any]) -> bool:
+    """当前路由是否与上次推给 Agent 会话的完全一致（含 Key，只比不打印）。"""
+    previous = _applied_route
+    if previous is None:
+        return False
+    for field in ("model", "provider", "base_url", "api_key", "native"):
+        if str(previous.get(field) or "") != str(route.get(field) or ""):
+            return False
+    return True
+
+
+def sync_live_agents() -> None:
+    """把当前路由推给所有已建的 Agent 会话；路由变了就连 client 一起重建。
+
+    这是「报价保存设置后技术工艺不需要重启」的落点：技术工艺每次对话前调用一次，
+    报价侧在另一个进程里改的模型 / 网关 / Key 会在这次比对里被发现。路由不可读
+    （没配模型、配置损坏）时安全退出，不打断对话本身。
+    """
+    global _applied_route
+    try:
+        route = resolve(vision=False)
+    except Exception:                                   # pragma: no cover - 配置不可读
+        return
+    rebuild = not _route_matches_applied(route)
     try:
         from . import oc_agent
 
-        oc_agent.apply_settings(agent_params(), rebuild_client=rebuild_client)
+        oc_agent.apply_settings(agent_params(), rebuild_client=rebuild)
     except Exception:                                   # pragma: no cover - 依赖环境
-        pass
+        return
+    _applied_route = {key: str(route.get(key) or "") for key in
+                      ("model", "provider", "base_url", "api_key", "native")}
 
 
 def changed_fields(patch: dict) -> list[str]:
     """审计用：只留字段名，密钥的值永远不进日志。"""
     return sorted(key for key in patch if key != "api_key")
+
+
+# 旧名字保留：有些调用方仍在用「本地模型」这一叫法（报价侧叫 local）。
+LOCAL_MODEL_ALIAS = CPQ_LOCAL_PROVIDER

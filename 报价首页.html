@@ -1414,10 +1414,6 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
-          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
-          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
-        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -1437,34 +1433,6 @@
           <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
           <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
-        </div>
-
-        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 模型设置</label>
-          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
-            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
-            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
-          <label>多模态模型（图纸识别）</label>
-          <select id="setTechVision"></select>
-          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
-          <select id="setTechText"></select>
-          <div class="field-row" style="margin-top:8px">
-            <div style="flex:1">
-              <label>Temperature（留空＝模型默认）</label>
-              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
-            </div>
-            <div style="flex:1">
-              <label>最大输出 Tokens（留空＝默认）</label>
-              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
-            </div>
-          </div>
-          <label class="check-row" style="margin-top:8px">
-            <input type="checkbox" id="setTechThinking"> 开启思考
-          </label>
-          <label>API Key（按提供商分别保存；留空表示不修改）</label>
-          <select id="setTechKeyProvider"></select>
-          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
-          <div class="hint" id="techLlmMsg"></div>
         </div>
 
         <label class="check-row" style="margin-top:16px">
@@ -1492,7 +1460,7 @@
       </div>
       <div class="modal-footer">
         <button class="modal-btn secondary" onclick="closeOverlays()">取消</button>
-        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存</button>
+        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
       </div>
     </div>
   </div>
@@ -2513,7 +2481,6 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      await loadTechLlm();
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -2543,149 +2510,9 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
-    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
-       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
-                                  temperature,max_tokens,thinking,providers[],editable}
-       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
-       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
-       选了一个后端不认的 id，保存时才报错。 */
-    let TECH_LLM = null;
-    function _techFillSelect(sel, options, current) {
-      if (!sel) return;
-      sel.innerHTML = '';
-      (options || []).forEach(o => {
-        const el = document.createElement('option');
-        el.value = o.id;
-        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
-        sel.appendChild(el);
-      });
-      if (current) sel.value = current;
-    }
-    async function loadTechLlm() {
-      try {
-        const r = await fetch('/api/llm/settings');
-        if (!r.ok) throw new Error(r.status);
-        TECH_LLM = await r.json();
-      } catch (e) {
-        TECH_LLM = null;
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
-        return;
-      }
-      const t = TECH_LLM;
-      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
-      _techFillSelect($('setTechText'), t.text_options, t.text_model);
-      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
-      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
-      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
-      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
-      const kp = $('setTechKeyProvider');
-      if (kp) {
-        kp.innerHTML = '';
-        (t.providers || []).forEach(p => {
-          const el = document.createElement('option');
-          el.value = p.provider;
-          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
-          kp.appendChild(el);
-        });
-      }
-      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
-      if ($('techLlmMsg')) {
-        $('techLlmMsg').textContent = miss.length
-          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
-          : '当前所选模型的 Key 均已配置。';
-      }
-    }
-    async function saveTechLlm() {
-      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
-      const body = {};
-      const v = $('setTechVision') && $('setTechVision').value;
-      const x = $('setTechText') && $('setTechText').value;
-      if (v) body.vision_model = v;
-      if (x) body.text_model = x;
-      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
-      body.temperature = tp === '' ? null : Number(tp);
-      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
-      body.max_tokens = mt === '' ? null : Number(mt);
-      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (key) {
-        body.api_key = key;
-        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
-        if (!body.api_key_provider) {
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
-          return;
-        }
-      }
-      try {
-        const r = await fetch('/api/llm/settings', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
-          return;
-        }
-        if ($('setTechKey')) $('setTechKey').value = '';
-        TECH_LLM = await r.json().catch(() => null);
-        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
-      } catch (e) {
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
-      }
-    }
-    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
-    let SETTINGS_TAB = 'agents';
-    function switchSettingsTab(which) {
-      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
-      const body = document.querySelector('#settingsModal .modal-body');
-      if (body) {
-        Array.from(body.children).forEach(ch => {
-          if (ch.id === 'setTabs') return;
-          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
-          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
-          ch.style.display = SETTINGS_TAB === 'agents'
-            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
-            : 'none';
-        });
-      }
-      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
-        const b = $(id);
-        if (!b) return;
-        const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#0067D1)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
-      });
-      const sb = $('saveSettingsBtn');
-      if (sb) {
-        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
-        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
-      }
-      if (SETTINGS_TAB === 'agents') {
-        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
-        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
-      }
-    }
-    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
-    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
-    if (typeof onModelChange === 'function') {
-      const _omcOrig = onModelChange;
-      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
-    }
-    if (typeof onThinkingChange === 'function') {
-      const _otcOrig = onThinkingChange;
-      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
-    }
-    async function saveActiveSettings() {
-      if (SETTINGS_TAB === 'tech') {
-        const m = $('techLlmMsg');
-        if (m) m.textContent = '保存中…';
-        await saveTechLlm();
-      } else {
-        await saveSettings();
-      }
-    }
-    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
+    /* 模型配置已统一：报价、配置、规则与技术工艺共用报价的 /api/settings 与
+       cpq_settings.json，不再有「助手模型 / 技术工艺模型」双页签；技术工艺侧只在
+       服务端保留一条兼容委托路由，前端不再直接依赖它，也不再保存第二份模型状态。 */
     async function saveSettings() {
       const o = selectedModelOption();
       const payload = {

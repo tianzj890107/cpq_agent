@@ -110,11 +110,14 @@ class UpdateUserRole(BaseModel):
 class LlmSettingsBody(BaseModel):
     """全局模型配置。首页与 2.1 Agent 小窗提交的是同一个结构。
 
-    只有六项可改：多模态模型、语言模型、温度、最大 token、是否思考、API Key。
+    只有五项可改：模型、温度、最大 token、是否思考、API Key。
     未传的字段保持不变，因此全部可选；API Key 只允许写入，绝不回显。
     """
 
-    # 多模态用于图纸解析；语言模型同时用于文档分析与 Agent 对话。
+    # 唯一模型：图纸解析、文档分析、工艺推荐、成本测算和 Agent 对话都用它。
+    model: Optional[str] = Field(default=None, max_length=120)
+    # 兼容字段：升级前的客户端还会发这两个名字。它们不再代表"两套模型"，
+    # 服务端只把它们当作同一个 model 的老写法（见 update_runtime_llm_settings）。
     vision_model: Optional[str] = Field(default=None, max_length=120)
     text_model: Optional[str] = Field(default=None, max_length=120)
     temperature: Optional[float] = None
@@ -650,7 +653,12 @@ def update_user_role_ep(username: str, body: UpdateUserRole, user: dict = Depend
 def health():
     # 一律以「模型设置」为准。以前这里按 .env 的 LLM_PROVIDER 分支、再读 qwen 的
     # 模型池，界面上改了模型健康检查却还报旧值。
-    vision = llm_settings.resolve(vision=True)
+    # 当前模型不支持图像时 resolve(vision=True) 会如实报错，健康检查不能因此 500：
+    # 健康检查要回答的是"服务起没起来"，能力不匹配由图纸解析那一步去报。
+    try:
+        vision = llm_settings.resolve(vision=True)
+    except ValueError:
+        vision = llm_settings.resolve(vision=False)
     text = llm_settings.resolve(vision=False)
     return {
         "status": "ok",
@@ -684,6 +692,9 @@ def get_runtime_llm_settings(user: dict = Depends(current_user)):
 
     所有已登录用户都能看；工艺经理及以上能改模型与参数，API Key 只有管理员能改。
     密钥永远只回「是否已配置」。
+
+    兼容保留：真正的读写只有一份实现（下面 /api/settings 是同一个函数），
+    技术工艺前端与业务逻辑一律走 /api/settings，这里不再保存任何独立状态。
     """
     return llm_settings.snapshot(**_llm_settings_rights(user))
 
@@ -695,6 +706,13 @@ def update_runtime_llm_settings(body: LlmSettingsBody, user: dict = Depends(curr
     # 用 exclude_none 的话，temperature=null（恢复模型默认值）会被整个丢掉，
     # 界面上"留空"就永远生效不了。
     patch = body.model_dump(exclude_unset=True)
+    # 旧客户端的 vision_model / text_model 只是同一个 model 的老名字。
+    if not patch.get("model"):
+        legacy = patch.get("vision_model") or patch.get("text_model")
+        if legacy:
+            patch["model"] = legacy
+    patch.pop("vision_model", None)
+    patch.pop("text_model", None)
     if not patch:
         raise HTTPException(400, "没有要修改的设置项")
     try:
@@ -714,6 +732,19 @@ def audit_llm_settings_change(user: dict, patch: dict) -> None:
         "fields": llm_settings.changed_fields(patch),
         "secrets_changed": llm_settings.touches_secrets(patch),
     })
+
+
+# 四个入口（报价 / 配置 / 规则 / 技术工艺）共用的「模型设置」接口。
+# 与 /api/llm/settings 是同一份实现、同一份配置、同一套角色校验，只是路径更直白。
+@app.get("/api/settings")
+def get_shared_model_settings(user: dict = Depends(current_user)):
+    return get_runtime_llm_settings(user)
+
+
+@app.put("/api/settings")
+def update_shared_model_settings(body: LlmSettingsBody,
+                                 user: dict = Depends(current_user)):
+    return update_runtime_llm_settings(body, user)
 
 
 @app.get("/api/projects")
@@ -1109,7 +1140,7 @@ def parse(project_id: str, user: dict = Depends(current_user)):
             f"读取输入：{name}"
             + (f"、技术文档 {len(atts)} 份" if atts else "")
             + (f"、补充说明 {len(note.strip())} 字" if note.strip() else ""))
-        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.snapshot()['vision_model']}）")
+        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.snapshot()['model']}）")
         ir = vision.parse_drawing(data, name, note=note, attachments=atts)
         tasks.report_progress(
             f"  ↳ 解析完成：{len(ir.parts)} 个零件、{len(ir.open_questions or [])} 个待澄清问题、"
@@ -1800,6 +1831,9 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
     if not ok:
         # 不抛 500：页面需要显示「为什么用不了」，而不是一个红色报错。
         return {"available": False, "reason": reason}
+    # 报价侧可能刚换过模型 / 网关 / Key：先把当前路由推给已建会话，页面上的模型名
+    # 与实际请求才会一致（技术工艺与报价是两个进程，收不到对方的保存回调）。
+    llm_settings.sync_live_agents()
     try:
         meta = oc_agent.get_agent(project_id).meta()
     except oc_agent.AgentUnavailable as exc:
@@ -1818,6 +1852,9 @@ def agent_send(project_id: str, body: AgentSendRequest, user: dict = Depends(cur
     ok, reason = oc_agent.available()
     if not ok:
         raise HTTPException(503, reason)
+    # 报价保存设置后技术工艺不重启也要生效：比对当前路由，变了就重建 client，
+    # 否则这一轮还会把新模型发给旧厂商。
+    llm_settings.sync_live_agents()
     if body.page_context.strip():
         message = f"{message}\n\n[当前页面：{body.page_context.strip()[:160]}]"
     return StreamingResponse(

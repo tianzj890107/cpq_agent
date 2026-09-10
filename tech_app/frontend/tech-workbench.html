@@ -6,8 +6,8 @@
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="agent-chat.css?v=20260819-layout3" />
-  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb8" />
+  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb9" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -140,10 +140,24 @@
       </section>
     </div>
   </div>
+  <!-- 居中的模型设置卡片：报价、配置、规则、技术工艺四个入口共用同一套语义。
+       固定 DOM + 全屏遮罩 + flex 居中，不再按触发按钮的 getBoundingClientRect 计算
+       浮层坐标；卡片内容继续由 llm-settings-panel.js 渲染，不复制第二套表单。 -->
+  <div class="tech-model-settings-mask" id="techModelSettingsMask" role="presentation" hidden>
+    <div class="tech-model-settings" id="techModelSettings" role="dialog" tabindex="-1"
+         aria-modal="true" aria-labelledby="techModelSettingsTitle">
+      <header class="tech-model-settings-head">
+        <span class="tech-model-settings-title" id="techModelSettingsTitle">模型设置</span>
+        <button type="button" class="tech-model-settings-close" id="techModelSettingsClose"
+                aria-label="关闭模型设置">×</button>
+      </header>
+      <div class="llm-set-host" id="techModelSettingsBody"></div>
+    </div>
+  </div>
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
-  <script src="llm-settings-panel.js?v=llm-set1"></script>
-  <script src="tech-workbench.js?v=twb9"></script>
-  <script src="agent-chat.js?v=20260819-match2"></script>
+  <script src="llm-settings-panel.js?v=llm-set2"></script>
+  <script src="tech-workbench.js?v=twb10"></script>
+  <script src="agent-chat.js?v=20260819-match3"></script>
 </body>
 </html>
