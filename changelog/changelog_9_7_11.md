@@ -166,3 +166,11 @@
 - 端到端验证（本地假 OpenAI 兼容网关，非真实 Key）：选 Qwen 时请求命中 `<QWEN_BASE_URL>/chat/completions`、`model=qwen3.5-plus`、`Authorization: Bearer <Qwen Key>`，全程未使用 Anthropic Key；CPQ 本地网关 `cpq_local` 被运行时注册进 open-claude 的 `PROVIDERS` 与模型映射，网关地址与 `TECH_LOCAL_API_KEY` 生效；Anthropic 分支仍返回原生 SDK client；缺 Key 时 `openai_compat` 报的是当前 provider 的环境变量名（如 `DASHSCOPE_API_KEY, QWEN_API_KEY`）。
 - 运行期验收（真实 FastAPI 应用 + `TestClient`，DATA_DIR 用临时目录，不碰线上数据）：`GET /api/projects/{id}/agent/meta` 四个场景全部符合预期 —— ① 选 Qwen + 有 Qwen Key、无 Anthropic Key → `available=true, model=qwen3.5-plus`；② 选 Qwen 无 Key → `未配置阿里云百炼 API Key，Agent 无法启动`；③ 选 Anthropic 无 Key → `未配置 Anthropic API Key，Agent 无法启动`；④ 注入 CPQ 本地网关（占位 Key）→ `available=true, model=cpq-local-7b`，全程不要求 Anthropic Key。同一轮还校验 `/tech-workbench.html` 返回 200、引用 `twb8`，且页面含 `tech-workspace-context` / `techSubstepsBar`、无 `1.1` 文案。
 - 全量 `unittest discover` 通过；`py_compile`、`node --check`（tech-workbench.js、assembly-integration.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本轮改动未提交。
+
+## 19. 双远端推送（GitLab + GitHub）（9-10）
+
+- `scripts/push_remotes.py` 从只推 GitLab 改为默认双推：`gitlab` → `git@gitlab.boulderaitech.com:ai-team/cpq_agent.git`，`origin` → `git@github.com:tianzj890107/cpq_agent.git`，推送目标为两个远端的同名 `20260909`；预检仍要求当前分支为 `20260909`、工作区干净、远端不含本地未知提交，禁止 force push，推送后分别回读两个远端 SHA。
+- 新增 `--only <远端>`（可重复）用于某个远端失败后以同一 HEAD 只补推缺失远端；任一远端失败不再静默继续，脚本打印成功/失败清单并以非零状态退出。`--check` 只预检不推送。
+- 远端地址校验扩展为逐远端校验推送地址：`origin` 的 pushurl 必须是 GitHub 地址，`gitlab` 必须是 GitLab 地址；本地已清理 `origin` 上重复的 GitLab pushurl（`git remote set-url --delete --push origin git@gitlab.boulderaitech.com...`），使 `git push origin` 只指向 GitHub，双推统一由脚本显式同时推送两个远端。
+- 同步更新工作流契约与文档：`tests/test_repository_workflow_contract.py` 改为校验双远端地址与 `--only` 补推、且脚本不得出现 force push；`AGENTS.md` 的拉取/推送、`push` 动作映射、推送后回读、部分失败补推和最终回复分类口径，以及 `docs/gitlab-workflow.md` 的分支模型与命令说明一并改为双远端口径。第 9 节“推送链路收敛到 GitLab”作为历史记录保留。
+- 本地验证：`tests.test_repository_workflow_contract` 9/9 通过；实际执行 `python3 scripts/push_remotes.py --check` 与双推后，`git ls-remote gitlab refs/heads/20260909` 与 `git ls-remote origin refs/heads/20260909` 均回读到同一 HEAD。未创建 MR/tag/Release，未部署。
