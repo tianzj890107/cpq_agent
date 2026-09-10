@@ -336,6 +336,16 @@
     if (!edits.length) return;
     noteInThread(
       `Agent 已修改 ${edits.map(item => item.part_id).join("、")} 的参数，正在刷新工作台…`);
+    // 统一父壳里看板是 iframe：同窗口事件跨不过去，必须经桥请右侧看板自己刷新
+    // （看板收到 edits 后复用既有 refreshAfterChatEdit：拉 IR / 重生几何 / 刷版本）。
+    if (inUnifiedWorkbench) {
+      const bridge = boardBridge();
+      const call = (bridge && typeof bridge.executeAction === "function")
+        ? bridge.executeAction("refreshData", { action: "refreshData", edits })
+        : pushSystem("零件参数已由 Agent 修改，但右侧看板尚未就绪，暂时无法刷新显示。");
+      Promise.resolve(call).catch(error => pushSystem(`刷新右侧看板失败：${(error && error.message) || "看板未响应"}。`));
+      return;
+    }
     for (const detail of edits) {
       window.dispatchEvent(new CustomEvent("cad-engine:workbench-chat-edit", { detail }));
     }
@@ -728,6 +738,15 @@
 
   // ------------------------------------------------------ 零部件库检索结果
   async function renderComponentMatch() {
+    // 统一父壳不自己拉业务数据：零部件库检索明细属于右侧看板，这里只把语义化动作
+    // 交给看板（refreshOnly：后端解析时已算好落盘，这里只让看板把报告读出来）。
+    if (inUnifiedWorkbench) {
+      const board = boardBridge();
+      if (!board || typeof board.executeAction !== "function") return;
+      try { await board.executeAction("searchComponents", { refreshOnly: true, label: "零部件库检索" }); }
+      catch { /* 看板未就绪时忽略，不阻塞会话 */ }
+      return;
+    }
     if (!projectId) return;
     let report = null;
     try {
@@ -774,6 +793,19 @@
     button.type = "button";
     button.textContent = "↻ 重新检索零部件库";
     button.onclick = async () => {
+      // 统一父壳里没有本页检索入口：重检索是右侧看板的动作，只经桥发语义化动作名。
+      if (inUnifiedWorkbench) {
+        const board = boardBridge();
+        button.disabled = true;
+        try {
+          if (board && typeof board.executeAction === "function") {
+            await board.executeAction("searchComponents", { label: "重新检索零部件库" });
+          } else {
+            pushSystem("重新检索暂不可用：右侧看板尚未就绪。");
+          }
+        } finally { button.disabled = false; }
+        return;
+      }
       button.disabled = true;
       button.textContent = "检索中…";
       try {
@@ -843,6 +875,7 @@
     upload: "补充需求图纸", evidence: "解析视图", import3d: "导入已有 3D 模型",
     review: "版本与校核审查", parts: "零件清单", questions: "待澄清问题",
     report: "解析报告", files: "任务文件",
+    modelLookup: "联网核验", verify: "校验修正",
   };
   const capabilityMenu = $("ocCapabilityMenu");
   const capabilityItems = capabilityMenu ? [...capabilityMenu.querySelectorAll("[data-tech-capability]")] : [];
@@ -985,13 +1018,34 @@
 
   // 统一分派：＋ 的四个能力入口与任务文件按钮只把语义化名字交给同一条导航出口；
   // 不查找 #secUpload 等旧面板，也不另起一套业务数据。
+  // ＋ 菜单混了两类入口：视图入口走 navigate-view，业务动作入口走 execute-action；
+  // 发错通道看板会回 unknown-action，所以这里显式分流，不靠名字猜。
+  const DRAWING_ACTION_CAPABILITIES = ["modelLookup", "verify"];
+
   function dispatchDrawingCapability(name, payload) {
     const label = CAPABILITY_LABELS[name] || name;
-    const view = TECH_BOARD_VIEW_ENTRIES[`capability:${name}`] || name;
+    const body = Object.assign({ capability: name, label }, payload || {});
     const bridge = boardBridge();
+    if (DRAWING_ACTION_CAPABILITIES.includes(name)) return dispatchBoardAction(name, body, bridge, label);
+    const view = TECH_BOARD_VIEW_ENTRIES[`capability:${name}`] || name;
     if (bridge && typeof bridge.navigateView !== "function") pushSystem(`「${label}」暂不可用：看板桥不支持视图导航。`);
     else if (bridge && typeof bridge.isReady === "function" && !bridge.isReady()) pushSystem(`「${label}」暂不可用：右侧看板尚未就绪，请稍后重试。`);
-    return boardNavigateView(view, Object.assign({ capability: name, label }, payload || {}));
+    return boardNavigateView(view, body);
+  }
+
+  // 业务动作入口（联网核验 / 校验修正）只发 execute-action，绝不落到 navigate-view。
+  function dispatchBoardAction(name, body, bridge, label) {
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem(`「${label}」暂不可用：右侧看板尚未就绪，请稍后重试。`);
+      return null;
+    }
+    const call = name === "modelLookup"
+      ? bridge.executeAction("modelLookup", body)
+      : bridge.executeAction("verify", body);
+    return Promise.resolve(call).catch(error => {
+      noteInThread(`「${label}」执行失败：${(error && error.message) || "看板未响应"}。`);
+      return null;
+    });
   }
 
   function setChipCount(node, count) {

@@ -212,6 +212,8 @@ body{padding-bottom:0}
 /* 零件清单里每个零件下的子操作：工艺推荐 / 成本测算。
    原先这两个按钮在右侧零件详情中，现随零件一起移到左侧。 */
 .part-subactions{margin:0 0 10px;padding:0 0 0 10px;border-left:2px solid var(--color-primary-light,#dbeafe)}
+.part-detail-versions{margin-top:12px}
+.part-detail-versions .version-panel{margin-top:0}
 .part-subactions[hidden]{display:none}
 .part-subactions .part-nav{margin:6px 0 0}
 

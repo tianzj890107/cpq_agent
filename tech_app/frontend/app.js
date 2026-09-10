@@ -48,6 +48,21 @@ const chatSessions = new Map(); // 项目级会话仅保存在当前浏览器内
 let chatBusy = false;
 
 const $ = (id) => document.getElementById(id);
+
+// 看板内部零件层级视图（技术工艺 Agent 能力恢复第 6 步）：
+// drawing-overview → parts-list → part-detail → part-process / part-cost。
+// 这些视图只存在于右侧 iframe 看板内部；父壳 tech-workbench 里不出现它们的名字。
+const PART_VIEW_PARENT = {
+  "part-cost": "part-detail",
+  "part-process": "part-detail",
+  "part-detail": "parts-list",
+  "parts-list": "drawing-overview",
+};
+const PART_VIEW_FOR = { process: "part-process", cost: "part-cost" };
+const PART_VIEW_MODE = { "part-process": "process", "part-cost": "cost" };
+const PART_FLOW_VIEWS = ["drawing-overview", "parts-list", "part-detail", "part-process", "part-cost"];
+const BACK_TO_PARTS_LIST = "返回零件清单";
+const BACK_TO_PART_DETAIL = "返回零件详情";
 const status = (msg, busy = false) => {
   $("status").textContent = (busy ? "处理中 · " : "") + msg;
   const card = $("statusCard");
@@ -542,9 +557,26 @@ document.addEventListener("click", (event) => {
 
 // 顶层绑定一律判空：拿到 null 会让整个 module 中止，页面所有功能一起失效（见 §23）。
 if ($("btnBackToModel")) {
+  // 工艺推荐 / 成本测算在看板内部是 part-process / part-cost 两个子视图：返回按钮只按
+  // 看板内部父子关系回到 part-detail，不向父壳发消息、不重载页面、不清左侧会话。
+  // 独立抽屉模式（没有看板视图状态）保持原来的行为。
+  $("btnBackToModel").textContent = BACK_TO_PART_DETAIL;
   $("btnBackToModel").onclick = () => {
+    const parts = window.TechBoardPartViews;
+    const view = parts && typeof parts.current === "function" ? parts.current() : "";
+    if (parts && (view === "part-process" || view === "part-cost")) {
+      parts.back();
+      return;
+    }
     window.CadInlineAnalysis?.reset();
     setRightPane("model");
+  };
+}
+if ($("btnBoardBackList")) {
+  // 零件详情里的「返回零件清单」：同样只切看板内部视图。
+  $("btnBoardBackList").textContent = BACK_TO_PARTS_LIST;
+  $("btnBoardBackList").onclick = () => {
+    if (window.TechBoardPartViews) window.TechBoardPartViews.back();
   };
 }
 $("btnPrevious").onclick = () => {
@@ -845,6 +877,9 @@ async function parseDrawing() {
       .catch(() => 0);
     status(`解析完成（已结合 ${documentCount} 份技术资料；平均置信度 ${avgConfidence(currentIR)}）`);
     setWorkflow("review", "AI 已完成解析，请确认零件、材料与待澄清项。");
+    // 统一工作台里零部件库检索明细属于右侧看板：解析后把后端顺手算好、已落盘的
+    // 报告读到看板内部（独立 2.1 页仍由对话侧渲染，不重复画第二份）。
+    if (__techEmbedMode__) refreshComponentMatchResult();
     // 通知 2.1 的 Agent 对话框：把零件清单与待澄清问题渲染成结果按钮。
     window.dispatchEvent(new CustomEvent("agent:parse-done", {
       detail: {
@@ -865,19 +900,33 @@ async function parseDrawing() {
 }
 $("btnParse").onclick = parseDrawing;
 
-$("btnModelLookup").onclick = async () => {
-  if (!currentProject || !currentIR) return;
+// 具名函数：原 #btnModelLookup 点击逻辑原样搬过来，页面按钮与统一看板动作
+// （TechBoardRuntime 的 modelLookup）共用同一份实现，不复制第二份核验逻辑。
+async function runModelLookup() {
+  if (!currentProject || !currentIR) {
+    return { ok: false, error: { code: "not-ready", message: "请先完成图纸解析，再做型号联网核验。" } };
+  }
   status("AI 正在联网核验型号候选与公开零件资料（会产生联网搜索与模型 token 消耗）...", true);
   try {
     const report = await runTask(currentProject, `/api/projects/${currentProject}/model-lookup`, "型号联网核验");
     renderModelLookup(report);
     $("modelLookupDetails").open = true;
     status(`型号联网核验完成（${(report.identifications || []).length} 个候选，搜索 ${report.search_count || 0} 次；确认后才会同步至零件清单/BOM）`);
-  } catch (error) { status("型号联网核验失败: " + error.message); }
-};
+    publishResultSummary(currentIR);
+    return { ok: true, result: { candidates: (report.identifications || []).length } };
+  } catch (error) {
+    status("型号联网核验失败: " + error.message);
+    return { ok: false, error: { code: "model-lookup-failed", message: error.message } };
+  }
+}
+$("btnModelLookup").onclick = runModelLookup;
 
-$("btnVerify").onclick = async () => {
-  if (!currentProject) return;
+// 具名函数：原 #btnVerify 点击逻辑原样搬过来，页面按钮与统一看板动作
+// （TechBoardRuntime 的 verify）共用同一份实现。
+async function runVerification() {
+  if (!currentProject) {
+    return { ok: false, error: { code: "not-ready", message: "还没有选择项目，无法做校验修正。" } };
+  }
   const before = avgConfidence(currentIR);
   status("模型正在对照原图自校验（会产生一次额外调用费用）...", true);
   try {
@@ -886,7 +935,7 @@ $("btnVerify").onclick = async () => {
       currentIR = result.ir;
       renderIR(currentIR);
       status(result.verification.message + " 详情：" + result.verification.detail);
-      return;
+      return { ok: false, error: { code: "verification-rejected", message: result.verification.message || "校验未通过。" } };
     }
     currentIR = result.ir || result;
     renderIR(currentIR);
@@ -898,8 +947,86 @@ $("btnVerify").onclick = async () => {
     if ((verification.pending_changes || []).length) $("verificationDetails").open = true;
     status(`${verification.message || "校验完成"}（平均置信度 ${before} → ${avgConfidence(currentIR)}）`);
     setWorkflow("review", "校验完成，可继续确认识别结果或生成 CAD。");
-  } catch (e) { status("自校验失败: " + e.message); }
-};
+    publishResultSummary(currentIR);
+    return { ok: true, result: { pending: (verification.pending_changes || []).length } };
+  } catch (e) {
+    status("自校验失败: " + e.message);
+    return { ok: false, error: { code: "verification-failed", message: e.message } };
+  }
+}
+$("btnVerify").onclick = runVerification;
+
+/* 零部件库检索：复用既有 /component-match 接口与既有轮询，不复制第二份打分逻辑。
+ * refreshOnly=true 表示后端已有落盘报告（解析 / 拆解后由后端顺手重跑），只读取渲染。 */
+async function refreshComponentMatchResult() {
+  if (!currentProject) return null;
+  const report = await fetch(`${API}/api/projects/${encodeURIComponent(currentProject)}/component-match`)
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);
+  renderComponentMatchResult(report);
+  return report;
+}
+
+async function runComponentMatch(payload) {
+  if (!currentProject) {
+    return { ok: false, error: { code: "no-project", message: "还没有选择项目，无法检索零部件库。" } };
+  }
+  const refreshOnly = Boolean(payload && payload.refreshOnly);
+  try {
+    if (!refreshOnly) {
+      status("正在重新检索零部件库…", true);
+      const response = await fetch(`${API}/api/projects/${encodeURIComponent(currentProject)}/component-match`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+      if (data.task_id) await pollTask(currentProject, data.task_id, "零部件库检索");
+    }
+    const report = await refreshComponentMatchResult();
+    publishResultSummary(currentIR);
+    const summary = (report && report.summary) || {};
+    status(`零部件库检索完成（可复用 ${summary.reuse || 0}、可改制 ${summary.modify || 0}、未匹配 ${summary.new || 0}）`);
+    return { ok: true, result: { items: ((report && report.items) || []).length } };
+  } catch (error) {
+    status("零部件库检索失败: " + error.message);
+    return { ok: false, error: { code: "component-match-failed", message: error.message } };
+  }
+}
+
+// 检索报告渲染在右侧看板内部（零件清单面板里），不搬进父壳会话。
+function renderComponentMatchResult(report) {
+  const section = document.getElementById("secParts");
+  if (!section) return;
+  let slot = document.getElementById("componentMatchResult");
+  if (!slot) {
+    slot = document.createElement("div");
+    slot.id = "componentMatchResult";
+    slot.className = "component-match-result";
+    section.append(slot);
+  }
+  slot.replaceChildren();
+  const items = (report && report.items) || [];
+  if (!items.length) {
+    slot.textContent = "还没有零部件库检索结果（解析完成后自动生成）。";
+    return;
+  }
+  const summary = report.summary || {};
+  const head = document.createElement("div");
+  head.className = "component-match-summary";
+  head.textContent = `零部件库检索：可复用 ${summary.reuse || 0} · 可改制 ${summary.modify || 0} · 未匹配 ${summary.new || 0}`
+    + `（库内 ${report.library_size || 0} 条${report.generated_at ? " · " + report.generated_at : ""}）`;
+  slot.append(head);
+  const list = document.createElement("div");
+  list.className = "component-match-list";
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = `component-match-item ${item.decision || "new"}`;
+    const who = `${item.part_id || "?"} ${item.part_name || ""}`.trim();
+    const hit = item.component_code ? `${item.component_code} ${item.component_name || ""}`.trim() : "库内无同类件";
+    row.textContent = `${who} → ${hit}（${item.decision_label || "未匹配"}`
+      + `${item.score ? ` · ${Math.round(Number(item.score) * 100)}%` : ""}）`;
+    list.append(row);
+  });
+  slot.append(list);
+}
 
 $("btnDecompose").onclick = async () => {
   if (!currentProject) return;
@@ -1245,13 +1372,28 @@ function setRightPane(which, title) {
   label.textContent = showAnalysis ? title : modelTitle;
 }
 
+// 工艺推荐 / 成本测算在看板内部是两个子视图：入口统一走视图状态机，渲染仍然复用
+// 既有 CadInlineAnalysis，不另写一套工艺 / 成本算法或第二套数据源。
 function openPartAnalysis(part, mode) {
+  if (!part) return { ok: false, error: { code: "no-part", message: "未选择零件，无法查看工艺或成本。" } };
+  const view = PART_VIEW_FOR[mode] || "part-detail";
+  if (window.TechBoardPartViews && typeof window.TechBoardPartViews.show === "function") {
+    return window.TechBoardPartViews.show(view, { partId: part.part_id });
+  }
+  return renderPartAnalysis(part, mode);
+}
+
+// 真正的渲染：仍然渲染到右侧工作区，仍然复用既有 CadInlineAnalysis。
+function renderPartAnalysis(part, mode) {
   const host = $("analysisHost");
-  if (!host || !window.CadInlineAnalysis) return;
+  if (!host || !window.CadInlineAnalysis) {
+    return { ok: false, error: { code: "no-analysis-host", message: "当前看板没有可用的分析渲染区。" } };
+  }
   // 渲染到右侧而不是左侧零件行下面：这两份结论是本步骤的主要产出，
   // 挤在零件清单里既窄又要滚动，而右边正好是一整块工作区。
   const label = mode === "process" ? "工艺推荐" : "成本测算";
   setRightPane("analysis", `${part.part_id} ${part.name || ""} · ${label}`.trim());
+  exitBoardViewHost();
   // 右边换了内容，左边得知道。生成任务的每一步由 agent:task-progress 单独播，
   // 这里只负责说清楚"现在右侧在看谁的什么"。
   window.dispatchEvent(new CustomEvent("agent:part-analysis-opened", {
@@ -1265,6 +1407,8 @@ function openPartAnalysis(part, mode) {
     // 关闭后右侧切回 3D 视图，而不是留一块空白。
     onClose: () => setRightPane("model"),
   });
+  notePartView(PART_VIEW_FOR[mode] || "part-detail");
+  return { ok: true, result: { view: PART_VIEW_FOR[mode] || "part-detail", partId: part.part_id } };
 }
 
 // 展开的零件只保留一个：两个零件同时露出「工艺推荐/成本测算」，
@@ -1544,6 +1688,8 @@ function selectPart(part) {
   window.CadInlineAnalysis?.reset();
   // 换了零件就切回 3D —— 否则右边还留着上一个零件的工艺推荐，标题却换成了新零件。
   setRightPane("model");
+  // 零件详情是看板内部视图 part-detail：退出看板内容宿主，回到 3D / 零件信息 / 参数。
+  exitBoardViewHost();
   currentSelectedId = part.part_id;
   markSelection(part.part_id);
   togglePartSubActions(part.part_id);
@@ -1631,14 +1777,30 @@ function selectPart(part) {
 
   // 工艺推荐与成本测算已移到左侧零件清单的子按钮下；右侧只保留 3D 与零件信息。
   const html = `<div class="part-summary">${summaryHtml}</div>` +
-    `<div id="inlineAnalysisHost" class="inline-analysis-host">${lowerHtml}</div>`;
+    `<div id="inlineAnalysisHost" class="inline-analysis-host">${lowerHtml}</div>` +
+    // 版本面板在看板内部是同一份节点：这里给它一个槽位，切到零件详情时把既有
+    // #secVersions 挪进来，切走时再随视图移动 —— 不复制节点、不另建数据源。
+    `<div id="partDetailVersions" class="part-detail-versions"></div>`;
 
+  // 先取出来：下面 innerHTML 会把已经挪进详情的版本面板摘下来。
+  const versionsNode = document.getElementById("secVersions");
   $("partDetail").innerHTML = html;
   $("parameterEditor").innerHTML = parameterHtml || "此零件暂无可编辑参数。";
+  const versionsSlot = document.getElementById("partDetailVersions");
+  if (versionsNode && versionsSlot) {
+    versionsNode.removeAttribute("data-drawer-hidden");   // 详情里就是要展示，不能带着隐藏标记
+    versionsSlot.append(versionsNode);
+  }
+  // 详情内要能直接进「工艺推荐」：复用零件清单同一份子动作构造，不另写按钮逻辑。
+  const detailActions = buildPartSubActions(part);
+  detailActions.hidden = false;
+  $("partDetail").append(detailActions);
   const sb = document.getElementById("btnSaveParams");
   if (sb) sb.onclick = () => savePartEdits(part.part_id, false);
   const rb = document.getElementById("btnRegen");
   if (rb) rb.onclick = () => savePartEdits(part.part_id, true);
+  // 选中零件 = 看板内部进入 part-detail；只上报视图，不触发父壳导航。
+  notePartView("part-detail");
 }
 
 // 读取行内编辑 -> 更新 IR -> 保存；按需继续单零件重生并刷新
@@ -1805,6 +1967,9 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         };
       },
     },
+    modelLookup: { label: "联网核验", run: () => runModelLookup(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
+    verify: { label: "校验修正", run: () => runVerification(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
+    searchComponents: { label: "重新检索零部件库", run: (payload) => runComponentMatch(payload || {}), getState: () => ({ visible: true, enabled: Boolean(currentProject), busy: false }) },
   });
 }
 /* --------------------------------------------------------------------------- //
@@ -1876,7 +2041,8 @@ function boardViewHost() {
   back.type = "button";
   back.className = "board-view-back";
   back.textContent = "← 返回 3D 视图";
-  back.addEventListener("click", () => closeBoardView());
+  // 返回一律按看板内部父子视图回到上一层，不顺带导航父壳。
+  back.addEventListener("click", () => boardBackToParent());
   head.append(title, back);
   const body = document.createElement("div");
   body.className = "board-view-body";
@@ -2004,7 +2170,12 @@ function closeBoardView() {
   return true;
 }
 
-function runBoardView(view) {
+function runBoardView(view, payload) {
+  // 零件层级视图交给看板内部状态机：这里只转发，返回键也按内部父子关系走。
+  const partViews = window.TechBoardPartViews;
+  if (partViews && PART_FLOW_VIEWS.indexOf(view) !== -1) {
+    return partViews.show(view, payload || {});
+  }
   try {
     return openBoardView(view);
   } catch (error) {
@@ -2014,6 +2185,106 @@ function runBoardView(view) {
 
 // 独立 2.1 页没有父壳桥：+ 菜单与结果按钮由 agent-chat.js 调用这里就地打开同一份面板。
 window.TechBoardViews = { open: runBoardView, close: closeBoardView, specs: BOARD_VIEW_SPECS };
+
+/* --------------------------------------------------------------------------- //
+ * 看板内部零件层级视图状态机（技术工艺 Agent 能力恢复第 6 步）
+ * ---------------------------------------------------------------------------
+ * drawing-overview → parts-list → part-detail → part-process / part-cost。
+ * 所有零件详情、3D/2D、参数、工艺、成本、版本都在右侧看板内部展开；返回只改看板
+ * 视图，不关闭父壳、不重载页面、不清左侧会话。渲染全部复用既有 selectPart /
+ * #partDetail / #parameterEditor / #viewer / CadInlineAnalysis / /versions，
+ * 不新建第二套零件渲染或数据源。
+ * ------------------------------------------------------------------------- */
+let boardPartView = "drawing-overview";
+
+function boardPartId(payload) {
+  const data = payload || {};
+  const raw = data.partId || data.part_id || currentSelectedId || "";
+  return raw ? String(raw) : "";
+}
+
+function findBoardPart(partId) {
+  if (!partId) return null;
+  return ((currentIR && currentIR.parts) || []).find((p) => p.part_id === partId) || null;
+}
+
+// 每次切换视图都上报当前视图名（父壳据此高亮左侧入口），并同步看板内的返回控件。
+function notePartView(name) {
+  boardPartView = String(name || "");
+  syncPartViewControls();
+  if (window.TechBoardRuntime && typeof window.TechBoardRuntime.setView === "function") {
+    window.TechBoardRuntime.setView(boardPartView);
+  }
+  return boardPartView;
+}
+
+function syncPartViewControls() {
+  const backToList = document.getElementById("btnBoardBackList");
+  if (backToList) backToList.hidden = boardPartView !== "part-detail";
+}
+
+// 退出看板内容宿主：把复用的抽屉面板放回原处，再显示 3D / 零件信息 / 参数。
+function exitBoardViewHost() {
+  const host = document.getElementById("boardViewHost");
+  if (host && !host.hidden) {
+    resetBoardViewBody(document.getElementById("boardViewBody"));
+    host.hidden = true;
+  }
+}
+
+// part-detail：复用既有 selectPart 渲染 3D / 2D / 识别依据 / 参数 / 材料 / 数量，
+// 并用既有 /versions 带出版本（版本面板随详情一起展示）。
+function showPartDetail(payload) {
+  const part = findBoardPart(boardPartId(payload));
+  if (!part) return { ok: false, error: { code: "no-part", message: "还没有选择零件。" } };
+  selectPart(part);
+  loadVersions();
+  return { ok: true, result: { view: "part-detail", partId: part.part_id } };
+}
+
+function showPartView(name, payload) {
+  const view = String(name || "");
+  if (view === "drawing-overview") {
+    window.CadInlineAnalysis?.reset();
+    closeBoardView();
+    notePartView(view);
+    return { ok: true, result: { view: view } };
+  }
+  if (view === "parts-list" || view === "parts") {
+    const outcome = openBoardView("parts");
+    notePartView("parts-list");
+    return outcome && outcome.ok === false ? outcome : { ok: true, result: { view: "parts-list" } };
+  }
+  if (view === "part-detail") return showPartDetail(payload);
+  const mode = PART_VIEW_MODE[view];
+  if (mode) {
+    const part = findBoardPart(boardPartId(payload));
+    if (!part) {
+      return { ok: false, error: { code: "no-part", message: "还没有选择零件，无法打开" + (mode === "process" ? "工艺推荐" : "成本测算") + "。" } };
+    }
+    return renderPartAnalysis(part, mode);
+  }
+  return { ok: false, error: { code: "unknown-view", message: "看板未注册零件视图：" + view } };
+}
+
+// 返回只改右侧视图：按 PART_VIEW_PARENT 回到上一层，不看浏览器历史。
+function backPartView() {
+  const parent = PART_VIEW_PARENT[boardPartView] || "drawing-overview";
+  return showPartView(parent, { partId: currentSelectedId });
+}
+
+function boardBackToParent() {
+  if (window.TechBoardPartViews && typeof window.TechBoardPartViews.back === "function") {
+    return window.TechBoardPartViews.back();
+  }
+  return closeBoardView();
+}
+
+window.TechBoardPartViews = {
+  show: showPartView,
+  back: backPartView,
+  current: () => boardPartView,
+};
 
 /* 看板视图注册：左侧入口只发 navigate-view，这里给出真实的 run 实现（复用上面的既有
  * 面板与既有接口）。父壳据 runtime 发出的 action-state(view.active) 高亮左侧入口。 */
@@ -2027,6 +2298,11 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerViews === 
     files: { label: "任务文件", run: () => runBoardView("files") },
     upload: { label: "补充需求图纸", run: () => runBoardView("upload") },
     import3d: { label: "导入已有 3D 模型", run: () => runBoardView("import3d") },
+    "drawing-overview": { label: "图纸解析总览", run: (payload) => runBoardView("drawing-overview", payload) },
+    "parts-list": { label: "零件清单", run: (payload) => runBoardView("parts-list", payload) },
+    "part-detail": { label: "零件详情", run: (payload) => runBoardView("part-detail", payload) },
+    "part-process": { label: "工艺推荐", run: (payload) => runBoardView("part-process", payload) },
+    "part-cost": { label: "成本测算", run: (payload) => runBoardView("part-cost", payload) },
   });
 }
 
@@ -2035,8 +2311,16 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerViews === 
 if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions === "function") {
   window.TechBoardRuntime.registerActions({
     refreshData: {
-      label: "刷新看板摘要",
-      run: () => { publishResultSummary(); return { ok: true }; },
+      label: "刷新看板数据",
+      // 纯刷新（无 edits）只重播解析摘要；带 edits 时是 Agent 改完零件参数后经桥
+      // 触发的刷新，复用既有 refreshAfterChatEdit（拉 IR / 重生几何 / 刷版本）。
+      run: (payload) => {
+        const edits = (payload && payload.edits) || [];
+        return Promise.all(edits.map((edit) => refreshAfterChatEdit(edit))).then(() => {
+          publishResultSummary(currentIR);
+          return { ok: true, result: { edits: edits.length } };
+        });
+      },
     },
   });
 }

@@ -94,12 +94,21 @@ class TechResultEntriesBoardViewsDynamicTest(unittest.TestCase):
             return set()
         return set(re.findall(r"(?:^|[\s{,])['\"]?([A-Za-z][\w-]*)['\"]?\s*:", match.group(1)))
 
+    def _registered_actions(self):
+        """看板注册的业务动作名（第 7 步起 ＋ 菜单同时承载视图入口与动作入口）。"""
+        blocks = re.findall(r"registerActions\(\s*\{([\s\S]*?)\n\s*\}\)", self.board)
+        return set(
+            name for block in blocks
+            for name in re.findall(r"\n    ([A-Za-z][\w-]*):", block))
+
     def _left_view_targets(self):
         targets = set(re.findall(
             r'["\']oc[A-Za-z]*Action["\']\s*,\s*["\']([a-z-]+)["\']', self.chat))
         targets |= set(re.findall(r'dispatchDrawingCapability\(\s*["\']([a-z-]+)["\']', self.chat))
-        targets |= set(re.findall(r'data-tech-capability="([a-z0-9-]+)"', self.html))
-        return {name for name in targets if name}
+        targets |= set(re.findall(r'data-tech-capability="([A-Za-z0-9-]+)"', self.html))
+        # ＋ 菜单里既有视图入口也有业务动作入口：动作名走 execute-action，不是看板视图，
+        # 不能按“未注册视图”判失败；视图入口仍必须全部在看板注册。
+        return {name for name in targets if name} - self._registered_actions()
 
     @unittest.skipUnless(shutil.which("node"), "需要 node 才能跑运行时动态验证")
     def test_runtime_switches_registered_view_and_rejects_unknown(self):
