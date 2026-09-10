@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from ..config import DATA_DIR, ROOT_DIR
 from ..storage import store
+from . import llm_settings
 
 OPEN_CLAUDE_DIR = Path(os.getenv("OPEN_CLAUDE_DIR", ROOT_DIR / "open-claude"))
 
@@ -93,14 +94,117 @@ def _import_open_claude():
     }
 
 
+# --------------------------------------------------------------------------- #
+# 模型路由：Agent 用哪个模型由「模型设置」决定，不是由某一家厂商的 Key 决定
+# --------------------------------------------------------------------------- #
+# 非 Anthropic 的 provider（qwen / openai / deepseek / cpq_local 本地网关）都走
+# OpenAI 兼容协议，由 open-claude 的 openai_compat 客户端发出；只有 anthropic
+# 走原生 SDK。provider 表本身来自 llm_settings.PROVIDERS —— 这里不复制第二份配置。
+OPENAI_COMPATIBLE_PROVIDERS = ("qwen", "openai", "deepseek", "cpq_local")
+
+
+def agent_route() -> dict[str, Any]:
+    """Agent 当前该用的模型路由（model/provider/base_url/native/api_key）。
+
+    唯一事实源是 llm_settings：默认语言模型是 Qwen，所以 Anthropic 的 Key
+    从来都不该是前提。
+    """
+    return llm_settings.resolve(vision=False)
+
+
+def _provider_env_names(provider: str) -> tuple[str, ...]:
+    """某个 provider 的 Key 环境变量名，取自 llm_settings 的 provider 表。"""
+    spec = llm_settings.PROVIDERS.get(provider) or {}
+    return tuple(spec.get("env") or ())
+
+
+def sync_route_environment(route: dict[str, Any]) -> None:
+    """把当前路由（模型 / provider / Key / 网关）同步给 open-claude。
+
+    open-claude 自己按模型推断 provider，并从该 provider 的 Key 环境变量与
+    `<PROVIDER>_BASE_URL` 读连接信息，所以这里只做搬运：
+
+      · CLAUDE_MODEL          让 open-claude 选中同一个模型，而不是回到默认 Claude；
+      · provider 的 Key       官方 provider 各写自己的环境变量；
+      · 自定义网关            CPQ 注入的 cpq_local 这类 open-claude 不认识的 provider
+                              在运行时按 llm_settings 的表注册（不改包内文件）。
+
+    路由变化后必须重建 client 才能生效，见 ProjectAgent.apply/_rebuild_client。
+    任何情况下都不打印、不返回 Key。
+    """
+    provider = str(route["provider"] or "").strip()
+    api_key = str(route["api_key"] or "").strip()
+    model = str(route.get("model") or "").strip()
+    base_url = str(route["base_url"] or "").strip()
+    if model:
+        os.environ["CLAUDE_MODEL"] = model
+    if provider:
+        for env_name in _provider_env_names(provider):
+            if api_key:
+                os.environ[env_name] = api_key
+        if base_url:
+            # open-claude 的既有约定：<PROVIDER>_BASE_URL 覆盖该 provider 的网关。
+            # 只在部署未显式配置时兜底写入：运维用 QWEN_BASE_URL 指了业务空间专属
+            # 域名（见 .env.example）时不能被默认网关覆盖回去。
+            os.environ.setdefault(f"{provider.upper()}_BASE_URL", base_url)
+    _register_runtime_provider(route)
+
+
+def _register_runtime_provider(route: dict[str, Any]) -> None:
+    """把 open-claude 不认识的 provider（CPQ 本地网关）注册进它的 provider 表。
+
+    官方 provider 已经内置，只补环境变量即可；只有 base_url 由外部注入的
+    cpq_local 需要登记 provider 与「模型 → provider」映射，否则模型名会被前缀
+    推断成别的厂商，请求就发错了地方。
+    """
+    provider = str(route["provider"] or "").strip()
+    model = str(route.get("model") or "").strip()
+    if not provider or not model:
+        return
+    try:
+        _ensure_path()
+        from open_claude import config as oc_config               # noqa: WPS433
+    except Exception:                                            # pragma: no cover - 环境相关
+        return
+    providers = getattr(oc_config, "PROVIDERS", None)
+    if isinstance(providers, dict) and provider not in providers:
+        # 只有 OpenAI 兼容的自定义网关才能按这套表接进来；原生 SDK 的 provider
+        # 不在这里伪造，否则请求会被发到不存在的协议上。
+        if provider not in OPENAI_COMPATIBLE_PROVIDERS:
+            return
+        providers[provider] = {
+            "label": str(route.get("provider_label") or provider),
+            "env": list(_provider_env_names(provider)),
+            "base_url": str(route["base_url"] or "").strip() or None,
+        }
+    mapping = getattr(oc_config, "_MODEL_PROVIDERS", None)
+    if isinstance(mapping, dict):
+        mapping[model] = provider
+
+
 def available() -> tuple[bool, str]:
-    """探测 Agent 是否可用。用于页面加载时给出明确原因而不是静默失败。"""
-    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-        return (False, "未配置 ANTHROPIC_API_KEY，Agent 无法启动")
+    """探测 Agent 是否可用：按**当前所选语言模型**的 provider 与 Key 判断。
+
+    默认语言模型是 Qwen，因此只配了 Qwen Key 时 Agent 必须可用；只有真正选中
+    Anthropic 模型时，缺 Anthropic Key 才是原因。错误信息只报当前 provider，
+    不含任何 Key 内容。
+    """
+    try:
+        route = llm_settings.resolve(vision=False)
+    except Exception as exc:                                     # pragma: no cover - 配置损坏
+        return (False, f"读取模型设置失败：{exc}")
+    model = str(route.get("model") or "").strip()
+    if not model:
+        return (False, "未配置语言模型，Agent 无法启动")
+    if not str(route["api_key"] or "").strip():
+        label = str(route.get("provider_label") or route["provider"] or "当前模型")
+        gap = " " if label.isascii() else ""
+        return (False, f"未配置{gap}{label} API Key，Agent 无法启动")
     try:
         _import_open_claude()
     except AgentUnavailable as exc:
         return (False, str(exc))
+    sync_route_environment(route)
     return (True, "")
 
 
@@ -827,6 +931,12 @@ class ProjectAgent:
 
         self.project_id = project_id
         self.cwd = str(_project_workdir(project_id))
+        # 会话必须建在当前所选模型的路由上：open-claude 在构造时就把 provider 与 Key
+        # 读进去了，先同步环境再建会话，否则选了 Qwen 也会被发去 Anthropic。
+        try:
+            sync_route_environment(agent_route())
+        except Exception:                                        # pragma: no cover - 配置不可读时退回 open-claude 默认
+            pass
         profile = modules["load_profile"](profile_name, self.cwd) if profile_name else None
         self.conv = oc_repl.Conversation(self.cwd, permission_mode="always_allow", profile=profile)
         # 没有终端可以回答 y/n，任何询问都直接放行（只读限制仍然生效）。
@@ -894,8 +1004,26 @@ class ProjectAgent:
             if params.get("max_iterations"):
                 profile.max_iterations = int(params["max_iterations"])
             if rebuild_client:
-                # 换密钥必须重建 client：open-claude 在构造时就把 key 读进去了。
-                self.conv.client = self._oc["repl"].create_client()
+                self._rebuild_client()
+
+    def _rebuild_client(self) -> None:
+        """按最新路由重建 client（调用方需已持有 self.lock）。
+
+        换 provider 或换 Key 必须重建：open-claude 在构造 client 时就把 provider
+        与 Key 读进去了，沿用旧 client 会把新模型发给旧厂商。
+        """
+        try:
+            route = agent_route()
+        except Exception:                                        # pragma: no cover - 配置不可读
+            route = {}
+        if route:
+            try:
+                sync_route_environment(route)
+            except Exception:                                    # pragma: no cover - 环境相关
+                pass
+            if route.get("model"):
+                self.conv.model = str(route["model"])
+        self.conv.client = self._oc["repl"].create_client()
 
     # -- 一轮对话（镜像 Conversation.run_turn，改为产出事件）--------------- #
     def stream_turn(self, text: str, emit: Callable[[dict], None]) -> None:

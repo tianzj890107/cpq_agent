@@ -149,15 +149,20 @@
 ## 17. 技术工艺上下文小流程与步骤控件浅色选中态（9-10）
 
 - 删除 iframe 上方的加载/“已就绪”状态行：`mountStageFrame()` 不再创建 `.tech-wb-state.has-frame` 与 `#techStageMessage`，`tech-workbench.html` 的初始占位也不再使用该 id，iframe 直接占满右侧工作区剩余区域；iframe `load` 后仍执行 `syncActionBar()`，底栏代理同步不受影响，缺项目、未知 stage、无权限、请求失败等 `.tech-wb-state.error` 状态全部保留。
-- 新增父壳上下文小流程：`tech-workbench.html` 增加 `#techSubstepsBar`，大流程 1 渲染「1.1 创建 / 1.2 确认 / 1.3 审核」，大流程 5 渲染「5.1 汇总结果 / 5.2 结果审核 / 5.3 发布并回传报价」；大流程 2–4 隐藏并清空该栏，继续使用子页面自己的页签。点击一律走 `applyStage(target, { project })`，URL、iframe、底栏、popstate 与真实完成度保持同一套状态，无项目时沿用既有导航保护。
+- 新增父壳上下文小流程：`tech-workbench.html` 在业务卡片标题行增加 `#techSubstepsBar`，大流程 1 渲染「创建 / 确认 / 审核」，大流程 5 渲染「汇总结果 / 结果审核 / 发布并回传报价」；大流程 2–4 隐藏并清空该栏，继续使用子页面自己的页签。点击一律走 `applyStage(target, { project })`，URL、iframe、底栏、popstate 与真实完成度保持同一套状态，无项目时沿用既有导航保护。
 - 展示编号只影响按钮文案，九个内部 stage id、页面文件名、上一步/下一步九阶段流转和历史 URL 均未改动，也不迁移任何数据。
 - 四组步骤控件统一浅色选中态：顶部五大流程与新增小流程均为白底/浅蓝底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover 与 focus-visible 都不会翻成深色填充；`.ai-tabs button.active`（组装与整合、成本测算页签共用）与 `.inline-analysis-tabs button.active` 同步改为白底蓝字蓝边框。完成态只保留对勾与浅绿边框，按钮主体不做深色填充。
-- 资源版本号：`tech-workbench.css/js` → `twb7`，成本测算页引用的 `assembly-integration.css` 对齐到 `ai7`，`inline-analysis.css` → `flat6`。
+- 资源版本号：`tech-workbench.css/js` → `twb7`，成本测算页引用的 `assembly-integration.css` 对齐到 `ai7`，`inline-analysis.css` → `flat6`。（第 17 节口径修订时 `tech-workbench.css` 与 `tech-workbench.js` 一并提升到 `twb8`。）
 - 本地验证：`tests.test_tech_context_substeps_and_frame_status_red` 7/7 通过，组装页签/禁用态/按钮主次/模型入口四组 Red 24/24 通过，全量 `unittest discover` 86/86 通过；`py_compile`、`node --check`（tech-workbench.js、assembly-integration.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本节改动未提交。
-- 后续口径修订：流程 1、5 的小流程按钮移动到与流程 3、4 内部步骤一致的卡片标题位置，不再作为顶部五大流程下方的独立横条；文案去掉 1.1/1.2/1.3 和 5.1/5.2/5.3，只保留“创建/确认/审核”与“汇总结果/结果审核/发布并回传报价”，等待重新实现和验收。
+- 口径修订（同节内完成）：流程 1、5 的小流程按钮不再作为顶部五大流程下方的独立横条，改为业务卡片标题行 `#techContextHeader` 内与标题同级、靠右排列的 `#techSubstepsBar`，尺寸/间距/胶囊样式与流程 3、4 页面内部页签一致；文案去掉 1.1/1.2/1.3 和 5.1/5.2/5.3，只保留“创建/确认/审核”与“汇总结果/结果审核/发布并回传报价”，按钮与提示文案都不再显示内部小步编号（底栏 `#techNowLabel` 改显示内部步骤名称）。九个内部 stage id、URL、九阶段前后流转与 `applyStage()` 代理逻辑不变。
 
 ## 18. 技术工艺 Agent 多提供商可用性（9-10）
 
-- 确认 Agent 不可用的根因是 `oc_agent.available()` 硬编码要求 `ANTHROPIC_API_KEY`，与统一模型设置默认 Qwen、支持多 provider 的路由冲突；新增多提供商 Agent readiness Spec 与 Red 测试。
-- 约定 Agent 按 `llm_settings.resolve(vision=False)` 当前语言模型的 provider、base URL 和 Key 判断并实际创建会话；Qwen 已配置时不依赖 Anthropic Key，缺 Key 时提示当前 provider。
-- 本地根 `.env` 与 `tech_app/.env` 均不存在，但 `.env` 在 UI 持久化设置和 CPQ 本地网关注入场景不是必需文件；禁止创建或提交含密钥的 `.env`，仅修订 `.env.example` 的 Anthropic 强制旧口径，等待 DeepSeek 实现。
+- 根因：`oc_agent.available()` 硬编码要求 `ANTHROPIC_API_KEY`，与统一模型设置默认 Qwen、支持多 provider 的路由冲突；现在 `available()` 改为解析 `llm_settings.resolve(vision=False)`（模型设置是唯一事实源），只检查当前 provider 的 Key，缺 Key 时提示当前 provider（如“未配置阿里云百炼 API Key，Agent 无法启动”“未配置 Anthropic API Key，Agent 无法启动”），不再统一报 ANTHROPIC_API_KEY。
+- 实际调用同样按路由走：新增 `agent_route()` / `sync_route_environment()`，会话创建前把 `CLAUDE_MODEL`、当前 provider 的 Key 与 `<PROVIDER>_BASE_URL` 同步给 open-claude（网关地址用 `setdefault` 写入，运维用 `QWEN_BASE_URL` 指的业务空间专属域名不会被默认网关覆盖回去；open-claude 的 `get_provider_base_url()` 原生支持该覆盖，而平台自身推理仍由 `llm_settings.PROVIDERS` 的 base_url 决定，这一差异不在本次改动范围内）；Qwen/OpenAI/DeepSeek 走 OpenAI 兼容协议，Anthropic 走原生 SDK，CPQ 本地网关 `cpq_local` 在受控集成层按 `llm_settings.PROVIDERS` 运行时注册，不修改 open-claude 包内文件。
+- 切换 provider 或 Key 后由 `ProjectAgent._rebuild_client()` 重新解析路由、同步环境、更新 `conv.model` 并重建 client，复用旧 provider client 的情况被消除；错误信息只含 provider 名，不含任何 Key 内容。
+- `.env` 不是强制条件：不创建、不提交、不打印真实 `.env`；`tech_app/.env.example` 首段改为中立说明，明确模型与 Key 可在前端模型设置中保存，也可用环境变量部署，且只填当前所选 provider 的 Key，Anthropic/OpenAI/Qwen 等变量示例保留但不再暗示 Anthropic 必填。
+- 本地验证：`tests.test_tech_agent_provider_readiness_red` 5/5 通过、`tests.test_tech_context_substeps_and_frame_status_red` 8/8 通过；新增动态测试 `tests.test_tech_agent_provider_readiness_dynamic` 在系统解释器下 5 通过 + 2 跳过（跳过项需要与 open-claude 字节码匹配的解释器），在 `open-claude/.venv`（Python 3.10）下 7/7 通过，覆盖 Qwen+Key 无需 Anthropic Key、缺 Qwen Key 报 Qwen、缺 Anthropic Key 报 Anthropic、切换 provider 重建 client、`QWEN_BASE_URL` 部署覆盖不被覆盖，以及端到端路由。
+- 端到端验证（本地假 OpenAI 兼容网关，非真实 Key）：选 Qwen 时请求命中 `<QWEN_BASE_URL>/chat/completions`、`model=qwen3.5-plus`、`Authorization: Bearer <Qwen Key>`，全程未使用 Anthropic Key；CPQ 本地网关 `cpq_local` 被运行时注册进 open-claude 的 `PROVIDERS` 与模型映射，网关地址与 `TECH_LOCAL_API_KEY` 生效；Anthropic 分支仍返回原生 SDK client；缺 Key 时 `openai_compat` 报的是当前 provider 的环境变量名（如 `DASHSCOPE_API_KEY, QWEN_API_KEY`）。
+- 运行期验收（真实 FastAPI 应用 + `TestClient`，DATA_DIR 用临时目录，不碰线上数据）：`GET /api/projects/{id}/agent/meta` 四个场景全部符合预期 —— ① 选 Qwen + 有 Qwen Key、无 Anthropic Key → `available=true, model=qwen3.5-plus`；② 选 Qwen 无 Key → `未配置阿里云百炼 API Key，Agent 无法启动`；③ 选 Anthropic 无 Key → `未配置 Anthropic API Key，Agent 无法启动`；④ 注入 CPQ 本地网关（占位 Key）→ `available=true, model=cpq-local-7b`，全程不要求 Anthropic Key。同一轮还校验 `/tech-workbench.html` 返回 200、引用 `twb8`，且页面含 `tech-workspace-context` / `techSubstepsBar`、无 `1.1` 文案。
+- 全量 `unittest discover` 通过；`py_compile`、`node --check`（tech-workbench.js、assembly-integration.js、agent-chat.js）与 `git diff --check` 通过。未执行浏览器人工验收与部署，本轮改动未提交。

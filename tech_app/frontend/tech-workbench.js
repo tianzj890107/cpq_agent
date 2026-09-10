@@ -36,19 +36,19 @@
     { no: '5', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
   ];
 
-  // 大流程 1、5 内部还有多步，需要在父壳给一排上下文小流程按钮（大流程 2-4 各自
-  // 只有一个内部阶段或已有子页面页签，不在父壳重复生成）。展示编号只影响文案，
+  // 大流程 1、5 内部还有多步，需要在业务卡片标题行给一排上下文小流程按钮（大流程
+  // 2-4 各自只有一个内部阶段或已有子页面页签，不在父壳重复生成）。按钮只显示名称，
   // stage id、页面文件和九阶段流转都不变。
   const CONTEXT_SUBSTEPS = {
     1: [
-      { no: '1.1', stage: 'requirement-create',  label: '1.1 创建' },
-      { no: '1.2', stage: 'requirement-confirm', label: '1.2 确认' },
-      { no: '1.3', stage: 'requirement-review',  label: '1.3 审核' },
+      { stage: 'requirement-create',  label: '创建' },
+      { stage: 'requirement-confirm', label: '确认' },
+      { stage: 'requirement-review',  label: '审核' },
     ],
     5: [
-      { no: '5.1', stage: 'summary',        label: '5.1 汇总结果' },
-      { no: '5.2', stage: 'report-review',  label: '5.2 结果审核' },
-      { no: '5.3', stage: 'report-publish', label: '5.3 发布并回传报价' },
+      { stage: 'summary',        label: '汇总结果' },
+      { stage: 'report-review',  label: '结果审核' },
+      { stage: 'report-publish', label: '发布并回传报价' },
     ],
   };
 
@@ -157,7 +157,7 @@
         const step = MAJOR_STEPS.find((item) => item.no === btn.dataset.majorStep) || MAJOR_STEPS[0];
         if (state.stage === step.entry) return;
         if (!state.project && step.entry !== 'requirement-create') {
-          setStateView('error', '尚未绑定项目', '请先在 1.1 创建中上传图纸并保存草稿创建项目，再进入后续步骤。');
+          setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
           return;
         }
         applyStage(step.entry, { project: state.project });
@@ -165,7 +165,7 @@
     });
 
     const now = $('techNowLabel');
-    if (now) now.textContent = current ? `${current.no} ${current.label}` : '';
+    if (now) now.textContent = current ? current.label : '';
     updateProjectLabel();
     const prev = $('techPrev');
     const next = $('techNext');
@@ -178,14 +178,20 @@
      前进后退 / 真实完成度保持同一套状态，不直接改 iframe.src。 */
   function renderContextSubsteps() {
     const bar = $('techSubstepsBar');
+    const header = $('techContextHeader');
+    const title = $('techContextTitle');
     if (!bar) return;
-    const substeps = CONTEXT_SUBSTEPS[currentMajorStep().no] || [];
+    const major = currentMajorStep();
+    const substeps = CONTEXT_SUBSTEPS[major.no] || [];
     const canNav = Boolean(state.project || state.stage === 'requirement-create');
+    if (title) title.textContent = major.label;
     if (!substeps.length) {
       bar.hidden = true;
       bar.replaceChildren();
+      if (header) header.hidden = true;
       return;
     }
+    if (header) header.hidden = false;
     bar.hidden = false;
     bar.innerHTML = substeps.map((step) => {
       const cls = ['tech-substep-btn'];
@@ -200,7 +206,7 @@
         const target = btn.dataset.substep;
         if (!stages.has(target) || target === state.stage) return;
         if (!state.project && target !== 'requirement-create') {
-          setStateView('error', '尚未绑定项目', '请先在 1.1 创建中上传图纸并保存草稿创建项目，再进入后续步骤。');
+          setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
           return;
         }
         applyStage(target, { project: state.project });
@@ -340,14 +346,14 @@
     const meta = stageMeta(state.stage);
     if (!meta) {
       setStateView('error', '未知步骤', '当前 stage 不在固定白名单内，已拒绝加载。', [
-        { id: 'go-create', label: '去 1.1 创建', stage: 'requirement-create' },
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
         { id: 'go-home', label: '返回技术工艺首页', href: 'home.html' },
       ]);
       return;
     }
     if (!state.project && state.stage !== 'requirement-create') {
-      setStateView('error', '缺少项目', 'URL 中未提供 project，工作台不会创建匿名项目。请先进入 1.1 创建，或从项目列表进入。', [
-        { id: 'go-create', label: '去 1.1 创建', stage: 'requirement-create' },
+      setStateView('error', '缺少项目', 'URL 中未提供 project，工作台不会创建匿名项目。请先进入「创建」，或从项目列表进入。', [
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
         { id: 'go-home', label: '返回技术工艺首页', href: 'home.html' },
       ]);
       return;
@@ -357,13 +363,13 @@
       const banner = document.createElement('div');
       banner.className = 'tech-wb-banner';
       banner.textContent = state.taskId
-        ? '新增工艺任务：本步承载任务详情与图纸上传；创建项目后将自动进入需求 1.1 并绑定左侧会话。'
+        ? '新增工艺任务：本步承载任务详情与图纸上传；创建项目后将自动进入「创建」并绑定左侧会话。'
         : '尚未绑定项目：请在本步上传 2D 工程图并保存草稿，系统会自动创建项目并绑定到左侧会话。';
       outlet.append(banner);
     }
     const iframe = document.createElement('iframe');
     iframe.id = 'techStageFrame';
-    iframe.title = `${meta.no} ${meta.label}`;
+    iframe.title = meta.label;
     iframe.setAttribute('data-stage', state.stage);
     iframe.src = childUrl(state.stage);
     iframe.addEventListener('load', () => {
@@ -462,7 +468,7 @@
     if (idx < 0 || idx >= STAGES.length - 1) return;
     const target = STAGES[idx + 1];
     if (!state.project && target.id !== 'requirement-create') {
-      setStateView('error', '尚未绑定项目', '请先在 1.1 创建中保存草稿创建项目，再进入下一步。');
+      setStateView('error', '尚未绑定项目', '请先在「创建」中保存草稿创建项目，再进入下一步。');
       return;
     }
     applyStage(target.id, { project: state.project });
@@ -615,7 +621,7 @@
     const newChat = $('techNewChat');
     if (newChat) newChat.addEventListener('click', () => {
       if (!state.project) {
-        setStateView('error', '尚未绑定项目', '新对话需要先绑定项目：请先在 1.1 创建中上传图纸并保存草稿。');
+        setStateView('error', '尚未绑定项目', '新对话需要先绑定项目：请先在「创建」中上传图纸并保存草稿。');
         return;
       }
       if (window.ocTechAgent && typeof window.ocTechAgent.resetTask === 'function') {
@@ -752,7 +758,7 @@
       applyStage(stage, { project: projectId });
     } catch (error) {
       setStateView('error', '无法恢复历史项目', `打开项目 ${projectId} 失败：${error.message}`, [
-        { id: 'go-create', label: '去 1.1 创建', stage: 'requirement-create' },
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
       ]);
     }
   }

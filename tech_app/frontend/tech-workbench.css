@@ -362,16 +362,37 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   pointer-events: none;
 }
 
-/* 上下文小流程（大流程 1、5）：与顶部大流程同一套浅色选中态，选中项永远是
-   白底 + 品牌蓝字 + 1px 品牌浅蓝边框，hover/focus 也不翻成深色。 */
-.tech-substeps-bar {
+/* 上下文小流程（大流程 1、5）：位于业务卡片标题行内、靠右排列，与流程 3、4
+   页面内部页签同一水平位置；选中项永远是白底 + 品牌蓝字 + 1px 品牌浅蓝边框，
+   hover/focus 也不翻成深色。 */
+.tech-workspace-context {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
   padding: 8px 16px;
   border-bottom: .5px solid var(--twb-border);
   background: var(--twb-card);
+}
+.tech-workspace-context[hidden] { display: none; }
+.tech-context-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--twb-text);
+  white-space: nowrap;
+}
+.tech-substeps-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-left: auto;
+}
+.tech-substeps-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   overflow-x: auto;
 }
 .tech-substeps-bar[hidden] { display: none; }

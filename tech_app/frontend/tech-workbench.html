@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="agent-chat.css?v=20260819-layout2" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb7" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb8" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -111,8 +111,15 @@
         <div class="tech-workspace-progress">
           <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
         </div>
-        <!-- 上下文小流程：只有大流程 1、5 内部还有多步时才有内容，其余大流程隐藏。 -->
-        <nav class="tech-substeps-bar" id="techSubstepsBar" aria-label="当前大流程小流程" hidden></nav>
+        <!-- 上下文小流程：位于业务卡片标题行内、与大流程 3、4 页面内部页签同一水平
+             位置并靠右排列，只有大流程 1、5 内部还有多步时才出现；其余大流程整行隐藏，
+             不会在顶部五大流程下方多出一条流程条。 -->
+        <div class="tech-workspace-context" id="techContextHeader" hidden>
+          <div class="tech-context-title" id="techContextTitle"></div>
+          <div class="tech-substeps-slot">
+            <nav class="tech-substeps-bar" id="techSubstepsBar" aria-label="当前大流程小流程" hidden></nav>
+          </div>
+        </div>
         <div id="techWorkspaceOutlet" aria-live="polite">
           <div class="tech-wb-state" id="techStageState">
             <div class="tech-wb-spinner" aria-hidden="true"></div>
@@ -137,7 +144,7 @@
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set1"></script>
-  <script src="tech-workbench.js?v=twb7"></script>
+  <script src="tech-workbench.js?v=twb8"></script>
   <script src="agent-chat.js?v=20260819-match1"></script>
 </body>
 </html>
