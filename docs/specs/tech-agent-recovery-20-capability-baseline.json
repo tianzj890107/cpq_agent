@@ -1,0 +1,112 @@
+{
+  "step": 20,
+  "baseline": "tech_app/frontend/index.html",
+  "note": "以旧 2.1 页面为基线，冻结技术工艺八项能力依赖的真实路由与前端入口；只增不减。",
+  "capabilities": [
+    {
+      "id": "upload",
+      "requirement": "原来能上传的仍能上传",
+      "routes": [
+        "POST /api/projects",
+        "POST /api/projects/3d",
+        "POST /api/projects/{project_id}/attachments"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnUpload",
+        "tech_app/frontend/index.html#fileInput"
+      ],
+      "manual": "2.1 上传 PDF/DWG/STEP，看板显示文件名并出现解析入口"
+    },
+    {
+      "id": "view",
+      "requirement": "原来能看拆解树与零件清单的仍能看",
+      "routes": [
+        "GET /api/projects/{project_id}/tree",
+        "GET /api/projects/{project_id}/files",
+        "GET /api/projects/{project_id}/bom"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnParse",
+        "tech_app/frontend/app.js#part-detail"
+      ],
+      "manual": "解析后右侧出现零件清单，点零件在看板内部展开详情（3D/2D/参数）"
+    },
+    {
+      "id": "generate",
+      "requirement": "原来能生成几何/制造方案的仍能生成",
+      "routes": [
+        "POST /api/projects/{project_id}/generate",
+        "POST /api/projects/{project_id}/manufacturing/recommend"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnGenerate"
+      ],
+      "manual": "点「生成」后出现生成结果与 3D 预览"
+    },
+    {
+      "id": "modify",
+      "requirement": "原来能改零件参数并回写 IR 的仍能改",
+      "routes": [
+        "PUT /api/projects/{project_id}/ir",
+        "POST /api/projects/{project_id}/ai-chat"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnVerify",
+        "tech_app/frontend/app.js#part-detail"
+      ],
+      "manual": "改零件参数 → 点校验修正 → IR 更新，零件清单同步"
+    },
+    {
+      "id": "submit-review",
+      "requirement": "原来能提交审批的仍能提交",
+      "routes": [
+        "POST /api/projects/{project_id}/approval/submit",
+        "GET /api/projects/{project_id}/approval"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnGenerate"
+      ],
+      "manual": "提交审批后 approval 状态变为待审"
+    },
+    {
+      "id": "export",
+      "requirement": "原来能导出 BOM/汇总的仍能导出",
+      "routes": [
+        "GET /api/projects/{project_id}/bom.csv",
+        "GET /api/projects/{project_id}/summary.md",
+        "GET /api/projects/{project_id}/costest.csv"
+      ],
+      "refs": [
+        "tech_app/frontend/index.html#btnBom"
+      ],
+      "manual": "点导出下载 CSV/Markdown，内容与看板一致"
+    },
+    {
+      "id": "version",
+      "requirement": "原来能看版本与差异的仍能看",
+      "routes": [
+        "GET /api/projects/{project_id}/versions",
+        "GET /api/projects/{project_id}/versions/{version}",
+        "GET /api/projects/{project_id}/versions/{v_from}/diff/{v_to}"
+      ],
+      "refs": [
+        "tech_app/frontend/app.js#version"
+      ],
+      "manual": "打开版本列表，能查看某一版与两版差异"
+    },
+    {
+      "id": "expand-part",
+      "requirement": "零件能力仍只在右侧看板内部展开",
+      "routes": [
+        "GET /api/projects/{project_id}/parts/{part_id}/process",
+        "GET /api/projects/{project_id}/parts/{part_id}/cost"
+      ],
+      "refs": [
+        "tech_app/frontend/app.js#part-detail",
+        "tech_app/frontend/app.js#part-process",
+        "tech_app/frontend/app.js#part-cost"
+      ],
+      "manual": "点零件 → 详情、工艺推荐、成本测算都在右侧看板展开，父壳不出现零件 Drawer"
+    }
+  ]
+}

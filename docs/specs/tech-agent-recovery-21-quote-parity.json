@@ -1,0 +1,119 @@
+{
+  "step": 21,
+  "quote_reference": "确认需求解析结果.html",
+  "note": "技术工艺统一工作台左侧会话与报价 Agent 的交互能力对照。第 16–19 步已落地，14 项全部 live；gated 机制保留供后续批次使用（gated_by 限 16–19，且对应 Spec + Red 必须存在）。",
+  "rows": [
+    {
+      "id": "quick_buttons",
+      "label": "快捷按钮",
+      "quote": "确认需求解析结果.html#quickActions",
+      "tech": "tech_app/frontend/tech-workbench.html#techChatActions",
+      "status": "live",
+      "release": "第 16 步统一左侧操作栏"
+    },
+    {
+      "id": "attachments",
+      "label": "附件",
+      "quote": "确认需求解析结果.html#chatAttachBtn",
+      "tech": "tech_app/frontend/tech-workbench.html#ocPlus",
+      "status": "live",
+      "release": "既有 ＋ 能力菜单 + 任务文件入口"
+    },
+    {
+      "id": "tool_trace",
+      "label": "工具轨迹",
+      "quote": "确认需求解析结果.html#addToolActivity",
+      "tech": "tech_app/frontend/agent-chat.js#addToolCard",
+      "status": "live",
+      "release": "既有工具卡渲染"
+    },
+    {
+      "id": "structured_fill",
+      "label": "结构化回填",
+      "quote": "确认需求解析结果.html#qaFillStep",
+      "tech": "tech_app/frontend/agent-chat.js#TECH_UI_ACTIONS",
+      "status": "live",
+      "release": "第 17 步 tech_ui fill_fields"
+    },
+    {
+      "id": "current_step",
+      "label": "当前步骤",
+      "quote": "确认需求解析结果.html#stepTitle",
+      "tech": "tech_app/frontend/agent-chat.js#ocStageContext",
+      "status": "live",
+      "release": "第 19 步九阶段独立 page_context"
+    },
+    {
+      "id": "prev_next",
+      "label": "上下步",
+      "quote": "确认需求解析结果.html#btnPrev",
+      "tech": "tech_app/frontend/tech-workbench.html#techPrev",
+      "status": "live",
+      "release": "既有底栏 + 第 16 步左侧操作栏"
+    },
+    {
+      "id": "transfer",
+      "label": "转交任务",
+      "quote": "确认需求解析结果.html#wfKindHandoffBtn",
+      "tech": "tech_app/frontend/tech-workbench.html#techChatTransfer",
+      "status": "live",
+      "release": "第 16 步转交入口（无转交动作时带入会话输入区）"
+    },
+    {
+      "id": "history",
+      "label": "历史",
+      "quote": "确认需求解析结果.html#historyDrawer",
+      "tech": "tech_app/frontend/tech-workbench.html#techHistory",
+      "status": "live",
+      "release": "既有会话历史"
+    },
+    {
+      "id": "settings",
+      "label": "设置",
+      "quote": "确认需求解析结果.html#settingsModal",
+      "tech": "tech_app/frontend/tech-workbench.html#techSettings",
+      "status": "live",
+      "release": "第 18 步统一居中设置卡片"
+    },
+    {
+      "id": "error_prompt",
+      "label": "错误提示",
+      "quote": "确认需求解析结果.html#addErrorBubble",
+      "tech": "tech_app/frontend/agent-chat.js#oc-err-line",
+      "status": "live",
+      "release": "既有会话错误行 + 第 17 步固定确认交互"
+    },
+    {
+      "id": "task_progress",
+      "label": "任务进度",
+      "quote": "确认需求解析结果.html#progressBar",
+      "tech": "tech_app/frontend/tech-workbench.html#ocTaskProgressHost",
+      "status": "live",
+      "release": "既有任务进度宿主"
+    },
+    {
+      "id": "result_entry",
+      "label": "结果入口",
+      "quote": "确认需求解析结果.html#resultsContent",
+      "tech": "tech_app/frontend/tech-workbench.html#ocResultActions",
+      "status": "live",
+      "release": "既有结果 chip 组"
+    },
+    {
+      "id": "session_restore",
+      "label": "会话恢复",
+      "quote": "确认需求解析结果.html#replaySession",
+      "tech": "tech_app/frontend/tech-workbench.js#techHistoryRestore",
+      "status": "live",
+      "release": "既有会话恢复"
+    },
+    {
+      "id": "model_display",
+      "label": "模型显示",
+      "quote": "确认需求解析结果.html#modelInfo",
+      "tech": "tech_app/frontend/tech-workbench.html#techModelInfo",
+      "status": "live",
+      "release": "第 18 步唯一模型口径"
+    }
+  ]
+}

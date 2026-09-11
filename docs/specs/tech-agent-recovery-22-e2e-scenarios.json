@@ -1,0 +1,130 @@
+{
+  "step": 22,
+  "note": "技术工艺 Agent 能力恢复十条端到端场景。automated 复用既有 Red/守护套件，manual 是需要人工在浏览器里确认的步骤；depends_on 是 1–19 的批次号。",
+  "scenarios": [
+    {
+      "id": "e2e-01",
+      "title": "上传资料 → Agent 解析需求 → 右侧填字段",
+      "automated": ["tests/test_tech_requirement_agent_red.py"],
+      "manual": [
+        "1.1 上传需求文档 → 点「一键解析需求」",
+        "右侧表单出现 AI 带入/推荐徽标，左侧总结填了什么、缺什么"
+      ],
+      "depends_on": [8],
+      "expected": "需求单字段由后端填写，左右同时可见，无需刷新整页"
+    },
+    {
+      "id": "e2e-02",
+      "title": "确认需求 → 审核需求（含退回）",
+      "automated": [
+        "tests/test_tech_requirement_confirm_red.py",
+        "tests/test_tech_requirement_review_red.py"
+      ],
+      "manual": [
+        "1.2 把 Agent 起草的确认意见带入看板 → 通过确认 / 驳回",
+        "1.3 带入审核意见 → 审核通过 / 退回汇总，右侧显示审核状态与流程留痕"
+      ],
+      "depends_on": [9, 10],
+      "expected": "通过 / 退回都需人工明确确认，状态流转与审计各只有一份实现"
+    },
+    {
+      "id": "e2e-03",
+      "title": "图纸解析 Agent 动作 + 左侧统一工具条",
+      "automated": [
+        "tests/test_tech_drawing_agent_actions_red.py",
+        "tests/test_tech_left_toolbar_parity_red.py"
+      ],
+      "manual": [
+        "2.1 在左侧说「开始解析」，右侧看板逐条显示解析进度",
+        "左侧操作栏的上一步 / 下一步 / 主要操作可用且随 stage 变化"
+      ],
+      "depends_on": [7, 16],
+      "expected": "左侧只发语义化动作名，解析在右侧既有流水线里完成"
+    },
+    {
+      "id": "e2e-04",
+      "title": "零件清单 → 零件详情层级",
+      "automated": ["tests/test_tech_parts_views_inside_board_red.py"],
+      "manual": [
+        "点「零件清单」→ 右侧清单；点零件 → 详情（3D/2D/参数/材料/数量/版本）",
+        "点返回 → 回到上一层，全程左侧会话不消失、无父层弹层"
+      ],
+      "depends_on": [6],
+      "expected": "零件层级视图全部在右侧看板内部展开，父壳不承载零件正文"
+    },
+    {
+      "id": "e2e-05",
+      "title": "看板内 3D/2D 与识别依据",
+      "automated": ["tests/test_tech_drawing_agent_actions_red.py"],
+      "manual": [
+        "在零件详情查看 3D 模型与 2D 工程图，可下载工程图",
+        "查看识别依据（role / model_lookup_evidence / confidence）"
+      ],
+      "depends_on": [5],
+      "expected": "3D/2D 与识别依据都在右侧看板内，不新开窗口、不搬到父壳"
+    },
+    {
+      "id": "e2e-06",
+      "title": "2.2 组装与整合：参数推荐 → 组装工艺",
+      "automated": ["tests/test_tech_integration_agent_red.py"],
+      "manual": [
+        "上传整合图纸 → 生成参数推荐 → 生成组装工艺",
+        "左侧 Agent 请求跑环节，右侧看板刷新；确认工艺后发送财务"
+      ],
+      "depends_on": [11],
+      "expected": "参数 / 工序改动刷新右侧看板，发送财务有显式确认门"
+    },
+    {
+      "id": "e2e-07",
+      "title": "2.3 成本测算：逐件 → 汇总 → 确认",
+      "automated": ["tests/test_tech_cost_review_agent_red.py"],
+      "manual": [
+        "逐件测算 → 组装成本 → 汇总，右侧看板显示四项成本与合计",
+        "确认成本 → 写物料 / 发报价，均需人工确认"
+      ],
+      "depends_on": [12],
+      "expected": "成本算法只有一份实现，未确认绝不写物料 / 发报价 / 退回工艺"
+    },
+    {
+      "id": "e2e-08",
+      "title": "3.1 汇总 → 3.2 审核 → 3.3 发布并回传报价",
+      "automated": [
+        "tests/test_tech_summary_report_agent_red.py",
+        "tests/test_tech_report_review_agent_red.py",
+        "tests/test_tech_report_publish_agent_red.py"
+      ],
+      "manual": [
+        "3.1 生成报告草稿 → 保存发布范围 → 提交审核",
+        "3.2 审核通过 / 退回；3.3 正式发布 → 回传报价 → 新建版本"
+      ],
+      "depends_on": [13, 14, 15],
+      "expected": "送审 / 审批 / 发布 / 回传 / 新建版本都有确认门，审计与状态流转各一份实现"
+    },
+    {
+      "id": "e2e-09",
+      "title": "九阶段独立上下文与步进",
+      "automated": ["tests/test_tech_stage_context_nine_stages_red.py"],
+      "manual": [
+        "依次切换九个步骤，左侧上下文卡显示各自的 page_context",
+        "任何一步都不冒充 2.1 图纸解析"
+      ],
+      "depends_on": [19],
+      "expected": "九个阶段各有独立 page_context，缺失时不回退成别的步骤"
+    },
+    {
+      "id": "e2e-10",
+      "title": "失败可复现：左右两侧同时显示真实错误并可重试",
+      "automated": [
+        "tests/test_tech_board_bridge_protocol_red.py",
+        "tests/test_tech_left_toolbar_parity_red.py"
+      ],
+      "manual": [
+        "在右侧看板制造一次真实失败（例如缺少前置数据或超时）",
+        "确认左右两侧都显示真实错误文本，而不是无声返回",
+        "用左侧「失败重试」或错误提示里的重试入口重发同一条命令并成功"
+      ],
+      "depends_on": [10, 16],
+      "expected": "看板动作失败或超时时，右侧看板显示真实错误，左侧会话同时以可见提示呈现同一错误，并提供「重试」入口重发同一条命令；左右两侧都不得无声返回。"
+    }
+  ]
+}
