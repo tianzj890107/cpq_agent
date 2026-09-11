@@ -98,11 +98,24 @@ function crToast(message, error = false) {
 }
 
 /* --------------------------------------------------------------- 任务轮询 */
-async function crPollTask(taskId, card) {
+/** 长任务进度经统一看板协议上报父壳：左侧进度卡按 taskId 去重、日志增量追加。 */
+function crPublishTask(name, extra) {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.publish !== 'function') return;
+  try {
+    runtime.publish(name, 'costStep', Object.assign({ action: 'costStep' }, extra || {}));
+  } catch { /* 进度上报失败不影响业务本身 */ }
+}
+
+async function crPollTask(taskId, card, label) {
   for (;;) {
     await crSleep(1200);
     const task = await api(`/api/projects/${encodeURIComponent(crPid)}/tasks/${encodeURIComponent(taskId)}`);
-    card.log(Array.isArray(task.progress_log) ? task.progress_log : []);
+    const log = Array.isArray(task.progress_log) ? task.progress_log : [];
+    card.log(log);
+    // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
+    crPublishTask('task-progress', { taskId: taskId, label: label || '成本测算',
+                                     status: 'running', log: log });
     if (task.status === 'succeeded') return task.result;
     if (task.status === 'failed') throw new Error(task.error || '任务失败');
   }
@@ -427,13 +440,16 @@ function crRenderOps() {
 }
 
 async function crRunOp(kind) {
-  if (crBusy) return;
+  if (crBusy) return false;
   const labels = { 'material-write': '写入数据库', 'send-to-quote': '发送至报价',
                    'return-to-process': '退回工艺经理' };
   crBusy = true;
   crRender();
   const card = crCard(labels[kind]);
   crStatus(`${labels[kind]}中…`);
+  const opTask = `cost-op-${kind}`;
+  crPublishTask('task-progress', { taskId: opTask, label: labels[kind],
+                                   progress: `${labels[kind]}中…` });
   try {
     const body = {
       product_name: $cr('crProductName')?.value.trim() || '',
@@ -476,10 +492,16 @@ async function crRunOp(kind) {
     }
     card.done(true);
     crStatus(`${labels[kind]}完成`);
+    crPublishTask('task-completed', { taskId: opTask, label: labels[kind],
+                                      status: 'succeeded' });
+    return true;
   } catch (error) {
     card.done(false, error.message || '失败');
     crStatus(`${labels[kind]}失败：${error.message}`, true);
     crToast(error.message || `${labels[kind]}失败`, true);
+    crPublishTask('task-failed', { taskId: opTask, label: labels[kind],
+                                   status: 'failed', error: error.message || '失败' });
+    return false;
   } finally {
     crBusy = false;
     crRender();
@@ -488,22 +510,32 @@ async function crRunOp(kind) {
 
 /* --------------------------------------------------------------- 测算 */
 async function crRunPart(partId, quantity) {
-  if (crBusy) return;
+  if (crBusy) return false;
   crBusy = true;
   crRender();
+  const label = `零件成本 ${partId}`;
   const card = crCard(`零件成本 · ${partId}`);
   crStatus(`${partId} 测算中…`);
+  let taskKey = `cost-part-${partId}`;
   try {
     const submitted = await api(
       crUrl(`/parts/${encodeURIComponent(partId)}?quantity=${quantity || 1}`),
       { method: 'POST' });
-    crData = await crPollTask(submitted.task_id, card);
+    taskKey = String(submitted.task_id || taskKey);
+    crPublishTask('task-progress', { taskId: taskKey, label: label, status: 'running',
+                                     progress: `${partId} 已提交，正在测算…` });
+    crData = await crPollTask(taskKey, card, label);
     card.done(true);
     crStatus(`${partId} 已测算`);
+    crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });
+    return true;
   } catch (error) {
     card.done(false, error.message || '失败');
     crStatus(`${partId} 测算失败：${error.message}`, true);
     crToast(error.message || '测算失败', true);
+    crPublishTask('task-failed', { taskId: taskKey, label: label, status: 'failed',
+                                   error: error.message || '测算失败' });
+    return false;
   } finally {
     crBusy = false;
     crRender();
@@ -525,20 +557,30 @@ async function crRunParts(onlyMissing) {
 }
 
 async function crRunAssembly() {
-  if (crBusy) return;
+  if (crBusy) return false;
   crBusy = true;
   crRender();
+  const label = '组装成本';
   const card = crCard('组装成本');
   crStatus('组装成本测算中…');
+  let taskKey = 'cost-assembly';
   try {
     const submitted = await api(crUrl('/assembly'), { method: 'POST' });
-    crData = await crPollTask(submitted.task_id, card);
+    taskKey = String(submitted.task_id || taskKey);
+    crPublishTask('task-progress', { taskId: taskKey, label: label, status: 'running',
+                                     progress: '整机成本已提交，正在测算…' });
+    crData = await crPollTask(taskKey, card, label);
     card.done(true);
     crStatus('组装成本已测算');
+    crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });
+    return true;
   } catch (error) {
     card.done(false, error.message || '失败');
     crStatus(`组装成本测算失败：${error.message}`, true);
     crToast(error.message || '测算失败', true);
+    crPublishTask('task-failed', { taskId: taskKey, label: label, status: 'failed',
+                                   error: error.message || '测算失败' });
+    return false;
   } finally {
     crBusy = false;
     crRender();
@@ -561,17 +603,25 @@ async function crRunAll() {
 }
 
 async function crConfirmCost() {
-  if (crBusy) return;
+  if (crBusy) return false;
   crBusy = true;
   crRender();
+  crPublishTask('task-progress', { taskId: 'cost-confirm', label: '确认成本',
+                                   progress: '正在确认成本…' });
   try {
     crData = await api(crUrl('/confirm'), { method: 'POST' });
     crStatus('成本已确认');
     crToast('成本已确认');
     crSay('成本已确认。现在可以写入数据库、发送至报价，或把结果退回工艺经理复核。');
+    crPublishTask('task-completed', { taskId: 'cost-confirm', label: '确认成本',
+                                      status: 'succeeded' });
+    return true;
   } catch (error) {
     crStatus(`确认失败：${error.message}`, true);
     crToast(error.message || '确认失败', true);
+    crPublishTask('task-failed', { taskId: 'cost-confirm', label: '确认成本',
+                                   status: 'failed', error: error.message || '确认失败' });
+    return false;
   } finally {
     crBusy = false;
     crRender();
@@ -691,6 +741,29 @@ crStart();
 (function crRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
   const crSetTab = (name) => { crTab = name; crRender(); };
+  // 重新拉取并渲染（复用既有读取路径），供 Agent 改完说明 / 确认 / 去向之后刷新看板。
+  const crRefresh = async () => {
+    try {
+      crData = await api(crUrl(''));
+      crRender();
+      crStatus('已刷新');
+      return { ok: true };
+    } catch (error) {
+      crStatus(`刷新失败：${error.message}`, true);
+      return { ok: false, error: { code: 'refresh-failed', message: error.message || '刷新失败' } };
+    }
+  };
+  // 三个去向动作共用：各自复用既有 crRunOp(kind)（material-write / send-to-quote /
+  // return-to-process），不复制任何对外调用。
+  const crOpAction = (kind, label) => ({
+    label: label,
+    run: async () => {
+      const ok = await crRunOp(kind);
+      return ok ? { ok: true }
+        : { ok: false, error: { code: 'op-failed', message: `${label}失败，请查看看板提示。` } };
+    },
+    getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+  });
   window.TechBoardRuntime.registerActions({
     runCostReview: {
       label: '逐件测算并汇总',
@@ -715,6 +788,42 @@ crStart();
         return { visible: true, enabled: Boolean(button) && !button.disabled, busy: Boolean(crBusy) };
       },
     },
+    // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。
+    refreshCostReview: {
+      label: '刷新成本看板',
+      run: async () => crRefresh(),
+      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+    },
+    // 左侧 Agent 请求跑某一环节：复用既有 crRunPart / crRunAssembly / crRunAll。
+    costStep: {
+      label: '运行成本测算',
+      run: async (payload) => {
+        const step = String((payload && payload.step) || '').toLowerCase();
+        if (step === 'all') { await crRunAll(); return { ok: true }; }
+        if (step === 'assembly') {
+          const ok = await crRunAssembly();
+          return ok ? { ok: true }
+            : { ok: false, error: { code: 'step-failed', message: '组装成本测算失败，请查看看板提示。' } };
+        }
+        if (step === 'part') {
+          const partId = String((payload && payload.part_id) || '').trim();
+          if (!partId) {
+            return { ok: false, error: { code: 'missing-part',
+                                         message: '缺少 part_id：请指定要测算的零件。' } };
+          }
+          const ok = await crRunPart(partId, Number((payload && payload.quantity) || 1));
+          return ok ? { ok: true }
+            : { ok: false, error: { code: 'step-failed',
+                                    message: `${partId} 测算失败，请查看看板提示。` } };
+        }
+        return { ok: false, error: { code: 'bad-step', message: 'step 只能是 part / assembly / all' } };
+      },
+      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+    },
+    // 三个去向：复用既有 crRunOp，不新增对外调用。
+    writeCostReviewMaterial: crOpAction('material-write', '写入数据库'),
+    sendCostReviewToQuote: crOpAction('send-to-quote', '发送至报价'),
+    returnCostReviewToProcess: crOpAction('return-to-process', '退回工艺经理'),
   });
   window.TechBoardRuntime.registerViews({
     parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },

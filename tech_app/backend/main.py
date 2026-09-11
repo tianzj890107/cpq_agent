@@ -64,7 +64,7 @@ from .models.workflow import (
 from .services import (
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
-    cost_review, industry_templates, integration, manufacturing,
+    cost_flow, cost_review, industry_templates, integration, manufacturing,
     llm_settings, material, negotiation, oc_agent, part_edit, pricenego, pricing, process_lookup,
     process, product_params, production, requirement_extract, requirement_service,
     step_import,
@@ -2620,39 +2620,6 @@ class IntegrationPublishBody(BaseModel):
     target_user_id: str = ""
 
 
-def _integration_quote_result(project_id: str, plan, title: str) -> dict:
-    """随「确认工艺并发送至报价」一起回传的整机结论。
-
-    报价那头要的不是 2.2 的界面，而是能落进测算单的三样东西：成品编码与名称、
-    单件成本的四项拆解、以及按 DA 字段拉平的整机参数。参数按**字段编码**给 ——
-    报价的产品技术参数表是按 DA 列取数的，用 2.2 自己的参数名对不上号。
-    """
-    breakdown = cost_model.breakdown(plan.cost.model_dump()) if plan.cost else {}
-    written = plan.material_writes[-1] if plan.material_writes else None
-    return {
-        "project_id": project_id,
-        "product_name": title,
-        "assembly_name": (plan.params.assembly_name if plan.params else "") or title,
-        "quantity": plan.quantity,
-        # 写库是另一个按钮，可能还没点 —— 没有成品编码不该挡住推送，但要说清楚。
-        "material": ({"number": written.number, "name": written.name,
-                      "material_id": written.material_id,
-                      "unit_price": written.material_unit_price} if written else None),
-        "cost": breakdown,
-        "params": product_params.rows_for_quote(plan.params) if plan.params else None,
-        "process_step_count": len(plan.process.steps) if plan.process else 0,
-        "params_final": bool(plan.params_final),
-    }
-
-
-def _integration_ready_cost(project_id: str):
-    """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。"""
-    plan = integration.load_plan(project_id)
-    if not (plan.cost and plan.cost.items):
-        raise HTTPException(400, "请先完成整机成本测算，再写入数据库或发送至报价")
-    return plan
-
-
 def _bridge_call(action, *args, **kwargs):
     """把桥接层的两类失败翻译成 HTTP：业务拒绝 400，服务不可用 503。
 
@@ -2666,45 +2633,15 @@ def _bridge_call(action, *args, **kwargs):
         raise HTTPException(503, f"业务数据库/报价服务暂不可用：{exc}") from exc
 
 
-def _integration_do_material_write(project_id: str, plan, body: IntegrationPublishBody,
-                                   token: str, user: dict) -> MaterialWrite:
-    """取号 + 写两张主数据表 + 把编码回填进整机参数。就地改 plan，不落盘。
-
-    抽出来是因为「发送至报价」也要用它：成品编码只能由系统生成，但不该逼着人先去点
-    另一个按钮 —— 发的时候没有编码，这里顺手补一个。
-    """
-    product_name = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or ""
-    if not product_name:
-        raise HTTPException(400, "缺少产品名称：请先完成参数推荐，或在写入时填写产品名称")
-    breakdown = cost_model.breakdown(plan.cost.model_dump())
-    result = _bridge_call(cpq_bridge.write_material, token,
-                          product_name, breakdown["total"], breakdown, body.spec)
-    record = MaterialWrite(
-        material_id=str(result.get("material_id") or ""),
-        number=str(result.get("number") or ""),
-        name=str(result.get("name") or product_name),
-        material_unit_price=result.get("material_unit_price"),
-        breakdown=breakdown,
-        tables=result.get("tables") or [],
-        written_at=now_cst_str(),
-        written_by=user.get("display_name") or user.get("username") or "",
-    )
-    plan.material_writes.append(record)
-    # 成品编码回填进整机参数：报价按成品编码匹配定价/加价规则，产品行没有编码，
-    # 那边规则查得到、加价值却落不到产品上（见 services/integration.apply_material_code）。
-    integration.apply_material_code(plan, record.number, record.name)
-    return record
-
-
 @app.post("/api/projects/{project_id}/integration/material-write")
 def integration_write_material(project_id: str, body: IntegrationPublishBody,
                                request: Request, user: dict = Depends(current_user)):
     """写入数据库：新建成品编码，落 md_clm_material_base_info + md_clm_material_cost_cnf。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = _integration_ready_cost(project_id)
-    record = _integration_do_material_write(
-        project_id, plan, body, _sso_token(request), user)
+    plan = _cost_flow(cost_flow.integration_ready_cost, project_id)
+    record = _cost_flow(cost_flow.integration_material_write_record, project_id, plan,
+                        product_name=body.product_name, spec=body.spec,
+                        token=_sso_token(request), user=user)
     integration.save_plan(project_id, plan, user.get("username", "system"))
     store.audit(project_id, "integration_material_write",
                 {"number": record.number, "price": record.material_unit_price,
@@ -2737,128 +2674,9 @@ def integration_send_to_quote(project_id: str, body: IntegrationPublishBody,
                               request: Request, user: dict = Depends(current_user)):
     """确认工艺并发送至报价：卡片推进到第 3 步「定价-利润加成」，销售经理收到任务。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
-    return _integration_do_send_to_quote(project_id, body, request, user)
-
-
-def _requirement_customer(requirement: dict, req_data: dict) -> str:
-    """需求单里的客户名。
-
-    客户信息是销售在报价那头填的，经「新增工艺」任务带进技术工艺的需求单。它落在哪
-    一层历来不统一（顶层 / data / 早期的 customer），少查一处，推回报价时卡片上的
-    客户就是空的 —— 销售看到的是一张没有客户的报价单。所以这里逐个兜底。
-    """
-    for value in (requirement.get("customer_name"), req_data.get("customer_name"),
-                  requirement.get("customer"), req_data.get("customer"),
-                  (req_data.get("quote") or {}).get("customer")):
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _integration_do_send_to_quote(project_id: str, body: IntegrationPublishBody,
-                                  request: Request, user: dict) -> dict:
-    """「发送至报价」的正文。**不含权限判断** —— 由调用方各自把门。
-
-    两个入口：2.2 归工艺经理（MANAGER_ROLES），2.3 归财务经理（COST_ROLES）。
-    早先 2.3 是直接调用上面那个路由函数来复用逻辑的，于是又撞上一次 MANAGER_ROLES：
-    财务经理点「发送至报价」被拒，文案还把他指去找工艺经理。权限和正文必须分开，
-    复用正文的人才不会连带继承另一步的权限。
-    """
-    plan = _integration_ready_cost(project_id)
-    # 报价必填项没齐就不给发：这些参数就是这次要**回传**给报价的东西，
-    # 缺一格，那边的测算单上就是一格空白，还得等销售回头来问。「整合参数」环节补。
-    missing = product_params.missing_required(plan.params) if plan.params else []
-    if missing:
-        names = "、".join(field["name"] for field in missing[:8])
-        more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
-        raise HTTPException(
-            400, f"报价必填的成品参数还缺：{names}{more}。请先在「整合参数」环节补填并确认")
-    # 成品编码必须有 —— 报价的定价与加价规则是按**产品行里的那串字符**匹配的
-    # （cpq_agent_server::_handle_markup_fill 里 `code in codes`），编码为空时那边规则
-    # 查得到、加价值却落不到产品上，最终价格 = 基础成本，既没有利润也没有加价。
-    #
-    # 但它不该成为一道门：编码只能由系统生成，那就在这里生成。业务主数据写不进去
-    # （库连不上/没权限）也**不中断推送** —— 改用本地临时号，参数照样送到报价。
-    # 报价的匹配并不查主数据里有没有这个号，所以定价那一步照样跑得通；等库恢复了
-    # 再点「写入数据库」补写即可。这一切都要如实告诉用户，不能假装写成功了。
-    auto_written = None
-    code_fallback = None
-    if not plan.material_writes:
-        try:
-            auto_written = _integration_do_material_write(
-                project_id, plan, body, _sso_token(request), user)
-            store.audit(project_id, "integration_material_write", {
-                "number": auto_written.number, "price": auto_written.material_unit_price,
-                "by": auto_written.written_by, "auto": "发送至报价时自动生成"})
-        except HTTPException as exc:
-            number = integration.next_local_code()
-            integration.apply_material_code(
-                plan, number,
-                (body.product_name or "").strip()
-                or (plan.params.assembly_name if plan.params else "") or f"整机 {project_id}",
-                source="临时编码", basis="业务主数据暂不可用，发送至报价时本地生成")
-            code_fallback = {"number": number, "reason": str(exc.detail)[:300]}
-            store.audit(project_id, "integration_material_write_fallback",
-                        {"number": number, "reason": code_fallback["reason"][:200],
-                         "by": user.get("username", "system")})
-        integration.save_plan(project_id, plan, user.get("username", "system"))
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-
-    result = _bridge_call(
-        cpq_bridge.send_to_quote, _sso_token(request), project_id, title,
-        _requirement_customer(requirement, req_data),
-        str(requirement.get("product_name") or req_data.get("product_name") or ""),
-        body.note or "技术工艺已确认，请进入定价",
-        # 这单是从报价的「新增工艺」任务过来的：原样退回给当初发起的那个人，
-        # 而不是新开一张卡片再群发给销售角色。来源写在 1.1 的需求单里
-        # （frontend/tech-task.js 建单时落的 source_task_id / source_session_id）。
-        str(req_data.get("source_task_id") or ""),
-        _integration_quote_result(project_id, plan, title),
-        # 任务行被删/被后来的任务顶掉时，会话号是认回原卡片的最后一条线索。
-        str(req_data.get("source_session_id") or ""))
-    handoff = result.get("handoff") or result.get("auto_handoff") or {}
-    plan.quote_handoff = QuoteHandoff(
-        # 从「新增工艺」过来的单子推回的是**原来那张报价卡片**，会话号不是项目号。
-        session_id=str(result.get("quote_session_id") or project_id),
-        next_step_no=result.get("next_step_no"),
-        next_step_name=result.get("next_step_name") or "",
-        target_role_name=(handoff.get("target_role_name")
-                          or result.get("next_role_name") or ""),
-        target_name=str(handoff.get("target_name") or ""),
-        returned_to_sender=bool(handoff.get("returned_to_sender")),
-        source_task_no=str(handoff.get("source_task_no") or ""),
-        returned_sections=list(result.get("returned_sections") or []),
-        task_id=str(handoff.get("task_id") or "") or None,
-        sent_at=now_cst_str(),
-        sent_by=user.get("display_name") or user.get("username") or "",
-    )
-    # 发到报价意味着工艺侧定稿；这里顺手把 2.2 标成已确认，省得再点一次。
-    if not plan.confirmed:
-        plan.confirmed = True
-        plan.confirmed_by = user.get("username", "system")
-        plan.confirmed_at = plan.quote_handoff.sent_at
-        plan.timing.status = "done"
-        plan.timing.completed = True
-        plan.timing.finished_at = plan.confirmed_at
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_send_to_quote",
-                {"next_step": plan.quote_handoff.next_step_name,
-                 "task_id": plan.quote_handoff.task_id, "by": plan.quote_handoff.sent_by})
-    return {**_integration_payload(project_id, plan),
-            "handoff": plan.quote_handoff.model_dump(),
-            # 这次顺手生成的成品编码要回给界面：用户没点写库，但主数据里确实多了一行，
-            # 不说出来就成了"背着人写库"。
-            "auto_written": auto_written.model_dump() if auto_written else None,
-            # 主数据没写进去、改用了本地临时号：更要说，否则人会以为已经入库了。
-            "code_fallback": code_fallback,
-            # 结论落到哪张报价卡片：task=原任务 / session=原会话号 / new=新建。
-            # new 的时候销售那边打不开会话历史、也没有原始客户信息，界面要照实说。
-            "linked_by": result.get("linked_by") or "",
-            "new_card": bool(result.get("new_card"))}
+    return _cost_flow(cost_flow.integration_send_to_quote_body, project_id,
+                      product_name=body.product_name, spec=body.spec, note=body.note,
+                      token=_sso_token(request), user=user)
 
 
 # --------------------------------------------------------------------------- #
@@ -2882,6 +2700,18 @@ def _cost_review_payload(project_id: str):
     return cost_review.payload(project_id, ir, plan, review)
 
 
+def _cost_flow(fn, *args, **kwargs):
+    """2.3 流转的统一出口：共享 service 的业务错误原样映射成 HTTPException。
+
+    Agent 工具（ConfirmCostReview / WriteCostReviewMaterial / SendCostReviewToQuote /
+    ReturnCostReviewToProcess）调用的是同一份 service 函数，这里只负责 HTTP 这一层。
+    """
+    try:
+        return fn(*args, **kwargs)
+    except cost_flow.CostFlowError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/cost-review")
 def get_cost_review(project_id: str):
     """2.3 全貌：零件逐项成本 + 整机成本 + 两种口径的合计 + 评审状态。"""
@@ -2893,15 +2723,8 @@ def update_cost_review(project_id: str, body: CostReviewBody,
                        user: dict = Depends(current_user)):
     """保存财务的补充说明（会作为下一次测算的输入）。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    review.note = body.note
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    # 核算批量存在 2.2 的 plan 上（成本测算与写库都读它），这一步负责改。
-    quantity = max(1, int(body.quantity or 1))
-    if plan.quantity != quantity:
-        plan.quantity = quantity
-        integration.save_plan(project_id, plan, user.get("username", "system"))
-    return cost_review.payload(project_id, ir, plan, review)
+    return _cost_flow(cost_flow.save_note, project_id, user,
+                      note=body.note, quantity=body.quantity)
 
 
 @app.post("/api/projects/{project_id}/cost-review/parts/{part_id}")
@@ -2950,87 +2773,27 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
 def confirm_cost_review(project_id: str, user: dict = Depends(current_user)):
     """财务确认本步成本。零件没算齐、或者哪一项是 0，都要先解决。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    data = cost_review.summarize(project_id, ir, plan)
-    counts = data["counts"]
-    if counts["missing"]:
-        raise HTTPException(400, f"还有零件没算成本：{'、'.join(counts['missing'])}")
-    if not counts["assembly_costed"]:
-        raise HTTPException(400, "整机（组装）成本还没算")
-    if counts["zero"]:
-        raise HTTPException(
-            400, f"这些行算出来是 0 元：{'、'.join(counts['zero'])}。"
-                 "请重算或人工补上材料明细 —— 0 元送到报价那头会变成没有成本的产品")
-    review.confirmed = True
-    review.confirmed_by = user.get("display_name") or user.get("username") or ""
-    review.confirmed_at = now_cst_str()
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    store.audit(project_id, "cost_review_confirm",
-                {"by": review.confirmed_by, "total": data["final"].get("total")})
-    return cost_review.payload(project_id, ir, plan, review)
-
-
-def _cost_review_ready(project_id: str):
-    """三个去向动作的共同前置：成本得先算齐并确认。"""
-    ir, plan, review = _cost_review_ctx(project_id)
-    if not review.confirmed:
-        raise HTTPException(400, "请先点「确认成本」：三个去向都以确认过的成本为准")
-    return ir, plan, review
-
-
-def _record_cost_action(project_id: str, review, kind: str, label: str, detail: str,
-                        user: dict) -> None:
-    review.actions.append(CostAction(
-        kind=kind, label=label, detail=detail[:300], at=now_cst_str(),
-        by=user.get("display_name") or user.get("username") or ""))
-    cost_review.save_review(project_id, review, user.get("username", "system"))
+    return _cost_flow(cost_flow.confirm_review, project_id, user)
 
 
 @app.post("/api/projects/{project_id}/cost-review/material-write")
-def cost_review_material_write(project_id: str, body: CostActionBody,
+def write_cost_review_material(project_id: str, body: CostActionBody,
                                request: Request, user: dict = Depends(current_user)):
     """去向①：写入数据库（新建成品编码 + 物料成本配置）。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ready(project_id)
-    record = _integration_do_material_write(
-        project_id, plan,
-        IntegrationPublishBody(product_name=body.product_name, spec=body.spec),
-        _sso_token(request), user)
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    _record_cost_action(project_id, review, "material-write", "写入数据库",
-                        f"成品编码 {record.number}「{record.name}」，"
-                        f"单价 {record.material_unit_price} 元", user)
-    store.audit(project_id, "cost_review_material_write",
-                {"number": record.number, "by": user.get("username", "system")})
-    return {**cost_review.payload(project_id, ir, plan, review),
-            "written": record.model_dump()}
+    return _cost_flow(cost_flow.write_material, project_id, user,
+                      product_name=body.product_name, spec=body.spec,
+                      token=_sso_token(request))
 
 
 @app.post("/api/projects/{project_id}/cost-review/send-to-quote")
-def cost_review_send_to_quote(project_id: str, body: CostActionBody,
+def send_cost_review_to_quote(project_id: str, body: CostActionBody,
                               request: Request, user: dict = Depends(current_user)):
     """去向②：发送至报价（复用 2.2 那条推送，成本与参数一并带回）。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    _cost_review_ready(project_id)
-    # 走正文，不走 2.2 那个路由函数：那里的 _require 认的是工艺经理。
-    result = _integration_do_send_to_quote(
-        project_id,
-        IntegrationPublishBody(product_name=body.product_name, spec=body.spec,
-                               note=body.note),
-        request, user)
-    ir, plan, review = _cost_review_ctx(project_id)
-    handoff = result.get("handoff") or {}
-    _record_cost_action(
-        project_id, review, "send-to-quote", "发送至报价",
-        f"卡片进入第 {handoff.get('next_step_no') or 3} 步"
-        f"「{handoff.get('next_step_name') or '定价-利润加成'}」"
-        + (f"，已退回给{handoff.get('target_name')}" if handoff.get("returned_to_sender")
-           else f"，已通知{handoff.get('target_role_name') or '销售经理'}"), user)
-    return {**cost_review.payload(project_id, ir, plan, review),
-            "handoff": handoff, "auto_written": result.get("auto_written"),
-            "code_fallback": result.get("code_fallback"),
-            "linked_by": result.get("linked_by") or "",
-            "new_card": bool(result.get("new_card"))}
+    return _cost_flow(cost_flow.send_to_quote, project_id, user,
+                      product_name=body.product_name, spec=body.spec, note=body.note,
+                      token=_sso_token(request))
 
 
 @app.post("/api/projects/{project_id}/cost-review/return-to-process")
@@ -3042,27 +2805,9 @@ def cost_review_return_to_process(project_id: str, body: CostActionBody,
     要工艺经理去改。硬卡着确认，等于逼财务先认可一份他不认可的数。
     """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    data = cost_review.summarize(project_id, ir, plan)
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    result = _bridge_call(
-        cpq_bridge.return_to_process, _sso_token(request), project_id, title,
-        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
-        str(requirement.get("product_name") or ""),
-        body.note or "成本已测算，请复核工艺与用量",
-        {"cost_review": {"project_id": project_id, "final": data["final"],
-                         "parts_total": data["parts_total"],
-                         "counts": data["counts"], "note": body.note}},
-        body.target_user_id)
-    _record_cost_action(
-        project_id, review, "return-to-process", "退回工艺经理",
-        f"任务 {result.get('task_no') or ''} 已发给"
-        f"{result.get('target_role_name') or '工艺经理'}", user)
-    ir, plan, review = _cost_review_ctx(project_id)
-    return {**cost_review.payload(project_id, ir, plan, review), "returned": result}
+    return _cost_flow(cost_flow.return_to_process, project_id, user,
+                      product_name=body.product_name, note=body.note,
+                      target_user_id=body.target_user_id, token=_sso_token(request))
 
 
 def _integration_process_lookup(project_id: str, plan) -> Optional[dict]:

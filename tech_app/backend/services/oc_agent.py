@@ -729,6 +729,129 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["confirmed"],
         },
     },
+    {
+        "name": "GetCostReviewState",
+        "description": "读取 2.3 成本测算的状态：评审是否已确认、零件 / 整机成本的完成与缺口"
+                       "（counts）、零件小计与整机合计、成品编码情况。只读；数据复用既有 "
+                       "services.cost_review，成本数字请让用户看右侧 2.3 看板。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ListCostReviewParts",
+        "description": "列出 2.3 的逐零件成本与整机行（每行的单件成本、用量、小计、是否已算）。"
+                       "只读；回答「哪个零件花了多少」时调用，不要让模型自己算，也不要编造数字。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "RunCostReviewPart",
+        "description": "测算单个零件的成本。**本工具不自己测算**：只向界面发出请求，由右侧 2.3 看板"
+                       "调既有接口跑平台流水线；参数要与看板一致，进度与结果都在看板。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "part_id": {"type": "string", "description": "零件编号，先用 ListCostReviewParts 确认"},
+                "quantity": {"type": "integer", "description": "核算批量（默认 1）"},
+                "reason": {"type": "string", "description": "为什么要重算"},
+            },
+            "required": ["part_id"],
+        },
+    },
+    {
+        "name": "RunCostReviewAssembly",
+        "description": "测算整机（组装）成本。**本工具不自己测算**：只向界面发出请求，由右侧 2.3 看板"
+                       "调既有接口执行；整机成本依赖各零件的单件成本，请先确保零件算齐。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "为什么要重算"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "RunCostReviewAll",
+        "description": "逐件测算并汇总（先算所有缺成本的零件，再算整机）。**本工具不自己测算**："
+                       "只向界面发出请求，由右侧 2.3 看板跑既有流水线；本步不联网。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "为什么要重算"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "UpdateCostReviewNote",
+        "description": "保存财务的补充说明与核算批量（会作为下一次测算的输入）。复用看板 "
+                       "PUT /cost-review 的同一份实现；只改说明与批量，不改成本数字、不改状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "成本说明 / 测算口径备注"},
+                "quantity": {"type": "integer", "description": "核算批量（默认 1）"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ConfirmCostReview",
+        "description": "确认 2.3 的本步成本。**必须由用户明确确认**：确认后写入数据库 / 发送报价 / "
+                       "退回工艺都以这份数为准；未 confirmed=true 时只返回回执，绝不改状态。"
+                       "沿用既有闸门：零件没算齐、整机没算、或哪一项是 0 元都不放行。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认本步成本；必须是 true 才生效"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "WriteCostReviewMaterial",
+        "description": "去向①：把确认过的成本写入业务主数据（新建成品编码 + 物料成本配置），"
+                       "属于对外写库动作。**必须由用户明确确认**：未 confirmed=true 只回执，绝不写库。"
+                       "需先确认成本。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认写入数据库；必须是 true 才写库"},
+                "product_name": {"type": "string", "description": "成品名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "ReturnCostReviewToProcess",
+        "description": "去向③：把成本结果退回工艺经理复核（成本高在工序或用量上时用它）。"
+                       "属于对外动作，**必须由用户明确确认**：未 confirmed=true 只回执，绝不退回。"
+                       "沿用既有口径：不要求先确认成本。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回工艺；必须是 true 才退回"},
+                "note": {"type": "string", "description": "退回说明，会随任务发给工艺经理"},
+                "target_user_id": {"type": "string", "description": "指定接收人，留空按角色派发"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "SendCostReviewToQuote",
+        "description": "去向②：把成本与整机参数发送至报价（卡片推进到定价步骤），属于对外动作。"
+                       "**必须由用户明确确认**：未 confirmed=true 只回执，绝不发送。"
+                       "沿用既有闸门：必须已确认成本且报价必填参数齐全。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发送报价；必须是 true 才发送"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+                "note": {"type": "string", "description": "给报价侧的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -747,6 +870,17 @@ UI_ACTION_TOOLS = {
     "ConfirmIntegrationParams": "refresh-integration",
     "ConfirmIntegrationProcess": "refresh-integration",
     "SendIntegrationToFinance": "refresh-integration",
+    # 2.3：测算类只发请求，由看板跑既有 cost-review 流水线；编辑说明与确认 / 写库 /
+    # 退回 / 发报价都只刷新看板 —— 绝不映射成 tool_use 阶段就自动执行的动作，
+    # 否则父壳会在用户确认之前就把成本写进数据库或发去报价。
+    "RunCostReviewPart": "cost-step",
+    "RunCostReviewAssembly": "cost-step",
+    "RunCostReviewAll": "cost-step",
+    "UpdateCostReviewNote": "refresh-cost-review",
+    "ConfirmCostReview": "refresh-cost-review",
+    "WriteCostReviewMaterial": "refresh-cost-review",
+    "ReturnCostReviewToProcess": "refresh-cost-review",
+    "SendCostReviewToQuote": "refresh-cost-review",
     # 1.1：一键解析与字段补充都由右侧看板执行（Agent 只发请求），补完刷新 1.1 表单。
     "ExtractRequirement": "extract-requirement",
     "UpdateRequirementFields": "refresh-requirement",
@@ -853,6 +987,117 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
         return json.dumps(
             _send_integration_to_finance(project_id, str(params.get("product_name") or ""),
                                          str(params.get("note") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "GetCostReviewState":
+        from . import cost_review
+        ir, plan, review = _cost_review_context(project_id)
+        data = cost_review.summarize(project_id, ir, plan)
+        written = plan.material_writes[-1] if plan.material_writes else None
+        return json.dumps({
+            "project_id": project_id,
+            "confirmed": bool(review.confirmed),
+            "review": review.model_dump(),
+            "counts": data["counts"],
+            "parts_total": data["parts_total"],
+            "final": data["final"],
+            "quantity": plan.quantity,
+            "material": ({"number": written.number, "name": written.name,
+                          "unit_price": written.material_unit_price} if written else None),
+            "note": "数据来自既有 services.cost_review；具体数字请在右侧 2.3 看板查看。",
+        }, ensure_ascii=False, indent=2)
+    if name == "ListCostReviewParts":
+        from . import cost_review
+        ir, plan, review = _cost_review_context(project_id)
+        data = cost_review.summarize(project_id, ir, plan)
+        return json.dumps({
+            "project_id": project_id,
+            "counts": data["counts"],
+            "parts": data["parts"],
+            "assembly": data.get("assembly"),
+            "parts_total": data["parts_total"],
+            "final": data["final"],
+            "note": "逐零件成本来自既有 services.cost_review，不要自行推算；"
+                    "明细在右侧 2.3 看板。",
+        }, ensure_ascii=False, indent=2)
+    if name == "RunCostReviewPart":
+        return json.dumps({
+            "requested": True,
+            "step": "part",
+            "part_id": str(params.get("part_id") or ""),
+            "quantity": int(params.get("quantity") or 1),
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。零件成本由右侧 2.3 看板调既有接口测算，本步不联网；"
+                    "请勿自行编造成本数字。",
+        }, ensure_ascii=False)
+    if name == "RunCostReviewAssembly":
+        return json.dumps({
+            "requested": True,
+            "step": "assembly",
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。整机成本由右侧 2.3 看板调既有接口测算；"
+                    "它依赖各零件的单件成本，请先确保零件算齐。",
+        }, ensure_ascii=False)
+    if name == "RunCostReviewAll":
+        return json.dumps({
+            "requested": True,
+            "step": "all",
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。逐件 + 整机测算由右侧 2.3 看板跑既有流水线；"
+                    "进度与结果显示在对话与看板。",
+        }, ensure_ascii=False)
+    if name == "UpdateCostReviewNote":
+        return json.dumps(_update_cost_review_note(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "ConfirmCostReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "confirm-cost-review",
+                "status": _cost_review_status(project_id),
+                "note": "确认成本后，写入数据库 / 发送报价 / 退回工艺都以这份数为准，必须由用户"
+                        "明确确认。请先复述零件缺口与整机合计，得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_confirm_cost_review(project_id), ensure_ascii=False, indent=2)
+    if name == "WriteCostReviewMaterial":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "write-cost-review-material",
+                "status": _cost_review_status(project_id),
+                "note": "写入数据库会在业务主数据里新建成品编码与物料成本配置，属于对外写库动作，"
+                        "必须由用户明确确认。请先说明将写入的成品名称与单价，得到同意后再带 "
+                        "confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _write_cost_review_material(project_id, str(params.get("product_name") or ""),
+                                        str(params.get("spec") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "ReturnCostReviewToProcess":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "return-cost-review-to-process",
+                "status": _cost_review_status(project_id),
+                "note": "退回工艺经理会把任务发回给工艺侧，必须由用户明确确认。请先复述退回原因，"
+                        "得到同意后再带 confirmed=true 重新调用；不要求先确认成本。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _return_cost_review_to_process(project_id, str(params.get("note") or ""),
+                                           str(params.get("target_user_id") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "SendCostReviewToQuote":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-cost-review-to-quote",
+                "status": _cost_review_status(project_id),
+                "note": "发送报价会把成本与整机参数推给销售侧做定价，属于对外动作，必须由用户明确"
+                        "确认。需先确认成本、且报价必填参数齐全；得到同意后再带 confirmed=true 调用。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _send_cost_review_to_quote(project_id, str(params.get("product_name") or ""),
+                                       str(params.get("spec") or ""),
+                                       str(params.get("note") or "")),
             ensure_ascii=False, indent=2)
     if name == "GetRequirementDraft":
         return json.dumps(_requirement_draft(project_id), ensure_ascii=False, indent=2)
@@ -1621,6 +1866,115 @@ def _send_integration_to_finance(project_id: str, product_name: str, note: str) 
             "sent_to": handoff.target_role_name if handoff else "",
             "status": _integration_status(project_id),
             "note": "已发送财务做成本测算；请刷新右侧看板查看发送状态与接收人。"}
+
+
+# --------------------------------------------------------------------------- #
+# 2.3 成本测算
+#
+# 读取复用既有 services.cost_review；确认 / 写库 / 发报价 / 退回这四类流转复用
+# services.cost_flow 的同一份实现（路由与平台工具共用一个函数），oc_agent 不直写
+# 评审状态、不拼桥接调用、不另算成本。
+# --------------------------------------------------------------------------- #
+def _cost_review_context(project_id: str):
+    """2.3 的三样输入（与 main.py 的 _cost_review_ctx 同源，不复制数据）。"""
+    from ..models.ir import DesignIR
+    from . import cost_review, integration
+
+    ir_dict = store.load_ir(project_id)
+    ir = DesignIR(**ir_dict) if ir_dict else None
+    return ir, integration.load_plan(project_id), cost_review.load_review(project_id)
+
+
+def _cost_review_status(project_id: str) -> dict:
+    """确认门前给模型的状态摘要（只读）。"""
+    from . import cost_review
+
+    ir, plan, review = _cost_review_context(project_id)
+    data = cost_review.summarize(project_id, ir, plan)
+    return {"confirmed": bool(review.confirmed), "counts": data["counts"],
+            "parts_total": data["parts_total"], "final": data["final"]}
+
+
+def _update_cost_review_note(project_id: str, params: dict) -> dict:
+    """保存财务说明与核算批量：与看板 PUT /cost-review 同一份实现。"""
+    from . import cost_flow
+
+    try:
+        quantity = int(params.get("quantity") or 1)
+    except (TypeError, ValueError):
+        return {"updated": False, "error": "quantity 必须是整数"}
+    try:
+        data = cost_flow.save_note(project_id, _actor_user(),
+                                   note=str(params.get("note") or "")[:2000],
+                                   quantity=quantity)
+    except cost_flow.CostFlowError as exc:
+        return {"updated": False, "error": str(exc)}
+    review = (data or {}).get("review") or {}
+    return {"updated": True, "note": review.get("note", ""),
+            "quantity": (data or {}).get("quantity"),
+            "note": "说明与核算批量已保存；请刷新右侧 2.3 看板查看。"}
+
+
+def _confirm_cost_review(project_id: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.confirm_review(project_id, _actor_user()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "confirm-cost-review", "error": str(exc)}
+    return {"applied": True, "action": "confirm-cost-review",
+            "confirmed": bool((data.get("review") or {}).get("confirmed")),
+            "counts": data.get("counts"), "final": data.get("final"),
+            "note": "成本已确认；请刷新右侧 2.3 看板查看确认状态。"}
+
+
+def _write_cost_review_material(project_id: str, product_name: str, spec: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.write_material(project_id, _actor_user(),
+                                        product_name=product_name, spec=spec,
+                                        token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "write-cost-review-material", "error": str(exc)}
+    written = data.get("written") or {}
+    return {"applied": True, "action": "write-cost-review-material",
+            "material": {"number": written.get("number"), "name": written.get("name"),
+                         "unit_price": written.get("material_unit_price")},
+            "note": "成品编码与物料成本已写入业务主数据；请刷新右侧看板查看。"}
+
+
+def _return_cost_review_to_process(project_id: str, note: str, target_user_id: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.return_to_process(project_id, _actor_user(), note=note,
+                                           target_user_id=target_user_id,
+                                           token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "return-cost-review-to-process", "error": str(exc)}
+    returned = data.get("returned") or {}
+    return {"applied": True, "action": "return-cost-review-to-process",
+            "task_no": returned.get("task_no"),
+            "sent_to": returned.get("target_role_name") or "工艺经理",
+            "note": "已把成本结果退回工艺经理复核；请刷新右侧看板查看去向留痕。"}
+
+
+def _send_cost_review_to_quote(project_id: str, product_name: str, spec: str,
+                               note: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.send_to_quote(project_id, _actor_user(), product_name=product_name,
+                                       spec=spec, note=note, token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "send-cost-review-to-quote", "error": str(exc)}
+    handoff = data.get("handoff") or {}
+    return {"applied": True, "action": "send-cost-review-to-quote",
+            "task_no": handoff.get("task_id"),
+            "next_step_name": handoff.get("next_step_name") or "",
+            "returned_to_sender": bool(handoff.get("returned_to_sender")),
+            "note": "已发送至报价；请刷新右侧看板查看去向留痕。"}
 
 
 def _project_state(project_id: str) -> dict:

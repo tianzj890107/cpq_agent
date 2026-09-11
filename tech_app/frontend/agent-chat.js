@@ -377,6 +377,10 @@
       if (event.ui_action === "refresh-integration") refreshIntegrationBoard(event.input);
       if (event.ui_action === "integration-step") integrationBoardStep(event.input);
       if (event.ui_action === "open-integration-drawings") openIntegrationDrawings();
+      // 2.3 成本测算：测算进度交给右侧看板跑既有成本流水线；
+      // 说明 / 确认 / 写物料 / 发报价 / 退回工艺后刷新看板。
+      if (event.ui_action === "cost-step") costReviewBoardStep(event.input);
+      if (event.ui_action === "refresh-cost-review") refreshCostReviewBoard();
       return;
     }
     if (event.type === "tool_result") {
@@ -545,6 +549,44 @@
   function openIntegrationDrawings() {
     noteInThread("Agent 请求上传整合图纸 —— 请在右侧看板「整合图纸」页签选择文件上传。");
     integrationBoardAction(bridge => bridge.executeAction("openIntegrationDrawings", { label: "整合图纸" }));
+  }
+
+  // ---------------------------------------------- 2.3 成本测算：Agent 动作联动
+  // 与 2.2 完全同模式：左侧只发语义化业务动作名，测算与流转仍由右侧 2.3 看板
+  // 复用既有成本实现执行；左侧不直接调用任何成本接口。
+  function costReviewBoardStep(input) {
+    const step = String((input && input.step) || "").trim().toLowerCase();
+    const labels = { part: "单件成本测算", assembly: "组装成本测算", all: "全部成本测算" };
+    if (!labels[step]) {
+      pushSystem("Agent 请求成本测算，但没有给出有效的 step（part / assembly / all）。");
+      return;
+    }
+    noteInThread(`Agent 已请求「${labels[step]}」，右侧看板正在跑平台既有成本流水线。`);
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能操作 2.3 成本看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("costStep", {
+      step: step,
+      part_id: (input && (input.part_id || input.partId)) || "",
+      quantity: (input && input.quantity) || 0,
+      label: labels[step],
+    })).catch(error => {
+      pushSystem(`成本看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  function refreshCostReviewBoard() {
+    noteInThread("Agent 已更新成本说明 / 确认 / 流转，正在刷新右侧 2.3 看板。");
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能操作 2.3 成本看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("refreshCostReview", { label: "刷新成本看板" })).catch(error => {
+      pushSystem(`成本看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
   }
 
   // 工具回执里的需求解析结果：document_extraction（或顶层同名字段）携带
