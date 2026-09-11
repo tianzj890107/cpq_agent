@@ -590,3 +590,13 @@
 - Red 基线（实际运行）：`python3 -m unittest tests.test_tech_stage_context_nine_stages_red -v` → **7 项中 5 失败 2 通过**。5 项失败对应缺口：`test_stage_agent_context_covers_nine_stages`、`test_each_stage_has_independent_page_context`、`test_page_context_matches_own_substep`、`test_agent_chat_does_not_default_page_context_to_2_1`、`test_backend_does_not_default_page_context_to_2_1`；2 项通过为守护项：`stageAgentContext` 查询不回退别的 stage、九个 stage id 不变。
 - 全量口径（实际运行，写入本记录时）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **326 项、26 失败、4 跳过**；26 失败 = 第 16 步 6（`test_tech_left_toolbar_parity_red`，12 项）+ 第 17 步 12（`test_tech_ui_protocol_red`，16 项）+ 第 18 步 3（`test_tech_unified_config_completion_red`，7 项）+ 第 19 步 5（`test_tech_stage_context_nine_stages_red`，7 项），全部是尚未实现的预期 Red；第 13–15 步实现已落地，三套红测（12 / 14 / 14 项）均转全绿，没有把此前任何通过用例改红。
 - 范围说明：未提交、未推送、未创建 MR/tag/Release、未部署；未启动服务、未做浏览器验收；未修改既有实现与通过用例。
+
+## 55. 第 0–15 步验收、第 13–15 步实现与 16–19 Spec/Red 的提交双推记录（9-11）
+
+- 验收范围：技术工艺 Agent 能力恢复第 0–15 步（全部已落地的实现与守护），不含仍为预期 Red 的第 16–19 步。
+- 目标套件（实际运行）：`test_tech_backend_capability_preservation_red`、`test_tech_board_bridge_protocol_red`、`test_tech_board_action_registry_red`、`test_tech_parts_views_inside_board_red`、`test_tech_drawing_agent_actions_red`、`test_tech_requirement_agent_red`、`test_tech_requirement_confirm_red`、`test_tech_requirement_review_red`、`test_tech_integration_agent_red`、`test_tech_cost_review_agent_red`、`test_tech_summary_report_agent_red`、`test_tech_report_review_agent_red`、`test_tech_report_publish_agent_red`、`test_tech_backend_get_route_smoke_dynamic`、`test_tech_backend_undefined_names_dynamic`、`test_tech_board_state_envelope_dynamic` → **139 项、全部通过、1 跳过**，无失败。
+- 全量口径（实际运行）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **326 项、26 失败、4 跳过**；26 失败 = 第 16 步 6 + 第 17 步 12 + 第 18 步 3 + 第 19 步 5，全部是尚未实现的预期 Red；第 13–15 步三套红测（12 / 14 / 14 项）已转全绿。
+- 校验：`node --check` 通过 `tech-workbench.js` / `agent-chat.js` / `assembly-integration.js` / `cost-review.js`；`python3 -m py_compile` 通过 `main.py` / `services/oc_agent.py` / `services/report_workflow.py`；`git diff --check` 通过。
+- 提交：`fc7b3c3`「技术工艺 Agent 能力恢复 13–15 实现：3.1/3.2/3.3 报告 Agent 动作接通」（父提交 `923f53d`）；`6ddaa3d`「技术工艺 Agent 能力恢复 16–19 Spec/Red 基线」（父提交 `fc7b3c3`，含 `## 50` / `## 51` / `## 53` / `## 54` 的 Spec、红测与 changelog）。
+- 双推：`python3 scripts/push_remotes.py --check` 回读 `gitlab/20260909`、`origin/20260909` 与 HEAD 三者同为 `6ddaa3d`；未创建 MR/tag/Release，未部署，未启动服务，未做浏览器验收。
+- 说明：本记录不改变第 16–19 步仍待实现的事实；三处红测基线（`## 50`/`## 51`/`## 53`/`## 54` 中标注「未提交、未推送」的句子描述的是 Spec/Red 基线落盘当刻，提交事实以本记录为准。
