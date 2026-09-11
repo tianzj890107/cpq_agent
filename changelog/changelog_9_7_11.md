@@ -571,3 +571,22 @@
 - 全量回归：`python3 -m unittest discover -s tests -p 'test_*.py'` 共 **312 项、290 通过、4 跳过、18 失败**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` 共 **314 项、296 通过、18 失败**。18 项失败全部来自本轮新出现、由外部流程新增的第 16 步（6 项）与第 17 步（12 项）Red 基线（`test_tech_left_toolbar_parity_red` / `test_tech_ui_protocol_red`，见 `## 50` / `## 51`），不属于本批范围；本批没有把此前任何通过用例改红。
 - 校验：`node --check` 覆盖 `summary-result.js` / `report-review-result.js` / `report-publish-result.js` / `agent-chat.js`；`python3 -m py_compile` 覆盖 `main.py` / `oc_agent.py` / `report_workflow.py` / `cost_flow.py`；`git diff --check` 通过；`agent-chat.js` 的 4 个 NUL 哨兵计数保持不变；导入后端仍是 200 条路由。
 - 范围说明：未新增 / 删除任何 `@app.` 路由或既有平台工具；未改九个 stage id / URL、数据模型、历史会话与项目数据；未把 3.1–3.3 表单搬进父壳；未修改任何 Red 测试。
+
+## 53. 技术工艺 Agent 能力恢复第 18 步（统一配置落实补完）Spec / Red 基线（9-11）
+
+- 新增 Spec `docs/specs/tech-agent-recovery-18-unified-config-completion.md`：第 18 步不新增业务能力，只把既有统一配置 Spec（`docs/specs/unified-model-settings-and-api-keys.md`）在技术工艺侧落实干净，并与业务 Agent 接线分开实施。已完成、本步只做守卫的是「`/api/settings` 唯一前端接口」「`cpq_settings.json` 唯一持久化源」「API Key 按 provider 全局共享」「技术工艺设置是唯一居中模态卡片」。
+- 本步真实缺口：技术工艺看板页 `assembly-integration.js` 与 `cost-review.js` 仍按两个模型渲染模型药丸 —— 用 `text_options` + `vision_options` 拼候选、`text_model` 当显示值、`vision_model` 写 tooltip，与「报价模型是唯一模型配置」冲突。
+- 新增红测 `tests/test_tech_unified_config_completion_red.py`（7 项）：两个看板页不得再出现 `text_model` / `vision_model` / `text_options` / `vision_options`；模型药丸必须改读唯一 `settings.model` + `settings.options` 且仍复用 `LlmSettingsPanel`；不得再渲染「语言模型 / 多模态模型」双模型文案；技术工艺前端（全部 `.js` / `.html`）无 `/api/llm/settings` 且唯一面板走 `/api/settings`；设置仍是唯一居中模态卡片（`#techModelSettingsMask` / `#techModelSettings`，`role="dialog"`）且无 `role="tab"` 双页签；`llm_settings.py` 不再把 `llm_settings.json` 当路径 / 读写目标且 Key 仍按 provider 全局读取、不打印明文；`main.py` 的兼容路由只委托 `llm_settings.snapshot(...)` / `llm_settings.update(...)`。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_unified_config_completion_red -v` → **7 项中 3 失败 4 通过**。3 项失败对应真实缺口：`test_board_pages_drop_legacy_two_model_fields`、`test_board_model_pill_reads_single_shared_model`、`test_no_board_page_renders_two_model_tooltip`；4 项通过为守护项：无 `/api/llm/settings`、唯一居中模态卡片、唯一持久化源与 Key 全局读取、兼容路由委托唯一实现。
+- 边界与自己基线保持：既有 `tests.test_unified_model_settings_and_api_keys_red`（7 项）与 `tests.test_unified_model_settings_backend_dynamic`（4 项）均保持全绿，本步不改其行为。
+- 范围说明：未提交、未推送、未创建 MR/tag/Release、未部署；未启动服务、未做浏览器验收；未写入任何真实 Key，未修改既有实现与通过用例。
+
+## 54. 技术工艺 Agent 能力恢复第 19 步（九阶段上下文修复）Spec / Red 基线（9-11）
+
+- 新增 Spec `docs/specs/tech-agent-recovery-19-nine-stage-page-context.md`：九个内部阶段每一个都必须带独立、正确的 `page_context`，禁止在缺上下文时默认冒充 2.1 图纸解析。
+- 缺口：`tech-workbench.js` 的 `STAGE_AGENT_CONTEXT` 只登记 `drawing` / `process` / `cost` 三步，其余六步（1.1 / 1.2 / 1.3 / 3.1 / 3.2 / 3.3）无上下文；`agent-chat.js` 的 `currentPageContext()` 缺上下文时硬回退 `"2.1 图纸解析"`；`tech_app/backend/main.py` 保存会话轮次时 `body.page_context or "2.1 图纸解析"`。
+- 九阶段 page_context 口径（写入 Spec）：`requirement-create` → `1.1 创建需求`、`requirement-confirm` → `1.2 确认需求`、`requirement-review` → `1.3 审核需求`、`drawing` → `2.1 图纸解析`、`process` → `2.2 组装与整合`、`cost` → `2.3 成本测算`、`summary` → `3.1 汇总结果`、`report-review` → `3.2 结果审核`、`report-publish` → `3.3 发布并回传报价`。
+- 新增红测 `tests/test_tech_stage_context_nine_stages_red.py`（7 项）：`STAGE_AGENT_CONTEXT` 覆盖九个 stage id；九个 `pageContext` 各有一个且互不重复；每个 `pageContext` 带正确子步骤号并描述本步骤；`stageAgentContext()` 按 `state.stage` 取上下文、查不到 `return null`、不回退 2.1；`agent-chat.js` 的 `currentPageContext()` 不再硬回退 `"2.1 图纸解析"`；后端 `page_context` 默认值不再是 `"2.1 图纸解析"`；九个 stage id 不变。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_stage_context_nine_stages_red -v` → **7 项中 5 失败 2 通过**。5 项失败对应缺口：`test_stage_agent_context_covers_nine_stages`、`test_each_stage_has_independent_page_context`、`test_page_context_matches_own_substep`、`test_agent_chat_does_not_default_page_context_to_2_1`、`test_backend_does_not_default_page_context_to_2_1`；2 项通过为守护项：`stageAgentContext` 查询不回退别的 stage、九个 stage id 不变。
+- 全量口径（实际运行，写入本记录时）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **326 项、26 失败、4 跳过**；26 失败 = 第 16 步 6（`test_tech_left_toolbar_parity_red`，12 项）+ 第 17 步 12（`test_tech_ui_protocol_red`，16 项）+ 第 18 步 3（`test_tech_unified_config_completion_red`，7 项）+ 第 19 步 5（`test_tech_stage_context_nine_stages_red`，7 项），全部是尚未实现的预期 Red；第 13–15 步实现已落地，三套红测（12 / 14 / 14 项）均转全绿，没有把此前任何通过用例改红。
+- 范围说明：未提交、未推送、未创建 MR/tag/Release、未部署；未启动服务、未做浏览器验收；未修改既有实现与通过用例。
