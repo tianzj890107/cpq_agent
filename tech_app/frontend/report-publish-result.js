@@ -21,6 +21,46 @@ rpStart();
 (function rpRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
   let rpBoardBusy = false;
+  function rpBoardPublish(name, extra) {
+    const runtime = window.TechBoardRuntime;
+    if (!runtime || typeof runtime.publish !== 'function') return;
+    try { runtime.publish(name, 'report', Object.assign({ action: name }, extra || {})); }
+    catch { /* 进度上报失败不影响业务本身 */ }
+  }
+  async function rpRefreshReport() {
+    const [reportResult, aggregate] = await Promise.all([
+      api(`/api/projects/${encodeURIComponent(rpPid)}/process-report`),
+      api(`/api/projects/${encodeURIComponent(rpPid)}/summary`),
+    ]);
+    rpReport = reportResult.report || rpReport;
+    rpAggregate = aggregate;
+    rpView = rpLiveView(rpReport, aggregate);
+    rpRender();
+    return { ok: true };
+  }
+  async function rpSendToQuote() {
+    rpBoardPublish('task-progress', { taskId: 'report-to-quote', label: '回传报价', status: 'running' });
+    try {
+      const result = await api(`/api/projects/${encodeURIComponent(rpPid)}/integration/send-to-quote`, { method: 'POST', body: JSON.stringify({ note: '工艺评估报告已发布，回传报价。' }) });
+      rpBoardPublish('task-completed', { taskId: 'report-to-quote', label: '回传报价', status: 'succeeded' });
+      return { ok: true, handoff: (result && result.handoff) || {} };
+    } catch (error) {
+      rpBoardPublish('task-failed', { taskId: 'report-to-quote', label: '回传报价', status: 'failed', message: (error && error.message) || '回传失败' });
+      return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '回传报价失败' } };
+    }
+  }
+  async function rpNewVersion() {
+    rpBoardPublish('task-progress', { taskId: 'report-new-version', label: '新建报告版本', status: 'running' });
+    try {
+      await api(`/api/projects/${encodeURIComponent(rpPid)}/process-report/new-version`, { method: 'POST' });
+      await rpRefreshReport();
+      rpBoardPublish('task-completed', { taskId: 'report-new-version', label: '新建报告版本', status: 'succeeded' });
+      return { ok: true };
+    } catch (error) {
+      rpBoardPublish('task-failed', { taskId: 'report-new-version', label: '新建报告版本', status: 'failed', message: (error && error.message) || '新建失败' });
+      return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '新建报告版本失败' } };
+    }
+  }
   window.TechBoardRuntime.registerActions({
     publishProcessReport: {
       label: '发布报告',
@@ -37,6 +77,21 @@ rpStart();
         const button = document.querySelector('#rpPrimary');
         return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rpBoardBusy, busy: rpBoardBusy };
       },
+    },
+    refreshProcessReport: {
+      label: '刷新发布报告',
+      run: async () => { try { return await rpRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
+      getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
+    },
+    sendReportToQuote: {
+      label: '回传报价',
+      run: () => rpSendToQuote(),
+      getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
+    },
+    createReportNewVersion: {
+      label: '新建报告版本',
+      run: () => rpNewVersion(),
+      getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
     },
   });
 })();

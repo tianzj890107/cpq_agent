@@ -50,6 +50,60 @@ srStart();
 (function srRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
   let srBoardBusy = false;
+  function srBoardPublish(name, extra) {
+    const runtime = window.TechBoardRuntime;
+    if (!runtime || typeof runtime.publish !== 'function') return;
+    try { runtime.publish(name, 'report', Object.assign({ action: name }, extra || {})); }
+    catch { /* 进度上报失败不影响业务本身 */ }
+  }
+  async function srRefreshReport() {
+    const [reportResult, aggregate] = await Promise.all([
+      api(`/api/projects/${encodeURIComponent(srPid)}/process-report`),
+      api(`/api/projects/${encodeURIComponent(srPid)}/summary`),
+    ]);
+    srReport = reportResult.report || srReport;
+    srAggregate = aggregate;
+    srView = srBuildView(srReport, srAggregate, srRequirement);
+    srRender();
+    return { ok: true };
+  }
+  async function srGenerateDraft() {
+    srBoardPublish('task-progress', { taskId: 'report-draft', label: '生成报告草稿', status: 'running' });
+    try {
+      const result = await api(`/api/projects/${encodeURIComponent(srPid)}/process-report/prepare`, { method: 'POST', body: JSON.stringify({}) });
+      srReport = result.report || srReport;
+      await srRefreshReport();
+      srBoardPublish('task-completed', { taskId: 'report-draft', label: '生成报告草稿', status: 'succeeded' });
+      return { ok: true };
+    } catch (error) {
+      srBoardPublish('task-failed', { taskId: 'report-draft', label: '生成报告草稿', status: 'failed', message: (error && error.message) || '生成失败' });
+      return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '生成报告草稿失败' } };
+    }
+  }
+  async function srUpdateFields(fields) {
+    try {
+      const payload = Object.assign(srRead(), fields || {});
+      const saved = await api(`/api/projects/${encodeURIComponent(srPid)}/process-report`, { method: 'PUT', body: JSON.stringify(payload) });
+      srReport = saved.report || srReport;
+      await srRefreshReport();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '更新报告字段失败' } };
+    }
+  }
+  async function srSaveDistribution(payload) {
+    const data = payload || {};
+    const scope = data.distribution_scope != null ? String(data.distribution_scope) : (document.querySelector('#srDistributionScope')?.value.trim() || '');
+    const cc = data.distribution_cc != null ? String(data.distribution_cc) : (document.querySelector('#srDistributionCc')?.value.trim() || '');
+    try {
+      const result = await api(`/api/projects/${encodeURIComponent(srPid)}/process-report/distribution`, { method: 'PUT', body: JSON.stringify({ distribution_scope: scope, distribution_cc: cc }) });
+      srReport = result.report || srReport;
+      await srRefreshReport();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '保存发布范围失败' } };
+    }
+  }
   async function srBoardRun(submit) {
     if (srBoardBusy) return { ok: false, error: { code: 'busy', message: '正在保存，请稍候。' } };
     srBoardBusy = true;
@@ -67,6 +121,26 @@ srStart();
       label: '提交审核',
       run: () => srBoardRun(true),
       getState: () => ({ visible: Boolean(document.querySelector('#srSubmit')), enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+    refreshProcessReport: {
+      label: '刷新汇总报告',
+      run: async () => { try { return await srRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
+      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+    generateProcessReportDraft: {
+      label: '生成报告草稿',
+      run: () => srGenerateDraft(),
+      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+    updateProcessReportFields: {
+      label: '更新报告字段',
+      run: (payload) => srUpdateFields(payload || {}),
+      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
+    },
+    saveProcessReportDistribution: {
+      label: '保存发布范围',
+      run: (payload) => srSaveDistribution(payload || {}),
+      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
   });
 })();

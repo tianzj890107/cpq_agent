@@ -1,0 +1,605 @@
+"""3.1 / 3.2 / 3.3 汇总报告流程的共享正文 —— HTTP 路由与平台 Agent 工具共用的**唯一实现**。
+
+覆盖：生成 / 保存报告草稿、维护发布范围、送审、审核通过 / 退回、正式发布、回传报价、
+新建版本，以及它们依赖的确定性门禁（送审前置、内容完备、来源快照一致）。
+
+为什么单独成一层：同一步骤既有人工在看板上点按钮的入口（HTTP 路由），也有统一左侧
+Agent 的入口（平台工具）。``oc_agent.py`` 不能 import ``main``，所以共享实现只能待在
+services 层；两条入口调用同一份函数，才能保证「Agent 改的」与「看板显示的」一致。
+
+本模块只做编排与门禁，不新增业务口径：汇总数据一律来自 ``services.summary.aggregate``，
+报告读写一律走 ``store.load_process_report`` / ``store.save_process_report``。状态流转与
+审计动作名只在这里定义（调用方按 ``audit`` 回执落审计），因此不会出现第二套实现。
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any, Optional
+
+from pydantic import BaseModel
+
+from ..config import TECH_SUBSTEPS
+from ..models.assembly import AssemblyPlan
+from ..models.cleaning import CleaningPlan
+from ..models.manufacturing import ManufacturingPlan
+from ..models.material import MaterialPlan
+from ..models.production import ProductionPlan
+from ..models.summary import SummaryDoc
+from ..models.workflow import ProcessReport, ReportRecipient, WorkflowReview
+from ..storage import store
+from ..time_utils import now_cst_str
+from . import summary as summary_svc
+
+# 3.1 允许 Agent / 看板改写的报告字段；单据号、编制人、审核发布留痕、版本号一律服务端维护。
+ALLOWED_REPORT_FIELDS = (
+    "title", "overview", "highlights", "risks", "conclusion",
+    "distribution_scope", "distribution_cc",
+)
+
+# 审计动作名（唯一事实源）：调用方按回执里的 action 落审计，不得自造句面。
+AUDIT_PREPARED = "workflow:report_prepared"
+AUDIT_SAVED = "workflow:report_saved"
+AUDIT_DISTRIBUTION = "workflow:report_distribution_updated"
+AUDIT_SUBMITTED = "workflow:report_submitted"
+AUDIT_PUBLISHED = "workflow:report_published"
+AUDIT_NEW_VERSION = "workflow:report_new_version"
+
+
+class ReportWorkflowError(Exception):
+    """报告流程的业务拒绝：门禁未过、状态不符或数据缺失，调用方映射成 HTTP。"""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+# --------------------------------------------------------------------------- #
+# 与 main 同口径的纯工具（保持报告留痕、来源摘要稳定）
+# --------------------------------------------------------------------------- #
+def now_str() -> str:
+    return now_cst_str()
+
+
+def workflow_event(action: str, user: dict, comment: str = "") -> WorkflowReview:
+    return WorkflowReview(
+        action=action,
+        actor=(user or {}).get("username", "system"),
+        role=(user or {}).get("role", ""),
+        comment=comment or "",
+        at=now_str(),
+    )
+
+
+def report_no(project_id: str, requirement_no: str = "") -> str:
+    """报告编号沿用 RPT 前缀，并与项目流水号保持一一对应。"""
+    return f"RPT-{project_id.upper()}"
+
+
+def digest_value(value) -> str:
+    """为业务快照生成稳定摘要；与报告来源比对共用同一算法。"""
+    def normalize(item):
+        if isinstance(item, BaseModel):
+            return normalize(item.model_dump())
+        if isinstance(item, bytes):
+            return {"__bytes_sha256__": hashlib.sha256(item).hexdigest(), "size": len(item)}
+        if isinstance(item, dict):
+            return {str(key): normalize(item[key]) for key in sorted(item, key=str)}
+        if isinstance(item, (list, tuple)):
+            return [normalize(child) for child in item]
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            return item
+        return str(item)
+
+    payload = json.dumps(normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def report_source_payload(snapshot: dict) -> dict:
+    """报告审核依据只取业务数据，排除会随审计写入变化的项目 meta。"""
+    source = snapshot or {}
+    return {
+        "device_name": source.get("device_name"),
+        "ir": source.get("ir") or {},
+        "steps": source.get("steps") or {},
+        "summary": source.get("summary") or {},
+    }
+
+
+def _ensure_project(project_id: str) -> None:
+    meta = store.load_meta(project_id)
+    if not meta or meta.get("deleted_at"):
+        raise ReportWorkflowError("项目不存在", 404)
+
+
+def _load_report(project_id: str) -> Optional[dict]:
+    return store.load_process_report(project_id)
+
+
+def _require_report(project_id: str) -> ProcessReport:
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("评估报告不存在", 404)
+    return ProcessReport(**saved)
+
+
+# --------------------------------------------------------------------------- #
+# 确定性门禁（与既有送审 / 审核 / 发布同一份）
+# --------------------------------------------------------------------------- #
+def prerequisite_issues(project_id: str) -> list[str]:
+    """正式报告送审前的确定性门禁；AI 不能代替这些人工确认。
+
+    【CPQ 定制】2.x 各步是否参与门禁，由 config.TECH_SUBSTEPS 决定。CPQ 只启用
+    2.1 图纸解析（drawing），所以下面 2.2–2.6 的检查整段跳过——否则流程走到 3.1
+    汇总结果后会被"2.2 材料定性尚未完成"永久挡住送审。
+    """
+    issues: list[str] = []
+    requirement = store.load_requirement(project_id) or {}
+    if requirement.get("status") != "approved":
+        issues.append("需求单尚未由工艺技术总监审核通过")
+
+    ir = store.load_ir(project_id) or {}
+    if not (ir.get("parts") or []):
+        issues.append("2.1 图纸解析尚未形成有效零件 IR")
+
+    if "material" in TECH_SUBSTEPS:
+        material_doc = store.load_material(project_id)
+        if not material_doc:
+            issues.append("2.2 材料定性尚未完成")
+        else:
+            material_plan = MaterialPlan(**material_doc)
+            if not material_plan.body.selected or not material_plan.body.confirmed:
+                issues.append("2.2 主体材料尚未选定并人工确认")
+            has_metallization = bool(
+                material_plan.metallization.paste
+                or material_plan.metallization.layers
+                or material_plan.metallization.rationale
+            )
+            if has_metallization and not material_plan.metallization.confirmed:
+                issues.append("2.2 金属化方案已有内容但尚未人工确认")
+
+    if "manufacturing" in TECH_SUBSTEPS:
+        manufacturing_doc = store.load_manufacturing(project_id)
+        if not manufacturing_doc:
+            issues.append("2.3 制造工艺路径尚未完成")
+        else:
+            manufacturing_plan = ManufacturingPlan(**manufacturing_doc)
+            if not manufacturing_plan.path.steps or not manufacturing_plan.path.confirmed:
+                issues.append("2.3 工艺路径尚未形成并人工确认")
+            if not manufacturing_plan.bom.items or not manufacturing_plan.bom.confirmed:
+                issues.append("2.3 工艺 BOM 尚未形成并人工确认")
+
+    if "cleaning" in TECH_SUBSTEPS:
+        cleaning_doc = store.load_cleaning(project_id)
+        if not cleaning_doc:
+            issues.append("2.4 清洗与洁净度方案尚未完成")
+        else:
+            cleaning_plan = CleaningPlan(**cleaning_doc)
+            if not (cleaning_plan.chemical_steps or cleaning_plan.rinse_steps or cleaning_plan.controls):
+                issues.append("2.4 清洗与洁净度方案没有有效内容")
+            elif not cleaning_plan.confirmed:
+                issues.append("2.4 清洗与洁净度方案尚未人工确认")
+
+    if "assembly" in TECH_SUBSTEPS:
+        assembly_doc = store.load_assembly(project_id)
+        if not assembly_doc:
+            issues.append("2.5 组装与检测方案尚未完成")
+        else:
+            assembly_plan = AssemblyPlan(**assembly_doc)
+            if not assembly_plan.assembly.steps or not assembly_plan.assembly.confirmed:
+                issues.append("2.5 组装方案尚未形成并人工确认")
+            if not assembly_plan.inspection.tests or not assembly_plan.inspection.confirmed:
+                issues.append("2.5 检测方案尚未形成并人工确认")
+
+    if "production" in TECH_SUBSTEPS:
+        production_doc = store.load_production(project_id)
+        if not production_doc:
+            issues.append("2.6 产线匹配与产能评估尚未完成")
+        else:
+            production_plan = ProductionPlan(**production_doc)
+            if not production_plan.requirements or not production_plan.conclusion:
+                issues.append("2.6 产线需求或总体结论尚未形成")
+            if production_plan.inhouse.matches and not production_plan.inhouse.confirmed:
+                issues.append("2.6 自有产线匹配结果尚未人工确认")
+            if production_plan.outsourcing.plans and not production_plan.outsourcing.confirmed:
+                issues.append("2.6 外协方案尚未人工确认")
+            if not production_plan.inhouse.matches and not production_plan.outsourcing.plans:
+                issues.append("2.6 尚无自有产线匹配或外协处置方案")
+
+    summary_doc = store.load_summary(project_id)
+    if not summary_doc:
+        issues.append("技术工艺总结尚未生成")
+    else:
+        summary_doc_model = SummaryDoc(**summary_doc)
+        if not summary_doc_model.conclusion or not summary_doc_model.confirmed:
+            issues.append("技术工艺总结尚未形成结论并由经理确认")
+    return issues
+
+
+def content_issues(doc: ProcessReport) -> list[str]:
+    issues: list[str] = []
+    if not doc.title.strip():
+        issues.append("报告标题为空")
+    if not doc.conclusion.strip():
+        issues.append("报告总结论为空")
+    if not doc.evaluation_items:
+        issues.append("工艺可行性结论为空")
+    for item in doc.evaluation_items:
+        if not item.conclusion.strip() or item.status in {"待评估", "需补充"}:
+            issues.append(f"评估项“{item.item}”尚未形成可送审结论")
+    if not doc.stage_results:
+        issues.append("各工艺阶段汇总结论为空")
+    for item in doc.stage_results:
+        text = item.conclusion.strip()
+        if not text or "尚未" in text or "暂无" in text:
+            issues.append(f"阶段“{item.stage}”尚未形成有效结论")
+    return list(dict.fromkeys(issues))
+
+
+def source_is_current(project_id: str, doc: ProcessReport) -> bool:
+    current = summary_svc.aggregate(project_id)
+    return digest_value(report_source_payload(doc.source_snapshot)) == digest_value(
+        report_source_payload(current))
+
+
+def ready_gaps(project_id: str, doc: Optional[ProcessReport] = None) -> list[str]:
+    """送审就绪缺口：只读工具与提交审核共用，保证「看到的缺口」和「被拦的理由」一致。"""
+    if doc is None:
+        saved = _load_report(project_id)
+        doc = ProcessReport(**saved) if saved else None
+    issues = prerequisite_issues(project_id)
+    if doc is not None:
+        issues = issues + content_issues(doc)
+    return list(dict.fromkeys(issues))
+
+
+# --------------------------------------------------------------------------- #
+# 3.1 汇总报告
+# --------------------------------------------------------------------------- #
+def new_report(project_id: str, user: dict) -> ProcessReport:
+    requirement = store.load_requirement(project_id) or {}
+    aggregate = summary_svc.aggregate(project_id)
+    summary = aggregate.get("summary") or {}
+    device_name = aggregate.get("device_name") or "未命名项目"
+    now = now_str()
+    preparer = (user or {}).get("display_name") or (user or {}).get("username", "system")
+    number = report_no(project_id)
+    return ProcessReport(
+        project_id=project_id,
+        report_no=number,
+        requirement_no=requirement.get("requirement_no", ""),
+        title=f"{device_name}工艺评估报告",
+        overview=summary.get("overview") or "",
+        highlights=summary.get("highlights") or [],
+        risks=summary.get("risks") or [],
+        conclusion=summary.get("conclusion") or "",
+        source_snapshot=aggregate,
+        basic_info={
+            "report_no": number,
+            "requirement_no": requirement.get("requirement_no", ""),
+            "prepared_by": preparer,
+            "prepared_at": now,
+        },
+        prepared_by=preparer,
+        prepared_at=now,
+        updated_at=now,
+        history=[workflow_event("report_prepared", user or {})],
+    )
+
+
+def prepare(project_id: str, user: dict) -> dict:
+    """生成报告草稿（POST /process-report/prepare 同一实现）。"""
+    _ensure_project(project_id)
+    current = _load_report(project_id)
+    if current and current.get("status") not in ("draft", "rejected"):
+        raise ReportWorkflowError("报告已送审或发布，不能覆盖；请基于现有版本继续处理", 409)
+    doc = new_report(project_id, user)
+    if current:
+        prior = ProcessReport(**current)
+        doc.version = prior.version + 1
+        doc.history = prior.history + [workflow_event("report_refreshed", user or {})]
+    out = doc.model_dump()
+    return {"report": out, "audit": {"action": AUDIT_PREPARED, "payload": {"version": doc.version}}}
+
+
+def _persist_save(project_id: str, doc: ProcessReport, user: dict) -> dict:
+    current = _load_report(project_id)
+    if current and current.get("status") not in ("draft", "rejected"):
+        raise ReportWorkflowError("报告已送审或发布，不能直接修改", 409)
+    requirement_no = (store.load_requirement(project_id) or {}).get("requirement_no", "")
+    expected_report_no = report_no(project_id)
+    user = user or {}
+    doc.project_id = project_id
+    # 单据号、编制人和编制时间由服务端生成，避免页面手动值覆盖正式留痕。
+    current_report_no = (current or {}).get("report_no", "")
+    doc.report_no = current_report_no or expected_report_no
+    doc.requirement_no = requirement_no
+    doc.prepared_by = (current or {}).get("prepared_by") or user.get("display_name") or user.get("username", "system")
+    doc.prepared_at = (current or {}).get("prepared_at") or now_str()
+    doc.version = int((current or {}).get("version") or 1)
+    # 审核、发布签名以及正式来源快照均由服务端维护，客户端不能伪造。
+    doc.reviewed_by = (current or {}).get("reviewed_by")
+    doc.reviewed_at = (current or {}).get("reviewed_at")
+    doc.review_note = (current or {}).get("review_note", "")
+    doc.published_by = (current or {}).get("published_by")
+    doc.published_at = (current or {}).get("published_at")
+    doc.recipients = ProcessReport(**current).recipients if current else []
+    doc.source_snapshot = summary_svc.aggregate(project_id)
+    doc.basic_info = {
+        **(doc.basic_info or {}),
+        "report_no": doc.report_no,
+        "requirement_no": doc.requirement_no,
+        "prepared_by": doc.prepared_by,
+        "prepared_at": doc.prepared_at,
+    }
+    doc.status = (current or {}).get("status") if current else "draft"
+    doc.history = [WorkflowReview(**row) for row in (current or {}).get("history", [])]
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out, "audit": {"action": AUDIT_SAVED, "payload": {"report_no": doc.report_no}}}
+
+
+def save(project_id: str, doc: ProcessReport, user: dict) -> dict:
+    """保存报告字段（PUT /process-report 同一实现）。"""
+    _ensure_project(project_id)
+    return _persist_save(project_id, doc, user)
+
+
+def update_fields(project_id: str, fields: dict, user: dict) -> dict:
+    """Agent 只按白名单改报告字段：其余留痕与单据信息一律沿用服务端当前值。"""
+    _ensure_project(project_id)
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("请先生成并保存评估报告草稿", 404)
+    doc = ProcessReport(**saved)
+    for key in ALLOWED_REPORT_FIELDS:
+        if key in (fields or {}) and fields[key] is not None:
+            setattr(doc, key, fields[key])
+    return _persist_save(project_id, doc, user)
+
+
+def update_distribution(project_id: str, *, distribution_scope: str = "",
+                        distribution_cc: str = "", user: Optional[dict] = None) -> dict:
+    """在审核或发布阶段维护分发范围，不改变审核 / 发布状态。"""
+    _ensure_project(project_id)
+    user = user or {}
+    doc = _require_report(project_id)
+    if doc.status not in ("draft", "rejected", "in_review", "approved"):
+        raise ReportWorkflowError("已发布报告不可再维护发布设置", 409)
+    doc.distribution_scope = (distribution_scope or "").strip()
+    doc.distribution_cc = (distribution_cc or "").strip()
+    doc.history.append(workflow_event("report_distribution_updated", user,
+                                      "更新发布范围与抄送对象"))
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out,
+            "audit": {"action": AUDIT_DISTRIBUTION,
+                      "payload": {"scope": doc.distribution_scope, "cc": doc.distribution_cc}}}
+
+
+def submit_review(project_id: str, user: Optional[dict] = None, *, comment: str = "") -> dict:
+    """提交审核（POST /process-report/submit-review 同一实现）。"""
+    _ensure_project(project_id)
+    user = user or {}
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("请先汇总并保存评估报告", 404)
+    doc = ProcessReport(**saved)
+    if doc.status not in ("draft", "rejected"):
+        raise ReportWorkflowError("当前报告不在可送审状态", 409)
+    issues = prerequisite_issues(project_id) + content_issues(doc)
+    if issues:
+        raise ReportWorkflowError("报告暂不可送审：" + "；".join(issues), 409)
+    # 送审时重新冻结一次来源快照，保证审核人与发布人看到同一份依据。
+    doc.source_snapshot = summary_svc.aggregate(project_id)
+    doc.status = "in_review"
+    doc.history.append(workflow_event("report_submitted", user, comment))
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out, "audit": {"action": AUDIT_SUBMITTED, "payload": {"comment": comment}}}
+
+
+# --------------------------------------------------------------------------- #
+# 3.2 审核报告
+# --------------------------------------------------------------------------- #
+def review(project_id: str, user: dict, *, decision: str, comment: str = "",
+           review_items=None, review_conclusion: str = "",
+           distribution_scope: str = "", distribution_cc: str = "") -> dict:
+    """审核通过 / 退回（POST /process-report/review 同一实现）。"""
+    _ensure_project(project_id)
+    user = user or {}
+    doc = _require_report(project_id)
+    if doc.status != "in_review":
+        raise ReportWorkflowError("当前报告不在待审核状态", 409)
+    if decision not in ("approve", "reject"):
+        raise ReportWorkflowError("decision 必须为 approve 或 reject", 400)
+    if decision == "approve":
+        issues = prerequisite_issues(project_id) + content_issues(doc)
+        if issues:
+            raise ReportWorkflowError("报告内容仍不满足通过条件：" + "；".join(issues), 409)
+        if not source_is_current(project_id, doc):
+            raise ReportWorkflowError("报告送审后上游工艺数据已变化，请驳回并重新汇总后送审", 409)
+    doc.status = "approved" if decision == "approve" else "rejected"
+    doc.reviewed_by = user.get("username", "system")
+    doc.reviewed_at = now_str()
+    doc.review_note = comment
+    if review_items:
+        doc.review_items = review_items
+    if review_conclusion:
+        doc.review_conclusion = review_conclusion
+    if distribution_scope:
+        doc.distribution_scope = distribution_scope
+    if distribution_cc:
+        doc.distribution_cc = distribution_cc
+    doc.history.append(workflow_event(f"report_review_{decision}", user, comment))
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out,
+            "audit": {"action": f"workflow:report_{decision}", "payload": {"comment": comment}}}
+
+
+def review_summary(project_id: str) -> dict:
+    """3.2 审核摘要：确定性汇总，不调模型、不编造结论。"""
+    _ensure_project(project_id)
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("评估报告不存在", 404)
+    doc = ProcessReport(**saved)
+    issues = prerequisite_issues(project_id) + content_issues(doc)
+    materials = {
+        "report_no": doc.report_no,
+        "title": doc.title,
+        "status": doc.status,
+        "version": doc.version,
+        "prepared_by": doc.prepared_by,
+        "prepared_at": doc.prepared_at,
+        "attachment_count": len(doc.attachments or []),
+        "evaluation_items": len(doc.evaluation_items or []),
+        "stage_results": len(doc.stage_results or []),
+    }
+    return {
+        "report": saved,
+        "review_materials": materials,
+        "review_summary": {
+            "summary": doc.conclusion or doc.overview or "",
+            "items": [{"item": item.item, "status": item.status, "conclusion": item.conclusion}
+                      for item in doc.evaluation_items],
+            "generated_note": doc.review_note or "",
+            "decision_options": ["approve", "reject"],
+            "gaps": issues,
+        },
+        "source_current": source_is_current(project_id, doc),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 3.3 发布并回传报价
+# --------------------------------------------------------------------------- #
+def publish(project_id: str, user: dict, *, recipients, comment: str = "") -> dict:
+    """正式发布（POST /process-report/publish 同一实现）。"""
+    _ensure_project(project_id)
+    user = user or {}
+    doc = _require_report(project_id)
+    if doc.status != "approved":
+        raise ReportWorkflowError("报告须审核通过后才能发布", 409)
+    issues = prerequisite_issues(project_id) + content_issues(doc)
+    if issues:
+        raise ReportWorkflowError("报告当前不满足发布条件：" + "；".join(issues), 409)
+    if not source_is_current(project_id, doc):
+        raise ReportWorkflowError("报告审核通过后上游工艺数据已变化，请重新走报告审核流程", 409)
+    rows = [row if isinstance(row, ReportRecipient) else ReportRecipient(**row)
+            for row in (recipients or [])]
+    if not rows:
+        raise ReportWorkflowError("请至少设置一个正式发布对象", 409)
+    doc.status = "published"
+    doc.published_by = user.get("username", "system")
+    doc.published_at = now_str()
+    doc.recipients = rows
+    doc.history.append(workflow_event("report_published", user, comment))
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out,
+            "audit": {"action": AUDIT_PUBLISHED,
+                      "payload": {"comment": comment,
+                                  "recipients": [r.model_dump() for r in rows]}}}
+
+
+def new_version(project_id: str, user: Optional[dict] = None) -> dict:
+    """从已发布报告创建下一版草稿，保留既有内容和完整审计链。"""
+    _ensure_project(project_id)
+    user = user or {}
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("评估报告不存在", 404)
+    prior = ProcessReport(**saved)
+    if prior.status != "published":
+        raise ReportWorkflowError("仅已发布报告可创建新版本", 409)
+    # 兼容升级前已发布的数据：创建新草稿前先确保旧版进入不可变版本库（由 commit 落盘）。
+    archive = prior.model_dump()
+    doc = prior.model_copy(deep=True)
+    doc.version = prior.version + 1
+    doc.status = "draft"
+    doc.reviewed_by = None
+    doc.reviewed_at = None
+    doc.review_note = ""
+    doc.review_items = []
+    doc.review_conclusion = ""
+    doc.published_by = None
+    doc.published_at = None
+    doc.recipients = []
+    doc.history.append(workflow_event("report_new_version", user,
+                                      f"基于 V{prior.version} 创建 V{doc.version} 草稿"))
+    doc.updated_at = now_str()
+    out = doc.model_dump()
+    return {"report": out, "archive": archive,
+            "audit": {"action": AUDIT_NEW_VERSION,
+                      "payload": {"from_version": prior.version, "version": doc.version}}}
+
+
+def distribution_recipients(project_id: str) -> dict:
+    """3.3 发布对象：沿用报告已保存的发布范围，不另造一份数据。"""
+    _ensure_project(project_id)
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("评估报告不存在", 404)
+    doc = ProcessReport(**saved)
+    return {"report_no": doc.report_no, "status": doc.status,
+            "distribution_scope": doc.distribution_scope,
+            "distribution_cc": doc.distribution_cc,
+            "recipients": [row.model_dump() for row in (doc.recipients or [])]}
+
+
+def publish_state(project_id: str) -> dict:
+    """3.3 发布状态：报告状态 + 发布前置缺口，供 Agent 判断能不能发布。"""
+    _ensure_project(project_id)
+    saved = _load_report(project_id)
+    if not saved:
+        raise ReportWorkflowError("评估报告不存在", 404)
+    doc = ProcessReport(**saved)
+    issues = prerequisite_issues(project_id) + content_issues(doc)
+    return {
+        "report": saved,
+        "status": doc.status,
+        "approved": doc.status == "approved",
+        "published": doc.status == "published",
+        "can_publish": doc.status == "approved" and not issues,
+        "gaps": issues,
+        "source_current": source_is_current(project_id, doc),
+        "recipient_count": len(doc.recipients or []),
+    }
+
+
+def publish_result(project_id: str) -> dict:
+    """3.3 发布结果：报告 + 版本链 + 整机回传结果（如已回传）。"""
+    _ensure_project(project_id)
+    saved = _load_report(project_id)
+    versions = store.list_process_report_versions(project_id)
+    handoff: dict[str, Any] = {}
+    try:
+        from . import integration
+        plan = integration.load_plan(project_id)
+        handoff = (plan.quote_handoff.model_dump() if plan and plan.quote_handoff else {}) or {}
+    except Exception:  # 回传只影响展示，缺整机计划不影响发布结果读取
+        handoff = {}
+    return {"report": saved, "versions": versions, "quote_handoff": handoff}
+
+
+def commit(project_id: str, result: dict, user: Optional[dict] = None) -> dict:
+    """把共享实现算好的报告落盘并记审计（Agent 路径入口）。
+
+    业务判断（门禁、状态流转、审计动作名）已在各流程函数里完成，本函数只做落盘与留痕；
+    路由侧用等价的 ``main._persist_report`` + ``store.audit`` 直写同一份结果。两条入口
+    写的是同一份 doc，不存在第二套业务实现。
+    """
+    user = user or {}
+    archive = (result or {}).get("archive")
+    if archive:
+        store.save_process_report(project_id, archive, author=user.get("username", "system"))
+    report = (result or {}).get("report") or {}
+    if report:
+        store.save_process_report(project_id, report, author=user.get("username", "system"))
+    audit = (result or {}).get("audit") or {}
+    if audit.get("action"):
+        store.audit(project_id, audit["action"], audit.get("payload") or {})
+    return report

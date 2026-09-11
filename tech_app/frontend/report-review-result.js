@@ -27,6 +27,45 @@ rrStart();
 (function rrRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
   let rrBoardBusy = false;
+  function rrBoardPublish(name, extra) {
+    const runtime = window.TechBoardRuntime;
+    if (!runtime || typeof runtime.publish !== 'function') return;
+    try { runtime.publish(name, 'report', Object.assign({ action: name }, extra || {})); }
+    catch { /* 进度上报失败不影响业务本身 */ }
+  }
+  async function rrRefreshReport() {
+    const [reportResult, aggregate] = await Promise.all([
+      api(`/api/projects/${encodeURIComponent(rrPid)}/process-report`),
+      api(`/api/projects/${encodeURIComponent(rrPid)}/summary`),
+    ]);
+    rrReport = reportResult.report || rrReport;
+    rrAggregate = aggregate;
+    rrView = rrLiveView(rrReport, rrAggregate);
+    rrRender();
+    return { ok: true };
+  }
+  function rrApplyReviewNote(payload) {
+    const data = payload || {};
+    const decision = String(data.decision || '').toLowerCase();
+    const note = String(data.note || '');
+    // 只回填看板：写入既有意见输入框（不覆盖人工已写内容），不落盘、不改状态。
+    let target = document.querySelector('#reviewText') || document.querySelector('#rrReviewNote');
+    if (!target) {
+      const publish = document.querySelector('#rrPublish');
+      if (publish) {
+        target = document.createElement('textarea');
+        target.id = 'rrReviewNote';
+        target.className = 'table-input';
+        target.rows = 3;
+        target.placeholder = '审核意见';
+        publish.parentNode.insertBefore(target, publish);
+      }
+    }
+    if (target) target.value = target.value ? `${target.value}\n${note}` : note;
+    rrBoardPublish('task-completed', { taskId: 'report-review-note', label: '带入审核意见', status: 'succeeded' });
+    rrToast(decision === 'approve' ? '审核通过意见已带入看板，请人工确认后提交。' : decision === 'reject' ? '退回意见已带入看板，请人工确认后提交。' : '审核意见已带入看板。');
+    return { ok: true, decision: decision, note: note };
+  }
   window.TechBoardRuntime.registerActions({
     approveProcessReport: {
       label: '审核通过并发布',
@@ -56,5 +95,15 @@ rrStart();
         return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rrBoardBusy, busy: rrBoardBusy };
       },
     },
+    refreshProcessReport: {
+      label: '刷新审核报告',
+      run: async () => { try { return await rrRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
+      getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
+    },
+    applyReportReviewNote: {
+      label: '带入审核意见',
+      run: (payload) => rrApplyReviewNote(payload || {}),
+      getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
+    }
   });
 })();

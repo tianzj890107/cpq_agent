@@ -381,6 +381,9 @@
       // 说明 / 确认 / 写物料 / 发报价 / 退回工艺后刷新看板。
       if (event.ui_action === "cost-step") costReviewBoardStep(event.input);
       if (event.ui_action === "refresh-cost-review") refreshCostReviewBoard();
+      // 3.1 / 3.2 / 3.3 报告：写入动作完成后刷新右侧报告看板；审核意见经桥带入看板。
+      if (event.ui_action === "refresh-report") refreshProcessReportBoard();
+      if (event.ui_action === "fill-report-review-note") applyReportReviewNoteAction(event.input);
       return;
     }
     if (event.type === "tool_result") {
@@ -586,6 +589,43 @@
     }
     Promise.resolve(bridge.executeAction("refreshCostReview", { label: "刷新成本看板" })).catch(error => {
       pushSystem(`成本看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  // ---------------------------------------------- 3.1 / 3.2 / 3.3 报告：Agent 动作联动
+  // 与 2.2 / 2.3 完全同模式：左侧只发语义化业务动作名，报告读写、审核与发布仍在右侧
+  // 看板复用既有流程执行；左侧不直接调用任何报告或汇总接口。
+  function refreshProcessReportBoard() {
+    noteInThread("Agent 已更新报告内容，正在刷新右侧报告看板。");
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能操作报告看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("refreshProcessReport", { label: "刷新报告看板" })).catch(error => {
+      pushSystem(`报告看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  function applyReportReviewNoteAction(input) {
+    const decision = String((input && input.decision) || "").trim().toLowerCase();
+    const note = String((input && input.note) || "");
+    if (!note) {
+      pushSystem("Agent 请求带入审核意见，但没有给出意见正文。");
+      return;
+    }
+    noteInThread("Agent 已起草审核意见，正在带入右侧审核看板；是否通过 / 退回仍需你人工确认。");
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能操作报告看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("applyReportReviewNote", {
+      decision: decision,
+      note: note,
+      label: "带入审核意见",
+    })).catch(error => {
+      pushSystem(`报告看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
     });
   }
 

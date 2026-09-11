@@ -852,6 +852,201 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["confirmed"],
         },
     },
+    # ---- 3.1 汇总报告 ----
+    {
+        "name": "GetSummaryData",
+        "description": "读取 3.1 汇总数据（各环节结论，与「汇总结果」页面同一份）。只读，"
+                       "不触发模型汇总、不落盘。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetProcessReport",
+        "description": "准备报告：读取当前报告草稿与送审就绪缺口（确定性检查，不调模型）。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GenerateProcessReportDraft",
+        "description": "生成 3.1 报告草稿（与「生成报告草稿」按钮同一实现），不改单据号与留痕。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateProcessReportFields",
+        "description": "更新报告字段。只接受白名单字段：title / overview / highlights / risks / "
+                       "conclusion / distribution_scope / distribution_cc；单据号、编制人、审核与"
+                       "发布留痕、版本号一律服务端维护，不能通过本工具改写。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "报告标题"},
+                "overview": {"type": "string", "description": "概述"},
+                "highlights": {"type": "array", "items": {"type": "string"}, "description": "亮点"},
+                "risks": {"type": "array", "items": {"type": "string"}, "description": "风险"},
+                "conclusion": {"type": "string", "description": "总结论"},
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "SaveProcessReportDistribution",
+        "description": "保存 3.1 发布范围与抄送对象（与既有发布设置同一实现），不改变审核状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "SubmitProcessReportReview",
+        "description": "把 3.1 报告提交审核（draft/rejected → in_review）。**必须由用户明确确认**："
+                       "只有用户明确说「提交审核」后才能带 confirmed=true 调用；未确认只回执，"
+                       "绝不改状态。报告需先满足送审就绪检查。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认送审；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "送审说明，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    # ---- 3.2 审核报告 ----
+    {
+        "name": "GetProcessReportReview",
+        "description": "读取 3.2 报告与版本链（与审核页面同一份），只读、不改状态。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetReportReviewSummary",
+        "description": "输出 3.2 确定性审核摘要：报告材料、评估项、来源快照一致性与待补充项。"
+                       "不调模型、不编造结论。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveReportReviewNote",
+        "description": "把审核意见带入 3.2 看板表单（仅回填，不落盘、不改状态、不提交）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision": {"type": "string", "enum": ["approve", "reject", ""],
+                             "description": "倾向的审核结论，留空表示仅记录意见"},
+                "note": {"type": "string", "description": "审核意见"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ApproveProcessReport",
+        "description": "审核通过 3.2 报告（in_review → approved）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，绝不代替人工审批。"
+                       "通过仍受内容检查与来源快照一致性约束。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核通过；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "审核意见，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "RejectProcessReport",
+        "description": "退回 3.2 报告汇总修改（in_review → rejected）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，不得静默退回。"
+                       "退回不受内容检查约束。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    # ---- 3.3 发布并回传报价 ----
+    {
+        "name": "GetReportPublishState",
+        "description": "读取 3.3 发布状态与发布前置缺口（报告状态、是否 approved / published）。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ListReportPublishRecipients",
+        "description": "读取 3.3 发布对象与发布范围 / 抄送（与发布设置同一份）。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateReportDistribution",
+        "description": "更新 3.3 发布范围与抄送对象（与既有发布设置同一实现），不改变发布状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "PublishProcessReport",
+        "description": "正式发布 3.3 报告（approved → published）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，绝不发布。"
+                       "保留「审核通过(approved)」状态闸门、来源快照校验与发布对象非空校验。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发布；必须是 true 才发布"},
+                "comment": {"type": "string", "description": "发布说明，会写进报告留痕"},
+                "recipients": {
+                    "type": "array",
+                    "description": "正式发布对象；至少一项，每项含 name / organization / channel",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "SendReportToQuote",
+        "description": "把 3.3 报告回传报价（复用既有回传正文）。**必须由用户明确确认**："
+                       "未 confirmed=true 只回执，绝不外呼；回传要求报告已发布(published)。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认回传报价；必须是 true 才外呼"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+                "note": {"type": "string", "description": "给报价侧的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "CreateReportNewVersion",
+        "description": "基于已发布报告创建下一版草稿。**必须由用户明确确认**，且需工艺技术经理"
+                       "或管理员权限：未 confirmed=true 只回执，绝不新建版本；只有已正式发布的报告才允许新建下一版。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认新建版本；必须是 true 才执行"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "GetReportPublishResult",
+        "description": "读取 3.3 发布结果：报告、版本链与（如已回传）报价回执。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -894,6 +1089,19 @@ UI_ACTION_TOOLS = {
     "SaveRequirementReviewNote": "fill-review-note",
     "ApproveRequirementReview": "refresh-requirement",
     "RejectRequirementReview": "refresh-requirement",
+    # 3.1 / 3.2 / 3.3：报告类写入动作统一只刷新右侧看板；送审 / 审核 / 发布 / 回传 /
+    # 新建版本都有显式确认门，绝不映射成 tool_use 阶段就自动执行的动作。
+    "GenerateProcessReportDraft": "refresh-report",
+    "UpdateProcessReportFields": "refresh-report",
+    "SaveProcessReportDistribution": "refresh-report",
+    "SubmitProcessReportReview": "refresh-report",
+    "SaveReportReviewNote": "fill-report-review-note",
+    "ApproveProcessReport": "refresh-report",
+    "RejectProcessReport": "refresh-report",
+    "UpdateReportDistribution": "refresh-report",
+    "PublishProcessReport": "refresh-report",
+    "SendReportToQuote": "refresh-report",
+    "CreateReportNewVersion": "refresh-report",
 }
 
 
@@ -1199,7 +1407,283 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
             }, ensure_ascii=False)
         return json.dumps(_reject_requirement_review(project_id, str(params.get("comment") or "")),
                           ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.1 汇总报告
+    if name == "GetSummaryData":
+        from . import summary as summary_svc
+        return json.dumps(_summary_read(project_id, summary_svc.aggregate(project_id)),
+                          ensure_ascii=False, indent=2)
+    if name == "GetProcessReport":
+        saved = store.load_process_report(project_id)
+        return json.dumps(_report_prepare_read(project_id, saved), ensure_ascii=False, indent=2)
+    if name == "GenerateProcessReportDraft":
+        return json.dumps(_report_call(project_id, "prepare"), ensure_ascii=False, indent=2)
+    if name == "UpdateProcessReportFields":
+        fields = {key: params.get(key) for key in _report_field_keys() if key in params}
+        return json.dumps(_report_call(project_id, "update_fields", fields=fields),
+                          ensure_ascii=False, indent=2)
+    if name == "SaveProcessReportDistribution":
+        return json.dumps(_report_call(project_id, "update_distribution",
+                                       distribution_scope=str(params.get("distribution_scope") or ""),
+                                       distribution_cc=str(params.get("distribution_cc") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "SubmitProcessReportReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "submit-review",
+                "status": _report_status(project_id),
+                "note": "提交审核会把报告推进到「待审核」，必须由用户明确确认。请先复述送审就绪"
+                        "缺口，得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_call(project_id, "submit_review",
+                                       comment=str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.2 审核报告
+    if name == "GetProcessReportReview":
+        saved = store.load_process_report(project_id)
+        versions = store.list_process_report_versions(project_id)
+        return json.dumps({"report": saved, "versions": versions}, ensure_ascii=False, indent=2)
+    if name == "GetReportReviewSummary":
+        return json.dumps(_report_summary(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveReportReviewNote":
+        decision = str(params.get("decision") or "").strip().lower()
+        if decision not in ("approve", "reject", ""):
+            decision = ""
+        return json.dumps({
+            "requested": True,
+            "decision": decision,
+            "note": str(params.get("note") or ""),
+            "note_target": "review",
+            "note_hint": "审核意见已带入看板；请人工确认后再提交，Agent 不代替审批。",
+        }, ensure_ascii=False, indent=2)
+    if name == "ApproveProcessReport":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "approve",
+                "status": _report_status(project_id),
+                "note": "审核通过会推进到发布，必须由用户明确确认，且需工艺技术总监或管理员权限。"
+                        "请先征得用户同意，再带 confirmed=true 重新调用；绝不代替人工审批。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_review(project_id, "approve", params),
+                          ensure_ascii=False, indent=2)
+    if name == "RejectProcessReport":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "reject",
+                "status": _report_status(project_id),
+                "note": "退回会把报告打回汇总修改，必须由用户明确确认，且需工艺技术总监或管理员"
+                        "权限。请先征得用户同意，再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_review(project_id, "reject", params),
+                          ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.3 发布并回传报价
+    if name == "GetReportPublishState":
+        saved = store.load_process_report(project_id)
+        return json.dumps(_report_publish_state(project_id, saved), ensure_ascii=False, indent=2)
+    if name == "ListReportPublishRecipients":
+        return json.dumps(_report_recipients(project_id), ensure_ascii=False, indent=2)
+    if name == "UpdateReportDistribution":
+        return json.dumps(_report_call(project_id, "update_distribution",
+                                       distribution_scope=str(params.get("distribution_scope") or ""),
+                                       distribution_cc=str(params.get("distribution_cc") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "PublishProcessReport":
+        saved = store.load_process_report(project_id)
+        if str((saved or {}).get("status") or "") != "approved":
+            return json.dumps({
+                "error": "报告须先审核通过(approved)后才能正式发布",
+                "status": (saved or {}).get("status") or "missing",
+            }, ensure_ascii=False)
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "publish",
+                "status": _report_status(project_id),
+                "note": "正式发布是对外动作，必须由用户明确确认。请先确认发布范围与发布对象，"
+                        "得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_publish(project_id, params), ensure_ascii=False, indent=2)
+    if name == "SendReportToQuote":
+        saved = store.load_process_report(project_id)
+        if str((saved or {}).get("status") or "") != "published":
+            return json.dumps({
+                "error": "报告须已正式发布(published)后才能回传报价",
+                "status": (saved or {}).get("status") or "missing",
+            }, ensure_ascii=False)
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-to-quote",
+                "status": _report_status(project_id),
+                "note": "回传报价会把报告推给销售侧做定价，属于对外动作，必须由用户明确确认。"
+                        "得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_send_to_quote(project_id, params), ensure_ascii=False, indent=2)
+    if name == "CreateReportNewVersion":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "new-version",
+                "status": _report_status(project_id),
+                "note": "新建报告版本会生成下一版草稿，必须由用户明确确认。得到同意后再带 "
+                        "confirmed=true 重新调用；只有已正式发布的报告才允许新建下一版。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_call(project_id, "new_version"), ensure_ascii=False, indent=2)
+    if name == "GetReportPublishResult":
+        saved = store.load_process_report(project_id)
+        versions = store.list_process_report_versions(project_id)
+        return json.dumps({"report": saved, "versions": versions,
+                           "quote_handoff": _report_quote_handoff(project_id)},
+                          ensure_ascii=False, indent=2)
     return f"未知的平台工具：{name}"
+
+
+# --------------------------------------------------------------------------- #
+# 3.1 / 3.2 / 3.3 汇总报告：与 HTTP 路由共用 services.report_workflow
+# --------------------------------------------------------------------------- #
+def _report_field_keys():
+    """Agent 可改写的报告字段白名单（唯一来源在共享 service）。"""
+    from . import report_workflow
+    return report_workflow.ALLOWED_REPORT_FIELDS
+
+
+def _report_apply(project_id: str, result: dict) -> dict:
+    """落盘 + 审计并返回报告：业务判断在 service，落盘与留痕交给 service 的 commit。"""
+    from . import report_workflow
+    return report_workflow.commit(project_id, result, _actor_user())
+
+
+def _report_error(exc) -> dict:
+    return {"error": getattr(exc, "message", str(exc)),
+            "status_code": getattr(exc, "status_code", 400)}
+
+
+def _report_status(project_id: str) -> dict:
+    saved = store.load_process_report(project_id) or {}
+    return {"status": saved.get("status") or "missing",
+            "report_no": saved.get("report_no") or "",
+            "version": saved.get("version") or 0}
+
+
+def _summary_read(project_id: str, aggregate: dict) -> dict:
+    aggregate = aggregate or {}
+    return {
+        "project_id": project_id,
+        "device_name": aggregate.get("device_name") or "",
+        "summary": aggregate.get("summary") or {},
+        "steps": aggregate.get("steps") or {},
+    }
+
+
+def _report_prepare_read(project_id: str, saved) -> dict:
+    from . import report_workflow
+    try:
+        gaps = report_workflow.ready_gaps(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return {"report": saved, "error": exc.message, "status_code": exc.status_code}
+    return {"report": saved, "ready": not gaps, "gaps": gaps}
+
+
+def _report_call(project_id: str, op: str, **kwargs) -> dict:
+    """把 Agent 工具参数接到共享 report_workflow；业务拒绝转成结构化错误。"""
+    from . import report_workflow
+    user = _actor_user()
+    try:
+        if op == "prepare":
+            return _report_apply(project_id, report_workflow.prepare(project_id, user))
+        if op == "update_fields":
+            return _report_apply(project_id, report_workflow.update_fields(
+                project_id, kwargs.get("fields") or {}, user))
+        if op == "save":
+            return _report_apply(project_id, report_workflow.save(
+                project_id, kwargs.get("doc"), user))
+        if op == "update_distribution":
+            return _report_apply(project_id, report_workflow.update_distribution(
+                project_id, distribution_scope=kwargs.get("distribution_scope", ""),
+                distribution_cc=kwargs.get("distribution_cc", ""), user=user))
+        if op == "submit_review":
+            return _report_apply(project_id, report_workflow.submit_review(
+                project_id, user, comment=kwargs.get("comment", "")))
+        if op == "new_version":
+            return _report_apply(project_id, report_workflow.new_version(project_id, user))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return {"error": f"未知的报告流程动作：{op}"}
+
+
+def _report_summary(project_id: str) -> dict:
+    from . import report_workflow
+    try:
+        return report_workflow.review_summary(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+
+
+def _report_review(project_id: str, decision: str, params: dict) -> dict:
+    from . import report_workflow
+    try:
+        result = report_workflow.review(
+            project_id, _actor_user(), decision=decision,
+            comment=str(params.get("comment") or ""))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return _report_apply(project_id, result)
+
+
+def _report_publish_state(project_id: str, saved) -> dict:
+    from . import report_workflow
+    try:
+        state = report_workflow.publish_state(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return {"report": state.get("report", saved),
+            "status": state.get("status"), "approved": state.get("approved"),
+            "published": state.get("published"), "can_publish": state.get("can_publish"),
+            "gaps": state.get("gaps"), "recipient_count": state.get("recipient_count")}
+
+
+def _report_recipients(project_id: str) -> dict:
+    from . import report_workflow
+    try:
+        return report_workflow.distribution_recipients(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+
+
+def _report_publish(project_id: str, params: dict) -> dict:
+    from . import report_workflow
+    try:
+        result = report_workflow.publish(
+            project_id, _actor_user(), recipients=params.get("recipients") or [],
+            comment=str(params.get("comment") or ""))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return _report_apply(project_id, result)
+
+
+def _report_send_to_quote(project_id: str, params: dict) -> dict:
+    """3.3 回传报价复用 2.2/2.3 共用正文；令牌取用户 SSO，不落日志。"""
+    from . import cost_flow
+    try:
+        return cost_flow.integration_send_to_quote_body(
+            project_id,
+            product_name=str(params.get("product_name") or ""),
+            spec=str(params.get("spec") or ""),
+            note=str(params.get("note") or ""),
+            token=current_token(), user=_actor_user())
+    except cost_flow.CostFlowError as exc:
+        return _report_error(exc)
+
+
+def _report_quote_handoff(project_id: str) -> dict:
+    try:
+        from . import integration
+        plan = integration.load_plan(project_id)
+        return (plan.quote_handoff.model_dump() if plan and plan.quote_handoff else {}) or {}
+    except Exception:
+        return {}
 
 
 # --------------------------------------------------------------------------- #
