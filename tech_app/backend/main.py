@@ -1804,7 +1804,8 @@ def workbench_chat(
         "model": model,
         "question_length": len(body.message),
     })
-    _save_project_chat_turn(project_id, body.message, answer, user, body.page_context or "2.1 图纸解析")
+    # 无上下文时用中性空值，不冒充任何具体步骤（第 19 步：九阶段各有独立 page_context）。
+    _save_project_chat_turn(project_id, body.message, answer, user, body.page_context or "")
     return {"answer": answer, "model": model, "edit_applied": edit_applied}
 
 

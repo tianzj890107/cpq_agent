@@ -73,6 +73,84 @@ def current_token() -> str:
     return _TOKEN.get() or ""
 
 
+# --------------------------------------------------------------------------- #
+# 统一结构化 UI 事件 tech_ui（第 17 步）：与报价 cpq_ui 同构 —— Agent 只表达意图，
+# 右侧看板按固定结构渲染。模型不能提供 HTML / 原始结构 / 字段集 / 列定义，服务端也
+# 不拼接 HTML。每轮会话里 tech_ui 调用产生的事件先入线程本地队列，工具批次执行完后
+# 随 SSE 下发；线程隔离即会话隔离，多会话并发不会互相串。
+# --------------------------------------------------------------------------- #
+_TECH_UI_TLS = threading.local()
+
+# action 固定八项，不得增删；未知 action 一律拒绝且不入队。
+TECH_UI_ACTIONS = (
+    "focus_view", "refresh_view", "fill_fields", "select_part",
+    "show_result_actions", "show_progress", "set_stage", "request_confirmation",
+)
+# 九个内部阶段（与前端 STAGES / TECH_UI 白名单一致）。
+TECH_UI_STAGES = (
+    "requirement-create", "requirement-confirm", "requirement-review",
+    "drawing", "process", "cost", "summary", "report-review", "report-publish",
+)
+# 看板已注册的视图白名单（app.js / assembly-integration.js / cost-review.js）。
+TECH_UI_VIEWS = (
+    "parts", "questions", "report", "evidence", "review", "files", "upload", "import3d",
+    "drawing-overview", "parts-list", "part-detail", "part-process", "part-cost",
+    "drawings", "params", "process", "assembly", "total",
+)
+
+
+def _tech_ui_events() -> list:
+    lst = getattr(_TECH_UI_TLS, "events", None)
+    if lst is None:
+        lst = _TECH_UI_TLS.events = []
+    return lst
+
+
+def _handle_tech_ui(tool_input: dict) -> str:
+    """执行 tech_ui：校验白名单、归一化后入队，给模型返回简短回执。
+
+    越界 action / stage / view 一律拒绝且不入队；服务端只归一化结构，不拼 HTML，
+    也不接受任何自由字段集、列定义或脚本 —— 模型只能表达意图，渲染交给看板。
+    """
+    if not isinstance(tool_input, dict):
+        return "tech_ui 入参必须是 JSON 对象"
+    action = str(tool_input.get("action") or "").strip()
+    if action not in TECH_UI_ACTIONS:
+        return f"未知的 tech_ui action：{action or '(空)'}，不在白名单内"
+    stage = str(tool_input.get("stage") or "").strip()
+    if stage and stage not in TECH_UI_STAGES:
+        return f"未知 stage：{stage}，不在九阶段白名单内"
+    view = str(tool_input.get("view") or "").strip()
+    if view and view not in TECH_UI_VIEWS:
+        return f"未知 view：{view}，不在看板视图白名单内"
+    if action == "set_stage" and stage not in TECH_UI_STAGES:
+        return "set_stage 必须提供九阶段白名单内的 stage"
+    if action == "focus_view" and view not in TECH_UI_VIEWS:
+        return "focus_view 必须提供看板视图白名单内的 view"
+    fields = tool_input.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return "fields 必须是字符串键值对象"
+    normalized: dict[str, Any] = {"action": action}
+    if stage:
+        normalized["stage"] = stage
+    if view:
+        normalized["view"] = view
+    if isinstance(fields, dict):
+        normalized["fields"] = {str(k): str(v) for k, v in fields.items()}
+    for key in ("part_id", "note", "label", "target"):
+        value = tool_input.get(key)
+        if value not in (None, ""):
+            normalized[key] = str(value)
+    _tech_ui_events().append(normalized)
+    if action == "set_stage":
+        return f"已请求切换到步骤 {stage}"
+    if action == "focus_view":
+        return f"已请求看板聚焦视图 {view}"
+    if action == "request_confirmation":
+        return "已请用户确认后再执行（等待用户点击确认）"
+    return f"已请求看板执行 {action}"
+
+
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -1047,6 +1125,45 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "description": "读取 3.3 发布结果：报告、版本链与（如已回传）报价回执。只读。",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "tech_ui",
+        "description": (
+            "驱动技术工艺右侧看板的结构化界面动作。你只表达意图，看板按固定模板渲染："
+            "聚焦/刷新视图、回填白名单字段、在看板选中零件、展示结果入口、展示任务进度、"
+            "切换九个步骤、请求用户确认后再执行。本工具不接受任何自由 HTML、原始结构、"
+            "自定义字段集或列定义，服务端也不会据此拼接界面；未知 action / stage / view "
+            "会被拒绝且不产生任何界面动作。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["focus_view", "refresh_view", "fill_fields", "select_part",
+                             "show_result_actions", "show_progress", "set_stage",
+                             "request_confirmation"],
+                    "description": (
+                        "focus_view=聚焦右侧看板的某个视图；refresh_view=让看板重新拉取并渲染；"
+                        "fill_fields=把白名单字段回填当前步骤表单；select_part=在看板内选中/打开零件；"
+                        "show_result_actions=展示结果入口；show_progress=展示任务执行进度；"
+                        "set_stage=切换到九个步骤之一；request_confirmation=请求用户明确确认后再执行 target"
+                    ),
+                },
+                "stage": {"type": "string",
+                          "description": "九个 stage id 之一：requirement-create / requirement-confirm / requirement-review / drawing / process / cost / summary / report-review / report-publish"},
+                "view": {"type": "string",
+                         "description": "看板视图白名单内的视图名（focus_view / refresh_view 用）"},
+                "fields": {"type": "object", "additionalProperties": {"type": "string"},
+                           "description": "回填字段：键值均为字符串（fill_fields 用）"},
+                "part_id": {"type": "string", "description": "零件 id（select_part 用）"},
+                "note": {"type": "string", "description": "展示给用户的简短说明"},
+                "label": {"type": "string", "description": "按钮 / 入口文案"},
+                "target": {"type": "string",
+                           "description": "request_confirmation 中，用户确认后要执行的动作名"},
+            },
+            "required": ["action"],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -1537,6 +1654,8 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
         return json.dumps({"report": saved, "versions": versions,
                            "quote_handoff": _report_quote_handoff(project_id)},
                           ensure_ascii=False, indent=2)
+    if name == "tech_ui":
+        return _handle_tech_ui(params if isinstance(params, dict) else {})
     return f"未知的平台工具：{name}"
 
 
@@ -2805,7 +2924,12 @@ class ProjectAgent:
                     if stop_reason != "tool_use":
                         break
                     # 复用 open-claude 自己的执行路径（权限、钩子、Agent/MCP 分派）。
+                    _tech_ui_events().clear()
                     conv._execute_pending_tools()
+                    # tech_ui 调用产生的结构化界面事件随本轮 SSE 下发，随后清空队列。
+                    for tech_ui_event in _tech_ui_events():
+                        emit({"type": "tech_ui", "tech_ui": tech_ui_event})
+                    _tech_ui_events().clear()
                     last = conv.messages[-1] if conv.messages else None
                     if last and last.get("role") == "user" and isinstance(last.get("content"), list):
                         for block in last["content"]:
@@ -2845,9 +2969,17 @@ class ProjectAgent:
             elif kind == "tool_use_end":
                 tool_uses.append({"type": "tool_use", "id": event["id"],
                                   "name": event["name"], "input": event["input"]})
-                emit({"type": "tool_use", "id": event["id"], "name": event["name"],
-                      "input": event["input"],
-                      "ui_action": UI_ACTION_TOOLS.get(event["name"], "")})
+                if event["name"] == "tech_ui":
+                    # tech_ui 走独立的 tech_ui 帧：tool_use 只透传轻量元信息，不带整份 fields。
+                    tech_input = event["input"] if isinstance(event["input"], dict) else {}
+                    emit({"type": "tool_use", "id": event["id"], "name": event["name"],
+                          "input": {"action": tech_input.get("action", ""),
+                                    "stage": tech_input.get("stage", "")},
+                          "ui_action": ""})
+                else:
+                    emit({"type": "tool_use", "id": event["id"], "name": event["name"],
+                          "input": event["input"],
+                          "ui_action": UI_ACTION_TOOLS.get(event["name"], "")})
             elif kind == "message_end":
                 stop_reason = event.get("stop_reason", "end_turn")
                 usage = event.get("usage", {})

@@ -101,34 +101,89 @@
     'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
   };
 
-  // 大流程 2/3/4 的子页面在统一工作台里没有自己的可见会话栏：它们需要的阶段
-  // 上下文、提示与可用操作统一接入父壳唯一的 #techChatPane。这里只登记这三个
-  // stage；流程 1、5 不登记，父会话栏不出现子页面附加面板。操作只引用底栏已有的
-  // STAGE_ACTIONS 代理角色，不复制任何业务逻辑。
+  // 左侧统一操作栏（第 16 步）的九阶段描述表：每个 stage 一条，键覆盖全部九个
+  // stage id，不只为 2.1–2.3 写死。ai / primary / secondary 只引用既有 STAGE_ACTIONS
+  // 的语义化动作名，不复制任何业务逻辑；transfer 为 null 时把转交意图带进会话输入区。
+  const STAGE_CHAT_ACTIONS = {
+    'requirement-create':  { ai: null, primary: 'submitRequirement',      secondary: 'saveRequirementDraft',      transfer: null, prev: false, next: true },
+    'requirement-confirm': { ai: null, primary: 'confirmRequirement',     secondary: 'returnRequirementDraft',    transfer: null, prev: true,  next: true },
+    'requirement-review':  { ai: null, primary: 'submitRequirementReview', secondary: null,                       transfer: null, prev: true,  next: true },
+    'drawing':             { ai: 'parseDrawing',    primary: 'parseDrawing',            secondary: null,          transfer: null, prev: true,  next: true },
+    'process':             { ai: 'runIntegration',  primary: 'sendIntegrationToFinance', secondary: 'runIntegration', transfer: null, prev: true, next: true },
+    'cost':                { ai: 'runCostReview',   primary: 'runCostReview',           secondary: 'confirmCostReview', transfer: null, prev: true, next: true },
+    'summary':             { ai: null, primary: 'submitProcessReportReview', secondary: 'saveProcessReport',    transfer: null, prev: true,  next: true },
+    'report-review':       { ai: null, primary: 'approveProcessReport',   secondary: 'rejectProcessReport',        transfer: null, prev: true,  next: true },
+    'report-publish':      { ai: null, primary: 'publishProcessReport',   secondary: null,                         transfer: null, prev: true,  next: false },
+  };
+
+  // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
+  // 2.3 / 3.1 / 3.2 / 3.3 一一对应，缺上下文时 stageAgentContext() 返回 null 并
+  // 不回退成任何别的 stage，父会话栏既不冒充 2.1、也不出现子页面附加面板。操作只引用
+  // 底栏已有的 STAGE_ACTIONS 语义动作名，不复制任何业务逻辑。
   const STAGE_AGENT_CONTEXT = {
-    drawing: {
+    'requirement-create': {
+      pageContext: '1.1 创建需求',
+      label: '创建需求',
+      hint: '可让我补全需求字段、带入附件或发起需求解析；提交确认与保存草稿请用左侧操作栏。',
+      actions: ['primary', 'secondary'],
+    },
+    'requirement-confirm': {
+      pageContext: '1.2 确认需求',
+      label: '确认需求',
+      hint: '可让我汇总待澄清问题与完整性检查结果；通过确认或驳回请用左侧操作栏。',
+      actions: ['primary', 'secondary'],
+    },
+    'requirement-review': {
+      pageContext: '1.3 审核需求',
+      label: '审核需求',
+      hint: '可让我汇总审核材料与审核摘要；审核结论由具备权限的人提交，请用左侧操作栏。',
+      actions: ['primary'],
+    },
+    'drawing': {
       pageContext: '2.1 图纸解析',
       label: '图纸解析',
       hint: '右侧看板显示解析进度与零件结果；可以在这里追问解析结果，或直接说「开始解析」。',
       actions: ['primary'],
     },
-    process: {
+    'process': {
       pageContext: '2.2 组装与整合',
       label: '组装与整合',
       hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
       actions: ['primary', 'secondary'],
     },
-    cost: {
+    'cost': {
       pageContext: '2.3 成本测算',
       label: '成本测算',
       hint: '可追问成本构成与零件测算结果；重算与确认成本请用底栏操作。',
       actions: ['primary', 'secondary'],
+    },
+    'summary': {
+      pageContext: '3.1 汇总结果',
+      label: '汇总结果',
+      hint: '可让我汇总各步骤数据并生成报告草稿；保存与提交审核请用左侧操作栏。',
+      actions: ['primary', 'secondary'],
+    },
+    'report-review': {
+      pageContext: '3.2 结果审核',
+      label: '结果审核',
+      hint: '可让我读取报告与版本、汇总审核摘要；通过或退回由具备权限的人提交。',
+      actions: ['primary', 'secondary'],
+    },
+    'report-publish': {
+      pageContext: '3.3 发布并回传报价',
+      label: '发布并回传报价',
+      hint: '可让我读取发布状态与回传结果；正式发布与回传报价请用左侧操作栏。',
+      actions: ['primary'],
     },
   };
 
   const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
 
   const state = { stage: '', project: '', taskId: '', progress: null };
+  // 左侧「失败重试」重跑的最近一次经桥动作：{ kind, name, payload, label }。
+  // 只在真正发出看板命令时记录，重试复用同一条通道，不重新发明流程。
+  let lastBoardAction = null;
+  let lastActionFailed = false;
   // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
   const projectNames = new Map();
 
@@ -508,6 +563,7 @@
       else setBoardNotice('');
       syncActionBar();
       syncAgentStageContext();
+      syncChatActions();
       renderContextSubsteps();
     });
     outlet.append(iframe);
@@ -515,6 +571,7 @@
     // 再用看板回传的 action-state 覆盖。
     renderContextSubsteps();
     syncActionBar();
+    syncChatActions();
   }
 
   /* 新增工艺待办（无 project、有 task_id）用 tech-task.html 建项，不在看板协议范围内。 */
@@ -533,9 +590,11 @@
         syncActionBar();
         renderContextSubsteps();
         syncAgentStageContext();
+        syncChatActions();
       }).catch((error) => {
         setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。');
         syncActionBar();
+        syncChatActions();
       });
     } catch (error) {
       setBoardNotice('看板尚未就绪，请稍后重试。');
@@ -578,14 +637,20 @@
     const bridge = boardBridge();
     if (!bridge || typeof bridge.executeAction !== 'function') {
       setBoardNotice(`${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`);
+      lastActionFailed = true;
+      syncChatActions();
       return;
     }
     setBoardNotice('');
+    lastBoardAction = { kind: 'action', name: actionName, label, role };
+    lastActionFailed = false;
     Promise.resolve(bridge.executeAction(actionName, { label, role }))
-      .then(() => { syncActionBar(); })
+      .then(() => { lastActionFailed = false; syncActionBar(); syncChatActions(); })
       .catch((error) => {
+        lastActionFailed = true;
         setBoardNotice((error && error.message) || `${label || actionName} 执行失败`);
         syncActionBar();
+        syncChatActions();
       });
   }
 
@@ -616,6 +681,142 @@
     }
     renderActionButton(primary, actions.primary, actions.primaryLabel, 'primary');
     renderActionButton(secondary, actions.secondary, actions.secondaryLabel, 'secondary');
+  }
+
+  /* ---------------------------------------------------- 左侧统一操作栏（第 16 步）
+   * 与报价 Agent 同级、按 stage 动态变化：文案 / 可见 / 可用全部来自九阶段描述表
+   * STAGE_CHAT_ACTIONS 与看板回传的 action-state，不查 iframe DOM、不写死 selector。
+   * 主 / 次 / AI 走 executeAction，上一步 / 下一步走 applyStage，附件复用既有 ＋
+   * 能力菜单，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
+  function chatActionEntry() {
+    return STAGE_CHAT_ACTIONS[state.stage] || null;
+  }
+  function chatActionLabel(name) {
+    const routing = STAGE_ACTIONS[state.stage] || {};
+    if (name === routing.primary) return routing.primaryLabel || name;
+    if (name === routing.secondary) return routing.secondaryLabel || name;
+    const entry = chatActionEntry();
+    if (entry && name === entry.ai) return 'AI 执行';
+    return name;
+  }
+  function boardActionReady(name) {
+    if (!name) return false;
+    const snapshot = boardSnapshot();
+    const entry = boardActionState(name);
+    if (!snapshot || !snapshot.ready || !entry) return false;
+    return entry.enabled !== false && entry.busy !== true && Boolean(state.project);
+  }
+  function setChatButton(button, opts) {
+    if (!button) return;
+    const visible = opts.visible !== false;
+    button.hidden = !visible;
+    button.disabled = !visible || opts.enabled === false;
+    if (opts.label) button.textContent = opts.label;
+    button.title = opts.title || opts.label || '';
+  }
+  function openChatCapabilities() {
+    const menu = $('ocCapabilityMenu');
+    const plus = $('ocPlus');
+    if (!menu || !plus) return;
+    if (menu.hidden) plus.click();
+  }
+  function transferCurrentTask() {
+    const entry = chatActionEntry();
+    if (entry && entry.transfer) {
+      runBoardAction(entry.transfer, '转交任务', 'transfer');
+      return;
+    }
+    const input = $('ocInput');
+    if (!input) return;
+    input.value = '请把当前任务转交：';
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch (error) { /* 忽略 */ }
+  }
+  function replayLastBoardAction() {
+    if (!lastBoardAction) return;
+    runBoardAction(lastBoardAction.name, lastBoardAction.label, lastBoardAction.role || 'primary');
+  }
+  function syncChatActions() {
+    const bar = $('techChatActions');
+    if (!bar) return;
+    const entry = chatActionEntry();
+    if (!entry) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    setChatButton($('techChatAttach'), { label: '附件', enabled: true });
+    setChatButton($('techChatAiRun'), {
+      label: 'AI 执行',
+      visible: Boolean(entry.ai),
+      enabled: boardActionReady(entry.ai),
+    });
+    setChatButton($('techChatPrimary'), {
+      label: chatActionLabel(entry.primary),
+      visible: Boolean(entry.primary),
+      enabled: boardActionReady(entry.primary),
+    });
+    setChatButton($('techChatSecondary'), {
+      label: chatActionLabel(entry.secondary),
+      visible: Boolean(entry.secondary),
+      enabled: boardActionReady(entry.secondary),
+    });
+    const prevTarget = entry.prev ? STAGES[Math.max(0, stageIndex(state.stage) - 1)] : null;
+    const nextIdx = stageIndex(state.stage);
+    const nextTarget = entry.next && nextIdx >= 0 ? STAGES[nextIdx + 1] : null;
+    setChatButton($('techChatPrev'), {
+      label: '上一步',
+      visible: Boolean(entry.prev),
+      enabled: Boolean(prevTarget) && (Boolean(state.project) || prevTarget.id === 'requirement-create'),
+    });
+    setChatButton($('techChatNext'), {
+      label: '下一步',
+      visible: Boolean(entry.next),
+      enabled: Boolean(nextTarget) && (Boolean(state.project) || nextTarget.id === 'requirement-create'),
+    });
+    setChatButton($('techChatTransfer'), { label: '转交任务', enabled: Boolean(state.project) });
+    setChatButton($('techChatRetry'), {
+      label: '失败重试',
+      enabled: Boolean(lastBoardAction) && lastActionFailed && Boolean(state.project),
+    });
+  }
+  function bindChatToolbar() {
+    const aiBtn = $('techChatAiRun');
+    const primaryBtn = $('techChatPrimary');
+    const secondaryBtn = $('techChatSecondary');
+    const prevBtn = $('techChatPrev');
+    const nextBtn = $('techChatNext');
+    const transferBtn = $('techChatTransfer');
+    const attachBtn = $('techChatAttach');
+    const retryBtn = $('techChatRetry');
+    if (attachBtn) attachBtn.addEventListener('click', openChatCapabilities);
+    if (transferBtn) transferBtn.addEventListener('click', transferCurrentTask);
+    if (retryBtn) retryBtn.addEventListener('click', replayLastBoardAction);
+    if (aiBtn) aiBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      if (entry && entry.ai) runBoardAction(entry.ai, chatActionLabel(entry.ai), 'ai');
+    });
+    if (primaryBtn) primaryBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      if (entry && entry.primary) runBoardAction(entry.primary, chatActionLabel(entry.primary), 'primary');
+    });
+    if (secondaryBtn) secondaryBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      if (entry && entry.secondary) runBoardAction(entry.secondary, chatActionLabel(entry.secondary), 'secondary');
+    });
+    // 上一步 / 下一步复用既有 applyStage，与底栏共用同一条切步通道。
+    if (prevBtn) prevBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      const idx = stageIndex(state.stage);
+      if (!entry || !entry.prev || idx <= 0) return;
+      applyStage(STAGES[idx - 1].id, { project: state.project });
+    });
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      const idx = stageIndex(state.stage);
+      if (!entry || !entry.next || idx < 0 || idx >= STAGES.length - 1) return;
+      applyStage(STAGES[idx + 1].id, { project: state.project });
+    });
   }
 
   /* ---------------------------------------------------- 左侧唯一 Agent 会话栏 */
@@ -671,6 +872,15 @@
     runBoardAction(action, label, role);
   });
 
+  // tech_ui 的 set_stage：Agent 只表达「切到某一步」，这里按九阶段白名单校验后走
+  // 既有 applyStage，与顶部流程 / 底栏 / 左侧操作栏共用同一条切步通道。
+  window.addEventListener('cpq:tech-agent:set-stage', (event) => {
+    const detail = event.detail || {};
+    const stage = String(detail.stage || '');
+    if (!stages.has(stage)) return;   // 只接受九个 stage 白名单，越界直接忽略
+    applyStage(stage, { project: state.project });
+  });
+
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
     if (!stages.has(stageId)) {
@@ -685,6 +895,7 @@
     pushState();
     refreshProgress();
     syncAgentStageContext();
+    syncChatActions();
   }
 
   const prevBtn = $('techPrev');
@@ -1003,6 +1214,7 @@
         if (message) setBoardNotice(message);
       }
       syncActionBar();
+      syncChatActions();
       if (type === 'action-state' || type === 'selection-changed' || type === 'ready') {
         renderContextSubsteps();
       }
@@ -1016,6 +1228,7 @@
   renderTop();
   mountStageFrame();
   syncAgentStageContext();
+  bindChatToolbar();
   bindTechNav();
   bindTechSettingsModal();
   refreshTechModelLabel();

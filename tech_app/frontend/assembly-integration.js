@@ -957,7 +957,7 @@ async function aiRunAll() {
 /* ------------------------------------------------------- 模型参数设置
  * 面板实现共用 llm-settings-panel.js（首页、2.1 Agent 小窗、这里都是同一份）——
  * 三处各写一套表单正是之前"首页改的和智能体里显示的对不上"的根因。
- * 这里只负责把它挂进一个贴着药丸的弹层，并把当前语言模型显示在药丸上。
+ * 这里只负责把它挂进一个贴着药丸的弹层，并把唯一当前模型显示在药丸上。
  */
 let aiPop = null;
 
@@ -997,14 +997,14 @@ function aiOpenSettings(anchor) {
 function aiSetModelLabel(settings) {
   const pill = $ai('aiModelPill');
   if (!pill) return;
-  const options = [...(settings?.text_options || []), ...(settings?.vision_options || [])];
-  const label = id => options.find(option => option.id === id)?.label || id;
-  const text = settings?.text_model ? label(settings.text_model) : '未配置模型';
+  // 唯一模型口径：报价 /api/settings 只给一个 model + 同一份 options，技术工艺
+  // 不再维护两套模型候选；药丸与 title 只显示这一个模型。
+  const options = settings?.options || [];
+  const modelId = String(settings?.model || '').trim();
+  const option = options.find(item => item && item.id === modelId);
+  const text = (option && option.label) || modelId || '未配置模型';
   pill.querySelector('[data-model-name]').textContent = text;
-  // 参数推荐带图时走多模态，工艺/成本走语言模型 —— 两个都写进 title，免得
-  // 药丸上只显示一个，改完另一个还以为没生效。
-  pill.title = `语言模型：${settings?.text_model || '未配置'}\n`
-    + `多模态模型：${settings?.vision_model || '未配置'}`;
+  pill.title = `当前模型：${text}`;
 }
 
 async function aiLoadModelLabel() {

@@ -352,6 +352,11 @@
   }
 
   function handleEvent(ctx, event) {
+    // 统一结构化 UI 事件（第 17 步）：Agent 只表达意图，前端按固定映射渲染。
+    if (event.type === "tech_ui") {
+      runTechUi(event.tech_ui || {});
+      return;
+    }
     if (event.type === "text") {
       ctx.full += event.text;
       ctx.text.textContent = ctx.full;
@@ -359,6 +364,8 @@
       return;
     }
     if (event.type === "tool_use") {
+      // tech_ui 走独立 tech_ui 帧渲染，不再画一张通用工具卡（避免两份说法）。
+      if (event.name === "tech_ui") return;
       addToolCard(ctx, event);
       // Agent 决定开始解析：交给平台既有流水线执行，不在这里另起一套解析逻辑。
       if (event.ui_action === "parse") requestParse("Agent");
@@ -1586,6 +1593,12 @@
   // 不跨 iframe 搬运或克隆 DOM，也不触碰消息历史、草稿、滚动位置与项目绑定；
   // 父壳传 null（流程 1、5）时整块移除。
   let stageContext = null;
+  // 独立打开的 2.1 图纸解析页（没有统一工作台 #techChatPane）没有父壳注入阶段
+  // 上下文，它本身就是 2.1 步骤：只在发请求时用它当 page_context，不渲染额外上下文
+  // 卡。统一工作台里由父壳按当前 stage 注入九阶段之一的上下文，这里不参与。
+  function standalonePageContext() {
+    return document.getElementById("techChatPane") ? "" : "2.1 图纸解析";
+  }
 
   function contextHost() {
     const pane = $("techChatPane");
@@ -1634,10 +1647,124 @@
   }
 
   function currentPageContext() {
-    return (stageContext && stageContext.pageContext) || "2.1 图纸解析";
+    return (stageContext && stageContext.pageContext) || standalonePageContext();
   }
 
   window.addEventListener("cpq:tech-agent:stage-context", (event) => setStageContext(event.detail || null));
+
+  // ---------------------------------------------------------------- tech_ui（第 17 步）
+  // 与报价 cpq_ui 同构的统一结构化界面事件：Agent 只表达意图，前端按固定映射落到既有
+  // 宿主（#ocResultActions / #ocTaskProgressHost）与看板桥；模型字符串只经 textContent
+  // 呈现，绝不当 HTML 注入，未知 action 明确报错而不是静默忽略。
+  const TECH_UI_STAGES = [
+    "requirement-create", "requirement-confirm", "requirement-review",
+    "drawing", "process", "cost", "summary", "report-review", "report-publish",
+  ];
+  // 当前 stage → 看板字段回填动作：复用既有具名动作，不为 tech_ui 新造业务函数。
+  const TECH_UI_FILL_ACTIONS = {
+    "requirement-confirm": "applyConfirmationNote",
+    "requirement-review": "applyReviewNote",
+    "summary": "updateProcessReportFields",
+    "report-review": "applyReportReviewNote",
+    "report-publish": "updateReportDistribution",
+  };
+  const TECH_UI_ACTIONS = {
+    focus_view: (ui) => techUiFocusView(ui),
+    refresh_view: () => techUiRefreshView(),
+    fill_fields: (ui) => techUiFillFields(ui),
+    select_part: (ui) => techUiSelectPart(ui),
+    show_result_actions: (ui) => techUiShowResultActions(ui),
+    show_progress: (ui) => techUiShowProgress(ui),
+    set_stage: (ui) => techUiSetStage(ui),
+    request_confirmation: (ui) => techUiRequestConfirmation(ui),
+  };
+
+  function techUiBridge() {
+    return (window.TechBoardBridge && typeof window.TechBoardBridge.executeAction === "function")
+      ? window.TechBoardBridge : null;
+  }
+  function techUiFocusView(ui) {
+    const view = String((ui && ui.view) || "").trim();
+    if (!view) { pushSystem("看板聚焦失败：缺少视图名。"); return; }
+    boardNavigateView(view, { label: (ui && ui.label) || view });
+  }
+  function techUiRefreshView() {
+    const bridge = techUiBridge();
+    if (!bridge) { pushSystem("看板尚未就绪，暂时无法刷新视图。"); return; }
+    Promise.resolve(bridge.executeAction("refreshData", { label: "刷新看板" }))
+      .catch(error => pushSystem(`刷新看板失败：${(error && error.message) || "看板未响应"}`));
+  }
+  function techUiFillFields(ui) {
+    const stage = String((ui && ui.stage) || boardStage() || "");
+    const actionName = TECH_UI_FILL_ACTIONS[stage];
+    if (!actionName) { pushSystem(`「${stage || "当前步骤"}」暂不支持自动回填字段。`); return; }
+    const bridge = techUiBridge();
+    if (!bridge) { pushSystem("看板尚未就绪，暂时无法回填字段。"); return; }
+    const fields = (ui && ui.fields) || {};
+    Promise.resolve(bridge.executeAction(actionName, { fields: fields, stage: stage }))
+      .catch(error => pushSystem(`回填字段失败：${(error && error.message) || "看板未响应"}`));
+  }
+  function techUiSelectPart(ui) {
+    const partId = String((ui && ui.part_id) || "").trim();
+    if (!partId) { pushSystem("打开零件失败：缺少 part_id。"); return; }
+    const bridge = techUiBridge();
+    if (!bridge) { pushSystem("看板尚未就绪，暂时无法打开零件。"); return; }
+    Promise.resolve(bridge.executeAction("selectPart", { part_id: partId }))
+      .catch(error => pushSystem(`打开零件失败：${(error && error.message) || "看板未响应"}`));
+  }
+  function techUiShowResultActions(ui) {
+    applyDrawingResultSummary();
+    if (ui && ui.note) noteInThread(ui.note);
+  }
+  function techUiShowProgress(ui) {
+    if (ui && (ui.taskId || ui.task_id || ui.progress || ui.log)) renderTaskProgress(ui);
+    else if (ui && ui.note) noteInThread(ui.note);
+  }
+  function techUiSetStage(ui) {
+    const stage = String((ui && ui.stage) || "").trim();
+    if (TECH_UI_STAGES.indexOf(stage) < 0) { pushSystem(`切换步骤失败：未知步骤 ${stage || "(空)"}。`); return; }
+    // 交给父壳既有切步通道；父壳再按同一份九阶段白名单校验后 applyStage。
+    window.dispatchEvent(new CustomEvent("cpq:tech-agent:set-stage", { detail: { stage: stage } }));
+  }
+  // request_confirmation：固定确认卡片，只有用户点「确认」才执行 target，绝不自动执行。
+  function techUiRequestConfirmation(ui) {
+    const label = String((ui && ui.label) || (ui && ui.note) || "该操作需要你确认");
+    const target = String((ui && ui.target) || "");
+    const wrap = el("div", "oc-amsg");
+    wrap.append(el("div", "oc-aav", "?"));
+    const body = el("div", "oc-abody");
+    const card = el("div", "oc-confirm-card");
+    card.append(el("div", "oc-confirm-text", label));
+    const row = el("div", "oc-confirm-row");
+    const okButton = el("button", "oc-confirm-ok", "确认");
+    okButton.type = "button";
+    const cancelButton = el("button", "oc-confirm-cancel", "取消");
+    cancelButton.type = "button";
+    cancelButton.addEventListener("click", () => wrap.remove());
+    okButton.addEventListener("click", () => {
+      wrap.remove();
+      if (!target) return;
+      const bridge = techUiBridge();
+      if (bridge) {
+        Promise.resolve(bridge.executeAction(target, { source: "tech_ui-confirmation" }))
+          .catch(error => pushSystem(`「${target}」执行失败：${(error && error.message) || "看板未响应"}`));
+      } else {
+        boardNavigateView(target, { label: target });
+      }
+    });
+    row.append(okButton, cancelButton);
+    card.append(row);
+    body.append(card);
+    wrap.append(body);
+    clearEmpty();
+    tinner.append(wrap);
+    scrollDown();
+  }
+  function runTechUi(ui) {
+    const action = TECH_UI_ACTIONS[(ui && ui.action) || ""];
+    if (!action) { pushSystem(`暂不支持的界面动作：${(ui && ui.action) || "(空)"}。`); return; }
+    action(ui || {});
+  }
 
   // 供统一工作台左侧导航复用（新对话 / 设置 / 阶段上下文），旧页面不受影响。
   window.ocTechAgent = {

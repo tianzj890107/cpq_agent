@@ -674,10 +674,14 @@ function crOpenSettings(anchor) {
 function crSetModelLabel(settings) {
   const pill = $cr('crModelPill');
   if (!pill) return;
-  const options = [...(settings?.text_options || []), ...(settings?.vision_options || [])];
-  const label = id => options.find(option => option.id === id)?.label || id;
+  // 唯一模型口径：与 assembly-integration.js / agent-chat.js 一致，只读报价
+  // /api/settings 的单一 model + options。
+  const options = settings?.options || [];
+  const modelId = String(settings?.model || '').trim();
+  const option = options.find(item => item && item.id === modelId);
   pill.querySelector('[data-model-name]').textContent =
-    settings?.text_model ? label(settings.text_model) : '未配置模型';
+    (option && option.label) || modelId || '未配置模型';
+  pill.title = `当前模型：${(option && option.label) || modelId || '未配置模型'}`;
 }
 async function crLoadModelLabel() {
   if (!window.LlmSettingsPanel) { crSetModelLabel(null); return; }

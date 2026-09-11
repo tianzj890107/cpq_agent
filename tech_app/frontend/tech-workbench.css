@@ -193,6 +193,44 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   overflow-y: auto;
 }
 #techChatPane .oc-tinner { max-width: none; }
+/* ---------- 左侧统一操作栏（第 16 步）：按 stage 动态显隐 ---------- */
+.tech-chat-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: .5px solid var(--twb-border);
+  background: var(--twb-card);
+}
+.tech-chat-actions[hidden] { display: none; }
+.tech-chat-actions > button {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--twb-border);
+  border-radius: 9999px;
+  background: var(--twb-card);
+  color: var(--twb-text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.tech-chat-actions > button[hidden] { display: none; }
+.tech-chat-actions > button:hover:not(:disabled) {
+  border-color: var(--twb-primary);
+  color: var(--twb-primary);
+}
+.tech-chat-actions > button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.tech-chat-actions > button:focus-visible {
+  outline: 2px solid var(--twb-primary);
+  outline-offset: 1px;
+}
 #techChatPane .oc-composer {
   flex: 0 0 auto;
   border-top: .5px solid var(--twb-border);

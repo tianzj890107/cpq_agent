@@ -576,3 +576,30 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 }
 .oc-retry-row { display: flex; order: 1; padding: 2px 0 4px 38px; }
 .oc-chip-retry { padding: 4px 12px; font-size: 12px; }
+
+/* tech_ui（第 17 步）：会话流内的固定确认卡片 —— 只有用户点击「确认」才执行 target，
+   不覆盖右侧看板、不建父级 Modal。 */
+.oc-confirm-card {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--oc-accent, #0067D1);
+  border-radius: 10px;
+  background: var(--oc-bg-1, #f5f8fd);
+}
+.oc-confirm-text { font-size: 13px; line-height: 1.5; color: var(--oc-text, #1f2329); white-space: pre-wrap; }
+.oc-confirm-row { display: flex; gap: 8px; margin-top: 10px; }
+.oc-confirm-ok, .oc-confirm-cancel {
+  padding: 4px 14px;
+  border-radius: 9999px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--oc-border, #d9dce1);
+  background: #fff;
+  color: var(--oc-text, #1f2329);
+}
+.oc-confirm-ok { border-color: var(--oc-accent, #0067D1); background: var(--oc-accent, #0067D1); color: #fff; }
+.oc-confirm-ok:disabled, .oc-confirm-cancel:disabled { opacity: .5; cursor: not-allowed; }
+.oc-confirm-ok:focus-visible, .oc-confirm-cancel:focus-visible {
+  outline: 2px solid var(--oc-accent, #0067D1);
+  outline-offset: 1px;
+}

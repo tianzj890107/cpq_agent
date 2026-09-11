@@ -53,7 +53,7 @@ class TechFullWidthBoardAndSingleAgentPaneRedTest(unittest.TestCase):
         )
         self.assertIn("max-width:none", re.sub(r"\s+", "", container_rule.group(1)))
 
-    def test_parent_agent_has_stage_context_for_only_major_flows_two_three_four(self):
+    def test_parent_agent_has_stage_context_for_all_nine_stages(self):
         mapping = re.search(
             r"(?:const|let|var)\s+STAGE_AGENT_CONTEXT\s*=\s*\{([\s\S]*?)\n\s*\};",
             self.shell_js,
@@ -62,8 +62,11 @@ class TechFullWidthBoardAndSingleAgentPaneRedTest(unittest.TestCase):
         body = mapping.group(1)
         for stage in ("drawing", "process", "cost"):
             self.assertRegex(body, rf"(?:['\"]{stage}['\"]|\b{stage}\b)\s*:")
-        for stage in ("requirement-create", "report"):
-            self.assertNotRegex(body, rf"['\"]{stage}['\"]\s*:")
+        # 契约更新（第 19 步 Spec）：九个内部阶段各有独立 page_context，旧契约
+        # 「只登记大流程 2/3/4」已被新 Spec 取代，1.x 与 3.x 也必须各自登记。
+        for stage in ("requirement-create", "requirement-confirm", "requirement-review",
+                      "summary", "report-review", "report-publish"):
+            self.assertRegex(body, rf"['\"]{stage}['\"]\s*:")
 
     def test_stage_context_sync_targets_the_single_parent_agent_pane(self):
         self.assertEqual(self.shell_html.count('id="techChatPane"'), 1)
