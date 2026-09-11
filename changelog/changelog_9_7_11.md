@@ -708,3 +708,15 @@
 - 边界：未改 `tech-board-bridge.js`（`DEFAULT_TIMEOUT` 仍 20000，`sync-state` 仍 8000）；未改事件信封结构与字段；未新增第二套任务轮询；未读 iframe 内部 DOM、未引入按钮 id / selector；未改后端接口；未改 Spec 与红测。
 - 测试（实际运行）：`python3 -m unittest tests.test_tech_board_deferred_actions_red -v` → **10/10 通过**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **376 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **374 项通过、7 跳过、0 失败**；`node --check` 通过 `tech-board-runtime.js` / `tech-workbench.js` / `app.js` / `assembly-integration.js` / `cost-review.js` / `requirement-create.js`；`git diff --check` 通过。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 71. 报价 / 规则 / XBOM 四页 AI 徽标状态语义统一（9-11）
+
+- 问题定位：报价 Agent 页 `确认需求解析结果.html` 的 `.ai-badge` 基础规则仍写着 `background: var(--gradient-ai); color: white;`，虽被下方「报价智能体强调控件」规则覆盖（实际渲染已是浅蓝描边），但自上而下阅读会误判成"报价实心渐变"；同时 `报价规则.html`、`规则助手-规则配置.html`、`XBOM智能体-配置BOM生成.html` 三页 `.ai-badge` 仍是纯实心渐变。技术工艺 `.tech-ai-badge` 早已是「常态浅蓝描边 + hover 实心深蓝」。
+- 统一后的状态语义（四页一致）：常态 `background: var(--color-primary-page)` + `color: var(--color-primary)` + `border: 1px solid var(--color-primary-border)`；hover `background: var(--color-primary-active)` + `color: white` + `border-color: var(--color-primary-active)`。
+- token 取值（四页 + 技术 CSS 一致）：`--color-primary-page: #F4F8FF`、`--color-primary: #0060E6`、`--color-primary-border: #B4D0F8`、`--color-primary-active: #00419F`。
+- 实现（4 个文件，均只改 `.ai-badge` 规则，不动其它元素）：
+  - `确认需求解析结果.html`：删除 `.ai-badge` 内已失效的 `background: var(--gradient-ai)` / `color: white` 死规则并加注释说明外观由下方强调控件统一决定；该页 hover 态本已由强调控件块提供，未新增重复规则。
+  - `报价规则.html` / `规则助手-规则配置.html` / `XBOM智能体-配置BOM生成.html`：常态由实心渐变改为浅蓝描边，并新增 `.ai-badge:hover` 实心深蓝态。
+- 边界：未改技术工艺 `.tech-ai-badge`（原本即符合）；未删除或改写各页其它 `var(--gradient-ai)` 使用（主按钮、渐变文字等语义不变）；未改徽标 DOM、文案、缓存版本号、后端接口与模型配置；未覆盖工作区中其它任务尚未提交的修改。
+- 测试（实际运行）：`python3 -m unittest tests.test_ai_badge_unified_state_semantics_red -v` → **4/4 通过**（Red 基线为 3 失败 1 通过）；`python3 -m unittest tests.test_quote_agent_emphasis_hover_red tests.test_quote_tech_agent_shell_parity_red tests.test_primary_button_blue_gradient_red -v` → **17/17 通过**；`python3 -m unittest discover -s tests -p 'test_*.py'` → **392 项通过、7 跳过、0 失败**；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
