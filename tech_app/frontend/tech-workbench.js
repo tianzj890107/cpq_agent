@@ -95,7 +95,7 @@
     'requirement-review':  { primary: 'submitRequirementReview', primaryLabel: '提交审核意见', secondary: null, secondaryLabel: '' },
     'drawing':             { primary: 'parseDrawing',            primaryLabel: '▶ 开始解析', secondary: null, secondaryLabel: '' },
     'process':             { primary: 'sendIntegrationToFinance', primaryLabel: '✓ 确认工艺并发送财务', secondary: 'runIntegration', secondaryLabel: '▶ 开始整合分析' },
-    'cost':                { primary: 'runCostReview',           primaryLabel: '▶ 逐件测算并汇总', secondary: 'confirmCostReview', secondaryLabel: '✓ 确认成本' },
+    'cost':                { primary: 'runCostReview',           primaryLabel: '一键测算全部成本', secondary: 'confirmCostReview', secondaryLabel: '✓ 确认成本' },
     'summary':             { primary: 'submitProcessReportReview', primaryLabel: '提交审核', secondary: 'saveProcessReport', secondaryLabel: '保存' },
     'report-review':       { primary: 'approveProcessReport',    primaryLabel: '审核通过并发布', secondary: 'rejectProcessReport', secondaryLabel: '退回汇总' },
     'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
@@ -108,7 +108,7 @@
     'requirement-create':  { ai: null, primary: 'submitRequirement',      secondary: 'saveRequirementDraft',      transfer: null, prev: false, next: true },
     'requirement-confirm': { ai: null, primary: 'confirmRequirement',     secondary: 'returnRequirementDraft',    transfer: null, prev: true,  next: true },
     'requirement-review':  { ai: null, primary: 'submitRequirementReview', secondary: null,                       transfer: null, prev: true,  next: true },
-    'drawing':             { ai: 'parseDrawing',    primary: 'parseDrawing',            secondary: null,          transfer: null, prev: true,  next: true },
+    'drawing':             { ai: 'parseDrawing',    primary: 'parseDrawing',            bulk: 'runAllPartProcesses', secondary: null, transfer: null, prev: true, next: true },
     'process':             { ai: 'runIntegration',  primary: 'sendIntegrationToFinance', secondary: 'runIntegration', transfer: null, prev: true, next: true },
     'cost':                { ai: 'runCostReview',   primary: 'runCostReview',           secondary: 'confirmCostReview', transfer: null, prev: true, next: true },
     'summary':             { ai: null, primary: 'submitProcessReportReview', secondary: 'saveProcessReport',    transfer: null, prev: true,  next: true },
@@ -552,6 +552,9 @@
     }
     const iframe = document.createElement('iframe');
     iframe.id = 'techStageFrame';
+    // 满高裁切由结果卡的 overflow:hidden 负责：iframe 自身不带圆角，避免二次圆角 /
+    // 双边框；样式契约见 tech-workbench.css 的 .tech-stage-frame。
+    iframe.className = 'tech-stage-frame';
     iframe.title = meta.label;
     iframe.setAttribute('data-stage', state.stage);
     iframe.src = childUrl(state.stage);
@@ -686,8 +689,8 @@
   /* ---------------------------------------------------- 左侧统一操作栏（第 16 步）
    * 与报价 Agent 同级、按 stage 动态变化：文案 / 可见 / 可用全部来自九阶段描述表
    * STAGE_CHAT_ACTIONS 与看板回传的 action-state，不查 iframe DOM、不写死 selector。
-   * 主 / 次 / AI 走 executeAction，上一步 / 下一步走 applyStage，附件复用既有 ＋
-   * 能力菜单，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
+   * 主 / 次 / AI 走 executeAction，上一步 / 下一步走 applyStage，附件直接打开输入区
+   * 的隐藏文件选择器，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
   function chatActionEntry() {
     return STAGE_CHAT_ACTIONS[state.stage] || null;
   }
@@ -711,14 +714,17 @@
     const visible = opts.visible !== false;
     button.hidden = !visible;
     button.disabled = !visible || opts.enabled === false;
+    // 主操作 / 批量入口是报价式蓝色实心主按钮（.primary），其余导航型按钮保持白底描边；
+    // 统一在这里按 variant 标记，不在各处手写 class。
+    button.classList.toggle('primary', opts.variant === 'primary');
     if (opts.label) button.textContent = opts.label;
     button.title = opts.title || opts.label || '';
   }
-  function openChatCapabilities() {
-    const menu = $('ocCapabilityMenu');
-    const plus = $('ocPlus');
-    if (!menu || !plus) return;
-    if (menu.hidden) plus.click();
+  // 附件：与输入区回形针同一个入口，点击在同一次用户点击链路里直接打开隐藏的
+  // 原生文件选择器 —— 不弹菜单、不先导航到上传页面，否则会失去 user activation。
+  function openChatFilePicker() {
+    const input = $('ocChatFileInput');
+    if (input) input.click();
   }
   function transferCurrentTask() {
     const entry = chatActionEntry();
@@ -746,15 +752,23 @@
     }
     bar.hidden = false;
     setChatButton($('techChatAttach'), { label: '附件', enabled: true });
+    // AI 执行与主操作指向同一动作时不重复渲染第二个同样的蓝色按钮，只保留主操作入口。
     setChatButton($('techChatAiRun'), {
       label: 'AI 执行',
-      visible: Boolean(entry.ai),
+      visible: Boolean(entry.ai) && entry.ai !== entry.primary,
       enabled: boardActionReady(entry.ai),
     });
     setChatButton($('techChatPrimary'), {
       label: chatActionLabel(entry.primary),
       visible: Boolean(entry.primary),
       enabled: boardActionReady(entry.primary),
+      variant: 'primary',
+    });
+    setChatButton($('techChatBulk'), {
+      label: '一键生成全部工艺推荐',
+      visible: Boolean(entry.bulk),
+      enabled: boardActionReady(entry.bulk),
+      variant: 'primary',
     });
     setChatButton($('techChatSecondary'), {
       label: chatActionLabel(entry.secondary),
@@ -789,7 +803,12 @@
     const transferBtn = $('techChatTransfer');
     const attachBtn = $('techChatAttach');
     const retryBtn = $('techChatRetry');
-    if (attachBtn) attachBtn.addEventListener('click', openChatCapabilities);
+    const bulkBtn = $('techChatBulk');
+    if (attachBtn) attachBtn.addEventListener('click', openChatFilePicker);
+    if (bulkBtn) bulkBtn.addEventListener('click', () => {
+      const entry = chatActionEntry();
+      if (entry && entry.bulk) runBoardAction(entry.bulk, '一键生成全部工艺推荐', 'primary');
+    });
     if (transferBtn) transferBtn.addEventListener('click', transferCurrentTask);
     if (retryBtn) retryBtn.addEventListener('click', replayLastBoardAction);
     if (aiBtn) aiBtn.addEventListener('click', () => {
@@ -1086,51 +1105,65 @@
   }
 
   /* ---------------------------------------------------------- 技术项目历史
-   * “历史记录”打开当前用户的技术项目历史抽屉：项目列表来自既有 /api/projects，
-   * 点击项目后按既有 /workflow 与项目数据换算当前 stage，在同一壳内恢复。 */
-  let historyTimer = 0;
-  function ensureHistoryUi() {
-    if ($('techHistoryDrawer')) return;
-    const mask = document.createElement('div');
-    mask.className = 'tech-history-mask';
-    mask.id = 'techHistoryMask';
-    mask.hidden = true;
-    mask.addEventListener('click', closeTechHistory);
-    const drawer = document.createElement('aside');
-    drawer.className = 'tech-history-drawer';
-    drawer.id = 'techHistoryDrawer';
-    drawer.hidden = true;
-    drawer.setAttribute('aria-label', '技术项目历史');
-    drawer.innerHTML =
-      '<div class="tech-history-head">' +
-      '<span class="tech-history-title"><i class="ti ti-history" aria-hidden="true"></i>技术项目历史</span>' +
-      '<button type="button" class="tech-history-close" aria-label="关闭历史抽屉">×</button>' +
-      '</div>' +
-      '<div class="tech-history-list" id="techHistoryList"></div>';
-    drawer.querySelector('.tech-history-close').addEventListener('click', closeTechHistory);
-    document.body.append(mask, drawer);
+   * 「历史记录」打开技术项目历史抽屉：形态与报价助手一致（340px 左滑 + 全屏遮罩 +
+   * 标题/关闭 + 新建/刷新 + 历史卡片）。DOM 是 tech-workbench.html 里的静态结构，
+   * 这里只切 .show 状态，不再动态拼第二份抽屉，也不用 hidden + 定时器做动画。
+   * 数据仍是既有 /api/projects；点击项目按既有 /workflow 与项目数据换算 stage，
+   * 在同一壳里用 applyStage 恢复，不新增删除能力、不改任何历史数据。 */
+  let historyFocusReturn = null;
+
+  function setTechHistoryOpen(open) {
+    const overlay = $('techHistoryOverlay');
+    const drawer = $('techHistoryDrawer');
+    if (!overlay || !drawer) return;
+    overlay.classList.toggle('show', Boolean(open));
+    drawer.classList.toggle('show', Boolean(open));
+  }
+  function isTechHistoryOpen() {
+    const drawer = $('techHistoryDrawer');
+    return Boolean(drawer && drawer.classList.contains('show'));
   }
   function openTechHistory() {
-    ensureHistoryUi();
-    const mask = $('techHistoryMask');
+    const overlay = $('techHistoryOverlay');
     const drawer = $('techHistoryDrawer');
-    if (!mask || !drawer) return;
-    mask.hidden = false;
-    drawer.hidden = false;
+    if (!overlay || !drawer) return;
+    historyFocusReturn = document.activeElement;
+    overlay.classList.add('show');
+    drawer.classList.add('show');
+    // 焦点进入抽屉第一个操作按钮（关闭），用户不用重新找位置。
+    const close = $('techHistoryClose');
+    if (close) close.focus();
     loadTechHistory();
   }
   function closeTechHistory() {
-    const mask = $('techHistoryMask');
+    const overlay = $('techHistoryOverlay');
     const drawer = $('techHistoryDrawer');
-    if (!mask || !drawer) return;
-    window.clearTimeout(historyTimer);
-    historyTimer = window.setTimeout(() => {
-      mask.hidden = true;
-      drawer.hidden = true;
-    }, 200);
+    if (overlay) overlay.classList.remove('show');
+    if (drawer) drawer.classList.remove('show');
+    // 关闭后焦点回到历史入口，键盘用户不丢位置；入口缺失时退回打开前的焦点。
+    if ($('techHistory')) $('techHistory').focus();
+    else if (historyFocusReturn && typeof historyFocusReturn.focus === 'function') historyFocusReturn.focus();
   }
+  function bindTechHistory() {
+    const overlay = $('techHistoryOverlay');
+    if (overlay) overlay.addEventListener('click', closeTechHistory);
+    const close = $('techHistoryClose');
+    if (close) close.addEventListener('click', closeTechHistory);
+    // 刷新只重新拉列表，不关闭抽屉。
+    const refresh = $('techHistoryRefresh');
+    if (refresh) refresh.addEventListener('click', () => loadTechHistory());
+    // 新建技术项目：关抽屉并进入统一技术主页，不调用任何删除 / 重置接口。
+    const create = $('techHistoryNew');
+    if (create) create.addEventListener('click', () => {
+      closeTechHistory();
+      location.href = '/报价首页.html?assistant=tech';
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && isTechHistoryOpen()) closeTechHistory();
+    });
+  }
+
   async function loadTechHistory() {
-    ensureHistoryUi();
     const box = $('techHistoryList');
     if (!box) return;
     box.innerHTML = '<div class="tech-history-empty">加载历史项目…</div>';
@@ -1154,13 +1187,34 @@
     rows.forEach((row) => {
       const id = row.project_id || row.id;
       const title = row.project_name || row.device_name || row.source_filename || `PRJ-${id}`;
-      const meta = `PRJ-${id}${row.created_at ? ` · ${String(row.created_at).slice(0, 10)}` : ''}`;
+      const dateText = row.created_at || row.updated_at
+        ? ` · ${String(row.created_at || row.updated_at).slice(0, 10)}`
+        : '';
+      const current = String(id) === String(state.project);
+      // 阶段 chip：优先用列表里带的阶段，其次用当前项目在本壳里的真实 stage。
+      const stageName = row.stage_label || row.stage
+        || (current ? (stageMeta(state.stage) || {}).label : '');
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'tech-history-item';
-      item.innerHTML = '<span class="tech-history-item-title"></span><span class="tech-history-item-meta"></span>';
-      item.querySelector('.tech-history-item-title').textContent = title;
-      item.querySelector('.tech-history-item-meta').textContent = meta;
+      if (current) {
+        item.classList.add('current');
+        item.setAttribute('aria-current', 'true');
+        item.title = '当前项目';
+      }
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tech-history-item-title';
+      titleEl.textContent = title;
+      const metaEl = document.createElement('span');
+      metaEl.className = 'tech-history-item-meta';
+      metaEl.textContent = `PRJ-${id}${dateText}`;
+      if (stageName) {
+        const chip = document.createElement('span');
+        chip.className = 'tech-history-chip';
+        chip.textContent = stageName;
+        metaEl.append(' ', chip);
+      }
+      item.append(titleEl, metaEl);
       item.addEventListener('click', () => techHistoryRestore(id));
       box.append(item);
     });
@@ -1233,6 +1287,7 @@
   syncAgentStageContext();
   bindChatToolbar();
   bindTechNav();
+  bindTechHistory();
   bindTechSettingsModal();
   refreshTechModelLabel();
   if (state.project) refreshProgress();

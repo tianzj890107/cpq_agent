@@ -26,28 +26,24 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
 
     def test_parent_chat_restores_single_persistent_control_hosts(self):
         for node_id in (
-            "ocPlus", "ocCapabilityMenu", "ocResultActions", "ocPartsAction",
+            "ocChatAttachBtn", "ocChatFileInput", "ocResultActions", "ocPartsAction",
             "ocQuestionsAction", "ocReportAction", "ocFilesAction", "ocFilesCount",
             "ocTaskProgressHost",
         ):
             self._one_id(node_id)
 
-    def test_plus_button_and_menu_are_accessible(self):
+    def test_attachment_button_and_hidden_file_input_are_accessible(self):
+        # 契约更新（附件直传 Spec）：统一工作台不再用 ＋ 能力菜单，附件改为回形针按钮
+        # 直接打开隐藏的多选文件输入框；旧的 ocPlus / ocCapabilityMenu 断言已被取代。
         self.assertRegex(
             self.html,
-            r'<button[^>]+id="ocPlus"[^>]+type="button"[^>]+aria-(?:label|expanded)=',
+            r'<button[^>]+id="ocChatAttachBtn"[^>]+type="button"[^>]+aria-label="上传附件"',
         )
-        self.assertRegex(self.html, r'id="ocCapabilityMenu"[^>]+role="menu"')
-        for capability, label in (
-            ("upload", "补充需求图纸"),
-            ("evidence", "解析视图"),
-            ("import3d", "导入已有 3D 模型"),
-            ("review", "版本与校核审查"),
-        ):
-            self.assertRegex(
-                self.html,
-                rf'<button[^>]+data-tech-capability="{capability}"[^>]+role="menuitem"[^>]*>[\s\S]*?{label}',
-            )
+        file_input = re.search(r'<input[^>]+id="ocChatFileInput"[^>]*>', self.html)
+        self.assertIsNotNone(file_input, "缺少隐藏附件文件输入框")
+        self.assertRegex(file_input.group(0), r'type="file"')
+        self.assertRegex(file_input.group(0), r'multiple')
+        self.assertRegex(file_input.group(0), r'hidden')
 
     def test_result_actions_are_persistent_accessible_buttons(self):
         self.assertRegex(
@@ -96,10 +92,13 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
             owner,
             f"右侧看板没有任何脚本发布 result-summary，左侧入口无数据来源（已查 {sorted(publishers)}）")
 
-    def test_menu_closes_on_escape_and_restores_focus(self):
-        self.assertRegex(self.chat, r'(?:event|e)\.key\s*===?\s*["\']Escape["\']')
-        self.assertRegex(self.chat, r'ocPlus[\s\S]{0,1200}\.focus\(')
-        self.assertRegex(self.chat, r'aria-expanded')
+    def test_unified_workbench_plus_menu_is_replaced_by_direct_attachment(self):
+        # 契约更新（附件直传 Spec）：统一工作台的 ＋ 能力菜单与 Escape / 焦点回位接线
+        # 已随菜单一并删除，改由回形针按钮在同一次点击里打开文件选择器。
+        self.assertNotIn('id="ocPlus"', self.html)
+        self.assertNotIn('id="ocCapabilityMenu"', self.html)
+        self.assertNotIn('role="menuitem"', self.html)
+        self.assertIn("ocChatAttachBtn", self.chat)
 
     def test_task_progress_is_keyed_by_task_id_and_has_failure_state(self):
         self.assertIn("ocTaskProgressHost", self.combined)
@@ -119,10 +118,9 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
         )
 
     def test_controls_have_focus_and_disabled_styles(self):
-        for selector in ("oc-ibtn", "oc-capability-item", "oc-chip", "oc-files-action"):
+        for selector in ("oc-ibtn", "oc-chip", "oc-files-action"):
             self.assertRegex(self.css, rf'\.{selector}[^{{]*:(?:focus-visible|disabled)')
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -239,6 +239,32 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   outline: 2px solid var(--twb-primary);
   outline-offset: 1px;
 }
+/* 主操作（当前阶段主要业务操作 + 批量入口）与报价 .quick-action-btn.primary 同级：
+   统一主色渐变 + 白字 + 无普通描边。次要导航（附件 / 上一步 / 下一步 / 转交 /
+   失败重试 / 解析视图等能力入口）继续走上面的白底描边胶囊，不变蓝。
+   disabled 退回描边浅色，不能仍像可点击。 */
+.tech-chat-actions > button.primary {
+  background: var(--gradient-primary);
+  color: #fff;
+  border-color: transparent;
+}
+.tech-chat-actions > button.primary:hover:not(:disabled) {
+  background: var(--gradient-primary-hover);
+  color: #fff;
+  border-color: transparent;
+}
+.tech-chat-actions > button.primary:focus-visible {
+  outline: 2px solid var(--twb-primary);
+  outline-offset: 2px;
+  color: #fff;
+}
+.tech-chat-actions > button.primary:disabled {
+  background: var(--twb-card);
+  color: var(--twb-primary);
+  border-color: var(--twb-border);
+  opacity: .5;
+  cursor: not-allowed;
+}
 #techChatPane .oc-composer {
   flex: 0 0 auto;
   border-top: .5px solid var(--twb-border);
@@ -255,6 +281,20 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   border: 0;
   border-left: .5px solid var(--twb-border);
   border-radius: 0;
+  overflow: hidden;
+  box-shadow: none;
+}
+/* 业务结果卡（报价式）：项目标题与流程条之下，当前步骤标题 / iframe 业务内容 /
+   底栏同属这一张卡；右侧列容器继续无圆角、无阴影，不形成第二张外层卡片。 */
+.tech-results-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 16px;
+  border: .5px solid var(--twb-border);
+  border-radius: 12px;
+  background: var(--twb-card);
   overflow: hidden;
   box-shadow: none;
 }
@@ -556,12 +596,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   flex-direction: column;
   overflow: hidden;
 }
-#techStageFrame {
+.tech-stage-frame {
   width: 100%;
   height: 100%;
   flex: 1 1 auto;
   min-height: 0;
   border: 0;
+  border-radius: 0;
   display: block;
   background: #fff;
 }
@@ -697,27 +738,36 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   white-space: nowrap;
 }
 
-/* ---------- 技术项目历史抽屉（沿用报价助手历史抽屉的遮罩交互） ---------- */
+/* ---------- 技术项目历史抽屉（与报价助手 #historyDrawer 同一形态） ----------
+   遮罩 opacity/visibility 过渡、抽屉 340px 左滑、标题/关闭、新建/刷新、历史卡片。 */
 .tech-history-mask {
   position: fixed;
   inset: 0;
   background: rgba(15,16,25, .35);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .18s, visibility .18s;
   z-index: 1190;
 }
+.tech-history-mask.show { opacity: 1; visibility: visible; }
 .tech-history-drawer {
   position: fixed;
   top: 0;
   left: 0;
-  width: min(360px, 88vw);
+  width: 340px;
+  max-width: 88vw;
   height: 100vh;
   background: var(--twb-card);
   border-right: .5px solid var(--twb-border);
+  box-shadow: 4px 0 24px rgba(15,16,25, .12);
+  transform: translateX(-104%);
+  transition: transform .22s ease;
   z-index: 1200;
   display: flex;
   flex-direction: column;
-  box-shadow: 8px 0 24px rgba(15,16,25, .10);
 }
-.tech-history-head {
+.tech-history-drawer.show { transform: translateX(0); }
+.tech-history-drawer .drawer-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -725,7 +775,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   padding: 14px 16px;
   border-bottom: .5px solid var(--twb-border);
 }
-.tech-history-title {
+.tech-history-drawer .drawer-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -733,23 +783,57 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-weight: 600;
   color: var(--twb-text);
 }
-.tech-history-title .ti { color: var(--twb-primary); font-size: 18px; }
-.tech-history-close {
-  border: 0;
-  background: transparent;
-  color: var(--twb-muted);
-  font-size: 18px;
-  line-height: 1;
-  padding: 4px 6px;
-  border-radius: 6px;
+.tech-history-drawer .drawer-title .ti { color: var(--twb-primary); font-size: 18px; }
+.tech-history-drawer .drawer-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: .5px solid var(--twb-border);
 }
-.tech-history-close:hover { background: var(--twb-bg-deep); color: var(--twb-text); }
-.tech-history-list {
+.tech-history-drawer .drawer-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: 10px 12px;
 }
+.tech-history-drawer .icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--twb-muted);
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.tech-history-drawer .icon-btn:hover { background: var(--twb-bg-deep); color: var(--twb-primary); }
+.tech-history-drawer .icon-btn:focus-visible { outline: 2px solid var(--twb-primary); outline-offset: 1px; }
+.tech-history-drawer .btn-mini {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border: .5px solid var(--twb-border);
+  border-radius: 9px;
+  background: var(--twb-card);
+  color: var(--twb-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.tech-history-drawer .btn-mini.primary {
+  background: var(--gradient-primary);
+  color: #fff;
+  border-color: transparent;
+}
+.tech-history-drawer .btn-mini:focus-visible { outline: 2px solid var(--twb-primary); outline-offset: 1px; }
 .tech-history-item {
   display: flex;
   flex-direction: column;
@@ -757,24 +841,40 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   width: 100%;
   text-align: left;
   padding: 10px 12px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   border: .5px solid var(--twb-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--twb-card);
   color: var(--twb-text);
   font-size: 13px;
   cursor: pointer;
 }
 .tech-history-item:hover { border-color: var(--twb-primary); background: var(--twb-primary-light); }
+.tech-history-item:focus-visible { outline: 2px solid var(--twb-primary); outline-offset: 1px; }
+.tech-history-item.current { border-color: var(--twb-primary); background: var(--twb-primary-light); }
 .tech-history-item-title {
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tech-history-item-meta { font-size: 11.5px; color: var(--twb-muted); }
+.tech-history-item-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--twb-muted);
+}
+.tech-history-chip {
+  padding: 1px 7px;
+  border-radius: 9999px;
+  background: var(--twb-bg-deep);
+  color: var(--twb-muted);
+  font-size: 11px;
+}
 .tech-history-empty {
-  padding: 28px 16px;
+  padding: 40px 16px;
   color: var(--twb-muted);
   font-size: 13px;
   text-align: center;
@@ -785,6 +885,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 /* ---------- 中等屏：中间会话列收窄，仍保持三列 ---------- */
 @media (max-width: 1180px) and (min-width: 901px) {
   .tech-workbench-body { grid-template-columns: 56px 380px minmax(0, 1fr); }
+  .tech-results-area { margin: 12px; }
 }
 
 /* ---------- 窄屏：上下排列，导航/会话/工作区均保持可访问 ---------- */
@@ -825,7 +926,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
     min-height: 62vh;
     border-left: 0;
   }
-  #techStageFrame { min-height: 62vh; }
+  .tech-stage-frame { min-height: 62vh; }
+  .tech-results-area { margin: 8px; }
   .tech-project-header { flex-wrap: wrap; }
   .tech-project-status { white-space: normal; }
   .tech-workspace-progress { flex-wrap: wrap; }

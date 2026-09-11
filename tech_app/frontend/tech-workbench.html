@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260911-bubble1" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260911-tooltrace1" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb11" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb14" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -97,9 +97,21 @@
         <!-- 左侧统一操作栏（第 16 步）：与报价 Agent 同级、按当前 stage 动态变化。
              文案 / 可见 / 可用全部来自父壳的九阶段描述表 STAGE_CHAT_ACTIONS，
              点击一律复用既有通道：主 / 次 / AI 走 TechBoardBridge.executeAction，上一步 /
-             下一步走 applyStage，附件复用既有 ＋ 能力菜单，失败重试重跑最近一次动作。 -->
+             下一步走 applyStage，附件直传走输入框隐藏文件输入，失败重试重跑最近一次动作。 -->
         <nav class="tech-chat-actions" id="techChatActions" aria-label="当前步骤操作">
           <button type="button" id="techChatAttach">附件</button>
+          <!-- 2.1 图纸解析的五项能力（原 ＋ 能力菜单）：只在 drawing 阶段显示/启用。
+               视图类（解析视图 / 导入已有 3D 模型 / 版本与校核审查）走既有看板视图导航，
+               动作类（联网核验 / 校验修正）走既有执行通道，名字与既有分派语义不变。 -->
+          <button type="button" data-tech-capability="evidence">解析视图</button>
+          <button type="button" data-tech-capability="import3d">导入已有 3D 模型</button>
+          <button type="button" data-tech-capability="review">版本与校核审查</button>
+          <button type="button" data-tech-capability="modelLookup">联网核验</button>
+          <button type="button" data-tech-capability="verify">校验修正</button>
+          <!-- 2.1 批量入口：一键生成全部工艺推荐（蓝色 primary）。语义动作名
+               runAllPartProcesses 注册在看板 app.js，复用既有单零件 process 接口串行执行；
+               单零件「工艺推荐」仍留在零件行上，用于查看 / 编辑 / 单件重算。 -->
+          <button type="button" id="techChatBulk">一键生成全部工艺推荐</button>
           <button type="button" id="techChatAiRun">AI 执行</button>
           <button type="button" id="techChatPrev">上一步</button>
           <button type="button" id="techChatNext">下一步</button>
@@ -110,12 +122,16 @@
         </nav>
         <div class="oc-composer">
           <div class="oc-cinner">
-            <!-- ＋ 与「任务文件」：统一父壳唯一的输入区入口。＋ 打开固定菜单（不是临时
-                 浮层、不做坐标计算），四项能力只把语义化名字交给看板桥。 -->
+            <!-- 附件与「任务文件」：统一父壳唯一的输入区入口。附件是回形针按钮，点击在
+                 同一次用户点击链路里直接打开下面的隐藏文件输入框（不弹菜单、不先导航）；
+                 任务文件只负责查看已上传文件，不是上传入口。 -->
             <div class="oc-inputbox">
               <div class="oc-input-tools">
-                <button class="oc-ibtn" id="ocPlus" type="button" aria-label="补充资料与审查"
-                        aria-haspopup="menu" aria-expanded="false" aria-controls="ocCapabilityMenu">＋</button>
+                <button class="oc-ibtn" id="ocChatAttachBtn" type="button" aria-label="上传附件" title="上传附件">
+                  <i class="ti ti-paperclip" aria-hidden="true"></i>
+                </button>
+                <input id="ocChatFileInput" type="file" multiple hidden
+                       accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yaml,.yml" />
                 <button class="oc-files-action" id="ocFilesAction" type="button">
                   <i class="ti ti-paperclip" aria-hidden="true"></i>
                   <span class="oc-files-action-label">任务文件</span>
@@ -125,16 +141,6 @@
               <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向工艺评估助手描述需求…" aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
-            <nav class="oc-capability-menu" id="ocCapabilityMenu" role="menu"
-                 aria-label="补充资料与审查" hidden>
-              <button class="oc-capability-item" type="button" data-tech-capability="upload" role="menuitem">补充需求图纸</button>
-              <button class="oc-capability-item" type="button" data-tech-capability="evidence" role="menuitem">解析视图</button>
-              <button class="oc-capability-item" type="button" data-tech-capability="import3d" role="menuitem">导入已有 3D 模型</button>
-              <button class="oc-capability-item" type="button" data-tech-capability="review" role="menuitem">版本与校核审查</button>
-              <!-- 业务动作入口：走 execute-action，不发 navigate-view（视图入口在上一组）。 -->
-              <button class="oc-capability-item" type="button" data-tech-capability="modelLookup" role="menuitem">联网核验</button>
-              <button class="oc-capability-item" type="button" data-tech-capability="verify" role="menuitem">校验修正</button>
-            </nav>
             <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
@@ -157,6 +163,9 @@
         <div class="tech-workspace-progress">
           <nav class="tech-steps-bar" id="techStepsBar" aria-label="工艺评估流程"></nav>
         </div>
+        <!-- 业务结果卡（报价式圆角卡）：左上项目标题、流程条之下只包这一层卡片，
+             当前步骤标题 / iframe 业务内容 / 底栏同属一张卡；右侧列容器本身不加圆角。 -->
+        <section id="techResultsArea" class="tech-results-area">
         <!-- 业务卡片标题行：左侧固定大标题，右侧一行上下文小流程（大流程 3、4 渲染成
              代理页签，active 来自看板 action-state）；#techContextNotice 只放看板桥的
              未就绪 / 失败提示，不覆盖固定大标题。 -->
@@ -184,8 +193,35 @@
             <button type="button" id="techNext" class="tech-wb-btn primary">下一步 →</button>
           </div>
         </footer>
+        </section>
       </section>
     </div>
+    <!-- 技术项目历史：与报价助手 #historyDrawer 同一形态的 340px 左滑抽屉 + 全屏遮罩。
+         结构静态存在，父壳工作台脚本只切 .show；不动态拼第二份抽屉，也不用
+         hidden + 定时器做动画。数据仍来自既有 /api/projects 与 /workflow。 -->
+    <div id="techHistoryOverlay" class="overlay tech-history-mask"></div>
+    <aside id="techHistoryDrawer" class="drawer tech-history-drawer" role="dialog" aria-modal="true"
+           aria-labelledby="techHistoryDrawerTitle">
+      <div class="drawer-header">
+        <div class="drawer-title" id="techHistoryDrawerTitle">
+          <i class="ti ti-history" aria-hidden="true"></i> 技术项目历史
+        </div>
+        <button type="button" class="icon-btn" id="techHistoryClose" aria-label="关闭历史记录">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="drawer-actions">
+        <button type="button" id="techHistoryNew" class="btn-mini primary">
+          <i class="ti ti-plus" aria-hidden="true"></i> 新建技术项目
+        </button>
+        <button type="button" class="icon-btn" id="techHistoryRefresh" aria-label="刷新历史记录" title="刷新">
+          <i class="ti ti-refresh" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="drawer-body" id="techHistoryList">
+        <div class="tech-history-empty">加载中…</div>
+      </div>
+    </aside>
   </div>
   <!-- 居中的模型设置卡片：报价、配置、规则、技术工艺四个入口共用同一套语义。
        固定 DOM + 全屏遮罩 + flex 居中，不再按触发按钮的 getBoundingClientRect 计算
@@ -206,7 +242,7 @@
   <!-- 父壳看板桥必须在 workbench 之前：底栏 / 左侧快捷操作都通过它发命令。 -->
   <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
-  <script src="tech-workbench.js?v=twb12"></script>
-  <script src="agent-chat.js?v=20260911-board13"></script>
+  <script src="tech-workbench.js?v=twb15"></script>
+  <script src="agent-chat.js?v=20260911-tooltrace1"></script>
 </body>
 </html>

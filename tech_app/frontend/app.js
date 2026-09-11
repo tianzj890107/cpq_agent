@@ -1340,7 +1340,10 @@ function buildPartSubActions(part) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `part-subaction btn-${mode}`;
-      button.dataset.partAnalysis = mode;
+      // 单件入口只把模式写进零件行的 data（data.partAnalysis = mode）：批量入口按模式
+      // 判断缺失 / 已成功 / 失败项，不抓取也不模拟点击这里的按钮。
+      const data = button.dataset;
+      data.partAnalysis = mode;
       button.innerHTML = `${icon}<span>${label}</span>`;
       button.onclick = event => {
         event.stopPropagation();   // 不要触发外层零件行的再次选中
@@ -1936,6 +1939,162 @@ init().catch(error => {
          + "请把这句话反馈给维护者。");
 });
 
+/* 2.1 零件批量工艺推荐（一键生成全部工艺推荐）
+ * 复用既有单零件接口 POST /api/projects/{project_id}/parts/{part_id}/process 与既有任务
+ * 查询链路 pollTask：前端受控串行（for + await），绝不一次并发全部模型调用；已有成功
+ * 工艺的零件默认 skip，不覆盖人工编辑后的工艺，也不再产生一次模型费用；单件失败记录
+ * 真实原因后继续下一件，最后统一汇总成功 / 失败 / 跳过数并刷新看板。 */
+let allPartsProcessBusy = false;
+
+function allPartsProcessPublish(state) {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.publish !== "function") return;
+  runtime.publish("task-progress", "runAllPartProcesses", {
+    action: "runAllPartProcesses",
+    total: state.total,
+    done: state.done,
+    succeeded: state.succeeded,
+    failed: state.failed,
+    skipped: state.skipped,
+    progress: state.running
+      ? `正在生成工艺推荐 ${Math.min(state.done + 1, state.total)}/${state.total}：${state.running}`
+      : "",
+  });
+}
+
+function allPartsProcessSettle(event, payload) {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.publish !== "function") return;
+  runtime.publish(event, "runAllPartProcesses",
+    Object.assign({ action: "runAllPartProcesses" }, payload || {}));
+}
+
+// 已有工艺判定：读既有 GET .../parts/{part_id}/process，库里已有工序就 skip，避免重复
+// 计费、避免覆盖人工编辑后的工艺路线。
+async function partHasExistingProcess(projectId, partId) {
+  try {
+    const data = await fetch(
+      `${API}/api/projects/${encodeURIComponent(projectId)}/parts/${encodeURIComponent(partId)}/process`,
+    ).then((response) => (response.ok ? response.json() : null));
+    return Boolean(data && data.plan && (data.plan.steps || []).length);
+  } catch (error) {
+    return false;
+  }
+}
+
+// 单件：只调用既有单零件接口拿 task_id，再复用既有 pollTask 等到这一件真正算完。
+async function runOnePartProcess(projectId, part) {
+  const response = await fetch(
+    `${API}/api/projects/${encodeURIComponent(projectId)}/parts/${encodeURIComponent(part.part_id)}/process`,
+    { method: "POST", body: new FormData() },
+  );
+  const submitted = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(submitted.detail || `HTTP ${response.status}`);
+  if (!submitted.task_id) throw new Error("工艺推荐任务提交失败：没有返回 task_id");
+  return pollTask(projectId, submitted.task_id, "工艺推荐");
+}
+
+// 批量执行：受控串行跑完全部待处理零件，逐件上报进度，部分失败 continue 下一件。
+async function runAllPartProcesses(options = {}) {
+  const projectId = currentProject;
+  if (!projectId) throw new Error("还没有选择项目，无法生成工艺推荐。");
+  const parts = ((currentIR && currentIR.parts) || []).slice();
+  if (!parts.length) throw new Error("还没有零件，请先完成图纸解析再生成工艺推荐。");
+  const force = Boolean(options.force);
+  const state = { total: parts.length, done: 0, running: "", succeeded: 0, failed: 0, skipped: 0 };
+  const failures = [];
+  for (const part of parts) {
+    const name = `${part.part_id} ${part.name || ""}`.trim();
+    if (!force && await partHasExistingProcess(projectId, part.part_id)) {
+      state.skipped += 1;
+      state.done += 1;
+      allPartsProcessPublish(state);
+      continue;
+    }
+    state.running = name;
+    allPartsProcessPublish(state);
+    status(`正在生成工艺推荐 ${state.done + 1}/${state.total}：${name}`, true);
+    try {
+      await runOnePartProcess(projectId, part);
+      state.succeeded += 1;
+    } catch (error) {
+      state.failed += 1;
+      failures.push({
+        part_id: part.part_id,
+        name: name,
+        message: (error && error.message) || "工艺推荐失败",
+      });
+      state.done += 1;
+      state.running = "";
+      allPartsProcessPublish(state);
+      continue;
+    }
+    state.done += 1;
+    state.running = "";
+    allPartsProcessPublish(state);
+  }
+  return { state: state, failures: failures };
+}
+
+// 完成后刷新看板：复用既有 IR 渲染与解析摘要通道，不新增数据源，也不必让用户逐个点开
+// 零件才知道批量任务已经完成。
+function requestBoardSummary() {
+  if (currentIR) renderIR(currentIR);
+  else publishResultSummary(currentIR);
+  return { ok: true };
+}
+
+async function runAllPartProcessesInBackground(options) {
+  try {
+    const result = await runAllPartProcesses(options);
+    requestBoardSummary();
+    const state = result.state;
+    const summary = `全部工艺推荐已执行：成功 ${state.succeeded}、失败 ${state.failed}、跳过 ${state.skipped}`;
+    if (result.failures.length) {
+      allPartsProcessSettle("task-failed", {
+        message: `${summary}；失败零件：${result.failures.map((item) => item.part_id).join("、")}`,
+        total: state.total, succeeded: state.succeeded, failed: state.failed,
+        skipped: state.skipped, failures: result.failures,
+      });
+    } else {
+      allPartsProcessSettle("task-completed", {
+        message: summary, total: state.total, succeeded: state.succeeded,
+        failed: state.failed, skipped: state.skipped,
+      });
+    }
+    status(summary);
+  } catch (error) {
+    allPartsProcessSettle("task-failed", { message: (error && error.message) || "批量工艺推荐失败。" });
+    status(`批量工艺推荐失败：${(error && error.message) || ""}`);
+  } finally {
+    allPartsProcessBusy = false;
+    const runtime = window.TechBoardRuntime;
+    if (runtime && typeof runtime.updateActionState === "function") {
+      runtime.updateActionState("runAllPartProcesses", { busy: false });
+    }
+  }
+}
+
+// 批量入口：只启动后台链路并秒级回执（deferred），真正的完成 / 失败由后台自己上报。
+function startAllPartProcesses(options) {
+  if (allPartsProcessBusy) {
+    return { ok: false, error: { code: "busy", message: "正在生成工艺推荐，请稍候。" } };
+  }
+  if (!currentProject) {
+    return { ok: false, error: { code: "no-project", message: "还没有选择项目，无法生成工艺推荐。" } };
+  }
+  if (!currentIR || !(currentIR.parts || []).length) {
+    return { ok: false, error: { code: "no-parts", message: "还没有零件，请先完成图纸解析。" } };
+  }
+  allPartsProcessBusy = true;
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.updateActionState === "function") {
+    runtime.updateActionState("runAllPartProcesses", { busy: true });
+  }
+  runAllPartProcessesInBackground(options);
+  return { ok: true };
+}
+
 /* 统一看板协议：2.1 的「开始解析」注册成 parseDrawing，父壳底栏 / Agent 只发动作名，
  * 页面上的原按钮继续走同一个函数，独立打开时行为不变。 */
 if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions === "function") {
@@ -1986,6 +2145,19 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           visible: true,
           enabled: Boolean(button) && !button.disabled,
           busy: Boolean(button && button.getAttribute("aria-busy") === "true"),
+        };
+      },
+    },
+    runAllPartProcesses: {
+      label: "一键生成全部工艺推荐",
+      deferred: true,
+      run: () => startAllPartProcesses(),
+      getState: () => {
+        return {
+          visible: true,
+          enabled: Boolean(currentProject) && Boolean(currentIR && (currentIR.parts || []).length)
+            && !allPartsProcessBusy,
+          busy: Boolean(allPartsProcessBusy),
         };
       },
     },
@@ -2157,6 +2329,27 @@ function renderBoardReport(body) {
   return { ok: true, result: { view: "report" } };
 }
 
+// 零件清单看板顶部：一键生成全部工艺推荐（蓝色主操作）。与左侧快捷按钮共用同一条
+// runAllPartProcesses 通道；单个零件的「工艺推荐」按钮仍留在零件行上，用于查看 / 编辑 /
+// 单件重算 / 定点处理失败项。
+function renderPartsBoardToolbar(body) {
+  const bar = document.createElement("div");
+  bar.className = "board-parts-toolbar";
+  bar.setAttribute("data-board-generated", "true");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "board-parts-bulk start-parse-btn";
+  button.textContent = "一键生成全部工艺推荐";
+  button.addEventListener("click", () => {
+    const outcome = startAllPartProcesses();
+    if (outcome && outcome.ok === false) {
+      status((outcome.error && outcome.error.message) || "一键生成全部工艺推荐未能启动");
+    }
+  });
+  bar.append(button);
+  body.append(bar);
+}
+
 function openBoardView(view) {
   const spec = BOARD_VIEW_SPECS[view];
   if (!spec) return { ok: false, error: { code: "unknown-action", message: "看板未注册视图：" + view } };
@@ -2175,6 +2368,7 @@ function openBoardView(view) {
     if (node.tagName === "DETAILS") node.open = true;
     body.append(node);
   });
+  if (view === "parts") renderPartsBoardToolbar(body);
   const panes = document.getElementById("modelPanes");
   const analysis = document.getElementById("analysisPanel");
   if (panes) panes.hidden = true;

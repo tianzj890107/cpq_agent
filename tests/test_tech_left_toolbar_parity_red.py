@@ -4,7 +4,7 @@
 1. 左侧会话栏新增唯一一条操作栏：附件 / AI 执行 / 上一步 / 下一步 / 转交任务 /
    主要操作 / 次要操作 / 失败重试，并复用既有结果入口与任务进度宿主；
 2. 按钮由覆盖九个 stage 的描述表驱动，不只为 2.1–2.3 写死；
-3. 主 / 次 / AI 走 TechBoardBridge，上下步走既有 applyStage，附件复用既有能力菜单；
+3. 主 / 次 / AI 走 TechBoardBridge，上下步走既有 applyStage，附件直接打开隐藏文件输入框；
 4. 失败重试复用最近一次动作，不是新流程；
 5. 不新增 @app. 路由；父壳不查 iframe DOM；既有底栏与结果入口不被删除。
 
@@ -33,7 +33,8 @@ NINE_STAGES = (
     "drawing", "process", "cost", "summary", "report-review", "report-publish",
 )
 KEPT_IDS = ("techPrev", "techNext", "techPrimary", "techSecondary",
-            "ocResultActions", "ocTaskProgressHost", "ocCapabilityMenu")
+            "ocResultActions", "ocTaskProgressHost",
+            "ocChatAttachBtn", "ocChatFileInput")
 
 
 def _read(path):
@@ -91,10 +92,14 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
         for kept in ("techPrev", "techNext"):
             self.assertIn(kept, self.js, f"既有底栏按钮 {kept} 被删除")
 
-    def test_attach_reuses_existing_capability_menu(self):
-        self.assertIn("ocCapabilityMenu", self.js,
-                      "附件必须复用既有能力菜单，不新增上传实现")
-        self.assertIn("ocPlus", self.js, "附件入口应复用既有 ＋ 按钮")
+    def test_attach_reuses_the_hidden_file_input_not_a_menu(self):
+        # 契约更新（附件直传 Spec）：附件不再走 ＋ 能力菜单，改为回形针按钮在同一次
+        # 点击里直接触发父壳隐藏文件输入框，仍不新增第二套上传实现。
+        self.assertIn("ocChatFileInput", self.js,
+                      "附件必须直接触发父壳隐藏文件输入框，不新增上传实现")
+        self.assertIn("ocChatAttachBtn", self.html, "附件入口应复用输入区回形针按钮")
+        self.assertNotIn("ocCapabilityMenu", self.html,
+                         "统一工作台不再使用 ＋ 能力菜单")
 
     def test_transfer_reuses_existing_capability_not_new_route(self):
         self.assertIn("techChatTransfer", self.js, "缺少转交任务处理")

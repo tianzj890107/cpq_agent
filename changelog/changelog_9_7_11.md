@@ -756,6 +756,33 @@
 - 新增 `docs/specs/tech-direct-attachment-and-chat-capability-actions.md`：技术输入框左侧取消“＋能力菜单”，统一为报价式回形针附件按钮，单击直接打开父壳隐藏文件选择器；选择文件后必须复用既有上传/任务文件/看板刷新链路。
 - 原菜单的解析视图、导入已有 3D 模型、版本与校核审查、联网核验、校验修正五项能力迁到 `#techChatActions` 快捷按钮栏；视图类继续走看板导航，动作类继续走 `executeAction`，不得删除能力或复制业务实现。
 - 新增 Red 测试 `tests/test_tech_direct_attachment_and_chat_capability_actions_red.py`，覆盖附件按钮形态、直接文件选择、多文件输入、上传与刷新链路、五项快捷按钮、视图/动作分派边界、旧菜单清理及任务文件/结果入口回归守卫。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_direct_attachment_and_chat_capability_actions_red -v` → 7 个测试方法产生 9 个预期失败点：缺少回形针直传按钮和父壳多文件输入、点击仍打开菜单、没有文件 change 上传/刷新链路、五项能力尚未迁入 `#techChatActions`、旧 `#ocPlus/#ocCapabilityMenu` 与菜单样式仍存在。既有视图/动作分派边界和任务文件/三项结果入口守卫通过。
+- 本批只新增 Spec、Red 测试与周 changelog，未修改上传或其它业务实现；未提交、未推送、未创建 MR、未部署或重启服务。
+
+## 71. 技术会话主按钮与全零件批量工艺/成本 Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/tech-primary-quick-actions-and-bulk-part-analysis.md`：技术会话 AI/主要/批量动作采用报价式系统蓝色 primary 胶囊，其它导航、附件、转交、次要和重试保持白底描边层级。
+- 2.1 新增 `runAllPartProcesses` /「一键生成全部工艺推荐」：只做前端受控串行编排，复用既有单零件 process 接口与任务轮询；默认跳过已有成功结果，逐件进度、部分失败汇总、只重试缺失/失败项，不新增批量算法或后端路由。
+- 2.3 把既有 `runCostReview → crRunAll → crRunParts → crRunAssembly` 产品入口统一为「一键测算全部成本」，会话与右侧看板共用文案和既有 deferred 任务链路。
+- 新增 Red 测试 `tests/test_tech_primary_quick_actions_and_bulk_part_analysis_red.py`，覆盖 primary 样式/动态 class、2.1 会话与看板入口、deferred 批量编排、单件接口复用、串行/跳过/失败/刷新语义、单件入口保留，以及2.3既有批量成本链路复用。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_primary_quick_actions_and_bulk_part_analysis_red -v` → 8 个测试方法中 7 个按预期失败、1 个通过；失败覆盖技术快捷主按钮尚无报价式蓝色 primary 样式、drawing 会话/零件看板缺少 `runAllPartProcesses`、没有受控串行与逐件进度/部分失败/刷新编排、以及成本入口尚未统一为「一键测算全部成本」。已通过项证明上一步、转交等次要导航尚未被误标成 primary。
+- 本批只新增 Spec、Red 测试与周 changelog，未修改前后端业务实现；未提交、未推送、未创建 MR、未部署或重启服务。
+
+## 72. 技术历史记录统一报价 Drawer Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/tech-history-quote-drawer-parity.md`：技术历史统一为报价侧340px左滑 Drawer，采用相同遮罩、标题/关闭、第二行新建/刷新、历史卡片和 show 过渡；技术数据仍读取既有项目与 workflow，并在同一工作台恢复真实 stage。
+- 要求固定静态可访问 DOM，遮罩/关闭/Escape关闭与焦点返回；“新建技术项目”进入统一技术主页，刷新只重载列表；不增加无后端契约的删除能力，不修改或迁移历史数据。
+- 新增 Red 测试 `tests/test_tech_history_quote_drawer_parity_red.py`，覆盖结构与无障碍、报价同尺寸/动画/阴影、操作按钮、开关及焦点、数据恢复契约、当前项目/阶段元信息以及清理动态创建/hidden计时实现。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_history_quote_drawer_parity_red -v` → 9 项中 8 项按预期失败、1 项通过；失败覆盖固定 Drawer DOM、新建/刷新/关闭控件、340px尺寸与报价同级阴影/滑入动画、遮罩 show 状态、Escape与焦点返回、当前项目/阶段元信息及动态创建/hidden计时清理。唯一通过项证明既有 `/api/projects + /workflow + techStageFromProject + applyStage` 数据恢复链路可继续复用。
+- 本批只新增 Spec、Red 测试与周 changelog，未修改历史抽屉业务实现或任何历史数据；未提交、未推送、未创建 MR、未部署或重启服务。
+
+## 73. 技术右侧业务区统一报价圆角卡片 Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/tech-right-workspace-quote-rounded-card.md`：以用户最新决定覆盖早期“业务区完全贴边”约束；保留右侧项目标题与流程进度条，在其下将当前步骤标题、iframe内容和底部操作栏包为一张报价式业务结果卡。
+- 桌面卡片固定16px外间距、12px圆角、0.5px边框、白底、无阴影和overflow裁切；中窄屏仍保留非零间距。右侧列容器本身保持无圆角/无阴影，禁止双重卡片。
+- 新增 Red 测试 `tests/test_tech_right_workspace_quote_rounded_card_red.py`，覆盖单一包装层及子项顺序、报价式几何/表面、外层非卡片守卫、标题/底栏分隔线、iframe填充裁切、响应式非零间距及九阶段/桥接回归锚点。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_right_workspace_quote_rounded_card_red -v` → **7 项中 4 项按预期失败、3 项通过**；失败覆盖缺少 `#techResultsArea.tech-results-area` 单一卡片包装层、16px/12px/0.5px 的报价卡片几何与表面、响应式非零外间距，以及显式 iframe 满高无二次圆角规则。已通过项证明标题/底栏分隔、外层工作区不形成第二张卡、九阶段与 `TechBoardBridge` 锚点均被保留。
+- 本批只新增 Spec、Red 测试与周 changelog，未修改前端业务实现；未提交、未推送、未创建 MR、未部署或重启服务。
 
 ## 69. 报价与技术工艺用户消息主色气泡统一实现（9-11）
 
@@ -779,3 +806,89 @@
 - 边界：未改技术工艺 `.tech-ai-badge`（原本即符合）；未删除或改写各页其它 `var(--gradient-ai)` 使用（主按钮、渐变文字等语义不变）；未改徽标 DOM、文案、缓存版本号、后端接口与模型配置；未覆盖工作区中其它任务尚未提交的修改。
 - 测试（实际运行）：`python3 -m unittest tests.test_ai_badge_unified_state_semantics_red -v` → **4/4 通过**（Red 基线为 3 失败 1 通过）；`python3 -m unittest tests.test_quote_agent_emphasis_hover_red tests.test_quote_tech_agent_shell_parity_red tests.test_primary_button_blue_gradient_red -v` → **17/17 通过**；`python3 -m unittest discover -s tests -p 'test_*.py'` → **392 项通过、7 跳过、0 失败**；`git diff --check` 通过。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 72. 技术工艺工具轨迹「业务行 + 可展开详情」Spec / Red 基线（9-11）
+
+- 需求：技术侧工具轨迹在「报价侧轻量行」与「技术侧完整工具卡」之间取混合形态 —— 主行对齐报价侧业务行（图标 + 中文文案 + 参数摘要 + 状态），原始工具名 / 入参 JSON / 工具结果收进默认折叠的原生 `<details>`。第 21 步对照表 `tool_trace` 行仍是 `live`，本批只统一形态、不减能力。
+- 现状缺口：`tech_app/frontend/agent-chat.js` 的 `addToolCard()` 把原始工具名（`ListParts`、`tech_ui`、`mcp__…`）当主标题，`toolSubtitle()` 把入参 JSON 铺在副标题，`setToolResult()` 把整份返回常驻渲染成 `<pre class="oc-tool-result">`；报价侧 `describeTool()` 只给一行中文业务描述且不展示结果。
+- 新增 Spec：`docs/specs/tech-agent-tool-trace-business-line-detail.md`（产品契约、名称与结构契约、范围、禁止事项、12 条验收标准）。
+- 新增红测：`tests/test_tech_tool_trace_business_line_detail_red.py`（12 项），覆盖 `TOOL_TRACE_LABELS` 必须覆盖 `oc_agent.py` 声明的全部 63 个平台工具、`TOOL_TRACE_UI_ACTIONS` 覆盖 8 个 `tech_ui` action、`toolTraceLabel()` 未登记工具回退、主行 `oc-art-name` 必须用业务文案、`<details class="oc-art-detail">` 默认折叠且含 `oc-art-raw` / `oc-art-input` / `oc-tool-result`、4000 字截断与 `◌ / ✓ / ⚠`、`agent-chat.css` 详情规则与 `.oc-art` 换行、映射表纯展示（无 `fetch(` / `/api/` / `executeAction`）、`agent-chat.js` 与 `agent-chat.css` 的 `?v=` 同步更新、`node --check` 语法通过。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_tool_trace_business_line_detail_red -v` → **12 项中 10 失败、2 通过**；失败点集中在缺少映射表与 `toolTraceLabel()`、主行仍是 `event.name`、没有 `<details>` 详情块、`agent-chat.css` 无详情规则、缓存版本未更新。通过的两项是 `node --check` 与结果截断/错误样式保留守卫。
+- 全量（实际运行）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **411 项、17 失败、7 跳过**；其中 10 项为本批新增 Red 基线，另 7 项来自工作区中其它并行未提交批次（附件直传 / 全会话能力按钮重排 / 批量工艺成本，`tech-workbench.html#ocPlus` 等锚点仍在改动中），与本批无关。
+- 边界：本轮只写 Spec 与 Red 测试，未写任何业务实现；未改 `agent-chat.js` / `agent-chat.css` / 后端工具 schema；未覆盖工作区中其它任务尚未提交的修改。
+- 交付状态：本记录写入时 Spec / Red **尚未提交、尚未推送**；实现未开始；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 73. 技术工艺附件直传与会话能力按钮重排实现（9-11）
+
+- `tech-workbench.html`：输入区左侧 `#ocPlus`「＋」与 `#ocCapabilityMenu`（含全部 `role="menuitem"`）整体删除，替换为回形针按钮 `#ocChatAttachBtn`（`aria-label="上传附件"`，无 aria-haspopup/controls/expanded）与隐藏多选文件输入 `#ocChatFileInput`（`type="file" multiple hidden`，保留图片与 PDF/Office/文本类型）；原菜单五项能力迁入 `#techChatActions`，带稳定 `data-tech-capability="evidence|import3d|review|modelLookup|verify"` 与原文案。
+- 附件调用链：回形针 `click` → 同一次用户点击链路里 `document.getElementById("ocChatFileInput").click()`（`agent-chat.js`）／父壳 `#techChatAttach` → 既有 `openChatFilePicker()`（`tech-workbench.js`）→ 原生文件选择器；`change` → `uploadChatAttachments(files)` → `FormData` 每个文件以 `files` 字段追加 → `POST /api/projects/{project_id}/attachments`（`authHeaders()` 不带 Content-Type）→ 成功经看板桥 `refreshData` + `requestBoardSummary()` + `loadFiles()` 刷新，并清空 input.value；`finally` 恢复按钮可用。上传中 / 成功 / 失败（真实错误文本）都写入既有任务进度卡与会话消息，未打印文件二进制。
+- 五项能力分派通道不变：`evidence` / `import3d` / `review` 走既有 `boardNavigateView`（`TECH_BOARD_VIEW_ENTRIES` 的 `capability:*`），`modelLookup` / `verify` 走既有 `DRAWING_ACTION_CAPABILITIES` → `executeAction`；仅在 `stage === "drawing"` 显示并启用，不读 iframe DOM、不模拟点击子页面按钮。
+- 清理：删除 `capabilityMenu` / `capabilityItems` / `plusButton` 菜单态、`openCapabilityMenu` / `closeCapabilityMenu` / `toggleCapabilityMenu` / `firstEnabledCapability`、菜单 Escape 与点击外部关闭监听、`tech-workbench.js` 的 `openChatCapabilities` 及统一工作台菜单状态同步；`agent-chat.css` 删除 `.oc-capability-menu` / `.oc-capability-item` 及其 `.is-active` 规则。独立 2.1 页（`index.html`）仍保留自己的 `#ocPlus` + `plusMenu()` popover 能力入口，未失效。
+- 契约更新（附件直传 Spec 取代旧「＋ 能力菜单」契约）：`tests/test_tech_left_toolbar_parity_red.py` 的附件断言、`tests/test_tech_left_chat_controls_restore_red.py` 的 ＋ 菜单 / Escape 断言改为回形针直传契约；`docs/specs/tech-agent-recovery-21-quote-parity.json` 的 `attachments` 行 tech 锚点由 `#ocPlus` 改为 `#ocChatAttachBtn`。
+- 缓存：改动的 `agent-chat.css` / `agent-chat.js` 版本号由 `?v=20260911-bubble1` / `?v=20260911-board13` 升到 `?v=20260911-attach1`（4 个 CSS 引用 + 2 个 JS 引用）；未批量刷新其它资源。
+- 测试（实际运行）：`tests.test_tech_direct_attachment_and_chat_capability_actions_red` → **7/7 通过**（Red 基线为 7 方法 9 失败点）；相关会话回归 7 个模块 → **46/46 通过**；全量 `python3 -m unittest discover` → 419 项、16 失败，失败**全部**来自并行未实现批次 `test_tech_tool_trace_business_line_detail_red`（9）与 `test_tech_primary_quick_actions_and_bulk_part_analysis_red`（7），本批无新增失败；`./open-claude/.venv/bin/python -m unittest discover` → 421 项、同样 16 失败（同一来源）；`node --check` 三个前端脚本通过；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 74. 技术会话蓝色主操作 + 一键生成全部工艺推荐 / 一键测算全部成本 实现（9-11）
+
+- `tech-workbench.css`：新增 `.tech-chat-actions > button.primary` 及 `:hover:not(:disabled)` / `:focus-visible` / `:disabled`，用 `--gradient-primary`（`#0060E6 → #0050C4`）实心渐变 + 白字 + 无描边，与报价 `.quick-action-btn.primary` 同级；附件 / 上一步 / 下一步 / 转交 / 失败重试 / 解析视图等导航型按钮继续白底描边，`#techChatPrev` / `#techChatTransfer` 不带 `primary`。
+- `tech-workbench.js`：`setChatButton(button, opts)` 支持 `variant`，由它统一 `classList.toggle('primary', opts.variant === 'primary')`，不在各处手写 class；`STAGE_CHAT_ACTIONS.drawing` 增加 `bulk: 'runAllPartProcesses'`，`STAGE_ACTIONS.cost.primaryLabel` 改为「一键测算全部成本」；`#techChatBulk` 经 `runBoardAction('runAllPartProcesses')` 走看板桥。`ai === primary` 时只渲染一个入口（隐藏重复的「AI 执行」），避免两个同样的蓝色主按钮。
+- `app.js`：新增 `startAllPartProcesses()` / `runAllPartProcesses()` / `partHasExistingProcess()` / `runOnePartProcess()` 与 `requestBoardSummary()`，并在 `TechBoardRuntime.registerActions` 注册 `runAllPartProcesses`（`label: "一键生成全部工艺推荐"`、`deferred: true`、`run` 只启动后台并秒级回执 `{ ok: true }`）。批量执行**复用既有单零件** `POST /api/projects/{project_id}/parts/{part_id}/process` 与既有 `pollTask`，`for (const part of targets) { … await … }` 受控串行，不使用 `Promise.all`；先读既有 `GET …/process` 判定已有工艺 → `skipped` 不重复计费、不覆盖人工编辑；单件失败记录真实错误后 `continue` 下一件；结束经 `task-progress` / `task-completed` / `task-failed` 上报成功 / 失败 / 跳过数与失败零件，并刷新 IR 与解析摘要。零件清单看板顶部新增 `data-board-generated` 的蓝色 `一键生成全部工艺推荐` 入口，单零件「工艺推荐」按钮（`data.partAnalysis = mode`）保留。
+- `cost-review.html` / `cost-review.js`：`#crRunAll` 与 `runCostReview.label`、`crRunAll()` 起始提示统一为「一键测算全部成本」；内部 `crRunAll → crRunParts(false) → crRunAssembly` 与 `runCostReview / crRunAll / crRunParts / crRunAssembly` 函数名不变，未新增第二套成本算法或批量成本路由。
+- 缓存：`tech-workbench.css?v=twb12`、`tech-workbench.js?v=twb13`、`app.js?v=20260911-bulk1`、`agent-chat.css?v=20260911-bulk1`（4 处引用同版本）；未批量刷新其它资源。
+- 测试（实际运行）：`tests.test_tech_primary_quick_actions_and_bulk_part_analysis_red` → **8/8 通过**（Red 基线 7 失败 1 通过）；附件批次 `tests.test_tech_direct_attachment_and_chat_capability_actions_red` → 7/7；相关回归 8 模块 + 本批目标 → 77/77；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → 435 项、**21 失败**、7 跳过，失败全部来自工作区中三个并行未实现批次（tool-trace 9 / 历史 Drawer 8 / 右侧圆角卡片 4），本批无新增失败；`./open-claude/.venv/bin/python -m unittest discover` → 437 项、同一 21 项失败；`node --check` 四个前端脚本通过；`git diff --check` 通过。
+- 边界：未新增 / 删除任何 `@app.` 路由，未改后端与成本算法，未 `Promise.all` 并发调用模型，未静默覆盖已有工艺，未删除单件工艺 / 成本与确认、审核、财务流转入口，未读 iframe DOM、未模拟点击子页面按钮，未改 Spec 与 Red 测试，未覆盖工作区中其它未提交修改。2.1 只做工艺推荐，成本仍归 2.3。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 75. 技术工艺 Agent「结果呈现」提示词口径 Spec / Red 基线（第一轮，9-11）
+
+- 需求：技术侧把「数据表格 / 结果明细放哪里」统一到右侧看板。第一轮只改后端提示词，不动前端（`tech_app/frontend/agent-chat.js` 正被另一个并行批次修改）。
+- 依据（实测）：报价侧是双保险 —— `cpq_agent_server.py:108-110` 的 `cpq_ui` 描述「不要在聊天里贴大表格」+ `:1770-1772` 系统提示词「绝不允许只把表格写在聊天文字里」「聊天里不要贴 Markdown 表格……右侧表格才是唯一真源，避免左边一份、右边一份、对不上」；技术侧 `oc_agent.py:2779` 的 `SYSTEM_APPENDIX` 只覆盖 2.1 / 2.2，硬性要求只有三条，全篇 0 次 `tech_ui`、0 次「右侧看板」、0 条禁贴表格 / JSON 约束。物理上两侧会话栏都只有 460px（`tech-workbench.css:53`、`确认需求解析结果.html:52`），报价侧被设计过的会话内表格还要 `min-width: 620px` + `overflow-x: auto`（`:173-176`、`:1692`），技术侧 markdown 根本不解析表格（贴表就是一堆 `|` 竖线）。落点上 1.1–1.3 与 3.1–3.3 六个看板页 `registerViews` 计数为 0（只有 actions），笼统要求 `focus_view` 会得到无效视图命令。
+- 新增 Spec：`docs/specs/tech-result-presentation-prompt-policy.md`（4 条结果呈现硬性要求 + 九阶段落点表 + 「只有当右侧看板已注册该视图时才调用 focus_view」+ 范围 / 禁止事项 / 验收标准）。
+- 新增红测：`tests/test_tech_agent_result_presentation_prompt_red.py`（8 项），覆盖三句原样口径、JSON 禁令正则、九阶段 stage id 全覆盖、`tech_ui` / `focus_view` / `refresh_view` 落点说明，以及既有硬性要求、2.1/2.2 指引、注入方式、八项 action 与视图白名单的保留守卫。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_tech_agent_result_presentation_prompt_red -v` → **8 项中 4 失败、4 通过**；失败项 = 三句口径 + JSON 禁令 + 九阶段落点 + `tech_ui` 落点说明；通过项为保留守卫（既有硬性要求、2.1/2.2 指引、注入方式、白名单）。
+- 全量（实际运行）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **443 项、25 失败、7 跳过**；其中本批 4 项 + 上一批工具轨迹 10 项 = 14 项属本方 Red 基线，另 11 项来自工作区其它并行未提交批次（历史抽屉 / 右侧卡片 / 附件直传 / 批量工艺成本等），与本批无关。
+- 边界：未改任何前端文件、未改 `tech_ui` 八项 action 白名单与 `TECH_UI_VIEWS`、未改工具 schema、未改 `SYSTEM_APPENDIX` 注入方式、未改工具返回文案与业务 service、未覆盖工作区中其它任务尚未提交的修改。
+- 交付状态：本记录写入时 Spec / Red **尚未提交、尚未推送**；实现未开始；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 76. 技术工艺工具轨迹「业务行 + 可展开详情」实现（9-11）
+
+- `tech_app/frontend/agent-chat.js`（只动工具轨迹渲染）：新增 `const TOOL_TRACE_LABELS`（覆盖 `oc_agent.py` 声明的全部 63 个平台工具，`tech_ui` 除外，逐条中文业务文案，例：`GetProjectState → 读取项目状态`、`ListParts → 读取零件清单`、`RunCostReviewAll → 逐件测算并汇总成本`、`PublishProcessReport → 发布报告`、`SendReportToQuote → 回传报价`）；新增 `const TOOL_TRACE_UI_ACTIONS`（`focus_view/refresh_view/fill_fields/select_part/show_result_actions/show_progress/set_stage/request_confirmation` 八项；例：切换看板视图 / 刷新看板 / 回填看板字段）；新增 `function toolTraceLabel(name, params)` 返回 `{ title, subtitle }`，`tech_ui` 走 action 表并可拼上 `stage`，未登记工具回退成含「调用」的中文行。
+- `addToolCard(ctx, event)` 改为混合形态：主行仍是 `oc-atile` 图标 + `oc-art-name`（`toolTraceLabel().title`）+ 可选 `oc-art-sub`（`subtitle`）+ `oc-art-state`（`◌`）；新增默认折叠的原生 `<details class="oc-art-detail">`，`<summary>详情</summary>` 下依次是 `oc-art-raw`（原始工具名）、`oc-art-input`（入参 JSON，截断 ≤300 字）、`oc-tool-result`（结果 `<pre>`，初始 `display:none`）；仍写 `ctx.cards[event.id] = { state, result }`，事件 id 作为 key 不变，未加 `open` 属性、未 `.open = true`。
+- `setToolResult(ctx, event)` 行为不变（只把写入目标换成详情里的那个 `<pre class="oc-tool-result">`）：4000 字截断（超出追加「… (已截断)」）、`is_error` 时 `.err` 红字、状态位 `✓`（`#16a34a`）/ `⚠`（`#dc2626`）全部保留；工具返回内容、失败原因与既有能力一律未改。
+- `tech_app/frontend/agent-chat.css`：`.oc-art` 增加 `flex-wrap: wrap`（保留原 display / 宽度 / 描边 / 圆角），新增 `.oc-art-state` / `.oc-art-detail`（`flex-basis:100%` + 上分隔线）/ `.oc-art-detail summary`（可点击、小字、次级色）/ `.oc-art-raw` / `.oc-art-input`（等宽、`white-space: pre-wrap`、可滚动）；`.oc-tool-result` 与 `.oc-tool-result.err` 规则保持不变（`max-height: 240px` + `overflow: auto`）。纯展示：映射表与 `toolTraceLabel()` 内无请求、无看板通道调用、无新增路由。
+- 缓存：`agent-chat.js?v=20260911-tooltrace1`（`index.html` / `tech-workbench.html` 两处）、`agent-chat.css?v=20260911-tooltrace1`（另加 `assembly-integration.html` / `cost-review.html` 共四处）；只改这两个参数，其它资源版本未动。
+- 测试（实际运行）：`tests.test_tech_tool_trace_business_line_detail_red` → **12/12 通过**（Red 基线 9 失败 3 通过）；`node --check tech_app/frontend/agent-chat.js` 通过；`tests.test_tech_ui_protocol_red + test_tech_drawing_agent_actions_red + test_tech_quote_agent_parity_matrix_red` → 31/31 通过（`tool_trace` 行仍 live）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **443 项、16 失败、7 跳过**，失败全部来自工作区其它并行未实现批次（历史抽屉 8 / 右侧圆角卡片 4 / 结果呈现提示词 4），本批无新增失败；`git diff --check` 通过。
+- 边界：未改后端工具清单 / schema / `tech_ui` 校验 / `UI_ACTION_TOOLS`；未改工具结果内容与 4000 字上限；未新建第二套注册表 / 路由 / 接口；未动普通 AI 消息、用户主色气泡、任务卡、确认卡、错误行与 `tech_ui` 八个 action 的既有行为；未删 `.oc-art` / `.oc-atile` / `.oc-art-name` / `.oc-art-sub`；未改 Spec 与 Red 测试；`agent-chat.js` 的 4 个 NUL 哨兵计数保持为 4。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 77. 技术右侧业务工作区统一报价圆角结果卡 实现（9-11）
+
+- `tech-workbench.html`：项目标题 `header.tech-project-header` 与流程条 `.tech-workspace-progress` 之下，新增唯一一层业务结果卡 `<section id="techResultsArea" class="tech-results-area">`，把 `#techContextHeader`（当前步骤标题行）、`#techWorkspaceOutlet`（业务 iframe 出口）、`footer.tech-workbench-bottom`（上一步 / 本步操作 / 下一步）包进同一张卡；只增加这一层，三列父壳、右侧列、iframe 内部业务页都没有再加卡。
+- `tech-workbench.css`：新增 `.tech-results-area { margin:16px; border:.5px solid var(--twb-border); border-radius:12px; background:var(--twb-card); overflow:hidden; display:flex; flex-direction:column; flex:1 1 auto; min-height:0; box-shadow:none; }`（报价 `.results-area` 同级几何与表面，靠边框不靠浮层阴影）；`.tech-workspace-pane` 保持 `border-radius:0` / `box-shadow:none` / 无 margin，不构成第二张外层卡；`.tech-workspace-context` 继续只有 0.5px 底部分隔线、`.tech-workbench-bottom` 继续只有 0.5px 顶部分隔线，两者都无阴影、无外圆角。
+- iframe 裁切：`#techStageFrame` 的样式规则改名为 `.tech-stage-frame`（同一元素：`tech-workbench.js` 建 frame 时补 `iframe.className = 'tech-stage-frame'`，`id` 与 `getElementById` 查询方式不变），`width:100% / height:100% / border:0 / border-radius:0`，圆角裁切交给结果卡的 `overflow:hidden`，不产生二次圆角或双边框；`#techWorkspaceOutlet` 保持 `flex:1 1 auto; min-height:0`。
+- 响应式：`@media (max-width:1180px) and (min-width:901px)` 内 `.tech-results-area { margin:12px; }`，`@media (max-width:900px)` 内 `.tech-results-area { margin:8px; }`（同时把窄屏 `#techStageFrame { min-height:62vh }` 同步为 `.tech-stage-frame`）；所有响应式外间距均大于 0，窄屏不恢复贴边，12px 圆角保留。
+- 缓存：`tech-workbench.css?v=twb12 → twb13`、`tech-workbench.js?v=twb13 → twb14`（仅 `tech-workbench.html` 引用这两份资源）；未动其它 JS/CSS 版本号。
+- 测试（实际运行）：`tests.test_tech_right_workspace_quote_rounded_card_red` → **7/7 通过**（Red 基线 4 失败 3 通过，失败原因与 Spec 描述一致：缺卡片容器、缺卡片几何/表面、缺响应式非零间距、缺 iframe 满高无圆角契约）；相关回归 `tests.test_tech_quote_agent_shell_parity_red + 本批目标` → 15/15 通过（三列贴边、footer 归属、右侧标题/流程/模型等既有契约未回归）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → 443 项、**12 失败**、7 跳过，失败全部来自其它并行未实现批次（历史 Drawer 8 / 结果呈现提示词 4），本批无新增失败；`./open-claude/.venv/bin/python -m unittest discover` → 445 项、同一 12 项失败；`node --check tech_app/frontend/tech-workbench.js` 通过；`git diff --check` 通过。
+- 边界：未改项目标题、九阶段流程进度条、`techContextHeader` / `techWorkspaceOutlet` / `techPrev` / `techNext` / `mountStageFrame` / `TechBoardBridge` / `applyStage` / `syncActionBar`、iframe postMessage 协议、九阶段 URL 与后端接口；未改 iframe 内业务页面的卡片、表格、表单与业务结构；未动工作区中并行的附件直传、批量工艺 / 成本、历史 Drawer、工具轨迹修改；未改 Spec 与 Red 测试。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 78. 技术工艺 Agent「结果呈现」提示词口径 实现（9-11）
+
+- 需求：技术工艺 Agent 输出长表格 / 明细时不再在聊天里堆 Markdown 表格或大段 JSON，一律把数据落到右侧看板，聊天只留 2~3 句结论、依据与下一步；让「右侧看板是唯一真源」成为系统提示词的硬约束。
+- 实现（1 个文件，只改提示词文本，不动工具与协议）：`tech_app/backend/services/oc_agent.py` 的 `SYSTEM_APPENDIX` 在既有「硬性要求」之后追加「结果呈现（所有阶段都适用）」段，写入 Spec 要求的三句原样口径 —— 包含「绝不允许只把表格写在聊天文字里」、「不要贴 Markdown 表格」、「右侧看板是唯一真源」，并补充「只有当右侧看板已注册该视图时才调用 focus_view」与「不要贴大段 JSON / 字段清单」。
+- 九阶段落点表：同一段内给出九 stage 的落点 —— `requirement-create` / `requirement-confirm` / `requirement-review`（1.1/1.2/1.3）只有表单、不发 `focus_view`，用 `fill_fields` 回填 + `refresh_view` 刷新；`drawing`（2.1）可 `focus_view` 到 parts / questions / report / evidence / review / files；`process`（2.2）可 `focus_view` 到 drawings / params / process；`cost`（2.3）可 `focus_view` 到 parts / assembly / total / params；`summary` / `report-review` / `report-publish`（3.1/3.2/3.3）没有注册看板视图、不发 `focus_view`。
+- 边界：只追加提示词文本；`SYSTEM_APPENDIX` 的注入方式（`self.conv.system_prompt = f"{self.conv.system_prompt}\n{SYSTEM_APPENDIX}"`）未改；`PLATFORM_TOOL_SCHEMAS`、`TECH_UI_ACTIONS` / `TECH_UI_VIEWS` 白名单、`_handle_tech_ui` 校验、`UI_ACTION_TOOLS` 与 `stream_turn` 事件协议均未动；未改 Spec 与 Red 测试。
+- 测试（实际运行）：`python3 -m unittest tests.test_tech_agent_result_presentation_prompt_red -v` → **8/8 通过**（Red 基线 4 失败 4 通过）；`python3 -m py_compile tech_app/backend/services/oc_agent.py` 通过；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 79. 技术工艺历史记录统一报价 Drawer 实现（9-11）
+
+- 需求：技术工艺 Agent 的历史记录采用报价 Agent `#historyDrawer` 的同一形态 —— 左侧 340px 左滑抽屉 + 半透明全屏遮罩 + 顶部标题/关闭 + 第二行新建/刷新 + 历史卡片列表；技术侧仍读技术项目、按真实 workflow 恢复 stage，不改成报价历史数据。
+- `tech-workbench.html`：新增静态 `#techHistoryOverlay.overlay.tech-history-mask` 与 `aside#techHistoryDrawer.drawer.tech-history-drawer`（`role="dialog"` / `aria-modal="true"` / `aria-labelledby="techHistoryDrawerTitle"`），内含 `.drawer-header`（`#techHistoryDrawerTitle`「技术项目历史」+ `#techHistoryClose` 30×30 关闭图标）、`.drawer-actions`（`#techHistoryNew.btn-mini.primary`「新建技术项目」+ `#techHistoryRefresh` 刷新图标）、`#techHistoryList.drawer-body`；结构静态存在，不在首次点击时临时拼 `innerHTML`。
+- `tech-workbench.css`：抽屉与报价同级 —— 遮罩 `rgba(15,16,25,.35)` + `opacity` / `visibility` 过渡、`.show` 生效；抽屉 `width:340px` / `max-width:88vw` / `height:100vh` / `transform:translateX(-104%)` / `box-shadow:4px 0 24px rgba(15,16,25,.12)`、`.show → translateX(0)`；`.drawer-header` 14px16px、`.drawer-actions` 10px16px、`.drawer-body` 10px12px；`.tech-history-item` 白底 / 0.5px 描边 / 10px 圆角、`.current` 主色边框浅蓝底 + `aria-current`、`.tech-history-chip` 步骤标签。
+- `tech-workbench.js`：重写历史抽屉区块 —— `setTechHistoryOpen` / `isTechHistoryOpen` / `openTechHistory`（加 `.show` + `#techHistory` 聚焦）/ `closeTechHistory`（移除 `.show` + 焦点回位）/ `bindTechHistory`（遮罩点击、关闭按钮、刷新 → `loadTechHistory`、新建 → `location.href = '/报价首页.html?assistant=tech'`、`document` 级 `keydown` Escape 关闭）；`loadTechHistory` 复用既有 `GET /api/projects` 渲染卡片并标出当前项目 + stage；`techStageFromProject` + `techHistoryRestore` 走既有 `/workflow` 与项目详情后调 `applyStage`；删除旧的 `ensureHistoryUi(` 动态建 UI、`historyTimer` 与 hidden 动画。
+- 缓存：`tech-workbench.css?v=twb13 → twb14`、`tech-workbench.js?v=twb14 → twb15`（仅 `tech-workbench.html` 引用这两份资源）；未动其它资源版本号。
+- 测试（实际运行）：`python3 -m unittest tests.test_tech_history_quote_drawer_parity_red -v` → **9/9 通过**（Red 基线 8 失败 1 通过）；`node --check tech_app/frontend/tech-workbench.js` 通过；`git diff --check` 通过。
+- 边界：未改历史数据来源（仍是技术项目 + `/workflow`）、未改九阶段 stage id 与 URL、未新增/删除 `@app.` 路由、未改 iframe postMessage 协议、未改后端接口；未改 Spec 与 Red 测试。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。

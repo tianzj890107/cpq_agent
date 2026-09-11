@@ -15,9 +15,9 @@
       "id": "attachments",
       "label": "附件",
       "quote": "确认需求解析结果.html#chatAttachBtn",
-      "tech": "tech_app/frontend/tech-workbench.html#ocPlus",
+      "tech": "tech_app/frontend/tech-workbench.html#ocChatAttachBtn",
       "status": "live",
-      "release": "既有 ＋ 能力菜单 + 任务文件入口"
+      "release": "既有附件直传（附件直传 Spec：回形针按钮直接打开隐藏文件输入框）+ 任务文件入口"
     },
     {
       "id": "tool_trace",

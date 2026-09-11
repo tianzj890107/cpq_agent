@@ -660,7 +660,7 @@ async function crRunAssembly() {
 
 async function crRunAll() {
   await crSaveNote();
-  crSay('开始逐件测算：先把每个零件算出来，再算整机（它要引用零件的单件成本）。本步不联网。');
+  crSay('一键测算全部成本：先把每个零件算出来，再算整机（它要引用零件的单件成本）。本步不联网。');
   if (!await crRunParts(false)) return;
   crTab = 'assembly';
   await crRunAssembly();
@@ -841,7 +841,7 @@ crStart();
   });
   window.TechBoardRuntime.registerActions({
     runCostReview: {
-      label: '逐件测算并汇总',
+      label: '一键测算全部成本',
       deferred: true,
       run: () => {
         if (crBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };

@@ -7,9 +7,10 @@
  * 与页面的关系：
  *   - #intent 与 #btnParse 就在对话第一条消息里，因此 app.js 原有的赋值和点击
  *     绑定不用改动 —— 设计意图天然"出现在对话内容中"，开始解析按钮天然在它下方。
- *   - 左侧 ＋ 能力菜单与零件清单 / 待澄清问题 / 解析报告 / 任务文件入口只负责导航：
- *     统一工作台（tech-workbench.html）里把看板视图名交给 TechBoardBridge.navigateView；
- *     独立 2.1 页没有父壳桥，由同页看板模块（window.TechBoardViews）就地打开同一份面板。
+ *   - 左侧零件清单 / 待澄清问题 / 解析报告 / 任务文件入口与统一工作台 #techChatActions
+ *     会话快捷能力按钮只负责导航：统一工作台（tech-workbench.html）把看板视图名交给
+ *     TechBoardBridge.navigateView，业务动作走 executeAction；独立 2.1 页没有父壳桥，
+ *     由同页看板模块（window.TechBoardViews）就地打开同一份面板。
  *   - 具体内容一律留在右侧看板内部：零件清单、待澄清问题、解析报告、解析视图、版本
  *     与校核、任务文件都由看板（app.js）注册成视图后展开，父壳不再持有业务抽屉。
  */
@@ -262,6 +263,100 @@
     try { return JSON.stringify(input_).slice(0, 140); } catch { return ""; }
   }
 
+  /* 工具轨迹：工具名 → 中文业务文案。主行只给业务语言，原始工具名 / 入参 / 结果
+     收进默认折叠的详情块。这里只做展示，不发请求、不调看板通道、不写业务分支。 */
+  const TOOL_TRACE_LABELS = {
+    GetProjectState: "读取项目状态",
+    ListParts: "读取零件清单",
+    GetPartDetail: "读取零件详情",
+    GetOpenQuestions: "读取待澄清问题",
+    LookupComponentLibrary: "查询零部件库",
+    LookupProcessLibrary: "查询工艺库",
+    LookupCostLibrary: "查询成本库",
+    UpdatePartParameters: "修改零件参数",
+    GetIntegrationState: "读取整合状态",
+    ListIntegrationParams: "读取整合参数",
+    UpdateIntegrationParams: "修改整合参数",
+    UpdateIntegrationProcess: "修改组装工序",
+    RequestIntegrationStep: "发起整合生成",
+    RequestParse: "请求开始解析图纸",
+    GetRequirementDraft: "读取需求草案",
+    UpdateRequirementFields: "修改需求字段",
+    AttachRequirementFiles: "关联需求附件",
+    ExtractRequirement: "解析需求",
+    GetRequirementTask: "读取需求解析任务",
+    GetRequirementAiFill: "读取需求智能补全",
+    SubmitRequirementConfirmation: "提交需求确认",
+    GetRequirementPrecheck: "读取需求预检查",
+    GetRequirementClarifications: "读取需求待澄清问题",
+    SaveRequirementConfirmationNote: "保存需求确认说明",
+    ConfirmRequirement: "确认需求",
+    ReturnRequirementToDraft: "退回需求草稿",
+    GetRequirementReviewMaterials: "读取需求审核材料",
+    GetRequirementReviewSummary: "读取需求审核摘要",
+    SaveRequirementReviewNote: "保存需求审核意见",
+    ApproveRequirementReview: "审核需求",
+    RejectRequirementReview: "驳回需求审核",
+    UploadIntegrationDrawing: "上传整合图纸",
+    ConfirmIntegrationParams: "确认整合参数",
+    ConfirmIntegrationProcess: "确认组装工序",
+    SendIntegrationToFinance: "把工艺发送财务",
+    GetCostReviewState: "读取成本测算状态",
+    ListCostReviewParts: "读取成本测算零件",
+    RunCostReviewPart: "测算单个零件成本",
+    RunCostReviewAssembly: "测算整机成本",
+    RunCostReviewAll: "逐件测算并汇总成本",
+    UpdateCostReviewNote: "修改成本说明",
+    ConfirmCostReview: "确认成本",
+    WriteCostReviewMaterial: "写入成本物料",
+    ReturnCostReviewToProcess: "把成本结果退回工艺",
+    SendCostReviewToQuote: "把成本结果发送报价",
+    GetSummaryData: "读取汇总数据",
+    GetProcessReport: "读取工艺报告",
+    GenerateProcessReportDraft: "生成报告草稿",
+    UpdateProcessReportFields: "修改报告字段",
+    SaveProcessReportDistribution: "保存报告发布范围",
+    SubmitProcessReportReview: "提交报告审核",
+    GetProcessReportReview: "读取报告审核信息",
+    GetReportReviewSummary: "读取报告审核摘要",
+    SaveReportReviewNote: "保存报告审核意见",
+    ApproveProcessReport: "审核通过报告",
+    RejectProcessReport: "退回报告",
+    GetReportPublishState: "读取报告发布状态",
+    ListReportPublishRecipients: "读取报告发布对象",
+    UpdateReportDistribution: "更新报告发布范围",
+    PublishProcessReport: "发布报告",
+    SendReportToQuote: "回传报价",
+    CreateReportNewVersion: "新建报告版本",
+    GetReportPublishResult: "读取报告发布结果",
+  };
+  // tech_ui 没有单一业务含义，按八个固定 action 各自给中文文案。
+  const TOOL_TRACE_UI_ACTIONS = {
+    focus_view: "切换看板视图",
+    refresh_view: "刷新看板",
+    fill_fields: "回填看板字段",
+    select_part: "选中看板零件",
+    show_result_actions: "展示结果入口",
+    show_progress: "展示任务进度",
+    set_stage: "切换当前步骤",
+    request_confirmation: "请求用户确认",
+  };
+
+  // 业务行文案：已登记工具查表；tech_ui 走 action 表（可拼上 stage）；未登记工具
+  // 回退成含「调用」的中文行，绝不把原始英文工具名当主标题。
+  function toolTraceLabel(name, params) {
+    const tool = String(name || "");
+    const input_ = params || {};
+    if (tool === "tech_ui") {
+      const action = String(input_.action || "");
+      const label = TOOL_TRACE_UI_ACTIONS[action] || `看板操作（${action || "未指定动作"}）`;
+      const stage = input_.stage ? ` · ${input_.stage}` : "";
+      return { title: `${label}${stage}`, subtitle: input_.note || input_.label || input_.view || "" };
+    }
+    const title = TOOL_TRACE_LABELS[tool] || `调用工具 ${tool || "未知"}`;
+    return { title: title, subtitle: toolSubtitle(tool, input_) };
+  }
+
   function clearEmpty() { $("ocEmpty")?.remove(); }
   function addUser(text) { clearEmpty(); tinner.append(el("div", "oc-ubub", text)); scrollDown(); }
   function pushSystem(text) {
@@ -289,19 +384,32 @@
   function addToolCard(ctx, event) {
     const card = el("div", "oc-art");
     const tile = el("div", "oc-atile", toolIcon(event.name));
+    const label = toolTraceLabel(event.name, event.input);
     const mid = el("div");
     mid.style.cssText = "flex:1;min-width:0;";
-    mid.append(el("div", "oc-art-name", event.name));
-    mid.append(el("div", "oc-art-sub", toolSubtitle(event.name, event.input)));
-    const state = el("div", null, "");
+    mid.append(el("div", "oc-art-name", label.title));
+    if (label.subtitle) mid.append(el("div", "oc-art-sub", label.subtitle));
+    const state = el("div", "oc-art-state", "");
     state.innerHTML = '<span class="oc-spin">◌</span>';
-    card.append(tile, mid, state);
+    // 原始工具名 / 入参 JSON / 工具结果收进默认折叠的原生 details：业务用户只看
+    // 主行的中文业务文案，排障时展开仍能看到完整载荷与返回值。
+    let rawInput = "";
+    try { rawInput = JSON.stringify(event.input == null ? {} : event.input).slice(0, 300); }
+    catch { rawInput = ""; }
+    const details = el("details", "oc-art-detail");
+    details.append(el("summary", null, "详情"));
+    details.append(el("div", "oc-art-raw", event.name));
+    details.append(el("pre", "oc-art-input", rawInput));
     const result = el("pre", "oc-tool-result");
     result.style.display = "none";
-    ctx.body.append(card, result);
+    details.append(result);
+    card.append(tile, mid, state, details);
+    ctx.body.append(card);
     ctx.cards[event.id] = { state, result };
     scrollDown();
   }
+  // 工具结果仍写回详情里那一个 <pre class="oc-tool-result">：4000 字截断、失败红字
+  // 与 .err、成功 / 失败状态位（✓ / ⚠ 与 #16a34a / #dc2626）全部保持不变。
   function setToolResult(ctx, event) {
     const card = ctx.cards[event.tool_use_id];
     if (!card) return;
@@ -1226,8 +1334,9 @@
     report: "解析报告", files: "任务文件",
     modelLookup: "联网核验", verify: "校验修正",
   };
-  const capabilityMenu = $("ocCapabilityMenu");
-  const capabilityItems = capabilityMenu ? [...capabilityMenu.querySelectorAll("[data-tech-capability]")] : [];
+  // 会话快捷能力按钮（原 ＋ 能力菜单的五项能力）：只查父壳 #techChatActions 里的
+  // data-tech-capability，不读 iframe DOM，也不在别处再藏一份菜单副本。
+  const capabilityButtons = [...document.querySelectorAll("#techChatActions [data-tech-capability]")];
   const partsActionButton = $("ocPartsAction");
   const questionsActionButton = $("ocQuestionsAction");
   const reportActionButton = $("ocReportAction");
@@ -1235,7 +1344,6 @@
   const boardFilesCount = $("ocFilesCount");
   // 摘要按 stage 记忆：切换大流程后上一阶段的解析摘要不能继续显示。
   let boardResultSummary = null;
-  if (capabilityMenu) capabilityMenu.tabIndex = -1;
 
   function boardBridge() {
     return (window.TechBoardBridge && typeof window.TechBoardBridge.snapshot === "function")
@@ -1247,31 +1355,59 @@
     return String((snapshot && snapshot.stage) || "");
   }
 
-  const plusButton = $("ocPlus");
+  // 上传选中文件：复用既有 POST /api/projects/{id}/attachments（multipart，字段名
+  // files），不新增第二套上传接口；进度、成功与真实错误都进会话时间线。
+  async function uploadChatAttachments(files) {
+    const list = [...(files || [])];
+    if (!list.length) return;
+    if (!projectId) {
+      pushSystem("还没绑定项目，无法上传附件。请先选择项目后再试。");
+      return;
+    }
+    const attachBtn = $("ocChatAttachBtn");
+    if (attachBtn) attachBtn.disabled = true;
+    const names = list.map(file => file.name).join("、");
+    const taskId = `attach-${Date.now()}`;
+    renderTaskProgress({ taskId, label: "上传附件", status: "running", log: [`正在上传：${names}`] });
+    try {
+      const form = new FormData();
+      // 后端 UploadFile 列表的字段名固定为 files；每个文件追加一次，只传二进制，不打印内容。
+      list.forEach(file => form.append("files", file, file.name));
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/attachments`,
+                                  { method: "POST", headers: authHeaders(), body: form });
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => "")).trim();
+        throw new Error(detail || `上传失败（HTTP ${response.status}）`);
+      }
+      const payload = await response.json().catch(() => ({}));
+      const total = Array.isArray(payload.attachments) ? payload.attachments.length : list.length;
+      renderTaskProgress({
+        taskId, label: "上传附件", status: "succeeded",
+        log: [`上传成功：${names}`, `当前附件共 ${total} 个`],
+      });
+      noteInThread(`已上传 ${list.length} 个附件，任务文件已更新。`);
+      refreshBoardAfterUpload();
+    } catch (error) {
+      const message = (error && error.message) || "上传失败";
+      renderTaskProgress({ taskId, label: "上传附件", status: "failed", log: [`上传失败：${message}`], error: message });
+      noteInThread(`上传附件失败：${message}`);
+    } finally {
+      if (attachBtn) attachBtn.disabled = false;
+    }
+  }
 
-  function firstEnabledCapability() {
-    return capabilityItems.find(item => !item.disabled && !item.hidden) || null;
-  }
-  function closeCapabilityMenu(restoreFocus) {
-    if (capabilityMenu && !capabilityMenu.hidden) capabilityMenu.hidden = true;
-    if (plusButton) plusButton.setAttribute("aria-expanded", "false");
-    if (restoreFocus && plusButton) plusButton.focus();
-  }
-  function openCapabilityMenu() {
-    if (!capabilityMenu || !plusButton) return;
-    capabilityMenu.hidden = false;
-    plusButton.setAttribute("aria-expanded", "true");
-    // 打开后焦点进入第一个可用菜单项，键盘用户不用再 Tab 才能进菜单。
-    (firstEnabledCapability() || capabilityMenu).focus();
-  }
-  function toggleCapabilityMenu() {
-    if (!capabilityMenu) return;
-    if (capabilityMenu.hidden) openCapabilityMenu();
-    else closeCapabilityMenu(true);
+  // 上传成功后把新附件带进看板：统一父壳走看板桥既有刷新动作，独立 2.1 页退回本地清单。
+  function refreshBoardAfterUpload() {
+    const bridge = boardBridge();
+    if (bridge && typeof bridge.refreshData === "function") {
+      Promise.resolve(bridge.refreshData({ action: "refreshData", label: "刷新任务文件" })).catch(() => {});
+    }
+    requestBoardSummary();
+    loadFiles();
   }
 
   // 左侧会话栏的入口 → 看板视图：显式、单一来源的映射表。键就是左侧控件（结果
-  // 按钮 / 任务文件用控件 id），＋ 菜单项用 capability:<name>；值是看板视图名。
+  // 按钮 / 任务文件用控件 id），会话快捷能力按钮用 capability:<name>；值是看板视图名。
   const TECH_BOARD_VIEW_ENTRIES = {
     ocPartsAction: 'parts',
     ocQuestionsAction: 'questions',
@@ -1305,7 +1441,7 @@
       ["ocPartsAction", "parts"], ["ocQuestionsAction", "questions"],
       ["ocReportAction", "report"], ["ocFilesAction", "files"],
     ].map(([nodeId, fallback]) => [$(nodeId), TECH_BOARD_VIEW_ENTRIES[nodeId] || fallback]);
-    capabilityItems.forEach(item => pairs.push([
+    capabilityButtons.forEach(item => pairs.push([
       item, TECH_BOARD_VIEW_ENTRIES[`capability:${item.dataset.techCapability}`] || item.dataset.techCapability,
     ]));
     return pairs.filter(([node]) => Boolean(node));
@@ -1365,9 +1501,9 @@
     return null;
   }
 
-  // 统一分派：＋ 的四个能力入口与任务文件按钮只把语义化名字交给同一条导航出口；
+  // 统一分派：会话快捷能力按钮与任务文件按钮只把语义化名字交给同一条导航出口；
   // 不查找 #secUpload 等旧面板，也不另起一套业务数据。
-  // ＋ 菜单混了两类入口：视图入口走 navigate-view，业务动作入口走 execute-action；
+  // 快捷能力混了两类入口：视图入口走 navigate-view，业务动作入口走 execute-action；
   // 发错通道看板会回 unknown-action，所以这里显式分流，不靠名字猜。
   const DRAWING_ACTION_CAPABILITIES = ["modelLookup", "verify"];
 
@@ -1428,10 +1564,8 @@
       const total = Number(fileInfo.count) > 0 ? String(Math.floor(Number(fileInfo.count))) : "—";
       if (boardFilesCount.textContent !== total) boardFilesCount.textContent = total;
     }
-    // 能力入口是 2.1 专属：其它阶段关菜单并禁用，切回 drawing 按最新状态恢复。
-    capabilityItems.forEach(item => { item.disabled = !isDrawing; });
-    if (plusButton) plusButton.disabled = !isDrawing;
-    if (!isDrawing) closeCapabilityMenu(false);
+    // 五项能力入口是 2.1 专属：其它阶段隐藏并禁用，切回 drawing 按最新状态恢复。
+    capabilityButtons.forEach(item => { item.hidden = !isDrawing; item.disabled = !isDrawing; });
     const resultActions = $("ocResultActions");
     if (!resultActions) return;
     const anyResult = isDrawing && (showParts || showQuestions || showReport);
@@ -1510,26 +1644,26 @@
     } catch { /* 桥快照不可用时忽略 */ }
   }
 
-  // 上下文菜单与结果按钮统一绑定：只分派语义化能力名，不拆业务。
+  // 附件与能力按钮统一绑定：只分派语义化能力名，不拆业务。
+  // 回形针点击必须在同一次用户点击链路里直接触发隐藏文件输入框 —— 先请求、先导航或
+  // 先弹层都会失去 user activation，系统文件选择器会被浏览器拦掉。
+  const chatAttachBtn = $("ocChatAttachBtn");
+  chatAttachBtn?.addEventListener("click", () => document.getElementById("ocChatFileInput").click());
+  const chatFileInput = $("ocChatFileInput");
+  chatFileInput?.addEventListener("change", () => {
+    const files = chatFileInput.files ? [...chatFileInput.files] : [];
+    chatFileInput.value = "";      // 清空后同名文件才能再次触发 change
+    if (files.length) uploadChatAttachments(files);
+  });
+  capabilityButtons.forEach(item => {
+    item.addEventListener("click", () => dispatchDrawingCapability(item.dataset.techCapability, {}));
+  });
+  // 独立 2.1 页（index.html）仍保留输入区 ＋ 能力菜单：那里没有父壳桥，由本页 plusMenu()
+  // 就地打开同一批看板视图。统一工作台已删除 ＋，这里取不到按钮便自然不生效。
+  const plusButton = $("ocPlus");
   plusButton?.addEventListener("click", event => {
     event.stopPropagation();
-    if (inUnifiedWorkbench) toggleCapabilityMenu();
-    else plusMenu(event.currentTarget);
-  });
-  capabilityItems.forEach(item => {
-    item.addEventListener("click", () => {
-      closeCapabilityMenu(false);
-      dispatchDrawingCapability(item.dataset.techCapability, {});
-    });
-  });
-  document.addEventListener("click", event => {
-    if (!capabilityMenu || capabilityMenu.hidden) return;
-    if (capabilityMenu.contains(event.target)) return;
-    if (plusButton && plusButton.contains(event.target)) return;
-    closeCapabilityMenu(false);
-  });
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape" && capabilityMenu && !capabilityMenu.hidden) closeCapabilityMenu(true);
+    if (!inUnifiedWorkbench) plusMenu(event.currentTarget);
   });
   // 任务文件入口沿用同一张映射表与唯一出口。
   filesActionButton?.addEventListener("click", () => dispatchDrawingCapability("files", {}));
