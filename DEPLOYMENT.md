@@ -29,4 +29,13 @@
 CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
 ```
 
-脚本只允许 fast-forward/确定 tag，使用现有 Docker Compose 数据挂载，重建 `cpq-suite` 服务并检查 `http://127.0.0.1:8010/`。Docker 守护进程异常时停止并报告，不自行重启整台主机或清理 Docker 数据。
+脚本只允许 fast-forward/确定 tag；部署前会逐一确认以下宿主路径已存在，缺一即非零退出。脚本不会自动创建空目录，避免空目录遮住镜像内容、让人误以为旧数据还在：
+
+- `cpq_settings.json`；
+- `cpq_history/`、`xbom_history/`、`rule_history/`；
+- `tech_app/tech_data/`（技术工艺项目、需求、IR、报告、任务、审计、附件与本地库）；
+- `product_images/`（上传/替换的产品图片）。
+
+`docker-compose.yml` 用 bind mount 把上述运行数据挂到容器内同一路径，容器重建、替换、重启都不会丢数据；不使用匿名 volume。Docker 守护进程异常时停止并报告，不自行重启整台主机或清理 Docker 数据。
+
+部署成功必须同时满足三个条件：`http://127.0.0.1:8010/` 返回 2xx；`http://127.0.0.1:8010/api/health` 返回 2xx；`/api/health` 的 JSON 字段 `status` 严格等于 `ok`。该接口经父服务反向代理到技术工艺 FastAPI 子服务，是子服务启动完成的就绪信号，只看首页会在子服务未启动时误报成功。容器自身也配置了同样的 healthcheck（用运行镜像自带的 Python 标准库解析 JSON，不依赖 `curl`）。达到超时仍不健康时会打印 `docker compose logs --tail=100 cpq-suite` 并非零退出，不删除旧数据、不清理 volume。

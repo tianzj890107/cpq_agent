@@ -17,17 +17,26 @@ git merge-base --is-ancestor "$target" origin/master || { echo "目标不在 Git
 git checkout --detach "$target"
 docker info >/dev/null
 test -f cpq_settings.json || { echo "缺少持久化 cpq_settings.json，拒绝重建。" >&2; exit 1; }
-for path in cpq_history xbom_history rule_history; do
+for path in cpq_history xbom_history rule_history tech_app/tech_data product_images; do
   test -d "$path" || { echo "缺少持久化目录 $path，拒绝重建。" >&2; exit 1; }
 done
 docker compose up -d --build cpq-suite
+ready=0
 for _ in $(seq 1 60); do
-  if curl --fail --silent --show-error "http://127.0.0.1:${deploy_port}/" >/dev/null; then
-    echo "部署成功 commit=$target port=$deploy_port"
-    exit 0
+  root_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${deploy_port}/" || true)"
+  health_code="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${deploy_port}/api/health" || true)"
+  if [[ "$root_code" == 2* && "$health_code" == 2* ]] \
+     && curl --fail --silent --show-error "http://127.0.0.1:${deploy_port}/api/health" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if str(d.get("status")) == "ok" else 1)'; then
+    ready=1
+    break
   fi
   sleep 1
 done
+if [ "$ready" = "1" ]; then
+  echo "部署成功 commit=$target port=$deploy_port"
+  exit 0
+fi
 docker compose logs --tail=100 cpq-suite >&2 || true
 echo "服务健康检查失败。" >&2
 exit 1

@@ -25,4 +25,20 @@ services:
       - ./cpq_history:/app/cpq_history
       - ./xbom_history:/app/xbom_history
       - ./rule_history:/app/rule_history
+      # 持久化：技术工艺运行数据（项目/需求/IR/报告/任务/审计/附件/本地库），宿主与容器同路径
+      - ./tech_app/tech_data:/app/tech_app/tech_data
+      # 持久化：产品图片（用户上传/替换后的图片），容器重建后仍保留
+      - ./product_images:/app/product_images
+    healthcheck:
+      # 镜像不含 curl：用运行镜像自带的 Python 标准库请求父服务反代的 /api/health，
+      # 必须解析 JSON 并严格校验 status == "ok"（子服务未起时 / 仍可能返回 200）。
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import json,urllib.request;d=json.load(urllib.request.urlopen('http://127.0.0.1:8010/api/health',timeout=4));assert d.get('status')=='ok'"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped

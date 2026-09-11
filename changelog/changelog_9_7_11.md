@@ -650,3 +650,20 @@
 - 规范与红测：`docs/specs/global-brand-color-0067d1.md` 更名为 `docs/specs/global-brand-color-0060e6.md` 并更新色阶与验收口径；`tests/test_global_brand_color_red.py`、`tests/test_primary_button_blue_gradient_red.py` 的断言与用例名同步到 `#0060E6` 色阶。
 - 测试（实际运行）：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **349 项、全部通过**；品牌契约两套 10/10 通过；`node --check` 覆盖本批改动的全部 JS；`git diff --check` 通过。
 - 范围：仅改样式/品牌色与对应规范、红测；未新增或删除 `@app.` 路由，未改业务逻辑、数据结构、历史会话与项目数据。
+
+## 61. 容器运行数据持久化与完整健康检查 Spec / Red 基线（9-11）
+
+- 新增 Spec `docs/specs/deployment-runtime-data-persistence-and-health.md`：明确技术工艺运行数据 `tech_app/tech_data` 和产品图片 `product_images` 必须通过宿主 bind mount 跨容器重建保留；部署前必须确认两个目录存在，不得静默创建空目录或覆盖旧数据。
+- 健康契约：部署成功必须同时满足父服务 `/` 返回 2xx、技术工艺 `/api/health` 返回 2xx 且 JSON `status == "ok"`；Compose 也必须声明基于 Python 标准库的同口径 healthcheck，避免父首页正常但 8012 子服务失败时误报成功。
+- 新增红测 `tests/test_deployment_runtime_data_persistence_and_health_red.py`（5 项），覆盖两个精确 bind mount、两个运行目录的部署前守卫、父服务与技术工艺双重就绪验证、Compose healthcheck 及禁止用空目录掩盖数据缺失。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_deployment_runtime_data_persistence_and_health_red -v` → **5 个测试方法全部命中缺口，共 6 个失败点**；其中目录守卫对 `tech_app/tech_data` 与 `product_images` 分别报告子测试失败，其余失败为两个 bind mount、部署脚本未验证 `/api/health` JSON、Compose 未声明 healthcheck。
+- 全量口径（实际运行）：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **354 项，6 个失败点**；失败全部来自本批新增 RED，原有 349 项保持通过。`git diff --check` 通过。
+- 范围：本批只新增 Spec、RED 测试与周 changelog，未修改 Docker/Compose/部署实现、业务逻辑、分支/MR/CI 规则；未启动或部署服务，未读取、改写或提交任何运行数据。
+
+## 61. 容器部署：技术工艺运行数据 / 产品图片持久化与完整健康检查（9-11）
+
+- `docker-compose.yml`：在保留 `cpq_settings.json`、`cpq_history`、`xbom_history`、`rule_history` 挂载的前提下，新增两条精确 bind mount `./tech_app/tech_data:/app/tech_app/tech_data` 与 `./product_images:/app/product_images`（宿主与容器同路径，不使用匿名 volume，不改容器内数据路径）。为 `cpq-suite` 增加 `healthcheck`：用运行镜像自带 Python 标准库请求 `http://127.0.0.1:8010/api/health`，解析 JSON 并严格校验 `status == "ok"`（`interval 15s` / `timeout 5s` / `retries 5` / `start_period 90s`），不依赖 `curl`。
+- `scripts/deploy_server.sh`：部署前目录守卫在原有 `cpq_history`/`xbom_history`/`rule_history` 之外补上 `tech_app/tech_data` 与 `product_images`，缺任一路径打印具体路径并非零退出；不使用 `mkdir` 自动建空目录、不删除/移动/覆盖目录、不清理 Docker volume。就绪循环改为三条件同时成立才打印「部署成功」并退出 0：`http://127.0.0.1:${deploy_port}/` 返回 2xx、`/api/health` 返回 2xx、且 `/api/health` JSON 的 `status` 严格等于 `ok`；超时保留 `docker compose logs --tail=100 cpq-suite` 并非零退出。
+- `DEPLOYMENT.md`：同步持久化目录清单（含 `tech_app/tech_data/`、`product_images/`）、bind mount 说明与三条件健康判定，明确只看首页会在技术工艺子服务未启动时误报成功。
+- 测试（实际运行）：`tests.test_deployment_runtime_data_persistence_and_health_red` → **5/5 通过**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → 全量通过；`docker compose config` 成功且展开后含两条新增 bind mount 与 healthcheck；`bash -n scripts/deploy_server.sh` 通过；`git diff --check` 通过。
+- 边界：未修改 Spec、RED 测试、Dockerfile、业务代码、接口与数据格式、认证/角色/权限、`.gitlab-ci.yml`、`AGENTS.md`、分支/MR/tag/Release 配置，也未读写任何真实运行数据或密钥；未启动、停止或部署服务；提交与双推按用户后续明确指令单独执行。
