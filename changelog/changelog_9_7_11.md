@@ -600,3 +600,11 @@
 - 提交：`fc7b3c3`「技术工艺 Agent 能力恢复 13–15 实现：3.1/3.2/3.3 报告 Agent 动作接通」（父提交 `923f53d`）；`6ddaa3d`「技术工艺 Agent 能力恢复 16–19 Spec/Red 基线」（父提交 `fc7b3c3`，含 `## 50` / `## 51` / `## 53` / `## 54` 的 Spec、红测与 changelog）。
 - 双推：`python3 scripts/push_remotes.py --check` 回读 `gitlab/20260909`、`origin/20260909` 与 HEAD 三者同为 `6ddaa3d`；未创建 MR/tag/Release，未部署，未启动服务，未做浏览器验收。
 - 说明：本记录不改变第 16–19 步仍待实现的事实；三处红测基线（`## 50`/`## 51`/`## 53`/`## 54` 中标注「未提交、未推送」的句子描述的是 Spec/Red 基线落盘当刻，提交事实以本记录为准。
+
+## 56. 第 0–15 步验收与 13–15 实现的提交双推完成记录（9-11）
+
+- 验收结论：第 0–15 步目标套件 16 套 → **139 项全通过、1 跳过**；全量 326 项、4 跳过、26 失败（26 项全为第 16–19 步尚未实现的预期 Red）；`node --check` / `py_compile` / `git diff --check` 均通过。
+- 提交：`3d7141e`「changelog: 记录第 0–15 步验收与 13–15 / 16–19 提交双推事实」（父提交 `6ddaa3d`，父提交 `fc7b3c3` 为 13–15 实现）。
+- 双推：`gitlab/20260909` 与 `origin/20260909` 均由 `6ddaa3d` fast-forward 到 `3d7141e`（`6ddaa3d..3d7141e`），`git ls-remote` 回读两者与 HEAD 一致。
+- 过程说明：仓库 `scripts/push_remotes.py` 的干净工作区守卫因**并行第 16–19 步**未提交改动（`main.py` / `tech-workbench.css` / `tech-workbench.html` / `tech-workbench.js`）而拒绝执行；本次按用户「16-19 不用管，只做直到 15 的提交推送」的明确指令，改用精确 SHA 的 `git push`（非 force、纯 fast-forward，不含任何未提交内容）完成双推。第 16–19 步在途改动保持原样，未被提交、未被覆盖。
+- 未创建 MR/tag/Release，未部署，未启动服务，未做浏览器验收。
