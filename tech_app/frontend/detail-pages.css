@@ -1,10 +1,10 @@
 /* 工艺拆解与成本分析：沿用工作台的浅色卡片、蓝紫主操作与底部操作栏。 */
 :root {
-  --detail-blue: #0067D1;
-  --detail-blue-dark: #0057B8;
-  --detail-blue-soft: #EAF3FC;
-  --detail-purple: #0067D1;
-  --detail-purple-soft: #F4F9FE;
+  --detail-blue: #0060E6;
+  --detail-blue-dark: #0050C4;
+  --detail-blue-soft: #E6F0FD;
+  --detail-purple: #0060E6;
+  --detail-purple-soft: #F4F8FF;
   --detail-green: #059669;
   --detail-green-soft: #ecfdf5;
   --detail-amber: #b45309;
@@ -28,9 +28,9 @@ body.detail-page .detail-header {
   min-height: 64px;
   padding: 0 max(20px, calc((100vw - 1200px) / 2 + 20px));
   gap: 14px;
-  background: rgba(255, 255, 255, .96);
+  background: rgba(255,255,255, .96);
   border-bottom: 1px solid var(--detail-border);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+  box-shadow: 0 1px 2px rgba(15,23,42, .03);
 }
 body.detail-page .detail-header h1 { color: var(--detail-ink); font-size: 18px; }
 body.detail-page .subtitle { max-width: 760px; color: var(--detail-muted); line-height: 1.45; }
@@ -61,11 +61,11 @@ body.detail-page .proc-head {
   gap: 10px;
   margin-bottom: 16px;
   padding: 18px 20px;
-  background: linear-gradient(120deg, #fff 0%, #faf5ff 100%);
+  background: linear-gradient(120deg, #fff 0%, #F4F8FF 100%);
   border: 1px solid #ddd6fe;
   border-radius: 12px;
 }
-body.detail-page .proc-head .pid { padding: 3px 9px; color: #6d28d9; background: var(--detail-purple-soft); border: 0; border-radius: 6px; font-size: 12px; }
+body.detail-page .proc-head .pid { padding: 3px 9px; color: #0060E6; background: var(--detail-purple-soft); border: 0; border-radius: 6px; font-size: 12px; }
 body.detail-page .proc-head h2 { color: var(--detail-ink); font-size: 20px; }
 body.detail-page .proc-head .pmat { color: var(--detail-muted); }
 
@@ -77,7 +77,7 @@ body.detail-page .proc-summary {
   background: #fff;
   border: 1px solid var(--detail-border);
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .025);
+  box-shadow: 0 1px 2px rgba(15,23,42, .025);
 }
 body.detail-page .card-h { margin-bottom: 12px; padding-bottom: 10px; color: var(--detail-ink); border-bottom-color: #f3f4f6; font-size: 13px; letter-spacing: 0; }
 body.detail-page .panel-card .row,
@@ -98,7 +98,7 @@ body.detail-page .detail-file-picker { display: flex; align-items: center; gap: 
 body.detail-page .detail-file-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-height: 44px; padding: 9px 18px; border: 2px solid var(--detail-blue); border-radius: 9px; background: #fff; color: var(--detail-blue); font-size: 14px; font-weight: 600; transition: .15s; }
 body.detail-page .detail-file-picker:hover .detail-file-button { background: var(--detail-blue-soft); }
 body.detail-page .detail-file-name { min-width: 0; overflow: hidden; color: var(--detail-subtle); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-body.detail-page .detail-file-input:focus + .detail-file-picker .detail-file-button { box-shadow: 0 0 0 2px #bfdbfe; }
+body.detail-page .detail-file-input:focus + .detail-file-picker .detail-file-button { box-shadow: 0 0 0 2px #B4D0F8; }
 body.detail-page textarea:focus,
 body.detail-page input:focus,
 body.detail-page select:focus { outline: none; border-color: var(--detail-blue); box-shadow: 0 0 0 2px var(--detail-blue-soft); }
@@ -114,7 +114,7 @@ body.detail-page .proc-totals .stat .l { color: var(--detail-muted); }
 body.detail-page .proc-warn,
 body.detail-page .proc-q { margin-top: 7px; padding: 7px 9px; color: #92400e; background: var(--detail-amber-soft); border-radius: 7px; }
 
-body.detail-page .vnode:not(:last-child)::before { background: #dbeafe; }
+body.detail-page .vnode:not(:last-child)::before { background: #E6F0FD; }
 body.detail-page .vnode .vno { border-color: #fff; box-shadow: 0 0 0 1px var(--detail-border); }
 body.detail-page .vnode .vname { color: var(--detail-ink); }
 body.detail-page .vnode .vtype { color: var(--detail-muted); }
@@ -124,8 +124,8 @@ body.detail-page .vnode.cat-machining .vno { background: var(--detail-blue); }
 body.detail-page .vnode.cat-thermal .vno { background: #f59e0b; }
 body.detail-page .vnode.cat-inspect .vno { background: var(--detail-green); }
 
-body.detail-page .step { padding: 14px; background: #fff; border-color: var(--detail-border); border-radius: 10px; box-shadow: 0 1px 2px rgba(15, 23, 42, .02); }
-body.detail-page .step .sno { background: var(--detail-purple); box-shadow: 0 4px 10px rgba(0, 103, 209, .20); }
+body.detail-page .step { padding: 14px; background: #fff; border-color: var(--detail-border); border-radius: 10px; box-shadow: 0 1px 2px rgba(15,23,42, .02); }
+body.detail-page .step .sno { background: var(--detail-purple); box-shadow: 0 4px 10px rgba(0,96,230, .20); }
 body.detail-page .step .stitle { color: var(--detail-ink); }
 body.detail-page .step .stype { color: var(--detail-blue); background: var(--detail-blue-soft); }
 body.detail-page .step .sdesc { color: var(--detail-muted); }
@@ -134,7 +134,7 @@ body.detail-page .step .sgrid .k,
 body.detail-page .step .sdep { color: var(--detail-subtle); }
 body.detail-page .step.lo { border-left-color: #ef4444; }
 body.detail-page .step.mid { border-left-color: #f59e0b; }
-body.detail-page .step.hl { box-shadow: 0 0 0 2px #bfdbfe; }
+body.detail-page .step.hl { box-shadow: 0 0 0 2px #B4D0F8; }
 body.detail-page .step .sedit label { color: var(--detail-muted); }
 body.detail-page .step .sedit input,
 body.detail-page .step .sedit select,
@@ -153,7 +153,7 @@ body.detail-page .cost-table tr:hover td { background: #f8fbff; }
 body.detail-page .cost-table .amt { color: var(--detail-ink); }
 body.detail-page .cost-table .src { color: var(--detail-muted); }
 body.detail-page .cost-table input { color: var(--detail-ink); background: #fff; border-color: var(--detail-border); }
-body.detail-page .cat-tag { color: #6d28d9; background: var(--detail-purple-soft); }
+body.detail-page .cat-tag { color: #0060E6; background: var(--detail-purple-soft); }
 body.detail-page .priceref { border-color: var(--detail-border); background: #fafafa; }
 body.detail-page .priceref .pi { color: var(--detail-ink); }
 body.detail-page .priceref .pp { color: var(--detail-green); }
@@ -168,9 +168,9 @@ body.detail-page .proc-actions {
   justify-content: flex-end;
   min-height: 64px;
   padding: 12px max(20px, calc((100vw - 1200px) / 2 + 20px));
-  background: rgba(255, 255, 255, .96);
+  background: rgba(255,255,255, .96);
   border-top-color: var(--detail-border);
-  box-shadow: 0 -3px 16px rgba(15, 23, 42, .05);
+  box-shadow: 0 -3px 16px rgba(15,23,42, .05);
 }
 body.detail-page .proc-actions .act-sm { min-width: 112px; padding: 8px 13px; background: var(--detail-blue); border-radius: 8px; font-weight: 600; }
 body.detail-page .proc-actions .act-sm:hover:not(:disabled),

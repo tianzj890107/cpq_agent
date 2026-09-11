@@ -33,7 +33,7 @@ class GlobalBrandColorContract(unittest.TestCase):
         for path in UI_FILES:
             yield path, path.read_text(encoding="utf-8")
 
-    def test_global_entry_points_define_0067d1_as_primary(self):
+    def test_global_entry_points_define_0060e6_as_primary(self):
         entries = [
             "报价首页.html", "配置首页.html", "规则首页.html",
             "XBOM智能体-配置BOM生成.html", "规则助手-规则配置.html",
@@ -41,7 +41,7 @@ class GlobalBrandColorContract(unittest.TestCase):
         ]
         for relative in entries:
             text = (ROOT / relative).read_text(encoding="utf-8")
-            if "#0067D1" not in text.upper():
+            if "#0060E6" not in text.upper():
                 self.fail(f"{relative} 尚未声明统一品牌主色")
 
     def test_no_legacy_purple_or_competing_blue_brand_literals(self):
@@ -57,17 +57,17 @@ class GlobalBrandColorContract(unittest.TestCase):
     def test_shared_dynamic_components_use_new_primary_fallback(self):
         for relative in ("cpq_auth.js", "cpq_msg.js"):
             text = (ROOT / relative).read_text(encoding="utf-8")
-            if "#0067D1" not in text.upper():
+            if "#0060E6" not in text.upper():
                 self.fail(f"{relative} fallback 未统一")
             self.assertNotIn("#6366f1", text.lower())
 
     def test_blue_tint_tokens_exist_for_background_border_and_interaction(self):
         combined = "\n".join(text for _, text in self.texts()).upper()
-        for color in ("#0057B8", "#004A9F", "#EAF3FC", "#F4F9FE", "#B8D7F4"):
+        for color in ("#0050C4", "#00419F", "#E6F0FD", "#F4F8FF", "#B4D0F8"):
             if color not in combined:
                 self.fail(f"缺少统一同色系 token：{color}")
         compact = re.sub(r"\s+", "", combined)
-        self.assertRegex(compact, r"RGBA\(0,103,209,\.?\d+\)")
+        self.assertRegex(compact, r"RGBA\(0,96,230,\.?\d+\)")
 
     def test_semantic_success_warning_and_danger_colors_are_preserved(self):
         combined = "\n".join(text for _, text in self.texts()).lower()

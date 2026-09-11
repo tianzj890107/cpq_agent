@@ -53,11 +53,11 @@
     style.id = 'cpqInboxCss';
     style.textContent = [
       '.cpq-inbox-card{cursor:pointer}',
-      '.cpq-inbox-card.technew{border-left:3px solid #0067D1}',
+      '.cpq-inbox-card.technew{border-left:3px solid #0060E6}',
       '.cpq-inbox-meta{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}',
       '.cpq-inbox-chip{padding:2px 9px;border-radius:999px;background:var(--bg-page,#f3f4f6);',
       'color:var(--text-secondary,#64748b);font-size:11.5px}',
-      '.cpq-inbox-chip.no{background:#0067D1;color:#fff;font-weight:700;letter-spacing:.03em}',
+      '.cpq-inbox-chip.no{background:#0060E6;color:#fff;font-weight:700;letter-spacing:.03em}',
       '.cpq-inbox-note{margin-top:7px;padding:7px 10px;border-radius:8px;',
       'background:var(--bg-page,#f8fafc);color:var(--text-secondary,#64748b);font-size:12px}',
       '.cpq-tab-badge{margin-left:6px;padding:0 6px;border-radius:999px;background:#ef4444;',

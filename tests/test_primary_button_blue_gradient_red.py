@@ -18,9 +18,9 @@ class PrimaryButtonBlueGradientContract(unittest.TestCase):
 
     def assert_gradient_tokens(self, css, source):
         expected = (
-            "--gradient-primary:linear-gradient(135deg,#0067d10%,#0057b8100%)",
-            "--gradient-primary-hover:linear-gradient(135deg,#0057b80%,#004a9f100%)",
-            "--gradient-primary-soft:linear-gradient(135deg,#ffffff0%,#f4f9fe100%)",
+            "--gradient-primary:linear-gradient(135deg,#0060e60%,#0050c4100%)",
+            "--gradient-primary-hover:linear-gradient(135deg,#0050c40%,#00419f100%)",
+            "--gradient-primary-soft:linear-gradient(135deg,#ffffff0%,#f4f8ff100%)",
         )
         for token in expected:
             self.assertIn(token, css, f"{source} 缺少同色系渐变 token：{token}")
@@ -63,9 +63,9 @@ class PrimaryButtonBlueGradientContract(unittest.TestCase):
             r"#technext:hover:not\(:disabled\)\{[^}]*background:var\(--gradient-primary-hover\)",
         )
 
-    def test_primary_brand_color_stays_0067d1(self):
-        self.assertIn("--color-primary:#0067d1", self.quote)
-        self.assertIn("--twb-primary:#0067d1", self.tech)
+    def test_primary_brand_color_stays_0060e6(self):
+        self.assertIn("--color-primary:#0060e6", self.quote)
+        self.assertIn("--twb-primary:#0060e6", self.tech)
 
 
 if __name__ == "__main__":

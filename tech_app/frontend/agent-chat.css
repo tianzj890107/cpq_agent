@@ -10,7 +10,7 @@
   --oc-bg-3: #ececf1;
   --oc-border-3: #e7e7ea;
   --oc-border-2: #d9d9e3;
-  --oc-accent: #0067D1;
+  --oc-accent: #0060E6;
   --oc-text-1: #1f2023;
   --oc-text-2: #62636d;
   --oc-text-3: #9a9ba6;
@@ -30,7 +30,7 @@
   /* 页脚是 fixed 的（上一步 / 解析报告，约 70px 高），小窗再高也不能盖住它。 */
   max-height: calc(100vh - 78px - 88px); overflow-y: auto;
   border: .5px solid var(--oc-border-2); border-radius: 13px; background: var(--oc-bg-1);
-  box-shadow: 0 6px 24px rgba(15, 23, 42, .1);
+  box-shadow: 0 6px 24px rgba(15,23,42, .1);
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--oc-text-1);
@@ -49,7 +49,7 @@
 .oc-dock-mark {
   display: flex; width: 24px; height: 24px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 8px;
-  background: linear-gradient(135deg, #0067D1, #0057B8); color: #fff; font-size: 13px;
+  background: linear-gradient(135deg, #0060E6, #0050C4); color: #fff; font-size: 13px;
 }
 .oc-dock-title { flex: 1; font-size: 13px; font-weight: 600; }
 .oc-dock-count {
@@ -144,7 +144,7 @@
 }
 .oc-ibtn:hover { background: var(--oc-bg-2); color: var(--oc-text-1); }
 .oc-ibtn:focus-visible {
-  outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px;
+  outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px;
   background: var(--oc-bg-2); color: var(--oc-accent);
 }
 .oc-ibtn:disabled { opacity: .45; cursor: not-allowed; }
@@ -162,8 +162,8 @@
 .oc-aav {
   display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 50%;
-  background: linear-gradient(135deg, #0067D1, #0057B8);
-  box-shadow: 0 2px 7px rgba(0, 103, 209, .3); color: #fff; font-size: 14px;
+  background: linear-gradient(135deg, #0060E6, #0050C4);
+  box-shadow: 0 2px 7px rgba(0,96,230, .3); color: #fff; font-size: 14px;
 }
 .oc-abody { min-width: 0; flex: 1; }
 .oc-atxt { color: var(--oc-text-1); font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
@@ -231,7 +231,7 @@
 }
 .oc-chip:hover { border-color: var(--oc-accent); background: var(--oc-bg-3); }
 .oc-chip:focus-visible {
-  outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px;
+  outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px;
   border-color: var(--oc-accent);
 }
 .oc-chip:disabled {
@@ -247,9 +247,9 @@
 /* 解析报告：和前两个按钮并排，但它是"看整份结果"的收口动作，用实心蓝分出层级
    —— 三个长得一模一样的话，用户读不出哪个是终点。 */
 .oc-chip-report {
-  border-color: transparent; background: #0067D1; color: #fff; font-weight: 600;
+  border-color: transparent; background: #0060E6; color: #fff; font-weight: 600;
 }
-.oc-chip-report:hover { border-color: transparent; background: #0057B8; }
+.oc-chip-report:hover { border-color: transparent; background: #0050C4; }
 
 /* 任务文件：直接列在右侧小窗里，不用点开弹窗 */
 .oc-files-list { padding-top: 2px; }
@@ -364,7 +364,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   border: .5px solid var(--oc-border-2); border-radius: 16px; background: var(--oc-bg-2);
   transition: border-color .15s, box-shadow .15s;
 }
-.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(0, 103, 209, .12); }
+.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(0,96,230, .12); }
 .oc-inputbox textarea {
   min-width: 0; max-height: 120px; flex: 1; padding: 0; border: 0; background: transparent;
   color: var(--oc-text-1); font: 14px/1.5 inherit; outline: 0; resize: none;
@@ -372,7 +372,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-send {
   display: flex; width: 38px; height: 38px; flex-shrink: 0; align-items: center;
   justify-content: center; border: none; border-radius: 11px;
-  background: linear-gradient(135deg, #0067D1, #0057B8);
+  background: linear-gradient(135deg, #0060E6, #0050C4);
   color: #fff; cursor: pointer;
 }
 .oc-send .ti { font-size: 18px; color: #fff; }
@@ -385,7 +385,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-pop {
   position: fixed; z-index: 1300; min-width: 210px; max-height: 360px; overflow: auto;
   padding: 6px; border: .5px solid var(--oc-border-2); border-radius: 12px;
-  background: var(--oc-bg-1); box-shadow: 0 12px 34px rgba(0, 0, 0, .16);
+  background: var(--oc-bg-1); box-shadow: 0 12px 34px rgba(0,0,0, .16);
   font: 13px/1.5 inherit;
 }
 .oc-popitem {
@@ -404,7 +404,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 /* ---------- 抽屉：承载原左栏的资料与结果面板 ---------- */
 .oc-drawer-backdrop {
   position: fixed; z-index: 1200; inset: 0; border: 0; padding: 0;
-  background: rgba(15, 23, 42, .38); cursor: pointer;
+  background: rgba(15,23,42, .38); cursor: pointer;
 }
 .oc-drawer-backdrop[hidden] { display: none; }
 .oc-drawer {
@@ -412,7 +412,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   /* 工艺推荐/成本测算面板搬进来之后，抽屉要容得下它的多栏表格。 */
   display: flex; width: min(760px, 96vw); flex-direction: column;
   border-left: .5px solid var(--oc-border-3); background: var(--oc-bg-1);
-  box-shadow: -18px 0 48px rgba(15, 23, 42, .18);
+  box-shadow: -18px 0 48px rgba(15,23,42, .18);
 }
 .oc-drawer[hidden] { display: none; }
 .oc-drawer-head {
@@ -450,19 +450,19 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-stage-context-head { display: flex; align-items: center; gap: 8px; }
 .oc-stage-context-title { color: var(--oc-text-1); font: 600 12.5px/1.4 inherit; }
 .oc-stage-context-step {
-  padding: 1px 7px; border: 1px solid #B8D7F4; border-radius: 999px;
-  background: #fff; color: #0067D1; font: 500 11px/1.6 inherit;
+  padding: 1px 7px; border: 1px solid #B4D0F8; border-radius: 999px;
+  background: #fff; color: #0060E6; font: 500 11px/1.6 inherit;
 }
 .oc-stage-context-hint { margin-top: 6px; color: var(--oc-text-3); font-size: 12px; line-height: 1.6; }
 .oc-stage-context-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .oc-stage-context-btn {
-  padding: 5px 12px; border: 1px solid #B8D7F4; border-radius: 999px;
-  background: #fff; color: #0067D1; font: 500 12px/1.4 inherit; cursor: pointer;
+  padding: 5px 12px; border: 1px solid #B4D0F8; border-radius: 999px;
+  background: #fff; color: #0060E6; font: 500 12px/1.4 inherit; cursor: pointer;
   transition: background .15s, border-color .15s;
 }
-.oc-stage-context-btn:hover:not(:disabled) { border-color: #0067D1; background: #EAF3FC; }
+.oc-stage-context-btn:hover:not(:disabled) { border-color: #0060E6; background: #E6F0FD; }
 .oc-stage-context-btn:disabled { cursor: not-allowed; opacity: .6; }
-.oc-stage-context-btn:focus-visible { outline: 2px solid rgba(0, 103, 209, .25); outline-offset: 2px; }
+.oc-stage-context-btn:focus-visible { outline: 2px solid rgba(0,96,230, .25); outline-offset: 2px; }
 
 /* ---------- 统一父壳左侧会话：输入区工具条与 ＋ 能力菜单 ----------
    ＋ 菜单是输入区里的固定 DOM（相对 .oc-cinner 定位），不是 body 上的临时浮层，
@@ -476,7 +476,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   transition: background .15s, border-color .15s, color .15s;
 }
 .oc-files-action:hover { border-color: var(--oc-accent); color: var(--oc-accent); background: var(--oc-bg-3); }
-.oc-files-action:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px; border-color: var(--oc-accent); }
+.oc-files-action:focus-visible { outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px; border-color: var(--oc-accent); }
 .oc-files-action:disabled { opacity: .5; cursor: not-allowed; border-color: var(--oc-border-2); color: var(--oc-text-3); background: var(--oc-bg-2); }
 .oc-files-action-label { white-space: nowrap; }
 
@@ -484,7 +484,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
   display: flex; width: 232px; flex-direction: column; gap: 2px; padding: 6px;
   border: .5px solid var(--oc-border-2); border-radius: 13px; background: var(--oc-bg-1);
-  box-shadow: 0 8px 26px rgba(15, 23, 42, .14);
+  box-shadow: 0 8px 26px rgba(15,23,42, .14);
 }
 .oc-capability-menu[hidden] { display: none; }
 .oc-capability-item {
@@ -493,7 +493,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   text-align: left; cursor: pointer; transition: background .15s, color .15s;
 }
 .oc-capability-item:hover { background: var(--oc-bg-2); color: var(--oc-accent); }
-.oc-capability-item:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: -1px; background: var(--oc-bg-2); color: var(--oc-accent); }
+.oc-capability-item:focus-visible { outline: 2px solid rgba(0,96,230, .35); outline-offset: -1px; background: var(--oc-bg-2); color: var(--oc-accent); }
 .oc-capability-item:disabled { opacity: .45; cursor: not-allowed; background: transparent; color: var(--oc-text-3); }
 
 /* ---------- 统一父壳左侧会话：任务执行进度（按 taskId 一张卡） ---------- */
@@ -510,7 +510,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   color: var(--oc-text-2); font-size: 11px; font-weight: 600;
 }
 .oc-task-card.is-queued .oc-task-state { background: var(--oc-bg-3); color: var(--oc-text-2); }
-.oc-task-card.is-running .oc-task-state { background: #e0edff; color: #0057B8; }
+.oc-task-card.is-running .oc-task-state { background: #e0edff; color: #0050C4; }
 .oc-task-card.is-succeeded .oc-task-state { background: #dcfce7; color: #15803d; }
 .oc-task-card.is-failed .oc-task-state { background: #fee2e2; color: #b91c1c; }
 .oc-task-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
@@ -548,7 +548,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   background: var(--oc-bg-1); color: var(--oc-accent); font: 12.5px/1.2 inherit; cursor: pointer;
 }
 .board-view-back:hover { background: var(--oc-bg-2); border-color: var(--oc-accent); }
-.board-view-back:focus-visible { outline: 2px solid rgba(0, 103, 209, .35); outline-offset: 2px; }
+.board-view-back:focus-visible { outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px; }
 .board-view-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 20px; }
 .board-view-body .panel-section { margin-bottom: 14px; }
 .board-view-body .panel-section[data-drawer-hidden] { display: none; }
@@ -582,7 +582,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-confirm-card {
   margin-top: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--oc-accent, #0067D1);
+  border: 1px solid var(--oc-accent, #0060E6);
   border-radius: 10px;
   background: var(--oc-bg-1, #f5f8fd);
 }
@@ -597,9 +597,9 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   background: #fff;
   color: var(--oc-text, #1f2329);
 }
-.oc-confirm-ok { border-color: var(--oc-accent, #0067D1); background: var(--oc-accent, #0067D1); color: #fff; }
+.oc-confirm-ok { border-color: var(--oc-accent, #0060E6); background: var(--oc-accent, #0060E6); color: #fff; }
 .oc-confirm-ok:disabled, .oc-confirm-cancel:disabled { opacity: .5; cursor: not-allowed; }
 .oc-confirm-ok:focus-visible, .oc-confirm-cancel:focus-visible {
-  outline: 2px solid var(--oc-accent, #0067D1);
+  outline: 2px solid var(--oc-accent, #0060E6);
   outline-offset: 1px;
 }

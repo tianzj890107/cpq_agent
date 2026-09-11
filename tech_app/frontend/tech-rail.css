@@ -24,7 +24,7 @@
   display: grid; position: relative; place-items: center;
   width: 36px; height: 36px; flex: 0 0 36px; margin-bottom: 8px;
   border: 0; border-radius: 10px; padding: 0;
-  background: linear-gradient(135deg, #0067D1, #0057B8); color: #fff;
+  background: linear-gradient(135deg, #0060E6, #0050C4); color: #fff;
 }
 .oc-rail-logo .ti { font-size: 20px; }
 
@@ -36,8 +36,8 @@
   transition: background .15s, color .15s;
 }
 .oc-rail-icon .ti { font-size: 20px; }
-.oc-rail-icon:hover, .oc-rail-icon.active { background: #EAF3FC; color: #0067D1; }
-.oc-rail-icon.active { box-shadow: inset 2px 0 0 #0067D1; }
+.oc-rail-icon:hover, .oc-rail-icon.active { background: #E6F0FD; color: #0060E6; }
+.oc-rail-icon.active { box-shadow: inset 2px 0 0 #0060E6; }
 .oc-rail-icon:disabled { opacity: .45; cursor: not-allowed; }
 .oc-rail-icon:disabled:hover { background: transparent; color: #6b7280; }
 
@@ -73,7 +73,7 @@
 }
 .oc-rail-icon:hover .nav-tooltip { opacity: 1; visibility: visible; }
 /* 已登录时 cpq_auth.js 会给按钮加 active，与报价助手一样高亮。 */
-.oc-rail-icon.active { background: #EAF3FC; color: #0067D1; }
+.oc-rail-icon.active { background: #E6F0FD; color: #0060E6; }
 
 .oc-rail-divider { display: block; width: 32px; height: 1px; flex: 0 0 1px; margin: 6px 0; background: #e5e7eb; }
 .oc-rail-grow { flex: 1 1 auto; }
@@ -88,7 +88,7 @@
 .oc-rail-pop {
   position: absolute; left: calc(100% + 8px); top: 0; z-index: 1300; width: 168px;
   padding: 10px 12px; border: .5px solid #d9d9e3; border-radius: 12px; background: #fff;
-  box-shadow: 0 12px 34px rgba(15, 23, 42, .16); text-align: left; cursor: default;
+  box-shadow: 0 12px 34px rgba(15,23,42, .16); text-align: left; cursor: default;
 }
 .oc-rail-pop[hidden] { display: none; }
 .oc-rail-pop > b { display: block; margin-bottom: 6px; color: #62636d; font: 11px/1.5 inherit; font-weight: 600; }

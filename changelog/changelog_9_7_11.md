@@ -640,3 +640,13 @@
 - 全量口径（实际运行）：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **349 项、全部通过、0 失败**；第 0–19 步既有用例无一回退。
 - 校验：`python3 -m py_compile scripts/tech_e2e_scenarios.py` 通过；`git diff --check` 通过。
 - 交付状态：本记录写入时第 20–22 步产物（3 个 JSON 清单 + runner）**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务、未做浏览器验收。
+
+## 60. 全局品牌主色定稿为 #0060E6（9-11）
+
+- 决策：品牌主色由 `#0067D1` 定稿为 `#0060E6`，并确定同色系色阶：主色 `#0060E6`、悬停 `#0050C4`、按下/深色强调 `#00419F`、浅底/选中 `#E6F0FD`、更浅页面染色 `#F4F8FF`、浅边框 `#B4D0F8`、半透明焦点与阴影 `rgba(0,96,230,<alpha>)`。
+- 全局统一：覆盖全部一方前端（`tech_app` 28 个文件 + 仓库根 11 个文件），主色、hover/active、渐变、焦点环、选中底与边框全部落到新色阶。此前只换了基底色、按钮 hover/active/浅底/浅边仍旧蓝的问题一并修复。
+- 顺带统一的旧蓝与竞争蓝字面量：`#2563AB`、`#2F74C9`、`#1E40AF`、`#285EA8`、`#3F7BD0`、`#3F8AE0`、`#5FA8E0`、`#87B5D6`、`#9FC4E8`、`#DBEAFE`、`#BFDBFE`、`#93C5FD`、`#60A5FA`、`#0284C7`、`#0EA5E9`、`#A5B4FC`、`#C4B5FD`、`#EDE9FE`、`#FAF5FF`、`#EFF6FF`、`#F5F3FF`、`#6D28D9`、`#5B21B6`，以及 `rgba(79,70,229)`、`rgba(95,168,224)`、`rgba(30,64,175)`；品牌渐变统一为 `#0060E6 → #0050C4`。
+- 保持不动：成功/警告/错误语义色、中性灰、正文与禁用态；`changelog` 历史记录、`docs` 旧记录、后端与数据；第三方 vendor（扫描误改的 `tech_app/frontend/vendor/three/three.module.js` 已还原）。
+- 规范与红测：`docs/specs/global-brand-color-0067d1.md` 更名为 `docs/specs/global-brand-color-0060e6.md` 并更新色阶与验收口径；`tests/test_global_brand_color_red.py`、`tests/test_primary_button_blue_gradient_red.py` 的断言与用例名同步到 `#0060E6` 色阶。
+- 测试（实际运行）：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **349 项、全部通过**；品牌契约两套 10/10 通过；`node --check` 覆盖本批改动的全部 JS；`git diff --check` 通过。
+- 范围：仅改样式/品牌色与对应规范、红测；未新增或删除 `@app.` 路由，未改业务逻辑、数据结构、历史会话与项目数据。

@@ -9,15 +9,15 @@
 
 /* 任务编码：工艺经理要凭它跟销售对单，是这一页最该一眼看到的东西。 */
 .tt-card {
-  margin-bottom: 18px; border: 1px solid #bfdbfe; border-radius: 14px;
-  background: #eff6ff; overflow: hidden;
+  margin-bottom: 18px; border: 1px solid #B4D0F8; border-radius: 14px;
+  background: #F4F8FF; overflow: hidden;
 }
 .tt-head {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 14px 20px; background: #dbeafe; color: #1e40af; font-size: 13px;
+  padding: 14px 20px; background: #E6F0FD; color: #00419F; font-size: 13px;
 }
 .tt-no {
-  padding: 4px 13px; border-radius: 999px; background: #0067D1; color: #fff;
+  padding: 4px 13px; border-radius: 999px; background: #0060E6; color: #fff;
   font-size: 14px; font-weight: 700; letter-spacing: .04em;
 }
 .tt-from { margin-left: auto; font-size: 12px; opacity: .85; }
@@ -52,7 +52,7 @@
   border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #0f172a;
   font-family: inherit; font-size: 13px; line-height: 1.7;
 }
-.tt-field textarea:focus { outline: none; border-color: #0067D1; }
+.tt-field textarea:focus { outline: none; border-color: #0060E6; }
 /* 行业模板下拉：与需求描述同宽同风格，别让它看着像个附属控件 —— 选错行业，
    1.1 的整段产品技术规格和 2.x 取的物料费率都会跟着错。 */
 .tt-field select {
@@ -60,7 +60,7 @@
   border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #0f172a;
   font-family: inherit; font-size: 13px;
 }
-.tt-field select:focus { outline: none; border-color: #0067D1; }
+.tt-field select:focus { outline: none; border-color: #0060E6; }
 .tt-field > .tt-hint {
   display: block; margin-top: 5px; color: #94a3b8; font-size: 11.5px;
   font-style: normal; line-height: 1.6;
@@ -68,10 +68,10 @@
 .tt-uploads { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .tt-upload {
   display: inline-flex; align-items: center; gap: 7px; padding: 9px 15px;
-  border: 1px dashed #93c5fd; border-radius: 10px; background: #f8fafc;
-  color: #1e40af; font-size: 13px; cursor: pointer;
+  border: 1px dashed #8FBFFA; border-radius: 10px; background: #f8fafc;
+  color: #00419F; font-size: 13px; cursor: pointer;
 }
-.tt-upload:hover { background: #eff6ff; }
+.tt-upload:hover { background: #F4F8FF; }
 .tt-upload input { display: none; }
 .tt-files { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .tt-file {
@@ -90,15 +90,15 @@
 .tt-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
 .tt-primary {
   padding: 10px 20px; border: none; border-radius: 9px;
-  background: #0067D1; color: #fff; font-size: 13.5px; font-weight: 650; cursor: pointer;
+  background: #0060E6; color: #fff; font-size: 13.5px; font-weight: 650; cursor: pointer;
 }
-.tt-primary:hover:not(:disabled) { background: #1e40af; }
+.tt-primary:hover:not(:disabled) { background: #00419F; }
 .tt-primary:disabled { opacity: .55; cursor: not-allowed; }
 .tt-ghost {
   padding: 10px 18px; border: 1px solid #e2e8f0; border-radius: 9px;
   background: #fff; color: #334155; font-size: 13.5px; cursor: pointer; text-decoration: none;
 }
-.tt-ghost:hover { border-color: #B8D7F4; color: #0057B8; }
+.tt-ghost:hover { border-color: #B4D0F8; color: #0050C4; }
 .tt-note { color: #64748b; font-size: 12px; }
 
 .tt-err {
@@ -110,7 +110,7 @@
 .tt-toast {
   position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 9999;
   padding: 10px 18px; border-radius: 10px; background: #111827; color: #fff;
-  font-size: 13px; box-shadow: 0 8px 24px rgba(15, 23, 42, .18);
+  font-size: 13px; box-shadow: 0 8px 24px rgba(15,23,42, .18);
 }
 .tt-toast.error { background: #b91c1c; }
 
