@@ -529,3 +529,9 @@
 - 测试结果（实际运行）：`tests.test_tech_cost_review_agent_red` **14/14 通过**（实现前 9 失败 5 通过）；`tests.test_tech_integration_agent_red` 11/11、`tests.test_tech_backend_capability_preservation_red` 与 `tests.test_tech_board_bridge_protocol_red` 均通过（21 项一次运行全绿），无回退。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 共 **284 项、254 通过、4 跳过、26 失败**；26 项失败 = 第 13 步 8 项 + 第 14 步 9 项 + 第 15 步 9 项，全部是尚未实现的后续批次预期 Red（`## 46` / `## 47` 已记录），没有把此前任何通过用例改红。`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` 共 286 项、260 通过、26 失败（同三批预期 Red）。
 - 校验：`node --check tech_app/frontend/cost-review.js`、`node --check tech_app/frontend/agent-chat.js`、`python3 -m py_compile tech_app/backend/main.py tech_app/backend/services/oc_agent.py tech_app/backend/services/cost_review.py tech_app/backend/services/cost_flow.py`、`git diff --check` 全部通过；`agent-chat.js` 的 4 个 NUL 哨兵计数保持不变。
 - 范围说明：未提交、未推送、未创建 MR/tag/Release、未部署；未启动服务、未做浏览器验收；未修改任何 Red 测试。双推由用户在本轮末尾明确要求后执行（见 `## 49`）。
+
+## 49. 第 12 步提交与双推记录（9-11）
+
+- 提交：`9f8b888`（父提交 `ce60a5e`），主题「技术工艺 Agent 能力恢复 12 实现：2.3 成本测算 Agent 动作接通」。
+- 双推：用户在本轮末尾明确要求双推，已推送分支 `20260909` 到 GitLab（`gitlab`，`ce60a5e..9f8b888`）与 GitHub（`origin`，`ce60a5e..9f8b888`）。此前「只推 GitLab」的口径被本轮指令覆盖。
+- 未创建 MR/tag/Release，未部署，未启动服务，未做浏览器验收。
