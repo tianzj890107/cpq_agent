@@ -121,39 +121,63 @@ function aiBlocker(tab) {
 }
 
 // --------------------------------------------------------------------------- 请求
-async function aiPost(path, { form, label, quantity } = {}) {
-  if (aiBusy) return;
+/** 长任务进度经统一看板协议上报父壳：左侧进度卡按 taskId 去重、日志增量追加。
+    独立打开（无父壳 / 无运行时）时不通信，页面照常工作。 */
+function aiPublishTask(name, extra) {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.publish !== 'function') return;
+  try {
+    runtime.publish(name, 'integrationStep',
+      Object.assign({ action: 'integrationStep' }, extra || {}));
+  } catch { /* 进度上报失败不影响业务本身 */ }
+}
+
+async function aiPost(path, { form, label, quantity, keepTab } = {}) {
+  if (aiBusy) return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   const blocked = aiBlocker(path);
-  if (blocked) { aiToast(blocked, true); return; }
+  if (blocked) { aiToast(blocked, true); return { ok: false, error: { code: 'blocked', message: blocked } }; }
   aiBusy = true;
   aiRenderActions();
-  const title = label || AI_TABS[path];
+  const title = label || AI_TABS[path] || path;
   aiStatus(`${title}生成中…`);
   const card = aiProcessCard(title);
+  let taskId = '';
   try {
     const query = quantity ? `?quantity=${quantity}` : '';
     const submitted = await api(aiUrl(`/${path}${query}`), { method: 'POST', body: form || new FormData() });
-    aiData = await aiPollTask(submitted.task_id, card);
+    taskId = String(submitted.task_id || '');
+    aiPublishTask('task-progress', { taskId: taskId, label: title, status: 'running',
+                                     progress: `${title}已提交，正在生成…` });
+    aiData = await aiPollTask(taskId, card, title);
     aiEditing[path] = false;
     card.done(true);
     aiStatus(`${title}已完成`);
-    aiTab = path;
+    aiPublishTask('task-completed', { taskId: taskId, label: title, status: 'succeeded' });
+    if (!keepTab) aiTab = path;
     aiRender();
+    return { ok: true };
   } catch (error) {
-    card.done(false, error.message || '失败');
-    aiStatus(`${title}失败：${error.message}`, true);
-    aiToast(error.message || `${title}失败`, true);
+    const message = error.message || `${title}失败`;
+    card.done(false, message);
+    aiStatus(`${title}失败：${message}`, true);
+    aiToast(message, true);
+    aiPublishTask('task-failed', { taskId: taskId, label: title, status: 'failed', error: message });
+    return { ok: false, error: { code: 'task-failed', message: message } };
   } finally {
     aiBusy = false;
     aiRenderActions();
   }
 }
 
-async function aiPollTask(taskId, card) {
+async function aiPollTask(taskId, card, label) {
   while (true) {
     await aiSleep(1200);
     const task = await api(`/api/projects/${encodeURIComponent(aiPid)}/tasks/${encodeURIComponent(taskId)}`);
-    card.log(Array.isArray(task.progress_log) ? task.progress_log : []);
+    const log = Array.isArray(task.progress_log) ? task.progress_log : [];
+    card.log(log);
+    // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
+    aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
+                                     status: 'running', log: log });
     if (task.status === 'succeeded') return task.result;
     if (task.status === 'failed') throw new Error(task.error || '任务失败');
   }
@@ -222,11 +246,11 @@ function aiRenderActions() {
   if (alwaysEditable) save.textContent = '保存参数';
 }
 
-function aiGenerate(tab) {
+function aiGenerate(tab, options) {
   const form = new FormData();
   const note = $ai('aiRequirement')?.value.trim() || '';
   if (note) form.append('note', note);
-  return aiPost(tab, { form });
+  return aiPost(tab, Object.assign({ form }, options || {}));
 }
 
 // --------------------------------------------------------------------------- 面板：整合图纸
@@ -325,11 +349,16 @@ async function aiConfirmStep(step) {
   aiBusy = true;
   aiRenderActions();
   const label = AI_TABS[step];
+  const confirmTask = `confirm-${step}`;
+  aiPublishTask('task-progress', { taskId: confirmTask, label: `${label}确认`,
+                                   progress: `正在确认${label}…` });
   try {
     aiData = await api(aiUrl(`/${step}/confirm`), { method: 'POST' });
     const missing = aiData?.status?.required_missing || 0;
     aiStatus(`${label}已确认`);
     aiToast(`${label}已确认`);
+    aiPublishTask('task-completed', { taskId: confirmTask, label: `${label}确认`,
+                                      status: 'succeeded' });
     if (step === 'process') {
       aiSay('组装工艺已确认。现在可以点左边「确认工艺并发送至财务做成本测算」，'
         + '把任务交给财务经理 —— 他会在 2.3 逐件算零件成本与组装成本。');
@@ -342,6 +371,8 @@ async function aiConfirmStep(step) {
   } catch (error) {
     aiStatus(`确认失败：${error.message}`, true);
     aiToast(error.message || '确认失败', true);
+    aiPublishTask('task-failed', { taskId: confirmTask, label: `${label}确认`,
+                                   status: 'failed', error: error.message || '确认失败' });
   } finally {
     aiBusy = false;
     aiRender();
@@ -759,6 +790,9 @@ async function aiRunOp(kind, dispatch) {
   aiRenderActions();
   const card = aiProcessCard(labels[kind]);
   aiStatus(`${labels[kind]}中…`);
+  const opTask = `integration-${kind}`;
+  aiPublishTask('task-progress', { taskId: opTask, label: labels[kind],
+                                   progress: `${labels[kind]}中…` });
   try {
     const payload = Object.assign(
       { product_name: $ai('aiProductName')?.value.trim() || '' }, dispatch || {});
@@ -774,10 +808,14 @@ async function aiRunOp(kind, dispatch) {
       + `或把结果退回给你复核工艺与用量。`);
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
+    aiPublishTask('task-completed', { taskId: opTask, label: labels[kind],
+                                      status: 'succeeded' });
   } catch (error) {
     card.done(false, error.message || '失败');
     aiStatus(`${labels[kind]}失败：${error.message}`, true);
     aiToast(error.message || `${labels[kind]}失败`, true);
+    aiPublishTask('task-failed', { taskId: opTask, label: labels[kind],
+                                   status: 'failed', error: error.message || '失败' });
   } finally {
     aiBusy = false;
     aiRender();
@@ -1252,6 +1290,38 @@ aiStart();
         const button = $ai('aiToFinance');
         return { visible: true, enabled: Boolean(button) && !button.disabled, busy: false, analyzed: aiAnalyzed() };
       },
+    },
+    // Agent 改完参数 / 工序后让看板重新拉取并渲染（复用 aiStart 的读取路径）。
+    refreshIntegration: {
+      label: '刷新整合看板',
+      run: async () => { await aiStart(); return { ok: true }; },
+      getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy, analyzed: aiAnalyzed() }),
+    },
+    // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 2.2 内跑流水线。
+    integrationStep: {
+      label: '运行整合环节',
+      run: async (payload) => {
+        const step = String((payload && payload.step) || '').toLowerCase();
+        const labels = { params: '参数推荐', process: '组装工艺', cost: '成本测算' };
+        if (!labels[step]) {
+          return { ok: false, error: { code: 'bad-step', message: 'step 只能是 params / process / cost' } };
+        }
+        // 成本测算不在 2.2 的三个页签里（它属于 2.3）：生成但不切走当前页签。
+        return await aiGenerate(step, { label: labels[step], keepTab: step === 'cost' });
+      },
+      getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy }),
+    },
+    // 图纸上传只能由用户完成：切到「整合图纸」页签并聚焦上传入口，不代传二进制。
+    openIntegrationDrawings: {
+      label: '整合图纸',
+      run: async () => {
+        aiSetTab('drawings');
+        const button = $ai('aiUploadBtn');
+        if (button) button.focus();
+        return { ok: true };
+      },
+      getState: () => ({ visible: true, enabled: !aiBusy, busy: false,
+                         active: aiTab === 'drawings' ? 'drawings' : null }),
     },
   });
   window.TechBoardRuntime.registerViews({

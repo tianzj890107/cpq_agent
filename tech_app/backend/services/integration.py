@@ -22,10 +22,13 @@ from typing import Callable, List, Optional, Tuple
 from ..config import DATA_DIR
 from ..models.cost import CostAnalysis, WebSource
 from ..models.integration import (
-    IntegrationParam, IntegrationParamFillPlan, IntegrationParamPlan, IntegrationPlan)
+    FinanceHandoff, IntegrationParam, IntegrationParamFillPlan, IntegrationParamPlan,
+    IntegrationPlan)
 from ..models.ir import DesignIR
 from ..models.process import ProcessOutline, ProcessPlan, ProcessStep
 from ..storage import store
+from ..time_utils import now_cst_str
+from . import cpq_bridge
 from . import llm_client as claude_client
 from . import cost as cost_svc
 from . import process as process_svc
@@ -785,3 +788,135 @@ def payload(project_id: str, plan: IntegrationPlan) -> dict:
         "cost_lookup": store.load_cost_lookup(project_id, ASSEMBLY_PART_ID),
         "process_coverage": store.load_process_coverage(project_id, ASSEMBLY_PART_ID),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 2.2 流转：参数确认 / 工序确认 / 发送财务
+#
+# 这三个动作既来自 HTTP 路由（人工在看板上点按钮），也来自平台 Agent 工具
+# （ConfirmIntegrationParams / ConfirmIntegrationProcess / SendIntegrationToFinance）。
+# 两条路必须落在同一份实现上，否则 Agent 确认过的状态和看板显示的会对不上。
+# --------------------------------------------------------------------------- #
+class IntegrationFlowError(Exception):
+    """2.2 流转的业务拒绝：前置结果缺失或还没确认，调用方映射成 HTTP 400。"""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _flow_actor(user: Optional[dict]) -> Tuple[str, str]:
+    """返回 (审计用的用户名, 展示名)。两者可能不同，审计与界面各取所需。"""
+    user = user or {}
+    username = user.get("username", "system")
+    return username, (user.get("display_name") or user.get("username") or "")
+
+
+def confirm_params(project_id: str, user: Optional[dict] = None) -> IntegrationPlan:
+    """确认「参数推荐」这一环节：整机参数、连接关系与 BOM 由人核对过了。
+
+    与「整合参数」的确认是两件事：那个是交给报价前的最后收口（必填要齐），
+    这个只是本环节定稿 —— 缺口在这里不拦，但要如实说出来。
+    """
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.params is None:
+        raise IntegrationFlowError("还没有参数推荐结果，无法确认")
+    plan.params_confirmed = True
+    plan.params_confirmed_by = display
+    plan.params_confirmed_at = now_cst_str()
+    save_plan(project_id, plan, username)
+    store.audit(project_id, "integration_params_confirm",
+                {"by": display,
+                 "missing_required": len(product_params.missing_required(plan.params))})
+    return plan
+
+
+def confirm_process(project_id: str, user: Optional[dict] = None) -> IntegrationPlan:
+    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给财务经理算成本。
+
+    不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
+    """
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.process is None:
+        raise IntegrationFlowError("还没有组装工艺结果，无法确认")
+    plan.process_confirmed = True
+    plan.process_confirmed_by = display
+    plan.process_confirmed_at = now_cst_str()
+    save_plan(project_id, plan, username)
+    store.audit(project_id, "integration_process_confirm",
+                {"by": display, "steps": len(plan.process.steps)})
+    return plan
+
+
+def send_to_finance(project_id: str, user: Optional[dict] = None, *,
+                    product_name: str = "", note: str = "",
+                    target_type: str = "", target_role_code: str = "",
+                    target_user_id: str = "", token: str = "") -> IntegrationPlan:
+    """2.2 的出口：确认工艺并发送至财务做成本测算。
+
+    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归财务
+    （技术工艺 2.3）。所以这一步**不要求成本已完成**，只要求工艺与参数到位。
+
+    对外调用由 ``cpq_bridge`` 完成，可能抛 BridgeRejected / BridgeUnavailable；
+    调用方（HTTP 路由或 Agent 工具）各自把它翻译成用户能看懂的形式。
+    """
+    # cost_review 反向依赖本模块，函数内延迟导入，避免形成导入环。
+    from . import cost_review
+
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.params is None:
+        raise IntegrationFlowError("请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
+    if plan.process is None:
+        raise IntegrationFlowError("请先完成组装工艺：组装成本要按工序与工时算")
+    # 闸门是**两个确认**，不是报价必填参数 —— 那些参数由财务在 2.3 的「整合参数」补齐。
+    if not plan.params_confirmed:
+        raise IntegrationFlowError("请先在「参数推荐」里点「确认参数推荐」")
+    if not plan.process_confirmed:
+        raise IntegrationFlowError("请先在「组装工艺」里点「确认组装工艺」——"
+                                   "工序与用量定稿了，财务算出来的成本才有意义")
+
+    title = (product_name or "").strip() or (
+        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
+    requirement = store.load_requirement(project_id) or {}
+    req_data = requirement.get("data") or {}
+    result = cpq_bridge.send_to_finance(
+        token, project_id, title,
+        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
+        str(requirement.get("product_name") or ""),
+        note or "工艺与整机参数已确认，请做成本测算",
+        {"tech_cost": {"project_id": project_id, "product_name": title,
+                       "quantity": plan.quantity,
+                       "process_step_count": len(plan.process.steps),
+                       "part_refs": len(plan.params.part_refs)}},
+        target_type, target_role_code, target_user_id)
+
+    # 交给财务就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
+    if not plan.confirmed:
+        plan.confirmed = True
+        plan.confirmed_by = username
+        plan.confirmed_at = now_cst_str()
+        plan.timing.status = "done"
+        plan.timing.completed = True
+        plan.timing.finished_at = plan.confirmed_at
+    plan.finance_handoff = FinanceHandoff(
+        task_id=str(result.get("task_id") or "") or None,
+        task_no=str(result.get("task_no") or ""),
+        target_role_name=str(result.get("target_role_name") or "财务经理"),
+        target_type=str(result.get("target_type") or "role"),
+        target_name=str(result.get("target_name") or ""),
+        sent_at=now_cst_str(),
+        sent_by=display,
+    )
+    save_plan(project_id, plan, username)
+    # 财务那一步的入口状态：谁交来的、什么时候
+    review = cost_review.load_review(project_id)
+    review.received_from = plan.finance_handoff.sent_by
+    review.received_at = plan.finance_handoff.sent_at
+    cost_review.save_review(project_id, review, username)
+    store.audit(project_id, "integration_send_to_finance",
+                {"task_no": plan.finance_handoff.task_no,
+                 "by": plan.finance_handoff.sent_by})
+    return plan

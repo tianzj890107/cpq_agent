@@ -372,6 +372,11 @@
       // 1.2 / 1.3：Agent 起草的确认 / 审核意见经桥带回看板（不落盘、不改状态）。
       if (event.ui_action === "fill-confirmation-note") applyConfirmationNoteAction(event.input);
       if (event.ui_action === "fill-review-note") applyReviewNoteAction(event.input);
+      // 2.2 组装与整合：参数 / 工序改动后刷新看板；请求跑环节交给看板跑既有流水线；
+      // 上传图纸只能由用户完成，这里只把看板切到「整合图纸」并聚焦上传入口。
+      if (event.ui_action === "refresh-integration") refreshIntegrationBoard(event.input);
+      if (event.ui_action === "integration-step") integrationBoardStep(event.input);
+      if (event.ui_action === "open-integration-drawings") openIntegrationDrawings();
       return;
     }
     if (event.type === "tool_result") {
@@ -475,6 +480,7 @@
     if (origin === "Agent") noteInThread("Agent 已请求开始解析，平台流水线正在执行。");
     // 不制造第二次点击事件：直接调用 app.js 绑定在按钮上的同一份实现。
     button.onclick?.();
+  }
   // ---------------------------------------------- 1.1 创建需求：Agent 动作联动
   // Agent 决定一键解析技术资料 / 刷新需求看板时，与 requestParse 完全同模式：只把
   // 语义化业务动作名交给右侧 1.1 看板（TechBoardBridge.executeAction）。字段提取仍
@@ -503,6 +509,42 @@
     Promise.resolve(call).catch(error => {
       pushSystem(`刷新需求看板失败：${(error && error.message) || "右侧看板未响应"}。`);
     });
+  }
+
+  // ---------------------------------------------- 2.2 组装与整合：Agent 动作联动
+  // 与 requestParse / 需求动作完全同模式：左侧只把语义化业务动作名交给右侧 2.2 看板
+  // （TechBoardBridge.executeAction），生成与流转仍由看板复用既有实现执行；
+  // 左侧不直接调用 2.2 的任何接口，也不另写第二份生成逻辑。
+  function integrationBoardAction(start) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("当前还不能操作 2.2 整合看板：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(start(bridge)).catch(error => {
+      pushSystem(`整合看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  function refreshIntegrationBoard() {
+    noteInThread("Agent 已更新整合参数 / 工序，正在刷新右侧 2.2 看板。");
+    integrationBoardAction(bridge => bridge.executeAction("refreshIntegration", { label: "刷新整合看板" }));
+  }
+
+  function integrationBoardStep(input) {
+    const step = String((input && input.step) || "").trim().toLowerCase();
+    const labels = { params: "参数推荐", process: "组装工艺", cost: "成本测算" };
+    if (!labels[step]) {
+      pushSystem("Agent 请求生成整合环节，但没有给出有效的 step（params / process / cost）。");
+      return;
+    }
+    noteInThread(`Agent 已请求生成「${labels[step]}」，右侧看板正在跑平台既有流水线。`);
+    integrationBoardAction(bridge => bridge.executeAction("integrationStep", { step: step, label: labels[step] }));
+  }
+
+  function openIntegrationDrawings() {
+    noteInThread("Agent 请求上传整合图纸 —— 请在右侧看板「整合图纸」页签选择文件上传。");
+    integrationBoardAction(bridge => bridge.executeAction("openIntegrationDrawings", { label: "整合图纸" }));
   }
 
   // 工具回执里的需求解析结果：document_extraction（或顶层同名字段）携带
@@ -682,7 +724,6 @@
     scrollDown();
   }
 
-  }
   function noteInThread(text) {
     clearEmpty();
     const wrap = el("div", "oc-amsg");

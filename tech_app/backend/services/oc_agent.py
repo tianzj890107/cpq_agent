@@ -58,9 +58,19 @@ class AgentUnavailable(RuntimeError):
 _ACTOR: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_actor",
                                                             default="system")
 
+# 发起本轮对话的用户令牌（CPQ SSO）。发送财务要代表用户去调一体化服务，而该请求
+# 必须带用户自己的 Bearer 令牌 —— 与 _ACTOR 同理：worker 线程拿不到请求上下文，
+# 接口层在 stream_sse 时注入。令牌只用于出站调用，绝不进日志、工具结果或异常文案。
+_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_token",
+                                                             default="")
+
 
 def current_actor() -> str:
     return _ACTOR.get() or "system"
+
+
+def current_token() -> str:
+    return _TOKEN.get() or ""
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -676,6 +686,49 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["confirmed"],
         },
     },
+    {
+        "name": "UploadIntegrationDrawing",
+        "description": "请用户上传 2.2 整合图纸（装配图 / 爆炸图 / 接线图）。与 RequestParse 同模式："
+                       "本工具**只发请求、不接收二进制、不落盘**——Agent 无法替用户上传文件，"
+                       "请告诉用户在右侧看板的「整合图纸」页签上传。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "为什么要补图纸"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ConfirmIntegrationParams",
+        "description": "确认 2.2「参数推荐」这一环节（整机参数、连接关系与 BOM 已由人核对）。"
+                       "复用看板同一个 POST /integration/params/confirm 实现，只改状态、不重算；"
+                       "执行前应向用户复述待确认要点，得到同意后再调用。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ConfirmIntegrationProcess",
+        "description": "确认 2.2「组装工艺」。这是把任务推给财务的闸门：确认之后才允许发送财务。"
+                       "复用看板同一个 POST /integration/process/confirm 实现，只改状态、不重算。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SendIntegrationToFinance",
+        "description": "把 2.2 定稿的工艺与整机参数发送给财务做成本测算（对外动作）。"
+                       "**必须由用户明确确认**：只有用户明确说「发送 / 交给财务」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不代替用户触发外呼。"
+                       "既有闸门不变：参数推荐与组装工艺都必须已确认才能发送。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发送财务；必须是 true 才执行外呼"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "note": {"type": "string", "description": "给财务的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -688,6 +741,12 @@ UI_ACTION_TOOLS = {
     "UpdateIntegrationParams": "refresh-integration",
     "UpdateIntegrationProcess": "refresh-integration",
     "RequestIntegrationStep": "integration-step",
+    # 2.2：整合图纸上传请用户在看板完成；参数 / 工序确认后刷新看板确认态。
+    # 发送财务是对外动作，只映射成「刷新看板」，绝不映射成 tool_use 阶段就自动执行的动作。
+    "UploadIntegrationDrawing": "open-integration-drawings",
+    "ConfirmIntegrationParams": "refresh-integration",
+    "ConfirmIntegrationProcess": "refresh-integration",
+    "SendIntegrationToFinance": "refresh-integration",
     # 1.1：一键解析与字段补充都由右侧看板执行（Agent 只发请求），补完刷新 1.1 表单。
     "ExtractRequirement": "extract-requirement",
     "UpdateRequirementFields": "refresh-requirement",
@@ -767,6 +826,34 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
             "note": "已向界面发出请求。生成由平台流水线异步执行，进度与结果显示在对话与"
                     "中间面板；请勿自行编造参数、工序或金额。",
         }, ensure_ascii=False)
+    if name == "UploadIntegrationDrawing":
+        return json.dumps({
+            "requested": True,
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出上传请求。Agent 无法替用户上传文件，请在右侧看板的"
+                    "「整合图纸」页签上传装配图 / 爆炸图 / 接线图；上传后看板会刷新图纸清单。",
+        }, ensure_ascii=False)
+    if name == "ConfirmIntegrationParams":
+        return json.dumps(_confirm_integration_params(project_id),
+                          ensure_ascii=False, indent=2)
+    if name == "ConfirmIntegrationProcess":
+        return json.dumps(_confirm_integration_process(project_id),
+                          ensure_ascii=False, indent=2)
+    if name == "SendIntegrationToFinance":
+        # 显式确认门：没有用户明确的确认，绝不触发对外调用。
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-to-finance",
+                "status": _integration_status(project_id),
+                "note": "发送财务会把任务推给财务经理做成本测算，属于对外动作，必须由用户明确确认。"
+                        "请先复述整机参数与组装工艺的确认状态，得到同意后再带 confirmed=true 重新调用；"
+                        "参数推荐与组装工艺都必须先确认，否则财务算出来的成本没有依据。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _send_integration_to_finance(project_id, str(params.get("product_name") or ""),
+                                         str(params.get("note") or "")),
+            ensure_ascii=False, indent=2)
     if name == "GetRequirementDraft":
         return json.dumps(_requirement_draft(project_id), ensure_ascii=False, indent=2)
     if name == "UpdateRequirementFields":
@@ -1478,6 +1565,64 @@ def _update_integration_process(project_id: str, params: dict) -> dict:
             "note": "工序已写入。成本是按工序与物料算的，改完工序建议重跑「成本测算」。"}
 
 
+def _integration_status(project_id: str) -> str:
+    from . import integration
+
+    return integration.status(integration.load_plan(project_id))
+
+
+def _confirm_integration_params(project_id: str) -> dict:
+    """确认 2.2「参数推荐」：与看板 POST /integration/params/confirm 同一份实现，不重算、不另写状态。"""
+    from . import integration
+
+    try:
+        plan = integration.confirm_params(project_id, _actor_user())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "confirm-params", "error": str(exc)}
+    return {"applied": True, "action": "confirm-params", "params_confirmed": True,
+            "confirmed_by": plan.params_confirmed_by or "",
+            "status": _integration_status(project_id),
+            "note": "「参数推荐」已确认；请刷新右侧看板查看确认状态。"}
+
+
+def _confirm_integration_process(project_id: str) -> dict:
+    """确认 2.2「组装工艺」：与看板 POST /integration/process/confirm 同一份实现。"""
+    from . import integration
+
+    try:
+        plan = integration.confirm_process(project_id, _actor_user())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "confirm-process", "error": str(exc)}
+    return {"applied": True, "action": "confirm-process", "process_confirmed": True,
+            "confirmed_by": plan.process_confirmed_by or "",
+            "status": _integration_status(project_id),
+            "note": "「组装工艺」已确认；请刷新右侧看板查看确认状态。"}
+
+
+def _send_integration_to_finance(project_id: str, product_name: str, note: str) -> dict:
+    """2.2 出口：把工艺与整机参数发送给财务。对外调用与看板同一份实现，只在这里翻译错误。"""
+    from . import cpq_bridge, integration
+
+    try:
+        plan = integration.send_to_finance(
+            project_id, _actor_user(), product_name=product_name, note=note,
+            token=current_token())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "send-to-finance", "error": str(exc)}
+    except cpq_bridge.BridgeRejected as exc:
+        return {"applied": False, "action": "send-to-finance",
+                "error": f"CPQ 服务拒绝了这次发送财务：{exc}"}
+    except cpq_bridge.BridgeUnavailable as exc:
+        return {"applied": False, "action": "send-to-finance",
+                "error": f"发送财务失败：{exc}"}
+    handoff = plan.finance_handoff
+    return {"applied": True, "action": "send-to-finance",
+            "task_no": handoff.task_no if handoff else "",
+            "sent_to": handoff.target_role_name if handoff else "",
+            "status": _integration_status(project_id),
+            "note": "已发送财务做成本测算；请刷新右侧看板查看发送状态与接收人。"}
+
+
 def _project_state(project_id: str) -> dict:
     meta = store.load_meta(project_id) or {}
     ir = _ir_of(project_id)
@@ -1960,7 +2105,8 @@ def sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-def stream_sse(project_id: str, message: str, actor: str = "system") -> Iterator[str]:
+def stream_sse(project_id: str, message: str, actor: str = "system",
+               token: str = "") -> Iterator[str]:
     """把一轮对话产出为 SSE 帧序列。事件通过队列跨线程传递，保证边生成边下发。"""
     import queue
 
@@ -1971,6 +2117,8 @@ def stream_sse(project_id: str, message: str, actor: str = "system") -> Iterator
         # ContextVar 不会自动跨线程传播，必须在 worker 内部再设一次，
         # 否则 UpdatePartParameters 的审计只会记到 system。
         _ACTOR.set(actor or "system")
+        # 同理：SendIntegrationToFinance 代表用户去调一体化服务需要用户令牌。
+        _TOKEN.set(token or "")
         try:
             agent.stream_turn(message, channel.put)
         except Exception as exc:                         # pragma: no cover - 依赖外部服务

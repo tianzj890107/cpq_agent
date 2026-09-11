@@ -1843,7 +1843,8 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
 
 
 @app.post("/api/projects/{project_id}/agent/send")
-def agent_send(project_id: str, body: AgentSendRequest, user: dict = Depends(current_user)):
+def agent_send(project_id: str, body: AgentSendRequest, request: Request,
+               user: dict = Depends(current_user)):
     """一轮 Agent 对话，SSE 流式返回文本、工具调用与工具结果。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     _agent_project(project_id)
@@ -1860,7 +1861,9 @@ def agent_send(project_id: str, body: AgentSendRequest, user: dict = Depends(cur
         message = f"{message}\n\n[当前页面：{body.page_context.strip()[:160]}]"
     return StreamingResponse(
         # 带上操作人：Agent 能改零件参数，审计必须记「是谁让它改的」。
-        oc_agent.stream_sse(project_id, message, actor=user.get("username", "system")),
+        # 同时带上用户令牌：SendIntegrationToFinance 要代表用户去调一体化服务。
+        oc_agent.stream_sse(project_id, message, actor=user.get("username", "system"),
+                            token=_sso_token(request)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -2367,16 +2370,8 @@ def confirm_integration_params(project_id: str, user: dict = Depends(current_use
     这个只是本环节定稿 —— 缺口在这里不拦，但要如实说出来。
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = integration.load_plan(project_id)
-    if plan.params is None:
-        raise HTTPException(400, "还没有参数推荐结果，无法确认")
-    plan.params_confirmed = True
-    plan.params_confirmed_by = user.get("display_name") or user.get("username") or ""
-    plan.params_confirmed_at = now_cst_str()
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_params_confirm",
-                {"by": plan.params_confirmed_by,
-                 "missing_required": len(product_params.missing_required(plan.params))})
+    # 实现唯一：与 Agent 的 ConfirmIntegrationParams 走同一份 services.integration。
+    plan = _integration_flow(integration.confirm_params, project_id, user)
     return _integration_payload(project_id, plan)
 
 
@@ -2387,15 +2382,8 @@ def confirm_integration_process(project_id: str, user: dict = Depends(current_us
     不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = integration.load_plan(project_id)
-    if plan.process is None:
-        raise HTTPException(400, "还没有组装工艺结果，无法确认")
-    plan.process_confirmed = True
-    plan.process_confirmed_by = user.get("display_name") or user.get("username") or ""
-    plan.process_confirmed_at = now_cst_str()
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_process_confirm",
-                {"by": plan.process_confirmed_by, "steps": len(plan.process.steps)})
+    # 实现唯一：与 Agent 的 ConfirmIntegrationProcess 走同一份 services.integration。
+    plan = _integration_flow(integration.confirm_process, project_id, user)
     return _integration_payload(project_id, plan)
 
 
@@ -2733,59 +2721,13 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
     （技术工艺 2.3）。所以这一步**不要求成本已完成**，只要求工艺与参数到位。
     """
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
-    plan = integration.load_plan(project_id)
-    if plan.params is None:
-        raise HTTPException(400, "请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
-    if plan.process is None:
-        raise HTTPException(400, "请先完成组装工艺：组装成本要按工序与工时算")
-    # 闸门是**两个确认**，不是报价必填参数 —— 那些参数由财务在 2.3 的「整合参数」补齐。
-    if not plan.params_confirmed:
-        raise HTTPException(400, "请先在「参数推荐」里点「确认参数推荐」")
-    if not plan.process_confirmed:
-        raise HTTPException(400, "请先在「组装工艺」里点「确认组装工艺」——"
-                                 "工序与用量定稿了，财务算出来的成本才有意义")
-
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-    result = _bridge_call(
-        cpq_bridge.send_to_finance, _sso_token(request), project_id, title,
-        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
-        str(requirement.get("product_name") or ""),
-        body.note or "工艺与整机参数已确认，请做成本测算",
-        {"tech_cost": {"project_id": project_id, "product_name": title,
-                       "quantity": plan.quantity,
-                       "process_step_count": len(plan.process.steps),
-                       "part_refs": len(plan.params.part_refs)}},
-        body.target_type, body.target_role_code, body.target_user_id)
-
-    # 交给财务就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
-    if not plan.confirmed:
-        plan.confirmed = True
-        plan.confirmed_by = user.get("username", "system")
-        plan.confirmed_at = now_cst_str()
-        plan.timing.status = "done"
-        plan.timing.completed = True
-        plan.timing.finished_at = plan.confirmed_at
-    plan.finance_handoff = FinanceHandoff(
-        task_id=str(result.get("task_id") or "") or None,
-        task_no=str(result.get("task_no") or ""),
-        target_role_name=str(result.get("target_role_name") or "财务经理"),
-        target_type=str(result.get("target_type") or "role"),
-        target_name=str(result.get("target_name") or ""),
-        sent_at=now_cst_str(),
-        sent_by=user.get("display_name") or user.get("username") or "",
-    )
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    # 财务那一步的入口状态：谁交来的、什么时候
-    review = cost_review.load_review(project_id)
-    review.received_from = plan.finance_handoff.sent_by
-    review.received_at = plan.finance_handoff.sent_at
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    store.audit(project_id, "integration_send_to_finance",
-                {"task_no": plan.finance_handoff.task_no,
-                 "by": plan.finance_handoff.sent_by})
+    # 实现唯一：与 Agent 的 SendIntegrationToFinance 走同一份 services.integration，
+    # 两个确认闸门与对外调用都在那里，路由只做权限与错误翻译。
+    plan = _bridge_call(
+        _integration_flow, integration.send_to_finance, project_id, user,
+        product_name=body.product_name, note=body.note,
+        target_type=body.target_type, target_role_code=body.target_role_code,
+        target_user_id=body.target_user_id, token=_sso_token(request))
     return {**_integration_payload(project_id, plan),
             "finance": plan.finance_handoff.model_dump()}
 
@@ -5583,6 +5525,18 @@ def _requirement_flow(fn, project_id: str, user: dict, comment: str, *rest):
     try:
         return fn(project_id, user, comment, *rest)
     except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _integration_flow(fn, project_id: str, user: dict, **kwargs):
+    """2.2 确认 / 发送的统一出口：service 的业务错误原样映射成 HTTPException。
+
+    Agent 工具（ConfirmIntegrationParams / ConfirmIntegrationProcess /
+    SendIntegrationToFinance）调用的是同一个 service 函数，这里只负责 HTTP 这一层。
+    """
+    try:
+        return fn(project_id, user, **kwargs)
+    except integration.IntegrationFlowError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
 
 
