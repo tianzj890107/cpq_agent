@@ -64,7 +64,8 @@ const missing=document.querySelector('#requirementForm')&&typeof rcRequiredField
 function rcSetExtractionStatus(message,state=''){const el=document.querySelector('#aiExtractStatus');if(!el)return;el.textContent=message;el.dataset.state=state}
 /* 解析进度必须经 TechBoardRuntime 广播给父壳左侧会话：iframe 内 dispatchEvent 出不了同源子页，
    父壳收不到。独立打开 1.1 页时没有运行时，静默跳过。数据只带业务语义，不含任何凭据。 */
-function rcPublishTaskEvent(type,extra){try{if(window.TechBoardRuntime&&typeof window.TechBoardRuntime.publish==='function')window.TechBoardRuntime.publish(type,'extractRequirement',extra||{})}catch(_){/* 独立打开无运行时 */}}
+let rcTaskSettled=false;
+function rcPublishTaskEvent(type,extra){try{if(window.TechBoardRuntime&&typeof window.TechBoardRuntime.publish==='function'){window.TechBoardRuntime.publish(type,'extractRequirement',extra||{});if(type==='task-completed'||type==='task-failed')rcTaskSettled=true}}catch(_){/* 独立打开无运行时 */}}
 function rcTaskPayload(task,extra){const info=task||{};return Object.assign({action:'extractRequirement',taskId:info.task_id||rcLastExtractTaskId||'',label:'需求资料解析',status:info.status||'running',progress:info.progress||'',log:Array.isArray(info.progress_log)?info.progress_log:[],error:info.error||''},extra||{})}
 function rcHasPendingFiles(){return Object.values(rcFiles).some(files=>Array.isArray(files)&&files.length)}
 async function rcWaitExtractionTask(taskId){const deadline=Date.now()+210000;while(Date.now()<deadline){const task=await api(`/api/projects/${rcProjectId}/tasks/${encodeURIComponent(taskId)}`);rcPublishTaskEvent('task-progress',rcTaskPayload(task));if(task.status==='succeeded')return task;if(task.status==='failed')throw new Error(task.error||'AI 解析任务失败');rcSetExtractionStatus(task.progress||'AI 正在处理技术资料，请稍候…','loading');await new Promise(resolve=>setTimeout(resolve,900));}throw new Error('AI 解析等待超时；请稍后刷新本页查看结果。')}
@@ -222,6 +223,27 @@ rcPersist=async function(submit){
     catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '保存失败' } }; }
     finally { rcBoardBusy = false; }
   }
+  // 长任务后台链路：动作条目只启动它并秒级回执（deferred），
+  // 解析完成后由 rcExtractRequirementFields 自己发布 task-completed / task-failed。
+  async function rcExtractInBackground() {
+    try {
+      const result = await rcExtractRequirementFields();
+      if (result && result.ok === false && !rcTaskSettled) {
+        rcPublishTaskEvent('task-failed', rcTaskPayload(null, {
+          status: 'failed', taskId: rcLastExtractTaskId,
+          error: (result.error && result.error.message) || 'AI 解析失败' }));
+      }
+    } catch (error) {
+      if (!rcTaskSettled) {
+        rcPublishTaskEvent('task-failed', rcTaskPayload(null, {
+          status: 'failed', taskId: rcLastExtractTaskId,
+          error: (error && error.message) || 'AI 解析失败' }));
+      }
+    } finally {
+      rcBoardBusy = false;
+      window.TechBoardRuntime.updateActionState('extractRequirement', { busy: false });
+    }
+  }
   window.TechBoardRuntime.registerActions({
     saveRequirementDraft: {
       label: '保存草稿',
@@ -235,12 +257,16 @@ rcPersist=async function(submit){
     },
     extractRequirement: {
       label: '一键解析需求',
-      run: async () => {
+      deferred: true,
+      run: () => {
         if (rcBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
         rcBoardBusy = true;
-        try { return await rcExtractRequirementFields(); }
-        catch (error) { return { ok: false, error: { code: 'extract-failed', message: (error && error.message) || 'AI 解析失败' } }; }
-        finally { rcBoardBusy = false; }
+        rcTaskSettled = false;
+        window.TechBoardRuntime.updateActionState('extractRequirement', { busy: true });
+        // 解析是长任务（rcWaitExtractionTask 最长等 210 秒）：只启动，秒级回执；
+        // 进度与最终结果由 rcExtractRequirementFields 自己经 rcPublishTaskEvent 上报。
+        rcExtractInBackground();
+        return { ok: true };
       },
       getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
     },

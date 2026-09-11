@@ -1209,7 +1209,10 @@
     if (!bridge || typeof bridge.subscribe !== 'function') return;
     bridge.subscribe((event) => {
       const type = (event && event.type) || '';
-      if (type === 'error') {
+      // 长任务（deferred）的完成 / 失败由看板自己推 task-completed / task-failed，
+      // 不是 type === 'error'：失败原因必须显示到标题行提示位，否则用户只看到
+      // 「超时未响应」这类桥层兜底文案，真实原因被吞掉。
+      if (type === 'error' || type === 'task-failed') {
         const message = event && event.payload && event.payload.message;
         if (message) setBoardNotice(message);
       }

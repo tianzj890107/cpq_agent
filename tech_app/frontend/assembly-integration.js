@@ -34,6 +34,9 @@ let aiData = null;          // 后端 payload：plan / status / *_validation / *
 let aiParts = [];
 let aiTab = 'drawings';
 let aiBusy = false;
+// deferred 长任务（runIntegration / integrationStep）自己的并发闸门：启动即回执，
+// 后台链路没结束前不允许再排一条。
+let aiDeferredBusy = false;
 const aiEditing = { params: false, process: false };
 
 const $ai = id => document.getElementById(id);
@@ -129,7 +132,71 @@ function aiPublishTask(name, extra) {
   try {
     runtime.publish(name, 'integrationStep',
       Object.assign({ action: 'integrationStep' }, extra || {}));
+    aiRememberSettle(name, 'integrationStep', extra);
   } catch { /* 进度上报失败不影响业务本身 */ }
+}
+
+// 最近一次收尾事件：长任务包装器据此决定要不要补一条属于本动作名的 task-completed，
+// 已经发过同样事件时不再重复，失败时把真实原因原样带过去。
+let aiLastSettle = null;
+function aiRememberSettle(name, subject, extra) {
+  if (name !== 'task-completed' && name !== 'task-failed') return;
+  aiLastSettle = { event: name, subject: subject,
+                   message: (extra && (extra.error || extra.message)) || '' };
+}
+
+// 长任务（deferred）在后台真正结束时由本页自报收尾：主体必须是本动作名，
+// 失败必须带真实错误文本（父壳拿来显示，不再只报「超时未响应」）。
+function aiSettleTask(event, action, extra) {
+  try {
+    window.TechBoardRuntime.publish(event, action, Object.assign({ action: action }, extra || {}));
+  } catch (error) { /* 独立打开无运行时 */ }
+  aiRememberSettle(event, action, extra);
+}
+
+// 既有实现（aiPost / aiRunOp）已经就同一动作发过同一收尾事件时不再补发。
+function aiSettleIfNeeded(event, action, extra) {
+  if (aiLastSettle && aiLastSettle.event === event && aiLastSettle.subject === action) return;
+  aiSettleTask(event, action, extra);
+}
+
+// 后台链路放在注册表外：动作条目只启动它并秒级回执（deferred），整合分析
+// （参数推荐 + 组装工艺两轮模型调用）跑完后再由这里推 task-completed / task-failed。
+async function aiRunIntegrationInBackground() {
+  try {
+    await aiRunAll();
+    if (aiLastSettle && aiLastSettle.event === 'task-failed') {
+      aiSettleIfNeeded('task-failed', 'runIntegration',
+        { message: aiLastSettle.message || '整合分析未完成，请查看右侧看板提示。' });
+    } else {
+      aiSettleIfNeeded('task-completed', 'runIntegration');
+    }
+  } catch (error) {
+    aiSettleIfNeeded('task-failed', 'runIntegration',
+      { message: (error && error.message) || '整合分析失败，请查看右侧看板提示。' });
+  } finally {
+    aiDeferredBusy = false;
+    window.TechBoardRuntime.updateActionState('runIntegration', { busy: false });
+  }
+}
+
+// 单个环节（参数推荐 / 组装工艺 / 成本测算）的后台链路，同上：只启动，跑完自报。
+async function aiIntegrationStepInBackground(step, options) {
+  try {
+    const result = await aiGenerate(step, options);
+    if (result && result.ok === false) {
+      aiSettleIfNeeded('task-failed', 'integrationStep',
+        { message: (result.error && result.error.message) || '整合环节未完成，请查看右侧看板提示。' });
+    } else {
+      aiSettleIfNeeded('task-completed', 'integrationStep');
+    }
+  } catch (error) {
+    aiSettleIfNeeded('task-failed', 'integrationStep',
+      { message: (error && error.message) || '整合环节失败，请查看右侧看板提示。' });
+  } finally {
+    aiDeferredBusy = false;
+    window.TechBoardRuntime.updateActionState('integrationStep', { busy: false });
+  }
 }
 
 async function aiPost(path, { form, label, quantity, keepTab } = {}) {
@@ -1268,14 +1335,21 @@ aiStart();
   window.TechBoardRuntime.registerActions({
     runIntegration: {
       label: '开始整合分析',
-      run: async () => {
+      deferred: true,
+      run: () => {
         const button = $ai('aiStart');
         if (button && button.disabled) {
           return { ok: false, error: { code: 'not-ready', message: '当前不能开始整合分析，请先补齐图纸与需求信息。' } };
         }
+        if (aiDeferredBusy) {
+          return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+        }
+        // 整合分析是长任务（参数推荐 + 组装工艺，两轮模型调用）：只启动，秒级回执。
+        aiDeferredBusy = true;
+        aiLastSettle = null;
         window.TechBoardRuntime.updateActionState('runIntegration', { busy: true });
-        try { await aiRunAll(); return { ok: true }; }
-        finally { window.TechBoardRuntime.updateActionState('runIntegration', { busy: false }); }
+        aiRunIntegrationInBackground();
+        return { ok: true };
       },
       getState: () => {
         const button = $ai('aiStart');
@@ -1300,14 +1374,23 @@ aiStart();
     // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 2.2 内跑流水线。
     integrationStep: {
       label: '运行整合环节',
-      run: async (payload) => {
+      deferred: true,
+      run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
         const labels = { params: '参数推荐', process: '组装工艺', cost: '成本测算' };
         if (!labels[step]) {
           return { ok: false, error: { code: 'bad-step', message: 'step 只能是 params / process / cost' } };
         }
+        if (aiDeferredBusy) {
+          return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+        }
         // 成本测算不在 2.2 的三个页签里（它属于 2.3）：生成但不切走当前页签。
-        return await aiGenerate(step, { label: labels[step], keepTab: step === 'cost' });
+        const options = { label: labels[step], keepTab: step === 'cost' };
+        aiDeferredBusy = true;
+        aiLastSettle = null;
+        window.TechBoardRuntime.updateActionState('integrationStep', { busy: true });
+        aiIntegrationStepInBackground(step, options);
+        return { ok: true };
       },
       getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy }),
     },

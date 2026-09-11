@@ -18,6 +18,11 @@
  * 页面不再各自写一套 postMessage 解析器，也不暴露按钮 id / CSS selector：
  * 父壳和 Agent 只知道动作名，具体实现留在本页面。
  *
+ * 长任务（`deferred: true`）：动作条目只负责「启动」，回执照旧秒级返回，但运行时
+ * 不再替它发布 task-completed —— 真正的完成 / 失败由本页在后台任务结束时用
+ * `publish('task-completed' | 'task-failed', <动作名>, { action, message? })` 自报，
+ * 20 秒的桥默认超时只用来抓「看板没响应」，长任务不会再被误判成超时。
+ *
  * 独立打开（无 embed、无父壳）时本模块不做任何通信，页面照常工作。
  */
 (function () {
@@ -243,6 +248,10 @@
       }
       if (source === 'view') currentView = name;
       if (entry.keepActionState !== true) publish(EVENT.ACTION_STATE, name);
+      // deferred 条目只负责启动：回执照旧成功，但不在这里发 task-completed ——
+      // 后台任务还没跑完，抢发完成会让父壳以为长任务瞬间结束。真正的收尾
+      // 由本页在任务结束时自己 publish(EVENT.TASK_COMPLETED / TASK_FAILED)。
+      if (entry.deferred === true) return ok(name, result);
       publish(EVENT.TASK_COMPLETED, name, { action: name });
       return ok(name, result);
     }, function (error) {

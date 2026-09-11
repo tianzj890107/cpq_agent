@@ -1939,24 +1939,46 @@ init().catch(error => {
 /* 统一看板协议：2.1 的「开始解析」注册成 parseDrawing，父壳底栏 / Agent 只发动作名，
  * 页面上的原按钮继续走同一个函数，独立打开时行为不变。 */
 if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions === "function") {
+  // 解析是长任务（视觉模型一轮常常远超桥的 20 秒默认超时）：动作条目声明 deferred，
+  // 只负责启动后台链路并秒级回执，真正的完成 / 失败由后台结束时自己推给父壳。
+  let parseDrawingBusy = false;
+  function parseDrawingSettle(event, message) {
+    try {
+      window.TechBoardRuntime.publish(event, "parseDrawing",
+        message ? { action: "parseDrawing", message: message } : { action: "parseDrawing" });
+    } catch (error) { /* 独立打开无运行时 */ }
+  }
+  // 后台链路放在注册表外：动作条目只负责启动它并秒级回执（deferred），
+  // 真正的完成 / 失败由这里解析完后推给父壳。
+  async function parseDrawingInBackground() {
+    try {
+      const result = await parseDrawing();
+      if (result) parseDrawingSettle("task-completed");
+      else parseDrawingSettle("task-failed", parseDrawingError || "图纸解析未完成。");
+    } catch (error) {
+      parseDrawingSettle("task-failed", (error && error.message) || "图纸解析失败。");
+    } finally {
+      parseDrawingBusy = false;
+      window.TechBoardRuntime.updateActionState("parseDrawing", { busy: false });
+    }
+  }
   window.TechBoardRuntime.registerActions({
     parseDrawing: {
       label: "开始解析",
-      run: async () => {
+      deferred: true,
+      run: () => {
         const button = $("btnParse");
         if (button && button.disabled) {
           return { ok: false, error: { code: "not-ready", message: "当前没有可解析的图纸，请先上传 2D 工程图。" } };
         }
-        // 解析是长任务：先告诉父壳 busy，完成后无论成功失败都恢复。
-        window.TechBoardRuntime.updateActionState("parseDrawing", { busy: true });
-        try {
-          const result = await parseDrawing();
-          return result
-            ? { ok: true }
-            : { ok: false, error: { code: "parse-failed", message: parseDrawingError || "图纸解析未完成。" } };
-        } finally {
-          window.TechBoardRuntime.updateActionState("parseDrawing", { busy: false });
+        if (parseDrawingBusy) {
+          return { ok: false, error: { code: "busy", message: "正在解析图纸，请稍候。" } };
         }
+        // 先告诉父壳 busy，后台链路无论成功失败都恢复；这里不等解析结果。
+        parseDrawingBusy = true;
+        window.TechBoardRuntime.updateActionState("parseDrawing", { busy: true });
+        parseDrawingInBackground();
+        return { ok: true };
       },
       getState: () => {
         const button = $("btnParse");

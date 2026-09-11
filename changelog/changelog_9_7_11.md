@@ -687,3 +687,24 @@
 - 边界：未改 `open-claude/**` 字节码与包本身；未新增第二套截断/续写实现（全部复用 `llm_output`）；未降低 Pydantic 校验强度、未把半截 JSON 当成功；未改 `max_tokens` 既有环境变量语义与 `llm_settings` 的 `[256, 64000]` 校验范围；未改 Spec 与红测文件。
 - 测试（实际运行）：`./open-claude/.venv/bin/python -m unittest tests.test_llm_output_truncation_recovery_red -v` → **12/12 通过（0 跳过）**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **366 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **364 项通过、7 跳过、0 失败**；`git diff --check` 通过。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 64. 看板长任务"提交即回执 + 事件驱动完成"Spec / Red 基线（9-11）
+
+- 定位统一父壳里「开始解析超时未响应」的根因：桥的 `executeAction` 用 20 秒默认超时（`tech-board-bridge.js:22/236`，超时文案在 `:114`），而右侧看板把 `parseDrawing`、`runIntegration` / `integrationStep`、`runCostReview` / `costStep`、`extractRequirement` 注册成"等整份任务跑完才回执"（`app.js:1943` 的 `await parseDrawing()` → `pollTask()` 自身无超时；`requirement-create.js` 的 `rcWaitExtractionTask` 最长等 210 秒）。后端模型超时是 `QWEN_TIMEOUT_SECONDS` 300 / `OPENAI_BACKGROUND_TIMEOUT_SECONDS` 600，必然超过 20 秒，所以业务还在跑、父壳已判超时。
+- 新增 `docs/specs/tech-board-long-task-ack-protocol.md`：动作条目新增 `deferred`，`run` 只负责启动并立即回执；完成/失败由看板用既有 `TechBoardRuntime.publish` 推 `task-completed` / `task-failed`；父壳负责把 `task-failed` 的真实原因显示到标题行提示位；桥的 20 秒超时保留不放宽。
+- 新增红测 `tests/test_tech_board_deferred_actions_red.py`（10 条，6 失败 4 通过）：运行时必须认识 `deferred` 且不得替它宣告完成、6 个长任务动作必须声明 `deferred` 且不得再 `await` 整份任务、长任务页面必须自己发布 `task-completed` / `task-failed`、父壳 `bindBoardBridge` 必须处理 `task-failed`；行为用例用 Node 真跑 `tech-board-runtime.js` 的消息分发，验证"回执时不得出现 `task-completed`、后台结束后恰好一条"。
+- 红测基线：`python3 -m unittest tests.test_tech_board_deferred_actions_red` → 10 中 6 失败（4 条为回归守卫：非 `deferred` 时序不变、桥超时仍为 20000、`deferred` 失败仍回结构化错误）。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 由 364 通过变为 374 中 6 失败、7 跳过，失败全部来自本批新增红测，无既有用例回归；`node --check` 通过 `tech-board-runtime.js` / `tech-board-bridge.js` / `tech-workbench.js` / `app.js`。
+- 本批只提交 spec 与红测，业务实现交由 DeepSeek 完成，实现提示词仅在会话中交付。
+
+## 65. 看板长任务"提交即回执 + 事件驱动完成"实现（9-11）
+
+- `tech-board-runtime.js`：`runEntry` 识别动作条目的 `deferred`。`deferred === true` 时照旧发 `action-state` 并回 `{ok:true}`，但**不再**发布 `task-completed`；`{ok:false,error}`、抛异常 / reject 仍照旧发 `task-failed` 并回结构化 failure。非 `deferred` 条目行为一字未改（回归由红测覆盖）。顶部注释补充 `deferred` 契约。
+- `tech-workbench.js`：`bindBoardBridge` 的订阅回调把 `task-failed` 与 `type === 'error'` 一视同仁，`payload.message` 交给 `setBoardNotice()` —— 长任务真实失败原因从此显示到标题行提示位，不再只剩「超时未响应」。
+- 6 个长任务动作条目改为 `deferred: true`，`run` 只启动后台链路并立即 resolve（**不再** `await` 整份任务）；后台链路抽成注册表外的具名函数，保留原有 `updateActionState(name, {busy})` 切换与 `finally` 恢复：
+  - `app.js`：`parseDrawing` + `parseDrawingInBackground()`（`parseDrawing()` → `task-completed` / `task-failed`，失败带 `parseDrawingError`）。
+  - `assembly-integration.js`：`runIntegration` / `integrationStep` + `aiRunIntegrationInBackground()` / `aiIntegrationStepInBackground()`；`aiPublishTask` 记录最近一次收尾事件，`aiSettleTask` / `aiSettleIfNeeded` 保证每个动作各发一条、失败带真实原因。新增 `aiDeferredBusy` 并发闸门。
+  - `cost-review.js`：`runCostReview` / `costStep` + `crRunAllInBackground()` / `crCostStepInBackground()`；同理新增 `crRememberSettle` / `crSettleTask` / `crSettleIfNeeded` 与 `crDeferredBusy`。
+  - `requirement-create.js`：`extractRequirement` 改为 `deferred`，新增 `rcExtractInBackground()`；`rcPublishTaskEvent` 记录 `rcTaskSettled`，早退失败（无项目 / 待保存附件 / 无可解析文档）也会补一条 `task-failed`，沿用既有 `task-progress` / `task-completed` / `task-failed` 信封。
+- 边界：未改 `tech-board-bridge.js`（`DEFAULT_TIMEOUT` 仍 20000，`sync-state` 仍 8000）；未改事件信封结构与字段；未新增第二套任务轮询；未读 iframe 内部 DOM、未引入按钮 id / selector；未改后端接口；未改 Spec 与红测。
+- 测试（实际运行）：`python3 -m unittest tests.test_tech_board_deferred_actions_red -v` → **10/10 通过**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **376 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **374 项通过、7 跳过、0 失败**；`node --check` 通过 `tech-board-runtime.js` / `tech-workbench.js` / `app.js` / `assembly-integration.js` / `cost-review.js` / `requirement-create.js`；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。

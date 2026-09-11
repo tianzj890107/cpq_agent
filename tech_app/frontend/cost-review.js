@@ -20,6 +20,9 @@ const CR_COST_LABEL = { material: '材料', labor: '人工', overhead: '制造�
 let crData = null;
 let crTab = 'parts';
 let crBusy = false;
+// deferred 长任务（runCostReview / costStep）自己的并发闸门：启动即回执，
+// 后台链路没结束前不允许再排一条。
+let crDeferredBusy = false;
 /* 2.3 是财务经理的步骤。别人（工艺经理、销售）能打开这一页看数，但不能算、不能发。
    后端才是权威（main.py 的 COST_ROLES），这里只是提前说清楚 —— 否则要等点下去
    才收到 403，还容易被读成"系统坏了"。取不到身份时不拦：让后端去判。 */
@@ -104,7 +107,75 @@ function crPublishTask(name, extra) {
   if (!runtime || typeof runtime.publish !== 'function') return;
   try {
     runtime.publish(name, 'costStep', Object.assign({ action: 'costStep' }, extra || {}));
+    crRememberSettle(name, 'costStep', extra);
   } catch { /* 进度上报失败不影响业务本身 */ }
+}
+
+// 最近一次收尾事件：长任务包装器据此决定要不要补一条属于本动作名的 task-completed，
+// 已经发过同样事件时不再重复，失败时把真实原因原样带过去。
+let crLastSettle = null;
+function crRememberSettle(name, subject, extra) {
+  if (name !== 'task-completed' && name !== 'task-failed') return;
+  crLastSettle = { event: name, subject: subject,
+                   message: (extra && (extra.error || extra.message)) || '' };
+}
+
+// 长任务（deferred）在后台真正结束时由本页自报收尾：主体必须是本动作名，
+// 失败必须带真实错误文本（父壳拿来显示，不再只报「超时未响应」）。
+function crSettleTask(event, action, extra) {
+  try {
+    window.TechBoardRuntime.publish(event, action, Object.assign({ action: action }, extra || {}));
+  } catch (error) { /* 独立打开无运行时 */ }
+  crRememberSettle(event, action, extra);
+}
+
+// 既有实现（crRunPart / crRunAssembly）已经就同一动作发过同一收尾事件时不再补发。
+function crSettleIfNeeded(event, action, extra) {
+  if (crLastSettle && crLastSettle.event === event && crLastSettle.subject === action) return;
+  crSettleTask(event, action, extra);
+}
+
+// 后台链路放在注册表外：动作条目只启动它并秒级回执（deferred），逐件 + 整机
+// 测算跑完后再由这里推 task-completed / task-failed。
+async function crRunAllInBackground() {
+  try {
+    await crRunAll();
+    if (crLastSettle && crLastSettle.event === 'task-failed') {
+      crSettleTask('task-failed', 'runCostReview',
+        { message: crLastSettle.message || '成本测算未完成，请查看右侧看板提示。' });
+    } else {
+      crSettleIfNeeded('task-completed', 'runCostReview');
+    }
+  } catch (error) {
+    crSettleTask('task-failed', 'runCostReview',
+      { message: (error && error.message) || '成本测算失败，请查看右侧看板提示。' });
+  } finally {
+    crDeferredBusy = false;
+    window.TechBoardRuntime.updateActionState('runCostReview', { busy: false });
+  }
+}
+
+// 单个环节（零件 / 组装 / 全量）的后台链路，同上：只启动，跑完自报。
+async function crCostStepInBackground(work) {
+  try {
+    const result = await work();
+    const failed = (result && result.ok === false)
+      || Boolean(crLastSettle && crLastSettle.event === 'task-failed');
+    if (failed) {
+      const message = (crLastSettle && crLastSettle.message)
+        || (result && result.error && result.error.message)
+        || '成本测算未完成，请查看右侧看板提示。';
+      crSettleIfNeeded('task-failed', 'costStep', { message: message });
+    } else {
+      crSettleIfNeeded('task-completed', 'costStep');
+    }
+  } catch (error) {
+    crSettleIfNeeded('task-failed', 'costStep',
+      { message: (error && error.message) || '成本测算失败，请查看右侧看板提示。' });
+  } finally {
+    crDeferredBusy = false;
+    window.TechBoardRuntime.updateActionState('costStep', { busy: false });
+  }
 }
 
 async function crPollTask(taskId, card, label) {
@@ -771,11 +842,16 @@ crStart();
   window.TechBoardRuntime.registerActions({
     runCostReview: {
       label: '逐件测算并汇总',
-      run: async () => {
+      deferred: true,
+      run: () => {
         if (crBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
+        if (crDeferredBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
+        // 逐件测算 + 整机汇总要跑很多轮模型调用：只启动，秒级回执。
+        crDeferredBusy = true;
+        crLastSettle = null;
         window.TechBoardRuntime.updateActionState('runCostReview', { busy: true });
-        try { await crRunAll(); return { ok: true }; }
-        finally { window.TechBoardRuntime.updateActionState('runCostReview', { busy: false }); }
+        crRunAllInBackground();
+        return { ok: true };
       },
       getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
     },
@@ -801,26 +877,35 @@ crStart();
     // 左侧 Agent 请求跑某一环节：复用既有 crRunPart / crRunAssembly / crRunAll。
     costStep: {
       label: '运行成本测算',
-      run: async (payload) => {
+      deferred: true,
+      run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
-        if (step === 'all') { await crRunAll(); return { ok: true }; }
-        if (step === 'assembly') {
-          const ok = await crRunAssembly();
-          return ok ? { ok: true }
-            : { ok: false, error: { code: 'step-failed', message: '组装成本测算失败，请查看看板提示。' } };
-        }
+        const partId = String((payload && payload.part_id) || '').trim();
         if (step === 'part') {
-          const partId = String((payload && payload.part_id) || '').trim();
           if (!partId) {
             return { ok: false, error: { code: 'missing-part',
                                          message: '缺少 part_id：请指定要测算的零件。' } };
           }
-          const ok = await crRunPart(partId, Number((payload && payload.quantity) || 1));
-          return ok ? { ok: true }
-            : { ok: false, error: { code: 'step-failed',
-                                    message: `${partId} 测算失败，请查看看板提示。` } };
+        } else if (step !== 'assembly' && step !== 'all') {
+          return { ok: false, error: { code: 'bad-step', message: 'step 只能是 part / assembly / all' } };
         }
-        return { ok: false, error: { code: 'bad-step', message: 'step 只能是 part / assembly / all' } };
+        if (crBusy || crDeferredBusy) {
+          return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
+        }
+        // 单件 / 整机 / 全量都是长任务：只启动后台链路，完成或失败由它自己上报。
+        const quantity = Number((payload && payload.quantity) || 1);
+        const work = step === 'all'
+          ? () => crRunAll()
+          : (step === 'assembly'
+            ? () => crRunAssembly().then((done) => (done ? { ok: true }
+                : { ok: false, error: { code: 'step-failed', message: '组装成本测算失败，请查看右侧看板提示。' } }))
+            : () => crRunPart(partId, quantity).then((done) => (done ? { ok: true }
+                : { ok: false, error: { code: 'step-failed', message: `${partId} 测算失败，请查看右侧看板提示。` } })));
+        crDeferredBusy = true;
+        crLastSettle = null;
+        window.TechBoardRuntime.updateActionState('costStep', { busy: true });
+        crCostStepInBackground(work);
+        return { ok: true };
       },
       getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
     },
