@@ -129,9 +129,8 @@
     .message { display: flex; flex-direction: column; max-width: 92%; }
     .message-ai {
       align-self: flex-start;
-      background: var(--bg-secondary);
-      border: 0.5px solid var(--border-color);
-      border-radius: 14px; border-bottom-left-radius: 4px;
+      background: var(--bg-page);
+      border-radius: 14px;
       padding: 11px 14px;
     }
     .message-label {
@@ -153,7 +152,7 @@
     }
     .message-user {
       align-self: flex-end;
-      background: var(--gradient-ai); color: white;
+      background: var(--color-primary); color: white;
       border-radius: 14px; border-bottom-right-radius: 4px;
       padding: 11px 14px;
     }
@@ -2702,7 +2701,7 @@
       if (!bar) {
         bar = document.createElement('div');
         bar.id = 'wfBar';
-        bar.style.cssText = 'display:none;margin:0 0 10px;padding:8px 12px;border-radius:8px;' +
+        bar.style.cssText = 'display:none;margin:0 0 10px;padding:8px 12px;' +
           'font-size:12px;line-height:1.5;border:1px solid var(--border-color);';
         const host = $('resultsContent');
         if (host && host.parentElement) host.parentElement.insertBefore(bar, host);

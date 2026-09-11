@@ -10,7 +10,9 @@
   --oc-bg-3: #ececf1;
   --oc-border-3: #e7e7ea;
   --oc-border-2: #d9d9e3;
-  --oc-accent: #0060E6;
+  /* 系统主色唯一事实源在宿主主题入口（tech-workbench.css / workbench.css）。
+     这里只做兼容别名，绝不独立写死另一份蓝色，否则换主色时会与报价侧分叉。 */
+  --oc-accent: var(--color-primary);
   --oc-text-1: #1f2023;
   --oc-text-2: #62636d;
   --oc-text-3: #9a9ba6;
@@ -155,7 +157,10 @@
 
 .oc-ubub {
   max-width: 82%; align-self: flex-end; padding: 10px 14px; border-radius: 16px;
-  background: var(--oc-bg-2); font-size: 14px; line-height: 1.6;
+  /* 用户消息 = 系统主色实心气泡 + 白字（与报价 .message-user 同一语义）；
+     右下角小圆角是"用户气泡尾部"，其余三角保持常规圆角。 */
+  border-bottom-right-radius: 4px;
+  background: var(--oc-accent); color: white; font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
 .oc-amsg { display: flex; gap: 11px; }

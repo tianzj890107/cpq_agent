@@ -688,6 +688,15 @@
 - 测试（实际运行）：`./open-claude/.venv/bin/python -m unittest tests.test_llm_output_truncation_recovery_red -v` → **12/12 通过（0 跳过）**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **366 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **364 项通过、7 跳过、0 失败**；`git diff --check` 通过。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
 
+## 70. 报价与技术工艺 AI 消息白底统一实现（9-11）
+
+- 报价 `确认需求解析结果.html` 的 `.message-ai` 只做三处最小定点修改：`background: var(--bg-secondary)` → `background: var(--bg-page)`（该页 `:root` 已有 `--bg-page: #ffffff`）；删除 `border: 0.5px solid var(--border-color)` 卡片描边；删除 `border-bottom-left-radius: 4px` 左下气泡尾部。保留 `align-self: flex-start`、`border-radius: 14px`、`padding: 11px 14px` 与全部正文渲染能力。
+- 修改前后样式：`align-self: flex-start; background: var(--bg-secondary); border: 0.5px solid var(--border-color); border-radius: 14px; border-bottom-left-radius: 4px; padding: 11px 14px;` → `align-self: flex-start; background: var(--bg-page); border-radius: 14px; padding: 11px 14px;`。
+- 技术侧 `.oc-amsg` / `.oc-aav` / `.oc-abody` / `.oc-atxt` 与 `agent-chat.css` 本轮未改动（原本即为白底正文基准）；本次改动为 HTML 内联样式，未涉及静态资源版本参数，故未调整任何 `?v=` 缓存号。
+- 边界：未做全局 `--bg-secondary` 替换，未改用户主色蓝气泡（`.message-user` / `.oc-ubub`）、AI 头像与 AI 标签 DOM、代码块、工具卡、任务卡、确认卡、候选产品表、错误与语义状态色，未改消息生成、Markdown、流式输出、会话持久化与后端；未覆盖工作区中其它任务的未提交修改。
+- 测试（实际运行）：`python3 -m unittest tests.test_quote_tech_ai_message_white_surface_red -v` → **5/5 通过**（Red 基线为 2 失败 3 通过）；`python3 -m unittest tests.test_quote_tech_user_message_primary_bubble_red -v` → **5/5 通过**；`python3 -m unittest tests.test_global_brand_color_red tests.test_primary_button_blue_gradient_red tests.test_quote_tech_user_message_primary_bubble_red tests.test_quote_tech_ai_message_white_surface_red -v` → **20/20 通过**；`python3 -m unittest discover -s tests -p 'test_*.py'` → **392 项通过、7 跳过、0 失败**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **394 项全部通过**；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
 ## 64. 看板长任务"提交即回执 + 事件驱动完成"Spec / Red 基线（9-11）
 
 - 定位统一父壳里「开始解析超时未响应」的根因：桥的 `executeAction` 用 20 秒默认超时（`tech-board-bridge.js:22/236`，超时文案在 `:114`），而右侧看板把 `parseDrawing`、`runIntegration` / `integrationStep`、`runCostReview` / `costStep`、`extractRequirement` 注册成"等整份任务跑完才回执"（`app.js:1943` 的 `await parseDrawing()` → `pollTask()` 自身无超时；`requirement-create.js` 的 `rcWaitExtractionTask` 最长等 210 秒）。后端模型超时是 `QWEN_TIMEOUT_SECONDS` 300 / `OPENAI_BACKGROUND_TIMEOUT_SECONDS` 600，必然超过 20 秒，所以业务还在跑、父壳已判超时。
@@ -707,6 +716,56 @@
   - `requirement-create.js`：`extractRequirement` 改为 `deferred`，新增 `rcExtractInBackground()`；`rcPublishTaskEvent` 记录 `rcTaskSettled`，早退失败（无项目 / 待保存附件 / 无可解析文档）也会补一条 `task-failed`，沿用既有 `task-progress` / `task-completed` / `task-failed` 信封。
 - 边界：未改 `tech-board-bridge.js`（`DEFAULT_TIMEOUT` 仍 20000，`sync-state` 仍 8000）；未改事件信封结构与字段；未新增第二套任务轮询；未读 iframe 内部 DOM、未引入按钮 id / selector；未改后端接口；未改 Spec 与红测。
 - 测试（实际运行）：`python3 -m unittest tests.test_tech_board_deferred_actions_red -v` → **10/10 通过**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **376 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **374 项通过、7 跳过、0 失败**；`node --check` 通过 `tech-board-runtime.js` / `tech-workbench.js` / `app.js` / `assembly-integration.js` / `cost-review.js` / `requirement-create.js`；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 66. 报价「已转交·待领取」流程提示条去倒角 Spec / Red 基线（9-11）
+
+- 需求：`确认需求解析结果.html` 顶部承载"这张卡片卡在谁那里"的流程提示条改为直角，不做倒角；文案示例为「已转交·待领取：销售经理·salesm1 发起「新增工艺」 · 请到技术工艺新增产品 · 指派给指定人员。对方领取后即可继续第 1 步。」
+- 定位现状：提示条 `#wfBar` 由 `确认需求解析结果.html:2703` 的 `wfRenderBar()` 动态创建，内联样式写死 `border-radius:8px`；文案来自 `cpq_wf.py:731` 的 `source_label`，经 `:2731` 的 `WF.pendingTask` 分支渲染。
+- 新增 `docs/specs/quote-transfer-bar-square-corners.md`：去圆角，但保留 `padding` / `border:1px solid` / `font-size` / `line-height`；只改这一条，页面其它圆角（气泡 14px、胶囊 9999px、圆点 50%）与五种状态文案都不动。
+- 新增红测 `tests/test_quote_transfer_bar_square_corners_red.py`（4 条，1 失败 3 通过）：提示条创建分支内不得出现非 0 圆角（当前实测 `['8px']` → 失败）、提示条盒样式保留、五种状态文案仍在、其它圆角 token 未消失。
+- 全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 由 374 通过变为 378 中 1 失败、7 跳过，失败即本批红测，无既有用例回归。
+- 本批只提交 spec 与红测，业务实现交由 DeepSeek 完成，实现提示词仅在会话中交付。
+
+## 67. 报价「已转交·待领取」流程提示条去倒角实现（9-11）
+
+- `确认需求解析结果.html:2705` `wfRenderBar()` 里 `#wfBar` 的内联样式删掉 `border-radius:8px;`，提示条四角变直角；未动创建时机、五种状态分支与文案。
+- 最终 cssText：`'display:none;margin:0 0 10px;padding:8px 12px;' + 'font-size:12px;line-height:1.5;border:1px solid var(--border-color);'` —— `margin` / `padding:8px 12px` / `font-size:12px` / `line-height:1.5` / `border:1px solid var(--border-color)` 全部保留，没有删掉整条 cssText，也没有顺手改 padding / border / 字号。
+- 未用全局查找替换：本次只有这一处 `border-radius` 变化，页面其它圆角（聊天气泡 `14px`、胶囊 `9999px`、圆点 `50%`）原样保留；未改 `cpq_wf.py` 与任何后端接口。
+- 测试（实际运行）：`python3 -m unittest tests.test_quote_transfer_bar_square_corners_red -v` → **4/4 通过**；`python3 -m unittest discover -s tests -p 'test_*.py'` → **378 项通过、7 跳过、0 失败**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **380 项全部通过**；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
+
+## 68. 报价与技术工艺用户消息主色气泡统一 Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/quote-tech-user-message-primary-bubble.md`：报价与技术工艺 Agent 的用户消息统一为右对齐的系统主色实心蓝气泡、白色文字及右下小圆角；两侧都必须通过统一系统主色 token 取色，不再分别使用报价渐变和技术浅灰背景。
+- 范围明确限定为用户消息气泡，不全局删除 Logo、主按钮和步骤节点等既有渐变，不改变 AI 消息、工具卡、语义状态色、消息 DOM、发送接口、流式响应与会话持久化。
+- 新增 Red 测试 `tests/test_quote_tech_user_message_primary_bubble_red.py`，覆盖报价实心主色 token、技术主色别名、白字与右下角气泡尾部、右对齐以及组件规则禁止硬编码颜色/渐变。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_quote_tech_user_message_primary_bubble_red -v` → 5 条中 4 条失败、1 条通过；失败分别证明报价仍使用 `--gradient-ai`、技术仍使用 `--oc-bg-2` 灰底、`--oc-accent` 仍独立写死 `#0060E6`、技术气泡缺少白字与右下小圆角；既有右对齐守卫通过。
+- 本批只新增 Spec、Red 测试和周 changelog，未修改报价或技术工艺业务实现；未提交、未推送、未创建 MR、未部署或重启服务。
+
+## 69. 报价与技术工艺 AI 消息白底统一 Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/quote-tech-ai-message-white-surface.md`：以技术工艺 Agent 的“头像 + 白底正文”为普通 AI 消息基准，报价 `.message-ai` 改为系统白色表面并取消浅灰气泡描边和左下尾部；保留两边现有身份标识和消息 DOM。
+- 范围只覆盖普通 AI 消息容器，不修改用户主色气泡、代码块、工具卡、任务卡、确认卡、候选表、错误卡和语义状态色，也不改消息生成、流式输出、接口与会话存储。
+- 新增 Red 测试 `tests/test_quote_tech_ai_message_white_surface_red.py`，覆盖报价白底 token、去灰底/描边/左下尾部、技术白底基准守卫、AI 左侧深色正文及用户消息隔离守卫。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_quote_tech_ai_message_white_surface_red -v` → 5 条中 2 条失败、3 条通过；失败证明报价 `.message-ai` 仍使用 `var(--bg-secondary)`，并保留 `0.5px` 描边和 `border-bottom-left-radius` 气泡尾部；技术普通 AI 消息白底基准、左侧深色正文及用户蓝色气泡隔离守卫均通过。
+- 本批只新增 Spec、Red 测试与周 changelog，未修改业务实现；未提交、未推送、未创建 MR、未部署或重启服务。
+
+## 70. 技术工艺附件直传与会话能力按钮重排 Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/tech-direct-attachment-and-chat-capability-actions.md`：技术输入框左侧取消“＋能力菜单”，统一为报价式回形针附件按钮，单击直接打开父壳隐藏文件选择器；选择文件后必须复用既有上传/任务文件/看板刷新链路。
+- 原菜单的解析视图、导入已有 3D 模型、版本与校核审查、联网核验、校验修正五项能力迁到 `#techChatActions` 快捷按钮栏；视图类继续走看板导航，动作类继续走 `executeAction`，不得删除能力或复制业务实现。
+- 新增 Red 测试 `tests/test_tech_direct_attachment_and_chat_capability_actions_red.py`，覆盖附件按钮形态、直接文件选择、多文件输入、上传与刷新链路、五项快捷按钮、视图/动作分派边界、旧菜单清理及任务文件/结果入口回归守卫。
+
+## 69. 报价与技术工艺用户消息主色气泡统一实现（9-11）
+
+- 报价 `确认需求解析结果.html` `.message-user`：`background: var(--gradient-ai)` → `background: var(--color-primary)`；`align-self: flex-end` / `color: white` / `border-radius: 14px` / `border-bottom-right-radius: 4px` / `padding: 11px 14px` 原样保留，DOM、标签、换行与正文渲染未动。该页 `:root` 已有 `--color-primary: #0060E6`，取值不受影响。
+- 技术 `tech_app/frontend/agent-chat.css`：`:root` 的 `--oc-accent: #0060E6` 改为 `--oc-accent: var(--color-primary)`（只作兼容别名，不再独立写死蓝色）；`.oc-ubub` 背景由 `var(--oc-bg-2)` 浅灰改为 `var(--oc-accent)`、新增 `color: white` 与 `border-bottom-right-radius: 4px`，`max-width: 82%` / `align-self: flex-end` / `padding: 10px 14px` / `border-radius: 16px` / `white-space: pre-wrap` / `word-break: break-word` 全部保留；该规则内无渐变、无 `--oc-bg-1/2/3`、无十六进制与 rgba。
+- 技术主题入口 `tech_app/frontend/tech-workbench.css`：新增 `:root { --color-primary: #0060E6; }` 作为技术聊天配色的系统主色事实源（tech-workbench.html 只加载 agent-chat.css + tech-workbench.css，不加载 workbench.css，故必须在此声明，声明在 `:root` 而非布局容器上以免依赖继承）。index.html / assembly-integration.html / cost-review.html 由 `workbench.css` 提供同名 token。
+- token 引用链：`.oc-ubub` → `var(--oc-accent)` → `var(--color-primary)` → `#0060E6`；报价 `.message-user` → `var(--color-primary)` → `#0060E6`。
+- 缓存：只更新被改动的样式表版本参数 —— `agent-chat.css?v=20260911-bubble1`（tech-workbench.html / index.html / assembly-integration.html / cost-review.html 四处引用）与 `tech-workbench.css?v=twb11`；未批量改动其它资源版本。
+- 边界：未改 AI 消息、工具卡、Logo、主按钮、步骤节点与语义色（成功绿 / 警告橙 / 失败红）；未全局删除渐变；未改消息 DOM、发送接口、流式响应、会话恢复与后端；未改 Spec 与 Red 测试。
+- 测试（实际运行）：`python3 -m unittest tests.test_quote_tech_user_message_primary_bubble_red -v` → **5/5 通过**（Red 基线为 4 失败 1 通过）；`python3 -m unittest tests.test_global_brand_color_red tests.test_primary_button_blue_gradient_red tests.test_quote_tech_user_message_primary_bubble_red -v` → **15/15 通过**；`python3 -m unittest discover -s tests -p 'test_*.py'` → **383 项通过、7 跳过、0 失败**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **385 项全部通过**；`git diff --check` 通过。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。
 
 ## 71. 报价 / 规则 / XBOM 四页 AI 徽标状态语义统一（9-11）
