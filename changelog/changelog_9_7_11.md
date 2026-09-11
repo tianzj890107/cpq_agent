@@ -667,3 +667,23 @@
 - `DEPLOYMENT.md`：同步持久化目录清单（含 `tech_app/tech_data/`、`product_images/`）、bind mount 说明与三条件健康判定，明确只看首页会在技术工艺子服务未启动时误报成功。
 - 测试（实际运行）：`tests.test_deployment_runtime_data_persistence_and_health_red` → **5/5 通过**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → 全量通过；`docker compose config` 成功且展开后含两条新增 bind mount 与 healthcheck；`bash -n scripts/deploy_server.sh` 通过；`git diff --check` 通过。
 - 边界：未修改 Spec、RED 测试、Dockerfile、业务代码、接口与数据格式、认证/角色/权限、`.gitlab-ci.yml`、`AGENTS.md`、分支/MR/tag/Release 配置，也未读写任何真实运行数据或密钥；未启动、停止或部署服务；提交与双推按用户后续明确指令单独执行。
+
+## 62. 长结构化输出截断恢复（输出 token 上限中断）Spec / Red 基线（9-11）
+
+- 新增 `docs/specs/tech-llm-output-truncation-recovery.md`：把"输出被 provider 上限截断"从整份重新生成/直接放弃，改为可提升预算、可续写、失败可诊断的统一契约，覆盖 Qwen 文本与视觉路径、OpenAI Responses 路径、1.1 需求解析，以及技术工艺 Agent 与报价/配置/规则三个业务 Agent 会话的 `stop_reason`。
+- 记录现状证据：`qwen_client.py` 的修复预算 `max(当前, 24000 if vision else 12000)` 对文本路径是 no-op（12000 → 12000），且修复是整份重生成；`openai_client.py` 在 `status=="incomplete"` 时直接放弃并写死"系统未自动重试"；`requirement_extract.py` 写死 `max_tokens=12000`；四个 Agent 会话把 `stop_reason=="max_tokens"` 当正常结束。
+- 新增红测 `tests/test_llm_output_truncation_recovery_red.py`（12 条，全部按预期失败）：共享截断模块 `llm_output` 的 API 与预算提升语义、`truncation_note` 诊断字段、Qwen 文本预算提升与续写、OpenAI 重试、1.1 共享预算、四个会话的 `max_tokens` 处理，以及三条行为用例（续写请求预算严格大于首轮、片段本地拼接后通过校验、一直截断时抛 `OutputTruncated` 且带上限值）。
+- 红测基线：`open-claude/.venv/bin/python` 下 12/12 失败（0 跳过）；`python3`（3.13，无 pydantic/httpx）下 11 失败 3 跳过。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 由 352 通过变为 364 中 11 失败、7 跳过，失败全部来自本批新增红测，无既有用例回归。
+- 本批只提交 spec 与红测，业务实现交由 DeepSeek 完成，实现提示词仅在会话中交付。
+
+## 63. 长结构化输出截断恢复：统一预算提升与续写（9-11）
+
+- 新增 `tech_app/backend/services/llm_output.py` 作为唯一共享实现：`OutputTruncated(RuntimeError)`（带 `finish_reason` / `limit` / `partial`）、`TRUNCATION_REASONS`、`is_truncated`、`raised_budget`（严格大于当前且不超过 provider 上限，到顶返回 `None`）、`budget_within`、`stitch_fragments`、`continuation_instruction`、`truncation_note`（同一行含 finish_reason、初始预算、最终预算、续写次数与上限）。同一进程内 `OutputTruncated` 类型通过共享槽位唯一化，避免按文件路径重复加载时 `isinstance` 失效。
+- `tech_app/backend/services/qwen_client.py`：删除 `24000 if vision else 12000` 的 no-op 提升；截断后改用 `llm_output.raised_budget` 提升预算，并把上一轮已产出片段交回模型续写（本地拼接后再做 JSON 解析 + Pydantic 校验）；续写请求剔除 `image_url` 块、不再重复触发联网检索；重试次数受 `QWEN_SCHEMA_REPAIR_RETRIES` 限制；到 `QWEN_MAX_OUTPUT_TOKENS` 仍不完整时抛 `OutputTruncated`（消息含 `finish_reason` 与上限值）。同一策略应用到视觉分支与 `complete_to_model_with_web_search`。
+- `tech_app/backend/services/openai_client.py`：删除"系统未自动重试，避免再次发送图纸产生额外费用"文案；`status == "incomplete"` 且 `incomplete_details.reason` 命中输出上限时抛 `OutputTruncated`（保留 `output_text` 片段），`run()` 用 `llm_output.raised_budget` 提升 `max_output_tokens` 并续写；续写只回传已产出 JSON、剔除图纸块且不调用工具；重试耗尽抛 `OutputTruncated`；`_value_from()` 的 dict/对象双形态兼容保持不变。
+- `tech_app/backend/services/requirement_extract.py`：1.1 需求解析不再写死 `max_tokens=12000`，改为 `llm_output.budget_within(llm_output.DEFAULT_TEXT_OUTPUT_BUDGET, QWEN_MAX_OUTPUT_TOKENS)`，首轮截断后由 provider 客户端提升预算 + 续写拿到完整 `RequirementDocumentExtraction`。
+- 四个 Agent 会话显式处理输出上限停止：`tech_app/backend/services/oc_agent.py`、`cpq_agent_server.py`、`xbom_agent_server.py`、`rule_agent_server.py` 在 `stop_reason == "max_tokens"` 时保留已产出文本，发出带 `stop_reason` 的可识别提示（三套 server 另写入 `self.events` 会话事件），不再当正常 `end_turn` 静默收尾；`tool_use` 循环语义与既有事件协议未改。
+- 可观测性（R6）：`llm_output` 新增 `record_remediation` / `remediation_notes`（记录放在进程级共享槽位，模块被重复加载也不丢），`truncation_note` 增加可选 `outcome`；Qwen 文本/视觉、Qwen 联网核验、OpenAI Responses 三处补救都会写入带「调用路径 + 初始预算 + 最终预算 + 续写次数 + 上限 + 结果（续写重试/成功/失败）」的单行记录，只含诊断文本，不含图纸二进制、完整提示词或 API Key。
+- 边界：未改 `open-claude/**` 字节码与包本身；未新增第二套截断/续写实现（全部复用 `llm_output`）；未降低 Pydantic 校验强度、未把半截 JSON 当成功；未改 `max_tokens` 既有环境变量语义与 `llm_settings` 的 `[256, 64000]` 校验范围；未改 Spec 与红测文件。
+- 测试（实际运行）：`./open-claude/.venv/bin/python -m unittest tests.test_llm_output_truncation_recovery_red -v` → **12/12 通过（0 跳过）**；`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **366 项全部通过**；`python3 -m unittest discover -s tests -p 'test_*.py'`（3.13 无三方依赖）→ **364 项通过、7 跳过、0 失败**；`git diff --check` 通过。
+- 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动服务。

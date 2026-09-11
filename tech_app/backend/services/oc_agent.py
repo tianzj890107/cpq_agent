@@ -2982,6 +2982,17 @@ class ProjectAgent:
                           "ui_action": UI_ACTION_TOOLS.get(event["name"], "")})
             elif kind == "message_end":
                 stop_reason = event.get("stop_reason", "end_turn")
+                if stop_reason == "max_tokens":
+                    # 输出被 provider 输出上限截断：已产出的文本已通过 text 帧下发并写入
+                    # 会话历史（下面仍会 append），这里再发一条可识别信号，让前端提示重试，
+                    # 绝不能当作正常 end_turn 静默收尾。
+                    emit({
+                        "type": "error",
+                        "stop_reason": "max_tokens",
+                        "truncated": True,
+                        "error": "模型输出达到 max_tokens 上限被截断，已保留已生成内容；"
+                                 "请重试，或减少一次解析/生成的输出量。",
+                    })
                 usage = event.get("usage", {})
                 conv.cost_tracker.add_usage(
                     conv.model,

@@ -14,10 +14,14 @@ from typing import Iterable
 from xml.etree import ElementTree
 
 from ..models.workflow import RequirementDocumentExtraction, RequirementDynamicSpecField
-from ..config import LLM_MAX_DOCUMENT_CHARS, LLM_MAX_DOCUMENTS, LLM_MAX_TOTAL_DOCUMENT_CHARS
+from ..config import (
+    LLM_MAX_DOCUMENT_CHARS, LLM_MAX_DOCUMENTS, LLM_MAX_TOTAL_DOCUMENT_CHARS,
+    QWEN_MAX_OUTPUT_TOKENS,
+)
 # 走统一分派层，而不是直接绑死 qwen —— 直接 import 具体提供商的客户端，
 # 就会绕过「模型设置」，出现"配了 opus5 却报 Qwen 调用失败"。
 from . import llm_client
+from . import llm_output
 
 _TEXT_SUFFIXES = (".txt", ".md", ".csv", ".json", ".log", ".yaml", ".yml", ".ini")
 _MAX_DOCUMENTS = LLM_MAX_DOCUMENTS
@@ -403,7 +407,10 @@ def extract_requirement_fields(prepared: PreparedDocuments, industry_selection: 
         RequirementDocumentExtraction,
         # 1.1 字段与灵活行业规格可能同时返回几十个字段，不能再使用早期
         # 个人 API 的 2200 token 小预算，否则合法 JSON 会在末尾被截断。
-        max_tokens=12000,
+        # 预算统一由 llm_output 提供，截断后由 provider 客户端提升预算并续写拼接。
+        max_tokens=llm_output.budget_within(
+            llm_output.DEFAULT_TEXT_OUTPUT_BUDGET, QWEN_MAX_OUTPUT_TOKENS
+        ),
     )
     result.title = result.title.strip()[:160] or "待人工确认需求"
     result.summary = result.summary.strip()[:240]
