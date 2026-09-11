@@ -369,6 +369,9 @@
       // 由右侧看板复用既有 extract-documents 流水线执行（左侧绝不直接调用该接口）。
       if (event.ui_action === "extract-requirement") requestRequirementExtract("Agent");
       if (event.ui_action === "refresh-requirement") refreshRequirementBoard();
+      // 1.2 / 1.3：Agent 起草的确认 / 审核意见经桥带回看板（不落盘、不改状态）。
+      if (event.ui_action === "fill-confirmation-note") applyConfirmationNoteAction(event.input);
+      if (event.ui_action === "fill-review-note") applyReviewNoteAction(event.input);
       return;
     }
     if (event.type === "tool_result") {
@@ -379,6 +382,8 @@
       // 1.1 需求提取工具回执里的 document_extraction：抽取成需求解析摘要。
       const requirementSummary = requirementSummaryFromToolResult(event);
       if (requirementSummary) renderRequirementSummary(requirementSummary);
+      const flowSummary = requirementFlowSummaryFromToolResult(event);
+      if (flowSummary) renderRequirementFlowSummary(flowSummary);
       return;
     }
     if (event.type === "error") {
@@ -555,6 +560,121 @@
     if (summary.missing.length) {
       card.append(el("div", "oc-req-line oc-req-missing",
         `仍缺必填项 ${summary.missing.length} 个：${summary.missing.join("、")}`));
+    }
+    body.append(card);
+    wrap.append(body);
+    tinner.append(wrap);
+    scrollDown();
+  }
+
+  // ---------------------------------------------- 1.2 / 1.3：确认与审核意见带入看板
+  // Agent 起草的确认意见 / 审核意见经桥交给右侧看板写入表单（复用各页既有写法）：
+  // 左侧不直接调接口、不落盘、不改任何状态；通过 / 退回仍由看板的确认门执行。
+  function applyConfirmationNoteAction(input) {
+    const note = String((input && input.note) || "").trim();
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("确认意见暂未带入：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("applyConfirmationNote", { note })).catch(error => {
+      pushSystem(`带入确认意见失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  function applyReviewNoteAction(input) {
+    const decision = String((input && input.decision) || "").trim();
+    const note = String((input && input.note) || "").trim();
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== "function") {
+      pushSystem("审核意见暂未带入：右侧看板尚未就绪，请稍后重试。");
+      return;
+    }
+    Promise.resolve(bridge.executeAction("applyReviewNote", { decision, note })).catch(error => {
+      pushSystem(`带入审核意见失败：${(error && error.message) || "右侧看板未响应"}。`);
+    });
+  }
+
+  // 工具回执都是后端 json.dumps 出来的对象；解析失败一律返回 null，不猜内容。
+  function toolResultJson(event) {
+    if (event.is_error) return null;
+    const text = String(event.content || "").trim();
+    if (!text || text.charAt(0) !== "{") return null;
+    try {
+      const data = JSON.parse(text);
+      return (data && typeof data === "object") ? data : null;
+    } catch { return null; }
+  }
+
+  // 1.2 / 1.3 的工具回执 → 左侧摘要：确认门回执、确定性预检 / 待澄清、审核材料 / 摘要。
+  function requirementFlowSummaryFromToolResult(event) {
+    const data = toolResultJson(event);
+    if (!data) return null;
+    if (data.requires_confirmation === true) {
+      return { kind: "confirm-gate", action: String(data.action || ""), note: String(data.note || "") };
+    }
+    if (data.review_summary || data.review_materials) {
+      return { kind: "review", materials: data.review_materials || null, summary: data.review_summary || null };
+    }
+    const generated = typeof data.generated_note === "string" ? data.generated_note : "";
+    const needs = Array.isArray(data.need_info) ? data.need_info
+      : (Array.isArray(data.questions) ? data.questions : null);
+    if (generated || needs) {
+      return { kind: "confirmation", generated_note: generated, need_info: needs || [],
+               status: String(data.status || "") };
+    }
+    return null;
+  }
+
+  const CONFIRM_GATE_LABELS = { confirm: "通过确认", return: "退回草稿", approve: "审核通过", reject: "审核退回" };
+  let lastRequirementFlowKey = "";
+
+  function requirementFlowSignature(summary) {
+    if (summary.kind === "confirm-gate") return `gate:${summary.action}`;
+    if (summary.kind === "review") return `review:${JSON.stringify(summary.summary || {})}`;
+    return `confirm:${summary.status}:${summary.generated_note}:${(summary.need_info || []).length}`;
+  }
+
+  function renderRequirementFlowSummary(summary) {
+    if (!summary) return;
+    const signature = requirementFlowSignature(summary);
+    if (signature === lastRequirementFlowKey) return;
+    lastRequirementFlowKey = signature;
+    clearEmpty();
+    const wrap = el("div", "oc-amsg");
+    wrap.append(el("div", "oc-aav", "✦"));
+    const body = el("div", "oc-abody");
+    const card = el("div", "oc-req-summary");
+    if (summary.kind === "confirm-gate") {
+      const label = CONFIRM_GATE_LABELS[summary.action] || "该操作";
+      card.append(el("h4", null, "需要人工确认"));
+      card.append(el("div", "oc-req-line oc-req-missing",
+        `「${label}」需人工明确确认后才能执行，Agent 不会代替审批。`));
+      if (summary.note) card.append(el("div", "oc-req-line", summary.note));
+    } else if (summary.kind === "review") {
+      card.append(el("h4", null, "审核摘要"));
+      const inner = summary.summary || {};
+      if (inner.summary) card.append(el("div", "oc-req-line", inner.summary));
+      if (inner.generated_note) card.append(el("div", "oc-req-line", inner.generated_note));
+      const needs = Array.isArray(inner.need_info) ? inner.need_info : [];
+      if (needs.length) {
+        card.append(el("div", "oc-req-line oc-req-missing",
+          `仍有 ${needs.length} 个待补充项：${needs.map(row => (row && row.item) || "").filter(Boolean).join("、")}`));
+      }
+      const materials = summary.materials || {};
+      const files = Array.isArray(materials.attachments) ? materials.attachments : [];
+      if (materials.source_filename || files.length) {
+        card.append(el("div", "oc-req-line",
+          `审核材料：原始图纸 ${materials.source_filename || "—"}；附件 ${files.length} 份。`));
+      }
+    } else {
+      card.append(el("h4", null, "需求确认摘要"));
+      if (summary.generated_note) card.append(el("div", "oc-req-line", summary.generated_note));
+      const needs = summary.need_info || [];
+      const items = needs.map(row => (row && row.item) || "").filter(Boolean);
+      card.append(el("div", needs.length ? "oc-req-line oc-req-missing" : "oc-req-line",
+        needs.length ? `待补充 ${needs.length} 项：${items.join("、")}` : "确定性检查未发现待补充项。"));
+      if (summary.status) card.append(el("div", "oc-req-line", `当前状态：${summary.status}`));
     }
     body.append(card);
     wrap.append(body);

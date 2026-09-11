@@ -716,6 +716,10 @@
       return;
     }
     if (data.type !== 'cpq:tech-workbench:navigate') return;
+    // 只认当前嵌入的看板 iframe 发来的导航：旧通道与看板桥一样必须校验 event.source，
+    // 否则任意同源窗口都能驱动父壳切流程，origin 校验并不足够。
+    const navigateFrame = $('techStageFrame');
+    if (!navigateFrame || event.source !== navigateFrame.contentWindow) return;
     if (!stages.has(data.stage)) return;                       // stage 白名单校验
     applyStage(data.stage, {
       project: data.project || state.project,

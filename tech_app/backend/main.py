@@ -66,7 +66,8 @@ from .services import (
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_review, industry_templates, integration, manufacturing,
     llm_settings, material, negotiation, oc_agent, part_edit, pricenego, pricing, process_lookup,
-    process, product_params, production, requirement_extract, step_import,
+    process, product_params, production, requirement_extract, requirement_service,
+    step_import,
     summary as summary_svc, tasks, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
 )
@@ -3681,9 +3682,7 @@ def recommend_assembly(project_id: str, note: str = Form(""),
     material_plan = store.load_material(project_id)
     manufacturing_plan = store.load_manufacturing(project_id)
     author = user.get("username", "system")
-    dependency_hash = _digest_value((
-        ir_dict, material_plan, manufacturing_plan, store.load_costest(project_id),
-    ))
+    # 提交时先取输入+草稿摘要，任务执行期间若被改过就丢弃旧结果。
     dependency_hash = _digest_value((
         ir_dict, material_plan, manufacturing_plan, store.load_assembly(project_id),
     ))
@@ -4226,6 +4225,10 @@ def recommend_costest(project_id: str, note: str = Form(""),
     material_plan = store.load_material(project_id)
     manufacturing_plan = store.load_manufacturing(project_id)
     author = user.get("username", "system")
+    # 与其它 recommend 路由一致：提交时先取输入+草稿摘要，任务执行期间若被改过就丢弃旧结果。
+    dependency_hash = _digest_value((
+        ir_dict, material_plan, manufacturing_plan, store.load_costest(project_id),
+    ))
 
     def job():
         tasks.report_progress("正在调用模型生成完整成本测算")
@@ -5801,8 +5804,12 @@ def review_requirement(
 ):
     _require(user, auth.DIRECTOR_ROLES, "需要工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    return {"requirement": _requirement_flow(
-        requirement_service.review_requirement, project_id, user, body.comment, body.decision)}
+    try:
+        out = requirement_service.review_requirement(
+            project_id, user, body.decision, body.comment)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    return {"requirement": out}
 
 
 def _report_prerequisite_issues(project_id: str) -> list[str]:

@@ -563,6 +563,119 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "GetRequirementPrecheck",
+        "description": "读取 1.2 确认页的**确定性**完整性检查结果：每个区块的 ok / need_info 与"
+                       "整体结论（generated_note）。回答「这单能不能确认」「还缺什么」时先调用它；"
+                       "结果由既有规则算出，不经模型。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetRequirementClarifications",
+        "description": "读取 1.2 待澄清问题：把同一份确定性预检里 status == need_info 的条目"
+                       "投影成问题清单。回答「还有哪些要补充」时调用；不要自己编造问题。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveRequirementConfirmationNote",
+        "description": "把确认意见**带进 1.2 看板**的提交意见框（#confirmationNote），与 RequestParse"
+                       " 同模式：只向界面发请求，本工具**不落盘**。真正写入需求单由用户点击通过 / "
+                       "驳回时携带的 comment 完成。用户说「把意见填上」「起草确认意见」时调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"note": {"type": "string", "description": "要带入确认意见框的文本"}},
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "ConfirmRequirement",
+        "description": "通过 1.2 需求确认（pending_confirmation → pending_review）。"
+                       "**必须由用户明确确认**：只有用户在本轮明确说「确认通过」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不能代替人工审批。"
+                       "需要工艺技术经理或管理员权限，状态不符会如实返回失败原因。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认通过；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "确认意见，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "ReturnRequirementToDraft",
+        "description": "把 1.2 需求退回草稿（pending_confirmation → draft），供创建人补充后重新提交。"
+                       "**必须由用户明确确认**：只有用户明确说「退回 / 驳回」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，不得静默退回。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "GetRequirementReviewMaterials",
+        "description": "读取 1.3 审核材料：需求单关键字段、原始图纸与附件清单、确认信息、"
+                       "确定性预检与历史留痕。回答「审核要看哪些材料」时调用；只读取，不改状态。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetRequirementReviewSummary",
+        "description": "生成 1.3 审核摘要：由同一份确定性预检与关键字段汇总出 summary / items / "
+                       "need_info / decision_options，**不调用模型、不编造结论**。用户问「这份需求能不能"
+                       "过审」「审核结论建议」时调用。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveRequirementReviewNote",
+        "description": "把审核意见与审核结果**带进 1.3 看板**（选中审核结果单选 + 写入 #reviewText），"
+                       "与 RequestParse 同模式：只向界面发请求，本工具**不落盘**。真正写入需求单由"
+                       "用户点击提交审核时完成。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision": {"type": "string", "enum": ["approve", "reject", ""],
+                             "description": "审核结果：approve 通过 / reject 退回 / 留空只带入意见"},
+                "note": {"type": "string", "description": "要带入审核说明的文本"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ApproveRequirementReview",
+        "description": "审核通过 1.3 需求（pending_review → approved）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：只有用户明确说「审核通过」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不代替人工审批。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核通过；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "审核意见，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "RejectRequirementReview",
+        "description": "审核退回 1.3 需求（pending_review → rejected）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：只有用户明确说「退回 / 驳回」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，不得静默退回。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核退回；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -579,6 +692,15 @@ UI_ACTION_TOOLS = {
     "ExtractRequirement": "extract-requirement",
     "UpdateRequirementFields": "refresh-requirement",
     "AttachRequirementFiles": "refresh-requirement",
+    # 1.2 确认需求：确认意见带入看板；通过 / 退回有显式确认门，绝不能映射成
+    # 会在 tool_use 阶段就自动执行的动作（否则父壳会在工具跑之前绕过确认门直接审批）。
+    "SaveRequirementConfirmationNote": "fill-confirmation-note",
+    "ConfirmRequirement": "refresh-requirement",
+    "ReturnRequirementToDraft": "refresh-requirement",
+    # 1.3 审核需求：审核意见带入看板；通过 / 退回同样只刷新，不自动审批。
+    "SaveRequirementReviewNote": "fill-review-note",
+    "ApproveRequirementReview": "refresh-requirement",
+    "RejectRequirementReview": "refresh-requirement",
 }
 
 
@@ -666,6 +788,84 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
         return json.dumps(_requirement_ai_fill(project_id), ensure_ascii=False, indent=2)
     if name == "SubmitRequirementConfirmation":
         return json.dumps(_submit_requirement_confirmation(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementPrecheck":
+        return json.dumps(_requirement_precheck_data(project_id), ensure_ascii=False, indent=2)
+    if name == "GetRequirementClarifications":
+        return json.dumps(_requirement_clarifications(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveRequirementConfirmationNote":
+        note = str(params.get("note") or "")[:2000]
+        return json.dumps({
+            "requested": True,
+            "note": note,
+            "note_target": "confirmationNote",
+            "note_style": "append",
+            "note_hint": "已请求看板把这段文字带进「提交意见」；本工具不落盘，"
+                         "真正写入需求单由用户点击通过 / 驳回时完成。",
+        }, ensure_ascii=False)
+    if name == "ConfirmRequirement":
+        # 显式确认门：没有用户明确的确认，绝不改状态。
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "confirm",
+                "status": _requirement_status(project_id),
+                "note": "通过需求会推进到 1.3 审核，必须由用户明确确认。请先向用户复述待确认要点，"
+                        "得到同意后再带 confirmed=true 重新调用；不要代替用户做决定。",
+            }, ensure_ascii=False)
+        return json.dumps(_confirm_requirement(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "ReturnRequirementToDraft":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "return",
+                "status": _requirement_status(project_id),
+                "note": "退回需求会让创建人重新补充，必须由用户明确确认。请先征得用户同意，"
+                        "再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_return_requirement_to_draft(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementReviewMaterials":
+        return json.dumps({"review_materials": _requirement_review_materials(project_id)},
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementReviewSummary":
+        return json.dumps(_requirement_review_summary(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveRequirementReviewNote":
+        decision = str(params.get("decision") or "").strip().lower()
+        if decision not in ("approve", "reject", ""):
+            return json.dumps({"requested": False,
+                               "error": "decision 只能是 approve / reject 或留空"},
+                              ensure_ascii=False)
+        return json.dumps({
+            "requested": True,
+            "decision": decision,
+            "note": str(params.get("note") or "")[:2000],
+            "note_target": "reviewText",
+            "note_hint": "已请求看板选中审核结果并带入审核说明；本工具不落盘，"
+                         "真正写入需求单由用户点击提交审核时完成。",
+        }, ensure_ascii=False)
+    if name == "ApproveRequirementReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "approve",
+                "status": _requirement_status(project_id),
+                "note": "审核通过会推进到图纸解析，必须由用户明确确认，且需工艺技术总监或管理员"
+                        "权限。请先征得用户同意，再带 confirmed=true 重新调用；绝不代替人工审批。",
+            }, ensure_ascii=False)
+        return json.dumps(_approve_requirement_review(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "RejectRequirementReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "reject",
+                "status": _requirement_status(project_id),
+                "note": "审核退回会把需求打回，必须由用户明确确认，且需工艺技术总监或管理员权限。"
+                        "请先征得用户同意，再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_reject_requirement_review(project_id, str(params.get("comment") or "")),
                           ensure_ascii=False, indent=2)
     return f"未知的平台工具：{name}"
 
@@ -918,6 +1118,186 @@ def _submit_requirement_confirmation(project_id: str, params: dict) -> dict:
     return {"submitted": True, "status": out.get("status", ""),
             "requirement_no": out.get("requirement_no", ""),
             "note": "已提交到 1.2 待确认；后续仍由人工确认或退回，Agent 不代替审批。"}
+
+
+# --------------------------------------------------------------------------- #
+# 1.2 确认需求 / 1.3 审核需求
+# --------------------------------------------------------------------------- #
+# 预检、确认、退回、审核的状态流转都只有一份实现（services/requirement_service.py），
+# 这里只是把同一份结果投影成 Agent 可读的结构，绝不自己重写规则或状态机。
+def _requirement_status(project_id: str) -> str:
+    saved = store.load_requirement(project_id) or {}
+    return str(saved.get("status") or "")
+
+
+def _requirement_precheck_data(project_id: str) -> dict:
+    from . import requirement_service
+
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "status": "",
+                "note": "还没有需求单；请先在 1.1 创建需求并提交到 1.2 确认。"}
+    result = requirement_service.requirement_precheck(project_id, _requirement_doc(saved))
+    needs = [row for row in result.get("items") or [] if row.get("status") == "need_info"]
+    return {
+        "available": True,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "items": result.get("items") or [],
+        "need_info": [{"item": row.get("item", ""), "detail": row.get("detail", "")}
+                      for row in needs],
+        "ok": result.get("ok") is True,
+        "generated_note": result.get("generated_note", ""),
+        "engine": result.get("engine", ""),
+    }
+
+
+def _requirement_clarifications(project_id: str) -> dict:
+    """只把同一份预检里 status == need_info 的条目投影成待澄清问题。"""
+    precheck = _requirement_precheck_data(project_id)
+    if not precheck.get("available"):
+        return {"available": False, "status": "", "count": 0, "questions": [],
+                "note": precheck.get("note", "")}
+    questions = list(precheck.get("need_info") or [])
+    return {
+        "available": True,
+        "requirement_no": precheck.get("requirement_no", ""),
+        "status": precheck.get("status", ""),
+        "count": len(questions),
+        "questions": questions,
+        "generated_note": precheck.get("generated_note", ""),
+        "note": ("以上问题来自既有确定性预检的 need_info 项，未另立规则、未调用模型。"
+                 if questions else "既有确定性预检没有待澄清项。"),
+    }
+
+
+def _confirm_requirement(project_id: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"applied": False, "error": "通过需求确认需要工艺技术经理或管理员权限。"}
+    try:
+        out = requirement_service.confirm_requirement(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    return {"applied": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "需求已进入 1.3 待审核；请刷新右侧看板查看状态与流程留痕。"}
+
+
+def _return_requirement_to_draft(project_id: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"applied": False, "error": "退回需求需要工艺技术经理或管理员权限。"}
+    try:
+        out = requirement_service.return_requirement_to_draft(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    return {"applied": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "需求已退回 1.1 草稿；请刷新右侧看板查看状态与流程留痕。"}
+
+
+def _requirement_review_materials(project_id: str) -> dict:
+    """1.3 审核材料：需求关键字段 + 附件 + 确认信息 + 确定性预检 + 历史留痕（只读）。"""
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "note": "还没有需求单；请先完成 1.1 创建与 1.2 确认。"}
+    meta = store.load_meta(project_id) or {}
+    data = saved.get("data") or {}
+    precheck = _requirement_precheck_data(project_id)
+    attachments = [name for name, _ in store.load_attachments(project_id)]
+    history = [dict(row) for row in (saved.get("history") or [])][-10:]
+    return {
+        "available": True,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "created_by": saved.get("created_by", ""),
+        "created_at": saved.get("created_at", ""),
+        "confirmed_by": saved.get("confirmed_by", ""),
+        "confirmed_at": saved.get("confirmed_at", ""),
+        "confirmation_note": saved.get("confirmation_note", ""),
+        "source_filename": meta.get("source_filename", ""),
+        "attachments": attachments,
+        "file_roles": data.get("file_roles") or {},
+        "key_fields": {
+            "requirement_type": data.get("requirement_type", ""),
+            "priority": data.get("priority", ""),
+            "bu": data.get("bu", ""),
+            "customer_type": data.get("customer_type", ""),
+            "final_customer_name": data.get("final_customer_name", ""),
+            "project_name": data.get("project_name", ""),
+            "project_code": data.get("project_code", ""),
+            "annual_forecast": data.get("annual_forecast", ""),
+            "first_sample_due": data.get("first_sample_due", ""),
+            "mass_production_due": data.get("mass_production_due", ""),
+        },
+        "precheck": {"ok": precheck.get("ok"), "generated_note": precheck.get("generated_note", ""),
+                     "items": precheck.get("items") or []},
+        "history": history,
+        "note": "以上材料全部来自既有 store 与确定性预检，只读，不改任何状态、不调模型。",
+    }
+
+
+def _requirement_review_summary(project_id: str) -> dict:
+    """由同一份预检 + 关键字段做确定性汇总，不调模型、不编造结论。"""
+    materials = _requirement_review_materials(project_id)
+    if not materials.get("available"):
+        return {"available": False, "note": materials.get("note", "")}
+    precheck = materials.get("precheck") or {}
+    items = list(precheck.get("items") or [])
+    needs = [row for row in items if row.get("status") == "need_info"]
+    summary = ("确定性检查未发现待补充项，资料齐备，可提交审核通过。"
+               if not needs else
+               f"确定性检查仍有 {len(needs)} 个待补充项，建议先退回补充再审核通过。")
+    return {
+        "available": True,
+        "review_summary": {
+            "requirement_no": materials.get("requirement_no", ""),
+            "title": materials.get("title", ""),
+            "status": materials.get("status", ""),
+            "summary": summary,
+            "generated_note": precheck.get("generated_note", ""),
+            "items": items,
+            "need_info": [{"item": row.get("item", ""), "detail": row.get("detail", "")}
+                          for row in needs],
+            "key_fields": materials.get("key_fields") or {},
+            "decision_options": [
+                {"decision": "approve", "label": "审核通过", "requires_confirmation": True},
+                {"decision": "reject", "label": "退回修改", "requires_confirmation": True},
+            ],
+        },
+        "note": "确定性汇总，不调用模型、不代替人工审批；通过 / 退回都需用户明确确认。",
+    }
+
+
+def _approve_requirement_review(project_id: str, comment: str) -> dict:
+    return _run_requirement_review(project_id, "approve", comment)
+
+
+def _reject_requirement_review(project_id: str, comment: str) -> dict:
+    return _run_requirement_review(project_id, "reject", comment)
+
+
+def _run_requirement_review(project_id: str, decision: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.DIRECTOR_ROLES:
+        return {"applied": False, "decision": decision,
+                "error": "审核需求需要工艺技术总监或管理员权限。"}
+    try:
+        out = requirement_service.review_requirement(project_id, user, decision, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "decision": decision, "error": str(exc)}
+    return {"applied": True, "decision": decision, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "审核结果已落盘；请刷新右侧看板查看审核状态与流程留痕。"}
 
 
 # --------------------------------------------------------------------------- #

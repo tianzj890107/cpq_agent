@@ -55,11 +55,43 @@ async function cfRunAiCheck() {
   catch (err) { button.disabled = false; button.textContent = '⚡ AI 检查'; cfToast(`AI 检查失败：${err.message}`, true); }
 }
 
+// 确认进度经统一看板协议上报父壳（独立打开时静默），不能只发 iframe 内 window 事件。
+function cfPublishTaskEvent(type, extra) {
+  try {
+    if (window.TechBoardRuntime && typeof window.TechBoardRuntime.publish === 'function') {
+      window.TechBoardRuntime.publish(type, 'confirmRequirement', extra || {});
+    }
+  } catch (_) { /* 独立打开无运行时 */ }
+}
+
+// 复用 #bringAi 的「带入」写法：只追加，不覆盖人工已写内容，也不重复追加同一段。
+function cfAppendNote(note) {
+  const area = document.querySelector('#confirmationNote');
+  const text = String(note || '').trim();
+  if (!area || !text) return false;
+  area.value = area.value ? (area.value.includes(text) ? area.value : `${area.value}\n${text}`) : text;
+  area.focus();
+  return true;
+}
+
 async function cfAct(kind) {
   const comment = document.querySelector('#confirmationNote').value.trim();
-  if (!comment) return cfToast('请填写提交意见。', true);
-  if (cfRequirement.status !== 'pending_confirmation') return cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true);
-  try { const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`; await api(url,{method:'POST',body:JSON.stringify({comment})}); if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(kind==='confirm'?'requirement-review':'requirement-create',cfPid);}else{location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`;} } catch (err) { cfToast(err.message, true); }
+  if (!comment) { cfToast('请填写提交意见。', true); return { ok: false, error: { code: 'missing-comment', message: '请填写提交意见。' } }; }
+  if (cfRequirement.status !== 'pending_confirmation') { cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求尚未提交至确认环节。' } }; }
+  const taskId = `requirement-confirm-${kind}`;
+  const label = kind === 'confirm' ? '通过确认' : '退回草稿';
+  cfPublishTaskEvent('task-progress', { taskId, status: 'running', progress: `正在${label}…` });
+  try {
+    const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`;
+    await api(url,{method:'POST',body:JSON.stringify({comment})});
+    cfPublishTaskEvent('task-completed', { taskId, status: 'succeeded' });
+    if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(kind==='confirm'?'requirement-review':'requirement-create',cfPid);}else{location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`;}
+    return { ok: true };
+  } catch (err) {
+    cfPublishTaskEvent('task-failed', { taskId, status: 'failed', error: err.message });
+    cfToast(err.message, true);
+    return { ok: false, error: { code: 'action-failed', message: err.message } };
+  }
 }
 
 async function cfStart() {
@@ -91,11 +123,28 @@ cfRender = function () {
   async function cfBoardRun(kind) {
     if (cfBoardBusy) return { ok: false, error: { code: 'busy', message: '正在提交，请稍候。' } };
     cfBoardBusy = true;
-    try { await cfAct(kind); return { ok: true }; }
+    try { return await cfAct(kind); }
     catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '提交失败' } }; }
     finally { cfBoardBusy = false; }
   }
   window.TechBoardRuntime.registerActions({
+    // Agent（SaveRequirementConfirmationNote）起草的确认意见带回看板：复用 cfAppendNote
+    // 的追加写法写入既有 #confirmationNote，不覆盖人工已写内容，也不动任何状态。
+    applyConfirmationNote: {
+      label: '带入确认意见',
+      run: ({ note } = {}) => {
+        const applied = cfAppendNote(note);
+        return applied ? { ok: true } : { ok: false, error: { code: 'note-target-missing', message: '看板未找到确认意见输入框或意见为空。' } };
+      },
+      getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#confirmationNote')), busy: cfBoardBusy }),
+    },
+    // Agent 改完状态（ConfirmRequirement / ReturnRequirementToDraft）后左侧只发
+    // refresh-data：复用既有 cfStart() 重新拉需求单与预检并重绘，不新增读取逻辑。
+    refreshData: {
+      label: '刷新需求确认页',
+      run: async () => { await cfStart(); return { ok: true }; },
+      getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#confirmPass')), busy: cfBoardBusy }),
+    },
     confirmRequirement: {
       label: '✓ 通过确认',
       run: () => cfBoardRun('confirm'),
