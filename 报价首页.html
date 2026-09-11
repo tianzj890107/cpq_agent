@@ -665,9 +665,12 @@
     }
 
     /* 待办任务卡片：除了左侧那条蓝边，其余与另外三个助手的卡片完全一样。
-       它以前多一排 chip 和一块备注，同一行里卡片就高矮不齐、长文本还会顶出边框。 */
+       以前它多一排 chip 和一块备注，行数随内容变，同一行里卡片就高矮不齐、
+       长文本还会顶出边框；现在高度由网格拉伸统一，备注行只在有备注时才渲染。 */
     .request-card.wf-task { border-left: 3px solid var(--color-primary); }
-    /* 备注那一行没内容时也占位，四张卡的页脚才对得齐（空时填 &nbsp;）。 */
+    /* 卡片等高靠网格的 align-items:stretch 拉伸 + 卡片 height:100% 吃满格高，
+       页脚再由 footer 的 margin-top:auto 贴底对齐。备注为空时整行不渲染，
+       不再用占位内容凑高度。 */
     .request-note { font-style: italic; color: var(--text-tertiary); }
 
     .list-tab {
@@ -740,6 +743,8 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 10px;
       margin-bottom: 12px;
+      /* 同一行卡片等高：拉伸格子里的卡片吃满行高，再由 footer margin-top:auto 对齐页脚。 */
+      align-items: stretch;
     }
 
     .cards-empty { grid-column: 1 / -1; text-align: center; color: var(--text-tertiary); font-size: 13.5px; line-height: 1.9; padding: 44px 12px; }
@@ -756,6 +761,7 @@
          内容多一行少一行都不会看起来"大小不一"。 */
       display: flex;
       flex-direction: column;
+      height: 100%;              /* 吃满网格单元高度，同一行卡片才会等高 */
       min-width: 0;
       overflow: hidden;
     }
@@ -920,13 +926,22 @@
       color: var(--text-tertiary);
     }
 
+    /* 会话卡（我的报价 / 全部报价）与待办卡等高：待办卡比会话卡多一行「来自 … 第 N 步」，
+       净高 11px × 1.5 = 16.5px。会话卡不补假内容行，改成把「客户名称」这一行整体下移同样
+       高度，卡片总高就与待办卡一致，页脚仍由 margin-top:auto 贴底。 */
+    .request-card:not(.wf-task) .request-info { margin-top: 16.5px; }
+
+    /* 「来自 … 第 N 步」这一行：上下行距各减一半（原来的 4px → 2px）。卡片是 flex 列，
+       子项外边距不折叠，所以用 -2px 抵消上一行的 4px 下边距，下方再把 4px 收到 2px。 */
+    .request-info.request-from { margin-top: -2px; margin-bottom: 2px; }
+
     .request-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
       margin-top: auto;          /* 页脚贴底：同一行的卡片页脚对齐 */
-      padding-top: 8px;
+      padding-top: 0;            /* 「…负责」这一行上方不再留间距 */
       border-top: 1px solid var(--border-light);
     }
 
@@ -1620,11 +1635,10 @@
            原来这里多了一排 wf-chip 和一块备注，行数随内容变，同一行里卡片高矮不一，
            长备注还会顶出边框。信息一条没少，只是改成同样会截断的单行。 */
         '<div class="request-info">客户名称：<span>' + escH(t.customer || '—') + '</span></div>' +
-        '<div class="request-info">来自 <span>' + escH(t.from_display_name || '—') +
+        '<div class="request-info request-from">来自 <span>' + escH(t.from_display_name || '—') +
         '（' + escH(t.from_role_name || '') + '）</span> · 第 ' + escH(t.next_step_no) +
         ' 步 <span>' + escH(t.next_step_name) + '</span></div>' +
-        '<div class="request-info request-note">' +
-        (t.note ? '“' + escH(t.note) + '”' : '&nbsp;') + '</div>' +
+        (t.note ? '<div class="request-info request-note">“' + escH(t.note) + '”</div>' : '') +
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
         escH(fmtTime(t.created_at)) + ' · ' + escH(t.next_role_name) + '负责</div>' +

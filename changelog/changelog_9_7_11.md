@@ -892,3 +892,14 @@
 - 测试（实际运行）：`python3 -m unittest tests.test_tech_history_quote_drawer_parity_red -v` → **9/9 通过**（Red 基线 8 失败 1 通过）；`node --check tech_app/frontend/tech-workbench.js` 通过；`git diff --check` 通过。
 - 边界：未改历史数据来源（仍是技术项目 + `/workflow`）、未改九阶段 stage id 与 URL、未新增/删除 `@app.` 路由、未改 iframe postMessage 协议、未改后端接口；未改 Spec 与 Red 测试。
 - 交付状态：本记录写入时实现**尚未提交、尚未推送**；未创建 MR/tag/Release、未部署、未启动或重启服务。
+
+## 80. 首页待办卡与会话卡等高 Spec / Red 基线（9-11）
+
+- 需求：`报价首页.html` 的待办卡比会话卡多一行「来自 … 第 N 步」，备注为空时还用 `&nbsp;` 硬占一整行，同一行卡片高矮不一、多余空白把页脚顶开；要求同排卡片等高，待办卡多出的内容不产生空行，另两张会话卡按同一高度对齐。
+- 缺口（实测）：`.card-grid` 只有 `repeat(3, 1fr)`，无 `align-items` 等高策略（`:738`）；`.request-card` 无 `height: 100%`（`:746`）；待办卡 `taskCardHtml()` 备注行写死 `(t.note ? … : '&nbsp;')`（`:1626`）；描述该占位做法的注释「备注那一行没内容时也占位，四张卡的页脚才对得齐」仍在（`:668`）。
+- 新增 Spec：`docs/specs/home-pending-and-session-cards-equal-height.md`（等高契约 3 条 + 待办卡内容契约 2 条 + 保留守卫 2 条）。契约明确：`.card-grid{align-items:stretch}`、`.request-card{height:100%}`、备注行由 `t.note` 条件渲染且不再有 `&nbsp;` 占位，保留「来自 … 第 N 步」行与左侧蓝边；会话卡不许补假占位行凑高度，不改三列网格 / 单行截断 / 页脚 `margin-top:auto`，不引入固定像素高度。
+- 新增红测：`tests/test_home_cards_equal_height_red.py`（10 项），覆盖网格拉伸、卡片吃满格高、禁用 `start` 对齐、待办卡无 `&nbsp;`、备注行条件渲染、来源/步骤行与左侧蓝边保留、会话卡信息行数上限、页脚贴底、三列网格与单行截断守卫、过时注释清除。
+- Red 基线（实际运行）：`python3 -m unittest tests.test_home_cards_equal_height_red -v` → **10 项中 4 失败、6 通过**；失败项 = 网格 `align-items: stretch`、卡片 `height: 100%`、`&nbsp;` 占位、过时注释；通过项为 6 条保留守卫。
+- 全量（实际运行）：`python3 -m unittest discover -s tests -p 'test_*.py'` → **453 项、4 失败、7 跳过**，4 项失败全部来自本批红测。
+- 边界：未改 `报价首页.html`（实现由 DeepSeek 承接）；未改 `cardHtml()` 信息行、卡片点击 / 领取 / 删除 / 搜索 / 分页与数据接口；未动其它页面样式；未改 Spec 与 Red 测试。
+- 交付状态：本记录写入时 Spec / Red **尚未提交、尚未推送**；实现未开始；未创建 MR/tag/Release、未部署、未启动或重启服务。
