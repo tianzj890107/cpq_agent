@@ -38,7 +38,9 @@ MORE_MENU_ITEMS = (
     "导出 BOM（CSV）", "导入已有 3D 模型", "版本与校核审查",
 )
 # 左侧会话栏本次必须交还给「更多功能」的四项能力。
-RETIRED_CAPABILITIES = ("import3d", "review", "modelLookup", "verify")
+# 契约更新（2.1 左侧按钮清理批次）：左侧会话栏不再保留任何静态能力按钮，
+# 「解析视图（evidence）」与其余四项一起归位到 2.1 页内的「更多功能 ▾」/ 看板内部视图。
+RETIRED_CAPABILITIES = ("import3d", "review", "modelLookup", "verify", "evidence")
 
 
 def read(path: pathlib.Path) -> str:
@@ -174,9 +176,7 @@ class TechStepPrimaryAndDrawingEntryCleanupRedTest(unittest.TestCase):
         for name in RETIRED_CAPABILITIES:
             with self.subTest(capability=name):
                 self.assertNotIn(f'data-tech-capability="{name}"', self.wb_html,
-                                 "这四项能力已归位「更多功能」，左侧栏不得重复")
-        self.assertIn('data-tech-capability="evidence"', self.wb_html,
-                      "「解析视图」仍留在左侧会话栏")
+                                 "这项能力已归位「更多功能」/ 看板内部，左侧栏不得重复")
 
     def test_more_menu_has_all_capabilities(self):
         sheet = html_block(self.index, 'id="actionSheet"')

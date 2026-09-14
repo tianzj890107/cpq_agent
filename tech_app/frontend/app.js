@@ -493,6 +493,7 @@ async function init() {
       el.appendChild(tip);
     }
   }
+  renderPartsBoardToolbar();
   let h;
   try { h = await fetch(`${API}/api/health`).then(r => r.json()); }
   catch (error) {
@@ -1517,6 +1518,18 @@ function renderBboxes(ir) {
   });
 }
 
+// 零件清单树：只重建 #tree 内部（2.1 固定左栏），不碰右栏 3D 画布。
+function renderTree(ir) {
+  const tree = $("tree");
+  if (!tree) return;
+  tree.innerHTML = "";
+  tree.classList.toggle("empty-state", !(ir.parts || []).length);
+  const partById = {};
+  (ir.parts || []).forEach(p => { partById[p.part_id] = p; });
+  const root = buildClientTree(ir);
+  root.children.forEach(c => renderNode(c, tree, 0, partById));
+}
+
 function renderIR(ir) {
   $("deviceName").textContent = ir.device_name || "当前解析任务";
   $("intent").innerHTML =
@@ -1526,13 +1539,7 @@ function renderIR(ir) {
   $("partsMetric").textContent = `${(ir.parts || []).length}`;
   $("confidenceMetric").textContent = avgConfidence(ir);
 
-  const tree = $("tree");
-  tree.innerHTML = "";
-  tree.classList.toggle("empty-state", !(ir.parts || []).length);
-  const partById = {};
-  (ir.parts || []).forEach(p => { partById[p.part_id] = p; });
-  const root = buildClientTree(ir);
-  root.children.forEach(c => renderNode(c, tree, 0, partById));
+  renderTree(ir);
 
   // 标准件 + 待澄清：确认说明只在本地保存，不会触发新的 AI 调用。
   renderClarifications(ir);
@@ -1550,6 +1557,8 @@ function renderIR(ir) {
   loadVersions();
   // 零件清单/待澄清已重新渲染：先把解析摘要播给父壳看板桥，再通知 Agent 对话框刷新
   // 结果按钮的数量。左侧入口的显示 / 计数只认看板播回的解析摘要，不读本页 DOM。
+  // 重渲染只重建清单行，不动右栏 3D 画布；选中态在上面已按 part_id 恢复。
+  renderPartsBoardToolbar();
   publishResultSummary(ir);
   window.dispatchEvent(new CustomEvent("agent:ir-rendered"));
 }
@@ -1852,6 +1861,8 @@ function selectPart(part) {
   if (rb) rb.onclick = () => savePartEdits(part.part_id, true);
   // 选中零件 = 看板内部进入 part-detail；只上报视图，不触发父壳导航。
   notePartView("part-detail");
+  // 工艺推荐已经生成过就不再逼用户多点一次：只读判定命中就复用既有工艺推荐入口。
+  autoOpenGeneratedProcess(part);
 }
 
 // 读取行内编辑 -> 更新 IR -> 保存；按需继续单零件重生并刷新
@@ -1945,11 +1956,18 @@ function initViewer() {
     renderer.render(scene, camera);
   })();
 
-  window.addEventListener("resize", () => {
+  const resizeToBox = () => {
+    if (!renderer || !camera || !el.clientWidth || !el.clientHeight) return;
     camera.aspect = el.clientWidth / el.clientHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(el.clientWidth, el.clientHeight);
-  });
+  };
+  window.addEventListener("resize", resizeToBox);
+  // 2.1 改成固定两栏后，右栏宽度会随窗口 / 布局变化，单独观察右栏避免 canvas 停在旧尺寸。
+  if (typeof ResizeObserver === "function") {
+    const column = document.querySelector(".drawing-model-column") || el;
+    new ResizeObserver(resizeToBox).observe(column);
+  }
 }
 
 function clearViewer() {
@@ -1997,6 +2015,13 @@ let allPartsProcessBusy = false;
 function allPartsProcessPublish(state) {
   const runtime = window.TechBoardRuntime;
   if (!runtime || typeof runtime.publish !== "function") return;
+  // 会话只给「有真实执行明细」的任务出卡：这里把逐件进度累积成 log，和 progress 一起上报，
+  // 否则批量推荐只剩一句通用文本，会被父壳的降噪闸门挡掉、看不到跑到第几件。
+  const line = state.running
+    ? `正在生成工艺推荐 ${Math.min(state.done + 1, state.total)}/${state.total}：${state.running}`
+    : "";
+  if (!Array.isArray(state.log)) state.log = [];
+  if (line && state.log[state.log.length - 1] !== line) state.log.push(line);
   runtime.publish("task-progress", "runAllPartProcesses", {
     action: "runAllPartProcesses",
     total: state.total,
@@ -2004,9 +2029,8 @@ function allPartsProcessPublish(state) {
     succeeded: state.succeeded,
     failed: state.failed,
     skipped: state.skipped,
-    progress: state.running
-      ? `正在生成工艺推荐 ${Math.min(state.done + 1, state.total)}/${state.total}：${state.running}`
-      : "",
+    progress: line,
+    log: state.log.slice(),
   });
 }
 
@@ -2028,6 +2052,20 @@ async function partHasExistingProcess(projectId, partId) {
   } catch (error) {
     return false;
   }
+}
+
+// 已生成工艺推荐 → 选中零件即自动展开（2.1 看板内部切到 part-process）。
+// 判定完全复用上面的只读 GET，渲染复用既有 openPartAnalysis()：不发新请求、不触发生成、
+// 不新建面板；同一零件只自动展开一次，之后用户仍可用「工艺推荐」按钮自由切换。
+const autoOpenedProcessParts = new Set();
+function autoOpenGeneratedProcess(part) {
+  if (!part || !currentProject) return;
+  if (autoOpenedProcessParts.has(part.part_id)) return;
+  return partHasExistingProcess(currentProject, part.part_id).then((ready) => {
+    if (!ready) return;
+    const outcome = openPartAnalysis(part, "process");
+    if (!outcome || outcome.ok !== false) autoOpenedProcessParts.add(part.part_id);
+  }).catch(() => { /* 读取失败就静默回落 3D，不影响选中零件的既有行为 */ });
 }
 
 // 单件：只调用既有单零件接口拿 task_id，再复用既有 pollTask 等到这一件真正算完。
@@ -2111,6 +2149,10 @@ async function runAllPartProcessesInBackground(options) {
       });
     }
     status(summary);
+    // 批量跑完后，当前选中的零件若是这一轮刚生成出来的，同样按「已生成即展开」处理。
+    const selected = ((currentIR && currentIR.parts) || [])
+      .find((item) => item.part_id === currentSelectedId);
+    autoOpenGeneratedProcess(selected);
   } catch (error) {
     allPartsProcessSettle("task-failed", { message: (error && error.message) || "批量工艺推荐失败。" });
     status(`批量工艺推荐失败：${(error && error.message) || ""}`);
@@ -2172,7 +2214,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   window.TechBoardRuntime.registerActions({
     parseDrawing: {
       label: "一键解析图纸",
-      // 解析完成前它是本页唯一主按钮；有解析结果之后让位给「确认解析结果并进入下一步」。
+      // 解析完成前它是本页唯一主按钮；有解析结果之后让位给「确认解析结果」。
       role: "aux",
       order: 10,
       deferred: true,
@@ -2204,7 +2246,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
     // 先回读后端真实状态（GET /api/projects/<id>），解析结果确实在才走既有嵌入导航通道
     // （tech-embed.js 的 requestNavigate），独立打开时由它整页跳转。
     confirmDrawingResult: {
-      label: "确认解析结果并进入下一步",
+      label: "确认解析结果",
       role: "aux",
       order: 15,
       run: async () => {
@@ -2247,8 +2289,11 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         };
       },
     },
-    modelLookup: { label: "联网核验", role: "aux", order: 30, run: () => runModelLookup(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
-    verify: { label: "校验修正", role: "aux", order: 40, run: () => runVerification(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
+    // 联网核验 / 校验修正：左侧操作栏不再重复提供 —— 两者已在 2.1 页内「更多功能 ▾」
+    // 菜单里（index.html 的 #btnModelLookup / #btnVerify）。动作本体保留，Agent 与看板
+    // 内部仍可按名字分派；这里只关掉左侧栏的可见性。
+    modelLookup: { label: "联网核验", role: "aux", order: 30, run: () => runModelLookup(), getState: () => ({ visible: false, enabled: Boolean(currentIR), busy: false }) },
+    verify: { label: "校验修正", role: "aux", order: 40, run: () => runVerification(), getState: () => ({ visible: false, enabled: Boolean(currentIR), busy: false }) },
     searchComponents: { label: "重新检索零部件库", role: "aux", order: 50, run: (payload) => runComponentMatch(payload || {}), getState: () => ({ visible: true, enabled: Boolean(currentProject), busy: false }) },
   });
 }
@@ -2293,7 +2338,9 @@ function publishResultSummary(ir) {
 
 // 左侧入口 → 看板视图：run 全部复用下面的既有面板 / 既有接口。
 const BOARD_VIEW_SPECS = {
-  parts: { title: "零件清单", sections: ["secParts"] },
+  // 零件清单是 2.1 固定左栏的常驻内容（#secParts / #tree 全页唯一），
+  // 不再是可搬运的覆盖式视图：run 只聚焦左栏，不把节点搬进结果宿主。
+  parts: { title: "零件清单", focus: "parts" },
   questions: { title: "待澄清问题", sections: ["secQuestions"] },
   evidence: { title: "解析视图", sections: ["secEvidence"] },
   review: { title: "版本与校核", sections: ["secVersions", "verificationDetails", "modelLookupDetails"] },
@@ -2418,22 +2465,33 @@ function renderBoardReport(body) {
 // 零件清单看板顶部：一键生成全部工艺推荐（蓝色主操作）。与左侧快捷按钮共用同一条
 // runAllPartProcesses 通道；单个零件的「工艺推荐」按钮仍留在零件行上，用于查看 / 编辑 /
 // 单件重算 / 定点处理失败项。
-function renderPartsBoardToolbar(body) {
-  const bar = document.createElement("div");
-  bar.className = "board-parts-toolbar";
-  bar.setAttribute("data-board-generated", "true");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "board-parts-bulk start-parse-btn";
-  button.textContent = "一键生成全部工艺推荐";
-  button.addEventListener("click", () => {
-    const outcome = startAllPartProcesses();
-    if (outcome && outcome.ok === false) {
-      status((outcome.error && outcome.error.message) || "一键生成全部工艺推荐未能启动");
-    }
-  });
-  bar.append(button);
-  body.append(bar);
+function partsBoardToolbarHost() {
+  return document.querySelector(".drawing-parts-column") || document.getElementById("secParts");
+}
+
+// 批量工艺推荐条挂在 2.1 固定左栏（零件清单下方），不再挂进覆盖式结果宿主；
+// 幂等重建，重复渲染不会出现第二条。
+function renderPartsBoardToolbar() {
+  const host = partsBoardToolbarHost();
+  if (!host) return;
+  let bar = document.getElementById("partsBulkBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "partsBulkBar";
+    bar.className = "board-parts-toolbar";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "board-parts-bulk start-parse-btn";
+    button.textContent = "一键生成全部工艺推荐";
+    button.addEventListener("click", () => {
+      const outcome = startAllPartProcesses();
+      if (outcome && outcome.ok === false) {
+        status((outcome.error && outcome.error.message) || "一键生成全部工艺推荐未能启动");
+      }
+    });
+    bar.append(button);
+  }
+  host.append(bar);
 }
 
 function openBoardView(view) {
@@ -2454,7 +2512,6 @@ function openBoardView(view) {
     if (node.tagName === "DETAILS") node.open = true;
     body.append(node);
   });
-  if (view === "parts") renderPartsBoardToolbar(body);
   const panes = document.getElementById("modelPanes");
   const analysis = document.getElementById("analysisPanel");
   if (panes) panes.hidden = true;
@@ -2477,6 +2534,10 @@ function runBoardView(view, payload) {
   const partViews = window.TechBoardPartViews;
   if (partViews && PART_FLOW_VIEWS.indexOf(view) !== -1) {
     return partViews.show(view, payload || {});
+  }
+  // 「零件清单」是 2.1 固定左栏：只聚焦，不打开覆盖式结果宿主。
+  if (view === "parts") {
+    return partViews ? partViews.show("parts-list", payload || {}) : focusPartsColumn();
   }
   try {
     return openBoardView(view);
@@ -2544,18 +2605,33 @@ function showPartDetail(payload) {
   return { ok: true, result: { view: "part-detail", partId: part.part_id } };
 }
 
+function focusPartsColumn() {
+  const column = document.querySelector(".drawing-parts-column") || document.getElementById("secParts");
+  if (!column) return false;
+  if (typeof column.scrollIntoView === "function") {
+    try { column.scrollIntoView({ block: "nearest" }); } catch (error) { /* 老浏览器忽略参数 */ }
+  }
+  if (typeof column.focus === "function") {
+    if (!column.hasAttribute("tabindex")) column.setAttribute("tabindex", "-1");
+    try { column.focus({ preventScroll: true }); } catch (error) { column.focus(); }
+  }
+  return true;
+}
+
 function showPartView(name, payload) {
   const view = String(name || "");
   if (view === "drawing-overview") {
     window.CadInlineAnalysis?.reset();
     closeBoardView();
+    setRightPane("model");
     notePartView(view);
     return { ok: true, result: { view: view } };
   }
   if (view === "parts-list" || view === "parts") {
-    const outcome = openBoardView("parts");
+    // 清单与 3D 是同一屏的固定两栏：这里只聚焦左栏，不搬运节点、不隐藏右栏。
+    focusPartsColumn();
     notePartView("parts-list");
-    return outcome && outcome.ok === false ? outcome : { ok: true, result: { view: "parts-list" } };
+    return { ok: true, result: { view: "parts-list" } };
   }
   if (view === "part-detail") return showPartDetail(payload);
   const mode = PART_VIEW_MODE[view];

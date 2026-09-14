@@ -82,8 +82,9 @@ class TechChatDropStaticIntroBubbleRed(unittest.TestCase):
 
     def test_empty_state_keeps_capability_guidance(self):
         start = self.html.find('id="ocTinner"')
-        start_actions = self.html.find('id="ocResultActions"')
-        self.assertGreater(start_actions, start, "找不到结果入口容器")
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条已删除，空态区间改用仍在线程内的任务进度宿主收口。
+        start_actions = self.html.find('id="ocTaskProgressHost"')
+        self.assertGreater(start_actions, start, "找不到任务进度宿主")
         region = self.html[start:start_actions]
         self.assertIn('id="ocEmpty"', region, "空态必须仍在 #ocTinner 内")
         for token in ("工艺评估助手", "按你的要求发起解析", "切换右侧步骤不会清空这里的会话"):
@@ -102,14 +103,19 @@ class TechChatDropStaticIntroBubbleRed(unittest.TestCase):
                                  f"不得用 {token} 换个位置再补一张开场卡")
 
     def test_result_entries_and_progress_host_stay_in_the_thread(self):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条 #ocResultActions 退役，任务进度宿主仍留在
+        # #ocTinner 内；两颗结果入口迁到左侧操作栏 #techChatActions。
         tinner = self.html.find('id="ocTinner"')
-        actions = self.html.find('id="ocResultActions"')
         progress = self.html.find('id="ocTaskProgressHost"')
+        toolbar = self.html.find('id="techChatActions"')
         self.assertGreater(tinner, -1, "找不到 #ocTinner")
-        self.assertGreater(actions, tinner, "结果入口必须仍在 #ocTinner 内")
-        self.assertGreater(progress, actions, "任务进度宿主必须仍在会话线程里")
-        self.assertRegex(self.html[actions - 200:actions + 200], r'id="ocResultActions"[^>]*hidden',
-                         "结果入口仍须默认隐藏，靠看板摘要点亮")
+        self.assertGreater(progress, tinner, "任务进度宿主必须仍在会话线程里")
+        self.assertGreater(toolbar, progress, "结果入口必须迁到左侧操作栏")
+        region = self.html[toolbar:self.html.find("</nav>", toolbar)]
+        for node_id in ("ocQuestionsAction", "ocReportAction"):
+            with self.subTest(node_id=node_id):
+                self.assertIn(f'id="{node_id}"', region)
+        self.assertNotIn('id="ocResultActions"', self.html, "会话结果条不得保留")
 
     def test_parent_js_does_not_inject_thread_nodes(self):
         for token in ("ocTinner", "ocThread", "oc-intent-card"):

@@ -47,7 +47,8 @@ class TechGlobalSinglePrimaryAndNonblockingNoticesContract(unittest.TestCase):
             "requirement-create": ("一键解析需求", "提交确认"),
             "requirement-confirm": ("通过确认",),
             "requirement-review": ("提交审核意见",),
-            "drawing": ("一键解析图纸", "确认解析结果并进入下一步"),
+            # 契约更新（2.1 收口按钮文案精简批次）：不再带「并进入下一步」，只叫确认解析结果。
+            "drawing": ("一键解析图纸", "确认解析结果"),
             "process": ("一键分析整合图纸", "确认图纸并进入参数推荐", "一键生成参数推荐",
                         "确认并进入下一页签", "一键生成组装工艺", "确认并进入下一步"),
             "cost": ("一键测算全部成本", "确认成本"),
@@ -89,7 +90,8 @@ class TechGlobalSinglePrimaryAndNonblockingNoticesContract(unittest.TestCase):
         self.assertIn("会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。", WB_HTML)
         composer = re.search(r"#techChatPane \.oc-composer\s*\{([^}]*)\}", WB_CSS, re.S)
         self.assertIsNotNone(composer)
-        self.assertRegex(composer.group(1), r"padding:\s*10px\s+16px\s+0")
+        # 契约更新（报价/工艺输入框几何对齐批次）：composer 上下内衬 = 报价 10px。
+        self.assertRegex(composer.group(1), r"padding:\s*10px\s+16px\s*;")
         caption = re.search(r"#techChatPane \.oc-disc\s*\{([^}]*)\}", WB_CSS, re.S)
         self.assertIsNotNone(caption)
         self.assertNotRegex(caption.group(1), r"position:\s*(absolute|fixed)")

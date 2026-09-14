@@ -25,8 +25,10 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
         )
 
     def test_parent_chat_restores_single_persistent_control_hosts(self):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条 #ocResultActions 与「零件清单」入口已删除，
+        # 两颗结果入口改挂 #techChatActions。
         for node_id in (
-            "ocChatAttachBtn", "ocChatFileInput", "ocResultActions", "ocPartsAction",
+            "ocChatAttachBtn", "ocChatFileInput",
             "ocQuestionsAction", "ocReportAction", "ocFilesAction", "ocFilesCount",
             "ocTaskProgressHost",
         ):
@@ -46,24 +48,29 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
         self.assertRegex(file_input.group(0), r'hidden')
 
     def test_result_actions_are_persistent_accessible_buttons(self):
-        self.assertRegex(
-            self.html,
-            r'id="ocResultActions"[^>]+aria-label="图纸解析结果"[^>]+hidden',
-        )
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：两颗结果入口移入左侧操作栏 #techChatActions，
+        # 会话结果条与「零件清单」入口退役。
+        toolbar = re.search(
+            r'<nav class="tech-chat-actions"[^>]*id="techChatActions"[^>]*>([\s\S]*?)</nav>',
+            self.html)
+        self.assertIsNotNone(toolbar, "缺少左侧统一操作栏 #techChatActions")
+        body = toolbar.group(1)
         for node_id, label in (
-            ("ocPartsAction", "零件清单"),
             ("ocQuestionsAction", "待澄清问题"),
             ("ocReportAction", "解析报告"),
         ):
             self.assertRegex(
-                self.html,
+                body,
                 rf'<button[^>]+id="{node_id}"[^>]+type="button"[^>]*>[\s\S]*?{label}',
             )
+        for gone in ("ocResultActions", "ocPartsAction", "ocPartsCount"):
+            with self.subTest(retired=gone):
+                self.assertNotIn(f'id="{gone}"', self.html, f"{gone} 已退役，不得回到父壳")
 
     def test_controls_are_driven_by_drawing_stage_and_bridge_state(self):
         self.assertRegex(self.chat, r'(?:stage|context\.stage)[\s\S]{0,300}["\']drawing["\']')
         self.assertRegex(self.chat, r'(?:TechBoardBridge|cpq:tech-board)[\s\S]{0,800}(?:subscribe|snapshot|action-state|result-summary)')
-        for node_id in ("ocPartsAction", "ocQuestionsAction", "ocFilesCount"):
+        for node_id in ("ocQuestionsAction", "ocReportAction", "ocFilesCount"):
             self.assertIn(node_id, self.chat)
         self.assertNotRegex(self.chat, r'contentDocument|#tree\s+\.part|querySelectorAll\(["\']#tree')
 
@@ -74,13 +81,15 @@ class TechLeftChatControlsRestoreRedTest(unittest.TestCase):
             r"function\s+applyDrawingResultSummary\s*\([\s\S]*?\n  \}", self.chat)
         self.assertIsNotNone(match, "缺少 applyDrawingResultSummary")
         body = match.group(0)
-        for group in ("parts", "questions", "report"):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条与「零件清单」入口已删除，左侧只剩两颗结果入口；
+        # result-summary.parts 数据仍由看板桥保留给其它统计使用。
+        for group in ("questions", "report"):
             self.assertRegex(body, rf"results\.{group}\b", f"未从 result-summary 读取 results.{group}")
         self.assertGreaterEqual(
-            len(re.findall(r"\.available\s*===?\s*true|available\s*===\s*true", body)), 3,
-            "三个结果入口都必须按 available 决定是否显示")
-        self.assertRegex(body, r'setChipCount\(\s*\$\(\s*"ocPartsCount"',
-                         "零件数量必须写入 #ocPartsCount")
+            len(re.findall(r"\.available\s*===?\s*true|available\s*===\s*true", body)), 2,
+            "两颗结果入口都必须按 available 决定是否显示")
+        self.assertRegex(body, r'setChipCount\(\s*\$\(\s*"ocQuestionsCount"',
+                         "待澄清问题数量必须写入 #ocQuestionsCount")
 
     def test_board_actually_publishes_result_summary(self):
         # 左侧控件不是“恢复了 DOM”就算完成：看板必须真的发布 result-summary，

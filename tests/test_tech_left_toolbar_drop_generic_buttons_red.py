@@ -101,8 +101,9 @@ class TechLeftToolbarDropGenericButtonsRedTest(unittest.TestCase):
                                  "左侧会话操作栏不再保留通用导航 / 转交 / 重试按钮")
 
     def test_primary_slot_and_other_hosts_are_kept(self):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：结果条退役，改挂两颗结果入口。
         for token in ("techChatPrimary", "ocChatAttachBtn", "ocChatFileInput",
-                      "ocResultActions", "ocTaskProgressHost",
+                      "ocQuestionsAction", "ocReportAction", "ocTaskProgressHost",
                       "techPrev", "techNext", "techNowLabel"):
             with self.subTest(token=token):
                 self.assertIn(token, self.html, f"既有入口不得被这次减法删掉：{token}")

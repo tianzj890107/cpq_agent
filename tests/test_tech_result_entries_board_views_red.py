@@ -24,8 +24,9 @@ class TechResultEntriesBoardViewsRedTest(unittest.TestCase):
         cls.board = (FRONTEND / "app.js").read_text(encoding="utf-8", errors="replace")
 
     def test_left_entries_forward_view_names_to_board(self):
-        # 三颗结果按钮：控件 id → 视图名，成对登记。
-        for node_id, view in (("ocPartsAction", "parts"), ("ocQuestionsAction", "questions"),
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：「零件清单」chip 与结果条已删除，
+        # 清单改为 2.1 固定左栏的常驻内容；余下两颗入口继续按控件 id → 视图名成对登记。
+        for node_id, view in (("ocQuestionsAction", "questions"),
                               ("ocReportAction", "report")):
             self.assertRegex(
                 self.chat,
@@ -33,11 +34,12 @@ class TechResultEntriesBoardViewsRedTest(unittest.TestCase):
                 f"{node_id} 未与视图 {view} 成对登记")
         # 任务文件入口。
         self.assertRegex(self.chat, r'dispatchDrawingCapability\(\s*["\']files["\']')
-        # 契约更新（2.1「能力入口归位更多功能」批次）：左侧会话栏只保留「解析视图」这一个
-        # 视图入口；导入已有 3D 模型 / 版本与校核审查 / 联网核验 / 校验修正四项已归位到 2.1
-        # 页内的「更多功能 ▾」菜单（仍复用同一批看板视图与业务动作，能力一个不少）。
-        self.assertRegex(self.html, r'data-tech-capability="evidence"',
-                         "左侧会话栏缺少「解析视图」入口")
+        # 契约更新（2.1 左侧按钮清理批次）：左侧会话栏不再保留任何静态能力按钮 ——
+        # 「解析视图」也与导入已有 3D 模型 / 版本与校核审查 / 联网核验 / 校验修正一起
+        # 归位到 2.1 页内的「更多功能 ▾」/ 看板内部视图；视图与业务动作一个不少。
+        self.assertNotRegex(self.html, r'data-tech-capability="evidence"',
+                            "「解析视图」不再占用左侧会话栏按钮")
+        self.assertIn("evidence", self.board, "解析视图的看板视图注册被删除")
         for moved in ("import3d", "review", "modelLookup", "verify"):
             with self.subTest(capability=moved):
                 self.assertNotRegex(

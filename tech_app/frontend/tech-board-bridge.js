@@ -96,8 +96,26 @@
       var entry = pending[requestId];
       delete pending[requestId];
       if (entry && entry.timer) clearTimeout(entry.timer);
-      if (entry) entry.reject(Object.assign(new Error(message), { code: code, requestId: requestId }));
+      if (entry) {
+        var cancelled = Object.assign(new Error(message), { code: code, requestId: requestId });
+        if (isQuietFailure(cancelled)) cancelled.quiet = true;
+        entry.reject(cancelled);
+      }
     });
+  }
+
+  /* 「预期内失败」：由用户 / 流程自己造成、且看板已经就地给出提示的失败。这类失败不再
+     进入左侧会话（既不留 ⚠ 提示，也不留失败卡），否则每次切步骤都会刷一片噪音：
+       detached            看板切换导致的在途命令取消（用户主动切走，不是故障）
+       note-target-missing 带入意见时当前视图没有对应输入框（或意见为空）
+       missing-comment     必填意见 / 说明未填写（看板自己已 toast）
+       no-selection        审核意见未选择（看板自己已 toast）
+     其余失败（超时、未就绪、后端失败、action-failed…）照旧四处可见，不能被这里吞掉。 */
+  var QUIET_FAILURE_CODES = ['detached', 'note-target-missing', 'missing-comment', 'no-selection'];
+  function isQuietFailure(error) {
+    if (!error) return false;
+    if (error.quiet === true) return true;
+    return QUIET_FAILURE_CODES.indexOf(String(error.code || '')) >= 0;
   }
 
   function send(name, payload, options) {
@@ -140,9 +158,12 @@
       var message = String(error.message || '看板执行失败');
       state.error = message;
       notify({ type: 'error', name: String(data.name || ''), payload: payload });
-      entry.reject(Object.assign(new Error(message), {
+      var failed = Object.assign(new Error(message), {
         code: String(error.code || 'action-failed'), requestId: requestId,
-      }));
+      });
+      // 预期内失败打上 quiet：调用方据此不把它写进会话（看板自己已经提示过）。
+      if (isQuietFailure(failed)) failed.quiet = true;
+      entry.reject(failed);
     }
   }
 
@@ -299,6 +320,7 @@
     subscribe: subscribe,
     snapshot: snapshot,
     actionState: actionState,
+    isQuietFailure: isQuietFailure,
     isReady: function () { return Boolean(frame) && state.ready; },
   };
 })();

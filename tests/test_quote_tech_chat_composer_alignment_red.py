@@ -96,7 +96,8 @@ class QuoteTechComposerAlignmentRedTest(unittest.TestCase):
         self.assertRegex(tech_thread, r"flex:\s*1\s+1\s+auto")
         self.assertRegex(tech_thread, r"min-height:\s*0")
         self.assertRegex(tech_composer, r"flex:\s*0\s+0\s+auto")
-        self.assertRegex(tech_composer, r"padding:\s*10px\s+16px\s+0")
+        # 契约更新（报价/工艺输入框几何对齐批次）：工艺 composer 上下内衬 = 报价 10px。
+        self.assertRegex(tech_composer, r"padding:\s*10px\s+16px\s*;")
 
     def test_global_model_settings_entries_remain_available(self):
         self.assertIn('id="techModelInfo"', self.tech_html)

@@ -149,7 +149,8 @@ class TechUiProtocolRedTest(unittest.TestCase):
                          "refresh_view / select_part 必须经 TechBoardBridge.executeAction")
 
     def test_result_and_progress_reuse_existing_hosts(self):
-        for host in ("ocResultActions", "ocTaskProgressHost"):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条退役，结果入口复用左侧操作栏的两颗按钮。
+        for host in ("ocQuestionsAction", "ocReportAction", "ocTaskProgressHost"):
             self.assertIn(host, self.chat, f"必须复用既有宿主 {host}")
         self.assertIn("renderTaskProgress", self.chat,
                       "show_progress 必须复用既有任务进度渲染")

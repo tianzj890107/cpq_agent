@@ -79,5 +79,41 @@ class TechDrawingTitleAndResultActionsCleanupContract(unittest.TestCase):
         self.assertIn(".tech-context-notice.is-error", CSS)
 
 
+    def test_result_entries_are_hidden_outside_drawing_stage(self):
+        # 两颗结果入口只属于 2.1 图纸解析：HTML 静态就带 hidden，看板摘要按 drawing 阶段显隐。
+        for node_id in ("ocQuestionsAction", "ocReportAction"):
+            with self.subTest(node_id=node_id):
+                self.assertRegex(HTML, rf'<button[^>]+id="{node_id}"[^>]*\bhidden\b')
+        # .tech-chat-actions > button.oc-chip 的 display:inline-flex 会盖掉 UA 的
+        # [hidden]{display:none}，必须补一条同选择器族且优先级更高的规则，否则
+        # 两颗 chip 会在九个阶段里全部常驻。
+        self.assertRegex(
+            CSS,
+            r"\.tech-chat-actions\s*>\s*button\.oc-chip\[hidden\]\s*\{\s*display:\s*none",
+        )
+        body = re.search(r"function\s+applyDrawingResultSummary\s*\(\)\s*\{([\s\S]*?)\n  \}", CHAT_JS)
+        self.assertIsNotNone(body, "缺少 applyDrawingResultSummary")
+        self.assertRegex(body.group(1), r"questionsActionButton\.hidden\s*=\s*!isDrawing")
+        self.assertRegex(body.group(1), r"reportActionButton\.hidden\s*=\s*!isDrawing")
+
+
+    def test_result_entries_are_plain_and_sit_at_the_end(self):
+        toolbar = re.search(r'<nav class="tech-chat-actions"[^>]*id="techChatActions"[^>]*>([\s\S]*?)</nav>', HTML)
+        self.assertIsNotNone(toolbar)
+        body = toolbar.group(1)
+        # 动态业务动作插在 #techChatPrimary 之后，所以两颗结果入口必须排在主按钮之后才始终在最后。
+        self.assertLess(body.index('id="techChatPrimary"'), body.index('id="ocQuestionsAction"'))
+        self.assertLess(body.index('id="techChatPrimary"'), body.index('id="ocReportAction"'))
+        for node_id in ("ocQuestionsAction", "ocReportAction"):
+            tag = re.search(r'<button[^>]*id="%s"[^>]*>' % node_id, body)
+            with self.subTest(node_id=node_id):
+                self.assertIsNotNone(tag)
+                # 普通按钮样式：不得再用告警黄（oc-chip warn）或实心主色（oc-chip-report）。
+                self.assertNotRegex(tag.group(0), r'oc-chip-report')
+                self.assertNotRegex(tag.group(0), r'class="[^"]*\bwarn\b')
+        self.assertNotIn("button.oc-chip.warn", CSS)
+        self.assertNotIn("button.oc-chip.oc-chip-report", CSS)
+
+
 if __name__ == "__main__":
     unittest.main()

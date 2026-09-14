@@ -118,7 +118,9 @@ class TechQuoteAgentParityMatrixRedTest(unittest.TestCase):
 
     def test_tech_side_has_the_anchor_hosts(self):
         html = _read(ROOT / "tech_app" / "frontend" / "tech-workbench.html")
-        for token in ("techChatPane", "ocResultActions", "ocTaskProgressHost",
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：结果入口迁到 #techChatActions，宿主名换新。
+        for token in ("techChatPane", "ocQuestionsAction", "ocReportAction",
+                      "ocTaskProgressHost",
                       "techHistory", "techSettings", "techModelInfo"):
             self.assertIn(token, html, f"技术工艺侧缺少能力宿主：{token}")
 

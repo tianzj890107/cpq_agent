@@ -168,14 +168,22 @@ class IntegrationParamsTabSinglePrimaryRed(unittest.TestCase):
         body = block_from(self.board, "async function aiGenerateParamsFully()")
         self.assertTrue(body, "找不到 aiGenerateParamsFully()")
         self.assertIn("aiGenerate('params')", body, "第一步必须复用既有生成实现")
-        self.assertIn("aiParamsAutofill()", body, "第二步必须复用既有智能补全接口")
-        self.assertIn("aiParamsFinalize(false)", body, "第三步必须复用既有 finalize 落库")
+        # 契约更新（自动补全归口批次）：补全 + 落库抽成 aiAutoFillParams()，
+        # 「开始整合分析」与「一键生成参数推荐」共用同一份，不再各写一遍调用序列。
+        self.assertIn("aiAutoFillParams()", body, "第二步必须走共用的自动补全链路")
+        helper = block_from(self.board, "async function aiAutoFillParams()")
+        self.assertTrue(helper, "找不到 aiAutoFillParams()")
+        self.assertIn("aiParamsAutofill()", helper, "第二步必须复用既有智能补全接口")
+        self.assertIn("aiParamsFinalize(false)", helper, "第三步必须复用既有 finalize 落库")
 
     def test_auto_fill_only_saves_when_it_filled_something(self):
-        body = block_from(self.board, "async function aiGenerateParamsFully()")
+        # 契约更新（自动补全归口批次）：落库判断随补全链路一起搬到 aiAutoFillParams()。
+        body = block_from(self.board, "async function aiAutoFillParams()")
         self.assertRegex(body, r"applied\s*>\s*0",
                          "只有真的补进了值才需要落库，空补全不写库")
-        self.assertIn("aiRequiredGaps()", body, "必须先看报价必填缺口")
+        # 契约更新（自动补全归口批次）：判空从「只数报价必填」放宽成「整张参数表的
+        # 空格子」（aiMissingParamFields 内部字典缺失时仍退回 aiRequiredGaps().fields）。
+        self.assertIn("aiMissingParamFields()", body, "必须先看参数表还有哪些空格子")
 
     def test_autofill_reports_what_it_filled(self):
         body = block_from(self.board, "async function aiParamsAutofill()")

@@ -73,7 +73,9 @@ MUST_STAY_VISIBLE = ("#aiProductName", "#crProductName", "#crQuantity", "#aiOpsH
 REQUIRED_LEFT_TOOLBAR_IDS = ("techChatPrimary",)
 RETIRED_LEFT_TOOLBAR_IDS = ("techChatPrev", "techChatNext", "techChatTransfer", "techChatRetry")
 REMOVED_LEFT_TOOLBAR_IDS = ("techChatAttach", "techChatAiRun", "techChatSecondary", "techChatBulk")
-KEPT_KEEP_IDS = ("ocFilesAction", "ocResultActions", "ocTaskProgressHost",
+# 契约更新（2.1 结果入口迁到左侧操作栏批次）：#ocResultActions 结果条与「零件清单」chip
+# 已删除，待澄清问题 / 解析报告两颗入口改挂 #techChatActions。
+KEPT_KEEP_IDS = ("ocFilesAction", "ocQuestionsAction", "ocReportAction", "ocTaskProgressHost",
                  "ocChatAttachBtn", "ocChatFileInput", "techPrev", "techNext", "techNowLabel")
 
 

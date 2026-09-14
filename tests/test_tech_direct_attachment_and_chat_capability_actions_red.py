@@ -11,10 +11,10 @@ CHAT_CSS = (ROOT / "tech_app/frontend/agent-chat.css").read_text(encoding="utf-8
 INDEX_HTML = (ROOT / "tech_app/frontend/index.html").read_text(encoding="utf-8")
 APP_JS = (ROOT / "tech_app/frontend/app.js").read_text(encoding="utf-8")
 
-# 左侧会话栏保留的唯一能力入口（视图入口）。
-CAPABILITIES = {
-    "evidence": "解析视图",
-}
+# 契约更新（2.1 左侧按钮清理批次）：左侧会话栏不再保留任何静态能力按钮 —— 「解析视图」
+# 与其余四项能力一起归位到 2.1 页内的「更多功能 ▾」/ 看板内部视图，只留下按真实
+# result-summary 渲染的结果入口（#ocQuestionsAction / #ocReportAction）。
+CAPABILITIES = {}
 # 契约更新（2.1「能力入口归位更多功能」批次）：导入已有 3D 模型 / 版本与校核审查 /
 # 联网核验 / 校验修正四项从左侧会话栏移到 2.1 页内的「更多功能 ▾」菜单；
 # capability 名 → (2.1 页内的节点 id, 按钮文案)。
@@ -63,6 +63,8 @@ class TechDirectAttachmentAndChatCapabilitiesContract(unittest.TestCase):
     def test_non_upload_capabilities_live_in_chat_action_bar(self):
         bar = re.search(r'<nav[^>]+id="techChatActions"[^>]*>(.*?)</nav>', HTML, re.S)
         self.assertIsNotNone(bar)
+        self.assertNotIn("data-tech-capability", bar.group(1),
+                         "左侧会话栏不得再有自己的能力按钮，入口交给看板动作快照与结果入口")
         for capability, label in CAPABILITIES.items():
             with self.subTest(capability=capability):
                 self.assertRegex(
@@ -105,7 +107,8 @@ class TechDirectAttachmentAndChatCapabilitiesContract(unittest.TestCase):
         self.assertNotRegex(CHAT_CSS, r'\.oc-capability-(?:menu|item)\b')
 
     def test_task_files_entry_and_existing_result_entries_remain(self):
-        for token in ("ocFilesAction", "ocResultActions", "ocPartsAction", "ocQuestionsAction", "ocReportAction"):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：会话结果条与「零件清单」入口已删除。
+        for token in ("ocFilesAction", "ocQuestionsAction", "ocReportAction"):
             with self.subTest(token=token):
                 self.assertIn(f'id="{token}"', HTML)
 

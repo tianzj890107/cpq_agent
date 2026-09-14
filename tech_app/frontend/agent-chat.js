@@ -16,7 +16,11 @@
  */
 (() => {
   if (new URLSearchParams(location.search).has("embed")) return; // 统一工作台内嵌（embed=1）：会话宿主在父壳 techChatPane，子页不再自建/自连会话。
-  const projectId = new URLSearchParams(location.search).get("project") || "";
+  // 统一工作台可以在不重载页面的情况下换项目（历史抽屉 / 首页卡片 / 看板 set_stage /
+  // 上下一步都只 pushState），所以项目绑定必须是可重绑的 let，而不是加载时的一次性快照：
+  // 一次性快照会让左侧永远停在首次进入时的项目，新项目的历史带不回来，还会串出上一个
+  // 项目的对话、任务文件与进度卡。重绑入口见下面 setProject()。
+  let projectId = new URLSearchParams(location.search).get("project") || "";
   const $ = id => document.getElementById(id);
   const thread = $("ocThread");
   const tinner = $("ocTinner");
@@ -192,6 +196,41 @@
       pushSystem(`读取历史会话失败：${(error && error.message) || "未知错误"}`);
     }
   }
+
+  // 换项目：左侧会话的项目绑定必须跟着统一工作台走，然后重新回放**目标项目**已持久化的
+  // 完整会话。父壳（tech-workbench.js applyStage / popstate）只调这一个入口，不直接改会话
+  // 内部状态。三件事必须同时成立：
+  //   1. 只重绑 + 重放历史，绝不调用 /agent/new 或 resetTaskFlow() —— 换项目不是重置任务，
+  //      后端已持久化的会话、解析结果与项目数据一个都不能动；
+  //   2. 上一个项目留在会话里的可见内容（消息、任务卡映射 + DOM、结果条）全部清掉，
+  //      否则 A 项目的对话会串到 B 项目上；任务进度宿主与设计意图空态是页面结构，只清内容；
+  //   3. 同项目重复同步直接返回（幂等），用户正在输入还没发送的草稿保留。
+  async function setProject(nextId) {
+    const next = String(nextId || "");
+    if (next === String(projectId || "")) return;
+    projectId = next;
+    historyLoaded = false;                 // 放开一次性闸门，允许回放新项目的历史
+    tinner.querySelectorAll(".oc-amsg, .oc-ubub").forEach(node => node.remove());
+    taskProgressCards.clear();
+    pendingEdits.clear();
+    const progressHost = $("ocTaskProgressHost");
+    if (progressHost) progressHost.replaceChildren();
+    boardResultSummary = null;
+    hasParsedIR = false;
+    if (resultBox) resultBox.hidden = true;
+    if (!projectId) {
+      techShellConn("未连接", false);
+      setPillLabel("未选择项目");
+      return;
+    }
+    techShellConn("连接中…");
+    await loadHistory();
+    await loadMeta();
+    loadFiles();
+    renderComponentMatch();
+    refreshResultChips();
+  }
+
   // 按后端顺序回放：用户消息、助手文本（复用 Markdown 渲染）、工具卡与工具结果。
   // tech_ui 是结构化界面事件而不是业务工具，回放时跳过，避免多出一张空卡。
   function renderHistory(events) {
@@ -426,6 +465,26 @@
     tinner.append(wrap);
     scrollDown();
   }
+  // 预期内失败码（口径与 tech-board-bridge.js 的 QUIET_FAILURE_CODES 一致）：切看板导致
+  // 在途命令被取消、必填意见没填、当前视图没有目标输入框 —— 看板自己已经就地提示过，
+  // 再往会话里塞一条 ⚠ 就是纯噪音。其余失败照旧可见，绝不在这里吞掉。
+  const QUIET_BOARD_CODES = ["detached", "note-target-missing", "missing-comment", "no-selection"];
+  function isQuietBoardCode(code) {
+    const value = String(code || "");
+    const bridge = window.TechBoardBridge;
+    if (bridge && typeof bridge.isQuietFailure === "function" && bridge.isQuietFailure({ code: value })) {
+      return true;
+    }
+    return QUIET_BOARD_CODES.indexOf(value) >= 0;
+  }
+  // 看板动作 / 导航 / 刷新失败的唯一出口：预期内失败直接忽略，其余把真实原因按普通输出
+  // 写进会话（不是空 catch）。前缀沿用各调用点原有的「…失败：」措辞。
+  function boardFailureNotice(prefix, error) {
+    if ((error && error.quiet === true) || isQuietBoardCode(error && error.code)) return;
+    const reason = (error && error.message) || "看板未响应";
+    pushSystem(`${prefix}${reason}。`);
+  }
+
   function addAssistant() {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
@@ -540,7 +599,7 @@
       const call = (bridge && typeof bridge.executeAction === "function")
         ? bridge.executeAction("refreshData", { action: "refreshData", edits })
         : pushSystem("零件参数已由 Agent 修改，但右侧看板尚未就绪，暂时无法刷新显示。");
-      Promise.resolve(call).catch(error => pushSystem(`刷新右侧看板失败：${(error && error.message) || "看板未响应"}。`));
+      Promise.resolve(call).catch(error => boardFailureNotice("刷新右侧看板失败：", error));
       return;
     }
     for (const detail of edits) {
@@ -689,7 +748,7 @@
       const bridge = boardBridge();
       if (!bridge) { pushSystem("当前还不能解析：右侧看板尚未就绪，请稍后重试。"); return; }
       bridge.executeAction("parseDrawing", { label: "开始解析" }).catch(error => {
-        pushSystem(`开始解析失败：${(error && error.message) || "右侧看板未响应"}。`);
+        boardFailureNotice("开始解析失败：", error);
       });
       return;
     }
@@ -717,7 +776,7 @@
     }
     const call = bridge.executeAction("extractRequirement", { label: "一键解析需求" });
     Promise.resolve(call).catch(error => {
-      pushSystem(`需求解析失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("需求解析失败：", error);
     });
   }
 
@@ -729,7 +788,7 @@
     }
     const call = bridge.executeAction("refreshData", { action: "refreshData", label: "刷新需求看板" });
     Promise.resolve(call).catch(error => {
-      pushSystem(`刷新需求看板失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("刷新需求看板失败：", error);
     });
   }
 
@@ -744,7 +803,7 @@
       return;
     }
     Promise.resolve(start(bridge)).catch(error => {
-      pushSystem(`整合看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("整合看板操作失败：", error);
     });
   }
 
@@ -791,7 +850,7 @@
       quantity: (input && input.quantity) || 0,
       label: labels[step],
     })).catch(error => {
-      pushSystem(`成本看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("成本看板操作失败：", error);
     });
   }
 
@@ -803,7 +862,7 @@
       return;
     }
     Promise.resolve(bridge.executeAction("refreshCostReview", { label: "刷新成本看板" })).catch(error => {
-      pushSystem(`成本看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("成本看板操作失败：", error);
     });
   }
 
@@ -818,7 +877,7 @@
       return;
     }
     Promise.resolve(bridge.executeAction("refreshProcessReport", { label: "刷新报告看板" })).catch(error => {
-      pushSystem(`报告看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("报告看板操作失败：", error);
     });
   }
 
@@ -840,7 +899,7 @@
       note: note,
       label: "带入审核意见",
     })).catch(error => {
-      pushSystem(`报告看板操作失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("报告看板操作失败：", error);
     });
   }
 
@@ -917,7 +976,7 @@
       return;
     }
     Promise.resolve(bridge.executeAction("applyConfirmationNote", { note })).catch(error => {
-      pushSystem(`带入确认意见失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("带入确认意见失败：", error);
     });
   }
 
@@ -930,7 +989,7 @@
       return;
     }
     Promise.resolve(bridge.executeAction("applyReviewNote", { decision, note })).catch(error => {
-      pushSystem(`带入审核意见失败：${(error && error.message) || "右侧看板未响应"}。`);
+      boardFailureNotice("带入审核意见失败：", error);
     });
   }
 
@@ -1040,7 +1099,7 @@
   // 原本它挂在设计意图卡（对话第一条）里，聊上几轮就被顶到上面，要往回翻才找得到；
   // 现在每次刷新都把它重新 append 到 tinner 末尾 —— append 已存在的节点是"移动"，
   // 所以不会产生第二份，chips 永远停在最新一条消息下面。
-  const resultBox = $("ocResultActions");
+  const resultBox = document.querySelector(".oc-result-actions");
   // 解析报告是 index.html 里的静态节点，不是这里造的：跳转和「还没有项目」的兜底
   // 都写在 app.js 的 $("btnReport").onclick 里，前端再造一个就会有两套说法。
   //
@@ -1055,10 +1114,10 @@
   // 那种情况下按钮不出现，用户就没有入口了。
   let hasParsedIR = false;
   function refreshResultChips() {
-    if (!resultBox) return;
     // 统一父壳：数量与可用状态只来自看板桥播报的解析摘要，不读 iframe DOM、
-    // 也不另拉一份零件 / 问题数据。
+    // 也不另拉一份零件 / 问题数据；结果入口已迁到左侧 #techChatActions。
     if (inUnifiedWorkbench) { applyDrawingResultSummary(); return; }
+    if (!resultBox) return;
     const tree = document.getElementById("tree");
     const extras = document.getElementById("extras");
     const parts = tree ? tree.querySelectorAll(".part").length : 0;
@@ -1075,7 +1134,6 @@
       resultBox.hidden = true;
       return;
     }
-    if (hasTree) resultBox.append(agentResultChip("零件清单", parts, "ocPartsAction", false));
     if (hasQuestions) resultBox.append(agentResultChip("待澄清问题", questions || "", "ocQuestionsAction", true));
     // 排最后：前两个是"看某一部分结果"，解析报告是"看整份"，读下来是收束关系。
     if (reportButton) resultBox.append(reportButton);
@@ -1246,6 +1304,15 @@
     if (!label && !taskId && !log.length && !progressLine) return;
     const requested = String(detail.status || "running");
     const status = requested === "completed" ? "succeeded" : requested;
+    // 会话只留「有真实执行内容」的卡：progress_log 明细才算内容。只有标题、只有状态、
+    // 只有一句通用「正在…」进度的点击回执一律不建卡 —— 否则秒级同步动作每点一次都会
+    // 留下一张「提交审核意见 · 已完成」。失败卡只认真实原因，且跳过预期内失败。
+    const failureReason = status === "failed"
+      ? String(detail.error || detail.message || "").trim() : "";
+    const existingCard = taskProgressCards.has(String(taskId || label || "task"));
+    const keepFailure = Boolean(failureReason) && !isQuietBoardCode(detail.code);
+    const hasContent = log.length > 0 || existingCard || keepFailure;
+    if (!hasContent) return;
     const card = ensureTaskCard(taskId, label);
     setTaskStatus(card, status);
     if (log.length > card.cursor) {
@@ -1269,7 +1336,7 @@
     }
     if (status === "failed") {
       card.done = true;
-      const message = detail.error || "任务失败";
+      const message = failureReason || "任务失败";
       if (!card.errorNode) {
         card.errorNode = el("div", "oc-task-error", message);
         card.box.append(card.errorNode);
@@ -1383,7 +1450,7 @@
       } catch (error) {
         button.disabled = false;
         button.textContent = "↻ 重新检索零部件库";
-        pushSystem(`重新检索失败：${error.message}`);
+        boardFailureNotice("重新检索失败：", error);
       }
     };
     bar.append(button);
@@ -1444,7 +1511,6 @@
   // 会话快捷能力按钮（原 ＋ 能力菜单的五项能力）：只查父壳 #techChatActions 里的
   // data-tech-capability，不读 iframe DOM，也不在别处再藏一份菜单副本。
   const capabilityButtons = [...document.querySelectorAll("#techChatActions [data-tech-capability]")];
-  const partsActionButton = $("ocPartsAction");
   const questionsActionButton = $("ocQuestionsAction");
   const reportActionButton = $("ocReportAction");
   const filesActionButton = $("ocFilesAction");
@@ -1510,7 +1576,7 @@
       // 刷新失败不再被空 catch 吞掉：真实原因按普通输出写进会话，用户能看到并重试。
       Promise.resolve(bridge.refreshData({ action: "refreshData", label: "刷新任务文件" }))
         .catch((error) => {
-          pushSystem(`刷新看板失败：${(error && error.message) || "看板未响应"}`);
+          boardFailureNotice("刷新看板失败：", error);
         });
     }
     requestBoardSummary();
@@ -1520,7 +1586,6 @@
   // 左侧会话栏的入口 → 看板视图：显式、单一来源的映射表。键就是左侧控件（结果
   // 按钮 / 任务文件用控件 id），会话快捷能力按钮用 capability:<name>；值是看板视图名。
   const TECH_BOARD_VIEW_ENTRIES = {
-    ocPartsAction: 'parts',
     ocQuestionsAction: 'questions',
     ocReportAction: 'report',
     'capability:evidence': 'evidence',
@@ -1549,7 +1614,7 @@
   }
   function boardEntryNodes() {
     const pairs = [
-      ["ocPartsAction", "parts"], ["ocQuestionsAction", "questions"],
+      ["ocQuestionsAction", "questions"],
       ["ocReportAction", "report"], ["ocFilesAction", "files"],
     ].map(([nodeId, fallback]) => [$(nodeId), TECH_BOARD_VIEW_ENTRIES[nodeId] || fallback]);
     capabilityButtons.forEach(item => pairs.push([
@@ -1570,6 +1635,8 @@
 
   // 失败可见、可重试：把真实原因写进会话，并给一个重发同一视图 / 同一 payload 的按钮。
   function showBoardNavFailure(view, payload, error) {
+    // 预期内失败（看板切换把在途导航取消、必填项没填）不再进会话：看板自己已经提示过。
+    if ((error && error.quiet === true) || isQuietBoardCode(error && error.code)) return;
     const label = (payload && payload.label) || CAPABILITY_LABELS[view] || view || "该视图";
     const reason = (error && error.message) || "看板未响应";
     // 提示按普通输出进流：正文和重试按钮同属一条消息，会被后面的消息自然顶上去。
@@ -1640,7 +1707,7 @@
       ? bridge.executeAction("modelLookup", body)
       : bridge.executeAction("verify", body);
     return Promise.resolve(call).catch(error => {
-      noteInThread(`「${label}」执行失败：${(error && error.message) || "看板未响应"}。`);
+      boardFailureNotice(`「${label}」执行失败：`, error);
       return null;
     });
   }
@@ -1652,37 +1719,34 @@
     if (node.textContent !== next) node.textContent = next;
   }
 
-  // 解析摘要 → 左侧结果入口。数量只来自看板桥；没有结果时整组隐藏，
-  // 有结果时把同一个 #ocResultActions 节点 append 到消息流末尾（append 已存在
-  // 节点是“移动”，不会出现第二份）。
+  // 解析摘要 → 左侧操作栏结果入口（#techChatActions 内的待澄清问题 / 解析报告）。
+  // 数量与可用状态只来自看板桥；非 drawing 阶段一律隐藏，切回按最新摘要恢复。
   function applyDrawingResultSummary() {
     const stage = boardStage();
     const isDrawing = stage === "drawing";
     const summary = (boardResultSummary && boardResultSummary.stage === stage) ? boardResultSummary : null;
     const results = (summary && summary.results) || null;
-    const partInfo = (isDrawing && results && results.parts) || {};
     const questionInfo = (isDrawing && results && results.questions) || {};
     const reportInfo = (isDrawing && results && results.report) || {};
     const fileInfo = (results && results.files) || {};
-    const showParts = partInfo.available === true;
     const showQuestions = questionInfo.available === true;
     const showReport = reportInfo.available === true;
-    setChipCount($("ocPartsCount"), partInfo.count);
     setChipCount($("ocQuestionsCount"), questionInfo.count);
-    if (partsActionButton) partsActionButton.disabled = !showParts;
-    if (questionsActionButton) questionsActionButton.disabled = !showQuestions;
-    if (reportActionButton) reportActionButton.disabled = !showReport;
+    // 两颗结果入口只在 drawing 阶段出现，其余阶段隐藏（不残留上一阶段状态）。
+    if (questionsActionButton) {
+      questionsActionButton.hidden = !isDrawing;
+      questionsActionButton.disabled = !showQuestions;
+    }
+    if (reportActionButton) {
+      reportActionButton.hidden = !isDrawing;
+      reportActionButton.disabled = !showReport;
+    }
     if (boardFilesCount) {
       const total = Number(fileInfo.count) > 0 ? String(Math.floor(Number(fileInfo.count))) : "—";
       if (boardFilesCount.textContent !== total) boardFilesCount.textContent = total;
     }
     // 五项能力入口是 2.1 专属：其它阶段隐藏并禁用，切回 drawing 按最新状态恢复。
     capabilityButtons.forEach(item => { item.hidden = !isDrawing; item.disabled = !isDrawing; });
-    const resultActions = $("ocResultActions");
-    if (!resultActions) return;
-    const anyResult = isDrawing && (showParts || showQuestions || showReport);
-    resultActions.hidden = !anyResult;
-    if (anyResult && tinner && tinner.lastElementChild !== resultActions) tinner.append(resultActions);
   }
 
   function normalizeBoardSummary(payload) {
@@ -1780,7 +1844,7 @@
   // 任务文件入口沿用同一张映射表与唯一出口。
   filesActionButton?.addEventListener("click", () => dispatchDrawingCapability("files", {}));
   // 三颗结果按钮：控件 id ↔ 看板视图名成对登记，点击只把视图名交给唯一出口。
-  [["ocPartsAction", "parts"], ["ocQuestionsAction", "questions"], ["ocReportAction", "report"]]
+  [["ocQuestionsAction", "questions"], ["ocReportAction", "report"]]
     .forEach(([nodeId, view]) => {
       const target = TECH_BOARD_VIEW_ENTRIES[nodeId] || view;
       $(nodeId)?.addEventListener("click", () => boardNavigateView(target, { label: CAPABILITY_LABELS[target] }));
@@ -1861,7 +1925,7 @@
 
   // ---------------------------------------------------------------- tech_ui（第 17 步）
   // 与报价 cpq_ui 同构的统一结构化界面事件：Agent 只表达意图，前端按固定映射落到既有
-  // 宿主（#ocResultActions / #ocTaskProgressHost）与看板桥；模型字符串只经 textContent
+  // 宿主（#techChatActions 结果入口 / #ocTaskProgressHost）与看板桥；模型字符串只经 textContent
   // 呈现，绝不当 HTML 注入，未知 action 明确报错而不是静默忽略。
   const TECH_UI_STAGES = [
     "requirement-create", "requirement-confirm", "requirement-review",
@@ -1899,7 +1963,7 @@
     const bridge = techUiBridge();
     if (!bridge) { pushSystem("看板尚未就绪，暂时无法刷新视图。"); return; }
     Promise.resolve(bridge.executeAction("refreshData", { label: "刷新看板" }))
-      .catch(error => pushSystem(`刷新看板失败：${(error && error.message) || "看板未响应"}`));
+      .catch(error => boardFailureNotice("刷新看板失败：", error));
   }
   function techUiFillFields(ui) {
     const stage = String((ui && ui.stage) || boardStage() || "");
@@ -1909,7 +1973,7 @@
     if (!bridge) { pushSystem("看板尚未就绪，暂时无法回填字段。"); return; }
     const fields = (ui && ui.fields) || {};
     Promise.resolve(bridge.executeAction(actionName, { fields: fields, stage: stage }))
-      .catch(error => pushSystem(`回填字段失败：${(error && error.message) || "看板未响应"}`));
+      .catch(error => boardFailureNotice("回填字段失败：", error));
   }
   function techUiSelectPart(ui) {
     const partId = String((ui && ui.part_id) || "").trim();
@@ -1917,7 +1981,7 @@
     const bridge = techUiBridge();
     if (!bridge) { pushSystem("看板尚未就绪，暂时无法打开零件。"); return; }
     Promise.resolve(bridge.executeAction("selectPart", { part_id: partId }))
-      .catch(error => pushSystem(`打开零件失败：${(error && error.message) || "看板未响应"}`));
+      .catch(error => boardFailureNotice("打开零件失败：", error));
   }
   function techUiShowResultActions(ui) {
     applyDrawingResultSummary();
@@ -1954,7 +2018,7 @@
       const bridge = techUiBridge();
       if (bridge) {
         Promise.resolve(bridge.executeAction(target, { source: "tech_ui-confirmation" }))
-          .catch(error => pushSystem(`「${target}」执行失败：${(error && error.message) || "看板未响应"}`));
+          .catch(error => boardFailureNotice(`「${target}」执行失败：`, error));
       } else {
         boardNavigateView(target, { label: target });
       }
@@ -1976,6 +2040,8 @@
   // 供统一工作台左侧导航复用（新对话 / 设置 / 阶段上下文），旧页面不受影响。
   window.ocTechAgent = {
     resetTask: resetTaskFlow,
+    // 换项目重绑：统一工作台不重载页面就能换项目，会话要跟着换并回放目标项目的历史。
+    setProject,
     openSettings: (anchor) => settingsPanel(anchor),
     setStageContext: (context) => setStageContext(context),
     // 父壳业务动作失败时把原因同步进左侧会话（pushSystem 是会话提示的唯一入口）。

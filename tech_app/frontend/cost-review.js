@@ -308,6 +308,39 @@ function crRenderTotal() {
   return html + `</section>`;
 }
 
+/* 软闸门：成本还有没算完的项时不再硬阻断 —— 先把「还差什么」摆出来，人点
+   「仍要继续」就带着缺口确认，点「取消」才停手。权限不在这里：只读身份由
+   crReadOnly() 硬挡，那是「不该由他做」，不是「还没做完」。 */
+function crAskProceed(why, options = {}) {
+  const text = String(why || '').trim();
+  if (!text) return Promise.resolve(true);
+  const mask = document.createElement('div');
+  mask.className = 'ai-confirm-mask';
+  mask.innerHTML =
+    `<div class="ai-confirm-box" role="dialog" aria-modal="true" aria-label="确认继续">
+      <div class="ai-confirm-head">${esc(options.title || '成本还有没算完的地方')}</div>
+      <div class="ai-confirm-body">${esc(text)}</div>
+      <div class="ai-confirm-foot">
+        <button type="button" class="cancel" data-ai-confirm-cancel>取消</button>
+        <button type="button" class="go" data-ai-confirm-go>仍要继续</button>
+      </div></div>`;
+  document.body.append(mask);
+  return new Promise(resolve => {
+    const finish = value => {
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(value);
+    };
+    const onKey = event => { if (event.key === 'Escape') finish(false); };
+    mask.querySelector('[data-ai-confirm-go]').onclick = () => finish(true);
+    mask.querySelector('[data-ai-confirm-cancel]').onclick = () => finish(false);
+    mask.addEventListener('mousedown', event => { if (event.target === mask) finish(false); });
+    document.addEventListener('keydown', onKey);
+    const go = mask.querySelector('[data-ai-confirm-go]');
+    if (go) go.focus();
+  });
+}
+
 /* 「确认成本」的前置条件唯一判定：只读身份 / 缺零件 / 缺件数 / 整机未算 / 0 元行。
    只判前置条件，不含 busy；页内提示与左侧动作快照的 run() 共用这一份，两处不漂移。 */
 function crConfirmBlocker() {
@@ -805,7 +838,20 @@ crStart();
       order: 20,
       run: async () => {
         const why = crConfirmBlocker();
-        if (why) { crStatus(why, true); return { ok: false, error: { code: 'not-ready', message: why } }; }
+        if (why) {
+          // 闸门里唯一不给「继续」选项的是权限：只读身份不是「没做完」，
+          // 而是这一步不该由他做 —— 点击照旧给真实原因，后端 403 仍是权威。
+          if (why === crReadOnlyWhy()) {
+            crStatus(why, true);
+            return { ok: false, error: { code: 'forbidden', message: why } };
+          }
+          const go = await crAskProceed(
+            `${why}。\n\n成本没算齐就确认，汇总里会带着这几处缺口。确定要继续吗？`);
+          if (!go) {
+            crStatus(`已取消：${why}`, true);
+            return { ok: false, error: { code: 'not-ready', message: why } };
+          }
+        }
         const done = await crConfirmCost();
         return done ? { ok: true }
           : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };

@@ -21,7 +21,7 @@ class TechChatComposerFlushBottomContract(unittest.TestCase):
     def test_binding_caption_returns_below_the_input(self):
         # 最新决策（取代第 33 批）：说明原文回到输入框下方，走普通文档流
         # （与技术工艺其它会话一致）；不得再用绝对 / 固定定位把它抽离布局。
-        # composer 仍由 flex 锚定在会话列底部（padding: 10px 16px 0 不变）。
+        # composer 仍由 flex 锚定在会话列底部。
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', TECH_HTML, re.S)
         self.assertIsNotNone(composer)
         body = composer.group(1)
@@ -33,9 +33,11 @@ class TechChatComposerFlushBottomContract(unittest.TestCase):
         self.assertNotIn("position:fixed", caption)
         self.assertIn("margin-top:9px", caption)
 
-    def test_tech_composer_bottom_padding_is_zero(self):
+    def test_tech_composer_outer_padding_matches_quote(self):
+        # 契约更新（报价/工艺输入框几何对齐批次）：工艺 composer 的上下内衬改成与报价
+        # `.chat-input-area` 相同的 10px（原来 bottom 是 0），两侧输入区底边视觉基线一致。
         rule = css_rule(TECH_CSS, "#techChatPane .oc-composer")
-        self.assertIn("padding:10px16px0", rule)
+        self.assertIn("padding:10px16px", rule)
         self.assertIn("flex:00auto", rule)
 
     def test_input_box_is_last_visible_child_and_controls_remain(self):

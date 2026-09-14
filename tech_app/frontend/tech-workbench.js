@@ -193,6 +193,7 @@
     if (!state.stage) state.stage = 'requirement-create';
     renderTop();
     mountStageFrame();
+    syncChatProject();
     syncAgentStageContext();
   });
 
@@ -605,6 +606,11 @@
     Promise.resolve(bridge.executeAction(actionName, { label, role }))
       .then(() => { syncChatActions(); })
       .catch((error) => {
+        // 预期内失败（切看板取消在途命令 / 必填项没填 / 当前视图没有目标输入框）：看板自己
+        // 已经就地提示过，父壳不再往会话里塞一条 ⚠，也不占标题行提示位 —— 否则每次切步骤
+        // 都会刷一片「看板已切换，命令已取消。」。技术性失败照旧两处可见。
+        if (window.TechBoardBridge && typeof window.TechBoardBridge.isQuietFailure === 'function'
+            && window.TechBoardBridge.isQuietFailure(error)) { syncChatActions(); return; }
         const message = (error && error.message) || `${label || actionName} 执行失败`;
         setBoardNotice(message, 'error');
         chatNotice(message);
@@ -794,6 +800,16 @@
     applyStage(stage, { project: state.project });
   });
 
+  /* 左侧会话的项目绑定跟随本壳：换项目（历史抽屉 / 首页卡片 / 看板 set_stage / 上下一步 /
+     浏览器前进后退）都只 pushState 不重载页面，会话必须重绑到目标项目并回放它的历史，
+     否则新项目的历史永远带不回来、还会串出上一个项目的对话与任务卡。只走会话宿主导出的
+     唯一入口 window.ocTechAgent.setProject；入口缺失（旧壳 / 脚本未加载）时安全跳过。 */
+  function syncChatProject() {
+    const api = window.ocTechAgent;
+    if (!api || typeof api.setProject !== 'function') return;
+    try { api.setProject(state.project); } catch (error) { /* 会话重绑失败不阻断流程切换 */ }
+  }
+
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
     if (!stages.has(stageId)) {
@@ -812,6 +828,9 @@
     renderTop();
     mountStageFrame();
     pushState();
+    // 会话绑定必须跟着项目走：换项目只 pushState 不重载页面，若左侧还锁着首次进入时的
+    // 项目，目标项目的历史就永远带不回来，还会串出上一个项目的对话与任务卡。
+    syncChatProject();
     refreshProgress();
     syncAgentStageContext();
     syncChatActions();

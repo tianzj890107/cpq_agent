@@ -139,8 +139,10 @@ cfRender = function () {
       role: 'aux',
       order: 30,
       run: ({ note } = {}) => {
+        // 当前视图没有确认意见输入框（或 Agent 没给正文）不是故障：如实回传 applied=false
+        // 即可，不再返回失败码 —— 否则每次带入意见都会在会话里留一条 ⚠ 卡。
         const applied = cfAppendNote(note);
-        return applied ? { ok: true } : { ok: false, error: { code: 'note-target-missing', message: '看板未找到确认意见输入框或意见为空。' } };
+        return { ok: true, result: { applied: applied, reason: applied ? '' : 'target-missing' } };
       },
       getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#confirmationNote')), busy: cfBoardBusy }),
     },

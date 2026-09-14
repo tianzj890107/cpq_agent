@@ -325,6 +325,7 @@
     } catch (error) {
       publishTaskCard(EVENT.TASK_FAILED, { action: name,
         label: entryState(name).label, taskId: context.taskId || '',
+        code: String((error && error.code) || 'action-failed'),
         message: String((error && error.message) || error) });
       return Promise.resolve(failure('action-failed', String((error && error.message) || error)));
     }
@@ -333,7 +334,10 @@
       if (result && typeof result === 'object' && result.ok === false) {
         var reason = (result.error && result.error.message) || ('动作执行失败：' + name);
         publishTaskCard(EVENT.TASK_FAILED, { action: name,
-          label: entryState(name).label, taskId: context.taskId || '', message: reason });
+          label: entryState(name).label, taskId: context.taskId || '',
+          // 只转发失败码，不在运行时判定「要不要出卡」：父壳据 code 跳过预期内失败。
+          code: String((result.error && result.error.code) || 'action-failed'),
+          message: reason });
         return result.error ? result : failure('action-failed', '动作执行失败：' + name);
       }
       if (source === 'view') currentView = name;
@@ -348,6 +352,7 @@
     }, function (error) {
       publishTaskCard(EVENT.TASK_FAILED, { action: name,
         label: entryState(name).label, taskId: context.taskId || '',
+        code: String((error && error.code) || 'action-failed'),
         message: String((error && error.message) || error) });
       return failure('action-failed', String((error && error.message) || error));
     });

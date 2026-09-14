@@ -1,7 +1,7 @@
 {
   "step": 21,
   "quote_reference": "确认需求解析结果.html",
-  "note": "技术工艺统一工作台左侧会话与报价 Agent 的交互能力对照。第 16–19 步已落地，14 项全部 live；gated 机制保留供后续批次使用（gated_by 限 16–19，且对应 Spec + Red 必须存在）。 契约更新：统一工作台左侧常驻「上一步 / 下一步 / 转交任务 / 失败重试」已按用户要求删除（上下步在右侧底栏、转交由业务动作与会话承担），transfer 行锚点随之改指 2.2「确认工艺并发送财务」，prev_next 行仍锚定右侧底栏 techPrev。",
+  "note": "技术工艺统一工作台左侧会话与报价 Agent 的交互能力对照。第 16–19 步已落地，14 项全部 live；gated 机制保留供后续批次使用（gated_by 限 16–19，且对应 Spec + Red 必须存在）。 契约更新：统一工作台左侧常驻「上一步 / 下一步 / 转交任务 / 失败重试」已按用户要求删除（上下步在右侧底栏、转交由业务动作与会话承担），transfer 行锚点随之改指 2.2「确认工艺并发送财务」，prev_next 行仍锚定右侧底栏 techPrev。 契约更新：2.1 结果入口迁到左侧操作栏——会话结果条 #ocResultActions 与「零件清单」入口删除，result_entry 行锚点改指 #techChatActions 内的 #ocQuestionsAction / #ocReportAction；result-summary 协议不变。",
   "rows": [
     {
       "id": "quick_buttons",
@@ -95,9 +95,9 @@
       "id": "result_entry",
       "label": "结果入口",
       "quote": "确认需求解析结果.html#resultsContent",
-      "tech": "tech_app/frontend/tech-workbench.html#ocResultActions",
+      "tech": "tech_app/frontend/tech-workbench.html#ocQuestionsAction",
       "status": "live",
-      "release": "既有结果 chip 组"
+      "release": "左侧操作栏 results chip 组（待澄清问题 / 解析报告，挂 #techChatActions）"
     },
     {
       "id": "session_restore",

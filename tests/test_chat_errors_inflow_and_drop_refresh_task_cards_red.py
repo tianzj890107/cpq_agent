@@ -181,7 +181,9 @@ class ChatErrorsInflowAndDropRefreshTaskCardsRedTest(unittest.TestCase):
         self.assertTrue(body, "找不到 refreshBoardAfterUpload()")
         self.assertNotRegex(body, r"\.catch\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)",
                             "refresh 失败不得再被空 catch 吞掉")
-        self.assertRegex(body, r"pushSystem\(|noteInThread\(",
+        # 契约更新（会话卡片降噪批次）：看板失败统一走 boardFailureNotice 出口（内部仍是
+        # pushSystem 的普通输出，预期内失败才提前返回），刷新失败不得被静默吞掉。
+        self.assertRegex(body, r"boardFailureNotice\(|pushSystem\(|noteInThread\(",
                          "refresh 失败必须以普通输出写进会话")
 
     # ------------------------------------------------ 保护边界

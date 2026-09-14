@@ -49,9 +49,15 @@ class DrawingBoardTwoColumnPartsAnd3DContract(unittest.TestCase):
         self.assertRegex(parts.group(1), r'overflow-y:\s*auto')
         self.assertIsNotNone(model)
         self.assertRegex(model.group(1), r'min-width:\s*0')
+        # 右栏比栏高的内容必须自己能滚，不能被 overflow:hidden 裁掉。
+        panes = re.search(r'\.model-panes\s*\{([^}]*)\}', CSS, re.S)
+        self.assertIsNotNone(panes)
+        self.assertRegex(panes.group(1), r'overflow-y:\s*auto')
 
     def test_mobile_stacks_parts_above_model(self):
-        media = re.search(r'@media\s*\(max-width:\s*900px\)\s*\{([\s\S]*?)\n\}', CSS)
+        # 断点必须留在「真·窄屏」区间：统一工作台里 2.1 是 iframe，窗口 1440 时
+        # iframe 只有 ~890px 宽，曾经的 900px 断点会让桌面端也退化成上下两栏。
+        media = re.search(r'@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}', CSS)
         self.assertIsNotNone(media)
         self.assertRegex(media.group(1), r'\.drawing-board-split\s*\{[^}]*grid-template-columns:\s*1fr')
 

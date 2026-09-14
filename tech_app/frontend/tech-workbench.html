@@ -7,8 +7,8 @@
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="agent-chat.css?v=20260914-compact1" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb16" />
-  <script src="cpq-sso.js?v=sso2"></script>
+  <link rel="stylesheet" href="tech-workbench.css?v=twb19" />
+  <script src="cpq-sso.js?v=sso3"></script>
 </head>
 <body>
   <div class="tech-workbench-app tech-workbench-layout" id="techWorkbenchApp">
@@ -73,14 +73,6 @@
               <div style="font-size:14px;">工艺评估助手</div>
               <div style="font-size:12.5px;">它能读取本项目图纸与技术资料、查询解析结果，并按你的要求发起解析。<br/>切换右侧步骤不会清空这里的会话。</div>
             </div>
-            <!-- 解析结果快捷入口：唯一且持久的三颗按钮，默认整组隐藏但绝不从 DOM 删除。
-                 数量与可用状态只来自看板桥回传的解析摘要（父壳不读 iframe DOM、不另拉一份
-                 零件/问题数据）；点开具体内容属于右侧看板，本轮只保留统一分派入口。 -->
-            <div class="oc-result-actions" id="ocResultActions" aria-label="图纸解析结果" role="group" hidden>
-              <button class="oc-chip" id="ocPartsAction" type="button">🧩 零件清单<span class="oc-chip-count" id="ocPartsCount" aria-live="polite">0</span></button>
-              <button class="oc-chip warn" id="ocQuestionsAction" type="button">⚠ 待澄清问题<span class="oc-chip-count" id="ocQuestionsCount" aria-live="polite">0</span></button>
-              <button class="oc-chip oc-chip-report" id="ocReportAction" type="button">解析报告</button>
-            </div>
             <!-- 任务执行进度宿主：只渲染看板桥播过来的 task-progress / task-completed /
                  task-failed，按 taskId 去重；父壳不轮询后端、不改后端任务。 -->
             <div class="oc-task-progress" id="ocTaskProgressHost" aria-live="polite" aria-label="任务执行进度"></div>
@@ -99,13 +91,20 @@
             <span class="oc-files-action-label">任务文件</span>
             <span class="oc-chip-count" id="ocFilesCount" aria-live="polite">—</span>
           </button>
-          <!-- 2.1 图纸解析：只有「解析视图」留在左侧会话栏；导入已有 3D 模型 / 版本与校核
-               审查 / 联网核验 / 校验修正四项归位到 2.1 的「更多功能 ▾」菜单，这里不再重复
-               提供。能力本体与既有分派语义不变，只在 drawing 阶段显示/启用。 -->
-          <button type="button" data-tech-capability="evidence">解析视图</button>
+          <!-- 2.1 图纸解析：左侧会话栏不再重复提供任何静态能力按钮 —— 证据视图 / 导入已有
+               3D 模型 / 版本与校核审查 / 联网核验 / 校验修正都归位到 2.1 页内的「更多功能 ▾」
+               与看板内部视图，这里只保留下面按真实 result-summary 渲染的结果入口。
+               能力本体与既有分派语义不变（Agent 仍按 capability 名分派）。 -->
           <!-- 唯一主按钮槽位：具体动作由看板快照的 role === 'primary' 决定，父壳只渲染。
                其余业务动作（含 2.1 的「一键生成全部工艺推荐」等）紧随其后动态插入。 -->
           <button type="button" id="techChatPrimary">主要操作</button>
+          <!-- 2.1 结果入口：排在最后 —— 动态业务动作插在 #techChatPrimary 之后，所以这里写在
+               主按钮后面才会永远落在整栏末尾。只用普通（描边）按钮样式，不再用告警黄或实心主色，
+               免得和唯一主按钮抢视觉层级；只在 drawing 阶段按真实 result-summary 显示 / 启用；
+               点击仍只把视图名交给唯一出口（父壳 TechBoardBridge.navigateView，独立页
+               window.TechBoardViews.open），父壳不再另建一份结果条。 -->
+          <button class="oc-chip" id="ocQuestionsAction" type="button" hidden>⚠ 待澄清问题<span class="oc-chip-count" id="ocQuestionsCount" aria-live="polite">0</span></button>
+          <button class="oc-chip" id="ocReportAction" type="button" hidden>解析报告</button>
         </nav>
         <div class="oc-composer">
           <div class="oc-cinner">
@@ -226,6 +225,6 @@
   <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
   <script src="tech-workbench.js?v=twb17"></script>
-  <script src="agent-chat.js?v=20260914-compact1"></script>
+  <script src="agent-chat.js?v=20260914-result1"></script>
 </body>
 </html>

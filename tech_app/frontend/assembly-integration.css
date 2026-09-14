@@ -250,3 +250,29 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #0060E6; }
 .ai-send-foot .cancel { background: var(--oc-bg-3, #f3f4f6); color: var(--oc-text-2, #4b5563); }
 .ai-send-foot .send { background: var(--oc-accent, #0060E6); color: #fff; }
 .ai-send-foot button:disabled { opacity: .6; cursor: not-allowed; }
+
+/* 「还有没完成的项，确定要继续吗」的软闸门确认框（2.2 与 2.3 共用）。
+   只承载「人点了确认才继续」这件事，不参与页面布局：fixed 覆盖在整页之上，
+   关掉之后页面回到原样，不会把底栏或上下步按钮顶走。 */
+.ai-confirm-mask {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15,23,42, .45);
+}
+.ai-confirm-box {
+  width: 420px; max-width: 92vw; padding: 18px 22px 16px;
+  border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0, .28);
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827); font-size: 13px;
+}
+.ai-confirm-head { margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+.ai-confirm-body { white-space: pre-wrap; line-height: 1.7; color: var(--oc-text-2, #4b5563); }
+.ai-confirm-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.ai-confirm-foot button {
+  padding: 7px 16px; border-radius: 8px; font-family: inherit; font-size: 13px; cursor: pointer;
+}
+.ai-confirm-foot .cancel {
+  border: 1px solid var(--oc-border-2, #e2e5ea); background: #fff; color: var(--oc-text-2, #4b5563);
+}
+.ai-confirm-foot .go {
+  border: 1px solid transparent; background: var(--color-primary, #0060E6); color: #fff;
+}

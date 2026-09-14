@@ -132,6 +132,20 @@ body{padding-bottom:0}
 .left-panel,.center-panel{position:sticky;top:18px;align-self:start;height:calc(100vh - 38px);max-height:none;overflow-y:auto;overflow-x:hidden}
 @media(max-width:700px){.left-panel,.center-panel{position:static;height:auto;max-height:none;overflow:visible}}
 
+/* 2.1 图纸解析固定两栏：左栏零件清单独立滚动（不再被搬进覆盖式结果宿主），
+   右栏常驻 3D / 零件信息 / 参数 / 工艺 / 成本；右栏宽度变化不影响左栏滚动。 */
+.drawing-board-split{display:grid;grid-template-columns:minmax(260px,34%) minmax(0,1fr);gap:var(--space-lg);flex:1;min-height:0}
+.drawing-parts-column{min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:6px;border-right:1px solid var(--border-light)}
+.drawing-model-column{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.drawing-parts-column .panel-section{border-bottom:0}
+/* 只有真·窄屏才上下堆叠：统一工作台里 2.1 跑在 ~890px 宽的 iframe 里（1440 窗口），
+   断点放 900px 会把桌面端也压成上下两栏，所以收紧到 640px。 */
+@media (max-width: 640px) {
+  .drawing-board-split { grid-template-columns: 1fr; }
+  .drawing-parts-column { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border-light); }
+}
+
+
 /* 零件编辑操作按钮与返回/上一步/首页保持统一的蓝色导航按钮样式。 */
 .parameter-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--space-lg);align-items:start}
 .parameter-base,.parameter-features{min-width:0}
@@ -220,7 +234,9 @@ body{padding-bottom:0}
 /* 右侧工作区的两种内容互斥：看几何（3D/2D/参数）与看结论（工艺推荐/成本测算）。
    零件清单里点「工艺推荐」「成本测算」就整块切过来，不再挤在左侧零件行下面。 */
 .model-panes[hidden],.analysis-panel[hidden]{display:none}
-.model-panes{display:flex;flex:1;min-height:0;flex-direction:column}
+/* 右栏内容（3D + 零件信息 + 参数）可能比栏高：让面板自己滚，
+   否则会被 .drawing-model-column 的 overflow:hidden 裁掉、用户够不到参数编辑。 */
+.model-panes{display:flex;flex:1;min-height:0;flex-direction:column;overflow-y:auto}
 .analysis-panel{display:flex;flex:1;min-height:0;flex-direction:column}
 .analysis-panel-bar{display:flex;align-items:center;padding:var(--space-md) var(--space-lg);border-bottom:1px solid var(--border-light)}
 .analysis-panel .inline-analysis-host{flex:1;min-width:0;padding:var(--space-lg);overflow-y:auto}

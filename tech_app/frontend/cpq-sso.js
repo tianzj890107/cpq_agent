@@ -27,13 +27,14 @@
   var state = { enabled: false, user: null, canWrite: false, canCost: false,
                 roleName: '', checked: false };
 
-  /* 成本相关接口：2.3 本体，以及零件/整机成本与整合参数（都随成本搬去了 2.3）。
-     只列**写**接口的路径特征，判定仍以后端 COST_ROLES 为准。 */
+  /* 成本相关接口：2.3 本体，以及零件/整机成本。只列**写**接口的路径特征，
+     判定仍以后端 COST_ROLES 为准。（「整合参数」曾随成本短暂搬去 2.3，后来搬回 2.2
+     的「参数推荐」，接口是 /integration/params/*，归工艺经理的 WRITE_ROLES ——
+     这里再放行给财务，等于让他在 2.2 点出一个注定 403 的按钮。） */
   var COST_URL_PATTERNS = [
     /\/cost-review(\/|$|\?)/,
     /\/parts\/[^/]+\/cost(\/|$|\?)/,
     /\/integration\/cost(\/|$|\?)/,
-    /\/integration\/params\/(autofill|finalize)(\/|$|\?)/,
   ];
   function isCostUrl(url) {
     return COST_URL_PATTERNS.some(function (re) { return re.test(url); });
@@ -158,7 +159,7 @@
     bar.innerHTML = '<span>当前以 <b>' + esc(state.roleName || '非工艺经理') +
       '</b> 身份登录，' + (state.canCost
         ? '你负责 <b>2.3 成本测算</b>：那一步可以测算、确认并对外发送；' +
-          '2.1 图纸解析与 2.2 组装整合归工艺经理，这里是只读。'
+          '2.1 图纸解析、2.2 组装与整合（整合图纸 / 参数推荐 / 组装工艺）归工艺经理，这里是只读。'
         : '技术工艺为<b>只读</b>：可以查看项目与结果，' +
           '解析、生成、保存、确认、发布等操作仅限工艺经理。') + '</span>' +
       '<button type="button">切换账号</button>';

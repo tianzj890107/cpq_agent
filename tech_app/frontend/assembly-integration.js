@@ -403,6 +403,16 @@ function aiRequiredGaps() {
   };
 }
 
+/** 报价成品参数表里的**全部**空格子（不只必填、也不只报价必填）。
+    自动补全按它判断要不要跑：模型推得出来的非必填项也一并补上，
+    报价那头才不会一列空着。字典没加载到时退回必填缺口，别把补全整条跳过。 */
+function aiMissingParamFields() {
+  const fields = ((aiData?.param_checklist?.groups) || [])
+    .flatMap(group => group.fields || []);
+  const missing = fields.filter(field => !field.filled && !field.generated);
+  return fields.length ? missing : aiRequiredGaps().fields;
+}
+
 /** 「报价必填参数完成度」：缺几项、缺哪些、是否已最终确认。 */
 function aiRequiredCard() {
   if (!aiData?.param_checklist) return '';
@@ -593,7 +603,18 @@ async function aiParamsFinalize(confirm) {
   }
 }
 
-/** 「生成参数推荐」的完整链路：生成 → 有报价必填缺口就自动补全 → 把补上的值落库。
+/** 「生成之后直接补全」的唯一实现：智能补全 → 把补上的值落库。
+    「开始整合分析」与「一键生成参数推荐」两条链路共用它 —— 生成完参数就补，
+    用户不必再点一次「智能补全 / 保存补填」。没有空格子时不发请求、不写库。 */
+async function aiAutoFillParams() {
+  if (!aiHasParams()) return { applied: 0, unresolved: [] };
+  if (!aiMissingParamFields().length) return { applied: 0, unresolved: [] };
+  const filled = await aiParamsAutofill();
+  if (filled && filled.applied > 0) await aiParamsFinalize(false);
+  return filled || { applied: 0, unresolved: [] };
+}
+
+/** 「生成参数推荐」的完整链路：生成 → 自动补全整张表的空格子 → 把补上的值落库。
     三步全部复用既有实现与既有接口（/integration/params、/params/autofill、/params/finalize），
     不新增第二套推荐逻辑；用户因此不必再点「智能补全 / 保存补填 / 确认参数已齐」。 */
 async function aiGenerateParamsFully() {
@@ -605,10 +626,7 @@ async function aiGenerateParamsFully() {
     return { ok: false, error: { code: 'no-params',
       message: '模型没有产出整机参数，请查看右侧看板提示后重试。' } };
   }
-  if (aiRequiredGaps().required_missing > 0) {
-    const filled = await aiParamsAutofill();
-    if (filled && filled.applied > 0) await aiParamsFinalize(false);
-  }
+  await aiAutoFillParams();
   const gaps = aiRequiredGaps();
   aiSay(gaps.required_missing
     ? `参数推荐已生成：报价必填 ${gaps.required_filled}/${gaps.required_total} 项有值，`
@@ -646,9 +664,44 @@ async function aiConfirmDrawingsAndNext() {
   return { ok: true };
 }
 
-/** 「确认并进入下一步」：确认参数已齐（按报价必填校验）→ 确认参数推荐 → 切到组装工艺。
-    两步都复用既有接口（/params/finalize 的 confirm 分支、/params/confirm），缺项时不往下走，
-    把后端的真实原因交给父壳显示。 */
+/** 软闸门：前置没做完时不再硬阻断 —— 先把「还差什么」原样摆出来，人点「仍要继续」
+    就带着缺口往下走，点「取消」才停手。
+    只用于「没完成」这一类：权限不在这里，那是后端 _require 的判定，前端只如实转述。
+    不记状态、不发请求、不用浏览器原生 confirm 挡住整页。 */
+function aiAskProceed(why, options = {}) {
+  const text = String(why || '').trim();
+  if (!text) return Promise.resolve(true);
+  const mask = document.createElement('div');
+  mask.className = 'ai-confirm-mask';
+  mask.innerHTML =
+    `<div class="ai-confirm-box" role="dialog" aria-modal="true" aria-label="确认继续">
+      <div class="ai-confirm-head">${esc(options.title || '这一步还有没完成的项')}</div>
+      <div class="ai-confirm-body">${esc(text)}</div>
+      <div class="ai-confirm-foot">
+        <button type="button" class="cancel" data-ai-confirm-cancel>取消</button>
+        <button type="button" class="go" data-ai-confirm-go>仍要继续</button>
+      </div></div>`;
+  document.body.append(mask);
+  return new Promise(resolve => {
+    const finish = value => {
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(value);
+    };
+    const onKey = event => { if (event.key === 'Escape') finish(false); };
+    mask.querySelector('[data-ai-confirm-go]').onclick = () => finish(true);
+    mask.querySelector('[data-ai-confirm-cancel]').onclick = () => finish(false);
+    mask.addEventListener('mousedown', event => { if (event.target === mask) finish(false); });
+    document.addEventListener('keydown', onKey);
+    const go = mask.querySelector('[data-ai-confirm-go]');
+    if (go) go.focus();
+  });
+}
+
+/** 「确认并进入下一页签」：确认参数已齐（按报价必填校验）→ 确认参数推荐 → 切到组装工艺。
+    两步都复用既有接口（/params/finalize 的 confirm 分支、/params/confirm）。
+    必填没齐时不硬阻断：把缺的项摆清楚，人点「仍要继续」就把已填的值先落库，
+    再走 /params/confirm 带着缺口进入组装工艺 —— 这是人的决定，由他签字。 */
 async function aiConfirmParamsAndNext() {
   if (aiBusy) {
     return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
@@ -656,13 +709,21 @@ async function aiConfirmParamsAndNext() {
   if (!aiHasParams()) {
     return { ok: false, error: { code: 'no-params', message: '请先生成参数推荐。' } };
   }
-  // 先落库 + 校验报价必填：缺项时后端退回真实原因，这里如实返回，不把缺口带给工艺与成本。
+  // 先落库 + 校验报价必填：缺项时后端退回真实原因，这里如实摆给用户看。
   await aiParamsFinalize(true);
   if (!aiData?.status?.params_final) {
     const gaps = aiRequiredGaps();
-    return { ok: false, error: { code: 'required-missing',
-      message: `还有 ${gaps.required_missing} 项报价必填参数没有值：`
-        + `${gaps.fields.map(field => field.name || field.code).join('、')}。请在右侧表格补填后再确认。` } };
+    const why = `还有 ${gaps.required_missing} 项报价必填参数没有值：`
+      + `${gaps.fields.map(field => field.name || field.code).join('、')}。`;
+    const go = await aiAskProceed(
+      `${why}\n\n这些项平台推不出来，需要有人给个值。现在继续的话，`
+      + `报价测算单上这几格会是空白。确定要带着缺口进入「组装工艺」吗？`);
+    if (!go) {
+      return { ok: false, error: { code: 'required-missing',
+        message: `${why}已停在参数推荐这一步，在右侧表格补填后再点「确认并进入下一页签」。` } };
+    }
+    // 带着缺口继续：只把已经填上的值落库（finalize 的非校验分支），必填缺口由人担着。
+    await aiParamsFinalize(false);
   }
   await aiConfirmStep('params');
   if (!aiData?.status?.params_confirmed) {
@@ -1309,6 +1370,9 @@ async function aiRunAll() {
       aiSay(`「${AI_TABS[step]}」没有产出结果，后面两步依赖它，先停在这里。`);
       return;
     }
+    // 参数刚生成出来就把空格子补掉并落库：这一步不补，用户进「参数推荐」看到的
+    // 就是满屏「必填未给出」，还得自己回来点「智能补全」。
+    if (step === 'params') await aiAutoFillParams();
   }
   // 确认不代跑：那是人对结果点头，自动点等于没确认。
   aiTab = 'process';

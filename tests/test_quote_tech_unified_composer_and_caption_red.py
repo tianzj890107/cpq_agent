@@ -10,6 +10,10 @@
 
 本批只改输入区 DOM/CSS 与说明行；不改消息渲染、接口、Agent 工具、九阶段流程与右侧看板。
 不联网、不起服务、不读真实业务数据；只做静态契约校验。
+
+契约更新（报价/工艺输入框几何对齐批次）：本批当初给报价留的 76px 高框 / `gap:12px` /
+15px 字号 / 50px 附件钮 / 54px 发送钮已按用户要求改成与工艺 `.oc-inputbox-single` 完全一致
+（0 / 8px / 12px/20px / 34px / 36px），下列用例随之更新为「报价 = 工艺」的比对。
 """
 from __future__ import annotations
 
@@ -68,18 +72,20 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         for token in (
             "display:flex",
             "align-items:center",
-            "gap:12px",
-            "min-height:76px",
+            "gap:8px",
+            "min-height:0",
+            "padding:7px8px7px12px",
             "border-radius:24px",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, wrapper, "报价输入行未采用技术工艺单行圆角造型：缺 %s" % token)
 
     def test_quote_geometry_remains_while_tech_uses_compact_content_height(self):
+        # 契约更新：报价不再是 76px 高框，几何与技术工艺 .oc-inputbox-single 逐项相等。
         quote = compact(css_rule(self.quote, ".chat-input-wrapper"))
         tech = compact(css_rule(self.chat_css, ".oc-inputbox-single"))
         self.assertTrue(tech, "找不到技术工艺 .oc-inputbox-single 规则")
-        self.assertIn("min-height:76px", quote)
+        self.assertIn("min-height:0", quote)
         self.assertIn("min-height:0", tech)
         self.assertIn("border-radius:24px", tech)
         self.assertIn("gap:8px", tech)
@@ -92,14 +98,14 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         self.assertNotRegex(markup, r"oc-add-mark", "报价输入框不应引入技术工艺的回形针角标类")
 
         rule = compact(css_rule(self.quote, ".chat-attach-btn"))
-        self.assertIn("width:50px", rule)
-        self.assertIn("height:50px", rule)
+        self.assertIn("width:34px", rule)
+        self.assertIn("height:34px", rule)
         self.assertIn("border-radius:50%", rule)
 
     def test_quote_send_button_is_round_primary(self):
         rule = compact(css_rule(self.quote, ".chat-send"))
-        self.assertIn("width:54px", rule)
-        self.assertIn("height:54px", rule)
+        self.assertIn("width:36px", rule)
+        self.assertIn("height:36px", rule)
         self.assertIn("border-radius:50%", rule)
         self.assertIn("var(--color-primary)", rule)
 
@@ -109,8 +115,8 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         self.assertRegex(textarea.group(0), r'rows="1"', "报价输入框应改为单行")
 
         rule = compact(css_rule(self.quote, ".chat-input"))
-        self.assertIn("font-size:15px", rule)
-        self.assertIn("line-height:24px", rule)
+        self.assertIn("font-size:12px", rule)
+        self.assertIn("line-height:20px", rule)
         self.assertTrue(
             "border:0;" in rule or "border:none" in rule,
             "单行输入框内部 textarea 必须去边框：%s" % rule,
@@ -226,7 +232,7 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         )
         self.assertIsNotNone(tech_composer)
         self.assertIn("flex: 0 0 auto", tech_composer.group(1))
-        self.assertIn("padding: 10px 16px 0", tech_composer.group(1))
+        self.assertIn("padding: 10px 16px;", tech_composer.group(1))
 
     def test_global_model_settings_entries_kept(self):
         self.assertIn('id="techModelInfo"', self.tech_html)

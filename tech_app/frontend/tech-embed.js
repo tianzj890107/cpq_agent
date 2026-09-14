@@ -149,10 +149,10 @@
       '.tech-embed .oc-work { display:block !important; width:100% !important; min-width:0 !important; gap:0 !important; }',
       '.tech-embed .oc-shell .page-container { width:100% !important; max-width:none !important; min-width:0 !important; margin-left:0 !important; margin-right:0 !important; padding-left:18px !important; padding-right:18px !important; }',
       '.tech-embed .oc-work .center-panel { width:100% !important; min-width:0 !important; max-width:none !important; flex:1 1 100% !important; max-height:none !important; }',
-      // 子页面不再显示第二份大标题与第二份阶段页签（统一标题行由父壳 #techContextHeader
-      // 承载）。只隐藏标题文字与页签行本身：#partsMetric / #confidenceMetric 等度量、
-      // 文件名、错误与业务提示都留在原位，内容区里 inline-analysis 面板自己的切换也保持可见。
-      '.tech-embed .title-section .form-title, .tech-embed .title-row .form-title { display:none !important; }',
+      // 子页面不再显示第二份大标题、第二份阶段页签与整块标题区（统一标题行由父壳
+      // #techContextHeader 承载）。嵌入态整块 .title-section 退出布局，避免残留空白行；
+      // 只作用于 .tech-embed，独立打开阶段页（没有 .tech-embed）的标题与状态照旧。
+      '.tech-embed .title-section { display: none !important; }',
       '.tech-embed .ai-tabs { display:none !important; }',
       // 步骤状态那一行改为并入父壳标题行（board-status → #techContextNotice）：嵌入态下
       // 不再让它在页内单独占一行。独立打开阶段页（没有 .tech-embed）时状态行照旧显示。

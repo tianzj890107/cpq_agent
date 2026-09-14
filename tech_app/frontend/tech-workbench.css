@@ -139,6 +139,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   min-width: 0;
   min-height: 0;
   height: 100%;
+  max-height: none;
   flex: 0 0 auto;
   border: 0;
   border-radius: 0;
@@ -281,9 +282,24 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   padding: 1px 7px; border-radius: 999px; background: var(--twb-bg-deep);
   color: var(--twb-muted); font-size: 11px; font-weight: 600;
 }
+/* 2.1 结果入口（待澄清问题 / 解析报告）迁到本操作栏、排在最后：用和其它业务动作一样的
+   普通描边按钮样式（不用告警黄、不用实心主色，避免与唯一主按钮抢层级），这里只补计数对齐。
+   只在 drawing 阶段由看板摘要显隐，计数为 0 也保留 0，不隐藏按钮。 */
+.tech-chat-actions > button.oc-chip { display: inline-flex; align-items: center; gap: 6px; }
+/* 上面这条 display 会盖掉 UA 的 [hidden]{display:none}，必须补回一条优先级更高的同族规则，
+   否则两颗结果入口会无视 hidden 属性、在九个阶段里全部常驻。 */
+.tech-chat-actions > button.oc-chip[hidden] { display: none; }
+/* 禁用态与其它业务动作一致（.oc-chip:disabled 的灰底优先级更高，这里压回白底描边）。 */
+.tech-chat-actions > button.oc-chip:disabled {
+  background: var(--twb-card); color: var(--twb-text); border-color: var(--twb-border);
+}
+.tech-chat-actions > button.oc-chip .oc-chip-count {
+  padding: 1px 7px; border-radius: 999px; background: var(--twb-bg-deep);
+  color: var(--twb-muted); font-size: 11px; font-weight: 600;
+}
 #techChatPane .oc-composer {
   flex: 0 0 auto;
-  padding: 10px 16px 0;
+  padding: 10px 16px;
   border-top: .5px solid var(--twb-border);
 }
 /* 会话绑定说明：原文保留，紧随输入框下方（普通文档流），与技术工艺其它会话一致。
@@ -534,6 +550,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+  /* 五个大流程共用同一标题行：固定最小高度，子页签 / 状态 / 权限提示变化都不改高度。 */
+  min-height: 52px;
   padding: 8px 16px;
   border-bottom: .5px solid var(--twb-border);
   background: var(--twb-card);

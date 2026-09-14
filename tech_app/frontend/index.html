@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 工艺 - 图纸解析</title>
-  <link rel="stylesheet" href="workbench.css?v=20260819-pane1" />
+  <link rel="stylesheet" href="workbench.css?v=20260914-split2" />
   <link rel="stylesheet" href="inline-analysis.css?v=20260819-flat6" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
   <link rel="stylesheet" href="agent-chat.css?v=20260914-compact1" />
@@ -31,8 +31,8 @@
   <script type="importmap">
   {"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}
   </script>
-  <script src="cpq-sso.js?v=sso2"></script>
-  <script src="tech-embed.js?v=twb2"></script>
+  <script src="cpq-sso.js?v=sso3"></script>
+  <script src="tech-embed.js?v=twb3"></script>
 </head>
 <body>
   <div class="oc-app">
@@ -176,7 +176,17 @@
           </section>
 
           <div class="center-panel">
-            <div class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnBoardBackList" class="report-btn" type="button" hidden>返回零件清单</button><button id="btnMoreActions" class="report-btn" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></div>
+            <!-- 2.1 固定两栏：左栏零件清单独立滚动，右栏 3D / 零件信息 / 参数 / 工艺 / 成本。
+                 #secParts / #tree 全页唯一，不再放进抽屉，也不再被搬进覆盖式结果宿主。 -->
+            <div class="drawing-board-split">
+              <section class="drawing-parts-column" aria-label="零件清单">
+                <div class="panel-section" id="secParts">
+                  <div class="section-title">零件清单</div>
+                  <div id="tree" class="parts-list empty-state">完成解析后显示零件清单</div>
+                </div>
+              </section>
+              <section class="drawing-model-column" aria-label="3D 视图">
+              <header class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnBoardBackList" class="report-btn" type="button" hidden>返回零件清单</button><button id="btnMoreActions" class="report-btn" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
             <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（零件工艺推荐）。
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
@@ -193,6 +203,8 @@
               </div>
               <div id="analysisHost" class="inline-analysis-host"></div>
             </section>
+              </section>
+            </div>
           </div>
         </div>
 
@@ -230,10 +242,6 @@
         </div>
       </details>
 
-      <div class="panel-section" id="secParts" data-drawer-section>
-        <div class="section-title">零件清单</div><div id="tree" class="parts-list empty-state">完成解析后显示零件清单</div>
-      </div>
-
       <details class="panel-section workbench-disclosure clarification-disclosure" id="secQuestions" data-drawer-section open>
         <summary class="section-title warning">待澄清问题</summary><div id="extras" class="extras">暂无待澄清问题</div>
       </details>
@@ -259,6 +267,6 @@
   <div id="loginOverlay" class="login-overlay" style="display:none"><form id="loginForm" class="login-card"><h2>登录</h2><div class="login-sub">图纸解析与生成平台 · 私有化部署</div><input id="loginUser" placeholder="用户名" autocomplete="username" /><input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" /><div id="loginErr" class="login-err"></div><button type="submit">登 录</button></form></div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260819-flat5"></script><script src="tech-board-runtime.js?v=tbr1"></script><script type="module" src="app.js?v=20260911-bulk1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260914-compact1"></script><script src="home-link.js?v=home6"></script>
+<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260819-flat5"></script><script src="tech-board-runtime.js?v=tbr1"></script><script type="module" src="app.js?v=20260914-split1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260914-result1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>

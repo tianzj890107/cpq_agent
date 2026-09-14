@@ -248,19 +248,19 @@
     /* 单行圆角输入框：几何尺寸（min-height / border-radius / gap）与技术工艺
        .oc-inputbox-single 逐项相等，配色改用本页 token。 */
     .chat-input-wrapper {
-      display: flex; align-items: center; gap: 12px; min-height: 76px;
-      padding: 10px 12px 10px 20px;
+      display: flex; align-items: center; gap: 8px; min-height: 0;
+      padding: 7px 8px 7px 12px;
       border: 1px solid var(--border-color); border-radius: 24px; background: var(--bg-page);
     }
     .chat-input-wrapper:focus-within { border-color: var(--color-primary); }
     .chat-input {
       flex: 1; min-width: 0; max-height: 120px; padding: 0;
       border: 0; background: transparent; color: var(--text-primary);
-      font-size: 15px; line-height: 24px; font-family: inherit; resize: none; outline: none;
+      font-size: 12px; line-height: 20px; font-family: inherit; resize: none; outline: none;
     }
     .chat-input:focus { border-color: var(--color-primary); }
     .chat-send {
-      width: 54px; height: 54px; border: none; border-radius: 50%;
+      width: 36px; height: 36px; flex: 0 0 36px; border: none; border-radius: 50%;
       background: var(--color-primary); color: white; cursor: pointer;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
@@ -453,7 +453,7 @@
     .attach-chip .rm:hover { color: var(--color-danger); }
     /* 圆形 +：新增 / 上传附件，与技术工艺 .oc-add 同尺寸（查看已有文件仍在上方「任务文件」）。 */
     .chat-attach-btn {
-      width: 50px; height: 50px; flex: 0 0 50px; border: 0; border-radius: 50%;
+      width: 34px; height: 34px; flex: 0 0 34px; border: 0; border-radius: 50%;
       background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;
       display: flex; align-items: center; justify-content: center;
     }

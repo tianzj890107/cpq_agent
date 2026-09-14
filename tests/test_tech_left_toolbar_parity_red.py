@@ -44,8 +44,9 @@ NINE_STAGES = (
     "requirement-create", "requirement-confirm", "requirement-review",
     "drawing", "process", "cost", "summary", "report-review", "report-publish",
 )
+# 契约更新（2.1 结果入口迁到左侧操作栏批次）：ocResultActions 会话结果条退役，改用左侧操作栏里的两颗结果入口。
 KEPT_IDS = ("techPrev", "techNext", "techNowLabel",
-            "ocResultActions", "ocTaskProgressHost",
+            "ocQuestionsAction", "ocReportAction", "ocTaskProgressHost",
             "ocChatAttachBtn", "ocChatFileInput")
 
 
@@ -81,9 +82,11 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
                 self.assertNotIn(retired, self.js, f"父壳不得再驱动 {retired}")
 
     def test_toolbar_reuses_existing_result_and_progress_hosts(self):
-        for kept in ("ocResultActions", "ocTaskProgressHost"):
+        # 契约更新（2.1 结果入口迁到左侧操作栏批次）：结果入口改挂 #techChatActions，任务进度仍复用既有宿主。
+        for kept in ("ocQuestionsAction", "ocReportAction", "ocTaskProgressHost"):
             self.assertIn(f'id="{kept}"', self.html,
                           f"结果入口 / 任务进度必须复用既有宿主 {kept}")
+        self.assertNotIn('id="ocResultActions"', self.html, "会话结果条已退役")
 
     # ---------------------------------------------------------------- 动态描述表
     def test_stage_table_covers_all_nine_stages(self):
