@@ -229,15 +229,23 @@ class TechBusinessActionsClickableRedTest(unittest.TestCase):
 
     # ------------------------------------------------ 契约 D：2.3 成本测算
     def test_cost_role_codes_match_backend_authority(self):
+        # 契约更新（2.3 角色判定批次）：登录态 window.cpqAuth.user() 给的是 **CPQ 口径**
+        # 角色码（cpq_auth.ROLES：finance_mgr / process_mgr / sales_mgr），后端权威是技术工艺
+        # 口径 finance_manager（cpq_sso.ROLE_MAP 映射）。前一版只抄了后端那一份，于是真财务
+        # 经理被前端判成只读、写请求发不出去。现在判定改成「服务端能力位 can_cost 优先，
+        # 退回角色码白名单时两套口径都认」。
         backend_match = re.search(r"COST_ROLES\s*=\s*\{([^}]*)\}", self.auth)
         self.assertTrue(backend_match, "找不到后端 auth.COST_ROLES")
         backend = set(re.findall(r"['\"]([A-Za-z_]+)['\"]", backend_match.group(1)))
         frontend_match = re.search(r"CR_COST_ROLES\s*=\s*\[([^\]]*)\]", self.cost)
         self.assertTrue(frontend_match, "找不到前端 CR_COST_ROLES")
         frontend = set(re.findall(r"['\"]([A-Za-z_]+)['\"]", frontend_match.group(1)))
-        self.assertEqual(frontend, backend, "前端只读判定必须与后端权威角色码一致")
-        self.assertNotIn("finance_mgr", self.cost,
-                         "finance_mgr 是后端不存在的角色码，必须清掉")
+        self.assertTrue(backend <= frontend,
+                        "后端权威角色码必须都在前端白名单里（前端只是提前提示）")
+        self.assertIn("finance_mgr", frontend,
+                      "CPQ 登录态给的是 finance_mgr，前端不认就会把财务经理误判成只读")
+        self.assertIn("CpqSso", self.cost, "要优先读服务端算好的能力位")
+        self.assertIn("canCost", self.cost, "能力位字段是 canCost")
 
     def test_cost_getstate_never_reads_page_button_disabled(self):
         blocks = arrow_bodies(self.cost, "getState:")

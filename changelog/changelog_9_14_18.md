@@ -613,3 +613,14 @@
 - 推送：`python3 scripts/push_remotes.py --check` → `python3 scripts/push_remotes.py`，GitLab 与 GitHub `20260909` 均推送并回读成功；`git ls-remote` 双远端与本地 HEAD 都是 `efef393`。
 - 部署（用户指令「部署0909到34」）：172.16.10.34 `/home/wugefei/CPQ/cpq_agent`（分支 `20260909`）`git fetch gitlab 20260909` → `checkout` → `pull --ff-only` 到 `efef393`；按既有顺序先停 8012 子进程再停 8010 主进程、等端口释放后重启 8010（新 PID 1186450，子进程 8012 新 PID 1186498 由主进程拉起）。`http://127.0.0.1:8010/` 与 `/api/health` 均 2xx 且 `status=ok`（`cadquery_available: true`），内网 `http://172.16.10.34:8010/` 实测 200。
 - 边界：部署只 fast-forward 更新 tracked 文件，未删改服务器上的 `cpq_settings.json`、`cpq_history/`、`rule_history/`、`tech_data/`、`product_images/` 等持久化数据；未动同机 8013 / 8080 上的其它服务；未创建 MR/tag/Release。
+
+## 54. 2.3 成本测算角色判定改为「服务端能力位优先 + 两套角色口径」（9-14）
+
+- 需求（用户）：「⚠ 回传销售经理继续报价失败，请查看看板提示。」「⚠ 2.3 成本测算是财务经理的步骤；当前登录的是「财务经理」，这一页只能查看。请用财务经理账号登录后测算。」——自己就是财务经理，却被前端判成只读。
+- Spec：`docs/specs/tech-cost-role-gate-capability.md`；红测：`tests/test_tech_cost_role_gate_capability_red.py`（12 项），Red 基线 **3–4 失败**。
+- 根因：角色码有两套口径 —— CPQ 登录态（`window.cpqAuth.user()`，见 `cpq_auth.ROLES`）给的是 `finance_mgr` / `process_mgr` / `sales_mgr`；技术工艺内部是 `finance_manager` / `process_manager`（`cpq_sso.ROLE_MAP` 把 `finance_mgr → finance_manager`）。`cost-review.js` 的 `CR_COST_ROLES` 只写了内部口径 `['finance_manager','admin']`，于是 CPQ 财务经理永远落进只读分支：看板按钮置灰、去向动作被拒，会话里就出现上面那两条自相矛盾的话。
+- 实现（`tech_app/frontend/cost-review.js`）：`crReadOnly()` 改为「服务端能力位优先」——先取 `window.CpqSso.state()` 的 `canCost`（`enabled && checked` 才采信；它来自 `main.py` 的 `sso.can_cost`，就是后端 `auth.COST_ROLES` 的判定结果），拿不到能力位再退回角色码白名单，且两套口径都收（`finance_manager` / `finance_mgr` / `admin`），角色码同读 `role_code` 与 `role`；`crStart()` 在拿不到 CPQ 登录态时补第二来源 `CpqSso.state().user`，让只读原因里的人名不再退化成「其他角色」。
+- 保留：真闸门没松 —— 工艺经理（`process_mgr` / `process_manager`）在 2.3 仍是只读，`crReadOnlyWhy()` 文案保留；身份完全取不到时不拦，交给后端 403。后端 `auth.COST_ROLES`、`cpq_sso.ROLE_MAP`、`cpq-sso.js` 写拦截、`crRunOp` / `crConfirmCost` / 三个去向接口与看板动作名一字未动。全仓扫描确认只有 `cost-review.js` 存在这套跨口径比较（`home.js` / `account.js` 读的是技术工艺自身登录态，`assembly-integration.js` 的 `AI_FINANCE_ROLE` 取自 CPQ `/auth/roles`，口径本来就一致）。
+- 过期断言更新（1 处）：`tests/test_tech_business_actions_clickable_then_error_red.py::test_cost_role_codes_match_backend_authority` 从「锁死 `CR_COST_ROLES = ['finance_manager','admin']`」改为「后端角色集 ⊆ 前端白名单 + 必须认 `finance_mgr` + 必须认 `CpqSso` 能力位」，注明「契约更新（2.3 角色判定批次）」。
+- 验证：本批红测 **12/12**（含 node 动态跑判定段：CPQ 财务经理 / 技术工艺财务经理 / SSO 未就绪时按角色码 / 工艺经理仍只读 / 身份未知不拦 / 服务端能力位压过陌生角色码）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **946 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/cost-review.js` 通过；`git diff --check` 通过；本地 8012 实测已下发修复后的 `cost-review.js`。
+- 边界：未改后端权限、路由、字段与 Agent 工具；未删动作注册与业务实现；未提交、未推送、未部署 —— 34 服务器当前仍是 `efef393`，上面跑的还是旧的单口径判定，所以线上仍能复现该提示。

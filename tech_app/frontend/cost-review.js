@@ -31,9 +31,27 @@ let crDeferredBusy = false;
    后端才是权威（main.py 的 COST_ROLES），这里只是提前说清楚 —— 否则要等点下去
    才收到 403，还容易被读成"系统坏了"。取不到身份时不拦：让后端去判。 */
 let crUser = null;
-const CR_COST_ROLES = ['finance_manager', 'admin'];
-const crReadOnly = () =>
-  Boolean(crUser && crUser.role_code) && !CR_COST_ROLES.includes(crUser.role_code);
+/* 角色码有两套口径：CPQ 登录态（window.cpqAuth → /auth/me，见 cpq_auth.ROLES）给的是
+   CPQ 口径 finance_mgr / process_mgr / sales_mgr；技术工艺内部则是 finance_manager /
+   process_manager（cpq_sso.ROLE_MAP 映射过来）。只认其中一套就会出现「显示身份是
+   财务经理、却被判成只读」——真财务经理点「回传销售经理继续报价」被前端挡下就是这个 bug。 */
+const CR_COST_ROLES = ['finance_manager', 'finance_mgr', 'admin'];
+const crRoleCode = () => String((crUser && (crUser.role_code || crUser.role)) || '');
+/* 服务端按技术工艺角色算好的能力位（main.py 的 sso.can_cost）才是权威：
+   登录态的原始角色码只是第二信源，两者不能互相否决。还没核对完（enabled/checked
+   未就绪）时返回 null，交给下面的角色码白名单。 */
+const crCostCapability = () => {
+  const sso = window.CpqSso;
+  if (!sso || typeof sso.state !== 'function') return null;
+  const state = sso.state() || {};
+  if (!state.enabled || !state.checked) return null;
+  return Boolean(state.canCost);
+};
+const crReadOnly = () => {
+  const capability = crCostCapability();
+  if (capability !== null) return !capability;
+  return Boolean(crRoleCode()) && !CR_COST_ROLES.includes(crRoleCode());
+};
 const crReadOnlyWhy = () =>
   `2.3 成本测算是财务经理的步骤；当前登录的是「${crUser && crUser.role_name || '其他角色'}」，`
   + '这一页只能查看。请用财务经理账号登录后测算。';
@@ -760,6 +778,12 @@ async function crStart() {
     // 首屏可能还没拉到登录态：等它一次，别把有权限的人误判成只读。
     try { await window.cpqAuth.refresh(); } catch (error) { /* 后端会再判一次 */ }
     crUser = (window.cpqAuth.user && window.cpqAuth.user()) || null;
+  }
+  if (!crUser) {
+    // 独立打开（只有技术工艺登录态）时补一个第二来源：身份名要能出现在只读原因里。
+    const ssoState = (window.CpqSso && typeof window.CpqSso.state === 'function'
+      && window.CpqSso.state()) || {};
+    crUser = ssoState.user || null;
   }
   $cr('crProject').textContent = `项目 ${crPid}`;
   crLoadModelLabel();
