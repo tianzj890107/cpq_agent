@@ -606,3 +606,10 @@
 - 实现：`aiSetTab` 提成模块级 `function aiSetTab(name)`（注册闭包不再重复声明）；`confirmParamsAndNext` / `confirmCostReview` 改 `deferred: true`，`run()` 只启动后台链路并立即回执，成败由链路自己播报（本页状态位 + 普通会话输出），既有闸门 `aiAskProceed()` / `crAskProceed()` / `aiParamsFinalize()` / `aiConfirmStep()` / `crConfirmCost()` 全部保留；`renderTaskProgress()` 建卡闸门改为 `log.length > 0 || existingCard`，没有执行明细的失败一律不建卡，已经在跑的卡仍就地翻失败态并显示原因，且预期内失败码（`isQuietBoardCode(detail.code)`）不把在跑的卡翻红。
 - 验证：本批红测 **12/12**；回归 `test_tech_chat_card_noise_and_quiet_board_failures_red` + `test_tech_board_bridge_protocol_red` + `test_cost_review_single_primary_and_drop_run_step_red` + `test_tech_params_autofill_and_soft_gates_red` + `test_integration_params_tab_single_primary_and_auto_fill_red` 合计 **93/93**；`node --check` 覆盖 `agent-chat.js` / `assembly-integration.js` / `cost-review.js`；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **934 项 / 0 失败 / 7 跳过**；`git diff --check` 通过。
 - 边界：未改 `cpq:tech-board` 信封、七个事件、`tech:command` 方向与 projectId/stage 校验，未改桥的 `DEFAULT_TIMEOUT` 与 `QUIET_FAILURE_CODES`，未新增后端路由 / 字段 / Agent 工具，未删动作注册与业务实现。本批为本地修改，未提交、未推送。
+
+## 53. 本批（## 47–52）提交、双远端推送与 34 服务器部署记录（9-14）
+
+- 提交：`efef393` 技术工艺收口链路修复：`aiSetTab` 归位 + 收口动作 deferred + 失败不建常驻卡片；并落地并行批次（28 个文件，1640 插入 / 139 删除），覆盖 ## 47 零件清单批量按钮下线、## 48 2.1 主按钮三段式、## 49 1.2/1.3 主按钮命名与意见选填、## 50 2.2 组装工艺收口与作用域泄漏、## 51 只读横幅下线、## 52 收口动作超时与失败卡降噪。
+- 推送：`python3 scripts/push_remotes.py --check` → `python3 scripts/push_remotes.py`，GitLab 与 GitHub `20260909` 均推送并回读成功；`git ls-remote` 双远端与本地 HEAD 都是 `efef393`。
+- 部署（用户指令「部署0909到34」）：172.16.10.34 `/home/wugefei/CPQ/cpq_agent`（分支 `20260909`）`git fetch gitlab 20260909` → `checkout` → `pull --ff-only` 到 `efef393`；按既有顺序先停 8012 子进程再停 8010 主进程、等端口释放后重启 8010（新 PID 1186450，子进程 8012 新 PID 1186498 由主进程拉起）。`http://127.0.0.1:8010/` 与 `/api/health` 均 2xx 且 `status=ok`（`cadquery_available: true`），内网 `http://172.16.10.34:8010/` 实测 200。
+- 边界：部署只 fast-forward 更新 tracked 文件，未删改服务器上的 `cpq_settings.json`、`cpq_history/`、`rule_history/`、`tech_data/`、`product_images/` 等持久化数据；未动同机 8013 / 8080 上的其它服务；未创建 MR/tag/Release。
