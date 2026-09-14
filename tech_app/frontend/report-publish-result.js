@@ -81,6 +81,8 @@ rpStart();
   window.TechBoardRuntime.registerActions({
     publishProcessReport: {
       label: '发布报告',
+      role: 'primary',
+      order: 10,
       run: async () => {
         const button = document.querySelector('#rpPrimary');
         if (!button) return { ok: false, error: { code: 'not-ready', message: '报告尚未审核通过，暂不能发布。' } };
@@ -97,16 +99,22 @@ rpStart();
     },
     refreshProcessReport: {
       label: '刷新发布报告',
+      role: 'aux',
+      order: 40,
       run: async () => { try { return await rpRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
       getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
     },
     sendReportToQuote: {
       label: '回传销售经理继续报价',
+      role: 'aux',
+      order: 20,
       run: () => rpSendToQuote(),
       getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
     },
     createReportNewVersion: {
       label: '新建报告版本',
+      role: 'aux',
+      order: 30,
       run: () => rpNewVersion(),
       getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
     },

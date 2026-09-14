@@ -114,31 +114,43 @@ srStart();
   window.TechBoardRuntime.registerActions({
     saveProcessReport: {
       label: '保存',
+      role: 'aux',
+      order: 20,
       run: () => srBoardRun(false),
       getState: () => ({ visible: Boolean(document.querySelector('#srSave')), enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     submitProcessReportReview: {
       label: '提交审核',
+      role: 'primary',
+      order: 10,
       run: () => srBoardRun(true),
       getState: () => ({ visible: Boolean(document.querySelector('#srSubmit')), enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     refreshProcessReport: {
       label: '刷新汇总报告',
+      role: 'aux',
+      order: 60,
       run: async () => { try { return await srRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
       getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     generateProcessReportDraft: {
       label: '生成报告草稿',
+      role: 'aux',
+      order: 30,
       run: () => srGenerateDraft(),
       getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     updateProcessReportFields: {
       label: '更新报告字段',
+      role: 'aux',
+      order: 40,
       run: (payload) => srUpdateFields(payload || {}),
       getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     saveProcessReportDistribution: {
       label: '保存发布范围',
+      role: 'aux',
+      order: 50,
       run: (payload) => srSaveDistribution(payload || {}),
       getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
     },

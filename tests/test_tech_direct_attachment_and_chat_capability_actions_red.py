@@ -23,7 +23,9 @@ class TechDirectAttachmentAndChatCapabilitiesContract(unittest.TestCase):
         attach_button = re.search(r'<button[^>]+id="ocChatAttachBtn"[^>]*>(.*?)</button>', HTML, re.S)
         self.assertIsNotNone(attach_button)
         self.assertIn('aria-label="上传附件"', attach_button.group(0))
-        self.assertRegex(attach_button.group(0), r'<i[^>]+ti-paperclip')
+        # 角标回形针由「报价 / 技术工艺输入区统一」批次移除：＋ 只保留 ti-plus 主字形。
+        self.assertRegex(attach_button.group(0), r'<i[^>]+ti-plus')
+        self.assertNotRegex(attach_button.group(0), r'ti-paperclip')
         self.assertNotIn("＋", attach_button.group(0))
         self.assertNotRegex(attach_button.group(0), r'aria-(?:haspopup|controls|expanded)')
         file_input = re.search(r'<input[^>]+id="ocChatFileInput"[^>]*>', HTML, re.S)

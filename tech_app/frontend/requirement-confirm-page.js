@@ -33,7 +33,11 @@ function cfRender() {
   const fields = [['需求编号',cfRequirement.requirement_no],['需求名称',cfRequirement.title],['需求类型',cfLabel('requirement_type',data.requirement_type)],['优先级',cfLabel('priority',data.priority)],['BU',cfLabel('bu',data.bu)],['创建人',cfRequirement.created_by],['新旧客户',cfLabel('customer_type',data.customer_type)],['最终客户',data.final_customer_name],['客户行业',cfLabel('customer_industry',data.customer_industry)],['项目编码',data.project_code],['年预测量',data.annual_forecast],['期望交付',data.first_sample_due]];
   document.querySelector('#app').innerHTML = `<section class="workflow-section"><div class="main-workflow"><div class="main-step-wrapper"><div class="main-step active"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div><div class="sub-labels-row"><span class="sub-label completed">1.1 创建</span><span class="sub-label-arrow">→</span><span class="sub-label active">1.2 确认</span><span class="sub-label-arrow">→</span><span class="sub-label">1.3 审核</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div></div></section><section class="title-section"><div class="title-row"><h1 class="form-title">${cfEsc(cfRequirement.title || '工艺评估需求单')}</h1><span class="status-badge">${cfEsc(status)}</span></div></section><section class="pdf-section"><div class="pdf-header"><div class="pdf-title">${cfIcon('doc')}工艺评估需求表单（点击查看详情）</div></div><div class="pdf-preview"><button class="pdf-thumbnail" id="previewForm" type="button">${cfIcon('pdf')}<span>预览 PDF</span></button><div class="pdf-info"><div class="pdf-info-title">需求基本信息</div><div class="info-list">${fields.map(([label,value]) => `<div class="info-item"><span class="info-label">${label}</span><span class="info-value">${cfEsc(value || '—')}</span></div>`).join('')}</div><div class="pdf-actions"><button class="pdf-action-btn" id="viewForm" type="button">◉ 查看完整表单</button><button class="pdf-action-btn" id="downloadForm" type="button">⇩ 下载 PDF</button><button class="pdf-action-btn ai-check-btn" id="runAiCheck" type="button">⚡ AI 检查</button></div></div></div></section><section class="ai-check-section"><div class="section-title">⚡ AI 检查结果</div><div class="ai-result-box"><div class="ai-result-header"><span class="ai-badge">⚡ 工艺评估需求单确认表</span><span class="ai-note">${cfEsc(cfAiNote())}</span></div><table class="confirm-table"><thead><tr><th>确认项目</th><th>确认结果</th><th>补充说明</th></tr></thead><tbody>${cfPrecheckRows()}</tbody></table></div></section><section class="opinion-section"><div class="section-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>提交意见</div><textarea id="confirmationNote" class="opinion-textarea" maxlength="3000" placeholder="请输入审批意见...">${cfEsc(cfRequirement.confirmation_note || '')}</textarea><div class="opinion-hint"><span style="color:var(--color-red)">*</span> 必填，最多可输入 3000 字</div></section><footer class="footer-bar"><div class="footer-left"><a class="btn btn-secondary" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">← 上一步</a></div><div class="footer-right"><button class="btn btn-secondary" id="bringAi" type="button">⚡ AI 结果带入</button><button class="btn btn-danger" id="returnDraft" type="button">× 驳回</button><button class="btn btn-primary" id="confirmPass" type="button">✓ 通过</button></div></footer><div class="modal-overlay" id="formModal"><div class="modal"><div class="modal-header"><span class="modal-title">工艺评估需求单</span><button class="modal-close" id="closeModal" type="button">×</button></div><div class="modal-content"><img class="source-preview" src="${cfSourceUrl()}" alt="项目原始图纸"><a class="modal-link" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">打开可编辑的完整需求表单</a></div></div></div>`;
   cfBind();
+  cfPublishStatus();
 }
+
+// 渲染出的状态徽标文本原样上报给父壳（统一标题行提示位）；独立打开（无运行时）时不通信。
+function cfPublishStatus(){const badge=document.querySelector('.title-section .title-row .status-badge');const text=(badge&&badge.textContent||'').trim();const runtime=window.TechBoardRuntime;if(runtime&&typeof runtime.publishStatus==='function')runtime.publishStatus(text,'info');}
 
 function cfBind() {
   cfMountRecommendationSection();
@@ -132,6 +136,8 @@ cfRender = function () {
     // 的追加写法写入既有 #confirmationNote，不覆盖人工已写内容，也不动任何状态。
     applyConfirmationNote: {
       label: '带入确认意见',
+      role: 'aux',
+      order: 30,
       run: ({ note } = {}) => {
         const applied = cfAppendNote(note);
         return applied ? { ok: true } : { ok: false, error: { code: 'note-target-missing', message: '看板未找到确认意见输入框或意见为空。' } };
@@ -142,16 +148,22 @@ cfRender = function () {
     // refresh-data：复用既有 cfStart() 重新拉需求单与预检并重绘，不新增读取逻辑。
     refreshData: {
       label: '刷新需求确认页',
+      role: 'aux',
+      order: 40,
       run: async () => { await cfStart(); return { ok: true }; },
       getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#confirmPass')), busy: cfBoardBusy }),
     },
     confirmRequirement: {
       label: '✓ 通过确认',
+      role: 'primary',
+      order: 10,
       run: () => cfBoardRun('confirm'),
       getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.enabled, busy: state.busy }; },
     },
     returnRequirementDraft: {
       label: '× 驳回',
+      role: 'aux',
+      order: 20,
       run: () => cfBoardRun('return'),
       getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.back && !state.busy, busy: state.busy }; },
     },

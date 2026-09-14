@@ -64,9 +64,13 @@ const PART_FLOW_VIEWS = ["drawing-overview", "parts-list", "part-detail", "part-
 const BACK_TO_PARTS_LIST = "返回零件清单";
 const BACK_TO_PART_DETAIL = "返回零件详情";
 const status = (msg, busy = false) => {
-  $("status").textContent = (busy ? "处理中 · " : "") + msg;
+  const text = (busy ? "处理中 · " : "") + msg;
+  $("status").textContent = text;
   const card = $("statusCard");
   if (card) card.dataset.busy = String(busy);
+  // 同一段文字原样上报给父壳，由统一标题行的提示位显示；独立打开（无运行时）时不通信。
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.publishStatus === "function") runtime.publishStatus(text, "info");
 };
 
 // 抽屉里的折叠块（解析视图、待澄清问题、零件参数…）一律默认展开，由 HTML 上的
@@ -2124,6 +2128,8 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   window.TechBoardRuntime.registerActions({
     parseDrawing: {
       label: "开始解析",
+      role: "primary",
+      order: 10,
       deferred: true,
       run: () => {
         const button = $("btnParse");
@@ -2150,6 +2156,8 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",
+      role: "aux",
+      order: 20,
       deferred: true,
       run: () => startAllPartProcesses(),
       getState: () => {
@@ -2161,9 +2169,9 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         };
       },
     },
-    modelLookup: { label: "联网核验", run: () => runModelLookup(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
-    verify: { label: "校验修正", run: () => runVerification(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
-    searchComponents: { label: "重新检索零部件库", run: (payload) => runComponentMatch(payload || {}), getState: () => ({ visible: true, enabled: Boolean(currentProject), busy: false }) },
+    modelLookup: { label: "联网核验", role: "aux", order: 30, run: () => runModelLookup(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
+    verify: { label: "校验修正", role: "aux", order: 40, run: () => runVerification(), getState: () => ({ visible: true, enabled: Boolean(currentIR), busy: false }) },
+    searchComponents: { label: "重新检索零部件库", role: "aux", order: 50, run: (payload) => runComponentMatch(payload || {}), getState: () => ({ visible: true, enabled: Boolean(currentProject), busy: false }) },
   });
 }
 /* --------------------------------------------------------------------------- //
@@ -2528,6 +2536,8 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   window.TechBoardRuntime.registerActions({
     refreshData: {
       label: "刷新看板数据",
+      role: "aux",
+      order: 60,
       // 纯刷新（无 edits）只重播解析摘要；带 edits 时是 Agent 改完零件参数后经桥
       // 触发的刷新，复用既有 refreshAfterChatEdit（拉 IR / 重生几何 / 刷版本）。
       run: (payload) => {

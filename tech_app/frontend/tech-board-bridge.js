@@ -30,6 +30,7 @@
     TASK_COMPLETED: 'task-completed',
     TASK_FAILED: 'task-failed',
     SELECTION_CHANGED: 'selection-changed',
+    BOARD_STATUS: 'board-status',
   };
 
   var frame = null;

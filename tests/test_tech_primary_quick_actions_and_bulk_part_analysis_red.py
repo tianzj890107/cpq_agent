@@ -21,9 +21,12 @@ class TechPrimaryQuickActionsAndBulkAnalysisContract(unittest.TestCase):
         self.assertRegex(WB_JS, r'classList\.(?:toggle|add)\(["\']primary["\']')
 
     def test_drawing_chat_has_primary_bulk_process_action(self):
-        self.assertIn("runAllPartProcesses", WB_JS)
-        self.assertIn("一键生成全部工艺推荐", WB_JS + WB_HTML)
-        self.assertRegex(WB_JS, r"['\"]drawing['\"][\s\S]{0,500}runAllPartProcesses")
+        # 契约更新（「右侧看板按钮统一到左侧会话操作栏」批次）：批量入口不再由父壳写死，
+        # 父壳只按看板动作快照渲染；2.1 唯一主按钮是「开始解析」，批量入口是描边动作。
+        self.assertIn("runAllPartProcesses", DRAWING_JS)
+        self.assertIn("一键生成全部工艺推荐", DRAWING_JS + WB_JS)
+        self.assertRegex(DRAWING_JS, r"runAllPartProcesses\s*:\s*\{[\s\S]{0,600}role\s*:")
+        self.assertRegex(WB_JS, r"data-tech-action", "批量入口必须由看板快照动态渲染到左侧操作栏")
 
     def test_parts_board_registers_deferred_bulk_process_action(self):
         self.assertRegex(
@@ -58,7 +61,7 @@ class TechPrimaryQuickActionsAndBulkAnalysisContract(unittest.TestCase):
         self.assertRegex(COST_JS, r'async\s+function\s+crRunAll\s*\(')
         self.assertRegex(COST_JS, r'crRunAll[\s\S]{0,900}crRunParts\(false\)[\s\S]{0,900}crRunAssembly\(')
 
-    def test_bulk_buttons_are_primary_but_secondary_navigation_stays_outline(self):
+    def test_primary_slot_stays_blue_and_navigation_stays_outline(self):
         self.assertRegex(WB_HTML, r'id="techChatPrimary"[^>]*')
         self.assertRegex(WB_JS, r'setChatButton\([^)]*techChatPrimary[\s\S]{0,500}(?:primary|variant)')
         self.assertNotRegex(WB_HTML, r'id="techChatPrev"[^>]*class="[^"]*primary')

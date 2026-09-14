@@ -84,37 +84,20 @@
     return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
   }
 
-  // 每步“主操作/次要操作”代理：这里只登记语义化业务动作名与兜底文案，真正的实现留在
-  // 右侧看板里（页面 JS 通过 TechBoardRuntime.registerActions 注册）。父壳点击底栏时
-  // 调 TechBoardBridge.executeAction(actionName)，按钮的可见 / 可用 / busy 全部来自
-  // 看板回传的 action-state —— 本壳不再查询 iframe DOM，也没有任何 selector。
-  const STAGE_ACTIONS = {
-    'requirement-create':  { primary: 'submitRequirement',       primaryLabel: '提交确认', secondary: 'saveRequirementDraft', secondaryLabel: '保存草稿' },
-    'requirement-confirm': { primary: 'confirmRequirement',      primaryLabel: '✓ 通过确认', secondary: 'returnRequirementDraft', secondaryLabel: '× 驳回' },
-    'requirement-review':  { primary: 'submitRequirementReview', primaryLabel: '提交审核意见', secondary: null, secondaryLabel: '' },
-    'drawing':             { primary: 'parseDrawing',            primaryLabel: '▶ 开始解析', secondary: null, secondaryLabel: '' },
-    'process':             { primary: 'sendIntegrationToFinance', primaryLabel: '✓ 确认工艺并发送财务', secondary: 'runIntegration', secondaryLabel: '▶ 开始整合分析' },
-    'cost':                { primary: 'runCostReview',           primaryLabel: '一键测算全部成本', secondary: 'confirmCostReview', secondaryLabel: '✓ 确认成本' },
-    'summary':             { primary: 'submitProcessReportReview', primaryLabel: '提交审核', secondary: 'saveProcessReport', secondaryLabel: '保存' },
-    'report-review':       { primary: 'approveProcessReport',    primaryLabel: '审核通过并发布', secondary: 'rejectProcessReport', secondaryLabel: '退回汇总' },
-    // 3.3 的两个业务动作：发布报告（主）+ 回传销售经理继续报价（次）。后者走报告语义
-    // 明确的专用路由，已发布后才可用；父壳只登记语义动作名，实现留在右侧看板。
-    'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: 'sendReportToQuote', secondaryLabel: '回传销售经理继续报价' },
-  };
-
-  // 左侧统一操作栏（第 16 步）的九阶段描述表：每个 stage 一条，键覆盖全部九个
-  // stage id，不只为 2.1–2.3 写死。ai / primary / secondary 只引用既有 STAGE_ACTIONS
-  // 的语义化动作名，不复制任何业务逻辑；transfer 为 null 时把转交意图带进会话输入区。
-  const STAGE_CHAT_ACTIONS = {
-    'requirement-create':  { ai: null, primary: 'submitRequirement',      secondary: 'saveRequirementDraft',      transfer: null, prev: false, next: true },
-    'requirement-confirm': { ai: null, primary: 'confirmRequirement',     secondary: 'returnRequirementDraft',    transfer: null, prev: true,  next: true },
-    'requirement-review':  { ai: null, primary: 'submitRequirementReview', secondary: null,                       transfer: null, prev: true,  next: true },
-    'drawing':             { ai: 'parseDrawing',    primary: 'parseDrawing',            bulk: 'runAllPartProcesses', secondary: null, transfer: null, prev: true, next: true },
-    'process':             { ai: 'runIntegration',  primary: 'sendIntegrationToFinance', secondary: 'runIntegration', transfer: null, prev: true, next: true },
-    'cost':                { ai: 'runCostReview',   primary: 'runCostReview',           secondary: 'confirmCostReview', transfer: null, prev: true, next: true },
-    'summary':             { ai: null, primary: 'submitProcessReportReview', secondary: 'saveProcessReport',    transfer: null, prev: true,  next: true },
-    'report-review':       { ai: null, primary: 'approveProcessReport',   secondary: 'rejectProcessReport',        transfer: null, prev: true,  next: true },
-    'report-publish':      { ai: null, primary: 'publishProcessReport',   secondary: 'sendReportToQuote',          transfer: null, prev: true,  next: false },
+  // 九阶段壳导航表：每个 stage 只登记「上一步 / 下一步 / 转交」这些壳结构标记，绝不再
+  // 出现任何业务动作名。业务按钮的 label / role / order / hint / 可见 / 可用全部来自
+  // 看板动作快照（TechBoardBridge.snapshot().actions），父壳只渲染与转发，不维护兜底
+  // 文案表，也不按动作名写分支；实现始终留在右侧看板（TechBoardRuntime.registerActions）。
+  const STAGE_CHAT_FLOW = {
+    'requirement-create':  { prev: false, next: true,  transfer: true },
+    'requirement-confirm': { prev: true,  next: true,  transfer: true },
+    'requirement-review':  { prev: true,  next: true,  transfer: true },
+    'drawing':             { prev: true,  next: true,  transfer: true },
+    'process':             { prev: true,  next: true,  transfer: true },
+    'cost':                { prev: true,  next: true,  transfer: true },
+    'summary':             { prev: true,  next: true,  transfer: true },
+    'report-review':       { prev: true,  next: true,  transfer: true },
+    'report-publish':      { prev: true,  next: false, transfer: true },
   };
 
   // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
@@ -171,7 +154,9 @@
 
   const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
 
-  const state = { stage: '', project: '', taskId: '', progress: null };
+  // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
+  // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
+  const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardNotice: '' };
   // 左侧「失败重试」重跑的最近一次经桥动作：{ kind, name, payload, label }。
   // 只在真正发出看板命令时记录，重试复用同一条通道，不重新发明流程。
   let lastBoardAction = null;
@@ -298,11 +283,15 @@
   }
 
   // 看板的失败 / 超时 / 未就绪提示统一写进标题行的独立节点，不污染固定大标题。
+  // 提示位两种内容共存：未就绪 / 失败提示优先；提示清除后回落到最近一次收到的
+  // 步骤状态（board-status），而不是留空。
   function setBoardNotice(message) {
     const notice = $('techContextNotice');
     if (!notice) return;
-    notice.textContent = message || '';
-    notice.hidden = !message;
+    state.boardNotice = message || '';
+    const text = state.boardNotice || state.boardStatus || '';
+    notice.textContent = text;
+    notice.hidden = !text;
   }
 
   /* 代理页签的 active 以看板回传的真实视图为准，父壳只渲染，不自建状态。 */
@@ -488,7 +477,6 @@
         else if (action && action.stage) applyStage(action.stage, { project: state.project });
       });
     });
-    syncActionBar(null);
   }
   function escH(value) {
     return String(value ?? '').replace(/[&<>"']/g, (char) => (
@@ -518,6 +506,10 @@
     if (!outlet) return;
     // 换页先断开旧看板：pending 命令作废、状态清空，避免新页面误用上一个 stage 的按钮。
     detachBoardBridge('stage-change');
+    // 上一步的步骤状态不能带到下一步：新页面自己的 board-status 到达前，提示位留空。
+    state.boardStatus = '';
+    state.boardNotice = '';
+    setBoardNotice('');
     const meta = stageMeta(state.stage);
     if (!meta) {
       setStateView('error', '未知步骤', '当前 stage 不在固定白名单内，已拒绝加载。', [
@@ -556,16 +548,14 @@
       // 新增工艺待办用 tech-task.html 承载建项流程，它不属于九阶段看板，没有运行时。
       if (stagePageHasRuntime()) attachBoardBridge(iframe);
       else setBoardNotice('');
-      syncActionBar();
       syncAgentStageContext();
       syncChatActions();
       renderContextSubsteps();
     });
     outlet.append(iframe);
-    // detach 后旧看板状态已清空：先按“未就绪”渲染一次标题行与底栏，等 load → ready
-    // 再用看板回传的 action-state 覆盖。
+    // detach 后旧看板状态已清空：先按“未就绪”渲染一次标题行与左侧操作栏，等
+    // load → ready 再用看板回传的 action-state 覆盖。
     renderContextSubsteps();
-    syncActionBar();
     syncChatActions();
   }
 
@@ -582,13 +572,11 @@
       Promise.resolve(bridge.attach(frame, {
         projectId: state.project, stage: state.stage, taskId: state.taskId,
       })).then(() => {
-        syncActionBar();
         renderContextSubsteps();
         syncAgentStageContext();
         syncChatActions();
       }).catch((error) => {
         setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。');
-        syncActionBar();
         syncChatActions();
       });
     } catch (error) {
@@ -601,32 +589,8 @@
     try { bridge.detach(reason || 'stage-change'); } catch (error) { /* 忽略：切换流程优先 */ }
   }
 
-  /* 底栏主/次操作代理：文案、可见、可用、busy 全部来自看板回传的 action-state；点击只
-     发语义化动作名，真正的业务实现留在右侧看板里。看板未就绪时按钮禁用并给出明确提示，
-     超时 / 业务失败也会显示在标题行提示位，绝不无声返回。 */
-  function renderActionButton(button, actionName, fallbackLabel, role) {
-    if (!button) return;
-    if (!actionName) {
-      button.hidden = true;
-      button.disabled = true;
-      button.onclick = null;
-      button.title = '';
-      return;
-    }
-    const snapshot = boardSnapshot();
-    const entry = actionName ? boardActionState(actionName) : null;
-    const label = (entry && entry.label) || fallbackLabel || actionName;
-    button.hidden = Boolean(entry && entry.visible === false);
-    button.textContent = label;
-    button.dataset.actionRole = role;
-    button.disabled = !entry || entry.enabled === false || entry.busy === true || !state.project;
-    button.title = !entry
-      ? '看板尚未就绪，请等待右侧步骤加载完成。'
-      : (entry.busy ? `${label}：正在执行…` : label);
-    button.onclick = () => runBoardAction(actionName, label, role);
-    if (!snapshot || !snapshot.ready) button.title = '看板尚未就绪，请等待右侧步骤加载完成。';
-  }
-
+  /* 业务动作统一出口：只发语义化动作名，真正的业务实现留在右侧看板里。看板未就绪时
+     给出明确提示，超时 / 业务失败也会显示在标题行提示位，绝不无声返回。 */
   function runBoardAction(actionName, label, role) {
     if (!state.project) return;
     const bridge = boardBridge();
@@ -640,66 +604,55 @@
     lastBoardAction = { kind: 'action', name: actionName, label, role };
     lastActionFailed = false;
     Promise.resolve(bridge.executeAction(actionName, { label, role }))
-      .then(() => { lastActionFailed = false; syncActionBar(); syncChatActions(); })
+      .then(() => { lastActionFailed = false; syncChatActions(); })
       .catch((error) => {
         lastActionFailed = true;
         setBoardNotice((error && error.message) || `${label || actionName} 执行失败`);
-        syncActionBar();
         syncChatActions();
       });
   }
 
-  function syncActionBar() {
-    const actions = STAGE_ACTIONS[state.stage] || null;
-    const primary = $('techPrimary');
-    const secondary = $('techSecondary');
-    // 每次同步先清掉上一轮角色 class，避免切换 stage 或看板重建后残留。
-    if (primary) primary.classList.remove('is-filled', 'is-outline');
-    if (secondary) secondary.classList.remove('is-filled', 'is-outline');
-    if (!actions) {
-      if (primary) { primary.hidden = true; primary.disabled = true; }
-      if (secondary) { secondary.hidden = true; secondary.disabled = true; }
-      return;
-    }
-    // 2.2「组装与整合」：按看板真实产出反转主次 —— 参数推荐与组装工艺都已生成时，
-    // 主操作才是「确认工艺并发送财务」；只生成一项、busy 或尚未分析时主操作仍是
-    // 「开始整合分析」。analyzed 来自看板动作状态，父壳不按按钮文案猜测。
-    if (state.stage === 'process' && primary && secondary) {
-      const analyzed = Boolean((boardActionState(actions.primary) || {}).analyzed);
-      if (analyzed) {
-        primary.classList.add('is-filled');
-        secondary.classList.add('is-outline');
-      } else {
-        secondary.classList.add('is-filled');
-        primary.classList.add('is-outline');
-      }
-    }
-    renderActionButton(primary, actions.primary, actions.primaryLabel, 'primary');
-    renderActionButton(secondary, actions.secondary, actions.secondaryLabel, 'secondary');
-  }
-
   /* ---------------------------------------------------- 左侧统一操作栏（第 16 步）
-   * 与报价 Agent 同级、按 stage 动态变化：文案 / 可见 / 可用全部来自九阶段描述表
-   * STAGE_CHAT_ACTIONS 与看板回传的 action-state，不查 iframe DOM、不写死 selector。
-   * 主 / 次 / AI 走 executeAction，上一步 / 下一步走 applyStage，附件直接打开输入区
-   * 的隐藏文件选择器，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
-  function chatActionEntry() {
-    return STAGE_CHAT_ACTIONS[state.stage] || null;
+   * 唯一的业务动作入口：按钮完全由看板动作快照驱动，父壳只渲染与转发，不查 iframe
+   * DOM、不写死 selector、不按动作名写分支。label / role / order / hint / visible /
+   * enabled / busy 全部来自看板；role === 'primary' 的那一个进 #techChatPrimary 槽位，
+   * 其余紧随其后描边渲染。点击一律走 TechBoardBridge.executeAction，上一步 / 下一步走
+   * applyStage，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
+  function chatFlow() {
+    return STAGE_CHAT_FLOW[state.stage] || null;
   }
-  function chatActionLabel(name) {
-    const routing = STAGE_ACTIONS[state.stage] || {};
-    if (name === routing.primary) return routing.primaryLabel || name;
-    if (name === routing.secondary) return routing.secondaryLabel || name;
-    const entry = chatActionEntry();
-    if (entry && name === entry.ai) return 'AI 执行';
-    return name;
-  }
-  function boardActionReady(name) {
-    if (!name) return false;
+  function boardActionEntries() {
     const snapshot = boardSnapshot();
-    const entry = boardActionState(name);
-    if (!snapshot || !snapshot.ready || !entry) return false;
-    return entry.enabled !== false && entry.busy !== true && Boolean(state.project);
+    const actions = (snapshot && snapshot.actions) || {};
+    const entries = [];
+    Object.keys(actions).forEach((name) => {
+      const entry = actions[name];
+      if (!entry || entry.visible === false) return;
+      entries.push(Object.assign({}, entry, { name }));
+    });
+    // order 升序；缺省 order 排最后，同 order 保持注册顺序（sort 稳定）。
+    entries.sort((a, b) => {
+      const ao = a.order == null ? Number.MAX_SAFE_INTEGER : Number(a.order);
+      const bo = b.order == null ? Number.MAX_SAFE_INTEGER : Number(b.order);
+      return ao - bo;
+    });
+    return entries;
+  }
+  function primaryActionName(entries) {
+    const primaries = (entries || []).filter((entry) => entry && entry.role === 'primary');
+    if (!primaries.length) return '';
+    return (primaries[0] && primaries[0].name) || '';
+  }
+  function actionTooltip(entry, opts) {
+    const options = opts || {};
+    const item = entry || {};
+    const label = item.label || options.label || item.name || '';
+    const hint = item.hint ? String(item.hint) : '';
+    if (options.busy || item.busy) return `${label}（执行中）`;
+    if (item.enabled === false) return `${label}（${hint || '当前不可用'}）`;
+    if (options.needsProject && !state.project) return `${label}（请先打开项目）`;
+    const text = hint ? `${label}：${hint}` : label;
+    return options.primary ? `${text}（当前步骤主操作）` : text;
   }
   function setChatButton(button, opts) {
     if (!button) return;
@@ -710,20 +663,38 @@
     // 统一在这里按 variant 标记，不在各处手写 class。
     button.classList.toggle('primary', opts.variant === 'primary');
     if (opts.label) button.textContent = opts.label;
-    button.title = opts.title || opts.label || '';
+    // 悬浮 tooltip 同时写 title 与 aria-label：禁用原因由 actionTooltip() 统一给出。
+    const tooltip = opts.title || opts.label || '';
+    button.title = tooltip;
+    button.setAttribute('aria-label', tooltip);
   }
-  // 附件：与输入区回形针同一个入口，点击在同一次用户点击链路里直接打开隐藏的
-  // 原生文件选择器 —— 不弹菜单、不先导航到上传页面，否则会失去 user activation。
-  function openChatFilePicker() {
-    const input = $('ocChatFileInput');
-    if (input) input.click();
+  // 动态业务按钮：先清掉上一批 [data-tech-action] 再重建，统一插到 #techChatPrimary
+  // 之后（主按钮在前、其余动作紧随其后、导航按钮在后），每个都带 title 与 aria-label。
+  function syncChatActionList(entries, primaryName) {
+    const bar = $('techChatActions');
+    const primaryButton = $('techChatPrimary');
+    if (!bar || !primaryButton) return;
+    bar.querySelectorAll('[data-tech-action]').forEach((node) => node.remove());
+    let anchor = primaryButton;
+    (entries || []).forEach((entry) => {
+      if (!entry || !entry.name || entry.name === primaryName) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('data-tech-action', entry.name);
+      const tooltip = actionTooltip(entry, { needsProject: !state.project });
+      button.textContent = entry.label || entry.name;
+      button.title = tooltip;
+      button.setAttribute('aria-label', tooltip);
+      button.disabled = entry.enabled === false || entry.busy === true || !state.project;
+      button.addEventListener('click', () => runBoardAction(entry.name, entry.label || entry.name, 'aux'));
+      // 插到当前锚点之后：等价于 anchor.insertAdjacentElement('afterend')，返回的新
+      // 节点成为下一个锚点，保证「主按钮在前、其余动作紧随其后」的固定顺序。
+      anchor.insertAdjacentElement('afterend', button);
+      anchor = button;
+    });
   }
+  // 转交：没有对应业务动作，把转交意图带进会话输入区，由用户确认后发送。
   function transferCurrentTask() {
-    const entry = chatActionEntry();
-    if (entry && entry.transfer) {
-      runBoardAction(entry.transfer, '转交任务', 'transfer');
-      return;
-    }
     const input = $('ocInput');
     if (!input) return;
     input.value = '请把当前任务转交：';
@@ -737,95 +708,85 @@
   function syncChatActions() {
     const bar = $('techChatActions');
     if (!bar) return;
-    const entry = chatActionEntry();
-    if (!entry) {
+    const flow = chatFlow();
+    if (!flow) {
       bar.hidden = true;
       return;
     }
     bar.hidden = false;
-    setChatButton($('techChatAttach'), { label: '附件', enabled: true });
-    // AI 执行与主操作指向同一动作时不重复渲染第二个同样的蓝色按钮，只保留主操作入口。
-    setChatButton($('techChatAiRun'), {
-      label: 'AI 执行',
-      visible: Boolean(entry.ai) && entry.ai !== entry.primary,
-      enabled: boardActionReady(entry.ai),
-    });
+    // 主按钮只认看板声明的 role === 'primary'：没有就隐藏，不猜、不兜底。
+    const entries = boardActionEntries();
+    const primaryName = primaryActionName(entries);
+    const primaryEntry = entries.filter((entry) => entry.name === primaryName)[0] || null;
     setChatButton($('techChatPrimary'), {
-      label: chatActionLabel(entry.primary),
-      visible: Boolean(entry.primary),
-      enabled: boardActionReady(entry.primary),
+      label: primaryEntry ? primaryEntry.label : '主要操作',
+      visible: Boolean(primaryEntry),
+      enabled: Boolean(primaryEntry) && primaryEntry.enabled !== false
+        && primaryEntry.busy !== true && Boolean(state.project),
       variant: 'primary',
+      title: primaryEntry ? actionTooltip(primaryEntry, { primary: true }) : '',
     });
-    setChatButton($('techChatBulk'), {
-      label: '一键生成全部工艺推荐',
-      visible: Boolean(entry.bulk),
-      enabled: boardActionReady(entry.bulk),
-      variant: 'primary',
-    });
-    setChatButton($('techChatSecondary'), {
-      label: chatActionLabel(entry.secondary),
-      visible: Boolean(entry.secondary),
-      enabled: boardActionReady(entry.secondary),
-    });
-    const prevTarget = entry.prev ? STAGES[Math.max(0, stageIndex(state.stage) - 1)] : null;
-    const nextIdx = stageIndex(state.stage);
-    const nextTarget = entry.next && nextIdx >= 0 ? STAGES[nextIdx + 1] : null;
+    // 其余动作紧随主按钮动态渲染；同一个动作不会既当主按钮又出现在列表里。
+    syncChatActionList(entries, primaryName);
+    const idx = stageIndex(state.stage);
+    const prevTarget = flow.prev && idx > 0 ? STAGES[idx - 1] : null;
+    const nextTarget = flow.next && idx >= 0 ? STAGES[idx + 1] : null;
+    const prevEnabled = Boolean(prevTarget) && (Boolean(state.project) || prevTarget.id === 'requirement-create');
+    const nextEnabled = Boolean(nextTarget) && (Boolean(state.project) || nextTarget.id === 'requirement-create');
+    const noProjectHint = state.project ? '' : '请先打开项目';
     setChatButton($('techChatPrev'), {
       label: '上一步',
-      visible: Boolean(entry.prev),
-      enabled: Boolean(prevTarget) && (Boolean(state.project) || prevTarget.id === 'requirement-create'),
+      visible: Boolean(flow.prev),
+      enabled: prevEnabled,
+      title: actionTooltip({ label: '上一步', enabled: prevEnabled, hint: noProjectHint }, {}),
     });
     setChatButton($('techChatNext'), {
       label: '下一步',
-      visible: Boolean(entry.next),
-      enabled: Boolean(nextTarget) && (Boolean(state.project) || nextTarget.id === 'requirement-create'),
+      visible: Boolean(flow.next),
+      enabled: nextEnabled,
+      title: actionTooltip({ label: '下一步', enabled: nextEnabled, hint: noProjectHint }, {}),
     });
-    setChatButton($('techChatTransfer'), { label: '转交任务', enabled: Boolean(state.project) });
+    const transferEnabled = Boolean(flow.transfer) && Boolean(state.project);
+    setChatButton($('techChatTransfer'), {
+      label: '转交任务',
+      visible: Boolean(flow.transfer),
+      enabled: transferEnabled,
+      title: actionTooltip({ label: '转交任务', enabled: transferEnabled, hint: noProjectHint }, {}),
+    });
+    const retryEnabled = Boolean(lastBoardAction) && lastActionFailed && Boolean(state.project);
     setChatButton($('techChatRetry'), {
       label: '失败重试',
-      enabled: Boolean(lastBoardAction) && lastActionFailed && Boolean(state.project),
+      enabled: retryEnabled,
+      title: actionTooltip({ label: '失败重试', enabled: retryEnabled,
+        hint: lastBoardAction ? noProjectHint : '暂无可重试的动作' }, {}),
     });
   }
   function bindChatToolbar() {
-    const aiBtn = $('techChatAiRun');
     const primaryBtn = $('techChatPrimary');
-    const secondaryBtn = $('techChatSecondary');
     const prevBtn = $('techChatPrev');
     const nextBtn = $('techChatNext');
     const transferBtn = $('techChatTransfer');
-    const attachBtn = $('techChatAttach');
     const retryBtn = $('techChatRetry');
-    const bulkBtn = $('techChatBulk');
-    if (attachBtn) attachBtn.addEventListener('click', openChatFilePicker);
-    if (bulkBtn) bulkBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
-      if (entry && entry.bulk) runBoardAction(entry.bulk, '一键生成全部工艺推荐', 'primary');
-    });
     if (transferBtn) transferBtn.addEventListener('click', transferCurrentTask);
     if (retryBtn) retryBtn.addEventListener('click', replayLastBoardAction);
-    if (aiBtn) aiBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
-      if (entry && entry.ai) runBoardAction(entry.ai, chatActionLabel(entry.ai), 'ai');
-    });
+    // 主按钮点的是「当前快照里 role === 'primary' 的那一个动作」，不写死动作名。
     if (primaryBtn) primaryBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
-      if (entry && entry.primary) runBoardAction(entry.primary, chatActionLabel(entry.primary), 'primary');
-    });
-    if (secondaryBtn) secondaryBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
-      if (entry && entry.secondary) runBoardAction(entry.secondary, chatActionLabel(entry.secondary), 'secondary');
+      const entries = boardActionEntries();
+      const primaryName = primaryActionName(entries);
+      const entry = entries.filter((item) => item.name === primaryName)[0];
+      if (entry) runBoardAction(entry.name, entry.label, 'primary');
     });
     // 上一步 / 下一步复用既有 applyStage，与底栏共用同一条切步通道。
     if (prevBtn) prevBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
+      const flow = chatFlow();
       const idx = stageIndex(state.stage);
-      if (!entry || !entry.prev || idx <= 0) return;
+      if (!flow || !flow.prev || idx <= 0) return;
       applyStage(STAGES[idx - 1].id, { project: state.project });
     });
     if (nextBtn) nextBtn.addEventListener('click', () => {
-      const entry = chatActionEntry();
+      const flow = chatFlow();
       const idx = stageIndex(state.stage);
-      if (!entry || !entry.next || idx < 0 || idx >= STAGES.length - 1) return;
+      if (!flow || !flow.next || idx < 0 || idx >= STAGES.length - 1) return;
       applyStage(STAGES[idx + 1].id, { project: state.project });
     });
   }
@@ -1246,7 +1207,12 @@
         const message = event && event.payload && event.payload.message;
         if (message) setBoardNotice(message);
       }
-      syncActionBar();
+      // 阶段页把本页那行步骤状态（「已打开项目 …」/「就绪」/「本步已确认」…）原样
+      // 上报：这里只搬运 payload.text，不做二次加工，也不碰固定大标题与子页签。
+      if (type === 'board-status') {
+        state.boardStatus = String((event && event.payload && event.payload.text) || '');
+        setBoardNotice(state.boardNotice);
+      }
       syncChatActions();
       if (type === 'action-state' || type === 'selection-changed' || type === 'ready') {
         renderContextSubsteps();

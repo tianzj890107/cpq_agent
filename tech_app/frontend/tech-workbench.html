@@ -94,12 +94,12 @@
             <div class="oc-task-progress" id="ocTaskProgressHost" aria-live="polite" aria-label="任务执行进度"></div>
           </div>
         </div>
-        <!-- 左侧统一操作栏（第 16 步）：与报价 Agent 同级、按当前 stage 动态变化。
-             文案 / 可见 / 可用全部来自父壳的九阶段描述表 STAGE_CHAT_ACTIONS，
-             点击一律复用既有通道：主 / 次 / AI 走 TechBoardBridge.executeAction，上一步 /
-             下一步走 applyStage，附件直传走输入框隐藏文件输入，失败重试重跑最近一次动作。 -->
+        <!-- 左侧统一操作栏（第 16 步）：唯一的业务动作入口，与报价 Agent 同级。
+             业务按钮完全由看板动作快照动态渲染（label / role / order / hint / 可见 /
+             可用都来自看板，父壳不写死动作名，也不维护兜底文案表）；主 / 次业务动作走
+             TechBoardBridge.executeAction，上一步 / 下一步走 applyStage，附件上传经输入区
+             圆形 ＋ 打开隐藏文件输入，失败重试重跑最近一次动作。 -->
         <nav class="tech-chat-actions" id="techChatActions" aria-label="当前步骤操作">
-          <button type="button" id="techChatAttach">附件</button>
           <!-- 「任务文件」＝查看本项目已上传的文件（不是上传入口）。原在输入框内部，
                现归到本工具栏；上传新增走输入区左侧的圆形 +，两个入口各自复用既有逻辑。 -->
           <button type="button" class="oc-files-action" id="ocFilesAction">
@@ -115,16 +115,12 @@
           <button type="button" data-tech-capability="review">版本与校核审查</button>
           <button type="button" data-tech-capability="modelLookup">联网核验</button>
           <button type="button" data-tech-capability="verify">校验修正</button>
-          <!-- 2.1 批量入口：一键生成全部工艺推荐（蓝色 primary）。语义动作名
-               runAllPartProcesses 注册在看板 app.js，复用既有单零件 process 接口串行执行；
-               单零件「工艺推荐」仍留在零件行上，用于查看 / 编辑 / 单件重算。 -->
-          <button type="button" id="techChatBulk">一键生成全部工艺推荐</button>
-          <button type="button" id="techChatAiRun">AI 执行</button>
+          <!-- 唯一主按钮槽位：具体动作由看板快照的 role === 'primary' 决定，父壳只渲染。
+               其余业务动作（含 2.1 的「一键生成全部工艺推荐」等）紧随其后动态插入。 -->
+          <button type="button" id="techChatPrimary">主要操作</button>
           <button type="button" id="techChatPrev">上一步</button>
           <button type="button" id="techChatNext">下一步</button>
           <button type="button" id="techChatTransfer">转交任务</button>
-          <button type="button" id="techChatPrimary">主要操作</button>
-          <button type="button" id="techChatSecondary">次要操作</button>
           <button type="button" id="techChatRetry">失败重试</button>
         </nav>
         <div class="oc-composer">
@@ -137,7 +133,6 @@
             <div class="oc-inputbox oc-inputbox-single">
               <button class="oc-add" id="ocChatAttachBtn" type="button" aria-label="上传附件" title="上传附件">
                 <i class="ti ti-plus" aria-hidden="true"></i>
-                <i class="ti ti-paperclip oc-add-mark" aria-hidden="true"></i>
               </button>
               <input id="ocChatFileInput" type="file" multiple hidden
                      accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yaml,.yml" />
@@ -146,6 +141,7 @@
                         aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
+            <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
       </section>
@@ -190,8 +186,6 @@
           <div class="tech-action-left" id="techActionLeft">
             <button type="button" id="techPrev" class="tech-wb-btn secondary">← 上一步</button>
             <span class="tech-wb-now" id="techNowLabel"></span>
-            <button type="button" id="techSecondary" class="tech-wb-btn secondary" hidden></button>
-            <button type="button" id="techPrimary" class="tech-wb-btn primary" hidden></button>
           </div>
           <div class="tech-action-right" id="techActionRight">
             <button type="button" id="techNext" class="tech-wb-btn primary">下一步 →</button>

@@ -222,21 +222,30 @@
     @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 35% { opacity: 1; } }
 
     .chat-input-area { padding: 10px 16px; border-top: 0.5px solid var(--border-color); flex-shrink: 0; }
-    .chat-input-wrapper { display: flex; gap: var(--space-sm); align-items: center; }
-    .chat-input {
-      flex: 1; padding: 9px 10px;
-      border: 0.5px solid var(--border-secondary);
-      border-radius: 11px; background: var(--bg-secondary);
-      font-size: 14px; font-family: inherit; resize: none; outline: none;
+    /* 输入框下方说明行：口径与 agent-chat.css 的 .oc-disc 一致，正常文档流内撑出高度，
+       使报价与技术工艺两个工作台的输入区底边落在同一视觉基线上。 */
+    .oc-disc { margin-top: 9px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+    /* 单行圆角输入框：几何尺寸（min-height / border-radius / gap）与技术工艺
+       .oc-inputbox-single 逐项相等，配色改用本页 token。 */
+    .chat-input-wrapper {
+      display: flex; align-items: center; gap: 12px; min-height: 76px;
+      padding: 10px 12px 10px 20px;
+      border: 1px solid var(--border-color); border-radius: 24px; background: var(--bg-page);
     }
-    .chat-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,96,230,.12); }
+    .chat-input-wrapper:focus-within { border-color: var(--color-primary); }
+    .chat-input {
+      flex: 1; min-width: 0; max-height: 120px; padding: 0;
+      border: 0; background: transparent; color: var(--text-primary);
+      font-size: 15px; line-height: 24px; font-family: inherit; resize: none; outline: none;
+    }
+    .chat-input:focus { border-color: var(--color-primary); }
     .chat-send {
-      width: 38px; height: 38px; border: none; border-radius: 11px;
-      background: var(--gradient-ai); color: white; cursor: pointer;
+      width: 54px; height: 54px; border: none; border-radius: 50%;
+      background: var(--color-primary); color: white; cursor: pointer;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     .chat-send:disabled { opacity: 0.45; cursor: not-allowed; }
-    .chat-send .ti { font-size: 18px; color: white; }
+    .chat-send .ti { font-size: 22px; color: white; }
 
     /* ---------- 右侧区域 ---------- */
     .right-panel { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg-page); }
@@ -408,12 +417,15 @@
     .attach-chip .ti { font-size: 13px; color: var(--color-secondary); }
     .attach-chip .rm { cursor: pointer; color: var(--text-tertiary); font-size: 13px; }
     .attach-chip .rm:hover { color: var(--color-danger); }
+    /* 圆形 +：新增 / 上传附件，与技术工艺 .oc-add 同尺寸（查看已有文件仍在上方「任务文件」）。 */
     .chat-attach-btn {
-      width: 38px; height: 38px; border: 0.5px solid var(--border-secondary); border-radius: 11px;
-      background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
+      width: 50px; height: 50px; flex: 0 0 50px; border: 0; border-radius: 50%;
+      background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;
       display: flex; align-items: center; justify-content: center;
     }
-    .chat-attach-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .chat-attach-btn:hover { background: var(--bg-tertiary); }
+    .chat-attach-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .chat-attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .chat-attach-btn .ti { font-size: 18px; }
 
     /* 键值表单 */
@@ -724,15 +736,16 @@
         <div class="attach-chips" id="attachChips"></div>
         <div class="chat-input-wrapper">
           <button class="chat-attach-btn" id="chatAttachBtn" title="上传需求文档（Word/PDF/表格/图片/文本）">
-            <i class="ti ti-paperclip"></i>
+            <i class="ti ti-plus"></i>
           </button>
           <input id="chatFileInput" type="file" multiple hidden
             accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
-          <textarea class="chat-input" id="chatInput" rows="2" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea class="chat-input" id="chatInput" rows="1" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
           <button class="chat-send" id="chatSend" onclick="sendFromInput()">
             <i class="ti ti-send"></i>
           </button>
         </div>
+        <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
       </div>
     </div>
 

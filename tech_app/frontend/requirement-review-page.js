@@ -33,8 +33,10 @@ async function rrStart(){if(!rrPid){if(window.TechEmbed&&window.TechEmbed.embedd
 rrStart();
 
 // 审核页沿用确认页展示口径，确保信用等级在流程中可追溯。
+// 渲染出的状态徽标文本原样上报给父壳（统一标题行提示位）；独立打开（无运行时）时不通信。
+function rrPublishStatus(){const badge=document.querySelector('.title-section .title-row .status-badge');const text=(badge&&badge.textContent||'').trim();const runtime=window.TechBoardRuntime;if(runtime&&typeof runtime.publishStatus==='function')runtime.publishStatus(text,'info');}
 const rrRenderWithCustomerCredit=rrRender;
-rrRender=function(){rrRenderWithCustomerCredit();const list=document.querySelector('.info-list');if(!list)return;const value=String(rrRequirement?.data?.customer_credit||'').trim()||'—';list.insertAdjacentHTML('beforeend',`<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${rrEsc(value)}</span></div>`)};
+rrRender=function(){rrRenderWithCustomerCredit();rrPublishStatus();const list=document.querySelector('.info-list');if(!list)return;const value=String(rrRequirement?.data?.customer_credit||'').trim()||'—';list.insertAdjacentHTML('beforeend',`<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${rrEsc(value)}</span></div>`)};
 
 /* 统一看板协议：提交审核复用既有 rrSubmit，父壳只发动作名；校验前置条件后返回结构化结果。 */
 (function rrRegisterTechBoardActions() {
@@ -45,6 +47,8 @@ rrRender=function(){rrRenderWithCustomerCredit();const list=document.querySelect
     // 选中审核结果，并把意见追加进既有 #reviewText，不覆盖人工已写内容、不动任何状态。
     applyReviewNote: {
       label: '带入审核意见',
+      role: 'aux',
+      order: 20,
       run: ({ decision, note } = {}) => {
         const text = document.querySelector('#reviewText');
         const target = String(decision || '').trim().toLowerCase();
@@ -71,11 +75,15 @@ rrRender=function(){rrRenderWithCustomerCredit();const list=document.querySelect
     // refresh-data：复用既有 rrStart() 重新拉需求单与留痕并重绘，不新增读取逻辑。
     refreshData: {
       label: '刷新需求审核页',
+      role: 'aux',
+      order: 30,
       run: async () => { await rrStart(); return { ok: true }; },
       getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#submitReview')), busy: rrBoardBusy }),
     },
     submitRequirementReview: {
       label: '提交审核意见',
+      role: 'primary',
+      order: 10,
       run: async function submitRequirementReview() {
         if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在提交，请稍候。' } };
         const checked = document.querySelector('input[name="opinion"]:checked');

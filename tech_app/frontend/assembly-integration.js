@@ -105,6 +105,9 @@ function aiStatus(message, error = false) {
   const panel = $ai('aiPanelStatus');
   panel.textContent = message || '';
   panel.classList.toggle('error', error);
+  // 与本地显示的同一段文字原样上报；独立打开（无运行时）时不通信。
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.publishStatus === 'function') runtime.publishStatus(message || '', error ? 'error' : 'info');
 }
 
 function aiToast(message, error = false) {
@@ -1495,7 +1498,10 @@ aiStart();
       getState: () => {
         const button = $ai('aiStart');
         const busy = Boolean(button && button.disabled);
-        return { visible: true, enabled: !busy, busy: busy, analyzed: aiAnalyzed() };
+        const analyzed = aiAnalyzed();
+        return { visible: true, enabled: !busy, busy: busy, analyzed: analyzed,
+                 role: analyzed ? 'aux' : 'primary', order: 10,
+                 hint: '生成参数推荐与组装工艺' };
       },
     },
     sendIntegrationToFinance: {
@@ -1503,18 +1509,92 @@ aiStart();
       run: async () => { await aiOpenFinanceDialog(); return { ok: true }; },
       getState: () => {
         const button = $ai('aiToFinance');
-        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: false, analyzed: aiAnalyzed() };
+        const analyzed = aiAnalyzed();
+        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: false,
+                 analyzed: analyzed, role: analyzed ? 'primary' : 'aux', order: 20,
+                 hint: '参数推荐与组装工艺都确认后可发送财务' };
       },
+    },
+    // 参数推荐 / 组装工艺两个页签的专属动作：全部复用既有实现（aiGenerate / aiSaveEdits /
+    // aiConfirmStep / aiParamsAutofill / aiParamsFinalize），不另写一套。与 runIntegration
+    // 一样都是长任务：只启动、立即回执（deferred），进度与收尾由本页 aiPublishTask 自报。
+    // visible 由当前页签决定，左侧工具栏按这份快照渲染、右侧页内按钮在嵌入态隐藏。
+    generateIntegrationParams: {
+      label: '生成参数推荐',
+      role: 'aux',
+      order: 30,
+      deferred: true,
+      run: () => { aiGenerate('params'); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    generateIntegrationProcess: {
+      label: '生成组装工艺',
+      role: 'aux',
+      order: 40,
+      deferred: true,
+      run: () => { aiGenerate('process'); return { ok: true }; },
+      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    saveIntegrationParams: {
+      label: '保存参数',
+      role: 'aux',
+      order: 50,
+      run: () => { aiSaveEdits('params'); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    confirmIntegrationParams: {
+      label: '确认参数推荐',
+      role: 'aux',
+      order: 60,
+      deferred: true,
+      run: () => { aiConfirmStep('params'); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    confirmIntegrationProcess: {
+      label: '确认组装工艺',
+      role: 'aux',
+      order: 70,
+      deferred: true,
+      run: () => { aiConfirmStep('process'); return { ok: true }; },
+      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    autofillIntegrationParams: {
+      label: '智能补全',
+      role: 'aux',
+      order: 80,
+      deferred: true,
+      run: () => { aiParamsAutofill(); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    saveIntegrationParamsFinal: {
+      label: '保存补填',
+      role: 'aux',
+      order: 90,
+      deferred: true,
+      run: () => { aiParamsFinalize(false); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+    },
+    confirmIntegrationParamsFinal: {
+      label: '确认参数已齐',
+      role: 'aux',
+      order: 100,
+      deferred: true,
+      run: () => { aiParamsFinalize(true); return { ok: true }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
     },
     // Agent 改完参数 / 工序后让看板重新拉取并渲染（复用 aiStart 的读取路径）。
     refreshIntegration: {
       label: '刷新整合看板',
+      role: 'aux',
+      order: 110,
       run: async () => { await aiStart(); return { ok: true }; },
       getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy, analyzed: aiAnalyzed() }),
     },
     // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 2.2 内跑流水线。
     integrationStep: {
       label: '运行整合环节',
+      role: 'aux',
+      order: 120,
       deferred: true,
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
@@ -1539,6 +1619,8 @@ aiStart();
     // 图纸上传只能由用户完成：切到「整合图纸」页签并聚焦上传入口，不代传二进制。
     openIntegrationDrawings: {
       label: '整合图纸',
+      role: 'aux',
+      order: 130,
       run: async () => {
         aiSetTab('drawings');
         const button = $ai('aiUploadBtn');

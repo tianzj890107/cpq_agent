@@ -1,9 +1,16 @@
 """第 16 步红测：统一左侧基础按钮（与报价 Agent 同级，按 stage 动态变化）。
 
+契约更新（「右侧看板业务按钮统一到左侧会话操作栏」批次）：
+- 附件按钮 `techChatAttach` 删除（输入区圆形 ＋ 是唯一上传入口）；
+- `techChatAiRun` / `techChatSecondary` 静态按钮删除，改由看板动作快照动态渲染
+  （`[data-tech-action]`），业务动作名不再写死在父壳；
+- 右侧业务卡底栏的 `techPrimary` / `techSecondary` 业务按钮退役（与左侧重复）；
+- 九阶段壳导航表由 `STAGE_CHAT_ACTIONS` 换成不含动作名的 `STAGE_CHAT_FLOW`。
+
 覆盖：
-1. 左侧会话栏新增唯一一条操作栏：附件 / AI 执行 / 上一步 / 下一步 / 转交任务 /
-   主要操作 / 次要操作 / 失败重试，并复用既有结果入口与任务进度宿主；
-2. 按钮由覆盖九个 stage 的描述表驱动，不只为 2.1–2.3 写死；
+1. 左侧会话栏唯一一条操作栏：唯一主按钮 / 上一步 / 下一步 / 转交任务 / 失败重试，
+   并复用既有结果入口与任务进度宿主；
+2. 壳导航标记由覆盖九个 stage 的描述表驱动，不只为 2.1–2.3 写死；
 3. 主 / 次 / AI 走 TechBoardBridge，上下步走既有 applyStage，附件直接打开隐藏文件输入框；
 4. 失败重试复用最近一次动作，不是新流程；
 5. 不新增 @app. 路由；父壳不查 iframe DOM；既有底栏与结果入口不被删除。
@@ -24,15 +31,14 @@ MAIN = BACKEND / "main.py"
 
 # 左侧操作栏控件 id（Spec 第 1 节）。
 TOOLBAR_IDS = (
-    "techChatAttach", "techChatAiRun", "techChatPrev", "techChatNext",
-    "techChatTransfer", "techChatPrimary", "techChatSecondary", "techChatRetry",
+    "techChatPrev", "techChatNext", "techChatTransfer", "techChatPrimary", "techChatRetry",
 )
 # 九个 stage id：描述表必须全覆盖，不能只写 2.1–2.3。
 NINE_STAGES = (
     "requirement-create", "requirement-confirm", "requirement-review",
     "drawing", "process", "cost", "summary", "report-review", "report-publish",
 )
-KEPT_IDS = ("techPrev", "techNext", "techPrimary", "techSecondary",
+KEPT_IDS = ("techPrev", "techNext", "techNowLabel",
             "ocResultActions", "ocTaskProgressHost",
             "ocChatAttachBtn", "ocChatFileInput")
 
@@ -70,8 +76,8 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- 动态描述表
     def test_stage_table_covers_all_nine_stages(self):
-        block = _js_block(self.js, "STAGE_CHAT_ACTIONS")
-        self.assertTrue(block, "tech-workbench.js 没有九阶段描述表 STAGE_CHAT_ACTIONS")
+        block = _js_block(self.js, "STAGE_CHAT_FLOW")
+        self.assertTrue(block, "tech-workbench.js 没有九阶段壳导航表 STAGE_CHAT_FLOW")
         for stage in NINE_STAGES:
             self.assertIn(stage, block, f"描述表缺少 stage {stage}（不能只为 2.1–2.3 写死）")
 
@@ -83,8 +89,9 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
     def test_primary_secondary_ai_go_through_board_bridge(self):
         self.assertIn("TechBoardBridge", self.js, "主 / 次 / AI 动作必须走看板桥")
         self.assertRegex(self.js, r"executeAction\(",
-                         "主 / 次 / AI 动作必须经 TechBoardBridge.executeAction")
-        self.assertIn("STAGE_ACTIONS", self.js, "必须复用既有 STAGE_ACTIONS 代理表")
+                         "业务动作必须经 TechBoardBridge.executeAction")
+        self.assertIn("boardSnapshot()", self.js,
+                      "按钮的文案 / 可见 / 可用必须来自看板动作快照，不再维护兜底动作名表")
 
     def test_prev_next_reuse_apply_stage(self):
         self.assertRegex(self.js, r"applyStage\(",

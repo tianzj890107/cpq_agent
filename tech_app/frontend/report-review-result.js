@@ -69,6 +69,8 @@ rrStart();
   window.TechBoardRuntime.registerActions({
     approveProcessReport: {
       label: '审核通过并发布',
+      role: 'primary',
+      order: 10,
       run: async () => {
         if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
         rrBoardBusy = true;
@@ -83,6 +85,8 @@ rrStart();
     },
     rejectProcessReport: {
       label: '退回汇总',
+      role: 'aux',
+      order: 20,
       run: async () => {
         if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
         rrBoardBusy = true;
@@ -97,11 +101,15 @@ rrStart();
     },
     refreshProcessReport: {
       label: '刷新审核报告',
+      role: 'aux',
+      order: 40,
       run: async () => { try { return await rrRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
       getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
     },
     applyReportReviewNote: {
       label: '带入审核意见',
+      role: 'aux',
+      order: 30,
       run: (payload) => rrApplyReviewNote(payload || {}),
       getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
     }

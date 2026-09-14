@@ -51,15 +51,17 @@ class QuoteTechComposerAlignmentRedTest(unittest.TestCase):
         self.assertNotIn("ocModelSelect", self.workbench_js)
         self.assertNotIn("ocModelSelectLabel", self.workbench_js)
 
-    def test_tech_composer_has_no_caption_below_the_input_box(self):
+    def test_tech_composer_has_binding_caption_below_the_input_box(self):
+        # 本断言由「报价 / 技术工艺输入区统一」批次反转：说明行不再作为占位被移除，
+        # 而是与技术工艺单行输入框一起恢复，用来对齐两侧输入区底边。
         composer = re.search(
             r'<div class="oc-composer">(.*?)</div>\s*</section>',
             self.tech_html,
             re.S,
         )
         self.assertIsNotNone(composer)
-        self.assertNotIn("oc-disc", composer.group(1))
-        self.assertNotIn("会话绑定当前项目", composer.group(1))
+        self.assertIn("oc-disc", composer.group(1))
+        self.assertIn("会话绑定当前项目", composer.group(1))
 
     def test_quote_and_tech_composer_use_the_same_outer_padding(self):
         quote_padding = re.search(r"\.chat-input-area\s*\{[^}]*padding:\s*([^;]+);", self.quote, re.S)

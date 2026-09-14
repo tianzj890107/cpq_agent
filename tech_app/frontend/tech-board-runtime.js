@@ -41,7 +41,9 @@
   //   task-progress    长任务开始或有进度推进；
   //   task-completed   长任务成功结束；
   //   task-failed      长任务失败（结构化错误同时通过 result 回传）；
-  //   selection-changed 看板内部选中的零件 / 视图发生变化。
+  //   selection-changed 看板内部选中的零件 / 视图发生变化；
+  //   board-status     本页那行步骤状态（「已打开项目 …」/「就绪」/「本步已确认」…）
+  //                    原样上报，由父壳渲染进统一标题行的提示位（payload.text / level）。
   var EVENT = {
     READY: 'ready',
     ACTION_STATE: 'action-state',
@@ -49,6 +51,7 @@
     TASK_COMPLETED: 'task-completed',
     TASK_FAILED: 'task-failed',
     SELECTION_CHANGED: 'selection-changed',
+    BOARD_STATUS: 'board-status',
   };
 
   var qs = new URLSearchParams(location.search);
@@ -121,6 +124,13 @@
       busy: Boolean(raw.busy),
       active: raw.active == null ? null : String(raw.active),
       analyzed: raw.analyzed === true,
+      // 动作元数据：role 只认白名单 'primary' / 'aux'（其它值一律降级为 'aux'），
+      // order 供父壳在同一步骤内定序，hint 给父壳拼 tooltip。三者既可来自静态条目，
+      // 也可由 getState() 动态返回（2.2 的主操作反转就靠它）。
+      role: raw.role === 'primary' ? 'primary' : 'aux',
+      order: raw.order != null && raw.order !== '' && Number.isFinite(Number(raw.order))
+        ? Number(raw.order) : null,
+      hint: raw.hint != null ? String(raw.hint) : '',
     };
   }
 
@@ -158,6 +168,16 @@
       Object.keys(extra).forEach(function (key) { payload[key] = extra[key]; });
     }
     return emitState(name, payload);
+  }
+
+  // 阶段页的状态行（status() / aiStatus() / crStatus() / 需求单状态徽标）与本地
+  // 显示用的是同一段文字：这里只做透明转发，不改写、不截断、不补前缀。level 只有
+  // 'info' 与 'error' 两种，父壳用它决定提示位是否需要优先显示。
+  function publishStatus(text, level) {
+    return publish(EVENT.BOARD_STATUS, '', {
+      text: text == null ? '' : String(text),
+      level: level === 'error' ? 'error' : 'info',
+    });
   }
 
   /* ------------------------------------------------------------ 注册与状态 */
@@ -338,6 +358,7 @@
     emit: emit,
     emitState: emitState,
     publish: publish,
+    publishStatus: publishStatus,
     setView: function (name) { currentView = String(name || ''); return publish(EVENT.ACTION_STATE, 'view'); },
     snapshot: function () {
       return { actions: actionSnapshot(), view: viewSnapshot(), stage: context.stage, projectId: context.projectId };

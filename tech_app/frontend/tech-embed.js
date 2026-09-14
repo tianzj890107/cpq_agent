@@ -150,10 +150,25 @@
       '.tech-embed .oc-shell .page-container { width:100% !important; max-width:none !important; min-width:0 !important; margin-left:0 !important; margin-right:0 !important; padding-left:18px !important; padding-right:18px !important; }',
       '.tech-embed .oc-work .center-panel { width:100% !important; min-width:0 !important; max-width:none !important; flex:1 1 100% !important; max-height:none !important; }',
       // 子页面不再显示第二份大标题与第二份阶段页签（统一标题行由父壳 #techContextHeader
-      // 承载）。只隐藏标题文字与页签行本身：#status 状态徽标、度量、文件名、错误与业务
-      // 提示都留在原位，内容区里 inline-analysis 面板自己的切换也保持可见。
+      // 承载）。只隐藏标题文字与页签行本身：#partsMetric / #confidenceMetric 等度量、
+      // 文件名、错误与业务提示都留在原位，内容区里 inline-analysis 面板自己的切换也保持可见。
       '.tech-embed .title-section .form-title, .tech-embed .title-row .form-title { display:none !important; }',
       '.tech-embed .ai-tabs { display:none !important; }',
+      // 步骤状态那一行改为并入父壳标题行（board-status → #techContextNotice）：嵌入态下
+      // 不再让它在页内单独占一行。独立打开阶段页（没有 .tech-embed）时状态行照旧显示。
+      '.tech-embed .title-row .status-badge { display:none !important; }',
+      '.tech-embed #status { display:none !important; }',
+      '.tech-embed .ai-status { display:none !important; }',
+      // 业务按钮唯一入口在左侧 #techChatActions（由看板动作快照动态渲染）：嵌入态下
+      // 第二份页内按钮行只隐藏、不删节点、不动绑定，独立打开阶段页照旧；每一条都限定
+      // 在 .tech-embed 作用域。卡片里的产品名 / 数量输入与说明文字一律保持可见。
+      '.tech-embed #btnParse { display:none !important; }',
+      '.tech-embed #aiStart { display:none !important; }',
+      '.tech-embed #aiActions { display:none !important; }',
+      '.tech-embed #aiOpsCard .ai-ops { display:none !important; }',
+      '.tech-embed #crRunAll { display:none !important; }',
+      '.tech-embed #crOpsCard .ai-ops { display:none !important; }',
+      '.tech-embed #btnAiExtract { display:none !important; }',
       '.tech-embed body { padding-bottom:18px !important; }',
     ].join('\n');
     document.head.appendChild(style);

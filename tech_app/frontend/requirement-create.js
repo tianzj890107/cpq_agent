@@ -157,7 +157,9 @@ function rcMountCustomerCredit(){
 }
 const rcRenderRequirementCreateWithCredit=renderRequirementCreate;
 function rcRemoveBomRequiredMark(){document.querySelector('#file_bom_assembly')?.closest('.form-field')?.querySelector('.required-mark')?.remove();document.querySelectorAll('#requirementForm input[type="date"]').forEach(input=>{const value=String(rcData()[input.name]||'').trim();if(value&&rcAiRecommendedSet().has(input.name)&&!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)){input.type='text';input.value=value;input.placeholder='请输入 YYYY-MM-DD，或修改 AI 推荐';}});}
-renderRequirementCreate=function(){rcRenderRequirementCreateWithCredit();rcMountCustomerCredit();rcRemoveBomRequiredMark();};
+// 渲染出的状态徽标文本原样上报给父壳（统一标题行提示位）；独立打开（无运行时）时不通信。
+function rcPublishStatus(){const badge=document.querySelector('.title-section .title-row .status-badge');const text=(badge&&badge.textContent||'').trim();const runtime=window.TechBoardRuntime;if(runtime&&typeof runtime.publishStatus==='function')runtime.publishStatus(text,'info');}
+renderRequirementCreate=function(){rcRenderRequirementCreateWithCredit();rcMountCustomerCredit();rcRemoveBomRequiredMark();rcPublishStatus();};
 
 // 提交前严格按照页面星号标记校验，避免只校验名称/描述导致不完整需求进入确认环节。
 function rcRequiredFieldEntries(){
@@ -247,16 +249,22 @@ rcPersist=async function(submit){
   window.TechBoardRuntime.registerActions({
     saveRequirementDraft: {
       label: '保存草稿',
+      role: 'aux',
+      order: 20,
       run: () => rcBoardRun(false),
       getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
     },
     submitRequirement: {
       label: '提交确认',
+      role: 'primary',
+      order: 10,
       run: () => rcBoardRun(true),
       getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
     },
     extractRequirement: {
       label: '一键解析需求',
+      role: 'aux',
+      order: 30,
       deferred: true,
       run: () => {
         if (rcBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
@@ -275,6 +283,8 @@ rcPersist=async function(submit){
     // 第二套读取逻辑，也不直接写字段。
     refreshData: {
       label: '刷新需求看板',
+      role: 'aux',
+      order: 40,
       run: async () => { await rcStart(); return { ok: true }; },
       getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
     },

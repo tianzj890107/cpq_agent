@@ -94,6 +94,9 @@ function crStatus(message, error = false) {
   const box = $cr('crStatus');
   box.textContent = message || '';
   box.classList.toggle('error', Boolean(error));
+  // 与本地显示的同一段文字原样上报；独立打开（无运行时）时不通信。
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.publishStatus === 'function') runtime.publishStatus(message || '', error ? 'error' : 'info');
 }
 
 function crToast(message, error = false) {
@@ -732,8 +735,10 @@ crStart();
   };
   // 三个去向动作共用：各自复用既有 crRunOp(kind)（material-write / send-to-quote /
   // return-to-process），不复制任何对外调用。
-  const crOpAction = (kind, label) => ({
+  const crOpAction = (kind, label, role, order) => ({
     label: label,
+    role: role || 'aux',
+    order: order == null ? null : order,
     run: async () => {
       const ok = await crRunOp(kind);
       return ok ? { ok: true }
@@ -744,6 +749,8 @@ crStart();
   window.TechBoardRuntime.registerActions({
     runCostReview: {
       label: '一键测算全部成本',
+      role: 'primary',
+      order: 10,
       deferred: true,
       run: () => {
         if (crBusy) return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
@@ -759,6 +766,8 @@ crStart();
     },
     confirmCostReview: {
       label: '确认成本',
+      role: 'aux',
+      order: 20,
       run: async () => {
         const button = $cr('crConfirm');
         if (button && button.disabled) return { ok: false, error: { code: 'not-ready', message: '尚未测算完成，暂不能确认成本。' } };
@@ -773,12 +782,16 @@ crStart();
     // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。
     refreshCostReview: {
       label: '刷新成本看板',
+      role: 'aux',
+      order: 60,
       run: async () => crRefresh(),
       getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
     },
     // 左侧 Agent 请求跑某一环节：复用既有 crRunPart / crRunAssembly / crRunAll。
     costStep: {
       label: '运行成本测算',
+      role: 'aux',
+      order: 70,
       deferred: true,
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
@@ -812,9 +825,9 @@ crStart();
       getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
     },
     // 三个去向：复用既有 crRunOp，不新增对外调用。
-    writeCostReviewMaterial: crOpAction('material-write', '写入数据库'),
-    sendCostReviewToQuote: crOpAction('send-to-quote', '回传销售经理继续报价'),
-    returnCostReviewToProcess: crOpAction('return-to-process', '提交工艺经理确认'),
+    writeCostReviewMaterial: crOpAction('material-write', '写入数据库', 'aux', 30),
+    sendCostReviewToQuote: crOpAction('send-to-quote', '回传销售经理继续报价', 'aux', 40),
+    returnCostReviewToProcess: crOpAction('return-to-process', '提交工艺经理确认', 'aux', 50),
   });
   window.TechBoardRuntime.registerViews({
     parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },
