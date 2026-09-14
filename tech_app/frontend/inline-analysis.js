@@ -231,12 +231,18 @@
       await sleep(1200);
       const task = await jsonFetch(`/api/projects/${encodeURIComponent(state.context.projectId)}/tasks/${encodeURIComponent(taskId)}`);
       // 把知识库检索的每一步同时播给 Agent 对话框，处理过程要在对话里看得见。
-      window.dispatchEvent(new CustomEvent("agent:task-progress", {
-        detail: { label: title, taskId, status: task.status,
-                  progress: task.progress || "",
-                  log: Array.isArray(task.progress_log) ? task.progress_log : [],
-                  error: task.error || "" },
-      }));
+      const taskDetail = { label: title, taskId, status: task.status,
+                progress: task.progress || "",
+                log: Array.isArray(task.progress_log) ? task.progress_log : [],
+                error: task.error || "" };
+      window.dispatchEvent(new CustomEvent("agent:task-progress", { detail: taskDetail }));
+      // 同一份 detail 也经看板运行时按状态转给统一父壳（看板是 iframe）；独立打开无害。
+      if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
+        window.TechBoardRuntime.publish(
+          taskDetail.status === "failed" ? "task-failed"
+            : taskDetail.status === "succeeded" ? "task-completed" : "task-progress",
+          "board-task", taskDetail);
+      }
       if (task.status === "succeeded") return task.result;
       if (task.status === "failed") throw new Error(task.error || "任务失败");
       if (active === state) setStatus(state, `${title}：${task.progress || "正在处理"}…`, true);

@@ -2994,6 +2994,11 @@ class ProjectAgent:
             if kind == "text_delta":
                 text_buffer.append(event["text"])
                 emit({"type": "text", "text": event["text"]})
+            elif kind == "thinking_delta":
+                # 供应商的思维链增量只透传给前端做默认折叠的「思考过程」，
+                # 不写入会话事件、不落库、不进历史回放（见 _serialize_history）。
+                emit({"type": "thinking",
+                      "text": str(event.get("thinking") or event.get("text") or "")})
             elif kind == "tool_use_end":
                 tool_uses.append({"type": "tool_use", "id": event["id"],
                                   "name": event["name"], "input": event["input"]})

@@ -205,6 +205,7 @@
       }
       if (event.type === "assistant") {
         ctx = addAssistant();
+        setAssistantState(ctx, "succeeded");
         ctx.full = String(event.text || "");
         ctx.text.classList.add("rendered");
         ctx.text.innerHTML = renderMarkdown(ctx.full);
@@ -213,6 +214,7 @@
       if (event.type === "tool_use") {
         if (event.name === "tech_ui") return;
         if (!ctx) ctx = addAssistant();
+        setAssistantState(ctx, "succeeded");
         addToolCard(ctx, { id: event.id, name: event.name, input: event.input || {} });
         return;
       }
@@ -429,12 +431,44 @@
     const wrap = el("div", "oc-amsg");
     const avatar = el("div", "oc-aav", "✦");
     const body = el("div", "oc-abody");
+    // 标题行：左侧蓝色身份行（与报价「报价单智能体」同款），右侧运行状态 chip。
+    // 一轮回复只有这一张 chip，状态就地翻转，不新增第二行 / 第二张卡。
+    const label = el("div", "oc-alabel");
+    label.append(el("span", null, "技术工艺智能体"));
+    const state = el("span", "oc-alabel-state is-running", "◌ 运行中");
+    label.append(state);
     const text = el("div", "oc-atxt");
-    body.append(text);
+    body.append(label, text);
     wrap.append(avatar, body);
     tinner.append(wrap);
     scrollDown();
-    return { body, text, cards: {}, full: "" };
+    return { body, text, cards: {}, full: "", label, state, thinking: null };
+  }
+  // 就地翻转同一张 chip：文本与配色都按状态切换，绝不另建节点。
+  function setAssistantState(ctx, state) {
+    const chip = ctx && ctx.state;
+    if (!chip) return;
+    const word = state === "succeeded" ? "✓ 已完成" : state === "failed" ? "⚠ 失败" : "◌ 运行中";
+    chip.classList.remove("is-running", "is-succeeded", "is-failed");
+    chip.classList.add(`is-${state || "running"}`);
+    chip.textContent = word;
+  }
+  // 思考过程折叠块（默认关闭）——只有供应商真的推了 thinking 帧才出现，不建空块。
+  function appendThinking(ctx, text) {
+    const value = String(text || "");
+    if (!value) return;
+    if (!ctx.thinking) {
+      const block = el("details", "oc-thinking");
+      block.append(el("summary", null, "思考过程"));
+      const inner = el("div", "oc-thinking-body");
+      block.append(inner);
+      ctx.thinking = block;
+      ctx.thinkingBody = inner;
+      // 插入顺序固定：身份行 → 思考过程 → 正文文本。
+      ctx.body.insertBefore(block, ctx.text);
+    }
+    ctx.thinkingBody.textContent += value;
+    scrollDown();
   }
   function addToolCard(ctx, event) {
     const card = el("div", "oc-art");
@@ -520,6 +554,10 @@
       runTechUi(event.tech_ui || {});
       return;
     }
+    if (event.type === "thinking") {
+      appendThinking(ctx, event.text);
+      return;
+    }
     if (event.type === "text") {
       ctx.full += event.text;
       ctx.text.textContent = ctx.full;
@@ -569,6 +607,8 @@
       return;
     }
     if (event.type === "error") {
+      ctx.failed = true;
+      setAssistantState(ctx, "failed");
       ctx.body.append(el("div", "oc-err-line", `⚠ ${event.error}`));
       scrollDown();
       return;
@@ -578,6 +618,7 @@
         ctx.text.classList.add("rendered");
         ctx.text.innerHTML = renderMarkdown(ctx.full);
       }
+      if (!ctx.failed) setAssistantState(ctx, "succeeded");
       if (event.model) setModelLabel(event.model);
     }
   }
@@ -618,6 +659,8 @@
         }
       }
     } catch (error) {
+      ctx.failed = true;
+      setAssistantState(ctx, "failed");
       ctx.body.append(el("div", "oc-err-line", `⚠ ${error.message || "连接错误"}`));
     } finally {
       busy = false;
@@ -1190,12 +1233,15 @@
   function renderTaskProgress(raw) {
     const detail = sanitizeTaskDetail(raw);
     const taskId = String(detail.taskId || detail.task_id || "");
-    const label = detail.label || "处理中";
+    const label = String(detail.label || "");
+    const log = Array.isArray(detail.log) ? detail.log : [];
+    const progressLine = String(detail.progress || "").trim();
+    // label / taskId / log / progress 全空时不建空卡（不再把 label 兜底成「处理中」）。
+    if (!label && !taskId && !log.length && !progressLine) return;
     const requested = String(detail.status || "running");
     const status = requested === "completed" ? "succeeded" : requested;
     const card = ensureTaskCard(taskId, label);
     setTaskStatus(card, status);
-    const log = Array.isArray(detail.log) ? detail.log : [];
     if (log.length > card.cursor) {
       for (const entry of log.slice(card.cursor)) {
         const line = String(entry || "").replace(/\s+$/, "");
@@ -1204,7 +1250,7 @@
       card.cursor = log.length;
     } else if (!log.length) {
       // 兼容还没有 progress_log 的旧任务记录：退回单条进度。
-      const line = String(detail.progress || "").trim();
+      const line = progressLine;
       if (line && line !== card.lastFallback) {
         card.lastFallback = line;
         pushTaskStep(card, line, toneOf(line));

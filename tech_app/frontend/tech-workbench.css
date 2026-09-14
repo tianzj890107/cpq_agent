@@ -529,12 +529,21 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 /* 看板桥的未就绪 / 失败提示：与大标题同排的独立节点，不覆盖固定大标题。 */
 .tech-context-notice {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--color-primary-light, #E6F0FD);
+  color: var(--color-primary, #0060E6);
   font-size: 12px;
+  font-weight: 500;
+}
+/* 失败态：只有看板未就绪 / 执行失败这类提示才变红，正常步骤状态保持蓝底蓝字胶囊。 */
+.tech-context-notice.is-error {
+  background: var(--color-red-light, #fee2e2);
   color: var(--color-red, #d92d20);
 }
 .tech-context-notice[hidden] { display: none; }

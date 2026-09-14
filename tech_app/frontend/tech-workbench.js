@@ -156,7 +156,7 @@
 
   // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
   // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
-  const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardNotice: '' };
+  const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
   // 左侧「失败重试」重跑的最近一次经桥动作：{ kind, name, payload, label }。
   // 只在真正发出看板命令时记录，重试复用同一条通道，不重新发明流程。
   let lastBoardAction = null;
@@ -285,13 +285,17 @@
   // 看板的失败 / 超时 / 未就绪提示统一写进标题行的独立节点，不污染固定大标题。
   // 提示位两种内容共存：未就绪 / 失败提示优先；提示清除后回落到最近一次收到的
   // 步骤状态（board-status），而不是留空。
-  function setBoardNotice(message) {
+  function setBoardNotice(message, level) {
     const notice = $('techContextNotice');
     if (!notice) return;
     state.boardNotice = message || '';
+    state.boardNoticeLevel = ((level || 'info') === 'error') ? 'error' : 'info';
     const text = state.boardNotice || state.boardStatus || '';
+    // 颜色跟随当前真正显示的那条：显式提示优先，清除后回落到步骤状态。
+    const shownLevel = state.boardNotice ? state.boardNoticeLevel : state.boardStatusLevel;
     notice.textContent = text;
     notice.hidden = !text;
+    notice.classList.toggle('is-error', shownLevel === 'error');
   }
 
   /* 代理页签的 active 以看板回传的真实视图为准，父壳只渲染，不自建状态。 */
@@ -308,14 +312,14 @@
   function navigateBoardView(view, label) {
     const bridge = boardBridge();
     if (!bridge || typeof bridge.navigateView !== 'function') {
-      setBoardNotice(`${label || view}：看板尚未就绪，请等待右侧步骤加载完成。`);
+      setBoardNotice(`${label || view}：看板尚未就绪，请等待右侧步骤加载完成。`, 'error');
       return;
     }
     Promise.resolve(bridge.navigateView(view, {})).then(() => {
       setBoardNotice('');
       syncChildTabActive(CHILD_TAB_PROXY[state.stage] || null);
     }).catch((error) => {
-      setBoardNotice((error && error.message) || `切换到「${label || view}」失败`);
+      setBoardNotice((error && error.message) || `切换到「${label || view}」失败`, 'error');
     });
   }
 
@@ -508,7 +512,9 @@
     detachBoardBridge('stage-change');
     // 上一步的步骤状态不能带到下一步：新页面自己的 board-status 到达前，提示位留空。
     state.boardStatus = '';
+    state.boardStatusLevel = 'info';
     state.boardNotice = '';
+    state.boardNoticeLevel = 'info';
     setBoardNotice('');
     const meta = stageMeta(state.stage);
     if (!meta) {
@@ -576,11 +582,11 @@
         syncAgentStageContext();
         syncChatActions();
       }).catch((error) => {
-        setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。');
+        setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。', 'error');
         syncChatActions();
       });
     } catch (error) {
-      setBoardNotice('看板尚未就绪，请稍后重试。');
+      setBoardNotice('看板尚未就绪，请稍后重试。', 'error');
     }
   }
   function detachBoardBridge(reason) {
@@ -595,7 +601,7 @@
     if (!state.project) return;
     const bridge = boardBridge();
     if (!bridge || typeof bridge.executeAction !== 'function') {
-      setBoardNotice(`${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`);
+      setBoardNotice(`${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`, 'error');
       lastActionFailed = true;
       syncChatActions();
       return;
@@ -607,7 +613,7 @@
       .then(() => { lastActionFailed = false; syncChatActions(); })
       .catch((error) => {
         lastActionFailed = true;
-        setBoardNotice((error && error.message) || `${label || actionName} 执行失败`);
+        setBoardNotice((error && error.message) || `${label || actionName} 执行失败`, 'error');
         syncChatActions();
       });
   }
@@ -843,6 +849,11 @@
     if (opts && opts.project) state.project = opts.project;
     if (opts && opts.taskId) state.taskId = opts.taskId;
     state.stage = stageId;
+    // 切步：上一步的步骤状态与等级都不能带过来，否则会在新步骤显示旧文案 / 旧配色。
+    state.boardStatus = '';
+    state.boardStatusLevel = 'info';
+    state.boardNotice = '';
+    state.boardNoticeLevel = 'info';
     renderTop();
     mountStageFrame();
     pushState();
@@ -1205,13 +1216,14 @@
       // 「超时未响应」这类桥层兜底文案，真实原因被吞掉。
       if (type === 'error' || type === 'task-failed') {
         const message = event && event.payload && event.payload.message;
-        if (message) setBoardNotice(message);
+        if (message) setBoardNotice(message, 'error');
       }
       // 阶段页把本页那行步骤状态（「已打开项目 …」/「就绪」/「本步已确认」…）原样
       // 上报：这里只搬运 payload.text，不做二次加工，也不碰固定大标题与子页签。
       if (type === 'board-status') {
         state.boardStatus = String((event && event.payload && event.payload.text) || '');
-        setBoardNotice(state.boardNotice);
+        state.boardStatusLevel = ((event && event.payload && event.payload.level) === 'error') ? 'error' : 'info';
+        setBoardNotice(state.boardNotice, state.boardNoticeLevel);
       }
       syncChatActions();
       if (type === 'action-state' || type === 'selection-changed' || type === 'ready') {

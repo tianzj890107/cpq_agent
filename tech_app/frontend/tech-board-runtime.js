@@ -251,19 +251,23 @@
     if (typeof entry.run !== 'function') {
       return Promise.resolve(failure('no-handler', '动作缺少可执行实现：' + name));
     }
-    publish(EVENT.TASK_PROGRESS, name, { action: name, phase: 'start' });
+    publish(EVENT.TASK_PROGRESS, name, { action: name, phase: 'start',
+      label: entryState(name).label, taskId: context.taskId || '' });
     var outcome;
     try {
       outcome = entry.run(payload || {});
     } catch (error) {
-      publish(EVENT.TASK_FAILED, name, { action: name, message: String((error && error.message) || error) });
+      publish(EVENT.TASK_FAILED, name, { action: name,
+        label: entryState(name).label, taskId: context.taskId || '',
+        message: String((error && error.message) || error) });
       return Promise.resolve(failure('action-failed', String((error && error.message) || error)));
     }
     return Promise.resolve(outcome).then(function (result) {
       // 业务函数自己回结构化失败时原样透传，不伪装成功。
       if (result && typeof result === 'object' && result.ok === false) {
         var reason = (result.error && result.error.message) || ('动作执行失败：' + name);
-        publish(EVENT.TASK_FAILED, name, { action: name, message: reason });
+        publish(EVENT.TASK_FAILED, name, { action: name,
+          label: entryState(name).label, taskId: context.taskId || '', message: reason });
         return result.error ? result : failure('action-failed', '动作执行失败：' + name);
       }
       if (source === 'view') currentView = name;
@@ -272,10 +276,13 @@
       // 后台任务还没跑完，抢发完成会让父壳以为长任务瞬间结束。真正的收尾
       // 由本页在任务结束时自己 publish(EVENT.TASK_COMPLETED / TASK_FAILED)。
       if (entry.deferred === true) return ok(name, result);
-      publish(EVENT.TASK_COMPLETED, name, { action: name });
+      publish(EVENT.TASK_COMPLETED, name, { action: name,
+        label: entryState(name).label, taskId: context.taskId || '' });
       return ok(name, result);
     }, function (error) {
-      publish(EVENT.TASK_FAILED, name, { action: name, message: String((error && error.message) || error) });
+      publish(EVENT.TASK_FAILED, name, { action: name,
+        label: entryState(name).label, taskId: context.taskId || '',
+        message: String((error && error.message) || error) });
       return failure('action-failed', String((error && error.message) || error));
     });
   }

@@ -2414,6 +2414,10 @@ class Bridge:
                     first_at[0] = time.perf_counter()
                 text_buf.append(ev["text"])
                 emit({"type": "text", "text": ev["text"]})
+            elif t == "thinking_delta":
+                # 供应商的思维链增量只透传给前端做默认折叠的「思考过程」，
+                # 不写入会话事件、不落库、不进历史回放。
+                emit({"type": "thinking", "text": str(ev.get("thinking") or ev.get("text") or "")})
             elif t == "tool_use_start":
                 # 参数还在生成中：先说一声"开始调用"，别让界面空等到 end。
                 emit({"type": "stage",

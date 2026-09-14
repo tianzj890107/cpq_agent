@@ -163,7 +163,10 @@
   background: var(--oc-accent); color: white; font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
-.oc-amsg { display: flex; gap: 11px; }
+.oc-amsg {
+  display: flex; gap: 11px; background: #ffffff;
+  border: 1px solid var(--oc-border-2); border-radius: 14px; padding: 11px 14px;
+}
 .oc-aav {
   display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 50%;
@@ -171,6 +174,31 @@
   box-shadow: 0 2px 7px rgba(0,96,230, .3); color: #fff; font-size: 14px;
 }
 .oc-abody { min-width: 0; flex: 1; }
+.oc-alabel {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+  color: #0060E6; font-size: 11px; font-weight: 500;
+}
+.oc-alabel::before {
+  content: ''; width: 6px; height: 6px; flex-shrink: 0;
+  border-radius: 50%; background: linear-gradient(135deg, #0060E6, #0050C4);
+}
+.oc-alabel-state {
+  margin-left: auto; flex-shrink: 0; padding: 1px 8px; border-radius: 999px;
+  background: var(--oc-bg-3); color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+}
+.oc-alabel-state.is-running { background: #e0edff; color: #0050C4; }
+.oc-alabel-state.is-succeeded { background: #dcfce7; color: #15803d; }
+.oc-alabel-state.is-failed { background: #fee2e2; color: #b91c1c; }
+/* 思考过程折叠块：唯一与工具「详情」并列的默认折叠项（白底 + 边框）。 */
+.oc-thinking {
+  margin-bottom: 8px; padding: 9px 12px; background: #ffffff;
+  border: 1px solid var(--oc-border-2); border-radius: 12px;
+}
+.oc-thinking summary { cursor: pointer; color: var(--oc-text-3); font-size: 11px; }
+.oc-thinking-body {
+  margin-top: 7px; color: var(--oc-text-2); font-size: 12px;
+  line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+}
 .oc-atxt { color: var(--oc-text-1); font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .oc-atxt.rendered { white-space: normal; }
 .oc-atxt.rendered p { margin: 0 0 10px; }
@@ -205,8 +233,8 @@
 .oc-art {
   display: flex; width: 100%; max-width: 460px; margin-top: 10px; align-items: center;
   flex-wrap: wrap;   /* 详情块换行到下一行，主行密度不变 */
-  gap: 11px; padding: 11px 12px; border: .5px solid var(--oc-border-2);
-  border-radius: 13px; background: var(--oc-bg-1); text-align: left;
+  gap: 11px; padding: 11px 12px; border: 1px solid var(--oc-border-2);
+  border-radius: 13px; background: #ffffff; text-align: left;
 }
 .oc-atile {
   display: flex; width: 36px; height: 36px; flex-shrink: 0; align-items: center;
@@ -230,8 +258,8 @@
 
 /* 设计意图卡：对话里的第一条内容 */
 .oc-intent-card {
-  padding: 13px 15px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
+  padding: 13px 15px; border: 1px solid var(--oc-border-2); border-radius: 13px;
+  background: #ffffff;
 }
 .oc-intent-card h4 {
   margin: 0 0 7px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
@@ -516,8 +544,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-task-progress { display: flex; flex-direction: column; gap: 10px; }
 .oc-task-progress:empty { display: none; }
 .oc-task-card {
-  padding: 11px 13px; border: .5px solid var(--oc-border-2); border-radius: 12px;
-  background: var(--oc-bg-1);
+  padding: 11px 13px; border: 1px solid var(--oc-border-2); border-radius: 12px;
+  background: #ffffff;
 }
 .oc-task-head { display: flex; align-items: center; gap: 8px; }
 .oc-task-title { min-width: 0; flex: 1; color: var(--oc-text-1); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

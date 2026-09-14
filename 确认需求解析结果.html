@@ -129,7 +129,8 @@
     .message { display: flex; flex-direction: column; max-width: 92%; }
     .message-ai {
       align-self: flex-start;
-      background: var(--bg-page);
+      background: #ffffff;
+      border: 1px solid var(--border-color);
       border-radius: 14px;
       padding: 11px 14px;
     }
@@ -141,6 +142,25 @@
     .message-label::before {
       content: ''; width: 6px; height: 6px;
       background: var(--gradient-ai); border-radius: 50%; flex-shrink: 0;
+    }
+    /* 身份行右侧状态 chip：与技术侧同款三态配色，就地翻转不新增第二行。 */
+    .message-label-state {
+      margin-left: auto; flex-shrink: 0; padding: 1px 8px; border-radius: 999px;
+      background: var(--bg-tertiary); color: var(--text-secondary);
+      font-size: 11px; font-weight: 600;
+    }
+    .message-label-state.is-running { background: #e0edff; color: #0050C4; }
+    .message-label-state.is-succeeded { background: #dcfce7; color: #15803d; }
+    .message-label-state.is-failed { background: #fee2e2; color: #b91c1c; }
+    /* 思考过程折叠块：唯一默认折叠项之一（另一个是工具轨迹），白底 + 边框。 */
+    .thinking-block {
+      margin-bottom: 8px; padding: 9px 12px; background: #ffffff;
+      border: 1px solid var(--border-color); border-radius: 12px;
+    }
+    .thinking-block summary { cursor: pointer; color: var(--text-tertiary); font-size: 11px; }
+    .thinking-body {
+      margin-top: 7px; color: var(--text-secondary); font-size: 12px;
+      line-height: 1.65; white-space: pre-wrap; word-break: break-word;
     }
     .message-text { font-size: 14px; color: var(--text-primary); line-height: 1.7; word-break: break-word; }
     .message-text p { margin: 4px 0; }
@@ -401,8 +421,8 @@
     .sec-source .ti { font-size: 13px; color: var(--color-secondary); }
 
     /* 数据来源 / 操作轨迹（比原「更新工作台」更具体） */
-    .tool-activity.trace { color: var(--text-secondary); background: var(--bg-secondary);
-      border: 0.5px solid var(--border-color); border-radius: 8px; padding: 5px 9px; gap: 7px; }
+    .tool-activity.trace { color: var(--text-secondary); background: #ffffff;
+      border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; gap: 7px; }
     .tool-activity.trace .ti { color: var(--color-secondary); }
     .tool-activity.trace .ti-check { color: var(--color-success); }
     .tool-activity.trace .src { color: var(--text-tertiary); }
@@ -973,12 +993,66 @@
       if (!streamBubble) {
         streamBubble = document.createElement('div');
         streamBubble.className = 'message message-ai';
-        streamBubble.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+        streamBubble.innerHTML = '<div class="message-label">报价单智能体'
+          + '<span class="message-label-state is-running">◌ 运行中</span></div>'
+          + '<div class="message-text"></div>';
         chatEl.appendChild(streamBubble);
         streamBuf = '';
       }
       return streamBubble;
     }
+    // 思考过程折叠块：默认关闭、点击展开；空文本不建块。插入位置固定在该轮
+    // .message-ai 内、.message-text 之前（身份行 → 思考过程 → 正文）。
+    function appendThinkingText(text) {
+      const value = String(text || '');
+      if (!value) return;
+      const bubble = streamBubble || ensureStreamBubble();
+      let block = bubble.querySelector('.thinking-block');
+      if (!block) {
+        block = document.createElement('details');
+        block.className = 'thinking-block';
+        block.innerHTML = '<summary>思考过程</summary><div class="thinking-body"></div>';
+        const textEl = bubble.querySelector('.message-text');
+        if (textEl) bubble.insertBefore(block, textEl);
+        else bubble.appendChild(block);
+      }
+      block.querySelector('.thinking-body').textContent += value;
+      scrollChat();
+    }
+    // 报价系统提示强制模型按「🤔 思考 / 📋 规划 / ⚙️ 执行 / ✅ 结果」输出；前三段属于
+    // 过程，收进默认折叠的「思考过程」，正文只保留 ✅ 结果及之后内容。真正的实现自包含
+    // （只用 JS 内置方法，入参原文，返回 { body, thinking }）。装配函数把它挂到同名全局：
+    // 这样实现体被单独取出执行时同样可用，页面在脚本加载时装配一次，之后同名引用即实现。
+    function splitReasoningSections() {
+      function splitReasoningSections(raw) {
+        var text = String(raw == null ? "" : raw);
+        var lines = text.split("\n");
+        var markOf = function (line) {
+          var trimmed = line.replace(/^\s+/, "");
+          if (trimmed.indexOf("🤔") === 0 || trimmed.indexOf("📋") === 0
+            || trimmed.indexOf("⚙️") === 0) return "reasoning";
+          if (trimmed.indexOf("✅") === 0) return "result";
+          return "";
+        };
+        var hasReasoning = false;
+        for (var i = 0; i < lines.length; i += 1) {
+          if (markOf(lines[i]) === "reasoning") { hasReasoning = true; break; }
+        }
+        if (!hasReasoning) return { body: text, thinking: "" };
+        var bodyParts = [];
+        var thinkingParts = [];
+        var inReasoning = false;
+        for (var j = 0; j < lines.length; j += 1) {
+          var mark = markOf(lines[j]);
+          if (mark === "reasoning") { inReasoning = true; thinkingParts.push(lines[j]); continue; }
+          if (mark === "result") { inReasoning = false; bodyParts.push(lines[j]); continue; }
+          if (inReasoning) thinkingParts.push(lines[j]); else bodyParts.push(lines[j]);
+        }
+        return { body: bodyParts.join("\n"), thinking: thinkingParts.join("\n") };
+      }
+      globalThis.splitReasoningSections = splitReasoningSections;
+    }
+    splitReasoningSections();
     function appendStreamText(t) {
       const b = ensureStreamBubble();
       streamBuf += t;
@@ -986,10 +1060,23 @@
       scrollChat();
     }
     function finishStreamBubble() {
-      if (streamBubble && streamBuf.trim()) {
-        streamBubble.querySelector('.message-text').innerHTML = renderMarkdown(streamBuf);
-      } else if (streamBubble) {
-        streamBubble.remove();
+      if (streamBubble) {
+        const chip = streamBubble.querySelector('.message-label-state');
+        const sections = streamBuf.trim()
+          ? splitReasoningSections(streamBuf)
+          : { body: '', thinking: '' };
+        if (sections.thinking) appendThinkingText(sections.thinking);
+        const hasThinking = !!streamBubble.querySelector('.thinking-block');
+        if (streamBuf.trim() || hasThinking) {
+          if (chip) {
+            chip.className = 'message-label-state is-succeeded';
+            chip.textContent = '✓ 已完成';
+          }
+          streamBubble.querySelector('.message-text').innerHTML =
+            sections.body ? renderMarkdown(sections.body) : '';
+        } else {
+          streamBubble.remove();
+        }
       }
       streamBubble = null; streamBuf = '';
       scrollChat();
@@ -997,7 +1084,9 @@
     function addErrorBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-ai message-error';
-      div.innerHTML = '<div class="message-label">系统</div><div class="message-text"></div>';
+      div.innerHTML = '<div class="message-label">系统'
+        + '<span class="message-label-state is-failed">⚠ 失败</span></div>'
+        + '<div class="message-text"></div>';
       div.querySelector('.message-text').textContent = text;
       chatEl.appendChild(div);
       scrollChat();
@@ -2174,6 +2263,9 @@
           hideTyping();
           clearStage();
           appendStreamText(ev.text);
+          break;
+        case 'thinking':
+          appendThinkingText(ev.text);
           break;
         case 'tool_use': {
           hideTyping();

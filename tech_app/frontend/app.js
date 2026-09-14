@@ -1106,6 +1106,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // 同一页面中相同任务只允许一个轮询链，双击不会重复提交/重复计费。
 const activeTaskPromises = new Map();
 
+// 同一份任务 detail 既要播给同窗口的 Agent 对话框（agent:task-progress），也要经看板
+// 运行时按状态转给统一父壳 —— 统一工作台里看板是 iframe，同窗口事件跨不过去。
+// 独立打开（无父壳）时 TechBoardRuntime 仍存在，但不会向父窗口发送任何消息，行为不变。
+function forwardTaskDetail(detail) {
+  const runtimeEvent = detail.status === "failed" ? "task-failed"
+    : detail.status === "succeeded" ? "task-completed" : "task-progress";
+  if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
+    window.TechBoardRuntime.publish(runtimeEvent, "board-task", detail);
+  }
+  return detail;
+}
+
 async function pollTask(projectId, taskId, label) {
   while (true) {
     await sleep(1200);
@@ -1116,12 +1128,12 @@ async function pollTask(projectId, taskId, label) {
     // 传整份 progress_log 而不是单条 progress：轮询间隔内后端可能已经走完好几步，
     // 只传"最新一条"的话中间步骤全都丢了（检索类任务尤其明显）。
     window.dispatchEvent(new CustomEvent("agent:task-progress", {
-      detail: {
+      detail: forwardTaskDetail({
         label, taskId, status: t.status,
         progress: t.progress || "",
         log: Array.isArray(t.progress_log) ? t.progress_log : [],
         error: t.error || "",
-      },
+      }),
     }));
     if (t.status === "succeeded") return t.result;
     if (t.status === "failed") throw new Error(t.error || "任务失败");
