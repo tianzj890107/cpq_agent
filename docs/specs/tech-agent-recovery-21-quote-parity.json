@@ -39,9 +39,9 @@
       "id": "current_step",
       "label": "当前步骤",
       "quote": "确认需求解析结果.html#stepTitle",
-      "tech": "tech_app/frontend/agent-chat.js#ocStageContext",
+      "tech": "tech_app/frontend/tech-workbench.html#techStepsBar",
       "status": "live",
-      "release": "第 19 步九阶段独立 page_context"
+      "release": "顶部九阶段流程条 + 右侧子步骤导航；第 19 步九阶段独立 page_context 仍注入会话请求，但不再渲染可见阶段卡"
     },
     {
       "id": "prev_next",

@@ -118,62 +118,53 @@
 
   // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
   // 2.3 / 3.1 / 3.2 / 3.3 一一对应，缺上下文时 stageAgentContext() 返回 null 并
-  // 不回退成任何别的 stage，父会话栏既不冒充 2.1、也不出现子页面附加面板。操作只引用
-  // 底栏已有的 STAGE_ACTIONS 语义动作名，不复制任何业务逻辑。
+  // 不回退成任何别的 stage。这里只向会话组件提供模型请求用的语义上下文，不构造任何
+  // 可见阶段卡或卡内操作；用户操作只在左侧统一操作栏与右侧看板。
   const STAGE_AGENT_CONTEXT = {
     'requirement-create': {
       pageContext: '1.1 创建需求',
       label: '创建需求',
       hint: '可让我补全需求字段、带入附件或发起需求解析；提交确认与保存草稿请用左侧操作栏。',
-      actions: ['primary', 'secondary'],
     },
     'requirement-confirm': {
       pageContext: '1.2 确认需求',
       label: '确认需求',
       hint: '可让我汇总待澄清问题与完整性检查结果；通过确认或驳回请用左侧操作栏。',
-      actions: ['primary', 'secondary'],
     },
     'requirement-review': {
       pageContext: '1.3 审核需求',
       label: '审核需求',
       hint: '可让我汇总审核材料与审核摘要；审核结论由具备权限的人提交，请用左侧操作栏。',
-      actions: ['primary'],
     },
     'drawing': {
       pageContext: '2.1 图纸解析',
       label: '图纸解析',
       hint: '右侧看板显示解析进度与零件结果；可以在这里追问解析结果，或直接说「开始解析」。',
-      actions: ['primary'],
     },
     'process': {
       pageContext: '2.2 组装与整合',
       label: '组装与整合',
       hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
-      actions: ['primary', 'secondary'],
     },
     'cost': {
       pageContext: '2.3 成本测算',
       label: '成本测算',
       hint: '可追问成本构成与零件测算结果；重算与确认成本请用底栏操作。',
-      actions: ['primary', 'secondary'],
     },
     'summary': {
       pageContext: '3.1 汇总结果',
       label: '汇总结果',
       hint: '可让我汇总各步骤数据并生成报告草稿；保存与提交审核请用左侧操作栏。',
-      actions: ['primary', 'secondary'],
     },
     'report-review': {
       pageContext: '3.2 结果审核',
       label: '结果审核',
       hint: '可让我读取报告与版本、汇总审核摘要；通过或退回由具备权限的人提交。',
-      actions: ['primary', 'secondary'],
     },
     'report-publish': {
       pageContext: '3.3 发布并回传报价',
       label: '发布并回传报价',
       hint: '可让我读取发布状态与回传结果；正式发布与回传报价请用左侧操作栏。',
-      actions: ['primary'],
     },
   };
 
@@ -844,12 +835,8 @@
   function stageAgentContext() {
     const context = STAGE_AGENT_CONTEXT[state.stage];
     if (!context) return null;
-    const routing = STAGE_ACTIONS[state.stage] || {};
-    const actions = (context.actions || []).map((role) => {
-      const action = role === 'secondary' ? routing.secondary : routing.primary;
-      const label = (role === 'secondary' ? routing.secondaryLabel : routing.primaryLabel) || '';
-      return action && label ? { role, action, label } : null;
-    }).filter(Boolean);
+    // 只返回模型请求需要的语义上下文（stage / project / pageContext 等），
+    // 不再构造任何供可见卡片渲染的动作；用户操作走统一操作栏与看板桥。
     return {
       stage: state.stage,
       project: state.project,
@@ -857,7 +844,6 @@
       label: context.label,
       pageContext: context.pageContext,
       hint: context.hint,
-      actions,
     };
   }
 
@@ -876,20 +862,6 @@
       /* 上下文同步失败不影响会话与流程切换 */
     }
   }
-
-  // 左侧上下文里的操作按钮只回传角色 / 动作名，执行统一走看板桥的同一套命令，
-  // 与底栏按钮共用一条通道、一份状态，不额外复制点击逻辑。
-  window.addEventListener('cpq:tech-agent:stage-action', (event) => {
-    const detail = event.detail || {};
-    const role = detail.role || 'primary';
-    const routing = STAGE_ACTIONS[state.stage] || {};
-    const action = detail.action || (role === 'secondary' ? routing.secondary : routing.primary);
-    const label = detail.label
-      || (role === 'secondary' ? routing.secondaryLabel : routing.primaryLabel)
-      || action;
-    if (!action) return;
-    runBoardAction(action, label, role);
-  });
 
   // tech_ui 的 set_stage：Agent 只表达「切到某一步」，这里按九阶段白名单校验后走
   // 既有 applyStage，与顶部流程 / 底栏 / 左侧操作栏共用同一条切步通道。

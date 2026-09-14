@@ -1722,10 +1722,9 @@
   }
   $("ocNewChat")?.addEventListener("click", resetTaskFlow);
   // ---------------------------------------------------------------- 阶段上下文
-  // 统一工作台只有父页 #techChatPane 这一个会话宿主：右侧 iframe 流程（2/3/4）需要的
-  // 阶段说明与可用操作由父壳 syncAgentStageContext() 注入到这里。只更新这一小块，
-  // 不跨 iframe 搬运或克隆 DOM，也不触碰消息历史、草稿、滚动位置与项目绑定；
-  // 父壳传 null（流程 1、5）时整块移除。
+  // 统一工作台只有父页 #techChatPane 这一个会话宿主：父壳 syncAgentStageContext() 按当前
+  // stage 注入的语义上下文只作为请求时的 page_context，不生成任何可见 UI；不跨 iframe
+  // 搬运或克隆 DOM，也不触碰消息历史、草稿、滚动位置与项目绑定。
   let stageContext = null;
   // 独立打开的 2.1 图纸解析页（没有统一工作台 #techChatPane）没有父壳注入阶段
   // 上下文，它本身就是 2.1 步骤：只在发请求时用它当 page_context，不渲染额外上下文
@@ -1734,50 +1733,9 @@
     return document.getElementById("techChatPane") ? "" : "2.1 图纸解析";
   }
 
-  function contextHost() {
-    const pane = $("techChatPane");
-    if (!pane) return null;
-    let host = $("ocStageContext");
-    if (host) return host;
-    host = el("div", "oc-stage-context");
-    host.id = "ocStageContext";
-    const header = pane.querySelector(".tech-chat-header");
-    if (header && header.parentNode === pane) header.insertAdjacentElement("afterend", host);
-    else pane.prepend(host);
-    return host;
-  }
-
-  function renderStageContext() {
-    const existing = $("ocStageContext");
-    if (!stageContext) { existing?.remove(); return; }
-    const host = existing || contextHost();
-    if (!host) return;
-    host.replaceChildren();
-    const head = el("div", "oc-stage-context-head");
-    head.append(el("span", "oc-stage-context-title", stageContext.label || "当前步骤"));
-    if (stageContext.pageContext) head.append(el("span", "oc-stage-context-step", stageContext.pageContext));
-    host.append(head);
-    if (stageContext.hint) host.append(el("div", "oc-stage-context-hint", stageContext.hint));
-    const actions = stageContext.actions || [];
-    if (actions.length) {
-      const row = el("div", "oc-stage-context-actions");
-      actions.forEach((action) => {
-        const button = el("button", "oc-stage-context-btn", action.label);
-        button.type = "button";
-        // 复用父壳底栏的代理定义：点击只把角色回传给父壳，由父壳点同源 iframe 里
-        // 的既有业务按钮，这里不复制任何业务逻辑。
-        button.addEventListener("click", () => {
-          window.dispatchEvent(new CustomEvent("cpq:tech-agent:stage-action", { detail: action }));
-        });
-        row.append(button);
-      });
-      host.append(row);
-    }
-  }
-
   function setStageContext(context) {
-    stageContext = context && context.label ? context : null;
-    try { renderStageContext(); } catch { /* 上下文渲染失败不影响会话本体 */ }
+    // 只保存模型请求需要的语义上下文：接收端不据此生成任何阶段介绍或阶段按钮。
+    stageContext = context && context.pageContext ? context : null;
   }
 
   function currentPageContext() {
