@@ -194,10 +194,13 @@ class ParamsStepBelongsToProcessManager(unittest.TestCase):
         self.assertIn(r"\/integration\/cost", body, "成本接口仍要放行给财务经理")
 
     def test_readonly_bar_names_params_as_process_step(self):
-        body = block_from(self.sso, "function showReadonlyBar()")
-        self.assertTrue(body)
-        self.assertIn("参数推荐", body,
-                      "只读横幅要说清参数推荐归工艺经理，不能让财务以为自己能做这一步")
+        # 契约更新（只读横幅下线批次）：横幅已按用户要求整体删除（外层 + iframe 两处都不再出现）。
+        # 原意保留为「权限提示仍说清参数推荐归工艺经理」，改由写请求被拦时的 toast 承担。
+        self.assertNotIn("showReadonlyBar", self.sso, "只读横幅已整体下线")
+        start = self.sso.find("var detail = state.canCost")
+        self.assertGreater(start, 0, "找不到写请求被拦时的说明文本")
+        self.assertIn("归工艺经理", self.sso[start:start + 400],
+                      "被拦时仍要说清这一步归工艺经理，不能让财务以为自己能做")
 
     def test_frontend_gate_still_defers_to_backend(self):
         self.assertIn("state.canWrite || (state.canCost && isCostUrl(url))", self.sso,

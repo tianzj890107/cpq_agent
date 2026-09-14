@@ -493,7 +493,6 @@ async function init() {
       el.appendChild(tip);
     }
   }
-  renderPartsBoardToolbar();
   let h;
   try { h = await fetch(`${API}/api/health`).then(r => r.json()); }
   catch (error) {
@@ -1558,8 +1557,9 @@ function renderIR(ir) {
   // 零件清单/待澄清已重新渲染：先把解析摘要播给父壳看板桥，再通知 Agent 对话框刷新
   // 结果按钮的数量。左侧入口的显示 / 计数只认看板播回的解析摘要，不读本页 DOM。
   // 重渲染只重建清单行，不动右栏 3D 画布；选中态在上面已按 part_id 恢复。
-  renderPartsBoardToolbar();
   publishResultSummary(ir);
+  // 重新打开项目时按当前零件表只读探一次（失败不影响渲染）。
+  probePartsProcessState();
   window.dispatchEvent(new CustomEvent("agent:ir-rendered"));
 }
 
@@ -2041,6 +2041,57 @@ function allPartsProcessSettle(event, payload) {
     Object.assign({ action: "runAllPartProcesses" }, payload || {}));
 }
 
+/* 2.1 主按钮三段式的同步判定：哪些零件已经有工艺推荐。
+   getState() 只能同步读，所以这里只读本地缓存，不发请求；真实探测走 probePartsProcessState。 */
+const processReadyParts = new Set();
+function partProcessKey(projectId, partId) {
+  return `${projectId || ""}:${partId || ""}`;
+}
+function markPartProcessReady(projectId, partId) {
+  if (!projectId || !partId) return;
+  processReadyParts.add(partProcessKey(projectId, partId));
+}
+function partsProcessComplete() {
+  if (!drawingParsed()) return false;
+  const parts = (currentIR && currentIR.parts) || [];
+  if (!parts.length) return false;
+  return parts.every((part) => processReadyParts.has(partProcessKey(currentProject, part.part_id)));
+}
+
+/* 结论变化后主动把新快照推给父壳：主按钮要自己翻面，不能等用户再点一次某个按钮。 */
+function refreshBoardActionState() {
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.refreshState === "function") runtime.refreshState();
+}
+
+/* 首次进入已有 IR 的项目：按当前零件表各只读探一次，复用 partHasExistingProcess；
+   同一份零件表只探一次，并发只放一个在跑（单飞）。 */
+let processProbeKey = "";
+let processProbeBusy = false;
+async function probePartsProcessState() {
+  const projectId = currentProject;
+  const parts = ((currentIR && currentIR.parts) || []).slice();
+  if (!projectId || !parts.length) return;
+  const key = projectId + "|" + parts.map((part) => part.part_id).join(",");
+  if (processProbeBusy || key === processProbeKey) return;
+  processProbeBusy = true;
+  processProbeKey = key;
+  let changed = false;
+  try {
+    for (const part of parts) {
+      if (processReadyParts.has(partProcessKey(projectId, part.part_id))) continue;
+      const ready = await partHasExistingProcess(projectId, part.part_id);
+      if (ready) {
+        markPartProcessReady(projectId, part.part_id);
+        changed = true;
+      }
+    }
+  } finally {
+    processProbeBusy = false;
+  }
+  if (changed) refreshBoardActionState();
+}
+
 // 已有工艺判定：读既有 GET .../parts/{part_id}/process，库里已有工序就 skip，避免重复
 // 计费、避免覆盖人工编辑后的工艺路线。
 async function partHasExistingProcess(projectId, partId) {
@@ -2063,6 +2114,7 @@ function autoOpenGeneratedProcess(part) {
   if (autoOpenedProcessParts.has(part.part_id)) return;
   return partHasExistingProcess(currentProject, part.part_id).then((ready) => {
     if (!ready) return;
+    markPartProcessReady(currentProject, part.part_id);
     const outcome = openPartAnalysis(part, "process");
     if (!outcome || outcome.ok !== false) autoOpenedProcessParts.add(part.part_id);
   }).catch(() => { /* 读取失败就静默回落 3D，不影响选中零件的既有行为 */ });
@@ -2092,6 +2144,7 @@ async function runAllPartProcesses(options = {}) {
   for (const part of parts) {
     const name = `${part.part_id} ${part.name || ""}`.trim();
     if (!force && await partHasExistingProcess(projectId, part.part_id)) {
+      markPartProcessReady(projectId, part.part_id);
       state.skipped += 1;
       state.done += 1;
       allPartsProcessPublish(state);
@@ -2102,6 +2155,7 @@ async function runAllPartProcesses(options = {}) {
     status(`正在生成工艺推荐 ${state.done + 1}/${state.total}：${name}`, true);
     try {
       await runOnePartProcess(projectId, part);
+      markPartProcessReady(projectId, part.part_id);
       state.succeeded += 1;
     } catch (error) {
       state.failed += 1;
@@ -2119,6 +2173,8 @@ async function runAllPartProcesses(options = {}) {
     state.running = "";
     allPartsProcessPublish(state);
   }
+  // 全部零件都已有工艺推荐后，主按钮自己从「一键生成全部工艺推荐」翻成「确认解析结果」。
+  refreshBoardActionState();
   return { state: state, failures: failures };
 }
 
@@ -2248,7 +2304,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
     confirmDrawingResult: {
       label: "确认解析结果",
       role: "aux",
-      order: 15,
+      order: 25,
       run: async () => {
         if (!currentProject) {
           return { ok: false, error: { code: "no-project", message: "请先打开项目。" } };
@@ -2271,13 +2327,14 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
         return { ok: true };
       },
       // 单行对象字面量：与同文件既有条目一致，避免多行 `})` 打断按行取块的静态契约。
+      // 主按钮三段式：只有全部零件都有工艺推荐之后，确认才是主按钮。
       getState: () => ({ visible: drawingParsed(), enabled: true, busy: false,
-                         role: drawingParsed() ? "primary" : "aux" }),
+                         role: partsProcessComplete() ? "primary" : "aux" }),
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",
       role: "aux",
-      order: 20,
+      order: 15,
       deferred: true,
       run: () => startAllPartProcesses(),
       getState: () => {
@@ -2286,6 +2343,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           enabled: Boolean(currentProject) && Boolean(currentIR && (currentIR.parts || []).length)
             && !allPartsProcessBusy,
           busy: Boolean(allPartsProcessBusy),
+          role: (drawingParsed() && !partsProcessComplete()) ? "primary" : "aux",
         };
       },
     },
@@ -2462,37 +2520,9 @@ function renderBoardReport(body) {
   return { ok: true, result: { view: "report" } };
 }
 
-// 零件清单看板顶部：一键生成全部工艺推荐（蓝色主操作）。与左侧快捷按钮共用同一条
-// runAllPartProcesses 通道；单个零件的「工艺推荐」按钮仍留在零件行上，用于查看 / 编辑 /
-// 单件重算 / 定点处理失败项。
-function partsBoardToolbarHost() {
-  return document.querySelector(".drawing-parts-column") || document.getElementById("secParts");
-}
-
-// 批量工艺推荐条挂在 2.1 固定左栏（零件清单下方），不再挂进覆盖式结果宿主；
-// 幂等重建，重复渲染不会出现第二条。
-function renderPartsBoardToolbar() {
-  const host = partsBoardToolbarHost();
-  if (!host) return;
-  let bar = document.getElementById("partsBulkBar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "partsBulkBar";
-    bar.className = "board-parts-toolbar";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "board-parts-bulk start-parse-btn";
-    button.textContent = "一键生成全部工艺推荐";
-    button.addEventListener("click", () => {
-      const outcome = startAllPartProcesses();
-      if (outcome && outcome.ok === false) {
-        status((outcome.error && outcome.error.message) || "一键生成全部工艺推荐未能启动");
-      }
-    });
-    bar.append(button);
-  }
-  host.append(bar);
-}
+// 零件清单里不再有批量按钮（用户要求）：批量能力只在左侧会话操作栏保留唯一入口 —— 看板动作
+// runAllPartProcesses → startAllPartProcesses()，与 Agent 分派同一条通道。零件行上的单件
+// 「工艺推荐」入口不变，仍用于查看 / 编辑 / 单件重算 / 定点处理失败项。
 
 function openBoardView(view) {
   const spec = BOARD_VIEW_SPECS[view];

@@ -1306,12 +1306,17 @@
     const status = requested === "completed" ? "succeeded" : requested;
     // 会话只留「有真实执行内容」的卡：progress_log 明细才算内容。只有标题、只有状态、
     // 只有一句通用「正在…」进度的点击回执一律不建卡 —— 否则秒级同步动作每点一次都会
-    // 留下一张「提交审核意见 · 已完成」。失败卡只认真实原因，且跳过预期内失败。
+    // 留下一张「提交审核意见 · 已完成」。
+    // 失败也不再单独建卡：这张卡长在 #ocTaskProgressHost（会话底部常驻宿主），建出来
+    // 就永远钉在底部，聊多少轮都不动。失败原因照旧进标题行提示位与普通会话输出；
+    // 已经在跑的卡（有真实 progress_log 明细）仍就地翻成失败态并显示原因。
     const failureReason = status === "failed"
       ? String(detail.error || detail.message || "").trim() : "";
+    // 预期内失败（在途命令被取消、当前视图没有目标输入框…）看板自己已经就地提示过：
+    // 已经在跑的卡不翻红，也不再往会话里补噪音。
+    const quietFailure = status === "failed" && isQuietBoardCode(detail.code);
     const existingCard = taskProgressCards.has(String(taskId || label || "task"));
-    const keepFailure = Boolean(failureReason) && !isQuietBoardCode(detail.code);
-    const hasContent = log.length > 0 || existingCard || keepFailure;
+    const hasContent = log.length > 0 || existingCard;
     if (!hasContent) return;
     const card = ensureTaskCard(taskId, label);
     setTaskStatus(card, status);
@@ -1336,6 +1341,7 @@
     }
     if (status === "failed") {
       card.done = true;
+      if (quietFailure) return;
       const message = failureReason || "任务失败";
       if (!card.errorNode) {
         card.errorNode = el("div", "oc-task-error", message);

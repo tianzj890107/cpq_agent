@@ -208,7 +208,9 @@ class TechCostReviewAgentRedTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- 看板
     def test_board_registers_cost_review_actions(self):
-        blocks = re.findall(r"registerActions\(\s*\{([\s\S]*?)\n\s*\}\)", self.board)
+        # 取到注册表末尾：非贪婪版会在动作内部第一个 `\n  })`（例如 run 里的
+        # `}).catch(...)` 收尾）提前截断，动作注册被误判成缺失。
+        blocks = re.findall(r"registerActions\(\s*\{([\s\S]*)\n  \}\);", self.board)
         self.assertTrue(blocks, "cost-review.js 没有 registerActions 注册块")
         block = "\n".join(blocks)
         for name in ("refreshCostReview", "costStep", "writeCostReviewMaterial",

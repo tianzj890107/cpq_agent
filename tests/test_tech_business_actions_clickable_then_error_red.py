@@ -198,7 +198,10 @@ class TechBusinessActionsClickableRedTest(unittest.TestCase):
         self.assertNotIn(".disabled", body, "发送财务不能再读页内按钮 disabled")
         self.assertIn("aiFinanceBlocker(", body, "点了要先算前置条件，再决定放行或报错")
         self.assertRegex(body, r"ok:\s*false", "前置不满足要返回结构化失败")
-        self.assertIn("aiOpenFinanceDialog(", body, "满足条件时仍走既有发送对话框")
+        # 契约更新（组装工艺收口批次）：弹窗改由后台链路调用（它要先确认工艺再开弹窗），
+        # 实现本体与调用点一字未少。
+        chain = block_from(self.assembly, "async function aiConfirmProcessAndSendToFinance(")
+        self.assertIn("aiOpenFinanceDialog(", chain, "满足条件时仍走既有发送对话框")
         self.assertIn("code:", body, "结构化失败必须带可识别的 code")
 
     def test_finance_blocker_is_single_source(self):

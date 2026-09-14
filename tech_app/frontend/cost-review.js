@@ -836,25 +836,41 @@ crStart();
       label: '确认成本',
       role: 'aux',
       order: 20,
-      run: async () => {
-        const why = crConfirmBlocker();
-        if (why) {
-          // 闸门里唯一不给「继续」选项的是权限：只读身份不是「没做完」，
-          // 而是这一步不该由他做 —— 点击照旧给真实原因，后端 403 仍是权威。
-          if (why === crReadOnlyWhy()) {
-            crStatus(why, true);
-            return { ok: false, error: { code: 'forbidden', message: why } };
+      // 缺项时要弹确认框等人点「仍要继续」—— 这段等待不能算进桥的 20s 超时，
+      // 所以 run 只启动后台链路并立即回执；成败由链路自己播报（本页状态位 + 普通会话输出）。
+      deferred: true,
+      run: () => {
+        Promise.resolve((async () => {
+          const why = crConfirmBlocker();
+          if (why) {
+            // 闸门里唯一不给「继续」选项的是权限：只读身份不是「没做完」，
+            // 而是这一步不该由他做 —— 点击照旧给真实原因，后端 403 仍是权威。
+            if (why === crReadOnlyWhy()) {
+              crStatus(why, true);
+              return { ok: false, error: { code: 'forbidden', message: why } };
+            }
+            const go = await crAskProceed(
+              `${why}。\n\n成本没算齐就确认，汇总里会带着这几处缺口。确定要继续吗？`);
+            if (!go) {
+              crStatus(`已取消：${why}`, true);
+              return { ok: false, error: { code: 'not-ready', message: why } };
+            }
           }
-          const go = await crAskProceed(
-            `${why}。\n\n成本没算齐就确认，汇总里会带着这几处缺口。确定要继续吗？`);
-          if (!go) {
-            crStatus(`已取消：${why}`, true);
-            return { ok: false, error: { code: 'not-ready', message: why } };
-          }
-        }
-        const done = await crConfirmCost();
-        return done ? { ok: true }
-          : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };
+          const done = await crConfirmCost();
+          return done ? { ok: true }
+            : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };
+        })()).then((result) => {
+          if (result && result.ok === true) return;
+          const message = (result && result.error && result.error.message)
+            || '确认成本失败，请查看右侧看板提示。';
+          crStatus(message, true);
+          crSay(`⚠ ${message}`);
+        }).catch((error) => {
+          const message = (error && error.message) || '确认成本失败，请稍后重试。';
+          crStatus(message, true);
+          crSay(`⚠ ${message}`);
+        });
+        return { ok: true };
       },
       // 算全之后它就是 2.3 的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
       getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy),

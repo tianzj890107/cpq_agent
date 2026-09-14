@@ -34,6 +34,21 @@ function rpWorkflow(){const status=rpReport?.status||'draft',done=status==='publ
 function rpRender(){const d=rpView,status=d.status||'draft',empty=(count,cols)=>count?'':`<tr><td colspan="${cols}" class="empty-cell">暂无数据（待前序步骤完成）</td></tr>`,reportInfo=rpCard('报告信息',`<div class="table-wrap"><table class="info-table"><tbody><tr><th>报告编号</th><td>${rpEsc(d.report_no)}</td><th>对应需求单号</th><td>${rpEsc(d.requirement_no)}</td></tr><tr><th>产品名称</th><td colspan="3">${rpEsc(d.product_name)}</td></tr></tbody></table></div>`),timeline=rpCard('发布流程',`<div class="timeline">${d.timeline.map((row,index)=>`<div class="timeline-item"><div class="timeline-dot">${index===0?rpIcon:index===1?rpCheck:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>'}</div><div class="timeline-content"><div class="timeline-title">${rpEsc(row[0])}</div><div class="timeline-desc">${rpEsc(row[1])}</div><div class="timeline-time">${rpEsc(row[2])}</div></div></div>`).join('')}</div>`),distribution=rpCard('发布范围',`<div class="distribution-list">${d.scope.length?d.scope.map(x=>`<span class="distribution-tag">${rpEsc(x)}</span>`).join(''):'<span class="distribution-tag">暂无发布范围</span>'}<span class="distribution-tag cc">抄送：${rpEsc(d.cc||'暂无抄送对象')}</span></div>`),attachments=rpCard('附件清单',`<div class="table-wrap"><table class="attachment-table"><thead><tr><th>序号</th><th>附件名称</th><th>来源</th></tr></thead><tbody>${empty(d.attachments.length,3)}${d.attachments.map((row,index)=>`<tr><td>${index+1}</td><td><a class="attachment-link" target="_blank" rel="noopener" href="${rpEsc(row.href)}">${rpIcon}${rpEsc(row.name)}</a></td><td>${rpEsc(row.source)}</td></tr>`).join('')}</tbody></table></div>`),published=status==='published',cardTitle=published?'报告已成功发布':status==='approved'?'报告已审核通过':'报告尚未发布',cardSubtitle=published?'工艺评估报告已完成审核并正式发布至相关部门':status==='approved'?'请确认发布范围后正式发布报告':'请先完成 3.1 汇总与 3.2 审核。',primary=published?'新建报告':status==='approved'?'正式发布':'等待审核',badge=published?'已发布':status==='approved'?'待发布':status==='rejected'?'已退回':'待审核';document.querySelector('#app').innerHTML=`${rpWorkflow()}<section class="title-section"><div class="title-row"><h1 class="form-title">${rpEsc(d.title)}</h1><span class="status-badge">${rpEsc(badge)}</span></div></section><section class="published-card"><div class="published-icon">${rpCheck}</div><div class="published-title">${rpEsc(cardTitle)}</div><div class="published-subtitle">${rpEsc(cardSubtitle)}</div><div class="publish-info"><div class="publish-info-item"><div class="publish-info-label">发布时间</div><div class="publish-info-value">${rpEsc(d.published_at)}</div></div><div class="publish-info-item"><div class="publish-info-label">发布人</div><div class="publish-info-value">${rpEsc(d.published_by)}</div></div><div class="publish-info-item"><div class="publish-info-label">报告编号</div><div class="publish-info-value">${rpEsc(d.report_no)}</div></div><div class="publish-info-item"><div class="publish-info-label">版本</div><div class="publish-info-value">${d.version?`V${rpEsc(d.version)}.0`:'—'}</div></div></div></section>${reportInfo}${timeline}${distribution}${attachments}<footer class="footer-bar"><div class="footer-left"><button id="rpBack" class="summary-btn secondary">← 上一步</button></div><div class="footer-right"><button id="rpPrint" class="summary-btn secondary">打印报告</button><button id="rpExport" class="summary-btn secondary">导出PDF</button>${published?`<button id="rpSendToSales" class="summary-btn secondary" data-report-handoff="sales">⇪ 回传销售经理继续报价</button>`:''}${['approved','published'].includes(status)?`<button id="rpPrimary" class="summary-btn primary">＋ ${primary}</button>`:''}</div></footer>`;document.querySelector('#rpBack').onclick=()=>location.href=`report-review.html?project=${encodeURIComponent(rpPid)}`;document.querySelector('#rpPrint').onclick=()=>window.print();document.querySelector('#rpExport').onclick=()=>{rpToast('请在系统打印窗口中选择“存储为 PDF”。');window.print();};const primaryButton=document.querySelector('#rpPrimary');if(primaryButton)primaryButton.onclick=rpPrimaryAction;const salesButton=document.querySelector('#rpSendToSales');if(salesButton)salesButton.onclick=rpSendReportToSales;}
 rpStart();
 
+/* 重新拉报告与汇总并重绘。原先它写在 rpRegisterTechBoardActions 闭包里，而
+   rpSendReportToSales()（点「⇪ 回传销售经理继续报价」的入口）定义在闭包外调用它 ——
+   一跑就是 ReferenceError: rpRefreshReport is not defined。提到模块作用域后只有一份实现。 */
+async function rpRefreshReport() {
+  const [reportResult, aggregate] = await Promise.all([
+    api(`/api/projects/${encodeURIComponent(rpPid)}/process-report`),
+    api(`/api/projects/${encodeURIComponent(rpPid)}/summary`),
+  ]);
+  rpReport = reportResult.report || rpReport;
+  rpAggregate = aggregate;
+  rpView = rpLiveView(rpReport, aggregate);
+  rpRender();
+  return { ok: true };
+}
+
 /* 统一看板协议：3.3 的发布复用既有 rpPrimaryAction；按钮只在可发布 / 可新建时存在。 */
 (function rpRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
@@ -44,17 +59,8 @@ rpStart();
     try { runtime.publish(name, 'report', Object.assign({ action: name }, extra || {})); }
     catch { /* 进度上报失败不影响业务本身 */ }
   }
-  async function rpRefreshReport() {
-    const [reportResult, aggregate] = await Promise.all([
-      api(`/api/projects/${encodeURIComponent(rpPid)}/process-report`),
-      api(`/api/projects/${encodeURIComponent(rpPid)}/summary`),
-    ]);
-    rpReport = reportResult.report || rpReport;
-    rpAggregate = aggregate;
-    rpView = rpLiveView(rpReport, aggregate);
-    rpRender();
-    return { ok: true };
-  }
+  // rpRefreshReport 已提到模块作用域（见文件上方）：闭包外的「回传销售经理继续报价」
+  // 也要用它，留在闭包里就是 ReferenceError。
   async function rpSendToQuote() {
     rpBoardPublish('task-progress', { taskId: 'report-to-quote', label: '回传报价', status: 'running' });
     try {

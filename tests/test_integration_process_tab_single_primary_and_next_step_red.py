@@ -99,13 +99,15 @@ class IntegrationProcessTabSinglePrimaryRed(unittest.TestCase):
                       "生成组装工艺必须继续复用既有实现 aiGenerate('process')")
 
     def test_confirm_process_and_next_action_is_registered(self):
+        # 契约更新（组装工艺收口批次）：成本测算是财务经理那一步，2.2 不再给「去 2.3」
+        # 单独一颗按钮 —— 同一步的主按钮改为「确认工艺并发送财务」（它自己先把组装工艺
+        # 确认掉再发送）。这一颗退出左侧栏，动作注册与实现按「能力不缩水」保留。
         block = block_from(self.board, "confirmProcessAndNext:")
         self.assertTrue(block, "缺少 confirmProcessAndNext 动作（确认并进入下一步）")
         self.assertIn("确认并进入下一步", block, "动作 label 必须是「确认并进入下一步」")
-        self.assertRegex(block, r"visible:\s*aiTab === 'process' && aiHasProcess\(\)",
-                         "确认并进入下一步只在组装工艺页且已生成工艺时出现")
-        self.assertRegex(block, r"role:\s*aiHasProcess\(\)\s*\?\s*'primary'\s*:\s*'aux'",
-                         "确认并进入下一步必须是本页主按钮")
+        self.assertRegex(block, r"visible:\s*false",
+                         "确认并进入下一步不再占左侧栏，交给「确认工艺并发送财务」")
+        self.assertRegex(block, r"role:\s*'aux'", "退出左侧栏的动作不再抢主按钮")
         self.assertRegex(block, r"order:\s*45", "确认并进入下一步的 order 应为 45")
         self.assertIn("aiConfirmProcessAndNext()", block,
                       "动作必须走新增的确认链路函数")
@@ -147,8 +149,13 @@ class IntegrationProcessTabSinglePrimaryRed(unittest.TestCase):
         block = block_from(self.board, "sendIntegrationToFinance:")
         self.assertRegex(block, r"aiTab === 'process'[\s\S]{0,160}visible",
                          "确认工艺并发送财务仍属于组装工艺页（人工交接入口）")
-        self.assertIn("aiFinanceBlocker()", block, "财务闸门不得被改动或删除")
-        self.assertIn("aiOpenFinanceDialog()", block, "发送财务弹窗不得被删除")
+        # 契约更新（组装工艺收口批次）：闸门本体保留，但「组装工艺还没确认」这一段改由
+        # 「确认工艺并发送财务」的后台链路先补（它自己也调 aiFinanceBlocker()），
+        # 所以同步回执里调用的是带参数的 aiFinanceBlocker({ ignoreProcessConfirm: true })。
+        self.assertIn("aiFinanceBlocker(", block, "财务闸门不得被改动或删除")
+        # 弹窗改由后台链路调用（它要先确认工艺再开弹窗），实现本体一字未动。
+        chain = block_from(self.board, "async function aiConfirmProcessAndSendToFinance(")
+        self.assertIn("aiOpenFinanceDialog(", chain, "发送财务弹窗不得被删除")
 
     def test_process_helper_is_shared(self):
         self.assertRegex(self.board, r"const aiHasProcess = \(\)",

@@ -609,11 +609,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .board-file-link { color: var(--oc-accent); text-decoration: none; word-break: break-all; }
 .board-file-link:hover { text-decoration: underline; }
 
-/* 零件清单看板顶部：一键生成全部工艺推荐（蓝色主操作，复用 .start-parse-btn 主色渐变）。
-   与左侧快捷按钮同一条 runAllPartProcesses 通道；单零件「工艺推荐」仍在零件行上。 */
-.board-parts-toolbar { display: flex; justify-content: flex-end; margin: 0 0 10px; }
-.board-parts-toolbar .board-parts-bulk { padding: 7px 14px; font-size: 12.5px; }
-
+/* 零件清单里的批量按钮已退役：批量入口只留在左侧会话操作栏（看板动作 runAllPartProcesses）。 */
 /* 左侧入口的高亮只来自看板回传的 view.active：沿用浅色选中态，不用深色底白字。 */
 .oc-chip.is-active {
   border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);

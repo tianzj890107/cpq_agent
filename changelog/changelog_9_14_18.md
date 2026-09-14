@@ -543,3 +543,66 @@
 - 过期断言更新（1 份，注明「契约更新（自动补全归口批次）」）：`test_integration_params_tab_single_primary_and_auto_fill_red` 的 `test_generate_params_calls_the_full_chain` / `test_auto_fill_only_saves_when_it_filled_something` 改指 `aiAutoFillParams()` + `aiMissingParamFields()`（意图不变：生成 → 补全 → 落库，空补全不写库）。
 - 验证：本批红测 **14/14**；`test_integration_params_tab_single_primary_and_auto_fill_red` + `test_tech_integration_params_step_ownership_red` + `test_cost_review_single_primary_and_drop_run_step_red` + `test_tech_board_bridge_protocol_red` 合计 **77/77**；`node --check` 覆盖 `cpq-sso.js` / `assembly-integration.js` / `cost-review.js`；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **869 项 / 0 失败 / 7 跳过**；`git diff --check` 通过。
 - 边界：未改后端路由与 `_require`（`WRITE_ROLES` / `COST_ROLES` 一字未动）、未改 `cpq:tech-board` 信封与七个事件、未改 `aiParamsAutofill()` / `aiParamsFinalize()` / `aiConfirmStep()` / `crConfirmCost()` 实现与接口、未删任何动作注册（`autofillIntegrationParams` / `saveIntegrationParamsFinal` / `confirmIntegrationParamsFinal` 仍以 `visible:false` 保留）、未放宽权限（403 仍是权威）。
+
+## 47. 2.1 零件清单去掉「一键生成全部工艺推荐」批量按钮（9-14）
+
+- 需求（用户）：「零件清单那里不要有一键生成全部工艺推荐这个按钮」。
+- Spec：`docs/specs/tech-parts-list-drop-bulk-process-button.md`；红测：`tests/test_tech_parts_list_drop_bulk_process_button_red.py`（8 项），Red 基线 **7 失败 / 1 通过**。
+- 实现：`tech_app/frontend/app.js` 删除看板内的批量工具条宿主 `partsBoardToolbarHost()` 与渲染函数 `renderPartsBoardToolbar()`（连同两处调用点，改为说明注释）；`tech_app/frontend/agent-chat.css` 删除只服务于该工具条的 `.board-parts-toolbar` / `.board-parts-bulk` 两条规则（保留注释说明归口）。
+- 保留：批量能力本身不缩水 —— 左侧会话栏的「一键生成全部工艺推荐」动作注册、`startAllPartProcesses()` / `runAllPartProcesses()` 受控串行实现、单零件「工艺推荐」入口与后端 `POST /parts/{part_id}/process` 一字未动。
+- 验证：本批红测 **8/8**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 通过（当前 904 项 / 0 失败 / 7 跳过）；`node --check tech_app/frontend/app.js` 通过；`git diff --check` 通过。
+- 边界：未改后端路由 / Agent 工具 / 看板桥信封；未删任何动作注册与看板视图；未改零件详情、参数编辑、3D·2D、版本面板。本批为本地修改，未提交、未推送。
+
+## 48. 2.1 主按钮三段式：解析 → 一键生成全部工艺推荐 → 确认解析结果（9-14）
+
+- 需求（用户）：「解析之后的下一个主按钮是一键生成全部工艺推荐，之后主按钮才是确认解析结果，他们在按钮清单里的出现位置也按照这样来排序」。
+- Spec：`docs/specs/tech-drawing-primary-bulk-then-confirm.md`；红测：`tests/test_tech_drawing_primary_bulk_then_confirm_red.py`（13 项），Red 基线 **11 失败 / 2 通过**。
+- 实现（`tech_app/frontend/app.js`）：`parseDrawing` 保持 order 10、未解析 primary；`runAllPartProcesses` order 20 → **15**、`role: (drawingParsed() && !partsProcessComplete()) ? "primary" : "aux"`；`confirmDrawingResult` order 15 → **25**、`role: partsProcessComplete() ? "primary" : "aux"`（`visible: drawingParsed()` 与 `enabled: true` 不变，没生成完也可点，点了由既有闸门给真实原因）。
+- 判定与探测（新增，均为同步判定 + 只读探测）：`processReadyParts` 缓存（按 `project:part`）、`markPartProcessReady()`、同步 `partsProcessComplete()`（`getState()` 里不得发请求）、`refreshBoardActionState()`（结论变化主动重发快照，主按钮自己翻面）、`async probePartsProcessState()`（复用既有只读 `partHasExistingProcess()`，按「项目 + 零件表」签名去重 + 单飞，只用 GET）。`renderIR()` 渲染后探一次；批量里的 skip 与成功、`autoOpenGeneratedProcess()` 命中的既有工艺都记为已生成。
+- 过期断言更新（1 处）：`tests/test_tech_drawing_toolbar_cleanup_and_process_auto_expand_red.py` 的 `order: 15` → `order: 25`，注明「契约更新（主按钮三段式批次）」。
+- 验证：本批红测 **13/13**；全量 **904 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/app.js` 通过；`git diff --check` 通过。
+- 边界：未新增后端接口（仍只有单零件 `GET/POST /parts/{part_id}/process`，无 process-all / bulk 路由）；未改解析链路、确认闸门与嵌入导航通道；未改父壳主按钮渲染与唯一 primary 守卫。本批为本地修改，未提交、未推送。
+
+## 49. 1.2 确认 / 1.3 审核：主按钮命名对齐 + 意见改为选填（9-14）
+
+- 需求（用户）：「确认需求的主按钮应该是通过确认，并且不强制必须要有意见，审核的主按钮是提交审核意见，也不强制必须要有审核意见」。
+- Spec：`docs/specs/tech-confirm-review-primary-and-optional-note.md`；红测：`tests/test_tech_confirm_review_optional_note_red.py`（14 项），Red 基线 **4 失败 / 10 通过**。
+- 实现：`requirement-confirm-page.js` 删除 `cfAct()` 里「意见为空 → `missing-comment` / 请填写提交意见」的硬拦（空意见按 `comment: ""` 交给既有 `/requirement/confirm` 与 `/requirement/return-to-draft`），提示由「* 必填，最多可输入 3000 字」改为「选填，最多可输入 3000 字」，页内主按钮 `#confirmPass` 文案「✓ 通过」→「✓ 通过确认」；`requirement-review-page.js` 删除 `rrSubmit()` 与看板动作 `submitRequirementReview` 里重复的驳回必填意见闸门，`rrBind()` 驳回提示由「* 如驳回，必填」改为「如驳回，可补充审核说明（选填）」，页内主按钮 `#submitReview` 文案「➤ 提交」→「提交审核意见」。
+- 未放宽的真实约束：`pending_confirmation` / `pending_review` 状态闸门、审核结论单选项（`decision ∈ {approve, reject}`，未选仍报 `no-selection`）、`busy` 与 `invalid-status` 闸门、后端角色校验与审计留痕、五个看板动作注册名（含 `applyConfirmationNote` / `applyReviewNote` / `refreshData`）全部保留。
+- 验证：本批红测 **14/14**；全量 **904 项 / 0 失败 / 7 跳过**；`node --check` 覆盖两个改动文件；`git diff --check` 通过。
+- 边界：未改后端路由与 `requirement_service`、未改状态机与权限、未改 Agent 工具与桥协议、未新增第二套提交出口。本批为本地修改，未提交、未推送。
+
+## 50. 2.2 组装工艺收口：主按钮改为「确认工艺并发送财务」+ 作用域泄漏补齐（9-14）
+
+- 需求（用户）：①「组装工艺完成之后下一个主按钮应该是确认工艺并发给财务」；②「确认组装工艺之后就会进入下一步，下一步成本测算又不是工艺经理的，改成确认工艺并发送财务这个按钮直接就帮着顺便确认了再直接发送」。
+- Spec：`docs/specs/tech-integration-confirm-finance-flow.md`；红测：`tests/test_tech_integration_confirm_finance_flow_red.py`（12 项），Red 基线 **9 失败 / 3 通过**。
+- 主按钮与一次点完（`tech_app/frontend/assembly-integration.js`）：`sendIntegrationToFinance`（确认工艺并发送财务）order 20 → **42**、`role: (aiTab === 'process' && aiHasProcess()) ? 'primary' : 'aux'`、改 `deferred: true`（弹窗要人选接收人，不再占桥的 20 秒回合）；新增链路 `aiConfirmProcessAndSendToFinance()`：工艺没确认就先走既有 `POST /integration/process/confirm`（`aiConfirmStep('process')`）确认掉，再判 `aiFinanceBlocker()`，通过后打开既有 `aiOpenFinanceDialog()`；收尾由 `aiSendToFinanceInBackground()` 自报 `task-completed` / `task-failed`（带真实原因）并复位 `aiDeferredBusy` 与动作 busy。
+- `confirmProcessAndNext`（确认并进入下一步）退出左侧栏（`visible: false`，动作注册与实现保留）：2.3 成本测算是财务经理那一步，工艺经理只需把任务交给财务。
+- `aiFinanceBlocker(options)` 增加 `ignoreProcessConfirm`（默认口径不变）：同步回执里只判参数推荐那半边，「工艺还没确认」由链路先补。
+- 作用域泄漏补齐：`aiStatusState()` / `aiAnalyzed()` 与并行批次已提升的 `aiSetTab()` 一样挂到模块作用域（闭包外的「确认图纸并进入参数推荐」原来一跑就是 ReferenceError）；`report-publish-result.js` 的 `rpRefreshReport()` 同样提升，3.3「⇪ 回传销售经理继续报价」不再 ReferenceError。
+- 通用护栏：新红测扫描 `tech_app/frontend/*.js` 的全部注册 IIFE，任何以页面前缀声明的助手在 IIFE 外被引用即失败（防同类回归）。
+- 过期断言更新（3 处，均注明「契约更新」）：`test_integration_process_tab_single_primary_and_next_step_red.py`（确认并进入下一步改 `visible: false` / `role: 'aux'`；财务闸门与弹窗改指后台链路）、`test_tech_business_actions_clickable_then_error_red.py`（弹窗调用点）。另修 2 处测试脚手架：`test_tech_integration_agent_red.py` / `test_tech_cost_review_agent_red.py` 的注册表提取正则被并行批次的 `}).catch(...)` 提前截断，改为取到注册表末尾。
+- 验证：本批红测 **12/12**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **934 项 / 0 失败 / 7 跳过**；`node --check` 覆盖两个改动文件；`git diff --check` 通过。
+- 边界：未改后端路由与 service、未改 `aiConfirmStep` / `aiParamsFinalize` / `aiOpenFinanceDialog` / `aiRunOp` 实现、未改看板动作名与视图名、未动并行批次已落地的 `confirmParamsAndNext` deferred 与 `agent-chat.js` 卡片降噪。本批为本地修改，未提交、未推送。
+
+## 51. 下线「以财务经理身份登录…其余步骤只读」只读横幅（9-14）
+
+- 需求（用户）：「不要这个当前以 财务经理 身份登录，你负责 2.3 成本测算…归工艺经理，这里是只读」；随后补充「现在会出现两处这个全都不要」。
+- Spec：`docs/specs/tech-drop-readonly-bar.md`；红测：`tests/test_tech_drop_readonly_bar_red.py`（6 项），Red 基线 **9 失败**。
+- 根因：`tech_app/frontend/cpq-sso.js` 的 `showReadonlyBar()` 在 `!state.canWrite` 时往 body 插 `.cpq-sso-bar`；统一工作台外层与嵌入阶段页各自加载同一份脚本，于是同一句 2.3 归属说明同时出现在外层和 iframe（「两处」）。
+- 实现：删除 `showReadonlyBar()` 与调用点、删除 `.cpq-sso-bar` 三条样式；被拦写请求的 toast 收短为「这一步归工艺经理办理；当前账号没有这一步的操作权限」，不再复述 2.3 归属。
+- 保留：写请求预判仍是 `state.canWrite || (state.canCost && isCostUrl(url))` 并返回结构化 403 + toast、登录墙 `showLoginWall()`、`openCpqLogin()`、`COST_URL_PATTERNS` / `isCostUrl()`、`cpq-sso-ready` 事件与 `CpqSso` 接口；后端 `_require` 仍是唯一权限判定方。
+- 过期断言更新（1 处，注明「契约更新（只读横幅下线批次）」）：`test_tech_params_autofill_and_soft_gates_red.py::test_readonly_bar_names_params_as_process_step` 改为断言横幅已下线、写拦截仍说清这一步归工艺经理。
+- 验证：本批红测 **6/6**；全量 **934 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/cpq-sso.js` 通过；`git diff --check` 通过。
+- 边界：未改后端权限与路由、未改 SSO 检查与镜像写入、未新增第二套权限提示。本批为本地修改，未提交、未推送。
+
+## 52. 2.2 / 2.3 收口动作不再超时、失败不再钉底：`aiSetTab` 归位 + 收口动作 deferred + 失败不建卡（9-14）
+
+- 需求（用户）：「⚠ 确认并进入下一页签超时未响应」「⚠ aiSetTab is not defined」这些报错都不要再有卡片了，因为有卡片之后会固定在底部。
+- Spec：`docs/specs/tech-confirm-actions-no-timeout-and-no-failure-cards.md`；红测：`tests/test_tech_confirm_action_timeout_and_no_pinned_cards_red.py`（12 项）。
+- 根因 1（`aiSetTab is not defined`）：`assembly-integration.js` 里 `aiSetTab` 只在 `aiRegisterTechBoardActions()` 的 IIFE 内用 `const` 声明，而两个收口函数 `aiConfirmDrawingsAndNext()` / `aiConfirmParamsAndNext()` 定义在外层却调用它 —— 点「确认并进入下一页签」必抛 ReferenceError。
+- 根因 2（超时未响应）：「确认并进入下一页签」「确认成本」要弹人工确认框（缺项时等人点「仍要继续」），却是普通（非 deferred）动作 —— 桥 `DEFAULT_TIMEOUT = 20000` 把人的思考时间算成了超时。
+- 根因 3（失败卡钉底）：`agent-chat.js renderTaskProgress()` 的 `keepFailure` 让「只有失败原因、没有任何执行明细」的事件也新建 `.oc-task-card`，而它长在 `#ocTaskProgressHost`（会话底部常驻宿主），建出来就永远钉在底部。
+- 实现：`aiSetTab` 提成模块级 `function aiSetTab(name)`（注册闭包不再重复声明）；`confirmParamsAndNext` / `confirmCostReview` 改 `deferred: true`，`run()` 只启动后台链路并立即回执，成败由链路自己播报（本页状态位 + 普通会话输出），既有闸门 `aiAskProceed()` / `crAskProceed()` / `aiParamsFinalize()` / `aiConfirmStep()` / `crConfirmCost()` 全部保留；`renderTaskProgress()` 建卡闸门改为 `log.length > 0 || existingCard`，没有执行明细的失败一律不建卡，已经在跑的卡仍就地翻失败态并显示原因，且预期内失败码（`isQuietBoardCode(detail.code)`）不把在跑的卡翻红。
+- 验证：本批红测 **12/12**；回归 `test_tech_chat_card_noise_and_quiet_board_failures_red` + `test_tech_board_bridge_protocol_red` + `test_cost_review_single_primary_and_drop_run_step_red` + `test_tech_params_autofill_and_soft_gates_red` + `test_integration_params_tab_single_primary_and_auto_fill_red` 合计 **93/93**；`node --check` 覆盖 `agent-chat.js` / `assembly-integration.js` / `cost-review.js`；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **934 项 / 0 失败 / 7 跳过**；`git diff --check` 通过。
+- 边界：未改 `cpq:tech-board` 信封、七个事件、`tech:command` 方向与 projectId/stage 校验，未改桥的 `DEFAULT_TIMEOUT` 与 `QUIET_FAILURE_CODES`，未新增后端路由 / 字段 / Agent 工具，未删动作注册与业务实现。本批为本地修改，未提交、未推送。

@@ -52,6 +52,22 @@ const aiPlan = () => aiData?.plan || {};
 const aiHasParams = () => Boolean(aiData?.status?.has_params);
 const aiHasProcess = () => Boolean(aiData?.status?.has_process);
 
+/* 页签切换 + 重渲染。原先它只在 aiRegisterTechBoardActions 的闭包里用 const 声明，
+   而「确认图纸并进入参数推荐」「确认并进入下一页签」这两个收口函数定义在外层，
+   调用它当场就是 ReferenceError「aiSetTab is not defined」。切页签是这一页的基础
+   设施，挂在模块作用域，视图注册与业务函数共用同一个。 */
+function aiSetTab(name) { aiTab = name; aiRender(); }
+
+/* 同一处病灶的另外两个助手：「确认图纸并进入参数推荐」在闭包外调用 aiAnalyzed()，
+   留在闭包里同样一跑就 ReferenceError。它们只读看板手里那份 payload，不额外发请求。 */
+function aiStatusState() {
+  return (aiData && aiData.status) || {};
+}
+function aiAnalyzed() {
+  const state = aiStatusState();
+  return Boolean(state.has_params && state.has_process);
+}
+
 // --------------------------------------------------------------------------- 对话区
 function aiThreadAppend(html) {
   $ai('aiEmpty')?.remove();
@@ -1031,14 +1047,16 @@ function aiPublishState() {
 
 /* 「确认工艺并发送财务」的前置条件唯一判定：只判前置条件，不含 busy。
    aiRenderOps() 的页内 why 与左侧动作快照的 run() 共用这一份，两处不许漂移。 */
-function aiFinanceBlocker() {
+function aiFinanceBlocker(options = {}) {
   const state = aiData?.status || {};
   if (!state.has_params) return '请先完成参数推荐';
   if (!state.has_process) return '请先完成组装工艺';
   if ((state.required_missing || 0) > 0) return `请先在「参数推荐」里补齐 ${state.required_missing} 项报价必填参数`;
   if (!state.params_final) return '请先在「参数推荐」里点「确认参数已齐」';
   if (!state.params_confirmed) return '请先在「参数推荐」里点「确认参数推荐」';
-  if (!state.process_confirmed) return '请先在「组装工艺」里点「确认组装工艺」';
+  // 「组装工艺还没确认」这一段可以由调用方先补上（确认并发送财务的链路会先跑
+  // /process/confirm）；只有调用方明确说 ignoreProcessConfirm 时才跳过，默认口径不变。
+  if (!options.ignoreProcessConfirm && !state.process_confirmed) return '请先在「组装工艺」里点「确认组装工艺」';
   return '';
 }
 
@@ -1203,6 +1221,43 @@ async function aiOpenFinanceDialog() {
     mask.remove();
     aiRunOp('send-to-finance', dispatch);
   };
+}
+
+/* 「确认工艺并发送财务」的链路：组装工艺还没确认就先走既有 /process/confirm 把它
+   确认掉（确认没通过就带真实原因停下），再由既有 aiFinanceBlocker 判定并打开既有弹窗
+   选接收人。弹窗要人操作，所以整条链由 aiSendToFinanceInBackground 在后台跑。 */
+async function aiConfirmProcessAndSendToFinance() {
+  const state = aiStatusState();
+  if (state.has_process && !state.process_confirmed) {
+    await aiConfirmStep('process');
+    if (!aiStatusState().process_confirmed) {
+      return { ok: false, error: { code: 'confirm-failed',
+        message: '组装工艺确认没有通过，请查看右侧看板提示。' } };
+    }
+  }
+  const why = aiFinanceBlocker();
+  if (why) return { ok: false, error: { code: 'not-ready', message: why } };
+  return aiOpenFinanceDialog();
+}
+
+/* 发送财务的后台链路：动作条目只启动它、秒级回执，由这里在真正结束时自报收尾。
+   父壳那 20 秒超时只用来抓「看板没响应」，不再误伤要人选接收人的弹窗。 */
+async function aiSendToFinanceInBackground() {
+  try {
+    const result = await aiConfirmProcessAndSendToFinance();
+    if (result && result.ok === false) {
+      aiSettleIfNeeded('task-failed', 'sendIntegrationToFinance',
+        { message: (result.error && result.error.message) || '发送财务失败，请查看右侧看板提示。' });
+      return;
+    }
+    aiSettleIfNeeded('task-completed', 'sendIntegrationToFinance');
+  } catch (error) {
+    aiSettleIfNeeded('task-failed', 'sendIntegrationToFinance',
+      { message: (error && error.message) || '发送财务失败，请查看右侧看板提示。' });
+  } finally {
+    aiDeferredBusy = false;
+    window.TechBoardRuntime.updateActionState('sendIntegrationToFinance', { busy: false });
+  }
 }
 
 async function aiRunOp(kind, dispatch) {
@@ -1689,9 +1744,8 @@ aiStart();
  * 父壳底栏 / 标题行只发动作名 / 视图名，页面上的原按钮继续走同一份实现。 */
 (function aiRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
-  const aiStatusState = () => (aiData && aiData.status) || {};
-  const aiAnalyzed = () => Boolean(aiStatusState().has_params && aiStatusState().has_process);
-  const aiSetTab = (name) => { aiTab = name; aiRender(); };
+  // aiStatusState / aiAnalyzed / aiSetTab 都挂在模块作用域（见文件上方）：
+  // 闭包外的收口函数要用同一份实现，这里不再重复声明。
   window.TechBoardRuntime.registerActions({
     runIntegration: {
       label: '一键分析整合图纸',
@@ -1722,21 +1776,34 @@ aiStart();
                  hint: '生成参数推荐与组装工艺' };
       },
     },
+    // 组装工艺页的收口动作：工艺生成后它就是这一步的主按钮 —— 没确认过就先按既有
+    // /process/confirm 确认（不做死按钮），再由既有弹窗选接收人把任务交给财务。
+    // 弹窗要人操作，所以是 deferred：条目只启动、秒级回执，成败由后台链路自报。
     sendIntegrationToFinance: {
       label: '确认工艺并发送财务',
-      run: async () => {
-        const why = aiFinanceBlocker();
+      deferred: true,
+      run: () => {
+        // 「组装工艺还没确认」由后台链路先补上，所以同步回执里只判参数推荐那半边；
+        // 其余前置（参数推荐、报价必填）在这里就能如实说清楚。
+        const why = aiFinanceBlocker({ ignoreProcessConfirm: true });
         if (why) { aiStatus(why, true); return { ok: false, error: { code: 'not-ready', message: why } }; }
-        return aiOpenFinanceDialog();
+        if (aiDeferredBusy) {
+          return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+        }
+        aiDeferredBusy = true;
+        aiLastSettle = null;
+        window.TechBoardRuntime.updateActionState('sendIntegrationToFinance', { busy: true });
+        aiSendToFinanceInBackground();
+        return { ok: true };
       },
       getState: () => {
         const analyzed = aiAnalyzed();
-        // 它的闸门要求工艺已生成并确认（aiFinanceBlocker），因此只在「组装工艺」页出现；
-        // 放在参数页只会抢走主按钮位置，点了也必然是死按钮。
+        // 它的闸门要求参数推荐与组装工艺都跑过，因此只在「组装工艺」页出现；
+        // 工艺生成后它是本页唯一主按钮，生成前主按钮仍是「一键生成组装工艺」。
         const show = aiTab === 'process';
-        return { visible: show, enabled: true, busy: aiBusy,
-                 analyzed: analyzed, role: 'aux', order: 20,
-                 hint: '参数推荐与组装工艺都确认后可发送财务' };
+        return { visible: show, enabled: true, busy: aiBusy || aiDeferredBusy,
+                 analyzed: analyzed, role: (show && aiHasProcess()) ? 'primary' : 'aux', order: 42,
+                 hint: '确认工艺并把任务交给财务做成本测算' };
       },
     },
     // 整合图纸页的收口动作：分析出结果后，「确认图纸并进入参数推荐」才是这一步的下一步，
@@ -1777,7 +1844,23 @@ aiStart();
     confirmParamsAndNext: {
       label: '确认并进入下一页签',
       order: 35,
-      run: () => aiConfirmParamsAndNext(),
+      // 缺项时要弹确认框等人点「仍要继续」—— 这段等待不能算进桥的 20s 超时，
+      // 所以 run 只启动后台链路并立即回执；成败由链路自己播报（标题行 + 普通会话输出）。
+      deferred: true,
+      run: () => {
+        Promise.resolve(aiConfirmParamsAndNext()).then((result) => {
+          if (result && result.ok === true) return;
+          const message = (result && result.error && result.error.message)
+            || '确认参数推荐失败，请查看右侧看板提示。';
+          aiStatus(message, true);
+          aiSay(`⚠ ${message}`);
+        }).catch((error) => {
+          const message = (error && error.message) || '确认参数推荐失败，请稍后重试。';
+          aiStatus(message, true);
+          aiSay(`⚠ ${message}`);
+        });
+        return { ok: true };
+      },
       // role 只在这里声明一次：整个 2.2 页只允许有「当前那一个」主按钮。
       getState: () => ({ visible: aiTab === 'params' && aiHasParams(),
                          enabled: true, busy: aiBusy, role: 'primary', order: 35 }),
@@ -1795,16 +1878,16 @@ aiStart();
                  role: aiHasProcess() ? 'aux' : 'primary', order: 40 };
       },
     },
-    // 组装工艺页的收口动作：确认组装工艺 + 切到下一步 2.3 成本测算。
-    // 交给财务的交接不在这一步做（接收人要人工选），仍由本页「确认工艺并发送财务」承担。
+    // 组装工艺页的收口不再给「去 2.3 成本测算」单独一颗按钮：成本测算是财务经理那一步，
+    // 工艺经理在这里只需把任务交给财务。工艺生成后的主按钮是「确认工艺并发送财务」，
+    // 它自己会先把组装工艺确认掉 —— 所以这一颗退出左侧栏（动作注册与实现照旧保留，
+    // Agent / 内部链路仍按名字调用）。
     confirmProcessAndNext: {
       label: '确认并进入下一步',
       order: 45,
       run: () => aiConfirmProcessAndNext(),
-      // role 与可见性同一个条件：已生成工艺时它是本页唯一主按钮。
-      getState: () => ({ visible: aiTab === 'process' && aiHasProcess(),
-                         enabled: true, busy: aiBusy,
-                         role: aiHasProcess() ? 'primary' : 'aux', order: 45 }),
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy,
+                         role: 'aux', order: 45 }),
     },
     saveIntegrationParams: {
       label: '保存参数',

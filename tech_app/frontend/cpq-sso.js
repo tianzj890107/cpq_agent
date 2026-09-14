@@ -89,12 +89,6 @@
     var style = document.createElement('style');
     style.id = 'cpqSsoCss';
     style.textContent = [
-      '.cpq-sso-bar{position:sticky;top:0;z-index:9998;display:flex;align-items:center;gap:10px;',
-      'padding:9px 16px;background:#fef3c7;color:#92400e;font-size:13px;line-height:1.6;',
-      'border-bottom:1px solid #fde68a;}',
-      '.cpq-sso-bar b{font-weight:650;}',
-      '.cpq-sso-bar button{margin-left:auto;padding:5px 14px;border:none;border-radius:7px;',
-      'background:#92400e;color:#fff;font-size:12.5px;cursor:pointer;}',
       '.cpq-sso-mask{position:fixed;inset:0;z-index:99998;display:flex;align-items:center;',
       'justify-content:center;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);}',
       '.cpq-sso-card{width:400px;max-width:92vw;padding:26px 28px;border-radius:14px;background:#fff;',
@@ -151,21 +145,9 @@
     document.body.appendChild(mask);
   }
 
-  function showReadonlyBar() {
-    injectCss();
-    if (document.querySelector('.cpq-sso-bar')) return;
-    var bar = document.createElement('div');
-    bar.className = 'cpq-sso-bar';
-    bar.innerHTML = '<span>当前以 <b>' + esc(state.roleName || '非工艺经理') +
-      '</b> 身份登录，' + (state.canCost
-        ? '你负责 <b>2.3 成本测算</b>：那一步可以测算、确认并对外发送；' +
-          '2.1 图纸解析、2.2 组装与整合（整合图纸 / 参数推荐 / 组装工艺）归工艺经理，这里是只读。'
-        : '技术工艺为<b>只读</b>：可以查看项目与结果，' +
-          '解析、生成、保存、确认、发布等操作仅限工艺经理。') + '</span>' +
-      '<button type="button">切换账号</button>';
-    bar.querySelector('button').onclick = openCpqLogin;
-    document.body.insertBefore(bar, document.body.firstChild);
-  }
+  /* 只读横幅已按用户要求整体下线：外层工作台与嵌入阶段页各自都会加载本文件，
+     那条「当前以某身份登录 / 其余步骤只读」的归属说明会同时出现两处。权限提示改由
+     写请求被拦时的 toast 就地给出（见下面的写请求拦截），不再常驻一条横幅。 */
 
   function ready(fn) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
@@ -185,8 +167,7 @@
     var allowed = state.canWrite || (state.canCost && isCostUrl(url));
     if (isWrite && state.enabled && state.checked && !allowed) {
       var detail = state.canCost
-        ? '这一步归工艺经理；' + (state.roleName || '当前账号') +
-          '负责的是 2.3 成本测算，其余步骤只读'
+        ? '这一步归工艺经理办理；' + (state.roleName || '当前账号') + '没有这一步的操作权限'
         : '技术工艺的操作仅限工艺经理；' + (state.roleName || '当前账号') +
           '只能浏览，不能执行本操作';
       toast(detail);
@@ -223,7 +204,7 @@
     // 正常路径靠重载走到这里，但 CpqSso.refresh() 也能被单独调用，不能只依赖重载。
     ready(removeLoginWall);
     if (!state.enabled) return;                    // 未开 SSO：保持原有本地行为
-    if (!state.canWrite) ready(showReadonlyBar);
+    // 不再挂只读横幅：能力差异只在真正要写的时候提示一次。
     document.dispatchEvent(new CustomEvent('cpq-sso-ready', { detail: state }));
   }
 

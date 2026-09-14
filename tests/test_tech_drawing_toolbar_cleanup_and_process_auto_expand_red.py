@@ -162,8 +162,10 @@ class TechDrawingToolbarCleanupAndProcessAutoExpandRed(unittest.TestCase):
 
     def test_confirm_keeps_its_real_state_gate(self):
         block = block_from(self.app, "confirmDrawingResult:")
+        # 契约更新（主按钮三段式批次）：确认动作从 order 15 让位到 25，
+        # 前面插「一键生成全部工艺推荐」(order 15)；闸门本体与标签不变。
         for token in ('requestNavigate("process"', "drawingParsed()", "no-navigation",
-                      "/api/projects/", "order: 15", "role:"):
+                      "/api/projects/", "order: 25", "role:"):
             with self.subTest(token=token):
                 self.assertIn(token, block, f"确认动作既有实现被删除：{token}")
 
