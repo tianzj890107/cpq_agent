@@ -1781,36 +1781,84 @@
         '<span><span class="request-detail">详情</span>' +
         (mode === 'tech' ? '' : '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button>') + '</span></div></div>';
     }
+    /* ===== 认证就绪：技术清单必须等 window.cpqAuth 加载并完成首次登录态刷新 =====
+       直接打开 ?assistant=tech 时，这段内联脚本先于页面末尾的 cpq_auth.js 执行，
+       window.cpqAuth 还不存在。这里显式等 cpq-auth-ready；模块缺失或超时都抛明确错误，
+       既不读裸变量 cpqAuth，也不允许无限等待，监听器和定时器用完即清。 */
+    let HOME_AUTH_WAIT = null;          // 并发调用共用同一次等待
+    const HOME_AUTH_TIMEOUT = 8000;
+    function homeAuthReady() {
+      return Boolean(window.cpqAuth && typeof window.cpqAuth.ready === 'function' && window.cpqAuth.ready());
+    }
+    function waitForHomeAuth(timeoutMs) {
+      if (homeAuthReady()) return Promise.resolve(window.cpqAuth);
+      if (HOME_AUTH_WAIT) return HOME_AUTH_WAIT;
+      HOME_AUTH_WAIT = new Promise((resolve, reject) => {
+        let timer = 0;
+        const settle = (fn, value) => {
+          document.removeEventListener('cpq-auth-ready', onReady);
+          if (timer) { clearTimeout(timer); timer = 0; }
+          HOME_AUTH_WAIT = null;
+          fn(value);
+        };
+        const onReady = () => settle(resolve, window.cpqAuth);
+        document.addEventListener('cpq-auth-ready', onReady);
+        timer = setTimeout(() => {
+          const err = new Error(window.cpqAuth
+            ? '等待登录状态刷新超时，请检查认证服务后重试'
+            : '登录模块未加载或加载失败，请刷新页面重试');
+          err.homeAuthCode = window.cpqAuth ? 'auth-timeout' : 'auth-missing';
+          settle(reject, err);
+        }, Number(timeoutMs) || HOME_AUTH_TIMEOUT);
+      });
+      return HOME_AUTH_WAIT;
+    }
+
+    /* 同一模式的并发加载合并成一次（初始化和 cpq-auth-ready 可能同时触发）；
+       本次请求结束就释放，失败不会被缓存，登录态变化后仍然重试。 */
+    const LOAD_INFLIGHT = {};
     async function loadCards(mode) {
       if (!cardGrid) return;
-      cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
-      SESSION_ERROR = null;
-      try {
-        if (mode === 'tech') {
-          // 技术工艺项目与历史 Drawer 同源：都走带登录凭证的 cpqAuth.api('/api/projects')，
-          // 读取失败必须显式报错，不能当成「没有项目」。
-          const data = await cpqAuth.api('/api/projects');
-          const arr = Array.isArray(data) ? data : (data && data.projects) || [];
-          SESSIONS.tech = arr.map(pp => ({
-            id: pp.project_id,
-            owner: pp.owner,
-            ownerName: pp.owner_display_name || pp.owner || '',
-            title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
-            project: pp.project_name || pp.device_name || pp.source_filename || '',
-            created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
-            status: pp.status || '', turns: 0,
-          }));
-        } else {
-          const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
-          SESSIONS[mode] = r.sessions || [];
+      if (LOAD_INFLIGHT[mode]) return LOAD_INFLIGHT[mode];
+      const run = (async () => {
+        cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
+        SESSION_ERROR = null;
+        try {
+          if (mode === 'tech') {
+            // 技术工艺项目与历史 Drawer 同源：都走带登录凭证的 window.cpqAuth.api('/api/projects')。
+            // 时序上必须先等认证就绪，否则会抛 cpqAuth is not defined，再被误报成后端服务异常。
+            await waitForHomeAuth();
+            if (!wfUser()) throw new Error('尚未登录，请先登录后再查看技术工艺项目');
+            let data;
+            try {
+              data = await window.cpqAuth.api('/api/projects');
+            } catch (e) {
+              throw new Error('项目接口读取失败：' + ((e && e.message) || '未知错误'));
+            }
+            const arr = Array.isArray(data) ? data : (data && data.projects) || [];
+            SESSIONS.tech = arr.map(pp => ({
+              id: pp.project_id,
+              owner: pp.owner,
+              ownerName: pp.owner_display_name || pp.owner || '',
+              title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
+              project: pp.project_name || pp.device_name || pp.source_filename || '',
+              created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
+              status: pp.status || '', turns: 0,
+            }));
+          } else {
+            const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
+            SESSIONS[mode] = r.sessions || [];
+          }
+        } catch (e) {
+          SESSIONS[mode] = null;
+          SESSION_ERROR = (e && e.message) || '读取失败';
         }
-      } catch (e) {
-        SESSIONS[mode] = null;
-        SESSION_ERROR = (e && e.message) || '读取失败';
-      }
-      if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
-      PAGE = 1;
-      renderCards();
+        if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
+        PAGE = 1;
+        renderCards();
+      })();
+      LOAD_INFLIGHT[mode] = run;
+      try { return await run; } finally { delete LOAD_INFLIGHT[mode]; }
     }
     // 「待办任务」标签内容：未登录提示登录；已登录列出转交给我的任务卡片
     function renderTaskTab(q, info, ctrl) {
@@ -1844,8 +1892,10 @@
       const info = document.querySelector('.pagination-info');
       const ctrl = document.querySelector('.pagination-controls');
       if (rows === null) {
+        // 这里直接显示真实原因（认证未就绪 / 未登录 / 项目接口失败），
+        // 不再统一补一句「请检查后端服务」把真正的原因盖掉。
         cardGrid.innerHTML = '<div class="cards-empty">读取' + escH(MODES[mode].tag) + '数据失败：'
-          + escH(SESSION_ERROR || '服务不可达') + '。<br>请检查登录状态与后端服务后重试。</div>';
+          + escH(SESSION_ERROR || '服务不可达') + '。<br>请确认登录状态后重试。</div>';
         if (info) info.textContent = '';
         if (ctrl) ctrl.innerHTML = '';
         return;
@@ -2367,8 +2417,10 @@
     // 从工作台返回（含 bfcache）时刷新卡片，让新建/推进的单据立即出现
     window.addEventListener('pageshow', (e) => { if (e.persisted) loadCards(currentMode); });
     // 登录/登出后重拉「我的报价」与「待办任务」（两者都按账号归属）
-    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote' || currentMode === 'tech') wfLoad().then(renderCards); });
-    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote' || currentMode === 'tech') wfLoad().then(renderCards); });
+    // 登录态就绪/变化后重新拉取清单：技术工艺要从失败或未加载状态真正重试，
+    // 不能只 renderCards() 渲染旧数组。
+    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote' || currentMode === 'tech') loadCards(currentMode); });
+    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote' || currentMode === 'tech') loadCards(currentMode); });
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);

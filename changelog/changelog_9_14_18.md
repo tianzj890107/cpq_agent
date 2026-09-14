@@ -127,3 +127,18 @@
 - 缓存版本：统一递增为 `agent-chat.css?v=20260914-composer2` / `agent-chat.js?v=20260914-composer2`，四个入口（`tech-workbench.html`、`index.html`、`assembly-integration.html`、`cost-review.html`）保持一致。
 - 测试（实际运行）：`python3 -m unittest tests.test_quote_tech_chat_composer_alignment_red -v` → **6/6 通过**（Red 基线 2 通过 / 4 失败全部转绿）；回归 `tests.test_tech_direct_attachment_and_chat_capability_actions_red + test_tech_left_chat_controls_restore_red + test_tech_left_toolbar_parity_red + test_unified_model_settings_and_api_keys_red` → **36/36 通过**（无 `#ocModelSelect` 过期契约冲突）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **499 项、0 失败、7 跳过**；`node --check tech_app/frontend/agent-chat.js`、`node --check tech_app/frontend/tech-workbench.js` 通过；`git diff --check` 通过。
 - 边界：未用 `display:none` / `visibility:hidden` / 零宽 / 移出屏幕等任何方式隐藏旧按钮，是真正删除 DOM、CSS 与绑定；未删除或改写全局模型设置、API Key 后端与弹窗，未新建第二套模型状态或第二张设置卡片；未改后端接口、未改附件上传 / Enter 发送 / Shift+Enter 换行 / 输入法保护 / 消息与流式响应 / 历史会话 / 九阶段流程 / 右侧看板；未改独立 2.1 / 2.2 页面的输入逻辑；未提交、未推送、未创建 MR/tag/Release、未部署。
+
+## 10. 技术清单认证就绪与报价主色状态统一 实现（9-14）
+
+- `报价首页.html`：
+  - 新增 `waitForHomeAuth()`：`window.cpqAuth.ready()` 已就绪则立即返回，否则监听一次 `cpq-auth-ready`；模块缺失或 8s 超时抛明确错误（`homeAuthCode` = `auth-missing` / `auth-timeout`），监听器与定时器在 settle 时清理，不会无限等待。
+  - `loadCards('tech')` 在请求前 `await waitForHomeAuth()`，项目读取改为 `window.cpqAuth.api('/api/projects')`，不再出现裸变量 `cpqAuth`；未登录单独抛「尚未登录」，项目接口失败包装成「项目接口读取失败：…」，认证未就绪、未登录、鉴权失败、项目失败四类原因不再被一句「请检查后端服务」盖掉（列表错误文案改为「请确认登录状态后重试」）。
+  - `cpq-auth-ready` / `cpq-auth-change` 在 quote/tech 模式下改为真正重新 `loadCards(currentMode)`，从失败或未加载状态可重试，不再只 `renderCards()` 渲染旧数组。
+  - `loadCards` 增加按模式的在途去重（`LOAD_INFLIGHT`）：初始化与 `cpq-auth-ready` 同时触发时合并为一次请求，Promise 结束即释放，失败不缓存，登录态变化后仍会重试。
+- `确认需求解析结果.html`：
+  - `.guessed`（Agent 推测值）由琥珀色改为系统主色：`background: var(--color-primary-light)`、`border-color: var(--color-primary)`、`color: var(--color-primary-active)`；guessed 标记、字段值、人工编辑与提交行为不变，真正的 warning/error 颜色不受影响。
+  - `wfGate()` 在「已登录 + `WF.loaded` + `!WF.canEdit`」时不再调用 `showGateBubble('handoff')`，改为清理旧 `#wfGateBubble`，由 `wfRenderBar()` 在右侧看板给唯一一条提示；未登录（`login`）与服务不可用（`unavailable`）的会话提示保持不变。
+  - `wfRenderBar()` 只读角色分支改为主色语义（浅蓝底 + 蓝色边框 + 深蓝文字），并在进入分支前重置 `borderColor`，避免残留蓝色边框；`#wfBar` 只读提示成为角色不匹配的唯一可见入口。
+  - 权限未放宽：按钮仍按 `WF.canEdit` 禁用，后端角色校验未动，「转交任务」入口与 `GATE_BLOCKED` 保护保持原样。
+- 测试（实际运行）：`python3 -m unittest tests.test_home_auth_ready_and_quote_primary_state_colors_red -v` → **7/7 通过**（Red 基线 1 通过 / 6 失败全部转绿）；回归 `tests.test_tech_home_project_cards_and_agent_history_red + tests.test_tech_home_quote_shell_red + tests.test_tech_requirement_confirm_red + tests.test_unified_model_settings_and_api_keys_red` → 32/32 通过；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **506 项、0 失败、7 跳过**；两个页面的内联脚本 `node --check` 通过；`git diff --check` 通过。
+- 边界：未改角色定义、步骤负责人、`/wf/*` 接口、鉴权后端、登录 Token 与 API Key；未放宽任何操作权限；未删除技术项目、报价卡片或历史会话，也未迁移业务数据；未提交、未推送、未创建 MR/tag/Release、未部署。

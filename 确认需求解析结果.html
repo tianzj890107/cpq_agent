@@ -380,9 +380,10 @@
     }
     .sec-status.active { background: rgba(0,96,230,.12); color: var(--color-primary); }
     .sec-status.done { background: rgba(16,185,129,0.14); color: var(--color-success); }
-    /* 无依据的推测值：琥珀色高亮，让用户一眼看出哪些是猜的 */
+    /* 无依据的推测值：用系统主色浅蓝高亮，让用户一眼看出哪些是猜的。
+       语义只是「智能体猜的、待人工确认」，不是 warning，所以不再用琥珀色。 */
     .info-table input.guessed, .list-table input.guessed, .info-table span.guessed, .list-table td.guessed {
-      background: #FEF3C7; border-color: var(--color-warning); color: #92400e; font-weight: 500;
+      background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary-active); font-weight: 500;
     }
     .sec-source {
       font-size: 11px; color: var(--text-tertiary); margin: 2px 0 8px;
@@ -2517,7 +2518,8 @@
 
     /* ================= 准入闸门 =================
        报价流程按角色分工，**未登录一律不开工**：不解析需求、不做产品推荐、不调智能体。
-       登录后按角色决定：能做第 1 步 -> 请他点「开始」；不能做 -> 要求转交任务。 */
+       登录后按角色决定：本步归我 -> 自动开始；不归我 -> 只在右侧看板 #wfBar 显示一条
+       只读提示（左侧会话不再插重复气泡），需要交接时用页脚/快捷操作里的「转交任务」。 */
     let GATE_BLOCKED = false;   // true = 未登录/未就绪，锁住输入与操作
 
     function wfGate() {
@@ -2536,8 +2538,10 @@
         removeGateBubble();
         if (WF.canEdit) {
           wfMaybePromptStart();                    // 角色匹配 -> 「开始第 N 步」
-        } else if (PENDING_KICKOFF || !WF.stepStarted) {
-          showGateBubble('handoff');               // 角色不符 -> 要求转交
+        } else {
+          // 角色不符：只由右侧看板的 #wfBar 给一条只读提示，不再往左侧会话插重复气泡；
+          // 权限没有放宽，按钮仍禁用，后端仍会按角色校验，「转交任务」入口照旧。
+          removeGateBubble();
         }
       }
       wfRenderBar();
@@ -2717,6 +2721,7 @@
       }
       if (!WF.loaded) { bar.style.display = 'none'; return; }
       bar.style.display = 'block';
+      bar.style.borderColor = 'var(--border-color)';   // 每个分支自己决定是否改回主色边框
       // 待转交：本步已完成、下一步归别人，卡片必须推送出去才算交接完成
       if (WF.awaiting) {
         bar.style.background = 'rgba(239,68,68,.10)';
@@ -2742,8 +2747,10 @@
           escapeHtml(STEPS[currentStep - 1]) + '」由<b>' + escapeHtml(WF.needRole) +
           '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。';
       } else {
-        bar.style.background = 'rgba(234,179,8,.12)';
-        bar.style.color = '#a16207';
+        // 只读角色：主色浅蓝底 + 蓝色边框 + 深蓝文字（与「已转交·待领取」同一条主色语义）
+        bar.style.background = 'var(--color-primary-light)';
+        bar.style.borderColor = 'var(--color-primary)';
+        bar.style.color = 'var(--color-primary-active)';
         bar.innerHTML = '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
           '</b>完成，你是' + escapeHtml(u.role_name) + '，只能查看。' +
