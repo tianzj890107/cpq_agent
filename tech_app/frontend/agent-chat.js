@@ -1967,6 +1967,8 @@
     resetTask: resetTaskFlow,
     openSettings: (anchor) => settingsPanel(anchor),
     setStageContext: (context) => setStageContext(context),
+    // 父壳业务动作失败时把原因同步进左侧会话（pushSystem 是会话提示的唯一入口）。
+    notice: pushSystem,
   };
 
   $("ocFilesRefresh")?.addEventListener("click", () => loadFiles());

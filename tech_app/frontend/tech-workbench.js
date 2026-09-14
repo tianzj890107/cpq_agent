@@ -84,22 +84,6 @@
     return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
   }
 
-  // 九阶段壳导航表：每个 stage 只登记「上一步 / 下一步 / 转交」这些壳结构标记，绝不再
-  // 出现任何业务动作名。业务按钮的 label / role / order / hint / 可见 / 可用全部来自
-  // 看板动作快照（TechBoardBridge.snapshot().actions），父壳只渲染与转发，不维护兜底
-  // 文案表，也不按动作名写分支；实现始终留在右侧看板（TechBoardRuntime.registerActions）。
-  const STAGE_CHAT_FLOW = {
-    'requirement-create':  { prev: false, next: true,  transfer: true },
-    'requirement-confirm': { prev: true,  next: true,  transfer: true },
-    'requirement-review':  { prev: true,  next: true,  transfer: true },
-    'drawing':             { prev: true,  next: true,  transfer: true },
-    'process':             { prev: true,  next: true,  transfer: true },
-    'cost':                { prev: true,  next: true,  transfer: true },
-    'summary':             { prev: true,  next: true,  transfer: true },
-    'report-review':       { prev: true,  next: true,  transfer: true },
-    'report-publish':      { prev: true,  next: false, transfer: true },
-  };
-
   // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
   // 2.3 / 3.1 / 3.2 / 3.3 一一对应，缺上下文时 stageAgentContext() 返回 null 并
   // 不回退成任何别的 stage。这里只向会话组件提供模型请求用的语义上下文，不构造任何
@@ -157,10 +141,6 @@
   // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
   // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
   const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
-  // 左侧「失败重试」重跑的最近一次经桥动作：{ kind, name, payload, label }。
-  // 只在真正发出看板命令时记录，重试复用同一条通道，不重新发明流程。
-  let lastBoardAction = null;
-  let lastActionFailed = false;
   // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
   const projectNames = new Map();
 
@@ -598,35 +578,44 @@
   /* 业务动作统一出口：只发语义化动作名，真正的业务实现留在右侧看板里。看板未就绪时
      给出明确提示，超时 / 业务失败也会显示在标题行提示位，绝不无声返回。 */
   function runBoardAction(actionName, label, role) {
-    if (!state.project) return;
+    // 失败原因必须同时看得见：标题行提示位（红色 .is-error）+ 左侧会话一条提示。
+    // 会话提示只走 window.ocTechAgent.notice（唯一入口），父壳不在这里新建气泡。
+    const chatNotice = (message) => {
+      const agent = window.ocTechAgent;
+      if (!message || !agent || typeof agent.notice !== 'function') return;
+      try { agent.notice(message); } catch (error) { /* 会话提示失败不阻断主流程 */ }
+    };
+    if (!state.project) {
+      const message = `${label || actionName}：请先打开项目，再执行这一步的操作。`;
+      setBoardNotice(message, 'error');
+      chatNotice(message);
+      return;
+    }
     const bridge = boardBridge();
     if (!bridge || typeof bridge.executeAction !== 'function') {
-      setBoardNotice(`${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`, 'error');
-      lastActionFailed = true;
-      syncChatActions();
+      const message = `${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`;
+      setBoardNotice(message, 'error');
+      chatNotice(message);
       return;
     }
     setBoardNotice('');
-    lastBoardAction = { kind: 'action', name: actionName, label, role };
-    lastActionFailed = false;
     Promise.resolve(bridge.executeAction(actionName, { label, role }))
-      .then(() => { lastActionFailed = false; syncChatActions(); })
+      .then(() => { syncChatActions(); })
       .catch((error) => {
-        lastActionFailed = true;
-        setBoardNotice((error && error.message) || `${label || actionName} 执行失败`, 'error');
+        const message = (error && error.message) || `${label || actionName} 执行失败`;
+        setBoardNotice(message, 'error');
+        chatNotice(message);
         syncChatActions();
       });
   }
 
   /* ---------------------------------------------------- 左侧统一操作栏（第 16 步）
-   * 唯一的业务动作入口：按钮完全由看板动作快照驱动，父壳只渲染与转发，不查 iframe
-   * DOM、不写死 selector、不按动作名写分支。label / role / order / hint / visible /
-   * enabled / busy 全部来自看板；role === 'primary' 的那一个进 #techChatPrimary 槽位，
-   * 其余紧随其后描边渲染。点击一律走 TechBoardBridge.executeAction，上一步 / 下一步走
-   * applyStage，转交复用会话输入区，失败重试重跑最近一次经桥动作。 */
-  function chatFlow() {
-    return STAGE_CHAT_FLOW[state.stage] || null;
-  }
+   * 唯一的业务动作入口，且只放当前步骤的业务动作：按钮完全由看板动作快照驱动，父壳
+   * 只渲染与转发，不查 iframe DOM、不写死 selector、不按动作名写分支。label / role /
+   * order / hint / visible / enabled / busy 全部来自看板；role === 'primary' 的那一个
+   * 进 #techChatPrimary 槽位，其余紧随其后描边渲染。点击一律走
+   * TechBoardBridge.executeAction。步骤导航在顶部流程条，附件在输入区 ＋，刷新类动作
+   * 只由 refresh-data 命令与 Agent 工具触发 —— 都不在这里重复出现。 */
   function boardActionEntries() {
     const snapshot = boardSnapshot();
     const actions = (snapshot && snapshot.actions) || {};
@@ -655,7 +644,6 @@
     const label = item.label || options.label || item.name || '';
     const hint = item.hint ? String(item.hint) : '';
     if (options.busy || item.busy) return `${label}（执行中）`;
-    if (item.enabled === false) return `${label}（${hint || '当前不可用'}）`;
     if (options.needsProject && !state.project) return `${label}（请先打开项目）`;
     const text = hint ? `${label}：${hint}` : label;
     return options.primary ? `${text}（当前步骤主操作）` : text;
@@ -691,7 +679,7 @@
       button.textContent = entry.label || entry.name;
       button.title = tooltip;
       button.setAttribute('aria-label', tooltip);
-      button.disabled = entry.enabled === false || entry.busy === true || !state.project;
+      button.disabled = entry.busy === true || !state.project;
       button.addEventListener('click', () => runBoardAction(entry.name, entry.label || entry.name, 'aux'));
       // 插到当前锚点之后：等价于 anchor.insertAdjacentElement('afterend')，返回的新
       // 节点成为下一个锚点，保证「主按钮在前、其余动作紧随其后」的固定顺序。
@@ -699,101 +687,37 @@
       anchor = button;
     });
   }
-  // 转交：没有对应业务动作，把转交意图带进会话输入区，由用户确认后发送。
-  function transferCurrentTask() {
-    const input = $('ocInput');
-    if (!input) return;
-    input.value = '请把当前任务转交：';
-    input.focus();
-    try { input.setSelectionRange(input.value.length, input.value.length); } catch (error) { /* 忽略 */ }
-  }
-  function replayLastBoardAction() {
-    if (!lastBoardAction) return;
-    runBoardAction(lastBoardAction.name, lastBoardAction.label, lastBoardAction.role || 'primary');
-  }
   function syncChatActions() {
     const bar = $('techChatActions');
     if (!bar) return;
-    const flow = chatFlow();
-    if (!flow) {
+    // 显隐由看板动作快照决定：这一步没有可见业务动作就整栏隐藏，不看壳里的阶段导航表。
+    const entries = boardActionEntries();
+    if (!entries.length) {
       bar.hidden = true;
       return;
     }
     bar.hidden = false;
     // 主按钮只认看板声明的 role === 'primary'：没有就隐藏，不猜、不兜底。
-    const entries = boardActionEntries();
     const primaryName = primaryActionName(entries);
     const primaryEntry = entries.filter((entry) => entry.name === primaryName)[0] || null;
     setChatButton($('techChatPrimary'), {
       label: primaryEntry ? primaryEntry.label : '主要操作',
       visible: Boolean(primaryEntry),
-      enabled: Boolean(primaryEntry) && primaryEntry.enabled !== false
-        && primaryEntry.busy !== true && Boolean(state.project),
+      enabled: Boolean(primaryEntry) && primaryEntry.busy !== true && Boolean(state.project),
       variant: 'primary',
       title: primaryEntry ? actionTooltip(primaryEntry, { primary: true }) : '',
     });
     // 其余动作紧随主按钮动态渲染；同一个动作不会既当主按钮又出现在列表里。
     syncChatActionList(entries, primaryName);
-    const idx = stageIndex(state.stage);
-    const prevTarget = flow.prev && idx > 0 ? STAGES[idx - 1] : null;
-    const nextTarget = flow.next && idx >= 0 ? STAGES[idx + 1] : null;
-    const prevEnabled = Boolean(prevTarget) && (Boolean(state.project) || prevTarget.id === 'requirement-create');
-    const nextEnabled = Boolean(nextTarget) && (Boolean(state.project) || nextTarget.id === 'requirement-create');
-    const noProjectHint = state.project ? '' : '请先打开项目';
-    setChatButton($('techChatPrev'), {
-      label: '上一步',
-      visible: Boolean(flow.prev),
-      enabled: prevEnabled,
-      title: actionTooltip({ label: '上一步', enabled: prevEnabled, hint: noProjectHint }, {}),
-    });
-    setChatButton($('techChatNext'), {
-      label: '下一步',
-      visible: Boolean(flow.next),
-      enabled: nextEnabled,
-      title: actionTooltip({ label: '下一步', enabled: nextEnabled, hint: noProjectHint }, {}),
-    });
-    const transferEnabled = Boolean(flow.transfer) && Boolean(state.project);
-    setChatButton($('techChatTransfer'), {
-      label: '转交任务',
-      visible: Boolean(flow.transfer),
-      enabled: transferEnabled,
-      title: actionTooltip({ label: '转交任务', enabled: transferEnabled, hint: noProjectHint }, {}),
-    });
-    const retryEnabled = Boolean(lastBoardAction) && lastActionFailed && Boolean(state.project);
-    setChatButton($('techChatRetry'), {
-      label: '失败重试',
-      enabled: retryEnabled,
-      title: actionTooltip({ label: '失败重试', enabled: retryEnabled,
-        hint: lastBoardAction ? noProjectHint : '暂无可重试的动作' }, {}),
-    });
   }
   function bindChatToolbar() {
     const primaryBtn = $('techChatPrimary');
-    const prevBtn = $('techChatPrev');
-    const nextBtn = $('techChatNext');
-    const transferBtn = $('techChatTransfer');
-    const retryBtn = $('techChatRetry');
-    if (transferBtn) transferBtn.addEventListener('click', transferCurrentTask);
-    if (retryBtn) retryBtn.addEventListener('click', replayLastBoardAction);
     // 主按钮点的是「当前快照里 role === 'primary' 的那一个动作」，不写死动作名。
     if (primaryBtn) primaryBtn.addEventListener('click', () => {
       const entries = boardActionEntries();
       const primaryName = primaryActionName(entries);
       const entry = entries.filter((item) => item.name === primaryName)[0];
       if (entry) runBoardAction(entry.name, entry.label, 'primary');
-    });
-    // 上一步 / 下一步复用既有 applyStage，与底栏共用同一条切步通道。
-    if (prevBtn) prevBtn.addEventListener('click', () => {
-      const flow = chatFlow();
-      const idx = stageIndex(state.stage);
-      if (!flow || !flow.prev || idx <= 0) return;
-      applyStage(STAGES[idx - 1].id, { project: state.project });
-    });
-    if (nextBtn) nextBtn.addEventListener('click', () => {
-      const flow = chatFlow();
-      const idx = stageIndex(state.stage);
-      if (!flow || !flow.next || idx < 0 || idx >= STAGES.length - 1) return;
-      applyStage(STAGES[idx + 1].id, { project: state.project });
     });
   }
 

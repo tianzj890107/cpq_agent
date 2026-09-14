@@ -104,7 +104,8 @@ rrStart();
       role: 'aux',
       order: 40,
       run: async () => { try { return await rrRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
-      getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: !rrBoardBusy, busy: rrBoardBusy }),
     },
     applyReportReviewNote: {
       label: '带入审核意见',

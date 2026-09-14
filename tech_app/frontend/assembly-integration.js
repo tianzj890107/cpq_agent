@@ -818,6 +818,21 @@ function aiRender() {
     + ` · 工艺 ${state.process_confirmed ? '已确认' : state.has_process ? '待确认' : '—'}`;
   const name = aiPlan().params?.assembly_name;
   $ai('aiTitle').textContent = name ? `组装与整合 · ${name}` : '组装与整合';
+  aiPublishState();
+}
+
+/* 每次渲染收尾重新发布一次动作快照：父壳左侧「确认工艺并发送财务」等按钮的
+   busy / 可见性不会停在上一帧。同一帧内多次渲染合并成一次；独立打开阶段页
+   （没有 TechBoardRuntime）时无副作用。 */
+let aiPublishTimer = null;
+function aiPublishState() {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.refreshState !== 'function') return;
+  if (aiPublishTimer) return;
+  aiPublishTimer = setTimeout(() => {
+    aiPublishTimer = null;
+    try { runtime.refreshState(); } catch (error) { /* 快照刷新失败不影响页内渲染 */ }
+  }, 0);
 }
 
 /* ------------------------------------------------------- 两个对外动作
@@ -825,6 +840,19 @@ function aiRender() {
  * （远程 Postgres 与报价工作流都在那一侧）。成本没算完一律不给点 —— 写进主数据的
  * 单价是要拿去报价的，宁可拦住，也不要写一个 0 进去。
  */
+
+/* 「确认工艺并发送财务」的前置条件唯一判定：只判前置条件，不含 busy。
+   aiRenderOps() 的页内 why 与左侧动作快照的 run() 共用这一份，两处不许漂移。 */
+function aiFinanceBlocker() {
+  const state = aiData?.status || {};
+  if (!state.has_params) return '请先完成参数推荐';
+  if (!state.has_process) return '请先完成组装工艺';
+  if ((state.required_missing || 0) > 0) return `请先在「参数推荐」里补齐 ${state.required_missing} 项报价必填参数`;
+  if (!state.params_final) return '请先在「参数推荐」里点「确认参数已齐」';
+  if (!state.params_confirmed) return '请先在「参数推荐」里点「确认参数推荐」';
+  if (!state.process_confirmed) return '请先在「组装工艺」里点「确认组装工艺」';
+  return '';
+}
 
 function aiRenderOps() {
   const plan = aiPlan();
@@ -846,14 +874,7 @@ function aiRenderOps() {
     && state.params_final && !state.required_missing) && !aiBusy;
   if (financeBtn) financeBtn.disabled = !ready;
 
-  const why = aiBusy ? '正在处理…'
-    : !state.has_params ? '请先完成参数推荐'
-    : !state.has_process ? '请先完成组装工艺'
-    : (state.required_missing || 0) > 0 ? `请先在「参数推荐」里补齐 ${state.required_missing} 项报价必填参数`
-    : !state.params_final ? '请先在「参数推荐」里点「确认参数已齐」'
-    : !state.params_confirmed ? '请先在「参数推荐」里点「确认参数推荐」'
-    : !state.process_confirmed ? '请先在「组装工艺」里点「确认组装工艺」'
-    : '';
+  const why = aiBusy ? '正在处理…' : aiFinanceBlocker();
   if (financeBtn) {
     financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 2.3 测算成本';
   }
@@ -905,7 +926,11 @@ async function aiWfApi(path) {
 }
 
 async function aiOpenFinanceDialog() {
-  if (aiBusy) return;
+  if (aiBusy) {
+    const message = '正在处理中，请稍后再发送财务。';
+    aiStatus(message, true);
+    return { ok: false, error: { code: 'busy', message: message } };
+  }
   // 名单取不到也要能发：那时只剩「发给财务经理」这一种，与改造前的行为一致。
   let roles = [];
   let users = [];
@@ -1496,21 +1521,23 @@ aiStart();
         return { ok: true };
       },
       getState: () => {
-        const button = $ai('aiStart');
-        const busy = Boolean(button && button.disabled);
         const analyzed = aiAnalyzed();
-        return { visible: true, enabled: !busy, busy: busy, analyzed: analyzed,
+        const busy = aiBusy || aiDeferredBusy;
+        return { visible: true, enabled: true, busy: busy, analyzed: analyzed,
                  role: analyzed ? 'aux' : 'primary', order: 10,
                  hint: '生成参数推荐与组装工艺' };
       },
     },
     sendIntegrationToFinance: {
       label: '确认工艺并发送财务',
-      run: async () => { await aiOpenFinanceDialog(); return { ok: true }; },
+      run: async () => {
+        const why = aiFinanceBlocker();
+        if (why) { aiStatus(why, true); return { ok: false, error: { code: 'not-ready', message: why } }; }
+        return aiOpenFinanceDialog();
+      },
       getState: () => {
-        const button = $ai('aiToFinance');
         const analyzed = aiAnalyzed();
-        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: false,
+        return { visible: true, enabled: true, busy: aiBusy,
                  analyzed: analyzed, role: analyzed ? 'primary' : 'aux', order: 20,
                  hint: '参数推荐与组装工艺都确认后可发送财务' };
       },
@@ -1525,7 +1552,7 @@ aiStart();
       order: 30,
       deferred: true,
       run: () => { aiGenerate('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     generateIntegrationProcess: {
       label: '生成组装工艺',
@@ -1533,14 +1560,14 @@ aiStart();
       order: 40,
       deferred: true,
       run: () => { aiGenerate('process'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     saveIntegrationParams: {
       label: '保存参数',
       role: 'aux',
       order: 50,
       run: () => { aiSaveEdits('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     confirmIntegrationParams: {
       label: '确认参数推荐',
@@ -1548,7 +1575,7 @@ aiStart();
       order: 60,
       deferred: true,
       run: () => { aiConfirmStep('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     confirmIntegrationProcess: {
       label: '确认组装工艺',
@@ -1556,7 +1583,7 @@ aiStart();
       order: 70,
       deferred: true,
       run: () => { aiConfirmStep('process'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     autofillIntegrationParams: {
       label: '智能补全',
@@ -1564,7 +1591,7 @@ aiStart();
       order: 80,
       deferred: true,
       run: () => { aiParamsAutofill(); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     saveIntegrationParamsFinal: {
       label: '保存补填',
@@ -1572,7 +1599,7 @@ aiStart();
       order: 90,
       deferred: true,
       run: () => { aiParamsFinalize(false); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     confirmIntegrationParamsFinal: {
       label: '确认参数已齐',
@@ -1580,7 +1607,7 @@ aiStart();
       order: 100,
       deferred: true,
       run: () => { aiParamsFinalize(true); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: !aiBusy, busy: aiBusy }; },
+      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
     },
     // Agent 改完参数 / 工序后让看板重新拉取并渲染（复用 aiStart 的读取路径）。
     refreshIntegration: {
@@ -1588,7 +1615,8 @@ aiStart();
       role: 'aux',
       order: 110,
       run: async () => { await aiStart(); return { ok: true }; },
-      getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy, analyzed: aiAnalyzed() }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy, analyzed: aiAnalyzed() }),
     },
     // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 2.2 内跑流水线。
     integrationStep: {
@@ -1614,7 +1642,7 @@ aiStart();
         aiIntegrationStepInBackground(step, options);
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: !aiBusy, busy: aiBusy }),
+      getState: () => ({ visible: true, enabled: true, busy: aiBusy }),
     },
     // 图纸上传只能由用户完成：切到「整合图纸」页签并聚焦上传入口，不代传二进制。
     openIntegrationDrawings: {
@@ -1627,7 +1655,7 @@ aiStart();
         if (button) button.focus();
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: !aiBusy, busy: false,
+      getState: () => ({ visible: true, enabled: true, busy: false,
                          active: aiTab === 'drawings' ? 'drawings' : null }),
     },
   });

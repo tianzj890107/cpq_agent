@@ -31,7 +31,7 @@ let crDeferredBusy = false;
    后端才是权威（main.py 的 COST_ROLES），这里只是提前说清楚 —— 否则要等点下去
    才收到 403，还容易被读成"系统坏了"。取不到身份时不拦：让后端去判。 */
 let crUser = null;
-const CR_COST_ROLES = ['finance_mgr', 'admin'];
+const CR_COST_ROLES = ['finance_manager', 'admin'];
 const crReadOnly = () =>
   Boolean(crUser && crUser.role_code) && !CR_COST_ROLES.includes(crUser.role_code);
 const crReadOnlyWhy = () =>
@@ -308,8 +308,23 @@ function crRenderTotal() {
   return html + `</section>`;
 }
 
+/* 「确认成本」的前置条件唯一判定：只读身份 / 缺零件 / 缺件数 / 整机未算 / 0 元行。
+   只判前置条件，不含 busy；页内提示与左侧动作快照的 run() 共用这一份，两处不漂移。 */
+function crConfirmBlocker() {
+  if (crReadOnly()) return crReadOnlyWhy();
+  const counts = crData?.counts || {};
+  if (!counts.parts) return '还没有零件可以确认，请先完成成本测算';
+  if ((counts.missing || []).length) return `还有 ${counts.missing.length} 个零件没算成本`;
+  if (!counts.assembly_costed) return '整机（组装）成本还没算';
+  if ((counts.zero || []).length) return `这些行是 0 元：${counts.zero.join('、')}`;
+  return '';
+}
+
 function crRenderActions() {
   const host = $cr('crActions');
+  // 确认按钮的悬浮原因与左侧动作快照共用同一份判定（crConfirmBlocker）。
+  const confirmBtn = $cr('crConfirm');
+  if (confirmBtn) confirmBtn.title = crConfirmBlocker() || '确认成本后，三个去向都以确认过的数为准';
   if (crTab === 'parts') {
     const missing = (crData?.counts?.missing || []).length;
     host.innerHTML =
@@ -361,6 +376,21 @@ function crRender() {
     + ` · ${crData?.review?.confirmed ? '已确认' : '未确认'}`;
   const name = crData?.assembly?.name;
   $cr('crTitle').textContent = name ? `2.3 成本测算 · ${name}` : '2.3 成本测算';
+  crPublishState();
+}
+
+/* 每次渲染收尾重新发布一次动作快照：父壳「写入数据库 / 回传销售经理继续报价 /
+   提交工艺经理确认」的可用性不会停在上一帧（确认成本与测算收尾都会走到这里）。
+   同一帧内合并成一次；独立打开阶段页（没有 TechBoardRuntime）时无副作用。 */
+let crPublishTimer = null;
+function crPublishState() {
+  const runtime = window.TechBoardRuntime;
+  if (!runtime || typeof runtime.refreshState !== 'function') return;
+  if (crPublishTimer) return;
+  crPublishTimer = setTimeout(() => {
+    crPublishTimer = null;
+    try { runtime.refreshState(); } catch (error) { /* 快照刷新失败不影响页内渲染 */ }
+  }, 0);
 }
 
 /* --------------------------------------------------------------- 三个去向 */
@@ -388,14 +418,10 @@ function crRenderOps() {
   $cr('crToQuote').disabled = !confirmed;
   $cr('crReturn').disabled = crBusy || readOnly;
 
-  const counts = crData?.counts || {};
-  const why = readOnly ? crReadOnlyWhy()
-    : crBusy ? '正在处理…'
-    : (counts.missing || []).length ? `还有 ${counts.missing.length} 个零件没算成本`
-    : !counts.assembly_costed ? '整机（组装）成本还没算'
-    : (counts.zero || []).length ? `这些行是 0 元：${counts.zero.join('、')}`
-    : !review.confirmed ? '先点「确认成本」，写库与发报价都以确认过的数为准'
-    : '';
+  // 去向提示：前置条件来自 crConfirmBlocker()（唯一判定），确认之后才是三个去向。
+  const why = crBusy ? '正在处理…'
+    : crConfirmBlocker()
+    || (!review.confirmed ? '先点「确认成本」，写库与发报价都以确认过的数为准' : '');
   const badge = $cr('crWhy');
   badge.textContent = why;
   badge.hidden = !why;
@@ -744,7 +770,7 @@ crStart();
       return ok ? { ok: true }
         : { ok: false, error: { code: 'op-failed', message: `${label}失败，请查看看板提示。` } };
     },
-    getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+    getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
   });
   window.TechBoardRuntime.registerActions({
     runCostReview: {
@@ -762,22 +788,20 @@ crStart();
         crRunAllInBackground();
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
     },
     confirmCostReview: {
       label: '确认成本',
       role: 'aux',
       order: 20,
       run: async () => {
-        const button = $cr('crConfirm');
-        if (button && button.disabled) return { ok: false, error: { code: 'not-ready', message: '尚未测算完成，暂不能确认成本。' } };
-        await crConfirmCost();
-        return { ok: true };
+        const why = crConfirmBlocker();
+        if (why) { crStatus(why, true); return { ok: false, error: { code: 'not-ready', message: why } }; }
+        const done = await crConfirmCost();
+        return done ? { ok: true }
+          : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };
       },
-      getState: () => {
-        const button = $cr('crConfirm');
-        return { visible: true, enabled: Boolean(button) && !button.disabled, busy: Boolean(crBusy) };
-      },
+      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
     },
     // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。
     refreshCostReview: {
@@ -785,7 +809,8 @@ crStart();
       role: 'aux',
       order: 60,
       run: async () => crRefresh(),
-      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: true, busy: Boolean(crBusy) }),
     },
     // 左侧 Agent 请求跑某一环节：复用既有 crRunPart / crRunAssembly / crRunAll。
     costStep: {
@@ -822,7 +847,7 @@ crStart();
         crCostStepInBackground(work);
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: !crBusy, busy: Boolean(crBusy) }),
+      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
     },
     // 三个去向：复用既有 crRunOp，不新增对外调用。
     writeCostReviewMaterial: crOpAction('material-write', '写入数据库', 'aux', 30),

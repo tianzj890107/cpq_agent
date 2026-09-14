@@ -210,6 +210,13 @@
     return api;
   }
 
+  // 看板每次渲染收尾调它：重新发布一次 action-state 快照，父壳按钮的 busy /
+  // 可见性不会停在上一帧。只重发，不做覆盖（覆盖走 updateActionState）。
+  function refreshState() {
+    publish(EVENT.ACTION_STATE, 'refresh');
+    return api;
+  }
+
   function setContext(patch) {
     if (!patch || typeof patch !== 'object') return api;
     Object.keys(patch).forEach(function (key) {
@@ -355,6 +362,7 @@
   }
 
   var api = {
+    refreshState: function () { return refreshState(); },
     namespace: NAMESPACE,
     version: VERSION,
     context: context,

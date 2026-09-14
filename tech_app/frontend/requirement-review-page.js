@@ -78,7 +78,8 @@ rrRender=function(){rrRenderWithCustomerCredit();rrPublishStatus();const list=do
       role: 'aux',
       order: 30,
       run: async () => { await rrStart(); return { ok: true }; },
-      getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#submitReview')), busy: rrBoardBusy }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: Boolean(document.querySelector('#submitReview')), busy: rrBoardBusy }),
     },
     submitRequirementReview: {
       label: '提交审核意见',

@@ -286,7 +286,8 @@ rcPersist=async function(submit){
       role: 'aux',
       order: 40,
       run: async () => { await rcStart(); return { ok: true }; },
-      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: !rcBoardBusy, busy: rcBoardBusy }),
     },
   });
 })();

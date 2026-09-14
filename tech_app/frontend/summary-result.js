@@ -131,7 +131,8 @@ srStart();
       role: 'aux',
       order: 60,
       run: async () => { try { return await srRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
-      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     generateProcessReportDraft: {
       label: '生成报告草稿',
