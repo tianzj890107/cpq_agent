@@ -18,16 +18,20 @@ def css_rule(source: str, selector: str) -> str:
 
 
 class TechChatComposerFlushBottomContract(unittest.TestCase):
-    def test_binding_caption_returns_without_moving_flush_bottom_input(self):
-        # 第 33 批反转：说明原文回归技术工艺会话区，但必须是 composer 内绝对定位的辅助提示
-        # （不占布局高度），输入框底边坐标仍与「贴底」实现一致（padding: 10px 16px 0）。
+    def test_binding_caption_returns_below_the_input(self):
+        # 最新决策（取代第 33 批）：说明原文回到输入框下方，走普通文档流
+        # （与技术工艺其它会话一致）；不得再用绝对 / 固定定位把它抽离布局。
+        # composer 仍由 flex 锚定在会话列底部（padding: 10px 16px 0 不变）。
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', TECH_HTML, re.S)
         self.assertIsNotNone(composer)
-        self.assertIn('class="oc-disc"', composer.group(1))
-        self.assertIn("会话绑定当前项目", composer.group(1))
+        body = composer.group(1)
+        self.assertIn('class="oc-disc"', body)
+        self.assertIn("会话绑定当前项目", body)
+        self.assertLess(body.find("oc-inputbox"), body.find("oc-disc"), "说明行必须在输入框之后（下方）")
         caption = css_rule(TECH_CSS, "#techChatPane .oc-disc")
-        self.assertIn("position:absolute", caption)
-        self.assertNotRegex(caption, r"margin-bottom:\s*[1-9]")
+        self.assertNotIn("position:absolute", caption)
+        self.assertNotIn("position:fixed", caption)
+        self.assertIn("margin-top:9px", caption)
 
     def test_tech_composer_bottom_padding_is_zero(self):
         rule = css_rule(TECH_CSS, "#techChatPane .oc-composer")

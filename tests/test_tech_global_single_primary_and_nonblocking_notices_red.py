@@ -84,15 +84,16 @@ class TechGlobalSinglePrimaryAndNonblockingNoticesContract(unittest.TestCase):
         self.assertIn("var(--gradient-primary)", block.group(1))
         self.assertRegex(block.group(1), r"color:\s*#fff")
 
-    def test_binding_caption_returns_without_moving_flush_bottom_input(self):
+    def test_binding_caption_returns_below_the_input(self):
+        # 最新决策（取代第 33 批）：说明位于输入框下方、走普通文档流，不得绝对定位。
         self.assertIn("会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。", WB_HTML)
         composer = re.search(r"#techChatPane \.oc-composer\s*\{([^}]*)\}", WB_CSS, re.S)
         self.assertIsNotNone(composer)
         self.assertRegex(composer.group(1), r"padding:\s*10px\s+16px\s+0")
         caption = re.search(r"#techChatPane \.oc-disc\s*\{([^}]*)\}", WB_CSS, re.S)
         self.assertIsNotNone(caption)
-        self.assertRegex(caption.group(1), r"position:\s*absolute")
-        self.assertNotRegex(caption.group(1), r"margin-bottom:\s*[1-9]")
+        self.assertNotRegex(caption.group(1), r"position:\s*(absolute|fixed)")
+        self.assertRegex(caption.group(1), r"margin-top:\s*9px")
 
     def test_compact_autogrow_input_contract_remains(self):
         for token in ("width: 34px", "height: 34px", "width: 36px", "height: 36px",

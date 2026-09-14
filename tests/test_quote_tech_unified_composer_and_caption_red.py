@@ -172,17 +172,19 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         )
 
     # ------------------------------------------------- 说明行（最新决策：报价保留、技术移除并贴底）
-    def test_tech_composer_keeps_binding_caption_without_layout_height(self):
-        # 第 33 批反转：说明原文回归技术工艺（不再删除），但改为绝对定位的不占布局高度提示，
-        # 输入框底边坐标不变（#techChatPane .oc-composer 仍 padding: 10px 16px 0）。
+    def test_tech_composer_keeps_binding_caption_below_input(self):
+        # 最新决策（取代第 33 批）：说明原文位于输入框下方、走普通文档流，
+        # 不得用绝对 / 固定定位把它抽离布局（#techChatPane .oc-composer 仍 padding: 10px 16px 0）。
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', self.tech_html, re.S)
         self.assertIsNotNone(composer, "找不到技术工艺 .oc-composer 区块")
         body = composer.group(1)
         self.assertIn('class="oc-disc"', body, "技术工艺说明行必须存在")
         self.assertIn(CAPTION, body)
+        self.assertLess(body.find("oc-inputbox"), body.find("oc-disc"), "说明行必须在输入框下方")
         caption = compact(css_rule(_read(WORKBENCH_CSS), "#techChatPane .oc-disc"))
-        self.assertIn("position:absolute", caption, "说明行必须绝对定位，不能占布局高度")
-        self.assertNotRegex(caption, r"margin-bottom:[1-9]")
+        self.assertNotIn("position:absolute", caption, "说明行必须在普通文档流内")
+        self.assertNotIn("position:fixed", caption)
+        self.assertIn("margin-top:9px", caption)
 
     def test_quote_composer_has_same_binding_caption(self):
         area = re.search(r'<div class="chat-input-area">(.*?)\n      </div>', self.quote, re.S)

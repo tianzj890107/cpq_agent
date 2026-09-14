@@ -51,9 +51,9 @@ class QuoteTechComposerAlignmentRedTest(unittest.TestCase):
         self.assertNotIn("ocModelSelect", self.workbench_js)
         self.assertNotIn("ocModelSelectLabel", self.workbench_js)
 
-    def test_tech_composer_keeps_binding_caption_without_moving_input(self):
-        # 第 33 批反转：技术工艺说明行回归，但改为绝对定位的不占布局高度提示；
-        # 输入框底边坐标不变（#techChatPane .oc-composer 仍是 padding: 10px 16px 0）。
+    def test_tech_composer_keeps_binding_caption_below_input(self):
+        # 最新决策（取代第 33 批）：技术工艺说明行位于输入框下方、走普通文档流；
+        # 不得绝对定位抽离布局（#techChatPane .oc-composer 仍是 padding: 10px 16px 0）。
         composer = re.search(
             r'<div class="oc-composer">(.*?)</div>\s*</section>',
             self.tech_html,
@@ -63,8 +63,8 @@ class QuoteTechComposerAlignmentRedTest(unittest.TestCase):
         self.assertIn("oc-disc", composer.group(1))
         self.assertIn("会话绑定当前项目", composer.group(1))
         caption = block(self.workbench_css, "#techChatPane .oc-disc")
-        self.assertRegex(caption, r"position:\s*absolute")
-        self.assertNotRegex(caption, r"margin-bottom:\s*[1-9]")
+        self.assertNotRegex(caption, r"position:\s*(absolute|fixed)")
+        self.assertRegex(caption, r"margin-top:\s*9px")
 
     def test_quote_and_tech_composer_use_the_same_outer_padding(self):
         quote_padding = re.search(r"\.chat-input-area\s*\{[^}]*padding:\s*([^;]+);", self.quote, re.S)
