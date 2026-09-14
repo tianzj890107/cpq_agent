@@ -281,6 +281,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 #techChatPane .oc-composer {
   flex: 0 0 auto;
+  padding: 10px 16px 0;
   border-top: .5px solid var(--twb-border);
 }
 

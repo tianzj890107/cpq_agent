@@ -437,15 +437,15 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    模型切换不在输入框内 —— 沿用头部 / 导航的「模型与参数设置」入口，避免挤占输入宽度。
    独立 2.1 页（index.html）与 2.2 页（assembly-integration.html）继续用上面的 .oc-inputbox。 */
 .oc-inputbox-single {
-  min-height: 76px; padding: 10px 12px 10px 20px; gap: 12px;
+  min-height: 0; padding: 7px 8px 7px 12px; gap: 8px;
   border: 1px solid var(--oc-border-3); border-radius: 24px; background: var(--oc-bg-1);
 }
 .oc-inputbox-single:focus-within { border-color: var(--oc-accent); }
-.oc-inputbox-single textarea { font-size: 15px; line-height: 24px; }
+.oc-inputbox-single textarea { overflow-y: hidden; font-size: 12px; line-height: 20px; }
 .oc-inputbox-single textarea::placeholder { color: var(--oc-text-3); }
 /* 圆形 +：新增 / 上传附件（查看已有文件在会话上方的「任务文件」，两个入口不合并）。 */
 .oc-add {
-  display: flex; width: 50px; height: 50px; flex: 0 0 50px;
+  display: flex; width: 34px; height: 34px; flex: 0 0 34px;
   align-items: center; justify-content: center; padding: 0; border: 0;
   border-radius: 50%; background: var(--oc-bg-2); color: var(--oc-text-1);
   font-size: 18px; cursor: pointer; transition: background .15s;
@@ -455,7 +455,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-add:disabled { opacity: .5; cursor: not-allowed; }
 /* 发送：真正的圆形主色按钮（主色唯一事实源仍是 --oc-accent → --color-primary）。 */
 .oc-inputbox-single .oc-send {
-  width: 54px; height: 54px; flex: 0 0 54px; border-radius: 50%; background: var(--oc-accent);
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; background: var(--oc-accent);
 }
 .oc-inputbox-single .oc-send:hover:not(:disabled) { filter: brightness(.94); }
 .oc-inputbox-single .oc-send .ti { font-size: 22px; }
@@ -621,8 +621,9 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-chip.is-active:hover {
   border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);
 }
-.oc-retry-row { display: flex; order: 1; padding: 2px 0 4px 38px; }
-.oc-chip-retry { padding: 4px 12px; font-size: 12px; }
+/* 失败提示的重试按钮内联在会话流那条消息里（noteInThread 的 extras），
+   不再有独立的常驻提示行，所以只需要一点与正文的间距。 */
+.oc-chip-retry { display: inline-flex; margin-top: 6px; padding: 4px 12px; font-size: 12px; }
 
 /* tech_ui（第 17 步）：会话流内的固定确认卡片 —— 只有用户点击「确认」才执行 target，
    不覆盖右侧看板、不建父级 Modal。 */

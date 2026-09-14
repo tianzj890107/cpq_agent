@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260914-composer2" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260914-compact1" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb15" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb16" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -107,14 +107,10 @@
             <span class="oc-files-action-label">任务文件</span>
             <span class="oc-chip-count" id="ocFilesCount" aria-live="polite">—</span>
           </button>
-          <!-- 2.1 图纸解析的五项能力（原 ＋ 能力菜单）：只在 drawing 阶段显示/启用。
-               视图类（解析视图 / 导入已有 3D 模型 / 版本与校核审查）走既有看板视图导航，
-               动作类（联网核验 / 校验修正）走既有执行通道，名字与既有分派语义不变。 -->
+          <!-- 2.1 图纸解析：只有「解析视图」留在左侧会话栏；导入已有 3D 模型 / 版本与校核
+               审查 / 联网核验 / 校验修正四项归位到 2.1 的「更多功能 ▾」菜单，这里不再重复
+               提供。能力本体与既有分派语义不变，只在 drawing 阶段显示/启用。 -->
           <button type="button" data-tech-capability="evidence">解析视图</button>
-          <button type="button" data-tech-capability="import3d">导入已有 3D 模型</button>
-          <button type="button" data-tech-capability="review">版本与校核审查</button>
-          <button type="button" data-tech-capability="modelLookup">联网核验</button>
-          <button type="button" data-tech-capability="verify">校验修正</button>
           <!-- 唯一主按钮槽位：具体动作由看板快照的 role === 'primary' 决定，父壳只渲染。
                其余业务动作（含 2.1 的「一键生成全部工艺推荐」等）紧随其后动态插入。 -->
           <button type="button" id="techChatPrimary">主要操作</button>
@@ -137,7 +133,6 @@
                         aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
-            <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
       </section>
@@ -237,6 +232,6 @@
   <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
   <script src="tech-workbench.js?v=twb17"></script>
-  <script src="agent-chat.js?v=20260914-composer2"></script>
+  <script src="agent-chat.js?v=20260914-compact1"></script>
 </body>
 </html>

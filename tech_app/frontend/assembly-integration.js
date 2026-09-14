@@ -47,6 +47,10 @@ const aiMoney = value => value == null ? '—'
   : Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 const aiSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const aiPlan = () => aiData?.plan || {};
+// 两个「这一步做到哪了」的共享判定：左侧动作的可见性 / role 都由它们推导，
+// 不许各处各写一份（写散了就会出现「参数已经生成、按钮却还是生成」这类漂移）。
+const aiHasParams = () => Boolean(aiData?.status?.has_params);
+const aiHasProcess = () => Boolean(aiData?.status?.has_process);
 
 // --------------------------------------------------------------------------- 对话区
 function aiThreadAppend(html) {
@@ -537,9 +541,12 @@ async function aiParamsAutofill() {
     aiPublishTask('task-completed', { taskId: taskId, label: '智能补全', status: 'succeeded' });
     aiSay(applied
       ? `已为 ${applied} 项参数填入建议值（表格里标了「AI 建议」）。`
-        + `**这是建议不是结论** —— 请逐项核对，改完点「保存补填」才会写进参数表。`
+        + `**这是建议不是结论** —— 请逐项核对后再确认。`
         + (unresolved.length ? `\n另有 ${unresolved.length} 项确实推不出来：${unresolved.join('、')}。` : '')
       : `没有可以推出来的参数${unresolved.length ? `：${unresolved.join('、')} 都需要人工确定。` : '。'}`);
+    // 调用方（生成参数推荐链路）据此判断要不要把补上的值落库：建议已回填进表格，
+    // 但只有真的填了值才值得写一次 finalize。
+    return { applied: applied, unresolved: unresolved };
   } catch (error) {
     const message = error.message || '智能补全失败';
     card.done(false, message);
@@ -584,6 +591,99 @@ async function aiParamsFinalize(confirm) {
     aiBusy = false;
     aiRender();
   }
+}
+
+/** 「生成参数推荐」的完整链路：生成 → 有报价必填缺口就自动补全 → 把补上的值落库。
+    三步全部复用既有实现与既有接口（/integration/params、/params/autofill、/params/finalize），
+    不新增第二套推荐逻辑；用户因此不必再点「智能补全 / 保存补填 / 确认参数已齐」。 */
+async function aiGenerateParamsFully() {
+  const generated = await aiGenerate('params');
+  if (!generated || generated.ok === false) {
+    return generated || { ok: false, error: { code: 'generate-failed', message: '生成参数推荐失败，请查看右侧看板提示。' } };
+  }
+  if (!aiHasParams()) {
+    return { ok: false, error: { code: 'no-params',
+      message: '模型没有产出整机参数，请查看右侧看板提示后重试。' } };
+  }
+  if (aiRequiredGaps().required_missing > 0) {
+    const filled = await aiParamsAutofill();
+    if (filled && filled.applied > 0) await aiParamsFinalize(false);
+  }
+  const gaps = aiRequiredGaps();
+  aiSay(gaps.required_missing
+    ? `参数推荐已生成：报价必填 ${gaps.required_filled}/${gaps.required_total} 项有值，`
+      + `还缺 ${gaps.required_missing} 项（${gaps.fields.map(field => field.name || field.code).join('、')}）—— `
+      + `平台推不出来的这些请在右侧表格「值」列直接补填，补齐后点「确认并进入下一步」。`
+    : `参数推荐已生成，报价必填 ${gaps.required_total} 项都齐了。`
+      + `在右侧核对无误后，点「确认并进入下一步」继续排组装工艺。`);
+  return { ok: true };
+}
+
+/** 「确认并进入下一步」：确认参数已齐（按报价必填校验）→ 确认参数推荐 → 切到组装工艺。
+    两步都复用既有接口（/params/finalize 的 confirm 分支、/params/confirm），缺项时不往下走，
+    把后端的真实原因交给父壳显示。 */
+async function aiConfirmParamsAndNext() {
+  if (aiBusy) {
+    return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+  }
+  if (!aiHasParams()) {
+    return { ok: false, error: { code: 'no-params', message: '请先生成参数推荐。' } };
+  }
+  // 先落库 + 校验报价必填：缺项时后端退回真实原因，这里如实返回，不把缺口带给工艺与成本。
+  await aiParamsFinalize(true);
+  if (!aiData?.status?.params_final) {
+    const gaps = aiRequiredGaps();
+    return { ok: false, error: { code: 'required-missing',
+      message: `还有 ${gaps.required_missing} 项报价必填参数没有值：`
+        + `${gaps.fields.map(field => field.name || field.code).join('、')}。请在右侧表格补填后再确认。` } };
+  }
+  await aiConfirmStep('params');
+  if (!aiData?.status?.params_confirmed) {
+    return { ok: false, error: { code: 'confirm-failed',
+      message: '参数推荐确认没有通过，请查看右侧看板提示。' } };
+  }
+  aiSetTab('process');
+  aiSay('参数推荐已确认。已切到「组装工艺」—— 点「生成组装工艺」继续排工序。');
+  return { ok: true };
+}
+
+/** 切到下一步：复用既有嵌入导航通道（tech-embed.js 的 requestNavigate 会按
+    cpq:tech-workbench:navigate 交给父壳；独立打开时它自己整页跳转）。
+    这里不自己拼 postMessage，也不认 iframe 内部 DOM —— 导航只有这一条通道。 */
+function techGoNextStage(stage) {
+  if (!stage) return false;
+  try {
+    if (window.TechEmbed && typeof window.TechEmbed.requestNavigate === 'function') {
+      window.TechEmbed.requestNavigate(stage, aiPid);
+      return true;
+    }
+  } catch (error) { /* 嵌入壳缺失或未就绪：保持页内不动，由顶部流程条兜底 */ }
+  return false;
+}
+
+/** 「确认并进入下一步」（组装工艺页）：确认组装工艺 → 切到 2.3 成本测算。
+    确认走既有 /integration/process/confirm，切步骤走既有嵌入导航通道；
+    确认没过就把真实原因原样返回，不往下走。交给财务的交接不在这里做 ——
+    接收人必须人工选，仍由同一页的「确认工艺并发送财务」承担。 */
+async function aiConfirmProcessAndNext() {
+  if (aiBusy) {
+    return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+  }
+  if (!aiHasProcess()) {
+    return { ok: false, error: { code: 'no-process', message: '请先生成组装工艺。' } };
+  }
+  await aiConfirmStep('process');
+  if (!aiData?.status?.process_confirmed) {
+    return { ok: false, error: { code: 'confirm-failed',
+      message: '组装工艺确认没有通过，请查看右侧看板提示。' } };
+  }
+  techGoNextStage('cost');
+  aiSay('组装工艺已确认，已进入下一步 2.3 成本测算。'
+    + (aiPlan().finance_handoff
+        ? '任务已经在财务手里，接下来由他在 2.3 逐件测算零件成本与组装成本。'
+        : '如果还没把任务交给财务，先在左边点「确认工艺并发送财务」（接收人要人工选），'
+          + '否则 2.3 没有可接手的测算任务。'));
+  return { ok: true };
 }
 
 /** 把参数表里改过的值收回成 IntegrationParamPlan。后端 finalize 那条路只回传值
@@ -1523,7 +1623,10 @@ aiStart();
       getState: () => {
         const analyzed = aiAnalyzed();
         const busy = aiBusy || aiDeferredBusy;
-        return { visible: true, enabled: true, busy: busy, analyzed: analyzed,
+        // 开始整合分析是「整合图纸」页的起点：整条链（参数推荐 + 组装工艺）从这里发起，
+        // 参数页与工艺页各自有本步的生成 / 确认动作，不再重复出现这颗按钮。
+        const show = aiTab === 'drawings';
+        return { visible: show, enabled: true, busy: busy, analyzed: analyzed,
                  role: analyzed ? 'aux' : 'primary', order: 10,
                  hint: '生成参数推荐与组装工艺' };
       },
@@ -1537,7 +1640,10 @@ aiStart();
       },
       getState: () => {
         const analyzed = aiAnalyzed();
-        return { visible: true, enabled: true, busy: aiBusy,
+        // 它的闸门要求工艺已生成并确认（aiFinanceBlocker），因此只在「组装工艺」页出现；
+        // 放在参数页只会抢走主按钮位置，点了也必然是死按钮。
+        const show = aiTab === 'process';
+        return { visible: show, enabled: true, busy: aiBusy,
                  analyzed: analyzed, role: analyzed ? 'primary' : 'aux', order: 20,
                  hint: '参数推荐与组装工艺都确认后可发送财务' };
       },
@@ -1551,8 +1657,26 @@ aiStart();
       role: 'aux',
       order: 30,
       deferred: true,
-      run: () => { aiGenerate('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 一次点完就是完整链路：aiGenerate('params') 生成 → aiParamsAutofill() 自动补全
+      // 报价必填缺口 → aiParamsFinalize(false) 把补上的值落库。三步都是既有实现与既有接口，
+      // 左侧因此不再需要「智能补全 / 保存补填 / 确认参数已齐」三颗按钮。
+      run: () => { aiGenerateParamsFully(); return { ok: true }; },
+      getState: () => {
+        const show = aiTab === 'params';
+        // 未生成时它就是参数页的主按钮；生成之后主按钮交给「确认并进入下一步」。
+        return { visible: show, enabled: true, busy: aiBusy,
+                 role: aiHasParams() ? 'aux' : 'primary', order: 30 };
+      },
+    },
+    // 参数页的收口动作：确认参数已齐（按报价必填校验）+ 确认参数推荐 + 切到组装工艺，
+    // 用户只点一次；必填不齐时返回真实原因、不切页。
+    confirmParamsAndNext: {
+      label: '确认并进入下一步',
+      order: 35,
+      run: () => aiConfirmParamsAndNext(),
+      // role 只在这里声明一次：整个 2.2 页只允许有「当前那一个」主按钮。
+      getState: () => ({ visible: aiTab === 'params' && aiHasParams(),
+                         enabled: true, busy: aiBusy, role: 'primary', order: 35 }),
     },
     generateIntegrationProcess: {
       label: '生成组装工艺',
@@ -1560,14 +1684,31 @@ aiStart();
       order: 40,
       deferred: true,
       run: () => { aiGenerate('process'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: true, busy: aiBusy }; },
+      getState: () => {
+        const show = aiTab === 'process';
+        // 未生成工艺时它就是本页主按钮；生成之后主按钮交给「确认并进入下一步」。
+        return { visible: show, enabled: true, busy: aiBusy,
+                 role: aiHasProcess() ? 'aux' : 'primary', order: 40 };
+      },
+    },
+    // 组装工艺页的收口动作：确认组装工艺 + 切到下一步 2.3 成本测算。
+    // 交给财务的交接不在这一步做（接收人要人工选），仍由本页「确认工艺并发送财务」承担。
+    confirmProcessAndNext: {
+      label: '确认并进入下一步',
+      order: 45,
+      run: () => aiConfirmProcessAndNext(),
+      // role 与可见性同一个条件：已生成工艺时它是本页唯一主按钮。
+      getState: () => ({ visible: aiTab === 'process' && aiHasProcess(),
+                         enabled: true, busy: aiBusy,
+                         role: aiHasProcess() ? 'primary' : 'aux', order: 45 }),
     },
     saveIntegrationParams: {
       label: '保存参数',
       role: 'aux',
       order: 50,
       run: () => { aiSaveEdits('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 参数表一直可编辑，保存只是链路内部的一步：不再占左侧栏一颗按钮。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     confirmIntegrationParams: {
       label: '确认参数推荐',
@@ -1575,7 +1716,8 @@ aiStart();
       order: 60,
       deferred: true,
       run: () => { aiConfirmStep('params'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 已并入「确认并进入下一步」；动作本身保留，Agent / 内部链路仍可调用。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     confirmIntegrationProcess: {
       label: '确认组装工艺',
@@ -1583,7 +1725,8 @@ aiStart();
       order: 70,
       deferred: true,
       run: () => { aiConfirmStep('process'); return { ok: true }; },
-      getState: () => { const show = aiTab === 'process'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 已并入「确认并进入下一步」；动作本身保留，Agent / 内部链路仍可调用。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     autofillIntegrationParams: {
       label: '智能补全',
@@ -1591,7 +1734,8 @@ aiStart();
       order: 80,
       deferred: true,
       run: () => { aiParamsAutofill(); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 已并入「生成参数推荐」的自动补全；动作本身保留。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     saveIntegrationParamsFinal: {
       label: '保存补填',
@@ -1599,7 +1743,8 @@ aiStart();
       order: 90,
       deferred: true,
       run: () => { aiParamsFinalize(false); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 已并入「生成参数推荐」的链路；动作本身保留。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     confirmIntegrationParamsFinal: {
       label: '确认参数已齐',
@@ -1607,13 +1752,15 @@ aiStart();
       order: 100,
       deferred: true,
       run: () => { aiParamsFinalize(true); return { ok: true }; },
-      getState: () => { const show = aiTab === 'params'; return { visible: show, enabled: true, busy: aiBusy }; },
+      // 已并入「确认并进入下一步」；动作本身保留。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     // Agent 改完参数 / 工序后让看板重新拉取并渲染（复用 aiStart 的读取路径）。
     refreshIntegration: {
       label: '刷新整合看板',
       role: 'aux',
       order: 110,
+      silent: true,
       run: async () => { await aiStart(); return { ok: true }; },
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
       getState: () => ({ visible: false, enabled: true, busy: aiBusy, analyzed: aiAnalyzed() }),
@@ -1642,7 +1789,10 @@ aiStart();
         aiIntegrationStepInBackground(step, options);
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: true, busy: aiBusy }),
+      // 只给 Agent 工具用（RequestIntegrationStep → tech_ui "integration-step"）：
+      // 它必须拿到 payload.step，而左侧栏只发 { label, role }，用户点了必然报 bad-step。
+      // 隐藏入口不影响执行 —— runEntry 只认动作名，execute-action 照旧能跑到这里。
+      getState: () => ({ visible: false, enabled: true, busy: aiBusy }),
     },
     // 图纸上传只能由用户完成：切到「整合图纸」页签并聚焦上传入口，不代传二进制。
     openIntegrationDrawings: {
@@ -1655,7 +1805,9 @@ aiStart();
         if (button) button.focus();
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: true, busy: false,
+      // 同样只给 Agent 工具用（UploadIntegrationDrawing → "open-integration-drawings"）：
+      // 对用户而言标题行右侧的子页签已经是同一目标的入口，左侧栏不再重复一颗。
+      getState: () => ({ visible: false, enabled: true, busy: false,
                          active: aiTab === 'drawings' ? 'drawings' : null }),
     },
   });

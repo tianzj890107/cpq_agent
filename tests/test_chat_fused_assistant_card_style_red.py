@@ -203,7 +203,9 @@ class ChatFusedAssistantCardStyleRedTest(unittest.TestCase):
     def test_board_runtime_task_events_carry_label_and_task_id(self):
         for event in ("TASK_PROGRESS", "TASK_COMPLETED", "TASK_FAILED"):
             with self.subTest(event=event):
-                body = block_from(self.runtime, f"publish(EVENT.{event},")
+                # 卡片事件现在统一经 runEntry 内的 publishTaskCard 出口发布
+                # （silent 条目在出口里短路，不再直接 publish(EVENT.*)）。
+                body = block_from(self.runtime, f"publishTaskCard(EVENT.{event},")
                 self.assertTrue(body, f"找不到 {event} 的 publish 调用")
                 self.assertIn("label", body, f"{event} payload 必须带 label")
                 self.assertIn("taskId", body, f"{event} payload 必须带 taskId")

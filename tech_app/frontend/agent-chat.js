@@ -675,7 +675,9 @@
 
   function autoSize() {
     input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    const contentHeight = input.scrollHeight;
+    input.style.height = `${Math.min(contentHeight, 120)}px`;
+    input.style.overflowY = contentHeight > 120 ? "auto" : "hidden";
   }
 
   // ---------------------------------------------------------------- 解析联动
@@ -1019,12 +1021,16 @@
     scrollDown();
   }
 
-  function noteInThread(text) {
+  // extras：同一条消息的附加控件（例如失败后的「重试」按钮）。它们必须和正文共享
+  // 同一个气泡容器，按时间顺序留在会话流里；不要再另起一行 append 到 tinner 末尾 ——
+  // 那种独立节点会永远钉在底部，后面聊多少轮都顶不走。
+  function noteInThread(text, extras) {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
     wrap.append(el("div", "oc-aav", "✦"));
     const body = el("div", "oc-abody");
     body.append(el("div", "oc-atxt", text));
+    if (typeof extras === "function") extras(body);
     wrap.append(body);
     tinner.append(wrap);
     scrollDown();
@@ -1501,7 +1507,11 @@
   function refreshBoardAfterUpload() {
     const bridge = boardBridge();
     if (bridge && typeof bridge.refreshData === "function") {
-      Promise.resolve(bridge.refreshData({ action: "refreshData", label: "刷新任务文件" })).catch(() => {});
+      // 刷新失败不再被空 catch 吞掉：真实原因按普通输出写进会话，用户能看到并重试。
+      Promise.resolve(bridge.refreshData({ action: "refreshData", label: "刷新任务文件" }))
+        .catch((error) => {
+          pushSystem(`刷新看板失败：${(error && error.message) || "看板未响应"}`);
+        });
     }
     requestBoardSummary();
     loadFiles();
@@ -1562,17 +1572,18 @@
   function showBoardNavFailure(view, payload, error) {
     const label = (payload && payload.label) || CAPABILITY_LABELS[view] || view || "该视图";
     const reason = (error && error.message) || "看板未响应";
-    noteInThread(`打开「${label}」失败：${reason}。`);
-    const retry = el("button", "oc-chip oc-chip-retry", "重试");
-    retry.type = "button";
-    retry.addEventListener("click", () => {
-      retry.disabled = true;
-      Promise.resolve(boardNavigateView(view, payload)).finally(() => { retry.disabled = false; });
+    // 提示按普通输出进流：正文和重试按钮同属一条消息，会被后面的消息自然顶上去。
+    // 这里以前额外往 tinner 末尾 append 一个独立提示行节点，且该节点从不移除 ——
+    // 一次失败之后底部就永久挂着那行提示，再聊多少轮也不动（那套样式已随批删除）。
+    noteInThread(`打开「${label}」失败：${reason}。`, (body) => {
+      const retry = el("button", "oc-chip oc-chip-retry", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        Promise.resolve(boardNavigateView(view, payload)).finally(() => { retry.disabled = false; });
+      });
+      body.append(retry);
     });
-    const row = el("div", "oc-retry-row");
-    row.append(retry);
-    (tinner || thread).append(row);
-    scrollDown();
   }
 
   // 唯一导航出口：所有左侧入口都只经这里把看板视图名发出去。桥缺失 / 未就绪 /

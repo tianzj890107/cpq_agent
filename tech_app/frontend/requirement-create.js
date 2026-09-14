@@ -6,6 +6,9 @@ const rcSvg = (kind='doc') => ({doc:'<svg width="18" height="18" viewBox="0 0 24
 const rcUploadSvg='<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
 function rcToast(message,error=false){const el=document.createElement('div');el.className=`page-toast${error?' error':''}`;el.textContent=message;document.body.append(el);setTimeout(()=>el.remove(),3600)}
 function rcData(){return rcRequirement?.data||{}}
+// 「需求是否已解析」的唯一判定：document_extraction 由既有「一键解析需求」流程写入
+// rcRequirement.data；1.1 的主按钮槽位（解析 ↔ 提交确认）共用这一份，不另造标记。
+function rcExtracted(){return Boolean(rcData().document_extraction)}
 function rcValue(key){return esc(rcData()[key]||'')}
 const RC_FIELD_LABELS={title:'需求名称',requirement_type:'需求类型',priority:'优先级',bu:'BU',disclosure:'披露口径',description:'需求描述',customer_type:'新旧客户',customer_industry:'客户行业分类',account_manager:'客户经理',final_customer_name:'最终客户名称',transaction_customer_name:'交易客户名称',customer_credit:'客户信用等级',project_name:'项目名称',project_code:'项目编码',product_iteration:'全新或迭代',project_manager:'项目经理',technical_contact:'技术对接人',product_name:'产品名称',product_model:'产品型号',wafer_size:'晶圆尺寸',chuck_type:'静电吸盘类型',temperature_zones:'温区数量',ceramic_material:'陶瓷基体材料',electrode_material:'电极材料',base_material:'金属基座材质',product_weight:'产品重量',overall_dimensions:'外形尺寸',ttv:'平面度（TTV）要求',roughness:'表面粗糙度（Ra）要求',micro_hole_diameter:'微孔孔径',micro_hole_diameter_tolerance:'微孔孔径公差',micro_hole_depth_tolerance:'微孔深度公差',mesa_height:'微凸台高度',adsorption_uniformity:'吸附力均匀性',temperature_range:'工作温度范围',max_voltage:'最高使用电压',leakage_current:'漏电流要求',helium_leak_rate:'氦气漏率要求',cleanliness:'洁净度等级',service_life:'使用寿命要求',target_equipment:'目标设备类型',process_stage:'适用工艺环节',vacuum_environment:'真空环境要求',heating:'是否含加热功能',annual_forecast:'年预测量',lifetime_forecast:'生命周期总预测',first_sample_due:'期望首样交付时间',mass_production_due:'期望量产时间',target_price:'目标售价',competitors:'竞争对手情况',current_situation:'目前状况说明',project_k0:'预估项目 K0 时间',evaluation_due:'期望工艺评估完成日期',project_start_due:'项目启动预计时间',milestones:'关键里程碑节点',category_a:'类型 A',category_b:'类型 B',product_type:'产品类型',complexity:'工艺复杂度等级',new_technology:'是否涉及新技术',technology_source:'技术来源',notes:'备注',related_requirement:'关联需求单号'};
 Object.assign(RC_FIELD_LABELS,{battery_model:'电芯型号',cathode_material:'正极材料',anode_material:'负极材料',nominal_voltage:'标称电压',gravimetric_energy_density:'质量能量密度',volumetric_energy_density:'体积能量密度',dcir:'直流内阻（DCIR）',battery_operating_temperature:'工作温度范围',thermal_runaway_temperature:'热失控触发温度',crush_puncture_safety:'挤压/针刺安全',cycle_life:'循环寿命',calendar_life:'日历寿命',stacking_process:'叠片工艺',minimalist_packaging:'极简封装',battery_process_other:'其他核心工艺特点',vda_dimensions:'VDA标准尺寸',slim_cell_dimensions:'长薄化尺寸',battery_form_factor:'形状',appliance_category:'产品品类',appliance_model:'产品型号',rated_voltage:'额定电压/频率',rated_power:'额定功率',energy_efficiency_grade:'能效等级',appliance_dimensions:'整机外形尺寸',appliance_weight:'整机净重',key_performance:'关键性能指标',noise_limit:'噪声限值',standby_power:'待机功耗',appliance_operating_temperature:'工作环境温度',appliance_service_life:'整机使用寿命',reliability_test:'可靠性试验要求',housing_material:'主体结构材料',surface_process:'外观表面工艺',insulation_requirement:'保温与密封要求',core_components:'核心部件',forming_process:'关键成型工艺',safety_standard:'安规标准',hipot_requirement:'耐压测试要求',ground_resistance:'接地电阻要求',emc_requirement:'EMC 要求',certification_region:'认证区域'});
@@ -250,21 +253,24 @@ rcPersist=async function(submit){
     saveRequirementDraft: {
       label: '保存草稿',
       role: 'aux',
-      order: 20,
+      order: 30,
       run: () => rcBoardRun(false),
-      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+      // 前置条件不灰按钮（与 tech-business-actions-clickable-then-error 一致）：忙闲只由 busy 表达。
+      getState: () => ({ visible: true, enabled: true, busy: rcBoardBusy }),
     },
     submitRequirement: {
       label: '提交确认',
-      role: 'primary',
-      order: 10,
+      // 解析前主按钮让给「一键解析需求」（此时提交只会被校验拦回）；解析完成后反转为提交。
       run: () => rcBoardRun(true),
-      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+      getState: () => {
+        const extracted = rcExtracted();
+        return { visible: true, enabled: true, busy: rcBoardBusy,
+                 role: extracted ? 'primary' : 'aux', order: 20 };
+      },
     },
     extractRequirement: {
       label: '一键解析需求',
-      role: 'aux',
-      order: 30,
+      // 这一步真正的起点：字段还没解析、需求单还空着时它才是主按钮。
       deferred: true,
       run: () => {
         if (rcBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
@@ -276,7 +282,11 @@ rcPersist=async function(submit){
         rcExtractInBackground();
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+      getState: () => {
+        const extracted = rcExtracted();
+        return { visible: true, enabled: true, busy: rcBoardBusy,
+                 role: extracted ? 'aux' : 'primary', order: 10 };
+      },
     },
     // Agent 改完需求字段（UpdateRequirementFields / AttachRequirementFiles）后，左侧
     // 只发 refresh-data；这里复用既有 rcStart() 重新拉取需求单并重绘看板，不新增
@@ -285,9 +295,10 @@ rcPersist=async function(submit){
       label: '刷新需求看板',
       role: 'aux',
       order: 40,
+      silent: true,
       run: async () => { await rcStart(); return { ok: true }; },
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
-      getState: () => ({ visible: false, enabled: !rcBoardBusy, busy: rcBoardBusy }),
+      getState: () => ({ visible: false, enabled: true, busy: rcBoardBusy }),
     },
   });
 })();

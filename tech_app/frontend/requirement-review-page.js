@@ -77,6 +77,7 @@ rrRender=function(){rrRenderWithCustomerCredit();rrPublishStatus();const list=do
       label: '刷新需求审核页',
       role: 'aux',
       order: 30,
+      silent: true,
       run: async () => { await rrStart(); return { ok: true }; },
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
       getState: () => ({ visible: false, enabled: Boolean(document.querySelector('#submitReview')), busy: rrBoardBusy }),

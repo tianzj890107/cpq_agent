@@ -101,6 +101,7 @@ rpStart();
       label: '刷新发布报告',
       role: 'aux',
       order: 40,
+      silent: true,
       run: async () => { try { return await rpRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
       getState: () => ({ visible: false, enabled: !rpBoardBusy, busy: rpBoardBusy }),

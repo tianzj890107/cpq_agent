@@ -96,8 +96,10 @@ class RuntimeDeferredContract(unittest.TestCase):
     def test_non_deferred_actions_still_publish_completion(self):
         match = re.search(r"function runEntry\([\s\S]*?\n  \}", self.runtime)
         self.assertIsNotNone(match)
+        # 第 5 批之后卡片事件收口到 runEntry 内的 publishTaskCard(eventName, extra)
+        # 出口（silent 条目在出口里短路），完成事件因此不再以裸 publish(EVENT.*) 出现。
         self.assertRegex(
-            match.group(0), r"publish\(EVENT\.TASK_COMPLETED",
+            match.group(0), r"publishTaskCard\(EVENT\.TASK_COMPLETED",
             "非 deferred 动作仍必须发布 task-completed",
         )
 

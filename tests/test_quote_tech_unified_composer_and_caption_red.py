@@ -75,17 +75,14 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, wrapper, "报价输入行未采用技术工艺单行圆角造型：缺 %s" % token)
 
-    def test_quote_input_row_matches_tech_geometry(self):
+    def test_quote_geometry_remains_while_tech_uses_compact_content_height(self):
         quote = compact(css_rule(self.quote, ".chat-input-wrapper"))
         tech = compact(css_rule(self.chat_css, ".oc-inputbox-single"))
         self.assertTrue(tech, "找不到技术工艺 .oc-inputbox-single 规则")
-        for prop in ("min-height:", "border-radius:", "gap:"):
-            with self.subTest(prop=prop):
-                q = re.search(re.escape(prop) + r"([^;]+)", quote)
-                t = re.search(re.escape(prop) + r"([^;]+)", tech)
-                self.assertIsNotNone(q, "报价输入行缺 %s" % prop)
-                self.assertIsNotNone(t, "技术工艺输入行缺 %s" % prop)
-                self.assertEqual(q.group(1), t.group(1), "两侧输入行 %s 数值不一致" % prop)
+        self.assertIn("min-height:76px", quote)
+        self.assertIn("min-height:0", tech)
+        self.assertIn("border-radius:24px", tech)
+        self.assertIn("gap:8px", tech)
 
     def test_quote_attach_button_is_round_plus_without_paperclip(self):
         markup = button_markup(self.quote, "chatAttachBtn")
@@ -164,8 +161,8 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
 
     def test_tech_add_button_still_opens_file_input(self):
         rule = compact(css_rule(self.chat_css, ".oc-add"))
-        self.assertIn("width:50px", rule)
-        self.assertIn("height:50px", rule)
+        self.assertIn("width:34px", rule)
+        self.assertIn("height:34px", rule)
         self.assertIn("border-radius:50%", rule)
         combined = self.chat_js + "\n" + self.workbench_js
         self.assertRegex(
@@ -174,18 +171,13 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
             "＋ 仍须直接打开隐藏文件输入框",
         )
 
-    # ------------------------------------------------- 恢复说明行
-    def test_tech_composer_restores_binding_caption(self):
+    # ------------------------------------------------- 说明行（最新决策：报价保留、技术移除并贴底）
+    def test_tech_composer_removes_binding_caption_for_flush_bottom(self):
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', self.tech_html, re.S)
         self.assertIsNotNone(composer, "找不到技术工艺 .oc-composer 区块")
         body = composer.group(1)
-        self.assertIn('class="oc-disc"', body, "技术工艺 composer 必须恢复 .oc-disc 说明行")
-        self.assertIn(CAPTION, body, "说明行文案必须与既有口径一致")
-        self.assertLess(
-            body.find("oc-inputbox-single"),
-            body.find("oc-disc"),
-            "说明行必须在输入框下方（DOM 顺序在外层输入框之后）",
-        )
+        self.assertNotIn('class="oc-disc"', body, "技术工艺输入框下方不得再有说明行")
+        self.assertNotIn(CAPTION, body)
 
     def test_quote_composer_has_same_binding_caption(self):
         area = re.search(r'<div class="chat-input-area">(.*?)\n      </div>', self.quote, re.S)
@@ -200,7 +192,9 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         )
 
     def test_caption_stays_in_normal_flow_with_shared_style(self):
-        for name, css in (("技术工艺", self.chat_css), ("报价", self.quote)):
+        # 通用样式继续保留给独立技术页面，报价页也继续保留自己的同名样式；
+        # 统一技术工作台只是删除对应 DOM，不全局删除该 class。
+        for name, css in (("技术工艺通用样式", self.chat_css), ("报价", self.quote)):
             rule = compact(css_rule(css, ".oc-disc"))
             with self.subTest(side=name):
                 self.assertTrue(rule, "%s 缺 .oc-disc 样式" % name)
@@ -225,6 +219,7 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         )
         self.assertIsNotNone(tech_composer)
         self.assertIn("flex: 0 0 auto", tech_composer.group(1))
+        self.assertIn("padding: 10px 16px 0", tech_composer.group(1))
 
     def test_global_model_settings_entries_kept(self):
         self.assertIn('id="techModelInfo"', self.tech_html)

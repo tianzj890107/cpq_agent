@@ -23,6 +23,10 @@
  * `publish('task-completed' | 'task-failed', <动作名>, { action, message? })` 自报，
  * 20 秒的桥默认超时只用来抓「看板没响应」，长任务不会再被误判成超时。
  *
+ * 静默条目（`silent: true`）：动作照常执行、照常回执并更新 action-state，但运行时不为它
+ * 发布 task-progress / task-completed / task-failed —— 会话里不会留下「xxx 已完成」卡片。
+ * 只给纯看板内同步用（刷新数据、刷新某个页面）；解析这类需要在左侧留痕的长任务不适用。
+ *
  * 独立打开（无 embed、无父壳）时本模块不做任何通信，页面照常工作。
  */
 (function () {
@@ -258,13 +262,21 @@
     if (typeof entry.run !== 'function') {
       return Promise.resolve(failure('no-handler', '动作缺少可执行实现：' + name));
     }
-    publish(EVENT.TASK_PROGRESS, name, { action: name, phase: 'start',
+    // 卡片事件的唯一出口：progress / completed / failed 都经这里。
+    // silent 条目（纯看板内同步：刷新数据、刷新某个页面）只跑动作，
+    // 不在会话里留「xxx 已完成」；其余动作（解析等长任务）照旧出卡。
+    function publishTaskCard(eventName, extra) {
+      if (entry.silent === true) return;
+      if ([EVENT.TASK_PROGRESS, EVENT.TASK_COMPLETED, EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
+      publish(eventName, name, extra);
+    }
+    publishTaskCard(EVENT.TASK_PROGRESS, { action: name, phase: 'start',
       label: entryState(name).label, taskId: context.taskId || '' });
     var outcome;
     try {
       outcome = entry.run(payload || {});
     } catch (error) {
-      publish(EVENT.TASK_FAILED, name, { action: name,
+      publishTaskCard(EVENT.TASK_FAILED, { action: name,
         label: entryState(name).label, taskId: context.taskId || '',
         message: String((error && error.message) || error) });
       return Promise.resolve(failure('action-failed', String((error && error.message) || error)));
@@ -273,7 +285,7 @@
       // 业务函数自己回结构化失败时原样透传，不伪装成功。
       if (result && typeof result === 'object' && result.ok === false) {
         var reason = (result.error && result.error.message) || ('动作执行失败：' + name);
-        publish(EVENT.TASK_FAILED, name, { action: name,
+        publishTaskCard(EVENT.TASK_FAILED, { action: name,
           label: entryState(name).label, taskId: context.taskId || '', message: reason });
         return result.error ? result : failure('action-failed', '动作执行失败：' + name);
       }
@@ -281,13 +293,13 @@
       if (entry.keepActionState !== true) publish(EVENT.ACTION_STATE, name);
       // deferred 条目只负责启动：回执照旧成功，但不在这里发 task-completed ——
       // 后台任务还没跑完，抢发完成会让父壳以为长任务瞬间结束。真正的收尾
-      // 由本页在任务结束时自己 publish(EVENT.TASK_COMPLETED / TASK_FAILED)。
+      // 由本页在任务结束时自己经 publishTaskCard 上报（silent 条目照旧不出卡）。
       if (entry.deferred === true) return ok(name, result);
-      publish(EVENT.TASK_COMPLETED, name, { action: name,
+      publishTaskCard(EVENT.TASK_COMPLETED, { action: name,
         label: entryState(name).label, taskId: context.taskId || '' });
       return ok(name, result);
     }, function (error) {
-      publish(EVENT.TASK_FAILED, name, { action: name,
+      publishTaskCard(EVENT.TASK_FAILED, { action: name,
         label: entryState(name).label, taskId: context.taskId || '',
         message: String((error && error.message) || error) });
       return failure('action-failed', String((error && error.message) || error));

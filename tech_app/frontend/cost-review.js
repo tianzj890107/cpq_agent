@@ -808,6 +808,7 @@ crStart();
       label: '刷新成本看板',
       role: 'aux',
       order: 60,
+      silent: true,
       run: async () => crRefresh(),
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
       getState: () => ({ visible: false, enabled: true, busy: Boolean(crBusy) }),

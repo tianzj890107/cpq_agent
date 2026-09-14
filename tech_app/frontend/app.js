@@ -546,6 +546,10 @@ function afterAuth() {
   });
 }
 
+// 「更多功能 ▾」里补上 2.1 的两项能力入口：直接复用既有看板视图（import3d / review），
+// 点完顺手收起菜单，不新建第二套面板。
+$("btnMoreImport3d").onclick = () => { $("actionSheet").hidden = true; $("btnMoreActions").setAttribute("aria-expanded", "false"); return runBoardView("import3d"); };
+$("btnMoreReview").onclick = () => { $("actionSheet").hidden = true; $("btnMoreActions").setAttribute("aria-expanded", "false"); return runBoardView("review"); };
 $("btnMoreActions").onclick = () => {
   const sheet = $("actionSheet");
   sheet.hidden = !sheet.hidden;
@@ -875,6 +879,8 @@ async function parseDrawing() {
     $("btnGenerate").disabled = false;
     $("btnDrawings").disabled = false;
     $("btnBom").disabled = false;
+    $("btnMoreImport3d").disabled = false;
+    $("btnMoreReview").disabled = false;
     const documentCount = await fetch(`${API}/api/projects/${currentProject}/attachments`)
       .then(r => r.ok ? r.json() : { attachments: [] })
       .then(payload => (payload.attachments || []).length)
@@ -892,6 +898,8 @@ async function parseDrawing() {
           + `平均置信度 ${avgConfidence(currentIR)}。`,
       },
     }));
+    // 解析成功后自动串行生成几何与 2D 工程图：用户不必再进「更多功能 ▾」点两次。
+    await autoGenerateAfterParse();
     parseDrawingError = "";
     return currentIR;
   } catch (e) { parseDrawingError = e.message; status("解析失败: " + e.message); return null; }
@@ -1046,8 +1054,10 @@ $("btnDecompose").onclick = async () => {
   } catch (e) { status("拆解失败: " + e.message); }
 };
 
-$("btnGenerate").onclick = async () => {
-  if (!currentProject) return;
+// 具名函数：原 #btnGenerate 点击逻辑原样搬过来，页面按钮与「解析后自动生成 3D」共用
+// 同一份实现；回执 true/false 给自动流程判断该不该继续跑 2D。
+async function generateGeometry() {
+  if (!currentProject) return false;
   status("CAD 内核正在生成几何(STEP/STL)并校验...", true);
   try {
     currentGeometry = await runTask(currentProject, `/api/projects/${currentProject}/generate`, "几何生成");
@@ -1056,11 +1066,15 @@ $("btnGenerate").onclick = async () => {
     const okCount = (currentGeometry.parts || []).filter(p => p.ok).length;
     status(`几何生成完成（${okCount}/${(currentGeometry.parts || []).length} 件），已显示在右侧`);
     setWorkflow("generate", "CAD 几何已生成，可查看 3D、工程图和 BOM。");
-  } catch (e) { status("几何生成失败: " + e.message); }
-};
+    return true;
+  } catch (e) { status("几何生成失败: " + e.message); return false; }
+}
+$("btnGenerate").onclick = generateGeometry;
 
-$("btnDrawings").onclick = async () => {
-  if (!currentProject) return;
+// 具名函数：原 #btnDrawings 点击逻辑原样搬过来，页面按钮与「解析后自动生成 2D」共用
+// 同一份实现。
+async function generateDrawings() {
+  if (!currentProject) return false;
   status("CAD 内核正在投影 2D 工程图(三视图 SVG + 下料 DXF)...", true);
   try {
     currentDrawings = await runTask(currentProject, `/api/projects/${currentProject}/drawings`, "2D 工程图");
@@ -1068,8 +1082,20 @@ $("btnDrawings").onclick = async () => {
     showGeneratedResult();
     const ok = currentDrawings.parts.filter(p => p.ok).length;
     status(`2D 工程图完成（${ok}/${currentDrawings.parts.length} 件），已显示在右侧`);
-  } catch (e) { status("2D 工程图生成失败: " + e.message); }
-};
+    return true;
+  } catch (e) { status("2D 工程图生成失败: " + e.message); return false; }
+}
+$("btnDrawings").onclick = generateDrawings;
+
+// 解析成功后的唯一自动入口：只服务「图→IR」项目（3D 导入项目的几何与工程图在导入阶段
+// 已有，直接跳过）。先生成 3D 再生成 2D，串行执行。
+async function autoGenerateAfterParse() {
+  if (!currentIsImg || !currentIR) return false;
+  const geometryOk = await generateGeometry();
+  // 几何失败即停：2D 由几何结果投影，带着失败继续跑只会产出空壳，真实原因已写进状态行。
+  if (!geometryOk) return false;
+  return await generateDrawings();
+}
 
 $("btnBom").onclick = () => {
   if (!currentProject) return;
@@ -2550,6 +2576,7 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       label: "刷新看板数据",
       role: "aux",
       order: 60,
+      silent: true,
       // 纯刷新（无 edits）只重播解析摘要；带 edits 时是 Agent 改完零件参数后经桥
       // 触发的刷新，复用既有 refreshAfterChatEdit（拉 IR / 重生几何 / 刷版本）。
       run: (payload) => {
