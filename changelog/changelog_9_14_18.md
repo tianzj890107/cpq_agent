@@ -624,3 +624,11 @@
 - 过期断言更新（1 处）：`tests/test_tech_business_actions_clickable_then_error_red.py::test_cost_role_codes_match_backend_authority` 从「锁死 `CR_COST_ROLES = ['finance_manager','admin']`」改为「后端角色集 ⊆ 前端白名单 + 必须认 `finance_mgr` + 必须认 `CpqSso` 能力位」，注明「契约更新（2.3 角色判定批次）」。
 - 验证：本批红测 **12/12**（含 node 动态跑判定段：CPQ 财务经理 / 技术工艺财务经理 / SSO 未就绪时按角色码 / 工艺经理仍只读 / 身份未知不拦 / 服务端能力位压过陌生角色码）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **946 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/cost-review.js` 通过；`git diff --check` 通过；本地 8012 实测已下发修复后的 `cost-review.js`。
 - 边界：未改后端权限、路由、字段与 Agent 工具；未删动作注册与业务实现；未提交、未推送、未部署 —— 34 服务器当前仍是 `efef393`，上面跑的还是旧的单口径判定，所以线上仍能复现该提示。
+
+## 55. 本批（## 54）提交、双远端推送与 34 服务器部署记录（9-14）
+
+- 提交：`3d80961` 2.3 成本测算角色判定改为服务端能力位优先 + 两套角色口径（5 个文件，256 插入 / 6 删除）：`tech_app/frontend/cost-review.js`、`docs/specs/tech-cost-role-gate-capability.md`、`tests/test_tech_cost_role_gate_capability_red.py`，以及 `tests/test_tech_business_actions_clickable_then_error_red.py`（契约更新）与 `changelog/changelog_9_14_18.md`。
+- 推送：`python3 scripts/push_remotes.py --check` → `python3 scripts/push_remotes.py`，GitLab 与 GitHub 的 `20260909` 均推送成功并回读为 `3d809612e2d6159b6fd8b7c11037c3327ef23e40`。
+- 部署（用户指令「0909部署到34」）：172.16.10.34 `/home/wugefei/CPQ/cpq_agent`（分支 `20260909`，工作区无 tracked 改动）`git fetch gitlab 20260909` → `checkout` → `pull --ff-only`，fast-forward `efef393 → 3d80961`；按既定顺序先停 8012 子进程再停 8010 主进程，确认两端口释放后重启 8010（新 PID 1213903，子进程 8012 新 PID 1213960 由主进程拉起）。
+- 部署后核验：`http://127.0.0.1:8010/` 与 `/api/health` 均 200 且 `status=ok`（`cadquery_available: true`、`sso_enabled: true`）；线上下发的 `cost-review.js` 实测已含两套角色口径（`finance_mgr` 命中 2 处），CPQ 财务经理不再被判只读；同机 8011 / 8013 未受影响仍 200。
+- 边界：只 fast-forward 更新 tracked 文件，未删改服务器上的 `cpq_settings.json`、`cpq_history/`、`rule_history/`、`tech_data/`、`product_images/` 等持久化数据；未动 8011 / 8013 / 8082 上的其它服务；未创建 MR/tag/Release。
