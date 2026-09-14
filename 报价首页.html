@@ -926,10 +926,10 @@
       color: var(--text-tertiary);
     }
 
-    /* 会话卡（我的报价 / 全部报价）与待办卡等高：待办卡比会话卡多一行「来自 … 第 N 步」，
-       净高 11px × 1.5 = 16.5px。会话卡不补假内容行，改成把「客户名称」这一行整体下移同样
-       高度，卡片总高就与待办卡一致，页脚仍由 margin-top:auto 贴底。 */
-    .request-card:not(.wf-task) .request-info { margin-top: 16.5px; }
+    /* 会话卡（我的报价 / 全部报价）与待办卡等高：待办卡比会话卡多一行「来自 … 第 N 步」。
+       会话卡不补假内容行，改成把「客户名称」这一行整体下移半行（11px × 1.5 ÷ 2 = 8.25px），
+       再由页脚 margin-top:auto 贴底，卡片总高仍与待办卡一致。 */
+    .request-card:not(.wf-task) .request-info { margin-top: 8.25px; }
 
     /* 「来自 … 第 N 步」这一行：上下行距各减一半（原来的 4px → 2px）。卡片是 flex 列，
        子项外边距不折叠，所以用 -2px 抵消上一行的 4px 下边距，下方再把 4px 收到 2px。 */
