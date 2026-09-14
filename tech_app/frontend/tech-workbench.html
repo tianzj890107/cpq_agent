@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260911-tooltrace1" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260914-composer2" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set2" />
-  <link rel="stylesheet" href="tech-workbench.css?v=twb14" />
+  <link rel="stylesheet" href="tech-workbench.css?v=twb15" />
   <script src="cpq-sso.js?v=sso2"></script>
 </head>
 <body>
@@ -100,6 +100,13 @@
              下一步走 applyStage，附件直传走输入框隐藏文件输入，失败重试重跑最近一次动作。 -->
         <nav class="tech-chat-actions" id="techChatActions" aria-label="当前步骤操作">
           <button type="button" id="techChatAttach">附件</button>
+          <!-- 「任务文件」＝查看本项目已上传的文件（不是上传入口）。原在输入框内部，
+               现归到本工具栏；上传新增走输入区左侧的圆形 +，两个入口各自复用既有逻辑。 -->
+          <button type="button" class="oc-files-action" id="ocFilesAction">
+            <i class="ti ti-paperclip" aria-hidden="true"></i>
+            <span class="oc-files-action-label">任务文件</span>
+            <span class="oc-chip-count" id="ocFilesCount" aria-live="polite">—</span>
+          </button>
           <!-- 2.1 图纸解析的五项能力（原 ＋ 能力菜单）：只在 drawing 阶段显示/启用。
                视图类（解析视图 / 导入已有 3D 模型 / 版本与校核审查）走既有看板视图导航，
                动作类（联网核验 / 校验修正）走既有执行通道，名字与既有分派语义不变。 -->
@@ -122,26 +129,23 @@
         </nav>
         <div class="oc-composer">
           <div class="oc-cinner">
-            <!-- 附件与「任务文件」：统一父壳唯一的输入区入口。附件是回形针按钮，点击在
-                 同一次用户点击链路里直接打开下面的隐藏文件输入框（不弹菜单、不先导航）；
-                 任务文件只负责查看已上传文件，不是上传入口。 -->
-            <div class="oc-inputbox">
-              <div class="oc-input-tools">
-                <button class="oc-ibtn" id="ocChatAttachBtn" type="button" aria-label="上传附件" title="上传附件">
-                  <i class="ti ti-paperclip" aria-hidden="true"></i>
-                </button>
-                <input id="ocChatFileInput" type="file" multiple hidden
-                       accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yaml,.yml" />
-                <button class="oc-files-action" id="ocFilesAction" type="button">
-                  <i class="ti ti-paperclip" aria-hidden="true"></i>
-                  <span class="oc-files-action-label">任务文件</span>
-                  <span class="oc-chip-count" id="ocFilesCount" aria-live="polite">—</span>
-                </button>
-              </div>
-              <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向工艺评估助手描述需求…" aria-label="向工艺评估助手发送消息"></textarea>
+            <!-- 单行输入区：左侧圆形 + 新增附件（在同一次用户点击链路里直接打开下面的
+                 隐藏文件输入框，不弹菜单、不先导航），中间输入，右侧圆形发送。
+                 模型切换不在输入框内 —— 沿用右侧头部 / 导航的「模型与参数设置」入口。
+                 查看已上传文件不在输入区，改到上方工具栏的「任务文件」—— 那是两个
+                 入口，不合并。 -->
+            <div class="oc-inputbox oc-inputbox-single">
+              <button class="oc-add" id="ocChatAttachBtn" type="button" aria-label="上传附件" title="上传附件">
+                <i class="ti ti-plus" aria-hidden="true"></i>
+                <i class="ti ti-paperclip oc-add-mark" aria-hidden="true"></i>
+              </button>
+              <input id="ocChatFileInput" type="file" multiple hidden
+                     accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.csv,.json,.log,.yaml,.yml" />
+              <textarea id="ocInput" rows="1" maxlength="4000"
+                        placeholder="输入你的问题…（Enter 发送，Shift+Enter 换行）"
+                        aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
-            <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
       </section>
@@ -242,7 +246,7 @@
   <!-- 父壳看板桥必须在 workbench 之前：底栏 / 左侧快捷操作都通过它发命令。 -->
   <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
-  <script src="tech-workbench.js?v=twb15"></script>
-  <script src="agent-chat.js?v=20260911-tooltrace1"></script>
+  <script src="tech-workbench.js?v=twb17"></script>
+  <script src="agent-chat.js?v=20260914-composer2"></script>
 </body>
 </html>

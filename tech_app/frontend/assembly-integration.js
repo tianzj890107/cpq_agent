@@ -13,7 +13,8 @@ const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === 
  */
 const aiPid = new URLSearchParams(location.search).get('project')
   || localStorage.getItem('cad_engine_project_id') || '';
-// 2.2 只剩三个环节：成本测算与整合参数都搬去了 2.3（财务经理的步骤）。
+// 2.2 只剩三个环节：成本测算搬去了 2.3（财务经理的步骤）。
+// 整合参数（报价必填项的补全与最终确认）留在本步的「参数推荐」里 ——
 // 工艺经理在这里交的是**工艺、参数与用量**，成本的数字不由他给。
 const AI_TABS = { drawings: '整合图纸', params: '参数推荐', process: '组装工艺' };
 const AI_TYPE_LABEL = {
@@ -293,6 +294,20 @@ function aiRenderActions() {
   // 参数表始终可填：它的行是报价字典定死的，模型没推出来的那些正是要人工补的。
   // 藏在「编辑」后面的话，一旦模型一条都没给，按钮连出现的机会都没有。
   const alwaysEditable = aiTab === 'params';
+  // 参数推荐是第 3 大步的收口页：智能补全 / 保存补填 / 确认参数已齐都长在这里，
+  // 复用既有的 autofill 与 finalize 接口，成本步骤不再承担这份工作。
+  const gaps = aiRequiredGaps();
+  const final = Boolean(aiData?.status?.params_final);
+  const paramsExtra = aiTab === 'params'
+    ? `<button type="button" class="inline-action" id="aiParamsAutofill" ${has && !aiBusy ? '' : 'disabled'}>`
+      + (aiBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>智能补全中…</span>` : '✦ 智能补全')
+      + `</button>`
+      + `<button type="button" class="inline-action save" id="aiParamsFinalSave" ${has && !aiBusy ? '' : 'disabled'}>保存补填</button>`
+      + `<button type="button" class="inline-action" id="aiParamsFinalConfirm" ${has && !aiBusy ? '' : 'disabled'}>`
+      + `${final ? '重新确认参数已齐' : '确认参数已齐'}</button>`
+      + `<span class="ai-hint">已填 ${gaps.required_filled}/${gaps.required_total} 项报价必填，`
+      + `还缺 ${gaps.required_missing} 项；${final ? '已最终确认' : '尚未最终确认'}。</span>`
+    : '';
   host.innerHTML =
     `<button type="button" class="inline-action" id="aiGenerate" ${aiBusy ? 'disabled aria-busy="true"' : ''}>`
     + (aiBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>${esc(label)}中…</span>` : esc(label))
@@ -300,12 +315,19 @@ function aiRenderActions() {
     + `<button type="button" class="inline-action" id="aiEdit" ${alwaysEditable || !has || aiEditing[aiTab] || aiBusy ? 'hidden' : ''}>编辑</button>`
     + `<button type="button" class="inline-action save" id="aiSave" ${alwaysEditable || aiEditing[aiTab] ? '' : 'hidden'} ${aiBusy ? 'disabled' : ''}>保存参数</button>`
     + confirmBtn
+    + paramsExtra
 ;
   $ai('aiGenerate').onclick = () => aiGenerate(aiTab);
   const paramsConfirm = $ai('aiParamsConfirm');
   if (paramsConfirm) paramsConfirm.onclick = () => aiConfirmStep('params');
   const processConfirm = $ai('aiProcessConfirm');
   if (processConfirm) processConfirm.onclick = () => aiConfirmStep('process');
+  const autofill = $ai('aiParamsAutofill');
+  if (autofill) autofill.onclick = () => aiParamsAutofill();
+  const finalSave = $ai('aiParamsFinalSave');
+  if (finalSave) finalSave.onclick = () => aiParamsFinalize(false);
+  const finalConfirm = $ai('aiParamsFinalConfirm');
+  if (finalConfirm) finalConfirm.onclick = () => aiParamsFinalize(true);
   const edit = $ai('aiEdit');
   if (edit) edit.onclick = () => { aiEditing[aiTab] = true; aiRender(); };
   const save = $ai('aiSave');
@@ -359,6 +381,39 @@ function aiRenderDrawings() {
   return html + `</section>`;
 }
 
+/** 报价必填完成度：以报价成品参数字典为准（required 且没有值，且不是平台生成项）。
+    字典没加载到时退回后端给的 required_missing 计数。 */
+function aiRequiredGaps() {
+  const fields = ((aiData?.param_checklist?.groups) || [])
+    .flatMap(group => group.fields || []);
+  const required = fields.filter(field => field.required);
+  const pending = required.filter(field => !field.filled && !field.generated);
+  return {
+    required_total: required.length,
+    required_filled: required.filter(field => field.filled).length,
+    required_missing: fields.length ? pending.length : (aiData?.status?.required_missing || 0),
+    fields: pending,
+  };
+}
+
+/** 「报价必填参数完成度」：缺几项、缺哪些、是否已最终确认。 */
+function aiRequiredCard() {
+  if (!aiData?.param_checklist) return '';
+  const gaps = aiRequiredGaps();
+  const final = Boolean(aiData?.status?.params_final);
+  let html = `<section class="inline-card"><div class="inline-card-title">报价必填参数完成度</div>`
+    + `<div class="inline-totals"><span><strong>${gaps.required_filled}</strong>/${gaps.required_total} 报价必填已填</span>`
+    + `<span class="${gaps.required_missing ? 'total' : ''}">还缺 <strong>${gaps.required_missing}</strong> 项</span>`
+    + `<span>${final ? '已最终确认' : '尚未最终确认'}</span></div>`;
+  if (gaps.required_missing) {
+    html += `<div class="inline-warn">⚠ 还有 ${gaps.required_missing} 项报价必填参数没有值：`
+      + `${esc(gaps.fields.map(field => field.name || field.code).join('、'))}。`
+      + `可以直接在下表「值」列补填，或点上方「智能补全」按 2.1 零件、已排工艺给建议值；`
+      + `建议只是建议，逐项核对后点「保存补填」才落库，都齐了再点「确认参数已齐」。</div>`;
+  }
+  return html + `</section>`;
+}
+
 // --------------------------------------------------------------------------- 面板：参数推荐
 function aiRenderParams() {
   const params = aiPlan().params;
@@ -379,6 +434,7 @@ function aiRenderParams() {
   if (params.summary) html += `<div class="inline-row"><b>整合思路</b>${esc(params.summary)}</div>`;
   html += `</section>`;
 
+  html += aiRequiredCard();
   html += QuoteParams.card(checklist, editing);
   html += QuoteParams.extraCard(params, checklist, editing);
 
@@ -432,8 +488,8 @@ async function aiConfirmStep(step) {
     } else {
       aiSay(missing
         ? `参数推荐已确认。注意还有 ${missing} 项报价必填的成品参数没有值 —— `
-          + `它们由财务经理在 2.3「整合参数」里补齐（那里有智能补全）。`
-        : '参数推荐已确认，可以继续排组装工艺了。');
+          + `请在本页签点「智能补全」或直接在表里补填，都齐了再点「确认参数已齐」。`
+        : '参数推荐已确认，报价必填项也齐了。可以继续排组装工艺了。');
     }
   } catch (error) {
     aiStatus(`确认失败：${error.message}`, true);
@@ -446,8 +502,89 @@ async function aiConfirmStep(step) {
   }
 }
 
-/** 把参数表里改过的值收回成 IntegrationParamPlan。2.3 的「整合参数」走的是另一条
-    （只回传值，由后端按"人工补填"标注），这里要连依据与来源一起存。 */
+/** 第 3 大步 · 参数推荐：智能补全。只给还缺的报价必填项出**建议值**，不落库。
+    复用既有 POST /integration/params/autofill 与任务轮询，不新增第二套推荐逻辑；
+    建议值经 QuoteParams.applyFills() 回填到当前参数表，人工核对后保存才会写进模型。 */
+async function aiParamsAutofill() {
+  if (aiBusy) return;
+  if (!aiData?.status?.has_params) { aiToast('请先生成参数推荐', true); return; }
+  aiBusy = true;
+  aiRenderActions();
+  aiStatus('智能补全中…');
+  const card = aiProcessCard('参数推荐 · 智能补全');
+  let taskId = '';
+  try {
+    const form = new FormData();
+    const note = $ai('aiRequirement')?.value.trim() || '';
+    if (note) form.append('note', note);
+    const submitted = await api(
+      `/api/projects/${encodeURIComponent(aiPid)}/integration/params/autofill`,
+      { method: 'POST', body: form });
+    taskId = String(submitted.task_id || '');
+    aiPublishTask('task-progress', { taskId: taskId, label: '智能补全', status: 'running',
+                                     progress: '已提交，正在按 2.1 零件与库内规则推缺失项…' });
+    const result = await aiPollTask(taskId, card, '智能补全');
+    const fills = result?.fills || [];
+    const unresolved = result?.unresolved || [];
+    aiBusy = false;
+    aiRender();                     // 先把表画回来，再往输入框里填
+    const applied = QuoteParams.applyFills(fills);
+    card.done(true);
+    aiStatus(`智能补全给出 ${applied} 项建议`);
+    aiPublishTask('task-completed', { taskId: taskId, label: '智能补全', status: 'succeeded' });
+    aiSay(applied
+      ? `已为 ${applied} 项参数填入建议值（表格里标了「AI 建议」）。`
+        + `**这是建议不是结论** —— 请逐项核对，改完点「保存补填」才会写进参数表。`
+        + (unresolved.length ? `\n另有 ${unresolved.length} 项确实推不出来：${unresolved.join('、')}。` : '')
+      : `没有可以推出来的参数${unresolved.length ? `：${unresolved.join('、')} 都需要人工确定。` : '。'}`);
+  } catch (error) {
+    const message = error.message || '智能补全失败';
+    card.done(false, message);
+    aiStatus(`智能补全失败：${message}`, true);
+    aiToast(message, true);
+    aiPublishTask('task-failed', { taskId: taskId, label: '智能补全', status: 'failed', error: message });
+  } finally {
+    aiBusy = false;
+    aiRender();
+  }
+}
+
+/** 「保存补填」/「确认参数已齐」：把表里的值合进整机参数（finalize），
+    confirm=true 时后端校验报价必填项 —— 缺项就退回真实原因，不把缺口带给后面。 */
+async function aiParamsFinalize(confirm) {
+  if (aiBusy) return;
+  aiBusy = true;
+  aiRenderActions();
+  const label = confirm ? '确认参数已齐' : '保存补填';
+  const taskId = `params-final-${confirm ? 'confirm' : 'save'}`;
+  aiStatus(`${label}…`);
+  aiPublishTask('task-progress', { taskId: taskId, label: label, progress: `正在${label}…` });
+  try {
+    aiData = await api(
+      `/api/projects/${encodeURIComponent(aiPid)}/integration/params/finalize`, {
+        method: 'POST',
+        body: JSON.stringify({ values: QuoteParams.collect(), confirm: !!confirm }),
+      });
+    const gaps = aiRequiredGaps();
+    aiStatus(confirm ? '参数已最终确认' : '补填已保存');
+    aiToast(confirm ? '参数已最终确认' : '已保存');
+    aiPublishTask('task-completed', { taskId: taskId, label: label, status: 'succeeded' });
+    aiSay(confirm
+      ? '参数已最终确认：报价必填的成品参数都齐了，接下来排组装工艺，再把任务发送财务。'
+      : `补填已保存${gaps.required_missing ? `，还有 ${gaps.required_missing} 项报价必填参数没有值。` : '，报价必填项已齐。'}`);
+  } catch (error) {
+    const message = error.message || `${label}失败`;
+    aiStatus(`${label}失败：${message}`, true);
+    aiToast(message, true);
+    aiPublishTask('task-failed', { taskId: taskId, label: label, status: 'failed', error: message });
+  } finally {
+    aiBusy = false;
+    aiRender();
+  }
+}
+
+/** 把参数表里改过的值收回成 IntegrationParamPlan。后端 finalize 那条路只回传值
+    （由后端按"人工补填"标注），这里要连依据与来源一起存。 */
 function aiCollectParams() {
   const params = JSON.parse(JSON.stringify(aiPlan().params || {}));
   params.params = params.params || [];
@@ -702,12 +839,15 @@ function aiRenderOps() {
 
   const financeBtn = $ai('aiToFinance');
   // 闸门：参数与工艺都**确认过**才允许推给财务 —— 工序和用量没定稿，算出来的成本没意义。
-  const ready = Boolean(state.params_confirmed && state.process_confirmed) && !aiBusy;
+  const ready = Boolean(state.params_confirmed && state.process_confirmed
+    && state.params_final && !state.required_missing) && !aiBusy;
   if (financeBtn) financeBtn.disabled = !ready;
 
   const why = aiBusy ? '正在处理…'
     : !state.has_params ? '请先完成参数推荐'
     : !state.has_process ? '请先完成组装工艺'
+    : (state.required_missing || 0) > 0 ? `请先在「参数推荐」里补齐 ${state.required_missing} 项报价必填参数`
+    : !state.params_final ? '请先在「参数推荐」里点「确认参数已齐」'
     : !state.params_confirmed ? '请先在「参数推荐」里点「确认参数推荐」'
     : !state.process_confirmed ? '请先在「组装工艺」里点「确认组装工艺」'
     : '';
@@ -734,8 +874,8 @@ function aiRenderOps() {
   hint.innerHTML = (done.length
     ? done.map(line => `<div class="ai-op-done">✓ ${line}</div>`).join('')
       + `<div style="margin-top:6px">再点一次可以换个派发方式重发（旧任务会被作废）。</div>`
-    : '工艺与整机参数在这一步定稿；<strong>成本由财务经理在 2.3 测算</strong>，'
-      + '写入数据库与发送至报价也都移到了那一步。')
+    : '工艺与整机参数在这一步定稿（报价必填参数在「参数推荐」里补齐并确认）；'
+      + '<strong>成本由财务经理在 2.3 测算</strong>，写入数据库与发送至报价也都移到了那一步。')
     + (why ? '' : '');
 }
 
@@ -868,11 +1008,11 @@ async function aiRunOp(kind, dispatch) {
     const whom = aiHandoffWhom(finance);
     card.log([`任务 ${finance.task_no || ''} 已${whom}`,
       `  他将在技术工艺 2.3 逐件测算零件成本与组装成本`,
-      `  整合参数、写入数据库与发送至报价都在那一步完成`]);
+      `  写入数据库与发送至报价也都在那一步完成`]);
     aiSay(`工艺已确认，任务 ${finance.task_no || ''} 已${whom}做成本测算。
 `
-      + `他会在 2.3 逐个零件加整机算完成本、补齐报价参数，然后选择写入数据库、发送至报价，`
-      + `或把结果退回给你复核工艺与用量。`);
+      + `他会在 2.3 逐个零件加整机算完成本，然后选择写入数据库、发送至报价，`
+      + `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`);
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
     aiPublishTask('task-completed', { taskId: opTask, label: labels[kind],
@@ -1006,7 +1146,8 @@ async function aiRunAll() {
     method: 'PUT',
     body: JSON.stringify({ requirement_note: note, quantity: aiPlan().quantity || 1 }),
   }).then(data => { aiData = data; }).catch(() => {});
-  aiSay('开始整合分析：参数推荐 → 组装工艺 → 成本测算，三步依次进行。');
+  aiSay('开始整合分析：参数推荐 → 组装工艺，两步依次进行。'
+    + '成本测算在 2.3 由财务经理做（左边「确认工艺并发送财务」之后）。');
   for (const step of ['params', 'process']) {
     await aiGenerate(step);
     if (!aiData?.status?.[{ params: 'has_params', process: 'has_process' }[step]]) {
@@ -1377,15 +1518,16 @@ aiStart();
       deferred: true,
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
-        const labels = { params: '参数推荐', process: '组装工艺', cost: '成本测算' };
+        // 成本测算属于第 4 大步（成本页），不再从 2.2 发起 —— 这里只跑参数推荐与组装工艺。
+        const labels = { params: '参数推荐', process: '组装工艺' };
         if (!labels[step]) {
-          return { ok: false, error: { code: 'bad-step', message: 'step 只能是 params / process / cost' } };
+          return { ok: false, error: { code: 'bad-step',
+                                       message: 'step 只能是 params / process；成本测算请在成本步骤发起' } };
         }
         if (aiDeferredBusy) {
           return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
         }
-        // 成本测算不在 2.2 的三个页签里（它属于 2.3）：生成但不切走当前页签。
-        const options = { label: labels[step], keepTab: step === 'cost' };
+        const options = { label: labels[step] };
         aiDeferredBusy = true;
         aiLastSettle = null;
         window.TechBoardRuntime.updateActionState('integrationStep', { busy: true });

@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="workbench.css?v=20260819-pane1" />
   <link rel="stylesheet" href="inline-analysis.css?v=20260819-flat6" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260911-tooltrace1" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260914-composer2" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="tech-rail.css?v=rail2" />
@@ -48,10 +48,6 @@
         <button class="oc-rail-icon" type="button" id="crGoTotal" aria-label="汇总">
           <i class="ti ti-sum" aria-hidden="true"></i>
           <span class="oc-rail-tip"><b>汇总</b><span>对外口径与四项拆解</span></span>
-        </button>
-        <button class="oc-rail-icon" type="button" id="crGoParams" aria-label="整合参数">
-          <i class="ti ti-checkup-list" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>整合参数</b><span>报价必填参数收口，可智能补全</span></span>
         </button>
       </div>
       <span class="oc-rail-grow"></span>
@@ -131,13 +127,15 @@
               <div class="ai-ops">
                 <button id="crConfirm" class="ai-op-btn primary" type="button" disabled>✓ 确认成本</button>
                 <button id="crWriteDb" class="ai-op-btn" type="button" disabled>⛁ 写入数据库</button>
-                <button id="crToQuote" class="ai-op-btn" type="button" disabled>➜ 发送至报价</button>
-                <button id="crReturn" class="ai-op-btn" type="button">↩ 退回工艺经理</button>
+                <button id="crToQuote" class="ai-op-btn" type="button" disabled>➜ 回传销售经理继续报价</button>
+                <button id="crReturn" class="ai-op-btn" type="button">↩ 提交工艺经理确认</button>
               </div>
               <div class="ai-op-why" id="crWhy" hidden></div>
               <div class="ai-op-hint" id="crHint">
                 确认成本：三个去向都以确认过的数为准。<br/>
-                退回工艺经理：成本高在工序或用量上时用它 —— 那是工艺的判断，不该由财务改。
+                提交工艺经理确认：把已确认的成本作为第 5 大步「工艺评估报告」的输入交给工艺经理，
+                由他做最终工艺确认、汇总、审核和发布；确实要返工时，由第 5 大步明确退回第 3 大步。<br/>
+                回传销售经理继续报价：优先回到原报价会话，从第 3 步「定价-利润加成」继续。
               </div>
             </div>
           </section>
@@ -149,7 +147,6 @@
                 <button type="button" data-cr-tab="parts" class="active">零件成本</button>
                 <button type="button" data-cr-tab="assembly">组装成本</button>
                 <button type="button" data-cr-tab="total">汇总</button>
-                <button type="button" data-cr-tab="params">整合参数</button>
               </div>
             </div>
             <div class="ai-actions" id="crActions"></div>
@@ -174,7 +171,7 @@
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set1"></script>
   <script src="quote-params-table.js?v=qp1"></script>
-  <script src="tech-board-runtime.js?v=tbr1"></script><script src="cost-review.js?v=cr4"></script>
+  <script src="tech-board-runtime.js?v=tbr1"></script><script src="cost-review.js?v=cr5"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

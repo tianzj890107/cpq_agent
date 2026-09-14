@@ -174,7 +174,9 @@
         + encodeURIComponent(task.task_id);
       return;
     }
-    // 成本测算（财务经理）→ stage=cost；成本结果复核（工艺经理）→ stage=process。
+    // 成本测算（财务经理）→ stage=cost；成本结果确认（工艺经理）→ stage=summary。
+    // 后者的落点是第 5 大步「工艺评估报告」：工艺经理在那里做最终工艺确认、汇总、
+    // 审核和发布，而不是回到第 3 大步重新建参数与工艺（返工由第 5 大步另行发起）。
     // 这两条支线的 session_id 就是技术工艺的项目号，task_id 一并带给右侧步骤页。
     if (kind === 'tech_cost') {
       location.href = '/tech-workbench.html?stage=cost&project='
@@ -182,7 +184,7 @@
       return;
     }
     if (kind === 'tech_cost_return') {
-      location.href = '/tech-workbench.html?stage=process&project='
+      location.href = '/tech-workbench.html?stage=summary&project='
         + encodeURIComponent(task.session_id || '') + '&task_id=' + encodeURIComponent(task.task_id);
       return;
     }

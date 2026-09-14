@@ -53,7 +53,11 @@ class CostActionBody(BaseModel):
     product_name: str = ""
     spec: str = ""
     note: str = ""
-    target_user_id: str = Field("", description="退回工艺经理时可指定到人；留空按角色发")
+    target_user_id: str = Field("", description="提交工艺经理确认时可指定到人；留空按角色发")
+    # 统一工作台从待办点进来时 URL 上带着 task_id：完成正式去向后按它关闭原来的
+    # claimed 财务待办。留空不影响老入口（Agent / 直接打开页面）继续可用。
+    source_task_id: str = Field(
+        "", description="来源待办任务号；完成后据此把已领取的 tech_cost 任务置为完成")
 
 
 def merge_totals(rows: List[dict]) -> dict:

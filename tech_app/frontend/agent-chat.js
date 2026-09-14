@@ -173,6 +173,60 @@
       pushSystem(`读取 Agent 信息失败：${error.message}`);
     }
   }
+  // ---------------------------------------------------------------- 历史回放
+  // 打开已绑定项目时先取回该项目持久化的完整会话（用户 / 助手 / 工具轨迹），再进入
+  // 正常会话状态；空历史才保留空态，读取失败必须显式报错，绝不静默展示空会话。
+  let historyLoaded = false;
+  async function loadHistory() {
+    if (!projectId || historyLoaded) return;
+    historyLoaded = true;
+    try {
+      const response = await fetch(api("/history"), { headers: authHeaders() });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+      if (data.available === false) throw new Error(data.reason || "会话历史暂不可用");
+      renderHistory((data && data.messages) || []);
+    } catch (error) {
+      // 允许重新登录 / 服务恢复后再取一次，不把失败伪装成空会话。
+      historyLoaded = false;
+      pushSystem(`读取历史会话失败：${(error && error.message) || "未知错误"}`);
+    }
+  }
+  // 按后端顺序回放：用户消息、助手文本（复用 Markdown 渲染）、工具卡与工具结果。
+  // tech_ui 是结构化界面事件而不是业务工具，回放时跳过，避免多出一张空卡。
+  function renderHistory(events) {
+    let ctx = null;
+    events.forEach(event => {
+      if (!event || typeof event !== "object") return;
+      if (event.type === "user") {
+        addUser(String(event.text || ""));
+        ctx = null;
+        return;
+      }
+      if (event.type === "assistant") {
+        ctx = addAssistant();
+        ctx.full = String(event.text || "");
+        ctx.text.classList.add("rendered");
+        ctx.text.innerHTML = renderMarkdown(ctx.full);
+        return;
+      }
+      if (event.type === "tool_use") {
+        if (event.name === "tech_ui") return;
+        if (!ctx) ctx = addAssistant();
+        addToolCard(ctx, { id: event.id, name: event.name, input: event.input || {} });
+        return;
+      }
+      if (event.type === "tool_result") {
+        if (!ctx || !ctx.cards[event.tool_use_id]) return;
+        setToolResult(ctx, {
+          tool_use_id: event.tool_use_id,
+          content: event.content,
+          is_error: !!event.is_error,
+        });
+      }
+    });
+    scrollDown();
+  }
   // 右上角模型文字只表达「模型设置」里的当前语言模型；Agent 会话是否可用是另一件事，
   // 不能用「未连接 / Agent 未就绪」覆盖真实模型。没有配置时才显示提示。
   function modelLabelFromSettings(settings) {
@@ -195,11 +249,12 @@
   }
 
   function techShellModel(text) {
-    const info = $("techModelInfo");
-    if (!info) return;
     const value = String(text || "").trim();
-    const stateWord = ["未连接", "未就绪", "未选择", "未知模型", "未配置", "Agent"].some(word => value.includes(word));
-    info.textContent = stateWord || !value ? value : `· ${value}`;
+    const info = $("techModelInfo");
+    if (info) {
+      const stateWord = ["未连接", "未就绪", "未选择", "未知模型", "未配置", "Agent"].some(word => value.includes(word));
+      info.textContent = stateWord || !value ? value : `· ${value}`;
+    }
   }
   function setPillLabel(text) {
     const pill = $("ocModelPill");
@@ -1678,6 +1733,9 @@
   sendBtn.onclick = send;
   input.addEventListener("input", autoSize);
   input.addEventListener("keydown", event => {
+    // 中文输入法里 Enter 是"上屏候选词"，不是发送：组合期间（isComposing / keyCode 229）
+    // 直接放行，避免把没敲完的字当问题发出去。Shift+Enter 换行不受影响。
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
   });
   $("ocModelPill")?.addEventListener("click", event => {
@@ -1860,7 +1918,7 @@
 
   // 供统一工作台左侧导航复用（新对话 / 设置 / 阶段上下文），旧页面不受影响。
   window.ocTechAgent = {
-    resetTask: () => resetTaskFlow(),
+    resetTask: resetTaskFlow,
     openSettings: (anchor) => settingsPanel(anchor),
     setStageContext: (context) => setStageContext(context),
   };
@@ -1876,7 +1934,10 @@
   setStageContext(window.ocTechStageContext || null);
   // 父壳模式下订阅看板状态：ready / action-state / result-summary / task-* 驱动左侧入口。
   if (inUnifiedWorkbench) bindBoardBridge();
-  if (projectId) loadMeta();
+  if (projectId) {
+    // 先回放该项目已持久化的完整会话，再进入正常会话状态（空历史才保留空态）。
+    loadHistory().then(() => loadMeta());
+  }
   else {
     techShellConn("未连接", false);
     setPillLabel("未选择项目");

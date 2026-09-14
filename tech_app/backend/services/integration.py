@@ -854,10 +854,11 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
                     product_name: str = "", note: str = "",
                     target_type: str = "", target_role_code: str = "",
                     target_user_id: str = "", token: str = "") -> IntegrationPlan:
-    """2.2 的出口：确认工艺并发送至财务做成本测算。
+    """组装与整合的出口：确认工艺并发送至财务做成本测算。
 
-    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归财务
-    （技术工艺 2.3）。所以这一步**不要求成本已完成**，只要求工艺与参数到位。
+    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归后一步的财务。
+    所以这里**不要求成本已完成**，但要求参数与工艺真正到位：报价必填项一项不差、
+    参数已最终确认、参数推荐与组装工艺都已确认。
 
     对外调用由 ``cpq_bridge`` 完成，可能抛 BridgeRejected / BridgeUnavailable；
     调用方（HTTP 路由或 Agent 工具）各自把它翻译成用户能看懂的形式。
@@ -871,7 +872,21 @@ def send_to_finance(project_id: str, user: Optional[dict] = None, *,
         raise IntegrationFlowError("请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
     if plan.process is None:
         raise IntegrationFlowError("请先完成组装工艺：组装成本要按工序与工时算")
-    # 闸门是**两个确认**，不是报价必填参数 —— 那些参数由财务在 2.3 的「整合参数」补齐。
+    # 报价必填项在本步（组装与整合 · 参数推荐）补齐，发财务之前必须一项不差 ——
+    # 带缺口发下去，报价测算单上就是几格空白，等销售回头来问才发现。
+    missing = product_params.missing_required(plan.params)
+    if missing:
+        names = "、".join(str(field.get("name") or field.get("code") or "")
+                          for field in missing[:8])
+        more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
+        raise IntegrationFlowError(
+            f"报价必填的成品参数还缺：{names}{more}。"
+            f"请回到本步「参数推荐」页签补填，再点「确认参数已齐」")
+    if not plan.params_final:
+        raise IntegrationFlowError(
+            "请先在「参数推荐」里点「确认参数已齐」——报价必填参数定稿了，"
+            "后面算出来的成本才有落点")
+    # 再往下是两道"人按过头"的确认闸门：参数推荐与组装工艺各一次。
     if not plan.params_confirmed:
         raise IntegrationFlowError("请先在「参数推荐」里点「确认参数推荐」")
     if not plan.process_confirmed:

@@ -265,6 +265,20 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   opacity: .5;
   cursor: not-allowed;
 }
+/* 「任务文件」从输入区移到本工具栏：继续用上面这条白底描边胶囊规范，只是内容多了
+   图标与计数，所以只需补对齐；看板里的文件视图处于活动态时描主色边。
+   注意它与输入区左侧的圆形 + 不是同一个入口 —— 那个是新增上传，这个只查看已有文件。 */
+.tech-chat-actions > button.oc-files-action {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.tech-chat-actions > button.oc-files-action.is-active {
+  border-color: var(--twb-primary);
+  color: var(--twb-primary);
+}
+.tech-chat-actions > button.oc-files-action .oc-chip-count {
+  padding: 1px 7px; border-radius: 999px; background: var(--twb-bg-deep);
+  color: var(--twb-muted); font-size: 11px; font-weight: 600;
+}
 #techChatPane .oc-composer {
   flex: 0 0 auto;
   border-top: .5px solid var(--twb-border);

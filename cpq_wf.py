@@ -571,6 +571,109 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
     return result
 
 
+# 有管理权的角色：库里没有这类角色时这张表为空，校验自然只认领取人本人。
+ADMIN_ROLES = ("admin", "sys_admin")
+
+
+def advance_step_no(card, step_no: int) -> int:
+    """报价步骤只能单调前进：目标步骤不得小于卡片当前步骤。
+
+    报告回传可能发生在成本阶段已经把报价推进到第 3 步之后，这时绝不能把
+    current_step 写回 TECH_CONFIRM_STEP —— 步骤倒退会让销售看到一张已经回退的卡片。
+    """
+    return max(int((card or {}).get("current_step") or 1), int(step_no or 1))
+
+
+def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict) -> dict:
+    """把新的技术结果**合并**进某一步已有的 data_snapshot，不改任何步骤状态。
+
+    已推进过报价卡片时（成本阶段已经回传销售），报告回传只能补充快照，
+    不能重新完成第 2 步、也不能覆盖第 3 步之后已经产生的结果。
+    """
+    conn = cpq_auth._connect()
+    try:
+        card = _fetch_card(conn, session_id)
+        if not card:
+            raise WfError("卡片不存在，请先保存报价会话")
+        cid = int(card["card_id"])
+        cur = cpq_auth._exec(
+            conn, "SELECT data_snapshot FROM cpq_wf_card_step WHERE card_id = %s AND step_no = %s",
+            (cid, int(step_no)))
+        row = cur.fetchone()
+        existing = row[0] if row and isinstance(row[0], dict) else {}
+        merged = dict(existing or {})
+        for key, value in (snapshot or {}).items():
+            merged[key] = value
+        cpq_auth._exec(
+            conn, "UPDATE cpq_wf_card_step SET data_snapshot = %s::jsonb"
+                  " WHERE card_id = %s AND step_no = %s",
+            (json.dumps(merged, ensure_ascii=False), cid, int(step_no)))
+        _commit(conn)
+        return merged
+    finally:
+        conn.close()
+
+
+def complete_claimed_task(task_id, user: dict, *, card_session_id: str = "",
+                          comment: str = "") -> dict:
+    """把当前用户已领取的任务置为 completed（幂等）。
+
+    技术工艺完成正式去向（提交工艺经理确认 / 回传销售经理继续报价）后调用：原 claimed
+    的财务待办必须随之关闭，否则它会一直挂在领取人的「我的任务」里。
+
+    校验四件事：任务存在、当前用户是领取人（或有管理角色）、任务确实属于该卡片、
+    状态只能是 claimed（已经是 completed 时直接返回 already，不重复写审计）。
+    重复调用保持幂等：不会重复记事件、也不会把 completed 变回别的状态。
+    """
+    if not user:
+        raise WfError("请先登录")
+    try:
+        tid = int(str(task_id).strip())
+    except (TypeError, ValueError):
+        raise WfError("任务编号无效")
+    uid = int(user["user_id"])
+    conn = cpq_auth._connect()
+    try:
+        cur = cpq_auth._exec(
+            conn, "SELECT card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s",
+            (tid,))
+        row = cur.fetchone()
+        if not row:
+            raise WfError("任务不存在")
+        cid, status, claimed_by = int(row[0]), str(row[1] or ""), row[2]
+        card = _fetch_card_by_id(conn, cid)
+        if not card:
+            raise WfError("任务所属卡片不存在")
+        if card_session_id and str(card.get("session_id") or "") != str(card_session_id):
+            # 任务必须属于当前技术项目/报价卡片：避免拿别的卡片的 task_id 误关。
+            raise WfError("该任务不属于当前项目")
+        is_claimer = claimed_by is not None and int(claimed_by) == uid
+        if not is_claimer and (user.get("role_code") or "") not in ADMIN_ROLES:
+            raise WfError("只有领取人本人（或有管理权限的人）能完成该任务")
+        if status == "completed":
+            return {"task_id": str(tid), "task_no": task_no(tid), "already": True,
+                    "status": status}
+        if status != "claimed":
+            raise WfError("该任务尚未被领取，无需完成")
+        now = _now()
+        cpq_auth._exec(
+            conn, "UPDATE cpq_wf_task SET status = 'completed', completed_at = %s"
+                  " WHERE task_id = %s AND status = 'claimed'", (_ts(now), tid))
+        _log(conn, cid, tid, uid, "complete", None, None,
+             comment or "成本结果已提交下一步，来源待办完成")
+        _commit(conn)
+        return {"task_id": str(tid), "task_no": task_no(tid), "already": False,
+                "status": "completed", "session_id": card.get("session_id")}
+    finally:
+        conn.close()
+
+
+def _fetch_card_by_id(conn, card_id: int):
+    cur = cpq_auth._exec(
+        conn, f"SELECT {', '.join(_CARD_COLS)} FROM cpq_wf_card WHERE card_id = %s", (int(card_id),))
+    return _card_row(cur.fetchone())
+
+
 # ---------------------------------------------------------------------------
 # 任务流转
 # ---------------------------------------------------------------------------

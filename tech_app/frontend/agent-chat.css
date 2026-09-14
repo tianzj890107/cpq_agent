@@ -381,7 +381,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 }
 
 /* 输入区 */
-.oc-composer { padding: 6px 16px 14px; }
+.oc-composer { padding: 10px 16px; }
 .oc-cinner { width: 100%; max-width: 640px; margin: 0 auto; }
 .oc-inputbox {
   display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 13px;
@@ -402,6 +402,40 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-send .ti { font-size: 18px; color: #fff; }
 .oc-send:disabled { opacity: .45; cursor: not-allowed; }
 .oc-disc { margin-top: 9px; color: var(--oc-text-3); font-size: 11px; text-align: center; }
+
+/* ---------- 统一父壳 · 单行输入区（+ / 输入 / 发送） ----------
+   只对挂 .oc-inputbox-single 的宿主生效（tech-workbench.html 的统一会话栏）：白底单行、
+   24px 大圆角；左侧圆形 + 负责新增附件，右侧是圆形发送按钮。
+   模型切换不在输入框内 —— 沿用头部 / 导航的「模型与参数设置」入口，避免挤占输入宽度。
+   独立 2.1 页（index.html）与 2.2 页（assembly-integration.html）继续用上面的 .oc-inputbox。 */
+.oc-inputbox-single {
+  min-height: 76px; padding: 10px 12px 10px 20px; gap: 12px;
+  border: 1px solid var(--oc-border-3); border-radius: 24px; background: var(--oc-bg-1);
+}
+.oc-inputbox-single:focus-within { border-color: var(--oc-accent); }
+.oc-inputbox-single textarea { font-size: 15px; line-height: 24px; }
+.oc-inputbox-single textarea::placeholder { color: var(--oc-text-3); }
+/* 圆形 +：新增 / 上传附件（查看已有文件在会话上方的「任务文件」，两个入口不合并）。 */
+.oc-add {
+  position: relative; display: flex; width: 50px; height: 50px; flex: 0 0 50px;
+  align-items: center; justify-content: center; padding: 0; border: 0;
+  border-radius: 50%; background: var(--oc-bg-2); color: var(--oc-text-1);
+  font-size: 18px; cursor: pointer; transition: background .15s;
+}
+/* 角标回形针点明附件语义（本按钮同时也是既有附件入口，契约要求保留这个字形），
+   主字形仍是 +（新增 / 上传）。 */
+.oc-add .oc-add-mark {
+  position: absolute; top: 5px; right: 6px; font-size: 11px; color: var(--oc-text-3);
+}
+.oc-add:hover { background: var(--oc-bg-3); }
+.oc-add:focus-visible { outline: 2px solid var(--oc-accent); outline-offset: 2px; }
+.oc-add:disabled { opacity: .5; cursor: not-allowed; }
+/* 发送：真正的圆形主色按钮（主色唯一事实源仍是 --oc-accent → --color-primary）。 */
+.oc-inputbox-single .oc-send {
+  width: 54px; height: 54px; flex: 0 0 54px; border-radius: 50%; background: var(--oc-accent);
+}
+.oc-inputbox-single .oc-send:hover:not(:disabled) { filter: brightness(.94); }
+.oc-inputbox-single .oc-send .ti { font-size: 22px; }
 
 /* 弹层（模型选择 / Agent 能力 / ＋ 菜单） */
 /* fixed 而不是 absolute：位置来自 getBoundingClientRect（视口坐标），
@@ -464,9 +498,11 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    这条留着：抽屉窄，成本明细表有 min-width，得允许它自己横向滚动。 */
 .oc-drawer .inline-analysis-host { overflow-x: auto; }
 
-/* ---------- 统一父壳左侧会话：输入区工具条（附件 / 任务文件） ----------
-   附件是回形针按钮（沿用 .oc-ibtn 的 32px 与 hover / focus-visible / disabled），
-   点击在同一次用户点击链路里直接打开下面的隐藏文件输入框 —— 没有菜单、没有箭头、
+/* ---------- 统一父壳左侧会话：输入区与「任务文件」 ----------
+   输入区只剩圆形 +（新增附件）与右侧圆形发送（见上面的 .oc-inputbox-single）；
+   「任务文件」（查看已上传文件）已移到会话上方的统一工具栏，样式沿用那一条胶囊规范，
+   这里保留 .oc-files-action 的 hover / focus-visible / disabled 及其外观定义。
+   + 点击在同一次用户点击链路里直接打开隐藏文件输入框 —— 没有菜单、没有箭头、
    不做 getBoundingClientRect 坐标计算。 */
 .oc-cinner { position: relative; }
 .oc-input-tools { display: flex; flex-shrink: 0; align-items: center; gap: 4px; }

@@ -173,7 +173,8 @@ def _import_open_claude():
         from open_claude.api import stream_message                  # noqa: WPS433
         from open_claude.config import AVAILABLE_MODELS             # noqa: WPS433
         from open_claude.profile import load_profile                # noqa: WPS433
-        from open_claude.sessions import SessionStore               # noqa: WPS433
+        from open_claude.sessions import (SessionStore, latest_session_id,  # noqa: WPS433
+                                          load_session)
         from open_claude.skills.registry import get_registry        # noqa: WPS433
     except Exception as exc:                                        # pragma: no cover - 环境相关
         raise AgentUnavailable(f"open-claude 导入失败：{exc}") from exc
@@ -181,6 +182,7 @@ def _import_open_claude():
         "repl": oc_repl, "stream_message": stream_message,
         "AVAILABLE_MODELS": AVAILABLE_MODELS, "load_profile": load_profile,
         "SessionStore": SessionStore, "get_registry": get_registry,
+        "latest_session_id": latest_session_id, "load_session": load_session,
     }
 
 
@@ -2844,7 +2846,14 @@ class ProjectAgent:
         except Exception:                                        # pragma: no cover - 配置不可读时退回 open-claude 默认
             pass
         profile = modules["load_profile"](profile_name, self.cwd) if profile_name else None
-        self.conv = oc_repl.Conversation(self.cwd, permission_mode="always_allow", profile=profile)
+        # 会话按项目持久化：进程重建后接着磁盘上最近一次会话继续，否则新一轮会写到
+        # 新文件，用户刷新时只能看到最后一段，「完整会话恢复」就不成立。
+        try:
+            resume_id = modules["latest_session_id"](self.cwd) or None
+        except Exception:                                        # pragma: no cover - 会话目录不可读
+            resume_id = None
+        self.conv = oc_repl.Conversation(self.cwd, permission_mode="always_allow",
+                                         resume_session_id=resume_id, profile=profile)
         # 没有终端可以回答 y/n，任何询问都直接放行（只读限制仍然生效）。
         self.conv.permissions._prompt_user = lambda *args, **kwargs: (True, "")
 
@@ -3056,6 +3065,93 @@ def _stringify(content: Any) -> str:
                 parts.append(str(block))
         return "\n".join(part for part in parts if part)
     return json.dumps(content, ensure_ascii=False, default=str)
+
+
+# --------------------------------------------------------------------------- #
+# 会话历史：只读回放（用户 / 助手 / 工具轨迹）
+# --------------------------------------------------------------------------- #
+_HISTORY_TEXT_LIMIT = 20000
+
+
+def _history_text(value: Any) -> str:
+    """工具结果正文可能是字符串或分块列表：统一成可直接展示的文本。"""
+    text = value if isinstance(value, str) else _stringify(value)
+    if len(text) > _HISTORY_TEXT_LIMIT:
+        return text[:_HISTORY_TEXT_LIMIT] + "\n… (已截断)"
+    return text
+
+
+def _serialize_history(raw: list) -> list[dict]:
+    """把 open-claude 的消息还原成前端可回放的有序事件。
+
+    兼容旧消息与异常数据：content 既可能是字符串，也可能是 text / tool_use /
+    tool_result 分块列表；无法识别的块直接跳过，绝不让整段历史读不出来。
+    """
+    events: list[dict] = []
+    for message in raw:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        output = "user" if role == "user" else "assistant"
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                events.append({"type": output, "text": text})
+            continue
+        if not isinstance(content, list):
+            continue
+        for chunk in content:
+            if not isinstance(chunk, dict):
+                continue
+            kind = str(chunk.get("type") or "")
+            if kind == "text":
+                text = str(chunk.get("text") or "").strip()
+                if text:
+                    events.append({"type": output, "text": text})
+            elif kind == "tool_use":
+                events.append({
+                    "type": "tool_use",
+                    "id": str(chunk.get("id") or ""),
+                    "name": str(chunk.get("name") or ""),
+                    "input": chunk.get("input") if isinstance(chunk.get("input"), dict) else {},
+                })
+            elif kind == "tool_result":
+                events.append({
+                    "type": "tool_result",
+                    "tool_use_id": str(chunk.get("tool_use_id") or ""),
+                    "content": _history_text(chunk.get("content")),
+                    "is_error": bool(chunk.get("is_error")),
+                })
+    return events
+
+
+def load_history(project_id: str) -> dict[str, Any]:
+    """只读回放该项目已持久化的 Agent 会话（用户 / 助手 / 工具轨迹）。
+
+    与 Conversation 共用同一份 open-claude SessionStore：ProjectAgent 创建时接着最近
+    一次会话继续，所以「继续发送」仍写回同一文件；进程重建（没有在线会话）时回退到
+    磁盘上最近一次会话，服务重启后照样能恢复。只返回可渲染的消息事件，不返回系统
+    提示词、模型 Key 或工作目录。
+    """
+    modules = _import_open_claude()
+    cwd = str(_project_workdir(project_id))
+    with _lock:
+        agent = _sessions.get(project_id)
+    session_id = ""
+    if agent is not None:
+        session = getattr(getattr(agent, "conv", None), "session", None)
+        session_id = str(getattr(session, "session_id", "") or "")
+    if not session_id:
+        session_id = str(modules["latest_session_id"](cwd) or "")
+    raw = modules["load_session"](cwd, session_id) if session_id else None
+    messages = _serialize_history(raw or [])
+    return {
+        "project_id": project_id,
+        "session_id": session_id,
+        "messages": messages,
+        "message_count": len(messages),
+    }
 
 
 # --------------------------------------------------------------------------- #

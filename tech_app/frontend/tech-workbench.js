@@ -71,7 +71,6 @@
         { key: 'parts', label: '零件成本', view: 'parts' },
         { key: 'assembly', label: '组装成本', view: 'assembly' },
         { key: 'total', label: '汇总', view: 'total' },
-        { key: 'params', label: '整合参数', view: 'params' },
       ],
     },
   };
@@ -98,7 +97,9 @@
     'cost':                { primary: 'runCostReview',           primaryLabel: '一键测算全部成本', secondary: 'confirmCostReview', secondaryLabel: '✓ 确认成本' },
     'summary':             { primary: 'submitProcessReportReview', primaryLabel: '提交审核', secondary: 'saveProcessReport', secondaryLabel: '保存' },
     'report-review':       { primary: 'approveProcessReport',    primaryLabel: '审核通过并发布', secondary: 'rejectProcessReport', secondaryLabel: '退回汇总' },
-    'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: null, secondaryLabel: '' },
+    // 3.3 的两个业务动作：发布报告（主）+ 回传销售经理继续报价（次）。后者走报告语义
+    // 明确的专用路由，已发布后才可用；父壳只登记语义动作名，实现留在右侧看板。
+    'report-publish':      { primary: 'publishProcessReport',    primaryLabel: '发布报告', secondary: 'sendReportToQuote', secondaryLabel: '回传销售经理继续报价' },
   };
 
   // 左侧统一操作栏（第 16 步）的九阶段描述表：每个 stage 一条，键覆盖全部九个
@@ -113,7 +114,7 @@
     'cost':                { ai: 'runCostReview',   primary: 'runCostReview',           secondary: 'confirmCostReview', transfer: null, prev: true, next: true },
     'summary':             { ai: null, primary: 'submitProcessReportReview', secondary: 'saveProcessReport',    transfer: null, prev: true,  next: true },
     'report-review':       { ai: null, primary: 'approveProcessReport',   secondary: 'rejectProcessReport',        transfer: null, prev: true,  next: true },
-    'report-publish':      { ai: null, primary: 'publishProcessReport',   secondary: null,                         transfer: null, prev: true,  next: false },
+    'report-publish':      { ai: null, primary: 'publishProcessReport',   secondary: 'sendReportToQuote',          transfer: null, prev: true,  next: false },
   };
 
   // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
@@ -1031,6 +1032,9 @@
     const focusable = body.querySelector(TECH_SETTINGS_FOCUSABLE);
     window.setTimeout(() => (focusable || card).focus(), 0);
   }
+  // 右侧头部 / 导航「设置」共用的模型设置入口（模型切换已不在会话输入框内）：
+  // 仍然只有这一张卡片、这一份状态，不另建第二套。
+  window.techOpenModelSettings = (anchor) => openTechModelSettings(anchor);
   function bindTechSettingsModal() {
     const mask = $('techModelSettingsMask');
     if (!mask || mask.dataset.bound === '1') return;

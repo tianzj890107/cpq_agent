@@ -25,11 +25,12 @@ from ..models.cleaning import CleaningPlan
 from ..models.manufacturing import ManufacturingPlan
 from ..models.material import MaterialPlan
 from ..models.production import ProductionPlan
+from ..models.integration import QuoteHandoff
 from ..models.summary import SummaryDoc
 from ..models.workflow import ProcessReport, ReportRecipient, WorkflowReview
 from ..storage import store
 from ..time_utils import now_cst_str
-from . import summary as summary_svc
+from . import cpq_bridge, summary as summary_svc
 
 # 3.1 允许 Agent / 看板改写的报告字段；单据号、编制人、审核发布留痕、版本号一律服务端维护。
 ALLOWED_REPORT_FIELDS = (
@@ -44,6 +45,7 @@ AUDIT_DISTRIBUTION = "workflow:report_distribution_updated"
 AUDIT_SUBMITTED = "workflow:report_submitted"
 AUDIT_PUBLISHED = "workflow:report_published"
 AUDIT_NEW_VERSION = "workflow:report_new_version"
+AUDIT_SENT_TO_QUOTE = "workflow:report_sent_to_quote"
 
 
 class ReportWorkflowError(Exception):
@@ -603,3 +605,152 @@ def commit(project_id: str, result: dict, user: Optional[dict] = None) -> dict:
     if audit.get("action"):
         store.audit(project_id, audit["action"], audit.get("payload") or {})
     return report
+
+
+# --------------------------------------------------------------------------- #
+# 3.3 → 报价：已发布报告回传销售经理继续报价
+# --------------------------------------------------------------------------- #
+def _bridge_call(action, *args, **kwargs):
+    """把桥接层的两类失败翻成报告流程的业务错误（与 2.3 同一口径）。"""
+    from . import cpq_bridge
+
+    try:
+        return action(*args, **kwargs)
+    except cpq_bridge.BridgeRejected as exc:
+        raise ReportWorkflowError(str(exc), 400) from exc
+    except cpq_bridge.BridgeUnavailable as exc:
+        raise ReportWorkflowError(f"业务数据库/报价服务暂不可用：{exc}", 503) from exc
+
+
+def report_package(doc: ProcessReport) -> dict:
+    """已发布报告 → 报价侧要看的完整报告包。
+
+    销售拿到的必须是**权威结论**：编号、版本、审核与发布留痕、发布范围、结论、风险、
+    附件与导出入口全部取自服务端报告本身，不让前端自行拼。
+    """
+    return {
+        "report_no": doc.report_no,
+        "version": doc.version,
+        "title": doc.title,
+        "status": doc.status,
+        "reviewed_by": doc.reviewed_by or "",
+        "reviewed_at": doc.reviewed_at or "",
+        "review_note": doc.review_note or "",
+        "published_by": doc.published_by or "",
+        "published_at": doc.published_at or "",
+        "distribution_scope": doc.distribution_scope or "",
+        "distribution_cc": doc.distribution_cc or "",
+        "summary": doc.overview or "",
+        "conclusion": doc.conclusion or "",
+        "risks": list(doc.risks or []),
+        "highlights": list(doc.highlights or []),
+        "attachments": [row.model_dump() if hasattr(row, "model_dump") else dict(row or {})
+                        for row in (doc.attachments or [])],
+        # 报告页与 PDF 导出入口：让销售点得开原始报告，而不是只看一段摘要。
+        "report_url": f"tech-workbench.html?stage=summary&project={doc.project_id}",
+        "pdf_url": f"/api/projects/{doc.project_id}/process-report/export.pdf",
+        "recipients": [row.model_dump() if hasattr(row, "model_dump") else dict(row or {})
+                       for row in (doc.recipients or [])],
+    }
+
+
+def _technical_result(project_id: str, title: str) -> dict:
+    """回传用的技术结果：参数、工艺、零件与组装成本。复用 2.3 的同一份口径。"""
+    from . import cost_flow, integration
+
+    try:
+        plan = integration.load_plan(project_id)
+    except Exception:
+        return {"tech_project_id": project_id}
+    if plan is None or not (plan.cost and plan.cost.items):
+        return {"tech_project_id": project_id}
+    requirement = store.load_requirement(project_id) or {}
+    return cost_flow.integration_quote_result(project_id, plan, title, requirement)
+
+
+def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "",
+                  target_type: str = "", target_role_code: str = "",
+                  target_user_id: str = "") -> dict:
+    """3.3 → 销售经理：把**已发布报告**回传报价，让销售接着往下走。
+
+    这是报告语义明确的专用入口，不再复用 2.2/2.3 的 `/integration/send-to-quote`：
+    回传必须带齐报告编号、版本、审核与发布信息、发布范围、结论、风险与附件入口。
+
+    报价步骤只允许单调前进：如果成本阶段已经把报价推进到第 3 步或更后（例如报告
+    在本步之前就回传过），这里只合并技术结果与报告快照并通知当前销售负责人，
+    绝不重做第 2 步、也不把 current_step 写回去。
+
+    幂等：同一项目、同一报告版本、同一目标报价会话只产生一个有效交接结果，
+    重复点击返回 already_sent，不重复建 open 任务、不重复发消息。
+    """
+    from . import cost_flow, integration
+
+    _ensure_project(project_id)
+    user = user or {}
+    doc = _require_report(project_id)
+    if doc.status != "published":
+        raise ReportWorkflowError("报告须正式发布后才能回传销售经理继续报价", 409)
+    requirement = store.load_requirement(project_id) or {}
+    req_data = requirement.get("data") or {}
+    title = (doc.basic_info or {}).get("product_name") or doc.title or f"技术工艺项目 {project_id}"
+    result = _technical_result(project_id, title)
+    package = report_package(doc)
+    # 结果版本按**报告版本**走：同一版报告重复点击只交一次，换版后才是新的交接。
+    result_version = f"report-v{doc.version}"
+
+    outcome = _bridge_call(
+        cpq_bridge.report_handoff, token, project_id, title,
+        cost_flow.requirement_customer(requirement, req_data),
+        str(requirement.get("product_name") or req_data.get("product_name") or ""),
+        note or f"已发布报告 {doc.report_no} V{doc.version}，请继续报价",
+        str(req_data.get("source_task_id") or ""),
+        str(req_data.get("source_session_id") or ""),
+        result, package, result_version,
+        str(doc.report_no or ""))
+
+    # 技术侧留痕：报告回传后整机计划里的 quote_handoff 指向同一个报价会话，
+    # 历史页面与 3.3 的"回传结果"都从这一份数据读，不另存。
+    handoff = outcome.get("handoff") or {}
+    try:
+        plan = integration.load_plan(project_id)
+    except Exception:
+        plan = None
+    if plan is not None:
+        plan.quote_handoff = QuoteHandoff(
+            session_id=str(outcome.get("quote_session_id") or ""),
+            next_step_no=outcome.get("next_step_no"),
+            next_step_name=outcome.get("next_step_name") or "",
+            target_role_name=str(handoff.get("target_role_name") or ""),
+            target_name=str(handoff.get("target_name") or ""),
+            returned_to_sender=bool(handoff.get("returned_to_sender")),
+            source_task_no=str(handoff.get("source_task_no") or ""),
+            returned_sections=list(outcome.get("returned_sections") or []),
+            task_id=str(handoff.get("task_id") or "") or None,
+            sent_at=now_str(),
+            sent_by=user.get("display_name") or user.get("username") or "",
+        )
+        try:
+            integration.save_plan(project_id, plan, user.get("username", "system"))
+        except Exception:
+            pass
+
+    return {
+        "report_no": doc.report_no,
+        "version": doc.version,
+        "status": doc.status,
+        "handoff": handoff,
+        "quote_session_id": outcome.get("quote_session_id") or "",
+        "linked_by": outcome.get("linked_by") or "",
+        "new_card": bool(outcome.get("new_card")),
+        "already_sent": bool(outcome.get("already_sent")),
+        "next_step_no": outcome.get("next_step_no"),
+        "next_step_name": outcome.get("next_step_name") or "",
+        "carried": {
+            "report": sorted(package.keys()),
+            "tech_result": sorted(result.keys()) if isinstance(result, dict) else [],
+        },
+        "audit": {"action": AUDIT_SENT_TO_QUOTE,
+                  "payload": {"report_no": doc.report_no, "version": doc.version,
+                              "task_id": handoff.get("task_id"),
+                              "already_sent": bool(outcome.get("already_sent"))}},
+    }

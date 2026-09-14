@@ -79,6 +79,16 @@ class ReviewAction(BaseModel):
     comment: str = ""
 
 
+class ReportQuoteAction(BaseModel):
+    """3.3 已发布报告回传销售经理的入参。"""
+    note: str = ""
+    # 派发方式与其它转交一致：留空时由报价那边落到该任务的默认角色（销售经理）。
+    target_type: str = ""
+    target_role_code: str = ""
+    target_user_id: str = ""
+    source_task_id: str = Field("", description="来源待办任务号，随 URL 带进来")
+
+
 class LoginBody(BaseModel):
     username: str
     password: str
@@ -1843,6 +1853,21 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
     return {"available": True, "reason": "", **meta}
 
 
+@app.get("/api/projects/{project_id}/agent/history")
+def agent_history(project_id: str, user: dict = Depends(current_user)):
+    """只读回放：该项目已持久化的完整 Agent 会话（用户 / 助手 / 工具轨迹）。
+
+    与左侧会话共用同一条 open-claude 会话事实源：打开历史项目时前端先取这份历史，
+    再进入正常会话状态。只读，不创建新会话，也不触发 /agent/new。
+    """
+    _agent_project(project_id)
+    try:
+        return oc_agent.load_history(project_id)
+    except oc_agent.AgentUnavailable as exc:
+        # 与 /agent/meta 一致：会话层不可用时不抛 500，让页面显示真实原因而不是空白会话。
+        return {"available": False, "reason": str(exc), "messages": [], "message_count": 0}
+
+
 @app.post("/api/projects/{project_id}/agent/send")
 def agent_send(project_id: str, body: AgentSendRequest, request: Request,
                user: dict = Depends(current_user)):
@@ -2330,6 +2355,11 @@ async def generate_integration_params(
         # 参数变了，下游的工艺与成本就不再是依据当前参数算的。这里不静默保留旧值，
         # 由前端提示重新生成 —— 留着会让人以为整机成本已经跟着新参数更新过了。
         plan.confirmed = False
+        # 「确认参数已齐」也是针对当时那一版参数按下的：整份重推之后必须重新确认，
+        # 否则新参数带着旧确认发到财务，缺项没人看得见。
+        plan.params_final = False
+        plan.params_final_by = None
+        plan.params_final_at = None
         integration.save_plan(project_id, plan, author)
         return _integration_payload(project_id, plan)
 
@@ -2367,7 +2397,7 @@ def update_integration_params(project_id: str, params: IntegrationParamPlan,
 def confirm_integration_params(project_id: str, user: dict = Depends(current_user)):
     """确认「参数推荐」这一环节：整机参数、连接关系与 BOM 由人核对过了。
 
-    与「整合参数」的确认是两件事：那个是交给报价前的最后收口（必填要齐），
+    与「确认参数已齐」是两件事：那个是交给报价前的最后收口（报价必填要齐），
     这个只是本环节定稿 —— 缺口在这里不拦，但要如实说出来。
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
@@ -2392,14 +2422,15 @@ def confirm_integration_process(project_id: str, user: dict = Depends(current_us
 async def autofill_integration_params(
     project_id: str, note: str = Form(""), user: dict = Depends(current_user),
 ):
-    """整合参数 · 智能补全：只给还缺的字段出**建议值**，不落库。
+    """参数推荐 · 智能补全：只给还缺的字段出**建议值**，不落库。
 
-    这一步随「整合参数」一起搬到了 2.3（财务经理），所以权限也跟着走。
+    这是第 3 大步「组装与整合 · 参数推荐」里的能力：整机参数、连接关系与 BOM 在这一步
+    定稿，报价必填项自然也在这里补齐，所以沿用技术工艺写权限。
 
     不直接写入是有意的：补全里必然混着"靠常识凑的"，直接写进去，报价那头就分不清
     哪些是算出来的、哪些是猜的。建议回到界面上由工艺经理逐项过目再保存。
     """
-    _require(user, auth.COST_ROLES, "「整合参数」在 2.3，由财务经理负责")
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir = _integration_ir(project_id)
     if integration.load_plan(project_id).params is None:
         raise HTTPException(400, "请先完成参数推荐：智能补全只补它没给出的那些字段")
@@ -2415,7 +2446,7 @@ async def autofill_integration_params(
 
 
 class IntegrationFinalizeBody(BaseModel):
-    """「整合参数」环节：人工补填的值 + 是否就此确认。
+    """「参数推荐」环节：人工补填的值 + 是否就此确认。
 
     values 按**字段编码**给：{"rated_voltage": {"value": "14.4", "unit": "V"}}。
     confirm=False 只保存（补一半先存着），True 才校验必填齐不齐并落确认。
@@ -2427,12 +2458,13 @@ class IntegrationFinalizeBody(BaseModel):
 @app.post("/api/projects/{project_id}/integration/params/finalize")
 def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
                                 user: dict = Depends(current_user)):
-    """整合参数：把人工补填的值合进整机参数，必填齐了才允许确认。
+    """参数推荐：把人工补填的值合进整机参数，必填齐了才允许最终确认。
 
-    这一步是 2.2 与报价之间的验收口径 —— 报价测算单按 DA 字段取数，必填项缺一格，
-    那边就是一格空白，而且要等销售回头来问才发现。宁可在这里挡住。
+    这是第 3 大步「组装与整合 · 参数推荐」与报价之间的验收口径 —— 报价测算单按 DA
+    字段取数，必填项缺一格，那边就是一格空白，而且要等销售回头来问才发现。宁可在这里
+    挡住，也不把补齐的活儿推给后面的成本步骤。
     """
-    _require(user, auth.COST_ROLES, "「整合参数」在 2.3，由财务经理负责")
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     plan = integration.load_plan(project_id)
     integration.finalize_params(plan, body.values)
     if body.confirm:
@@ -2441,7 +2473,7 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
             names = "、".join(field["name"] for field in missing[:8])
             more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
             raise HTTPException(
-                400, f"报价必填的成品参数还缺：{names}{more}。请在「整合参数」里补填后再确认")
+                400, f"报价必填的成品参数还缺：{names}{more}。请在「参数推荐」里补填后再确认")
         plan.params_final = True
         plan.params_final_by = user.get("display_name") or user.get("username") or ""
         plan.params_final_at = now_cst_str()
@@ -2684,8 +2716,8 @@ def integration_send_to_quote(project_id: str, body: IntegrationPublishBody,
 # 2.3 成本测算 —— 财务经理的步骤
 #
 # 分工：工艺经理在 2.1/2.2 出工艺与用量，2.2 结束时把项目交给财务；财务在这一步
-# 逐个零件 + 整机算成本、汇总，然后选三个去向之一：写入数据库 / 发送至报价 /
-# 退回工艺经理复核。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
+# 逐个零件 + 整机算成本、汇总，然后选三个去向之一：写入数据库 / 回传销售经理继续报价 /
+# 提交工艺经理确认。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
 # --------------------------------------------------------------------------- #
 def _cost_review_ctx(project_id: str):
     """2.3 的三样输入：IR（零件）、2.2 的整机方案、本步的评审状态。"""
@@ -2790,25 +2822,29 @@ def write_cost_review_material(project_id: str, body: CostActionBody,
 @app.post("/api/projects/{project_id}/cost-review/send-to-quote")
 def send_cost_review_to_quote(project_id: str, body: CostActionBody,
                               request: Request, user: dict = Depends(current_user)):
-    """去向②：发送至报价（复用 2.2 那条推送，成本与参数一并带回）。"""
+    """去向②：回传销售经理继续报价（复用 2.2 那条推送，成本与参数一并带回）。
+
+    完成后按 body.source_task_id 关闭来源的 claimed 财务待办（在 cost_flow 里做）。
+    """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
     return _cost_flow(cost_flow.send_to_quote, project_id, user,
                       product_name=body.product_name, spec=body.spec, note=body.note,
-                      token=_sso_token(request))
+                      token=_sso_token(request), source_task_id=body.source_task_id)
 
 
 @app.post("/api/projects/{project_id}/cost-review/return-to-process")
 def cost_review_return_to_process(project_id: str, body: CostActionBody,
                                   request: Request, user: dict = Depends(current_user)):
-    """去向③：把结果退回工艺经理复核。
+    """去向①：提交工艺经理确认（第 5 大步「工艺评估报告」）。
 
-    不要求先确认 —— 退回的场景恰恰是"这个成本我认不了"：工序或用量有问题，
-    要工艺经理去改。硬卡着确认，等于逼财务先认可一份他不认可的数。
+    成本必须先确认，未确认的数不作为正式结果往下走。正常提交确认与返工是两条路：
+    确实要返工时，由第 5 大步明确退回第 3 大步，不走这个按钮。
     """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
     return _cost_flow(cost_flow.return_to_process, project_id, user,
                       product_name=body.product_name, note=body.note,
-                      target_user_id=body.target_user_id, token=_sso_token(request))
+                      target_user_id=body.target_user_id, token=_sso_token(request),
+                      source_task_id=body.source_task_id)
 
 
 def _integration_process_lookup(project_id: str, plan) -> Optional[dict]:
@@ -5610,6 +5646,29 @@ def publish_process_report(project_id: str, body: PublishAction, user: dict = De
     _persist_report(project_id, result, user)
     store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
     return {"report": result["report"]}
+
+
+@app.post("/api/projects/{project_id}/process-report/send-to-quote")
+def send_process_report_to_quote(project_id: str, body: ReportQuoteAction,
+                                 request: Request, user: dict = Depends(current_user)):
+    """3.3 的回传去向：把**已发布**报告回传销售经理继续报价。
+
+    报告语义明确的专用路由 —— 与 2.2/2.3 的 /integration/send-to-quote 不是一回事：
+    这里必须带齐报告编号、版本、审核发布留痕、发布范围、结论、风险与附件入口，
+    并由 services.report_workflow 统一做"必须已发布"与幂等、步骤单调性保护。
+    实现唯一：与 Agent 的 SendReportToQuote 走同一份 services.report_workflow。
+    """
+    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    _workflow_project(project_id)
+    result = _report_flow(report_workflow.send_to_quote, project_id, user,
+                          note=body.note, token=_sso_token(request),
+                          target_type=body.target_type,
+                          target_role_code=body.target_role_code,
+                          target_user_id=body.target_user_id,
+                          source_task_id=body.source_task_id)
+    if result.get("audit"):
+        store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return result
 
 
 @app.get("/api/projects/{project_id}/process-report/versions")

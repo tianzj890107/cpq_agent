@@ -87,12 +87,72 @@ def send_to_finance(token: str, session_id: str, title: str, customer: str = "",
 
 def return_to_process(token: str, session_id: str, title: str, customer: str = "",
                       project_name: str = "", note: str = "",
-                      payload: Optional[dict] = None, target_user_id: str = "") -> dict:
-    """2.3 → 工艺经理：成本测完了，请复核工艺与用量。"""
+                      payload: Optional[dict] = None, target_user_id: str = "",
+                      source_task_id: str = "") -> dict:
+    """2.3 → 工艺经理：成本已确认，请做最终工艺确认与报告（第 5 大步）。"""
     return _post("/wf/tech/return-process", token, {
         "session_id": session_id, "title": title, "customer": customer,
         "project_name": project_name, "note": note, "payload": payload or {},
-        "target_user_id": target_user_id,
+        "target_user_id": target_user_id, "source_task_id": source_task_id,
+    })
+
+
+def complete_task(token: str, task_id: str, card_session_id: str = "",
+                  comment: str = "") -> dict:
+    """把来源的那条 claimed 待办置为完成（幂等）。技术工艺完成正式去向后调用。"""
+    return _post("/wf/tech/complete-task", token, {
+        "task_id": task_id, "card_session_id": card_session_id, "comment": comment,
+    })
+
+
+def report_handoff(token: str, session_id: str, title: str, customer: str = "",
+                   project_name: str = "", note: str = "",
+                   source_task_id: str = "", source_session_id: str = "",
+                   result: Optional[dict] = None, report: Optional[dict] = None,
+                   result_version: str = "", source_task_no: str = "") -> dict:
+    """已发布报告 → 销售经理继续报价。走与成本回传同一条 handoff 通道，
+    额外带上完整报告与报告版本，由一体化服务做幂等与步骤单调性保护。"""
+    return _post("/wf/tech/handoff", token, {
+        "session_id": session_id,
+        "title": title,
+        "customer": customer,
+        "project_name": project_name,
+        "note": note,
+        "source_task_id": source_task_id,
+        "source_session_id": source_session_id,
+        "result": result or {},
+        "report": report or {},
+        "handoff_kind": "report_to_quote",
+        "result_version": result_version,
+        "source_task_no": source_task_no,
+    })
+
+
+def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
+                  project_name: str = "", note: str = "",
+                  source_task_id: str = "", result: Optional[dict] = None,
+                  source_session_id: str = "", result_version: str = "") -> dict:
+    """确认工艺（报价第 2 步）并把卡片推进到第 3 步定价，通知销售经理。
+
+    source_task_id 是当初那条「新增工艺」任务：给了它，一体化服务会回到**原来那张
+    报价卡片**、把任务退回给当初发起的那个人，而不是新开一张卡片群发给销售角色。
+    source_session_id 是同一份需求单里记着的原报价会话号 —— 任务行被删或被后来的
+    任务顶掉时，它是唯一还能认回原卡片的线索。两个都给不出来时，一体化服务会建立
+    一条**真实**的报价 Agent 会话（不再拿技术项目号冒充会话号），返回的 linked_by /
+    new_card 会一路带回界面说明白。
+    result 是随任务带回去的整机结论（成品编码、四项成本、参数、工艺与零件成本）。
+    """
+    return _post("/wf/tech/handoff", token, {
+        "session_id": session_id,
+        "title": title,
+        "customer": customer,
+        "project_name": project_name,
+        "note": note,
+        "source_task_id": source_task_id,
+        "source_session_id": source_session_id,
+        "result": result or {},
+        "handoff_kind": "cost_to_quote",
+        "result_version": result_version,
     })
 
 

@@ -4,7 +4,7 @@
  *
  * 分工：工艺经理在 2.1/2.2 出工艺、参数与用量，2.2 结束点「确认工艺并发送至财务做
  * 成本测算」把项目交过来；财务在这里逐个零件 + 整机算成本、汇总，然后选三个去向：
- * 写入数据库 / 发送至报价 / 退回工艺经理复核。
+ * 写入数据库 / 回传销售经理继续报价 / 提交工艺经理确认。
  *
  * 两条要一直记着的口径：
  *   · **本步不联网**。只用企业成本库里已有的物料价、费率、系数，加模型的工程经验。
@@ -14,7 +14,11 @@
  */
 const crPid = new URLSearchParams(location.search).get('project')
   || localStorage.getItem('cad_engine_project_id') || '';
-const CR_TABS = { parts: '零件成本', assembly: '组装成本', total: '汇总', params: '整合参数' };
+// 统一工作台从待办点进来时 URL 上带着来源 task_id / tech_task：完成正式去向时原样带回，
+// 由后端把原来那条已领取的财务待办关闭（cpq_wf.complete_claimed_task，幂等）。
+const crTaskId = new URLSearchParams(location.search).get('task_id')
+  || new URLSearchParams(location.search).get('tech_task') || '';
+const CR_TABS = { parts: '零件成本', assembly: '组装成本', total: '汇总' };
 const CR_COST_LABEL = { material: '材料', labor: '人工', overhead: '制造费用', machining: '加工费用' };
 
 let crData = null;
@@ -301,98 +305,6 @@ function crRenderTotal() {
   return html + `</section>`;
 }
 
-/* --------------------------------------------------------------- 面板：整合参数
- * 从 2.2 搬过来的收口环节。放在 2.3 是因为它服务的是**出成本、发报价**这件事：
- * 报价测算单按 DA 字段取数，必填缺一格，那边就是一格空白。既然发报价已经是财务的
- * 动作，补齐参数自然也归他。
- */
-function crRenderParams() {
-  const checklist = crData?.param_checklist;
-  const review = crData?.review || {};
-  if (!checklist) {
-    return `<div class="inline-empty">还没有整机参数。请先让工艺经理在 2.2 完成参数推荐，`
-      + `再回到这一步把报价要的字段补齐。</div>`;
-  }
-  const stat = checklist.summary;
-  const missing = crData?.required_missing || 0;
-  let html = `<section class="inline-card"><div class="inline-card-title">交给报价前的收口</div>`
-    + `<div class="inline-hint">报价测算单上的成品行按下面这些 DA 字段取数。`
-    + `确认之后，「发送至报价」会把它们连同成品编码与成本一起带回报价。</div>`
-    + `<div class="inline-totals"><span><strong>${stat.filled}</strong>/${stat.total} 已给出</span>`
-    + `<span><strong>${stat.required_filled}</strong>/${stat.required_total} 报价必填</span>`
-    + `<span class="total">${review.params_final ? '已确认' : missing ? `还缺 ${missing} 项` : '待确认'}</span></div>`;
-  if (missing) {
-    html += `<div class="inline-warn">⚠ 还有 ${missing} 项报价必填参数没有值。`
-      + `可以直接在下表「值」列里补填，或用上方「✦ 智能补全」按 2.1 零件、已排工艺与`
-      + `已算成本给建议值。填完点「保存补填」，都齐了再点「确认参数已齐」。</div>`;
-  }
-  html += `</section>`;
-  QuoteParams.setWritten(crData?.has_material_code);
-  html += QuoteParams.card(checklist, true);
-  html += QuoteParams.extraCard(crData?.params_plan, checklist, false);
-  return html;
-}
-
-async function crAutofill() {
-  if (crBusy) return;
-  crBusy = true;
-  crRender();
-  const card = crCard('整合参数 · 智能补全');
-  crStatus('智能补全中…');
-  try {
-    const form = new FormData();
-    const note = $cr('crNote')?.value.trim() || '';
-    if (note) form.append('note', note);
-    const submitted = await api(
-      `/api/projects/${encodeURIComponent(crPid)}/integration/params/autofill`,
-      { method: 'POST', body: form });
-    const result = await crPollTask(submitted.task_id, card);
-    const fills = result?.fills || [];
-    const unresolved = result?.unresolved || [];
-    crBusy = false;
-    crRender();                     // 先把表画回来，再往输入框里填
-    const applied = QuoteParams.applyFills(fills);
-    card.done(true);
-    crStatus(`智能补全给出 ${applied} 项建议`);
-    crSay(applied
-      ? `已为 ${applied} 项参数填入建议值（表格里标了「AI 建议」）。`
-        + `**这是建议不是结论** —— 请逐项核对，改完点「保存补填」才会写进参数表。`
-        + (unresolved.length ? `
-另有 ${unresolved.length} 项确实推不出来：${unresolved.join('、')}。` : '')
-      : `没有可以推出来的参数${unresolved.length ? `：${unresolved.join('、')} 都需要人工确定。` : '。'}`);
-  } catch (error) {
-    card.done(false, error.message || '失败');
-    crStatus(`智能补全失败：${error.message}`, true);
-    crToast(error.message || '智能补全失败', true);
-    crBusy = false;
-    crRender();
-  }
-}
-
-async function crFinalize(confirm) {
-  if (crBusy) return;
-  crBusy = true;
-  crRenderActions();
-  crStatus(confirm ? '确认整合参数…' : '保存补填…');
-  try {
-    crData = await api(
-      `/api/projects/${encodeURIComponent(crPid)}/integration/params/finalize`,
-      { method: 'POST',
-        body: JSON.stringify({ values: QuoteParams.collect(), confirm: !!confirm }) });
-    // finalize 返回的是 2.2 的 payload，重新取一次 2.3 的全貌。
-    crData = await api(crUrl(''));
-    crStatus(confirm ? '整合参数已确认' : '补填已保存');
-    crToast(confirm ? '整合参数已确认' : '已保存');
-    if (confirm) crSay('整合参数已确认，报价必填的成品参数都有值了。可以发送至报价。');
-  } catch (error) {
-    crStatus(`${confirm ? '确认' : '保存'}失败：${error.message}`, true);
-    crToast(error.message || '操作失败', true);
-  } finally {
-    crBusy = false;
-    crRender();
-  }
-}
-
 function crRenderActions() {
   const host = $cr('crActions');
   if (crTab === 'parts') {
@@ -414,24 +326,6 @@ function crRenderActions() {
     $cr('crRunAssembly').onclick = () => crRunAssembly();
     return;
   }
-  if (crTab === 'params') {
-    const missing = crData?.required_missing || 0;
-    const final = crData?.review?.params_final;
-    host.innerHTML =
-      `<button type="button" class="inline-action primary start-parse-btn" id="crAutofill" ${crBusy ? 'disabled' : ''}>`
-      + (crBusy ? `<span class="parse-spinner" aria-hidden="true"></span><span>智能补全中…</span>` : '✦ 智能补全')
-      + `</button>`
-      + `<button type="button" class="inline-action save" id="crFinalSave" ${crBusy ? 'disabled' : ''}>保存补填</button>`
-      + `<button type="button" class="inline-action" id="crFinalConfirm" ${crBusy ? 'disabled' : ''}>`
-      + `${final ? '重新确认' : '确认参数已齐'}</button>`
-      + `<span class="ai-hint">${missing
-          ? `还差 ${missing} 项报价必填参数，补完再确认。`
-          : final ? '已确认，可以发送至报价。' : '必填项都有值了，确认后即可发送至报价。'}</span>`;
-    $cr('crAutofill').onclick = () => crAutofill();
-    $cr('crFinalSave').onclick = () => crFinalize(false);
-    $cr('crFinalConfirm').onclick = () => crFinalize(true);
-    return;
-  }
   host.innerHTML = `<span class="ai-hint">核对无误后，到左边点「确认成本」，再选择去向。</span>`;
 }
 
@@ -446,7 +340,7 @@ function crDisableActions() {
 
 function crRender() {
   const renderers = { parts: crRenderParts, assembly: crRenderAssembly,
-                      total: crRenderTotal, params: crRenderParams };
+                      total: crRenderTotal };
   $cr('crPanelTitle').textContent = CR_TABS[crTab];
   document.querySelectorAll('#crTabs [data-cr-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.crTab === crTab);
@@ -507,13 +401,15 @@ function crRenderOps() {
     `<div class="ai-op-done">✓ ${esc(action.label)}：${esc(action.detail)}</div>`).join('');
   $cr('crHint').innerHTML = done
     || '确认成本：三个去向都以确认过的数为准。<br/>'
-       + '退回工艺经理：成本高在工序或用量上时用它 —— 那是工艺的判断，不该由财务改。';
+       + '提交工艺经理确认：把已确认的成本交给工艺经理，进第 5 大步做最终工艺确认与报告；'
+       + '确实要返工，由第 5 大步明确退回第 3 大步。<br/>'
+       + '回传销售经理继续报价：优先回到原报价会话，从第 3 步「定价-利润加成」继续。';
 }
 
 async function crRunOp(kind) {
   if (crBusy) return false;
-  const labels = { 'material-write': '写入数据库', 'send-to-quote': '发送至报价',
-                   'return-to-process': '退回工艺经理' };
+  const labels = { 'material-write': '写入数据库', 'send-to-quote': '回传销售经理继续报价',
+                   'return-to-process': '提交工艺经理确认' };
   crBusy = true;
   crRender();
   const card = crCard(labels[kind]);
@@ -525,6 +421,8 @@ async function crRunOp(kind) {
     const body = {
       product_name: $cr('crProductName')?.value.trim() || '',
       note: $cr('crNote')?.value.trim() || '',
+      // 来源待办：完成后后端据此关闭已领取的 tech_cost 任务，不让旧待办继续挂着。
+      source_task_id: crTaskId,
     };
     crData = await api(crUrl(`/${kind}`), { method: 'POST', body: JSON.stringify(body) });
     if (kind === 'material-write') {
@@ -547,7 +445,8 @@ async function crRunOp(kind) {
         ...(linked ? [`  ${linked}`] : []),
         ...(crData.new_card ? ['  未认回原报价卡片，已新建一张'] : []),
         ...(fallback ? [`  主数据未写入（${fallback.reason}），改用临时编码 ${fallback.number}`] : [])]);
-      crSay(`成本已确认并发送至报价：卡片进入「${handoff.next_step_name || '定价-利润加成'}」。`
+      crSay(`成本已确认并回传销售经理继续报价：卡片进入「${handoff.next_step_name || '定价-利润加成'}」。`
+        + (crData.already_sent ? '\n（这一版已经回传过，沿用已有交接，没有重复建任务。）' : '')
         + (crData.new_card
             ? `\n⚠ 这单没能认回原来那张报价卡片（需求单里既没有来源任务号、也没有报价会话号），`
               + `系统新建了一张。销售在报价里打不开这张卡片的对话历史，客户信息也只有技术侧填过的部分`
@@ -556,10 +455,14 @@ async function crRunOp(kind) {
         + (fallback ? `\n⚠ 主数据暂时写不进去，本次用了临时成品编码 ${fallback.number}。` : ''));
     } else {
       const returned = crData.returned || {};
+      const source = crData.source_task || {};
       card.log([`任务 ${returned.task_no || ''} 已发给${returned.target_role_name || '工艺经理'}`,
-        `  他会复核工序与用量，改完再交回来`]);
-      crSay(`已把成本结果退回给${returned.target_role_name || '工艺经理'}`
-        + `（任务 ${returned.task_no || ''}）。请在说明里写清楚是哪一项偏高、怀疑在哪。`);
+        `  落点：第 5 大步「工艺评估报告」（stage=summary）`,
+        `  随包带上参数、工艺路线、零件成本、组装成本与确认信息`,
+        ...(source.closed ? [`  来源待办 ${source.task_no || crTaskId} 已完成`]
+                          : (source.skipped ? [] : [`  来源待办未能关闭：${source.error || '未知原因'}`]))]);
+      crSay(`已提交给${returned.target_role_name || '工艺经理'}确认`
+        + `（任务 ${returned.task_no || ''}）。他会进入第 5 大步做最终工艺确认、汇总、审核与发布。`);
     }
     card.done(true);
     crStatus(`${labels[kind]}完成`);
@@ -683,7 +586,7 @@ async function crConfirmCost() {
     crData = await api(crUrl('/confirm'), { method: 'POST' });
     crStatus('成本已确认');
     crToast('成本已确认');
-    crSay('成本已确认。现在可以写入数据库、发送至报价，或把结果退回工艺经理复核。');
+    crSay('成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 大步）。');
     crPublishTask('task-completed', { taskId: 'cost-confirm', label: '确认成本',
                                       status: 'succeeded' });
     return true;
@@ -768,7 +671,6 @@ function crBind() {
   $cr('crGoParts').onclick = () => { crTab = 'parts'; crRender(); };
   $cr('crGoAssembly').onclick = () => { crTab = 'assembly'; crRender(); };
   $cr('crGoTotal').onclick = () => { crTab = 'total'; crRender(); };
-  $cr('crGoParams').onclick = () => { crTab = 'params'; crRender(); };
   $cr('crModelPill').onclick = event => { event.stopPropagation(); crOpenSettings(event.currentTarget); };
   $cr('crRunAll').onclick = () => crRunAll();
   $cr('crConfirm').onclick = () => crConfirmCost();
@@ -911,13 +813,20 @@ crStart();
     },
     // 三个去向：复用既有 crRunOp，不新增对外调用。
     writeCostReviewMaterial: crOpAction('material-write', '写入数据库'),
-    sendCostReviewToQuote: crOpAction('send-to-quote', '发送至报价'),
-    returnCostReviewToProcess: crOpAction('return-to-process', '退回工艺经理'),
+    sendCostReviewToQuote: crOpAction('send-to-quote', '回传销售经理继续报价'),
+    returnCostReviewToProcess: crOpAction('return-to-process', '提交工艺经理确认'),
   });
   window.TechBoardRuntime.registerViews({
     parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },
     assembly: { run: () => crSetTab('assembly'), getState: () => ({ active: crTab === 'assembly' ? 'assembly' : null }) },
     total: { run: () => crSetTab('total'), getState: () => ({ active: crTab === 'total' ? 'total' : null }) },
-    params: { run: () => crSetTab('params'), getState: () => ({ active: crTab === 'params' ? 'params' : null }) },
+    // 「整合参数」已归位第 3 大步「组装与整合 · 参数推荐」，本步不再有对应看板。
+    // 这里只留一个显式拒绝的兼容别名：旧调用会拿到可识别的失败，而不是静默什么都不做，
+    // 也不会打开一个已经不存在的页签。
+    params: {
+      run: () => ({ ok: false, error: { code: 'moved-to-integration',
+        message: '「整合参数」在第 3 大步「组装与整合 · 参数推荐」，本步只保留成本页签。' } }),
+      getState: () => ({ visible: false, active: null }),
+    },
   });
 })();

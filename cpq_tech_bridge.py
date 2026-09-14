@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 
 import cpq_auth
 import cpq_db
@@ -404,6 +405,93 @@ def _side_task(user: dict, session_id: str, title: str, customer: str, project_n
     }
 
 
+def _handoff_key(session_id: str, tech_project_id: str, handoff_kind: str,
+                 result_version: str) -> str:
+    """回传的稳定幂等键：同一项目、同一报价会话、同一结果版本只应产生一次有效交接。
+
+    重复点击用它识别"已经交过的这一版"，返回已有任务而不是再发一条。
+    """
+    return "|".join([str(tech_project_id or ""), str(session_id or ""),
+                     str(handoff_kind or ""), str(result_version or "")])
+
+
+def _find_handoff_task(conn, card_id: int, handoff_key: str):
+    """这张卡片上是否已经有同一幂等键的任务。返回 (task_id, status) 或 None。"""
+    if not handoff_key:
+        return None
+    cur = cpq_auth._exec(
+        conn, "SELECT task_id, status FROM cpq_wf_task"
+              " WHERE card_id = %s AND payload->>'handoff_key' = %s"
+              " ORDER BY created_at DESC LIMIT 1", (int(card_id), handoff_key))
+    row = cur.fetchone()
+    return (row[0], str(row[1] or "")) if row else None
+
+
+def _handoff_text(result: dict, report: dict = None) -> str:
+    """回传正文：技术结果（+已发布报告）的要点，写成报价助手会话里的开场说明。"""
+    material = (result or {}).get("material") or {}
+    cost = (result or {}).get("cost") or {}
+    params = (result or {}).get("params") or {}
+    lines = ["技术工艺已回传本单，以下是随任务带过来的技术结果："]
+    summary = params.get("summary") or {}
+    if summary:
+        lines.append("· 参数：" + "；".join(f"{k}={v}" for k, v in list(summary.items())[:10]))
+    if material.get("number"):
+        lines.append(f"· 成品：{material.get('number')} {material.get('name') or ''}")
+    if cost.get("total") is not None:
+        lines.append(f"· 单台成本合计：{cost.get('total')}")
+    report = report or {}
+    if report:
+        lines.append(f"· 已发布报告：{report.get('report_no') or ''} "
+                     f"v{report.get('version') or ''}「{report.get('title') or ''}」")
+        if report.get("conclusion"):
+            lines.append(f"· 结论：{report.get('conclusion')}")
+    return "\n".join(lines)
+
+
+def _seed_quote_history(session_id: str, *, title: str = "", project_name: str = "",
+                        result: dict = None, report: dict = None) -> None:
+    """用报价助手自己的历史存储，为新会话写一条可打开的初始记录。
+
+    复用 ``cpq_agent_server.save_history``（报价助手落盘历史用的就是它），不伪造文件、
+    不建第二套存储。只在会话还没有历史时写，绝不覆盖已有历史。
+    """
+    try:
+        import cpq_agent_server
+    except Exception:
+        return
+    if cpq_agent_server.load_history(session_id) is not None:
+        return
+    created = cpq_wf._iso(cpq_wf._now())
+    session = {
+        "id": session_id,
+        "title": title or (project_name or "技术工艺回传"),
+        "created": created,
+        "updated": created,
+        "step": TECH_CONFIRM_STEP,
+        "events": [{"type": "assistant", "text": _handoff_text(result or {}, report)}],
+        "messages": [],
+    }
+    cpq_agent_server.save_history(session)
+
+
+def ensure_quote_session(user: dict, *, title: str = "", customer: str = "",
+                         project_name: str = "", result: dict = None,
+                         report: dict = None) -> str:
+    """技术工艺独立发起、确实没有原报价卡片时，建一条**真实**的报价 Agent 会话。
+
+    绝不拿技术 project_id 当报价 session_id：报价助手是按会话号取历史的，技术项目号
+    在那边根本不存在，销售点开会看到空白会话。这里生成的会话号与报价助手新建会话
+    同一形状（12 位 hex），并初始化一条可打开的会话记录。
+    """
+    session_id = uuid.uuid4().hex[:12]
+    cpq_wf.sync_card(session_id, user, title=title, customer=customer,
+                     project_name=project_name)
+    _seed_quote_history(session_id, title=title, project_name=project_name,
+                        result=result, report=report)
+    return session_id
+
+
 def send_to_finance(user: dict, session_id: str, title: str, customer: str = "",
                     project_name: str = "", note: str = "", payload: dict = None,
                     target_type: str = "", target_role_code: str = "",
@@ -443,24 +531,36 @@ def return_to_process(user: dict, session_id: str, title: str, customer: str = "
 def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
                   project_name: str = "", note: str = "",
                   source_task_id: str = "", result: dict = None,
-                  source_session_id: str = "") -> dict:
+                  source_session_id: str = "", report: dict = None,
+                  handoff_kind: str = "cost_to_quote", result_version: str = "",
+                  source_task_no: str = "") -> dict:
     """技术工艺确认完工艺，把报价卡片推进到第 3 步「定价-利润加成」并通知销售经理。
 
-    两条路径：
+    三种来源：
 
       · 有 source_task_id（这单是报价那边「新增工艺」派过来的）——回到**原来那张报价
         卡片**，把整机参数写进第 2 步快照，任务定向退回给当初发起的那个人。
-        销售打开的就是他自己那单报价的第 3 步，右侧已经带着新产品与技术参数。
 
-      · 没有来源（技术工艺自己发起的项目）——沿用旧行为：以项目号建一张卡片，
-        按角色群发给销售经理。
+      · 有 source_session_id 且报价里确实有对应的卡片 —— 认回那张卡片。
 
-    两条路走的都是标准 cpq_wf.complete_step(第 2 步)：卡片状态、步骤留痕、任务与消息
-    全部复用，这里只负责把前置步骤补齐、把结论塞进快照。
+      · 都没有 —— 技术工艺自己发起的项目：**新建一条真实的报价 Agent 会话**
+        （见 ensure_quote_session），把技术需求与结果写进它的第 2 步快照，
+        绝不拿技术 project_id 冒充报价会话号。
+
+    两种时机：
+
+      · 报价还没推进过（current_step <= 第 2 步）——走标准 cpq_wf.complete_step(第 2 步)：
+        卡片状态、步骤留痕、任务与消息全部复用。
+
+      · 成本阶段已经回传过、报价已在第 3 步或更后（例如已发布的报告再回传）——
+        只把技术结果/报告**合并**进第 2 步快照并通知当前销售负责人，
+        不重新完成第 2 步、不把 current_step 写回去。
+
+    幂等：同一「项目 + 报价会话 + 交接类型 + 结果版本」重复调用只产生一个有效交接。
     """
     if not user:
         raise BridgeError("请先登录")
-    # 成本测算改由财务经理做（2.3），所以发报价这一步现在是他的动作；
+    # 成本测算改由财务经理做（2.3），所以回传报价这一步现在是他的动作；
     # 工艺经理仍然放行 —— 老流程（没有 2.3 的项目）还得走得通。
     if user.get("role_code") not in ("finance_mgr", "process_mgr"):
         raise BridgeError(
@@ -469,15 +569,15 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
     if not session_id:
         raise BridgeError("缺少会话 ID")
     result = result or {}
+    report = report or {}
+    # 技术项目号（溯源用）与报价会话号（真正落点）是两回事，不要混用。
+    tech_project_id = session_id
 
     source = None
     # 结论要送回**哪张报价卡片**。三条线索，按可靠性排序：
     #   task    —— 当初那条「新增工艺」任务（能连人带卡片一起找到，最完整）；
     #   session —— 需求单里记着的原报价会话号（任务行被删/被顶掉时的后手）；
-    #   new     —— 都没有：技术工艺自己发起的项目，只能新建一张卡片。
-    # 前两条都落空却走了第三条时，销售点开任务会打不开会话历史（报价助手按会话号
-    # 取历史，技术项目号在那边根本不存在），客户信息也只剩技术侧填过的那点。
-    # 所以这里必须把用了哪条线索**如实回给界面**，不能默默新建。
+    #   new     —— 都没有：技术工艺自己发起的项目，建一条真实报价会话。
     linked_by = "new"
     try:
         conn = cpq_auth._connect()
@@ -498,17 +598,36 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             conn.close()
 
         if linked_by == "new":
-            cpq_wf.sync_card(session_id, user, title=title, customer=customer,
-                             project_name=project_name)
+            # 认不回原报价时，建**真实**报价会话；禁止用技术 project_id 当会话号。
+            session_id = ensure_quote_session(
+                user, title=title, customer=customer, project_name=project_name,
+                result=result, report=report)
+            linked_by = "new_session"
 
         conn = cpq_auth._connect()
         try:
             card = cpq_wf._fetch_card(conn, session_id)
             if not card:
                 raise BridgeError("报价卡片创建失败")
-            for step_no in range(1, TECH_CONFIRM_STEP):
-                _force_done(conn, int(card["card_id"]), step_no, int(user["user_id"]),
-                            "技术工艺推送：前置步骤在技术工艺流程中已完成")
+            # 幂等：同一版本的结果已经交过就不再重复建任务、不重复完成第 2 步。
+            existing = _find_handoff_task(conn, int(card["card_id"]),
+                                          _handoff_key(session_id, tech_project_id,
+                                                       handoff_kind, result_version))
+            if existing and str(existing[1]) in ("open", "claimed"):
+                # 重复点击：沿用已有交接，不重复建任务、不重复补前置步骤留痕。
+                return {
+                    "quote_session_id": session_id,
+                    "task_id": str(existing[0]),
+                    "task_no": cpq_wf.task_no(existing[0]),
+                    "linked_by": linked_by,
+                    "new_card": linked_by == "new_session",
+                    "already_sent": True,
+                    "next_step_no": cpq_wf.advance_step_no(card, TECH_CONFIRM_STEP),
+                    "next_step_name": _step_name(card),
+                    "handoff": {"task_id": str(existing[0]),
+                                "task_no": cpq_wf.task_no(existing[0])},
+                }
+            card = _commit_card_steps(conn, card, user) or card
             cpq_wf._commit(conn)
         finally:
             conn.close()
@@ -518,50 +637,171 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         raise _db_error("推送到报价", exc) from exc
 
     snapshot = _step2_snapshot(result)
-    # 代技术侧完成报价第 2 步「工艺确认」。成本拆给财务之后，点这一下的可能是财务经理
-    # （2.3 测完成本才回传报价），而第 2 步在报价里归工艺经理 —— 本函数开头已经按
-    # 「财务经理 / 工艺经理」鉴过权，这里把代办角色显式写出来，由 cpq_wf 校验它确实
-    # 是该步骤的归属角色，并在留痕里记下是谁代的。
-    outcome = cpq_wf.complete_step(
-        session_id, TECH_CONFIRM_STEP, user,
-        snapshot=json.dumps(snapshot, ensure_ascii=False) if snapshot else "",
-        on_behalf_of=cpq_wf.role_of_step(TECH_CONFIRM_STEP))
-    outcome["returned_sections"] = sorted(snapshot.keys())
+    if report:
+        snapshot = _merge_report_snapshot(snapshot, report)
+    payload = {
+        "tech_result": result,
+        "report": report,
+        # 幂等与溯源：任务、审计里都按这几个字段查得到是哪一版、从哪来。
+        "handoff_kind": handoff_kind,
+        "handoff_key": _handoff_key(session_id, tech_project_id, handoff_kind, result_version),
+        "result_version": result_version,
+        "tech_project_id": tech_project_id,
+        "quote_session_id": session_id,
+        "source_task_id": str(source_task_id or ""),
+        "source_task_no": source_task_no,
+    }
 
-    payload = {"tech_result": result}
+    current_step = int(card["current_step"] or 1)
+    if current_step <= TECH_CONFIRM_STEP:
+        # 代技术侧完成报价第 2 步「工艺确认」。成本拆给财务之后，点这一下的可能是财务经理
+        # （2.3 测完成本才回传报价），而第 2 步在报价里归工艺经理 —— 本函数开头已经按
+        # 「财务经理 / 工艺经理」鉴过权，这里把代办角色显式写出来，由 cpq_wf 校验它确实
+        # 是该步骤的归属角色，并在留痕里记下是谁代的。
+        outcome = cpq_wf.complete_step(
+            session_id, TECH_CONFIRM_STEP, user,
+            snapshot=json.dumps(snapshot, ensure_ascii=False) if snapshot else "",
+            on_behalf_of=cpq_wf.role_of_step(TECH_CONFIRM_STEP))
+        outcome["returned_sections"] = sorted(snapshot.keys())
+    else:
+        # 报价已经推进过：只合并技术结果/报告快照，绝不倒退 current_step，也不重做第 2 步。
+        cpq_wf.merge_step_snapshot(session_id, TECH_CONFIRM_STEP, snapshot)
+        card = cpq_wf.get_card(session_id) or card
+        outcome = {
+            "card": card,
+            "need_handoff": False,
+            "next_step_no": cpq_wf.advance_step_no(card, TECH_CONFIRM_STEP),
+            "next_step_name": _step_name(card),
+            "returned_sections": sorted(snapshot.keys()),
+            "snapshot_merged": True,
+        }
+
+    sent = _dispatch_handoff_task(session_id, user, card, payload, note, source, outcome, result)
+    outcome["handoff"] = sent
+    outcome["quote_session_id"] = session_id
+    # 界面据此说清这单落到哪儿了：新建会话时销售那边原本没有这张卡片，必须明说，
+    # 不能让人以为结论回到了他原来那张报价单上。
+    outcome["linked_by"] = linked_by
+    outcome["new_card"] = linked_by == "new_session"
+    outcome["already_sent"] = False
+    return outcome
+
+
+def _step_name(card) -> str:
+    """卡片当前所处步骤的中文名。"""
+    return dict((s[0], s[1]) for s in cpq_wf.QUOTE_STEPS).get(
+        int((card or {}).get("current_step") or 1), "")
+
+
+def _commit_card_steps(conn, card, user) -> dict:
+    """把第 2 步之前的前置步骤补齐为已完成（技术工艺流程里它们已经走完）。"""
+    for step_no in range(1, TECH_CONFIRM_STEP):
+        _force_done(conn, int(card["card_id"]), step_no, int(user["user_id"]),
+                    "技术工艺推送：前置步骤在技术工艺流程中已完成")
+    cpq_wf._commit(conn)
+    return card
+
+
+def _merge_report_snapshot(snapshot: dict, report: dict) -> dict:
+    """把已发布报告要点并进第 2 步快照，让销售在报价卡片上看得到报告出处。"""
+    merged = dict(snapshot or {})
+    merged["s2_report"] = {"数据": [{
+        "报告编号": report.get("report_no") or "",
+        "版本": report.get("version") or "",
+        "标题": report.get("title") or "",
+        "状态": report.get("status") or "",
+        "审核人": report.get("reviewed_by") or "",
+        "审核时间": report.get("reviewed_at") or "",
+        "发布人": report.get("published_by") or "",
+        "发布时间": report.get("published_at") or "",
+        "结论": report.get("conclusion") or "",
+        "报告链接": report.get("report_url") or "",
+    }]}
+    return merged
+
+
+def _dispatch_handoff_task(session_id: str, user: dict, card: dict, payload: dict,
+                           note: str, source, outcome: dict, result: dict) -> dict:
+    """把交接任务发出去，或更新已经存在的那一条（不制造第二个 open 任务）。
+
+    · 报价还没推进过：complete_step 会在换角色时自动推给项目创建人；没推成功时
+      由这里定向退回给当初发起「新增工艺」的人，或按角色群发给销售经理。
+
+    · 报价已经推进过：卡片上通常已经有一条销售任务。找到它就更新 payload（补上
+      技术结果与报告），找不到才补发一条，绝不重复建 open 任务。
+    """
+    text = _result_note(result, note)
+    if outcome.get("snapshot_merged"):
+        conn = cpq_auth._connect()
+        try:
+            cur = cpq_auth._exec(
+                conn, "SELECT task_id FROM cpq_wf_task WHERE card_id = %s"
+                      " AND status IN ('open', 'claimed') ORDER BY created_at DESC LIMIT 1",
+                (int(card["card_id"]),))
+            row = cur.fetchone()
+            if row:
+                cpq_auth._exec(
+                    conn, "UPDATE cpq_wf_task SET payload = %s::jsonb, note = %s"
+                          " WHERE task_id = %s",
+                    (json.dumps(payload, ensure_ascii=False), text[:500], int(row[0])))
+                cpq_wf._commit(conn)
+                return {"task_id": str(row[0]), "task_no": cpq_wf.task_no(row[0]),
+                        "target_role_name": cpq_wf.ROLES.get("sales_mgr", ""),
+                        "updated_existing": True}
+        finally:
+            conn.close()
+        sent = cpq_wf.send_task(session_id, user, "role", target_role_code="sales_mgr",
+                                note=text, payload=payload)
+        return {"task_id": sent.get("task_id"), "task_no": sent.get("task_no"),
+                "target_role_code": "sales_mgr",
+                "target_role_name": cpq_wf.ROLES.get("sales_mgr", "销售经理")}
+
     if source and source.get("from_user_id") and source.get("from_active"):
         # 定向退回给当初发起「新增工艺」的那个人。complete_step 的自动推送是发给
         # **卡片创建人**的，两者通常是同一个人；不同的时候，以发起人为准 ——
         # 是他在等这台新产品。send_task 会把上一条 open 任务置为 cancelled。
         sent = cpq_wf.send_task(
             session_id, user, "user", target_user_id=str(source["from_user_id"]),
-            note=_result_note(result, note), payload=payload)
-        outcome["handoff"] = {
+            note=text, payload=payload)
+        return {
             "target_user_id": str(source["from_user_id"]),
             "target_name": source.get("from_name") or "",
             "target_role_name": cpq_wf.ROLES.get(source.get("from_role"), source.get("from_role") or ""),
             "task_id": sent.get("task_id"),
+            "task_no": sent.get("task_no"),
             "source_task_no": cpq_wf.task_no(source["task_id"]),
             "returned_to_sender": True,
         }
-    elif outcome.get("need_handoff") and not outcome.get("auto_handoff"):
-        # complete_step 只在"卡片创建人正好是销售经理"时自动推送。技术工艺自己建的
-        # 卡片创建人就是工艺经理，所以那条路走不通 —— 退回按角色群发给销售经理。
-        sent = cpq_wf.send_task(
-            session_id, user, "role", target_role_code="sales_mgr",
-            note=_result_note(result, note), payload=payload)
-        outcome["handoff"] = {"target_role_code": "sales_mgr",
-                              "target_role_name": cpq_wf.ROLES.get("sales_mgr", "销售经理"),
-                              "task_id": sent.get("task_id")}
-    if source and not (source.get("from_user_id") and source.get("from_active")):
-        # 发起人被停用/删号：不能假装退回给了他，界面要照实说。
-        outcome["source_sender_unavailable"] = True
-    outcome["quote_session_id"] = session_id
-    # 界面据此说清这单落到哪儿了：新建卡片时销售那边既没有会话历史、也没有原始客户信息，
-    # 必须明说，不能让人以为结论回到了他原来那张报价单上。
-    outcome["linked_by"] = linked_by
-    outcome["new_card"] = linked_by == "new"
-    return outcome
+    if outcome.get("auto_handoff"):
+        auto = dict(outcome["auto_handoff"])
+        auto["task_no"] = cpq_wf.task_no(auto.get("task_id"))
+        return auto
+    # complete_step 只在"卡片创建人正好是销售经理"时自动推送。技术工艺自己建的
+    # 卡片创建人就是工艺经理，所以那条路走不通 —— 按角色群发给销售经理。
+    sent = cpq_wf.send_task(session_id, user, "role", target_role_code="sales_mgr",
+                            note=text, payload=payload)
+    return {"target_role_code": "sales_mgr",
+            "target_role_name": cpq_wf.ROLES.get("sales_mgr", "销售经理"),
+            "task_id": sent.get("task_id"), "task_no": sent.get("task_no")}
+
+
+def return_to_process(user: dict, session_id: str, title: str, customer: str = "",
+                      project_name: str = "", note: str = "", payload: dict = None,
+                      target_user_id: str = "", source_task_id: str = "") -> dict:
+    """技术工艺 2.3 → 工艺经理：成本已确认，请做最终工艺确认与报告。
+
+    正常提交确认，不是返工支线：工艺经理领取后进第 5 大步「工艺评估报告」，
+    在那里汇总、审核、发布；确实要返工时由第 5 大步明确退回第 3 大步。
+    """
+    if user.get("role_code") != "finance_mgr":
+        raise BridgeError(
+            f"只有财务经理能提交成本结果给工艺经理；当前是「{user.get('role_name')}」")
+    payload = dict(payload or {})
+    if source_task_id:
+        payload.setdefault("source_task_id", str(source_task_id))
+    return _side_task(user, session_id, title, customer, project_name,
+                      cpq_wf.TASK_KIND_TECH_COST_RETURN,
+                      note or "成本已确认，请做最终工艺确认与报告", payload, target_user_id)
 
 
 if __name__ == "__main__":

@@ -1563,6 +1563,7 @@
     const NUM_PREFIX = { quote: 'BJD', config: 'PZ', rule: 'GZ', tech: 'GY' };
     const PAGE_SIZE = 6;
     let PAGE = 1;
+    let SESSION_ERROR = null;   // 最近一次列表读取失败的真实原因（null=无错误）
 
     function modeBase(mode) {
       if (mode === 'quote') return AGENT_URL;
@@ -1648,9 +1649,14 @@
     }
 
     // 技术工艺清单/历史卡片统一入口：按项目真实状态换算 stage，进入左会话+右工作台。
+    // 2.2「组装与整合」是本页唯一固定落点的阶段 —— 有 IR、还没出报告的项目打开它，
+    // 第 5 大步确认后需要返工也回到这里；所以单独写成常量，避免各处拼错。
+    const TECH_PROCESS_URL = 'tech-workbench.html?stage=process&project=';
     function techWorkbenchUrl(stage, projectId, taskId) {
-      let url = 'tech-workbench.html?stage=' + encodeURIComponent(stage)
-        + '&project=' + encodeURIComponent(projectId || '');
+      let url = (stage === 'process')
+        ? TECH_PROCESS_URL + encodeURIComponent(projectId || '')
+        : 'tech-workbench.html?stage=' + encodeURIComponent(stage)
+          + '&project=' + encodeURIComponent(projectId || '');
       if (taskId) url += '&task_id=' + encodeURIComponent(taskId);
       return url;
     }
@@ -1704,15 +1710,16 @@
           + encodeURIComponent(taskId);
         return;
       }
-      // 成本测算（财务经理）与成本结果复核（工艺经理）都在技术工艺里做，
-      // 项目号就是卡片的 session_id —— 落到统一工作台的 cost / process 步。
+      // 成本测算（财务经理）与成本结果确认（工艺经理）都在技术工艺里做，
+      // 项目号就是卡片的 session_id。后者落到第 5 大步「工艺评估报告」：工艺经理在那里
+      // 做最终工艺确认、汇总、审核和发布，不回到第 3 大步重新建参数与工艺。
       if (k === 'tech_cost') {
         window.location.href = 'tech-workbench.html?stage=cost&project='
           + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
         return;
       }
       if (k === 'tech_cost_return') {
-        window.location.href = 'tech-workbench.html?stage=process&project='
+        window.location.href = 'tech-workbench.html?stage=summary&project='
           + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
         return;
       }
@@ -1777,12 +1784,17 @@
     async function loadCards(mode) {
       if (!cardGrid) return;
       cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
+      SESSION_ERROR = null;
       try {
         if (mode === 'tech') {
-          // 技术工艺 = 内嵌 process_drawing：列表来自 tech_app /api/projects（同源 8010 反向代理）
-          const arr = await fetch('/api/projects').then(r => r.json());
-          SESSIONS.tech = (Array.isArray(arr) ? arr : []).map(pp => ({
+          // 技术工艺项目与历史 Drawer 同源：都走带登录凭证的 cpqAuth.api('/api/projects')，
+          // 读取失败必须显式报错，不能当成「没有项目」。
+          const data = await cpqAuth.api('/api/projects');
+          const arr = Array.isArray(data) ? data : (data && data.projects) || [];
+          SESSIONS.tech = arr.map(pp => ({
             id: pp.project_id,
+            owner: pp.owner,
+            ownerName: pp.owner_display_name || pp.owner || '',
             title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
             project: pp.project_name || pp.device_name || pp.source_filename || '',
             created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
@@ -1794,6 +1806,7 @@
         }
       } catch (e) {
         SESSIONS[mode] = null;
+        SESSION_ERROR = (e && e.message) || '读取失败';
       }
       if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
       PAGE = 1;
@@ -1831,7 +1844,8 @@
       const info = document.querySelector('.pagination-info');
       const ctrl = document.querySelector('.pagination-controls');
       if (rows === null) {
-        cardGrid.innerHTML = '<div class="cards-empty">无法连接助手服务，读不到数据。<br>请先启动 cpq_suite_server.py 后刷新。</div>';
+        cardGrid.innerHTML = '<div class="cards-empty">读取' + escH(MODES[mode].tag) + '数据失败：'
+          + escH(SESSION_ERROR || '服务不可达') + '。<br>请检查登录状态与后端服务后重试。</div>';
         if (info) info.textContent = '';
         if (ctrl) ctrl.innerHTML = '';
         return;
@@ -1848,10 +1862,10 @@
       }
 
       const mineOnly = tab.indexOf('我的') === 0;
-      // 「我的报价」严格按登录账号归属（我创建 / 我持有 / 我领取过），不再用本机 localStorage 兜底：
-      // 未登录时不展示任何单据，直接引导登录，避免"换个人登录还看到别人的单子"。
-      if (mode === 'quote' && mineOnly && !wfUser()) {
-        cardGrid.innerHTML = '<div class="cards-empty">「我的报价」按登录账号归属显示。' +
+      // 「我的报价」与「我的清单」都严格按登录账号归属：报价看创建 / 持有 / 领取，技术工艺
+      // 看项目 owner === 当前登录用户名；已登录才展示，避免"换个人登录还看到别人的单子"。
+      if ((mode === 'quote' || mode === 'tech') && mineOnly && !wfUser()) {
+        cardGrid.innerHTML = '<div class="cards-empty">「' + escH(MODES[mode].tag) + '」按登录账号归属显示。' +
           '<br><a href="javascript:;" onclick="cpqAuth.open()">请先登录</a></div>';
         if (info) info.textContent = '';
         if (ctrl) ctrl.innerHTML = '';
@@ -1859,10 +1873,16 @@
       }
       const wfMine = (mode === 'quote' && mineOnly)
         ? new Set((WF.cards || []).map(c => c.session_id)) : null;
+      // 技术工艺按项目 owner 归属（历史项目沿用后端 owner / backfill 的结果），
+      // 不用 localStorage 猜测归属。
+      const loginUser = wfUser();
+      const techOwner = (mode === 'tech' && mineOnly)
+        ? String((loginUser && (loginUser.username || loginUser.user_name)) || '') : '';
       const my = mySessionSet(mode);
       const filtered = (rows || []).filter(s => {
         if (mineOnly && mode === 'quote') { if (!wfMine.has(s.id)) return false; }
-        else if (mineOnly && mode !== 'tech' && !my.has(s.id)) return false;
+        else if (mineOnly && mode === 'tech') { if (!techOwner || s.owner !== techOwner) return false; }
+        else if (mineOnly && !my.has(s.id)) return false;
         if (!q) return true;
         const hay = ((s.title || '') + ' ' + (s.customer || '') + ' ' + (s.project || '') + ' ' + quoteNo(mode, s)).toLowerCase();
         return hay.indexOf(q) >= 0;
@@ -1874,6 +1894,8 @@
         const emptyMsg = q ? '没有匹配「' + escH(q) + '」的结果。'
           : (mineOnly && mode === 'quote')
             ? '你名下还没有报价单。点右上角「' + MODES[mode].newBtn + '」开始，或到「待办任务」领取同事转交的卡片。'
+          : (mineOnly && mode === 'tech')
+            ? '你名下还没有技术工艺项目。点右上角「' + MODES[mode].newBtn + '」开始，或到「待办任务」领取同事转交的卡片。'
           : mineOnly ? '本机还没有创建过记录。点右上角「' + MODES[mode].newBtn + '」开始。'
           : '还没有数据。点右上角「' + MODES[mode].newBtn + '」创建第一条。';
         cardGrid.innerHTML = '<div class="cards-empty">' + emptyMsg + '</div>';

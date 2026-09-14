@@ -426,7 +426,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = cpq_tech_bridge.return_to_process(
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
-                    d.get("payload") or {}, d.get("target_user_id", ""))
+                    d.get("payload") or {}, d.get("target_user_id", ""),
+                    d.get("source_task_id", ""))
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/handoff" and m == "POST":
                 d = self._read_json()
@@ -434,7 +435,18 @@ class Handler(BaseHTTPRequestHandler):
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
                     d.get("source_task_id", ""), d.get("result") or {},
-                    d.get("source_session_id", ""))
+                    d.get("source_session_id", ""), d.get("report") or {},
+                    d.get("handoff_kind") or "cost_to_quote",
+                    d.get("result_version", ""), d.get("source_task_no", ""))
+                self._send_json(200, {"ok": True, **out})
+            # 技术工艺完成正式去向后关闭来源 claimed 待办：任务表在报价工作流这一侧，
+            # 校验（领取人 / 归属 / 状态 / 幂等）统一由 cpq_wf 做，不散落 SQL。
+            elif path == "/wf/tech/complete-task" and m == "POST":
+                d = self._read_json()
+                out = cpq_wf.complete_claimed_task(
+                    d.get("task_id", ""), user,
+                    card_session_id=d.get("card_session_id", ""),
+                    comment=d.get("comment", ""))
                 self._send_json(200, {"ok": True, **out})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
