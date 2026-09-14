@@ -289,9 +289,24 @@ class TechBusinessActionsClickableRedTest(unittest.TestCase):
         self.assertIn("refreshState", publish, "crPublishState 必须走运行的 refreshState()")
 
     def test_readonly_does_not_block_left_toolbar(self):
+        # 契约更新（2.3 工艺经理发送给财务批次）：本批之前「只读身份」只准出现在 run 里，
+        # 按钮本身必须对所有人可见可点（点了给原因）。用户随后明确要求 2.3 按身份分工：
+        # 工艺经理在这一页不该看见财务的五颗动作，唯一出路是「发送给财务」主按钮。
+        # 于是可见性改成身份判定（服务端能力位 can_cost 优先，允许 crReadOnly 出现在
+        # getState 的 visible），但下面三条不变：可用性不许直通页内按钮 disabled；
+        # 真被点到时仍必须给出真实原因而不是静默；后端 403 仍是权威。
         body = block_from(self.cost, "confirmCostReview:")
-        self.assertNotIn("crReadOnly(", body,
-                         "只读身份不再拦在按钮前面：点了给原因，后端照旧 403 兜底")
+        self.assertNotIn(".disabled", body,
+                         "可用性仍不许直通页内按钮 disabled（硬 bug 的根因）")
+        self.assertIn("crReadOnlyWhy(", body,
+                      "只读身份被点到时必须给出真实原因，不能静默返回")
+        self.assertNotIn("enabled: !crReadOnly(", body,
+                         "只读身份只能决定 visible（这一步该不该给他看），不能决定 enabled")
+        # 身份 gate 只允许出现在 visible，且只允许来自 crReadOnly()。
+        for match in re.finditer(r"visible:\s*([^,\n]+)", body):
+            value = match.group(1).strip()
+            self.assertTrue(value in ("crReadOnly()", "!crReadOnly()"),
+                            f"visible 只允许按身份判定，发现：{value}")
 
     # ------------------------------------------------ 保护边界
     def test_protocol_bridge_and_backend_untouched(self):

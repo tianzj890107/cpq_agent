@@ -1289,7 +1289,11 @@ function showGeneratedResult() {
     || parts.find(p => (geomFor(p.part_id) || {}).ok)          // 否则挑第一个成功的
     || parts.find(p => (drawingsFor(p.part_id) || {}).ok)
     || parts[0];
-  if (target) selectPart(target);
+  if (!target) return;
+  selectPart(target);
+  // 解析 / 生成跑完是一次性时机：该零件若已有工艺推荐就自动展开一次（用户手动点零件
+  // 一律留在 3D，见 selectPart）。判定与渲染仍复用既有只读探查与工艺推荐入口。
+  autoOpenGeneratedProcess(target);
 }
 
 function geomFor(partId) {
@@ -1861,8 +1865,9 @@ function selectPart(part) {
   if (rb) rb.onclick = () => savePartEdits(part.part_id, true);
   // 选中零件 = 看板内部进入 part-detail；只上报视图，不触发父壳导航。
   notePartView("part-detail");
-  // 工艺推荐已经生成过就不再逼用户多点一次：只读判定命中就复用既有工艺推荐入口。
-  autoOpenGeneratedProcess(part);
+  // 点零件就停在 3D：不看这个零件有没有工艺推荐，也不替用户切结论 —— 进工艺推荐
+  // 只有零件行下的「工艺推荐」子按钮一个入口（openPartAnalysis）。已生成即自动展开
+  // 挪到解析 / 生成完成的时机（showGeneratedResult / 批量收尾），不再绑在选中零件上。
 }
 
 // 读取行内编辑 -> 更新 IR -> 保存；按需继续单零件重生并刷新

@@ -125,6 +125,9 @@
                 <div class="ai-op-cost" id="crOpCost">完成测算后显示成品成本</div>
               </div>
               <div class="ai-ops">
+                <!-- 工艺经理侧唯一主按钮：把整机参数、工艺路线与用量交给财务做成本测算。
+                     财务经理侧相反 —— 它隐藏，露出下面那四颗财务动作。 -->
+                <button id="crSendToFinance" class="ai-op-btn primary" type="button" hidden>⇪ 发送给财务</button>
                 <button id="crConfirm" class="ai-op-btn primary" type="button" disabled>✓ 确认成本</button>
                 <button id="crWriteDb" class="ai-op-btn" type="button" disabled>⛁ 写入数据库</button>
                 <button id="crToQuote" class="ai-op-btn" type="button" disabled>➜ 回传销售经理继续报价</button>
@@ -171,7 +174,7 @@
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set1"></script>
   <script src="quote-params-table.js?v=qp1"></script>
-  <script src="tech-board-runtime.js?v=tbr1"></script><script src="cost-review.js?v=cr5"></script>
+  <script src="tech-board-runtime.js?v=tbr1"></script><script src="cost-review.js?v=cr6"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

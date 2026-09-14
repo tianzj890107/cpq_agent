@@ -380,6 +380,13 @@ function crCostsComplete() {
 
 function crRenderActions() {
   const host = $cr('crActions');
+  // 工艺经理侧：零件 / 整机页签里都不再摆「测算未完成的 N 个零件」这类他点不动的按钮，
+  // 只说清楚成本归财务经理、入口是左栏同一颗「发送给财务」。
+  if (crReadOnly()) {
+    host.innerHTML = `<span class="ai-hint">成本由财务经理测算；你可以点「发送给财务」把`
+      + `工艺、整机参数与用量交给他。</span>`;
+    return;
+  }
   // 确认按钮的悬浮原因与左侧动作快照共用同一份判定（crConfirmBlocker）。
   const confirmBtn = $cr('crConfirm');
   if (confirmBtn) confirmBtn.title = crConfirmBlocker() || '确认成本后，三个去向都以确认过的数为准';
@@ -468,6 +475,18 @@ function crRenderOps() {
     box.textContent = '完成测算后显示成品成本';
   }
   const readOnly = crReadOnly();
+  // 工艺经理侧：这一页不摆他点不动的财务按钮，只留同一颗「发送给财务」主按钮；
+  // 财务经理侧相反。左栏聊天卡里的「一键测算全部成本」同理。
+  const sendBtn = $cr('crSendToFinance');
+  if (sendBtn) {
+    sendBtn.hidden = !readOnly;
+    sendBtn.disabled = crBusy;
+    sendBtn.title = readOnly ? '把整机参数、工艺路线与用量交给财务做成本测算' : '';
+  }
+  [$cr('crConfirm'), $cr('crWriteDb'), $cr('crToQuote'), $cr('crReturn')]
+    .forEach(btn => { if (btn) btn.hidden = readOnly; });
+  const runAllBtn = $cr('crRunAll');
+  if (runAllBtn) runAllBtn.hidden = readOnly;
   const ready = Boolean(crData?.ready) && !crBusy && !readOnly;
   const confirmed = Boolean(review.confirmed) && !crBusy && !readOnly;
   $cr('crConfirm').disabled = !ready;
@@ -478,6 +497,7 @@ function crRenderOps() {
 
   // 去向提示：前置条件来自 crConfirmBlocker()（唯一判定），确认之后才是三个去向。
   const why = crBusy ? '正在处理…'
+    : readOnly ? '成本由财务经理测算；你可以点「发送给财务」把工艺与参数交给他'
     : crConfirmBlocker()
     || (!review.confirmed ? '先点「确认成本」，写库与发报价都以确认过的数为准' : '');
   const badge = $cr('crWhy');
@@ -563,6 +583,52 @@ async function crRunOp(kind) {
     crPublishTask('task-failed', { taskId: opTask, label: labels[kind],
                                    status: 'failed', error: error.message || '失败' });
     return false;
+  } finally {
+    crBusy = false;
+    crRender();
+  }
+}
+
+/* 2.3 对工艺经理的唯一出口：把工艺与整机参数交给财务做成本测算。
+   复用 2.2 的既有出口 POST /integration/send-to-finance（同一 service、同一闸门、
+   同一对外调用）；收件人留空由报价侧落到默认角色（成本测算＝财务经理），所以这里
+   不需要重写 2.2 的派发弹窗，也不新建第二套发送实现。 */
+async function crSendToFinance() {
+  if (crBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
+  crBusy = true;
+  crRender();
+  crStatus('发送给财务中…');
+  const taskKey = 'cost-send-to-finance';
+  const card = crCard('发送给财务');
+  crPublishTask('task-progress', { taskId: taskKey, label: '发送给财务',
+                                   progress: '发送给财务中…' });
+  try {
+    const body = {
+      product_name: $cr('crProductName')?.value.trim() || '',
+      note: $cr('crNote')?.value.trim() || '',
+    };
+    crData = await api(
+      `/api/projects/${encodeURIComponent(crPid)}/integration/send-to-finance`,
+      { method: 'POST', body: JSON.stringify(body) });
+    const finance = crData.finance || {};
+    card.log([`任务 ${finance.task_no || ''} 已发给${finance.target_role_name || '财务经理'}`,
+      '  随包带上整机参数、工艺路线与用量',
+      '  落点：本步（2.3 成本测算）']);
+    crSay(`已发送给${finance.target_role_name || '财务经理'}做成本测算`
+      + `（任务 ${finance.task_no || ''}）。`);
+    card.done(true);
+    crStatus('已发送给财务');
+    crPublishTask('task-completed', { taskId: taskKey, label: '发送给财务',
+                                      status: 'succeeded' });
+    return { ok: true };
+  } catch (error) {
+    const message = (error && error.message) || '发送给财务失败';
+    card.done(false, message);
+    crStatus(`发送给财务失败：${message}`, true);
+    crToast(message, true);
+    crPublishTask('task-failed', { taskId: taskKey, label: '发送给财务',
+                                   status: 'failed', error: message });
+    return { ok: false, error: { code: 'send-to-finance-failed', message: message } };
   } finally {
     crBusy = false;
     crRender();
@@ -760,6 +826,7 @@ function crBind() {
   $cr('crGoTotal').onclick = () => { crTab = 'total'; crRender(); };
   $cr('crModelPill').onclick = event => { event.stopPropagation(); crOpenSettings(event.currentTarget); };
   $cr('crRunAll').onclick = () => crRunAll();
+  if ($cr('crSendToFinance')) $cr('crSendToFinance').onclick = () => crSendToFinance();
   $cr('crConfirm').onclick = () => crConfirmCost();
   $cr('crWriteDb').onclick = () => crRunOp('material-write');
   $cr('crToQuote').onclick = () => crRunOp('send-to-quote');
@@ -807,6 +874,13 @@ async function crStart() {
 
 crStart();
 
+/* 身份核对完（CpqSso 拿到 can_cost）后翻一次：主按钮在「发送给财务」与财务动作之间切换，
+   页内的财务按钮组同步显隐 —— 不能等用户再点一次才变。 */
+document.addEventListener('cpq-sso-ready', () => {
+  if (crData) crRender();
+  crPublishState();
+});
+
 /* 统一看板协议：2.3 的测算与确认成本注册成语义化动作，内部页签注册成语义化视图。 */
 (function crRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
@@ -834,9 +908,23 @@ crStart();
       return ok ? { ok: true }
         : { ok: false, error: { code: 'op-failed', message: `${label}失败，请查看看板提示。` } };
     },
-    getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
+    // 非财务身份（工艺经理）不占操作栏：这一页他只有「发送给财务」一个出口。
+    getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy) }),
   });
   window.TechBoardRuntime.registerActions({
+    // 2.3 是财务经理的步骤：工艺经理打开这一页时五颗财务动作一个也点不动（crReadOnly 全挡），
+    // 他真正该做的只有一件 —— 把工艺与整机参数交给财务。所以非财务身份下唯一可见的主按钮
+    // 是它；财务动作注册与 run 都保留（Agent / 看板仍可调用），只是不占用户操作栏。
+    sendCostReviewToFinance: {
+      label: '发送给财务',
+      order: 5,
+      deferred: true,
+      run: () => crSendToFinance(),
+      // role 只由 getState() 决定（条目上的静态 role 是运行时读不到的死元数据，
+      // 2.3 一律不写）；enabled 只表达「这一步有这个动作」，忙闲交给 busy。
+      getState: () => ({ visible: crReadOnly(), enabled: true, busy: Boolean(crBusy),
+                         role: 'primary' }),
+    },
     runCostReview: {
       label: '一键测算全部成本',
       role: 'aux',
@@ -853,7 +941,7 @@ crStart();
         return { ok: true };
       },
       // 没算全时它就是 2.3 的主按钮；算全之后让位给「确认成本」。
-      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy),
+      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
                          role: !crCostsComplete() ? 'primary' : 'aux' }),
     },
     confirmCostReview: {
@@ -897,7 +985,7 @@ crStart();
         return { ok: true };
       },
       // 算全之后它就是 2.3 的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
-      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy),
+      getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
                          role: crCostsComplete() ? 'primary' : 'aux' }),
     },
     // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。

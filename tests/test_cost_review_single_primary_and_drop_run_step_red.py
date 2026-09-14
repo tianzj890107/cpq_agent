@@ -186,9 +186,22 @@ class CostReviewSinglePrimaryRed(unittest.TestCase):
             "动作条目上的静态 role 是死元数据：真实 role 只能由 getState() 返回")
 
     def test_exactly_one_primary_role_is_declared(self):
+        # 契约更新（2.3 工艺经理发送给财务批次）：这一页现在是「按身份分工的两套主按钮」——
+        # 财务身份：测算没全时「一键测算全部成本」主，算全后「确认成本」主（二者互补，恒有一主）；
+        # 工艺经理身份：唯一主按钮是「发送给财务」。所以声明处从 2 处变成 3 处，
+        # 但任一稳定状态下可见的主按钮仍必须恰好一个（三者的 visible 互斥，见下）。
         found = re.findall(r"role\s*:\s*[^\n]*'primary'", self.board)
-        self.assertEqual(len(found), 2,
-                         f"2.3 只允许两颗按钮声明动态 role（各一处），实际 {len(found)} 处：{found}")
+        self.assertEqual(len(found), 3,
+                         f"2.3 允许三处 primary 声明（两处财务互补 + 一处工艺经理），实际 {len(found)} 处：{found}")
+        # 互斥：财务那两颗只在 !crReadOnly() 时可见，工艺经理那颗只在 crReadOnly() 时可见。
+        finance_primaries = ("runCostReview", "confirmCostReview")
+        for name in finance_primaries:
+            block = block_from(self.board, f"{name}:")
+            self.assertRegex(block, r"visible:\s*!crReadOnly\(\)",
+                             f"{name} 只在财务身份可见（与「发送给财务」互斥）")
+        sender = block_from(self.board, "sendCostReviewToFinance:")
+        self.assertRegex(sender, r"visible:\s*crReadOnly\(\)",
+                         "「发送给财务」只在非财务身份可见（与财务主按钮互斥）")
 
     def test_roles_reverse_from_the_same_judgement(self):
         for name in ("runCostReview", "confirmCostReview"):
@@ -219,11 +232,18 @@ class CostReviewSinglePrimaryRed(unittest.TestCase):
         self.assertNotIn(".disabled", block, "可用性不能再直通页内按钮 disabled")
 
     def test_confirm_cost_review_stays_visible_at_all_times(self):
+        # 契约更新（2.3 工艺经理发送给财务批次）：本批之前「确认成本」对所有身份都必须可见，
+        # 只读身份靠点击后给原因兜底。用户随后明确 2.3 要按身份分工：工艺经理在这一页不该
+        # 看见财务的五颗动作，唯一出路是「发送给财务」主按钮。于是 visible 改成身份判定，
+        # 但「没算全也要能点出真实原因」这条不变（crCostsComplete() 不再决定 visible）。
         block = block_from(self.board, "confirmCostReview:")
-        self.assertRegex(block, r"visible:\s*true",
-                         "确认成本必须一直可见：没算全也要让用户点出真实原因")
-        self.assertNotIn("crReadOnly(", block,
-                         "只读身份不再拦在按钮前面：点了给原因，后端照旧 403 兜底")
+        self.assertNotRegex(block, r"visible:\s*crCostsComplete\(",
+                            "没算全不能把按钮藏起来：这是要用户点出真实原因的主按钮")
+        self.assertRegex(block, r"visible:\s*!crReadOnly\(\)",
+                         "确认成本只允许按身份 gate 可见性（财务身份可见）")
+        self.assertNotIn(".disabled", block, "可用性仍不许直通页内按钮 disabled")
+        self.assertRegex(block, r"enabled:\s*true",
+                         "enabled 只表达「这一步有这个动作」，忙闲交给 busy")
 
     def test_other_cost_actions_keep_visibility_and_role(self):
         for name, order in (("writeCostReviewMaterial", 30),

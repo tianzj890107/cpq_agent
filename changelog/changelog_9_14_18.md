@@ -632,3 +632,31 @@
 - 部署（用户指令「0909部署到34」）：172.16.10.34 `/home/wugefei/CPQ/cpq_agent`（分支 `20260909`，工作区无 tracked 改动）`git fetch gitlab 20260909` → `checkout` → `pull --ff-only`，fast-forward `efef393 → 3d80961`；按既定顺序先停 8012 子进程再停 8010 主进程，确认两端口释放后重启 8010（新 PID 1213903，子进程 8012 新 PID 1213960 由主进程拉起）。
 - 部署后核验：`http://127.0.0.1:8010/` 与 `/api/health` 均 200 且 `status=ok`（`cadquery_available: true`、`sso_enabled: true`）；线上下发的 `cost-review.js` 实测已含两套角色口径（`finance_mgr` 命中 2 处），CPQ 财务经理不再被判只读；同机 8011 / 8013 未受影响仍 200。
 - 边界：只 fast-forward 更新 tracked 文件，未删改服务器上的 `cpq_settings.json`、`cpq_history/`、`rule_history/`、`tech_data/`、`product_images/` 等持久化数据；未动 8011 / 8013 / 8082 上的其它服务；未创建 MR/tag/Release。
+
+## 56. 零件清单点零件进 3D 视图，「工艺推荐」只由零件行下的子按钮进入（9-14）
+
+- 需求（用户）：「零件清单点零件的话就去 3D 视图，现在点零件和点工艺推荐都是去的工艺推荐」。
+- Spec：`docs/specs/tech-part-click-goes-3d-not-process.md`；红测：`tests/test_tech_part_click_goes_3d_not_process_red.py`（11 项），Red 基线 **2 失败 / 9 通过**。
+- 根因：`tech_app/frontend/app.js` 的 `selectPart()` 末尾无条件调用 `autoOpenGeneratedProcess(part)`；该函数对「库里已有工艺」的零件会 `openPartAnalysis(part, "process")`，把右栏从 3D 切到工艺推荐。于是所有选中零件的入口都被劫持：零件行点击（`renderNode`）、2D 缩略图 bbox 点击（`renderBboxes`）、生成结果展示（`showGeneratedResult`）；零件行下本来独立的「工艺推荐」子按钮反而看不出区别，3D 只在「该零件还没有工艺」时才出现。
+- 实现：`selectPart()` 删除该调用，只保留既有 3D / 零件详情渲染（`setRightPane("model")`、`exitBoardViewHost()`、`markSelection()`、`togglePartSubActions()`、`updateChatContext()`、`notePartView("part-detail")`）；「已生成即自动展开」改在解析 / 生成完成的时机补一次 —— `showGeneratedResult()` 里 `selectPart(target)` 之后加 `autoOpenGeneratedProcess(target)`，批量工艺推荐收尾处的既有调用不变。
+- 保留：零件行下的「工艺推荐」子按钮仍是唯一工艺推荐入口（`buildPartSubActions` → `openPartAnalysis(part, mode)` → `part-process` → `renderPartAnalysis`），`event.stopPropagation()`、单件 `POST /parts/{part_id}/process`、`partHasExistingProcess()` 只读判定、`autoOpenedProcessParts` 去重、零件层级视图注册（`PART_VIEW_PARENT` / `PART_FLOW_VIEWS` / `window.TechBoardPartViews`）与返回键、父壳不承载零件弹层的边界全部不动。
+- 过期断言更新（1 处）：`tests/test_tech_drawing_toolbar_cleanup_and_process_auto_expand_red.py::test_select_part_triggers_auto_open` 改为 `test_select_part_stays_on_3d_and_generation_path_auto_opens`（`selectPart` 不得自动展开 + `showGeneratedResult` 保留自动展开），注明「契约更新（点零件=3D 批次）」。
+- 验证：本批红测 **11/11**（先红后绿）；上述旧用例所在文件重跑 **17/17**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **957 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/app.js` 通过；`git diff --check` 通过。
+- 边界：未改后端路由 / Agent 工具 / 看板桥协议与事件；未新增请求、未触发生成、未新建父级 Drawer/Modal。本批为本地修改，未提交、未推送、未部署（本地 8010/8012 下发工作区文件，硬刷即可验收）。
+
+## 57. 2.3 成本测算：工艺经理只留「发送给财务」主按钮（9-14）
+
+- 需求（用户）：「工艺经理在成本测算那一页就不是这些按钮了 —— 确认成本、一键测算全部成本、写入数据库、回传销售经理继续报价、提交工艺经理确认，而是『发送给财务』的按钮，并且是主按钮」。
+- Spec：`docs/specs/tech-cost-process-manager-send-to-finance.md`；红测：`tests/test_tech_cost_process_manager_send_to_finance_red.py`（10 项），Red 基线 **10 项用例 / 11 处断言失败**（含 subTest）。
+- 根因：2.3 是财务经理的步骤（`auth.COST_ROLES`），工艺经理打开这一页时五颗财务动作本来就被 `crReadOnly()` 挡着（点下去只会得到「2.3 成本测算是财务经理的步骤…」），但这一页对他没有任何出口 —— 他真正该做的「把工艺与整机参数交给财务」只在 2.2（`确认工艺并发送财务`）有入口，2.3 上缺这一步。
+- 实现（只改前端两处：`tech_app/frontend/cost-review.js`、`cost-review.html`）：
+  - 新增 `crSendToFinance()`：直接 `POST /api/projects/{id}/integration/send-to-finance`（复用 2.2 既有出口与 `IntegrationPublishBody` 字段 `product_name` / `note`，收件人留空由报价侧落到默认角色），不重写 `aiOpenFinanceDialog`、不建第二套发送实现；反馈走既有 `crCard` / `crStatus` / `crToast` / `crPublishTask`。
+  - 新动作 `sendCostReviewToFinance`：`label: '发送给财务'`、`order: 5`、`deferred: true`，`getState()` 返回 `visible: crReadOnly()`、`enabled: true`、`busy: Boolean(crBusy)`、`role: 'primary'`。条目上不写静态 `role`（运行时只认 `getState()`，静态 role 是死元数据，2.3 一律不写）。
+  - 财务五颗动作（`runCostReview` / `confirmCostReview` / `writeCostReviewMaterial` / `sendCostReviewToQuote` / `returnCostReviewToProcess`）与 `costStep`、`refreshCostReview` 的 `visible` 改为 `!crReadOnly()`：仍全部注册、仍有真实 `run`，Agent 工具与看板桥照旧可调用，只是不占工艺经理的左侧操作栏。
+  - `cost-review.html` 的 `.ai-ops` 增加 `#crSendToFinance`（`ai-op-btn primary`，默认 `hidden`），资源版本 `cost-review.js?v=cr5 → ?v=cr6`。
+  - `crRenderOps()` 按 `crReadOnly()` 互斥切换两侧按钮并隐藏聊天卡里的 `#crRunAll`；`crRenderActions()` 在只读身份下不再渲染「测算未完成的 N 个零件」，改为说明成本归财务经理、入口是「发送给财务」；只读原因的文案同步点名「发送给财务」。
+  - `crStart()` 之后补 `cpq-sso-ready` 监听：身份核对完成（`CpqSso.state().canCost` 到位）后重绘并重发动作快照，主按钮自动翻面。
+- 保留：后端 `/cost-review` 全部 GET/POST/PUT 与 `/integration/send-to-finance` 路由、`services.integration.send_to_finance` 的参数 / 工艺确认闸门、`cpq_bridge.send_to_finance`、`auth.COST_ROLES`、`crReadOnly()` 的两套角色口径与能力位优先判定全部不动；点击仍给后端真实原因（如「请先在『组装工艺』里点『确认组装工艺』」），左侧「失败重试」照旧可用。
+- 过期断言更新（3 个文件、4 处，均注明「契约更新（2.3 工艺经理发送给财务批次）」）：① `tests/test_cost_review_single_primary_and_drop_run_step_red.py::test_exactly_one_primary_role_is_declared` 从 2 处 primary 声明改为 3 处，并新增「财务两颗与「发送给财务」visible 互斥」断言；② 同文件 `test_confirm_cost_review_stays_visible_at_all_times` 改为只按身份 gate（不允许 `crCostsComplete()` 决定 visible，`enabled: true` 与不得直通页内 `.disabled` 不变）；③ `tests/test_tech_business_actions_clickable_then_error_red.py::test_readonly_does_not_block_left_toolbar` 改为允许 `crReadOnly()` 出现在 `visible`，但禁止它决定 `enabled`，并要求被点到时仍给 `crReadOnlyWhy()` 真实原因；④ 同文件 `test_cost_actions_declare_enabled_true` 由实现侧对齐（新动作 `enabled: true`）。
+- 验证：本批红测 **10/10**（先红后绿）；`test_tech_business_actions_clickable_then_error_red` **24/24**；`test_cost_review_single_primary_and_drop_run_step_red` + `test_tech_board_actions_into_left_toolbar_red` **40/40**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **967 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/cost-review.js` 与 `node --check tech_app/frontend/app.js` 通过；`git diff --check` 通过。
+- 边界：未改后端路由 / service / Agent 工具 / 看板桥协议与事件；未删动作注册与业务实现；未新增第二套成本或发送算法；未新建父级 Drawer/Modal。本批与 `## 56`（点零件=3D）一起本地修改，待提交推送与 34 部署。

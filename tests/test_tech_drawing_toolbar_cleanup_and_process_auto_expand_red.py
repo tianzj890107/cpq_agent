@@ -211,11 +211,18 @@ class TechDrawingToolbarCleanupAndProcessAutoExpandRed(unittest.TestCase):
                 self.assertNotIn(token, block,
                                  f"自动展开不得出现这些用户可见副作用：{token}")
 
-    def test_select_part_triggers_auto_open(self):
+    def test_select_part_stays_on_3d_and_generation_path_auto_opens(self):
+        # 契约更新（点零件=3D 批次）：用户要求「零件清单点零件进 3D 视图，零件行下的
+        # 「工艺推荐」子按钮才进工艺推荐」，所以选中零件不再自动展开工艺推荐；
+        # 「已生成即展开」只留在解析 / 生成完成的时机（showGeneratedResult）与批量收尾。
         block = block_from(self.app, "function selectPart(part)")
         self.assertTrue(block, "找不到 selectPart(part)")
-        self.assertIn("autoOpenGeneratedProcess(", block,
-                      "选中零件后要按「已生成即展开」处理")
+        self.assertNotIn("autoOpenGeneratedProcess(", block,
+                         "点零件必须留在 3D：selectPart() 不得自动展开工艺推荐")
+        generated = block_from(self.app, "function showGeneratedResult()")
+        self.assertTrue(generated, "找不到 showGeneratedResult()")
+        self.assertIn("autoOpenGeneratedProcess(", generated,
+                      "解析 / 生成完成后要按「已生成即展开」补一次自动展开")
 
     def test_batch_process_completion_triggers_auto_open(self):
         block = block_from(self.app, "async function runAllPartProcessesInBackground(")
