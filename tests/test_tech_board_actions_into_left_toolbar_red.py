@@ -67,9 +67,11 @@ EMBED_HIDDEN = (
 MUST_STAY_VISIBLE = ("#aiProductName", "#crProductName", "#crQuantity", "#aiOpsHint", "#crHint",
                      "#aiExtractStatus")
 
-REQUIRED_LEFT_TOOLBAR_IDS = (
-    "techChatPrimary", "techChatPrev", "techChatNext", "techChatTransfer", "techChatRetry",
-)
+# 契约更新（「左侧操作栏只留当前步骤业务动作、去掉通用刷新与导航按钮」批次）：用户明确要求
+# 去掉每页重复的上一步 / 下一步 / 转交任务 / 失败重试；父壳左侧只保留唯一主按钮槽位，
+# 其余业务动作全部由看板快照动态渲染。
+REQUIRED_LEFT_TOOLBAR_IDS = ("techChatPrimary",)
+RETIRED_LEFT_TOOLBAR_IDS = ("techChatPrev", "techChatNext", "techChatTransfer", "techChatRetry")
 REMOVED_LEFT_TOOLBAR_IDS = ("techChatAttach", "techChatAiRun", "techChatSecondary", "techChatBulk")
 KEPT_KEEP_IDS = ("ocFilesAction", "ocResultActions", "ocTaskProgressHost",
                  "ocChatAttachBtn", "ocChatFileInput", "techPrev", "techNext", "techNowLabel")
@@ -175,6 +177,10 @@ class TechBoardActionsIntoLeftToolbarRedTest(unittest.TestCase):
             with self.subTest(token=bad):
                 self.assertNotIn(f'id="{bad}"', self.html,
                                  f"左侧仍写死业务按钮 {bad}，应改为按看板快照动态渲染")
+        for gone in RETIRED_LEFT_TOOLBAR_IDS:
+            with self.subTest(retired=gone):
+                self.assertNotIn(f'id="{gone}"', self.html, f"已退役的通用按钮 {gone} 不得回到父壳")
+                self.assertNotIn(gone, self.js, f"父壳不得再驱动已退役按钮 {gone}")
         for needed in REQUIRED_LEFT_TOOLBAR_IDS + KEPT_KEEP_IDS:
             with self.subTest(token=needed):
                 self.assertIn(f'id="{needed}"', self.html, f"既有节点 {needed} 被删除")
@@ -201,11 +207,21 @@ class TechBoardActionsIntoLeftToolbarRedTest(unittest.TestCase):
                          "唯一主按钮必须落在既有 #techChatPrimary 槽位")
 
     def test_primary_selection_is_driven_by_board_role(self):
+        # 第 33 批反转：父壳不再「在多个 primary 里确定性地取第一个」—— 可见 primary 恰好一个
+        # 才认；0 个或多个都返回空并交给 primaryDiagnostic() 出确定性诊断（见新 Spec）。
+        role_block = block_from(self.js, "function primaryEntries(")
+        self.assertTrue(role_block, "缺少 primaryEntries()")
+        self.assertRegex(role_block, r"role\s*===\s*['\"]primary['\"]",
+                         "主按钮必须来自看板声明的 role === 'primary'")
         body = block_from(self.js, "function primaryActionName(")
         self.assertTrue(body, "缺少 primaryActionName()")
-        self.assertRegex(body, r"role\s*===\s*['\"]primary['\"]",
-                         "主按钮必须来自看板声明的 role === 'primary'")
-        self.assertRegex(body, r"\[0\]|\.find\(", "必须在多个 primary 中确定性地取第一个")
+        self.assertRegex(body, r"length\s*!==\s*1",
+                         "可见 primary 必须恰好一个才认，不得取第一个")
+        guard = body.find("length !== 1")
+        pick = body.find("[0]")
+        self.assertGreaterEqual(guard, 0, "缺少唯一性守卫")
+        if pick >= 0:
+            self.assertLess(guard, pick, "唯一性守卫必须先于取值，多个 primary 时不得静默取第一个")
         self.assertGreaterEqual(len(re.findall(r"primaryName", self.js)), 2,
                                 "primaryName 必须同时用于选中与排除，避免同一动作渲染两次")
         self.assertRegex(self.js, r"(?:===|!==)\s*primaryName",
@@ -214,7 +230,9 @@ class TechBoardActionsIntoLeftToolbarRedTest(unittest.TestCase):
     def test_every_button_has_tooltip_and_aria_label(self):
         body = block_from(self.js, "function actionTooltip(")
         self.assertTrue(body, "缺少 actionTooltip()")
-        for token in ("hint", "执行中", "请先打开项目", "当前不可用"):
+        # 契约更新（「业务动作一律可点、点了再给真实原因」批次）：按钮不再有「当前不可用」这种
+        # 预先置灰的文案，tooltip 只区分执行中 / 未打开项目 / 当前步骤主操作。
+        for token in ("hint", "执行中", "请先打开项目", "当前步骤主操作"):
             with self.subTest(token=token):
                 self.assertIn(token, body, f"tooltip 规则缺少 {token}")
         self.assertIn("setAttribute('aria-label'", self.js, "动态按钮必须写 aria-label")
@@ -229,14 +247,22 @@ class TechBoardActionsIntoLeftToolbarRedTest(unittest.TestCase):
                          "父壳仍在写死业务动作名（左侧入口必须完全由看板快照驱动）：%s" % leaked)
         for gone in ("STAGE_ACTIONS", "STAGE_CHAT_ACTIONS"):
             with self.subTest(token=gone):
-                self.assertNotIn(gone, self.js, f"{gone} 应被 STAGE_CHAT_FLOW + 看板快照取代")
+                self.assertNotIn(gone, self.js, f"{gone} 应被 STAGES 描述表 + 看板快照取代")
 
     def test_stage_flow_table_covers_nine_stages_without_action_names(self):
-        block = block_from(self.js, "STAGE_CHAT_FLOW")
-        self.assertTrue(block, "缺少九阶段壳导航表 STAGE_CHAT_FLOW")
+        # 契约更新（第 19 步「九阶段上下文」批次）：壳导航表定名 STAGES，只描述九阶段的编号 /
+        # 名称 / 页面文件，不再携带任何业务动作名（动作由看板快照决定）。
+        start = self.js.find("const STAGES = [")
+        self.assertGreater(start, -1, "缺少九阶段描述表 STAGES")
+        end = self.js.find("];", start)
+        self.assertGreater(end, start, "STAGES 描述表没有正常结束")
+        block = self.js[start:end]
         for stage in STAGE_PAGES:
             with self.subTest(stage=stage):
-                self.assertIn(stage, block, f"STAGE_CHAT_FLOW 缺少 {stage}")
+                self.assertIn(stage, block, f"STAGES 缺少 {stage}")
+        for token in ("primary:", "secondary:"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, block, "壳导航表不得再写死业务动作名")
 
     def test_bottom_bar_business_buttons_are_retired(self):
         for bad in ("techPrimary", "techSecondary"):
@@ -249,7 +275,13 @@ class TechBoardActionsIntoLeftToolbarRedTest(unittest.TestCase):
         self.assertIn("TechBoardBridge", self.js)
         self.assertRegex(self.js, r"executeAction\(", "业务动作仍必须经 TechBoardBridge.executeAction")
         self.assertRegex(self.js, r"applyStage\(", "上一步 / 下一步仍复用既有 applyStage")
-        self.assertRegex(self.js, r"last[A-Za-z]*Action", "失败重试仍复用最近一次动作")
+        # 契约更新：常驻「失败重试」按钮与其「最近一次动作」缓存已随通用导航按钮一起退役，
+        # 失败恢复改由「业务动作始终可点 + 真实错误落到标题行」承担。
+        self.assertNotRegex(self.js, r"last[A-Za-z]*Action",
+                            "最近一次动作缓存应随失败重试按钮一起退役")
+        for token in ("setBoardNotice", "task-failed"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.js, f"失败恢复仍须有真实错误出口：{token}")
         for bad in ("contentDocument", "contentWindow.document"):
             self.assertNotIn(bad, self.js, f"父壳不得查询 iframe DOM：{bad}")
         for bad in ("techChatAction", "tech-board-action", "@app.post(\"/api/tech-board"):

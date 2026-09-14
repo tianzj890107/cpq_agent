@@ -33,12 +33,18 @@ class TechResultEntriesBoardViewsRedTest(unittest.TestCase):
                 f"{node_id} 未与视图 {view} 成对登记")
         # 任务文件入口。
         self.assertRegex(self.chat, r'dispatchDrawingCapability\(\s*["\']files["\']')
-        # ＋ 菜单里的两个视图入口来自 HTML 的 capability 名。
-        for capability in ("evidence", "review"):
-            self.assertRegex(
-                self.html,
-                rf'data-tech-capability="{capability}"',
-                f"＋ 菜单缺少 {capability} 入口")
+        # 契约更新（2.1「能力入口归位更多功能」批次）：左侧会话栏只保留「解析视图」这一个
+        # 视图入口；导入已有 3D 模型 / 版本与校核审查 / 联网核验 / 校验修正四项已归位到 2.1
+        # 页内的「更多功能 ▾」菜单（仍复用同一批看板视图与业务动作，能力一个不少）。
+        self.assertRegex(self.html, r'data-tech-capability="evidence"',
+                         "左侧会话栏缺少「解析视图」入口")
+        for moved in ("import3d", "review", "modelLookup", "verify"):
+            with self.subTest(capability=moved):
+                self.assertNotRegex(
+                    self.html, rf'data-tech-capability="{moved}"',
+                    f"{moved} 已归位 2.1「更多功能 ▾」，不得留在左侧会话栏")
+                self.assertIn(moved, self.board,
+                              f"{moved} 的看板视图 / 业务动作不得被删除")
 
     def test_dispatch_goes_through_board_bridge_navigate_view(self):
         match = re.search(

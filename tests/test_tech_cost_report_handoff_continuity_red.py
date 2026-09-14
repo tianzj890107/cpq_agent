@@ -120,9 +120,12 @@ class PublishedReportHandoffContract(unittest.TestCase):
         self.assertRegex(combined, r"(?:>=|max\()[^\n]{0,100}(?:TECH_CONFIRM_STEP|step_no|current_step)")
 
     def test_report_publish_parent_exposes_sales_handoff_action(self):
-        block = re.search(r"['\"]report-publish['\"]\s*:\s*\{([^\n]+)", PARENT)
-        self.assertIsNotNone(block)
-        self.assertIn("sendReportToQuote", block.group(1))
+        # 契约更新（「按钮统一到左侧会话操作栏」批次）：父壳不再持有 report-publish 阶段的
+        # 动作表，回传销售的动作由发布页自己注册，左侧按看板动作快照渲染。
+        self.assertRegex(REPORT_JS, r"sendReportToQuote\s*:\s*\{[\s\S]{0,400}回传销售经理",
+                         "发布页必须自己注册「回传销售经理继续报价」动作")
+        self.assertNotIn("sendReportToQuote", PARENT,
+                         "父壳不得再写死发布阶段的业务动作名")
 
 
 class ExistingWorkflowPreservation(unittest.TestCase):

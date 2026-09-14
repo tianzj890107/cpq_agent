@@ -320,6 +320,13 @@ function crConfirmBlocker() {
   return '';
 }
 
+/* 「成本是否算全」的唯一判定：直接复用 crConfirmBlocker()（本页唯一前置判定），
+   不新增第二份 counts / ready 判断。只读身份在这里按「未算全」处理 —— 它只决定
+   谁是主按钮，不决定能不能点：点了照旧由后端 403 与看板提示给出真实原因。 */
+function crCostsComplete() {
+  return !crConfirmBlocker();
+}
+
 function crRenderActions() {
   const host = $cr('crActions');
   // 确认按钮的悬浮原因与左侧动作快照共用同一份判定（crConfirmBlocker）。
@@ -775,7 +782,7 @@ crStart();
   window.TechBoardRuntime.registerActions({
     runCostReview: {
       label: '一键测算全部成本',
-      role: 'primary',
+      role: 'aux',
       order: 10,
       deferred: true,
       run: () => {
@@ -788,7 +795,9 @@ crStart();
         crRunAllInBackground();
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
+      // 没算全时它就是 2.3 的主按钮；算全之后让位给「确认成本」。
+      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy),
+                         role: !crCostsComplete() ? 'primary' : 'aux' }),
     },
     confirmCostReview: {
       label: '确认成本',
@@ -801,7 +810,9 @@ crStart();
         return done ? { ok: true }
           : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };
       },
-      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
+      // 算全之后它就是 2.3 的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
+      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy),
+                         role: crCostsComplete() ? 'primary' : 'aux' }),
     },
     // Agent 改完说明 / 确认 / 去向之后让看板重新拉取并渲染。
     refreshCostReview: {
@@ -848,7 +859,9 @@ crStart();
         crCostStepInBackground(work);
         return { ok: true };
       },
-      getState: () => ({ visible: true, enabled: true, busy: Boolean(crBusy) }),
+      // 它是 Agent（RunCostReviewPart / Assembly / All）与内部链路的入口，仍然注册可执行；
+      // 只是不再占用户左侧操作栏一颗按钮 —— 「一键测算全部成本」才是用户入口。
+      getState: () => ({ visible: false, enabled: true, busy: Boolean(crBusy) }),
     },
     // 三个去向：复用既有 crRunOp，不新增对外调用。
     writeCostReviewMaterial: crOpAction('material-write', '写入数据库', 'aux', 30),

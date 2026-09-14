@@ -8,13 +8,21 @@ HTML = (ROOT / "tech_app/frontend/tech-workbench.html").read_text(encoding="utf-
 WORKBENCH_JS = (ROOT / "tech_app/frontend/tech-workbench.js").read_text(encoding="utf-8")
 CHAT_JS = (ROOT / "tech_app/frontend/agent-chat.js").read_text(encoding="utf-8").replace("\x00", "")
 CHAT_CSS = (ROOT / "tech_app/frontend/agent-chat.css").read_text(encoding="utf-8")
+INDEX_HTML = (ROOT / "tech_app/frontend/index.html").read_text(encoding="utf-8")
+APP_JS = (ROOT / "tech_app/frontend/app.js").read_text(encoding="utf-8")
 
+# 左侧会话栏保留的唯一能力入口（视图入口）。
 CAPABILITIES = {
     "evidence": "解析视图",
-    "import3d": "导入已有 3D 模型",
-    "review": "版本与校核审查",
-    "modelLookup": "联网核验",
-    "verify": "校验修正",
+}
+# 契约更新（2.1「能力入口归位更多功能」批次）：导入已有 3D 模型 / 版本与校核审查 /
+# 联网核验 / 校验修正四项从左侧会话栏移到 2.1 页内的「更多功能 ▾」菜单；
+# capability 名 → (2.1 页内的节点 id, 按钮文案)。
+PAGE_CAPABILITIES = {
+    "import3d": ("btnMoreImport3d", "导入已有 3D 模型"),
+    "review": ("btnMoreReview", "版本与校核审查"),
+    "modelLookup": ("btnModelLookup", "联网核验"),
+    "verify": ("btnVerify", "校验修正"),
 }
 
 
@@ -61,6 +69,19 @@ class TechDirectAttachmentAndChatCapabilitiesContract(unittest.TestCase):
                     bar.group(1),
                     rf'<button[^>]+data-tech-capability="{re.escape(capability)}"[^>]*>[^<]*{re.escape(label)}',
                 )
+        for moved in PAGE_CAPABILITIES:
+            with self.subTest(moved=moved):
+                self.assertNotRegex(
+                    bar.group(1), rf'data-tech-capability="{re.escape(moved)}"',
+                    f"{moved} 已归位 2.1「更多功能 ▾」，不得留在左侧会话栏")
+
+    def test_moved_capabilities_live_in_the_drawing_more_menu(self):
+        for capability, (node_id, label) in PAGE_CAPABILITIES.items():
+            with self.subTest(capability=capability):
+                self.assertRegex(INDEX_HTML, rf'id="{node_id}"[^>]*>{re.escape(label)}',
+                                 f"2.1「更多功能 ▾」缺少 {label}（{capability}）")
+                self.assertIn(capability, APP_JS,
+                              f"{capability} 仍须由 2.1 看板分派，不得只留一个空按钮")
 
     def test_capabilities_keep_view_vs_action_dispatch_boundaries(self):
         combined = CHAT_JS + "\n" + WORKBENCH_JS

@@ -356,7 +356,21 @@
       border-bottom: 0.5px solid var(--border-color);
       display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
     }
-    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); }
+    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
+    .results-title > #stepTitle, .results-title > .section-badge { flex: 0 0 auto; }
+    /* 流程 / 权限提示：固定标题行里的一枚胶囊，单行省略、悬浮看全文。
+       不参与结果卡的文档流，因此不会挤掉业务内容与上一步/下一步。 */
+    .wf-note {
+      margin-left: auto; min-width: 0; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      border-radius: 9999px;
+    }
+    .wf-note i.ti { margin-right: 4px; }
+    .wf-note a { color: inherit; }
+    .wf-note-danger { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.35); color: #b91c1c; }
+    .wf-note-primary { background: rgba(0,96,230,.10); border-color: var(--color-primary); color: #00419F; }
+    .wf-note-ok { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.35); color: #15803d; }
+    .wf-note-readonly { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary-active); }
     .section-badge { font-size: 11px; padding: 3px 10px; border-radius: 9999px; font-weight: 500; }
     .badge-active { background: rgba(0,96,230,.12); color: var(--color-primary); }
     .results-content { padding: var(--space-lg); flex: 1; overflow-y: auto; }
@@ -2803,63 +2817,61 @@
       return true;
     }
 
-    // 顶部提示条：当前步骤该谁做 / 我能不能做
+    // 权限 / 流程提示：固定标题行里的一枚单行省略状态胶囊（不再以普通流横条插到
+    // resultsContent 前面 —— 那会把业务内容、底栏和上一步/下一步一起往下顶）。
+    // 角色判定、待领取 / 待转交 / 只读 / 可编辑语义与按钮禁用逻辑一律不变。
     function wfRenderBar() {
       let bar = $('wfBar');
       const u = wfUser();
       if (!bar) {
-        bar = document.createElement('div');
+        bar = document.createElement('span');
         bar.id = 'wfBar';
-        bar.style.cssText = 'display:none;margin:0 0 10px;padding:8px 12px;' +
+        bar.className = 'wf-note';
+        bar.setAttribute('role', 'status');
+        bar.style.cssText = 'display:none;padding:3px 10px;' +
           'font-size:12px;line-height:1.5;border:1px solid var(--border-color);';
-        const host = $('resultsContent');
-        if (host && host.parentElement) host.parentElement.insertBefore(bar, host);
+        // 只挂进既有的固定标题行（.results-title 是 .results-header 的 flex-shrink:0 子项），
+        // 不新增横条、不改 resultsContent 的有效高度。
+        const titleRow = document.querySelector('.results-title');
+        if (titleRow) titleRow.appendChild(bar);
       }
+      const wfShow = (cls, html) => {
+        bar.className = 'wf-note ' + cls;
+        bar.innerHTML = html;
+        bar.title = String(bar.textContent || '').replace(/\s+/g, ' ').trim();
+        bar.style.display = 'inline-block';
+      };
       if (!u) {
-        bar.style.display = 'block';
-        bar.style.background = 'rgba(239,68,68,.10)';
-        bar.style.color = '#b91c1c';
-        bar.innerHTML = '<i class="ti ti-lock"></i> <b>未登录</b>：报价流程按角色分工，' +
+        wfShow('wf-note-danger', '<i class="ti ti-lock"></i> <b>未登录</b>：报价流程按角色分工，' +
           '登录后系统才能判断这一步归谁做。请先登录。' +
-          '<a href="javascript:;" onclick="cpqAuth.open()" style="margin-left:6px">去登录</a>';
+          '<a href="javascript:;" onclick="cpqAuth.open()" style="margin-left:6px">去登录</a>');
         return;
       }
       if (!WF.loaded) { bar.style.display = 'none'; return; }
-      bar.style.display = 'block';
-      bar.style.borderColor = 'var(--border-color)';   // 每个分支自己决定是否改回主色边框
       // 待转交：本步已完成、下一步归别人，卡片必须推送出去才算交接完成
       if (WF.awaiting) {
-        bar.style.background = 'rgba(239,68,68,.10)';
-        bar.style.color = '#b91c1c';
-        bar.innerHTML = '<i class="ti ti-send"></i> <b>待转交</b>：第 ' + currentStep + ' 步「' +
+        wfShow('wf-note-danger', '<i class="ti ti-send"></i> <b>待转交</b>：第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
-          '</b>完成。请把卡片<a href="javascript:;" onclick="wfOpenSend(true)" style="margin:0 4px">推送给某人或发布到公共任务池</a>。';
+          '</b>完成。请把卡片<a href="javascript:;" onclick="wfOpenSend(true)" style="margin:0 4px">推送给某人或发布到公共任务池</a>。');
         return;
       }
       // 已推送、等待对方领取
       if (WF.pendingTask) {
-        bar.style.background = 'rgba(0,96,230,.10)';
-        bar.style.color = '#00419F';
-        bar.innerHTML = '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
+        wfShow('wf-note-primary', '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
           escapeHtml(WF.pendingTask.source_label || '') + '。对方领取后即可继续第 ' +
-          WF.pendingTask.next_step_no + ' 步。';
+          WF.pendingTask.next_step_no + ' 步。');
         return;
       }
       if (WF.canEdit) {
-        bar.style.background = 'rgba(34,197,94,.10)';
-        bar.style.color = '#15803d';
-        bar.innerHTML = '<i class="ti ti-user-check"></i> 第 ' + currentStep + ' 步「' +
+        wfShow('wf-note-ok', '<i class="ti ti-user-check"></i> 第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」由<b>' + escapeHtml(WF.needRole) +
-          '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。';
+          '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。');
       } else {
         // 只读角色：主色浅蓝底 + 蓝色边框 + 深蓝文字（与「已转交·待领取」同一条主色语义）
-        bar.style.background = 'var(--color-primary-light)';
-        bar.style.borderColor = 'var(--color-primary)';
-        bar.style.color = 'var(--color-primary-active)';
-        bar.innerHTML = '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
+        wfShow('wf-note-readonly', '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
           '</b>完成，你是' + escapeHtml(u.role_name) + '，只能查看。' +
-          '可点下方「转交任务」把卡片发给' + escapeHtml(WF.needRole) + '。';
+          '可点下方「转交任务」把卡片发给' + escapeHtml(WF.needRole) + '。');
       }
     }
 

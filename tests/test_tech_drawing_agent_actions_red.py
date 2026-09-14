@@ -84,11 +84,16 @@ class TechDrawingAgentActionsRedTest(unittest.TestCase):
                 f"左侧没有把 Agent 事件接到看板动作 {action}")
 
     def test_plus_menu_routes_actions_and_views_separately(self):
-        for capability in ("modelLookup", "verify"):
-            self.assertRegex(
-                self.parent_html,
-                rf'data-tech-capability="{capability}"',
-                f"＋ 菜单缺少业务动作入口 {capability}")
+        # 契约更新（2.1「能力入口归位更多功能」批次）：联网核验 / 校验修正在统一工作台里从
+        # 左侧会话栏移到 2.1 页内的「更多功能 ▾」菜单（节点 id 不变，左侧不再重复一份），
+        # 业务动作分派与视图分派仍然分开。
+        drawing_html = _read(FRONTEND / "index.html")
+        for node_id, label in (("btnModelLookup", "联网核验"), ("btnVerify", "校验修正")):
+            with self.subTest(node=node_id):
+                self.assertRegex(drawing_html, rf'id="{node_id}"[^>]*>{label}',
+                                 f"2.1「更多功能 ▾」缺少 {label}")
+                self.assertNotRegex(self.parent_html, rf'id="{node_id}"',
+                                    f"{label} 不得再占左侧会话栏一颗按钮")
         # 动作名只能发给 execute-action；视图名继续发给 navigate-view。
         self.assertRegex(
             self.chat, r'(?:executeAction|DRAWING_ACTION)[\s\S]{0,400}modelLookup',

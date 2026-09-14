@@ -619,6 +619,33 @@ async function aiGenerateParamsFully() {
   return { ok: true };
 }
 
+/** 「确认图纸并进入参数推荐」（整合图纸页的收口动作）：不新增确认接口 —— 先回读
+    后端真实状态（GET /integration），整合结果确实在才切到「参数推荐」页签；回读不到或
+    还没分析出结果就如实返回原因，不用本地布尔冒充确认完成。 */
+async function aiConfirmDrawingsAndNext() {
+  if (aiBusy) {
+    return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
+  }
+  if (!aiAnalyzed()) {
+    return { ok: false, error: { code: 'not-analyzed',
+      message: '请先点「一键分析整合图纸」，有整合结果后才能进入参数推荐。' } };
+  }
+  try {
+    aiData = await api(aiUrl(''));
+    aiRender();
+  } catch (error) {
+    return { ok: false, error: { code: 'read-failed',
+      message: (error && error.message) || '读取整合结果失败，请稍后重试。' } };
+  }
+  if (!aiAnalyzed()) {
+    return { ok: false, error: { code: 'not-analyzed',
+      message: '后端还没有整合结果，请先完成整合分析。' } };
+  }
+  aiSetTab('params');
+  aiSay('整合图纸已确认，已切到「参数推荐」。');
+  return { ok: true };
+}
+
 /** 「确认并进入下一步」：确认参数已齐（按报价必填校验）→ 确认参数推荐 → 切到组装工艺。
     两步都复用既有接口（/params/finalize 的 confirm 分支、/params/confirm），缺项时不往下走，
     把后端的真实原因交给父壳显示。 */
@@ -1603,7 +1630,7 @@ aiStart();
   const aiSetTab = (name) => { aiTab = name; aiRender(); };
   window.TechBoardRuntime.registerActions({
     runIntegration: {
-      label: '开始整合分析',
+      label: '一键分析整合图纸',
       deferred: true,
       run: () => {
         const button = $ai('aiStart');
@@ -1644,8 +1671,21 @@ aiStart();
         // 放在参数页只会抢走主按钮位置，点了也必然是死按钮。
         const show = aiTab === 'process';
         return { visible: show, enabled: true, busy: aiBusy,
-                 analyzed: analyzed, role: analyzed ? 'primary' : 'aux', order: 20,
+                 analyzed: analyzed, role: 'aux', order: 20,
                  hint: '参数推荐与组装工艺都确认后可发送财务' };
+      },
+    },
+    // 整合图纸页的收口动作：分析出结果后，「确认图纸并进入参数推荐」才是这一步的下一步，
+    // 财务交接不抢主按钮（它只属于组装工艺页）。role 与可见性同一个条件，全页签只此一颗。
+    confirmDrawingsAndNext: {
+      label: '确认图纸并进入参数推荐',
+      order: 15,
+      run: () => aiConfirmDrawingsAndNext(),
+      getState: () => {
+        const show = aiTab === 'drawings' && aiAnalyzed();
+        return { visible: show, enabled: true, busy: aiBusy,
+                 analyzed: show, role: show ? 'primary' : 'aux', order: 15,
+                 hint: '整合结果核对无误后进入参数推荐' };
       },
     },
     // 参数推荐 / 组装工艺两个页签的专属动作：全部复用既有实现（aiGenerate / aiSaveEdits /
@@ -1653,7 +1693,7 @@ aiStart();
     // 一样都是长任务：只启动、立即回执（deferred），进度与收尾由本页 aiPublishTask 自报。
     // visible 由当前页签决定，左侧工具栏按这份快照渲染、右侧页内按钮在嵌入态隐藏。
     generateIntegrationParams: {
-      label: '生成参数推荐',
+      label: '一键生成参数推荐',
       role: 'aux',
       order: 30,
       deferred: true,
@@ -1671,7 +1711,7 @@ aiStart();
     // 参数页的收口动作：确认参数已齐（按报价必填校验）+ 确认参数推荐 + 切到组装工艺，
     // 用户只点一次；必填不齐时返回真实原因、不切页。
     confirmParamsAndNext: {
-      label: '确认并进入下一步',
+      label: '确认并进入下一页签',
       order: 35,
       run: () => aiConfirmParamsAndNext(),
       // role 只在这里声明一次：整个 2.2 页只允许有「当前那一个」主按钮。
@@ -1679,7 +1719,7 @@ aiStart();
                          enabled: true, busy: aiBusy, role: 'primary', order: 35 }),
     },
     generateIntegrationProcess: {
-      label: '生成组装工艺',
+      label: '一键生成组装工艺',
       role: 'aux',
       order: 40,
       deferred: true,

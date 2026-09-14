@@ -18,11 +18,16 @@ def css_rule(source: str, selector: str) -> str:
 
 
 class TechChatComposerFlushBottomContract(unittest.TestCase):
-    def test_tech_composer_has_no_caption_below_input(self):
+    def test_binding_caption_returns_without_moving_flush_bottom_input(self):
+        # 第 33 批反转：说明原文回归技术工艺会话区，但必须是 composer 内绝对定位的辅助提示
+        # （不占布局高度），输入框底边坐标仍与「贴底」实现一致（padding: 10px 16px 0）。
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', TECH_HTML, re.S)
         self.assertIsNotNone(composer)
-        self.assertNotIn('class="oc-disc"', composer.group(1))
-        self.assertNotIn("会话绑定当前项目", composer.group(1))
+        self.assertIn('class="oc-disc"', composer.group(1))
+        self.assertIn("会话绑定当前项目", composer.group(1))
+        caption = css_rule(TECH_CSS, "#techChatPane .oc-disc")
+        self.assertIn("position:absolute", caption)
+        self.assertNotRegex(caption, r"margin-bottom:\s*[1-9]")
 
     def test_tech_composer_bottom_padding_is_zero(self):
         rule = css_rule(TECH_CSS, "#techChatPane .oc-composer")

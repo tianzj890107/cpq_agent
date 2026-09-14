@@ -141,6 +141,8 @@
   // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
   // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
   const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
+  // 主按钮数量异常时标题行显示的那条诊断（正常帧清掉，避免盖住真实步骤状态）。
+  let primaryDiagnosticShown = '';
   // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
   const projectNames = new Map();
 
@@ -495,6 +497,7 @@
     state.boardStatusLevel = 'info';
     state.boardNotice = '';
     state.boardNoticeLevel = 'info';
+    primaryDiagnosticShown = '';
     setBoardNotice('');
     const meta = stageMeta(state.stage);
     if (!meta) {
@@ -633,10 +636,23 @@
     });
     return entries;
   }
+  // 唯一主按钮：只有「可见动作里恰好一个 role === 'primary'」才认。0 个（这一步没有主操作）
+  // 或多个（看板快照有毛病）都不猜、也不取数组里的第一个 —— 那等于父壳替看板决定业务
+  // 优先级；异常一律走 primaryDiagnostic() 给确定性诊断。
+  function primaryEntries(entries) {
+    return (entries || []).filter((entry) => entry && entry.role === 'primary');
+  }
   function primaryActionName(entries) {
-    const primaries = (entries || []).filter((entry) => entry && entry.role === 'primary');
-    if (!primaries.length) return '';
-    return (primaries[0] && primaries[0].name) || '';
+    const primaries = primaryEntries(entries);
+    if (primaries.length !== 1) return '';
+    return primaries[0].name || '';
+  }
+  // 确定性诊断：带上 primary_count / stage / view / 可见动作名，父壳不吞错、不兜底。
+  function primaryDiagnostic(entries, primaries) {
+    const names = (entries || []).map((entry) => entry.name).filter(Boolean);
+    return '看板动作快照的可见主按钮数不是 1：primary_count=' + primaries.length
+      + '，stage=' + (state.stage || '') + '，view=' + ((state.view && state.view.active) || '')
+      + '，可见动作=' + (names.length ? names.join('、') : '（无）');
   }
   function actionTooltip(entry, opts) {
     const options = opts || {};
@@ -697,9 +713,23 @@
       return;
     }
     bar.hidden = false;
-    // 主按钮只认看板声明的 role === 'primary'：没有就隐藏，不猜、不兜底。
+    // 主按钮只认看板声明的 role === 'primary'，且必须恰好一个：没有或不止一个都隐藏主槽位，
+    // 不猜、不兜底、不取第一个；异常给确定性诊断（标题行 + 控制台，同一条文案）。
+    const primaries = primaryEntries(entries);
     const primaryName = primaryActionName(entries);
     const primaryEntry = entries.filter((entry) => entry.name === primaryName)[0] || null;
+    if (primaries.length === 1) {
+      if (primaryDiagnosticShown) {
+        primaryDiagnosticShown = '';
+        setBoardNotice(state.boardNotice, state.boardNoticeLevel);
+      }
+    } else {
+      const detail = primaryDiagnostic(entries, primaries);
+      primaryDiagnosticShown = detail;
+      console.error('[tech-workbench] ' + detail);
+      // 两个以上主按钮是明确的快照毛病：标题行按 error 等级说出来（清除时回落步骤状态）。
+      if (primaries.length > 1) setBoardNotice(detail, 'error');
+    }
     setChatButton($('techChatPrimary'), {
       label: primaryEntry ? primaryEntry.label : '主要操作',
       visible: Boolean(primaryEntry),
@@ -778,6 +808,7 @@
     state.boardStatusLevel = 'info';
     state.boardNotice = '';
     state.boardNoticeLevel = 'info';
+    primaryDiagnosticShown = '';
     renderTop();
     mountStageFrame();
     pushState();

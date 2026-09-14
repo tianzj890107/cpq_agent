@@ -111,6 +111,9 @@ srStart();
     catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '保存失败' } }; }
     finally { srBoardBusy = false; }
   }
+  // 3.1「草稿是否已经形成」的唯一判定：报告落过库（单据号 / 编制时间由后端在
+  // prepare / save 时写入）才算形成。两颗按钮的 role 由它反转，不许各写一份。
+  const srHasDraft = () => Boolean(srReport && (srReport.report_no || srReport.prepared_at));
   window.TechBoardRuntime.registerActions({
     saveProcessReport: {
       label: '保存',
@@ -121,10 +124,12 @@ srStart();
     },
     submitProcessReportReview: {
       label: '提交审核',
-      role: 'primary',
+      role: 'aux',
       order: 10,
       run: () => srBoardRun(true),
-      getState: () => ({ visible: Boolean(document.querySelector('#srSubmit')), enabled: !srBoardBusy, busy: srBoardBusy }),
+      // 草稿形成后它才是本页唯一主按钮；还没草稿时让位给「一键生成报告草稿」。
+      getState: () => ({ visible: Boolean(document.querySelector('#srSubmit')), enabled: !srBoardBusy,
+                         busy: srBoardBusy, role: srHasDraft() ? 'primary' : 'aux' }),
     },
     refreshProcessReport: {
       label: '刷新汇总报告',
@@ -136,11 +141,12 @@ srStart();
       getState: () => ({ visible: false, enabled: !srBoardBusy, busy: srBoardBusy }),
     },
     generateProcessReportDraft: {
-      label: '生成报告草稿',
+      label: '一键生成报告草稿',
       role: 'aux',
       order: 30,
       run: () => srGenerateDraft(),
-      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy }),
+      getState: () => ({ visible: true, enabled: !srBoardBusy, busy: srBoardBusy,
+                         role: srHasDraft() ? 'aux' : 'primary' }),
     },
     updateProcessReportFields: {
       label: '更新报告字段',

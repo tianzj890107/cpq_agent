@@ -44,7 +44,11 @@ class TechAgentRemoveStageContextCardContract(unittest.TestCase):
 
     def test_unified_chat_action_bar_and_board_action_routing_remain(self):
         self.assertIn('id="techChatActions"', WB_HTML)
-        self.assertIn("const STAGE_ACTIONS", WB_JS)
+        # 契约更新（「去掉通用刷新与导航按钮」批次）：父壳不再持有 STAGE_ACTIONS 动作表 ——
+        # 阶段只由 STAGES 描述表登记，动作全部来自看板注册表与动作快照。
+        self.assertIn("const STAGES", WB_JS)
+        self.assertIn("boardActionEntries", WB_JS)
+        self.assertIn("techChatPrimary", WB_JS)
         self.assertIn("TechBoardBridge", WB_JS)
         self.assertIn("executeAction", WB_JS)
 

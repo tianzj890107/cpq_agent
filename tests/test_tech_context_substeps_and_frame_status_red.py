@@ -25,7 +25,9 @@ class TechContextSubstepsAndFrameStatusRedTest(unittest.TestCase):
     def test_iframe_load_still_syncs_action_bar(self):
         load = re.search(r"iframe\.addEventListener\(['\"]load['\"],\s*\(\)\s*=>\s*\{([\s\S]*?)\}\);", self.js)
         self.assertIsNotNone(load)
-        self.assertIn("syncActionBar()", load.group(1))
+        # 契约更新（「业务按钮统一到左侧会话操作栏」批次）：底栏代理 syncActionBar() 退役，
+        # iframe load 后仍须按看板动作快照重渲染左侧操作栏。
+        self.assertIn("syncChatActions()", load.group(1))
 
     def test_context_substep_host_is_rendered(self):
         self.assertRegex(self.html, r'id="techSubstepsBar"[^>]+aria-label="[^"]*小流程[^"]*"')

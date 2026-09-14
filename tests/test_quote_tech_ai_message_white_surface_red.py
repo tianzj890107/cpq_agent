@@ -23,20 +23,28 @@ class QuoteTechAiMessageWhiteSurfaceContract(unittest.TestCase):
         cls.quote_ai = css_block(cls.quote, ".message-ai")
 
     def test_quote_ai_message_uses_system_white_surface(self):
-        self.assertRegex(self.quote_ai, r"background(?:-color)?\s*:\s*var\(--bg-page\)")
-        self.assertNotRegex(self.quote_ai, r"var\(--bg-secondary\)|gradient|#[0-9a-fA-F]{3,8}|rgba?\(")
+        # 契约更新（「报价 / 技术工艺助手气泡统一为白底 + 气泡边框」批次）：用户明确要求助手
+        # 消息用白色气泡背景并保留气泡边框；仍不得用灰底 / 次级底色 / 渐变 / 半透明容器。
+        self.assertRegex(self.quote_ai, r"background(?:-color)?\s*:\s*(?:#fff(?:fff)?|var\(--bg-page\))")
+        self.assertNotRegex(self.quote_ai, r"var\(--bg-secondary\)|gradient|rgba?\(")
 
-    def test_quote_ai_message_is_not_a_bordered_tail_bubble(self):
-        self.assertNotRegex(self.quote_ai, r"border\s*:\s*(?!0(?:\D|$)|none\b)")
+    def test_quote_ai_message_is_a_bordered_bubble_without_tail(self):
+        # 气泡边框是用户明确要求保留的（「要有气泡边框，只是背景都保留是白色背景」）；
+        # 这里只禁止「带尾巴」的对话气泡（左下角小尖角）。
+        self.assertRegex(self.quote_ai, r"border\s*:\s*1px\s+solid")
         self.assertNotRegex(self.quote_ai, r"border-bottom-left-radius\s*:")
 
-    def test_tech_plain_ai_message_remains_without_colored_container_background(self):
+    def test_tech_plain_ai_message_keeps_white_surface_without_colored_container(self):
+        # 契约更新：技术侧助手消息同样改成白色气泡背景 + 气泡边框（与报价同款），
+        # 但仍不得出现灰底 / 强调色 / 渐变这类「带底色的容器」。
+        self.assertRegex(css_block(self.tech, ".oc-amsg"),
+                         r"background(?:-color)?\s*:\s*(?:#fff(?:fff)?|var\(--oc-bg-1\))")
         for selector in (".oc-amsg", ".oc-abody", ".oc-atxt"):
             block = css_block(self.tech, selector)
             with self.subTest(selector=selector):
                 self.assertNotRegex(
                     block,
-                    r"background(?:-color)?\s*:\s*(?:var\(--oc-bg-[23]\)|var\(--oc-accent\)|gradient|#[0-9a-fA-F]{3,8}|rgba?\()",
+                    r"background(?:-color)?\s*:\s*(?:var\(--oc-bg-[23]\)|var\(--oc-accent\)|gradient|rgba?\()",
                 )
 
     def test_ai_messages_remain_left_aligned_with_dark_text(self):

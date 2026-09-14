@@ -113,7 +113,9 @@ class IntegrationParamsTabSinglePrimaryRed(unittest.TestCase):
     def test_confirm_and_next_action_is_registered(self):
         block = block_from(self.board, "confirmParamsAndNext:")
         self.assertTrue(block, "缺少 confirmParamsAndNext 动作（确认并进入下一步）")
-        self.assertIn("确认并进入下一步", block, "动作 label 必须是「确认并进入下一步」")
+        # 第 33 批反转：参数页的收口动作文案由「确认并进入下一步」改为「确认并进入下一页签」，
+        # 与组装工艺页（仍叫「确认并进入下一步」）区分开；role / order / 实现不变。
+        self.assertIn("确认并进入下一页签", block, "动作 label 必须是「确认并进入下一页签」")
         self.assertRegex(block, r"visible:\s*aiTab === 'params' && aiHasParams\(\)",
                          "确认并进入下一步只在参数页且已生成参数时出现")
         self.assertRegex(block, r"role:\s*'primary'", "确认并进入下一步必须是主按钮")

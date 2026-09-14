@@ -172,12 +172,17 @@ class QuoteTechUnifiedComposerRedTest(unittest.TestCase):
         )
 
     # ------------------------------------------------- 说明行（最新决策：报价保留、技术移除并贴底）
-    def test_tech_composer_removes_binding_caption_for_flush_bottom(self):
+    def test_tech_composer_keeps_binding_caption_without_layout_height(self):
+        # 第 33 批反转：说明原文回归技术工艺（不再删除），但改为绝对定位的不占布局高度提示，
+        # 输入框底边坐标不变（#techChatPane .oc-composer 仍 padding: 10px 16px 0）。
         composer = re.search(r'<div class="oc-composer">(.*?)</div>\s*</section>', self.tech_html, re.S)
         self.assertIsNotNone(composer, "找不到技术工艺 .oc-composer 区块")
         body = composer.group(1)
-        self.assertNotIn('class="oc-disc"', body, "技术工艺输入框下方不得再有说明行")
-        self.assertNotIn(CAPTION, body)
+        self.assertIn('class="oc-disc"', body, "技术工艺说明行必须存在")
+        self.assertIn(CAPTION, body)
+        caption = compact(css_rule(_read(WORKBENCH_CSS), "#techChatPane .oc-disc"))
+        self.assertIn("position:absolute", caption, "说明行必须绝对定位，不能占布局高度")
+        self.assertNotRegex(caption, r"margin-bottom:[1-9]")
 
     def test_quote_composer_has_same_binding_caption(self):
         area = re.search(r'<div class="chat-input-area">(.*?)\n      </div>', self.quote, re.S)

@@ -2,6 +2,10 @@
 
 状态：TDD Red，等待实现。
 
+> 已更新（`tech-global-single-primary-by-state-and-nonblocking-notices.md`）：参数页收口动作
+> 的文案由「确认并进入下一步」改为「确认并进入下一页签」（组装工艺页仍叫「确认并进入下一步」），
+> 动作名、role 判定、order 与实现不变；下表及描述中出现的旧文案按此条理解。
+
 ## 1. 问题（实测）
 
 统一工作台左侧操作栏由看板动作快照渲染（`tech-workbench.js` 的 `boardActionEntries()` 只跳过

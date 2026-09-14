@@ -860,6 +860,12 @@ $("btnUpload").onclick = async () => {
   setWorkflow("parse", "图纸已保存。确认后可开始 AI 解析。");
 };
 
+/* 2.1「这一步做到哪了」的唯一判定：有解析结果（零件或标准件）才算有效。
+   左侧主按钮的 role、收口动作的可见性都由它推导，不许各处各写一份。 */
+function drawingParsed() {
+  return Boolean(currentIR && ((currentIR.parts || []).length || (currentIR.standard_parts || []).length));
+}
+
 // 具名函数：原 #btnParse 点击逻辑原样搬过来，按钮和统一看板动作共用同一份实现。
 let parseDrawingError = "";
 async function parseDrawing() {
@@ -2165,8 +2171,9 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   }
   window.TechBoardRuntime.registerActions({
     parseDrawing: {
-      label: "开始解析",
-      role: "primary",
+      label: "一键解析图纸",
+      // 解析完成前它是本页唯一主按钮；有解析结果之后让位给「确认解析结果并进入下一步」。
+      role: "aux",
       order: 10,
       deferred: true,
       run: () => {
@@ -2189,8 +2196,41 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           visible: true,
           enabled: Boolean(button) && !button.disabled,
           busy: Boolean(button && button.getAttribute("aria-busy") === "true"),
+          role: drawingParsed() ? "aux" : "primary",
         };
       },
+    },
+    // 2.1 的收口动作：解析结果确认无误后进 2.2 组装与整合。确认不是本地布尔冒充完成 ——
+    // 先回读后端真实状态（GET /api/projects/<id>），解析结果确实在才走既有嵌入导航通道
+    // （tech-embed.js 的 requestNavigate），独立打开时由它整页跳转。
+    confirmDrawingResult: {
+      label: "确认解析结果并进入下一步",
+      role: "aux",
+      order: 15,
+      run: async () => {
+        if (!currentProject) {
+          return { ok: false, error: { code: "no-project", message: "请先打开项目。" } };
+        }
+        try {
+          const project = await fetch(`${API}/api/projects/${currentProject}`)
+            .then(r => r.ok ? r.json() : null);
+          if (project && project.ir) { currentIR = project.ir; renderIR(currentIR); }
+        } catch (error) { /* 回读失败按下面的真实状态判定，不假装确认成功 */ }
+        if (!drawingParsed()) {
+          status("还没有可确认的解析结果：请先点「一键解析图纸」。", true);
+          return { ok: false, error: { code: "not-parsed",
+            message: "还没有可确认的解析结果，请先完成图纸解析。" } };
+        }
+        if (!(window.TechEmbed && typeof window.TechEmbed.requestNavigate === "function")) {
+          return { ok: false, error: { code: "no-navigation",
+            message: "当前页面缺少嵌入导航通道，无法进入下一步。" } };
+        }
+        window.TechEmbed.requestNavigate("process", currentProject);
+        return { ok: true };
+      },
+      // 单行对象字面量：与同文件既有条目一致，避免多行 `})` 打断按行取块的静态契约。
+      getState: () => ({ visible: drawingParsed(), enabled: true, busy: false,
+                         role: drawingParsed() ? "primary" : "aux" }),
     },
     runAllPartProcesses: {
       label: "一键生成全部工艺推荐",

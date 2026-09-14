@@ -23,10 +23,11 @@ PAGE_ACTIONS = {
 
 class TechBoardActionRegistryRedTest(unittest.TestCase):
     def test_parent_stage_actions_use_business_names_not_selectors(self):
-        match = re.search(r'const STAGE_ACTIONS\s*=\s*\{([\s\S]*?)\n\s*\};', PARENT)
-        self.assertIsNotNone(match)
-        body = match.group(1)
-        self.assertNotRegex(body, r'["\']#[A-Za-z]')
+        # 契约更新（「去掉通用刷新与导航按钮」+「业务动作一律可点」批次）：父壳不再持有
+        # STAGE_ACTIONS 动作表 —— 阶段只由 STAGES 描述表登记，动作名与 selector 一律不进父壳，
+        # 左侧按钮完全由看板注册表的动作快照渲染。
+        self.assertNotIn("const STAGE_ACTIONS", PARENT, "STAGE_ACTIONS 动作表应已退役")
+        self.assertNotRegex(PARENT, r'["\']#[A-Za-z]', "父壳不得持有子页面 selector")
         for action in (
             "saveRequirementDraft", "submitRequirement", "confirmRequirement",
             "returnRequirementDraft", "submitRequirementReview", "parseDrawing",
@@ -34,7 +35,10 @@ class TechBoardActionRegistryRedTest(unittest.TestCase):
             "confirmCostReview", "saveProcessReport", "submitProcessReportReview",
             "approveProcessReport", "rejectProcessReport", "publishProcessReport",
         ):
-            self.assertIn(action, body)
+            with self.subTest(action=action):
+                self.assertNotIn(action, PARENT, f"父壳不得写死业务动作名：{action}")
+        self.assertIn("boardActionEntries()", PARENT,
+                      "左侧入口仍必须只由看板动作快照驱动")
 
     def test_every_stage_registers_its_existing_actions(self):
         missing = []

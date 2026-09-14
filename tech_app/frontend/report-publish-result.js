@@ -81,7 +81,7 @@ rpStart();
   window.TechBoardRuntime.registerActions({
     publishProcessReport: {
       label: '发布报告',
-      role: 'primary',
+      role: 'aux',
       order: 10,
       run: async () => {
         const button = document.querySelector('#rpPrimary');
@@ -94,7 +94,10 @@ rpStart();
       },
       getState: () => {
         const button = document.querySelector('#rpPrimary');
-        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rpBoardBusy, busy: rpBoardBusy };
+        // 已审核通过 → 发布报告是本页唯一主按钮；已发布 → 主按钮让位给「回传销售经理继续报价」。
+        const status = rpReport?.status || 'draft';
+        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rpBoardBusy,
+                 busy: rpBoardBusy, role: status === 'approved' ? 'primary' : 'aux' };
       },
     },
     refreshProcessReport: {
@@ -111,7 +114,12 @@ rpStart();
       role: 'aux',
       order: 20,
       run: () => rpSendToQuote(),
-      getState: () => ({ visible: true, enabled: !rpBoardBusy, busy: rpBoardBusy }),
+      // 只有报告正式发布之后才出现回传入口：发布完成后它就是这一步的主操作（幂等重发）。
+      getState: () => {
+        const status = rpReport?.status || 'draft';
+        return { visible: status === 'published', enabled: !rpBoardBusy, busy: rpBoardBusy,
+                 role: status === 'published' ? 'primary' : 'aux' };
+      },
     },
     createReportNewVersion: {
       label: '新建报告版本',

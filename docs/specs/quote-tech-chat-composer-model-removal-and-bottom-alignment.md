@@ -24,6 +24,9 @@
 - 报价 `.chat-panel` 与技术工艺 `#techChatPane` 均保持纵向 flex、全高和 `overflow:hidden`；消息线程保持 `flex: 1`、`min-height: 0`，composer 保持 `flex-shrink: 0` / `flex: 0 0 auto`，确保其被锚定在会话列底部。
 - 技术工艺统一工作台 `.oc-composer` 的 padding 为 `10px 16px`，与报价 `.chat-input-area` 一致；不得保留额外 bottom 偏移。
 - `tech-workbench.html` 的统一 composer 内不再出现 `.oc-disc`，避免说明行将输入框本体向上推。通用 `.oc-disc` 样式可供其他独立页面继续使用。
+  — 已更新（`tech-global-single-primary-by-state-and-nonblocking-notices.md`）：说明原文回归技术工艺，
+  但以 composer 内绝对定位的不占布局高度提示呈现，因此「不得把输入框本体向上推」这条要求仍然成立，
+  「composer 内不出现 `.oc-disc`」这条表述不再有效。
 - 本次只对齐输入区底边，不要求报价和技术工艺 textarea 的行数、输入框高度或视觉造型完全相同。
 
 ## 5. 非目标与保护边界

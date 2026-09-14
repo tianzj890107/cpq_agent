@@ -27,11 +27,17 @@ FRONTEND = ROOT / "tech_app" / "frontend"
 BACKEND = ROOT / "tech_app" / "backend"
 WORKBENCH_HTML = FRONTEND / "tech-workbench.html"
 WORKBENCH_JS = FRONTEND / "tech-workbench.js"
+CHAT_JS = FRONTEND / "agent-chat.js"
 MAIN = BACKEND / "main.py"
 
-# 左侧操作栏控件 id（Spec 第 1 节）。
-TOOLBAR_IDS = (
-    "techChatPrev", "techChatNext", "techChatTransfer", "techChatPrimary", "techChatRetry",
+# 左侧操作栏控件 id（现行契约）：「唯一主按钮槽位」+「任务文件」。
+# 契约更新（「左侧操作栏只留当前步骤业务动作、去掉通用刷新与导航按钮」批次）：用户明确要求
+# 去掉上一步 / 下一步 / 转交任务 / 失败重试这些每页重复的按钮，AI 执行与次按钮槽位也改由看板
+# 动作快照动态渲染 —— 这些静态控件不得再回到父壳。
+TOOLBAR_IDS = ("techChatPrimary", "ocFilesAction")
+RETIRED_TOOLBAR_IDS = (
+    "techChatPrev", "techChatNext", "techChatTransfer", "techChatRetry",
+    "techChatAiRun", "techChatSecondary", "techChatAttach",
 )
 # 九个 stage id：描述表必须全覆盖，不能只写 2.1–2.3。
 NINE_STAGES = (
@@ -68,6 +74,11 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
         for control in TOOLBAR_IDS:
             self.assertIn(f'id="{control}"', self.html,
                           f"左侧操作栏缺少控件 {control}")
+        for retired in RETIRED_TOOLBAR_IDS:
+            with self.subTest(retired=retired):
+                self.assertNotIn(f'id="{retired}"', self.html,
+                                 f"{retired} 已被「按钮统一到左侧」批次删除，不得回到父壳")
+                self.assertNotIn(retired, self.js, f"父壳不得再驱动 {retired}")
 
     def test_toolbar_reuses_existing_result_and_progress_hosts(self):
         for kept in ("ocResultActions", "ocTaskProgressHost"):
@@ -76,14 +87,22 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- 动态描述表
     def test_stage_table_covers_all_nine_stages(self):
-        block = _js_block(self.js, "STAGE_CHAT_FLOW")
-        self.assertTrue(block, "tech-workbench.js 没有九阶段壳导航表 STAGE_CHAT_FLOW")
+        # 契约更新（第 19 步「九阶段上下文」批次）：壳导航表定名为 STAGES，只描述九阶段的
+        # 编号 / 名称 / 页面，不再携带任何业务动作名（动作由看板快照决定）。
+        block = _js_block(self.js, "const STAGES = [")
+        self.assertTrue(block, "tech-workbench.js 没有九阶段描述表 STAGES")
         for stage in NINE_STAGES:
             self.assertIn(stage, block, f"描述表缺少 stage {stage}（不能只为 2.1–2.3 写死）")
+        for token in ("primary:", "secondary:"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, block, "壳导航表不得再写死业务动作名")
 
     def test_toolbar_controls_are_wired(self):
-        for control in TOOLBAR_IDS:
-            self.assertIn(control, self.js, f"tech-workbench.js 没有处理 {control}")
+        # 主按钮槽位由父壳按快照渲染（tech-workbench.js），任务文件入口在共享会话脚本里接线。
+        self.assertIn("techChatPrimary", self.js, "tech-workbench.js 没有处理主按钮槽位")
+        self.assertIn("ocFilesAction", _read(CHAT_JS), "任务文件入口没有接线")
+        self.assertIn("data-tech-action", self.js,
+                      "其余业务动作必须由看板快照动态渲染成按钮")
 
     # ---------------------------------------------------------------- 复用既有通道
     def test_primary_secondary_ai_go_through_board_bridge(self):
@@ -100,25 +119,38 @@ class TechLeftToolbarParityRedTest(unittest.TestCase):
             self.assertIn(kept, self.js, f"既有底栏按钮 {kept} 被删除")
 
     def test_attach_reuses_the_hidden_file_input_not_a_menu(self):
-        # 契约更新（附件直传 Spec）：附件不再走 ＋ 能力菜单，改为回形针按钮在同一次
-        # 点击里直接触发父壳隐藏文件输入框，仍不新增第二套上传实现。
-        self.assertIn("ocChatFileInput", self.js,
+        # 契约更新（附件直传 Spec + 输入区单行化批次）：附件不走能力菜单，由输入区左侧圆形 ＋
+        # 在同一次点击里直接触发父壳隐藏文件输入框；接线在共享会话脚本 agent-chat.js（父壳
+        # tech-workbench.js 不再重复实现一套上传），仍不新增第二套上传实现。
+        chat = _read(CHAT_JS)
+        self.assertIn("ocChatFileInput", chat,
                       "附件必须直接触发父壳隐藏文件输入框，不新增上传实现")
+        self.assertIn("ocChatAttachBtn", chat, "＋ 按钮必须复用既有点击链路")
         self.assertIn("ocChatAttachBtn", self.html, "附件入口应复用输入区回形针按钮")
         self.assertNotIn("ocCapabilityMenu", self.html,
                          "统一工作台不再使用 ＋ 能力菜单")
 
     def test_transfer_reuses_existing_capability_not_new_route(self):
-        self.assertIn("techChatTransfer", self.js, "缺少转交任务处理")
+        # 契约更新（「去掉通用导航按钮」批次）：常驻「转交任务」按钮已按用户要求删除，
+        # 转交能力仍由既有页面 / Agent 工具承担（2.2 的发送财务、报价侧的交接收件箱），
+        # 不得为它新增后端路由。
+        self.assertNotIn("techChatTransfer", self.html, "常驻转交按钮不得回到父壳")
+        self.assertNotIn("techChatTransfer", self.js, "父壳不得再驱动转交按钮")
         self.assertNotIn("/api/projects/{project_id}/transfer", self.main,
                          "不得为左侧按钮新增转交路由")
-        self.assertIn("ocInput", self.js,
-                      "无既有转交动作时，应把转交意图带进会话输入区")
+        self.assertIn("/api/projects/{project_id}/integration/send-to-finance", self.main,
+                      "既有转交能力（2.2 发送财务）不得被删除")
 
     def test_retry_replays_last_action(self):
-        self.assertIn("techChatRetry", self.js, "缺少失败重试控件处理")
-        self.assertRegex(self.js, r"last[A-Za-z]*Action",
-                         "失败重试必须记住并重跑最近一次动作")
+        # 契约更新（「去掉通用导航按钮」+「业务动作一律可点、点了再给真实原因」两个批次）：
+        # 常驻「失败重试」按钮与最近一次动作缓存已退役；失败恢复由「业务动作始终可点」+
+        # 「真实错误落到标题行提示位」承担，不再靠父壳缓存上一次动作重放。
+        self.assertNotIn("techChatRetry", self.html, "常驻失败重试按钮不得回到父壳")
+        self.assertNotIn("techChatRetry", self.js, "父壳不得再驱动失败重试按钮")
+        self.assertNotRegex(self.js, r"last[A-Za-z]*Action", "最近一次动作缓存应随按钮一起退役")
+        for token in ("setBoardNotice", "task-failed"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.js, f"失败恢复仍须有真实错误出口：{token}")
 
     # ---------------------------------------------------------------- 边界
     def test_parent_shell_does_not_query_iframe_dom(self):

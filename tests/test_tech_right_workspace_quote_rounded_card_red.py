@@ -74,7 +74,9 @@ class TechRightWorkspaceQuoteRoundedCardContract(unittest.TestCase):
         for token in ("techWorkspaceOutlet", "techContextHeader", "techPrev", "techNext"):
             with self.subTest(token=token):
                 self.assertIn(token, HTML)
-        for token in ("mountStageFrame", "TechBoardBridge", "applyStage", "syncActionBar"):
+        # 契约更新（「业务按钮统一到左侧会话操作栏」批次）：底栏代理 syncActionBar() 退役，
+        # 左侧操作栏改由 syncChatActions() 按看板动作快照渲染。
+        for token in ("mountStageFrame", "TechBoardBridge", "applyStage", "syncChatActions"):
             with self.subTest(token=token):
                 self.assertIn(token, JS)
 

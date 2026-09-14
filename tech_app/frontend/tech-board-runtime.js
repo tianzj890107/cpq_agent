@@ -144,6 +144,50 @@
     return out;
   }
 
+  /* 每个稳定状态的「可见主按钮」必须恰好一个：父壳只渲染 role === 'primary' 的那一颗，
+     既不在多个 primary 里挑第一个（那等于父壳替看板决定业务优先级），也不替看板补造
+     主按钮。诊断带上 primary_count / stage / view / 当前可见动作名，异常时直接把快照的
+     毛病说清楚，而不是让人对着两颗蓝按钮猜。只有「一个可见动作都没有」的页面（这一步
+     没有可做的业务动作，左侧操作栏整栏隐藏）不算异常。 */
+  function primaryAudit() {
+    var visibleActions = [];
+    var primaryActions = [];
+    Object.keys(actions).forEach(function (name) {
+      var state = entryState(name);
+      if (state.visible === false) return;
+      visibleActions.push(name);
+      if (state.role === 'primary') primaryActions.push(name);
+    });
+    return {
+      primary_count: primaryActions.length,
+      primary_actions: primaryActions,
+      visible_actions: visibleActions,
+      stage: context.stage == null ? '' : String(context.stage),
+      view: currentView || viewSnapshot().active || '',
+      ok: visibleActions.length === 0 || primaryActions.length === 1,
+    };
+  }
+
+  // 诊断只在动作完整注册后的快照上判定（注册中途不报），返回 null 表示这一帧没有毛病。
+  function primaryDiagnostics() {
+    var audit = primaryAudit();
+    if (audit.visible_actions.length === 0) return null;
+    if (audit.primary_count !== 1) {
+      return {
+        code: 'primary-count',
+        primary_count: audit.primary_count,
+        stage: audit.stage,
+        view: audit.view,
+        visible_actions: audit.visible_actions,
+        primary_actions: audit.primary_actions,
+        message: '看板动作快照的可见主按钮数不是 1：primary_count=' + audit.primary_count
+          + '，stage=' + audit.stage + '，view=' + audit.view
+          + '，可见动作=' + audit.visible_actions.join('、'),
+      };
+    }
+    return null;
+  }
+
   function viewSnapshot() {
     var active = currentView;
     if (!active) {
@@ -167,6 +211,9 @@
       stage: context.stage,
       projectId: context.projectId,
       taskId: context.taskId,
+      // 快照元数据：这一帧的可见主按钮审计（primary_count / stage / view / 可见动作名）。
+      // 只读诊断，不改 actions 结构，也不新增事件；父壳据此决定渲染还是报错。
+      primary: primaryAudit(),
     };
     if (extra && typeof extra === 'object') {
       Object.keys(extra).forEach(function (key) { payload[key] = extra[key]; });
@@ -379,6 +426,8 @@
     version: VERSION,
     context: context,
     registerActions: registerActions,
+    auditPrimary: primaryAudit,
+    primaryDiagnostics: primaryDiagnostics,
     registerViews: registerViews,
     updateActionState: updateActionState,
     setContext: setContext,

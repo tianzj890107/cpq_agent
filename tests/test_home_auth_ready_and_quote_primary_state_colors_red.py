@@ -60,13 +60,20 @@ class HomeAuthReadyAndQuotePrimaryStateColorsRedTest(unittest.TestCase):
         self.assertIn("wfRenderBar()", gate)
 
     def test_board_readonly_permission_notice_uses_primary_palette(self):
+        # 第 33 批：权限提示从结果卡顶部的普通流横条改为固定标题行里的状态胶囊，
+        # 因此配色由 .wf-note-readonly 这一条 CSS 类承载（JS 分支只选类名，不再内联色值）。
         render = function_body(QUOTE, "wfRenderBar", r"\n\s*// 完成当前步骤")
         readonly = re.search(r"if\s*\(WF\.canEdit\).*?\}\s*else\s*\{(.*?)\n\s*\}", render, re.S)
         self.assertIsNotNone(readonly)
         code = readonly.group(1)
-        self.assertRegex(code, r"color-primary-light|rgba\(0\s*,\s*96\s*,\s*230")
-        self.assertRegex(code, r"color-primary-active|#00419F")
-        self.assertRegex(code, r"border(?:Color)?|border:")
+        self.assertIn("wf-note-readonly", code, "只读提示必须用主色胶囊类渲染")
+        rule = re.search(r"\.wf-note-readonly\s*\{([^}]*)\}", QUOTE, re.S)
+        self.assertIsNotNone(rule, "缺少 .wf-note-readonly 规则")
+        css = rule.group(1)
+        self.assertRegex(css, r"color-primary-light|rgba\(0\s*,\s*96\s*,\s*230")
+        self.assertRegex(css, r"color-primary-active|#00419F")
+        self.assertRegex(css, r"border(?:Color)?|border:")
+        self.assertNotRegex(css, r"234\s*,\s*179\s*,\s*8|#a16207|color-warning|f59e0b")
         self.assertNotRegex(code, r"234\s*,\s*179\s*,\s*8|#a16207|color-warning|f59e0b")
 
     def test_role_protection_and_transfer_action_are_preserved(self):

@@ -55,8 +55,12 @@ class TechPrimaryQuickActionsAndBulkAnalysisContract(unittest.TestCase):
         self.assertRegex(DRAWING_JS, r'data\.partAnalysis\s*=\s*mode')
 
     def test_cost_bulk_action_uses_one_click_all_copy_and_existing_pipeline(self):
+        # 契约更新（「右侧看板业务按钮统一到左侧会话操作栏」批次）：父壳不再写死按钮文案，
+        # 文案来自看板注册的动作 label（cost-review.js），左侧只按动作快照渲染。
         self.assertIn("一键测算全部成本", COST_HTML)
-        self.assertIn("一键测算全部成本", WB_JS)
+        self.assertIn("一键测算全部成本", COST_JS)
+        self.assertIn("data-tech-action", WB_JS,
+                      "批量入口必须由看板快照动态渲染到左侧操作栏")
         self.assertRegex(COST_JS, r'runCostReview\s*:\s*\{[\s\S]{0,500}deferred\s*:\s*true')
         self.assertRegex(COST_JS, r'async\s+function\s+crRunAll\s*\(')
         self.assertRegex(COST_JS, r'crRunAll[\s\S]{0,900}crRunParts\(false\)[\s\S]{0,900}crRunAssembly\(')

@@ -112,15 +112,22 @@ class QuoteTechAgentShellParityContract(unittest.TestCase):
         self.assertTrue(TreeParser.has_ancestor(footer, class_name="tech-workspace-pane"))
         # techPanelToggle（“子页面板”）已被 docs/specs/tech-full-width-board-and-single-agent-pane.md
         # 要求删除：统一工作台只保留父壳 #techChatPane 一个会话宿主，嵌入页不再提供展开入口。
-        for node_id in ("techPrev", "techNext", "techSecondary", "techPrimary"):
+        # 契约更新（「业务按钮统一到左侧会话操作栏」批次）：底栏的 techPrimary / techSecondary
+        # 业务按钮已退役（它们与左侧唯一主按钮槽位重复），底栏只留上下步导航。
+        for node_id in ("techPrev", "techNext"):
             self.assertTrue(TreeParser.has_ancestor(self.tree.by_id(node_id), class_name="tech-workbench-bottom"))
+        for retired in ("techPrimary", "techSecondary"):
+            with self.subTest(retired=retired):
+                self.assertIsNone(self.tree.by_id(retired),
+                                  f"{retired} 底栏业务按钮应已退役，不得与左侧重复")
 
     def test_footer_groups_put_only_next_on_the_right(self):
         left = self.tree.by_id("techActionLeft")
         right = self.tree.by_id("techActionRight")
         self.assertIsNotNone(left)
         self.assertIsNotNone(right)
-        for node_id in ("techPrev", "techNowLabel", "techSecondary", "techPrimary"):
+        # 契约更新：左组只剩「上一步 + 当前步骤」；主 / 次业务按钮已移到左侧会话操作栏。
+        for node_id in ("techPrev", "techNowLabel"):
             self.assertTrue(TreeParser.has_ancestor(self.tree.by_id(node_id), node_id="techActionLeft"))
         self.assertTrue(TreeParser.has_ancestor(self.tree.by_id("techNext"), node_id="techActionRight"))
         right_buttons = [

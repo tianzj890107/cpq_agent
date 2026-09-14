@@ -199,6 +199,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 给输入框上方那条绝对定位的会话说明留出视觉余量，避免压到最后一条消息上。 */
+  padding-bottom: 22px;
 }
 #techChatPane .oc-tinner { max-width: none; }
 /* ---------- 左侧统一操作栏（第 16 步）：按 stage 动态显隐 ---------- */
@@ -283,6 +285,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   flex: 0 0 auto;
   padding: 10px 16px 0;
   border-top: .5px solid var(--twb-border);
+}
+/* 会话绑定说明：原文保留，但不占布局高度 —— 绝对定位在输入框正上方，输入框底边坐标
+   与「贴底」实现保持一致（不得用 margin-bottom 之类的普通流留白把 composer 顶高）。
+   .oc-cinner 已是 position: relative（agent-chat.css），这里只覆盖说明行自身。 */
+#techChatPane .oc-disc {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin: 0;
+  padding: 0 2px;
+  color: var(--twb-muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 /* ---------- 右侧：技术工艺工作区（项目/流程/模型 + 进度 + 步骤出口） ---------- */

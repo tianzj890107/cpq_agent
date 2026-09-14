@@ -68,7 +68,7 @@ rrStart();
   }
   window.TechBoardRuntime.registerActions({
     approveProcessReport: {
-      label: '审核通过并发布',
+      label: '审核通过并进入下一步',
       role: 'primary',
       order: 10,
       run: async () => {

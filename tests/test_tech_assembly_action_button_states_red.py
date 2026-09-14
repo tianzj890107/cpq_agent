@@ -43,12 +43,15 @@ class TechAssemblyActionButtonStatesRedTest(unittest.TestCase):
         self.assertNotRegex(self.workbench_js, r'(?:analysis|analyzed)\s*=\s*!?\s*(?:el|primary|finance)[^.\n]*\.disabled')
 
     def test_process_action_bar_switches_explicit_visual_roles(self):
-        sync = re.search(r'function syncActionBar\([^)]*\)\s*\{([\s\S]*?)\n\s*\}\n\n\s*/\*', self.workbench_js)
-        self.assertIsNotNone(sync)
+        # 契约更新（「业务按钮统一到左侧会话操作栏」批次）：底栏代理 syncActionBar() 已退役，
+        # 2.2 的视觉角色改由看板快照的 role 决定 —— 父壳把 role === 'primary' 的那一个放进
+        # 唯一主按钮槽位，其余按 order 描边渲染，父壳不再认识 process 阶段的动作名。
+        sync = re.search(r'function syncChatActions\([^)]*\)\s*\{([\s\S]*?)\n  \}', self.workbench_js)
+        self.assertIsNotNone(sync, "缺少 syncChatActions()")
         body = sync.group(1)
-        self.assertIn("state.stage", body)
-        self.assertIn("process", body)
-        self.assertRegex(body, r'(?:dataset|classList)[\s\S]{0,500}(?:is-filled|filled|is-outline|outline)')
+        self.assertRegex(body, r"primaryActionName\(", "主按钮必须由看板 role 决定")
+        self.assertRegex(body, r"variant:\s*'primary'", "唯一主按钮仍须显式声明 primary 外观")
+        self.assertIn("syncChatActionList(", body, "其余动作仍须按角色描边渲染")
 
     def test_workbench_defines_filled_and_outline_roles_with_hover_guards(self):
         self.assertRegex(self.workbench_css, r'\.tech-wb-btn\.(?:is-filled|filled)\s*\{[^}]*gradient-primary[^}]*color:\s*#fff')
@@ -56,14 +59,15 @@ class TechAssemblyActionButtonStatesRedTest(unittest.TestCase):
         self.assertRegex(self.workbench_css, r'\.tech-wb-btn\.(?:is-outline|outline):hover:not\(:disabled\)[^{]*\{[^}]*gradient-primary-hover[^}]*color:\s*#fff')
 
     def test_existing_process_targets_and_finance_gate_remain(self):
-        # 契约更新（本轮 0-3「看板消息协议 + 业务动作注册表」）：父壳不再持有子页面
-        # 选择器，process 阶段的同一条业务链路改为语义化动作名接线 ——
-        # primary=sendIntegrationToFinance（发财务）、secondary=runIntegration（开始整合）。
-        # 门槛没有降低：仍然是这两个既有业务动作，财务闸门也仍由组装页自己判定。
-        self.assertRegex(
-            self.workbench_js,
-            r"'process'\s*:\s*\{[^}]*primary:\s*'sendIntegrationToFinance'[^}]*secondary:\s*'runIntegration'",
-        )
+        # 契约更新（「业务按钮统一到左侧 + 按钮统一到左侧会话操作栏」批次）：父壳不再持有
+        # process 阶段的动作表，同一条业务链路改由组装页自己注册 ——
+        # sendIntegrationToFinance（确认工艺并发送财务）与 runIntegration /
+        # generateIntegrationProcess（整合图纸 / 生成组装工艺）。
+        # 门槛没有降低：财务闸门仍由组装页自己判定。
+        self.assertIn("sendIntegrationToFinance:", self.assembly_js)
+        self.assertIn("aiFinanceBlocker()", self.assembly_js)
+        self.assertNotIn("sendIntegrationToFinance", self.workbench_js,
+                         "父壳不得再写死 2.2 的业务动作名")
         self.assertIn("state.params_confirmed && state.process_confirmed", self.assembly_js)
 
 

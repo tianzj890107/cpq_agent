@@ -68,14 +68,6 @@
         </header>
         <div class="oc-thread" id="ocThread">
           <div class="oc-tinner" id="ocTinner">
-            <div class="oc-amsg">
-              <div class="oc-abody">
-                <div class="oc-intent-card">
-                  <h4>技术工艺评估助手</h4>
-                  <div class="oc-intent-meta">左侧会话在整个评估流程中持续存在：可以描述零件与工艺要求、追问图纸解析结果、发起解析，或直接说「开始解析」。</div>
-                </div>
-              </div>
-            </div>
             <div class="oc-empty" id="ocEmpty">
               <div style="font-size:30px;">✦</div>
               <div style="font-size:14px;">工艺评估助手</div>
@@ -133,6 +125,10 @@
                         aria-label="向工艺评估助手发送消息"></textarea>
               <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
             </div>
+            <!-- 会话绑定说明：原文保留，但不再作为输入框下方的普通流元素占高度 ——
+                 #techChatPane .oc-disc 绝对定位在输入框正上方（见 tech-workbench.css），
+                 输入框底边坐标与「贴底」实现完全一致。 -->
+            <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
           </div>
         </div>
       </section>
