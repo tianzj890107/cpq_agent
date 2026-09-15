@@ -1411,3 +1411,27 @@
 - 验收：红测 `tests.test_tech_task_interrupted_state_red` 24/24（改前 18 处失败）；
   相关回归 181/181 全绿；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
   → 1233 项 / 0 失败 / 7 跳过；三个前端脚本 `node --check` 通过，`git diff --check` 干净。
+
+## 80 提交、双远端推送与 34 部署记录（9-15）
+
+- 提交：`932e9e7`（12 个文件，+621 / -41）。只暂存本批文件（周 changelog、任务终态 Spec、红测、
+  `tasks.py`、`agent-chat.js/css`、2.2/2.3 阶段页与四个页面的静态资源版本号），未使用 `git add -A`。
+- 推送：`python3 scripts/push_remotes.py --check` 预检（两远端均为 `3ce3983`、HEAD `932e9e7`）后双推，
+  GitLab 与 GitHub 的 `20260909` 回读均为 `932e9e7`。
+- 部署（172.16.10.34）：从 GitLab `fetch` + `merge --ff-only` 到 `932e9e7`（12 files changed）。
+  部署前记录旧 HEAD `3ce3983`（回滚点）；服务器已跟踪文件干净；`tech_app/tech_data/**/tasks.json`
+  扫描确认当时**没有** queued/running 任务，重启不会打断在途工作。
+- 重启范围（重要）：8010 的 `cpq_suite_server.py` 会以子进程拉起 8012 的 `tech_app_launch.py`
+  （`backend.main:app`）。本批改的是 tech_app 后端，只重启 8010 不够 —— 第一次 SIGTERM 只结束了
+  套件进程，8012 的旧代码子进程被孤儿化并占住端口，新套件绑定 8012 失败（日志
+  `[Errno 98] address already in use`）。随后按正确顺序整体重启：先停 8012、再停 8010，由套件
+  重新拉起 8012。现 `8010=807220`、`8012=807272`（后者 PPID=807220，拓扑与部署前一致，无孤儿）。
+- 线上校验（127.0.0.1:8010）：`/api/health` `status=ok`（模型 / CAD / auth / SSO 配置与部署前一致）、
+  `8012/api/health` 200、`/`、`/home.html`、`/tech-workbench.html`、`/assembly-integration.html`、
+  `/cost-review.html` 全部 200；线上 `agent-chat.css?v=20260915-int1` 含 `is-interrupted` 规则，
+  `tech-workbench.html` 引用 `agent-chat.js?v=20260915-int1`、`assembly-integration.js?v=ai17`、
+  `cost-review.js?v=cr9`；重启日志无 Traceback / ERROR。
+- 恢复逻辑实测（临时 `DATA_DIR`，不碰线上数据）：写入一条 running 任务后调用
+  `recover_interrupted_tasks()` → 任务落 `interrupted` + `progress=服务重启中断` + error/finished_at 保留，
+  会话时间线出现 1 张 `key=task:<id>` 的中断卡；重复调用返回 0 且不重复写卡（幂等）。
+- 线上本次启动没有需要恢复的在途任务（无中断卡写入），业务数据未变动。
