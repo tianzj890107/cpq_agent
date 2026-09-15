@@ -941,3 +941,18 @@
 - 边界：未新增按钮、未改文案、未放宽 `primaryAudit` 的唯一主按钮约束；「3.2 / 3.3 某些状态有可见动作但没有任何
   主按钮」仍按 Spec 留给下一步门禁批次（本批只用 `primaryDiagnostics()` 给出确定性诊断）；
   **未提交、未推送、未部署**。
+
+## 67–70 提交与双远端推送记录（9-15）
+
+- 提交：`4f42e6a`「看板静态 role 快照、2.2 缺口豁免、会话时间线持久化、会话去红字卡片」，
+  29 个文件（+3415 / −113），含 ## 67 / ## 68 / ## 69 / ## 70 四批的 Spec、红测、实现、契约更新与
+  changelog；提交前 `git diff --cached --check` 无输出、全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1113 项 / 0 失败 / 7 跳过。
+- 推送：`python3 scripts/push_remotes.py --check --only origin` 预检通过（origin 当时为 `d888213`，是
+  HEAD 的祖先、快进关系成立）→ `python3 scripts/push_remotes.py --only origin` 推送并回读成功，
+  `origin/20260909` = `4f42e6a`（GitHub 已推）。
+- GitLab 未推：`gitlab.boulderaitech.com` 仍解析不到（`ssh: Could not resolve hostname
+  gitlab.boulderaitech.com: nodename nor servname provided, or not known`），与 ## 66 记录的同一外部阻塞一致，
+  非仓库权限或历史问题。恢复内网可达后以同一 HEAD 补推：
+  `python3 scripts/push_remotes.py --only gitlab`（禁止 force push / 补偿提交 / 改写历史）。
+- 部署：本批**未部署**（用户只要求提交推送）；`0909` 到 172.16.10.34 的部署仍按用户单独指示执行。
