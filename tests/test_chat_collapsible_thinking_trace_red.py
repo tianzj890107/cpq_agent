@@ -187,15 +187,16 @@ class ChatCollapsibleThinkingTraceRedTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, body, f"历史回放既有分支 {token} 被改动")
 
-    def test_tech_thinking_css_is_white_with_border(self):
+    def test_tech_thinking_css_is_a_borderless_block(self):
+        # 契约更新（助手卡片统一批次）：一次助手回复只保留 `.oc-amsg` 那一层边框，思考过程
+        # 是卡内区块，不再自带白底 + 边框（原断言要求「白底 + 1px 边框」已被本批取代）；
+        # 折叠能力本身不变 —— 仍是原生 details，仍通过 .oc-thinking summary 展开。
         blocks = re.findall(r"\.oc-thinking\s*\{[^}]*\}", self.tech_css)
         self.assertTrue(blocks, "缺少 .oc-thinking 样式")
         for block in blocks:
             with self.subTest(block=block[:50]):
-                self.assertRegex(block, WHITE, ".oc-thinking 必须是白底")
-                self.assertRegex(block, BORDER, ".oc-thinking 必须有 1px 边框")
-                for token in GRAY:
-                    self.assertNotIn(token, block, f".oc-thinking 不得用灰底 {token}")
+                self.assertNotRegex(block, r"border\s*:", ".oc-thinking 不得再自成一张带框卡")
+                self.assertNotRegex(block, r"background\s*:", ".oc-thinking 不得再自带底色")
         self.assertIn(".oc-thinking-body", self.tech_css, "缺少 .oc-thinking-body 样式")
         self.assertIn(".oc-thinking summary", self.tech_css, "折叠行需要可点击样式")
 
@@ -218,15 +219,15 @@ class ChatCollapsibleThinkingTraceRedTest(unittest.TestCase):
         self.assertRegex(body, r"if\s*\(\s*![\w.]*\s*\)\s*return",
                          "文本为空时必须直接 return，不建空块")
 
-    def test_quote_thinking_css_is_white_with_border(self):
+    def test_quote_thinking_css_is_a_borderless_block(self):
+        # 契约更新（助手卡片统一批次）：报价助手卡同样只保留 `.message-ai` 一层边框，
+        # 思考块并进那张卡，不再自带白底 + 边框；折叠能力本身不变。
         blocks = re.findall(r"\.thinking-block\s*\{[^}]*\}", self.quote)
         self.assertTrue(blocks, "缺少 .thinking-block 样式")
         for block in blocks:
             with self.subTest(block=block[:50]):
-                self.assertRegex(block, WHITE, ".thinking-block 必须是白底")
-                self.assertRegex(block, BORDER, ".thinking-block 必须有 1px 边框")
-                for token in GRAY:
-                    self.assertNotIn(token, block, f".thinking-block 不得用灰底 {token}")
+                self.assertNotRegex(block, r"border\s*:", ".thinking-block 不得再自成一张带框卡")
+                self.assertNotRegex(block, r"background\s*:", ".thinking-block 不得再自带底色")
         self.assertIn(".thinking-body", self.quote, "缺少 .thinking-body 样式")
 
     def test_quote_finish_bubble_splits_reasoning_sections(self):

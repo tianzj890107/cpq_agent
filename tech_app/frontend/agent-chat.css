@@ -153,25 +153,21 @@
 .oc-ibtn[aria-expanded="true"] { background: var(--oc-bg-3); color: var(--oc-accent); }
 
 .oc-thread { flex: 1; padding: 18px 16px; overflow-y: auto; }
-.oc-tinner { display: flex; width: 100%; max-width: 640px; margin: 0 auto; flex-direction: column; gap: 16px; }
+.oc-tinner { display: flex; width: 100%; max-width: 640px; margin: 0 auto; flex-direction: column; gap: 14px; }
 
 .oc-ubub {
-  max-width: 82%; align-self: flex-end; padding: 10px 14px; border-radius: 16px;
+  max-width: 92%; align-self: flex-end; padding: 11px 14px; border-radius: 14px;
   /* 用户消息 = 系统主色实心气泡 + 白字（与报价 .message-user 同一语义）；
      右下角小圆角是"用户气泡尾部"，其余三角保持常规圆角。 */
   border-bottom-right-radius: 4px;
   background: var(--oc-accent); color: white; font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
+/* 助手回复里唯一带边框 + 白底的容器（与报价 .message-ai 逐项同值）。
+   身份靠下面那行蓝色 .oc-alabel，不再有头像。 */
 .oc-amsg {
   display: flex; gap: 11px; background: #ffffff;
-  border: 1px solid var(--oc-border-2); border-radius: 14px; padding: 11px 14px;
-}
-.oc-aav {
-  display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center;
-  justify-content: center; border-radius: 50%;
-  background: linear-gradient(135deg, #0060E6, #0050C4);
-  box-shadow: 0 2px 7px rgba(0,96,230, .3); color: #fff; font-size: 14px;
+  border: 1px solid var(--oc-border-3); border-radius: 14px; padding: 11px 14px;
 }
 .oc-abody { min-width: 0; flex: 1; }
 .oc-alabel {
@@ -189,11 +185,11 @@
 .oc-alabel-state.is-running { background: #e0edff; color: #0050C4; }
 .oc-alabel-state.is-succeeded { background: #dcfce7; color: #15803d; }
 .oc-alabel-state.is-failed { background: #fee2e2; color: #b91c1c; }
-/* 思考过程折叠块：唯一与工具「详情」并列的默认折叠项（白底 + 边框）。 */
-.oc-thinking {
-  margin-bottom: 8px; padding: 9px 12px; background: #ffffff;
-  border: 1px solid var(--oc-border-2); border-radius: 12px;
-}
+/* 阶段页过程卡沿用同一行身份时，把这一步的中文名跟在身份后面。 */
+.oc-alabel-sub { color: var(--oc-text-3); font-weight: 400; }
+/* 思考过程折叠块：唯一与工具「详情」并列的默认折叠项。它落在助手卡正文里，
+   自己不再带框 —— 一次回复只保留 .oc-amsg 那一层边框。 */
+.oc-thinking { margin-bottom: 8px; padding: 0; }
 .oc-thinking summary { cursor: pointer; color: var(--oc-text-3); font-size: 11px; }
 .oc-thinking-body {
   margin-top: 7px; color: var(--oc-text-2); font-size: 12px;
@@ -208,7 +204,7 @@
 }
 .oc-atxt.rendered code { font-family: "SFMono-Regular", Consolas, monospace; }
 .oc-atxt.rendered :not(pre) > code {
-  padding: 1px 5px; border-radius: 5px; background: var(--oc-bg-3); font-size: 12.5px;
+  padding: 1px 5px; border-radius: 4px; background: var(--oc-bg-3); font-size: 12.5px;
 }
 
 /* 工具卡详情：业务主行在上一行，原始工具名 / 入参 / 结果收在默认折叠的 <details>。 */
@@ -230,11 +226,11 @@
 }
 
 /* 工具调用卡片 */
+/* 工具轨迹：助手卡里的无边框区块（.oc-art-detail 的 border-top 是分隔线，不是卡框）。 */
 .oc-art {
   display: flex; width: 100%; max-width: 460px; margin-top: 10px; align-items: center;
   flex-wrap: wrap;   /* 详情块换行到下一行，主行密度不变 */
-  gap: 11px; padding: 11px 12px; border: 1px solid var(--oc-border-2);
-  border-radius: 13px; background: #ffffff; text-align: left;
+  gap: 11px; padding: 0; text-align: left;
 }
 .oc-atile {
   display: flex; width: 36px; height: 36px; flex-shrink: 0; align-items: center;
@@ -255,11 +251,8 @@
 .oc-spin { display: inline-block; animation: oc-spin 1s linear infinite; }
 @keyframes oc-spin { to { transform: rotate(360deg); } }
 
-/* 设计意图卡：对话里的第一条内容 */
-.oc-intent-card {
-  padding: 13px 15px; border: 1px solid var(--oc-border-2); border-radius: 13px;
-  background: #ffffff;
-}
+/* 设计意图卡：对话里的第一条内容。内容直接落在 .oc-abody 里，不再自成一张卡。 */
+.oc-intent-card { padding: 0; }
 .oc-intent-card h4 {
   margin: 0 0 7px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
   letter-spacing: .04em;
@@ -325,19 +318,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-file-note { color: var(--oc-text-3); font-size: 11px; line-height: 1.6; word-break: break-word; }
 .oc-file-empty { padding: 18px 0; color: var(--oc-text-3); font-size: 12px; text-align: center; }
 
-/* 处理过程时间线 */
-.oc-process-card {
-  padding: 11px 13px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
-}
-.oc-process-head { display: flex; align-items: center; gap: 8px; }
-.oc-process-title { color: var(--oc-text-1); font-size: 13px; font-weight: 600; }
-.oc-process-state {
-  margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--oc-bg-3);
-  color: var(--oc-text-2); font-size: 11px;
-}
-.oc-process-state.ok { background: #dcfce7; color: #15803d; }
-.oc-process-state.err { background: #fee2e2; color: #b91c1c; }
+/* 处理过程时间线：阶段页的过程卡与 Agent 回复是同一张卡（.oc-amsg + 身份行 +
+   同一个状态 chip），容器本身不再带第二层框，也不再有第二套状态类名。 */
 .oc-process-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
 .oc-process-step {
   display: flex; align-items: flex-start; gap: 7px; color: var(--oc-text-2);
@@ -353,11 +335,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-process-step.miss { color: #b45309; }
 .oc-process-step.err { color: #b91c1c; }
 
-/* 零部件库检索结果 */
-.oc-match-card {
-  padding: 12px 14px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
-}
+/* 零部件库检索结果：与其它卡内区块一样，不再自带边框与底色。 */
+.oc-match-card { padding: 0; }
 .oc-match-card h4 {
   margin: 0 0 9px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
   letter-spacing: .04em;
@@ -542,8 +521,9 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 /* ---------- 统一父壳左侧会话：任务执行进度（按 taskId 一张卡） ---------- */
 .oc-task-progress { display: flex; flex-direction: column; gap: 10px; }
 .oc-task-progress:empty { display: none; }
+/* 任务卡是同级卡（不在 .oc-amsg 里），保留自己的框，但与助手卡完全同款。 */
 .oc-task-card {
-  padding: 11px 13px; border: 1px solid var(--oc-border-2); border-radius: 12px;
+  padding: 11px 14px; border: 1px solid var(--oc-border-3); border-radius: 14px;
   background: #ffffff;
 }
 .oc-task-head { display: flex; align-items: center; gap: 8px; }

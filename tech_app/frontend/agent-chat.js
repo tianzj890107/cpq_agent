@@ -498,13 +498,21 @@
 
   function clearEmpty() { $("ocEmpty")?.remove(); }
   function addUser(text) { clearEmpty(); tinner.append(el("div", "oc-ubub", text)); scrollDown(); }
+  // 身份行：技术侧不再有头像，助手 / 系统 / 检索结果卡统一靠这行蓝字表明身份（与报价同款）。
+  function identityLabel(text) {
+    const label = el("div", "oc-alabel");
+    label.append(el("span", null, text || "技术工艺智能体"));
+    return label;
+  }
   function pushSystem(text) {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    const avatar = el("div", "oc-aav", "✦");
     const body = el("div", "oc-abody");
-    body.append(el("div", "oc-atxt", text));
-    wrap.append(avatar, body);
+    // 身份行与技术回复同款，只是不带状态 chip：系统提示也是同一条会话流里的普通输出。
+    const label = el("div", "oc-alabel");
+    label.append(el("span", null, "技术工艺智能体"));
+    body.append(label, el("div", "oc-atxt", text));
+    wrap.append(body);
     tinner.append(wrap);
     scrollDown();
     persistSessionEvent({ kind: "session-note", source: "shell",
@@ -533,7 +541,6 @@
   function addAssistant() {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    const avatar = el("div", "oc-aav", "✦");
     const body = el("div", "oc-abody");
     // 标题行：左侧蓝色身份行（与报价「报价单智能体」同款），右侧运行状态 chip。
     // 一轮回复只有这一张 chip，状态就地翻转，不新增第二行 / 第二张卡。
@@ -543,7 +550,7 @@
     label.append(state);
     const text = el("div", "oc-atxt");
     body.append(label, text);
-    wrap.append(avatar, body);
+    wrap.append(body);
     tinner.append(wrap);
     scrollDown();
     return { body, text, cards: {}, full: "", label, state, thinking: null };
@@ -991,7 +998,6 @@
     lastRequirementSummaryKey = signature;
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "✦"));
     const body = el("div", "oc-abody");
     const card = el("div", "oc-req-summary");
     card.append(el("h4", null, "需求解析摘要"));
@@ -1094,7 +1100,6 @@
     lastRequirementFlowKey = signature;
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "✦"));
     const body = el("div", "oc-abody");
     const card = el("div", "oc-req-summary");
     if (summary.kind === "confirm-gate") {
@@ -1140,7 +1145,6 @@
   function noteInThread(text, extras) {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "✦"));
     const body = el("div", "oc-abody");
     body.append(el("div", "oc-atxt", text));
     if (typeof extras === "function") extras(body);
@@ -1314,11 +1318,9 @@
     head.append(state);
     const steps = el("div", "oc-task-steps");
     box.append(head, steps);
-    const wrapper = el("div", "oc-amsg");
-    wrapper.append(el("div", "oc-aav", "✦"));
-    const body = el("div", "oc-abody");
-    body.append(box);
-    wrapper.append(body);
+    // 任务卡是与助手卡同级的一张卡：直接进会话流，不再套一层 .oc-amsg ——
+    // 套上去就是本批要消灭的卡中卡。两者边框 / 圆角 / 内边距 / 白底完全同款。
+    const wrapper = box;
     host.append(wrapper);
     scrollDown();
     // cursor：已渲染到 progress_log 的第几条。用下标而不是文本去重 ——
@@ -1469,8 +1471,8 @@
     document.querySelector(".oc-match-card")?.closest(".oc-amsg")?.remove();
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "✦"));
     const body = el("div", "oc-abody");
+    body.append(identityLabel());
     const card = el("div", "oc-match-card");
     const summary = report.summary || {};
     card.append(el("h4", null, "零部件库检索结果"));
@@ -2079,7 +2081,6 @@
     const label = String((ui && ui.label) || (ui && ui.note) || "该操作需要你确认");
     const target = String((ui && ui.target) || "");
     const wrap = el("div", "oc-amsg");
-    wrap.append(el("div", "oc-aav", "?"));
     const body = el("div", "oc-abody");
     const card = el("div", "oc-confirm-card");
     card.append(el("div", "oc-confirm-text", label));

@@ -10,7 +10,7 @@
     （此前的问题是「报错持续在最下面一直看到」，既占位又不是一套样式）。
 
 新契约见 docs/specs/tech-chat-drop-red-error-cards.md：
-  `pushSystem` 改用与普通助手输出同款的结构（`oc-amsg` + `oc-aav` ✦ + `oc-abody` + `oc-atxt`）；
+  `pushSystem` 改用与普通助手输出同款的结构（`oc-amsg` + `oc-alabel` 身份行 + `oc-abody` + `oc-atxt`）；
   流式失败写进同一条回复的正文并保留失败状态位；`.oc-err-line` 从 JS 与 CSS 一起删掉；
   **但失败文本必须仍然可见**，状态 chip（`⚠ 失败`）、工具结果错误边框（`.oc-tool-result.err`）、
   看板侧白色气泡里的 `⚠` 文本都要保留。
@@ -125,14 +125,16 @@ class SystemNoticesUseOrdinaryOutput(unittest.TestCase):
         self.body = body
 
     def test_push_system_uses_the_ordinary_output_structure(self):
-        for token in ("oc-amsg", "oc-aav", "oc-abody", "oc-atxt"):
+        for token in ("oc-amsg", "oc-alabel", "oc-abody", "oc-atxt"):
             with self.subTest(token=token):
                 self.assertIn(token, self.body,
                               "pushSystem 必须与普通助手输出同款渲染（缺少 %s）" % token)
 
-    def test_push_system_uses_the_assistant_identity_avatar(self):
-        self.assertIn("✦", self.body,
-                      "系统提示要和普通输出一样，用助手同一身份（✦），不再是「!」头像")
+    def test_push_system_uses_the_assistant_identity_row(self):
+        # 契约更新（助手卡片统一批次）：技术侧去掉头像，普通输出与系统提示统一靠
+        # 「技术工艺智能体」那行蓝色身份行表明身份，不再靠 ✦ / ¥ 头像。
+        self.assertIn("技术工艺智能体", self.body, "系统提示要和普通输出一样带身份行")
+        self.assertNotIn("oc-aav", self.body, "技术侧已去掉头像，pushSystem 不得再建头像节点")
         self.assertNotIn('"!"', self.body, "pushSystem 仍在用「!」头像")
 
     def test_push_system_no_longer_prepends_the_warning_glyph(self):

@@ -122,12 +122,22 @@ class ChatFusedAssistantCardStyleRedTest(unittest.TestCase):
         self.assertIn("border-radius", rule(self.tech_css, ".oc-amsg"), "白卡需要圆角")
         self.assertIn("padding", rule(self.tech_css, ".oc-amsg"), "白卡需要内边距")
 
-    def test_tech_inner_cards_are_white_with_border(self):
-        for selector in (".oc-art", ".oc-task-card", ".oc-intent-card"):
-            with self.subTest(selector=selector):
-                self._assert_card(self.tech_css, selector, "agent-chat.css")
+    def test_tech_sibling_task_card_is_the_single_box(self):
+        # 契约更新（助手卡片统一批次）：一次助手回复只保留一层边框 —— `.oc-amsg` 是那一层，
+        # 它里面的区块不再各自带框。`.oc-task-card` 是同级卡（不在 `.oc-amsg` 内），
+        # 仍保留自己的框，但要与 `.oc-amsg` 同款，让两者看起来是同一套卡。
+        self._assert_card(self.tech_css, ".oc-task-card", "agent-chat.css")
         task_body = rule(self.tech_css, ".oc-task-steps")
         self.assertTrue(task_body, "步骤区 .oc-task-steps 必须保留（默认展开）")
+
+    def test_tech_inner_blocks_no_longer_carry_a_second_box(self):
+        # 卡中卡是本次要消灭的对象：`.oc-amsg` 里面只允许有无边框区块。
+        for selector in (".oc-art", ".oc-intent-card"):
+            with self.subTest(selector=selector):
+                body = rule(self.tech_css, selector)
+                self.assertTrue(body, f"找不到 {selector} 规则")
+                self.assertNotRegex(body, r"border\s*:", f"{selector} 不得再自带边框")
+                self.assertNotRegex(body, r"background\s*:", f"{selector} 不得再自带底色")
 
     # ------------------------------------------------------------ 技术：蓝色身份行
     def test_tech_assistant_has_blue_identity_row(self):

@@ -80,7 +80,7 @@ function aiThreadAppend(html) {
 }
 
 function aiSay(text) {
-  aiThreadAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">✦</div>
+  aiThreadAppend(`<div class="oc-amsg">
     <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
   aiTimelineNote(text);
 }
@@ -123,11 +123,12 @@ function aiReplayTimeline() {
 
 /** 处理过程卡：任务进度逐条落在这里，和 2.1 的 Agent 对话框一个样子。 */
 function aiProcessCard(title) {
-  const card = aiThreadAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">✦</div>
-    <div class="oc-abody"><div class="oc-process-card">
-      <div class="oc-process-head"><span class="oc-process-title">${esc(title)}</span>
-        <span class="oc-process-state">进行中</span></div>
-      <div class="oc-process-steps"></div></div></div></div>`);
+  // 与 2.1 的 Agent 回复是同一张卡、同一个状态 chip：不再有第二套过程卡样式。
+  const card = aiThreadAppend(`<div class="oc-amsg">
+    <div class="oc-abody"><div class="oc-alabel"><span>技术工艺智能体</span>`
+      + `<span class="oc-alabel-sub">${esc(title)}</span>`
+      + `<span class="oc-alabel-state is-running">◌ 运行中</span></div>
+      <div class="oc-process-steps"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
   const seen = new Set();
   return {
@@ -143,9 +144,9 @@ function aiProcessCard(title) {
       $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
     },
     done(ok, message) {
-      const state = card.querySelector('.oc-process-state');
-      state.className = `oc-process-state ${ok ? 'ok' : 'err'}`;
-      state.textContent = ok ? '已完成' : '失败';
+      const state = card.querySelector('.oc-alabel-state');
+      state.className = `oc-alabel-state ${ok ? 'is-succeeded' : 'is-failed'}`;
+      state.textContent = ok ? '✓ 已完成' : '⚠ 失败';
       if (message) this.log([`  ${message}`]);
     },
   };
@@ -1696,7 +1697,7 @@ let aiChatBusy = false;
 async function aiAgentTurn(message) {
   aiChatBusy = true;
   $ai('aiSend').disabled = true;
-  const bubble = aiThreadAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">✦</div>
+  const bubble = aiThreadAppend(`<div class="oc-amsg">
     <div class="oc-abody"><div class="oc-atxt oc-streaming"></div></div></div>`);
   const body = bubble.querySelector('.oc-atxt');
   let text = '';

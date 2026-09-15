@@ -75,7 +75,7 @@ function crAppend(html) {
 }
 
 function crSay(text) {
-  crAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">¥</div>
+  crAppend(`<div class="oc-amsg">
     <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
   crPersistNote(text);
 }
@@ -112,11 +112,12 @@ function crReplayTimeline() {
 }
 
 function crCard(title) {
-  const card = crAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">¥</div>
-    <div class="oc-abody"><div class="oc-process-card">
-      <div class="oc-process-head"><span class="oc-process-title">${esc(title)}</span>
-        <span class="oc-process-state">进行中</span></div>
-      <div class="oc-process-steps"></div></div></div></div>`);
+  // 与 2.1 的 Agent 回复是同一张卡、同一个状态 chip：不再有第二套过程卡样式。
+  const card = crAppend(`<div class="oc-amsg">
+    <div class="oc-abody"><div class="oc-alabel"><span>成本测算</span>`
+      + `<span class="oc-alabel-sub">${esc(title)}</span>`
+      + `<span class="oc-alabel-state is-running">◌ 运行中</span></div>
+      <div class="oc-process-steps"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
   const seen = new Set();
   return {
@@ -132,9 +133,9 @@ function crCard(title) {
       $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
     },
     done(ok, message) {
-      const state = card.querySelector('.oc-process-state');
-      state.className = `oc-process-state ${ok ? 'ok' : 'err'}`;
-      state.textContent = ok ? '已完成' : '失败';
+      const state = card.querySelector('.oc-alabel-state');
+      state.className = `oc-alabel-state ${ok ? 'is-succeeded' : 'is-failed'}`;
+      state.textContent = ok ? '✓ 已完成' : '⚠ 失败';
       if (message) this.log([`  ${message}`]);
     },
   };

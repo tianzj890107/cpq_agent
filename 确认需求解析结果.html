@@ -153,10 +153,8 @@
     .message-label-state.is-succeeded { background: #dcfce7; color: #15803d; }
     .message-label-state.is-failed { background: #fee2e2; color: #b91c1c; }
     /* 思考过程折叠块：唯一默认折叠项之一（另一个是工具轨迹），白底 + 边框。 */
-    .thinking-block {
-      margin-bottom: 8px; padding: 9px 12px; background: #ffffff;
-      border: 1px solid var(--border-color); border-radius: 12px;
-    }
+    /* 助手回复只保留 .message-ai 一层边框：思考块并进那张卡，不再自成一张。 */
+    .thinking-block { margin-bottom: 8px; padding: 0; }
     .thinking-block summary { cursor: pointer; color: var(--text-tertiary); font-size: 11px; }
     .thinking-body {
       margin-top: 7px; color: var(--text-secondary); font-size: 12px;
