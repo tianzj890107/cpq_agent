@@ -252,7 +252,6 @@
   white-space: pre-wrap; word-break: break-word;
 }
 .oc-tool-result.err { border-color: #f3b4b4; color: #dc2626; }
-.oc-err-line { margin-top: 8px; color: #dc2626; font-size: 13px; }
 .oc-spin { display: inline-block; animation: oc-spin 1s linear infinite; }
 @keyframes oc-spin { to { transform: rotate(360deg); } }
 

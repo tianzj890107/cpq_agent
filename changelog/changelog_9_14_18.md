@@ -770,3 +770,174 @@
 - GitLab 未推送：`gitlab.boulderaitech.com` 在当前网络 DNS 解析为 NXDOMAIN（`ssh: Could not resolve hostname gitlab.boulderaitech.com`），`push_remotes.py` 与 `git ls-remote gitlab` 均连不上，属外部网络阻塞、非仓库问题；待内网可达后用同一 HEAD 执行 `python3 scripts/push_remotes.py --only gitlab` 补推（不生成补偿 commit、不 force push、不改写历史）。
 - 验证：全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1034 项 / 0 失败 / 7 跳过**；提交后 `git status` 干净。
 - 边界：未创建 MR / tag / Release，未部署、未重启服务。
+
+## 67. 看板动作静态 role 快照解析（1.2 / 1.3 / 3.2 主按钮被静默降级）Spec / Red（9-15）
+
+- 需求（用户反馈）：1.2「✓ 通过确认」与 1.3「提交审核意见」在左侧统一操作栏里不是蓝色实心主按钮，而是白底描边的次要按钮。
+- 实测根因：`tech_app/frontend/tech-board-runtime.js:114` 的 `entryState()` 只读 `getState()` 返回的 `role`，条目外层静态声明的 `role` 从不进入 `raw`，于是「外层写 `role: 'primary'`、`getState()` 只返回 `visible/enabled/busy`」的条目一律被降级成 `'aux'`；这与同一段代码 `:126`～`:129` 已声明的契约（三种元数据既可来自静态条目、也可由 `getState()` 动态返回）不一致。
+- 影响面：九个阶段页面里条目外层静态 `role: 'primary'` 只有三处 —— 1.2 `confirmRequirement`、1.3 `submitRequirementReview`、3.2 `approveProcessReport`，三颗按钮在父壳（只渲染 `role === 'primary'` 的那一颗）里全部降级；其余动作的 `role` 都由 `getState()` 动态返回，不受影响。
+- 新增 `docs/specs/tech-board-static-action-role-in-snapshot.md`：规定在运行时（唯一必需修改点）把静态 `role` / `order` / `hint` 作为基线，合并优先级为「静态元数据 < `entry.state` < `getState()` < `updateActionState()` 覆盖值」；`visible` / `enabled` / `busy` 不参与静态回退；禁止在各页 `getState()` 里再抄一份 `role`（同一颗按钮不得有两处事实来源）。并明确把「3.2 / 3.3 某些状态有可见动作但没有任何主按钮」划到下一步门禁批次，本批不新增按钮。
+- 新增 `tests/test_tech_board_static_action_role_snapshot_red.py`：在 Node 的 `vm` 里加载**真实的** `tech-board-runtime.js`，逐场景注册后读取运行时真正发给父壳的快照（`snapshot()` / `action-state` 信封 `payload.actions` / `auditPrimary()`），覆盖静态 primary 生效、信封透传、唯一主按钮审计、无 `getState()` 的静态条目、`getState()` 动态覆盖、`updateActionState()` 覆盖、静态 aux 不误升、`getState()` 抛错保留静态元数据、`order` / `hint` 回退与动态优先，以及三处真实页面条目「静态 role 为唯一事实来源」与公开 API / 协议常量不缩水。
+- Red 验证：`python3 -m unittest tests.test_tech_board_static_action_role_snapshot_red -v` → 13 项中 7 通过、**6 失败**；失败正是缺陷行为（静态 primary 被降级 aux、信封里也是 aux、`primary_count=0`、无 `getState()` 的静态 primary 也降级、`getState()` 抛错时静态元数据丢失、`order` / `hint` 静态回退缺失）。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1047 项 / 6 失败 / 7 跳过**，失败全部来自本批红测；相关回归 `test_tech_global_single_primary_and_nonblocking_notices_red`、`test_tech_confirm_review_optional_note_red`、`test_tech_board_state_envelope_dynamic`、`test_tech_board_deferred_actions_red` 共 42 项全绿。
+- 状态：本批只建立 Spec 与 Red 基线（另在 `/tmp` 副本上验证「静态元数据基线」这一处最小改动即可让 13 项全绿），未修改 `tech-board-runtime.js` 或任何业务实现；等待 DeepSeek 实现后复验。
+
+## 68. 2.2 出口依赖分级与「带缺口继续」的缺口豁免（waiver）Spec / Red（9-15）
+
+- 需求（用户反馈）：「参数推荐已确认 / 组装工艺已确认」不该当硬门禁，转发或进下一步时「仍要继续」就帮着确认；报价必填参数里电压电流重量型号这类很多填不出来，也不该一项不齐就卡死整条流程。
+- 实测根因：2.2 出口存在自相矛盾的链路 —— 参数推荐页的「仍要继续」（`assembly-integration.js:717`）只调 `finalize(confirm=false)`，于是 `params_final` 被置回 false（`main.py:2480`）；随后发送财务的前端闸门（`assembly-integration.js:1050`）与后端闸门（`services/integration.py:853`）又把「报价必填缺口 / params_final / params_confirmed / process_confirmed」四项全部当硬门禁。前端那次「仍要继续」没有留下任何可读的豁免记录，后端也没有存档，于是同一个缺口被反复拦回来（前端说允许继续、后端说不许），用户只能逐页倒查。
+- 新增 `docs/specs/tech-dependency-tiers-and-step-waivers.md`：把依赖统一分成 L1 生成依赖 / L2 质量依赖 / L3 交接依赖 / L4 合规依赖四级（页面永远可进入；生成动作只检查能否真的计算；内部阶段确认可带缺口放行；跨角色交接要显式签字与接收人；写库、回传报价、审核、发布、权限一律不可豁免；已签字的缺口不得再拦第二次），并给出本批落地范围：只做 2.2 → 2.3 出口与参数推荐确认，其余阶段后续批次按同一口径落地。契约包含 `IntegrationWaiver`（stage / missing_codes / missing_fields / waived_confirmations / reason / waived_by / waived_at / reused）、`record_waiver()` / `waiver_covers()` 唯一实现、`send_to_finance()` 的 L1 硬拦与 L2 放行、`status()` 与 `cost_review.payload()` 对下游暴露 `params_complete` / `waiver`、以及前端 `aiFinanceBlocker()` 只判 L1、新增 `aiFinanceGaps()` 描述 L2 缺口、签发复用既有 `aiAskProceed()` 与既有 finalize / send-to-finance 接口的可选 `waiver` 字段（不新增路由）。
+- 新增 `tests/test_tech_integration_dependency_waiver_red.py`：后端行为用带 pydantic 的解释器（`open-claude/.venv/bin/python`）在子进程里真跑 `send_to_finance / record_waiver / status / cost_review.payload`（临时 DATA_DIR、假项目、打桩 cpq_bridge，不联网不碰真实数据），覆盖未签字仍拦、签字放行并落库（人 / 时间 / 审计 `integration_send_to_finance_waived`）、顺带补齐内部确认、同一缺口复用签字不再拦第二次（`reused=True`）、新缺口要重新签字、L1 不可豁免、下游可见；前端与路由做契约断言（`aiFinanceBlocker` 不再引用四项 L2 依赖、`aiFinanceGaps()` 存在、签发链路取消即停、签字随既有接口提交）。
+- 被取代的过期断言：`tests/test_tech_integration_params_step_ownership_red.py::test_send_to_finance_requires_final_complete_parameters`（编码的正是本次要取消的硬门禁）改写为 `test_send_to_finance_grades_its_dependencies`，锁 L1 不可豁免 + L2 由 waiver 放行 + 未签字仍如实报错。
+- Red 验证：`python3 -m unittest tests.test_tech_integration_dependency_waiver_red -v` → 20 项中 5 通过、**15 失败**；`tests.test_tech_integration_params_step_ownership_red` → 10 项中 1 失败（被取代的旧断言）。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1067 项 / 22 失败 / 7 跳过**（22 = 本批 15 + 被取代断言 1 + 上一批 ## 67 的 6）。
+- 状态：本批只建立 Spec 与 Red 基线；另在 `/tmp` 的一次性副本上按本 Spec 验证过「8 项后端行为红测可全部转绿」，仓库内 `tech_app/` 未做任何业务改动，等待 DeepSeek 实现后复验。
+
+## 68 实现：2.2 出口依赖分级 + 「带缺口继续」的缺口豁免（9-15）
+
+- 后端（`models/integration.py` / `services/integration.py` / `services/cost_review.py` / `main.py`）：`IntegrationWaiver` + `IntegrationPlan.waivers` 落库；`record_waiver()`（唯一实现，写入人手 / 时间，reason 为空补默认原因）、`waiver_covers()`（比对键 = 报价必填字段编码集合，签字后又冒出新缺口必须重签）、`waiver_summary()` / `pending_confirmations()` / `missing_required()` / `gap_message()` 收口判定；`send_to_finance(..., waiver=None)` 只保留 L1 硬拦（无参数推荐 / 无组装工艺），L2 缺口一次列全（报价必填中文名 + 未点确认的环节）后要么如实 `IntegrationFlowError`、要么凭签字放行并顺带补齐三项确认、写审计 `integration_send_to_finance_waived`，被 `stage='params'` 的签字覆盖同一批缺口时追加 `reused=True` 记录而不是要第二次签字。
+- 路由（既有接口加可选字段、不新增路由）：`IntegrationFinalizeBody` / `IntegrationPublishBody` 各加 `waiver`；`finalize_integration_params` 在 `confirm=false` + waiver 时把 `stage='params'` 的签字落库（`params_final` 仍为 False）；`integration_send_to_finance` 透传 waiver，权限仍是 `auth.MANAGER_ROLES`。
+- 下游可见性：`status()` 增 `params_complete` 与 `waiver`（既有字段一个不删）；`cost_review.payload()` 的顶层与 `review` 都带 `params_complete` / `waiver`，财务据此知道缺口是签过字的、不再按同一批缺口拦人。
+- 前端（`assembly-integration.js`）：`aiFinanceBlocker()` 只判 L1（参数推荐 / 组装工艺跑过没有）；新增 `aiFinanceGaps()` 把四类 L2 缺口写成一句人话；`aiRenderOps()` 不再因 L2 缺口置灰（只保留 busy 并发保护）并把缺口摆在页面提示位；`aiConfirmProcessAndSendToFinance()` 用既有 `aiAskProceed` 取签字，取消即返回结构化失败（不发送不落库），继续则把 `{ reason }` 交给既有 `aiOpenFinanceDialog(waiver)` → `aiRunOp('send-to-finance', dispatch)`；参数推荐页的「仍要继续」改为 `aiParamsFinalize(false, waiver)`，签字随既有 `/integration/params/finalize` 落库。
+- 验证：`tests.test_tech_integration_dependency_waiver_red` → **20/20 全绿**（Red 基线 15 失败归零）；`tests.test_tech_integration_params_step_ownership_red` 10/10、`tests.test_tech_integration_confirm_finance_flow_red` + `tests.test_tech_business_actions_clickable_then_error_red` + `tests.test_integration_params_tab_single_primary_and_auto_fill_red` + `tests.test_tech_integration_agent_red` + `tests.test_tech_cost_process_manager_send_to_finance_red` 共 81 项全绿；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1098 项 / 39 失败 / 7 跳过**，39 项全部来自尚未实现的两个并行批次（## 67 静态 role 快照 6 项、会话时间线持久化 33 项），本批无遗留失败。手工链路自查（路由层直调）：未签字 confirm=true → 400 真实原因；confirm=false + waiver → `params_final=False` / `waiver.stage=params` / `waived_by=王五`；发送财务 → `reused=True`、`waived_confirmations` 三项齐、审计含 `integration_send_to_finance_waived`。
+- 边界：未改 `quote_product_params.json` 的 16 项必填、未新增路由 / 第二套缺口实现、未放宽权限、未让 Agent 自动豁免、未改 `tests/` 与上一批 `tech-board-runtime.js` 的静态 role 逻辑；未提交、未推送、未部署。
+
+## 69. 项目会话时间线：所有会话卡片统一持久化 + 按同一顺序拼接 Spec / Red（9-15）
+
+- 需求（用户反馈）：重新进入项目后只剩 Agent 对话，看板按钮跑出来的过程卡与结果提示全都不见了；而且同一条会
+  话线程里「有的卡片永远钉在最下面，有的按顺序从上到下」。要求所有卡片都持久化保存，并按同一顺序拼接。
+- 实测四类内容走了四条不同的路，只有前两类会持久化：Agent 对话与工具轨迹经 `/agent/send` → OpenClaude
+  JSONL → `/agent/history`（可恢复）；`tech_ui` 事件虽可能进 JSONL，但 `renderHistory()` 主动跳过
+  （`agent-chat.js:254` `if (event.name === "tech_ui") return;`）；看板任务卡（`task-progress` /
+  `task-completed` / `task-failed`）经桥消息进 `renderTaskProgress()`，只写 DOM；阶段页的 `crSay()` /
+  `aiSay()` 只写各自 iframe 内的 `#crThread` / `#aiThread`，同样不落库。
+- 顺序缺陷：`agent-chat.js` 的 `taskProgressHost()` 回落到 `#ocTaskProgressHost`
+  （`tech-workbench.html:78`，位于 `#ocTinner` 末尾），任务卡永远排在所有消息之后（代码注释自己写着
+  「建出来就永远钉在底部，聊多少轮都不动」）；Agent 消息却按时间追加，同一线程两套顺序规则。
+- 新增 `docs/specs/tech-session-timeline-persistence-and-order.md`：后端新增项目级 append-only 时间线
+  (`store.append_session_event()` / `load_session_events()`，`seq` 等于追加顺序、`key` 幂等且就地更新、
+  同一 `task.id` 只留一张卡且进度行按行去重)；路由新增 `POST /agent/event` 与 `GET /agent/events`，并把
+  `timeline` 扩展进既有 `GET /agent/history`（Agent 层不可用时**仍要返回本地条目**）；前端新增唯一顺序实现
+  `tech-app/frontend/tech-session-timeline.js`（`normalize` / `merge` / `append` / `dedupe` /
+  `applyTaskProgress` / `forShell` / `forStage`，按 `(ts, seq)` 稳定升序）；父壳 `taskProgressHost()`
+  固定返回 `#ocTinner`、任务卡按顺序进线程并落库、回放 `timeline` 且不再跳过 `tech_ui`；阶段页文字改为
+  「本地线程照旧可见 + 同一条内容以 `session-note` / `source:board` / `stage` 落库 + 加载后按本阶段回放」。
+- 明确不做：**不删除** `#ocTaskProgressHost` 节点 —— 它已被 `test_tech_left_chat_controls_restore_red`、
+  `test_tech_chat_card_noise_and_quiet_board_failures_red`、`test_tech_agent_history_project_rebind_red`、
+  `test_tech_chat_drop_static_intro_bubble_red` 等防缩水守卫固定引用，本批只改「卡片插到哪里」，删节点属于扩大范围；
+  也不改 OpenClaude JSONL 读写、`/agent/send` SSE 协议、业务数据存储与 `.oc-result-actions` 结果入口。
+- 新增 `tests/test_tech_session_timeline_persistence_red.py`（31 项）：后端用带 fastapi/pydantic 的解释器在
+  子进程里真跑 store 与 TestClient（含跨进程重启后仍在、同 key 幂等保留 seq、同 task 合并步骤、`?stage=`/`?source=`
+  过滤、Agent 层不可用时 history 仍返回 timeline 且既有字段一个不少）；前端纯函数用 Node `vm` 加载真实模块驱动
+  （交错排序 / seq 兜底 / 稳定排序 / forShell 只排除 board note / forStage 只回本阶段 / 同一张卡就地更新 / 去重取先
+  位置后内容 / append 不改入参 / normalize 补齐 kind）；接线做源码契约断言（不再钉底、不再跳过 tech_ui、模块先于
+  agent-chat.js 加载、阶段页落库与回放、原有本地线程出口不缩水、既有会话路由与 history 字段不缩水）。
+- 被取代的过期断言：`tests/test_tech_agent_history_project_rebind_red.py::test_replay_path_and_event_types_unchanged`
+  里原先要求 `renderHistory()` 出现 `event.name === "tech_ui"`（即回放必须跳过）—— 正是本批要取消的行为，改写为
+  「四种事件类型仍在 + 不允许再跳过 tech_ui」。
+- Red 验证：`python3 -m unittest tests.test_tech_session_timeline_persistence_red` → 31 项中 6 通过、
+  **32 处失败**（后端能力/路由 20 处、纯函数 8 处、父壳接线 3 处、阶段页 9 处……含子测试）；被取代断言 1 处失败。
+  全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1098 项 / 39 失败 / 7 跳过**（39 = 本批 32 +
+  上一批 ## 67 的 6 + 被取代断言 1）。
+- 可满足性：在 `/tmp` 一次性副本上按本 Spec 实现后，本批 31 项 **全绿**（仓库内 `tech_app/` 未做任何业务改动），
+  证明红测可被一份直白实现满足、不是死断言。
+- 状态：本批只建立 Spec 与 Red 基线（含 1 处被取代断言改写），等待 DeepSeek 实现后复验；未提交、未推送。
+
+## 70. 技术工艺会话去掉红色报错卡片，失败信息按普通输出继续 Spec / Red（9-15）
+
+- 需求（用户反馈）：「⚠ 回传销售经理继续报价失败，请查看看板提示。 这些报错的红色文字的卡片全都不要了」。
+- 实测根因：`agent-chat.js:458` 的 `pushSystem()` 用 `el("div", "oc-err-line", `⚠ ${text}`)` 配一个「!」头像，
+  `agent-chat.css:255` 的 `.oc-err-line { color: #dc2626 }` 把它染红；流式失败（`agent-chat.js:668` 的
+  `event.type === "error"`）与 SSE 读取失败（`:720` 的 catch）也各自往同一条回复里插一行 `.oc-err-line`。
+  `pushSystem` 有约 40 处调用（动作失败、看板未就绪、Agent 不可用、历史读取失败…）并经
+  `window.ocTechAgent.notice` 暴露给父壳，所以**提示本身要保留**，改的只是呈现样式。
+- 新增 `docs/specs/tech-chat-drop-red-error-cards.md`：`pushSystem` 改用与普通助手输出同款结构
+  （`oc-amsg` + `oc-aav` ✦ + `oc-abody` + `oc-atxt`，不再是「!」+ 红字）；流式失败与连接失败把原因写进
+  同一条回复正文并保留 `setAssistantState(ctx, "failed")`；`.oc-err-line` 从 JS 与 CSS 一起删除；
+  **保留**助手失败状态 chip（`.oc-alabel-state.is-failed`，`⚠ 失败`）、工具结果错误边框（`.oc-tool-result.err`）、
+  看板侧白色气泡里的 `⚠` 文本，以及 `boardFailureNotice` 对预期内失败码的静默与 `pushSystem` 的唯一出口地位。
+- 新增 `tests/test_tech_chat_drop_red_error_cards_red.py`（15 项，按括号配平截取真实函数体断言，不做全文件 grep）：
+  JS/CSS 都不再有 `oc-err-line`、pushSystem 走普通输出结构且用助手身份、不再拼 `⚠ ${`、仍写进线程并跟随滚动、
+  `notice: pushSystem` 仍在、看板失败仍经唯一出口且预期内失败码仍静默、error 分支与 SSE catch 都写正文且置失败、
+  状态位 `⚠ 失败` 与 `is-failed` 仍在、看板侧 `⚠` 文本未被一并删除、失败文本未被吞、`node --check` 通过。
+- 被取代的断言：`tests/test_chat_errors_inflow_and_drop_refresh_task_cards_red.py::test_existing_error_channels_are_kept`
+  原先要求 `oc-err-line` 同时留在 JS 与 CSS（正是红字卡片长期存在的依据），改写为「pushSystem 仍在 + 走普通输出
+  排版 + 不再出现红字卡片」，保留其真实意图（错误仍在会话流内、不被静默吞掉）。
+- Red 验证：`python3 -m unittest tests.test_tech_chat_drop_red_error_cards_red` → 15 项中 7 通过、**8 失败**；
+  被取代断言 1 处失败。全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1113 项 / 48 失败 / 7 跳过**
+  （48 = 本批 8 + 上一批 ## 69 的 32 + ## 67 的 6 + 两处被取代断言 2）。
+- 可满足性：在 `/tmp` 一次性副本上按两份 Spec 实现后，本批 15 项与 ## 69 的 31 项连同两处改写断言
+  **149 项全绿**（仓库内 `tech_app/` 仍未做任何业务改动），证明红测可被直白实现满足。
+- 状态：本批只建立 Spec 与 Red 基线（含 1 处被取代断言改写），等待 DeepSeek 实现后复验；未提交、未推送。
+
+## 69 / 70 实现：会话时间线统一持久化 + 会话里不再出现红色报错卡片（9-15）
+
+- 后端（`storage/store.py` / `main.py`，不新增业务路由）：`append_session_event()` 按追加顺序分配 `seq`，
+  带 `key` 幂等且**就地更新**（保留原 `seq` 与原位置），同一 `task.id` 只留一张卡（`task.steps` 按行去重追加、
+  `status` / `error` 就地更新），无 `key` 一律追加新行；`load_session_events()` 按 `seq` 升序返回。
+  新增 `POST /api/projects/{pid}/agent/event`（WRITE_ROLES，`kind` 必填 400，返回 `{seq, event}`）与
+  只读 `GET .../agent/events?stage=&kinds=&source=`；`GET .../agent/history` 扩展 `timeline` 字段
+  （`project_id` / `session_id` / `messages` / `message_count` 一个不删，Agent 层不可用的分支同样返回本地条目）。
+- 前端唯一顺序实现 `tech_app/frontend/tech-session-timeline.js`（`normalize` / `merge` / `append` /
+  `dedupe` / `applyTaskProgress` / `forShell` / `forStage` / `mergeTask`，按 `(ts, seq)` 稳定升序、同 `key` /
+  同 `task.id` 就地更新）。父壳 `taskProgressHost()` 固定返回 `#ocTinner`（任务卡不再钉在会话底部），
+  `ensureTaskCard()` 只剩「和普通消息同款包裹」这一条路径；`#ocTaskProgressHost` 节点与 `setProject()` 的
+  `replaceChildren()` 保留不动。`loadHistory()` 把 `data.timeline` 一并交给 `renderHistory()`，回放改走
+  `forShell(...)` 并且**不再跳过 `tech_ui`**；`detached` 分支不再清空已落库历史与任务卡映射（重新挂上时
+  不会再画一张同样的卡）。
+- 落库口径：父壳新增 `persistSessionEvent()`（`POST /agent/event`，失败只留痕不阻塞渲染），任务卡按
+  `key: task:<taskId>` 只提交新出现的进度行、进度文字按 `kind: session-note` / `source: shell` 落库，
+  回放期间置位 `replayingHistory` 不重复写回（否则每打开一次项目就会重复追加一遍）。
+- 阶段页（`cost-review.js` / `assembly-integration.js` / `app.js`）：`crSay` / `aiSay` / `aiUserSay`
+  在写本地线程之后把同一条内容以 `kind: session-note` / `source: board` / `stage` 落库（幂等 key），
+  加载完成后用 `GET /agent/events?stage=…&source=board` + `forStage(...)` 回放进 `#crTinner` / `#aiTinner`；
+  2.1（`app.js`）在 `forwardTaskDetail()` 里按 `key: task:<taskId>` 落库任务卡（只提交新进度行），
+  `openProject()` 之后回放本阶段条目交给会话宿主按同一顺序渲染。三个阶段页 HTML 各补一行
+  `tech-session-timeline.js`（`index.html` / `cost-review.html` / `assembly-integration.html`），
+  `tech-workbench.html` 里该模块排在 `agent-chat.js` 之前。
+- 去掉红色报错卡片（本批 ## 70）：`pushSystem()` 改用与普通助手输出同款结构（`oc-amsg` + `oc-aav` ✦ +
+  `oc-abody` + `oc-atxt`）并把提示照旧写进线程、跟随滚动；流式失败与 SSE 读取失败把真实原因并进同一条回复
+  正文（`ctx.full` 重渲染），状态位仍是 `setAssistantState(ctx, "failed")`；`.oc-err-line` 从 JS 与 CSS 一起
+  删除。保留：失败状态 chip（`⚠ 失败` / `.is-failed`）、工具结果错误边框（`.oc-tool-result.err`）、看板侧
+  白色气泡里的 `⚠` 文本、`boardFailureNotice` 对预期内失败码的静默与 `pushSystem` 的唯一出口地位。
+- 缓存版本号同步：`agent-chat.js?v=20260915-timeline1`（两个页面一致）、
+  `agent-chat.css?v=20260915-nored1`（四个页面一致）、`tech-session-timeline.js?v=tst1`。
+- 被取代的过期断言：`tests/test_tech_quote_agent_parity_matrix_red.py` 的对照表
+  `docs/specs/tech-agent-recovery-21-quote-parity.json` 里 `error_prompt` 的 tech 锚点原指向
+  `agent-chat.js#oc-err-line`（本批已按 Spec 退役），改为 `agent-chat.js#pushSystem` 并在 `release`
+  注明「契约更新（去掉红色报错卡片批次）」；语义（错误提示仍在会话流内）不变。
+- 验证：`tests.test_tech_session_timeline_persistence_red` → **31/31 全绿**（Red 基线 32 处失败归零）；
+  `tests.test_tech_chat_drop_red_error_cards_red` → **15/15 全绿**（基线 8 失败归零）；
+  回归 `test_tech_agent_history_project_rebind_red` + `test_tech_board_state_envelope_dynamic` +
+  `test_tech_left_chat_controls_restore_red` + `test_chat_collapsible_thinking_trace_red` 共 47 项全绿，
+  `test_chat_errors_inflow_and_drop_refresh_task_cards_red` + `test_chat_fused_assistant_card_style_red` +
+  `test_tech_chat_card_noise_and_quiet_board_failures_red` +
+  `test_tech_business_actions_clickable_then_error_red` 共 65 项全绿。
+  全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1113 项 / 6 失败 / 7 跳过**，
+  6 项全部来自尚未实现的并行批次 ## 67（看板动作静态 role 快照，只跑 `tech-board-runtime.js`，本批未改该文件），
+  本批无遗留失败。语法与空白检查：`node --check`（`tech-session-timeline.js` / `agent-chat.js` /
+  `cost-review.js` / `assembly-integration.js` / `app.js`）全部通过，`git diff --check` 无输出。
+- 边界：未删 `#ocTaskProgressHost` 节点与 `.oc-result-actions` 结果入口、未改 `/agent/send` 的 SSE 协议 /
+  `/agent/new` / 业务数据存储、未新增业务路由、未改上一批 ## 67 的静态 role 逻辑；
+  **未提交、未推送、未部署**。
+
+## 67 实现：看板动作静态元数据基线（1.2 / 1.3 / 3.2 主按钮恢复蓝色实心）（9-15）
+
+- 唯一必需修改点：`tech_app/frontend/tech-board-runtime.js` 的 `entryState()` 加入静态元数据基线
+  `{ role, order, hint }`（取自条目外层声明，缺失即缺省），合并优先级保持「静态元数据 < `entry.state` <
+  `getState()` 返回值 < `updateActionState()` 覆盖值」；`visible` / `enabled` / `busy` / `active` /
+  `analyzed` 仍只由运行时状态决定、不参与静态回退；`getState()` 抛错时保留基线（与既有 `label` 回退语义一致），
+  照旧不向上抛。三处真实页面条目（`confirmRequirement` / `submitRequirementReview` / `approveProcessReport`）
+  的**外层静态 `role: 'primary'` 原样保留**，`getState()` 里没有补写第二处 `role`，也没有改动作名、`run`、
+  `silent` / `deferred` 标记、协议常量（`NAMESPACE` / `VERSION` / 事件信封）与父壳的主按钮判定。
+- 效果：父壳只渲染 `role === 'primary'` 的那一颗按钮，快照与 `action-state` 信封（`payload.actions[name].role`）
+  现在都是 `primary`，1.2「✓ 通过确认」、1.3「提交审核意见」、3.2「审核通过并进入下一步」恢复蓝色实心主按钮；
+  `primaryAudit()` 在这三处回到 `primary_count === 1` / `ok === true`，`primaryDiagnostics()` 不再误报。
+  2.2 / 2.3 / 3.1 / 3.3 由 `getState()` 动态返回 `role` 的主操作反转不受影响。
+- 验证：`tests.test_tech_board_static_action_role_snapshot_red` → **13/13 全绿**（Red 基线 6 失败归零）；
+  回归 `test_tech_global_single_primary_and_nonblocking_notices_red` +
+  `test_tech_confirm_review_optional_note_red` + `test_tech_board_state_envelope_dynamic` +
+  `test_tech_board_deferred_actions_red` 共 42 项全绿；`node --check tech-board-runtime.js` 通过。
+  全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1113 项 / 0 失败 / 7 跳过**
+  （此前遗留的 6 项静态 role 失败清零，工作区全绿）。
+- 边界：未新增按钮、未改文案、未放宽 `primaryAudit` 的唯一主按钮约束；「3.2 / 3.3 某些状态有可见动作但没有任何
+  主按钮」仍按 Spec 留给下一步门禁批次（本批只用 `primaryDiagnostics()` 给出确定性诊断）；
+  **未提交、未推送、未部署**。

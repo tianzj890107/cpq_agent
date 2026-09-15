@@ -1830,6 +1830,22 @@ class AgentSendRequest(BaseModel):
     page_context: str = ""
 
 
+class AgentEventBody(BaseModel):
+    """项目会话时间线的一条条目（任务卡 / 过程文字 / tech_ui 卡 / shell note）。
+
+    与 store.append_session_event 的条目形状一致：kind 必填，其余可选；带 key 的
+    条目幂等且就地更新（同一张卡重复提交不会多出一行）。
+    """
+    kind: str = ""
+    source: str = ""
+    stage: str = ""
+    text: str = ""
+    task: Optional[Dict[str, Any]] = None
+    ui: Optional[Dict[str, Any]] = None
+    key: str = ""
+    ts: str = ""
+
+
 def _agent_project(project_id: str) -> None:
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
@@ -1861,11 +1877,54 @@ def agent_history(project_id: str, user: dict = Depends(current_user)):
     再进入正常会话状态。只读，不创建新会话，也不触发 /agent/new。
     """
     _agent_project(project_id)
+    # 项目会话时间线是本地持久化的那一半（任务卡 / 过程文字 / tech_ui 卡），与 Agent 层
+    # 是否可用无关：会话层连不上时也必须回放出来，否则重进项目又只剩空白会话。
+    timeline = store.load_session_events(project_id)
     try:
-        return oc_agent.load_history(project_id)
+        data = oc_agent.load_history(project_id)
     except oc_agent.AgentUnavailable as exc:
         # 与 /agent/meta 一致：会话层不可用时不抛 500，让页面显示真实原因而不是空白会话。
-        return {"available": False, "reason": str(exc), "messages": [], "message_count": 0}
+        return {"available": False, "reason": str(exc), "project_id": project_id,
+                "session_id": "", "messages": [], "message_count": 0, "timeline": timeline}
+    data = dict(data or {})
+    data.setdefault("project_id", project_id)
+    data["timeline"] = timeline
+    return data
+
+
+@app.post("/api/projects/{project_id}/agent/event")
+def agent_event(project_id: str, body: AgentEventBody, user: dict = Depends(current_user)):
+    """追加一条会话时间线条目（任务卡 / 过程文字 / tech_ui 卡 / shell note）。
+
+    会话内容属于项目数据，不是业务产出：seq 由服务端分配（等于追加顺序），带 key 的条目
+    幂等且就地更新 —— 前端进度轮询只提交新出现的进度行，不会每次追加整段。
+    """
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    _agent_project(project_id)
+    event = body.model_dump()
+    if not str(event.get("kind") or "").strip():
+        raise HTTPException(400, "会话事件缺少 kind")
+    stored = store.append_session_event(project_id, event)
+    return {"seq": stored.get("seq"), "event": stored}
+
+
+@app.get("/api/projects/{project_id}/agent/events")
+def agent_events(project_id: str, stage: str = "", kinds: str = "", source: str = "",
+                 user: dict = Depends(current_user)):
+    """按 seq 升序回放项目会话时间线，可按阶段 / 类型 / 来源过滤（只读）。
+
+    阶段页加载完成后用它取回自己那一份过程文字（stage + source=board），父壳取全量。
+    """
+    _agent_project(project_id)
+    rows = store.load_session_events(project_id)
+    if stage:
+        rows = [row for row in rows if str(row.get("stage") or "") == stage]
+    if source:
+        rows = [row for row in rows if str(row.get("source") or "") == source]
+    wanted = [item.strip() for item in str(kinds or "").split(",") if item.strip()]
+    if wanted:
+        rows = [row for row in rows if str(row.get("kind") or "") in wanted]
+    return {"events": rows, "count": len(rows)}
 
 
 @app.post("/api/projects/{project_id}/agent/send")
@@ -2453,6 +2512,9 @@ class IntegrationFinalizeBody(BaseModel):
     """
     values: Dict[str, Any] = Field(default_factory=dict)
     confirm: bool = False
+    # 可选：参数推荐页的「仍要继续」签字。confirm=False 且带 waiver 时，把缺口与签字
+    # 一起落库（params_final 仍然保持 False —— 签的是"可以带缺口往下走"，不是"参数已齐"）。
+    waiver: Optional[dict] = None
 
 
 @app.post("/api/projects/{project_id}/integration/params/finalize")
@@ -2482,6 +2544,21 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
         plan.params_final = False
         plan.params_final_by = None
         plan.params_final_at = None
+        if body.waiver:
+            # 「仍要继续」：人签了字，缺口原样留档 —— 参数推荐这一步的签字记在
+            # stage='params'，发送财务时同一批缺口凭它复用，不再要第二次签字。
+            missing = integration.missing_required(plan)
+            integration.record_waiver(
+                plan, "params",
+                missing_codes=[str(field.get("code") or "") for field in missing],
+                missing_fields=[str(field.get("name") or field.get("code") or "")
+                                for field in missing],
+                confirmations=integration.pending_confirmations(plan),
+                reason=str((body.waiver or {}).get("reason") or ""),
+                actor=user)
+            store.audit(project_id, "integration_params_finalize_waived",
+                        {"missing": len(missing),
+                         "by": user.get("display_name") or user.get("username") or ""})
     integration.save_plan(project_id, plan, user.get("username", "system"))
     store.audit(project_id, "integration_params_finalize",
                 {"filled": len(body.values or {}), "confirmed": bool(plan.params_final),
@@ -2651,6 +2728,9 @@ class IntegrationPublishBody(BaseModel):
     target_type: str = ""
     target_role_code: str = ""
     target_user_id: str = ""
+    # 可选：发送财务时携带的「仍要继续」签字（L2 缺口豁免）。真正记进 plan.waivers 的
+    # 缺口以服务端算出的为准，这里只是本人"可以带缺口继续"的意愿与原因。
+    waiver: Optional[dict] = None
 
 
 def _bridge_call(action, *args, **kwargs):
@@ -2697,7 +2777,8 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
         _integration_flow, integration.send_to_finance, project_id, user,
         product_name=body.product_name, note=body.note,
         target_type=body.target_type, target_role_code=body.target_role_code,
-        target_user_id=body.target_user_id, token=_sso_token(request))
+        target_user_id=body.target_user_id, token=_sso_token(request),
+        waiver=body.waiver)
     return {**_integration_payload(project_id, plan),
             "finance": plan.finance_handoff.model_dump()}
 

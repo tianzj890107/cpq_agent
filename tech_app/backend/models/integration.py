@@ -305,6 +305,27 @@ class FinanceHandoff(BaseModel):
     sent_by: Optional[str] = None
 
 
+class IntegrationWaiver(BaseModel):
+    """2.2 出口的「带缺口继续」签字：L2 缺口由本人签一次字即可放行。
+
+    这是**人的决定**的留痕 —— 缺了哪些报价必填（编码 + 中文名）、顺带把哪些内部确认
+    补掉、谁在什么时候签的。同一批缺口签过之后不再拦第二次；出现新缺口要重新签，
+    比对键就是 missing_codes 集合。写库、回传报价、审核发布与权限（L4）不在豁免范围。
+    """
+    stage: str = Field("params", description="在哪一步签的字：'params' | 'finance_handoff'")
+    missing_codes: List[str] = Field(
+        default_factory=list, description="报价必填缺口（字段编码），同一缺口的比对键")
+    missing_fields: List[str] = Field(
+        default_factory=list, description="同一批缺口的中文名，给人看")
+    waived_confirmations: List[str] = Field(
+        default_factory=list,
+        description="顺带放行的内部确认：params_final / params_confirmed / process_confirmed")
+    reason: str = Field("", description="签字原因；允许为空，服务端会补默认原因")
+    waived_by: Optional[str] = None
+    waived_at: Optional[str] = None
+    reused: bool = Field(False, description="本次是复用已有签字，而不是重新签一次")
+
+
 class IntegrationPlan(BaseModel):
     project_id: Optional[str] = None
     requirement_note: str = Field("", description="用户在 2.2 输入的整合需求(参与参数推荐)")
@@ -339,6 +360,9 @@ class IntegrationPlan(BaseModel):
     # 成本测算改由财务经理做（2.3），所以 2.2 的出口是"发给财务"，不是直接发报价。
     finance_handoff: Optional[FinanceHandoff] = Field(
         None, description="最近一次确认工艺并发送至财务做成本测算")
+    # 「带缺口继续」的签字记录：只追加、不覆盖 —— 后来补上的缺口不该把历史签字抹掉。
+    waivers: List[IntegrationWaiver] = Field(
+        default_factory=list, description="历次「带缺口继续」的签字（L2 缺口豁免）")
     timing: Timing = Field(default_factory=Timing)
     updated_at: Optional[str] = None
 

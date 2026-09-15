@@ -530,6 +530,7 @@ function afterAuth() {
     return;
   }
   openProject(pid).then(() => {
+    replayDrawingTimeline();
     const partId = q.get("part");
     if (!partId) return;
     const p = (currentIR && currentIR.parts || []).find(x => x.part_id === partId);
@@ -1147,6 +1148,7 @@ function forwardTaskDetail(detail) {
   if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
     window.TechBoardRuntime.publish(runtimeEvent, "board-task", detail);
   }
+  persistDrawingTask(detail);
   return detail;
 }
 
@@ -1171,6 +1173,62 @@ async function pollTask(projectId, taskId, label) {
     if (t.status === "failed") throw new Error(t.error || "任务失败");
     status(`${label}：${t.progress || "正在处理"}…`, true);
   }
+}
+
+// ---------------------------------------------------------------- 会话时间线（2.1）
+// 2.1 的任务进度卡除了播给会话宿主（同窗口的 agent-chat.js / 统一工作台的父壳看板桥），
+// 也按项目落库：seq 由服务端分配、key 固定 task:<taskId> 幂等，重进项目或重载 iframe 后
+// 由统一的 tech-session-timeline.js 回放 —— 不再只存在 DOM 里、也不再钉在会话底部。
+const DRAWING_STAGE = "drawing";
+// 每个任务已经落库过的进度行数：轮询只提交新出现的行，不重复追加整段。
+const drawingTimelineCursor = new Map();
+// 会话时间线的两个出口都写全路径（POST /agent/event 落库、GET /agent/events 回放），
+// 避免各处再拼一份路径、也方便和父壳的同一份契约对照。
+function drawingTimelineEventUrl() {
+  return `/api/projects/${encodeURIComponent(currentProject)}/agent/event`;
+}
+function drawingTimelineEventsUrl() {
+  return `/api/projects/${encodeURIComponent(currentProject)}/agent/events?stage=drawing&source=board`;
+}
+function persistDrawingTask(detail) {
+  const taskId = String(detail.taskId || detail.task_id || "");
+  if (!currentProject || !taskId) return;
+  const log = Array.isArray(detail.log)
+    ? detail.log.map(line => String(line).replace(/\s+$/, "")).filter(Boolean) : [];
+  const fresh = log.slice(drawingTimelineCursor.get(taskId) || 0);
+  drawingTimelineCursor.set(taskId, log.length);
+  if (!fresh.length && !detail.status) return;
+  fetch(drawingTimelineEventUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: "task", source: "board", stage: DRAWING_STAGE,
+      text: String(detail.label || ""), key: `task:${taskId}`,
+      task: { id: taskId, label: String(detail.label || ""),
+              status: String(detail.status || ""), steps: fresh,
+              error: String(detail.error || "") },
+    }),
+  }).catch(() => { /* 落库失败不影响看板与本地会话可见性 */ });
+}
+// 回放本阶段已落库条目：交给会话宿主按同一套 (ts, seq) 顺序渲染；
+// 任务卡走 agent:task-progress，宿主按 task.id 就地合并，重复回放不会叠加。
+async function replayDrawingTimeline() {
+  if (!currentProject) return;
+  let payload = null;
+  try {
+    payload = await fetch(drawingTimelineEventsUrl())
+      .then(response => (response.ok ? response.json() : null));
+  } catch (error) { return; }
+  const rows = (window.TechSessionTimeline && payload)
+    ? window.TechSessionTimeline.forStage({ stage: DRAWING_STAGE, events: payload.events || [] })
+    : [];
+  rows.filter(row => row.kind === "task" && row.task).forEach(row => {
+    window.dispatchEvent(new CustomEvent("agent:task-progress", {
+      detail: { label: row.task.label || row.text || "", taskId: row.task.id,
+                status: row.task.status || "running",
+                log: row.task.steps || [], error: row.task.error || "" },
+    }));
+  });
 }
 
 async function runTask(projectId, submitPath, label) {

@@ -82,10 +82,43 @@ function aiThreadAppend(html) {
 function aiSay(text) {
   aiThreadAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">✦</div>
     <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
+  aiTimelineNote(text);
 }
 
 function aiUserSay(text) {
   aiThreadAppend(`<div class="oc-ubub">${esc(text)}</div>`);
+  aiTimelineNote(text);
+}
+
+/* --------------------------------------------- 会话时间线（项目级，按顺序持久化）
+   过程文字既写本地线程（可见效果不变），也以 session-note / source=board 落库；重进项目
+   或重载 iframe 后用 GET /agent/events 取回本阶段那几条回放进 #aiTinner。排序 / 去重
+   复用父壳同一份 tech-session-timeline.js，两个出口不各写一套顺序规则。 */
+let aiReplaying = false;
+function aiTimelineNote(text) {
+  const value = String(text || '').trim();
+  if (!value || aiReplaying || !aiPid) return;
+  Promise.resolve()
+    .then(() => api(`/api/projects/${encodeURIComponent(aiPid)}/agent/event`, {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'session-note', source: 'board', stage: 'process',
+        text: value, key: `process:${value}` }),
+    }))
+    .catch(() => { /* 落库失败不影响本地可见性 */ });
+}
+function aiReplayTimeline() {
+  if (!aiPid) return Promise.resolve();
+  return Promise.resolve()
+    .then(() => api(`/api/projects/${encodeURIComponent(aiPid)}/agent/events?stage=process&source=board`))
+    .then((payload) => {
+      const rows = (window.TechSessionTimeline && window.TechSessionTimeline.forStage)
+        ? window.TechSessionTimeline.forStage({ stage: 'process', events: (payload && payload.events) || [] })
+        : [];
+      aiReplaying = true;
+      try { rows.forEach(row => { if (row && row.text) aiSay(String(row.text)); }); }
+      finally { aiReplaying = false; }
+    })
+    .catch(() => { /* 时间线读不到不影响本轮渲染 */ });
 }
 
 /** 处理过程卡：任务进度逐条落在这里，和 2.1 的 Agent 对话框一个样子。 */
@@ -586,8 +619,10 @@ async function aiParamsAutofill() {
 }
 
 /** 「保存补填」/「确认参数已齐」：把表里的值合进整机参数（finalize），
-    confirm=true 时后端校验报价必填项 —— 缺项就退回真实原因，不把缺口带给后面。 */
-async function aiParamsFinalize(confirm) {
+    confirm=true 时后端校验报价必填项 —— 缺项就退回真实原因，不把缺口带给后面。
+    可选第二个参数 waiver 是「仍要继续」那条路：缺口原样留档、人签了字，
+    params_final 仍为 false（签字不等于参数已齐），发送财务时同一批缺口凭它复用。 */
+async function aiParamsFinalize(confirm, waiver) {
   if (aiBusy) return;
   aiBusy = true;
   aiRenderActions();
@@ -599,7 +634,8 @@ async function aiParamsFinalize(confirm) {
     aiData = await api(
       `/api/projects/${encodeURIComponent(aiPid)}/integration/params/finalize`, {
         method: 'POST',
-        body: JSON.stringify({ values: QuoteParams.collect(), confirm: !!confirm }),
+        body: JSON.stringify({ values: QuoteParams.collect(), confirm: !!confirm,
+                               waiver: waiver || null }),
       });
     const gaps = aiRequiredGaps();
     aiStatus(confirm ? '参数已最终确认' : '补填已保存');
@@ -738,8 +774,11 @@ async function aiConfirmParamsAndNext() {
       return { ok: false, error: { code: 'required-missing',
         message: `${why}已停在参数推荐这一步，在右侧表格补填后再点「确认并进入下一页签」。` } };
     }
-    // 带着缺口继续：只把已经填上的值落库（finalize 的非校验分支），必填缺口由人担着。
-    await aiParamsFinalize(false);
+    // 带着缺口继续：既有的「保存补填」调用 aiParamsFinalize(false) 形态不变，只是这次
+    // 多带一个签字 —— 已填的值照旧落库（params_final 仍为 false，签字不等于参数已齐），
+    // 缺口与签字一起留档，发送财务时同一批缺口凭它复用，不再要第二次签字。
+    const waiver = { reason: `带缺口继续：${why}` };
+    await aiParamsFinalize(false, waiver);
   }
   await aiConfirmStep('params');
   if (!aiData?.status?.params_confirmed) {
@@ -1045,19 +1084,47 @@ function aiPublishState() {
  * 单价是要拿去报价的，宁可拦住，也不要写一个 0 进去。
  */
 
-/* 「确认工艺并发送财务」的前置条件唯一判定：只判前置条件，不含 busy。
+/* 「确认工艺并发送财务」的 L1 硬门禁：只判**生成依赖** —— 参数推荐 / 组装工艺跑过没有。
+   没有这两样，财务连成本都算不出来，签字也不放行（L1 不可豁免）。
+   L2（报价必填缺口、三项内部确认）不在这里拦：那是「仍要继续」的签字范围，
+   见 aiFinanceGaps() 与 aiConfirmProcessAndSendToFinance()。
    aiRenderOps() 的页内 why 与左侧动作快照的 run() 共用这一份，两处不许漂移。 */
-function aiFinanceBlocker(options = {}) {
+function aiFinanceBlocker() {
   const state = aiData?.status || {};
   if (!state.has_params) return '请先完成参数推荐';
   if (!state.has_process) return '请先完成组装工艺';
-  if ((state.required_missing || 0) > 0) return `请先在「参数推荐」里补齐 ${state.required_missing} 项报价必填参数`;
-  if (!state.params_final) return '请先在「参数推荐」里点「确认参数已齐」';
-  if (!state.params_confirmed) return '请先在「参数推荐」里点「确认参数推荐」';
-  // 「组装工艺还没确认」这一段可以由调用方先补上（确认并发送财务的链路会先跑
-  // /process/confirm）；只有调用方明确说 ignoreProcessConfirm 时才跳过，默认口径不变。
-  if (!options.ignoreProcessConfirm && !state.process_confirmed) return '请先在「组装工艺」里点「确认组装工艺」';
   return '';
+}
+
+/* L2 缺口的完整描述（报价必填缺口 + 三项内部确认）：只描述、不拦截。
+   「仍要继续」弹窗正文与页内提示共用这一份 —— 缺口一次说全，不让人逐页倒查；
+   点「仍要继续」才带着本人签字往下发，点「取消」即停。 */
+function aiFinanceGaps() {
+  const state = aiData?.status || {};
+  const gaps = aiRequiredGaps();
+  // 三项内部确认是否都点过。只用来把缺口说清楚 —— 点不点都不再当硬门禁（可签字放行）。
+  const confirmed = Boolean(state.params_confirmed && state.process_confirmed);
+  const pending = [];
+  if (!state.params_final) pending.push('「确认参数已齐」');
+  if (!state.params_confirmed) pending.push('「确认参数推荐」');
+  if (!state.process_confirmed) pending.push('「确认组装工艺」');
+  const parts = [];
+  if (gaps.required_missing > 0) {
+    const names = gaps.fields.map(field => field.name || field.code).join('、');
+    parts.push(`报价必填的成品参数还缺 ${gaps.required_missing} 项：${names}`);
+  }
+  if (pending.length) parts.push(`还没点确认的环节：${pending.join('、')}`);
+  return {
+    required_total: gaps.required_total,
+    required_filled: gaps.required_filled,
+    required_missing: gaps.required_missing,
+    fields: gaps.fields,
+    params_final: !!state.params_final,
+    params_confirmed: !!state.params_confirmed,
+    process_confirmed: !!state.process_confirmed,
+    confirmed: confirmed,
+    text: parts.length ? `${parts.join('；')}。` : '',
+  };
 }
 
 function aiRenderOps() {
@@ -1075,12 +1142,13 @@ function aiRenderOps() {
     : '确认参数推荐与组装工艺后，把任务交给财务经理测算成本';
 
   const financeBtn = $ai('aiToFinance');
-  // 闸门：参数与工艺都**确认过**才允许推给财务 —— 工序和用量没定稿，算出来的成本没意义。
-  const ready = Boolean(state.params_confirmed && state.process_confirmed
-    && state.params_final && !state.required_missing) && !aiBusy;
+  // L2 缺口不再把按钮置灰：参数推荐与组装工艺跑过（L1）就能点，缺什么由「仍要继续」
+  // 签字放行。忙的时候仍然禁用 —— 那是并发保护，不是业务门禁。
+  const ready = Boolean(state.has_params && state.has_process) && !aiBusy;
   if (financeBtn) financeBtn.disabled = !ready;
 
-  const why = aiBusy ? '正在处理…' : aiFinanceBlocker();
+  const gaps = aiFinanceGaps();
+  const why = aiBusy ? '正在处理…' : (aiFinanceBlocker() || gaps.text);
   if (financeBtn) {
     financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 2.3 测算成本';
   }
@@ -1131,7 +1199,7 @@ async function aiWfApi(path) {
   return window.cpqAuth.api(path);
 }
 
-async function aiOpenFinanceDialog() {
+async function aiOpenFinanceDialog(waiver) {
   if (aiBusy) {
     const message = '正在处理中，请稍后再发送财务。';
     aiStatus(message, true);
@@ -1218,14 +1286,18 @@ async function aiOpenFinanceDialog() {
       dispatch.target_user_id = $ai('aiSendUser').value;
       if (!dispatch.target_user_id) { $ai('aiSendMsg').textContent = '请选择目标人员'; return; }
     }
+    // 「带缺口继续」的签字随请求一起提交：缺口以服务端算出的为准，前端只表达本人意愿。
+    if (waiver) dispatch.waiver = waiver;
     mask.remove();
     aiRunOp('send-to-finance', dispatch);
   };
 }
 
 /* 「确认工艺并发送财务」的链路：组装工艺还没确认就先走既有 /process/confirm 把它
-   确认掉（确认没通过就带真实原因停下），再由既有 aiFinanceBlocker 判定并打开既有弹窗
-   选接收人。弹窗要人操作，所以整条链由 aiSendToFinanceInBackground 在后台跑。 */
+   确认掉（确认没通过就带真实原因停下），再由既有 aiFinanceBlocker 判定 L1 生成依赖；
+   L2 缺口（报价必填 + 三项内部确认）不硬拦 —— 用既有 aiAskProceed 取得本人签字，
+   点「仍要继续」才带着签字打开既有接收人弹窗，点「取消」即停、不发送不落库。
+   弹窗要人操作，所以整条链由 aiSendToFinanceInBackground 在后台跑。 */
 async function aiConfirmProcessAndSendToFinance() {
   const state = aiStatusState();
   if (state.has_process && !state.process_confirmed) {
@@ -1237,7 +1309,21 @@ async function aiConfirmProcessAndSendToFinance() {
   }
   const why = aiFinanceBlocker();
   if (why) return { ok: false, error: { code: 'not-ready', message: why } };
-  return aiOpenFinanceDialog();
+  const gaps = aiFinanceGaps();
+  let waiver = null;
+  if (gaps.text) {
+    const go = await aiAskProceed(
+      `${gaps.text}\n\n这些项平台推不出来，需要有人给个值。现在继续的话，报价测算单上`
+      + `这几格会是空白，内部确认也按你的签字放行；平台会记下是你签的字，`
+      + `之后不再按同一批缺口拦你。确定要带着缺口发送财务吗？`,
+      { title: '这一步还有没完成的项' });
+    if (!go) {
+      return { ok: false, error: { code: 'required-missing',
+        message: `${gaps.text}已停在发送财务这一步：补填参数或点确认后再重试。` } };
+    }
+    waiver = { reason: `带缺口继续：${gaps.text}` };
+  }
+  return aiOpenFinanceDialog(waiver);
 }
 
 /* 发送财务的后台链路：动作条目只启动它、秒级回执，由这里在真正结束时自报收尾。
@@ -1274,6 +1360,9 @@ async function aiRunOp(kind, dispatch) {
   try {
     const payload = Object.assign(
       { product_name: $ai('aiProductName')?.value.trim() || '' }, dispatch || {});
+    // 「带缺口继续」的签字只在自己带上来时提交：后端以它算出的缺口为准落库，
+    // 前端伪造不了豁免范围。
+    if (dispatch && dispatch.waiver) payload.waiver = dispatch.waiver;
     aiData = await api(aiUrl(`/${kind}`), { method: 'POST', body: JSON.stringify(payload) });
     const finance = aiData.finance || {};
     const whom = aiHandoffWhom(finance);
@@ -1514,8 +1603,9 @@ function aiBindShell() {
   };
   $ai('aiPlus').onclick = () => $ai('aiDrawingInput').click();
   $ai('aiStart').onclick = () => aiRunAll();
-  // 不直接发：先让人选派发方式（角色 / 指定人 / 公共任务池），和报价助手一致。
-  $ai('aiToFinance').onclick = () => aiOpenFinanceDialog();
+  // 不直接发：先走与左侧动作同一条链路 —— 组装工艺没确认就先确认，L2 缺口由「仍要继续」
+  // 取得本人签字，最后才让人选派发方式（角色 / 指定人 / 公共任务池），和报价助手一致。
+  $ai('aiToFinance').onclick = () => aiConfirmProcessAndSendToFinance();
   $ai('aiSend').onclick = () => aiSendNote();
   $ai('aiInput').onkeydown = event => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); aiSendNote(); }
@@ -1730,6 +1820,7 @@ async function aiStart() {
     // 落在"下一件该做的事"上。
     aiTab = state.has_process ? 'process' : state.has_params ? 'params' : 'drawings';
     aiRender();
+    await aiReplayTimeline();
     aiStatus(state.confirmed ? '本步已确认' : '就绪');
     if (!parts.length) aiSay('还没有拿到 2.1 的零件清单。请先完成 2.1 图纸解析 —— 2.2 是把那些零件装回整机。');
   } catch (error) {
@@ -1783,9 +1874,9 @@ aiStart();
       label: '确认工艺并发送财务',
       deferred: true,
       run: () => {
-        // 「组装工艺还没确认」由后台链路先补上，所以同步回执里只判参数推荐那半边；
-        // 其余前置（参数推荐、报价必填）在这里就能如实说清楚。
-        const why = aiFinanceBlocker({ ignoreProcessConfirm: true });
+        // 同步回执里只判 L1 生成依赖（参数推荐 / 组装工艺跑过没有），并如实说清楚；
+        // 「组装工艺还没确认」与其它 L2 缺口由后台链路的「仍要继续」签字处理。
+        const why = aiFinanceBlocker();
         if (why) { aiStatus(why, true); return { ok: false, error: { code: 'not-ready', message: why } }; }
         if (aiDeferredBusy) {
           return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };

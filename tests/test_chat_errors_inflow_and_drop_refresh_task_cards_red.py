@@ -127,9 +127,15 @@ class ChatErrorsInflowAndDropRefreshTaskCardsRedTest(unittest.TestCase):
                          "常驻底部行已退役，对应 CSS 规则必须一起删除")
 
     def test_existing_error_channels_are_kept(self):
+        # 被取代的断言（去掉红字报错卡片批次）：旧契约要求 oc-err-line 同时留在 JS 与 CSS，
+        # 也正因为如此失败提示一直是红字卡片。它的真实意图是「错误仍在会话流内、不被静默
+        # 吞掉」，与红色样式无关 —— 改为「pushSystem 仍在 + 走普通输出 + 不再有红字卡片」。
         self.assertIn("function pushSystem(", self.chat, "pushSystem 仍是流内错误输出通道")
-        self.assertIn("oc-err-line", self.chat)
-        self.assertIn(".oc-err-line", self.css, "流内错误行样式保留")
+        body = block_from(self.chat, "function pushSystem(")
+        self.assertIn("oc-atxt", body, "系统提示必须走普通输出排版")
+        self.assertNotIn("oc-err-line", self.chat,
+                         "红字报错卡片退役（见 docs/specs/tech-chat-drop-red-error-cards.md）")
+        self.assertNotIn(".oc-err-line", self.css, "红字报错样式一并删除")
 
     # ------------------------------------------------ 契约 B：silent 动作不出卡
     def test_runtime_gates_card_events_by_silent(self):

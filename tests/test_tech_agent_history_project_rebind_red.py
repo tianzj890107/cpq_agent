@@ -161,7 +161,13 @@ class HistoryCapabilityKeptContract(unittest.TestCase):
         for event_type in ("user", "assistant", "tool_use", "tool_result"):
             with self.subTest(event_type=event_type):
                 self.assertIn(f'"{event_type}"', render)
-        self.assertIn('event.name === "tech_ui"', render)
+        # 被取代的断言（会话时间线批次）：旧契约要求回放时主动跳过 tech_ui，
+        # 于是结构化卡片永远无法在重进项目后恢复；新契约要求 tech_ui 照常回放。
+        self.assertNotRegex(
+            render,
+            r'event\.name === "tech_ui"\)\s*return',
+            "renderHistory() 不允许再跳过 tech_ui（见 docs/specs/tech-session-timeline-persistence-and-order.md）",
+        )
 
 
 if __name__ == "__main__":

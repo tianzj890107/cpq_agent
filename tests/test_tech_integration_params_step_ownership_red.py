@@ -85,11 +85,17 @@ class ParameterFinalizationAndFlowGate(unittest.TestCase):
             self.assertNotIn("auth.COST_ROLES", body)
             self.assertNotRegex(body, r"2\.3|财务经理负责")
 
-    def test_send_to_finance_requires_final_complete_parameters(self):
+    def test_send_to_finance_grades_its_dependencies(self):
+        """契约更新（依赖分级与缺口豁免批次，取代旧的「必填齐 + 已定稿才能发财务」硬门禁）：
+        L1 生成依赖（没有参数推荐 / 没有组装工艺）仍不可豁免；L2 质量依赖（报价必填缺口、
+        参数已齐、参数推荐确认、组装工艺确认）改为可由本人签字带缺口放行，签字要落库。"""
         body = py_function(INTEGRATION, "send_to_finance")
-        self.assertIn("params_final", body)
-        self.assertRegex(body, r"missing_required\s*\(")
-        self.assertRegex(body, r"raise\s+IntegrationFlowError")
+        self.assertIn("plan.params is None", body, "L1：没有参数推荐不许发财务")
+        self.assertIn("plan.process is None", body, "L1：没有组装工艺不许发财务")
+        self.assertRegex(body, r"missing_required\s*\(", "L2 缺口仍要算出来给人看")
+        self.assertIn("waiver", body, "L2 缺口要能由 waiver 签字放行")
+        self.assertRegex(body, r"record_waiver\s*\(", "签字必须落库（唯一实现）")
+        self.assertRegex(body, r"raise\s+IntegrationFlowError", "未签字仍要如实拦住")
         self.assertNotRegex(body, r"财务[^\n]{0,100}(?:补齐|补填)")
 
     def test_cost_permissions_and_core_actions_remain(self):

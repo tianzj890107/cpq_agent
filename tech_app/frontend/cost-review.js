@@ -77,6 +77,38 @@ function crAppend(html) {
 function crSay(text) {
   crAppend(`<div class="oc-amsg"><div class="oc-aav" aria-hidden="true">¥</div>
     <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
+  crPersistNote(text);
+}
+
+/* --------------------------------------------- 会话时间线（项目级，按顺序持久化）
+   过程文字既写本地线程（可见效果不变），也以 session-note / source=board 落库；重进项目
+   或重载 iframe 后用 GET /agent/events 取回本阶段那几条回放进 #crTinner。排序 / 去重
+   复用父壳同一份 tech-session-timeline.js，两个出口不各写一套顺序规则。 */
+let crReplaying = false;
+function crPersistNote(text) {
+  const value = String(text || '').trim();
+  if (!value || crReplaying || !crPid) return;
+  Promise.resolve()
+    .then(() => api(`/api/projects/${encodeURIComponent(crPid)}/agent/event`, {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'session-note', source: 'board', stage: 'cost',
+        text: value, key: `cost:${value}` }),
+    }))
+    .catch(() => { /* 落库失败不影响本地可见性 */ });
+}
+function crReplayTimeline() {
+  if (!crPid) return Promise.resolve();
+  return Promise.resolve()
+    .then(() => api(`/api/projects/${encodeURIComponent(crPid)}/agent/events?stage=cost&source=board`))
+    .then((payload) => {
+      const rows = (window.TechSessionTimeline && window.TechSessionTimeline.forStage)
+        ? window.TechSessionTimeline.forStage({ stage: 'cost', events: (payload && payload.events) || [] })
+        : [];
+      crReplaying = true;
+      try { rows.forEach(row => { if (row && row.text) crSay(String(row.text)); }); }
+      finally { crReplaying = false; }
+    })
+    .catch(() => { /* 时间线读不到不影响本轮渲染 */ });
 }
 
 function crCard(title) {
@@ -860,6 +892,7 @@ async function crStart() {
     $cr('crQuantity').value = crData.quantity || 1;
     crTab = crData.ready ? 'total' : (crData.counts?.missing || []).length ? 'parts' : 'assembly';
     crRender();
+    await crReplayTimeline();
     crStatus(crReadOnly() ? '只读：本步归财务经理'
       : crData.review?.confirmed ? '成本已确认' : '就绪');
     if (crReadOnly()) crSay(crReadOnlyWhy());

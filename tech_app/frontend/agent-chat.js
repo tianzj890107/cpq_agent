@@ -52,6 +52,16 @@
     return node;
   };
   const scrollDown = () => { thread.scrollTop = thread.scrollHeight; };
+  // 会话条目落库：统一走 POST /agent/event（回放走 GET /agent/events?stage=&source=）。
+  // 渲染不依赖落库结果 —— 网络失败只留痕，不阻塞会话。回放期间不重复写回。
+  function persistSessionEvent(event) {
+    if (!projectId || replayingHistory) return null;
+    const payload = Object.assign({ source: "shell", stage: boardStage() }, event || {});
+    return fetch(api("/event"), {
+      method: "POST", headers: authHeaders(true), body: JSON.stringify(payload),
+    }).then(response => (response.ok ? response.json().catch(() => null) : null))
+      .catch(() => null);
+  }
 
   // 统一工作台（tech-workbench.html）与独立 2.1 页共用本脚本。父壳只有
   // #techChatPane 一个会话宿主，右侧九步看板是 iframe：父壳模式必须走持久控件 +
@@ -181,6 +191,8 @@
   // 打开已绑定项目时先取回该项目持久化的完整会话（用户 / 助手 / 工具轨迹），再进入
   // 正常会话状态；空历史才保留空态，读取失败必须显式报错，绝不静默展示空会话。
   let historyLoaded = false;
+  // 回放历史期间不再把同一条内容写回时间线（否则每打开一次项目就重复追加一遍）。
+  let replayingHistory = false;
   async function loadHistory() {
     if (!projectId || historyLoaded) return;
     historyLoaded = true;
@@ -189,7 +201,7 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
       if (data.available === false) throw new Error(data.reason || "会话历史暂不可用");
-      renderHistory((data && data.messages) || []);
+      renderHistory((data && data.messages) || [], (data && data.timeline) || []);
     } catch (error) {
       // 允许重新登录 / 服务恢复后再取一次，不把失败伪装成空会话。
       historyLoaded = false;
@@ -231,12 +243,21 @@
     refreshResultChips();
   }
 
-  // 按后端顺序回放：用户消息、助手文本（复用 Markdown 渲染）、工具卡与工具结果。
-  // tech_ui 是结构化界面事件而不是业务工具，回放时跳过，避免多出一张空卡。
-  function renderHistory(events) {
+  // 按统一时间线回放：Agent 消息、任务卡、阶段过程文字、工具卡与工具结果都由
+  // TechSessionTimeline 的同一套 (ts, seq) 规则排成一条列表，不再「消息全在前、
+  // 卡片钉底部」。tech_ui 不再跳过 —— 重进项目必须恢复结构化确认卡。
+  function renderHistory(events, timeline) {
+    const rows = window.TechSessionTimeline
+      ? window.TechSessionTimeline.forShell({ messages: events || [], events: timeline || [] })
+      : (events || []);
+    replayingHistory = true;
     let ctx = null;
-    events.forEach(event => {
-      if (!event || typeof event !== "object") return;
+    rows.forEach(raw => {
+      if (!raw || typeof raw !== "object") return;
+      // 时间线条目用 kind（normalize 补齐），Agent JSONL 消息用 type：这里统一成 type，
+      // 下面几个既有分支的写法与语义保持不变。
+      const event = Object.assign({}, raw);
+      if (!event.type && event.kind) event.type = event.kind;
       if (event.type === "user") {
         addUser(String(event.text || ""));
         ctx = null;
@@ -250,8 +271,15 @@
         ctx.text.innerHTML = renderMarkdown(ctx.full);
         return;
       }
+      if (event.type === "task") {
+        replayTimelineTask(event);
+        return;
+      }
+      if (event.type === "session-note") {
+        noteInThread(String(event.text || ""));
+        return;
+      }
       if (event.type === "tool_use") {
-        if (event.name === "tech_ui") return;
         if (!ctx) ctx = addAssistant();
         setAssistantState(ctx, "succeeded");
         addToolCard(ctx, { id: event.id, name: event.name, input: event.input || {} });
@@ -266,7 +294,22 @@
         });
       }
     });
+    replayingHistory = false;
     scrollDown();
+  }
+  // 回放持久化的任务卡：同一 task.id 只画一张，进度行按行去重追加、状态就地更新。
+  function replayTimelineTask(event) {
+    const task = (event && event.task) || {};
+    const taskId = String(task.id || "");
+    if (!taskId) return;
+    // 走同一个渲染入口：进度行按 cursor 去重 —— 回放与看板桥播报撞在一起也不会叠加。
+    renderTaskProgress({
+      label: String(task.label || event.text || "任务"),
+      taskId: taskId,
+      status: String(task.status || "running"),
+      log: (task.steps || []).slice(),
+      error: String(task.error || ""),
+    });
   }
   // 右上角模型文字只表达「模型设置」里的当前语言模型；Agent 会话是否可用是另一件事，
   // 不能用「未连接 / Agent 未就绪」覆盖真实模型。没有配置时才显示提示。
@@ -458,12 +501,14 @@
   function pushSystem(text) {
     clearEmpty();
     const wrap = el("div", "oc-amsg");
-    const avatar = el("div", "oc-aav", "!");
+    const avatar = el("div", "oc-aav", "✦");
     const body = el("div", "oc-abody");
-    body.append(el("div", "oc-err-line", `⚠ ${text}`));
+    body.append(el("div", "oc-atxt", text));
     wrap.append(avatar, body);
     tinner.append(wrap);
     scrollDown();
+    persistSessionEvent({ kind: "session-note", source: "shell",
+                          text: String(text || ""), key: `shell:${String(text || "")}` });
   }
   // 预期内失败码（口径与 tech-board-bridge.js 的 QUIET_FAILURE_CODES 一致）：切看板导致
   // 在途命令被取消、必填意见没填、当前视图没有目标输入框 —— 看板自己已经就地提示过，
@@ -666,9 +711,14 @@
       return;
     }
     if (event.type === "error") {
+      // 失败不再是另一张红字卡片：原因并进同一条回复的正文（状态位仍置失败），
+      // 和普通输出同一套排版，也不会额外占住会话底部。
       ctx.failed = true;
       setAssistantState(ctx, "failed");
-      ctx.body.append(el("div", "oc-err-line", `⚠ ${event.error}`));
+      const reason = String(event.error || "未知错误");
+      ctx.full = (ctx.full ? `${ctx.full}\n` : "") + `⚠ ${reason}`;
+      ctx.text.classList.add("rendered");
+      ctx.text.innerHTML = renderMarkdown(ctx.full);
       scrollDown();
       return;
     }
@@ -718,9 +768,13 @@
         }
       }
     } catch (error) {
+      // 连接失败同样并进正文：保留失败状态位，但不再画一张红色的独立卡片。
       ctx.failed = true;
       setAssistantState(ctx, "failed");
-      ctx.body.append(el("div", "oc-err-line", `⚠ ${error.message || "连接错误"}`));
+      const reason = (error && error.message) || "连接错误";
+      ctx.full = (ctx.full ? `${ctx.full}\n` : "") + `⚠ ${reason}`;
+      ctx.text.classList.add("rendered");
+      ctx.text.innerHTML = renderMarkdown(ctx.full);
     } finally {
       busy = false;
       sendBtn.disabled = false;
@@ -1093,6 +1147,8 @@
     wrap.append(body);
     tinner.append(wrap);
     scrollDown();
+    persistSessionEvent({ kind: "session-note", source: "shell",
+                          text: String(text || ""), key: `shell:${String(text || "")}` });
   }
 
   // 解析结果以按钮形式常驻对话**底部**。
@@ -1225,11 +1281,12 @@
   // 这里渲染成对话中的一条时间线，让每一步在干什么可见。
   // 统一的进度卡：按 taskId 去重，queued / running / succeeded / failed 四态；
   // progress_log 只从游标增量追加，已经显示的中间步骤不会被覆盖。
-  // 统一父壳渲染进 #ocTaskProgressHost；独立 2.1 页没有该宿主时退回消息流。
+  // 任务卡和消息共用同一个插入点 #ocTinner：#ocTaskProgressHost 只保留节点（多个
+  // 批次的防缩水守卫与 setProject 的清理逻辑引用它），卡片不再钉在会话底部。
   const taskProgressCards = new Map();
 
   function taskProgressHost() {
-    return $("ocTaskProgressHost") || tinner;
+    return tinner;
   }
   // 进度只展示业务语义：Key / Authorization / 请求头等敏感字段一律不进 DOM。
   const SENSITIVE_TASK_KEYS = /^(api[-_]?key|authorization|headers|token|secret|password)$/i;
@@ -1257,14 +1314,11 @@
     head.append(state);
     const steps = el("div", "oc-task-steps");
     box.append(head, steps);
-    let wrapper = box;
-    if (host === tinner) {
-      wrapper = el("div", "oc-amsg");
-      wrapper.append(el("div", "oc-aav", "✦"));
-      const body = el("div", "oc-abody");
-      body.append(box);
-      wrapper.append(body);
-    }
+    const wrapper = el("div", "oc-amsg");
+    wrapper.append(el("div", "oc-aav", "✦"));
+    const body = el("div", "oc-abody");
+    body.append(box);
+    wrapper.append(body);
     host.append(wrapper);
     scrollDown();
     // cursor：已渲染到 progress_log 的第几条。用下标而不是文本去重 ——
@@ -1319,6 +1373,7 @@
     const hasContent = log.length > 0 || existingCard;
     if (!hasContent) return;
     const card = ensureTaskCard(taskId, label);
+    const freshSteps = log.length > card.cursor ? log.slice(card.cursor) : [];
     setTaskStatus(card, status);
     if (log.length > card.cursor) {
       for (const entry of log.slice(card.cursor)) {
@@ -1334,6 +1389,8 @@
         pushTaskStep(card, line, toneOf(line));
       }
     }
+    // 落库只提交新出现的进度行：服务端按行去重合并、就地更新同一张卡的状态。
+    persistTaskCard(taskId, label, status, freshSteps, failureReason);
     if (status === "succeeded") {
       card.done = true;
       refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
@@ -1350,6 +1407,19 @@
         card.errorNode.textContent = message;
       }
     }
+  }
+
+  // 任务卡落库：key 固定 task:<taskId>，与 store.append_session_event 的同一 task.id
+  // 只留一张卡的口径一致（前端 applyTaskProgress 也复用这套合并规则）。
+  function persistTaskCard(taskId, label, status, steps, error) {
+    const id = String(taskId || label || "task");
+    persistSessionEvent({
+      kind: "task", source: "shell", stage: boardStage(), text: String(label || ""),
+      key: `task:${id}`,
+      task: { id: id, label: String(label || ""), status: String(status || ""),
+              steps: (steps || []).map(line => String(line).replace(/\s+$/, "")),
+              error: String(error || "") },
+    });
   }
 
   function toneOf(line) {
@@ -1806,8 +1876,9 @@
       }
       if (name === "attached") { boardResultSummary = null; applyDrawingResultSummary(); return; }
       if (name === "detached") {
+        // 解绑只清摘要：已落库 / 已在会话里的条目一条都不动（重进项目要能恢复），
+        // 也不清任务卡映射 —— 否则重新挂上时会再画一张同样的卡。
         boardResultSummary = null;
-        taskProgressCards.clear();
         applyDrawingResultSummary();
         return;
       }

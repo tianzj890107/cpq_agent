@@ -113,12 +113,22 @@
 
   function entryState(name) {
     var entry = actions[name] || views[name] || {};
-    var raw = {};
+    // 静态元数据基线：外层声明的 role / order / hint 就是这三者的单一事实来源，
+    // getState() / entry.state 在自己的返回值里覆盖它们（不写即沿用静态声明）。
+    // 只回退「元数据」—— visible / enabled / busy / active / analyzed 仍只由运行时状态
+    // 决定，不把静态声明误当成运行时状态。否则「外层 role: 'primary'、getState() 只返回
+    // visible/enabled/busy」的条目会被静默降级成 aux（1.2 / 1.3 / 3.2 的主按钮就是这样丢的）。
+    var base = {};
+    ['role', 'order', 'hint'].forEach(function (key) {
+      if (entry[key] != null && entry[key] !== '') base[key] = entry[key];
+    });
+    var raw = base;
     try {
-      if (typeof entry.getState === 'function') raw = entry.getState() || {};
-      else if (entry.state && typeof entry.state === 'object') raw = entry.state;
+      if (typeof entry.getState === 'function') raw = Object.assign({}, base, entry.getState() || {});
+      else if (entry.state && typeof entry.state === 'object') raw = Object.assign({}, base, entry.state);
     } catch (error) {
-      raw = {};
+      // getState() 抛错时保留静态元数据基线（与既有 label 回退语义一致），照旧不向上抛。
+      raw = base;
     }
     if (overrides[name]) raw = Object.assign({}, raw, overrides[name]);
     return {

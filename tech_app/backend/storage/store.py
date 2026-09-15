@@ -1172,3 +1172,95 @@ def _touch_stage(project_id: str, stage: str) -> None:
     meta = load_meta(project_id) or {}
     meta.setdefault("stages", {})[stage] = _now()
     _meta().put_meta(project_id, meta)
+
+
+# --------------------------------------------------------------------------- #
+# 项目会话时间线（左侧会话的持久化事实源）
+#
+# 左侧会话里除了 OpenClaude 的 JSONL 消息，还有任务进度卡与各阶段页的过程文字 —— 它们
+# 以前只存在 DOM 里，重进项目就没了，而且任务卡被固定在会话底部、和消息两套顺序。
+# 这里给它们一份项目级、只追加、有序的存储：seq 由服务端分配（等于追加顺序），
+# 带 key 的条目幂等且就地更新（同一张卡重复提交不会多出一行、位置也不动）。
+#
+# 与业务数据无关：时间线只存「会话可见内容」，成本 / 工艺 / 报告仍各写自己的文件与库。
+# --------------------------------------------------------------------------- #
+SESSION_EVENTS_KIND = "session_events"
+
+
+def _session_events(project_id: str) -> dict:
+    data = _meta().get_doc(project_id, SESSION_EVENTS_KIND) or {}
+    items = data.get("items")
+    if not isinstance(items, list):
+        items = []
+    return {"items": items}
+
+
+def _merge_task_entry(previous: dict, incoming: dict) -> dict:
+    """同一张任务卡的合并口径：进度行按行去重追加，状态 / 错误就地更新。
+
+    与前端 tech-session-timeline.js 的 applyTaskProgress() 是同一套口径 —— 否则
+    「左栏渲染出来的卡」和「落库里的卡」会漂移。
+    """
+    merged = dict(previous or {})
+    for field, value in (incoming or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        merged[field] = value
+    steps: List[str] = []
+    for row in list((previous or {}).get("steps") or []) + list((incoming or {}).get("steps") or []):
+        text = str(row)
+        if text and text not in steps:
+            steps.append(text)
+    merged["steps"] = steps
+    return merged
+
+
+def append_session_event(project_id: str, event: dict) -> dict:
+    """追加一条会话条目（或就地更新同一 key / 同一 task.id 的那一条）。
+
+    返回**存下来**的那条：新条目带服务端分配的 seq；就地更新的条目保留原 seq 与原位置。
+    """
+    incoming = dict(event or {})
+    kind = str(incoming.get("kind") or "").strip()
+    if not kind:
+        raise ValueError("会话事件缺少 kind")
+    incoming.pop("seq", None)
+    incoming["kind"] = kind
+    incoming.setdefault("ts", _now())
+    key = str(incoming.get("key") or "").strip()
+    task_id = str(((incoming.get("task") or {}) or {}).get("id") or "").strip()
+    with _document_lock:
+        data = _session_events(project_id)
+        items = data["items"]
+        index = None
+        if key:
+            index = next((i for i, row in enumerate(items)
+                          if str((row or {}).get("key") or "") == key), None)
+        if index is None and task_id:
+            # 任务卡按 task.id 幂等：同一个任务无论 key 怎么写都只有一张卡。
+            index = next((i for i, row in enumerate(items)
+                          if str(((row or {}).get("task") or {}).get("id") or "") == task_id), None)
+        if index is None:
+            incoming["seq"] = max((int((row or {}).get("seq") or 0) for row in items), default=0) + 1
+            items.append(incoming)
+            stored = incoming
+        else:
+            previous = dict(items[index] or {})
+            merged = dict(previous)
+            # 空值不覆盖：进度提交常常只带增量字段（比如只报状态），不能把已有内容抹掉。
+            merged.update({k: v for k, v in incoming.items() if v not in (None, "", [], {})})
+            merged["seq"] = previous.get("seq")
+            if merged.get("task") is not None and previous.get("task") is not None:
+                merged["task"] = _merge_task_entry(previous.get("task"), incoming.get("task"))
+            items[index] = merged
+            stored = merged
+        data["items"] = items
+        _meta().put_doc(project_id, SESSION_EVENTS_KIND, data)
+        return dict(stored)
+
+
+def load_session_events(project_id: str) -> List[dict]:
+    """按 seq 升序返回该项目的会话时间线（不重排、不合并）。"""
+    rows = [dict(row) for row in _session_events(project_id)["items"] if isinstance(row, dict)]
+    rows.sort(key=lambda row: int(row.get("seq") or 0))
+    return rows

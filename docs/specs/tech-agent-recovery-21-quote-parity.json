@@ -79,9 +79,9 @@
       "id": "error_prompt",
       "label": "错误提示",
       "quote": "确认需求解析结果.html#addErrorBubble",
-      "tech": "tech_app/frontend/agent-chat.js#oc-err-line",
+      "tech": "tech_app/frontend/agent-chat.js#pushSystem",
       "status": "live",
-      "release": "既有会话错误行 + 第 17 步固定确认交互"
+      "release": "既有会话错误提示（普通输出，不再是红字卡片）；第 17 步固定确认交互 · 契约更新（去掉红色报错卡片批次）"
     },
     {
       "id": "task_progress",

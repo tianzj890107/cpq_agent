@@ -151,15 +151,23 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
     checklist = product_params.checklist(plan.params) if plan.params else None
     review_dict = review.model_dump()
     review_dict["params_final"] = bool(plan.params_final)
+    # 「带缺口继续」的签字与"报价必填到底齐没齐"要一并交给财务：缺口是**人签过字的**，
+    # 就不能再按同一批缺口把财务拦在门口（L1 生成依赖与 L4 写库 / 发报价 / 审核发布
+    # 仍各自硬校验，不受影响）。复用 integration 的唯一实现，这里不另算一份。
+    review_dict["params_complete"] = bool(plan.params) and not integration.missing_required(plan)
+    review_dict["waiver"] = integration.waiver_summary(plan)
     return {
         "review": review_dict,
         "param_checklist": checklist,
         "params_plan": plan.params.model_dump() if plan.params else None,
-        "required_missing": (len(product_params.missing_required(plan.params))
-                             if plan.params else 0),
+        "required_missing": len(integration.missing_required(plan)),
         # 参数表里「成品编码」那一格要按它决定是显示「由系统生成」还是给出警告，
         # 说明手上这个号主数据里并不存在。
         "has_material_code": bool(plan.material_writes),
+        # 财务看板要能一眼看出"缺的这几项工艺经理签过字了"：params_complete 说数齐没齐，
+        # waiver 说缺口是谁在什么时候签字放行的（没有签字时为 None）。
+        "params_complete": review_dict["params_complete"],
+        "waiver": review_dict["waiver"],
         **data,
         "quantity": plan.quantity,
         "material": ({"number": written.number, "name": written.name,
