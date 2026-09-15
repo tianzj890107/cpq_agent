@@ -1019,3 +1019,32 @@
 - 边界：未新增 / 删除任何路由与 Agent 工具，未改 `_require` 角色、状态机前置、人工审批点击与
   `requirement_precheck()` 的完整性算法；缺口一律来自既有预检，签字一律走既有三条流转路由；
   2.1 / 2.3 / 3.1–3.3 的依赖分级仍留给后续批次。**未提交、未推送、未部署**。
+
+## 72. 本批（## 71）提交、双远端推送与 34 部署记录（9-15）
+
+- 提交：`92f9d30`「需求阶段依赖分级与「带缺口继续」的缺口记录（1.1 / 1.2 / 1.3）」，
+  9 个文件（+907 / −17），含 Spec、红测、后端模型 / 服务 / 路由、三个前端页面与 changelog；
+  提交前 `git diff --cached --check` 无输出，全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1137 项 / 0 失败 / 7 跳过。
+- 推送：`python3 scripts/push_remotes.py --only origin` → `origin/20260909` = `92f9d30`（GitHub 已推）；
+  GitLab 仍按上一批的临时 ssh 映射推送（`Host gitlab.boulderaitech.com / HostName 172.16.5.150 / User git`，
+  不改 `/etc/hosts`、不改仓库远端地址）：`GIT_SSH_COMMAND="ssh -F /tmp/gl.conf" python3 scripts/push_remotes.py
+  --only gitlab` → `gitlab/20260909` = `92f9d30`。两个远端均已用 `git ls-remote` 回读确认。
+- 部署到 172.16.10.34：**未执行，当前身份无权限**（与上一批相同，本批再次逐项复核）：
+  - 服务由 `wugefei` 账号运行：8010 `cpq_suite_server.py` PID 1302252、8012 `tech_app_launch.py`
+    PID 1302344；部署目录 `/home/wugefei/CPQ/cpq_agent`（`drwxr-xr-x wugefei ai`）对 `zhangzhen`
+    **不可写**（实测 `touch` 报「权限不够」），目录 HEAD 仍是 `e541fdf`。
+  - 本机 ssh 只有 `zhangzhen` 身份（`~/.ssh/config` 把 172.16.10.34 固定为 `zhangzhen`）；`sudo -n`
+    仍需密码；本机三个私钥（`cad_engine_deploy` / `agent` / `id_ed25519`）以 `wugefei` 登录均
+    `Permission denied (publickey,password)`，没有 `wugefei` 凭据。
+  - `DEPLOYMENT.md` 的默认部署根 `/home/data/zhangzhen_home/zhangzhen/cpq_agent` **不存在**
+    （`deploy_server.sh` 明确不自动创建目录），且部署要求保留的 `cpq_settings.json` 在 34 上权限为
+    `0600 wugefei`（`zhangzhen` 连读都不行），无法按文档路径重建一套 docker 栈；现网也不是 docker
+    （`docker ps` 里没有 cpq 容器，8010 是裸进程），贸然 `docker compose up` 只会抢 8010 端口。
+  - `.gitlab-ci.yml` 只有 `test`（全量单测 + `py_compile`）与 `build`（`docker build`，仅默认分支）
+    两个 stage，**没有部署 job**，不存在可代跑的 CI 部署链路。
+  - 具备 `wugefei` 权限时的部署顺序（该目录 `gitlab` 是内网 GitLab、`origin` 是 GitHub，部署只从
+    GitLab 取）：`cd /home/wugefei/CPQ/cpq_agent && git -c safe.directory=$PWD fetch gitlab 20260909 &&
+    git -c safe.directory=$PWD checkout 20260909 && git -c safe.directory=$PWD merge --ff-only FETCH_HEAD`
+    （`e541fdf → 92f9d30` 是纯快进）；随后先停 8012 子进程、再停 8010 主进程，等端口释放后重启 8010，
+    最后用 `/` 与 `/api/health`（`status=ok`）核验。
