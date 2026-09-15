@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..models.workflow import RequirementDoc, WorkflowReview
+from ..models.workflow import RequirementDoc, RequirementWaiver, WorkflowReview
 from . import industry_templates
 from ..storage import store
 from ..time_utils import now_cst_str
@@ -32,6 +32,31 @@ class RequirementSaveError(Exception):
     def __init__(self, message: str, status_code: int = 409):
         super().__init__(message)
         self.status_code = status_code
+
+
+# 需求阶段缺口记录用的字段中文名：Section C 由行业模板给（industry_templates.all_labels），
+# 其余固定字段在这里补齐，取不到就回落成字段编码本身（绝不返回空串）。
+_FIXED_FIELD_LABELS = {
+    "title": "需求名称", "requirement_type": "需求类型", "priority": "优先级",
+    "bu": "BU", "disclosure": "披露口径", "description": "需求描述",
+    "customer_type": "新旧客户", "customer_industry": "客户行业分类",
+    "final_customer_name": "最终客户名称", "project_name": "项目名称",
+    "project_code": "项目编码", "product_iteration": "全新或迭代",
+    "source": "原始图纸/技术资料",
+    "annual_forecast": "年预测量", "first_sample_due": "期望首样交付时间",
+    "mass_production_due": "期望量产时间",
+    "evaluation_due": "期望工艺评估完成日期", "milestones": "关键里程碑节点",
+    "category_a": "类型 A", "product_type": "产品类型", "complexity": "工艺复杂度等级",
+}
+_INDUSTRY_FIELD_LABELS = industry_templates.all_labels()
+
+
+def field_label(code: object) -> str:
+    """把缺口字段编码翻译成中文名；未知编码原样返回（绝不返回空串）。"""
+    text = str(code or "")
+    if not text:
+        return ""
+    return _FIXED_FIELD_LABELS.get(text) or _INDUSTRY_FIELD_LABELS.get(text) or text
 
 
 def next_requirement_no(project_id: str) -> str:
@@ -92,6 +117,8 @@ def save_requirement_draft(project_id: str, doc: RequirementDoc,
     doc.created_at = (current or {}).get("created_at") or now_cst_str()
     doc.status = (current or {}).get("status") if current else (doc.status if doc.status == "draft" else "draft")
     doc.history = [WorkflowReview(**row) for row in (current or {}).get("history", [])]
+    # 缺口签字和 history 一样是服务端写入的留痕：整份表单 PUT 过来时要继承，不能被抹掉。
+    doc.waivers = [RequirementWaiver(**row) for row in (current or {}).get("waivers", [])]
     doc.updated_at = now_cst_str()
     saved = doc.model_dump()
     store.save_requirement(project_id, saved, author=user.get("username", "system"))
@@ -100,7 +127,7 @@ def save_requirement_draft(project_id: str, doc: RequirementDoc,
 
 
 def submit_requirement_confirmation(project_id: str, user: Optional[dict] = None,
-                                    comment: str = "") -> dict:
+                                    comment: str = "", waiver: Optional[dict] = None) -> dict:
     """提交需求确认：只允许 draft/rejected 进入 pending_confirmation。
 
     与既有 `POST /requirement/submit-confirmation` 同一份落盘逻辑；Agent 即便调用
@@ -113,7 +140,15 @@ def submit_requirement_confirmation(project_id: str, user: Optional[dict] = None
     doc = RequirementDoc(**saved)
     if doc.status not in EDITABLE_STATUSES:
         raise RequirementSaveError("当前需求不在可提交状态", 409)
-    # 1.1 的唯一提交门槛由页面星号必填字段负责；不再用另一套完整性清单拦截。
+    # 1.1 不新增硬门禁：星号字段没填全时，前端弹「仍要继续」，点继续就把 waiver 带到这里。
+    # 缺口属于 L2（质量依赖），允许带着继续，但必须留下可追溯的签字记录。
+    if waiver:
+        gaps = requirement_gaps(project_id, doc)
+        record_requirement_waiver(project_id, doc, "submit_confirmation", gaps=gaps,
+                                  reason=_waiver_reason(waiver), actor=user)
+        store.audit(project_id, "workflow:requirement_submitted_waived",
+                    {"count": len(gaps.get("keys") or []),
+                     "by": (user or {}).get("username", "system")})
     doc.status = "pending_confirmation"
     doc.history.append(workflow_event("submit_confirmation", user, comment))
     doc.updated_at = now_cst_str()
@@ -178,7 +213,8 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
             if not meta.get("source_filename"):
                 missing.append("source")
         if missing:
-            items.append({"item": label, "status": "need_info", "detail": f"待补充：{', '.join(missing)}"})
+            items.append({"item": label, "status": "need_info",
+                          "detail": f"待补充：{', '.join(missing)}", "missing": list(missing)})
         else:
             items.append({"item": label, "status": "ok", "detail": ok_message})
     needs = [row for row in items if row["status"] == "need_info"]
@@ -187,13 +223,93 @@ def requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
         if not needs else
         "系统完整性检查发现待补充项：" + "；".join(row["item"] + "（" + row["detail"] + "）" for row in needs) + "。"
     )
-    return {"items": items, "ok": not needs, "generated_note": generated_note, "engine": "deterministic_rules"}
+    # 结构化缺口（唯一口径）：keys 是同一批缺口的比对键，labels 与之一一对应。
+    # items / ok / generated_note / engine 全部保留，确认页已有渲染依赖它们。
+    gap_keys: list[str] = []
+    gap_labels: list[str] = []
+    for row in needs:
+        for code in row.get("missing") or []:
+            key = str(code or "")
+            if not key or key in gap_keys:
+                continue
+            gap_keys.append(key)
+            gap_labels.append(field_label(key))
+    gaps = {"keys": gap_keys, "labels": gap_labels, "count": len(gap_keys)}
+    return {"items": items, "ok": not needs, "generated_note": generated_note,
+            "engine": "deterministic_rules", "gaps": gaps}
+
+# --------------------------------------------------------------------------- #
+# 需求阶段的缺口（L2）与「带缺口继续」签字：唯一实现，路由与 Agent 共用
+# --------------------------------------------------------------------------- #
+def requirement_gaps(project_id: str, doc: RequirementDoc) -> dict:
+    """把预检结果里 status == need_info 的条目收敛成结构化缺口。
+
+    直接复用 requirement_precheck()，不另写一套完整性算法。返回
+    {"keys": [...字段编码], "labels": [...中文名], "items": [...need_info 条目]}；
+    keys 与 labels 顺序一致，是同一批缺口的比对键与展示名。
+    """
+    precheck = requirement_precheck(project_id, doc)
+    gaps = dict(precheck.get("gaps") or {})
+    return {
+        "keys": list(gaps.get("keys") or []),
+        "labels": list(gaps.get("labels") or []),
+        "items": [row for row in (precheck.get("items") or [])
+                  if str(row.get("status") or "") == "need_info"],
+    }
+
+
+def _waiver_reason(waiver: Optional[dict]) -> str:
+    """请求体里的 waiver 只取人工填的原因；原因留空时由服务端补默认原因。"""
+    if isinstance(waiver, dict):
+        return str(waiver.get("reason") or "")
+    return ""
+
+
+def record_requirement_waiver(project_id: str, doc: RequirementDoc, stage: str, *,
+                              gaps: Optional[dict] = None, reason: str = "",
+                              actor: Optional[dict] = None,
+                              reused: bool = False) -> RequirementWaiver:
+    """写入一条需求阶段的缺口签字，返回该记录（调用方负责 store.save_requirement）。
+
+    缺口一律以服务端算出的为准（传进来的 gaps 只是省一次预检）；reason 为空时补默认原因，
+    并写入签字人与签字时间。同一批缺口已被上一条签字覆盖时用 reused=True 记录，不再重复索要。
+    """
+    actor = actor or {}
+    gaps = gaps if gaps is not None else requirement_gaps(project_id, doc)
+    keys = [str(item) for item in (gaps.get("keys") or [])]
+    labels = [str(item) for item in (gaps.get("labels") or [])]
+    default_reason = f"带缺口继续：{'、'.join(labels) if labels else '无'}，已在 {stage} 由本人签字放行"
+    waiver = RequirementWaiver(
+        stage=stage,
+        missing_keys=keys,
+        missing_fields=labels,
+        reason=(str(reason or "").strip() or default_reason),
+        waived_by=(actor.get("display_name") or actor.get("username") or "system"),
+        waived_at=now_cst_str(),
+        reused=bool(reused),
+    )
+    doc.waivers = list(getattr(doc, "waivers", None) or [])
+    doc.waivers.append(waiver)
+    return waiver
+
+
+def requirement_waiver_covers(doc: RequirementDoc, keys) -> Optional[RequirementWaiver]:
+    """同一批缺口已经签过字时返回那条签字；出现新缺口返回 None（必须重新签）。"""
+    need = {str(item) for item in (keys or []) if str(item or "").strip()}
+    if not need:
+        return None
+    for waiver in reversed(list(getattr(doc, "waivers", None) or [])):
+        have = {str(item) for item in (getattr(waiver, "missing_keys", None) or [])}
+        if need <= have:
+            return waiver
+    return None
+
 
 # --------------------------------------------------------------------------- #
 # 1.2 确认需求 / 1.3 审核需求：状态流转的唯一实现
 # --------------------------------------------------------------------------- #
 def confirm_requirement(project_id: str, user: Optional[dict] = None,
-                        comment: str = "") -> dict:
+                        comment: str = "", waiver: Optional[dict] = None) -> dict:
     """1.2 通过确认：pending_confirmation → pending_review。
 
     既有 `POST /requirement/confirm` 与 Agent 的 `ConfirmRequirement` 工具共用这一份；
@@ -206,6 +322,17 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     doc = RequirementDoc(**saved)
     if doc.status != "pending_confirmation":
         raise RequirementSaveError("当前需求不在待确认状态", 409)
+    # 1.2 不新增硬门禁：有缺口时前端弹「仍要继续」，点继续才把 waiver 带到这里。
+    # 同一批缺口在 1.1 已签过字就复用（reused=True），不再重复索要第二次签字。
+    if waiver:
+        gaps = requirement_gaps(project_id, doc)
+        covering = requirement_waiver_covers(doc, gaps.get("keys") or [])
+        record_requirement_waiver(project_id, doc, "confirm", gaps=gaps,
+                                  reason=_waiver_reason(waiver), actor=user,
+                                  reused=bool(covering))
+        store.audit(project_id, "workflow:requirement_confirmed_waived",
+                    {"count": len(gaps.get("keys") or []), "reused": bool(covering),
+                     "by": (user or {}).get("username", "system")})
     doc.status = "pending_review"
     doc.confirmed_by = user.get("username", "system")
     doc.confirmed_at = now_cst_str()
@@ -243,7 +370,8 @@ def return_requirement_to_draft(project_id: str, user: Optional[dict] = None,
 
 
 def review_requirement(project_id: str, user: Optional[dict] = None,
-                       decision: str = "", comment: str = "") -> dict:
+                       decision: str = "", comment: str = "",
+                       waiver: Optional[dict] = None) -> dict:
     """1.3 审核需求：pending_review → approved / rejected。
 
     既有 `POST /requirement/review` 与 Agent 的 `ApproveRequirementReview` /
@@ -259,6 +387,16 @@ def review_requirement(project_id: str, user: Optional[dict] = None,
         raise RequirementSaveError("当前需求不在待审核状态", 409)
     if decision not in ("approve", "reject"):
         raise RequirementSaveError("decision 必须为 approve 或 reject", 400)
+    # 1.3 把「业务批准」与「技术上能不能解析」分开记：带缺口批准只留痕，不放宽审核结论与权限。
+    if waiver:
+        gaps = requirement_gaps(project_id, doc)
+        covering = requirement_waiver_covers(doc, gaps.get("keys") or [])
+        record_requirement_waiver(project_id, doc, "review", gaps=gaps,
+                                  reason=_waiver_reason(waiver), actor=user,
+                                  reused=bool(covering))
+        store.audit(project_id, "workflow:requirement_reviewed_waived",
+                    {"count": len(gaps.get("keys") or []), "reused": bool(covering),
+                     "decision": decision, "by": (user or {}).get("username", "system")})
     doc.status = "approved" if decision == "approve" else "rejected"
     doc.reviewed_by = user.get("username", "system")
     doc.reviewed_at = now_cst_str()

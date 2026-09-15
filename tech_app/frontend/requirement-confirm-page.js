@@ -24,6 +24,14 @@ function cfPrecheckRows() {
     return `<tr class="${rowClass.trim()}"><td class="item-name">${cfEsc(item)}</td><td class="confirm-result"><span class="${status === 'ok' ? 'ok' : 'need-info'}">${result}</span></td><td class="confirm-supplement">${cfEsc(detail)}</td></tr>`;
   }).join('');
 }
+// 缺口口径只来自后端预检（/requirement/precheck 的 gaps 或 AI 检查结果），本页不另写一套。
+function cfGaps() {
+  const gaps = cfPrecheck && cfPrecheck.gaps;
+  if (gaps && Array.isArray(gaps.labels) && gaps.labels.length) return gaps.labels.slice();
+  const items = Array.isArray(cfPrecheck?.items) ? cfPrecheck.items : [];
+  return items.filter(row => String(row?.status || '').toLowerCase() !== 'ok')
+    .map(row => String(row?.item || '').trim()).filter(Boolean);
+}
 function cfSourceUrl() { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const base = `/api/projects/${encodeURIComponent(cfPid)}/source`; return token ? `${base}?token=${encodeURIComponent(token)}` : base; }
 function cfPdfUrl(download = false) { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const params = new URLSearchParams(); if (download) params.set('download', 'true'); if (token) params.set('token', token); const query = params.toString(); return `/api/projects/${encodeURIComponent(cfPid)}/requirement/pdf${query ? `?${query}` : ''}`; }
 
@@ -82,12 +90,22 @@ async function cfAct(kind) {
   // 提交意见是选填：空意见按 comment: "" 交给既有接口，不再拦在页面上。
   const comment = document.querySelector('#confirmationNote').value.trim();
   if (cfRequirement.status !== 'pending_confirmation') { cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求尚未提交至确认环节。' } }; }
+  // L2 缺口不硬拦：有没完成的项时先问「仍要继续」，点继续就把签字交给既有 /requirement/confirm。
+  let waiver = null;
+  if (kind === 'confirm') {
+    const gaps = cfGaps();
+    if (gaps.length) {
+      const go = window.confirm(`这一步还有 ${gaps.length} 项没完成：\n${gaps.join('、')}\n\n确定要带着这些缺口继续吗？（点「确定」＝仍要继续）`);
+      if (!go) { cfToast(`已停在确认这一步，请先补齐：${gaps.join('、')}`, true); return { ok: false, error: { code: 'gap-unconfirmed', message: `还有没完成的项：${gaps.join('、')}` } }; }
+      waiver = { reason: `带缺口继续：${gaps.join('、')}`, missing_fields: gaps };
+    }
+  }
   const taskId = `requirement-confirm-${kind}`;
   const label = kind === 'confirm' ? '通过确认' : '退回草稿';
   cfPublishTaskEvent('task-progress', { taskId, status: 'running', progress: `正在${label}…` });
   try {
     const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`;
-    await api(url,{method:'POST',body:JSON.stringify({comment})});
+    await api(url,{method:'POST',body:JSON.stringify(waiver?{comment,waiver}:{comment})});
     cfPublishTaskEvent('task-completed', { taskId, status: 'succeeded' });
     if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(kind==='confirm'?'requirement-review':'requirement-create',cfPid);}else{location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`;}
     return { ok: true };

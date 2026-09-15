@@ -966,3 +966,56 @@
   git merge --ff-only FETCH_HEAD`（`e541fdf → eb35498` 是本批的纯快进：`e541fdf` 已是 HEAD 祖先）；
   再先停 8012 子进程、后停 8010 主进程、等端口释放后重启 8010，最后用 `/` 与 `/api/health`
   （`status=ok`）核验。
+
+## 71. 需求阶段（1.1 → 1.2 → 1.3）依赖分级与「带缺口继续」的缺口记录（9-15）
+
+- 需求（用户反馈）：全流程依赖分级里，除了权限这类强制项，别的一律不要硬阻断；没填好 / 没完成的
+  地方要「提示现在缺什么，确定要继续吗」，点继续就带着缺口往下走。2.2 → 2.3 出口已在 `## 68` 落地，
+  本轮把统一口径铺到需求三段 —— 之前 1.1 是**真硬闸门**（星号字段没填全直接 `rcToast + return`，
+  什么都不存、什么都不发），1.2 / 1.3 则是缺口既不拦也不留痕。
+- Spec：新增 `docs/specs/tech-requirement-stage-dependency-tiers.md`（沿用 `tech-dependency-tiers-and-step-waivers.md`
+  的 L1–L4 分级：保存前置 / 状态机 / 人工点击 / 角色权限不可豁免，星号字段与完整性检查缺口属 L2，
+  允许「仍要继续」但必须落库）。
+- 红测：新增 `tests/test_tech_requirement_stage_waiver_red.py`（24 项，基线 **21 失败 / 3 通过**）。
+  后端行为用带 pydantic 的解释器（`open-claude/.venv/bin/python`）在子进程里真跑 `requirement_service`
+  的缺口计算、签字与三个流转函数（临时 `DATA_DIR`、假项目），前端做源码契约断言。
+- 后端模型 `tech_app/backend/models/workflow.py`：新增 `RequirementWaiver`（`stage` / `missing_keys` /
+  `missing_fields` / `reason` / `waived_by` / `waived_at` / `reused`），`RequirementDoc` 增加
+  `waivers: List[RequirementWaiver]`；`WorkflowAction` 增加可选 `waiver: Optional[dict]`。
+- 后端服务 `tech_app/backend/services/requirement_service.py`（唯一实现）：
+  - 新增 `field_label()`（Section C 走 `industry_templates.all_labels()`，其余固定字段本地补齐中文名）、
+    `requirement_gaps()`（直接复用 `requirement_precheck()` 的 `need_info` 汇总成 `keys` / `labels`，
+    不另写完整性算法）、`record_requirement_waiver()`（写签字人 / 时间，原因留空时补默认原因）、
+    `requirement_waiver_covers()`（同一批缺口签过字就命中，出现新缺口返回 `None`）。
+  - `requirement_precheck()` 的 `need_info` 条目新增 `missing` 字段，返回值**只增不改**地新增
+    `gaps: {keys, labels, count}`；`items` / `ok` / `generated_note` / `engine` 原样保留。
+  - `submit_requirement_confirmation` / `confirm_requirement` / `review_requirement` 各加可选
+    `waiver` 形参（默认 `None`）：带签字时按服务端算出的缺口落库并发 `workflow:requirement_*_waived`
+    审计，1.2 / 1.3 命中既有签字改为追加 `reused=True` 记录；**不传签字时三个流转行为与今天完全一致**
+    （不新增任何 409 硬门禁）。
+  - `save_requirement_draft()` 像 `history` 一样从旧文档继承 `waivers`，前端整份表单 PUT 不会抹掉签字。
+- 后端路由 `tech_app/backend/main.py`：三条既有路由把 `body.waiver` 透传给 service；
+  `_require(MANAGER_ROLES / DIRECTOR_ROLES)` 角色校验与路由集合**一字未动**（红测锁了 12 条需求相关路由）。
+- 前端 `tech_app/frontend/requirement-create.js`（1.1）：星号字段没填全不再直接 `return`，改为弹
+  「仍要继续」（列出缺口项）——取消仍 `rcFocusFirstRequiredField()` 定位首个缺口、不保存不发送；
+  继续则把 `{reason, missing_fields}` 作为 `waiver` 随既有 `/requirement/submit-confirmation` 提交。
+- 前端 `tech_app/frontend/requirement-confirm-page.js`（1.2）：新增 `cfGaps()`（只读后端预检的
+  `gaps`，缺失时回落 `need_info` 条目名），`cfAct('confirm')` 有缺口时先问「仍要继续」，点继续把
+  `waiver` 放进既有 `/requirement/confirm`；点取消返回结构化失败、不发送。退回草稿不弹、状态机前置保留。
+- 前端 `tech_app/frontend/requirement-review-page.js`（1.3）：`rrStart()` 并发读一次既有
+  `/requirement/precheck` 存进 `rrGaps`；`rrSubmit()` 在「审核通过 + 有缺口」时先问「仍要继续」，
+  点继续把 `waiver` 放进既有 `/requirement/review`。驳回不弹，审核结论与权限不动。
+- 验证（实际运行）：
+  - 本批红测 `python3 -m unittest tests.test_tech_requirement_stage_waiver_red -v` → **24/24 通过**
+    （基线 21 失败）。
+  - 回归 `tests.test_tech_confirm_review_optional_note_red + test_tech_requirement_confirm_red +
+    test_tech_requirement_review_red + test_tech_requirement_agent_red +
+    test_tech_integration_dependency_waiver_red + test_tech_integration_params_step_ownership_red`
+    → **77/77 通过**。
+  - 全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1137 项 / 0 失败 / 7 跳过**；
+    venv 解释器（`open-claude/.venv/bin/python`）→ **1139 项 / 0 失败**。
+  - `node --check` 覆盖 `requirement-create.js` / `requirement-confirm-page.js` /
+    `requirement-review-page.js` 全部通过；`git diff --check` 无输出。
+- 边界：未新增 / 删除任何路由与 Agent 工具，未改 `_require` 角色、状态机前置、人工审批点击与
+  `requirement_precheck()` 的完整性算法；缺口一律来自既有预检，签字一律走既有三条流转路由；
+  2.1 / 2.3 / 3.1–3.3 的依赖分级仍留给后续批次。**未提交、未推送、未部署**。

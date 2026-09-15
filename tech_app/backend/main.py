@@ -5581,7 +5581,8 @@ def submit_requirement_confirmation(
     # 与 Agent 工具 SubmitRequirementConfirmation 共用同一份落盘/校验逻辑，
     # 人工审批环节没有被绕过：这里只把草稿推进到 pending_confirmation。
     try:
-        out = requirement_service.submit_requirement_confirmation(project_id, user, body.comment)
+        out = requirement_service.submit_requirement_confirmation(
+            project_id, user, body.comment, body.waiver)
     except requirement_service.RequirementSaveError as exc:
         raise HTTPException(exc.status_code, str(exc))
     return {"requirement": out}
@@ -5595,7 +5596,7 @@ def confirm_requirement(
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
     return {"requirement": _requirement_flow(
-        requirement_service.confirm_requirement, project_id, user, body.comment)}
+        requirement_service.confirm_requirement, project_id, user, body.comment, body.waiver)}
 
 
 @app.post("/api/projects/{project_id}/requirement/return-to-draft")
@@ -5618,7 +5619,7 @@ def review_requirement(
     _workflow_project(project_id)
     try:
         out = requirement_service.review_requirement(
-            project_id, user, body.decision, body.comment)
+            project_id, user, body.decision, body.comment, body.waiver)
     except requirement_service.RequirementSaveError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
     return {"requirement": out}
