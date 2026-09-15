@@ -960,7 +960,9 @@
   （`/home/wugefei/CPQ/cpq_agent` 的 8010 `cpq_suite_server.py` PID 1302252 与 8012 `tech_app_launch.py`
   PID 1302344，部署目录 HEAD 仍是 `e541fdf`，落后本批 6 个提交），而本机 ssh 只有 `zhangzhen`
   身份（`sudo` 需密码、无 `wugefei` 私钥），实测该目录对 `zhangzhen` 不可写。
-  具备 `wugefei` 权限时按既有顺序部署：`cd /home/wugefei/CPQ/cpq_agent && git fetch gitlab 20260909 &&
-  git checkout 20260909 && git merge --ff-only origin/20260909`（不能从 GitHub 直推该目录，仍走 GitLab），
+  具备 `wugefei` 权限时按既有顺序部署（该目录的 `gitlab` 远端是内网 GitLab、`origin` 是 GitHub，
+  部署仍只从 GitLab 取）：
+  `cd /home/wugefei/CPQ/cpq_agent && git fetch gitlab 20260909 && git checkout 20260909 &&
+  git merge --ff-only FETCH_HEAD`（`e541fdf → eb35498` 是本批的纯快进：`e541fdf` 已是 HEAD 祖先）；
   再先停 8012 子进程、后停 8010 主进程、等端口释放后重启 8010，最后用 `/` 与 `/api/health`
   （`status=ok`）核验。
