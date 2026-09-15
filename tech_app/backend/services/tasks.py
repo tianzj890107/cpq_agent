@@ -175,8 +175,13 @@ def _safe_error(exc: Exception) -> str:
 def recover_interrupted_tasks() -> int:
     """标记服务重启前遗留的内存任务，避免轮询端永久显示“处理中”。
 
-    当前执行器是进程内 ThreadPoolExecutor，进程退出后无法恢复函数闭包；因此将
-    queued/running 任务明确置为失败，比保留一个永远不会完成的状态更可追溯也更安全。
+    当前执行器是进程内 ThreadPoolExecutor，进程退出后无法恢复函数闭包；因此把
+    queued/running 任务明确置为**中断**终态 —— 不是「失败」：这一步没有任何业务动作
+    失败，是进程重启把在途任务打断了，前端据此显示蓝色的「中断」而不是红字失败。
+
+    同时把这张中断卡写进项目会话时间线（key 固定 task:<task_id>，与前端同一套幂等
+    口径）：浏览器关着的时候被中断的任务，重进项目必须看到「中断」，而不是永远停在
+    「进行中」。
     """
     recovered = 0
     for project in store.list_projects():
@@ -186,12 +191,24 @@ def recover_interrupted_tasks() -> int:
         for task in store.list_tasks(project_id):
             if task.get("status") not in {"queued", "running"}:
                 continue
+            reason = "服务在任务执行期间重启，任务未完成；请确认输入后重新发起。"
             task.update({
-                "status": "failed",
+                "status": "interrupted",
                 "progress": "服务重启中断",
                 "finished_at": _now(),
-                "error": "服务在任务执行期间重启，任务未完成；请确认输入后重新发起。",
+                "error": reason,
             })
             store.save_task(project_id, task)
+            task_id = str(task.get("task_id") or "")
+            if task_id:
+                sop_name = _SOP_NAMES.get(str(task.get("kind") or ""), ("任务处理 SOP", 3))[0]
+                store.append_session_event(project_id, {
+                    "kind": "task",
+                    "source": "shell",
+                    "text": sop_name[:-4] if sop_name.endswith(" SOP") else sop_name,
+                    "key": f"task:{task_id}",
+                    "task": {"id": task_id, "label": "", "status": "interrupted",
+                             "steps": ["服务重启中断"], "error": reason},
+                })
             recovered += 1
     return recovered

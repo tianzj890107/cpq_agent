@@ -145,8 +145,10 @@ function aiProcessCard(title) {
     },
     done(ok, message) {
       const state = card.querySelector('.oc-alabel-state');
-      state.className = `oc-alabel-state ${ok ? 'is-succeeded' : 'is-failed'}`;
-      state.textContent = ok ? '✓ 已完成' : '⚠ 失败';
+      // 中断沿用进行中的蓝色 chip：同一张卡、同一个 chip 就地翻转，不新增第二行。
+      const interrupted = ok === 'interrupted';
+      state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
+      state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
       if (message) this.log([`  ${message}`]);
     },
   };
@@ -257,6 +259,11 @@ async function aiIntegrationStepInBackground(step, options) {
   }
 }
 
+/** 中断与失败要分开：服务重启 / 桥超时把在途任务打断是「中断」（蓝色 chip），不是失败。 */
+function aiTaskInterrupted(error) {
+  return String((error && error.code) || '') === 'interrupted';
+}
+
 async function aiPost(path, { form, label, quantity, keepTab } = {}) {
   if (aiBusy) return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   const blocked = aiBlocker(path);
@@ -283,11 +290,15 @@ async function aiPost(path, { form, label, quantity, keepTab } = {}) {
     return { ok: true };
   } catch (error) {
     const message = error.message || `${title}失败`;
-    card.done(false, message);
-    aiStatus(`${title}失败：${message}`, true);
+    const interrupted = aiTaskInterrupted(error);
+    card.done(interrupted ? 'interrupted' : false, message);
+    aiStatus(interrupted ? `${title}已中断：${message}` : `${title}失败：${message}`, !interrupted);
     aiToast(message, true);
-    aiPublishTask('task-failed', { taskId: taskId, label: title, status: 'failed', error: message });
-    return { ok: false, error: { code: 'task-failed', message: message } };
+    aiPublishTask('task-failed', { taskId: taskId, label: title,
+                                   status: interrupted ? 'interrupted' : 'failed',
+                                   code: interrupted ? 'interrupted' : 'task-failed',
+                                   error: message });
+    return { ok: false, error: { code: interrupted ? 'interrupted' : 'task-failed', message: message } };
   } finally {
     aiBusy = false;
     aiRenderActions();
@@ -302,9 +313,14 @@ async function aiPollTask(taskId, card, label) {
     card.log(log);
     // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
     aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
-                                     status: 'running', log: log });
+                                     status: task.status === 'interrupted' ? 'interrupted' : 'running',
+                                     log: log });
     if (task.status === 'succeeded') return task.result;
     if (task.status === 'failed') throw new Error(task.error || '任务失败');
+    // 服务重启把在途任务打断了：中断是终态，不能继续 while(true) 轮询下去。
+    if (task.status === 'interrupted') {
+      throw Object.assign(new Error(task.error || '服务重启中断，任务已中止。'), { code: 'interrupted' });
+    }
   }
 }
 
@@ -609,10 +625,14 @@ async function aiParamsAutofill() {
     return { applied: applied, unresolved: unresolved };
   } catch (error) {
     const message = error.message || '智能补全失败';
-    card.done(false, message);
-    aiStatus(`智能补全失败：${message}`, true);
+    const interrupted = aiTaskInterrupted(error);
+    card.done(interrupted ? 'interrupted' : false, message);
+    aiStatus(interrupted ? `智能补全已中断：${message}` : `智能补全失败：${message}`, !interrupted);
     aiToast(message, true);
-    aiPublishTask('task-failed', { taskId: taskId, label: '智能补全', status: 'failed', error: message });
+    aiPublishTask('task-failed', { taskId: taskId, label: '智能补全',
+                                   status: interrupted ? 'interrupted' : 'failed',
+                                   code: interrupted ? 'interrupted' : 'task-failed',
+                                   error: message });
   } finally {
     aiBusy = false;
     aiRender();

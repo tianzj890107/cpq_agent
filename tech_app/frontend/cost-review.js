@@ -134,8 +134,10 @@ function crCard(title) {
     },
     done(ok, message) {
       const state = card.querySelector('.oc-alabel-state');
-      state.className = `oc-alabel-state ${ok ? 'is-succeeded' : 'is-failed'}`;
-      state.textContent = ok ? '✓ 已完成' : '⚠ 失败';
+      // 中断沿用进行中的蓝色 chip：同一张卡、同一个 chip 就地翻转，不新增第二行。
+      const interrupted = ok === 'interrupted';
+      state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
+      state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
       if (message) this.log([`  ${message}`]);
     },
   };
@@ -244,10 +246,20 @@ async function crPollTask(taskId, card, label) {
     card.log(log);
     // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
     crPublishTask('task-progress', { taskId: taskId, label: label || '成本测算',
-                                     status: 'running', log: log });
+                                     status: task.status === 'interrupted' ? 'interrupted' : 'running',
+                                     log: log });
     if (task.status === 'succeeded') return task.result;
     if (task.status === 'failed') throw new Error(task.error || '任务失败');
+    // 服务重启把在途任务打断了：中断是终态，不能继续 for(;;) 轮询下去。
+    if (task.status === 'interrupted') {
+      throw Object.assign(new Error(task.error || '服务重启中断，成本测算已中止。'), { code: 'interrupted' });
+    }
   }
+}
+
+/** 中断与失败要分开：服务重启 / 桥超时把在途任务打断是「中断」（蓝色 chip），不是失败。 */
+function crTaskInterrupted(error) {
+  return String((error && error.code) || '') === 'interrupted';
 }
 
 /* --------------------------------------------------------------- 渲染 */
@@ -725,11 +737,15 @@ async function crRunPart(partId, quantity) {
     crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });
     return true;
   } catch (error) {
-    card.done(false, error.message || '失败');
-    crStatus(`${partId} 测算失败：${error.message}`, true);
-    crToast(error.message || '测算失败', true);
-    crPublishTask('task-failed', { taskId: taskKey, label: label, status: 'failed',
-                                   error: error.message || '测算失败' });
+    const interrupted = crTaskInterrupted(error);
+    const message = error.message || '失败';
+    card.done(interrupted ? 'interrupted' : false, message);
+    crStatus(interrupted ? `${partId} 测算已中断：${message}` : `${partId} 测算失败：${message}`, !interrupted);
+    crToast(message, true);
+    crPublishTask('task-failed', { taskId: taskKey, label: label,
+                                   status: interrupted ? 'interrupted' : 'failed',
+                                   code: interrupted ? 'interrupted' : 'task-failed',
+                                   error: message });
     return false;
   } finally {
     crBusy = false;
@@ -770,11 +786,15 @@ async function crRunAssembly() {
     crPublishTask('task-completed', { taskId: taskKey, label: label, status: 'succeeded' });
     return true;
   } catch (error) {
-    card.done(false, error.message || '失败');
-    crStatus(`组装成本测算失败：${error.message}`, true);
-    crToast(error.message || '测算失败', true);
-    crPublishTask('task-failed', { taskId: taskKey, label: label, status: 'failed',
-                                   error: error.message || '测算失败' });
+    const interrupted = crTaskInterrupted(error);
+    const message = error.message || '失败';
+    card.done(interrupted ? 'interrupted' : false, message);
+    crStatus(interrupted ? `组装成本测算已中断：${message}` : `组装成本测算失败：${message}`, !interrupted);
+    crToast(message, true);
+    crPublishTask('task-failed', { taskId: taskKey, label: label,
+                                   status: interrupted ? 'interrupted' : 'failed',
+                                   code: interrupted ? 'interrupted' : 'task-failed',
+                                   error: message });
     return false;
   } finally {
     crBusy = false;

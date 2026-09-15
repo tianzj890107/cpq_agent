@@ -1377,3 +1377,37 @@
   `/index.html` 与 `/tech-workbench.html` 已带 `agent-chat.js?v=20260915-cards1`、
   `/assembly-integration.html` → `?v=ai16`、`/cost-review.html` → `?v=cr8`；
   线上 `agent-chat.css` 中 `oc-aav` 为 0 处、`oc-alabel-sub` 已生效、任务卡边框已是 `--oc-border-3`。
+
+## 80. 任务终态「中断」：服务重启 / 切看板 / 桥超时都收尾，沿用蓝色不改配色（9-15）
+
+- 用户口径：先问「进行中的任务卡片是不是没设置已中断 / 已结束这种状态」，随后拍板
+  「添加这个，就叫中断，沿用蓝色不改颜色」。
+- 现状（实测）：任务卡只有 排队中 / 进行中 / 已完成 / 失败 四态，未知状态一律兜底「进行中」。
+  三种真实存在的收尾方式没有名字 —— 服务重启把在途任务打断（后端把它写 `failed`）、
+  切看板取消在途命令（`detached`）、看板 20s 没回执（`timeout`）；后两种卡会永远停在
+  「进行中」，阶段页轮询也会一直转。
+- 改动（6 个业务文件 + 缓存版本号 + 本批 spec 与红测）：
+  - `tech_app/backend/services/tasks.py`：`recover_interrupted_tasks()` 把在途任务落成
+    **`interrupted`**（不是 failed；progress 仍「服务重启中断」、error 与 finished_at 保留），
+    并把这张中断卡按 `key=task:<task_id>` 写进项目会话时间线 —— 浏览器关着的时候被中断的
+    任务，重进项目看到的是「中断」，不再是永远「进行中」。
+  - `tech_app/frontend/agent-chat.js`：状态词表新增 `interrupted → 中断`；`setTaskStatus()`
+    切换 `is-interrupted`；中断判定收口到 `isInterruptedCode()`（`interrupted / detached /
+    timeout`）；中断原因写中性的 `.oc-task-note`（红字只留给真正的失败）；新增
+    `interruptRunningCards()`，切看板与桥超时把还没收尾的卡就地标成中断；会话侧检索轮询
+    把中断当终态。
+  - `tech_app/frontend/agent-chat.css`：`.oc-task-card.is-interrupted .oc-task-state` 与
+    `.oc-alabel-state.is-interrupted` 取值与 `is-running` **逐项同值**（#e0edff / #0050C4）
+    —— 沿用蓝色，不新增颜色 token；新增 `.oc-task-note`。
+  - `tech_app/frontend/assembly-integration.js`（2.2）/ `cost-review.js`（2.3）：
+    `aiPollTask()` / `crPollTask()` 把 `interrupted` 当终态并带 `code: 'interrupted'` 上报；
+    过程卡 `aiProcessCard.done()` / `crCard.done()` 支持第三态（同一张卡、同一个 chip，
+    文案 `⏸ 中断`、蓝色）。
+  - 缓存版本号跟上：`agent-chat.js` / `agent-chat.css` → `?v=20260915-int1`（四个页面一致）、
+    `assembly-integration.js` → `?v=ai17`、`cost-review.js` → `?v=cr9`。
+- 明确不动：桥协议事件名、`QUIET_FAILURE_CODES`、`DEFAULT_TIMEOUT`、后端路由与权限、
+  助手回复卡三态、阶段白名单、成本 / 工艺 / 报告数据；2.1 图纸页（app/cost/process.js）与
+  1.1 需求页（requirement-create.js）的轮询本轮不改。
+- 验收：红测 `tests.test_tech_task_interrupted_state_red` 24/24（改前 18 处失败）；
+  相关回归 181/181 全绿；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1233 项 / 0 失败 / 7 跳过；三个前端脚本 `node --check` 通过，`git diff --check` 干净。

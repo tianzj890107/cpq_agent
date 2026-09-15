@@ -522,6 +522,13 @@
   // 在途命令被取消、必填意见没填、当前视图没有目标输入框 —— 看板自己已经就地提示过，
   // 再往会话里塞一条 ⚠ 就是纯噪音。其余失败照旧可见，绝不在这里吞掉。
   const QUIET_BOARD_CODES = ["detached", "note-target-missing", "missing-comment", "no-selection"];
+  // 「中断」不是「失败」：任务没有正常收尾 —— 服务重启把在途任务打断（interrupted）、
+  // 切看板导致在途命令被取消（detached）、看板 20s 没回执（timeout）。这三种都标「中断」，
+  // 沿用进行中的蓝色 chip，不刷红字、也不谎报成功。判定只此一处。
+  const INTERRUPTED_CODES = ["interrupted", "detached", "timeout"];
+  function isInterruptedCode(code) {
+    return INTERRUPTED_CODES.indexOf(String(code || "")) >= 0;
+  }
   function isQuietBoardCode(code) {
     const value = String(code || "");
     const bridge = window.TechBoardBridge;
@@ -1303,7 +1310,8 @@
     return out;
   }
   function taskStatusWord(status) {
-    return { queued: "排队中", running: "进行中", succeeded: "已完成", failed: "失败" }[status] || "进行中";
+    return { queued: "排队中", running: "进行中", succeeded: "已完成", failed: "失败",
+             interrupted: "中断" }[status] || "进行中";
   }
   function ensureTaskCard(taskId, label) {
     const key = String(taskId || label || "task");
@@ -1346,7 +1354,7 @@
   function setTaskStatus(card, status) {
     if (!card || !status || card.status === status) return;
     card.status = status;
-    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed");
+    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed", "is-interrupted");
     card.box.classList.add(`is-${status}`);
     card.state.textContent = taskStatusWord(status);
   }
@@ -1359,7 +1367,12 @@
     // label / taskId / log / progress 全空时不建空卡（不再把 label 兜底成「处理中」）。
     if (!label && !taskId && !log.length && !progressLine) return;
     const requested = String(detail.status || "running");
-    const status = requested === "completed" ? "succeeded" : requested;
+    // 中断是真实终态：服务重启 / 切看板 / 桥超时打断的在途任务标「中断」，
+    // 既不谎报失败，也不能一直停在「进行中」。
+    const interrupted = requested === "interrupted"
+      || (requested !== "succeeded" && isInterruptedCode(detail.code));
+    const status = requested === "completed" ? "succeeded"
+      : interrupted ? "interrupted" : requested;
     // 会话只留「有真实执行内容」的卡：progress_log 明细才算内容。只有标题、只有状态、
     // 只有一句通用「正在…」进度的点击回执一律不建卡 —— 否则秒级同步动作每点一次都会
     // 留下一张「提交审核意见 · 已完成」。
@@ -1367,6 +1380,8 @@
     // 就永远钉在底部，聊多少轮都不动。失败原因照旧进标题行提示位与普通会话输出；
     // 已经在跑的卡（有真实 progress_log 明细）仍就地翻成失败态并显示原因。
     const failureReason = status === "failed"
+      ? String(detail.error || detail.message || "").trim() : "";
+    const interruptedReason = status === "interrupted"
       ? String(detail.error || detail.message || "").trim() : "";
     // 预期内失败（在途命令被取消、当前视图没有目标输入框…）看板自己已经就地提示过：
     // 已经在跑的卡不翻红，也不再往会话里补噪音。
@@ -1392,7 +1407,7 @@
       }
     }
     // 落库只提交新出现的进度行：服务端按行去重合并、就地更新同一张卡的状态。
-    persistTaskCard(taskId, label, status, freshSteps, failureReason);
+    persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason);
     if (status === "succeeded") {
       card.done = true;
       refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
@@ -1409,6 +1424,29 @@
         card.errorNode.textContent = message;
       }
     }
+    // 中断沿用蓝色 chip，原因进中性行（红字只留给真正的失败），落库与回放沿用同一套。
+    if (status === "interrupted") {
+      card.done = true;
+      const message = interruptedReason || "任务已中断";
+      if (!card.noteNode) {
+        card.noteNode = el("div", "oc-task-note", message);
+        card.box.append(card.noteNode);
+      } else {
+        card.noteNode.textContent = message;
+      }
+    }
+  }
+
+  // 在途任务卡（还没到终态）在「不可能再有收尾事件」时的唯一收尾：切看板与桥超时。
+  // 它们以前留在「进行中」永远转圈；现在就地标成「中断」，并落库。
+  function interruptRunningCards(reason) {
+    const message = String(reason || "任务已中断").trim();
+    taskProgressCards.forEach(card => {
+      if (!card || card.done) return;
+      if (["succeeded", "failed", "interrupted"].indexOf(String(card.status || "")) >= 0) return;
+      renderTaskProgress({ taskId: card.key, label: card.label, status: "interrupted",
+                           error: message, log: [] });
+    });
   }
 
   // 任务卡落库：key 固定 task:<taskId>，与 store.append_session_event 的同一 task.id
@@ -1552,6 +1590,10 @@
       }));
       if (task.status === "succeeded") return;
       if (task.status === "failed") throw new Error(task.error || "检索失败");
+      // 服务重启把在途任务打断了：停止轮询（卡上已按同一套判定标成「中断」）。
+      if (task.status === "interrupted") {
+        throw Object.assign(new Error(task.error || "服务重启中断，检索已中止。"), { code: "interrupted" });
+      }
     }
   }
   function statChip(label, count, kind) {
@@ -1861,7 +1903,13 @@
     if (!bridge || typeof bridge.subscribe !== "function") return;
     bridge.subscribe(event => {
       const name = String((event && (event.name || event.type)) || "");
+      const type = String((event && event.type) || "");
       const payload = (event && event.payload) || {};
+      // 桥 20s 没回执不是业务失败：在途任务卡标「中断」，不再永远转圈。
+      if (type === "error" && isInterruptedCode(payload.code)) {
+        interruptRunningCards(payload.message || "看板超时未响应，任务已中断。");
+        return;
+      }
       if (name === "result-summary" || name === "summary") {
         boardResultSummary = normalizeBoardSummary(payload);
         applyDrawingResultSummary();
@@ -1882,6 +1930,8 @@
         // 也不清任务卡映射 —— 否则重新挂上时会再画一张同样的卡。
         boardResultSummary = null;
         applyDrawingResultSummary();
+        // 在途命令已被桥取消，不会再有收尾事件：已建的任务卡标成「中断」。
+        interruptRunningCards("看板已切换，任务已中断。");
         return;
       }
       if (name === "ready" || name === "action-state" || name === "selection-changed") {

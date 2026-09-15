@@ -183,6 +183,8 @@
   background: var(--oc-bg-3); color: var(--oc-text-2); font-size: 11px; font-weight: 600;
 }
 .oc-alabel-state.is-running { background: #e0edff; color: #0050C4; }
+/* 中断沿用进行中的蓝色（用户口径：就叫中断、不改配色），不是失败：不刷红。 */
+.oc-alabel-state.is-interrupted { background: #e0edff; color: #0050C4; }
 .oc-alabel-state.is-succeeded { background: #dcfce7; color: #15803d; }
 .oc-alabel-state.is-failed { background: #fee2e2; color: #b91c1c; }
 /* 阶段页过程卡沿用同一行身份时，把这一步的中文名跟在身份后面。 */
@@ -534,11 +536,14 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 }
 .oc-task-card.is-queued .oc-task-state { background: var(--oc-bg-3); color: var(--oc-text-2); }
 .oc-task-card.is-running .oc-task-state { background: #e0edff; color: #0050C4; }
+.oc-task-card.is-interrupted .oc-task-state { background: #e0edff; color: #0050C4; }
 .oc-task-card.is-succeeded .oc-task-state { background: #dcfce7; color: #15803d; }
 .oc-task-card.is-failed .oc-task-state { background: #fee2e2; color: #b91c1c; }
 .oc-task-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
 .oc-task-steps:empty { display: none; }
 .oc-task-error { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
+/* 中断的原因：如实写出来，但不用失败的红字（中断不是失败）。 */
+.oc-task-note { margin-top: 8px; color: var(--oc-text-3); font-size: 12px; word-break: break-word; }
 
 /* 1.1 创建需求的「需求解析摘要」（Agent 工具结果驱动，内容留在对话流里） */
 .oc-req-summary {
