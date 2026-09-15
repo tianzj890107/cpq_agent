@@ -1048,3 +1048,27 @@
     git -c safe.directory=$PWD checkout 20260909 && git -c safe.directory=$PWD merge --ff-only FETCH_HEAD`
     （`e541fdf → 92f9d30` 是纯快进）；随后先停 8012 子进程、再停 8010 主进程，等端口释放后重启 8010，
     最后用 `/` 与 `/api/health`（`status=ok`）核验。
+
+## 73. 本批（## 71）部署到 172.16.10.34 成功（9-15）
+
+- 授权与方式：用户提供 `wugefei` 账号凭据后执行部署。本机无 `sshpass`，用系统自带 `/usr/bin/expect`
+  写了一个只做密码登录的包装脚本（临时文件，未改服务器配置、未写 known_hosts 之外的任何东西）。
+- 部署前状态（已记录）：`/home/wugefei/CPQ/cpq_agent` 在 `20260909`、HEAD `e541fdf`；
+  8010 `cpq_suite_server.py` PID 1302252（父）、8012 `tech_app_launch.py` PID 1302344（子，父进程拉起）；
+  `/` 与 `/api/health` 均正常。该目录 `gitlab` 远端是 `http://gitlab.boulderaitech.com/ai-team/cpq_agent.git`，
+  拉取不需要 SSH key。
+- 取代码：`git -c safe.directory=$PWD fetch --prune gitlab 20260909` → `e541fdf..63d79f6`，
+  `git merge --ff-only FETCH_HEAD` 纯快进成功；工作区里 `.dockerignore.bk` / `jdk.tar` / `nohup.out`
+  等未跟踪文件未被触碰。
+- 重启：先停 8012 子进程、再停 8010 父进程，轮询到 8010 / 8012 端口全部释放、无 cpq 进程后，
+  在部署目录用原命令**原样重启**（旧日志先备份为 `nohup.out.prev.<时间戳>`）：
+  `setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010 > nohup.out 2>&1 < /dev/null &`
+  （`setsid` + 重定向确保进程脱离本次 SSH 会话存活）。父进程会自动拉起 8012 子服务。
+- 部署后校验（全部通过）：
+  - 新进程：8010 PID **165755**（`0.0.0.0:8010`）、8012 PID **165866**（`127.0.0.1:8012`，父进程为 165755）；
+  - `http://127.0.0.1:8010/` → `200`；`http://127.0.0.1:8010/api/health` → `200` 且
+    `{"status":"ok",...}`（**1 秒内就绪**）；
+  - 部署目录 HEAD = **`63d79f6`**，且部署树里已含本批代码（`def requirement_gaps`、`RequirementWaiver`、
+    前端 `waiver`）；
+  - 服务器上的 `cpq_settings.json`（0600）、`cpq_history/`、`tech_app/tech_data/`、`product_images/`
+    等运行数据未改动；未新增第二套服务、未抢端口、未动反代配置。
