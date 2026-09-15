@@ -164,9 +164,11 @@ def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
         codes.append("assembly:missing")
         fields.append("整机（组装）成本还没算")
     for row_id in counts["zero"]:
-        label = "整机" if str(row_id) == ASSEMBLY_ID else f"零件 {row_id}"
+        # 中文里不加空格：「整机（组装）算出来是 0 元」/「零件 P1 算出来是 0 元」。
+        label = "整机（组装）" if str(row_id) == ASSEMBLY_ID else f"零件 {row_id}"
         codes.append(f"{row_id}:zero")
-        fields.append(f"{label} 算出来是 0 元")
+        fields.append(f"{label}算出来是 0 元" if str(row_id) == ASSEMBLY_ID
+                      else f"{label} 算出来是 0 元")
     return {
         "codes": codes,
         "fields": fields,

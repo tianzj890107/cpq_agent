@@ -409,9 +409,15 @@ class GapsAreListedAndHardGatesStayHard(unittest.TestCase):
 
     def test_zero_rows_are_listed_by_id(self):
         data = run_backend_case("zero_rows_are_named")
-        codes = (data["before"] or {}).get("codes") or []
+        before = data["before"] or {}
+        codes = before.get("codes") or []
         self.assertIn("P1:zero", codes)
         self.assertIn("P2:zero", codes)
+        self.assertIn("ASSY:zero", codes, "整机那一行也要单独点名")
+        fields = before.get("fields") or []
+        self.assertTrue(any("整机" in row for row in fields), "整机缺口要有人看的中文名")
+        self.assertFalse(any("整机 " in row for row in fields),
+                         "中文之间不要留空格（「整机（组装）算出来是 0 元」）")
 
     def test_route_permission_and_outbound_gates_are_untouched(self):
         route = py_def_region(MAIN, "confirm_cost_review")

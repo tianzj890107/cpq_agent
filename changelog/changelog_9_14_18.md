@@ -1318,3 +1318,22 @@
   以及被该批次改写的 `test_chat_fused_assistant_card_style_red` 2 项、`test_tech_chat_drop_red_error_cards_red` 2 项），
   与本批的版本号改动无关（本批只改 HTML 里的引用串）。
 - 状态：已提交、双远端推送并同步到 172.16.10.34（静态资源按请求读盘，无需重启进程）。
+
+## 78. 2.3 确认成本的路由级端到端验证 + 缺口文案去掉中文间的空格（9-15）
+
+- 路由级验证（本批红测只跑 service，补上真正走 HTTP 的那条链）：本地用带 pydantic 的解释器起
+  `starlette.testclient` 打到 `tech_app.backend.main.app` 的真实路由，临时 `DATA_DIR`、假项目、0 元行：
+  1. `POST /api/projects/{id}/cost-review/confirm` **完全不带请求体**（老调用/Agent）→ 400，
+     消息一次列全缺口并说明「可以点『仍要继续』带着缺口确认」；
+  2. 带 `{}` → 同上（请求体形状不影响判定）；
+  3. 带 `{"waiver": {"reason": "…"}}` → **200**，`review.confirmed=true`，返回体带
+     `review.gaps`（`P1:zero` / `ASSY:zero`）与 `review.cost_waiver`（谁在什么时候签的字）；
+  4. 同一批缺口**第二次不带签字**再确认 → 200（不再拦第二次）；
+  5. `GET /api/projects/{id}/cost-review` → 看板同样拿得到 `gaps` / `cost_waiver`，缺口如实留着。
+  结论：前端「仍要继续」这条链在路由层是通的，老调用行为不变。
+- 顺带修掉的文案瑕疵（同一批验证里看到的）：整机那一行的缺口名渲染成了「整机 算出来是 0 元」（中文之间多了空格），
+  改成「整机（组装）算出来是 0 元」；`零件 P1 算出来是 0 元` 不变。
+  红测里补一条断言锁住（有中文名、且 `整机 ` 带空格的形式不得出现），仍 18/18 全绿。
+- 全量：`python3 -m unittest discover -s tests -p 'test_*.py'` → 1209 项 / 33 失败 / 7 跳过，
+  33 个失败仍全部来自工作区里并行批次的 Red 基线（模块同上，与本批无关）。
+- 状态：已提交、双远端推送，34 已同步并重启（后端 .py 改动需要重启进程）。
