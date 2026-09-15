@@ -1148,6 +1148,24 @@
   `node --check tech_app/frontend/assembly-integration.js` 与 `git diff --check` 通过。
 - 状态：已提交并双远端推送，随后部署到 172.16.10.34（见本节后的部署记录）。
 
+## 74 提交、双远端推送与 34 部署记录（9-15）
+
+- 提交：`4549cc7`「同一批缺口只签一次字：2.2 不再二次签字，2.3 回传按签字放行（## 74 实现）」，
+  只暂存本批 5 个文件（`assembly-integration.js`、`cost_flow.py`、红测、Spec、本 changelog），未用 `git add -A`。
+- 双远端回读一致（`git ls-remote`）：
+  - `origin`（github.com:tianzj890107/cpq_agent.git）→ `4549cc79e01e358f3a528dd5d7fafabc3b8479f9`
+  - `gitlab`（gitlab.boulderaitech.com:ai-team/cpq_agent.git，经 `ssh -F /tmp/gl.conf`）→ 同一 SHA
+- 34 部署（`wugefei@172.16.10.34`，`/home/wugefei/CPQ/cpq_agent`）：从 `4259884` 快进到 `4549cc7`
+  （`git merge --ff-only FETCH_HEAD`：5 文件 / +678 −9），先停 8012（pid 206371）再停 8010（pid 206316），
+  再以既有方式重启 —— `setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010`
+  （新 pid **239560**，子进程 8012 = **239648**，启动于 10:56:38 / 10:56:39）。
+- 上线后自检：`/` → 200；`/api/health` → `{"status":"ok", ...}`；
+  服务器树上 `assembly-integration.js` 含 `aiWaiverCoversGaps`（2 处）、`cost_flow.py` 含 `waiver_covers`，
+  `git rev-parse --short HEAD` = `4549cc7`。
+- 用户可见效果：2.2 签过字的同一批缺口，「确认工艺并发送财务」不再弹第二次「仍要继续」，
+  只在会话里说明缺口已由谁在何时签字放行；2.3 回传销售经理按那次签字放行，
+  缺口仍以 `required_missing` / `params_complete=false` / `waiver` 如实带出去；新冒出的缺口仍逐个点名拒绝。
+
 ## 75. 2.3 成本测算的会话时间线写入权限（财务经理不再被前端伪 403 拦下）（9-15）
 
 - 用户反馈：「我在成本测算为什么会显示这一步归工艺经理办理；财务经理没有这一步的操作权限 / 但是执行是可以正常执行的」。
