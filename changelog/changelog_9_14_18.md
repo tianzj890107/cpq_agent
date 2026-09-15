@@ -1364,3 +1364,16 @@
   → 1209 项 / 0 失败 / 7 跳过；三个前端脚本 `node --check` 通过，`git diff --check` 干净。
 - 顺带撤掉：本会话一度为「任务进度卡也换成同一行身份 + 同一个 chip」写了 Spec / Red，
   用户喊停后两个文件已删除，该批未实现（进度卡保持原样）。
+
+## 79 提交、双远端推送与 34 部署记录（9-15）
+
+- 提交：`363f986`（15 个文件，+591 / -109）。只暂存本批相关文件（周 changelog、8 个前端业务文件、
+  3 个被取代断言的测试、本批 spec 与红测），未使用 `git add -A`。
+- 推送：`python3 scripts/push_remotes.py --check` 预检后双推，GitLab 与 GitHub 的 `20260909`
+  回读均为 `363f986`。
+- 部署：172.16.10.34 从 GitLab `fetch` + `merge --ff-only` 到 `363f986`（15 files changed）；
+  **纯前端改动，静态资源按请求读盘，未重启进程**。
+- 线上校验（127.0.0.1:8010）：`/` 返回 200、`/api/health` `status=ok`；
+  `/index.html` 与 `/tech-workbench.html` 已带 `agent-chat.js?v=20260915-cards1`、
+  `/assembly-integration.html` → `?v=ai16`、`/cost-review.html` → `?v=cr8`；
+  线上 `agent-chat.css` 中 `oc-aav` 为 0 处、`oc-alabel-sub` 已生效、任务卡边框已是 `--oc-border-3`。
