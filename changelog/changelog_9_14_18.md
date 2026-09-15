@@ -1256,3 +1256,65 @@
 - 用户可见效果：2.3 有 0 元行（或还有零件没算 / 整机没算）时，「确认成本」按钮可点，
   弹一次「仍要继续」，点继续即带缺口确认成功并留痕；同一批缺口不再拦第二次；
   点取消即停；「一个零件都没有」仍硬拦。
+
+## 76. 技术工艺 / 报价 助手卡片统一：一层边框 + 去头像 + token 与几何对齐 Spec / Red（9-15）
+
+- 用户反馈：技术工艺的卡片和报价的卡片风格不一样，要求统一 —— 0–2 步一起做，技术侧去掉头像、
+  改成报价同款蓝色身份行头部，不要两个边框卡片、只保留报价那样的一个，间距等几何一并对齐。
+- 本次实测（只读诊断）：
+  - 一次助手回复在技术侧确实是**两层边框**：外层 `.oc-amsg` 一张带框白卡，里面再套一张带框卡 ——
+    `index.html:141` / `assembly-integration.html:123` / `cost-review.html:97` 的 `.oc-intent-card`，
+    以及 `agent-chat.css:233` 的 `.oc-art`、`:329` 的 `.oc-process-card`、`:357` 的 `.oc-match-card`；
+  - 技术侧每张助手卡左侧还有 28px 渐变头像（`agent-chat.css:170` 的 `.oc-aav`，`✦` / `¥`），报价侧没有；
+  - 两边卡框不是同一个颜色：技术 `--oc-border-2: #d9d9e3`（`agent-chat.css:12`）、
+    报价 `--border-color: #e7e7ea`（`确认需求解析结果.html:26`）—— 这个分叉是
+    `docs/specs/chat-fused-assistant-card-style.md` 第 42 / 98 行分别写死两个 token 造成的；
+  - 另有 4 处几何各写一套：`.oc-tinner` gap 16px（报价 14px）、`.oc-ubub` 16px/10px/82%（报价 14px/11px/92%）、
+    行内代码圆角 5px（报价 4px）、`.oc-task-card` 圆角 12px / 内边距 `11px 13px`（助手卡 14px / `11px 14px`）；
+  - 阶段页 `aiProcessCard()` / `crCard()` 还各自渲染一套 `.oc-process-head/.oc-process-title/.oc-process-state`，
+    与助手卡的 `.oc-alabel` + `.oc-alabel-state` 是两套状态 chip 实现。
+- 新增 `docs/specs/tech-quote-assistant-card-unification.md`：C1 技术侧删掉 `.oc-aav` 与全部头像节点、
+  身份统一靠 `.oc-alabel`；C2 `.oc-amsg` 是助手回复里唯一带 `background` + `border` 的容器，
+  `.oc-art` / `.oc-thinking` / `.oc-intent-card` / `.oc-process-card` / `.oc-match-card` 一律去框，
+  报价 `.thinking-block` 同步去框，同级卡 `.oc-task-card` 保留一张框但与 `.oc-amsg` 完全同款；
+  C3 技术卡框改用 `var(--oc-border-3)`（= `#e7e7ea`，与报价 `--border-color` 同值）；
+  C4 间距 / 用户气泡 / 行内代码圆角对齐；C5 阶段页过程卡改用 `.oc-alabel` + `.oc-alabel-state`；
+  C6 思考过程与工具详情仍默认折叠、任务卡管线 / 用户主色气泡 / 桥协议 / 路由一律不动。
+- 新增 `tests/test_tech_quote_assistant_card_unification_red.py`（26 项）：CSS 用选择器取真实规则块
+  两侧同值比对，JS 按函数体断言节点与类名（agent-chat.js 读盘前先清 NUL 哨兵）。
+- 随契约变更改写的既有断言（原断言写的是本批要消灭的旧形态）：
+  - `tests/test_chat_fused_assistant_card_style_red.py`：原 `test_tech_inner_cards_are_white_with_border`
+    同时要求 `.oc-art` / `.oc-task-card` / `.oc-intent-card` 各自是白底带框卡；拆成
+    `test_tech_sibling_task_card_is_the_single_box`（同级任务卡保留一张框）与
+    `test_tech_inner_blocks_no_longer_carry_a_second_box`（卡内区块不得再有边框与底色）。
+  - `tests/test_tech_chat_drop_red_error_cards_red.py`：原 `test_push_system_uses_the_assistant_identity_avatar`
+    要求系统提示也带 `oc-aav` ✦ 头像；改为 `test_push_system_uses_the_assistant_identity_row`
+    （带 `oc-alabel` 身份行、不得再有 `oc-aav`），普通输出结构那条的 token 列表同步把 `oc-aav` 换成 `oc-alabel`。
+- Red 验证：`python3 -m unittest tests.test_tech_quote_assistant_card_unification_red -v` →
+  26 项中 **15 项失败（29 个失败点）**、11 项通过（通过的都是「不许放宽」守卫：`--oc-border-3` 与报价同色、
+  助手卡盒模型已同值、用户气泡仍主色实心、思考过程与工具详情仍默认折叠、任务卡管线保留、后端无样式分支）；
+  全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → 1209 项、**33 失败**、7 跳过
+  （改前 1182 项 / 0 失败 / 7 跳过；33 = 本批新增 29 + 上述两处被取代断言改写后的 4）。
+- 状态：本批只建立 Spec / Red 基线并改写被取代的断言，**未修改业务实现**；未重启服务、未部署；等待实现后复验。
+
+## 77. 前端静态资源版本号补更：三个近批改过的脚本没带新 `?v=`（浏览器可能还在跑旧代码）（9-15）
+
+- 发现的缺口（不改逻辑，只补版本号）：仓库的约定是「脚本内容一变就把引用它的 `?v=` 递增」
+  （上一批 `cost-review.js?v=cr5 → cr6` 就是这么做的），但最近三批改过脚本却没递增：
+  - `cost-review.js` 在 ## 76（`623230f`）改过 → 仍写着 `?v=cr6`；
+  - `assembly-integration.js` 在 ## 74（`4549cc7`）改过 → 仍写着 `?v=ai14`；
+  - `cpq-sso.js` 在 ## 75（`4259884`）改过 → 仍写着 `?v=sso3`。
+  静态服务虽然会按 ETag 回源校验，但浏览器一旦命中强缓存/中间层缓存，用户点下去看到的仍是旧逻辑
+  —— 「我点了还是老样子」「已经仍要继续了还是不能继续」这类反馈里，这是最常见的另一半原因。
+- 改动（16 个 HTML，只动引用串，不动任何业务代码）：
+  - `cpq-sso.js?v=sso3 → sso4`：account / assembly-integration / cost-review / cost / index /
+    process / report-publish / report-review / report / requirement-confirm / requirement-create /
+    requirement-detail / requirement-review / summary / tech-task / tech-workbench 共 16 个页面；
+  - `assembly-integration.js?v=ai14 → ai15`（assembly-integration.html）；
+  - `cost-review.js?v=cr6 → cr7`（cost-review.html）。
+- 校验：全仓再 grep `sso3` / `ai14` / `js?v=cr6` 均为 0 处；`tests/` 里没有任何断言引用这些版本串。
+- 全量：`python3 -m unittest discover -s tests -p 'test_*.py'` → 1209 项 / **33 失败** / 7 跳过，
+  33 个失败**全部**来自工作区里并行批次的 Red 基线（`test_tech_quote_assistant_card_unification_red` 29 项，
+  以及被该批次改写的 `test_chat_fused_assistant_card_style_red` 2 项、`test_tech_chat_drop_red_error_cards_red` 2 项），
+  与本批的版本号改动无关（本批只改 HTML 里的引用串）。
+- 状态：已提交、双远端推送并同步到 172.16.10.34（静态资源按请求读盘，无需重启进程）。
