@@ -352,12 +352,25 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     plan = integration_ready_cost(project_id)
     # 报价必填项没齐就不给发：这些参数就是这次要**回传**给报价的东西，缺一格，
     # 那边的测算单上就是一格空白。「参数推荐」环节补。
+    #
+    # 但「带缺口继续」是**本人签过字**的：同一批缺口（字段编码集合，以及顺带放行的
+    # 还没点确认的环节）已被那条签字覆盖时，这里只是最后的完整性检查，不再第二次拦
+    # 同一个人 —— 缺口照旧随返回体带出去（status.required_missing / params_complete
+    # 为 false / status.waiver），财务与销售都看得见哪几格还空着。签字之后新冒出来的
+    # 缺口（编码集合变大）覆盖不成立，仍然逐个点名拒绝。
     missing = product_params.missing_required(plan.params) if plan.params else []
     if missing:
-        names = "、".join(field["name"] for field in missing[:8])
-        more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
-        raise CostFlowError(
-            f"报价必填的成品参数还缺：{names}{more}。请先在「参数推荐」环节补填并确认")
+        missing_codes = sorted({str(field.get("code") or "") for field in missing
+                                if str(field.get("code") or "")})
+        # 不传 stage：签字可能落在「参数推荐」（stage=params），也可能落在「确认工艺并
+        # 发送财务」（stage=finance_handoff）—— 限定其中一种会把另一种漏掉。
+        covered = integration.waiver_covers(plan, missing_codes,
+                                            integration.pending_confirmations(plan))
+        if covered is None:
+            names = "、".join(field["name"] for field in missing[:8])
+            more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
+            raise CostFlowError(
+                f"报价必填的成品参数还缺：{names}{more}。请先在「参数推荐」环节补填并确认")
     # 成品编码必须有 —— 报价的定价与加价规则是按**产品行里的那串字符**匹配的。但它
     # 不该成为一道门：编码只能由系统生成，那就在这里生成。业务主数据写不进去也
     # **不中断推送** —— 改用本地临时号，参数照样送到报价；等库恢复了再补写。

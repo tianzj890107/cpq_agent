@@ -1096,6 +1096,18 @@ function aiFinanceBlocker() {
   return '';
 }
 
+/* 「这批缺口是不是已经被同一份签字放行过」——与后端 integration.waiver_covers() 逐条
+   对应：签字的字段编码集合要盖住当前缺口，顺带放行的确认项也要盖住还没点确认的环节；
+   签字之后新冒出来的缺口（集合变大）不算覆盖，必须重新签；空集合视为已被覆盖。
+   纯函数：不引用页面上的任何东西，单测可以直接求值（与后端同一套判定，不另写一份）。 */
+function aiWaiverCoversGaps(waiver, missingCodes, pending) {
+  if (!waiver || typeof waiver !== 'object') return false;
+  const signed = new Set((waiver.missing_codes || []).map(String));
+  const released = new Set((waiver.waived_confirmations || []).map(String));
+  const covers = (items, pool) => (items || []).every(item => pool.has(String(item)));
+  return covers(missingCodes, signed) && covers(pending, released);
+}
+
 /* L2 缺口的完整描述（报价必填缺口 + 三项内部确认）：只描述、不拦截。
    「仍要继续」弹窗正文与页内提示共用这一份 —— 缺口一次说全，不让人逐页倒查；
    点「仍要继续」才带着本人签字往下发，点「取消」即停。 */
@@ -1105,15 +1117,21 @@ function aiFinanceGaps() {
   // 三项内部确认是否都点过。只用来把缺口说清楚 —— 点不点都不再当硬门禁（可签字放行）。
   const confirmed = Boolean(state.params_confirmed && state.process_confirmed);
   const pending = [];
-  if (!state.params_final) pending.push('「确认参数已齐」');
-  if (!state.params_confirmed) pending.push('「确认参数推荐」');
-  if (!state.process_confirmed) pending.push('「确认组装工艺」');
+  const pendingCodes = [];
+  if (!state.params_final) { pending.push('「确认参数已齐」'); pendingCodes.push('params_final'); }
+  if (!state.params_confirmed) { pending.push('「确认参数推荐」'); pendingCodes.push('params_confirmed'); }
+  if (!state.process_confirmed) { pending.push('「确认组装工艺」'); pendingCodes.push('process_confirmed'); }
   const parts = [];
   if (gaps.required_missing > 0) {
     const names = gaps.fields.map(field => field.name || field.code).join('、');
     parts.push(`报价必填的成品参数还缺 ${gaps.required_missing} 项：${names}`);
   }
   if (pending.length) parts.push(`还没点确认的环节：${pending.join('、')}`);
+  // 这批缺口是不是已经签过字：读后端落库的那份签字（status.waiver），判定与后端
+  // waiver_covers() 同一套规则 —— 前端不另写一份，也不拿本地状态猜。
+  const waiver = state.waiver || null;
+  const covered = aiWaiverCoversGaps(waiver, gaps.fields.map(field => field.code),
+    pendingCodes);
   return {
     required_total: gaps.required_total,
     required_filled: gaps.required_filled,
@@ -1123,6 +1141,8 @@ function aiFinanceGaps() {
     params_confirmed: !!state.params_confirmed,
     process_confirmed: !!state.process_confirmed,
     confirmed: confirmed,
+    covered: covered,
+    waiver: waiver,
     text: parts.length ? `${parts.join('；')}。` : '',
   };
 }
@@ -1148,7 +1168,8 @@ function aiRenderOps() {
   if (financeBtn) financeBtn.disabled = !ready;
 
   const gaps = aiFinanceGaps();
-  const why = aiBusy ? '正在处理…' : (aiFinanceBlocker() || gaps.text);
+  const gapsWhy = gaps.text && gaps.covered ? `${gaps.text}（这批缺口已签字放行）` : gaps.text;
+  const why = aiBusy ? '正在处理…' : (aiFinanceBlocker() || gapsWhy);
   if (financeBtn) {
     financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 2.3 测算成本';
   }
@@ -1311,7 +1332,19 @@ async function aiConfirmProcessAndSendToFinance() {
   if (why) return { ok: false, error: { code: 'not-ready', message: why } };
   const gaps = aiFinanceGaps();
   let waiver = null;
-  if (gaps.text) {
+  if (gaps.covered && gaps.text) {
+    // 同一批缺口在「参数推荐」已经签过字（后端已落库，就是这份 status.waiver）：
+    // 不再弹第二次「仍要继续」，只把风险按普通会话输出说清楚，然后照旧走接收人弹窗 ——
+    // 传 null 让后端复用那次签字，前端不伪造第二次签字，也不另开一条发送通道。
+    const signed = gaps.waiver || {};
+    aiSay(`这批缺口上一环节已经签过字，不再重复询问：${gaps.text}`
+      + `报价测算单上对应的格子仍是空白；签字：${signed.waived_by || '本人'}`
+      + `${signed.waived_at ? `（${signed.waived_at}）` : ''}`
+      + `${signed.reason ? `，事由：${signed.reason}` : ''}。`
+      + `现在把工艺、参数与用量发给财务，缺口按那次签字放行。`);
+    return aiOpenFinanceDialog(null);
+  }
+  if (gaps.text && !gaps.covered) {
     const go = await aiAskProceed(
       `${gaps.text}\n\n这些项平台推不出来，需要有人给个值。现在继续的话，报价测算单上`
       + `这几格会是空白，内部确认也按你的签字放行；平台会记下是你签的字，`

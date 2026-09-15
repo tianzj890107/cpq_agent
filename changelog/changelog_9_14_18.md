@@ -1075,6 +1075,79 @@
 - 收尾：服务器部署目录随后再快进到分支 tip `c78f430`（相对 `63d79f6` 只多两条 changelog 提交，
   **无代码变化，未再重启**），`/` 仍 200、`/api/health` 仍 `status=ok`。
 
+## 74. 「带缺口继续」签字在后续环节被重复拦（2.2 二次签字 + 2.3 回传报价）Spec / Red（9-15）
+
+- 用户反馈：在 2.2「参数推荐」已经点过「仍要继续」并拿到「平台会记下是你签的字，之后不再按同一批缺口拦你」的承诺，
+  到了「确认工艺并发送财务」又被同一批缺口问一遍（弹窗里还列着「还没点确认的环节：「确认参数已齐」」），
+  再往后 2.3 财务回传销售经理还会被同一批缺口第三次硬拦。
+- 本次实测（只读诊断，未改业务代码）：
+  - 运行中的本机 8010 / 8012 进程启动于 **9-14 18:14**（无 `--reload`），而豁免实现随 `4f42e6a` 于 **9-15 10:20** 才落库；
+    前端 JS 由 `StaticFiles` 每次从磁盘读取，所以浏览器拿到的是新版弹窗，后端 Python 仍是旧版 ——
+    用户复现到的旧文案「请回到本步「参数推荐」页签补填，再点「确认参数已齐」」只存在于 `4f42e6a^`，当前树里已不存在。
+    结论：这一半是**进程未重启**，刷新页面无法让已导入的 Python 模块更新。
+  - 用真实后端探针复验当前代码：`send_to_finance(..., waiver=...)` 与 `POST /integration/send-to-finance` 带 waiver 均 **200**，
+    三项内部确认会被顺带补掉；`/integration/params/finalize` 的 `confirm=true` 仍按设计硬校验报价必填。
+  - 真正的残留缺陷：`cost_flow.integration_send_to_quote_body()` 在 `missing_required()` 非空时**无条件**抛错，
+    既不查 `integration.waiver_covers()`，也不区分「本人签过字的这批缺口」与「签字之后新冒出来的缺口」；
+    2.2 已签字放行后 `send_to_quote()` 仍被同一批缺口拦下。前端 `aiFinanceGaps()` 则完全不读 `status.waiver`，
+    所以后端已经会复用的签字，前端还是要用户再签一次。
+- 新增 `docs/specs/tech-waiver-reuse-and-outbound-quote-handoff-with-gaps.md`：同一批缺口只签一次字；
+  前端新增纯函数 `aiWaiverCoversGaps()` 并让 `aiFinanceGaps()` 给出 `covered`，已覆盖时不再弹「仍要继续」、
+  缺口只作风险持续展示；2.3 对外回传保留最终完整性检查（继续引用 `missing_required`），
+  已覆盖时按签字放行并把 `required_missing` / `params_complete=false` / `waiver` 随返回体带出去，
+  未覆盖（新缺口）时仍抛 `CostFlowError` 并逐个点名；L1 生成依赖、权限、写库、审核、发布、回传幂等与 16 项报价必填清单一律不放宽。
+- 新增 `tests/test_tech_waiver_reuse_across_handoffs_red.py`（11 项）：后端用带 pydantic 的解释器在临时 `DATA_DIR` 里真跑
+  `integration` / `cost_flow`（打桩 `cpq_bridge`，不联网、不碰运行数据）；前端用 Node `vm` 加载从
+  `assembly-integration.js` 抽出的真实函数驱动覆盖判定，另加接线与「不放宽」的源码契约断言。
+- Red 验证：`python3 -m unittest tests.test_tech_waiver_reuse_across_handoffs_red -v` → 11 项中 5 通过、**6 失败**；
+  失败准确覆盖「签字后回传仍被拦」「缺口没随交接带出去」「回传审计缺失」与前端 `aiWaiverCoversGaps` / `covered` 接线。
+  本批动手前的全量基线是 **1137 项 / 0 失败 / 7 跳过**；加上本批 11 项后，本批自身贡献的失败数为 6 项，
+  其余测试文件不受影响（工作区另有并行的未提交 Red 基线，不计入本批结论）。
+- 状态：本批只建立 Spec / Red 基线并记录 34/本机的进程新旧的诊断结论，**未修改业务实现**、未重启服务、未部署；等待实现后复验。
+
+## 74 实现：同一批缺口只签一次字（2.2 不再二次签字 + 2.3 回传按签字放行）（9-15）
+
+- 改动文件（2 个业务文件 + 1 个红测修正）：
+  - `tech_app/frontend/assembly-integration.js`
+    - 新增**纯函数** `aiWaiverCoversGaps(waiver, missingCodes, pending)`，逐条对应后端
+      `integration.waiver_covers()`：`missing_codes` 要盖住当前缺口编码集合、`waived_confirmations`
+      要盖住还没点确认的环节，空集合视为已覆盖，签字后新冒出的缺口不算覆盖。
+    - `aiFinanceGaps()` 读 `status.waiver` 并返回新增的 `covered` / `waiver`；
+      `text` / `required_missing` / `fields` / 文案一格未改（缺口照旧一次说全）。
+    - `aiConfirmProcessAndSendToFinance()` 改成 `if (gaps.text && !gaps.covered)` 才弹「仍要继续」；
+      `gaps.covered` 为真时**不弹窗**，用 `aiSay()` 把「这批缺口上一环节已经签过字、报价测算单上
+      对应格子仍是空白、签字人/时间/事由」讲清楚，然后照旧 `aiOpenFinanceDialog(null)` ——
+      传 `null` 让后端复用已落库的那条签字，前端不伪造第二次签字、不另开发送通道。
+      点「取消」仍然即停、不发送不落库。
+    - `aiRenderOps()` 里 `gaps.covered` 时在页内提示尾部加「（这批缺口已签字放行）」，按钮不再因为
+      L2 缺口置灰（L1 硬门禁 `aiFinanceBlocker()` 原样保留）。
+  - `tech_app/backend/services/cost_flow.py`（`integration_send_to_quote_body()`）
+    - 保留 `product_params.missing_required(plan.params)` 这最后一道完整性检查，但把无条件 `raise`
+      改成两级判定：`integration.waiver_covers(plan, missing_codes, pending_confirmations(plan))`
+      （**不传 stage**：签字可能落在 `params`，也可能落在 `finance_handoff`，限定一种会漏掉另一种）；
+      返回非空即放行并继续走既有的取号 / 写主数据 / 桥调用，返回 `None` 时仍抛 `CostFlowError`
+      并逐个点名字段。缺失编码集合的算法与 `send_to_finance()` 保持一致
+      （`sorted({str(field.get("code") or "") ...})`）。
+- 未改动的边界（红测与守护套件逐条锁住）：`main.py` 的 `/integration/params/finalize`（`confirm=true`
+  仍要求真齐）、权限 `_require`、写库 / 审核 / 发布、回传幂等键四元组、L1 生成依赖豁免、
+  `quote_product_params.json` 的 16 项必填、`waiver_covers()` / `record_waiver()` 的比对规则、
+  `report_handoff` 语义。
+- 红测：`tests/test_tech_waiver_reuse_across_handoffs_red.py` → **11/11 全绿**
+  （实现前 6 失败）。其中两处失败被实测确认是**本批红测自身的缺陷**，按「契约更新（签字复用批次）」
+  注明后就地修正，判据未放松：
+  1. `extract_waiver_helper()` 用 `ASSEMBLY.rfind(pattern, 0, head + 1)` 取源码，窗口只到函数名首字符，
+     任何实现都取不到（实测恒为 -1）；改成「按 marker 出现次数判唯一 + 从 head 取到配对块末尾」，
+     仍是「必须有唯一一份实现」，且 `block_from()` 只返回 `{...}` 块，需要自己把函数头补回。
+  2. `test_the_gap_travels_with_the_handoff_instead_of_being_hidden` 拿**签字那一刻**的缺口数
+     与回传后的 `status.required_missing` 比相等；而回传本身会用业务主数据回填「成品描述」
+     （`apply_material_code`，既有行为），实测 6 → 5。断言改成「等于回传后的真实缺口 +
+     大于 0 + 不超过签字时的快照」，即验证「如实带出去」，而不是假装缺口数量没变。
+- 回归：`tests.test_tech_integration_dependency_waiver_red` / `tests.test_tech_requirement_stage_waiver_red`
+  / `tests.test_tech_cost_report_handoff_continuity_red` → **58 项全绿**。
+- 全量：`python3 -m unittest discover -s tests -p 'test_*.py'` → **1164 项 / 0 失败 / 7 跳过**。
+  `node --check tech_app/frontend/assembly-integration.js` 与 `git diff --check` 通过。
+- 状态：已提交并双远端推送，随后部署到 172.16.10.34（见本节后的部署记录）。
+
 ## 75. 2.3 成本测算的会话时间线写入权限（财务经理不再被前端伪 403 拦下）（9-15）
 
 - 用户反馈：「我在成本测算为什么会显示这一步归工艺经理办理；财务经理没有这一步的操作权限 / 但是执行是可以正常执行的」。
