@@ -951,8 +951,16 @@
 - 推送：`python3 scripts/push_remotes.py --check --only origin` 预检通过（origin 当时为 `d888213`，是
   HEAD 的祖先、快进关系成立）→ `python3 scripts/push_remotes.py --only origin` 推送并回读成功，
   `origin/20260909` = `4f42e6a`（GitHub 已推）。
-- GitLab 未推：`gitlab.boulderaitech.com` 仍解析不到（`ssh: Could not resolve hostname
-  gitlab.boulderaitech.com: nodename nor servname provided, or not known`），与 ## 66 记录的同一外部阻塞一致，
-  非仓库权限或历史问题。恢复内网可达后以同一 HEAD 补推：
-  `python3 scripts/push_remotes.py --only gitlab`（禁止 force push / 补偿提交 / 改写历史）。
-- 部署：本批**未部署**（用户只要求提交推送）；`0909` 到 172.16.10.34 的部署仍按用户单独指示执行。
+- GitLab 已补推：本机 DNS 仍解析不到 `gitlab.boulderaitech.com`，但内网可达（34 服务器解析到
+  `172.16.5.150`，本机 `nc 172.16.5.150 22` 成功且 `known_hosts` 已有该 IP 的同一把 ed25519 主机公钥）。
+  用临时 ssh 配置把主机名映射到该 IP（`Host gitlab.boulderaitech.com / HostName 172.16.5.150 / User git`，
+  不改 `/etc/hosts`、不改仓库远端地址），`GIT_SSH_COMMAND="ssh -F /tmp/gl.conf" python3 scripts/push_remotes.py
+  --only gitlab` 推送并回读成功；两个远端 `20260909` 现在都指向 `3517bb8`（`git ls-remote` 已分别回读确认）。
+- 部署到 172.16.10.34：**未执行，当前身份无权限**。服务器上服务由 `wugefei` 账号运行
+  （`/home/wugefei/CPQ/cpq_agent` 的 8010 `cpq_suite_server.py` PID 1302252 与 8012 `tech_app_launch.py`
+  PID 1302344，部署目录 HEAD 仍是 `e541fdf`，落后本批 6 个提交），而本机 ssh 只有 `zhangzhen`
+  身份（`sudo` 需密码、无 `wugefei` 私钥），实测该目录对 `zhangzhen` 不可写。
+  具备 `wugefei` 权限时按既有顺序部署：`cd /home/wugefei/CPQ/cpq_agent && git fetch gitlab 20260909 &&
+  git checkout 20260909 && git merge --ff-only origin/20260909`（不能从 GitHub 直推该目录，仍走 GitLab），
+  再先停 8012 子进程、后停 8010 主进程、等端口释放后重启 8010，最后用 `/` 与 `/api/health`
+  （`status=ok`）核验。
