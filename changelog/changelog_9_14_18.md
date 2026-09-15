@@ -1074,3 +1074,32 @@
     等运行数据未改动；未新增第二套服务、未抢端口、未动反代配置。
 - 收尾：服务器部署目录随后再快进到分支 tip `c78f430`（相对 `63d79f6` 只多两条 changelog 提交，
   **无代码变化，未再重启**），`/` 仍 200、`/api/health` 仍 `status=ok`。
+
+## 75. 2.3 成本测算的会话时间线写入权限（财务经理不再被前端伪 403 拦下）（9-15）
+
+- 用户反馈：「我在成本测算为什么会显示这一步归工艺经理办理；财务经理没有这一步的操作权限 / 但是执行是可以正常执行的」。
+- 根因（实测，缺口的另一半）：
+  - `tech_app/frontend/cpq-sso.js` 的写请求拦截只在 `state.canWrite || (state.canCost && isCostUrl(url))` 为真时放行，
+    而 `COST_URL_PATTERNS` 只列了 `/cost-review/*`、`/parts/{id}/cost`、`/integration/cost` —— 2.3 的真业务动作都在其中，
+    所以「执行可以正常执行」。
+  - 漏掉的是同一批动作**伴随写**的会话时间线：`cost-review.js` 的 `crPersistNote()` 每条过程文字都要
+    `POST /api/projects/{id}/agent/event`（## 69 引入）。这条路径不在白名单里 → 前端伪造 403 且**不调用 nativeFetch**
+    （后端因此没有任何日志），用户点一下 2.3 的动作就看到一次「这一步归工艺经理办理」，而过程文字同时没落库。
+  - 后端缺的另一半：`main.py` 的 `/agent/event` 用 `auth.WRITE_ROLES`，`finance_manager` 不在其中 —— 前端放行也会真 403。
+- 改动（只三处，路由与字段一个不动）：
+  - `tech_app/frontend/cpq-sso.js`：`isCostUrl()` 并进 `/agent/event(\?|$)` 这一条写路径（会话内容属于项目数据、不是业务产出）。
+    拦截表达式形状、伪 403、toast 文案都不改；Agent 对话 `/agent/send`、`/agent/new` 仍不放行给财务。
+  - `tech_app/backend/services/auth.py`：新增 `SESSION_WRITE_ROLES = set(WRITE_ROLES) | set(COST_ROLES)`（会话时间线的写权限）。
+  - `tech_app/backend/main.py`：`/agent/event` 改用 `auth.SESSION_WRITE_ROLES`；`/agent/send`、`/agent/new`、
+    `/integration/params/*` 的角色集合，以及 `COST_ROLES` / `WRITE_ROLES` / `cpq_sso.ROLE_MAP` 的值全部不变。
+- 新增 `docs/specs/tech-cost-session-timeline-write-permission.md` 与
+  `tests/test_tech_cost_session_timeline_write_permission_red.py`（16 项：Node 真跑整份 `cpq-sso.js` 看写请求有没有发到原生 fetch，
+  Node 真跑 `isCostUrl()`，后端 TestClient 按角色真跑 `/agent/event` 与 `/agent/send`，另加权限集合与路由的源码契约）。
+- Red 基线：16 项中 6 通过、**10 失败**；失败准确覆盖「财务经理的 `/agent/event` 被伪 403 拦下（请求没发出去）」、
+  「后端 403 且不落库」与两处权限集合缺失，不是 harness 自身跑不起来。
+- 实现后：本批 16/16 全绿；回归 `test_tech_drop_readonly_bar_red` / `test_tech_cost_role_gate_capability_red` /
+  `test_tech_session_timeline_persistence_red` / `test_tech_params_autofill_and_soft_gates_red` /
+  `test_tech_integration_params_step_ownership_red` → 73 项全绿；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1164 项 / 6 失败 / 7 跳过，6 个失败全部来自工作区里并行未提交的 ## 74 红测
+  （`tests/test_tech_waiver_reuse_across_handoffs_red.py`，与本批无关）；本批自身 0 失败。
+- 状态：实现完成，未提交、未推送、未部署。

@@ -1898,8 +1898,13 @@ def agent_event(project_id: str, body: AgentEventBody, user: dict = Depends(curr
 
     会话内容属于项目数据，不是业务产出：seq 由服务端分配（等于追加顺序），带 key 的条目
     幂等且就地更新 —— 前端进度轮询只提交新出现的进度行，不会每次追加整段。
+
+    权限也按这个定位来：不是"谁能改工艺参数"，而是"谁在这个项目里能动手"
+    （见 auth.SESSION_WRITE_ROLES）。2.3 的操作者是财务经理，他写自己那几条过程
+    文字曾经被这里的 WRITE_ROLES 拦下 —— 业务动作成功、时间线却丢了，前端还会先
+    弹一次伪 403。Agent 对话（/agent/send、/agent/new）不在放宽之列。
     """
-    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    _require(user, auth.SESSION_WRITE_ROLES, "需要工程师及以上权限")
     _agent_project(project_id)
     event = body.model_dump()
     if not str(event.get("kind") or "").strip():

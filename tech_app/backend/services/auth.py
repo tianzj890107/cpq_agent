@@ -53,6 +53,12 @@ FINANCE_ROLES = {"finance_manager", "admin"}
 # 他交的是工艺与用量，成本的数字由财务负责。刻意**不**并进 WRITE_ROLES：
 # 那会让工艺工程师又能改成本，等于这次拆分白做。
 COST_ROLES = {"finance_manager", "admin"}
+# 项目会话时间线（任务卡 / 过程文字 / tech_ui 卡）的写权限。会话内容属于项目数据，
+# 不是业务产出，所以门槛不是"谁能改工艺参数"，而是"谁在这个项目里能动手"：工艺侧
+# 写角色 + 2.3 的操作者（财务经理）。少了他，2.3 的过程文字就写不进去 —— 前端已经
+# 按能力放行，后端再按工艺侧写权限拦一次，等于把人拦在"没有权限"上而动作其实成功。
+# 刻意**不**放宽 Agent 对话（/agent/send、/agent/new 仍走 WRITE_ROLES）。
+SESSION_WRITE_ROLES = set(WRITE_ROLES) | set(COST_ROLES)
 QUOTE_APPROVAL_ROLES = {"sales_director", "finance_manager", "general_manager", "admin"}
 QUOTE_NODE_BY_ROLE = {
     "sales_director": "销售总监",

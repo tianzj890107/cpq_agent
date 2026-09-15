@@ -18,6 +18,11 @@
  *      根本发不出去，前端自己伪造了一个 403，还带着"仅限工艺经理"的文案 ——
  *      后端权限改对了也没用。现在按**能力**分别放行：can_write 管工艺侧，
  *      can_cost 管成本相关接口。
+ *
+ *      同一类误拦还出现过第二次：2.3 的真业务动作放行了，可这些动作**伴随写**的
+ *      会话时间线（POST /agent/event）不在成本白名单里，于是点「测算」业务成功、
+ *      页面却弹「这一步归工艺经理办理」。会话内容属于项目数据、不是业务产出，
+ *      它的路径一并归进成本这一侧（Agent 对话 /agent/send 仍归工艺侧）。
  */
 (function () {
   'use strict';
@@ -36,8 +41,18 @@
     /\/parts\/[^/]+\/cost(\/|$|\?)/,
     /\/integration\/cost(\/|$|\?)/,
   ];
+  /* 2.3 页面除了业务动作，还要**伴随写**自己那几条会话时间线：cost-review.js 的
+     crPersistNote() 每条过程文字都 POST /agent/event 落库。那是项目数据、不是业务
+     产出，却原本落在上面那份白名单之外 —— 财务经理点「测算」业务动作成功了，这条
+     伴随写却被前端伪 403 拦下并弹「这一步归工艺经理办理」，请求根本没发出去。
+     只放行这一条写路径：Agent 对话 /agent/send 、/agent/new 仍归工艺侧；
+     GET /agent/events 是只读，本来就不经过写拦截。 */
+  var COST_SESSION_URL_PATTERNS = [
+    /\/agent\/event(\?|$)/,
+  ];
   function isCostUrl(url) {
-    return COST_URL_PATTERNS.some(function (re) { return re.test(url); });
+    return COST_URL_PATTERNS.concat(COST_SESSION_URL_PATTERNS)
+      .some(function (re) { return re.test(url); });
   }
 
   function ls(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
