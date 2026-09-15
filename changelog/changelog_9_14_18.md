@@ -1072,3 +1072,5 @@
     前端 `waiver`）；
   - 服务器上的 `cpq_settings.json`（0600）、`cpq_history/`、`tech_app/tech_data/`、`product_images/`
     等运行数据未改动；未新增第二套服务、未抢端口、未动反代配置。
+- 收尾：服务器部署目录随后再快进到分支 tip `c78f430`（相对 `63d79f6` 只多两条 changelog 提交，
+  **无代码变化，未再重启**），`/` 仍 200、`/api/health` 仍 `status=ok`。
