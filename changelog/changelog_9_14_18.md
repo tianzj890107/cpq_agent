@@ -668,3 +668,97 @@
 - 部署（用户指令「改完之后提交推送然后0909部署到34服务器」）：172.16.10.34 `/home/wugefei/CPQ/cpq_agent`（分支 `20260909`）`git fetch gitlab 20260909` → `checkout` → `pull --ff-only`，fast-forward `ae1a6f7 → e541fdf`；按既定顺序先停 8012 子进程再停 8010 主进程，确认两端口释放后重启 8010（新 PID 1302252，子进程 8012 新 PID 1302344 由主进程拉起）。
 - 部署后核验：`/` 与 `/api/health` 在 8010 / 8012 均 200 且 `status=ok`（`cadquery_available: true`、`sso_enabled: true`）；对 172.16.10.34 实际下发的 `/app.js` 与 `/cost-review.js` 取 SHA-256，与本机工作区逐字节一致；下发 `cost-review.js` 已含 `crSendToFinance` / `sendCostReviewToFinance` / `visible: crReadOnly()`，`cost-review.html` 已是 `cost-review.js?v=cr6` 且含 `#crSendToFinance`；下发 `app.js` 的 `selectPart()` 内已无 `autoOpenGeneratedProcess`（解析 / 生成收尾各保留一次）。同机 8011 / 8013 仍 200，8082 仍 307。
 - 边界：只 fast-forward 更新 tracked 文件，未删改服务器上的 `cpq_settings.json`、`cpq_history/`、`rule_history/`、`tech_data/`、`product_images/` 等持久化数据；服务器工作区无 tracked 改动（仅 `nohup.out`、`.dockerignore.bk*`、`jdk.tar` 等未跟踪文件）；未动同机其它服务；未创建 MR/tag/Release。
+
+## 59. 成本回传报价的桥函数 `send_to_quote()` 重复定义（9-15）
+
+- 需求（用户）：「严重：成本回传报价的桥函数被重复定义覆盖」—— `cpq_bridge.py:131` 的正确版本会发 `handoff_kind: cost_to_quote` 与 `result_version`，`:159` 又定义了一次同名函数且没有这两个字段，Python 只用后一个，前一份完全失效。
+- Spec：`docs/specs/tech-cpq-bridge-send-to-quote-single-definition.md`；红测：`tests/test_tech_cpq_bridge_send_to_quote_single_definition_red.py`（12 项），Red 基线 **5 失败 + 1 错误**（另 6 项是防回归守卫）。
+- 根因链（实测，非推测）：客户端第二份实现发出的 payload 只有 `session_id` / `title` / `customer` / `project_name` / `note` / `source_task_id` / `source_session_id` / `result`；服务端 `cpq_suite_server.py:432` 用 `d.get("handoff_kind") or "cost_to_quote"` 兜住类型（**侥幸正确**），`:439` 把缺失的 `result_version` 读成 `""`；服务端 `cpq_tech_bridge._handoff_key(session, project, kind, version)` 实测为空版本时得到 `p|s|cost_to_quote|`，并且命中仍未关闭的既有任务时会返回 `already_sent` **早退**（不合并新 `result`、不派发任务、不通知销售）。
+- 影响：`handoff_kind` 变成隐式依赖服务端默认值（默认值一变就会静默串到报告回传语义）；`result_version` 恒空导致同一项目 + 同一报价会话的所有成本版本共用一个幂等键，**成本复核后改了成本再回传会被上一次未关闭的任务吞掉，新成本数永远到不了报价卡片**。
+- 现状测试为何全绿：既有测试对桥函数做的是**静态文本**提取（拿到的是第一份函数体），从不验证运行时真正绑定的对象；本批红测改为真的 import 模块、把 `_post` 换成假实现，直接断言实际发出的 payload，并断言 `send_to_quote` 的运行时签名含 `result_version`。
+- 实现（本批）：① `tech_app/backend/services/cpq_bridge.py` 删除第二份重复的 `send_to_quote`（只减不增，`git diff` 为 26 行删除），只保留带 `handoff_kind: "cost_to_quote"` 与 `result_version` 形参的那一份；`report_handoff`、`write_material` / `send_to_finance` / `return_to_process` / `complete_task` 与 `"/wf/tech/handoff"` 路径一字未改。② `tech_app/backend/services/cost_flow.py` 的 `integration_send_to_quote_body()` 调用点：把 `integration_quote_result(...)` 提到调用前只算一次（同时取 `result_version`），按位置把版本号作为第 10 个实参交给桥；版本号仍来自既有的 `cost_flow.result_version(plan)`（`cost-v1:{quantity}:{total}`），调用点未另写版本算法，2.2 与 2.3 两个入口共用这一条正文因此行为一致。
+- 验证：本批红测 `tests/test_tech_cpq_bridge_send_to_quote_single_definition_red.py` 12 项 **6 处失败 → 0（12/12 全绿）**；运行时实测（假 `_post`）关键字传版本 → payload `handoff_kind=cost_to_quote` / `result_version=cost-v1:1:1234`，位置传旧 9 参 → payload 十个键齐全且 `result_version=""`（缺省不丢键），位置传第 10 参 → 版本号原样透传；`cost_flow.result_version` 同数据同号（`cost-v1:1:0`）、换数量换号（`cost-v1:3:0`）。回归 `tests.test_tech_cost_report_handoff_continuity_red` + `tests.test_tech_cost_review_agent_red` + `tests.test_tech_report_publish_agent_red` **42 项全绿**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **979 项 / 0 失败 / 7 跳过**；`py_compile` 两个文件通过。
+- 边界：未新增 / 删除路由，未改 `cpq_suite_server.py`（继续 `handoff_kind` + `result_version` 读载荷）、`cpq_tech_bridge.py`（幂等键仍是四元组、`already_sent` 早退不变）、`cpq_wf.py`，未改报价第 2/3 步快照与步骤单调性；报告回传仍是 `report_to_quote` + `report-v{n}`；未拆函数、未留兼容壳、未用 `try/except` 吞 `TypeError`；未改任何测试断言。本批为本地修改，未提交、未推送。
+
+## 60. 2.3 成本结果没有进入 3.1 汇总报告（红测已就位，待实现）（9-15）
+
+- 需求（用户）：「2.3 成本结果没有真正进入 3.1 报告」—— 财务做完零件成本 / 组装成本 / 合计 / 确认，3.1 仍显示占位句，用户只能人工改写；而门禁会拦「待评估」，手工把状态点成「可行」又可能让错句作为正式报告内容过审。
+- Spec：`docs/specs/tech-summary-3-1-includes-cost-review.md`；红测：`tests/test_tech_summary_report_includes_cost_review_red.py`（14 项），Red 基线 **9 处失败**（另 5 项是守卫）。
+- 根因（实测）：① `tech_app/frontend/summary-result.js:20` 的 `srLiveView()` 把评估项「经济可行性」写死成 `status:'待评估'` + `conclusion:'尚未接入可追溯的成本与报价结论。'`；② 阶段汇总只拼 `2.1 图纸解析` + `srIntegrationStage(steps.integration)`（2.2），**没有 2.3**；③ 3.1 保存时由 `srRead()` 把页面表格读成 `evaluation_items` / `stage_results` 经 `PUT /process-report` 落库 —— 占位句就是落库内容，而 `report_workflow.content_issues()`（`:230`）只按 `status ∈ {待评估, 需补充}` 拦截，状态被手工改掉后占位句可一路送审；④ 后端 `services/summary.py` 其实已装载 2.3 状态（`_LOADERS["cost_review"] = store.load_cost_review` → `steps.cost_review`），但没有对外口径，前端也没读。
+- 红测方式：用 node 真实执行 `srLiveView()`（喂确认 / 未确认 / 完全没做三种 aggregate，并同时提供 `steps.cost_review`、`steps.integration.cost` 与聚合层 `cost` 口径），断言渲染出的行内容 —— 不再用静态文本提取判断行为。
+- 待实现（DeepSeek）：① `summary.aggregate()` 增加**顶层** `cost` 口径，复用既有 `cost_review.summarize()` / `payload()` 与 `integration.load_plan()`（顶层而非 `steps.cost`，避免改动 `report_source_payload` 审核依据摘要、无故挡下已有草稿）；② 3.1 用 2.3 数据生成经济可行性结论（已确认→「可行」+ 整机成本合计 + 确认人/时间；已测算未确认→仍「待评估」并说明未确认；未开始→说明尚未完成），并在 2.2 之后新增「2.3 成本测算」阶段行，已确认时不得出现「尚未 / 暂无」（否则门禁会拦整份报告）；③ `content_issues()` 增加只针对「经济可行性」的占位句拦截，状态被手工改成「可行」但结论仍含「尚未接入 / 未接入 / 可追溯 / 占位」时继续阻止送审。实现提示词只在会话交付，未落盘。
+- 验证：本批红测 **14 项 → 9 处失败**（先红）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **993 项 / 9 失败 / 7 跳过**，失败全部来自本批新红测。
+- 边界：未改任何业务实现、未改路由 / 权限 / 成本算法 / 2.3 写路径；未动工作区里并行的 `cost_flow.py` / `cpq_bridge.py` 改动（那是第 1 项缺陷的实现，其红测现已 12/12 通过）。本批为本地新增 Spec 与红测，未提交、未推送。
+
+## 61. 历史记录 / 首页卡片恢复项目落到真实阶段（红测已就位，待实现）（9-15）
+
+- 需求（用户）：「历史记录恢复不到真实当前阶段」—— `tech-workbench.js:1144` 的 `techStageFromProject()` 只判断需求状态 / 是否有报告 / 是否有 IR，有 IR 就一律回 `process`（2.2）；做到 2.3 甚至财务已测完成本的项目重开仍退回 2.2，财务经理也进不了自己的 2.3。
+- Spec：`docs/specs/tech-history-restore-real-stage.md`；红测：`tests/test_tech_history_restore_real_stage_red.py`（15 项方法 / 38 处断言失败），Red 基线 **10 项方法失败、5 项守卫通过**。
+- 根因（实测）：判定里完全没有 2.2 参数确认（`plan.params_confirmed`）、工艺确认（`plan.process_confirmed`）、是否已发送财务（`plan.finance_handoff`）、2.3 是否已有成本（`/cost-review` 的 `parts[].has_cost` / `ready`）、成本是否确认（`cost_review.confirmed`）、是否已退回工艺经理复核（`cost_review.actions.kind === 'return-to-process'`）。同一条判定在 `报价首页.html` 的 `techStageFromFlow()`（首页卡片点开时拼 `stage=`）里是**第二份现役拷贝**，缺陷一致；`tech_app/frontend/home.js` 是第三份，但 `home.html` 已不再加载 `home.js`，属停用代码，本批不动。
+- 待实现（DeepSeek）：① 新增纯函数模块 `tech_app/frontend/tech-stage-restore.js`，导出 `window.TechStageRestore.fromSignals(flow, projectData, signals)`，按 Spec 固定的 9 步顺序返回白名单内的 stage id（含「2.2 整机成本不算 2.3 已开始」「已退回工艺经理 → 3.1」两条关键规则）；② `tech-workbench.js` 的 `techHistoryRestore()` 与 `报价首页.html` 的 `openTechProject()` 各自取 `/workflow` + `/summary`（必要时 `/cost-review`，其 GET 无角色限制）后委托共享函数，删除两处自建的 `hasIr ? 'process' : 'drawing'` 分支；③ 两个页面引入新脚本。实现提示词只在会话交付，未落盘。
+- 行为断言方式：用 node 真实执行共享纯函数，跑 22 例判定矩阵（需求三态、报告三态、无需求老项目、只有 IR、参数/工艺确认未发财务、已发财务、2.2 整机成本负例、2.3 已确认 / 已核算 / 已备注 / 已有逐件成本 / ready、已退回工艺经理、无 IR 但在 2.3），断言返回的阶段 id 与白名单 —— 不做静态文本提取。
+- 验证：本批红测 **15 项方法 / 38 处失败**（先红）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **1008 项 / 38 失败 / 7 跳过**，失败全部来自本批新红测。
+- 顺带核实：工作区里第 1 项（桥函数重复定义）与第 2 项（2.3 → 3.1 成本汇总）的实现已落地（`cpq_bridge.py` / `cost_flow.py` / `summary.py` / `report_workflow.py` / `summary-result.js`），两份红测现均通过（26 项 OK）；尚未做代码审查与全量验收，也未提交。
+- 边界：本批只新增 Spec 与红测，未改任何业务实现；未动工作区里并行批次的文件；未提交、未推送。
+
+## 62. 2.3 成本结果进入 3.1 汇总报告（实现）（9-15）
+
+- 需求：承接 ## 60，把 2.3 的成本测算结果真正带进 3.1 汇总报告；只做「2.3 → 3.1」这条展示链，不动路由 / 权限 / 成本算法 / 2.3 写路径。
+- Spec / 红测（本批未改）：`docs/specs/tech-summary-3-1-includes-cost-review.md`、`tests/test_tech_summary_report_includes_cost_review_red.py`（14 项），Red 基线 9 处失败。
+- 实现（只改 3 个文件）：
+  - `tech_app/backend/services/summary.py`：新增只读 `_cost_rollup(project_id)` —— 用 `store.load_ir` + `integration.load_plan` 取得 IR 与整机方案，复用既有 `cost_review.summarize()`（零件 / 整机 / 合计 / ready / missing / zero）与 `cost_review.load_review()`（确认状态 / 确认人 / 时间），返回顶层 dict（`ready / missing / zero / parts_total / assembly / final / quantity / review`）；`aggregate()` 在**顶层**新增 `"cost": _cost_rollup(project_id)`，**不进 steps** —— 保证 `report_workflow.report_source_payload()` 的摘要键仍是 `device_name / ir / steps / summary`，已有草稿不会因「上游工艺数据已变化」被挡在审核外。未引 `cost_model`、未对 `cost.items` 求和（合计直接取 2.3 口径）。
+  - `tech_app/frontend/summary-result.js`：`srLiveView()` 删掉写死的「尚未接入可追溯的成本与报价结论。」；新增 `srMoney`（仅展示格式化）/ `srCostInfo` / `srCostConfirmedText` / `srCostAmounts` / `srCostEconomic` / `srCostStage`。经济可行性三态 —— 2.3 已确认 → 「可行」+ 整机成本合计 + 确认人 / 时间；已测算未确认 → 「待评估」并说明「成本已测算…财务尚未确认」；没做 → 「待评估」说明成本测算尚未完成。阶段汇总在 2.2（`srIntegrationStage`）之后追加「2.3 成本测算」行，仅已确认才加（否则该行必然带「尚未 / 暂无」被门禁拦）。确认信息优先取聚合层 `cost.review`，回落 `steps.cost_review`。
+  - `tech_app/backend/services/report_workflow.py`：`content_issues()` 增加只针对「经济可行性」的规则 —— 状态不是「待评估 / 需补充」但结论仍含「尚未接入 / 未接入 / 可追溯 / 占位」时继续拦送审，提示「请先回到 3.1 刷新汇总，把 2.3 成本测算的结论带进来再送审」；原有 `status ∈ {待评估, 需补充}` 规则不删不放宽，其它评估项（如「暂无重大风险」）不受影响。
+- 验证：红测 `tests/test_tech_summary_report_includes_cost_review_red.py` **14/14**（9 处失败 → 0）；回归 `tests.test_tech_report_publish_agent_red + tests.test_tech_cost_review_agent_red + tests.test_tech_e2e_scenarios_red` **35 项全绿**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **993 项 / 0 失败 / 7 跳过**；`node --check tech_app/frontend/summary-result.js`、`python3 -m py_compile tech_app/backend/services/summary.py tech_app/backend/services/report_workflow.py` 通过。行为级核验（真实构造 `ProcessReport` 调 `content_issues`）：① 可行 + 占位句 → 拦；② 可行 + 真实结论 → 放行；③ 待评估 + 占位句 → 拦（原规则）；④ 其它评估项「暂无重大风险」→ 放行（新规则只认经济可行性）；`report_source_payload()` 摘要键仍为 `['device_name','ir','steps','summary']`。
+- 边界：未改路由 / 权限 / 请求体字段；未改 2.1 / 2.2 两行结论与 `srIntegrationStage`；未在 3.1 或 `summary.py` 重算成本（未引 `cost_model`、未对 `cost.items` 求和）；未改 `cost_review` / `integration` 写路径与 2.3 页面（只读复用）；新口径只在顶层、未塞进 `steps`；未放宽 `content_issues()` 既有规则，新规则未扩大到其它评估项；未改红测。未动工作区里并行的 `cost_flow.py` / `cpq_bridge.py`（## 59）与并行批次的文件。本批为本地修改，未提交、未推送。
+
+## 62. 零零件 IR 的解析完成判定 + 第 22 步验收清单过期（红测已就位，待实现）（9-15）
+
+- 需求（用户）：「有效的零零件 IR 永远不算图纸解析完成」与「验收文档已经落后于当前产品」。
+- Spec：`docs/specs/tech-empty-ir-parse-completion.md`、`docs/specs/tech-e2e-acceptance-doc-refresh.md`；红测：`tests/test_tech_empty_ir_parse_completion_red.py`（12 项方法，Red 基线 27 处失败）、`tests/test_tech_e2e_acceptance_doc_current_red.py`（14 项方法，Red 基线 15 处失败）。
+- 零零件 IR 根因（实测）：`tech-workbench.js:898` 用 `irParts.length` 当「图纸解析完成」标志，同写法还有 `tech-workbench.js:1156` 与 `报价首页.html:1677`。解析成功才会写 IR —— `store.save_ir(..., stage="parsed")` 同时写 IR 文档、`meta.ir_revision += 1`、`meta.stages["parsed"] = 时间戳`（3D 导入写 `parsed_3d`），只上传未解析时只有 `stages.uploaded`。因此完成依据应是「IR 存在（非空对象）或解析留痕或解析版本 ≥ 1」，零件数量只是结果。
+- 验收清单过期（实测）：`docs/specs/tech-agent-recovery-22-e2e-scenarios.json` 仍要求「左侧操作栏的上一步 / 下一步」（实际在 `tech-workbench-bottom` 的 `#techPrev` / `#techNext`）、「点「零件清单」」（实际右侧看板常驻）、「左侧上下文卡显示 page_context」（可见卡片已删，`page_context` 现在只是发给 Agent 的请求字段，见 `assembly-integration.js`）、「左侧「失败重试」」（该入口已下线，失败走普通会话输出 + 就近重试）。
+- 待实现（DeepSeek）：① 在共享纯函数模块 `tech-stage-restore.js` 增加 `TechStageRestore.drawingParsed({ir, meta, stages})`（若第 3 项批次已建该文件，只新增导出、不重写 `fromSignals`），并让 `refreshProgress()` 的 drawing 打点、工作台与首页的「有 IR」判断都改用它；② 重写第 22 步验收清单，使 manual/expected 只描述当前交互。两份实现提示词只在会话交付，未落盘。
+- 行为断言方式：node 真实执行 `drawingParsed` 跑 13 例矩阵（零零件 IR 有/无留痕、只有 `parsed`/`parsed_3d` 留痕、`ir_revision` 回退位、只有 `uploaded`、空输入、null 输入不得抛异常）；验收清单则用结构化断言（10 个场景与 id 必须保留、引用的 automated 文件必须存在、过期话术必须消失、当前话术必须出现），防止靠删场景变绿。
+- 验证：两份红测分别 **27 处 / 15 处失败**（先红）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **1034 项 / 80 失败 / 8 跳过**，失败全部来自第 3、5、6 三批新红测（38 + 27 + 15）。
+- 边界：本批只新增 Spec 与红测，未改任何业务实现与验收文档正文；未动工作区里并行批次文件；未提交、未推送。
+
+## 63. 恢复项目时落到真实阶段（实现）（9-15）
+
+- 需求：承接 ## 61，让「历史记录」与「首页项目卡片 / 清单」打开项目时按真实进度落到 1.1 / 1.2 / 1.3 / 2.1 / 2.2 / 2.3 / 3.1 / 3.2 / 3.3，不再「有 IR 就回 2.2」；判定只有一份实现，两个入口共用。
+- Spec / 红测（本批未改）：`docs/specs/tech-history-restore-real-stage.md`、`tests/test_tech_history_restore_real_stage_red.py`（15 项方法 / 38 处失败），Red 基线全红。
+- 实现（4 个文件）：
+  - 新增 `tech_app/frontend/tech-stage-restore.js`：纯函数模块，导出 `window.TechStageRestore.fromSignals(flow, projectData, signals)`，`signals = { integration, cost_review, cost_detail }`。判定顺序固定九步：需求三态 → 报告三态（draft→summary / in_review→report-review / approved·published→report-publish）→「无需求且无 IR」→ 财务退回工艺经理（`actions[].kind === 'return-to-process'`）→ 2.3 已开始 → 有 IR → drawing。**`integration.cost.items`（2.2 自己算的整机成本）不算 2.3 已开始**；`return-to-process` 优先于 `cost_review.confirmed`。不碰 DOM / 不发请求 / 不读存储。
+  - `tech_app/frontend/tech-workbench.js`：`techStageFromProject(flow, project, signals)` 只做委托（删掉自建 `hasIr ? 'process' : 'drawing'`）；`techHistoryRestore()` 由 2 个 GET 扩到 4 个（新增 `/summary`、`/cost-review`，后者失败按 `{}`），把 `steps.integration` / `steps.cost_review` / cost-review 原文交给共享函数。
+  - `报价首页.html`：`techStageFromFlow(flow, projectData, signals)` 只做委托；`openTechProject()` 同样扩到 4 个 GET，删掉自建分支。
+  - `tech_app/frontend/tech-workbench.html`：在 `tech-workbench.js` 之前引入 `tech-stage-restore.js?v=tsr1`，workbench 版本提到 `twb18`；`报价首页.html` 底部脚本前引入同一模块。
+- 验证：本批红测 `tests.test_tech_history_restore_real_stage_red` **38 处失败 → 0（15/15 全绿）**；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` 在本批范围为 **1008 项 / 0 失败 / 7 跳过**（工作区另有并行批次新加的两个未实现红测文件，其 40 处失败不属于本批）；`node --check tech-stage-restore.js`、`node --check tech-workbench.js`、`git diff --check` 全部通过。
+- 边界：未改阶段白名单（`tech-board-bridge.js` / `tech-board-runtime.js`）、协议事件、各 stage 页面、`applyStage()` / `techWorkbenchUrl()` 用法与任务类型落点（`tech_new_product` → 1.1、`tech_cost` → `stage=cost`、`tech_cost_return` → `summary`）；未新增后端路由、未改任何后端文件；调用点未保留第二份判定。
+- 状态：本批为本地修改，未提交、未推送（## 59 桥函数去重、## 62 2.3 → 3.1 成本汇总同样仍在工作区）。工作区另有并行批次的未实现红测（`test_tech_empty_ir_parse_completion_red`、`test_tech_e2e_acceptance_doc_current_red`），不属于本批。
+
+## 64. 零零件 IR 的解析完成判定（实现）（9-15）
+
+- 需求：承接上面那个重复编号的「零零件 IR 的解析完成判定…」批次，让「图纸解析完成」不再依赖零件数量：解析成功但确实是 0 个零件的 IR 也算完成。
+- Spec / 红测（本批未改）：`docs/specs/tech-empty-ir-parse-completion.md`、`tests/test_tech_empty_ir_parse_completion_red.py`（12 项方法 / 27 处失败），Red 基线全红。
+- 实现（3 个文件）：
+  - `tech_app/frontend/tech-stage-restore.js`：新增纯函数 `TechStageRestore.drawingParsed(input)`（`input = { ir, meta, stages }`，三者均可缺、null 容错、绝不抛异常）。返回 true 当且仅当：① `ir` 是对象且至少一个自有键（**不要求 parts 非空**）；② `stages.parsed` / `stages.parsed_3d`（含 `meta.stages` 同名项）非空；③ `meta.ir_revision` / `meta.ir_input_revision` ≥ 1。`fromSignals()` 内部的「有 IR」判定改为委托它（保留既有 `has_ir` 信号，矩阵行为不变）；顺带把 `hasCostPart()` 的局部变量由 `parts` 改名为 `rows`，让文件里不再有零件数量判定。
+  - `tech_app/frontend/tech-workbench.js`：`refreshProgress()` 的 `done.add('drawing')` 改由 `drawingParsed({ ir, meta, stages })` 决定（`meta` / `stages` 取自 `/workflow` 的 `project`，IR 取自 `/summary` 的 `steps.ir`）；`techStageFromProject()` 经 `fromSignals` 复用同一判定，调用点没有第二份实现。
+  - `报价首页.html`：`techStageFromFlow()` 同样经共享判定，不再自比较零件数量。
+- 验证：本批红测 `tests.test_tech_empty_ir_parse_completion_red` **27 处失败 → 0（12/12 全绿）**，13 例判定矩阵逐例符合；第 3 项批次红测 `tests.test_tech_history_restore_real_stage_red` 仍 **15/15**（阶段矩阵未回退）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **1034 项 / 0 失败 / 7 跳过**；`node --check tech-stage-restore.js`、`node --check tech-workbench.js`、`git diff --check` 通过。
+- 边界：未改后端 / 路由 / `save_ir` 语义；未改阶段白名单、协议事件、`applyStage()` / `techWorkbenchUrl()` 用法；六个步骤条打点 (`done.add(...)`) 与其它阶段完成条件一字未动；`tech-workbench.js` / `报价首页.html` / `tech-stage-restore.js` 里 `parts.length` 类判定已归零。
+
+## 65. 第 22 步端到端验收清单改写（9-15）
+
+- 需求：把 `docs/specs/tech-agent-recovery-22-e2e-scenarios.json` 改写成与当前产品一致的第 22 步人工验收清单 —— 只改这一份文档，不动任何业务代码。
+- Spec / 红测（本批未改）：`docs/specs/tech-e2e-acceptance-doc-refresh.md`、`tests/test_tech_e2e_acceptance_doc_current_red.py`（14 项 / 15 处失败），Red 基线全红。
+- 实现（只改 1 个文件）：
+  - 保留 `step: 22`、10 个场景与 id 顺序（`e2e-01` … `e2e-10`）、`title` / `depends_on`；`automated` 全部逐条核对为真实存在的测试文件，未删任何引用。
+  - `note` 说明 automated 是离线可运行的 Red/守护套件、manual 是浏览器里人工确认的步骤。
+  - `e2e-03`：上下步改述为**右侧底栏**的「上一步 / 下一步」，左侧仍验收附件入口与当前步骤执行按钮；`expected` 补「上下步走右侧底栏，左侧不再承载导航」。
+  - `e2e-04`：零件清单改述为**右侧看板常驻**区块，点零件进看板内详情，返回只切右侧视图、不弹父层。
+  - `e2e-09`：`page_context` 改述为**发给 Agent 的请求上下文**（九阶段各自独立），不再要求页面「显示」上下文。
+  - `e2e-10`：失败路径改述为**普通会话输出**呈现真实错误 + 就近**重试**重发，不再提左侧常驻失败重试入口。
+- 验证：本批红测 `tests.test_tech_e2e_acceptance_doc_current_red` **15 处失败 → 0（14/14 全绿）**；`python3 -m json.tool` 校验通过（合法 JSON，step=22，10 个 id 顺序不变，各字段齐全非空）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'` **1034 项 / 0 失败 / 7 跳过**。
+- 边界：未删场景、未改 id、未合并场景、未降低 `expected` 强度；未改任何代码、测试或其它文档。
+
+- 状态：## 64 与 ## 65 均为本地修改，未提交、未推送。

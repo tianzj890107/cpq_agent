@@ -1660,35 +1660,35 @@
       if (taskId) url += '&task_id=' + encodeURIComponent(taskId);
       return url;
     }
-    function techStageFromFlow(flow, projectData) {
-      const req = (flow && flow.requirement) || {};
-      const status = req.status || '';
-      if (!status || status === 'draft' || status === 'rejected') return 'requirement-create';
-      if (status === 'pending_confirmation') return 'requirement-confirm';
-      if (status === 'pending_review') return 'requirement-review';
-      const report = flow && flow.report;
-      if (report) {
-        if (report.status === 'in_review') return 'report-review';
-        if (report.status === 'approved' || report.status === 'published') return 'report-publish';
-        return 'summary';
-      }
-      const ir = (projectData && projectData.ir) || {};
-      const meta = (projectData && projectData.meta) || {};
-      const hasIr = Boolean((ir.parts && ir.parts.length) || meta.has_ir
-        || (meta.stages && meta.stages.parsed));
-      return hasIr ? 'process' : 'drawing';
+    // 阶段判定的唯一实现在共享纯函数 tech-stage-restore.js：本页只取数后委托，
+    // 不再自己用「有没有 IR」猜 2.1 / 2.2。
+    function techStageFromFlow(flow, projectData, signals) {
+      const restore = window.TechStageRestore;
+      if (!restore || typeof restore.fromSignals !== 'function') return 'requirement-create';
+      return restore.fromSignals(flow || {}, projectData || {}, signals || {});
     }
     async function openTechProject(projectId) {
       if (!projectId) return;
       let stage = 'requirement-create';
+      const id = encodeURIComponent(projectId);
       try {
-        const [flow, projectData] = await Promise.all([
-          fetch('/api/projects/' + encodeURIComponent(projectId) + '/workflow')
+        const [flow, projectData, aggregate, costDetail] = await Promise.all([
+          fetch('/api/projects/' + id + '/workflow')
             .then(r => r.ok ? r.json() : null),
-          fetch('/api/projects/' + encodeURIComponent(projectId))
+          fetch('/api/projects/' + id)
             .then(r => r.ok ? r.json() : null),
+          fetch('/api/projects/' + id + '/summary')
+            .then(r => r.ok ? r.json() : null),
+          fetch('/api/projects/' + id + '/cost-review')
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null),
         ]);
-        stage = techStageFromFlow(flow, projectData) || stage;
+        const steps = (aggregate && aggregate.steps) || {};
+        stage = techStageFromFlow(flow, projectData, {
+          integration: steps.integration || {},
+          cost_review: steps.cost_review || {},
+          cost_detail: costDetail || {},
+        }) || stage;
       } catch (e) { /* 拉不到状态时落 1.1，页内可继续定位 */ }
       window.location.href = techWorkbenchUrl(stage, projectId);
     }
@@ -2654,6 +2654,7 @@
     }
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
   </script>
+  <script src="tech-stage-restore.js?v=tsr1"></script>
   <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>

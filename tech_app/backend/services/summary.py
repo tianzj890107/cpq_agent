@@ -12,6 +12,9 @@ import html as _html
 from typing import Any, Dict, List, Optional
 
 from ..models.summary import SummaryRecommendation
+from ..models.ir import DesignIR
+from . import cost_review
+from . import integration
 from . import llm_client as claude_client
 from ..storage import store
 from ..time_utils import now_cst_str
@@ -144,6 +147,32 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def _cost_rollup(project_id: str) -> Dict[str, Any]:
+    """2.3 成本测算的对外口径，供 3.1 汇总报告使用（经济可行性与 2.3 阶段行）。
+
+    只读复用既有 services/cost_review 的零件/整机/合计口径与 integration 的整机方案，
+    汇总层不重算任何成本（那是第二套成本算法）。键挂在 aggregate() 顶层：审核依据摘要
+    （report_workflow.report_source_payload）只取 device_name / ir / steps / summary，
+    塞进 steps 会让已有草稿因为「上游工艺数据已变化」被挡在审核外。
+    """
+    ir_dict = store.load_ir(project_id)
+    plan = integration.load_plan(project_id)
+    data = cost_review.summarize(project_id, DesignIR(**ir_dict) if ir_dict else None, plan)
+    review = cost_review.load_review(project_id)
+    counts = data.get("counts") or {}
+    return {
+        "project_id": project_id,
+        "review": review.model_dump(),
+        "ready": bool(data.get("ready")),
+        "missing": list(counts.get("missing") or []),
+        "zero": list(counts.get("zero") or []),
+        "parts_total": data.get("parts_total") or {},
+        "assembly": data.get("assembly") or {},
+        "final": data.get("final") or {},
+        "quantity": plan.quantity,
+    }
+
+
 def aggregate(project_id: str) -> Dict[str, Any]:
     meta = store.load_meta(project_id) or {}
     ir = store.load_ir(project_id) or {}
@@ -153,6 +182,8 @@ def aggregate(project_id: str) -> Dict[str, Any]:
         "project_id": project_id,
         "device_name": ir.get("device_name") or meta.get("source_filename"),
         "meta": meta, "ir": ir, "steps": steps, "summary": summary,
+        # 2.3 → 3.1：成本口径只在顶层，不进 steps（不改审核依据摘要）。
+        "cost": _cost_rollup(project_id),
     }
 
 

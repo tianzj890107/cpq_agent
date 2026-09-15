@@ -230,6 +230,15 @@ def content_issues(doc: ProcessReport) -> list[str]:
     for item in doc.evaluation_items:
         if not item.conclusion.strip() or item.status in {"待评估", "需补充"}:
             issues.append(f"评估项“{item.item}”尚未形成可送审结论")
+        # 只盯「经济可行性」：状态被手工点成「可行」时，结论也可能还是那句成本占位句
+        # （2.3 的成本结论没带进来）。上面按状态拦截的规则一条都没有放宽，这条只补
+        # 一个「状态过了、结论仍是占位」的缺口，别的评估项（例如「暂无重大风险」）
+        # 不受影响。
+        elif item.item.strip() == "经济可行性" and any(
+                token in item.conclusion
+                for token in ("尚未接入", "未接入", "可追溯", "占位")):
+            issues.append("评估项“经济可行性”仍是成本占位结论：请先回到 3.1 刷新汇总，"
+                          "把 2.3 成本测算的结论带进来再送审")
     if not doc.stage_results:
         issues.append("各工艺阶段汇总结论为空")
     for item in doc.stage_results:

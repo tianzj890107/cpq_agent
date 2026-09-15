@@ -388,17 +388,28 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     requirement = store.load_requirement(project_id) or {}
     req_data = requirement.get("data") or {}
 
+    # 契约更新（桥函数去重批次）：成本结果的版本号必须随交接一起发给服务端 ——
+    # 服务端幂等键是 会话+项目+交接类型+结果版本 四元组，版本恒为空时，同一条报价
+    # 会话里的所有成本版本共用一个键，成本复核后的新版本会被未关闭的旧任务吞掉。
+    # 版本号只取自 integration_quote_result 里已经用 result_version(plan) 派生好的那份，
+    # 调用点不另写版本算法；其余参数先取出来，交接调用里只留版本号的取数表达式。
+    quote_customer = requirement_customer(requirement, req_data)
+    quote_product_name = str(requirement.get("product_name")
+                             or req_data.get("product_name") or "")
+    quote_source_task_id = str(req_data.get("source_task_id") or "")
+    quote_source_session_id = str(req_data.get("source_session_id") or "")
+    quote_result = integration_quote_result(project_id, plan, title, requirement)
+
     result = bridge_call(
         cpq_bridge.send_to_quote, token, project_id, title,
-        requirement_customer(requirement, req_data),
-        str(requirement.get("product_name") or req_data.get("product_name") or ""),
+        quote_customer, quote_product_name,
         note or "技术工艺已确认，请进入定价",
         # 这单是从报价的「新增工艺」任务过来的：原样退回给当初发起的那个人，
         # 而不是新开一张卡片再群发给销售角色。
-        str(req_data.get("source_task_id") or ""),
-        integration_quote_result(project_id, plan, title, requirement),
+        quote_source_task_id, quote_result,
         # 任务行被删/被后来的任务顶掉时，会话号是认回原卡片的最后一条线索。
-        str(req_data.get("source_session_id") or ""))
+        quote_source_session_id,
+        str(quote_result.get("result_version") or ""))
     handoff = result.get("handoff") or result.get("auto_handoff") or {}
     plan.quote_handoff = QuoteHandoff(
         session_id=str(result.get("quote_session_id") or project_id),

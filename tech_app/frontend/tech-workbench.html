@@ -224,7 +224,9 @@
   <!-- 父壳看板桥必须在 workbench 之前：底栏 / 左侧快捷操作都通过它发命令。 -->
   <script src="tech-board-bridge.js?v=tbb1"></script>
   <script src="llm-settings-panel.js?v=llm-set2"></script>
-  <script src="tech-workbench.js?v=twb17"></script>
+  <!-- 阶段恢复判定只有一份实现：工作台 / 首页共用，必须在 workbench 之前。 -->
+  <script src="tech-stage-restore.js?v=tsr1"></script>
+  <script src="tech-workbench.js?v=twb18"></script>
   <script src="agent-chat.js?v=20260914-result1"></script>
 </body>
 </html>

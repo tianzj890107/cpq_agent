@@ -895,16 +895,21 @@
       const reqStatus = (wf.requirement || {}).status || '';
       const reportStatus = (wf.report || {}).status || '';
       const summary = wf.summary || {};
-      const parts = (aggregate.aggregate && aggregate.aggregate.steps && aggregate.aggregate.steps.ir) ||
-                    ((aggregate.steps || {}).ir);
-      const irParts = (parts && parts.parts) || [];
-      const integration = (aggregate.steps || {}).integration || {};
-      const costReview = (aggregate.steps || {}).cost_review || {};
+      const agg = aggregate.aggregate || aggregate;
+      const steps = agg.steps || {};
+      const projectMeta = wf.project || {};
+      /* 解析完成看留痕（IR 文档 / stages.parsed(_3d) / ir_revision），不看零件数量：
+         解析成功但确实是 0 个零件的整机同样算完成。 */
+      const restore = window.TechStageRestore;
+      const drawingDone = Boolean(restore && typeof restore.drawingParsed === 'function'
+        && restore.drawingParsed({ ir: steps.ir || {}, meta: projectMeta, stages: projectMeta.stages }));
+      const integration = steps.integration || {};
+      const costReview = steps.cost_review || {};
       const done = new Set();
       if (reqStatus) done.add('requirement-create');
       if (['pending_review', 'approved'].includes(reqStatus)) done.add('requirement-confirm');
       if (reqStatus === 'approved') done.add('requirement-review');
-      if (irParts.length) done.add('drawing');
+      if (drawingDone) done.add('drawing');
       if ((integration.process && integration.process.steps && integration.process.steps.length)) done.add('process');
       if (costReview.confirmed) done.add('cost');
       if (summary.confirmed_at || ['in_review', 'approved', 'published'].includes(reportStatus)) done.add('summary');
@@ -1141,35 +1146,37 @@
       box.append(item);
     });
   }
-  function techStageFromProject(flow, project) {
-    const status = String(((flow.requirement || {}).status) || '').trim();
-    if (status === 'draft' || status === 'rejected') return 'requirement-create';
-    if (status === 'pending_confirmation') return 'requirement-confirm';
-    if (status === 'pending_review') return 'requirement-review';
-    const report = flow.report || null;
-    if (report) {
-      if (report.status === 'in_review') return 'report-review';
-      if (report.status === 'approved' || report.status === 'published') return 'report-publish';
-      return 'summary';
-    }
-    const hasIr = Boolean(
-      (project.ir && project.ir.parts && project.ir.parts.length) ||
-      (project.meta && project.meta.has_ir) || project.has_ir ||
-      (project.stages && project.stages.parsed),
-    );
-    return hasIr ? 'process' : 'drawing';
+  /* 阶段判定的唯一实现在共享纯函数 tech-stage-restore.js（window.TechStageRestore）：
+     本文件只负责把 /workflow、/api/projects/{id}、/summary、/cost-review 取回来交给它，
+     不再自己比较「有没有 IR」。 */
+  function techStageFromProject(flow, project, signals) {
+    const restore = window.TechStageRestore;
+    if (!restore || typeof restore.fromSignals !== 'function') return 'requirement-create';
+    return restore.fromSignals(flow || {}, project || {}, signals || {});
   }
   async function techHistoryRestore(projectId) {
     if (!projectId) return;
     closeTechHistory();
+    const id = encodeURIComponent(projectId);
     try {
       const results = await Promise.all([
-        fetch(`/api/projects/${encodeURIComponent(projectId)}/workflow`, { headers: authHeaders() })
+        fetch(`/api/projects/${id}/workflow`, { headers: authHeaders() })
           .then((r) => r.ok ? r.json() : {}),
-        fetch(`/api/projects/${encodeURIComponent(projectId)}`, { headers: authHeaders() })
+        fetch(`/api/projects/${id}`, { headers: authHeaders() })
           .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${id}/summary`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${id}/cost-review`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {})
+          .catch(() => ({})),
       ]);
-      const stage = techStageFromProject(results[0] || {}, results[1] || {});
+      const aggregate = results[2] || {};
+      const steps = aggregate.steps || {};
+      const stage = techStageFromProject(results[0] || {}, results[1] || {}, {
+        integration: steps.integration || {},
+        cost_review: steps.cost_review || {},
+        cost_detail: results[3] || {},
+      });
       applyStage(stage, { project: projectId });
     } catch (error) {
       setStateView('error', '无法恢复历史项目', `打开项目 ${projectId} 失败：${error.message}`, [
