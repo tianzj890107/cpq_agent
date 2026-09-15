@@ -1194,3 +1194,50 @@
   → 1164 项 / 6 失败 / 7 跳过，6 个失败全部来自工作区里并行未提交的 ## 74 红测
   （`tests/test_tech_waiver_reuse_across_handoffs_red.py`，与本批无关）；本批自身 0 失败。
 - 状态：实现完成，未提交、未推送、未部署。
+
+## 76. 2.3「确认成本」的 0 元行不再硬拦：点了「仍要继续」就带着缺口确认（9-15）
+
+- 用户反馈：「现在确认成本是 0 元仍要继续就会拦着」。
+- 根因（实测三处，一条链）：
+  - `tech_app/backend/services/cost_flow.py::confirm_review()` 把「还有零件没算成本 / 整机没算 /
+    某一行算出来是 0 元」**一律硬抛** `CostFlowError`，既不认请求里的签字，也不认库里已有的签字；
+  - 前端 `cost-review.js` 的「确认成本」按钮按 `crData.ready` 置灰，而 `ready` 把 0 元行也算作
+    「没算全」—— 从右看板那颗按钮点下去根本没有入口；
+  - 左侧操作栏的闸门确实弹了「成本还有没算完的地方 … 确定要继续吗？」，但点「仍要继续」之后
+    `crConfirmCost()` 发的是**不带任何签字**的请求，于是后端用同一批缺口再拦一次，
+    界面回到「确认失败」—— 用户看到的就是「点了仍要继续还是拦着」。
+    这是唯一一处「前端承诺可带缺口继续、后端没有豁免机制」的环节（2.2 与需求阶段早已打通）。
+- 改动（5 个文件，沿用既有的 L0–L4 分级与签字语义，不新增第二套实现）：
+  - `tech_app/backend/models/cost_review.py`：新增 `CostReviewWaiver`（stage / missing_codes /
+    missing_fields / reason / waived_by / waived_at / reused），`CostReview.waivers` 只追加不覆盖；
+    新增可选的 `CostConfirmBody(waiver)`。
+  - `tech_app/backend/services/cost_review.py`：新增 `confirm_gaps()`（复用 `summarize()`，缺口 =
+    未算零件 + 整机未算 + 0 元行，比对键形如 `part:P1:missing` / `P1:zero`）、`record_waiver()` /
+    `waiver_covers()` / `waiver_summary()`；`payload().review` 暴露 `gaps` 与 `cost_waiver`。
+  - `tech_app/backend/services/cost_flow.py`：`confirm_review(..., waiver=None)` 改两级判定 ——
+    **L1「一个零件都没有」仍然硬拦（签字也不放行）**；L2 缺口有签字就落库放行、已被同一批签字覆盖
+    就直接放行（不拦第二次）、两者都没有才拒绝，且拒绝信息一次列全缺口并提示可点「仍要继续」；
+    落库时 `store.audit(..., "cost_review_confirm_waived", ...)`。
+  - `tech_app/backend/main.py`：`POST /cost-review/confirm` 增加可选请求体（`waiver`），
+    权限仍是 `auth.COST_ROLES`；Agent 工具那条调用不带 waiver，行为不变（缺口该报错就报错）。
+  - `tech_app/frontend/cost-review.js`：新增纯函数 `crWaiverCoversGaps()`（与后端
+    `waiver_covers()` 同一条规则）与 `crConfirmGaps()`（缺口以后端算出的为准）；确认闸门只有一份
+    （`confirmCostReview` 的 gate，注册时挂到 `crConfirmGate` 给右看板那颗按钮共用）——
+    只读身份与「没有零件」硬拦，其余缺口弹一次「仍要继续」，已签字覆盖时不再弹、只把风险说清楚；
+    `crConfirmCost(waiver)` 把签字放进请求体；「确认成本」按钮不再按 `ready` 置灰。
+- 新增 `docs/specs/tech-cost-confirm-gaps-and-waiver.md` 与
+  `tests/test_tech_cost_confirm_zero_waiver_red.py`（18 项：带 pydantic 的解释器在临时 DATA_DIR 里真跑
+  `cost_flow.confirm_review`，Node 真跑从 `cost-review.js` 抽出的纯函数，另加按钮/请求体/闸门的源码契约）。
+- Red → Green：Red 基线 17 项中 1 通过、**16 失败**（后端一律硬拦、前端没有签字概念），
+  失败点覆盖「0 元行不带签字也拦」「带签字仍拦」「缺口不带出去」「前端不认 covered」；
+  实现中补了 1 项右看板共用闸门的契约，最终 **18/18 全绿**。回归 `test_tech_cost_process_manager_send_to_finance_red` /
+  `test_cost_review_single_primary_and_drop_run_step_red` / `test_tech_business_actions_clickable_then_error_red` /
+  `test_tech_confirm_action_timeout_and_no_pinned_cards_red` / `test_tech_params_autofill_and_soft_gates_red` → 101 项全绿
+  （中间一次重构把闸门提出动作块，动了这些守护套件依赖的字面位置，已改为「闸门仍在这一块里 + 右看板共用同一份」，
+  断言语义未改、测试文件未改）。
+- 全量：`python3 -m unittest discover -s tests -p 'test_*.py'` → **1182 项 / 0 失败 / 7 跳过**；
+  `node --check tech_app/frontend/cost-review.js` 与 `git diff --check` 通过。
+- 用户可见效果：0 元行 / 还有零件没算 / 整机没算时，「确认成本」按钮可点，弹一次「仍要继续」，
+  点继续就带着缺口确认成功、缺口在返回体里照旧可见（`review.gaps` / `review.cost_waiver`），
+  同一批缺口下次不再拦；点取消即停、不发送不落库；「一个零件都没有」仍然拦。
+- 状态：实现完成，随后提交、双远端推送并部署到 172.16.10.34。

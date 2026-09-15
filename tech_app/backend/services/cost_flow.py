@@ -94,19 +94,40 @@ def save_note(project_id: str, user: dict, *, note: str = "", quantity: int = 1)
     return cost_review.payload(project_id, ir, plan, review)
 
 
-def confirm_review(project_id: str, user: Optional[dict] = None) -> dict:
-    """财务确认本步成本。零件没算齐、或者哪一项是 0，都要先解决。"""
+def confirm_review(project_id: str, user: Optional[dict] = None,
+                   waiver: Optional[dict] = None) -> dict:
+    """财务确认本步成本。
+
+    缺口分两级（见 docs/specs/tech-cost-confirm-gaps-and-waiver.md）：
+
+    · **L1 生成依赖**：一个零件都没有 —— 没有可确认的对象，硬拦，签字也不放行；
+    · **L2 质量依赖**：还有零件没算成本 / 整机成本还没算 / 某一行算出来是 0 元
+      （模型给不出材料明细时很常见）—— 前端弹一次「仍要继续」，点继续就把签字带到这里，
+      带着缺口确认，**同一批缺口不再拦第二次**。缺口照旧留在返回体里
+      （`review.gaps` / `review.cost_waiver`），事后查得出是谁在什么时候放的行。
+    """
     ir, plan, review = cost_review_ctx(project_id)
     data = cost_review.summarize(project_id, ir, plan)
-    counts = data["counts"]
-    if counts["missing"]:
-        raise CostFlowError(f"还有零件没算成本：{'、'.join(counts['missing'])}")
-    if not counts["assembly_costed"]:
-        raise CostFlowError("整机（组装）成本还没算")
-    if counts["zero"]:
-        raise CostFlowError(
-            f"这些行算出来是 0 元：{'、'.join(counts['zero'])}。"
-            "请重算或人工补上材料明细 —— 0 元送到报价那头会变成没有成本的产品")
+    gaps = cost_review.confirm_gaps(project_id, ir, plan, data)
+    if not gaps["parts"]:
+        raise CostFlowError("还没有零件可以确认，请先完成成本测算")
+    if gaps["codes"]:
+        covering = cost_review.waiver_covers(review, gaps["codes"])
+        # 请求里没带签字、库里也没有覆盖这批缺口的签字 —— 如实拒绝，并说清可以怎么办，
+        # 不让人逐页倒查（这是「仍要继续」存在的意义）。
+        if waiver is None and covering is None:
+            raise CostFlowError(
+                f"成本还有没算完的地方：{gaps['text']}"
+                "可以点「仍要继续」带着缺口确认 —— 平台会记下是你签的字，"
+                "之后不再按同一批缺口拦你。")
+        if waiver is not None:
+            cost_review.record_waiver(review, gaps=gaps,
+                                      reason=cost_review.waiver_reason(waiver),
+                                      actor=user, reused=bool(covering))
+            store.audit(project_id, "cost_review_confirm_waived",
+                        {"count": len(gaps["codes"]), "gaps": gaps["fields"][:8],
+                         "reused": bool(covering),
+                         "by": (user or {}).get("username", "system")})
     review.confirmed = True
     review.confirmed_by = (user or {}).get("display_name") or (user or {}).get("username") or ""
     review.confirmed_at = now_cst_str()

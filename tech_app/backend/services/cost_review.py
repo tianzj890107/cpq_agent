@@ -22,9 +22,10 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Tuple
 
-from ..models.cost_review import CostReview, merge_totals
+from ..models.cost_review import CostReview, CostReviewWaiver, merge_totals
 from ..models.ir import DesignIR
 from ..storage import store
+from ..time_utils import now_cst_str
 from . import cost as cost_svc
 from . import cost_lookup
 from . import cost_model
@@ -142,6 +143,104 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
     }
 
 
+def confirm_gaps(project_id: str, ir: Optional[DesignIR], plan,
+                 data: Optional[dict] = None) -> dict:
+    """2.3「确认成本」这一步的缺口：未算零件 / 整机未算 / 算出来是 0 元。
+
+    直接复用 summarize()（本步唯一的汇总口径），不另算一份。返回
+    {"codes": [...比对键], "fields": [...中文名], "text": 一句话, "count": n,
+     "parts": 零件总数}；codes 与 fields 顺序一致。
+    比对键带类型前缀（part:P1:missing / assembly:missing / P1:zero），
+    签字之后新冒出的缺口会让集合变大，覆盖判定因此失败、必须重新签。
+    """
+    data = data if data is not None else summarize(project_id, ir, plan)
+    counts = data["counts"]
+    codes: List[str] = []
+    fields: List[str] = []
+    for part_id in counts["missing"]:
+        codes.append(f"part:{part_id}:missing")
+        fields.append(f"零件 {part_id} 没算成本")
+    if not counts["assembly_costed"]:
+        codes.append("assembly:missing")
+        fields.append("整机（组装）成本还没算")
+    for row_id in counts["zero"]:
+        label = "整机" if str(row_id) == ASSEMBLY_ID else f"零件 {row_id}"
+        codes.append(f"{row_id}:zero")
+        fields.append(f"{label} 算出来是 0 元")
+    return {
+        "codes": codes,
+        "fields": fields,
+        "count": len(codes),
+        "parts": counts["parts"],
+        "text": ("；".join(fields) + "。" if fields else ""),
+    }
+
+
+def waiver_reason(waiver: Optional[dict]) -> str:
+    """请求体里的签字只取人工填的原因；原因留空时由调用方补默认原因。"""
+    if isinstance(waiver, dict):
+        return str(waiver.get("reason") or "")
+    return ""
+
+
+def record_waiver(review: CostReview, *, gaps: Optional[dict] = None, reason: str = "",
+                  actor: Optional[dict] = None, reused: bool = False,
+                  stage: str = "cost_review") -> CostReviewWaiver:
+    """写入一条 2.3 的缺口签字，返回该记录（调用方负责 store.save_cost_review）。
+
+    缺口一律以服务端算出的为准；reason 为空时补默认原因，并写入签字人与签字时间。
+    同一批缺口已被上一条签字覆盖时用 reused=True 记录，不再重复索要。
+    """
+    actor = actor or {}
+    gaps = gaps or {}
+    codes = [str(item) for item in (gaps.get("codes") or [])]
+    fields = [str(item) for item in (gaps.get("fields") or [])]
+    default_reason = (f"带缺口继续：{'、'.join(fields) if fields else '无'}，"
+                      f"已在 {stage} 由本人签字放行")
+    waiver = CostReviewWaiver(
+        stage=stage,
+        missing_codes=codes,
+        missing_fields=fields,
+        reason=(str(reason or "").strip() or default_reason),
+        waived_by=(actor.get("display_name") or actor.get("username") or "system"),
+        waived_at=now_cst_str(),
+        reused=bool(reused),
+    )
+    review.waivers = list(getattr(review, "waivers", None) or [])
+    review.waivers.append(waiver)
+    return waiver
+
+
+def waiver_covers(review: CostReview, codes) -> Optional[CostReviewWaiver]:
+    """同一批缺口已经签过字时返回那条签字；出现新缺口返回 None（必须重新签）。"""
+    need = {str(item) for item in (codes or []) if str(item or "").strip()}
+    if not need:
+        return None
+    for waiver in reversed(list(getattr(review, "waivers", None) or [])):
+        have = {str(item) for item in (getattr(waiver, "missing_codes", None) or [])}
+        if need <= have:
+            return waiver
+    return None
+
+
+def waiver_summary(review: CostReview) -> Optional[dict]:
+    """最近一条本步签字摘要（2.3 看板与前端闸门共用）。没有则 None。"""
+    waivers = list(getattr(review, "waivers", None) or [])
+    if not waivers:
+        return None
+    waiver = waivers[-1]
+    return {
+        "stage": waiver.stage,
+        "missing_codes": list(waiver.missing_codes),
+        "missing_fields": list(waiver.missing_fields),
+        "reason": waiver.reason,
+        "waived_by": waiver.waived_by,
+        "waived_at": waiver.waived_at,
+        "reused": bool(waiver.reused),
+        "count": len(waivers),
+    }
+
+
 def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -> dict:
     """接口统一返回体。前端只认这一种形状。"""
     data = summarize(project_id, ir, plan)
@@ -156,6 +255,10 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
     # 仍各自硬校验，不受影响）。复用 integration 的唯一实现，这里不另算一份。
     review_dict["params_complete"] = bool(plan.params) and not integration.missing_required(plan)
     review_dict["waiver"] = integration.waiver_summary(plan)
+    # 本步自己的缺口与签字：前端据此决定「仍要继续」还弹不弹 —— 同一批缺口签过字就
+    # 不弹第二次；缺口本身如实带出去（签字只放行，不抹掉）。
+    review_dict["gaps"] = confirm_gaps(project_id, ir, plan, data)
+    review_dict["cost_waiver"] = waiver_summary(review)
     return {
         "review": review_dict,
         "param_checklist": checklist,

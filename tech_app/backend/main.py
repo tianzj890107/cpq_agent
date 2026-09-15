@@ -41,7 +41,8 @@ from .models.approval import QuoteApproval
 from .models.ai import VerificationPatch, VerificationPatchDecision
 from .models.cleaning import CleaningPlan
 from .models.cost import CostAnalysis
-from .models.cost_review import CostActionBody, CostAction, CostReviewBody
+from .models.cost_review import (CostAction, CostActionBody, CostConfirmBody,
+                                 CostReviewBody)
 from .models.costest import CostEstimate
 from .models.integration import (
     FinanceHandoff, IntegrationDrawing, IntegrationParamPlan, MaterialWrite, QuoteHandoff,
@@ -2889,10 +2890,17 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
 
 
 @app.post("/api/projects/{project_id}/cost-review/confirm")
-def confirm_cost_review(project_id: str, user: dict = Depends(current_user)):
-    """财务确认本步成本。零件没算齐、或者哪一项是 0，都要先解决。"""
+def confirm_cost_review(project_id: str, body: Optional[CostConfirmBody] = None,
+                        user: dict = Depends(current_user)):
+    """财务确认本步成本。
+
+    缺口分两级：「一个零件都没有」是 L1 硬拦（签字也不放行）；未算零件 / 整机未算 /
+    算出来是 0 元是 L2 缺口 —— 前端弹一次「仍要继续」，点继续才带着签字进 body.waiver，
+    同一批缺口不再拦第二次。不带请求体的老调用（Agent 工具）行为不变：有缺口就如实拒绝。
+    """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    return _cost_flow(cost_flow.confirm_review, project_id, user)
+    return _cost_flow(cost_flow.confirm_review, project_id, user,
+                      waiver=(body.waiver if body else None))
 
 
 @app.post("/api/projects/{project_id}/cost-review/material-write")

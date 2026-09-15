@@ -410,6 +410,39 @@ function crCostsComplete() {
   return !crConfirmBlocker();
 }
 
+/* 「这批缺口是不是已经被同一份签字放行过」——与后端 cost_review.waiver_covers() 逐条
+   对应：签字的缺口编码集合要盖住当前这批（need ⊆ have），空集合视为已覆盖；
+   签字之后新冒出来的 0 元行 / 新没算的零件会让集合变大，覆盖不成立、必须重新签。
+   纯函数：不引用页面上的任何东西，单测可以直接求值。 */
+function crWaiverCoversGaps(waiver, codes) {
+  if (!waiver || typeof waiver !== 'object') return false;
+  const signed = new Set((waiver.missing_codes || []).map(String));
+  return (codes || []).every(code => signed.has(String(code)));
+}
+
+/* 2.3「确认成本」的缺口闸门：缺口清单以后端算出的那份为准（crData.review.gaps），
+   签字看后端落库的 review.cost_waiver —— 前端不另算一份缺口，也不拿本地状态猜。 */
+function crConfirmGaps() {
+  const why = crConfirmBlocker();
+  const review = crData?.review || {};
+  const gaps = review.gaps || {};
+  const codes = (gaps.codes || []).map(String);
+  const waiver = review.cost_waiver || null;
+  return {
+    why: why,
+    text: gaps.text || why,
+    codes: codes,
+    fields: gaps.fields || [],
+    waiver: waiver,
+    covered: crWaiverCoversGaps(waiver, codes),
+  };
+}
+
+/* 「确认成本」的闸门实现只有一份，在下面的动作块里（registerActions 的 confirmCostReview）。
+   右看板那颗按钮与左侧操作栏是同一步的两颗按钮，所以注册时把那段实现挂到这个指针上 ——
+   两处各写一遍的话，缺口判定迟早会漂移。 */
+let crConfirmGate = null;
+
 function crRenderActions() {
   const host = $cr('crActions');
   // 工艺经理侧：零件 / 整机页签里都不再摆「测算未完成的 N 个零件」这类他点不动的按钮，
@@ -519,9 +552,11 @@ function crRenderOps() {
     .forEach(btn => { if (btn) btn.hidden = readOnly; });
   const runAllBtn = $cr('crRunAll');
   if (runAllBtn) runAllBtn.hidden = readOnly;
-  const ready = Boolean(crData?.ready) && !crBusy && !readOnly;
   const confirmed = Boolean(review.confirmed) && !crBusy && !readOnly;
-  $cr('crConfirm').disabled = !ready;
+  // 「确认成本」不再按 ready 置灰：还有零件没算 / 整机没算 / 算出来是 0 元都属于
+  // 可以签字放行的 L2 缺口，点了照旧由「确认成本」的闸门弹一次「仍要继续」。
+  // 只有「一个零件都没有」（L1，没有可确认的对象）与忙闲、只读身份才禁用。
+  $cr('crConfirm').disabled = !(Boolean((crData?.counts || {}).parts) && !crBusy && !readOnly);
   $cr('crConfirm').textContent = review.confirmed ? '✓ 重新确认成本' : '✓ 确认成本';
   $cr('crWriteDb').disabled = !confirmed;
   $cr('crToQuote').disabled = !confirmed;
@@ -761,14 +796,19 @@ async function crRunAll() {
       + `核对无误后点「确认成本」，再选择去向。`);
 }
 
-async function crConfirmCost() {
+async function crConfirmCost(waiver = null) {
   if (crBusy) return false;
   crBusy = true;
   crRender();
   crPublishTask('task-progress', { taskId: 'cost-confirm', label: '确认成本',
                                    progress: '正在确认成本…' });
   try {
-    crData = await api(crUrl('/confirm'), { method: 'POST' });
+    // 带着缺口确认时把签字交给后端：它按服务端算出的缺口落库，
+    // 同一批缺口下次不再拦人。没有缺口时原样提交空请求体。
+    crData = await api(crUrl('/confirm'), {
+      method: 'POST',
+      body: JSON.stringify(waiver ? { waiver } : {}),
+    });
     crStatus('成本已确认');
     crToast('成本已确认');
     crSay('成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 大步）。');
@@ -859,7 +899,8 @@ function crBind() {
   $cr('crModelPill').onclick = event => { event.stopPropagation(); crOpenSettings(event.currentTarget); };
   $cr('crRunAll').onclick = () => crRunAll();
   if ($cr('crSendToFinance')) $cr('crSendToFinance').onclick = () => crSendToFinance();
-  $cr('crConfirm').onclick = () => crConfirmCost();
+  // 右看板这颗与左侧操作栏是同一步的两颗按钮：闸门只有一份，这里只是取出来调用。
+  $cr('crConfirm').onclick = () => (crConfirmGate ? crConfirmGate() : crConfirmCost());
   $cr('crWriteDb').onclick = () => crRunOp('material-write');
   $cr('crToQuote').onclick = () => crRunOp('send-to-quote');
   $cr('crReturn').onclick = () => crRunOp('return-to-process');
@@ -984,27 +1025,54 @@ document.addEventListener('cpq-sso-ready', () => {
       // 缺项时要弹确认框等人点「仍要继续」—— 这段等待不能算进桥的 20s 超时，
       // 所以 run 只启动后台链路并立即回执；成败由链路自己播报（本页状态位 + 普通会话输出）。
       deferred: true,
-      run: () => {
-        Promise.resolve((async () => {
+      /* 「确认成本」的闸门实现 —— 全页唯一一份。右看板那颗「确认成本」与左侧操作栏是同一步
+         的两颗按钮，所以注册时把这一段交给 crConfirmGate 指针，两处共用、不各写一遍。
+         缺口分两级：只读身份 crReadOnlyWhy() 与「一个零件都没有」是硬拦，不给「仍要继续」
+         的选项；其余缺口（未算零件 / 整机未算 / 算出来是 0 元）先由 crConfirmBlocker()
+         取文案、crAskProceed() 弹一次「仍要继续」，点了才带着签字走 crConfirmCost(waiver)；
+         已经签过字的同一批缺口不再问第二遍（crConfirmGaps().covered）。 */
+      gate: (() => {
+        const gate = async () => {
+          if (crReadOnly()) {
+            const why = crReadOnlyWhy();
+            crStatus(why, true);
+            return { ok: false, error: { code: 'forbidden', message: why } };
+          }
+          if (!((crData?.counts || {}).parts)) {
+            const why = '还没有零件可以确认，请先完成成本测算';
+            crStatus(why, true);
+            return { ok: false, error: { code: 'not-ready', message: why } };
+          }
           const why = crConfirmBlocker();
-          if (why) {
-            // 闸门里唯一不给「继续」选项的是权限：只读身份不是「没做完」，
-            // 而是这一步不该由他做 —— 点击照旧给真实原因，后端 403 仍是权威。
-            if (why === crReadOnlyWhy()) {
-              crStatus(why, true);
-              return { ok: false, error: { code: 'forbidden', message: why } };
-            }
+          const gaps = crConfirmGaps();
+          let waiver = null;
+          if (why && gaps.covered) {
+            // 这批缺口上一环节已经签过字（后端落库的那份）：不再弹第二次，只把风险说清楚。
+            const signed = gaps.waiver || {};
+            crSay(`这批缺口已经签过字，不再重复询问：${gaps.text}`
+              + `签字：${signed.waived_by || '本人'}`
+              + `${signed.waived_at ? `（${signed.waived_at}）` : ''}`
+              + `${signed.reason ? `，事由：${signed.reason}` : ''}。`);
+          } else if (why) {
             const go = await crAskProceed(
               `${why}。\n\n成本没算齐就确认，汇总里会带着这几处缺口。确定要继续吗？`);
             if (!go) {
               crStatus(`已取消：${why}`, true);
               return { ok: false, error: { code: 'not-ready', message: why } };
             }
+            // 点「仍要继续」= 人的签字：缺口以后端算出的为准，原因留空由服务端补默认原因。
+            waiver = {};
           }
-          const done = await crConfirmCost();
+          // 没有缺口（或已被签字覆盖）时就是既有那条路径：不带签字直接确认。
+          const done = waiver ? await crConfirmCost(waiver) : await crConfirmCost();
           return done ? { ok: true }
             : { ok: false, error: { code: 'confirm-failed', message: '确认成本失败，请查看右侧看板提示。' } };
-        })()).then((result) => {
+        };
+        crConfirmGate = gate;
+        return gate;
+      })(),
+      run: () => {
+        Promise.resolve(crConfirmGate()).then((result) => {
           if (result && result.ok === true) return;
           const message = (result && result.error && result.error.message)
             || '确认成本失败，请查看右侧看板提示。';
