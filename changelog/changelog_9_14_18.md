@@ -762,3 +762,11 @@
 - 边界：未删场景、未改 id、未合并场景、未降低 `expected` 强度；未改任何代码、测试或其它文档。
 
 - 状态：## 64 与 ## 65 均为本地修改，未提交、未推送。
+
+## 66. 本批（## 59 / ## 62 / ## 63 / ## 64 / ## 65）提交与双远端推送记录（9-15）
+
+- 提交：`c938fdf`「成本回传去重、2.3→3.1 成本汇总、阶段恢复与解析完成判定；第 22 步验收清单改写」（21 files changed, 1986 insertions(+), 91 deletions(-)），一次纳入 ## 59–## 65 的全部实现、Spec、红测与 changelog。
+- 推送（GitHub 成功）：`python3 scripts/push_remotes.py --check --only origin` → `python3 scripts/push_remotes.py --only origin`，`origin/20260909` 由 `4909256` fast-forward 到 `c938fdf`；回读 `git ls-remote origin refs/heads/20260909` = `c938fdf5960d10e0df936b54d0da93b369661e95`，与本地 HEAD 一致。
+- GitLab 未推送：`gitlab.boulderaitech.com` 在当前网络 DNS 解析为 NXDOMAIN（`ssh: Could not resolve hostname gitlab.boulderaitech.com`），`push_remotes.py` 与 `git ls-remote gitlab` 均连不上，属外部网络阻塞、非仓库问题；待内网可达后用同一 HEAD 执行 `python3 scripts/push_remotes.py --only gitlab` 补推（不生成补偿 commit、不 force push、不改写历史）。
+- 验证：全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → **1034 项 / 0 失败 / 7 跳过**；提交后 `git status` 干净。
+- 边界：未创建 MR / tag / Release，未部署、未重启服务。
