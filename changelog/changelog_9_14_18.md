@@ -2240,6 +2240,9 @@
 
 ## 94 / 95 / 96 提交与双远端推送记录（34 部署未执行）（9-16）
 
+> 后续：用户随后提供 `wugefei` 凭据，同日 18:08 已完成部署（`7dad9b8`），详见文末
+> 「## 94 / 95 / 96 部署到 172.16.10.34 记录（9-16 18:08）」。
+
 - 本工作区一次交付两批，分两次提交（只暂存本批文件，未用 `git add -A`）：
   - `34260f9`「技术工艺任务卡：卡片体布局归位 + 任务框架「过程事件」通道；视觉闸门跟实际模型走 +
     过程事件带结构化明细（## 94 / ## 95）」，30 个文件 / +3436 −92（两个 Spec、四个红测、
@@ -2366,3 +2369,39 @@ Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red
 
 实现提示词在会话中交付；本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 1 个 + 反转旧断言 2 个 +
 旧 Spec 标注 1 处 + 本 changelog）。
+
+## 94 / 95 / 96 部署到 172.16.10.34 记录（9-16 18:08）
+
+- 授权与方式：用户提供 `wugefei` 账号凭据后执行。本机无 `sshpass`，沿用 `## 73` 的做法用系统自带
+  `/usr/bin/expect` 写了一个只做密码登录的包装脚本（`/tmp/wf.exp`，`0700`，只把目标脚本从 stdin
+  管道给远端 `bash -s`），未改服务器配置、未写 known_hosts 之外的东西。
+- 部署前只读检查（全部通过）：`HEAD=c30323b`、分支 `20260909`、**tracked 改动 0**（未跟踪的
+  `nohup.out*` / `jdk.tar` / `open-claude/` 不参与快进）；env 文件 `/home/wugefei/CPQ/cpq_env.sh`
+  （`0600 wugefei`）含 `CPQ_USER_SECRET_KEY`（`CPQ_INTERNAL_TOKEN` 不在文件里，由 8010 启动时自动
+  生成并注入子进程，符合预期）；运行中的 8010 进程环境里有 `CPQ_ENV_FILE=`，说明重启会自己读该文件。
+  `git fsck` 只报两个**悬空 blob**、无损坏 —— 之前以 `zhangzhen` 看到的「`dfe6cd4` 已损坏」确认是
+  读不了 mode `400` 松散对象造成的**假警报**。
+- 取代码：`git -c safe.directory=$PWD fetch --prune gitlab 20260909` → `git merge --ff-only FETCH_HEAD`，
+  纯快进 `c30323b → 7dad9b8`（47 文件 / +4114 −128），把 `## 94` / `## 95` / `## 96` 与本工作区的
+  changelog 记录一并带上。
+- 重启：旧日志归档为 `nohup.out.prev.20260916-180804`；按既有顺序**先停 8012 子进程（PID 1969961）、
+  再停 8010 父进程（PID 1969891）**，轮询到 8010 / 8012 端口全部释放后，用原命令行加
+  `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh` 重启（`setsid nohup … >> nohup.out 2>&1 < /dev/null &`）。
+- 新进程：8010 PID **2290595**（18:08:05，PPID 1，会话已脱离）、8012 PID **2290720**（18:08:07，
+  父进程 2290595 拉起）。
+- 部署后核验（全部通过）：
+  - `HEAD=7dad9b8`；`/` → 200；`/api/health` → `{"status":"ok","model":"qwen3.5-plus",
+    "cadquery_available":true,"auth_enabled":true,"sso_enabled":true}`；启动日志
+    **`traceback_lines=0`**；
+  - **线上真实下发的资源已换新**：`/tech-workbench.html` 引 `tech-workbench.css?v=twb20`；
+    该 CSS 里 `.tech-results-area` 是 `margin:0` / `border:0` / `border-radius:0`，`:951` / `:993`
+    两处响应式都是 `margin:0`，`.tech-workspace-context` 是 `min-height:34px` / `padding:4px 16px`；
+    下发的 `tech-embed.js` 含 `background:#fff !important` 与 `padding-top:10px` / `padding-bottom:9px` /
+    `padding-left:9px` / `padding-right:9px`；下发的 `确认需求解析结果.html` 里 `.results-area`
+   已是 `background:var(--bg-page)` + `border:0` + `margin:0` + `border-radius:0`；
+  - 运行数据未动：`cpq_settings.json`（mtime 仍是 16:39）、`tech_app/tech_data/`、`cpq_history/`
+    均未被本次部署改写；未新增第二套服务、未抢端口。
+- 提醒：`tech-workbench.js` 的版本号仍是 `twb19`（本批未改该文件，属预期）；浏览器需强刷一次，
+  否则会命中 `twb19` 那份旧 CSS。
+- 附带确认：以 `wugefei` 身份 `git status --porcelain --untracked-files=no` 为空，说明服务器侧
+  没有会被快进覆盖的本地改动。
