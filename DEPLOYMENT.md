@@ -59,21 +59,33 @@ CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
 
 部署成功必须同时满足三个条件：`http://127.0.0.1:8010/` 返回 2xx；`http://127.0.0.1:8010/api/health` 返回 2xx；`/api/health` 的 JSON 字段 `status` 严格等于 `ok`。该接口经父服务反向代理到技术工艺 FastAPI 子服务，是子服务启动完成的就绪信号，只看首页会在子服务未启动时误报成功。容器自身也配置了同样的 healthcheck（用运行镜像自带的 Python 标准库解析 JSON，不依赖 `curl`）。达到超时仍不健康时会打印 `docker compose logs --tail=100 cpq-suite` 并非零退出，不删除旧数据、不清理 volume。
 
-## 线上实例现状（172.16.10.34，2026-09-16 只读核对）
+## 线上实例现状（172.16.10.34，2026-09-16 18:08 部署后核对）
 
 上面那套是**容器化**路径；这台机器上真正在跑的是另一条，换机器或换人前请重新核对本节。
 
 - 服务形态：**裸进程**，不走 `docker compose`。`8010` 由 `wugefei` 运行
   `./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010`，父进程再拉起子进程
   `tech_app_launch.py --host 127.0.0.1 --port 8012`（父进程退出会带走子进程）。
-- 代码目录：`/home/wugefei/CPQ/cpq_agent`（该目录 `origin` 指向 GitHub），当前 `4b35a25`；
+- 代码目录：`/home/wugefei/CPQ/cpq_agent`，分支 `20260909`，当前 `c71679b`（该目录 `origin` 指向
+  GitHub、`gitlab` 指向内网 `http://gitlab.boulderaitech.com/ai-team/cpq_agent.git`；**部署从
+  `gitlab` 取、fetch 不需要 SSH key**）；
   另有 `/home/wugefei/CPQ2/cpq_agent`（带 `Dockerfile` / `docker-compose.yml`，不是当前线上实例）。
+- 当前进程（2026-09-16 18:08 重启后）：8010 `cpq_suite_server.py` PID **2290595**（PPID 1，已脱离会话）、
+  8012 `tech_app_launch.py` PID **2290720**（父进程 2290595 拉起）；旧日志按次归档为
+  `nohup.out.prev.<时间戳>`。
 - 本文默认目录 `/home/data/zhangzhen_home/zhangzhen/cpq_agent` 在这台机器上**不存在**；照上面那条
   `CPQ_DEPLOY_REF=... bash scripts/deploy_server.sh` 直接执行会先失败在目录与 `origin` 校验
   （脚本要求部署目录 `origin` 是 CPQ GitLab）。
-- 权限：`zhangzhen` 账号对上面两个目录**不可写**，`sudo` 需要密码。部署与重启必须在 `wugefei` 账号
-  （或等价授权）下进行。
-- **8010 重启前先确认 `CPQ_USER_SECRET_KEY` 与 `CPQ_INTERNAL_TOKEN` 在场**（`tr '\0' '\n' < /proc/<8010 pid>/environ | grep CPQ_`）：
+- 权限：`zhangzhen` 账号对上面两个目录**不可写**，`sudo` 需要密码；本机对 `wugefei` 没有可用私钥
+  （三个 key 都被拒）。实测可用的路径是**用户提供 `wugefei` 密码**，用系统自带 `/usr/bin/expect`
+  写一个只做密码登录的临时包装脚本，把部署脚本从 stdin 管道给远端 `bash -s` 执行（不要用
+  `sshpass`，本机没有；不要把密码写进仓库或任何入库文件）。
+- 以 `zhangzhen` 身份跑 `git log` 可能报某个松散对象「已损坏」：先看该文件是不是 `-r--------`（mode `400`、
+  仅 owner 可读）—— 那是权限不足被 git 误判，不是真损坏；以 `wugefei` 身份 `git fsck --no-progress`
+  只应有悬空 blob。
+- **8010 重启前先确认加密材料在场**：`/home/wugefei/CPQ/cpq_env.sh`（`0600 wugefei`）里要有
+  `CPQ_USER_SECRET_KEY`，重启命令行用 `CPQ_ENV_FILE` 指过去即可（`CPQ_INTERNAL_TOKEN` 不在该文件里，
+  由 8010 启动时自动生成并注入子进程，属正常）：
   缺加密密钥时保存账号级模型与密钥会回 503（文案点名 `CPQ_USER_SECRET_KEY`），而重启时若漏掉那把密钥，
   已经存过个人 Key 的账号连读都会失败；env 文件放在仓库外并用 `CPQ_ENV_FILE` 指过去，可避免"重启后忘了 export"。
 - 发布门禁：`scripts/deploy_server.sh` 要求目标 commit 是 GitLab `master` 的祖先。开发分支 `20260909`
@@ -84,11 +96,18 @@ CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
 
 ```bash
 cd /home/wugefei/CPQ/cpq_agent
-git fetch --prune origin
-git checkout --detach "$CPQ_DEPLOY_REF"     # 例：git checkout --detach a4bd13c
-# 重启：先 `ps -o args= -p <8010 的 pid>` 把当前启动命令行原样抄下来，停掉旧进程后按同一命令行重启；
-# 不要改写参数，也不要另起第二套端口。
+git -c safe.directory=$PWD fetch --prune gitlab 20260909
+git -c safe.directory=$PWD merge --ff-only FETCH_HEAD   # 纯快进，不产生合并提交；先确认 tracked 改动为 0
+# 重启顺序固定「先停 8012 子进程、再停 8010 父进程」，轮询到 8010 / 8012 端口释放后用原命令行重启
+# （只多 CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh 前缀），由父进程重新拉起子进程：
+#   mv nohup.out nohup.out.prev.$(date +%Y%m%d-%H%M%S)
+#   CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh setsid nohup ./open-claude/.venv/bin/python \
+#     cpq_suite_server.py --host 0.0.0.0 --port 8010 >> nohup.out 2>&1 < /dev/null &
+# 不要改写启动参数，也不要另起第二套端口。
 curl -s http://127.0.0.1:8010/api/health   # JSON 的 status 必须严格等于 ok
 ```
+
+部署脚本 `/tmp/deploy_857b7e0_34.sh` 就是按上面这条链路写的（快进 → 归档日志 → 先子后父停服务 →
+带 `CPQ_ENV_FILE` 重启 → health 轮询 → 打印新 PID 与 HEAD），可作为模板复用。
 
 上面那三条健康检查（首页 2xx、`/api/health` 2xx、`status == "ok"`）对裸进程这条路径同样适用。
