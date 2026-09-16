@@ -1435,3 +1435,288 @@
   `recover_interrupted_tasks()` → 任务落 `interrupted` + `progress=服务重启中断` + error/finished_at 保留，
   会话时间线出现 1 张 `key=task:<id>` 的中断卡；重复调用返回 0 且不重复写卡（幂等）。
 - 线上本次启动没有需要恢复的在途任务（无中断卡写入），业务数据未变动。
+
+## 81. CAD 批量生成改「逐件容错 + 部分成功」：Spec / Red（第 1 批）（9-16）
+
+- 背景（线上实证，只读检查）：项目 `7393f6a00ccc`（电池图纸案例 1.png，5 个零件）里
+  `P-005 输出线缆组件`（型号 `XT30`）的 `features=[]`，`main.py` 的 `/generate` 与 `/drawings`
+  在预检阶段就 `raise RuntimeError`，于是 `P-001 ~ P-004`（几何齐备）一张 3D / 2D 都拿不到，
+  同一条错误连产生 6 次 `failed` 任务。底层 `geometry.generate_part()` /
+  `drawing2d.generate_drawings()` 本来就逐件返回 `ok/error`，是一票否决把它封死了。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/tech-cad-batch-partial-generation.md`（C1 3D 逐件预检、C2 2D 同一套逐件模型且
+    不依赖 3D 全成功、C3 整批失败只剩 5 种、C4 任务终态支持 `partial`、C5 前端结构化门禁、
+    C6 成功件立即可看 / 待补件就地可辨、C7 确定性预检不再堆失败任务、C8 既有门禁不放松；
+    并写明第 2 ~ 5 批不做的范围）。
+  - 红测：`tests/test_tech_cad_batch_partial_generation_red.py` 29 项 —— 后端用 `TestClient` +
+    **真实 CadQuery** 在临时 `DATA_DIR` 跑 8 个场景（4 好 + 1 空特征 / 基体缺尺寸 / 全部不可生成 /
+    连点 3 次 / 内核不可用 / 单件运行期失败 / IR 并发变更 / 单零件重生成 409），前端做
+    轮询终态、结构化摘要、门禁、进度卡 `partial` 的源码契约断言。
+  - 契约更新：`tests/test_tech_step_primary_and_drawing_entry_cleanup_red.py` 里「几何失败必须挡住 2D」
+    与「回执 true/false」两条已被本批取代的断言，改成「只有基础设施 / IR 级失败与
+    `processable === 0` 才挡 2D，单件失败不得阻断其余零件」。
+- Red 基线（改前实测）：`tests.test_tech_cad_batch_partial_generation_red` 29 项 / 24 项失败
+  （31 个失败点），另加契约更新处 1 个失败点；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1262 项 / 32 失败 / 7 跳过（扣除本批两个文件即 1233 / 0 / 7，与 `## 80` 记录一致）。
+  典型红点：整批 `failed` 且一件未生成、`P-005` 无结构化原因、连点 3 次留下 3 条失败任务、
+  `pollTask` / 进度卡不认识 `partial`、`autoGenerateAfterParse()` 仍用单一布尔 gate。
+- 未落地（本批明确不做，留给第 2 ~ 5 批）：`features=[]` 的基础几何初始化入口与
+  `initialize_base_feature` 服务、`cad_requirement` / `make_or_buy` 零件分类、
+  `source_part_hash` 与字段级失效表、成本 / 工艺批量 partial 语义与「仅重试失败项」。
+
+## 82. 空特征零件回退到「plate / box / cylinder 空模板」：Spec / Red（第二批，范围已收窄）（9-16）
+
+- 范围变更（用户口径，覆盖此前报告里的第二批 + 第三批）：不再做零件分类
+  （`cad_requirement` / `make_or_buy`）、不做「该零件不需要 CAD」、不区分标准件 / 外购件 /
+  电气件 / 柔性件、不做「P005 默认待确认是否需要 CAD」、不做按分类的 工艺 / 成本 / BOM
+  完整性规则、不做「上传 STEP 替代简化几何」。**只做一条**：没有 `feature` 的零件自动回退成
+  「plate / box / cylinder 空模板」——三选一 + 该类型固定尺寸字段（默认空），填完保存并单件
+  重生成；没填就留空，等人工或 Agent 补。理由：物理表/数据库长期稳定，不给自由加字段的自由度。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/tech-empty-feature-base-geometry-fallback.md`
+    （C1 前端固定模板 + 唯一白名单常量 `BASE_FEATURE_TYPES`；C2 保存写 `features[0]`、留空保持空；
+    C3 后端受控能力 `initialize_base_feature` / `replace_base_feature`；C4 留空不再当错误、
+    非数值与 ≤0 仍拒绝；C5 单件重生成只影响该零件；C6 Agent 同一份 `part_edit` + 缺参数必须问用户、
+    不得编造尺寸；C7 与第 1 批的 code / repair 词表对齐；C8 明确禁止引入分类字段）。
+  - 红测：`tests/test_tech_base_geometry_fallback_red.py` 25 项 —— 后端真跑 `part_edit`、
+    `oc_agent._update_part` 与 `TestClient`（临时 `DATA_DIR`），单件重生成场景用真实 CadQuery；
+    前端做固定模板 / 封闭类型 / 保存写回 / `?v=` 版本号的源码契约断言。
+- Red 基线（实测，本机 9-16 09:26）：`tests.test_tech_base_geometry_fallback_red` 26 项 /
+  20 项失败（31 个失败点）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1288 项 / 32 失败 / 7 跳过（31 个失败点来自本批红测，另 1 个来自尚在收敛的第 1 批红测）。
+  典型红点：`part_edit` 没有 `initialize_base_feature` / `replace_base_feature`；
+  `oc_agent._update_part` 不认识 `base_feature`（缺尺寸时既不报错也不落库）；
+  `main.py` 的 `WorkbenchPartEdit` / `_apply_workbench_chat_edit` 没有 `base_feature`；
+  `app.js` 没有 `BASE_FEATURE_TYPES` / `parameter-base-feature` / `data-base-type` /
+  `data-base-dim`，空特征零件在界面上仍是死路；`apply_edit` 把留空当错误（422）。
+- 说明（重要）：测量期间同一工作区里有另一条会话在落地/回退第 1 批实现
+  （`main.py` / `geometry.py` / `tasks.py` / `app.js` 等文件被反复改写），因此「第 1 批红测失败数」
+  会在 1 与 31 之间跳动；本批红测与之解耦，自身稳定在 26 项 / 31 个失败点。
+- 说明：本批红测与第 2 批实现的依赖关系已解耦 —— 其中 6 项是保护性用例（补完尺寸后单件重生成、
+  只影响该零件、非数值与 ≤0 仍拒绝、导入 STEP 仍禁止改 IR、不引入分类字段、无自由加字段入口）
+  改前即为绿色；另外 20 项才是本批要转红的缺口。
+
+## 84. 几何 / 2D 结果改「逐件版本粒度」：Spec / Red（第四批）（9-16）
+
+- 目标（用户口径）：改 P-005 的一个尺寸 / 数量 / 名称，不能连坐让 P-001 ~ P-004 的 3D / 2D
+  一起过期、整份视图清空、被迫全量重跑；「哪个字段变了、失效哪些结果」要有明确粒度。
+  第三批（零件分类 / `cad_requirement` / `make_or_buy` / 「不需要 CAD」/ 标准件外购件电气件柔性件
+  区分 / 按分类的 工艺·成本·BOM 完整性规则）已按用户指示取消，本批不涉及。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/tech-per-part-result-staleness.md`
+    （C1 形状指纹 `part_fingerprint` + 属性指纹 `part_attribute_fingerprint`，结果条目新增
+    `source_part_hash` / `source_attr_hash` / `generated_at`；C2 读时装饰 `stale` / `stale_reason`
+    / `stale_attributes`，过期条目**不清空** `step_url` / `stl_url` / `views` / `dxf`；
+    C3 整份隐藏收窄到只剩「来源资料被替换 / 零件增删或结构变化 / legacy 无逐件指纹」三种；
+    C4 名称·数量·公差·型号·备注变化不失效任何结果，材料变化只标 `stale_attributes=["mass_g"]`；
+    C5 `_geom_for_part` 改逐件判定；C6 单件重生成只刷新该件且不再刷新顶层 `source_ir_hash`；
+    C7 legacy 文档兜底；C8 前端零件行过期标记 + `?v=` bump；C9 既有字段 / 路由 / 权限 /
+    并发保护一律不删不改）。
+  - 红测：`tests/test_tech_per_part_result_staleness_red.py` 18 项 —— 后端用真实 CadQuery +
+    `TestClient` + 临时 `DATA_DIR` 跑「改尺寸 / 改数量 / 改名称 / 改材料 / 改公差 / 零件增删 /
+    legacy 同哈希 / legacy 异哈希 / 单件重生成 / 过期件仍可下载」等场景，前端做零件行过期标记与
+    静态资源版本号的源码契约断言。
+- Red 基线（实测，本机 9-16）：`tests.test_tech_per_part_result_staleness_red` 18 项 / **21 个失败点**
+  （14 项红、4 项保护性用例改前即为绿色：既有 artifact 字段不缩水、结构变化仍整份过期、
+  路由不减少、`app.js` 的 `?v=` 已 bump）；全量
+  `python3 -m unittest discover -s tests -p 'test_*.py'` → 1308 项 / 21 失败，14 个失败方法
+  **全部**落在本批红测。典型红点：`GET /api/projects/{id}` 不认识 `geometry_parts_stale` /
+  `drawings_parts_stale` / `stale_attributes` / `legacy_fingerprints`，仍按整份 `source_ir_hash`
+  决定是否把整份 `geometry` / `drawings` 置 `None`；结果条目没有任何逐件来源指纹；
+  `_geom_for_part` 仍用整份 IR 哈希；`save_ir()` 仍无条件 `derived_results_stale = true`；
+  单件重生成不写回逐件指纹；前端零件行没有「结果已过期」标记。
+- 红测自纠（改前自检发现）：`test_regenerate_refreshes_only_that_part` 最初把「重生成后的指纹」
+  与「改尺寸前的旧指纹」做相等断言，属**空跑**（两侧都是 `None` 也能过）且会误伤正确实现；
+  已改为「重生成必须写回非空指纹 + 与重生成前挂着的旧指纹不同 + 条目不再标过期 + 其它零件
+  条目一字不动 + 顶层整份哈希不被刷新」。
+- 同期状态（并行会话）：第 1 批（`## 81` 逐件容错 + partial，29 项）与第 2 批
+  （`## 82` 空特征回退 plate / box / cylinder 空模板，26 项）红测已由另一条会话落地实现并转绿，
+  55 项实测全通过；本批红测与之解耦，失败数与之一致性无关。
+- 说明：本批只改「逐件过期判定与指纹」，不做 数量 / 材料 对 BOM·工艺·成本的逐件失效、
+  `invalidate_confirmations()` 收敛、报告与成本快照的逐件版本、成本 / 工艺批量 partial 语义。
+- 实现已落地（并行会话提交 `1297f5b`，9-16）：`tests.test_tech_per_part_result_staleness_red`
+  18 项**全绿**，全量 `unittest discover` 里已无本批失败点。
+
+## 85. 批量动作统一容错语义：逐件跑完 + 部分完成 + 仅重试失败项：Spec / Red（第五批）（9-16）
+
+- 目标（用户口径）：页面浏览不被卡住；批量动作要「一个零件失败不影响其它零件」，
+  并且要如实告诉用户「4 成功 + 1 失败 = 部分完成」，而不是把部分成功说成整批失败；
+  失败后只重跑失败项，不重复计费、不重写已成功的结果。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/tech-batch-action-partial-and-retry-failed.md`
+    （C1 事件与运行时常量 `task-partial` + 统一 payload；C2 成本逐件全部尝试 + `crRetryFailed`；
+    C3 工艺 partial 语义 + `retryFailedPartProcesses`；C4 会话卡把部分完成当完成、不当失败，
+    并提供「仅重试失败项」；C5 整机成本的服务端同步 409 门禁（不提交任务、不调模型）；
+    C6 其它批量动作核对结论；C7 既有契约不放松）。
+  - 红测：`tests/test_tech_batch_partial_semantics_red.py` 17 项 —— 后端用真实 `TestClient` +
+    临时 `DATA_DIR` 并把 `tasks.submit` 打桩（**绝不发模型请求**）验整机成本门禁；前端用 Node
+    `vm` 真跑 `cost-review.js` / `app.js` 里抽出的 `crRunParts` / `crRunAll` /
+    `runAllPartProcesses` / `runAllPartProcessesInBackground` 控制流；运行时与会话卡做源码契约断言。
+- Red 基线（实测，本机 9-16）：`tests.test_tech_batch_partial_semantics_red` 17 项 / **19 个失败点**
+  （3 项保护性用例改前即为绿色：没有 2.2 组装工艺仍是 400、成本零失败仍跑整机成本、
+  工艺 0 成功仍是整批失败）；全量 `python3 -m unittest discover -s tests -p 'test_*.py'`
+  → 1325 项 / 19 失败，失败**全部**落在本批红测（第 1 / 2 / 4 批红测均已由并行会话实现并转绿）。
+  典型红点：零件成本残缺时整机成本照样提交任务（200 且有 task_id，真调一次模型）；
+  成本 `crRunParts` 第一件失败就停（4 个零件只跑 1 个）；
+  `crRunAll` 一件失败整批停且不上报部分完成；工艺批量 4 成功 + 1 失败上报 `task-failed`；
+  `tech-board-runtime.js` 没有 `TASK_PARTIAL`；会话壳不认 `task-partial`；两个「仅重试失败项」
+  实现都不存在；四个改过的脚本 `?v=` 未 bump。
+- 说明：本批只做「批量动作的容错语义与收尾口径」，不做 数量 / 材料 对 BOM·工艺·成本的逐件
+  失效、报告与成本快照的逐件版本、零件分类（用户已取消）。
+
+## 86. 账号级模型与密钥（全局默认兜底保留）：Spec / Red（9-16）
+
+- 目标（用户口径）：按**登录账号**选模型 —— 每个账号可以用自己的模型、配自己的密钥，
+  不再"全平台一个模型一把 Key"；没有自己配置时回落到平台默认（现有全局
+  `cpq_settings.json` 的 `model` 与 `api_keys`，兜底必须保留）。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/per-account-model-and-api-key.md`
+    （C1 `resolve()` 增加发起账号维度；C2 `effective()` 报告生效模型与来源；
+    C3 账号级设置独立落 `DATA_DIR/_user_llm.json`，0600 原子写，不写全局文件；
+    C4 模型/provider 白名单仍只有 `llm_settings` 一份；C5 只回 configured + 打码、账号不串号；
+    C6 发起账号唯一通道：HTTP 由 `auth_guard` 设上下文、异步任务由 `tasks.submit(actor=...)`；
+    C7 会话按发起账号解析路由并重建 client；C8 能力校验按生效模型；
+    C9 全局兜底不被账号级写入改动、缺 Key 明确失败不静默降级；
+    C10 `GET/PUT /api/my/settings` + `DELETE /api/my/settings/keys/{provider}` 只作用于本人；
+    C12 共用面板新增「我的模型与密钥」区、全局区权限不变、报价端 404 时隐藏；
+    C13 边界：报价/配置/规则三个助手不在本批，不复活 `vision_model`/`text_model`）。
+  - 红测：`tests/test_per_account_model_and_api_key_red.py` **43 项** —— 子进程用带
+    fastapi/pydantic 的解释器真跑服务层与 HTTP 面（临时 `DATA_DIR`、内存里的假全局配置、
+    **绝不写仓库里真实的 `cpq_settings.json`**、不联网），另加前端面板、模块接口名与后端通道
+    的源码契约。9-16 补齐先前没有覆盖的契约：C4 非法模型/provider 必须 `ValueError` 明确拒绝
+    且不落盘、白名单仍取自 `llm_settings.MODEL_PROVIDERS`/`PROVIDERS`；C3 账号级文件原子写
+    （`os.replace`）与 `0600`；C7 会话按发起账号解析路由并在换人时重建 client（stub 掉
+    `oc_agent` 只看是否重建、同账号连续两轮不重建）、`_route_matches_applied` 必须把账号算进去；
+    C11 账号级改动写 `_global`/`user_llm_settings_update` 审计且不含明文；C14 账号级文件损坏时
+    安全降级回落全局；C12 面板显示生效模型并标注「我的」；另加 `acting_user`/`user_llm`
+    的接口名契约（按 Spec §6，不得改名）。
+- Red 基线（实测，本机 9-16 补齐后）：`tests.test_per_account_model_and_api_key_red` 43 项 /
+  **34 个失败点**（9 项保护性用例改前即为绿色：无发起人的任务回落全局、响应无明文 Key、
+  面板不含双模型字段、面板保留全局权限位、Spec 已存在、用户视图不带账号级字段、
+  会话路由走查可运行、同账号连续两轮不重建 client、审计里无明文）。
+  典型红点：`resolve()` 不接受 `user`（`TypeError: unexpected keyword argument 'user'`）；
+  `llm_settings.effective()` 不存在；`services/user_llm.py` 不存在；
+  `GET /api/my/settings` 404、`PUT`/`DELETE` 405；`/api/settings` 响应没有 `mine` /
+  `effective_model`；`tasks.submit()` 没有 `actor` 参数；面板里没有「我的模型」区；
+  图纸解析进度文案仍取 `llm_settings.snapshot()['model']`；`main.py` 没有发起账号上下文。
+  全量 `python3 -m unittest discover -s tests -p 'test_*.py'` → 1348 项 / 19 失败 / 7 跳过，
+  19 个失败**全部**落在本批红测。
+- 说明：本批只做「模型与密钥的账号级覆盖 + 全局兜底」，不做账号级 Temperature / 最大
+  Tokens / 深度思考，也不做报价、配置、规则三个助手的账号级设置（它们的 `/api/settings`
+  在另一个服务、另一套鉴权，留作下一批）。
+
+## 87. 报价与技术工艺合并为一套登录与鉴权（保留私有化独立模式 + 补齐工艺技术总监）：Spec / Red（9-16）
+
+- 目标（用户口径）：**保留**技术工艺的私有化独立登录模式，**补齐**缺失的「工艺技术总监」
+  角色，先把"两套服务两套鉴权"里真正没做一起的部分写成 Spec 与红测；账号级模型与密钥
+  下一批再做。
+- 现状（实测）：端口与静态资源早就是一套（8010 进程内挂三个 Agent，技术工艺作子进程走
+  反向代理），但鉴权有三处互不相干 —— `/agents/*` 完全不验票（`cpq_suite_server.py:137`
+  的 `_dispatch_agent()` 是 `do_GET`/`do_POST` 的第一个分支），四张报价页面 46 处 Agent 调用
+  全是裸 `fetch`、报价首页另有 6 处同源技术工艺 `/api/*` 裸 `fetch`；CPQ 只有销售/工艺/财务
+  三个角色，没有"工艺技术总监"，3.2 审核/3.3 发布只能靠 `enable_cpq_single_manager()` 让
+  工艺经理兼任；`/api/me` 的 `sso` 只有 `can_write`/`can_cost`，`cpq-sso.js` 的写拦截只看
+  `can_write`，总监点「审核」「发布」会被**前端伪 403** 挡住。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/single-login-across-quote-and-tech.md`
+    （C1 唯一身份源；C2 `/agents/*` 先验票再进 Agent、401/503 语义、无副作用；
+    C3 `Bearer` + `?token=`，`OPTIONS` 预检不验票；C4 服务间同步带 `X-Internal-Token`
+    且失败必须告警；C5 前端统一走 `window.cpqAuthFetch`、登录后重新拉取；
+    C6 保留 `CPQ_SSO=false` 的独立登录/注册/用户管理；C7 新增 `tech_director` 工艺技术总监
+    → `process_director`；C8 `CPQ_MANAGER_FULL_TECH=false` 恢复 3.1/3.2/3.3 职责分离；
+    C9 `/api/me` 增 `can_review`/`can_publish` 并按能力放行审核发布路径；
+    C10 不降低既有安全；C11 非目标：不合并进程、独立 Agent 服务不在本批）。
+  - 红测：`tests/test_single_login_across_quote_and_tech_red.py` 39 项 —— 子进程真起一体化
+    服务（端口 0 + 假 Agent 模块）用真 HTTP 打 `/agents/*` 并记录"Agent 是否真被调用"；
+    子进程真起技术工艺 App（TestClient + 假 `cpq_sso.resolve`）读能力位并按
+    `CPQ_MANAGER_FULL_TECH` 真跑一次启动期角色授予；另加前端带票、能力位放行、内部令牌、
+    独立模式保留的源码契约。
+- Red 基线（实测，本机 9-16）：
+  - 本批红测 `tests.test_single_login_across_quote_and_tech_red` → 39 项 / **26 个测试失败**
+    （含 subTest 共 30 个失败点）；13 项保护性用例改前即绿（`OPTIONS` 预检、`?token=`、
+    静态资源不被挡、总监不拿写权限、关掉全权后工艺经理失去审核发布/保留写权限、
+    全权模式下工艺经理仍被授权、本地登录在 SSO 下被拒、既有角色映射与 `FALLBACK_ROLE` 不变、
+    角色字典在代码里而非 schema）。
+  - 典型红点：无票 / 伪造票 / 非 `Bearer` 的 `GET /agents/quote/api/settings`、`POST /agents/quote/api/send`
+    全回 200 且真的进了 Agent（4 次调用被记录）；登录库不可用时也回 200 而非 503；
+    四张页面 46 处 Agent 调用 + 报价首页 6 处技术工艺 `/api/*` 全无票；`cpq_auth.ROLES`
+    无 `tech_director`；`ROLE_MAP` / `TECH_ROLE_LABEL` 无总监；`/api/me` 无
+    `can_review`/`can_publish`；`cpq-sso.js` 不认识这两个能力位；`llm_settings._post_quote_settings`
+    不带内部令牌且 `except` 里是 `pass`。
+  - 全量 `python3 -m unittest discover -s tests -p 'test_*.py'`：不含本批为
+    **1350 项 / 19 失败**（19 个全部是上一批 `test_per_account_model_and_api_key_red`）；
+    含本批为 **1389 项 / 49 失败**，49 = 19 + 30，失败**全部**落在上述两个红测文件。
+- 说明：本批只做「一张票、一处校验、一套角色」，账号级模型与密钥（## 86）按用户要求
+  留到下一批；不合并进程（技术工艺仍是 8010 拉起的子进程）、不动 `open-claude`、
+  不改业务逻辑与数据库 schema、不删除任何历史数据。
+- 状态：仅建立 Spec / Red 基线，未修改业务实现、未提交、未推送；等待实现后复验。
+
+## 88. 3.2/3.3 能力位批次的三处旧契约对齐（测试侧，9-16）
+
+- 背景：`## 87` 的实现把 `cpq-sso.js` 的写拦截从两档（`can_write` / `can_cost`）扩到四档
+  （再加 `can_review` / `can_publish`），三个更早的红测文件里锁字面形状的断言因此失效
+  （`tests/test_tech_drop_readonly_bar_red.py`、`tests/test_tech_params_autofill_and_soft_gates_red.py`、
+  `tests/test_tech_cost_session_timeline_write_permission_red.py`）。
+- 已改（**仅测试文件**）：把这些断言从「锁字面表达式」改成锁**通路**——
+  `state.canWrite` 与 `state.canCost && isCostUrl(url)` 必须同时在放行表达式里（正则容忍换行），
+  并补上 `state.canReview` / `state.canPublish` 参与判定的断言；`var detail = ...` 的定位方式
+  改为不锁具体分支。
+- 收紧一条真契约：写请求被拦时只能说明「这一步归**工艺经理**」。有 `canWrite` 的账号不会被拦，
+  成本/审核/发布的写又各自放行了，所以**被拦的一定是工艺侧步骤**；实现里按能力位反推归属，
+  会输出「这一步归财务经理办理；财务经理没有这一步的操作权限」这种自相矛盾的文案。
+  两条红测（`test_blocked_write_toast_still_names_the_owner`、
+  `test_readonly_bar_names_params_as_process_step`）当前仍红，指向待修的实现。
+- 全量基线（9-16）：`python3 -m unittest discover -s tests -p 'test_*.py'` → 1407 项 / 36 失败，
+  36 = 34（`## 86` 账号级模型与密钥红测）+ 2（上面这条待修文案）。`## 87` 的
+  `tests/test_single_login_across_quote_and_tech_red.py` 39 项已全绿。
+
+## 89. 技术工艺执行动作的「我：…」回声 + 执行进度与助手回复合成一张卡（9-16）
+
+- 用户口径（三条拍板）：
+  1. 只给「Agent 主动发起、并且会真的跑起来」的动作补一条用户气泡；往看板写字段、把确认 /
+     审核意见带进看板输入框、单纯刷新看板这几类**一条都不加**，维持现在的系统提示；
+  2. 气泡文案由**执行方**（右侧看板动作）给出，左侧不写「动作名 → 文案」映射表；
+  3. 执行进度不再是一种独立卡片，与助手回复**合成同一个气泡**（报价 `.message-ai` 的形态）。
+- 现状缺口（只读排查）：技术工艺左侧只有真人打字才出用户气泡（`agent-chat.js` 的发送与历史回放），
+  `tech_app/frontend/` 里没有一处 `addUserBubble`（报价侧 13 处）；执行进度是另一族卡
+  （`ensureTaskCard()` 建独立 `.oc-task-card`，与助手卡 `.oc-amsg` 平级）；看板运行时的
+  `task-progress` 载荷里没有任何用户口吻字段。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/tech-agent-echo-bubble-and-single-exec-card.md`
+    （C1 动作声明 `prompt` + 运行时解析并放进启动载荷；C2 只有 `parseDrawing` / `extractRequirement` /
+    `integrationStep` / `costStep` / `openIntegrationDrawings` 五个动作声明；C3 左侧按 `prompt` 出气泡、
+    同一次执行只出一条；C4 气泡插在当前这一轮助手卡**上方**；C5 执行进度并进本轮助手卡、无实时轮时
+    新建 `.oc-amsg.oc-task-card`（蓝色身份行 + 任务名 + 状态 chip）；C6 落库与回放；C7 明确不做的事）。
+  - 红测：`tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py` —— 35 项静态契约 + 用 node
+    真跑 `tech-board-runtime.js` 的消息分发（声明式 / 函数式 / 未声明 / 文案函数抛错 / silent 五种情形）。
+- Red 基线（建立时实测，9-16 14:30）：35 项 / **23 个用例失败（34 个失败点）**；12 项是保护性用例
+  改前即绿（`.oc-ubub` 主色、任务卡管线与配色、桥事件、确认卡、工具轨迹与思考块、第 6 / 7 类动作
+  不加气泡、后端不加路由等）。全量 `discover` 当时含本批为 1442 项 / 34 失败，失败全部落在本批文件。
+- 落地情况（**说明**：实现由另一条会话完成，不是本批 Codex 交付内容）：看板侧
+  `tech-board-runtime.js` 新增 `resolveActionPrompt()` 并把 `prompt` 放进启动载荷，四个看板页给上述
+  5 个动作声明了文案（`integrationStep` / `costStep` 用 `function(payload)` 按 step / 零件号变化）；
+  左侧 `agent-chat.js` 新增 `echoTaskPrompt()` / `addUser(text, before)` / 当前轮上下文合并，`agent-chat.css`
+  补 `.oc-task-card .oc-task-state { margin-left: auto; }`；页面版本号同步为
+  `agent-chat.js?v=20260916-echo1`、`agent-chat.css?v=20260916-echo1`、`tech-board-runtime.js?v=tbr3`、
+  `assembly-integration.js?v=ai18`、`cost-review.js?v=cr11`、`requirement-create.js?v=reqcreate18`。
+  复验：本批 35 项全绿。
+- 审查发现两处真实缺口（**已补 3 条红测，当前仍红**）：
+  1. 回声按「项目级 `taskId` / 动作名」去重，同一动作在同一个项目里**第二次执行不再出气泡**；
+     需要运行时在启动载荷里带每次执行唯一的 `runId`，左侧按它去重。
+  2. 回声只存在于当前页面 DOM，`task.prompt` 绑到的是另一次事件的卡，**重进项目后气泡丢失**；
+     需要出气泡时同步落库一条 `kind: "user"` 的会话条目（回放已支持用户气泡，无需第二套渲染）。
+  Spec 已同步补 C1（`runId`）/ C3（按执行去重）/ C6（气泡落库）与验收 9 / 10。
+- 全量基线（9-16 14:38）：`discover -s tests -p 'test_*.py'` → **1446 项 / 3 失败**，3 个失败全部是
+  上面这两处缺口的红测；`## 86` / `## 87` 的红测已随实现落地转绿。
+- 修正落地（9-16，两处缺口已补）：
+  - `tech-board-runtime.js` `runEntry()`：启动载荷新增 `runId`（`nextRequestId('run')`，每次执行唯一），
+    `action / phase / label / taskId / prompt` 一个不动；运行时 `prompt` 的解析规则与 5 条文案不变。
+  - `agent-chat.js` `echoTaskPrompt()`：去重键改为 `detail.runId || taskId || label`（同一个动作第二次执行
+    照样出气泡）；出气泡的同时 `persistSessionEvent({ kind: "user", text, stage: boardStage(),
+    key: "echo:" + runId })` 落库，回放沿用既有 `type === "user"` 分支，不新增第二套渲染；回放期间
+    （`replayingHistory`）不再二次补气泡，避免与已落库条目重复。
+  - 复验（9-16）：`tests.test_tech_agent_echo_bubble_and_single_exec_card_red` → **39/39 全绿**
+    （`EchoPerExecutionBehavior` 两条 + `EchoPersistenceContract` 一条已转绿）；
+    `discover -s tests -p 'test_*.py'` → **1446 项 / 0 失败**；六个改动脚本 `node --check` 全过；
+    `git diff --check` 无告警。
+- 状态：Spec / 红测 / changelog / 前端实现均在本工作区，未提交、未推送、未部署。

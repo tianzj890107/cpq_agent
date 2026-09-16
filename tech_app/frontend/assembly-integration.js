@@ -2103,6 +2103,14 @@ aiStart();
       role: 'aux',
       order: 120,
       deferred: true,
+      // 会真的跑起来：按这一次的 step（必要时带上零件号）给左侧一条用户口吻的回声。
+      prompt:(payload) => {
+        const step = String((payload && payload.step) || '').toLowerCase();
+        const partId = String((payload && payload.part_id) || '').trim();
+        if (step === 'params') return partId ? `帮我生成 ${partId} 的参数推荐。` : '帮我生成参数推荐。';
+        if (step === 'process') return partId ? `帮我生成 ${partId} 的组装工艺。` : '帮我生成组装工艺。';
+        return '';
+      },
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
         // 成本测算属于第 4 大步（成本页），不再从 2.2 发起 —— 这里只跑参数推荐与组装工艺。
@@ -2131,6 +2139,8 @@ aiStart();
       label: '整合图纸',
       role: 'aux',
       order: 130,
+      // 会真的跑起来（切到整合图纸页签并聚焦上传入口）：说清要干什么。
+      prompt:'把整合图纸打开，我要补一张图纸。',
       run: async () => {
         aiSetTab('drawings');
         const button = $ai('aiUploadBtn');

@@ -2529,6 +2529,8 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       role: "aux",
       order: 10,
       deferred: true,
+      // 这一步会真的跑起来：给左侧一条用户口吻的回声（文案属执行方，是每次调用的入参）。
+      prompt:"帮我解析这张图纸。",
       run: () => {
         const button = $("btnParse");
         if (button && button.disabled) {

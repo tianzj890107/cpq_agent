@@ -309,6 +309,7 @@
       status: String(task.status || "running"),
       log: (task.steps || []).slice(),
       error: String(task.error || ""),
+      prompt: String(task.prompt || ""),
     });
   }
   // 右上角模型文字只表达「模型设置」里的当前语言模型；Agent 会话是否可用是另一件事，
@@ -497,7 +498,50 @@
   }
 
   function clearEmpty() { $("ocEmpty")?.remove(); }
-  function addUser(text) { clearEmpty(); tinner.append(el("div", "oc-ubub", text)); scrollDown(); }
+  // 「当前这一轮」助手卡：实时会话里执行进度要长进它，而不是另起一张卡。
+  // 历史回放不设置（回放按行渲染，不跨行合流）；send() 收尾时清空。
+  let activeTurnCtx = null;
+  // 已经出过回声气泡的任务：同一个任务只出一条，后续进度不重复刷屏。
+  const echoedTaskPrompts = new Set();
+  // Agent 主动发起的动作会真的跑起来时补一条用户口吻的回声（「我：…」），会话里才看
+  // 得出「是我让它做的」。文案来自执行方（右侧看板动作声明的 prompt），左侧只负责显示，
+  // 绝不按 ui_action 或动作名兜底造句 —— 那是两套口径。
+  function echoTaskPrompt(detail) {
+    // 回放期间不再补回声：气泡本身已经作为 kind:"user" 条目落库，回放按行恢复。
+    if (replayingHistory) return;
+    const text = String((detail && detail.prompt) || "").trim();
+    if (!text) return;
+    // 去重按「这一次执行」：runId 优先，回退 taskId / label。同一个动作第二次执行
+    // 的 runId 不同，所以照样会再出一声「我：…」。
+    const runId = String((detail && detail.runId) || "");
+    const key = runId
+      || String((detail && (detail.taskId || detail.task_id)) || (detail && detail.label) || "");
+    if (!key || echoedTaskPrompts.has(key)) return;
+    echoedTaskPrompts.add(key);
+    const turn = activeTurnCtx;
+    addUser(text, turn && turn.wrap ? turn.wrap : null);
+    // 回声气泡本身也要落库：重进项目要按原顺序恢复成同一条用户气泡。
+    persistSessionEvent({ kind: "user", text: text, stage: boardStage(),
+                          key: `echo:${key}` });
+  }
+  // 本轮挂了任务卡时，chip 的措辞与配色由任务最终状态决定：任务还在跑（或最后是
+  // 部分完成 / 失败 / 中断）都不该被一句「已完成」抹掉 —— 不能因为模型这一轮说完了
+  // 就替任务谎报收尾。只有任务确实成功收尾，才照旧翻成助手那句「✓ 已完成」。
+  function turnChipOwnedByTask(ctx) {
+    let owned = false;
+    taskProgressCards.forEach(card => {
+      if (card && card.turn === ctx && String(card.status) !== "succeeded") owned = true;
+    });
+    return owned;
+  }
+  function addUser(text, before) {
+    clearEmpty();
+    const bubble = el("div", "oc-ubub", text);
+    // 回声气泡要插在「当前这一轮助手卡」的上方；锚点不在会话流里时照旧追加到末尾。
+    if (before && before.parentNode === tinner) tinner.insertBefore(bubble, before);
+    else tinner.append(bubble);
+    scrollDown();
+  }
   // 身份行：技术侧不再有头像，助手 / 系统 / 检索结果卡统一靠这行蓝字表明身份（与报价同款）。
   function identityLabel(text) {
     const label = el("div", "oc-alabel");
@@ -560,7 +604,10 @@
     wrap.append(body);
     tinner.append(wrap);
     scrollDown();
-    return { body, text, cards: {}, full: "", label, state, thinking: null };
+    const ctx = { body, text, cards: {}, full: "", label, state, thinking: null, wrap };
+    // 实时会话记下这一轮：任务进度要并进这张卡；历史回放不设，按行渲染不合流。
+    if (!replayingHistory) activeTurnCtx = ctx;
+    return ctx;
   }
   // 就地翻转同一张 chip：文本与配色都按状态切换，绝不另建节点。
   function setAssistantState(ctx, state) {
@@ -741,7 +788,8 @@
         ctx.text.classList.add("rendered");
         ctx.text.innerHTML = renderMarkdown(ctx.full);
       }
-      if (!ctx.failed) setAssistantState(ctx, "succeeded");
+      // 这一轮总结完了，但它挂着的那条任务还没收尾：chip 交给任务最终状态决定。
+      if (!ctx.failed && !turnChipOwnedByTask(ctx)) setAssistantState(ctx, "succeeded");
       if (event.model) setModelLabel(event.model);
     }
   }
@@ -790,6 +838,8 @@
       ctx.text.classList.add("rendered");
       ctx.text.innerHTML = renderMarkdown(ctx.full);
     } finally {
+      // 这一轮结束：后续执行进度不再并进这张卡，要出就另起一张。
+      activeTurnCtx = null;
       busy = false;
       sendBtn.disabled = false;
       input.focus();
@@ -1318,22 +1368,36 @@
     const existing = taskProgressCards.get(key);
     if (existing) return existing;
     clearEmpty();
-    const host = taskProgressHost();
-    const box = el("div", "oc-task-card is-queued");
-    const head = el("div", "oc-task-head");
-    head.append(el("span", "oc-task-title", label));
-    const state = el("span", "oc-task-state", "排队中");
-    head.append(state);
     const steps = el("div", "oc-task-steps");
+    // 这一轮助手卡还在跑：执行进度直接长进它那张卡（复用身份行与状态 chip），
+    // 不再另起一张 —— 一轮里既是助手回复卡、又是执行卡，就是本批要消灭的卡中卡。
+    const turn = activeTurnCtx;
+    if (turn && turn.body && turn.state && turn.wrap) {
+      turn.wrap.classList.add("oc-task-card", "is-queued");
+      turn.state.classList.add("oc-task-state");
+      turn.body.append(steps);
+      scrollDown();
+      const merged = { key, label, box: turn.wrap, wrapper: turn.wrap, steps,
+                       state: turn.state, cursor: 0, status: "queued", done: false, turn };
+      taskProgressCards.set(key, merged);
+      return merged;
+    }
+    // 没有实时轮（用户从右侧看板点按钮触发）：新建的就是助手卡同款的一张卡 ——
+    // 头行复用蓝色身份行（身份 + 任务中文名）与右侧那颗状态 chip，不套第二层框。
+    const box = el("div", "oc-amsg oc-task-card is-queued");
+    const head = el("div", "oc-alabel");
+    head.append(el("span", null, "技术工艺智能体"));
+    head.append(el("span", "oc-alabel-sub", label));
+    const state = el("span", "oc-alabel-state oc-task-state", "排队中");
+    head.append(state);
     box.append(head, steps);
-    // 任务卡是与助手卡同级的一张卡：直接进会话流，不再套一层 .oc-amsg ——
-    // 套上去就是本批要消灭的卡中卡。两者边框 / 圆角 / 内边距 / 白底完全同款。
     const wrapper = box;
-    host.append(wrapper);
+    taskProgressHost().append(wrapper);
     scrollDown();
     // cursor：已渲染到 progress_log 的第几条。用下标而不是文本去重 ——
     // 同一句进度（比如两个零件都"库内无同类件"）本来就该出现两次。
-    const card = { key, label, box, wrapper, steps, state, cursor: 0, status: "queued", done: false };
+    const card = { key, label, box, wrapper, steps, state, cursor: 0, status: "queued",
+                   done: false, turn: null };
     taskProgressCards.set(key, card);
     return card;
   }
@@ -1393,6 +1457,8 @@
   }
   function renderTaskProgress(raw) {
     const detail = sanitizeTaskDetail(raw);
+    // 先出回声气泡：任务刚启动、还没蹦出第一条进度明细时，那声「我：…」也要先出现。
+    echoTaskPrompt(detail);
     const taskId = String(detail.taskId || detail.task_id || "");
     const label = String(detail.label || "");
     const log = Array.isArray(detail.log) ? detail.log : [];
@@ -1423,6 +1489,7 @@
     const hasContent = log.length > 0 || existingCard;
     if (!hasContent) return;
     const card = ensureTaskCard(taskId, label);
+    if (!card.prompt) card.prompt = String(detail.prompt || "").trim();
     const freshSteps = log.length > card.cursor ? log.slice(card.cursor) : [];
     setTaskStatus(card, status);
     if (log.length > card.cursor) {
@@ -1440,7 +1507,8 @@
       }
     }
     // 落库只提交新出现的进度行：服务端按行去重合并、就地更新同一张卡的状态。
-    persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason);
+    persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason,
+                   card.prompt);
     if (status === "succeeded" || status === "partial") {
       card.done = true;
       renderTaskRetry(card, status, detail);
@@ -1485,14 +1553,14 @@
 
   // 任务卡落库：key 固定 task:<taskId>，与 store.append_session_event 的同一 task.id
   // 只留一张卡的口径一致（前端 applyTaskProgress 也复用这套合并规则）。
-  function persistTaskCard(taskId, label, status, steps, error) {
+  function persistTaskCard(taskId, label, status, steps, error, prompt) {
     const id = String(taskId || label || "task");
     persistSessionEvent({
       kind: "task", source: "shell", stage: boardStage(), text: String(label || ""),
       key: `task:${id}`,
       task: { id: id, label: String(label || ""), status: String(status || ""),
               steps: (steps || []).map(line => String(line).replace(/\s+$/, "")),
-              error: String(error || "") },
+              error: String(error || ""), prompt: String(prompt || "") },
     });
   }
 

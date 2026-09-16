@@ -281,6 +281,8 @@ rcPersist=async function(submit){
       label: '一键解析需求',
       // 这一步真正的起点：字段还没解析、需求单还空着时它才是主按钮。
       deferred: true,
+      // 会真的跑起来：给左侧一条用户口吻的回声（文案属执行方，是每次调用的入参）。
+      prompt:'帮我把这份技术资料解析一遍，需求字段自动填好。',
       run: () => {
         if (rcBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
         rcBoardBusy = true;

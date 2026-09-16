@@ -1210,6 +1210,16 @@ document.addEventListener('cpq-sso-ready', () => {
       role: 'aux',
       order: 70,
       deferred: true,
+      // 会真的跑起来：按这一次的 step / 零件号给左侧一条用户口吻的回声。
+      prompt:(payload) => {
+        const step = String((payload && payload.step) || '').toLowerCase();
+        const partId = String((payload && payload.part_id) || '').trim();
+        if (step === 'part') return partId ? `跑一下 ${partId} 的单件成本测算。` : '跑一下单件成本测算。';
+        if (step === 'assembly') return '跑一下组装成本测算。';
+        if (step === 'all') return '把所有零件的成本都算一遍。';
+        if (step === 'retry') return '把上一轮没算成功的零件重新算一遍。';
+        return '';
+      },
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
         const partId = String((payload && payload.part_id) || '').trim();

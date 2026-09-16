@@ -528,6 +528,9 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   padding: 11px 14px; border: 1px solid var(--oc-border-3); border-radius: 14px;
   background: #ffffff;
 }
+/* 任务卡头行改用与助手回复同款的蓝色身份行：身份 + 任务中文名 + 右侧状态 chip。
+   .oc-alabel 是行内 flex，chip 靠右由这一条保证（合并进本轮助手卡时同样生效）。 */
+.oc-task-card .oc-task-state { margin-left: auto; }
 .oc-task-head { display: flex; align-items: center; gap: 8px; }
 .oc-task-title { min-width: 0; flex: 1; color: var(--oc-text-1); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-task-state {

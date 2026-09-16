@@ -312,6 +312,24 @@
     return { ok: true, status: 'success', action: action, result: result === undefined ? null : result };
   }
 
+  // 动作条目可以可选声明 prompt：这一次执行要用「用户口吻」说清楚自己在做什么。
+  // 它是**执行方**的知识（只有右侧看板知道自己这一步真干了什么），所以放在动作
+  // 条目上，不进 getState()；解析不出就留空，绝不拿动作名 / label 兜底造句 ——
+  // 凭空造句会让左侧出现一句与实际执行不符的话。
+  function resolveActionPrompt(entry, payload) {
+    var declared = entry ? entry.prompt : '';
+    if (typeof declared === 'function') {
+      try {
+        declared = declared(payload || {});
+      } catch (error) {
+        return '';
+      }
+    } else if (typeof declared !== 'string') {
+      return '';
+    }
+    return String(declared === undefined || declared === null ? '' : declared).trim();
+  }
+
   function runEntry(source, target, name, payload) {
     if (!name || !target[name]) {
       return Promise.resolve(failure('unknown-action', '看板未注册动作：' + (name || '(空)')));
@@ -329,8 +347,12 @@
            EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
       publish(eventName, name, extra);
     }
+    // 「这一次执行」的唯一标识：同一次执行只出一次回声，两次执行各自再出一次。
+    // 父壳据此去重，绝不按项目 / 动作名去重（否则第二次执行就静默了）。
+    var runId = nextRequestId('run');
     publishTaskCard(EVENT.TASK_PROGRESS, { action: name, phase: 'start',
-      label: entryState(name).label, taskId: context.taskId || '' });
+      label: entryState(name).label, taskId: context.taskId || '',
+      runId: runId, prompt: resolveActionPrompt(entry, payload) });
     var outcome;
     try {
       outcome = entry.run(payload || {});
