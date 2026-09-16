@@ -1060,13 +1060,30 @@ function renderComponentMatchResult(report) {
 
   const items = (report && report.items) || [];
   const summary = (report && report.summary) || {};
+  // 每条结论由三段独立节点组成（件号/名称 · 命中件 · 判定胶囊），不再拼成一段文字：
+  // 判定进胶囊后就不需要外层括号，也就不会出现「（未匹配（…」这种嵌套括号。
+  // 匹配度只在真的命中（有 component_code）时出现 —— 未匹配行上的分数只说明"最像的
+  // 候选也不太像"，挂在结论里会误导。
   const rowOf = (item) => {
     const row = document.createElement("div");
     row.className = `component-match-item ${item.decision || "new"}`;
-    const who = `${item.part_id || "?"} ${item.part_name || ""}`.trim();
-    const hit = item.component_code ? `${item.component_code} ${item.component_name || ""}`.trim() : "库内无同类件";
-    row.textContent = `${who} → ${hit}（${item.decision_label || "未匹配"}`
-      + `${item.score ? ` · ${Math.round(Number(item.score) * 100)}%` : ""}）`;
+    const part = document.createElement("span");
+    part.className = "component-match-part";
+    part.textContent = `${item.part_id || "?"} ${item.part_name || ""}`.trim();
+    const hit = document.createElement("span");
+    hit.className = "component-match-hit";
+    hit.textContent = item.component_code
+      ? `${item.component_code} ${item.component_name || ""}`.trim() : "库内无同类件";
+    const tag = document.createElement("span");
+    tag.className = `component-match-tag ${item.decision || "new"}`;
+    tag.textContent = item.decision_label || "未匹配";
+    row.append(part, hit, tag);
+    if (item.component_code && item.score) {
+      const score = document.createElement("span");
+      score.className = "component-match-score";
+      score.textContent = `匹配度 ${Math.round(Number(item.score) * 100)}%`;
+      row.append(score);
+    }
     return row;
   };
   const listOf = (rows) => {
@@ -1517,16 +1534,25 @@ function partStaleMark(partId) {
   return "";
 }
 
-function renderNode(node, container, depth, partById) {
-  const pad = 6 + depth * 14;
+/** renderNode(node, container, partById)
+ *  零件清单缩进：总成一行、零件固定深一级；层级深度不参与计算 —— 同一层的东西必须
+ *  看起来在同一层，否则「这个零件属于谁」要靠猜。 */
+function renderNode(node, container, partById) {
+  // 调用签名固定为 renderNode(node, container, partById)：不再接收 depth，
+  // 缩进只分「总成 / 零件」两档，与层级深度无关。
+  const ASM_INDENT = 6;    // 总成：一层
+  const PART_INDENT = 20;  // 零件：固定比总成深一级
+  // 兼容旧调用写法 (node, container, depth, partById)：缩进已与层级解绑，
+  // 这里只把真正的 partById 取出来，depth 一律忽略。
+  if (typeof partById === "number") partById = arguments[3] || {};
   if (node.type === "assembly") {
     const div = document.createElement("div");
     div.className = "asm";
-    div.style.paddingLeft = pad + "px";
+    div.style.paddingLeft = ASM_INDENT + "px";
     div.innerHTML = `<span class="asm-id">▸ ${esc(node.id)}</span> ${esc(node.name)}` +
       `<span class="asm-meta">${node.role ? esc(node.role) + " · " : ""}总成 ×${node.quantity || 1}</span>`;
     container.appendChild(div);
-    (node.children || []).forEach(c => renderNode(c, container, depth + 1, partById));
+    (node.children || []).forEach(c => renderNode(c, container, partById));
     return;
   }
   // part
@@ -1537,7 +1563,7 @@ function renderNode(node, container, depth, partById) {
   const div = document.createElement("div");
   div.className = "part part-item confirmed";
   div.dataset.partId = p.part_id;
-  div.style.marginLeft = pad + "px";
+  div.style.marginLeft = PART_INDENT + "px";
   const feats = (p.features || []).map(f => f.type).join(", ");
   // 被逐件预检挡下的零件带结构化 issues：就地标「待补参数」而不是笼统的几何✗，
   // 用户才知道该去补参数而不是点「再次生成」。
@@ -1562,10 +1588,13 @@ function renderNode(node, container, depth, partById) {
 // 现在跟着零件一起放在左侧 —— 左侧负责"选什么、看什么结论"，
 // 右侧只保留 3D 视图与零件信息。
 function buildPartSubActions(part) {
+  const PART_INDENT = 20;  // 与零件行同一档：子操作属于它上面那个零件
   const wrap = document.createElement("div");
   wrap.className = "part-subactions";
   wrap.dataset.partActions = part.part_id;
   wrap.hidden = true;
+  // 「工艺推荐」属于它上面那个零件：缩进跟着零件走，不能落在总成那一档。
+  wrap.style.marginLeft = PART_INDENT + "px";
 
   const row = document.createElement("div");
   row.className = "part-nav part-subactions-row";   // 复用原右侧按钮的既有样式
@@ -1714,7 +1743,7 @@ function renderTree(ir) {
   const partById = {};
   (ir.parts || []).forEach(p => { partById[p.part_id] = p; });
   const root = buildClientTree(ir);
-  root.children.forEach(c => renderNode(c, tree, 0, partById));
+  root.children.forEach(c => renderNode(c, tree, partById));
 }
 
 function renderIR(ir) {

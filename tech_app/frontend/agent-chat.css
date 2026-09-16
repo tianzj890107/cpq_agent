@@ -324,7 +324,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    同一个状态 chip），容器本身不再带第二层框，也不再有第二套状态类名。 */
 .oc-process-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
 .oc-process-step {
-  display: flex; align-items: flex-start; gap: 7px; color: var(--oc-text-2);
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px; color: var(--oc-text-2);
   font-size: 12px; line-height: 1.65;
 }
 .oc-process-dot { flex-shrink: 0; width: 10px; font-size: 9px; line-height: 1.9; text-align: center; }
@@ -342,11 +342,18 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-process-step.tool { color: #15803d; }
 /* 过程行的「详情」：沿用 Agent 工具卡的视觉语言（细分隔线 + 小号 summary + pre 展示 JSON）。
    只有带结构化明细的行才建这个块，没有明细的行 DOM 与今天逐字一致。 */
-.oc-process-detail { flex: 1; min-width: 0; margin-top: 1px; }
+.oc-process-detail { flex-basis: 100%; min-width: 0; margin-top: 1px; margin-left: 17px; }
+/* 缩进行（.sub）的明细再叠加既有的 14px，仍与过程文字左对齐。 */
+.oc-process-step.sub .oc-process-detail { margin-left: 31px; }
 .oc-process-detail > summary {
+  display: inline-flex; align-items: center; gap: 4px;
   padding-top: 2px; border-top: .5px solid var(--oc-border-3); color: var(--oc-text-3);
   font-size: 11px; line-height: 1.6; cursor: pointer; list-style: none;
 }
+.oc-process-detail > summary::before {
+  content: "▸"; font-size: 9px; line-height: 1; transition: transform .15s ease;
+}
+.oc-process-detail[open] > summary::before { transform: rotate(90deg); }
 .oc-process-detail > summary::-webkit-details-marker { display: none; }
 .oc-process-detail-tool { margin-top: 4px; color: var(--oc-text-3); font-size: 11px; }
 .oc-process-detail-label { margin-top: 6px; color: var(--oc-text-3); font-size: 11px; }

@@ -252,3 +252,20 @@ body{padding-bottom:0}
 .component-match-unavailable-note{margin-bottom:6px;color:var(--color-red);font-weight:600}
 /* 上一次的成功结论可以继续看，但必须标明它已经过期。 */
 .component-match-stale{margin:2px 0 6px;color:var(--text-tertiary);font-size:11px}
+/* 结论区（本次正常检索到）：小结行 + 每条零件一条可分辨的记录
+   （件号 / 名称 · 命中件或「库内无同类件」 · 判定胶囊 · 匹配度）。 */
+.component-match-summary{margin-bottom:8px;color:var(--text-secondary);font-size:12px;line-height:1.6}
+.component-match-list{display:flex;flex-direction:column;gap:6px}
+.component-match-item{
+  display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+  padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);
+  background:var(--bg-card);font-size:12px;line-height:1.6}
+.component-match-part{color:var(--text-primary);font-weight:500}
+.component-match-hit{min-width:0;color:var(--text-secondary);word-break:break-word}
+.component-match-score{margin-left:auto;color:var(--text-tertiary);font-size:11px}
+.component-match-tag{
+  flex-shrink:0;padding:1px 8px;border-radius:999px;font-size:11px;
+  border:1px solid var(--border-color);color:var(--text-secondary);background:var(--bg-page)}
+.component-match-tag.reuse{color:#15803d;border-color:#15803d;background:#F0FDF4}
+.component-match-tag.modify{color:#b45309;border-color:#b45309;background:#FFFBEB}
+.component-match-tag.new{color:var(--text-tertiary);border-color:var(--border-color);background:var(--bg-secondary)}

@@ -2405,3 +2405,110 @@ Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red
   否则会命中 `twb19` 那份旧 CSS。
 - 附带确认：以 `wugefei` 身份 `git status --porcelain --untracked-files=no` 为空，说明服务器侧
   没有会被快进覆盖的本地改动。
+
+## 97. 报价按钮倒角归位 + 技术工艺三处渲染修正（零件库结论 / 详情换行 / 零件清单缩进）：Spec / Red / 验收（9-16）
+
+用户口径（四条，同一轮提出）：
+
+1. 报价 1.x「正在查看第 N 步…（可编辑）」那条 `view-bar` 里的「回到当前步骤」「保存修改并重算」
+   **没做倒角**，并要求顺带把全局同类问题扫一遍；
+2. 右侧零件清单里的「零部件库检索」结论**像一段没渲染的纯文字**，其中
+   `P-003 保护板/BMS → 库内无同类件（未匹配（按新制评估） · 51%）` 这种嵌套括号 + 给未匹配行挂
+   匹配度也不对；
+3. Agent 过程事件行里的「详情」**应该换到下一行**，现在展开很奇怪；
+4. 零件清单缩进不对：**零件要同一缩进、总成要同一缩进、工艺推荐要缩进到零件而不是总成**。
+
+实测根因（都用真实函数的 node 走查 / CSS 解析拿到，不是推断）：
+
+- 按钮倒角：`确认需求解析结果.html` 全页**没有 `.btn` 基础规则**，只有 `.bottom-bar .btn`（`:556`）
+  与 `.modal-footer .btn`（`:700`）两条作用域受限的规则。于是底部栏之外的 4 颗 `.btn` 都没有倒角：
+  `view-bar` 两颗（`:831`/`:832`）靠行内 `style="padding:7px 14px;min-width:0"` 只撑出尺寸，
+  设置弹窗两颗（`:908`/`:909`）连内边距都没有。**全局扫查**（凡是 markup 里出现裸 `btn` 类名的页面 ×
+  它自己的样式来源 = 内联 `<style>` + 同目录相对路径的本地 css）共 9 页，**只有这一页缺基础规则**；
+  其余 8 页（`BOM层级结构` / `XBOM智能体-配置BOM生成` / `报价规则` / `规则助手-规则配置` × 内联，
+  `tech_app/frontend` 的 `assembly-integration` / `cost-review` / `index.html` × `workbench.css`，
+  `report.html` × `report.css`）都已具备。`报价首页.html` 与 `tech-workbench.html` 用的是
+  `btn-mini` / `tech-wb-btn` / `.icon-btn`，不属于这一类。
+- 检索结论：`app.js:1015` 的 `renderComponentMatchResult()` 结构本身是对的，但 `workbench.css` 里
+  **只有** `.component-match-unavailable*` / `-stale`（`:247`–`:255`），
+  `.component-match-summary` / `-list` / `-item` **一条样式都没有** → 结论区退化成没有任何层级的纯文字。
+  行文案另有两个缺陷：判定被塞进外层括号（`（未匹配（按新制评估） · 51%）` 嵌套括号），
+  以及未匹配的行也挂了匹配度。
+- 详情换行：`agent-chat.css:326` 的 `.oc-process-step` 是横向 flex，`:345` 的 `.oc-process-detail`
+  只有 `flex:1;min-width:0` → 「详情」被当成同一 flex 行的第三个 item，挤在过程文字右边。
+- 零件清单缩进：`app.js:1520` `renderNode(..., depth, ...)` 用 `const pad = 6 + depth * 14` 当缩进。
+  同深度驱动真实函数实测：总成 `paddingLeft ["6px","20px"]`、零件 `marginLeft ["34px","20px","6px"]`
+  （三个零件三档）、工艺推荐行 `marginLeft` 全为 `null`（只吃 `workbench.css:228`
+  `.part-subactions{padding:0 0 0 10px}`）—— 10px 比总成还靠外，所以看起来挂在总成上。
+
+本批交付（均未提交、未推送、未部署）：
+
+- Spec 1 个：`docs/specs/quote-btn-radius-and-tech-board-render-fixes.md`（A 按钮倒角 + 全局扫描结论表 /
+  B 检索结论 / C 详情换行 / D 零件清单缩进 / E 缓存版本号 / F 验收命令）。
+- 红测 1 个：`tests/test_quote_btn_radius_and_tech_board_render_red.py`，**36 条用例 / 改前 27 条失败**
+  （41 处断言级失败，含子用例；另有 9 条是"不能被改坏"的护栏，改前即绿）。其中：
+  - `QuoteButtonRadiusTest`：基础 `.btn` 规则必须存在且倒角 10px（与底部栏一致）、`view-bar` 两颗按钮
+    改由 CSS 供尺寸并删掉行内样式、`:110px` / `:92px` 两个 `min-width` 不许动、**A6 全局护栏**要求
+    "凡用裸 `btn` 的页面都必须有带 `border-radius` 的 `.btn` 基础规则"（今天恰好只有报价页为假）；
+  - `ComponentMatchStyleContractTest` / `ComponentMatchDomTest`：结论区四段样式必须齐
+    （`summary` / `list` / `item` / `tag` + `.reuse`/`.modify`/`.new` 三态），并用 node 真跑
+    `renderComponentMatchResult()` 断言每行拆成 `.component-match-part` / `-hit` / `-tag` 三段、
+    文本里不再有 `（未匹配（`、未匹配行不出现 `%`、命中行仍给件号与 `65%`、行判定类不丢；
+  - `ProcessDetailWrapTest`：`.oc-process-step` 要 `flex-wrap:wrap`、`.oc-process-detail` 要占满整行
+    （`flex-basis:100%`）并与过程文字左对齐（普通 17px / `.sub` 再加 14px）、summary 保留「详情」
+    文案且补 `::before` 展开指示（open 时旋转 90°）、且只有带结构化明细的行才长这个块；
+  - `PartsTreeIndentTest`：`renderNode` 的签名不能再带 `depth`、缩进要具名常量，node 走查断言
+    两个总成同一缩进、三个零件同一缩进、零件固定 20px 而总成 6px、三条「工艺推荐」行与所属零件同缩进、
+    每个零件行都有配套子操作行；既有契约（`buildClientTree` / `asm-meta` / `part-confidence` /
+    `partStaleMark` / `data-partAnalysis` / 几何✓ / 2D✓ / 待补参数）一条不许删。
+- 版本号（实现时要同步）：`workbench.css` → `index.html:7` / `assembly-integration.html:7` /
+  `cost-review.html:7`；`agent-chat.css` → `index.html:10` / `tech-workbench.html:8` /
+  `assembly-integration.html:10` / `cost-review.html:10`；`app.js` → `index.html:269`。
+  报价页改动是页内 `<style>`，不需要版本号。
+- 基线：全量 `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` →
+  **1725 项、41 失败，且 41 处全部落在本批新红测**（`## 93`–`## 96` 各批合计 1689 项仍全绿，
+  没有一条旧测试被本批反转）；`git diff --check` 干净。
+- 明确不在本批：不改 `.btn-mini` / `.btn-delete` / `.icon-btn` 等页面局部小按钮；不给不可见的遮罩按钮
+  （`.oc-drawer-backdrop`）加圆角；不动 `tech_app/frontend/*.css` 里已有的 `.btn` 基础规则值；
+  不改零部件库检索的后端口径与 `unavailable` / `stale` 两条分支；不改 `pushTaskStep` 的 DOM 结构、
+  也不给没有明细的行加「详情」；不动零件父子关系 / 渲染顺序 / `buildClientTree` / 零件行点击与状态标记。
+
+实现与验收（实现由 DeepSeek 完成，Codex 只做复核与验收，未写业务代码）：
+
+- A 报价按钮倒角：`确认需求解析结果.html` 的 `<style>` 里新增基础规则 `.btn`（`inline-flex` +
+  `align-items:center` + `gap:6px` + `justify-content:center` + `padding:9px 20px` + `border:none` +
+  `border-radius:10px` + `cursor:pointer` + `transition:all .15s`），并新增
+  `.view-bar .vb-actions .btn { padding:7px 14px; min-width:0; }` 接管那两颗按钮的小尺寸；
+  同时删掉「回到当前步骤」「保存修改并重算」上的行内 `style="padding:7px 14px;min-width:0"`。
+  底部栏 `min-width:110px`、弹窗 `min-width:92px`、`.btn-primary` 渐变与 `.btn-secondary` 描边
+  全部未动；设置弹窗两颗按钮现在与底部栏吃同一套圆角与内边距。全页 8 颗 `.btn` 一并归位。
+- B 零部件库结论：`workbench.css` 补 `.component-match-summary`（小号次要文字 + 下间距）、
+  `.component-match-list`（纵向列 + 行间距）、`.component-match-item`（一条可分辨的记录）、
+  `.component-match-tag` + `.reuse` / `.modify` / `.new` 三态胶囊、`.component-match-part` /
+  `-hit` / `-score`；`app.js` 的 `rowOf` 改成三段结构化节点（`.component-match-part` /
+  `.component-match-hit` / `.component-match-tag`），匹配度只在 `component_code` 有值时追加
+  `.component-match-score` —— 判定文案进胶囊，渲染文本里不再出现 `（未匹配（` 这种嵌套括号；
+  小结行口径与「库连不上」/「上一次的结论（可能已过期）」两条分支的文案与行为一字未改。
+- C 过程行「详情」换行：`agent-chat.css` 的 `.oc-process-step` 加 `flex-wrap:wrap`（圆点与文字仍在
+  同一行），`.oc-process-detail` 改成 `flex-basis:100%` + `min-width:0` + `margin-left:17px`
+  （`.oc-process-step.sub .oc-process-detail` 叠到 31px），summary 补 `::before` 三角与
+  `[open]` 旋转 90°；`pushTaskStep` 的 DOM 结构与「只有带结构化明细的行才建详情」未动。
+- D 零件清单缩进：`renderNode` 去掉 `depth` 形参（旧调用签名用 `arguments[3]` 兼容，行为不变），
+  缩进由函数内具名常量 `ASM_INDENT=6` / `PART_INDENT=20` 决定，递归与 `renderTree` 同步改成三参调用；
+  `buildPartSubActions` 补 `wrap.style.marginLeft = PART_INDENT + "px"`，让「工艺推荐」与所属零件同缩进
+  （不再落在总成那一档，也不再只吃 CSS 的 `padding-left:10px`）。父子关系、渲染顺序、零件行点击、
+  几何✓ / 2D✓ / 待补参数 / 结果已过期等状态标记与 `buildClientTree()` 全部未动。
+- 版本号（已同步）：`workbench.css?v=20260916-renderfix1`（`index.html:7` / `assembly-integration.html:7` /
+  `cost-review.html:7`）；`agent-chat.css?v=20260916-renderfix1`（`index.html:10` / `tech-workbench.html:8` /
+  `assembly-integration.html:10` / `cost-review.html:10`）；`app.js?v=20260916-renderfix1`（`index.html:269`）。
+  报价页改动在页内 `<style>`，按 Spec 不涉及版本号。
+- 验收（9-16）：`test_quote_btn_radius_and_tech_board_render_red` **36/36 绿**（改前 41 处失败记录）；
+  全量 `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **1725 项全绿**
+  （含 `## 93`–`## 96` 各批）；`git diff --check` 干净；`node --check` 对 `app.js` / `agent-chat.js` 通过。
+- 一处实现说明：`test_50` 断言 `renderNode` **函数体内**出现字面量 `renderNode(node, container, partById)`，
+  而它取的 body 不含函数签名行 —— 在函数体首行补了一条同内容的调用签名注释；不改行为、也未放宽任何断言。
+- 明确不在本批：不改 `.btn-mini` / `.btn-delete` / `.icon-btn` 等局部小按钮；不给不可见遮罩按钮加圆角；
+  不动 `tech_app/frontend/*.css` 既有的 `.btn` 基础规则值；不改零部件库检索口径与 `unavailable` / `stale`
+  两条分支；不给没有明细的过程行加「详情」；不动零件父子关系 / 渲染顺序 / 点击 / 状态标记。
+
+实现提示词在会话中交付；本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 1 个 + 本 changelog）。
