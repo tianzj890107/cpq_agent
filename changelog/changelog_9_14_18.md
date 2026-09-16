@@ -2512,3 +2512,30 @@ Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red
   两条分支；不给没有明细的过程行加「详情」；不动零件父子关系 / 渲染顺序 / 点击 / 状态标记。
 
 实现提示词在会话中交付；本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 1 个 + 本 changelog）。
+
+## 97 提交、双远端推送与 34 发布记录（9-16 19:0x，无需重启）
+
+- 提交：`9a65790`「报价按钮倒角归位 + 技术工艺三处渲染修正（## 97）」，11 个文件 / +1153 −31
+  （`确认需求解析结果.html`、`workbench.css`、`app.js`、`agent-chat.css`、4 个页面版本号、本批 Spec、
+  本批红测、周 changelog）。只暂存本批文件，未使用 `git add -A`。
+- 顺带推上上一批遗留：`05358fc`（`DEPLOYMENT.md` 的「线上实例现状」更新）此前因「工作区不干净」被
+  `scripts/push_remotes.py` 拦下，本次一起双推。
+- 双远端推送：`python3 scripts/push_remotes.py --check` 预检后双推，`gitlab/20260909` 与
+  `origin/20260909` 回读均为 `9a65790`，纯快进。
+- 34 发布（**本批只改静态前端，不需要重启**；`wugefei` 凭据由用户提供，沿用 `/usr/bin/expect`
+  一次性密码登录）：`git -c safe.directory=$PWD fetch --prune gitlab 20260909` →
+  `git merge --ff-only FETCH_HEAD`，纯快进 `c71679b → 9a65790`（12 文件 +1153 −31）；
+  服务**未重启**，8010 PID `2290595`（18:08:05）、8012 PID `2290720`（18:08:07）保持不变，
+  `/api/health` 仍 `status:ok`。
+- 线上核验（从外部直连 `http://172.16.10.34:8010` 实测下发的资源）：
+  - `tech-workbench.html` → `agent-chat.css?v=20260916-renderfix1`；`index.html` →
+    `workbench.css?v=20260916-renderfix1` + `agent-chat.css?v=20260916-renderfix1` +
+    `app.js?v=20260916-renderfix1`；`assembly-integration.html` / `cost-review.html` 两个 css 同号；
+  - 下发的 `workbench.css` 已含 `.component-match-summary` / `-list` / `-item` / `-part` / `-hit` /
+    `-score` / `-tag.reuse`；下发的 `agent-chat.css` 里 `.oc-process-detail` 是
+    `flex-basis:100%; min-width:0; margin-left:17px`，且 `.oc-process-step.sub .oc-process-detail`
+    为 `31px`；下发的 `app.js` 含 `ASM_INDENT = 6` / `PART_INDENT = 20` 与 `component-match-tag` /
+    `component-match-score`；
+  - 下发的 `确认需求解析结果.html` 已有基础规则 `.btn{border-radius:10px;padding:9px 20px;…}`，
+    两颗 view-bar 按钮上的行内 `padding/min-width` 已消失（计数 0）。
+- 提醒：浏览器需强刷一次（`?v=` 已换号，不刷会命中旧缓存）。
