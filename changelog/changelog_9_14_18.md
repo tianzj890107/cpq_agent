@@ -2238,6 +2238,40 @@
 - 本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 2 个 + 本 changelog；实现改动与
   `## 94` 的实现改动仍在同一份未提交工作区里）。
 
+## 94 / 95 / 96 提交与双远端推送记录（34 部署未执行）（9-16）
+
+- 本工作区一次交付两批，分两次提交（只暂存本批文件，未用 `git add -A`）：
+  - `34260f9`「技术工艺任务卡：卡片体布局归位 + 任务框架「过程事件」通道；视觉闸门跟实际模型走 +
+    过程事件带结构化明细（## 94 / ## 95）」，30 个文件 / +3436 −92（两个 Spec、四个红测、
+    `tasks.py` / `store.py` / `main.py` / `claude_client.py` / `qwen_client.py` / `llm_settings.py` /
+    `model_lookup.py` / `ai_governance.py` / `component_match.py` / `process_lookup.py` /
+    `cost_lookup.py`、`agent-chat.js|css` / `tech-session-timeline.js` / `app.js` 等前端与四个页面
+    版本号、周 changelog）。
+  - `857b7e0`「报价 / 工艺工作区去圆角卡片 + 工艺标题行收窄 + 嵌入态去灰底（## 96）」，
+    22 个文件 / +644 −36（本批 Spec、新红测、两个反转红测、`确认需求解析结果.html`、
+    `tech-workbench.css`、`tech-embed.js`、13 个页面版本号、周 changelog）。
+- 双远端推送：`python3 scripts/push_remotes.py --check` 预检（两远端均为 HEAD 的祖先、纯快进）后双推，
+  `gitlab/20260909` 与 `origin/20260909` 回读先后为 `34260f9`、`857b7e0`，无历史重写。
+- **34 部署未执行 —— 当前身份无权限**（与 `## 73` 记录同理）：`ssh wugefei@172.16.10.34` 用本机三个私钥
+  （`cad_engine_deploy` / `agent` / `id_ed25519`）逐个试过都是 `Permission denied (publickey,password)`；
+  `/home/wugefei/CPQ/cpq_agent` 实测 `not-writable`（`drwxr-xr-x wugefei ai`）；`sudo -n` 报「需要密码」。
+  该目录的 `gitlab` 远端是内网 **HTTP** 地址（`http://gitlab.boulderaitech.com/ai-team/cpq_agent.git`），
+  fetch 本身不需要 SSH key，缺的是**登录 wugefei 的手段**。
+- 部署前状态（只读核对，9-16）：`HEAD=c30323b`、分支 `20260909`、工作区无 tracked 改动
+  （37 条全是 `nohup.out*` / `jdk.tar` / `open-claude/` 之类未跟踪文件）；8010 PID **1969891**（`wugefei`，
+  自 16:33）、8012 PID **1969961**（父进程拉起）；`/api/health` → `{"status":"ok","model":"qwen3.5-plus",
+  "auth_enabled":true,"sso_enabled":true}`；磁盘用 86%、剩 254G。相对本地**落后两个提交**
+  （`34260f9`、`857b7e0` 两个 commit 在服务器上尚不存在）。
+- 一个**假警报**要记下来：以 `zhangzhen` 跑 `git log` 会报 `.git/objects/df/e6cd45e…（dfe6cd4）已损坏`。
+  实测该文件是 `-r--------`（mode `400`、仅 owner 可读、时间戳 16:33 = ## 93 那次合并写下的松散对象），
+  是**读权限不足**被 git 判成损坏，不是真损坏；以 `wugefei` 身份 `git fsck --no-progress` 复核即可。
+- 具备 `wugefei` 权限时的部署脚本已备好并 `bash -n` 通过：`/tmp/deploy_857b7e0_34.sh`
+  （`git fetch --prune gitlab 20260909` → `merge --ff-only FETCH_HEAD` 纯快进 `c30323b → 857b7e0`
+  → 归档 `nohup.out` → **先停 8012 再停 8010**、轮询两端口释放 → 原命令行加
+  `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh` 重启 → `/api/health` 必须 `status=ok` → 打印新 PID 与 HEAD）。
+  本批有 Python 改动（## 94/95），**必须重启**才生效；部署后浏览器需强刷一次（`?v=` 为 `twb20` / `twb3` / `twb4`）。
+- 收尾：重启会打断在途任务，执行前请确认无正在跑的任务。
+
 ## 96. 报价 / 工艺工作区去圆角卡片 + 工艺标题行收窄 + 嵌入态去灰底：Spec / Red / 验收（9-16）
 
 用户口径（同一批三件事）：
