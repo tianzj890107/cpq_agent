@@ -15,6 +15,25 @@
 3. 运行相关测试、Python 语法检查和 `git diff --check`。
 4. 备份并保留服务器 Git 忽略的设置、历史和上传目录。
 5. 确认 `8010` 的当前进程或容器，避免启动第二套服务抢占端口。
+6. 配置 `CPQ_USER_SECRET_KEY`（32 字节的 base64 或 hex）：账号级模型与 API Key 的
+   **加密材料**。账号级设置以密文落在 `cpq_wf.cpq_wf_user_llm_setting`，没有它就保存不了
+   （接口按 503 明确拒绝，绝不明文落库）。**启用后不可更换** —— 换掉之后已经存过个人 Key
+   的账号连读取都会失败。
+7. 确认 `CPQ_INTERNAL_TOKEN` 在场：服务间通道（知识库快照 `/wf/tech/kb/snapshot`、
+   账号级设置的内部读写）只认它。8010 启动时会自动生成一把并注入技术工艺子进程；
+   多实例或需要固定令牌时再用环境变量显式指定。
+
+这两个变量放在**仓库外**的 env 文件里（例如 `/home/wugefei/CPQ/cpq_env.sh`，权限 `0600`），
+不要写进仓库（`.env` 已在 `.gitignore`）。两种等价用法：
+
+```bash
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a    # 显式导出，优先于文件内容
+# 或：export CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh   # 由 8010 自己读这个文件
+```
+
+`cpq_suite_server.py` 启动时按「`CPQ_ENV_FILE` → 仓库根 `.env`」的顺序读取（`export KEY=VALUE`
+写法也认），**已 export 的同名变量优先、不被文件覆盖**；文件不存在不算错误。env 文件放在仓库
+之外，`git pull` / `git checkout` 碰不到它，重启时也不会丢。
 
 ## 服务器约定
 
@@ -54,6 +73,9 @@ CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
   （脚本要求部署目录 `origin` 是 CPQ GitLab）。
 - 权限：`zhangzhen` 账号对上面两个目录**不可写**，`sudo` 需要密码。部署与重启必须在 `wugefei` 账号
   （或等价授权）下进行。
+- **8010 重启前先确认 `CPQ_USER_SECRET_KEY` 与 `CPQ_INTERNAL_TOKEN` 在场**（`tr '\0' '\n' < /proc/<8010 pid>/environ | grep CPQ_`）：
+  缺加密密钥时保存账号级模型与密钥会回 503（文案点名 `CPQ_USER_SECRET_KEY`），而重启时若漏掉那把密钥，
+  已经存过个人 Key 的账号连读都会失败；env 文件放在仓库外并用 `CPQ_ENV_FILE` 指过去，可避免"重启后忘了 export"。
 - 发布门禁：`scripts/deploy_server.sh` 要求目标 commit 是 GitLab `master` 的祖先。开发分支 `20260909`
   上的临时验证部署**必须先合并到 `master`**（或显式改用下面裸进程路径），否则脚本会以
   「目标不在 GitLab master 历史中」拒绝。

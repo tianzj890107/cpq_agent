@@ -45,12 +45,29 @@ for _stream in (sys.stdout, sys.stderr):
 # 与各 agent main() 一致：兜底只读文件系统（须在构建 Bridge 前设置）
 os.environ["OC_READONLY_FS"] = "1"
 
+# 启动即读配置文件。以前 8010 的配置（PG 连接、内部令牌、账号级密钥的加密材料）只能靠
+# 手工 export —— 换台机器、换个人就复发。与 tech_app/backend/config.py 同一套语义：
+#   ① 设了 CPQ_ENV_FILE → 用它指向的文件（便于把密钥放在仓库外，git 碰不到）；
+#   ② 否则用仓库根 .env。
+# python-dotenv 认 `export KEY=VALUE` 这种 shell 写法；文件不存在不算错误。
+# override=False：已经显式 export 的同名变量优先，文件不得覆盖它。
+# **必须**排在下面对 cpq_auth / cpq_wf / 三个 agent 模块的 import 之前：这些模块在
+# 导入期就会读 CPQ_PG_* / CPQ_INTERNAL_TOKEN 等变量。
+try:
+    from dotenv import load_dotenv
+except ImportError:                                    # pragma: no cover - 缺依赖时降级
+    load_dotenv = None
+if load_dotenv:
+    load_dotenv(os.environ.get("CPQ_ENV_FILE") or os.path.join(SCRIPT_DIR, ".env"),
+                override=False)
+
 # 三个 Agent 模块（import 即完成各自的工具注入/execute_tool 补丁，三者链式共存：
 # 各自只接管自己的工具名；sql_query 三份实现等价、都是同库只读，谁接都一样）
 import cpq_agent_server as quote_agent    # noqa: E402
 import xbom_agent_server as config_agent  # noqa: E402
 import rule_agent_server as rule_agent    # noqa: E402
 import cpq_auth                            # noqa: E402  登录与角色系统（/auth/*）
+import cpq_user_secrets                   # noqa: E402  账号级密钥的加密封装（缺密钥要说清）
 import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
 import cpq_tech_bridge                     # noqa: E402  技术工艺回调：写主数据 / 推送到报价
 import cpq_kb                             # noqa: E402  知识库（kb_*）：快照接口，事实源在 PG cpq_kb
@@ -515,6 +532,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": "未知接口"})
         except cpq_auth.AuthError as e:
             self._send_json(400, {"ok": False, "error": str(e)})
+        except cpq_user_secrets.SecretKeyMissing as e:
+            # 缺账号级加密密钥是**配置缺口**，不是"服务异常"：回 503 并把下一步写清楚，
+            # 免得被前端翻译成"登录服务暂不可用"（## 93）。必须排在通用 except 之前
+            # （SecretKeyMissing 是 RuntimeError 子类）。绝不明文落库，也不回显密钥材料。
+            print(f"[cpq-suite] 账号级密钥不可用: {e}", file=sys.stderr)
+            self._send_json(503, {"ok": False, "error": (
+                "账号级模型与密钥的加密密钥 CPQ_USER_SECRET_KEY 未配置或不可用："
+                "请在 8010 的启动环境里配置 32 字节 base64/hex 的 CPQ_USER_SECRET_KEY"
+                " 后重启服务；启用后不可更换。")})
         except Exception as e:
             print(f"[cpq-suite] /auth 出错: {e}", file=sys.stderr)
             self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})

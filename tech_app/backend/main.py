@@ -519,7 +519,7 @@ async def cpq_auth_unavailable_handler(_request: Request, exc: Exception):
     回 401 会把在线的人当成"没登录"，回 500 又像是本服务自己崩了 —— 都不是实情。
     """
     return JSONResponse(status_code=503, content={
-        "detail": f"登录服务暂不可用，暂时读不到账号级模型与密钥：{exc}"})
+        "detail": f"账号级模型与密钥暂时读不到：{exc}"})
 
 
 @app.middleware("http")

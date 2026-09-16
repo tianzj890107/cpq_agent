@@ -1937,3 +1937,105 @@
 - 遗留说明：服务器上原来的 `tech_app/tech_data/da.db` 整库 0 行（本次未改它，也不再被知识库读取）；
   权威数据现在是 PG 的 `cpq_kb`。零部件匹配口径（`ENVELOPE_TOLERANCE=0.20`）本次未动，
   9/14 那个冰箱项目仍会因口径偏紧匹配不到 —— 那是口径问题，需工艺/产品单独拍板。
+
+## 93. 账号级密钥的加密密钥：配置文件要真被读到 + 缺密钥必须是可执行的 503：Spec / Red（9-16）
+
+- 线上现象：技术工艺「模型设置 → 我的模型与密钥」保存报「登录服务暂不可用」。只读核对
+  （未改任何文件、未重启服务）确认根因**不是登录服务挂了**，而是 8010 这台机器从来没配过
+  `CPQ_USER_SECRET_KEY`：`cpq_auth.set_user_llm()` 写库前对 model 与 Key 一律
+  `cpq_user_secrets.seal()`（`cpq_auth.py:536-538`），`cpq_user_secrets._key()` 读不到环境变量
+  就抛 `SecretKeyMissing`（`cpq_user_secrets.py:56-60`）；该异常不是 `cpq_auth.AuthError`，
+  落进兜底分支 → stderr 一行 `[cpq-suite] /auth 出错: …` + 回 `500 服务异常，请稍后重试`
+  （`cpq_suite_server.py:516-519`），技术工艺再包成 `CpqAuthUnavailable`，前端显示成
+  「登录服务暂不可用」。同时 `cpq_suite_server.py` **从不调用 `load_dotenv()`**
+  （只有 `tech_app/backend/config.py:9` 调），所以"把变量写进文件"这条路在 8010 上不存在，
+  只能靠手工 export，换台机器/换个人就复发。
+- 失败边界（比"保存失败"更精确）：失败的是带内容的写 —— `PUT /auth/my/llm`（模型非空或 Key
+  非空）与内部通道 `PUT /auth/internal/user-llm`；`DELETE /auth/my/llm/keys/{provider}` 在该账号
+  本来就没有 Key 时不 seal，属空操作、不算失败；读取（`GET /auth/my/llm`、
+  `GET /auth/internal/user-llm`）、平台默认模型/参数、解析/生成/报价/Agent 全部不受影响；
+  数据无损失（`cpq_wf_user_llm_setting` 0 行，23 个账号都在）。
+- 顺带核查的其它环境变量：`CPQ_ADMIN_USER/PASSWORD` 只在"用户表为空"时才用（现有 23 个账号，
+  用不到）；`CPQ_INTERNAL_TOKEN` 启动自动生成并注入子进程；`CPQ_KB_SCHEMA` / `CPQ_WF_SCHEMA` /
+  `CPQ_PG_*` 都走默认值且已工作；`CPQ_MANAGER_FULL_TECH` 默认 true 与既有行为一致。**缺的只有
+  这一把。**
+- 新增 `docs/specs/cpq-secret-key-env-and-loud-503.md`：契约 C1–C6（`cpq_suite_server.py` 启动即读
+  配置文件且支持 `CPQ_ENV_FILE`、不覆盖已 export 的变量 / `SecretKeyMissing` → 503 + 可执行文案 /
+  读取路径不受影响 / `DEPLOYMENT.md` 写成部署前置检查并写清"密钥启用后不可更换" / 技术工艺侧文案
+  不再只暗示登录故障 / 不放松明文落库与静默回落），验收 A1–A7。
+- 新增 `tests/test_cpq_secret_key_env_and_loud_503_red.py`（12 项，三组）：
+  - 源码与文档契约：Spec 钉住契约；`cpq_suite_server.py` 有 `load_dotenv()` 且排在
+    `import cpq_auth` / `import cpq_wf` / `import cpq_agent_server` **之前**、认得 `CPQ_ENV_FILE`；
+    有 `except cpq_user_secrets.SecretKeyMissing` 专用分支且文案同时含 `CPQ_USER_SECRET_KEY` 与
+    「未配置」、通用 500 文案未被顺手改掉；`DEPLOYMENT.md` 含两个变量与「不可更换」；
+    `tech_app/backend/main.py` 的 `cpq_auth_unavailable_handler()` 文案指向"账号级模型与密钥"
+    且不再出现「登录服务暂不可用」。
+  - 配置文件真被读进来：子进程真 `import cpq_suite_server`（临时 `DATA_DIR`、`CPQ_ENV_FILE`
+    指向临时文件、文件写法与线上 `cpq_env.sh` 同款 `export KEY=VALUE`），断言导入后环境里能看到
+    该变量、`cpq_user_secrets.seal()/open()` 往返成功、且用的就是文件里那把密钥；另一路子进程断言
+    已 export 的同名变量优先于文件内容（`override=False`）。
+  - `/auth` 写接口真打 HTTP：子进程真起一体化服务 `Handler`，用打桩的 `cpq_auth`（`whoami`、
+    `set_user_llm` 三态：缺密钥 / 其它异常 / 正常）打真请求。**绝不真连 PG**。
+- 现状缺口（红测依据，均已实测非推断）：`cpq_suite_server.py` 全文找不到 `load_dotenv(`；
+  找不到 `except cpq_user_secrets.SecretKeyMissing`（也不 import 该模块）；`DEPLOYMENT.md`
+  的「部署前检查」只列了 `cpq_settings.json` 与历史目录，两个变量一个没提；
+  `tech_app/backend/main.py:515-522` 的文案仍是「登录服务暂不可用，暂时读不到账号级模型与密钥：{exc}」；
+  `PUT /auth/my/llm` 与 `PUT /auth/internal/user-llm` 在缺密钥时真回
+  `500 {"ok": false, "error": "服务异常，请稍后重试"}`。
+- Red 验证（9-16）：`open-claude/.venv/bin/python tests/test_cpq_secret_key_env_and_loud_503_red.py`
+  → 12 项中 **7 失败**（`test_02/03/04/05/10/20/21`），失败原因全是"功能缺失"而非测试自身问题：
+  子进程探针确实走到了目标代码（真起 `Handler` 拿到 500、真 `import cpq_suite_server` 拿到
+  `env_visible: False` + `SecretKeyMissing`）。5 项改前即绿，均为保护性约束：Spec 已在位、
+  尚未 `load_dotenv()` 所以 export 天然优先、其它异常仍 500、读取仍 200、正常写入仍 200。
+  全量 `unittest discover -s tests -p 'test_*.py'`：**1585 项中 7 失败，全部来自本文件**，
+  无其它回归（## 91 的 22 项、## 92 的 18 项均绿）。
+- 明确不在本批：线上补密钥与重启 8010（需要用户单独授权；本批只改代码与文档）；密文损坏
+  （能解出但认证失败）的映射（那是数据问题不是服务不可用，仍按通用 500）；把环境变量来源做成
+  一等配置中心（本批只支持"文件 + 显式导出"两种）。
+- 风险提示（已写进 Spec 与待改的部署文档）：加密密钥一旦启用就**不能换**——
+  `get_user_llm()` 对解不开的密文是明确抛错而不是当成"没设置"（`cpq_auth.py:490-506`），
+  换掉之后已存过个人 Key 的账号连读都会失败。本批改动**未提交、未推送、未部署**。
+- 允许修改范围（交付 DeepSeek 的实现提示词里已写死）：`cpq_suite_server.py`、
+  `tech_app/backend/main.py`（仅该 handler 的文案）、`DEPLOYMENT.md`；不得碰 `cpq_user_secrets.py`
+  的密钥校验、不得放宽明文落库或静默回落全局 Key。
+- 落地 C1（`cpq_suite_server.py`）：在 `os.environ["OC_READONLY_FS"] = "1"` 之后、三个 Agent 与
+  `cpq_auth` / `cpq_wf` / `cpq_kb` 等模块的 import **之前**插入 `load_dotenv(...)` —— 路径取
+  `CPQ_ENV_FILE`，没设则用仓库根 `.env`；`override=False`（已 export 的同名变量优先）；
+  文件不存在不算错误；`python-dotenv` 缺依赖时降级为不读文件（`try/except ImportError`），
+  不让启动因此失败。位置是硬要求：这些模块在导入期就读 `CPQ_PG_*` / `CPQ_INTERNAL_TOKEN`。
+- 落地 C2（`cpq_suite_server.py`）：import 块补 `import cpq_user_secrets`；`_dispatch_auth` 的异常链在
+  `except cpq_auth.AuthError` 之后、通用 `except Exception` **之前**新增
+  `except cpq_user_secrets.SecretKeyMissing` → stderr 一行 `[cpq-suite] 账号级密钥不可用: …` +
+  `503 {"ok": false, "error": "账号级模型与密钥的加密密钥 CPQ_USER_SECRET_KEY 未配置或不可用：
+  请在 8010 的启动环境里配置 32 字节 base64/hex 的 CPQ_USER_SECRET_KEY 后重启服务；启用后不可更换。"}`。
+  文案同时含变量名与「未配置」、给出下一步、不回显密钥材料；这一处覆盖所有会 seal 的 `/auth`
+  入口（`PUT /auth/my/llm` 与 `PUT /auth/internal/user-llm` 共用同一条链）。通用 `except` 原样保留
+  `500 服务异常，请稍后重试`，没有把所有异常都改成 503。
+- 落地 C4（`DEPLOYMENT.md`）：「部署前检查」补第 6 项 `CPQ_USER_SECRET_KEY`（32 字节 base64/hex、
+  账号级模型与 API Key 的加密材料、**启用后不可更换**、没有它写入按 503 明确拒绝）与第 7 项
+  `CPQ_INTERNAL_TOKEN`（知识库快照与账号级设置的内部读写只认它），并写清配置方式：变量放**仓库外**
+  的 env 文件（例 `/home/wugefei/CPQ/cpq_env.sh`，权限 `0600`），用
+  `set -a; . <该文件>; set +a` 或 `CPQ_ENV_FILE=<该文件>`，已 export 的优先、文件不覆盖；
+  「线上实例现状」补一句：8010 重启前先确认这两个变量在场（`tr '\0' '\n' < /proc/<pid>/environ | grep CPQ_`）。
+- 落地 C5（`tech_app/backend/main.py`）：`cpq_auth_unavailable_handler` 的 detail 由
+  「登录服务暂不可用，暂时读不到账号级模型与密钥：{exc}」改为「账号级模型与密钥暂时读不到：{exc}」，
+  让上游原文（现在是一条可执行的 503 说明）能原样被看到；状态码仍是 503。只改这一处，
+  `main.py` 里验票的 503（`:385`）与前端一字未动。
+- 未放宽（C3 / C6 逐条复核）：缺密钥时两个 GET 读接口仍 200（读取不做 seal/open）；`DELETE
+  /auth/my/llm/keys/{provider}` 行为不变；未配置密钥时**绝不明文落库**、账号级设置读取失败仍明确
+  失败而不静默回落全局 Key；没有新增任何"缺密钥也放行"的开关；`cpq_user_secrets.py` 的密钥校验
+  逻辑与 `cpq_auth.AuthError` 的语义一个字节没动。
+- Green 验证（9-16，全部实跑）：
+  - `open-claude/.venv/bin/python tests/test_cpq_secret_key_env_and_loud_503_red.py -v`
+    → **Ran 12 tests / OK**（改前 7 失败：`test_02/03/04/05/10/20/21`）；其中配置文件的
+    真读入、`override=False` 的优先级、缺密钥 503、其它异常仍 500、两个 GET 仍 200、
+    密钥齐备时写入仍 200 都是子进程真起服务/真 import 打出来的结果，不是源码文本断言。
+  - `python -m unittest discover -s tests -p 'test_*.py'` → **Ran 1585 tests / OK**（0 失败）。
+  - `python -c "import ast;ast.parse(open('cpq_suite_server.py').read())"` → 通过（`main.py` 同）；
+    `git diff --check` → 无告警。
+- 线上仍未恢复（本批只改代码与文档）：8010 那台机器依旧没有 `CPQ_USER_SECRET_KEY`，所以现在保存
+  「我的模型与密钥」会从"500 服务异常 / 登录服务暂不可用"变成**可执行的 503**，但**仍然存不进去**。
+  恢复动作需要单独授权：在服务器生成一把 32 字节密钥 → 落到仓库外 `0600` 的 env 文件 →
+  重启 8010（`set -a; . <文件>; set +a` 或 `CPQ_ENV_FILE=<文件>`）→ 页面上存一次确认；
+  密钥**启用后不可更换**（换掉已存过个人 Key 的账号连读都会失败）。
+- 状态：实现 + 测试同一次交付；**未提交、未推送、未部署**，服务器与线上数据未做任何改动。
