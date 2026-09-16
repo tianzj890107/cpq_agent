@@ -1193,6 +1193,9 @@
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     // 默认同源 /agents/rule（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47296。
     const AGENT_URL = (localStorage.getItem('cpq:ruleAgentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47296' : '/agents/rule')).replace(/\/$/, '');
@@ -1459,7 +1462,7 @@
       const btn = document.getElementById('btnImportDb');
       if (btn) btn.disabled = true;
       try {
-        const res = await fetch(AGENT_URL + '/api/import', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules }),
@@ -1533,7 +1536,7 @@
       }
       try {
         const b64 = await fileToBase64(file);
-        const res = await fetch(AGENT_URL + '/api/extract', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: file.name, data: b64 }),
@@ -1564,7 +1567,7 @@
       let receivedAnything = false;
 
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text, display, sid: currentSessionId || undefined }), // sid：会话隔离，路由到本会话专属 Bridge
@@ -1677,7 +1680,7 @@
       if (busy) return;
       closeOverlays();
       try {
-        const r = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json());
         currentSessionId = r.id || null;
       } catch (e) {}
       const messages = document.querySelector('.chat-messages');
@@ -1704,7 +1707,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const res = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const res = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (res.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -1744,7 +1747,7 @@
       }
       let data = null;
       try {
-        data = await fetch(AGENT_URL + '/api/session/open', {
+        data = await cpqAuthFetch(AGENT_URL + '/api/session/open', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
@@ -1762,7 +1765,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
@@ -1791,7 +1794,7 @@
       sel.innerHTML = '';
       let current = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         current = r.current;
       } catch (e) {
@@ -1815,7 +1818,7 @@
       });
 
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model; else if (current) sel.value = current;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
       const lc = st.local || {};
@@ -1908,7 +1911,7 @@
       msg.textContent = '保存中...';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1937,12 +1940,12 @@
 
     async function initAgentMeta() {
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true, '已连接');
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         // 每个打开的页面申请自己的会话 id（会话隔离，多人同时用互不串扰）
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || currentSessionId;
         try { // 记入「我的规则」（首页「我的」标签按本机创建的会话过滤）
           const mine = JSON.parse(localStorage.getItem('rule:mySessions') || '[]');
@@ -1957,10 +1960,28 @@
       }
     }
 
-    // 先取 meta（含 manualMode 判定）再处理首页带入的需求，保证无模型模式判定生效
-    initAgentMeta().then(initFromHomepage);
+    // 先取 meta（含 manualMode 判定）再处理首页带入的需求，保证无模型模式判定生效。
+    // 未登录时 /agents/* 一律 401（cpqAuthFetch 会顺手拉起 CPQ 登录框），那时拿不到
+    // 会话 id；登录成功后必须真正重跑一遍，而不是停在空列表。
+    let agentUiStarted = false;
+    function startAgentUi() {
+      if (agentUiStarted) return;
+      agentUiStarted = true;
+      initAgentMeta().then(initFromHomepage).then(() => {
+        if (!currentSessionId) agentUiStarted = false;
+      });
+    }
+
+    document.addEventListener('cpq-auth-change', (e) => {
+      // 只在登录成功时重拉：退出登录时保留屏幕上已有的会话内容
+      if (!(e && e.detail && e.detail.user)) return;
+      loadHistoryList();
+      loadModels();
+      startAgentUi();
+    });
+
+    startAgentUi();
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

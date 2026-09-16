@@ -1480,6 +1480,9 @@
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
     function toggleNav() {
@@ -1673,13 +1676,13 @@
       const id = encodeURIComponent(projectId);
       try {
         const [flow, projectData, aggregate, costDetail] = await Promise.all([
-          fetch('/api/projects/' + id + '/workflow')
+          cpqAuthFetch('/api/projects/' + id + '/workflow')
             .then(r => r.ok ? r.json() : null),
-          fetch('/api/projects/' + id)
+          cpqAuthFetch('/api/projects/' + id)
             .then(r => r.ok ? r.json() : null),
-          fetch('/api/projects/' + id + '/summary')
+          cpqAuthFetch('/api/projects/' + id + '/summary')
             .then(r => r.ok ? r.json() : null),
-          fetch('/api/projects/' + id + '/cost-review')
+          cpqAuthFetch('/api/projects/' + id + '/cost-review')
             .then(r => r.ok ? r.json() : null)
             .catch(() => null),
         ]);
@@ -1846,7 +1849,7 @@
               status: pp.status || '', turns: 0,
             }));
           } else {
-            const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
+            const r = await cpqAuthFetch(modeBase(mode) + '/api/sessions').then(r => r.json());
             SESSIONS[mode] = r.sessions || [];
           }
         } catch (e) {
@@ -2010,7 +2013,7 @@
       if (DOC_EXT_H.test(file.name)) {
         try {
           const b64 = await fileToBase64(file);
-          const r = await fetch(AGENT_URL + '/api/extract', {
+          const r = await cpqAuthFetch(AGENT_URL + '/api/extract', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: file.name, data: b64 }),
           });
@@ -2111,7 +2114,7 @@
         fd.append('note', (textarea && textarea.value.trim()) || '');
         for (let i = 1; i < techDrawFiles.length; i++) fd.append('attachments', techDrawFiles[i]);
         for (const f of techReqFiles) fd.append('attachments', f);
-        const created = await fetch('/api/projects', { method: 'POST', body: fd }).then(r => r.json());
+        const created = await cpqAuthFetch('/api/projects', { method: 'POST', body: fd }).then(r => r.json());
         const pid = created && created.project_id;
         if (!pid) throw new Error('返回无 project_id');
         // 关键：建项目后立即存一版需求草稿，否则 requirement-create 里点「AI 解析」会因
@@ -2120,7 +2123,7 @@
         const reqNames = techReqFiles.map(f => f.name);
         const title = (note.split(/\n|。|；|;/)[0] || '').slice(0, 40) || '工艺评估需求单';
         try {
-          await fetch('/api/projects/' + encodeURIComponent(pid) + '/requirement', {
+          await cpqAuthFetch('/api/projects/' + encodeURIComponent(pid) + '/requirement', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               project_id: pid, requirement_no: '', title, status: 'draft',
@@ -2455,7 +2458,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -2495,7 +2498,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -2506,7 +2509,7 @@
     async function deleteCard(mode, id, title) {
       if (!confirm('删除「' + (title || id) + '」？会话记录将被删除，此操作不可恢复。')) return;
       try {
-        await fetch(modeBase(mode) + '/api/session/delete', {
+        await cpqAuthFetch(modeBase(mode) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -2529,7 +2532,7 @@
       sel.innerHTML = '';
       let cur = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         cur = r.current;
       } catch (e) { MODELS = []; }
@@ -2550,7 +2553,7 @@
         sel.appendChild(og);
       });
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model;
       else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
@@ -2632,7 +2635,7 @@
       msg.textContent = '保存中…';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         }).then(r => r.json());
@@ -2655,7 +2658,6 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
   </script>
   <script src="tech-stage-restore.js?v=tsr1"></script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

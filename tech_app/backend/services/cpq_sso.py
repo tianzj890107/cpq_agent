@@ -39,6 +39,10 @@ ROLE_MAP = {
     # （auth.ROLES），这里只是把 CPQ 的角色码接上去。他在 2.1/2.2 仍然是只读 ——
     # 工艺与参数不归他改，他只对成本负责。
     "finance_mgr": "finance_manager",
+    # 工艺技术总监：3.2 报告审核（REVIEW_ROLES）与 3.3 报告发布（DIRECTOR_ROLES）。
+    # 有了它，CPQ_MANAGER_FULL_TECH=false 就能让工艺经理回到"只写不审不发"，
+    # 3.1 → 3.2 → 3.3 的三级职责分离才恢复。
+    "tech_director": "process_director",
 }
 FALLBACK_ROLE = "viewer"
 
@@ -112,6 +116,7 @@ def _fetch(token: str) -> Optional[dict]:
 # 界面上看到的是「财务经理」，不是技术工艺内部的 finance_manager。
 TECH_ROLE_LABEL = {
     "process_manager": "工艺经理",
+    "process_director": "工艺技术总监",
     "finance_manager": "财务经理",
     "sales_manager": "销售经理",
     "viewer": "只读浏览",

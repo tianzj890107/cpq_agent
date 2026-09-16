@@ -17,7 +17,7 @@
   · 另一半缺口在后端：`main.py` 的 `/agent/event` 用 `auth.WRITE_ROLES`，
     `finance_manager` 不在其中 —— 前端放行也仍会真 403。
 
-红线：拦截表达式的形状（`state.canWrite || (state.canCost && isCostUrl(url))`、伪 403、toast）、
+红线：拦截表达式的两条通路（`state.canWrite`、`state.canCost && isCostUrl(url)`）、伪 403、toast、
 Agent 对话 `/agent/send` 归工艺侧、`COST_ROLES` / `WRITE_ROLES` / `ROLE_MAP` 的值、
 会话时间线的读写结构与排序口径，全部不变。
 """
@@ -401,8 +401,11 @@ class FrontendCostGateAllowsSessionTimeline(unittest.TestCase):
                 self.assertEqual(got.get("status"), 403)
 
     def test_gate_expression_and_single_source_of_urls_stay(self):
-        self.assertIn("state.canWrite || (state.canCost && isCostUrl(url))", SSO_SOURCE,
-                      "能力分流不能改形状；本批只修误拦")
+        # 契约更新（3.2/3.3 能力位批次）：放行表达式扩到四档，这里锁住本批真正关心的
+        # 两条通路 —— 工艺侧写权限，以及作为成本侧唯一入口的 isCostUrl(url)。
+        self.assertRegex(SSO_SOURCE,
+                         r"state\.canWrite\b[\s\S]{0,200}state\.canCost\s*&&\s*isCostUrl\(url\)",
+                         "能力分流不能删；isCostUrl 仍是成本侧的唯一入口")
         self.assertIn("status: 403", SSO_SOURCE)
         self.assertIn("toast(detail)", SSO_SOURCE)
         self.assertNotIn("function isCostUrl(url) {\n    return COST_URL_PATTERNS.some",

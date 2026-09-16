@@ -23,6 +23,10 @@
  *      会话时间线（POST /agent/event）不在成本白名单里，于是点「测算」业务成功、
  *      页面却弹「这一步归工艺经理办理」。会话内容属于项目数据、不是业务产出，
  *      它的路径一并归进成本这一侧（Agent 对话 /agent/send 仍归工艺侧）。
+ *
+ *      第三次是 3.2/3.3：报告审核与发布归 process_director（CPQ 的「工艺技术总监」），
+ *      他只审不发之外的写操作一概没有。这里再按能力补两档：can_review 放行
+ *      /versions/<n>/approve|reject，can_publish 放行报告审核、发布、需求审核与发布范围。
  */
 (function () {
   'use strict';
@@ -30,7 +34,7 @@
   var CPQ_TOKEN_KEY = 'cpq_auth_token';
   var MIRROR_KEYS = ['authToken', 'cad_engine_token'];
   var state = { enabled: false, user: null, canWrite: false, canCost: false,
-                roleName: '', checked: false };
+                canReview: false, canPublish: false, roleName: '', checked: false };
 
   /* 成本相关接口：2.3 本体，以及零件/整机成本。只列**写**接口的路径特征，
      判定仍以后端 COST_ROLES 为准。（「整合参数」曾随成本短暂搬去 2.3，后来搬回 2.2
@@ -53,6 +57,25 @@
   function isCostUrl(url) {
     return COST_URL_PATTERNS.concat(COST_SESSION_URL_PATTERNS)
       .some(function (re) { return re.test(url); });
+  }
+
+  /* 3.2「报告审核」：审签通过与驳回。归 can_review（REVIEW_ROLES）。 */
+  var REVIEW_URL_PATTERNS = [
+    /\/versions\/[^/]+\/approve(\?|$)/,
+    /\/versions\/[^/]+\/reject(\?|$)/,
+  ];
+  /* 3.3「报告发布」与需求终审：归 can_publish（DIRECTOR_ROLES）。 */
+  var PUBLISH_URL_PATTERNS = [
+    /\/process-report\/review(\?|$)/,
+    /\/process-report\/publish(\?|$)/,
+    /\/requirement\/review(\?|$)/,
+    /\/process-report\/distribution(\?|$)/,
+  ];
+  function isReviewUrl(url) {
+    return REVIEW_URL_PATTERNS.some(function (re) { return re.test(url); });
+  }
+  function isPublishUrl(url) {
+    return PUBLISH_URL_PATTERNS.some(function (re) { return re.test(url); });
   }
 
   function ls(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
@@ -179,8 +202,14 @@
     var method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
     var isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/api/') !== -1;
     // 有对应能力就放行，让后端逐接口判定：拦截只是省一次往返，不是权限本身。
+    // 四档能力：can_write（工艺侧）、can_cost（成本侧，唯一入口 isCostUrl）、
+    // can_review（3.2 审签）、can_publish（3.3 发布）。
     var allowed = state.canWrite || (state.canCost && isCostUrl(url));
+    if (!allowed && state.canReview && isReviewUrl(url)) allowed = true;
+    if (!allowed && state.canPublish && isPublishUrl(url)) allowed = true;
     if (isWrite && state.enabled && state.checked && !allowed) {
+      // 文案不按能力位反推归属：成本 / 审核 / 发布的写都已在上面按能力放行，
+      // 真被拦下来的一定是工艺侧动作，所以统一告诉用户「这一步归工艺经理」。
       var detail = state.canCost
         ? '这一步归工艺经理办理；' + (state.roleName || '当前账号') + '没有这一步的操作权限'
         : '技术工艺的操作仅限工艺经理；' + (state.roleName || '当前账号') +
@@ -194,6 +223,7 @@
       // 会话在使用中过期：立刻挡住页面，而不是让后续每个动作各报一次错。
       if (response.status === 401 && url.indexOf('/api/') !== -1 && state.enabled) {
         state.user = null; state.canWrite = false;
+        state.canReview = false; state.canPublish = false;
         MIRROR_KEYS.forEach(function (key) { setLs(key, ''); });
         ready(function () { showLoginWall('登录状态已失效，请在配置报价 CPQ 中重新登录。'); });
       }
@@ -213,6 +243,8 @@
     state.user = (data && data.user) || null;
     state.canWrite = !!sso.can_write;
     state.canCost = !!sso.can_cost;
+    state.canReview = !!sso.can_review;        // 3.2 审签通过 / 驳回
+    state.canPublish = !!sso.can_publish;      // 3.3 报告发布 / 需求终审
     state.roleName = sso.role_name || '';
     state.checked = true;
     // 身份已确认：无论此前因为未登录还是登录服务故障挂了遮罩，这里都要收掉。

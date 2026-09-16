@@ -409,14 +409,22 @@ def _notify_quote_agents(changes: dict[str, Any]) -> None:
 
 def _post_quote_settings(base: str, body: dict[str, Any]) -> None:
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    # 报价侧的 /agents/* 现在也要验票：服务间调用没有用户票据，改用一体化服务在拉起本
+    # 进程时注入的内部令牌（cpq_suite_server.CPQ_INTERNAL_TOKEN）。缺了它不是"少一个头"
+    # 而是"技术工艺改了模型，报价侧不生效"的静默事故，所以下面要留下可诊断的告警。
+    internal = (os.environ.get("CPQ_INTERNAL_TOKEN") or "").strip()
+    if internal:
+        headers["X-Internal-Token"] = internal
     request = urllib.request.Request(
-        f"{base}/agents/quote/api/settings", data=data, method="POST",
-        headers={"Content-Type": "application/json"})
+        f"{base}/agents/quote/api/settings", data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=5) as response:   # noqa: S310 - 固定内网地址
             response.read()
-    except Exception:                                               # pragma: no cover - 报价侧没起时忽略
-        pass
+    except Exception as exc:                                        # noqa: BLE001 - 任何失败都要说清楚
+        reason = str(exc) if internal else "未配置 CPQ_INTERNAL_TOKEN（独立运行？）"
+        print(f"[tech-app] 警告：模型/密钥设置未能同步到报价侧（{reason}）；"
+              f"技术工艺改了模型但报价侧不会生效。", file=sys.stderr)
 
 
 def _route_matches_applied(route: dict[str, Any]) -> bool:

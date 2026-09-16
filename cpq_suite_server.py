@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import re
+import secrets as _secrets
 import sys
 import traceback
 import urllib.parse
@@ -60,6 +61,16 @@ AGENTS = {
     "rule": rule_agent,
 }
 AGENT_LABELS = {"quote": "报价助手", "config": "配置助手", "rule": "规则助手"}
+
+# 服务间内部令牌。技术工艺改完模型/密钥要把设置广播回报价侧
+# （POST /agents/quote/api/settings），而 /agents/* 本批起要验票 —— 它没有用户票据。
+# 这个令牌由一体化服务自己生成、只注入技术工艺子进程，仅用于服务间同步：
+#   · 环境变量里已经有了就不覆盖（多进程/重复拉起时不变）；
+#   · 没配置就关闭这条通道（fail-closed），绝不做"来源是 127.0.0.1 就放行"的兜底；
+#   · 外部用户拿不到它，也用不了它跳过用户级权限判定。
+CPQ_INTERNAL_TOKEN = (os.environ.get("CPQ_INTERNAL_TOKEN") or "").strip() or _secrets.token_urlsafe(32)
+os.environ["CPQ_INTERNAL_TOKEN"] = CPQ_INTERNAL_TOKEN
+INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 
 _AGENT_RE = re.compile(r"^/agents/(quote|config|rule)(/.*)?$")
 
@@ -134,13 +145,48 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def _agent_token(self) -> str:
+        """/agents/* 的票据：Authorization: Bearer <token> 优先，其次 ?token=<token>
+        （与 tech_app 既有约定一致，供发不出请求头的场景），两者走同一条校验。"""
+        token = self._token()
+        if token:
+            return token
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        return (query.get("token") or [""])[0].strip()
+
+    def _internal_token_ok(self) -> bool:
+        """服务间调用：X-Internal-Token 必须与 env 里的值严格相等。env 未设置时该通道
+        关闭（fail-closed）—— 不做「来源是 127.0.0.1 就放行」的兜底。"""
+        expected = (os.environ.get("CPQ_INTERNAL_TOKEN") or "").strip()
+        if not expected:
+            return False
+        got = (self.headers.get(INTERNAL_TOKEN_HEADER) or "").strip()
+        return bool(got) and _secrets.compare_digest(got, expected)
+
+    def _authorize_agent(self) -> bool:
+        """验票必须在调用 Agent 处理函数**之前**完成：被拒绝的请求不得有任何副作用
+        （不写历史、不落盘、不调模型）。登录库不可用回 503，而不是把在线的人静默踢成
+        401。这里只认 CPQ 的票与内部令牌，独立模式的 Agent 服务不经过本方法。"""
+        if self._internal_token_ok():
+            return True
+        if cpq_auth._backend is None:
+            self._send_json(503, {"ok": False, "error": "登录服务暂不可用，请稍后重试"})
+            return False
+        if not cpq_auth.whoami(self._agent_token()):
+            self._send_json(401, {"ok": False, "error": "请先登录"})
+            return False
+        return True
+
     def _dispatch_agent(self, method_name: str) -> bool:
-        """匹配 /agents/<name>/... 前缀；命中则剥掉前缀，把本次请求整体交给对应
-        Agent 模块的 Handler 处理（临时切换 __class__，让 _send_json/_handle_send
-        及模块全局 bridge 等全部解析到该模块），处理完恢复。"""
+        """匹配 /agents/<name>/... 前缀；命中则**先验票**，再剥掉前缀把本次请求整体交给
+        对应 Agent 模块的 Handler 处理（临时切换 __class__，让 _send_json/_handle_send
+        及模块全局 bridge 等全部解析到该模块），处理完恢复。
+        OPTIONS 是浏览器预检（不带 Authorization），不验票，照旧交给 Agent 回 204+CORS。"""
         m = _AGENT_RE.match(self.path)
         if not m:
             return False
+        if method_name != "do_OPTIONS" and not self._authorize_agent():
+            return True
         mod = AGENTS[m.group(1)]
         self.path = m.group(2) or "/"
         self.__class__ = mod.Handler
@@ -625,6 +671,8 @@ def _start_tech_app(suite_port: int = 8010):
         return
     env = dict(os.environ)
     env.setdefault("CPQ_AUTH_BASE_URL", f"http://{TECH_HOST}:{suite_port}")
+    # 技术工艺要把设置广播回报价侧，而 /agents/* 已验票：把内部令牌给它。
+    env["CPQ_INTERNAL_TOKEN"] = CPQ_INTERNAL_TOKEN
     try:
         _tech_proc = subprocess.Popen(
             [sys.executable, launcher, "--host", TECH_HOST, "--port", str(TECH_PORT)],

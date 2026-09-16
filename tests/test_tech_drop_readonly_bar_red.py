@@ -42,8 +42,12 @@ class ReadonlyBarIsGone(unittest.TestCase):
 
 class WriteGateStays(unittest.TestCase):
     def test_frontend_gate_and_403_response_stay(self):
-        self.assertIn("state.canWrite || (state.canCost && isCostUrl(url))", SSO,
-                      "能力分流不能删；前端只是提前告知，判定仍在后端")
+        # 契约更新（3.2/3.3 能力位批次）：放行表达式从两档扩到四档，这里只锁
+        # 「工艺侧写权限」与「成本白名单」两条通路都在，不再锁字面形状。
+        self.assertRegex(SSO, r"state\.canWrite\b[\s\S]{0,200}state\.canCost\s*&&\s*isCostUrl\(url\)",
+                         "能力分流不能删；前端只是提前告知，判定仍在后端")
+        self.assertIn("state.canReview", SSO, "3.2 审核能力位也要参与放行判定")
+        self.assertIn("state.canPublish", SSO, "3.3 发布能力位也要参与放行判定")
         self.assertIn("status: 403", SSO, "写请求预判仍要返回结构化 403")
         self.assertIn("toast(detail)", SSO, "被拦时仍要把原因告诉用户")
 
@@ -54,10 +58,20 @@ class WriteGateStays(unittest.TestCase):
                 self.assertIn(token, SSO, f"既有能力被删除：{token}")
 
     def test_blocked_write_toast_still_names_the_owner(self):
-        start = SSO.find("var detail = state.canCost")
+        # 说明文本随能力位分了几档，但**被拦的写操作一定是工艺侧的步骤**：
+        # 有 canWrite 的账号根本不会被拦，成本/审核/发布的写又各自放行了。
+        # 所以被拦时只能告诉用户「这一步归工艺经理」，绝不能反过来声称归他自己
+        # （「这一步归财务经理办理；财务经理没有这一步的操作权限」是自相矛盾的）。
+        start = SSO.find("var detail =")
         self.assertGreater(start, 0, "找不到写请求被拦时的说明文本")
-        body = SSO[start:start + 400]
-        self.assertIn("归工艺经理", body, "被拦时仍要说清这一步归谁")
+        body = SSO[start:start + 700]
+        self.assertIn("归工艺经理", body, "被拦时仍要说清这一步归工艺经理")
+        self.assertNotIn("这一步归财务经理", body,
+                         "被拦的一定是工艺侧动作，不能声称归财务经理")
+        self.assertNotIn("这一步归工艺技术总监", body,
+                         "被拦的一定是工艺侧动作，不能声称归工艺技术总监")
+        self.assertNotIn("这一步归' + (state.canPublish", body,
+                         "被拦的写不该按能力位反推归属")
         self.assertNotIn("2.3 成本测算", body, "别再复述那段 2.3 归属说明")
 
 

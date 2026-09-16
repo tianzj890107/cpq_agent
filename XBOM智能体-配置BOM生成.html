@@ -1470,6 +1470,9 @@
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     'use strict';
     // 默认同源 /agents/config（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47294。
@@ -1864,7 +1867,7 @@
       const project = (sessionStorage.getItem('cpq:projectName') || '').trim();
       const btn = $('btnImportDb'); const old = btn.textContent; btn.disabled = true; btn.textContent = '导入中…';
       try {
-        const j = await fetch(AGENT_URL + '/api/import', {
+        const j = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ product, project, params, rows })
         }).then(r => r.json());
@@ -1895,7 +1898,7 @@
       if (step) body.step = step; // 人工模式下上报本地进度（用于历史/首页卡片状态）
       if (display !== undefined) body.display = display; else if (!echo) body.display = '';
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
         setConn(true);
         const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -1938,7 +1941,7 @@
     async function extractFile(f) {
       if (TEXT_EXT.test(f.name)) { try { return { text: (await f.text()).slice(0, 200000) }; } catch (e) { return { err: '读取失败' }; } }
       if (DOC_EXT.test(f.name)) { try { const b = await fileB64(f);
-        const r = await fetch(AGENT_URL + '/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: b }) });
+        const r = await cpqAuthFetch(AGENT_URL + '/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: b }) });
         const d = await r.json(); if (d && d.ok) return { text: d.text, truncated: d.truncated }; return { err: (d && d.error) || '解析失败' }; } catch (e) { return { err: '无法连接解析服务' }; } }
       return { err: '该类型暂不支持' };
     }
@@ -1985,10 +1988,10 @@
       } catch {}
       if ($('configPanelTitle') && projectName) $('configPanelTitle').textContent = '配置BOM - ' + projectName;
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json()); setConn(true);
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json()); setConn(true);
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || null;
         try { // 记入「我的配置」（首页「我的」标签按本机创建的会话过滤）
           const mine = JSON.parse(localStorage.getItem('xbom:mySessions') || '[]');
@@ -2055,7 +2058,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -2087,14 +2090,14 @@
     async function openSession(id) {
       if (busy) { alert('请等当前回合结束再切换历史。'); return; }
       let data;
-      try { data = await fetch(AGENT_URL + '/api/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(r => r.ok ? r.json() : null); }
+      try { data = await cpqAuthFetch(AGENT_URL + '/api/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(r => r.ok ? r.json() : null); }
       catch (e) { data = null; }
       if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
       currentSessionId = data.id; closeOverlays(); replaySession(data);
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
-      try { await fetch((src && src.base || AGENT_URL) + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
+      try { await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
       loadHistoryList();
     }
     function replaySession(data) {
@@ -2120,7 +2123,7 @@
     }
     async function loadModels() {
       const sel = $('setModel'); sel.innerHTML = ''; let cur = null;
-      try { const r = await fetch(AGENT_URL + '/api/models').then(r => r.json()); MODELS = r.models || []; cur = r.current; } catch (e) { MODELS = []; }
+      try { const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json()); MODELS = r.models || []; cur = r.current; } catch (e) { MODELS = []; }
       const groups = {};
       MODELS.forEach(m => { (groups[m.provider_label] = groups[m.provider_label] || []).push(m); });
       Object.keys(groups).forEach(gl => {
@@ -2128,7 +2131,7 @@
         groups[gl].forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label + (m.configured ? '' : '（未配置 Key）'); o.dataset.provider = m.provider; o.dataset.providerLabel = m.provider_label; o.dataset.configured = m.configured ? '1' : ''; og.appendChild(o); });
         sel.appendChild(og);
       });
-      let st = {}; try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      let st = {}; try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model; else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
       const lc = st.local || {};
@@ -2177,7 +2180,7 @@
       } else if (key && o) { payload.api_key = key; payload.provider = o.dataset.provider; }
       const msg = $('settingsMsg'); msg.className = 'hint'; msg.textContent = '保存中…'; $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
         $('setApiKey').value = '';
         const wasManual = manualMode;
         manualMode = (r.model || payload.model) === 'none';
@@ -2201,10 +2204,28 @@
           const en = { name: file.name, text: null, status: 'parsing', err: null }; chatFiles.push(en); renderChips();
           const res = await extractFile(file); en.text = res.text; en.err = res.err; en.truncated = res.truncated; en.status = res.text ? 'ok' : 'err'; renderChips();
         } fi.value = ''; }); }
-      boot();
+      startAgentUi();
+    });
+
+    /* ---------- 启动 / 登录态变化（CPQ SSO） ---------- */
+    let agentUiStarted = false;
+    // 未登录时 /agents/* 一律 401（cpqAuthFetch 会顺手拉起 CPQ 登录框），那时拿不到
+    // 会话 id；登录成功后必须真正重跑一遍，而不是停在「未连接」的报错上。
+    function startAgentUi() {
+      if (agentUiStarted) return;
+      agentUiStarted = true;
+      Promise.resolve(boot()).catch(() => {}).then(() => {
+        if (!currentSessionId) agentUiStarted = false;
+      });
+    }
+    document.addEventListener('cpq-auth-change', (e) => {
+      // 只在登录成功时重拉：退出登录时保留屏幕上已有的会话内容
+      if (!(e && e.detail && e.detail.user)) return;
+      loadHistoryList();
+      loadModels();
+      startAgentUi();
     });
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

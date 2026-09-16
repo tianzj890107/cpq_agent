@@ -36,6 +36,33 @@
     });
   }
 
+  /* 统一的带票请求：四个页面对 Agent 基址（/agents/quote|config|rule）与技术工艺
+     同源 /api/* 的调用一律走它。返回**原始 Response** —— /api/send 是 SSE 流、
+     /api/export/docx 是二进制，在这里解析 JSON 会把它们弄坏，所以只加头、不读体。
+     401（票过期或被撤销）时清掉本地镜像并拉起 CPQ 登录框，同时把响应原样交回调用方，
+     让它照常走自己的错误分支。 */
+  function cpqAuthFetch(url, options) {
+    var opts = options || {};
+    var headers = Object.assign({}, opts.headers || {});
+    var t = token();
+    if (t && !headers['Authorization'] && !headers['authorization']) {
+      headers['Authorization'] = 'Bearer ' + t;
+    }
+    var next = Object.assign({}, opts, { headers: headers });
+    return fetch(url, next).then(function (response) {
+      if (response.status === 401) {
+        setToken('');                       // 这张票已经不认了，留着只会一直转圈
+        state.user = null;
+        openLoginDialog();
+      }
+      return response;
+    });
+  }
+
+  function openLoginDialog() {
+    try { showAuthForm('login'); } catch (e) { /* 页面结构被裁掉时不影响响应本身的返回 */ }
+  }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -275,7 +302,10 @@
     token: token,
     /** 带登录态的 fetch 封装，供后续任务流接口调用 */
     api: api,
+    /** 统一带票 fetch：返回原始 Response（SSE / 二进制都安全），401 时拉起登录框 */
+    fetch: cpqAuthFetch,
   };
+  window.cpqAuthFetch = cpqAuthFetch;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', refresh);

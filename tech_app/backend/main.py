@@ -595,13 +595,21 @@ def whoami(user: dict = Depends(current_user)):
         "sso": {
             "enabled": CPQ_SSO_ENABLED,
             "provider": "配置报价 CPQ",
-            "required_role_name": "工艺经理",
+            # 登录提示要跟开关一致：全权模式下工艺经理一个人做完，关掉之后 3.2 审核 /
+            # 3.3 发布归「工艺技术总监」，再声称"只能工艺经理使用"会把人挡在门外。
+            "required_role_name": "工艺经理" if CPQ_MANAGER_FULL_TECH else "工艺技术总监",
             # can_write 是**工艺侧**的写权限（2.1/2.2 解析、生成、确认）。
             # can_cost 是 2.3 成本测算 —— 那是财务经理的步骤，他在工艺侧只读，
             # 但绝不能因此被前端一刀切拦成"什么都不能做"（cpq-sso.js 的写拦截
             # 原来只看 can_write，财务经理点测算连请求都发不出去）。
             "can_write": (user or {}).get("role") in auth.WRITE_ROLES,
             "can_cost": (user or {}).get("role") in auth.COST_ROLES,
+            # can_review = 3.2 报告审核（REVIEW_ROLES）、can_publish = 3.3 报告发布
+            # （DIRECTOR_ROLES）。前端据此放行对应按钮，否则工艺技术总监点「审核通过」
+            # 「发布」会被前端伪 403 挡下（和当初财务经理点「测算」是同一个坑）；
+            # 最终判定仍在后端 _require。
+            "can_review": (user or {}).get("role") in auth.REVIEW_ROLES,
+            "can_publish": (user or {}).get("role") in auth.DIRECTOR_ROLES,
             "role_name": (user or {}).get("cpq_role_name") or auth.ROLE_LABEL.get(
                 (user or {}).get("role", ""), ""),
         } if CPQ_SSO_ENABLED else {"enabled": False},

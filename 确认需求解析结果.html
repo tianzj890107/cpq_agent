@@ -911,6 +911,9 @@
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     'use strict';
 
@@ -1331,7 +1334,7 @@
       };
       if (be) be.disabled = true;
       try {
-        const resp = await fetch(AGENT_URL + '/api/export/docx', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/export/docx', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
         if (!resp.ok) { const t = await resp.json().catch(() => ({})); throw new Error(t.error || ('HTTP ' + resp.status)); }
@@ -1360,7 +1363,7 @@
       addAiBubble('🗄️ 开始导入数据库，共 ' + Object.keys(all).length + ' 个分区，逐个写入目标表…');
       if (bi) { bi.disabled = true; bi.textContent = '导入中…'; }
       try {
-        const res = await fetch(AGENT_URL + '/api/import', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sections: all, sid: currentSessionId }),
         }).then(r => r.json());
@@ -1893,7 +1896,7 @@
       btn.innerHTML = '<i class="ti ti-loader-2"></i>取价中…';
       let d;
       try {
-        d = await fetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code))
+        d = await cpqAuthFetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code))
           .then(r => r.json());
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
@@ -1977,7 +1980,7 @@
     async function _sseCall(url, body) {
       let d = null, gotText = false;
       try {
-        const resp = await fetch(url, {
+        const resp = await cpqAuthFetch(url, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
@@ -2224,7 +2227,7 @@
       if (display !== undefined) body.display = display;
       else if (!echo) body.display = '';
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -2338,7 +2341,7 @@
       if (DOC_EXT.test(file.name)) {
         try {
           const b64 = await fileToBase64(file);
-          const r = await fetch(AGENT_URL + '/api/extract', {
+          const r = await cpqAuthFetch(AGENT_URL + '/api/extract', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: file.name, data: b64 }),
           });
@@ -3450,7 +3453,7 @@
       showTyping();
       let d = null, gotText = false;
       try {
-        const resp = await fetch(AGENT_URL + '/api/markup/fill', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/markup/fill', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
@@ -3797,7 +3800,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -3844,7 +3847,7 @@
       if (busy) { alert('请等当前回合结束再切换历史。'); return; }
       let data;
       try {
-        data = await fetch(AGENT_URL + '/api/session/open', {
+        data = await cpqAuthFetch(AGENT_URL + '/api/session/open', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         }).then(r => r.ok ? r.json() : null);
@@ -3863,7 +3866,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -3910,7 +3913,7 @@
       sel.innerHTML = '';
       let cur = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         cur = r.current;
       } catch (e) { MODELS = []; }
@@ -3933,7 +3936,7 @@
       });
       // 载入当前设置
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model;
       else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
@@ -3958,7 +3961,7 @@
       const node = $('modelInfo');
       if (!node || node.textContent.trim()) return;
       try {
-        const st = await fetch(AGENT_URL + '/api/settings').then(r => r.json());
+        const st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json());
         if (st && st.model === 'none') {
           manualMode = true;
           node.textContent = ' · 无模型（人工填写）';
@@ -4033,7 +4036,7 @@
       msg.textContent = '保存中…';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         }).then(r => r.json());
@@ -4086,12 +4089,12 @@
 
       // 探测服务 & 重置会话
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true);
         FORMS = meta.forms || []; // 写死的表结构（用于预渲染骨架）
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || meta.session_id || null;
         try { // 记入「我的报价」（未登录时首页「我的」标签仍按本机会话过滤）
           const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
@@ -4175,7 +4178,6 @@
 
     boot();
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

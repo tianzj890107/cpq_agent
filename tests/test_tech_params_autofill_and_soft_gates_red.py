@@ -197,14 +197,21 @@ class ParamsStepBelongsToProcessManager(unittest.TestCase):
         # 契约更新（只读横幅下线批次）：横幅已按用户要求整体删除（外层 + iframe 两处都不再出现）。
         # 原意保留为「权限提示仍说清参数推荐归工艺经理」，改由写请求被拦时的 toast 承担。
         self.assertNotIn("showReadonlyBar", self.sso, "只读横幅已整体下线")
-        start = self.sso.find("var detail = state.canCost")
+        # 说明文本按能力位分档之后，定位方式跟着改（不再锁 "var detail = state.canCost"），
+        # 但「参数推荐是工艺经理的步骤」这条不能变：被拦时仍要说清归工艺经理。
+        start = self.sso.find("var detail =")
         self.assertGreater(start, 0, "找不到写请求被拦时的说明文本")
-        self.assertIn("归工艺经理", self.sso[start:start + 400],
+        body = self.sso[start:start + 700]
+        self.assertIn("归工艺经理", body,
                       "被拦时仍要说清这一步归工艺经理，不能让财务以为自己能做")
 
     def test_frontend_gate_still_defers_to_backend(self):
-        self.assertIn("state.canWrite || (state.canCost && isCostUrl(url))", self.sso,
-                      "能力分流不能删；前端只是提前告知，判定仍在后端")
+        # 契约更新（3.2/3.3 能力位批次）：放行表达式扩到四档，只锁两条既有通路在不在。
+        self.assertRegex(self.sso,
+                         r"state\.canWrite\b[\s\S]{0,200}state\.canCost\s*&&\s*isCostUrl\(url\)",
+                         "能力分流不能删；前端只是提前告知，判定仍在后端")
+        self.assertIn("state.canReview", self.sso)
+        self.assertIn("state.canPublish", self.sso)
 
     def test_backend_role_ownership_unchanged(self):
         for name in ("generate_integration_params", "autofill_integration_params",
