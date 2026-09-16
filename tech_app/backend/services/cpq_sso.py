@@ -43,6 +43,11 @@ ROLE_MAP = {
     # 有了它，CPQ_MANAGER_FULL_TECH=false 就能让工艺经理回到"只写不审不发"，
     # 3.1 → 3.2 → 3.3 的三级职责分离才恢复。
     "tech_director": "process_director",
+    # 系统管理员：用户管理、角色授予、账号停用。技术工艺侧对应 auth.ROLES 里的
+    # admin（全权 + 用户管理），与 CPQ 的 admin 一一对应。
+    "admin": "admin",
+    # 只读用户：CPQ 自助注册的落地角色，也是认不出来时的安全默认（= FALLBACK_ROLE）。
+    "viewer": "viewer",
 }
 FALLBACK_ROLE = "viewer"
 
@@ -138,6 +143,9 @@ def to_tech_user(cpq_user: dict) -> dict:
         "requested_role": ROLE_MAP.get(role_code, FALLBACK_ROLE),
         "created_at": cpq_user.get("created_at"),
         "is_system": False,
+        # 用户主键口径统一成 CPQ 的 user_id（出接口是字符串）：前端要按它指派到人，
+        # 技术工艺自己的业务字段下沉到 user_id 是下一批的事。
+        "user_id": cpq_user.get("user_id"),
         # 留痕：出问题时要能看出这个身份是从 CPQ 哪个角色映射来的。
         "source": "cpq",
         "cpq_role_code": role_code,

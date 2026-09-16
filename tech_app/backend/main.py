@@ -64,7 +64,7 @@ from .models.workflow import (
     WorkflowAction, WorkflowReview,
 )
 from .services import (
-    acting_user, user_llm,
+    acting_user, cpq_auth_client, user_llm,
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
@@ -385,6 +385,9 @@ async def _cpq_sso_guard(request: Request) -> None:
         raise HTTPException(503, f"登录服务暂不可用，无法校验身份：{exc}") from exc
     if not user:
         raise HTTPException(401, "请先在配置报价 CPQ 中登录")
+    # 账号级模型与密钥也只有 PG 一处：这里把**用户自己的票**交给 cpq_auth_client，
+    # 「我的模型与密钥」这类本人接口才能以本人身份回调 CPQ（写操作走内部通道）。
+    cpq_auth_client.set_request_token(_sso_token(request))
     request.state.user = _bind_acting_user(user)
 
 
@@ -509,6 +512,16 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(cpq_auth_client.CpqAuthUnavailable)
+async def cpq_auth_unavailable_handler(_request: Request, exc: Exception):
+    """账号级设置的来源（配置报价 CPQ）不可用：明确 503。
+
+    回 401 会把在线的人当成"没登录"，回 500 又像是本服务自己崩了 —— 都不是实情。
+    """
+    return JSONResponse(status_code=503, content={
+        "detail": f"登录服务暂不可用，暂时读不到账号级模型与密钥：{exc}"})
+
+
 @app.middleware("http")
 async def project_id_guard(request: Request, call_next):
     if not _valid_project_path(request.url.path):
@@ -536,16 +549,14 @@ def _startup_housekeeping():
         # 详见 auth.enable_cpq_single_manager 的注释（含职责分离的代价）。
         auth.enable_cpq_single_manager()
     if AUTH_ENABLED and not CPQ_SSO_ENABLED:
-        # Do not silently expose an authenticated deployment with the source-code
-        # fallback secret. Existing installations with a custom secret keep their
-        # original behaviour; new deployments get a clear, actionable failure.
-        if AUTH_SECRET == "dev-insecure-secret-change-me":
-            raise RuntimeError("开启 AUTH_ENABLED 时必须在 .env 设置随机 AUTH_SECRET")
-        if not store.list_users() and DEFAULT_ADMIN_PASSWORD == "admin123":
-            raise RuntimeError("首次开启 AUTH_ENABLED 时必须在 .env 设置非默认 DEFAULT_ADMIN_PASSWORD")
-        auth.ensure_default_admin(store)
-        auth.ensure_system_user(store)
-        store.backfill_legacy_mine_owner(DEFAULT_ADMIN_USER)
+        # 用户数据已经只有 PG 一处（配置报价 CPQ 的 cpq_wf），技术工艺的本地账号库
+        # 已退役：留着 AUTH_ENABLED=true + CPQ_SSO=false 这条路，只能得到一个
+        # "登录页永远密码错误"的假象。当场说清楚，并给出两条出路。
+        raise RuntimeError(
+            "AUTH_ENABLED=true 且 CPQ_SSO=false：用户数据已统一到配置报价 CPQ 的 "
+            "Postgres，技术工艺不再有本地账号库，这条登录路径没有用户来源。"
+            "两条出路：① 设 CPQ_SSO=true 并配置 CPQ_AUTH_BASE_URL 指向配置报价 CPQ"
+            "（推荐）；② 本地开发设 AUTH_ENABLED=false。")
     # ThreadPoolExecutor 任务只在当前进程中存在。服务重启后明确结束旧任务，
     # 使轮询端能恢复操作，而不是永久停留在“处理中”。
     if TASK_RECOVER_ON_START:
@@ -553,14 +564,29 @@ def _startup_housekeeping():
 
 
 def _reject_local_login() -> None:
-    """SSO 模式下本地登录必须明确拒绝，不能"看着能用"。
+    """本地登录必须明确拒绝，不能"看着能用"。
 
-    放着不管的话它照样发一张 tech_app 令牌，而 SSO 守卫只认 CPQ 的票 —— 用户会看到
-    "登录成功"然后每个接口都 401，无从判断是密码错了还是别的。
+    SSO 模式下放着不管的话它照样发一张 tech_app 令牌，而 SSO 守卫只认 CPQ 的票 ——
+    用户会看到"登录成功"然后每个接口都 401，无从判断是密码错了还是别的。
+
+    独立模式（CPQ_SSO=false）同样拒绝：本地账号库已退役，用户数据只剩 PG 一处，
+    再让它"看起来能登录"只会得到一个永远密码错误的登录框。路由保留（前端还在引用），
+    但入口一律指路配置报价 CPQ。
     """
     if CPQ_SSO_ENABLED:
         raise HTTPException(
             409, "技术工艺已接入配置报价 CPQ 的统一登录，请在 CPQ 中以工艺经理身份登录")
+    raise HTTPException(
+        409, "技术工艺的账号与角色已统一在配置报价 CPQ 中维护，本机不再保存用户数据；"
+             "请在 CPQ 里登录（本地开发请设 AUTH_ENABLED=false）。")
+
+
+def _users_moved_to_cpq() -> None:
+    """用户与权限的路由保留，但明确 409 指路 —— 不允许再回本地用户数据。"""
+    raise HTTPException(
+        409, "用户与权限在配置报价 CPQ 中维护：请到 CPQ 的「用户管理」里建号、改角色、"
+             "停用账号或重置口令（技术工艺不再保存本地账号；存量账号见 "
+             "scripts/migrate_users_to_pg.py）。")
 
 
 @app.post("/api/login")
@@ -610,6 +636,9 @@ def whoami(user: dict = Depends(current_user)):
         "sso": {
             "enabled": CPQ_SSO_ENABLED,
             "provider": "配置报价 CPQ",
+            # 前端要按 user_id 管账号（改角色 / 停用 / 重置口令都在 CPQ 的
+            # /auth/users/{user_id} 上），username 只作登录名与展示。
+            "user_id": (user or {}).get("user_id") or (user or {}).get("cpq_user_id") or "",
             # 登录提示要跟开关一致：全权模式下工艺经理一个人做完，关掉之后 3.2 审核 /
             # 3.3 发布归「工艺技术总监」，再声称"只能工艺经理使用"会把人挡在门外。
             "required_role_name": "工艺经理" if CPQ_MANAGER_FULL_TECH else "工艺技术总监",
@@ -633,57 +662,38 @@ def whoami(user: dict = Depends(current_user)):
 
 @app.put("/api/me")
 def update_my_profile(body: UpdateMyProfile, user: dict = Depends(current_user)):
-    username = user.get("username", "")
-    saved = store.get_user(username)
-    if not saved:
-        raise HTTPException(404, "用户不存在")
+    """改本人的显示名 / 密码。用户数据只剩 PG 一处，改动转发给配置报价 CPQ。"""
+    if not CPQ_SSO_ENABLED:
+        raise HTTPException(
+            409, "账号资料在配置报价 CPQ 中维护：请在 CPQ 里改显示名与密码"
+                 "（本地开发模式没有用户来源，不签发技术工艺自己的令牌）。")
     display_name = body.display_name.strip()
     if display_name:
-        saved["display_name"] = display_name
+        cpq_auth_client.update_profile(display_name)
     if body.new_password:
-        if not body.current_password or not auth.verify_password(body.current_password, saved.get("password_hash", "")):
-            raise HTTPException(400, "当前密码不正确")
-        if len(body.new_password) < 8:
-            raise HTTPException(400, "新密码至少需要 8 位")
-        saved["password_hash"] = auth.hash_password(body.new_password)
-    store.save_user(username, saved)
-    public = auth.public_user(saved)
-    return {"user": public, "token": auth.make_token(public["username"], public["role"])}
+        if not body.current_password:
+            raise HTTPException(400, "请输入当前密码")
+        cpq_auth_client.change_password(body.current_password, body.new_password)
+    profile = dict(user)
+    if display_name:
+        profile["display_name"] = display_name
+    return {"user": profile, "message": "资料已更新（以配置报价 CPQ 的账号为准）"}
 
 
 @app.get("/api/users")
 def list_users_ep(user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    return {"users": [auth.public_user(u) for u in store.list_users()]}
+    # 路由保留（前端仍在引用），但用户数据只在 CPQ 一处：不允许再回本地账号。
+    _users_moved_to_cpq()
 
 
 @app.post("/api/users")
 def create_user_ep(body: NewUser, user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    username = _valid_username(body.username)
-    if body.role not in auth.ROLES:
-        raise HTTPException(400, f"非法角色,可选: {', '.join(auth.ROLES)}")
-    if store.get_user(username):
-        raise HTTPException(409, "用户名已存在")
-    rec = auth.make_user(username, body.password, body.role, body.display_name)
-    store.save_user(rec["username"], rec)
-    return auth.public_user(rec)
+    _users_moved_to_cpq()
 
 
 @app.put("/api/users/{username}/role")
 def update_user_role_ep(username: str, body: UpdateUserRole, user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    if body.role not in auth.ROLES or body.role == "admin":
-        raise HTTPException(400, "仅可授予业务角色；管理员角色不可通过此接口授予")
-    target = store.get_user(username)
-    if not target:
-        raise HTTPException(404, "用户不存在")
-    if target.get("is_system"):
-        raise HTTPException(400, "system 为历史项目归档账号，不能修改角色")
-    target["role"] = body.role
-    target["requested_role"] = body.role
-    store.save_user(username, target)
-    return {"user": auth.public_user(target)}
+    _users_moved_to_cpq()
 
 
 # --------------------------------------------------------------------------- #

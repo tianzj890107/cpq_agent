@@ -15,9 +15,11 @@
   · 当前模型不支持图像时如实报错（并带上实际模型名），不静默降级、不另设
         "多模态模型"绕开统一要求；
   · 【账号级覆盖】全局之上还有一层可选的"每个账号自己的模型 / 自己的 Key"
-        （services/user_llm.py，落 DATA_DIR/_user_llm.json）。优先级是
-        「账号 → 全局 → 环境变量」，缺项一律回落全局；Temperature / 最大 Tokens /
-        深度思考仍只有全局一份。发起账号由 services/acting_user.py 的上下文带入。
+        （services/user_llm.py -> services/cpq_auth_client.py -> CPQ 的
+        /auth/my/llm，密文落 Postgres）。优先级是「账号 → 全局 → 环境变量」，
+        缺项一律回落全局；Temperature / 最大 Tokens / 深度思考仍只有全局一份。
+        发起账号由 services/acting_user.py 的上下文带入；没有配置 CPQ 通道时
+        客户端如实返回"没有账号级设置"（见 cpq_auth_client._configured）。
 
 密钥安全：Key 只从共享配置取出来交给调用方，本模块不打印、不写日志、不回接口。
 """
@@ -162,25 +164,23 @@ def _target_user(user: str = "") -> str:
 
 
 def _account_model(user: str) -> str:
-    """该账号的个人模型；没设置或读不出来（文件损坏）都返回空串。"""
+    """该账号的个人模型；没有账号或没有记录返回空串。
+
+    读不到（CPQ 不可达且没有缓存）时**不吞异常**：那会把"读不出来"伪装成"这个人
+    没设置"，然后拿全局模型与全局 Key 去跑别人的额度。异常一路抛给 HTTP 面转 503。
+    """
     if not user:
         return ""
-    try:
-        from . import user_llm
-        return str((user_llm.get(user) or {}).get("model") or "").strip()
-    except Exception:                                   # pragma: no cover - 读盘异常
-        return ""
+    from . import user_llm
+    return str((user_llm.get(user) or {}).get("model") or "").strip()
 
 
 def _account_key(user: str, provider: str) -> str:
-    """该账号在某 provider 的个人 Key；没有则空串。"""
+    """该账号在某 provider 的个人 Key；没有账号或没有记录返回空串（同上，不吞异常）。"""
     if not user:
         return ""
-    try:
-        from . import user_llm
-        return user_llm.personal_key(user, provider)
-    except Exception:                                   # pragma: no cover - 读盘异常
-        return ""
+    from . import user_llm
+    return user_llm.personal_key(user, provider)
 
 
 def _model_and_source(user: str) -> tuple[str, str]:

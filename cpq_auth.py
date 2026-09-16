@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import cpq_db
 
@@ -41,6 +44,12 @@ ROLES = {
     # 就不成立。角色只是本字典的一个取值（role_code 是 varchar(32)、无 CHECK 约束），
     # 所以新增它不需要任何 DDL / 迁移。
     "tech_director": "工艺技术总监",
+    # 系统管理员：用户管理、角色授予、停用账号、重置口令（/auth/users 那一组）。
+    # 账号数据统一到 PG 之后，"谁批角色申请"这一问必须有人回答，否则自助注册进来的
+    # 只读账号永远升不了级。
+    "admin": "系统管理员",
+    # 自助注册的落地角色。注册只给只读，业务角色由管理员授予（见 /auth/register）。
+    "viewer": "只读用户",
 }
 
 SESSION_DAYS = int(os.getenv("CPQ_SESSION_DAYS", "7"))
@@ -154,6 +163,21 @@ _DDL = [
             expires_at  timestamptz NOT NULL,
             ip          varchar(45)
         )""",
+    # 增量列：老库上 CREATE TABLE IF NOT EXISTS 不会补列，必须显式 ALTER（幂等）。
+    # requested_role = 注册时申请的业务角色；is_system = 历史归档账号（不可登录、
+    # 不可改角色）。status 取值 active / disabled / archived，不加 CHECK 约束 ——
+    # 角色与状态都是字典取值，加取值就不该改 schema。
+    f"ALTER TABLE {WF_SCHEMA}.cpq_wf_user ADD COLUMN IF NOT EXISTS requested_role varchar(32)",
+    f"ALTER TABLE {WF_SCHEMA}.cpq_wf_user ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false",
+    # 账号级模型与密钥：密文存这里，明文只从内部通道/本人接口出。user_id 既是主键
+    # 也是外键 —— 账号删了，设置跟着删，不留孤儿。
+    f"""CREATE TABLE IF NOT EXISTS {WF_SCHEMA}.cpq_wf_user_llm_setting (
+            user_id      bigint      PRIMARY KEY
+                         REFERENCES {WF_SCHEMA}.cpq_wf_user(user_id) ON DELETE CASCADE,
+            model_cipher text,
+            keys_cipher  text,
+            updated_at   timestamptz NOT NULL DEFAULT now()
+        )""",
     f"CREATE INDEX IF NOT EXISTS idx_wf_session_user ON {WF_SCHEMA}.cpq_wf_login_session(user_id)",
 ]
 
@@ -182,7 +206,8 @@ def backend_info() -> dict:
 # 内部：行 -> dict
 # ---------------------------------------------------------------------------
 _USER_COLS = ("user_id", "username", "display_name", "role_code",
-              "email", "status", "last_login_at", "created_at")
+              "email", "status", "last_login_at", "created_at",
+              "requested_role", "is_system")
 
 
 def _user_row(row) -> dict:
@@ -191,6 +216,8 @@ def _user_row(row) -> dict:
     d = dict(zip(_USER_COLS, row))
     d["user_id"] = str(d["user_id"])       # 雪花 ID 超 JS 安全整数，统一转字符串
     d["role_name"] = ROLES.get(d["role_code"], d["role_code"])
+    d["requested_role"] = str(d.get("requested_role") or "")
+    d["is_system"] = bool(d.get("is_system"))
     for k in ("last_login_at", "created_at"):
         v = d.get(k)
         d[k] = v.isoformat() if hasattr(v, "isoformat") else (v or None)
@@ -201,15 +228,24 @@ def _new_user_id(conn) -> int:
     return cpq_db.snow_next_id(conn)
 
 
+def _uid(user_id) -> int:
+    """出接口是字符串（雪花 ID 超 JS 安全整数），回库统一转 int。"""
+    try:
+        return int(str(user_id).strip())
+    except (TypeError, ValueError):
+        raise AuthError("用户不存在")
+
+
 # ---------------------------------------------------------------------------
 # 对外能力：注册 / 登录 / 登出 / 当前用户
 # ---------------------------------------------------------------------------
 def register(username: str, password: str, display_name: str,
-             role_code: str, email: str = "") -> dict:
+             role_code: str, email: str = "", requested_role: str = "") -> dict:
     """注册写入 cpq_wf.cpq_wf_user。"""
     username = (username or "").strip()
     display_name = (display_name or "").strip() or username
     email = (email or "").strip()
+    requested_role = (requested_role or "").strip()
     if not username or len(username) < 2:
         raise AuthError("登录名至少 2 个字符")
     if not password or len(password) < 6:
@@ -227,10 +263,10 @@ def register(username: str, password: str, display_name: str,
             now = _now()
             _exec(conn,
                   "INSERT INTO cpq_wf_user (user_id, username, display_name, password_hash,"
-                  " role_code, email, status, created_at, updated_at)"
-                  " VALUES (%s,%s,%s,%s,%s,%s,'active',%s,%s)",
+                  " role_code, email, status, created_at, updated_at, requested_role, is_system)"
+                  " VALUES (%s,%s,%s,%s,%s,%s,'active',%s,%s,%s,false)",
                   (uid, username, display_name, hash_password(password),
-                   role_code, email or None, _ts(now), _ts(now)))
+                   role_code, email or None, _ts(now), _ts(now), requested_role or None))
             cur = _exec(conn, f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE user_id = %s", (uid,))
             return _user_row(cur.fetchone())
         finally:
@@ -309,17 +345,247 @@ def whoami(token: str) -> dict:
         conn.close()
 
 
-def list_users(role_code: str = "") -> list:
-    """按角色列出启用中的用户（供「按角色发送任务」使用）。"""
+def list_users(role_code: str = "", status: str = "") -> list:
+    """按角色 / 状态列出用户（用户管理页与「按角色发送任务」共用）。
+
+    - role_code 为空 = 不按角色过滤；指定时只回该角色。
+    - status 为空 = 沿用既有口径，只看启用中的账号（派发任务只发给能干活的人）；
+      显式给 status（含 disabled / archived）才按它过滤 —— 停用与归档账号要能从
+      用户管理里翻出来。
+    """
+    role_code = (role_code or "").strip()
+    status = (status or "").strip()
     conn = _connect()
     try:
-        sql = f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE status = 'active'"
-        args = ()
+        sql = f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE true"
+        args: tuple = ()
+        if status:
+            sql += " AND status = %s"
+            args = args + (status,)
+        else:
+            sql += " AND status = 'active'"
         if role_code:
             sql += " AND role_code = %s"
-            args = (role_code,)
+            args = args + (role_code,)
         sql += " ORDER BY created_at"
         cur = _exec(conn, sql, args)
         return [_user_row(r) for r in cur.fetchall()]
     finally:
         conn.close()
+
+
+def find_user(username: str) -> Optional[dict]:
+    """按登录名精确取一个账号（含停用/归档），不存在返回 None。"""
+    username = (username or "").strip()
+    if not username:
+        return None
+    conn = _connect()
+    try:
+        cur = _exec(conn, f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE username = %s",
+                    (username,))
+        return _user_row(cur.fetchone())
+    finally:
+        conn.close()
+
+
+def create_user(username: str, password: str, display_name: str, role_code: str,
+                email: str = "", requested_role: str = "") -> dict:
+    """管理员建号：角色直接授予，不走自助注册那条只读落地。"""
+    username = (username or "").strip()
+    if role_code not in ROLES:
+        raise AuthError("请选择有效角色")
+    return register(username, password, display_name, role_code, email,
+                    requested_role=requested_role)
+
+
+def update_user(user_id, patch: Optional[dict] = None) -> dict:
+    """按 **user_id** 改一个账号（display_name / email / status / role_code / requested_role）。
+
+    is_system=true 的历史归档账号不允许改角色（与既有"归档账号不能改角色"同一约束）。
+    作用对象永远是调用方给的 user_id：路由层必须用路径里的那个，绝不能被请求体顶掉。
+    """
+    uid = _uid(user_id)
+    patch = dict(patch or {})
+    fields = ("display_name", "email", "status", "role_code", "requested_role")
+    updates = {k: patch[k] for k in fields if k in patch}
+    if not updates:
+        raise AuthError("没有需要修改的字段")
+    if "role_code" in updates and updates["role_code"] not in ROLES:
+        raise AuthError("请选择有效角色")
+    if "status" in updates and str(updates["status"]) not in ("active", "disabled", "archived"):
+        raise AuthError("账号状态只能是 active / disabled / archived")
+    with _lock:
+        conn = _connect()
+        try:
+            cur = _exec(conn, f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE user_id = %s", (uid,))
+            row = _user_row(cur.fetchone())
+            if not row:
+                raise AuthError("用户不存在")
+            if row.get("is_system") and "role_code" in updates \
+                    and str(updates["role_code"]) != str(row.get("role_code")):
+                raise AuthError("system 为历史项目归档账号，不能修改角色")
+            sets, args = [], []
+            for key, value in updates.items():
+                value = str(value or "").strip()
+                if key == "email":
+                    value = value or None
+                if key == "requested_role" and not value:
+                    value = None
+                sets.append(f"{key} = %s")
+                args.append(value)
+            sets.append("updated_at = %s")
+            args.append(_ts(_now()))
+            args.append(uid)
+            _exec(conn, f"UPDATE cpq_wf_user SET {', '.join(sets)} WHERE user_id = %s", tuple(args))
+            cur = _exec(conn, f"SELECT {', '.join(_USER_COLS)} FROM cpq_wf_user WHERE user_id = %s", (uid,))
+            return _user_row(cur.fetchone())
+        finally:
+            conn.close()
+
+
+def set_password(user_id, password: str) -> None:
+    """管理员重置口令：不需要旧密码，但要过长度底线。"""
+    uid = _uid(user_id)
+    password = str(password or "")
+    if len(password) < 6:
+        raise AuthError("密码至少 6 位")
+    with _lock:
+        conn = _connect()
+        try:
+            cur = _exec(conn,
+                        "UPDATE cpq_wf_user SET password_hash = %s, updated_at = %s WHERE user_id = %s",
+                        (hash_password(password), _ts(_now()), uid))
+            if not getattr(cur, "rowcount", 0):
+                raise AuthError("用户不存在")
+        finally:
+            conn.close()
+
+
+def change_password(user_id, current_password: str, new_password: str) -> None:
+    """本人改口令：必须先验旧口令（错 → AuthError），新口令 ≥ 8 位。"""
+    uid = _uid(user_id)
+    current_password = str(current_password or "")
+    new_password = str(new_password or "")
+    if len(new_password) < 8:
+        raise AuthError("新密码至少需要 8 位")
+    with _lock:
+        conn = _connect()
+        try:
+            cur = _exec(conn, "SELECT password_hash FROM cpq_wf_user WHERE user_id = %s", (uid,))
+            row = cur.fetchone()
+            if not row:
+                raise AuthError("用户不存在")
+            if not verify_password(current_password, row[0] or ""):
+                raise AuthError("当前密码不正确")
+            _exec(conn,
+                  "UPDATE cpq_wf_user SET password_hash = %s, updated_at = %s WHERE user_id = %s",
+                  (hash_password(new_password), _ts(_now()), uid))
+        finally:
+            conn.close()
+
+
+def get_user_llm(user_id) -> dict:
+    """账号级模型与密钥（**明文**，只供内部通道与本人接口）。
+
+    没有记录 → {"model": "", "api_keys": {}}。密文解不开时明确抛错 —— 静默当成
+    "没设置"会让人以为设置丢了，然后拿全局 Key 去跑。
+    """
+    import cpq_user_secrets
+
+    uid = _uid(user_id)
+    conn = _connect()
+    try:
+        cur = _exec(conn,
+                    f"SELECT model_cipher, keys_cipher FROM {WF_SCHEMA}.cpq_wf_user_llm_setting"
+                    " WHERE user_id = %s", (uid,))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {"model": "", "api_keys": {}}
+    model = str(cpq_user_secrets.open(row[0]) or "").strip() if row[0] else ""
+    keys: dict = {}
+    if row[1]:
+        try:
+            raw = json.loads(cpq_user_secrets.open(row[1]) or "{}")
+        except ValueError:
+            raw = {}
+        if isinstance(raw, dict):
+            keys = {str(p): str(k) for p, k in raw.items() if str(k or "").strip()}
+    return {"model": model, "api_keys": keys}
+
+
+def set_user_llm(user_id, model=None, provider=None, key=None) -> dict:
+    """写账号级模型 / 密钥。`None` = 该项不动；空串 = 清除；写库前一律 seal()。"""
+    import cpq_user_secrets
+
+    uid = _uid(user_id)
+    with _lock:
+        current = get_user_llm(uid)
+        model_plain = str(current.get("model") or "")
+        keys_plain = dict(current.get("api_keys") or {})
+        if model is not None:
+            model_plain = str(model or "").strip()
+        if provider:
+            name = str(provider).strip()
+            value = str(key or "").strip()
+            if value:
+                keys_plain[name] = value
+            else:
+                keys_plain.pop(name, None)
+        model_cipher = cpq_user_secrets.seal(model_plain) if model_plain else None
+        keys_cipher = (cpq_user_secrets.seal(json.dumps(keys_plain, ensure_ascii=False))
+                       if keys_plain else None)
+        conn = _connect()
+        try:
+            if model_cipher is None and keys_cipher is None:
+                _exec(conn,
+                      f"DELETE FROM {WF_SCHEMA}.cpq_wf_user_llm_setting WHERE user_id = %s", (uid,))
+            else:
+                _exec(conn,
+                      f"INSERT INTO {WF_SCHEMA}.cpq_wf_user_llm_setting"
+                      " (user_id, model_cipher, keys_cipher, updated_at)"
+                      " VALUES (%s,%s,%s,%s)"
+                      " ON CONFLICT (user_id) DO UPDATE SET model_cipher = EXCLUDED.model_cipher,"
+                      " keys_cipher = EXCLUDED.keys_cipher, updated_at = EXCLUDED.updated_at",
+                      (uid, model_cipher, keys_cipher, _ts(_now())))
+        finally:
+            conn.close()
+    return {"model": model_plain, "api_keys": keys_plain}
+
+
+def delete_user_llm_key(user_id, provider: str) -> None:
+    """删除账号在某个 provider 的个人 Key（provider 为空就什么都不做）。"""
+    _uid(user_id)
+    provider = str(provider or "").strip()
+    if not provider:
+        return
+    set_user_llm(user_id, provider=provider, key="")
+
+
+def bootstrap_admin() -> Optional[str]:
+    """首个管理员引导：**只在用户表为空**且环境变量配好时才建号，否则只打印提示。
+
+    自助注册收紧到 viewer 之后，"谁来当第一个管理员"必须有答案：先手工设
+    CPQ_ADMIN_USER / CPQ_ADMIN_PASSWORD 再启动，本函数就会建出这个 admin。
+    不自动建号、不让启动失败 —— 没配就打印一句可操作的提示。
+    """
+    conn = _connect()
+    try:
+        cur = _exec(conn, "SELECT 1 FROM cpq_wf_user LIMIT 1")
+        empty = cur.fetchone() is None
+    finally:
+        conn.close()
+    if not empty:
+        return None
+    username = (os.getenv("CPQ_ADMIN_USER") or "").strip()
+    password = os.getenv("CPQ_ADMIN_PASSWORD") or ""
+    weak = {"admin123", "123456", "12345678", "password", "admin", "admin1234"}
+    if not username or len(password) < 8 or password in weak:
+        print("[cpq-auth] 用户表为空：请在 .env 设置 CPQ_ADMIN_USER 与 CPQ_ADMIN_PASSWORD"
+              "（≥8 位、非默认弱口令）后重启，即自动建出首个系统管理员；"
+              "或由现有管理员在用户管理里建号。", file=sys.stderr)
+        return None
+    created = create_user(username, password, "系统管理员", "admin")
+    print(f"[cpq-auth] 已按环境变量创建首个系统管理员：{created.get('username')}", file=sys.stderr)
+    return str(created.get("username") or "")

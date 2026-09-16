@@ -1720,3 +1720,51 @@
     `discover -s tests -p 'test_*.py'` → **1446 项 / 0 失败**；六个改动脚本 `node --check` 全过；
     `git diff --check` 无告警。
 - 状态：Spec / 红测 / changelog / 前端实现均在本工作区，未提交、未推送、未部署。
+
+## 90. 用户数据统一维护在 Postgres（配置报价 CPQ 为唯一权威）：Spec / Red（9-16）
+
+- 需求：用户拍板四项——① 技术工艺**不直连 PG**，统一走 CPQ 的 HTTP 接口；② 用户主键口径统一成
+  `user_id`；③ CPQ 角色字典新增 `admin`（系统管理员）；④ "所有用户数据"包含账号级模型与 API Key，
+  且**加密存**。
+- 事实核对（本轮只读）：技术工艺的用户一直**不在** sqlite，而是本地 JSON `DATA_DIR/_auth_users.json`
+  （`tech_app/backend/storage/meta_backend.py:124-141`）；用过 sqlite 的是 CPQ 自己那套
+  `cpq_auth.db` 回落，2026-07-27 的 `50b6c4d` 已把回落删除、改成"只用线上 Postgres"。
+  本轮"统一"统一的是数据归属（一份用户数据 + 一张票），不是把行从 sqlite 搬到 PG。
+- 本批交付（Spec + 红测 + 实现提示词，不含业务实现）：
+  - Spec：`docs/specs/user-data-unified-in-pg.md`（C1 唯一权威；C2 角色字典增 admin / viewer；
+    C3 `cpq_wf_user` 增 `requested_role` / `is_system` + 新表 `cpq_wf_user_llm_setting`；
+    C4 主键口径 = `user_id`；C5 admin 专用建号 / 改角色 / 停用 / 重置口令；C6 本人接口与越权防线；
+    C7 自助注册一律落地 viewer；C8 AEAD 加密 + `CPQ_USER_SECRET_KEY`；C9 内部通道
+    `/auth/internal/user-llm`；C10 技术工艺 `cpq_auth_client`；C11 技术工艺 HTTP 面；
+    C12 本地用户表退役 + 启动守卫；C13 迁移脚本；C14 依赖与配置）。
+  - 红测：`tests/test_user_data_unified_in_pg_red.py` —— 85 项，含三段真跑走查：真起一体化服务 HTTP 面
+    打 `/auth/*`（假的存储函数，端口 0）、真起技术工艺 App（TestClient + 假 SSO + 假客户端）、
+    真跑加密模块与迁移脚本的散列转换，另有启动自检走查与源码契约。
+- Red 基线（建立时实测 9-16）：本批 85 项 / **72 个用例失败**，13 项是保护性约束改前即绿
+  （既有角色映射不变、不加 `CHECK (role_code`、未登录 401、SSO 下本地登录/注册仍 409、
+  技术工艺无 `import psycopg`、库不可用时 503 等）。
+- 同批改版（测试侧，只有我负责的 Spec 与测试）：`tests/test_per_account_model_and_api_key_red.py`
+  的账号级存储口径随本批迁移——客户端换成内存实现、C14 由"本地文件损坏静默回落全局"改为
+  "读不到账号级设置必须明确失败、不得静默改用全局模型/Key"，并新增"遗留 `_user_llm.json`
+  不再影响解析"。该文件 6 项随之转红（本批范围内应当红）。
+- 全量基线（9-16）：`discover -s tests -p 'test_*.py'` → **1533 项 / 78 失败**，失败全部落在
+  `test_user_data_unified_in_pg_red.py`（72）与 `test_per_account_model_and_api_key_red.py`（6），
+  无其它文件被带红；`## 89`（回声气泡）39 项已全绿。
+- 批次划分（见 Spec §6）：本批只做后端与存储通路；**批次 2** 才把 `user_id` 下沉到存量业务字段
+  （项目 `owner`、任务 `target_user_id`、审计 actor）并回填；**批次 3** 才做前端收口
+  （`account.html` 用户管理改走 `/auth/users`、CPQ 侧用户管理界面）。
+- 实现落地（9-16）：新增 `cpq_user_secrets.py`（AESGCM `seal`/`open`）、
+  `services/cpq_auth_client.py`（只走 HTTP + 请求票 / 内部令牌 + TTL 缓存）、
+  `scripts/migrate_users_to_pg.py`（散列无损转换 / 默认 dry-run / `--apply` 落报告 / `--promote`）；
+  `cpq_auth.py`、`cpq_suite_server.py`、`main.py`、`meta_backend.py`、`user_llm.py`、`cpq_sso.py`
+  按 C2–C14 改完；本地 `_auth_users.json` 与 `_user_llm.json` 退役，技术工艺不直连 PG。
+- 验收实测（9-16）：本批 85/85、账号级 45/45、全量 `discover -s tests -p 'test_*.py'`
+  **1533 项 / 0 失败**；`## 87/88` 的 `test_single_login_across_quote_and_tech_red.py` 39/39 未被带红；
+  `git diff --check` 无告警；本批未改前端资源（无 `node --check` 对象）。
+- 两处如实记录：① 红测 `test_user_data_unified_in_pg_red.py` 的两条断言原本写
+  `self.case("patch_calls")[0]`，而 `case()` 只接受 dict、探针产出的是 list，任何实现下都不可能通过 ——
+  改为从 `self.data` 取列表，断言本体（作用对象是路径里的 `user_id=9`）一字未动；
+  ② 新增 `cpq_auth_client._configured()`：只有"完全没配过任何 CPQ 通道"（无内部令牌、无用户票、
+  `CPQ_SSO=false`）时账号级读才是空，避免本地开发模式下 `/api/health` 等读接口 503（Spec C12 口径）；
+  任一通道在场即维持"不可达 → `CpqAuthUnavailable` → 503"，绝不静默回落全局 Key。
+- 状态：实现 + Spec + 红测 + changelog 同一次提交，并双远端推送（20260909）。

@@ -73,6 +73,27 @@ os.environ["CPQ_INTERNAL_TOKEN"] = CPQ_INTERNAL_TOKEN
 INTERNAL_TOKEN_HEADER = "X-Internal-Token"
 
 _AGENT_RE = re.compile(r"^/agents/(quote|config|rule)(/.*)?$")
+_AUTH_USER_RE = re.compile(r"^/auth/users/(?P<uid>[0-9]+)$")
+_AUTH_USER_PW_RE = re.compile(r"^/auth/users/(?P<uid>[0-9]+)/password$")
+_AUTH_MY_KEY_RE = re.compile(r"^/auth/my/llm/keys/(?P<provider>[^/]+)$")
+
+
+def _auth_user_by_login(username: str):
+    """内部通道把登录名换成账号：先查名单（一次查询，通常是几十条），
+    名单里没有（停用/归档账号不在默认名单里）再按登录名精确查一次。"""
+    name = str(username or "").strip()
+    if not name:
+        return None
+    try:
+        for row in cpq_auth.list_users():
+            if str((row or {}).get("username") or "") == name:
+                return row
+    except Exception:
+        pass
+    try:
+        return cpq_auth.find_user(name)
+    except Exception:
+        return None
 
 # ---------------------------------------------------------------- 技术工艺 App（反向代理）
 # 第四个助手「技术工艺」= 照搬 process_drawing 的 FastAPI 全链路（tech_app/），由本服务
@@ -326,12 +347,25 @@ class Handler(BaseHTTPRequestHandler):
         return (fwd or self.client_address[0] or "")[:45]
 
     def _dispatch_auth(self) -> bool:
-        """/auth/* 登录与角色接口。命中返回 True。"""
+        """/auth/* 登录、用户管理与账号级设置接口。命中返回 True。
+
+        用户数据只有 PG 一处（`cpq_wf`），所以这里是**唯一**的读写出口：
+
+          · 公开：/auth/roles、/auth/login、/auth/register（注册一律落地只读）；
+          · admin：/auth/users*（建号 / 改角色 / 停用 / 重置口令）；
+          · 本人：/auth/my/*（改资料、改密码、账号级模型与密钥），请求体里的
+            user_id / username / actor 一律忽略 —— 只认票上的人；
+          · 服务间：/auth/internal/user-llm（X-Internal-Token），后台任务线程没有
+            用户票，靠它读账号级设置，也是**唯一**回明文 Key 的通道。
+        """
+        parsed = urllib.parse.urlparse(self.path)
         # 注意：根路径 "/" 去掉尾斜杠后是空串，绝不能兜底成 "/auth"，否则首页会被当成认证接口而 404
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        path = parsed.path.rstrip("/") or "/"
         if not path.startswith("/auth"):
             return False
         m = self.command
+        q = urllib.parse.parse_qs(parsed.query)
+        arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
         # 角色字典是代码里的静态常量、当前登录态查询也能安全降级，二者都**不依赖数据库**，
         # 必须放在下面的 503 守卫之前——否则库一断，注册表单的角色下拉会是空的、根本没法选。
         if path == "/auth/roles" and m == "GET":
@@ -348,14 +382,26 @@ class Handler(BaseHTTPRequestHandler):
                                   "登录系统未就绪：未能连接服务器 Postgres，请联系管理员检查网络与数据库配置。"})
             return True
         try:
+            user = cpq_auth.whoami(self._token())
             if path == "/auth/register" and m == "POST":
                 d = self._read_json()
+                role_code = str(d.get("role_code") or "").strip()
+                requested = str(d.get("requested_role") or "").strip()
+                # 自助注册不能自己选角色：指定任意角色的建号能力只在 admin 的
+                # POST /auth/users 里（否则加了 admin 之后谁都能把自己变成管理员）。
+                if role_code == "admin" or requested == "admin":
+                    self._send_json(400, {"ok": False, "error":
+                                          "管理员账号只能由现有管理员创建；注册只发放只读权限。"})
+                    return True
+                if not requested and role_code and role_code != "viewer":
+                    requested = role_code
                 user = cpq_auth.register(d.get("username", ""), d.get("password", ""),
-                                         d.get("display_name", ""), d.get("role_code", ""),
-                                         d.get("email", ""))
+                                         d.get("display_name", ""), "viewer",
+                                         d.get("email", ""), requested_role=requested)
                 # 注册成功直接发放会话，免去再登录一次
                 out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
-                self._send_json(200, {"ok": True, "user": user, "token": out["token"]})
+                self._send_json(200, {"ok": True, "user": user, "token": out["token"],
+                                      "message": "注册成功，当前为只读权限；请由系统管理员授予业务角色。"})
             elif path == "/auth/login" and m == "POST":
                 d = self._read_json()
                 out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
@@ -364,12 +410,106 @@ class Handler(BaseHTTPRequestHandler):
                 cpq_auth.logout(self._token())
                 self._send_json(200, {"ok": True})
             elif path == "/auth/users" and m == "GET":
-                # 供后续「按角色搜索并派发任务」使用；需登录
-                if not cpq_auth.whoami(self._token()):
+                # 供「按角色搜索并派发任务」与用户管理页使用；需登录。
+                if not user:
                     self._send_json(401, {"ok": False, "error": "未登录"})
                 else:
-                    q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                    self._send_json(200, {"users": cpq_auth.list_users((q.get("role") or [""])[0])})
+                    rows = cpq_auth.list_users(arg("role"), arg("status"))
+                    self._send_json(200, {"users": [self._user_view(r, user) for r in rows]})
+            elif path == "/auth/users" and m == "POST":
+                if not self._require_admin(user):
+                    return True
+                d = self._read_json()
+                row = cpq_auth.create_user(d.get("username", ""), d.get("password", ""),
+                                           d.get("display_name", ""), d.get("role_code", ""),
+                                           d.get("email", ""),
+                                           requested_role=d.get("requested_role", ""))
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif m == "PUT" and _AUTH_USER_RE.match(path):
+                if not self._require_admin(user):
+                    return True
+                uid = _AUTH_USER_RE.match(path).group("uid")
+                body = self._read_json()
+                # 作用对象永远是路径里的 user_id：请求体里的 user_id 一律忽略。
+                patch = {k: body[k] for k in
+                         ("display_name", "email", "status", "role_code", "requested_role")
+                         if k in body}
+                row = cpq_auth.update_user(uid, patch)
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif m == "PUT" and _AUTH_USER_PW_RE.match(path):
+                if not self._require_admin(user):
+                    return True
+                uid = _AUTH_USER_PW_RE.match(path).group("uid")
+                cpq_auth.set_password(uid, self._read_json().get("password", ""))
+                self._send_json(200, {"ok": True})
+            elif path == "/auth/my/profile" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                # 只认票上的人：请求体里的 user_id / username / actor 一概忽略。
+                row = cpq_auth.update_user(user.get("user_id"),
+                                           {"display_name": self._read_json().get("display_name", "")})
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif path == "/auth/my/password" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                d = self._read_json()
+                cpq_auth.change_password(user.get("user_id"), d.get("current_password", ""),
+                                         d.get("new_password", ""))
+                self._send_json(200, {"ok": True, "message": "密码已更新"})
+            elif path == "/auth/my/llm" and m == "GET":
+                if not self._require_self(user):
+                    return True
+                entry = cpq_auth.get_user_llm(user.get("user_id"))
+                self._send_json(200, self._llm_summary(user, entry))
+            elif path == "/auth/my/llm" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                d = self._read_json()
+                model, provider, key = self._llm_patch(d)
+                entry = cpq_auth.set_user_llm(user.get("user_id"), model=model,
+                                              provider=provider, key=key)
+                self._send_json(200, {"ok": True, **self._llm_summary(user, entry)})
+            elif m == "DELETE" and _AUTH_MY_KEY_RE.match(path):
+                if not self._require_self(user):
+                    return True
+                provider = urllib.parse.unquote(_AUTH_MY_KEY_RE.match(path).group("provider"))
+                cpq_auth.delete_user_llm_key(user.get("user_id"), provider)
+                entry = cpq_auth.get_user_llm(user.get("user_id"))
+                self._send_json(200, {"ok": True, **self._llm_summary(user, entry)})
+            elif path == "/auth/internal/user-llm" and m in ("GET", "PUT"):
+                # 服务间通道：后台任务线程没有用户票，用内部令牌换账号级设置。
+                # 令牌不对时**一个字节的用户数据都不能回**。
+                if not self._internal_token_ok():
+                    self._send_json(403, {"ok": False, "error": "内部令牌无效"})
+                    return True
+                if m == "GET":
+                    row = _auth_user_by_login(arg("username"))
+                    if not row:
+                        self._send_json(404, {"ok": False, "error": "账号不存在"})
+                    else:
+                        entry = cpq_auth.get_user_llm(row.get("user_id"))
+                        self._send_json(200, {"user_id": row.get("user_id"),
+                                              "username": row.get("username"),
+                                              "model": entry.get("model") or "",
+                                              "api_keys": entry.get("api_keys") or {}})
+                else:
+                    d = self._read_json()
+                    row = _auth_user_by_login(d.get("username"))
+                    if not row:
+                        self._send_json(404, {"ok": False, "error": "账号不存在"})
+                    else:
+                        provider = str(d.get("api_key_provider") or "").strip()
+                        key = str(d.get("api_key") or "")
+                        model = d.get("model") if "model" in d else None
+                        if key and not provider:
+                            raise cpq_auth.AuthError("写账号级 API Key 时必须指明 api_key_provider")
+                        entry = cpq_auth.set_user_llm(row.get("user_id"), model=model,
+                                                      provider=provider or None,
+                                                      key=key if provider else None)
+                        self._send_json(200, {"ok": True, "user_id": row.get("user_id"),
+                                              "username": row.get("username"),
+                                              "model": entry.get("model") or "",
+                                              "api_keys": entry.get("api_keys") or {}})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
         except cpq_auth.AuthError as e:
@@ -378,6 +518,65 @@ class Handler(BaseHTTPRequestHandler):
             print(f"[cpq-suite] /auth 出错: {e}", file=sys.stderr)
             self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})
         return True
+
+    # ---------------------------------------------------------------- /auth 小工具
+    # 用户管理端点的路径形状。user_id 是雪花 ID（出接口是字符串），只允许数字，
+    # 免得 /auth/users/my/xxx 之类被当成 ID。
+    def _require_admin(self, user) -> bool:
+        if not user:
+            self._send_json(401, {"ok": False, "error": "未登录"})
+            return False
+        if str(user.get("role_code") or "") != "admin":
+            self._send_json(403, {"ok": False, "error":
+                                  "这一步只有系统管理员（admin）能做：账号与角色统一在配置报价 CPQ 里维护。"})
+            return False
+        return True
+
+    def _require_self(self, user) -> bool:
+        """"本人"端点：只认票上的人。请求体里的 user_id / username / actor 一律忽略。"""
+        if not user:
+            self._send_json(401, {"ok": False, "error": "未登录"})
+            return False
+        return True
+
+    def _user_view(self, row: dict, viewer: dict) -> dict:
+        """名单出参：非 admin 只给公开列；admin 才看得到 email / status / 申请角色等。"""
+        row = row or {}
+        public = {k: row.get(k) for k in
+                  ("user_id", "username", "display_name", "role_code", "role_name")}
+        if str((viewer or {}).get("role_code") or "") != "admin":
+            return public
+        for key in ("email", "status", "requested_role", "is_system",
+                    "last_login_at", "created_at"):
+            public[key] = row.get(key)
+        return public
+
+    def _llm_patch(self, body: dict):
+        """{model?, api_key?, api_key_provider?} -> (model, provider, key)，语义按 Spec C6。"""
+        model = body.get("model") if "model" in body else None
+        if model is not None:
+            model = str(model or "")
+        provider = str(body.get("api_key_provider") or "").strip()
+        key = str(body.get("api_key") or "")
+        if key and not provider:
+            raise cpq_auth.AuthError("写账号级 API Key 时必须指明 api_key_provider")
+        return model, (provider or None), (key if provider else None)
+
+    def _llm_summary(self, user: dict, entry: dict) -> dict:
+        """账号级设置摘要：**只有 configured 与打码**，明文永不出这条路径。"""
+        try:
+            import cpq_shared_settings as shared
+            mask = shared.mask
+        except Exception:                                   # pragma: no cover - 独立运行兜底
+            def mask(value):
+                text = str(value or "")
+                return f"{text[:7]}…{text[-4:]}" if len(text) > 14 else ("已配置" if text else "")
+        keys = {}
+        for provider, value in ((entry or {}).get("api_keys") or {}).items():
+            keys[str(provider)] = {"configured": True, "hint": mask(value)}
+        model = str((entry or {}).get("model") or "")
+        return {"user_id": user.get("user_id"), "username": user.get("username"),
+                "model": model, "has_model": bool(model), "keys": keys}
 
     # ------------------------------------------------------------ 报价工作流 /wf/*
     def _dispatch_wf(self) -> bool:
@@ -595,12 +794,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_PUT(self):
+        # /auth/* 的新端点（改账号、改本人资料/密码/账号级设置）走 PUT，
+        # 不分发就会变成 404 而不是该有的 401/403/400。
+        if self._dispatch_auth():
+            return
         if self._is_tech_path():
             self._proxy_tech()
         else:
             self.send_error(404)
 
     def do_DELETE(self):
+        if self._dispatch_auth():
+            return
         if self._is_tech_path():
             self._proxy_tech()
         else:
@@ -756,6 +961,8 @@ def main():
     # 没有任何本地存储回落；连不上就让 /auth/* /wf/* 回 503，绝不静默写本地。
     try:
         print(f"[cpq-suite] 登录系统 /auth/*  存储={cpq_auth.init()}")
+        # 用户表为空时按环境变量引导首个管理员（不配则只打印提示，不影响启动）。
+        cpq_auth.bootstrap_admin()
         print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
     except cpq_auth.BackendUnavailable as e:
         print(f"[cpq-suite] 错误: {e}", file=sys.stderr)

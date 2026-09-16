@@ -12,7 +12,9 @@
 本批要建立的契约（摘要）：
   C1 resolve() 增加"发起账号"维度：显式 user → 上下文账号 → 全局兜底；
   C2 llm_settings.effective(username) 报告生效模型与来源；
-  C3 账号级设置独立落 DATA_DIR/_user_llm.json（0600，原子写），不写全局文件；
+  C3 账号级设置独立于全局文件；【批次 ## 90 起改版】存储介质从 DATA_DIR/_user_llm.json
+     改为配置报价 CPQ 统一维护（PG 密文 + /auth/* HTTP）；本文件据此把客户端换成内存实现，
+     存储/加密本身由 tests/test_user_data_unified_in_pg_red.py 验收；
   C4 模型/provider 白名单仍只有 llm_settings 那一份；
   C5 任何 GET 只回 configured + 打码；账号之间不串号；
   C6 发起账号：HTTP 由 auth_guard 设上下文，异步任务由 tasks.submit(actor=...) 传；
@@ -110,6 +112,88 @@ cpq_shared_settings.load = lambda legacy=(): dict(GLOBAL)
 _global_saves = []
 cpq_shared_settings.save = lambda data: _global_saves.append(dict(data))
 
+# 【批次 ## 90】账号级设置不再落本地文件，统一由配置报价 CPQ 维护。本走查把这些调用
+# 换成内存实现：本文件验的是"账号级覆盖的优先级、隔离与审计"，存储介质与加密由
+# tests/test_user_data_unified_in_pg_red.py 验收。
+import types
+
+CLIENT_CALLS = []
+CLIENT_MODE = {"mode": "ok"}
+ACCOUNT_STORE = {}
+
+client = types.ModuleType("tech_app.backend.services.cpq_auth_client")
+
+
+class CpqAuthUnavailable(RuntimeError):
+    pass
+
+
+client.CpqAuthUnavailable = CpqAuthUnavailable
+
+
+def _client_guard():
+    if CLIENT_MODE["mode"] == "down":
+        raise CpqAuthUnavailable("CPQ 不可达（走查）")
+
+
+def _mask(secret):
+    value = str(secret or "")
+    return "%s…%s" % (value[:7], value[-4:]) if len(value) > 14 else ("已配置" if value else "")
+
+
+def client_user_overrides(username):
+    _client_guard()
+    CLIENT_CALLS.append(["user_overrides", str(username)])
+    entry = ACCOUNT_STORE.get(str(username)) or {}
+    return {"model": str(entry.get("model") or ""),
+            "api_keys": {k: v for k, v in (entry.get("api_keys") or {}).items() if v}}
+
+
+def client_set_model(username, model):
+    _client_guard()
+    CLIENT_CALLS.append(["set_model", str(username), str(model)])
+    entry = dict(ACCOUNT_STORE.get(str(username)) or {})
+    if str(model or "").strip():
+        entry["model"] = str(model)
+    else:
+        entry.pop("model", None)
+    ACCOUNT_STORE[str(username)] = entry
+    return client_user_overrides(username)
+
+
+def client_set_key(username, provider, key):
+    _client_guard()
+    CLIENT_CALLS.append(["set_key", str(username), str(provider), str(key)])
+    entry = dict(ACCOUNT_STORE.get(str(username)) or {})
+    keys = dict(entry.get("api_keys") or {})
+    if str(key or "").strip():
+        keys[str(provider)] = str(key)
+    else:
+        keys.pop(str(provider), None)
+    entry["api_keys"] = keys
+    ACCOUNT_STORE[str(username)] = entry
+    return client_user_overrides(username)
+
+
+def client_summary(username):
+    _client_guard()
+    CLIENT_CALLS.append(["summary", str(username)])
+    entry = ACCOUNT_STORE.get(str(username)) or {}
+    model = str(entry.get("model") or "")
+    keys = {str(prov): {"configured": True, "hint": _mask(value)}
+            for prov, value in (entry.get("api_keys") or {}).items() if value}
+    return {"model": model, "has_model": bool(model), "keys": keys}
+
+
+for _name, _fn in (("user_overrides", client_user_overrides), ("set_model", client_set_model),
+                   ("set_key", client_set_key), ("summary", client_summary),
+                   ("invalidate", lambda username="": CLIENT_CALLS.append(["invalidate", str(username)])),
+                   ("set_request_token", lambda token="": None),
+                   ("update_profile", lambda *a, **k: {}),
+                   ("change_password", lambda *a, **k: {})):
+    setattr(client, _name, _fn)
+sys.modules["tech_app.backend.services.cpq_auth_client"] = client
+
 from tech_app.backend.services import llm_settings
 from tech_app.backend.storage import store
 
@@ -151,9 +235,8 @@ if user_llm is not None:
     try:
         user_llm.set_model("alice", ACCOUNT_MODEL)
         out["alice_store_after_model"] = user_llm.get("alice")
-        out["store_path_exists"] = (pathlib.Path(data_dir) / "_user_llm.json").exists()
-        mode = (pathlib.Path(data_dir) / "_user_llm.json").stat().st_mode & 0o777
-        out["store_mode"] = oct(mode)
+        out["client_calls_after_model"] = [list(c) for c in CLIENT_CALLS]
+        out["legacy_store_file_written"] = (pathlib.Path(data_dir) / "_user_llm.json").exists()
         out["alice_summary"] = user_llm.summary("alice")
         out["bob_summary"] = user_llm.summary("bob")
         out["saved_global_configs"] = len(_global_saves)
@@ -377,19 +460,27 @@ try:
 except Exception as exc:  # noqa: BLE001
     out["session_route_probe_error"] = "%s: %s" % (type(exc).__name__, exc)
 
-# --- 10. C14 账号级文件损坏时安全降级（不许 500、不许中断对话） ---
+# --- 10. C14（## 90 改版）读不到账号级设置时必须明确失败，不许静默改用全局 ---
 try:
-    store_file = pathlib.Path(data_dir) / "_user_llm.json"
-    backup = store_file.read_bytes() if store_file.exists() else None
-    store_file.write_text("{ not json at all", encoding="utf-8")
-    out["corrupt_get"] = attempt(lambda: user_llm.get("alice"))
-    out["corrupt_summary"] = attempt(lambda: user_llm.summary("alice"))
-    out["corrupt_route"] = route("alice")
-    if backup is not None:
-        store_file.write_bytes(backup)
-    out["corrupt_restored"] = store_file.exists()
+    # 10a. 遗留的本地文件不再影响任何一次解析（换存储不丢设置靠迁移脚本，不靠继续读旧文件）
+    legacy = pathlib.Path(data_dir) / "_user_llm.json"
+    legacy.write_text(json.dumps({"users": {"alice": {"model": ACCOUNT_MODEL,
+                                                      "api_keys": {"qwen": ACCOUNT_QWEN_KEY}}}},
+                                 ensure_ascii=False), encoding="utf-8")
+    ACCOUNT_STORE.pop("alice", None)
+    out["legacy_get"] = attempt(lambda: user_llm.get("alice"))
+    out["legacy_route"] = route("alice")
+    legacy.unlink()
+
+    # 10b. 客户端不可达：明确失败，不得静默回落全局
+    ACCOUNT_STORE["alice"] = {"model": ACCOUNT_MODEL, "api_keys": {"qwen": ACCOUNT_QWEN_KEY}}
+    CLIENT_MODE["mode"] = "down"
+    out["down_get"] = attempt(lambda: user_llm.get("alice"))
+    out["down_route"] = route("alice")
+    CLIENT_MODE["mode"] = "ok"
+    out["down_restored_route"] = route("alice")
 except Exception as exc:  # noqa: BLE001
-    out["corrupt_probe_error"] = "%s: %s" % (type(exc).__name__, exc)
+    out["outage_probe_error"] = "%s: %s" % (type(exc).__name__, exc)
 
 out["global_file_after"] = (global_path.read_bytes() if global_path.exists() else b"").hex()[:64]
 out["saved_global_configs_total"] = len(_global_saves)
@@ -465,10 +556,20 @@ class AccountModelResolutionRedTest(AccountModelBase):
         self.assertTrue(self.data.get("user_llm_module") is True,
                         f"缺少账号级设置模块：{self.data.get('user_llm_module')}")
         self.assertNotIn("user_llm_probe_error", self.data, self.data.get("user_llm_probe_error"))
-        self.assertTrue(self.data.get("store_path_exists"), "账号级设置必须落在 DATA_DIR 下的文件")
-        self.assertEqual(self.data.get("store_mode"), "0o600", "账号级设置文件必须是 0600")
         self.assertEqual(self.data.get("saved_global_configs"), 0,
                          "写账号级设置不得触碰全局 cpq_settings.json")
+
+    def test_account_settings_are_stored_outside_the_assistant(self):
+        """## 90：账号级设置由配置报价 CPQ 统一维护，不再落 DATA_DIR 下的本地文件。"""
+        src = read(USER_LLM_PY) if USER_LLM_PY.exists() else ""
+        self.assertTrue(src, f"缺少 {USER_LLM_PY.relative_to(ROOT)}")
+        self.assertNotIn("_user_llm.json", src,
+                         "账号级设置不再落本地文件，改由 CPQ 统一维护（PG 密文 + /auth/*）")
+        calls = [c[0] for c in (self.data.get("client_calls_after_model") or [])]
+        self.assertIn("set_model", calls,
+                      f"写账号级模型必须转发给 cpq_auth_client，实际：{calls}")
+        self.assertFalse(self.data.get("legacy_store_file_written"),
+                         "写账号级设置不得再生成 DATA_DIR/_user_llm.json")
 
     def test_resolve_prefers_account_model_then_global(self):
         self.assertEqual(self.case("route_no_user").get("model"), "qwen3.5-plus",
@@ -639,11 +740,14 @@ class AccountModelWhitelistRedTest(AccountModelBase):
             self.assertIn(marker, src,
                           f"账号级设置必须复用 llm_settings.{marker}，不得新建第二份白名单")
 
-    def test_store_is_written_atomically(self):
+    def test_account_settings_stay_behind_the_client(self):
+        """## 90：存储搬到 CPQ 后，"原子写 + 0600"由 CPQ 侧负责；这里守的是
+        "技术工艺侧不再自己落盘"。"""
         src = read(USER_LLM_PY) if USER_LLM_PY.exists() else ""
         self.assertTrue(src, f"缺少 {USER_LLM_PY.relative_to(ROOT)}")
-        self.assertIn("os.replace", src, "账号级设置必须原子写（临时文件 + os.replace）")
-        self.assertIn("0o600", src, "账号级设置文件必须是 0600")
+        self.assertIn("cpq_auth_client", src,
+                      "账号级设置必须经 cpq_auth_client 读写（技术工艺只走 HTTP）")
+        self.assertNotIn("_user_llm.json", src, "不得再读写本地文件")
 
 
 class AccountModelSessionRouteRedTest(AccountModelBase):
@@ -705,28 +809,39 @@ class AccountModelAuditRedTest(AccountModelBase):
 
 
 class AccountModelResilienceRedTest(AccountModelBase):
-    """C14：账号级文件损坏时安全降级为"没有账号级设置"，不抛错、不中断对话。"""
+    """C14（## 90 改版）：存储搬到 CPQ 之后，读不到设置要明确失败，不得静默回落全局。"""
 
-    def test_corrupt_store_degrades_to_global(self):
-        self.assertFalse(self.data.get("corrupt_probe_error"),
-                         self.data.get("corrupt_probe_error"))
-        self.assertIn("corrupt_get", self.data,
-                      "账号级设置模块不可用：%s" % self.data.get("user_llm_module"))
-        got = self.data.get("corrupt_get")
+    def test_legacy_file_no_longer_drives_resolution(self):
+        self.assertFalse(self.data.get("outage_probe_error"),
+                         self.data.get("outage_probe_error"))
+        got = self.data.get("legacy_get")
         self.assertIsInstance(got, dict, got)
-        self.assertNotIn("error", got, f"账号级文件损坏不得抛错：{got}")
-        self.assertEqual(got.get("value"), {}, "读不出来时应当作「没有账号级设置」")
-
-    def test_corrupt_store_still_resolves_global(self):
-        route = self.data.get("corrupt_route") or {}
-        self.assertFalse(route.get("error"), route)
+        self.assertNotIn("error", got, f"读账号级设置不得因为盘上还留着旧文件而报错：{got}")
+        self.assertEqual(got.get("value"), {},
+                         "遗留的 _user_llm.json 不得再决定生效模型 —— 设置已统一存 CPQ；"
+                         "存量搬迁由 scripts/migrate_users_to_pg.py 负责")
+        route = self.data.get("legacy_route") or {}
         self.assertEqual(route.get("model"), "qwen3.5-plus",
-                         "损坏时必须回落全局模型，而不是让对话/任务报错")
+                         "旧文件不该再让 alice 用上自己的模型")
 
-    def test_corrupt_store_summary_does_not_raise(self):
-        got = self.data.get("corrupt_summary")
+    def test_outage_fails_loudly(self):
+        got = self.data.get("down_get")
         self.assertIsInstance(got, dict, got)
-        self.assertNotIn("error", got, f"损坏时 summary 也要能返回空摘要：{got}")
+        self.assertTrue(got.get("error"),
+                        f"读不到账号级设置必须明确报错，不能装作「没有设置」：{got}")
+
+    def test_outage_does_not_silently_use_the_global_model(self):
+        route = self.data.get("down_route") or {}
+        self.assertTrue(route.get("error"),
+                        f"CPQ 不可达时不得静默改用全局模型/Key（会拿别人的额度跑）：{route}")
+        self.assertNotEqual(route.get("model"), "qwen3.5-plus",
+                            "不得把全局模型当成 alice 的生效模型")
+
+    def test_recovery_resolves_again(self):
+        route = self.data.get("down_restored_route") or {}
+        self.assertFalse(route.get("error"), route)
+        self.assertEqual(route.get("model"), ACCOUNT_MODEL,
+                         "客户端恢复后必须重新按 alice 自己的模型解析")
 
 
 class AccountModelSourceRedTest(unittest.TestCase):
