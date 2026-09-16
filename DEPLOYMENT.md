@@ -39,3 +39,34 @@ CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
 `docker-compose.yml` 用 bind mount 把上述运行数据挂到容器内同一路径，容器重建、替换、重启都不会丢数据；不使用匿名 volume。Docker 守护进程异常时停止并报告，不自行重启整台主机或清理 Docker 数据。
 
 部署成功必须同时满足三个条件：`http://127.0.0.1:8010/` 返回 2xx；`http://127.0.0.1:8010/api/health` 返回 2xx；`/api/health` 的 JSON 字段 `status` 严格等于 `ok`。该接口经父服务反向代理到技术工艺 FastAPI 子服务，是子服务启动完成的就绪信号，只看首页会在子服务未启动时误报成功。容器自身也配置了同样的 healthcheck（用运行镜像自带的 Python 标准库解析 JSON，不依赖 `curl`）。达到超时仍不健康时会打印 `docker compose logs --tail=100 cpq-suite` 并非零退出，不删除旧数据、不清理 volume。
+
+## 线上实例现状（172.16.10.34，2026-09-16 只读核对）
+
+上面那套是**容器化**路径；这台机器上真正在跑的是另一条，换机器或换人前请重新核对本节。
+
+- 服务形态：**裸进程**，不走 `docker compose`。`8010` 由 `wugefei` 运行
+  `./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010`，父进程再拉起子进程
+  `tech_app_launch.py --host 127.0.0.1 --port 8012`（父进程退出会带走子进程）。
+- 代码目录：`/home/wugefei/CPQ/cpq_agent`（该目录 `origin` 指向 GitHub），当前 `4b35a25`；
+  另有 `/home/wugefei/CPQ2/cpq_agent`（带 `Dockerfile` / `docker-compose.yml`，不是当前线上实例）。
+- 本文默认目录 `/home/data/zhangzhen_home/zhangzhen/cpq_agent` 在这台机器上**不存在**；照上面那条
+  `CPQ_DEPLOY_REF=... bash scripts/deploy_server.sh` 直接执行会先失败在目录与 `origin` 校验
+  （脚本要求部署目录 `origin` 是 CPQ GitLab）。
+- 权限：`zhangzhen` 账号对上面两个目录**不可写**，`sudo` 需要密码。部署与重启必须在 `wugefei` 账号
+  （或等价授权）下进行。
+- 发布门禁：`scripts/deploy_server.sh` 要求目标 commit 是 GitLab `master` 的祖先。开发分支 `20260909`
+  上的临时验证部署**必须先合并到 `master`**（或显式改用下面裸进程路径），否则脚本会以
+  「目标不在 GitLab master 历史中」拒绝。
+
+裸进程形态的临时验证部署（**须先获得明确授权**；重启会打断在途任务）：
+
+```bash
+cd /home/wugefei/CPQ/cpq_agent
+git fetch --prune origin
+git checkout --detach "$CPQ_DEPLOY_REF"     # 例：git checkout --detach a4bd13c
+# 重启：先 `ps -o args= -p <8010 的 pid>` 把当前启动命令行原样抄下来，停掉旧进程后按同一命令行重启；
+# 不要改写参数，也不要另起第二套端口。
+curl -s http://127.0.0.1:8010/api/health   # JSON 的 status 必须严格等于 ok
+```
+
+上面那三条健康检查（首页 2xx、`/api/health` 2xx、`status == "ok"`）对裸进程这条路径同样适用。
