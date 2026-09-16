@@ -123,7 +123,7 @@ async function pollTask(taskId) {
     let t;
     try { t = await fetch(`${API}/api/projects/${PID}/tasks/${taskId}`).then(r => r.json()); }
     catch { continue; }
-    if (t.status === "succeeded") return t.result;
+    if (t.status === "succeeded" || t.status === "partial") return t.result;  // partial 也是终态
     if (t.status === "failed") throw new Error(t.error || "任务失败");
     status(`工艺拆解：${t.progress || "正在处理"}…`, true);
   }

@@ -1062,35 +1062,79 @@ $("btnDecompose").onclick = async () => {
 };
 
 // 具名函数：原 #btnGenerate 点击逻辑原样搬过来，页面按钮与「解析后自动生成 3D」共用
-// 同一份实现；回执 true/false 给自动流程判断该不该继续跑 2D。
+// 同一份实现；回执是结构化摘要（C5），自动流程按 infrastructure_ok / processable 判定。
+// 批量回执 → 结构化摘要：C5。partial 也算「基础设施正常」（有成功件就是成功），
+// 只有 HTTP 503 / 任务 failed / IR 并发变更 / 提交响应 status=failed 才是不可用。
+function batchSummary(payload) {
+  const parts = Array.isArray(payload && payload.parts) ? payload.parts : [];
+  const succeeded = parts.filter(p => p.ok).length;
+  const skipped = parts.filter(p => !p.ok && p.skipped).length;
+  const failed = parts.length - succeeded - skipped;
+  const blocked = Array.isArray(payload && payload.blocked) ? payload.blocked : [];
+  const total = Number(payload && payload.total) || parts.length;
+  const reported = Number(payload && payload.processable);
+  return {
+    infrastructure_ok: !(payload && payload.status === "failed" && !payload.task_id),
+    total,
+    processable: Number.isInteger(reported) ? reported : succeeded + failed,
+    succeeded, failed, skipped, blocked,
+  };
+}
+
 async function generateGeometry() {
-  if (!currentProject) return false;
+  if (!currentProject) {
+    return { infrastructure_ok: false, total: 0, processable: 0,
+             succeeded: 0, failed: 0, skipped: 0, blocked: [] };
+  }
   status("CAD 内核正在生成几何(STEP/STL)并校验...", true);
   try {
-    currentGeometry = await runTask(currentProject, `/api/projects/${currentProject}/generate`, "几何生成");
+    const d = await runTask(currentProject, `/api/projects/${currentProject}/generate`, "几何生成");
+    const summary = batchSummary(d);
+    if (!Array.isArray(d && d.parts)) {
+      // 逐件预检同步判定整批不可执行（processable === 0）：没有 task_id 就不起任务、
+      // 不去轮询 null，直接把 blocked 写进状态行 —— 确定性缺参数不该再堆失败任务。
+      status(`几何生成未提交：${summary.blocked.length} 个零件待补参数（可生成 ${summary.processable}/${summary.total} 件），可在零件清单里补充`);
+      return { ...summary, infrastructure_ok: false };
+    }
+    currentGeometry = d;
     renderIR(currentIR);  // 重渲染以挂上几何状态
     showGeneratedResult();   // 生成完直接显示，不让用户再点一次
-    const okCount = (currentGeometry.parts || []).filter(p => p.ok).length;
-    status(`几何生成完成（${okCount}/${(currentGeometry.parts || []).length} 件），已显示在右侧`);
+    status(`几何生成完成（${summary.succeeded}/${summary.total} 件）：${summary.succeeded} 成功、${summary.skipped} 待补`);
     setWorkflow("generate", "CAD 几何已生成，可查看 3D、工程图和 BOM。");
-    return true;
-  } catch (e) { status("几何生成失败: " + e.message); return false; }
+    return summary;
+  } catch (e) {
+    status("几何生成失败: " + e.message);
+    return { infrastructure_ok: false, total: 0, processable: 0,
+             succeeded: 0, failed: 0, skipped: 0, blocked: [] };
+  }
 }
 $("btnGenerate").onclick = generateGeometry;
 
 // 具名函数：原 #btnDrawings 点击逻辑原样搬过来，页面按钮与「解析后自动生成 2D」共用
 // 同一份实现。
 async function generateDrawings() {
-  if (!currentProject) return false;
+  if (!currentProject) {
+    return { infrastructure_ok: false, total: 0, processable: 0,
+             succeeded: 0, failed: 0, skipped: 0, blocked: [] };
+  }
   status("CAD 内核正在投影 2D 工程图(三视图 SVG + 下料 DXF)...", true);
   try {
-    currentDrawings = await runTask(currentProject, `/api/projects/${currentProject}/drawings`, "2D 工程图");
+    const d = await runTask(currentProject, `/api/projects/${currentProject}/drawings`, "2D 工程图");
+    const summary = batchSummary(d);
+    if (!Array.isArray(d && d.parts)) {
+      status(`2D 工程图未提交：${summary.blocked.length} 个零件待补参数（可生成 ${summary.processable}/${summary.total} 件），可在零件清单里补充`);
+      return { ...summary, infrastructure_ok: false };
+    }
+    currentDrawings = d;
     renderIR(currentIR);
     showGeneratedResult();
-    const ok = currentDrawings.parts.filter(p => p.ok).length;
-    status(`2D 工程图完成（${ok}/${currentDrawings.parts.length} 件），已显示在右侧`);
-    return true;
-  } catch (e) { status("2D 工程图生成失败: " + e.message); return false; }
+    status(`2D 工程图完成（${summary.succeeded}/${summary.total} 件）：${summary.succeeded} 成功、${summary.skipped} 待补`);
+    return summary;
+  } catch (e) {
+    status("2D 工程图生成失败: " + e.message);
+    return { infrastructure_ok: false, total: 0, processable: 0,
+             succeeded: 0, failed: 0, skipped: 0, blocked: [] };
+  }
 }
 $("btnDrawings").onclick = generateDrawings;
 
@@ -1098,9 +1142,11 @@ $("btnDrawings").onclick = generateDrawings;
 // 已有，直接跳过）。先生成 3D 再生成 2D，串行执行。
 async function autoGenerateAfterParse() {
   if (!currentIsImg || !currentIR) return false;
-  const geometryOk = await generateGeometry();
-  // 几何失败即停：2D 由几何结果投影，带着失败继续跑只会产出空壳，真实原因已写进状态行。
-  if (!geometryOk) return false;
+  const gate = await generateGeometry();
+  // 只有基础设施 / IR 级失败才停：单个零件预检失败不得阻断其余零件的 2D。
+  if (!gate || gate.infrastructure_ok === false) return false;
+  // 一个可生成零件都没有时不必空跑 2D（没有输入，只会产出一批空壳）。
+  if (!gate.processable) return false;
   return await generateDrawings();
 }
 
@@ -1144,7 +1190,8 @@ const activeTaskPromises = new Map();
 // 独立打开（无父壳）时 TechBoardRuntime 仍存在，但不会向父窗口发送任何消息，行为不变。
 function forwardTaskDetail(detail) {
   const runtimeEvent = detail.status === "failed" ? "task-failed"
-    : detail.status === "succeeded" ? "task-completed" : "task-progress";
+    : (detail.status === "succeeded" || detail.status === "partial") ? "task-completed"
+    : "task-progress";
   if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
     window.TechBoardRuntime.publish(runtimeEvent, "board-task", detail);
   }
@@ -1169,7 +1216,8 @@ async function pollTask(projectId, taskId, label) {
         error: t.error || "",
       }),
     }));
-    if (t.status === "succeeded") return t.result;
+    // partial 与 succeeded 一样是终态：不再等待，也不当失败（C4）。
+    if (t.status === "succeeded" || t.status === "partial") return t.result;
     if (t.status === "failed") throw new Error(t.error || "任务失败");
     status(`${label}：${t.progress || "正在处理"}…`, true);
   }
@@ -1243,6 +1291,9 @@ async function runTask(projectId, submitPath, label) {
     const r = await fetch(`${API}${submitPath}`, { method: "POST" });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || r.status);
+    // 提交响应没有 task_id：逐件预检同步判定整批不可执行，直接把它交给调用方
+    // 按 blocked 处理 —— 绝不能拿 null 去轮询。
+    if (!d.task_id) return d;
     status(`${label}已提交(任务 ${String(d.task_id).slice(0, 6)})，处理中…`, true);
     return pollTask(projectId, d.task_id, label);
   })();
@@ -1418,8 +1469,12 @@ function renderNode(node, container, depth, partById) {
   div.dataset.partId = p.part_id;
   div.style.marginLeft = pad + "px";
   const feats = (p.features || []).map(f => f.type).join(", ");
-  const gstat = g ? (g.ok ? " · 几何✓" : " · 几何✗") : "";
-  const dstat = dw ? (dw.ok ? " · 2D✓" : " · 2D✗") : "";
+  // 被逐件预检挡下的零件带结构化 issues：就地标「待补参数」而不是笼统的几何✗，
+  // 用户才知道该去补参数而不是点「再次生成」。
+  const gstat = g ? (g.ok ? " · 几何✓"
+    : (g.issues && g.issues.length ? " · 待补参数" : " · 几何✗")) : "";
+  const dstat = dw ? (dw.ok ? " · 2D✓"
+    : (dw.issues && dw.issues.length ? " · 2D待补参数" : " · 2D✗")) : "";
   div.innerHTML =
     `${partThumbnail(p)}<div class="part-info">` +
     `<div class="part-name">${esc(p.part_id)} ${esc(p.name)}` +
@@ -1805,6 +1860,31 @@ const FEAT_FIELDS = {
   chamfer: ["distance"],
 };
 
+// 空特征零件只能在这三种简化外形里选一个 —— 唯一的基体白名单，键集与后端
+// part_edit.BASE_FEATURE_FIELDS 一致。只给固定模板字段，不给「自己加特征 /
+// 自己加字段」的入口：基体之外的类型（hole / fillet / chamfer…）一律不出现。
+const BASE_FEATURE_TYPES = ["plate", "box", "cylinder"];
+const BASE_FEATURE_LABELS = { plate: "板件", box: "长方体", cylinder: "圆柱体" };
+
+// 基体模板的尺寸输入：字段取自该类型的固定模板，默认全空 —— 空即待补，不猜尺寸。
+function baseFeatureDimsHtml(type) {
+  return (FEAT_FIELDS[type] || [])
+    .map(k => `<label>${k}</label><input data-base-dim="${k}" type="number" value=""/>`)
+    .join("");
+}
+
+// features 为空时的受控基体编辑器：类型三选一 + 该类型固定的尺寸字段。
+function baseFeatureEditorHtml() {
+  return `<div class="feat-edit parameter-base-feature">` +
+    `<div class="feat-type">该零件当前没有可建模特征。请选择简化外形并填写该类型的` +
+    `全部尺寸；留空即待补，可由人工或 Agent 后补。</div>` +
+    `<div class="edit-grid"><label>简化外形</label><select data-base-type>` +
+    BASE_FEATURE_TYPES.map(t => `<option value="${t}">${BASE_FEATURE_LABELS[t]}</option>`).join("") +
+    `</select></div>` +
+    `<div class="edit-grid" data-base-dims>` +
+    baseFeatureDimsHtml(BASE_FEATURE_TYPES[0]) + `</div></div>`;
+}
+
 function selectPart(part) {
   if (!part) return;
   window.CadInlineAnalysis?.reset();
@@ -1838,17 +1918,22 @@ function selectPart(part) {
       `<label>数量</label><input data-pf="quantity" type="number" value="${part.quantity || 1}"/>` +
       `<label>材料</label><input data-pf="material" value="${esc(part.material ? part.material.spec : "")}"/>` +
       `</div></div><div class="parameter-features">`;
-    (part.features || []).forEach((f, fi) => {
-      const fields = FEAT_FIELDS[f.type] || [];
-      parameterHtml += `<div class="feat-edit"><div class="feat-type">特征 #${fi + 1}: ${f.type}` +
-        `${f.purpose ? " · " + esc(f.purpose) : ""}</div><div class="edit-grid">`;
-      fields.forEach(k => {
-        const v = f[k];
-        parameterHtml += `<label>${k}</label><input data-fi="${fi}" data-fk="${k}" type="number" ` +
-          `value="${v != null ? v : ""}"/>`;
+    if (!part.features || !part.features.length) {
+      // 没有可建模特征：不摆空白参数区，给受控的三种基体模板（留空即待补）。
+      parameterHtml += baseFeatureEditorHtml();
+    } else {
+      (part.features || []).forEach((f, fi) => {
+        const fields = FEAT_FIELDS[f.type] || [];
+        parameterHtml += `<div class="feat-edit"><div class="feat-type">特征 #${fi + 1}: ${f.type}` +
+          `${f.purpose ? " · " + esc(f.purpose) : ""}</div><div class="edit-grid">`;
+        fields.forEach(k => {
+          const v = f[k];
+          parameterHtml += `<label>${k}</label><input data-fi="${fi}" data-fk="${k}" type="number" ` +
+            `value="${v != null ? v : ""}"/>`;
+        });
+        parameterHtml += `</div></div>`;
       });
-      parameterHtml += `</div></div>`;
-    });
+    }
     parameterHtml += `</div></div><div class="parameter-actions"><button class="btn-regen" id="btnSaveParams" type="button">保存零件参数</button><button class="btn-regen" id="btnRegen" type="button">重新生成零件</button></div>`;
   } else {
     parameterHtml += "<table>";
@@ -1908,6 +1993,14 @@ function selectPart(part) {
   const versionsNode = document.getElementById("secVersions");
   $("partDetail").innerHTML = html;
   $("parameterEditor").innerHTML = parameterHtml || "此零件暂无可编辑参数。";
+  // 换简化外形就按新模板重渲染尺寸输入（默认全空）—— 不允许上一类型的字段残留。
+  const baseTypeSel = document.querySelector("#parameterEditor [data-base-type]");
+  if (baseTypeSel) {
+    const baseDims = document.querySelector("#parameterEditor [data-base-dims]");
+    baseTypeSel.onchange = () => {
+      if (baseDims) baseDims.innerHTML = baseFeatureDimsHtml(baseTypeSel.value);
+    };
+  }
   const versionsSlot = document.getElementById("partDetailVersions");
   if (versionsNode && versionsSlot) {
     versionsNode.removeAttribute("data-drawer-hidden");   // 详情里就是要展示，不能带着隐藏标记
@@ -1945,6 +2038,19 @@ async function savePartEdits(partId, regenerate = false) {
       part.material = spec ? { spec, density: part.material ? part.material.density : null } : null;
     }
   });
+  // 基体模板（空特征零件）：只认模板里的字段，留空写 null 而不是 0 / 默认值，
+  // 写进 features[0]（features 为空时先补成 [基体]）。
+  const baseTypeSel = detail.querySelector("[data-base-type]");
+  if (baseTypeSel) {
+    const baseObj = { type: baseTypeSel.value };
+    detail.querySelectorAll("[data-base-dim]").forEach(inp => {
+      const raw = inp.value.trim();
+      baseObj[inp.dataset.baseDim] = raw === "" ? null : parseFloat(raw);
+    });
+    part.features = part.features || [];
+    part.features[0] = baseObj;
+  }
+
   // 特征数值
   detail.querySelectorAll("[data-fi]").forEach(inp => {
     const fi = +inp.dataset.fi, fk = inp.dataset.fk;

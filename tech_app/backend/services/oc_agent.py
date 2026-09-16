@@ -452,6 +452,26 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "required": ["feature_index", "field", "value"],
                     },
                 },
+                "base_feature": {
+                    "type": "object",
+                    "description": "为没有可建模特征的零件建立简化基体，或把非法基体换成合法基体。"
+                                   "**用户没有给出全部尺寸时不得调用**：绝对不得编造尺寸、"
+                                   "不得按常识或型号推测、也不得填默认值，必须先把需要哪些尺寸"
+                                   "问清楚（例如「这个零件要按长方体简化吗？需要长、宽、高三个"
+                                   "尺寸」），等用户明确回答后再调用。"
+                                   "只允许 plate / box / cylinder 三种模板与它们的固定字段，"
+                                   "不得自行增加字段。",
+                    "properties": {
+                        "type": {"type": "string", "enum": ["plate", "box", "cylinder"],
+                                 "description": "基体类型：plate 板件 / box 长方体 / cylinder 圆柱体"},
+                        "length": {"type": "number", "description": "长（plate / box）mm"},
+                        "width": {"type": "number", "description": "宽（plate / box）mm"},
+                        "thickness": {"type": "number", "description": "厚（plate）mm"},
+                        "height": {"type": "number", "description": "高（box / cylinder）mm"},
+                        "diameter": {"type": "number", "description": "直径（cylinder）mm"},
+                    },
+                    "required": ["type"],
+                },
                 "reason": {"type": "string", "description": "本次修改的依据，会写进版本说明"},
             },
             "required": ["part_id"],
@@ -2676,13 +2696,32 @@ def _update_part(project_id: str, params: dict) -> dict:
                 "available": [item.part_id for item in ir.parts]}
 
     try:
-        changes, geometry_changed = part_edit.apply_edit(
+        # 先补基体，再改其它字段：补基体是可选的独立动作，只有在用户明确给出
+        # 类型与全部尺寸时才会走到这里（尺寸不全一律被 part_edit 拒绝）。
+        changes: list[dict] = []
+        geometry_changed = False
+        base_feature = params.get("base_feature")
+        if base_feature:
+            if not isinstance(base_feature, dict):
+                raise part_edit.PartEditError(
+                    f"base_feature 需要一个 {{type, 尺寸…}} 的结构，收到 {base_feature!r}")
+            base_type = base_feature.get("type")
+            dimensions = {key: value for key, value in base_feature.items() if key != "type"}
+            if part.features:
+                changes, geometry_changed = part_edit.replace_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+            else:
+                changes, geometry_changed = part_edit.initialize_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+        extra_changes, extra_geometry = part_edit.apply_edit(
             part,
             name=params.get("name"),
             quantity=params.get("quantity"),
             material_spec=params.get("material_spec"),
             feature_updates=params.get("feature_updates") or (),
         )
+        changes = changes + extra_changes
+        geometry_changed = geometry_changed or extra_geometry
     except part_edit.PartEditError as exc:
         return {"error": str(exc), "applied": False}
 

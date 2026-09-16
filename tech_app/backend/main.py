@@ -194,6 +194,9 @@ class WorkbenchPartEdit(BaseModel):
     quantity: Optional[int] = Field(default=None, ge=1, le=100000)
     material_spec: Optional[str] = Field(default=None, max_length=160)
     feature_updates: List[WorkbenchFeatureEdit] = Field(default_factory=list, max_length=30)
+    # 空特征零件补基体（或把非法基体换成合法基体）：只认 plate / box / cylinder 三种
+    # 模板与它们的固定尺寸，具体校验在 services.part_edit，两条会话入口共用同一份。
+    base_feature: Optional[dict] = None
     explanation: str = Field(default="", max_length=1000)
 
     @field_validator("feature_updates", mode="before")
@@ -1012,19 +1015,74 @@ def list_project_files(project_id: str):
     }
 
 
-def _geometry_payload(project_id: str, results) -> dict:
+def _geometry_entry(project_id: str, r) -> dict:
     base = f"/api/projects/{project_id}/geometry"
     return {
-        "parts": [
-            {
-                "part_id": r.part_id, "name": r.name, "ok": r.ok,
-                "volume_mm3": r.volume_mm3, "mass_g": r.mass_g, "bbox": r.bbox,
-                "warnings": r.warnings, "error": r.error,
-                "stl_url": f"{base}/{r.part_id}.stl" if r.ok else None,
-                "step_url": f"{base}/{r.part_id}.step" if r.ok else None,
-            }
-            for r in results
-        ]
+        "part_id": r.part_id, "name": r.name, "ok": r.ok,
+        "volume_mm3": r.volume_mm3, "mass_g": r.mass_g, "bbox": r.bbox,
+        "warnings": r.warnings, "error": r.error,
+        "stl_url": f"{base}/{r.part_id}.stl" if r.ok else None,
+        "step_url": f"{base}/{r.part_id}.step" if r.ok else None,
+    }
+
+
+def _geometry_payload(project_id: str, results) -> dict:
+    return {"parts": [_geometry_entry(project_id, r) for r in results]}
+
+
+def _drawings_entry(project_id: str, r) -> dict:
+    base = f"/api/projects/{project_id}/geometry"
+    return {
+        "part_id": r.part_id, "name": r.name, "ok": r.ok,
+        "views": {v: f"{base}/{fn}" for v, fn in r.views.items()},
+        "dxf_url": f"{base}/{r.dxf}" if r.dxf else None,
+        "warnings": r.warnings, "error": r.error,
+    }
+
+
+def _assemble_batch(project_id: str, parts, results, blocked, build_entry) -> dict:
+    """把逐件结果拼成「覆盖 IR 全部零件、保持 IR 顺序」的批量结果（C1）。
+
+    被预检挡下的零件根本没进 CAD：条目带 skipped=True 与结构化 issues，
+    与成功件一起落库 —— 重进项目 / 重载看板才能看到「4 成功 + 1 待补」。
+    计数口径：succeeded + failed + skipped == total，
+    预检被挡算 skipped，预检通过但运行期报错算 failed。
+    """
+    by_id = {r.part_id: r for r in results}
+    issues_by_id: dict = {}
+    for issue in blocked:
+        issues_by_id.setdefault(issue.get("part_id"), []).append(issue)
+    entries: list[dict] = []
+    skipped_parts: list[str] = []
+    succeeded = failed = skipped = 0
+    for part in parts:
+        result = by_id.get(part.part_id)
+        if result is None:
+            issues = issues_by_id.get(part.part_id) or []
+            entries.append({
+                "part_id": part.part_id, "name": part.name, "ok": False,
+                "warnings": [], "skipped": True, "issues": issues,
+                "error": issues[0]["message"] if issues else "该零件未生成",
+            })
+            skipped += 1
+            skipped_parts.append(part.part_id)
+            continue
+        entry = build_entry(project_id, result)
+        entry["skipped"] = False
+        if result.ok:
+            succeeded += 1
+            entry["issues"] = []
+        else:
+            failed += 1
+            # 预检通过却运行期失败：只有这种才适合「再次生成」，与缺参数区分开。
+            entry["issues"] = [geometry.runtime_issue(
+                result.part_id, result.name, result.error or "CAD 生成失败")]
+        entries.append(entry)
+    return {
+        "status": "succeeded" if not skipped and not failed else "partial",
+        "total": len(parts), "succeeded": succeeded, "failed": failed,
+        "skipped": skipped, "skipped_parts": skipped_parts,
+        "blocked": blocked, "parts": entries,
     }
 
 
@@ -1038,18 +1096,7 @@ def _upsert_part(payload: dict, part_entry: dict) -> None:
 
 
 def _drawings_payload(project_id: str, results) -> dict:
-    base = f"/api/projects/{project_id}/geometry"
-    return {
-        "parts": [
-            {
-                "part_id": r.part_id, "name": r.name, "ok": r.ok,
-                "views": {v: f"{base}/{fn}" for v, fn in r.views.items()},
-                "dxf_url": f"{base}/{r.dxf}" if r.dxf else None,
-                "warnings": r.warnings, "error": r.error,
-            }
-            for r in results
-        ]
-    }
+    return {"parts": [_drawings_entry(project_id, r) for r in results]}
 
 
 @app.post("/api/projects/3d")
@@ -1563,7 +1610,11 @@ def decompose_recommend(project_id: str, user: dict = Depends(current_user)):
 
 @app.post("/api/projects/{project_id}/generate")
 def generate(project_id: str, user: dict = Depends(current_user)):
-    """据 IR 用 CAD 内核生成各零件几何(STEP/STL) + 校验(异步任务)。"""
+    """据 IR 用 CAD 内核生成各零件几何(STEP/STL) + 校验(异步任务)。
+
+    预检是逐件的：能生成的零件先全部生成，被挡零件就地带着结构化原因返回。
+    一个零件缺参数不再让整批 3D 一起失败（C1）。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir_dict = store.load_ir(project_id)
     if not ir_dict:
@@ -1573,31 +1624,59 @@ def generate(project_id: str, user: dict = Depends(current_user)):
             503, "CadQuery 未安装，几何生成不可用。请 `pip install cadquery` 后重试。"
         )
     expected_ir = _digest_value(ir_dict)
+    ir = DesignIR(**ir_dict)
+    # 确定性预检在提交异步任务之前同步跑完（C7）：被挡零件不进任务，同一份 IR
+    # 反复点击也不会再堆出一串一模一样的失败任务。
+    processable, blocked = geometry.plan_batch(ir.parts)
+    part_ids = [p.part_id for p in processable]
+    if not part_ids:
+        return {
+            # 一个可生成零件都没有 ⇒ 一个成功件都不会有，所以这不是 partial（C3-4）：
+            # 不起异步任务、不留任何任务记录，直接把结构化原因交回前端就地显示。
+            "task_id": None, "status": "failed", "total": len(ir.parts),
+            "processable": 0, "blocked": blocked,
+        }
 
     def job():
-        ir = DesignIR(**ir_dict)
-        issues = geometry.preflight_parts(ir.parts)
-        if issues:
+        out_dir = store.geometry_dir(project_id)
+        results = []
+        try:
+            for part in DesignIR(**ir_dict).parts:
+                if part.part_id in part_ids:
+                    results.append(geometry.generate_part(part, out_dir))
+        except geometry.GeometryUnavailable as exc:
+            # 内核整体不可用属于整批失败（C3-1），不得被吞成「5 个零件各自失败」。
+            raise geometry.GeometryUnavailable(
+                f"{exc}（{geometry.CADQUERY_UNAVAILABLE_CODE}）") from exc
+        if not any(r.ok for r in results):
             raise RuntimeError(
-                "CAD 几何预检未通过（未调用模型，也不会产生 API 费用）：\n- "
-                + "\n- ".join(issues)
+                "CAD 几何生成失败：所有可生成零件都在运行期报错\n- "
+                + "\n- ".join(f"{r.part_id}: {r.error}" for r in results)
             )
-        results = geometry.generate_all(ir.parts, store.geometry_dir(project_id))
         _assert_ir_unchanged(project_id, expected_ir)
-        payload = _geometry_payload(project_id, results)
+        payload = _assemble_batch(project_id, ir.parts, results, blocked, _geometry_entry)
         payload["source_ir_hash"] = expected_ir
         store.save_geometry_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
 
-    return {"task_id": tasks.submit(
-        project_id, "generate", job, cad=True, dedup_key=_task_key("generate", expected_ir)
-    )}
+    return {
+        "task_id": tasks.submit(
+            project_id, "generate", job, cad=True,
+            dedup_key=_task_key("generate", expected_ir),
+        ),
+        "status": "queued", "total": len(ir.parts),
+        "processable": len(part_ids), "blocked": blocked,
+    }
 
 
 @app.post("/api/projects/{project_id}/drawings")
 def drawings(project_id: str, user: dict = Depends(current_user)):
-    """据 IR 用 CAD 内核生成各零件 2D 工程图(三视图 SVG + 下料 DXF,异步任务)。"""
+    """据 IR 用 CAD 内核生成各零件 2D 工程图(三视图 SVG + 下料 DXF,异步任务)。
+
+    2D 从 IR 重建实体（不读已保存的 3D 文件），所以与 3D 共用同一套逐件模型、
+    同样不要求 3D 全成功（C2）。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir_dict = store.load_ir(project_id)
     if not ir_dict:
@@ -1605,26 +1684,40 @@ def drawings(project_id: str, user: dict = Depends(current_user)):
     if not drawing2d.AVAILABLE:
         raise HTTPException(503, "CadQuery 未安装，2D 工程图生成不可用。")
     expected_ir = _digest_value(ir_dict)
+    ir = DesignIR(**ir_dict)
+    processable, blocked = geometry.plan_batch(ir.parts)
+    part_ids = [p.part_id for p in processable]
+    if not part_ids:
+        return {
+            # 2D 与 3D 同形：没有可生成零件时不会出现 partial，整批就地失败。
+            "task_id": None, "status": "failed", "total": len(ir.parts),
+            "processable": 0, "blocked": blocked,
+        }
 
     def job():
-        ir = DesignIR(**ir_dict)
-        issues = geometry.preflight_parts(ir.parts)
-        if issues:
+        out_dir = store.geometry_dir(project_id)
+        results = [drawing2d.generate_drawings(part, out_dir)
+                   for part in DesignIR(**ir_dict).parts if part.part_id in part_ids]
+        if not any(r.ok for r in results):
             raise RuntimeError(
-                "2D 工程图几何预检未通过（未调用模型，也不会产生 API 费用）：\n- "
-                + "\n- ".join(dict.fromkeys(issues))
+                "2D 工程图生成失败：所有可生成零件都在运行期报错\n- "
+                + "\n- ".join(f"{r.part_id}: {r.error}" for r in results)
             )
-        results = drawing2d.generate_all(ir.parts, store.geometry_dir(project_id))
         _assert_ir_unchanged(project_id, expected_ir)
-        payload = _drawings_payload(project_id, results)
+        payload = _assemble_batch(project_id, ir.parts, results, blocked, _drawings_entry)
         payload["source_ir_hash"] = expected_ir
         store.save_drawings_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
 
-    return {"task_id": tasks.submit(
-        project_id, "drawings", job, cad=True, dedup_key=_task_key("drawings", expected_ir)
-    )}
+    return {
+        "task_id": tasks.submit(
+            project_id, "drawings", job, cad=True,
+            dedup_key=_task_key("drawings", expected_ir),
+        ),
+        "status": "queued", "total": len(ir.parts),
+        "processable": len(part_ids), "blocked": blocked,
+    }
 
 
 @app.get("/api/projects/{project_id}/bom.csv")
@@ -1710,10 +1803,24 @@ def _apply_workbench_chat_edit(part, edit: WorkbenchPartEdit) -> tuple[list[dict
     两条会话入口不能各有一套规则。
     """
     try:
-        return part_edit.apply_edit(
+        changes: list[dict] = []
+        geometry_changed = False
+        # 老入口也要能提出同样的受控补基体，规则与 2.1 页的 Agent 完全一致。
+        base_feature = edit.base_feature if isinstance(edit.base_feature, dict) else None
+        if base_feature:
+            base_type = base_feature.get("type")
+            dimensions = {key: value for key, value in base_feature.items() if key != "type"}
+            if part.features:
+                changes, geometry_changed = part_edit.replace_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+            else:
+                changes, geometry_changed = part_edit.initialize_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+        extra_changes, extra_geometry = part_edit.apply_edit(
             part, name=edit.name, quantity=edit.quantity,
             material_spec=edit.material_spec, feature_updates=edit.feature_updates,
         )
+        return changes + extra_changes, geometry_changed or extra_geometry
     except part_edit.PartEditError as exc:
         raise HTTPException(422, str(exc)) from exc
 

@@ -240,10 +240,12 @@
       if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
         window.TechBoardRuntime.publish(
           taskDetail.status === "failed" ? "task-failed"
-            : taskDetail.status === "succeeded" ? "task-completed" : "task-progress",
+            : (taskDetail.status === "succeeded" || taskDetail.status === "partial")
+              ? "task-completed" : "task-progress",
           "board-task", taskDetail);
       }
-      if (task.status === "succeeded") return task.result;
+      // partial 也是终态：不再等待，也不当失败。
+      if (task.status === "succeeded" || task.status === "partial") return task.result;
       if (task.status === "failed") throw new Error(task.error || "任务失败");
       if (active === state) setStatus(state, `${title}：${task.progress || "正在处理"}…`, true);
     }

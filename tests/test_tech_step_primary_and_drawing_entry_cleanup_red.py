@@ -219,11 +219,16 @@ class TechStepPrimaryAndDrawingEntryCleanupRedTest(unittest.TestCase):
                          "#btnDrawings 必须复用同一份实现")
 
     def test_generate_functions_report_success_and_failure(self):
+        # 契约更新（CAD 逐件容错批次）：回执从布尔改成结构化摘要
+        # （infrastructure_ok / processable / succeeded / blocked），
+        # 见 docs/specs/tech-cad-batch-partial-generation.md C5。
         for name in ("generateGeometry", "generateDrawings"):
             body = block_from(self.app, f"function {name}(")
             self.assertTrue(body, f"找不到 {name}()")
-            self.assertRegex(body, r"return\s+(?:true|false|{[\s\S]{0,40}?ok\s*:)",
-                             f"{name}() 必须回执成功 / 失败，自动流程才知道该不该继续")
+            self.assertTrue(
+                re.search(r"return\s+(?:true|false\b)", body)
+                or re.search(r"return\s*\{[\s\S]{0,240}?(?:infrastructure_ok|ok\s*:)", body),
+                f"{name}() 必须回执成功 / 失败摘要，自动流程才知道该不该继续")
             self.assertIn("status(", body, f"{name}() 必须把结果写进状态行")
 
     def test_parse_triggers_automatic_generation(self):
@@ -236,8 +241,16 @@ class TechStepPrimaryAndDrawingEntryCleanupRedTest(unittest.TestCase):
         geo = helper.index("generateGeometry(")
         drw = helper.index("generateDrawings(")
         self.assertLess(geo, drw, "必须先生成 3D 再生成 2D")
+        # 契约更新（CAD 逐件容错批次）：只有基础设施失败 / IR 并发变更 / 没有可生成零件才挡 2D；
+        # 单个零件预检失败不得阻断其余零件的 2D（见 docs/specs/tech-cad-batch-partial-generation.md）。
         self.assertRegex(helper[geo:drw], r"if\s*\(",
-                         "几何失败必须挡住 2D：先判断几何结果再继续")
+                         "必须先判断结构化门禁再决定要不要继续跑 2D")
+        self.assertIn("infrastructure_ok", helper,
+                      "自动流程只能被基础设施 / IR 级失败挡住，单件失败不得阻断 2D")
+        self.assertRegex(helper, r"processable",
+                         "没有可生成零件时才跳过 2D，不能因为单件失败就跳过")
+        self.assertNotRegex(helper, r"!\s*geometryOk\b",
+                            "不得再用单一布尔 gate 挡住 2D")
         self.assertRegex(helper, r"失败|error|ok:\s*false",
                          "失败必须给出真实原因，不得静默")
         parse = block_from(self.app, "async function parseDrawing(")

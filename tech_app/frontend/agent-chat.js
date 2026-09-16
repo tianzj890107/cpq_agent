@@ -1310,7 +1310,7 @@
     return out;
   }
   function taskStatusWord(status) {
-    return { queued: "排队中", running: "进行中", succeeded: "已完成", failed: "失败",
+    return { queued: "排队中", running: "进行中", succeeded: "已完成", partial: "部分完成", failed: "失败",
              interrupted: "中断" }[status] || "进行中";
   }
   function ensureTaskCard(taskId, label) {
@@ -1354,7 +1354,7 @@
   function setTaskStatus(card, status) {
     if (!card || !status || card.status === status) return;
     card.status = status;
-    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed", "is-interrupted");
+    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed", "is-partial", "is-interrupted");
     card.box.classList.add(`is-${status}`);
     card.state.textContent = taskStatusWord(status);
   }
@@ -1408,7 +1408,7 @@
     }
     // 落库只提交新出现的进度行：服务端按行去重合并、就地更新同一张卡的状态。
     persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason);
-    if (status === "succeeded") {
+    if (status === "succeeded" || status === "partial") {
       card.done = true;
       refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
       loadFiles();                   // 几何、2D 图、导出表格都是任务产出
@@ -1443,7 +1443,7 @@
     const message = String(reason || "任务已中断").trim();
     taskProgressCards.forEach(card => {
       if (!card || card.done) return;
-      if (["succeeded", "failed", "interrupted"].indexOf(String(card.status || "")) >= 0) return;
+      if (["succeeded", "failed", "interrupted", "partial"].indexOf(String(card.status || "")) >= 0) return;
       renderTaskProgress({ taskId: card.key, label: card.label, status: "interrupted",
                            error: message, log: [] });
     });

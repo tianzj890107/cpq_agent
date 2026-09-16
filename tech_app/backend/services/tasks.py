@@ -137,9 +137,16 @@ def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: 
             store.save_ai_result_metadata(
                 project_id, task_id, kind, ai_governance.metadata(kind, result)
             )
-        _update(project_id, task_id, status="succeeded", progress="完成",
-                sop_step=sop_total,
-                finished_at=_now(), result=result)
+        # 任务函数自带 status=partial 时（CAD 逐件容错：有零件被跳过但仍有成功件），
+        # 终态就是 partial —— 它是终态，轮询方不再等待，也不当失败。
+        # 其余任务维持既有的 succeeded 语义，异常路径照旧 failed / interrupted。
+        partial = isinstance(result, dict) and result.get("status") == "partial"
+        outcome = {
+            "status": "partial" if partial else "succeeded",
+            "progress": "部分完成" if partial else "完成",
+        }
+        _update(project_id, task_id, sop_step=sop_total, finished_at=_now(),
+                result=result, **outcome)
     except Exception as e:  # noqa: BLE001 — 任务内任何异常都转成失败态
         traceback.print_exc()
         _update(project_id, task_id, status="failed", progress="失败",
