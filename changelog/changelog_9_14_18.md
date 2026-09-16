@@ -2538,4 +2538,16 @@ Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red
     `component-match-score`；
   - 下发的 `确认需求解析结果.html` 已有基础规则 `.btn{border-radius:10px;padding:9px 20px;…}`，
     两颗 view-bar 按钮上的行内 `padding/min-width` 已消失（计数 0）。
+- **浏览器实测（无头 Chrome，加载线上页面的实际 HTML/CSS 后读计算值，非查源码）**：
+  - 报价页（`确认需求解析结果.html` 线上副本 + 其页内 `<style>`）：view-bar 两颗按钮
+    `border-radius:10px` / `padding:7px 14px` / `min-width:0`，且 `style` 属性为 `null`（行内样式确实删净）；
+    底部栏按钮 `10px` / `9px 20px` / `min-width:110px` 不变；设置弹窗按钮 `10px` / `9px 20px` /
+    `min-width:92px`（改前连内边距都没有）。按钮计算出的 `display` 是 `flex`（作为 flex 子项被块化）属正常。
+  - 结论区（线上 `workbench.css`）：记录行 `display:flex` + `flex-wrap:wrap` + `padding:6px` +
+    `border-radius:6px`；判定胶囊 `border-radius:999px`、`padding-left:8px`，「可改制」`rgb(180,83,9)`、
+    「未匹配」`rgb(156,163,175)`；小结行 `12px` 灰 + `margin-bottom:8px`；列表 `column` + `row-gap:6px`。
+  - 过程行（线上 `agent-chat.css`）：`.oc-process-step` 含 `flex-wrap:wrap`；详情块 `flex-basis:100%` /
+    `margin-left:17px`，`.sub` 行实测左边界 45px（17+14+14 的叠加口径一致）；**过程文字底边 167px、
+    详情顶边 175px —— 确实落到下一行**；summary 的 `::before` 计算内容为 `"▸"`。
+  - 零件清单缩进由红测的 node 结构走查覆盖（两个总成同为 6px、三个零件同为 20px、「工艺推荐」与所属零件同缩进）。
 - 提醒：浏览器需强刷一次（`?v=` 已换号，不刷会命中旧缓存）。
