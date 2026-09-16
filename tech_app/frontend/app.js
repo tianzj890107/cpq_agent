@@ -2356,6 +2356,11 @@ async function runAllPartProcesses(options = {}) {
     state.running = "";
     allPartsProcessPublish(state);
   }
+  // 记住这一轮的失败清单：看板「仅重试失败项」据此只补跑失败的零件，不重算已成功件。
+  // （globalThis：页面是模块作用域，桥 / 测试驱动与它共用同一份记忆。）
+  globalThis.__techPartProcessFailures = failures.map((item) => ({
+    part_id: item.part_id, name: item.name, message: item.message,
+  }));
   // 全部零件都已有工艺推荐后，主按钮自己从「一键生成全部工艺推荐」翻成「确认解析结果」。
   refreshBoardActionState();
   return { state: state, failures: failures };
@@ -2376,8 +2381,10 @@ async function runAllPartProcessesInBackground(options) {
     const state = result.state;
     const summary = `全部工艺推荐已执行：成功 ${state.succeeded}、失败 ${state.failed}、跳过 ${state.skipped}`;
     if (result.failures.length) {
-      allPartsProcessSettle("task-failed", {
-        message: `${summary}；失败零件：${result.failures.map((item) => item.part_id).join("、")}`,
+      // 有成功件就是「部分完成」，不是整批失败：整批失败会把已经生成的工艺说成没跑。
+      const failedIds = result.failures.map((item) => item.part_id).join("、");
+      allPartsProcessSettle(state.succeeded > 0 ? "task-partial" : "task-failed", {
+        message: `${summary}；失败零件：${failedIds}`,
         total: state.total, succeeded: state.succeeded, failed: state.failed,
         skipped: state.skipped, failures: result.failures,
       });
@@ -2400,6 +2407,71 @@ async function runAllPartProcessesInBackground(options) {
     const runtime = window.TechBoardRuntime;
     if (runtime && typeof runtime.updateActionState === "function") {
       runtime.updateActionState("runAllPartProcesses", { busy: false });
+    }
+  }
+}
+
+/* 「仅重试失败项」：只把上一轮失败的零件交给既有单件链路重跑，已成功件不重跑
+ * （不重复计费）。结算口径与整批一致：有成功件 → task-partial，一件都没成功 → task-failed。 */
+async function retryFailedPartProcesses(options = {}) {
+  // 与整批同一道忙碌闸门：重试期间再点一次不会变成第二串并行的模型调用（重复计费）。
+  if (allPartsProcessBusy) return { state: null, failures: [] };
+  const projectId = currentProject;
+  if (!projectId) throw new Error("还没有选择项目，无法重试。");
+  const remembered = globalThis.__techPartProcessFailures || [];
+  const wanted = new Set(remembered.map((item) => String(item.part_id || item.id || "")).filter(Boolean));
+  const parts = ((currentIR && currentIR.parts) || []).filter((part) => wanted.has(String(part.part_id)));
+  if (!parts.length) {
+    status("没有需要重试的零件。");
+    return { state: null, failures: [] };
+  }
+  allPartsProcessBusy = true;
+  const runtime = window.TechBoardRuntime;
+  if (runtime && typeof runtime.updateActionState === "function") {
+    runtime.updateActionState("retryFailedPartProcesses", { busy: true });
+  }
+  try {
+    const state = { total: parts.length, done: 0, running: "", succeeded: 0, failed: 0, skipped: 0 };
+    const failures = [];
+    for (const part of parts) {
+      const name = `${part.part_id} ${part.name || ""}`.trim();
+      state.running = name;
+      allPartsProcessPublish(state);
+      status(`正在重试工艺推荐 ${state.done + 1}/${state.total}：${name}`, true);
+      try {
+        await runOnePartProcess(projectId, part);
+        markPartProcessReady(projectId, part.part_id);
+        state.succeeded += 1;
+      } catch (error) {
+        state.failed += 1;
+        failures.push({
+          part_id: part.part_id,
+          name: name,
+          message: (error && error.message) || "工艺推荐失败",
+        });
+      }
+      state.done += 1;
+      state.running = "";
+      allPartsProcessPublish(state);
+    }
+    globalThis.__techPartProcessFailures = failures.map((item) => ({
+      part_id: item.part_id, name: item.name, message: item.message,
+    }));
+    refreshBoardActionState();
+    const summary = `失败项重试完成：成功 ${state.succeeded}、失败 ${state.failed}`;
+    allPartsProcessSettle(failures.length === 0 ? "task-completed"
+      : (state.succeeded > 0 ? "task-partial" : "task-failed"), {
+      message: failures.length ? `${summary}；仍是失败的零件：${failures.map((item) => item.part_id).join("、")}` : summary,
+      total: state.total, succeeded: state.succeeded, failed: state.failed,
+      skipped: state.skipped, failures: failures,
+    });
+    status(summary);
+    requestBoardSummary();
+    return { state: state, failures: failures };
+  } finally {
+    allPartsProcessBusy = false;
+    if (runtime && typeof runtime.updateActionState === "function") {
+      runtime.updateActionState("retryFailedPartProcesses", { busy: false });
     }
   }
 }
@@ -2527,6 +2599,24 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
             && !allPartsProcessBusy,
           busy: Boolean(allPartsProcessBusy),
           role: (drawingParsed() && !partsProcessComplete()) ? "primary" : "aux",
+        };
+      },
+    },
+    // 仅重试失败项：只在上一轮真留下失败清单时出现（没失败就没有可重试的东西）。
+    retryFailedPartProcesses: {
+      label: "仅重试失败项",
+      role: "aux",
+      order: 16,
+      deferred: true,
+      run: () => retryFailedPartProcesses().then(() => ({ ok: true })),
+      // 与 runAllPartProcesses 同款写法：块式 getState 不写 `})` 收尾，
+      // 否则会被按 `\n\s*})` 截取注册表的既有走查提前截断。
+      getState: () => {
+        return {
+          visible: ((globalThis.__techPartProcessFailures || []).length) > 0,
+          enabled: !allPartsProcessBusy,
+          busy: Boolean(allPartsProcessBusy),
+          role: "aux",
         };
       },
     },

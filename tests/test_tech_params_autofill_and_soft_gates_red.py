@@ -237,10 +237,14 @@ class NoScopeCreep(unittest.TestCase):
         events = re.search(r"var EVENT = \{([\s\S]*?)\};", self.runtime)
         self.assertIsNotNone(events, "找不到 EVENT 常量表")
         names = re.findall(r"\b[A-Z_]+:\s*'([^']+)'", events.group(1))
+        # 契约更新（批量动作 partial 批次 ## 85）：逐件批量动作新增「部分完成」终态
+        # `task-partial`（见 docs/specs/tech-batch-action-partial-and-retry-failed.md C1）。
+        # 除这一条外，既有事件仍一个都不能增删。
         self.assertEqual(sorted(names),
                          sorted(["ready", "action-state", "task-progress", "task-completed",
-                                 "task-failed", "selection-changed", "board-status"]),
-                         "既有事件一个都不能增删")
+                                 "task-partial", "task-failed", "selection-changed",
+                                 "board-status"]),
+                         "除本批新增的 task-partial 外，既有事件不得增删")
 
 
 if __name__ == "__main__":

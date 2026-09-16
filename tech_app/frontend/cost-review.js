@@ -175,7 +175,7 @@ function crPublishTask(name, extra) {
 // 已经发过同样事件时不再重复，失败时把真实原因原样带过去。
 let crLastSettle = null;
 function crRememberSettle(name, subject, extra) {
-  if (name !== 'task-completed' && name !== 'task-failed') return;
+  if (name !== 'task-completed' && name !== 'task-failed' && name !== 'task-partial') return;
   crLastSettle = { event: name, subject: subject,
                    message: (extra && (extra.error || extra.message)) || '' };
 }
@@ -203,6 +203,10 @@ async function crRunAllInBackground() {
     if (crLastSettle && crLastSettle.event === 'task-failed') {
       crSettleTask('task-failed', 'runCostReview',
         { message: crLastSettle.message || '成本测算未完成，请查看右侧看板提示。' });
+    } else if (crLastSettle && crLastSettle.event === 'task-partial') {
+      // 部分完成不是失败：照实上报，父壳据此出「部分完成 + 仅重试失败项」的卡。
+      crSettleTask('task-partial', 'runCostReview',
+        { message: crLastSettle.message || '部分零件没算出成本，可点「仅重试失败项」。' });
     } else {
       crSettleIfNeeded('task-completed', 'runCostReview');
     }
@@ -226,6 +230,11 @@ async function crCostStepInBackground(work) {
         || (result && result.error && result.error.message)
         || '成本测算未完成，请查看右侧看板提示。';
       crSettleIfNeeded('task-failed', 'costStep', { message: message });
+    } else if (crLastSettle && crLastSettle.event === 'task-partial') {
+      // 部分完成是终态，不是"没说完整，补一条成功"：照实上报，父壳据此出
+      // 「部分完成 + 仅重试失败项」的卡。
+      crSettleIfNeeded('task-partial', 'costStep',
+        { message: crLastSettle.message || '部分零件没算出成本，可点「仅重试失败项」。' });
     } else {
       crSettleIfNeeded('task-completed', 'costStep');
     }
@@ -565,6 +574,13 @@ function crRenderOps() {
     .forEach(btn => { if (btn) btn.hidden = readOnly; });
   const runAllBtn = $cr('crRunAll');
   if (runAllBtn) runAllBtn.hidden = readOnly;
+  // 「仅重试失败项」只在上一轮真留下失败清单时出现（没失败就没有可重试的东西）。
+  const retryBtn = $cr('crRetryFailed');
+  if (retryBtn) {
+    const pending = (globalThis.__techCostFailures || []).length;
+    retryBtn.hidden = readOnly || !pending;
+    retryBtn.disabled = Boolean(crBusy);
+  }
   const confirmed = Boolean(review.confirmed) && !crBusy && !readOnly;
   // 「确认成本」不再按 ready 置灰：还有零件没算 / 整机没算 / 算出来是 0 元都属于
   // 可以签字放行的 L2 缺口，点了照旧由「确认成本」的闸门弹一次「仍要继续」。
@@ -753,18 +769,37 @@ async function crRunPart(partId, quantity) {
   }
 }
 
-/** 逐件跑。串行是有意的：并行会把一次要花钱的调用变成 N 次同时打出去。 */
-async function crRunParts(onlyMissing) {
-  const rows = (crData?.parts || []).filter(row => !onlyMissing || !row.has_cost);
-  const targets = rows.length ? rows : (crData?.parts || []);
+/** 逐件跑。串行是有意的：并行会把一次要花钱的调用变成 N 次同时打出去。
+ *
+ *  一件失败**不再提前停**：后面的零件照样一次跑完，最后交一份结构化结果
+ *  （谁来决定要不要继续跑整机成本、要不要给「仅重试失败项」）。一票否决会让用户
+ *  遇到「P-002 失败 → P-003~P-005 连试都不试，只能一个个点」。
+ *  `onlyIds` 给定时只跑这些零件（「仅重试失败项」复用同一份逻辑，不重算已成功件）。 */
+async function crRunParts(onlyMissing = false, onlyIds = null) {
+  const wanted = (Array.isArray(onlyIds) && onlyIds.length)
+    ? new Set(onlyIds.map(id => String(id))) : null;
+  const rows = (crData?.parts || []).filter(row =>
+    (!wanted || wanted.has(String(row.id))) && (!onlyMissing || !row.has_cost));
+  // 兜底：页签里一个零件都不缺时按钮写的是「重算全部零件」，onlyMissing 不能把整批
+  // 变成空跑；只有显式给了 onlyIds 时，筛空就是真的没得跑。
+  const targets = (rows.length || wanted) ? rows : (crData?.parts || []);
+  const summary = { attempted: 0, succeeded: 0, failed: 0, skipped: 0, failures: [] };
   for (const row of targets) {
+    summary.attempted += 1;
     await crRunPart(row.id, row.quantity);
-    if (!crData?.parts?.find(item => item.id === row.id)?.has_cost) {
-      crSay(`${row.id} 没算出结果，先停在这里 —— 后面的整机成本要以它为底。`);
-      return false;
+    if (crData?.parts?.find(item => item.id === row.id)?.has_cost) {
+      summary.succeeded += 1;
+      continue;
     }
+    summary.failed += 1;
+    summary.failures.push({ id: row.id, part_id: row.id,
+                            name: row.name || row.id,
+                            message: '没算出结果，需补参数或明细' });
+    crSay(`${row.id} 没算出结果，先记下来 —— 其余零件继续跑，最后可以只重试失败项。`);
   }
-  return true;
+  // 失败清单留给「仅重试失败项」：只重跑这些零件，已成功的不再花第二次钱。
+  globalThis.__techCostFailures = summary.failures.map(item => Object.assign({}, item));
+  return summary;
 }
 
 async function crRunAssembly() {
@@ -805,7 +840,21 @@ async function crRunAssembly() {
 async function crRunAll() {
   await crSaveNote();
   crSay('一键测算全部成本：先把每个零件算出来，再算整机（它要引用零件的单件成本）。本步不联网。');
-  if (!await crRunParts(false)) return;
+  const summary = await crRunParts(false);
+  const failed = Number(summary?.failed) || 0;
+  if (failed > 0) {
+    // 整机成本依赖全部零件的单件成本：有缺口就**不跑**，也不假装算完 ——
+    // 但已经算出来的零件成果照常保留，用户点「仅重试失败项」只补缺的那几个。
+    const ids = (summary.failures || []).map(item => item.id || item.part_id).join('、');
+    const message = `还有 ${failed} 个零件没算出成本（${ids}）：整机成本先不跑，`
+      + '补齐参数或明细后点「仅重试失败项」重算这几个零件。';
+    crSay(message);
+    crStatus(`成本测算部分完成：成功 ${summary.succeeded}、失败 ${failed}`, true);
+    crPublishTask(summary.succeeded > 0 ? 'task-partial' : 'task-failed',
+      { total: summary.attempted, succeeded: summary.succeeded, failed: failed,
+        skipped: summary.skipped, failures: summary.failures, message: message });
+    return summary;
+  }
   crTab = 'assembly';
   await crRunAssembly();
   crTab = 'total';
@@ -815,6 +864,40 @@ async function crRunAll() {
     ? `测算完成，但这些行是 0 元：${counts.zero.join('、')}，请重算或人工补明细后再确认。`
     : `测算完成。整机成本 ${crMoney((crData?.final || {}).total)} 元/台，`
       + `核对无误后点「确认成本」，再选择去向。`);
+  return summary;
+}
+
+/** 仅重试失败项：只把上一轮失败的零件交给同一份逐件链路，已成功件不重跑（不重复计费）。 */
+async function crRetryFailed() {
+  const remembered = globalThis.__techCostFailures || [];
+  const ids = remembered.map(item => String(item.id || item.part_id || '')).filter(Boolean);
+  if (!ids.length) {
+    crSay('没有需要重试的零件。');
+    return { attempted: 0, succeeded: 0, failed: 0, skipped: 0, failures: [] };
+  }
+  crSay(`仅重试失败项：${ids.join('、')}（已算出成本的零件不重跑，不再重复计费）。`);
+  const summary = await crRunParts(false, ids);
+  const failed = Number(summary?.failed) || 0;
+  if (failed > 0) {
+    const message = `重试后仍有 ${failed} 个零件没算出成本，整机成本继续不跑。`;
+    crSay(message);
+    crStatus(`重试后仍有失败：成功 ${summary.succeeded}、失败 ${failed}`, true);
+    crPublishTask(summary.succeeded > 0 ? 'task-partial' : 'task-failed',
+      { total: summary.attempted, succeeded: summary.succeeded, failed: failed,
+        skipped: summary.skipped, failures: summary.failures, message: message });
+    return summary;
+  }
+  crTab = 'assembly';
+  await crRunAssembly();
+  crTab = 'total';
+  crRender();
+  const total = (crData?.final || {}).total;
+  const totalText = total == null ? '—' : String(total);
+  crSay(`失败项已补算完成（成功 ${summary.succeeded} 个），整机成本 ${totalText} 元/台，`
+    + '核对无误后点「确认成本」。');
+  crPublishTask('task-completed', { total: summary.attempted, succeeded: summary.succeeded,
+                                    failed: 0, skipped: summary.skipped, failures: [] });
+  return summary;
 }
 
 async function crConfirmCost(waiver = null) {
@@ -919,6 +1002,7 @@ function crBind() {
   $cr('crGoTotal').onclick = () => { crTab = 'total'; crRender(); };
   $cr('crModelPill').onclick = event => { event.stopPropagation(); crOpenSettings(event.currentTarget); };
   $cr('crRunAll').onclick = () => crRunAll();
+  if ($cr('crRetryFailed')) $cr('crRetryFailed').onclick = () => crRetryFailed();
   if ($cr('crSendToFinance')) $cr('crSendToFinance').onclick = () => crSendToFinance();
   // 右看板这颗与左侧操作栏是同一步的两颗按钮：闸门只有一份，这里只是取出来调用。
   $cr('crConfirm').onclick = () => (crConfirmGate ? crConfirmGate() : crConfirmCost());
@@ -1134,21 +1218,25 @@ document.addEventListener('cpq-sso-ready', () => {
             return { ok: false, error: { code: 'missing-part',
                                          message: '缺少 part_id：请指定要测算的零件。' } };
           }
-        } else if (step !== 'assembly' && step !== 'all') {
-          return { ok: false, error: { code: 'bad-step', message: 'step 只能是 part / assembly / all' } };
+        } else if (step !== 'assembly' && step !== 'all' && step !== 'retry') {
+          return { ok: false, error: { code: 'bad-step', message: 'step 只能是 part / assembly / all / retry' } };
         }
         if (crBusy || crDeferredBusy) {
           return { ok: false, error: { code: 'busy', message: '正在测算，请稍候。' } };
         }
         // 单件 / 整机 / 全量都是长任务：只启动后台链路，完成或失败由它自己上报。
         const quantity = Number((payload && payload.quantity) || 1);
+        // retry 只重跑上一轮失败的零件（已成功件不重算、不重复计费），与「仅重试失败项」
+        // 同一份实现 —— 左侧会话卡与页内按钮不各写一套。
         const work = step === 'all'
           ? () => crRunAll()
-          : (step === 'assembly'
-            ? () => crRunAssembly().then((done) => (done ? { ok: true }
-                : { ok: false, error: { code: 'step-failed', message: '组装成本测算失败，请查看右侧看板提示。' } }))
-            : () => crRunPart(partId, quantity).then((done) => (done ? { ok: true }
-                : { ok: false, error: { code: 'step-failed', message: `${partId} 测算失败，请查看右侧看板提示。` } })));
+          : (step === 'retry'
+            ? () => crRetryFailed()
+            : (step === 'assembly'
+              ? () => crRunAssembly().then((done) => (done ? { ok: true }
+                  : { ok: false, error: { code: 'step-failed', message: '组装成本测算失败，请查看右侧看板提示。' } }))
+              : () => crRunPart(partId, quantity).then((done) => (done ? { ok: true }
+                  : { ok: false, error: { code: 'step-failed', message: `${partId} 测算失败，请查看右侧看板提示。` } }))));
         crDeferredBusy = true;
         crLastSettle = null;
         window.TechBoardRuntime.updateActionState('costStep', { busy: true });

@@ -53,6 +53,7 @@
     ACTION_STATE: 'action-state',
     TASK_PROGRESS: 'task-progress',
     TASK_COMPLETED: 'task-completed',
+    TASK_PARTIAL: 'task-partial',
     TASK_FAILED: 'task-failed',
     SELECTION_CHANGED: 'selection-changed',
     BOARD_STATUS: 'board-status',
@@ -324,7 +325,8 @@
     // 不在会话里留「xxx 已完成」；其余动作（解析等长任务）照旧出卡。
     function publishTaskCard(eventName, extra) {
       if (entry.silent === true) return;
-      if ([EVENT.TASK_PROGRESS, EVENT.TASK_COMPLETED, EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
+      if ([EVENT.TASK_PROGRESS, EVENT.TASK_COMPLETED, EVENT.TASK_PARTIAL,
+           EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
       publish(eventName, name, extra);
     }
     publishTaskCard(EVENT.TASK_PROGRESS, { action: name, phase: 'start',

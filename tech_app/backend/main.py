@@ -3006,6 +3006,20 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
     ir, plan, review = _cost_review_ctx(project_id)
     if plan.process is None:
         raise HTTPException(400, "请先由工艺经理完成 2.2 组装工艺：组装成本要按它来算")
+    # 整机成本要引用每个零件的单件成本：缺一件就会算出一份偏低的整机成本，还白花一次
+    # 模型钱。所以同步判定（提交任务之前）—— 口径复用 summarize() 的 counts.missing，
+    # 不另算一份，也不靠前端"第一件失败就提前 return"顺带兜住。
+    summary = cost_review.summarize(project_id, ir, plan)
+    missing = list((summary.get("counts") or {}).get("missing") or [])
+    if missing:
+        names = {str(row.get("id")): row.get("name") for row in summary.get("parts") or []}
+        detail = "、".join(
+            f"{part_id}（{names.get(part_id)}）" if names.get(part_id) else str(part_id)
+            for part_id in missing)
+        raise HTTPException(
+            409,
+            f"还有 {len(missing)} 个零件没算出成本：{detail}。"
+            "请先在「零件」页逐个算完（或点「仅重试失败项」补算缺的那几个），再算整机成本。")
     author = user.get("username", "system")
 
     def job():

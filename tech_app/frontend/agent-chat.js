@@ -1358,6 +1358,39 @@
     card.box.classList.add(`is-${status}`);
     card.state.textContent = taskStatusWord(status);
   }
+  // 批量动作的「仅重试失败项」：只重跑上一轮真失败的零件（已成功件不重算、不重复计费）。
+  // 左侧不直接调业务接口：按批量动作名把重试交给看板对应动作（成本 costStep{step:'retry'} /
+  // 工艺 retryFailedPartProcesses），与页内那颗按钮共用同一份实现。
+  const TASK_RETRY_ACTIONS = {
+    runCostReview: { action: "costStep", payload: { step: "retry", label: "仅重试失败项" } },
+    costStep: { action: "costStep", payload: { step: "retry", label: "仅重试失败项" } },
+    runAllPartProcesses: { action: "retryFailedPartProcesses", payload: { label: "仅重试失败项" } },
+  };
+  function renderTaskRetry(card, status, detail) {
+    const spec = TASK_RETRY_ACTIONS[String((detail && detail.action) || "")];
+    const wanted = status === "partial" && Boolean(spec);
+    if (card.retryButton && !wanted) { card.retryButton.remove(); card.retryButton = null; }
+    if (!wanted || card.retryButton) return;
+    const button = el("button", "oc-chip oc-chip-retry", "仅重试失败项");
+    button.type = "button";
+    button.onclick = () => {
+      const board = boardBridge();
+      if (!board || typeof board.executeAction !== "function") {
+        pushSystem("仅重试失败项暂不可用：右侧看板尚未就绪，请稍后重试。");
+        return;
+      }
+      button.disabled = true;
+      Promise.resolve(board.executeAction(spec.action, Object.assign({}, spec.payload)))
+        .catch(error => {
+          // 重试本身失败由看板就地上报；这里只把真实原因说清楚，不再静默吞掉。
+          pushSystem(`仅重试失败项未完成：${(error && error.message) || "看板未响应"}`);
+        })
+        .finally(() => { button.disabled = false; });
+    };
+    card.box.append(button);
+    card.retryButton = button;
+    scrollDown();
+  }
   function renderTaskProgress(raw) {
     const detail = sanitizeTaskDetail(raw);
     const taskId = String(detail.taskId || detail.task_id || "");
@@ -1410,6 +1443,7 @@
     persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason);
     if (status === "succeeded" || status === "partial") {
       card.done = true;
+      renderTaskRetry(card, status, detail);
       refreshResultChips();          // 任务跑完，结果按钮重新置底并刷新数量
       loadFiles();                   // 几何、2D 图、导出表格都是任务产出
     }
@@ -1920,6 +1954,7 @@
         renderTaskProgress(Object.assign({}, payload, { status: "succeeded" }));
         return;
       }
+      if (name === "task-partial") { renderTaskProgress({ ...payload, status: "partial" }); return; }
       if (name === "task-failed") {
         renderTaskProgress(Object.assign({}, payload, { status: "failed" }));
         return;
