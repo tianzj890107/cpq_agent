@@ -2077,3 +2077,163 @@
 - **运维提醒（重要）**：这把密钥**启用后不可更换** —— 换掉之后已经存过个人 Key 的账号连读都会失败。
   8010 的重启命令今后都要带 `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh`（或先 `set -a; . 该文件; set +a`），
   `DEPLOYMENT.md` 的「部署前检查」与「线上实例现状」已把这条写成前置条件。
+
+## 94. 技术工艺任务卡：卡片体布局归位 + 任务框架「过程事件」通道：Spec / Red（9-16）
+
+- 用户口径（两条一起做，同一张卡的两个验收面）：① 右侧按钮跑出来的任务卡（例：
+  「需求资料解析 / 进行中 / 正在读取技术资料并调用模型提取需求字段」）所有文字挤在同一行，
+  按助手卡的同构形态改回来（内容包进 `.oc-abody`，或干脆不加 `.oc-amsg`）；② 给任务框架加一条
+  「过程事件」通道，把模型调用与工具摘要按序播进会话。
+- 只读排查（未改任何文件）定位到两件事，原因不同：
+  - **挤成一行是真回归**：`agent-chat.js:1387` 把 `oc-amsg oc-task-card is-queued` 三个类放在
+    同一个 div 上，`:1393` 又把「身份行」与「步骤列表」作为两个兄弟节点挂上去；而
+    `.oc-amsg` 是横向 flex（`agent-chat.css:168-172`），于是两者成了同一 flex 行的两个 item。
+    同函数上面那一支（合并进当前轮助手卡）把 steps 塞进 `.oc-abody`，所以只有「没有实时轮」
+    这条分支是坏的 —— 而 `activeTurnCtx` 为空正是「右侧看板点按钮」的常态
+    （`agent-chat.js:503/842/1374`）。回归由 `## 89`（`a4bd13c`）引入：改之前是
+    `el("div", "oc-task-card is-queued")`，默认 block、上下排列；`agent-chat.css:526` 的注释
+    「任务卡是同级卡（不在 `.oc-amsg` 里）」与实现相反。
+  - **看不到模型/工具是数据源问题**：这张卡的正文只有 `progress_log`
+    （`services/tasks.py:201-212` → `storage/store.py:236-257`）；「需求资料解析」的 job 在后台
+    线程里直接调模型（`main.py:5894-5896`），没经过 Agent 会话循环；`thinking` / `tool_use`
+    只在 `/agent/send` 的 SSE 里产生（`services/oc_agent.py:3036-3040`），任务线程永远不会产生
+    这类事件，落库也只存文字步骤（`tasks.py:251-257`）。所以不是"漏渲染"，是"根本没有这类数据"。
+- 新增 `docs/specs/tech-task-card-body-layout-and-process-stream.md`：契约 A1–A6（卡片体同构 /
+  直接子元素恰好 1 个 / 全文件 `.oc-amsg` 与 `.oc-abody` 成对 / 注释与实现一致 / 样式契约不变 /
+  两个现成样板 `aiProcessCard`·`crCard` 逐字不动）与 B1–B11（`tasks.process_event(phase,text)`、
+  `report_progress` 同源进流、建任务即有空日志、任务端点带 `process_log`、模型调用在"真正发起
+  调用的那一层"成对发事件、四处工具事件、六个轮询点透传 `process`、左侧按 seq 渲染并带 phase
+  色调、落库与前端合并都按 seq 取并集、回放同序、不放松），验收 A1–A6 / B1–B10。
+- 新增 `tests/test_tech_task_card_body_layout_red.py`（19 项）：
+  - 源码契约 10 项（spec 钉契约 / `ensureTaskCard` 必须建 `.oc-abody` / 身份行与步骤不得直接挂
+    卡片元素 / 全文件 `.oc-amsg` 与 `.oc-abody` 数量必须相等 / CSS 注释不得再写「不在 `.oc-amsg` 里」
+    且要有说明形状的注释 / `.oc-abody` 保持 `flex:1` + `min-width:0` / `.oc-task-steps` 保持纵向 /
+    chip 靠右与六态配色不动 / 两个样板结构不变 / 既有管线 token 一个不少）；
+  - 真跑 DOM 结构 9 项：从 `agent-chat.js` 抽出真的 `el` / `ensureTaskCard` / `pushTaskStep` /
+    `setTaskStatus` / `taskStatusWord`，用最小 DOM 桩驱动「没有实时轮」这条分支，断言
+    `.oc-amsg.oc-task-card` 的直接子元素**恰好 1 个**且是 `.oc-abody`、体里是「身份行 + 步骤区」、
+    步骤文字不出现在身份行里；另断言「合并进当前轮」那一支仍把 steps 放进本轮助手卡的 `.oc-abody`。
+- 新增 `tests/test_tech_task_process_stream_red.py`（25 项）：
+  - 源码契约 12 项（`tasks.process_event` + phase 白名单 + 非法 phase 报错 + 无任务上下文 no-op /
+    `PROCESS_LOG_LIMIT` 与建任务时初始化 / `report_progress` 同源进流 / `llm_client.run` **不得**
+    自己再发一对 / `claude_client.run` 与 `qwen_client.run` 必须发 / 四处工具事件
+    （`_process_lookup_for`·`_cost_lookup_for`·`_refresh_component_match`·`model_lookup_search`）/
+    六个轮询点透传 `process`（`app.js`·`assembly-integration.js`·`cost-review.js`·
+    `inline-analysis.js`·`requirement-create.js`·`agent-chat.js`）/ `pushTaskStep` 携带 phase /
+    `.oc-process-step.model`·`.tool` 配色 / 落库与回放带 process / `_merge_task_entry` 与
+    `mergeTask` 都按 seq 取并集）；
+  - 真跑后端 8 项（临时 `DATA_DIR` + `TestClient`，打桩 `claude_client._route`/`get_client`/`_tuning`，
+    用假 response 走完 `run()` 真实控制流，**绝不联网、不花钱**）：一条有序流
+    （`progress → tool → model → model → progress`，seq 1..5）、一次逻辑模型调用恰好一对事件且点名
+    实际模型、`progress_log` 既有形状不变、事件里不出现 system prompt / 用户输入 / API Key、
+    空文本 no-op 且非法 phase 让任务明确失败、无任务上下文静默且不写盘、任务端点带 `process_log`
+    且顺序一致、会话卡按 seq 合并且**重复文本保留两遍**；
+  - 真跑前端合并 5 项（node + vm 加载真的 `tech-session-timeline.js`）：`mergeTask` 按 seq 升序取并集、
+    同文本不同 seq 两条都留、`steps` 既有合并与状态就地更新不动、看板载荷的 `process` 落进同一张卡、
+    旧卡片（没有 process）照旧合并且不凭空补空数组。
+- Red 验证（9-16）：`open-claude/.venv/bin/python tests/test_tech_task_card_body_layout_red.py`
+  → 19 项中 **10 失败**；`... tests/test_tech_task_process_stream_red.py` → 25 项中 **19 失败
+  （含 subTest 共 28 条失败记录）**；失败点全是"功能缺失"，不是测试自身问题（DOM 桩真跑到了
+  `ensureTaskCard`，后端探针真跑到了任务线程与任务端点）。全量
+  `unittest discover -s tests -p 'test_*.py'` → **1629 项 / 38 条失败记录，全部来自本批两个文件**，
+  其余（含 ## 93 的 12 项）全绿。改前即绿的保护性用例 6 项：分派层不发事件、事件不泄漏、
+  同文本不同 seq 两条都留、steps 既有合并、旧卡片合并、`progress_log` 既有形状。
+- 明确不在本批：把后台任务改造成走 Agent 会话循环；播模型完整推理过程；右侧看板页面自己的过程卡
+  （`aiProcessCard` / `crCard` / `crSay`）如何使用 `process` —— 本批只要求它们结构不变。
+- 本批改动**未提交、未推送、未部署**（Spec + 两个红测 + 本 changelog 共四个文件）。
+
+## 95. 视觉闸门跟「实际会用的模型」走 + 过程事件带结构化明细：Spec / Red / 验收（9-16）
+
+用户口径（两个问题一起交付 Spec + 红测 + 实现提示词）：
+
+- **问题一**：在「我的模型与密钥」里把自己的模型改成 `qwen3.5-plus` 之后，图纸解析仍报
+  「当前生效模型 deepseek-v4-flash（来源：平台默认）不支持图像解析，请在「模型设置」里改用
+  支持多模态的模型」—— 看着就像"我设的模型根本没生效"。
+- **问题二**：`## 94` 只把"过程事件"播出来了，事件本身还是一行中文；用户要求**直接执行**
+  （右侧看板按钮 / 一键动作）时的逐件库检索要和 Agent 会话里的工具卡一样，能展开看
+  「查询条件 / 命中了谁 / 匹配度 / 差异」的输入输出。
+
+只读排查（未改任何文件）定位到两个不同根因：
+
+- **问题一是"一个口径被绕过"**：账号级覆盖只进了 `resolve(vision=…)` 一条路
+  （`llm_settings.py:315` → `_model_and_source(账号)`，`claude_client.py:167`、
+  `llm_client.py:103` 都在用）。而 `llm_settings.py:286` 的 `selected_model()` 仍是
+  `current_model_id()`（纯平台默认），偏偏 `qwen_client.py:291` 的 `_model_candidates()`
+  与 `llm_settings.py:293` 的 `ensure_vision_capable()` 都把它当成"这次实际会用的模型"。
+  于是同一次调用里**闸门判平台默认、真正发出去的是账号模型**，报错文案永远写「来源：平台默认」。
+  同源影响：`model_lookup.py:55`（选路按平台默认判 provider）、`ai_governance.py:51`（留痕）。
+  实测复现：`selected_model(vision=True)` 抛「deepseek-v4-flash（来源：平台默认）不支持图像解析」，
+  而同一时刻 `resolve(vision=True)["model"]` 已经是 `qwen3.5-plus`。
+- **问题二是"事件有了、载荷没有"**：`tasks.report_progress()` 只收一个参数
+  （`tasks.py:208`），四处工具事件只发文本（`main.py:1345/1473/1492/1692`），
+  `component_match.py:156-169` 的「查询条件 / 命中 / 差异」是拼好的中文句子 ——
+  `query_params` / `component_code` / `score` / `gap_notes` 这些事实只存在于落盘报告里；
+  前端 `pushTaskStep()`（`agent-chat.js:1407`）只画 dot + text，`persistTaskCard()`
+  （`agent-chat.js:1585`）落库只挑 `seq/phase/text`。
+
+新增 `docs/specs/effective-model-for-vision-and-task-process-detail.md`（契约 A1–A6 / B1–B8）：
+
+- **契约 A（模型只留一个口径）**：A1 `selected_model(vision=…)` 必须 == `resolve(vision=…)["model"]`；
+  A2 `_model_candidates(vision)[0]` == 实际发出的 `model=`；A3 报错点名**实际模型 + 正确来源**
+  （账号 →「账号 <user> 的个人设置」，平台默认 →「平台默认」）；A4 `model_lookup` 选路按生效模型；
+  A5 `ai_governance` 留痕兜底按生效模型；A6 不放松 —— 无 Key 明确失败、`VISION_MODELS` 语义不变、
+  没有账号上下文时行为与文案逐字不变。
+- **契约 B（过程事件带明细）**：B1 tool 明细固定五键 `{tool,title,input,output,status}`，
+  tool 白名单 `component_match/process_lookup/cost_lookup/model_lookup`，
+  status `running/ok/failed` 且 failed 必须带 `output.reason`；B2 model 明细 `{model,provider,vision}`；
+  B3 `report_progress(text, detail=None)` 且**文本口径一字不改**，服务层 `_report(progress, message,
+  detail=None)` 兼容单参回调；B4 `component_match` 逐件四行（目标/查询条件/命中/差异）+ 起始/结束行
+  都带 detail，文本行一条不减；B5 四处工具事件开始+返回都带 detail；B6 落库/合并/回放保住 detail
+  （`persistTaskCard`、`store._merge_task_entry`、`mergeTask`）；B7 有 detail 才渲染
+  `<details class="oc-process-detail">`，无 detail 的行 DOM 逐字不变；B8 不泄漏 prompt / Key /
+  响应正文 / 候选原件，单条明细 ≤ 4096 字节。
+
+新增两个红测（都在实现前真跑过，红是"功能缺失"不是测试自身问题）：
+
+- `tests/test_effective_model_for_vision_red.py`（15 项）：前 11 项用子进程真跑后端
+  （临时 `DATA_DIR`、打桩 `cpq_auth_client` 账号覆盖、打桩 `qwen_client.get_client` 抓
+  **实际发出去的 `model=`**、绝不联网），覆盖三个场景：账号选支持图像的模型 / 账号选纯文本模型 /
+  没有账号模型；另 4 项是源码契约（`current_model_id()` 只允许出现在 `llm_settings.py`、
+  `selected_model()` 必须走账号解析、`model_lookup._lookup_with_search()` 不得用 `selected_model(`
+  选路、`ai_governance._model()` 兜底必须账号感知）。
+- `tests/test_task_process_detail_red.py`（23 项）：三个层次 —— 后端子进程真跑
+  `report_progress` / `_refresh_component_match` / `_process_lookup_for` / `_cost_lookup_for` /
+  `qwen_client.run` 并回读 `process_log` 的 detail；源码契约（四处工具事件 ≥8 处带 detail、
+  三个服务 `_report` 收 detail、模型事件带 provider/vision）；node 真跑 DOM（从 `agent-chat.js`
+  抽出真的 `pushTaskStep`/`renderTaskProgress`/`persistTaskCard`，断言带明细的行长
+  `<details class="oc-process-detail">` 且输入/输出可见、不带明细的行子元素仍是
+  `['oc-process-dot','oc-process-text']` 逐字一致、落库载荷保住 `detail`）。
+- Red 验证（9-16，用 `git worktree` 在 `c30323b` 上重放，不碰工作区）：
+  `test_effective_model_for_vision_red` → 15 项中 **9 失败**；
+  `test_task_process_detail_red` → 23 项中 **19 失败**；失败清单全是"功能缺失"，
+  保护性用例（无账号模型时文案不变、不带明细的行不得长出详情、既有 `progress_log` 形状）改前即绿。
+
+实现与验收（实现由 DeepSeek 完成，Codex 只做验收，未写业务代码）：
+
+- 问题一：`selected_model()` 改为 `_model_and_source(_target_user(""))`（与 `resolve()` 同口径，
+  文档串写明"模型选择只留这一个口径"）；`model_lookup._lookup_with_search()` 的选路改成
+  `llm_settings.resolve(vision=False)["provider"]`；`ai_governance._model()` 兜底改成
+  `llm_settings.effective()["model"]`。三处合计 7 行。
+- 问题二：`tasks.py` 新增 `PROCESS_DETAIL_LIMIT=4096` 与 `_cap_detail()`（超限时优先截断最长字符串、
+  再退化为只留计数，绝不静默丢字段）、`report_progress(progress, detail=None)` 与
+  `process_event(phase, text, detail=None)` 都落 detail；`main.py` 新增 `_tool_detail()` 统一五键，
+  12 处工具事件（零部件库 / 工艺库 / 成本库 / 型号核验的开始、成功、失败）全部带 detail；
+  `component_match.py` 起始行、逐件目标行、查询条件行、命中行、差异行、结束行都带 detail
+  （文本行逐字未改）；`process_lookup.py` / `cost_lookup.py` / `claude_client.py` / `qwen_client.py`
+  的 `_report` 与模型事件同样带 detail；前端 `pushTaskStep(card, text, tone, phase, detail)`
+  在有 detail 时才建 `<details class="oc-process-detail">`（summary「详情」+ 工具行 + 输入/输出
+  两个 `pre`），`agent-chat.css` 补 `.oc-process-detail` 及其子元素样式，
+  `tech-session-timeline.mergeTask` 与 `store._merge_task_entry` 都按 seq 保留整行（含 detail）。
+- 验收（9-16）：`test_effective_model_for_vision_red` **15/15 绿**、
+  `test_task_process_detail_red` **23/23 绿**；全量
+  `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` →
+  **1667 项全绿**（含 `## 94` 的两个红测 44 项、`## 93` 的 12 项）。
+- 顺带修掉红测自身的三个缺陷（只动测试脚手架）：DOM 桩里 `rows` 与 `card.steps.children`
+  是同一个活数组、第二次 push 后按下标取到 `undefined`；落库载荷里 `detail` 为 `undefined`
+  时 `JSON.stringify` 会丢键、断言变成 ERROR 而不是 FAIL；`assertRegex` 失败时会把整份
+  源文件/样式表打进报错，改用 `assertTrue(re.search(...))` + 短消息。
+- 明确不在本批：把 `process` 明细接进右侧看板自己的过程卡（`aiProcessCard` / `crCard` / `crSay`）；
+  给过程明细加「复制 / 导出」；前端对嵌套 detail 做递归脱敏（后端已保证不放敏感内容，
+  前端 `sanitizeTaskDetail` 仍是顶层过滤）。
+- 本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 2 个 + 本 changelog；实现改动与
+  `## 94` 的实现改动仍在同一份未提交工作区里）。

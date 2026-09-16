@@ -308,6 +308,7 @@
       taskId: taskId,
       status: String(task.status || "running"),
       log: (task.steps || []).slice(),
+      process: Array.isArray(task.process) ? task.process : null,
       error: String(task.error || ""),
       prompt: String(task.prompt || ""),
     });
@@ -1390,7 +1391,9 @@
     head.append(el("span", "oc-alabel-sub", label));
     const state = el("span", "oc-alabel-state oc-task-state", "排队中");
     head.append(state);
-    box.append(head, steps);
+    var body = el("div", "oc-abody");
+    body.append(head, steps);
+    box.append(body);
     const wrapper = box;
     taskProgressHost().append(wrapper);
     scrollDown();
@@ -1401,17 +1404,34 @@
     taskProgressCards.set(key, card);
     return card;
   }
-  function pushTaskStep(card, text, tone) {
+  function pushTaskStep(card, text, tone, phase, detail) {
     if (!card || !text) return;
     // 后端用前导空格 + ↳ / · 表示「这一条是上一步的结果或依据」，
     // 前端据此缩进，动作与结果才分得开。
+    // phase 只决定过程行的色调：model / tool 各有专属类名；
+    // phase === "progress"（以及旧任务的无 phase 行）沿用默认样式，不新增类名。
     const raw = String(text);
     const sub = /^\s{2,}/.test(raw);
     const body = raw.replace(/^[\s]*[↳·]?\s*/, "");
-    const step = el("div", `oc-process-step${sub ? " sub" : ""}${tone ? ` ${tone}` : ""}`);
+    const phaseCls = phase === "model" || phase === "tool" ? ` ${phase}` : "";
+    const step = el("div", `oc-process-step${sub ? " sub" : ""}${tone ? ` ${tone}` : ""}${phaseCls}`);
     step.append(el("span", "oc-process-dot",
       tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•"));
     step.append(el("span", "oc-process-text", body));
+    if (detail && typeof detail === "object") {
+      // 有结构化明细才长「详情」；没有明细的行（含旧任务的 progress 行）结构逐字不变。
+      const heading = [detail.tool, detail.title, detail.status].filter(Boolean).join(" · ");
+      const box = el("details", "oc-process-detail");
+      box.append(el("summary", null, "详情"));
+      box.append(el("div", "oc-process-detail-tool", heading));
+      box.append(el("div", "oc-process-detail-label", "输入"));
+      box.append(el("pre", "oc-process-detail-input",
+        JSON.stringify(detail.input || {}, null, 2)));
+      box.append(el("div", "oc-process-detail-label", "输出"));
+      box.append(el("pre", "oc-process-detail-output",
+        JSON.stringify(detail.output || {}, null, 2)));
+      step.append(box);
+    }
     card.steps.append(step);
     scrollDown();
   }
@@ -1462,9 +1482,17 @@
     const taskId = String(detail.taskId || detail.task_id || "");
     const label = String(detail.label || "");
     const log = Array.isArray(detail.log) ? detail.log : [];
+    // 过程事件通道：只要载荷带 process 键（哪怕是空数组）就以它为准，按 seq 升序渲染；
+    // 旧任务没有 process_log，退回 progress_log 的文本行（兼容口径，不回归）。
+    const rawProcess = Array.isArray(detail.process) ? detail.process : null;
+    const processRows = rawProcess
+      ? rawProcess.slice().sort((a, b) =>
+          ((a && Number(a.seq)) || 0) - ((b && Number(b.seq)) || 0))
+      : null;
+    const streamLength = processRows ? processRows.length : log.length;
     const progressLine = String(detail.progress || "").trim();
     // label / taskId / log / progress 全空时不建空卡（不再把 label 兜底成「处理中」）。
-    if (!label && !taskId && !log.length && !progressLine) return;
+    if (!label && !taskId && !streamLength && !progressLine) return;
     const requested = String(detail.status || "running");
     // 中断是真实终态：服务重启 / 切看板 / 桥超时打断的在途任务标「中断」，
     // 既不谎报失败，也不能一直停在「进行中」。
@@ -1486,13 +1514,28 @@
     // 已经在跑的卡不翻红，也不再往会话里补噪音。
     const quietFailure = status === "failed" && isQuietBoardCode(detail.code);
     const existingCard = taskProgressCards.has(String(taskId || label || "task"));
+    // 有真实执行明细（进度行或过程事件）才算内容；已在运行的卡不重复建。
     const hasContent = log.length > 0 || existingCard;
-    if (!hasContent) return;
+    if (!hasContent && !streamLength) return;
     const card = ensureTaskCard(taskId, label);
     if (!card.prompt) card.prompt = String(detail.prompt || "").trim();
     const freshSteps = log.length > card.cursor ? log.slice(card.cursor) : [];
+    const processCursor = Number(card.processCursor) || 0;
+    const freshProcess = processRows && processRows.length > processCursor
+      ? processRows.slice(processCursor) : [];
     setTaskStatus(card, status);
-    if (log.length > card.cursor) {
+    if (processRows) {
+      // 过程序列按 seq 一行一条，phase 决定色调（model / tool / progress）。
+      // 游标按「已渲染到第几条」增量推进，重复投递不会叠加。
+      for (const entry of freshProcess) {
+        const line = String((entry && entry.text) || "").replace(/\s+$/, "");
+        if (line.trim()) {
+          pushTaskStep(card, line, toneOf(line), String((entry && entry.phase) || ""),
+                       (entry && entry.detail) || null);
+        }
+      }
+      card.processCursor = processRows.length;
+    } else if (log.length > card.cursor) {
       for (const entry of log.slice(card.cursor)) {
         const line = String(entry || "").replace(/\s+$/, "");
         if (line.trim()) pushTaskStep(card, line, toneOf(line));
@@ -1506,9 +1549,10 @@
         pushTaskStep(card, line, toneOf(line));
       }
     }
-    // 落库只提交新出现的进度行：服务端按行去重合并、就地更新同一张卡的状态。
+    // 落库只提交新出现的进度行与过程条目：服务端按行去重 / 按 seq 取并集，
+    // 就地更新同一张卡的状态。
     persistTaskCard(taskId, label, status, freshSteps, failureReason || interruptedReason,
-                   card.prompt);
+                   card.prompt, freshProcess);
     if (status === "succeeded" || status === "partial") {
       card.done = true;
       renderTaskRetry(card, status, detail);
@@ -1553,14 +1597,25 @@
 
   // 任务卡落库：key 固定 task:<taskId>，与 store.append_session_event 的同一 task.id
   // 只留一张卡的口径一致（前端 applyTaskProgress 也复用这套合并规则）。
-  function persistTaskCard(taskId, label, status, steps, error, prompt) {
+  function persistTaskCard(taskId, label, status, steps, error, prompt, process) {
     const id = String(taskId || label || "task");
+    const task = { id: id, label: String(label || ""), status: String(status || ""),
+                   steps: (steps || []).map(line => String(line).replace(/\s+$/, "")),
+                   error: String(error || ""), prompt: String(prompt || "") };
+    // 过程条目只提交新增的那几条（原样带 seq/phase/text），服务端按 seq 取并集。
+    if (Array.isArray(process) && process.length) {
+      // 原样带上整行（含 detail）：明细必须活过一次刷新，否则展开的入口会消失。
+      task.process = process.map(row => {
+        const item = { seq: row && row.seq, phase: String((row && row.phase) || ""),
+                       text: String((row && row.text) || "") };
+        if (row && row.detail !== undefined && row.detail !== null) item.detail = row.detail;
+        return item;
+      });
+    }
     persistSessionEvent({
       kind: "task", source: "shell", stage: boardStage(), text: String(label || ""),
       key: `task:${id}`,
-      task: { id: id, label: String(label || ""), status: String(status || ""),
-              steps: (steps || []).map(line => String(line).replace(/\s+$/, "")),
-              error: String(error || ""), prompt: String(prompt || "") },
+      task: task,
     });
   }
 
@@ -1688,6 +1743,7 @@
         detail: { label: "零部件库检索", taskId, status: task.status,
                   progress: task.progress || "",
                   log: Array.isArray(task.progress_log) ? task.progress_log : [],
+                  process: Array.isArray(task.process_log) ? task.process_log : null,
                   error: task.error || "" },
       }));
       if (task.status === "succeeded") return;

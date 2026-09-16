@@ -701,6 +701,44 @@ def run(
         raise RuntimeError("Qwen 路径暂不支持本项目的联网检索；请关闭“联网检索”后重试，或切回 OpenAI。")
     if sources_out is not None:
         sources_out.clear()
+    # 过程事件在**真正发起调用的这一层**发：llm_client 只做分派，再发一对会出现两份。
+    # 一次逻辑调用恰好一对（开始 + 成功/失败）；文本只出现实际模型名与规模，
+    # 绝不带上 prompt 原文、用户输入、附件内容、密钥或响应正文。
+    from . import tasks
+    vision = _is_vision(user_content)
+    planned = (_model_candidates(vision) or ("",))[0]
+    tasks.process_event("model", f"调用模型（{planned or '未配置模型'}）",
+                        detail=_model_detail(planned, vision))
+    try:
+        result = _invoke(system_prompt, user_content, output_model, max_tokens)
+    except Exception as exc:                            # noqa: BLE001 - 事件后原样上抛
+        reason = str(exc)[:80]
+        tasks.process_event("model", f"模型调用失败（{reason}）",
+                            detail=_model_detail(planned, vision))
+        raise
+    used = _last_used_model.get() or planned or "模型"
+    tasks.process_event("model", f"模型返回（{used}）",
+                        detail=_model_detail(used, vision))
+    return result
+
+
+def _model_detail(model: str, vision: bool) -> dict:
+    """模型事件的明细（Spec B2）：实际模型名 + provider + 是否带图，除此外不放别的。"""
+    from . import llm_settings
+    try:
+        provider = llm_settings.provider_of(str(model or ""))
+    except Exception:                                   # 表外模型：如实留空，不猜
+        provider = ""
+    return {"model": str(model or ""), "provider": provider, "vision": bool(vision)}
+
+
+def _invoke(
+    system_prompt: str,
+    user_content: List[Dict[str, Any]],
+    output_model: Type[T],
+    max_tokens: int | None = None,
+) -> T:
+    """一次逻辑调用的实际执行体（多候选 / 截断续写 / schema 修复都在这里）。"""
     vision = _is_vision(user_content)
     # 「模型设置」里配的温度/最大 token/是否思考必须真的用上 —— 以前这三项只在
     # Agent 会话里生效，平台自己的解析与分析仍走 .env 里的固定值，等于设了没用。
@@ -885,7 +923,6 @@ def run(
     if last_error:
         raise RuntimeError(str(last_error)) from last_error
     raise RuntimeError("Qwen 未返回可解析结果。")
-
 
 def parse_image_to_model(image_bytes: bytes, filename: str, system_prompt: str, user_instruction: str, output_model: Type[T]) -> T:
     return run(system_prompt, [image_block(image_bytes, filename), text_block(user_instruction)], output_model)

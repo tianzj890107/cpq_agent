@@ -90,11 +90,21 @@ def _put(target: dict, key: str, value: Any) -> None:
 
 
 def _material_code_for(spec: Optional[str]) -> Optional[str]:
-    """按牌号在物料库里反查编码；查不到就留空，不猜。"""
+    """按牌号在物料库里反查编码；查不到就留空，不猜。
+
+    编码只是检索的附带信息，**读不出来也留空**，绝不能因为一次物料库读取异常把
+    整轮检索（以及已经拿到的解析结果）拖垮；但知识库整体不可用仍要响亮失败。
+    """
     text = str(spec or "").strip()
     if not text:
         return None
-    for material in kb_repo.list_materials(keyword=text):
+    try:
+        materials = kb_repo.list_materials(keyword=text)
+    except KbUnavailable:
+        raise
+    except Exception:                                   # noqa: BLE001 - 附带信息，降级留空
+        return None
+    for material in materials:
         grade = str(material.get("grade") or "").strip()
         if grade and (grade in text or text in grade):
             return material["material_code"]
@@ -141,32 +151,67 @@ def match_part(part: dict) -> dict:
     }
 
 
+_TOOL_NAME = "component_match"
+_TOOL_TITLE = "零部件库检索"
+
+
+def _detail(status: str, input_facts: dict, output_facts: dict | None = None) -> dict:
+    """过程事件的明细统一五键形状（Spec B1）：tool / title / input / output / status。
+
+    只放事实（件号、序号、查询条件、判定、匹配度、差异、计数）——候选件完整数组、
+    库内原件详情、密钥一律不进明细。
+    """
+    return {"tool": _TOOL_NAME, "title": _TOOL_TITLE,
+            "input": dict(input_facts or {}), "status": status,
+            "output": dict(output_facts or {})}
+
+
 def match_project(project_id: str, ir: dict, *, progress: ProgressFn = None) -> dict:
     """对整份 IR 逐件检索零部件库，产出可复用/可改制/未匹配三档报告。"""
     parts = list(ir.get("parts") or [])
     _require_kb()                       # 报告一个字段都还没写,先确认知识库可用
     library_size = len(kb_repo.list_components(limit=1000))
-    _report(progress, f"零部件库检索开始：{len(parts)} 个零件 × 库内 {library_size} 条记录")
+    _report(progress, f"零部件库检索开始：{len(parts)} 个零件 × 库内 {library_size} 条记录",
+            _detail("running", {"parts": len(parts), "library_size": library_size}))
 
     items: list[dict] = []
+    total = len(parts)
     for index, part in enumerate(parts, start=1):
-        label = f"{part.get('part_id') or '?'} {part.get('name') or ''}".strip()
-        _report(progress, f"检索零部件库（{index}/{len(parts)}）：{label}")
+        part_id = part.get("part_id") or ""
+        part_name = part.get("name") or ""
+        label = f"{part_id or '?'} {part_name}".strip()
+        # 文本行一条不减、一条不改：明细只是**附着在同一行**上的结构化载荷，
+        # 让界面能展开看"拿什么条件比、命中了谁、差在哪"，绝不另起一条事件。
+        _report(progress, f"检索零部件库（{index}/{total}）：{label}",
+                _detail("running", {"part_id": part_id, "part_name": part_name,
+                                    "index": index, "total": total}))
         # 把查询条件本身也播出去：用户要能看出"是拿哪几个尺寸去比的"，
         # 只报结论的话，匹配不上时根本无从判断是库里没有还是条件提错了。
         query = build_query(part)
         criteria = "、".join(f"{key}={value:g}" for key, value in query["params"].items())
         _report(progress, f"  · 查询条件：{criteria or '无可用尺寸参数'}"
-                          + (f"，材料 {query['material_spec']}" if query["material_spec"] else ""))
+                          + (f"，材料 {query['material_spec']}" if query["material_spec"] else ""),
+                _detail("running", {"part_id": part_id, "params": dict(query["params"]),
+                                    "material_spec": query["material_spec"] or ""}))
         result = match_part(part)
         items.append(result)
+        hit = {"decision": result["decision"], "decision_label": result["decision_label"],
+               "component_code": result.get("component_code") or "",
+               "component_name": result.get("component_name") or "",
+               "score": float(result.get("score") or 0.0),
+               "match_type": result.get("match_type") or "none",
+               "candidate_count": len(result.get("candidates") or [])}
         if result["matched"]:
             _report(progress, f"  ↳ 命中 {result['component_code']} {result['component_name'] or ''}"
-                              f"（{result['decision_label']}，匹配度 {result['score']:.0%}）")
+                              f"（{result['decision_label']}，匹配度 {result['score']:.0%}）",
+                    _detail("running", {"part_id": part_id}, hit))
             if result.get("gap_notes"):
-                _report(progress, f"    差异：{result['gap_notes']}")
+                _report(progress, f"    差异：{result['gap_notes']}",
+                        _detail("running", {"part_id": part_id},
+                                {"gap_notes": result["gap_notes"]}))
         else:
-            _report(progress, "  ↳ 库内无同类件，按新制评估")
+            _report(progress, "  ↳ 库内无同类件，按新制评估",
+                    _detail("running", {"part_id": part_id}, hit))
 
     reuse = [item for item in items if item["decision"] == "reuse"]
     modify = [item for item in items if item["decision"] == "modify"]
@@ -185,16 +230,25 @@ def match_project(project_id: str, ir: dict, *, progress: ProgressFn = None) -> 
         },
     }
     _report(progress, f"零部件库检索完成：可复用 {len(reuse)}、可改制 {len(modify)}、"
-                      f"未匹配 {len(new)}")
+                      f"未匹配 {len(new)}",
+            _detail("ok", {}, dict(report["summary"], library_size=library_size)))
     return report
 
 
-def _report(progress: ProgressFn, message: str) -> None:
-    if progress:
-        try:
+def _report(progress: ProgressFn, message: str, detail: dict | None = None) -> None:
+    if not progress:
+        return
+    try:
+        if detail:
+            try:
+                progress(message, detail)
+            except TypeError:
+                # 回调只接受一个参数（既有的 list.append / 单参 lambda 探针）：回落单参。
+                progress(message)
+        else:
             progress(message)
-        except Exception:      # 进度上报失败不能影响检索本身
-            pass
+    except Exception:          # 进度上报失败不能影响检索本身
+        pass
 
 
 # --------------------------------------------------------------------------- #

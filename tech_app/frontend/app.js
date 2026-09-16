@@ -1270,6 +1270,8 @@ async function pollTask(projectId, taskId, label) {
         label, taskId, status: t.status,
         progress: t.progress || "",
         log: Array.isArray(t.progress_log) ? t.progress_log : [],
+        // 过程事件序列（model/tool/progress）：带 process_log 时按它以 seq 顺序渲染。
+        process: Array.isArray(t.process_log) ? t.process_log : null,
         error: t.error || "",
       }),
     }));

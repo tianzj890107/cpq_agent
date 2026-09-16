@@ -284,7 +284,13 @@ def api_key_of(provider: str, keys: dict[str, str] | None = None) -> str:
 
 
 def selected_model(*, vision: bool = False) -> str:
-    model = current_model_id()
+    """**生效模型**（与 resolve() 同一口径）：账号有覆盖就按覆盖，没有才回落平台默认。
+
+    以前这里直接读 current_model_id()（纯平台默认），于是同一次调用里"闸门判的模型"
+    与"实际发出的模型"会分裂：账号选了自己的模型，图纸解析仍按平台默认判图像能力，
+    报错永远写「来源：平台默认」。模型选择只留这一个口径。
+    """
+    model, _source = _model_and_source(_target_user(""))
     if vision:
         ensure_vision_capable(model)
     return model

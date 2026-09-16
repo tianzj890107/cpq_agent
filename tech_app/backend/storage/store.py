@@ -256,6 +256,32 @@ def append_task_progress(project_id: str, task_id: str, line: str) -> Optional[d
     return None
 
 
+PROCESS_LOG_LIMIT = 400
+
+
+def append_task_process(project_id: str, task_id: str, entry: dict) -> Optional[dict]:
+    """追加一条「过程事件」（phase=model/tool/progress），与进度日志同一把锁。
+
+    过程序列是**只增不改**的一条流：序号在本任务内从 1 单调递增，由这里在锁内分配，
+    并发写入不会撞号。落库与回放都按 seq 排序，顺序唯一。
+    """
+    with _task_lock:
+        data = _meta().get_doc(project_id, "tasks") or {"items": []}
+        for task in data.get("items", []):
+            if task.get("task_id") != task_id:
+                continue
+            log = task.get("process_log")
+            if not isinstance(log, list):
+                log = []
+            row = dict(entry or {})
+            row["seq"] = max((int((old or {}).get("seq") or 0) for old in log), default=0) + 1
+            log.append(row)
+            task["process_log"] = log[-PROCESS_LOG_LIMIT:]
+            _meta().put_doc(project_id, "tasks", data)
+            return task.copy()
+    return None
+
+
 def get_task(project_id: str, task_id: str) -> Optional[dict]:
     with _task_lock:
         data = _meta().get_doc(project_id, "tasks") or {"items": []}
@@ -1239,6 +1265,21 @@ def _merge_task_entry(previous: dict, incoming: dict) -> dict:
         if text and text not in steps:
             steps.append(text)
     merged["steps"] = steps
+    # process 是「过程事件」序列：按 seq 取并集、按 seq 升序，**不按文本去重** ——
+    # 不同零件说同一句话（"库内无同类件"）是合法的，不能像 steps 那样被吃掉。
+    previous_process = (previous or {}).get("process")
+    incoming_process = (incoming or {}).get("process")
+    if isinstance(previous_process, list) or isinstance(incoming_process, list):
+        by_seq: dict[int, dict] = {}
+        for row in list(incoming_process or []) + list(previous_process or []):
+            if not isinstance(row, dict):
+                continue
+            try:
+                seq = int(row.get("seq"))
+            except (TypeError, ValueError):
+                continue
+            by_seq.setdefault(seq, row)
+        merged["process"] = [by_seq[key] for key in sorted(by_seq)]
     return merged
 
 

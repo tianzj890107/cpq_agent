@@ -61,6 +61,24 @@
       if (text && steps.indexOf(text) < 0) steps.push(text);
     });
     merged.steps = steps;
+    // process 是过程事件序列：按 seq 取并集、按 seq 升序，**不按文本去重**
+    // （不同零件说同一句话是合法的）。两侧都没有时不凭空补一个空数组。
+    const previousProcess = isPlain(previous) && Array.isArray(previous.process)
+      ? previous.process : null;
+    const incomingProcess = isPlain(incoming) && Array.isArray(incoming.process)
+      ? incoming.process : null;
+    if (previousProcess || incomingProcess) {
+      const bySeq = new Map();
+      [].concat(incomingProcess || [], previousProcess || []).forEach(row => {
+        if (!isPlain(row)) return;
+        const seq = Number(row.seq);
+        if (!Number.isFinite(seq) || bySeq.has(seq)) return;
+        bySeq.set(seq, row);
+      });
+      merged.process = Array.from(bySeq.keys())
+        .sort((left, right) => left - right)
+        .map(seq => bySeq.get(seq));
+    }
     return merged;
   }
 
@@ -143,20 +161,25 @@
     const index = items.findIndex(entry =>
       String((entry.task && entry.task.id) || '') === taskId);
     if (index < 0) {
+      const freshTask = { id: taskId, label: detail.label || '',
+                          status: detail.status || 'running',
+                          steps: (detail.steps || []).slice(), error: detail.error || '' };
+      if (Array.isArray(detail.process)) freshTask.process = detail.process.slice();
       const fresh = normalize({
         kind: 'task', source: detail.source || 'board', stage: detail.stage || '',
         ts: detail.ts || new Date().toISOString(),
         text: detail.label || '',
-        task: { id: taskId, label: detail.label || '', status: detail.status || 'running',
-                steps: (detail.steps || []).slice(), error: detail.error || '' },
+        task: freshTask,
       });
       return append(items, fresh);
     }
     const card = Object.assign({}, items[index]);
-    card.task = mergeTask(items[index].task, {
+    const incomingTask = {
       id: taskId, label: detail.label || '', status: detail.status || '',
       steps: (detail.steps || []).slice(), error: detail.error || '',
-    });
+    };
+    if (Array.isArray(detail.process)) incomingTask.process = detail.process.slice();
+    card.task = mergeTask(items[index].task, incomingTask);
     if (detail.label) card.text = detail.label;
     const next = items.slice();
     next[index] = card;

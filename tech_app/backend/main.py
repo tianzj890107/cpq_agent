@@ -1331,6 +1331,18 @@ def _kb_unavailable_info(exc: BaseException) -> dict:
     }
 
 
+def _tool_detail(tool: str, title: str, *, status: str,
+                 input: Optional[dict] = None, output: Optional[dict] = None) -> dict:
+    """过程事件的工具明细统一五键形状（Spec B1）：tool / title / input / output / status。
+
+    只放事实（件号、序号、查询条件、判定、匹配度、差异、计数）——密钥、prompt 原文、
+    附件内容与候选件完整数组一律不进明细。
+    """
+    return {"tool": str(tool or ""), "title": str(title or ""),
+            "input": dict(input or {}), "status": str(status or "running"),
+            "output": dict(output or {})}
+
+
 def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> None:
     """把当前零件清单拿到零部件库里比一遍，标出可复用/可改制/未匹配。
 
@@ -1342,15 +1354,32 @@ def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> No
     但"没查到"这件事必须**留下现场**（落盘 + 左边提示），不能只写一条审计就完事：
     审计是给事后追溯的，用户当场看不到，刷新页面后现场就没了。
     """
+    tasks.process_event("tool", "检索零部件库开始",
+                        detail=_tool_detail("component_match", "零部件库检索",
+                                            status="running"))
     try:
         report = component_match.match_project(
             project_id, payload, progress=tasks.report_progress,
         )
         component_match.save_report(project_id, report)   # 成功即清掉"未检索"状态
         payload["component_match"] = report
+        summary = report.get("summary") or {}
+        reuse = summary.get("reuse", 0)
+        modify = summary.get("modify", 0)
+        tasks.process_event("tool", f"  ↳ 命中可复用 {reuse} 件、可改制 {modify} 件",
+                            detail=_tool_detail(
+                                "component_match", "零部件库检索", status="ok",
+                                output={"total": summary.get("total", 0), "reuse": reuse,
+                                        "modify": modify, "new": summary.get("new", 0),
+                                        "library_size": report.get("library_size", 0)}))
     except Exception as exc:
         info = _kb_unavailable_info(exc)
-        tasks.report_progress(f"  ↳ {info['message']}：{str(exc)[:120]}（不影响已得到的{kept}）")
+        reason = str(exc)[:120]
+        tasks.report_progress(f"  ↳ {info['message']}：{reason}（不影响已得到的{kept}）")
+        tasks.process_event("tool", f"  ↳ 零部件库检索失败：{reason}",
+                            detail=_tool_detail("component_match", "零部件库检索",
+                                                status="failed",
+                                                output={"reason": reason}))
         store.audit(project_id, "component_match_failed", {"error": str(exc)[:200]})
         store.save_component_match_unavailable(project_id, info)
 
@@ -1465,20 +1494,43 @@ def _match_for_part(project_id: str, part_id: str) -> Optional[dict]:
 
 
 def _process_lookup_for(project_id: str, part_id: str, part: dict) -> Optional[dict]:
+    tasks.process_event("tool", f"检索企业工艺库（{part_id}）",
+                        detail=_tool_detail("process_lookup", "企业工艺库检索",
+                                            status="running", input={"part_id": part_id}))
     try:
         report = process_lookup.lookup_part(
             part, match=_match_for_part(project_id, part_id),
             progress=tasks.report_progress,
         )
         process_lookup.save_report(project_id, part_id, report)
+        summary = report.get("summary") or {}
+        route_code = (report.get("route") or {}).get("route_code") or ""
+        route_steps = summary.get("route_steps", 0)
+        extra_steps = summary.get("extra_steps", 0)
+        tasks.process_event("tool", f"  ↳ 命中 {route_steps} 道工序、补充工序 {extra_steps} 条",
+                            detail=_tool_detail(
+                                "process_lookup", "企业工艺库检索", status="ok",
+                                input={"part_id": part_id},
+                                output={"route_code": route_code, "route_steps": route_steps,
+                                        "extra_steps": extra_steps,
+                                        "feature_gaps": len(report.get("feature_gaps") or []),
+                                        "library_steps": summary.get("library_steps", 0)}))
         return report
     except Exception as exc:
+        reason = str(exc)[:120]
+        tasks.process_event("tool", f"  ↳ 企业工艺库检索失败：{reason}",
+                            detail=_tool_detail("process_lookup", "企业工艺库检索",
+                                                status="failed", input={"part_id": part_id},
+                                                output={"reason": reason}))
         store.audit(project_id, "process_lookup_failed",
                     {"part_id": part_id, "error": str(exc)[:200]})
         return None
 
 
 def _cost_lookup_for(project_id: str, part_id: str, part: dict, quantity: int) -> Optional[dict]:
+    tasks.process_event("tool", f"检索企业成本库（{part_id}）",
+                        detail=_tool_detail("cost_lookup", "企业成本库检索", status="running",
+                                            input={"part_id": part_id, "quantity": quantity}))
     try:
         report = cost_lookup.lookup_part(
             part, quantity=quantity, match=_match_for_part(project_id, part_id),
@@ -1486,8 +1538,23 @@ def _cost_lookup_for(project_id: str, part_id: str, part: dict, quantity: int) -
             progress=tasks.report_progress,
         )
         cost_lookup.save_report(project_id, part_id, report)
+        summary = report.get("summary") or {}
+        materials = summary.get("materials", 0)
+        rates = summary.get("rates", 0)
+        tasks.process_event("tool", f"  ↳ 命中物料价 {materials} 条、费率 {rates} 条",
+                            detail=_tool_detail(
+                                "cost_lookup", "企业成本库检索", status="ok",
+                                input={"part_id": part_id, "quantity": quantity},
+                                output={"materials": materials, "rates": rates,
+                                        "factors": summary.get("factors", 0)}))
         return report
     except Exception as exc:
+        reason = str(exc)[:120]
+        tasks.process_event("tool", f"  ↳ 企业成本库检索失败：{reason}",
+                            detail=_tool_detail("cost_lookup", "企业成本库检索",
+                                                status="failed",
+                                                input={"part_id": part_id, "quantity": quantity},
+                                                output={"reason": reason}))
         store.audit(project_id, "cost_lookup_failed",
                     {"part_id": part_id, "error": str(exc)[:200]})
         return None
@@ -1674,7 +1741,28 @@ def model_lookup_search(project_id: str, user: dict = Depends(current_user)):
 
     def job():
         tasks.report_progress("正在调用模型识别候选型号")
-        result = model_lookup.identify_models(DesignIR(**ir_dict), attachments)
+        tasks.process_event("tool", "联网核验型号",
+                            detail=_tool_detail("model_lookup", "型号联网核验",
+                                                status="running"))
+        try:
+            result = model_lookup.identify_models(DesignIR(**ir_dict), attachments)
+        except Exception as exc:
+            reason = str(exc)[:120]
+            tasks.process_event("tool", f"  ↳ 型号联网核验失败：{reason}",
+                                detail=_tool_detail("model_lookup", "型号联网核验",
+                                                    status="failed",
+                                                    output={"reason": reason}))
+            raise
+        identifications = list(result.identifications or [])
+        counts = {"matched": 0, "ambiguous": 0, "not_found": 0, "not_a_model": 0}
+        for item in identifications:
+            decision = str(getattr(item, "status", "") or "").strip().lower()
+            if decision in counts:
+                counts[decision] += 1
+        candidate_count = len(identifications)
+        tasks.process_event("tool", f"  ↳ 命中 {candidate_count} 个型号候选",
+                            detail=_tool_detail("model_lookup", "型号联网核验", status="ok",
+                                                output=counts))
         tasks.report_progress("型号候选已返回，正在去重并保存待确认结果")
         _assert_ir_unchanged(project_id, expected_ir)
         payload = result.model_dump()

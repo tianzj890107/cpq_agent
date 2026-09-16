@@ -52,7 +52,9 @@ def _lookup_with_search(prompt: dict, *, max_tokens: int):
     """
     from . import llm_client, llm_settings
 
-    provider = llm_settings.provider_of(llm_settings.selected_model(vision=False))
+    # 选路必须按**生效模型**（账号可覆盖），不能拿平台默认判 provider：账号选了 qwen
+    # 而平台默认是 deepseek 时，走错分支就会报"Qwen 调用失败"这类误导性错误。
+    provider = llm_settings.resolve(vision=False)["provider"]
     if provider == "qwen":
         return qwen_client.complete_to_model_with_web_search(
             _SYSTEM_PROMPT, prompt, ModelLookupResult, max_tokens=max_tokens)

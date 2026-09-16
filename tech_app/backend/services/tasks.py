@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 import traceback
@@ -33,6 +34,11 @@ _cad_lock = threading.Lock()  # 串行化 CAD(OCCT 非线程安全)
 _submit_lock = threading.Lock()  # 防止双击/多标签页重复提交同一种昂贵任务
 _MAX_ERROR_CHARS = 4000
 _CURRENT_TASK: ContextVar[tuple[str, str, str, int] | None] = ContextVar("current_task", default=None)
+
+# 过程事件的阶段词表：封闭三值，写错了必须当场报错（见 process_event）。
+_TASK_PROCESS_PHASES = ("model", "tool", "progress")
+# 与 PROGRESS_LOG_LIMIT 同量级：只防异常循环把任务文档撑爆。
+PROCESS_LOG_LIMIT = 400
 
 _SOP_NAMES = {
     "parse": ("图纸解析 SOP", 3), "verify": ("图纸校核 SOP", 3),
@@ -122,6 +128,9 @@ def submit(
             # 只增不改的进度日志。前端据此把每一步渲染成对话里的时间线；
             # 上面的 progress 只是"最新一条"，供状态条显示。
             "progress_log": [],
+            # 过程事件序列（phase=model/tool/progress）：与进度日志同一条有序流，
+            # 会话卡据此回放「调用了哪个模型、哪个工具、拿到什么规模」。
+            "process_log": [],
             "sop_name": sop_name,
             "sop_step": 0,
             "sop_total": sop_total,
@@ -198,8 +207,12 @@ def _update(project_id: str, task_id: str, **fields) -> None:
     store.update_task(project_id, task_id, **fields)
 
 
-def report_progress(progress: str) -> None:
-    """更新当前异步任务的真实阶段；任务函数内可直接调用。"""
+def report_progress(progress: str, detail=None) -> None:
+    """更新当前异步任务的真实阶段；任务函数内可直接调用。
+
+    detail 是可选的结构化明细：**文本口径一字不改**（progress_log / progress 照旧），
+    有明细时附着在同一条 process_log 行上，绝不为了带明细另起一条进度行。
+    """
     current = _CURRENT_TASK.get()
     if not current or not progress:
         return
@@ -209,7 +222,100 @@ def report_progress(progress: str) -> None:
     # 必须 append 而不是覆盖：轮询间隔（1.2s）内播出的多条进度，覆盖式写法只会
     # 剩下最后一条，检索类任务因此看起来"完全没有过程"。
     store.append_task_progress(project_id, task_id, str(progress)[:240])
+    # 同一条进度也进 process_log：进度行与模型 / 工具事件共用一条有序序列，
+    # 会话卡才能按唯一顺序回放（见 process_event）。
+    row = {"phase": "progress", "text": str(progress)[:240], "at": _now()}
+    if detail is not None:
+        row["detail"] = _cap_detail(detail)
+    store.append_task_process(project_id, task_id, row)
+    # 带 detail 的行与不带 detail 的旧行共用同一套渲染：没有明细就不长「详情」。
     _update(project_id, task_id, sop_step=next_step)
+
+
+def process_event(phase: str, text: str, detail=None) -> None:
+    """往当前任务的过程序列里播一条事件（phase：model / tool / progress）。
+
+    与 report_progress 同族：**没有任务上下文时静默 no-op**（Agent 会话线程、HTTP
+    请求线程都会走到这里，绝不能污染它们，也不能凭空写盘）。非法 phase 则明确报错 ——
+    阶段是封闭词表，"model" / "tool" / "progress" 之外的写法是代码 bug，必须当场看见。
+
+    只播"调用了哪个模型 / 哪个工具、拿到什么规模"这类事实：不得写入 prompt 原文、
+    附件内容、密钥或响应正文（文本还会被截到 240 字）。
+    """
+    name = str(phase or "").strip()
+    if name not in _TASK_PROCESS_PHASES:
+        raise ValueError(
+            '未知的过程阶段 phase=%s（只允许 "model" / "tool" / "progress"）' % phase)
+    current = _CURRENT_TASK.get()
+    if not current:
+        return
+    body = str(text or "").strip()
+    if not body:
+        return
+    project_id, task_id, _kind, _step = current
+    entry = {"phase": name, "text": body[:240], "at": _now()}
+    if detail is not None:
+        entry["detail"] = _cap_detail(detail)
+    store.append_task_process(project_id, task_id, entry)
+
+
+PROCESS_DETAIL_LIMIT = 4096
+_DETAIL_SUFFIX = "…（明细已截断）"
+
+
+def _detail_size(value) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _string_nodes(value, path=()):
+    """列出明细里所有字符串叶子（含路径），供超限时优先截断长文本。"""
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.extend(_string_nodes(item, path + (key,)))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(_string_nodes(item, path + (index,)))
+    elif isinstance(value, str):
+        found.append((path, value))
+    return found
+
+
+def _assign_path(value, path, new_value) -> None:
+    node = value
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = new_value
+
+
+def _cap_detail(detail):
+    """把明细收口成可落库的 JSON：非字典丢弃，序列化超 4096 字节时显式截断。
+
+    明细是给界面展开的附属信息，不能因为一段超长差异文本把任务文档撑爆；截断优先
+    保留计数与件号，长字符串留明确后缀 —— 不静默丢字段。
+    """
+    if not isinstance(detail, dict):
+        return None
+    try:
+        text = json.dumps(detail, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+    capped = json.loads(text)
+    if len(text.encode("utf-8")) <= PROCESS_DETAIL_LIMIT:
+        return capped
+    while _detail_size(capped) > PROCESS_DETAIL_LIMIT:
+        nodes = _string_nodes(capped)
+        if not nodes:
+            break
+        path, longest = max(nodes, key=lambda item: len(item[1]))
+        if len(longest) <= 40:
+            break
+        _assign_path(capped, path, longest[: max(20, len(longest) // 2)] + _DETAIL_SUFFIX)
+    if _detail_size(capped) > PROCESS_DETAIL_LIMIT:
+        for key in ("output", "input"):
+            capped[key] = {name: item for name, item in (capped.get(key) or {}).items()
+                           if isinstance(item, (int, float, bool))}
+    return capped
 
 
 def _safe_error(exc: Exception) -> str:

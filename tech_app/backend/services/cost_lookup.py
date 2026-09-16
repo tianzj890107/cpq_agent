@@ -214,12 +214,20 @@ def _lookup_factors(category: Optional[str], material_category: Optional[str],
     return factors
 
 
-def _report(progress: ProgressFn, message: str) -> None:
-    if progress:
-        try:
+def _report(progress: ProgressFn, message: str, detail: dict | None = None) -> None:
+    if not progress:
+        return
+    try:
+        if detail:
+            try:
+                progress(message, detail)
+            except TypeError:
+                # 回调只接受一个参数（既有的 list.append / 单参 lambda 探针）：回落单参。
+                progress(message)
+        else:
             progress(message)
-        except Exception:      # 进度上报失败不能影响检索本身
-            pass
+    except Exception:          # 进度上报失败不能影响检索本身
+        pass
 
 
 # --------------------------------------------------------------------------- #

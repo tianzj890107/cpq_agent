@@ -314,7 +314,8 @@ async function aiPollTask(taskId, card, label) {
     // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
     aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
                                      status: task.status === 'interrupted' ? 'interrupted' : 'running',
-                                     log: log });
+                                     log: log,
+                                     process: Array.isArray(task.process_log) ? task.process_log : null });
     if (task.status === 'succeeded') return task.result;
     if (task.status === 'failed') throw new Error(task.error || '任务失败');
     // 服务重启把在途任务打断了：中断是终态，不能继续 while(true) 轮询下去。

@@ -234,6 +234,8 @@
       const taskDetail = { label: title, taskId, status: task.status,
                 progress: task.progress || "",
                 log: Array.isArray(task.progress_log) ? task.progress_log : [],
+                // 过程事件序列（model/tool/progress）：有就以它为准，无则退回 log。
+                process: Array.isArray(task.process_log) ? task.process_log : null,
                 error: task.error || "" };
       window.dispatchEvent(new CustomEvent("agent:task-progress", { detail: taskDetail }));
       // 同一份 detail 也经看板运行时按状态转给统一父壳（看板是 iframe）；独立打开无害。

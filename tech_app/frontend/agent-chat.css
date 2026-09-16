@@ -336,6 +336,25 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-process-step.hit { color: #15803d; }
 .oc-process-step.miss { color: #b45309; }
 .oc-process-step.err { color: #b91c1c; }
+/* 过程事件通道的专属色调：模型调用（model）与工具执行（tool）各一眼可辨，
+   progress 行沿用上面的默认样式（含 ↳ 缩进与命中/未命中判定），不另起一套。 */
+.oc-process-step.model { color: #0050C4; }
+.oc-process-step.tool { color: #15803d; }
+/* 过程行的「详情」：沿用 Agent 工具卡的视觉语言（细分隔线 + 小号 summary + pre 展示 JSON）。
+   只有带结构化明细的行才建这个块，没有明细的行 DOM 与今天逐字一致。 */
+.oc-process-detail { flex: 1; min-width: 0; margin-top: 1px; }
+.oc-process-detail > summary {
+  padding-top: 2px; border-top: .5px solid var(--oc-border-3); color: var(--oc-text-3);
+  font-size: 11px; line-height: 1.6; cursor: pointer; list-style: none;
+}
+.oc-process-detail > summary::-webkit-details-marker { display: none; }
+.oc-process-detail-tool { margin-top: 4px; color: var(--oc-text-3); font-size: 11px; }
+.oc-process-detail-label { margin-top: 6px; color: var(--oc-text-3); font-size: 11px; }
+.oc-process-detail pre {
+  margin: 2px 0 0; padding: 6px 8px; border-radius: 8px; background: var(--oc-bg-2);
+  color: var(--oc-text-2); font-size: 11px; line-height: 1.5; white-space: pre-wrap;
+  word-break: break-word; max-height: 240px; overflow: auto;
+}
 
 /* 零部件库检索结果：与其它卡内区块一样，不再自带边框与底色。 */
 .oc-match-card { padding: 0; }
@@ -523,7 +542,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 /* ---------- 统一父壳左侧会话：任务执行进度（按 taskId 一张卡） ---------- */
 .oc-task-progress { display: flex; flex-direction: column; gap: 10px; }
 .oc-task-progress:empty { display: none; }
-/* 任务卡是同级卡（不在 .oc-amsg 里），保留自己的框，但与助手卡完全同款。 */
+/* 任务卡与助手回复同款：挂在同一个 .oc-amsg 节点上（oc-amsg oc-task-card），
+   内容落在 .oc-abody 里，身份行（.oc-alabel）与步骤区（.oc-task-steps）在体里上下排列。 */
 .oc-task-card {
   padding: 11px 14px; border: 1px solid var(--oc-border-3); border-radius: 14px;
   background: #ffffff;

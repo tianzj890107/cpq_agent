@@ -178,38 +178,62 @@ def run(system_prompt: str, user_content: List[Dict[str, Any]], output_model: Ty
             sources_out.extend({"title": acc[url], "url": url} for url in acc)
         return model
 
-    response = _create_until_done(
-        client, system, tools, [{"role": "user", "content": user_content}], max_tokens, acc,
-        model=route["model"], thinking=bool(tuning.get("thinking", True)))
-    data = _extract_tool_input(response, _TOOL_NAME)
-    error = None
-    if data is not None:
-        try:
-            return finish(output_model.model_validate(data))
-        except ValidationError as exc:
-            error = str(exc)
-    else:
-        error = "未调用 emit_design_ir 工具。"
-
-    repair = user_content + [{"type": "text", "text": (
-        f"上一次未能得到合规结果({error})。请务必调用 {_TOOL_NAME} 工具，"
-        "严格按其 input_schema 输出，确保所有必填字段齐全、类型正确。"
-    )}]
-    # 修复重试必须用同一个模型与同样的思考设置 —— 漏传就会悄悄退回 .env 里的
-    # CLAUDE_MODEL，等于"第一次用你选的模型，重试时换成别的"。
-    response = _create_until_done(
-        client, system, tools, [{"role": "user", "content": repair}], max_tokens, acc,
-        model=route["model"], thinking=bool(tuning.get("thinking", True)))
-    data = _extract_tool_input(response, _TOOL_NAME)
-    if data is None:
-        raise RuntimeError(
-            f"{route['model']} 未能产出结构化结果 (stop_reason={response.stop_reason})。")
+    # 过程事件在**真正发起调用的这一层**发：llm_client 只做分派，再发一对会出现两份。
+    # 一次逻辑调用恰好一对（开始 + 成功/失败）——run 内部为修复重试再跑一轮，仍算这一对。
+    # 文本只出现实际使用的模型名，绝不带上 prompt 原文、用户输入、附件内容、密钥或响应正文。
+    from . import tasks
+    tasks.process_event("model", f"调用模型（{route['model']}）",
+                        detail=_model_detail(route, vision))
+    outcome: T | None = None
     try:
-        return finish(output_model.model_validate(data))
-    except ValidationError as exc:
-        # 报出实际跑的那个模型，不要写死"Claude" —— 这条路径也可能跑的是别的
-        # Anthropic 模型，用户看到的名字必须和「模型设置」里选的对得上。
-        raise RuntimeError(f"{route['model']} 输出未通过 schema 校验: {exc}") from exc
+        response = _create_until_done(
+            client, system, tools, [{"role": "user", "content": user_content}], max_tokens, acc,
+            model=route["model"], thinking=bool(tuning.get("thinking", True)))
+        data = _extract_tool_input(response, _TOOL_NAME)
+        error = None
+        if data is not None:
+            try:
+                outcome = finish(output_model.model_validate(data))
+            except ValidationError as exc:
+                error = str(exc)
+        else:
+            error = "未调用 emit_design_ir 工具。"
+
+        if outcome is None:
+            repair = user_content + [{"type": "text", "text": (
+                f"上一次未能得到合规结果({error})。请务必调用 {_TOOL_NAME} 工具，"
+                "严格按其 input_schema 输出，确保所有必填字段齐全、类型正确。"
+            )}]
+            # 修复重试必须用同一个模型与同样的思考设置 —— 漏传就会悄悄退回 .env 里的
+            # CLAUDE_MODEL，等于"第一次用你选的模型，重试时换成别的"。
+            response = _create_until_done(
+                client, system, tools, [{"role": "user", "content": repair}], max_tokens, acc,
+                model=route["model"], thinking=bool(tuning.get("thinking", True)))
+            data = _extract_tool_input(response, _TOOL_NAME)
+            if data is None:
+                raise RuntimeError(
+                    f"{route['model']} 未能产出结构化结果 (stop_reason={response.stop_reason})。")
+            try:
+                outcome = finish(output_model.model_validate(data))
+            except ValidationError as exc:
+                # 报出实际跑的那个模型，不要写死"Claude" —— 这条路径也可能跑的是别的
+                # Anthropic 模型，用户看到的名字必须和「模型设置」里选的对得上。
+                raise RuntimeError(f"{route['model']} 输出未通过 schema 校验: {exc}") from exc
+    except Exception as exc:                            # noqa: BLE001 - 事件后原样上抛
+        reason = str(exc)[:80]
+        tasks.process_event("model", f"模型调用失败（{reason}）",
+                            detail=_model_detail(route, vision))
+        raise
+    tasks.process_event("model", f"模型返回（{route['model']}）",
+                        detail=_model_detail(route, vision))
+    return outcome
+
+
+def _model_detail(route: dict, vision: bool) -> dict:
+    """模型事件的明细（Spec B2）：实际模型名 + provider + 是否带图，除此外不放别的。"""
+    return {"model": str((route or {}).get("model") or ""),
+            "provider": str((route or {}).get("provider") or ""),
+            "vision": bool(vision)}
 
 
 def parse_image_to_model(image_bytes: bytes, filename: str, system_prompt: str,
