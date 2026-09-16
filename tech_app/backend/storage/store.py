@@ -372,8 +372,11 @@ def save_ir(project_id: str, ir_dict: dict, stage: str = "parsed", author: str =
         meta = load_meta(project_id) or {}
         meta["ir_revision"] = int(meta.get("ir_revision") or 0) + 1
         meta["ir_input_revision"] = int(meta.get("input_revision") or 1)
-        meta["derived_results_stale"] = True
-        meta["derived_results_stale_reason"] = "设计 IR 已变化，请重新生成下游工艺或几何结果"
+        # 这里**不再**无条件把 derived_results_stale 置真：IR 一变就说「整份下游结果作废」
+        # 会把没被改到的零件一起判过期。逐件过期由结果条目自带的 source_part_hash /
+        # source_attr_hash 判断（见 docs/specs/tech-per-part-result-staleness.md）。
+        # 这个标记只留给「输入被替换 / 解析被重置」（replace_source / add_attachment /
+        # reset），它们是真正影响整份结果的输入变化。
         meta.setdefault("stages", {})[stage] = _now()
         _meta().put_meta(project_id, meta)
         audit(project_id, f"save_ir:{stage}", {"parts": len(ir_dict.get("parts", [])), "note": note})

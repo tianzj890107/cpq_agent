@@ -40,6 +40,8 @@ let currentProject = null;
 let currentIR = null;
 let currentGeometry = null;
 let currentDrawings = null;
+// GET /api/projects/{id} 给的逐件过期状态：改一个零件只标那一个，不再整份清空。
+let artifact_status = null;
 let currentIsImg = true;       // 是否为"图→IR"项目(3D 导入项目不可改参重生)
 let currentSelectedId = null;  // 当前选中的零件 id
 let viewerBroken = false;      // WebGL 不可用：3D 预览降级，其余流程照常
@@ -1321,6 +1323,7 @@ async function openProject(pid) {
   currentIR = data.ir;
   currentGeometry = data.geometry;
   currentDrawings = data.drawings;
+  artifact_status = data.artifact_status || null;
 
   // 原图区: 图片项目显示原图; 3D 导入项目无 2D 原图,显示占位
   const fname = (data.meta && data.meta.source_filename) || "";
@@ -1447,6 +1450,16 @@ function buildClientTree(ir) {
   return root;
 }
 
+// 逐件过期标记：数据来自后端 artifact_status（不是整份判过期）。
+// 过期件只是带标记，3D / 2D 文件仍在，用户照样能点开对比、再点「重新生成零件」。
+function partStaleMark(partId) {
+  const status = artifact_status || {};
+  const staleParts = (status.geometry_parts_stale || []).concat(status.drawings_parts_stale || []);
+  if (staleParts.indexOf(partId) >= 0) return " · 结果已过期";
+  if (((status.stale_attributes || {})[partId] || []).length) return " · 质量待重算";
+  return "";
+}
+
 function renderNode(node, container, depth, partById) {
   const pad = 6 + depth * 14;
   if (node.type === "assembly") {
@@ -1475,11 +1488,12 @@ function renderNode(node, container, depth, partById) {
     : (g.issues && g.issues.length ? " · 待补参数" : " · 几何✗")) : "";
   const dstat = dw ? (dw.ok ? " · 2D✓"
     : (dw.issues && dw.issues.length ? " · 2D待补参数" : " · 2D✗")) : "";
+  const mark = partStaleMark(p.part_id);
   div.innerHTML =
     `${partThumbnail(p)}<div class="part-info">` +
     `<div class="part-name">${esc(p.part_id)} ${esc(p.name)}` +
     `<span class="part-confidence">${(p.confidence * 100 | 0)}%</span></div>` +
-    `<div class="part-type">${esc(feats)} · ${p.material ? esc(p.material.spec) : "材料待确认"} · ${p.quantity}件${gstat}${dstat}</div>` +
+    `<div class="part-type">${esc(feats)} · ${p.material ? esc(p.material.spec) : "材料待确认"} · ${p.quantity}件${gstat}${dstat}${mark}</div>` +
     (p.recommendation ? `<div class="recommend">${esc(p.recommendation)}</div>` : "") +
     `</div>`;
   div.onclick = () => selectPart(p);

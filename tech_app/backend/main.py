@@ -8,6 +8,7 @@ FastAPI 应用: 图纸解析与生成平台后端。
 """
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import re
@@ -66,7 +67,8 @@ from .services import (
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
-    llm_settings, material, negotiation, oc_agent, part_edit, pricenego, pricing, process_lookup,
+    llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
+    process_lookup,
     process, product_params, production, requirement_extract, requirement_service,
     step_import,
     summary as summary_svc, tasks, tree,
@@ -1059,15 +1061,17 @@ def _assemble_batch(project_id: str, parts, results, blocked, build_entry) -> di
         result = by_id.get(part.part_id)
         if result is None:
             issues = issues_by_id.get(part.part_id) or []
-            entries.append({
+            entries.append(part_versions.stamp_entry({
                 "part_id": part.part_id, "name": part.name, "ok": False,
                 "warnings": [], "skipped": True, "issues": issues,
                 "error": issues[0]["message"] if issues else "该零件未生成",
-            })
+            }, part))
             skipped += 1
             skipped_parts.append(part.part_id)
             continue
         entry = build_entry(project_id, result)
+        # 逐件来源指纹（C1）：重进项目时才知道这个条目是不是当前形状生成的。
+        part_versions.stamp_entry(entry, part)
         entry["skipped"] = False
         if result.ok:
             succeeded += 1
@@ -1656,6 +1660,8 @@ def generate(project_id: str, user: dict = Depends(current_user)):
         _assert_ir_unchanged(project_id, expected_ir)
         payload = _assemble_batch(project_id, ir.parts, results, blocked, _geometry_entry)
         payload["source_ir_hash"] = expected_ir
+        # 生成时的输入版本：之后原图 / 附件被替换（input_revision 变了）才整份过期（C3-1）。
+        payload["input_revision"] = _input_revision(project_id)
         store.save_geometry_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
@@ -1706,6 +1712,7 @@ def drawings(project_id: str, user: dict = Depends(current_user)):
         _assert_ir_unchanged(project_id, expected_ir)
         payload = _assemble_batch(project_id, ir.parts, results, blocked, _drawings_entry)
         payload["source_ir_hash"] = expected_ir
+        payload["input_revision"] = _input_revision(project_id)
         store.save_drawings_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
@@ -2196,12 +2203,16 @@ def regenerate_part(project_id: str, part_id: str, user: dict = Depends(current_
     g = geometry.generate_part(part, out_dir)
     gp = store.load_geometry_result(project_id) or {"parts": []}
     g_entry = _geometry_payload(project_id, [g])["parts"][0]
+    # 只刷新这一个零件的来源指纹：其他零件的指纹 / URL / 数值一字不动，
+    # 顶层 source_ir_hash 也保持原值 —— 逐件指纹才是判据（C6）。
+    part_versions.stamp_entry(g_entry, part)
     _upsert_part(gp, g_entry)
     store.save_geometry_result(project_id, gp)
 
     d = drawing2d.generate_drawings(part, out_dir)
     dp = store.load_drawings_result(project_id) or {"parts": []}
     d_entry = _drawings_payload(project_id, [d])["parts"][0]
+    part_versions.stamp_entry(d_entry, part)
     _upsert_part(dp, d_entry)
     store.save_drawings_result(project_id, dp)
 
@@ -2214,14 +2225,27 @@ def regenerate_part(project_id: str, part_id: str, user: dict = Depends(current_
 # 工艺拆解(把单个零件拆成结构化工艺路线,CAPP)
 # --------------------------------------------------------------------------- #
 def _geom_for_part(project_id: str, part_id: str):
+    """取单个零件的几何属性（工艺 / 成本的口子）。
+
+    判据是**逐件形状指纹**，不是整份 IR 哈希：别的零件被改过不该让这个零件取不到；
+    本零件自己的尺寸变了才返回 None（沿用既有语义，让上游提示先重生成）。
+    """
     gp = store.load_geometry_result(project_id) or {}
-    source_ir_hash = str(gp.get("source_ir_hash") or "")
-    if source_ir_hash and source_ir_hash != _ir_snapshot(project_id):
+    entry = next((p for p in gp.get("parts", []) if p.get("part_id") == part_id), None)
+    if entry is None:
         return None
-    for p in gp.get("parts", []):
-        if p.get("part_id") == part_id:
-            return {"bbox": p.get("bbox"), "volume_mm3": p.get("volume_mm3"), "mass_g": p.get("mass_g")}
-    return None
+    stored_hash = str(entry.get("source_part_hash") or "")
+    if stored_hash:
+        ir_dict = store.load_ir(project_id) or {}
+        part = next((p for p in ir_dict.get("parts") or []
+                     if str(p.get("part_id")) == part_id), None)
+        if part is None or part_versions.part_fingerprint(part) != stored_hash:
+            return None
+    elif (store.load_meta(project_id) or {}).get("derived_results_stale"):
+        # 老结果没有逐件指纹：只剩「输入被替换 / 解析被重置」这一条底线判断（C7）。
+        return None
+    return {"bbox": entry.get("bbox"), "volume_mm3": entry.get("volume_mm3"),
+            "mass_g": entry.get("mass_g")}
 
 
 async def _read_attachments(attachments: List[UploadFile]):
@@ -5025,34 +5049,122 @@ def structure_tree(project_id: str):
     return tree.build_tree(DesignIR(**ir_dict))
 
 
+#: 整份隐藏（返回 null）只剩三种情况（C3）：输入被替换 / 零件增删或结构变化 / legacy
+#: 无法逐件判断。单纯的字段修改一律只标相关零件。
+_STALE_REASON_STRUCTURE = "零件已增删或结构变化，逐件指纹对不上号，需整批重新生成"
+_STALE_REASON_LEGACY = "老结果只有整份 source_ir_hash、没有逐件指纹（legacy），无法逐件判断是否过期"
+_STALE_REASON_INPUT = "输入资料已替换（input_revision 已变化），结果需重新生成"
+
+
+def _result_part_ids(doc: dict) -> list:
+    return [str(entry.get("part_id") or "") for entry in (doc or {}).get("parts") or []]
+
+
+def _decorate_result(doc, current_parts: dict, current_hash: str, meta: dict):
+    """读时装饰逐件过期状态（不写回存储），返回 (装饰后的文档, 该文档的状态)。
+
+    过期条目**不清空** step_url / stl_url / views / dxf —— 文件还在，用户要能下载对比；
+    过期只是标记（C2）。
+    """
+    status = {"whole_stale": False, "reason": "", "parts_stale": [],
+              "stale_attributes": {}, "legacy": False}
+    if not doc:
+        return doc, status
+    decorated = copy.deepcopy(doc)
+    entries = decorated.get("parts") or []
+    has_fingerprints = bool(entries) and all(
+        str(entry.get("source_part_hash") or "") and str(entry.get("source_attr_hash") or "")
+        for entry in entries)
+    if not has_fingerprints:
+        # 迁移兜底（C7）：老结果只有整份 source_ir_hash，没有逐件指纹。
+        status["legacy"] = True
+        top = str(decorated.get("source_ir_hash") or "")
+        if top:
+            if top == current_hash:
+                return decorated, status      # 哈希一致 → 判为有效，保持可读提示
+            status["whole_stale"] = True
+            status["reason"] = _STALE_REASON_LEGACY
+            return None, status
+        if meta.get("derived_results_stale"):
+            status["whole_stale"] = True
+            status["reason"] = str(meta.get("derived_results_stale_reason") or _STALE_REASON_INPUT)
+            return None, status
+        return decorated, status
+    recorded_input = decorated.get("input_revision")
+    if recorded_input is not None and int(recorded_input) != int(meta.get("input_revision") or 1):
+        status["whole_stale"] = True
+        status["reason"] = _STALE_REASON_INPUT
+        return None, status
+    if sorted(_result_part_ids(decorated)) != sorted(current_parts.keys()):
+        status["whole_stale"] = True
+        status["reason"] = _STALE_REASON_STRUCTURE
+        return None, status
+    for entry in entries:
+        part_id = str(entry.get("part_id") or "")
+        part = current_parts.get(part_id)
+        stored_shape = str(entry.get("source_part_hash") or "")
+        stored_attr = str(entry.get("source_attr_hash") or "")
+        if part is None:
+            entry["stale"] = False
+            entry["stale_reason"] = "legacy"
+            entry["stale_attributes"] = []
+            continue
+        attributes = []
+        if stored_attr and stored_attr != part_versions.part_attribute_fingerprint(part):
+            # 形状没变、派生数值会变：3D / 2D 文件仍然有效，只是 mass_g 要重算（C4）。
+            attributes.append("mass_g")
+        if stored_shape != part_versions.part_fingerprint(part):
+            # 这批文件不是当前形状生成的：旧指纹已经不能代表结果，换成当前要求值，
+            # 旧值留在 generated_part_hash 里便于对比（过期不是清空）。
+            entry["generated_part_hash"] = stored_shape
+            entry["source_part_hash"] = ""
+            entry["stale"] = True
+            entry["stale_reason"] = "geometry"
+            status["parts_stale"].append(part_id)
+        else:
+            entry["stale"] = False
+            entry["stale_reason"] = ""
+        entry["stale_attributes"] = attributes
+        if attributes:
+            status["stale_attributes"][part_id] = attributes
+    return decorated, status
+
+
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str):
-    """项目全量状态(元数据 + IR + 几何 + 2D 图纸结果)。"""
+    """项目全量状态(元数据 + IR + 几何 + 2D 图纸结果)。
+
+    过期判定按**零件**给（改一个零件的尺寸只标那一个），整份置空只剩三种情况。
+    """
     meta = store.load_meta(project_id)
     if not meta:
         raise HTTPException(404, "项目不存在")
     current_ir = store.load_ir(project_id)
     current_hash = _digest_value(current_ir or {})
-    geometry_result = store.load_geometry_result(project_id)
-    drawings_result = store.load_drawings_result(project_id)
-    geometry_stale = bool(
-        geometry_result and (
-            (geometry_result.get("source_ir_hash") and geometry_result.get("source_ir_hash") != current_hash)
-            or (not geometry_result.get("source_ir_hash") and meta.get("derived_results_stale"))
-        )
-    )
-    drawings_stale = bool(
-        drawings_result and (
-            (drawings_result.get("source_ir_hash") and drawings_result.get("source_ir_hash") != current_hash)
-            or (not drawings_result.get("source_ir_hash") and meta.get("derived_results_stale"))
-        )
-    )
+    current_parts = {str(p.get("part_id") or ""): p
+                     for p in (current_ir or {}).get("parts") or []}
+    geometry_doc, geometry_status = _decorate_result(
+        store.load_geometry_result(project_id), current_parts, current_hash, meta)
+    drawings_doc, drawings_status = _decorate_result(
+        store.load_drawings_result(project_id), current_parts, current_hash, meta)
+    artifact_status = {
+        # 既有字段一个不删（C9）
+        "geometry_stale": geometry_status["whole_stale"],
+        "drawings_stale": drawings_status["whole_stale"],
+        # 逐件状态（C2）
+        "geometry_parts_stale": geometry_status["parts_stale"],
+        "drawings_parts_stale": drawings_status["parts_stale"],
+        "stale_attributes": {**geometry_status["stale_attributes"],
+                             **drawings_status["stale_attributes"]},
+        "legacy_fingerprints": bool(geometry_status["legacy"] or drawings_status["legacy"]),
+        "stale_reason": geometry_status["reason"] or drawings_status["reason"],
+    }
     return {
         "meta": meta,
         "ir": current_ir,
-        "geometry": None if geometry_stale else geometry_result,
-        "drawings": None if drawings_stale else drawings_result,
-        "artifact_status": {"geometry_stale": geometry_stale, "drawings_stale": drawings_stale},
+        "geometry": geometry_doc,
+        "drawings": drawings_doc,
+        "artifact_status": artifact_status,
     }
 
 
