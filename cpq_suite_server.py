@@ -53,6 +53,7 @@ import rule_agent_server as rule_agent    # noqa: E402
 import cpq_auth                            # noqa: E402  登录与角色系统（/auth/*）
 import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
 import cpq_tech_bridge                     # noqa: E402  技术工艺回调：写主数据 / 推送到报价
+import cpq_kb                             # noqa: E402  知识库（kb_*）：快照接口，事实源在 PG cpq_kb
 import cpq_image_server                    # noqa: E402  产品图片维护服务（独立端口，见下）
 
 AGENTS = {
@@ -588,6 +589,26 @@ class Handler(BaseHTTPRequestHandler):
             return False
         q = urllib.parse.parse_qs(parsed.query)
         arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+        # ---- 知识库快照（技术工艺取数通道）----
+        # 放在登录库守卫与用户票校验**之前**：这是服务间调用，后台刷新线程没有用户票，
+        # 只认 X-Internal-Token（与 /agents/* 同一套 fail-closed 判定）。
+        # PG / schema 不可用时回 503 + 原因 —— 绝不回空表：那会被读侧误判成
+        # "库里没有可复用零件"（正是本批要消灭的假象）。
+        if path == "/wf/tech/kb/snapshot" and self.command == "GET":
+            if not self._internal_token_ok():
+                self._send_json(403, {"ok": False, "error": "内部令牌校验失败"})
+                return True
+            try:
+                snap = cpq_kb.snapshot(since=arg("since") or None)
+            except Exception as e:                             # noqa: BLE001
+                traceback.print_exc()
+                print(f"[cpq-suite] 知识库快照失败: {type(e).__name__}: {e}", file=sys.stderr)
+                detail = (f"{type(e).__name__}: {str(e).splitlines()[0][:300]}" if str(e)
+                          else type(e).__name__)
+                self._send_json(503, {"ok": False, "error": detail})
+                return True
+            self._send_json(200, {"ok": True, **(snap or {})})
+            return True
         if cpq_auth._backend is None:      # 同上：工作流与登录共用同一后端
             self._send_json(503, {"ok": False, "error":
                                   "工作流未就绪：未能连接服务器 Postgres。"})

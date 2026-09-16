@@ -240,3 +240,15 @@ body{padding-bottom:0}
 .analysis-panel{display:flex;flex:1;min-height:0;flex-direction:column}
 .analysis-panel-bar{display:flex;align-items:center;padding:var(--space-md) var(--space-lg);border-bottom:1px solid var(--border-light)}
 .analysis-panel .inline-analysis-host{flex:1;min-width:0;padding:var(--space-lg);overflow-y:auto}
+
+/* 零件库（知识库）这次没查到：看板顶部的红色警示（## 92）。
+   和"库里确实没有可复用零件"是两回事 —— 前者没有任何数字可谈，所以用红色警示
+   把故障摆在结论之前，并且状态在后端落盘、刷新页面仍在，直到一次成功检索清掉它。 */
+.component-match-unavailable{margin:0 0 var(--space-md);padding:10px 12px;
+  border:1px solid var(--color-red);border-left:4px solid var(--color-red);
+  border-radius:var(--radius-sm);background:#FEF2F2;color:var(--color-red);
+  font-size:12px;line-height:1.6}
+/* 结论区：本次没查到（不再是"按新制评估"那种正常结论）。 */
+.component-match-unavailable-note{margin-bottom:6px;color:var(--color-red);font-weight:600}
+/* 上一次的成功结论可以继续看，但必须标明它已经过期。 */
+.component-match-stale{margin:2px 0 6px;color:var(--text-tertiary);font-size:11px}

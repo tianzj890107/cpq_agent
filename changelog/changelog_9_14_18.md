@@ -1768,3 +1768,132 @@
   `CPQ_SSO=false`）时账号级读才是空，避免本地开发模式下 `/api/health` 等读接口 503（Spec C12 口径）；
   任一通道在场即维持"不可达 → `CpqAuthUnavailable` → 503"，绝不静默回落全局 Key。
 - 状态：实现 + Spec + 红测 + changelog 同一次提交，并双远端推送（20260909）。
+
+## 91. 知识库统一维护在 Postgres（`cpq_kb`）+ 技术工艺经 HTTP 快照读取：Spec / Red（9-16）
+
+- 新增 `docs/specs/kb-in-pg-http-snapshot.md`：把知识库（零部件 / 物料 / 工序 / 路线 / 设备 /
+  供应商 / 费率 / 计价系数 / 标准件）收敛成**一份**——PG 新建 `cpq_kb` schema，`kb_*` 20 张表
+  1:1 搬迁 + `kb_meta` 版本表；技术工艺不再读写本地 `da.db` 的知识库，改为经一体化服务
+  `GET /wf/tech/kb/snapshot`（只认 `X-Internal-Token`，支持 `since`）拉整包快照并在进程内按
+  `kb_version` 缓存。契约 C1–C11、验收 A1–A7、固定接口/命令见 Spec §7。
+- 用户已拍板：① 新建 `cpq_kb`（不并入报价侧 `master_data`，粒度不同）；② `da.db` 里的数据
+  直接导入；③ 匹配必须打到正确的目标——快照拿不到时要报错，**不得**把"库是空的"伪装成
+  "没有可复用零件"。
+- 新增 `tests/test_kb_in_pg_http_snapshot_red.py`（22 项）：源码契约（`cpq_kb.py` /
+  `/wf/tech/kb/snapshot` / `cpq_kb_client.py` / 导入器只读打开 / `kb_repo` 读路径不再走 SQL /
+  `tech_app` 无 `psycopg`）；导入器真跑（夹具还原源库 → `--dry-run --json`，校验 16 表 613 行
+  且源文件 sha256+mtime 不变、不产生 WAL）；子进程真起一体化服务打快照端点（无票 401、
+  同版本 `unchanged`、PG 故障 503 且不回空表）；子进程真起技术工艺侧（假 CPQ 快照 + 空 SQLite
+  知识库 → 必须给出 20 条并真的发起 HTTP 调用；快照 503 时必须抛错）；一致性（13 个既有零件的
+  命中编码/评分/类型与旧 SQLite 口径逐条一致）。
+- 新增测试夹具 `tests/fixtures/cpq_kb_snapshot_20260916.json`（16 表 613 行，只读导出）与
+  `tests/fixtures/cpq_kb_parts_golden_20260916.json`（13 个零件输入 + 期望命中）。夹具是回归
+  对照，**不是**事实源；事实源是 `cpq_kb`。
+- 背景缺口（线上实测 9-16）：技术工艺本地那份 `da.db` 的知识库整库为 0 行，9/14 冰箱项目的
+  `component_match.json` 写着 `"library_size": 0`、6 个零件全部 `candidates: []`；平台没有
+  自动灌种子（`da_seed` / `da_mock` 只在 `python -m` 与测试里被调用），换一次数据目录知识库
+  就归零且不报错。旧口径下"桥断了"与"真没有可复用零件"产出的结果形状完全一样。
+- Red 验证（9-16）：`open-claude/.venv/bin/python tests/test_kb_in_pg_http_snapshot_red.py`
+  → 22 项中 **18 失败**；4 项改前即绿，均为保护性约束（Spec 已在位、判定口径未被改动、
+  技术工艺无 `psycopg`、未执行导入时源库未被改动）。
+- 明确不在本批（避免误期待）：`src_*` / `wip_*` 业务数据迁 PG；零部件图纸二进制集中存储；
+  知识库维护页面；以及**匹配口径调整**——`ENVELOPE_TOLERANCE=0.20` 的硬淘汰对家电/钣金大件
+  偏紧（1800×450×60 的门板对库内 1200×595×22 的件会被直接淘汰），因此**入库演示库后 9/14
+  那个冰箱项目仍然匹配不到**，这是口径问题不是数据源问题，需工艺/产品单独拍板。
+- 源库现状备注：用于生成夹具的那份 `da.db` 已被 checkpoint 成单文件（962,560 → 966,656 B，
+  行数与合并前逐表一致、`integrity_check=ok`、无新增行），`-wal`/`-shm` 不再存在；后续导入器
+  仍必须按 Spec C3 以只读方式打开源库。
+- 落地：新增 `cpq_kb.py`（`cpq_kb` schema：20 张 `kb_*` 表 1:1 + `kb_meta` 版本表、按外键
+  依赖排序建表/写入、`snapshot(since=)`、`import_from_sqlite()`）、
+  `scripts/import_da_kb_to_pg.py`（默认 dry-run、`--confirm` 才写、源库 `mode=ro`、导入前后
+  比对源文件 sha256）、`tech_app/backend/services/cpq_kb_client.py`（只走 HTTP）；一体化服务
+  `_dispatch_wf` 增 `GET /wf/tech/kb/snapshot`（只认内部令牌，放在登录库守卫之前，PG 故障回
+  503 + 原因，绝不回空表）；`kb_repo` 读路径整体搬到进程内快照缓存（模块级
+  `{"version","tables"}` + `refresh_kb(force=False)`，20 处读 SQL 全部换成内存过滤，排序口径
+  逐字照搬），`save_*` 只留给 `da_seed` / `da_seed_battery` / `da_mock`；`component_match`
+  在 `match_part` / `match_project` 入口先 `refresh_kb()`，知识库不可用时在写任何报告之前上抛。
+- 端到端真库校验（本地一次性 PG 14 集群，非线上）：导入器 `--confirm` 首次 613 行
+  `kb_version=1`、再跑一次 `changed=0`（幂等）；PG 快照与夹具逐表逐字段**零差异**（文本/JSON
+  列保持 `text` 不变形）；真起一体化服务打快照端点 → 技术工艺客户端 → `kb_repo` → 13 个既有
+  零件的编码/评分/类型/结论与 golden 逐条一致。
+- 真连 PG 才暴露、单测（假快照）看不见的两个缺陷已修：① `KB_KEYS` 的单项曾被写成
+  `("component_id")`（字符串而非 1-元组），`ON CONFLICT` 会按字符拆成 `("c","o",…)`；
+  ② 建表/写入未按外键依赖排序，`kb_component.default_material_code` 一插就报
+  "relation kb_material does not exist"。两处都加了保护性注释与顺序推导（Kahn），不靠人记。
+- 上线动作（部署时做一次）：`python scripts/import_da_kb_to_pg.py --source <da.db 副本>
+  --confirm` → 校验 `cpq_kb` 每表行数；`da.db` 之后只作历史存档，服务器不再需要拷它。
+- 状态：实现 + Spec + 红测 + changelog 同一次交付；红测 22/22、全量 1555 项 0 失败、
+  导入器 dry-run 16 表 613 行且源库 sha256/mtime 不变。**未部署** —— 上线前需先在 CPQ 侧跑
+  一次导入器建 `cpq_kb` 并灌数（见上条），否则技术工艺会明确报「知识库不可用」。
+
+## 92. 零件库连不上必须"当场看见"：看板顶部红色警示 + 结论区「未检索（库连不上）」：Spec / Red（9-16）
+
+- 用户拍板（选项一）：知识库不可用时**两边都要醒目**——右边看板顶部出红色警示
+  「零件库连不上，本次未检索」，匹配结论区明确写「未检索（库连不上）」，绝不出「库内 0 条」
+  「可复用 0 · 可改制 0 · 未匹配 0」这类把故障当结论的文案；左边保留提示。用户要能一眼分清
+  「库里确实没有」和「压根没查到」。
+- 新增 `docs/specs/tech-kb-unavailable-loud-notice.md`：契约 C1–C7（状态落库 / 两个入口都落 /
+  读取出口交出 `unavailable` / 前端警示与结论文案 / 红色样式 / 资源版本号 / 既有约束不放松）、
+  验收 A1–A7。
+- 新增 `tests/test_tech_kb_unavailable_notice_red.py`（18 项）：源码契约（`store.py` 两个新函数、
+  `main.py` 的 GET 出口与两条检索入口、`app.js` 渲染、`workbench.css` 红色样式、`index.html`
+  资源版本号）；后端子进程真跑 TestClient（临时 `DATA_DIR`、`tasks.submit` 打桩同步执行、
+  「知识库不可达」用内部令牌给足但基址指向无人监听端口造出来，绝不真连 PG；「重试成功」用夹具
+  快照打桩）；前端 Node 加载从 `app.js` 抽出的 `renderComponentMatchResult()`，用最小 DOM 桩
+  驱动，断言警示节点位置（必须排在零件清单之前）、红色类名、文案，以及整页不出现 0 条结论。
+- 现状缺口（红测依据）：自动路把异常吞成一条进度提示 + 审计、不落状态（`main.py:1334-1335`）；
+  GET 出口查不到报告只回 `{"items": [], "summary": {}}`（`main.py:1393`）；前端把空报告渲染成
+  「还没有零部件库检索结果（解析完成后自动生成）。」（`app.js:1028`），有旧报告时顶行还会写
+  「库内 0 条」（`app.js:1036`）。刷新页面后故障现场消失——「库连不上」与「库里没有可复用零件」
+  在界面上长得一样。
+- Red 验证（9-16）：`open-claude/.venv/bin/python tests/test_tech_kb_unavailable_notice_red.py`
+  → 18 项中 **16 失败**；2 项改前即绿，均为保护性约束（Spec 已在位、尚未落过 `library_size=0`
+  报告）。全量 `unittest discover`：1573 项中 16 失败，全部来自本文件，无其它回归。
+- 明确不在本批：匹配口径调整（`ENVELOPE_TOLERANCE=0.20`）、知识库维护页面、把「未检索」做成
+  任务中心的一等任务状态。
+- 落地：`store.py` 新增 `save_component_match_unavailable()`（`put_doc` + `audit`）与
+  `load_component_match_unavailable()`（缺失/空 dict → `None`），并把
+  `component_match_unavailable` 加进 `PARSE_STAGE_DOCS`（"从头开始"连警示一起清）；
+  `save_component_match()` 成功落报告时同一条写入空 dict 清掉警示，
+  **重试成功 = 警示消失**。
+- 落地：`main.py` 两条入口都落状态。新增 `_kb_unavailable_info(exc)` 出固定字段
+  `{reason, message, error, at}`（`reason = kb_unavailable` 当且仅当
+  `isinstance(exc, component_match.KbUnavailable)`）；`_refresh_component_match()` 的
+  `except` 分支**保留**原 `tasks.report_progress`（文案前缀换成 `info["message"]`）与
+  `component_match_failed` 审计、**新增** `save_component_match_unavailable`，异常仍不
+  向调用方抛出（已拿到的解析/推荐结果不作废）；`run_component_match().job()` 改成
+  `try/except` 里落状态再 `raise`、成功才 `save_report`（任务本身照旧失败）。
+  红线守住：知识库不可用时绝不写 `library_size=0` 的"成功报告"。
+- 落地：`main.py` 的 `get_component_match()` 在既有报告字段之上多出顶层 `unavailable`
+  ——有失败记录给该 dict、没有给 `null`、既没报告也没失败仍是
+  `{"items": [], "summary": {}}`；`unavailable` 非空时 `library_size` 不再回落成 0
+  （保留上一次成功值或 `null`）。
+- 落地：`app.js` 的 `renderComponentMatchResult(report)` 在 `report.unavailable` 为真时
+  插入/更新 `#componentMatchBanner`（`className` 含 `component-match-unavailable`、
+  文案含「零件库连不上，本次未检索」并附 `error` / `at`），插在 `#secParts` 所在的
+  `.center-panel` 顶部（取不到才退回清单父节点、紧贴清单之前，**必排在 `#secParts` 之前**），
+  重复渲染复用同一节点、不会出第二份；结论区只写「未检索（库连不上）」，若带着上一次的
+  成功结论则并列标注「上一次的结论（可能已过期）」，**整页不出现**「库内 0 条」「可复用 0」
+  「可改制 0」「未匹配 0」。`unavailable` 为空时 `banner.remove()`，其余渲染与改前逐字一致。
+- 落地：`workbench.css` 新增 `.component-match-unavailable`（红色警示：`1px solid
+  var(--color-red)` + 左侧 4px 红边 + `#FEF2F2` 红底 + 红字）与
+  `.component-match-unavailable-note` / `.component-match-stale` 两条配套；`index.html`
+  两个版本号同批 bump：`workbench.css?v=20260916-kbnotice1`、`app.js?v=20260916-kbnotice1`
+  （只动 `index.html`，其余页面资源不动）。
+- 人工实跑（非只跑测试）：前端用红测同一套 DOM 桩 + 从 `app.js` 抽出的真函数驱动 ——
+  `unavailable` + 空 `items` → 警示 1 个、类名正确、落在 `.center-panel` 顶部且在
+  `#secParts` 之前、结论区「未检索（库连不上）」、整页无任何 0 计数；`unavailable` + 旧报告
+  → 结论区含「上一次的结论（可能已过期）」；连续渲染两次仍只有 1 个警示；正常报告
+  → 警示为 0、渲染回「零部件库检索：可复用 1 · 可改制 0 · 未匹配 0（库内 20 条 · …）」。
+  后端用 TestClient + 临时 `DATA_DIR` + 基址指向无人监听端口真跑：GET 回
+  `{"items": [], "summary": {}, "unavailable": {reason: kb_unavailable, message: 零件库连不上，
+  本次未检索, error: …, at: …}, "library_size": null}`；`component_match_unavailable.json`
+  落盘内容正确；审计两条（`component_match_failed` + `component_match_unavailable`）。
+- Green 验证（9-16）：`open-claude/.venv/bin/python
+  tests/test_tech_kb_unavailable_notice_red.py` → **Ran 18 tests / OK**（改前 16 失败）；
+  `tests/test_kb_in_pg_http_snapshot_red.py` → **Ran 22 tests / OK**（## 91 未被带红）；
+  `python -m unittest discover -s tests -p 'test_*.py'` → **Ran 1573 tests / OK**（0 失败）；
+  `node --check tech_app/frontend/app.js` → 通过；`git diff --check` → 无告警。
+- 部署说明：**## 91 与 ## 92 同一次上线**。技术工艺侧的"零件库连不上"警示要生效，前提是
+  CPQ 侧已按 ## 91 跑过 `scripts/import_da_kb_to_pg.py --confirm` 建好 `cpq_kb` 并灌数；
+  否则线上会（如实）显示这枚红色警示。本次改动**未提交、未推送、未部署**。

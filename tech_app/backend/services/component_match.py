@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Optional
 
 from ..storage import kb_repo, store
+from ..storage.kb_repo import KbUnavailable
 from ..time_utils import now_cst_str
 
 # 可直接复用的门槛。低于它但仍被漏斗召回的，算"可改制"候选。
@@ -26,6 +27,21 @@ MODIFY_SCORE = 0.55
 CANDIDATE_LIMIT = 3
 
 ProgressFn = Optional[Callable[[str], None]]
+
+
+def _require_kb() -> None:
+    """知识库不可用必须在产出报告**之前**响亮失败(Spec C7)。
+
+    知识库只有一份,在 CPQ 的 `cpq_kb`;技术工艺经 HTTP 快照取数(见 storage/kb_repo)。
+    拿不到快照时 `KbUnavailable` 必须一路上抛 —— 绝不能把"桥断了"降级成一份
+    `library_size: 0` 的"未匹配(按新制评估)"报告:那会让人误以为库里真的没有可复用
+    零件,而实际上什么都没查到。
+    """
+    try:
+        kb_repo.refresh_kb()
+    except KbUnavailable:
+        # 原样上抛：调用方(技术工艺 HTTP 面)要看到的是"快照为什么拿不到",不是复述。
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +106,7 @@ def _material_code_for(spec: Optional[str]) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 def match_part(part: dict) -> dict:
     """检索单个零件。返回结论 + 候选，不写库。"""
+    _require_kb()                       # 先确认知识库在,再谈检索结论
     query = build_query(part)
     candidates = kb_repo.recommend_components(query, limit=CANDIDATE_LIMIT)
     top = candidates[0] if candidates else None
@@ -127,6 +144,7 @@ def match_part(part: dict) -> dict:
 def match_project(project_id: str, ir: dict, *, progress: ProgressFn = None) -> dict:
     """对整份 IR 逐件检索零部件库，产出可复用/可改制/未匹配三档报告。"""
     parts = list(ir.get("parts") or [])
+    _require_kb()                       # 报告一个字段都还没写,先确认知识库可用
     library_size = len(kb_repo.list_components(limit=1000))
     _report(progress, f"零部件库检索开始：{len(parts)} 个零件 × 库内 {library_size} 条记录")
 

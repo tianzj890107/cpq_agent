@@ -1023,30 +1023,85 @@ function renderComponentMatchResult(report) {
     slot.className = "component-match-result";
     section.append(slot);
   }
-  slot.replaceChildren();
-  const items = (report && report.items) || [];
-  if (!items.length) {
-    slot.textContent = "还没有零部件库检索结果（解析完成后自动生成）。";
-    return;
+
+  // ---- 看板顶部：零件库这次到底查到没有（## 92）----
+  // 「库里确实没有可复用零件」是一份正常报告；「压根没查到」没有任何数字可谈。
+  // 两者在界面上必须一眼分开，而且状态是后端落盘的：切换看板、刷新页面后仍在，
+  // 直到一次成功检索把它清掉（后端 save_component_match 会清）。
+  const unavailable = (report && report.unavailable) || null;
+  let banner = document.getElementById("componentMatchBanner");
+  if (!unavailable) {
+    if (banner) banner.remove();
+  } else {
+    const headline = "零件库连不上，本次未检索";
+    const notes = [];
+    if (unavailable.message && String(unavailable.message) !== headline) {
+      notes.push(String(unavailable.message));
+    }
+    if (unavailable.error) notes.push(String(unavailable.error));
+    if (unavailable.at) notes.push(String(unavailable.at));
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "componentMatchBanner";
+      banner.className = "component-match-unavailable";
+      // 挂在看板容器最顶部：它不属于零件清单本身，更不能跟着清单滚走
+      // （.drawing-parts-column 是独立滚动的，塞在清单里会滚出台面）。
+      // 容器取不到时才退回 #secParts 的父节点、紧贴清单之前插。
+      const panel = (section.closest ? section.closest(".center-panel") : null)
+        || document.querySelector(".center-panel");
+      if (panel && panel.prepend) panel.prepend(banner);
+      else if (section.parentNode && section.parentNode.insertBefore) {
+        section.parentNode.insertBefore(banner, section);
+      } else section.append(banner);
+    }
+    banner.className = "component-match-unavailable";
+    banner.textContent = headline + (notes.length ? `（${notes.join(" · ")}）` : "");
   }
-  const summary = report.summary || {};
-  const head = document.createElement("div");
-  head.className = "component-match-summary";
-  head.textContent = `零部件库检索：可复用 ${summary.reuse || 0} · 可改制 ${summary.modify || 0} · 未匹配 ${summary.new || 0}`
-    + `（库内 ${report.library_size || 0} 条${report.generated_at ? " · " + report.generated_at : ""}）`;
-  slot.append(head);
-  const list = document.createElement("div");
-  list.className = "component-match-list";
-  items.forEach(item => {
+
+  const items = (report && report.items) || [];
+  const summary = (report && report.summary) || {};
+  const rowOf = (item) => {
     const row = document.createElement("div");
     row.className = `component-match-item ${item.decision || "new"}`;
     const who = `${item.part_id || "?"} ${item.part_name || ""}`.trim();
     const hit = item.component_code ? `${item.component_code} ${item.component_name || ""}`.trim() : "库内无同类件";
     row.textContent = `${who} → ${hit}（${item.decision_label || "未匹配"}`
       + `${item.score ? ` · ${Math.round(Number(item.score) * 100)}%` : ""}）`;
-    list.append(row);
-  });
-  slot.append(list);
+    return row;
+  };
+  const listOf = (rows) => {
+    const node = document.createElement("div");
+    node.className = "component-match-list";
+    rows.forEach(item => node.append(rowOf(item)));
+    return node;
+  };
+
+  slot.replaceChildren();
+  if (unavailable) {
+    // 本次没有任何结论：结论区只写「未检索」，绝不拿旧数字冒充本次结果
+    // （「库内 0 条」「可复用 0」这类把故障当结论的文案一律不出现）。
+    const head = document.createElement("div");
+    head.className = "component-match-unavailable-note";
+    head.textContent = "未检索（库连不上）";
+    slot.append(head);
+    if (!items.length) return;
+    const stale = document.createElement("div");
+    stale.className = "component-match-stale";
+    stale.textContent = "上一次的结论（可能已过期）";
+    slot.append(stale);
+    slot.append(listOf(items));
+    return;
+  }
+  if (!items.length) {
+    slot.textContent = "还没有零部件库检索结果（解析完成后自动生成）。";
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "component-match-summary";
+  head.textContent = `零部件库检索：可复用 ${summary.reuse || 0} · 可改制 ${summary.modify || 0} · 未匹配 ${summary.new || 0}`
+    + `（库内 ${report.library_size || 0} 条${report.generated_at ? " · " + report.generated_at : ""}）`;
+  slot.append(head);
+  slot.append(listOf(items));
 }
 
 $("btnDecompose").onclick = async () => {

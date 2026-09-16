@@ -1315,6 +1315,22 @@ async def upload_3d(
     return {"project_id": project_id, "task_id": task_id}
 
 
+def _kb_unavailable_info(exc: BaseException) -> dict:
+    """把"知识库这次没查到"整理成 store 要的固定字段（reason/message/error/at）。
+
+    「库里没有可复用零件」与「压根没查到」必须能分开：前者仍是一份正常报告，
+    后者落成 component_match_unavailable，由看板顶部与结论区如实显示（## 92）。
+    """
+    kb_down = isinstance(exc, component_match.KbUnavailable)
+    return {
+        "reason": "kb_unavailable" if kb_down else "kb_error",
+        "message": ("零件库连不上，本次未检索" if kb_down
+                    else "零件库检索失败，本次未检索"),
+        "error": str(exc)[:200],
+        "at": store._now(),
+    }
+
+
 def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> None:
     """把当前零件清单拿到零部件库里比一遍，标出可复用/可改制/未匹配。
 
@@ -1323,16 +1339,20 @@ def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> No
 
     检索本身不调模型、只读本地库，所以顺手跑不增加成本；但它失败也**不能**让
     已经拿到的解析/推荐结果作废 —— 那是花了模型钱的，检索只是附加信息。
+    但"没查到"这件事必须**留下现场**（落盘 + 左边提示），不能只写一条审计就完事：
+    审计是给事后追溯的，用户当场看不到，刷新页面后现场就没了。
     """
     try:
         report = component_match.match_project(
             project_id, payload, progress=tasks.report_progress,
         )
-        component_match.save_report(project_id, report)
+        component_match.save_report(project_id, report)   # 成功即清掉"未检索"状态
         payload["component_match"] = report
     except Exception as exc:
-        tasks.report_progress(f"  ↳ 零部件库检索失败：{str(exc)[:120]}（不影响已得到的{kept}）")
+        info = _kb_unavailable_info(exc)
+        tasks.report_progress(f"  ↳ {info['message']}：{str(exc)[:120]}（不影响已得到的{kept}）")
         store.audit(project_id, "component_match_failed", {"error": str(exc)[:200]})
+        store.save_component_match_unavailable(project_id, info)
 
 
 @app.post("/api/projects/{project_id}/parse")
@@ -1387,10 +1407,23 @@ def parse(project_id: str, user: dict = Depends(current_user)):
 
 @app.get("/api/projects/{project_id}/component-match")
 def get_component_match(project_id: str, user: dict = Depends(current_user)):
-    """图纸拆解时的零部件库检索报告。尚未解析或库为空时返回空报告。"""
+    """图纸拆解时的零部件库检索报告 + 本次"没查到"的状态。
+
+    报告缺失只说明"还没检索过"；`unavailable` 非空才说明"检索了但没查成"。
+    前端靠这个字段把"库里没有可复用零件"与"压根没查到"分开（## 92 C3）。
+
+    没查到时不回 `library_size: 0`：那是把故障说成"库内 0 条"。上一次成功结论的
+    真实计数照旧带出（可能已过期，由前端标注），本来就没有报告时才给 null。
+    """
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
-    return store.load_component_match(project_id) or {"items": [], "summary": {}}
+    unavailable = store.load_component_match_unavailable(project_id)
+    report = store.load_component_match(project_id)
+    body = dict(report) if report else {"items": [], "summary": {}}
+    body["unavailable"] = unavailable or None
+    if unavailable and not body.get("library_size"):
+        body["library_size"] = None
+    return body
 
 
 @app.post("/api/projects/{project_id}/component-match")
@@ -1402,8 +1435,16 @@ def run_component_match(project_id: str, user: dict = Depends(current_user)):
         raise HTTPException(400, "尚未完成图纸解析")
 
     def job():
-        report = component_match.match_project(project_id, ir, progress=tasks.report_progress)
-        component_match.save_report(project_id, report)
+        try:
+            report = component_match.match_project(
+                project_id, ir, progress=tasks.report_progress,
+            )
+        except Exception as exc:
+            # 任务照样失败（异常继续上抛），但先把"没查到"落成状态：
+            # 刷新页面、换台机器打开，看板顶部的警示都还在。
+            store.save_component_match_unavailable(project_id, _kb_unavailable_info(exc))
+            raise
+        component_match.save_report(project_id, report)   # 成功即清掉"未检索"状态
         return report
 
     return {"task_id": tasks.submit(project_id, "component_match", job)}

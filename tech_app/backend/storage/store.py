@@ -398,7 +398,8 @@ def load_ir(project_id: str) -> Optional[dict]:
 # 2.1 图纸解析这一步产出的全部东西。「本次任务从头开始」清的就是这一串。
 PARSE_STAGE_DOCS = (
     "ir", "drawing_analysis", "verification_report", "model_lookup",
-    "component_match", "geometry", "drawings",
+    "component_match", "component_match_unavailable",
+    "geometry", "drawings",
     "process", "cost", "process_lookup", "cost_lookup", "ai_results",
 )
 
@@ -434,11 +435,34 @@ def save_component_match(project_id: str, report: dict) -> None:
     """图纸拆解阶段的零部件库检索报告（哪些可复用/可改制/未匹配）。"""
     with _document_lock:
         _meta().put_doc(project_id, "component_match", report)
+        # 这一次查成了：把上一次的"未检索"现场清掉（本仓库的清空约定是写空 dict，
+        # 见 reset_parse_stage）。重试成功 = 看板上的红色警示消失。
+        _meta().put_doc(project_id, "component_match_unavailable", {})
         audit(project_id, "component_match", report.get("summary", {}))
 
 
 def load_component_match(project_id: str) -> Optional[dict]:
     return _meta().get_doc(project_id, "component_match")
+
+
+def save_component_match_unavailable(project_id: str, info: dict) -> None:
+    """零部件库**这次没查到**（知识库连不上 / 检索报错）——把现场留下。
+
+    和 component_match 报告是两件事：报告缺失只说明"还没检索过"，这一条才说明
+    "检索过、但没查成"。前端拿它把"库里没有可复用零件"与"压根没查到"分开，
+    并且它**落盘**，所以切换看板、刷新页面之后现场仍在（## 92）。
+
+    字段（由调用方给全）：reason / message / error / at。
+    """
+    payload = dict(info or {})
+    with _document_lock:
+        _meta().put_doc(project_id, "component_match_unavailable", payload)
+    audit(project_id, "component_match_unavailable", payload)
+
+
+def load_component_match_unavailable(project_id: str) -> Optional[dict]:
+    """上一次"没查到"的现场；从没记录过（或已被成功检索清空）时返回 None。"""
+    return _meta().get_doc(project_id, "component_match_unavailable") or None
 
 
 # --------------------------------------------------------------------------- #
