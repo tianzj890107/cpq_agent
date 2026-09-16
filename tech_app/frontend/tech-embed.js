@@ -145,9 +145,14 @@
       // 右侧业务看板满宽：清掉旧页面的 1200/1560px 宽度上限、左右各 236/196/78px
       // 的双栏留白与自动居中，隐藏子会话栏后 .oc-work 退化为真正的单列。
       '.tech-embed, .tech-embed body { width:100% !important; max-width:none !important; min-width:0 !important; margin:0 !important; }',
+      // 嵌入态阶段页去掉 workbench.css 的页面灰底（独立打开阶段页没有 .tech-embed，
+      // 灰底与 .page-container 的 20px 内边距照旧）。
+      '.tech-embed body { background:#fff !important; }',
       '.tech-embed .oc-shell { width:100% !important; max-width:none !important; min-width:0 !important; margin:0 !important; }',
       '.tech-embed .oc-work { display:block !important; width:100% !important; min-width:0 !important; gap:0 !important; }',
-      '.tech-embed .oc-shell .page-container { width:100% !important; max-width:none !important; min-width:0 !important; margin-left:0 !important; margin-right:0 !important; padding-left:18px !important; padding-right:18px !important; }',
+      // 四条内边距用 longhand 写全，避免与 workbench.css 的 padding 简写互相覆盖；
+      // 四周间距是独立打开时（上下 20px / 左右 18px）的一半。
+      '.tech-embed .oc-shell .page-container { width:100% !important; max-width:none !important; min-width:0 !important; margin-left:0 !important; margin-right:0 !important; padding-top:10px !important; padding-bottom:10px !important; padding-left:9px !important; padding-right:9px !important; }',
       '.tech-embed .oc-work .center-panel { width:100% !important; min-width:0 !important; max-width:none !important; flex:1 1 100% !important; max-height:none !important; }',
       // 子页面不再显示第二份大标题、第二份阶段页签与整块标题区（统一标题行由父壳
       // #techContextHeader 承载）。嵌入态整块 .title-section 退出布局，避免残留空白行；
@@ -169,7 +174,7 @@
       '.tech-embed #crRunAll { display:none !important; }',
       '.tech-embed #crOpsCard .ai-ops { display:none !important; }',
       '.tech-embed #btnAiExtract { display:none !important; }',
-      '.tech-embed body { padding-bottom:18px !important; }',
+      '.tech-embed body { padding-bottom:9px !important; }',
     ].join('\n');
     document.head.appendChild(style);
 

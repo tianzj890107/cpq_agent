@@ -1,3 +1,10 @@
+"""技术右侧工作区结果卡契约。
+
+契约更新（「报价 / 工艺工作区去卡片 + 工艺标题行收窄」批次）：
+原「报价式圆角卡片」几何（margin:16px / border:.5px / border-radius:12px）已被用户最新决策
+覆盖为「铺满、无外边距、无边框、无圆角」，见
+docs/specs/tech-quote-workspace-flush-and-compact-stage-title-row.md。
+本文件保留同层包装、外层非卡片、分隔线、iframe 满高与桥接等结构断言。"""
 import pathlib
 import re
 import unittest
@@ -27,14 +34,18 @@ class TechRightWorkspaceQuoteRoundedCardContract(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
 
     def test_results_card_matches_quote_geometry_and_surface(self):
+        # 契约反转（「报价 / 工艺工作区去卡片」批次，Spec
+        # docs/specs/tech-quote-workspace-flush-and-compact-stage-title-row.md）：
+        # 用户明确要求这层圆角卡片不再包住内容 —— 外边距 / 边框 / 圆角全部归零，
+        # 结果区铺满右侧工作区；表面色与 flex 排版保持不变。精确高度与内外间距
+        # 由 tests/test_tech_quote_workspace_flush_red.py 逐条钉住。
         card = rule(".tech-results-area")
         for declaration in (
-            "margin:16px", "border-radius:12px", "overflow:hidden",
+            "margin:0", "border:0", "border-radius:0", "overflow:hidden",
             "display:flex", "flex-direction:column", "flex:1", "min-height:0",
         ):
             with self.subTest(declaration=declaration):
                 self.assertIn(declaration, card)
-        self.assertRegex(card, r"border:\.?5pxsolidvar\(--(?:twb-border|border-color)\)")
         self.assertRegex(card, r"background:var\(--(?:twb-card|bg-page)\)")
         self.assertNotRegex(card, r"box-shadow:(?!none)")
 
@@ -61,14 +72,14 @@ class TechRightWorkspaceQuoteRoundedCardContract(unittest.TestCase):
         self.assertRegex(frame, r"border:0(?:;|$)")
         self.assertNotRegex(frame, r"border-radius:(?!0)")
 
-    def test_responsive_rules_keep_spacing_instead_of_returning_flush(self):
+    def test_responsive_rules_do_not_bring_the_margin_back(self):
+        # 同上契约反转：窄屏也不许把外边距加回来（原来是 12px / 8px）。
         compact = re.sub(r"\s+", "", CSS)
-        responsive_margins = re.findall(
-            r'@media[^{}]+\{[\s\S]*?\.tech-results-area\{[^{}]*margin:([0-9]+)px',
+        offenders = re.findall(
+            r'@media[^{}]+\{[\s\S]*?\.tech-results-area\{[^{}]*margin:([1-9][0-9]*)px',
             compact,
         )
-        self.assertTrue(responsive_margins, "缺少技术结果卡的响应式外间距")
-        self.assertTrue(all(int(value) > 0 for value in responsive_margins), responsive_margins)
+        self.assertEqual([], offenders, "响应式里又把结果卡外边距加回来了：%s" % offenders)
 
     def test_existing_stage_and_bridge_contract_is_preserved(self):
         for token in ("techWorkspaceOutlet", "techContextHeader", "techPrev", "techNext"):

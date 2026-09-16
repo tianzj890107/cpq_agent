@@ -2237,3 +2237,98 @@
   前端 `sanitizeTaskDetail` 仍是顶层过滤）。
 - 本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 2 个 + 本 changelog；实现改动与
   `## 94` 的实现改动仍在同一份未提交工作区里）。
+
+## 96. 报价 / 工艺工作区去圆角卡片 + 工艺标题行收窄 + 嵌入态去灰底：Spec / Red / 验收（9-16）
+
+用户口径（同一批三件事）：
+
+1. **报价和工艺工作区都用圆角卡片把所有内容包起来** —— 这个不需要，直接铺满整个工作区；
+2. **工艺的标题行太厚**（`组装与整合` + `就绪` + `整合图纸 / 参数推荐 / 组装工艺` 这一行）—— 要窄很多；
+3. **工作区里面那层卡片外面的灰底取消、它四周的外边距减半** —— 用户随后确认：
+   **报价侧没有那圈灰，这一条只改技术工艺**。
+
+只读排查（未改任何文件）定位到四个位置，并先与用户对齐过一次（报价侧的"里面那层卡片"有两种可能）：
+
+- 报价 `确认需求解析结果.html:344` 的 `.results-area`：`margin:var(--space-lg)` + `border:.5px` +
+  `border-radius:var(--radius-lg)` 的圆角卡片，外层 `确认需求解析结果.html:269` 的 `.right-panel`
+  与它同为 `var(--bg-page)`，所以报价侧看不到"另一圈灰"。
+- 工艺 `tech_app/frontend/tech-workbench.css:337` 的 `.tech-results-area`：`margin:16px` + `.5px` 边框 +
+  `12px` 圆角，包着标题行、iframe 与底栏；响应式 `:947`（12px）与 `:989`（8px）又加了间距。
+- 工艺 `tech_app/frontend/tech-workbench.css:546` 的 `.tech-workspace-context`：`min-height:52px` +
+  `padding:8px 16px`，正好是用户点名的那一行（标题 `组装与整合`、状态 `就绪` 来自阶段页
+  `board-status`、右端子页签 `整合图纸 / 参数推荐 / 组装工艺`）。
+- 工艺嵌入态的灰底与四周间距：`tech_app/frontend/workbench.css:12` 的 `body{background:var(--bg-page)}`
+  （#F5F5F5）与 `.page-container` 的 `var(--space-xl)`（20px）内边距，左右再被
+  `tech-embed.js:150` 覆盖成 18px；阶段页在嵌入态只剩一张 `.center-panel` 白卡
+  （`tech-workbench.css` 外壳全白，所以那圈灰只可能来自 iframe 里的阶段页）。
+
+新增 Spec `docs/specs/tech-quote-workspace-flush-and-compact-stage-title-row.md`：写明四处"现在 → 改为"的
+逐条契约（`.results-area` 与 `.tech-results-area` 归零外边距 / 边框 / 圆角、`.tech-workspace-context`
+52px → 34px 且 `padding` 8px → 4px、嵌入态 `.tech-embed body` 白底 + 四周 20px/18px → 10px/9px）、
+必须保留项（三列贴合、iframe 满高、分隔线、子页签与状态胶囊样式、报价结果区内部排版）、
+禁止事项与验收标准；并把 `docs/specs/tech-right-workspace-quote-rounded-card.md` 标注为**部分被覆盖**
+（§2 几何与 §4 响应式失效，§1 / §3 继续有效）。
+
+新增红测 `tests/test_tech_quote_workspace_flush_red.py`（22 项，含 5 个测试类）：
+spec 钉契约、报价结果区去卡片但保留 `flex` 与 `background:var(--bg-page)`、右栏与结果区内部行不动、
+工艺结果卡去卡片但保留表面与 `flex`、响应式不许把外边距加回来、外层列仍不是第二张卡、
+标题行 52px → 34px 且仍是固定 px、`padding` 收一半、子页签 / 状态胶囊 / 标题字号一个都不许缩、
+嵌入态 `.tech-embed body` 必须白底且四条内边距减半、`.tech-embed body` 的 `padding-bottom` 18px → 9px、
+灰底规则必须留在 `.tech-embed` 作用域内（不得写成裸 `body`）、`workbench.css` 的独立打开基线不动、
+内层 `.center-panel` 自身保留，以及 iframe / 满宽覆盖 / 九阶段桥接等回归锚点。
+
+按新契约反转两处旧断言（只改测试脚手架 + 补注释，未改业务实现）：
+
+- `tests/test_tech_right_workspace_quote_rounded_card_red.py`：`margin:16px / border:.5px / border-radius:12px`
+  改为 `margin:0 / border:0 / border-radius:0`，响应式断言由"必须非零"反转为"不许非零"，其余结构断言保留；
+- `tests/test_tech_drawing_title_and_result_actions_cleanup_red.py`：标题行固定高度断言由
+  "44–99px" 放宽为"仍是固定 px 且明显小于 44px"，精确值由本批新红测逐条钉住。
+
+Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red` → 22 项中
+**12 条失败记录**（`.results-area` 仍未去卡片、`.tech-results-area` 仍 16px/12px、两处响应式仍 12px/8px、
+标题行仍 52px 与 8px 内边距、嵌入态无白底且左右仍 18px、`padding-bottom` 仍 18px），
+含 subTest 的失败点与方法一一对应；改前即绿的 10 项是保护性用例（内层卡片保留、右栏灰底不动、
+子页签与胶囊不许缩、满宽覆盖、桥接锚点）。两个被反转的旧测试 → 18 项中 **5 条失败记录**，
+全部是本次契约反转点。全量 `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+→ **1689 项 / 17 条失败记录，全部来自本批三个文件**，其余（含 `## 93` / `## 94` / `## 95` 各批）全绿。
+
+明确不在本批：不换一种新的卡片形态、不动 `#techResultsArea` 这层 DOM 与三个子块的顺序、
+不改 `workbench.css` 的独立打开基线、不缩小子页签与状态胶囊来"假装"行变窄。
+
+实现与验收（实现由 DeepSeek 完成，Codex 只做复核与验收，未写业务代码）：
+
+- 四处样式逐条落地：
+  - `确认需求解析结果.html` 的 `.results-area`：`border:0` / `margin:0` / `border-radius:0`；
+    `background:var(--bg-page)`、`display:flex`、`flex-direction:column`、`flex:1`、`overflow:hidden`
+    逐条保留，`.right-panel` 的灰底与 `.results-header` / `.results-content` / `.bottom-bar`
+    的内部排版未动（报价侧分隔仍由 `.chat-panel` 的 `border-right` 承担）。
+  - `tech-workbench.css` 的 `.tech-results-area`：`margin:16px → 0`、`border:.5px → 0`、
+    `border-radius:12px → 0`，`background:var(--twb-card)` 与 flex 排版、`box-shadow:none` 不变；
+    `:947` 中屏的 `margin:12px` 与 `:990` 窄屏的 `margin:8px` 一并归零，任何断点都不恢复外边距。
+  - 同文件 `.tech-workspace-context`：`min-height:52px → 34px`、`padding:8px 16px → 4px 16px`；
+    `align-items:center` / `justify-content:space-between` / `border-bottom` / `background` / `gap` 未动，
+    `.tech-substep-btn`（`padding:5px 12px`）、`.tech-context-notice`（`padding:2px 10px`）、
+    `.tech-context-title`（`font-size:13px`）、`.tech-substeps-slot{margin-left:auto}` 一个都没缩。
+  - `tech-embed.js` 注入块：新增 `.tech-embed body{background:#fff !important}`（作用域内，没有裸 `body`
+    规则）；`.tech-embed .oc-shell .page-container` 的左右内边距 `18px → 9px` 并补齐
+    `padding-top/bottom:10px`，四条内边距全部 longhand（避开 `workbench.css` 的 `padding` 简写）；
+    `.tech-embed body` 的 `padding-bottom` `18px → 9px`。`workbench.css` 的 body 灰底与
+    `.page-container{padding:var(--space-xl)}`、`.center-panel` 的白底 / 1px 边框 / 12px 圆角原样保留，
+    独立打开阶段页的基线未分叉。
+- 版本号：`tech-workbench.css?v=twb19 → twb20`（`tech-workbench.html`）；
+  `tech-embed.js?v=twb2 → twb3`（11 个阶段页：assembly-integration / cost-review / cost / process /
+  report-publish / report-review / requirement-confirm / requirement-create / requirement-review /
+  summary / tech-task）；`index.html` 的 `?v=twb3 → twb4`。
+- 验收（9-16）：`test_tech_quote_workspace_flush_red` **22/22 绿**（改前 12 条失败记录，全部落在上述
+  四处）；两个被反转的旧测试 `test_tech_right_workspace_quote_rounded_card_red` +
+  `test_tech_drawing_title_and_result_actions_cleanup_red` → **18/18 绿**（改前 5 条失败记录）；
+  全量 `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` →
+  **1689 项全绿**（0 失败，含 `## 93` / `## 94` / `## 95` 各批）；`node --check tech-embed.js` 通过；
+  `git diff --check` 干净。
+- 明确不在本批：不换一种新的卡片形态（无阴影卡 / 渐变卡 / 描边卡）、不删 `#techResultsArea` 这层 DOM、
+  不改 `#techContextHeader` / `#techWorkspaceOutlet` / `.tech-workbench-bottom` 的顺序与归属、
+  不改 `workbench.css` 的独立打开基线、不缩子页签与状态胶囊来"假装"标题行变窄、
+  不动九阶段路由 / iframe / postMessage / TechBoardBridge / `syncChatActions()`。
+
+实现提示词在会话中交付；本批改动**未提交、未推送、未部署**（Spec 1 个 + 红测 1 个 + 反转旧断言 2 个 +
+旧 Spec 标注 1 处 + 本 changelog）。

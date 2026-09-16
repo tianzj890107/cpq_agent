@@ -332,16 +332,18 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   overflow: hidden;
   box-shadow: none;
 }
-/* 业务结果卡（报价式）：项目标题与流程条之下，当前步骤标题 / iframe 业务内容 /
-   底栏同属这一张卡；右侧列容器继续无圆角、无阴影，不形成第二张外层卡片。 */
+/* 业务结果区：项目标题与流程条之下，当前步骤标题 / iframe 业务内容 / 底栏同属
+   这一层；它铺满右侧列本身（无外边距、无边框、无圆角），右侧列容器同样无圆角、
+   无阴影，不形成第二张外层卡片。三块内容之间的分隔由标题行 border-bottom 与
+   底栏 border-top 承担。 */
 .tech-results-area {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  margin: 16px;
-  border: .5px solid var(--twb-border);
-  border-radius: 12px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
   background: var(--twb-card);
   overflow: hidden;
   box-shadow: none;
@@ -550,9 +552,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  /* 五个大流程共用同一标题行：固定最小高度，子页签 / 状态 / 权限提示变化都不改高度。 */
-  min-height: 52px;
-  padding: 8px 16px;
+  /* 五个大流程共用同一标题行：固定最小高度，子页签 / 状态 / 权限提示变化都不改高度。
+     高度只由这一行自己的 min-height / padding 决定，不缩子页签、状态胶囊或标题字号。 */
+  min-height: 34px;
+  padding: 4px 16px;
   border-bottom: .5px solid var(--twb-border);
   background: var(--twb-card);
 }
@@ -944,7 +947,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 /* ---------- 中等屏：中间会话列收窄，仍保持三列 ---------- */
 @media (max-width: 1180px) and (min-width: 901px) {
   .tech-workbench-body { grid-template-columns: 56px 380px minmax(0, 1fr); }
-  .tech-results-area { margin: 12px; }
+  /* 收窄的只有中屏的会话列；结果区在任何断点都铺满右侧列，不恢复外边距。 */
+  .tech-results-area { margin: 0; }
 }
 
 /* ---------- 窄屏：上下排列，导航/会话/工作区均保持可访问 ---------- */
@@ -986,7 +990,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
     border-left: 0;
   }
   .tech-stage-frame { min-height: 62vh; }
-  .tech-results-area { margin: 8px; }
+  .tech-results-area { margin: 0; }
   .tech-project-header { flex-wrap: wrap; }
   .tech-project-status { white-space: normal; }
   .tech-workspace-progress { flex-wrap: wrap; }

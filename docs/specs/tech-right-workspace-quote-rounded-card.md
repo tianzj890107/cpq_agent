@@ -2,6 +2,11 @@
 
 状态：TDD Red，等待 DeepSeek 实现。
 
+**部分被覆盖（9-16）**：§2「报价式卡片视觉」的外边距 / 边框 / 圆角，以及 §4「响应式」的
+12px / 8px 非零外间距，已被用户最新决策反转 —— 见
+`docs/specs/tech-quote-workspace-flush-and-compact-stage-title-row.md`（结果区铺满右侧工作区）。
+本 Spec 的 §1 / §3（同层包装、内部顺序、分隔线、iframe 满高）继续有效。
+
 ## 决策覆盖
 
 本 Spec 以用户最新决策为准，覆盖早期“技术右侧工作区完全贴边、无外围卡片”的视觉约束。

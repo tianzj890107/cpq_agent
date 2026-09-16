@@ -19,9 +19,15 @@ EMBED_JS = read("tech_app/frontend/tech-embed.js")
 
 class TechDrawingTitleAndResultActionsCleanupContract(unittest.TestCase):
     def test_context_header_has_stage_independent_height(self):
+        # 契约更新（「工艺标题行收窄」批次）：用户要求这一行窄很多，固定高度从 52px
+        # 收到 34px（精确值由 tests/test_tech_quote_workspace_flush_red.py 钉住）。
+        # 这里只守原意：高度仍是**固定 px**（不随内容 / 子页签数量变化）且仍然居中。
         rule = re.search(r"\.tech-workspace-context\s*\{([^}]*)\}", CSS, re.S)
         self.assertIsNotNone(rule)
-        self.assertRegex(rule.group(1), r"min-height:\s*(?:4[4-9]|[5-9]\d)px")
+        height = re.search(r"min-height:\s*(\d+)px", rule.group(1))
+        self.assertIsNotNone(height, "标题行必须继续使用固定 px 的 min-height")
+        self.assertLess(int(height.group(1)), 44,
+                        "收窄后的标题行高度应明显小于原来的 52px")
         self.assertRegex(rule.group(1), r"align-items:\s*center")
 
     def test_drawing_title_and_real_board_status_share_parent_row(self):
