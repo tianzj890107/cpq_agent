@@ -13,7 +13,11 @@
   · 只有一个模型：图纸解析、文档分析、工艺推荐、成本测算和 Agent 对话都解析
         同一个报价模型，不再有 vision_model / text_model 之分；
   · 当前模型不支持图像时如实报错（并带上实际模型名），不静默降级、不另设
-        "多模态模型"绕开统一要求。
+        "多模态模型"绕开统一要求；
+  · 【账号级覆盖】全局之上还有一层可选的"每个账号自己的模型 / 自己的 Key"
+        （services/user_llm.py，落 DATA_DIR/_user_llm.json）。优先级是
+        「账号 → 全局 → 环境变量」，缺项一律回落全局；Temperature / 最大 Tokens /
+        深度思考仍只有全局一份。发起账号由 services/acting_user.py 的上下文带入。
 
 密钥安全：Key 只从共享配置取出来交给调用方，本模块不打印、不写日志、不回接口。
 """
@@ -143,6 +147,75 @@ _applied_route: dict[str, str] | None = None
 
 
 # --------------------------------------------------------------------------- #
+# 发起账号（账号级覆盖的入口）
+# --------------------------------------------------------------------------- #
+def _target_user(user: str = "") -> str:
+    """这一次调用是谁发起的：显式传入优先，其次上下文，都没有就是空串（回落全局）。"""
+    explicit = str(user or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from . import acting_user
+        return acting_user.current_acting_user()
+    except Exception:                                   # pragma: no cover - 依赖环境
+        return ""
+
+
+def _account_model(user: str) -> str:
+    """该账号的个人模型；没设置或读不出来（文件损坏）都返回空串。"""
+    if not user:
+        return ""
+    try:
+        from . import user_llm
+        return str((user_llm.get(user) or {}).get("model") or "").strip()
+    except Exception:                                   # pragma: no cover - 读盘异常
+        return ""
+
+
+def _account_key(user: str, provider: str) -> str:
+    """该账号在某 provider 的个人 Key；没有则空串。"""
+    if not user:
+        return ""
+    try:
+        from . import user_llm
+        return user_llm.personal_key(user, provider)
+    except Exception:                                   # pragma: no cover - 读盘异常
+        return ""
+
+
+def _model_and_source(user: str) -> tuple[str, str]:
+    """生效模型 + 来源（account / global）。"""
+    personal = _account_model(user)
+    if personal:
+        return personal, "account"
+    return current_model_id(), "global"
+
+
+def _key_and_source(user: str, provider: str, saved: dict[str, str] | None = None) -> tuple[str, str]:
+    """生效 Key + 来源（account / global / env / missing），优先级与 resolve 一致。"""
+    personal = _account_key(user, provider)
+    if personal:
+        return personal, "account"
+    keys = _saved_keys() if saved is None else saved
+    global_key = str(keys.get(provider) or "").strip()
+    if not global_key and provider == CPQ_LOCAL_PROVIDER:      # 报价侧本地模型的旧叫法
+        global_key = str(keys.get("local") or "").strip()
+    if global_key:
+        return global_key, "global"
+    for env_name in (PROVIDERS.get(provider) or {}).get("env") or ():
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value, "env"
+    return "", "missing"
+
+
+def _source_label(source: str, user: str = "") -> str:
+    if source == "account":
+        return f"账号 {user} 的个人设置" if user else "账号个人设置"
+    return "平台默认"
+
+
+# --------------------------------------------------------------------------- #
 # 共享配置读写
 # --------------------------------------------------------------------------- #
 def _quote_settings() -> dict[str, Any]:
@@ -217,36 +290,80 @@ def selected_model(*, vision: bool = False) -> str:
     return model
 
 
-def ensure_vision_capable(model: str | None = None) -> str:
-    """图纸解析这类必须用图像能力的调用先过这里：不支持就带着模型名报错。"""
-    target = str(model or current_model_id()).strip()
+def ensure_vision_capable(model: str | None = None, *, user: str = "") -> str:
+    """图纸解析这类必须用图像能力的调用先过这里：不支持就带着**生效模型与来源**报错。
+
+    账号有自己的模型时按账号的模型判断，报错里说清"这是谁的模型"，绝不静默换模型。
+    """
+    target_user = _target_user(user)
+    if model:
+        target = str(model).strip()
+        personal = _account_model(target_user)
+        source = "account" if (personal and target == personal) else "global"
+    else:
+        target, source = _model_and_source(target_user)
     provider = provider_of(target)
     if target in VISION_MODELS or provider in ("anthropic", "openai", "qwen"):
         return target
     if provider == CPQ_LOCAL_PROVIDER:
         return target
-    raise ValueError(f"当前模型 {target} 不支持图像解析，请在「模型设置」里改用支持多模态的模型")
+    raise ValueError(
+        f"当前生效模型 {target}（来源：{_source_label(source, target_user)}）不支持图像解析，"
+        f"请在「模型设置」里改用支持多模态的模型")
 
 
-def resolve(*, vision: bool) -> dict[str, Any]:
-    """把「报价当前模型」解析成一次调用所需的全部信息。
+def resolve(*, vision: bool, user: str = "") -> dict[str, Any]:
+    """把「生效模型」解析成一次调用所需的全部信息。
 
-    调用方不再自己拼 base_url 或取环境变量 —— 那正是以前请求跑去别的网关的原因。
+    优先级：显式 user → 上下文里的发起账号 → 全局兜底（Spec C1）。返回结构与以前
+    逐字段一致，既有调用点不传账号也不改签名。调用方不再自己拼 base_url 或取环境
+    变量 —— 那正是以前请求跑去别的网关的原因。
     """
-    model = current_model_id()
+    target = _target_user(user)
+    model, source = _model_and_source(target)
     if vision:
-        ensure_vision_capable(model)
+        ensure_vision_capable(model, user=target)
     provider = provider_of(model)
     spec = PROVIDERS.get(provider)
     if spec is None:
         raise ValueError(f"模型 {model} 的提供商 {provider} 未配置网关")
+    api_key, key_source = _key_and_source(target, provider)
+    if not api_key and source == "account":
+        # 账号选了自己没有 Key、全局也没有该 provider Key 的模型：明确失败，
+        # 绝不静默改用全局模型或别的 provider（Spec C9）。
+        raise ValueError(
+            f"账号 {target} 选用的模型 {model} 需要 {provider} 的 API Key，"
+            f"但该账号与平台默认都没有配置 {provider} 的 Key；"
+            f"请在「我的模型与密钥」里填写自己的 Key，或把个人模型改回平台默认")
     return {
         "model": model,
         "provider": provider,
         "provider_label": spec.get("label") or provider,
         "base_url": base_url_of(provider),
         "native": bool(spec.get("native")),
-        "api_key": api_key_of(provider),
+        "api_key": api_key,
+    }
+
+
+def effective(user: str = "") -> dict[str, Any]:
+    """「现在到底用谁的模型 / 谁的 Key」—— 供接口与界面显示，不重复实现优先级。
+
+    与 resolve() 共用同一套判定；区别只是**不抛错**：账号选了缺 Key 的模型时，
+    这里如实报 key_source="missing"，让界面能把问题指出来（真正调用时才由
+    resolve() 明确失败）。
+    """
+    target = _target_user(user)
+    model, model_source = _model_and_source(target)
+    try:
+        provider = provider_of(model)
+    except ValueError:
+        provider = ""
+    _, key_source = _key_and_source(target, provider) if provider else ("", "missing")
+    return {
+        "model": model,
+        "source": model_source,
+        "provider": provider,
+        "key_source": key_source,
     }
 
 
@@ -260,10 +377,10 @@ def inference_params() -> dict[str, Any]:
     }
 
 
-def agent_params() -> dict[str, Any]:
-    """Agent 会话要用的参数：模型与推理参数同样取自报价配置。"""
+def agent_params(user: str = "") -> dict[str, Any]:
+    """Agent 会话要用的参数：推理参数取自全局配置，模型取**生效模型**（账号可覆盖）。"""
     params = inference_params()
-    params["agent_model"] = current_model_id()
+    params["agent_model"] = _model_and_source(_target_user(user))[0]
     params["thinking_budget"] = _quote_settings().get("thinking_budget") or THINKING_BUDGET
     params["max_iterations"] = MAX_ITERATIONS
     return params
@@ -428,37 +545,44 @@ def _post_quote_settings(base: str, body: dict[str, Any]) -> None:
 
 
 def _route_matches_applied(route: dict[str, Any]) -> bool:
-    """当前路由是否与上次推给 Agent 会话的完全一致（含 Key，只比不打印）。"""
+    """当前路由是否与上次推给 Agent 会话的完全一致（含 Key 与发起账号，只比不打印）。
+
+    "account" 必须一起比：会话（按项目）是共享的，A 说完 B 说时模型与 Key 都可能
+    换人，不把账号算进去就发现不了，会拿上一个人的模型与额度继续跑。
+    """
     previous = _applied_route
     if previous is None:
         return False
-    for field in ("model", "provider", "base_url", "api_key", "native"):
+    for field in ("model", "provider", "base_url", "api_key", "native", "account"):
         if str(previous.get(field) or "") != str(route.get(field) or ""):
             return False
     return True
 
 
-def sync_live_agents() -> None:
-    """把当前路由推给所有已建的 Agent 会话；路由变了就连 client 一起重建。
+def sync_live_agents(user: str = "") -> None:
+    """把**发起账号的**生效路由推给所有已建的 Agent 会话；路由变了就连 client 一起重建。
 
     这是「报价保存设置后技术工艺不需要重启」的落点：技术工艺每次对话前调用一次，
-    报价侧在另一个进程里改的模型 / 网关 / Key 会在这次比对里被发现。路由不可读
-    （没配模型、配置损坏）时安全退出，不打断对话本身。
+    报价侧在另一个进程里改的模型 / 网关 / Key、或者换了说话的人，都会在这次比对里
+    被发现。路由不可读（没配模型、配置损坏、账号缺 Key）时安全退出，不打断对话本身
+    —— 真正的报错留给该报错的那一步。
     """
     global _applied_route
+    target = _target_user(user)
     try:
-        route = resolve(vision=False)
+        route = resolve(vision=False, user=target)
     except Exception:                                   # pragma: no cover - 配置不可读
         return
+    route = {**route, "account": target}
     rebuild = not _route_matches_applied(route)
     try:
         from . import oc_agent
 
-        oc_agent.apply_settings(agent_params(), rebuild_client=rebuild)
+        oc_agent.apply_settings(agent_params(user=target), rebuild_client=rebuild)
     except Exception:                                   # pragma: no cover - 依赖环境
         return
     _applied_route = {key: str(route.get(key) or "") for key in
-                      ("model", "provider", "base_url", "api_key", "native")}
+                      ("model", "provider", "base_url", "api_key", "native", "account")}
 
 
 def changed_fields(patch: dict) -> list[str]:

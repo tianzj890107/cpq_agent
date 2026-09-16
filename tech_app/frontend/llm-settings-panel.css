@@ -60,6 +60,29 @@
 }
 .llm-set-status.err { color: #dc2626; }
 
+/* 「我的模型与密钥」区：与「平台默认」区之间用一条分隔线断开，避免看成一整套。
+   仍然复用同一套行/输入/按钮类名，两块的控件外观一致。 */
+.llm-set-section {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: .5px solid var(--oc-border-3, #e7e7ea);
+}
+.llm-set-section .llm-set-status { border-top: 0; }
+.llm-set-title {
+  padding: 2px 2px 4px;
+  color: var(--oc-text-1, #1f2023);
+  font-size: 12px;
+  font-weight: 600;
+}
+.llm-set-chip {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: #e0edff;
+  color: #0050C4;
+  font-size: 10px;
+}
+
 /* Agent 小窗里的弹层比首页对话框窄，输入区留一点内边距 */
 .oc-settings .llm-set-host { padding: 0 8px 4px; }
 .llm-set-warn {

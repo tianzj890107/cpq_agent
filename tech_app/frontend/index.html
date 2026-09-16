@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="agent-chat.css?v=20260916-cad1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="tech-rail.css?v=rail2" />
-  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
+  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set3" />
   <!-- three 必须走本地副本，不能挂公网 CDN。app.js 是 ES module，import 没解析完
        它一行都不跑：按钮、图纸、任务文件全停在 HTML 初始态，界面看上去就像
        "前面步骤的东西没传过来"。unpkg 在内网实测要 5~7 秒，断网则是永久卡住 ——
@@ -266,6 +266,6 @@
   <div id="loginOverlay" class="login-overlay" style="display:none"><form id="loginForm" class="login-card"><h2>登录</h2><div class="login-sub">图纸解析与生成平台 · 私有化部署</div><input id="loginUser" placeholder="用户名" autocomplete="username" /><input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" /><div id="loginErr" class="login-err"></div><button type="submit">登 录</button></form></div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260916-cad1"></script><script src="tech-board-runtime.js?v=tbr2"></script><script src="tech-session-timeline.js?v=tst1"></script><script type="module" src="app.js?v=20260916-bp1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260916-bp1"></script><script src="home-link.js?v=home6"></script>
+<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260916-cad1"></script><script src="tech-board-runtime.js?v=tbr2"></script><script src="tech-session-timeline.js?v=tst1"></script><script type="module" src="app.js?v=20260916-bp1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20260916-bp1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>

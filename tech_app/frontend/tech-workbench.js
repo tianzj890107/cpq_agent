@@ -931,9 +931,12 @@
    * 保存后立即刷新右上角模型文字；权限只读态由接口的 editable / secrets_editable 决定。 */
   function techModelLabel(settings) {
     const options = (settings && settings.options) || [];
-    const id = String((settings && settings.model) || '').trim();
+    // 账号级模型优先：别人看到的还是平台默认，只有自己这一屏显示「我的」那一个。
+    const isMine = Boolean(settings) && settings.effective_source === 'account';
+    const id = String((settings && (isMine ? settings.effective_model : settings.model)) || '').trim();
     const found = options.find((item) => item && item.id === id);
-    return (found && found.label) || id || '未配置模型';
+    const label = (found && found.label) || id || '未配置模型';
+    return isMine && label !== '未配置模型' ? `${label}（我的）` : label;
   }
   async function refreshTechModelLabel() {
     const node = $('techModelInfo');

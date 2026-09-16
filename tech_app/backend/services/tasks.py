@@ -85,8 +85,22 @@ def submit(
     cad: bool = False,
     *,
     dedup_key: str | None = None,
+    actor: str = "",
 ) -> str:
-    """提交一个任务(fn 为零参可调用,返回 JSON 可序列化的结果),立即返回 task_id。"""
+    """提交一个任务(fn 为零参可调用,返回 JSON 可序列化的结果),立即返回 task_id。
+
+    actor 是**发起账号**：模型 / API Key 是「全局默认 + 每个账号可覆盖」，worker 线程
+    里要按发起人解析路由。没显式传时从当前上下文补（HTTP 请求线程里就是当前登录
+    账号）—— 线程池不会自动带上上下文，所以必须在这里取值再显式带进 worker。
+    没有发起人的任务(定时、系统自愈重跑、历史任务恢复)留空 → 全局兜底。
+    """
+    actor = str(actor or "").strip()
+    if not actor:
+        try:
+            from . import acting_user
+            actor = acting_user.current_acting_user()
+        except Exception:                               # pragma: no cover - 依赖环境
+            actor = ""
     with _submit_lock:
         # 只有业务输入完全相同的任务才复用。零件级任务、不同批量或不同补充
         # 说明不能仅因 kind 相同就被错误合并。
@@ -117,12 +131,14 @@ def submit(
             "result": None,
             "error": None,
         })
-        _executor.submit(_run, project_id, task_id, kind, fn, cad)
+        _executor.submit(_run, project_id, task_id, kind, fn, cad, actor)
         return task_id
 
 
-def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: bool) -> None:
+def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: bool,
+         actor: str = "") -> None:
     token = _CURRENT_TASK.set((project_id, task_id, kind, 0))
+    acting_token = _set_acting(actor)
     sop_name, sop_total = _SOP_NAMES.get(kind, ("任务处理 SOP", 3))
     _update(project_id, task_id, status="running",
             progress=_TASK_START_PROGRESS.get(kind, "开始处理"), sop_name=sop_name,
@@ -153,6 +169,29 @@ def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: 
                 finished_at=_now(), error=_safe_error(e))
     finally:
         _CURRENT_TASK.reset(token)
+        _reset_acting(acting_token)
+
+
+def _set_acting(actor: str):
+    """worker 线程内设入发起账号；返回 token 供 finally 还原。
+
+    线程池会复用线程，用了不还原的话下一个任务会继承上一个人的模型与 Key。
+    """
+    try:
+        from . import acting_user
+        return acting_user.acting_user_token(actor)
+    except Exception:                                   # pragma: no cover - 依赖环境
+        return None
+
+
+def _reset_acting(token) -> None:
+    if token is None:
+        return
+    try:
+        from . import acting_user
+        acting_user.reset_acting_user(token)
+    except Exception:                                   # pragma: no cover
+        pass
 
 
 def _update(project_id: str, task_id: str, **fields) -> None:

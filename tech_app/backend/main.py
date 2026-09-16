@@ -64,6 +64,7 @@ from .models.workflow import (
     WorkflowAction, WorkflowReview,
 )
 from .services import (
+    acting_user, user_llm,
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
@@ -357,6 +358,20 @@ def _sso_token(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
+def _bind_acting_user(user: dict) -> dict:
+    """把「这一轮是谁」设入上下文，与 request.state.user 同一处落地。
+
+    模型/密钥是「全局默认 + 每个账号可覆盖」，服务层得知道发起账号才能选。
+    这里设的是**请求上下文**，之后同一个请求里调用的任务提交、解析、Agent 都读得到；
+    真正给用户算「我的 / 生效」的接口仍显式用 current_user，不依赖上下文传递。
+    """
+    try:
+        acting_user.set_acting_user((user or {}).get("username", ""))
+    except Exception:                                     # pragma: no cover - 上下文异常不影响鉴权
+        pass
+    return user
+
+
 async def _cpq_sso_guard(request: Request) -> None:
     """【CPQ 定制】身份来自 CPQ 的登录系统。见 services/cpq_sso.py。"""
     path = request.url.path
@@ -370,7 +385,7 @@ async def _cpq_sso_guard(request: Request) -> None:
         raise HTTPException(503, f"登录服务暂不可用，无法校验身份：{exc}") from exc
     if not user:
         raise HTTPException(401, "请先在配置报价 CPQ 中登录")
-    request.state.user = user
+    request.state.user = _bind_acting_user(user)
 
 
 async def auth_guard(request: Request):
@@ -379,15 +394,15 @@ async def auth_guard(request: Request):
         return
     if AUTH_AUTO_ADMIN:
         # 演示/内网临时模式：不展示登录页，但仍以管理员身份通过所有业务权限检查。
-        request.state.user = {
+        request.state.user = _bind_acting_user({
             "username": DEFAULT_ADMIN_USER,
             "role": "admin",
             "display_name": "默认管理员",
             "is_system": False,
-        }
+        })
         return
     if not AUTH_ENABLED:
-        request.state.user = auth.SYSTEM_USER
+        request.state.user = _bind_acting_user(auth.SYSTEM_USER)
         return
     path = request.url.path
     if path in _PUBLIC_PATHS or not path.startswith("/api/"):
@@ -402,7 +417,7 @@ async def auth_guard(request: Request):
     u = store.get_user(payload.get("sub", ""))
     if not u:
         raise HTTPException(401, "用户不存在")
-    request.state.user = auth.public_user(u)
+    request.state.user = _bind_acting_user(auth.public_user(u))
 
 
 def current_user(request: Request) -> dict:
@@ -759,11 +774,131 @@ def audit_llm_settings_change(user: dict, patch: dict) -> None:
     })
 
 
+class MyLlmSettingsBody(BaseModel):
+    """账号级「我的模型与密钥」入参。
+
+    只有 model 与 api_key 两项（推理参数归全局）。请求体里就算带 username / user /
+    actor 也一律忽略：这三个接口只作用于 current_user，不接受指定他人。
+    """
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_provider: Optional[str] = None
+
+
+def audit_user_llm_settings_change(user: dict, fields: list, secrets_changed: bool) -> None:
+    """账号级改动的审计口径与全局一致：只记字段名与「是否改了密钥」，不记任何值。"""
+    store.audit("_global", "user_llm_settings_update", {
+        "actor": (user or {}).get("username", "system"),
+        "fields": sorted(set(fields)),
+        "secrets_changed": bool(secrets_changed),
+    })
+
+
+def _my_llm_username(user: dict) -> str:
+    """账号级接口只认 current_user 的 username —— 显式取，不依赖上下文传递。"""
+    return str((user or {}).get("username", "") or "").strip()
+
+
+def _my_provider_rows(username: str) -> list:
+    """该账号各 provider 的个人 Key 状态：只有 configured 与打码，永不回明文。"""
+    personal = (user_llm.summary(username).get("keys") or {})
+    rows = []
+    for provider, spec in (llm_settings.PROVIDERS or {}).items():
+        entry = personal.get(provider) or {}
+        rows.append({
+            "provider": provider,
+            "label": (spec or {}).get("label") or provider,
+            "base_url": llm_settings.base_url_of(provider),
+            "configured": bool(entry.get("configured")),
+            "hint": entry.get("hint") or "",
+        })
+    return sorted(rows, key=lambda row: row["provider"])
+
+
+def _my_llm_payload(username: str) -> dict:
+    """账号级设置 + 生效模型/来源（给界面显示"现在用的是谁的模型"）。"""
+    summary = user_llm.summary(username)
+    eff = llm_settings.effective(username)
+    return {
+        "username": username,
+        "model": summary.get("model") or "",
+        "has_model": bool(summary.get("has_model")),
+        "keys": summary.get("keys") or {},
+        "effective_model": eff.get("model") or "",
+        "effective_source": eff.get("source") or "global",
+        "key_source": eff.get("key_source") or "missing",
+    }
+
+
+# 「我的模型与密钥」：每个登录账号管自己的那一层，不设置就回落平台默认。
+@app.get("/api/my/settings")
+def get_my_llm_settings(user: dict = Depends(current_user)):
+    """读**自己**的账号级设置；任何账号都看不到别人的（连打码都不行）。"""
+    username = _my_llm_username(user)
+    return {**_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
+@app.put("/api/my/settings")
+def update_my_llm_settings(body: MyLlmSettingsBody, user: dict = Depends(current_user)):
+    """写**自己**的账号级设置。
+
+    model 缺键 = 不改；空串/null = 清除个人模型（回落平台默认）；api_key 必须与
+    api_key_provider 成对且非空才写（留空 = 不修改，与全局设置一致）。
+    """
+    username = _my_llm_username(user)
+    if not username:
+        raise HTTPException(400, "无法确定当前账号，无法保存账号级模型设置")
+    patch = body.model_dump(exclude_unset=True)
+    fields: list = []
+    secrets_changed = False
+    try:
+        if "model" in patch:
+            user_llm.set_model(username, patch.get("model") or "")
+            fields.append("model")
+        key = str(patch.get("api_key") or "").strip()
+        if key:
+            provider = str(patch.get("api_key_provider") or "").strip()
+            if not provider:
+                raise ValueError("保存账号级 API Key 时必须指明提供商")
+            user_llm.set_key(username, provider, key)
+            fields.append("api_key")
+            secrets_changed = True
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if fields:
+        audit_user_llm_settings_change(user, fields, secrets_changed)
+    return {"ok": True, "message": "已保存到「我的模型与密钥」，只对本账号生效",
+            **_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
+@app.delete("/api/my/settings/keys/{provider}")
+def delete_my_llm_key(provider: str, user: dict = Depends(current_user)):
+    """删除**自己**在某个 provider 的个人 Key（模板 Key 不动）。"""
+    username = _my_llm_username(user)
+    if not username:
+        raise HTTPException(400, "无法确定当前账号，无法删除账号级密钥")
+    try:
+        user_llm.set_key(username, provider, "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit_user_llm_settings_change(user, ["api_key"], True)
+    return {"ok": True, **_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
 # 四个入口（报价 / 配置 / 规则 / 技术工艺）共用的「模型设置」接口。
 # 与 /api/llm/settings 是同一份实现、同一份配置、同一套角色校验，只是路径更直白。
 @app.get("/api/settings")
 def get_shared_model_settings(user: dict = Depends(current_user)):
-    return get_runtime_llm_settings(user)
+    # 额外附上「我的」摘要与生效模型：面板要在同一屏里说清"平台默认是什么、
+    # 我现在实际用的是谁的"。仍然只回 configured + 打码，不回明文。
+    username = _my_llm_username(user)
+    eff = llm_settings.effective(username)
+    return {
+        **get_runtime_llm_settings(user),
+        "mine": user_llm.summary(username),
+        "effective_model": eff.get("model") or "",
+        "effective_source": eff.get("source") or "global",
+    }
 
 
 @app.put("/api/settings")
@@ -1211,7 +1346,9 @@ def parse(project_id: str, user: dict = Depends(current_user)):
             f"读取输入：{name}"
             + (f"、技术文档 {len(atts)} 份" if atts else "")
             + (f"、补充说明 {len(note.strip())} 字" if note.strip() else ""))
-        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.snapshot()['model']}）")
+        # 显示**生效模型**：发起账号（谁点的解析）可能有自己的模型，
+        # 写死全局默认会让人对着日志找不到实际用的是哪个模型。
+        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.effective()['model']}）")
         ir = vision.parse_drawing(data, name, note=note, attachments=atts)
         tasks.report_progress(
             f"  ↳ 解析完成：{len(ir.parts)} 个零件、{len(ir.open_questions or [])} 个待澄清问题、"
@@ -1984,7 +2121,8 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
         return {"available": False, "reason": reason}
     # 报价侧可能刚换过模型 / 网关 / Key：先把当前路由推给已建会话，页面上的模型名
     # 与实际请求才会一致（技术工艺与报价是两个进程，收不到对方的保存回调）。
-    llm_settings.sync_live_agents()
+    # 按**发起账号**推：账号级模型/Key 与全局不同，换人说话就得换路由。
+    llm_settings.sync_live_agents(user=user.get("username", ""))
     try:
         meta = oc_agent.get_agent(project_id).meta()
     except oc_agent.AgentUnavailable as exc:
@@ -2068,8 +2206,8 @@ def agent_send(project_id: str, body: AgentSendRequest, request: Request,
     if not ok:
         raise HTTPException(503, reason)
     # 报价保存设置后技术工艺不重启也要生效：比对当前路由，变了就重建 client，
-    # 否则这一轮还会把新模型发给旧厂商。
-    llm_settings.sync_live_agents()
+    # 否则这一轮还会把新模型发给旧厂商。账号级模型/Key 也在这里换人换路由。
+    llm_settings.sync_live_agents(user=user.get("username", ""))
     if body.page_context.strip():
         message = f"{message}\n\n[当前页面：{body.page_context.strip()[:160]}]"
     return StreamingResponse(
