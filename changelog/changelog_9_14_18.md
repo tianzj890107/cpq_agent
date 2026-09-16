@@ -2039,3 +2039,41 @@
   重启 8010（`set -a; . <文件>; set +a` 或 `CPQ_ENV_FILE=<文件>`）→ 页面上存一次确认；
   密钥**启用后不可更换**（换掉已存过个人 Key 的账号连读都会失败）。
 - 状态：实现 + 测试同一次交付；**未提交、未推送、未部署**，服务器与线上数据未做任何改动。
+
+## 93 提交、双远端推送与 34 部署（含线上补密钥）记录（9-16）
+
+- 提交：`dfe6cd4`「缺账号级加密密钥时回可执行的 503 + 8010 启动即读配置文件（## 93）」，
+  6 个文件 / +602 −1（`cpq_suite_server.py`、`tech_app/backend/main.py`、`DEPLOYMENT.md`、
+  本批 Spec、红测、周 changelog）。只暂存本批文件，未使用 `git add -A`。
+- 双远端推送：`python3 scripts/push_remotes.py --check` 预检（`gitlab` / `origin` 均停在 `4a0c892`、
+  是 HEAD 的祖先）后双推，两远端 `refs/heads/20260909` 回读均为 `dfe6cd4`。
+- 34 部署（`wugefei@172.16.10.34`，`/home/wugefei/CPQ/cpq_agent`）分两步做，中途不留下半套服务：
+  1. **先备密钥、再拉代码**（不动服务）：在服务器生成 32 字节随机密钥（base64），写入**仓库外**
+     `/home/wugefei/CPQ/cpq_env.sh`（权限 `0600`，含 `export CPQ_USER_SECRET_KEY=…`；脚本只打印
+     解码后的字节数 `=32`，**不回显密钥本身**）；`git fetch --prune gitlab 20260909` →
+     `git merge --ff-only FETCH_HEAD` 纯快进 `4a0c892 → dfe6cd4`，并确认部署树里已有
+     `cpq_user_secrets.SecretKeyMissing` 与 `CPQ_ENV_FILE` 两处改动。
+  2. **真验证配置文件生效**（一次性进程，服务未动）：`CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh
+     ./open-claude/.venv/bin/python -c "import cpq_suite_server, cpq_user_secrets; …"`
+     → `seal/open 往返: True`、`env 里能看到 CPQ_USER_SECRET_KEY: True`（即 8010 启动时能自己读到文件，
+     不再依赖手工 export）。
+  3. **重启**：先停 8012 子进程、再停 8010 主进程，轮询到两端口释放；命令行**参数原样**、只多一个
+     环境变量前缀 `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh`（本批新增的一等配置方式），
+     `setsid nohup … >> nohup.out 2>&1 < /dev/null &`；旧日志归档为 `nohup.out.prev.<时间戳>`。
+     新进程：8010 PID **1969891**（16:33:47）、8012 PID **1969961**（16:33:48，父进程拉起）。
+- 部署后核验（全部通过）：
+  - **端到端真写一次**（这是用户报的那条路径，走的是同一份 `cpq_auth.set_user_llm` → `seal()`）：
+    借停用账号 `11` 通过内部通道 `PUT /auth/internal/user-llm` 写 `model=deepseek-v4-flash`
+    → **200**（改前是 500），回读拿到该模型；再清空 → **200**，复位后 `model: ""`、`api_keys: {}`。
+    测试前后 `cpq_wf_user_llm_setting` 总行数都是 **0** —— `set_user_llm()` 在两个密文都为 NULL 时
+    直接 `DELETE` 行（`cpq_auth.py:540-543`），所以这次验证**零残留**，没有覆盖任何人的设置。
+  - 坏内部令牌 → **403**；`/` → 200；`/api/health`（8010、直连 8012、内网 `172.16.10.34:8010`）
+    全部 `status=ok`；启动日志只有两行 tech-app 提示，**没有** `[cpq-suite] /auth 出错`。
+  - `git rev-parse --short HEAD` = `dfe6cd4`；服务器上 `cpq_settings.json`、`cpq_history/`、
+    `tech_app/tech_data/`、`product_images/` 均未改写，未新增第二套服务、未抢端口。
+- 现在用户看到的行为：保存「我的模型与密钥」不再报「登录服务暂不可用」，**可以正常保存**；
+  将来若哪天把 `CPQ_USER_SECRET_KEY` 弄丢，报错会是一条**可执行的 503**（点名变量、说明未配置、
+  给出下一步），不再是通用 500。
+- **运维提醒（重要）**：这把密钥**启用后不可更换** —— 换掉之后已经存过个人 Key 的账号连读都会失败。
+  8010 的重启命令今后都要带 `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh`（或先 `set -a; . 该文件; set +a`），
+  `DEPLOYMENT.md` 的「部署前检查」与「线上实例现状」已把这条写成前置条件。
