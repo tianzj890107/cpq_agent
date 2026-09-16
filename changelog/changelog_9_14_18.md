@@ -1897,3 +1897,43 @@
 - 部署说明：**## 91 与 ## 92 同一次上线**。技术工艺侧的"零件库连不上"警示要生效，前提是
   CPQ 侧已按 ## 91 跑过 `scripts/import_da_kb_to_pg.py --confirm` 建好 `cpq_kb` 并灌数；
   否则线上会（如实）显示这枚红色警示。本次改动**未提交、未推送、未部署**。
+
+## 91 / 92 提交、双远端推送与 34 部署记录（9-16）
+
+- 提交：`3cb2e54`「知识库统一维护在 Postgres（cpq_kb）+ 技术工艺经 HTTP 快照读取；零件库连不上
+  当场红字警示（## 91 / ## 92）」，19 个文件 / +3108 −200（`cpq_kb.py`、导入器、
+  `cpq_kb_client.py`、`cpq_suite_server.py`、`kb_repo.py`、`component_match.py`、`store.py`、
+  `main.py`、`app.js`、`workbench.css`、`index.html`、两个 Spec、两个红测、两个夹具、周 changelog）。
+  只暂存本批文件，未使用 `git add -A`；夹具来源那份 `da.db` 按约定**未入库**。
+- 双远端推送：`python3 scripts/push_remotes.py --check` 预检（`gitlab` / `origin` 均停在 `3c893aa`、
+  是 HEAD 的祖先）后双推，两远端 `refs/heads/20260909` 回读均为 `3cb2e54`。
+- 34 部署（`wugefei@172.16.10.34`，`/home/wugefei/CPQ/cpq_agent`）：服务器原先停在 `4b35a25`（## 85），
+  本次 `git -c safe.directory=$PWD fetch --prune gitlab 20260909` → `git merge --ff-only FETCH_HEAD`，
+  纯快进 `4b35a25 → 3cb2e54`，把 ## 86–## 92 一并带上（服务器 `gitlab` 远端是内网 HTTP 地址，
+  不依赖 SSH key）。
+- 先灌知识库、再重启（分两步执行，中途不留下半套服务）：
+  - 把仓库外那份 8 月库 `da.db` 副本（966,656 B，sha256 `0ef8d35…9b24`）拷到
+    服务器 `/tmp/da_kb_source.db`；导入器以 `mode=ro` 打开，导入前后 sha256 **逐位一致**；
+  - `--dry-run --json` → `16 表 / 613 行 / dry_run: true`；`--confirm` → 建 `cpq_kb`（20 张
+    `kb_*` 表 + `kb_meta`）灌入 613 行、`kb_version=1`；再从 PG 侧回读校验：20 表 / 613 行。
+  - 重启按既有顺序：先停 8012 子进程、再停 8010 主进程 → 轮询到两端口全部释放 → 用原命令行
+    `setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010 >> nohup.out 2>&1 < /dev/null &`
+    重启（旧日志归档为 `nohup.out.prev.<时间戳>`）。新进程：8010 PID **1915414**（16:18:02）、
+    8012 PID **1915475**（16:18:03，父进程拉起）。
+- 部署后核验（全部通过）：
+  - `/` → 200；`/api/health`（8010 与直连 8012）→ `{"status":"ok",…,"cadquery_available":true,
+    "sso_enabled":true}`，启动日志无 Traceback / ERROR；内网 `http://172.16.10.34:8010/` → 200 且
+    `status=ok`；
+  - 知识库通道：`GET /wf/tech/kb/snapshot` 无票 / 坏票 → 403（fail-closed），带子进程注入的内部令牌
+    → `kb_version:1 / tables:20 / rows:613`，`?since=1` → `unchanged:true`（不重传表）；
+    在技术工艺侧真跑客户端 + `kb_repo`：`refresh_kb(force=True)` → 20 表、`list_components()` 20 件、
+    `list_materials()` 31、`list_equipment()` 35，二次拉取命中 `since` 缓存、版本不变；
+  - 前端资源：下发的 `/index.html` 已是 `app.js?v=20260916-kbnotice1`、`workbench.css?v=20260916-kbnotice1`，
+    下发的 `app.js` 含 `componentMatchBanner`、`workbench.css` 含 `.component-match-unavailable`；
+  - 权限未放松：未登录访问 `/api/projects/<id>/component-match` 与 `/api/users` 仍 401，
+    `/api/me` 仍提示「请先在配置报价 CPQ 中登录」；
+  - 运行数据未动：`cpq_settings.json`（0600）、`cpq_history/`、`tech_app/tech_data/`、`product_images/`
+    均未改写，未新增第二套服务、未抢端口。
+- 遗留说明：服务器上原来的 `tech_app/tech_data/da.db` 整库 0 行（本次未改它，也不再被知识库读取）；
+  权威数据现在是 PG 的 `cpq_kb`。零部件匹配口径（`ENVELOPE_TOLERANCE=0.20`）本次未动，
+  9/14 那个冰箱项目仍会因口径偏紧匹配不到 —— 那是口径问题，需工艺/产品单独拍板。
