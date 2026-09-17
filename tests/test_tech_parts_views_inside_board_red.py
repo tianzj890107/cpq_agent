@@ -103,8 +103,12 @@ class TechPartsViewsInsideBoardRedTest(unittest.TestCase):
 
     # ---------------------------------------------------------------- 返回
     def test_back_controls_only_change_board_view(self):
+        # ## 100 反转：零件清单常驻左栏、「返回零件详情」由内嵌面板自己的关闭按钮承担，
+        # 看板 app.js 里不再有这两个返回控件（原断言要求它们在场）。本测试仍锁「返回
+        # 只切看板内部视图、不走父壳通道」这一条，不放松。
         for label in ("返回零件清单", "返回零件详情"):
-            self._assert_in(self.board, label, f"看板内部缺少「{label}」返回控件")
+            self.assertFalse(label in self.board,
+                             f"看板里不该再有「{label}」返回控件（## 100 已删）")
         self.assertRegex(
             self.board, r"PART_VIEW_PARENT[\s\S]{0,400}parts-list",
             "返回必须按看板内部父子视图回到上一层")

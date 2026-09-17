@@ -269,3 +269,13 @@ body{padding-bottom:0}
 .component-match-tag.reuse{color:#15803d;border-color:#15803d;background:#F0FDF4}
 .component-match-tag.modify{color:#b45309;border-color:#b45309;background:#FFFBEB}
 .component-match-tag.new{color:var(--text-tertiary);border-color:var(--border-color);background:var(--bg-secondary)}
+
+/* 看板弹卡片：三处「导入已有 3D 模型 / 版本与校核 / 任务文件」不再占用工作区，
+   改用与「模型设置」同一套语义的居中卡片（固定 DOM + 全屏遮罩 + flex 居中）。 */
+.board-card-mask{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.45)}
+.board-card-mask[hidden]{display:none}
+.board-card{width:min(760px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-lg);box-shadow:0 24px 60px rgba(15,23,42,.25)}
+.board-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border-light)}
+.board-card-title{font-size:13px;font-weight:600;color:var(--text-primary)}
+.board-card-body{padding:16px 18px;overflow:auto}
+.board-card-close{padding:5px 8px;border:1px solid var(--color-primary);border-radius:var(--radius-sm);background:#fff;color:var(--color-primary);font-size:11px;cursor:pointer}

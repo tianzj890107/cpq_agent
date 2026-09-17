@@ -57,7 +57,6 @@ PANEL_CHROME_SMALL = {
     ".inline-analysis-inputs textarea",
     ".inline-analysis-qty",
     ".inline-analysis-qty input",
-    ".inline-file-picker span",
     ".inline-file-picker em",
     ".inline-action",
     ".inline-analysis-status",
@@ -384,7 +383,8 @@ class InlineFontScaleRedTest(unittest.TestCase):
         self.assertEqual(effective_font_size(self.css, ".inline-analysis-tabs button"), 11.0)
         self.assertEqual(effective_font_size(self.css, ".inline-action"), 11.0)
         self.assertEqual(effective_font_size(self.css, ".inline-analysis-status"), 10.0)
-        self.assertEqual(effective_font_size(self.css, ".inline-file-picker span"), 10.0)
+        # ## 100 反转：「选择补充文件」整行连同 .inline-file-picker 一起删掉，
+        # 该选择器不再存在，这一条随之删除（其余「明确不放大」的断言一条不动）。
 
     def test_big_numbers_unchanged(self):
         self.assertEqual(effective_font_size(self.css, ".inline-totals strong"), 15.0)

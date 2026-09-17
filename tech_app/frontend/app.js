@@ -63,8 +63,6 @@ const PART_VIEW_PARENT = {
 const PART_VIEW_FOR = { process: "part-process", cost: "part-cost" };
 const PART_VIEW_MODE = { "part-process": "process", "part-cost": "cost" };
 const PART_FLOW_VIEWS = ["drawing-overview", "parts-list", "part-detail", "part-process", "part-cost"];
-const BACK_TO_PARTS_LIST = "返回零件清单";
-const BACK_TO_PART_DETAIL = "返回零件详情";
 const status = (msg, busy = false) => {
   const text = (busy ? "处理中 · " : "") + msg;
   $("status").textContent = text;
@@ -566,30 +564,18 @@ document.addEventListener("click", (event) => {
   }
 });
 
-// 顶层绑定一律判空：拿到 null 会让整个 module 中止，页面所有功能一起失效（见 §23）。
-if ($("btnBackToModel")) {
-  // 工艺推荐 / 成本测算在看板内部是 part-process / part-cost 两个子视图：返回按钮只按
-  // 看板内部父子关系回到 part-detail，不向父壳发消息、不重载页面、不清左侧会话。
-  // 独立抽屉模式（没有看板视图状态）保持原来的行为。
-  $("btnBackToModel").textContent = BACK_TO_PART_DETAIL;
-  $("btnBackToModel").onclick = () => {
-    const parts = window.TechBoardPartViews;
-    const view = parts && typeof parts.current === "function" ? parts.current() : "";
-    if (parts && (view === "part-process" || view === "part-cost")) {
-      parts.back();
-      return;
-    }
-    window.CadInlineAnalysis?.reset();
-    setRightPane("model");
-  };
+// 看板弹卡片（导入已有 3D 模型 / 版本与校核 / 任务文件）：
+// 关闭三条路径统一走 closeBoardCard()，不在各处各写一份收起逻辑。
+if ($("boardCardClose")) $("boardCardClose").onclick = () => { closeBoardCard(); };
+if ($("boardCardMask")) {
+  $("boardCardMask").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeBoardCard();
+  });
 }
-if ($("btnBoardBackList")) {
-  // 零件详情里的「返回零件清单」：同样只切看板内部视图。
-  $("btnBoardBackList").textContent = BACK_TO_PARTS_LIST;
-  $("btnBoardBackList").onclick = () => {
-    if (window.TechBoardPartViews) window.TechBoardPartViews.back();
-  };
-}
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeBoardCard();
+});
+
 $("btnPrevious").onclick = () => {
   if (history.length > 1) history.back();
   else if (__techEmbedMode__ && window.TechEmbed && window.TechEmbed.embedded) { window.TechEmbed.exitToTechHome(); } else location.href = "index.html";
@@ -869,6 +855,25 @@ function drawingParsed() {
   return Boolean(currentIR && ((currentIR.parts || []).length || (currentIR.standard_parts || []).length));
 }
 
+// #actionSheet 八颗按钮唯一的启用判定：解析成功与打开已有项目两处共用，
+// 不许各写一份（#btnMoreImport3d / #btnMoreReview 曾只在解析成功那一刻启用，
+// 打开已有项目后永远置灰，用户点不了 —— 那是缺陷不是设计）。
+function syncActionSheet(ir) {
+  const data = ir || currentIR;
+  const isImg = Boolean(currentIsImg);
+  $("btnVerify").disabled = !isImg || !data;
+  $("btnDecompose").disabled = !data;
+  $("btnModelLookup").disabled = !data;
+  $("btnGenerate").disabled = !isImg || !data;
+  $("btnDrawings").disabled = !isImg || !data;
+  $("btnBom").disabled = !data;
+  // 导入已有 3D 模型 / 版本与校核审查只依赖「有项目」：它们原先只在解析成功
+  // 那一刻被启用，打开已有项目后永远置灰，用户点不了。
+  const hasProject = Boolean(currentProject);
+  $("btnMoreImport3d").disabled = !hasProject;
+  $("btnMoreReview").disabled = !hasProject;
+}
+
 // 具名函数：原 #btnParse 点击逻辑原样搬过来，按钮和统一看板动作共用同一份实现。
 let parseDrawingError = "";
 async function parseDrawing() {
@@ -882,14 +887,7 @@ async function parseDrawing() {
   try {
     currentIR = await runTask(currentProject, `/api/projects/${currentProject}/parse`, "解析");
     renderIR(currentIR);
-    $("btnVerify").disabled = false;
-    $("btnDecompose").disabled = false;
-    $("btnModelLookup").disabled = false;
-    $("btnGenerate").disabled = false;
-    $("btnDrawings").disabled = false;
-    $("btnBom").disabled = false;
-    $("btnMoreImport3d").disabled = false;
-    $("btnMoreReview").disabled = false;
+    syncActionSheet(currentIR);
     const documentCount = await fetch(`${API}/api/projects/${currentProject}/attachments`)
       .then(r => r.ok ? r.json() : { attachments: [] })
       .then(payload => (payload.attachments || []).length)
@@ -1432,12 +1430,7 @@ async function openProject(pid) {
   // 灰按钮必须自己说明为什么灰 —— 理由原来只写在抽屉里的占位文字上，
   // 而抽屉默认是关的，主界面上没有任何线索。
   $("btnParse").title = blockedReason || "";
-  $("btnVerify").disabled = !isImg || !data.ir;
-  $("btnDecompose").disabled = !data.ir;
-  $("btnModelLookup").disabled = !data.ir;
-  $("btnGenerate").disabled = !isImg || !data.ir;
-  $("btnDrawings").disabled = !isImg || !data.ir;
-  $("btnBom").disabled = !data.ir;
+  syncActionSheet(currentIR);
   if (data.ir) renderIR(data.ir);
   loadModelLookup(pid);
   loadVerification(pid);
@@ -2083,14 +2076,11 @@ function selectPart(part) {
   if (downloadLinks.length) lowerHtml += `<div class="dl download-actions">${downloadLinks.join("")}</div>`;
 
   // 工艺推荐与成本测算已移到左侧零件清单的子按钮下；右侧只保留 3D 与零件信息。
+  // 版本面板不再内嵌进零件详情 —— 它改由「更多功能 ▾ → 版本与校核」的弹卡片承载，
+  // 节点本体留在抽屉里，只换呈现位置、不复制。
   const html = `<div class="part-summary">${summaryHtml}</div>` +
-    `<div id="inlineAnalysisHost" class="inline-analysis-host">${lowerHtml}</div>` +
-    // 版本面板在看板内部是同一份节点：这里给它一个槽位，切到零件详情时把既有
-    // #secVersions 挪进来，切走时再随视图移动 —— 不复制节点、不另建数据源。
-    `<div id="partDetailVersions" class="part-detail-versions"></div>`;
+    `<div id="inlineAnalysisHost" class="inline-analysis-host">${lowerHtml}</div>`;
 
-  // 先取出来：下面 innerHTML 会把已经挪进详情的版本面板摘下来。
-  const versionsNode = document.getElementById("secVersions");
   $("partDetail").innerHTML = html;
   $("parameterEditor").innerHTML = parameterHtml || "此零件暂无可编辑参数。";
   // 换简化外形就按新模板重渲染尺寸输入（默认全空）—— 不允许上一类型的字段残留。
@@ -2100,11 +2090,6 @@ function selectPart(part) {
     baseTypeSel.onchange = () => {
       if (baseDims) baseDims.innerHTML = baseFeatureDimsHtml(baseTypeSel.value);
     };
-  }
-  const versionsSlot = document.getElementById("partDetailVersions");
-  if (versionsNode && versionsSlot) {
-    versionsNode.removeAttribute("data-drawer-hidden");   // 详情里就是要展示，不能带着隐藏标记
-    versionsSlot.append(versionsNode);
   }
   // 详情内要能直接进「工艺推荐」：复用零件清单同一份子动作构造，不另写按钮逻辑。
   const detailActions = buildPartSubActions(part);
@@ -2731,6 +2716,21 @@ function boardStageName() {
 }
 
 let boardFileManifest = null;
+let boardCardTrigger = null;  // 弹卡片的触发按钮：关闭时把焦点还回去
+
+// 左侧入口 → 看板视图：run 全部复用既有的面板 / 既有接口（card: true 的三项走弹卡片）。
+const BOARD_VIEW_SPECS = {
+  // 零件清单是 2.1 固定左栏的常驻内容（#secParts / #tree 全页唯一），
+  // 不再是可搬运的覆盖式视图：run 只聚焦左栏，不把节点搬进结果宿主。
+  parts: { title: "零件清单", focus: "parts" },
+  questions: { title: "待澄清问题", sections: ["secQuestions"] },
+  evidence: { title: "解析视图", sections: ["secEvidence"] },
+  review: { title: "版本与校核", sections: ["secVersions", "verificationDetails", "modelLookupDetails"], card: true },
+  upload: { title: "补充需求图纸", sections: ["secUpload"] },
+  import3d: { title: "导入已有 3D 模型", sections: ["secImport3d"], card: true },
+  files: { title: "任务文件", files: true, card: true },
+  report: { title: "解析报告", report: true },
+};
 
 // 解析摘要 → 父壳看板桥。左侧入口的显示 / 计数只来自这条 result-summary。
 function publishResultSummary(ir) {
@@ -2754,20 +2754,6 @@ function publishResultSummary(ir) {
     },
   });
 }
-
-// 左侧入口 → 看板视图：run 全部复用下面的既有面板 / 既有接口。
-const BOARD_VIEW_SPECS = {
-  // 零件清单是 2.1 固定左栏的常驻内容（#secParts / #tree 全页唯一），
-  // 不再是可搬运的覆盖式视图：run 只聚焦左栏，不把节点搬进结果宿主。
-  parts: { title: "零件清单", focus: "parts" },
-  questions: { title: "待澄清问题", sections: ["secQuestions"] },
-  evidence: { title: "解析视图", sections: ["secEvidence"] },
-  review: { title: "版本与校核", sections: ["secVersions", "verificationDetails", "modelLookupDetails"] },
-  upload: { title: "补充需求图纸", sections: ["secUpload"] },
-  import3d: { title: "导入已有 3D 模型", sections: ["secImport3d"] },
-  files: { title: "任务文件", files: true },
-  report: { title: "解析报告", report: true },
-};
 
 function boardViewHost() {
   let host = document.getElementById("boardViewHost");
@@ -2885,14 +2871,9 @@ function renderBoardReport(body) {
 // runAllPartProcesses → startAllPartProcesses()，与 Agent 分派同一条通道。零件行上的单件
 // 「工艺推荐」入口不变，仍用于查看 / 编辑 / 单件重算 / 定点处理失败项。
 
-function openBoardView(view) {
-  const spec = BOARD_VIEW_SPECS[view];
-  if (!spec) return { ok: false, error: { code: "unknown-action", message: "看板未注册视图：" + view } };
-  const host = boardViewHost();
-  const body = document.getElementById("boardViewBody");
-  resetBoardViewBody(body);
-  const title = document.getElementById("boardViewTitle");
-  if (title) title.textContent = spec.title;
+// 视图正文的唯一搬运口径：sections 搬既有节点（不复制），files 复用同一份
+// renderBoardFiles()，report 复用同一份 renderBoardReport()。工作区与弹卡片共用。
+function fillBoardViewBody(body, view, spec) {
   let outcome = { ok: true, result: { view: view, title: spec.title } };
   if (spec.report) outcome = renderBoardReport(body);
   else if (spec.files) outcome = renderBoardFiles(body);
@@ -2903,6 +2884,53 @@ function openBoardView(view) {
     if (node.tagName === "DETAILS") node.open = true;
     body.append(node);
   });
+  return outcome;
+}
+
+// 弹卡片：导入已有 3D 模型 / 版本与校核 / 任务文件不再占用工作区宿主 ——
+// 渲染进 #boardCardBody 并显示居中的 #boardCardMask，工作区内容原样留在原地。
+function openBoardCard(view, spec) {
+  const mask = document.getElementById("boardCardMask");
+  const body = document.getElementById("boardCardBody");
+  const title = document.getElementById("boardCardTitle");
+  if (!mask || !body) return { ok: false, error: { code: "no-card", message: "看板卡片未就绪。" } };
+  // 记住触发按钮，关闭时把焦点还回去（键盘用户不丢上下文）。
+  boardCardTrigger = document.activeElement && typeof document.activeElement.focus === "function"
+    ? document.activeElement : null;
+  resetBoardViewBody(body);
+  if (title) title.textContent = spec.title;
+  // 任务文件仍走既有的 renderBoardFiles()（同一份实现，不复制第二份）。
+  const outcome = spec.files ? renderBoardFiles(body) : fillBoardViewBody(body, view, spec);
+  mask.hidden = false;
+  const card = document.getElementById("boardCard");
+  if (card && typeof card.focus === "function") card.focus();
+  return outcome;
+}
+
+function closeBoardCard() {
+  const mask = document.getElementById("boardCardMask");
+  if (!mask || mask.hidden) return false;
+  resetBoardViewBody(document.getElementById("boardCardBody"));
+  mask.hidden = true;
+  const back = boardCardTrigger;
+  boardCardTrigger = null;
+  if (back && typeof back.focus === "function") {
+    try { back.focus(); } catch { /* 触发按钮可能已不在文档里 */ }
+  }
+  return true;
+}
+
+function openBoardView(view) {
+  const spec = BOARD_VIEW_SPECS[view];
+  if (!spec) return { ok: false, error: { code: "unknown-action", message: "看板未注册视图：" + view } };
+  // 带 card: true 的视图走弹卡片，不占用工作区（不隐藏 #modelPanes / #analysisPanel）。
+  if (spec.card) return openBoardCard(view, spec);
+  const host = boardViewHost();
+  const body = document.getElementById("boardViewBody");
+  resetBoardViewBody(body);
+  const title = document.getElementById("boardViewTitle");
+  if (title) title.textContent = spec.title;
+  const outcome = fillBoardViewBody(body, view, spec);
   const panes = document.getElementById("modelPanes");
   const analysis = document.getElementById("analysisPanel");
   if (panes) panes.hidden = true;
@@ -2912,6 +2940,8 @@ function openBoardView(view) {
 }
 
 function closeBoardView() {
+  // 卡片是同一套关闭出口：先收卡片，没有卡片再收工作区宿主。
+  if (closeBoardCard()) return true;
   const host = document.getElementById("boardViewHost");
   resetBoardViewBody(document.getElementById("boardViewBody"));
   if (host) host.hidden = true;
@@ -2965,17 +2995,12 @@ function findBoardPart(partId) {
 // 每次切换视图都上报当前视图名（父壳据此高亮左侧入口），并同步看板内的返回控件。
 function notePartView(name) {
   boardPartView = String(name || "");
-  syncPartViewControls();
   if (window.TechBoardRuntime && typeof window.TechBoardRuntime.setView === "function") {
     window.TechBoardRuntime.setView(boardPartView);
   }
   return boardPartView;
 }
 
-function syncPartViewControls() {
-  const backToList = document.getElementById("btnBoardBackList");
-  if (backToList) backToList.hidden = boardPartView !== "part-detail";
-}
 
 // 退出看板内容宿主：把复用的抽屉面板放回原处，再显示 3D / 零件信息 / 参数。
 function exitBoardViewHost() {

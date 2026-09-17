@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 工艺 - 图纸解析</title>
-  <link rel="stylesheet" href="workbench.css?v=20260916-renderfix1" />
-  <link rel="stylesheet" href="inline-analysis.css?v=20260917-font1" />
+  <link rel="stylesheet" href="workbench.css?v=20260917-partchrome1" />
+  <link rel="stylesheet" href="inline-analysis.css?v=20260917-partchrome1" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
   <link rel="stylesheet" href="agent-chat.css?v=20260916-renderfix1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
@@ -185,7 +185,7 @@
                 </div>
               </section>
               <section class="drawing-model-column" aria-label="3D 视图">
-              <header class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnBoardBackList" class="report-btn" type="button" hidden>返回零件清单</button><button id="btnMoreActions" class="report-btn" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
+              <header class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="inline-action" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
             <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（零件工艺推荐）。
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
@@ -197,9 +197,6 @@
             <!-- 零件工艺推荐：原来渲染在左侧零件行下面，又窄又要滚动，
                  而它们本来就是这一步的主要产出。现在占满右侧工作区。 -->
             <section id="analysisPanel" class="analysis-panel" hidden aria-label="零件分析">
-              <div class="analysis-panel-bar">
-                <button id="btnBackToModel" class="report-btn" type="button">返回零件详情</button>
-              </div>
               <div id="analysisHost" class="inline-analysis-host"></div>
             </section>
               </section>
@@ -264,8 +261,17 @@
   </section>
 
   <div id="loginOverlay" class="login-overlay" style="display:none"><form id="loginForm" class="login-card"><h2>登录</h2><div class="login-sub">图纸解析与生成平台 · 私有化部署</div><input id="loginUser" placeholder="用户名" autocomplete="username" /><input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" /><div id="loginErr" class="login-err"></div><button type="submit">登 录</button></form></div>
+  <div id="boardCardMask" class="board-card-mask" role="presentation" hidden>
+    <section id="boardCard" class="board-card" role="dialog" aria-modal="true" aria-labelledby="boardCardTitle" tabindex="-1">
+      <header class="board-card-head">
+        <div class="board-card-title" id="boardCardTitle"></div>
+        <button type="button" class="board-card-close" id="boardCardClose" aria-label="关闭">×</button>
+      </header>
+      <div class="board-card-body" id="boardCardBody"></div>
+    </section>
+  </div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260916-cad1"></script><script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script type="module" src="app.js?v=20260916-renderfix1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20260917-modelrow1"></script><script src="home-link.js?v=home6"></script>
+<script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260917-partchrome1"></script><script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script type="module" src="app.js?v=20260917-partchrome1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20260917-modelrow1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>
