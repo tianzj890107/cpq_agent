@@ -44,10 +44,13 @@ DB_LABEL = f"Postgres {PG_HOST}:{PG_PORT}/{PG_DATABASE}" + (
 )
 
 
-def connect(readonly: bool = True):
+def connect(readonly: bool = True, autocommit: bool = True):
     """打开一个到远程 Postgres 的连接（psycopg3，autocommit）。
 
     readonly=True：设为只读事务（业务库取数）；readonly=False：可写（导入数据库）。
+    autocommit=False：调用方要自己 commit()/rollback()（一次写入命令 = 一个事务，
+    例如写主数据必须让「主数据行 + 成本行 + 写入记录」同时可见或同时消失）。
+    默认值保持 True：导入等既有调用方行为不变。
     调用方负责 close()。连不上会抛异常，由调用方兜底成文本错误。
     """
     import psycopg  # 延迟导入
@@ -59,7 +62,7 @@ def connect(readonly: bool = True):
         password=PG_PASSWORD,
         dbname=PG_DATABASE,
         connect_timeout=PG_CONNECT_TIMEOUT,
-        autocommit=True,
+        autocommit=autocommit,
     )
     with conn.cursor() as cur:
         if PG_SCHEMA:
@@ -337,13 +340,22 @@ def table_types(conn, table: str) -> dict:
     schema 前缀）都按这条路解析。这里若只查 PG_SCHEMA，表建在 public 时就会得出
     "目标表不存在"——同一张表读得到、写不进去，而错误信息还指向一个不存在的问题。
     优先取 PG_SCHEMA 里的那张（同名时以配置为准）。
+
+    表名可以带 schema 前缀（例如 `cpq_wf.cpq_wf_material_write`）：那种表**不在**
+    search_path 上，只能按显式 schema 找，否则会把"表明明在、只是没进 search_path"
+    误报成"目标表不存在"。
     """
-    schemas = [s for s in (PG_SCHEMA, "public") if s]
+    text = str(table or "").strip()
+    schema_hint, _, bare = text.rpartition(".")
+    if schema_hint:
+        table_name, schemas = bare, [schema_hint]
+    else:
+        table_name, schemas = text, [s for s in (PG_SCHEMA, "public") if s]
     with conn.cursor() as cur:
         cur.execute(
             "SELECT table_schema, column_name, data_type FROM information_schema.columns "
             "WHERE table_schema = ANY(%s) AND table_name = lower(%s)",
-            (schemas or ["public"], table),
+            (schemas or ["public"], table_name),
         )
         found: dict = {}
         for schema, column, dtype in cur.fetchall():

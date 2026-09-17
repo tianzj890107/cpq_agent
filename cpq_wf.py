@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 
 try:  # psycopg 只在真库路径上必需；受控假库的测试环境也装了它，缺失时降级为不收敛
@@ -209,6 +210,37 @@ def _ddl_pg(schema: str) -> list:
         f" replaced_by_task_id bigint REFERENCES {schema}.cpq_wf_task(task_id) ON DELETE SET NULL",
         f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS cancel_reason varchar(200)",
         f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS cancelled_at timestamptz",
+        # 回传记录（批次 3）：一次「技术工艺 → 报价」回传 = 一行，
+        # 与它的全部副作用（目标任务 / 第 2 步快照 / 来源任务关闭 / 消息 / 审计）
+        # 在同一个事务里落库。handoff_key 是业务幂等键，唯一约束由数据库裁决 ——
+        # 「先 SELECT 再 INSERT」决定要不要新建是并发下必然出错的老写法。
+        f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_handoff (
+                handoff_id              bigint PRIMARY KEY,
+                handoff_key             varchar(255) NOT NULL,
+                handoff_kind            varchar(32)  NOT NULL,
+                source_project_id       varchar(64),
+                source_task_id          bigint,
+                source_result_version   varchar(64),
+                target_quote_session_id varchar(32),
+                target_card_id          bigint,
+                target_task_id          bigint,
+                target_task_kind        varchar(24),
+                step_no                 int,
+                snapshot_sections       jsonb,
+                source_task_closed      boolean NOT NULL DEFAULT false,
+                source_task_status      varchar(16),
+                created_by_user_id      bigint,
+                created_at              timestamptz NOT NULL DEFAULT now()
+            )""",
+        # 业务实例号（批次 6）：跨系统、跨重建认回报价卡片的唯一线索。老库靠
+        # ADD COLUMN IF NOT EXISTS 补齐；索引要排在下面的 CREATE INDEX 之前（列先存在）。
+        f"ALTER TABLE {schema}.cpq_wf_card ADD COLUMN IF NOT EXISTS business_case_id varchar(64)",
+        f"ALTER TABLE {schema}.cpq_wf_handoff ADD COLUMN IF NOT EXISTS"
+        f" business_case_id varchar(64)",
+        f"CREATE INDEX IF NOT EXISTS idx_wf_card_case"
+        f" ON {schema}.cpq_wf_card(business_case_id)",
+        f"CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_handoff_key"
+        f" ON {schema}.cpq_wf_handoff(handoff_key)",
         # 「同一卡片同一任务类型最多一条 open」由数据库裁决：并发下应用层就算判断错
         # 也会被这条部分唯一索引挡住（catch 后收敛成复用，不抛 500）。
         f"CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_task_open_kind"
@@ -252,6 +284,11 @@ def _new_id(conn) -> int:
     return cpq_auth.cpq_db.snow_next_id(conn)
 
 
+def new_business_case_id() -> str:
+    """业务实例号：``bc_`` + 12 位小写 hex（批次 6）。报价建卡时生成，同一会话不再换号。"""
+    return "bc_" + uuid.uuid4().hex[:12]
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -265,12 +302,176 @@ def _commit(conn):
     return None
 
 
+def tx_connect():
+    """打开一条**非 autocommit** 连接：一个业务命令 = 一条连接的一个事务。
+
+    为什么不能用 ``cpq_auth._connect()``：它是 autocommit=True，psycopg 在 autocommit
+    连接上不会为 ``with conn.transaction():`` 发 BEGIN，所以"多写一步"就等于"多提交
+    一次"，中途失败事后无法整体回滚（回传今天就是被这件事拆成半完成状态的）。
+
+    连接参数 / search_path 与 ``cpq_auth._connect()`` 完全一致，只有 autocommit 不同；
+    调用方负责 commit / rollback 与 close。
+    """
+    import psycopg
+
+    conn = psycopg.connect(
+        host=cpq_auth.cpq_db.PG_HOST, port=cpq_auth.cpq_db.PG_PORT,
+        user=cpq_auth.cpq_db.PG_USER, password=cpq_auth.cpq_db.PG_PASSWORD,
+        dbname=cpq_auth.cpq_db.PG_DATABASE,
+        connect_timeout=cpq_auth.cpq_db.PG_CONNECT_TIMEOUT, autocommit=False,
+    )
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('search_path', %s, false)",
+                    (f"{cpq_auth.WF_SCHEMA}, public",))
+    return conn
+
+
 def _iso(v):
     return v.isoformat() if hasattr(v, "isoformat") else (v or None)
 
 
 def _uid(v):
     return str(v) if v is not None else None
+
+
+# ---------------------------------------------------------------------------
+# 回传记录（cpq_wf_handoff）
+#
+# 一行 = 一次「技术工艺 → 报价」回传。它同时是幂等键的落点：INSERT ... ON CONFLICT
+# (handoff_key) DO NOTHING 先拿"裁决权"，重读发现不是自己插的那条就整段回滚、复用
+# 对方的结果。并发下唯一约束由数据库保证 —— 不是应用层先 SELECT 再决定。
+# ---------------------------------------------------------------------------
+_HANDOFF_COLS = ("handoff_id", "handoff_key", "handoff_kind", "source_project_id",
+                 "source_task_id", "source_result_version", "target_quote_session_id",
+                 "target_card_id", "target_task_id", "target_task_kind", "step_no",
+                 "snapshot_sections", "source_task_closed", "source_task_status",
+                 "created_by_user_id", "created_at", "business_case_id")
+
+
+def _handoff_row(row) -> dict:
+    if not row:
+        return None
+    d = dict(zip(_HANDOFF_COLS, row))
+    for k in ("handoff_id", "source_task_id", "target_card_id", "target_task_id",
+              "created_by_user_id"):
+        d[k] = _uid(d[k])
+    d["created_at"] = _iso(d["created_at"])
+    d["business_case_id"] = str(d.get("business_case_id") or "")
+    return d
+
+
+def insert_handoff_placeholder(conn, handoff_id, handoff_key: str, handoff_kind: str,
+                              source_project_id: str = "", source_task_id: str = "",
+                              source_result_version: str = "",
+                              target_quote_session_id: str = "",
+                              created_by_user_id=None,
+                              business_case_id: str = "") -> bool:
+    """插占位行拿幂等键的裁决权。返回 True = 本次是第一个；False = 已经有人交过。
+
+    ``DO NOTHING`` 之后不 RETURNING（同一把键可能已被别的连接插进去），调用方在
+    返回 False 时重读 ``find_handoff`` 复用对方那一条。
+    """
+    cur = cpq_auth._exec(
+        conn, "INSERT INTO cpq_wf_handoff (handoff_id, handoff_key, handoff_kind,"
+              " source_project_id, source_task_id, source_result_version,"
+              " target_quote_session_id, source_task_closed, created_by_user_id, created_at,"
+              " business_case_id)"
+              " VALUES (%s,%s,%s,%s,%s,%s,%s,false,%s,%s,%s)"
+              " ON CONFLICT (handoff_key) DO NOTHING",
+        (handoff_id, str(handoff_key or "")[:255], handoff_kind or "",
+         source_project_id or None, _int_or_none(source_task_id),
+         source_result_version or None, target_quote_session_id or None,
+         created_by_user_id, _ts(_now()), str(business_case_id or "") or None))
+    return int(getattr(cur, "rowcount", 0) or 0) > 0
+
+
+def find_handoff(conn, handoff_key: str):
+    """按业务幂等键取回传记录（dict，取不到 None）。"""
+    cur = cpq_auth._exec(
+        conn, f"SELECT {', '.join(_HANDOFF_COLS)} FROM cpq_wf_handoff WHERE handoff_key = %s",
+        (str(handoff_key or ""),))
+    return _handoff_row(cur.fetchone())
+
+
+def update_handoff(conn, handoff_id, **fields) -> None:
+    """把回传记录的落点补全（目标任务、快照栏目、来源任务关闭结果）。"""
+    allowed = ("target_quote_session_id", "target_card_id", "target_task_id",
+               "target_task_kind", "step_no", "snapshot_sections",
+               "source_task_closed", "source_task_status", "business_case_id")
+    sets, args = [], []
+    for col in allowed:
+        if col not in fields:
+            continue
+        value = fields[col]
+        if col == "snapshot_sections":
+            sets.append(f"{col} = %s::jsonb")
+            args.append(json.dumps(value or {}, ensure_ascii=False))
+        else:
+            sets.append(f"{col} = %s")
+            args.append(value)
+    if not sets:
+        return
+    args.append(int(handoff_id))
+    cpq_auth._exec(conn, f"UPDATE cpq_wf_handoff SET {', '.join(sets)}"
+                         " WHERE handoff_id = %s", tuple(args))
+
+
+def _int_or_none(v):
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+UNCLOSED_TASK_STATUSES = ("cancelled", "expired")
+
+
+def close_source_task(conn, task_id, user: dict, *, comment: str = "") -> dict:
+    """在**当前事务**里关闭来源的 claimed 待办，并把结果如实回报。
+
+    返回 ``{task_id, status, closed, already, skipped}``：
+      · 没带 task_id / 查不到 → ``skipped``，不算失败（技术工艺独立发起的项目没有来源）；
+      · 已是 ``completed`` → ``already=True``，不重写状态、不重复写审计；
+      · ``open``（没人领）→ 置完成并审计（技术侧确实做完了这件事）；
+      · ``claimed`` 且领取人不是调用者（也不是管理员）→ 抛 ``WfError``，由调用方
+        整段回滚 —— 别人的待办不能被顺手关掉。
+    """
+    tid = _int_or_none(task_id)
+    if tid is None:
+        return {"task_id": "", "status": "", "closed": False, "already": False,
+                "skipped": "missing_task_id"}
+    cur = cpq_auth._exec(
+        conn, "SELECT card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s",
+        (tid,))
+    row = cur.fetchone()
+    if not row:
+        return {"task_id": str(tid), "status": "", "closed": False, "already": False,
+                "skipped": "not_found"}
+    cid, status, claimed_by = int(row[0]), str(row[1] or ""), row[2]
+    uid = int(user["user_id"]) if user else None
+    is_admin = bool(user) and str(user.get("role_code") or "") in ADMIN_ROLES
+    if status == "completed":
+        return {"task_id": str(tid), "status": status, "closed": False, "already": True,
+                "skipped": ""}
+    if status == "claimed" and not is_admin and (claimed_by is None or int(claimed_by) != uid):
+        holder = "其他同事"
+        cur = cpq_auth._exec(
+            conn, "SELECT display_name FROM cpq_wf_user WHERE user_id = %s", (claimed_by,))
+        hrow = cur.fetchone()
+        if hrow and hrow[0]:
+            holder = hrow[0]
+        raise WfError(f"该任务已被 {holder} 领取，不能由你关闭；请等他完成后再回传")
+    if status not in ("open", "claimed"):
+        # 已撤销 / 过期这类终态：不再回开，也不让整次回传失败。
+        return {"task_id": str(tid), "status": status, "closed": False, "already": False,
+                "skipped": status or "closed"}
+    cpq_auth._exec(
+        conn, "UPDATE cpq_wf_task SET status = 'completed', completed_at = %s"
+              " WHERE task_id = %s AND status IN ('open', 'claimed')", (_ts(_now()), tid))
+    _log(conn, cid, tid, uid, "complete", None, None,
+         comment or "技术工艺回传报价：来源待办已随本次交接完成")
+    return {"task_id": str(tid), "status": "completed", "closed": True, "already": False,
+            "skipped": ""}
 
 
 def step_perms() -> list:
@@ -307,7 +508,7 @@ def can_do_step(user: dict, step_no: int) -> bool:
 # ---------------------------------------------------------------------------
 _CARD_COLS = ("card_id", "session_id", "assistant_type", "title", "customer", "project_name",
               "current_step", "overall_status", "creator_user_id", "current_owner",
-              "created_at", "updated_at")
+              "created_at", "updated_at", "business_case_id")
 
 
 def _card_row(row) -> dict:
@@ -337,26 +538,33 @@ def get_card(session_id: str) -> dict:
 
 
 def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
-              project_name: str = "", current_step: int = None) -> dict:
+              project_name: str = "", current_step: int = None, conn=None,
+              business_case_id: str = "") -> dict:
     """新建或更新卡片（报价会话每次保存/推进时由前端调用）。
-    创建人 = 首次同步的登录用户；current_owner 首次同步时也归他。"""
+    创建人 = 首次同步的登录用户；current_owner 首次同步时也归他。
+
+    conn：给了就并进调用方的事务（回传命令新建报价会话时用），不自己 commit / close。
+    business_case_id：业务实例号（批次 6）。留空时建卡自动生成；同一会话再次同步不换号。"""
     session_id = (session_id or "").strip()
     if not session_id:
         raise WfError("缺少会话 ID")
     uid = int(user["user_id"]) if user else None
-    conn = cpq_auth._connect()
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
         now = _now()
         if not card:
             cid = _new_id(conn)
+            case_id = str(business_case_id or "").strip() or new_business_case_id()
             cpq_auth._exec(
                 conn, "INSERT INTO cpq_wf_card (card_id, session_id, assistant_type, title,"
                       " customer, project_name, current_step, overall_status, creator_user_id,"
-                      " current_owner, created_at, updated_at)"
-                      " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                      " current_owner, created_at, updated_at, business_case_id)"
+                      " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (cid, session_id, ASSISTANT, title or None, customer or None, project_name or None,
-                 int(current_step or 1), "draft", uid, uid, _ts(now), _ts(now)))
+                 int(current_step or 1), "draft", uid, uid, _ts(now), _ts(now), case_id))
             _log(conn, cid, None, uid, "create", None, int(current_step or 1), "创建报价卡片")
             _ensure_steps(conn, cid)
             _commit(conn)
@@ -368,6 +576,11 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
             if val:
                 sets.append(f"{col} = %s")
                 args.append(val)
+        # 老卡片没有实例号时，安全回填（只在卡片为空时写；同值重写无副作用）。
+        wanted_case = str(business_case_id or "").strip()
+        if wanted_case and not str(card.get("business_case_id") or "").strip():
+            sets.append("business_case_id = %s")
+            args.append(wanted_case)
         step = int(current_step or 0)
         if step and step > int(card["current_step"] or 1):
             sets.append("current_step = %s")
@@ -380,7 +593,8 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
         _commit(conn)
         return _fetch_card(conn, session_id)
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def _ensure_steps(conn, card_id: int):
@@ -455,12 +669,16 @@ def start_step(session_id: str, step_no: int, user: dict) -> dict:
         conn.close()
 
 
-def step_snapshot(session_id: str, step_no: int):
+def step_snapshot(session_id: str, step_no: int, conn=None):
     """取某一步确认时存下的表单快照（card_step.data_snapshot）。
 
     交接过来的卡片，接手人本地 DOM 里没有前面各步的数据——尤其第 1 步的产品信息/技术参数
-    是前端直接填的、不在智能体事件流里，只能从这里恢复。"""
-    conn = cpq_auth._connect()
+    是前端直接填的、不在智能体事件流里，只能从这里恢复。
+
+    conn：给了就在调用方的事务连接上读（回传命令要先合并老快照再写回），不自开自关。"""
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         cur = cpq_auth._exec(
             conn, "SELECT s.data_snapshot FROM cpq_wf_card_step s"
@@ -469,7 +687,8 @@ def step_snapshot(session_id: str, step_no: int):
             (session_id, int(step_no or 0)))
         row = cur.fetchone()
     finally:
-        conn.close()
+        if own:
+            conn.close()
     if not row or row[0] is None:
         return None
     v = row[0]
@@ -482,11 +701,14 @@ def step_snapshot(session_id: str, step_no: int):
 
 
 def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
-                  on_behalf_of: str = "") -> dict:
+                  on_behalf_of: str = "", conn=None) -> dict:
     """把某一步标记为完成（角色不符会被拒绝）。
 
     返回 {card, need_handoff, next_step_no, next_step_name, next_role_code/name}：
     下一步若归属别的角色，卡片置为 awaiting_handoff（待转交），前端据此强制走推送任务流。
+
+    conn：给了就并进调用方的事务（回传命令用），且**不做自动推送** —— 派发由调用方
+    在同一事务里完成。
 
     on_behalf_of：**代技术侧完成**。第 2 步「工艺确认」归工艺经理，但成本测算拆给
     财务之后，这一步的收尾动作（技术工艺 2.3「发送至报价」）是财务经理点的 ——
@@ -507,7 +729,9 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
     if not can_do_step(user, step_no) and not stand_in:
         need = ROLES.get(role_of_step(step_no), "指定角色")
         raise WfError(f"第 {step_no} 步需要「{need}」完成，你当前是「{user.get('role_name')}」")
-    conn = cpq_auth._connect()
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
         if not card:
@@ -576,8 +800,11 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
             "next_role_name": ROLES.get(next_role, next_role),
         }
     finally:
-        conn.close()
-    if auto_target:
+        if own:
+            conn.close()
+    # 外部事务（回传命令）里派发由调用方在同一事务内完成 —— 这里的自动推送会另开连接，
+    # 等于把「一次业务动作」拆成两次提交，正是本批要消灭的半完成状态来源。
+    if auto_target and own:
         # 用独立连接走标准 send_task（消息、审计、状态流转全套照旧）；失败就退回手动推送
         step_name = dict((s[0], s[1]) for s in QUOTE_STEPS).get(step_no, "")
         try:
@@ -613,13 +840,31 @@ def advance_step_no(card, step_no: int) -> int:
     return max(int((card or {}).get("current_step") or 1), int(step_no or 1))
 
 
-def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict) -> dict:
+def _snapshot_dict(v) -> dict:
+    """data_snapshot 既可能是 jsonb（psycopg 已解成 dict），也可能是 JSON 字符串
+    （受控假库 / 老库直读），两种都要认，否则一次「合并」会把老键整份丢掉。"""
+    if isinstance(v, dict):
+        return dict(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            got = json.loads(v)
+        except ValueError:
+            return {}
+        return got if isinstance(got, dict) else {}
+    return {}
+
+
+def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict, conn=None) -> dict:
     """把新的技术结果**合并**进某一步已有的 data_snapshot，不改任何步骤状态。
+
+    conn：给了就并进调用方的事务（回传命令用），不自己 commit / close。
 
     已推进过报价卡片时（成本阶段已经回传销售），报告回传只能补充快照，
     不能重新完成第 2 步、也不能覆盖第 3 步之后已经产生的结果。
     """
-    conn = cpq_auth._connect()
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
         if not card:
@@ -629,8 +874,7 @@ def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict) -> dict:
             conn, "SELECT data_snapshot FROM cpq_wf_card_step WHERE card_id = %s AND step_no = %s",
             (cid, int(step_no)))
         row = cur.fetchone()
-        existing = row[0] if row and isinstance(row[0], dict) else {}
-        merged = dict(existing or {})
+        merged = _snapshot_dict(row[0]) if row else {}
         for key, value in (snapshot or {}).items():
             merged[key] = value
         cpq_auth._exec(
@@ -640,11 +884,12 @@ def merge_step_snapshot(session_id: str, step_no: int, snapshot: dict) -> dict:
         _commit(conn)
         return merged
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def complete_claimed_task(task_id, user: dict, *, card_session_id: str = "",
-                          comment: str = "") -> dict:
+                          comment: str = "", conn=None) -> dict:
     """把当前用户已领取的任务置为 completed（幂等）。
 
     技术工艺完成正式去向（提交工艺经理确认 / 回传销售经理继续报价）后调用：原 claimed
@@ -661,7 +906,9 @@ def complete_claimed_task(task_id, user: dict, *, card_session_id: str = "",
     except (TypeError, ValueError):
         raise WfError("任务编号无效")
     uid = int(user["user_id"])
-    conn = cpq_auth._connect()
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         cur = cpq_auth._exec(
             conn, "SELECT card_id, status, claimed_by_user_id FROM cpq_wf_task WHERE task_id = %s",
@@ -694,7 +941,8 @@ def complete_claimed_task(task_id, user: dict, *, card_session_id: str = "",
         return {"task_id": str(tid), "task_no": task_no(tid), "already": False,
                 "status": "completed", "session_id": card.get("session_id")}
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 def _fetch_card_by_id(conn, card_id: int):
@@ -870,18 +1118,28 @@ def _reuse_result(row, task_kind) -> dict:
             "task_no": task_no(tid), "reused": True, "supersedes_task_id": None}
 
 
-def _supersede_task(conn, old_row, new_task_id, card_id, actor_uid, session_id, from_step):
-    """把同类旧任务标成「被新任务替代」：改状态 + 留 1 条 cancel 审计 + 通知旧受众。
+def _cancel_task_for_supersede(conn, old_row, *, reason: str = "被新任务替代"):
+    """替代第一步：把同类旧任务置为已取消，腾出 (card_id, task_kind) 的 open 槽位。
+
+    这里只改状态 / 原因 / 时间，**不写** replaced_by_task_id：那个指针有外键，指向的
+    新任务此刻还没入库；真库的外键是立即校验的，先写指针会直接抛外键错误。
+    """
+    cpq_auth._exec(
+        conn, "UPDATE cpq_wf_task SET status = 'cancelled', cancel_reason = %s,"
+              " cancelled_at = %s WHERE task_id = %s AND status = 'open'",
+        (reason, _ts(_now()), int(old_row[0])))
+
+
+def _link_superseded_task(conn, old_row, new_task_id, card_id, actor_uid, session_id, from_step):
+    """替代第二步（新任务已入库之后）：补 replaced_by_task_id + 1 条 cancel 审计 + 通知旧受众。
 
     旧受众 = 旧任务原收件人（按旧 target 解析）∪ 旧任务发起人 ∪ 旧任务领取人，去重。
     """
     old_id = int(old_row[0])
     reason = "被新任务替代"
     cpq_auth._exec(
-        conn, "UPDATE cpq_wf_task SET status = 'cancelled', cancel_reason = %s,"
-              " cancelled_at = %s, replaced_by_task_id = %s"
-              " WHERE task_id = %s AND status = 'open'",
-        (reason, _ts(_now()), new_task_id, old_id))
+        conn, "UPDATE cpq_wf_task SET replaced_by_task_id = %s WHERE task_id = %s",
+        (new_task_id, old_id))
     old_no, new_no = task_no(old_id), task_no(new_task_id)
     audience = set()
     for rid in _recipients(conn, old_row[2], old_row[3], old_row[4], 0):
@@ -900,8 +1158,10 @@ def _supersede_task(conn, old_row, new_task_id, card_id, actor_uid, session_id, 
 
 def send_task(session_id: str, user: dict, target_type: str, target_role_code: str = "",
               target_user_id: str = "", note: str = "", task_kind: str = TASK_KIND_HANDOFF,
-              payload: dict = None) -> dict:
+              payload: dict = None, conn=None) -> dict:
     """把卡片作为任务发出：定向角色 / 定向个人 / 公共任务池。
+
+    conn：给了就并进调用方的事务（回传命令用），不自己 commit / close。
 
     task_kind=tech_new_product 时是「新增工艺」支线：固定发给工艺经理，卡片**不推进
     步骤、不置待转交** —— 报价还停在第 1 步等新产品，把它标成已转交会让销售以为
@@ -930,7 +1190,9 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         target_user_id = None
     if target_type != "role":
         target_role_code = None
-    conn = cpq_auth._connect()
+    own = conn is None
+    if own:
+        conn = cpq_auth._connect()
     try:
         card = _fetch_card(conn, session_id)
         if not card:
@@ -982,8 +1244,9 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         now = _now()
         tid = _new_id(conn)
         if superseded_id is not None:
-            # 先生成新任务 id（旧任务的 replaced_by_task_id 要用它），再取消旧任务 + 通知 + 审计
-            _supersede_task(conn, active, tid, cid, int(user["user_id"]), session_id, from_step)
+            # 先把旧任务置为已取消：腾出 (card_id, task_kind) 的 open 槽位，新任务才插得进去。
+            # 替代指针与通知要等新任务入库之后再写（见下面 _link_superseded_task）。
+            _cancel_task_for_supersede(conn, active)
         try:
             cpq_auth._exec(
                 conn, "INSERT INTO cpq_wf_task (task_id, card_id, from_user_id, from_step_no,"
@@ -1007,6 +1270,12 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
             if row is None:
                 raise
             return _reuse_result(row, task_kind)
+        if superseded_id is not None:
+            # 新任务已经入库，现在才写「被谁替代」的指针：replaced_by_task_id 有外键，
+            # 指向的任务必须已经存在（同一条连接里未提交的行也算存在）。
+            # 先写指针再 INSERT 会在真库上直接抛外键错误（受控假库不校验外键，抓不到）。
+            _link_superseded_task(conn, active, tid, cid, int(user["user_id"]),
+                                  session_id, from_step)
         # 支线任务（新增工艺、成本测算、成本复核）都不夺卡片持有人：报价还停在原来
         # 那一步等结果，标成"已转交待领取"会让销售以为这单已经交出去、不用管了。
         if not is_side:
@@ -1036,7 +1305,8 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
                 "reused": False,
                 "supersedes_task_id": str(superseded_id) if superseded_id else None}
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
 _TASK_SELECT = (

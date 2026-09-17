@@ -679,7 +679,7 @@ def _technical_result(project_id: str, title: str) -> dict:
 
 def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "",
                   target_type: str = "", target_role_code: str = "",
-                  target_user_id: str = "") -> dict:
+                  target_user_id: str = "", source_task_id: str = "") -> dict:
     """3.3 → 销售经理：把**已发布报告**回传报价，让销售接着往下走。
 
     这是报告语义明确的专用入口，不再复用 2.2/2.3 的 `/integration/send-to-quote`：
@@ -712,10 +712,13 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         cost_flow.requirement_customer(requirement, req_data),
         str(requirement.get("product_name") or req_data.get("product_name") or ""),
         note or f"已发布报告 {doc.report_no} V{doc.version}，请继续报价",
-        str(req_data.get("source_task_id") or ""),
+        # 来源任务号：路由直接传进来的优先，其次才是需求单里记着的那一条；服务端会在
+        # 那一次回传命令的同一个事务里把它关掉（不再另发关闭请求）。
+        str(source_task_id or req_data.get("source_task_id") or ""),
         str(req_data.get("source_session_id") or ""),
         result, package, result_version,
-        str(doc.report_no or ""))
+        str(doc.report_no or ""),
+        str(target_type or ""), str(target_role_code or ""), str(target_user_id or ""))
 
     # 技术侧留痕：报告回传后整机计划里的 quote_handoff 指向同一个报价会话，
     # 历史页面与 3.3 的"回传结果"都从这一份数据读，不另存。
@@ -752,6 +755,10 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         "linked_by": outcome.get("linked_by") or "",
         "new_card": bool(outcome.get("new_card")),
         "already_sent": bool(outcome.get("already_sent")),
+        "already_completed": bool(outcome.get("already_completed")),
+        # 这一批的核心新增：这次回传的唯一标识，结果区按它就能查到哪一次交接
+        "handoff_id": str(outcome.get("handoff_id") or ""),
+        "source_task": outcome.get("source_task") or {},
         "next_step_no": outcome.get("next_step_no"),
         "next_step_name": outcome.get("next_step_name") or "",
         "carried": {
@@ -760,6 +767,7 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         },
         "audit": {"action": AUDIT_SENT_TO_QUOTE,
                   "payload": {"report_no": doc.report_no, "version": doc.version,
+                              "handoff_id": str(outcome.get("handoff_id") or ""),
                               "task_id": handoff.get("task_id"),
                               "already_sent": bool(outcome.get("already_sent"))}},
     }

@@ -70,6 +70,7 @@ import cpq_auth                            # noqa: E402  登录与角色系统�
 import cpq_user_secrets                   # noqa: E402  账号级密钥的加密封装（缺密钥要说清）
 import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
 import cpq_tech_bridge                     # noqa: E402  技术工艺回调：写主数据 / 推送到报价
+import cpq_case_link                       # noqa: E402  业务实例关联：回传落点判定（批次 6）
 import cpq_kb                             # noqa: E402  知识库（kb_*）：快照接口，事实源在 PG cpq_kb
 import cpq_image_server                    # noqa: E402  产品图片维护服务（独立端口，见下）
 
@@ -703,7 +704,9 @@ class Handler(BaseHTTPRequestHandler):
                 d = self._read_json()
                 out = cpq_tech_bridge.write_material(
                     user, d.get("product_name", ""), d.get("unit_price"),
-                    d.get("breakdown") or {}, d.get("spec", ""))
+                    d.get("breakdown") or {}, d.get("spec", ""),
+                    project_id=d.get("project_id", ""),
+                    result_version=d.get("result_version", ""))
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/finance" and m == "POST":
                 d = self._read_json()
@@ -715,10 +718,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/return-process" and m == "POST":
                 d = self._read_json()
+                # 幂等五元组里的两项由路由显式透传：交接类型固定 cost_to_process，
+                # 结果版本优先取调用方给的、否则沿用交接包里已经算好的那一份
+                # （cost_flow.result_version(plan)）。两者都进 payload，服务端据此算键。
+                payload = dict(d.get("payload") or {})
+                payload.setdefault("handoff_kind", d.get("handoff_kind") or "cost_to_process")
+                payload.setdefault("result_version", d.get("result_version", ""))
+                if d.get("source_task_no"):
+                    payload.setdefault("source_task_no", d.get("source_task_no"))
                 out = cpq_tech_bridge.return_to_process(
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
-                    d.get("payload") or {}, d.get("target_user_id", ""),
+                    payload, d.get("target_user_id", ""),
                     d.get("source_task_id", ""))
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/handoff" and m == "POST":
@@ -729,7 +740,14 @@ class Handler(BaseHTTPRequestHandler):
                     d.get("source_task_id", ""), d.get("result") or {},
                     d.get("source_session_id", ""), d.get("report") or {},
                     d.get("handoff_kind") or "cost_to_quote",
-                    d.get("result_version", ""), d.get("source_task_no", ""))
+                    d.get("result_version", ""), d.get("source_task_no", ""),
+                    d.get("target_user_id", ""), d.get("target_type", ""),
+                    d.get("target_role_code", ""),
+                    # 批次 6：业务实例号与「明确要求新建 + 原因」由路由原样透传，
+                    # 没有线索时不再静默新建（会抛 no_candidate，走下面的 409）。
+                    business_case_id=d.get("business_case_id", ""),
+                    create_new=bool(d.get("create_new")),
+                    create_reason=d.get("create_reason", ""))
                 self._send_json(200, {"ok": True, **out})
             # 技术工艺完成正式去向后关闭来源 claimed 待办：任务表在报价工作流这一侧，
             # 校验（领取人 / 归属 / 状态 / 幂等）统一由 cpq_wf 做，不散落 SQL。
@@ -742,6 +760,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **out})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
+        except cpq_case_link.CaseLinkError as e:
+            # 落点定不下来是**业务冲突**，不是服务异常：把 code 与候选清单原样回给
+            # 调用方，报价侧才能列候选让人选、或先问一句"要不要新建报价卡片"。
+            self._send_json(409, {"ok": False, "code": e.code,
+                                  "candidates": list(e.candidates or []),
+                                  "error": e.message})
         except cpq_tech_bridge.BridgeError as e:
             self._send_json(400, {"ok": False, "error": str(e)})
         except cpq_wf.WfError as e:
@@ -1011,6 +1035,9 @@ def main():
         # 用户表为空时按环境变量引导首个管理员（不配则只打印提示，不影响启动）。
         cpq_auth.bootstrap_admin()
         print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
+        # 成品写入记录表：没有它就判不了幂等（同一个版本会重复取号），所以与上面两张表
+        # 一起建；建表失败必须让本次启动看得见，不能等到用户点「写入数据库」才发现。
+        print(f"[cpq-suite] 成品写入记录表   {cpq_tech_bridge.init()}")
     except cpq_auth.BackendUnavailable as e:
         print(f"[cpq-suite] 错误: {e}", file=sys.stderr)
         print("[cpq-suite] 登录与工作流接口将不可用（/auth/* /wf/* 返回 503），"

@@ -349,6 +349,36 @@ def load_meta(project_id: str) -> Optional[dict]:
     return _meta().get_meta(project_id)
 
 
+# 统一业务实例号（business_case_id）随项目 meta 落盘：报价—技术—财务—报告共用同
+# 一份身份，重启后仍能凭它认回原报价卡片。文档键固定，合并写入，不抹掉既有键。
+BUSINESS_CASE_KIND = "business_case"
+BUSINESS_CASE_KEYS = ("business_case_id", "quote_session_id", "source_task_id",
+                      "linked_by", "linked_at", "recovered_from_project_id",
+                      "recovery_reason", "recovered_by", "recovered_at")
+
+
+def load_business_case(project_id: str) -> dict:
+    """读回项目的业务实例关联；没有则空 dict（绝不现编实例号）。"""
+    doc = _meta().get_doc(project_id, BUSINESS_CASE_KIND) or {}
+    if not doc:
+        doc = (load_meta(project_id) or {}).get(BUSINESS_CASE_KIND) or {}
+    return dict(doc)
+
+
+def save_business_case(project_id: str, link: dict, author: str = "system") -> dict:
+    """合并写入 meta["business_case"]：只传部分键（如 recovery_reason）不得抹掉既有键。"""
+    with _document_lock:
+        merged = load_business_case(project_id)
+        merged.update(dict(link or {}))
+        merged["updated_at"] = _now()
+        meta = load_meta(project_id)
+        if meta is not None:
+            meta[BUSINESS_CASE_KIND] = merged
+            _meta().put_meta(project_id, meta)
+        _meta().put_doc(project_id, BUSINESS_CASE_KIND, merged)
+    return dict(merged)
+
+
 def list_projects(include_archived: bool = False) -> List[dict]:
     out = []
     for meta in _meta().list_metas():

@@ -273,6 +273,11 @@ class MaterialWrite(BaseModel):
     tables: StrList = Field(default_factory=list, description="实际写入的表")
     written_at: Optional[str] = None
     written_by: Optional[str] = None
+    # 批次 4：业务版本 + 幂等命中留痕。带默认值 —— 老项目文件里的历史记录反序列化后
+    # 是空串/False，不需要迁移脚本，也不该报错。
+    result_version: str = Field("", description="本次写入的业务版本（mat-v1:…）")
+    idempotency_key: str = Field("", description="业务幂等键 project_id|result_version|material-write")
+    already_written: bool = Field(False, description="True = 沿用已有成品编码，本次没有新建")
 
 
 class QuoteHandoff(BaseModel):

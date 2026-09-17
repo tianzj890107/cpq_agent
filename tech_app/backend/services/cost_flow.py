@@ -15,6 +15,7 @@ import ``main``，所以共享实现只能待在 services 层，由路由与工�
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 
 from ..models.cost_review import CostAction
@@ -159,6 +160,18 @@ def result_version(plan) -> str:
     return f"cost-v1:{int(plan.quantity or 1)}:{total}"
 
 
+def material_result_version(plan, name: str, spec: str = "") -> str:
+    """成品写入的业务版本 = 成本结果版本 + 名称/规格摘要（内容版本，不是计数器）。
+
+    双击 / 刷新后再点 / 超时重试时内容没变 → 同一个版本 → 沿用原成品编码；
+    数量变化、成本合计变化、成品改名或规格说明变化 → 新版本 → 必须新建编码
+    （否则"改名后重写"会静默沿用旧行，用户以为改生效了）。
+    摘要只留 10 位哈希，不落名称与规格原文之外的任何内容。
+    """
+    digest = hashlib.sha1(f"{name}\n{spec}".encode("utf-8")).hexdigest()[:10]
+    return f"mat-v1:{result_version(plan)}:{digest}"
+
+
 def _process_route(plan) -> dict:
     """组装工艺路线摘要。只做字段投影，不复制工艺算法。"""
     process = plan.process
@@ -200,6 +213,17 @@ def _quote_session_hint(plan, requirement: dict) -> str:
             or str(((plan.quote_handoff.session_id if plan.quote_handoff else "") or "")).strip())
 
 
+def business_case_of(project_id: str, plan=None) -> str:
+    """项目已确认的业务实例号：先读 meta 的 business_case 文档，再退回最近一次回传，
+    都没有就空串 —— 绝不现编一个。回传时把它一起发出去，服务端据此认回原报价卡片。"""
+    doc = store.load_business_case(project_id) or {}
+    case_id = str(doc.get("business_case_id") or "").strip()
+    if case_id:
+        return case_id
+    handoff = getattr(plan, "quote_handoff", None) if plan is not None else None
+    return str(getattr(handoff, "business_case_id", "") or "").strip()
+
+
 def requirement_customer(requirement: dict, req_data: dict) -> str:
     """需求单里的客户名（顶层 / data / 早期 customer 逐个兜底）。"""
     for value in (requirement.get("customer_name"), req_data.get("customer_name"),
@@ -232,6 +256,8 @@ def integration_quote_result(project_id: str, plan, title: str,
         "quote_session_id": _quote_session_hint(plan, requirement),
         "source_session_id": str((requirement.get("data") or {}).get("source_session_id") or ""),
         "source_task_id": str((requirement.get("data") or {}).get("source_task_id") or ""),
+        # 业务实例号来自项目 meta，缺就空串（没有就绝不当场编一个）。
+        "business_case_id": business_case_of(project_id, plan),
         "handoff_kind": HANDOFF_KIND_COST,
         "handoff_version": HANDOFF_VERSION,
         "result_version": result_version(plan),
@@ -264,7 +290,7 @@ def process_handoff_package(project_id: str, plan, review, snapshot: dict,
                             requirement: dict, title: str) -> dict:
     """成本结果 → 工艺经理确认的完整交接包。
 
-    工艺经理领取后进的是第 5 大步「工艺评估报告」，所以这里必须把参数、工艺路线、
+    工艺经理领取后进的是第 5 阶段「工艺评估报告」，所以这里必须把参数、工艺路线、
     逐件成本、组装成本与财务确认一并交过去；只给一句 note 等于让他回头再问一遍。
     字段全部来自既有 plan / review / summarize，不在这一步重算任何成本。
     """
@@ -298,7 +324,7 @@ def process_handoff_package(project_id: str, plan, review, snapshot: dict,
             "confirmed_at": review.confirmed_at,
             "note": review.note or "",
         },
-        # 工艺经理的正常落点是第 5 大步「工艺评估报告」，不是第 3 大步重新建工艺。
+        # 工艺经理的正常落点是第 5 阶段「工艺评估报告」，不是第 3 阶段重新建工艺。
         "confirmed": bool(review.confirmed),
         "target_stage": "summary",
         "target_entry": f"tech-workbench.html?stage=summary&project={project_id}",
@@ -335,6 +361,8 @@ def integration_material_write_record(project_id: str, plan, *,
     """取号 + 写两张主数据表 + 把编码回填进整机参数。就地改 plan，不落盘。
 
     2.2 的「写入数据库」与「发送至报价」的自动补编码、2.3 的「写入数据库」都调它。
+    项目号与业务版本一起发给服务端：同一个版本重复调用不会再产生第二个成品编码；
+    命中时业务结果里只留原来那一条（同一个编码不重复记），编码照样回填整机参数。
     """
     user = user or {}
     name = (product_name or "").strip() or (
@@ -342,8 +370,11 @@ def integration_material_write_record(project_id: str, plan, *,
     if not name:
         raise CostFlowError("缺少产品名称：请先完成参数推荐，或在写入时填写产品名称")
     breakdown = cost_model.breakdown(plan.cost.model_dump())
+    version = material_result_version(plan, name, spec)
     result = bridge_call(cpq_bridge.write_material, token,
-                         name, breakdown["total"], breakdown, spec)
+                         name, breakdown["total"], breakdown, spec,
+                         project_id=project_id, result_version=version)
+    already = bool(result.get("already_written"))
     record = MaterialWrite(
         material_id=str(result.get("material_id") or ""),
         number=str(result.get("number") or ""),
@@ -353,8 +384,12 @@ def integration_material_write_record(project_id: str, plan, *,
         tables=result.get("tables") or [],
         written_at=now_cst_str(),
         written_by=user.get("display_name") or user.get("username") or "",
+        result_version=str(result.get("result_version") or version),
+        idempotency_key=str(result.get("idempotency_key") or ""),
+        already_written=already,
     )
-    plan.material_writes.append(record)
+    if not already:
+        plan.material_writes.append(record)
     # 成品编码回填进整机参数：报价按成品编码匹配定价/加价规则，产品行没有编码，
     # 那边规则查得到、加价值却落不到产品上（见 services/integration.apply_material_code）。
     integration.apply_material_code(plan, record.number, record.name)
@@ -443,7 +478,9 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
         quote_source_task_id, quote_result,
         # 任务行被删/被后来的任务顶掉时，会话号是认回原卡片的最后一条线索。
         quote_source_session_id,
-        str(quote_result.get("result_version") or ""))
+        str(quote_result.get("result_version") or ""),
+        # 实例号是落点的唯一裁决依据：服务端凭它认回原报价卡片，而不是靠散落线索猜。
+        business_case_id=business_case_of(project_id, plan))
     handoff = result.get("handoff") or result.get("auto_handoff") or {}
     plan.quote_handoff = QuoteHandoff(
         session_id=str(result.get("quote_session_id") or project_id),
@@ -473,11 +510,16 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
                  "task_id": plan.quote_handoff.task_id, "by": plan.quote_handoff.sent_by})
     return {**integration.payload(project_id, plan),
             "handoff": plan.quote_handoff.model_dump(),
+            # 服务端这一次回传的唯一标识与来源待办结果：一路透到 2.3 的界面与审计里。
+            "handoff_id": str(result.get("handoff_id") or ""),
+            "source_task": result.get("source_task")
+            or {"closed": False, "skipped": "not_reported"},
             "auto_written": auto_written.model_dump() if auto_written else None,
             "code_fallback": code_fallback,
             "linked_by": result.get("linked_by") or "",
             "new_card": bool(result.get("new_card")),
             "already_sent": bool(result.get("already_sent")),
+            "already_completed": bool(result.get("already_completed")),
             "quote_session_id": str(result.get("quote_session_id") or "")}
 
 
@@ -486,16 +528,31 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
 # --------------------------------------------------------------------------- #
 def write_material(project_id: str, user: Optional[dict] = None, *,
                    product_name: str = "", spec: str = "", token: str = "") -> dict:
-    """去向①：写入数据库（新建成品编码 + 物料成本配置）。"""
+    """去向①：写入数据库（新建成品编码 + 物料成本配置）。
+
+    同一个业务版本重复点（双击 / 超时重试 / 刷新后再点）不新建第二个成品编码：
+    服务端按 project_id + result_version 判幂等，命中时沿用原编码 —— 动作留痕与审计
+    都要说清楚是"沿用"，否则用户会以为又建了一个成品。
+    """
     ir, plan, review = _ready(project_id)
     record = integration_material_write_record(
         project_id, plan, product_name=product_name, spec=spec, token=token, user=user)
     integration.save_plan(project_id, plan, (user or {}).get("username", "system"))
-    _record_action(project_id, review, "material-write", "写入数据库",
-                   f"成品编码 {record.number}「{record.name}」，"
-                   f"单价 {record.material_unit_price} 元", user or {})
+    if record.already_written:
+        label = "写入数据库（沿用已有成品编码）"
+        detail = (f"沿用已有成品编码 {record.number}「{record.name}」，本次没有新建"
+                  f"（材料单价 {record.material_unit_price} 元）")
+    else:
+        label = "写入数据库"
+        detail = (f"成品编码 {record.number}「{record.name}」，"
+                  f"单价 {record.material_unit_price} 元")
+    _record_action(project_id, review, "material-write", label, detail, user or {})
     store.audit(project_id, "cost_review_material_write",
-                {"number": record.number, "by": (user or {}).get("username", "system")})
+                {"number": record.number,
+                 "by": (user or {}).get("username", "system"),
+                 "already_written": record.already_written,
+                 "result_version": record.result_version,
+                 "idempotency_key": record.idempotency_key})
     return {**cost_review.payload(project_id, ir, plan, review),
             "written": record.model_dump()}
 
@@ -505,36 +562,48 @@ def send_to_quote(project_id: str, user: Optional[dict] = None, *,
                   token: str = "", source_task_id: str = "") -> dict:
     """去向②：回传销售经理继续报价（复用 2.2 那条推送，成本与参数一并带回）。
 
-    完成后把来源的 claimed 财务待办关掉 —— 去向下游已经接手，旧待办不该继续挂着。
+    来源的 claimed 财务待办由服务端在**同一次回传命令的同一个事务里**关掉（详见
+    cpq_tech_bridge.send_to_quote）：技术侧不再另发一次可以独立失败的关闭请求，
+    否则断路 / 超时就会留下"销售已收到任务、技术待办还挂着"的半完成状态。
+    这里只在拿到明确成功结果（含 handoff_id）之后才写项目留痕。
     """
     _ready(project_id)
     # 走正文，不走 2.2 那个路由函数：那里的权限认的是工艺经理。
     result = integration_send_to_quote_body(
         project_id, product_name=product_name, spec=spec, note=note,
         token=token, user=user)
-    closed = close_source_task(project_id, user, token, source_task_id,
-                               comment="成本结果已回传销售经理继续报价")
     ir, plan, review = cost_review_ctx(project_id)
     handoff = result.get("handoff") or {}
+    # 来源待办关没关、为什么没关，都随这一次回传的结果一起回给界面（可追溯到 handoff_id）
+    source = result.get("source_task") or {"closed": False, "skipped": "not_reported"}
+    handoff_id = str(result.get("handoff_id") or "")
     _record_action(
         project_id, review, "send-to-quote", "回传销售经理继续报价",
         f"卡片进入第 {handoff.get('next_step_no') or 3} 步"
         f"「{handoff.get('next_step_name') or '定价-利润加成'}」"
         + (f"，已退回给{handoff.get('target_name')}" if handoff.get("returned_to_sender")
            else f"，已通知{handoff.get('target_role_name') or '销售经理'}")
+        + (f"；交接编号 {handoff_id}" if handoff_id else "")
+        + (f"；来源待办{source.get('task_id') or source_task_id}已关闭"
+           if source.get("closed") else "")
         + ("（重复回传，沿用已有交接）" if result.get("already_sent") else ""), user or {})
     store.audit(project_id, "cost_review_send_to_quote",
-                {"task_id": handoff.get("task_id"),
+                {"handoff_id": handoff_id,
+                 "task_id": handoff.get("task_id"),
                  "already_sent": bool(result.get("already_sent")),
                  "by": (user or {}).get("username", "system")})
     return {**cost_review.payload(project_id, ir, plan, review),
-            "handoff": handoff, "source_task": closed,
+            "handoff": handoff, "source_task": source, "handoff_id": handoff_id,
             "auto_written": result.get("auto_written"),
             "code_fallback": result.get("code_fallback"),
             "linked_by": result.get("linked_by") or "",
             "quote_session_id": result.get("quote_session_id") or "",
             "already_sent": bool(result.get("already_sent")),
-            "new_card": bool(result.get("new_card"))}
+            "already_completed": bool(result.get("already_completed")),
+            "new_card": bool(result.get("new_card")),
+            "business_case_id": str(result.get("business_case_id") or ""),
+            "candidates": list(result.get("candidates") or []),
+            "recovery": dict(result.get("recovery") or {})}
 
 
 def return_to_process(project_id: str, user: Optional[dict] = None, *,
@@ -544,8 +613,8 @@ def return_to_process(project_id: str, user: Optional[dict] = None, *,
     """去向①：提交工艺经理确认。
 
     这与旧的"退回返工"不是一回事：财务认可本步成本，把完整结果交给工艺经理，由他在
-    第 5 大步做最终工艺确认、汇总、审核和发布。确实需要返工时，由第 5 大步明确退回
-    第 3 大步，不能把正常提交确认与返工混在一个模糊按钮里。
+    第 5 阶段做最终工艺确认、汇总、审核和发布。确实需要返工时，由第 5 阶段明确退回
+    第 3 阶段，不能把正常提交确认与返工混在一个模糊按钮里。
 
     成本必须先确认：未确认的数不该作为正式结果往下走。
     """
@@ -569,18 +638,25 @@ def return_to_process(project_id: str, user: Optional[dict] = None, *,
         requirement_customer(requirement, req_data),
         str(requirement.get("product_name") or req_data.get("product_name") or ""),
         note or "成本已确认，请做最终工艺确认与报告",
-        package, target_user_id, str(source_task_id or ""))
-    closed = close_source_task(project_id, user, token, source_task_id,
-                               comment="成本结果已提交工艺经理确认")
+        package, target_user_id, str(source_task_id or ""),
+        # 结果版本随交接一起交出去：它是服务端幂等五元组的一部分（同一版只交一次）。
+        str(package.get("result_version") or ""))
+    # 来源待办由服务端在那一次回传命令的同一个事务里关掉 —— 技术侧不再另发关闭请求。
+    source = result.get("source_task") or {"closed": False, "skipped": "not_reported"}
+    handoff_id = str(result.get("handoff_id") or "")
     _record_action(
         project_id, review, "return-to-process", "提交工艺经理确认",
         f"任务 {result.get('task_no') or ''} 已发给"
-        f"{result.get('target_role_name') or '工艺经理'}，进入第 5 大步「工艺评估报告」；"
+        f"{result.get('target_role_name') or '工艺经理'}，进入第 5 阶段「工艺评估报告」；"
         f"随包带上零件成本 {len(parts)} 项、组装成本 {'有' if assembly else '无'}、"
         f"合计 {final.get('total') or 0} 元、成本{'已确认' if confirmed else '未确认'}"
-        + (f"、原报价会话 {quote_session_id}" if quote_session_id else ""),
+        + (f"、原报价会话 {quote_session_id}" if quote_session_id else "")
+        + (f"；交接编号 {handoff_id}" if handoff_id else "")
+        + (f"；来源待办{source.get('task_id') or source_task_id}已关闭"
+           if source.get("closed") else "")
+        + ("（重复提交，沿用上一次交接）" if result.get("already_sent") else ""),
         user)
     ir, plan, review = cost_review_ctx(project_id)
     return {**cost_review.payload(project_id, ir, plan, review),
-            "returned": result, "source_task": closed,
+            "returned": result, "source_task": source, "handoff_id": handoff_id,
             "target_stage": "summary", "package": package}

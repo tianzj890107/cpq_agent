@@ -1,8 +1,8 @@
 /* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
  *
- * 2.3 成本测算 —— 财务经理的步骤。
+ * 4 成本测算 —— 财务经理的步骤。
  *
- * 分工：工艺经理在 2.1/2.2 出工艺、参数与用量，2.2 结束点「确认工艺并发送至财务做
+ * 分工：工艺经理在 2.1 图纸解析与 3 组装与整合出工艺、参数与用量，3 组装与整合的结束点「确认工艺并发送至财务做
  * 成本测算」把项目交过来；财务在这里逐个零件 + 整机算成本、汇总，然后选三个去向：
  * 写入数据库 / 回传销售经理继续报价 / 提交工艺经理确认。
  *
@@ -12,12 +12,13 @@
  *   · **对外用整机成本，不是零件之和**。整机成本的材料项就是逐个零件引过来的，
  *     两者相加会把零件成本算两遍。界面上两个数都给，但送出去的只有整机那个。
  */
-const crPid = new URLSearchParams(location.search).get('project')
-  || localStorage.getItem('cad_engine_project_id') || '';
+let crPid = TechProjectContext.bind().project;
 // 统一工作台从待办点进来时 URL 上带着来源 task_id / tech_task：完成正式去向时原样带回，
 // 由后端把原来那条已领取的财务待办关闭（cpq_wf.complete_claimed_task，幂等）。
 const crTaskId = new URLSearchParams(location.search).get('task_id')
   || new URLSearchParams(location.search).get('tech_task') || '';
+// 待办恢复通道要带当前账号令牌：/wf/task 按账号裁剪任务可见性，归属仍由服务端判定。
+const crToken = () => localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token') || '';
 const CR_TABS = { parts: '零件成本', assembly: '组装成本', total: '汇总' };
 const CR_COST_LABEL = { material: '材料', labor: '人工', overhead: '制造费用', machining: '加工费用' };
 
@@ -27,7 +28,7 @@ let crBusy = false;
 // deferred 长任务（runCostReview / costStep）自己的并发闸门：启动即回执，
 // 后台链路没结束前不允许再排一条。
 let crDeferredBusy = false;
-/* 2.3 是财务经理的步骤。别人（工艺经理、销售）能打开这一页看数，但不能算、不能发。
+/* 4 成本测算是财务经理的步骤。别人（工艺经理、销售）能打开这一页看数，但不能算、不能发。
    后端才是权威（main.py 的 COST_ROLES），这里只是提前说清楚 —— 否则要等点下去
    才收到 403，还容易被读成"系统坏了"。取不到身份时不拦：让后端去判。 */
 let crUser = null;
@@ -53,7 +54,7 @@ const crReadOnly = () => {
   return Boolean(crRoleCode()) && !CR_COST_ROLES.includes(crRoleCode());
 };
 const crReadOnlyWhy = () =>
-  `2.3 成本测算是财务经理的步骤；当前登录的是「${crUser && crUser.role_name || '其他角色'}」，`
+  `4 成本测算是财务经理的步骤；当前登录的是「${crUser && crUser.role_name || '其他角色'}」，`
   + '这一页只能查看。请用财务经理账号登录后测算。';
 
 const $cr = id => document.getElementById(id);
@@ -283,7 +284,7 @@ function crBreakdownRow(breakdown) {
 function crRenderParts() {
   const rows = crData?.parts || [];
   if (!rows.length) {
-    return `<div class="inline-empty">还没有零件清单。2.3 的零件成本按 2.1 已确认的零件逐件算，`
+    return `<div class="inline-empty">还没有零件清单。4.1 零件成本按 2.1 已确认的零件逐件算，`
       + `请先让工艺经理完成图纸解析。</div>`;
   }
   const counts = crData.counts || {};
@@ -443,7 +444,7 @@ function crWaiverCoversGaps(waiver, codes) {
   return (codes || []).every(code => signed.has(String(code)));
 }
 
-/* 2.3「确认成本」的缺口闸门：缺口清单以后端算出的那份为准（crData.review.gaps），
+/* 4 成本测算「确认成本」的缺口闸门：缺口清单以后端算出的那份为准（crData.review.gaps），
    签字看后端落库的 review.cost_waiver —— 前端不另算一份缺口，也不拿本地状态猜。 */
 function crConfirmGaps() {
   const why = crConfirmBlocker();
@@ -527,7 +528,7 @@ function crRender() {
     + ` · 整机 ${counts.assembly_costed ? '✓' : '—'}`
     + ` · ${crData?.review?.confirmed ? '已确认' : '未确认'}`;
   const name = crData?.assembly?.name;
-  $cr('crTitle').textContent = name ? `2.3 成本测算 · ${name}` : '2.3 成本测算';
+  $cr('crTitle').textContent = name ? `4 成本测算 · ${name}` : '4 成本测算';
   crPublishState();
 }
 
@@ -604,9 +605,20 @@ function crRenderOps() {
     `<div class="ai-op-done">✓ ${esc(action.label)}：${esc(action.detail)}</div>`).join('');
   $cr('crHint').innerHTML = done
     || '确认成本：三个去向都以确认过的数为准。<br/>'
-       + '提交工艺经理确认：把已确认的成本交给工艺经理，进第 5 大步做最终工艺确认与报告；'
-       + '确实要返工，由第 5 大步明确退回第 3 大步。<br/>'
+       + '提交工艺经理确认：把已确认的成本交给工艺经理，进第 5 阶段做最终工艺确认与报告；'
+       + '确实要返工，由第 5 阶段明确退回第 3 阶段。<br/>'
        + '回传销售经理继续报价：优先回到原报价会话，从第 3 步「定价-利润加成」继续。';
+}
+
+/* 来源待办的四种出口都要说清楚（回传销售 / 提交复核共用）：
+   已关闭 / 本来就已完成 / 本次没有要关的 / 关不掉的原因。这段话同时随动作留痕落库
+   （后端 _record_action 里带上交接编号），所以刷新页面后仍能在「已执行」区看到。 */
+function crSourceLine(source, taskId) {
+  const row = source || {};
+  if (row.closed) return `  来源待办 ${row.task_id || taskId || ''} 已关闭`;
+  if (row.already) return `  来源待办 ${row.task_id || taskId || ''} 在此之前已完成，无需重复关闭`;
+  if (row.skipped) return `  本次没有需要关闭的来源待办（${row.skipped}）`;
+  return `  来源待办未能关闭：${row.error || '未知原因'}`;
 }
 
 async function crRunOp(kind) {
@@ -630,14 +642,22 @@ async function crRunOp(kind) {
     crData = await api(crUrl(`/${kind}`), { method: 'POST', body: JSON.stringify(body) });
     if (kind === 'material-write') {
       const written = crData.written || {};
+      // 幂等命中（同一份成本重复点 / 超时重试 / 刷新后再点）沿用原成品编码：
+      // 不说清楚是「沿用」，用户会以为又新建了一个成品。
+      const reused = Boolean(written.already_written);
       card.log([`成品编码 ${written.number}`, `  产品名称 ${written.name}`,
         `  材料单价（四项合计）${written.material_unit_price} 元`,
-        `  已写入 ${(written.tables || []).join('、')}`]);
-      crSay(`已写入数据库：成品编码 ${written.number}「${written.name}」，`
-        + `单价 ${written.material_unit_price} 元。`);
+        `  已写入 ${(written.tables || []).join('、')}`,
+        ...(reused ? ['  沿用已有成品编码（本次没有新建）'] : [])]);
+      crSay(reused
+        ? `沿用已有成品编码 ${written.number}「${written.name}」，本次没有新建`
+          + `（单价 ${written.material_unit_price} 元）。`
+        : `已写入数据库：成品编码 ${written.number}「${written.name}」，`
+          + `单价 ${written.material_unit_price} 元。`);
     } else if (kind === 'send-to-quote') {
       const handoff = crData.handoff || {};
       const fallback = crData.code_fallback;
+      const source = crData.source_task || {};
       // 落到**哪张**报价卡片，比"发出去了"更要紧：新建卡片时销售那边打不开会话历史
       // （报价助手按会话号取历史，技术项目号在那边不存在），客户也只剩技术侧填过的。
       const linked = { task: '回到了原来那张报价卡片（按「新增工艺」任务认回）',
@@ -647,8 +667,11 @@ async function crRunOp(kind) {
                                         : '已通知' + (handoff.target_role_name || '销售经理')}`,
         ...(linked ? [`  ${linked}`] : []),
         ...(crData.new_card ? ['  未认回原报价卡片，已新建一张'] : []),
+        crSourceLine(source, crTaskId),
+        ...(crData.handoff_id ? [`  交接编号 ${crData.handoff_id}`] : []),
         ...(fallback ? [`  主数据未写入（${fallback.reason}），改用临时编码 ${fallback.number}`] : [])]);
       crSay(`成本已确认并回传销售经理继续报价：卡片进入「${handoff.next_step_name || '定价-利润加成'}」。`
+        + (crData.handoff_id ? `\n交接编号 ${crData.handoff_id}。` : '')
         + (crData.already_sent ? '\n（这一版已经回传过，沿用已有交接，没有重复建任务。）' : '')
         + (crData.new_card
             ? `\n⚠ 这单没能认回原来那张报价卡片（需求单里既没有来源任务号、也没有报价会话号），`
@@ -660,12 +683,14 @@ async function crRunOp(kind) {
       const returned = crData.returned || {};
       const source = crData.source_task || {};
       card.log([`任务 ${returned.task_no || ''} 已发给${returned.target_role_name || '工艺经理'}`,
-        `  落点：第 5 大步「工艺评估报告」（stage=summary）`,
+        `  落点：第 5 阶段「工艺评估报告」（stage=summary）`,
         `  随包带上参数、工艺路线、零件成本、组装成本与确认信息`,
-        ...(source.closed ? [`  来源待办 ${source.task_no || crTaskId} 已完成`]
-                          : (source.skipped ? [] : [`  来源待办未能关闭：${source.error || '未知原因'}`]))]);
+        crSourceLine(source, crTaskId),
+        ...(crData.handoff_id ? [`  交接编号 ${crData.handoff_id}`] : [])]);
       crSay(`已提交给${returned.target_role_name || '工艺经理'}确认`
-        + `（任务 ${returned.task_no || ''}）。他会进入第 5 大步做最终工艺确认、汇总、审核与发布。`);
+        + `（任务 ${returned.task_no || ''}）。他会进入第 5 阶段做最终工艺确认、汇总、审核与发布。`
+        + (crData.handoff_id ? `\n交接编号 ${crData.handoff_id}。` : '')
+        + (crData.already_sent ? '\n（同一版已经交过，沿用上一次交接，没有重复建任务。）' : ''));
     }
     card.done(true);
     crStatus(`${labels[kind]}完成`);
@@ -685,10 +710,10 @@ async function crRunOp(kind) {
   }
 }
 
-/* 2.3 对工艺经理的唯一出口：把工艺与整机参数交给财务做成本测算。
-   复用 2.2 的既有出口 POST /integration/send-to-finance（同一 service、同一闸门、
+/* 4 成本测算对工艺经理的唯一出口：把工艺与整机参数交给财务做成本测算。
+   复用 3 组装与整合的既有出口 POST /integration/send-to-finance（同一 service、同一闸门、
    同一对外调用）；收件人留空由报价侧落到默认角色（成本测算＝财务经理），所以这里
-   不需要重写 2.2 的派发弹窗，也不新建第二套发送实现。 */
+   不需要重写 3 组装与整合的派发弹窗，也不新建第二套发送实现。 */
 async function crSendToFinance() {
   if (crBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
   crBusy = true;
@@ -709,7 +734,7 @@ async function crSendToFinance() {
     const finance = crData.finance || {};
     card.log([`任务 ${finance.task_no || ''} 已发给${finance.target_role_name || '财务经理'}`,
       '  随包带上整机参数、工艺路线与用量',
-      '  落点：本步（2.3 成本测算）']);
+      '  落点：本步（4 成本测算）']);
     crSay(`已发送给${finance.target_role_name || '财务经理'}做成本测算`
       + `（任务 ${finance.task_no || ''}）。`);
     card.done(true);
@@ -915,7 +940,7 @@ async function crConfirmCost(waiver = null) {
     });
     crStatus('成本已确认');
     crToast('成本已确认');
-    crSay('成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 大步）。');
+    crSay('成本已确认。现在可以写入数据库、回传销售经理继续报价，或提交工艺经理确认（第 5 阶段）。');
     crPublishTask('task-completed', { taskId: 'cost-confirm', label: '确认成本',
                                       status: 'succeeded' });
     return true;
@@ -1011,11 +1036,26 @@ function crBind() {
   $cr('crReturn').onclick = () => crRunOp('return-to-process');
   $cr('crNote').onchange = () => crSaveNote();
   $cr('crQuantity').onchange = () => crSaveNote();
-  $cr('crPrev').onclick = () => window.CadWorkflowNavigation?.navigate('2.2');
-  $cr('crNext').onclick = () => window.CadWorkflowNavigation?.navigate('3.1');
+  $cr('crPrev').onclick = () => window.CadWorkflowNavigation?.navigate('3.1');
+  $cr('crNext').onclick = () => window.CadWorkflowNavigation?.navigate('5.1');
 }
 
 async function crStart() {
+  if (!crPid && crTaskId) {
+    // URL 没带 project（财务从待办直接进入）：用 task_id 走共享模块唯一恢复项目身份。
+    // 关联 0 个 / 多个不同项目、接口读不到 —— 都停下来提示，不加载任何项目数据，
+    // 也绝不退回上一次打开的项目。
+    try {
+      const recovered = await TechProjectContext.fromTask(crTaskId, { token: crToken() });
+      crPid = recovered.project;
+    } catch (error) {
+      const message = (error && error.message) || '任务信息读取失败，无法确定所属项目。';
+      crToast(message, true);
+      crStatus(message, true);
+      $cr('crBody').innerHTML = `<div class="inline-empty error">${esc(message)}</div>`;
+      return;
+    }
+  }
   if (!crPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
   crBind();
   crUser = (window.cpqAuth && window.cpqAuth.user && window.cpqAuth.user()) || null;
@@ -1060,7 +1100,7 @@ document.addEventListener('cpq-sso-ready', () => {
   crPublishState();
 });
 
-/* 统一看板协议：2.3 的测算与确认成本注册成语义化动作，内部页签注册成语义化视图。 */
+/* 统一看板协议：4 成本测算的测算与确认成本注册成语义化动作，内部页签注册成语义化视图。 */
 (function crRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
   const crSetTab = (name) => { crTab = name; crRender(); };
@@ -1091,7 +1131,7 @@ document.addEventListener('cpq-sso-ready', () => {
     getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy) }),
   });
   window.TechBoardRuntime.registerActions({
-    // 2.3 是财务经理的步骤：工艺经理打开这一页时五颗财务动作一个也点不动（crReadOnly 全挡），
+    // 4 成本测算是财务经理的步骤：工艺经理打开这一页时五颗财务动作一个也点不动（crReadOnly 全挡），
     // 他真正该做的只有一件 —— 把工艺与整机参数交给财务。所以非财务身份下唯一可见的主按钮
     // 是它；财务动作注册与 run 都保留（Agent / 看板仍可调用），只是不占用户操作栏。
     sendCostReviewToFinance: {
@@ -1100,7 +1140,7 @@ document.addEventListener('cpq-sso-ready', () => {
       deferred: true,
       run: () => crSendToFinance(),
       // role 只由 getState() 决定（条目上的静态 role 是运行时读不到的死元数据，
-      // 2.3 一律不写）；enabled 只表达「这一步有这个动作」，忙闲交给 busy。
+      // 4 成本测算一律不写）；enabled 只表达「这一步有这个动作」，忙闲交给 busy。
       getState: () => ({ visible: crReadOnly(), enabled: true, busy: Boolean(crBusy),
                          role: 'primary' }),
     },
@@ -1119,7 +1159,7 @@ document.addEventListener('cpq-sso-ready', () => {
         crRunAllInBackground();
         return { ok: true };
       },
-      // 没算全时它就是 2.3 的主按钮；算全之后让位给「确认成本」。
+      // 没算全时它就是 4 成本测算的主按钮；算全之后让位给「确认成本」。
       getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
                          role: !crCostsComplete() ? 'primary' : 'aux' }),
     },
@@ -1190,7 +1230,7 @@ document.addEventListener('cpq-sso-ready', () => {
         });
         return { ok: true };
       },
-      // 算全之后它就是 2.3 的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
+      // 算全之后它就是 4 成本测算的主按钮；没算全也一直可见可点，点了由闸门给真实原因。
       getState: () => ({ visible: !crReadOnly(), enabled: true, busy: Boolean(crBusy),
                          role: crCostsComplete() ? 'primary' : 'aux' }),
     },
@@ -1266,12 +1306,12 @@ document.addEventListener('cpq-sso-ready', () => {
     parts: { run: () => crSetTab('parts'), getState: () => ({ active: crTab === 'parts' ? 'parts' : null }) },
     assembly: { run: () => crSetTab('assembly'), getState: () => ({ active: crTab === 'assembly' ? 'assembly' : null }) },
     total: { run: () => crSetTab('total'), getState: () => ({ active: crTab === 'total' ? 'total' : null }) },
-    // 「整合参数」已归位第 3 大步「组装与整合 · 参数推荐」，本步不再有对应看板。
+    // 「整合参数」已归位第 3 阶段「组装与整合 · 3.2 参数推荐」，本步不再有对应看板。
     // 这里只留一个显式拒绝的兼容别名：旧调用会拿到可识别的失败，而不是静默什么都不做，
     // 也不会打开一个已经不存在的页签。
     params: {
       run: () => ({ ok: false, error: { code: 'moved-to-integration',
-        message: '「整合参数」在第 3 大步「组装与整合 · 参数推荐」，本步只保留成本页签。' } }),
+        message: '「整合参数」在第 3 阶段「组装与整合 · 3.2 参数推荐」，本步只保留成本页签。' } }),
       getState: () => ({ visible: false, active: null }),
     },
   });

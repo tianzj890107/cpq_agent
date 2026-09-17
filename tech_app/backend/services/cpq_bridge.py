@@ -58,13 +58,21 @@ def _post(path: str, token: str, payload: dict) -> dict:
 
 
 def write_material(token: str, product_name: str, unit_price: float,
-                   breakdown: Optional[dict] = None, spec: str = "") -> dict:
-    """新建成品编码，并把成品与成本写进 md_clm_material_base_info / md_clm_material_cost_cnf。"""
+                   breakdown: Optional[dict] = None, spec: str = "",
+                   project_id: str = "", result_version: str = "") -> dict:
+    """新建成品编码，并把成品与成本写进 md_clm_material_base_info / md_clm_material_cost_cnf。
+
+    project_id 与 result_version 一起发出去（旧调用方不传 → 默认空串，服务端照旧每次
+    新建）：服务端用 `project_id|result_version|material-write` 判幂等，同一版重复调用
+    只会产生一个成品编码。
+    """
     return _post("/wf/tech/material", token, {
         "product_name": product_name,
         "unit_price": unit_price,
         "breakdown": breakdown or {},
         "spec": spec,
+        "project_id": project_id,
+        "result_version": result_version,
     })
 
 
@@ -88,12 +96,17 @@ def send_to_finance(token: str, session_id: str, title: str, customer: str = "",
 def return_to_process(token: str, session_id: str, title: str, customer: str = "",
                       project_name: str = "", note: str = "",
                       payload: Optional[dict] = None, target_user_id: str = "",
-                      source_task_id: str = "") -> dict:
-    """2.3 → 工艺经理：成本已确认，请做最终工艺确认与报告（第 5 大步）。"""
+                      source_task_id: str = "", result_version: str = "") -> dict:
+    """4 成本测算 → 工艺经理：成本已确认，请做最终工艺确认与报告（第 5 阶段）。
+
+    result_version 与 payload 里的同名键一起构成服务端幂等五元组的一部分：同一版成本
+    重复提交只会落一条交接记录，成本复核后的新版本才算新的一次。
+    """
     return _post("/wf/tech/return-process", token, {
         "session_id": session_id, "title": title, "customer": customer,
         "project_name": project_name, "note": note, "payload": payload or {},
         "target_user_id": target_user_id, "source_task_id": source_task_id,
+        "handoff_kind": "cost_to_process", "result_version": result_version,
     })
 
 
@@ -109,7 +122,10 @@ def report_handoff(token: str, session_id: str, title: str, customer: str = "",
                    project_name: str = "", note: str = "",
                    source_task_id: str = "", source_session_id: str = "",
                    result: Optional[dict] = None, report: Optional[dict] = None,
-                   result_version: str = "", source_task_no: str = "") -> dict:
+                   result_version: str = "", source_task_no: str = "",
+                   target_type: str = "", target_role_code: str = "",
+                   target_user_id: str = "", business_case_id: str = "",
+                   create_new: bool = False, create_reason: str = "") -> dict:
     """已发布报告 → 销售经理继续报价。走与成本回传同一条 handoff 通道，
     额外带上完整报告与报告版本，由一体化服务做幂等与步骤单调性保护。"""
     return _post("/wf/tech/handoff", token, {
@@ -125,13 +141,21 @@ def report_handoff(token: str, session_id: str, title: str, customer: str = "",
         "handoff_kind": "report_to_quote",
         "result_version": result_version,
         "source_task_no": source_task_no,
+        "target_type": target_type,
+        "target_role_code": target_role_code,
+        "target_user_id": target_user_id,
+        "business_case_id": business_case_id,
+        "create_new": bool(create_new),
+        "create_reason": create_reason,
     })
 
 
 def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
                   project_name: str = "", note: str = "",
                   source_task_id: str = "", result: Optional[dict] = None,
-                  source_session_id: str = "", result_version: str = "") -> dict:
+                  source_session_id: str = "", result_version: str = "",
+                  business_case_id: str = "", create_new: bool = False,
+                  create_reason: str = "") -> dict:
     """确认工艺（报价第 2 步）并把卡片推进到第 3 步定价，通知销售经理。
 
     source_task_id 是当初那条「新增工艺」任务：给了它，一体化服务会回到**原来那张
@@ -141,6 +165,10 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
     一条**真实**的报价 Agent 会话（不再拿技术项目号冒充会话号），返回的 linked_by /
     new_card 会一路带回界面说明白。
     result 是随任务带回去的整机结论（成品编码、四项成本、参数、工艺与零件成本）。
+    business_case_id 是报价—技术—财务—报告共用的稳定业务实例号：服务端拿它作**落点
+    的唯一裁决依据**（唯一候选自动关联、多候选停下来让人选、无候选不再静默新建）。
+    create_new / create_reason 只在无候选、且用户明确确认"新建报价卡片"并写了原因时
+    才为非空；服务端把这些字段原样带回来（business_case_id / candidates / recovery）。
     """
     return _post("/wf/tech/handoff", token, {
         "session_id": session_id,
@@ -153,4 +181,7 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
         "result": result or {},
         "handoff_kind": "cost_to_quote",
         "result_version": result_version,
+        "business_case_id": business_case_id,
+        "create_new": bool(create_new),
+        "create_reason": create_reason,
     })
