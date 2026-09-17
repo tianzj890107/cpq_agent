@@ -3509,3 +3509,29 @@ index.html / tech-workbench.html 的 ?v=），因此只记录、不擅自动：
 - 同轮的 2.1 悬浮小窗在 embed 下没有渲染 —— 这是**既有且刻意**的行为，不是本批引入：
   `agent-chat.js:18` 在 URL 带 `embed` 时整体早退（统一工作台的会话宿主是父壳 `#techChatPane`，
   子页不自建会话栏/文件小窗）。`fileRow()` 在该模式下根本不执行。
+
+### ## 101 提交 / 推送 / 发布记录（9-17）
+
+- 提交：`91df3bf`　「技术工艺 2.1：任务文件在卡片内预览 + 修掉裸链接 401（## 101）」，**10 个文件**
+  （`docs/specs/tech-file-preview-in-card-and-auth.md`、`tests/test_tech_file_preview_in_card_and_auth_red.py`
+  两个新增文件随实现一起入库，与 ## 100 的 `33ce7b4` 同约定；其余为 app.js / agent-chat.js /
+  workbench.css / index.html / tech-workbench.html / assembly-integration.html / cost-review.html /
+  changelog）。逐文件 `git add`，未用 `git add -A`。
+- 推送：`gitlab/20260909` → `6e217b5..91df3bf`；`origin`（github.com:tianzj890107/cpq_agent）→
+  `6e217b5..91df3bf`。两远端一致。
+- 发布 34：`git fetch gitlab 20260909` + `git merge --ff-only FETCH_HEAD` → 34 `HEAD=91df3bf`；
+  `git diff --stat FETCH_HEAD` 空（工作区与本批一致）。**纯前端，未重启 8010/8012**：
+  `cpq_suite_server.py` 仍是原 PID `1376146`，8010 / 8012 `/api/health` 均 `200`。
+- 产物逐字节核对（`http://172.16.10.34:8010/<file>` 的 md5 vs 本地）**7/7 OK**：
+
+  | 文件 | md5 |
+  |------|-----|
+  | app.js | 29fb85322082d8a8b33c44ed00b97324 |
+  | agent-chat.js | 384c518e14bc65efd1d9af84dd55e499 |
+  | workbench.css | 063415423ae3d99327df5f117f76a183 |
+  | index.html | 8e4ac8f0a2c1d5621c2affe1bd925622 |
+  | tech-workbench.html | dcef522a1b3ed503fea928036209940c |
+  | assembly-integration.html | ed16933c65cdb4fe17eac02c6cffda4c |
+  | cost-review.html | 2f4549a5482fa1089f82338deff70f83 |
+
+  线上页面已带新缓存号（`filepreview1`），用户侧不会再命中旧 app.js / agent-chat.js。
