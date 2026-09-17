@@ -1596,7 +1596,9 @@
       const tabs = document.querySelectorAll('.list-tab');
       tabs.forEach(t => {
         if (t.textContent.trim().indexOf('待办任务') !== 0) return;
-        const n = WF.tasks.length;
+        // 待办计数只算还能做的任务：终态（已撤回 / 已完成）会留在列表里，
+        // 但不能被算成待办。
+        const n = WF.tasks.filter(t => t.status !== 'cancelled' && t.status !== 'completed').length;
         t.textContent = n ? '待办任务 (' + n + ')' : '待办任务';
       });
     }
@@ -1621,19 +1623,28 @@
     // 待办任务卡片：带时间 / 来源 / 步骤标记
     function taskCardHtml(t) {
       const claimed = t.status === 'claimed';
+      // 终态（已撤回 / 已完成）：留在列表里给一个明确出口，但不再挂领取入口。
+      const closed = t.status === 'cancelled' || t.status === 'completed';
+      const replacedBy = closed ? (t.replaced_by_task_no || '') : '';
       const techNew = t.task_kind === 'tech_new_product';
       // 支线任务用任务类型本身作标题，比"定向角色"有信息量得多。
       const side = { tech_new_product: '新增工艺', tech_cost: '成本测算',
                      tech_cost_return: '成本结果复核' }[t.task_kind];
       const way = side || (t.target_type === 'public' ? '公共任务'
         : t.target_type === 'role' ? '定向角色' : '指派给我');
+      // 状态胶囊显示中文状态（待领取 / 进行中 / 已完成 / 已撤回），不再一律显示成待领取。
+      const statusLabel = t.status_label || (closed ? '已撤回' : (claimed ? '进行中' : '待领取'));
+      const cta = closed ? (replacedBy ? '被新任务替代' : '已关闭')
+        : (side ? (claimed ? '继续处理' : '领取并去技术工艺')
+                : (claimed ? '继续处理' : '领取并继续'));
       return '<div class="request-card wf-task' + (techNew ? ' wf-task-technew' : '') +
+        (closed ? ' wf-task-closed' : '') +
         '" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) +
         '" data-kind="' + escH(t.task_kind || 'handoff') + '">' +
         '<div class="request-card-header"><span class="request-id">' + escH(way) +
         (side && t.task_no ? ' · ' + escH(t.task_no) : '') + '</span>' +
-        '<span class="request-status ' + (claimed ? 'status-reviewing' : 'status-draft') + '">' +
-        (claimed ? '进行中' : '待领取') + '</span></div>' +
+        '<span class="request-status ' + (claimed ? 'status-reviewing' : closed ? 'status-closed' : 'status-draft') + '">' +
+        escH(statusLabel) + '</span></div>' +
         '<div class="request-title">' + escH(t.title || '未命名报价') + '</div>' +
         /* 与另外三个助手的卡片同一套骨架：标题 → 两行 request-info → footer。
            原来这里多了一排 wf-chip 和一块备注，行数随内容变，同一行里卡片高矮不一，
@@ -1642,13 +1653,13 @@
         '<div class="request-info request-from">来自 <span>' + escH(t.from_display_name || '—') +
         '（' + escH(t.from_role_name || '') + '）</span> · 第 ' + escH(t.next_step_no) +
         ' 步 <span>' + escH(t.next_step_name) + '</span></div>' +
+        (replacedBy ? '<div class="request-info request-replaced">被新任务替代：<span>' +
+          escH(replacedBy) + '</span></div>' : '') +
         (t.note ? '<div class="request-info request-note">“' + escH(t.note) + '”</div>' : '') +
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
         escH(fmtTime(t.created_at)) + ' · ' + escH(t.next_role_name) + '负责</div>' +
-        '<span class="request-detail">' +
-        (side ? (claimed ? '继续处理' : '领取并去技术工艺')
-              : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
+        '<span class="request-detail">' + cta + '</span></div></div>';
     }
 
     // 技术工艺清单/历史卡片统一入口：按项目真实状态换算 stage，进入左会话+右工作台。

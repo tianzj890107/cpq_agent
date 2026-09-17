@@ -43,6 +43,8 @@
     task_sent: ['ti-send', '#0060E6'],
     task_received: ['ti-inbox', '#16a34a'],
     task_claimed: ['ti-user-check', '#f59e0b'],
+    task_superseded: ['ti-replace', '#ef4444'],
+    task_cancelled: ['ti-ban', '#94a3b8'],
   };
 
   /* ---------------- 样式 ---------------- */

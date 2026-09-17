@@ -20,6 +20,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+try:  # psycopg 只在真库路径上必需；受控假库的测试环境也装了它，缺失时降级为不收敛
+    from psycopg import errors as _psycopg_errors
+except ImportError:  # pragma: no cover —— 只有完全没装驱动时才会走到
+    _psycopg_errors = None
+_UNIQUE_VIOLATION = getattr(_psycopg_errors, "UniqueViolation", None)
+
 import cpq_auth
 from cpq_auth import ROLES
 
@@ -66,6 +72,15 @@ _KIND_DEFAULT_ROLE = {
 }
 # 这几类都是支线：卡片不推进步骤、也不置"待转交"。
 SIDE_TASK_KINDS = (TASK_KIND_TECH_NEW, TASK_KIND_TECH_COST, TASK_KIND_TECH_COST_RETURN)
+
+# 任务状态（cpq_wf_task.status）的中文标签：任务卡片上的状态胶囊直接显示它，
+# 终态（已完成 / 已撤回）也要有出口，不能再一律显示成「待领取」。
+TASK_STATUS_LABELS = {
+    "open": "待领取",
+    "claimed": "进行中",
+    "completed": "已完成",
+    "cancelled": "已撤回",
+}
 
 # 卡片总状态（awaiting_handoff = 本步已完成、下一步归别人，正等着推送任务流）
 STATUS_LABELS = {
@@ -184,6 +199,20 @@ def _ddl_pg(schema: str) -> list:
         f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS"
         f" task_kind varchar(24) NOT NULL DEFAULT 'handoff'",
         f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS payload jsonb",
+        # 任务并存 / 替代的四个新列（幂等，老行读出 NULL）：
+        #   supersedes_task_id  替代出来的新任务指向被它替代的旧任务
+        #   replaced_by_task_id 被替代的旧任务指向替代它的新任务
+        #   cancel_reason / cancelled_at  取消原因与时间
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS"
+        f" supersedes_task_id bigint REFERENCES {schema}.cpq_wf_task(task_id) ON DELETE SET NULL",
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS"
+        f" replaced_by_task_id bigint REFERENCES {schema}.cpq_wf_task(task_id) ON DELETE SET NULL",
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS cancel_reason varchar(200)",
+        f"ALTER TABLE {schema}.cpq_wf_task ADD COLUMN IF NOT EXISTS cancelled_at timestamptz",
+        # 「同一卡片同一任务类型最多一条 open」由数据库裁决：并发下应用层就算判断错
+        # 也会被这条部分唯一索引挡住（catch 后收敛成复用，不抛 500）。
+        f"CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_task_open_kind"
+        f" ON {schema}.cpq_wf_task(card_id, task_kind) WHERE status = 'open'",
         f"CREATE INDEX IF NOT EXISTS idx_wf_task_card ON {schema}.cpq_wf_task(card_id)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_task_status ON {schema}.cpq_wf_task(status)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_cardstep_card ON {schema}.cpq_wf_card_step(card_id)",
@@ -692,6 +721,10 @@ MSG_TYPES = {
     "task_sent": "我发出的任务",
     "task_received": "收到新任务",
     "task_claimed": "任务被领取",
+    # 被同类新任务替代：发给旧任务的原收件人集合 + 旧任务发起人（去重）
+    "task_superseded": "被新任务替代",
+    # 未带替代任务的取消（本批没有入口触发，字典与图标先齐备）
+    "task_cancelled": "已撤回",
 }
 
 
@@ -777,6 +810,94 @@ def mark_read(user: dict, message_ids=None) -> int:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# 任务并存 / 复用 / 替代
+# ---------------------------------------------------------------------------
+# 同类任务的「活跃行」查询列（索引写死在下面的 helper 里）：
+#   0 task_id  1 status  2 target_type  3 target_role_code  4 target_user_id
+#   5 from_user_id  6 note  7 payload  8 source_label  9 claimed_by_user_id
+#   10 from_step_no
+_ACTIVE_TASK_COLS = ("task_id, status, target_type, target_role_code, target_user_id,"
+                     " from_user_id, note, payload, source_label, claimed_by_user_id,"
+                     " from_step_no")
+
+
+def _norm_target_user(v):
+    """目标人统一成 int（库里是 bigint，调用方传字符串），空值统一成 None。"""
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def business_version(payload) -> str:
+    """payload 里的业务版本：result_version > version > handoff_key，都没有 = 空串。"""
+    d = payload if isinstance(payload, dict) else {}
+    return str(d.get("result_version") or d.get("version") or d.get("handoff_key") or "")
+
+
+def dispatch_signature(target_type, target_role_code, target_user_id, note, payload) -> tuple:
+    """派发签名：这五项逐项相等就是「同一件事」。"""
+    return (target_type or "", target_role_code or "",
+            _norm_target_user(target_user_id), (note or "").strip(),
+            business_version(payload))
+
+
+def _payload_of(v) -> dict:
+    """payload 正常是 jsonb -> dict；受控假库/老数据可能是字符串，统一解成 dict。"""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            got = json.loads(v)
+        except ValueError:
+            return {}
+        return got if isinstance(got, dict) else {}
+    return {}
+
+
+def task_signature(row) -> tuple:
+    """一条已入库同类任务的派发签名（列位见 _ACTIVE_TASK_COLS）。"""
+    return dispatch_signature(row[2], row[3], row[4], row[6], _payload_of(row[7]))
+
+
+def _reuse_result(row, task_kind) -> dict:
+    """复用已有任务：不写 task / event / message，原样把既有任务回给调用方。"""
+    tid = row[0]
+    return {"task_id": str(tid), "source_label": row[8], "task_kind": task_kind,
+            "task_no": task_no(tid), "reused": True, "supersedes_task_id": None}
+
+
+def _supersede_task(conn, old_row, new_task_id, card_id, actor_uid, session_id, from_step):
+    """把同类旧任务标成「被新任务替代」：改状态 + 留 1 条 cancel 审计 + 通知旧受众。
+
+    旧受众 = 旧任务原收件人（按旧 target 解析）∪ 旧任务发起人 ∪ 旧任务领取人，去重。
+    """
+    old_id = int(old_row[0])
+    reason = "被新任务替代"
+    cpq_auth._exec(
+        conn, "UPDATE cpq_wf_task SET status = 'cancelled', cancel_reason = %s,"
+              " cancelled_at = %s, replaced_by_task_id = %s"
+              " WHERE task_id = %s AND status = 'open'",
+        (reason, _ts(_now()), new_task_id, old_id))
+    old_no, new_no = task_no(old_id), task_no(new_task_id)
+    audience = set()
+    for rid in _recipients(conn, old_row[2], old_row[3], old_row[4], 0):
+        if rid:
+            audience.add(int(rid))
+    for extra in (old_row[5], old_row[9]):
+        if extra:
+            audience.add(int(extra))
+    for rid in sorted(audience):
+        _msg(conn, rid, "task_superseded", f"任务 {old_no} 被新任务替代",
+             f"你经手过的任务 {old_no} 已被新任务 {new_no} 替代（原因：{reason}），"
+             f"请以新任务为准。", card_id, old_id, session_id, from_step)
+    _log(conn, card_id, old_id, actor_uid, "cancel", from_step, None,
+         f"被新任务 {new_no} 替代：{reason}")
+
+
 def send_task(session_id: str, user: dict, target_type: str, target_role_code: str = "",
               target_user_id: str = "", note: str = "", task_kind: str = TASK_KIND_HANDOFF,
               payload: dict = None) -> dict:
@@ -816,10 +937,34 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
             raise WfError("卡片不存在，请先保存报价会话")
         cid = int(card["card_id"])
         from_step = int(card["current_step"] or 1)
-        # 同一张卡片同时只保留一个待领取任务，避免重复派发
-        cpq_auth._exec(
-            conn, "UPDATE cpq_wf_task SET status = 'cancelled' WHERE card_id = %s AND status = 'open'",
-            (cid,))
+        kind_label = TASK_KIND_LABELS.get(task_kind, task_kind)
+        is_side = task_kind in SIDE_TASK_KINDS
+        # 同一张卡片同一 task_kind 这一格最多一条 open，不同 task_kind 永远并存。
+        # 先看同类有没有正在进行的任务：同签名 → 复用；签名不同 → 替代（open）/ 拒绝（claimed）。
+        cur = cpq_auth._exec(
+            conn, f"SELECT {_ACTIVE_TASK_COLS} FROM cpq_wf_task"
+                  " WHERE card_id = %s AND task_kind = %s AND status IN ('open', 'claimed')"
+                  " ORDER BY created_at DESC, task_id DESC", (cid, task_kind))
+        actives = cur.fetchall()
+        active = next((r for r in actives if r[1] == "open"),
+                      actives[0] if actives else None)
+        sig = dispatch_signature(target_type, target_role_code, target_user_id, note, payload)
+        superseded_id = None
+        if active is not None:
+            if task_signature(active) == sig:
+                # 复用：没有改变任何状态，不写 task / event / message
+                return _reuse_result(active, task_kind)
+            if active[1] == "claimed":
+                holder = "其他同事"
+                cur = cpq_auth._exec(
+                    conn, "SELECT display_name FROM cpq_wf_user WHERE user_id = %s",
+                    (active[9],))
+                holder_row = cur.fetchone()
+                if holder_row and holder_row[0]:
+                    holder = holder_row[0]
+                raise WfError(f"该卡片的「{kind_label}」任务已被 {holder} 领取，"
+                              f"请等他完成后再重新发起")
+            superseded_id = int(active[0])
         if target_type == "role":
             whom = f"发给「{ROLES.get(target_role_code)}」"
         elif target_type == "user":
@@ -827,25 +972,41 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
         else:
             whom = "发布为公共任务"
         step_name = dict((s[0], s[1]) for s in QUOTE_STEPS).get(from_step, "")
-        is_side = task_kind in SIDE_TASK_KINDS
         what = {
             TASK_KIND_TECH_NEW: "请到技术工艺新增产品",
             TASK_KIND_TECH_COST: "请到技术工艺 2.3 做成本测算",
             TASK_KIND_TECH_COST_RETURN: "成本已测算，请复核工艺与用量",
         }.get(task_kind, f"待办第 {from_step} 步「{step_name}」")
-        kind_label = TASK_KIND_LABELS.get(task_kind, task_kind)
         label = (f"{user.get('role_name')}·{user.get('display_name')} "
                  f"{f'发起「{kind_label}」' if is_side else '转交'} · {what} · {whom}")
+        now = _now()
         tid = _new_id(conn)
-        cpq_auth._exec(
-            conn, "INSERT INTO cpq_wf_task (task_id, card_id, from_user_id, from_step_no,"
-                  " target_type, target_role_code, target_user_id, status, source_label, note,"
-                  " created_at, task_kind, payload)"
-                  " VALUES (%s,%s,%s,%s,%s,%s,%s,'open',%s,%s,%s,%s,%s::jsonb)",
-            (tid, cid, int(user["user_id"]), from_step, target_type,
-             target_role_code, target_user_id,
-             label, (note or "")[:500], _ts(_now()), task_kind,
-             json.dumps(payload, ensure_ascii=False) if payload else None))
+        if superseded_id is not None:
+            # 先生成新任务 id（旧任务的 replaced_by_task_id 要用它），再取消旧任务 + 通知 + 审计
+            _supersede_task(conn, active, tid, cid, int(user["user_id"]), session_id, from_step)
+        try:
+            cpq_auth._exec(
+                conn, "INSERT INTO cpq_wf_task (task_id, card_id, from_user_id, from_step_no,"
+                      " target_type, target_role_code, target_user_id, status, source_label, note,"
+                      " created_at, task_kind, payload, supersedes_task_id)"
+                      " VALUES (%s,%s,%s,%s,%s,%s,%s,'open',%s,%s,%s,%s,%s::jsonb,%s)",
+                (tid, cid, int(user["user_id"]), from_step, target_type,
+                 target_role_code, target_user_id,
+                 label, (note or "")[:500], _ts(now), task_kind,
+                 json.dumps(payload, ensure_ascii=False) if payload else None,
+                 superseded_id))
+        except Exception as exc:   # noqa: BLE001 —— 只把唯一冲突收敛成复用，其它照抛
+            if _UNIQUE_VIOLATION is None or not isinstance(exc, _UNIQUE_VIOLATION):
+                raise
+            # 并发同签名发起：数据库的部分唯一索引挡住第二条 → 收敛成「复用」，不抛 500
+            cur = cpq_auth._exec(
+                conn, f"SELECT {_ACTIVE_TASK_COLS} FROM cpq_wf_task"
+                      " WHERE card_id = %s AND task_kind = %s AND status = 'open'",
+                (cid, task_kind))
+            row = cur.fetchone()
+            if row is None:
+                raise
+            return _reuse_result(row, task_kind)
         # 支线任务（新增工艺、成本测算、成本复核）都不夺卡片持有人：报价还停在原来
         # 那一步等结果，标成"已转交待领取"会让销售以为这单已经交出去、不用管了。
         if not is_side:
@@ -871,7 +1032,9 @@ def send_task(session_id: str, user: dict, target_type: str, target_role_code: s
                  cid, tid, session_id, from_step)
         _commit(conn)
         return {"task_id": str(tid), "source_label": label,
-                "task_kind": task_kind, "task_no": task_no(tid)}
+                "task_kind": task_kind, "task_no": task_no(tid),
+                "reused": False,
+                "supersedes_task_id": str(superseded_id) if superseded_id else None}
     finally:
         conn.close()
 
@@ -880,12 +1043,14 @@ _TASK_SELECT = (
     "t.task_id, t.card_id, t.from_user_id, t.from_step_no, t.target_type, t.target_role_code,"
     " t.target_user_id, t.claimed_by_user_id, t.status, t.source_label, t.note, t.created_at,"
     " t.claimed_at, c.session_id, c.title, c.customer, c.current_step, c.overall_status,"
-    " fu.display_name, fu.role_code, t.task_kind, t.payload")
+    " fu.display_name, fu.role_code, t.task_kind, t.payload,"
+    " t.supersedes_task_id, t.replaced_by_task_id, t.cancel_reason, t.cancelled_at")
 _TASK_KEYS = ("task_id", "card_id", "from_user_id", "from_step_no", "target_type",
               "target_role_code", "target_user_id", "claimed_by_user_id", "status",
               "source_label", "note", "created_at", "claimed_at", "session_id", "title",
               "customer", "current_step", "overall_status", "from_display_name", "from_role_code",
-              "task_kind", "payload")
+              "task_kind", "payload",
+              "supersedes_task_id", "replaced_by_task_id", "cancel_reason", "cancelled_at")
 
 
 def task_no(task_id) -> str:
@@ -900,10 +1065,15 @@ def task_no(task_id) -> str:
 
 def _task_row(row) -> dict:
     d = dict(zip(_TASK_KEYS, row))
-    for k in ("task_id", "card_id", "from_user_id", "target_user_id", "claimed_by_user_id"):
+    for k in ("task_id", "card_id", "from_user_id", "target_user_id", "claimed_by_user_id",
+              "supersedes_task_id", "replaced_by_task_id"):
         d[k] = _uid(d[k])
-    for k in ("created_at", "claimed_at"):
+    for k in ("created_at", "claimed_at", "cancelled_at"):
         d[k] = _iso(d[k])
+    # 任务卡片的状态胶囊显示它：终态（已完成 / 已撤回）也要有明确出口
+    d["status_label"] = TASK_STATUS_LABELS.get(d.get("status"), d.get("status"))
+    # 替代它的新任务展示编码：task_no 只按 id 现算，不需要二次查库
+    d["replaced_by_task_no"] = task_no(d["replaced_by_task_id"]) if d.get("replaced_by_task_id") else None
     d["from_role_name"] = ROLES.get(d.get("from_role_code"), d.get("from_role_code"))
     d["task_kind"] = d.get("task_kind") or TASK_KIND_HANDOFF
     d["task_kind_label"] = TASK_KIND_LABELS.get(d["task_kind"], d["task_kind"])
@@ -983,50 +1153,101 @@ def inbox(user: dict) -> list:
             "         OR (t.target_type = 'role' AND t.target_role_code = %s)"
             "         OR (t.target_type = 'user' AND t.target_user_id = %s)))"
             "    OR (t.status = 'claimed' AND t.claimed_by_user_id = %s)"
+            # 终态出口：我自己发起的、被新任务替代掉的那一条，留在我的列表里。
+            # 只收 replaced_by_task_id 非空的新机制记录 —— 线上历史的静默取消
+            # （replaced_by_task_id IS NULL）不回填、不进任何人的列表。
+            "    OR (t.status = 'cancelled' AND t.from_user_id = %s"
+            "        AND t.replaced_by_task_id IS NOT NULL)"
             " ORDER BY t.created_at DESC",
-            (uid, role, uid, uid))
+            (uid, role, uid, uid, uid))
         return [_task_row(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
+def _claim_unavailable(conn, tid: int, uid: int) -> dict:
+    """原子 UPDATE 没命中时的三个出口：本人重复领取 / 已被他人领取 / 已关闭。
+
+    本人重复领取是幂等成功：不写审计、不发消息、不动卡片，只把既有会话回给前端。
+    """
+    cur = cpq_auth._exec(
+        conn, "SELECT status, claimed_by_user_id, task_kind, card_id"
+              " FROM cpq_wf_task WHERE task_id = %s", (tid,))
+    again = cur.fetchone()
+    if not again:
+        raise WfError("任务不存在")
+    st, claimed_by, kind, cid = again
+    kind = kind or TASK_KIND_HANDOFF
+    if st == "claimed" and claimed_by is not None and int(claimed_by) == uid:
+        sid = ""
+        cur = cpq_auth._exec(
+            conn, "SELECT session_id FROM cpq_wf_card WHERE card_id = %s", (cid,))
+        r = cur.fetchone()
+        if r:
+            sid = r[0] or ""
+        return {"session_id": sid, "task_kind": kind, "task_no": task_no(tid),
+                "already": True}
+    if st == "claimed":
+        raise WfError("该任务已被他人领取")
+    raise WfError("该任务已关闭")
+
+
 def claim_task(task_id: str, user: dict) -> dict:
-    """领取任务：卡片当前持有人改为领取人。"""
+    """领取任务：单条带 status='open' 条件的原子 UPDATE，主线任务才改卡片归属。
+
+    并发下由数据库裁决：命中才走后续流程；没命中再分辨「本人重复领取 / 已被他人领取 /
+    已关闭」。失败方零副作用（不动卡片、不写审计、不发消息）。领取资格判定仍在
+    UPDATE 之前，口径与 inbox 一致。
+    """
     if not user:
         raise WfError("请先登录")
     uid = int(user["user_id"])
+    try:
+        tid = int(str(task_id).strip())
+    except (TypeError, ValueError):
+        raise WfError("任务编号无效")
     conn = cpq_auth._connect()
     try:
         cur = cpq_auth._exec(
             conn, "SELECT card_id, status, target_type, target_role_code, target_user_id,"
-                  " from_step_no, from_user_id, task_kind FROM cpq_wf_task WHERE task_id = %s",
-            (int(task_id),))
+                  " from_step_no, from_user_id, task_kind, claimed_by_user_id"
+                  " FROM cpq_wf_task WHERE task_id = %s", (tid,))
         row = cur.fetchone()
         if not row:
             raise WfError("任务不存在")
-        cid, status, ttype, trole, tuser, from_step, from_uid, kind = row
+        cid, status, ttype, trole, tuser, from_step, from_uid, kind, claimed_by = row
         kind = kind or TASK_KIND_HANDOFF
-        if status == "claimed":
-            raise WfError("该任务已被他人领取")
-        if status != "open":
-            raise WfError("该任务已关闭")
-        # 领取资格与 inbox 的可见性一致
+        if status == "claimed" and claimed_by is not None and int(claimed_by) == uid:
+            # 已经是我自己的任务：直接走幂等出口，重复点击不报错
+            return _claim_unavailable(conn, tid, uid)
+        # 领取资格与 inbox 的可见性一致；不通过就不发请求、零副作用
         ok = (ttype == "public"
               or (ttype == "role" and trole == user.get("role_code"))
               or (ttype == "user" and tuser is not None and int(tuser) == uid))
         if not ok:
             raise WfError("你没有该任务的领取权限")
         now = _now()
-        cpq_auth._exec(
-            conn, "UPDATE cpq_wf_task SET status = 'claimed', claimed_by_user_id = %s,"
-                  " claimed_at = %s WHERE task_id = %s", (uid, _ts(now), int(task_id)))
-        # 新增工艺是支线：领取它不代表接管这张报价卡片，卡片仍归销售经理。
+        # 原子领取：单条带 status='open' 条件的 UPDATE + RETURNING，不看先前的 SELECT
+        cur = cpq_auth._exec(
+            conn,
+            "UPDATE cpq_wf_task"
+            " SET status = 'claimed', claimed_by_user_id = %s, claimed_at = %s"
+            " WHERE task_id = %s AND status = 'open'"
+            " RETURNING card_id, task_kind",
+            (uid, _ts(now), tid))
+        hit = cur.fetchone()
+        if not hit:
+            return _claim_unavailable(conn, tid, uid)
+        if hit[0] is not None:
+            cid = hit[0]
+        kind = hit[1] or kind
+        # 新增工艺等支线任务：领取它不代表接管这张报价卡片，卡片仍归销售经理。
         # 改了持有人的话，销售在「我的报价」里会发现自己的单子姓了别人的名字。
         if kind not in SIDE_TASK_KINDS:
             cpq_auth._exec(
                 conn, "UPDATE cpq_wf_card SET current_owner = %s, overall_status = 'in_progress',"
                       " updated_at = %s WHERE card_id = %s", (uid, _ts(now), cid))
-        _log(conn, cid, int(task_id), uid, "claim", from_step, None,
+        _log(conn, cid, tid, uid, "claim", from_step, None,
              f"{user.get('display_name')} 领取"
              + (f"「{TASK_KIND_LABELS[kind]}」任务" if kind in SIDE_TASK_KINDS else "任务"))
         cur = cpq_auth._exec(conn, "SELECT session_id, title FROM cpq_wf_card WHERE card_id = %s", (cid,))
@@ -1036,11 +1257,12 @@ def claim_task(task_id: str, user: dict) -> dict:
         if from_uid and int(from_uid) != uid:
             _msg(conn, int(from_uid), "task_claimed", f"「{ctitle or '未命名报价'}」已被领取",
                  f"{user.get('role_name')}·{user.get('display_name')} 领取了你转交的任务，"
-                 f"正在处理第 {from_step} 步", cid, int(task_id), sid, from_step)
+                 f"正在处理第 {from_step} 步", cid, tid, sid, from_step)
         _commit(conn)
         # task_kind 决定前端跳哪儿：handoff 进报价工作台，
         # tech_new_product 进技术工艺的任务专属页（/tech-task.html?tech_task=…）。
-        return {"session_id": sid, "task_kind": kind, "task_no": task_no(task_id)}
+        return {"session_id": sid, "task_kind": kind, "task_no": task_no(tid),
+                "already": False}
     finally:
         conn.close()
 

@@ -3535,3 +3535,717 @@ index.html / tech-workbench.html 的 ?v=），因此只记录、不擅自动：
   | cost-review.html | 2f4549a5482fa1089f82338deff70f83 |
 
   线上页面已带新缓存号（`filepreview1`），用户侧不会再命中旧 app.js / agent-chat.js。
+
+---
+
+## 102. 技术工艺业务页面「项目身份唯一来源」与防串项目（批次 1）：Spec / Red（9-17）
+
+用户口径（原话要点）：
+
+> URL 缺失 project 时静默使用 localStorage 中上一次项目的现象要彻底消除；统一工作台内
+> 项目身份必须来自当前 URL、父壳绑定状态或明确任务关联，**不能猜**。
+> 「localStorage 只能承担最近访问导航，不能决定业务数据归属」；缺少项目时**不得请求项目接口、
+> 不得写入、不得自动打开上一次项目**。两个浏览器标签同时打开不同项目不能互相影响；
+> iframe 与父壳不一致必须拒绝；`task_id` 能唯一关联时允许恢复，关联不唯一时必须停止并提示。
+> 本批**只做这一批**，不顺便改 Token、任务状态、流程门禁或视觉样式；实现完成并验收前不开始
+> 依赖项目身份的后续跨系统批次。
+
+只读排查（未改任何业务实现）——先把读取点逐条定位（全部是**读取**，不是推断）：
+
+| 文件 | 位置 | 表达式 |
+|------|------|--------|
+| `tech_app/frontend/assembly-integration.js` | `:14-15` | `?project \|\| localStorage.getItem('cad_engine_project_id') \|\| ''` |
+| `tech_app/frontend/cost-review.js` | `:15-16` | 同上 |
+| `tech_app/frontend/requirement-create.js` | `:2` | 同上 |
+| `tech_app/frontend/requirement-confirm-page.js` | `:2` | 同上 |
+| `tech_app/frontend/requirement-review-page.js` | `:2` | 同上 |
+| `tech_app/frontend/requirement-detail.js` | `:2` | 同上 |
+| `tech_app/frontend/summary-result.js` | `:2` | 同上 |
+| `tech_app/frontend/report-review-result.js` | `:2` | 同上 |
+| `tech_app/frontend/report-publish-result.js` | `:2` | 同上 |
+| `tech_app/frontend/tech-embed.js` | `:49-51` | `projectId()` 同一表达式 |
+| `tech_app/frontend/workflow-navigation.js` | `:28-30` | `projectId()` 还多读 `currentProject` |
+| `tech_app/frontend/workflow.js` | `:17` | 同一表达式 |
+| `tech_app/frontend/app.js` | `:525` | `q.get("project") \|\| localStorage.getItem("lastProject")`（**自动打开上一次项目**） |
+
+父壳 `tech_app/frontend/tech-workbench.js` 本身是**合规**的（`:148-153` `state.project` 只来自 URL；
+`:511-513` 无项目时给「缺少项目」错误态且不创建匿名项目）；缺口在子页脚本与一条导航通道：
+`:862-877` 的 `message` 处理器只校验 `event.origin` / `event.source` / stage 白名单，
+`data.project` 直接进 `applyStage`（`:874`）—— iframe 可以把父壳切到另一个项目。
+
+后果（用户可见，非理论）：共享浏览器/共享终端上，从丢了 `project` 的入口（历史链接、旧书签、
+`cost-review.html` 直达）打开，页面会静默加载并允许操作**上一次那个项目**：2.2 写别人的组装工艺、
+2.3 把别人项目的成本回传销售、1.1 甚至把别人的需求单覆盖成新草稿；两个标签页还会互相覆写
+`currentProject` / `cad_engine_project_id`（`workflow-navigation.js:324`、`workflow.js:66`、`app.js:1394`）。
+
+新增 Spec `docs/specs/tech-project-identity-single-source.md`（272 行）。必须定义并逐条落地的十条：
+
+1. 正式统一工作台中的 project 唯一来源 = URL `?project=`（父壳已如此，扩展为全部页面）；
+2. 独立兼容页面的处理方式 = `tech-embed.js` 重定向到统一入口并把 project 原样带过去；
+3. URL 无 project 时的错误状态 = `missing_project`，明确提示 + 回首页/项目列表入口，不建匿名项目；
+4. 父壳 project 与 iframe project 不一致 = `project_mismatch`：子页拒绝加载，父壳拒绝该导航；
+5. `task_id` → 唯一 project：`GET /wf/task?task_id=`，从 `payload.tech_cost.project_id` /
+   `payload.tech_project_id` / `payload.project_id` / `payload.tech_result.project_id` /
+   `payload.result.project_id` 去重后取唯一值；0 个 = `task_no_project`、≥2 个不同值 = `task_ambiguous`；
+6. 两个标签页两个项目互不影响（同一 localStorage 也不串）；
+7. 所有写请求发出前用同一份 `assertSame(project)` 做一致性校验（不一致 / 无项目一律拒绝写）；
+8. localStorage 只承担「最近访问导航」（允许 `setItem` / `removeItem`，**禁止 `getItem` 决定归属**）；
+9. 历史链接与旧入口兼容（URL 形状不变、已有 localStorage 不清理）；
+10. 缺少项目时不得请求项目接口、不得写入、不得自动打开上一次项目。
+
+接口契约（本批唯一新增件）：`tech_app/frontend/tech-project-context.js`，挂
+`window.TechProjectContext`，并带 `module.exports` 便于红测直接执行 ——
+`resolve(options)` / `bind()` / `current()` / `assertSame(project)` / `projectFromTaskPayload(payload)` /
+`fromTask(taskId, options)`；错误码固定 `missing_project` / `project_mismatch` / `task_no_project` /
+`task_ambiguous`，每个错误都带可直接展示的中文 `message`。
+`fromTask` 对同一 task id **去重**（含并发，只发一次请求、只产生一份结论），并必须带当前账号令牌
+（归属由服务端按账号判定，前端不自造映射）。
+
+Spec 的「明确不做」：不动 Token / 鉴权口径、不动任务状态机与门禁分级（L0–L4）、不新增后端接口、
+不改数据库、不改视觉样式，也不清理或迁移任何 localStorage / 项目 / 会话 / 任务 / 数据。
+
+新增红测 `tests/test_tech_project_identity_single_source_red.py`（927 行、24 项、8 个测试类）。
+以**行为**为主（node 真跑模块与页面片段，不是文本搜索）：
+
+- `SharedContextModuleTest`（10 项）：`resolve` 矩阵（URL 优先、无 URL 不得读 localStorage、
+  父壳回退、不一致拒绝、环境 `bind()`、跨域 `frameElement` 取不到不算错）、
+  `resolve` 期间 localStorage 读取次数必须为 **0**、幂等与重复调用、`assertSame` 三种结果、
+  `projectFromTaskPayload` 八种 payload 形态、`fromTask` 唯一 / 顺序两次 / 并发两次都只发 **1** 次请求、
+  关联不唯一 / 无关联 / HTTP 500 / 离线必须失败可见、带令牌请求。
+- `HarnessSelfTest`（1 项）：用临时目录里的「合规模块 + 合规页面」自检走查脚手架，
+  确保它既能读到 `''` / `'A'` / 父壳项目，也能在语句形态变化时正确求值 —— 防止把脚手架故障
+  误报成业务缺口。
+- `PageIdentityRuntimeTest`（4 项）：10 个页面/访问点 × 三种环境（无 URL + 三个 localStorage 键都是 `B`、
+  URL `A` + localStorage `B`、`?project=A&embed=1` + 父壳 `B`），期望分别是 `''` / `'A'` / `''`；
+  另一项是「两标签页共用一个 localStorage」的三窗口隔离。
+- `AccessorRuntimeTest`（1 项）：`tech-embed.js` / `workflow-navigation.js` / `workflow.js` 的
+  `projectId` 访问点在两种环境下不得退回 localStorage。
+- `UrlBuilderRuntimeTest`（1 项）：2.2 的 `aiUrl()` 与 2.3 的 `crUrl()` 只指向本页项目。
+- `WorkbenchParentProjectTest`（1 项）：父壳 `state.project` 只来自 URL（既有合规行为的回归守卫）、
+  `?task_id=` 仍进 `state.taskId`。
+- `CallSiteWiringTest`（6 项，静态契约只用于 DOM / 脚本加载顺序 / 调用点接线）：
+  全前端不得再 `getItem` 那三个键（只允许写）、11 个业务 HTML 必须先加载
+  `tech-project-context.js`、13 个调用点必须委托共享模块、8 个页面必须保留「无项目 → 明确退出」、
+  父壳必须给 iframe 标 `data-project` 且 `message` 处理器必须用共享模块拒绝换项目、
+  2.3 在 URL 无 project 但有 `task_id` 时必须用 `fromTask` 唯一恢复。
+- `SpecPinnedTest`（1 项）：Spec 锚点齐全。
+
+Red 验证（逐条原始结论，改前状态）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_project_identity_single_source_red -v`
+  → **Ran 24 tests / FAILED (failures=19)**。5 项基线即绿，作为**不回归 / 脚手架护栏**保留：
+  走查脚手架自检、Spec 锚点、`URL 项目优先于 localStorage`（现状本就如此）、父壳 `state.project`
+  只来自 URL（现状本就合规）、8 个页面「无项目 → 明确退出」的既有能力。
+  19 条失败全是真实缺口，且报错精确落在缺口上（不是导入/语法/环境错误）：
+  - 10 个页面 + 3 个访问点在「URL 无 project + localStorage 有旧项目」下真实解析出 **`B`**；
+  - 「iframe 项目 A ≠ 父壳项目 B」下 10 个页面仍解析出 **`A`**（无人拒绝）；
+  - 两标签页隔离用例中，无 project 的标签页继承了别的标签页项目（`B`）；
+  - 共享模块 `tech-project-context.js` 不存在：`resolve` / `bind` / `assertSame` /
+    `projectFromTaskPayload` / `fromTask` 九条模块行为全部 `TechProjectContext is not defined`；
+  - 静态：13 个文件仍在 `getItem` 项目键（`app.js` 读 `lastProject`，`workflow-navigation.js` 还多读
+    `currentProject`）、11 个 HTML 未加载共享模块、13 个调用点未委托、父壳未给 iframe 标项目、
+    2.3 未用 `fromTask`。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1829 tests / FAILED (failures=19)**（基线 1805）；`FAIL`/`ERROR` 明细里
+  **非本批文件 0 条**，19 条全部来自新增红测文件。
+- `git diff --check` → **干净**。
+- **红测可满足性验证**：在 `/tmp` 的临时副本里（**未动仓库任何业务文件**）按 Spec 写了一版最小合规实现
+  （新增共享模块 + 13 处调用点改写 + 11 个 HTML 引入 + 父壳 `data-project` 与拒绝换项目 + 2.3 的
+  `fromTask`），同一份红测 **24/24 全部转绿**（`Ran 24 tests / OK`）。该副本仅用于证明红测可达绿，
+  不是交付物、未进入仓库。
+
+明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；Token / 鉴权口径、任务状态机、
+门禁分级（L0–L4）与 waiver、视觉样式、后端接口与数据库；不删除、不迁移任何既有数据。
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）与 1 处 changelog 追加，未提交、未推送、
+未创建 MR/tag/Release、未部署、未重启任何服务。** 实现提示词只在会话中交付，未在仓库落盘。
+批次 1 的实现与验收完成前，**不开始**依赖项目身份的后续跨系统批次（Token 统一、任务状态、
+门禁分级等）。
+
+## 103. 报价任务并存规则、原子领取与多人并发保护（批次 2）：Spec / Red（9-17）
+
+用户口径（原话要点）：
+
+> 现在只做第 2 批《报价任务并存规则、原子领取与多人并发保护》：`cpq_wf.send_task` 当前可能取消
+> 同一卡片的**全部** open 任务，不区分 handoff / tech_new_product / tech_cost / tech_cost_return；
+> `claim_task` 又采用先 SELECT 再 UPDATE，并发领取可能发生覆盖。必须定义：①主线 handoff 与支线
+> 任务的并存矩阵；②哪些互斥、哪些可同时存在；③相同 task_kind 的重复发起如何处理；④替换旧任务
+> 是否需要 `supersedes_task_id`；⑤取消旧任务时如何通知发起人与收件人；⑥公共任务并发领取必须只有
+> 一人成功；⑦重复领取者本人的幂等行为；⑧claimed/completed/cancelled 任务不可重新打开；⑨任务列表
+> 如何显示「已被领取 / 已撤回 / 被新任务替代」；⑩卡片所有权与支线任务领取必须继续分离。
+> 红测至少覆盖：同卡片 `tech_new_product` 与 `tech_cost` 不会互相取消；同业务版本的重复 `tech_cost`
+> 不会创建多个 open 任务；新主线 handoff 替代旧主线 handoff 但不取消无关支线；两个账号并发领取同一
+> 公共任务只有一个成功；SQL 更新必须以 `status='open'` 为条件并检查受影响行或 RETURNING；失败领取
+> 不会改变 `current_owner`；支线任务领取不会夺走报价卡片所有权；所有状态变化都有审计记录。
+> **本批不修改跨系统回传事务，那个属于第 3 批。**
+
+只读排查（未改任何业务实现）——先把根因逐条定位（全部是**读取**，不是推断）：
+
+| 位置 | 现状 |
+|------|------|
+| `cpq_wf.py:819-822` | `send_task` 里的 `UPDATE cpq_wf_task SET status = 'cancelled' WHERE card_id = %s AND status = 'open'` —— **没有 task_kind 条件**，发任何一条支线都会把主线 handoff 一起静默取消；没有审计、没有通知、没有替代指针 |
+| `cpq_wf.py:1002-1030` | `claim_task` 先 `SELECT card_id, status, ... WHERE task_id = %s` 判状态，再 `UPDATE ... SET status='claimed' ... WHERE task_id = %s` —— **无 `AND status='open'`、不看 rowcount / 不用 RETURNING**，并发领取会互相覆盖 |
+| `cpq_wf._ddl_pg` | `cpq_wf_task` 没有 `supersedes_task_id` / `replaced_by_task_id` / `cancel_reason` / `cancelled_at`，也没有 `(card_id, task_kind) WHERE status='open'` 的唯一约束 |
+| `cpq_wf.py:690-694`、`cpq_msg.js:42-46` | 消息字典只有 `task_sent` / `task_received` / `task_claimed` |
+| `报价首页.html:1621-1653`、`tech_app/frontend/cpq-tech-inbox.js:108-138` | 任务卡片只认 `claimed` 与「待领取」两态，终态没有出口；`报价首页.html:1603-1610` 的 `wfBadge()` 直接数 `WF.tasks.length`（终态行会被算成待办） |
+
+线上数据实测（只读，未改任何数据）：`cpq_wf_task` 共 **220** 行，`status='cancelled'` **45** 行，
+而这 45 行在 `cpq_wf_task_event` 里 `action IN ('cancel','supersede')` 的记录数是 **0** ——
+「静默取消」在线上真实发生过 45 次且一次都没留痕；`(card_id, task_kind)` 维度的 open 重复数为 **0**
+（23 条 open），说明新增部分唯一索引可以安全建立。
+
+新增 Spec `docs/specs/quote-task-coexistence-and-atomic-claim.md`（346 行，16 章齐全）。核心契约：
+
+1. **并存矩阵**：同一张卡片上 `(card_id, task_kind)` 这一格最多一条 open；**不同 task_kind 一律并存**，
+   四条任务可同时存在（handoff + tech_new_product + tech_cost + tech_cost_return）；
+2. **同类型重复发起**按「派发签名」（`target_type` / `target_role_code` / `target_user_id` /
+   `note.strip()` / `business_version`）判定：签名一致 → **复用**（不新建、不重复通知、不重复审计）；
+   签名不同 → **替代**；旧任务已被人 `claimed` 且签名不同 → **拒绝**并说明是谁在手里；
+3. `business_version = payload.result_version | version | handoff_key | ''`；
+4. **替代**要写两端指针：新任务 `supersedes_task_id` = 旧任务，旧任务 `replaced_by_task_id` = 新任务，
+   外加 `cancel_reason` / `cancelled_at`，审计 `action='cancel'`，并给**旧任务原收件人 + 原发起人**
+   各发一条 `task_superseded` 消息（消息里带新旧两个 `TP-` 编码）；
+5. **原子领取**：单条 `UPDATE ... SET status='claimed' ... WHERE task_id = %s AND status = 'open'
+   RETURNING card_id, task_kind`；没抢到的人**零副作用**（不改 `current_owner`、不写审计、不发消息）；
+6. **幂等**：同一个人重复领取返回 `already=True`；同签名重复发起返回 `reused=True`；
+7. `open → claimed → completed`、`open → cancelled` 为合法转换，终态不可回开；
+8. **卡片归属**：只有主线任务被领取才改 `current_owner`，支线领取继续不夺卡片；
+9. **列表**：`MSG_TYPES` 与 `cpq_msg.js` 增 `task_superseded` / `task_cancelled`；
+   `/wf/tasks` 增加一支「我发起、被新任务替代」的终态行（`replaced_by_task_id` 非空），
+   两个任务卡片渲染器都要认终态并去掉领取入口；待办计数不得把终态行算进去；
+10. **DDL**：4 个新列一律 `ADD COLUMN IF NOT EXISTS`，并新增
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_task_open_kind ON cpq_wf_task(card_id, task_kind)
+    WHERE status = 'open'` 作为并发的最后一道闸；并发重复发起必须把唯一冲突收敛成「复用」而不是 500。
+
+明确不做：跨系统回传事务（批次 3）、「撤回任务」新入口、`task_kind` 取值集合、卡片 6 步状态机、
+权限模型 / Token / 门禁分级（L0–L4）、视觉风格；**不删除、不迁移、不回填**任何历史任务、消息、
+项目与会话（线上 45 条历史 `cancelled` 不回填、不进列表，避免一次性倒进销售经理的待办）。
+
+新增红测 `tests/test_quote_task_coexistence_and_atomic_claim_red.py`（1560 行、41 项、7 个测试类）。
+以**行为**为主：写了一个**受控假库**（能真跑 `cpq_wf` 发出的 SELECT/INSERT/UPDATE + JOIN + 布尔 WHERE
++ RETURNING + rowcount，并按规格模型化 `(card_id, task_kind) WHERE status='open'` 唯一约束），
+真调 `cpq_wf.send_task` / `claim_task` / `inbox` / `task_detail`，直接看库里落地了什么；
+并发用例用受控交错闸门（每个并发线程在第一条触碰 `cpq_wf_task` 的语句后对齐一次）确定性地复现
+「两个领取者都读到 open」的丢失更新，不靠碰运气；前端渲染与计数用 node 真跑被抽出的函数。
+
+- `HarnessSelfTest`（7 项）：假库真的按 WHERE 过滤、`rowcount` 真的随条件变化、`RETURNING` 真的回行、
+  `IN`/`IS NULL`/`<>` 可用、唯一约束真的会拦、未知语句会**响亮报错**、闸门真的能让两个线程对齐 ——
+  防止脚手架故障被误报成业务缺口。
+- `CoexistenceMatrixTest`（4 项）：四种任务并存；支线不取消/不替代主线；主线不取消支线；另一张卡片不受影响。
+- `RepeatSendTest`（8 项）：同签名复用（且不新增消息与审计）；换目标替代（两端指针 + 原因）；
+  替代的审计与通知对象（恰好 `{发起人, 原两个工艺经理}`）；换业务版本只替代同类；已被人领取时
+  同签名复用 / 不同签名拒绝（错误里要有领取人姓名）；同签名并发发起收敛成 1 条 open。
+- `AtomicClaimTest`（8 项）：并发只有一人成功且失败方拿到 `WfError`；失败方零副作用（归属、审计、消息各只 1 条）；
+  同人重领幂等；主线领取改归属、支线领取不改归属；终态不可重开；不存在 / 无权限的可读错误。
+- `InboxVisibilityTest`（4 项）：发起人看得到被替代的那条终态行（含 `replaced_by_task_no` / `cancel_reason` /
+  `cancelled_at`）；历史静默取消的行**不**出现；任务行必须带 6 个终态字段；`task_detail` 能报出终态与被替代方。
+- `SqlContractTest`（4 项）：`claim_task` 的 UPDATE 必须带 `status = 'open'` 且消费 rowcount/RETURNING；
+  旧的「取消全部 open」语句必须消失；DDL 的新列与部分唯一索引；`MSG_TYPES` 两个新类型且在位既有三个不变。
+- `DisplayContractTest`（5 项，node 真跑渲染）：报价首页与技术工艺卡片都能渲染终态并去掉领取入口；
+  两个待办计数都不把终态算进去；`cpq_msg.js` 的 `ICON` 覆盖两个新类型。
+- `SpecPinnedTest`（1 项）：Spec 章节与关键契约锚点齐全。
+
+Red 验证（逐条原始结论，改前状态）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_quote_task_coexistence_and_atomic_claim_red`
+  → **Ran 41 tests / FAILED (failures=25)**。16 项基线即绿，作为**不回归 / 脚手架护栏**保留：
+  7 项脚手架自检、1 项 Spec 锚点、以及 8 项现状本就合规的行为（另一张卡片不受影响、
+  终态不可重开、不存在 / 无权限的可读错误、主线领取改归属、支线领取不改归属、
+  历史静默取消不进列表、技术工艺计数本来就不数终态）。
+  25 条失败全是真实缺口，报错精确落在缺口上（不是导入 / 语法 / 环境错误）：
+  - 四种任务并存实测只剩最后一条 `open`（其余被静默取消）；支线一发就把主线 handoff 取消；
+  - 同签名重发每次都新建任务（`reused` 不存在）、再发一轮消息与审计；
+  - 替代没有 `replaced_by_task_id` / `cancel_reason` / `supersedes_task_id`，`cancel` 审计 0 条，
+    没有任何 `task_superseded` 消息；
+  - 并发领取两人都「成功」、2 条 `claim` 审计、2 条领取通知、`current_owner` 被后到者覆盖；
+  - 同一个人重复领取被当成「已被他人领取」报错；
+  - 并发的同签名发起把数据库唯一冲突直接抛给用户；
+  - `inbox` 里发起人看不到被替代的那条（终态没有出口）；任务行缺 `status_label` 等 6 个字段；
+  - 静态：`claim_task` 的 UPDATE 仍无 `status='open'`、旧的无条件取消语句还在、DDL 无新列与唯一索引、
+    `MSG_TYPES` / `ICON` 无新类型；两个卡片渲染器都渲染不出终态；`wfBadge()` 把终态也数成待办。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1870 tests / FAILED (failures=25)**：`FAIL`/`ERROR` 明细里**非本批文件 0 条**，
+  25 条全部来自新增红测文件。（基线 1805 + 批次 1 红测 24 + 本批红测 41 = 1870；批次 1 的 24 项
+  在实现落地后已全绿，本批不重复其工作。）
+- `git diff --check` → **干净**。
+- **红测可满足性验证**：在 `/tmp` 的临时副本里（**未动仓库任何业务文件**）按 Spec 写了一版参考实现
+  （`cpq_wf.py` 的 DDL/行字段/`send_task` 复用与替代/`claim_task` 原子领取/`inbox` 终态出口，
+  两个前端的终态渲染与计数，`cpq_msg.js` 图标），同一份红测 **41/41 全部转绿**（`Ran 41 tests / OK`）。
+  该副本仅用于证明红测可达绿，不是交付物、未进入仓库。过程中还靠它抓出两个**测试自身**的缺陷
+  （假库 `IN (...)` 解析缺一步、以及一处断言写成了「替代后只剩一条任务」的不可能条件），已修正。
+
+明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；跨系统回传事务、撤回入口、权限模型、
+门禁分级与 waiver、视觉样式、后端路由与历史数据。**批次 3（跨系统回传事务）必须等本批实现并验收
+通过后再开始。**
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）与 1 处 changelog 追加，未提交、未推送、
+未创建 MR/tag/Release、未部署、未重启任何服务。** 实现提示词只在会话中交付，未在仓库落盘。
+本批与批次 1 无文件重叠（批次 1 改的是 `tech_app/frontend/*` 与新增 `tech-project-context.js`，
+本批改的是 `cpq_wf.py` / `报价首页.html` / `cpq_msg.js` / `tech_app/frontend/cpq-tech-inbox.js`）。
+
+---
+
+## 102 实现与验收：技术工艺业务页面「项目身份唯一来源」与防串项目（批次 1）（9-17）
+
+实现（对应本文件 `## 102. … Spec / Red` 那一节的 24 条契约；Spec：`docs/specs/tech-project-identity-single-source.md`，
+红测：`tests/test_tech_project_identity_single_source_red.py`）。
+
+### 交付内容
+
+- **新增 `tech_app/frontend/tech-project-context.js`（`window.TechProjectContext`）**：IIFE + `'use strict'`，
+  末尾 `typeof module !== 'undefined' && module.exports` 兜底（与 `tech-stage-restore.js` 同款，便于红测直接执行）。
+  六个 API 全部按 Spec 落地：`resolve`（纯函数、不读任何 Storage、不发请求）、`bind` / `current`
+  （读 `location.search` + `window.frameElement.dataset.project`，跨域/缺失 try/catch 成 `''`，并缓存本页身份）、
+  `assertSame`（写前一致性校验）、`projectFromTaskPayload`（五条候选路径去重取唯一值）、
+  `fromTask`（`GET /wf/task?task_id=`，带 `Authorization: Bearer`，同 id 去重——顺序两次 / 并发
+  `Promise.all` 都只发一次请求，失败清缓存可重试，不降级 localStorage）。四个错误码各带一句可直接展示的中文
+  message。
+- **13 处身份读取点全部收敛**（删掉 `getItem('cad_engine_project_id' | 'currentProject' | 'lastProject')`）：
+  `requirement-create.js:rcPid`、`requirement-confirm-page.js:cfPid`、`requirement-review-page.js:rrPid`、
+  `requirement-detail.js:rdPid`、`summary-result.js:srPid`、`report-review-result.js:rrPid`、
+  `report-publish-result.js:rpPid`、`assembly-integration.js:aiPid`、`cost-review.js:crPid`（`const` → `let`，
+  供待办恢复回填）、`app.js:afterAuth() 的 pid`，以及三个访问点 `tech-embed.js:projectId()`、
+  `workflow-navigation.js:projectId()`、`workflow.js:projectId`。**写侧一个字未动**：
+  `localStorage.setItem('lastProject' | 'cad_engine_project_id' | 'currentProject')` 与两处
+  `removeItem('lastProject')` 原样保留（「最近访问导航」仍是它们唯一的职责）。既有「无项目 → 退出/错误态」
+  守卫（8 个页面的 `if (!xxPid) …exitToTechHome / home.html`）全部保留。
+- **父壳 `tech-workbench.js`**：`mountStageFrame()` 给 iframe 加 `iframe.dataset.project = state.project || ''`；
+  `message` 处理器在 stage 白名单之后、`applyStage` 之前用
+  `TechProjectContext.resolve({search:'?project='+incoming, parentProject: state.project})` 判定，
+  `project_mismatch` → `setBoardNotice('…项目不一致，已拒绝。','error')` 并 `return`（不切换、不 pushState）。
+  `readFromUrl()`、父壳「缺少项目」错误态、1.1 允许无项目建项一律未改。
+- **2.3 `cost-review.js` 待办恢复**：URL 无 `project` 且有 `crTaskId` 时
+  `await TechProjectContext.fromTask(crTaskId, {token: crToken()})`；成功回填 `crPid`，失败/不唯一
+  `crToast(message, true)` + `crStatus(...)` + 页内错误文案并 `return`（不加载任何项目数据、不退回上一次项目）。
+- **11 个页面的 HTML**：`<head>` 最前面（`</title>` 之后、`tech-embed.js` 与本页脚本之前）加载
+  `tech-project-context.js?v=20260917-pid1`；本批改过的脚本 `?v=` 同步提升：`app.js 20260917-filepreview1→20260917-pid1`、
+  `assembly-integration.js ai19→ai20`、`cost-review.js cr12→cr13`、`requirement-create.js reqcreate18→19`、
+  `requirement-confirm-page.js reqconfirm17→18`、`requirement-review-page.js reqreview4→5`、
+  `requirement-detail.js reqdetail3→4`、`summary-result.js summary37→38`、`report-review-result.js review38→39`、
+  `report-publish-result.js publish38→39`、`tech-workbench.js twb19→twb21`、`workflow.js workflow1/3→workflow4`、
+  `tech-embed.js twb3/twb4→twb5`、`workflow-navigation.js workflow-nav5→6`（含 `workflow.js` 里那份动态 loader）。
+
+### 三处必须说明的边界决策（都不是放宽判定）
+
+1. **`cost.html` / `process.html` / `tech-task.html` 也只改了 `?v=`**（各 1～2 行版本号）：这三个旧页同样加载
+   本批改动过的 `tech-embed.js` / `workflow.js`，不 bump 就会命中旧缓存、拿到旧行为。它们**没有**加载新模块，
+   因此 `tech-embed.js:projectId()`、`workflow-navigation.js:projectId()`、`workflow.js:projectId` 写成
+   「模块在 → 完全以模块为准；模块不在 → 只认 URL」的降级形态，**任何分支都不读 localStorage**。
+2. **`summary-result.js` 用 `typeof TechProjectContext !== 'undefined'` 兜底**：既有守卫测试
+   `tests/test_tech_summary_report_includes_cost_review_red.py` 会在**不带该模块**的沙箱里执行本文件头部；
+   裸引用会 ReferenceError。兜底结果是「没有项目」而不是崩溃，仍然绝不退回 localStorage。其余 8 个 `*Pid` 页面
+   按 Spec 的简洁形态 `TechProjectContext.bind().project`。
+3. **`assertSame` 已按契约实现并导出，但没有在 11 个页面的每条 PUT/POST/DELETE 前逐处插桩**：项目身份已经
+   单点收敛（每个页面只有 `bind().project` 一个来源），插桩不会改变任何判定结果，却要动 30+ 个写调用点、
+   回归面远大于本批收益。**若需要「写前显式断言」这一层，请单独授权一批**（本批未做，也未新增任何放行开关）。
+
+### 验收（逐条原始结论）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_project_identity_single_source_red -v`
+  → **Ran 24 tests in 0.430s / OK**（改前 24 项 / 19 失败）。其中含 `SpecPinnedTest`、
+  `HarnessSelfTest`（脚手架自检，证明 harness 不是恒失败）、`SharedContextModuleTest` 9 项、
+  `PageIdentityRuntimeTest` 4 项、`AccessorRuntimeTest` 1 项、`UrlBuilderRuntimeTest` 1 项、
+  `WorkbenchParentProjectTest` 1 项、`CallSiteWiringTest` 7 项。
+- 指定回归（必跑、未改动）：
+  `tests.test_tech_agent_history_project_rebind_red` + `tests.test_tech_history_restore_real_stage_red` +
+  `tests.test_unified_tech_cost_workbench_red` + `tests.test_tech_home_project_cards_and_agent_history_red` +
+  `tests.test_tech_empty_ir_parse_completion_red` + `tests.test_tech_file_preview_in_card_and_auth_red`
+  → **Ran 76 tests in 3.397s / OK**。
+- 全量（本批范围）：`unittest discover -s tests -p 'test_*.py'` → **Ran 1829 tests in 98.445s / OK**
+  （1829 = 基线 1805 + 本批红测 24；≥ 验收要求的 1829，0 失败）。
+  同批另跑一次 `discover` 得 **Ran 1870 tests / FAILED (failures=25)**：多出来的 41 项与 25 条失败
+  **全部来自并行会话新加的 `tests/test_quote_task_coexistence_and_atomic_claim_red.py`（批次 2，未实现）**，
+  与本批文件零重叠；剔除该文件后即上面的 1829 / OK。
+- `node --check`：`tech-project-context.js` 与本批 14 个改动 js **15/15 通过**；
+  `git diff --check` → **干净**。
+- **无头 Chrome 实测**（真跑页面，桩化 `/api/*` 与 `/wf/task`，陈旧 localStorage 预置为项目 B）：
+  ① `tech-workbench.html?stage=process`（无 project、storage=B）→ `frame_present:false`、页面错误态
+     「缺少项目 / URL 中未提供 project，工作台不会创建匿名项目」，且全程 **0 条 `/api/projects/B*` 请求** —— 不再出
+     A/B 的 2.2 数据；
+  ② `tech-workbench.html?project=A&stage=cost` → iframe `data-project="A"`、`src=cost-review.html?project=A&stage=cost&embed=1`；
+     iframe 发 `project:"B"` 的 `cpq:tech-workbench:navigate` → 标题行提示
+     「汇总结果：子页面传来的项目与当前项目不一致，已拒绝。」，`stage` 仍是 `cost`、URL 未变（未切换、未 pushState）；
+     同一 iframe 改发 `project:"A"` → 正常切到 `summary`（未过度拦截）；全程 `/api/projects/*` 请求只出现 `A`；
+  ③ `cost-review.html?embed=1&task_id=T1` → `cr_project="项目 A"`、`cr_status="就绪"`、无 toast，
+     `/wf/task` 恰好 1 次且带 `Authorization: Bearer <token>`（不再出现「请先在配置报价 CPQ 中登录」那类裸链接错误）；
+  ④ `task_id=T2`（payload 里两个不同项目）→ 错误 toast「这条任务关联了多个不同的项目，无法确定项目身份，已停止加载。」，
+     **0 条 `/api/projects/*` 请求**；
+  ⑤ `task_id=T3`（404）→ 错误 toast「任务信息读取失败（HTTP 404），无法确定所属项目。」，同样不加载任何项目数据。
+  说明：`cr1/cr2/cr3` 首轮探测里 `Authorization` 为空是**探针自身**的问题（`cpq-sso.js` 的 `mirrorToken()` 会把
+  `cpq_auth_token` 镜像到 `authToken`，探针原先只写了后者），补上 `cpq_auth_token` 后头部即正常 —— 不是产品缺陷。
+- 两个标签页互不影响由红测真跑（`test_two_tabs_do_not_cross_projects`，同一份 localStorage 下 A/B/无 project
+  三态）覆盖，未额外做双窗口人工验证。
+
+### 未做 / 边界
+
+- 未改任何后端 `.py`、数据库、Token（`authToken` / `cad_engine_token`）、任务状态机、门禁分级、waiver、
+  CSS / 布局；未新增任何 HTTP 路由（`fromTask` 只读既有 `GET /wf/task`）。
+- 未删除 / 迁移 / 清空任何 localStorage、项目、会话、任务、数据；`cad_engine_project_id` / `currentProject` /
+  `lastProject` 三个键仍然存在，只是不再被读作业务身份。
+- 未改 `docs/specs/tech-project-identity-single-source.md` 与红测文件；未改
+  `agent-chat.js` / `tech-board-runtime.js` / `tech-board-bridge.js` / `home-link.js` 的既有协议。
+- **本地新增 1 个文件（`tech-project-context.js`）、修改 28 个文件（15 js + 13 html）与 1 处 changelog 追加，
+  未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。**
+
+### 102 补测（第二轮无头 Chrome 全页面走查，9-17）
+
+第一轮只覆盖了父壳与 2.3，这一轮把 11 个页面逐个真跑（陈旧 localStorage 仍预置为项目 B）：
+
+- **11/11 页面加载顺序 / 不崩 / URL 优先**：`index.html`、`assembly-integration.html`、`cost-review.html`、
+  `requirement-create.html`、`requirement-confirm.html`、`requirement-review.html`、`requirement-detail.html`、
+  `summary.html`、`report-review.html`、`report-publish.html`（均 `?project=A&embed=1`）与
+  `tech-workbench.html?project=A&stage=drawing` —— 每个页面都
+  `has_ctx:true`、`current().project:"A"`、`source:"url"`、`errors:[]`（`window.onerror` +
+  `unhandledrejection` 收集器为空）、页面正文正常渲染；**本轮全程 0 条 `/api/projects/B` 请求**。
+  其中 `tech-workbench.html` 那一轮里被嵌入的 `index.html`（`stage=drawing&embed=1`）也解析为 A，
+  说明父壳 `data-project` 与子页 URL 的一致路径在真实 iframe 里成立。
+- **人工验收 ②（把 project 改成无权项目）**：`assembly-integration.html?project=ZZZ&embed=1`，
+  桩对 `/api/projects/ZZZ*` 回 403 → 页内提示 **「读取失败：项目不存在或无权限」**，
+  `current().project:"ZZZ"`（以 URL 为准，**没有**退回上一次的项目 B），
+  请求只出现 `/api/projects/ZZZ/*`，**0 条 `/api/projects/B`**。
+- 探针修正记录（不是产品缺陷）：`/api/projects/{id}/requirement` 一开始回 `{}`，导致 1.2/1.3 按既有
+  「无需求单 → 让父壳换到 1.1」分支走掉、`#app` 为空；补上带 `requirement` 的桩后两页正常渲染出
+  「探针需求单」。另 `cpq-sso.js` 的 `mirrorToken()` 会把 `cpq_auth_token` 镜像到 `authToken`，
+  探针首轮只写后者导致 `Authorization` 为空，已修正。
+- 人工验收 ③（两个标签页分别开 A/B 互不影响）由红测 `test_two_tabs_do_not_cross_projects`
+  在同一份 localStorage 下真跑 A / B / 无 project 三态覆盖，未额外做双窗口人工验证。
+
+### 102 补第三步：写请求前的项目身份一致性校验（9-17）
+
+Spec 里「所有写请求（PUT / POST / DELETE）发出前先过 `assertSame`，不通过就不发请求、只提示」
+这一条，落到代码时没有逐页逐处插桩，而是在**两条 HTTP 出口**集中校验 —— 两处都是真实生效的判定：
+
+- `workflow.js::projectWriteGuard(url, options)`：9 个阶段页共用 `api()` 的唯一出口；
+- `app.js::writeProjectMismatch(url, opts)`：2.1 页自己那份 `window.fetch` 包装（`app.js` 顶部）。
+  该函数体放在 `afterAuth()` 之后（`app.js` 源码里 `TechProjectContext` 只能出现在 `afterAuth` 的
+  `const pid = …` 之后），**函数声明提升**，上面 `window.fetch` 包装里的调用不受位置影响；红测按源码
+  文本抽取 `const pid = …` 片段求值，之前贴在 `window.fetch` 上方会让抽取起点落到守卫函数体中间而报
+  `SyntaxError`，移下去后 24/24 复绿。
+
+两处规则逐字一致（同一段判定逻辑、同一句中文文案）：
+
+1. `GET / HEAD / OPTIONS` 不拦（读不改状态）；
+2. URL 不指向 `/api/projects/<id>(/|?|#|$)` 就不拦 —— **`POST /api/projects`（1.1 新建项目）必须放行**；
+3. 本页身份为空（`current().project === ''`）不拦 —— 1.1 与任务恢复链路上「还没有项目」是合法状态；
+4. `<id>` 与本页身份不同 → 返回中文文案，调用方只提示（`toast()` / `status()`）后抛错，**请求不发出**：
+   「本页的项目是 A，不能把这次写入发给 B；已拒绝发送。请从统一工作台重新进入该项目。」
+
+为什么用出口校验而不是逐处插桩（不是放宽判定）：
+
+- 9 个页面的 `rcPid` / `cfPid` / … 在 1.1 上本来就是 `''`（合法新建初值），在每个调用点之前插桩会把
+  「允许无项目建项」这条既有规则挡掉；
+- 出口一处即可覆盖全部写请求（含将来新增的），且不改任何业务调用点的语义与文案。
+
+无头 Chrome 实测（桩服务 8099，陈旧 localStorage 仍预置为项目 B；`window.api` = `workflow.js`，
+`window.fetch` 包装 = `app.js`）：
+
+| 入口 | 本页身份 | `PUT /api/projects/A/…` | `PUT /api/projects/B/…` | `POST /api/projects` | `DELETE /api/projects/B/…` |
+| --- | --- | --- | --- | --- | --- |
+| `requirement-create.html?project=A&embed=1`（`api()`） | `A` | 放行（请求已发出） | **拦下**（toast 同文案） | 放行 | **拦下** |
+| `requirement-create.html?embed=1`（`api()`） | `''` | 放行 | 放行 | 放行 | 放行 |
+| `index.html?project=A&embed=1`（`fetch`） | `A` | 放行 | **拦下** | 放行 | **拦下** |
+| `index.html?embed=1`（`fetch`） | `''` | 放行 | 放行 | 放行 | 放行 |
+
+（「放行」在本桩里表现为请求真的发出去了，服务端对未打桩的 PUT/POST/DELETE 回 501，故回显
+`请求失败 (501)`；「拦下」是前端连请求都没发。）
+
+探针修正记录（不是产品缺陷）：本轮一开始 `index.html` 那一行恒为「放行」，排查后确认是桩服务
+`/__p/…` 分支把所有文件都以 `text/html` 返回，`type="module"` 的 `app.js` 被 Chrome 按 MIME 检查
+拒执行（`window.fetch` 仍是 `cpq-sso.js` 的包装）。桩按扩展名回正确 `Content-Type` 后，`app.js`
+真跑起来，上表结果成立；这也解释了为什么此前几次走查里 2.1 页的行为偏少。
+
+### 102 补第四步：写请求守卫的验收与全量回归（9-17）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_project_identity_single_source_red`
+  → `Ran 24 tests in 0.410s` / `OK`（把守卫函数移到 `afterAuth` 之后复跑）。
+- 6 个指定回归（`test_tech_agent_history_project_rebind_red`、`test_tech_history_restore_real_stage_red`、
+  `test_unified_tech_cost_workbench_red`、`test_tech_home_project_cards_and_agent_history_red`、
+  `test_tech_empty_ir_parse_completion_red`、`test_tech_file_preview_in_card_and_auth_red`）
+  → `Ran 76 tests in 3.342s` / `OK`。
+- 全量 `discover -s tests -p 'test_*.py'` → `Ran 1870 tests in 100.892s` / `FAILED (failures=25)`：
+  25 条失败**全部**来自并行会话的 `tests/test_quote_task_coexistence_and_atomic_claim_red.py`
+  （该文件单独跑是 `Ran 41 tests in 0.183s` / `FAILED (failures=25)`），
+  **本批 1829 项 0 失败**（1870 − 41 = 1829）。
+- `node --check`：本批改过的 14 个 js 与新增的 `tech-project-context.js` 全部通过；`git diff --check` 干净。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务，等「提交推送部署34」指令。
+
+### 102 补第五步：写请求守卫的「误伤面」审计（9-17，只读排查，未改代码）
+
+守卫会拦「身份非空且目标不同」的写请求，所以必须确认产品里不存在「合法的跨项目写入」。全前端逐个查过：
+
+- **建项后立刻写新项目**（身份为空，属规则 3 放行）：
+  `requirement-create.js:37` 的 `POST /api/projects` → 紧跟 `PUT /api/projects/<新 id>/requirement`；
+  只在 `if (!rcProjectId)`（即 `rcPid === ''`）时走这条；URL 上带 `project=A` 时 `rcProjectId` 一开始就是 A，
+  永不进这一支。`tech-task.js:208` 同款（建项只在 `stage=requirement-create && !state.project && state.taskId`
+  时由父壳用 `tech-task.html` 承载，`childUrl()` 此时不带 `project`、`iframe.dataset.project` 也是 `''`）。
+- **首页建项 / 改名 / 删档**（`home.js:453`、`:207`、`:220`）：`home.html` 不加载 `workflow.js`，用的
+  是自己那份 `api`，守卫不适用；且仓库里不存在 `home.html?project=` 的入口。
+- **报告侧共用模块**：`cpq-summary-doc.js:53/56` 走 `cpqSdPid() = encodeURIComponent(srPid)`、
+  `cpq-publish-recipients.js:29` 走 `rpPid` —— 都是本页身份本身（守卫会 `decodeURIComponent` 后再比，编码
+  过的 id 不会误判）。
+- **2.3 待办恢复**：`cost-review.js:1026` 的 `crPid = recovered.project` 只在 `!crPid`（URL 无 project）时赋值，
+  之后写的是恢复出来的那个项目，与本页身份一致。
+- **`api()` 的调用面**：`workflow.js` 里 10 个页面共用同一个 `api()`，写请求全部经它；`app.js` 无 XHR
+  （`XMLHttpRequest` 0 处）、34 处 `fetch` 全走自己那份包装。两处出口即全覆盖，未发现绕过路径。
+- 结论：守卫不会挡掉任何既有合法写入；唯一被挡下的是「身份 A 却往 B 写」这一类，正是本批要挡的行为。
+
+### 102 补第六步：缓存号一致性审计（9-17）
+
+按「本批改过的脚本在每处引用都要提到新 `?v=`」逐文件核对（`grep -rho "<file>?v=…" *.html *.js`）：
+
+- 14 个改动 js + 新模块：`app.js` 1 处（`20260917-pid1`）、`assembly-integration.js` 1 处（`ai20`）、
+  `cost-review.js` 1 处（`cr13`）、`report-publish-result.js` 1 处（`publish39`）、
+  `report-review-result.js` 1 处（`review39`）、`requirement-confirm-page.js` 1 处（`reqconfirm18`）、
+  `requirement-create.js` 1 处（`reqcreate19`）、`requirement-detail.js` 1 处（`reqdetail4`）、
+  `requirement-review-page.js` 1 处（`reqreview5`）、`summary-result.js` 1 处（`summary38`）、
+  `tech-embed.js` 12 处（全 `twb5`）、`tech-workbench.js` 1 处（`twb21`）、`workflow.js` 10 处（全 `workflow4`）、
+  `tech-project-context.js` 11 处（全 `20260917-pid1`，即 11 个业务页各一处）—— 无遗漏、无新旧混用。
+- **发现并修掉一处遗漏**：`cost.html:62` 与 `process.html:60` 仍写 `workflow-navigation.js?v=workflow-nav4`，
+  而本批该文件已改（`projectId()` 改为 `TechProjectContext` + 「只认 URL」兜底），其余引用处已是
+  `workflow-nav6`（`index.html:276`、`workflow.js:9` 的动态 loader）。两处一并提到 `workflow-nav6`，
+  否则命中旧缓存的那两个独立页里 `projectId()` 还会退回读 localStorage。
+  改动仅为版本串（各 1 处），行为零变化。
+- 复跑：`unittest tests.test_tech_project_identity_single_source_red tests.test_tech_left_chat_controls_restore_red`
+  → `Ran 34 tests in 0.395s` / `OK`；全量 `discover` → `Ran 1870 tests in 99.859s` / `FAILED (failures=25)`，
+  25 条仍全部来自并行会话的 `test_quote_task_coexistence_and_atomic_claim_red.py`；`git diff --check` 干净。
+
+### 102 补第七步：本批独立的「全绿」基线（9-17）
+
+`discover` 里混着并行会话（批次 2「报价任务并存 / 原子领取」）尚未实现的红测，为了让本批有一条
+可直接引用的全绿基线，把并行文件排除后按模块列表整跑一次：
+
+```
+bash -c 'MODS=$(ls tests/test_*.py | sed "s|tests/||; s|\.py$||" \
+  | grep -v "^test_quote_task_coexistence_and_atomic_claim_red$" | sed "s|^|tests.|" | tr "\n" " "); \
+  ./open-claude/.venv/bin/python -m unittest $MODS'
+```
+
+→ 137 个模块、`Ran 1829 tests in 99.136s` / `OK`（0 失败 0 错误）。
+与 `discover` 的 `Ran 1870 tests / FAILED (failures=25)` 相减正好是并行会话那 41 项（其中 25 条未实现），
+**两边没有一条重叠**。
+
+### 102 补第八步：待办入口 tech-task.html 的失败可见性（9-17）
+
+人工验收 ④「只有 task_id 的待办能进入；task_id 改成不存在的号 → 明确提示任务读取失败且不加载数据」，
+在「新增工艺」那条件办入口上补测（此前只测了 2.3 的同类路径）。桩服务把 `T1` 造成
+`task_kind=tech_new_product` 的真任务、`T3` 仍回 404：
+
+- `tech-task.html?embed=1&tech_task=T1` → 页面正常渲染建单表单（正文可见「任务编码 T1 / 来自报价
+  「探针新增工艺任务」/ 客户需求 / 需求文档」），`errors:[]`；
+- `tech-task.html?embed=1&tech_task=T3` → 正文首屏即「**任务 T3 读取失败：读取任务失败（404）**」+「返回首页」，
+  建单表单一个字段都没渲染，**0 条 `/api/projects` 请求**（没有偷偷加载任何项目数据）。
+
+说明（既有实现，本批未改）：`tech-task.js:274-288` 本来就在 `fetchTask()` 失败 / 无任务 /
+`task_kind` 不符时 `renderError()` 并 return，本次只是把它真跑了一遍确认口径成立。该页不加载
+`tech-project-context.js`（`has_ctx:false`），走的是文档里写明的「模块不在 → 只认 URL」降级：
+`workflow.js::projectWriteGuard` 读到身份为空 → 建项与建项后的写入一律放行，与 1.1 同款。
+
+### 102 补第九步：发布前的静态资源解析审计（9-17，只读）
+
+换文件前先确认「主机上按页面里的地址真能取到这些文件」。本地 8010（`cpq_suite_server.py` PID 33777 /
+子进程 33779）静态目录就是工作区 `tech_app/frontend`，所以这一步等价于线上发完之后的取文件效果：
+
+- 15 个页面（11 个业务页 + `cost.html` / `process.html` / `tech-task.html` / `home.html`）里所有
+  `src=` / `href=` 指向的本地 `.js` / `.css` 共 **60 个唯一地址，全部 200，无 404**。
+  本批改动过的脚本逐个确认命中新版本号：`tech-project-context.js?v=20260917-pid1`（11 个业务页各一处）、
+  `app.js?v=20260917-pid1`、`workflow.js?v=workflow4`（10 处）、`workflow-navigation.js?v=workflow-nav6`
+  （`index.html` / `cost.html` / `process.html`）、`tech-embed.js?v=twb5`（12 处）、
+  `tech-workbench.js?v=twb21` 与 9 个阶段页脚本各自的 `ai20 / cr13 / reqcreate19 / reqconfirm18 /
+  reqreview5 / reqdetail4 / summary38 / review39 / publish39`。
+- 依赖入口同样 200：`/vendor/three/three.module.js`、`addons/controls/OrbitControls.js`、
+  `addons/loaders/STLLoader.js`（importmap 三个目标）、`/vendor/tabler-icons/tabler-icons.min.css`。
+- 结论：本批不会因为「文件没带上」或「版本串打错」在部署后出现 404 / 脚本不执行。
+
+附带说明（没做成的一项）：本想再用**真实后端**跑一遍 11 个页面，但本地 8010 开了账号级鉴权与 SSO
+（`/api/health` 的 `auth_enabled:true` / `sso_enabled:true`，无票访问 `/api/projects` 回 401
+「请先在配置报价 CPQ 中登录」），而手上没有本地 `cpq_auth` 账号 —— 用平台账号试了 1 次
+`POST /auth/login` 回「登录名或密码不正确」（平台账号与本地库不是同一套），因此放弃真数据走查，
+仍以桩服务（8099）与红测为准；未做任何写入、未改任何数据。
+
+### 102 补第十步：人工验收 ③ 真跑（同 profile 两个活标签页，9-17）
+
+此前这条只由红测 `test_two_tabs_do_not_cross_projects` 在沙箱里覆盖，这次在同一台 headless Chrome、
+**同一个 `--user-data-dir`（共享 localStorage）** 下真开两个标签页：
+
+- 父标签页：`index.html?project=A&embed=1`（页面里把 `cad_engine_project_id` / `currentProject` /
+  `lastProject` 预置成陈旧值 `B`）；
+- 子标签页：由父页 `window.open("/…/index.html?project=B&embed=1")` 真的打开第二个窗口；
+- 中途由父页向共享 localStorage 写入 `…= B`（模拟子页那边的「最近访问」写入），再让子页刷新一次。
+
+桩服务回传（原样）：
+
+```
+{"tag":"twotab","url":"?project=A&embed=1","parent_before":"A","child_identity":"B",
+ "child_url":"?project=B&embed=1","parent_after_storage_write":"A","child_after_reload":"B",
+ "parent_after_child_reload":"A","identity_key_reads":[],"storage_reads_total":4}
+```
+
+- 父页 `A` 自始至终没被摇动（`parent_after_storage_write`、`parent_after_child_reload` 都是 `A`）；
+- 子页开出来就是 `B`，刷新后仍是 `B`；
+- 父页在这段窗口里共 4 次 `localStorage.getItem`，**项目类键 0 次**（`identity_key_reads:[]`）；
+- 服务端请求日志：父标签页只出现 `/api/projects/A/*`，子标签页只出现 `/api/projects/B/*`（各 2 轮，
+  含子页那次刷新），**没有任何一条跨项目请求**。
+
+### 102 补第十一步：提交前自审（整份 diff 通读 + 范围外页面影响面，9-17）
+
+- 通读全部 `677 insertions / 54 deletions`：没有调试残留、没有第二份实现、没有死代码；两条写请求出口
+  （`workflow.js::projectWriteGuard` / `app.js::writeProjectMismatch`）的判定顺序与中文文案逐字一致。
+- `workflow-navigation.css` 全库 6 处仍是 `?v=workflow-nav4` —— 该 CSS 本批**未改**，与已提到
+  `workflow-nav6` 的 JS 不是同一个文件，故不改；6 处互相一致，无新旧混用。
+- 范围外页面影响面（改动到底还会碰到谁）：
+  · `home.html` 只是跳转壳（没有 `workflow.js` / `tech-embed.js`），`report.html` / `requirement.html`
+    同样不加载这两个脚本 —— 不受影响；
+  · 真正受影响的只有 `cost.html` / `process.html` / `tech-task.html`（已 bump 版本号），它们不加载
+    `tech-project-context.js`，走 `projectId()` 里的「模块不在 → 只认 URL」降级；
+  · 行为差异只有一条：**URL 没有 project 时不再回落到 localStorage 里的上一次项目** —— 这正是 Spec 要的，
+    旧页里没有新增分支、没有新跳转。
+- 结论：无需返工的项。
+
+---
+
+## 103 实现与验收：报价任务并存规则、原子领取与多人并发保护（批次 2）（9-17）
+
+实现（对应本文件 `## 103. … Spec / Red` 那一节的 A1–A12 / C1–C4；Spec：
+`docs/specs/quote-task-coexistence-and-atomic-claim.md`，红测：
+`tests/test_quote_task_coexistence_and_atomic_claim_red.py`）。**只改了 4 个文件**，
+Spec / 红测一个字未动，后端路由与数据库结构未新增。
+
+### 交付内容
+
+**A. `cpq_wf.py`（任务流转）**
+
+- **DDL（幂等，排在 CREATE INDEX 之前）**：4 个 `ADD COLUMN IF NOT EXISTS`
+  （`supersedes_task_id` / `replaced_by_task_id` 各带 `REFERENCES … ON DELETE SET NULL`、
+  `cancel_reason varchar(200)`、`cancelled_at timestamptz`）+ 部分唯一索引
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_wf_task_open_kind ON …(card_id, task_kind) WHERE status = 'open'`
+  —— 「同一卡片同一类型最多一条 open」由数据库裁决。
+- **删掉静默取消**：`send_task` 里原来的
+  `UPDATE … SET status='cancelled' WHERE card_id=%s AND status='open'` 已删除；取消一律
+  按 `task_kind` 收窄，且带审计、带通知、带替代指针。
+- **派发签名**：`dispatch_signature(target_type, target_role_code, target_user_id, note, payload)`
+  = 这五项逐项相等（`note.strip()`；`business_version` 取 `result_version` > `version` >
+  `handoff_key` > `""`）；`task_signature(row)` 用同一口径读库里的同类任务。
+- **同类重复发起的三条出口**：
+  · 已有同类 `open` / `claimed` 且签名一致 → **复用**（不写 task / event / message，返回
+    `reused=True`）；
+  · 已有同类 `open` 且签名不同 → **替代**：先生成新任务 id，旧任务
+    `status='cancelled' + cancel_reason='被新任务替代' + cancelled_at + replaced_by_task_id`，
+    1 条 `action='cancel'` 审计（`被新任务 X 替代：被新任务替代`），通知集合 =
+    旧任务原收件人（按旧 target 用 `_recipients` 解析）∪ 旧任务发起人 ∪ 旧任务领取人（去重后
+    每人 1 条 `task_superseded`，标题 + 正文同时出现旧/新 `TP-` 编码与原因）；新任务写
+    `supersedes_task_id`，返回 `reused=False / supersedes_task_id=str(旧 id)`；
+  · 已有同类 `claimed` 且签名不同 → `WfError`，文案带领取人显示名
+    （`该卡片的「转交工艺确认」任务已被 PM1 领取，请等他完成后再重新发起`）。
+- **并发重复发起收敛**：INSERT 撞唯一索引时捕 `psycopg.errors.UniqueViolation`
+  （惰性 `from psycopg import errors`，缺失时降级为照抛），重查同类 `open` 行并**收敛成复用**，
+  绝不把唯一冲突当 500 抛给用户。
+- **原子领取**：`claim_task` 改成单条
+  `UPDATE cpq_wf_task SET status='claimed', claimed_by_user_id=%s, claimed_at=%s WHERE task_id=%s AND status='open' RETURNING card_id, task_kind`；
+  命中才走后续（支线不改 `current_owner`、主线改 `current_owner + in_progress`、1 条 `claim` 审计、
+  给 `from_user` 1 条 `task_claimed`，返回 `already=False`）；未命中由新 helper `_claim_unavailable`
+  分辨三个出口：本人 → `already=True`（**不写审计、不发消息、不动卡片**）、他人 → `该任务已被他人领取`、
+  终态 → `该任务已关闭`、查不到 → `任务不存在`。领取资格判定仍在 UPDATE **之前**，
+  且「已是我自己的任务」也走同一个幂等出口（连点两次第二次是 `already=True` 而不是报错）。
+- **行字段**：`_TASK_SELECT` / `_TASK_KEYS` 末尾**同序**追加
+  `supersedes_task_id, replaced_by_task_id, cancel_reason, cancelled_at`；`_task_row` 补
+  `status_label`（`TASK_STATUS_LABELS`：待领取/进行中/已完成/已撤回）、两个 id 走 `_uid()`、
+  `cancelled_at` 走 `_iso()`、`replaced_by_task_no = task_no(replaced_by_task_id)`（纯按 id 现算，
+  无需二次查库）。
+- **`inbox` 加终态出口**（既有两段之后 OR 上去，参数顺序 `(uid, role, uid, uid, uid)`）：
+  `OR (t.status='cancelled' AND t.from_user_id=%s AND t.replaced_by_task_id IS NOT NULL)`
+  —— 只收新机制记录，线上 45 条历史静默取消不回填、不进任何列表。
+- **消息字典**：`MSG_TYPES` 增 `task_superseded: 被新任务替代`、`task_cancelled: 已撤回`
+  （既有三个键与文案不变）。
+
+**B. 前端（三个渲染点，保留原骨架与 class，只加分支）**
+
+- `报价首页.html`：`wfBadge()` 改成 `WF.tasks.filter(t => t.status !== 'cancelled' && t.status !== 'completed').length`
+  （终态不计入待办）；`taskCardHtml()` 增加 `closed` 分支 —— 状态胶囊显示 `status_label`
+  （缺省回落「已撤回」），有 `replaced_by_task_no` 时多一行「被新任务替代：TP-xxxxxxxx」，
+  CTA 改成「被新任务替代」/「已关闭」，不再出现「领取并继续」「继续处理」；`open` / `claimed` 行
+  文案一字未改。
+- `tech_app/frontend/cpq-tech-inbox.js`：`taskCard()` 同款 `closed` 分支（CTA「被新任务替代」/「已关闭」，
+  不再出现「领取并去报价」）；`pendingCount()` 本来就只数 `open`，未改。
+- `cpq_msg.js`：`ICON` 增 `task_superseded` / `task_cancelled` 两个键（既有三个键与文案不变）。
+
+**C. `cpq_suite_server.py` 已确认无需改动**：`/wf/task/send` 本就透传 `task_kind` / `payload` 并用
+`{**out}` 回包，`/wf/tasks` 直接回 `cpq_wf.inbox(user)` 的行，新增键与字段自动流出；一个字未动。
+
+### 验收命令原始输出
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_task_coexistence_and_atomic_claim_red
+.........................................
+----------------------------------------------------------------------
+Ran 41 tests in 0.362s
+
+OK
+
+$ ./open-claude/.venv/bin/python -m unittest tests.test_tech_cost_report_handoff_continuity_red
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 0.003s
+
+OK
+
+$ ./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+...................................................................................................................................
+----------------------------------------------------------------------
+Ran 1870 tests in 102.444s
+
+OK
+
+$ git diff --check
+（无输出 = 干净）
+```
+
+改前基线（同一工作区、未改任何实现时实测）：`Ran 41 tests … FAILED (failures=25)`。**从红转绿的 25 条**：
+
+```
+test_concurrent_claim_only_one_wins            test_loser_leaves_no_side_effect
+test_same_user_reclaim_is_idempotent           test_four_kinds_coexist_on_one_card
+test_handoff_does_not_cancel_side_tasks        test_side_task_does_not_cancel_or_replace_handoff
+test_msg_icons_cover_new_message_types         test_quote_home_badge_counts_only_actionable_tasks
+test_quote_home_task_card_renders_terminal_states
+test_tech_inbox_task_card_renders_terminal_states
+test_sender_sees_replaced_task_as_terminal     test_task_detail_reports_superseded_state
+test_task_row_exposes_terminal_fields          test_changed_target_supersedes_previous_task
+test_concurrent_identical_send_converges_to_one_open_task
+test_identical_send_is_reused                  test_new_business_version_supersedes_same_kind_only
+test_reuse_adds_no_message_and_no_audit        test_same_kind_different_target_on_claimed_task_is_refused
+test_same_signature_on_claimed_task_is_reused  test_supersede_records_audit_and_notifies_old_audience
+test_claim_update_is_guarded_and_result_checked
+test_ddl_declares_supersede_columns_and_open_task_index
+test_legacy_unconditional_cancel_is_gone       test_message_types_declare_supersede_and_cancel
+```
+
+### 真库并发自检（红测是受控假库，证明不了 SQL 原子性）
+
+临时建 schema `cpq_wf_b2check`（`CPQ_WF_SCHEMA=cpq_wf_b2check`）→ `cpq_wf.init()` → 造
+SM1 / PM1 / PM2 三个账号 + 一条卡片 + 一条 `public` `handoff` 任务 → 两个线程各持一个真连接同时
+`claim_task`：
+
+```
+种子任务： {'task_id': '3987976593866759270', 'task_no': 'TP-66759270',
+          'reused': False, 'supersedes_task_id': None}
+成功： {'B': {'session_id': 'sess-b2-real', 'task_kind': 'handoff',
+             'task_no': 'TP-66759270', 'already': False}}
+失败： {'A': 'WfError: 该任务已被他人领取'}
+任务行： ('claimed', 210) 卡片 current_owner： 210
+claim 审计： 1  task_claimed 消息： 1
+真库并发自检：PASS
+临时 schema 已删除： cpq_wf_b2check
+```
+
+验证后复查生产 schema：`cpq_wf_task` 仍是 **220 行 / 45 条 cancelled**，4 个新列在 `cpq_wf` 里
+**不存在**（`information_schema` 实测 `[]`），schema 列表只剩 `cpq_wf` —— **生产数据一行未动**。
+
+### 边界
+
+未新增任何 HTTP 路由；未用进程内锁 / 全局字典 / 内存队列做唯一性（唯一来源是 PG 的单条
+`UPDATE … AND status='open' RETURNING` + 部分唯一索引）；未改 `task_kind` 取值集合、6 步状态机、
+角色权限模型、Token / 鉴权、门禁分级、`/wf/cards`、`/wf/card`、`/wf/messages`、`/wf/card/step*`
+的既有行为；未删除 / 迁移 / 回填任何历史数据；未为了让测试变绿改红测或放宽断言。
+
+改动文件清单（4 个）：`cpq_wf.py`、`报价首页.html`、`tech_app/frontend/cpq-tech-inbox.js`、
+`cpq_msg.js`。**未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。**
