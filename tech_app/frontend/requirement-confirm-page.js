@@ -1,5 +1,5 @@
 /* 1.2 确认需求：默认展示本地规则；仅点击“AI 检查”才会调用模型。 */
-const cfPid = new URLSearchParams(location.search).get('project') || localStorage.getItem('cad_engine_project_id') || '';
+const cfPid = TechProjectContext.bind().project;
 let cfRequirement = null, cfProject = null, cfPrecheck = null;
 const cfEsc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
 

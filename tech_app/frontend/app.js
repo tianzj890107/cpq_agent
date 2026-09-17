@@ -19,6 +19,11 @@ let authEnabled = false;
 // 给同源 /api 请求自动带上令牌(鉴权开启时)
 const _fetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
+  const blocked = writeProjectMismatch(url, opts);
+  if (blocked) {
+    try { status(blocked); } catch (error) { /* status 初始化前不显示 */ }
+    return Promise.reject(new Error(blocked));
+  }
   const hasAuth = opts.headers && (opts.headers.Authorization || opts.headers.authorization);
   if (typeof url === "string" && url.indexOf("/api/") !== -1 && authToken && !hasAuth) {
     opts = Object.assign({}, opts, {
@@ -520,9 +525,11 @@ async function refreshMe() {
 
 function afterAuth() {
   renderUserBox();
-  // 深链/恢复: 从 URL ?project=&part= 或上次打开的项目自动重开,避免从工艺页返回后丢内容
+  // 深链/恢复: 只认 URL ?project=&part=。项目身份走共享模块，没有 project 就是一个
+  // 明确的错误态 —— 不再用「最近访问」里记的项目自动打开「上一次那个项目」，
+  // 否则共享终端上会静默加载别人的项目。
   const q = new URLSearchParams(location.search);
-  const pid = q.get("project") || localStorage.getItem("lastProject");
+  const pid = TechProjectContext.bind().project;
   if (!pid) {
     // 静默 return 的话，页面就停在"等待上传图纸"，而用户明明是从 1.3 走过来的。
     status("本页没有拿到项目编号（URL 缺 ?project=），因此没有加载任何图纸。"
@@ -545,6 +552,27 @@ function afterAuth() {
     status(`上次的项目打不开（${error.message}）。请在「＋ → 补充需求图纸」新建评估任务，`
            + "或从首页重新进入一个项目。");
   });
+}
+
+/* 写请求前的项目身份一致性校验（项目身份唯一来源 = tech-project-context.js）。
+   规则与 9 个阶段页共用的 workflow.js::projectWriteGuard 一致：PUT/POST/DELETE/PATCH 且
+   URL 指向 /api/projects/<id>/… 时，<id> 必须等于本页解析出的项目；本页身份为空
+   （还没有 project 的合法链路）或非项目级 URL（POST /api/projects 建项）一律放行。
+   放在 afterAuth 之后：项目身份在本页由 afterAuth 里的 TechProjectContext.bind() 解析，
+   函数声明会提升，上面 window.fetch 包装里的调用不受位置影响。 */
+function writeProjectMismatch(url, opts = {}) {
+  const method = String(opts.method || "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return "";
+  const match = String(url || "").match(/\/api\/projects\/([^/?#]+)(?:[/?#]|$)/);
+  if (!match) return "";
+  let target = match[1];
+  try { target = decodeURIComponent(target); } catch (error) { /* 非法转义按原样比对 */ }
+  let current = "";
+  try {
+    current = (typeof TechProjectContext !== "undefined" && TechProjectContext.current().project) || "";
+  } catch (error) { current = ""; }
+  if (!current || current === target) return "";
+  return `本页的项目是 ${current}，不能把这次写入发给 ${target}；已拒绝发送。请从统一工作台重新进入该项目。`;
 }
 
 // 「更多功能 ▾」里补上 2.1 的两项能力入口：直接复用既有看板视图（import3d / review），

@@ -1,5 +1,5 @@
 /* 首页需求单详情：参考稿的时间线信息架构，状态和入口全部读取项目真实流程数据。 */
-const rdPid=new URLSearchParams(location.search).get('project')||localStorage.getItem('cad_engine_project_id')||'';
+const rdPid = TechProjectContext.bind().project;
 const rdParams=new URLSearchParams(location.search);
 const rdEsc=value=>esc(value??'');
 const rdCheck='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>';

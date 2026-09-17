@@ -1,5 +1,5 @@
 /* 1.3 审核需求：严格对应参考页面的结构，审批动作接入真实需求状态机。 */
-const rrPid=new URLSearchParams(location.search).get('project')||localStorage.getItem('cad_engine_project_id')||'';
+const rrPid = TechProjectContext.bind().project;
 let rrRequirement=null, rrGaps=[];
 const rrEsc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 function rrToast(message,error=false){const el=document.createElement('div');el.className=`page-toast${error?' error':''}`;el.textContent=message;document.body.append(el);setTimeout(()=>el.remove(),3600)}

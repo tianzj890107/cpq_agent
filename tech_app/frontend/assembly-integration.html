@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI 工艺 - 组装与整合</title>
+  <title>AI 工艺 - 3 组装与整合</title>
+  <script src="tech-project-context.js?v=20260917-pid1"></script>
   <link rel="stylesheet" href="workbench.css?v=20260917-filepreview1" />
   <link rel="stylesheet" href="inline-analysis.css?v=20260917-headgap1" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
@@ -25,7 +26,7 @@
   });
   </script>
   <script src="cpq-sso.js?v=sso5"></script>
-  <script src="tech-embed.js?v=twb3"></script>
+  <script src="tech-embed.js?v=twb5"></script>
 </head>
 <body>
   <div class="oc-app">
@@ -38,22 +39,22 @@
            aiStart 与 aiRender 会往里写。 -->
       <div class="oc-rail-logo">
         <i class="ti ti-sparkles" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>2.2 组装与整合</b><span
+        <span class="oc-rail-tip"><b>3 组装与整合</b><span
           class="oc-side-cwd" id="aiSideProject">项目工作区</span><span
           class="oc-side-profile" id="aiSideState">读取中…</span></span>
       </div>
       <div class="oc-rail-steps" id="aiStepBody">
-        <button class="oc-rail-icon" type="button" data-ai-tab="drawings" aria-label="整合图纸">
+        <button class="oc-rail-icon" type="button" data-ai-tab="drawings" aria-label="3.1 整合图纸">
           <i class="ti ti-photo" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>① 整合图纸</b><span>装配图 / 爆炸图</span></span>
+          <span class="oc-rail-tip"><b>3.1 整合图纸</b><span>装配图 / 爆炸图</span></span>
         </button>
-        <button class="oc-rail-icon" type="button" data-ai-tab="params" aria-label="参数推荐">
+        <button class="oc-rail-icon" type="button" data-ai-tab="params" aria-label="3.2 参数推荐">
           <i class="ti ti-adjustments" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>② 参数推荐</b><span>整机参数、连接关系与 BOM</span></span>
+          <span class="oc-rail-tip"><b>3.2 参数推荐</b><span>整机参数、连接关系与 BOM</span></span>
         </button>
-        <button class="oc-rail-icon" type="button" data-ai-tab="process" aria-label="组装工艺">
+        <button class="oc-rail-icon" type="button" data-ai-tab="process" aria-label="3.3 组装工艺">
           <i class="ti ti-route" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>③ 组装工艺</b><span>整机组装线工序</span></span>
+          <span class="oc-rail-tip"><b>3.3 组装工艺</b><span>整机组装线工序</span></span>
         </button>
       </div>
       <span class="oc-rail-grow"></span>
@@ -78,7 +79,7 @@
     </nav>
 
     <!-- 右侧悬浮小窗：与 2.1 的「任务文件」同一份清单接口（/files），外加本步上传的
-         整合图纸和用户需求描述。原来这里只列整合图纸 —— 而 2.2 的参数推荐恰恰是拿
+         整合图纸和用户需求描述。原来这里只列整合图纸 —— 而 3.2 参数推荐恰恰是拿
          2.1 的图纸与需求当输入的，看不到它们，人就无从判断"模型到底看了什么"。 -->
     <aside class="oc-dock oc-dock-right" id="aiFilesDock" aria-label="任务文件">
       <div class="oc-dock-head">
@@ -98,19 +99,34 @@
       <div class="page-container">
         <div class="workflow-section">
           <div class="main-workflow" id="workflowSteps">
-            <div class="main-step-wrapper" data-step="upload"><div class="main-step completed"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div></div>
+            <div class="main-step-wrapper" data-step="requirement"><div class="main-step completed"><div class="main-step-number">1</div><span>工艺评估需求</span></div>
+              <div class="sub-labels-row"><span class="sub-label">1.1 创建</span><span class="sub-label-arrow">→</span><span class="sub-label">1.2 确认</span><span class="sub-label-arrow">→</span><span class="sub-label">1.3 审核</span></div>
+            </div>
             <div class="main-connector active"></div>
-            <div class="main-step-wrapper" data-step="parse">
-              <div class="main-step completed"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div>
-              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span><span class="sub-label-arrow">→</span><span class="sub-label active">2.2 组装与整合</span><span class="sub-label-arrow">→</span><span class="sub-label">2.3 成本测算</span></div>
+            <div class="main-step-wrapper" data-step="drawing">
+              <div class="main-step completed"><div class="main-step-number">2</div><span>图纸解析</span></div>
+              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span></div>
+            </div>
+            <div class="main-connector active"></div>
+            <div class="main-step-wrapper" data-step="integration">
+              <div class="main-step active"><div class="main-step-number">3</div><span>组装与整合</span></div>
+              <div class="sub-labels-row"><span class="sub-label active">3.1 整合图纸</span><span class="sub-label-arrow">→</span><span class="sub-label">3.2 参数推荐</span><span class="sub-label-arrow">→</span><span class="sub-label">3.3 组装工艺</span></div>
             </div>
             <div class="main-connector"></div>
-            <div class="main-step-wrapper" data-step="generate"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div>
+            <div class="main-step-wrapper" data-step="cost">
+              <div class="main-step pending"><div class="main-step-number">4</div><span>成本测算</span></div>
+              <div class="sub-labels-row"><span class="sub-label">4.1 零件成本</span><span class="sub-label-arrow">→</span><span class="sub-label">4.2 组装成本</span><span class="sub-label-arrow">→</span><span class="sub-label">4.3 汇总</span></div>
+            </div>
+            <div class="main-connector"></div>
+            <div class="main-step-wrapper" data-step="report">
+              <div class="main-step pending"><div class="main-step-number">5</div><span>工艺评估报告</span></div>
+              <div class="sub-labels-row"><span class="sub-label">5.1 汇总结果</span><span class="sub-label-arrow">→</span><span class="sub-label">5.2 结果审核</span><span class="sub-label-arrow">→</span><span class="sub-label">5.3 发布并回传报价</span></div>
+            </div>
           </div>
         </div>
 
         <div class="title-section">
-          <div class="title-row"><h1 id="aiTitle" class="form-title">组装与整合</h1><span id="status" class="status-badge">读取中…</span></div>
+          <div class="title-row"><h1 id="aiTitle" class="form-title">3 组装与整合</h1><span id="status" class="status-badge">读取中…</span></div>
         </div>
 
         <div class="oc-work">
@@ -132,7 +148,7 @@
                 <div class="oc-empty" id="aiEmpty">
                   <div style="font-size:30px;">✦</div>
                   <div style="font-size:14px;">组装与整合助手</div>
-                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，两项都确认后把任务交给财务经理在 2.3 测算成本。</div>
+                  <div style="font-size:12.5px;">它把 2.1 拆出来的零件装回一台整机：先推荐整机参数与连接关系，<br/>再按企业工艺库排组装工序，两项都确认后把任务交给财务经理在 4.1 零件成本起算。</div>
                 </div>
               </div>
             </div>
@@ -149,8 +165,8 @@
                 </label>
                 <div class="ai-op-cost" id="aiOpCost">确认参数推荐与组装工艺后，把任务交给财务经理测算成本</div>
               </div>
-              <!-- 2.2 的出口是**发给财务**：成本不归工艺经理算，他交的是工艺、参数与
-                   用量，成本的数字由财务经理在 2.3 负责（写库与发报价也移到那一步）。
+              <!-- 本步（3 组装与整合）的出口是**发给财务**：成本不归工艺经理算，他交的是工艺、参数与
+                   用量，成本的数字由财务经理在 4 成本测算负责（写库与发报价也移到那一步）。
                    点它先开派发弹窗：发给角色 / 指派到人 / 公共任务池，与报价助手一致。 -->
               <div class="ai-ops">
                 <button id="aiToFinance" class="ai-op-btn primary" type="button" disabled>
@@ -159,7 +175,7 @@
               <!-- 按钮为什么是灰的，就贴在按钮下面 —— 不要让人去下面那段说明里找。 -->
               <div class="ai-op-why" id="aiOpsWhy" hidden></div>
               <div class="ai-op-hint" id="aiOpsHint">
-                工艺与整机参数在这一步定稿；<strong>成本由财务经理在 2.3 测算</strong>，
+                工艺与整机参数在这一步定稿；<strong>成本由财务经理在 4 成本测算完成</strong>，
                 写入数据库与发送至报价也都移到了那一步。
               </div>
             </div>
@@ -168,7 +184,7 @@
               <div class="oc-cinner">
                 <div class="oc-inputbox">
                   <button class="oc-ibtn" id="aiPlus" type="button" aria-label="上传整合图纸" style="width:30px;height:30px;flex-shrink:0;">＋</button>
-                  <textarea id="aiInput" rows="1" maxlength="4000" placeholder="问它 2.2 的任何事，或直接说「把 20 工序工时改成 8 分钟」…" aria-label="与工艺助手对话"></textarea>
+                  <textarea id="aiInput" rows="1" maxlength="4000" placeholder="问它 3.1–3.3 的任何事，或直接说「把 20 工序工时改成 8 分钟」…" aria-label="与工艺助手对话"></textarea>
                   <button class="oc-send" id="aiSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
                 </div>
                 <div class="oc-disc" id="aiDisc">与 2.1 同一个工艺助手。它能查本步状态与参数缺口，也能直接改整机参数、改组装工序、重跑某个环节。</div>
@@ -203,13 +219,13 @@
 
   <input id="aiDrawingInput" type="file" multiple accept="image/*,.pdf" hidden />
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-  <script src="workflow.js?v=workflow1"></script>
+  <script src="workflow.js?v=workflow4"></script>
   <!-- 左下角的消息与登录：与报价助手同一份实现，未读红点、登录态图标都由它们自己维护 -->
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set3"></script>
   <script src="quote-params-table.js?v=qp1"></script>
-  <script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script src="assembly-integration.js?v=ai19"></script>
+  <script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script src="assembly-integration.js?v=ai20"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>

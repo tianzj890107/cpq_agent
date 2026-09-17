@@ -47,7 +47,10 @@
   var CURRENT_STAGE = STAGE_OF_FILE[FILE] || null;
 
   function projectId() {
-    return qs.get('project') || localStorage.getItem('cad_engine_project_id') || '';
+    // 唯一来源：共享模块（URL project / 父壳 data-project）；模块缺失时至少只认 URL，
+    // 绝不退回 localStorage 里的上一次项目。
+    if (window.TechProjectContext) return window.TechProjectContext.bind().project;
+    return qs.get('project') || '';
   }
 
   function basePath() {
