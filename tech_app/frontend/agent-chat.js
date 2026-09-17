@@ -1404,6 +1404,37 @@
     taskProgressCards.set(key, card);
     return card;
   }
+  // 同一次模型调用只占一行（## 99）：开始事件建行、把「配对 id → 行」记在本卡上，
+  // 返回 / 失败事件把结果补写回那一行，不再另起「模型返回（x）」。
+  // 只在渲染层合并：落库照旧两条事件，回放时按同样规则再并一次。
+  function modelRowKey(detail) {
+    return detail && detail.call ? String(detail.call) : "";
+  }
+  function modelRowMap(card) {
+    if (!card) return null;
+    if (!card.modelRows) card.modelRows = new Map();
+    return card.modelRows;
+  }
+  function findModelRow(card, call) {
+    const map = modelRowMap(card);
+    const key = String(call || "");
+    return map && key ? (map.get(key) || null) : null;
+  }
+  function applyModelOutput(row, detail) {
+    if (!row || !row.output) return;
+    row.output.textContent = JSON.stringify((detail && detail.output) || {}, null, 2);
+  }
+  function mergeModelRow(card, row, text, detail) {
+    applyModelOutput(row, detail);
+    // 失败原因不展开就要能看见：行文字改成「调用模型（x） · 模型调用失败（原因）」。
+    if (row.text && detail && detail.status === "failed") {
+      const first = String(row.text.textContent || "");
+      if (first && first.indexOf(" · ") < 0) {
+        row.text.textContent = `${first} · ${String(text || "")}`;
+      }
+    }
+    return true;
+  }
   function pushTaskStep(card, text, tone, phase, detail) {
     if (!card || !text) return;
     // 后端用前导空格 + ↳ / · 表示「这一条是上一步的结果或依据」，
@@ -1414,10 +1445,25 @@
     const sub = /^\s{2,}/.test(raw);
     const body = raw.replace(/^[\s]*[↳·]?\s*/, "");
     const phaseCls = phase === "model" || phase === "tool" ? ` ${phase}` : "";
+    // 同一次调用的第二条事件（返回 / 失败）补写回开始那一行；旧数据没有 call →
+    // callKey 为空，逐字走下面这条老路径（两条各自建行、各自详情）。
+    const callKey = phase === "model" ? modelRowKey(detail) : "";
+    if (callKey) {
+      const known = findModelRow(card, callKey);
+      const status = String((detail && detail.status) || "");
+      if (known && (status === "ok" || status === "failed")) {
+        mergeModelRow(card, known, body, detail);
+        scrollDown();
+        return;
+      }
+      // 重复投递的开始事件：已有同一行就直接收下，不再建第二行。
+      if (known && status === "running") { scrollDown(); return; }
+    }
     const step = el("div", `oc-process-step${sub ? " sub" : ""}${tone ? ` ${tone}` : ""}${phaseCls}`);
     step.append(el("span", "oc-process-dot",
       tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•"));
-    step.append(el("span", "oc-process-text", body));
+    const textNode = el("span", "oc-process-text", body);
+    step.append(textNode);
     if (detail && typeof detail === "object") {
       // 有结构化明细才长「详情」；没有明细的行（含旧任务的 progress 行）结构逐字不变。
       const heading = [detail.tool, detail.title, detail.status].filter(Boolean).join(" · ");
@@ -1428,8 +1474,13 @@
       box.append(el("pre", "oc-process-detail-input",
         JSON.stringify(detail.input || {}, null, 2)));
       box.append(el("div", "oc-process-detail-label", "输出"));
-      box.append(el("pre", "oc-process-detail-output",
-        JSON.stringify(detail.output || {}, null, 2)));
+      const outputNode = el("pre", "oc-process-detail-output",
+        JSON.stringify(detail.output || {}, null, 2));
+      box.append(outputNode);
+      if (callKey) {
+        const map = modelRowMap(card);
+        if (map) map.set(callKey, { call: callKey, step, text: textNode, output: outputNode });
+      }
       step.append(box);
     }
     card.steps.append(step);

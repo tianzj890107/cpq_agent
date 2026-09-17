@@ -1336,7 +1336,8 @@ def _tool_detail(tool: str, title: str, *, status: str,
     """过程事件的工具明细统一五键形状（Spec B1）：tool / title / input / output / status。
 
     只放事实（件号、序号、查询条件、判定、匹配度、差异、计数）——密钥、prompt 原文、
-    附件内容与候选件完整数组一律不进明细。
+    附件内容与候选件完整数组一律不进明细；**规模与结构摘要**（字数 / 段落数 / 图片数 /
+    顶层字段规模）与**文件名**（非路径）例外，允许放进明细。
     """
     return {"tool": str(tool or ""), "title": str(title or ""),
             "input": dict(input or {}), "status": str(status or "running"),

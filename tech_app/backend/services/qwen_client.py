@@ -9,7 +9,9 @@ import base64
 import contextvars
 import json
 import os
+import re
 import threading
+import uuid
 from enum import Enum
 from types import UnionType
 from typing import Any, Dict, List, Type, TypeVar, Union, get_args, get_origin
@@ -707,29 +709,151 @@ def run(
     from . import tasks
     vision = _is_vision(user_content)
     planned = (_model_candidates(vision) or ("",))[0]
+    # 同一次逻辑调用共用一个配对 id：开始 / 返回 / 失败三条事件都带，界面据此把两条
+    # 事件并成一行（返回补写回原行，见 ## 99）。_invoke 内部的候选切换与 schema 修复
+    # 重试仍算同一次调用，call 不变。
+    call = uuid.uuid4().hex[:8]
+    ask = _model_input_summary(system_prompt, user_content, planned)
     tasks.process_event("model", f"调用模型（{planned or '未配置模型'}）",
-                        detail=_model_detail(planned, vision))
+                        detail=_model_detail(planned, vision, call, "running", ask, None))
     try:
         result = _invoke(system_prompt, user_content, output_model, max_tokens)
     except Exception as exc:                            # noqa: BLE001 - 事件后原样上抛
         reason = str(exc)[:80]
+        failed = _model_output_summary(error=exc)
         tasks.process_event("model", f"模型调用失败（{reason}）",
-                            detail=_model_detail(planned, vision))
+                            detail=_model_detail(planned, vision, call, "failed", None, failed))
         raise
     used = _last_used_model.get() or planned or "模型"
+    answer = _model_output_summary(result=result)
     tasks.process_event("model", f"模型返回（{used}）",
-                        detail=_model_detail(used, vision))
+                        detail=_model_detail(used, vision, call, "ok", None, answer))
     return result
 
 
-def _model_detail(model: str, vision: bool) -> dict:
-    """模型事件的明细（Spec B2）：实际模型名 + provider + 是否带图，除此外不放别的。"""
+def _model_detail(model: str, vision: bool, call: str = "", status: str = "running",
+                  input_summary: dict | None = None,
+                  output_summary: dict | None = None) -> dict:
+    """模型事件的明细（Spec B2 / ## 99 A）：实跑模型 + provider + 是否带图 + 配对 id + 短摘要。
+
+    三键 model / provider / vision 是既有契约，保留；再补 call（同一次逻辑调用的配对
+    id）、status（running / ok / failed）与 input / output 短摘要。摘要只算计数、长度
+    与文件名，绝不落 prompt 原文、用户消息原文、附件内容或响应正文。
+    """
     from . import llm_settings
     try:
         provider = llm_settings.provider_of(str(model or ""))
     except Exception:                                   # 表外模型：如实留空，不猜
         provider = ""
-    return {"model": str(model or ""), "provider": provider, "vision": bool(vision)}
+    detail = {"model": str(model or ""), "provider": provider, "vision": bool(vision),
+              "call": str(call or ""), "status": str(status or "running")}
+    if isinstance(input_summary, dict):
+        detail["input"] = input_summary
+    if isinstance(output_summary, dict):
+        detail["output"] = output_summary
+    return detail
+
+
+# 附件名白名单：只从文本块按扩展名抓，去重保序，只留文件名不留路径（## 99 A2）。
+_ATTACHMENT_EXTS = ("png", "jpg", "jpeg", "gif", "webp", "bmp", "pdf", "dwg", "dxf",
+                    "xlsx", "xls", "docx", "doc", "txt", "md", "csv", "step", "stp")
+_ATTACHMENT_RE = re.compile(
+    r"""[^\s\\/"'<>()\[\]{}，。；：、【】]+\.(?:%s)\b""" % "|".join(_ATTACHMENT_EXTS),
+    re.IGNORECASE)
+
+
+def _attachment_names(user_content) -> list:
+    """从文本块里按扩展名抓文件名：去重、保序、最多 5 个，只留文件名不留路径。"""
+    names: list[str] = []
+    for block in user_content or []:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        for raw in _ATTACHMENT_RE.findall(text):
+            name = str(raw).replace("\\", "/").rsplit("/", 1)[-1]
+            if name and name not in names:
+                names.append(name)
+    return names[:5]
+
+
+def _model_input_summary(system_prompt: str, user_content, model: str) -> dict:
+    """「问的是什么」的短摘要（## 99 A2）：只算计数、长度与文件名，不落任何原文。"""
+    from . import llm_settings, tasks
+    try:
+        provider = llm_settings.provider_of(str(model or ""))
+    except Exception:
+        provider = ""
+    images = 0
+    texts = 0
+    text_chars = 0
+    for block in user_content or []:
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("type") or "")
+        if kind in ("image", "image_url", "input_image"):
+            images += 1
+        elif kind in ("text", "input_text"):
+            texts += 1
+            body = block.get("text")
+            if isinstance(body, str):
+                text_chars += len(body)
+    summary = {"模型": str(model or ""), "服务商": provider, "带图": images,
+               "文本段": texts, "提示字数": len(str(system_prompt or "")),
+               "消息字数": text_chars}
+    try:
+        task_name = str(tasks.current_task_name() or "")
+    except Exception:
+        task_name = ""
+    if task_name:
+        summary = {"任务": task_name, **summary}
+    names = _attachment_names(user_content)
+    if names:
+        summary["附件"] = names
+    return summary
+
+
+def _model_value_size(value):
+    """顶层字段的规模：只给计数 / 长度 / 原值，字符串绝不落正文。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return "%d 字" % len(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, dict):
+        return "%d 键" % len(value)
+    if isinstance(value, (list, tuple)):
+        return "%d 项" % len(value)
+    if value is None:
+        return "—"
+    return type(value).__name__
+
+
+def _model_output_summary(result=None, error=None) -> dict:
+    """「返回的是什么」的短摘要（## 99 A3）：状态 + 顶层字段规模 + JSON 字数。"""
+    if error is not None:
+        return {"状态": "failed", "原因": str(error)[:120]}
+    payload = result
+    if hasattr(payload, "model_dump"):
+        try:
+            payload = payload.model_dump()
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields: dict = {}
+    items = list(payload.items())
+    for key, value in items[:12]:
+        fields[str(key)] = _model_value_size(value)
+    if len(items) > 12:
+        fields["…"] = "另有 %d 键" % (len(items) - 12)
+    try:
+        size = len(json.dumps(payload, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        size = 0
+    return {"状态": "ok", "结果": fields, "规模": size}
 
 
 def _invoke(

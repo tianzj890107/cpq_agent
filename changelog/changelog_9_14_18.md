@@ -2738,3 +2738,188 @@ Red 验证（9-17，实际运行）：`tests.test_tech_stage_inline_card_dedup_a
   - `inline-analysis.css` 抽样：`.inline-card-title` 13px、`.inline-step-grid` 12px、`.inline-cost-table` 12px；
   - `/api/health` = `{"status":"ok", ...}`。
 - 提醒：浏览器需强刷一次（`?v=` 已换号，不刷会命中旧缓存）。
+
+## 99. 技术工艺「调用模型」与「模型返回」合并成一行 + 明细改短摘要：Spec / Red（9-17）
+
+用户口径（两条原话）：
+
+1. 「调用模型（qwen3.5-plus）详情 输入{} 输出{} · 模型返回（qwen3.5-plus）详情 输入{} 输出{}
+   这个东西没必要，只需要调用模型（qwen3.5-plus），不需要『模型返回（qwen3.5-plus）』这个题目，
+   然后输入输出都是空的，只要一个『问的是什么』『返回的是什么』只要有就行了，看一下现在为什么没有。」
+2. 「输入：这是哪一步的调用 + 实际模型 + 是否带图 + 附件名/数量 + 发给模型的文字提示……
+   这挺好的，但还是你参考一下报价和提问 agent 的时候怎么做的，我不想有很长文本截断成只有开头那点，
+   我想总结性的比较简短的，就像现在报价和提问 agent 的时候怎么做的。**然后返回时把结果补写进原来那条。**」
+
+只读排查（未改任何业务实现），先回答「为什么现在是空的」：
+
+- 后端在「开始调用」与「拿到结果」各播一条 `model` 事件（`qwen_client.py:710` / `:720`、
+  `claude_client.py:185` / `:227`），这是 `## 94` 写进契约的「一次逻辑调用恰好一对（开始 + 成功/失败）」。
+- 两条事件的明细都只有三项：`_model_detail()` 返回 `{model, provider, vision}`
+  （`qwen_client.py:725`、`claude_client.py:232`），**没有** `input` / `output`。
+- 前端对**任何**带明细的过程行都长一个折叠「详情」，里面固定两格
+  `输入 = JSON.stringify(detail.input || {})`、`输出 = JSON.stringify(detail.output || {})`
+  （`agent-chat.js:1421-1433`）→ 明细里没有这两项，所以两行都显示 `{}`。
+- 对照：工具事件的明细是 `main.py:1334` 的 `_tool_detail(tool, title, status, input, output)` 五键形状，
+  所以工具行的详情是有内容的。
+- 当时刻意不留正文：`effective-model-for-vision-and-task-process-detail.md:189-193`（B8）与
+  `tech-task-card-body-layout-and-process-stream.md:206` 都写着「不得落 prompt 原文、附件内容、
+  模型响应正文、API Key」，守卫在 `test_task_process_detail_red.py:523`（test_10）与
+  `test_tech_task_process_stream_red.py:516`（test_23）。
+
+用户点名的参照实现（「像报价和提问 agent 那样」）：
+
+- 报价侧 `确认需求解析结果.html`：`showStage(text)`（`:1131`）**只有一条**轨迹行，被后面的 stage
+  原地覆盖，结束由 `clearStage()` 收掉；`addToolActivity(main, source)`（`:1119`）用一句业务语言
+  + 一句来源摘要，从不贴长原文。
+- 提问 Agent 侧 `agent-chat.js`：工具卡 `addToolCard()`（`:639`）主行 = 中文业务文案
+  `label.title` + 一句话入参摘要 `label.subtitle`（`toolSubtitle()` `:379`）；结果到达时
+  **写回同一张卡** —— `setToolResult()`（`:668`）按 `tool_use_id` 找回那张卡，只更新状态位与结果
+  `<pre>`，绝不另建一行。
+- 结论：参照实现给出的形态是「一行 + 一句摘要 + 折叠详情 + 结果写回原行」，不是把长正文截断后贴上来。
+
+新增 Spec `docs/specs/tech-model-call-row-merged-and-summary-detail.md`（7 节），三个契约：
+
+- **契约 A（后端明细）**：`_model_detail()` 扩成
+  `{model, provider, vision, call, status, input, output}`（前三键为既有，test_09 / test_24 依赖）。
+  `call` 在 `run()` 里生成一次、两条事件共用（`_invoke` 内部的候选切换与 schema 修复重试仍算同一次）；
+  `status` = `running` / `ok` / `failed`。`input` 是「问的是什么」的短摘要：
+  `任务`（新增 `tasks.current_task_name()`，无上下文时省略该键）、`模型`、`服务商`、`带图`、`文本段`、
+  `提示字数`、`消息字数`、`附件`（文件名，去重、最多 5 个，来自 `run()` 入参，**不改 25 个调用点**）。
+  `output` 是「返回的是什么」的短摘要：成功 → `状态` + `结果`（返回对象顶层字段的规模字典，最多 12 键，
+  list→`N 项`、dict→`N 键`、str→`N 字`、bool 原值、数字原值、None→`—`，超 12 键追加 `另有 N 键`）
+  + `规模`（返回 JSON 字符数）；失败 → `状态` + `原因`（前 120 字）。
+  两个摘要各由一个**具名私有辅助函数**生成（`_model_input_summary()` / `_model_output_summary()`，
+  两 client 同名），长度/规模一律 `len(...)` 现算、不落原文。
+- **契约 A3**：`tasks.py` 新增 `current_task_name()`，从 `_CURRENT_TASK` 取 kind、查 `_SOP_NAMES`（`:43`）。
+- **契约 B（前端合并）**：`pushTaskStep()`（`agent-chat.js:1407`）在 `phase === "model"` 且 `detail.call`
+  非空时，同 `call` 的第二条事件**不建行** —— `ok` 只把 `output` 写进该行已有的「输出」`pre`（不重写「输入」），
+  `failed` 写「输出」并把行文字改成 `调用模型（x） · 模型调用失败（原因）`（原因不展开就能看见）。
+  `detail.call` 缺失（旧任务回放、旧落库数据）→ **逐字保持今天的行为**（两条各自建行）。
+  现有行为全部保留：相位类名、圆点、「有明细才长详情」、`.oc-process-detail` 的内部结构；
+  `card.processCursor` 推进与 `persistTaskCard()` 落库内容不变（两条照旧落库，回放时按同样规则再合并）。
+- **契约 C（口径补丁，不放松安全底线）**：B8 禁止项全部继续有效（prompt 原文、用户消息原文、
+  附件内容、模型响应正文、API Key、绝对路径、候选件完整数组）；**新增允许项**只有 prompt / 响应的
+  **规模与结构摘要**与**文件名**（非路径）；`PROCESS_DETAIL_LIMIT` = 4096 不变、不放宽上限；
+  `tasks.process_event()` 与 `main._tool_detail()` 的 docstring 补一句「规模与结构摘要允许」；
+  两份旧 Spec（B8 / B5）各补一句同样的例外。**因此既有守卫一条都不用反转。**
+
+Spec 的「明确不做」：不贴 prompt 原文 / 响应正文（无论是否截断）；不提高 `PROCESS_DETAIL_LIMIT`、
+不为正文另建存储；**不改后端两条事件的文本一个字**（合并只在渲染层）；不动 `## 94` 的一对事件契约
+与 process_log 的 seq / 落库形状；不在 25 个 `run()` 调用点加「用途」参数；不给模型行加副标题 /
+图标 / 状态胶囊、不新增 CSS 类；不动报价侧 `showStage()` / `addToolActivity()` 与提问 Agent 的工具卡。
+
+新增红测 `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`（17 项，4 个测试类）：
+
+- `SpecPinnedTest`：Spec 必须钉住 `call` / `input` / `output` / `current_task_name` / `pushTaskStep` /
+  `模型返回` / `PROCESS_DETAIL_LIMIT` 七个锚点，并写明**不反转**既有守卫测试。
+- `ModelDetailSourceContractTest`（源码级）：`tasks.py` 的 `current_task_name()` 必须看 `_CURRENT_TASK`
+  与 `_SOP_NAMES`；两个 client 的 `_model_detail` 至少两处调用点、每处都带配对 id；明细必须有
+  `call` / `status` 键与八个摘要字段、且引 `current_task_name`；摘要体不得出现 `data:` / `base64`
+  并必须用 `len(` 算长度/规模；两条事件文本一字不改。
+- `ModelDetailRuntimeTest`（子进程真跑 `tasks.submit(kind="parse")` + 桩 `qwen_client.get_client`）：
+  一次逻辑调用恰好一对事件；两条事件 `call` 相同、`status` 分别是 `running` / `ok`；
+  `input` 摘要要说清是哪一步（`图纸解析 SOP`）、带图数、`文本段 ≥ 2`、附件名 `["source.png"]`；
+  `output` 摘要的 `结果` 标量给原值、字符串只给字数、每项 ≤ 16 字，`规模` 是正整数；
+  明细不泄漏（无 prompt 原文、无 base64）且单条 ≤ 4096 字节。
+- `ModelRowMergeFrontendTest`（node + DOM 桩，真跑 `pushTaskStep`）：开始+成功返回合并成 **1** 行、
+  行文字保留「调用模型」且不含「模型返回」；详情里能看到问的是什么（`图纸解析 SOP`）与返回的是什么
+  （`parts`）、输入输出都不是 `{}`；两次不同 `call` 仍为 **2** 行；无 `call` 的旧数据保持今天形状
+  （2 行、输入输出都是 `{}`）；失败时仍是 **1** 行且行文字不展开就能看到 `模型调用失败`。
+
+红测自身修正 3 处（判据未放松，与 `## 74` / `## 94`「注明后就地修正红测自身缺陷」的先例一致）：
+
+1. 旧数据那条原本断言 `has_details is False`——但**今天**的行为是「凡有明细就长详情块」，
+   旧数据的详情块存在而内容为 `{}`。改成断言「详情块在、输入输出都是 `{}`」（即逐字保持今天的行为），
+   比原断言更严，不会放过「本批把旧数据也改了」。
+2. Spec 锚点 token：`pushTaskStep`（Spec 原文写作 `pushTaskStep()`）与「不反转」（Spec 原文写作
+   「不需要反转」）两处写法不一致 → **改 Spec 补齐这两个显式锚点**（Spec 是契约文档，不是业务实现），
+   红测判据未动。另外把「两次不同 call」那条的失败提示语从「被并成一行了」改准为
+   「应各自一行（合并不得跨 call）」，避免误导实现方。
+3. 「短摘要必须用 len(」这条原本判在 `_model_detail` 体内。但按 Spec，`提示字数` / `消息字数` /
+   `规模` 的上游（system prompt、用户消息、响应 JSON）只在 `run()` 里拿得到，把长度计算写在
+   `run()` 或独立辅助函数里同样正确 —— 原判据会**冤枉一个正确实现**。改成判在两个具名辅助函数
+   `_model_input_summary()` / `_model_output_summary()` 体内必须用 `len(`、且不得出现 `data:` /
+   `base64`；同时把这两个函数名写进 Spec 契约 A（Spec 是契约文档，可改）。判据改为更强
+   （从「某处用过 len」变成「两个具名函数各自只用 len」），红测仍 14 失败。
+
+Red 验证（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_model_call_row_merged_and_summary_detail_red -v`
+  → **Ran 17 tests / FAILED (failures=14)**（上面 3 处修正后重跑仍为 14 失败，失败点未变），含 3 组双子用例，失败点全部是真实缺口：
+  后端五个摘要键 / `call` / `status` 全无、`tasks.current_task_name()` 不存在、两个摘要辅助函数
+  `_model_input_summary()` / `_model_output_summary()` 不存在；
+  运行期「一次调用一对事件」存在但两条没有同一个 `call`、`input` / `output` 为空；
+  前端不合并（`rows_after_return = 2`、两次调用 `4` 行、失败 `2` 行）。
+  另有 6 项基线即绿，作为**不回归守卫**保留：一对事件、明细不泄漏且 ≤ 4096 字节、
+  行文字保留「调用模型」、两次调用不合并时不多不少、旧数据形状、后端事件文本不变。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1765 tests / FAILED (failures=14)**，`grep -c '^FAIL:'` = 14，其中非本批文件 **0** 条
+  —— 既有 `test_task_process_detail_red.py`、`test_tech_task_process_stream_red.py` 等守卫一条未动、继续全绿。
+- `git diff --check` → **干净**。
+
+明确不在本批：任何业务实现（按仓库约定由 DeepSeek 完成）；不改后端事件文本；不改 25 个 `run()` 调用点；
+不动落库与回放形状；不给模型行加新样式；不动报价侧与提问 Agent 的工具卡。
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）与 1 处 changelog 追加，未提交、未推送、未部署。**
+实现提示词只在会话中交付，未在仓库落盘。
+
+## 99 实现与验收（9-17）
+
+改动文件（8 个；只碰本批允许的范围）：
+
+- `tech_app/backend/services/tasks.py`：新增 `current_task_name()`（从 `_CURRENT_TASK` 取 kind、查
+  `_SOP_NAMES` 第一项，无任务上下文返回空串）；`process_event()` docstring 口径补丁（规模/结构摘要与文件名允许）。
+- `tech_app/backend/services/qwen_client.py`：`run()` 里生成一次配对 id `call = uuid.uuid4().hex[:8]`，
+  三条事件共用；`_model_detail()` 扩成 `{model, provider, vision, call, status, input, output}`
+  （前三键原样保留）；新增 `_model_input_summary()` / `_model_output_summary()` / `_model_value_size()` /
+  `_attachment_names()` 与附件白名单正则；补 `import re` / `import uuid`。
+- `tech_app/backend/services/claude_client.py`：同构改动（`_model_detail(route, vision, call, status, ...)`）。
+- `tech_app/frontend/agent-chat.js`：`pushTaskStep()` 增合并分支；新增 5 个具名小函数
+  `modelRowKey()` / `modelRowMap()` / `findModelRow()` / `applyModelOutput()` / `mergeModelRow()`
+  （红测按名抽取的名单之内）。`card.modelRows` 惰性挂在本卡上，未加顶层全局状态。
+- `tech_app/backend/main.py`：只改 `_tool_detail()` docstring 的口径句。
+- `docs/specs/effective-model-for-vision-and-task-process-detail.md`（B8）、
+  `docs/specs/tech-task-card-body-layout-and-process-stream.md`（B5）：各补一句同样的例外。
+
+实现口径（与 Spec 逐条对齐）：
+
+- 输入摘要 `{"任务"?, "模型", "服务商", "带图", "文本段", "提示字数", "消息字数", "附件"?}`：附件只从文本块按扩展名
+  抓、去重保序、最多 5 个、只留文件名不留路径；只有计数、长度与文件名，无原文、无 `data:`、无 base64。
+- 输出摘要：成功 `{"状态":"ok","结果":{顶层字段规模，>12 键追加 "…"},"规模":<JSON 字符数>}`（字符串只给 `N 字`）；
+  失败 `{"状态":"failed","原因":str(exc)[:120]}`。长度/规模一律 `len(...)` 现算。
+- 合并只发生在渲染层：后端两条事件文本一个字未改（`调用模型（x）` / `模型返回（x）` / `模型调用失败（原因）`），
+  落库仍是两条、`process_log` 的 seq 与明细形状未动；`detail.call` 缺失（旧任务/旧落库）逐字走老路径。
+- `PROCESS_DETAIL_LIMIT` 仍为 4096，未放宽；未新增 CSS、未改任何样式；未新增 HTTP 路由。
+
+验收（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_model_call_row_merged_and_summary_detail_red -v`
+  → **Ran 17 tests / OK**（改前 14 失败）。
+- `./open-claude/.venv/bin/python -m unittest tests.test_task_process_detail_red tests.test_tech_task_process_stream_red -v`
+  → **Ran 48 tests / OK**（两份守卫一条未改、继续全绿）。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1765 tests / OK**（0 失败）。
+- `node --check tech_app/frontend/agent-chat.js` → 通过；
+  `./open-claude/.venv/bin/python -m py_compile` 两个 client 与 `tasks.py` → 通过。
+- `git diff --check` → **干净**。
+- 无头 Chrome 实测（本机 Chrome 152，`--headless=new` 加载真实 `tech_app/frontend/agent-chat.js`，
+  派发真实的 `agent:task-progress` 载荷后读回 DOM）：
+  `js_loaded=true`；同一次调用（`call=c1` 开始 + 成功返回）**1** 行、`ok_has_return_title=false`；
+  详情输入 = `{"任务":"图纸解析 SOP","模型":"qwen3.5-plus","服务商":"qwen","带图":1,"文本段":4,
+  "提示字数":3300,"消息字数":120,"附件":["source.png"]}`，输出 = `{"状态":"ok","结果":{"parts":4,
+  "questions":3,"summary":"58 字"},"规模":128}`（都不是 `{}`）；失败事件仍 **1** 行且行文字为
+  `调用模型（qwen3.5-plus） · 模型调用失败（连接超时）`（原因不展开可见）；两次不同 `call` = **2** 行；
+  无 `call` 的旧数据 = **2** 行且输入/输出都是 `{}`（逐字维持今天的行为）。
+
+过程记录（如实说明）：
+
+- `agent-chat.js` 是**混合行尾**文件（HEAD 上 611 行 CRLF + 1746 行 LF）。第一版实现用 Python 整文件
+  `read_text` / `write_text` 改写，把全文压成 LF，`git diff --stat` 一度显示 1277 行变更 —— 已 `git checkout --`
+  还原，改用**字节级**替换只改目标行，并把我新增的行统一为 LF（否则 `git diff --check` 会以
+  「trailing whitespace」告警 CRLF 新增行）。最终该文件 diff 为 `54 insertions(+), 3 deletions(-)`。
+- 合并逻辑的第一版把 5 个具名小函数落在了 `pushTaskStep()` 体内（可运行、红测也过），已挪到函数外的同级位置。
+- 红测自身**未改一字**；本批没有为过测试放宽任何判定。
+- 本批**未**改任何页面的 `?v=`（`agent-chat.js?v=` 的行尾版本号不在本批允许修改的清单里）。
+  因此线上生效时需要一次缓存击穿；发布时若不换号，浏览器可能继续用旧 `agent-chat.js`。
+
+状态：**本批已实现并通过全部验收，未提交、未推送、未部署。**

@@ -207,6 +207,21 @@ def _update(project_id: str, task_id: str, **fields) -> None:
     store.update_task(project_id, task_id, **fields)
 
 
+def current_task_name() -> str:
+    """当前任务的中文名（没有任务上下文时返回空串）。
+
+    模型事件的输入摘要要能说清"这是哪一步的调用"：worker 线程里 _CURRENT_TASK 带着
+    kind（parse / process / cost…），这里翻成 _SOP_NAMES 的中文名（如 parse →
+    "图纸解析 SOP"）。Agent 会话线程与 HTTP 请求线程没有任务上下文，返回空串，调用方
+    据此省略「任务」键。
+    """
+    current = _CURRENT_TASK.get()
+    if not current:
+        return ""
+    kind = str(current[2] or "")
+    return _SOP_NAMES.get(kind, ("", 0))[0]
+
+
 def report_progress(progress: str, detail=None) -> None:
     """更新当前异步任务的真实阶段；任务函数内可直接调用。
 
@@ -239,8 +254,9 @@ def process_event(phase: str, text: str, detail=None) -> None:
     请求线程都会走到这里，绝不能污染它们，也不能凭空写盘）。非法 phase 则明确报错 ——
     阶段是封闭词表，"model" / "tool" / "progress" 之外的写法是代码 bug，必须当场看见。
 
-    只播"调用了哪个模型 / 哪个工具、拿到什么规模"这类事实：不得写入 prompt 原文、
-    附件内容、密钥或响应正文（文本还会被截到 240 字）。
+    只播"调用了哪个模型 / 哪个工具、拿到什么规模"这类事实：不得写入 prompt 原文与
+    响应正文；**规模与结构摘要**（字数 / 段落数 / 图片数 / 顶层字段规模）与**文件名**
+    （非路径）例外，允许放进明细；密钥与附件内容一律不进（文本还会被截到 240 字）。
     """
     name = str(phase or "").strip()
     if name not in _TASK_PROCESS_PHASES:

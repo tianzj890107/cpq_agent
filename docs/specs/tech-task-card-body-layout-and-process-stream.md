@@ -203,7 +203,8 @@ div.oc-amsg.oc-task-card.is-queued
   `task:<id>` 幂等 key、「失败不单独建常驻卡」「预期内失败静默」等既有口径一律不动；
 - 不加新的 HTTP 路由（`process_log` 走既有任务端点）；
 - 不把 `thinking` / `tool_use` / `tool_result` 这类 Agent 专有事件塞进任务卡；
-- 不在过程事件里落任何密钥、prompt 原文或响应正文。
+- 不在过程事件里落任何密钥、prompt 原文或响应正文（## 99 例外：规模与结构摘要
+  （字数 / 段落数 / 图片数 / 顶层字段规模）与文件名（非路径）允许放进明细）。
 
 ## 5. 验收
 
