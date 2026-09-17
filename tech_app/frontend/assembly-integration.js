@@ -176,6 +176,18 @@ function aiToast(message, error = false) {
   setTimeout(() => el.remove(), 3200);
 }
 
+/* 关键失败必须留在页面上（批次 9 §7.5）：toast 只留给成功提示与安静失败。
+   code 决定文案与影响（task-failed / interrupted / permission_denied…），
+   trace_id 是这次调用的错误追踪 ID，用户报障时与线上日志逐字对得上。 */
+function aiShowFailure(code, message, traceId) {
+  if (window.TechFailure && typeof window.TechFailure.show === 'function') {
+    window.TechFailure.show({ code: code, message: message, stage: '3 组装与整合',
+                              trace_id: traceId || '' });
+    return true;
+  }
+  return false;
+}
+
 /** 这一环节能不能开跑。返回空串表示可以，否则是拦下来的理由。 */
 function aiBlocker(tab) {
   const state = aiData?.status || {};
@@ -295,6 +307,8 @@ async function aiPost(path, { form, label, quantity, keepTab } = {}) {
     card.done(interrupted ? 'interrupted' : false, message);
     aiStatus(interrupted ? `${title}已中断：${message}` : `${title}失败：${message}`, !interrupted);
     aiToast(message, true);
+    // 中断也是关键失败：常驻块要出来（toast 会消失，用户回头看不到原因）。
+    aiShowFailure(interrupted ? 'interrupted' : 'task-failed', message, error.trace_id);
     aiPublishTask('task-failed', { taskId: taskId, label: title,
                                    status: interrupted ? 'interrupted' : 'failed',
                                    code: interrupted ? 'interrupted' : 'task-failed',
@@ -306,23 +320,46 @@ async function aiPost(path, { form, label, quantity, keepTab } = {}) {
   }
 }
 
+/* 轮询收口到 TechTaskWatch（批次 9 §7.4）：一次网络抖动只计数、不判失败；
+   连续不可达降级成「连接不稳定，结果仍在处理中」并放慢间隔继续等；刷新后仍能按
+   task_id 复原。状态词表与中文口径也由它一处给出。 */
 async function aiPollTask(taskId, card, label) {
-  while (true) {
-    await aiSleep(1200);
-    const task = await api(`/api/projects/${encodeURIComponent(aiPid)}/tasks/${encodeURIComponent(taskId)}`);
-    const log = Array.isArray(task.progress_log) ? task.progress_log : [];
-    card.log(log);
-    // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
-    aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
-                                     status: task.status === 'interrupted' ? 'interrupted' : 'running',
-                                     log: log,
-                                     process: Array.isArray(task.process_log) ? task.process_log : null });
-    if (task.status === 'succeeded') return task.result;
-    if (task.status === 'failed') throw new Error(task.error || '任务失败');
-    // 服务重启把在途任务打断了：中断是终态，不能继续 while(true) 轮询下去。
-    if (task.status === 'interrupted') {
-      throw Object.assign(new Error(task.error || '服务重启中断，任务已中止。'), { code: 'interrupted' });
+  if (!window.TechTaskWatch || typeof window.TechTaskWatch.watch !== 'function') {
+    throw new Error('缺少 tech-task-watch.js：无法跟踪长任务状态');
+  }
+  const handle = window.TechTaskWatch.watch({
+    projectId: aiPid,
+    taskId: taskId,
+    intervalMs: 1200,
+    onProgress: task => {
+      const record = task || {};
+      const log = Array.isArray(record.progress_log) ? record.progress_log : [];
+      card.log(log);
+      // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
+      aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
+                                       status: record.status === 'interrupted' ? 'interrupted' : 'running',
+                                       log: log,
+                                       process: Array.isArray(record.process_log) ? record.process_log : null });
+    },
+    onDegraded: () => {
+      aiStatus('连接不稳定，结果仍在处理中');
+      aiPublishTask('task-progress', { taskId: taskId, label: label || '整合分析',
+                                       status: 'running',
+                                       progress: '连接不稳定，结果仍在处理中' });
+    },
+  });
+  try {
+    const settled = await handle.promise;
+    return settled.record && settled.record.result;
+  } catch (failure) {
+    const code = String((failure && failure.code) || '');
+    // 服务重启把在途任务打断了：中断是终态，不能继续轮询下去。
+    if (code === 'interrupted') {
+      throw Object.assign(new Error((failure && failure.message) || '服务重启中断，任务已中止。'),
+                          { code: 'interrupted', trace_id: (failure && failure.trace_id) || '' });
     }
+    throw Object.assign(new Error((failure && failure.message) || '任务失败'),
+                        { code: code || 'task-failed', trace_id: (failure && failure.trace_id) || '' });
   }
 }
 

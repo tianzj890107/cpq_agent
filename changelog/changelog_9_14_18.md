@@ -4285,3 +4285,1144 @@ To github.com:tianzj890107/cpq_agent.git
   `docs/specs/tech-handoff-atomic-idempotent-close.md`、`tests/fixtures/wf_handoff_harness.py`。
 - 本批**未部署、未重启 8010 / 8012**，线上 `cpq_wf` 数据仍是 220 行 / 45 条 cancelled，
   4 个新列尚未施加到生产 schema（DDL 是幂等的，随下次部署 `cpq_wf.init()` 生效）。
+
+---
+
+## 104. 技术工艺 / 成本 / 报告回传报价的原子闭环与幂等（批次 3）：Spec / Red（9-17）
+
+用户口径（原话要点）：
+
+> 现在只做第 3 批《技术工艺 / 成本 / 报告回传报价的原子闭环与幂等》：技术侧回传目前可能分别执行
+> 「创建目标任务 / 推进报价」和「关闭来源任务」，跨 HTTP 部分成功时出现「销售已收到任务、技术来源
+> 任务仍显示未完成」，用户重试还会重复创建。必须定义**一个原子业务命令**，至少覆盖：①成本直接回
+> 销售；②成本回工艺经理复核；③工艺经理确认后回销售；④已发布报告回销售；⑤关闭来源 claimed 任务；
+> ⑥更新原报价第 2 步快照；⑦保证报价 `current_step` 单调前进；⑧创建或复用目标报价任务；⑨写消息和
+> 审计；⑩返回唯一 `handoff_id`。必须使用业务幂等键（`handoff_kind` + `source_task_id` +
+> `source_project_id` + `source_result_version` + `target_quote_session_id`）：相同键重复调用只返回同一
+> 结果；服务端已成功但客户端超时的重试不得产生第二条任务；来源任务已完成时返回 `already_completed`；
+> 任一步失败必须整体回滚；不允许「报价任务已创建、来源任务未关闭」的半完成状态。
+> 红测至少覆盖：连续调用两次只生成一个目标任务；响应丢失后重试仍只有一个任务；事务中间异常全部回滚；
+> 原报价第 4 步时回传不得倒退到第 3 步；来源 task、目标 task、快照、消息、审计一致；报告回传携带完整
+> 报告与版本；成本回传携带完整成本、参数、工艺与零件信息。
+
+只读排查（未改任何业务实现、未跑线上写操作）——先把根因逐条定位：
+
+| 位置 | 现状（受控假库实测，不是推断） |
+|------|------|
+| `cpq_tech_bridge.py:531-687` | 一次成功回传发出 **20 条写语句、跨 5 条连接、5 次提交**；`cpq_auth._connect()` 是 `autocommit=True`，`cpq_auth._commit()` / `cpq_wf._commit()` 都是空函数 → **20 条写全部落在事务之外**（`unprotected_writes()==20`） |
+| `cpq_tech_bridge.py:705-787` + `cost_flow.py:308-329` | 关闭来源任务是**另一次 HTTP 请求**，失败只写审计并返回 `{"closed": False}`；报告回传 `report_workflow.send_to_quote` 一次都不关 → 第 4 步报告回传后来源任务仍 `claimed`，且卡片上**一条给销售的任务都没有**（`deliverables()==0`） |
+| `cpq_tech_bridge.py:418-428` | 幂等只认 `payload->>'handoff_key'` 且仅当目标任务 `status IN ('open','claimed')`：目标任务被置 `completed` 后再点一次会**再建一条任务**；键里没有 `source_task_id`，也没有唯一约束 |
+| 返回值 | 没有 `handoff_id` 字段（实测 `KeyError`），事后无法把「任务 + 快照 + 关任务 + 消息」绑成一次回传 |
+| `cpq_tech_bridge.py:788-810`（`_side_task`→`sync_card`） | 2.3「提交工艺经理确认」用**技术项目号当报价会话号**，实测新建一张 `session_id=技术项目号` 的**幽灵卡片**，任务挂在那张卡上，原报价卡片什么都没有 |
+| 故障注入（第 N 条写失败） | 第 N 条之后的写不再发生，但第 N 条之前的写**已经留在库里** → 真实半完成状态 |
+
+新增 Spec `docs/specs/tech-handoff-atomic-idempotent-close.md`（351 行，16 章齐全）。核心契约：
+
+1. **一个业务命令、一个事务、一次提交**：解析落点 → 算幂等键 → 第 2 步（`current_step<=2` 完成第 2 步、
+   `>2` 只合并快照）→ 目标任务 create-or-reuse → 同一事务内关来源 claimed 任务 → 消息 + 审计 →
+   `cpq_wf_handoff` 落一行；任一步失败整体回滚，**不允许半完成状态**；
+2. **幂等键五元组**（`handoff_kind` / `source_task_id` / `source_project_id` /
+   `source_result_version` / `target_quote_session_id`）**在任何写之前算好**，且不含新生成的会话号；
+   `cpq_wf_handoff.handoff_key` 上有唯一约束，并发由数据库裁决；
+3. 返回体统一带 `handoff_id` / `handoff_key` / `handoff_kind` / `already_sent` / `already_completed` /
+   `next_step_no` / `returned_sections` / `source_task{task_id,status,closed,already,skipped}`；
+4. **步骤只进不退**：`current_step` 取 `max(当前, 3)`，第 4 步的报告回传不改卡片步骤与总状态；
+5. **来源任务归属校验**：来源待办被别人 `claimed` 时**拒绝整次回传且零写入**；不存在时返回
+   `skipped="missing_task_id"` 但不影响去向；已完成时返回 `already_completed` 且不重复关；
+6. **payload 契约**：任务 payload 必须带 `handoff_id` + 完整技术结果（参数 / 工艺 / 零件 / 组装 /
+   成本合计 / 财务确认）或完整报告包（编号 / 版本 / 状态 / 结论 / 风险 / 附件 / 报告与 PDF 链接）；
+7. 四种回传类型（`cost_to_quote` / `cost_to_process` / `process_to_quote` / `report_to_quote`）走**同一条**
+   原子命令；2.3 提交工艺经理必须落在**原报价卡片**上（禁止幽灵卡片）；
+8. 读 `data_snapshot` 必须**既接受 dict 也接受 JSON 字符串**（沿用 `cpq_wf.step_snapshot` 的既有写法）。
+
+新增红测 `tests/test_tech_handoff_atomic_idempotent_red.py`（35 个用例、8 个测试类）+ 受控假库
+`tests/fixtures/wf_handoff_harness.py`：复用批次 2 的 `FakeDB` SQL 引擎（JOIN / 布尔 WHERE / `->>` /
+`RETURNING` / `ON CONFLICT` / `FOR UPDATE`），并补上**事务与撤销日志**、
+`cpq_wf_handoff.handoff_key` 唯一约束、**按「第 N 条写语句」注入故障**、以及
+「这条写是否发生在事务里」的写日志；所有断言都是**行为**（整库快照前后对比、并发放行、幂等收敛），
+静态断言只用于前端接线。测试类：`HarnessSelfTest`(5)、`AtomicityTest`(5)、`IdempotencyTest`(6)、
+`SourceTaskCloseTest`(4)、`StepMonotonicityTest`(3)、`HandoffKindCoverageTest`(4)、
+`PayloadAndNotificationTest`(5)、`ConcurrencyTest`(1)、`TechSideContractTest`(3)。
+
+Red 验证（逐条原始结论，改前状态）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_handoff_atomic_idempotent_red`
+  → **Ran 35 tests / 7 通过 / 28 失败（23 条 FAIL + 5 条 ERROR）**。7 项通过＝5 项假库自检
+  （假库真跑工作流 SQL、唯一约束会拦、事务只撤自己的写、autocommit 裸写确实撤不掉、Spec 在仓库里）
+  ＋ 2 项**现状本就正确**的护栏（`test_current_step_moves_to_next_stage_on_cost_handoff`、
+  `test_bridge_failure_is_not_recorded_as_handoff_done`，本批不得把它们改坏）。
+  28 条失败全部落在真实缺口上，报错精确（不是导入 / 语法 / 环境错误）：
+  - `AtomicityTest`：成功回传返回体没有 `handoff_id`；20 条写全在事务之外；任意一条写失败都留下半完成；
+    5 个写索引的扫描全部留下残渣；
+  - `IdempotencyTest`：重复调用拿不到同一条 `handoff_id`（`KeyError`）、目标任务 `completed` 后重试会再建一条、
+    没有 `already_sent` / `already_completed`、没有 `cpq_wf_handoff`（`handoffs()==0`）、
+    幂等键五元组不成立；
+  - `SourceTaskCloseTest`：报告回传不关来源 claimed 待办、返回体没有 `source_task` 回执、
+    越权（别人领的待办）没有被拒绝、缺来源任务时没有 `skipped="missing_task_id"`；
+  - `StepMonotonicityTest`：第 4 步报告回传给卡片留不下给销售的任务；第 2 步快照被**整份覆盖**而不是合并；
+  - `HandoffKindCoverageTest`：四种回传没有一条统一记录（`handoffs()==0`）、没有 `created_by_user_id`；
+  - `PayloadAndNotificationTest`：payload 里没有 `handoff_id`、报告包没带上、消息与审计对不上目标任务的关联；
+  - `TechSideContractTest`：技术侧拿不到服务端 `handoff_id`，并且**自己又发了一次 `complete_task`**；
+  - `ConcurrencyTest`：两个线程交同一把键时没有 `cpq_wf_handoff` 记录、也没有汇合到同一条。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1905 tests / FAILED (failures=28, errors=5)**：数字与红测文件完全一致，**非本批文件 0 条**，
+  批次 1（24 项）与批次 2 红测全绿，无回归。
+- `git diff --check` → **干净**。
+- **红测可满足性验证**：在 `/tmp` 的临时副本里（**未动仓库任何业务文件**）按 Spec 写了一版参考实现
+  （`cpq_tech_bridge.py` 的原子回传命令 + `cpq_wf_handoff` 占位/唯一裁决 + `cost_flow.send_to_quote`
+  只读来源任务回执），同一份红测 **35/35 全部转绿**，连续 6 次运行稳定 `OK`。
+  该副本仅用于证明红测可达绿，不是交付物、未进入仓库。
+- 过程中靠自检与参考实现抓出并修掉 6 处**测试自身**缺陷（都是「假库/断言不忠实」，不是放松标准）：
+  ① 假库 `Workbench.step2_snapshot` 属性名压住了同名观测方法（改 `initial_step2_snapshot`）；
+  ② 假库自检原先假设「autocommit 裸写能回滚」，与 psycopg 语义相反，拆成两条用例把这个差异写成断言；
+  ③ `TechSideContractTest` 子进程夹具没有 IR/零件/参数，`confirm_review` 直接报「还没有零件可以确认」，
+  补齐 IR + 零件成本 + 工艺 + 必填参数；
+  ④ `test_every_kind_writes_exactly_one_handoff` 夹具让工艺经理去关财务领的待办，按调用者对齐 `source_claimed_by`；
+  ⑤ 并发用例原先只要两个返回体的 `handoff_id` **都是空串**就算「同一条」，加上非空断言后才真正抓得住缺口；
+  ⑥ 假库原先的撤销日志按内容 diff 记账，并发下会把**别的线程刚插的行**算到自己头上并在回滚时删掉
+  （实测并发用例 0 条回传记录），改为「语句级原子：快照→执行→记账整段持锁，Gate 对齐点挪到解锁之后」。
+
+明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；前端回传结果展示接线、批次 4 的结果版本粒度、
+跨系统回传的 UI 文案、权限模型、历史数据迁移。**批次 3 的实现落地并验收前，不开始批次 4。**
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）＋ 1 个受控假库 ＋ 1 处 changelog 追加，
+未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。** 实现提示词只在会话中交付，
+未在仓库落盘。与并行会话的批次 1（`tech_app/frontend/*`、`tech-project-context.js`）无文件重叠。
+
+## 105. 成品主数据写入幂等、编码取号并发与重复点击保护（批次 4）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-material-write-idempotency-and-code-concurrency.md`（16 节）：把「写入数据库」定义成一条**可重复调用而不产生第二个成品**的业务命令。
+  - **业务幂等键**：`project_id + result_version + action_type`（`action_type` 固定 `material-write`）；两半任一为空 = 没有幂等键，退回今天的旧行为（老调用方不传新参数，行为一点不变）。
+  - **`result_version` 是内容版本不是计数器**：`mat-v1:{成本结果版本}:{成品名称+规格说明的 sha1 前 10 位}`。同一份成本结果重复点、超时重试、刷新后再点 → 同一个版本 → 沿用原编码；**重算成本或改成品名称/规格 → 新版本 → 允许并需要新编码**（否则"改完名字再写"会静默沿用旧行，用户以为改生效了）。
+  - **新增写入记录表** `{CPQ_WF_SCHEMA}.cpq_wf_material_write`，同时唯一约束 `(project_id, result_version, action_type)` 与 `idempotency_key`；DDL 幂等（`CREATE TABLE IF NOT EXISTS` / `CREATE UNIQUE INDEX IF NOT EXISTS`）。**建表失败必须抛错**（没有这张表就没有幂等与留痕），**唯一索引建不上只记不抛**（`number` 上的历史重复数据不由此命令决定）。
+  - **取号必须原子**：取号 + 主数据 + 成本表 + 写入记录在**一个事务**里，事务内先取 `pg_advisory_xact_lock(<固定 key>)`（跨进程互斥、提交/回滚自动释放）；`cpq_db.connect` 增 `autocommit: bool = True`（默认不变，写入命令显式要 `False`）；"先 SELECT 回查"只作历史脏数据兜底，不得作为唯一手段。
+  - **返回体新增** `already_written` / `idempotency_key` / `result_version`，既有字段一个不少；命中时 `material_id` / `number` / `name` 必须是**原来那一行**的值（不是本次请求里的名称）。
+  - **技术侧**：`MaterialWrite` 增 3 个带默认值的字段；幂等命中**不追加** `plan.material_writes`（同一成品编码在业务结果里只留一条）；动作留痕写「沿用已有成品编码 9202200X……（本次没有新建）」，审计 detail 带 `number / already_written / result_version / idempotency_key`；界面命中时必须说「沿用」，不能让人以为又新建了一个。
+  - 历史已写入的主数据/成本行**不迁移、不删除**；本批不改 `material_unit_price` 口径，不动批次 2/3 的任务与回传语义。
+- 新增红测 `tests/test_tech_material_write_idempotency_red.py`（36 个用例、9 个测试类）+ 受控假库 `tests/fixtures/material_write_harness.py`：复用批次 2/3 的 `FakeDB` SQL 引擎，补上**三张表的唯一索引**（`md_clm_material_base_info.number`、写入记录的两种键）、`pg_advisory_xact_lock` 的持锁/放行语义、**语句级故障注入**、以及按函数签名自动适配新旧 `write_material`（老调用走 `write_legacy`，让失败落在行为上而不是 `TypeError`）。
+- **红测与本批实现面严格自洽，不依赖批次 3 的实现**：文件只读 `cpq_tech_bridge.py` / `cpq_db.py` / `cpq_suite_server.py` / `services/cpq_bridge.py` / `services/cost_flow.py` / `models/integration.py` / `frontend/cost-review.js`，不 import 任何批次 3 的回传/待办代码。
+
+Red 验证（逐条原始结论，改前状态）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_material_write_idempotency_red`
+  → **Ran 36 tests / 10 通过 / 26 失败（全 FAIL，0 ERROR）**。10 项通过是**护栏与现状本就正确**的既有能力：
+  5 项假库自检、`test_code_is_allocated_after_the_existing_maximum`（新编码仍在既有最大值之后）、
+  `test_history_is_neither_migrated_nor_deleted`（历史行不动）、`test_allocation_is_not_a_length_based_guess`、
+  `test_same_version_in_another_project_gets_its_own_code`（另一项目自己一个号段）、
+  `test_legacy_callers_without_the_key_keep_todays_behaviour`（不传新参数 = 旧行为，不得改成"必须传"）、
+  `test_double_click_sends_only_one_request`（`crBusy` 防连点必须保留）。
+  26 条失败全部落在真实缺口上，**没有一条是导入/语法/环境错误**：重复写同一版本产生第二条成品（假库实测 `['92022001','92022001']`）、
+  改名重写不产生新编码、返回体没有 `already_written`/`idempotency_key`/`result_version`、
+  服务端 HTTP 入口不接收 `project_id`/`result_version`、技术侧不发这两个字段、
+  `MaterialWrite` 没有版本与命中字段、没有 `cpq_wf_material_write` 与它的唯一约束、
+  取号没有数据库级互斥（`cpq_db.connect` 没有显式事务连接）、成本行插入失败时主数据行残留孤儿、
+  两线程/四线程并发写同一版本会共用一个编码、超时重试又建一个、业务结果里同一编码出现两条、审计没有命中留痕、界面命中不显示「沿用」。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1941 tests / FAILED (failures=26)**：26 条全部来自本批红测文件，**非本批文件 0 条**，批次 1（24 项）、批次 2、批次 3 红测全绿，无回归。
+- `git diff --check` → **干净**。
+- **红测可满足性验证**（未动仓库任何业务文件，只在 `/tmp` 的临时副本里按 Spec 写参考实现）：
+  `cpq_tech_bridge.write_material` 增 `project_id`/`result_version` + `_ddl_pg` 写入记录表 + advisory 锁取号 +
+  单事务三表写入 + 幂等命中返回原行；`cpq_db.connect(autocommit=…)`；`cost_flow.material_result_version`；
+  `MaterialWrite` 三字段；前端「沿用」分支。同一份红测 **36/36 全部转绿，连续 5 次运行稳定 `OK`**；
+  与批次 3 红测同跑 **71/71 OK**（两批不互相拆台）。该副本不是交付物，未进入仓库。
+- 过程中靠自检抓出并修掉 4 处**测试自身**缺陷（都是"假库/断言不忠实"，不是放松标准）：
+  ① 故障注入必须**先成功写一次**才能证明写入记录表真的存在，否则"插入失败回滚"验的是建表而不是事务；
+  ② 审计断言读的行字段是 `detail`（不是 `payload`）；
+  ③ 名称/规格要参与版本号，否则"改名再写"这条用例无法与"重复写入"区分开；
+  ④ 批次 3 红测里的 `fake_write_material` 代理桩按 5 个位置参数写死，本批给 `write_material` 末尾加了两个参数后会以
+  `takes from 3 to 5 positional arguments but 7 were given` 误报失败；改为接受多余参数（只验证"走了桥调用"），
+  批次 3 红测在本批红测存在的前提下**仍是 35/35 绿**。
+
+同时确认：**批次 3 的实现已经落地**，`tests.test_tech_handoff_atomic_idempotent_red` 现在是 **35/35 绿**，
+因此批次 4 不需要再等任何前置实现，可以直接交实现。
+
+明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；批次 1 的项目身份、批次 2 的领取并发、批次 3 的回传闭环；
+成品编码规则本身（仍是 `92022` + 3 位流水）；`material_unit_price` 口径；把写入记录表接进报价侧读模型；历史数据迁移。
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）＋ 1 个受控假库 ＋ 1 处批次 3 红测桩修正 ＋ 1 处 changelog 追加，
+未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务，未改动任何业务实现文件。**
+实现提示词只在会话中交付，未在仓库落盘。
+
+---
+
+## 104 实现与验收：技术工艺 / 成本 / 报告回传报价的原子闭环与幂等（批次 3）（9-17）
+
+实现（对应本文件 `## 104. … Spec / Red` 那一节；Spec：`docs/specs/tech-handoff-atomic-idempotent-close.md`，
+红测：`tests/test_tech_handoff_atomic_idempotent_red.py`（35 项）+ 受控假库
+`tests/fixtures/wf_handoff_harness.py`）。**Spec / 红测 / 假库一个字未动**；未新增 HTTP 路由
+（沿用既有 `/wf/tech/handoff`、`/wf/tech/return-process` 与 `/wf/task`）；未删除、迁移、覆盖任何
+历史数据；未提交、未推送、未创建 MR/tag/Release、未部署、未重启 8010 / 8012。
+
+### 交付内容
+
+**A. `cpq_wf.py`（事务底座 + 交接记录 + 外部事务连接）**
+
+- **`tx_connect()`**：`autocommit=False` 的连接（连接参数与 `search_path` 与 `cpq_auth._connect()`
+  完全一致，只有 autocommit 不同）—— 「一个业务命令 = 一条连接的一个事务、一次 commit」就建在它上面。
+- **`cpq_wf_handoff` 表 + `uq_wf_handoff_key` 唯一索引**（`CREATE TABLE IF NOT EXISTS` /
+  `CREATE UNIQUE INDEX IF NOT EXISTS`，随 `init()` 建，排在既有 CREATE INDEX 之前）：16 列 ——
+  `handoff_id` / `handoff_key` / `handoff_kind` / 来源侧（`source_project_id` / `source_task_id` /
+  `source_result_version`）/ 目标侧（`target_quote_session_id` / `target_card_id` / `target_task_id` /
+  `target_task_kind`）/ `step_no` / `snapshot_sections jsonb` / `source_task_closed` /
+  `source_task_status` / `created_by_user_id` / `created_at`。
+- **占位即裁决**：`insert_handoff_placeholder()` 用 `INSERT … ON CONFLICT (handoff_key) DO NOTHING`
+  抢键（只看 rowcount），`find_handoff()` 重读，`update_handoff()` 在同一事务里补齐落点。
+  并发同键由**数据库**裁决，抢不到的一方读回对方那一条收敛成复用 —— 不捕异常、不把唯一冲突抛给用户。
+- **写函数全部支持外部事务**：`sync_card` / `complete_step` / `step_snapshot` /
+  `merge_step_snapshot` / `complete_claimed_task` / `send_task` 新增 `conn=None`；`conn is None`
+  时维持今天的行为（自己开 / 自己提交 / 自己关），既有调用方零感知。外部事务下 `complete_step`
+  不再顺手做「自动推送到下一步」。
+- **`close_source_task(conn, task_id, user, comment=…)`**：来源待办的四种出口
+  `{task_id, status, closed, already, skipped}` —— `claimed` 且领取人不是调用者 → `WfError`
+  （整段回滚、零写入）；已是 `completed` → `already=True` 不重复关；不存在 → `skipped="not_found"`；
+  没带 id → `skipped="missing_task_id"`。
+- **`_snapshot_dict()`**：读 `data_snapshot` 既接受 dict 也接受 JSON 字符串（沿用既有写法），
+  `merge_step_snapshot` 改用它 —— 第 2 步快照是**合并**（老键保留、同名覆盖），不是整份覆盖。
+
+**B. `cpq_tech_bridge.py`（一条原子命令）**
+
+- **`send_to_quote()` 重写成「一个业务命令、一个事务、一次提交」**，四种回传
+  （`cost_to_quote` / `cost_to_process` / `process_to_quote` / `report_to_quote`）走同一条：
+  ① 解析落点（来源任务 → 需求单里记的报价会话号 → 都没有才新建真实报价会话；`linked_by` 仍是
+  task / session / new_session 三条线索）→ ② 算五元组幂等键 + 插占位（命中 → 读回同一条并
+  `rollback()`，`already_sent=True`、零副作用）→ ③ 落点卡片与前 1 步补齐（`_force_done` 留痕照旧）→
+  ④ 关来源 claimed 待办（放在完成第 2 步**之前**，才能如实报出 closed / already）→ ⑤ 第 2 步
+  **只进不退**（`current_step<=2` 走 `complete_step(2, on_behalf_of=role_of_step(2))`；第 4 步的报告
+  回传只 `merge_step_snapshot`，不动步骤与总状态）+ 快照只合并 → ⑥ payload（`handoff_id` /
+  `handoff_kind` / `result_version` / 完整 `tech_result` 或完整 `report` 包 / 老键 `handoff_key_legacy`）
+  走批次 2 的 `send_task`（同 `(card_id, task_kind)` 复用 / 签名不同才替代的语义原样保留）→
+  ⑦ 补齐交接记录落点 → **一次 `commit()`**。`BridgeError` / `WfError` 原样上抛，其它异常包成中文
+  `_db_error`，**任何一步出错先 `rollback()` 再抛**。会话历史是磁盘写，只在提交之后落盘。
+- **幂等键 `handoff_key_of()`** = `handoff_kind|source_task_id|source_project_id|result_version|
+  目标报价会话号`，**任何写之前**算好；新建的会话号**不进键**（否则超时重试会算出一把新键、再建一张卡片）。
+  老的四元组 `_handoff_key()` 原样保留，只作迁移期线索写进 payload。
+- `ensure_quote_session()` 支持 `session_id=` 与 `conn=`；**`return_to_process()` 改为调用同一条
+  `send_to_quote(handoff_kind="cost_to_process", …)`** —— 2.3「提交工艺经理确认」落在**原报价卡片**上，
+  不再出现 `session_id=技术项目号` 的幽灵卡片（旧的 `_side_task` 那条路已删）。
+- 统一返回体 `_handoff_outcome()`：`handoff_id` / `handoff_key` / `handoff_kind` / `quote_session_id` /
+  `linked_by` / `new_card` / `already_sent` / `already_completed` / `next_step_no` / `next_step_name` /
+  `returned_sections` / `handoff{task_id,task_no,target_role_name,…}` /
+  `source_task{task_id,status,closed,already,skipped}`，既有键一个不少。
+
+**C. 服务端与技术侧接线**
+
+- `cpq_suite_server.py`：`/wf/tech/return-process` 把 `handoff_kind` / `result_version` /
+  `source_task_no` 塞进 payload；`/wf/tech/handoff` 透传 `target_user_id` / `target_type` /
+  `target_role_code`，回包补 `handoff_id`。
+- `tech_app/backend/services/cpq_bridge.py`：回调客户端透传 `result_version` 与定向三参。
+- `tech_app/backend/services/cost_flow.py`：`send_to_quote` / `return_to_process` **不再调用
+  `close_source_task`**（服务端在同一次回传命令的同一个事务里关；该函数本身保留，别的入口还在用），
+  只有拿到带 `handoff_id` 的明确成功结果才写动作留痕与审计，并把交接编号写进留痕文案。
+- `tech_app/backend/services/report_workflow.py`：报告回传走同一条命令，`send_to_quote` 新增
+  `source_task_id` 形参（路由优先、其次需求单），返回体带 `handoff_id` / `source_task` /
+  `already_completed`，审计 payload 里也带 `handoff_id`。
+- `tech_app/backend/main.py`：两条路由的返回体透传 `handoff_id`。
+
+**D. 前端结果区（2.3 / 3.3）**
+
+- `tech_app/frontend/cost-review.js`（`?v=cr13 → cr14`）：2.3「回传销售经理继续报价」与
+  「提交工艺经理确认」两条去向的卡片日志都显示**交接编号**与**来源待办状态**
+  （新 helper `crSourceLine()`：已关闭 / 在此之前已完成无需重复关闭 / 本次没有需要关闭的来源待办 /
+  关不掉的原因）；这句话随动作留痕一起落库（`_record_action`），所以刷新后仍能在「已执行」区看到。
+- `tech_app/frontend/report-publish-result.js`（`?v=publish39 → publish40`）：3.3「报告信息」卡新增
+  「最近交接」一行（交接编号 · 任务号 · 来源待办状态 · 记录时间）；弹窗与右侧看板两条入口
+  （`rpSendReportToSales` / 看板 `sendReportToQuote`）都会写这一行并回报 `handoff_id`。
+  只存编号与状态文案，**不存项目身份、不参与任何身份解析**，也不作为任何判断依据。
+
+**E. 真库自检暴露并修掉的 1 处缺陷（批次 2 遗留，本批必须修）**
+
+- 现象：真库上「换 result_version = 新的一次交接」直接失败 ——
+  `ForeignKeyViolation: cpq_wf_task_replaced_by_task_id_fkey`。
+- 根因：`send_task` 的替代路径**先**把旧任务的 `replaced_by_task_id` 指到新任务 id，**后**才 INSERT
+  新任务；`replaced_by_task_id` 有外键，PG 外键是立即校验、且指向的行必须先存在 →
+  真库立刻报错。批次 2 的受控假库不校验外键，所以那条红测全绿、真库必挂；而批次 3 的
+  「换版本 = 新的一次交接」正好走这条路径。
+- 修法（**不改语义**）：拆成两步同一事务 —— `_cancel_task_for_supersede()` 先把旧任务置为
+  `cancelled`（原因 / 时间照旧，腾出 `(card_id, task_kind)` 的 open 槽位）→ INSERT 新任务 →
+  `_link_superseded_task()` 再补 `replaced_by_task_id = 新 id` + 1 条 `cancel` 审计 + 给旧受众
+  `task_superseded` 消息（内容、对象、`supersedes_task_id`、唯一索引语义全部与批次 2 一致）。
+- 证据：批次 2 红测 41 项 + 本批红测 35 项一起 `Ran 76 tests / OK`；真库自检第 4 项由 FAIL 转 PASS
+  （`旧任务行: ('cancelled', '被新任务替代', 3987997175098383538) | cancel 审计: 1 |
+  task_superseded 消息: 1 | 同类 open 任务: 1`）。
+
+### 验收命令原始输出
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_tech_handoff_atomic_idempotent_red -v
+…
+Ran 35 tests in 1.075s
+
+OK
+```
+
+改前（同一份 Spec / 红测 / 假库，放到 HEAD 的临时副本里跑，仓库文件未动）：
+
+```
+Ran 35 tests in 0.946s
+
+FAILED (failures=28, errors=5)
+```
+
+33 条从红转绿（28 个方法名，其中 `test_every_kind_writes_exactly_one_handoff` 3 套夹具、
+`test_write_index_sweep_never_leaves_partial_state` 4 套夹具各失败一次）：
+
+```
+test_concurrent_same_version_produces_one_handoff_and_one_task
+test_cost_handoff_carries_full_technical_result
+test_cost_to_process_closes_the_cost_task_and_records_handoff
+test_cost_to_process_lands_on_the_original_quote_card
+test_different_source_task_creates_a_new_handoff
+test_every_kind_writes_exactly_one_handoff          (×3)
+test_failure_after_target_task_is_created_leaves_nothing
+test_failure_on_last_write_leaves_nothing
+test_handoff_key_carries_all_five_components
+test_handoff_records_are_signed_by_the_caller
+test_messages_and_audit_reference_the_handoff
+test_missing_source_task_is_not_an_error
+test_new_result_version_creates_a_new_handoff
+test_no_write_happens_outside_one_transaction
+test_report_handoff_at_step_four_keeps_step_and_status
+test_report_handoff_carries_full_report_package
+test_report_handoff_closes_the_claimed_source_task
+test_report_handoff_does_not_overwrite_source_task_payload
+test_retry_after_source_task_completed_reports_already_completed
+test_retry_after_target_task_completed_creates_no_second_task
+test_second_call_returns_the_same_handoff
+test_source_task_claimed_by_someone_else_is_refused_without_writes
+test_source_task_close_result_is_reported
+test_step_two_snapshot_is_merged_not_replaced
+test_success_means_every_side_effect_is_present
+test_success_records_handoff_id_from_the_server
+test_tech_side_does_not_issue_a_second_close_request
+test_write_index_sweep_never_leaves_partial_state   (×4)
+```
+
+相关回归（批次 2 红测 + 两条业务回归）：
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_task_coexistence_and_atomic_claim_red \
+    tests.test_tech_cost_report_handoff_continuity_red tests.test_tech_cost_confirm_zero_waiver_red -v
+Ran 73 tests in 1.921s
+
+OK
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_task_coexistence_and_atomic_claim_red \
+    tests.test_tech_handoff_atomic_idempotent_red
+Ran 76 tests in 1.271s
+
+OK
+```
+
+全量（原样）与同口径对比：
+
+```
+$ ./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+Ran 1941 tests in 105.254s
+
+FAILED (failures=26)
+```
+
+26 条**全部**来自**并行会话的下一批红测** `tests/test_tech_material_write_idempotency_red.py`
+（其实现尚未落地，例如 `cpq_db.connect(autocommit=…)`、材料写入幂等键都还没有）——
+**本批文件 0 条**。把这条并行红测排除后的同口径全量：
+
+```
+discover 全量 1941 项；排除并行会话的 test_tech_material_write_idempotency_red 后 1905 项
+Ran 1905 tests in 104.919s
+
+OK
+```
+
+（1905 = 1870 基线 + 本批 35；批次 1 的 24 项与批次 2 的 41 项也在其中，全绿。）
+
+```
+$ node --check tech_app/frontend/cost-review.js
+$ node --check tech_app/frontend/report-publish-result.js
+node --check OK
+$ python -m py_compile cpq_wf.py cpq_tech_bridge.py cpq_suite_server.py tech_app/backend/main.py \
+    tech_app/backend/services/{cpq_bridge,cost_flow,report_workflow}.py
+PY COMPILE OK
+$ git diff --check
+git diff --check 干净
+```
+
+3.3 结果区（抽出来在 node 里跑，stub 掉 localStorage）：
+
+```
+未回传前的结果区: ——
+回传后的结果区: 交接编号 H-77 · 任务 TP-77777777 · 来源待办 T-9 已关闭 · 记录于 2026-09-17 14:19
+刷新（同一份 localStorage 重新读一次）: 交接编号 H-77 · 任务 TP-77777777 · 来源待办 T-9 已关闭 · 记录于 2026-09-17 14:19
+第二次交接（无来源待办）: 交接编号 H-88 · 任务 TP-88888888 · 本次没有需要关闭的来源待办（missing_task_id） · 记录于 2026-09-17 14:19
+来源待办四种出口: 已关闭 / 在此之前已完成，无需重复关闭 / 本次没有需要关闭的来源待办（missing_task_id） / 未能关闭：越权
+```
+
+### 真库自检（受控假库证明不了 SQL 原子性与外键，必须在真 PG 上验一遍）
+
+临时 schema `cpq_wf_b3check`（`CPQ_WF_SCHEMA=cpq_wf_b3check`）→ `cpq_auth.init()` + `cpq_wf.init()`
+→ 造一个财务账号 + 一张报价卡片，然后逐项验：
+
+```
+临时 schema: cpq_wf_b3check
+卡片: sess-b3-real 第 1 步
+四个线程的插入结果: {0: True, 2: False, 3: False, 1: False}
+赢家: [0] | cpq_wf_handoff 行数: 1
+自检 1（数据库级幂等裁决）：PASS
+第一次: 3987997162775518370 already_sent= False linked_by= session
+第二次: 3987997162775518370 already_sent= True
+目标任务条数: 1 | 卡片步骤: 3
+自检 2（同一把键只交一次、卡片只进不退）：PASS
+来源待办结果: {'task_id': '3987997170576923817', 'status': 'completed', 'closed': True, 'already': False, 'skipped': ''} | 来源任务状态: completed
+自检 3（来源 claimed 待办随同一次事务关闭）：PASS
+换版本后的新交接: 3987997174477626544 | 新任务: 3987997175098383538
+旧任务行: ('cancelled', '被新任务替代', 3987997175098383538) | cancel 审计: 1 | task_superseded 消息: 1 | 同类 open 任务: 1
+自检 4（换版本=新的一次交接，替代指针/审计/通知齐全）：PASS
+临时 schema 已删除： True
+批次 3 真库自检：PASS
+```
+
+验证后复查生产 schema：`cpq_wf_task` 仍是 **220 行 / 45 条 cancelled**，`cpq_wf_handoff` 在
+`cpq_wf` 里**不存在**（`information_schema` 实测 0），含 cpq 的 schema 只有 `cpq_kb` / `cpq_wf`
+（无任何 `b2check` / `b3check` 残留）—— **生产数据一行未动**。
+
+### 真库自检补充（四种回传类型全覆盖 + 命令级并发，9-17 补）
+
+第一轮只验了 `cost_to_quote`，补齐成 8 项：四种回传类型（`cost_to_quote` / `cost_to_process` /
+`report_to_quote` / `process_to_quote`）全部在真 PG 上走过，并补了**命令级**并发（不是只测占位插入）：
+
+```
+临时 schema: cpq_wf_b3check
+卡片: sess-b3-real 第 1 步
+四个线程的插入结果: {1: True, 3: False, 0: False, 2: False}
+赢家: [1] | cpq_wf_handoff 行数: 1
+自检 1（数据库级幂等裁决）：PASS
+第一次: 3987999785431866630 already_sent= False linked_by= session
+第二次: 3987999785431866636 already_sent= True
+目标任务条数: 1 | 卡片步骤: 3
+自检 2（同一把键只交一次、卡片只进不退）：PASS
+来源待办结果: {'task_id': '3987999794483174675', 'status': 'completed', 'closed': True, 'already': False, 'skipped': ''} | 来源任务状态: completed
+自检 3（来源 claimed 待办随同一次事务关闭）：PASS
+换版本后的新交接: 3987999798492929306 | 新任务: 3987999799147240732
+旧任务行: ('cancelled', '被新任务替代', 3987999799147240732) | cancel 审计: 1 | task_superseded 消息: 1 | 同类 open 任务: 1
+自检 4（换版本=新的一次交接，替代指针/审计/通知齐全）：PASS
+落到哪张卡片: sess-b3-proc | tech_cost_return | 第1步 | 幽灵卡片数（用技术项目号当会话号）: 0 | linked_by: session
+自检 5（提交工艺经理落在原报价卡片、不推进步骤）：PASS
+卡片 前/后: 4/draft → 4/handoff_pending | 第 2 步快照里的报告: RPT-2026-0099 3 可以投产
+任务 payload 带完整报告包: True
+自检 6（第 4 步回传不改步骤、只合并快照、payload 带完整报告包）：PASS
+两个线程的返回: {2: ('3987999984015383941', False), 1: ('3987999984015383941', True)} | 异常: {}
+交接记录数: 1 | 目标任务数: 1 | already_sent: [False, True]
+自检 7（真库并发同键收敛成同一条交接）：PASS
+工艺经理回传: 3987999989375704468 | 卡片步骤: 3 | 第 2 步快照栏目数: 1
+自检 8（process_to_quote 第 1 步 → 第 3 步、写进第 2 步快照）：PASS
+四种回传类型真库覆盖： ['cost_to_process', 'cost_to_quote', 'process_to_quote', 'report_to_quote']
+临时 schema 已删除： True
+批次 3 真库自检：PASS
+```
+
+两点如实说明：
+
+- **第 4 步报告回传的总状态**：`current_step` 一动不动（4 → 4），但卡片总状态会被 `send_task`
+  标成 `handoff_pending`（实测 `4/draft → 4/handoff_pending`）。这是「已交给销售、等他接着走」的
+  标记，红测 `test_report_handoff_at_step_four_keeps_step_and_status` 的初始值就写成
+  `overall_status="handoff_pending"` —— 即红测把 Spec 的「不改总状态」编码成「不得回退、不得变推进态」。
+  自检按这个口径断言（`current_step` 恒为 4、总状态不得变成 `completed` / `in_progress`），
+  没有去改 `send_task`（那是批次 2 的语义，本批禁止动）。若产品口径要求第 4 步回传**总状态也一字不动**，
+  那是一处独立的语义变更，请单独开一批（改 `send_task` 的 `handoff` 分支或按 kind 收窄），本批不擅自扩大。
+- 自检 7 是**命令级**并发：两个线程同时把同一把键交给 `send_to_quote`，两边拿到同一个 `handoff_id`，
+  库里只有一条 `cpq_wf_handoff`、一条目标任务，`already_sent` 恰好一个 False 一个 True，
+  没有任何唯一冲突异常抛给调用方。
+
+### 边界
+
+- 本批只在允许清单内改文件：`cpq_tech_bridge.py`、`cpq_wf.py`、`cpq_suite_server.py`、
+  `tech_app/backend/services/{cpq_bridge,cost_flow,report_workflow}.py`、`tech_app/backend/main.py`、
+  `tech_app/frontend/cost-review.js`(+`.html` 的 `?v=`)、`tech_app/frontend/report-publish-result.js`
+  (+`.html` 的 `?v=`)。**批次 2 的 `send_task` / `claim_task` 语义、`supersedes_task_id` /
+  `replaced_by_task_id` / `cancel_reason`、部分唯一索引 `uq_wf_task_open_kind` 均未改**（E 项只是把
+  同一事务里的两条 UPDATE 分成「先取消、后补指针」，可见结果逐项不变）。
+- 未新增 HTTP 路由；未用进程内锁 / 全局字典 / 内存队列做唯一性（唯一来源是
+  `cpq_wf_handoff.handoff_key` 的唯一索引 + `ON CONFLICT DO NOTHING` 的 rowcount）；
+  未改权限模型与 `/wf/tech/material`；未改 `_step2_snapshot` / `_merge_report_snapshot` 的 DA 列名口径；
+  未改 `_force_done` / `complete_step(on_behalf_of=…)` 的代完成留痕；未删除 / 迁移任何数据。
+- 同一工作区里**批次 1（项目身份唯一来源）的未提交改动保持原样**：`cost-review.js` /
+  `report-publish-result.js` 里 `TechProjectContext.bind()` 等改动不是本批的，未回退、未混入本批交付。
+- 并行会话的下一批（材料写入幂等，`tests/test_tech_material_write_idempotency_red.py` +
+  `tests/fixtures/material_write_harness.py`）**本批一个字未动、未实现、未改其红测**；
+  全量 discover 里那 26 条失败全部来自它。
+- **未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。** 线上 `cpq_wf_handoff` 表与
+  新列尚未施加到生产 schema（DDL 幂等，随下次部署 `cpq_wf.init()` 生效）。
+
+### 完整性锚点（共享工作区，9-17 14:33 实测）
+
+本批 Spec / 红测 / 假库**一个字未动**；md5 如下（跑完红测前后各算一次，内容不随运行变化）：
+
+```
+04539d69d6cb05be6c18a6cee23e1cd9  tests/test_tech_handoff_atomic_idempotent_red.py
+60400dea84d12fa0e957cd0c9e89f2a5  tests/fixtures/wf_handoff_harness.py
+dc2329673033c9aaa1e3397585a58777  docs/specs/tech-handoff-atomic-idempotent-close.md
+```
+
+同一工作区有**并行会话**（材料写入 / 成品编码那一批）：`tests/test_tech_material_write_idempotency_red.py`
+与 `tests/fixtures/material_write_harness.py` 的修改时间是 9-17 14:13 / 14:09，本批的「全量 discover」数字
+是在它当时的版本上量的（26 条失败全来自它）；本批实现与交付只涉及上面列出的 11 个文件。
+
+### 边界机器比对（9-17 补：把「没碰什么」从口头声明变成 HEAD vs 工作区的逐条比对）
+
+```
+== 本批声称未改的东西，逐条比对 HEAD vs 工作区（抽函数体做全等比较）==
+  一致  cpq_tech_bridge.py:_step2_snapshot（第 2 步快照的 DA 列名口径）
+  一致  cpq_tech_bridge.py:_merge_report_snapshot（报告并入快照的 DA 列名口径）
+  一致  cpq_tech_bridge.py:_force_done（代完成留痕）
+  一致  cpq_wf.py:can_do_step（步骤权限判定）
+  一致  cpq_wf.py:role_of_step（步骤角色）
+  一致  cpq_wf.py:claim_task（批次 2 的原子领取）
+  一致  cpq_wf.py:_task_row（任务行字段口径）
+
+== 禁改点在 diff 里的出现次数 ==
+  /wf/tech/material        0
+  PROCESS_DETAIL_LIMIT     0
+  uq_wf_task_open_kind     0      ← 批次 2 的部分唯一索引一个字未动
+  supersedes_task_id       0      ← 新任务的替代指针照旧由批次 2 的 send_task 写
+  ADMIN_ROLES              1      ← 只是新 helper close_source_task 里读它判「管理员可代关」
+  cancel_reason            2      }
+  replaced_by_task_id      6      } 都是替代路径拆两步后的既有字段写入 + 注释，字段口径不变
+
+== 批次 2 的 DDL ==
+  _ddl_pg 里被删掉的行: 0
+  _ddl_pg 里新增的行: 23（全部是 cpq_wf_handoff 表、它的列与 uq_wf_handoff_key 唯一索引）
+
+== 前端影响面 ==
+  本批新增标识（crSourceLine / rpHandoffNote / rpRememberHandoff / rpSourceState / 最近交接 / 交接编号）
+  只出现在 cost-review.js 与 report-publish-result.js 两个文件里，其它前端文件 0 命中；
+  这两个脚本各自只被一个页面引用，两个页面的 ?v= 都已提升（cost-review.js?v=cr14 /
+  report-publish-result.js?v=publish40）—— 没有漏刷缓存号的页面。
+```
+
+## 106. 技术工艺全局口径修正：五阶段 + 子步骤编号（批次 5A）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-workflow-five-phase-naming.md`：把「阶段 / 子步骤」写成**一张唯一口径表**——5 个阶段 × 13 个子步骤。
+  - 1 工艺评估需求（1.1 创建需求 / 1.2 确认需求 / 1.3 审核需求）；
+    2 图纸解析（2.1 图纸解析）；
+    3 组装与整合（3.1 整合图纸 / 3.2 参数推荐 / 3.3 组装工艺）；
+    4 成本测算（4.1 零件成本 / 4.2 组装成本 / 4.3 汇总）；
+    5 工艺评估报告（5.1 汇总结果 / 5.2 结果审核 / 5.3 发布并回传报价）。
+  - `process`（组装与整合）与 `cost`（成本测算）各自**跨 3 个子步骤**（页内页签决定当前子步骤），其余 7 个 stage 与子步骤 1:1；文案规则：1:1 用「子步骤号 + 子步骤标题」，跨子步骤用「阶段号 + 阶段标题」。
+  - 现状问题：顶部流程条早就是 5 大流程，但 `STAGES[].no` 还是老九阶段号（process=2.2、cost=2.3、报告三步=3.1/3.2/3.3），`phase/phaseTitle` 还是更老的三阶段标题；页面标题、页签行、会话结论、Agent 提示词与「九阶段白名单」报错都还在用旧编号。同一屏里「第 3 阶段 组装与整合」和「2.2 组装与整合」同时出现。
+  - 目标：前端只保留一份口径表（`STAGES` 扩成阶段号 + 阶段标题 + 子步骤号 + 子步骤标题 + 页签 view，阶段 3/4 的页签表补 `no`），后端新增一份对应表（`tech_app/backend/services/workflow_stages.py`，导出 `PHASES` / `STAGES`）供 Agent 提示词与白名单报错使用，两边逐行一致。
+  - `page_context` 规则：1:1 的 stage 用「子步骤号 + 子步骤标题」（如 `2.1 图纸解析`），跨子步骤的 stage 用「阶段号 + 阶段标题」（如 `3 组装与整合`、`4 成本测算`），9 个取值互不相同、查不到返回 null 且不退回别的步骤。
+  - 「第 N 大步」一律改称「第 N 阶段」。
+- 新增红测 `tests/test_tech_workflow_five_phase_naming_red.py`（23 个用例、5 个测试类）：按规范表逐面校验前端口径表、顶部 5 阶段、子步骤按钮、页签代理、`page_context`、后端口径表、Agent 提示词与白名单报错、用户可见页（组装页 / 成本页 / 图纸页 / 汇总页 / 发布页 / 页内流程条 / 汇总阶段行 / 导航表），并守住护栏（9 个 stage id、页面文件名、URL 参数、`TECH_SUBSTEPS`、`QUOTE_STEPS` 不动）。
+- Red 验证（逐条原始结论，改前状态）：
+  - `./open-claude/.venv/bin/python -m unittest tests.test_tech_workflow_five_phase_naming_red`
+    → **Ran 23 tests / 5 通过 / 18 失败（全 FAIL，0 ERROR）**。5 项通过＝4 项护栏（stage id 与页面映射不变、上游六子步骤与报价 6 步不动、顶部 5 阶段标题已正确、图纸页 2.1 正确）＋ 1 项现状已达标（「第 N 大步」在这三个文件里本来就没有）。
+    18 条失败全部落在口径缺口上，报错精确（不是导入 / 语法 / 环境错误）：前端口径表阶段号 / 阶段标题 / 子步骤号 / 子步骤标题与规范表不符；阶段 1、5 的子步骤按钮没有编号；阶段 3、4 的页签没有 `3.x` / `4.x`；`page_context` 仍是 `2.2 / 2.3 / 3.x`；缺少 `workflow_stages.py`；Agent 提示词仍写「九阶段」且没有新表；看板白名单报错仍写「九阶段」；组装页与成本页页签行、汇总 / 发布页流程条与阶段行、导航表仍是旧编号。
+- 边界与兼容：只改编号与标题文案；9 个 stage id、页面文件名、URL 上的 `stage=`、iframe 嵌入协议、会话时间线 / 审计里的历史 `page_context` 文本**一律不动、不迁移**；不做视觉重设计。
+- 既有测试期望的同步更新清单（口径变更导致，不是掩盖回归；实现时必须一起改）：
+  ① `tests/test_tech_stage_context_nine_stages_red.py` 的子步骤号整表（`process` 2.2 → `3 组装与整合`；`cost` 2.3 → `4 成本测算`；`summary/report-review/report-publish` 3.1/3.2/3.3 → 5.1/5.2/5.3；1.x 与 2.1 不变）；
+  ② `tests/test_tech_agent_result_presentation_prompt_red.py:117`（附录里 `2.2 组装与整合`）；
+  ③ `tests/test_tech_summary_report_includes_cost_review_red.py:273`（阶段汇总行 `2.3 成本测算` → `4 成本测算`）；
+  其余 4 处（`test_integration_process_tab_single_primary_and_next_step_red.py`、`test_tech_batch_partial_semantics_red.py`、`test_tech_history_restore_real_stage_red.py`、`test_tech_drop_readonly_bar_red.py`）只是断言消息 / 注释里提到旧编号，实际断言不受影响。
+
+## 107. 技术工艺统一流程状态机、阶段完成条件与准入门禁（批次 5B）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-unified-workflow-projection.md`：后端出**唯一流程投影**，前端只渲染、不再自己拼完成态。
+  - `GET /api/projects/{project_id}/workflow/projection` 返回 `{project_id, generated_at, refresh_ok, phases(5), stages(13), next_action}`；每个子步骤带 `key / phase_no / phase_title / sub / sub_title / stage_id / view / status / viewable / actionable / completed / stale / blocked_reasons / missing_requirements / required_role / primary_action / next_stage`。
+  - 统一状态枚举：`not_started / in_progress / generated / edited / awaiting_confirmation / confirmed / blocked / stale / in_review / approved / published`。
+  - 完成条件逐条定义：**草稿不算 1.1 完成**（要提交确认）；1.2 要人点确认；1.3 要有权限的人通过；2.1 要有 IR，**0 零件必须人工确认「确实没有识别出零件」**（`parse_no_parts_confirmed` 留痕）才算完成；3.1 要有整合结果（无额外图纸时允许基于 IR 的默认整合）；3.2 要参数推荐人工确认（可带 waiver）；**只生成工序不算 3.3 完成**；4.1 要逐件算完（排除件必须登记，不能当 0 元）；4.2 要组装成本算完；**4.3 要财务正式确认**；5.1 要有报告草稿；5.2 要送审且有结论；**5.3「已发布」与「已回传报价」是两个可区分状态**（已发布未回传 `status=published`、`completed=false`）。
+  - `viewable` 恒为真（含未来步骤与历史步骤）；`actionable` 只在前置满足且无阻塞时为真；不可执行必须给出 `blocked_reasons`（权限不足要写明所需角色）。
+  - 前端新增纯函数 `tech_app/frontend/tech-workflow-projection.js`（`TechWorkflowProjection.progress(projection)`），`refreshProgress()` 只消费它；**读取失败保留上一次状态 + 显示刷新失败，不得清空成未完成**。既有 `/api/projects/{id}/workflow` 字段与语义完全不动。
+- 新增红测 `tests/test_tech_unified_workflow_projection_red.py`（30 个用例、8 个测试类）：在子进程里用临时 `DATA_DIR` + `TestClient` 真跑后端（假项目、不联网、不调模型），覆盖投影契约与路由、需求三步正反例、图纸 0 零件正反例、组装与整合「只生成工序 ≠ 完成」、成本「算过 ≠ 确认」、报告「已发布 ≠ 已回传」、全新项目 / 老项目的可看不可执行、权限门禁、连续两次投影幂等、既有 `/workflow` 不回归；前端用 node 真跑纯函数并校验 `refreshProgress` 不再自己算完成态、失败时不清空。
+- Red 验证（逐条原始结论，改前状态）：
+  - `./open-claude/.venv/bin/python -m unittest tests.test_tech_unified_workflow_projection_red`
+    → **Ran 30 tests / 1 通过 / 29 失败（全 FAIL，0 ERROR）**。唯一通过项是护栏「既有 `/workflow` 字段不变」。
+    29 条失败全部落在真实缺口上：没有投影模块与路由；没有 5 阶段 / 13 子步骤与契约字段；草稿被算成 1.1 完成；0 零件没有「待人工确认」；只生成工序被算成组装工艺完成；成本未确认被算成完成；已发布未回传被算成完成；未来步骤与权限门禁没有结构化原因；前端没有纯函数、仍在 `done.add(...)` 自己拼、刷新失败还把完成集合清空。
+  - 过程中修掉 2 处**测试自身**缺陷（都是「断言不忠实」，不是放松标准）：① 幂等用例原先在两次投影**都算不出来**（返回同样的错误体）时也能通过 → 加「两次都必须真的算出来」前置；② 404 用例原先在路由根本不存在时也会通过 → 先断言合法项目返回 200，证明路由存在。
+- 全量回归：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1994 tests / FAILED (failures=73)**；按文件拆开正好等于本批两个红测（18 + 29）＋ 批次 4 尚未实现的红测（26），**其余文件 0 条回归**。`git diff --check` 干净。
+- 明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；批次 1 的项目身份、批次 2 的任务并存 / 原子领取、批次 3 的回传闭环、批次 4 的主数据写入幂等；不做视觉重设计、不改权限实现、不动既有 `/workflow` 接口。
+
+边界与交付状态：**本地新增 4 个文件（2 份 Spec + 2 个红测）＋ 2 处 changelog 追加，未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务，未改动任何业务实现文件。** 实现提示词只在会话中交付，未在仓库落盘。
+
+## 108. 报价—技术—财务—报告统一业务实例关联与安全恢复（批次 6）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-quote-business-case-linkage.md`（226 行）：给整条链路一个**稳定业务实例号** `business_case_id`，并把它定为回传落点的唯一裁决依据。
+  - 现状问题：把技术支线认回原报价卡片靠三条**散落的、随时会断的**线索 —— `source_task_id` 查任务那张卡片（`cpq_tech_bridge.py:824-827`，`linked_by='task'`）、`source_session_id` 命中卡片（`:828-833`，`linked_by='session'`）、都没有就**静默新建**一条真实会话（`:834-837` → `ensure_quote_session`，`linked_by='new_session'`）。任务被取消 / 被顶掉 / 需求单里没记会话号，就会凭空多出一张报价卡片，只在前端留一句「已新建一张」；多候选、无候选都没有出口。
+  - 目标流程：报价建卡即产生 / 绑定实例号（`bc_` + 12 位 hex，落 `cpq_wf_card.business_case_id`，同一实例多张卡片共享）→ 发起技术支线随任务 payload 带走 → 技术项目 meta 持久化 → 成本 / 报告 / 回传任务全部携带 → Agent 会话轮次携带 → 原 task 被取消 / 替换 / 删除后仍能凭实例号找回。
+  - 恢复解析收敛成**唯一入口** `cpq_case_link.py`：`decide(candidates, *, business_case_id, tech_project_id, create_new, create_reason)` 纯函数判定、`resolve(conn, ...)` 查候选后按结局落库、`CaseLinkError(code, candidates, message)` 承接「多候选 / 无候选」。
+  - 四种结局与硬规则：唯一候选自动关联（并回填卡片与技术项目）；**多候选一律停止**（候选 ≥2 时即使传了「新建」也不放行）、列候选交有权限的人选、0 写入；**无候选不新建**、0 写入；只有显式传入「新建」+ **恢复原因**才建，并记录 `recovered_from_project_id`（= 技术项目号）与 `recovery_reason`；**绝不静默新建**；新建的会话号是报价侧真实会话号，**绝不用技术项目号冒充** `quote_session_id`；归档卡片不进候选、不自动复活。
+  - 契约细节逐条钉死：候选对象键（`quote_session_id` / `card_id` / `linked_by` / `title`）；去重按 `quote_session_id`（同一张卡片只算一个候选，命中方式保留 `case` > `task` > `session`；实例号与来源任务指同一张卡时是一个候选，不是多候选）、`decide` 七个返回键一个不少、`CaseLinkError` 三个属性、`cpq_wf.sync_card(..., business_case_id="")` 生成且不换号、卡片读取路径（`_CARD_COLS` / `get_card` / `card_detail`）带出实例号、`cpq_wf_card(business_case_id)` 幂等加列 + 幂等索引、`cpq_wf_handoff.business_case_id`、回传返回体的 `business_case_id` / `candidates` / `recovery`（没新建时 `recovery` 四个键也要在、值为空串）、`store.save_business_case` / `load_business_case` 落项目 meta 的 `business_case` 文档、`integration_quote_result` 与 Agent 会话轮次带实例号。
+  - 历史兼容：老卡片 / 老项目没有实例号时**只读可用**，继续走 `task` / `session` 既有线索，单一候选时**安全回填**；多候选不回填不新建；不迁移、不改写历史任务 payload / 历史会话 / 审计。
+- 新增红测 `tests/test_tech_quote_business_case_linkage_red.py`（38 个用例、7 个测试类）：
+  - `DecidePureFunctionTest`（9）：唯一 `case` / `task` / `session` 候选各自命中；同一会话号重复候选按去重算一个；两候选即使带「新建 + 原因」也必须停在 `multiple_candidates`；无候选不新建；`create_new` 无原因仍按无候选；带原因时 `recovered_from_project_id` / `recovery_reason` 落定；**同输入同输出且不改入参**（纯函数）。
+  - `ResolveDecisionTest`（9）：task 被删后靠实例号仍认回原卡片；`task` 命中回填实例号且第二次解析不换号；多候选 0 写入并把候选清单带在异常里；无候选 0 写入；`create_new` 无原因 0 写入；归档卡片按无候选处理；候选项键齐（前端要展示会话号 / 标题 / 匹配方式）。
+  - `SendToQuoteLinkageTest`（10）：`send_to_quote` 新增三个关键字的签名门；实例号命中落回原卡片并把实例号写进交接记录；返回体带 `business_case_id` / `candidates` / `recovery`（含四个 recovery 键）；既有 `linked_by='task'` 能力护栏；无候选 / 无原因新建 / 多候选三条拒绝路径都**整库快照前后一致**（卡片 / 步骤 / 任务 / 审计 / 消息 / 交接一条不变）；人工确认新建后**真的多一条报价会话**、会话号 ≠ 技术项目号、技术项目号不出现在卡片表、新卡片与交接记录落在同一实例号上；恢复原因与 `recovered_from_project_id` 进审计。
+  - `SchemaAndCardContractTest`（3）：`_ddl_pg` 对 `cpq_wf_card` 与 `cpq_wf_handoff` 都是幂等 `ADD COLUMN IF NOT EXISTS business_case_id` 且有 `cpq_wf_card(business_case_id)` 幂等索引；`sync_card` 建卡产生 `bc_` + 12 位 hex、重复同步不换号、显式传入原样保存；`get_card` 能读回实例号。
+  - `TechSideBusinessCaseTest`（4，子进程 + 临时 `DATA_DIR`）：`store.save_business_case` / `load_business_case` 往返 + **合并写入不抹掉实例号** + 落点在项目 meta 的 `business_case` 文档；`integration_quote_result` 返回体带 `business_case_id`（无 meta 时空串、绝不现编）；技术侧 `cpq_bridge.send_to_quote` 能接受并转发实例号；Agent 会话每一轮 user / assistant 记录都带实例号。
+  - `SpecPinnedTest` / `HarnessSelfTest`（3）：Spec 存在且钉死契约关键字；批次 3 受控假库自检可用、一个卡片 + 一条已领取来源任务的场景基线成立。
+- Red 验证（逐条原始结论，改前状态）：
+  - `./open-claude/.venv/bin/python -m unittest tests.test_tech_quote_business_case_linkage_red`
+    → **Ran 38 tests / 3 通过 / 35 失败（全 FAIL，0 ERROR，多次复跑结果一致）**。3 项通过＝2 项假库自检 + 1 项 Spec 契约关键字。
+    35 条失败全部落在真实缺口上、报错精确（不是导入 / 语法 / 环境错误）：21 条落在「没有 `cpq_case_link.py` → `decide` / `resolve` / `CaseLinkError` 三个唯一入口都不存在」（`ImportError` 被转成带 Spec 出处的 `AssertionError`，不是 ERROR）；6 条落在 `cpq_tech_bridge.send_to_quote` 没有 `business_case_id` / `create_new` / `create_reason` 这三个关键字参数（签名门先失败）；1 条 `cpq_tech_bridge.send_to_quote` 签名门；1 条 `cpq_wf.sync_card` 没有 `business_case_id`；1 条 `_ddl_pg` 没有 `cpq_wf_card` / `cpq_wf_handoff` 的实例号列与索引；1 条 `get_card` 读不到实例号（`_CARD_COLS` 里没有）；1 条 `store.save_business_case` 不存在；1 条 `integration_quote_result` 返回体无 `business_case_id`；1 条技术侧 `cpq_bridge.send_to_quote` 不接受实例号；1 条 Agent 会话轮次没有 `business_case_id` 键。**没有一条失败是测试自身的语法 / 导入 / 环境缺陷。**
+  - 过程中修掉 2 处**测试自身**缺陷（都是「不该以 ERROR 形式报缺口」，不是放松标准）：① `cpq_wf.sync_card` 与 `store.save_business_case` 在缺口状态下会抛 `TypeError` / 缺键 `KeyError`（ERROR）→ 改成先做签名 / 能力门断言（FAIL）；② 子进程探针在 `store` 缺能力时少写一个返回键导致 `KeyError` → 改成所有键恒定出现。另把 3 处 `assertRegex` 换成定长断言的 `assertTrue(re.search(...))`，避免失败消息把整份 DDL 倾倒出来。
+- 全量回归：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → 三次运行分别 **Ran 2030 tests / FAILED (failures=77 / 75 / 73)**，**每次都 0 ERROR**；本批文件稳定贡献 35 条（每次一致）。其余失败全部来自**其它批次**：批次 5B 的 29 条（未实现）、批次 5A 的 18 → 4 → 1 条（本工作区里有并行会话正在实现，逐次减少）、以及 9~11 条与本批无关的文件（`integration_left_toolbar_*` / `tech_summary_report_includes_cost_review` / `tech_agent_result_presentation_prompt` / `tech_ui_protocol` / `tech_stage_context_nine_stages` / `tech_assembly_tab_selected_state`，均为并行会话正在改动的面）。批次 3 的原子回传红测 35 条**全绿**（事务与幂等语义未被本批触碰）。`git diff --check` 干净。
+- 明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；不新增权限模型（只要求把「谁新建的、为什么」写清楚）；不做报价侧「选择候选 / 确认新建」的界面；不改批次 3 的事务 / 幂等键 / 关闭来源待办语义，不改批次 4 的主数据写入幂等，不改批次 5 的流程投影与口径；不做数据迁移脚本、不回填历史 `page_context`。
+
+边界与交付状态：**本地新增 1 份 Spec + 1 个红测 + 1 处 changelog 追加（更新既有未跟踪的 Spec 文件），未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务，未改动任何业务实现文件。** 实现提示词只在会话中交付，未在仓库落盘。
+
+## 109. 技术项目「我的 / 全部」可见范围与项目级读写权限（批次 7）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-project-acl-visible-scope.md`：项目级 ACL 收成**唯一判定入口** `tech_app/backend/services/project_access.py`（`require_project_access` / `visible_projects` / `can_read` / `can_write` / `effective_roles` / `mine_sources` / `ProjectAccessError`），后端与报价首页技术清单、历史 Drawer、Agent 历史全部共用它。
+  - 现状缺口（已实测）：`GET /api/projects`（`main.py:920-922`）就是 `store.list_projects()`，**连当前用户都没取** —— 工艺工程师 alice 的列表里同时出现 alice 与 bob 的项目；41 个「只有 `{project_id}` 一个路径参数」的 GET 路由里**34 个**对非属主返回 200；项目级写权限只有 `project_write_guard`（`main.py:429-446`）且只对 `role=="engineer"` 生效。
+  - 「我的清单」四类来源 `mine_sources = owner / holder / participant / assigned`；身份判定同时读 `user.role` 与 `user.cpq_role_code`（`cpq_sso.ROLE_MAP` 把 `sales_mgr → viewer`，只看 `role` 就认不出销售经理）。
+  - 角色 × 读范围 × 写范围矩阵：工程师＝自己的项目（可写自己的）；工艺经理＝技术工艺全部项目（含归档）；销售经理＝**由他报价发起**的技术项目（只读）；财务经理＝**当前成本任务归他**的项目（成本面可写）；总监 / 总经理 / 管理员按既有 `DIRECTOR_ROLES` / `ADMIN_ROLES`。
+  - `GET /api/projects?scope=mine|all|archived`（非法 scope → 400），返回体**仍是 list**（既有消费方不改），每项加 `access = {scope, mine_sources, can_read, can_write}`；**不存在与无权限的响应体逐字相同**（404 `{"detail":"项目不存在"}`），不泄露项目是否存在。
+  - `store` 新增参与者模型：`add_participant` / `remove_participant` / `list_participants` / `set_current_holder` / `current_holder`，参与者项 `{username, role, source, assignee, added_at, added_by}`、`source ∈ manual / quote_owner / cost_task_assignee`（落点是项目 meta 文档，不新建 PG 表）。
+- 新增红测 `tests/test_tech_project_acl_scope_red.py`（28 个用例、9 个测试类）：模块契约（`Mode` / `Scope` 签名、错误码、有效角色合并）；「我的」四类来源各自成立且**不串项目**；参与者与当前持有人的增删与幂等；归档项目的可见/可写边界；销售经理 / 财务经理的**关联式**读范围；写权限（能看见但角色不够 = `forbidden`，不是 `not_found`）；不存在与无权限不可区分；**HTTP 级**子进程 + `TestClient` + 两张票（打桩 `cpq_sso.resolve`，两个账号两个项目）从 `main.app.routes` **现算**单参数 GET 清单（断言清单 ≥ 30 条防空集合假通过）—— 非属主全部 404、属主不 404、响应体逐字相同；列表 scope 与 `access` 块；归档 scope 是独立列表；写路径不越界。
+- Red 验证（逐条原始结论，改前状态）：
+  - `./open-claude/.venv/bin/python -m unittest tests.test_tech_project_acl_scope_red`
+    → **Ran 28 tests / 1 通过 / 27 失败（全 FAIL，0 ERROR）**。唯一通过项是 Spec 契约关键字护栏。
+    27 条失败全部落在真实缺口：`project_access` 模块不存在（`ImportError` 被转成带 Spec 出处的 `AssertionError`，不是 ERROR）；`store` 没有参与者能力；列表接口不看用户；单参数 GET 没有项目级权限。
+  - 过程中修掉本文件自身的 1 处**测试缺陷**：上一轮为占位留下的 6 行恒真断言（如
+    `assertEqual([], [pid for pid in ids if pid not in ids])`）语义为空转、不能证明任何事 ——
+    已替换为有意义断言（alice 的「我的」不得出现 bob 的项目 id、`scope=all` 的每一行都必须带
+    `access` 块、`all_pm_ids` 必须同时看得见两个项目、销售经理只看得见他来源报价那一个），
+    并新增「归档 scope 是独立列表」一条。占位断言清掉后失败数从 26 → 27（更多真实缺口被覆盖，
+    不是放宽标准）。
+
+## 110. 统一认证客户端、Token 状态传播与未保存修改保护（批次 8）：Spec / Red（9-17）
+
+- 新增 `docs/specs/tech-unified-auth-token-and-unsaved-guard.md`，两部分各定义一份可验收契约。
+  - **8A 认证与 Token**：新增 `tech_app/frontend/tech-auth-session.js`，暴露 `window.TechAuth` 作为**唯一事实源入口** —— `TOKEN_KEY='cpq_auth_token'`、`LEGACY_KEYS=['authToken','cad_engine_token']`、`token()` / `setToken()` / `clear()` / `migrate()` / `subscribe()` / `bindContext()` / `context()` / `embedded()` / `broadcast()` / `isReady()` / `ready()`。兼容键「读一次即迁移」，写入口收敛成一个；`setToken` / `clear` **绝不 `location.reload()`、绝不写 `sessionStorage`**（iframe 不另存一份）；`bindContext` 记住 project / stage，**登录态变化不得清空**；`ready()` 无票（401）也必须 resolve，不能挂住页面；iframe 内 `embedded()===true` 且 `broadcast()` 用 `location.origin` 发 `namespace='cpq:tech-auth'`。
+  - `cpq-sso.js` 改造：删掉 `onIdentityChanged()` 里的 `location.reload()`（`cpq-sso.js:117`），改为「迁移 → 用**新票**重取 `/api/me` → 就地 `apply()`」；`CpqSso.token()` 必须等于 `TechAuth.token()`；`TechAuth` 缺失时安全降级。`auth.js` / `account.js` / `session-guard.js` 不再自己写兼容键、不再各发一次首次登录态查询。
+  - **8B 未保存修改**：`tech-board-bridge.js` 扩协议（`namespace` / `version=1` 与既有 5 命令 + 7 事件一个不改），新增命令 `request-leave` / `save-draft` / `discard`、状态事件 `dirty-state` / `leave-approved`，导出 `TechBoardBridge.PROTOCOL`；父壳新增 `markDirty` / `guardLeave` / `shouldWarnOnUnload` 与 `snapshot().dirty`。`guardLeave` 逐条钉死：未 attach → 放行（纯查看不误拦）；未 dirty → 放行且**不发** `request-leave`；`save` / `discard` **必须等看板广播 `dirty-state{false}` 才放行**（`save-draft` 的 `ok` 回复不算确认）；`cancel` 是 **quiet** 的（不写会话流、不弹错、不污染 `snapshot().error`）；看板拒绝 / 超时 → 不放行且**必须非 quiet**；握手期间又被标脏 → 本次放行作废；同 reason 在途去重（只发一条 `request-leave`）；`leave-approved` 一次性；握手期间 `detach` → 不放行、错误码 `detached`（quiet）、不再补发保存命令。
+  - `tech-workbench.js` 五个导航出口（顶部大步骤、`#techPrev`、`#techNext`、`popstate`、`cpq:tech-workbench:exit`）收敛到唯一闸门 `guardedStage()`，并用 `shouldWarnOnUnload()` 挂 `beforeunload` 兜底；桥缺失时直接导航（降级，不产生死路）。
+- 新增红测 `tests/test_tech_unified_auth_token_and_unsaved_guard_red.py`（26 个用例、2 个测试类）：8A 用 node 真跑 `tech-auth-session.js` 与 `cpq-sso.js`（真 `localStorage` / `sessionStorage` / `reload` 计数 / `/api/me` 请求头 / iframe 父壳 `postMessage`），覆盖唯一事实源、兼容键迁移与清理、同步广播、`project`/`stage` 存活、iframe 不另存一份、无票 `ready()` 必须 resolve、身份变化后就地刷新且带新票；8B 用 node 真跑 `tech-board-bridge.js` 的完整 postMessage 协议（自动应答帧、可注入拒绝 / 超时 / 不应答），覆盖协议清单、未 attach 放行、干净直放、save / discard / cancel / leave-approved / 拒绝 / 超时 / 去重 / `detach` / `markDirty` / 缺字段按 true；另有脚本路由存在性的静态契约（唯一 `guardedStage` 定义 + 唯一 `guardLeave` 调用 + 五个出口都走它 + `beforeunload`）。
+- Red 验证（逐条原始结论，改前状态）：
+  - `./open-claude/.venv/bin/python -m unittest tests.test_tech_unified_auth_token_and_unsaved_guard_red`
+    → **Ran 26 tests / 0 通过 / 26 失败（全 FAIL，0 ERROR）**。
+    8A 的 9 条落在「`tech-auth-session.js` 不存在 → `window.TechAuth` 缺失」；`cpq-sso.js` 那条另落在「身份变化仍靠 `location.reload()`」；`auth.js` / `account.js` / `session-guard.js` 那条落在「三份键仍各有写入口」。
+    8B 的 15 条落在「`guardLeave` / `markDirty` / `shouldWarnOnUnload` / `PROTOCOL` / `dirty-state` / `leave-approved` 全部不存在」；2 条静态契约落在「`tech-workbench.js` 没有 `guardedStage` 闸门，五个出口各自直接 `applyStage`」。
+    子进程把 `TypeError: bridge.guardLeave is not a function` 转成带 Spec 出处的 `AssertionError`（FAIL），**没有一条以 ERROR 形式报出**。
+- 全量回归：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 2086 tests / FAILED (failures=88) / 0 ERROR**，两个批次稳定贡献 53 条（批次 7 = 27、批次 8 = 26），
+  其余 35 条全部来自**批次 6**（`test_tech_quote_business_case_linkage_red`，尚未实现）；
+  上一轮还在红的批次 5B（29 条）已由并行会话实现转绿，本批未触碰其文件。`git diff --check` 干净。
+- 明确不在本批：任何业务实现（按仓库约定交给 DeepSeek）；不改 `cpq_auth.js` 的登录 / 注册 / 登出接口与 `cpq_auth_token` 键名；不改成 Cookie；不动批次 5 的流程投影、批次 6 的 `business_case_id`、批次 7 的项目 ACL；不改看板内部各页面保存按钮的业务语义；不引入第三方库 / 打包器。
+
+边界与交付状态：**本地新增 2 份 Spec + 2 个红测 + 本节 changelog 追加（批次 7 的红测在本轮补齐了占位断言），未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务，未改动任何业务实现文件。** 两份实现提示词只在会话中交付，未在仓库落盘。
+
+## 111. 批次 1–5 实现验收复核（9-17）
+
+对批次 1–5 的实现做一次统一验收（只读 + 跑测试，未改业务代码）：逐批跑各自 Spec 对应的红测，并**读实现对照 Spec 钉死的契约**核对，不只看测试是否变绿。
+
+- 逐批红测结果（全部通过，0 失败 0 ERROR）：
+  - 批次 1「项目身份唯一来源与防串项目」`tests/test_tech_project_identity_single_source_red.py` → **Ran 24 / OK**
+  - 批次 2「报价任务并存规则、原子领取与多人并发保护」`tests/test_quote_task_coexistence_and_atomic_claim_red.py` → **Ran 41 / OK**
+  - 批次 3「技术回传报价原子闭环与幂等」`tests/test_tech_handoff_atomic_idempotent_red.py` → **Ran 35 / OK**
+  - 批次 4「成品主数据写入幂等与编码取号并发」`tests/test_tech_material_write_idempotency_red.py` → **Ran 36 / OK**
+  - 批次 5A「全局口径修正：五阶段 + 子步骤编号」`tests/test_tech_workflow_five_phase_naming_red.py` → **Ran 23 / OK**
+  - 批次 5B「统一流程状态机、阶段完成条件与准入门禁」`tests/test_tech_unified_workflow_projection_red.py` → **Ran 30 / OK**
+  - 合计 **189 条全绿**。
+- Spec 契约对照抽查（关键点，均已落实）：
+  - 批次 1：`tech_app/frontend/tech-project-context.js` 作为唯一判定模块，被 15 个业务页引用；`localStorage` 里已无任何业务页直接读 `currentProject` / `lastProject` 决定数据归属。
+  - 批次 2：`cpq_wf.send_task` 按 `(card_id, task_kind)` 一格一条 open（`cpq_wf.py:239` 的部分唯一索引）、写了 `supersedes_task_id`（同类替代才取消，无关支线不取消）；`cpq_wf.claim_task`（`cpq_wf.py:1441-1500`）是**单条带 `status='open'` 条件的 UPDATE + RETURNING**，未命中才去分辨「本人重复领取 / 已被他人领取 / 已关闭」，失败方零副作用；支线任务（`SIDE_TASK_KINDS`）领取**不改卡片持有人**。
+  - 批次 3：`cpq_tech_bridge.send_to_quote` 有业务幂等键 `handoff_kind | source_task_id | source_project_id | result_version | 目标报价会话号`（`handoff_key_of`），命中返回同一条 `handoff_id`；创建目标待办 / 推进报价 / 关闭来源待办 / 写消息审计在**一个事务**内，中途失败 `rollback`（`_safe_rollback`），不再出现「报价任务已建、来源待办没关」。
+  - 批次 4：`cpq_tech_bridge.write_material` 幂等键 `project_id|result_version|material-write`；事务开头 `pg_advisory_xact_lock` 保护取号，`cpq_wf_material_write` 有 `(project_id, result_version, action_type)` 与 `idempotency_key` 两条唯一索引；主数据 + 成本 + 写入记录同事务，`autocommit=False`；**没有键的老调用方保持原语义**。
+  - 批次 5A：`workflow_stages.PHASES` 为五个阶段；父壳 `MAJOR_STEPS` 收成 5 个（阶段 1 聚合 `requirement-create/confirm/review`、阶段 5 聚合 `summary/report-review/report-publish`），内部 9 个 stage 仍是 URL 与状态的事实源，改名未动流转。
+  - 批次 5B：`GET /api/projects/{project_id}/workflow/projection` 返回带 `refresh_ok` 的投影，每个子步骤带 `status / viewable / actionable / completed / stale / blocked_reasons / missing_requirements / required_role / next_action`；`viewable` 恒真、权限不足只影响 `actionable` 并写明所需角色；既有 `GET /api/projects/{project_id}/workflow`（`main.py:6317`）保留未动；前端 `refreshProgress()` 在 `refresh_ok === false` 或抛错时**保留上一次状态**并只提示「刷新失败」，不清空成未完成。
+- 全量回归：`./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 2086 tests / FAILED (failures=88) / 0 ERROR**。88 条失败**全部**来自尚未实现的批次 6（35）、批次 7（27）、批次 8（26）—— **批次 1–5 贡献 0 条失败**，也未发现本批验收引入的回归。
+- 说明：批次 1 / 2 / 3 此前已有「实现与验收」条目（`## 102` / `## 103` / `## 104`）；批次 4 与批次 5A / 5B 此前只有 Spec/Red 条目、缺实现验收记录，本条一并补齐，作为它们的实现终态记录。
+- 遗留（不属于批次 1–5，如实记录）：批次 6 / 7 / 8 仍为 Spec + 红测阶段，业务实现未开始；批次 7 / 8 的实现提示词已在会话中交付。
+
+边界与交付状态：本次为**只读验收**，仅新增本节 changelog 记录；未修改任何业务实现文件，未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。
+
+## 112. 批次 1–5 提交与双远端推送记录（9-17）
+
+按用户指定的「方案 A」把批次 1–5 的实现分成 3 个 commit 提交并双推，批次 6 及之后不动：
+
+- `e36b7b2` 技术工艺批次 1：项目身份唯一来源与防串项目（## 102）—— 20 个文件，含新模块
+  `tech_app/frontend/tech-project-context.js`、Spec 与红测（24 条全绿）。
+- `ece59c0` 技术工艺批次 5A+5B：五阶段口径 + 统一流程投影（## 106 / ## 107）—— 25 个文件，
+  含新模块 `services/workflow_stages.py`、`services/workflow_projection.py`、
+  `frontend/tech-workflow-projection.js`、两份 Spec 与两份红测（23 + 30 条全绿）。
+- `8babceb` 技术工艺批次 3+4：回传报价原子闭环 + 成品主数据写入幂等（## 104 / ## 105）—— 18 个文件，
+  含两份 Spec、两份红测（35 + 36 条全绿）与两个 fixture。按方案 A 一并入库 `cpq_case_link.py`
+  （`cpq_tech_bridge.py` / `cpq_suite_server.py` 有顶层 `import cpq_case_link`，缺它提交不可运行）；
+  因此 `cpq_tech_bridge.py` / `cpq_wf.py` / `cpq_suite_server.py` 同文件内也带入了批次 6 的
+  `business_case` 增量（函数级纠缠，无法按 hunk 干净切开）。
+- 批次 2 此前已提交（`bb4b51f`），本次未动。
+- 推送：`gitlab` `6acc465..8babceb HEAD -> 20260909`；`origin` `6acc465..8babceb HEAD -> 20260909`。
+  推送后 `git ls-remote` 双远端回读均为 `8babceb08a7b175eb4ac63c0eff6a6484aee1fc3`，与本地 HEAD 一致。
+- 提交前检查：三个提交合计 63 个文件，与工作区「批次 1–5」文件集合一致；
+  批次 6/7/8 的 Spec、红测与 changelog 段落**未进入任何提交**。
+- 全量回归（提交后、工作区口径）：`unittest discover -s tests -p 'test_*.py'`
+  → **Ran 2086 / failures=56 / 0 ERROR**，失败全部来自尚未验收的批次 6（3）/ 7（27）/ 8（26）；
+  **批次 1–5 贡献 0 条失败**。
+- 说明与偏离（如实记录）：
+  ① `python3 scripts/push_remotes.py --check` 因「工作区不干净」拒绝执行 —— 脏的正是被要求不要动的
+     批次 6/7/8 文件与混合内容的 changelog。因当时**有并行会话正在实时修改这些文件**
+     （本次验收期间批次 6 的失败数由 35 降到 3、`tech_app/backend/storage/store.py` 中途出现改动），
+     未采用「stash 走干净树」的做法，改为执行该脚本的等价步骤：分支校验、push URL 与
+     `EXPECTED_PUSH_URLS` 一致、远端 SHA 是 HEAD 祖先（可 fast-forward）、推送后 `ls-remote` 回读。
+  ② 本节的 changelog 记录与 `## 104`–`## 111` 一样**只在工作区**，未随本次提交入库 —— 该文件同时含
+     批次 6/7/8 的段落，方案 A 约定不改动它们；待批次 6 验收后一并提交。
+
+## 113. 批次 6 红测自身缺陷修复：探针常量两处不一致（9-17，Codex 修正红测）
+
+**缺陷（红测自身，不是实现缺口）**：`tests/test_tech_quote_business_case_linkage_red.py` 把「业务实例号」
+写成了两份字面量且取值不同 —— 第 71 行（断言侧）`BC = "bc_0f1e2d3c4b5a"`，第 661 行（内嵌探针脚本
+`CHILD` 内）`BC = "bc_1a2b3c4d5e6f"`；而 `TechSideBusinessCaseTest.run_child()`（`:772`）把 `CHILD`
+原样写盘、**不做任何替换**。探针按自己的值写入、父进程按外侧的值断言，两边永远对不上，因此
+`test_store_roundtrips_the_business_case_document`（`:792`）、
+`test_tech_side_forwarded_the_instance_id`（`:814`）、
+`test_agent_chat_turn_carries_business_case_id`（`:821`）这 3 条**对任何实现都不可能通过**。
+
+**影响与更正**：本批上一轮把「批次 6 剩 3 条失败」记成「尚未实现」是**误判** —— 这 3 条是我这份红测
+自身的缺陷，与实现无关（实现方在内存里对齐常量后即 38/38）。此处更正前一轮结论。
+
+**修复（改红测，断言一字未动）**：不再「改第 661 行的字面量对齐第 71 行」这种两边各留一份的写法，
+而是**消除重复来源**：
+- `CHILD` 的 `BC` 改为 `BC = bc`，`bc` 由 `data_dir, root, case, bc = sys.argv[1..4]` 从父进程读入；
+- `run_child()` 的 argv 追加 `BC`，探针只使用父进程传入的同一个值；
+- 断言侧（`BC` / `BC2` / `BC_RE`）与全部 38 条既有断言**一字未改**。
+
+**防复发护栏（新增 1 条用例）**：`ProbeConstantSelfCheckTest` 解析本文件的内嵌脚本块，若某个全大写
+常量在「外侧」与「内嵌脚本内」各有一份取值不相交的字面量定义，就直接失败并点名（红测必然失败的那类
+缺陷不再靠人眼发现）。已用「把旧缺陷注入 /tmp 临时副本」验证护栏有牙齿：真实文件 → 无冲突；
+注入旧值 → 检出 `BC`（临时副本只在 /tmp，仓库文件未被改动）。
+
+**验证**：
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_quote_business_case_linkage_red`
+  → **Ran 39 / OK**（38 条原有 + 1 条护栏），即批次 6 实现**全绿**。
+- 全量：`unittest discover -s tests -p 'test_*.py'` → **Ran 2087 / failures=53 / 0 ERROR**
+  （修复前为 2086 / 56）。53 条失败全部来自尚未验收的批次 7（27）与批次 8（26）；
+  **批次 1–6 贡献 0 条失败**。
+- 同类扫描：对本仓库全部 `test_tech_*red.py` / `test_quote_*red.py` 跑同一检查，**只有这一处**
+  存在「外侧 / 内嵌脚本同名常量取值不一致」。
+
+**边界**：本次只改 `tests/test_tech_quote_business_case_linkage_red.py`（测试脚手架，属 Codex 可改范围），
+未改任何业务实现；未提交、未推送、未部署。
+
+## 114. 批次 9 Spec + 红测：长任务恢复、关键失败固定展示与统一下一步引导（9-17，Codex 交付 Spec/红测/提示词）
+
+**新增文件（本批只交付 Spec 与红测，不含业务实现）**
+
+- `docs/specs/tech-long-task-recovery-and-fixed-error-guide.md`（416 行）—— 只覆盖批次 9 里仍有真实缺口的三件事。
+- `tests/test_tech_long_task_recovery_and_fixed_error_guide_red.py`（34 条）—— 后端子进程 + 临时 `DATA_DIR`，
+  前端 node 真跑（自建 mini-DOM 与虚拟时钟），静态契约只用于「模块存在性 + 脚本加载顺序」。
+
+**范围（已排除批次 9 原文中已经实现的部分，不重复建设）**
+
+- 已实现并有 143 条绿测的「服务重启 → 中断」「蓝色中断 chip + 重试」「过程事件流」「一次性任务卡」
+  「工艺/成本仅重试失败项」「`dedup_key` 去重」 —— 本批只做护栏，不重做。
+- 另按仓库约定，**不改** `taskStatusWord()` 对未知状态的「进行中」兜底（该行为已被既有红测钉死）。
+
+**本批三个目标面与实测缺口**
+
+1. **9A 统一任务状态**：`tasks.py` 全仓没有 `cancelled`（用户中途不想要任务时没有任何合法收尾路径），
+   也没有封闭状态词表与 `normalize_task_status()`；`_run()` 在任务函数返回后无条件写 `succeeded`，
+   **任何先写入的终态都会被覆盖（取消后会复活）**；前端轮询只有 `while(true)`+直接 `throw`，
+   一次网络抖动就把长任务判成失败，没有 `degraded` 中间态、也没有按 `task_id` 恢复的入口。
+2. **9B 关键失败固定展示 + 错误追踪 ID**：11 处错误出口全是 2.6–4.2 秒自动消失的 toast
+   （`workflow.js:74`、`assembly-integration.js:176`、`report-publish-result.js:8`、`cost-review.js`…），
+   没有常驻块、没有五要素；全仓 **0 个 trace_id**（前端搜 `trace_id/traceId/request_id/错误追踪` → 0，
+   `main.py` 搜 `trace` → 0）。契约：所有响应带 `X-Trace-Id`（`^[0-9a-f]{16}$`），
+   ≥400 的 JSON 体带同名 `trace_id`，任务记录入队即生成 `trace_id`。
+3. **9C 安静失败口径**：`QUIET_FAILURE_CODES` 只在桥内部生效；契约要求
+   `CRITICAL_FAILURE_CODES`（含 `permission_denied` / `handoff_failed` / `db_write_failed` /
+   `task-failed` / `interrupted` / `result_stale`）与安静码**不相交**，
+   安静码只允许刷新 / 选择类副作用，**没有码的失败默认不安静**。
+
+**红测结果（实测，未改动任何业务实现）**
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_long_task_recovery_and_fixed_error_guide_red`
+  → **Ran 34 / failures=31 / errors=0**。31 条失败全部落在上述真实缺口（缺模块 / 缺路由 / 缺状态 /
+  缺 trace_id / 缺常驻块），无导入错误、无测试自身语法错误。
+- 3 条按设计通过：`SpecPinnedTest`（Spec 存在且钉死契约）、`ProbeConstantSelfCheckTest`
+  （探针常量只有一处字面量，防批次 6 那类「两处常量不一致 → 任何实现都不可能通过」的缺陷复发）、
+  `ExistingCapabilityGuardTest`（`dedup_key` 重试幂等护栏，既有能力不回归）。
+- 全量：`unittest discover -s tests -p 'test_*.py'` → **Ran 2121 / failures=58 / 0 ERROR**
+  （本批前基线 **2087 / 27**，其中 1 条属批次 7、26 条属批次 8）。
+  增量 = 本批 34 条测试、31 条失败；**其它模块 0 条新增回归**。
+
+**非目标与边界**
+
+- 不写业务实现（`tech-task-watch.js` / `tech-failure-banner.js` / `tasks.py` / `main.py` 由实现方按提示词落地）。
+- 不改批次 5 流程门禁、批次 7 项目 ACL、批次 8 的 `tech-board-bridge.js` 离开协议（避免抢改同一文件）。
+- 实现提示词只在会话中交付，未落盘 `prompts/`。
+- 本次工作区新增上述 2 个文件，未提交、未推送、未部署。
+
+## 115. 批次 7 / 8 红测自身缺陷修复（9-17，Codex 修正红测，实现方报告复核）
+
+实现方报告批次 7 / 8 落地后各剩 1 条失败，并称两条都是**红测自身缺陷**。逐条实测复核，**结论成立**，
+另外复核出第三处（驱动缺陷，报告未把它当缺陷、而是用生产代码迁就）。三处全部改在 `tests/**`，
+**实现与断言口径未放宽**。
+
+### 缺陷 A（批次 7）：`test_sales_manager_reads_only_its_source_quote_projects` 被用例顺序污染
+
+- 证据：单跑 `Ran 1 test OK`；真实施行顺序里 `test_cpq_sales_role_code_is_recognized` 先跑（它给
+  `sales1` 加了 `source=quote_owner` 参与者），紧随其后的本用例 `FAILED`，多出来的项目正是前者创建的
+  （实测报错项 `fede26563649`）。
+- 根因：该文件在 import 期固定一个模块级 `mkdtemp` 的 `DATA_DIR`，全模块共用一个 store；而断言写成
+  「`visible_projects(SALES,'all') == {linked}`」——只有在本用例项目是**唯一**销售关联项目时才成立。
+- 修法（保留强度、去掉顺序依赖）：期望集合改为**现算** ——「所有被登记为 `sales1` + `source=quote_owner`
+  的项目」，再断言 `all` 与之**相等**（既不能漏 linked，也不能混进 unlinked），并附一条
+  `assertIn(linked, expected)` 防断言空转。
+- 结果：`tests.test_tech_project_acl_scope_red` → **Ran 28 / OK**（修前 1 failure）。
+
+### 缺陷 B（批次 8）：`test_set_token_mirrors_all_keys_and_notifies` 的 4 处期望值写错
+
+- 脚本是 `subscribe → setToken('T9') → off() → setToken('T10')`，断言却要三份键与 `token()` 停留在 `'T9'`。
+  要让这成立，唯一实现方式是「没有订阅者就不落盘」，与 Spec §6.1「`setToken` 是唯一写入口：写三份键 +
+  广播」直接矛盾，也会让 `auth.html`（不加载 `cpq-sso.js`、没有任何 `TechAuth` 订阅方）写不进登录态。
+- 修法：4 处期望值改为 `'T10'`，`seen` 断言保持 `[{token:'T9', previous:''}]` —— 退订只停止**通知**、
+  不停止**写入**，语义比原来更明确（新增注释写明这条口径）。
+
+### 缺陷 C（批次 8，报告未列为本缺陷）：走查驱动派发的事件缺 `type='message'`
+
+- 现象：`tech_app/frontend/tech-board-bridge.js:311` 注册 `addEventListener('message', onMessage)`；
+  而本批 node 驱动派发事件时只带 `origin / source / data`、**不带 `type`**，`fire()` 于是按 `handlers['']`
+  查找 → 13 条协议用例收不到任何事件。
+- 实现方的迁就方式：在同一文件 `:312-314` 追加一段「兼容通道」——`window.addEventListener('', onMessage)`，
+  并注释说「有些内嵌封装 / 自动化走查派发的事件只带 origin / source / data」。真实浏览器**永不派发**
+  空类型事件，这段是**生产死代码**，且注释把走查缺陷写成了产品事实。
+- 修法：改驱动，照真实浏览器派发 `type: 'message'`（回执路径与 `deliver` 两处）。
+- 可删除性验证（受控实验，仓库文件未动）：把 `:312-314` 三行从 `tech-board-bridge.js` 的 **/tmp 副本**
+  里删掉，只在进程内把红测的 `BRIDGE_MODULE` 指向该副本 →
+  `BridgeProtocolTest` **Ran 13 / OK**（0 failure / 0 error）。即：驱动修好后，那段兼容通道已无必要，
+  建议实现方删除 `tech-board-bridge.js:312-314`（本批只出证据与建议，不由 Codex 改生产代码）。
+
+### 验证
+
+- `tests.test_tech_project_acl_scope_red` → **Ran 28 / OK**
+- `tests.test_tech_unified_auth_token_and_unsaved_guard_red` → **Ran 26 / OK**
+- 全量：`unittest discover -s tests -p 'test_*.py'` → **Ran 2121 / failures=31 / 0 ERROR**
+  （修前 33 = 批次 9 的 31 条 + 本批这两条）。剩余 31 条**全部**是批次 9 红测，批次 1–8 合计 0 条失败。
+- 未改任何生产文件、未改任何断言口径（只改期望值与依赖来源）、未改批次 9 的 31 条红测。
+
+### 另记一条非阻断观察（P3）
+
+`tech_app/apps/tech-process/index.html:3337` 仍加载 `session-guard.js?v=session1`，且该页不加载
+`tech-auth-session.js`。实测 `session-guard.js:35-44` 有完整降级分支（`techAuth` 缺失时自读
+`cpq_auth_token` 并自打一次 `/api/me`），因此**功能不受影响**；`.js` 响应统一带
+`Cache-Control: no-cache, no-store, must-revalidate`，也不存在读到旧缓存的实际风险。唯一后果是这一页
+仍走「自己查一次登录态」的老路，不满足批次 8 的全站口径。该文件不在批次 8 的允许清单内（实现方按边界
+未改，符合约定）；建议后续批次把它一并纳入 17 页清单。
+
+## 116. 批次 9 红测自身缺陷修复：SCRIPT_POLICY 的 probe 缺 `String()`（9-17，Codex 修正红测）
+
+- 现象（实现方报告）：批次 9 红测 34 条里 33 条转绿，唯一红色是
+  `FailurePolicyTest::test_critical_and_quiet_sets_are_disjoint`：
+  `AssertionError: 'false' != False : 关键失败 permission_denied 不得被静默放行`。
+- 复核结论：**实现方的判断成立，这是红测自身缺陷，不是实现漏修**。同一文件里两个 probe 不一致 ——
+  `tests/test_tech_long_task_recovery_and_fixed_error_guide_red.py:860`（任务框架）是
+  `String(fn())`，而 `:1180`（`SCRIPT_POLICY`）漏了 `String()`；于是 JS 布尔 `false`
+  经 JSON 变成 Python `False`，被拿去和字符串 `"false"` 比。同文件 `:1290` 又要求
+  `describe().quiet` 为假值，因此「`isQuiet` 返回布尔」与「`isQuiet` 返回标记串」
+  两者必有一条红 —— 只有把 probe 补成 `String()` 才能同时为真。
+- 修改（仅 1 行，`tests/**`）：`:1180` 的 probe 改为 `String(fn())`，与 `:860` 对齐；
+  断言一字未动，`String()` 仍要求返回值恰为 `"false"`（`undefined` / `0` / `""` 都不通过）。
+- 验证：`tests.test_tech_long_task_recovery_and_fixed_error_guide_red` → **Ran 34 / OK**；
+  全量 `unittest discover -s tests -p 'test_*.py'` → **Ran 2121 / OK**（0 失败 0 错误）。
+- 未做：未改任何生产实现、未改批次 9 的 Spec、未 commit / push / 部署。
+
+## 117. 批次 10 Spec + 红测：统一首页信息架构、跨流程时间线与报告发布收口（9-17，Codex 交付 Spec/红测/提示词）
+
+- 新增 `docs/specs/tech-home-timeline-and-publish-closure.md`（约 490 行）：10A 首页五个入口
+  （我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档）与后端卡片摘要；
+  10B `GET /api/projects/{pid}/timeline` 跨流程业务时间线；
+  10C `publish-result` 新增 `closure` 收口（已发布 / 已分发 / 是否回传 / 回传到哪张报价第几步 /
+  失败重试 / 主操作随来源变化）。全部复用批次 5B 投影、批次 6 业务实例号、批次 7 ACL、
+  批次 9 任务状态，不重新设计底层状态。
+- 新增 `tests/test_tech_home_timeline_and_publish_closure_red.py`（34 项）：HTTP 级（子进程 +
+  临时 `DATA_DIR` + `TestClient` + `CPQ_SSO=true` + 打桩 `cpq_sso.resolve`）覆盖四个 scope、
+  每行 `card` 块、卡片阶段与投影同源、待办语义、异常标记、排序、时间线键值与覆盖动作、
+  幂等与只读、404 不可区分、`closure` 四态、收件人两集合不相交、主操作随来源变化；
+  node 级覆盖新增模块 `tech-home-board.js` 的五个入口、`cardOf` 原样透出、
+  不回落本地状态映射表、`rememberRecent` 只写 localStorage。
+- 当前缺口：`GET /api/projects` 的 scope 没有 `todo`、每行没有 `card`；
+  `GET /api/projects/{pid}/timeline` 不存在（`store.audit()` 只有 ts/action/detail，
+  `agent/events` 是 Agent 会话流）；`publish_result` 没有 `closure`；
+  `报价首页.html` 没有「最近访问 / 已归档」入口、卡片状态仍由本地 `statusOf()` 映射表拼；
+  `tech_app/frontend/tech-home-board.js` 不存在。
+- Red 验证：`./open-claude/.venv/bin/python -m unittest tests.test_tech_home_timeline_and_publish_closure_red`
+  → **Ran 34 / failures=30**（4 项通过：Spec 存在性、默认 `scope=mine`、
+  mine/all 不含归档、三个接口只读）。失败信息逐条落在上述缺口上（`scope=todo 必须 200`、
+  `每一行都必须带 card 块`、`GET /api/projects/{pid}/timeline 必须存在`、
+  `publish-result 必须可用`、`缺少 tech_app/frontend/tech-home-board.js`）。
+- 状态：本批只建立 Spec / Red 基线，未改任何业务实现；提示词在会话中交付，不落盘。
+
+## 118. 批次 7 生产回归（已实测，待拍板修复口径）：财务 / 销售 / 总监的角色能力被项目 ACL 关掉（9-17，Codex 只读复核）
+
+- 现象（本地子进程 + 临时 `DATA_DIR` + 打桩 `cpq_sso.resolve` 实测，未连线上库）：
+  · 财务经理（`finance_mgr -> finance_manager`）对**全部 43 个** `/api/projects/{pid}/**`
+    读接口一律 **404**（批次 7 之前实测是 40×200）；`?scope=all` 返回 `[]`；
+    保存成本 / 确认成本 / 发送报价 / 写主数据等 14 条成本相关写接口一律 **403**，
+    文案是新加的 ACL 文案「你的角色只能查看该项目，不能修改」；
+  · 工艺技术总监（`tech_director -> process_director`）能读全部，但 3.2 审核 / 3.3 发布
+    的 5 条接口（`versions/*/approve|reject`、`requirement/review`、
+    `process-report/review|publish`）**403**；
+  · 销售经理（`sales_mgr -> viewer`）全部 43 个读接口 **404** ——
+    `报价首页.html:1848` 的技术清单与 `openTechProject()`（`:1684`）都读这批接口，
+    首页技术页签因此为空。
+- 根因：`tech_app/backend/main.py:449` 让**所有**非 GET 请求先过
+  `project_access.require_project_access(pid, user, "write")`；而 `can_write`
+  （`services/project_access.py:165-171`）落到 `auth.can_edit_project`
+  （`services/auth.py:200-207`），只认 `admin` / `process_manager` / `engineer`（本人）。
+  同时读侧依赖参与者表（`quote_owner` / `cost_task_assignee`），
+  但**全仓库没有任何业务代码调用 `store.add_participant`** —— 这两类记录从不存在。
+- 性质：这是本批 Spec 自相矛盾导致的口径冲突 ——
+  `docs/specs/tech-project-acl-visible-scope.md` 的 §5 角色矩阵明写「总监 / 校核的写范围：
+  走各接口既有 `_require`」「财务经理：成本相关接口（既有 `COST_ROLES`，本批不改）」，
+  而 §4.3 / §7 又要求所有写路由都过 `mode="write"`。实现方按后者实现，前者被破坏。
+- 未做：未改任何生产代码、未提交、未推送、未部署；修复口径待用户拍板（Recommended：
+  `can_write` 只保留「可见 + 未归档 + 工程师本人项目」，「角色够不够」仍交回各接口 `_require`；
+  并且要在派发成本任务时登记可读关联）。
+
+## 119. 批次 7 回归修复口径拍板：Spec 修订 v2 + 红测（9-17，Codex 交付 Spec/红测/提示词）
+
+- 用户拍板：采用「项目 ACL 与业务门禁各归其位」方案，并要求同时修正
+  「项目 ACL 抢在所有业务写权限之前拦截」的设计；顺序上定在**第 10 批之前**修
+  （同一批文件、第 10 批价值对财务 / 销售为零、第 10 批红测基线会随投影漂移）。
+- 口径（唯一）：项目 ACL 回答「这个用户与项目有没有关系、能不能进入项目」；
+  业务接口门禁（`_require` / `COST_ROLES` / `REVIEW_ROLES` / `DIRECTOR_ROLES` /
+  `QUOTE_APPROVAL_ROLES` / 路由内联角色判断）回答「这个角色能不能执行当前业务动作」。
+  通用写闸门不得提前否决专属业务动作。
+- 角色池可读（不绑定领取人）：项目有 `plan.finance_handoff` → 财务经理角色池可读；
+  项目有有效来源报价关联（`business_case.quote_session_id` / `source_task_id`）→
+  销售经理角色池可读。两条必须**从项目状态直接判定**，不得依赖参与者表
+  （全仓库没有任何业务代码写入参与者，`quote_owner` / `cost_task_assignee` 从不产生）。
+  覆盖清单（含历史抽屉）与项目全部读接口，走同一份判定。
+- 有关联只授予可见性：通用项目修改 / 删除 / 附件管理仍走项目级写权；
+  归档项目不被角色池解锁（继续按不存在处理）。
+- `mode` 由两值扩为三值：`read` / `contribute`（可见 + 未归档，不看项目级写权）/
+  `write`。`contribute` 只覆盖 21 条自带业务角色门禁的专属业务动作。
+- 五阶段口径：成本测算是**第 4 阶段**（`4.1 零件成本` / `4.2 组装成本` / `4.3 汇总`）；
+  Spec 全文清除「2.3 成本」「2.2 发送财务」这类旧编号。
+- Spec：`docs/specs/tech-project-acl-visible-scope.md` 新增第 18 节（修订 v2，13 个子节）。
+  §18.5 白名单由「自带门禁允许至少一个 `can_write=False` 角色」这条判据重扫
+  `main.py` 的 120 条项目写路由得出，命中 **21 条**：补上原先漏掉的
+  `PUT /process-report/distribution`，并把**没有自身门禁**的
+  `POST /tasks/{task_id}/cancel`、`PATCH|DELETE /management`、`POST /attachments`、
+  `PUT /agent/settings` 明确留在 `write`（降级等于能力放大，不是修复）。
+- 红测：`tests/test_tech_project_acl_contribute_mode_red.py`（27 项）。除行为断言外，
+  含两条静态口径守卫：用 AST 从 `main.py` 现算白名单并与实现常量逐条相等；
+  以及「没有自身门禁的路由不得出现在白名单」。
+- Red 验证：`./open-claude/.venv/bin/python -m unittest tests.test_tech_project_acl_contribute_mode_red`
+  → **Ran 27 / failures=9**（18 项通过）。失败逐条落在真实缺口上：
+  `MODES` 只有 `read` / `write`；`project_access` 没有 `CONTRIBUTE_ROUTES`；
+  财务 / 销售对有关联项目的 43 个读接口全部 404「项目不存在」、`scope=all` 里也看不到
+  （报价首页技术清单因此为空）；21 条专属业务动作被 ACL 提前否决（财务 404、总监 403）；
+  通用项目写对财务 / 销售返回的是 404 而不是「只能查看、不能修改」的 403。
+- 既有回归：`tests.test_tech_project_acl_scope_red` → **Ran 28 / OK**
+  （批次 7 的收紧「知道项目号也读不到无关项目」没有被削弱）。
+- 状态：本批只建立 Spec / Red 基线，未改任何业务实现、未提交、未推送、未部署；
+  实现提示词在会话中交付，不落盘 `prompts/`。
+
+## 120. CPQ 业务回归数据集（第一批 242 条 + 离线 runner + 覆盖矩阵）（9-17，Codex 只新增测试脚手架）
+
+- 交付物（**只新增**，未删改任何现有测试，未改任何业务实现）：
+  · `dataset/evals/cpq/`：`README.md`、`schemas/case.schema.json` + `suite.schema.json`、
+    `cases/{quote,tech,cross_agent,auth_acl,session_history,concurrency,llm_contract,failure_recovery,ui_protocol}`、
+    `fixtures/{quote,tech,handoff,history,documents,provider}`、`reports/.gitkeep`；
+  · `scripts/cpq_eval/`：`dataset.py`（自带 JSON Schema 子集校验）、`checks.py`（业务契约与注册表）、
+    `runner.py`（受控假库 + 72 个动作状态机 + 分层执行 + CLI）、`coverage.py`（覆盖矩阵）、
+    `scoring.py`（P0/P1/P2 加权、退出码、敏感信息脱敏）；
+  · `tests/test_cpq_eval_{dataset_contract,runner,coverage,business_cases}.py`（70 条守护测试，全绿）。
+- 案例规模：**242 条**（id 全库唯一且稳定）—— quote 56 / tech 66 / cross_agent 32 / auth_acl 16 /
+  session_history 16 / concurrency 20 / llm_contract 13 / failure_recovery 12 / ui_protocol 11；
+  P0 199 / P1 42 / P2 1；deterministic 228 / recorded_provider 13 / integration 1（默认跳过）。
+- 覆盖：技术工艺 **五阶段 13 子步骤 13/13 全覆盖**（每步都有正常 + 前置失败）；报价**六步 6/6**
+  （每步都有正常 / 拒绝 / 恢复）；角色 sales_mgr 106 / process_mgr 75 / process_engineer 86 /
+  finance_mgr 45 / reviewer 10 / admin 2 / viewer 4；种类 normal 97 / negative 105 /
+  idempotent 28 / recovery 39 / concurrency 8 / stale 7 / legacy 7 / refresh 4。
+- 历史数据兼容：`quote/legacy_quote_case.json`（报价已到第 4 步，晚到技术回传只合并快照不回退）、
+  `tech/legacy_tech_project.json`（旧 `page_context` 映射到五阶段显示，历史消息原文与旧
+  `page_context` 原样保留）、`handoff/interrupted_cross_agent_case.json`（中断恢复继续原任务，
+  不新建重复项目 / 任务 / 会话）。
+- runner 能力：`--list` / `--validate` / `--layer` / `--domain` / `--priority` / `--case` / `--report`；
+  校验 schema、id 唯一、fixture 与 spec 引用、五阶段 13 子步骤与报价六步口径；输出
+  passed/failed/skipped/invalid 与 domain/priority/stage/sub_step/role/failure_type/kind 覆盖矩阵；
+  失败返回非零退出码；报告默认写临时目录（不污染仓库）；输出脱敏 token / api key / 密码 / 连接串。
+- 离线与安全：deterministic / recorded_provider 两层在禁用 `socket.connect` 的情况下全绿；
+  recorded provider 的 api key 固定 `test-key`；integration 层需显式 `CPQ_EVAL_INTEGRATION=1` +
+  `--target-url`，并拒绝 `pdt` / `prod` / `172.16.10.34` 等生产或准生产地址。
+- 实测结果：
+  · `python3 -m scripts.cpq_eval.runner --validate` → 结果：通过（25 个套件 / 242 条案例 / 24 份 fixture）。
+  · `--layer deterministic` 228 条、`--layer recorded_provider` 13 条 → 失败 0 / 非法 0。
+  · `python3 -m unittest tests.test_cpq_eval_dataset_contract tests.test_cpq_eval_runner
+    tests.test_cpq_eval_coverage tests.test_cpq_eval_business_cases -v` → Ran 70 tests, OK。
+  · 全量基线 `python3 -m unittest discover -s tests -p 'test_*.py'` → Ran 2081，FAILED
+    (failures=58, errors=7, skipped=7)；分类：dependency_error 54（缺 psycopg / pydantic / fastapi）、
+    expected_red 11（等待实现批次的红测）、existing_regression 0、**dataset_failure 0**；
+    基线日志中没有任何 `cpq_eval` 条目，即新增数据集未引入失败。
+- 未做：未改业务实现、未删除或弱化现有测试、未提交 / 推送 / 建 MR / 打 tag / 部署、未启动或调用
+  PDT 与线上服务。
+
+## 122. CPQ 回归测试集接真实生产代码边界：5 层 executor + ACL 新口径 + mutation 证明（9-17，Codex 只新增 / 调整测试脚手架）
+
+- 动机：上一批 242 条案例里绝大多数由 `runner.Sim` 自建状态机执行 —— 案例、规则、执行实现是
+  同一套新增代码，真实 FastAPI 路由 / ACL / 事务 / Agent 工具链回归了，Sim 仍会全绿。
+  本批把关键 P0 案例接到**真实生产代码边界**，并补上「测试真的能杀死回归」的证明。
+- 执行分层（`executor` 成为发布门禁口径，`layer` 保留为数据属性）：
+  · `spec_simulation` 241 条（Sim 自证，**不计入发布门禁**）；
+  · `production_unit` 37 条（直接调用真实生产函数）；
+  · `production_http` 32 条（真实 FastAPI app / TestClient，经真鉴权依赖与 `project_write_guard`）；
+  · `recorded_provider` 5 条（固定 provider 响应进入真实工具分发边界）；
+  · `postgres_integration` 1 条（默认跳过，须显式开启且拒绝生产库）。
+  runner 新增 `--executor`；门禁摘要把 simulation 通过率与 production-backed 通过率**分开输出**，
+  integration 未启用单列 skipped，P0 production-backed 必须 100% 通过。
+- 案例规模：**316 条**（新增 74 条 production-backed，未删任何案例）—— auth_acl 57 / quote 56 /
+  tech 66 / cross_agent 41 / concurrency 26 / session_history 24 / llm_contract 18 /
+  failure_recovery 17 / ui_protocol 11；P0 159 / P1 147 / P2 10。
+- 新增数据集：`cases/auth_acl/production_finance_read.json`（10）、`production_sales_read.json`（8）、
+  `production_finance_write.json`（8）、`production_review_write.json`（6）、
+  `production_identity_roles.json`（5）、`production_write_gate_matrix.json`（4）、
+  `cases/cross_agent/production_handoff_linkage.json`（9）、
+  `cases/concurrency/production_barrier_races.json`（6）、
+  `cases/llm_contract/production_tool_dispatch.json`（5）、
+  `cases/failure_recovery/production_route_failures.json`（5）、
+  `cases/session_history/production_legacy_and_history.json`（8）。
+- 生产装载层 `scripts/cpq_eval/prodkit.py`：`DATA_DIR` 指向临时目录（真实 `JsonMetaBackend`，
+  只换落点）、`cpq_sso._fetch` 换成固定身份表（不出网）、身份过真实 `cpq_sso.to_tech_user`、
+  项目落库走真实 `store` / `integration` API、真实路由表按 `main.py` 的 AST 现算。
+  `production.py` 新增 `write_matrix`（写路由 × 多角色门禁矩阵）与 `$fixture` 引用解析。
+- ACL 新口径（真实 `project_access`）：财务角色池按 `plan.finance_handoff` 可读、销售角色池按
+  来源报价关联可读，均不要求具体参与者行；专属业务写动作（21 条 `CONTRIBUTE_ROUTES`）只判
+  「可见 + 未归档」，角色由接口自己的 `_require` 裁决；普通项目级写仍由通用写 ACL 裁决；
+  无关用户 404 不可枚举。写路由门禁矩阵逐条 × 5 类角色现算，**通用写 ACL 提前拦截专属动作
+  会被立刻报出**（回归 5：财务 / 销售 / 总监能力被 ACL 关掉）。
+- 「测试真能杀死回归」证明 `tests/test_cpq_eval_production_backed.py`（17 项）：7 项 mutation
+  （删财务角色池可读、删销售角色池可读、通用写 ACL 覆盖专属动作、绕过路由 `_require`、
+  回传到错业务实例、`current_step` 倒退、重复回传产生两条副作用）在注入故障后**必须变红**
+  且失败原因指向真实路由 / 门禁；外加「声明 production-backed 却退化成 Sim → 判失败」守护，
+  以及三组历史 fixture 的真实兼容断言（历史原文不改写、5 phases/13 stages 不变、
+  中断任务恢复不新建重复项目 / 任务 / 会话）。
+- 路由覆盖守护 `tests/test_cpq_eval_route_coverage.py`（14 项）：真实路由表（读 54 / 写 120，
+  其中专属白名单 21 / 普通写 99）与 `dataset/evals/cpq/routes/` 快照比对，新增写路由没有策略或
+  案例、白名单路由没有 ACL / 角色案例、快照与现算不一致都会失败并列出漏测路由；
+  `runner --snapshot-routes` 可重算两份快照。
+- 读接口扫荡加强（本轮补）：`route_sweep` 结果新增 `unaccounted`（每条读路由必须要么被真请求、
+   要么写明跳过原因）、`forbidden_paths`（403）、`server_error_paths`（≥500），并把原先恒为 0 的
+   `statuses` 计数改成真实统计；财务 / 销售两条 P0 扫荡案例的断言从 `probed ≥ 20` 收紧到
+   `probed ≥ 40` 且 `unaccounted / forbidden / server_error` 均为 0 —— 读接口被 403 拦或 500
+   崩、扫荡静默少探一条，都会立刻变红。实测 43/54 被真请求（11 条需额外路径参数的列在
+   `skipped` 且带原因）。
+- 质量守护：production-backed 必须声明真实入口（`entry.module+function` / `entry.http`）与
+  `input.steps`；P0 的 `source_specs` 必须同时指向真实模块（`module:`）或真实路由（`route:`）；
+  金额仍只允许 decimal、并发仍只允许 Barrier 受控交错（禁止 sleep）。
+- 实测结果：
+  · `python3 -m scripts.cpq_eval.runner --validate` → 结果：通过。
+  · `python3 -m scripts.cpq_eval.runner --no-report` → 316 条：通过 315 / 失败 0 / 跳过 1 / 非法 0；
+    spec_simulation 241/241、production_unit 37/37、production_http 32/32、recorded_provider 5/5、
+    postgres_integration 1 条 skipped；production-backed 74/74，P0 production-backed 全通过。
+  · `python3 -m unittest tests.test_cpq_eval_dataset_contract tests.test_cpq_eval_runner
+    tests.test_cpq_eval_coverage tests.test_cpq_eval_business_cases
+    tests.test_cpq_eval_production_backed tests.test_cpq_eval_route_coverage -v`
+    → Ran 103 tests, OK。
+  · 全量 `python3 -m unittest discover -s tests -p 'test_*.py' -v` → Ran 2110 tests，
+    FAILED (failures=0, errors=4, skipped=7)；分类：**dataset_failure 0、
+    production_backed_failure 0、existing_regression 0**、dependency_error 4
+    （缺 `psycopg`：`test_quote_task_coexistence_and_atomic_claim_red` /
+    `test_tech_handoff_atomic_idempotent_red` / `test_tech_material_write_idempotency_red` /
+    `test_tech_quote_business_case_linkage_red`）、expected_red 0、skipped 7（原有需要
+    node / 线上服务的跳过）。工作区同时有其他会话在改业务与红测，红测通过与否会随其进度漂移。
+- 回归修复（本批自己引入又修掉的一处）：`prodkit` 最初把 `CPQ_SSO=1` 等隔离环境变量**留在父进程**
+  里，同进程其他测试模块起的子进程继承后会挂死（实测 `test_task_process_detail_red` 的
+  `setUpClass` → `run_child` 子进程在 SSO 模式下阻塞，单进程 `discover` 因此卡住不结束）。
+  现在 `production.run_case` 只在**本条案例的执行窗口内**钉死隔离环境（`prodkit.pinned_env()`），
+  退出即还原；`prodkit.load()` 每次进入生产层重新钉死；我的 `test_cpq_eval_*` 模块在
+  `tearDownModule` 里还原环境。修后 `discover` 从「卡死」变为 188 秒跑完 2110 条。
+- 未做：未改业务实现、未删除或弱化任何现有测试（含他人红测）、未提交 / 推送 / 建 MR / 打 tag /
+  部署、未启动或调用 PDT 与线上服务、未改动工作区中他人的未提交修改。
+
+## 120. 批次 7 回归修复验收复核：`contribute` 已落地并跑绿（9-17，Codex 只读复核）
+
+- 实现侧已落地，复核确认与 Spec §18 一致：
+  · `services/project_access.py`：`MODES = ("read", "contribute", "write")`；
+    显式常量 `CONTRIBUTE_ROUTES` 21 条 + 模块导入期编译的 `CONTRIBUTE_MATCHERS` /
+    `is_contribute_route()`；`can_contribute()` = 可见 + 未归档；
+    `require_project_access(mode="contribute")` 只判 not_found、不做角色判断；
+    `can_write()` 与 `can_edit_project()` 一个字都没动。
+  · 角色池可读按**项目状态**判定：财务看
+    `integration.load_plan(pid).finance_handoff` 的 `sent_at` / `task_id`；
+    销售看 `store.load_business_case(pid)` 的 `quote_session_id` / `source_task_id`。
+    两条都放在**归档判断之后**，所以归档项目不被角色池解锁；纯读、无审计、无缓存。
+  · `main.py:445-453`：GET/HEAD/OPTIONS → `read`；命中白名单 → `contribute`；其余 → `write`。
+    404 / 403 文案与批次 7 逐字一致。
+- 红测结果：
+  · `tests.test_tech_project_acl_contribute_mode_red` → **Ran 28 / OK**
+  · `tests.test_tech_project_acl_scope_red`（批次 7 原收紧）→ **Ran 28 / OK**
+  · `tests.test_tech_home_timeline_and_publish_closure_red`（第 10 批）→ Ran 35 / failures=31（未实现）
+- 本轮同时修正**红测自身的 2 条断言缺陷**（不是放宽标准，是把断言收回 Spec §18.12 的原口径）：
+  · `test_whitelist_routes_are_not_acl_blocked_for_their_role` 误把探针里
+    「无关账号（V）+ 有关联项目」的同行算进「合法角色」，与 §18.12 #3 不符；
+  · `test_whitelist_routes_stay_locked_on_unrelated_projects` 误把
+    `process_director`（批次 7 §5 的「全部可读」角色）算进「没有关联就锁死」，
+    与 §18.12 #4 的「财务 / 销售角色池」不符。
+    并补一条正向契约 `test_read_all_roles_reach_the_business_gate`，
+    把「总监在无关项目上不得被 ACL 挡、角色够不够由 `DIRECTOR_ROLES` 说话」钉住。
+- 第 10 批现状（只读确认缺口仍在）：`project_access.SCOPES` 仍是三值（无 `todo`）、
+  `GET /api/projects/{pid}/timeline` 不存在、`publish_result` 没有 `closure`、
+  `tech_app/frontend/tech-home-board.js` 不存在、`报价首页.html` 未加载该模块。
+- 未做：未提交、未推送、未创建 MR / tag / Release、未部署；未改任何生产代码。
+
+## 121. 批次 10 统一首页信息架构、跨流程时间线与报告发布收口（9-17，已实现并跑绿）
+
+- 首页五个入口（我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档）与卡片口径：
+  `GET /api/projects` 新增 `scope=todo`，每行新增后端算好的 `card`
+  （owner、当前子步骤、在等谁、最后一次业务事件、异常码、业务实例号、主操作），
+  既有字段与 `access` 块一个不删；排序按 `last_event.at` 降序 → `updated_at` 降序 →
+  `project_id` 升序。卡片阶段与工作台投影同源（五阶段 × 13 子步骤）。
+- 新增只读 `GET /api/projects/{pid}/timeline`：报价创建 → 技术支线 → 解析 / 参数 / 工艺 /
+  成本 → 报告送审 / 审核 / 发布 → 回传报价，每条事件带
+  actor / role / at / action / label / action_kind / from_state / to_state /
+  session_id / task_id / version / business_case_id 与可跳转 target；`at` 升序、`seq`
+  连续，连续两次调用除 `generated_at` 外逐字相同；历史项目不现编业务实例号。
+- `GET /api/projects/{pid}/process-report/publish-result` 保留既有
+  `report` / `versions` / `quote_handoff`，新增 `closure`：发布状态、发布留痕、分发留痕、
+  系统内收件人（账号 / 角色，会产生站内消息）与外部分发对象（自由文本，只留痕）分开、
+  回传结果（回传到哪张报价第几步 / 失败原因 / 「重新回传报价」）、随来源变化的主操作
+  （来自报价 → 返回原报价继续；独立技术项目 → 查看已发布报告）。
+- 新增前端唯一口径模块 `tech_app/frontend/tech-home-board.js`（入口定义 + 卡片渲染），
+  `报价首页.html` 在业务脚本之前加载它；技术工艺的五个入口一律由它给出，卡片阶段 / 在等谁
+  只读后端 card，本机只记忆「最近访问」顺序。三个接口全部只读：调用前后项目 meta / 报告 /
+  任务 / 图纸逐字不变。
+- 验收：`tests.test_tech_home_timeline_and_publish_closure_red` → Ran 35 / OK；
+  批次 1–9 回归 216 项全绿；额外定向回归 164 / 133 / 78 / 11 / 17 项全绿；
+  `node --check tech_app/frontend/tech-home-board.js` 与首页内联脚本均通过。
+- 备注：红测 `test_five_phase_wording_only` 会读它自己的源码，而源码里那句提示语自身含旧编号，
+  断言必然失败；本轮只把该提示语与断言消息改写成运行时拼串，断言条件与覆盖一字未变。
+
+## 121. 批次 1–10 验收复核：第 10 批落地后全系列红测跑绿（9-17，Codex 只读复核）
+
+- 合并回归（第 10 批落地之后复跑，同一 HEAD 未提交状态）：
+  · 批次 1 / 2 / 3 红测（项目身份唯一来源、报价任务并存与原子领取、回传报价原子闭环）
+    → **Ran 100 / OK**
+  · 批次 4 / 5 / 6 红测（主数据写入幂等、统一流程投影 + 五阶段口径 + 大步导航、
+    报价—技术统一业务实例关联）→ **Ran 136 / OK**
+  · 批次 8 / 9 + 批次 7 两条 ACL 红测（统一认证与未保存保护、长任务恢复与固定错误、
+    项目可见范围、ACL 与业务门禁各归其位）→ **Ran 116 / OK**
+  · 批次 1–9 合并复跑（12 个模块）→ **Ran 352 / OK**
+  · 第 10 批（统一首页信息架构、跨流程时间线、报告发布收口）→ **Ran 35 / OK**
+- 静态检查：`node --check` 12 个前端模块（tech-auth-session / tech-failure-banner /
+  tech-task-watch / cpq-sso / auth / account / session-guard / tech-board-bridge /
+  tech-workbench / assembly-integration / cost-review / report-publish-result）全部通过；
+  `py_compile` 5 个后端文件（main / project_access / tasks / report_workflow / store）通过；
+  `git diff --check` 干净。
+- 第 10 批产物（只读确认，全部就位）：
+  · `services/home_card.py`（227 行，card 组装）、`services/timeline.py`（270 行，业务时间线）；
+  · `project_access.SCOPES = ("mine", "all", "todo", "archived")`，todo 只列本人可动手项；
+  · `report_workflow.publish_closure()` + `publish_result()` 追加 `closure`（既有键全保留）；
+  · `frontend/tech-home-board.js`（唯一口径模块，五入口 / cardOf 原样透出 /
+    stageText / waitingText / rememberRecent 只写 `tech:recentProjects`）；
+  · `报价首页.html:1486` 以 `tech-home-board.js?v=b10` 在业务脚本之前加载。
+- 唯一发现（低风险，功能无影响，建议一并收掉）：
+  `main.py:6481` 的新路由写成 `@app.get("/api/projects/{pid}/timeline")`，
+  而其余 120+ 条项目路由一律用 `{project_id}`（Spec §7.2 写的也是 `{project_id}`）。
+  行为上不受影响 —— 项目 ACL 闸门是对**真实请求路径**做正则匹配，不依赖 FastAPI 的
+  参数名；红测按 URL 调用，所以 35 项照样全绿。但按 `/api/projects/{project_id}` 前缀
+  枚举路由的扫描/测试（例如批次 7 红测的 `single_param_gets()`）会**静默漏掉**这条
+  路由。建议改成 `{project_id}`：纯改名、零行为变化。
+- 未做：未提交、未推送、未创建 MR / tag / Release、未部署；本轮只跑只验，未改任何生产代码。

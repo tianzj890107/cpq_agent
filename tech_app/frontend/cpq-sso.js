@@ -32,9 +32,14 @@
   'use strict';
 
   var CPQ_TOKEN_KEY = 'cpq_auth_token';
-  var MIRROR_KEYS = ['authToken', 'cad_engine_token'];
   var state = { enabled: false, user: null, canWrite: false, canCost: false,
                 canReview: false, canPublish: false, roleName: '', checked: false };
+
+  /* 登录态的唯一事实源入口（tech-auth-session.js）。旧壳 / 脚本未加载时为 null，
+     本文件一律安全降级：不抛错、不重载。 */
+  function techAuth() {
+    return (window.TechAuth && typeof window.TechAuth === 'object') ? window.TechAuth : null;
+  }
 
   /* 成本相关接口：2.3 本体，以及零件/整机成本。只列**写**接口的路径特征，
      判定仍以后端 COST_ROLES 为准。（「整合参数」曾随成本短暂搬去 2.3，后来搬回 2.2
@@ -83,37 +88,62 @@
     try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch (e) {}
   }
 
-  /** 把 CPQ 令牌镜像成技术工艺各页面在用的键。CPQ 登出后同步清掉，避免拿着过期票转圈。 */
+  /** 登录态读取：TechAuth 在时一律走它（唯一事实源，含兼容键兜底）。 */
+  function currentToken() {
+    var auth = techAuth();
+    if (auth && typeof auth.token === 'function') {
+      try { return String(auth.token() || ''); } catch (error) { /* 降级到 CPQ 自己的键 */ }
+    }
+    return ls(CPQ_TOKEN_KEY);
+  }
+
+  /** 兼容键的抄写职责整体收进 TechAuth（唯一写入口）：这里只调用它，不自己写 key。
+      技术工艺仍有页面在脚本求值时直接读 authToken / cad_engine_token，所以既要把兼容键
+      迁移进唯一事实源，也要把生效值镜像回去 —— 否则那些页面的每个请求都不带票。 */
   function mirrorToken() {
+    var auth = techAuth();
     var token = ls(CPQ_TOKEN_KEY);
-    MIRROR_KEYS.forEach(function (key) {
-      if (ls(key) !== token) setLs(key, token);
-    });
+    if (auth && typeof auth.migrate === 'function') {
+      try { token = String(auth.migrate() || ''); } catch (error) { token = ls(CPQ_TOKEN_KEY); }
+    }
+    if (auth && typeof auth.setToken === 'function') {
+      try { auth.setToken(token, { silent: true, source: 'mirror' }); } catch (error) { /* 镜像失败不影响身份 */ }
+    }
     return token;
+  }
+
+  /** 清掉登录态：同样只能经 TechAuth，绝不自己写兼容键。 */
+  function clearToken() {
+    var auth = techAuth();
+    if (auth && typeof auth.clear === 'function') {
+      try { auth.clear(); return; } catch (error) { /* 降级到 CPQ 自己的键 */ }
+    }
+    setLs(CPQ_TOKEN_KEY, '');
   }
 
   mirrorToken();          // 同步执行：必须早于任何读 authToken 的脚本
 
-  // CPQ 那边登录/登出会写同一个 key。两条通知缺一不可：
-  //   · storage —— 只在**别的**标签页触发（规范如此），管跨标签页同步；
-  //   · cpq-auth-change —— cpq_auth.js 登录/登出成功后在本标签页派发的事件。
-  // 早先只监听 storage，于是在本页弹出 CPQ 登录框、登录成功之后没有任何人收到通知，
-  // 那张「请先登录」的遮罩就一直挂着。
-  window.addEventListener('storage', function (event) {
-    if (event.key === CPQ_TOKEN_KEY) onIdentityChanged();
-  });
-  document.addEventListener('cpq-auth-change', onIdentityChanged);
+  /* CPQ 那边登录/登出会写同一个 key，通知两条缺一不可：
+       · storage —— 只在**别的**标签页触发（规范如此），管跨标签页同步；
+       · cpq-auth-change —— cpq_auth.js 登录/登出成功后在本标签页派发的事件。
+     TechAuth 在时它已经把这两条收成一条订阅，本文件只订阅它一次，避免同一次变化查两遍；
+     旧壳（TechAuth 缺失）才由本文件自己挂。 */
+  function watchIdentity() {
+    var auth = techAuth();
+    if (auth && typeof auth.subscribe === 'function') {
+      try { auth.subscribe(onIdentityChanged); return; } catch (error) { /* 退回自带监听 */ }
+    }
+    window.addEventListener('storage', function (event) {
+      if (event.key === CPQ_TOKEN_KEY) onIdentityChanged();
+    });
+    document.addEventListener('cpq-auth-change', onIdentityChanged);
+  }
 
-  /* 登录态变了就整页重载，而不是就地把遮罩摘掉。
-     技术工艺有十几个页面在**脚本求值时**就把 authToken 读进了局部变量
-     （app.js: `let authToken = readToken()` 等）。登录前那一刻它们读到的是空串，
-     只摘遮罩的话页面看着能用，之后每个请求都不带 Authorization —— 比遮罩不消失更难查。
-     重载后所有脚本重新读一遍镜像过的令牌，状态天然一致。 */
+  /* 身份变化的收敛手段从「整页重载」改成「就地重取身份」：重载会丢掉用户正在填的表单、
+     会话滚动位置与当前 project / stage（后两者由 TechAuth.context() 原样保留）。 */
   function onIdentityChanged() {
-    var before = ls(MIRROR_KEYS[0]);
-    var after = mirrorToken();
-    if (before === after) return;      // 没真的变（重复事件）就别白刷一次页面
-    location.reload();
+    mirrorToken();
+    check();
   }
 
   function esc(value) {
@@ -224,7 +254,7 @@
       if (response.status === 401 && url.indexOf('/api/') !== -1 && state.enabled) {
         state.user = null; state.canWrite = false;
         state.canReview = false; state.canPublish = false;
-        MIRROR_KEYS.forEach(function (key) { setLs(key, ''); });
+        clearToken();
         ready(function () { showLoginWall('登录状态已失效，请在配置报价 CPQ 中重新登录。'); });
       }
       return response;
@@ -259,7 +289,7 @@
     var path = location.pathname;
     // auth.html 是技术工艺自带的登录页，SSO 模式下已停用，不在它上面再弹一层。
     if (path.indexOf('/auth.html') !== -1) return;
-    nativeFetch('/api/me', { headers: { Authorization: 'Bearer ' + ls(CPQ_TOKEN_KEY) } })
+    nativeFetch('/api/me', { headers: { Authorization: 'Bearer ' + currentToken() } })
       .then(function (response) {
         if (response.status === 401) {
           state.enabled = true; state.checked = true;
@@ -283,11 +313,12 @@
 
   window.CpqSso = {
     state: function () { return state; },
-    token: function () { return ls(CPQ_TOKEN_KEY); },
+    token: function () { return currentToken(); },
     canWrite: function () { return !state.enabled || state.canWrite; },
     login: openCpqLogin,
     refresh: check,
   };
 
+  watchIdentity();
   check();
 })();

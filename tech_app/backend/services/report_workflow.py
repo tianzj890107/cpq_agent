@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -30,7 +31,7 @@ from ..models.summary import SummaryDoc
 from ..models.workflow import ProcessReport, ReportRecipient, WorkflowReview
 from ..storage import store
 from ..time_utils import now_cst_str
-from . import cpq_bridge, summary as summary_svc
+from . import auth, cpq_bridge, summary as summary_svc
 
 # 3.1 允许 Agent / 看板改写的报告字段；单据号、编制人、审核发布留痕、版本号一律服务端维护。
 ALLOWED_REPORT_FIELDS = (
@@ -581,19 +582,186 @@ def publish_state(project_id: str) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# 批次 10C：发布收口（closure）
+#
+# 发布完必须一眼看到：报告已发布 / 分发已留痕 / 是否已回传报价 / 回传到哪张报价第几步 /
+# 没回传就点这里重试；主操作随项目来源变化。只读、纯派生，不写库、不新建实例号。
+# --------------------------------------------------------------------------- #
+_CLOSURE_STATES = ("draft", "awaiting_review", "approved", "published",
+                   "handoff_pending", "handed_off", "handoff_failed", "revised")
+# 未发布时按报告状态给「下一步」：草稿 → 5.1 汇总结果；送审 → 5.2 结果审核；
+# 已通过 → 5.3 发布并回传报价。
+_NEXT_STEP_BY_STATUS = {
+    "draft": ("summary", "5.1", "汇总结果", "summary.html"),
+    "in_review": ("report-review", "5.2", "结果审核", "report-review.html"),
+    "approved": ("report-publish", "5.3", "发布并回传报价", "report-publish.html"),
+}
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{2,64}$")
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _role_id_of_label(label: str) -> str:
+    """中文角色名 → 角色码（auth.ROLES / cpq_sso.TECH_ROLE_LABEL 同源）；认不出给空串。"""
+    name = _text(label)
+    if not name:
+        return ""
+    for code, text in getattr(auth, "ROLE_LABEL", {}).items():
+        if text == name:
+            return code
+    try:
+        from . import cpq_sso
+        for code, text in getattr(cpq_sso, "TECH_ROLE_LABEL", {}).items():
+            if text == name:
+                return code
+    except Exception:  # noqa: BLE001
+        pass
+    return name if name in getattr(auth, "ROLES", ()) else ""
+
+
+def _split_recipients(recipients) -> tuple:
+    """系统内收件人（账号 / 角色，会产生站内消息）与外部分发对象（自由文本，只留痕）。
+
+    分类口径（Spec §7.3 规则 1，不新增数据字段）：channel 为空或「平台通知」且 name
+    能解析到系统内对象的一律算系统内；其余全部算外部。两个集合不相交。
+    """
+    internal: list = []
+    external: list = []
+    for row in recipients or []:
+        data = row if isinstance(row, dict) else (row.model_dump() if hasattr(row, "model_dump") else {})
+        if not isinstance(data, dict):
+            continue
+        name = _text(data.get("name"))
+        contact = _text(data.get("contact"))
+        channel = _text(data.get("channel"))
+        if not name:
+            continue
+        if channel not in ("", "平台通知") or "@" in name:
+            external.append(f"{name} <{contact}>" if contact else name)
+            continue
+        role_id = _role_id_of_label(name)
+        if role_id:
+            internal.append({"kind": "role", "id": role_id, "label": name})
+            continue
+        try:
+            user = store.get_user(name) or {}
+        except Exception:  # noqa: BLE001
+            user = {}
+        if user or _USERNAME_RE.match(name):
+            internal.append({"kind": "user", "id": name,
+                             "label": _text(user.get("display_name")) or name})
+            continue
+        external.append(f"{name} <{contact}>" if contact else name)
+    return internal, external
+
+
+def _stage_primary_action(project_id: str, key: str, action_id: str) -> dict:
+    step = _NEXT_STEP_BY_STATUS.get(key) or _NEXT_STEP_BY_STATUS["draft"]
+    return {"id": action_id, "label": f"去 {step[1]} {step[2]}",
+            "target": f"{step[3]}?project={project_id}&stage={step[0]}"}
+
+
+def publish_closure(project_id: str, report: dict, handoff: dict, raw_plan: dict) -> dict:
+    """发布收口块（closure）：状态 / 发布留痕 / 分发分类 / 回传结果 / 主操作 / 异常。"""
+    report = report if isinstance(report, dict) else {}
+    handoff = handoff if isinstance(handoff, dict) else {}
+    raw_plan = raw_plan if isinstance(raw_plan, dict) else {}
+    status = _text(report.get("status"))
+    published_at = _text(report.get("published_at"))
+    published = status == "published" or bool(published_at)
+    internal_recipients, external_targets = _split_recipients(report.get("recipients"))
+    scope = _text(report.get("distribution_scope"))
+    cc = _text(report.get("distribution_cc"))
+    recorded = bool(internal_recipients or external_targets or scope or cc)
+    session_id = _text(handoff.get("session_id"))
+    error = ""
+    for key in ("quote_handoff_error", "handoff_error"):
+        error = _text(raw_plan.get(key))
+        if error:
+            break
+    # 最近一次回传留了失败原因 -> 这次交接没有成功；否则才按回传留痕判定成功。
+    sent = bool(_text(handoff.get("sent_at")) or session_id) and not error
+    try:
+        link = store.load_business_case(project_id) or {}
+    except Exception:  # noqa: BLE001
+        link = {}
+    from_quote = bool(_text(link.get("quote_session_id")))
+
+    if not published:
+        state = {"draft": "draft", "in_review": "awaiting_review", "approved": "approved",
+                 "rejected": "awaiting_review"}.get(status, "draft")
+    elif sent:
+        state = "handed_off"
+    elif error:
+        state = "handoff_failed"
+    else:
+        state = "published"
+
+    if not published:
+        key = "approved" if status == "approved" else ("in_review" if status == "in_review" else "draft")
+        primary_action = _stage_primary_action(project_id, key, "open-stage")
+    elif sent and from_quote:
+        primary_action = {"id": "back-to-quote", "label": "返回原报价继续",
+                          "target": f"/?assistant=quote&session={session_id}"}
+    else:
+        primary_action = {"id": "view-report", "label": "查看已发布报告",
+                          "target": f"report-publish.html?project={project_id}"}
+
+    codes = ["handoff_failed"] if published and not sent and error else []
+    return {
+        "state": state,
+        "published": published,
+        "published_at": published_at,
+        "published_by": _text(report.get("published_by")),
+        "version": int(report.get("version") or 1),
+        "distributed": {
+            "recorded": recorded,
+            "scope": scope,
+            "cc": cc,
+            "internal_recipients": internal_recipients,
+            "external_targets": external_targets,
+        },
+        "handoff": {
+            "sent": sent,
+            "handoff_id": _text(report.get("handoff_id")) or _text(handoff.get("handoff_id")),
+            "target_quote": {
+                "session_id": session_id,
+                "card_id": _text(handoff.get("card_id")),
+                "current_step": int(handoff.get("next_step_no") or 0),
+                "current_step_label": _text(handoff.get("next_step_name")),
+            },
+            "error": error,
+            "retry_action": ({"id": "retry-handoff", "label": "重新回传报价"}
+                             if published and not sent and error else None),
+        },
+        "primary_action": primary_action,
+        "anomaly": {"has_anomaly": bool(codes), "codes": codes},
+    }
+
+
 def publish_result(project_id: str) -> dict:
-    """3.3 发布结果：报告 + 版本链 + 整机回传结果（如已回传）。"""
+    """3.3 发布结果：报告 + 版本链 + 整机回传结果（如已回传）+ 发布收口 closure。
+
+    既有键 report / versions / quote_handoff 一个不动，只**追加** closure（批次 10C）。
+    """
     _ensure_project(project_id)
     saved = _load_report(project_id)
     versions = store.list_process_report_versions(project_id)
     handoff: dict[str, Any] = {}
+    raw_plan: dict[str, Any] = {}
     try:
         from . import integration
+        raw_plan = store.load_integration(project_id) or {}
         plan = integration.load_plan(project_id)
         handoff = (plan.quote_handoff.model_dump() if plan and plan.quote_handoff else {}) or {}
     except Exception:  # 回传只影响展示，缺整机计划不影响发布结果读取
         handoff = {}
-    return {"report": saved, "versions": versions, "quote_handoff": handoff}
+    closure = publish_closure(project_id, saved or {}, handoff, raw_plan)
+    return {"report": saved, "versions": versions, "quote_handoff": handoff,
+            "closure": closure}
 
 
 def commit(project_id: str, result: dict, user: Optional[dict] = None) -> dict:
@@ -718,7 +886,9 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         str(req_data.get("source_session_id") or ""),
         result, package, result_version,
         str(doc.report_no or ""),
-        str(target_type or ""), str(target_role_code or ""), str(target_user_id or ""))
+        str(target_type or ""), str(target_role_code or ""), str(target_user_id or ""),
+        # 报告回传也带项目实例号：服务端凭它认回原报价卡片，而不是靠散落线索猜。
+        business_case_id=cost_flow.business_case_of(project_id))
 
     # 技术侧留痕：报告回传后整机计划里的 quote_handoff 指向同一个报价会话，
     # 历史页面与 3.3 的"回传结果"都从这一份数据读，不另存。

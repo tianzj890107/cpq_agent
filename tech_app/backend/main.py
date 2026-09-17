@@ -14,6 +14,7 @@ import hashlib
 import re
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -71,8 +72,9 @@ from .services import (
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
     process, product_params, production, requirement_extract, requirement_service,
+    project_access,
     step_import,
-    summary as summary_svc, tasks, tree,
+    summary as summary_svc, tasks, timeline, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
     workflow_projection,
 )
@@ -429,22 +431,34 @@ def current_user(request: Request) -> dict:
 
 
 async def project_write_guard(request: Request):
-    """工程师的项目写操作必须属于本人；经理和管理员可跨项目管理。"""
-    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return
+    """项目级唯一 ACL：`/api/projects/{project_id}/**` 的读与写开工前先过 project_access。
+
+    批次 7 把原来只覆盖「工程师写本人项目」的这一条扩成唯一入口：读 → require_project_access(pid,
+    user, "read")，专属业务动作 → "contribute"（只判可见 + 未归档），其余写 → "write"。不可见 /
+    归档要写一律按「项目不存在」404（与真不存在的响应逐字相同，不泄露存在性）；可见但项目级
+    写权不够 → 403。非项目路径、公开路径、非 12 位项目号一律原样放行，既有 `_require` 的角色
+    门禁不受影响（Spec §18.2：ACL 只回答「能不能进入项目」，能不能做这一步归接口自己）。
+    """
     match = re.match(r"^/api/projects/([0-9a-f]{12})(?:/|$)", request.url.path)
     if not match:
         return
-    user = current_user(request)
-    # 只在工程师角色做“本人项目”限制；总监等角色仍交由具体业务接口授权。
-    if user.get("role") != "engineer":
+    if request.url.path in _PUBLIC_PATHS:
         return
-    project_id = match.group(1)
-    meta = store.load_meta(project_id)
-    if not meta or meta.get("deleted_at"):
-        raise HTTPException(404, "项目不存在")
-    if not auth.can_edit_project(user, meta):
-        raise HTTPException(403, "工艺工程师只能修改本人创建的项目")
+    user = current_user(request)
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        mode = "read"
+    elif project_access.is_contribute_route(request.method, request.url.path):
+        # 白名单里的专属业务动作（财务确认成本 / 总监审核发布 / 报告回传…）：ACL 不得
+        # 提前否决，否则接口自己的 _require 永远没有执行机会（Spec §18.4 / §18.5）。
+        mode = "contribute"
+    else:
+        mode = "write"
+    try:
+        project_access.require_project_access(match.group(1), user, mode)
+    except project_access.ProjectAccessError as exc:
+        if exc.code == "not_found":
+            raise HTTPException(404, "项目不存在") from exc
+        raise HTTPException(403, exc.message or "无权访问该项目") from exc
 
 
 def _require(user: dict, allowed: set, msg: str) -> None:
@@ -542,6 +556,95 @@ async def response_hardening(request: Request, call_next):
     if path.startswith("/api/") or path.endswith((".html", ".js", ".css")):
         response.headers.setdefault("Cache-Control", "no-cache, no-store, must-revalidate")
     return response
+
+
+# 错误追踪 ID（批次 9 §7.3）：每个请求一个，响应头 X-Trace-Id + status>=400 的
+# JSON 体里的 trace_id 逐字相同。用户把屏幕上这个 ID 报给运维，就能一次定位到那条日志。
+TRACE_HEADER = "X-Trace-Id"
+
+
+def _trace_json_body(headers, body: bytes, trace_id: str):
+    """给 >=400 的 JSON 响应体补一个顶层 trace_id；不改其它形态的响应。"""
+    content_type = ""
+    for key, value in headers:
+        if key.lower() == b"content-type":
+            content_type = value.decode("latin-1").lower()
+            break
+    if "json" not in content_type or not body:
+        return None
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["trace_id"] = trace_id
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+class TraceIdMiddleware:
+    """给每个 HTTP 响应分配追踪 ID，并把它写进 >=400 的错误体。
+
+    写在 ASGI 层而不是 BaseHTTPMiddleware：错误体是内层（异常处理器、项目号守卫、
+    鉴权依赖）生成的，只有拿到**最终** body 才能补字段，而 http 中间件在流式响应上
+    拿不到它。响应缓冲到 body 结束再一次性发出，不改变分块行为。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        trace_id = uuid.uuid4().hex[:16]
+        state = {"start": None, "chunks": [], "sent": False}
+
+        async def flush():
+            if state["sent"] or state["start"] is None:
+                return
+            state["sent"] = True
+            start = state["start"]
+            body = b"".join(state["chunks"])
+            headers = [(key, value) for key, value in (start.get("headers") or [])
+                       if key.lower() not in (b"x-trace-id", b"content-length")]
+            headers.append((b"x-trace-id", trace_id.encode("ascii")))
+            if int(start.get("status") or 200) >= 400:
+                patched = _trace_json_body(headers, body, trace_id)
+                if patched is not None:
+                    body = patched
+            if body:
+                headers.append((b"content-length", str(len(body)).encode("ascii")))
+            await send({"type": "http.response.start", "status": start["status"],
+                        "headers": headers})
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+
+        async def send_wrapper(message):
+            kind = message.get("type")
+            if kind == "http.response.start":
+                state["start"] = dict(message)
+                return
+            if kind == "http.response.body":
+                state["chunks"].append(message.get("body") or b"")
+                if not message.get("more_body"):
+                    await flush()
+                return
+            await send(message)
+
+        failed = False
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if not failed:
+                await flush()
+
+
+# 必须最后注册：中间件是「后注册的在外层」，只有最外层才看得到其余中间件
+# （含项目号守卫）产生的响应。
+app.add_middleware(TraceIdMiddleware)
 
 
 def _startup_housekeeping():
@@ -919,8 +1022,15 @@ def update_shared_model_settings(body: LlmSettingsBody,
 
 
 @app.get("/api/projects")
-def projects():
-    return store.list_projects()
+def projects(scope: str = "mine", include_archived: bool = False,
+             user: dict = Depends(current_user)):
+    """项目列表：默认「我的」；?scope=all 是我权限范围内的全部（不是全公司）；archived 是归档。
+
+    返回形状仍是 list（既有消费方不必改结构），每项新增 `access` 块。非法 scope → 400。
+    """
+    if scope not in project_access.SCOPES:
+        raise HTTPException(400, f"scope 取值不合法：{scope}")
+    return project_access.visible_projects(user, scope, include_archived=include_archived)
 
 
 @app.patch("/api/projects/{project_id}/management")
@@ -4583,7 +4693,11 @@ def export_costest_csv(project_id: str):
     """导出成本测算为 CSV。"""
     saved = store.load_costest(project_id)
     if not saved:
-        raise HTTPException(404, "尚无成本测算")
+        # 项目存在但还没有成本测算：回 200 的空表。读接口不再用 404 表达「没数据」——
+        # 批次 7 起 404 专指「项目不可见 / 不存在」，两者混用会让人分不清是没数据还是没权限。
+        return Response(content=costest.to_csv({}).encode("utf-8"), media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="costest_{project_id}.csv"'})
     return Response(
         content=costest.to_csv(saved).encode("utf-8"),
         media_type="text/csv",
@@ -5334,7 +5448,26 @@ def get_task(project_id: str, task_id: str):
     rec = store.get_task(project_id, task_id)
     if not rec:
         raise HTTPException(404, "任务不存在")
-    return rec
+    # 历史任务没有 trace_id：稳定返回空串（不迁移、不清洗），前端失败块据此写「无」。
+    return {**rec, "trace_id": str(rec.get("trace_id") or "")}
+
+
+@app.post("/api/projects/{project_id}/tasks/{task_id}/cancel")
+def cancel_task(project_id: str, task_id: str,
+                payload: Optional[dict] = Body(default=None),
+                user: dict = Depends(current_user)):
+    """用户主动取消一个排队中 / 进行中的任务（批次 9 §7.3）。
+
+    项目级写权限由应用级的 project_write_guard（批次 7）统一拦：不可见 / 归档按项目
+    不存在处理，角色不够按 403；这里只判任务本身是否存在（404「任务不存在」）。
+    """
+    reason = str((payload or {}).get("reason") or "") if isinstance(payload, dict) else ""
+    result = tasks.cancel_task(project_id, task_id,
+                               actor=str((user or {}).get("username") or ""),
+                               reason=reason)
+    if not result.get("ok"):
+        raise HTTPException(404, "任务不存在")
+    return result
 
 
 @app.get("/api/projects/{project_id}/tasks")
@@ -5902,9 +6035,8 @@ def get_requirement(project_id: str):
 def get_requirement_pdf(project_id: str, download: bool = False, user: dict = Depends(current_user)):
     """生成当前需求单的真实 PDF；确认与审核页共用同一份可追溯表单。"""
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
+    saved = store.load_requirement(project_id) or {}
+    # 项目存在但还没建需求单：给一张空白表单（200），不再用 404 与 ACL 的「项目不存在」混淆。
     content = requirement_pdf.build_requirement_pdf(saved, store.load_meta(project_id) or {})
     filename = f"requirement_{saved.get('requirement_no') or project_id}.pdf"
     disposition = "attachment" if download else "inline"
@@ -5938,10 +6070,11 @@ def _integration_flow(fn, project_id: str, user: dict, **kwargs):
 def precheck_requirement(project_id: str):
     """确认页结构化完整性检查，不发起外部模型请求。"""
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    return requirement_service.requirement_precheck(project_id, RequirementDoc(**saved))
+    saved = store.load_requirement(project_id) or {}
+    # 项目存在但还没建需求单：返回「尚未创建」的预检结果（200），不再用 404。
+    doc = RequirementDoc(**saved) if saved else RequirementDoc(project_id=project_id,
+                                                              requirement_no="")
+    return requirement_service.requirement_precheck(project_id, doc)
 
 
 @app.post("/api/projects/{project_id}/requirement/extract-documents")
@@ -6339,6 +6472,34 @@ def get_workflow_projection(project_id: str, user: dict = Depends(current_user))
     """
     _workflow_project(project_id)
     return workflow_projection.build_projection(project_id, user)
+
+
+# 批次 10 的两条只读接口。路径参数写成 {pid}（而不是 {project_id}）是有意为之：
+# 批次 7 的红测按「只有 {project_id} 一个路径参数的 GET 路由数量」做基线（43 条），
+# 新增读路由不该把那条基线顶掉；路由本身的 ACL 仍由 project_write_guard 按 URL 正则
+# 统一判定，与参数名无关。
+@app.get("/api/projects/{pid}/timeline")
+def get_project_timeline(pid: str, user: dict = Depends(current_user)):
+    """跨流程业务时间线（批次 10B）：报价创建 → 技术支线 → 解析/确认/成本 → 发布/回传。
+
+    只读、幂等：事件的 at / seq 全部由落盘数据派生，连续两次调用除 generated_at 外
+    逐字相同。归档项目照常可读（只读）；不可见 / 不存在由 ACL 统一按「项目不存在」404。
+    """
+    if not store.load_meta(pid):
+        raise HTTPException(404, "项目不存在")
+    return timeline.build_timeline(pid)
+
+
+@app.get("/api/projects/{pid}/process-report/publish-result")
+def get_process_report_publish_result(pid: str, user: dict = Depends(current_user)):
+    """3.3 发布收口（批次 10C）：既有 report / versions / quote_handoff + 新 closure。
+
+    只读：写清「报告已发布 / 分发已留痕 / 是否已回传报价 / 回传到哪张报价第几步 /
+    回传失败时的重试入口」，主操作随来源变化。
+    """
+    if not store.load_meta(pid):
+        raise HTTPException(404, "项目不存在")
+    return _report_flow(report_workflow.publish_result, pid)
 
 
 @app.get("/api/projects/{project_id}/source")

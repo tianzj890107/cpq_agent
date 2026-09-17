@@ -35,8 +35,93 @@ _submit_lock = threading.Lock()  # 防止双击/多标签页重复提交同一�
 _MAX_ERROR_CHARS = 4000
 _CURRENT_TASK: ContextVar[tuple[str, str, str, int] | None] = ContextVar("current_task", default=None)
 
+# 任务状态的**封闭词表**（批次 9 §6.1）：unknown 只出现在读取侧的归一化结果里，
+# 永不由服务端写入；cancelled 是「用户主动取消」的正常终态。
+TASK_STATUSES = frozenset({"queued", "running", "succeeded", "partial",
+                           "failed", "interrupted", "cancelled", "unknown"})
+TERMINAL_STATUSES = frozenset({"succeeded", "partial", "failed",
+                               "interrupted", "cancelled"})
+# 还能被改写的状态：只有它们能转 cancelled，也只有它们允许收尾写入覆盖。
+_ACTIVE_STATUSES = ("queued", "running")
+
+# 取消与收尾共用的一把锁。本队列是**进程内**线程池，任务文档存在 meta 文档里、
+# 没有「带条件的单条更新」原语；把「读状态 → 判断 → 写」整段收进同一把锁，
+# 才能保证并发取消只有一个真正执行、以及取消之后收尾不复活。
+_cancel_lock = threading.Lock()
+
 # 过程事件的阶段词表：封闭三值，写错了必须当场报错（见 process_event）。
 _TASK_PROCESS_PHASES = ("model", "tool", "progress")
+
+
+def normalize_task_status(status) -> str:
+    """词表外 / 空 / None 一律归一成 unknown（读取侧口径，不写库）。"""
+    text = str(status or "").strip()
+    return text if text in TASK_STATUSES else "unknown"
+
+
+def is_terminal_status(status) -> bool:
+    """终态判定：词表外一律 False（unknown 不是终态，前端必须继续等）。"""
+    return normalize_task_status(status) in TERMINAL_STATUSES
+
+
+def _finish_active(project_id: str, task_id: str, **fields) -> bool:
+    """收尾写入只在任务仍处于 queued/running 时生效（批次 9 §6.2 第 6 条）。
+
+    用户取消是终态：任务函数在被取消之后才返回（或抛错）时，这里**丢弃结果**——
+    既不把 cancelled 改回 succeeded / failed，也不清空此前写入的 progress_log /
+    process_log（部分结果照旧可追溯）。
+    """
+    with _cancel_lock:
+        current = store.get_task(project_id, task_id) or {}
+        if normalize_task_status(current.get("status")) not in _ACTIVE_STATUSES:
+            return False
+        store.update_task(project_id, task_id, **fields)
+        return True
+
+
+def cancel_task(project_id: str, task_id: str, actor: str = "", reason: str = "") -> dict:
+    """用户主动取消：queued / running → cancelled（终态、可审计、幂等）。
+
+    返回契约见 Spec §7.1（字段名逐字钉死）::
+
+        {"ok": True,  "task_id": ..., "status": "cancelled", "already_terminal": False}
+        {"ok": True,  "task_id": ..., "status": <原终态>,   "already_terminal": True}
+        {"ok": False, "task_id": ..., "status": "",         "already_terminal": False,
+         "reason": "not_found"}
+
+    只写 status / progress / finished_at / error；result / dedup_key / trace_id 一律
+    不动（取消不是「失败」，也不是重新提交）。同时写一条审计与一张会话时间线卡
+    （key 固定 task:<id>，与「中断」同一套幂等口径：同一 key 就地更新，不重复建卡）。
+    """
+    task_id = str(task_id or "")
+    with _cancel_lock:
+        rec = store.get_task(project_id, task_id) or {}
+        if not rec:
+            return {"ok": False, "task_id": task_id, "status": "",
+                    "already_terminal": False, "reason": "not_found"}
+        current = normalize_task_status(rec.get("status"))
+        if current not in _ACTIVE_STATUSES:
+            # 终态一律不改写：第二次取消、以及「已经跑完才点取消」都走这里。
+            return {"ok": True, "task_id": task_id, "status": current,
+                    "already_terminal": True}
+        note = str(reason or "").strip()
+        detail = "用户取消任务" + ("：%s" % note if note else "")
+        store.update_task(project_id, task_id, status="cancelled", progress="已取消",
+                          finished_at=_now(), error=detail)
+        store.audit(project_id, "task_cancel", {
+            "task_id": task_id, "actor": str(actor or "").strip() or "system",
+            "reason": note, "status": "cancelled"})
+        sop_name = _SOP_NAMES.get(str(rec.get("kind") or ""), ("任务处理 SOP", 3))[0]
+        store.append_session_event(project_id, {
+            "kind": "task",
+            "source": "shell",
+            "text": sop_name[:-4] if sop_name.endswith(" SOP") else sop_name,
+            "key": f"task:{task_id}",
+            "task": {"id": task_id, "label": "", "status": "cancelled",
+                     "steps": ["已取消"], "error": detail},
+        })
+        return {"ok": True, "task_id": task_id, "status": "cancelled",
+                "already_terminal": False}
 # 与 PROGRESS_LOG_LIMIT 同量级：只防异常循环把任务文档撑爆。
 PROCESS_LOG_LIMIT = 400
 
@@ -139,6 +224,9 @@ def submit(
             "finished_at": None,
             "result": None,
             "error": None,
+            # 错误追踪 ID（批次 9 §7.2）：入队即生成，同一次提交（含 dedup 复用）
+            # 复用同一个值；GET 单任务把它透出，前端失败块与运维日志据此对齐。
+            "trace_id": uuid.uuid4().hex[:16],
         })
         _executor.submit(_run, project_id, task_id, kind, fn, cad, actor)
         return task_id
@@ -149,9 +237,15 @@ def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: 
     token = _CURRENT_TASK.set((project_id, task_id, kind, 0))
     acting_token = _set_acting(actor)
     sop_name, sop_total = _SOP_NAMES.get(kind, ("任务处理 SOP", 3))
-    _update(project_id, task_id, status="running",
-            progress=_TASK_START_PROGRESS.get(kind, "开始处理"), sop_name=sop_name,
-            sop_step=0, sop_total=sop_total, started_at=_now())
+    # 排队期间就被取消（或已被服务重启扫尾）：不执行任务函数，也不写任何字段——
+    # 否则一个「已取消」的任务会被这一行改回「进行中」。
+    if not _finish_active(project_id, task_id, status="running",
+                          progress=_TASK_START_PROGRESS.get(kind, "开始处理"),
+                          sop_name=sop_name, sop_step=0, sop_total=sop_total,
+                          started_at=_now()):
+        _CURRENT_TASK.reset(token)
+        _reset_acting(acting_token)
+        return
     try:
         if cad:
             with _cad_lock:
@@ -170,12 +264,14 @@ def _run(project_id: str, task_id: str, kind: str, fn: Callable[[], dict], cad: 
             "status": "partial" if partial else "succeeded",
             "progress": "部分完成" if partial else "完成",
         }
-        _update(project_id, task_id, sop_step=sop_total, finished_at=_now(),
-                result=result, **outcome)
+        # 收尾只在任务仍是 queued/running 时生效：被取消之后才返回的结果一律丢弃
+        # （progress_log / process_log 照旧保留，便于用户看到「跑到哪一步被取消」）。
+        _finish_active(project_id, task_id, sop_step=sop_total, finished_at=_now(),
+                       result=result, **outcome)
     except Exception as e:  # noqa: BLE001 — 任务内任何异常都转成失败态
         traceback.print_exc()
-        _update(project_id, task_id, status="failed", progress="失败",
-                finished_at=_now(), error=_safe_error(e))
+        _finish_active(project_id, task_id, status="failed", progress="失败",
+                       finished_at=_now(), error=_safe_error(e))
     finally:
         _CURRENT_TASK.reset(token)
         _reset_acting(acting_token)

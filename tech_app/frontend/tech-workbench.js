@@ -193,12 +193,20 @@
     history.pushState({ stage: state.stage, project: state.project }, '', `${location.pathname}?${q.toString()}`);
   }
   window.addEventListener('popstate', () => {
+    const previous = state.stage;
     readFromUrl();
     if (!state.stage) state.stage = 'requirement-create';
-    renderTop();
-    mountStageFrame();
-    syncChatProject();
-    syncAgentStageContext();
+    const target = state.stage;
+    // 闸门放行前先退回当前步，避免用户取消后 URL 与界面不一致。
+    state.stage = previous;
+    if (target === previous) {
+      renderTop();
+      mountStageFrame();
+      syncChatProject();
+      syncAgentStageContext();
+      return;
+    }
+    guardedStage(target, 'popstate');
   });
 
   /* ---------------------------------------------------------- 渲染 */
@@ -231,7 +239,7 @@
           setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
           return;
         }
-        applyStage(step.entry, { project: state.project });
+        guardedStage(step, 'stage-switch');
       });
     });
 
@@ -817,6 +825,37 @@
     try { api.setProject(state.project); } catch (error) { /* 会话重绑失败不阻断流程切换 */ }
   }
 
+  /* ---------------------------------------------------------- 导航闸门（批次 8）
+   * 看板里有未保存修改时，五个导航出口（顶部大步骤 / 上一步 / 下一步 / 浏览器前进后退 /
+   * 看板要求退出项目）必须先过同一道闸门：桥去问一次看板要不要保存，用户取消就停在原地；
+   * 桥缺失（旧壳 / 纯查看页）时直接导航，不产生死路。放行的唯一判据在桥里（此刻看板
+   * 已无未保存修改），这里只负责「不放行就不切步」。
+   *
+   * 入参既接受阶段号（上一步 / 下一步 / 浏览器前进后退 / 退出项目给的都是阶段号），也接受
+   * 顶部大步骤的条目对象：大步骤的点击落点必须是该阶段的**入口子步骤**（step.entry），
+   * 不是阶段号本身（批次 5A 口径）。两种入参在这里统一成 { entry }，闸门与导航都只看它。 */
+  async function guardedStage(target, reason, opts) {
+    const options = opts || {};
+    const step = (target && typeof target === 'object') ? target : { entry: String(target || '') };
+    const bridge = window.TechBoardBridge;
+    if (bridge && typeof bridge.guardLeave === 'function') {
+      const ok = await bridge.guardLeave(reason, { target: step.entry });
+      if (!ok) return false;
+    }
+    if (options.href) { window.location.href = options.href; return true; }
+    applyStage(step.entry, { project: state.project });
+    return true;
+  }
+
+  /* 关闭 / 刷新兜底：看板里还有没保存的修改时，让浏览器弹一次原生确认。 */
+  window.addEventListener('beforeunload', (event) => {
+    const bridge = window.TechBoardBridge;
+    if (!bridge || typeof bridge.shouldWarnOnUnload !== 'function') return;
+    if (!bridge.shouldWarnOnUnload()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
   /* ---------------------------------------------------------- 步骤切换 */
   function applyStage(stageId, opts) {
     if (!stages.has(stageId)) {
@@ -850,7 +889,7 @@
     if (idx <= 0) return;
     const target = STAGES[idx - 1];
     if (!state.project && target.id !== 'requirement-create') return;
-    applyStage(target.id, { project: state.project });
+    guardedStage(target.id, 'prev');
   });
   if (nextBtn) nextBtn.addEventListener('click', () => {
     const idx = stageIndex(state.stage);
@@ -860,7 +899,7 @@
       setStateView('error', '尚未绑定项目', '请先在「创建」中保存草稿创建项目，再进入下一步。');
       return;
     }
-    applyStage(target.id, { project: state.project });
+    guardedStage(target.id, 'next');
   });
   /* ---------------------------------------------------------- 子页面导航消息 */
   window.addEventListener('message', (event) => {
@@ -868,7 +907,8 @@
     const data = event.data || {};
     if (data.type === 'cpq:tech-workbench:exit') {
       const target = typeof data.url === 'string' && data.url ? data.url : 'home.html';
-      window.location.href = target;
+      // 退出项目也是导航出口：有未保存修改时先过闸门，放行后才真的离开。
+      guardedStage(target, 'exit-project', { href: target });
       return;
     }
     if (data.type !== 'cpq:tech-workbench:navigate') return;

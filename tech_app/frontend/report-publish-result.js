@@ -6,6 +6,9 @@ let rpReport,rpAggregate,rpView;
 const rpEsc=value=>esc(value??'');
 const rpDateTime=value=>String(value||'').replace('T',' ').slice(0,16)||'—';
 function rpToast(message,error=false){const el=document.createElement('div');el.className=`summary-toast${error?' error':''}`;el.textContent=message;document.body.append(el);setTimeout(()=>el.remove(),3600);}
+/* 关键失败必须留在页面上（批次 9 §7.5）：toast 只留给成功提示与安静失败。
+   回传销售经理失败 = 报价侧没收到这次交接，属于必须常驻 + 带追踪 ID 的一类。 */
+function rpShowFailure(code,message,traceId){if(window.TechFailure&&typeof window.TechFailure.show==='function'){window.TechFailure.show({code:code,message:message,stage:'5.3 发布并回传报价',trace_id:traceId||''});return true;}return false;}
 function rpScope(value){if(Array.isArray(value))return value.filter(Boolean);return String(value||'').split(/[、，,\n]/).map(x=>x.trim()).filter(Boolean);}
 function rpCard(title,body){return `<section class="summary-card"><div class="summary-card-header"><div class="summary-card-title">${rpIcon}${title}</div></div>${body}</section>`;}
 /* 3.3 的结果区要能回答两个问题：这一次交接的编号是多少、来源待办关掉没有。
@@ -13,6 +16,19 @@ function rpCard(title,body){return `<section class="summary-card"><div class="su
    文案，不存项目身份、不参与任何身份解析，也不作为任何判断依据。 */
 const RP_HANDOFF_NOTE_KEY='tech_report_handoff_note';
 function rpSourceState(source,handoffId){const row=source||{};if(row.closed)return `来源待办 ${row.task_id||handoffId||''} 已关闭`.trim();if(row.already)return '来源待办在此之前已完成，无需重复关闭';if(row.skipped)return `本次没有需要关闭的来源待办（${row.skipped}）`;if(row.error)return `来源待办未能关闭：${row.error}`;return '来源待办状态未回传';}
+/* 来源待办关掉没有：回传响应里带了状态就直接用；只有 task_id 时按 task_id 读一次。
+   读取任务记录的唯一入口是 TechTaskWatch（批次 9 §7.4）——刷新 / 复原走的是同一套
+   口径，页面不再自己拼 fetch。 */
+async function rpSourceLine(source,handoffId){
+  const row=source||{},taskId=String(row.task_id||'').trim(),watch=window.TechTaskWatch;
+  if(!taskId||!watch||typeof watch.recover!=='function')return rpSourceState(row,handoffId);
+  try{
+    const record=await watch.recover(rpPid,taskId);
+    if(!record)return rpSourceState(row,handoffId);
+    return rpSourceState({...row,status:String(record.status||row.status||''),
+                          closed:Boolean(row.closed)||watch.isTerminal(record.status)},handoffId);
+  }catch{return rpSourceState(row,handoffId);}
+}
 function rpNowLocal(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 function rpRememberHandoff(result){try{const row=result||{};localStorage.setItem(`${RP_HANDOFF_NOTE_KEY}:${rpPid}`,JSON.stringify({handoff_id:String(row.handoff_id||''),task_no:String((row.handoff||{}).task_no||''),source:rpSourceState(row.source_task,row.handoff_id),at:rpNowLocal()}));}catch{/* 展示用摘要，写不进去不影响回传本身 */}}
 function rpHandoffNote(){try{const last=JSON.parse(localStorage.getItem(`${RP_HANDOFF_NOTE_KEY}:${rpPid}`)||'null');if(!last)return '——';return [`交接编号 ${last.handoff_id||'——'}`,last.task_no?`任务 ${last.task_no}`:'',last.source||'',last.at?`记录于 ${last.at}`:''].filter(Boolean).join(' · ');}catch{return '——';}}
@@ -30,12 +46,12 @@ async function rpSendReportToSales(){
       result.new_card?'没有原报价卡片，已建立新的报价会话':'',
       `随包带上报告 ${result.report_no||''} V${result.version||''}`,
       result.handoff_id?`交接编号 ${result.handoff_id}`:'',
-      rpSourceState(result.source_task,result.handoff_id),
     ].filter(Boolean);
+    lines.push(await rpSourceLine(result.source_task,result.handoff_id));
     rpRememberHandoff(result);
     rpToast(lines.join(' · '));
     await rpRefreshReport();
-  }catch(error){rpToast(error.message||'回传销售经理失败',true);}
+  }catch(error){rpToast(error.message||'回传销售经理失败',true);rpShowFailure((error&&error.code)||'handoff_failed',error.message||'回传销售经理失败',error&&error.trace_id);}
 }
 async function rpStart(){if(!rpPid){if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;}location.href='home.html';return;}try{const [reportResult,aggregate]=await Promise.all([api(`/api/projects/${encodeURIComponent(rpPid)}/process-report`),api(`/api/projects/${encodeURIComponent(rpPid)}/summary`)]);rpReport=reportResult.report||{project_id:rpPid,status:'draft'};rpAggregate=aggregate;rpView=rpLiveView(rpReport,aggregate);rpRender();}catch(error){document.querySelector('#app').innerHTML=`<section class="title-section"><h1 class="form-title">发布工艺评估报告</h1><p style="color:#6b7280">页面加载失败：${rpEsc(error.message)}</p></section>`;}}
 // 3.3 只展示真实报告与真实发布记录，未产生的信息不再回填参考项目的默认数据。

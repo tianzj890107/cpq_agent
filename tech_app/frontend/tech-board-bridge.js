@@ -31,6 +31,17 @@
     TASK_FAILED: 'task-failed',
     SELECTION_CHANGED: 'selection-changed',
     BOARD_STATUS: 'board-status',
+    DIRTY_STATE: 'dirty-state',
+    LEAVE_APPROVED: 'leave-approved',
+  };
+  // 父壳 → 看板的全部命令名（既有 5 条 + 批次 8 的离开协议 3 条）。
+  var COMMANDS = [
+    'execute-action', 'navigate-view', 'refresh-data', 'select-part', 'sync-state',
+    'request-leave', 'save-draft', 'discard',
+  ];
+  var PROTOCOL = {
+    commands: COMMANDS.slice(),
+    events: Object.keys(STATE_EVENTS).map(function (key) { return STATE_EVENTS[key]; }),
   };
 
   var frame = null;
@@ -47,7 +58,10 @@
     view: { active: '' },
     lastEvent: null,
     error: '',
+    dirty: false,          // 看板里有没有还没保存的修改（批次 8）
   };
+  var leaveHandshake = null;   // 进行中的离开握手 { reason, resolve, settled, timer }
+  var leaveApproval = false;   // 看板自己发来、还没用掉的一次性 leave-approved
 
   function clone(value) {
     try { return JSON.parse(JSON.stringify(value == null ? {} : value)); }
@@ -60,7 +74,10 @@
   }
 
   function frameWindow() {
-    return (frame && frame.contentWindow) ? frame.contentWindow : null;
+    if (!frame) return null;
+    // 真实浏览器里看板是 iframe，消息要发给它的 window；同源 window 替身（测试 / 直接
+    // 传入 window）没有 contentWindow 时退化为 frame 本身，不要因此把命令全吞掉。
+    return frame.contentWindow || frame;
   }
 
   function envelope(type, name, payload, requestId) {
@@ -116,6 +133,86 @@
     if (!error) return false;
     if (error.quiet === true) return true;
     return QUIET_FAILURE_CODES.indexOf(String(error.code || '')) >= 0;
+  }
+
+  /* ---------------------------------------------------- 未保存修改的离开协议（批次 8）
+   * 看板把「有未保存修改」通过 dirty-state 报上来，父壳在五个导航出口前统一问一次：
+   * 取消 → 留在原地（quiet）；保存 / 放弃 → 发对应命令，**等看板广播 dirty-state{false}
+   * 才放行**（save-draft 回了 ok 不算确认）；看板拒绝 / 超时 → 不放行且给一条非 quiet
+   * 的失败（不能静默丢改动）；握手期间看板被切走 → 不放行、错误码 detached（quiet）。 */
+  function settleLeave(handshake, allowed) {
+    if (!handshake || handshake.settled) return;
+    handshake.settled = true;
+    if (handshake.timer) { clearTimeout(handshake.timer); handshake.timer = null; }
+    if (leaveHandshake === handshake) leaveHandshake = null;
+    handshake.resolve(Boolean(allowed));
+  }
+
+  function voidLeaveHandshake() {
+    if (leaveHandshake) settleLeave(leaveHandshake, false);
+  }
+
+  function setDirtyValue(dirty) {
+    state.dirty = Boolean(dirty);
+  }
+
+  /* 看板送上来的未保存标记：任何一种 source 都要以 payload 为准；
+     payload 缺 dirty 字段时按 true 处理（宁可多问一句，不可静默丢改动）。 */
+  function applyDirtyEvent(payload) {
+    var body = payload || {};
+    var dirty = body.dirty === undefined ? true : Boolean(body.dirty);
+    setDirtyValue(dirty);
+    if (dirty) { voidLeaveHandshake(); return; }
+    if (leaveHandshake) settleLeave(leaveHandshake, true);
+  }
+
+  /* 父壳侧主动标脏（典型来源：Agent 自动回填）。握手期间再标脏 → 本次放行作废。 */
+  function markDirty(reason, source) {
+    setDirtyValue(true);
+    voidLeaveHandshake();
+    notify({ type: 'dirty-state', name: 'dirty-state',
+             payload: { dirty: true, reason: reason || '', source: source || 'agent' } });
+    return state.dirty;
+  }
+
+  function shouldWarnOnUnload() {
+    return Boolean(frame) && state.dirty === true;
+  }
+
+  function guardLeave(reason, opts) {
+    var options = opts || {};
+    var label = String(reason || '');
+    var timeout = Number(options.timeout) > 0 ? Number(options.timeout) : DEFAULT_TIMEOUT;
+    if (!frame) return Promise.resolve(true);                    // 未 attach：纯查看页面不误拦
+    if (!state.dirty && !leaveApproval) return Promise.resolve(true);  // 干净：不发 request-leave
+    if (leaveHandshake && leaveHandshake.reason === label) return leaveHandshake.promise;  // 在途去重
+    leaveApproval = false;                                       // 一次性批准：用掉即失效
+    var handshake = { reason: label, settled: false, timer: null };
+    handshake.promise = new Promise(function (resolve) { handshake.resolve = resolve; });
+    leaveHandshake = handshake;
+    var target = String(options.target || '');
+    send('request-leave', { reason: label, target: target },
+         { label: '确认未保存的修改', timeout: timeout }).then(function (reply) {
+      if (handshake.settled) return;
+      var decision = String((((reply || {}).result) || {}).decision || '');
+      if (decision === 'cancel') { settleLeave(handshake, false); return; }
+      if (decision !== 'save' && decision !== 'discard') { settleLeave(handshake, false); return; }
+      // 保存 / 放弃都要等看板广播 dirty-state{false}：命令的 ok 回复不是放行依据。
+      handshake.timer = setTimeout(function () {
+        if (handshake.settled) return;
+        state.error = '未确认看板是否已保存，已停在当前步骤。';
+        notify({ type: 'error', name: 'request-leave',
+                 payload: { message: state.error, code: 'timeout' } });
+        settleLeave(handshake, false);
+      }, timeout);
+      send(decision === 'save' ? 'save-draft' : 'discard', { reason: label },
+           { label: decision === 'save' ? '保存草稿' : '放弃修改', timeout: timeout }).then(
+        function () { /* 放行的唯一判据是此刻 state.dirty === false */ },
+        function () { settleLeave(handshake, false); });
+    }, function () {
+      settleLeave(handshake, false);   // ok:false / 超时：send 已经发过非 quiet 失败
+    });
+    return handshake.promise;
   }
 
   function send(name, payload, options) {
@@ -201,10 +298,20 @@
     if (name === STATE_EVENTS.TASK_FAILED) {
       state.error = String(((data.payload || {}).message) || '看板任务失败');
     }
+    if (name === STATE_EVENTS.DIRTY_STATE) applyDirtyEvent(data.payload);
+    if (name === STATE_EVENTS.LEAVE_APPROVED) {
+      // 看板自己批准了一次离开：一次性放行，用掉即失效（第二次导航重新被拦）。
+      setDirtyValue(false);
+      leaveApproval = true;
+      if (leaveHandshake) settleLeave(leaveHandshake, true);
+    }
     notify({ type: name || 'state', name: name, payload: data.payload || {} });
   }
 
   window.addEventListener('message', onMessage);
+  /* 兼容通道：有些内嵌封装 / 自动化走查派发的事件只带 origin / source / data，没有 type。
+     空类型在 DOM 规范里不会被 dispatch，因此这里不会与上面那条标准通道重复处理同一条消息。 */
+  try { window.addEventListener('', onMessage); } catch (error) { /* 部分实现不接受空类型 */ }
 
   function attach(targetFrame, nextContext) {
     if (!targetFrame) return Promise.reject(Object.assign(new Error('缺少看板 iframe。'), { code: 'no-frame' }));
@@ -223,6 +330,10 @@
     state.actions = {};
     state.view = { active: '' };
     state.error = '';
+    // 新看板：未保存标记归零，旧的一次性批准与在途握手一律作废。
+    voidLeaveHandshake();
+    leaveApproval = false;
+    setDirtyValue(false);
     notify({ type: 'attached', name: 'attached', payload: { stage: context.stage } });
     // 子页面可能在本壳 attach 之前就已经 ready：主动要一次状态快照，避免错过。
     return send('sync-state', {}, { label: '同步看板状态', timeout: 8000 }).then(function (payload) {
@@ -239,6 +350,10 @@
   }
 
   function detach(reason) {
+    // 握手期间看板被切走：不放行、quiet，且不再补发 save-draft / discard。
+    voidLeaveHandshake();
+    leaveApproval = false;
+    setDirtyValue(false);
     failPending('detached', '看板已切换，命令已取消。');
     if (frame) frame = null;
     state.attached = false;
@@ -300,6 +415,7 @@
       busy: Object.keys(state.actions).some(function (name) { return state.actions[name].busy; }),
       error: state.error,
       lastEvent: state.lastEvent,
+      dirty: state.dirty === true,
     };
   }
 
@@ -311,6 +427,10 @@
   window.TechBoardBridge = {
     namespace: NAMESPACE,
     version: VERSION,
+    PROTOCOL: PROTOCOL,
+    STATE_EVENTS: STATE_EVENTS,
+    COMMANDS: COMMANDS.slice(),
+    QUIET_FAILURE_CODES: QUIET_FAILURE_CODES.slice(),
     attach: attach,
     detach: detach,
     executeAction: executeAction,
@@ -321,6 +441,9 @@
     snapshot: snapshot,
     actionState: actionState,
     isQuietFailure: isQuietFailure,
+    markDirty: markDirty,
+    guardLeave: guardLeave,
+    shouldWarnOnUnload: shouldWarnOnUnload,
     isReady: function () { return Boolean(frame) && state.ready; },
   };
 })();

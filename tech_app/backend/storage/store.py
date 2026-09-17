@@ -396,6 +396,97 @@ def list_projects(include_archived: bool = False) -> List[dict]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# 项目参与者 / 当前持有人（批次 7）：项目级 ACL 的落点，仍在 meta 文档里，不新建表。
+# 老项目没有这两个字段时按「只有 owner」处理，不迁移、不改写历史 meta。
+# --------------------------------------------------------------------------- #
+PARTICIPANT_SOURCES = ("manual", "quote_owner", "cost_task_assignee")
+
+
+def list_participants(project_id: str) -> List[dict]:
+    """项目的参与者清单（老项目没有该字段时返回空列表）。"""
+    meta = load_meta(project_id) or {}
+    rows = meta.get("participants") or []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def add_participant(project_id: str, username: str, *, role: str = "",
+                    source: str = "manual", assignee: bool = False,
+                    author: str = "system") -> List[dict]:
+    """加入参与者：幂等 —— 同一 username + source 已存在时只更新 role / assignee，不追加重复项。"""
+    username = str(username or "").strip()
+    if not username:
+        return list_participants(project_id)
+    source = str(source or "manual").strip() or "manual"
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return []
+        rows = [dict(row) for row in (meta.get("participants") or []) if isinstance(row, dict)]
+        found = None
+        for row in rows:
+            if str(row.get("username") or "") == username and str(row.get("source") or "") == source:
+                found = row
+                break
+        if found is None:
+            rows.append({"username": username, "role": str(role or ""), "source": source,
+                         "assignee": bool(assignee), "added_at": _now(), "added_by": author})
+        else:
+            if role:
+                found["role"] = str(role)
+            if assignee:
+                found["assignee"] = True
+            found["updated_at"] = _now()
+            found["updated_by"] = author
+        meta["participants"] = rows
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "add_participant",
+          {"username": username, "source": source, "role": role,
+           "assignee": bool(assignee), "by": author})
+    return rows
+
+
+def remove_participant(project_id: str, username: str, *, source: str = "",
+                       author: str = "system") -> List[dict]:
+    """移除参与者：不存在时安静返回（幂等）。传 source 只移除该来源的那一条。"""
+    username = str(username or "").strip()
+    source = str(source or "").strip()
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return []
+        rows = [dict(row) for row in (meta.get("participants") or []) if isinstance(row, dict)]
+        kept = [row for row in rows
+                if not (str(row.get("username") or "") == username
+                        and (not source or str(row.get("source") or "") == source))]
+        if len(kept) == len(rows):
+            return rows
+        meta["participants"] = kept
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "remove_participant",
+          {"username": username, "source": source or "*", "by": author})
+    return kept
+
+
+def current_holder(project_id: str) -> str:
+    """项目当前持有人；缺省 = 创建人（读取时兜底，不写回 meta）。"""
+    meta = load_meta(project_id) or {}
+    return str(meta.get("current_holder") or meta.get("owner") or "system")
+
+
+def set_current_holder(project_id: str, username: str, author: str = "system") -> str:
+    """覆盖写当前持有人，并留审计（幂等：同一人重复设无副作用）。"""
+    username = str(username or "").strip()
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return ""
+        meta["current_holder"] = username
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "set_current_holder", {"username": username, "by": author})
+    return username
+
+
 def backfill_legacy_mine_owner(owner: str) -> int:
     """把认证上线前原“我的清单”中的项目归属给默认管理员。
 

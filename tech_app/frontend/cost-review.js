@@ -161,6 +161,18 @@ function crToast(message, error = false) {
   setTimeout(() => node.remove(), error ? 4200 : 2400);
 }
 
+/* 关键失败必须留在页面上（批次 9 §7.5）：toast 只留给成功提示与安静失败。
+   code 决定文案与影响（task-failed / interrupted / handoff_failed…），trace_id 是
+   这次调用的错误追踪 ID，用户报障时与线上日志逐字对得上。 */
+function crShowFailure(code, message, traceId) {
+  if (window.TechFailure && typeof window.TechFailure.show === 'function') {
+    window.TechFailure.show({ code: code, message: message, stage: '4 成本测算',
+                              trace_id: traceId || '' });
+    return true;
+  }
+  return false;
+}
+
 /* --------------------------------------------------------------- 任务轮询 */
 /** 长任务进度经统一看板协议上报父壳：左侧进度卡按 taskId 去重、日志增量追加。 */
 function crPublishTask(name, extra) {
@@ -248,23 +260,46 @@ async function crCostStepInBackground(work) {
   }
 }
 
+/* 轮询收口到 TechTaskWatch（批次 9 §7.4）：一次网络抖动只计数、不判失败；
+   连续不可达降级成「连接不稳定，结果仍在处理中」并放慢间隔继续等；刷新后仍能按
+   task_id 复原。状态词表与中文口径也由它一处给出。 */
 async function crPollTask(taskId, card, label) {
-  for (;;) {
-    await crSleep(1200);
-    const task = await api(`/api/projects/${encodeURIComponent(crPid)}/tasks/${encodeURIComponent(taskId)}`);
-    const log = Array.isArray(task.progress_log) ? task.progress_log : [];
-    card.log(log);
-    // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
-    crPublishTask('task-progress', { taskId: taskId, label: label || '成本测算',
-                                     status: task.status === 'interrupted' ? 'interrupted' : 'running',
-                                     log: log,
-                                     process: Array.isArray(task.process_log) ? task.process_log : null });
-    if (task.status === 'succeeded') return task.result;
-    if (task.status === 'failed') throw new Error(task.error || '任务失败');
-    // 服务重启把在途任务打断了：中断是终态，不能继续 for(;;) 轮询下去。
-    if (task.status === 'interrupted') {
-      throw Object.assign(new Error(task.error || '服务重启中断，成本测算已中止。'), { code: 'interrupted' });
+  if (!window.TechTaskWatch || typeof window.TechTaskWatch.watch !== 'function') {
+    throw new Error('缺少 tech-task-watch.js：无法跟踪长任务状态');
+  }
+  const handle = window.TechTaskWatch.watch({
+    projectId: crPid,
+    taskId: taskId,
+    intervalMs: 1200,
+    onProgress: task => {
+      const record = task || {};
+      const log = Array.isArray(record.progress_log) ? record.progress_log : [];
+      card.log(log);
+      // progress_log 只增量追加：同一 taskId 的进度卡不会被后来的快照覆盖掉中间步骤。
+      crPublishTask('task-progress', { taskId: taskId, label: label || '成本测算',
+                                       status: record.status === 'interrupted' ? 'interrupted' : 'running',
+                                       log: log,
+                                       process: Array.isArray(record.process_log) ? record.process_log : null });
+    },
+    onDegraded: () => {
+      crStatus('连接不稳定，结果仍在处理中');
+      crPublishTask('task-progress', { taskId: taskId, label: label || '成本测算',
+                                       status: 'running',
+                                       progress: '连接不稳定，结果仍在处理中' });
+    },
+  });
+  try {
+    const settled = await handle.promise;
+    return settled.record && settled.record.result;
+  } catch (failure) {
+    const code = String((failure && failure.code) || '');
+    // 服务重启把在途任务打断了：中断是终态，不能继续轮询下去。
+    if (code === 'interrupted') {
+      throw Object.assign(new Error((failure && failure.message) || '服务重启中断，成本测算已中止。'),
+                          { code: 'interrupted', trace_id: (failure && failure.trace_id) || '' });
     }
+    throw Object.assign(new Error((failure && failure.message) || '任务失败'),
+                        { code: code || 'task-failed', trace_id: (failure && failure.trace_id) || '' });
   }
 }
 
@@ -701,6 +736,8 @@ async function crRunOp(kind) {
     card.done(false, error.message || '失败');
     crStatus(`${labels[kind]}失败：${error.message}`, true);
     crToast(error.message || `${labels[kind]}失败`, true);
+    // 回传/交接失败是报价侧收不到的那一类：必须常驻 + 带追踪 ID。
+    crShowFailure('handoff_failed', error.message || `${labels[kind]}失败`, error.trace_id);
     crPublishTask('task-failed', { taskId: opTask, label: labels[kind],
                                    status: 'failed', error: error.message || '失败' });
     return false;
@@ -783,6 +820,8 @@ async function crRunPart(partId, quantity) {
     card.done(interrupted ? 'interrupted' : false, message);
     crStatus(interrupted ? `${partId} 测算已中断：${message}` : `${partId} 测算失败：${message}`, !interrupted);
     crToast(message, true);
+    // 中断也是关键失败：常驻块要出来（toast 会消失，用户回头看不到原因）。
+    crShowFailure(interrupted ? 'interrupted' : 'task-failed', message, error.trace_id);
     crPublishTask('task-failed', { taskId: taskKey, label: label,
                                    status: interrupted ? 'interrupted' : 'failed',
                                    code: interrupted ? 'interrupted' : 'task-failed',
