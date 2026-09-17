@@ -3236,3 +3236,25 @@ Red 验证（逐条原始结论）：
   已在本机探针（真 `index.html` + 桩 API）三条路径实测通过，线上只做「产物字节一致」核对。
 
 状态：**本批已提交、双远端推送并发布到 34；纯前端改动，未重启服务。**
+
+## 100 修正：弹卡片遮罩层级 z-index 80 → 1300（9-17，发布后补）
+
+**这是本批唯一一处「偏离提示词字面值」的改动，单独列出。**
+
+- 事实（无头 Chrome 实测，独立打开 `index.html?project=P1`，窗口 1280×860，卡片打开时）：
+  - 遮罩 computed `z-index: 80`（提示词 B5 给的字面值）；
+  - 页面自身的固定底栏 `.footer-bar` computed `z-index: 100`（`workbench.css:117`），`display:flex`、可见、
+    rect `y=656`；`.more-actions .action-sheet` 是 `120`；
+  - 该点**落在遮罩矩形内**（`point_inside_mask: true`），但 `document.elementFromPoint(上一步/下一步中心)`
+    返回的是 `.footer-bar` 里的 `SPAN` —— 即底部栏按钮**浮在弹层之上并且可点**，遮罩不是真模态。
+  - 同页面还加载 `agent-chat.css`：`.oc-drawer-backdrop` = 1200、`.oc-drawer` = 1201，抽屉开着时弹层会被它压住。
+- 处理：`.board-card-mask` 的 `z-index` 由 `80` 改为 **`1300`**（与用户点名的参照实现
+  `#techModelSettingsMask` 同层，父壳那份就是 1300）。`index.html` 的 `workbench.css?v=` 同步 bump 到
+  `20260917-partchrome2`（只改这一个文件，其余三个号不动）。
+- 改后实测（同一条探针）：遮罩 `z-index: 1300`；`elementFromPoint(上一步/下一步中心)` 返回
+  `boardCardMask`（底部栏不再可穿透点击）；卡片仍 760×242、中心 `(633,359)` 对窗口中心 `(640,359)`；
+  打开/关闭（× / Esc / 点遮罩空白）行为不变。
+- 影响面：嵌入态本来就由 `tech-embed.js` 隐藏 `.footer-bar`（`.tech-embed .footer-bar{display:none}`），
+  所以这条只影响「独立打开 2.1」；父壳自己的左栏/模型设置卡在父文档，不受 iframe 内部层级影响。
+- 回归：`tests.test_tech_part_detail_chrome_and_action_cards_red` 25/25 绿（红测只断言选择器存在与
+  `[hidden]` 规则，不钉 z-index 数值）、被反转的两条旧测试绿、全量 1790/1790 绿；`node --check`、`git diff --check` 干净。

@@ -271,8 +271,10 @@ body{padding-bottom:0}
 .component-match-tag.new{color:var(--text-tertiary);border-color:var(--border-color);background:var(--bg-secondary)}
 
 /* 看板弹卡片：三处「导入已有 3D 模型 / 版本与校核 / 任务文件」不再占用工作区，
-   改用与「模型设置」同一套语义的居中卡片（固定 DOM + 全屏遮罩 + flex 居中）。 */
-.board-card-mask{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.45)}
+   改用与「模型设置」同一套语义的居中卡片（固定 DOM + 全屏遮罩 + flex 居中）。
+   z-index 取 1300（与父壳 #techModelSettingsMask 同层）：独立打开 2.1 时页面自己的 .footer-bar(100)、
+   .action-sheet(120) 以及 .oc-drawer(1201)/.oc-drawer-backdrop(1200) 都在它之下，弹层才是真模态。 */
+.board-card-mask{position:fixed;inset:0;z-index:1300;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.45)}
 .board-card-mask[hidden]{display:none}
 .board-card{width:min(760px,92vw);max-height:82vh;display:flex;flex-direction:column;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-lg);box-shadow:0 24px 60px rgba(15,23,42,.25)}
 .board-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--border-light)}
