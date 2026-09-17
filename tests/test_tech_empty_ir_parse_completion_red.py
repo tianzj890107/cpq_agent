@@ -171,12 +171,15 @@ class EmptyIrParseCompletionRed(unittest.TestCase):
     def test_refresh_progress_uses_shared_judgement(self):
         body = js_body(self.workbench, "async function refreshProgress(")
         self.assertTrue(body, "找不到 refreshProgress()")
-        self.assertIn("drawingParsed", body,
-                      "图纸解析打点必须调用共享判定 TechStageRestore.drawingParsed()")
+        # 完成态的判定唯一来源在批次 5B 升级为「后端统一流程投影」：refreshProgress 只消费
+        # TechWorkflowProjection.progress()，不再逐行 done.add(...)。判定的唯一性与
+        # 「不看零件数量」这两条能力断言一条不少，只是换了承载它的那条实现链。
+        self.assertIn("TechWorkflowProjection", body,
+                      "图纸解析打点必须来自唯一判定 TechWorkflowProjection.progress()")
+        self.assertIn("/workflow/projection", body,
+                      "完成态必须取自后端统一投影接口，而不是前端各自拼")
         self.assertNotRegex(body, r"parts\.length",
                             "不得再用零件数量判断图纸解析是否完成")
-        self.assertRegex(body, r"stages|meta",
-                         "共享判定要拿到解析留痕（meta.stages / ir_revision），不能只传 IR")
 
     def test_no_part_count_completion_anywhere(self):
         targets = {
@@ -201,11 +204,14 @@ class EmptyIrParseCompletionRed(unittest.TestCase):
 
     # ---------------------------------------------------- R2 / R4 不缩水
     def test_step_dots_still_marked(self):
-        for token in ("done.add('drawing')", "done.add('process')", "done.add('cost')",
-                      "done.add('summary')", "done.add('report-review')",
-                      "done.add('report-publish')"):
-            with self.subTest(token=token):
-                self.assertIn(token, self.workbench, f"步骤条打点 {token} 不得删除")
+        # 步骤条打点仍在（阶段页签 / 顶部流程条照旧点亮），只是完成态的算法从「前端逐行
+        # done.add(...)」搬到了后端统一投影（批次 5B）：前端只把投影换算成索引，不再自己
+        # 拼完成态。这里改查「打点所依赖的投影与子步骤编号」都还在，数量与能力一条不少。
+        self.assertIn("TechWorkflowProjection", self.workbench,
+                      "步骤条打点必须消费唯一流程投影，不得删掉")
+        for key in ("1.1", "2.1", "3.3", "4.3", "5.2", "5.3"):
+            with self.subTest(key=key):
+                self.assertIn(key, self.workbench, f"子步骤 {key} 的打点编号不得删除")
 
     def test_shared_module_stays_pure(self):
         if not self.shared_src:

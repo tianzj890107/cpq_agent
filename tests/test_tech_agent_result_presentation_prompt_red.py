@@ -114,7 +114,8 @@ class TechResultPresentationPromptRedTest(unittest.TestCase):
 
     def test_existing_stage_guidance_is_kept(self):
         self.assertIn("2.1 图纸解析", self.appendix)
-        self.assertIn("2.2 组装与整合", self.appendix)
+        self.assertIn("3 组装与整合", self.appendix)
+        self.assertIn("4 成本测算", self.appendix)
 
     def test_prompt_injection_and_whitelists_are_unchanged(self):
         self.assertRegex(

@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 
 from ..config import DATA_DIR, ROOT_DIR
 from ..storage import store
-from . import llm_settings
+from . import llm_settings, workflow_stages
 
 OPEN_CLAUDE_DIR = Path(os.getenv("OPEN_CLAUDE_DIR", ROOT_DIR / "open-claude"))
 
@@ -86,11 +86,15 @@ TECH_UI_ACTIONS = (
     "focus_view", "refresh_view", "fill_fields", "select_part",
     "show_result_actions", "show_progress", "set_stage", "request_confirmation",
 )
-# 九个内部阶段（与前端 STAGES / TECH_UI 白名单一致）。
+# 9 个内部 stage（与前端 STAGES / TECH_UI 白名单一致）。id 一律取自后端口径表
+# workflow_stages，下面这份字面表只是它的镜像，导入时逐项校验，避免两处漂移。
 TECH_UI_STAGES = (
     "requirement-create", "requirement-confirm", "requirement-review",
-    "drawing", "process", "cost", "summary", "report-review", "report-publish",
+    "drawing", "process", "cost",
+    "summary", "report-review", "report-publish",
 )
+if TECH_UI_STAGES != workflow_stages.stage_ids():
+    raise RuntimeError("TECH_UI_STAGES 与 workflow_stages.stage_ids() 不一致")
 # 看板已注册的视图白名单（app.js / assembly-integration.js / cost-review.js）。
 TECH_UI_VIEWS = (
     "parts", "questions", "report", "evidence", "review", "files", "upload", "import3d",
@@ -119,12 +123,12 @@ def _handle_tech_ui(tool_input: dict) -> str:
         return f"未知的 tech_ui action：{action or '(空)'}，不在白名单内"
     stage = str(tool_input.get("stage") or "").strip()
     if stage and stage not in TECH_UI_STAGES:
-        return f"未知 stage：{stage}，不在九阶段白名单内"
+        return f"未知 stage：{stage}，不在阶段白名单内"
     view = str(tool_input.get("view") or "").strip()
     if view and view not in TECH_UI_VIEWS:
         return f"未知 view：{view}，不在看板视图白名单内"
     if action == "set_stage" and stage not in TECH_UI_STAGES:
-        return "set_stage 必须提供九阶段白名单内的 stage"
+        return "set_stage 必须提供阶段白名单内的 stage"
     if action == "focus_view" and view not in TECH_UI_VIEWS:
         return "focus_view 必须提供看板视图白名单内的 view"
     fields = tool_input.get("fields")
@@ -2817,6 +2821,17 @@ def _install_tool_dispatch(oc_repl) -> None:
     _patched = True
 
 
+# 落点表（系统提示词用）：5 个阶段 × 13 个子步骤。它是后端口径表
+# workflow_stages.prompt_table() 的渲染结果 —— 导入时逐行校验，两处口径一漂移就直接报错，
+# 不会出现"提示词说 2.2、屏幕说第 3 阶段"这种自相矛盾。
+TECH_STAGE_TABLE = """\
+- 阶段 1 工艺评估需求：1.1 创建需求（requirement-create） / 1.2 确认需求（requirement-confirm） / 1.3 审核需求（requirement-review）
+- 阶段 2 图纸解析：2.1 图纸解析（drawing）
+- 阶段 3 组装与整合：3.1 整合图纸（process / drawings） / 3.2 参数推荐（process / params） / 3.3 组装工艺（process / process）
+- 阶段 4 成本测算：4.1 零件成本（cost / parts） / 4.2 组装成本（cost / assembly） / 4.3 汇总（cost / total）
+- 阶段 5 工艺评估报告：5.1 汇总结果（summary） / 5.2 结果审核（report-review） / 5.3 发布并回传报价（report-publish）"""
+
+
 SYSTEM_APPENDIX = """
 你现在是「AI 工艺评估平台」的工艺助手，服务对象是工艺工程师。同一个项目会在两个页面
 和你对话，每条消息末尾的 [当前页面：…] 标明用户此刻在哪一步 —— 按那一步选工具。
@@ -2826,7 +2841,7 @@ SYSTEM_APPENDIX = """
 - 讨论零件结构、材料、公差、可制造性与待澄清风险；
 - 用户要求开始/重新解析时调用 RequestParse，由平台执行，你不要自行编造解析结果。
 
-2.2 组装与整合（把 2.1 的零件装回一台整机）：
+3 组装与整合（把 2.1 图纸解析的零件装回一台整机）：
 - 先用 GetIntegrationState 取状态，再用 ListIntegrationParams 看参数缺口，不要拿 2.1 的
   零件数据代替整机结论；
 - 用户要改整机参数用 UpdateIntegrationParams、要改组装工序用 UpdateIntegrationProcess，
@@ -2848,18 +2863,35 @@ SYSTEM_APPENDIX = """
 - 需要把结果落到右侧看板时用 tech_ui：focus_view 切到对应视图、refresh_view 让看板重新拉取，
   再把结果入口给用户。只有当右侧看板已注册该视图时才调用 focus_view。
 
-九阶段落点表（stage 只能用这九个 id）：
-- requirement-create / requirement-confirm / requirement-review（1.1 创建 / 1.2 确认 / 1.3 审核）：
+五阶段落点表（阶段 1–5 / 子步骤 1.1–5.3，stage 只能用这九个 id）：
+- 阶段 1 工艺评估需求：1.1 创建需求（requirement-create） / 1.2 确认需求（requirement-confirm） / 1.3 审核需求（requirement-review）
+- 阶段 2 图纸解析：2.1 图纸解析（drawing）
+- 阶段 3 组装与整合：3.1 整合图纸（process / drawings） / 3.2 参数推荐（process / params） / 3.3 组装工艺（process / process）
+- 阶段 4 成本测算：4.1 零件成本（cost / parts） / 4.2 组装成本（cost / assembly） / 4.3 汇总（cost / total）
+- 阶段 5 工艺评估报告：5.1 汇总结果（summary） / 5.2 结果审核（report-review） / 5.3 发布并回传报价（report-publish）
+
+按 stage 决定要不要发 focus_view：
+- requirement-create / requirement-confirm / requirement-review（阶段 1 工艺评估需求）：
   这些页面只有表单和状态、没有注册看板视图，不要发 focus_view；用 fill_fields 回填字段，
   再用 refresh_view 让看板刷新。
 - drawing（2.1 图纸解析）：可 focus_view 到 parts / questions / report / evidence / review / files。
-- process（2.2 组装与整合）：可 focus_view 到 drawings / params / process；
+- process（3 组装与整合）：可 focus_view 到 drawings / params / process；
   刷新由业务工具返回后自动完成。
-- cost（2.3 成本测算）：可 focus_view 到 parts / assembly / total / params；
+- cost（4 成本测算）：可 focus_view 到 parts / assembly / total / params；
   刷新由业务工具返回后自动完成。
-- summary（3.1 汇总结果）/ report-review（3.2 结果审核）/ report-publish（3.3 发布并回传报价）：
+- summary（5.1 汇总结果）/ report-review（5.2 结果审核）/ report-publish（5.3 发布并回传报价）：
   这些页面没有注册看板视图，不要发 focus_view；刷新由报告类工具返回后自动完成。
 """
+
+
+def _stage_table_drift() -> list:
+    """落点表与 workflow_stages（以及提示词正文）的差异行（应为空）。"""
+    return [line for line in workflow_stages.prompt_table().splitlines()
+            if line and (line not in TECH_STAGE_TABLE or line not in SYSTEM_APPENDIX)]
+
+
+if _stage_table_drift():                                 # pragma: no cover - 口径漂移才会命中
+    raise RuntimeError(f"Agent 落点表与 workflow_stages 口径不一致：{_stage_table_drift()}")
 
 
 # --------------------------------------------------------------------------- #

@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>技术工艺智能体工作台</title>
+  <script src="tech-project-context.js?v=20260917-pid1"></script>
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="agent-chat.css?v=20260916-renderfix1" />
   <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set3" />
@@ -226,7 +227,9 @@
   <script src="llm-settings-panel.js?v=llm-set3"></script>
   <!-- 阶段恢复判定只有一份实现：工作台 / 首页共用，必须在 workbench 之前。 -->
   <script src="tech-stage-restore.js?v=tsr1"></script>
-  <script src="tech-workbench.js?v=twb19"></script>
+  <!-- 统一流程投影的唯一前端消费者，必须在 workbench 之前。 -->
+  <script src="tech-workflow-projection.js?v=twp1"></script>
+  <script src="tech-workbench.js?v=twb22"></script>
   <script src="tech-session-timeline.js?v=tst1"></script>
   <script src="agent-chat.js?v=20260917-filepreview1"></script>
 </body>

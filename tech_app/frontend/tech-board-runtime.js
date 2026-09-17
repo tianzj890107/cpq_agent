@@ -449,7 +449,7 @@
       return;
     }
     if (data.stage && STAGES.indexOf(String(data.stage)) === -1) {
-      reply(requestId, data.name, failure('context-mismatch', 'stage 不在九阶段白名单内。'));
+      reply(requestId, data.name, failure('context-mismatch', 'stage 不在阶段白名单内。'));
       return;
     }
     dispatch(data).then(

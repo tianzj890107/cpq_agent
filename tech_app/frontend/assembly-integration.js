@@ -1,7 +1,7 @@
 /* embed=1：本页在技术工艺统一工作台（tech-workbench.html）右侧打开，会话宿主在父壳 techChatPane。 */
 const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === '1';
 /*
- * 2.2 组装与整合。
+ * 3 组装与整合（3.1 整合图纸 / 3.2 参数推荐 / 3.3 组装工艺）。
  *
  * 2.1 把一张图纸拆成零件、逐件出工艺与成本；这一页把零件装回一台整机，四个环节：
  *   ① 整合图纸 → ② 参数推荐 → ③ 组装工艺 → ④ 成本测算
@@ -11,12 +11,13 @@ const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === 
  * 渲染刻意沿用 2.1 内嵌分析面板的 .inline-* 类：工艺路线和成本明细在两页是同一种东西，
  * 长得不一样只会让人以为算法也不一样。
  */
-const aiPid = new URLSearchParams(location.search).get('project')
-  || localStorage.getItem('cad_engine_project_id') || '';
-// 2.2 只剩三个环节：成本测算搬去了 2.3（财务经理的步骤）。
+const aiPid = TechProjectContext.bind().project;
+// 本步只剩三个环节：成本测算搬去了 4 成本测算（财务经理的步骤）。
 // 整合参数（报价必填项的补全与最终确认）留在本步的「参数推荐」里 ——
 // 工艺经理在这里交的是**工艺、参数与用量**，成本的数字不由他给。
 const AI_TABS = { drawings: '整合图纸', params: '参数推荐', process: '组装工艺' };
+// 【5 阶段口径】带子步骤号的完整名称：3.1 整合图纸 / 3.2 参数推荐 / 3.3 组装工艺。
+const AI_TAB_NAMES = { drawings: '3.1 整合图纸', params: '3.2 参数推荐', process: '3.3 组装工艺' };
 const AI_TYPE_LABEL = {
   blank: '下料/备料', turning: '车', milling: '铣', drilling: '钻', boring: '镗',
   grinding: '磨', bench: '钳工', sheet_metal: '钣金', welding: '焊接',
@@ -270,7 +271,7 @@ async function aiPost(path, { form, label, quantity, keepTab } = {}) {
   if (blocked) { aiToast(blocked, true); return { ok: false, error: { code: 'blocked', message: blocked } }; }
   aiBusy = true;
   aiRenderActions();
-  const title = label || AI_TABS[path] || path;
+  const title = label || AI_TAB_NAMES[path] || AI_TABS[path] || path;
   aiStatus(`${title}生成中…`);
   const card = aiProcessCard(title);
   let taskId = '';
@@ -353,7 +354,7 @@ function aiRenderActions() {
   // 参数推荐这一环节也要有人按下确认：整机参数、连接关系与 BOM 是后面工艺与成本的输入，
   // 没人点过头就往下走，错的口径会一路带到报价。
   // 参数推荐与组装工艺各有一个确认键。组装工艺那个是闸门：确认之后才允许把任务
-  // 推给财务经理去 2.3 测算成本 —— 工序和用量没定稿，算出来的成本没有意义。
+  // 推给财务经理去 4 成本测算 —— 工序和用量没定稿，算出来的成本没有意义。
   const confirmBtn = aiTab === 'params'
     ? `<button type="button" class="inline-action" id="aiParamsConfirm" ${!has || aiBusy ? 'disabled' : ''}>`
       + `${aiData?.status?.params_confirmed ? '重新确认' : '确认参数推荐'}</button>`
@@ -368,7 +369,7 @@ function aiRenderActions() {
   // 参数表始终可填：它的行是报价字典定死的，模型没推出来的那些正是要人工补的。
   // 藏在「编辑」后面的话，一旦模型一条都没给，按钮连出现的机会都没有。
   const alwaysEditable = aiTab === 'params';
-  // 参数推荐是第 3 大步的收口页：智能补全 / 保存补填 / 确认参数已齐都长在这里，
+  // 参数推荐（3.2）是本阶段的收口页：智能补全 / 保存补填 / 确认参数已齐都长在这里，
   // 复用既有的 autofill 与 finalize 接口，成本步骤不再承担这份工作。
   const gaps = aiRequiredGaps();
   const final = Boolean(aiData?.status?.params_final);
@@ -568,7 +569,7 @@ async function aiConfirmStep(step) {
                                       status: 'succeeded' });
     if (step === 'process') {
       aiSay('组装工艺已确认。现在可以点左边「确认工艺并发送至财务做成本测算」，'
-        + '把任务交给财务经理 —— 他会在 2.3 逐件算零件成本与组装成本。');
+        + '把任务交给财务经理 —— 他会在 4 成本测算逐件算零件成本与组装成本。');
     } else {
       aiSay(missing
         ? `参数推荐已确认。注意还有 ${missing} 项报价必填的成品参数没有值 —— `
@@ -586,7 +587,7 @@ async function aiConfirmStep(step) {
   }
 }
 
-/** 第 3 大步 · 参数推荐：智能补全。只给还缺的报价必填项出**建议值**，不落库。
+/** 第 3 阶段 · 3.2 参数推荐：智能补全。只给还缺的报价必填项出**建议值**，不落库。
     复用既有 POST /integration/params/autofill 与任务轮询，不新增第二套推荐逻辑；
     建议值经 QuoteParams.applyFills() 回填到当前参数表，人工核对后保存才会写进模型。 */
 async function aiParamsAutofill() {
@@ -826,7 +827,7 @@ function techGoNextStage(stage) {
   return false;
 }
 
-/** 「确认并进入下一步」（组装工艺页）：确认组装工艺 → 切到 2.3 成本测算。
+/** 「确认并进入下一步」（组装工艺页）：确认组装工艺 → 切到 4 成本测算。
     确认走既有 /integration/process/confirm，切步骤走既有嵌入导航通道；
     确认没过就把真实原因原样返回，不往下走。交给财务的交接不在这里做 ——
     接收人必须人工选，仍由同一页的「确认工艺并发送财务」承担。 */
@@ -843,11 +844,11 @@ async function aiConfirmProcessAndNext() {
       message: '组装工艺确认没有通过，请查看右侧看板提示。' } };
   }
   techGoNextStage('cost');
-  aiSay('组装工艺已确认，已进入下一步 2.3 成本测算。'
+  aiSay('组装工艺已确认，已进入下一步 4 成本测算。'
     + (aiPlan().finance_handoff
-        ? '任务已经在财务手里，接下来由他在 2.3 逐件测算零件成本与组装成本。'
+        ? '任务已经在财务手里，接下来由他在 4 成本测算逐件测算零件成本与组装成本。'
         : '如果还没把任务交给财务，先在左边点「确认工艺并发送财务」（接收人要人工选），'
-          + '否则 2.3 没有可接手的测算任务。'));
+          + '否则 4 成本测算没有可接手的测算任务。'));
   return { ok: true };
 }
 
@@ -1175,7 +1176,7 @@ function aiRenderOps() {
   if (nameInput && !nameInput.value && plan.params?.assembly_name) {
     nameInput.value = plan.params.assembly_name;
   }
-  // 2.2 不再显示成品成本 —— 成本是 2.3 的产出。这里只说工艺交到哪一步了。
+  // 本步不再显示成品成本 —— 成本是 4 成本测算的产出。这里只说工艺交到哪一步了。
   const box = $ai('aiOpCost');
   const finance = plan.finance_handoff;
   box.textContent = finance
@@ -1192,7 +1193,7 @@ function aiRenderOps() {
   const gapsWhy = gaps.text && gaps.covered ? `${gaps.text}（这批缺口已签字放行）` : gaps.text;
   const why = aiBusy ? '正在处理…' : (aiFinanceBlocker() || gapsWhy);
   if (financeBtn) {
-    financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 2.3 测算成本';
+    financeBtn.title = why || '把工艺、参数与用量交给财务经理，由他在 4 成本测算成本';
   }
   const badge = $ai('aiOpsWhy');
   if (badge) {
@@ -1215,7 +1216,7 @@ function aiRenderOps() {
     ? done.map(line => `<div class="ai-op-done">✓ ${line}</div>`).join('')
       + `<div style="margin-top:6px">再点一次可以换个派发方式重发（旧任务会被作废）。</div>`
     : '工艺与整机参数在这一步定稿（报价必填参数在「参数推荐」里补齐并确认）；'
-      + '<strong>成本由财务经理在 2.3 测算</strong>，写入数据库与发送至报价也都移到了那一步。')
+      + '<strong>成本由财务经理在 4 成本测算完成</strong>，写入数据库与发送至报价也都移到了那一步。')
     + (why ? '' : '');
 }
 
@@ -1267,7 +1268,7 @@ async function aiOpenFinanceDialog(waiver) {
   mask.innerHTML =
     `<div class="ai-send-box">
       <div class="ai-send-head"><h3>发送至财务做成本测算</h3>
-        <p>工艺、整机参数与用量在这一步定稿。接手人会在技术工艺 2.3 逐件测算零件成本、
+        <p>工艺、整机参数与用量在这一步定稿。接手人会在技术工艺 4 成本测算逐件测算零件成本、
            组装成本并汇总，再决定写入数据库、发送至报价，或退回给你复核。</p></div>
       <div class="ai-send-body">
         <div class="ai-send-row"><label for="aiSendWay">推送方式</label>
@@ -1421,11 +1422,11 @@ async function aiRunOp(kind, dispatch) {
     const finance = aiData.finance || {};
     const whom = aiHandoffWhom(finance);
     card.log([`任务 ${finance.task_no || ''} 已${whom}`,
-      `  他将在技术工艺 2.3 逐件测算零件成本与组装成本`,
+      `  他将在技术工艺 4 成本测算逐件测算零件成本与组装成本`,
       `  写入数据库与发送至报价也都在那一步完成`]);
     aiSay(`工艺已确认，任务 ${finance.task_no || ''} 已${whom}做成本测算。
 `
-      + `他会在 2.3 逐个零件加整机算完成本，然后选择写入数据库、发送至报价，`
+      + `他会在 4 成本测算逐个零件加整机算完成本，然后选择写入数据库、发送至报价，`
       + `或把结果退回给你复核工艺与用量。报价必填参数已在前面「参数推荐」里定稿。`);
     card.done(true);
     aiStatus(`${labels[kind]}完成`);
@@ -1453,7 +1454,7 @@ function aiBindBody() {
     button.onclick = () => aiMutateProcess(
       plan => plan.steps.splice(Number(button.dataset.aiDelStep), 1));
   });
-  // 成本明细的增删行随成本一起搬去了 2.3（cost-review），这里不再绑。
+  // 成本明细的增删行随成本一起搬去了 4 成本测算（cost-review），这里不再绑。
 }
 
 /* 右侧「任务文件」。与 2.1 同一个清单接口 —— 那边分散在各步骤里的产出（原图、技术
@@ -1561,7 +1562,7 @@ async function aiRunAll() {
     body: JSON.stringify({ requirement_note: note, quantity: aiPlan().quantity || 1 }),
   }).then(data => { aiData = data; }).catch(() => {});
   aiSay('开始整合分析：参数推荐 → 组装工艺，两步依次进行。'
-    + '成本测算在 2.3 由财务经理做（左边「确认工艺并发送财务」之后）。');
+    + '成本测算由财务经理在第 4 阶段做（左边「确认工艺并发送财务」之后）。');
   for (const step of ['params', 'process']) {
     await aiGenerate(step);
     if (!aiData?.status?.[{ params: 'has_params', process: 'has_process' }[step]]) {
@@ -1576,7 +1577,7 @@ async function aiRunAll() {
   aiTab = 'process';
   aiRender();
   aiSay('参数推荐与组装工艺都已生成。逐项核对后，分别点「确认参数推荐」与「确认组装工艺」，'
-    + '再把任务发给财务经理做成本测算（2.3）。');
+    + '再把任务发给财务经理做成本测算（4 成本测算）。');
 }
 
 /* ------------------------------------------------------- 模型参数设置
@@ -1666,14 +1667,14 @@ function aiBindShell() {
   };
   $ai('aiRequirement').onchange = () => aiSaveSettings();
   $ai('aiPrev').onclick = () => window.CadWorkflowNavigation?.navigate('2.1');
-  $ai('aiNext').onclick = () => window.CadWorkflowNavigation?.navigate('3.1');
+  $ai('aiNext').onclick = () => window.CadWorkflowNavigation?.navigate('5.1');
   $ai('aiConfirm').onclick = () => aiConfirm();
 }
 
 async function aiSaveSettings() {
   const body = {
     requirement_note: $ai('aiRequirement').value.trim(),
-    // 核算批量搬去 2.3 了（成本才用得上它），这里原样保留当前值。
+    // 核算批量搬去 4 成本测算了（成本才用得上它），这里原样保留当前值。
     quantity: aiPlan().quantity || 1,
   };
   try {
@@ -1691,7 +1692,7 @@ async function aiSaveSettings() {
  * 「把 20 工序工时改成 8 分钟」是真的会写进业务数据的。
  */
 const AI_TOOL_LABEL = {
-  GetIntegrationState: '读取 2.2 当前状态',
+  GetIntegrationState: '读取 3 组装与整合当前状态',
   ListIntegrationParams: '查整机参数与报价缺口',
   UpdateIntegrationParams: '写入整机参数',
   UpdateIntegrationProcess: '修改组装工序',
@@ -1726,7 +1727,7 @@ async function aiAgentTurn(message) {
     const response = await fetch(`/api/projects/${encodeURIComponent(aiPid)}/agent/send`, {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, aiAuthHeaders()),
-      body: JSON.stringify({ message, page_context: '2.2 组装与整合' }),
+      body: JSON.stringify({ message, page_context: '3 组装与整合' }),
     });
     if (!response.ok || !response.body) {
       const detail = await response.json().catch(() => ({}));
@@ -1828,7 +1829,7 @@ async function aiConfirm() {
   try {
     aiData = await api(aiUrl('/confirm'), { method: 'POST' });
     aiRender();
-    aiToast('2.2 组装与整合已确认');
+    aiToast('3 组装与整合已确认');
     // 确认不拦缺口（型号未定的方案也要能往下走），但必须说出来 ——
     // 报价必填项没齐，这台成品到了报价那头就是几个空格。
     const stat = aiData?.param_checklist?.summary;
@@ -1876,7 +1877,7 @@ async function aiStart() {
     aiRender();
     await aiReplayTimeline();
     aiStatus(state.confirmed ? '本步已确认' : '就绪');
-    if (!parts.length) aiSay('还没有拿到 2.1 的零件清单。请先完成 2.1 图纸解析 —— 2.2 是把那些零件装回整机。');
+    if (!parts.length) aiSay('还没有拿到 2.1 的零件清单。请先完成 2.1 图纸解析 —— 3 组装与整合是把那些零件装回整机。');
   } catch (error) {
     $ai('aiBody').innerHTML = `<div class="inline-empty error">读取失败：${esc(error.message)}</div>`;
     aiStatus(`读取失败：${error.message}`, true);
@@ -1885,7 +1886,7 @@ async function aiStart() {
 
 aiStart();
 
-/* 统一看板协议：2.2 的整合分析与发送财务注册成语义化动作，内部页签注册成语义化视图。
+/* 统一看板协议：3 组装与整合的整合分析与发送财务注册成语义化动作，内部页签注册成语义化视图。
  * 父壳底栏 / 标题行只发动作名 / 视图名，页面上的原按钮继续走同一份实现。 */
 (function aiRegisterTechBoardActions() {
   if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
@@ -2006,7 +2007,7 @@ aiStart();
         });
         return { ok: true };
       },
-      // role 只在这里声明一次：整个 2.2 页只允许有「当前那一个」主按钮。
+      // role 只在这里声明一次：整个 3 组装与整合页只允许有「当前那一个」主按钮。
       getState: () => ({ visible: aiTab === 'params' && aiHasParams(),
                          enabled: true, busy: aiBusy, role: 'primary', order: 35 }),
     },
@@ -2023,7 +2024,7 @@ aiStart();
                  role: aiHasProcess() ? 'aux' : 'primary', order: 40 };
       },
     },
-    // 组装工艺页的收口不再给「去 2.3 成本测算」单独一颗按钮：成本测算是财务经理那一步，
+    // 组装工艺页的收口不再给「去 4 成本测算」单独一颗按钮：成本测算是财务经理那一步，
     // 工艺经理在这里只需把任务交给财务。工艺生成后的主按钮是「确认工艺并发送财务」，
     // 它自己会先把组装工艺确认掉 —— 所以这一颗退出左侧栏（动作注册与实现照旧保留，
     // Agent / 内部链路仍按名字调用）。
@@ -2097,7 +2098,7 @@ aiStart();
       // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
       getState: () => ({ visible: false, enabled: true, busy: aiBusy, analyzed: aiAnalyzed() }),
     },
-    // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 2.2 内跑流水线。
+    // 左侧 Agent 请求跑某一环节：复用既有 aiGenerate(step)，真正在 3 组装与整合内跑流水线。
     integrationStep: {
       label: '运行整合环节',
       role: 'aux',
@@ -2113,7 +2114,7 @@ aiStart();
       },
       run: (payload) => {
         const step = String((payload && payload.step) || '').toLowerCase();
-        // 成本测算属于第 4 大步（成本页），不再从 2.2 发起 —— 这里只跑参数推荐与组装工艺。
+        // 成本测算属于第 4 阶段（成本页），不再从本步发起 —— 这里只跑参数推荐与组装工艺。
         const labels = { params: '参数推荐', process: '组装工艺' };
         if (!labels[step]) {
           return { ok: false, error: { code: 'bad-step',

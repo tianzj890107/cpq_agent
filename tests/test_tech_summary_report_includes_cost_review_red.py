@@ -266,17 +266,17 @@ class SummaryReportIncludesCostReviewRed(unittest.TestCase):
     def test_summary_has_2_3_stage_after_2_2(self):
         names = [row["stage"] for row in self._stages("confirmed")]
         two_one = next((i for i, name in enumerate(names) if name.startswith("2.1")), None)
-        two_two = next((i for i, name in enumerate(names) if name.startswith("2.2")), None)
-        two_three = next((i for i, name in enumerate(names) if name.startswith("2.3")), None)
+        two_two = next((i for i, name in enumerate(names) if name.startswith("3 组装与整合")), None)
+        two_three = next((i for i, name in enumerate(names) if name.startswith("4 成本测算")), None)
         self.assertIsNotNone(two_one, f"2.1 阶段行被删了：{names}")
-        self.assertIsNotNone(two_two, f"2.2 阶段行被删了：{names}")
-        self.assertIsNotNone(two_three, f"阶段汇总必须新增 2.3 成本测算行：{names}")
-        self.assertLess(two_two, two_three, "2.3 行必须排在 2.2 之后")
+        self.assertIsNotNone(two_two, f"3 组装与整合阶段行被删了：{names}")
+        self.assertIsNotNone(two_three, f"阶段汇总必须新增 4 成本测算行：{names}")
+        self.assertLess(two_two, two_three, "成本测算行必须排在组装与整合之后")
 
     def test_2_3_stage_carries_cost_conclusion_and_passes_gate(self):
-        row = self._stage("confirmed", "2.3")
+        row = self._stage("confirmed", "4 成本测算")
         text = row["conclusion"]
-        self.assertIn("1234", normalize(text), f"2.3 行必须带出成本合计，实际：{text}")
+        self.assertIn("1234", normalize(text), f"成本测算行必须带出成本合计，实际：{text}")
         for bad in _UNFINISHED:
             with self.subTest(bad=bad):
                 self.assertNotIn(bad, text,
@@ -336,7 +336,7 @@ class SummaryReportIncludesCostReviewRed(unittest.TestCase):
         for token in ("/summary", "/process-report", "process-report/submit-review"):
             with self.subTest(token=token):
                 self.assertIn(token, read(ROOT / "tech_app" / "backend" / "main.py"))
-        self.assertIn("srIntegrationStage", self.js, "2.2 阶段行的既有实现不得删除")
+        self.assertIn("srIntegrationStage", self.js, "组装与整合阶段行的既有实现不得删除")
         self.assertIn("2.1 图纸解析", self.js, "2.1 阶段行不得删除")
 
 

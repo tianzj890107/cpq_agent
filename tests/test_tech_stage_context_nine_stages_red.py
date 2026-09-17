@@ -2,7 +2,7 @@
 
 覆盖：
 1. STAGE_AGENT_CONTEXT 覆盖九个 stage id，每个 stage 有独立且互不重复的 pageContext，
-   取值与所属子步骤号一致（1.1 / 1.2 / 1.3 / 2.1 / 2.2 / 2.3 / 3.1 / 3.2 / 3.3）；
+   取值与所属子步骤号一致（1.1 / 1.2 / 1.3 / 2.1 / 3 组装与整合 / 4 成本测算 / 5.1 / 5.2 / 5.3）；
 2. stageAgentContext() 只按当前 stage 取上下文，查不到返回 null，不回退成 2.1；
 3. agent-chat.js 的 currentPageContext() 不再硬回退成 "2.1 图纸解析"；
 4. 后端保存会话轮次时 page_context 默认值不再是 "2.1 图纸解析"。
@@ -24,11 +24,11 @@ STAGE_CONTEXTS = (
     ("requirement-confirm", "1.2", ("确认",)),
     ("requirement-review", "1.3", ("审核",)),
     ("drawing", "2.1", ("图纸解析",)),
-    ("process", "2.2", ("组装",)),
-    ("cost", "2.3", ("成本",)),
-    ("summary", "3.1", ("汇总",)),
-    ("report-review", "3.2", ("审核",)),
-    ("report-publish", "3.3", ("发布",)),
+    ("process", "3", ("组装",)),
+    ("cost", "4", ("成本",)),
+    ("summary", "5.1", ("汇总",)),
+    ("report-review", "5.2", ("审核",)),
+    ("report-publish", "5.3", ("发布",)),
 )
 
 
@@ -52,7 +52,7 @@ class TechStageContextNineStagesRedTest(unittest.TestCase):
         match = re.search(r"STAGE_AGENT_CONTEXT\s*=\s*\{([\s\S]*?)\n  \};", cls.js)
         cls.context_block = match.group(1) if match else ""
 
-    # ---------------------------------------------------------------- 九阶段覆盖
+    # ---------------------------------------------------------------- 阶段覆盖
     def test_stage_agent_context_covers_nine_stages(self):
         self.assertTrue(self.context_block, "tech-workbench.js 缺少 STAGE_AGENT_CONTEXT")
         for stage, _no, _kw in STAGE_CONTEXTS:

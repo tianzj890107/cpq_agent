@@ -13,21 +13,24 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+  // 全局口径：5 个阶段 × 13 个子步骤。条目 = 阶段号 + 阶段标题 + 子步骤号 + 子步骤标题。
+  // 后端同一张表在 tech_app/backend/services/workflow_stages.py，两边必须逐行一致；
+  // stage id / 页面文件 / URL 参数一个字都不变，本批只换编号与标题。
   const STAGES = [
-    { id: 'requirement-create',  no: '1.1', phase: 1, phaseTitle: '接受工艺评估需求', label: '创建',     page: 'requirement-create.html' },
-    { id: 'requirement-confirm', no: '1.2', phase: 1, phaseTitle: '接受工艺评估需求', label: '确认',     page: 'requirement-confirm.html' },
-    { id: 'requirement-review',  no: '1.3', phase: 1, phaseTitle: '接受工艺评估需求', label: '审核',     page: 'requirement-review.html' },
-    { id: 'drawing',             no: '2.1', phase: 2, phaseTitle: '解析技术工艺过程', label: '图纸解析', page: 'index.html' },
-    { id: 'process',             no: '2.2', phase: 2, phaseTitle: '解析技术工艺过程', label: '工艺方案/组装整合', page: 'assembly-integration.html' },
-    { id: 'cost',                no: '2.3', phase: 2, phaseTitle: '解析技术工艺过程', label: '成本测算', page: 'cost-review.html' },
-    { id: 'summary',             no: '3.1', phase: 3, phaseTitle: '输出工艺评估结果', label: '汇总结果', page: 'summary.html' },
-    { id: 'report-review',       no: '3.2', phase: 3, phaseTitle: '输出工艺评估结果', label: '结果审核', page: 'report-review.html' },
-    { id: 'report-publish',      no: '3.3', phase: 3, phaseTitle: '输出工艺评估结果', label: '发布并回传报价', page: 'report-publish.html' },
+    { id: 'requirement-create',  phase: '1', phaseTitle: '工艺评估需求', no: '1.1', subTitle: '创建需求',   label: '创建',     page: 'requirement-create.html' },
+    { id: 'requirement-confirm', phase: '1', phaseTitle: '工艺评估需求', no: '1.2', subTitle: '确认需求',   label: '确认',     page: 'requirement-confirm.html' },
+    { id: 'requirement-review',  phase: '1', phaseTitle: '工艺评估需求', no: '1.3', subTitle: '审核需求',   label: '审核',     page: 'requirement-review.html' },
+    { id: 'drawing',             phase: '2', phaseTitle: '图纸解析',     no: '2.1', subTitle: '图纸解析',   label: '图纸解析', page: 'index.html' },
+    { id: 'process',             phase: '3', phaseTitle: '组装与整合',   no: '3.1', subTitle: '整合图纸',   label: '工艺方案/组装整合', page: 'assembly-integration.html' },
+    { id: 'cost',                phase: '4', phaseTitle: '成本测算',     no: '4.1', subTitle: '零件成本',   label: '成本测算', page: 'cost-review.html' },
+    { id: 'summary',             phase: '5', phaseTitle: '工艺评估报告', no: '5.1', subTitle: '汇总结果',   label: '汇总结果', page: 'summary.html' },
+    { id: 'report-review',       phase: '5', phaseTitle: '工艺评估报告', no: '5.2', subTitle: '结果审核',   label: '结果审核', page: 'report-review.html' },
+    { id: 'report-publish',      phase: '5', phaseTitle: '工艺评估报告', no: '5.3', subTitle: '发布并回传报价', label: '发布并回传报价', page: 'report-publish.html' },
   ];
   const stages = new Set(STAGES.map((item) => item.id));
 
-  // 顶部可见的五个大流程：九阶段仍是内部状态与 URL 的事实源，MAJOR_STEPS 只负责
-  // 把 1.1/1.2/1.3 聚合到大流程 1、把 3.1/3.2/3.3 聚合到大流程 5 的顶部投影。
+  // 顶部可见的五个大流程：9 个内部 stage 仍是内部状态与 URL 的事实源，MAJOR_STEPS 只负责
+  // 把 1.1/1.2/1.3 聚合到阶段 1、把 5.1/5.2/5.3 聚合到阶段 5 的顶部投影。
   // title 是右侧业务区域唯一的固定大标题（不接受子页面动态标题与状态刷新覆盖）；
   // label 仍是顶部流程导航上的原文，两者互不影响。
   const MAJOR_STEPS = [
@@ -38,39 +41,39 @@
     { no: '5', title: '工艺评估报告', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
   ];
 
-  // 大流程 1、5 内部还有多步，需要在业务卡片标题行给一排上下文小流程按钮（大流程
-  // 2-4 各自只有一个内部阶段或已有子页面页签，不在父壳重复生成）。按钮只显示名称，
-  // stage id、页面文件和九阶段流转都不变。
+  // 阶段 1、5 内部还有多步，需要在业务卡片标题行给一排上下文小流程按钮（阶段
+  // 2-4 各自只有一个内部阶段或已有子页面页签，不在父壳重复生成）。按钮显示
+  // 「子步骤号 + 名称」，stage id、页面文件与流转都不变。
   const CONTEXT_SUBSTEPS = {
     1: [
-      { stage: 'requirement-create',  label: '创建' },
-      { stage: 'requirement-confirm', label: '确认' },
-      { stage: 'requirement-review',  label: '审核' },
+      { stage: 'requirement-create',  no: '1.1', label: '创建' },
+      { stage: 'requirement-confirm', no: '1.2', label: '确认' },
+      { stage: 'requirement-review',  no: '1.3', label: '审核' },
     ],
     5: [
-      { stage: 'summary',        label: '汇总结果' },
-      { stage: 'report-review',  label: '结果审核' },
-      { stage: 'report-publish', label: '发布并回传报价' },
+      { stage: 'summary',        no: '5.1', label: '汇总结果' },
+      { stage: 'report-review',  no: '5.2', label: '结果审核' },
+      { stage: 'report-publish', no: '5.3', label: '发布并回传报价' },
     ],
   };
 
-  // 大流程 3、4 的子页面在统一工作台里已经隐藏了自带的页签行：父壳把同一组页签渲染成
-  // data-child-tab 按钮放到统一标题行右侧。这里只登记“视图名 + 文案”，点击通过
+  // 阶段 3、4 的子页面在统一工作台里已经隐藏了自带的页签行：父壳把同一组页签渲染成
+  // data-child-tab 按钮放到统一标题行右侧。这里只登记“子步骤号 + 视图名 + 文案”，点击通过
   // TechBoardBridge.navigateView(view) 交给同源 iframe 里注册过的 view 动作，active
   // 由看板回传的 action-state 决定 —— 父壳不认识任何子页面 id / CSS selector。
   const CHILD_TAB_PROXY = {
     'process': {
       tabs: [
-        { key: 'drawings', label: '整合图纸', view: 'drawings' },
-        { key: 'params', label: '参数推荐', view: 'params' },
-        { key: 'process', label: '组装工艺', view: 'process' },
+        { key: 'drawings', label: '整合图纸', no: '3.1', stage: 'process', view: 'drawings' },
+        { key: 'params', label: '参数推荐', no: '3.2', stage: 'process', view: 'params' },
+        { key: 'process', label: '组装工艺', no: '3.3', stage: 'process', view: 'process' },
       ],
     },
     'cost': {
       tabs: [
-        { key: 'parts', label: '零件成本', view: 'parts' },
-        { key: 'assembly', label: '组装成本', view: 'assembly' },
-        { key: 'total', label: '汇总', view: 'total' },
+        { key: 'parts', label: '零件成本', no: '4.1', stage: 'cost', view: 'parts' },
+        { key: 'assembly', label: '组装成本', no: '4.2', stage: 'cost', view: 'assembly' },
+        { key: 'total', label: '汇总', no: '4.3', stage: 'cost', view: 'total' },
       ],
     },
   };
@@ -84,10 +87,11 @@
     return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
   }
 
-  // 九个内部阶段各有独立 page_context（第 19 步）：1.1 / 1.2 / 1.3 / 2.1 / 2.2 /
-  // 2.3 / 3.1 / 3.2 / 3.3 一一对应，缺上下文时 stageAgentContext() 返回 null 并
-  // 不回退成任何别的 stage。这里只向会话组件提供模型请求用的语义上下文，不构造任何
-  // 可见阶段卡或卡内操作；用户操作只在左侧统一操作栏与右侧看板。
+  // 9 个内部 stage 各有独立 page_context：1:1 的 stage 用「子步骤号 + 子步骤标题」
+  // （2.1 图纸解析、5.2 结果审核），跨子步骤的 stage 用「阶段号 + 阶段标题」
+  // （3 组装与整合、4 成本测算）；9 个取值互不相同，缺上下文时 stageAgentContext()
+  // 返回 null 并不回退成任何别的 stage。这里只向会话组件提供模型请求用的语义上下文，
+  // 不构造任何可见阶段卡或卡内操作；用户操作只在左侧统一操作栏与右侧看板。
   const STAGE_AGENT_CONTEXT = {
     'requirement-create': {
       pageContext: '1.1 创建需求',
@@ -110,27 +114,27 @@
       hint: '右侧看板显示解析进度与零件结果；可以在这里追问解析结果，或直接说「开始解析」。',
     },
     'process': {
-      pageContext: '2.2 组装与整合',
+      pageContext: '3 组装与整合',
       label: '组装与整合',
       hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
     },
     'cost': {
-      pageContext: '2.3 成本测算',
+      pageContext: '4 成本测算',
       label: '成本测算',
       hint: '可追问成本构成与零件测算结果；重算与确认成本请用底栏操作。',
     },
     'summary': {
-      pageContext: '3.1 汇总结果',
+      pageContext: '5.1 汇总结果',
       label: '汇总结果',
       hint: '可让我汇总各步骤数据并生成报告草稿；保存与提交审核请用左侧操作栏。',
     },
     'report-review': {
-      pageContext: '3.2 结果审核',
+      pageContext: '5.2 结果审核',
       label: '结果审核',
       hint: '可让我读取报告与版本、汇总审核摘要；通过或退回由具备权限的人提交。',
     },
     'report-publish': {
-      pageContext: '3.3 发布并回传报价',
+      pageContext: '5.3 发布并回传报价',
       label: '发布并回传报价',
       hint: '可让我读取发布状态与回传结果；正式发布与回传报价请用左侧操作栏。',
     },
@@ -140,7 +144,7 @@
 
   // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
   // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
-  const state = { stage: '', project: '', taskId: '', progress: null, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
+  const state = { stage: '', project: '', taskId: '', progress: null, progressFailed: false, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
   // 主按钮数量异常时标题行显示的那条诊断（正常帧清掉，避免盖住真实步骤状态）。
   let primaryDiagnosticShown = '';
   // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
@@ -330,7 +334,7 @@
     bar.hidden = false;
     if (proxy) {
       bar.innerHTML = proxy.tabs.map((tab) =>
-        `<button type="button" class="tech-substep-btn" data-child-tab="${escH(tab.key)}">${escH(tab.label)}</button>`).join('');
+        `<button type="button" class="tech-substep-btn" data-child-tab="${escH(tab.key)}">${escH(tab.no ? `${tab.no} ${tab.label}` : tab.label)}</button>`).join('');
       bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const tab = proxy.tabs.find((item) => item.key === btn.dataset.childTab);
@@ -347,7 +351,7 @@
       if (step.stage === state.stage) cls.push('active');
       else if (done) cls.push('done');
       const allowed = canNav || step.stage === 'requirement-create';
-      return `<button type="button" class="${cls.join(' ')}" data-substep="${step.stage}" ${allowed ? '' : 'disabled'}>${step.label}</button>`;
+      return `<button type="button" class="${cls.join(' ')}" data-substep="${step.stage}" ${allowed ? '' : 'disabled'}>${escH(step.no ? `${step.no} ${step.label}` : step.label)}</button>`;
     }).join('');
     bar.querySelectorAll('[data-substep]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -531,11 +535,14 @@
     iframe.className = 'tech-stage-frame';
     iframe.title = meta.label;
     iframe.setAttribute('data-stage', state.stage);
+    // 把本壳项目标在 iframe 上（data-project）：子页用 TechProjectContext.bind() 比对，
+    // 与父壳不一致时拒绝加载，避免「父壳 A、iframe B」这种串项目组合。
+    iframe.dataset.project = state.project || '';
     iframe.src = childUrl(state.stage);
     iframe.addEventListener('load', () => {
       // iframe load 后挂上看板桥：等它 ready 后按钮状态与页签 active 全部来自
       // action-state 消息；等待期间底栏按钮保持禁用并给出“未就绪”提示。
-      // 新增工艺待办用 tech-task.html 承载建项流程，它不属于九阶段看板，没有运行时。
+      // 新增工艺待办用 tech-task.html 承载建项流程，它不属于阶段看板，没有运行时。
       if (stagePageHasRuntime()) attachBoardBridge(iframe);
       else setBoardNotice('');
       syncAgentStageContext();
@@ -791,7 +798,7 @@
     }
   }
 
-  // tech_ui 的 set_stage：Agent 只表达「切到某一步」，这里按九阶段白名单校验后走
+  // tech_ui 的 set_stage：Agent 只表达「切到某一步」，这里按阶段白名单校验后走
   // 既有 applyStage，与顶部流程 / 底栏 / 左侧操作栏共用同一条切步通道。
   window.addEventListener('cpq:tech-agent:set-stage', (event) => {
     const detail = event.detail || {};
@@ -870,54 +877,63 @@
     const navigateFrame = $('techStageFrame');
     if (!navigateFrame || event.source !== navigateFrame.contentWindow) return;
     if (!stages.has(data.stage)) return;                       // stage 白名单校验
+    // 项目一致性校验（在 stage 白名单之后、applyStage 之前）：iframe 不能把父壳切到
+    // 另一个项目。项目身份只由共享模块判定；不一致时只提示，既不切换也不 pushState。
+    const incomingProject = data.project || state.project;
+    const contextApi = window.TechProjectContext;
+    const verdict = contextApi ? contextApi.resolve({
+      search: '?project=' + encodeURIComponent(incomingProject),
+      parentProject: state.project,
+    }) : { error: '' };
+    if (verdict.error === 'project_mismatch') {
+      const label = (stageMeta(data.stage) || {}).label || data.stage;
+      setBoardNotice(`${label}：子页面传来的项目与当前项目不一致，已拒绝。`, 'error');
+      return;
+    }
     applyStage(data.stage, {
-      project: data.project || state.project,
+      project: incomingProject,
       taskId: data.task_id || state.taskId,
     });
   });
 
   /* ---------------------------------------------------------- 后端进度（只读）
-   * 步骤完成状态来自既有 /workflow、/summary 数据，仅用于步骤条打点，不冒充完成。 */
+   * 完成态与可执行性只有一个来源：后端流程投影
+   * （GET /api/projects/<id>/workflow/projection，见批次 5B 契约）。
+   * 本壳只把投影交给 tech-workflow-projection.js 换算成索引再渲染，不再自己拼
+   * 「有草稿就算完成」「有工序就算完成」这类启发式。 */
   function authHeaders() {
     const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
+  /* 未来步骤「能看、不能做」：点进去时按唯一投影说清缺什么、谁来做（批次 5B 契约 §7）。
+     只在投影明确说 actionable=false 时提示，不覆盖子页面自己上报的状态文案。 */
+  function syncStageGateNotice() {
+    const mapped = state.progress;
+    if (!mapped || !mapped.actionable || typeof mapped.actionable.get !== 'function') return;
+    if (mapped.actionable.get(state.stage) !== false) return;
+    const reasons = (mapped.blocked && mapped.blocked.get(state.stage)) || [];
+    setBoardNotice(reasons.length ? `本步还不能执行：${reasons.join('；')}` : '本步还不能执行。', 'error');
+  }
   async function refreshProgress() {
     if (!state.project) return;
     const id = encodeURIComponent(state.project);
+    const mapper = window.TechWorkflowProjection;
     try {
-      const results = await Promise.all([
-        fetch(`/api/projects/${id}/workflow`, { headers: authHeaders() }).then((r) => r.ok ? r.json() : {}),
-        fetch(`/api/projects/${id}/summary`, { headers: authHeaders() }).then((r) => r.ok ? r.json() : {}),
-      ]);
-      const wf = results[0] || {};
-      const aggregate = results[1] || {};
-      const reqStatus = (wf.requirement || {}).status || '';
-      const reportStatus = (wf.report || {}).status || '';
-      const summary = wf.summary || {};
-      const agg = aggregate.aggregate || aggregate;
-      const steps = agg.steps || {};
-      const projectMeta = wf.project || {};
-      /* 解析完成看留痕（IR 文档 / stages.parsed(_3d) / ir_revision），不看零件数量：
-         解析成功但确实是 0 个零件的整机同样算完成。 */
-      const restore = window.TechStageRestore;
-      const drawingDone = Boolean(restore && typeof restore.drawingParsed === 'function'
-        && restore.drawingParsed({ ir: steps.ir || {}, meta: projectMeta, stages: projectMeta.stages }));
-      const integration = steps.integration || {};
-      const costReview = steps.cost_review || {};
-      const done = new Set();
-      if (reqStatus) done.add('requirement-create');
-      if (['pending_review', 'approved'].includes(reqStatus)) done.add('requirement-confirm');
-      if (reqStatus === 'approved') done.add('requirement-review');
-      if (drawingDone) done.add('drawing');
-      if ((integration.process && integration.process.steps && integration.process.steps.length)) done.add('process');
-      if (costReview.confirmed) done.add('cost');
-      if (summary.confirmed_at || ['in_review', 'approved', 'published'].includes(reportStatus)) done.add('summary');
-      if (['approved', 'published'].includes(reportStatus)) done.add('report-review');
-      if (reportStatus === 'published') done.add('report-publish');
-      state.progress = { done };
+      const response = await fetch(`/api/projects/${id}/workflow/projection`, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const projection = await response.json();
+      if (!projection || projection.project_id !== state.project) throw new Error('projection-mismatch');
+      if (!mapper || typeof mapper.progress !== 'function') throw new Error('projection-mapper-missing');
+      /* 投影自报取数失败时同样按「刷新失败」处理：保留上一次状态，只提示，不清空。 */
+      if (projection.refresh_ok === false) throw new Error('refresh-failed');
+      state.progress = mapper.progress(projection);
+      state.progressFailed = false;
+      syncStageGateNotice();
     } catch (e) {
-      state.progress = { done: new Set() };
+      /* 读取失败保留上一次 state.progress（首次读取尚未拿到时保持空），
+         绝不把完成集合清空成「全没做」。 */
+      state.progressFailed = true;
+      setBoardNotice(state.progress ? '刷新失败，以下为上次读取到的状态' : '流程状态暂时读取不到，请稍后刷新重试。', 'error');
     }
     renderTop();
   }

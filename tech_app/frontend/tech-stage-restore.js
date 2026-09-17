@@ -1,8 +1,8 @@
 /* 项目阶段恢复的唯一判定实现（纯函数，可被单测直接执行）。
  *
  * 「历史记录」与「首页项目卡片 / 清单」打开项目时，都用这里把四路只读信号换算成
- * 9 个 stage id 之一：需求 / 报告（workflow）、是否已解析（project）、2.2 计划
- * （summary.steps.integration）与 2.3 成本（summary.steps.cost_review /
+ * 9 个 stage id 之一：需求 / 报告（workflow）、是否已解析（project）、3 组装与整合的计划
+ * （summary.steps.integration）与 4 成本测算（summary.steps.cost_review /
  * cost-review）。调用点只负责取数并委托，不再各留一份判定分支。
  *
  * 只读入参，不碰任何页面环境：接口地址、请求头、兜底文案都归调用点。
@@ -46,8 +46,8 @@
     return false;
   }
 
-  // 「2.3 已开始」判定。注意：integration.cost.items 是 2.2 自己算的整机成本，
-  // 不算 2.3 已开始 —— 否则工艺刚确认、成本还没交给财务的项目会被误判进 2.3。
+  // 「4 成本测算已开始」判定。注意：integration.cost.items 是 3 组装与整合自己算的整机成本，
+  // 不算 4 成本测算已开始 —— 否则工艺刚确认、成本还没交给财务的项目会被误判进 4 成本测算。
   function costStarted(integration, costReview, costDetail) {
     var plan = integration || {};
     var review = costReview || {};
@@ -97,7 +97,7 @@
     // 5 既没有需求单也没有解析结果：只能从 1.1 重新开始。
     if (!status && !parsed) return 'requirement-create';
 
-    // 6 财务把成本退回工艺经理复核：落到第 5 大步（与报价侧同义任务的既有落点一致）。
+    // 6 财务把成本退回工艺经理复核：落到第 5 阶段（与报价侧同义任务的既有落点一致）。
     var actions = (data.cost_review || {}).actions;
     if (Array.isArray(actions)) {
       for (var i = 0; i < actions.length; i += 1) {
@@ -105,10 +105,10 @@
       }
     }
 
-    // 7 2.3 已经开始（已发财务 / 已有逐件成本 / 已确认）：不能被退回 2.2。
+    // 7 4 成本测算已经开始（已发财务 / 已有逐件成本 / 已确认）：不能被退回 3 组装与整合。
     if (costStarted(data.integration, data.cost_review, data.cost_detail)) return 'cost';
 
-    // 8 已解析但还没进 2.3：2.2 组装与整合。
+    // 8 已解析但还没进 4 成本测算：3 组装与整合。
     if (parsed) return 'process';
 
     // 9 有需求单、还没解析：2.1 图纸解析。

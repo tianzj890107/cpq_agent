@@ -5,28 +5,33 @@
 (() => {
   'use strict';
 
+  // 【5 阶段 × 13 子步骤】技术工艺流程栏的唯一口径（与 tech-workbench.js 的 STAGES /
+  // backend/services/workflow_stages.py 同源）。上游的（材料定性/清洗/组装检测/产能）
+  // 不在 CPQ 的流程内；后端报告送审门禁另有一份口径（backend/config.py 的 TECH_SUBSTEPS），
+  // 那里管的是上游那六个子步骤，本表只认 CPQ 自己的 5 阶段 / 13 子步骤。
   const stages = {
     1: ['1.1 创建', '1.2 确认', '1.3 审核'],
-    // 【CPQ 定制】技术工艺阶段：2.1 图纸解析、2.2 组装与整合、2.3 成本测算（财务经理）；上游的
-    // （材料定性/清洗/组装检测/产能）不在 CPQ 的流程内。本表是流程栏、跳转和门禁的
-    // 唯一事实源。后端报告送审门禁另有一份口径（backend/config.py 的 TECH_SUBSTEPS），
-    // 那里管的是上游那六个子步骤，2.2 不在其中 —— 它是 CPQ 自己新增的一步，
-    // 有意不做成 3.1 的硬前置：老项目没有 2.2 的结果，挡住就没法出报告了。
-    2: ['2.1 图纸解析', '2.2 组装与整合', '2.3 成本测算'],
-    3: ['3.1 汇总结果', '3.2 审核报告', '3.3 发布报告'],
+    2: ['2.1 图纸解析'],
+    3: ['3.1 整合图纸', '3.2 参数推荐', '3.3 组装工艺'],
+    4: ['4.1 零件成本', '4.2 组装成本', '4.3 汇总'],
+    5: ['5.1 汇总结果', '5.2 结果审核', '5.3 发布并回传报价'],
   };
   const stepKey = {
-    '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing', '2.2':'integration',
-    // 2.3 成本测算：财务经理的步骤（工艺经理在 2.2 末尾把项目交过来）
-    '2.3':'costReview',
-    '3.1':'summary', '3.2':'reportReview', '3.3':'publish',
+    '1.1':'create', '1.2':'confirm', '1.3':'review', '2.1':'drawing',
+    // 3.x 组装与整合：工艺经理的步骤；4.x 成本测算：财务经理的步骤（工艺经理在 3.x 末尾交过来）
+    '3.1':'drawing', '3.2':'params', '3.3':'process',
+    '4.1':'costParts', '4.2':'costAssembly', '4.3':'costTotal',
+    '5.1':'summary', '5.2':'reportReview', '5.3':'publish',
   };
+  // 兼容旧调用方传进来的老编号（如 app.js 的「下一步 = 2.2」）：只做口径换算，不改路由。
+  const legacyCode = { '2.2': '3.1', '2.3': '4.1' };
   let cachedProject = null;
   let loadingProject = null;
 
   function projectId() {
-    const q = new URLSearchParams(location.search).get('project');
-    return q || localStorage.getItem('cad_engine_project_id') || localStorage.getItem('currentProject') || '';
+    // 唯一来源：共享模块（URL project / 父壳 data-project）。
+    if (window.TechProjectContext) return window.TechProjectContext.bind().project;
+    return new URLSearchParams(location.search).get('project') || '';
   }
   function authHeaders() {
     const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token');
@@ -40,17 +45,23 @@
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 3600);
   }
-  function labelCode(label) { return String(label || '').match(/([123]\.[123456])/u)?.[1] || ''; }
+  function labelCode(label) { return String(label || '').match(/([1-5]\.[1-9])/u)?.[1] || ''; }
   function stageOfCode(code) { return Number(String(code).split('.')[0]) || 0; }
+  // 阶段识别只做一件事：把「1 工艺评估需求 ... 5 工艺评估报告」认成 1–5。
+  function stageOfText(value) {
+    const text = String(value || '');
+    const code = labelCode(text);
+    if (code) return stageOfCode(code);
+    if (text.includes('工艺评估需求') || text.includes('接受')) return 1;
+    if (text.includes('图纸解析') || text.includes('解析')) return 2;
+    if (text.includes('组装与整合')) return 3;
+    if (text.includes('成本测算')) return 4;
+    if (text.includes('工艺评估报告') || text.includes('输出')) return 5;
+    return 0;
+  }
   function activeStage(root) {
     const active = root.querySelector('.workflow-step.active,.main-step.active,.tp-flow-step.active,.detail-step.active,.workflow-nav-link.active,.sub-label.active,.tp-flow-substep.active');
-    const code = active ? stageOfCode(active.textContent) : 0;
-    if (code) return code;
-    const text = active?.textContent || '';
-    if (text.includes('接受')) return 1;
-    if (text.includes('解析')) return 2;
-    if (text.includes('输出')) return 3;
-    return 0;
+    return active ? stageOfText(active.textContent) : 0;
   }
   function isActiveStage(node) { return node.classList.contains('active'); }
   function subContainer(wrapper, variant) {
@@ -61,13 +72,7 @@
     wrapper.appendChild(el);
     return el;
   }
-  function stageLabel(step) {
-    const text = step.textContent || '';
-    if (text.includes('接受')) return 1;
-    if (text.includes('解析')) return 2;
-    if (text.includes('输出')) return 3;
-    return 0;
-  }
+  function stageLabel(step) { return stageOfText(step.textContent || ''); }
   function hasCode(container, code) {
     return [...container.querySelectorAll('[data-workflow-code],span,button')].some((el) => labelCode(el.textContent) === code);
   }
@@ -80,7 +85,7 @@
     return b;
   }
   function populateSubsteps(container, stage, variant) {
-    // 【CPQ 定制】页面里写死的流程栏可能还残留 2.2–2.6；stages 是唯一事实源，
+    // 【CPQ 定制】页面里写死的流程栏可能还残留别的旧步骤号；stages 是唯一事实源，
     // 多出来的小步骤连同它前面的箭头一起移除，免得点进去无处可去。
     const allowed = new Set(stages[stage].map(labelCode));
     [...container.children].forEach((node) => {
@@ -94,8 +99,8 @@
     const codeNodes = current.filter((node) => labelCode(node.textContent));
     codeNodes.forEach((node) => {
       if (node.tagName === 'BUTTON') { node.dataset.workflowCode = labelCode(node.textContent); return; }
-      // 文案也以 stages 为准：2.2/2.3 这两个号在上游是「材料定性 / 工艺路径」，
-      // 我们换成了「组装与整合 / 成本测算」。只按号留下节点会把旧名字留在栏里。
+      // 文案也以 stages 为准：同号的旧名字（上游的「材料定性 / 工艺路径」之类）
+      // 必须换成 CPQ 自己的 5 阶段标题，只按号留下节点会把旧名字留在栏里。
       const canonical = stages[stage].find(label => labelCode(label) === labelCode(node.textContent));
       const replacement = linkMarkup(container, (canonical || node.textContent).trim(), variant);
       replacement.className = `${replacement.className} ${node.className || ''}`;
@@ -204,8 +209,8 @@
     const timing = value.timing || {};
     return timing.completed === true || timing.status === 'done' || Object.keys(value).some((k) => !['timing', 'project_id', 'updated_at', 'history'].includes(k) && value[k]);
   }
-  // 2.2 组装与整合：参数与组装工艺都有产出才算做完。
-  // **不再要求成本** —— 成本从 2.2 拆出去了，归财务经理在 2.3 做。
+  // 3 组装与整合：参数与组装工艺都有产出才算做完。
+  // **不再要求成本** —— 成本从组装阶段拆出去了，归财务经理在 4 成本测算做。
   function integrationDone(progress) {
     const doc = progress?.aggregate?.steps?.integration;
     if (!doc || typeof doc !== 'object') return false;
@@ -231,7 +236,7 @@
     const reqStatus = req.status || '';
     const pageStage = activeStage(root);
     const drawingDone = Boolean(progress.aggregate?.ir?.parts?.length);
-    // 【CPQ 定制】2.x 只剩 2.1：技术工艺阶段的开始与完成都以图纸解析出零件 IR 为准。
+    // 【CPQ 定制】2 阶段只剩 2.1：开始与完成都以图纸解析出零件 IR 为准。
     const techDone = Boolean(summary.confirmed) || drawingDone;
     const techStarted = drawingDone;
     const reportExists = Boolean(report.status);
@@ -239,10 +244,14 @@
     // 但既然已经生成报告，前序阶段在业务上必然已完成。
     const requirementDone = reqStatus === 'approved' || techStarted || techDone || reportExists;
     const technicalDone = techDone || reportExists;
+    const integrationDoneNow = integrationDone(progress);
+    const costConfirmed = Boolean(progress?.aggregate?.steps?.cost_review?.confirmed);
     const stageStates = {
       1: requirementDone ? 'done' : reqStatus ? 'active' : pageStage === 1 ? 'active' : 'pending',
-      2: technicalDone || pageStage >= 2 ? 'done' : techStarted ? 'active' : 'pending',
-      3: report.status === 'published' ? 'done' : reportExists ? 'active' : pageStage === 3 ? 'active' : 'pending',
+      2: technicalDone || pageStage > 2 ? 'done' : (techStarted || pageStage === 2) ? 'active' : 'pending',
+      3: integrationDoneNow ? 'done' : (techStarted || pageStage === 3) ? 'active' : 'pending',
+      4: costConfirmed ? 'done' : pageStage === 4 ? 'active' : 'pending',
+      5: report.status === 'published' ? 'done' : reportExists ? 'active' : pageStage === 5 ? 'active' : 'pending',
     };
     const doneCodes = new Set();
     if (requirementDone) ['1.1', '1.2', '1.3'].forEach((code) => doneCodes.add(code));
@@ -251,15 +260,18 @@
       if (['pending_review', 'approved'].includes(reqStatus)) doneCodes.add('1.2');
     }
     if (technicalDone || drawingDone) doneCodes.add('2.1');
-    // 2.2 以"三个环节都有产出"为完成，不要求人工点确认 —— 确认与否是 2.2 页面自己的事，
-    // 流程栏只回答"这一步做没做"。这里不能用 hasStepData：只要在 2.2 存过一次
-    // 整合需求，文档里就有 quantity 之类的非空字段，那套通用判据会直接判成已完成。
-    if (integrationDone(progress)) doneCodes.add('2.2');
-    // 2.3 以"财务确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
-    if (progress?.aggregate?.steps?.cost_review?.confirmed) doneCodes.add('2.3');
-    if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('3.1');
-    if (['approved', 'published'].includes(report.status)) doneCodes.add('3.2');
-    if (report.status === 'published') doneCodes.add('3.3');
+    // 3.1 以"整合图纸有产出"为完成，不要求人工点确认 —— 确认与否是 3 组装与整合页面
+    // 自己的事，流程栏只回答"这一步做没做"。这里不能用 hasStepData：只要在组装页存过
+    // 一次整合需求，文档里就有 quantity 之类的非空字段，那套通用判据会直接判成已完成。
+    const integration = progress?.aggregate?.steps?.integration || {};
+    if (integrationDoneNow) doneCodes.add('3.1');
+    if (integration?.params?.params?.length || integration?.params?.confirmed) doneCodes.add('3.2');
+    if (integration?.process?.steps?.length || integration?.process?.confirmed) doneCodes.add('3.3');
+    // 4.x 以"财务确认过成本"为完成 —— 算过但没确认不算，那是还在核的状态。
+    if (costConfirmed) ['4.1', '4.2', '4.3'].forEach((code) => doneCodes.add(code));
+    if (['in_review', 'approved', 'published'].includes(report.status)) doneCodes.add('5.1');
+    if (['approved', 'published'].includes(report.status)) doneCodes.add('5.2');
+    if (report.status === 'published') doneCodes.add('5.3');
 
     const mainSteps = [...root.querySelectorAll('.workflow-step,.main-step,.tp-flow-step,.detail-step')];
     mainSteps.forEach((node) => setState(node, stageStates[stageLabel(node)] || 'pending', true));
@@ -284,7 +296,11 @@
     const readyReq = ['pending_confirmation', 'pending_review', 'approved'].includes(status);
     const readyConfirm = ['pending_review', 'approved'].includes(status);
     const readyDrawing = approved || Boolean(progress?.aggregate?.ir?.parts?.length);
-    // 【CPQ 定制】3.1 的前置从「2.6 产能评估」改成「2.1 图纸解析已出结果」。
+    // 3.x 组装与整合的前置 = 2.1 已经拆出零件（光有需求审批不够）。
+    const partsReady = Boolean(progress?.aggregate?.ir?.parts?.length);
+    // 4.x 成本测算的前置 = 3 组装与整合的工艺与整机参数已定稿。
+    const assemblyReady = Boolean(progress?.aggregate?.steps?.integration?.process?.steps?.length);
+    // 【CPQ 定制】5.1 的前置从「2.6 产能评估」改成「2.1 图纸解析已出结果」。
     const readySummary = Boolean(progress?.aggregate?.ir?.parts?.length)
       || Boolean(summary?.confirmed_at) || Boolean(report?.id || report?.status);
     const readyReview = ['in_review', 'approved', 'published'].includes(report.status);
@@ -293,15 +309,17 @@
       '1.1': [true, ''], '1.2': [readyReq, '请先在 1.1 创建中保存并提交工艺评估需求。'],
       '1.3': [readyConfirm, '请先在 1.2 确认工艺评估需求后再进入审核。'],
       '2.1': [readyDrawing, '请先完成 1.3 审核并通过工艺评估需求。'],
-      // 2.2 要的是"零件已经拆出来了"，光有需求审批没用 —— 组装是把 2.1 的零件装回整机。
-      '2.2': [Boolean(progress?.aggregate?.ir?.parts?.length),
-              '请先完成 2.1 图纸解析并生成零件清单，2.2 要把这些零件装回整机。'],
-      // 2.3 要的是"工艺与整机参数已定稿"：成本按 2.2 的 BOM 与工序算。
-      '2.3': [Boolean(progress?.aggregate?.steps?.integration?.process?.steps?.length),
-              '请先完成 2.2 组装与整合：成本要按整机 BOM 与组装工序来算。'],
-      '3.1': [readySummary, '请先完成 2.1 图纸解析并生成解析结果。'],
-      '3.2': [readyReview, '请先在 3.1 汇总结果中保存并提交评估报告。'],
-      '3.3': [readyPublish, '请先完成 3.2 审核报告并获得通过。'],
+      // 3.x 要的是"零件已经拆出来了"，光有需求审批没用 —— 组装是把 2.1 的零件装回整机。
+      '3.1': [partsReady, '请先完成 2.1 图纸解析并生成零件清单，3 组装与整合要把这些零件装回整机。'],
+      '3.2': [partsReady, '请先完成 2.1 图纸解析并生成零件清单，3.2 参数推荐要基于这些零件。'],
+      '3.3': [partsReady, '请先完成 2.1 图纸解析并生成零件清单，3.3 组装工艺要基于这些零件。'],
+      // 4.x 要的是"工艺与整机参数已定稿"：成本按 3 组装与整合的 BOM 与工序算。
+      '4.1': [assemblyReady, '请先完成 3 组装与整合：4.1 零件成本要按整机 BOM 与组装工序来算。'],
+      '4.2': [assemblyReady, '请先完成 3 组装与整合：4.2 组装成本要按整机 BOM 与组装工序来算。'],
+      '4.3': [assemblyReady, '请先完成 3 组装与整合：4.3 汇总要按整机 BOM 与组装工序来算。'],
+      '5.1': [readySummary, '请先完成 2.1 图纸解析并生成解析结果。'],
+      '5.2': [readyReview, '请先在 5.1 汇总结果中保存并提交评估报告。'],
+      '5.3': [readyPublish, '请先完成 5.2 结果审核并获得通过。'],
     };
     return checks[code] || [false, '该流程步骤暂不可进入。'];
   }
@@ -309,12 +327,15 @@
     const q = id ? `?project=${encodeURIComponent(id)}` : '';
     const routes = {
       '1.1': `/requirement-create.html${q}`, '1.2': `/requirement-confirm.html${q}`, '1.3': `/requirement-review.html${q}`,
-      '2.1': `/index.html${q}`, '2.2': `/assembly-integration.html${q}`,
-      '2.3': `/cost-review.html${q}`, '3.1': `/summary.html${q}`, '3.2': `/report-review.html${q}`, '3.3': `/report-publish.html${q}`,
+      '2.1': `/index.html${q}`,
+      '3.1': `/assembly-integration.html${q}`, '3.2': `/assembly-integration.html${q}`, '3.3': `/assembly-integration.html${q}`,
+      '4.1': `/cost-review.html${q}`, '4.2': `/cost-review.html${q}`, '4.3': `/cost-review.html${q}`,
+      '5.1': `/summary.html${q}`, '5.2': `/report-review.html${q}`, '5.3': `/report-publish.html${q}`,
     };
     return routes[code] || '/home.html';
   }
   async function navigate(code) {
+    code = legacyCode[code] || code;
     if (!code) return;
     const id = projectId();
     if (!id && code !== '1.1') { notify('请先在 1.1 创建并保存一个工艺评估需求。', true); return; }
@@ -326,8 +347,10 @@
     // 避免 iframe 内部整页跳转破坏父壳的会话与步骤状态。
     const stageOfCode = {
       '1.1': 'requirement-create', '1.2': 'requirement-confirm', '1.3': 'requirement-review',
-      '2.1': 'drawing', '2.2': 'process', '2.3': 'cost',
-      '3.1': 'summary', '3.2': 'report-review', '3.3': 'report-publish',
+      '2.1': 'drawing',
+      '3.1': 'process', '3.2': 'process', '3.3': 'process',
+      '4.1': 'cost', '4.2': 'cost', '4.3': 'cost',
+      '5.1': 'summary', '5.2': 'report-review', '5.3': 'report-publish',
     };
     if (window.TechEmbed && window.TechEmbed.embedded && stageOfCode[code]) {
       window.TechEmbed.requestNavigate(stageOfCode[code], id);

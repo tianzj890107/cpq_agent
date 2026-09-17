@@ -74,6 +74,7 @@ from .services import (
     step_import,
     summary as summary_svc, tasks, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
+    workflow_projection,
 )
 from .storage import store
 from .time_utils import now_cst_str
@@ -2082,9 +2083,12 @@ def _save_project_chat_turn(project_id: str, user_message: str, answer: str, use
     """只追加本次问答，保留同一项目在每个页面之间连续的会话。"""
     messages = store.load_project_chat(project_id).get("messages", [])
     timestamp = now_cst_str()
+    # 每一轮都带上项目的业务实例号：报价—技术—财务—报告共用同一份身份，回溯会话时
+    # 能认出这轮问答属于哪张业务实例。项目还没有实例号时给空串，绝不现编。
+    business_case_id = str((store.load_business_case(project_id) or {}).get("business_case_id") or "")
     messages.extend([
-        {"role": "user", "content": user_message.strip(), "at": timestamp, "by": user.get("username", "system"), "page": page_context[:160]},
-        {"role": "assistant", "content": answer.strip(), "at": timestamp, "page": page_context[:160]},
+        {"role": "user", "content": user_message.strip(), "at": timestamp, "by": user.get("username", "system"), "page": page_context[:160], "business_case_id": business_case_id},
+        {"role": "assistant", "content": answer.strip(), "at": timestamp, "page": page_context[:160], "business_case_id": business_case_id},
     ])
     store.save_project_chat(project_id, messages, author=user.get("username", "system"))
 
@@ -2906,7 +2910,7 @@ async def autofill_integration_params(
 ):
     """参数推荐 · 智能补全：只给还缺的字段出**建议值**，不落库。
 
-    这是第 3 大步「组装与整合 · 参数推荐」里的能力：整机参数、连接关系与 BOM 在这一步
+    这是第 3 阶段「组装与整合 · 3.2 参数推荐」里的能力：整机参数、连接关系与 BOM 在这一步
     定稿，报价必填项自然也在这里补齐，所以沿用技术工艺写权限。
 
     不直接写入是有意的：补全里必然混着"靠常识凑的"，直接写进去，报价那头就分不清
@@ -2945,7 +2949,7 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
                                 user: dict = Depends(current_user)):
     """参数推荐：把人工补填的值合进整机参数，必填齐了才允许最终确认。
 
-    这是第 3 大步「组装与整合 · 参数推荐」与报价之间的验收口径 —— 报价测算单按 DA
+    这是第 3 阶段「组装与整合 · 3.2 参数推荐」与报价之间的验收口径 —— 报价测算单按 DA
     字段取数，必填项缺一格，那边就是一格空白，而且要等销售回头来问才发现。宁可在这里
     挡住，也不把补齐的活儿推给后面的成本步骤。
     """
@@ -3360,10 +3364,10 @@ def send_cost_review_to_quote(project_id: str, body: CostActionBody,
 @app.post("/api/projects/{project_id}/cost-review/return-to-process")
 def cost_review_return_to_process(project_id: str, body: CostActionBody,
                                   request: Request, user: dict = Depends(current_user)):
-    """去向①：提交工艺经理确认（第 5 大步「工艺评估报告」）。
+    """去向①：提交工艺经理确认（第 5 阶段「工艺评估报告」）。
 
     成本必须先确认，未确认的数不作为正式结果往下走。正常提交确认与返工是两条路：
-    确实要返工时，由第 5 大步明确退回第 3 大步，不走这个按钮。
+    确实要返工时，由第 5 阶段明确退回第 3 阶段，不走这个按钮。
     """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
     return _cost_flow(cost_flow.return_to_process, project_id, user,
@@ -6282,7 +6286,8 @@ def send_process_report_to_quote(project_id: str, body: ReportQuoteAction,
                           source_task_id=body.source_task_id)
     if result.get("audit"):
         store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
-    return result
+    # 这次回传的唯一标识一路透给前端：结果区按它就能查到哪一次交接、来源待办关没关。
+    return {**result, "handoff_id": str(result.get("handoff_id") or "")}
 
 
 @app.get("/api/projects/{project_id}/process-report/versions")
@@ -6323,6 +6328,17 @@ def get_workflow(project_id: str):
         "summary": store.load_summary(project_id),
         "audit": store.list_audit(project_id),
     }
+
+
+@app.get("/api/projects/{project_id}/workflow/projection")
+def get_workflow_projection(project_id: str, user: dict = Depends(current_user)):
+    """技术工艺统一流程投影（批次 5B）：5 阶段 × 13 子步骤的唯一状态来源。
+
+    只读、幂等：完成态、能否执行、缺什么、谁来做都由后端算，前端只渲染，不再自己拼
+    （见 docs/specs/tech-unified-workflow-projection.md）。既有 /workflow 一字不动。
+    """
+    _workflow_project(project_id)
+    return workflow_projection.build_projection(project_id, user)
 
 
 @app.get("/api/projects/{project_id}/source")

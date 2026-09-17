@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI 工艺 - 2.3 成本测算</title>
+  <title>AI 工艺 - 4 成本测算</title>
+  <script src="tech-project-context.js?v=20260917-pid1"></script>
   <link rel="stylesheet" href="workbench.css?v=20260917-filepreview1" />
   <link rel="stylesheet" href="inline-analysis.css?v=20260917-headgap1" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
@@ -24,30 +25,30 @@
   });
   </script>
   <script src="cpq-sso.js?v=sso5"></script>
-  <script src="tech-embed.js?v=twb3"></script>
+  <script src="tech-embed.js?v=twb5"></script>
 </head>
 <body>
   <div class="oc-app">
-    <!-- 左侧导航条：与 2.1 / 2.2 / 报价助手同一条 56px 图标栏。 -->
+    <!-- 左侧导航条：与 2.1 / 3 组装与整合 / 报价助手同一条 56px 图标栏。 -->
     <nav class="oc-rail" id="crRail" aria-label="本步骤导航">
       <div class="oc-rail-logo">
         <i class="ti ti-sparkles" aria-hidden="true"></i>
-        <span class="oc-rail-tip"><b>2.3 成本测算</b><span
+        <span class="oc-rail-tip"><b>4 成本测算</b><span
           class="oc-side-cwd" id="crProject">项目工作区</span><span
           class="oc-side-profile" id="crState">读取中…</span></span>
       </div>
       <div class="oc-rail-steps">
-        <button class="oc-rail-icon" type="button" id="crGoParts" aria-label="零件成本">
+        <button class="oc-rail-icon" type="button" id="crGoParts" aria-label="4.1 零件成本">
           <i class="ti ti-components" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>零件成本</b><span>2.1 拆出来的每个零件</span></span>
+          <span class="oc-rail-tip"><b>4.1 零件成本</b><span>2.1 拆出来的每个零件</span></span>
         </button>
-        <button class="oc-rail-icon" type="button" id="crGoAssembly" aria-label="组装成本">
+        <button class="oc-rail-icon" type="button" id="crGoAssembly" aria-label="4.2 组装成本">
           <i class="ti ti-route" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>组装成本</b><span>整机总成（已含零件成本）</span></span>
+          <span class="oc-rail-tip"><b>4.2 组装成本</b><span>整机总成（已含零件成本）</span></span>
         </button>
-        <button class="oc-rail-icon" type="button" id="crGoTotal" aria-label="汇总">
+        <button class="oc-rail-icon" type="button" id="crGoTotal" aria-label="4.3 汇总">
           <i class="ti ti-sum" aria-hidden="true"></i>
-          <span class="oc-rail-tip"><b>汇总</b><span>对外口径与四项拆解</span></span>
+          <span class="oc-rail-tip"><b>4.3 汇总</b><span>对外口径与四项拆解</span></span>
         </button>
       </div>
       <span class="oc-rail-grow"></span>
@@ -72,19 +73,34 @@
       <div class="page-container">
         <div class="workflow-section">
           <div class="main-workflow" id="workflowSteps">
-            <div class="main-step-wrapper" data-step="upload"><div class="main-step completed"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div></div>
+            <div class="main-step-wrapper" data-step="requirement"><div class="main-step completed"><div class="main-step-number">1</div><span>工艺评估需求</span></div>
+              <div class="sub-labels-row"><span class="sub-label">1.1 创建</span><span class="sub-label-arrow">→</span><span class="sub-label">1.2 确认</span><span class="sub-label-arrow">→</span><span class="sub-label">1.3 审核</span></div>
+            </div>
             <div class="main-connector active"></div>
-            <div class="main-step-wrapper" data-step="parse">
-              <div class="main-step completed"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div>
-              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span><span class="sub-label-arrow">→</span><span class="sub-label">2.2 组装与整合</span><span class="sub-label-arrow">→</span><span class="sub-label active">2.3 成本测算</span></div>
+            <div class="main-step-wrapper" data-step="drawing">
+              <div class="main-step completed"><div class="main-step-number">2</div><span>图纸解析</span></div>
+              <div class="sub-labels-row"><span class="sub-label">2.1 图纸解析</span></div>
+            </div>
+            <div class="main-connector active"></div>
+            <div class="main-step-wrapper" data-step="integration">
+              <div class="main-step completed"><div class="main-step-number">3</div><span>组装与整合</span></div>
+              <div class="sub-labels-row"><span class="sub-label">3.1 整合图纸</span><span class="sub-label-arrow">→</span><span class="sub-label">3.2 参数推荐</span><span class="sub-label-arrow">→</span><span class="sub-label">3.3 组装工艺</span></div>
             </div>
             <div class="main-connector"></div>
-            <div class="main-step-wrapper" data-step="generate"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div>
+            <div class="main-step-wrapper" data-step="cost">
+              <div class="main-step active"><div class="main-step-number">4</div><span>成本测算</span></div>
+              <div class="sub-labels-row"><span class="sub-label active">4.1 零件成本</span><span class="sub-label-arrow">→</span><span class="sub-label">4.2 组装成本</span><span class="sub-label-arrow">→</span><span class="sub-label">4.3 汇总</span></div>
+            </div>
+            <div class="main-connector"></div>
+            <div class="main-step-wrapper" data-step="report">
+              <div class="main-step pending"><div class="main-step-number">5</div><span>工艺评估报告</span></div>
+              <div class="sub-labels-row"><span class="sub-label">5.1 汇总结果</span><span class="sub-label-arrow">→</span><span class="sub-label">5.2 结果审核</span><span class="sub-label-arrow">→</span><span class="sub-label">5.3 发布并回传报价</span></div>
+            </div>
           </div>
         </div>
 
         <div class="title-section">
-          <div class="title-row"><h1 id="crTitle" class="form-title">2.3 成本测算</h1><span id="status" class="status-badge">读取中…</span></div>
+          <div class="title-row"><h1 id="crTitle" class="form-title">4 成本测算</h1><span id="status" class="status-badge">读取中…</span></div>
         </div>
 
         <div class="oc-work">
@@ -136,8 +152,8 @@
               <div class="ai-op-why" id="crWhy" hidden></div>
               <div class="ai-op-hint" id="crHint">
                 确认成本：三个去向都以确认过的数为准。<br/>
-                提交工艺经理确认：把已确认的成本作为第 5 大步「工艺评估报告」的输入交给工艺经理，
-                由他做最终工艺确认、汇总、审核和发布；确实要返工时，由第 5 大步明确退回第 3 大步。<br/>
+                提交工艺经理确认：把已确认的成本作为第 5 阶段「工艺评估报告」的输入交给工艺经理，
+                由他做最终工艺确认、汇总、审核和发布；确实要返工时，由第 5 阶段明确退回第 3 阶段。<br/>
                 回传销售经理继续报价：优先回到原报价会话，从第 3 步「定价-利润加成」继续。
               </div>
             </div>
@@ -146,9 +162,9 @@
           <div class="center-panel">
             <div class="center-header">
               <div class="ai-tabs" id="crTabs">
-                <button type="button" data-cr-tab="parts" class="active">零件成本</button>
-                <button type="button" data-cr-tab="assembly">组装成本</button>
-                <button type="button" data-cr-tab="total">汇总</button>
+                <button type="button" data-cr-tab="parts" class="active">4.1 零件成本</button>
+                <button type="button" data-cr-tab="assembly">4.2 组装成本</button>
+                <button type="button" data-cr-tab="total">4.3 汇总</button>
               </div>
             </div>
             <div class="ai-actions" id="crActions"></div>
@@ -168,12 +184,12 @@
   </div>
 
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-  <script src="workflow.js?v=workflow3"></script>
+  <script src="workflow.js?v=workflow4"></script>
   <script src="/cpq_auth.js"></script>
   <script src="/cpq_msg.js"></script>
   <script src="llm-settings-panel.js?v=llm-set3"></script>
   <script src="quote-params-table.js?v=qp1"></script>
-  <script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script src="cost-review.js?v=cr12"></script>
+  <script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script src="cost-review.js?v=cr14"></script>
   <script src="home-link.js?v=home6"></script>
 </body>
 </html>
