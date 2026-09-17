@@ -2787,6 +2787,11 @@ function boardViewHost() {
 // 面板节点始终是同一份：切换视图时把不需要的放回抽屉容器，再移入目标面板。
 function resetBoardViewBody(body) {
   if (!body) return;
+  // 预览态被容器重建 / 关闭时也要释放 objectURL（长会话反复预览不能一路泄漏）。
+  if (filePreviewState.container && body.contains(filePreviewState.container)) {
+    releaseFilePreviewUrl();
+    filePreviewState = { container: null, onBack: null };
+  }
   body.querySelectorAll("[data-board-generated]").forEach((node) => node.remove());
   const drawerBody = document.getElementById("ocDrawerBody");
   if (!drawerBody) return;
@@ -2795,6 +2800,175 @@ function resetBoardViewBody(body) {
     node.setAttribute("data-drawer-hidden", "true");
     drawerBody.append(node);
   });
+}
+
+// 任务文件预览：唯一一份实现，弹卡片与 2.1 悬浮小窗共用。
+// 文件 url 是受鉴权保护的同源 /api 路径：必须走 fetch —— 本文件顶部的 window.fetch 包装
+// 会自动带 Authorization。不能再发裸链接：顶层导航不带请求头、也没有 ?token=，
+// 后端 app 级鉴权会回 401「请先在配置报价 CPQ 中登录」，浏览器把那句 JSON 当网页显示。
+const TEXT_PREVIEW_LIMIT = 2000;      // 文本预览最多显示的行数
+const TEXT_PREVIEW_BYTES_LIMIT = 200 * 1024;   // 文本预览最多显示的字符量（Spec：2000 行或 200KB）
+const TEXT_FILE_PATTERN = /\.(txt|md|csv|json|log|yaml|yml)$/i;
+const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+let filePreviewUrl = null;
+let filePreviewState = { container: null, onBack: null };
+
+function releaseFilePreviewUrl() {
+  if (filePreviewUrl) { URL.revokeObjectURL(filePreviewUrl); filePreviewUrl = null; }
+}
+
+function filePreviewKind(file) {
+  const name = String((file && file.name) || "");
+  if ((file && file.kind === "image") || IMAGE_FILE_PATTERN.test(name)) return "image";
+  if (/\.pdf$/i.test(name)) return "pdf";
+  if ((file && file.kind === "model") || /\.(stl|step|stp)$/i.test(name)) return "model";
+  if ((file && file.kind === "table") || TEXT_FILE_PATTERN.test(name)) return "text";
+  return "other";
+}
+
+const mapFilePreviewError = (status) =>
+  (status === 401 || status === 403)
+    ? "登录状态已失效，请刷新页面后重新登录。"
+    : `读取失败：HTTP ${status}`;
+
+function downloadPreviewFile(file) {
+  if (!filePreviewUrl) return;
+  const link = document.createElement("a");
+  link.href = filePreviewUrl;
+  link.download = file.name || "下载";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+function renderPreviewShell(file) {
+  const wrap = document.createElement("div");
+  wrap.className = "file-preview";
+  const head = document.createElement("div");
+  head.className = "file-preview-head";
+  const name = document.createElement("span");
+  name.className = "file-preview-name";
+  name.textContent = file.name || "未命名文件";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "file-preview-back";
+  back.textContent = "← 返回文件列表";
+  back.addEventListener("click", () => window.CadFilePreview.close());
+  const download = document.createElement("button");
+  download.type = "button";
+  download.className = "file-preview-download";
+  download.textContent = "下载";
+  download.addEventListener("click", () => downloadPreviewFile(file));
+  head.append(name, back, download);
+  const content = document.createElement("div");
+  content.className = "file-preview-content";
+  content.textContent = "正在读取…";
+  wrap.append(head, content);
+  return { wrap, content };
+}
+
+async function openFilePreview(file, container, onBack) {
+  if (!container || !file) return;
+  releaseFilePreviewUrl();
+  filePreviewState = { container, onBack: typeof onBack === "function" ? onBack : null };
+  const { wrap, content } = renderPreviewShell(file);
+  container.replaceChildren(wrap);
+  let response;
+  try {
+    response = await fetch(file.url);
+  } catch (error) {
+    content.textContent = mapFilePreviewError(0);   // 网络层失败：不暴露底层报文
+    return;
+  }
+  if (!response.ok) {
+    content.textContent = mapFilePreviewError(response.status);
+    return;
+  }
+  let blob;
+  try {
+    blob = await response.blob();
+  } catch (error) {
+    content.textContent = mapFilePreviewError(response.status);
+    return;
+  }
+  filePreviewUrl = URL.createObjectURL(blob);
+  const kind = filePreviewKind(file);
+  if (kind === "image") {
+    const img = document.createElement("img");
+    img.className = "file-preview-image";
+    img.src = filePreviewUrl;
+    img.alt = file.name || "预览图片";
+    content.replaceChildren(img);
+  } else if (kind === "pdf") {
+    const frame = document.createElement("iframe");
+    frame.className = "file-preview-frame";
+    frame.src = filePreviewUrl;
+    frame.title = file.name || "PDF 预览";
+    content.replaceChildren(frame);
+  } else if (kind === "text") {
+    let text = "";
+    try { text = await blob.text(); } catch (error) { text = ""; }
+    // 行数与字符量取先到者：压缩 JSON / 内嵌 base64 这类超长单行也一定被截。
+    const tooLong = text.length > TEXT_PREVIEW_BYTES_LIMIT;
+    const lines = (tooLong ? text.slice(0, TEXT_PREVIEW_BYTES_LIMIT) : text).split("\n");
+    const tooManyLines = lines.length > TEXT_PREVIEW_LIMIT;
+    const truncated = tooLong || tooManyLines;
+    const pre = document.createElement("pre");
+    pre.className = "file-preview-text";
+    pre.textContent = (tooManyLines ? lines.slice(0, TEXT_PREVIEW_LIMIT).join("\n") : lines.join("\n"))
+      + (truncated ? "\n…（已截断）" : "");
+    content.replaceChildren(pre);
+  } else if (kind === "model") {
+    const note = document.createElement("div");
+    note.className = "file-preview-note";
+    note.textContent = "STL / STEP 不在卡片内预览，3D 请在零件详情里看。";
+    content.replaceChildren(note);
+  } else {
+    const note = document.createElement("div");
+    note.className = "file-preview-note";
+    note.textContent = "该类型暂不支持预览。";
+    content.replaceChildren(note);
+  }
+}
+
+function closeFilePreview() {
+  releaseFilePreviewUrl();
+  const onBack = filePreviewState.onBack;
+  filePreviewState = { container: null, onBack: null };
+  if (typeof onBack === "function") onBack();
+}
+
+window.CadFilePreview = { open: openFilePreview, close: closeFilePreview };
+
+// 任务文件清单渲染：renderBoardFiles() 与预览「返回文件列表」共用，不重新请求 /files。
+function renderFileList(box, manifest, openFile) {
+  box.replaceChildren();
+  ((manifest && manifest.groups) || []).forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "board-file-group";
+    const head = document.createElement("div");
+    head.className = "board-file-group-head";
+    const name = document.createElement("span");
+    name.textContent = group.title || "文件";
+    const count = document.createElement("span");
+    count.className = "board-file-count";
+    count.textContent = String((group.files || []).length);
+    head.append(name, count);
+    section.append(head);
+    (group.files || []).forEach((file) => {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "board-file-link";
+      link.textContent = file.name || "未命名文件";
+      if (file.note) link.title = file.note;
+      link.addEventListener("click", () => openFile(file));
+      section.append(link);
+    });
+    box.append(section);
+  });
+  if (!((manifest && manifest.groups) || []).length) {
+    box.append(document.createTextNode((manifest && manifest.note) || "还没有任何文件。"));
+  }
 }
 
 // 任务文件：复用既有 /files 接口与既有小窗 DOM 语义，正文留在看板内部。
@@ -2809,6 +2983,9 @@ function renderBoardFiles(body) {
     box.textContent = "还没有选择项目，无法读取任务文件。";
     return { ok: false, error: { code: "no-project", message: "还没有选择项目。" } };
   }
+  // 文件行点击统一交给 window.CadFilePreview（app.js 里的唯一一份预览实现）。
+  const openFile = (file) => window.CadFilePreview.open(
+    file, box, () => renderFileList(box, boardFileManifest, openFile));
   return fetch(`${API}/api/projects/${encodeURIComponent(project)}/files`)
     .then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2816,34 +2993,7 @@ function renderBoardFiles(body) {
     })
     .then((manifest) => {
       boardFileManifest = manifest || { groups: [], total: 0 };
-      box.replaceChildren();
-      (boardFileManifest.groups || []).forEach((group) => {
-        const section = document.createElement("section");
-        section.className = "board-file-group";
-        const head = document.createElement("div");
-        head.className = "board-file-group-head";
-        const name = document.createElement("span");
-        name.textContent = group.title || "文件";
-        const count = document.createElement("span");
-        count.className = "board-file-count";
-        count.textContent = String((group.files || []).length);
-        head.append(name, count);
-        section.append(head);
-        (group.files || []).forEach((file) => {
-          const link = document.createElement("a");
-          link.className = "board-file-link";
-          link.href = file.url || "#";
-          link.target = "_blank";
-          link.rel = "noopener";
-          link.textContent = file.name || "未命名文件";
-          if (file.note) link.title = file.note;
-          section.append(link);
-        });
-        box.append(section);
-      });
-      if (!(boardFileManifest.groups || []).length) {
-        box.append(document.createTextNode(boardFileManifest.note || "还没有任何文件。"));
-      }
+      renderFileList(box, boardFileManifest, openFile);
       publishResultSummary();
       return { ok: true, result: { view: "files", total: boardFileManifest.total || 0 } };
     })

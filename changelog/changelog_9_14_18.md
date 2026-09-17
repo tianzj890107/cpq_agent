@@ -3285,3 +3285,227 @@ Red 验证（逐条原始结论）：
    卡片正文只剩当前视图的节点（无第二份、无残留）。
 - 回归：本批红测 25/25、## 98 字号测与两条被反转旧测试 54/54、全量 1790/1790 绿；
   `node --check`、`git diff --check` 干净。
+
+## 101. 任务文件在卡片内预览 + 修掉「请先在配置报价 CPQ 中登录」：Spec / Red（9-17）
+
+用户口径（原话）：
+
+> 现在在任务文件的卡片里点击一个文件就会跳转到一个网页，应该是直接在这个卡片里就可以预览这个文件，
+> 而且关键是这个网页还 {"detail":"请先在配置报价 CPQ 中登录"}
+
+只读排查（未改任何业务实现）——先把那句 401 的来路查实：
+
+- **两个渲染点都在发裸链接**（不带令牌 + 强行新开标签页）：
+  `app.js` 的 `renderBoardFiles()`（`:2801`）里 `link.href = file.url; link.target = "_blank";`
+  （`:2833-2840`）；`agent-chat.js` 的 `fileRow()`（`:1293-1305`）同款（`:1297-1301`）。
+- **清单里的 url 全是同源 `/api/...` 相对路径**（`main.py:1109-1170` 的 `list_project_files()`：
+  `/source`、`/attachments/{name}`、`/geometry/{part}.stl|.step`、2D views / dxf、`/bom.csv`、
+  `/costest.csv`；`kind ∈ {image, doc, model, table}`），全部受 app 级鉴权保护。
+- CPQ SSO 开启时走 `_cpq_sso_guard()`（`main.py:372-393`），取票顺序是
+  `Authorization: Bearer` → 否则 `?token=`（`_sso_token()` `:350-358`）；
+  两个都没有就 `raise HTTPException(401, "请先在配置报价 CPQ 中登录")`（`:387`）。
+- 点裸链接是**顶层导航**：不带请求头、URL 里也没有 `?token=` → 必 401，浏览器把那句 JSON
+  当网页显示出来。**用户看到的现象与代码行为完全一致，不是偶发。**
+- 现成可复用：`app.js:21-30` 把 `window.fetch` 包了一层，同源 `/api/` 自动带
+  `Authorization: Bearer <票>`；`app.js:31-32` 的 `mediaUrl(u)` 是给 `<img>` / `<a>` 这类
+  「发不出请求头」的标签用的 `?token=` 旧约定。
+
+新增 Spec `docs/specs/tech-file-preview-in-card-and-auth.md`（113 行），四个契约：
+
+- **契约 A（卡片内预览）**：`renderBoardFiles()` 的文件名不再是链接、不再 `_blank`，点击调
+  统一入口 `window.CadFilePreview.open(file, container)`，在**原地**展开「顶部行（文件名 + ← 返回文件列表
+  + 下载）+ 内容区」；按类型分支：`image` → `<img>`；`table` 与文本类 `doc`
+  （txt/md/csv/json/log/yaml/yml）→ `<pre>`（超 `TEXT_PREVIEW_LIMIT` 2000 行或 200KB 只显示前一段
+  并标「已截断」）；pdf → `<iframe>`；`model`（stl/step/stp）→ 不内联，显示
+  「STL / STEP 不在卡片内预览，3D 请在零件详情里看」+ 下载；其它 → 「该类型暂不支持预览」+ 下载。
+  取文件一律 `fetch(file.url)`（同源 `/api/` 自动带 `Authorization`）→ `blob()` →
+  `URL.createObjectURL()`；**禁止** `location.href` / `window.open` / `target="_blank"`，
+  **禁止**把 token 拼进 URL；`close()` 用同一份 `boardFileManifest` 重建清单（不再请求接口）并
+  `URL.revokeObjectURL()`；失败时 401/403 显示「登录状态已失效，请刷新页面后重新登录」，
+  其它显示「读取失败：HTTP {status}」，**绝不显示响应体 JSON**。
+- **契约 B（两处入口共用一份）**：`agent-chat.js` 的 `fileRow()` 也改调同一个
+  `window.CadFilePreview.open(...)`；预览实现只在 `app.js` 有一份（含类型判断与错误文案）。
+- **契约 C（根因护栏）**：两个函数体内不得再出现 `_blank`；`_cpq_sso_guard()` 必须仍是
+  「无有效票 → 401『请先在配置报价 CPQ 中登录』」，`_sso_token()` 仍按
+  `Authorization` → `?token=` 取票 —— **不许为了让文件能打开而放宽鉴权**。
+- **契约 D（缓存号）**：`index.html` 的 `app.js?v=`、`index.html` 与 `tech-workbench.html` 的
+  `agent-chat.js?v=` 三处必须提升。
+
+Spec 的「明确不做」：不把 `/api/**` 改公开、不加白名单；不动 `/files` 返回结构；不在卡片里做
+STL/STEP 的 3D 渲染（那是零件详情 3D 视图的职责）；不动零件详情里的下载链接与 `#ocFilesDock` 的窗口形态；
+不缓存文件内容到会话/历史，不把 base64 或正文写进任何落库字段。
+
+新增红测 `tests/test_tech_file_preview_in_card_and_auth_red.py`（15 项，5 个测试类）：
+
+- `AuthRootCauseGuardTest`（子进程真起技术工艺 App + `TestClient`）：`/files` 有内容；
+  每个文件 url 必须以 `/api/projects/` 开头且不含 `http`（同源相对路径，前端才带得上票）；
+  `_cpq_sso_guard()` 无票时必须是 `401|请先在配置报价 CPQ 中登录`；带 `Authorization` 的请求放行并
+  挂上 `request.state.user`；`_sso_token()` 的 `?token=` 与 `Authorization` 两种取票都还在。
+- `SpecPinnedTest`：Spec 必须钉住 `CadFilePreview` / `createObjectURL` / `revokeObjectURL` /
+  `TEXT_PREVIEW_LIMIT` / `登录状态已失效` / `该类型暂不支持预览` / `不在卡片内预览` / `_blank` /
+  `Authorization` 九个锚点。
+- `PreviewEntryRedTest`：`renderBoardFiles()` 体内不许有 `_blank`；`app.js` 不许再有
+  `href = file.url` 与 `window.open(file.url`；该函数必须调 `CadFilePreview`；
+  必须有 `window.CadFilePreview = { open, close }`；必须有 `createObjectURL` / `revokeObjectURL` /
+  `TEXT_PREVIEW_LIMIT` / `createElement("iframe")`；三类分支文案必须都在；
+  且 `renderBoardFiles()` 不许用 `mediaUrl(` 把 token 拼回 URL。
+- `DockEntryRedTest`：`fileRow()` 体内不许有 `_blank`；`agent-chat.js` 不许再有 `href = file.url`；
+  `fileRow()` 必须调 `CadFilePreview`；`createObjectURL` / `TEXT_PREVIEW_LIMIT` / 分支文案
+  **不许**出现在 `agent-chat.js`（预览只有一份）。
+- `CacheBustRedTest`：三处 `?v=` 必须提升（改前实测值：`app.js` @ `index.html` = `20260917-partchrome1`；
+  `agent-chat.js` @ `index.html` 与 `tech-workbench.html` = `20260917-modelrow1`）。
+
+Red 验证（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_file_preview_in_card_and_auth_red -v`
+  → **Ran 15 tests / FAILED (failures=8)**；7 项基线即绿，作为**不回归 / 根因护栏**保留：
+  四条 401 与「同源 url」根因护栏、预览文案不重复、`renderBoardFiles()` 没有把 token 拼回 URL、
+  Spec 锚点齐全。8 条失败全是真实缺口：两个函数体仍 `_blank`、`href = file.url` 仍在、
+  两处都没调 `CadFilePreview`、`window.CadFilePreview` 不存在、`createObjectURL` / `revokeObjectURL` /
+  `TEXT_PREVIEW_LIMIT` / iframe 分支 / 三类文案全无、三处缓存号未提升。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1805 tests / FAILED (failures=8)**，`grep '^FAIL:\|^ERROR:'` 里非本批文件 **0** 条。
+- `git diff --check` → **干净**。
+
+明确不在本批：任何业务实现（按仓库约定由 DeepSeek 完成）；不动后端鉴权与 `/files` 结构；
+不做 STL/STEP 的卡片内 3D 渲染；不动其它页面。
+
+边界与交付状态：**本地新增 2 个文件（Spec + 红测）与 1 处 changelog 追加，未提交、未推送、未部署。**
+（## 100 之后在途的收尾修改 —— `app.js` 焦点归还、`inline-analysis.css` 的 `.inline-head-actions` 间距、
+三处 `inline-analysis.css?v=20260917-headgap1` —— 已由 `6e217b5` 单独提交，不是本批产物，本批未改动它们。）
+实现提示词只在会话中交付，未在仓库落盘。
+
+---
+
+## 101 实现与验收：任务文件在卡片内预览 + 修掉「请先在配置报价 CPQ 中登录」（9-17）
+
+用户口径：任务文件卡片里点文件会跳新网页，且那个网页回 `{"detail":"请先在配置报价 CPQ 中登录"}`。
+本批把两处裸链接（弹卡片 / 工作区 `renderBoardFiles()`、2.1 悬浮小窗 `fileRow()`）收口成
+「带 Authorization 的 fetch + 卡片内原地预览」，只改前端，后端鉴权一个字不改。
+
+改动文件（逐文件）：
+
+- `tech_app/frontend/app.js`：新增唯一一份预览实现并挂 `window.CadFilePreview = { open, close }`
+  （`TEXT_PREVIEW_LIMIT=2000`、`TEXT_FILE_PATTERN`、`IMAGE_FILE_PATTERN`、`releaseFilePreviewUrl()`、
+  `filePreviewKind()`、`mapFilePreviewError()`、`downloadPreviewFile()`、`renderPreviewShell()`、
+  `openFilePreview()`、`closeFilePreview()`）；`fetch(file.url)` → `blob()` → `URL.createObjectURL`，
+  image / pdf / text / model / other 五分支（文本超 2000 行追加「…（已截断）」）；401/403 显示
+  「登录状态已失效，请刷新页面后重新登录」、其它「读取失败：HTTP {n}」，不显示响应体。
+  抽出具名 `renderFileList(box, manifest, openFile)`，`renderBoardFiles()` 与「← 返回文件列表」共用
+  （返回不再重新请求 `/files`）；文件行由 `<a href target=_blank>` 改成 `<button class="board-file-link">`，
+  点击走 `window.CadFilePreview.open(file, box, () => renderFileList(box, boardFileManifest, openFile))`。
+- `tech_app/frontend/agent-chat.js`：`fileRow()` 的 `<a href=file.url target=_blank>` 改成
+  `<button class="oc-file-name">`，点击调 `window.CadFilePreview.open(file, filesBody, () => loadFiles())`；
+  不复制第二份预览实现（无 `createObjectURL` / `TEXT_PREVIEW_LIMIT` / 错误文案）。
+- `tech_app/frontend/workbench.css`：追加 `.file-preview-*` 一组最小样式（顶部行、内容区 52vh 限高、
+  `pre` 可滚动、图片居中）与 `button.board-file-link` / `button.oc-file-name` 的「按钮当链接」清零规则。
+- `tech_app/frontend/index.html`：`workbench.css?v=20260917-filepreview1`、
+  `app.js?v=20260917-filepreview1`、`agent-chat.js?v=20260917-filepreview1`。
+- `tech_app/frontend/tech-workbench.html`：`agent-chat.js?v=20260917-filepreview1`。
+- `tech_app/frontend/assembly-integration.html`、`cost-review.html`：`workbench.css?v=20260917-filepreview1`。
+
+验收（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_file_preview_in_card_and_auth_red -v`
+  → **Ran 15 tests / OK**（改前 8 失败）。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1805 tests / OK**。
+- `node --check tech_app/frontend/app.js`、`node --check tech_app/frontend/agent-chat.js` → 均通过。
+- `git diff --check` → 干净（`agent-chat.js` 是 CRLF/NUL 混排的历史文件，本批新增行按既有约定写 LF，
+  不再触发 trailing-whitespace）。
+- 无头 Chrome 实测（同一条命令起桩服务 + Chrome，beacon 回收；`/__standalone.html?project=P1`，
+  `/api/projects/P1/{files,source,attachments/parts.csv,geometry/P-001.stl}` 桩会记录请求头）：
+  文件行 `BUTTON/BUTTON/BUTTON`、卡片内无 `target=_blank`；点 `source.png` → `.file-preview-image`
+  且 `src` 为 `blob:`、顶部有返回/下载；返回后清单恢复 3 行；点 `parts.csv` → `.file-preview-text`
+  且含「已截断」（39895 字）；点 `P-001.stl` → 文案「STL / STEP 不在卡片内预览，3D 请在零件详情里看。」
+  + 下载、无 `<img>`；`window.open` 调用 **0** 次、`location.href` 全程不变。
+  文件请求头实测：`source`/`parts.csv`/`P-001.stl` 三条预览请求均为 `Authorization: Bearer probe-token-101`
+  且 `query_token=False`（即**没有**把 token 拼进 URL）——用户看到的那句 401 JSON 不再出现。
+  （同页另有一条 `/source` 带 `?token=` 的是既有 `<img>` 约定，非本批预览，符合「不新增第二套约定」。）
+
+是否为了过测试放宽判定：**没有**。未改任何红测、Spec、夹具；后端 `main.py`、`_cpq_sso_guard()`、
+`_sso_token()`、`/files` 返回结构一个字节未动；未新增解密/放行开关；未把 token 拼进预览 URL。
+
+边界与交付状态：**本地改 6 个前端文件 + 1 处 changelog 追加；未提交、未推送、未部署。**
+
+### ## 101 补充：预览态被容器重建 / 关闭卡片时也释放 objectURL
+
+自查发现 Spec A5 的一个边角：`CadFilePreview.close()` 与「切换预览另一个文件」都会
+`URL.revokeObjectURL`，但「预览开着时直接关卡片 / 切到别的看板视图」会走
+`resetBoardViewBody()` 把预览 DOM 拆掉，blob URL 却留着（长会话里反复预览会一路泄漏）。
+
+修法（只动 `app.js` 的 `resetBoardViewBody()`，一个入口覆盖 `openBoardCard / closeBoardCard /
+openBoardView / closeBoardView` 四条路径）：若当前预览容器正在被重置的 body 内，先
+`releaseFilePreviewUrl()` 并清空 `filePreviewState`。
+
+复验（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → **Ran 1805 tests / OK**。
+- 无头实测（探针里把 `URL.revokeObjectURL` 计数）：`source.png` 看过后返回、`parts.csv` 看过后返回
+  → `revokes_before_close: 2`；停在 `P-001.stl` 预览态按 Esc 关卡片 →
+  `revokes_after_card_close: 3`、`card_hidden_after_escape: true`。
+  同轮其余结果不变：文件行 `BUTTON`、卡片内无 `_blank`、图片 `blob:`、CSV 含「已截断」、
+  STL 文案正确、`window.open` 0 次、地址栏不变；三条预览请求均为 `Authorization: Bearer …`
+  且 `query_token=False`。
+
+### ## 101 补充二：2.1 悬浮「任务文件」小窗入口的无头实测
+
+契约 B 的第二个入口（`agent-chat.js::fileRow()` → `#ocFilesDock` / `#ocFilesBody`）此前只做了源码断言，
+这轮补上真实浏览器的端到端实测（同一探针，弹卡片阶段跑完后切到小窗）：
+
+- `#ocFilesBody .oc-file-name` 三行均为 **`BUTTON`**，`#ocFilesBody a[target="_blank"]` = 0；
+- 点 `source.png` → `#ocFilesBody .file-preview-image` 出现且 `src` 为 `blob:`、有「← 返回文件列表」；
+- 点返回 → 清单恢复 3 行；`URL.revokeObjectURL` 计数 3 → 4；
+- `window.open` 全程 **0** 次；该次预览请求为 `Authorization: Bearer probe-token-101` 且 `query_token=False`
+  （与弹卡片入口同一份 `window.CadFilePreview`，没有第二套实现）。
+
+### ## 101 补充三：文本预览补齐 Spec 的 200KB 上限（不止 2000 行）
+
+Spec §2/A2 的内容区口径是「超过 `TEXT_PREVIEW_LIMIT`（**2000 行或 200KB**）」。实现提示词只写了
+「最多显示的行数」，我照提示词先实现了纯行数截断 —— 复核 Spec 时发现这会漏掉「超长单行」
+（压缩 JSON、内嵌 base64 的 csv 只有一两行，却可能有几百 KB，会被整段渲染）。
+
+修法（只动 `app.js` 的文本分支）：新增 `TEXT_PREVIEW_BYTES_LIMIT = 200 * 1024`，先按字符量截到
+200KB、再按行数截到 2000 行，任一触发都追加同一行「…（已截断）」。**以 Spec 为准，不按提示词简化。**
+
+复验（逐条原始结论）：
+
+- 行数路径：桩 CSV 2600 行（约 65KB）→ `.file-preview-text` 含「已截断」，渲染 39895 字。
+- 字符量路径：桩 CSV 换成 350018 字节的单行内容 → 同样含「已截断」，渲染 **204807** 字
+  （204800 + 截断标记；若未加 200KB 上限会是 ~350006 字）。
+- `tests.test_tech_file_preview_in_card_and_auth_red` → **Ran 15 tests / OK**；
+  `node --check app.js / agent-chat.js` 通过；`git diff --check` 干净。
+- 同轮其余无头结果不变（两个入口都是 `BUTTON`、无 `_blank`、图片 `blob:`、STL 文案正确、
+  `window.open` 0 次、地址栏不变、预览请求带 `Authorization` 且无 `?token=`）。
+
+### ## 101 发现（未修，超出本批允许范围）：2.2 组装与整合页有同类裸文件链接，共两处
+
+按「这不止是两个入口」的怀疑把全前端扫了一遍，确认 2.2（`tech_app/frontend/assembly-integration.js`）
+还有同款缺陷，且**不在本批允许修改范围内**（本批只许改 app.js / agent-chat.js / workbench.css /
+index.html / tech-workbench.html 的 ?v=），因此只记录、不擅自动：
+
+1. `aiFileRow()`（约 `:1470`）：`<a class="oc-file-name" target="_blank" rel="noopener" href="${aiAttr(file.url)}">`
+   —— 与 2.1 悬浮小窗同一份 `/files` 清单、同一批同源受保护 url，顶层导航不带票 → 同样回
+   `401 {"detail":"请先在配置报价 CPQ 中登录"}`。
+2. `aiRenderDrawings()`（约 `:430`）：`<a href="${aiUrl('/drawings/<file>')}" target="_blank">`
+   —— `aiUrl()` 产出 `/api/projects/{id}/integration/drawings/...`，同为受保护路径，同样必 401。
+
+补充约束（决定后续怎么修）：`assembly-integration.html` 与 `cost-review.html` **都不加载 app.js**
+（只加载各自的 `assembly-integration.js` / `cost-review.js`），所以 `window.CadFilePreview` 在这两页
+根本不存在。后续批要收口的话，正确做法是把预览实现从 app.js 抽成一份共享脚本（例如
+`file-preview.js`）由三个页面共同加载并 bump 各自 `?v=`；把 `CadFilePreview` 复制一份到
+`assembly-integration.js` 会违反「预览只有一份实现」的口径。
+
+本批**不改**这三处中的任何一处，也不改 `assembly-integration.html` 的缓存号 —— 留给后续批次。
+
+### ## 101 补充四：生产嵌入路径（embed=1）实测
+
+2.1 在统一工作台里是以 `index.html?embed=1` 作为 iframe 打开的，之前的实测都是非 embed。补跑 embed：
+
+- `?project=P1&embed=1`：文件行仍为 `BUTTON×3`、卡片内无 `_blank`；点 `source.png` 卡片内出 `blob:`
+  图片、有返回/下载；返回恢复 3 行；CSV 含「已截断」（39895 字）；STL 文案正确且无 `<img>`；
+  `window.open` **0** 次、地址栏不变；Esc 关卡片触发 revoke（2→3）；三条预览请求均
+  `Authorization: Bearer …` 且 `query_token=False`。即嵌入路径与非嵌入路径行为一致。
+- 同轮的 2.1 悬浮小窗在 embed 下没有渲染 —— 这是**既有且刻意**的行为，不是本批引入：
+  `agent-chat.js:18` 在 URL 带 `embed` 时整体早退（统一工作台的会话宿主是父壳 `#techChatPane`，
+  子页不自建会话栏/文件小窗）。`fileRow()` 在该模式下根本不执行。

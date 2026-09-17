@@ -281,3 +281,22 @@ body{padding-bottom:0}
 .board-card-title{font-size:13px;font-weight:600;color:var(--text-primary)}
 .board-card-body{padding:16px 18px;overflow:auto}
 .board-card-close{padding:5px 8px;border:1px solid var(--color-primary);border-radius:var(--radius-sm);background:#fff;color:var(--color-primary);font-size:11px;cursor:pointer}
+
+/* 任务文件预览（弹卡片与 2.1 悬浮小窗共用 app.js 里那一份实现）：
+   限高不撑破容器、文本可滚动、图片居中；顶部一行是「文件名 + 返回 + 下载」。 */
+.file-preview{display:flex;flex-direction:column;gap:10px}
+.file-preview-head{display:flex;align-items:center;gap:8px}
+.file-preview-name{flex:1;min-width:0;font-size:12px;font-weight:600;color:var(--text-primary);word-break:break-all}
+.file-preview-back,.file-preview-download{flex-shrink:0;padding:4px 10px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-card);color:var(--text-secondary);font-size:11px;cursor:pointer}
+.file-preview-back:hover,.file-preview-download:hover{border-color:var(--color-primary);color:var(--color-primary)}
+.file-preview-content{max-height:52vh;overflow:auto;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-page)}
+.file-preview-image{display:block;max-width:100%;max-height:50vh;margin:0 auto}
+.file-preview-frame{display:block;width:100%;height:50vh;border:0}
+.file-preview-text{margin:0;padding:10px 12px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--text-primary)}
+.file-preview-note{padding:14px 12px;font-size:12px;color:var(--text-secondary)}
+
+/* 任务文件行由 <a> 改成 <button>（取文件必须走带 Authorization 的 fetch，不能裸链接新开页），
+   外观仍是"可点的链接"：清掉按钮默认边框 / 底色 / 内边距。 */
+button.board-file-link{display:block;width:100%;padding:0;border:0;background:none;text-align:left;font:inherit;color:var(--oc-accent);cursor:pointer;word-break:break-all}
+button.board-file-link:hover{text-decoration:underline}
+button.oc-file-name{width:100%;padding:0;border:0;background:none;text-align:left;font-family:inherit;cursor:pointer}

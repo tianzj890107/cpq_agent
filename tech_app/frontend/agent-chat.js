@@ -1294,10 +1294,10 @@
     const row = el("div", "oc-file");
     row.append(el("span", "oc-file-icon", KIND_ICON[file.kind] || "📄"));
     const body = el("div", "oc-file-body");
-    const link = el("a", "oc-file-name", file.name);
-    link.href = file.url;
-    link.target = "_blank";
-    link.rel = "noopener";
+    // 任务文件同样走 app.js 里唯一一份预览实现（window.CadFilePreview），不再新开标签页。
+    const link = el("button", "oc-file-name", file.name);
+    link.type = "button";
+    link.addEventListener("click", () => window.CadFilePreview.open(file, filesBody, () => loadFiles()));
     body.append(link);
     if (file.note) body.append(el("div", "oc-file-note", file.note));
     row.append(body);
