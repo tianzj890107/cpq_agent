@@ -4249,3 +4249,39 @@ claim 审计： 1  task_claimed 消息： 1
 
 改动文件清单（4 个）：`cpq_wf.py`、`报价首页.html`、`tech_app/frontend/cpq-tech-inbox.js`、
 `cpq_msg.js`。**未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。**
+
+---
+
+## 103 提交 / 双远端推送记录（9-17）
+
+用户口令「提交推送」（本批不含部署）。按仓库约定**逐文件 `git add`，未用 `git add -A`**。
+
+- 提交：`bb4b51f 报价任务并存规则、原子领取与多人并发保护（批次 2，## 103）`
+- 入库的 7 项（本批全部，含 Spec 与红测）：`cpq_wf.py`、`cpq_msg.js`、
+  `tech_app/frontend/cpq-tech-inbox.js`、`报价首页.html`、
+  `docs/specs/quote-task-coexistence-and-atomic-claim.md`、
+  `tests/test_quote_task_coexistence_and_atomic_claim_red.py`、`changelog/changelog_9_14_18.md`。
+- 双远端推送（推送前 `HEAD` 为 `e188d06`）：
+
+```
+$ PATH=/tmp/gitshim:$PATH git push gitlab 20260909
+To 172.16.5.150:ai-team/cpq_agent.git
+   e188d06..bb4b51f  20260909 -> 20260909
+
+$ git push origin 20260909
+To github.com:tianzj890107/cpq_agent.git
+   e188d06..bb4b51f  20260909 -> 20260909
+```
+
+- 推送后三处 SHA 一致：`local` / `gitlab` / `origin` 均为
+  `bb4b51fbc1f11ffe101465efc686928f20f7699d`。
+- **刻意排除（属并行会话的批次 1 与批次 3，本批一个字未动，也未提交）**：
+  `tech_app/frontend/*`（批次 1 的项目身份接线：`app.js`、`workflow.js`、
+  `tech-embed.js`、`workflow-navigation.js`、`assembly-integration.*`、`cost-review.*`、
+  `requirement-*`、`report-*`、`summary*`、`index.html`、`cost.html`、`process.html`、
+  `tech-task.html`、`tech-workbench.*`）、未跟踪的 `tech_app/frontend/tech-project-context.js`、
+  `docs/specs/tech-project-identity-single-source.md`、
+  `tests/test_tech_project_identity_single_source_red.py`，以及批次 3 的
+  `docs/specs/tech-handoff-atomic-idempotent-close.md`、`tests/fixtures/wf_handoff_harness.py`。
+- 本批**未部署、未重启 8010 / 8012**，线上 `cpq_wf` 数据仍是 220 行 / 45 条 cancelled，
+  4 个新列尚未施加到生产 schema（DDL 是幂等的，随下次部署 `cpq_wf.init()` 生效）。
