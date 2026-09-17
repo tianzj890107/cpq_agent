@@ -3227,6 +3227,12 @@ Red 验证（逐条原始结论）：
     `GET /inline-analysis.js?v=20260917-partchrome1` 200、`GET /app.js?v=20260917-partchrome1` 200。
   - 文件内容计数：`index.html` 的 `boardCardMask` = 1、`app.js` 的 `function syncActionSheet` = 1 /
     `function openBoardCard` = 1、`workbench.css` 的 `board-card-mask` = 2。
-- 提醒：浏览器需强刷一次（`?v=` 已换号；不刷会命中旧缓存）。
+- 发布产物**逐字节核对**：从 34 的 8010 根路径拉取本批改过的五个文件，md5 与本地（= 已测版本）逐一相同：
+  `index.html` `c253515b…`(22372B)、`app.js` `edae2969…`(153800B)、`inline-analysis.js` `8057cb97…`(30807B)、
+  `inline-analysis.css` `bf97fdcb…`(11371B)、`workbench.css` `5699bd90…`(45941B)。
+  （8012 是 `--host 127.0.0.1`，外网不可达；对外服务由 8010 承担，核对走 8010。）
+- 补充说明：直接以 `index.html?project=P1` 打开线上页面会被 SSO / 入口逻辑切到父壳
+  `tech-workbench.html`，因此线上的 2.1 面板与卡片无法在未登录的无头浏览器里复现；该部分
+  已在本机探针（真 `index.html` + 桩 API）三条路径实测通过，线上只做「产物字节一致」核对。
 
 状态：**本批已提交、双远端推送并发布到 34；纯前端改动，未重启服务。**
