@@ -512,7 +512,6 @@ function crDisableActions() {
 function crRender() {
   const renderers = { parts: crRenderParts, assembly: crRenderAssembly,
                       total: crRenderTotal };
-  $cr('crPanelTitle').textContent = CR_TABS[crTab];
   document.querySelectorAll('#crTabs [data-cr-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.crTab === crTab);
   });

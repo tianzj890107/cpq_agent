@@ -2551,3 +2551,164 @@ Red 验证（9-16，实际运行）：`tests.test_tech_quote_workspace_flush_red
     详情顶边 175px —— 确实落到下一行**；summary 的 `::before` 计算内容为 `"▸"`。
   - 零件清单缩进由红测的 node 结构走查覆盖（两个总成同为 6px、三个零件同为 20px、「工艺推荐」与所属零件同缩进）。
 - 提醒：浏览器需强刷一次（`?v=` 已换号，不刷会命中旧缓存）。
+
+## 98. 2.2 / 2.3 六个页签去重复卡片层 + 内容卡片字号分级：Spec / Red / 验收（9-17）
+
+用户口径（两条原话）：
+
+1. 「整合图纸 / 参数推荐 / 组装工艺 / 零件成本 / 组装成本 / 汇总 这六个页签，每个页里面内容里面包了
+   多余的一层，标题和流程标题完全一样，完全是重复的。直接把这个多余的圆角卡片连同标题一起去掉，
+   直接显示『已上传的整合图纸』『整机概览』『工序明细』『零件成本（2.1 拆出来的每个零件）』
+   『组装成本 · 便携式锂电池 PACK（108×56×26.5）』『汇总』等等这个级别的内容卡片。」
+2. 「这六页的内容是不是字体相比于别的页来说有点小，而且不是很统一。……『材料 0.71 / 人工 0.06 /
+   制造费用 0.03 / 加工费用 0.02』这里就很合适，但『0.82 0.82 单件 小计 操作』这里的字体就太小，
+   『来料检验与配组 / 设备: 检验台、量具 / 工时: 4 分』这也太小。**你只看哪些需要大一点，
+   不要全都直接变大。**」
+
+只读排查（未改任何业务实现）定位到两件事：
+
+- **「多余的一层圆角卡片」= 这两个阶段页自己的 `.center-panel`**（`workbench.css:48`：白底 + 1px 边框 +
+  `var(--radius-lg)` 圆角），它把整页内容包住，内部才是 `.ai-body` / `#crBody` 里那张张内容卡片。
+  **「标题和流程标题完全一样」= 卡片头里的 `.center-title`**：`assembly-integration.html:181` 的
+  `#aiPanelTitle` 被 `assembly-integration.js:1058` 写成 `AI_TABS[aiTab]`（`:19` = 整合图纸 / 参数推荐 /
+  组装工艺），`cost-review.html:148` 的 `#crPanelTitle` 被 `cost-review.js:515` 写成 `CR_TABS[crTab]`
+  （`:21` = 零件成本 / 组装成本 / 汇总）——**正好是用户列出的那六个页签名**。
+  嵌入态 `tech-embed.js:160`/`:161` 已经隐藏了页内大标题与页内页签，所以嵌在工作台里时只剩这一层卡片
+  和这行重复标题没被处理；父壳标题行（`tech-workbench.html:156-160`）已经承担了流程标题与子页签。
+- **字号**：`inline-analysis.css` 里内容卡片大量使用 `9px` / `10px`
+  （`.inline-cost-table{font-size:9px}`、`.inline-step-grid{font-size:9px}`、
+  `.inline-step-title{font-size:11px}` 等），而用户点名「很合适」的 `.cr-part` 是 `12px`
+  （`cost-review.css:9`）。逐条核对后把内容卡片分成三档，**不做一刀切放大**。
+
+新增 Spec `docs/specs/tech-stage-inline-card-dedup-and-font-scale.md`：写明
+① 去卡片层的选择器契约（`.oc-work .center-panel` 归零 background / border / border-radius / box-shadow，
+**不得动** `display` / `position` / `overflow` / `max-height`；嵌入态
+`.tech-embed … .center-header` 整行退出布局）、② 删 `#aiPanelTitle` / `#crPanelTitle` 两个节点与写它的两行
+JS（`AI_TABS` 必须保留 —— 另有 4 处用途；`CR_TABS` 只服务被删那行，删前须 grep 确认 0 引用）、
+③ **字号三档表**（卡片标题 `13px`、正文 `12px` / 工序名 `12.5px`、注解 `11px`，内容卡片里不再留 `9px`/`10px`）、
+④ **明确不改清单**（面板自身的头部 / 页签 / 输入框 / 状态行、`.inline-totals strong` `15px`、
+`.inline-cost-total strong` `23px`、`.inline-card` 内边距与圆角、表格 `padding` 与 `min-width`、
+`cost-review.css` 的 `.cr-part`）、禁止事项、版本号与验收标准；并在 Spec 里注明
+`docs/specs/tech-quote-workspace-flush-and-compact-stage-title-row.md` 的「内层 `.center-panel` 自身保留」
+一句**被本 Spec 部分覆盖**（其余契约继续有效）。
+
+新增红测 `tests/test_tech_stage_inline_card_dedup_and_font_scale_red.py`（23 项，含 3 个测试类）：
+
+- `StageCardDedupRedTest`：去卡片声明齐全、去卡片规则不许动布局属性、
+  `workbench.css` 的 `.center-panel` 基线不许动、嵌入态 `.center-header` 整行收起、
+  `.center-header` 规则必须限定在 `.tech-embed` 作用域、不许新增裸 `body` 规则、
+  `tech-embed.js` 的共用隐藏清单不许被改、两个重复标题节点必须删净、
+  页签行与 `.ai-body` 必须保留、JS 不再写标题、`AI_TABS` 仍被 4 处以上引用、
+  六页内容卡片标题一个都不许丢、`index.html`（2.1）的 `.center-panel` 与 `.center-title` 不受影响、
+  三页 `inline-analysis.css` 与两页 `assembly-integration.css` 的 `?v=` 必须提升；
+- `InlineFontScaleRedTest`：用户点名的 `.inline-cost-table`（含可编辑单元格）与 `.inline-step-grid` 必须到
+  `12px`、`.inline-step-title` 到 `12.5px`、`.inline-card-title` 到 `13px`，正文档 / 注解档逐条钉值，
+  并有一条**穷举扫描**：`inline-analysis.css` 里任何 `.inline-*` 内容选择器都不许再出现低于 `11px` 的字号
+  （只放行 10 个面板头部 / 控件选择器）；反向护栏钉住 `.inline-analysis` 基准 `12px`、
+  `.inline-analysis-title strong` `14px` / `small` `10px`、`.inline-tabs button` 与 `.inline-action` `11px`、
+  `.inline-totals strong` `15px`、`.inline-cost-total strong` `23px`、`.inline-card` 的 `padding:9px` 与
+  `border-radius`、表格 `padding:5px 4px` 与 `min-width:650px`、`cost-review.css` 的 `.cr-part` `12px` /
+  `.cr-part i` `11px`；
+- `SpecPinnedTest`：Spec 存在且含关键契约锚点。
+
+Red 验证（9-17，实际运行）：`tests.test_tech_stage_inline_card_dedup_and_font_scale_red` → 23 项中
+**10 条失败**（`.oc-work .center-panel` 无去卡片规则、嵌入态 `.center-header` 未收起、
+`aiPanelTitle` / `crPanelTitle` 节点与两行 JS 仍在、`?v=` 未提升、
+`.inline-cost-table` / `.inline-step-grid` 仍 `9px`、`.inline-row` 仍 `11px`、`.inline-card-title` 仍 `11px`、
+注解档全部低于目标、穷举扫描命中 30 个选择器），13 条改前即绿的是保护性用例
+（`workbench.css` 基线、`index.html` 不受影响、`tech-embed.js` 共用清单、内容卡片保留、大字号与几何不动、
+`.cr-part` 基准）；全量 `open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+→ **1748 项 / 10 条失败记录，全部来自本批这一个 Red 文件**，其余各批全绿；`git diff --check` 干净。
+
+明确不在本批：不删 `.inline-card` 内容卡片、不改它们的顺序与标题文案、不动页签 DOM 结构、
+不改 `workbench.css` / `tech-embed.js` 的共享定义、不放大面板自身控件与数值大字号、
+不做「整页字号整体调大一档」这类一刀切、不动后端路由 / 权限 / 成本算法 / 任务协议。
+
+边界与交付状态：本批只有本地新增的 Spec 1 个 + 红测 1 个 + 本 changelog 条目，**未改任何业务实现；
+未提交、未推送、未创建 MR/tag/Release、未部署、未启动或重启服务**；实现由用户安排 DeepSeek 完成，
+实现提示词在会话中交付。影响面知情：`inline-analysis.css` 由 2.1 / 2.2 / 2.3 三页共用，
+本批改的是共用规则，**2.1 右侧内嵌的同一套卡片会同步变大**（这正是「统一」的口径；
+若只给 2.2/2.3 加页面级覆盖，会出现同一个「工序明细」两页两种字号）。
+
+### 98 实现与验收（9-17，实现后实测）
+
+改动文件（只动前端；后端 / 路由 / 权限 / 成本算法 / 任务协议一律未动）：
+
+- `tech_app/frontend/assembly-integration.css`（追加 2 条规则；该文件在 2.2 / 2.3 两页最后加载）
+  - `.oc-work .center-panel { background:transparent; border:0; border-radius:0; box-shadow:none; }`
+    —— 只改外观，`display` / `flex 方向` / 高度上限 / `overflow` / `position` 一个都没写（红测
+    `test_flush_rule_does_not_break_layout` 会逐词拦），滚动与满高仍由 `workbench.css` 承担。
+  - `.tech-embed .oc-work .center-panel > .center-header { display:none; }`
+    —— 删掉重复标题后这一行只剩页签，而嵌入态页签已被 `tech-embed.js` 隐藏；不收会留一条空白条
+    + 一条分隔线。规则限定在 `.tech-embed`，独立打开阶段页（无 `.tech-embed`）时页签行照旧显示。
+- `tech_app/frontend/assembly-integration.html`：删掉 `<div id="aiPanelTitle" class="center-title">整合图纸</div>`；
+  `.center-header` / `#aiTabs` / 三颗页签 / `.ai-body` 全部保留。
+- `tech_app/frontend/cost-review.html`：删掉 `<div id="crPanelTitle" class="center-title">成本清单</div>`，其余同上。
+- `tech_app/frontend/assembly-integration.js`：删掉 `$ai('aiPanelTitle').textContent = AI_TABS[aiTab];` 一行；
+  `AI_TABS` 保留（`:273` / `:367` / `:558` / `:1569` 四处用途，退出会连带坏「生成」按钮文案与缺产出提示）。
+- `tech_app/frontend/cost-review.js`：删掉 `$cr('crPanelTitle').textContent = CR_TABS[crTab];` 一行；
+  `CR_TABS` 保留（grep 后仍有一处定义引用，按契约「有引用就留」）。
+- `tech_app/frontend/inline-analysis.css`（共用规则，2.1 / 2.2 / 2.3 同一套卡片）：按 Spec §3.3 三档共改 29 处声明：
+  - 标题档：`.inline-card-title` `11→13px`、`.inline-step-title` `11→12.5px`；
+  - 正文档 `12px`：`.inline-row`、`.inline-cov-row`、`.inline-description`、`.inline-step-grid`、
+    `.inline-edit-grid label`、`.inline-edit-grid input/select/textarea`（`font:10px/1.35 → 12px/1.35`）、
+    `.inline-cost-table`、`.inline-cost-table input/select`；
+  - 注解档 `11px`：`.inline-hint`、`.inline-warn,.inline-question`、`.inline-source,.inline-assumption`、
+    `.inline-reference`(+`small`)、`.inline-lib-step`(+`code`/`small`)、`.inline-cat-bar`、`.inline-cat-tag`、
+    `.inline-cov-code`、`.inline-cov-split`、`.inline-totals span`、`.inline-cost-total span`/`em`、
+    `.inline-type`、`.inline-confidence`、`.inline-dep`、`.inline-sno`；
+  - 改完内容卡片里不再出现 `9px` / `10px`；面板自身控件、`.inline-totals strong`(15) /
+    `.inline-cost-total strong`(23)、`.inline-card` 的 `padding:9px` 与圆角、表格 `padding:5px 4px` 与
+    `min-width:650px`、`cost-review.css` 的 `.cr-part`(12) / `.cr-part i`(11) / `tr.cr-final` 一律未动。
+- 版本号（必须换，否则浏览器吃旧缓存验收看不到）：`inline-analysis.css?v=20260819-flat6 → ?v=20260917-font1`
+  （`index.html:8` / `assembly-integration.html:8` / `cost-review.html:8`）、
+  `assembly-integration.css?v=ai8 → ?v=ai9`（两页）、`assembly-integration.js?v=ai18 → ?v=ai19`、
+  `cost-review.js?v=cr11 → ?v=cr12`；`cost-review.css` 本批未改，仍是 `?v=cr1`。
+- `tests/test_tech_stage_inline_card_dedup_and_font_scale_red.py`：**修掉红测自身的脚手架缺陷（1 处，判据未放松）**，
+  详见下条「红测脚手架缺陷」。
+- `changelog/changelog_9_14_18.md`：本条目。
+
+红测脚手架缺陷（实测，非推断 —— 已就地修正，**没有改任何一条断言**）：
+
+- 本批红测的 `bodies_for(css, selector)` 对**逗号选择器恒不匹配**：它把实参整串（含逗号）去空白后当
+  `wanted`，却拿它去和规则选择器 `sel.split(",")` 的**每一项**比相等；`split(",")` 的每一项都不含逗号，
+  所以当 `wanted` 含逗号时恒为 `False`。实测：即使文件里就有 `.inline-warn,.inline-question{font-size:11px}`，
+  `bodies_for(".inline-warn,.inline-question")` 仍返回 `[]`，任何 CSS 都过不了。受影响的是
+  `test_annotation_tier`（`.inline-warn,.inline-question`、`.inline-source,.inline-assumption`）、
+  `test_body_tier`（`.inline-edit-grid input,.inline-edit-grid select,.inline-edit-grid textarea`）、
+  `test_complained_table_and_step_grid_reach_body_size`（`.inline-cost-table input,.inline-cost-table select`）
+  三条，共 4 个逗号键。
+- 修法（只动测试脚手架，2 行逻辑）：单项选择器仍按原判据「命中规则选择器列表里的任一项」；
+  逗号选择器追加「整条选择器列表逐项相等」这一条，使断言真正比对到目标规则。**预期值一个未改、
+  断言一条未放宽**（与本仓 `## 74` / `## 94` 对红测自身缺陷「注明后就地修正、判据未放松」的先例一致）。
+  若要保留红测字节原样，可回退这 2 行；代价是上面 3 条断言恒红、本批永远不可能 23/23。
+
+验收（逐条原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_stage_inline_card_dedup_and_font_scale_red -v`
+  → **Ran 23 tests / OK**（改前 10 失败 → 0 失败）。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → **Ran 1748 tests / OK**（改前 10 条失败来自本批；本批落地后 0 失败，无其它批次被带红）。
+- `node --check tech_app/frontend/assembly-integration.js` 与 `node --check tech_app/frontend/cost-review.js`
+  → 均通过（退出码 0）。
+- `git diff --check`（已跟踪文件）→ **干净**，无空白告警。
+
+无头 Chrome 实测（Chrome `--headless=new --dump-dom` + 同源探针脚本读 `getComputedStyle`；
+2.2 / 2.3 以 `embed=1` 直接打开、以「无 embed 但带 project」在**同源 iframe**里打开 —— 旧 URL 无 embed 时会
+按 `tech-embed.js` 的兼容跳转重定向到工作台，iframe 内 `IN_IFRAME=true` 才不会被跳走）：
+
+- 嵌入态 2.2：`embed:true`、`.oc-work .center-panel` 计算 `background-color=rgba(0,0,0,0)`（透明）、
+  `border-top-width=0px`、`border-top-left-radius=0px`；`.center-header` `display:none`；页内无 `#aiPanelTitle`。
+- 嵌入态 2.3：同上一行（`.center-panel` 透明 / 0px / 0px，`.center-header` `display:none`），页内无 `#crPanelTitle`。
+- 独立打开（无 embed）2.2：`.center-panel` 同样透明 / 0px / 0px（去卡片对两页一视同仁），
+  但 `.center-header` 计算 `display:flex`、`.ai-tabs` `display:flex`、`#aiTabs [data-ai-tab]` 共 3 颗 —— **页签行照旧显示**。
+- 独立打开（无 embed）2.3：同上，`.cr-part` 计算 `font-size:12px`（未被带小）。
+- 字号（2.2 / 2.3 均实测）：`.inline-card-title` `13px`、`.inline-cost-table` `12px`、`.inline-step-grid` `12px`、
+  `.cr-part` 在 2.3 为 `12px`（2.2 未加载 `cost-review.css`，该元素回落到 body 默认 `14px`，属预期）。
+- 2.1（`index.html`，未加载 `assembly-integration.css`）嵌入态实测：`.oc-work .center-panel`
+  `background-color:rgb(255,255,255)`、`border-top-width:1px`、`border-top-left-radius:12px`
+  —— **3D 视图那层卡片原样保留**，本批只影响 2.2 / 2.3。
+- 影响面（知情）：`inline-analysis.css` 三页共用，2.1 右侧内嵌的同一套卡片字号同步变大，这正是
+  「统一」的口径（若只给 2.2 / 2.3 覆盖会出现同一个「工序明细」两页两种字号）。
+
+状态：本批改动**未提交、未推送、未部署、未重启服务**（按用户惯例等「提交推送部署」指令）。

@@ -1055,7 +1055,6 @@ function aiRender() {
   const renderers = {
     drawings: aiRenderDrawings, params: aiRenderParams, process: aiRenderProcess,
   };
-  $ai('aiPanelTitle').textContent = AI_TABS[aiTab];
   document.querySelectorAll('#aiTabs [data-ai-tab]').forEach(button => {
     button.classList.toggle('active', button.dataset.aiTab === aiTab);
   });

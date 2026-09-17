@@ -276,3 +276,17 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #0060E6; }
 .ai-confirm-foot .go {
   border: 1px solid transparent; background: var(--color-primary, #0060E6); color: #fff;
 }
+
+/* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
+   2.2 / 2.3 阶段页自己的 .center-panel 是多余的一层圆角卡片：标题已被页签取代，
+   嵌入态页签又被 tech-embed.js 隐藏，只剩一层白底描边。这里把它归零成透明容器。
+   只改外观 —— display / flex 方向 / 高度上限 / 滚动 / position 一个都不许动。
+   本文件在两页里最后加载，且 `.oc-work .center-panel` 的特异性高于 `.center-panel`。 */
+.oc-work .center-panel {
+  background: transparent; border: 0; border-radius: 0; box-shadow: none;
+}
+
+/* 删掉重复标题后，这一行只剩页签，而嵌入态页签已被 tech-embed.js 隐藏 ——
+   不收起来会留一条空白条 + 一条分隔线。必须限定在 .tech-embed：
+   独立打开这两个阶段页时，页签行照旧显示。 */
+.tech-embed .oc-work .center-panel > .center-header { display: none; }
