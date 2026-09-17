@@ -3097,3 +3097,136 @@ Red 验证（逐条原始结论）：
 - 提醒：浏览器需强刷一次（`?v=` 已换号；不刷会命中旧缓存）。
 
 状态：**本批已提交、双远端推送并发布到 34；8010 / 8012 已按新代码重启且健康。**
+
+## 100 实现与验收（9-17）
+
+实现（只改 Spec 允许的五个前端文件 + 两处被反转的旧断言）：
+
+- `tech_app/frontend/inline-analysis.js`：`renderShell()` 删掉说明 `textarea[data-inline-note]`、
+  `data-inline-files` 与整行「选择补充文件」，`notePlaceholder` 变量随之删除；`.inline-analysis-inputs`
+  改成只在 cost 模式渲染、行内只剩「批量」（`data-inline-quantity` 保留）；独立按钮行
+  `.inline-analysis-actions` 删除，四颗按钮搬进 `.inline-analysis-head` 内的 `.inline-head-actions`，
+  顺序固定 生成 → 编辑 → 保存 → 返回零件详情，四个 hook 名一个没改；生成按钮去掉 `primary` /
+  `start-parse-btn`。`bindShell()` 删 `[data-inline-files]` 的 onchange；`extraForm()` 删除，
+  `generate()` 的 POST 改成空 `FormData`（cost 的 `?quantity=` 拼 URL 逻辑一字未动）。
+- `tech_app/frontend/inline-analysis.css`：删 `.inline-file-picker` 五条规则与 `@media` 里的分支、
+  删 `.inline-analysis-actions` 规则；`.inline-analysis-inputs` 由 `minmax(0,1fr) auto auto` 三列
+  改成单行 flex（批量一列）。
+- `tech_app/frontend/index.html`：删 `.analysis-panel-bar` + `#btnBackToModel`、删 `#btnBoardBackList`；
+  `#btnMoreActions` 的 `report-btn` → `inline-action`；新增卡片外壳 `#boardCardMask` / `#boardCard`
+  （`role=dialog` / `aria-modal` / `aria-labelledby` / `tabindex`）/ `#boardCardHead` / `#boardCardTitle` /
+  `#boardCardBody` / `#boardCardClose`；四个 `?v=` 统一换新 `20260917-partchrome1`
+  （workbench.css / inline-analysis.css / inline-analysis.js / app.js）。
+- `tech_app/frontend/workbench.css`：追加 `.board-card-mask` / `[hidden]` / `.board-card` /
+  `.board-card-head` / `.board-card-title` / `.board-card-body` / `.board-card-close` 七条居中卡片规则；
+  `.report-btn` 的全局规则（600 13px）一个字未动。
+- `tech_app/frontend/app.js`：新增 `syncActionSheet(ir)` 作为 `#actionSheet` 八颗按钮唯一启用判定
+  （`btnMoreImport3d` / `btnMoreReview` 只依赖「有项目」），`parseDrawing()` 与 `openProject()`
+  两处共用它（旧的八行 / 六行散落赋值删除）；新增 `openBoardCard(view, spec)` / `closeBoardCard()`，
+  `BOARD_VIEW_SPECS` 的 `import3d` / `review` / `files` 加 `card: true`，`openBoardView()` 按 `spec.card`
+  分流（不碰 `boardViewHost()`、不隐藏 `#modelPanes` / `#analysisPanel`、不改工作区标题）；三条关闭路径
+  （`#boardCardClose` / `Esc` / 点遮罩空白）统一进 `closeBoardCard()`，`closeBoardView()` 内部也调它；
+  视图正文搬运抽成 `fillBoardViewBody()`（工作区与卡片共用；`files` 仍具名调用既有 `renderBoardFiles()`，
+  未复制第二份）；`selectPart()` 删 `#partDetailVersions` 槽位与搬运 `#secVersions` 的整段；
+  删 `#btnBackToModel` / `#btnBoardBackList` 两个绑定块、`BACK_TO_PART_DETAIL` / `BACK_TO_PARTS_LIST`
+  两个常量、`syncPartViewControls()` 及其调用点。
+
+实测（原始结论）：
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_tech_part_detail_chrome_and_action_cards_red -v`
+  → `Ran 25 tests in 0.010s` / `OK`（改前 22 失败）。
+- `./open-claude/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+  → `Ran 1790 tests in 98.559s` / `OK`。
+- `node --check tech_app/frontend/app.js` → 通过；`node --check tech_app/frontend/inline-analysis.js` → 通过。
+- `git diff --check` → 无告警。
+
+无头 Chrome 实测（本机 Chrome 152，探针页 `iframe` 载真 `index.html?project=P1`，`/api/*` 由探针
+服务器给固定 JSON，结果用 beacon 回收）：
+
+- 工艺推荐面板：`.inline-analysis-head` 只有 2 个子节点（标题 + 一组按钮）；四颗按钮同序、class 全含
+  `inline-action`（生成 / 编辑 / 保存 / 返回零件详情），可见三颗 `getBoundingClientRect().top` 同为
+  `1090`（同一行）；无 `textarea`、无 `data-inline-note`、无 `data-inline-files`、正文无「选择补充文件」、
+  无 `.inline-analysis-actions` 容器。
+- `#btnBoardBackList` 不存在；`#analysisPanel` 文本为空、不含「返回零件详情」。
+- `#btnMoreActions` 的 class 为 `inline-action`，计算样式与临时 `.inline-action` 按钮**逐项相同**
+  （11px / padding 6px 10px / radius 6px / 1px 蓝边 / 白底蓝字 / box-shadow:none）→ 同族。
+- 打开已有项目后 `#btnMoreImport3d.disabled=false`、`#btnMoreReview.disabled=false`（`#btnVerify` 也按
+  新判定为 `false`）。
+- 三处弹卡片：`import3d` / `review` / `files` 均 `#boardCardMask` 显示（computed `display:flex`、
+  `align-items:center`、`justify-content:center`，标题分别「导入已有 3D 模型」「版本与校核」「任务文件」），
+  正文搬的是既有节点（`#secImport3d` / `#secVersions + #verificationDetails + #modelLookupDetails` /
+  `.board-files`，任务文件卡渲染出 1 条 `source.png` 链接）；期间 `#modelPanes.hidden` 始终 `false`、
+  `#analysisPanel.hidden` 始终 `true`、`#boardViewHost` 不存在、工作区 `.oc-work .center-panel` 子节点数
+  前后都是 1（工作区内容未被占用）。
+- 三条关闭路径：`Esc` / `#boardCardClose` / 点遮罩空白都收起遮罩，且搬走的 `#secImport3d` / `#secVersions`
+  都回到 `#ocDrawerBody`。
+
+两处「被反转的旧断言」（不放松，另行列出）：
+
+- `tests/test_tech_parts_views_inside_board_red.py::test_back_controls_only_change_board_view`：
+  原断言要求 `app.js` 里有「返回零件清单」「返回零件详情」两个返回控件；本批 Spec 的 U3/U5 明确要求
+  删除（零件清单常驻左栏、面板自带关闭）。改为断言这两个控件**不再存在**，该测试的其余部分
+  （返回只切看板内部视图、窗口尺寸变化的返回链、不走父壳 postMessage 通道）一条未动。
+- `tests/test_tech_stage_inline_card_dedup_and_font_scale_red.py::InlineFontScaleRedTest::test_panel_chrome_unchanged`：
+  原断言要求 `.inline-file-picker span` 字号 = 10px；本批 Spec 的 U2/A6 要求整行连同
+  `.inline-file-picker` 一起删除，该选择器不再存在。只删掉这一条（并从 `PANEL_CHROME_SMALL` 集合里
+  去掉该选择器），其余「明确不放大」的断言一条未动。
+- 除上述两处外，**没有为过测试放宽任何判定**：算法、文案、接口、数据形状、`library_size` 语义、
+  `.report-btn` 全局规则、四个 hook 名、两个既有合并（`_merge_task_entry` / `mergeTask`）口径均未改。
+- 另有一处**无副作用的重排**：`BOARD_VIEW_SPECS` 常量声明上移到 `publishResultSummary()` 之前
+  （红测用正则取文件里第一处 `files: {`，原来的 `publishResultSummary()` 摘要对象排在前面）。无语义变化。
+
+状态：**本批实现完成、红测 25/25 与全量 1790 全绿；未提交、未推送、未发布。**
+
+## 100 补充实测：成本模式输入行 + 独立打开（非嵌入）居中（9-17）
+
+- 成本模式面板（`CadInlineAnalysis.open("cost", …)`）：头部仍是 4 颗 `inline-action` 按钮（生成 / 编辑 /
+  保存 / 返回零件详情）；`.inline-analysis-inputs` 只剩 **1 个子节点**、文本为「批量」，
+  `data-inline-quantity` 在、`data-inline-note` 不在、正文无「选择补充文件」；两个模式页签
+  （工艺推荐 / 成本测算）照旧。
+- 独立打开（不经 `iframe`，直接开 `index.html?project=P1`，窗口 1280×860）：`#btnMoreActions` class =
+  `inline-action`；打开已有项目后 `#btnMoreImport3d.disabled=false`；点它后 `#boardCardMask` 显示、
+  `#boardCard` 尺寸 760×242、卡片中心 `(633, 359)` 对窗口中心 `(640, 359)`（7px 差 = 竖向滚动条宽度，
+  横竖都居中）、`z-index:80`、`#secImport3d` 已搬进 `#boardCardBody`、`#modelPanes` 仍可见；
+  点 `#boardCardClose` 后遮罩收起。
+
+## 100 补充实测：生产入口（父壳桥 navigate-view）走同一张卡（9-17）
+
+- 在探针 iframe 里按 `tech-board-bridge.js` 的原报文发 `navigate-view`（`namespace=cpq:tech-board`、
+  `version=1`、`type=command`、`projectId=P1`）：
+  - `import3d` → 回执 `{ok:true, status:"success", action:"import3d", result:{view:"import3d", title:"导入已有 3D 模型"}}`，
+    `#boardCardMask` 显示、标题「导入已有 3D 模型」。
+  - `files`（= 左侧「任务文件」入口）→ 回执 `result:{view:"files", total:1}`，卡片显示、标题「任务文件」。
+  - 两次都用 `Esc` 收起（`bridge_closed: true`）。
+- 即：左侧「任务文件」与「更多功能 ▾」两项走的就是这条桥 → `TechBoardRuntime.registerViews` →
+  `runBoardView` → `openBoardCard`，与页面内直接调用同一条实现，不新增第二套入口。
+
+## 100 提交 / 双远端推送 / 34 发布记录（9-17）
+
+- 提交：`33ce7b4`（实现，9 文件）——`docs/specs/tech-part-detail-chrome-and-action-cards.md`、
+  `tests/test_tech_part_detail_chrome_and_action_cards_red.py`、`tech_app/frontend/{app.js,index.html,
+  inline-analysis.js,inline-analysis.css,workbench.css}`、两处被反转旧断言的测试文件（
+  `tests/test_tech_parts_views_inside_board_red.py`、`tests/test_tech_stage_inline_card_dedup_and_font_scale_red.py`）。
+  逐文件 `git add`，未用 `git add -A`。
+- 推送前复核（对齐 `scripts/push_remotes.py` 的安全前提）：
+  - 分支 = `20260909`；`git remote get-url --push` 仍是
+    `git@gitlab.boulderaitech.com:ai-team/cpq_agent.git` / `git@github.com:tianzj890107/cpq_agent.git`（未改）；
+  - `git ls-remote` 复核两个远端 `refs/heads/20260909` 均为 `bd5b9bd`，正是新提交 `33ce7b4` 的父提交
+    → 纯快进、无陌生提交、无 force。
+- 双远端推送：`gitlab/20260909` 与 `origin/20260909` 均 `bd5b9bd..33ce7b4`（快进）。
+  - 过程说明（DNS）：本机对 `gitlab.boulderaitech.com` 仍 NXDOMAIN，沿用**一次性 `git` 包装脚本**
+    `/tmp/gitshim/git`（只在 `push` / `ls-remote` 注入
+    `-c url.git@172.16.5.150:.insteadOf=git@gitlab.boulderaitech.com:`，其余子命令透传）。远端地址未改。
+- 34 发布：`/home/wugefei/CPQ/cpq_agent` 上 `git fetch gitlab 20260909` + `git merge --ff-only FETCH_HEAD`
+  → `bd5b9bd` 快进到 `33ce7b4`。
+  - 本批**只改前端**（无 `.py`），**未重启** 8010 / 8012；8010 `PID 1376146` 与发布前一致。
+  - 健康：`8010 /api/health`、`8012 /api/health` 均 `200`。
+- 发布后 34 实测：
+  - `index.html` 里三个资源号已是 `20260917-partchrome1`（`workbench.css` / `inline-analysis.js` / `app.js`）。
+  - 按页面里的真实 URL 抓：`GET /index.html` 200、`GET /workbench.css?v=20260917-partchrome1` 200、
+    `GET /inline-analysis.js?v=20260917-partchrome1` 200、`GET /app.js?v=20260917-partchrome1` 200。
+  - 文件内容计数：`index.html` 的 `boardCardMask` = 1、`app.js` 的 `function syncActionSheet` = 1 /
+    `function openBoardCard` = 1、`workbench.css` 的 `board-card-mask` = 2。
+- 提醒：浏览器需强刷一次（`?v=` 已换号；不刷会命中旧缓存）。
+
+状态：**本批已提交、双远端推送并发布到 34；纯前端改动，未重启服务。**
