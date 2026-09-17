@@ -3258,3 +3258,30 @@ Red 验证（逐条原始结论）：
   所以这条只影响「独立打开 2.1」；父壳自己的左栏/模型设置卡在父文档，不受 iframe 内部层级影响。
 - 回归：`tests.test_tech_part_detail_chrome_and_action_cards_red` 25/25 绿（红测只断言选择器存在与
   `[hidden]` 规则，不钉 z-index 数值）、被反转的两条旧测试绿、全量 1790/1790 绿；`node --check`、`git diff --check` 干净。
+
+## 100 修正二：头部按钮组空隙 + 焦点归还（9-17，发布后补）
+
+两处都是**按用户反馈 / 按 Spec D2 原意**修的，不是放宽判定：
+
+1. **用户口径**：「生成工艺推荐 / 编辑 / 返回零件详情这三个按钮太近了，应该有点空隙」。
+   - 事实：`.inline-analysis-head` 里的这组按钮是我在 ## 100 用 `.inline-head-actions` 拼出来的，
+     模板里四颗按钮**紧挨着拼接、中间没有任何空白**，而 CSS 里从来没有 `.inline-head-actions` 规则
+     → 实测相邻空隙 **0px**（按钮 rect `1189–1277 / 1285–1329 / 1337–1425` 里，前两颗相差 8px 全是边框）。
+   - 处理：`inline-analysis.css` 增加
+     `.inline-head-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}`。
+     实测（同一条探针）：`display:flex`、`gap:8px`，三颗可见按钮相邻空隙 **8px / 8px**（`[8, 8]`），
+     隐藏的「保存」不占位。`inline-analysis.css?v=` 三个引用页（`index.html` / `assembly-integration.html` /
+     `cost-review.html`）一起 bump 到 `20260917-headgap1`。
+2. **焦点归还**（Spec §5 D2「记住触发按钮以便关闭时归还」在「更多功能 ▾」这条路上原本是空操作）：
+   - 事实：`#btnMoreImport3d` / `#btnMoreReview` 的 onclick 第一步就把 `#actionSheet` 收起，
+     而触发按钮在 `#actionSheet` 里 → `closeBoardCard()` 里那次 `back.focus()` 落在**隐藏子树**上是空操作
+     （包一层 `HTMLElement.prototype.focus` 抓调用：确实调了 `btnMoreImport3d.focus()`，但关闭后
+     `document.activeElement` 仍是 `#boardCard`，焦点实际掉在 body 上）。
+   - 处理：`closeBoardCard()` 归还焦点时先判 `document.contains(back) && !back.closest("[hidden]")`，
+     触发按钮已被收起就退回到常驻的菜单按钮 `#btnMoreActions`（标准菜单语义）。
+     实测：关闭后 `activeElement` = `btnMoreActions`，focus 调用序列 = `boardCard`（开）→ `btnMoreActions`（关）。
+3. 顺带回归（同一条探针）：连续 3 次开合，`#secImport3d` 始终 `total=1 / inDrawer=1 / inCard=0`（不复制、不丢）；
+   卡片之间直接切换（`import3d → review → files`，不先关）每次都把上一个节点放回 `#ocDrawerBody`，
+   卡片正文只剩当前视图的节点（无第二份、无残留）。
+- 回归：本批红测 25/25、## 98 字号测与两条被反转旧测试 54/54、全量 1790/1790 绿；
+  `node --check`、`git diff --check` 干净。

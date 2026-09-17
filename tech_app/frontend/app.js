@@ -2912,10 +2912,17 @@ function closeBoardCard() {
   if (!mask || mask.hidden) return false;
   resetBoardViewBody(document.getElementById("boardCardBody"));
   mask.hidden = true;
+  // 焦点归还（Spec D2）：触发按钮若已被收起，就退回到常驻的菜单按钮 ——
+  // 「更多功能 ▾」里那两颗按钮的 onclick 会先把 #actionSheet 收起，隐藏子树上的 focus()
+  // 是空操作，焦点会掉在 body 上（实测：focus() 调了但 activeElement 仍是卡片）。
   const back = boardCardTrigger;
   boardCardTrigger = null;
-  if (back && typeof back.focus === "function") {
-    try { back.focus(); } catch { /* 触发按钮可能已不在文档里 */ }
+  let target = null;
+  if (back && document.contains(back)) {
+    target = back.closest("[hidden]") ? document.getElementById("btnMoreActions") : back;
+  }
+  if (target && typeof target.focus === "function") {
+    try { target.focus(); } catch { /* 触发按钮可能已不在文档里 */ }
   }
   return true;
 }
