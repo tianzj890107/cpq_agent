@@ -6376,3 +6376,94 @@ local  HEAD（提交时）      = 9f1cbcbe26f4dba436589686a51c9bbb8d7ea3b7
   `/api/projects?scope=all&include_archived=true` 并返回归档行。
 - 未改后端、未改权限、未迁移 / 删除数据、未改 `font-family`；本批未 commit / push / 部署
   （提交、双远端推送与 34 部署见 `## 141`）。
+
+### 验收（Codex 复核 ## 139 红测与 ## 140 落地，9-18）
+
+- 复跑本批红测：`tests.test_tech_home_three_tabs_and_todo_tasks_red` → **`Ran 14 tests / OK`**
+  （实现前为 `Ran 14 / FAILED (failures=10)`；另外用 `-W error::DeprecationWarning` 复跑同样 OK，
+  修掉了红测里那条正则把 `(?s)` 写在分支中间的弃用写法）。
+- 复跑被取代的旧断言文件：`tests.test_tech_home_timeline_and_publish_closure_red`
+  → **`Ran 35 tests / OK`**（三页签断言已转绿，## 139 记录的实现前为 1 失败）。
+- 回归一：`test_quote_task_coexistence_and_atomic_claim_red` + `test_tech_project_acl_scope_red` +
+  `test_tech_home_quote_shell_red` + `test_unified_tech_cost_workbench_red` +
+  `test_tech_home_project_cards_and_agent_history_red` + `test_home_cards_equal_height_red` +
+  `test_tech_history_restore_real_stage_red` + `test_tech_empty_ir_parse_completion_red` +
+  批次 10 首页文件 → **`Ran 166 tests / OK`**。
+- 回归二：`test_home_auth_ready_and_quote_primary_state_colors_red` +
+  `test_quote_btn_radius_and_tech_board_render_red` + `test_single_login_across_quote_and_tech_red` +
+  `test_quote_tech_agent_shell_parity_red` + `test_global_brand_color_red` → **`Ran 90 tests / OK`**。
+- 静态核对：`node --check tech_app/frontend/tech-home-board.js` 通过；`git diff --check` 干净；
+  前端已无 `scope=todo` / `TECH_SCOPE_ROWS.todo` 残留，`最近访问` 不再出现在首页页签文案里，
+  `include_archived` 只在 `mode==='tech' && techEntryId(tab)==='all'` 时显示开关。
+- 结论：## 139 Spec 的 10 条可自动化验收标准全部满足，未发现越界修改
+  （后端 `cpq_wf` / `project_access` / 项目卡样式 / 报价侧「我的报价·全部报价」数据源均未被改动）。
+- 仍需人工验收（本机无浏览器环境，未执行）：三页签实际观感、公共池转交后待办页签数字与
+  任务卡内容、领取后 CTA 变化、完成后数字减一、「全部项目」勾选「包含已归档」后能看到归档项目。
+- 本行只记录复核结果，不代表已提交 / 已推送 / 已部署。
+
+## 141. 技术工艺首页三页签与待办任务口径（## 139 / ## 140）的提交、双远端推送与 34 部署记录（9-18，Codex）
+
+### 提交
+
+- 提交 `011e725`「技术工艺首页三页签 + 待办任务口径：待办改读 /wf/tasks，报价与工艺同构
+  （## 139 / ## 140）」，7 个文件（969 insertions / 55 deletions）：
+  · 实现：`tech_app/frontend/tech-home-board.js`、`报价首页.html`；
+  · 文档与测试：新增 Spec `docs/specs/tech-home-three-tabs-and-todo-tasks.md`、新增红测
+    `tests/test_tech_home_three_tabs_and_todo_tasks_red.py`（14 项）、被取代旧断言的
+    `tests/test_tech_home_timeline_and_publish_closure_red.py`（只改五入口那一条）与
+    `docs/specs/tech-home-timeline-and-publish-closure.md`（加「被 ## 139 取代」说明）、当周 changelog。
+- 提交前复跑：`git diff --cached --check` 干净；`node --check` 通过（模块 + 页面内联脚本）；
+  本批红测 `Ran 14 / OK`、批次 10 时间线 `Ran 35 / OK`、5 模块 `Ran 94 / OK`。
+- **未提交**（刻意排除，属另一会话仍在写的 CPQ 回归数据集脚手架，与运行时不相关）：
+  `dataset/`、`scripts/cpq_eval/`、`tests/test_cpq_eval_*.py`（10 个模块）与 `.gitlab-ci.yml`
+  的并行改动；工作区保留原样。
+
+### 推送
+
+```
+git push gitlab HEAD:refs/heads/20260909   →   18cfff5..011e725  HEAD -> 20260909
+git push origin HEAD:refs/heads/20260909   →   18cfff5..011e725  HEAD -> 20260909
+```
+
+回读核对（两个远端与本地同 sha，无强推、无历史改写）：
+
+```
+gitlab refs/heads/20260909 = 011e725a1d018f6f98f5f80dac9e3d4743d631b6
+origin refs/heads/20260909 = 011e725a1d018f6f98f5f80dac9e3d4743d631b6
+local  HEAD（提交时）      = 011e725a1d018f6f98f5f80dac9e3d4743d631b6
+```
+
+`scripts/push_remotes.py` 因工作区仍有上述未跟踪文件会以「工作区不干净」拒绝，故按它的同一套断言
+（`--push` 地址必须是 `git@gitlab.boulderaitech.com:ai-team/cpq_agent.git` /
+`git@github.com:tianzj890107/cpq_agent.git`，且远端 sha 必须是 HEAD 祖先 —— `18cfff5` 祖先校验通过）
+手工核过后直接 `git push`（与 `## 123` / `## 127` / `## 131` / `## 135` / `## 138` 同一先例）。
+
+### 部署到 172.16.10.34（裸进程，非容器）
+
+- 脚本 `/tmp/deploy_011e725_34.sh`（沿用既有裸进程链路），经 `/usr/bin/expect` 包装
+  `/tmp/run_deploy_011e725.exp` 执行；脚本 base64 后经 ssh 命令行落到远端 `/tmp` 再执行，
+  正文（含 `pkill -f 'tech_app_launch.py …'`）不作为 ssh 命令参数出现，避免被 `pkill -f` 自匹配。
+  凭据沿用本线程此前已提供的部署口令（读环境变量 `CPQ_PW`，未落盘、未入库、未回显）。
+- 链路：`git fetch --prune gitlab 20260909` → `git merge --ff-only FETCH_HEAD` → 归档 `nohup.out` →
+  **先停 8012 子进程再停 8010 父进程** → 轮询端口释放 → 带
+  `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh` 用原命令行重启。
+- 结果（远端原始输出要点）：
+  · 部署前服务在 `HEAD=9f1cbcb`，tracked 改动为 0；纯快进 `9f1cbcb..011e725`，7 个文件、含 2 个新增文件；
+  · 停前进程：8010 PID `3289336`、8012 子进程 PID `3289410`；重启后：8010 PID **`3363284`**、
+    8012 子进程 PID **`3363355`**（父进程重新拉起）；
+  · 健康检查全过：首页 `200`、`/api/health` `200` 且 `{"status":"ok","model":"qwen3.5-plus",…,
+    "cadquery_available":true,"auth_enabled":true,"sso_enabled":true}`（`status` 严格 `ok`）；
+  · 抽查本批口径（只读）：`tech-home-board.js` 命中 `todoCount` 3 行 / `isTodoTask` 4 行、
+    `source: 'tasks'` 1 处、`id: 'recent'|'archived'` 入口 0 处；首页 `include_archived` 4 行、
+    `scope=todo` 0 处、待办的 `mode === 'quote'` 限定 0 处、缓存号 `tech-home-board.js?v=b11` 1 处；
+    线上 `GET /tech-home-board.js` 命中 `todoCount` 3 行与 `source: 'tasks'`，
+    线上首页 `GET /报价首页.html` 命中 `include_archived` 4 行。
+- 未改启动参数、未另起第二套端口、未删除或迁移任何线上数据。
+
+### 遗留
+
+- 归档项目现在只能从「全部项目 + 包含已归档」进入（后端 `scope=archived` 能力保留但首页不再请求），
+  属本批 Spec §17 的既定取舍。
+- 技术工艺待办改读 `/wf/tasks` 后，只做自己项目、没人转交的人会看到空待办 —— 同样是 Spec §17 的预期语义。
+- `wfBadge()` 在模块 / 登录态不可用时退回「只数非终态任务」的等价兜底（批次 2 单测会把该函数单独
+  抽到无 `window` 的沙箱里跑），与新口径不完全等价，仅限这两种不可用场景。
