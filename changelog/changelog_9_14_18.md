@@ -6496,3 +6496,39 @@ local  HEAD（提交时）      = 011e725a1d018f6f98f5f80dac9e3d4743d631b6
   ## 133 / ## 136 守卫项且当前为绿。失败原因分别是
   `'running' != 'completed'`、`'✓' unexpectedly found`、`0 != 2`、`'·' != '✓'`。
 - 本批只改 Spec / 红测 / changelog，未改生产实现、未提交推送、未重启服务。
+
+
+## 143. 创建 GitLab MR `20260909 → master` 与 `ytbz` 分支（9-18，Codex）
+
+### Merge Request（按仓库规定流程，只创建不合并）
+
+- 依据 `AGENTS.md` 的 merge 约定，用 `scripts/create_mr.py` 创建（幂等；不重复创建、不自动合并）：
+  **MR !1** `20260909 → master` ——
+  `http://gitlab.boulderaitech.com/ai-team/cpq_agent/-/merge_requests/1`
+- reviewer 固定 `tianzijing`、assignee 固定 `zhangzhen`（经 API 回读确认）；`has_conflicts=false`，
+  head sha `fb0173a`；描述覆盖 `master..20260909` 全部 136 个提交（含逐条清单）、用户可见变化与验证结果。
+- 流水线 `#3174`（`refs/merge-requests/1/head`）状态 `pending`。CI 只在 MR 与默认分支运行测试 / 镜像构建，
+  不含 deploy job、SSH / SCP / rsync 或生产环境写入。
+
+### 干净检出复跑（`fb0173a`，独立 `git worktree`，不含工作区未提交内容）
+
+- `python -m unittest discover -s tests -p 'test_*.py'` → **Ran 2252 tests / FAILED (failures=2)**。
+- 2 条失败均在 `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`（## 99 批次红测）：
+  `test_details_show_input_and_output`、`test_legacy_rows_without_call_keep_todays_shape`，
+  仍断言模型调用行 / 无 `call` 的旧数据行必须长出「详情」并展示输入输出 JSON；
+  该交互已由 ## 133 / ## 134 按用户明确口径移除（`docs/specs/quote-tech-process-row-product-contract.md`），
+  而 `## 133` 的退役清单只覆盖另外三份旧测，未含本文件。
+- 影响与处置：MR 的 `python_contract` job 会因此变红。已按 `## 133` 同一先例给出退役建议，
+  **未获授权前未修改任何测试**（本次一行测试都没动）。
+
+### `ytbz` 分支
+
+- 本地从 `fb0173a` 新建并切换到 `ytbz`；已推送 GitLab 与 GitHub，双远端回读 sha 均为
+  **`483c7f9`**，upstream 指向 `gitlab/ytbz`。
+- 提交 `483c7f9`：收拢工作区既有改动 —— `dataset/evals/cpq/**`、`scripts/cpq_eval/**`、
+  `tests/test_cpq_eval_*.py`（10 个）、`.gitlab-ci.yml`（cpq_eval 四个 `--strict` 门禁）、
+  `docs/specs/process-row-running-info-and-fold.md`、
+  `tests/test_process_row_running_info_and_fold_red.py` 与当周 changelog，共 101 个文件 / 51676 行。
+- **未纳入本提交**：`裕同包装项目-待开发/**` 的 4 份业务 Excel。原因有两条：仓库既有约定不跟踪
+  二进制 Office 文档（`git ls-files` 中 xlsx/xls/docx/pdf 数量为 0）；且 GitHub 镜像是可匿名访问的
+  公开仓库（未登录访问仓库页返回 200，不存在的仓库返回 404）。是否入库待用户明确确认。
