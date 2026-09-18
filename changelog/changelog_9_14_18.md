@@ -5897,3 +5897,119 @@ local  HEAD                = 254c231dafda016d3145cede4382564e0d4094af
 - `## 130` 所述「界面仍保留原生 `<summary>` 文案『详情』」的取舍**已随本批上线**：该行被两份既有
   绿测（`test_task_process_detail_red.test_31`、`test_quote_btn_radius_and_tech_board_render_red.test_43`）
   钉死，本轮未改测试；要彻底去掉需用户先批准修订那两条旧断言。
+
+## 132. 验收 ## 128 / ## 130 修正批次：红测口径收紧为「用户看得见」，「详情」标签缺口显式转红（9-18，Codex 只改 Spec + 红测）
+
+- 验收范围：`254c231`（口径修正实现）+ `16093ff`（changelog）已在本地与双远端，`## 131` 记录的 34 部署已完成。
+  本轮只做验收与红测口径收紧，未改任何生产实现、未 commit / push / 部署。
+- 验收实跑（实现未动）：
+  · `tests.test_quote_tech_unified_tool_list_conversation_red` → `Ran 52 tests / OK`；
+  · 被 `## 125` 打破的 5 个既有合同文件（用户气泡主色 / 融合卡 / 卡片统一 / 回显气泡 / 白底）→ `Ran 90 tests / OK`；
+  · 回归 5 文件（思考折叠 / 工具轨迹 / 任务卡版式 / 过程明细 / 输入区对齐）→ `Ran 76 tests / OK`；
+  · `node --check` 三个脚本、`git diff --check` 均通过。
+- **验收发现的真实缺口**：用户口径要的是「没有详情这个东西」，但左栏过程行仍有一个**看得见**的
+  `<summary>详情</summary>`（阶段页 `assembly-integration.js` / `cost-review.js` 已用 `div[hidden]`，
+  没有这个标签）。`## 130` / `## 131` 记录的是"取舍"，本轮把它变成可测口径。
+- 红测收紧（`tests/test_quote_tech_unified_tool_list_conversation_red.py`，52 → **53 个用例**）：
+  · 新增可见性探针 `DETAIL_LABEL_PROBE`（`ownLabel` / `cssHidesDetailLabel` / `detailLabelState`），
+    「详情」判定从「有没有这个字样」改成「用户是否看得见」：`hidden`、`aria-hidden="true"`、
+    CSS `display:none` / `visibility:hidden` 都算隐藏；伪元素规则（`::-webkit-details-marker`、
+    `summary::before`）不算隐藏标签本身。旧口径曾把 `data-agent-role="tool-detail"` 直接豁免，
+    导致「打上角色标记的可见『详情』」漏检。
+  · 新增 `test_d23b_the_detail_label_is_not_a_second_visible_toggle`，同时覆盖技术左栏过程行、
+    左栏缩进父行、阶段页过程卡三处。
+  · 驱动注入真实 `agent-chat.css` 供可见性判定；阶段页走查补 `process_detail_label_state`。
+- 红测实测：`Ran 53 tests / FAILED (failures=3)` —— `d23` + `d23b`（技术左栏过程行 / 缩进父行）
+  两条方法、共 3 条断言，全部指向同一个缺口：左栏仍看得见独立「详情」标签；阶段页 `state=absent` 通过。
+- 给实现方的两条合法路径（Spec §11.2 规则 1 / §21 风险 5 已写明）：
+  · **(A) 推荐、零测试改动**：`agent-chat.css` 给 `.oc-process-detail > summary` 加 `display: none`，
+    展开仍由标题行驱动 `<details>.open`；两份既有绿测（`test_task_process_detail_red.test_31`、
+    `test_quote_btn_radius_and_tech_board_render_red.test_43`）继续绿。
+  · **(B)** 彻底删掉该节点，但必须同时退役上面两条旧断言（需用户批准改这两份既有测试）。
+- 未改生产实现；未 commit / push / MR / tag / Release / 部署。
+
+## 133. 过程行产品侧收口（报价 + 技术工艺统一）：图标统一 ✓/圆圈、保留色调、去掉「详情」与输入输出（9-18，Codex 只改 Spec + 红测 + 退役相冲突旧断言）
+
+- 用户口径（针对现有渲染结果）：
+  1. 图标统一 —— 有地方是「点」有地方是圆圈，**做完的步骤一律 ✓**；
+  2. 本次修改后**之前不同颜色的文字没了**，色调要保留；
+  3. **「详情」这个东西和按钮完全不要**；输入 / 输出 JSON（含空 `{} {}`）也不要，
+     用户不需要感知技术实现，只要产品侧的执行结果；
+  4. 覆盖面是**报价 + 技术工艺所有** Agent 输出气泡，不只是图纸解析那一张。
+- 顺带查实的真实缺口（非推断）：
+  · 技术左栏 `agent-chat.js::pushTaskStep` 仍建 `<details>` + `<summary>详情</summary>`，
+    并把「工具名 · 状态 / 输入 JSON / 输出 JSON」画进折叠区；标题行还挂着
+    `role="button"` / `tabindex` / `aria-expanded`；
+  · 3/4 阶段页 `aiProcessCard` / `crCard` 同样建折叠区，图标写死 `●`；
+  · 报价页 `addToolActivity` / `showStage` 同样带 `role=button` / `tabindex` / `aria-expanded`，
+    且没有统一状态图标；
+  · **颜色丢失的根因**：缩进行渲染成 `.oc-process-sub hit/miss`，而 CSS 只给
+    `.oc-process-step.sub.hit/miss` 上色 —— 类名对不上，规则写了不生效。
+- 新增 Spec：`docs/specs/quote-tech-process-row-product-contract.md`
+  （过程行合同、覆盖范围、数据兼容、退役清单、人工验收）。
+- 新增红测：`tests/test_quote_tech_process_row_product_contract_red.py`（17 个用例、
+  A/B/C/D 四组，覆盖技术左栏 + 3 阶段页 + 4 阶段页真渲染走查，以及报价页静态合同）。
+- 红测实测（实现前）：
+  `Ran 17 tests / FAILED (failures=34)` —— 12 个用例失败：
+  a1/a2/a3/a5（仍有折叠区 + 按钮 + aria-expanded；结果被藏在收起的 `<details>` 里；
+  报价页仍带 role/tabindex/aria-expanded 且无统一图标）、
+  b1/b2/b3/b5（完成行是 `•`、阶段页是 `●`、完成后仍有 running 行）、
+  c1/c4（命中行没有 hit 色调类；阶段页没有命中 / 未命中色调）、
+  d1/d2（仍在显示输入输出 JSON 与 `component_match` 等原始工具名）；
+  通过：a4（子行仍归父行）、b4（失败仍 ⚠）、c2/c3（色调规则与颜色仍在）、d3（产品侧结果完整）。
+- 合同更替（用户口径取代旧交互，非掩盖回归）：退役
+  `test_quote_tech_unified_tool_list_conversation_red` 的 D22–D31、
+  `test_task_process_detail_red` 的 test_31/32/35/36、
+  `test_quote_btn_radius_and_tech_board_render_red` 的 test_41–45；
+  同步在旧文件里留下指向新 Spec / 新红测的退役说明。
+- 回归实测：新旧红测 + 退役后的两份旧测 + 8 个会话相关模块共 `Ran 240 tests / FAILED (failures=35)`
+  （34 条来自本批新红测、1 条是旧文件里新增的 c21「仍在建 tool-detail」），其余全绿。
+- 未改任何生产实现；未 commit / push / MR / tag / Release / 部署。
+
+## 134. 过程行产品侧收口落地：图标统一 ✓/圆圈、色调回到文字上、去掉「详情」与输入输出 JSON（9-18，Codex 实现）
+
+- 按 `## 133` 的 Spec / 红测把过程行（Tool List）在报价侧与技术工艺侧收成同一套产品侧合同，
+  四件事全部落地，且**没有改任何测试**（红测是标尺）。
+- **去掉折叠 / 按钮 / 输入输出**：`agent-chat.js::pushTaskStep`（5 入参不变）与阶段页
+  `aiProcessCard().log` / `crCard().log` 不再建 `tool-detail` / `tool-toggle` / `<details>` /
+  `<summary>`，也不再渲染工具名、输入输出 JSON 与「详情」二字；缩进行（2+ 前导空格 / ↳ / ·）
+  归上一条 Tool Item、直接可见（`.oc-process-subs` 容器内，无 `hidden` / `aria-hidden`）。
+  报价页 `addToolActivity` / `showStage` 同样去掉 `role=button` / `tabindex` / `aria-expanded`，
+  行内补统一状态图标；页面里原先把 `.ti-loader-2` 翻成 ✓ 的 6 处收尾改为 `markTraceDone()`。
+- **图标统一**：完成 `✓`、进行中 / 待处理 `○`、失败 `⚠`，不再出现 `•` / `●` / `⏺`；
+  `setAssistantState(..., "succeeded")` 与阶段页 `done()` 收尾时把仍是 `running` 的过程行
+  一次收成 `completed` + `✓`（同一次调用的模型行由 `mergeModelRow()` 就地翻状态）。
+- **色调回到文字上**：`rowTone()` / `STEP_TONE()` 在调用方没给 tone 时按原句判定
+  （命中 / 可改制 → hit，未命中 / 按新制 → miss），CSS 改成
+  `.oc-process-step.hit > .oc-process-text`（绿）/ `.miss > .oc-process-text`（橙），
+  模型行 `.model`（蓝）、工具行 `.tool`（绿）、失败 `.err`（红）保持既有取值；
+  缩进行不再用对不上的 `.oc-process-sub` 类名。
+  · 父行同时带 `has-hit` / `has-miss` 标记：父行的 `textContent` 包含缩进的结论行，
+    标记让「哪一类结论出现在这一行」对 DOM 阅读器与既有探针都读得到，而颜色只落在结论行文字上。
+- **信息一条未减**：读取输入、模型名、查询条件、命中件与匹配度、差异、库内条数、
+  `费率 0 条 / 回退 global 0 条 / 系数 0 条 / 待补 10 项` 全部原样保留；后端 `process[].detail`
+  载荷仍照旧落库（审计用），只是不再渲染；历史回放走同一渲染入口，不补造、不删除历史文本。
+- 缓存号：`agent-chat.css` / `agent-chat.js` → `20260918-product1`（4 个页面 6 处），
+  `assembly-integration.js` → `ai24`，`cost-review.js` → `cr18`。
+- **行号约束**：`test_quote_tech_unified_tool_list_conversation_red` 的 `FONT_FAMILY_BASELINE`
+  按行号钉死既有 `font-family` 声明（`confirm:43/169/257/476/498/693`、`chatcss:207`），
+  故报价页新增的过程行样式追加在 `</style>` 之前、JS helper 落在 693 行之后，未移动任何既有声明行号。
+- 实测（原样）：
+  · `tests.test_quote_tech_process_row_product_contract_red` → **Ran 17 tests / OK**（改前 `FAILED (failures=34)`）；
+  · `tests.test_quote_tech_unified_tool_list_conversation_red` → **Ran 35 tests / FAILED (failures=1)**，
+    唯一失败是 `test_c19_missing_items_fallbacks_and_times_are_kept`（见下）；
+  · `tests.test_task_process_detail_red` + `tests.test_quote_btn_radius_and_tech_board_render_red` → **Ran 50 tests / OK**；
+  · `node --check` 覆盖 `agent-chat.js` / `assembly-integration.js` / `cost-review.js` 全部通过，`git diff --check` 干净；
+  · 全量 `unittest discover -s tests -p 'test_*.py'` → **Ran 2388 tests / FAILED (failures=4, skipped=2)**：
+    本批相关 3 条（下）、另 1 条 `test_cpq_eval_ci_contract.test_every_production_import_has_a_requirement`
+    为并行会话的 CPQ 回归数据集脚手架，与本批无关。
+- **合同更替后仍需用户裁决的 3 条既有断言**（本轮按 Spec 实现、未改测试，故显式转红）：
+  1. `test_quote_tech_unified_tool_list_conversation_red::test_c19` 的探针
+     `row_detail_keeps_full_input = row.textContent.indexOf("component_match") >= 0` ——
+     它要求过程行里看得见原始工具名 `component_match`，与本批 Spec「不显示原始工具名」及新红测
+     D2（`RAW_TOOL_IDS` 一条都不许出现）**互为反证**，两者不可能同时为真；
+  2. `test_tech_model_call_row_merged_and_summary_detail_red::test_details_show_input_and_output`
+     与 3. `::test_legacy_rows_without_call_keep_todays_shape` 要求模型行仍有「详情」块且能看到
+     输入 / 输出 JSON —— 属 `## 133` 退役清单里的同一类旧合同，只是这两处未列入。
+  该文件其余能力断言（一次调用一行、旧数据两行、失败原因可见）仍全部通过。
+- 未 commit / push / merge / tag / Release / 部署；未改 `tests/**`、未改后端 / SSE / 工具协议 / 数据库 / Prompt。

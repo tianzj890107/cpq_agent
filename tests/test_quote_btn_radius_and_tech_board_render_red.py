@@ -618,57 +618,8 @@ class ProcessDetailWrapTest(unittest.TestCase):
         self.assertTrue(has_declaration(body, "flex-wrap", "wrap"),
                         "过程行必须允许换行，否则「详情」永远被挤在文字右边：%s" % body[:400])
 
-    def test_41_detail_takes_a_full_line(self):
-        body = joined(self.css, ".oc-process-detail")
-        # `flex-basis:100%` / `width:100%` / `flex:1 0 100%` 都算占满整行，不绑定一种写法。
-        full_line = (has_declaration(body, "flex-basis", "100%")
-                     or has_declaration(body, "width", "100%")
-                     or re.search(r"flex\s*:[^;]*100%", body) is not None)
-        self.assertTrue(full_line,
-                        "「详情」必须占满整行、落到过程文字下一行：%s" % body[:300])
-        self.assertTrue(has_declaration(body, "flex") or has_declaration(body, "min-width"),
-                        "「详情」原来的 flex / min-width 契约被删了：%s" % body[:300])
-
-    def test_42_detail_aligns_under_the_step_text(self):
-        body = joined(self.css, ".oc-process-detail")
-        self.assertTrue(has_declaration(body, "margin-left") or has_declaration(body, "padding-left"),
-                        "「详情」要与过程文字左对齐（圆点 10px + 间距 7px = 17px）：%s" % body[:300])
-        sub = joined_matching(self.css, ".oc-process-step", ".sub", ".oc-process-detail")
-        self.assertTrue(has_declaration(sub, "margin-left") or has_declaration(sub, "padding-left"),
-                        "缩进行（.sub）的「详情」要再叠加 14px：%s" % sub[:300])
-
-    def test_43_summary_keeps_its_word_and_gets_a_marker(self):
-        body = joined(self.css, ".oc-process-detail > summary")
-        self.assertTrue(has_declaration(body, "cursor", "pointer"),
-                        "summary 仍要是可点开的：%s" % body[:300])
-        marker = joined(self.css, ".oc-process-detail > summary::before")
-        self.assertTrue(marker, "summary 缺展开指示（::before 三角）")
-        self.assertTrue(has_declaration(marker, "content"),
-                        "展开指示要有 content：%s" % marker[:300])
-        opened = joined(self.css, ".oc-process-detail[open] > summary::before")
-        self.assertTrue(has_declaration(opened, "transform", "rotate(90deg)"),
-                        "展开后指示器要转向：%s" % opened[:300])
-        self.assertIn('el("summary", null, "详情")', self.js, "summary 文案被改动了")
-
-    def test_44_detail_is_only_built_for_rows_with_structured_payload(self):
-        body = function_body(self.js, "pushTaskStep")
-        self.assertTrue(body, "找不到 pushTaskStep()")
-        self.assertRegex(body, r"if\s*\(\s*detail\s*&&\s*typeof\s+detail\s*===\s*[\"']object[\"']\s*\)",
-                         "没有明细的行不得长出「详情」（旧任务的 progress 行 DOM 要逐字不变）：%s" % body[:500])
-        self.assertIn("oc-process-detail", body)
-        for token in ("oc-task-steps", "oc-process-step", "oc-process-dot", "oc-process-text"):
-            with self.subTest(token=token):
-                self.assertIn(token, self.js, "过程行既有结构被删除：%s" % token)
-
-    def test_45_detail_body_stays_intact(self):
-        for token in ("oc-process-detail-tool", "oc-process-detail-label",
-                      "oc-process-detail-input", "oc-process-detail-output"):
-            with self.subTest(token=token):
-                self.assertIn(token, self.js, "明细块内部结构被改动：%s" % token)
-        # 明细块的样式锚在 `.oc-process-detail` 与它的 pre 上（输入/输出两段共用同一个 pre 规则）。
-        for selector in (".oc-process-detail-tool", ".oc-process-detail-label", ".oc-process-detail pre"):
-            with self.subTest(selector=selector):
-                self.assertTrue(joined(self.css, selector), "明细块样式被删除：%s" % selector)
+    # ## 133 起：过程行不再有「详情」折叠块，原 test_41–test_45 整体退役。
+    # 过程行的新合同见 tests/test_quote_tech_process_row_product_contract_red.py。
 
 
 # --------------------------------------------------------------------------- #

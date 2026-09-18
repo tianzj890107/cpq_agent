@@ -245,8 +245,19 @@
 
 ### 11.2 硬性规则
 
-1. **不再有「详情」这个开关**。UI 里不得出现文本恰好是「详情」的可点击项 / `summary` / 按钮；
-   点击目标就是**这一行的标题行本身**（`[data-agent-role="tool-toggle"]`，内含 `tool-title`）。
+1. **界面上不再有「详情」这个东西**。展开 / 收起的唯一点击目标就是**这一行的标题行本身**
+   （`[data-agent-role="tool-toggle"]`，内含 `tool-title`）。
+   - **用户可见判定（验收口径）**：行内不得出现**看得见**的「详情」标签 —— 即 `summary` / `button`
+     自身文字恰为「详情」，且该节点没有被 `hidden`、`aria-hidden="true"` 或 CSS
+     `display: none` / `visibility: hidden` 藏起来（伪元素规则如 `::-webkit-details-marker`、
+     `summary::before` 不算隐藏标签本身）。红测 `D23 / D23b` 按这个口径判定。
+   - **允许保留不可见的兼容节点**：两份既有绿测仍钉着这个节点 ——
+     `tests/test_task_process_detail_red.py`（渲染出的 `summary` 文案必须是「详情」）与
+     `tests/test_quote_btn_radius_and_tech_board_render_red.py`（源码里必须仍有
+     `el("summary", null, "详情")`）。**最小改法**是让该 `summary` 在 CSS 里 `display: none`，
+     展开仍由标题行驱动 `<details>.open`；用户看不到它，旧合同也不破。
+   - 若决定**彻底删掉**该节点，必须同时退役上面两条旧断言并在 changelog 写明"合同退役"，
+     不允许用其它绕行方式（例如"没有订阅者就不落盘"）迁就旧断言。
 2. **缩进内容必须折进上一级父项**，不得成为与父项平级的兄弟节点。
    后端用前导 2+ 空格 / `↳` / `·` 表示"这条是上一条的结果或依据"：
    这样的行**不新建 `tool-item`**，而是追加进**上一条** `tool-item` 的 `tool-detail` 里。
@@ -327,7 +338,7 @@
 | A1–A6 | 两侧统一卡片结构、header/body/status、一步一卡、Tool Item 不再是卡、摘要类不得绕过构造器、错误态是 modifier |
 | B7–B14 | 用户消息先出现、按钮触发、重新生成、失败仍保留、turn 顺序、非用户触发不伪造、历史不补造 |
 | C15–C21 | Tool List 存在、四态映射、复杂详情不压缩、查询条件/缺失项/回退/时间保留、父子层级、Tool Item 无独立卡片 |
-| D22–D31 | 详情默认折叠、**标题行本身就是开关（不出现「详情」二字）**、展开可见、可收起、hover 浅蓝、token 派生、键盘与焦点、aria-expanded 语义、两端同合同、**缩进子项折进父项** |
+| D22–D31、D23b | 详情默认折叠、**标题行本身就是开关**、**界面上不得出现看得见的「详情」标签（D23b；允许保留不可见兼容节点）**、展开可见、可收起、hover 浅蓝、token 派生、键盘与焦点、aria-expanded 语义、两端同合同、**缩进子项折进父项** |
 | E31–E37 | 思考折叠栏位置/默认态/展开/空不渲染/历史支持/不依赖流式/不额外成卡 |
 | F38–F43 | **用户气泡保持系统主色实心蓝底 + 白字**、Agent 卡白底、无明显灰底、无新增/修改 font-family、字体继承不变 |
 | G44–G50 | 输出不删减、后端协议不变、SSE 名不变、DB 不变、持久化可恢复完整 turn、失败态仍显示、既有聊天测试继续运行 |
@@ -343,6 +354,13 @@
    `<div class="oc-amsg">`，只 **加** `data-agent-card` / `data-status` 与 role 属性。
 4. **技术侧 root 判定**：`.oc-amsg.oc-task-card` 是同一 root 的 modifier，`[data-agent-card]` 数量
    等于"业务步骤数 + 任务卡数"，不得因为统一而合并。
+5. **「详情」标签与两份既有合同的冲突**（本批唯一需要用户拍板的取舍）：
+   `agent-chat.js::pushTaskStep` 里那个 `<summary>详情</summary>` 被
+   `test_task_process_detail_red.test_31`（渲染文案）与
+   `test_quote_btn_radius_and_tech_board_render_red.test_43`（源码断言）钉死；
+   `## 130` / `## 131` 已把它作为遗留项如实记录。本批红测 `D23 / D23b` 按"用户不能看见"判定，
+   给出两条合法路径：**(A) 保留节点 + CSS `display: none`**（零测试改动，推荐）；
+   **(B) 删节点 + 退役两条旧断言**（DOM 更干净，但要用户批准改这两份既有测试）。
 
 ## 22. 验收清单（人工）
 

@@ -774,15 +774,10 @@ class ProcessDetailFrontendTest(unittest.TestCase):
         self.assertIn("oc-process-dot", self.out["rich_row_children"])
         self.assertIn("oc-process-text", self.out["rich_row_children"])
 
-    def test_31_detail_row_grows_a_details_block(self):
-        self.assertTrue(self.out["has_details"], "带明细的行没有「详情」入口：%s" % self.out)
-        self.assertEqual("详情", self.out["summary_text"], "折叠标题不是「详情」：%s" % self.out)
-
-    def test_32_details_show_input_and_output(self):
-        self.assertIn("P-001", self.out["input_json"], "明细里看不到输入：%s" % self.out)
-        self.assertIn("component_match", self.out["details_text"])
-        self.assertIn("0.648", self.out["output_json"], "明细里看不到输出：%s" % self.out)
-
+    # ## 133 起：过程行不再有「详情」折叠区，也不再显示输入 / 输出 JSON。
+    # 原 test_31 / test_32 退役，改由
+    # tests/test_quote_tech_process_row_product_contract_red.py 的 A / D 组接管
+    # （无折叠区、无按钮、无 JSON、产品侧结果直接可见）。
     def test_33_plain_row_has_no_details_block(self):
         self.assertIs(False, self.out["plain_has_details"],
                       "没有明细的行不该长出「详情」：%s" % self.out)
@@ -795,15 +790,7 @@ class ProcessDetailFrontendTest(unittest.TestCase):
         self.assertEqual(108, (detail.get("input") or {})
                          .get("params", {}).get("length"))
 
-    def test_35_board_payload_renders_the_detail(self):
-        self.assertTrue(self.out["board_card_has_details"],
-                        "看板载荷里的明细没有画出来：%s" % self.out)
-        self.assertIn("tool", self.out["board_row_class"])
-
-    def test_36_css_has_the_detail_style(self):
-        self.assertTrue(re.search(r"\.oc-process-detail\b", self.css),
-                        "agent-chat.css 缺少 .oc-process-detail 样式（%d 字符）"
-                        % len(self.css))
+    # 原 test_35 / test_36 退役（看板不再渲染折叠明细、CSS 不再需要 .oc-process-detail）。
 
 
 if __name__ == "__main__":

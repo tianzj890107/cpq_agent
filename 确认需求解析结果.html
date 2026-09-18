@@ -707,15 +707,17 @@
       padding: 14px 18px; border-top: 0.5px solid var(--border-color);
     }
     .modal-footer .btn { min-width: 92px; }
-    /* 标题行本身就是折叠开关：hover 浅蓝（由系统主色 token 推导）、可键盘聚焦、指针可点。 */
-    [data-agent-role="tool-toggle"] { cursor: pointer; border-radius: 6px; }
-    [data-agent-role="tool-toggle"]:hover {
-      background: color-mix(in srgb, var(--color-primary) 8%, white);
+      /* 过程行（Tool List）：状态图标 + 原句标题，产品侧结果直接可见 —— 没有折叠、
+       没有按钮；命中 / 未命中的颜色落在结论文字上。 */
+    .oc-process-row { display: flex; align-items: flex-start; gap: 7px; }
+    .oc-process-dot { flex-shrink: 0; width: 12px; text-align: center; font-size: 12px; line-height: 1.6; }
+    .oc-process-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+    .oc-process-row.hit .oc-process-text { color: var(--color-success); }
+    .oc-process-row.miss .oc-process-text { color: #b45309; }
+    [data-agent-role="tool-item"][data-state="completed"] [data-agent-role="tool-state-icon"] {
+      color: var(--color-success);
     }
-    [data-agent-role="tool-toggle"]:focus-visible {
-      outline: 2px solid var(--color-primary); outline-offset: 1px;
-    }
-  </style>
+</style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
 <body>
@@ -1154,7 +1156,8 @@
       finishStreamBubble(); // 工具调用把当前文本气泡截断
       const div = document.createElement('div');
       div.className = 'tool-activity trace';
-      // 报价侧的过程行同样是 Tool List：root 带统一合同标记，一条业务过程 = 一个 tool-item。
+      // 报价侧的过程行同样是 Tool List：一条业务过程 = 一个 tool-item，行首状态图标
+      // + 原句标题，产品侧结果直接可见 —— 没有折叠区、没有按钮。
       div.setAttribute('data-agent-card', '');
       div.setAttribute('data-status', 'running');
       const tools = document.createElement('div');
@@ -1162,17 +1165,19 @@
       const item = document.createElement('div');
       item.setAttribute('data-agent-role', 'tool-item');
       item.setAttribute('data-state', 'running');
-      // 标题行本身就是折叠开关（tool-toggle），不再另起「详情」按钮。
       const row = document.createElement('div');
       row.className = 'oc-process-row';
-      row.setAttribute('data-agent-role', 'tool-toggle');
-      row.setAttribute('role', 'button');
-      row.setAttribute('tabindex', '0');
-      row.setAttribute('aria-expanded', 'false');
-      const i = document.createElement('i'); i.className = 'ti ti-loader-2';
+      const i = document.createElement('span');
+      i.className = 'oc-process-dot';
+      i.setAttribute('data-agent-role', 'tool-state-icon');
+      i.textContent = '○';
       const s = document.createElement('span');
+      s.className = 'oc-process-text';
       s.setAttribute('data-agent-role', 'tool-title');
       s.textContent = main;
+      // 命中 / 未命中沿用与技术工艺同一套色调，颜色落在结论文字上。
+      if (/命中|可改制|可复用/.test(main)) row.classList.add('hit');
+      else if (/无同类件|未命中|按新制|未匹配/.test(main)) row.classList.add('miss');
       row.appendChild(i); row.appendChild(s);
       if (source) {
         const sp = document.createElement('span');
@@ -1186,6 +1191,25 @@
       chatEl.appendChild(div);
       scrollChat();
       return div;
+    }
+    /* 过程行完成：把进行中的圆圈就地收成 ✓（与 addToolActivity 同一套状态图标）。 */
+    function markTraceDone(scope) {
+      const root = scope || chatEl;
+      root.querySelectorAll('[data-agent-role="tool-item"]').forEach(item => {
+        item.setAttribute('data-state', 'completed');
+        const icon = item.querySelector('[data-agent-role="tool-state-icon"]');
+        if (icon) icon.textContent = '✓';
+      });
+    }
+    /* 进度轨迹就地换文案：色调跟着新文案走，命中 / 未命中不因为换了例子就丢色。 */
+    function titleElUpdate(node, text) {
+      if (!node) return;
+      node.textContent = text;
+      const row = node.parentNode;
+      if (!row || !row.classList) return;
+      row.classList.remove('hit', 'miss');
+      if (/命中|可改制|可复用/.test(text)) row.classList.add('hit');
+      else if (/无同类件|未命中|按新制|未匹配/.test(text)) row.classList.add('miss');
     }
     /* 进度轨迹：一条原地更新的行，专门显示"模型正在做什么、等了多久"。
        和 addToolActivity 的区别是它**只有一条**、随时被后面的 stage 覆盖，
@@ -1203,16 +1227,15 @@
         const item = document.createElement("div");
         item.setAttribute("data-agent-role", "tool-item");
         item.setAttribute("data-state", "running");
-        // 标题行本身就是折叠开关（tool-toggle），与 addToolActivity 同一套合同。
+        // 与 addToolActivity 同一套过程行合同：状态图标 + 原句标题，没有折叠 / 按钮。
         const row = document.createElement("div");
         row.className = "oc-process-row";
-        row.setAttribute("data-agent-role", "tool-toggle");
-        row.setAttribute("role", "button");
-        row.setAttribute("tabindex", "0");
-        row.setAttribute("aria-expanded", "false");
-        const i = document.createElement("i");
-        i.className = "ti ti-loader-2";
+        const i = document.createElement("span");
+        i.className = "oc-process-dot";
+        i.setAttribute("data-agent-role", "tool-state-icon");
+        i.textContent = "○";
         const sp = document.createElement("span");
+        sp.className = "oc-process-text";
         sp.setAttribute("data-agent-role", "tool-title");
         row.appendChild(i);
         row.appendChild(sp);
@@ -1221,7 +1244,7 @@
         stageEl.appendChild(tools);
         chatEl.appendChild(stageEl);
       }
-      stageEl.querySelector("span").textContent = text;
+      titleElUpdate(stageEl.querySelector('[data-agent-role="tool-title"]'), text);
       scrollChat();
     }
     function clearStage() {
@@ -2118,8 +2141,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
 
       if (d && d.stage === 'intent') {     // 信息不齐：到此为止
         STEP1_REINPUT = true;
@@ -2152,8 +2175,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
       if (!d || !d.ok) {
         addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
         return false;
@@ -2357,8 +2380,8 @@
         hideTyping();
         clearStage();
         finishStreamBubble();
-        // 清理转圈图标
-        chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+        // 过程行收尾：进行中的圆圈 → ✓
+        markTraceDone(chatEl);
         // 偶发：服务连上了但本轮无任何内容（模型空回/瞬时过载）—— 给出可重试提示
         // （无模型模式下【…】记录消息本来就静默，不提示）
         if (!turnHadError && !turnGotContent && !manualMode) {
@@ -3606,8 +3629,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
       if (!d || !d.ok) {
         addErrorBubble('第 ' + step + ' 步' + cfg.column + '计算失败：' + ((d && d.error) || '未知错误'));
         return false;
@@ -4006,8 +4029,7 @@
         else if (ev.type === 'tool_use') {
           const d = describeTool(ev.name, ev.input || {});
           const el = addToolActivity(d.main, d.source);
-          const ic = el.querySelector('.ti-loader-2');
-          if (ic) ic.className = 'ti ti-check';
+          markTraceDone(el);
         } else if (ev.type === 'ui') {
           applyUiEvent(ev.ui || {});
         }
@@ -4016,8 +4038,7 @@
       $('stepBadge').textContent = '历史记录';
       setBusy(false);
       const info = addToolActivity('已载入历史报价「' + (data.title || '') + '」，可继续对话补充或修改。');
-      const ii = info.querySelector('.ti-loader-2');
-      if (ii) ii.className = 'ti ti-history';
+      markTraceDone(info);
     }
 
     /* ================= 设置（模型 / 参数 / API Key） ================= */

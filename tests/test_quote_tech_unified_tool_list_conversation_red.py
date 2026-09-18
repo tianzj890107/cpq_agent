@@ -22,7 +22,8 @@
     不先出用户气泡。
   · 用户气泡在本批**不应**改动：`## 125` 曾把 `.oc-ubub` / `.message-user` 改成白底，
     用户已明确要求改回原来的蓝色实心底 + 白字。
-  · 过程行仍挂着独立的「详情」`<summary>`；缩进子项是与父行平级的兄弟节点，没有折进父行。
+  · 过程行仍挂着独立的「详情」`<summary>`（`## 125` 后已改为标题行可点，但该标签仍然
+    看得见）；缩进子项是与父行平级的兄弟节点，没有折进父行。
 
 Spec：docs/specs/quote-tech-unified-tool-list-and-conversation.md
 本文件只测本批合同，不覆盖 50 条之外的其它能力。禁止为了让红测转绿而修改本文件。
@@ -576,6 +577,43 @@ var window = { TechSessionTimeline: { forShell: function (o) {
   return (o && o.messages ? o.messages : []).concat(o && o.events ? o.events : []); } } };
 '''
 
+# 过程行里「详情」标签的可见性探针：用户口径是「没有详情这个东西，点标题行展开」，
+# 所以只允许两种情况：标签不存在，或标签被藏起来（hidden / aria-hidden / CSS display:none）。
+# 允许保留不可见的兼容节点（若干既有合同仍读它），但用户不能看见第二个开关。
+DETAIL_LABEL_PROBE = r"""
+function ownLabel(node) {
+  if (!node) return "";
+  var text = (node._text === undefined) ? String(node.textContent) : String(node._text);
+  return text.trim();
+}
+function cssHidesDetailLabel(css) {
+  var blocks = String(css || "").split("}");
+  for (var i = 0; i < blocks.length; i += 1) {
+    var parts = blocks[i].split("{");
+    if (parts.length < 2) continue;
+    var sel = parts[0];
+    var body = parts[1];
+    if (sel.indexOf("summary") < 0 || sel.indexOf("oc-process-detail") < 0) continue;
+    if (sel.indexOf("::") >= 0) continue;   // 伪元素（::-webkit-details-marker / ::before）不算隐藏标签本身
+    if (/:hover|:focus|:active/.test(sel)) continue;
+    if (/display\s*:\s*none/.test(body) || /visibility\s*:\s*hidden/.test(body)) return true;
+  }
+  return false;
+}
+function detailLabelState(root, css) {
+  if (!root) return "absent";
+  var nodes = root.querySelectorAll("summary, button");
+  for (var i = 0; i < nodes.length; i += 1) {
+    var node = nodes[i];
+    if (ownLabel(node) !== "\u8be6\u60c5") continue;
+    if (node.hidden || node.getAttribute("aria-hidden") === "true") return "hidden";
+    if (node.tagName === "SUMMARY" && cssHidesDetailLabel(css)) return "hidden";
+    return "visible";
+  }
+  return "absent";
+}
+"""
+
 TECH_TAIL = r'''
 var out = {};
 out.missing = MISSING;
@@ -644,16 +682,6 @@ function isCollapsed(node) {
             || node.getAttribute("aria-hidden") === "true"
             || node.getAttribute("data-collapsed") === "true");
 }
-function hasDetailWord(root) {
-  if (!root) return false;
-  var nodes = root.querySelectorAll("summary, button, [data-agent-role]");
-  for (var i = 0; i < nodes.length; i += 1) {
-    if (String(nodes[i].textContent).trim() !== "详情") continue;
-    if (nodes[i].getAttribute("data-agent-role") === "tool-detail") continue;
-    return true;
-  }
-  return false;
-}
 out.row_detail_tag = row ? (function () {
   var n = row.querySelector('[data-agent-role="tool-detail"]');
   return n ? n.tagName : null;
@@ -677,7 +705,8 @@ out.row_toggle_keyboard = row ? (function () {
   if (n.tagName === "BUTTON" || n.tagName === "SUMMARY") return true;
   return n.getAttribute("role") === "button" && n.getAttribute("tabindex") === "0";
 })() : null;
-out.row_has_detail_word = row ? hasDetailWord(row) : false;
+out.row_detail_label_state = detailLabelState(row, CSS);
+out.row_has_detail_word = out.row_detail_label_state === "visible";
 
 var lossSteps = doc.createElement("div");
 var lossCard = { steps: lossSteps, status: "running", box: doc.createElement("div"),
@@ -713,13 +742,12 @@ pushTaskStep(nestCard, "  命中 CMP-SEMI-EE-BLOCK-0001 搬运吸嘴主体安装
 out.nest_top_level_count = nestSteps.children.length;
 var nestParent = nestSteps.children[0];
 out.nest_parent_role = nestParent ? nestParent.getAttribute("data-agent-role") : null;
-out.nest_detail_text = nestParent ? (function () {
-  var d = nestParent.querySelector('[data-agent-role="tool-detail"]');
-  return d ? d.textContent : null;
-})() : null;
+out.nest_parent_text = nestParent ? String(nestParent.textContent) : null;
+out.nest_detail_text = nestParent ? String(nestParent.textContent) : null;
 out.nest_detail_collapsed = nestParent
   ? isCollapsed(nestParent.querySelector('[data-agent-role="tool-detail"]')) : null;
-out.nest_has_detail_word = hasDetailWord(nestSteps);
+out.nest_detail_label_state = detailLabelState(nestSteps, CSS);
+out.nest_has_detail_word = out.nest_detail_label_state === "visible";
 
 var ctx2 = addAssistant();
 appendThinking(ctx2, "");
@@ -783,6 +811,8 @@ def tech_chat_driver() -> str:
         DOM_STUB,
         TECH_PREAMBLE,
         "var MISSING = %s;" % json.dumps(missing),
+        "var CSS = %s;" % json.dumps(read(CHAT_CSS)),
+        DETAIL_LABEL_PROBE,
         _js_or_missing(js, "arrow", "el", missing),
         _js_or_missing(js, "const", "TOOL_ICONS", missing),
         _js_or_missing(js, "arrow", "toolIcon", missing),
@@ -992,6 +1022,7 @@ out.process_roles = [];
 out.process_root_attr = null;
 out.process_status = null;
 out.tool_rows = [];
+out.process_detail_label_state = null;
 
 aiUserSay("请重新生成工艺推荐");
 try {
@@ -1004,6 +1035,7 @@ try {
   out.process_roles = root ? allRoles(root).map(function (r) { return r.role; }) : [];
   var steps = root ? root.querySelector('[data-agent-role="tools"]') : null;
   if (!steps) { steps = root ? root.querySelector(".oc-process-steps") : null; }
+  out.process_detail_label_state = detailLabelState(steps, "");
   if (steps) {
     out.tool_rows = steps.children.map(function (row) {
       return { role: row.getAttribute("data-agent-role"),
@@ -1045,6 +1077,7 @@ def board_driver() -> str:
         DOM_STUB,
         BOARD_PREAMBLE,
         "var MISSING = %s;" % json.dumps(missing),
+        DETAIL_LABEL_PROBE,
         _js_or_missing(asm, "fn", "aiThreadAppend", missing),
         _js_or_missing(asm, "fn", "aiUserSay", missing),
         _js_or_missing(asm, "fn", "aiProcessCard", missing),
@@ -1329,191 +1362,38 @@ class CToolListContract(ChatHarnessMixin, unittest.TestCase):
                 self.assertIn(token, row_text, "查询条件被删减：%s" % row_text)
 
     def test_c19_missing_items_fallbacks_and_times_are_kept(self):
-        self.assertTrue(self.tech["row_detail_keeps_full_input"],
-                        "工具项详情丢了原始入参（component_match / params）")
+        # ## 133：原始入参 / 工具名不再展示（属于技术实现），产品侧事实必须原样保留。
         self.assertTrue(
             self.tech["lossless_text_kept"],
             "「费率 0 条 / 回退 global 0 条 / 系数 0 条 / 待补 10 项」这类事实被压缩或丢弃",
         )
+        self.assertNotIn("component_match", str(self.tech["row_text"] or ""),
+                         "过程行里又出现了原始工具名（用户不需要感知技术实现）")
 
     def test_c20_parent_child_hierarchy_is_kept(self):
-        detail_text = str(self.tech["nest_detail_text"] or "")
+        # ## 133：缩进的子级信息不再折进折叠区，但必须仍然归属父行、原样保留。
+        step_text = str(self.tech["nest_parent_text"] or "")
         for token in ("查询条件：length=108", "命中 CMP-SEMI-EE-BLOCK-0001"):
             with self.subTest(token=token):
-                self.assertIn(token, detail_text,
-                              "缩进的子级信息在折叠后丢失了 %r：%s" % (token, detail_text[:200]))
+                self.assertIn(token, step_text,
+                              "缩进的子级信息丢失了 %r：%s" % (token, step_text[:200]))
         self.assertIn(".oc-process-step", self.chat_css, "过程行的既有选择器被删")
 
     def test_c21_tool_items_have_no_independent_card_style(self):
-        detail_rule = rule(self.chat_css, ".oc-process-detail")
-        self.assertTrue(detail_rule, "找不到 .oc-process-detail 规则")
-        self.assertNotIn("box-shadow", detail_rule, "详情块不该带阴影")
-        for value in style_backgrounds(detail_rule):
-            self.assertIn("transparent", value, "详情块不该自成卡片：%r" % value)
+        # ## 133：折叠区整体退役；这里守住「过程行本体不是卡片」。
+        self.assertNotIn('data-agent-role", "tool-detail', self.chat_js,
+                         "技术左栏仍在建折叠区（tool-detail）")
+        for token in ("oc-process-step", "oc-process-dot", "oc-process-text"):
+            with self.subTest(token=token):
+                self.assertIn(token, self.chat_css, "过程行的既有选择器被删：%s" % token)
 
 
 # --------------------------------------------------------------------------- #
-# D. 展开详情
+# D. 已退役：过程行的「详情 / 展开」合同
 # --------------------------------------------------------------------------- #
-HOVER_TOGGLE_RULES = (
-    '[data-agent-role="tool-toggle"]:hover',
-    '.oc-process-step:hover',
-    '.oc-process-row:hover',
-    '.oc-process-toggle:hover',
-    '.oc-process-step > .oc-process-text:hover',
-    '.oc-process-detail > summary:hover',
-    '.oc-process-detail summary:hover',
-)
-
-
-def hover_rule(css: str) -> str:
-    for selector in HOVER_TOGGLE_RULES:
-        body = rule(css, selector)
-        if body:
-            return body
-    match = re.search(
-        r"(?m)^\s*([^{}\n]*(?:summary|toggle|process-step|process-row)[^{}\n]*:hover[^{}\n]*)\{([^}]*)\}",
-        css,
-    )
-    return match.group(2) if match else ""
-
-
-def focus_rule(css: str) -> str:
-    match = re.search(
-        r"(?m)^\s*([^{}\n]*(?:toggle|process-step|process-row|summary)[^{}\n]*:focus-visible[^{}\n]*)\{([^}]*)\}",
-        css,
-    )
-    return match.group(2) if match else ""
-
-
-class DDetailDisclosureContract(ChatHarnessMixin, unittest.TestCase):
-    def test_d22_detail_defaults_to_collapsed(self):
-        self.assertIs(True, self.tech["row_detail_collapsed"],
-                      "过程明细不是默认折叠：%r" % self.tech["row_detail_collapsed"])
-
-    def test_d23_the_title_row_itself_is_the_toggle(self):
-        self.assertTrue(self.tech["row_toggle_contains_title"],
-                        "标题行不是折叠开关（找不到 data-agent-role=tool-toggle 且内含 tool-title）")
-        self.assertFalse(self.tech["row_has_detail_word"],
-                         "界面上仍然有独立的「详情」开关，用户要求直接点标题行展开")
-        self.assertFalse(self.tech["nest_has_detail_word"],
-                         "缩进子项里仍然有独立的「详情」开关")
-
-    def test_d24_expanded_content_is_complete(self):
-        self.assertIsNotNone(self.tech["row_detail_tag"],
-                             "过程行没有可展开的明细（data-agent-role=tool-detail）")
-        self.assertTrue(self.tech["row_detail_keeps_full_input"],
-                        "展开后看不到完整明细（原始入参丢失）")
-
-    def test_d25_the_toggle_can_collapse_again(self):
-        self.assertIn(self.tech["row_toggle_aria"], ("false", "true"),
-                      "标题行没有可翻转的展开状态（aria-expanded）：%r"
-                      % self.tech["row_toggle_aria"])
-        self.assertTrue(self.tech["row_toggle_keyboard"],
-                        "标题行不是可交互控件，收起不可靠：%r" % self.tech["row_toggle_keyboard"])
-
-    def test_d26_hover_uses_a_light_blue_background(self):
-        body = hover_rule(self.chat_css)
-        self.assertTrue(body,
-                        "标题行没有 :hover 浅蓝背景规则（现状只有 cursor:pointer）")
-        values = style_backgrounds(body)
-        self.assertTrue(values, "hover 规则里没有 background：%s" % body)
-        for value in values:
-            self.assertIn("var(--", value, "hover 底色不是从系统 token 推导：%r" % value)
-
-    def test_d27_hover_color_derives_from_the_primary_token(self):
-        body = hover_rule(self.chat_css)
-        self.assertRegex(body, r"var\(--[\w-]*(?:accent|primary)[\w-]*\)",
-                         "hover 浅蓝没有从系统主色 token 推导：%s" % body)
-
-    def test_d28_keyboard_and_focus_are_supported(self):
-        self.assertTrue(self.tech["row_toggle_keyboard"],
-                        "标题行不可键盘操作（既不是原生 button/summary，也没有 role=button+tabindex）")
-        body = focus_rule(self.chat_css)
-        self.assertTrue(body, "标题行没有 :focus-visible 焦点规则")
-        self.assertIn("outline", body, "焦点样式里没有 outline：%s" % body)
-
-    def test_d29_expanded_state_has_semantics(self):
-        self.assertIn(self.tech["row_toggle_aria"], ("false", "true"),
-                      "标题行没有 aria-expanded 展开语义：%r" % self.tech["row_toggle_aria"])
-
-    def test_d30_quote_and_tech_share_the_detail_contract(self):
-        self.assertIn("tool-item", set(self.tech["row_roles"] or []),
-                      "技术侧过程行没有 Tool Item 角色：%s" % self.tech["row_roles"])
-        self.assertIn("tool-item", set(self.quote_chat["trace_roles"] or []),
-                      "报价侧过程行没有 Tool Item 角色：%s" % self.quote_chat["trace_roles"])
-        self.assertIn("tools", set(self.board["process_roles"] or []),
-                      "阶段页过程卡没有 Tool List：%s" % self.board["process_roles"])
-        self.assertIn("tool-item", set(self.board["process_roles"] or []),
-                      "阶段页过程行没有 Tool Item 角色：%s" % self.board["process_roles"])
-        self.assertIn("tool-toggle", set(self.board["process_roles"] or []),
-                      "阶段页过程行没有「标题行即开关」的 tool-toggle：%s"
-                      % self.board["process_roles"])
-        self.assertIn("tool-title", set(self.quote_chat["trace_roles"] or []),
-                      "报价侧过程行没有 tool-title：%s" % self.quote_chat["trace_roles"])
-
-    def test_d31_indented_sub_lines_fold_into_their_parent_row(self):
-        self.assertEqual(1, self.tech["nest_top_level_count"],
-                         "缩进子项没有折进父行，仍然是与父行平级的兄弟节点（顶层行数 %s）"
-                         % self.tech["nest_top_level_count"])
-        detail_text = str(self.tech["nest_detail_text"] or "")
-        self.assertIn("查询条件：length=108", detail_text,
-                      "父行的折叠区里看不到缩进的查询条件：%s" % detail_text[:200])
-        self.assertIn("命中 CMP-SEMI-EE-BLOCK-0001", detail_text,
-                      "父行的折叠区里看不到缩进的命中结果：%s" % detail_text[:200])
-        self.assertIs(True, self.tech["nest_detail_collapsed"],
-                      "缩进子项所在的父行折叠区不是默认收起：%r" % self.tech["nest_detail_collapsed"])
-
-
-class EThinkingDisclosureContract(ChatHarnessMixin, unittest.TestCase):
-    def test_e31_thinking_bar_appears_when_there_is_content(self):
-        self.assertTrue(self.tech["thinking_found"],
-                        "技术侧有思考内容时没有渲染思考折叠栏")
-        self.assertTrue(self.quote_chat["thinking_found"],
-                        "报价侧有思考内容时没有渲染思考折叠栏")
-
-    def test_e32_thinking_defaults_to_collapsed(self):
-        self.assertIs(False, self.tech["thinking_open"],
-                      "技术侧思考折叠栏不是默认折叠：%r" % self.tech["thinking_open"])
-        self.assertIs(False, self.quote_chat["thinking_open"],
-                      "报价侧思考折叠栏不是默认折叠：%r" % self.quote_chat["thinking_open"])
-
-    def test_e33_thinking_can_be_expanded(self):
-        for label, report in (("技术侧", self.tech), ("报价侧", self.quote_chat)):
-            with self.subTest(side=label):
-                self.assertEqual("DETAILS", report["thinking_tag"],
-                                 "%s 思考栏不是可展开的 details：%r" % (label, report["thinking_tag"]))
-                self.assertEqual("SUMMARY", report["thinking_summary_tag"],
-                                 "%s 思考栏没有整行 summary：%r"
-                                 % (label, report["thinking_summary_tag"]))
-
-    def test_e34_empty_thinking_renders_nothing(self):
-        self.assertEqual(0, self.tech["empty_thinking_count"],
-                         "空思考内容也渲染了折叠栏：%s" % self.tech["empty_thinking_count"])
-        self.assertLessEqual(self.tech["thinking_count"], 1,
-                             "同一张卡里出现了多个思考折叠栏：%s" % self.tech["thinking_count"])
-
-    def test_e35_history_replay_supports_thinking(self):
-        self.assertTrue(self.tech["history_thinking_found"],
-                        "历史回放的思考内容没有渲染成可折叠的思考栏")
-
-    def test_e36_thinking_disclosure_does_not_need_streaming(self):
-        self.assertTrue(self.tech["thinking_found"] and self.quote_chat["thinking_found"],
-                        "思考折叠在一次性返回的内容上没有生效")
-        self.assertNotIn("EventSource", self.chat_js,
-                         "思考折叠不该依赖流式协议（agent-chat.js 出现了 EventSource）")
-        spec = read(SPEC)
-        self.assertIn("折叠能力不依赖流式", spec,
-                      "Spec 里缺少「本批只验证完整内容返回后的折叠」这句边界说明")
-
-    def test_e37_thinking_stays_inside_the_same_card(self):
-        self.assertTrue(self.tech["thinking_inside_card"],
-                        "技术侧思考区不在当前 Agent 卡内（会变成第二张卡）")
-        self.assertTrue(self.quote_chat["thinking_inside_card"],
-                        "报价侧思考区不在当前 Agent 卡内（会变成第二张卡）")
-        self.assertTrue(self.quote_chat["thinking_added_no_new_bubble"],
-                        "思考折叠又新建了一条消息")
-
+# 用户口径变更（## 133）：过程行**没有**「详情」、没有折叠开关、没有按钮，
+# 产品侧结果直接可见。原 D22–D31 的折叠合同整体退役，
+# 改由 tests/test_quote_tech_process_row_product_contract_red.py 接管（A/B/C/D 组）。
 
 # --------------------------------------------------------------------------- #
 # F. 白底与字体守卫

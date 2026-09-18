@@ -330,58 +330,21 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-process-dot { flex-shrink: 0; width: 10px; font-size: 9px; line-height: 1.9; text-align: center; }
 /* 结果/依据行相对动作行缩进，一眼分得清「在做什么」和「做出了什么」。 */
 .oc-process-step.sub { padding-left: 14px; color: var(--oc-text-3); }
-.oc-process-step.sub.hit { color: #15803d; }
-.oc-process-step.sub.miss { color: #b45309; }
 .oc-process-text { flex: 1 1 auto; min-width: 0; word-break: break-word; white-space: pre-wrap; }
-.oc-process-step.hit { color: #15803d; }
-.oc-process-step.miss { color: #b45309; }
+/* 命中 / 未命中 / 按新制的颜色落在结论行自己的文字上（缩进子项与顶层结论行同一套类名）。
+   父行只带 has-hit / has-miss 标记，不再跟着变色 —— 颜色必须真的作用在文字上。 */
+.oc-process-step.hit > .oc-process-text,
+.oc-process-step.sub.hit > .oc-process-text { color: #15803d; }
+.oc-process-step.miss > .oc-process-text,
+.oc-process-step.sub.miss > .oc-process-text { color: #b45309; }
 .oc-process-step.err { color: #b91c1c; }
 /* 过程事件通道的专属色调：模型调用（model）与工具执行（tool）各一眼可辨，
    progress 行沿用上面的默认样式（含 ↳ 缩进与命中/未命中判定），不另起一套。 */
 .oc-process-step.model { color: #0050C4; }
 .oc-process-step.tool { color: #15803d; }
-/* 过程行的「详情」：沿用 Agent 工具卡的视觉语言（细分隔线 + 小号 summary + pre 展示 JSON）。
-   只有带结构化明细的行才建这个块，没有明细的行 DOM 与今天逐字一致。 */
-.oc-process-detail {
-  flex-basis: 100%; min-width: 0; margin-top: 1px; margin-left: 17px;
-  border-top: .5px solid var(--oc-border-3);
-  padding-top: 2px;
-}
-/* 缩进行（.sub）的明细再叠加既有的 14px，仍与过程文字左对齐。 */
-.oc-process-step.sub .oc-process-detail { margin-left: 31px; }
-/* 标题行本身就是折叠开关（[data-agent-role="tool-toggle"]）：整行 hover 浅蓝、可键盘
-   聚焦、鼠标指针为 pointer；工具项本体仍然没有背景 / 阴影 / 边框，也没有独立的「详情」开关。 */
-[data-agent-role="tool-toggle"] { cursor: pointer; border-radius: 6px; }
-[data-agent-role="tool-toggle"]:hover {
-  background: color-mix(in srgb, var(--oc-accent) 8%, white);
-}
-[data-agent-role="tool-toggle"]:focus-visible {
-  outline: 2px solid var(--oc-accent); outline-offset: 1px;
-}
-/* 缩进行折进上一条 Tool Item 的折叠明细里，不再与父项平级。 */
-.oc-process-sub { color: var(--oc-text-3); }
-/* 折叠块自己的标题行（历史契约保留「详情」二字与 ▸ 指示器）；
-   它与上面的标题行共同承担展开 / 收起，两者状态同步。 */
-.oc-process-detail > summary {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding-top: 2px; color: var(--oc-text-3);
-  font-size: 11px; line-height: 1.6; cursor: pointer; list-style: none;
-}
-.oc-process-detail > summary::before {
-  content: "▸"; font-size: 9px; line-height: 1; transition: transform .15s ease;
-}
-.oc-process-detail[open] > summary::before { transform: rotate(90deg); }
-.oc-process-detail > summary::-webkit-details-marker { display: none; }
-.oc-process-detail > summary:focus-visible {
-  outline: 2px solid var(--oc-accent); outline-offset: 1px; border-radius: 6px;
-}
-.oc-process-detail-tool { margin-top: 4px; color: var(--oc-text-3); font-size: 11px; }
-.oc-process-detail-label { margin-top: 6px; color: var(--oc-text-3); font-size: 11px; }
-.oc-process-detail pre {
-  margin: 2px 0 0; padding: 6px 8px; border-radius: 8px; background: var(--oc-bg-2);
-  color: var(--oc-text-2); font-size: 11px; line-height: 1.5; white-space: pre-wrap;
-  word-break: break-word; max-height: 240px; overflow: auto;
-}
+/* 产品侧结果行（缩进子项）归上一条 Tool Item，直接可见：没有「详情」、没有折叠、
+   没有可点控件，也不再与父项平级。 */
+.oc-process-subs { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 
 /* 零部件库检索结果：与其它卡内区块一样，不再自带边框与底色。 */
 .oc-match-card { padding: 0; }

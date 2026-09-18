@@ -144,38 +144,15 @@ function crCard(title) {
       + `<span class="oc-alabel-state is-running" data-agent-role="status">◌ 运行中</span></div>
       <div class="oc-process-steps" data-agent-role="tools"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
-  /* Tool Item 的折叠明细：缩进子项折进上一条；默认收起，展开 / 收起由标题行本身承担。 */
-  function crToolDetailBox(item) {
-    let box = item.querySelector('[data-agent-role="tool-detail"]');
-    if (box) return box;
-    box = document.createElement('div');
-    box.className = 'oc-process-detail';
-    box.setAttribute('data-agent-role', 'tool-detail');
-    box.hidden = true;
-    box.setAttribute('aria-hidden', 'true');
-    item.append(box);
-    return box;
-  }
-  function crToggleTool(item) {
-    const toggle = item.querySelector('[data-agent-role="tool-toggle"]');
-    if (!toggle) return;
-    const target = item.querySelector('[data-agent-role="tool-detail"]') || crToolDetailBox(item);
-    const next = toggle.getAttribute('aria-expanded') !== 'true';
-    toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
-    target.hidden = !next;
-    target.setAttribute('aria-hidden', next ? 'false' : 'true');
-  }
-  function crWireToolToggle(item) {
-    const toggle = item.querySelector('[data-agent-role="tool-toggle"]');
-    if (!toggle) return;
-    toggle.addEventListener('click', () => crToggleTool(item));
-    toggle.addEventListener('keydown', (event) => {
-      const key = String((event && event.key) || '');
-      if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
-      if (event && typeof event.preventDefault === 'function') event.preventDefault();
-      crToggleTool(item);
-    });
-  }
+  /* 过程行：一条业务过程 = 一个 Tool Item（[data-agent-role="tool-item"]）；行首状态图标
+     + 原句标题，产品侧结果行归上一条 Tool Item 直接可见 —— 没有「详情」、没有折叠、
+     没有按钮。命中 / 未命中 / 按新制的颜色落在结论行自己的文字上（父行只带标记）。 */
+  const STEP_TONE = (text) => (/命中/.test(text) ? 'hit'
+    : (/无同类件|按新制/.test(text) ? 'miss' : ''));
+  const STEP_ROW = (text, sub, tone) => `<div class="oc-process-step${sub ? ' sub' : ''}`
+    + `${tone ? ` ${tone}` : ''}" data-agent-role="tool-item" data-state="completed">`
+    + `<span class="oc-process-dot" data-agent-role="tool-state-icon">✓</span>`
+    + `<span class="oc-process-text" data-agent-role="tool-title">${esc(text)}</span></div>`;
   const seen = new Set();
   return {
     log(lines) {
@@ -183,23 +160,23 @@ function crCard(title) {
         if (seen.has(line)) continue;
         seen.add(line);
         const raw = String(line);
-        // 后端用前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：折进上一条的折叠区，
-        // 不再与父项平级；缩进行不新建 Tool Item。保留整句原话，不概括。
+        // 后端用前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：归上一条，
+        // 不再与父项平级；缩进行不新建第二条业务过程。保留整句原话，不概括。
         const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
         const text = raw.replace(/^[\s]*[↳·]?\s*/, '');
+        const tone = STEP_TONE(text);
         const parent = steps.children.length ? steps.children[steps.children.length - 1] : null;
         if (sub && parent) {
-          crToolDetailBox(parent).insertAdjacentHTML('beforeend',
-            `<div class="oc-process-sub">${esc(text)}</div>`);
+          let subs = parent.querySelector('.oc-process-subs');
+          if (!subs) {
+            parent.insertAdjacentHTML('beforeend', '<div class="oc-process-subs"></div>');
+            subs = parent.querySelector('.oc-process-subs');
+          }
+          if (subs) subs.insertAdjacentHTML('beforeend', STEP_ROW(text, true, tone));
+          if (tone && parent.classList && parent.classList.add) parent.classList.add(`has-${tone}`);
           continue;
         }
-        steps.insertAdjacentHTML('beforeend',
-          `<div class="oc-process-step" data-agent-role="tool-item" data-state="completed">`
-          + `<span class="oc-process-dot" data-agent-role="tool-state-icon">●</span>`
-          + `<span class="oc-process-text" data-agent-role="tool-toggle" role="button" tabindex="0" aria-expanded="false">`
-          + `<span data-agent-role="tool-title">${esc(text)}</span></span></div>`);
-        const step = steps.children[steps.children.length - 1];
-        crWireToolToggle(step);
+        steps.insertAdjacentHTML('beforeend', STEP_ROW(text, false, tone));
       }
       $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
     },
@@ -209,6 +186,14 @@ function crCard(title) {
       const interrupted = ok === 'interrupted';
       state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
       state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
+      // 卡片收尾：仍是「进行中」的过程行一次性收成完成 ✓（界面上不再留圆圈）。
+      if (!interrupted && ok) {
+        steps.querySelectorAll('[data-agent-role="tool-item"][data-state="running"]').forEach((row) => {
+          row.setAttribute('data-state', 'completed');
+          const icon = row.querySelector('[data-agent-role="tool-state-icon"]');
+          if (icon) icon.textContent = '✓';
+        });
+      }
       if (message) this.log([`  ${message}`]);
     },
   };
