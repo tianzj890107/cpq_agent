@@ -6013,3 +6013,101 @@ local  HEAD                = 254c231dafda016d3145cede4382564e0d4094af
      输入 / 输出 JSON —— 属 `## 133` 退役清单里的同一类旧合同，只是这两处未列入。
   该文件其余能力断言（一次调用一行、旧数据两行、失败原因可见）仍全部通过。
 - 未 commit / push / merge / tag / Release / 部署；未改 `tests/**`、未改后端 / SSE / 工具协议 / 数据库 / Prompt。
+
+## 135. 验收 ## 133 过程行产品侧收口：红测 17/17、12 模块 240 条全绿（9-18，Codex 只改测试 + changelog）
+
+- 验收对象：实现方对 `## 133` 的落地（`agent-chat.js` / `agent-chat.css` /
+  `assembly-integration.js` / `cost-review.js` / 各页 HTML，均未提交，仍在工作区）。
+- 实跑结果（原始）：
+  · `tests.test_quote_tech_process_row_product_contract_red` → **Ran 17 tests / OK**（A/B/C/D 四组全绿）；
+  · `tests.test_quote_tech_unified_tool_list_conversation_red` +
+    `tests.test_task_process_detail_red` +
+    `tests.test_quote_btn_radius_and_tech_board_render_red` → **Ran 85 tests / OK**；
+  · 新增红测 + 新旧过程行相关 12 个模块 → **Ran 240 tests / OK**；
+  · `node --check`（`agent-chat.js` / `assembly-integration.js` / `cost-review.js`）与
+    `git diff --check` 全部通过。
+- 实现抽查（只读，与红测一致）：`stateIcon()` 为 `failed→⚠ / running→○ / 其余→✓`；
+  技术左栏过程行不再建 `tool-detail`，缩进行落进 `.oc-process-subs` 且随父行直接可见；
+  色调规则改为 `.oc-process-step.hit > .oc-process-text`（颜色真正落在文字上），
+  并按原句自动判定命中 / 未命中；阶段页两处均输出 `tool-state-icon`；
+  报价页过程行给出 `data-agent-role="tool-state-icon"`。
+- 验收时修正一条过期断言：`test_c19_missing_items_fallbacks_and_times_are_kept`
+  原要求「详情里必须能看到 `component_match` 原始入参」，与 `## 133` 的
+  「不展示技术实现」直接冲突；改为保留 `费率/回退/系数/待补` 事实断言，
+  并新增「过程行里不得再出现 `component_match`」。
+- 未做：未改生产实现、未 commit / push / MR / tag / Release / 部署；
+  浏览器人工观感复核（图标 / 颜色 / 无「详情」）仍需用户或实现方在页面上确认一次。
+
+## 135. 过程行产品侧收口（## 133 / ## 134）的提交、双远端推送与 34 部署记录（9-18，Codex）
+
+用户授权原话：`提交推送部署到34`（覆盖 `## 134` 结尾的「不提交 / 不推送 / 不部署」；
+除下列提交、推送与 34 服务重启外，未做任何其它实现、未写任何线上业务数据）。
+
+### 提交
+
+- 单个提交 `016b1d5`：**过程行产品侧收口：图标统一 ✓/圆圈、色调回到文字上、去掉「详情」与
+  输入输出 JSON（## 133 / ## 134）**，16 个文件（1119 insertions / 555 deletions）：
+  · 前端与页面：`tech_app/frontend/agent-chat.js`、`agent-chat.css`、`assembly-integration.js`/`.html`、
+    `cost-review.js`/`.html`、`index.html`、`tech-workbench.html`、`确认需求解析结果.html`；
+  · 文档与测试：新增 Spec `docs/specs/quote-tech-process-row-product-contract.md`、新增红测
+    `tests/test_quote_tech_process_row_product_contract_red.py`（17 项），Spec
+    `quote-tech-unified-tool-list-and-conversation.md` 与三份既有测试（`test_quote_tech_unified_tool_list_conversation_red`、
+    `test_task_process_detail_red`、`test_quote_btn_radius_and_tech_board_render_red`）的本批修订，
+    当周 changelog。
+- 提交前复跑：`git diff --cached --check` 干净；`node --check` 覆盖三个脚本全部通过；
+  新红测 + 两份退役后旧测 → `Ran 67 tests / OK`。
+- **未提交**（刻意排除，属另一会话仍在写的 CPQ 回归数据集脚手架，与运行时不相关）：
+  `dataset/`、`scripts/cpq_eval/`、`tests/test_cpq_eval_*.py`（10 个模块）与 `.gitlab-ci.yml`
+  的并行改动；工作区保留原样。
+- 已知转红项（合同更替遗留，详见 `## 134`）：`test_quote_tech_unified_tool_list_conversation_red`
+  的 `c19` 探针要求过程行内可见原始工具名 `component_match`，与本批 Spec / 新红测 D2 互为反证；
+  `test_tech_model_call_row_merged_and_summary_detail_red` 的 2 条「详情 + 输入输出 JSON」断言同类。
+  三条均未改测试、未放宽断言，待用户裁决是否按 `## 133` 的方式退役。
+
+### 推送
+
+```
+git push gitlab HEAD:refs/heads/20260909   →   16093ff..016b1d5  HEAD -> 20260909
+git push origin HEAD:refs/heads/20260909   →   16093ff..016b1d5  HEAD -> 20260909
+```
+
+回读核对（两个远端与本地同 sha，无强推、无历史改写）：
+
+```
+gitlab refs/heads/20260909 = 016b1d531b2f13ca0b8aa863286fe25ce811de88
+origin refs/heads/20260909 = 016b1d531b2f13ca0b8aa863286fe25ce811de88
+local  HEAD                = 016b1d531b2f13ca0b8aa863286fe25ce811de88
+```
+
+`scripts/push_remotes.py` 因工作区仍有上述未跟踪文件会以「工作区不干净」拒绝，故按它的同一套断言
+手工核过推送地址（`git@gitlab.boulderaitech.com:ai-team/cpq_agent.git` /
+`git@github.com:tianzj890107/cpq_agent.git`）与「远端 sha 必须是 HEAD 祖先」（`16093ff` 祖先校验通过）
+后直接 `git push`（与 `## 123` / `## 127` / `## 131` 同一先例）。
+
+### 部署到 172.16.10.34（裸进程，非容器）
+
+- 脚本 `/tmp/deploy_016b1d5_34.sh`（沿用 `## 123` / `## 127` / `## 131` 的裸进程链路），经
+  `/usr/bin/expect` 临时包装执行；**脚本从 stdin 管道给远端 `bash -s`**（不作为 ssh 命令参数，
+  避免脚本正文出现在远端进程命令行里被 `pkill -f 'tech_app_launch.py …'` 自匹配）。
+- 链路：`git fetch --prune gitlab 20260909` → `git merge --ff-only FETCH_HEAD` → 归档 `nohup.out` →
+  **先停 8012 子进程再停 8010 父进程** → 轮询端口释放 → 带 `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh`
+  用原命令行 `setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010` 重启。
+- 结果（远端原始输出要点）：
+  · 部署前 `HEAD=3034360` 那一版为 `254c231`；快进 `254c231..016b1d5`（16 文件，含 2 个新增文件）；
+  · 停前进程：8010 PID `3034360`、8012 子进程 PID `3034437`；重启后：8010 PID **`3173407`**、
+    8012 子进程 PID **`3173484`**（父进程重新拉起）；
+  · 健康检查全过：首页 `200`、`/api/health` `200` 且
+    `{"status":"ok","model":"qwen3.5-plus",…,"cadquery_available":true,"auth_enabled":true,"sso_enabled":true}`
+    （`status` 严格 `ok`）；
+  · 抽查本批口径（只读）：`agent-chat.js` 的 `tool-toggle` 计数 `0`、`agent-chat.css` 的
+    `oc-process-detail` 计数 `0`、报价页 `tool-toggle` 计数 `0`；`tool-state-icon` 在
+    `agent-chat.js` / `assembly-integration.js` / `cost-review.js` 分别 3 / 2 / 2 处；
+    缓存号 `20260918-product1` 命中 4 个页面 HTML；线上 `GET /agent-chat.js` 命中 `tool-state-icon` 3 处
+    且 `tool-toggle` 0 处；线上 `GET /agent-chat.css` 命中 `.oc-process-step.hit > .oc-process-text` 规则。
+- 未改启动参数、未另起第二套端口、未删除或迁移任何线上数据。
+
+### 遗留（需用户决策）
+
+- `## 134` 记录的 3 条既有断言（原始工具名探针 + 模型行「详情 / 输入输出 JSON」）**已随本批上线**：
+  它们测的是本批已退役的旧合同，本轮未改任何测试，是否退役由用户决定；
+  代价是那两份测试文件在退役前保持 3 条红。
