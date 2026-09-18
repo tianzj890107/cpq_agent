@@ -1,0 +1,14 @@
+{
+  "fixture_id": "orphan_cost_task",
+  "note": "来源任务还在，但它关联的报价卡片已经不在了（历史归档 / 卡片被清掉）：回传必须靠业务实例号 + 明确的新建原因才能落到新卡片",
+  "tasks": [
+    {"task_id": "t_orphan1", "task_no": "TP-0300", "card_id": "c_gone", "session_id": "qs_gone",
+     "project_id": "", "task_kind": "tech_cost", "target_type": "role",
+     "target_role_code": "process_mgr", "target_user_id": "", "status": "claimed",
+     "claimed_by_user_id": "carol",
+     "payload": {"business_case_id": "bc_orphan00001", "initiator": "erin",
+                 "source_result_version": "R1"},
+     "signature": "tech_cost|role|process_mgr||", "supersedes_task_id": "",
+     "replaced_by_task_id": "", "cancel_reason": "", "note": "", "idempotency_key": ""}
+  ]
+}

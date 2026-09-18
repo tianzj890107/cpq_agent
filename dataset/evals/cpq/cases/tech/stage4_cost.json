@@ -1,0 +1,1904 @@
+{
+  "suite_id": "tech.stage4.cost",
+  "title": "技术工艺第 4 阶段：成本测算（4.1 零件成本 / 4.2 组装成本 / 4.3 汇总与财务确认）",
+  "domain": "tech",
+  "notes": "排除零件必须写 excluded_parts，不能按 0 元处理；4.3 必须由财务正式确认；金额一律 decimal 字符串。",
+  "cases": [
+    {
+      "id": "tech.s41.cost.parts_ok",
+      "version": "1.0",
+      "title": "4.1 零件成本：多个零件累加出零件合计",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s41-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_parts",
+          "project_id": "tp_k1",
+          "actor": "dave",
+          "parts": [
+            {
+              "part_id": "P01",
+              "amount": "12.5000"
+            },
+            {
+              "part_id": "P02",
+              "amount": "3.2500"
+            }
+          ],
+          "idempotency_key": "s41-ok"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "costed",
+          "included": 2,
+          "excluded": 0,
+          "parts_total": "15.7500"
+        },
+        "state": {
+          "tech.tp_k1.cost.parts": {
+            "$len": 2
+          },
+          "tech.tp_k1.cost.excluded_parts": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "cost_parts": 2
+        },
+        "forbidden": [
+          "zero_for_excluded_part",
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1"
+    },
+    {
+      "id": "tech.s41.cost.parts_excluded_declared",
+      "version": "1.0",
+      "title": "4.1 排除零件必须有 excluded_parts，不按 0 元处理",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s41-excl"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_parts",
+          "project_id": "tp_k2",
+          "actor": "dave",
+          "parts": [
+            {
+              "part_id": "P01",
+              "amount": "12.5000"
+            },
+            {
+              "part_id": "P02",
+              "amount": "9.9000",
+              "excluded": true
+            }
+          ],
+          "excluded_parts": [
+            "P02"
+          ],
+          "idempotency_key": "s41-excl"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "costed",
+          "included": 1,
+          "excluded": 1,
+          "parts_total": "12.5000"
+        },
+        "state": {
+          "tech.tp_k2.cost.parts": {
+            "$len": 1
+          },
+          "tech.tp_k2.cost.excluded_parts": {
+            "$len": 1
+          },
+          "tech.tp_k2.cost.excluded_parts.0.part_id": "P02",
+          "tech.tp_k2.cost.excluded_parts.0.excluded": true
+        },
+        "records": {
+          "cost_parts": 1
+        },
+        "forbidden": [
+          "zero_for_excluded_part"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1"
+    },
+    {
+      "id": "tech.s41.cost.excluded_not_declared",
+      "version": "1.0",
+      "title": "4.1 排除零件没在 excluded_parts 里声明：拒绝（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s41-undeclared"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_parts",
+          "project_id": "tp_k3",
+          "actor": "dave",
+          "parts": [
+            {
+              "part_id": "P01",
+              "amount": "12.5000"
+            },
+            {
+              "part_id": "P02",
+              "amount": "9.9000",
+              "excluded": true
+            }
+          ],
+          "idempotency_key": "s41-undeclared",
+          "expect": {
+            "status": 409,
+            "code": "excluded_part_not_declared"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "excluded_part_not_declared"
+        },
+        "state": {
+          "tech.tp_k3.cost.parts": {
+            "$len": 0
+          },
+          "tech.tp_k3.cost.excluded_parts": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "cost_parts": 0
+        },
+        "forbidden": [
+          "zero_for_excluded_part",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s41.cost.prereq_missing",
+      "version": "1.0",
+      "title": "4.1 前置失败：3.3 没确认不能算零件成本（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s41-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_parts",
+          "project_id": "tp_k4",
+          "actor": "dave",
+          "parts": [
+            {
+              "part_id": "P01",
+              "amount": "12.5000"
+            }
+          ],
+          "idempotency_key": "s41-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_k4.cost.parts": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "cost_parts": 0
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s41.cost.role_denied",
+      "version": "1.0",
+      "title": "4.1 权限失败：工艺工程师不能算零件成本（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s41-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_parts",
+          "project_id": "tp_k5",
+          "actor": "alice",
+          "parts": [
+            {
+              "part_id": "P01",
+              "amount": "12.5000"
+            }
+          ],
+          "idempotency_key": "s41-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_k5.cost.parts": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "cost_parts": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s42.cost.assembly_ok",
+      "version": "1.0",
+      "title": "4.2 组装成本：零件合计后再算组装成本",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s42-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_assembly",
+          "project_id": "tp_k6",
+          "actor": "dave",
+          "assembly": {
+            "amount": "3.0000"
+          },
+          "idempotency_key": "s42-ok"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "costed",
+          "assembly": {
+            "amount": "3.0000"
+          }
+        },
+        "state": {
+          "tech.tp_k6.cost.assembly.amount": "3.0000"
+        },
+        "events": [
+          {
+            "type": "cost_assembly",
+            "amount": "3.0000"
+          }
+        ],
+        "forbidden": [
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.2"
+    },
+    {
+      "id": "tech.s42.cost.assembly_rounding",
+      "version": "1.0",
+      "title": "4.2 组装成本金额保留 4 位小数（不落浮点）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s42-round"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k7",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "1.0000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_assembly",
+          "project_id": "tp_k7",
+          "actor": "dave",
+          "assembly": {
+            "amount": "12.34567"
+          },
+          "idempotency_key": "s42-round"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "costed",
+          "assembly": {
+            "amount": "12.3457"
+          }
+        },
+        "state": {
+          "tech.tp_k7.cost.assembly.amount": "12.3457"
+        },
+        "forbidden": [
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money",
+        "boundary"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.2"
+    },
+    {
+      "id": "tech.s42.cost.prereq_missing",
+      "version": "1.0",
+      "title": "4.2 前置失败：4.1 没算完不能算组装成本（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s42-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_assembly",
+          "project_id": "tp_k8",
+          "actor": "dave",
+          "assembly": {
+            "amount": "3.0000"
+          },
+          "idempotency_key": "s42-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_k8.cost.assembly": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s42.cost.role_denied",
+      "version": "1.0",
+      "title": "4.2 权限失败：工艺经理不能代财务算组装成本（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s42-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k9",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_assembly",
+          "project_id": "tp_k9",
+          "actor": "carol",
+          "assembly": {
+            "amount": "3.0000"
+          },
+          "idempotency_key": "s42-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_k9.cost.assembly": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.2",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s43.cost.total_ok",
+      "version": "1.0",
+      "title": "4.3 汇总：零件合计 + 组装成本 = 总成本，排除零件单独列出",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s43-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k10",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_total",
+          "project_id": "tp_k10",
+          "actor": "dave",
+          "idempotency_key": "s43-ok"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "totaled",
+          "total": {
+            "amount": "15.5000",
+            "parts_total": "12.5000",
+            "assembly_total": "3.0000"
+          }
+        },
+        "state": {
+          "tech.tp_k10.cost.total.amount": "15.5000",
+          "tech.tp_k10.cost.total.parts_total": "12.5000",
+          "tech.tp_k10.cost.confirmed": false
+        },
+        "events": [
+          {
+            "type": "cost_total",
+            "amount": "15.5000"
+          }
+        ],
+        "forbidden": [
+          "float_money",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.3"
+    },
+    {
+      "id": "tech.s43.cost.total_prereq_missing",
+      "version": "1.0",
+      "title": "4.3 前置失败：组装成本还没算不能汇总（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s43-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k11",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_total",
+          "project_id": "tp_k11",
+          "actor": "dave",
+          "idempotency_key": "s43-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_k11.cost.total": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s43.cost.confirm_ok",
+      "version": "1.0",
+      "title": "4.3 财务正式确认：确认后 4.3 才算完成",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s43-conf"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k12",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_total",
+          "project_id": "tp_k12",
+          "actor": "dave",
+          "idempotency_key": "s43-total"
+        },
+        {
+          "op": "tech_cost_confirm",
+          "project_id": "tp_k12",
+          "actor": "dave",
+          "idempotency_key": "s43-conf"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_k12",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "5.1",
+          "completed_substeps": {
+            "$contains": "4.3"
+          }
+        },
+        "state": {
+          "tech.tp_k12.cost.confirmed": true,
+          "tech.tp_k12.cost.confirmed_by": "dave"
+        },
+        "events": [
+          {
+            "type": "cost_confirmed",
+            "actor": "dave"
+          }
+        ],
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.3"
+    },
+    {
+      "id": "tech.s43.cost.confirm_role_denied",
+      "version": "1.0",
+      "title": "4.3 权限失败：工艺角色不能代财务确认成本（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s43-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k13",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_confirm",
+          "project_id": "tp_k13",
+          "actor": "alice",
+          "idempotency_key": "s43-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_k13.cost.confirmed": false
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.3",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s43.cost.confirm_before_total",
+      "version": "1.0",
+      "title": "4.3 没有汇总金额不能确认（409 missing_prerequisite）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s43-early"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_k14",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_cost_confirm",
+          "project_id": "tp_k14",
+          "actor": "dave",
+          "idempotency_key": "s43-early",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_k14.cost.confirmed": false
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.3",
+      "failure_type": "missing_prerequisite"
+    }
+  ]
+}

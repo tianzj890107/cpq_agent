@@ -1,0 +1,1119 @@
+{
+  "suite_id": "concurrency.task.pool",
+  "title": "任务池与状态机：原子领取、状态转换、重复完成、取消与完成竞争",
+  "domain": "concurrency",
+  "notes": "并发用例一律用 barrier + 线程 + 原子更新 / 唯一约束裁决；不使用 sleep，也不做串行 SELECT-INSERT 模拟。",
+  "cases": [
+    {
+      "id": "conc.task.atomic_claim_two_workers",
+      "version": "1.0",
+      "title": "公共任务池：两人同时领取只有一个成功（barrier + 原子更新）",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct1-send",
+        "actors": {
+          "carol2": {
+            "roles": [
+              "process_mgr"
+            ]
+          }
+        }
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct1",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000001",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct1-send"
+        },
+        {
+          "op": "task_claim_concurrent",
+          "task_id": "t_001",
+          "actors": [
+            "carol",
+            "carol2"
+          ]
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "concurrent_claim_done",
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          }
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          }
+        },
+        "state": {
+          "tasks.t_001.status": "claimed"
+        },
+        "records": {
+          "tasks_claimed": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "conc.task.claim_same_actor_again",
+      "version": "1.0",
+      "title": "同一人重复领取自己的任务：幂等返回，不写第二条消息",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct2-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000002",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct2",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000002",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct2-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol",
+          "expect": {
+            "code": "claimed"
+          }
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol",
+          "expect": {
+            "code": "already_claimed_by_you",
+            "idempotent": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_claimed_by_you",
+          "idempotent": true
+        },
+        "records": {
+          "tasks_claimed": 1,
+          "messages_total": 3
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.task.claim_wrong_role",
+      "version": "1.0",
+      "title": "角色不匹配的人不能领取公共任务（403）",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "viewer",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct3-send",
+        "actors": {
+          "heidi": {
+            "roles": [
+              "viewer"
+            ]
+          }
+        }
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000003",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct3",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000003",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct3-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "heidi",
+          "expect": {
+            "status": 403,
+            "code": "task_not_assigned_to_you"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "task_not_assigned_to_you"
+        },
+        "state": {
+          "tasks.t_001.status": "open",
+          "tasks.t_001.claimed_by_user_id": ""
+        },
+        "records": {
+          "tasks_claimed": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsafe_claim"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "conc.task.claim_user_targeted",
+      "version": "1.0",
+      "title": "指定到人的任务：别人领取被拒，本人领取成功",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct4-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000004",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct4",
+          "actor": "erin",
+          "task_kind": "handoff",
+          "target_type": "user",
+          "target_user_id": "carol",
+          "payload": {
+            "business_case_id": "bc_task0000004",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct4-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "alice",
+          "expect": {
+            "status": 403,
+            "code": "task_not_assigned_to_you"
+          }
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol",
+          "expect": {
+            "code": "claimed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "claimed",
+          "claimed_by": "carol",
+          "arbiter": "atomic_update"
+        },
+        "state": {
+          "tasks.t_001.status": "claimed",
+          "tasks.t_001.claimed_by_user_id": "carol"
+        },
+        "records": {
+          "tasks_claimed": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "negative",
+        "permission",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "conc.task.claim_cancelled",
+      "version": "1.0",
+      "title": "已取消的任务不能再次领取（409 task_not_claimable）",
+      "domain": "concurrency",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct5-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000005",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct5",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000005",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct5-send"
+        },
+        {
+          "op": "task_cancel",
+          "task_id": "t_001",
+          "actor": "erin",
+          "reason": "需求撤回"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol",
+          "expect": {
+            "status": 409,
+            "code": "task_not_claimable"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "task_not_claimable"
+        },
+        "state": {
+          "tasks.t_001.status": "cancelled",
+          "tasks.t_001.claimed_by_user_id": ""
+        },
+        "records": {
+          "tasks_cancelled": 1,
+          "tasks_claimed": 0
+        },
+        "forbidden": [
+          "unsafe_claim",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "conc.task.claim_completed",
+      "version": "1.0",
+      "title": "已完成的任务不能再被领取（409 task_not_claimable）",
+      "domain": "concurrency",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct6-send",
+        "actors": {
+          "bob2": {
+            "roles": [
+              "process_mgr"
+            ]
+          }
+        }
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct6",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000006",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct6",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000006",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct6-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "carol",
+          "result_version": "R1",
+          "idempotency_key": "ct6-done"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "bob2",
+          "expect": {
+            "status": 409,
+            "code": "task_not_claimable"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "task_not_claimable"
+        },
+        "state": {
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "tasks_completed": 1,
+          "tasks_claimed": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "unsafe_claim"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "conc.task.complete_repeat_no_duplicate",
+      "version": "1.0",
+      "title": "重复完成同一任务：不重复写消息 / 审计 / 快照",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct7-done"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct7",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000007",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct7",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000007",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct7-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "carol",
+          "result_version": "R1",
+          "idempotency_key": "ct7-done",
+          "expect": {
+            "code": "completed"
+          }
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "carol",
+          "result_version": "R1",
+          "idempotency_key": "ct7-done",
+          "expect": {
+            "code": "already_completed",
+            "idempotent": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_completed",
+          "idempotent": true
+        },
+        "state": {
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "tasks_completed": 1,
+          "messages_total": 4
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.task.complete_by_other",
+      "version": "1.0",
+      "title": "任务只能由领取者完成：他人完成被拒（403）",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct8-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct8",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000008",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct8",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000008",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct8-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "dave",
+          "result_version": "R1",
+          "idempotency_key": "ct8-done",
+          "expect": {
+            "status": 403,
+            "code": "task_not_owned_by_you"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "task_not_owned_by_you"
+        },
+        "state": {
+          "tasks.t_001.status": "claimed",
+          "tasks.t_001.claimed_by_user_id": "carol"
+        },
+        "records": {
+          "tasks_completed": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "conc.task.cancel_idempotent",
+      "version": "1.0",
+      "title": "取消任务幂等：第二次返回 already_cancelled",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct9-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct9",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000009",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct9",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000009",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct9-send"
+        },
+        {
+          "op": "task_cancel",
+          "task_id": "t_001",
+          "actor": "erin",
+          "reason": "撤回",
+          "expect": {
+            "code": "cancelled"
+          }
+        },
+        {
+          "op": "task_cancel",
+          "task_id": "t_001",
+          "actor": "erin",
+          "reason": "撤回",
+          "expect": {
+            "code": "already_cancelled",
+            "idempotent": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_cancelled",
+          "idempotent": true
+        },
+        "state": {
+          "tasks.t_001.status": "cancelled"
+        },
+        "records": {
+          "tasks_cancelled": 1,
+          "messages_total": 3
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.task.complete_after_cancel",
+      "version": "1.0",
+      "title": "已取消的任务不能完成（409 task_cancelled）",
+      "domain": "concurrency",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct10-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct10",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000010",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct10",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000010",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct10-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_cancel",
+          "task_id": "t_001",
+          "actor": "erin",
+          "reason": "需求变更"
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "carol",
+          "result_version": "R1",
+          "idempotency_key": "ct10-done",
+          "expect": {
+            "status": 409,
+            "code": "task_cancelled"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "task_cancelled"
+        },
+        "state": {
+          "tasks.t_001.status": "cancelled"
+        },
+        "records": {
+          "tasks_completed": 0,
+          "tasks_cancelled": 1
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "conc.task.cancel_vs_complete_race",
+      "version": "1.0",
+      "title": "取消与完成并发竞争：只有一个终态写成功",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct11-send"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct11",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000011",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct11",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000011",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct11-send"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_cancel_vs_complete_concurrent",
+          "task_id": "t_001",
+          "completer": "carol",
+          "canceller": "erin",
+          "result_version": "R1"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "race_done",
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          }
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          }
+        },
+        "state": {
+          "tasks.t_001.status": {
+            "$any_of": [
+              "completed",
+              "cancelled"
+            ]
+          }
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "conc.task.list_scope",
+      "version": "1.0",
+      "title": "待办清单只列出自己角色 / 自己的任务，看不到别人的",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ct12-a"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ct12",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_task0000012",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct12",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000012",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct12-a"
+        },
+        {
+          "op": "task_send",
+          "session_id": "ct12",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_task0000012",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ct12-b"
+        },
+        {
+          "op": "task_list",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "count": 1,
+          "tasks": [
+            "t_001"
+          ]
+        },
+        "state": {
+          "tasks.t_001.target_role_code": "process_mgr",
+          "tasks.t_002.target_role_code": "finance_mgr"
+        },
+        "records": {
+          "tasks_total": 2,
+          "tasks_open": 2
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ]
+    }
+  ]
+}

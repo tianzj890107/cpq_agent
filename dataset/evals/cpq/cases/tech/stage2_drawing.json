@@ -1,0 +1,1398 @@
+{
+  "suite_id": "tech.stage2.drawing",
+  "title": "技术工艺第 2 阶段：图纸解析（2.1 解析 / 0 零件人工确认 / 看板内展开）",
+  "domain": "tech",
+  "notes": "2.1 解析出 0 个零件必须人工确认才算完成；零件详情在看板内部展开；刷新失败保留上次状态。",
+  "cases": [
+    {
+      "id": "tech.s21.drawing.parse_ok",
+      "version": "1.0",
+      "title": "2.1 图纸解析：解析出 12 个零件并放行 3.1",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-ok",
+        "fixture": "documents/drawing_parts_12.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d1",
+          "actor": "alice",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_d1",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "3.1",
+          "completed_substeps": {
+            "$contains": "2.1"
+          }
+        },
+        "state": {
+          "tech.tp_d1.drawing.parts": 12,
+          "tech.tp_d1.drawing.parsed": true,
+          "tech.tp_d1.drawing.ir": true,
+          "tech.tp_d1.drawing.empty_confirmed": false
+        },
+        "records": {
+          "drawing_parses": 1
+        },
+        "events": [
+          {
+            "type": "drawing_parsed",
+            "parts": 12
+          }
+        ],
+        "forbidden": [
+          "legacy_wording",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1"
+    },
+    {
+      "id": "tech.s21.drawing.empty_needs_confirm",
+      "version": "1.0",
+      "title": "2.1 解析出 0 个零件：不算完成，必须人工确认",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-empty",
+        "fixture": "documents/drawing_empty.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d2",
+          "actor": "alice",
+          "fixture": "documents/drawing_empty.json",
+          "idempotency_key": "s21-empty",
+          "expect": {
+            "code": "empty_result",
+            "needs_manual_confirm": true
+          }
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_d2",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "next_action": "2.1",
+          "completed_substeps": {
+            "$len": 3
+          }
+        },
+        "state": {
+          "tech.tp_d2.drawing.parts": 0,
+          "tech.tp_d2.drawing.empty_confirmed": false
+        },
+        "records": {
+          "drawing_parses": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s21.drawing.empty_confirm_ok",
+      "version": "1.0",
+      "title": "2.1 0 零件后人工确认：这时才算完成并放行 3.1",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-confirm",
+        "fixture": "documents/drawing_empty.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d3",
+          "actor": "alice",
+          "fixture": "documents/drawing_empty.json",
+          "idempotency_key": "s21-empty2"
+        },
+        {
+          "op": "tech_drawing_confirm_empty",
+          "project_id": "tp_d3",
+          "actor": "alice",
+          "idempotency_key": "s21-confirm"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_d3",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "next_action": "3.1",
+          "completed_substeps": {
+            "$contains": "2.1"
+          }
+        },
+        "state": {
+          "tech.tp_d3.drawing.empty_confirmed": true,
+          "tech.tp_d3.drawing.empty_confirmed_by": "alice"
+        },
+        "records": {
+          "drawing_parses": 1
+        },
+        "events": [
+          {
+            "type": "drawing_empty_confirmed"
+          }
+        ],
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "boundary"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1"
+    },
+    {
+      "id": "tech.s21.drawing.empty_confirm_wrong",
+      "version": "1.0",
+      "title": "2.1 解析结果不是 0 个零件时不能「确认无零件」（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-wrong"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_confirm_empty",
+          "project_id": "tp_d4",
+          "actor": "alice",
+          "idempotency_key": "s21-wrong",
+          "expect": {
+            "status": 409,
+            "code": "not_empty_result"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "not_empty_result"
+        },
+        "state": {
+          "tech.tp_d4.drawing.empty_confirmed": false,
+          "tech.tp_d4.drawing.parts": 12
+        },
+        "records": {
+          "drawing_parses": 0
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s21.drawing.prereq_missing",
+      "version": "1.0",
+      "title": "2.1 前置失败：1.3 审核没通过就不能解析图纸（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-skip",
+        "fixture": "documents/drawing_parts_12.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d5",
+          "actor": "alice",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_d5.drawing.parsed": false,
+          "tech.tp_d5.drawing.parts": 0
+        },
+        "records": {
+          "drawing_parses": 0
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s21.drawing.role_denied",
+      "version": "1.0",
+      "title": "2.1 权限失败：审核员角色不能跑图纸解析（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-deny",
+        "fixture": "documents/drawing_parts_12.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d6",
+          "actor": "frank",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_d6.drawing.parsed": false
+        },
+        "records": {
+          "drawing_parses": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s21.drawing.part_in_board",
+      "version": "1.0",
+      "title": "2.1 零件详情在看板内部展开（不落到父壳上层）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-part"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d7",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_part_open",
+          "part_id": "P03",
+          "container": "board",
+          "view": "3d"
+        },
+        {
+          "op": "tech_part_open",
+          "part_id": "P03",
+          "container": "board",
+          "view": "2d"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "OK",
+          "container": "board",
+          "view": "2d"
+        },
+        "state": {
+          "tech.tp_d7.drawing.parts": 12
+        },
+        "events": [
+          {
+            "type": "part_opened",
+            "container": "board"
+          }
+        ],
+        "ui_protocol": {
+          "part_detail_in_board": true
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-home-project-cards-and-agent-history.md"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1"
+    },
+    {
+      "id": "tech.s21.drawing.part_parent_rejected",
+      "version": "1.0",
+      "title": "2.1 零件详情请求父壳图层：被拒（422 container_not_supported）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-part-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_part_open",
+          "part_id": "P03",
+          "container": "shell",
+          "view": "3d",
+          "expect": {
+            "status": 422,
+            "code": "container_not_supported"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "container_not_supported"
+        },
+        "state": {
+          "tech.tp_d8.drawing.parts": 12
+        },
+        "ui_protocol": {
+          "part_detail_in_board": true
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "negative",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-home-project-cards-and-agent-history.md"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "ui_protocol_violation"
+    },
+    {
+      "id": "tech.s21.drawing.refresh_failure_keeps_state",
+      "version": "1.0",
+      "title": "2.1 刷新失败：保留上次解析结果并提示，不清空",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-refresh"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d9",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_refresh",
+          "project_id": "tp_d9",
+          "actor": "alice",
+          "fail": true,
+          "expect": {
+            "status": 503,
+            "code": "refresh_failed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 503,
+          "code": "refresh_failed"
+        },
+        "state": {
+          "tech.tp_d9.drawing.parts": 12,
+          "tech.tp_d9.drawing.parsed": true
+        },
+        "records": {
+          "drawing_parses": 0
+        },
+        "ui_protocol": {
+          "refresh_failure_keeps_state": true
+        },
+        "forbidden": [
+          "refresh_cleared_state"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "refresh",
+        "failure",
+        "recovery"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "refresh_failure"
+    },
+    {
+      "id": "tech.s21.drawing.repeat_parse_no_duplicate",
+      "version": "1.0",
+      "title": "2.1 重复点击解析：不重复生成零件，结果保持一致",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-rep2",
+        "fixture": "documents/drawing_parts_12.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d10",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d10",
+          "actor": "alice",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-rep1",
+          "expect": {
+            "code": "parsed"
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d10",
+          "actor": "alice",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-rep2",
+          "expect": {
+            "code": "parsed",
+            "parts": 12
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "parsed",
+          "parts": 12,
+          "needs_manual_confirm": false
+        },
+        "state": {
+          "tech.tp_d10.drawing.parts": 12
+        },
+        "records": {
+          "drawing_parses": 2,
+          "projects": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1",
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "tech.s21.drawing.projection_5x13",
+      "version": "1.0",
+      "title": "2.1 完成后统一投影始终返回 5 个阶段 / 13 个子步骤",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-proj"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d11",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_d11",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "3.1",
+          "refresh_ok": true,
+          "completed_substeps": [
+            "1.1",
+            "1.2",
+            "1.3",
+            "2.1"
+          ]
+        },
+        "state": {
+          "tech.tp_d11.drawing.parts": 12
+        },
+        "records": {
+          "projections": 1
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "projection"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-workflow-five-phase-naming.md"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1"
+    },
+    {
+      "id": "tech.s21.drawing.no_cross_project_isolation",
+      "version": "1.0",
+      "title": "2.1 解析只落在本项目：另一个项目图纸状态不受影响",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s21-iso",
+        "fixture": "documents/drawing_parts_12.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d12",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_d13",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_drawing_parse",
+          "project_id": "tp_d12",
+          "actor": "alice",
+          "fixture": "documents/drawing_parts_12.json",
+          "idempotency_key": "s21-iso"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "parsed",
+          "parts": 12
+        },
+        "state": {
+          "tech.tp_d12.drawing.parts": 12,
+          "tech.tp_d13.drawing.parts": 0,
+          "tech.tp_d13.drawing.parsed": false
+        },
+        "records": {
+          "projects": 2,
+          "drawing_parses": 1
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "isolation"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "drawing",
+      "sub_step": "2.1"
+    }
+  ]
+}

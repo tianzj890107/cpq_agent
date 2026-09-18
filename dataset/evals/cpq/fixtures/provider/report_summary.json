@@ -1,0 +1,9 @@
+{
+  "provider_id": "rec-report-summary",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "5.1 汇总结果"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "5.1 汇总结果",
+      "values": {"结论": "工艺可行", "风险": ["焊接变形"]}}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

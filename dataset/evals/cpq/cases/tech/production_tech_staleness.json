@@ -1,0 +1,181 @@
+{
+  "suite_id": "production_tech_staleness",
+  "domain": "tech",
+  "title": "真实生产函数：输入变化标 stale / 刷新失败不伪造成功（production_unit）",
+  "notes": "用真实 backend.storage.store 与 backend.services.workflow_projection；数据落在隔离临时目录，不读真实工程数据。",
+  "cases": [
+    {
+      "id": "tech.real.attachment_change_marks_downstream_stale",
+      "version": "1.0",
+      "title": "新增/替换附件走真实 store：input_revision 递增且 derived_results_stale 置真",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "add_attachment"
+      },
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "tech/params_gap.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "p": {
+            "owner": "carol",
+            "filename": "v1.dxf"
+          }
+        },
+        "steps": [
+          {
+            "id": "add",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "p"
+                },
+                "filename": "v2.dxf",
+                "data": {
+                  "$bytes": "cpq-eval-attachment"
+                },
+                "author": "carol"
+              }
+            }
+          },
+          {
+            "id": "meta",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_meta",
+              "args": {
+                "project_id": {
+                  "$project_id": "p"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.meta.result.derived_results_stale": true,
+          "steps.meta.result.input_revision": {
+            "$gte": 2
+          },
+          "steps.meta.result.source_filename": "v1.dxf"
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 2
+          }
+        },
+        "forbidden": [
+          "stale_written_as_fresh"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "stale",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "stale_upstream",
+      "stage": "drawing",
+      "sub_step": "2.1"
+    },
+    {
+      "id": "tech.real.projection_refresh_failure_not_faked",
+      "version": "1.0",
+      "title": "刷新读取失败：真实投影返回 refresh_ok=false 与明确原因，不伪造成功状态",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.workflow_projection",
+        "function": "build_projection"
+      },
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "tech/params_gap.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {},
+        "steps": [
+          {
+            "id": "proj",
+            "call": {
+              "args": {
+                "project_id": "deadbeef0000",
+                "user": {
+                  "$identity": "engineer"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.proj.result.refresh_ok": false,
+          "steps.proj.result.stages": {
+            "$len": 13
+          },
+          "steps.proj.result.refresh_error": {
+            "$contains_text": "不存在"
+          }
+        },
+        "forbidden": [
+          "refresh_cleared_state",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "refresh",
+        "negative"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "module:backend.services.workflow_projection"
+      ],
+      "failure_type": "refresh_failure",
+      "stage": "drawing",
+      "sub_step": "2.1"
+    }
+  ]
+}

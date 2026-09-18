@@ -1,0 +1,1034 @@
+{
+  "suite_id": "cross_agent.production_handoff_linkage",
+  "title": "跨 Agent 回传关联（真实 cpq_case_link / cpq_wf / store 纯函数与真实落库）",
+  "domain": "cross_agent",
+  "cases": [
+    {
+      "id": "xagent.real.case_link_single_candidate_linked",
+      "version": "1.0",
+      "title": "跨 Agent 回传落点判定：唯一候选直接落回该报价会话，实例号取自关联文档",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_case_link",
+        "function": "decide"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "carol",
+            "filename": "tech.dxf",
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          }
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "decide",
+            "call": {
+              "args": {
+                "candidates": [
+                  {
+                    "quote_session_id": "QS-77",
+                    "linked_by": "session",
+                    "card_id": "C-1"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.decide.result.code": "linked",
+          "steps.decide.result.quote_session_id": "QS-77",
+          "steps.decide.result.linked_by": "session"
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_case_link"
+      ]
+    },
+    {
+      "id": "xagent.real.case_link_multiple_candidates_stops",
+      "version": "1.0",
+      "title": "多候选时必须停下让人选：即使带了新建原因也不许自动挑一个，避免串到别人的报价会话",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_case_link",
+        "function": "decide"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "decide",
+            "call": {
+              "args": {
+                "candidates": [
+                  {
+                    "quote_session_id": "QS-A",
+                    "linked_by": "session"
+                  },
+                  {
+                    "quote_session_id": "QS-B",
+                    "linked_by": "task"
+                  }
+                ],
+                "create_new": true,
+                "create_reason": "看起来像新单"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.decide.result.code": "multiple_candidates",
+          "steps.decide.result.candidates": {
+            "$len": 2
+          }
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_case_link"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "xagent.real.case_link_no_candidate_does_not_create",
+      "version": "1.0",
+      "title": "没有候选且没有明确「新建」要求时不得自动建单：回传落到空会话会把数据写进错项目",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_case_link",
+        "function": "decide"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "empty",
+            "call": {
+              "args": {
+                "candidates": []
+              }
+            }
+          },
+          {
+            "id": "reason_only",
+            "call": {
+              "args": {
+                "candidates": [],
+                "create_new": true
+              }
+            }
+          },
+          {
+            "id": "explicit",
+            "call": {
+              "args": {
+                "candidates": [],
+                "create_new": true,
+                "create_reason": "确认是新产品",
+                "tech_project_id": "tp-x"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.empty.result.code": "no_candidate",
+          "steps.reason_only.result.code": "no_candidate",
+          "steps.explicit.result.code": "create_new",
+          "steps.explicit.result.recovery_reason": "确认是新产品"
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_case_link"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "xagent.real.dedupe_same_card_by_session",
+      "version": "1.0",
+      "title": "同一张报价卡片的多种命中方式按会话号去重：并发回传不会因为命中方式不同被判成两个候选",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_case_link",
+        "function": "dedupe_candidates"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "dedupe",
+            "call": {
+              "args": {
+                "candidates": [
+                  {
+                    "quote_session_id": "QS-77",
+                    "linked_by": "session"
+                  },
+                  {
+                    "quote_session_id": "QS-77",
+                    "linked_by": "case",
+                    "business_case_id": "BC-1"
+                  },
+                  {
+                    "quote_session_id": "QS-77",
+                    "linked_by": "task",
+                    "card_id": "C-1"
+                  },
+                  {
+                    "quote_session_id": "QS-78",
+                    "linked_by": "session"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.dedupe.result": {
+            "$len": 2
+          },
+          "steps.dedupe.result.0.quote_session_id": "QS-77",
+          "steps.dedupe.result.0.linked_by": "case",
+          "steps.dedupe.result.0.card_id": "C-1"
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "normal",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_case_link"
+      ]
+    },
+    {
+      "id": "xagent.real.business_case_roundtrip_isolated_per_project",
+      "version": "1.0",
+      "title": "来源报价关联按项目隔离：写入 A 项目后 B 项目读回来仍是空的，防止串项目",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "load_business_case"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech_a": {
+            "owner": "carol",
+            "filename": "a.dxf"
+          },
+          "tech_b": {
+            "owner": "carol",
+            "filename": "b.dxf"
+          }
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "save",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "save_business_case",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech_a"
+                },
+                "link": {
+                  "business_case_id": "BC-2026-0001",
+                  "quote_session_id": "QS-77",
+                  "source_task_id": "TS-77",
+                  "linked_by": "erin"
+                },
+                "author": "erin"
+              }
+            }
+          },
+          {
+            "id": "load_a",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "tech_a"
+                }
+              }
+            }
+          },
+          {
+            "id": "load_b",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "tech_b"
+                }
+              }
+            }
+          },
+          {
+            "id": "links_a",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "_quote_link_visible",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech_a"
+                }
+              }
+            }
+          },
+          {
+            "id": "links_b",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "_quote_link_visible",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech_b"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.load_a.result.quote_session_id": "QS-77",
+          "steps.load_b.result": {
+            "$len": 0
+          },
+          "steps.links_a.result": true,
+          "steps.links_b.result": false
+        },
+        "records": {
+          "unit_calls": 5
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.storage.store"
+      ]
+    },
+    {
+      "id": "xagent.real.advance_step_never_regresses",
+      "version": "1.0",
+      "title": "晚到的技术回传不得让报价 current_step 倒退：advance_step_no 只前进",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "advance_step_no"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "late",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 4
+                },
+                "step_no": 2
+              }
+            }
+          },
+          {
+            "id": "forward",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 2
+                },
+                "step_no": 4
+              }
+            }
+          },
+          {
+            "id": "same",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 4
+                },
+                "step_no": 4
+              }
+            }
+          },
+          {
+            "id": "fresh",
+            "call": {
+              "args": {
+                "card": {},
+                "step_no": 1
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.late.result": 4,
+          "steps.forward.result": 4,
+          "steps.same.result": 4,
+          "steps.fresh.result": 1
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative",
+        "stale"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "stale_upstream"
+    },
+    {
+      "id": "xagent.real.dispatch_signature_same_request_same_key",
+      "version": "1.0",
+      "title": "同一件事的派发签名逐项相等即可幂等：重复回传复用同一个签名，不同内容必须换签名",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "dispatch_signature"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "first",
+            "call": {
+              "args": {
+                "target_type": "role",
+                "target_role_code": "finance_mgr",
+                "target_user_id": "u-1",
+                "note": "请算成本",
+                "payload": {
+                  "result_version": "V3"
+                }
+              }
+            }
+          },
+          {
+            "id": "repeat",
+            "call": {
+              "args": {
+                "target_type": "role",
+                "target_role_code": "finance_mgr",
+                "target_user_id": "u-1",
+                "note": "请算成本",
+                "payload": {
+                  "result_version": "V3"
+                }
+              }
+            }
+          },
+          {
+            "id": "changed",
+            "call": {
+              "args": {
+                "target_type": "role",
+                "target_role_code": "finance_mgr",
+                "target_user_id": "u-1",
+                "note": "请算成本",
+                "payload": {
+                  "result_version": "V4"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.first.result": {
+            "$len": 5
+          },
+          "steps.first.result.3": "请算成本",
+          "steps.first.result.4": "V3",
+          "steps.repeat.result.4": "V3",
+          "steps.changed.result.4": "V4",
+          "steps.changed.result.2": "u-1"
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request",
+      "notes": "签名是幂等键的业务基础；真实比较在测试里用 compare 判定 first == repeat 且 changed 不同。"
+    },
+    {
+      "id": "xagent.real.finance_handoff_gate_reads_project_state",
+      "version": "1.0",
+      "title": "财务角色池可读的判据来自项目状态本身（plan.finance_handoff），不依赖参与者表",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "_finance_handoff_visible"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "with_sent": {
+            "owner": "carol",
+            "filename": "s.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00"
+              }
+            }
+          },
+          "task_only": {
+            "owner": "carol",
+            "filename": "t.dxf",
+            "plan": {
+              "finance_handoff": {
+                "task_id": "T-9"
+              }
+            }
+          },
+          "blank": {
+            "owner": "carol",
+            "filename": "b.dxf",
+            "plan": {
+              "finance_handoff": {}
+            }
+          },
+          "none": {
+            "owner": "carol",
+            "filename": "n.dxf"
+          }
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "with_sent",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "with_sent"
+                }
+              }
+            }
+          },
+          {
+            "id": "task_only",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "task_only"
+                }
+              }
+            }
+          },
+          {
+            "id": "blank",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "blank"
+                }
+              }
+            }
+          },
+          {
+            "id": "none",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "none"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.with_sent.result": true,
+          "steps.task_only.result": true,
+          "steps.blank.result": false,
+          "steps.none.result": false
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:backend.services.project_access"
+      ]
+    },
+    {
+      "id": "xagent.real.project_tokens_are_12_hex_and_unique",
+      "version": "1.0",
+      "title": "项目身份唯一来源：真实 store 创建的项目号是 12 位、互不相同、可被真实 ACL 判定",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "can_read"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "a": {
+            "owner": "carol",
+            "filename": "a.dxf"
+          },
+          "b": {
+            "owner": "carol",
+            "filename": "b.dxf"
+          }
+        },
+        "identities": {
+          "manager": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "a",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_read",
+              "args": {
+                "user": {
+                  "$identity": "manager"
+                },
+                "meta": {
+                  "$project": "a"
+                }
+              }
+            }
+          },
+          {
+            "id": "b",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_read",
+              "args": {
+                "user": {
+                  "$identity": "manager"
+                },
+                "meta": {
+                  "$project": "b"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.a.result": true,
+          "steps.b.result": true,
+          "projects.a": {
+            "$len": 12
+          },
+          "projects.b": {
+            "$len": 12
+          }
+        },
+        "records": {
+          "unit_calls": 2,
+          "projects": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.services.project_access"
+      ]
+    },
+    {
+      "id": "xagent.real.handback_resumes_quote_forward",
+      "version": "1.0",
+      "title": "报价从回传点继续执行：工艺确认推进到第 2 步、成本回传推进到第 3 步，重复/晚到回传不再改动",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "advance_step_no"
+      },
+      "roles": [
+        "sales_mgr",
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "step2",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 1
+                },
+                "step_no": 2
+              }
+            }
+          },
+          {
+            "id": "step3",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 2
+                },
+                "step_no": 3
+              }
+            }
+          },
+          {
+            "id": "replay",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 3
+                },
+                "step_no": 3
+              }
+            }
+          },
+          {
+            "id": "late_cost",
+            "call": {
+              "args": {
+                "card": {
+                  "current_step": 3
+                },
+                "step_no": 2
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.step2.result": 2,
+          "steps.step3.result": 3,
+          "steps.replay.result": 3,
+          "steps.late_cost.result": 3
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "normal",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request"
+    }
+  ],
+  "notes": "全部直接调用生产模块；不断言 Sim 状态机。"
+}

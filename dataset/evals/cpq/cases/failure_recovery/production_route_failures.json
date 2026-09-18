@@ -1,0 +1,635 @@
+{
+  "suite_id": "failure_recovery.production_route_failures",
+  "title": "失败与恢复：真实路由的状态码 / 错误文案 / 幂等与不可枚举",
+  "domain": "failure_recovery",
+  "cases": [
+    {
+      "id": "fail.real.missing_project_returns_404_with_trace",
+      "version": "1.0",
+      "title": "不存在的项目号：真实路由返回 404「项目不存在」并带 trace_id，不是 500",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "process_engineer",
+        "admin"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "grace": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "admin": {
+            "username": "grace",
+            "display_name": "格蕾丝",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {},
+        "path_params": {
+          "project_id": "aaaaaaaaaaaa"
+        },
+        "steps": [
+          {
+            "id": "missing",
+            "http": {
+              "identity": "admin",
+              "method": "GET",
+              "path": "/api/projects/{project_id}"
+            }
+          },
+          {
+            "id": "missing_write",
+            "http": {
+              "identity": "admin",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "json": {
+                "note": "x"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.missing.status": 404,
+          "steps.missing.detail": "项目不存在",
+          "steps.missing_write.status": 404,
+          "steps.missing.trace_id": {
+            "$ne": ""
+          },
+          "steps.missing_write.trace_id": {
+            "$ne": ""
+          }
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "http_error_without_trace"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "/api/projects/{project_id}",
+        "/api/projects/{project_id}/cost-review"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "fail.real.duplicate_write_keeps_single_state",
+      "version": "1.0",
+      "title": "同一个写请求重复提交：真实状态不重复增长，第二次读回来与第一次一致",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "once",
+            "http": {
+              "identity": "finance",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "同一条备注"
+              }
+            }
+          },
+          {
+            "id": "twice",
+            "http": {
+              "identity": "finance",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "同一条备注"
+              }
+            }
+          },
+          {
+            "id": "readback",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.once.status": 200,
+          "steps.twice.status": 200,
+          "steps.readback.result.review.note": "同一条备注"
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "PUT /api/projects/{project_id}/cost-review",
+        "GET /api/projects/{project_id}/cost-review"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "fail.real.two_projects_never_leak_into_each_other",
+      "version": "1.0",
+      "title": "同一会话里连续读两个项目：每个响应里的 project_id 都等于请求目标，不串项目",
+      "domain": "failure_recovery",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "load_meta",
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "admin"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "grace": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "admin": {
+            "username": "grace",
+            "display_name": "格蕾丝",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          }
+        },
+        "projects": {
+          "first": {
+            "owner": "carol",
+            "filename": "one.dxf"
+          },
+          "second": {
+            "owner": "carol",
+            "filename": "two.dxf"
+          }
+        },
+        "steps": [
+          {
+            "id": "one",
+            "http": {
+              "identity": "admin",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "first"
+            }
+          },
+          {
+            "id": "two",
+            "http": {
+              "identity": "admin",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "second"
+            }
+          },
+          {
+            "id": "meta_one",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_meta",
+              "args": {
+                "project_id": {
+                  "$project_id": "first"
+                }
+              }
+            }
+          },
+          {
+            "id": "meta_two",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_meta",
+              "args": {
+                "project_id": {
+                  "$project_id": "second"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.one.result.meta.project_id": {
+            "$project_id": "first"
+          },
+          "steps.two.result.meta.project_id": {
+            "$project_id": "second"
+          },
+          "steps.meta_one.result.source_filename": "one.dxf",
+          "steps.meta_two.result.source_filename": "two.dxf"
+        },
+        "records": {
+          "http_calls": 2,
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ]
+    },
+    {
+      "id": "fail.real.generic_write_still_uses_write_mode",
+      "version": "1.0",
+      "title": "通用项目级写（管理）仍然走 write 判定：财务经理可见但改不动，得到 ACL 的 403；专属动作不受影响",
+      "domain": "failure_recovery",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "http": {
+          "method": "PATCH",
+          "path": "/api/projects/{project_id}/management"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "manager": {
+            "username": "carol",
+            "display_name": "卡罗尔",
+            "sso_roles": [
+              "process_manager"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "finance_rename",
+            "http": {
+              "identity": "finance",
+              "method": "PATCH",
+              "path": "/api/projects/{project_id}/management",
+              "project": "handoff",
+              "json": {
+                "name": "改名"
+              }
+            }
+          },
+          {
+            "id": "finance_confirm",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/confirm",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "manager_rename",
+            "http": {
+              "identity": "manager",
+              "method": "PATCH",
+              "path": "/api/projects/{project_id}/management",
+              "project": "handoff",
+              "json": {
+                "name": "改名"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.finance_rename.status": 403,
+          "steps.finance_rename.detail": "你的角色只能查看该项目，不能修改",
+          "steps.finance_confirm.status": 400,
+          "steps.finance_confirm.detail": {
+            "$ne": "你的角色只能查看该项目，不能修改"
+          },
+          "steps.manager_rename.status": 200
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "http_error_without_trace",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:PATCH /api/projects/{project_id}/management"
+      ],
+      "covers_routes": [
+        "PATCH /api/projects/{project_id}/management",
+        "POST /api/projects/{project_id}/cost-review/confirm"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "工艺技术总监在 CPQ 单经理模式下拥有项目级写权，因此改名成功；财务经理只能走专属动作。"
+    },
+    {
+      "id": "fail.real.outsider_cannot_probe_project_existence",
+      "version": "1.0",
+      "title": "无关用户对读与写接口得到同一个不可枚举响应：无法用状态码差反推项目是否存在",
+      "domain": "failure_recovery",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "heidi": "deny",
+          "dave": "allow"
+        },
+        "identities": {
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          },
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          }
+        },
+        "path_params": {
+          "project_id": "aaaaaaaaaaaa"
+        },
+        "steps": [
+          {
+            "id": "read_real",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "read_fake",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}"
+            }
+          },
+          {
+            "id": "write_real",
+            "http": {
+              "identity": "outsider",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "x"
+              }
+            }
+          },
+          {
+            "id": "write_fake",
+            "http": {
+              "identity": "outsider",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "json": {
+                "note": "x"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.read_real.status": 404,
+          "steps.read_fake.status": 404,
+          "steps.write_real.status": 404,
+          "steps.write_fake.status": 404,
+          "steps.read_real.detail": "项目不存在",
+          "steps.read_fake.detail": "项目不存在",
+          "steps.write_real.detail": "项目不存在",
+          "steps.write_fake.detail": "项目不存在"
+        },
+        "records": {
+          "http_calls": 4
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "/api/projects/{project_id}",
+        "/api/projects/{project_id}/cost-review"
+      ],
+      "failure_type": "data_leak_attempt"
+    }
+  ]
+}

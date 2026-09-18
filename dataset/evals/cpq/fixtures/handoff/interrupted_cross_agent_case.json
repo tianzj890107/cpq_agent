@@ -1,0 +1,33 @@
+{
+  "fixture_id": "interrupted_cross_agent_case",
+  "note": "报价已派发技术任务，技术完成部分步骤后服务重启；恢复后继续原任务，不新建重复项目 / 任务 / 会话",
+  "card": {
+    "session_id": "qs_interrupted", "card_id": "c_interrupted", "owner": "erin",
+    "title": "中断项目", "customer": "CATL", "business_case_id": "bc_interrupted1",
+    "current_step": 1, "overall_status": "in_progress"
+  },
+  "project": {
+    "project_id": "tp_interrupted", "title": "中断项目-工艺", "owner": "carol", "current_holder": "carol",
+    "business_case": {"business_case_id": "bc_interrupted1", "quote_session_id": "qs_interrupted",
+                      "source_task_id": "t_int1", "linked_by": "task"},
+    "page_context": "2.1 图纸解析",
+    "requirement": {"status": "approved", "confirmed": true, "review": "approved", "completeness_checked": true},
+    "drawing": {"parsed": true, "ir": true, "parts": 8, "empty_confirmed": false},
+    "integration": {"drawings_done": false, "params": [], "params_confirmed": false,
+                    "process_steps": [], "process_confirmed": false},
+    "cost": {"parts": [], "excluded_parts": [], "assembly": {}, "total": {},
+             "confirmed": false, "confirmed_by": ""},
+    "report": {"status": "", "published": false, "handed_back": false, "versions": []},
+    "timeline": [{"seq": 1, "kind": "message", "role": "user", "text": "这个我先做一半",
+                  "at": "2026-09-16T14:00:00+08:00", "payload": {}, "page_context": "2.1 图纸解析"}]
+  },
+  "tasks": [
+    {"task_id": "t_int1", "task_no": "TP-0200", "card_id": "c_interrupted", "session_id": "qs_interrupted",
+     "project_id": "", "task_kind": "tech_new_product", "target_type": "role",
+     "target_role_code": "process_mgr", "target_user_id": "", "status": "interrupted",
+     "claimed_by_user_id": "carol",
+     "payload": {"business_case_id": "bc_interrupted1", "initiator": "erin", "source_result_version": "R1"},
+     "signature": "tech_new_product|role|process_mgr||", "supersedes_task_id": "",
+     "replaced_by_task_id": "", "cancel_reason": "", "note": "", "idempotency_key": ""}
+  ]
+}

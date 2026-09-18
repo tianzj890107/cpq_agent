@@ -1,0 +1,1180 @@
+{
+  "suite_id": "auth_acl.production_finance_read",
+  "title": "财务经理读取回归（真实 HTTP 路由 + 真实 project_access）",
+  "domain": "auth_acl",
+  "notes": "全部用例走真实生产代码边界：production_http 经真实 FastAPI app/TestClient 与真鉴权依赖；production_unit 直接调用 backend.services.project_access。",
+  "cases": [
+    {
+      "id": "acl.real.finance.open_handoff_project",
+      "version": "1.0",
+      "title": "财务经理能打开存在财务交接但没有领取人、没有参与者记录的项目",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "finance-handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          },
+          "plain": {
+            "owner": "carol",
+            "filename": "no-handoff.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "open",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "open_plain",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "plain"
+            }
+          },
+          {
+            "id": "outsider",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.open.status": 200,
+          "steps.open.result.meta.project_id": {
+            "$project_id": "handoff"
+          },
+          "steps.open.result.meta.participants": {
+            "$absent": true
+          },
+          "steps.open_plain.status": 404,
+          "steps.outsider.status": 404
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "cross_project_leak",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-project-identity-single-source.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "回归：批次 7 之前财务经理对全部项目读接口 404；这条钉住「角色池可读」不依赖领取人。"
+    },
+    {
+      "id": "acl.real.finance.read_route_sweep_not_blocked",
+      "version": "1.0",
+      "title": "财务经理对全部项目级读接口发真实请求：没有一条因为缺 participant 变成 404「项目不存在」",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "sweep.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "sweep",
+            "route_sweep": {
+              "identity": "finance",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.sweep.acl_blocked_paths": {
+            "$len": 0
+          },
+          "steps.sweep.forbidden_paths": {
+            "$len": 0
+          },
+          "steps.sweep.server_error_paths": {
+            "$len": 0
+          },
+          "steps.sweep.unaccounted": {
+            "$len": 0
+          },
+          "steps.sweep.probed": {
+            "$gte": 40
+          }
+        },
+        "records": {
+          "http_calls": {
+            "$gte": 40
+          }
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "http_error_without_trace"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "路由清单从 main.py 现算（约 54 条项目级 GET，其中带额外路径参数的单独统计），不手抄条数。"
+    },
+    {
+      "id": "acl.real.finance.archived_project_still_hidden",
+      "version": "1.0",
+      "title": "已归档项目不因存在财务交接而对财务经理解锁：仍按不存在处理",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "archived": {
+            "owner": "carol",
+            "filename": "archived.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": [],
+            "archive": true
+          },
+          "live": {
+            "owner": "carol",
+            "filename": "live.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "archived",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "archived"
+            }
+          },
+          {
+            "id": "archived_write",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/confirm",
+              "project": "archived"
+            }
+          },
+          {
+            "id": "live",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "live"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.archived.status": 404,
+          "steps.archived_write.status": 404,
+          "steps.live.status": 200
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "acl.real.finance.unrelated_not_enumerable",
+      "version": "1.0",
+      "title": "无关项目与真正不存在的项目对财务经理返回逐字相同的 404，不能反推项目是否存在",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "plain": {
+            "owner": "carol",
+            "filename": "plain.dxf",
+            "participants": []
+          }
+        },
+        "path_params": {
+          "project_id": "aaaaaaaaaaaa"
+        },
+        "steps": [
+          {
+            "id": "unrelated",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "plain"
+            }
+          },
+          {
+            "id": "missing",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.unrelated.status": 404,
+          "steps.missing.status": 404,
+          "steps.unrelated.detail": {
+            "$ne": ""
+          },
+          "steps.missing.detail": {
+            "$ne": ""
+          }
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "data_leak_attempt"
+    },
+    {
+      "id": "acl.real.finance.handoff_without_sent_at_not_visible",
+      "version": "1.0",
+      "title": "财务交接留痕没有 sent_at 也没有 task_id 时不算有效交接，财务经理仍不可见",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "empty_handoff": {
+            "owner": "carol",
+            "filename": "empty.dxf",
+            "plan": {
+              "finance_handoff": {
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          },
+          "task_only": {
+            "owner": "carol",
+            "filename": "task.dxf",
+            "plan": {
+              "finance_handoff": {
+                "task_id": "T-COST-9"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "empty",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "empty_handoff"
+            }
+          },
+          {
+            "id": "task",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "task_only"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.empty.status": 404,
+          "steps.task.status": 200
+        },
+        "records": {
+          "http_calls": 2
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "acl.real.finance.cost_task_participant_still_visible",
+      "version": "1.0",
+      "title": "历史项目只有 cost_task_assignee 参与者、没有 plan.finance_handoff 时，该领取人仍可读",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "legacy": {
+            "owner": "carol",
+            "filename": "legacy-cost.dxf",
+            "participants": [
+              {
+                "username": "dave",
+                "role": "finance_manager",
+                "source": "cost_task_assignee",
+                "assignee": true
+              }
+            ]
+          },
+          "other": {
+            "owner": "carol",
+            "filename": "other-cost.dxf",
+            "participants": [
+              {
+                "username": "someone-else",
+                "role": "finance_manager",
+                "source": "cost_task_assignee",
+                "assignee": true
+              }
+            ]
+          }
+        },
+        "steps": [
+          {
+            "id": "legacy",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "legacy"
+            }
+          },
+          {
+            "id": "other",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "other"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.legacy.status": 200,
+          "steps.other.status": 404
+        },
+        "records": {
+          "http_calls": 2
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "legacy",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-project-identity-single-source.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ]
+    },
+    {
+      "id": "acl.real.finance.mode_read_contribute_write",
+      "version": "1.0",
+      "title": "财务经理在有关联的项目上：mode=read 与 contribute 放行，mode=write 仍按项目级写权拒绝",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "require_project_access"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "mode.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "read",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "handoff"
+                },
+                "user": {
+                  "$identity": "finance"
+                },
+                "mode": "read"
+              }
+            }
+          },
+          {
+            "id": "contribute",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "handoff"
+                },
+                "user": {
+                  "$identity": "finance"
+                },
+                "mode": "contribute"
+              }
+            }
+          },
+          {
+            "id": "write",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "handoff"
+                },
+                "user": {
+                  "$identity": "finance"
+                },
+                "mode": "write"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.read.ok": true,
+          "steps.read.result.project_id": {
+            "$project_id": "handoff"
+          },
+          "steps.contribute.ok": true,
+          "steps.write.ok": false,
+          "steps.write.error.code": "forbidden",
+          "steps.write.error.message": "你的角色只能查看该项目，不能修改"
+        },
+        "records": {
+          "unit_calls": 3,
+          "guard_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ],
+        "error": {
+          "code": "forbidden"
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "直接调用真实 project_access，不经 Sim。"
+    },
+    {
+      "id": "acl.real.finance.role_pool_readable_but_not_writable",
+      "version": "1.0",
+      "title": "角色池可读不等于项目级可写：财务经理 can_read=True 而 can_write=False",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "can_write"
+      },
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "manager": {
+            "username": "carol",
+            "display_name": "卡罗尔",
+            "sso_roles": [
+              "process_manager"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "rw.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "finance_can_write",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_write",
+              "args": {
+                "user": {
+                  "$identity": "finance"
+                },
+                "meta": {
+                  "$project": "handoff"
+                }
+              }
+            }
+          },
+          {
+            "id": "finance_can_read",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_read",
+              "args": {
+                "user": {
+                  "$identity": "finance"
+                },
+                "meta": {
+                  "$project": "handoff"
+                }
+              }
+            }
+          },
+          {
+            "id": "manager_can_write",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_write",
+              "args": {
+                "user": {
+                  "$identity": "manager"
+                },
+                "meta": {
+                  "$project": "handoff"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.finance_can_write.result": false,
+          "steps.finance_can_read.result": true,
+          "steps.manager_can_write.result": true
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.real.finance.visible_scope_all_and_archived",
+      "version": "1.0",
+      "title": "财务经理的可见范围：全部清单含交接项目、归档清单仍不含、无关项目一律看不见",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "visible_projects"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "scope.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          },
+          "plain": {
+            "owner": "carol",
+            "filename": "scope-plain.dxf",
+            "participants": []
+          },
+          "archived": {
+            "owner": "carol",
+            "filename": "scope-arch.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": [],
+            "archive": true
+          }
+        },
+        "steps": [
+          {
+            "id": "all",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "finance"
+                },
+                "scope": "all"
+              }
+            }
+          },
+          {
+            "id": "archived",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "finance"
+                },
+                "scope": "archived"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.all.result": {
+            "$len": 1
+          },
+          "steps.all.result.0.project_id": {
+            "$project_id": "handoff"
+          },
+          "steps.all.result.0.access.can_read": true,
+          "steps.all.result.0.access.can_write": false,
+          "steps.archived.result": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "unit_calls": 2
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.real.identity.effective_roles_union",
+      "version": "1.0",
+      "title": "身份口径取并集：finance_mgr 同时被认成 finance_mgr 与 finance_manager，未知角色不提升权限",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "effective_roles"
+      },
+      "roles": [
+        "finance_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "unknown": {
+            "username": "mallory",
+            "sso_roles": [],
+            "cpq_role_code": "super_admin"
+          }
+        },
+        "projects": {},
+        "steps": [
+          {
+            "id": "finance",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "finance"
+                }
+              }
+            }
+          },
+          {
+            "id": "unknown",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "unknown"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.finance.result": {
+            "$contains": "finance_mgr"
+          },
+          "steps.unknown.result": {
+            "$contains": "super_admin"
+          }
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "反例：未知 CPQ 角色码不得被静默映射成高权限角色。"
+    }
+  ]
+}

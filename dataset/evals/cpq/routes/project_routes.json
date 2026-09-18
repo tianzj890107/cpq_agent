@@ -1,0 +1,651 @@
+{
+  "generated_from": "tech_app/backend/main.py",
+  "note": "由 scripts/cpq_eval/prodkit.py 现算；真实路由增删必须让覆盖快照报差异。",
+  "project_routes": [
+    "DELETE /api/projects/{project_id}/integration/drawings/{filename}",
+    "DELETE /api/projects/{project_id}/management",
+    "GET /api/projects/{project_id}",
+    "GET /api/projects/{project_id}/agent/events",
+    "GET /api/projects/{project_id}/agent/history",
+    "GET /api/projects/{project_id}/agent/meta",
+    "GET /api/projects/{project_id}/agent/settings",
+    "GET /api/projects/{project_id}/ai-chat",
+    "GET /api/projects/{project_id}/ai-results",
+    "GET /api/projects/{project_id}/approval",
+    "GET /api/projects/{project_id}/assembly",
+    "GET /api/projects/{project_id}/attachments",
+    "GET /api/projects/{project_id}/attachments/{filename}",
+    "GET /api/projects/{project_id}/audit",
+    "GET /api/projects/{project_id}/bom",
+    "GET /api/projects/{project_id}/bom.csv",
+    "GET /api/projects/{project_id}/cleaning",
+    "GET /api/projects/{project_id}/component-match",
+    "GET /api/projects/{project_id}/cost-review",
+    "GET /api/projects/{project_id}/costest",
+    "GET /api/projects/{project_id}/costest.csv",
+    "GET /api/projects/{project_id}/files",
+    "GET /api/projects/{project_id}/geometry/{filename}",
+    "GET /api/projects/{project_id}/integration",
+    "GET /api/projects/{project_id}/integration/drawings/{filename}",
+    "GET /api/projects/{project_id}/manufacturing",
+    "GET /api/projects/{project_id}/manufacturing/bom.csv",
+    "GET /api/projects/{project_id}/material",
+    "GET /api/projects/{project_id}/model-lookup",
+    "GET /api/projects/{project_id}/negotiation",
+    "GET /api/projects/{project_id}/parts/{part_id}/cost",
+    "GET /api/projects/{project_id}/parts/{part_id}/cost-lookup",
+    "GET /api/projects/{project_id}/parts/{part_id}/process",
+    "GET /api/projects/{project_id}/parts/{part_id}/process-lookup",
+    "GET /api/projects/{project_id}/pricenego",
+    "GET /api/projects/{project_id}/pricing",
+    "GET /api/projects/{project_id}/process-report",
+    "GET /api/projects/{project_id}/process-report/versions",
+    "GET /api/projects/{project_id}/process-report/versions/{version}",
+    "GET /api/projects/{project_id}/production",
+    "GET /api/projects/{project_id}/requirement",
+    "GET /api/projects/{project_id}/requirement/pdf",
+    "GET /api/projects/{project_id}/requirement/precheck",
+    "GET /api/projects/{project_id}/source",
+    "GET /api/projects/{project_id}/summary",
+    "GET /api/projects/{project_id}/summary.html",
+    "GET /api/projects/{project_id}/summary.md",
+    "GET /api/projects/{project_id}/tasks",
+    "GET /api/projects/{project_id}/tasks/{task_id}",
+    "GET /api/projects/{project_id}/tree",
+    "GET /api/projects/{project_id}/verification",
+    "GET /api/projects/{project_id}/versions",
+    "GET /api/projects/{project_id}/versions/{v_from}/diff/{v_to}",
+    "GET /api/projects/{project_id}/versions/{version}",
+    "GET /api/projects/{project_id}/workflow",
+    "GET /api/projects/{project_id}/workflow/projection",
+    "PATCH /api/projects/{project_id}/management",
+    "POST /api/projects/{project_id}/agent/event",
+    "POST /api/projects/{project_id}/agent/new",
+    "POST /api/projects/{project_id}/agent/send",
+    "POST /api/projects/{project_id}/ai-chat",
+    "POST /api/projects/{project_id}/approval/act",
+    "POST /api/projects/{project_id}/approval/level",
+    "POST /api/projects/{project_id}/approval/recommend",
+    "POST /api/projects/{project_id}/approval/send",
+    "POST /api/projects/{project_id}/approval/submit",
+    "POST /api/projects/{project_id}/approval/timing",
+    "POST /api/projects/{project_id}/assembly/confirm",
+    "POST /api/projects/{project_id}/assembly/recommend",
+    "POST /api/projects/{project_id}/assembly/timing",
+    "POST /api/projects/{project_id}/attachments",
+    "POST /api/projects/{project_id}/cleaning/confirm",
+    "POST /api/projects/{project_id}/cleaning/recommend",
+    "POST /api/projects/{project_id}/cleaning/timing",
+    "POST /api/projects/{project_id}/component-match",
+    "POST /api/projects/{project_id}/cost-review/assembly",
+    "POST /api/projects/{project_id}/cost-review/confirm",
+    "POST /api/projects/{project_id}/cost-review/material-write",
+    "POST /api/projects/{project_id}/cost-review/parts/{part_id}",
+    "POST /api/projects/{project_id}/cost-review/return-to-process",
+    "POST /api/projects/{project_id}/cost-review/send-to-quote",
+    "POST /api/projects/{project_id}/costest/confirm",
+    "POST /api/projects/{project_id}/costest/recommend",
+    "POST /api/projects/{project_id}/costest/timing",
+    "POST /api/projects/{project_id}/decompose",
+    "POST /api/projects/{project_id}/drawings",
+    "POST /api/projects/{project_id}/generate",
+    "POST /api/projects/{project_id}/integration/confirm",
+    "POST /api/projects/{project_id}/integration/cost",
+    "POST /api/projects/{project_id}/integration/drawings",
+    "POST /api/projects/{project_id}/integration/material-write",
+    "POST /api/projects/{project_id}/integration/params",
+    "POST /api/projects/{project_id}/integration/params/autofill",
+    "POST /api/projects/{project_id}/integration/params/confirm",
+    "POST /api/projects/{project_id}/integration/params/finalize",
+    "POST /api/projects/{project_id}/integration/process",
+    "POST /api/projects/{project_id}/integration/process/confirm",
+    "POST /api/projects/{project_id}/integration/send-to-finance",
+    "POST /api/projects/{project_id}/integration/send-to-quote",
+    "POST /api/projects/{project_id}/manufacturing/confirm",
+    "POST /api/projects/{project_id}/manufacturing/recommend",
+    "POST /api/projects/{project_id}/manufacturing/timing",
+    "POST /api/projects/{project_id}/material/confirm",
+    "POST /api/projects/{project_id}/material/evaluate",
+    "POST /api/projects/{project_id}/material/recommend",
+    "POST /api/projects/{project_id}/material/timing",
+    "POST /api/projects/{project_id}/model-lookup",
+    "POST /api/projects/{project_id}/model-lookup/apply",
+    "POST /api/projects/{project_id}/model-lookup/confirm",
+    "POST /api/projects/{project_id}/negotiation/confirm",
+    "POST /api/projects/{project_id}/negotiation/recommend",
+    "POST /api/projects/{project_id}/negotiation/timing",
+    "POST /api/projects/{project_id}/parse",
+    "POST /api/projects/{project_id}/parts/{part_id}/cost",
+    "POST /api/projects/{project_id}/parts/{part_id}/library-lookup",
+    "POST /api/projects/{project_id}/parts/{part_id}/process",
+    "POST /api/projects/{project_id}/parts/{part_id}/regenerate",
+    "POST /api/projects/{project_id}/pricenego/confirm",
+    "POST /api/projects/{project_id}/pricenego/recommend",
+    "POST /api/projects/{project_id}/pricenego/timing",
+    "POST /api/projects/{project_id}/pricing/recommend",
+    "POST /api/projects/{project_id}/pricing/review",
+    "POST /api/projects/{project_id}/pricing/submit",
+    "POST /api/projects/{project_id}/pricing/timing",
+    "POST /api/projects/{project_id}/process-report/new-version",
+    "POST /api/projects/{project_id}/process-report/prepare",
+    "POST /api/projects/{project_id}/process-report/publish",
+    "POST /api/projects/{project_id}/process-report/review",
+    "POST /api/projects/{project_id}/process-report/send-to-quote",
+    "POST /api/projects/{project_id}/process-report/submit-review",
+    "POST /api/projects/{project_id}/production/confirm",
+    "POST /api/projects/{project_id}/production/recommend",
+    "POST /api/projects/{project_id}/production/timing",
+    "POST /api/projects/{project_id}/requirement/ai-check",
+    "POST /api/projects/{project_id}/requirement/confirm",
+    "POST /api/projects/{project_id}/requirement/extract-documents",
+    "POST /api/projects/{project_id}/requirement/return-to-draft",
+    "POST /api/projects/{project_id}/requirement/review",
+    "POST /api/projects/{project_id}/requirement/submit-confirmation",
+    "POST /api/projects/{project_id}/source",
+    "POST /api/projects/{project_id}/summary/confirm",
+    "POST /api/projects/{project_id}/summary/recommend",
+    "POST /api/projects/{project_id}/summary/timing",
+    "POST /api/projects/{project_id}/tasks/{task_id}/cancel",
+    "POST /api/projects/{project_id}/verification/decide",
+    "POST /api/projects/{project_id}/verify",
+    "POST /api/projects/{project_id}/versions/{version}/approve",
+    "POST /api/projects/{project_id}/versions/{version}/reject",
+    "POST /api/projects/{project_id}/versions/{version}/restore",
+    "POST /api/projects/{project_id}/versions/{version}/submit",
+    "POST /api/projects/{project_id}/workbench-chat",
+    "PUT /api/projects/{project_id}/agent/settings",
+    "PUT /api/projects/{project_id}/assembly",
+    "PUT /api/projects/{project_id}/cleaning",
+    "PUT /api/projects/{project_id}/cost-review",
+    "PUT /api/projects/{project_id}/costest",
+    "PUT /api/projects/{project_id}/integration",
+    "PUT /api/projects/{project_id}/integration/cost",
+    "PUT /api/projects/{project_id}/integration/params",
+    "PUT /api/projects/{project_id}/integration/process",
+    "PUT /api/projects/{project_id}/ir",
+    "PUT /api/projects/{project_id}/manufacturing",
+    "PUT /api/projects/{project_id}/material",
+    "PUT /api/projects/{project_id}/negotiation",
+    "PUT /api/projects/{project_id}/parts/{part_id}/cost",
+    "PUT /api/projects/{project_id}/parts/{part_id}/process",
+    "PUT /api/projects/{project_id}/pricenego",
+    "PUT /api/projects/{project_id}/pricing",
+    "PUT /api/projects/{project_id}/process-report",
+    "PUT /api/projects/{project_id}/process-report/distribution",
+    "PUT /api/projects/{project_id}/production",
+    "PUT /api/projects/{project_id}/requirement",
+    "PUT /api/projects/{project_id}/requirement/customer-credit",
+    "PUT /api/projects/{project_id}/summary"
+  ],
+  "reads": [
+    {
+      "route": "GET /api/projects/{project_id}/attachments",
+      "handler": "list_project_attachments",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/attachments/{filename}",
+      "handler": "get_project_attachment",
+      "extra_params": [
+        "filename"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/files",
+      "handler": "list_project_files",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/component-match",
+      "handler": "get_component_match",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/parts/{part_id}/process-lookup",
+      "handler": "get_process_lookup",
+      "extra_params": [
+        "part_id"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/parts/{part_id}/cost-lookup",
+      "handler": "get_cost_lookup",
+      "extra_params": [
+        "part_id"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/verification",
+      "handler": "get_verification",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/model-lookup",
+      "handler": "get_model_lookup",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/bom.csv",
+      "handler": "bom_csv",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/bom",
+      "handler": "bom_json",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/agent/meta",
+      "handler": "agent_meta",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/agent/history",
+      "handler": "agent_history",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/agent/events",
+      "handler": "agent_events",
+      "extra_params": [],
+      "covered_by": [
+        "history.real.agent_events_http_replays_persisted_timeline"
+      ]
+    },
+    {
+      "route": "GET /api/projects/{project_id}/agent/settings",
+      "handler": "agent_settings",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/ai-chat",
+      "handler": "get_project_chat",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/parts/{part_id}/process",
+      "handler": "get_process",
+      "extra_params": [
+        "part_id"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/parts/{part_id}/cost",
+      "handler": "get_cost",
+      "extra_params": [
+        "part_id"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/integration",
+      "handler": "get_integration",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/integration/drawings/{filename}",
+      "handler": "get_integration_drawing",
+      "extra_params": [
+        "filename"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/cost-review",
+      "handler": "get_cost_review",
+      "extra_params": [],
+      "covered_by": [
+        "acl.real.finance.save_cost_note_changes_state",
+        "fail.real.duplicate_write_keeps_single_state"
+      ]
+    },
+    {
+      "route": "GET /api/projects/{project_id}/material",
+      "handler": "get_material",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/manufacturing",
+      "handler": "get_manufacturing",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/manufacturing/bom.csv",
+      "handler": "export_manufacturing_bom",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/cleaning",
+      "handler": "get_cleaning",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/assembly",
+      "handler": "get_assembly",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/production",
+      "handler": "get_production",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/summary",
+      "handler": "get_summary",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/summary.html",
+      "handler": "export_summary_html",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/summary.md",
+      "handler": "export_summary_md",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/costest",
+      "handler": "get_costest",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/costest.csv",
+      "handler": "export_costest_csv",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/pricing",
+      "handler": "get_pricing",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/negotiation",
+      "handler": "get_negotiation",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/pricenego",
+      "handler": "get_pricenego",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/approval",
+      "handler": "get_approval",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/versions",
+      "handler": "list_versions",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/versions/{version}",
+      "handler": "get_version",
+      "extra_params": [
+        "version"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/versions/{v_from}/diff/{v_to}",
+      "handler": "diff_versions",
+      "extra_params": [
+        "v_from",
+        "v_to"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/tasks/{task_id}",
+      "handler": "get_task",
+      "extra_params": [
+        "task_id"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/tasks",
+      "handler": "list_tasks",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/tree",
+      "handler": "structure_tree",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}",
+      "handler": "get_project",
+      "extra_params": [],
+      "covered_by": [
+        "acl.real.finance.archived_project_still_hidden",
+        "acl.real.finance.cost_task_participant_still_visible",
+        "acl.real.finance.handoff_without_sent_at_not_visible",
+        "acl.real.finance.open_handoff_project",
+        "acl.real.finance.read_route_sweep_not_blocked",
+        "acl.real.finance.unrelated_not_enumerable",
+        "acl.real.sales.archived_quote_linked_hidden",
+        "acl.real.sales.list_and_open_same_project",
+        "acl.real.sales.open_quote_linked_project",
+        "acl.real.sales.quote_link_without_session_not_visible",
+        "acl.real.sales.quote_owner_participant_still_visible",
+        "acl.real.sales.read_route_sweep_not_blocked"
+      ]
+    },
+    {
+      "route": "GET /api/projects/{project_id}/ai-results",
+      "handler": "get_ai_results",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/audit",
+      "handler": "get_audit",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/requirement",
+      "handler": "get_requirement",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/requirement/pdf",
+      "handler": "get_requirement_pdf",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/requirement/precheck",
+      "handler": "precheck_requirement",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/process-report",
+      "handler": "get_process_report",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/process-report/versions",
+      "handler": "list_process_report_versions",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/process-report/versions/{version}",
+      "handler": "get_process_report_version",
+      "extra_params": [
+        "version"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/workflow",
+      "handler": "get_workflow",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/workflow/projection",
+      "handler": "get_workflow_projection",
+      "extra_params": [],
+      "covered_by": [
+        "history.real.legacy_project_projection_keeps_five_phases_thirteen_stages"
+      ]
+    },
+    {
+      "route": "GET /api/projects/{project_id}/source",
+      "handler": "get_source",
+      "extra_params": [],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    },
+    {
+      "route": "GET /api/projects/{project_id}/geometry/{filename}",
+      "handler": "get_geometry_file",
+      "extra_params": [
+        "filename"
+      ],
+      "covered_by": [],
+      "reason": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+    }
+  ],
+  "uncovered_reads_with_reason": {
+    "GET /api/projects/{project_id}/attachments": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/attachments/{filename}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/files": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/component-match": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/parts/{part_id}/process-lookup": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/parts/{part_id}/cost-lookup": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/verification": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/model-lookup": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/bom.csv": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/bom": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/agent/meta": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/agent/history": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/agent/settings": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/ai-chat": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/parts/{part_id}/process": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/parts/{part_id}/cost": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/integration": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/integration/drawings/{filename}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/material": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/manufacturing": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/manufacturing/bom.csv": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/cleaning": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/assembly": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/production": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/summary": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/summary.html": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/summary.md": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/costest": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/costest.csv": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/pricing": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/negotiation": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/pricenego": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/approval": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/versions": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/versions/{version}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/versions/{v_from}/diff/{v_to}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/tasks/{task_id}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/tasks": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/tree": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/ai-results": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/audit": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/requirement": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/requirement/pdf": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/requirement/precheck": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/process-report": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/process-report/versions": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/process-report/versions/{version}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/workflow": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/source": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）",
+    "GET /api/projects/{project_id}/geometry/{filename}": "路由清单整体覆盖（acl.real.finance.read_route_sweep_not_blocked / acl.real.sales.read_route_sweep_not_blocked 动态遍历全部项目级读路由）"
+  }
+}

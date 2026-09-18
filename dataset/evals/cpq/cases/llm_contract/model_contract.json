@@ -1,0 +1,1810 @@
+{
+  "suite_id": "llm_contract.model_contract",
+  "title": "模型与工具调用契约：结构化工具调用、截断恢复、非法输出与上下文不一致拒绝",
+  "domain": "llm_contract",
+  "notes": "全部使用 recorded provider 回放，api key 固定 test-key，不访问真实模型。",
+  "cases": [
+    {
+      "id": "llm.quote.parse_structured_tool_call",
+      "version": "1.0",
+      "title": "报价需求解析：模型输出结构化 quote_ui 工具调用并落库字段",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "provider": "test-key",
+        "idempotency_key": "llm.quote.parse_structured_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_holder": "erin",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "erin",
+          "project_id": "tp_l1",
+          "provider": "provider/quote_parse_ok.json",
+          "stage": "1 确认需求配置"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1,
+          "persisted": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "quote_ui",
+          "llm.tool_calls.0.args.values.customer": "亿纬锂能",
+          "llm.tool_calls.0.args.values.capacity": "5.6GWh",
+          "llm.tool_calls.0.recovered": false,
+          "tech.tp_l1.requirement.form_values.capacity": "5.6GWh",
+          "llm.persisted": 1
+        },
+        "records": {
+          "llm_calls": 1,
+          "llm_persisted": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tech.requirement_parse_tool_call",
+      "version": "1.0",
+      "title": "1.1 创建需求：技术需求解析走结构化 tech_ui 工具调用",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tech.requirement_parse_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l2",
+          "provider": "provider/tech_requirement_parse.json",
+          "stage": "1.1 创建需求"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "tech_ui",
+          "llm.tool_calls.0.args.page_context": "1.1 创建需求",
+          "llm.tool_calls.0.args.values.客户": "亿纬锂能",
+          "tech.tp_l2.requirement.form_values.产能": "5.6GWh"
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tech.params_recommend_tool_call",
+      "version": "1.0",
+      "title": "3.2 参数推荐：模型只给结构化参数值，不落成本步骤",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tech.params_recommend_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l3",
+          "provider": "provider/params_recommend.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "tech_ui",
+          "llm.tool_calls.0.args.values.焊接方式": "激光焊",
+          "llm.tool_calls.0.args.values.焊接电流": "120A",
+          "tech.tp_l3.requirement.form_values.焊接电流": "120A"
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tech.process_assemble_tool_call",
+      "version": "1.0",
+      "title": "3.3 组装工艺：模型输出的工序为结构化数组",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tech.process_assemble_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l4",
+          "provider": "provider/process_assemble.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "tech_ui",
+          "llm.tool_calls.0.args.values.工序.0": "下料",
+          "llm.tool_calls.0.args.values.工序": {
+            "$len": 3
+          }
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tech.cost_note_tool_call",
+      "version": "1.0",
+      "title": "4.1 成本说明：模型只给说明文本值，不改金额",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tech.cost_note_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "llm_call",
+          "actor": "dave",
+          "project_id": "tp_l5",
+          "provider": "provider/cost_note.json",
+          "stage": "4 成本测算"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "tech_ui",
+          "llm.tool_calls.0.args.values.说明": "零件成本按最新料价测算",
+          "tech.tp_l5.cost.total.amount": "15.5000"
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak",
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call",
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tech.report_summary_tool_call",
+      "version": "1.0",
+      "title": "5.1 汇总结果：报告摘要为结构化结论与风险列表",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tech.report_summary_tool_call",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l6",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "carol",
+          "project_id": "tp_l6",
+          "provider": "provider/report_summary.json",
+          "stage": "5.1 汇总结果"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "tool_call",
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.name": "tech_ui",
+          "llm.tool_calls.0.args.values.结论": "工艺可行",
+          "llm.tool_calls.0.args.values.风险.0": "焊接变形"
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "summary",
+      "sub_step": "5.1",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.truncated.recoverable_merged",
+      "version": "1.0",
+      "title": "截断输出恢复：允许续写后合并为一次完整工具调用",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.truncated.recoverable_merged",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l7",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l7",
+          "allow_truncated_recovery": true,
+          "required_args": [
+            "values"
+          ],
+          "provider": "provider/truncated_recoverable.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "recovered",
+          "recovered": true,
+          "tool_calls": 1
+        },
+        "state": {
+          "llm.tool_calls.0.recovered": true,
+          "llm.tool_calls.0.args.values.焊接方式": "激光焊",
+          "llm.tool_calls.0.args.values.焊接电流": "120A",
+          "llm.persisted": 1
+        },
+        "records": {
+          "llm_calls": 1,
+          "llm_persisted": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "verbatim_model_text",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "structured_tool_call"
+      ],
+      "tags": [
+        "recovery",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "invalid_output",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.truncated.unrecoverable_rejected",
+      "version": "1.0",
+      "title": "截断且无法恢复：422 output_truncated，不得落库半截结果",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.truncated.unrecoverable_rejected",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l8",
+          "provider": "provider/truncated_unrecoverable.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "output_truncated"
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "llm.persisted": 0,
+          "tech.tp_l8.requirement.form_values": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "llm_persisted": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "verbatim_model_text"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing",
+        "structured_tool_call"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "invalid_output",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.invalid_json.rejected",
+      "version": "1.0",
+      "title": "非法 JSON：422 invalid_json，不写任何看板字段",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.invalid_json.rejected",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l9",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l9",
+          "provider": "provider/invalid_json.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "invalid_json"
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "tech.tp_l9.requirement.form_values": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "llm_calls": 1
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "verbatim_model_text"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "failure_type": "invalid_output",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.refusal.not_faked_as_success",
+      "version": "1.0",
+      "title": "模型拒答：明确返回 model_refused，不伪造成功数据",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.refusal.not_faked_as_success",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l10",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l10",
+          "provider": "provider/refusal.json",
+          "stage": "1.1 创建需求"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "model_refused",
+          "persisted": 0
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "llm.persisted": 0,
+          "tech.tp_l10.requirement.status": "draft",
+          "tech.tp_l10.requirement.form_values": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "llm_persisted": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "verbatim_model_text"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "failure_type": "provider_error",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tool.args_missing_rejected",
+      "version": "1.0",
+      "title": "工具调用参数缺失：422 tool_args_missing，不落库",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tool.args_missing_rejected",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l11",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l11",
+          "required_args": [
+            "values"
+          ],
+          "provider": "provider/tool_args_missing.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "tool_args_missing"
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "llm.persisted": 0,
+          "tech.tp_l11.requirement.form_values": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "llm_persisted": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "verbatim_model_text"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "invalid_output",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.output.context_mismatch_rejected",
+      "version": "1.0",
+      "title": "模型输出与当前 project / stage 不一致：409 拒绝落库，防串项目",
+      "domain": "llm_contract",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.output.context_mismatch_rejected",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l12",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l12",
+          "provider": "provider/context_mismatch.json",
+          "stage": "3 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "output_context_mismatch"
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "llm.persisted": 0,
+          "tech.tp_l12.requirement.form_values": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "llm_persisted": 0
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak",
+        "structured_tool_call"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "data_leak_attempt",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    },
+    {
+      "id": "llm.tool.unknown_rejected",
+      "version": "1.0",
+      "title": "未注册工具：422 unknown_tool，不得执行任意命令",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "llm.tool.unknown_rejected",
+        "provider_replay": "simulated",
+        "provider_replay_reason": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_l13",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "llm_call",
+          "actor": "alice",
+          "project_id": "tp_l13",
+          "provider": "provider/unknown_tool.json",
+          "stage": "1.1 创建需求"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "unknown_tool"
+        },
+        "state": {
+          "llm.tool_calls": {
+            "$len": 0
+          },
+          "llm.persisted": 0
+        },
+        "records": {
+          "llm_persisted": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "verbatim_model_text"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "failure_type": "invalid_output",
+      "executor": "simulation",
+      "notes": "本案例的 recorded fixture 是旧口径的 tech_ui 入参（page_context + values），真实平台工具处理器当前的白名单是 action/stage/view/fields —— 该 fixture 喂进真实入口只会被拒绝，无法真实回放。因此本案例**不再声明 recorded_provider**，改由 Sim 回放验证规格；真实分发边界的契约由 llm.real.* 系列在 production 层覆盖。"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+ "fixture_id": "session_timeline_sample",
+ "note": "一条项目会话时间线：用户消息 / 助手回复 / 工具调用与结果 / 看板事件按同一顺序拼接",
+ "project": {
+  "project_id": "tp_timeline",
+  "title": "图纸解析历史会话",
+  "owner": "alice",
+  "current_holder": "alice",
+  "page_context": "2.1 图纸解析",
+  "business_case": {
+   "business_case_id": "bc_timeline01",
+   "quote_session_id": "qs_timeline",
+   "source_task_id": "",
+   "linked_by": "session"
+  },
+  "timeline": [
+   {
+    "seq": 1,
+    "kind": "message",
+    "role": "user",
+    "text": "上传图纸并解析",
+    "at": "2026-09-15T09:00:00+08:00",
+    "payload": {},
+    "page_context": "2.1 图纸解析"
+   },
+   {
+    "seq": 2,
+    "kind": "tool",
+    "role": "assistant",
+    "text": "",
+    "at": "2026-09-15T09:00:03+08:00",
+    "payload": {
+     "name": "tech_ui",
+     "args": {
+      "view": "parts"
+     }
+    },
+    "page_context": "2.1 图纸解析"
+   },
+   {
+    "seq": 3,
+    "kind": "message",
+    "role": "assistant",
+    "text": "解析出 8 个零件",
+    "at": "2026-09-15T09:00:04+08:00",
+    "payload": {},
+    "page_context": "2.1 图纸解析"
+   },
+   {
+    "seq": 4,
+    "kind": "board",
+    "role": "board",
+    "text": "",
+    "at": "2026-09-15T09:00:05+08:00",
+    "payload": {
+     "view": "parts",
+     "rows": 8
+    },
+    "page_context": "2.1 图纸解析"
+   },
+   {
+    "seq": 5,
+    "kind": "message",
+    "role": "user",
+    "text": "继续整合图纸",
+    "at": "2026-09-15T09:05:00+08:00",
+    "payload": {},
+    "page_context": "3 组装与整合"
+   }
+  ]
+ }
+}

@@ -1,0 +1,640 @@
+{
+  "suite_id": "production_pg_transactions",
+  "title": "隔离 PostgreSQL：并发领取 / 回传幂等 / 事务回滚 / 角色范围",
+  "notes": "在隔离 PostgreSQL（cpq_eval_it_* 临时库）上真跑 cpq_wf 的真实 SQL：唯一约束、原子 UPDATE、非 autocommit 事务。默认跳过；必须显式 CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（回环）。",
+  "cases": [
+    {
+      "id": "pg.claim.concurrent_two_claimers_one_winner",
+      "version": "1.0",
+      "title": "真库并发领取同一任务：唯一赢家，只写一条领取审计与一条到账消息",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "claim_task"
+      },
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "claim.concurrent_two_claimers_one_winner"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.successes": 1,
+          "steps.pg.result.claimed_rows": 1,
+          "steps.pg.result.claim_events": 1,
+          "steps.pg.result.claimed_messages": 1,
+          "steps.pg.result.errors": 0,
+          "steps.pg.result.status": "claimed"
+        },
+        "records": {
+          "pg_queries": {
+            "$gte": 4
+          }
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "concurrency",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "pg.handoff.concurrent_same_key_single_row",
+      "version": "1.0",
+      "title": "真库并发同一回传幂等键：唯一约束裁决，只留一行回传记录",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "insert_handoff_placeholder"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "handoff.concurrent_same_key_single_row"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.rows": 1,
+          "steps.pg.result.winners": 1,
+          "steps.pg.result.errors": 0,
+          "steps.pg.result.handoff_kind": "cost_to_quote",
+          "steps.pg.result.business_case_id": "bc_it"
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "concurrency",
+        "handoff"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "pg.task.duplicate_submit_single_open_row",
+      "version": "1.0",
+      "title": "真库重复发起同签名任务：复用既有任务，同卡片同类型只保留一行 open",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "send_task"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "task.duplicate_submit_single_open_row"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.first_reused": false,
+          "steps.pg.result.second_reused": true,
+          "steps.pg.result.same_task": true,
+          "steps.pg.result.open_rows": 1,
+          "steps.pg.result.total_rows": 1,
+          "steps.pg.result.send_events": 1
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "pg.tx.midway_failure_rolls_back_all",
+      "version": "1.0",
+      "title": "真库事务后半段失败：前半段写入的回传占位整体回滚，不留半成品",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "tx_connect"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "tx.midway_failure_rolls_back_all"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.raised": true,
+          "steps.pg.result.rolled_back": true,
+          "steps.pg.result.rows_after": 0
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "rollback",
+        "failure"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "transaction_rollback"
+    },
+    {
+      "id": "pg.claim.role_denied_no_side_effect",
+      "version": "1.0",
+      "title": "真库权限拒绝：无该任务领取权限的角色领取失败，零数据库副作用",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "claim_task"
+      },
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "claim.role_denied_no_side_effect"
+            }
+          }
+        ],
+        "access_matrix": {
+          "finance": "deny",
+          "process": "allow"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.denied": true,
+          "steps.pg.result.task_status": "open",
+          "steps.pg.result.claimed_by": "",
+          "steps.pg.result.claim_events": 0,
+          "steps.pg.result.claimed_messages": 0,
+          "steps.pg.result.owner_unchanged": true
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "permission",
+        "negative"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "pg.legacy.null_new_columns_readable",
+      "version": "1.0",
+      "title": "真库缺列 legacy 行：business_case_id 为空、task_kind 取迁移默认值，真实读取路径仍可用",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "get_card"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "legacy.null_new_columns_readable"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.readable": true,
+          "steps.pg.result.task_kind": "handoff",
+          "steps.pg.result.card_business_case_id": "",
+          "steps.pg.result.card_step": 4
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "stage": "cost",
+      "sub_step": "4.1"
+    },
+    {
+      "id": "pg.cross_instance.no_cross_handoff",
+      "version": "1.0",
+      "title": "真库两个业务实例并存：一个实例的回传记录不落到另一个实例上",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "find_handoff"
+      },
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "cross_instance.no_cross_handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.found_on_a": true,
+          "steps.pg.result.found_business_case": "bc_it_a",
+          "steps.pg.result.target_session": "it-case-a",
+          "steps.pg.result.card_b_business_case_id": "bc_it_b",
+          "steps.pg.result.other_key_missing": true
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "partial_write_on_failure"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "handoff",
+        "isolation"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "data_leak_attempt"
+    },
+    {
+      "id": "pg.visibility.role_scoped_tasks",
+      "version": "1.0",
+      "title": "真库角色范围可见性：定向任务只有目标角色可见可领，无关角色既不进收件箱也领不到",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "inbox"
+      },
+      "roles": [
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "visibility.role_scoped_tasks"
+            }
+          }
+        ],
+        "access_matrix": {
+          "process": "allow",
+          "finance": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.in_pm_inbox": true,
+          "steps.pg.result.in_fin_inbox": false,
+          "steps.pg.result.fin_denied": true,
+          "steps.pg.result.pm_claimed": true,
+          "steps.pg.result.status": "claimed"
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "pg.visibility.role_pools_isolated",
+      "version": "1.0",
+      "title": "真库财务 / 销售角色池互不串池：各自定向任务只进自己收件箱，跨池领取被拒且零副作用",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "inbox"
+      },
+      "roles": [
+        "finance_mgr",
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "visibility.finance_and_sales_role_pools_isolated"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.cost_in_fin_inbox": true,
+          "steps.pg.result.cost_in_sales_inbox": false,
+          "steps.pg.result.quote_in_sales_inbox": true,
+          "steps.pg.result.quote_in_fin_inbox": false,
+          "steps.pg.result.cross_pool_denied": 2,
+          "steps.pg.result.fin_claimed_own": true,
+          "steps.pg.result.sales_claimed_own": true,
+          "steps.pg.result.cross_claim_side_effects": 0
+        },
+        "records": {
+          "pg_queries": {
+            "$gte": 4
+          }
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "integration",
+        "permission",
+        "concurrency"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "pg.task.db_rejects_duplicate_open",
+      "version": "1.0",
+      "title": "真库最终裁决：绕过应用复用直接插第二条 open 任务，部分唯一索引必须拒绝",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "init"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "task.db_rejects_duplicate_open"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.raw_duplicate_rejected": true,
+          "steps.pg.result.open_rows": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "idempotent",
+        "constraint"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "pg.task.supersede_on_signature_change",
+      "version": "1.0",
+      "title": "真库同卡片同类型签名变化：旧任务被取消并由新任务替代，指针双向可查",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "send_task"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "task.supersede_on_signature_change"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.second_is_new": true,
+          "steps.pg.result.same_task": false,
+          "steps.pg.result.new_supersedes_old": true,
+          "steps.pg.result.old_status": "cancelled",
+          "steps.pg.result.old_replaced_by_new": true,
+          "steps.pg.result.open_rows": 1
+        }
+      },
+      "invariants": [
+        "single_source_of_truth",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "integration",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "duplicate_request"
+    }
+  ],
+  "domain": "concurrency"
+}

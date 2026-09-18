@@ -1,0 +1,12 @@
+{
+  "document_id": "dwg_12",
+  "file_name": "电池模组总装图.dwg",
+  "parts": [
+    {"part_id": "P01", "name": "端板"}, {"part_id": "P02", "name": "侧板"},
+    {"part_id": "P03", "name": "上盖"}, {"part_id": "P04", "name": "底板"},
+    {"part_id": "P05", "name": "汇流排"}, {"part_id": "P06", "name": "绝缘片"},
+    {"part_id": "P07", "name": "导热垫"}, {"part_id": "P08", "name": "螺栓组"},
+    {"part_id": "P09", "name": "密封圈"}, {"part_id": "P10", "name": "采样线束"},
+    {"part_id": "P11", "name": "支架"}, {"part_id": "P12", "name": "铭牌"}
+  ]
+}

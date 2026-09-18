@@ -1,0 +1,517 @@
+{
+  "suite_id": "auth_acl.production_identity_roles",
+  "title": "角色名称与身份适配（真实 cpq_sso 映射 + 真实 project_access）",
+  "domain": "auth_acl",
+  "cases": [
+    {
+      "id": "acl.real.identity.role_map_table_is_production_mapping",
+      "version": "1.0",
+      "title": "CPQ 角色码 → 技术工艺角色的映射逐条取自生产 ROLE_MAP：五个已知码各归其位",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.cpq_sso",
+        "function": "to_tech_user"
+      },
+      "roles": [
+        "finance_mgr",
+        "sales_mgr",
+        "process_mgr",
+        "reviewer",
+        "admin"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "projects": {},
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          },
+          "manager": {
+            "username": "carol",
+            "display_name": "卡罗尔",
+            "sso_roles": [
+              "process_manager"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "admin": {
+            "username": "grace",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          },
+          "viewer": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "steps": [
+          {
+            "id": "finance",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "dave",
+                  "role_code": "finance_mgr"
+                }
+              }
+            }
+          },
+          {
+            "id": "sales",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "erin",
+                  "role_code": "sales_mgr"
+                }
+              }
+            }
+          },
+          {
+            "id": "manager",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "carol",
+                  "role_code": "process_mgr"
+                }
+              }
+            }
+          },
+          {
+            "id": "director",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "frank",
+                  "role_code": "tech_director"
+                }
+              }
+            }
+          },
+          {
+            "id": "admin",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "grace",
+                  "role_code": "admin"
+                }
+              }
+            }
+          },
+          {
+            "id": "viewer",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "heidi",
+                  "role_code": "viewer"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.finance.result.role": "finance_manager",
+          "steps.sales.result.role": "viewer",
+          "steps.sales.result.cpq_role_code": "sales_mgr",
+          "steps.manager.result.role": "process_manager",
+          "steps.director.result.role": "process_director",
+          "steps.admin.result.role": "admin",
+          "steps.viewer.result.role": "viewer"
+        },
+        "records": {
+          "unit_calls": 6
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.services.cpq_sso"
+      ],
+      "notes": "反例在下一案例：角色码写错必须掉到 viewer，不能静默映射成高权限。"
+    },
+    {
+      "id": "acl.real.identity.unknown_role_code_falls_back_to_viewer",
+      "version": "1.0",
+      "title": "未知 / 空 / 大小写不一致的角色码一律掉到 viewer：不得静默映射成高权限",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.cpq_sso",
+        "function": "to_tech_user"
+      },
+      "roles": [
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "mallory": "deny"
+        },
+        "projects": {},
+        "identities": {
+          "unknown": {
+            "username": "mallory",
+            "sso_roles": [],
+            "cpq_role_code": "super_admin"
+          }
+        },
+        "steps": [
+          {
+            "id": "unknown",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "mallory",
+                  "role_code": "super_admin"
+                }
+              }
+            }
+          },
+          {
+            "id": "empty",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "mallory",
+                  "role_code": ""
+                }
+              }
+            }
+          },
+          {
+            "id": "case",
+            "call": {
+              "args": {
+                "cpq_user": {
+                  "username": "mallory",
+                  "role_code": "FINANCE_MGR"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.unknown.result.role": "viewer",
+          "steps.empty.result.role": "viewer",
+          "steps.case.result.role": "viewer"
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.services.cpq_sso"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.real.identity.empty_role_cannot_read",
+      "version": "1.0",
+      "title": "没有任何角色信息的用户读不到任何项目：空身份不得被当成管理员",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "can_read"
+      },
+      "roles": [
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "nobody": "deny"
+        },
+        "projects": {},
+        "identities": {
+          "nobody": {
+            "username": "nobody",
+            "sso_roles": [],
+            "tech_role": "viewer"
+          }
+        },
+        "steps": [
+          {
+            "id": "empty",
+            "call": {
+              "args": {
+                "user": {
+                  "username": "ghost"
+                },
+                "meta": {
+                  "project_id": "aaaaaaaaaaaa",
+                  "owner": "carol"
+                }
+              }
+            }
+          },
+          {
+            "id": "no_meta",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "nobody"
+                },
+                "meta": {}
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.empty.result": false,
+          "steps.no_meta.result": false
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.real.identity.tech_role_only_user_not_upgraded",
+      "version": "1.0",
+      "title": "只有技术工艺角色、没有 CPQ 角色码的用户：effective_roles 只含该角色，不因缺 CPQ 身份被降级或升级",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "effective_roles"
+      },
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny"
+        },
+        "projects": {},
+        "identities": {
+          "engineer": {
+            "username": "alice",
+            "sso_roles": [],
+            "tech_role": "engineer"
+          }
+        },
+        "steps": [
+          {
+            "id": "roles",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "engineer"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.roles.result": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.services.project_access"
+      ]
+    },
+    {
+      "id": "acl.real.identity.multi_role_user_gets_union_without_privilege_escalation",
+      "version": "1.0",
+      "title": "多角色用户取并集但不提权：engineer + sales_mgr 仍拿不到 process_manager 的项目级写权",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "effective_roles"
+      },
+      "roles": [
+        "process_engineer",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "mallory": "deny"
+        },
+        "projects": {},
+        "identities": {
+          "multi": {
+            "username": "alice",
+            "sso_roles": [
+              "engineer",
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "engineer"
+          }
+        },
+        "steps": [
+          {
+            "id": "roles",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "multi"
+                }
+              }
+            }
+          },
+          {
+            "id": "write",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_write",
+              "args": {
+                "user": {
+                  "$identity": "multi"
+                },
+                "meta": {
+                  "project_id": "aaaaaaaaaaaa",
+                  "owner": "carol"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.roles.result": {
+            "$contains": "viewer"
+          },
+          "steps.write.result": false
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "failure_type": "permission_denied"
+    }
+  ],
+  "notes": "身份一律过真实 cpq_sso.to_tech_user；runner 不凭用户名猜角色。"
+}

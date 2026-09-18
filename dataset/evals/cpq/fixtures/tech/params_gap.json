@@ -1,0 +1,8 @@
+{
+  "fixture_id": "params_gap",
+  "items": [
+    {"name": "焊接方式", "value": "激光焊", "required": true},
+    {"name": "焊接电流", "value": "", "required": true},
+    {"name": "清洗方式", "value": "水洗", "required": false}
+  ]
+}

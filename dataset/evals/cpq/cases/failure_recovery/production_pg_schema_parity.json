@@ -1,0 +1,58 @@
+{
+  "suite_id": "production_pg_schema_parity",
+  "domain": "failure_recovery",
+  "title": "隔离 PostgreSQL：真实初始化函数建出的表 / 列 / 索引 / 约束 catalog 复盘",
+  "notes": "表由 cpq_auth.init() + cpq_wf.init() 建立（生产 DDL 入口），不是测试另抄的一套。默认跳过；需 CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST。",
+  "cases": [
+    {
+      "id": "pg.schema.catalog_parity",
+      "version": "1.0",
+      "title": "真库 schema parity：关键表 / 列 / 部分唯一索引 / 外键与生产 DDL 定义一致",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "integration",
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "init"
+      },
+      "roles": [
+        "admin"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "schema.catalog_parity"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.schema": "cpq_wf",
+          "steps.pg.result.indexes.uq_wf_handoff_key.unique": true,
+          "steps.pg.result.indexes.uq_wf_task_open_kind.unique": true
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "integration",
+        "schema"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:cpq_wf"
+      ],
+      "failure_type": "none"
+    }
+  ]
+}

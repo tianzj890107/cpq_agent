@@ -1,0 +1,1338 @@
+{
+  "suite_id": "ui_protocol.ui_protocol",
+  "title": "UI 协议：左右同步、看板内展开、参数页签归属、错误面、主色、输入区对齐",
+  "domain": "ui_protocol",
+  "notes": "只断言有业务意义的协议项，不校验无业务意义的 CSS 细节。",
+  "cases": [
+    {
+      "id": "ui.board.parse_fills_left_and_right",
+      "version": "1.0",
+      "title": "一键解析：左侧 Agent 输出与右侧看板同步填充，字段带来源徽标",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-parse-1"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_ui1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_ui1",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "ui-parse-1"
+        },
+        {
+          "op": "ui_board_sync",
+          "session_id": "qs_ui1"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "board_synced",
+          "sources": [
+            "ai_recommended"
+          ]
+        },
+        "state": {
+          "quote.qs_ui1.fields.customer.source": "ai_recommended",
+          "quote.qs_ui1.fields.customer.value": "亿纬锂能",
+          "quote.qs_ui1.left_summary.missing": {
+            "$len": 0
+          }
+        },
+        "ui_protocol": {
+          "board_left_right_sync": true,
+          "field_source_badge": [
+            "ai_recommended"
+          ],
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ]
+    },
+    {
+      "id": "ui.board.manual_edit_changes_source_badge",
+      "version": "1.0",
+      "title": "人工修改字段后来源徽标变为 manual，人工值不被重新解析覆盖",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-parse-2"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_ui2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_ui2",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "ui-parse-2"
+        },
+        {
+          "op": "quote_edit_field",
+          "session_id": "qs_ui2",
+          "actor": "erin",
+          "field": "capacity",
+          "value": "6.0GWh",
+          "source": "manual"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_ui2",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "ui-parse-3"
+        },
+        {
+          "op": "ui_board_sync",
+          "session_id": "qs_ui2"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "board_synced",
+          "sources": [
+            "ai_recommended",
+            "manual"
+          ]
+        },
+        "state": {
+          "quote.qs_ui2.fields.capacity.value": "6.0GWh",
+          "quote.qs_ui2.fields.capacity.source": "manual"
+        },
+        "ui_protocol": {
+          "field_source_badge": [
+            "ai_recommended",
+            "manual"
+          ]
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ]
+    },
+    {
+      "id": "ui.board.part_detail_stays_in_board",
+      "version": "1.0",
+      "title": "零件详情在看板内部展开，不在父壳上层弹出",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-part-3"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_part_open",
+          "project_id": "tp_ui3",
+          "actor": "alice",
+          "part_id": "P01",
+          "view": "3d"
+        },
+        {
+          "op": "ui_board_sync",
+          "session_id": "",
+          "part_container": "board"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "board_synced"
+        },
+        "state": {
+          "ui.part_detail_in_board": true,
+          "tech.tp_ui3.drawing.parts": 12
+        },
+        "ui_protocol": {
+          "part_detail_in_board": true
+        },
+        "records": {
+          "events": 3
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md"
+      ]
+    },
+    {
+      "id": "ui.params.tab_belongs_to_integration_phase",
+      "version": "1.0",
+      "title": "3.2 参数推荐出现在组装与整合页签，不出现在成本测算",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-params-4"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_board_sync",
+          "session_id": "",
+          "params_phase": 3,
+          "primary_actions": 1
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_ui4",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "phases": 5,
+          "stages": 13
+        },
+        "state": {
+          "projection.phases.3.title": "组装与整合",
+          "projection.phases.4.title": "成本测算",
+          "ui.params_tab_phase": 3
+        },
+        "ui_protocol": {
+          "params_tab_phase": 3,
+          "single_primary_action": true
+        },
+        "forbidden": [
+          "legacy_wording",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ]
+    },
+    {
+      "id": "ui.error.role_hint_only_in_board",
+      "version": "1.0",
+      "title": "角色提示只保留在看板，不重复插到顶部会话",
+      "domain": "ui_protocol",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-role-5"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "board_action",
+          "actor": "carol",
+          "action": "confirm_cost",
+          "role_required": [
+            "finance_mgr"
+          ],
+          "code": "forbidden"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "ui.error_surface": "board",
+          "ui.session_error": "",
+          "signals.top_toast_created": false,
+          "signals.role_hint_right_only": true
+        },
+        "ui_protocol": {
+          "error_surface": "board"
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "negative",
+        "permission",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "ui.error.critical_failure_persistent",
+      "version": "1.0",
+      "title": "关键失败常驻显示，不被自动清掉",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-crit-6"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_error_banner",
+          "critical": true,
+          "surface": "board",
+          "brand_color": "#0060e6",
+          "code": "cost_confirm_failed"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "banner_ready",
+          "critical": true
+        },
+        "state": {
+          "ui.critical_failure_persistent": true,
+          "ui.quiet_failure_no_card": false,
+          "ui.session_error": "cost_confirm_failed",
+          "ui.board_error": "cost_confirm_failed"
+        },
+        "ui_protocol": {
+          "critical_failure_persistent": true,
+          "quiet_failure_no_card": false
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "failure",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ],
+      "failure_type": "ui_protocol_violation"
+    },
+    {
+      "id": "ui.error.quiet_failure_no_permanent_card",
+      "version": "1.0",
+      "title": "非关键失败不制造永久错误卡",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-quiet-7"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui7",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_error_banner",
+          "critical": false,
+          "surface": "board",
+          "brand_color": "#0060e6"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "banner_ready",
+          "critical": false
+        },
+        "state": {
+          "ui.critical_failure_persistent": false,
+          "ui.quiet_failure_no_card": true
+        },
+        "ui_protocol": {
+          "quiet_failure_no_card": true,
+          "critical_failure_persistent": false
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ]
+    },
+    {
+      "id": "ui.brand.primary_color_is_blue",
+      "version": "1.0",
+      "title": "系统主色提示为品牌蓝 #0060e6",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-brand-8"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_error_banner",
+          "critical": false,
+          "brand_color": "#0060e6"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "banner_ready"
+        },
+        "state": {
+          "ui.brand_color": "#0060e6"
+        },
+        "ui_protocol": {
+          "brand_color": "#0060e6"
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "brand"
+      ],
+      "source_specs": [
+        "docs/specs/global-brand-color-0060e6.md"
+      ]
+    },
+    {
+      "id": "ui.composer.bottom_aligned",
+      "version": "1.0",
+      "title": "报价与技术工艺输入框底部对齐，且模型按钮不占输入区",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-composer-9"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui9",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_composer",
+          "composer": {
+            "quote_padding": "10px 16px",
+            "tech_padding": "10px 16px",
+            "model_button_in_composer": false
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "composer_ready",
+          "aligned": true,
+          "model_button_in_composer": false
+        },
+        "state": {
+          "ui.quote_bottom_offset": 10,
+          "ui.tech_bottom_offset": 10
+        },
+        "ui_protocol": {
+          "composer_bottom_aligned": true,
+          "model_button_in_composer": false
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ]
+    },
+    {
+      "id": "ui.composer.misalignment_detected",
+      "version": "1.0",
+      "title": "输入区底部错位必须被检出：13px vs 9px 结果为未对齐",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-composer-10"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui10",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "ui_composer",
+          "composer": {
+            "quote_padding": "13px 16px",
+            "tech_padding": "9px 16px",
+            "model_button_in_composer": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "composer_ready",
+          "aligned": false,
+          "model_button_in_composer": true
+        },
+        "state": {
+          "ui.quote_bottom_offset": 13,
+          "ui.tech_bottom_offset": 9,
+          "ui.model_button_in_composer": true
+        },
+        "ui_protocol": {
+          "composer_bottom_aligned": false,
+          "model_button_in_composer": true
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "negative",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ],
+      "failure_type": "ui_protocol_violation"
+    },
+    {
+      "id": "ui.error.board_and_session_consistent",
+      "version": "1.0",
+      "title": "看板动作失败时左侧会话与右侧看板错误一致且带 trace_id",
+      "domain": "ui_protocol",
+      "priority": "P2",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ui-err-11"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_ui11",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "board_action",
+          "actor": "carol",
+          "action": "publish_report",
+          "fail": true,
+          "critical": true,
+          "code": "publish_failed"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "code": "publish_failed",
+          "trace_id": {
+            "$present": true
+          }
+        },
+        "state": {
+          "ui.board_error": "publish_failed",
+          "ui.session_error": "publish_failed",
+          "signals.left_right_error_consistent": true
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true,
+          "critical_failure_persistent": true
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "failure",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/quote-tech-chat-composer-model-removal-and-bottom-alignment.md"
+      ],
+      "failure_type": "ui_protocol_violation"
+    }
+  ]
+}

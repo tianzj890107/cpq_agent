@@ -1,0 +1,651 @@
+{
+  "suite_id": "auth_acl.production_review_write",
+  "title": "审核 / 发布专业写接口（真实路由 + 接口专属角色门禁）",
+  "domain": "auth_acl",
+  "cases": [
+    {
+      "id": "acl.real.director.publish_reaches_report_gate",
+      "version": "1.0",
+      "title": "工艺技术总监发布报告：通用写 ACL 不得提前阻断，落到报告自身的业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/process-report/publish"
+        }
+      },
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "manager": {
+            "username": "carol",
+            "display_name": "卡罗尔",
+            "sso_roles": [
+              "process_manager"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "publish",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/process-report/publish",
+              "project": "handoff",
+              "json": {
+                "note": "发布"
+              }
+            }
+          },
+          {
+            "id": "manager_publish",
+            "http": {
+              "identity": "manager",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/process-report/publish",
+              "project": "handoff",
+              "json": {
+                "note": "发布"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.publish.status": 404,
+          "steps.publish.detail": {
+            "$ne": "项目不存在"
+          },
+          "steps.manager_publish.status": 404,
+          "steps.manager_publish.detail": {
+            "$ne": "项目不存在"
+          }
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/process-report/publish"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/process-report/publish"
+      ],
+      "failure_type": "missing_prerequisite",
+      "notes": "工艺经理在 CPQ 单经理模式下也拿到发布权，因此这里断言的是「进入业务门禁」，不是「被拒」。"
+    },
+    {
+      "id": "acl.real.director.report_review_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监审核报告：ACL 放行，落到报告业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/process-report/review"
+        }
+      },
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "review",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/process-report/review",
+              "project": "handoff",
+              "json": {
+                "action": "approve"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 404
+        },
+        "state": {
+          "steps.review.detail": {
+            "$ne": "项目不存在"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/process-report/review"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/process-report/review"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.director.requirement_review_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监审核需求：ACL 放行，落到需求单业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/requirement/review"
+        }
+      },
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "review",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/requirement/review",
+              "project": "handoff",
+              "json": {
+                "action": "approve"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 404
+        },
+        "state": {
+          "steps.review.detail": {
+            "$ne": "项目不存在"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/requirement/review"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/requirement/review"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.director.version_approve_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监审批版本：ACL 放行，落到版本业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/versions/{version}/approve"
+        }
+      },
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "approve",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/versions/{version}/approve",
+              "project": "handoff",
+              "params": {
+                "comment": "同意"
+              }
+            }
+          }
+        ],
+        "path_params": {
+          "version": 1
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 404
+        },
+        "state": {
+          "steps.approve.detail": {
+            "$ne": "项目不存在"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/versions/{version}/approve"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/versions/{version}/approve"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.director.distribution_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监设置报告分发：ACL 放行，落到报告业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/process-report/distribution"
+        }
+      },
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "dist",
+            "http": {
+              "identity": "director",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/process-report/distribution",
+              "project": "handoff",
+              "json": {
+                "recipients": [
+                  "sales"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 404
+        },
+        "state": {
+          "steps.dist.detail": {
+            "$ne": "项目不存在"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:PUT /api/projects/{project_id}/process-report/distribution"
+      ],
+      "covers_routes": [
+        "PUT /api/projects/{project_id}/process-report/distribution"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.finance_related_but_wrong_duty_gets_route_403",
+      "version": "1.0",
+      "title": "财务经理与项目相关但无审核职责：拿到的是接口专属 403，文案指向工艺技术总监，而不是通用写拒绝",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/process-report/publish"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "publish",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/process-report/publish",
+              "project": "handoff",
+              "json": {
+                "note": "发布"
+              }
+            }
+          },
+          {
+            "id": "confirm_cost",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/confirm",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.publish.status": 403,
+          "steps.publish.detail": {
+            "$contains": "工艺技术总监"
+          },
+          "steps.confirm_cost.status": 403,
+          "steps.confirm_cost.detail": {
+            "$contains": "财务经理"
+          }
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/process-report/publish"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/process-report/publish",
+        "POST /api/projects/{project_id}/cost-review/confirm"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "双向反例：ACL 放行后，接口自己的角色门禁必须给出「这一步该谁做」的专属文案。"
+    }
+  ]
+}

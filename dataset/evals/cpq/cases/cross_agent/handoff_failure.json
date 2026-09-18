@@ -1,0 +1,781 @@
+{
+  "suite_id": "cross_agent.handoff.failure",
+  "title": "跨 Agent 回传失败与恢复：缺实例号 / 认不回 / 多候选 / 源任务异常 / 事务回滚",
+  "domain": "cross_agent",
+  "notes": "回传失败必须整体回滚（消息 / 任务 / 审计 / 快照都不留痕），源任务不能被错误关闭。",
+  "cases": [
+    {
+      "id": "cross.fail.bc_missing",
+      "version": "1.0",
+      "title": "回传缺少 business_case_id：明确失败（422），不新建卡片",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-1"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f1",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "",
+          "target_quote_session_id": "qc1",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "1.0000"
+            }
+          },
+          "idempotency_key": "cf-1",
+          "expect": {
+            "status": 422,
+            "code": "business_case_missing"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "business_case_missing"
+        },
+        "state": {
+          "quote.qc1.current_step": 2
+        },
+        "records": {
+          "handoff_rows": 0,
+          "cards": 1,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "cross.fail.bc_unknown",
+      "version": "1.0",
+      "title": "business_case_id 认不回任何卡片：明确 409 no_candidate",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-2"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000002",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f2",
+          "source_task_id": "t_ghost",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_unknown00002",
+          "target_quote_session_id": "",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "1.0000"
+            }
+          },
+          "idempotency_key": "cf-2",
+          "expect": {
+            "status": 409,
+            "code": "no_candidate"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "no_candidate"
+        },
+        "state": {
+          "quote.qc2.current_step": 2
+        },
+        "records": {
+          "handoff_rows": 0,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "not_found"
+    },
+    {
+      "id": "cross.fail.bc_multiple_candidates",
+      "version": "1.0",
+      "title": "同一业务实例号命中两张卡片：停下让人选，不许自动挑",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-3"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_dup0000001",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "create_quote_card",
+          "session_id": "qc4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_dup0000001",
+          "fields": {
+            "customer": "国轩高科（重复单）"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f3",
+          "source_task_id": "t_ghost",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_dup0000001",
+          "target_quote_session_id": "",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "1.0000"
+            }
+          },
+          "idempotency_key": "cf-3",
+          "expect": {
+            "status": 409,
+            "code": "multiple_candidates"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "multiple_candidates"
+        },
+        "state": {
+          "quote.qc3.current_step": 2,
+          "quote.qc4.current_step": 2
+        },
+        "records": {
+          "handoff_rows": 0,
+          "cards": 2,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "cpq_case_link.py"
+      ],
+      "quote_step": 2,
+      "failure_type": "not_found"
+    },
+    {
+      "id": "cross.fail.source_task_not_closed",
+      "version": "1.0",
+      "title": "回传失败时源任务不能被错误关闭（仍是 claimed）",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-5-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000005",
+          "fields": {
+            "customer": "宁德时代"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qc5",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_fail0000005",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cf-5"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send_failing",
+          "actor": "dave",
+          "source_project_id": "tp_f5",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000005",
+          "target_quote_session_id": "qc5",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "2.0000"
+            }
+          },
+          "fail_at": "insert_handoff",
+          "idempotency_key": "cf-5-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "code": "handoff_failed",
+          "rolled_back": true,
+          "source_task_status": "claimed"
+        },
+        "state": {
+          "tasks.t_001.status": "claimed",
+          "quote.qc5.current_step": 2
+        },
+        "records": {
+          "handoff_rows": 0,
+          "handoffs_created": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "recovery",
+        "rollback",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "transaction_rollback"
+    },
+    {
+      "id": "cross.fail.transaction_rollback",
+      "version": "1.0",
+      "title": "回传事务失败整体回滚：消息 / 任务 / 审计 / 快照都不留痕",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-6-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc6",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000006",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qc6",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_fail0000006",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cf-6"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send_failing",
+          "actor": "dave",
+          "source_project_id": "tp_f6",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000006",
+          "target_quote_session_id": "qc6",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "3.0000"
+            }
+          },
+          "fail_at": "insert_handoff",
+          "idempotency_key": "cf-6-hb",
+          "expect": {
+            "status": 500,
+            "code": "handoff_failed",
+            "rolled_back": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "code": "handoff_failed",
+          "before": {
+            "messages": 3,
+            "tasks": 1,
+            "handoffs": 0
+          },
+          "after": {
+            "messages": 3,
+            "tasks": 1,
+            "handoffs": 0
+          }
+        },
+        "state": {
+          "quote.qc6.current_step": 2,
+          "quote.qc6.steps.2.snapshot": {
+            "$absent": true
+          },
+          "tasks.t_001.status": "claimed"
+        },
+        "records": {
+          "rollbacks": 1,
+          "handoff_rows": 0,
+          "tasks_total": 1
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "recovery",
+        "rollback",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "transaction_rollback"
+    },
+    {
+      "id": "cross.fail.source_task_not_claimed",
+      "version": "1.0",
+      "title": "来源任务还没被领取：回传被拒（409），卡片不推进",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-7-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc7",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000007",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qc7",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_fail0000007",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cf-7"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f7",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000007",
+          "target_quote_session_id": "qc7",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "4.0000"
+            }
+          },
+          "idempotency_key": "cf-7-hb",
+          "expect": {
+            "status": 409,
+            "code": "source_task_not_owned"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "source_task_not_owned"
+        },
+        "state": {
+          "quote.qc7.current_step": 2,
+          "tasks.t_001.status": "open"
+        },
+        "records": {
+          "handoff_rows": 0,
+          "messages_total": 2
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "cross.fail.source_task_missing",
+      "version": "1.0",
+      "title": "来源任务不存在：回传 404，不许静默新建卡片",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-8-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc8",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000008",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f8",
+          "source_task_id": "t_missing8",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000008",
+          "target_quote_session_id": "qc8",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "5.0000"
+            }
+          },
+          "idempotency_key": "cf-8-hb",
+          "expect": {
+            "status": 404,
+            "code": "source_task_not_found"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 404,
+          "code": "source_task_not_found"
+        },
+        "state": {
+          "quote.qc8.current_step": 2
+        },
+        "records": {
+          "handoff_rows": 0,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "not_found"
+    },
+    {
+      "id": "cross.fail.error_then_recover",
+      "version": "1.0",
+      "title": "回传失败后按同一幂等键重放：只补一次副作用，不重复落库",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cf-9-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qc9",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_fail0000009",
+          "fields": {
+            "customer": "宁德时代"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qc9",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_fail0000009",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cf-9"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send_failing",
+          "actor": "dave",
+          "source_project_id": "tp_f9",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000009",
+          "target_quote_session_id": "qc9",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "6.0000"
+            }
+          },
+          "idempotency_key": "cf-9-hb",
+          "expect": {
+            "status": 500,
+            "code": "handoff_failed",
+            "rolled_back": true
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_f9",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_fail0000009",
+          "target_quote_session_id": "qc9",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "6.0000"
+            }
+          },
+          "idempotency_key": "cf-9-hb",
+          "expect": {
+            "code": "sent",
+            "already_sent": false
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "already_sent": false,
+          "business_case_id": "bc_fail0000009",
+          "source_task_id": "t_001",
+          "current_step": 3
+        },
+        "state": {
+          "quote.qc9.current_step": 3,
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "rollbacks": 1,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "recovery",
+        "rollback",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "transaction_rollback"
+    }
+  ]
+}

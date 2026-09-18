@@ -1,0 +1,1698 @@
+{
+  "suite_id": "session_history.session_timeline",
+  "title": "会话、历史与恢复：消息保存、顺序恢复、旧口径兼容、中断恢复与重放去重",
+  "domain": "session_history",
+  "notes": "历史消息原文与旧 page_context 原样保留；新显示统一五阶段口径。",
+  "cases": [
+    {
+      "id": "hist.timeline.messages_persisted",
+      "version": "1.0",
+      "title": "Agent 消息完整保存：用户与助手消息按追加顺序落库",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "hist-m1"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "history/session_timeline_sample.json"
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_timeline",
+          "actor": "alice",
+          "kind": "message",
+          "role": "user",
+          "text": "补充：按 120A 复核",
+          "dedup_key": "hist-m1"
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_timeline",
+          "actor": "alice",
+          "kind": "message",
+          "role": "assistant",
+          "text": "已按 120A 重新推荐参数",
+          "dedup_key": "hist-m2"
+        },
+        {
+          "op": "tech_timeline_read",
+          "project_id": "tp_timeline",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "OK",
+          "count": 7
+        },
+        "state": {
+          "tech.tp_timeline.timeline.0.kind": "message",
+          "tech.tp_timeline.timeline.0.text": "上传图纸并解析",
+          "tech.tp_timeline.timeline.5.text": "补充：按 120A 复核",
+          "tech.tp_timeline.timeline.6.kind": "message",
+          "tech.tp_timeline.timeline.6.role": "assistant",
+          "tech.tp_timeline.timeline.6.at": {
+            "$format": "iso8601"
+          }
+        },
+        "records": {
+          "session_events": 2,
+          "fixture_loads": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.timeline.tool_trace_and_order",
+      "version": "1.0",
+      "title": "工具轨迹与业务动作按同一顺序恢复：tool / board / message 不丢不乱序",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "hist-t1"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "history/session_timeline_sample.json"
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_timeline",
+          "actor": "alice",
+          "kind": "tool",
+          "role": "assistant",
+          "payload": {
+            "name": "tech_ui",
+            "args": {
+              "view": "params"
+            }
+          },
+          "dedup_key": "hist-t1"
+        },
+        {
+          "op": "session_restore",
+          "project_id": "tp_timeline",
+          "actor": "alice",
+          "entry": "history_drawer"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "restored",
+          "entry": "history_drawer",
+          "tool_trace": 2,
+          "board": 1,
+          "messages": 3
+        },
+        "state": {
+          "restore.order": {
+            "$order": "ascending"
+          },
+          "restore.stage": "2.1 图纸解析",
+          "restore.page_context": "2.1 图纸解析"
+        },
+        "records": {
+          "restore_history_drawer": 1,
+          "session_events": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.open.home_card_and_history_same_stage",
+      "version": "1.0",
+      "title": "首页卡片与历史入口打开同一项目的同一真实 stage",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "entry": "home_card",
+        "idempotency_key": "hist.open.home_card_and_history_same_stage"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "继续整合图纸",
+              "payload": {},
+              "at": "2026-09-15T09:00:00+08:00",
+              "page_context": "3 组装与整合"
+            }
+          ]
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_hist3",
+          "actor": "alice",
+          "entry": "home_card"
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_hist3",
+          "actor": "alice",
+          "entry": "history_drawer"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "project_id": "tp_hist3",
+          "entry": "history_drawer",
+          "page_context": "3 组装与整合",
+          "timeline_events": 1
+        },
+        "state": {
+          "focus.project": "tp_hist3",
+          "focus.stage": "3 组装与整合"
+        },
+        "records": {
+          "open_home_card": 1,
+          "open_history_drawer": 1
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible",
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-home-project-cards-and-agent-history.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.open.history_card_restores_real_stage",
+      "version": "1.0",
+      "title": "从历史项目卡片打开后恢复，仍落在项目真实 stage",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "entry": "history_drawer",
+        "idempotency_key": "hist.open.history_card_restores_real_stage"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "成本再核一遍",
+              "payload": {},
+              "at": "2026-09-15T10:00:00+08:00",
+              "page_context": "4 成本测算"
+            }
+          ]
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_hist4",
+          "actor": "alice",
+          "entry": "home_card"
+        },
+        {
+          "op": "session_restore",
+          "project_id": "tp_hist4",
+          "actor": "alice",
+          "entry": "history_drawer"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "restored",
+          "stage": "4 成本测算",
+          "messages": 1
+        },
+        "state": {
+          "focus.stage": "4 成本测算",
+          "restore.page_context": "4 成本测算"
+        },
+        "records": {
+          "open_home_card": 1,
+          "restore_history_drawer": 1
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-home-project-cards-and-agent-history.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.refresh.keeps_right_board_fields",
+      "version": "1.0",
+      "title": "刷新不丢右侧看板字段：图纸 12 个零件与参数仍在",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "hist-r1"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_refresh",
+          "project_id": "tp_hist5",
+          "actor": "alice"
+        },
+        {
+          "op": "session_restore",
+          "project_id": "tp_hist5",
+          "actor": "alice",
+          "entry": "refresh"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "restored",
+          "stage": "3 组装与整合"
+        },
+        "state": {
+          "tech.tp_hist5.drawing.parts": 12,
+          "tech.tp_hist5.integration.params.0.name": "焊接方式",
+          "tech.tp_hist5.integration.params_confirmed": true,
+          "tech.tp_hist5.cost.total.amount": "15.5000"
+        },
+        "records": {
+          "restore_refresh": 1,
+          "session_events": 0
+        },
+        "forbidden": [
+          "refresh_cleared_state"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "refresh"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ]
+    },
+    {
+      "id": "hist.rebind.no_cross_session_leak",
+      "version": "1.0",
+      "title": "项目重新绑定不会串会话：两个项目各自消息互不出现",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "hist-rb1"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist6a",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "项目 A 的私有需求",
+              "payload": {},
+              "at": "2026-09-15T09:00:00+08:00",
+              "page_context": "1.1 创建需求"
+            }
+          ]
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist6b",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "2.1 图纸解析",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "项目 B 的私有图纸",
+              "payload": {},
+              "at": "2026-09-15T09:01:00+08:00",
+              "page_context": "2.1 图纸解析"
+            }
+          ]
+        },
+        {
+          "op": "session_rebind_project",
+          "project_id": "tp_hist6a",
+          "other_project_id": "tp_hist6b",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "rebound",
+          "isolated": true,
+          "a_events": 1,
+          "b_events": 1
+        },
+        "state": {
+          "tech.tp_hist6a.timeline.0.text": "项目 A 的私有需求",
+          "tech.tp_hist6b.timeline.0.text": "项目 B 的私有图纸"
+        },
+        "records": {
+          "events": 3
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "hist.legacy.page_context_mapped_to_five_phase",
+      "version": "1.0",
+      "title": "旧 page_context 打开后映射到新的五阶段显示：组装与整合阶段归位到「3 组装与整合」",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "page_context": "2.2 组装与整合"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "tech/legacy_tech_project.json"
+        },
+        {
+          "op": "page_context_open",
+          "project_id": "tp_legacy2",
+          "page_context": "2.2 组装与整合"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "opened",
+          "stage_id": "process",
+          "display": "3 组装与整合"
+        },
+        "state": {
+          "tech.tp_legacy2.page_context": "3 组装与整合",
+          "tech.tp_legacy2.history_page_contexts.0": {
+            "$contains": "2.2"
+          }
+        },
+        "records": {
+          "fixture_loads": 1
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-home-project-cards-and-agent-history.md"
+      ]
+    },
+    {
+      "id": "hist.legacy.message_text_not_rewritten",
+      "version": "1.0",
+      "title": "历史消息原文不改写：打开旧页面后旧消息与旧 page_context 原样保留",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "page_context": "2.2 组装与整合"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "tech/legacy_tech_project.json"
+        },
+        {
+          "op": "page_context_open",
+          "project_id": "tp_legacy2",
+          "page_context": "2.2 组装与整合"
+        },
+        {
+          "op": "tech_timeline_read",
+          "project_id": "tp_legacy2",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "OK",
+          "count": 3
+        },
+        "state": {
+          "tech.tp_legacy2.timeline.0.text": "旧会话原文不动",
+          "tech.tp_legacy2.timeline.0.page_context": {
+            "$contains": "2.2"
+          },
+          "tech.tp_legacy2.timeline.1.kind": "tool",
+          "tech.tp_legacy2.timeline.1.payload.name": "tech_ui"
+        },
+        "records": {
+          "session_events": 0
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.legacy.project_and_session_kept",
+      "version": "1.0",
+      "title": "历史项目与会话不丢失：打开后仍只有 1 个项目 1 条会话",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "page_context": "2.3 成本测算"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "tech/legacy_tech_project.json"
+        },
+        {
+          "op": "page_context_open",
+          "project_id": "tp_legacy2",
+          "page_context": "2.3 成本测算"
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_legacy2",
+          "actor": "alice",
+          "entry": "history_drawer"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "project_id": "tp_legacy2",
+          "entry": "history_drawer",
+          "page_context": "4 成本测算",
+          "timeline_events": 3
+        },
+        "state": {
+          "tech.tp_legacy2.business_case.business_case_id": "bc_legacy0002",
+          "tech.tp_legacy2.page_context": "4 成本测算",
+          "tech.tp_legacy2.history_page_contexts": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "projects": 1,
+          "open_history_drawer": 1
+        },
+        "forbidden": [
+          "legacy_wording",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-home-project-cards-and-agent-history.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ]
+    },
+    {
+      "id": "hist.interrupted.task_shows_interrupted",
+      "version": "1.0",
+      "title": "中断任务显示 interrupted，不伪装成功",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "handoff/interrupted_cross_agent_case.json"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "handoff/interrupted_cross_agent_case.json"
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_interrupted",
+          "actor": "carol",
+          "entry": "task"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "project_id": "tp_interrupted",
+          "page_context": "2.1 图纸解析"
+        },
+        "state": {
+          "tasks.t_int1.status": "interrupted",
+          "tasks.t_int1.claimed_by_user_id": "carol",
+          "tasks.t_int1.project_id": ""
+        },
+        "records": {
+          "tasks_total": 1,
+          "open_task": 1
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "interrupted"
+      ],
+      "source_specs": [
+        "docs/specs/tech-task-interrupted-state.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "hist.interrupted.restart_no_duplicate_project",
+      "version": "1.0",
+      "title": "服务重启后恢复中断任务：不新建重复项目 / 任务 / 会话",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "handoff/interrupted_cross_agent_case.json"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "handoff/interrupted_cross_agent_case.json"
+        },
+        {
+          "op": "service_restart_recover"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "recovered",
+          "resumed": [
+            "t_int1"
+          ]
+        },
+        "state": {
+          "tasks.t_int1.status": "claimed",
+          "tasks.t_int1.resumed_at": {
+            "$format": "iso8601"
+          },
+          "tech.tp_interrupted.business_case.source_task_id": "t_int1"
+        },
+        "records": {
+          "projects": 1,
+          "cards": 1,
+          "tasks_total": 1,
+          "restarts": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "recovery",
+        "interrupted"
+      ],
+      "source_specs": [
+        "docs/specs/tech-task-interrupted-state.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "failure_type": "refresh_failure"
+    },
+    {
+      "id": "hist.interrupted.resume_original_task",
+      "version": "1.0",
+      "title": "恢复后继续原任务：任务号、业务实例号、报价会话都不变",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "handoff/interrupted_cross_agent_case.json"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "handoff/interrupted_cross_agent_case.json"
+        },
+        {
+          "op": "service_restart_recover"
+        },
+        {
+          "op": "tech_open_project",
+          "project_id": "tp_interrupted",
+          "actor": "carol",
+          "entry": "home_card"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "project_id": "tp_interrupted",
+          "page_context": "2.1 图纸解析"
+        },
+        "state": {
+          "tasks.t_int1.task_no": "TP-0200",
+          "tasks.t_int1.payload.business_case_id": "bc_interrupted1",
+          "tech.tp_interrupted.business_case.quote_session_id": "qs_interrupted",
+          "quote.qs_interrupted.business_case_id": "bc_interrupted1"
+        },
+        "records": {
+          "projects": 1,
+          "cards": 1,
+          "tasks_total": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "recovery",
+        "interrupted"
+      ],
+      "source_specs": [
+        "docs/specs/tech-task-interrupted-state.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "failure_type": "refresh_failure"
+    },
+    {
+      "id": "hist.replay.same_message_no_duplicate_side_effect",
+      "version": "1.0",
+      "title": "同一消息重放不重复执行业务副作用：命中去重键只回已存在序号",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "hist-dup-1"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist13",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "首次提交",
+              "payload": {},
+              "at": "2026-09-15T09:00:00+08:00",
+              "page_context": "1.1 创建需求"
+            }
+          ]
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_hist13",
+          "actor": "alice",
+          "kind": "message",
+          "role": "user",
+          "text": "重新提交同一需求",
+          "dedup_key": "hist-dup-1"
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_hist13",
+          "actor": "alice",
+          "kind": "message",
+          "role": "user",
+          "text": "重新提交同一需求",
+          "dedup_key": "hist-dup-1"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "already_appended",
+          "seq": 2,
+          "count": 2
+        },
+        "state": {
+          "tech.tp_hist13.timeline": {
+            "$len": 2
+          },
+          "tech.tp_hist13.timeline.1.text": "重新提交同一需求"
+        },
+        "records": {
+          "session_events": 1,
+          "events": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "hist.restore.left_right_consistent",
+      "version": "1.0",
+      "title": "会话恢复后左侧历史与右侧看板一致：stage 与消息条数对齐",
+      "domain": "session_history",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "entry": "home_card",
+        "idempotency_key": "hist.restore.left_right_consistent"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist14",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "timeline": [
+            {
+              "seq": 1,
+              "kind": "message",
+              "role": "user",
+              "text": "零件成本确认",
+              "payload": {},
+              "at": "2026-09-15T11:00:00+08:00",
+              "page_context": "4 成本测算"
+            },
+            {
+              "seq": 2,
+              "kind": "board",
+              "role": "board",
+              "text": "",
+              "payload": {
+                "view": "cost",
+                "rows": 3
+              },
+              "at": "2026-09-15T11:00:01+08:00",
+              "page_context": "4 成本测算"
+            }
+          ]
+        },
+        {
+          "op": "tech_refresh",
+          "project_id": "tp_hist14",
+          "actor": "alice"
+        },
+        {
+          "op": "session_restore",
+          "project_id": "tp_hist14",
+          "actor": "alice",
+          "entry": "home_card"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "restored",
+          "entry": "home_card",
+          "messages": 1,
+          "stage": "4 成本测算"
+        },
+        "state": {
+          "restore.board": {
+            "$len": 1
+          },
+          "restore.order": {
+            "$order": "ascending"
+          },
+          "tech.tp_hist14.page_context": "4 成本测算",
+          "tech.tp_hist14.cost.confirmed": true
+        },
+        "records": {
+          "restore_home_card": 1,
+          "events": 2
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ]
+    },
+    {
+      "id": "hist.new_session.five_phase_wording",
+      "version": "1.0",
+      "title": "新会话统一使用五阶段口径：投影恒为 5 阶段 13 子步骤",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "page_context": "1.1 创建需求",
+        "idempotency_key": "hist.new_session.five_phase_wording"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_hist15",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_hist15",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "phases": 5,
+          "stages": 13
+        },
+        "state": {
+          "tech.tp_hist15.page_context": "1.1 创建需求"
+        },
+        "records": {
+          "projections": 1
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible",
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ]
+    },
+    {
+      "id": "hist.legacy.interrupted_cross_agent_resume",
+      "version": "1.0",
+      "title": "跨 Agent 中断恢复：报价卡片与原技术任务仍一一对应，不串项目",
+      "domain": "session_history",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "fixture": "handoff/interrupted_cross_agent_case.json"
+      },
+      "actions": [
+        {
+          "op": "load_fixture_state",
+          "fixture": "handoff/interrupted_cross_agent_case.json"
+        },
+        {
+          "op": "service_restart_recover"
+        },
+        {
+          "op": "session_restore",
+          "project_id": "tp_interrupted",
+          "actor": "carol",
+          "entry": "history_drawer"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "restored",
+          "entry": "history_drawer"
+        },
+        "state": {
+          "tasks.t_int1.status": "claimed",
+          "quote.qs_interrupted.business_case_id": "bc_interrupted1",
+          "tech.tp_interrupted.business_case.business_case_id": "bc_interrupted1",
+          "tech.tp_interrupted.business_case.source_task_id": "t_int1"
+        },
+        "records": {
+          "cards": 1,
+          "projects": 1,
+          "tasks_total": 1,
+          "restarts": 1
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "recovery",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-task-interrupted-state.md",
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "failure_type": "refresh_failure"
+    }
+  ]
+}

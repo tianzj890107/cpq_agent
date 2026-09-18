@@ -1,0 +1,11 @@
+{
+  "provider_id": "rec-quote-parse-ok",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "1 确认需求配置"},
+  "stream": [
+    {"type": "text", "text": "已按需求文档填好右侧分区"},
+    {"type": "tool_use", "name": "quote_ui", "input": {"page_context": "1 确认需求配置",
+      "values": {"customer": "亿纬锂能", "capacity": "5.6GWh"}}},
+    {"type": "tool_result", "name": "quote_ui", "output": {"ok": true, "rendered": 2}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

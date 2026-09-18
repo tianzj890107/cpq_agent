@@ -1,0 +1,9 @@
+{
+  "provider_id": "rec-truncated-unrecoverable",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "3 组装与整合"},
+  "finish_reason": "length",
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "3 组装与整合",
+      "values": {"焊接方式": "激光"}}}
+  ]
+}

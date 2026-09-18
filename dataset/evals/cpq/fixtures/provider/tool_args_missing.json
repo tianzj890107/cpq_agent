@@ -1,0 +1,8 @@
+{
+  "provider_id": "rec-tool-args-missing",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "3 组装与整合"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "3 组装与整合"}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

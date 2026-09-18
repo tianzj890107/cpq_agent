@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "case.schema.json",
+  "title": "CPQ 业务回归案例",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "title",
+    "domain",
+    "priority",
+    "layer",
+    "roles",
+    "preconditions",
+    "input",
+    "actions",
+    "expected",
+    "invariants",
+    "tags",
+    "source_specs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{5,120}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 160
+    },
+    "domain": {
+      "enum": [
+        "quote",
+        "tech",
+        "cross_agent",
+        "auth_acl",
+        "session_history",
+        "concurrency",
+        "llm_contract",
+        "failure_recovery",
+        "ui_protocol"
+      ]
+    },
+    "priority": {
+      "enum": [
+        "P0",
+        "P1",
+        "P2"
+      ]
+    },
+    "layer": {
+      "enum": [
+        "deterministic",
+        "recorded_provider",
+        "integration"
+      ]
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "enum": [
+          "sales_mgr",
+          "process_mgr",
+          "process_engineer",
+          "finance_mgr",
+          "reviewer",
+          "admin",
+          "viewer"
+        ]
+      }
+    },
+    "preconditions": {
+      "type": "object"
+    },
+    "input": {
+      "type": "object"
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 40,
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "expected": {
+      "$ref": "#/$defs/expected"
+    },
+    "invariants": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 3
+      }
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 2
+      }
+    },
+    "source_specs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "minLength": 6
+      }
+    },
+    "stage": {
+      "enum": [
+        "requirement-create",
+        "requirement-confirm",
+        "requirement-review",
+        "drawing",
+        "process",
+        "cost",
+        "summary",
+        "report-review",
+        "report-publish"
+      ]
+    },
+    "sub_step": {
+      "enum": [
+        "1.1",
+        "1.2",
+        "1.3",
+        "2.1",
+        "3.1",
+        "3.2",
+        "3.3",
+        "4.1",
+        "4.2",
+        "4.3",
+        "5.1",
+        "5.2",
+        "5.3"
+      ]
+    },
+    "quote_step": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 6
+    },
+    "failure_type": {
+      "enum": [
+        "none",
+        "permission_denied",
+        "missing_prerequisite",
+        "duplicate_request",
+        "concurrency_conflict",
+        "transaction_rollback",
+        "provider_error",
+        "invalid_output",
+        "not_found",
+        "timeout",
+        "refresh_failure",
+        "stale_upstream",
+        "auth_failure",
+        "data_leak_attempt",
+        "ui_protocol_violation"
+      ]
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "executor": {
+      "description": "执行层（唯一口径，不允许从 layer 推断）。specification_only=没有可执行步骤；simulation=Sim 假库状态机；production_*=真实生产入口；postgres_integration=隔离 PostgreSQL。",
+      "enum": [
+        "specification_only",
+        "simulation",
+        "production_unit",
+        "production_http",
+        "recorded_provider",
+        "postgres_integration"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "type": "string",
+          "minLength": 6
+        },
+        "function": {
+          "type": "string",
+          "minLength": 2
+        },
+        "service": {
+          "type": "string",
+          "minLength": 4
+        },
+        "http": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "path"
+          ],
+          "properties": {
+            "method": {
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "minLength": 6
+            },
+            "handler": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "covers_routes": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "string",
+        "minLength": 8
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "expect": {
+          "type": "object"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "http": {
+          "type": "object",
+          "maxProperties": 8
+        },
+        "state": {
+          "type": "object",
+          "maxProperties": 40
+        },
+        "records": {
+          "type": "object",
+          "maxProperties": 40
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 30
+        },
+        "messages": {
+          "type": "array",
+          "maxItems": 30
+        },
+        "ui_protocol": {
+          "type": "object",
+          "maxProperties": 20
+        },
+        "concurrency": {
+          "type": "object",
+          "maxProperties": 12
+        },
+        "forbidden": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 120
+          }
+        },
+        "result": {
+          "type": "object",
+          "maxProperties": 40
+        },
+        "error": {
+          "type": "object",
+          "maxProperties": 8
+        }
+      }
+    }
+  }
+}

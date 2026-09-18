@@ -1,0 +1,9 @@
+{
+  "provider_id": "rec-cost-note",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "4 成本测算"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "4 成本测算",
+      "values": {"说明": "零件成本按最新料价测算"}}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

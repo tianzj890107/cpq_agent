@@ -1,0 +1,474 @@
+{
+  "suite_id": "llm_contract.production_tool_dispatch",
+  "title": "模型回放进入真实 Agent 工具分发边界",
+  "domain": "llm_contract",
+  "cases": [
+    {
+      "id": "llm.real.recorded_unknown_tool_is_rejected_by_dispatcher",
+      "version": "1.0",
+      "title": "回放的模型响应里出现未知工具：真实平台分发器用 fixture 里的工具名明确拒绝，不执行、不落库",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "recorded_provider",
+      "executor": "recorded_provider",
+      "entry": {
+        "module": "backend.services.oc_agent",
+        "function": "_run_platform_tool"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "alice",
+            "filename": "a.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "dispatch",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_run_platform_tool",
+              "args": {
+                "name": {
+                  "$fixture": "provider/unknown_tool.json",
+                  "$pick": "stream.0.name"
+                },
+                "params": {
+                  "$fixture": "provider/unknown_tool.json",
+                  "$pick": "stream.0.input"
+                },
+                "cwd": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ],
+        "provider": "provider/unknown_tool.json"
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.dispatch.result": {
+            "$contains_text": "未知的平台工具：shell_exec"
+          },
+          "steps.dispatch.tool": "_run_platform_tool",
+          "steps.dispatch.module": "backend.services.oc_agent"
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "partial_write_on_failure",
+          "sim_fallback",
+          "production_host_called"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+        "module:backend.services.oc_agent"
+      ],
+      "failure_type": "invalid_output",
+      "notes": "fixture 的 stream[0] 就是 tool_use(shell_exec)；案例用 $fixture 把工具名与参数喂进真实 _run_platform_tool，断言真实拒绝文案（不是 Sim 状态）。"
+    },
+    {
+      "id": "llm.real.recorded_tool_args_missing_returns_structured_error",
+      "version": "1.0",
+      "title": "回放的 tool_use 缺少 part_id：真实平台分发器返回结构化「未找到零件」，不伪造零件数据",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "recorded_provider",
+      "executor": "recorded_provider",
+      "entry": {
+        "module": "backend.services.oc_agent",
+        "function": "_run_platform_tool"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "alice",
+            "filename": "b.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "missing",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_run_platform_tool",
+              "args": {
+                "name": "GetPartDetail",
+                "params": {
+                  "$fixture": "provider/tool_args_missing.json",
+                  "$pick": "stream.0.input"
+                },
+                "cwd": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ],
+        "provider": "provider/tool_args_missing.json"
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.missing.result": {
+            "$contains_text": "未找到零件"
+          },
+          "steps.missing.tool": "_run_platform_tool"
+        },
+        "records": {
+          "unit_calls": 1
+        },
+        "forbidden": [
+          "partial_write_on_failure",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "provider"
+      ],
+      "source_specs": [
+        "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+        "module:backend.services.oc_agent"
+      ],
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "llm.real.recorded_state_reads_come_from_project_store",
+      "version": "1.0",
+      "title": "回放的 tech_ui 没有白名单 action：真实处理器拒绝且不入队；项目状态只从项目存储读",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "recorded_provider",
+      "executor": "recorded_provider",
+      "entry": {
+        "module": "backend.services.oc_agent",
+        "function": "_run_platform_tool"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "alice",
+            "filename": "state.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "dispatch",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_handle_tech_ui",
+              "args": {
+                "tool_input": {
+                  "$fixture": "provider/tech_requirement_parse.json",
+                  "$pick": "stream.0.input"
+                }
+              }
+            }
+          },
+          {
+            "id": "events",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_tech_ui_events",
+              "args": {}
+            }
+          },
+          {
+            "id": "state",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_run_platform_tool",
+              "args": {
+                "name": "GetProjectState",
+                "params": {},
+                "cwd": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ],
+        "provider": "provider/tech_requirement_parse.json"
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.dispatch.result": {
+            "$contains_text": "未知的 tech_ui action"
+          },
+          "steps.events.result": {
+            "$len": 0
+          },
+          "steps.state.result": {
+            "$contains_text": "state.dxf"
+          },
+          "steps.state.tool": "_run_platform_tool"
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+        "module:backend.services.oc_agent"
+      ],
+      "failure_type": "none"
+    },
+    {
+      "id": "llm.real.truncation_recovery_uses_real_llm_output",
+      "version": "1.0",
+      "title": "截断响应恢复：真实 llm_output 判定 length 截断、提高预算并拼接续写片段",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "recorded_provider",
+      "executor": "recorded_provider",
+      "entry": {
+        "module": "backend.services.llm_output",
+        "function": "stitch_fragments"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "flag",
+            "call": {
+              "module": "backend.services.llm_output",
+              "function": "is_truncated",
+              "args": {
+                "reason": {
+                  "$fixture": "provider/truncated_recoverable.json",
+                  "$pick": "finish_reason"
+                }
+              }
+            }
+          },
+          {
+            "id": "stitch",
+            "call": {
+              "module": "backend.services.llm_output",
+              "function": "stitch_fragments",
+              "args": {
+                "partial": {
+                  "$fixture": "provider/truncated_recoverable.json",
+                  "$pick": "stream.0.input.values.焊接方式"
+                },
+                "addition": {
+                  "$fixture": "provider/truncated_recoverable.json",
+                  "$pick": "continuation.tool_use.input.values.焊接电流"
+                }
+              }
+            }
+          }
+        ],
+        "provider": "provider/truncated_recoverable.json"
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.flag.result": true,
+          "steps.stitch.result": "激光焊120A",
+          "steps.stitch.tool": "stitch_fragments"
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "recovery",
+        "provider"
+      ],
+      "source_specs": [
+        "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+        "module:backend.services.llm_output"
+      ],
+      "failure_type": "provider_error",
+      "notes": "finish_reason 与续写片段都来自同一个 fixture，回放确实驱动了真实 llm_output 函数。"
+    },
+    {
+      "id": "llm.real.platform_tool_schemas_all_dispatchable",
+      "version": "1.0",
+      "title": "回放的参数推荐只给中文键值：真实集成参数接口要求 {code,value}，明确拒绝且不写入",
+      "domain": "llm_contract",
+      "priority": "P1",
+      "layer": "recorded_provider",
+      "executor": "recorded_provider",
+      "entry": {
+        "module": "backend.services.oc_agent",
+        "function": "_run_platform_tool"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "alice",
+            "filename": "c.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "probe",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_project_of",
+              "args": {
+                "cwd": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          },
+          {
+            "id": "recommend",
+            "call": {
+              "module": "backend.services.oc_agent",
+              "function": "_run_platform_tool",
+              "args": {
+                "name": "UpdateIntegrationParams",
+                "params": {
+                  "$fixture": "provider/params_recommend.json",
+                  "$pick": "stream.0.input.values"
+                },
+                "cwd": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ],
+        "provider": "provider/params_recommend.json"
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.probe.result": {
+            "$project_id": "tech"
+          },
+          "steps.probe.tool": "_project_of",
+          "steps.recommend.result": {
+            "$contains_text": "values 至少要给一项"
+          },
+          "steps.recommend.tool": "_run_platform_tool"
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "normal",
+        "provider"
+      ],
+      "source_specs": [
+        "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+        "module:backend.services.oc_agent"
+      ],
+      "notes": "工具名集合与 UI_ACTION_TOOLS 的静态一致性由 tests/test_cpq_eval_production_backed.py 逐条核对。"
+    }
+  ],
+  "notes": "固定 test-key 与录制响应；被调用的是真实 backend.services.oc_agent / llm_output。"
+}

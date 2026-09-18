@@ -1,0 +1,1373 @@
+{
+  "suite_id": "tech.stage1.requirement",
+  "title": "技术工艺第 1 阶段：工艺评估需求（1.1 创建 / 1.2 确认 / 1.3 审核）",
+  "domain": "tech",
+  "notes": "五阶段 13 子步骤口径：1.1 创建需求、1.2 确认需求、1.3 审核需求；每个子步骤都有正常与前置 / 权限失败。",
+  "cases": [
+    {
+      "id": "tech.s11.requirement.submit_ok",
+      "version": "1.0",
+      "title": "1.1 创建需求：提交需求单后进入待确认，投影停在 1.2",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {
+        "project": "tp_r1 新建，需求单未提交"
+      },
+      "input": {
+        "idempotency_key": "s11-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_r1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_create",
+          "project_id": "tp_r1",
+          "actor": "alice",
+          "submit": true,
+          "form": {
+            "客户": "亿纬锂能",
+            "产能": "5.6GWh",
+            "交期": "2026-12-31"
+          },
+          "idempotency_key": "s11-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_r1",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "1.2",
+          "completed_substeps": {
+            "$contains": "1.1"
+          }
+        },
+        "state": {
+          "tech.tp_r1.requirement.status": "pending_review",
+          "tech.tp_r1.requirement.created_by": "alice",
+          "projection.stages_total": 13,
+          "projection.phases_total": 5
+        },
+        "records": {
+          "tech_projects": 1,
+          "projections": 1
+        },
+        "events": [
+          {
+            "type": "requirement_created",
+            "status": "pending_review"
+          }
+        ],
+        "forbidden": [
+          "legacy_wording",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1"
+    },
+    {
+      "id": "tech.s11.requirement.draft_not_complete",
+      "version": "1.0",
+      "title": "1.1 只存草稿不算完成：投影仍停在 1.1",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s11-draft"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_r2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_create",
+          "project_id": "tp_r2",
+          "actor": "alice",
+          "form": {
+            "客户": "远景能源"
+          },
+          "idempotency_key": "s11-draft"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_r2",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "1.1",
+          "completed_substeps": {
+            "$len": 0
+          },
+          "actionable_substeps": {
+            "$contains": "1.1"
+          }
+        },
+        "state": {
+          "tech.tp_r2.requirement.status": "draft"
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s11.requirement.role_denied",
+      "version": "1.0",
+      "title": "只有工艺角色能建需求：审核员写入被拒（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s11-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_r3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_create",
+          "project_id": "tp_r3",
+          "actor": "frank",
+          "submit": true,
+          "form": {
+            "客户": "国轩高科"
+          },
+          "idempotency_key": "s11-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_r3.requirement.status": "draft",
+          "tech.tp_r3.requirement.created_by": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s11.requirement.repeat_idempotent",
+      "version": "1.0",
+      "title": "同一幂等键重复提交需求：不重复写会话 / 审计",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s11-rep"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_r4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_create",
+          "project_id": "tp_r4",
+          "actor": "alice",
+          "submit": true,
+          "form": {
+            "客户": "宁德时代"
+          },
+          "idempotency_key": "s11-rep",
+          "expect": {
+            "code": "submitted"
+          }
+        },
+        {
+          "op": "tech_requirement_create",
+          "project_id": "tp_r4",
+          "actor": "alice",
+          "submit": true,
+          "form": {
+            "客户": "宁德时代"
+          },
+          "idempotency_key": "s11-rep",
+          "expect": {
+            "code": "already_submitted"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_submitted",
+          "requirement": {
+            "status": "pending_review"
+          }
+        },
+        "state": {
+          "tech.tp_r4.requirement.status": "pending_review"
+        },
+        "records": {
+          "messages_total": 1,
+          "tech_projects": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-create",
+      "sub_step": "1.1",
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "tech.s12.requirement.confirm_ok",
+      "version": "1.0",
+      "title": "1.2 确认需求：无缺口时确认通过（人工确认才算完成）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s12-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_c1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.2 确认需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_confirm",
+          "project_id": "tp_c1",
+          "actor": "alice",
+          "idempotency_key": "s12-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_c1",
+          "actor": "frank"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "1.3",
+          "completed_substeps": {
+            "$contains": "1.2"
+          }
+        },
+        "state": {
+          "tech.tp_c1.requirement.confirmed": true,
+          "tech.tp_c1.requirement.confirmed_by": "alice",
+          "tech.tp_c1.requirement.completeness_checked": true
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "events": [
+          {
+            "type": "requirement_confirmed",
+            "waiver": false
+          }
+        ],
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-confirm",
+      "sub_step": "1.2"
+    },
+    {
+      "id": "tech.s12.requirement.gaps_blocked",
+      "version": "1.0",
+      "title": "1.2 有缺口且未豁免：确认被拒（409 gaps_not_waived）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s12-gap"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_c2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.2 确认需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_confirm",
+          "project_id": "tp_c2",
+          "actor": "alice",
+          "gaps": [
+            "产能",
+            "交期"
+          ],
+          "idempotency_key": "s12-gap",
+          "expect": {
+            "status": 409,
+            "code": "gaps_not_waived"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "gaps_not_waived"
+        },
+        "state": {
+          "tech.tp_c2.requirement.confirmed": false,
+          "tech.tp_c2.requirement.gaps": {
+            "$len": 2
+          }
+        },
+        "records": {
+          "messages_total": 0
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-confirm",
+      "sub_step": "1.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s12.requirement.waiver_allowed",
+      "version": "1.0",
+      "title": "1.2 缺口 + 显式 waiver：允许确认且缺口如实保留",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s12-waiver"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_c3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.2 确认需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_confirm",
+          "project_id": "tp_c3",
+          "actor": "alice",
+          "gaps": [
+            "产能"
+          ],
+          "waiver": true,
+          "idempotency_key": "s12-waiver"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "confirmed",
+          "gaps": [
+            "产能"
+          ],
+          "waiver": true
+        },
+        "state": {
+          "tech.tp_c3.requirement.confirmed": true,
+          "tech.tp_c3.requirement.waiver": true,
+          "tech.tp_c3.requirement.gaps": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "waiver"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "stage": "requirement-confirm",
+      "sub_step": "1.2"
+    },
+    {
+      "id": "tech.s12.requirement.prereq_missing",
+      "version": "1.0",
+      "title": "1.2 前置失败：需求单还是草稿，不能确认（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s12-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_c4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.2 确认需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_confirm",
+          "project_id": "tp_c4",
+          "actor": "alice",
+          "idempotency_key": "s12-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_c4.requirement.confirmed": false
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-confirm",
+      "sub_step": "1.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s13.requirement.review_approve",
+      "version": "1.0",
+      "title": "1.3 审核需求：审核员通过后放行图纸解析",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s13-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_v1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.3 审核需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": true,
+            "review": "",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_review",
+          "project_id": "tp_v1",
+          "actor": "frank",
+          "decision": "approve",
+          "idempotency_key": "s13-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_v1",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "2.1",
+          "completed_substeps": {
+            "$contains": "1.3"
+          }
+        },
+        "state": {
+          "tech.tp_v1.requirement.review": "approved",
+          "tech.tp_v1.requirement.status": "approved"
+        },
+        "records": {
+          "tech_projects": 1
+        },
+        "events": [
+          {
+            "type": "requirement_reviewed",
+            "decision": "approve"
+          }
+        ],
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-review",
+      "sub_step": "1.3"
+    },
+    {
+      "id": "tech.s13.requirement.review_reject",
+      "version": "1.0",
+      "title": "1.3 审核退回：状态回 delivered 前退回并通知创建人",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s13-reject"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_v2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.3 审核需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": true,
+            "review": "",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_review",
+          "project_id": "tp_v2",
+          "actor": "frank",
+          "decision": "reject",
+          "note": "产能口径要补",
+          "idempotency_key": "s13-reject"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "rejected",
+          "note": "产能口径要补"
+        },
+        "state": {
+          "tech.tp_v2.requirement.review": "rejected",
+          "tech.tp_v2.requirement.status": "rejected",
+          "tech.tp_v2.requirement.confirmed": true
+        },
+        "messages": [
+          {
+            "to": "alice",
+            "msg_type": "requirement_rejected"
+          }
+        ],
+        "records": {
+          "messages_total": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "reject"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-review",
+      "sub_step": "1.3"
+    },
+    {
+      "id": "tech.s13.requirement.review_prereq",
+      "version": "1.0",
+      "title": "1.3 前置失败：需求未确认时不能审核（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s13-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_v3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.3 审核需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_review",
+          "project_id": "tp_v3",
+          "actor": "frank",
+          "decision": "approve",
+          "idempotency_key": "s13-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_v3.requirement.review": ""
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-review",
+      "sub_step": "1.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s13.requirement.review_role_denied",
+      "version": "1.0",
+      "title": "1.3 权限失败：工艺工程师不能自己审自己（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s13-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_v4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.3 审核需求",
+          "requirement": {
+            "status": "pending_review",
+            "confirmed": true,
+            "review": "",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_requirement_review",
+          "project_id": "tp_v4",
+          "actor": "alice",
+          "decision": "approve",
+          "idempotency_key": "s13-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_v4.requirement.review": ""
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "requirement-review",
+      "sub_step": "1.3",
+      "failure_type": "permission_denied"
+    }
+  ]
+}

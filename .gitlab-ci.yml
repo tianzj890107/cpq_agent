@@ -8,9 +8,32 @@ workflow:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - when: never
 
+# --------------------------------------------------------------------------- #
+# 依赖安装（干净 python:3.10-slim 镜像里必须显式装 requirements.txt）
+#
+# 为什么必须装：production_unit / production_http / recorded_provider 会真的 import
+# 生产模块（backend.main → fastapi / pydantic / sqlalchemy / openai / tzdata …）。
+# 不装依赖时这些案例会被判 skipped，门禁就会「零执行却绿色」。所以：
+#   · 统一用本模板装 requirements.txt（版本与 Dockerfile 同源）；
+#   · 门禁一律用 `--strict`：缺依赖 / 有静默 skip / 空跑都判失败，且**不加 allow_failure**。
+# 镜像源沿用 Dockerfile 里已验证可用的阿里云配置（docker_build 在同一 CI 里跑）。
+# --------------------------------------------------------------------------- #
+.pip_base:
+  variables:
+    PIP_INDEX_URL: "https://mirrors.aliyun.com/pypi/simple/"
+    PIP_TRUSTED_HOST: "mirrors.aliyun.com"
+    PIP_DEFAULT_TIMEOUT: "120"
+    PIP_RETRIES: "5"
+    PIP_NO_CACHE_DIR: "1"
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt
+
 python_contract:
   stage: test
   image: python:3.10-slim
+  extends: .pip_base
   script:
     - python -m unittest discover -s tests -p 'test_*.py'
     - python -m py_compile cpq_suite_server.py cpq_auth.py cpq_wf.py cpq_tech_bridge.py
@@ -27,3 +50,69 @@ docker_build:
   needs: ["python_contract"]
   script:
     - docker build -f Dockerfile -t "cpq-agent:ci-${CI_COMMIT_SHORT_SHA}" .
+
+# --------------------------------------------------------------------------- #
+# CPQ 回归测试集门禁（scripts/cpq_eval）
+#
+# 四类门禁互相独立、都**不访问** PDT / 生产 / 真实模型 / 线上服务：
+#   · cpq_eval_fast               —— simulation + production_unit，纯离线；
+#   · cpq_eval_production_http    —— 真实 FastAPI TestClient + 真鉴权依赖，进程内；
+#   · cpq_eval_recorded_provider  —— 回放固定 provider fixture，进真实工具分发边界；
+#   · cpq_eval_postgres           —— 隔离 PostgreSQL service 上真跑 integration 案例
+#                                    与 mutation sentinel。
+# 四个 job 都用 `--strict`：缺依赖 / 全 skip / 空跑 / mutation survived 一律非零。
+# --------------------------------------------------------------------------- #
+.cpq_eval_base:
+  stage: test
+  image: python:3.10-slim
+  extends: .pip_base
+
+cpq_eval_fast:
+  extends: .cpq_eval_base
+  script:
+    - python -m scripts.cpq_eval.ci_gates --gate fast --strict
+
+cpq_eval_production_http:
+  extends: .cpq_eval_base
+  script:
+    - python -m scripts.cpq_eval.ci_gates --gate production_http --strict
+
+cpq_eval_recorded_provider:
+  extends: .cpq_eval_base
+  script:
+    - python -m scripts.cpq_eval.ci_gates --gate recorded_provider --strict
+
+cpq_eval_postgres:
+  extends: .cpq_eval_base
+  services:
+    - name: postgres:16-alpine
+      alias: cpq-eval-pg
+  variables:
+    POSTGRES_USER: cpq_eval
+    POSTGRES_PASSWORD: cpq_eval_ci_only
+    POSTGRES_DB: postgres
+    CPQ_EVAL_INTEGRATION: "1"
+    CPQ_EVAL_PG_CI: "1"
+    CPQ_EVAL_PG_HOST: cpq-eval-pg
+    CPQ_EVAL_PG_PORT: "5432"
+    CPQ_EVAL_PG_USER: cpq_eval
+    CPQ_EVAL_PG_PASSWORD: cpq_eval_ci_only
+    CPQ_EVAL_PG_MAINTENANCE_DB: postgres
+  script:
+    - |
+      python - <<'PY'
+      import time
+      import psycopg
+      for _ in range(60):
+          try:
+              psycopg.connect(host="cpq-eval-pg", user="cpq_eval",
+                              password="cpq_eval_ci_only", dbname="postgres",
+                              connect_timeout=3).close()
+              break
+          except Exception:
+              time.sleep(2)
+      else:
+          raise SystemExit("隔离 PostgreSQL service 未就绪")
+      print("隔离 PostgreSQL service 就绪")
+      PY
+    - python -m scripts.cpq_eval.ci_gates --gate postgres_integration --strict

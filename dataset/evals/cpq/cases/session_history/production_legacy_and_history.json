@@ -1,0 +1,1035 @@
+{
+  "suite_id": "session_history.production_legacy_and_history",
+  "title": "历史数据兼容与会话恢复（真实 cpq_wf / store / workflow_projection / tasks）",
+  "domain": "session_history",
+  "notes": "历史兼容三组 fixture（legacy_quote_case / legacy_tech_project / interrupted_cross_agent_case）在这里被真实执行器消费：报价步骤单调前进走真实 cpq_wf.advance_step_no；五阶段 13 子步骤投影走真实 HTTP 路由；会话时间线走真实 store.append_session_event / load_session_events；中断任务恢复走真实 services.tasks.recover_interrupted_tasks。历史原文只放在 input 里（fixture 原样），expected 只断言结构与顺序，不改写历史文本。",
+  "cases": [
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "negative",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "module:cpq_wf"
+      ],
+      "id": "history.real.legacy_quote_late_handoff_no_step_rollback",
+      "title": "历史报价卡片已到第 4 步：后到的技术回传只能合并，真实步骤推进函数不得让它退回 2/3 步",
+      "priority": "P0",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "advance_step_no"
+      },
+      "input": {
+        "fixture": "quote/legacy_quote_case.json",
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "late_tech_cost",
+            "call": {
+              "args": {
+                "card": {
+                  "$fixture": "quote/legacy_quote_case.json",
+                  "$pick": "card"
+                },
+                "step_no": 2
+              }
+            }
+          },
+          {
+            "id": "late_tech_confirm",
+            "call": {
+              "args": {
+                "card": {
+                  "$fixture": "quote/legacy_quote_case.json",
+                  "$pick": "card"
+                },
+                "step_no": 3
+              }
+            }
+          },
+          {
+            "id": "same_step",
+            "call": {
+              "args": {
+                "card": {
+                  "$fixture": "quote/legacy_quote_case.json",
+                  "$pick": "card"
+                },
+                "step_no": 4
+              }
+            }
+          },
+          {
+            "id": "forward",
+            "call": {
+              "args": {
+                "card": {
+                  "$fixture": "quote/legacy_quote_case.json",
+                  "$pick": "card"
+                },
+                "step_no": 5
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.late_tech_cost.result": 4,
+          "steps.late_tech_confirm.result": 4,
+          "steps.same_step.result": 4,
+          "steps.forward.result": 5
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "step_rollback",
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "covers_routes": []
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "normal",
+        "refresh"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "route:GET /api/projects/{project_id}/workflow/projection",
+        "module:backend.services.workflow_projection"
+      ],
+      "id": "history.real.legacy_project_projection_keeps_five_phases_thirteen_stages",
+      "title": "历史项目（旧 page_context 数据）经真实投影路由打开：恒返回 5 phases、13 stages，stage id 保持不变",
+      "priority": "P0",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}/workflow/projection",
+          "handler": "get_workflow_projection"
+        }
+      },
+      "input": {
+        "fixture": "tech/legacy_tech_project.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "legacy": {
+            "owner": "carol",
+            "filename": "legacy-project.dxf",
+            "business_case": {
+              "$fixture": "tech/legacy_tech_project.json",
+              "$pick": "project.business_case"
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "projection",
+            "http": {
+              "identity": "engineer",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/workflow/projection",
+              "project": "legacy"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.projection.status": 200,
+          "steps.projection.result.refresh_ok": true,
+          "steps.projection.result.phases": {
+            "$len": 5
+          },
+          "steps.projection.result.stages": {
+            "$len": 13
+          },
+          "steps.projection.result.phases.0.title": "工艺评估需求",
+          "steps.projection.result.phases.3.title": "成本测算",
+          "steps.projection.result.phases.4.title": "工艺评估报告",
+          "steps.projection.result.stages.0.stage_id": "requirement-create",
+          "steps.projection.result.stages.3.stage_id": "drawing",
+          "steps.projection.result.stages.4.stage_id": "process",
+          "steps.projection.result.stages.6.stage_id": "process",
+          "steps.projection.result.stages.7.stage_id": "cost",
+          "steps.projection.result.stages.10.stage_id": "summary",
+          "steps.projection.result.stages.11.stage_id": "report-review",
+          "steps.projection.result.stages.12.stage_id": "report-publish",
+          "steps.projection.result.stages.12.sub": "5.3"
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "covers_routes": [
+        "GET /api/projects/{project_id}/workflow/projection"
+      ]
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "recovery",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "module:backend.services.tasks",
+        "module:backend.storage.store"
+      ],
+      "id": "history.real.interrupted_task_recovered_not_faked_success",
+      "title": "服务重启后中断的在途任务被真实恢复为 interrupted：不伪装成功、不新建重复项目 / 任务 / 会话卡",
+      "priority": "P0",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.tasks",
+        "function": "recover_interrupted_tasks"
+      },
+      "input": {
+        "fixture": "handoff/interrupted_cross_agent_case.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "interrupted": {
+            "owner": "carol",
+            "filename": "interrupted.dxf",
+            "business_case": {
+              "$fixture": "handoff/interrupted_cross_agent_case.json",
+              "$pick": "project.business_case"
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "seed_task",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "save_task",
+              "args": {
+                "project_id": {
+                  "$project_id": "interrupted"
+                },
+                "rec": {
+                  "task_id": "t_int1",
+                  "kind": "tech_new_product",
+                  "label": "新增工艺",
+                  "status": "running",
+                  "progress": "",
+                  "error": "",
+                  "detail": {},
+                  "steps": [],
+                  "process": []
+                }
+              }
+            }
+          },
+          {
+            "id": "recover",
+            "call": {
+              "args": {}
+            }
+          },
+          {
+            "id": "recover_again",
+            "call": {
+              "args": {}
+            }
+          },
+          {
+            "id": "tasks",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "list_tasks",
+              "args": {
+                "project_id": {
+                  "$project_id": "interrupted"
+                }
+              }
+            }
+          },
+          {
+            "id": "events",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_session_events",
+              "args": {
+                "project_id": {
+                  "$project_id": "interrupted"
+                }
+              }
+            }
+          },
+          {
+            "id": "projects",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "list_projects",
+              "args": {}
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.recover.result": 1,
+          "steps.recover_again.result": 0,
+          "steps.tasks.result": {
+            "$len": 1
+          },
+          "steps.events.result": {
+            "$len": 1
+          },
+          "steps.events.result.0.seq": 1,
+          "steps.projects.result": {
+            "$len": 1
+          },
+          "steps.tasks.result.0.status": "interrupted",
+          "steps.tasks.result.0.finished_at": {
+            "$present": true
+          }
+        },
+        "records": {
+          "unit_calls": 6
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "partial_write_on_failure",
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "covers_routes": []
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "idempotent",
+        "refresh",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "module:backend.storage.store"
+      ],
+      "id": "history.real.session_event_replay_idempotent_and_ordered",
+      "title": "同一 key 重复提交的会话条目就地更新、seq 不变；不同 key 追加并按 seq 升序回放",
+      "priority": "P1",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "append_session_event"
+      },
+      "input": {
+        "fixture": "history/session_timeline_sample.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "timeline": {
+            "owner": "carol",
+            "filename": "timeline.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "first",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "timeline"
+                },
+                "event": {
+                  "kind": "task",
+                  "key": "task:t_int1",
+                  "text": "解析中",
+                  "status": "running"
+                }
+              }
+            }
+          },
+          {
+            "id": "replay",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "timeline"
+                },
+                "event": {
+                  "kind": "task",
+                  "key": "task:t_int1",
+                  "status": "interrupted"
+                }
+              }
+            }
+          },
+          {
+            "id": "second",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "timeline"
+                },
+                "event": {
+                  "kind": "board",
+                  "key": "board:parts",
+                  "view": "parts"
+                }
+              }
+            }
+          },
+          {
+            "id": "load",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_session_events",
+              "args": {
+                "project_id": {
+                  "$project_id": "timeline"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.first.result.seq": 1,
+          "steps.replay.result.seq": 1,
+          "steps.replay.result.status": "interrupted",
+          "steps.replay.result.text": "解析中",
+          "steps.second.result.seq": 2,
+          "steps.load.result": {
+            "$len": 2
+          },
+          "steps.load.result.0.seq": 1,
+          "steps.load.result.1.seq": 2
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "partial_write_on_failure",
+          "sim_fallback"
+        ]
+      },
+      "covers_routes": []
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "negative",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-home-project-cards-and-agent-history.md",
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "module:backend.storage.store"
+      ],
+      "id": "history.real.legacy_timeline_text_and_stage_not_rewritten",
+      "title": "历史会话条目原文与旧 stage 值原样回放：服务端只补 seq，不改写历史消息文本",
+      "priority": "P0",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "load_session_events"
+      },
+      "input": {
+        "fixture": "tech/legacy_tech_project.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "legacy": {
+            "owner": "carol",
+            "filename": "legacy.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "append_legacy_message",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "append_session_event",
+              "args": {
+                "project_id": {
+                  "$project_id": "legacy"
+                },
+                "event": {
+                  "kind": "message",
+                  "key": "legacy:1",
+                  "text": "旧会话原文不动",
+                  "stage": "2.2 组装与整合",
+                  "page_context": "2.2 组装与整合"
+                }
+              }
+            }
+          },
+          {
+            "id": "append_legacy_board",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "append_session_event",
+              "args": {
+                "project_id": {
+                  "$project_id": "legacy"
+                },
+                "event": {
+                  "kind": "board",
+                  "key": "legacy:2",
+                  "stage": "2.2 组装与整合",
+                  "payload": {
+                    "view": "params"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "load",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "legacy"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.load.result": {
+            "$len": 2
+          },
+          "steps.load.result.0.text": {
+            "$contains": "原文不动"
+          },
+          "steps.load.result.0.stage": {
+            "$contains": "组装与整合"
+          },
+          "steps.load.result.1.seq": 2,
+          "steps.load.result.0.seq": 1
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "partial_write_on_failure",
+          "cross_project_leak",
+          "sim_fallback"
+        ]
+      },
+      "covers_routes": []
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "refresh",
+        "idempotent",
+        "negative",
+        "legacy"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "route:GET /api/projects/{project_id}/agent/events",
+        "route:POST /api/projects/{project_id}/agent/event",
+        "module:backend.storage.store"
+      ],
+      "id": "history.real.agent_events_http_replays_persisted_timeline",
+      "title": "刷新后用真实 /agent/events 路由回放已持久化的时间线：条数 / 顺序一致，无关用户拿 404",
+      "priority": "P1",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}/agent/events",
+          "handler": "agent_events"
+        }
+      },
+      "input": {
+        "fixture": "history/session_timeline_sample.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {
+          "timeline": {
+            "owner": "carol",
+            "filename": "timeline.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "write_first",
+            "http": {
+              "identity": "engineer",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/agent/event",
+              "project": "timeline",
+              "json": {
+                "kind": "message",
+                "key": "ev:1",
+                "text": "上传图纸并解析",
+                "source": "board"
+              }
+            }
+          },
+          {
+            "id": "write_replay",
+            "http": {
+              "identity": "engineer",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/agent/event",
+              "project": "timeline",
+              "json": {
+                "kind": "message",
+                "key": "ev:1",
+                "text": "上传图纸并解析",
+                "source": "board"
+              }
+            }
+          },
+          {
+            "id": "write_second",
+            "http": {
+              "identity": "engineer",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/agent/event",
+              "project": "timeline",
+              "json": {
+                "kind": "board",
+                "key": "ev:2",
+                "view": "parts",
+                "source": "board"
+              }
+            }
+          },
+          {
+            "id": "events",
+            "http": {
+              "identity": "engineer",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/agent/events",
+              "project": "timeline"
+            }
+          },
+          {
+            "id": "outsider",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/agent/events",
+              "project": "timeline"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.write_first.status": 200,
+          "steps.write_replay.status": 200,
+          "steps.write_replay.result.seq": 1,
+          "steps.write_second.result.seq": 2,
+          "steps.events.status": 200,
+          "steps.events.result.count": 2,
+          "steps.events.result.events": {
+            "$len": 2
+          },
+          "steps.events.result.events.0.seq": 1,
+          "steps.events.result.events.1.seq": 2,
+          "steps.outsider.status": 404,
+          "steps.outsider.detail": "项目不存在"
+        },
+        "records": {
+          "http_calls": 5
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "http_error_without_trace",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "covers_routes": [
+        "GET /api/projects/{project_id}/agent/events",
+        "POST /api/projects/{project_id}/agent/event"
+      ]
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "negative"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-identity-single-source.md",
+        "module:backend.storage.store"
+      ],
+      "id": "history.real.session_rebind_does_not_cross_projects",
+      "title": "项目重新绑定不串会话：两个项目的会话时间线各归各，回放不互相污染",
+      "priority": "P0",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "load_session_events"
+      },
+      "input": {
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "first": {
+            "owner": "carol",
+            "filename": "first.dxf",
+            "participants": []
+          },
+          "second": {
+            "owner": "carol",
+            "filename": "second.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "write_first",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "append_session_event",
+              "args": {
+                "project_id": {
+                  "$project_id": "first"
+                },
+                "event": {
+                  "kind": "message",
+                  "key": "ev:shared",
+                  "text": "第一个项目的会话"
+                }
+              }
+            }
+          },
+          {
+            "id": "write_second",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "append_session_event",
+              "args": {
+                "project_id": {
+                  "$project_id": "second"
+                },
+                "event": {
+                  "kind": "message",
+                  "key": "ev:shared",
+                  "text": "第二个项目的会话"
+                }
+              }
+            }
+          },
+          {
+            "id": "first",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "first"
+                }
+              }
+            }
+          },
+          {
+            "id": "second",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "second"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.first.result": {
+            "$len": 1
+          },
+          "steps.second.result": {
+            "$len": 1
+          },
+          "steps.first.result.0.text": "第一个项目的会话",
+          "steps.second.result.0.text": "第二个项目的会话",
+          "steps.first.result.0.seq": 1,
+          "steps.second.result.0.seq": 1
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "duplicate_side_effect",
+          "sim_fallback"
+        ]
+      },
+      "covers_routes": []
+    },
+    {
+      "version": "1.0",
+      "domain": "session_history",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "actions": [],
+      "invariants": [],
+      "tags": [
+        "refresh",
+        "legacy",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "module:backend.services.workflow_projection"
+      ],
+      "id": "history.real.projection_repeat_read_is_stable",
+      "title": "右侧看板刷新（重复读投影）不丢字段：两次真实投影的 phases / stages / next_action 一致",
+      "priority": "P1",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.workflow_projection",
+        "function": "build_projection"
+      },
+      "input": {
+        "fixture": "tech/legacy_tech_project.json",
+        "identities": {
+          "engineer": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          }
+        },
+        "projects": {
+          "legacy": {
+            "owner": "carol",
+            "filename": "legacy.dxf",
+            "business_case": {
+              "$fixture": "tech/legacy_tech_project.json",
+              "$pick": "project.business_case"
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "first",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "legacy"
+                },
+                "user": {
+                  "$identity": "engineer"
+                }
+              }
+            }
+          },
+          {
+            "id": "second",
+            "call": {
+              "args": {
+                "project_id": {
+                  "$project_id": "legacy"
+                },
+                "user": {
+                  "$identity": "engineer"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "state": {
+          "steps.first.result.phases": {
+            "$len": 5
+          },
+          "steps.second.result.phases": {
+            "$len": 5
+          },
+          "steps.first.result.stages": {
+            "$len": 13
+          },
+          "steps.second.result.stages": {
+            "$len": 13
+          },
+          "steps.first.result.refresh_ok": true,
+          "steps.second.result.refresh_ok": true,
+          "steps.first.result.project_id": {
+            "$present": true
+          },
+          "steps.second.result.next_action.sub": "1.1"
+        },
+        "records": {
+          "unit_calls": 2
+        },
+        "forbidden": [
+          "refresh_cleared_state",
+          "sim_fallback",
+          "cross_project_leak"
+        ]
+      },
+      "covers_routes": []
+    }
+  ]
+}

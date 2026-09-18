@@ -1,0 +1,1649 @@
+{
+  "suite_id": "tech.stage5.report",
+  "title": "技术工艺第 5 阶段：工艺评估报告（5.1 汇总结果 / 5.2 结果审核 / 5.3 发布并回传报价）",
+  "domain": "tech",
+  "notes": "已发布但未回传不算完整完成；5.3 回传必须带 source_project_id / source_task_id / business_case_id。",
+  "cases": [
+    {
+      "id": "tech.s51.summary.save_ok",
+      "version": "1.0",
+      "title": "5.1 汇总结果：出报告草稿后放行 5.2",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s51-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w1",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_summary_save",
+          "project_id": "tp_w1",
+          "actor": "carol",
+          "draft": {
+            "结论": "工艺可行",
+            "风险": [
+              "焊接变形"
+            ]
+          },
+          "idempotency_key": "s51-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_w1",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "5.2",
+          "completed_substeps": {
+            "$contains": "5.1"
+          }
+        },
+        "state": {
+          "tech.tp_w1.report.status": "generated",
+          "tech.tp_w1.report.published": false
+        },
+        "records": {
+          "projections": 1
+        },
+        "events": [
+          {
+            "type": "report_draft"
+          }
+        ],
+        "forbidden": [
+          "published_without_handback_counted_complete",
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "summary",
+      "sub_step": "5.1"
+    },
+    {
+      "id": "tech.s51.summary.prereq_missing",
+      "version": "1.0",
+      "title": "5.1 前置失败：4.3 没正式确认不能出报告草稿（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s51-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w2",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": false,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_summary_save",
+          "project_id": "tp_w2",
+          "actor": "carol",
+          "draft": {
+            "结论": "草稿"
+          },
+          "idempotency_key": "s51-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_w2.report.status": "",
+          "tech.tp_w2.report.published": false
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "summary",
+      "sub_step": "5.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s51.summary.role_denied",
+      "version": "1.0",
+      "title": "5.1 权限失败：审核员不能写报告草稿（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s51-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w3",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_summary_save",
+          "project_id": "tp_w3",
+          "actor": "frank",
+          "draft": {
+            "结论": "越权草稿"
+          },
+          "idempotency_key": "s51-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_w3.report.status": ""
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "summary",
+      "sub_step": "5.1",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s51.summary.draft_not_published",
+      "version": "1.0",
+      "title": "5.1 草稿状态：已生成 ≠ 已发布 ≠ 已回传",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s51-draft"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w4",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_summary_save",
+          "project_id": "tp_w4",
+          "actor": "carol",
+          "draft": {
+            "结论": "工艺可行"
+          },
+          "idempotency_key": "s51-draft"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "drafted",
+          "status": "generated"
+        },
+        "state": {
+          "tech.tp_w4.report.published": false,
+          "tech.tp_w4.report.handed_back": false,
+          "tech.tp_w4.report.versions": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "published_without_handback_counted_complete"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "status"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "summary",
+      "sub_step": "5.1"
+    },
+    {
+      "id": "tech.s52.report.review_approve",
+      "version": "1.0",
+      "title": "5.2 结果审核通过：放行 5.3 发布",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s52-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w5",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "generated",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_review",
+          "project_id": "tp_w5",
+          "actor": "carol",
+          "decision": "approve",
+          "idempotency_key": "s52-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_w5",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "5.3",
+          "completed_substeps": {
+            "$contains": "5.2"
+          }
+        },
+        "state": {
+          "tech.tp_w5.report.status": "approved",
+          "tech.tp_w5.report.published": false
+        },
+        "events": [
+          {
+            "type": "report_reviewed",
+            "decision": "approve"
+          }
+        ],
+        "forbidden": [
+          "published_without_handback_counted_complete"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "report-review",
+      "sub_step": "5.2"
+    },
+    {
+      "id": "tech.s52.report.review_reject",
+      "version": "1.0",
+      "title": "5.2 结果审核退回：状态回到待审并通知属主",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s52-reject"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w6",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "generated",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_review",
+          "project_id": "tp_w6",
+          "actor": "carol",
+          "decision": "reject",
+          "note": "成本说明要补全",
+          "idempotency_key": "s52-reject"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "rejected",
+          "note": "成本说明要补全"
+        },
+        "state": {
+          "tech.tp_w6.report.status": "in_review",
+          "tech.tp_w6.report.published": false
+        },
+        "messages": [
+          {
+            "to": "carol",
+            "msg_type": "report_rejected"
+          }
+        ],
+        "forbidden": [
+          "published_without_handback_counted_complete",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "reject"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "report-review",
+      "sub_step": "5.2"
+    },
+    {
+      "id": "tech.s52.report.prereq_missing",
+      "version": "1.0",
+      "title": "5.2 前置失败：没有报告草稿不能审核（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s52-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w7",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.1 汇总结果",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_review",
+          "project_id": "tp_w7",
+          "actor": "carol",
+          "decision": "approve",
+          "idempotency_key": "s52-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_w7.report.status": ""
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "report-review",
+      "sub_step": "5.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s52.report.role_denied",
+      "version": "1.0",
+      "title": "5.2 权限失败：工艺工程师不能自审自己的报告（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s52-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "5.2 结果审核",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "generated",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_review",
+          "project_id": "tp_w8",
+          "actor": "alice",
+          "decision": "approve",
+          "idempotency_key": "s52-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_w8.report.status": "generated"
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "report-review",
+      "sub_step": "5.2",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s53.report.publish_not_complete",
+      "version": "1.0",
+      "title": "5.3 已发布但未回传：不算完整完成，投影仍停在 5.3",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s53-pub-only"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w9",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.3 发布并回传报价",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "approved",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_publish",
+          "project_id": "tp_w9",
+          "actor": "carol",
+          "idempotency_key": "s53-pub-only"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_w9",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "next_action": "5.3",
+          "completed_substeps": {
+            "$ne": [
+              "1.1",
+              "1.2",
+              "1.3",
+              "2.1",
+              "3.1",
+              "3.2",
+              "3.3",
+              "4.1",
+              "4.2",
+              "4.3",
+              "5.1",
+              "5.2",
+              "5.3"
+            ]
+          }
+        },
+        "state": {
+          "tech.tp_w9.report.published": true,
+          "tech.tp_w9.report.handed_back": false
+        },
+        "records": {
+          "handoff_rows": 0
+        },
+        "forbidden": [
+          "published_without_handback_counted_complete"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "stage": "report-publish",
+      "sub_step": "5.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s53.report.handback_complete",
+      "version": "1.0",
+      "title": "5.3 发布 + 回传报价：5.3 才算完整完成",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s53-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_h1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_hand0000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qs_h1",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "请做成本测算",
+          "payload": {
+            "business_case_id": "bc_hand0000001",
+            "initiator": "erin"
+          },
+          "idempotency_key": "s53-task"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_h1",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.3 发布并回传报价",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "approved",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "business_case": {
+            "business_case_id": "bc_hand0000001",
+            "quote_session_id": "qs_h1",
+            "source_task_id": "t_001"
+          }
+        },
+        {
+          "op": "tech_report_publish",
+          "project_id": "tp_h1",
+          "actor": "carol",
+          "idempotency_key": "s53-pub"
+        },
+        {
+          "op": "tech_report_handback",
+          "project_id": "tp_h1",
+          "actor": "carol",
+          "target_quote_session_id": "qs_h1",
+          "business_case_id": "bc_hand0000001",
+          "snapshot": {
+            "report": {
+              "status": "approved",
+              "version": "R1"
+            }
+          },
+          "idempotency_key": "s53-hb"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_h1",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "completed_substeps": {
+            "$contains": "5.3"
+          }
+        },
+        "state": {
+          "tech.tp_h1.report.published": true,
+          "tech.tp_h1.report.handed_back": true,
+          "quote.qs_h1.current_step": 3
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "cards_created_by_handoff": 0,
+          "tasks_completed": 1
+        },
+        "events": [
+          {
+            "type": "report_published"
+          },
+          {
+            "type": "handoff_created"
+          }
+        ],
+        "forbidden": [
+          "published_without_handback_counted_complete",
+          "silent_new_card",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak",
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "stage": "report-publish",
+      "sub_step": "5.3"
+    },
+    {
+      "id": "tech.s53.report.publish_prereq_missing",
+      "version": "1.0",
+      "title": "5.3 前置失败：报告没审核通过不能发布（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s53-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w10",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.3 发布并回传报价",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "generated",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_publish",
+          "project_id": "tp_w10",
+          "actor": "carol",
+          "idempotency_key": "s53-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_w10.report.published": false,
+          "tech.tp_w10.report.versions": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "published_without_handback_counted_complete",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "stage": "report-publish",
+      "sub_step": "5.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s53.report.handback_missing_bc",
+      "version": "1.0",
+      "title": "5.3 回传缺少业务实例号：明确失败（422 business_case_missing）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s53-hb-nobc"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_w11",
+          "actor": "carol",
+          "owner": "carol",
+          "current_holder": "carol",
+          "page_context": "5.3 发布并回传报价",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {
+              "结论": "工艺可行"
+            },
+            "status": "approved",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_report_publish",
+          "project_id": "tp_w11",
+          "actor": "carol",
+          "idempotency_key": "s53-pub-nobc"
+        },
+        {
+          "op": "tech_report_handback",
+          "project_id": "tp_w11",
+          "actor": "carol",
+          "idempotency_key": "s53-hb-nobc",
+          "expect": {
+            "status": 422,
+            "code": "business_case_missing"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "business_case_missing"
+        },
+        "state": {
+          "tech.tp_w11.report.handed_back": false,
+          "tech.tp_w11.report.published": true
+        },
+        "records": {
+          "handoff_rows": 0,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite",
+        "recovery"
+      ],
+      "source_specs": [
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "stage": "report-publish",
+      "sub_step": "5.3",
+      "failure_type": "missing_prerequisite"
+    }
+  ]
+}

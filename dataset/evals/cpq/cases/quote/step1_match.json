@@ -1,0 +1,554 @@
+{
+  "suite_id": "quote.step1.match",
+  "title": "报价第 1 步：产品匹配、匹配分数与找不到标品",
+  "domain": "quote",
+  "notes": "匹配分数用 decimal 字符串；低于阈值不得当成匹配成功；找不到标品时走技术工艺支线，报价卡片留在原步骤等待。",
+  "cases": [
+    {
+      "id": "quote.step1.match.ok",
+      "version": "1.0",
+      "title": "参数完全匹配：命中标品并记录匹配分数",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m1 第 1 步已解析需求"
+      },
+      "input": {
+        "idempotency_key": "match-q1-ok",
+        "session_id": "qs_m1"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m1",
+          "actor": "erin",
+          "owner": "erin",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m1",
+          "params": [
+            {
+              "name": "产品类型",
+              "weight": 3,
+              "matched": true
+            },
+            {
+              "name": "产能",
+              "weight": 2,
+              "matched": true
+            },
+            {
+              "name": "目的地",
+              "weight": 1,
+              "matched": true
+            }
+          ],
+          "product": {
+            "code": "MD-STD-0001",
+            "name": "280Ah 储能产线"
+          },
+          "idempotency_key": "match-q1-ok",
+          "expect": {
+            "code": "matched",
+            "matched": true,
+            "score": "100.0"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "matched",
+          "score": "100.0",
+          "matched": true
+        },
+        "state": {
+          "quote.qs_m1.products.0.code": "MD-STD-0001",
+          "quote.qs_m1.current_step": 1,
+          "quote.qs_m1.product_match.matched": true
+        },
+        "records": {
+          "tasks_open": 0
+        },
+        "forbidden": [
+          "float_money",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "cpq_match.py",
+        "docs/specs/quote-tech-unified-composer-and-binding-caption.md"
+      ]
+    },
+    {
+      "id": "quote.step1.match.boundary_70",
+      "version": "1.0",
+      "title": "匹配分数恰好 70（阈值边界）视为命中",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m2"
+      },
+      "input": {
+        "idempotency_key": "match-q1-70",
+        "session_id": "qs_m2"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m2",
+          "actor": "erin",
+          "owner": "erin",
+          "fields": {
+            "customer": "CATL"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m2",
+          "params": [
+            {
+              "name": "产品类型",
+              "weight": 10,
+              "matched": true
+            },
+            {
+              "name": "产能",
+              "weight": 4,
+              "matched": true
+            },
+            {
+              "name": "目的地",
+              "weight": 4,
+              "matched": false
+            },
+            {
+              "name": "交期",
+              "weight": 2,
+              "matched": false
+            }
+          ],
+          "threshold": 70,
+          "idempotency_key": "match-q1-70",
+          "expect": {
+            "code": "matched",
+            "score": "70.0"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "matched",
+          "score": "70.0",
+          "matched": true
+        },
+        "state": {
+          "quote.qs_m2.product_match.matched": true,
+          "quote.qs_m2.products": {
+            "$len": 1
+          }
+        },
+        "forbidden": [
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "boundary"
+      ],
+      "source_specs": [
+        "cpq_match.py"
+      ]
+    },
+    {
+      "id": "quote.step1.match.below_threshold",
+      "version": "1.0",
+      "title": "匹配分数 60 低于阈值：不写入标品、不推进步骤",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m3"
+      },
+      "input": {
+        "idempotency_key": "match-q1-low",
+        "session_id": "qs_m3"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m3",
+          "actor": "erin",
+          "owner": "erin",
+          "fields": {
+            "customer": "蜂巢能源"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m3",
+          "params": [
+            {
+              "name": "产品类型",
+              "weight": 3,
+              "matched": true
+            },
+            {
+              "name": "产能",
+              "weight": 2,
+              "matched": false
+            }
+          ],
+          "idempotency_key": "match-q1-low",
+          "expect": {
+            "code": "no_std_product",
+            "matched": false,
+            "score": "60.0"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "no_std_product",
+          "matched": false,
+          "score": "60.0",
+          "next_action": "send_tech_new_product"
+        },
+        "state": {
+          "quote.qs_m3.products": {
+            "$len": 0
+          },
+          "quote.qs_m3.current_step": 1,
+          "quote.qs_m3.product_match.matched": false
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative",
+        "boundary"
+      ],
+      "source_specs": [
+        "cpq_match.py",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ]
+    },
+    {
+      "id": "quote.step1.match.send_tech_task",
+      "version": "1.0",
+      "title": "找不到标品：发「新增工艺」技术任务，报价卡片留在第 1 步",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m4 无匹配标品"
+      },
+      "input": {
+        "idempotency_key": "tech-new-q1",
+        "session_id": "qs_m4"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m4",
+          "actor": "erin",
+          "owner": "erin",
+          "business_case_id": "bc_match04",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m4",
+          "params": [
+            {
+              "name": "产品类型",
+              "weight": 10,
+              "matched": true
+            },
+            {
+              "name": "新规格",
+              "weight": 10,
+              "matched": false
+            }
+          ],
+          "expect": {
+            "code": "no_std_product"
+          }
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qs_m4",
+          "actor": "erin",
+          "note": "请新建 314Ah 产线工艺",
+          "idempotency_key": "tech-new-q1",
+          "expect": {
+            "code": "sent"
+          }
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol",
+          "expect": {
+            "code": "claimed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "claimed",
+          "claimed_by": "carol"
+        },
+        "state": {
+          "quote.qs_m4.current_step": 1,
+          "tasks.t_001.task_kind": "tech_new_product",
+          "tasks.t_001.status": "claimed",
+          "tasks.t_001.payload.business_case_id": "bc_match04"
+        },
+        "records": {
+          "tasks_sent": 1,
+          "tasks_open": 0,
+          "tasks_claimed": 1
+        },
+        "events": [
+          {
+            "type": "task_sent",
+            "task_kind": "tech_new_product"
+          },
+          {
+            "type": "task_claimed",
+            "actor": "carol"
+          }
+        ],
+        "forbidden": [
+          "step_rollback",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "step_monotonic",
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "task"
+      ],
+      "source_specs": [
+        "cpq_wf.py",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ]
+    },
+    {
+      "id": "quote.step1.match.tech_task_repeat",
+      "version": "1.0",
+      "title": "同一支线任务重复提交：复用不重复建任务、不重复通知",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "duplicate_request",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m5"
+      },
+      "input": {
+        "idempotency_key": "tech-new-q1-dup",
+        "session_id": "qs_m5"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m5",
+          "actor": "erin",
+          "owner": "erin",
+          "business_case_id": "bc_match05"
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m5",
+          "params": [
+            {
+              "name": "新规格",
+              "weight": 10,
+              "matched": false
+            }
+          ],
+          "expect": {
+            "code": "no_std_product"
+          }
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qs_m5",
+          "actor": "erin",
+          "note": "新增工艺",
+          "idempotency_key": "tech-new-q1-dup"
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qs_m5",
+          "actor": "erin",
+          "note": "新增工艺",
+          "idempotency_key": "tech-new-q1-dup",
+          "expect": {
+            "code": "reused",
+            "reused": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "reused",
+          "reused": true
+        },
+        "records": {
+          "tasks_sent": 1,
+          "tasks_total": 1,
+          "messages_total": 2,
+          "tasks_reused": 1
+        },
+        "state": {
+          "tasks.t_001.status": "open"
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "cpq_wf.py",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ]
+    },
+    {
+      "id": "quote.step1.match.matched_no_tech_task",
+      "version": "1.0",
+      "title": "已有匹配标品时不得再发「新增工艺」任务（409）",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "missing_prerequisite",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_m6 已命中标品"
+      },
+      "input": {
+        "idempotency_key": "tech-new-q1-deny",
+        "session_id": "qs_m6"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_m6",
+          "actor": "erin",
+          "owner": "erin",
+          "business_case_id": "bc_match06"
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qs_m6",
+          "params": [
+            {
+              "name": "产品类型",
+              "weight": 10,
+              "matched": true
+            }
+          ],
+          "expect": {
+            "code": "matched"
+          }
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qs_m6",
+          "actor": "erin",
+          "idempotency_key": "tech-new-q1-deny",
+          "expect": {
+            "status": 409,
+            "code": "std_product_matched"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "std_product_matched"
+        },
+        "records": {
+          "tasks_total": 0,
+          "tasks_sent": 0
+        },
+        "state": {
+          "quote.qs_m6.current_step": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ]
+    }
+  ]
+}

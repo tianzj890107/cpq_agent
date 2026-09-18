@@ -1,0 +1,523 @@
+{
+  "suite_id": "quote.step5.plans",
+  "title": "报价第 5 步：报价方案（多方案、选中、重算、幂等）",
+  "domain": "quote",
+  "cases": [
+    {
+      "id": "quote.step5.plans.generate_multi",
+      "version": "1.0",
+      "title": "第 5 步多方案生成：每个方案独立折扣与报价价",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-gen"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_generate_plans",
+          "session_id": "qs_p1",
+          "actor": "erin",
+          "plans": [
+            {
+              "plan_id": "p1",
+              "name": "标准",
+              "discount": "0"
+            },
+            {
+              "plan_id": "p2",
+              "name": "让利",
+              "discount": "0.0500"
+            },
+            {
+              "plan_id": "p3",
+              "name": "战略",
+              "discount": "0.1000"
+            }
+          ],
+          "idempotency_key": "s5-gen"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "OK",
+          "count": 3,
+          "plans": [
+            {
+              "plan_id": "p1",
+              "quote_price": "2.0000"
+            },
+            {
+              "plan_id": "p2",
+              "quote_price": "1.9000"
+            },
+            {
+              "plan_id": "p3",
+              "quote_price": "1.8000"
+            }
+          ]
+        },
+        "state": {
+          "quote.qs_p1.plans": {
+            "$len": 3
+          },
+          "quote.qs_p1.current_step": 5
+        },
+        "records": {
+          "plans": 3
+        },
+        "forbidden": [
+          "float_money"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5
+    },
+    {
+      "id": "quote.step5.plans.select_recompute",
+      "version": "1.0",
+      "title": "选中方案后重算报价价并完成第 5 步",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-complete"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_generate_plans",
+          "session_id": "qs_p2",
+          "actor": "erin",
+          "plans": [
+            {
+              "plan_id": "p1",
+              "name": "标准",
+              "discount": "0"
+            },
+            {
+              "plan_id": "p2",
+              "name": "让利",
+              "discount": "0.0500"
+            }
+          ],
+          "idempotency_key": "s5-gen2"
+        },
+        {
+          "op": "quote_select_plan",
+          "session_id": "qs_p2",
+          "actor": "erin",
+          "plan_id": "p2",
+          "expect": {
+            "code": "OK",
+            "quote_price": "1.9000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_p2",
+          "step": 5,
+          "actor": "erin",
+          "snapshot": {
+            "selected_plan": "p2"
+          },
+          "idempotency_key": "s5-complete"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "completed",
+          "step": 5,
+          "current_step": 6
+        },
+        "state": {
+          "quote.qs_p2.selected_plan": "p2",
+          "quote.qs_p2.totals.discount": "0.0500",
+          "quote.qs_p2.totals.quote_price": "1.9000",
+          "quote.qs_p2.current_step": 6
+        },
+        "records": {
+          "quote_steps_completed": 1,
+          "plans": 2
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal",
+        "step_monotonic"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5
+    },
+    {
+      "id": "quote.step5.plans.select_idempotent",
+      "version": "1.0",
+      "title": "重复选中同一方案：不重复重算、不产生新版本",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-idem"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_generate_plans",
+          "session_id": "qs_p3",
+          "actor": "erin",
+          "plans": [
+            {
+              "plan_id": "p1",
+              "name": "标准",
+              "discount": "0.0500"
+            }
+          ],
+          "idempotency_key": "s5-gen3"
+        },
+        {
+          "op": "quote_select_plan",
+          "session_id": "qs_p3",
+          "actor": "erin",
+          "plan_id": "p1",
+          "expect": {
+            "code": "OK"
+          }
+        },
+        {
+          "op": "quote_select_plan",
+          "session_id": "qs_p3",
+          "actor": "erin",
+          "plan_id": "p1",
+          "expect": {
+            "code": "already_selected"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_selected",
+          "plan_id": "p1"
+        },
+        "state": {
+          "quote.qs_p3.selected_plan": "p1",
+          "quote.qs_p3.totals.quote_price": "1.9000"
+        },
+        "records": {
+          "plans": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5,
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "quote.step5.plans.not_found",
+      "version": "1.0",
+      "title": "选中不存在的方案：404 plan_not_found，卡片不推进",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-404"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_generate_plans",
+          "session_id": "qs_p4",
+          "actor": "erin",
+          "plans": [
+            {
+              "plan_id": "p1",
+              "name": "标准",
+              "discount": "0"
+            }
+          ],
+          "idempotency_key": "s5-gen4"
+        },
+        {
+          "op": "quote_select_plan",
+          "session_id": "qs_p4",
+          "actor": "erin",
+          "plan_id": "p9",
+          "expect": {
+            "status": 404,
+            "code": "plan_not_found"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 404,
+          "code": "plan_not_found"
+        },
+        "state": {
+          "quote.qs_p4.selected_plan": "",
+          "quote.qs_p4.current_step": 5
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5,
+      "failure_type": "not_found"
+    },
+    {
+      "id": "quote.step5.plans.prereq_missing",
+      "version": "1.0",
+      "title": "第 4 步没完成时不能生成方案（409）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-skip"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_generate_plans",
+          "session_id": "qs_p5",
+          "actor": "erin",
+          "plans": [
+            {
+              "plan_id": "p1",
+              "name": "标准",
+              "discount": "0"
+            }
+          ],
+          "idempotency_key": "s5-skip",
+          "expect": {
+            "status": 409,
+            "code": "step_not_ready"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "step_not_ready"
+        },
+        "state": {
+          "quote.qs_p5.plans": {
+            "$len": 0
+          },
+          "quote.qs_p5.current_step": 4
+        },
+        "records": {
+          "plans": 0
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5,
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "quote.step5.plans.role_denied",
+      "version": "1.0",
+      "title": "工艺经理不能生成或完成第 5 步（403）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s5-deny"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p6",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_p6",
+          "step": 5,
+          "actor": "carol",
+          "snapshot": {
+            "selected_plan": "p1"
+          },
+          "idempotency_key": "s5-deny",
+          "expect": {
+            "status": 403,
+            "code": "step_role_forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "step_role_forbidden"
+        },
+        "state": {
+          "quote.qs_p6.current_step": 5
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 5,
+      "failure_type": "permission_denied"
+    }
+  ]
+}

@@ -1,0 +1,1443 @@
+{
+  "generated_from": "tech_app/backend/main.py + backend/services/project_access.CONTRIBUTE_ROUTES",
+  "note": "由 scripts/cpq_eval/coverage.build_write_policy() 现算（runner --snapshot-routes 可重写）；每条项目级写路由必须有一条策略 —— 新增写路由若不在这里，覆盖测试会失败并列出它。",
+  "contribute_whitelist_size": 21,
+  "writes": [
+    {
+      "route": "PATCH /api/projects/{project_id}/management",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [
+        "fail.real.generic_write_still_uses_write_mode"
+      ],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "DELETE /api/projects/{project_id}/management",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/attachments",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/source",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/parse",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/component-match",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/parts/{part_id}/library-lookup",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/verify",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/verification/decide",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/model-lookup",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/model-lookup/apply",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/model-lookup/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/decompose",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/generate",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/drawings",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/ir",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/workbench-chat",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/agent/event",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.session_event_write_succeeds",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "history.real.agent_events_http_replays_persisted_timeline"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/agent/send",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/agent/new",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/agent/settings",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/ai-chat",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/parts/{part_id}/regenerate",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/parts/{part_id}/process",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/parts/{part_id}/process",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/parts/{part_id}/cost",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/parts/{part_id}/cost",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/integration",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/drawings",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "DELETE /api/projects/{project_id}/integration/drawings/{filename}",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/params",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/integration/params",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/params/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/process/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/params/autofill",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/params/finalize",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/process",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/integration/process",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/cost",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/integration/cost",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/material-write",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/send-to-finance",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/integration/send-to-quote",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/cost-review",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.save_cost_note_changes_state",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "fail.real.duplicate_write_keeps_single_state"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/parts/{part_id}",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.cost_part_task_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/assembly",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.assembly_cost_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/confirm",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.confirm_cost_reaches_business_gate",
+        "acl.real.finance_related_but_wrong_duty_gets_route_403",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "fail.real.generic_write_still_uses_write_mode"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/material-write",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/send-to-quote",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cost-review/return-to-process",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.finance.return_to_process_reaches_business_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/material/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/material",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/material/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/material/evaluate",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/material/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/manufacturing/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/manufacturing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/manufacturing/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/manufacturing/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cleaning/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/cleaning",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cleaning/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/cleaning/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/assembly/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/assembly",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/assembly/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/assembly/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/production/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/production",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/production/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/production/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/summary/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/summary",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/summary/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/summary/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/costest/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/costest",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/costest/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/costest/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricing/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/pricing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricing/submit",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricing/review",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricing/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/negotiation/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/negotiation",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/negotiation/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/negotiation/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricenego/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/pricenego",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricenego/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/pricenego/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/recommend",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/level",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/submit",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/send",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/act",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/approval/timing",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/versions/{version}/submit",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/versions/{version}/approve",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.director.version_approve_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/versions/{version}/reject",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/versions/{version}/restore",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/tasks/{task_id}/cancel",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/extract-documents",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/ai-check",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/requirement/customer-credit",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/requirement",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/submit-confirmation",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/confirm",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/return-to-draft",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/requirement/review",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.director.requirement_review_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/prepare",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/process-report",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/submit-review",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/review",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.director.report_review_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "PUT /api/projects/{project_id}/process-report/distribution",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.director.distribution_reaches_gate",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/publish",
+      "policy": "contribute_whitelist",
+      "reason": "自带业务角色门禁的专属动作：项目 ACL 只判可见 + 未归档，角色由接口 _require 判定",
+      "covered_by": [
+        "acl.real.director.publish_reaches_report_gate",
+        "acl.real.finance_related_but_wrong_duty_gets_route_403",
+        "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked"
+      ],
+      "policy_cases": [
+        "acl.real.contribute_whitelist_excludes_generic_writes",
+        "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+        "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/send-to-quote",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    },
+    {
+      "route": "POST /api/projects/{project_id}/process-report/new-version",
+      "policy": "acl_write_gated",
+      "reason": "普通项目级写：由 project_access mode=write 判定，可见但写权不足返回 403",
+      "covered_by": [],
+      "policy_cases": [
+        "fail.real.generic_write_still_uses_write_mode",
+        "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+        "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+      ]
+    }
+  ],
+  "delegates_to_spec": "docs/specs/tech-project-acl-visible-scope.md §18.5",
+  "policy_cases": {
+    "contribute_whitelist": [
+      "acl.real.contribute_whitelist_excludes_generic_writes",
+      "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+      "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording"
+    ],
+    "acl_write_gated": [
+      "fail.real.generic_write_still_uses_write_mode",
+      "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+      "acl.real.write_gate_matrix_generic_routes_still_acl_gated"
+    ]
+  }
+}

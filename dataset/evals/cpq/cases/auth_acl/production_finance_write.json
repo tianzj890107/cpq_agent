@@ -1,0 +1,1091 @@
+{
+  "suite_id": "auth_acl.production_finance_write",
+  "title": "财务经理专业写接口（真实路由 + 真实专属动作白名单）",
+  "domain": "auth_acl",
+  "cases": [
+    {
+      "id": "acl.real.finance.save_cost_note_changes_state",
+      "version": "1.0",
+      "title": "财务经理保存成本补充说明：ACL 放行、接口业务门禁通过、真实状态发生改变",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "save",
+            "http": {
+              "identity": "finance",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "财务复核：材料按当日牌价",
+                "quantity": 2
+              }
+            }
+          },
+          {
+            "id": "readback",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "denied",
+            "http": {
+              "identity": "outsider",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "越权改备注"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.save.status": 200,
+          "steps.readback.status": 200,
+          "steps.readback.result.review.note": "财务复核：材料按当日牌价",
+          "steps.denied.status": 404
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "PUT /api/projects/{project_id}/cost-review",
+        "GET /api/projects/{project_id}/cost-review"
+      ]
+    },
+    {
+      "id": "acl.real.finance.confirm_cost_reaches_business_gate",
+      "version": "1.0",
+      "title": "财务经理确认成本：项目 ACL 不得提前拦截，必须落到接口自己的业务门禁（还没有零件可确认）",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/confirm"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "confirm",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/confirm",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 400
+        },
+        "state": {
+          "steps.confirm.detail": {
+            "$contains": "还没有零件"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/confirm"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/confirm"
+      ],
+      "failure_type": "missing_prerequisite",
+      "notes": "回归：批次 7 之前这一条返回 403「你的角色只能查看该项目，不能修改」，财务经理根本走不到业务门禁。"
+    },
+    {
+      "id": "acl.real.finance.return_to_process_reaches_business_gate",
+      "version": "1.0",
+      "title": "财务经理提交工艺经理确认：ACL 放行，业务门禁按未确认成本如实拒绝",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/return-to-process"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "back",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/return-to-process",
+              "project": "handoff",
+              "json": {
+                "note": "请确认"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 400
+        },
+        "state": {
+          "steps.back.detail": {
+            "$contains": "确认成本"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/return-to-process"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/return-to-process"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.finance.cost_part_task_reaches_gate",
+      "version": "1.0",
+      "title": "财务经理算单个零件成本：ACL 放行，业务门禁要求先完成图纸解析",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/parts/{part_id}"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "part",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/parts/{part_id}",
+              "project": "handoff",
+              "params": {
+                "quantity": 1
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 400
+        },
+        "state": {
+          "steps.part.detail": {
+            "$contains": "图纸解析"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/parts/{part_id}"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/parts/{part_id}"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.finance.assembly_cost_reaches_gate",
+      "version": "1.0",
+      "title": "财务经理算组装成本：ACL 放行，业务门禁要求先由工艺经理完成组装工艺",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/assembly"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "assembly",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/assembly",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": 400
+        },
+        "state": {
+          "steps.assembly.detail": {
+            "$contains": "组装工艺"
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/assembly"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/assembly"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.finance.session_event_write_succeeds",
+      "version": "1.0",
+      "title": "财务经理写项目会话时间线：专属动作放行且真实落库（seq 由服务端分配）",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/agent/event"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "append",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/agent/event",
+              "project": "handoff",
+              "json": {
+                "kind": "note",
+                "stage": "cost",
+                "source": "cost-review",
+                "text": "财务补充：按当日牌价复核",
+                "key": "k-1"
+              }
+            }
+          },
+          {
+            "id": "list",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}/agent/events",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.append.status": 200,
+          "steps.append.result.seq": {
+            "$gte": 1
+          },
+          "steps.list.status": 200
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-auth-token-and-unsaved-guard.md",
+        "route:POST /api/projects/{project_id}/agent/event"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/agent/event"
+      ]
+    },
+    {
+      "id": "acl.real.finance.unrelated_write_is_not_found_not_forbidden",
+      "version": "1.0",
+      "title": "无关角色写成本接口得到的是不可枚举的 404，而不是 403 泄露「项目存在但你没权限」",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "outsider",
+            "http": {
+              "identity": "outsider",
+              "method": "PUT",
+              "path": "/api/projects/{project_id}/cost-review",
+              "project": "handoff",
+              "json": {
+                "note": "x"
+              }
+            }
+          },
+          {
+            "id": "outsider_read",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "finance",
+            "http": {
+              "identity": "finance",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.outsider.status": 404,
+          "steps.outsider.detail": "项目不存在",
+          "steps.outsider_read.detail": "项目不存在",
+          "steps.finance.status": 200
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "PUT /api/projects/{project_id}/cost-review",
+        "/api/projects/{project_id}"
+      ],
+      "failure_type": "data_leak_attempt"
+    },
+    {
+      "id": "acl.real.contribute_whitelist_excludes_generic_writes",
+      "version": "1.0",
+      "title": "专属业务动作白名单只覆盖自带角色门禁的 21 条，普通项目级写（管理/附件/Agent 设置/取消任务）仍走 write",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "is_contribute_route"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "projects": {},
+        "steps": [
+          {
+            "id": "wl0",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/agent/event"
+              }
+            }
+          },
+          {
+            "id": "wl1",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/parts/{part_id}/cost"
+              }
+            }
+          },
+          {
+            "id": "wl2",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/parts/{part_id}/cost"
+              }
+            }
+          },
+          {
+            "id": "wl3",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/integration/cost"
+              }
+            }
+          },
+          {
+            "id": "wl4",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/integration/cost"
+              }
+            }
+          },
+          {
+            "id": "wl5",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/cost-review"
+              }
+            }
+          },
+          {
+            "id": "wl6",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/parts/{part_id}"
+              }
+            }
+          },
+          {
+            "id": "wl7",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/assembly"
+              }
+            }
+          },
+          {
+            "id": "wl8",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/confirm"
+              }
+            }
+          },
+          {
+            "id": "wl9",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/material-write"
+              }
+            }
+          },
+          {
+            "id": "wl10",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/send-to-quote"
+              }
+            }
+          },
+          {
+            "id": "wl11",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/cost-review/return-to-process"
+              }
+            }
+          },
+          {
+            "id": "wl12",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/pricing/review"
+              }
+            }
+          },
+          {
+            "id": "wl13",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/approval/act"
+              }
+            }
+          },
+          {
+            "id": "wl14",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/versions/{version}/approve"
+              }
+            }
+          },
+          {
+            "id": "wl15",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/versions/{version}/reject"
+              }
+            }
+          },
+          {
+            "id": "wl16",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/requirement/review"
+              }
+            }
+          },
+          {
+            "id": "wl17",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/process-report/review"
+              }
+            }
+          },
+          {
+            "id": "wl18",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/process-report/distribution"
+              }
+            }
+          },
+          {
+            "id": "wl19",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/process-report/publish"
+              }
+            }
+          },
+          {
+            "id": "wl20",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/requirement/customer-credit"
+              }
+            }
+          },
+          {
+            "id": "non0",
+            "call": {
+              "args": {
+                "method": "PATCH",
+                "path": "/api/projects/{project_id}/management"
+              }
+            }
+          },
+          {
+            "id": "non1",
+            "call": {
+              "args": {
+                "method": "DELETE",
+                "path": "/api/projects/{project_id}/management"
+              }
+            }
+          },
+          {
+            "id": "non2",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/attachments"
+              }
+            }
+          },
+          {
+            "id": "non3",
+            "call": {
+              "args": {
+                "method": "PUT",
+                "path": "/api/projects/{project_id}/agent/settings"
+              }
+            }
+          },
+          {
+            "id": "non4",
+            "call": {
+              "args": {
+                "method": "POST",
+                "path": "/api/projects/{project_id}/tasks/1/cancel"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.wl0.result": true,
+          "steps.wl1.result": true,
+          "steps.wl2.result": true,
+          "steps.wl3.result": true,
+          "steps.wl4.result": true,
+          "steps.wl5.result": true,
+          "steps.wl6.result": true,
+          "steps.wl7.result": true,
+          "steps.wl8.result": true,
+          "steps.wl9.result": true,
+          "steps.wl10.result": true,
+          "steps.wl11.result": true,
+          "steps.wl12.result": true,
+          "steps.wl13.result": true,
+          "steps.wl14.result": true,
+          "steps.wl15.result": true,
+          "steps.wl16.result": true,
+          "steps.wl17.result": true,
+          "steps.wl18.result": true,
+          "steps.wl19.result": true,
+          "steps.wl20.result": true,
+          "steps.non0.result": false,
+          "steps.non1.result": false,
+          "steps.non2.result": false,
+          "steps.non3.result": false,
+          "steps.non4.result": false
+        },
+        "records": {
+          "unit_calls": 26
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ],
+      "notes": "白名单条数与内容由测试从 main.py 现算核对；这里核对的是「判据落在真实函数上」。"
+    }
+  ],
+  "notes": "每条都断言「ACL 没有先返回通用写拒绝」，并尽量断言真实状态变化。"
+}

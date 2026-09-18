@@ -1,0 +1,9 @@
+{
+  "provider_id": "rec-process-assemble",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "3 组装与整合"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "3 组装与整合",
+      "values": {"工序": ["下料", "焊接", "装配"]}}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

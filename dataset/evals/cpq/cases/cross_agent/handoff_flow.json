@@ -1,0 +1,1629 @@
+{
+  "suite_id": "cross_agent.handoff.flow",
+  "title": "跨 Agent 闭环：找不到标品派发、领取、成本回传、复核、发布回传与销售续步",
+  "domain": "cross_agent",
+  "notes": "技术侧回传只合并快照并认回原报价卡片；卡片停在原步骤等待，历史回传不得让 current_step 倒退。",
+  "cases": [
+    {
+      "id": "cross.flow.no_std_product_dispatch",
+      "version": "1.0",
+      "title": "报价第 1 步找不到标品：派发新增工艺任务，卡片留在原步骤",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {
+        "card": "qa1 第 1 步匹配不到标品"
+      },
+      "input": {
+        "idempotency_key": "cx-dispatch"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_cross000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qa1",
+          "actor": "erin",
+          "params": [
+            {
+              "name": "电压",
+              "matched": false
+            },
+            {
+              "name": "容量",
+              "matched": false
+            }
+          ]
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qa1",
+          "actor": "erin",
+          "target_role_code": "process_mgr",
+          "note": "没有匹配标品，请新增工艺",
+          "idempotency_key": "cx-dispatch"
+        },
+        {
+          "op": "quote_snapshot",
+          "session_id": "qa1",
+          "actor": "erin"
+        }
+      ],
+      "expected": {
+        "http": {
+          "current_step": 1,
+          "business_case_id": "bc_cross000001"
+        },
+        "state": {
+          "quote.qa1.current_step": 1,
+          "quote.qa1.steps.1": {
+            "$absent": true
+          },
+          "tasks.t_001.task_kind": "tech_new_product",
+          "tasks.t_001.target_role_code": "process_mgr",
+          "tasks.t_001.payload.business_case_id": "bc_cross000001",
+          "tasks.t_001.status": "open"
+        },
+        "records": {
+          "tasks_sent": 1,
+          "cards": 1
+        },
+        "ui_protocol": {
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "step_rollback",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "step_monotonic",
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 1
+    },
+    {
+      "id": "cross.flow.tech_task_done_card_still_step1",
+      "version": "1.0",
+      "title": "技术任务完成不推进报价步骤：卡片仍在第 1 步等新产品",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-wait"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_cross000002",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "quote_match_product",
+          "session_id": "qa2",
+          "actor": "erin",
+          "params": [
+            {
+              "name": "电压",
+              "matched": false
+            }
+          ]
+        },
+        {
+          "op": "quote_send_tech_task",
+          "session_id": "qa2",
+          "actor": "erin",
+          "target_role_code": "process_mgr",
+          "idempotency_key": "cx-wait"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "task_complete",
+          "task_id": "t_001",
+          "actor": "carol",
+          "result_version": "R1",
+          "idempotency_key": "cx-wait-done"
+        },
+        {
+          "op": "quote_snapshot",
+          "session_id": "qa2",
+          "actor": "erin"
+        }
+      ],
+      "expected": {
+        "http": {
+          "current_step": 1,
+          "overall_status": "in_progress"
+        },
+        "state": {
+          "quote.qa2.current_step": 1,
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "tasks_completed": 1,
+          "handoff_rows": 0
+        },
+        "forbidden": [
+          "step_rollback",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 1
+    },
+    {
+      "id": "cross.flow.process_mgr_claim",
+      "version": "1.0",
+      "title": "工艺经理领取技术任务：原子领取只成功一次",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-claim"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_cross000003",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa3",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000003",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-claim"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "claimed",
+          "task_id": "t_001",
+          "claimed_by": "carol",
+          "arbiter": "atomic_update"
+        },
+        "state": {
+          "tasks.t_001.status": "claimed",
+          "tasks.t_001.claimed_by_user_id": "carol",
+          "quote.qa3.current_owner": "carol",
+          "quote.qa3.current_step": 1
+        },
+        "records": {
+          "tasks_claimed": 1,
+          "messages_total": 3
+        },
+        "events": [
+          {
+            "type": "task_claimed",
+            "actor": "carol"
+          }
+        ],
+        "forbidden": [
+          "duplicate_side_effect",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "atomic_claim"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "quote_step": 1
+    },
+    {
+      "id": "cross.flow.finance_claim_cost_task",
+      "version": "1.0",
+      "title": "财务经理领取成本测算任务（支线），报价步骤不动",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-cost-claim"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000004",
+          "fields": {
+            "customer": "宁德时代"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa4",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000004",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-cost-claim"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "quote_snapshot",
+          "session_id": "qa4",
+          "actor": "erin"
+        }
+      ],
+      "expected": {
+        "http": {
+          "current_step": 2,
+          "business_case_id": "bc_cross000004"
+        },
+        "state": {
+          "tasks.t_001.status": "claimed",
+          "tasks.t_001.claimed_by_user_id": "dave",
+          "quote.qa4.current_step": 2
+        },
+        "records": {
+          "tasks_claimed": 1
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.cost_return_to_tech",
+      "version": "1.0",
+      "title": "财务测完把成本回传工艺经理复核（source_task 关闭 + 新任务）",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {
+        "note": "成本快照取 fixtures/handoff/cost_handoff.json 的结构"
+      },
+      "input": {
+        "idempotency_key": "cx-cost-return-hb",
+        "fixture": "handoff/cost_handoff.json"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_handoff01",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa5",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "note": "请测算成本",
+          "payload": {
+            "business_case_id": "bc_handoff01",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-cost-return"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_cost",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_handoff01",
+          "target_quote_session_id": "qs_cost",
+          "target_role_code": "process_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "15.5000"
+            },
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊"
+              }
+            ],
+            "process": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ]
+          },
+          "idempotency_key": "cx-cost-return-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "business_case_id": "bc_handoff01",
+          "source_task_id": "t_001",
+          "source_project_id": "tp_cost",
+          "current_step": 3
+        },
+        "state": {
+          "tasks.t_001.status": "completed",
+          "tasks.t_002.target_role_code": "process_mgr",
+          "quote.qa5.current_step": 3,
+          "quote.qa5.steps.2.snapshot.cost.total": "15.5000"
+        },
+        "messages": [
+          {
+            "msg_type": "handoff_received",
+            "to": "erin"
+          }
+        ],
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing",
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.tech_handback_sales",
+      "version": "1.0",
+      "title": "工艺经理复核完回传销售经理，报价第 2 步随之完成",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-back-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa6",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000006",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa6",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "成本复核",
+          "payload": {
+            "business_case_id": "bc_cross000006",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-back"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_tech06",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "report",
+          "business_case_id": "bc_cross000006",
+          "target_quote_session_id": "qa6",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "status": "approved",
+              "version": "R1"
+            }
+          },
+          "idempotency_key": "cx-back-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "target_quote_session_id": "qa6",
+          "source_task_id": "t_001",
+          "business_case_id": "bc_cross000006",
+          "current_step": 3,
+          "linked_by": "case"
+        },
+        "state": {
+          "quote.qa6.current_step": 3,
+          "quote.qa6.current_owner": "sales_mgr",
+          "tasks.t_002.target_role_code": "sales_mgr",
+          "quote.qa6.steps.2.status": "done"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "cards_created_by_handoff": 0
+        },
+        "ui_protocol": {
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.sales_resume_step3",
+      "version": "1.0",
+      "title": "销售经理收到完整快照后继续第 3 步定价",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-resume-s3"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa7",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000007",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa7",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000007",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-resume"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_cost07",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_cross000007",
+          "target_quote_session_id": "qa7",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "9.8000"
+            },
+            "base_cost": "5.6000"
+          },
+          "idempotency_key": "cx-resume-hb",
+          "expect": {
+            "code": "sent",
+            "current_step": 3
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qa7",
+          "step": 3,
+          "actor": "erin",
+          "snapshot": {
+            "base_cost": "5.6000",
+            "tech_premium": "1.0000"
+          },
+          "idempotency_key": "cx-resume-s3"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "completed",
+          "step": 3,
+          "current_step": 4
+        },
+        "state": {
+          "quote.qa7.current_step": 4,
+          "quote.qa7.steps.3.status": "done",
+          "quote.qa7.totals.profit_margin": "6.6000",
+          "quote.qa7.steps.2.snapshot.cost.total": "9.8000"
+        },
+        "records": {
+          "quote_steps_completed": 1,
+          "handoff_rows": 1
+        },
+        "forbidden": [
+          "step_rollback",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "step_monotonic",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 3
+    },
+    {
+      "id": "cross.flow.report_publish_handback",
+      "version": "1.0",
+      "title": "报告发布后回传销售经理：源项目 / 源任务 / 业务实例号齐全",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-report-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa8",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000008",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa8",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "报告回传",
+          "payload": {
+            "business_case_id": "bc_cross000008",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-report"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_report08",
+          "source_task_id": "t_001",
+          "source_result_version": "R3",
+          "handoff_kind": "report",
+          "business_case_id": "bc_cross000008",
+          "target_quote_session_id": "qa8",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "status": "published",
+              "version": "R3"
+            }
+          },
+          "idempotency_key": "cx-report-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "source_project_id": "tp_report08",
+          "source_task_id": "t_001",
+          "business_case_id": "bc_cross000008",
+          "target_quote_session_id": "qa8",
+          "current_step": 3
+        },
+        "state": {
+          "quote.qa8.steps.2.snapshot.report.version": "R3",
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1
+        },
+        "forbidden": [
+          "silent_new_card",
+          "cross_project_leak",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.late_handback_step4",
+      "version": "1.0",
+      "title": "报价已到第 4 步：历史技术回传只合并快照，不退步",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-late4-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa9",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "business_case_id": "bc_cross000009",
+          "totals": {
+            "base_cost": "5.6000"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa9",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000009",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-late4"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_late4",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_cross000009",
+          "target_quote_session_id": "qa9",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "7.1000"
+            }
+          },
+          "idempotency_key": "cx-late4-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "current_step": 4,
+          "business_case_id": "bc_cross000009"
+        },
+        "state": {
+          "quote.qa9.current_step": 4,
+          "quote.qa9.steps.2.snapshot.cost.total": "7.1000"
+        },
+        "records": {
+          "handoff_rows": 1
+        },
+        "ui_protocol": {
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "step_rollback",
+          "stale_written_as_fresh"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "recovery",
+        "stale",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "cpq_wf.py"
+      ],
+      "quote_step": 2,
+      "failure_type": "stale_upstream"
+    },
+    {
+      "id": "cross.flow.late_handback_step5",
+      "version": "1.0",
+      "title": "报价已到第 5 步：晚到的成本回传同样只合并快照",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-late5-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa10",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "business_case_id": "bc_cross000010",
+          "totals": {
+            "base_cost": "4.2000"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa10",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000010",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-late5"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_late5",
+          "source_task_id": "t_001",
+          "source_result_version": "R2",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_cross000010",
+          "target_quote_session_id": "qa10",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "8.3000"
+            }
+          },
+          "idempotency_key": "cx-late5-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "current_step": 5
+        },
+        "state": {
+          "quote.qa10.current_step": 5,
+          "quote.qa10.steps.2.snapshot.cost.total": "8.3000",
+          "quote.qa10.totals.base_cost": "4.2000"
+        },
+        "records": {
+          "handoff_rows": 1
+        },
+        "ui_protocol": {
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "recovery",
+        "stale",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "cpq_wf.py"
+      ],
+      "quote_step": 2,
+      "failure_type": "stale_upstream"
+    },
+    {
+      "id": "cross.flow.late_handback_step6",
+      "version": "1.0",
+      "title": "报价已到第 6 步（已出报价单）：回传只合并，不重开流程",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-late6-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa11",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 6,
+          "business_case_id": "bc_cross000011",
+          "totals": {
+            "base_cost": "3.1000"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa11",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000011",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-late6"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_late6",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_cross000011",
+          "target_quote_session_id": "qa11",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "5.4000"
+            }
+          },
+          "idempotency_key": "cx-late6-hb"
+        },
+        {
+          "op": "quote_snapshot",
+          "session_id": "qa11",
+          "actor": "erin"
+        }
+      ],
+      "expected": {
+        "http": {
+          "current_step": 6,
+          "overall_status": "in_progress"
+        },
+        "state": {
+          "quote.qa11.current_step": 6,
+          "quote.qa11.steps.2.snapshot.cost.total": "5.4000"
+        },
+        "records": {
+          "handoff_rows": 1
+        },
+        "ui_protocol": {
+          "monotonic_ui_stage": true
+        },
+        "forbidden": [
+          "step_rollback",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "recovery",
+        "stale",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "cpq_wf.py"
+      ],
+      "quote_step": 2,
+      "failure_type": "stale_upstream"
+    },
+    {
+      "id": "cross.flow.handoff_repeat_idempotent",
+      "version": "1.0",
+      "title": "同一回传重复请求：不建新任务、不重复写审计与消息",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-rep-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa12",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000012",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa12",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000012",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-rep"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_rep12",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "report",
+          "business_case_id": "bc_cross000012",
+          "target_quote_session_id": "qa12",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "version": "R1"
+            }
+          },
+          "idempotency_key": "cx-rep-hb",
+          "expect": {
+            "code": "sent"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_rep12",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "report",
+          "business_case_id": "bc_cross000012",
+          "target_quote_session_id": "qa12",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "version": "R1"
+            }
+          },
+          "idempotency_key": "cx-rep-hb",
+          "expect": {
+            "code": "already_sent",
+            "reused": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_sent",
+          "reused": true,
+          "business_case_id": "bc_cross000012",
+          "source_task_id": "t_001"
+        },
+        "state": {
+          "quote.qa12.current_step": 3,
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "handoff_replays": 1,
+          "tasks_total": 2
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "cross.flow.no_cross_project_leak",
+      "version": "1.0",
+      "title": "两张报价卡片互不串数据：回传只落到业务实例号对应的卡片",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-iso-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa13",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000013",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "create_quote_card",
+          "session_id": "qa14",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000014",
+          "fields": {
+            "customer": "LG Energy"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa13",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000013",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-iso"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_iso13",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "report",
+          "business_case_id": "bc_cross000013",
+          "target_quote_session_id": "qa13",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "version": "R1"
+            }
+          },
+          "idempotency_key": "cx-iso-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "target_quote_session_id": "qa13",
+          "business_case_id": "bc_cross000013"
+        },
+        "state": {
+          "quote.qa13.current_step": 3,
+          "quote.qa14.current_step": 2,
+          "quote.qa14.current_owner": "erin",
+          "quote.qa14.steps.2": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "cards": 2,
+          "handoff_rows": 1,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "cross-agent",
+        "isolation"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "data_leak_attempt"
+    },
+    {
+      "id": "cross.flow.snapshot_merge_only",
+      "version": "1.0",
+      "title": "回传只合并快照键：卡片上已有的字段与总额不被覆盖",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-merge-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa15",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 3,
+          "business_case_id": "bc_cross000015",
+          "fields": {
+            "customer": "宁德时代"
+          },
+          "totals": {
+            "base_cost": "5.6000"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa15",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000015",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-merge"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "carol",
+          "source_project_id": "tp_merge15",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_cross000015",
+          "target_quote_session_id": "qa15",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "6.6000"
+            }
+          },
+          "idempotency_key": "cx-merge-hb"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "sent",
+          "current_step": 3
+        },
+        "state": {
+          "quote.qa15.fields.customer.value": "宁德时代",
+          "quote.qa15.totals.base_cost": "5.6000",
+          "quote.qa15.steps.2.snapshot.cost.total": "6.6000"
+        },
+        "records": {
+          "handoff_rows": 1
+        },
+        "forbidden": [
+          "cross_project_leak",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.task_supersede",
+      "version": "1.0",
+      "title": "同类型任务换人 / 换说明：旧任务被替代而不是并存",
+      "domain": "cross_agent",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-sup2"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa16",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000016",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa16",
+          "actor": "erin",
+          "task_kind": "handoff",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "第一版说明",
+          "idempotency_key": "cx-sup1",
+          "expect": {
+            "code": "sent",
+            "task_id": "t_001"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa16",
+          "actor": "erin",
+          "task_kind": "handoff",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "第二版说明",
+          "idempotency_key": "cx-sup2",
+          "expect": {
+            "code": "superseded",
+            "superseded_task_id": "t_001",
+            "task_id": "t_002"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "superseded",
+          "task_id": "t_002",
+          "superseded_task_id": "t_001",
+          "reused": false
+        },
+        "state": {
+          "tasks.t_001.status": "cancelled",
+          "tasks.t_001.replaced_by_task_id": "t_002",
+          "tasks.t_002.status": "open",
+          "tasks.t_002.supersedes_task_id": "t_001"
+        },
+        "records": {
+          "tasks_total": 2,
+          "tasks_cancelled": 1,
+          "tasks_superseded": 1,
+          "tasks_reused": 0
+        },
+        "events": [
+          {
+            "type": "task_superseded",
+            "task_id": "t_001",
+            "replaced_by": "t_002"
+          }
+        ],
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "normal",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "quote_step": 2
+    },
+    {
+      "id": "cross.flow.cost_task_not_change_step",
+      "version": "1.0",
+      "title": "成本测算支线任务不推进报价步骤：领取后仍在第 2 步",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cx-sideline"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qa17",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_cross000017",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qa17",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_cross000017",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cx-sideline"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "task_list",
+          "actor": "dave"
+        }
+      ],
+      "expected": {
+        "http": {
+          "count": 1,
+          "tasks": [
+            "t_001"
+          ]
+        },
+        "state": {
+          "quote.qa17.current_step": 2,
+          "quote.qa17.current_owner": "dave",
+          "tasks.t_001.task_kind": "tech_cost"
+        },
+        "records": {
+          "tasks_claimed": 1,
+          "handoff_rows": 0
+        },
+        "forbidden": [
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "normal",
+        "cross-agent"
+      ],
+      "source_specs": [
+        "cpq_wf.py",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 2
+    }
+  ]
+}

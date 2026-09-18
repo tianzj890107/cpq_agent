@@ -1,0 +1,59 @@
+{
+  "note": "旧口径只读审计的**历史文本分类表**。命中的都是 step-22 技术工艺恢复清单的历史记录，是「只用于描述历史故障 / legacy fixture」的文本，不得改写；新口径以五阶段 13 子步骤为准，新数据集 / 新测试不得再出现这些旧口径。未在此表登记的旧口径一律视为真正过期并判失败。",
+  "categories": {
+    "historical_provenance": "历史故障复现 / 恢复清单原文，保留不改写",
+    "stale_role_or_stage": "真正过期的角色 / 阶段名称，必须修",
+    "legacy_fixture": "仍需兼容的 legacy fixture 原文，保留并在 dataset 侧标记"
+  },
+  "entries": [
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 68,
+      "legacy": "2.2组装与整合",
+      "classification": "historical_provenance",
+      "reason": "e2e-06 标题用旧的三页签口径（2.2 组装与整合）描述当时的场景；这是 step-22 恢复清单的历史记录，对应的 automated Red 套件名保持不变，改写会篡改历史。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 79,
+      "legacy": "2.3成本测算",
+      "classification": "historical_provenance",
+      "reason": "e2e-07 标题用旧口径（2.3 成本测算）描述当时场景，同属历史恢复记录。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 90,
+      "legacy": "3.2审核",
+      "classification": "historical_provenance",
+      "reason": "e2e-08 标题同时命中旧报告子步骤 3.1/3.2/3.3；历史场景记录，保留原文。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 90,
+      "legacy": "3.3发布",
+      "classification": "historical_provenance",
+      "reason": "e2e-08 标题同时命中旧报告子步骤 3.1/3.2/3.3；历史场景记录，保留原文。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 90,
+      "legacy": "旧报告子步骤",
+      "classification": "historical_provenance",
+      "reason": "e2e-08 标题同时命中旧报告子步骤 3.1/3.2/3.3；历史场景记录，保留原文。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 98,
+      "legacy": "3.2审核",
+      "classification": "historical_provenance",
+      "reason": "e2e-08 manual 步骤文本沿用当时的 3.2/3.3 编号，是人工操作历史说明。"
+    },
+    {
+      "file": "docs/specs/tech-agent-recovery-22-e2e-scenarios.json",
+      "line": 105,
+      "legacy": "九阶段",
+      "classification": "historical_provenance",
+      "reason": "e2e-09 标题「九阶段独立上下文与步进」对应 automated=tests/test_tech_stage_context_nine_stages_red.py，是旧九阶段上下文的故障复现历史，删改会使该历史条目与文件名不符。"
+    }
+  ]
+}

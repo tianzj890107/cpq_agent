@@ -1,0 +1,10 @@
+{
+  "provider_id": "rec-tech-requirement-parse",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "1.1 创建需求"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "1.1 创建需求",
+      "values": {"客户": "亿纬锂能", "产能": "5.6GWh"}}},
+    {"type": "tool_result", "name": "tech_ui", "output": {"ok": true}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

@@ -1,0 +1,2675 @@
+{
+  "suite_id": "auth_acl.acl_scope",
+  "title": "登录、角色与项目 ACL：统一登录态、账号隔离、可见范围与不可枚举拒绝",
+  "domain": "auth_acl",
+  "notes": "每条案例都同时覆盖允许角色与拒绝角色；未授权与不存在返回等价响应。",
+  "cases": [
+    {
+      "id": "acl.login.valid_account_unified_session",
+      "version": "1.0",
+      "title": "PE1 类有效账号登录：报价与技术工艺共享同一登录态",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "admin"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "grace": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.login.valid_account_unified_session"
+      },
+      "actions": [
+        {
+          "op": "login",
+          "actor": "alice"
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl1",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "grace": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok",
+          "bodies_equal": true
+        },
+        "state": {
+          "session.actor": "alice",
+          "session.token": "tok_alice",
+          "acl.bodies.missing.code": "project_not_found"
+        },
+        "records": {
+          "logins": 1
+        },
+        "forbidden": [
+          "real_secret_used",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "normal",
+        "login"
+      ],
+      "source_specs": [
+        "docs/specs/single-login-across-quote-and-tech.md",
+        "docs/specs/tech-project-acl-visible-scope.md"
+      ],
+      "failure_type": "auth_failure"
+    },
+    {
+      "id": "acl.login.missing_token_rejected",
+      "version": "1.0",
+      "title": "无 token 登录被拒：401 missing_token，不得拿到任何项目",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.login.missing_token_rejected"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "login_with_token",
+          "token": "",
+          "expect": {
+            "status": 401,
+            "code": "missing_token"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl1",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "session.actor": ""
+        },
+        "records": {
+          "logins": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/single-login-across-quote-and-tech.md"
+      ],
+      "failure_type": "auth_failure"
+    },
+    {
+      "id": "acl.login.expired_token_rejected",
+      "version": "1.0",
+      "title": "过期 token 登录被拒：401 token_expired",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.login.expired_token_rejected"
+      },
+      "actions": [
+        {
+          "op": "seed_actor",
+          "name": "alice",
+          "roles": [
+            "process_engineer"
+          ],
+          "token": "tok_alice",
+          "expired_tokens": [
+            "tok_alice_old"
+          ]
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "login_with_token",
+          "token": "tok_alice_old",
+          "expect": {
+            "status": 401,
+            "code": "token_expired"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl1",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "session.actor": ""
+        },
+        "records": {
+          "logins": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/single-login-across-quote-and-tech.md"
+      ],
+      "failure_type": "auth_failure"
+    },
+    {
+      "id": "acl.login.invalid_token_rejected",
+      "version": "1.0",
+      "title": "错误 token 登录被拒：401 invalid_token",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.login.invalid_token_rejected"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "login_with_token",
+          "token": "tok_not_exist",
+          "expect": {
+            "status": 401,
+            "code": "invalid_token"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl1",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "session.actor": ""
+        },
+        "records": {
+          "logins": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/single-login-across-quote-and-tech.md"
+      ],
+      "failure_type": "auth_failure"
+    },
+    {
+      "id": "acl.login.shared_across_quote_and_tech",
+      "version": "1.0",
+      "title": "报价与技术工艺共享统一登录态：一次登录两边都可用，不重复登录",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "carol": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.login.shared_across_quote_and_tech"
+      },
+      "actions": [
+        {
+          "op": "login",
+          "actor": "alice"
+        },
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_acl",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_acl000001"
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "business_case": {
+            "business_case_id": "bc_acl000001",
+            "quote_session_id": "qs_acl",
+            "source_task_id": "t_acl1"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "carol": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "session.actor": "alice",
+          "quote.qs_acl.current_owner": "erin",
+          "tech.tp_acl2.business_case.business_case_id": "bc_acl000001"
+        },
+        "records": {
+          "logins": 1,
+          "cards": 1,
+          "projects": 1
+        },
+        "forbidden": [
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "login"
+      ],
+      "source_specs": [
+        "docs/specs/single-login-across-quote-and-tech.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ]
+    },
+    {
+      "id": "acl.model.per_account_isolation",
+      "version": "1.0",
+      "title": "API key 与模型设置按账号隔离：改 bob 不影响 alice",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.model.per_account_isolation"
+      },
+      "actions": [
+        {
+          "op": "set_api_key",
+          "actor": "alice",
+          "api_key": "test-key",
+          "model": "model-alpha"
+        },
+        {
+          "op": "set_api_key",
+          "actor": "bob",
+          "api_key": "test-key",
+          "model": "model-beta"
+        },
+        {
+          "op": "read_models",
+          "actor": "alice",
+          "expect": {
+            "status": 200,
+            "models": [
+              "model-alpha"
+            ]
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl1",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "actors.alice.model": "model-alpha",
+          "actors.bob.model": "model-beta",
+          "actors.alice.api_key": "test-key"
+        },
+        "records": {
+          "logins": 0
+        },
+        "forbidden": [
+          "real_secret_used",
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "isolation"
+      ],
+      "source_specs": [
+        "docs/specs/per-account-model-and-api-key.md",
+        "docs/specs/tech-project-acl-visible-scope.md"
+      ]
+    },
+    {
+      "id": "acl.scope.engineer_own_projects_only",
+      "version": "1.0",
+      "title": "工艺工程师只看自己的项目：bob 看不到 alice 的项目",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "bob": "deny",
+          "heidi": "deny",
+          "erin": "deny"
+        },
+        "idempotency_key": "acl.scope.engineer_own_projects_only"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl3",
+          "actor": "bob",
+          "owner": "bob",
+          "current_holder": "bob",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "alice",
+          "scope": "mine",
+          "expect": {
+            "status": 200,
+            "code": "OK",
+            "projects": [
+              "tp_acl2"
+            ],
+            "count": 1
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "bob": "deny",
+            "heidi": "deny",
+            "erin": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "acl.bodies.missing.code": "project_not_found"
+        },
+        "records": {
+          "acl_list_mine": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak",
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "acl.scope.manager_visible_range",
+      "version": "1.0",
+      "title": "工艺经理可看权限范围内全部项目，我的清单只含自己负责的",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "carol": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.scope.manager_visible_range"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl3",
+          "actor": "bob",
+          "owner": "bob",
+          "current_holder": "bob",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "carol",
+          "scope": "all",
+          "expect": {
+            "status": 200,
+            "count": 2
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "carol",
+          "scope": "mine",
+          "expect": {
+            "status": 200,
+            "count": 0
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "matrix": {
+            "carol": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_list_all": 1,
+          "acl_list_mine": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "acl.scope.finance_cost_responsibility_only",
+      "version": "1.0",
+      "title": "财务经理只在自己承担成本测算的项目内可见，且只操作成本职责",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "erin": "deny",
+          "bob": "deny"
+        },
+        "idempotency_key": "acl.scope.finance_cost_responsibility_only"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "acl_list",
+          "actor": "dave",
+          "scope": "mine",
+          "expect": {
+            "status": 200,
+            "projects": [
+              "tp_acl4"
+            ],
+            "count": 1
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl4",
+          "mode": "read",
+          "matrix": {
+            "dave": "allow",
+            "erin": "deny",
+            "bob": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_list_mine": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "acl.scope.sales_readonly_linked_only",
+      "version": "1.0",
+      "title": "销售经理只读与自己报价单关联的技术项目，别的技术项目不可见",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "erin": "allow",
+          "bob": "deny",
+          "dave": "deny"
+        },
+        "idempotency_key": "acl.scope.sales_readonly_linked_only"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "business_case": {
+            "business_case_id": "bc_acl000005",
+            "quote_session_id": "qs_acl5",
+            "source_task_id": "t_acl5"
+          },
+          "participants": [
+            {
+              "username": "erin",
+              "role": "sales_mgr",
+              "source": "quote_owner"
+            }
+          ]
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "business_case": {
+            "business_case_id": "bc_acl000006",
+            "quote_session_id": "qs_acl6",
+            "source_task_id": "t_acl6"
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "erin",
+          "scope": "all",
+          "expect": {
+            "status": 200,
+            "projects": [
+              "tp_acl5"
+            ],
+            "count": 1
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl5",
+          "mode": "read",
+          "matrix": {
+            "erin": "allow",
+            "bob": "deny",
+            "dave": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_list_all": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ]
+    },
+    {
+      "id": "acl.scope.mine_all_archived_counts",
+      "version": "1.0",
+      "title": "我的清单 / 全部清单 / 已归档清单三种口径互不串味",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "carol": "allow",
+          "heidi": "deny",
+          "dave": "deny"
+        },
+        "idempotency_key": "acl.scope.mine_all_archived_counts"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl7",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl8",
+          "actor": "bob",
+          "owner": "bob",
+          "current_holder": "bob",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "archived": true
+        },
+        {
+          "op": "acl_list",
+          "actor": "alice",
+          "scope": "mine",
+          "expect": {
+            "status": 200,
+            "projects": [
+              "tp_acl7"
+            ],
+            "count": 1
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "carol",
+          "scope": "all",
+          "expect": {
+            "status": 200,
+            "count": 2
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "carol",
+          "scope": "archived",
+          "expect": {
+            "status": 200,
+            "projects": [
+              "tp_acl8"
+            ],
+            "count": 1
+          }
+        },
+        {
+          "op": "acl_list",
+          "actor": "carol",
+          "scope": "mine",
+          "expect": {
+            "status": 200,
+            "count": 0
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl7",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "carol": "allow",
+            "heidi": "deny",
+            "dave": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_list_mine": 2,
+          "acl_list_all": 1,
+          "acl_list_archived": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "scope"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "acl.scope.archived_project_readonly",
+      "version": "1.0",
+      "title": "已归档项目独立列表且只读：连项目负责人都不能改",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "carol": "allow",
+          "heidi": "deny",
+          "dave": "deny"
+        },
+        "idempotency_key": "acl.scope.archived_project_readonly"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl8",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "archived": true
+        },
+        {
+          "op": "acl_access",
+          "actor": "alice",
+          "project_id": "tp_acl8",
+          "mode": "read",
+          "expect": {
+            "status": 200,
+            "archived": true,
+            "access": {
+              "can_write": false
+            }
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl8",
+          "mode": "read",
+          "matrix": {
+            "carol": "allow",
+            "heidi": "deny",
+            "dave": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "state": {
+          "tech.tp_acl8.archived": true
+        },
+        "records": {
+          "acl_access": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ]
+    },
+    {
+      "id": "acl.access.cost_writer_denied",
+      "version": "1.0",
+      "title": "财务经理越权改项目文档被拒：403 forbidden（读得到 ≠ 改得动）",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "carol": "allow",
+          "alice": "allow",
+          "dave": "deny",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.access.cost_writer_denied"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "acl_access",
+          "actor": "dave",
+          "project_id": "tp_acl4",
+          "mode": "read",
+          "expect": {
+            "status": 200,
+            "access": {
+              "can_read": true,
+              "can_write": false
+            }
+          }
+        },
+        {
+          "op": "acl_access",
+          "actor": "dave",
+          "project_id": "tp_acl4",
+          "mode": "write",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl4",
+          "mode": "write",
+          "matrix": {
+            "carol": "allow",
+            "alice": "allow",
+            "dave": "deny",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_access": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.access.view_read_write_split",
+      "version": "1.0",
+      "title": "看板可查看与可操作必须区分：只读账号能看不能改",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "viewer",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "carol": "allow",
+          "heidi": "deny"
+        },
+        "idempotency_key": "acl.access.view_read_write_split"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "heidi",
+              "role": "viewer",
+              "source": "participant"
+            }
+          ]
+        },
+        {
+          "op": "acl_access",
+          "actor": "heidi",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "expect": {
+            "status": 200,
+            "access": {
+              "can_read": true,
+              "can_write": false
+            }
+          }
+        },
+        {
+          "op": "acl_access",
+          "actor": "heidi",
+          "project_id": "tp_acl2",
+          "mode": "write",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl2",
+          "mode": "write",
+          "matrix": {
+            "carol": "allow",
+            "heidi": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok"
+        },
+        "records": {
+          "acl_access": 1
+        },
+        "forbidden": [
+          "denied_actor_allowed"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.access.unauthorized_not_enumerable",
+      "version": "1.0",
+      "title": "未授权与不存在项目返回不可枚举的等价响应：不许用 404/403 差异探测项目是否存在",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "viewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "alice": "allow",
+          "heidi": "deny",
+          "bob": "deny"
+        },
+        "idempotency_key": "acl.access.unauthorized_not_enumerable"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_acl2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "acl_access",
+          "actor": "heidi",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "expect": {
+            "status": 404,
+            "code": "project_not_found"
+          }
+        },
+        {
+          "op": "acl_access",
+          "actor": "heidi",
+          "project_id": "tp_does_not_exist",
+          "mode": "read",
+          "expect": {
+            "status": 404,
+            "code": "project_not_found"
+          }
+        },
+        {
+          "op": "acl_matrix_check",
+          "project_id": "tp_acl2",
+          "mode": "read",
+          "matrix": {
+            "alice": "allow",
+            "heidi": "deny",
+            "bob": "deny"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "matrix_ok",
+          "bodies_equal": true
+        },
+        "state": {
+          "acl.bodies.missing.code": "project_not_found",
+          "acl.bodies.forbidden.code": "project_not_found"
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "deny_is_not_enumerable"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "failure_type": "data_leak_attempt"
+    },
+    {
+      "id": "acl.integration.token_probe",
+      "version": "1.0",
+      "title": "隔离 PostgreSQL：定向任务的角色范围可见性——目标角色可见可领，无关角色既不进收件箱也领不到",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "integration",
+      "roles": [
+        "process_mgr",
+        "finance_mgr"
+      ],
+      "preconditions": {
+        "requires": "CPQ_EVAL_INTEGRATION=1 + CPQ_EVAL_PG_HOST（隔离库）"
+      },
+      "input": {
+        "access_matrix": {
+          "process": "allow",
+          "finance": "deny"
+        },
+        "steps": [
+          {
+            "id": "pg",
+            "pg": {
+              "scenario": "visibility.role_scoped_tasks"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.pg.result.in_pm_inbox": true,
+          "steps.pg.result.in_fin_inbox": false,
+          "steps.pg.result.fin_denied": true,
+          "steps.pg.result.pm_claimed": true,
+          "steps.pg.result.status": "claimed"
+        },
+        "forbidden": [
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "integration",
+        "permission",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:cpq_wf"
+      ],
+      "executor": "postgres_integration",
+      "entry": {
+        "module": "cpq_wf",
+        "function": "inbox"
+      },
+      "failure_type": "permission_denied",
+      "notes": "原案例是「传 target-url 后校验登录态」的 Sim 探针，声明 postgres_integration 却由 Sim 执行。现改为真连隔离 PostgreSQL 跑 cpq_wf 的角色范围可见性；真实路由侧登录态由 acl.real.* 覆盖。"
+    }
+  ]
+}

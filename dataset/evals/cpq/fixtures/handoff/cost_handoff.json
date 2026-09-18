@@ -1,0 +1,13 @@
+{
+  "fixture_id": "cost_handoff",
+  "note": "成本测算完成后回传销售经理的完整快照（含业务实例号与来源任务）",
+  "source_project_id": "tp_cost",
+  "source_task_id": "t_cost1",
+  "source_result_version": "R1",
+  "handoff_kind": "cost",
+  "business_case_id": "bc_handoff01",
+  "target_quote_session_id": "qs_cost",
+  "snapshot": {"cost": {"total": "15.5000"}, "params": [{"name": "焊接方式", "value": "激光焊"}],
+               "process": [{"no": 10, "name": "下料"}]},
+  "note_text": "成本测算完成，回传销售经理继续报价"
+}

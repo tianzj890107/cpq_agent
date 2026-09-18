@@ -1,0 +1,986 @@
+{
+  "suite_id": "failure_recovery.failure_injection",
+  "title": "故障注入与恢复：状态码 / 错误码 / trace_id、超时重放、刷新保状态与看板错误面",
+  "domain": "failure_recovery",
+  "notes": "错误响应必须同时带稳定错误码与 trace_id；失败不得留下半写数据。",
+  "cases": [
+    {
+      "id": "fail.http.400_bad_request",
+      "version": "1.0",
+      "title": "后端 400：请求体不合法时返回稳定错误码与 trace_id",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.400_bad_request"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/quote/cards",
+          "status": "400",
+          "code": "bad_request"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 400,
+          "ok": false,
+          "code": "bad_request",
+          "route": "/api/quote/cards",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "fail.http.401_missing_token",
+      "version": "1.0",
+      "title": "后端 401：无登录凭证时返回 missing_token",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.401_missing_token"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/projects",
+          "status": "401",
+          "code": "missing_token"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 401,
+          "ok": false,
+          "code": "missing_token",
+          "route": "/api/tech/projects",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "fail.http.403_forbidden",
+      "version": "1.0",
+      "title": "后端 403：越权访问返回 forbidden，不泄露项目内容",
+      "domain": "failure_recovery",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.403_forbidden"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/projects/tp_x/requirement",
+          "status": "403",
+          "code": "forbidden"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "ok": false,
+          "code": "forbidden",
+          "route": "/api/tech/projects/tp_x/requirement",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "fail.http.404_not_found",
+      "version": "1.0",
+      "title": "后端 404：项目不存在返回可枚举等价的 not_found",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.404_not_found"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/projects/unknown_project",
+          "status": "404",
+          "code": "not_found"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 404,
+          "ok": false,
+          "code": "not_found",
+          "route": "/api/tech/projects/unknown_project",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "fail.http.409_conflict",
+      "version": "1.0",
+      "title": "后端 409：任务已被他人领取时返回 conflict",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.409_conflict"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/tasks/t_001/claim",
+          "status": "409",
+          "code": "conflict"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "ok": false,
+          "code": "conflict",
+          "route": "/api/tech/tasks/t_001/claim",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "fail.http.422_invalid_payload",
+      "version": "1.0",
+      "title": "后端 422：需求字段不合法时返回 422 且不落库",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.422_invalid_payload"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/projects/tp_x/requirement",
+          "status": "422",
+          "code": "unprocessable_entity"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "ok": false,
+          "code": "unprocessable_entity",
+          "route": "/api/tech/projects/tp_x/requirement",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "fail.http.500_internal_error",
+      "version": "1.0",
+      "title": "后端 500：服务内部错误也带稳定错误码与 trace_id",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.500_internal_error"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/tech/projects/tp_x/cost/parts",
+          "status": "500",
+          "code": "internal_error"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "ok": false,
+          "code": "internal_error",
+          "route": "/api/tech/projects/tp_x/cost/parts",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "transaction_rollback"
+    },
+    {
+      "id": "fail.http.503_service_unavailable",
+      "version": "1.0",
+      "title": "后端 503：依赖不可用时返回可重试错误码",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fail.http.503_service_unavailable"
+      },
+      "actions": [
+        {
+          "op": "http_call",
+          "route": "/api/quote/cards/qs_x/match",
+          "status": "503",
+          "code": "service_unavailable"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 503,
+          "ok": false,
+          "code": "service_unavailable",
+          "route": "/api/quote/cards/qs_x/match",
+          "trace_id": {
+            "$present": true
+          },
+          "header_trace_id": {
+            "$present": true
+          }
+        },
+        "ui_protocol": {
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "error",
+        "recovery"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "timeout"
+    },
+    {
+      "id": "fail.timeout.safe_replay_single_side_effect",
+      "version": "1.0",
+      "title": "客户端超时后安全重放：复用幂等键，只产生一次业务副作用",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fr-key-9"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_f9",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "retry_action",
+          "target_op": "tech_requirement_create",
+          "project_id": "tp_f9",
+          "actor": "alice",
+          "submit": true,
+          "form": {
+            "客户": "亿纬锂能"
+          },
+          "idempotency_key": "fr-key-9"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "retry_done",
+          "attempts": 3,
+          "no_duplicate": true,
+          "key": "fr-key-9"
+        },
+        "state": {
+          "tech.tp_f9.requirement.status": "pending_review"
+        },
+        "records": {
+          "retries": 1,
+          "messages_total": 1,
+          "events_total": 2
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "recovery",
+        "timeout",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md"
+      ],
+      "failure_type": "timeout"
+    },
+    {
+      "id": "fail.refresh.failure_keeps_last_state",
+      "version": "1.0",
+      "title": "刷新失败保留上次状态并提示，不清空成未完成",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fr-refresh"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_f10",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_refresh",
+          "project_id": "tp_f10",
+          "actor": "alice",
+          "fail": true
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 503,
+          "code": "refresh_failed"
+        },
+        "state": {
+          "tech.tp_f10.drawing.parts": 12,
+          "tech.tp_f10.integration.params_confirmed": true
+        },
+        "ui_protocol": {
+          "refresh_failure_keeps_state": true,
+          "error_code_with_trace": true
+        },
+        "records": {
+          "projections": 0
+        },
+        "forbidden": [
+          "refresh_cleared_state",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "refresh",
+        "failure"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "failure_type": "refresh_failure"
+    },
+    {
+      "id": "fail.board.critical_failure_persistent",
+      "version": "1.0",
+      "title": "看板关键失败常驻显示，且左侧会话与右侧看板错误一致",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fr-board-1"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_f11",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "board_action",
+          "actor": "carol",
+          "action": "publish_report",
+          "fail": true,
+          "critical": true,
+          "code": "publish_failed"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "code": "publish_failed"
+        },
+        "state": {
+          "ui.board_error": "publish_failed",
+          "ui.session_error": "publish_failed",
+          "signals.left_right_error_consistent": true
+        },
+        "ui_protocol": {
+          "critical_failure_persistent": true,
+          "quiet_failure_no_card": false,
+          "error_code_with_trace": true
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "failure",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md"
+      ],
+      "failure_type": "ui_protocol_violation"
+    },
+    {
+      "id": "fail.board.quiet_failure_no_permanent_card",
+      "version": "1.0",
+      "title": "非关键失败不制造永久错误卡：提示可消失，数据不丢",
+      "domain": "failure_recovery",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "fr-board-2"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_f12",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "board_action",
+          "actor": "carol",
+          "action": "refresh_optional_panel",
+          "fail": true,
+          "critical": false,
+          "code": "panel_unavailable"
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 500,
+          "code": "panel_unavailable"
+        },
+        "state": {
+          "ui.critical_failure_persistent": false
+        },
+        "ui_protocol": {
+          "quiet_failure_no_card": true,
+          "error_code_with_trace": true
+        },
+        "records": {
+          "projects": 1
+        },
+        "forbidden": [
+          "generic_error_body"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "failure",
+        "ui"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md"
+      ],
+      "failure_type": "ui_protocol_violation"
+    }
+  ]
+}

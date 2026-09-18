@@ -1,0 +1,28 @@
+{
+  "fixture_id": "legacy_tech_project",
+  "note": "历史数据使用旧 page_context（2.2 组装与整合）；打开后按五阶段 13 子步骤显示，历史消息原文不改写",
+  "project": {
+    "project_id": "tp_legacy2", "title": "历史项目（旧 page_context）", "owner": "alice",
+    "current_holder": "alice",
+    "business_case": {"business_case_id": "bc_legacy0002", "quote_session_id": "qs_history",
+                      "source_task_id": "", "linked_by": "session"},
+    "page_context": "2.2 组装与整合",
+    "history_page_contexts": [],
+    "timeline": [
+      {"seq": 1, "kind": "message", "role": "user", "text": "旧会话原文不动",
+       "at": "2026-09-11T10:00:00+08:00", "payload": {}, "page_context": "2.2 组装与整合"},
+      {"seq": 2, "kind": "tool", "role": "assistant", "text": "",
+       "at": "2026-09-11T10:00:05+08:00", "payload": {"name": "tech_ui"}, "page_context": "2.2 组装与整合"},
+      {"seq": 3, "kind": "board", "role": "board", "text": "",
+       "at": "2026-09-11T10:00:06+08:00", "payload": {"view": "params"}, "page_context": "2.2 组装与整合"}
+    ],
+    "requirement": {"status": "approved", "confirmed": true, "review": "approved", "completeness_checked": true},
+    "drawing": {"parsed": true, "ir": true, "parts": 3, "empty_confirmed": false},
+    "integration": {"drawings_done": true, "params_confirmed": false, "process_confirmed": false,
+                    "params": [{"name": "焊接方式", "value": "激光焊", "required": true}],
+                    "process_steps": []},
+    "cost": {"parts": [], "excluded_parts": [], "assembly": {}, "total": {},
+             "confirmed": false, "confirmed_by": ""},
+    "report": {"status": "", "published": false, "handed_back": false, "versions": []}
+  }
+}

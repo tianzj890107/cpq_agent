@@ -1,0 +1,6 @@
+{
+  "document_id": "doc_minimal",
+  "file_name": "客户口述需求.txt",
+  "text": "客户只说了要报价，没说产能和交期",
+  "fields": {"project_name": "临时项目", "customer": "", "capacity": "", "destination": ""}
+}

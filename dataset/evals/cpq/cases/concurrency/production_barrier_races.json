@@ -1,0 +1,637 @@
+{
+  "suite_id": "concurrency.production_barrier_races",
+  "title": "并发 / 幂等：Barrier 受控交错打在真实 store / 纯函数上",
+  "domain": "concurrency",
+  "cases": [
+    {
+      "id": "conc.real.barrier_participant_single_row",
+      "version": "1.0",
+      "title": "四个线程用 Barrier 同时加同一个财务参与者：真实 store 幂等，最终只有一行",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "add_participant"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          }
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "race",
+            "concurrent": {
+              "threads": 4,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "add_participant",
+                "args": {
+                  "project_id": {
+                    "$project_id": "handoff"
+                  },
+                  "username": "dave",
+                  "role": "finance_manager",
+                  "source": "cost_task_assignee",
+                  "assignee": true
+                }
+              }
+            }
+          },
+          {
+            "id": "rows",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "list_participants",
+              "args": {
+                "project_id": {
+                  "$project_id": "handoff"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.race.threads": 4,
+          "steps.race.errors.0": {
+            "$absent": true
+          },
+          "steps.rows.result": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 5
+          }
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "concurrency_conflict",
+      "notes": "裁决权在真实 store 的幂等写入，不在测试线程里；测试只用 Barrier 让它们同时起跑。"
+    },
+    {
+      "id": "conc.real.barrier_session_event_single_row_per_key",
+      "version": "1.0",
+      "title": "四个线程同时提交同一 key 的会话事件：服务端 seq 分配后只有一行，不产生重复条目",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "append_session_event"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "target_role_name": "财务经理"
+              }
+            },
+            "participants": []
+          }
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "race",
+            "concurrent": {
+              "threads": 4,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "append_session_event",
+                "args": {
+                  "project_id": {
+                    "$project_id": "handoff"
+                  },
+                  "event": {
+                    "kind": "note",
+                    "key": "dup-key",
+                    "text": "同一条"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "events",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_session_events",
+              "args": {
+                "project_id": {
+                  "$project_id": "handoff"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.race.threads": 4,
+          "steps.events.result": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 5
+          }
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "concurrency",
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.real.barrier_business_case_no_lost_update",
+      "version": "1.0",
+      "title": "四个线程并发写不同的业务关联键：合并写入不丢键，四个键都在最终文档里",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "save_business_case"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "carol",
+            "filename": "merge.dxf"
+          }
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "r1",
+            "concurrent": {
+              "threads": 2,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "save_business_case",
+                "args": {
+                  "project_id": {
+                    "$project_id": "tech"
+                  },
+                  "link": {
+                    "recovery_reason": "recovered"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "r2",
+            "concurrent": {
+              "threads": 2,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "save_business_case",
+                "args": {
+                  "project_id": {
+                    "$project_id": "tech"
+                  },
+                  "link": {
+                    "quote_session_id": "QS-77"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "final",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "load_business_case",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.final.result.recovery_reason": "recovered",
+          "steps.final.result.quote_session_id": "QS-77"
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 5
+          }
+        },
+        "forbidden": [
+          "partial_write_on_failure",
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "concurrency",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "conc.real.barrier_case_link_decide_identical",
+      "version": "1.0",
+      "title": "四个线程同时判定同一批候选：真实纯函数同输入同输出，四个结果完全一致（幂等键成立的前提）",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "cpq_case_link",
+        "function": "decide"
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {},
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          }
+        },
+        "steps": [
+          {
+            "id": "race",
+            "concurrent": {
+              "threads": 4,
+              "call": {
+                "module": "cpq_case_link",
+                "function": "decide",
+                "args": {
+                  "candidates": [
+                    {
+                      "quote_session_id": "QS-77",
+                      "linked_by": "case",
+                      "business_case_id": "BC-1"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.race.threads": 4,
+          "steps.race.results.0.result.code": "linked",
+          "steps.race.results.1.result.code": "linked",
+          "steps.race.results.2.result.code": "linked",
+          "steps.race.results.3.result.code": "linked",
+          "steps.race.results.0.result.business_case_id": "BC-1"
+        },
+        "records": {
+          "unit_calls": 4
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:cpq_case_link"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "conc.real.barrier_current_holder_single_winner_and_stable",
+      "version": "1.0",
+      "title": "四个线程同时抢项目当前持有人：最终人事后可见且只有一个，重读结果稳定",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "set_current_holder"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "carol",
+            "filename": "hold.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "race",
+            "concurrent": {
+              "threads": 4,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "set_current_holder",
+                "args": {
+                  "project_id": {
+                    "$project_id": "tech"
+                  },
+                  "username": "carol",
+                  "author": "cpq-eval"
+                }
+              }
+            }
+          },
+          {
+            "id": "read1",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "current_holder",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          },
+          {
+            "id": "read2",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "current_holder",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.race.threads": 4,
+          "steps.read1.result": "carol",
+          "steps.read2.result": "carol"
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 5
+          }
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "concurrency",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "conc.real.barrier_save_task_single_record",
+      "version": "1.0",
+      "title": "四个线程并发保存同一个任务号：真实 store 只留一条任务记录",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.storage.store",
+        "function": "save_task"
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "projects": {
+          "tech": {
+            "owner": "carol",
+            "filename": "task.dxf"
+          }
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          }
+        },
+        "steps": [
+          {
+            "id": "race",
+            "concurrent": {
+              "threads": 4,
+              "call": {
+                "module": "backend.storage.store",
+                "function": "save_task",
+                "args": {
+                  "project_id": {
+                    "$project_id": "tech"
+                  },
+                  "rec": {
+                    "task_id": "T-1",
+                    "kind": "cost_review_part",
+                    "status": "open",
+                    "title": "零件成本"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "tasks",
+            "call": {
+              "module": "backend.storage.store",
+              "function": "list_tasks",
+              "args": {
+                "project_id": {
+                  "$project_id": "tech"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.race.threads": 4,
+          "steps.tasks.result": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "unit_calls": {
+            "$gte": 5
+          }
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "module:backend.storage.store"
+      ],
+      "failure_type": "concurrency_conflict",
+      "notes": "报告必须说清这里裁决的是真实 JsonMetaBackend（锁定 JSON 后端），不是 PostgreSQL 唯一约束；PostgreSQL 层由 postgres_integration 单独验证。"
+    }
+  ],
+  "notes": "全部用 threading.Barrier 同步起跑，不使用 sleep；裁决权在生产代码。"
+}

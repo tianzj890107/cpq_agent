@@ -1,0 +1,860 @@
+{
+  "suite_id": "concurrency.idempotency",
+  "title": "幂等与重放：任务 / 报价步骤 / 回传 / 物料编码 / 会话事件 / 超时重试",
+  "domain": "concurrency",
+  "notes": "同一幂等键重放不得产生第二次副作用；物料编码由唯一约束生成，重放只回放已有编码。",
+  "cases": [
+    {
+      "id": "conc.idem.task_send_replay",
+      "version": "1.0",
+      "title": "同一幂等键重发任务：返回原任务，不产生第二条任务",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci1-key"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ci1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_idem0000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ci1",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_idem0000001",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ci1-key",
+          "expect": {
+            "code": "sent",
+            "task_id": "t_001"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ci1",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_idem0000001",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ci1-key",
+          "expect": {
+            "code": "replayed",
+            "task_id": "t_001",
+            "replayed": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "replayed",
+          "task_id": "t_001",
+          "replayed": true
+        },
+        "state": {
+          "tasks.t_001.status": "open"
+        },
+        "records": {
+          "tasks_total": 1,
+          "tasks_sent": 1,
+          "messages_total": 2
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.task_send_supersede",
+      "version": "1.0",
+      "title": "同类型任务换说明：旧任务取消并由新任务替代",
+      "domain": "concurrency",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci2-b"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ci2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_idem0000002",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ci2",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "第一版",
+          "payload": {
+            "business_case_id": "bc_idem0000002",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ci2-a",
+          "expect": {
+            "code": "sent",
+            "task_id": "t_001"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ci2",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "note": "第二版",
+          "payload": {
+            "business_case_id": "bc_idem0000002",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ci2-b",
+          "expect": {
+            "code": "superseded",
+            "task_id": "t_002",
+            "superseded_task_id": "t_001"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "superseded",
+          "task_id": "t_002",
+          "superseded_task_id": "t_001"
+        },
+        "state": {
+          "tasks.t_001.status": "cancelled",
+          "tasks.t_001.replaced_by_task_id": "t_002",
+          "tasks.t_002.status": "open"
+        },
+        "records": {
+          "tasks_total": 2,
+          "tasks_superseded": 1,
+          "tasks_open": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "normal",
+        "task-flow"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ]
+    },
+    {
+      "id": "conc.idem.quote_step_repeat",
+      "version": "1.0",
+      "title": "报价步骤重复提交：同一个幂等键只产生一个版本",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci3-key"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ci3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 3,
+          "business_case_id": "bc_idem0000003",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "ci3",
+          "step": 3,
+          "actor": "erin",
+          "snapshot": {
+            "base_cost": "5.6000"
+          },
+          "idempotency_key": "ci3-key",
+          "expect": {
+            "code": "completed",
+            "version": "v1"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "ci3",
+          "step": 3,
+          "actor": "erin",
+          "snapshot": {
+            "base_cost": "5.6000"
+          },
+          "idempotency_key": "ci3-key",
+          "expect": {
+            "code": "already_completed",
+            "version": "v1"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_completed",
+          "version": "v1",
+          "idempotent": true
+        },
+        "state": {
+          "quote.ci3.current_step": 4
+        },
+        "records": {
+          "quote_versions": 1,
+          "quote_steps_completed": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.quote_step_no_change",
+      "version": "1.0",
+      "title": "回改已完成步骤但没有实际变化：返回 no_change，不新增版本",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci4-key"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ci4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 5,
+          "business_case_id": "bc_idem0000004",
+          "fields": {
+            "customer": "宁德时代"
+          },
+          "totals": {
+            "base_cost": "5.6000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "ci4",
+          "step": 3,
+          "actor": "erin",
+          "snapshot": {},
+          "idempotency_key": "ci4-key",
+          "expect": {
+            "code": "no_change"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "no_change",
+          "step": 3
+        },
+        "state": {
+          "quote.ci4.current_step": 5
+        },
+        "records": {
+          "quote_versions": 0,
+          "quote_recomputes": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "step_monotonic"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "cpq_wf.py"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.handoff_replay",
+      "version": "1.0",
+      "title": "回传重复请求：命中幂等键返回 already_sent，不重复落库",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci5-hb"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "ci5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_idem0000005",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "ci5",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_idem0000005",
+            "initiator": "erin"
+          },
+          "idempotency_key": "ci5-a"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_i5",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_idem0000005",
+          "target_quote_session_id": "ci5",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "3.0000"
+            }
+          },
+          "idempotency_key": "ci5-hb",
+          "expect": {
+            "code": "sent"
+          }
+        },
+        {
+          "op": "handoff_send",
+          "actor": "dave",
+          "source_project_id": "tp_i5",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_idem0000005",
+          "target_quote_session_id": "ci5",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "3.0000"
+            }
+          },
+          "idempotency_key": "ci5-hb",
+          "expect": {
+            "code": "already_sent",
+            "reused": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_sent",
+          "reused": true,
+          "handoff_id": "h_001",
+          "business_case_id": "bc_idem0000005",
+          "source_task_id": "t_001"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "handoff_replays": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-material-write-idempotency-and-code-concurrency.md"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.material_replay",
+      "version": "1.0",
+      "title": "同一业务版本的物料写入重放：不重复生成物料编码",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci6-key"
+      },
+      "actions": [
+        {
+          "op": "material_write",
+          "project_id": "tp_m3",
+          "result_version": "R1",
+          "action_type": "material",
+          "rows": [
+            {
+              "name": "端板"
+            },
+            {
+              "name": "侧板"
+            }
+          ],
+          "prefix": "92031",
+          "idempotency_key": "ci6-key",
+          "expect": {
+            "code": "written",
+            "codes": [
+              "920310001",
+              "920310002"
+            ]
+          }
+        },
+        {
+          "op": "material_write",
+          "project_id": "tp_m3",
+          "result_version": "R1",
+          "action_type": "material",
+          "rows": [
+            {
+              "name": "端板"
+            },
+            {
+              "name": "侧板"
+            }
+          ],
+          "prefix": "92031",
+          "idempotency_key": "ci6-key",
+          "expect": {
+            "code": "replayed",
+            "codes": [
+              "920310001",
+              "920310002"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "replayed",
+          "replayed": true,
+          "rows": 2,
+          "unique": true
+        },
+        "records": {
+          "material_rows": 2,
+          "material_codes": 2,
+          "material_writes": 1,
+          "material_duplicates": 1,
+          "material_code_conflicts": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate",
+        "material"
+      ],
+      "source_specs": [
+        "docs/specs/tech-material-write-idempotency-and-code-concurrency.md"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.session_event_dedup",
+      "version": "1.0",
+      "title": "会话事件带 dedup_key 重放：不重复追加到时间线",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci7-key"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_h3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_h3",
+          "actor": "alice",
+          "kind": "message",
+          "role": "user",
+          "text": "帮我解析这张图纸",
+          "dedup_key": "ci7-ev",
+          "idempotency_key": "ci7-key",
+          "expect": {
+            "code": "appended",
+            "seq": 1
+          }
+        },
+        {
+          "op": "session_append_event",
+          "project_id": "tp_h3",
+          "actor": "alice",
+          "kind": "message",
+          "role": "user",
+          "text": "帮我解析这张图纸",
+          "dedup_key": "ci7-ev",
+          "idempotency_key": "ci7-key",
+          "expect": {
+            "code": "already_appended",
+            "seq": 1
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_appended",
+          "seq": 1,
+          "count": 1
+        },
+        "state": {
+          "tech.tp_h3.timeline": {
+            "$len": 1
+          }
+        },
+        "records": {
+          "session_events": 1,
+          "project_timeline_events": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate",
+        "history"
+      ],
+      "source_specs": [
+        "docs/specs/tech-session-timeline-persistence-and-order.md",
+        "docs/specs/tech-home-project-cards-and-agent-history.md"
+      ],
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "conc.idem.retry_after_timeout",
+      "version": "1.0",
+      "title": "超时后重试同一写操作：复用幂等键，不重复写审计 / 消息",
+      "domain": "concurrency",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "ci8-key"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_h4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "1.1 创建需求",
+          "requirement": {
+            "status": "draft",
+            "confirmed": false,
+            "review": "",
+            "completeness_checked": false,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [
+              {
+                "no": 10,
+                "name": "下料"
+              }
+            ],
+            "process_confirmed": true
+          },
+          "cost": {
+            "parts": [
+              {
+                "part_id": "P01",
+                "amount": "12.5000"
+              }
+            ],
+            "excluded_parts": [],
+            "assembly": {
+              "amount": "3.0000"
+            },
+            "total": {
+              "amount": "15.5000"
+            },
+            "confirmed": true,
+            "confirmed_by": "dave"
+          },
+          "report": {
+            "draft": {},
+            "status": "approved",
+            "published": true,
+            "handed_back": true,
+            "versions": [
+              {
+                "version": "R1",
+                "at": "x",
+                "by": "carol"
+              }
+            ]
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "retry_action",
+          "target_op": "tech_requirement_create",
+          "project_id": "tp_h4",
+          "actor": "alice",
+          "submit": true,
+          "form": {
+            "客户": "亿纬锂能"
+          },
+          "idempotency_key": "ci8-key",
+          "expect": {
+            "code": "retry_done",
+            "attempts": 3,
+            "no_duplicate": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "retry_done",
+          "attempts": 3,
+          "no_duplicate": true,
+          "key": "ci8-key"
+        },
+        "state": {
+          "tech.tp_h4.requirement.status": "pending_review"
+        },
+        "records": {
+          "retries": 1,
+          "messages_total": 1,
+          "events_total": 2
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "recovery",
+        "retry",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md",
+        "docs/specs/tech-workflow-five-phase-naming.md"
+      ],
+      "failure_type": "timeout"
+    }
+  ]
+}

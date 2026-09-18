@@ -1,0 +1,40 @@
+{
+  "fixture_id": "legacy_quote_case",
+  "note": "报价已进行到第 4 步；后到的技术成本回传只能合并快照，不能让报价退回第 2/3 步",
+  "card": {
+    "session_id": "qs_legacy", "card_id": "c_legacy", "owner": "erin",
+    "title": "波兰项目（历史报价单）", "customer": "LG Energy",
+    "business_case_id": "bc_legacy0001", "current_step": 4, "overall_status": "in_progress",
+    "fields": {"project_name": {"value": "波兰项目", "source": "manual"},
+               "customer": {"value": "LG Energy", "source": "manual"}},
+    "totals": {"base_cost": "5.6000", "tech_premium": "1.5000", "market_adjust": "-0.2000",
+               "profit_margin": "6.9000", "discount": "0.0000"}
+  },
+  "project": {
+    "project_id": "tp_legacy", "title": "波兰项目-工艺", "owner": "carol", "current_holder": "carol",
+    "business_case": {"business_case_id": "bc_legacy0001", "quote_session_id": "qs_legacy",
+                      "source_task_id": "t_legacy", "linked_by": "task"},
+    "page_context": "4 成本测算",
+    "requirement": {"status": "approved", "confirmed": true, "review": "approved", "completeness_checked": true},
+    "drawing": {"parsed": true, "ir": true, "parts": 12, "empty_confirmed": false},
+    "integration": {"drawings_done": true, "params_confirmed": true, "process_confirmed": true,
+                    "params": [{"name": "焊接方式", "value": "激光焊", "required": true}],
+                    "process_steps": [{"no": 10, "name": "下料"}]},
+    "cost": {"parts": [{"part_id": "P1", "amount": "12.5000"}], "excluded_parts": [],
+             "assembly": {"amount": "3.0000"}, "total": {"amount": "15.5000"},
+             "confirmed": true, "confirmed_by": "dave"},
+    "report": {"status": "generated", "published": false, "handed_back": false, "versions": []},
+    "timeline": [{"seq": 1, "kind": "message", "role": "user", "text": "帮我看下这个波兰项目",
+                  "at": "2026-09-10T09:00:00+08:00", "payload": {}, "page_context": "2.3 成本测算"}]
+  },
+  "tasks": [
+    {"task_id": "t_legacy", "task_no": "TP-0100", "card_id": "c_legacy", "session_id": "qs_legacy",
+     "project_id": "", "task_kind": "tech_cost", "target_type": "role",
+     "target_role_code": "process_mgr", "target_user_id": "", "status": "claimed",
+     "claimed_by_user_id": "carol",
+     "payload": {"business_case_id": "bc_legacy0001", "initiator": "erin", "source_result_version": "R1"},
+     "signature": "tech_cost|role|process_mgr||", "supersedes_task_id": "",
+     "replaced_by_task_id": "", "cancel_reason": "", "note": "", "idempotency_key": "",
+     "created_at": "2026-09-10T09:05:00+08:00"}
+  ]
+}

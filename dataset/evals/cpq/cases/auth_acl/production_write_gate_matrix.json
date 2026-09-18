@@ -1,0 +1,707 @@
+{
+  "suite_id": "auth_acl.production_write_gate_matrix",
+  "title": "项目级写接口门禁矩阵（真实路由 × CONTRIBUTE_ROUTES × 5 类角色）",
+  "domain": "auth_acl",
+  "notes": "矩阵由真实 FastAPI 路由表与 project_access.CONTRIBUTE_ROUTES 现算：专属动作只判「可见 + 未归档」，角色由接口自己的 _require 说话；普通写仍由通用写 ACL 拒绝。",
+  "cases": [
+    {
+      "id": "acl.real.write_gate_matrix_whitelist_not_acl_blocked",
+      "version": "1.0",
+      "title": "专属业务写接口门禁矩阵：21 条白名单路由 × 5 类角色，通用写 ACL 一条都不许提前拦截",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "process_mgr",
+        "reviewer",
+        "admin",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "owner": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          },
+          "admin": {
+            "username": "root",
+            "display_name": "管理员",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "matrix",
+            "write_matrix": {
+              "project": "handoff",
+              "routes": "contribute_whitelist",
+              "identities": [
+                "finance",
+                "director",
+                "owner",
+                "outsider",
+                "admin"
+              ],
+              "json": {}
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.matrix.route_count": {
+            "$gte": 19
+          },
+          "steps.matrix.identities": {
+            "$len": 5
+          },
+          "steps.matrix.acl_blocked_routes": {
+            "$len": 0
+          },
+          "steps.matrix.not_found.outsider": {
+            "$gte": 19
+          },
+          "steps.matrix.reached.finance": {
+            "$gte": 1
+          },
+          "steps.matrix.reached.director": {
+            "$gte": 1
+          },
+          "steps.matrix.reached.owner": {
+            "$gte": 1
+          },
+          "steps.matrix.reached.admin": {
+            "$gte": 19
+          },
+          "steps.matrix.routes": {
+            "$contains": "POST /api/projects/{project_id}/process-report/publish"
+          },
+          "steps.matrix.acl_blocked_hit_count": 0,
+          "steps.matrix.server_error_count": 0,
+          "steps.matrix.missing_route_count": 0
+        },
+        "records": {
+          "http_calls": {
+            "$gte": 95
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/agent/event",
+        "POST /api/projects/{project_id}/parts/{part_id}/cost",
+        "PUT /api/projects/{project_id}/parts/{part_id}/cost",
+        "POST /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/cost-review",
+        "POST /api/projects/{project_id}/cost-review/parts/{part_id}",
+        "POST /api/projects/{project_id}/cost-review/assembly",
+        "POST /api/projects/{project_id}/cost-review/confirm",
+        "POST /api/projects/{project_id}/cost-review/material-write",
+        "POST /api/projects/{project_id}/cost-review/send-to-quote",
+        "POST /api/projects/{project_id}/cost-review/return-to-process",
+        "POST /api/projects/{project_id}/pricing/review",
+        "POST /api/projects/{project_id}/approval/act",
+        "POST /api/projects/{project_id}/versions/{version}/approve",
+        "POST /api/projects/{project_id}/versions/{version}/reject",
+        "POST /api/projects/{project_id}/requirement/review",
+        "POST /api/projects/{project_id}/process-report/review",
+        "PUT /api/projects/{project_id}/process-report/distribution",
+        "POST /api/projects/{project_id}/process-report/publish",
+        "PUT /api/projects/{project_id}/requirement/customer-credit"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "门禁矩阵由真实 FastAPI 路由 × project_access.CONTRIBUTE_ROUTES 现算，不在测试里手抄接口清单。"
+    },
+    {
+      "id": "acl.real.write_gate_matrix_route_specific_403_keeps_role_wording",
+      "version": "1.0",
+      "title": "相关但无此业务职责的角色：拿到的是接口自己的 403 与「这一步该谁做」文案，不是通用写 ACL 拒绝",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "reviewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "owner": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          },
+          "admin": {
+            "username": "root",
+            "display_name": "管理员",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "matrix",
+            "write_matrix": {
+              "project": "handoff",
+              "routes": "contribute_whitelist",
+              "identities": [
+                "finance",
+                "director"
+              ],
+              "json": {}
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.matrix.route_count": {
+            "$gte": 19
+          },
+          "steps.matrix.acl_blocked_routes": {
+            "$len": 0
+          },
+          "steps.matrix.route_forbidden.finance": {
+            "$gte": 1
+          },
+          "steps.matrix.route_forbidden.director": {
+            "$gte": 1
+          },
+          "steps.matrix.route_forbidden_samples": {
+            "$contains_text": "只有"
+          },
+          "steps.matrix.not_found.finance": 0,
+          "steps.matrix.not_found.director": 0,
+          "steps.matrix.acl_blocked_hit_count": 0
+        },
+        "records": {
+          "http_calls": {
+            "$gte": 38
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/agent/event",
+        "POST /api/projects/{project_id}/parts/{part_id}/cost",
+        "PUT /api/projects/{project_id}/parts/{part_id}/cost",
+        "POST /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/cost-review",
+        "POST /api/projects/{project_id}/cost-review/parts/{part_id}",
+        "POST /api/projects/{project_id}/cost-review/assembly",
+        "POST /api/projects/{project_id}/cost-review/confirm",
+        "POST /api/projects/{project_id}/cost-review/material-write",
+        "POST /api/projects/{project_id}/cost-review/send-to-quote",
+        "POST /api/projects/{project_id}/cost-review/return-to-process",
+        "POST /api/projects/{project_id}/pricing/review",
+        "POST /api/projects/{project_id}/approval/act",
+        "POST /api/projects/{project_id}/versions/{version}/approve",
+        "POST /api/projects/{project_id}/versions/{version}/reject",
+        "POST /api/projects/{project_id}/requirement/review",
+        "POST /api/projects/{project_id}/process-report/review",
+        "PUT /api/projects/{project_id}/process-report/distribution",
+        "POST /api/projects/{project_id}/process-report/publish",
+        "PUT /api/projects/{project_id}/requirement/customer-credit"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "门禁矩阵由真实 FastAPI 路由 × project_access.CONTRIBUTE_ROUTES 现算，不在测试里手抄接口清单。"
+    },
+    {
+      "id": "acl.real.write_gate_matrix_generic_routes_still_acl_gated",
+      "version": "1.0",
+      "title": "反向守护：普通项目级写路由仍由通用写 ACL 裁决（可见但写权不足 403 / 无关 404），没有被白名单吞掉",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "finance_mgr",
+        "process_engineer",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "owner": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          },
+          "admin": {
+            "username": "root",
+            "display_name": "管理员",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "matrix",
+            "write_matrix": {
+              "project": "handoff",
+              "routes": "acl_write_gated",
+              "identities": [
+                "finance",
+                "owner",
+                "outsider"
+              ],
+              "json": {}
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.matrix.route_count": {
+            "$gte": 90
+          },
+          "steps.matrix.acl_blocked_routes": {
+            "$contains": "PATCH /api/projects/{project_id}/management"
+          },
+          "steps.matrix.not_found.outsider": {
+            "$gte": 90
+          },
+          "steps.matrix.reached.owner": {
+            "$gte": 1
+          },
+          "steps.matrix.acl_blocked_hit_count": {
+            "$gte": 1
+          },
+          "steps.matrix.server_error_count": 0,
+          "steps.matrix.missing_route_count": 0
+        },
+        "records": {
+          "http_calls": {
+            "$gte": 270
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [],
+      "failure_type": "permission_denied",
+      "notes": "门禁矩阵由真实 FastAPI 路由 × project_access.CONTRIBUTE_ROUTES 现算，不在测试里手抄接口清单。"
+    },
+    {
+      "id": "acl.real.write_gate_matrix_admin_and_owner_not_over_blocked",
+      "version": "1.0",
+      "title": "admin 与项目 owner 在专属写接口上不被通用写 ACL 误拦：到达接口业务门禁",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "PUT",
+          "path": "/api/projects/{project_id}/cost-review"
+        }
+      },
+      "roles": [
+        "admin",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "owner": {
+            "username": "carol",
+            "display_name": "卡罗",
+            "sso_roles": [
+              "process_engineer"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_engineer"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          },
+          "admin": {
+            "username": "root",
+            "display_name": "管理员",
+            "sso_roles": [
+              "admin"
+            ],
+            "cpq_role_code": "admin",
+            "tech_role": "admin"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "matrix",
+            "write_matrix": {
+              "project": "handoff",
+              "routes": "contribute_whitelist",
+              "identities": [
+                "admin",
+                "owner"
+              ],
+              "json": {}
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.matrix.route_count": {
+            "$gte": 19
+          },
+          "steps.matrix.not_found.admin": 0,
+          "steps.matrix.not_found.owner": 0,
+          "steps.matrix.reached.admin": {
+            "$gte": 19
+          },
+          "steps.matrix.reached.owner": {
+            "$gte": 19
+          },
+          "steps.matrix.acl_blocked_hit_count": 0,
+          "steps.matrix.server_error_count": 0
+        },
+        "records": {
+          "http_calls": {
+            "$gte": 38
+          }
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "sim_fallback",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access",
+        "route:PUT /api/projects/{project_id}/cost-review"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/agent/event",
+        "POST /api/projects/{project_id}/parts/{part_id}/cost",
+        "PUT /api/projects/{project_id}/parts/{part_id}/cost",
+        "POST /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/integration/cost",
+        "PUT /api/projects/{project_id}/cost-review",
+        "POST /api/projects/{project_id}/cost-review/parts/{part_id}",
+        "POST /api/projects/{project_id}/cost-review/assembly",
+        "POST /api/projects/{project_id}/cost-review/confirm",
+        "POST /api/projects/{project_id}/cost-review/material-write",
+        "POST /api/projects/{project_id}/cost-review/send-to-quote",
+        "POST /api/projects/{project_id}/cost-review/return-to-process",
+        "POST /api/projects/{project_id}/pricing/review",
+        "POST /api/projects/{project_id}/approval/act",
+        "POST /api/projects/{project_id}/versions/{version}/approve",
+        "POST /api/projects/{project_id}/versions/{version}/reject",
+        "POST /api/projects/{project_id}/requirement/review",
+        "POST /api/projects/{project_id}/process-report/review",
+        "PUT /api/projects/{project_id}/process-report/distribution",
+        "POST /api/projects/{project_id}/process-report/publish",
+        "PUT /api/projects/{project_id}/requirement/customer-credit"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "门禁矩阵由真实 FastAPI 路由 × project_access.CONTRIBUTE_ROUTES 现算，不在测试里手抄接口清单。"
+    }
+  ]
+}

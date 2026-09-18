@@ -1,0 +1,870 @@
+{
+  "suite_id": "auth_acl.production_sales_read",
+  "title": "销售经理读取回归（真实 HTTP 路由 + 真实 project_access）",
+  "domain": "auth_acl",
+  "cases": [
+    {
+      "id": "acl.real.sales.open_quote_linked_project",
+      "version": "1.0",
+      "title": "销售经理能打开有来源报价关联、但没有 quote_owner 参与者行的项目",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "sales_mgr",
+        "viewer"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          },
+          "outsider": {
+            "username": "heidi",
+            "display_name": "海蒂",
+            "sso_roles": [
+              "viewer"
+            ],
+            "cpq_role_code": "viewer",
+            "tech_role": "viewer"
+          }
+        },
+        "projects": {
+          "quoted": {
+            "owner": "carol",
+            "filename": "quoted.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          },
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff-only.dxf",
+            "participants": [],
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            }
+          }
+        },
+        "steps": [
+          {
+            "id": "open",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "quoted"
+            }
+          },
+          {
+            "id": "handoff_only",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "handoff"
+            }
+          },
+          {
+            "id": "outsider",
+            "http": {
+              "identity": "outsider",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "quoted"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.open.status": 200,
+          "steps.open.result.meta.project_id": {
+            "$project_id": "quoted"
+          },
+          "steps.handoff_only.status": 404,
+          "steps.outsider.status": 404
+        },
+        "records": {
+          "http_calls": 3
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak",
+          "http_error_without_trace"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "permission_denied",
+      "notes": "回归：批次 7 之前销售经理（sales_mgr -> viewer）对全部项目读接口 404，报价首页技术清单为空。"
+    },
+    {
+      "id": "acl.real.sales.read_route_sweep_not_blocked",
+      "version": "1.0",
+      "title": "销售经理对全部项目级读接口发真实请求：没有一条因为缺 quote_owner 参与者变成 404",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "quoted": {
+            "owner": "carol",
+            "filename": "sweep-quoted.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          }
+        },
+        "steps": [
+          {
+            "id": "sweep",
+            "route_sweep": {
+              "identity": "sales",
+              "project": "quoted"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.sweep.acl_blocked_paths": {
+            "$len": 0
+          },
+          "steps.sweep.forbidden_paths": {
+            "$len": 0
+          },
+          "steps.sweep.server_error_paths": {
+            "$len": 0
+          },
+          "steps.sweep.unaccounted": {
+            "$len": 0
+          },
+          "steps.sweep.probed": {
+            "$gte": 40
+          }
+        },
+        "forbidden": [
+          "acl_forbidden_message_leaked",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "acl.real.sales.quote_link_without_session_not_visible",
+      "version": "1.0",
+      "title": "来源报价关联缺少 quote_session_id 与 source_task_id 时视为无效关联，销售经理不可见",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "weak": {
+            "owner": "carol",
+            "filename": "weak.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-EMPTY",
+              "linked_by": "erin"
+            }
+          },
+          "strong": {
+            "owner": "carol",
+            "filename": "strong.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-OK",
+              "source_task_id": "TS-9",
+              "linked_by": "erin"
+            }
+          }
+        },
+        "steps": [
+          {
+            "id": "weak",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "weak"
+            }
+          },
+          {
+            "id": "strong",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "strong"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.weak.status": 404,
+          "steps.strong.status": 200
+        },
+        "records": {
+          "http_calls": 2
+        }
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-quote-business-case-linkage.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "acl.real.sales.archived_quote_linked_hidden",
+      "version": "1.0",
+      "title": "已归档项目不因来源报价关联而对销售经理解锁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "archived": {
+            "owner": "carol",
+            "filename": "arch.dxf",
+            "participants": [],
+            "archive": true,
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          },
+          "live": {
+            "owner": "carol",
+            "filename": "live.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          }
+        },
+        "steps": [
+          {
+            "id": "archived",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "archived"
+            }
+          },
+          {
+            "id": "live",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "live"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.archived.status": 404,
+          "steps.live.status": 200
+        },
+        "records": {
+          "http_calls": 2
+        }
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ],
+      "failure_type": "not_found"
+    },
+    {
+      "id": "acl.real.sales.list_and_open_same_project",
+      "version": "1.0",
+      "title": "技术工艺清单入口与历史入口打开的是同一个项目：列表命中的 project_id 与直接打开一致",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects"
+        }
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "quoted": {
+            "owner": "carol",
+            "filename": "list.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          },
+          "other": {
+            "owner": "carol",
+            "filename": "other.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "list",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects",
+              "params": {
+                "scope": "all"
+              }
+            }
+          },
+          {
+            "id": "open",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "quoted"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.list.status": 200,
+          "steps.list.result": {
+            "$len": 1
+          },
+          "steps.list.result.0.project_id": {
+            "$project_id": "quoted"
+          },
+          "steps.open.status": 200
+        },
+        "records": {
+          "http_calls": 2
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-unified-workflow-projection.md",
+        "route:GET /api/projects"
+      ],
+      "covers_routes": [
+        "GET /api/projects",
+        "GET /api/projects/{project_id}"
+      ]
+    },
+    {
+      "id": "acl.real.sales.visible_scope_unit",
+      "version": "1.0",
+      "title": "销售经理的可见范围（真实 visible_projects）：只含来源报价关联项目，mine_sources 不含 quote_owner",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "visible_projects"
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "quoted": {
+            "owner": "carol",
+            "filename": "u.dxf",
+            "participants": [],
+            "business_case": {
+              "business_case_id": "BC-2026-0001",
+              "quote_session_id": "QS-77",
+              "source_task_id": "TS-77",
+              "linked_by": "erin"
+            }
+          },
+          "plain": {
+            "owner": "carol",
+            "filename": "p.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "all",
+            "call": {
+              "args": {
+                "user": {
+                  "$identity": "sales"
+                },
+                "scope": "all"
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.all.result": {
+            "$len": 1
+          },
+          "steps.all.result.0.access.mine_sources": {
+            "$len": 0
+          },
+          "steps.all.result.0.access.can_read": true,
+          "steps.all.result.0.access.can_write": false
+        },
+        "records": {
+          "unit_calls": 1
+        }
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ]
+    },
+    {
+      "id": "acl.real.sales.quote_owner_participant_still_visible",
+      "version": "1.0",
+      "title": "历史项目只有 quote_owner 参与者行时该销售仍可读（与角色池口径并存，不互相替代）",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "GET",
+          "path": "/api/projects/{project_id}"
+        }
+      },
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "sales": {
+            "username": "erin",
+            "display_name": "艾琳",
+            "sso_roles": [
+              "sales_manager"
+            ],
+            "cpq_role_code": "sales_mgr",
+            "tech_role": "sales_manager"
+          }
+        },
+        "projects": {
+          "legacy": {
+            "owner": "carol",
+            "filename": "lo.dxf",
+            "participants": [
+              {
+                "username": "erin",
+                "role": "sales_manager",
+                "source": "quote_owner",
+                "assignee": true
+              }
+            ]
+          },
+          "other": {
+            "owner": "carol",
+            "filename": "oo.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "legacy",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "legacy"
+            }
+          },
+          {
+            "id": "other",
+            "http": {
+              "identity": "sales",
+              "method": "GET",
+              "path": "/api/projects/{project_id}",
+              "project": "other"
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.legacy.status": 200,
+          "steps.other.status": 404
+        },
+        "records": {
+          "http_calls": 2
+        }
+      },
+      "invariants": [],
+      "tags": [
+        "legacy",
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "docs/specs/tech-project-identity-single-source.md",
+        "route:GET /api/projects/{project_id}"
+      ],
+      "covers_routes": [
+        "GET /api/projects/{project_id}"
+      ]
+    },
+    {
+      "id": "acl.real.sales.director_reads_all_but_cannot_write",
+      "version": "1.0",
+      "title": "工艺技术总监能读全部项目，但项目级写权仍归工艺经理与管理员：can_write=False",
+      "domain": "auth_acl",
+      "priority": "P1",
+      "layer": "deterministic",
+      "executor": "production_unit",
+      "entry": {
+        "module": "backend.services.project_access",
+        "function": "can_write"
+      },
+      "roles": [
+        "reviewer",
+        "admin"
+      ],
+      "preconditions": {},
+      "input": {
+        "access_matrix": {
+          "frank": "allow",
+          "heidi": "deny"
+        },
+        "identities": {
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "tech_director",
+            "tech_role": "process_director"
+          },
+          "manager": {
+            "username": "carol",
+            "display_name": "卡罗尔",
+            "sso_roles": [
+              "process_manager"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_manager"
+          }
+        },
+        "projects": {
+          "plain": {
+            "owner": "carol",
+            "filename": "d.dxf",
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "director_write",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_write",
+              "args": {
+                "user": {
+                  "$identity": "director"
+                },
+                "meta": {
+                  "$project": "plain"
+                }
+              }
+            }
+          },
+          {
+            "id": "director_read",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_read",
+              "args": {
+                "user": {
+                  "$identity": "director"
+                },
+                "meta": {
+                  "$project": "plain"
+                }
+              }
+            }
+          },
+          {
+            "id": "manager_write",
+            "call": {
+              "module": "backend.services.project_access",
+              "function": "can_write",
+              "args": {
+                "user": {
+                  "$identity": "manager"
+                },
+                "meta": {
+                  "$project": "plain"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "actions": [],
+      "expected": {
+        "state": {
+          "steps.director_write.result": false,
+          "steps.director_read.result": true,
+          "steps.manager_write.result": true
+        },
+        "records": {
+          "unit_calls": 3
+        },
+        "forbidden": [
+          "sim_fallback"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "module:backend.services.project_access"
+      ]
+    }
+  ],
+  "notes": "全部走真实生产代码边界；销售经理不再被 sales_mgr -> viewer 压成陌生人。"
+}

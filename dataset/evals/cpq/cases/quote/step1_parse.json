@@ -1,0 +1,543 @@
+{
+  "suite_id": "quote.step1.parse",
+  "title": "报价第 1 步：需求解析、字段填充与附件提取",
+  "domain": "quote",
+  "notes": "一键解析后左侧 Agent 输出与右侧看板必须同步填充；字段带来源徽标；人工值不被推荐覆盖；解析失败不得留下半写数据。",
+  "cases": [
+    {
+      "id": "quote.step1.parse.basic",
+      "version": "1.0",
+      "title": "一键解析需求文档：左右同步填充 6 个字段",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1",
+        "actor": "erin 拥有报价第 1 步角色"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-basic",
+        "session_id": "qs_p1",
+        "document": "documents/requirement_ev_full.json"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1",
+          "actor": "erin",
+          "owner": "erin",
+          "title": "亿纬锂能 POC",
+          "customer": "亿纬锂能"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "parse-q1-basic",
+          "expect": {
+            "status": 200,
+            "code": "parsed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 200,
+          "code": "parsed",
+          "board_synced": true
+        },
+        "state": {
+          "quote.qs_p1.fields.customer.source": "ai_recommended",
+          "quote.qs_p1.fields.customer.value": "亿纬锂能",
+          "quote.qs_p1.left_summary.missing": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "requirement_parsed": 1
+        },
+        "events": [
+          {
+            "type": "requirement_parsed",
+            "card_id": "c_001"
+          }
+        ],
+        "ui_protocol": {
+          "board_left_right_sync": true,
+          "field_source_badge": {
+            "$contains": "ai_recommended"
+          }
+        },
+        "forbidden": [
+          "float_money",
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent",
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "p0-core"
+      ],
+      "source_specs": [
+        "docs/specs/quote-tech-unified-composer-and-binding-caption.md",
+        "cpq_wf.py"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.attachments",
+      "version": "1.0",
+      "title": "解析同时登记需求附件清单（附件名带进会话）",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1b"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-attach",
+        "session_id": "qs_p1b",
+        "document": "documents/requirement_ev_full.json",
+        "attachments": [
+          "需求.docx",
+          "接线图.pdf"
+        ]
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1b",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1b",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "attachments": [
+            "需求.docx",
+            "接线图.pdf"
+          ],
+          "idempotency_key": "parse-q1-attach",
+          "expect": {
+            "code": "parsed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "parsed"
+        },
+        "state": {
+          "quote.qs_p1b.attachments": {
+            "$len": 2
+          },
+          "quote.qs_p1b.fields.project_name.value": "亿纬锂能 POC 项目"
+        },
+        "records": {
+          "requirement_parsed": 1
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "attachment"
+      ],
+      "source_specs": [
+        "docs/specs/quote-tech-unified-composer-and-binding-caption.md"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.idempotent",
+      "version": "1.0",
+      "title": "同一解析请求重复提交不重复解析、不覆盖已填字段",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "duplicate_request",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1c"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-same",
+        "session_id": "qs_p1c",
+        "document": "documents/requirement_ev_full.json"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1c",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1c",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "parse-q1-same"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1c",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "parse-q1-same",
+          "expect": {
+            "code": "already_parsed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "already_parsed",
+          "idempotent": true
+        },
+        "records": {
+          "requirement_parsed": 1
+        },
+        "state": {
+          "quote.qs_p1c.fields": {
+            "$len": 6
+          }
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ],
+        "ui_protocol": {
+          "board_left_right_sync": true
+        }
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.missing",
+      "version": "1.0",
+      "title": "需求缺字段：左侧列出缺口，右侧不做成已完成",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "missing_prerequisite",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1d"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-missing",
+        "session_id": "qs_p1d",
+        "document": "documents/requirement_minimal.json"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1d",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1d",
+          "actor": "erin",
+          "document": "documents/requirement_minimal.json",
+          "idempotency_key": "parse-q1-missing",
+          "expect": {
+            "code": "parsed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "parsed",
+          "board_synced": false
+        },
+        "state": {
+          "quote.qs_p1d.left_summary.missing": {
+            "$contains": "customer"
+          },
+          "quote.qs_p1d.current_step": 1
+        },
+        "ui_protocol": {
+          "board_left_right_sync": false
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/quote-tech-unified-composer-and-binding-caption.md"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.malformed",
+      "version": "1.0",
+      "title": "文档解析失败：返回 422，不得伪造成功字段",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "provider_error",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1e"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-bad",
+        "session_id": "qs_p1e"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1e",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1e",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "malformed": true,
+          "idempotency_key": "parse-q1-bad",
+          "expect": {
+            "status": 422,
+            "code": "parse_failed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "parse_failed"
+        },
+        "state": {
+          "quote.qs_p1e.fields": {
+            "$len": 0
+          },
+          "quote.qs_p1e.current_step": 1
+        },
+        "records": {
+          "requirement_parsed": 0
+        },
+        "signals": {
+          "no_partial_write": true
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "completed_without_confirm"
+        ],
+        "ui_protocol": {
+          "board_left_right_sync": false
+        }
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "negative",
+        "failure",
+        "recovery"
+      ],
+      "source_specs": [
+        "docs/specs/chat-errors-inflow-and-drop-refresh-task-cards.md",
+        "cpq_wf.py"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.role_denied",
+      "version": "1.0",
+      "title": "工艺经理不能替销售经理解析需求（403）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "permission_denied",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1f",
+        "actor": "carol 是工艺经理"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-deny",
+        "session_id": "qs_p1f"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1f",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1f",
+          "actor": "carol",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "parse-q1-deny",
+          "expect": {
+            "status": 403,
+            "code": "step_role_forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "step_role_forbidden"
+        },
+        "state": {
+          "quote.qs_p1f.fields": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "requirement_parsed": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "cpq_wf.py",
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ]
+    },
+    {
+      "id": "quote.step1.parse.manual_kept",
+      "version": "1.0",
+      "title": "人工改过的字段不被再次解析覆盖",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "quote_step": 1,
+      "failure_type": "none",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {
+        "card": "qs_p1g"
+      },
+      "input": {
+        "idempotency_key": "parse-q1-manual",
+        "session_id": "qs_p1g"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_p1g",
+          "actor": "erin",
+          "owner": "erin"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1g",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "idempotency_key": "parse-q1-manual-1"
+        },
+        {
+          "op": "quote_edit_field",
+          "session_id": "qs_p1g",
+          "field": "customer",
+          "value": "惠州亿纬锂能股份有限公司",
+          "source": "manual"
+        },
+        {
+          "op": "quote_parse_requirement",
+          "session_id": "qs_p1g",
+          "actor": "erin",
+          "document": "documents/requirement_ev_full.json",
+          "expect": {
+            "code": "parsed"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "parsed"
+        },
+        "state": {
+          "quote.qs_p1g.fields.customer.value": "惠州亿纬锂能股份有限公司",
+          "quote.qs_p1g.fields.customer.source": "manual",
+          "quote.qs_p1g.fields.project_name.source": "ai_recommended"
+        },
+        "records": {
+          "requirement_parsed": 2
+        },
+        "ui_protocol": {
+          "field_source_badge": {
+            "$contains": "manual"
+          }
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "left_right_consistent"
+      ],
+      "tags": [
+        "normal",
+        "manual-override"
+      ],
+      "source_specs": [
+        "docs/specs/quote-tech-unified-composer-and-binding-caption.md"
+      ]
+    }
+  ]
+}

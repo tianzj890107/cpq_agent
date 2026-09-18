@@ -1,0 +1,8 @@
+{
+  "provider_id": "rec-invalid-json",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "3 组装与整合"},
+  "stream": [
+    {"type": "text", "text": "{\"values\": {\"焊接方式\": "},
+    {"type": "invalid_json", "raw": "{\"values\": {\"焊接方式\": "}
+  ]
+}

@@ -1,0 +1,1982 @@
+{
+  "suite_id": "tech.stage3.integration",
+  "title": "技术工艺第 3 阶段：组装与整合（3.1 整合图纸 / 3.2 参数推荐 / 3.3 组装工艺）",
+  "domain": "tech",
+  "notes": "参数推荐属于「3 组装与整合」，不得出现在「4 成本测算」；只生成工序但未确认不算 3.3 完成。",
+  "cases": [
+    {
+      "id": "tech.s31.integration.ok",
+      "version": "1.0",
+      "title": "3.1 整合图纸：2.1 完成后可整合并放行 3.2",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s31-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_integration_run",
+          "project_id": "tp_i1",
+          "actor": "alice",
+          "idempotency_key": "s31-ok"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_i1",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "next_action": "3.2",
+          "completed_substeps": {
+            "$contains": "3.1"
+          }
+        },
+        "state": {
+          "tech.tp_i1.integration.drawings_done": true
+        },
+        "events": [
+          {
+            "type": "integration_done"
+          }
+        ],
+        "forbidden": [
+          "legacy_wording",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.1"
+    },
+    {
+      "id": "tech.s31.integration.prereq_missing",
+      "version": "1.0",
+      "title": "3.1 前置失败：2.1 没完成不能整合图纸（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s31-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": false,
+            "ir": false,
+            "parts": 0,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_integration_run",
+          "project_id": "tp_i2",
+          "actor": "alice",
+          "idempotency_key": "s31-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_i2.integration.drawings_done": false
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.1",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s31.integration.role_denied",
+      "version": "1.0",
+      "title": "3.1 权限失败：审核员不能整合图纸（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s31-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_integration_run",
+          "project_id": "tp_i3",
+          "actor": "frank",
+          "idempotency_key": "s31-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_i3.integration.drawings_done": false
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.1",
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "tech.s31.integration.stale_after_upstream_edit",
+      "version": "1.0",
+      "title": "3.1 上游图纸改了：3.1 结果标 stale 并重取",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s31-refresh"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_edit_upstream",
+          "project_id": "tp_i4",
+          "actor": "alice",
+          "field": "drawing",
+          "idempotency_key": "s31-edit",
+          "expect": {
+            "code": "edited"
+          }
+        },
+        {
+          "op": "tech_refresh",
+          "project_id": "tp_i4",
+          "actor": "alice",
+          "idempotency_key": "s31-refresh"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "refreshed",
+          "phases_total": 5,
+          "stages_total": 13,
+          "stale_substeps": {
+            "$contains": "3.1"
+          },
+          "completed_substeps": {
+            "$ne": [
+              "1.1",
+              "1.2",
+              "1.3",
+              "2.1",
+              "3.1"
+            ]
+          }
+        },
+        "state": {
+          "tech.tp_i4.stale.integration": true,
+          "tech.tp_i4.stale.cost": true,
+          "tech.tp_i4.stale.report": true
+        },
+        "forbidden": [
+          "stale_written_as_fresh",
+          "refresh_cleared_state"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "stale",
+        "recovery",
+        "refresh"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-workflow-five-phase-naming.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.1",
+      "failure_type": "stale_upstream"
+    },
+    {
+      "id": "tech.s31.integration.no_cross_project",
+      "version": "1.0",
+      "title": "3.1 改一个项目的上游不会把另一个项目标 stale",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s31-iso"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_i6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 8,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_edit_upstream",
+          "project_id": "tp_i5",
+          "actor": "alice",
+          "field": "params",
+          "idempotency_key": "s31-iso"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "edited",
+          "stale": {
+            "integration": true,
+            "cost": true,
+            "report": true
+          }
+        },
+        "state": {
+          "tech.tp_i5.stale.integration": true,
+          "tech.tp_i6.stale.integration": false,
+          "tech.tp_i6.stale.cost": false,
+          "tech.tp_i6.stale.report": false
+        },
+        "records": {
+          "projects": 2
+        },
+        "forbidden": [
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "no_cross_project_leak"
+      ],
+      "tags": [
+        "normal",
+        "isolation"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-project-identity-single-source.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.1"
+    },
+    {
+      "id": "tech.s32.params.recommend_ok",
+      "version": "1.0",
+      "title": "3.2 参数推荐：推荐结果落在「3 组装与整合」",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s32-ok"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p1",
+          "actor": "alice",
+          "stage": "process",
+          "items": [
+            {
+              "name": "焊接方式",
+              "value": "激光焊",
+              "required": true
+            },
+            {
+              "name": "焊接电流",
+              "value": "120A",
+              "required": true
+            },
+            {
+              "name": "清洗方式",
+              "value": "水洗",
+              "required": false
+            }
+          ],
+          "idempotency_key": "s32-ok"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "recommended",
+          "count": 3,
+          "gaps": {
+            "$len": 0
+          }
+        },
+        "state": {
+          "tech.tp_p1.integration.params": {
+            "$len": 3
+          },
+          "tech.tp_p1.integration.params_confirmed": false
+        },
+        "records": {
+          "params_recommend": 1
+        },
+        "ui_protocol": {
+          "params_tab_phase": 3
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2"
+    },
+    {
+      "id": "tech.s32.params.in_cost_rejected",
+      "version": "1.0",
+      "title": "3.2 参数推荐不得出现在「4 成本测算」（409 params_not_in_cost）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s32-wrong"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "4 成本测算",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p2",
+          "actor": "alice",
+          "stage": "cost",
+          "items": [
+            {
+              "name": "焊接方式",
+              "value": "激光焊",
+              "required": true
+            }
+          ],
+          "idempotency_key": "s32-wrong",
+          "expect": {
+            "status": 409,
+            "code": "params_not_in_cost"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "params_not_in_cost"
+        },
+        "state": {
+          "tech.tp_p2.integration.params": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "params_recommend": 0
+        },
+        "ui_protocol": {
+          "params_tab_phase": 3
+        },
+        "forbidden": [
+          "legacy_wording",
+          "cross_project_leak"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s32.params.gaps_blocked",
+      "version": "1.0",
+      "title": "3.2 必填参数缺失且未豁免：确认被拒（409 params_gap）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {
+        "note": "参数缺口来自 fixtures/tech/params_gap.json"
+      },
+      "input": {
+        "idempotency_key": "s32-gap-conf",
+        "fixture": "tech/params_gap.json"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p3",
+          "actor": "alice",
+          "stage": "process",
+          "items": [
+            {
+              "name": "焊接方式",
+              "value": "激光焊",
+              "required": true
+            },
+            {
+              "name": "焊接电流",
+              "value": "",
+              "required": true
+            },
+            {
+              "name": "清洗方式",
+              "value": "水洗",
+              "required": false
+            }
+          ],
+          "idempotency_key": "s32-gap-rec",
+          "expect": {
+            "code": "recommended",
+            "gaps": [
+              "焊接电流"
+            ]
+          }
+        },
+        {
+          "op": "tech_params_confirm",
+          "project_id": "tp_p3",
+          "actor": "alice",
+          "idempotency_key": "s32-gap-conf",
+          "expect": {
+            "status": 409,
+            "code": "params_gap"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "params_gap"
+        },
+        "state": {
+          "tech.tp_p3.integration.params_confirmed": false,
+          "tech.tp_p3.integration.params": {
+            "$len": 3
+          }
+        },
+        "records": {
+          "params_recommend": 1
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s32.params.waiver_confirm",
+      "version": "1.0",
+      "title": "3.2 缺口 + 显式 waiver：允许确认且缺口如实记录",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s32-waiver-conf"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p4",
+          "actor": "alice",
+          "stage": "process",
+          "items": [
+            {
+              "name": "焊接电流",
+              "value": "",
+              "required": true
+            }
+          ],
+          "idempotency_key": "s32-waiver-rec"
+        },
+        {
+          "op": "tech_params_confirm",
+          "project_id": "tp_p4",
+          "actor": "alice",
+          "waiver": true,
+          "idempotency_key": "s32-waiver-conf"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "confirmed",
+          "waiver": true,
+          "gaps": [
+            "焊接电流"
+          ]
+        },
+        "state": {
+          "tech.tp_p4.integration.params_confirmed": true,
+          "tech.tp_p4.integration.params_waiver": true
+        },
+        "records": {
+          "params_recommend": 1
+        },
+        "forbidden": [
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal",
+        "waiver"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-handoff-atomic-idempotent-close.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2"
+    },
+    {
+      "id": "tech.s32.params.prereq_missing",
+      "version": "1.0",
+      "title": "3.2 前置失败：3.1 没完成不能推荐参数（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s32-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": false,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p5",
+          "actor": "alice",
+          "stage": "process",
+          "items": [
+            {
+              "name": "焊接方式",
+              "value": "激光焊",
+              "required": true
+            }
+          ],
+          "idempotency_key": "s32-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_p5.integration.params": {
+            "$len": 0
+          }
+        },
+        "records": {
+          "params_recommend": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "docs/specs/tech-unified-workflow-projection.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s32.params.required_gap_listed",
+      "version": "1.0",
+      "title": "3.2 推荐结果标出必填缺口，参数项落在整合阶段",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s32-list"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_p6",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_params_recommend",
+          "project_id": "tp_p6",
+          "actor": "alice",
+          "stage": "process",
+          "items": [
+            {
+              "name": "焊接方式",
+              "value": "激光焊",
+              "required": true
+            },
+            {
+              "name": "保护气",
+              "value": "",
+              "required": true
+            }
+          ],
+          "idempotency_key": "s32-list"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "recommended",
+          "count": 2,
+          "gaps": [
+            "保护气"
+          ]
+        },
+        "state": {
+          "tech.tp_p6.integration.params.1.required": true,
+          "tech.tp_p6.integration.params.1.value": ""
+        },
+        "records": {
+          "params_recommend": 1
+        },
+        "ui_protocol": {
+          "params_tab_phase": 3
+        },
+        "forbidden": [
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "legacy_compatible"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-unified-workflow-projection.md",
+        "docs/specs/tech-workflow-five-phase-naming.md"
+      ],
+      "stage": "process",
+      "sub_step": "3.2"
+    },
+    {
+      "id": "tech.s33.process.assemble_then_confirm",
+      "version": "1.0",
+      "title": "3.3 组装工艺：生成工序 + 人工确认才算完成",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s33-conf"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_s1",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          },
+          "participants": [
+            {
+              "username": "dave",
+              "role": "finance_mgr",
+              "source": "cost_task_assignee",
+              "assignee": true
+            }
+          ]
+        },
+        {
+          "op": "tech_process_assemble",
+          "project_id": "tp_s1",
+          "actor": "alice",
+          "steps": [
+            {
+              "no": 10,
+              "name": "下料"
+            },
+            {
+              "no": 20,
+              "name": "焊接"
+            },
+            {
+              "no": 30,
+              "name": "装配"
+            }
+          ],
+          "idempotency_key": "s33-asm",
+          "expect": {
+            "code": "generated",
+            "count": 3
+          }
+        },
+        {
+          "op": "tech_process_confirm",
+          "project_id": "tp_s1",
+          "actor": "alice",
+          "idempotency_key": "s33-conf"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_s1",
+          "actor": "dave"
+        }
+      ],
+      "expected": {
+        "http": {
+          "phases": 5,
+          "stages": 13,
+          "completed_substeps": {
+            "$contains": "3.3"
+          },
+          "actionable_substeps": {
+            "$contains": "4.1"
+          }
+        },
+        "state": {
+          "tech.tp_s1.integration.process_confirmed": true,
+          "tech.tp_s1.integration.process_confirmed_by": "alice",
+          "tech.tp_s1.integration.process_steps": {
+            "$len": 3
+          }
+        },
+        "events": [
+          {
+            "type": "process_generated",
+            "count": 3
+          },
+          {
+            "type": "process_confirmed"
+          }
+        ],
+        "forbidden": [
+          "completed_without_confirm",
+          "legacy_wording"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "normal"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3"
+    },
+    {
+      "id": "tech.s33.process.generated_not_confirmed",
+      "version": "1.0",
+      "title": "3.3 只生成工序没确认：不算完成，投影仍停在 3.3",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s33-only"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_s2",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_process_assemble",
+          "project_id": "tp_s2",
+          "actor": "alice",
+          "steps": [
+            {
+              "no": 10,
+              "name": "下料"
+            }
+          ],
+          "idempotency_key": "s33-only"
+        },
+        {
+          "op": "tech_projection",
+          "project_id": "tp_s2",
+          "actor": "alice"
+        }
+      ],
+      "expected": {
+        "http": {
+          "next_action": "3.3",
+          "completed_substeps": {
+            "$ne": [
+              "1.1",
+              "1.2",
+              "1.3",
+              "2.1",
+              "3.1",
+              "3.2",
+              "3.3"
+            ]
+          }
+        },
+        "state": {
+          "tech.tp_s2.integration.process_confirmed": false,
+          "tech.tp_s2.integration.process_steps": {
+            "$len": 1
+          }
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "stale_written_as_fresh"
+        ]
+      },
+      "invariants": [
+        "single_source_of_truth"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s33.process.no_steps",
+      "version": "1.0",
+      "title": "3.3 没有工序时不能确认（409 no_process）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s33-none"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_s3",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_process_confirm",
+          "project_id": "tp_s3",
+          "actor": "alice",
+          "idempotency_key": "s33-none",
+          "expect": {
+            "status": 409,
+            "code": "no_process"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "no_process"
+        },
+        "state": {
+          "tech.tp_s3.integration.process_confirmed": false
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s33.process.prereq_missing",
+      "version": "1.0",
+      "title": "3.3 前置失败：3.2 参数没确认不能组装工艺（409）",
+      "domain": "tech",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s33-skip"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_s4",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": false,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_process_assemble",
+          "project_id": "tp_s4",
+          "actor": "alice",
+          "steps": [
+            {
+              "no": 10,
+              "name": "下料"
+            }
+          ],
+          "idempotency_key": "s33-skip",
+          "expect": {
+            "status": 409,
+            "code": "missing_prerequisite"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "missing_prerequisite"
+        },
+        "state": {
+          "tech.tp_s4.integration.process_steps": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "completed_without_confirm",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "prerequisite"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "tech.s33.process.role_denied",
+      "version": "1.0",
+      "title": "3.3 权限失败：审核员不能组装工艺（403）",
+      "domain": "tech",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "reviewer",
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s33-deny"
+      },
+      "actions": [
+        {
+          "op": "tech_create_project",
+          "project_id": "tp_s5",
+          "actor": "alice",
+          "owner": "alice",
+          "current_holder": "alice",
+          "page_context": "3 组装与整合",
+          "requirement": {
+            "status": "approved",
+            "confirmed": true,
+            "review": "approved",
+            "completeness_checked": true,
+            "gaps": []
+          },
+          "drawing": {
+            "parsed": true,
+            "ir": true,
+            "parts": 12,
+            "empty_confirmed": false
+          },
+          "integration": {
+            "drawings_done": true,
+            "params": [
+              {
+                "name": "焊接方式",
+                "value": "激光焊",
+                "required": true
+              }
+            ],
+            "params_confirmed": true,
+            "params_waiver": false,
+            "process_steps": [],
+            "process_confirmed": false
+          },
+          "cost": {
+            "parts": [],
+            "excluded_parts": [],
+            "assembly": {},
+            "total": {},
+            "confirmed": false,
+            "confirmed_by": ""
+          },
+          "report": {
+            "draft": {},
+            "status": "",
+            "published": false,
+            "handed_back": false,
+            "versions": []
+          },
+          "stale": {
+            "integration": false,
+            "cost": false,
+            "report": false
+          }
+        },
+        {
+          "op": "tech_process_assemble",
+          "project_id": "tp_s5",
+          "actor": "frank",
+          "steps": [
+            {
+              "no": 10,
+              "name": "下料"
+            }
+          ],
+          "idempotency_key": "s33-deny",
+          "expect": {
+            "status": 403,
+            "code": "forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "forbidden"
+        },
+        "state": {
+          "tech.tp_s5.integration.process_steps": {
+            "$len": 0
+          }
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "completed_without_confirm"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-workflow-five-phase-naming.md",
+        "tech_app/backend/services/workflow_stages.py"
+      ],
+      "stage": "process",
+      "sub_step": "3.3",
+      "failure_type": "permission_denied"
+    }
+  ]
+}

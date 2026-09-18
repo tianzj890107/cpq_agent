@@ -1,0 +1,9 @@
+{
+  "provider_id": "rec-params-recommend",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "3 组装与整合"},
+  "stream": [
+    {"type": "tool_use", "name": "tech_ui", "input": {"page_context": "3 组装与整合",
+      "values": {"焊接方式": "激光焊", "焊接电流": "120A"}}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

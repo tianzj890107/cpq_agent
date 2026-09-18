@@ -1,0 +1,628 @@
+{
+  "suite_id": "auth_acl.production_handback_routes",
+  "title": "专属业务写路由：项目 ACL 与接口业务门禁的优先级（回传 / 确认 / 主数据）",
+  "domain": "auth_acl",
+  "cases": [
+    {
+      "id": "acl.real.finance.send_cost_result_to_quote_reaches_gate",
+      "version": "1.0",
+      "title": "财务经理发送成本结果到报价：通用写 ACL 不拦截，落到「先确认成本」业务门禁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/send-to-quote"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "call",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/send-to-quote",
+              "project": "handoff",
+              "json": {
+                "decision": "approve",
+                "comment": "e2e",
+                "note": "e2e",
+                "confirm": true,
+                "items": []
+              }
+            }
+          }
+        ],
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "state": {
+          "steps.call.detail": {
+            "$contains_text": "确认成本"
+          },
+          "steps.call.status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/send-to-quote"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/send-to-quote"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.finance.material_write_reaches_business_gate",
+      "version": "1.0",
+      "title": "财务经理写成本主数据：通用写 ACL 不拦截，落到成本确认业务门禁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/cost-review/material-write"
+        }
+      },
+      "roles": [
+        "finance_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "call",
+            "http": {
+              "identity": "finance",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/cost-review/material-write",
+              "project": "handoff",
+              "json": {
+                "decision": "approve",
+                "comment": "e2e",
+                "note": "e2e",
+                "confirm": true,
+                "items": []
+              }
+            }
+          }
+        ],
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "state": {
+          "steps.call.detail": {
+            "$contains_text": "确认成本"
+          },
+          "steps.call.status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/cost-review/material-write"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/cost-review/material-write"
+      ],
+      "failure_type": "missing_prerequisite"
+    },
+    {
+      "id": "acl.real.director.params_confirm_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监确认 3.2 参数：通用写 ACL 不拦截，落到参数业务门禁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/integration/params/confirm"
+        }
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "call",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/integration/params/confirm",
+              "project": "handoff",
+              "json": {
+                "decision": "approve",
+                "comment": "e2e",
+                "note": "e2e",
+                "confirm": true,
+                "items": []
+              }
+            }
+          }
+        ],
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "state": {
+          "steps.call.detail": {
+            "$contains_text": "参数推荐"
+          },
+          "steps.call.status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/integration/params/confirm"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/integration/params/confirm"
+      ],
+      "failure_type": "missing_prerequisite",
+      "stage": "process",
+      "sub_step": "3.2"
+    },
+    {
+      "id": "acl.real.director.process_confirm_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监确认 3.3 组装工艺：通用写 ACL 不拦截，落到组装工艺业务门禁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/integration/process/confirm"
+        }
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "call",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/integration/process/confirm",
+              "project": "handoff",
+              "json": {
+                "decision": "approve",
+                "comment": "e2e",
+                "note": "e2e",
+                "confirm": true,
+                "items": []
+              }
+            }
+          }
+        ],
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "state": {
+          "steps.call.detail": {
+            "$contains_text": "组装工艺"
+          },
+          "steps.call.status": {
+            "$any_of": [
+              400
+            ]
+          }
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/integration/process/confirm"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/integration/process/confirm"
+      ],
+      "failure_type": "missing_prerequisite",
+      "stage": "process",
+      "sub_step": "3.3"
+    },
+    {
+      "id": "acl.real.director.report_send_to_quote_reaches_gate",
+      "version": "1.0",
+      "title": "工艺技术总监发布后回传报价：通用写 ACL 不拦截，落到「报告不存在」业务门禁",
+      "domain": "auth_acl",
+      "priority": "P0",
+      "layer": "deterministic",
+      "executor": "production_http",
+      "entry": {
+        "http": {
+          "method": "POST",
+          "path": "/api/projects/{project_id}/process-report/send-to-quote"
+        }
+      },
+      "roles": [
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "identities": {
+          "finance": {
+            "username": "dave",
+            "display_name": "戴夫",
+            "sso_roles": [
+              "finance_manager"
+            ],
+            "cpq_role_code": "finance_mgr",
+            "tech_role": "finance_manager"
+          },
+          "director": {
+            "username": "frank",
+            "display_name": "弗兰克",
+            "sso_roles": [
+              "process_director"
+            ],
+            "cpq_role_code": "process_mgr",
+            "tech_role": "process_director"
+          }
+        },
+        "projects": {
+          "handoff": {
+            "owner": "carol",
+            "filename": "handoff.dxf",
+            "plan": {
+              "finance_handoff": {
+                "sent_at": "2026-09-17T10:00:00+08:00",
+                "sent_by": "carol",
+                "task_id": "T-COST-1",
+                "task_no": "RW-1",
+                "target_role_name": "财务经理",
+                "target_type": "role"
+              }
+            },
+            "participants": []
+          }
+        },
+        "steps": [
+          {
+            "id": "call",
+            "http": {
+              "identity": "director",
+              "method": "POST",
+              "path": "/api/projects/{project_id}/process-report/send-to-quote",
+              "project": "handoff",
+              "json": {
+                "decision": "approve",
+                "comment": "e2e",
+                "note": "e2e",
+                "confirm": true,
+                "items": []
+              }
+            }
+          }
+        ],
+        "access_matrix": {
+          "dave": "allow",
+          "heidi": "deny"
+        }
+      },
+      "actions": [],
+      "expected": {
+        "http": {
+          "status": {
+            "$any_of": [
+              404
+            ]
+          }
+        },
+        "state": {
+          "steps.call.detail": {
+            "$contains_text": "评估报告"
+          },
+          "steps.call.status": {
+            "$any_of": [
+              404
+            ]
+          }
+        },
+        "records": {
+          "http_calls": 1
+        },
+        "forbidden": [
+          "acl_blocked_professional_write",
+          "acl_forbidden_message_leaked",
+          "http_error_without_trace",
+          "production_host_called",
+          "real_secret_used"
+        ]
+      },
+      "invariants": [],
+      "tags": [
+        "negative",
+        "permission"
+      ],
+      "source_specs": [
+        "docs/specs/tech-project-acl-visible-scope.md",
+        "route:POST /api/projects/{project_id}/process-report/send-to-quote"
+      ],
+      "covers_routes": [
+        "POST /api/projects/{project_id}/process-report/send-to-quote"
+      ],
+      "failure_type": "missing_prerequisite",
+      "stage": "report-publish",
+      "sub_step": "5.3"
+    }
+  ]
+}

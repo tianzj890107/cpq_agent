@@ -1,0 +1,574 @@
+{
+  "suite_id": "quote.step4.charges",
+  "title": "报价第 4 步：报价-其他加价项（重复项、负值、非法金额、重试）",
+  "domain": "quote",
+  "notes": "加价项重复 / 负值 / 非 decimal 都必须被拒且整体回滚；重试复用幂等键不重复写。",
+  "cases": [
+    {
+      "id": "quote.step4.charges.multi",
+      "version": "1.0",
+      "title": "第 4 步其他加价项：多类加价并入预期价",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-multi"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c1",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "0.8000"
+              },
+              {
+                "name": "包装",
+                "amount": "0.2000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-multi"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "completed",
+          "step": 4,
+          "current_step": 5
+        },
+        "state": {
+          "quote.qs_c1.totals.extra_charges": "1.0000",
+          "quote.qs_c1.totals.expected_price": "3.0000",
+          "quote.qs_c1.totals.quote_price": "3.0000",
+          "quote.qs_c1.totals.charges": {
+            "$len": 2
+          }
+        },
+        "records": {
+          "quote_steps_completed": 1
+        },
+        "forbidden": [
+          "float_money",
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4
+    },
+    {
+      "id": "quote.step4.charges.duplicate_rejected",
+      "version": "1.0",
+      "title": "同名加价项重复提交必须被拒（409 duplicate_charge）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-dup"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c2",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "0.8000"
+              },
+              {
+                "name": "运费",
+                "amount": "0.3000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-dup",
+          "expect": {
+            "status": 409,
+            "code": "duplicate_charge"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 409,
+          "code": "duplicate_charge"
+        },
+        "state": {
+          "quote.qs_c2.current_step": 4,
+          "quote.qs_c2.steps.4": {
+            "$absent": true
+          },
+          "quote.qs_c2.totals.extra_charges": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect",
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "duplicate"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4,
+      "failure_type": "duplicate_request"
+    },
+    {
+      "id": "quote.step4.charges.negative_rejected",
+      "version": "1.0",
+      "title": "负值加价项必须被拒且不落库（422 negative_charge）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-neg"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c3",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "折让",
+                "amount": "-1.0000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-neg",
+          "expect": {
+            "status": 422,
+            "code": "negative_charge"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "negative_charge"
+        },
+        "state": {
+          "quote.qs_c3.current_step": 4,
+          "quote.qs_c3.totals.charges": {
+            "$absent": true
+          }
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "unsaved_on_failure",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "recovery"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4,
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "quote.step4.charges.bad_money",
+      "version": "1.0",
+      "title": "非 decimal 的加价金额必须被拒（422 bad_money）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-bad"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c4",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "abc"
+              }
+            ]
+          },
+          "idempotency_key": "s4-bad",
+          "expect": {
+            "status": 422,
+            "code": "bad_money"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 422,
+          "code": "bad_money"
+        },
+        "state": {
+          "quote.qs_c4.current_step": 4
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "float_money",
+          "unsaved_on_failure"
+        ]
+      },
+      "invariants": [
+        "money_is_decimal",
+        "transaction_all_or_nothing"
+      ],
+      "tags": [
+        "negative",
+        "money"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4,
+      "failure_type": "invalid_output"
+    },
+    {
+      "id": "quote.step4.charges.total_recompute",
+      "version": "1.0",
+      "title": "加价项并入后按折扣重算最终报价价",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-total"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c5",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000",
+            "discount": "0.1000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c5",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "0.8000"
+              },
+              {
+                "name": "包装",
+                "amount": "0.2000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-total"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "completed",
+          "step": 4,
+          "current_step": 5
+        },
+        "state": {
+          "quote.qs_c5.totals.expected_price": "3.0000",
+          "quote.qs_c5.totals.discount": "0.1000",
+          "quote.qs_c5.totals.quote_price": "2.7000"
+        },
+        "records": {
+          "quote_steps_completed": 1
+        }
+      },
+      "invariants": [
+        "money_is_decimal"
+      ],
+      "tags": [
+        "normal",
+        "money"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4
+    },
+    {
+      "id": "quote.step4.charges.role_denied",
+      "version": "1.0",
+      "title": "工艺经理不能完成第 4 步加价项（403）",
+      "domain": "quote",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-deny"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c6",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "quote_complete_step",
+          "session_id": "qs_c6",
+          "step": 4,
+          "actor": "carol",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "0.8000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-deny",
+          "expect": {
+            "status": 403,
+            "code": "step_role_forbidden"
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "status": 403,
+          "code": "step_role_forbidden"
+        },
+        "state": {
+          "quote.qs_c6.current_step": 4
+        },
+        "records": {
+          "quote_steps_completed": 0
+        },
+        "forbidden": [
+          "denied_actor_allowed",
+          "step_rollback"
+        ]
+      },
+      "invariants": [
+        "step_monotonic"
+      ],
+      "tags": [
+        "negative",
+        "deny",
+        "permission"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4,
+      "failure_type": "permission_denied"
+    },
+    {
+      "id": "quote.step4.charges.retry_idempotent",
+      "version": "1.0",
+      "title": "临时故障后重放：同一幂等键不重复写快照 / 消息",
+      "domain": "quote",
+      "priority": "P1",
+      "layer": "deterministic",
+      "roles": [
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "s4-retry"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qs_c7",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 4,
+          "fields": {
+            "customer": "亿纬锂能"
+          },
+          "totals": {
+            "base_cost": "2.0000"
+          }
+        },
+        {
+          "op": "retry_action",
+          "target_op": "quote_complete_step",
+          "session_id": "qs_c7",
+          "step": 4,
+          "actor": "erin",
+          "snapshot": {
+            "charges": [
+              {
+                "name": "运费",
+                "amount": "0.8000"
+              }
+            ]
+          },
+          "idempotency_key": "s4-retry",
+          "expect": {
+            "code": "retry_done",
+            "attempts": 3,
+            "no_duplicate": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "retry_done",
+          "attempts": 3,
+          "no_duplicate": true,
+          "key": "s4-retry"
+        },
+        "state": {
+          "quote.qs_c7.current_step": 5,
+          "quote.qs_c7.totals.extra_charges": "0.8000"
+        },
+        "records": {
+          "quote_steps_completed": 1,
+          "retries": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "recovery",
+        "retry",
+        "idempotent"
+      ],
+      "source_specs": [
+        "cpq_wf.py"
+      ],
+      "quote_step": 4,
+      "failure_type": "timeout"
+    }
+  ]
+}

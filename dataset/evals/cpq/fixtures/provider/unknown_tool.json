@@ -1,0 +1,8 @@
+{
+  "provider_id": "rec-unknown-tool",
+  "request": {"api_key": "test-key", "model": "recorded-test", "page_context": "1.1 创建需求"},
+  "stream": [
+    {"type": "tool_use", "name": "shell_exec", "input": {"cmd": "rm -rf /"}},
+    {"type": "done", "finish_reason": "stop"}
+  ]
+}

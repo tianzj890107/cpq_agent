@@ -1,0 +1,601 @@
+{
+  "suite_id": "cross_agent.handoff.concurrency",
+  "title": "跨 Agent 并发：回传 / 领取 / 取消与完成竞争 / 物料编码唯一约束",
+  "domain": "cross_agent",
+  "notes": "并发正确性由 barrier + 线程 + 原子更新 / 唯一约束裁决，不允许用 sleep 或串行 SELECT-INSERT 模拟。",
+  "cases": [
+    {
+      "id": "cross.conc.handoff_concurrent_once",
+      "version": "1.0",
+      "title": "两次并发回传只有一次产生副作用（唯一约束裁决）",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-1"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qb1",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_conc0000001",
+          "fields": {
+            "customer": "亿纬锂能"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qb1",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_conc0000001",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cc-1"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "handoff_send_concurrent",
+          "actors": [
+            "dave",
+            "dave"
+          ],
+          "source_project_id": "tp_conc1",
+          "source_task_id": "t_001",
+          "source_result_version": "R1",
+          "handoff_kind": "cost",
+          "business_case_id": "bc_conc0000001",
+          "target_quote_session_id": "qb1",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "cost": {
+              "total": "11.0000"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "concurrent_handoff_done",
+          "rows": 1,
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "unique_constraint"
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "unique_constraint",
+          "rows": 1
+        },
+        "state": {
+          "quote.qb1.current_step": 3,
+          "tasks.t_001.status": "completed"
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "handoff_replays": 1,
+          "cards_created_by_handoff": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based",
+          "silent_new_card"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "cross.conc.handoff_unique_constraint",
+      "version": "1.0",
+      "title": "并发回传的新版本：仍然只有一行落库",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-2"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qb2",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_conc0000002",
+          "fields": {
+            "customer": "远景能源"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qb2",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_conc0000002",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cc-2"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "carol"
+        },
+        {
+          "op": "handoff_send_concurrent",
+          "actors": [
+            "carol",
+            "carol"
+          ],
+          "source_project_id": "tp_conc2",
+          "source_task_id": "t_001",
+          "source_result_version": "R2",
+          "handoff_kind": "report",
+          "business_case_id": "bc_conc0000002",
+          "target_quote_session_id": "qb2",
+          "target_role_code": "sales_mgr",
+          "snapshot": {
+            "report": {
+              "version": "R2"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "concurrent_handoff_done",
+          "rows": 1,
+          "arbiter": "unique_constraint"
+        },
+        "concurrency": {
+          "rows": 1,
+          "arbiter": "unique_constraint",
+          "used_barrier": true
+        },
+        "state": {
+          "quote.qb2.current_step": 3
+        },
+        "records": {
+          "handoff_rows": 1,
+          "handoffs_created": 1,
+          "handoff_replays": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict",
+        "idempotent"
+      ],
+      "source_specs": [
+        "docs/specs/tech-handoff-atomic-idempotent-close.md",
+        "docs/specs/tech-quote-business-case-linkage.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "cross.conc.claim_two_actors",
+      "version": "1.0",
+      "title": "两人同时领取公共任务：原子更新只让一个人成功",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_mgr",
+        "sales_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-3",
+        "actors": {
+          "carol2": {
+            "roles": [
+              "process_mgr"
+            ]
+          }
+        }
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qb3",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 1,
+          "business_case_id": "bc_conc0000003",
+          "fields": {
+            "customer": "国轩高科"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qb3",
+          "actor": "erin",
+          "task_kind": "tech_new_product",
+          "target_type": "role",
+          "target_role_code": "process_mgr",
+          "payload": {
+            "business_case_id": "bc_conc0000003",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cc-3"
+        },
+        {
+          "op": "task_claim_concurrent",
+          "task_id": "t_001",
+          "actors": [
+            "carol",
+            "carol2"
+          ]
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "concurrent_claim_done",
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          }
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          }
+        },
+        "state": {
+          "tasks.t_001.status": "claimed"
+        },
+        "records": {
+          "tasks_claimed": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 1,
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "cross.conc.complete_vs_cancel",
+      "version": "1.0",
+      "title": "取消与完成并发竞争：任务只有一个终态",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "finance_mgr",
+        "process_mgr"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-4"
+      },
+      "actions": [
+        {
+          "op": "create_quote_card",
+          "session_id": "qb4",
+          "actor": "erin",
+          "owner": "erin",
+          "current_step": 2,
+          "business_case_id": "bc_conc0000004",
+          "fields": {
+            "customer": "宁德时代"
+          }
+        },
+        {
+          "op": "task_send",
+          "session_id": "qb4",
+          "actor": "erin",
+          "task_kind": "tech_cost",
+          "target_type": "role",
+          "target_role_code": "finance_mgr",
+          "payload": {
+            "business_case_id": "bc_conc0000004",
+            "initiator": "erin"
+          },
+          "idempotency_key": "cc-4"
+        },
+        {
+          "op": "task_claim",
+          "task_id": "t_001",
+          "actor": "dave"
+        },
+        {
+          "op": "task_cancel_vs_complete_concurrent",
+          "task_id": "t_001",
+          "completer": "dave",
+          "canceller": "carol",
+          "result_version": "R1"
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "race_done",
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          },
+          "final_status": {
+            "$any_of": [
+              "completed",
+              "cancelled"
+            ]
+          }
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "atomic_update",
+          "winners": {
+            "$len": 1
+          },
+          "losers": {
+            "$len": 1
+          },
+          "final_status": {
+            "$any_of": [
+              "completed",
+              "cancelled"
+            ]
+          }
+        },
+        "state": {
+          "tasks.t_001.status": {
+            "$any_of": [
+              "completed",
+              "cancelled"
+            ]
+          }
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict"
+      ],
+      "source_specs": [
+        "docs/specs/quote-task-coexistence-and-atomic-claim.md"
+      ],
+      "quote_step": 2,
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "cross.conc.material_write_unique",
+      "version": "1.0",
+      "title": "并发写物料：唯一约束决定编码，不出现重复编码",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-5"
+      },
+      "actions": [
+        {
+          "op": "material_write_concurrent",
+          "project_id": "tp_mat1",
+          "result_version": "R1",
+          "action_type": "material",
+          "split_version": true,
+          "rows": [
+            {
+              "name": "端板"
+            },
+            {
+              "name": "侧板"
+            }
+          ],
+          "prefix": "92022",
+          "actors": [
+            "alice",
+            "bob"
+          ]
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "concurrent_write_done",
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "unique_constraint",
+          "unique_codes": 4,
+          "rows": 4,
+          "violations": 0
+        },
+        "concurrency": {
+          "threads": 2,
+          "used_barrier": true,
+          "arbiter": "unique_constraint",
+          "unique_codes": 4
+        },
+        "records": {
+          "material_rows": 4,
+          "material_codes": 4,
+          "material_writes": 2,
+          "material_duplicates": 0
+        },
+        "forbidden": [
+          "duplicate_side_effect",
+          "timing_race_based"
+        ]
+      },
+      "invariants": [
+        "atomic_claim",
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "concurrency",
+        "conflict",
+        "material"
+      ],
+      "source_specs": [
+        "docs/specs/tech-material-write-idempotency-and-code-concurrency.md"
+      ],
+      "failure_type": "concurrency_conflict"
+    },
+    {
+      "id": "cross.conc.material_replay_no_row",
+      "version": "1.0",
+      "title": "同一业务版本的物料写入重复请求：重放而不是再写一行",
+      "domain": "cross_agent",
+      "priority": "P0",
+      "layer": "deterministic",
+      "roles": [
+        "process_engineer"
+      ],
+      "preconditions": {},
+      "input": {
+        "idempotency_key": "cc-6"
+      },
+      "actions": [
+        {
+          "op": "material_write",
+          "project_id": "tp_mat2",
+          "result_version": "R1",
+          "action_type": "material",
+          "rows": [
+            {
+              "name": "端板"
+            }
+          ],
+          "prefix": "92023",
+          "idempotency_key": "cc-6",
+          "expect": {
+            "code": "written",
+            "rows": 1
+          }
+        },
+        {
+          "op": "material_write",
+          "project_id": "tp_mat2",
+          "result_version": "R1",
+          "action_type": "material",
+          "rows": [
+            {
+              "name": "端板"
+            }
+          ],
+          "prefix": "92023",
+          "idempotency_key": "cc-6",
+          "expect": {
+            "code": "replayed",
+            "replayed": true
+          }
+        }
+      ],
+      "expected": {
+        "http": {
+          "code": "replayed",
+          "replayed": true,
+          "unique": true
+        },
+        "records": {
+          "material_rows": 1,
+          "material_codes": 1,
+          "material_writes": 1,
+          "material_duplicates": 1
+        },
+        "forbidden": [
+          "duplicate_side_effect"
+        ]
+      },
+      "invariants": [
+        "no_duplicate_side_effect"
+      ],
+      "tags": [
+        "idempotent",
+        "duplicate",
+        "material"
+      ],
+      "source_specs": [
+        "docs/specs/tech-material-write-idempotency-and-code-concurrency.md"
+      ],
+      "failure_type": "duplicate_request"
+    }
+  ]
+}

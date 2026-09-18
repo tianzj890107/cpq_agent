@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "suite.schema.json",
+  "title": "CPQ 业务回归套件",
+  "type": "object",
+  "required": [
+    "suite_id",
+    "title",
+    "domain",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "suite_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{3,80}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 160
+    },
+    "domain": {
+      "enum": [
+        "quote",
+        "tech",
+        "cross_agent",
+        "auth_acl",
+        "session_history",
+        "concurrency",
+        "llm_contract",
+        "failure_recovery",
+        "ui_protocol"
+      ]
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 1200
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 80,
+      "items": {
+        "$ref": "case.schema.json"
+      }
+    }
+  }
+}
