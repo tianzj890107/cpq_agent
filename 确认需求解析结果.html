@@ -168,14 +168,14 @@
       padding: 1px 5px; font-size: 12.5px;
       font-family: Consolas, Menlo, monospace;
     }
-    /* 用户消息白底 + 浅灰边框 + 深色正文（不再蓝底白字）；右下角小圆角是气泡尾部。 */
+    /* 用户气泡沿用系统主色实心蓝底 + 白字；右下角小圆角是气泡尾部。 */
     .message-user {
-      align-self: flex-end; background: #ffffff; color: var(--text-primary);
-      border: 1px solid var(--border-color); border-radius: 14px;
+      align-self: flex-end; background: var(--color-primary);
+      color: white; border-radius: 14px;
       border-bottom-right-radius: 4px; padding: 11px 14px;
     }
-    .message-user .message-label { color: var(--color-primary); flex-direction: row-reverse; } .message-user .message-label::before { background: var(--color-primary); }
-    .message-user .message-text { color: var(--text-primary); white-space: pre-wrap; }
+    .message-user .message-label { color: white; flex-direction: row-reverse; } .message-user .message-label::before { background: white; }
+    .message-user .message-text { color: white; white-space: pre-wrap; }
     .message-error { color: var(--color-danger); }
     .message-error .message-text { color: var(--color-danger); }
 
@@ -707,6 +707,14 @@
       padding: 14px 18px; border-top: 0.5px solid var(--border-color);
     }
     .modal-footer .btn { min-width: 92px; }
+    /* 标题行本身就是折叠开关：hover 浅蓝（由系统主色 token 推导）、可键盘聚焦、指针可点。 */
+    [data-agent-role="tool-toggle"] { cursor: pointer; border-radius: 6px; }
+    [data-agent-role="tool-toggle"]:hover {
+      background: color-mix(in srgb, var(--color-primary) 8%, white);
+    }
+    [data-agent-role="tool-toggle"]:focus-visible {
+      outline: 2px solid var(--color-primary); outline-offset: 1px;
+    }
   </style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
@@ -1154,17 +1162,25 @@
       const item = document.createElement('div');
       item.setAttribute('data-agent-role', 'tool-item');
       item.setAttribute('data-state', 'running');
+      // 标题行本身就是折叠开关（tool-toggle），不再另起「详情」按钮。
+      const row = document.createElement('div');
+      row.className = 'oc-process-row';
+      row.setAttribute('data-agent-role', 'tool-toggle');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-expanded', 'false');
       const i = document.createElement('i'); i.className = 'ti ti-loader-2';
       const s = document.createElement('span');
       s.setAttribute('data-agent-role', 'tool-title');
       s.textContent = main;
-      item.appendChild(i); item.appendChild(s);
+      row.appendChild(i); row.appendChild(s);
       if (source) {
         const sp = document.createElement('span');
         sp.className = 'src';
         sp.textContent = ' · 来源：' + source;
-        item.appendChild(sp);
+        row.appendChild(sp);
       }
+      item.appendChild(row);
       tools.appendChild(item);
       div.appendChild(tools);
       chatEl.appendChild(div);
@@ -1187,12 +1203,20 @@
         const item = document.createElement("div");
         item.setAttribute("data-agent-role", "tool-item");
         item.setAttribute("data-state", "running");
+        // 标题行本身就是折叠开关（tool-toggle），与 addToolActivity 同一套合同。
+        const row = document.createElement("div");
+        row.className = "oc-process-row";
+        row.setAttribute("data-agent-role", "tool-toggle");
+        row.setAttribute("role", "button");
+        row.setAttribute("tabindex", "0");
+        row.setAttribute("aria-expanded", "false");
         const i = document.createElement("i");
         i.className = "ti ti-loader-2";
         const sp = document.createElement("span");
         sp.setAttribute("data-agent-role", "tool-title");
-        item.appendChild(i);
-        item.appendChild(sp);
+        row.appendChild(i);
+        row.appendChild(sp);
+        item.appendChild(row);
         tools.appendChild(item);
         stageEl.appendChild(tools);
         chatEl.appendChild(stageEl);

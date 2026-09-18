@@ -1,4 +1,4 @@
-# 报价 / 技术工艺 Agent 会话统一：先用户消息、再统一执行卡与 Tool List、详情与思考可折叠、消息白底
+# 报价 / 技术工艺 Agent 会话统一：先用户消息、统一执行卡与 Tool List、详情与思考可折叠、Agent 消息白底（用户气泡保持蓝色）
 
 状态：TDD Red，等待实现（DS2）。
 
@@ -6,12 +6,9 @@
 
 取代关系（本批明确宣告，实现时必须遵守）：
 
-- 本 Spec §14「白底视觉合同」**取代** `docs/specs/quote-tech-user-message-primary-bubble.md`
-  的「用户消息 = 系统主色实心蓝底 + 白字」条款。用户在本批明确要求：用户消息与 Agent 消息
-  统一白底 + 浅灰边框 + 深色正文，**不使用蓝底白字**。旧 Spec 的
-  `tests/test_quote_tech_user_message_primary_bubble_red.py` 会因此由绿转红，属用户已拍板的
-  主动替换，不是回归。实现方**不得**删除或改写该旧红测去掩盖，只能在本批报告中如实说明，由用户
-  决定何时下线旧 Spec。
+- **用户气泡配色不在本批范围内**：`docs/specs/quote-tech-user-message-primary-bubble.md`
+  （用户消息 = 系统主色实心蓝底 + 白字）**继续有效**，本批只统一 **Agent 侧**消息与业务卡的
+  白底，不改用户气泡。用户已明确纠正：用户气泡必须是原来的蓝色背景。
 - 本 Spec §11「详情折叠」与 §12「思考折叠」是
   `docs/specs/chat-fused-assistant-card-style.md`、`docs/specs/tech-quote-assistant-card-unification.md`、
   `docs/specs/chat-collapsible-thinking-trace.md`、`docs/specs/tech-agent-tool-trace-business-line-detail.md`
@@ -51,11 +48,18 @@
 - **工艺技术员 / 工艺经理（技术工艺）**：点「一键解析图纸」「重新生成工艺推荐」「跑成本测算」
   「确认」「审核」「发布」后，同上。
 - **两者共同**：卡里的每个业务步骤仍是一张卡；卡里的过程是一份 Tool List，能收起、能展开看
-  查询条件与明细；思考过程能折叠展开；消息都是白底，不再是两种气泡配色。
+  查询条件与明细；思考过程能折叠展开；Agent 消息统一白底，用户气泡保持原来的蓝色。
 - **回看历史的人**：重进项目后，顺序、折叠态、Tool List 与当时一致；历史里没有的用户话术
   不许凭空补。
 
 ## 3. 入口盘点（务必逐个核对，不得只改 `sendMessage()`）
+
+> **盘点时点说明**：下面两张表建于 `## 125` 之前。`## 125` 已经落地了统一执行卡 root 与
+> `data-agent-role`、Tool Item 四态、看板页 `aiUserSay` / `crUserSay`、「先用户消息后出卡」
+> （含 kickoff / `runStep1`）与思考折叠。**本修正批只剩两件事要看**：
+> ① 用户气泡必须保持原来的蓝色（`## 125` 误改成白底）；
+> ② 过程明细必须去掉独立「详情」、改成点标题行展开，缩进子项折进父行（`## 125` 未做）。
+> 表中「当前是否违反新合同」列已按此口径回填为修正批的真实状态。
 
 ### 3.1 技术工艺侧（`tech_app/frontend/`）
 
@@ -84,11 +88,11 @@
 
 | # | 触发元素 | 调用函数 | 先生成用户消息？ | 用户文案来源 | Agent 卡构造 | 持久化 | 刷新恢复 | 当前 DOM | 违反新合同 |
 |---|---|---|---|---|---|---|---|---|---|
-| Q1 | 输入框 `#chatSend` / Enter | `sendFromInput` → `addUserBubble` → `sendToAgent` | 是 | 输入 / 附件名 | `ensureStreamBubble` | `/api/send` + 事件 | 是 | `.message-user` / `.message-ai` | 部分（白底） |
-| Q2 | 快捷「强行填满本步骤」 | `fillStepRecommend` | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 部分（白底） |
-| Q3 | 「确认，进入下一步」 | `confirmStep` | 是 | `确认第 N 步「…」…` | `ensureStreamBubble` | 同上 | 是 | 同上 | 部分（白底） |
-| Q4 | 「返回上一步」 | `prev` 绑定 | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 部分（白底） |
-| Q5 | 「修改第 N 步并保存」 | 表单保存 | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 部分（白底） |
+| Q1 | 输入框 `#chatSend` / Enter | `sendFromInput` → `addUserBubble` → `sendToAgent` | 是 | 输入 / 附件名 | `ensureStreamBubble` | `/api/send` + 事件 | 是 | `.message-user` / `.message-ai` | 否 |
+| Q2 | 快捷「强行填满本步骤」 | `fillStepRecommend` | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 否 |
+| Q3 | 「确认，进入下一步」 | `confirmStep` | 是 | `确认第 N 步「…」…` | `ensureStreamBubble` | 同上 | 是 | 同上 | 否 |
+| Q4 | 「返回上一步」 | `prev` 绑定 | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 否 |
+| Q5 | 「修改第 N 步并保存」 | 表单保存 | 是 | 固定中文句 | `ensureStreamBubble` | 同上 | 是 | 同上 | 否 |
 | Q6 | 新建报价「开始」（kickoff） | `wfStartStep` → `PENDING_KICKOFF` → `runStep1` | **否** | — | `ensureStreamBubble` | 同上 | 是 | 同上 | **是** |
 | Q7 | 第 1 步表单填写通道 | `runStep1` → `sendToAgent(task,{echo:false,display:''})` | **否** | — | 同上 | 同上 | 是 | 同上 | **是** |
 | Q8 | 「转交任务」成功后说明 | `$('wfSend').onclick` → `addAiBubble` | **否** | — | `addAiBubble` | 无 | 否 | 同上 | **是** |
@@ -114,7 +118,7 @@
 
 ```
 [按钮]
-  → 用户气泡（.oc-ubub / .message-user，白底，自然语言）
+  → 用户气泡（.oc-ubub / .message-user，系统主色实心蓝底 + 白字，自然语言）
   → 统一执行卡 root（.oc-amsg / .message.message-ai）
        ├─ header：身份 + 业务步骤标题 + 状态
        └─ body
@@ -219,17 +223,47 @@
 
 ## 11. Tool List 与详情折叠合同
 
-- 一个业务步骤一张卡；卡内过程区是 Tool List（`[data-agent-role="tools"]`）。
-- 每条过程 = `[data-agent-role="tool-item"]`，带 `data-state`（pending/running/completed/failed），
-  内含 `[data-agent-role="tool-title"]`（主文案，保留原句，不得概括）+ 可选
-  `[data-agent-role="tool-subtitle"]`（可读摘要）+ 可选 `details[data-agent-role="tool-detail"]`。
-- 状态 icon：`completed`→`✓`、`running`→`✳`/`◌`、`failed`→`⚠`、`pending`→`○`。
-- Tool Item 不得成为卡片：`.oc-process-step` 等规则里不得出现 `background`（除 transparent）
-  与 `box-shadow`；不得再套一层边框。
-- 详情默认折叠；`summary` 就是整行（原生 `<details>`/`<summary>`），可点击、可键盘操作、
-  可再次收起；展开后内容完整，不得截断；父子层级（`sub`）保留。
-- 有结构化明细的行必须保留完整输入与输出；`费率 0 条 / 回退 global 0 条 / 系数 0 条 / 待补 10 项`
-  这类事实一条都不能少。
+### 11.1 结构
+
+一条业务过程 = 一个 `[data-agent-role="tool-item"]`，内部只有两段：
+
+```
+<div class="oc-process-step" data-agent-role="tool-item" data-state="completed">
+  <div class="oc-process-row" data-agent-role="tool-toggle"      ← 标题行本身，整行可点
+       role="button" tabindex="0" aria-expanded="false">
+    <span data-agent-role="tool-state-icon">✓</span>
+    <span data-agent-role="tool-title">检索零部件库（1/4）：P-001 上壳</span>
+    <span data-agent-role="tool-subtitle">…</span>               ← 可选
+  </div>
+  <div class="oc-process-body" data-agent-role="tool-detail"      ← 折叠区，默认收起
+       hidden aria-hidden="true">
+    …该行的结构化明细（查询条件 / 命中 / 差异 / 输入输出 JSON）…
+    …以及所有缩进子项…
+  </div>
+</div>
+```
+
+### 11.2 硬性规则
+
+1. **不再有「详情」这个开关**。UI 里不得出现文本恰好是「详情」的可点击项 / `summary` / 按钮；
+   点击目标就是**这一行的标题行本身**（`[data-agent-role="tool-toggle"]`，内含 `tool-title`）。
+2. **缩进内容必须折进上一级父项**，不得成为与父项平级的兄弟节点。
+   后端用前导 2+ 空格 / `↳` / `·` 表示"这条是上一条的结果或依据"：
+   这样的行**不新建 `tool-item`**，而是追加进**上一条** `tool-item` 的 `tool-detail` 里。
+   用户口径原话：「这里面所有的缩进的内容都折叠在不缩进的内容里」。
+3. 没有明细、也没有缩进子项的普通行：`tool-toggle` 仍然存在（保证排版一致），
+   但不渲染 `tool-detail`（不造空折叠）。
+4. `tool-toggle` 必须整行可点：`hover` 浅蓝背景、鼠标指针为 pointer；
+   **不得**只有右边一个小三角/小字可点。
+5. 键盘与语义：`aria-expanded` 必须与展开状态同步（`"false"` ↔ `"true"`）；
+   可达性用原生 `<button>` / `<summary>`，或 `role="button"` + `tabindex="0"` + Enter/Space。
+6. 默认折叠；展开后内容完整，不得截断；`tool-title` 必须是原句，不得概括成
+   「查询数据」「生成分析」这类空话。
+7. 状态 icon：`completed`→`✓`、`running`→`◌`/`✳`、`failed`→`⚠`、`pending`→`○`。
+8. Tool Item 不得成为卡片：`.oc-process-step` 等规则里不得出现 `background`（transparent 除外）
+   与 `box-shadow`，也不得再套一层边框。
+9. 有结构化明细的行必须保留完整输入与输出；`费率 0 条 / 回退 global 0 条 / 系数 0 条 /
+   待补 10 项`、查询条件、命中件、差异、取价时间、回退数量一条都不能少。
 
 ## 12. 思考过程折叠合同
 
@@ -249,11 +283,13 @@
 
 ## 14. 白底视觉合同
 
-- 用户消息（`.oc-ubub` / `.message-user`）：白色背景、浅灰边框、深色正文、保留圆角；
-  **不得**蓝底白字、不得明显灰底。可用右对齐 / 身份行 / 轻边框区分。
-- Agent 消息（`.oc-amsg` / `.message-ai`）：白色背景、浅灰边框、深色正文；不得明显灰底。
-- 页面背景可以是浅色，但消息与业务卡本体必须是白色。
-- 详情标题行 hover 用浅蓝色，颜色必须由现有系统主色 token 推导
+- **Agent 消息**（`.oc-amsg` / `.message-ai`）：白色背景、浅灰边框、深色正文、保留圆角；
+  不使用明显灰底。这是本批要统一的部分。
+- **用户消息**（`.oc-ubub` / `.message-user`）：**保持原来系统主色实心蓝底 + 白字 + 右下小圆角**，
+  由 `docs/specs/quote-tech-user-message-primary-bubble.md` 继续约束，本批**不改**。
+  用户原话：「用户气泡应该是之前的蓝色背景，改回去。」
+- 页面背景可以是浅色，但 Agent 消息与业务卡本体必须是白色。
+- 工具行标题（`tool-toggle`）hover 用浅蓝色，颜色必须由现有系统主色 token 推导
   （例如 `color-mix(in srgb, var(--oc-accent) …)`），不得写死一份新的蓝。
 - **禁止新增或修改 `font-family`**；既有字体继承关系不变。
 
@@ -291,15 +327,16 @@
 | A1–A6 | 两侧统一卡片结构、header/body/status、一步一卡、Tool Item 不再是卡、摘要类不得绕过构造器、错误态是 modifier |
 | B7–B14 | 用户消息先出现、按钮触发、重新生成、失败仍保留、turn 顺序、非用户触发不伪造、历史不补造 |
 | C15–C21 | Tool List 存在、四态映射、复杂详情不压缩、查询条件/缺失项/回退/时间保留、父子层级、Tool Item 无独立卡片 |
-| D22–D30 | 详情默认折叠、整行可点、展开可见、可收起、hover 浅蓝、token 派生、键盘与焦点、展开语义、两端同合同 |
+| D22–D31 | 详情默认折叠、**标题行本身就是开关（不出现「详情」二字）**、展开可见、可收起、hover 浅蓝、token 派生、键盘与焦点、aria-expanded 语义、两端同合同、**缩进子项折进父项** |
 | E31–E37 | 思考折叠栏位置/默认态/展开/空不渲染/历史支持/不依赖流式/不额外成卡 |
-| F38–F43 | 用户白底、Agent 白底、无蓝底用户消息、无明显灰底、无新增/修改 font-family、字体继承不变 |
+| F38–F43 | **用户气泡保持系统主色实心蓝底 + 白字**、Agent 卡白底、无明显灰底、无新增/修改 font-family、字体继承不变 |
 | G44–G50 | 输出不删减、后端协议不变、SSE 名不变、DB 不变、持久化可恢复完整 turn、失败态仍显示、既有聊天测试继续运行 |
 
 ## 21. 风险与兼容策略
 
-1. **与 `quote-tech-user-message-primary-bubble` 冲突**（见文首取代声明）：本批实施后那份旧红测会转红。
-   处理策略：本批不动它，由用户在下一批决定下线或改写；DS2 报告里必须如实列出。
+1. **用户气泡配色**：本批**不碰** `docs/specs/quote-tech-user-message-primary-bubble.md`
+   （主色实心蓝底 + 白字）与 `tests/test_quote_tech_user_message_primary_bubble_red.py`；
+   DS2 实施后该文件必须仍然全绿，若转红说明误改了用户气泡。
 2. **`agent-chat.js` 含 4 个 NUL 字节**（`\x00` 哨兵，位于第 360 / 366 行的 markdown 代码块占位符）。
    `node --check` 通过，非损坏。读取时必须 `.replace("\x00","")`；**不要**顺手做无关的大范围重写。
 3. **`.oc-amsg` 变成 `<article>` 或加 `data-*`** 可能影响既有 flex/几何断言。策略：允许保持
@@ -311,10 +348,12 @@
 
 1. 技术工艺：点「一键解析图纸」→ 先出现「我：开始解析这张图纸。」→ 再出现执行卡，
    卡内是 Tool List（`✓ 查询同类件 / P-001 主体外壳`），查询条件默认折叠，hover 浅蓝。
-2. 技术工艺：展开「详情」→ 看到完整查询条件与输入输出；再点收起。
+2. 技术工艺：直接点「检索零部件库（1/4）：P-001 上壳」这一行 → 展开看到查询条件、命中件、
+   差异与输入输出；界面上**没有**独立的「详情」小标题；再点这一行收起。
+   缩进子项（查询条件 / 命中 / 差异）应出现在父行展开后的内容里，而不是与父行平级。
 3. 技术工艺：卡底展开「思考过程」。
 4. 报价：点 kickoff「开始」与「转交任务」→ 同样先出用户气泡。
-5. 两端消息均为白底 + 浅灰边框 + 深色正文；页面背景可以浅色。
+5. Agent 消息为白底 + 浅灰边框 + 深色正文；**用户气泡仍是原来的蓝色实心底 + 白字**。
 6. 刷新页面 → 顺序、折叠态、Tool List 与刷新前一致。
 7. 历史里本来没有用户气泡的旧回合 → 刷新后仍然没有。
 
@@ -337,6 +376,9 @@
 
 ## 25. 统一 turn helper（实现契约，必须存在）
 
+> 注：`## 125` 已按本节的建议补上 `echoTaskPrompt` 之外的回声路径与看板页 `aiUserSay` / `crUserSay`；
+> 本修正批只需保证这些入口在改过程卡片时不被打断。
+
 - **技术侧左栏** `tech_app/frontend/agent-chat.js`：必须有唯一一个函数，负责"用户主动触发的
   新回合"——先插用户气泡、再返回本轮 Agent 卡 ctx（建议名 `beginUserTurn(text)`）。真人打字、
   `echoTaskPrompt` 回声、以及未来所有"用户点按钮 → 左侧出卡"的入口，都必须经它。
@@ -348,5 +390,4 @@
 - **看板页** `assembly-integration.js` / `cost-review.js`：`aiProcessCard()` / `crCard()` 的**每一个**
   调用点所在函数，必须先有一条 `aiUserSay()` / `crUserSay()`（文案由该调用点按本次动作给出，
   不得暴露函数名、`tool_call_id` 或 JSON）；纯后台恢复（`aiReplayTimeline`）与连接状态提示不加。
-- 报价侧目前缺失 `crUserSay` 对应的用户气泡原语：要在报价页补一个可复用的用户气泡原语
-  （`addUserBubble` 已存在，直接复用即可，不新增第二套）。
+- 报价页（`确认需求解析结果.html`）的用户气泡原语就是既有 `addUserBubble`，不新增第二套。

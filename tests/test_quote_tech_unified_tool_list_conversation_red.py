@@ -7,8 +7,10 @@
   3) 卡里的过程行不能再是裸 bullet，要成为 Tool List：状态 icon + 标题 + 次级信息 + 可展开详情。
   4) 查询条件 / 库内条数 / 回退数量 / 待补项这类明细要默认折叠、整行可点、hover 浅蓝。
   5) 思考过程每个有内容的卡底部一个折叠栏，位于卡内，不另起一张卡。
-  6) 用户消息与 Agent 消息统一白底 + 浅灰边框 + 深色正文，不用蓝底白字。
+  6) Agent 消息白底 + 浅灰边框 + 深色正文；**用户气泡保持原来的蓝色实心底 + 白字**。
   7) 不新增 / 不修改 font-family。
+  8) 过程明细不再有独立的「详情」小标题：**点标题行本身**展开/收起；
+     所有缩进子项（查询条件 / 命中 / 差异）折进上一级父行的折叠区，不得与父行平级。
 
 现状缺口（已实测，非推断）：
   · 技术侧 `agent-chat.js` 有 6 处手写 `.oc-amsg` 字符串（需求摘要 / 流程摘要 / 系统提示 /
@@ -18,7 +20,9 @@
     的角色标记；Tool Item 也没有统一的 `data-agent-role` 合同。
   · 报价侧 kickoff（`PENDING_KICKOFF`）、`runStep1` 表单通道、转交任务成功说明三条路径
     不先出用户气泡。
-  · 报价 `.message-user` 是主色实心蓝底白字（与技术 `.oc-ubub` 同口径），本批用户要求改白底。
+  · 用户气泡在本批**不应**改动：`## 125` 曾把 `.oc-ubub` / `.message-user` 改成白底，
+    用户已明确要求改回原来的蓝色实心底 + 白字。
+  · 过程行仍挂着独立的「详情」`<summary>`；缩进子项是与父行平级的兄弟节点，没有折进父行。
 
 Spec：docs/specs/quote-tech-unified-tool-list-and-conversation.md
 本文件只测本批合同，不覆盖 50 条之外的其它能力。禁止为了让红测转绿而修改本文件。
@@ -433,20 +437,17 @@ function matchesSelector(node, selector) {
 }
 
 function matchesGroup(node, group) {
-  var compounds = splitCompounds(group.replace(/\s*>\s*/g, " > "));
-  return matchFrom(node, compounds, compounds.length - 1, true);
+  var compounds = splitCompounds(group);
+  return matchCompounds(node, compounds, compounds.length - 1);
 }
 
-function matchFrom(node, compounds, index, allowSelf) {
+function matchCompounds(node, compounds, index) {
   if (index < 0) return true;
-  if (allowSelf && matchesCompound(node, compounds[index])) {
-    if (matchFrom(node.parentNode, compounds, index - 1, true)) return true;
-  }
+  if (!node || !matchesCompound(node, compounds[index])) return false;
+  if (index === 0) return true;
   var parent = node.parentNode;
   while (parent) {
-    if (matchesCompound(parent, compounds[index])) {
-      if (matchFrom(parent.parentNode, compounds, index - 1, true)) return true;
-    }
+    if (matchCompounds(parent, compounds, index - 1)) return true;
     parent = parent.parentNode;
   }
   return false;
@@ -636,18 +637,47 @@ out.row_title = row ? (function () {
   var n = row.querySelector('[data-agent-role="tool-title"]');
   return n ? n.textContent : null;
 })() : null;
-out.row_detail_open = row ? (function () {
-  var n = row.querySelector('[data-agent-role="tool-detail"]');
-  return n ? !!n.open : null;
-})() : null;
+function isCollapsed(node) {
+  if (!node) return null;
+  if (node.tagName === "DETAILS") return !node.open;
+  return !!(node.hidden || node.hasAttribute("hidden")
+            || node.getAttribute("aria-hidden") === "true"
+            || node.getAttribute("data-collapsed") === "true");
+}
+function hasDetailWord(root) {
+  if (!root) return false;
+  var nodes = root.querySelectorAll("summary, button, [data-agent-role]");
+  for (var i = 0; i < nodes.length; i += 1) {
+    if (String(nodes[i].textContent).trim() !== "详情") continue;
+    if (nodes[i].getAttribute("data-agent-role") === "tool-detail") continue;
+    return true;
+  }
+  return false;
+}
 out.row_detail_tag = row ? (function () {
   var n = row.querySelector('[data-agent-role="tool-detail"]');
   return n ? n.tagName : null;
 })() : null;
-out.row_detail_summary_tag = row ? (function () {
-  var n = row.querySelector('[data-agent-role="tool-detail"]');
-  return n && n.firstElementChild ? n.firstElementChild.tagName : null;
+out.row_detail_collapsed = row ? isCollapsed(row.querySelector('[data-agent-role="tool-detail"]')) : null;
+out.row_toggle_tag = row ? (function () {
+  var n = row.querySelector('[data-agent-role="tool-toggle"]');
+  return n ? n.tagName : null;
 })() : null;
+out.row_toggle_contains_title = row ? (function () {
+  var n = row.querySelector('[data-agent-role="tool-toggle"]');
+  return !!(n && n.querySelector('[data-agent-role="tool-title"]'));
+})() : null;
+out.row_toggle_aria = row ? (function () {
+  var n = row.querySelector('[data-agent-role="tool-toggle"]');
+  return n ? n.getAttribute("aria-expanded") : null;
+})() : null;
+out.row_toggle_keyboard = row ? (function () {
+  var n = row.querySelector('[data-agent-role="tool-toggle"]');
+  if (!n) return null;
+  if (n.tagName === "BUTTON" || n.tagName === "SUMMARY") return true;
+  return n.getAttribute("role") === "button" && n.getAttribute("tabindex") === "0";
+})() : null;
+out.row_has_detail_word = row ? hasDetailWord(row) : false;
 
 var lossSteps = doc.createElement("div");
 var lossCard = { steps: lossSteps, status: "running", box: doc.createElement("div"),
@@ -672,13 +702,24 @@ renderHistory([{ type: "assistant", text: "只有助手" }], []);
 out.history_without_user = tinner.children.slice(before2).map(function (c) {
   return String(c.className); });
 
-var subSteps = doc.createElement("div");
-var subCard = { steps: subSteps, status: "running", box: doc.createElement("div"),
-                state: doc.createElement("span") };
-pushTaskStep(subCard, "  P-001 主体外壳", "", "tool");
-var subRow = subSteps.children[0];
-out.sub_row_class = subRow ? String(subRow.className) : null;
-out.sub_row_role = subRow ? subRow.getAttribute("data-agent-role") : null;
+var nestSteps = doc.createElement("div");
+var nestCard = { steps: nestSteps, status: "running", box: doc.createElement("div"),
+                 state: doc.createElement("span") };
+pushTaskStep(nestCard, "检索零部件库（1/4）：P-001 上壳", "", "tool");
+pushTaskStep(nestCard, "  查询条件：length=108、width=56、height=13.25、hole_diameter=4", "", "tool",
+  { tool: "component_match", title: "零部件库检索", status: "ok",
+    input: { part_id: "P-001" }, output: { decision: "modify", score: 0.648 } });
+pushTaskStep(nestCard, "  命中 CMP-SEMI-EE-BLOCK-0001 搬运吸嘴主体安装块（可改制，匹配度 65%）", "", "tool");
+out.nest_top_level_count = nestSteps.children.length;
+var nestParent = nestSteps.children[0];
+out.nest_parent_role = nestParent ? nestParent.getAttribute("data-agent-role") : null;
+out.nest_detail_text = nestParent ? (function () {
+  var d = nestParent.querySelector('[data-agent-role="tool-detail"]');
+  return d ? d.textContent : null;
+})() : null;
+out.nest_detail_collapsed = nestParent
+  ? isCollapsed(nestParent.querySelector('[data-agent-role="tool-detail"]')) : null;
+out.nest_has_detail_word = hasDetailWord(nestSteps);
 
 var ctx2 = addAssistant();
 appendThinking(ctx2, "");
@@ -786,9 +827,6 @@ out.missing = MISSING;
 addUserBubble("请解析当前需求");
 var bubble = ensureStreamBubble();
 out.turn_order = names(chatEl);
-var userNode = chatEl.children[0];
-out.user_root_attr = userNode ? userNode.getAttribute("data-agent-card") : null;
-out.user_status = userNode ? userNode.getAttribute("data-status") : null;
 out.ai_root_attr = bubble ? bubble.getAttribute("data-agent-card") : null;
 out.ai_status = bubble ? bubble.getAttribute("data-status") : null;
 out.ai_roles = bubble ? allRoles(bubble).map(function (r) { return r.role; }) : null;
@@ -943,6 +981,7 @@ function $cr(id) {
 }
 var crReplaying = false;
 var crPid = "";
+var costTurn = null;
 function crPersistNote(text) { TIMELINE.push(String(text)); }
 '''
 
@@ -1011,6 +1050,7 @@ def board_driver() -> str:
         _js_or_missing(asm, "fn", "aiProcessCard", missing),
         _js_or_missing(cost, "fn", "crAppend", missing),
         _js_or_missing(cost, "fn", "crSay", missing),
+        _js_or_missing(cost, "fn", "crUserSay", missing),
         _js_or_missing(cost, "fn", "crCard", missing),
         BOARD_TAIL,
     ]
@@ -1297,12 +1337,12 @@ class CToolListContract(ChatHarnessMixin, unittest.TestCase):
         )
 
     def test_c20_parent_child_hierarchy_is_kept(self):
-        self.assertIn("sub", str(self.tech["sub_row_class"] or ""),
-                      "缩进的子级过程行丢了层级类：%r" % self.tech["sub_row_class"])
-        self.assertEqual("tool-item", self.tech["sub_row_role"],
-                         "子级过程行没有 Tool Item 角色：%r" % self.tech["sub_row_role"])
-        self.assertIn(".oc-process-step.sub", self.chat_css,
-                      "父子层级的既有选择器被删")
+        detail_text = str(self.tech["nest_detail_text"] or "")
+        for token in ("查询条件：length=108", "命中 CMP-SEMI-EE-BLOCK-0001"):
+            with self.subTest(token=token):
+                self.assertIn(token, detail_text,
+                              "缩进的子级信息在折叠后丢失了 %r：%s" % (token, detail_text[:200]))
+        self.assertIn(".oc-process-step", self.chat_css, "过程行的既有选择器被删")
 
     def test_c21_tool_items_have_no_independent_card_style(self):
         detail_rule = rule(self.chat_css, ".oc-process-detail")
@@ -1315,32 +1355,49 @@ class CToolListContract(ChatHarnessMixin, unittest.TestCase):
 # --------------------------------------------------------------------------- #
 # D. 展开详情
 # --------------------------------------------------------------------------- #
-HOVER_SUMMARY_RULES = ('.oc-process-detail > summary:hover',
-                       '.oc-process-detail summary:hover',
-                       '[data-agent-role="tool-detail"] > summary:hover',
-                       '[data-agent-role="tool-detail"] summary:hover',
-                       '.oc-art-detail summary:hover',
-                       '[data-agent-role="tool-detail"]:hover > summary')
+HOVER_TOGGLE_RULES = (
+    '[data-agent-role="tool-toggle"]:hover',
+    '.oc-process-step:hover',
+    '.oc-process-row:hover',
+    '.oc-process-toggle:hover',
+    '.oc-process-step > .oc-process-text:hover',
+    '.oc-process-detail > summary:hover',
+    '.oc-process-detail summary:hover',
+)
 
 
 def hover_rule(css: str) -> str:
-    for selector in HOVER_SUMMARY_RULES:
+    for selector in HOVER_TOGGLE_RULES:
         body = rule(css, selector)
         if body:
             return body
-    match = re.search(r"(?m)^\s*([^{}\n]*summary[^{}\n]*:hover[^{}\n]*)\{([^}]*)\}", css)
+    match = re.search(
+        r"(?m)^\s*([^{}\n]*(?:summary|toggle|process-step|process-row)[^{}\n]*:hover[^{}\n]*)\{([^}]*)\}",
+        css,
+    )
+    return match.group(2) if match else ""
+
+
+def focus_rule(css: str) -> str:
+    match = re.search(
+        r"(?m)^\s*([^{}\n]*(?:toggle|process-step|process-row|summary)[^{}\n]*:focus-visible[^{}\n]*)\{([^}]*)\}",
+        css,
+    )
     return match.group(2) if match else ""
 
 
 class DDetailDisclosureContract(ChatHarnessMixin, unittest.TestCase):
     def test_d22_detail_defaults_to_collapsed(self):
-        self.assertIs(False, self.tech["row_detail_open"],
-                      "查询详情不是默认折叠：%r" % self.tech["row_detail_open"])
+        self.assertIs(True, self.tech["row_detail_collapsed"],
+                      "过程明细不是默认折叠：%r" % self.tech["row_detail_collapsed"])
 
-    def test_d23_the_whole_row_is_the_click_target(self):
-        self.assertEqual("SUMMARY", self.tech["row_detail_summary_tag"],
-                         "详情折叠的点击目标不是整行 summary：%r"
-                         % self.tech["row_detail_summary_tag"])
+    def test_d23_the_title_row_itself_is_the_toggle(self):
+        self.assertTrue(self.tech["row_toggle_contains_title"],
+                        "标题行不是折叠开关（找不到 data-agent-role=tool-toggle 且内含 tool-title）")
+        self.assertFalse(self.tech["row_has_detail_word"],
+                         "界面上仍然有独立的「详情」开关，用户要求直接点标题行展开")
+        self.assertFalse(self.tech["nest_has_detail_word"],
+                         "缩进子项里仍然有独立的「详情」开关")
 
     def test_d24_expanded_content_is_complete(self):
         self.assertIsNotNone(self.tech["row_detail_tag"],
@@ -1348,15 +1405,17 @@ class DDetailDisclosureContract(ChatHarnessMixin, unittest.TestCase):
         self.assertTrue(self.tech["row_detail_keeps_full_input"],
                         "展开后看不到完整明细（原始入参丢失）")
 
-    def test_d25_it_can_collapse_again(self):
-        self.assertEqual("DETAILS", self.tech["row_detail_tag"],
-                         "详情不是原生 details，无法可靠折叠/收起：%r"
-                         % self.tech["row_detail_tag"])
+    def test_d25_the_toggle_can_collapse_again(self):
+        self.assertIn(self.tech["row_toggle_aria"], ("false", "true"),
+                      "标题行没有可翻转的展开状态（aria-expanded）：%r"
+                      % self.tech["row_toggle_aria"])
+        self.assertTrue(self.tech["row_toggle_keyboard"],
+                        "标题行不是可交互控件，收起不可靠：%r" % self.tech["row_toggle_keyboard"])
 
     def test_d26_hover_uses_a_light_blue_background(self):
         body = hover_rule(self.chat_css)
         self.assertTrue(body,
-                        "详情标题行没有 :hover 浅蓝背景规则（现状只有 cursor:pointer）")
+                        "标题行没有 :hover 浅蓝背景规则（现状只有 cursor:pointer）")
         values = style_backgrounds(body)
         self.assertTrue(values, "hover 规则里没有 background：%s" % body)
         for value in values:
@@ -1368,18 +1427,15 @@ class DDetailDisclosureContract(ChatHarnessMixin, unittest.TestCase):
                          "hover 浅蓝没有从系统主色 token 推导：%s" % body)
 
     def test_d28_keyboard_and_focus_are_supported(self):
-        self.assertEqual("DETAILS", self.tech["row_detail_tag"],
-                         "详情不是原生 details：键盘无法展开")
-        self.assertEqual("SUMMARY", self.tech["row_detail_summary_tag"],
-                         "详情没有原生 summary：无法用 Enter/Space 操作")
-        self.assertRegex(self.chat_css, r"summary[^{}\n]*:focus-visible\s*\{[^}]*outline",
-                         "详情标题行没有可识别的焦点样式")
+        self.assertTrue(self.tech["row_toggle_keyboard"],
+                        "标题行不可键盘操作（既不是原生 button/summary，也没有 role=button+tabindex）")
+        body = focus_rule(self.chat_css)
+        self.assertTrue(body, "标题行没有 :focus-visible 焦点规则")
+        self.assertIn("outline", body, "焦点样式里没有 outline：%s" % body)
 
     def test_d29_expanded_state_has_semantics(self):
-        self.assertEqual("DETAILS", self.tech["row_detail_tag"],
-                         "详情不是原生 details，缺少展开状态语义")
-        self.assertEqual("SUMMARY", self.tech["row_detail_summary_tag"],
-                         "详情缺 summary，缺少展开状态语义")
+        self.assertIn(self.tech["row_toggle_aria"], ("false", "true"),
+                      "标题行没有 aria-expanded 展开语义：%r" % self.tech["row_toggle_aria"])
 
     def test_d30_quote_and_tech_share_the_detail_contract(self):
         self.assertIn("tool-item", set(self.tech["row_roles"] or []),
@@ -1388,11 +1444,27 @@ class DDetailDisclosureContract(ChatHarnessMixin, unittest.TestCase):
                       "报价侧过程行没有 Tool Item 角色：%s" % self.quote_chat["trace_roles"])
         self.assertIn("tools", set(self.board["process_roles"] or []),
                       "阶段页过程卡没有 Tool List：%s" % self.board["process_roles"])
+        self.assertIn("tool-item", set(self.board["process_roles"] or []),
+                      "阶段页过程行没有 Tool Item 角色：%s" % self.board["process_roles"])
+        self.assertIn("tool-toggle", set(self.board["process_roles"] or []),
+                      "阶段页过程行没有「标题行即开关」的 tool-toggle：%s"
+                      % self.board["process_roles"])
+        self.assertIn("tool-title", set(self.quote_chat["trace_roles"] or []),
+                      "报价侧过程行没有 tool-title：%s" % self.quote_chat["trace_roles"])
+
+    def test_d31_indented_sub_lines_fold_into_their_parent_row(self):
+        self.assertEqual(1, self.tech["nest_top_level_count"],
+                         "缩进子项没有折进父行，仍然是与父行平级的兄弟节点（顶层行数 %s）"
+                         % self.tech["nest_top_level_count"])
+        detail_text = str(self.tech["nest_detail_text"] or "")
+        self.assertIn("查询条件：length=108", detail_text,
+                      "父行的折叠区里看不到缩进的查询条件：%s" % detail_text[:200])
+        self.assertIn("命中 CMP-SEMI-EE-BLOCK-0001", detail_text,
+                      "父行的折叠区里看不到缩进的命中结果：%s" % detail_text[:200])
+        self.assertIs(True, self.tech["nest_detail_collapsed"],
+                      "缩进子项所在的父行折叠区不是默认收起：%r" % self.tech["nest_detail_collapsed"])
 
 
-# --------------------------------------------------------------------------- #
-# E. 思考过程
-# --------------------------------------------------------------------------- #
 class EThinkingDisclosureContract(ChatHarnessMixin, unittest.TestCase):
     def test_e31_thinking_bar_appears_when_there_is_content(self):
         self.assertTrue(self.tech["thinking_found"],
@@ -1447,7 +1519,7 @@ class EThinkingDisclosureContract(ChatHarnessMixin, unittest.TestCase):
 # F. 白底与字体守卫
 # --------------------------------------------------------------------------- #
 class FWhiteSurfaceAndFontGuard(ChatHarnessMixin, unittest.TestCase):
-    def test_f38_user_message_bubble_is_white(self):
+    def test_f38_user_message_bubble_keeps_the_system_primary_background(self):
         for label, css, selector in (("技术侧", self.chat_css, ".oc-ubub"),
                                      ("报价侧", self.quote_html, ".message-user")):
             with self.subTest(side=label):
@@ -1455,8 +1527,14 @@ class FWhiteSurfaceAndFontGuard(ChatHarnessMixin, unittest.TestCase):
                 self.assertTrue(body, "%s 找不到 %s 规则" % (label, selector))
                 values = style_backgrounds(body)
                 self.assertTrue(values, "%s 的 %s 没有 background" % (label, selector))
-                self.assertTrue(any(is_white(v) for v in values),
-                                "%s 用户消息不是白底：%s" % (label, values))
+                self.assertTrue(
+                    any(re.search(r"var\(--(?:color-primary|oc-accent)\)", v) for v in values),
+                    "%s 用户气泡必须保持系统主色实心背景：%s" % (label, values),
+                )
+                for value in values:
+                    self.assertFalse(is_white(value),
+                                     "%s 用户气泡被改成了白底（用户要求改回蓝色）：%r"
+                                     % (label, value))
 
     def test_f39_agent_card_is_white(self):
         for label, css, selector in (("技术侧", self.chat_css, ".oc-amsg"),
@@ -1468,19 +1546,15 @@ class FWhiteSurfaceAndFontGuard(ChatHarnessMixin, unittest.TestCase):
                 self.assertTrue(any(is_white(v) for v in values),
                                 "%s Agent 卡不是白底：%s" % (label, values))
 
-    def test_f40_user_message_is_not_blue_on_white(self):
-        for label, css, selector, banned in (
-            ("技术侧", self.chat_css, ".oc-ubub", ("var(--oc-accent)", "var(--color-primary)")),
-            ("报价侧", self.quote_html, ".message-user", ("var(--gradient-ai)", "var(--color-primary)")),
-        ):
+    def test_f40_user_message_text_stays_white_on_blue(self):
+        for label, css, selector in (("技术侧", self.chat_css, ".oc-ubub"),
+                                     ("报价侧", self.quote_html, ".message-user")):
             with self.subTest(side=label):
                 body = rule(css, selector)
-                for value in style_backgrounds(body):
-                    for token in banned:
-                        self.assertNotIn(token, value,
-                                         "%s 用户消息仍是品牌蓝底：%r" % (label, value))
-                self.assertNotRegex(body, r"color\s*:\s*(#fff(?:fff)?|white)\b",
-                                    "%s 用户消息仍是白字（蓝底白字）" % label)
+                self.assertRegex(body, r"color\s*:\s*(?:white|#fff(?:fff)?)\b",
+                                 "%s 用户气泡正文不是白字（蓝底白字是既有口径）" % label)
+                self.assertRegex(body, r"border-bottom-right-radius\s*:\s*(?!0(?:\D|$))",
+                                 "%s 用户气泡丢了右下角小圆角" % label)
 
     def test_f41_no_gray_message_background(self):
         for label, css, selector in (("技术侧", self.chat_css, ".oc-ubub"),

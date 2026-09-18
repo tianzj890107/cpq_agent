@@ -151,18 +151,62 @@ function aiProcessCard(title) {
       + `<span class="oc-alabel-state is-running" data-agent-role="status">◌ 运行中</span></div>
       <div class="oc-process-steps" data-agent-role="tools"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
+  /* Tool Item 的折叠明细：缩进子项折进上一条；默认收起，展开 / 收起由标题行本身承担。 */
+  function aiToolDetailBox(item) {
+    let box = item.querySelector('[data-agent-role="tool-detail"]');
+    if (box) return box;
+    box = document.createElement('div');
+    box.className = 'oc-process-detail';
+    box.setAttribute('data-agent-role', 'tool-detail');
+    box.hidden = true;
+    box.setAttribute('aria-hidden', 'true');
+    item.append(box);
+    return box;
+  }
+  function aiToggleTool(item) {
+    const toggle = item.querySelector('[data-agent-role="tool-toggle"]');
+    if (!toggle) return;
+    const target = item.querySelector('[data-agent-role="tool-detail"]') || aiToolDetailBox(item);
+    const next = toggle.getAttribute('aria-expanded') !== 'true';
+    toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+    target.hidden = !next;
+    target.setAttribute('aria-hidden', next ? 'false' : 'true');
+  }
+  function aiWireToolToggle(item) {
+    const toggle = item.querySelector('[data-agent-role="tool-toggle"]');
+    if (!toggle) return;
+    toggle.addEventListener('click', () => aiToggleTool(item));
+    toggle.addEventListener('keydown', (event) => {
+      const key = String((event && event.key) || '');
+      if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      aiToggleTool(item);
+    });
+  }
   const seen = new Set();
   return {
     log(lines) {
       for (const line of lines) {
         if (seen.has(line)) continue;
         seen.add(line);
-        const sub = line.startsWith('  ');
-        // 一条业务过程 = 一个 Tool Item（保留整句原话，不概括）。
+        const raw = String(line);
+        // 后端用前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：折进上一条的折叠区，
+        // 不再与父项平级；缩进行不新建 Tool Item。保留整句原话，不概括。
+        const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
+        const text = raw.replace(/^[\s]*[↳·]?\s*/, '');
+        const parent = steps.children.length ? steps.children[steps.children.length - 1] : null;
+        if (sub && parent) {
+          aiToolDetailBox(parent).insertAdjacentHTML('beforeend',
+            `<div class="oc-process-sub">${esc(text)}</div>`);
+          continue;
+        }
         steps.insertAdjacentHTML('beforeend',
-          `<div class="oc-process-step${sub ? ' sub' : ''}" data-agent-role="tool-item" data-state="completed">`
-          + `<span class="oc-process-dot" data-agent-role="tool-item">${sub ? '·' : '●'}</span>`
-          + `<span class="oc-process-text" data-agent-role="tool-title">${esc(line.trim())}</span></div>`);
+          `<div class="oc-process-step" data-agent-role="tool-item" data-state="completed">`
+          + `<span class="oc-process-dot" data-agent-role="tool-state-icon">●</span>`
+          + `<span class="oc-process-text" data-agent-role="tool-toggle" role="button" tabindex="0" aria-expanded="false">`
+          + `<span data-agent-role="tool-title">${esc(text)}</span></span></div>`);
+        const step = steps.children[steps.children.length - 1];
+        aiWireToolToggle(step);
       }
       $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
     },

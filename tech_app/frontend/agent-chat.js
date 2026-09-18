@@ -1527,12 +1527,74 @@
   }
   function pushTaskStep(card, text, tone, phase, detail) {
     if (!card || !text) return;
-    // 后端用前导空格 + ↳ / · 表示「这一条是上一步的结果或依据」，
-    // 前端据此缩进，动作与结果才分得开。
+    // Tool Item 的折叠明细容器：只有「有结构化明细」或「有缩进子项」时才建，默认收起。
+    // 「详情」二字保留为不可见的兼容标记（历史契约读它），界面上真正可点的开关是标题行本身。
+    function toolDetailBox(item) {
+      let box = item.querySelector('[data-agent-role="tool-detail"]');
+      if (box) return box;
+      box = el("details", "oc-process-detail");
+      box.setAttribute("data-agent-role", "tool-detail");
+      // 「详情」标题行：原生 <details>/<summary> 默认收起，键盘 Enter/Space 天然可用；
+      // 标成 tool-detail 表示它就是折叠区本身，界面上不再有第二个「详情」开关。
+      const caption = el("summary", null, "详情");
+      caption.setAttribute("data-agent-role", "tool-detail");
+      box.append(caption);
+      // 直接点原生 summary 时，标题行的 aria-expanded 也要跟着同步。
+      box.addEventListener("toggle", () => {
+        const row = item.querySelector('[data-agent-role="tool-toggle"]');
+        if (row) row.setAttribute("aria-expanded", box.open ? "true" : "false");
+      });
+      item.append(box);
+      return box;
+    }
+    // 标题行整行可点：点击 / 回车 / 空格都开合同一份明细，aria-expanded 与展开态同步。
+    function toggleToolDetail(toggle, item) {
+      if (!toggle || !item) return false;
+      const box = item.querySelector('[data-agent-role="tool-detail"]');
+      if (!box) return false;
+      const next = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", next ? "true" : "false");
+      if (box.tagName === "DETAILS") {
+        box.open = next;
+      } else {
+        box.hidden = !next;
+        box.setAttribute("aria-hidden", next ? "false" : "true");
+      }
+      return next;
+    }
+    function wireToolToggle(toggle, item) {
+      toggle.addEventListener("click", () => toggleToolDetail(toggle, item));
+      toggle.addEventListener("keydown", (event) => {
+        const key = String((event && event.key) || "");
+        if (key !== "Enter" && key !== " " && key !== "Spacebar") return;
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        toggleToolDetail(toggle, item);
+      });
+    }
+    // 结构化明细（输入 / 输出 JSON 与工具名 / 状态）写进折叠区；返回输出节点供模型行合并时原地更新。
+    function appendToolDetailPayload(box, detail) {
+      if (!box || !detail || typeof detail !== "object") return null;
+      const heading = [detail.tool, detail.title, detail.status].filter(Boolean).join(" · ");
+      if (heading) box.append(el("div", "oc-process-detail-tool", heading));
+      box.append(el("div", "oc-process-detail-label", "输入"));
+      box.append(el("pre", "oc-process-detail-input",
+        JSON.stringify(detail.input || {}, null, 2)));
+      box.append(el("div", "oc-process-detail-label", "输出"));
+      const outputNode = el("pre", "oc-process-detail-output",
+        JSON.stringify(detail.output || {}, null, 2));
+      box.append(outputNode);
+      return outputNode;
+    }
+    function lastToolItem(host) {
+      if (!host || !host.children || !host.children.length) return null;
+      return host.children[host.children.length - 1];
+    }
+    // 后端用前导 2+ 空格 / ↳ / · 表示「这一条是上一步的结果或依据」：这种行不新建
+    // Tool Item，而是折进上一条的折叠明细里（缩进的内容都收在不缩进的那一条里）。
     // phase 只决定过程行的色调：model / tool 各有专属类名；
     // phase === "progress"（以及旧任务的无 phase 行）沿用默认样式，不新增类名。
     const raw = String(text);
-    const sub = /^\s{2,}/.test(raw);
+    const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
     const body = raw.replace(/^[\s]*[↳·]?\s*/, "");
     const phaseCls = phase === "model" || phase === "tool" ? ` ${phase}` : "";
     // 同一次调用的第二条事件（返回 / 失败）补写回开始那一行；旧数据没有 call →
@@ -1549,50 +1611,59 @@
       // 重复投递的开始事件：已有同一行就直接收下，不再建第二行。
       if (known && status === "running") { scrollDown(); return; }
     }
+    if (sub) {
+      const parent = lastToolItem(card.steps);
+      if (parent) {
+        const box = toolDetailBox(parent);
+        box.append(el("div", `oc-process-sub${tone ? ` ${tone}` : ""}`, body));
+        appendToolDetailPayload(box, detail);
+        scrollDown();
+        return;
+      }
+    }
     // Tool Item：一条业务过程 = [data-agent-role="tool-item"]，四态写进 data-state；
-    // 主文案保留原句（不概括成「查询数据」这类空话），缩进子级仍用 .sub。
+    // 标题行本身就是折叠开关（tool-toggle），主文案保留原句，缩进子级仍用 .oc-process-sub。
     const itemState = tone === "err" || (detail && String(detail.status) === "failed") ? "failed"
       : (detail && String(detail.status) === "running") ? "running" : "completed";
-    const step = el("div", `oc-process-step${sub ? " sub" : ""}${tone ? ` ${tone}` : ""}${phaseCls}`);
+    const step = el("div", `oc-process-step${tone ? ` ${tone}` : ""}${phaseCls}`);
     step.setAttribute("data-agent-role", "tool-item");
     step.setAttribute("data-state", itemState);
     const dot = el("span", "oc-process-dot",
       itemState === "failed" ? "⚠" : itemState === "running" ? "◌"
-        : tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•");
-    // 行内可视部分（状态图标）与行根共用 tool-item 角色标记，工具项合同在行内也读得到。
-    dot.setAttribute("data-agent-role", "tool-item");
-    step.append(dot);
-    const textNode = el("span", "oc-process-text", body);
+        : tone === "hit" ? "●" : tone === "miss" ? "○" : "•");
+    dot.setAttribute("data-agent-role", "tool-state-icon");
+    const toggle = el("span", "oc-process-text");
+    toggle.setAttribute("data-agent-role", "tool-toggle");
+    toggle.setAttribute("role", "button");
+    toggle.setAttribute("tabindex", "0");
+    toggle.setAttribute("aria-expanded", "false");
+    // 行内再标一个 tool-item：工具项合同在行内也读得到（行根也是 tool-item）。
+    const lineItem = el("span", null);
+    lineItem.setAttribute("data-agent-role", "tool-item");
+    const textNode = el("span", null, body);
     textNode.setAttribute("data-agent-role", "tool-title");
-    step.append(textNode);
+    lineItem.append(textNode);
+    toggle.append(lineItem);
     if (itemState !== "running" && detail && typeof detail === "object") {
-      // 次级信息：结构化明细里能一眼读懂的那一行（查询条件 / 命中件名等）。
+      // 次级信息：结构化明细里能一眼读懂的那一行（工具名 / 状态等）。
       const subtitle = [detail.tool, detail.title].filter(Boolean).join(" · ");
       if (subtitle) {
         const subNode = el("span", "oc-process-sub", subtitle);
         subNode.setAttribute("data-agent-role", "tool-subtitle");
-        step.append(subNode);
+        toggle.append(subNode);
       }
     }
+    step.append(dot, toggle);
+    wireToolToggle(toggle, step);
+    dot.addEventListener("click", () => toggleToolDetail(toggle, step));
+    let outputNode = null;
     if (detail && typeof detail === "object") {
-      // 有结构化明细才长「详情」；没有明细的行（含旧任务的 progress 行）结构逐字不变。
-      const heading = [detail.tool, detail.title, detail.status].filter(Boolean).join(" · ");
-      const box = el("details", "oc-process-detail");
-      box.setAttribute("data-agent-role", "tool-detail");
-      box.append(el("summary", null, "详情"));
-      box.append(el("div", "oc-process-detail-tool", heading));
-      box.append(el("div", "oc-process-detail-label", "输入"));
-      box.append(el("pre", "oc-process-detail-input",
-        JSON.stringify(detail.input || {}, null, 2)));
-      box.append(el("div", "oc-process-detail-label", "输出"));
-      const outputNode = el("pre", "oc-process-detail-output",
-        JSON.stringify(detail.output || {}, null, 2));
-      box.append(outputNode);
-      if (callKey) {
-        const map = modelRowMap(card);
-        if (map) map.set(callKey, { call: callKey, step, text: textNode, output: outputNode });
-      }
-      step.append(box);
+      // 有结构化明细才长折叠区；没有明细的行（含旧任务的 progress 行）只有标题行。
+      outputNode = appendToolDetailPayload(toolDetailBox(step), detail);
+    }
+    if (callKey) {
+      const map = modelRowMap(card);
+      if (map) map.set(callKey, { call: callKey, step, text: textNode, output: outputNode });
     }
     card.steps.append(step);
     scrollDown();
