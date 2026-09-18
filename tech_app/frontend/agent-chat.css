@@ -342,9 +342,13 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    progress 行沿用上面的默认样式（含 ↳ 缩进与命中/未命中判定），不另起一套。 */
 .oc-process-step.model { color: #0050C4; }
 .oc-process-step.tool { color: #15803d; }
-/* 产品侧结果行（缩进子项）归上一条 Tool Item，直接可见：没有「详情」、没有折叠、
-   没有可点控件，也不再与父项平级。 */
-.oc-process-subs { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* 结果行折进所属标题行的折叠区（默认收起）：缩进在父行下面，点标题行才展开。 */
+/* 标题行本身就是展开开关（## 136）：整行可点、hover 浅蓝、焦点可见；
+   颜色一律由系统主色 token 推导，工具项本体仍然没有背景 / 阴影 / 边框。 */
+.oc-process-body { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-left: 17px; }
+.oc-process-toggle { cursor: pointer; }
+.oc-process-toggle:hover { background: color-mix(in srgb, var(--oc-accent) 10%, transparent); border-radius: 4px; }
+.oc-process-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--oc-accent) 55%, transparent); outline-offset: 1px; }
 
 /* 零部件库检索结果：与其它卡内区块一样，不再自带边框与底色。 */
 .oc-match-card { padding: 0; }

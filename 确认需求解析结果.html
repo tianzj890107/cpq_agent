@@ -709,13 +709,18 @@
     .modal-footer .btn { min-width: 92px; }
       /* 过程行（Tool List）：状态图标 + 原句标题，产品侧结果直接可见 —— 没有折叠、
        没有按钮；命中 / 未命中的颜色落在结论文字上。 */
-    .oc-process-row { display: flex; align-items: flex-start; gap: 7px; }
+    .oc-process-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px; }
     .oc-process-dot { flex-shrink: 0; width: 12px; text-align: center; font-size: 12px; line-height: 1.6; }
     .oc-process-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
     .oc-process-row.hit .oc-process-text { color: var(--color-success); }
     .oc-process-row.miss .oc-process-text { color: #b45309; }
     [data-agent-role="tool-item"][data-state="completed"] [data-agent-role="tool-state-icon"] {
       color: var(--color-success);
+    /* 结果行折进标题行的折叠区：默认收起；点标题行（开关）展开 / 再点收起。 */
+    .oc-process-body { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-left: 19px; }
+    .oc-process-toggle { cursor: pointer; }
+    .oc-process-toggle:hover { background: color-mix(in srgb, var(--color-primary) 10%, transparent); border-radius: 4px; }
+    .oc-process-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent); outline-offset: 1px; }
     }
 </style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
@@ -1154,39 +1159,120 @@
     }
     function addToolActivity(main, source) {
       finishStreamBubble(); // 工具调用把当前文本气泡截断
+      const ROLE_DETAIL = 'tool-detail';
+      const ROLE_TOGGLE = 'tool-toggle';
+      // 折叠区只认自己这一层的直接子节点：子项里还有更深的折叠区，别串台。
+      function detailBoxOf(item) {
+        const kids = (item && item.children) || [];
+        for (let i = 0; i < kids.length; i += 1) {
+          const kid = kids[i];
+          if (kid.getAttribute && kid.getAttribute('data-agent-role') === ROLE_DETAIL) return kid;
+        }
+        return null;
+      }
+      function toggleDetail(toggle, item) {
+        if (!toggle || !item) return false;
+        const box = detailBoxOf(item);
+        if (!box) return false;
+        const next = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        box.hidden = !next;
+        if (next) {
+          if (box.removeAttribute) box.removeAttribute('hidden');
+          box.setAttribute('aria-hidden', 'false');
+        } else {
+          box.setAttribute('hidden', '');
+          box.setAttribute('aria-hidden', 'true');
+        }
+        return next;
+      }
+      // 标题行本身就是展开开关（与技术工艺同一套合同）：原句搬进可点节点，aria 与键盘
+      // 语义都挂在它身上；界面上不再有第二个开关。
+      function wireToggle(item) {
+        const title = item.querySelector('[data-agent-role="tool-title"]');
+        if (!title || title.__ocToggle) return null;
+        const toggle = document.createElement('span');
+        toggle.className = 'oc-process-toggle';
+        toggle.setAttribute('data-agent-role', ROLE_TOGGLE);
+        toggle.setAttribute('role', 'button');
+        toggle.setAttribute('tabindex', '0');
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.textContent = String(title.textContent || '');
+        toggle.addEventListener('click', () => toggleDetail(toggle, item));
+        toggle.addEventListener('keydown', (event) => {
+          const key = String((event && event.key) || '');
+          if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+          if (event && typeof event.preventDefault === 'function') event.preventDefault();
+          toggleDetail(toggle, item);
+        });
+        title.textContent = '';
+        title.append(toggle);
+        title.__ocToggle = toggle;
+        return toggle;
+      }
+      // 有内容可展开的行才有折叠区：折叠区与标题行开关成对出现，不造空折叠。
+      function toolDetailBox(item) {
+        let box = detailBoxOf(item);
+        if (box) return box;
+        wireToggle(item);
+        box = document.createElement('div');
+        box.className = 'oc-process-body';
+        box.setAttribute('data-agent-role', ROLE_DETAIL);
+        box.hidden = true;
+        box.setAttribute('hidden', '');
+        box.setAttribute('aria-hidden', 'true');
+        item.append(box);
+        return box;
+      }
+      const rowTone = (value) => (/命中|可改制|可复用/.test(value) ? 'hit'
+        : (/无同类件|未命中|按新制|未匹配/.test(value) ? 'miss' : ''));
+      // 过程行：状态图标 + 原句标题；命中 / 未命中的颜色落在结论文字上。
+      function makeItem(text, tone, sourceText) {
+        const item = document.createElement('div');
+        item.setAttribute('data-agent-role', 'tool-item');
+        item.setAttribute('data-state', 'running');
+        const row = document.createElement('div');
+        row.className = 'oc-process-row';
+        if (tone) row.classList.add(tone);
+        const i = document.createElement('span');
+        i.className = 'oc-process-dot';
+        i.setAttribute('data-agent-role', 'tool-state-icon');
+        i.textContent = '○';
+        const s = document.createElement('span');
+        s.className = 'oc-process-text';
+        s.setAttribute('data-agent-role', 'tool-title');
+        s.textContent = text;
+        row.appendChild(i); row.appendChild(s);
+        if (sourceText) {
+          const sp = document.createElement('span');
+          sp.className = 'src';
+          sp.textContent = ' · 来源：' + sourceText;
+          row.appendChild(sp);
+        }
+        item.appendChild(row);
+        return item;
+      }
+      const raw = String(main == null ? '' : main);
+      // 前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：折进上一条的折叠区，
+      // 不再与父项平级。顶层行数只等于业务过程的个数。
+      const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
+      const text = raw.replace(/^[\s]*[↳·]?\s*/, '').trim();
+      const items = chatEl.querySelectorAll('[data-agent-role="tool-item"]');
+      const parent = items.length ? items[items.length - 1] : null;
+      if (sub && parent) {
+        const tone = rowTone(text);
+        toolDetailBox(parent).append(makeItem(text, tone, ''));
+        if (tone) parent.classList.add(`has-${tone}`);
+        scrollChat();
+        return parent.closest ? (parent.closest('.tool-activity') || parent) : parent;
+      }
       const div = document.createElement('div');
       div.className = 'tool-activity trace';
-      // 报价侧的过程行同样是 Tool List：一条业务过程 = 一个 tool-item，行首状态图标
-      // + 原句标题，产品侧结果直接可见 —— 没有折叠区、没有按钮。
       div.setAttribute('data-agent-card', '');
       div.setAttribute('data-status', 'running');
       const tools = document.createElement('div');
       tools.setAttribute('data-agent-role', 'tools');
-      const item = document.createElement('div');
-      item.setAttribute('data-agent-role', 'tool-item');
-      item.setAttribute('data-state', 'running');
-      const row = document.createElement('div');
-      row.className = 'oc-process-row';
-      const i = document.createElement('span');
-      i.className = 'oc-process-dot';
-      i.setAttribute('data-agent-role', 'tool-state-icon');
-      i.textContent = '○';
-      const s = document.createElement('span');
-      s.className = 'oc-process-text';
-      s.setAttribute('data-agent-role', 'tool-title');
-      s.textContent = main;
-      // 命中 / 未命中沿用与技术工艺同一套色调，颜色落在结论文字上。
-      if (/命中|可改制|可复用/.test(main)) row.classList.add('hit');
-      else if (/无同类件|未命中|按新制|未匹配/.test(main)) row.classList.add('miss');
-      row.appendChild(i); row.appendChild(s);
-      if (source) {
-        const sp = document.createElement('span');
-        sp.className = 'src';
-        sp.textContent = ' · 来源：' + source;
-        row.appendChild(sp);
-      }
-      item.appendChild(row);
-      tools.appendChild(item);
+      tools.appendChild(makeItem(text, rowTone(text), source));
       div.appendChild(tools);
       chatEl.appendChild(div);
       scrollChat();
@@ -1204,7 +1290,8 @@
     /* 进度轨迹就地换文案：色调跟着新文案走，命中 / 未命中不因为换了例子就丢色。 */
     function titleElUpdate(node, text) {
       if (!node) return;
-      node.textContent = text;
+      const toggle = node.querySelector ? node.querySelector('[data-agent-role="tool-toggle"]') : null;
+      if (toggle) toggle.textContent = text; else node.textContent = text;
       const row = node.parentNode;
       if (!row || !row.classList) return;
       row.classList.remove('hit', 'miss');

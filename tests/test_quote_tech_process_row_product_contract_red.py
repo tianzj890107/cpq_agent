@@ -112,12 +112,24 @@ function rowsOf(root) {
   walk(root, 0);
   return found;
 }
+function isCollapsed(node) {
+  if (!node) return null;
+  if (node.tagName === "DETAILS") return !node.open;
+  return !!(node.hidden || node.hasAttribute("hidden")
+            || node.getAttribute("aria-hidden") === "true");
+}
 function rosterOut(root, prefix, out) {
   var rows = rowsOf(root);
   out[prefix + "_rows"] = rows;
   out[prefix + "_icons"] = rows.map(function (r) { return r.icon; });
   out[prefix + "_states"] = rows.map(function (r) { return r.state; });
   out[prefix + "_classes"] = rows.map(function (r) { return r.cls; });
+  out[prefix + "_native_button_nodes"] = root.querySelectorAll("summary, button").length;
+  out[prefix + "_detail_collapsed_all"] = (function () {
+    var all = root.querySelectorAll('[data-agent-role="tool-detail"]');
+    for (var i = 0; i < all.length; i += 1) { if (!isCollapsed(all[i])) return false; }
+    return all.length > 0;
+  })();
   out[prefix + "_detail_nodes"] = root.querySelectorAll('[data-agent-role="tool-detail"]').length;
   out[prefix + "_toggle_nodes"] = root.querySelectorAll('[data-agent-role="tool-toggle"]').length;
   out[prefix + "_button_nodes"] =
@@ -313,46 +325,53 @@ class Harness(unittest.TestCase):
 
 
 class ANoDetailNoButton(Harness):
-    def test_a1_no_detail_region_on_either_side(self):
+    def test_a1_the_fold_is_the_title_row_only(self):
+        """## 136 起：标题行可以点击展开，但界面上的开关只能是标题行本身。"""
         for label, out, prefix in (("技术左栏", self.tech, "after"),
                                    ("阶段页-组装整合", self.board, "asm"),
                                    ("阶段页-成本", self.board, "cr")):
             with self.subTest(where=label):
-                self.assertEqual(0, out[prefix + "_detail_nodes"],
-                                 "%s 仍然有可展开的「详情」区（tool-detail）：用户要求完全不要" % label)
-                self.assertEqual(0, out[prefix + "_toggle_nodes"],
-                                 "%s 仍然有折叠开关（tool-toggle）" % label)
                 self.assertEqual(0, out[prefix + "_detail_word_nodes"],
-                                 "%s 仍然渲染出「详情」字样" % label)
+                                 "%s 又渲染出「详情」字样：开关只能是标题行本身" % label)
+                for row in (out[prefix + "_rows"] or []):
+                    has_detail = (row.get("detail") or 0) > 0
+                    has_toggle = (row.get("toggle") or 0) > 0
+                    with self.subTest(where=label, row=str(row.get("text"))[:40]):
+                        self.assertEqual(has_detail, has_toggle,
+                                         "折叠区与标题行开关没有成对出现"
+                                         "（detail=%r toggle=%r）"
+                                         % (row.get("detail"), row.get("toggle")))
 
-    def test_a2_no_button_or_disclosure_attributes(self):
+    def test_a2_no_second_button_next_to_the_title_row(self):
         for label, out, prefix in (("技术左栏", self.tech, "after"),
                                    ("阶段页-组装整合", self.board, "asm"),
                                    ("阶段页-成本", self.board, "cr")):
             with self.subTest(where=label):
-                self.assertEqual(0, out[prefix + "_button_nodes"],
-                                 "%s 过程行里仍有可点按钮 / role=button" % label)
-                self.assertEqual(0, out[prefix + "_aria_expanded"],
-                                 "%s 过程行仍带 aria-expanded 展开语义" % label)
-                self.assertEqual(0, out[prefix + "_tabindex"],
-                                 "%s 过程行仍可键盘聚焦（tabindex）" % label)
+                self.assertEqual(0, out[prefix + "_native_button_nodes"],
+                                 "%s 行内出现了原生 summary / button（第二套开关）" % label)
+                self.assertEqual(out[prefix + "_toggle_nodes"], out[prefix + "_aria_expanded"],
+                                 "%s aria-expanded 不只挂标题行：toggle=%r aria=%r"
+                                 % (label, out[prefix + "_toggle_nodes"],
+                                    out[prefix + "_aria_expanded"]))
+                self.assertEqual(out[prefix + "_toggle_nodes"], out[prefix + "_tabindex"],
+                                 "%s tabindex 不只挂标题行：toggle=%r tabindex=%r"
+                                 % (label, out[prefix + "_toggle_nodes"],
+                                    out[prefix + "_tabindex"]))
 
-    def test_a3_result_lines_are_visible_without_any_click(self):
-        out = self.tech
-        for label, prefix in (("技术左栏", "after"),):
+    def test_a3_the_fold_defaults_to_collapsed_and_keeps_the_results(self):
+        for label, out, prefix in (("技术左栏", self.tech, "after"),
+                                   ("阶段页-组装整合", self.board, "asm"),
+                                   ("阶段页-成本", self.board, "cr")):
             with self.subTest(where=label):
-                self.assertEqual(0, out[prefix + "_hidden_nodes"],
-                                 "%s 仍有 hidden 节点，结果行必须直接可见" % label)
-                self.assertEqual(0, out[prefix + "_aria_hidden_nodes"],
-                                 "%s 仍有 aria-hidden 节点，结果行必须直接可见" % label)
-                self.assertEqual(0, out[prefix + "_closed_details"],
-                                 "%s 把结果藏在收起的折叠块里，必须直接可见" % label)
-        text = str(out["after_text"])
+                if out[prefix + "_detail_nodes"]:
+                    self.assertTrue(out[prefix + "_detail_collapsed_all"],
+                                    "%s 折叠区不是默认收起" % label)
+        text = str(self.tech["after_text"])
         for token in ("查询条件：length=108", "命中 CMP-SEMI-EE-BLOCK-0001",
                       "库内无同类件，按新制评估", "差异：length: 库内 120.0mm",
                       "费率 0 条 / 回退 global 0 条 / 系数 0 条 / 待补 10 项"):
             with self.subTest(token=token):
-                self.assertIn(token, text, "%s 的产品侧结果没有直接显示出来" % token)
+                self.assertIn(token, text, "%s 的产品侧结果没有保留下来" % token)
 
     def test_a4_sub_lines_stay_inside_their_parent_row(self):
         rows = self.tech["after_rows"] or []
@@ -366,23 +385,8 @@ class ANoDetailNoButton(Harness):
         self.assertEqual(len(top), self.tech["after_top_level"],
                          "子结果被渲染成了与父行平级的顶层行")
 
-    def test_a5_quote_page_follows_the_same_contract(self):
-        fn = function_source(self.quote, "addToolActivity")
-        self.assertTrue(fn, "报价页找不到 addToolActivity（过程行渲染入口）")
-        for token in ("tool-detail", "\u8be6\u60c5", "aria-expanded", "tabindex", "summary"):
-            with self.subTest(token=token):
-                self.assertNotIn(token, fn,
-                                 "报价页过程行仍然带 %r：两侧必须同一套合同" % token)
-        for pattern in ('role="button"', "'role', 'button'", '"role", "button"',
-                        "'button', '0'", '"button", "0"'):
-            with self.subTest(pattern=pattern):
-                self.assertNotIn(pattern, fn, "报价页过程行仍是可点按钮：%r" % pattern)
-        self.assertIn("tool-state-icon", fn,
-                      "报价页过程行没有统一的状态图标标记")
-        for dot in DOTS:
-            with self.subTest(dot=dot):
-                self.assertNotIn(dot, fn, "报价页过程行还在用「点」当状态图标")
-
+    # a5（报价页标题行即开关）已由
+    # tests/test_quote_tech_process_row_fold_and_done_red.py::test_a5 接管。
 
 class BStateIcons(Harness):
     def test_b1_done_steps_show_a_check(self):

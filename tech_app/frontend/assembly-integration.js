@@ -151,15 +151,99 @@ function aiProcessCard(title) {
       + `<span class="oc-alabel-state is-running" data-agent-role="status">◌ 运行中</span></div>
       <div class="oc-process-steps" data-agent-role="tools"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
-  /* 过程行：一条业务过程 = 一个 Tool Item（[data-agent-role="tool-item"]）；行首状态图标
-     + 原句标题，产品侧结果行归上一条 Tool Item 直接可见 —— 没有「详情」、没有折叠、
-     没有按钮。命中 / 未命中 / 按新制的颜色落在结论行自己的文字上（父行只带标记）。 */
+  const ROLE_ITEM = 'tool-item';
+  const ROLE_TITLE = 'tool-title';
+  const ROLE_ICON = 'tool-state-icon';
+  const ROLE_TOGGLE = 'tool-toggle';
+  const ROLE_DETAIL = 'tool-detail';
+  // 过程行：一条业务过程 = 一个 Tool Item（[data-agent-role="tool-item"]）；行首状态图标
+  // + 原句标题，产品侧结果行折进它所属标题行的折叠区（默认收起，点标题行展开），
+  // 不再与父项平级。命中 / 未命中 / 按新制的颜色落在结论行自己的文字上（父行只带标记）。
   const STEP_TONE = (text) => (/命中/.test(text) ? 'hit'
     : (/无同类件|按新制/.test(text) ? 'miss' : ''));
-  const STEP_ROW = (text, sub, tone) => `<div class="oc-process-step${sub ? ' sub' : ''}`
-    + `${tone ? ` ${tone}` : ''}" data-agent-role="tool-item" data-state="completed">`
-    + `<span class="oc-process-dot" data-agent-role="tool-state-icon">✓</span>`
-    + `<span class="oc-process-text" data-agent-role="tool-title">${esc(text)}</span></div>`;
+  // 折叠区只认自己这一层的直接子节点。
+  const detailBoxOf = (row) => {
+    const kids = (row && row.children) || [];
+    for (let i = 0; i < kids.length; i += 1) {
+      const kid = kids[i];
+      if (kid.getAttribute && kid.getAttribute('data-agent-role') === ROLE_DETAIL) return kid;
+    }
+    return null;
+  };
+  const toggleDetail = (toggle, row) => {
+    if (!toggle || !row) return false;
+    const box = detailBoxOf(row);
+    if (!box) return false;
+    const next = toggle.getAttribute('aria-expanded') !== 'true';
+    toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+    box.hidden = !next;
+    if (next) {
+      if (box.removeAttribute) box.removeAttribute('hidden');
+      box.setAttribute('aria-hidden', 'false');
+    } else {
+      box.setAttribute('hidden', '');
+      box.setAttribute('aria-hidden', 'true');
+    }
+    return next;
+  };
+  // 标题行本身就是展开开关：原句搬进可点节点，aria 与键盘语义都挂在它身上。
+  const wireToggle = (row) => {
+    const title = row.querySelector(`[data-agent-role="${ROLE_TITLE}"]`);
+    if (!title || title.__ocToggle) return null;
+    const toggle = document.createElement('span');
+    toggle.className = 'oc-process-toggle';
+    toggle.setAttribute('data-agent-role', ROLE_TOGGLE);
+    toggle.setAttribute('role', 'button');
+    toggle.setAttribute('tabindex', '0');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = String(title.textContent || '');
+    toggle.addEventListener('click', () => toggleDetail(toggle, row));
+    toggle.addEventListener('keydown', (event) => {
+      const key = String((event && event.key) || '');
+      if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+      if (event && typeof event.preventDefault === 'function') event.preventDefault();
+      toggleDetail(toggle, row);
+    });
+    title.textContent = '';
+    title.append(toggle);
+    title.__ocToggle = toggle;
+    return toggle;
+  };
+  // 有内容可展开的行才有折叠区：折叠区与标题行开关成对出现，不造空折叠。
+  const toolDetailBox = (row) => {
+    let box = detailBoxOf(row);
+    if (box) return box;
+    wireToggle(row);
+    box = document.createElement('div');
+    box.className = 'oc-process-body';
+    box.setAttribute('data-agent-role', ROLE_DETAIL);
+    box.hidden = true;
+    box.setAttribute('hidden', '');
+    box.setAttribute('aria-hidden', 'true');
+    row.append(box);
+    return box;
+  };
+  const foldUnder = (parent, row, tone) => {
+    toolDetailBox(parent).append(row);
+    if (tone && parent.classList && parent.classList.add) parent.classList.add(`has-${tone}`);
+  };
+  const rowFor = (text, tone) => {
+    const row = document.createElement('div');
+    row.className = `oc-process-step${tone ? ` ${tone}` : ''}`;
+    row.setAttribute('data-agent-role', ROLE_ITEM);
+    row.setAttribute('data-state', 'completed');
+    const dot = document.createElement('span');
+    dot.className = 'oc-process-dot';
+    dot.setAttribute('data-agent-role', ROLE_ICON);
+    dot.textContent = '✓';
+    const label = document.createElement('span');
+    label.className = 'oc-process-text';
+    label.setAttribute('data-agent-role', ROLE_TITLE);
+    label.textContent = text;
+    row.append(dot, label);
+    return row;
+  };
+  const lastRow = () => (steps.children.length ? steps.children[steps.children.length - 1] : null);
   const seen = new Set();
   return {
     log(lines) {
@@ -167,23 +251,16 @@ function aiProcessCard(title) {
         if (seen.has(line)) continue;
         seen.add(line);
         const raw = String(line);
-        // 后端用前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：归上一条，
-        // 不再与父项平级；缩进行不新建第二条业务过程。保留整句原话，不概括。
+        // 后端用前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：折进上一条的
+        // 折叠区；已经开了折叠区的业务过程，后续普通行也继续归它，不另起顶层行。
         const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
-        const text = raw.replace(/^[\s]*[↳·]?\s*/, '');
+        const text = raw.replace(/^[\s]*[↳·]?\s*/, '').trim();
         const tone = STEP_TONE(text);
-        const parent = steps.children.length ? steps.children[steps.children.length - 1] : null;
-        if (sub && parent) {
-          let subs = parent.querySelector('.oc-process-subs');
-          if (!subs) {
-            parent.insertAdjacentHTML('beforeend', '<div class="oc-process-subs"></div>');
-            subs = parent.querySelector('.oc-process-subs');
-          }
-          if (subs) subs.insertAdjacentHTML('beforeend', STEP_ROW(text, true, tone));
-          if (tone && parent.classList && parent.classList.add) parent.classList.add(`has-${tone}`);
-          continue;
-        }
-        steps.insertAdjacentHTML('beforeend', STEP_ROW(text, false, tone));
+        const row = rowFor(text, tone);
+        const parent = lastRow();
+        if (sub && parent) { foldUnder(parent, row, tone); continue; }
+        if (!sub && parent && detailBoxOf(parent)) { foldUnder(parent, row, tone); continue; }
+        steps.append(row);
       }
       $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
     },
@@ -194,7 +271,8 @@ function aiProcessCard(title) {
       card.setAttribute('data-status', interrupted ? 'interrupted' : ok ? 'completed' : 'failed');
       state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
       state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
-      // 卡片收尾：仍是「进行中」的过程行一次性收成完成 ✓（界面上不再留圆圈）。
+      // 卡片收尾：仍是「进行中」的过程行（含折叠区里的结果行）一次性收成完成 ✓，
+      // 界面上不再留圆圈。
       if (!interrupted && ok) {
         steps.querySelectorAll('[data-agent-role="tool-item"][data-state="running"]').forEach((row) => {
           row.setAttribute('data-state', 'completed');

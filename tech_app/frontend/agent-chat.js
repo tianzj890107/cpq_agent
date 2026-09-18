@@ -679,16 +679,26 @@
     const normalized = state === "succeeded" ? "completed" : state === "failed" ? "failed"
       : state === "interrupted" ? "interrupted" : "running";
     if (root && typeof root.setAttribute === "function") root.setAttribute("data-status", normalized);
-    // 卡片收尾：仍是「进行中」的过程行一次性收成完成 ✓（界面上不再留圆圈）；
-    // 失败行原样保留 ⚠。
-    const host = ctx && (ctx.steps || ctx.tools);
-    if (host && host.querySelectorAll && (state === "succeeded" || state === "partial")) {
-      const running = host.querySelectorAll('[data-agent-role="tool-item"][data-state="running"]');
-      for (let i = 0; i < running.length; i += 1) {
-        running[i].setAttribute("data-state", "completed");
-        const icon = running[i].querySelector('[data-agent-role="tool-state-icon"]');
-        if (icon) icon.textContent = "✓";
-      }
+    // 卡片收尾：仍是「进行中」的过程行一次性收成完成 ✓（界面上不再留圆圈）；失败行原样
+    // 保留 ⚠。任务卡把 .oc-task-steps 挂在 turn.body 上（收尾时手里未必有 steps / tools），
+    // 所以正文区也要扫一遍，否则卡片显示已完成、行里还留着 ○。
+    if (state === "succeeded" || state === "partial") {
+      const hosts = [];
+      const direct = ctx && (ctx.steps || ctx.tools);
+      if (direct) hosts.push(direct);
+      const bodyHost = ctx && ctx.body;
+      if (bodyHost && bodyHost !== direct) hosts.push(bodyHost);
+      const wrapHost = ctx && ctx.wrap;
+      if (wrapHost && wrapHost !== direct && wrapHost !== bodyHost) hosts.push(wrapHost);
+      hosts.forEach((host) => {
+        if (!host || !host.querySelectorAll) return;
+        const running = host.querySelectorAll('[data-agent-role="tool-item"][data-state="running"]');
+        for (let i = 0; i < running.length; i += 1) {
+          running[i].setAttribute("data-state", "completed");
+          const icon = running[i].querySelector('[data-agent-role="tool-state-icon"]');
+          if (icon) icon.textContent = "✓";
+        }
+      });
     }
     if (!chip) return;
     const word = state === "succeeded" ? "✓ 已完成" : state === "failed" ? "⚠ 失败" : "◌ 运行中";
@@ -1548,6 +1558,11 @@
   }
   function pushTaskStep(card, text, tone, phase, detail) {
     if (!card || !text) return;
+    const ROLE_ITEM = "tool-item";
+    const ROLE_TITLE = "tool-title";
+    const ROLE_ICON = "tool-state-icon";
+    const ROLE_TOGGLE = "tool-toggle";
+    const ROLE_DETAIL = "tool-detail";
     // 状态图标：完成 ✓、进行中 ○、失败 ⚠；不再用「点」。
     function stateIcon(state) {
       return state === "failed" ? "⚠" : state === "running" ? "○" : "✓";
@@ -1564,11 +1579,78 @@
       if (!host || !host.children || !host.children.length) return null;
       return host.children[host.children.length - 1];
     }
+    // 折叠区只认自己这一层的直接子节点：子项里还有更深的折叠区，别串台。
+    function detailBoxOf(row) {
+      const kids = (row && row.children) || [];
+      for (let i = 0; i < kids.length; i += 1) {
+        const kid = kids[i];
+        if (kid.getAttribute && kid.getAttribute("data-agent-role") === ROLE_DETAIL) return kid;
+      }
+      return null;
+    }
+    function toggleToolDetail(toggle, row) {
+      if (!toggle || !row) return false;
+      const box = detailBoxOf(row);
+      if (!box) return false;
+      const next = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", next ? "true" : "false");
+      box.hidden = !next;
+      if (next) {
+        if (box.removeAttribute) box.removeAttribute("hidden");
+        box.setAttribute("aria-hidden", "false");
+      } else {
+        box.setAttribute("hidden", "");
+        box.setAttribute("aria-hidden", "true");
+      }
+      return next;
+    }
+    // 标题行本身就是展开开关（## 136）：把原句搬进可点节点，aria 与键盘语义都挂在它
+    // 身上；界面上没有第二个开关。
+    function wireToolToggle(row) {
+      const title = row.querySelector ? row.querySelector(`[data-agent-role="${ROLE_TITLE}"]`) : null;
+      if (!title || title.__ocToggle) return null;
+      const toggle = el("span", "oc-process-toggle", String(title.textContent || ""));
+      toggle.setAttribute("data-agent-role", ROLE_TOGGLE);
+      toggle.setAttribute("role", "button");
+      toggle.setAttribute("tabindex", "0");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.addEventListener("click", () => toggleToolDetail(toggle, row));
+      toggle.addEventListener("keydown", (event) => {
+        const key = String((event && event.key) || "");
+        if (key !== "Enter" && key !== " " && key !== "Spacebar") return;
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        toggleToolDetail(toggle, row);
+      });
+      title.textContent = "";
+      title.append(toggle);
+      title.__ocToggle = toggle;
+      return toggle;
+    }
+    // 有内容可展开的行才有折叠区：折叠区与标题行开关成对出现，不造空折叠。
+    function toolDetailBox(row) {
+      let box = detailBoxOf(row);
+      if (box) return box;
+      wireToolToggle(row);
+      box = el("div", "oc-process-body");
+      box.setAttribute("data-agent-role", ROLE_DETAIL);
+      box.hidden = true;
+      box.setAttribute("hidden", "");
+      box.setAttribute("aria-hidden", "true");
+      row.append(box);
+      return box;
+    }
+    // 结果行折进父行的折叠区（默认收起）：父行带 has-hit / has-miss 标记，
+    // 颜色仍然只落在结论行自己的文字上（见 agent-chat.css）。
+    function foldUnder(parent, row, toneName) {
+      const box = toolDetailBox(parent);
+      box.append(row);
+      if (toneName && parent.classList && parent.classList.add) parent.classList.add(`has-${toneName}`);
+    }
     const raw = String(text);
-    // 前导 2+ 空格 / ↳ / · 表示「这一条是上一条的产品侧结果」：归上一条 Tool Item，
-    // 直接可见 —— 没有折叠区、没有开关、没有按钮，也不再与父项平级。
+    // 前导 2+ 空格 / ↳ / · 表示「这一条是上一条的产品侧结果」：折进上一条 Tool Item，
+    // 不再与父项平级。
     const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
-    const body = raw.replace(/^[\s]*[↳·]?\s*/, "");
+    const body = raw.replace(/^[\s]*[↳·]?\s*/, "").trim();
     // phase 只决定过程行的色调：model / tool 各有专属类名；
     // phase === "progress"（以及旧任务里没有 phase 的行）沿用默认样式，不新增类名。
     const phaseCls = phase === "model" || phase === "tool" ? ` ${phase}` : "";
@@ -1591,23 +1673,33 @@
     // Tool Item：一条业务过程 = [data-agent-role="tool-item"]，四态写进 data-state；
     // 行首状态图标 + 原句标题，工具项本体没有背景 / 阴影 / 边框。
     const item = el("div", `oc-process-step${sub ? " sub" : ""}${toneName ? ` ${toneName}` : ""}${phaseCls}`);
-    item.setAttribute("data-agent-role", "tool-item");
+    item.setAttribute("data-agent-role", ROLE_ITEM);
     item.setAttribute("data-state", itemState);
     const icon = el("span", "oc-process-dot", stateIcon(itemState));
-    icon.setAttribute("data-agent-role", "tool-state-icon");
+    icon.setAttribute("data-agent-role", ROLE_ICON);
     const textNode = el("span", "oc-process-text", body);
-    textNode.setAttribute("data-agent-role", "tool-title");
+    textNode.setAttribute("data-agent-role", ROLE_TITLE);
     item.append(icon, textNode);
-    // 产品侧结果行归上一条 Tool Item：折在父项里、跟着父项一起直接可见。
-    // 父项同时带上 has-hit / has-miss 标记 —— 父行里出现了哪一类结论，标记就跟着哪一类，
-    // 颜色仍然只落在结论行自己的文字上（见 agent-chat.css）。
+    // 带结构化明细的行 = 一次工具 / 模型调用的起点，单独占一条顶层业务过程：
+    // 顶层行数只等于业务过程的个数，前面先到的普通行（没有明细的进度 / 输入行）
+    // 折进这次调用的折叠区里，不跟它平级。
     const parent = lastToolItem(card.steps);
-    if (sub && parent) {
-      let subs = parent.querySelector ? parent.querySelector(".oc-process-subs") : null;
-      if (!subs) { subs = el("div", "oc-process-subs"); parent.append(subs); }
-      subs.append(item);
-      if (toneName && parent.classList && parent.classList.add) parent.classList.add(`has-${toneName}`);
+    const opensCall = !sub && !!detail && typeof detail === "object";
+    if (opensCall) {
+      const pending = card.__ocPending || [];
+      card.__ocPending = [];
+      pending.forEach((row) => {
+        if (row.remove) row.remove();
+        item.append(row);
+      });
+      card.steps.append(item);
+    } else if (sub && parent) {
+      foldUnder(parent, item, toneName);
+    } else if (!sub && parent && detailBoxOf(parent)) {
+      // 这一步已经在展开 / 收起自己的结果：后续普通行继续归它，不另起一行。
+      foldUnder(parent, item, toneName);
     } else {
+      if (!sub) (card.__ocPending || (card.__ocPending = [])).push(item);
       card.steps.append(item);
     }
     if (callKey) {
