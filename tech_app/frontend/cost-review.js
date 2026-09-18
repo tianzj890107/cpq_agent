@@ -65,20 +65,43 @@ const crMoney = value => value == null ? '—'
 const crSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /* --------------------------------------------------------------- 对话区 */
+/* 与 3 组装与整合同款：一次用户触发 = 一个 turn 容器（display:contents，视觉顺序不变），
+   容器里先放用户气泡，紧随其后的执行卡 / 说明也落进来，成对顺序稳定。 */
+let costTurn = null;
 function crAppend(html) {
   $cr('crEmpty')?.remove();
   const node = document.createElement('div');
   node.innerHTML = html;
   const element = node.firstElementChild;
-  $cr('crTinner').append(element);
+  const host = (!crReplaying && costTurn) ? costTurn : $cr('crTinner');
+  host.append(element);
   $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
   return element;
 }
 
 function crSay(text) {
-  crAppend(`<div class="oc-amsg">
-    <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
+  crAppend(`<div class="oc-amsg" data-agent-card="" data-status="completed">
+    <div class="oc-abody" data-agent-role="body"><div class="oc-atxt">${esc(text)}</div></div></div>`);
   crPersistNote(text);
+}
+
+/* 用户气泡原语：本页所有「用户点按钮 → 会话区出卡」的入口都先经过它，返回可见气泡节点，
+   后续生成的执行卡就长在同一个 turn 容器里。 */
+function crUserSay(text) {
+  $cr('crEmpty')?.remove();
+  const turn = document.createElement('div');
+  turn.className = 'oc-turn';
+  turn.setAttribute('data-agent-card', '');
+  turn.setAttribute('data-status', 'completed');
+  const bubble = document.createElement('div');
+  bubble.className = 'oc-ubub';
+  bubble.textContent = String(text == null ? '' : text);
+  turn.append(bubble);
+  $cr('crTinner').append(turn);
+  $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
+  costTurn = turn;
+  crPersistNote(text);
+  return bubble;
 }
 
 /* --------------------------------------------- 会话时间线（项目级，按顺序持久化）
@@ -114,11 +137,12 @@ function crReplayTimeline() {
 
 function crCard(title) {
   // 与 2.1 的 Agent 回复是同一张卡、同一个状态 chip：不再有第二套过程卡样式。
-  const card = crAppend(`<div class="oc-amsg">
-    <div class="oc-abody"><div class="oc-alabel"><span>成本测算</span>`
-      + `<span class="oc-alabel-sub">${esc(title)}</span>`
-      + `<span class="oc-alabel-state is-running">◌ 运行中</span></div>
-      <div class="oc-process-steps"></div></div></div>`);
+  const card = crAppend(`<div class="oc-amsg" data-agent-card="" data-status="running">
+    <div class="oc-abody" data-agent-role="body"><div class="oc-alabel" data-agent-role="header">`
+      + `<span data-agent-role="identity">成本测算</span>`
+      + `<span class="oc-alabel-sub" data-agent-role="title">${esc(title)}</span>`
+      + `<span class="oc-alabel-state is-running" data-agent-role="status">◌ 运行中</span></div>
+      <div class="oc-process-steps" data-agent-role="tools"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
   const seen = new Set();
   return {
@@ -127,9 +151,11 @@ function crCard(title) {
         if (seen.has(line)) continue;
         seen.add(line);
         const sub = line.startsWith('  ');
+        // 一条业务过程 = 一个 Tool Item（保留整句原话，不概括）。
         steps.insertAdjacentHTML('beforeend',
-          `<div class="oc-process-step${sub ? ' sub' : ''}"><span class="oc-process-dot">${sub ? '·' : '●'}</span>`
-          + `<span class="oc-process-text">${esc(line.trim())}</span></div>`);
+          `<div class="oc-process-step${sub ? ' sub' : ''}" data-agent-role="tool-item" data-state="completed">`
+          + `<span class="oc-process-dot" data-agent-role="tool-item">${sub ? '·' : '●'}</span>`
+          + `<span class="oc-process-text" data-agent-role="tool-title">${esc(line.trim())}</span></div>`);
       }
       $cr('crThread').scrollTop = $cr('crThread').scrollHeight;
     },
@@ -662,6 +688,8 @@ async function crRunOp(kind) {
                    'return-to-process': '提交工艺经理确认' };
   crBusy = true;
   crRender();
+  // 用户点按钮触发：先出用户气泡，再出执行卡（唯一 turn helper，隔离执行时安全跳过）。
+  if (typeof crUserSay === "function") crUserSay(`${labels[kind]}。`);
   const card = crCard(labels[kind]);
   crStatus(`${labels[kind]}中…`);
   const opTask = `cost-op-${kind}`;
@@ -756,6 +784,8 @@ async function crSendToFinance() {
   crBusy = true;
   crRender();
   crStatus('发送给财务中…');
+  // 用户点按钮触发：先出用户气泡，再出执行卡。
+  if (typeof crUserSay === "function") crUserSay('确认工艺后发送给财务经理做成本测算。');
   const taskKey = 'cost-send-to-finance';
   const card = crCard('发送给财务');
   crPublishTask('task-progress', { taskId: taskKey, label: '发送给财务',
@@ -799,6 +829,8 @@ async function crRunPart(partId, quantity) {
   crBusy = true;
   crRender();
   const label = `零件成本 ${partId}`;
+  // 用户点按钮触发：先出用户气泡，再出执行卡。
+  if (typeof crUserSay === "function") crUserSay(`测算零件 ${partId} 的成本。`);
   const card = crCard(`零件成本 · ${partId}`);
   crStatus(`${partId} 测算中…`);
   let taskKey = `cost-part-${partId}`;
@@ -871,6 +903,8 @@ async function crRunAssembly() {
   crBusy = true;
   crRender();
   const label = '组装成本';
+  // 用户点按钮触发：先出用户气泡，再出执行卡。
+  if (typeof crUserSay === "function") crUserSay('测算整机组装成本。');
   const card = crCard('组装成本');
   crStatus('组装成本测算中…');
   let taskKey = 'cost-assembly';

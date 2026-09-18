@@ -168,15 +168,15 @@
       padding: 1px 5px; font-size: 12.5px;
       font-family: Consolas, Menlo, monospace;
     }
+    /* 用户消息白底 + 浅灰边框 + 深色正文（不再蓝底白字）；右下角小圆角是气泡尾部。 */
     .message-user {
-      align-self: flex-end;
-      background: var(--color-primary); color: white;
-      border-radius: 14px; border-bottom-right-radius: 4px;
-      padding: 11px 14px;
+      align-self: flex-end; background: #ffffff; color: var(--text-primary);
+      border: 1px solid var(--border-color); border-radius: 14px;
+      border-bottom-right-radius: 4px; padding: 11px 14px;
     }
-    .message-user .message-label { color: rgba(255,255,255,0.85); flex-direction: row-reverse; }
-    .message-user .message-label::before { background: rgba(255,255,255,0.7); }
-    .message-user .message-text { color: white; white-space: pre-wrap; }
+    .message-user .message-label { color: var(--color-primary); flex-direction: row-reverse; } .message-user .message-label::before { background: var(--color-primary); }
+    .message-user .message-text { color: var(--text-primary); white-space: pre-wrap; }
+    .message-error { color: var(--color-danger); }
     .message-error .message-text { color: var(--color-danger); }
 
     /* ===== 第1步 产品推荐清单（对话框内） ===== */
@@ -1006,10 +1006,29 @@
     function addUserBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-user';
-      div.innerHTML = '<div class="message-label">我</div><div class="message-text"></div>';
+      // 用户气泡也是会话流里的一等条目：与助手卡共用同一套 root 合同标记。
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">我</div>'
+        + '<div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').textContent = text;
       chatEl.appendChild(div);
       scrollChat();
+    }
+
+    /* 唯一 turn helper：一次「用户主动触发的新回合」先经它插用户气泡。真人打字、快捷动作、
+       确认 / 返回上一步 / 保存、kickoff 与 runStep1、转交任务说明都走它；addUserBubble()
+       仍是气泡的底层原语。同一轮里同一句话只插一条（气泡还挂在流末尾才算是同一轮）。 */
+    let lastUserTurn = null;
+    function beginUserTurn(text) {
+      const value = String(text == null ? '' : text);
+      if (lastUserTurn && lastUserTurn.text === value && lastUserTurn.bubble
+          && lastUserTurn.bubble === chatEl.lastElementChild) {
+        return lastUserTurn.bubble;
+      }
+      addUserBubble(value);
+      lastUserTurn = { text: value, bubble: chatEl.lastElementChild };
+      return lastUserTurn.bubble;
     }
 
     let streamBubble = null, streamBuf = '';
@@ -1017,9 +1036,12 @@
       if (!streamBubble) {
         streamBubble = document.createElement('div');
         streamBubble.className = 'message message-ai';
-        streamBubble.innerHTML = '<div class="message-label">报价单智能体'
-          + '<span class="message-label-state is-running">◌ 运行中</span></div>'
-          + '<div class="message-text"></div>';
+        streamBubble.setAttribute('data-agent-card', '');
+        streamBubble.setAttribute('data-status', 'running');
+        streamBubble.innerHTML = '<div class="message-label" data-agent-role="header">'
+          + '<span data-agent-role="identity">报价单智能体</span>'
+          + '<span class="message-label-state is-running" data-agent-role="status">◌ 运行中</span>'
+          + '</div><div class="message-text" data-agent-role="body"></div>';
         chatEl.appendChild(streamBubble);
         streamBuf = '';
       }
@@ -1035,6 +1057,7 @@
       if (!block) {
         block = document.createElement('details');
         block.className = 'thinking-block';
+        block.setAttribute('data-agent-role', 'thinking');
         block.innerHTML = '<summary>思考过程</summary><div class="thinking-body"></div>';
         const textEl = bubble.querySelector('.message-text');
         if (textEl) bubble.insertBefore(block, textEl);
@@ -1108,9 +1131,13 @@
     function addErrorBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-ai message-error';
-      div.innerHTML = '<div class="message-label">系统'
-        + '<span class="message-label-state is-failed">⚠ 失败</span></div>'
-        + '<div class="message-text"></div>';
+      // 失败态只是修饰符：root 仍是统一执行卡，状态就地写进 data-status。
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'failed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">系统</span>'
+        + '<span class="message-label-state is-failed" data-agent-role="status">⚠ 失败</span>'
+        + '</div><div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').textContent = text;
       chatEl.appendChild(div);
       scrollChat();
@@ -1119,15 +1146,27 @@
       finishStreamBubble(); // 工具调用把当前文本气泡截断
       const div = document.createElement('div');
       div.className = 'tool-activity trace';
+      // 报价侧的过程行同样是 Tool List：root 带统一合同标记，一条业务过程 = 一个 tool-item。
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'running');
+      const tools = document.createElement('div');
+      tools.setAttribute('data-agent-role', 'tools');
+      const item = document.createElement('div');
+      item.setAttribute('data-agent-role', 'tool-item');
+      item.setAttribute('data-state', 'running');
       const i = document.createElement('i'); i.className = 'ti ti-loader-2';
-      const s = document.createElement('span'); s.textContent = main;
-      div.appendChild(i); div.appendChild(s);
+      const s = document.createElement('span');
+      s.setAttribute('data-agent-role', 'tool-title');
+      s.textContent = main;
+      item.appendChild(i); item.appendChild(s);
       if (source) {
         const sp = document.createElement('span');
         sp.className = 'src';
         sp.textContent = ' · 来源：' + source;
-        div.appendChild(sp);
+        item.appendChild(sp);
       }
+      tools.appendChild(item);
+      div.appendChild(tools);
       chatEl.appendChild(div);
       scrollChat();
       return div;
@@ -1141,11 +1180,21 @@
         finishStreamBubble();
         stageEl = document.createElement("div");
         stageEl.className = "tool-activity trace";
+        stageEl.setAttribute("data-agent-card", "");
+        stageEl.setAttribute("data-status", "running");
+        const tools = document.createElement("div");
+        tools.setAttribute("data-agent-role", "tools");
+        const item = document.createElement("div");
+        item.setAttribute("data-agent-role", "tool-item");
+        item.setAttribute("data-state", "running");
         const i = document.createElement("i");
         i.className = "ti ti-loader-2";
         const sp = document.createElement("span");
-        stageEl.appendChild(i);
-        stageEl.appendChild(sp);
+        sp.setAttribute("data-agent-role", "tool-title");
+        item.appendChild(i);
+        item.appendChild(sp);
+        tools.appendChild(item);
+        stageEl.appendChild(tools);
         chatEl.appendChild(stageEl);
       }
       stageEl.querySelector("span").textContent = text;
@@ -1159,7 +1208,11 @@
     function addAiBubble(md) {
       const div = document.createElement('div');
       div.className = 'message message-ai';
-      div.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').innerHTML = renderMarkdown(md);
       chatEl.appendChild(div);
       scrollChat();
@@ -1397,7 +1450,9 @@
       const n = shownStep;
       const data = collectStepData(n);
       const stepName = STEPS[n - 1];
-      addUserBubble(`修改第 ${n} 步「${stepName}」并保存。`);
+      // 唯一 turn helper（隔离执行时退回底层气泡原语）：保存修改也是用户主动触发的新回合。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say(`修改第 ${n} 步「${stepName}」并保存。`);
       sendToAgent(
         `【表单修改】用户在第 ${n} 步「${stepName}」修改了工作台数据(JSON)如下：\n` +
         JSON.stringify(data, null, 1) +
@@ -1787,6 +1842,8 @@
       const list = ui.products || [];
       const div = document.createElement('div');
       div.className = 'message message-ai cand-block';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
       const reqTxt = Object.entries(ui.requirement || {})
         .map(([k, v]) => CAND_REQ_LABEL[k] || k).length
         ? Object.entries(ui.requirement || {}).map(([k, v]) =>
@@ -1794,7 +1851,8 @@
         : '（需求未给限定条件）';
       const dims = list.length ? Object.keys(list[0].detail || {}) : [];
 
-      let html = '<div class="message-label">产品推荐</div><div class="message-text">' +
+      let html = '<div class="message-label" data-agent-role="header">产品推荐</div>'
+        + '<div class="message-text" data-agent-role="body">' +
         '<div class="cand-head"><b>匹配需求</b>　' + reqTxt + '</div>' +
         (ui.source && ui.source.sql
           ? '<div class="cand-src"><i class="ti ti-database"></i> 数据来源：' +
@@ -2135,6 +2193,12 @@
       if (STEP1_FORM_TASK) {
         const task = STEP1_FORM_TASK;
         STEP1_FORM_TASK = null;
+        // kickoff / 表单通道的 User 文案就是 display；非空时必须先出用户气泡再出 Agent 卡。
+        const shown = String(displayText || '').trim();
+        if (shown) {
+          const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+          say(shown);
+        }
         await sendToAgent(task, { echo: false, display: '', step: 1 });
       }
       // ③ 智能体填完之后，才做产品匹配
@@ -2424,7 +2488,9 @@
       input.value = '';
       chatFiles = [];
       renderAttachChips();
-      addUserBubble(echo);          // 聊天里显示用户的话/附件说明
+      // 聊天里显示用户的话/附件说明（唯一 turn helper；隔离执行时退回底层气泡原语）
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say(echo);
       // 意图识别门槛未过（缺尺寸/应用范围/工作温度）：这条输入按「补充需求」处理，
       // 与原需求合并后重新走第 1 步快速匹配通道，不发给智能体
       if (STEP1_REINPUT && currentStep === 1) {
@@ -2448,7 +2514,9 @@
       if (manualMode) { addAiBubble('当前为「无模型」模式，无法自动填写。请直接在右侧人工填写各字段。'); return; }
       const n = currentStep;
       const name = STEPS[n - 1] || '';
-      addUserBubble('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
+      // 唯一 turn helper：先出用户气泡，再出 Agent 卡（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
       sendToAgent(
         '【强行推荐】用户要求把当前第 ' + n + ' 步「' + name + '」的**所有固定分区的每一个字段/单元格都填满、绝不留空**：\n' +
         '1) 能从需求文档拿到的先填文档值；2) 文档没有的用 sql_query 查数据库补；3) 文档和库都没有的，' +
@@ -2462,6 +2530,9 @@
 
     async function confirmStep() {
       if (busy) return;
+      // 唯一 turn helper：确认（含流程完成 / 待转交两条分支）同样是用户主动触发的新回合，
+      // 用户气泡必须先于 Agent 输出；隔离执行时退回底层气泡原语。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
       if (shownStep !== currentStep) showStep(currentStep); // 确认前先回到当前步骤
       const cur = currentStep;
       // 角色限步：登录后，本步必须由对应角色确认（第2步工艺确认=工艺经理，其余=销售经理）
@@ -2473,7 +2544,7 @@
       if (cur >= STEPS.length) {
         const done = '报价流程已完成。';
         if (!(await wfCompleteStep(cur, collectStepData(cur)))) return;
-        addUserBubble(done);
+        say(done);
         if (manualMode) {
           addAiBubble('报价流程已完成。可点「生成报价单(Word)」导出。');
           sendToAgent('【流程完成·人工模式】报价流程已人工完成。', { echo: false, display: done, step: STEPS.length });
@@ -2490,7 +2561,7 @@
       // 下一步不归我：右侧进度如实前进到下一步，但**左侧不开工**——只提醒推送，等接手人自己开始
       if (WF.pendingHandoff) {
         const h = WF.pendingHandoff;
-        addUserBubble(`确认第 ${cur} 步「${stepName}」。`);
+        say(`确认第 ${cur} 步「${stepName}」。`);
         setStep(next);
         if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
         await wfRefresh();
@@ -2512,7 +2583,7 @@
         return;   // ← 关键：不通知智能体开始下一步
       }
       const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。`;
-      addUserBubble(bubble);
+      say(bubble);
       setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
       // 第 2 步「工艺确认」：把第 1 步已确认的产品信息/技术参数原样沿用过来，只读展示供人工核对（不调用智能体）
       if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
@@ -2707,7 +2778,10 @@
           (PENDING_KICKOFF ? '你填写/上传的需求已随本卡片保存。' : '') +
           '请点下方「转交任务」把卡片推送给' + escapeHtml(WF.needRole) + '，对方开始后即可继续。</div>';
       }
-      div.innerHTML = '<div class="message-label">流程</div><div class="message-text">' + body + '</div>';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'pending');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">流程</div>'
+        + '<div class="message-text" data-agent-role="body">' + body + '</div>';
       chatEl.appendChild(div);
       const btn = $('wfGateLogin');
       if (btn) btn.onclick = () => cpqAuth.open();
@@ -2773,7 +2847,9 @@
         return true;
       }
       const name = STEPS[step - 1];
-      addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
+      // 唯一 turn helper：开始某一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('开始第 ' + step + ' 步「' + name + '」。');
       if (step === 2) {
         // 工艺确认是人工核对：沿用第 1 步数据展示，不调智能体
         // （本地没有第 1 步数据时先从卡片快照恢复——交接过来的卡片就是这种情况）
@@ -2922,8 +2998,12 @@
       const div = document.createElement('div');
       div.className = 'message message-ai';
       div.id = 'wfTechNewBubble';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
       div.innerHTML =
-        '<div class="message-label">报价单智能体</div><div class="message-text">' +
+        '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body">' +
         '<div style="margin-bottom:8px"><b>⚠ 最高匹配分 ' +
         escapeHtml(String(best.total != null ? best.total : '—')) + ' 分，低于 ' +
         escapeHtml(String(m.threshold != null ? m.threshold : 70)) + ' 分</b><br>' +
@@ -3140,6 +3220,11 @@
         try {
           const d = await wfApi('/wf/task/send', { method: 'POST', body });
           mask.remove();
+          // 转交也是「用户点按钮 → 会话区出 Agent 输出」：先出用户气泡再出说明。
+          const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+          say(techNew
+            ? '把本单需求转交工艺经理，做新增工艺评估。'
+            : '把这张报价卡片转交给' + (d.source_label || '接手人') + '继续。');
           if (techNew) {
             const bubble = document.getElementById('wfTechNewBubble');
             if (bubble) bubble.remove();
@@ -3759,7 +3844,9 @@
     function goPrev() {
       if (busy || currentStep <= 1) return;
       const prev = currentStep - 1;
-      addUserBubble('返回第 ' + prev + ' 步「' + STEPS[prev - 1] + '」。');
+      // 唯一 turn helper：返回上一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('返回第 ' + prev + ' 步「' + STEPS[prev - 1] + '」。');
       setStep(prev); // 前端直接回退，右边立刻切换
       if (manualMode) {
         sendToAgent('【返回上一步·人工模式】回到第 ' + prev + ' 步。', { echo: false, display: '返回第 ' + prev + ' 步', step: prev });

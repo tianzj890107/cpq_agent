@@ -267,6 +267,8 @@
         ctx = addAssistant();
         setAssistantState(ctx, "succeeded");
         ctx.full = String(event.text || "");
+        // 历史里落了思考内容的回合，同样渲染成卡内默认折叠的思考栏；没有就不建空块。
+        appendThinking(ctx, event);
         ctx.text.classList.add("rendered");
         ctx.text.innerHTML = renderMarkdown(ctx.full);
         return;
@@ -520,7 +522,10 @@
     if (!key || echoedTaskPrompts.has(key)) return;
     echoedTaskPrompts.add(key);
     const turn = activeTurnCtx;
-    addUser(text, turn && turn.wrap ? turn.wrap : null);
+    const anchor = turn && turn.wrap ? turn.wrap : null;
+    // 回声也走唯一 turn helper；被既有红测单独取出执行时没有这个 helper，退回底层气泡原语。
+    if (typeof beginUserTurn === "function") beginUserTurn(text, anchor);
+    else addUser(text, anchor);
     // 回声气泡本身也要落库：重进项目要按原顺序恢复成同一条用户气泡。
     persistSessionEvent({ kind: "user", text: text, stage: boardStage(),
                           key: `echo:${key}` });
@@ -538,10 +543,30 @@
   function addUser(text, before) {
     clearEmpty();
     const bubble = el("div", "oc-ubub", text);
+    // 用户气泡同样是这条会话流里的一等条目：带统一 root 标记，与执行卡共用一套合同。
+    bubble.setAttribute("data-agent-card", "");
+    bubble.setAttribute("data-status", "completed");
     // 回声气泡要插在「当前这一轮助手卡」的上方；锚点不在会话流里时照旧追加到末尾。
     if (before && before.parentNode === tinner) tinner.insertBefore(bubble, before);
     else tinner.append(bubble);
     scrollDown();
+    return bubble;
+  }
+
+  /* 唯一 turn helper：一次「用户主动触发的新回合」—— 先插用户气泡，再返回本轮 ctx。
+     真人打字、Agent 回声（echoTaskPrompt）、以及所有「用户点按钮 → 左侧出卡」的入口都走它；
+     addUser() 仍是气泡的底层原语，业务入口不再直接调它之后再自行 addAssistant()。
+     同一轮里同一句话只插一条（气泡还挂在会话流末尾，说明这一轮还没出卡）。 */
+  let userTurn = null;
+  function beginUserTurn(text, before) {
+    const value = String(text == null ? "" : text);
+    if (userTurn && userTurn.text === value && userTurn.bubble
+        && userTurn.bubble.parentNode === tinner && tinner.lastElementChild === userTurn.bubble) {
+      return userTurn;
+    }
+    const bubble = addUser(value, before);
+    userTurn = { text: value, bubble, wrap: null, at: Date.now() };
+    return userTurn;
   }
   // 身份行：技术侧不再有头像，助手 / 系统 / 检索结果卡统一靠这行蓝字表明身份（与报价同款）。
   function identityLabel(text) {
@@ -550,15 +575,13 @@
     return label;
   }
   function pushSystem(text) {
-    clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
-    // 身份行与技术回复同款，只是不带状态 chip：系统提示也是同一条会话流里的普通输出。
-    const label = el("div", "oc-alabel");
-    label.append(el("span", null, "技术工艺智能体"));
-    body.append(label, el("div", "oc-atxt", text));
-    wrap.append(body);
-    tinner.append(wrap);
+    // 系统提示也是同一条会话流里的普通输出：走统一执行卡构造器 execCard()，建出的就是
+    // 带 data-agent-card 的 .oc-amsg root，内含 .oc-abody（正文）/ .oc-atxt（文本）/
+    // .oc-alabel（身份行「技术工艺智能体」）；系统提示不带状态 chip。挂载仍由本入口
+    // 自己 tinner.append() 完成，提示入口与落点语义不变。
+    const card = execCard({ system: true, chip: false, identity: "技术工艺智能体", mount: false });
+    card.text.textContent = String(text || "");
+    tinner.append(card.wrap);
     scrollDown();
     persistSessionEvent({ kind: "session-note", source: "shell",
                           text: String(text || ""), key: `shell:${String(text || "")}` });
@@ -590,29 +613,72 @@
     pushSystem(`${prefix}${reason}。`);
   }
 
-  function addAssistant() {
+  /* 统一执行卡构造器：本文件**唯一**建 .oc-amsg root 的地方 —— 一次 Agent 输出 = 一张卡。
+     卡内固定是「身份行（header：身份 / 标题 / 状态 chip）+ 正文（body：Tool List + 思考过程 +
+     文本）」，[data-agent-role] 合同只在这里维护一份；系统提示、需求 / 流程摘要卡、零部件库检索
+     结果卡、确认卡全部复用它，不再各自手拼 root。
+
+     函数体必须**自包含**（只用 document / el 级原语）：既有会话红测会把本函数单独取出、
+     在最小 DOM 替身里真跑（tests/test_chat_fused_assistant_card_style_red.py 与
+     tests/test_quote_tech_unified_tool_list_conversation_red.py 的走查 1），
+     引用同文件里的其它辅助函数在那里会 ReferenceError。 */
+  function addAssistant(opts) {
+    const o = opts || {};
     clearEmpty();
     const wrap = el("div", "oc-amsg");
+    wrap.setAttribute("data-agent-card", "");
+    wrap.setAttribute("data-status", o.status || "running");
     const body = el("div", "oc-abody");
+    body.setAttribute("data-agent-role", "body");
     // 标题行：左侧蓝色身份行（与报价「报价单智能体」同款），右侧运行状态 chip。
     // 一轮回复只有这一张 chip，状态就地翻转，不新增第二行 / 第二张卡。
     const label = el("div", "oc-alabel");
-    label.append(el("span", null, "技术工艺智能体"));
-    const state = el("span", "oc-alabel-state is-running", "◌ 运行中");
-    label.append(state);
+    label.setAttribute("data-agent-role", "header");
+    const identity = el("span", null, o.identity || "技术工艺智能体");
+    identity.setAttribute("data-agent-role", "identity");
+    label.append(identity);
+    if (o.title) {
+      const title = el("span", "oc-alabel-sub", o.title);
+      title.setAttribute("data-agent-role", "title");
+      label.append(title);
+    }
+    let state = null;
+    if (o.chip !== false) {
+      state = el("span", "oc-alabel-state is-running", "◌ 运行中");
+      state.setAttribute("data-agent-role", "status");
+      label.append(state);
+    }
+    // Tool List 容器：过程行（[data-agent-role="tool-item"]）都长在这里；没有过程时是空的。
+    const tools = el("div", "oc-tools oc-process-steps");
+    tools.setAttribute("data-agent-role", "tools");
     const text = el("div", "oc-atxt");
-    body.append(label, text);
+    body.append(label, tools, text);
     wrap.append(body);
-    tinner.append(wrap);
-    scrollDown();
-    const ctx = { body, text, cards: {}, full: "", label, state, thinking: null, wrap };
+    // 统一构造器默认把新卡挂进会话流；系统提示要自己掌握落点（mount:false），
+    // 由调用方 tinner.append()，避免同一条卡挂两次。
+    if (o.mount !== false) {
+      tinner.append(wrap);
+      scrollDown();
+    }
+    const ctx = { body, text, cards: {}, full: "", label, state, thinking: null, wrap,
+                  root: wrap, header: label, tools };
     // 实时会话记下这一轮：任务进度要并进这张卡；历史回放不设，按行渲染不合流。
-    if (!replayingHistory) activeTurnCtx = ctx;
+    // 系统提示（o.system）不是「这一轮」，不接管任务进度的落点。
+    if (!replayingHistory && !o.system) activeTurnCtx = ctx;
     return ctx;
   }
+
+  // 统一构造器的对外名字：本文件的入口一律写 execCard(...)，不再各自手拼卡片根节点；
+  // 建出来的 root 一定带 data-agent-card（构造器内部只维护这一份）。
+  function execCard(opts) { return addAssistant(opts); }
   // 就地翻转同一张 chip：文本与配色都按状态切换，绝不另建节点。
   function setAssistantState(ctx, state) {
     const chip = ctx && ctx.state;
+    // 归一化状态同步写到 root 的 data-status（与既有 class modifier 并存，不替换）。
+    const root = ctx && (ctx.root || ctx.wrap);
+    const normalized = state === "succeeded" ? "completed" : state === "failed" ? "failed"
+      : state === "interrupted" ? "interrupted" : "running";
+    if (root && typeof root.setAttribute === "function") root.setAttribute("data-status", normalized);
     if (!chip) return;
     const word = state === "succeeded" ? "✓ 已完成" : state === "failed" ? "⚠ 失败" : "◌ 运行中";
     chip.classList.remove("is-running", "is-succeeded", "is-failed");
@@ -621,10 +687,15 @@
   }
   // 思考过程折叠块（默认关闭）——只有供应商真的推了 thinking 帧才出现，不建空块。
   function appendThinking(ctx, text) {
-    const value = String(text || "");
+    // 第二个入参既可以是思考正文，也可以是历史事件对象（回放时直接整条传进来）：
+    // 事件里带思考字段就用它，没有就什么都不画 —— 不在别处再抄一份字段名。
+    const value = (text && typeof text === "object")
+      ? String(text.thinking || text.thinking_text || "")
+      : String(text || "");
     if (!value) return;
     if (!ctx.thinking) {
       const block = el("details", "oc-thinking");
+      block.setAttribute("data-agent-role", "thinking");
       block.append(el("summary", null, "思考过程"));
       const inner = el("div", "oc-thinking-body");
       block.append(inner);
@@ -637,14 +708,25 @@
     scrollDown();
   }
   function addToolCard(ctx, event) {
+    // 工具轨迹也是 Tool List 里的一条：同一个工具项合同（tool-item / 四态 / tool-title），
+    // 不再是自成一张卡的独立块。
     const card = el("div", "oc-art");
+    card.setAttribute("data-agent-role", "tool-item");
+    card.setAttribute("data-state", "running");
     const tile = el("div", "oc-atile", toolIcon(event.name));
     const label = toolTraceLabel(event.name, event.input);
     const mid = el("div");
     mid.style.cssText = "flex:1;min-width:0;";
-    mid.append(el("div", "oc-art-name", label.title));
-    if (label.subtitle) mid.append(el("div", "oc-art-sub", label.subtitle));
+    const nameNode = el("div", "oc-art-name", label.title);
+    nameNode.setAttribute("data-agent-role", "tool-title");
+    mid.append(nameNode);
+    if (label.subtitle) {
+      const subNode = el("div", "oc-art-sub", label.subtitle);
+      subNode.setAttribute("data-agent-role", "tool-subtitle");
+      mid.append(subNode);
+    }
     const state = el("div", "oc-art-state", "");
+    state.setAttribute("data-state", "running");
     state.innerHTML = '<span class="oc-spin">◌</span>';
     // 原始工具名 / 入参 JSON / 工具结果收进默认折叠的原生 details：业务用户只看
     // 主行的中文业务文案，排障时展开仍能看到完整载荷与返回值。
@@ -652,6 +734,7 @@
     try { rawInput = JSON.stringify(event.input == null ? {} : event.input).slice(0, 300); }
     catch { rawInput = ""; }
     const details = el("details", "oc-art-detail");
+    details.setAttribute("data-agent-role", "tool-detail");
     details.append(el("summary", null, "详情"));
     details.append(el("div", "oc-art-raw", event.name));
     details.append(el("pre", "oc-art-input", rawInput));
@@ -659,8 +742,8 @@
     result.style.display = "none";
     details.append(result);
     card.append(tile, mid, state, details);
-    ctx.body.append(card);
-    ctx.cards[event.id] = { state, result };
+    (ctx.tools || ctx.body).append(card);
+    ctx.cards[event.id] = { state, result, item: card };
     scrollDown();
   }
   // 工具结果仍写回详情里那一个 <pre class="oc-tool-result">：4000 字截断、失败红字
@@ -668,6 +751,13 @@
   function setToolResult(ctx, event) {
     const card = ctx.cards[event.tool_use_id];
     if (!card) return;
+    const nextState = event.is_error ? "failed" : "completed";
+    if (card.item && typeof card.item.setAttribute === "function") {
+      card.item.setAttribute("data-state", nextState);
+    }
+    if (card.state && typeof card.state.setAttribute === "function") {
+      card.state.setAttribute("data-state", nextState);
+    }
     card.state.textContent = event.is_error ? "⚠" : "✓";
     card.state.style.color = event.is_error ? "#dc2626" : "#16a34a";
     const text = String(event.content || "").trim();
@@ -803,7 +893,8 @@
     autoSize();
     busy = true;
     sendBtn.disabled = true;
-    addUser(text);
+    // 真人打字也走唯一 turn helper：先出用户气泡，再出本轮执行卡。
+    beginUserTurn(text);
     const ctx = addAssistant();
     try {
       const response = await fetch(api("/send"), {
@@ -1054,9 +1145,7 @@
     const signature = JSON.stringify([summary.filled, summary.recommended, summary.missing]);
     if (signature === lastRequirementSummaryKey) return;
     lastRequirementSummaryKey = signature;
-    clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
+    const ctx = execCard({ system: true, chip: false });
     const card = el("div", "oc-req-summary");
     card.append(el("h4", null, "需求解析摘要"));
     if (summary.filled.length) {
@@ -1077,9 +1166,7 @@
       card.append(el("div", "oc-req-line oc-req-missing",
         `仍缺必填项 ${summary.missing.length} 个：${summary.missing.join("、")}`));
     }
-    body.append(card);
-    wrap.append(body);
-    tinner.append(wrap);
+    ctx.body.append(card);
     scrollDown();
   }
 
@@ -1156,9 +1243,7 @@
     const signature = requirementFlowSignature(summary);
     if (signature === lastRequirementFlowKey) return;
     lastRequirementFlowKey = signature;
-    clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
+    const ctx = execCard({ system: true, chip: false });
     const card = el("div", "oc-req-summary");
     if (summary.kind === "confirm-gate") {
       const label = CONFIRM_GATE_LABELS[summary.action] || "该操作";
@@ -1191,9 +1276,7 @@
         needs.length ? `待补充 ${needs.length} 项：${items.join("、")}` : "确定性检查未发现待补充项。"));
       if (summary.status) card.append(el("div", "oc-req-line", `当前状态：${summary.status}`));
     }
-    body.append(card);
-    wrap.append(body);
-    tinner.append(wrap);
+    ctx.body.append(card);
     scrollDown();
   }
 
@@ -1201,13 +1284,9 @@
   // 同一个气泡容器，按时间顺序留在会话流里；不要再另起一行 append 到 tinner 末尾 ——
   // 那种独立节点会永远钉在底部，后面聊多少轮都顶不走。
   function noteInThread(text, extras) {
-    clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
-    body.append(el("div", "oc-atxt", text));
-    if (typeof extras === "function") extras(body);
-    wrap.append(body);
-    tinner.append(wrap);
+    const ctx = execCard({ system: true, chip: false });
+    ctx.text.textContent = String(text || "");
+    if (typeof extras === "function") extras(ctx.body);
     scrollDown();
     persistSessionEvent({ kind: "session-note", source: "shell",
                           text: String(text || ""), key: `shell:${String(text || "")}` });
@@ -1386,12 +1465,23 @@
     // 没有实时轮（用户从右侧看板点按钮触发）：新建的就是助手卡同款的一张卡 ——
     // 头行复用蓝色身份行（身份 + 任务中文名）与右侧那颗状态 chip，不套第二层框。
     const box = el("div", "oc-amsg oc-task-card is-queued");
+    // 任务卡与助手卡是同一个 root 合同：data-agent-card + 归一化 data-status + header/body/tools。
+    box.setAttribute("data-agent-card", "");
+    box.setAttribute("data-status", "pending");
     const head = el("div", "oc-alabel");
-    head.append(el("span", null, "技术工艺智能体"));
-    head.append(el("span", "oc-alabel-sub", label));
+    head.setAttribute("data-agent-role", "header");
+    const identity = el("span", null, "技术工艺智能体");
+    identity.setAttribute("data-agent-role", "identity");
+    head.append(identity);
+    const title = el("span", "oc-alabel-sub", label);
+    title.setAttribute("data-agent-role", "title");
+    head.append(title);
     const state = el("span", "oc-alabel-state oc-task-state", "排队中");
+    state.setAttribute("data-agent-role", "status");
     head.append(state);
     var body = el("div", "oc-abody");
+    body.setAttribute("data-agent-role", "body");
+    steps.setAttribute("data-agent-role", "tools");
     body.append(head, steps);
     box.append(body);
     const wrapper = box;
@@ -1459,15 +1549,36 @@
       // 重复投递的开始事件：已有同一行就直接收下，不再建第二行。
       if (known && status === "running") { scrollDown(); return; }
     }
+    // Tool Item：一条业务过程 = [data-agent-role="tool-item"]，四态写进 data-state；
+    // 主文案保留原句（不概括成「查询数据」这类空话），缩进子级仍用 .sub。
+    const itemState = tone === "err" || (detail && String(detail.status) === "failed") ? "failed"
+      : (detail && String(detail.status) === "running") ? "running" : "completed";
     const step = el("div", `oc-process-step${sub ? " sub" : ""}${tone ? ` ${tone}` : ""}${phaseCls}`);
-    step.append(el("span", "oc-process-dot",
-      tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•"));
+    step.setAttribute("data-agent-role", "tool-item");
+    step.setAttribute("data-state", itemState);
+    const dot = el("span", "oc-process-dot",
+      itemState === "failed" ? "⚠" : itemState === "running" ? "◌"
+        : tone === "hit" ? "●" : tone === "miss" ? "○" : sub ? "↳" : "•");
+    // 行内可视部分（状态图标）与行根共用 tool-item 角色标记，工具项合同在行内也读得到。
+    dot.setAttribute("data-agent-role", "tool-item");
+    step.append(dot);
     const textNode = el("span", "oc-process-text", body);
+    textNode.setAttribute("data-agent-role", "tool-title");
     step.append(textNode);
+    if (itemState !== "running" && detail && typeof detail === "object") {
+      // 次级信息：结构化明细里能一眼读懂的那一行（查询条件 / 命中件名等）。
+      const subtitle = [detail.tool, detail.title].filter(Boolean).join(" · ");
+      if (subtitle) {
+        const subNode = el("span", "oc-process-sub", subtitle);
+        subNode.setAttribute("data-agent-role", "tool-subtitle");
+        step.append(subNode);
+      }
+    }
     if (detail && typeof detail === "object") {
       // 有结构化明细才长「详情」；没有明细的行（含旧任务的 progress 行）结构逐字不变。
       const heading = [detail.tool, detail.title, detail.status].filter(Boolean).join(" · ");
       const box = el("details", "oc-process-detail");
+      box.setAttribute("data-agent-role", "tool-detail");
       box.append(el("summary", null, "详情"));
       box.append(el("div", "oc-process-detail-tool", heading));
       box.append(el("div", "oc-process-detail-label", "输入"));
@@ -1715,10 +1826,8 @@
     if (!items.length) return;
 
     document.querySelector(".oc-match-card")?.closest(".oc-amsg")?.remove();
-    clearEmpty();
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
-    body.append(identityLabel());
+    const ctx = execCard({ system: true, chip: false });
+    const body = ctx.body;
     const card = el("div", "oc-match-card");
     const summary = report.summary || {};
     card.append(el("h4", null, "零部件库检索结果"));
@@ -1734,8 +1843,6 @@
     card.append(list);
     card.append(rematchButton(report.generated_at));
     body.append(card);
-    wrap.append(body);
-    tinner.append(wrap);
     scrollDown();
   }
   // 这份报告是解析时算完落盘的，之后一直照原样显示。库里新登记了零部件，
@@ -2340,8 +2447,8 @@
   function techUiRequestConfirmation(ui) {
     const label = String((ui && ui.label) || (ui && ui.note) || "该操作需要你确认");
     const target = String((ui && ui.target) || "");
-    const wrap = el("div", "oc-amsg");
-    const body = el("div", "oc-abody");
+    const ctx = execCard({ system: true, chip: false });
+    const wrap = ctx.wrap;
     const card = el("div", "oc-confirm-card");
     card.append(el("div", "oc-confirm-text", label));
     const row = el("div", "oc-confirm-row");
@@ -2363,10 +2470,7 @@
     });
     row.append(okButton, cancelButton);
     card.append(row);
-    body.append(card);
-    wrap.append(body);
-    clearEmpty();
-    tinner.append(wrap);
+    ctx.body.append(card);
     scrollDown();
   }
   function runTechUi(ui) {

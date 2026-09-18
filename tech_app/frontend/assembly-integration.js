@@ -70,25 +70,44 @@ function aiAnalyzed() {
 }
 
 // --------------------------------------------------------------------------- 对话区
+/* 一次用户触发 = 一个 turn 容器：容器里先放用户气泡，紧随其后的执行卡 / 说明也落进来，
+   两者因此永远是「我：… → Agent 卡」的成对顺序。容器在 CSS 里是 display:contents，
+   视觉顺序与 DOM 顺序一致，不多出一层盒子；历史回放与系统提示仍直接追加。 */
+let boardTurn = null;
 function aiThreadAppend(html) {
   $ai('aiEmpty')?.remove();
   const node = document.createElement('div');
   node.innerHTML = html;
   const element = node.firstElementChild;
-  $ai('aiTinner').append(element);
+  const host = (!aiReplaying && boardTurn) ? boardTurn : $ai('aiTinner');
+  host.append(element);
   $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
   return element;
 }
 
 function aiSay(text) {
-  aiThreadAppend(`<div class="oc-amsg">
-    <div class="oc-abody"><div class="oc-atxt">${esc(text)}</div></div></div>`);
+  aiThreadAppend(`<div class="oc-amsg" data-agent-card="" data-status="completed">
+    <div class="oc-abody" data-agent-role="body"><div class="oc-atxt">${esc(text)}</div></div></div>`);
   aiTimelineNote(text);
 }
 
+/* 用户气泡原语：本页所有「用户点按钮 → 会话区出卡」的入口都先经过它（唯一 turn helper
+   的可见部分），返回本轮 turn 容器，后续生成的执行卡就长在里面。 */
 function aiUserSay(text) {
-  aiThreadAppend(`<div class="oc-ubub">${esc(text)}</div>`);
+  $ai('aiEmpty')?.remove();
+  const turn = document.createElement('div');
+  turn.className = 'oc-turn';
+  turn.setAttribute('data-agent-card', '');
+  turn.setAttribute('data-status', 'completed');
+  const bubble = document.createElement('div');
+  bubble.className = 'oc-ubub';
+  bubble.textContent = String(text == null ? '' : text);
+  turn.append(bubble);
+  $ai('aiTinner').append(turn);
+  $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
+  boardTurn = turn;
   aiTimelineNote(text);
+  return bubble;
 }
 
 /* --------------------------------------------- 会话时间线（项目级，按顺序持久化）
@@ -125,11 +144,12 @@ function aiReplayTimeline() {
 /** 处理过程卡：任务进度逐条落在这里，和 2.1 的 Agent 对话框一个样子。 */
 function aiProcessCard(title) {
   // 与 2.1 的 Agent 回复是同一张卡、同一个状态 chip：不再有第二套过程卡样式。
-  const card = aiThreadAppend(`<div class="oc-amsg">
-    <div class="oc-abody"><div class="oc-alabel"><span>技术工艺智能体</span>`
-      + `<span class="oc-alabel-sub">${esc(title)}</span>`
-      + `<span class="oc-alabel-state is-running">◌ 运行中</span></div>
-      <div class="oc-process-steps"></div></div></div>`);
+  const card = aiThreadAppend(`<div class="oc-amsg" data-agent-card="" data-status="running">
+    <div class="oc-abody" data-agent-role="body"><div class="oc-alabel" data-agent-role="header">`
+      + `<span data-agent-role="identity">技术工艺智能体</span>`
+      + `<span class="oc-alabel-sub" data-agent-role="title">${esc(title)}</span>`
+      + `<span class="oc-alabel-state is-running" data-agent-role="status">◌ 运行中</span></div>
+      <div class="oc-process-steps" data-agent-role="tools"></div></div></div>`);
   const steps = card.querySelector('.oc-process-steps');
   const seen = new Set();
   return {
@@ -138,9 +158,11 @@ function aiProcessCard(title) {
         if (seen.has(line)) continue;
         seen.add(line);
         const sub = line.startsWith('  ');
+        // 一条业务过程 = 一个 Tool Item（保留整句原话，不概括）。
         steps.insertAdjacentHTML('beforeend',
-          `<div class="oc-process-step${sub ? ' sub' : ''}"><span class="oc-process-dot">${sub ? '·' : '●'}</span>`
-          + `<span class="oc-process-text">${esc(line.trim())}</span></div>`);
+          `<div class="oc-process-step${sub ? ' sub' : ''}" data-agent-role="tool-item" data-state="completed">`
+          + `<span class="oc-process-dot" data-agent-role="tool-item">${sub ? '·' : '●'}</span>`
+          + `<span class="oc-process-text" data-agent-role="tool-title">${esc(line.trim())}</span></div>`);
       }
       $ai('aiThread').scrollTop = $ai('aiThread').scrollHeight;
     },
@@ -148,6 +170,7 @@ function aiProcessCard(title) {
       const state = card.querySelector('.oc-alabel-state');
       // 中断沿用进行中的蓝色 chip：同一张卡、同一个 chip 就地翻转，不新增第二行。
       const interrupted = ok === 'interrupted';
+      card.setAttribute('data-status', interrupted ? 'interrupted' : ok ? 'completed' : 'failed');
       state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
       state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
       if (message) this.log([`  ${message}`]);
@@ -277,7 +300,11 @@ function aiTaskInterrupted(error) {
   return String((error && error.code) || '') === 'interrupted';
 }
 
-async function aiPost(path, { form, label, quantity, keepTab } = {}) {
+async function aiPost(path, opts) {
+  // 解构放在函数体里：静态提取「函数体」时不会被参数表里的花括号截断。
+  // 参数默认值同样不写成花括号字面量，避免静态提取在参数表处提前收尾。
+  opts = opts || {};
+  const { form, label, quantity, keepTab } = opts;
   if (aiBusy) return { ok: false, error: { code: 'busy', message: '已有任务在执行，请稍候。' } };
   const blocked = aiBlocker(path);
   if (blocked) { aiToast(blocked, true); return { ok: false, error: { code: 'blocked', message: blocked } }; }
@@ -285,6 +312,8 @@ async function aiPost(path, { form, label, quantity, keepTab } = {}) {
   aiRenderActions();
   const title = label || AI_TAB_NAMES[path] || AI_TABS[path] || path;
   aiStatus(`${title}生成中…`);
+  // 用户点按钮触发：先出用户气泡，再出执行卡（唯一 turn helper，隔离执行时安全跳过）。
+  if (typeof aiUserSay === "function") aiUserSay(`开始${title}。`);
   const card = aiProcessCard(title);
   let taskId = '';
   try {
@@ -633,6 +662,8 @@ async function aiParamsAutofill() {
   aiBusy = true;
   aiRenderActions();
   aiStatus('智能补全中…');
+  // 用户点按钮触发：先出用户气泡，再出执行卡。
+  if (typeof aiUserSay === "function") aiUserSay('按库内规则补全缺失的参数。');
   const card = aiProcessCard('参数推荐 · 智能补全');
   let taskId = '';
   try {
@@ -1444,6 +1475,8 @@ async function aiRunOp(kind, dispatch) {
   aiBusy = true;
   aiRenderOps();
   aiRenderActions();
+  // 用户点按钮触发：先出用户气泡，再出执行卡。
+  if (typeof aiUserSay === "function") aiUserSay(`${labels[kind]}。`);
   const card = aiProcessCard(labels[kind]);
   aiStatus(`${labels[kind]}中…`);
   const opTask = `integration-${kind}`;

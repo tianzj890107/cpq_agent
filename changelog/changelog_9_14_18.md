@@ -5494,3 +5494,146 @@ local  HEAD                = c9c97d5f50b44aae0d5e35b41485a33d4f83e396
     `报价首页.html` 里 `tech-home-board.js` 引用 3 处（模块 + 缓存号）；
   · 收尾远端 `HEAD=c9c97d5`。
 - 未改启动参数、未另起第二套端口、未删除或迁移任何线上数据。
+
+## 124. 报价 / 技术工艺会话统一：先用户消息、统一执行卡与 Tool List、详情与思考可折叠、消息白底（9-18，Codex 只写 Spec + 红测）
+
+- 需求：用户反馈「点按钮直接冒 Agent 卡、看不到"是我让它做的"」「卡里过程是挤成一行的
+  裸 bullet、看不到思考与工具执行」「查询条件/明细收不起来」。本批把两侧会话收敛成同一套合同。
+- 新增 Spec：`docs/specs/quote-tech-unified-tool-list-and-conversation.md`（25 节：入口矩阵、
+  统一 DOM 角色合同、turn 顺序、Tool List 适配、详情/思考折叠、可访问性、白底、状态映射、
+  历史兼容、非流式边界、红测对照表、风险）。同时**显式宣告取代**
+  `docs/specs/quote-tech-user-message-primary-bubble.md` 的「用户消息=主色实心蓝底白字」条款
+  （用户本批明确要求用户与 Agent 消息统一白底 + 浅灰边框 + 深色正文），并把
+  `chat-fused-assistant-card-style` / `tech-quote-assistant-card-unification` /
+  `chat-collapsible-thinking-trace` / `tech-agent-tool-trace-business-line-detail` 标为**叠加而非取代**。
+- 新增红测：`tests/test_quote_tech_unified_tool_list_conversation_red.py`（51 个用例，A–G 七组）。
+  · 真跑 DOM/JS 走查 4 组：技术侧左栏（真跑 `addUser`/`addAssistant`/`appendThinking`/`addToolCard`/
+    `pushTaskStep`/`renderHistory`/`echoTaskPrompt`）、报价侧会话（`addUserBubble`/`ensureStreamBubble`/
+    `appendThinkingText`/`addToolActivity`/`addErrorBubble`）、报价按钮入口（`sendFromInput`/
+    `fillStepRecommend`/`runStep1`，原语打桩捕获调用顺序）、阶段页看板（`aiUserSay`/`aiProcessCard`/
+    `crSay`/`crCard`）。自建最小 DOM + HTML 解析替身（无 jsdom），断言真实节点顺序与角色标记，
+    不是源码字符串位置。
+- 红测实测（`open-claude/.venv/bin/python -m unittest
+  tests.test_quote_tech_unified_tool_list_conversation_red`）：**Ran 51 tests / FAILED (failures=46)**，
+  29 个用例失败、22 个用例通过（含 6 个含子用例失败的方法；其余通过项为既有能力守卫与非回归，
+  非缺口，未计入失败）。
+- 当前缺口 → 需求对应：
+  · A1–A6：两侧都没有统一执行卡根标记（`data-agent-card` / `data-status`）与 header/body/tools
+    角色；`agent-chat.js` 有 6 处、`确认需求解析结果.html` 有 6 处直接拼 root，绕过统一构造器。
+  · B8b/B9：`runStep1`（新建报价 kickoff 通道）直接出 Agent 输出、无用户气泡；
+    阶段页 `aiParamsAutofill`/`aiPost`/`aiRunOp` 与 `crRunAssembly`/`crRunOp`/`crRunPart`/
+    `crSendToFinance` 出卡前没有用户气泡（报价侧连 `crUserSay` 原语都还没有）。
+  · C/D：`pushTaskStep` 过程行没有 `tool-item/tool-title/tool-detail` 角色与 `data-state`；
+    详情没有 hover 浅蓝与焦点样式；报价侧过程行（`.tool-activity.trace`）完全没有 Tool Item 合同。
+  · E：技术侧 `renderHistory` 不渲染历史 `thinking`；报价侧 `.oc-ubub` 过程卡思考折叠未走统一卡。
+  · F38/F40：`.oc-ubub` 仍是 `var(--oc-accent)`、`.message-user` 仍是 `var(--color-primary)`
+    蓝底白字，与用户本批口径冲突。
+- 需要用户拍板的冲突（**已写进 Spec §21 风险**）：本批白底口径与既有
+  `tests/test_quote_tech_user_message_primary_bubble_red.py`（3 条断言：主色实心 + 白字 +
+  `--color-primary` 取色）不可同时成立。本轮**未改动该旧测试、未改任何生产代码**，
+  DS2 实施后该旧红测会转红，需用户决定何时下线旧 Spec。
+- `agent-chat.js` 含 4 个 NUL 字节（markdown 代码块占位哨兵，`node --check` 通过），
+  红测读取时 `replace("\x00","")` 处理，未做无关重写。
+- 未修改生产 UI、未改后端 / SSE / 数据库 / 字体、未 commit / push / MR / tag / 部署。
+
+## 125. 报价 / 技术工艺会话统一：实现落地（先用户消息、统一执行卡与 Tool List、详情与思考折叠、消息白底）（9-18，Codex 实现）
+
+- 承接 `## 124` 的 Spec 与红测，本批只改前端静态资源：`agent-chat.js` / `agent-chat.css` /
+  `assembly-integration.js` / `cost-review.js` / `确认需求解析结果.html`（内联 CSS+JS）与四处
+  `?v=` 缓存号；未改后端路由 / SSE 帧名 / 工具协议 / Prompt / 数据库 / 字体。
+- 统一执行卡：技术侧 `agent-chat.js` 收敛出唯一构造器 `execCard(opts)`（`addAssistant` 即其底座），
+  `pushSystem` / 任务卡 / 需求摘要 / 流程摘要 / 检索结果卡 / 确认卡全部改走它；阶段页
+  `aiSay` / `aiProcessCard`、`crSay` / `crCard` 各自补齐 `data-agent-card` + `data-status`
+  + header/identity/title/status/body/tools 角色合同；报价侧 `ensureStreamBubble` /
+  `addAiBubble` / `addErrorBubble` / `.cand-block` / `showGateBubble` / `showTechNewSuggestion` /
+  轨迹行各自补齐同一套 root 标记。错误态只是 `.message-error` / `is-failed` 修饰符，
+  不另起底色与边框。
+- 先用户消息：技术侧新增唯一 turn helper `beginUserTurn(text, before)`（`addUser` 仍是底层原语），
+  真人输入与 `echoTaskPrompt` 回声都走它；报价侧新增唯一 turn helper `beginUserTurn(text)`，
+  `sendFromInput` / `fillStepRecommend` / `confirmStep` / 返回上一步 / 保存修改 / `runStep1` /
+  转交任务说明全部走它（`runStep1` 在原 kickoff 缺气泡处补上用户气泡）。阶段页
+  `aiUserSay` / `crUserSay` 作为唯一用户气泡原语，`aiPost` / `aiParamsAutofill` / `aiRunOp` /
+  `crRunOp` / `crRunPart` / `crRunAssembly` / `crSendToFinance` 出卡前先出中文业务气泡；
+  纯后台恢复（`aiReplayTimeline` / `crReplayTimeline`）、连接状态、系统通知不伪造用户气泡。
+- Tool List 与折叠：`pushTaskStep(card, text, tone, phase, detail)` 五入参不变，行改成
+  `[data-agent-role="tool-item"]` + `data-state`（四态）+ `tool-title`（原句）+ 可选
+  `tool-subtitle` + 有明细时 `details[data-agent-role="tool-detail"]`；Tool Item 不再是卡片
+  （无底色 / 无阴影 / 无独立边框），父级 `sub` 层级保留，「费率 0 条 / 回退 global 0 条 /
+  系数 0 条 / 待补 10 项」与原始输入输出 JSON 一字不减。详情与思考都用原生 `details`/`summary`
+  默认折叠、整行可点、可收起；hover 浅蓝由 `color-mix(in srgb, var(--oc-accent) 8%, #ffffff)`
+  推导，`:focus-visible` 有 outline。
+- 白底：`.oc-ubub` 与 `.message-user` 改成白底 + 浅灰边框 + 深色正文（不再蓝底白字）。
+- 实测（本机 `./open-claude/.venv/bin/python -m unittest`）：
+  · `tests.test_quote_tech_unified_tool_list_conversation_red`：**Ran 51 / FAILED (failures=3)**，
+    从改前 46 条失败降到 3 条。
+  · 剩余 3 条（`test_a3_one_business_step_still_makes_one_card`、`test_e34_empty_thinking_renders_nothing`、
+    `test_e37_thinking_stays_inside_the_same_card`）经最小复现确认是**红测自带 DOM 替身的缺陷**：
+    `matchFrom()` 把「后代」也算成命中（`node.matches('[data-agent-card]')` 对任意后代返回 true），
+    于是 `querySelectorAll("[data-agent-card]")` 统计的是整棵子树的节点数而不是带属性的节点数；
+    该替身同样导致 `closest()` 只能返回起点自身。在真实浏览器里这三条断言天然成立
+    （`[data-agent-card]` 只命中带属性的 root、`closest` 返回卡 root）。红测一字未改，
+    也没有为迁就替身写任何只在替身里生效的写法。
+    · 独立复核：用与真实浏览器等价的选择器语义（简单属性选择器只看属性存在性）重算同一份 DOM，
+      得到 `two_cards=2`、思考栏节点数 `1`（空思考 `0`）、`thinking_inside_card=true`，
+      报价侧同样 `1` / 卡内 / 未新建气泡 —— 三条断言只是被替身的选择器实现误伤。
+  · 全量 `discover -s tests -p 'test_*.py'`：**Ran 2358 / FAILED (failures=12, skipped=1)**。
+    12 条全部有据：3 条是上面那 3 条红测替身缺陷；9 条是既有「用户消息=主色实心」守卫
+    （`test_chat_fused_assistant_card_style_red::test_user_bubbles_keep_primary_fill`、
+    `test_tech_quote_assistant_card_unification_red::test_user_bubble_matches_quote` /
+    `::test_user_bubble_stays_primary_filled`、`test_tech_agent_echo_bubble_and_single_exec_card_red`
+    `::test_user_bubble_stays_primary_filled`、`test_quote_tech_ai_message_white_surface_red`
+    `::test_user_message_rules_are_not_conflated_with_ai_surface`、
+    `test_quote_tech_user_message_primary_bubble_red` 的 4 条），与 `## 124` 记录的
+    「白底取代主色实心」是同一处冲突，需用户决定何时下线旧口径。
+  · 其余既有回归全绿：`test_chat_collapsible_thinking_trace_red` /
+    `test_tech_tool_trace_business_line_detail_red` / `test_tech_task_card_body_layout_red` /
+    `test_quote_tech_chat_composer_alignment_red` / `test_tech_chat_drop_red_error_cards_red` /
+    `test_tech_task_interrupted_state_red` / `test_task_process_detail_red` /
+    `test_tech_batch_partial_semantics_red` 等。
+- `node --check` 覆盖 3 个改动的 JS 与报价页内联脚本；`git diff --check` 干净。
+- 未 commit / push / merge / tag / Release / 部署，未改动 `tests/**`。
+
+## 126. CPQ 回归测试集部署级闭环：CI 接入 + 隔离 PostgreSQL 真跑 + mutation sentinel 真杀（9-18，Codex 只改测试脚手架 / CI 配置）
+
+- **GitLab CI 接入**（`.gitlab-ci.yml`）：新增 `cpq_eval_fast` / `cpq_eval_production_http` /
+  `cpq_eval_recorded_provider` / `cpq_eval_postgres` 四个 job；PG job 用 `postgres:16-alpine`
+  service（alias `cpq-eval-pg`）+ `pip install 'psycopg[binary]'`，以
+  `python -m scripts.cpq_eval.ci_gates --gate postgres_integration --strict` 跑。CI 不部署、
+  不 SSH/SCP/rsync、不连 PDT/生产、不读真实模型 Key。触发范围仍是 Merge Request + 默认分支；
+  开发分支 `20260909` **不自动跑 CI**（受仓库 CI 约定限制，已在 README / CI_GATES.md 如实标注）。
+- **CI 防伪测试**：新增 `scripts/cpq_eval/ci_yaml.py`（零依赖极简 YAML 子集解析器，解析 job /
+  script / services / variables / rules 结构）与 `tests/test_cpq_eval_ci_contract.py`（13 项）：
+  断言四个 gate 被真实调用、PG job 必须 `--strict`、无部署 / 生产访问 / 真实 Key，并用真实
+  `ci_gates` / `runner` / `scoring` / `pg_sentinel` 函数验证「gate 失败返回非零」「runner invalid
+  非零」「production-backed 失败不被 simulation 掩盖」「mutation survived 判失败」。
+- **隔离 PostgreSQL 安全合同统一**：`scripts/cpq_eval/pg_guard.py` 作为父层 / 子层**唯一**白名单
+  与 `guard()` 定义（回环放行、CI alias 仅在 `CPQ_EVAL_PG_CI=1` + 显式白名单下放行、生产/PDT
+  特征永远拒绝、只读 `CPQ_EVAL_PG_*` 不回退 `CPQ_PG_*`、临时库必须匹配 `^cpq_eval_it_[0-9a-f]{10}$`）；
+  新增 `tests/test_cpq_eval_pg_guard.py`（15 项）覆盖 8 条合同 + 临时库兜底清理。
+- **超时兜底清理**：子进程超时 / 崩溃 / 返回格式错误时父进程 `cleanup_orphan` 只对**同一个**
+  child_db 兜底 DROP，再次校验 host 与 maintenance database，拒绝模糊匹配；清理失败进统计与报告。
+- **隔离 PostgreSQL 真跑**：13 条 `postgres_integration` 案例（12 个唯一场景）在临时库里全部通过，
+  cleanup 13/13 成功；新增 `pg.task.db_rejects_duplicate_open`（部分唯一索引是最终裁决者）、
+  `pg.task.supersede_on_signature_change`（签名变化 → 取消 + 替代双向指针）、
+  `pg.schema.catalog_parity`（真实 `cpq_auth.init()` + `cpq_wf.init()` 建出的表 / 列 / 索引 / 约束
+  与生产 `cpq_wf._ddl_pg` 对账）。
+- **Schema parity**：新增 `tests/test_cpq_eval_pg_schema.py`（6 项）：断言 `cpq_wf_task` /
+  `cpq_wf_task_event` / `cpq_wf_handoff` 的关键列、`uq_wf_handoff_key` 唯一索引、
+  `uq_wf_task_open_kind` 部分唯一索引（`WHERE status='open'`）、外键，并证明删除关键索引后
+  parity 报告看得见。
+- **mutation sentinel 真执行**：新增 `scripts/cpq_eval/pg_sentinel.py`，把 8 个已注册 mutation
+  **真的注入一次**并比较正常 / 注入后结果 —— 实测 8/8 killed。修正原 `tx.midway_failure_rolls_back_all`
+  场景照 `cpq_tech_bridge` 的 `commit()`/`rollback()` 写法（而不是 `with conn.transaction()`），
+  并新增 `claim_ignore_eligibility`，让「autocommit 破坏事务」「不回滚」「绕过领取资格」都能被杀。
+- **报告口径**：runner 报告新增 `postgres` 段（case count / unique scenario count / executed /
+  passed / failed / skipped / cleanup 成功失败 / 每条案例的临时库名、真实生产入口、SQL 次数、
+  结果、cleanup）与 `--pg-sentinel`（mutation executed / killed / survived）；CLI 与 Markdown 同步输出，
+  报告仍只写临时目录。
+- **production-backed 扩充**：新增 `tech.real.attachment_change_marks_downstream_stale`、
+  `tech.real.projection_refresh_failure_not_faked` 两条 `production_unit`（真实 `store.add_attachment` /
+  `workflow_projection.build_projection`），并在 production harness 增加 `$bytes` 引用。
+- 实测：数据集 336 条（simulation 241 / production_unit 40 / production_http 37 / recorded_provider 5 /
+  postgres_integration 13），P0 177；13 个 `test_cpq_eval_*` 模块 **Ran 165 tests OK**（开 PG）。
+  `ci_gates` 四门禁 fast / production_http / recorded_provider / postgres_integration(`--strict`) 全 PASSED。
+  全量 `discover -s tests`：Ran 2209 / FAILED（expected_red 13 + dependency_error 3，**dataset_failure 0**）。
+- 未 commit / push / merge / tag / Release / 部署；未改动任何生产业务实现、未覆盖他人 UI 修改。

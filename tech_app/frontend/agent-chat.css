@@ -157,10 +157,10 @@
 
 .oc-ubub {
   max-width: 92%; align-self: flex-end; padding: 11px 14px; border-radius: 14px;
-  /* 用户消息 = 系统主色实心气泡 + 白字（与报价 .message-user 同一语义）；
+  /* 用户消息与 Agent 消息同款：白底 + 浅灰边框 + 深色正文（不再蓝底白字）；
      右下角小圆角是"用户气泡尾部"，其余三角保持常规圆角。 */
-  border-bottom-right-radius: 4px;
-  background: var(--oc-accent); color: white; font-size: 14px; line-height: 1.6;
+  border-bottom-right-radius: 4px; border: 1px solid var(--oc-border-3);
+  background: #ffffff; color: var(--oc-text-1); font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
 /* 助手回复里唯一带边框 + 白底的容器（与报价 .message-ai 逐项同值）。
@@ -355,6 +355,14 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 }
 .oc-process-detail[open] > summary::before { transform: rotate(90deg); }
 .oc-process-detail > summary::-webkit-details-marker { display: none; }
+/* 详情标题行整行可点：hover 用系统主色 token 推导出来的浅蓝，不写死一份蓝。 */
+.oc-process-detail > summary:hover {
+  background: color-mix(in srgb, var(--oc-accent) 8%, #ffffff);
+}
+/* 键盘焦点：原生 details/summary 支持 Enter/Space，焦点样式必须看得出。 */
+.oc-process-detail > summary:focus-visible {
+  outline: 2px solid var(--oc-accent); outline-offset: 1px; border-radius: 6px;
+}
 .oc-process-detail-tool { margin-top: 4px; color: var(--oc-text-3); font-size: 11px; }
 .oc-process-detail-label { margin-top: 6px; color: var(--oc-text-3); font-size: 11px; }
 .oc-process-detail pre {
@@ -663,3 +671,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   outline: 2px solid var(--oc-accent, #0060E6);
   outline-offset: 1px;
 }
+
+/* 一次用户触发 = 一个 turn 容器（阶段页 3 组装与整合 / 4 成本测算）：容器里先放用户气泡、
+   紧随其后的执行卡，DOM 顺序就是「我：… → Agent 卡」。display:contents 让容器不生成盒子，
+   两个子节点直接排进 .oc-tinner 的 flex 列，视觉顺序与间距和改前完全一致。 */
+.oc-turn { display: contents; }
