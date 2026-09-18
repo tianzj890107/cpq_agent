@@ -5637,3 +5637,64 @@ local  HEAD                = c9c97d5f50b44aae0d5e35b41485a33d4f83e396
   `ci_gates` 四门禁 fast / production_http / recorded_provider / postgres_integration(`--strict`) 全 PASSED。
   全量 `discover -s tests`：Ran 2209 / FAILED（expected_red 13 + dependency_error 3，**dataset_failure 0**）。
 - 未 commit / push / merge / tag / Release / 部署；未改动任何生产业务实现、未覆盖他人 UI 修改。
+
+## 127. 报价 / 技术工艺会话统一（## 125）提交、双远端推送与 34 部署记录（9-18，Codex）
+
+用户授权原话：`提交推送部署到34 别的先别做了`（覆盖此前本批的「不提交 / 不推送 / 不部署」约束；
+除下列提交、推送与 34 服务重启外，未做任何其它实现、未写任何线上业务数据）。
+
+### 提交
+
+- 单个提交 `b46f9d8`：**报价 / 技术工艺会话统一：先用户消息、统一执行卡与 Tool List、
+  详情与思考折叠、消息白底（## 125）**，12 个文件（2505 insertions / 160 deletions）：
+  · 前端与页面：`tech_app/frontend/agent-chat.js`、`agent-chat.css`、`assembly-integration.js`/`.html`、
+    `cost-review.js`/`.html`、`index.html`、`tech-workbench.html`、`确认需求解析结果.html`；
+  · 文档与测试：`docs/specs/quote-tech-unified-tool-list-and-conversation.md`（Spec）、
+    `tests/test_quote_tech_unified_tool_list_conversation_red.py`（51 项红测）、当周 changelog。
+- 提交前复跑：`git diff --check --cached` 干净；`node --check` 覆盖 `agent-chat.js` /
+  `assembly-integration.js` / `cost-review.js` 三个脚本全部通过。
+- **未提交**（刻意排除，属另一会话仍在写的 CPQ 回归数据集脚手架，与运行时不相关）：
+  `dataset/`、`scripts/cpq_eval/`、`tests/test_cpq_eval_*.py`（10 个模块）与 `.gitlab-ci.yml`
+  的并行改动；工作区保留原样。
+- 已知转红项（详见 `## 125`）：本批 §14「用户消息白底」显式取代
+  `test_quote_tech_user_message_primary_bubble_red` 的主色实心气泡条款（该旧红测按预期转红），
+  另 3 条红测为测试自身 DOM 替身选择器缺陷；能力断言一条未删、未放宽。
+
+### 推送
+
+```
+git push gitlab HEAD:refs/heads/20260909   →   ec99be8..b46f9d8  HEAD -> 20260909
+git push origin HEAD:refs/heads/20260909   →  ec99be8..b46f9d8  HEAD -> 20260909
+```
+
+回读核对（两个远端与本地同 sha，无强推、无历史改写）：
+
+```
+gitlab refs/heads/20260909 = b46f9d8eb8959269e84c739a1da2f0238bbb647e
+origin refs/heads/20260909 = b46f9d8eb8959269e84c739a1da2f0238bbb647e
+local  HEAD                = b46f9d8eb8959269e84c739a1da2f0238bbb647e
+```
+
+`scripts/push_remotes.py` 因工作区仍有上述未跟踪文件会以「工作区不干净」拒绝，故按它的同一套断言
+手工核过推送地址（`git@gitlab.boulderaitech.com:ai-team/cpq_agent.git` /
+`git@github.com:tianzj890107/cpq_agent.git`）与「远端 sha 必须是 HEAD 祖先」后直接 `git push`
+（与 `## 123` 同一先例）。
+
+### 部署到 172.16.10.34（裸进程，非容器）
+
+- 脚本 `/tmp/deploy_b46f9d8_34.sh`（沿用 `## 123` 的裸进程链路），经 `/usr/bin/expect` 临时包装
+  执行；**脚本必须从 stdin 管道给远端 `bash -s`**，不能作为 ssh 命令参数传入——否则脚本正文会
+  出现在远端进程命令行里，`pkill -f 'tech_app_launch.py …'` 会自匹配并中断脚本。
+- 链路：`git fetch --prune gitlab 20260909` → `git merge --ff-only FETCH_HEAD` → 归档 `nohup.out` →
+  **先停 8012 子进程再停 8010 父进程** → 轮询端口释放 → 带 `CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh`
+  用原命令行 `setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010` 重启。
+- 结果（远端原始输出要点）：
+  · 合并后 `HEAD=b46f9d8`（期望 `b46f9d8`），tracked 改动 `[]`，纯快进、12 文件；
+  · 停前进程：8010 PID `3153045`、8012 子进程 PID `3153149`；重启后：8010 PID **`2514942`**、
+    8012 子进程 PID **`2515023`**（父进程重新拉起）；
+  · 健康检查全过：首页 `200`、`/api/health` `200` 且
+    `{"status":"ok",…,"cadquery_available":true,"auth_enabled":true,"sso_enabled":true}`（`status` 严格 `ok`）；
+  · 抽查新能力：线上 `GET /agent-chat.js` 含 `beginUserTurn` 3 处、`GET /agent-chat.css` 含
+    `.oc-ubub` 白底用户气泡规则，四个页面 HTML 命中缓存号 `20260918-unified1`；
+    `GET /api/projects/__probe__/timeline` 未登录 → `404`（不泄漏存在性，沿用批次 7 口径）。
+- 未改启动参数、未另起第二套端口、未删除或迁移任何线上数据。
