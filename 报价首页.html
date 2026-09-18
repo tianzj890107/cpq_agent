@@ -701,6 +701,19 @@
       gap: 6px;
     }
 
+    /* 技术工艺「全部项目」的归档开关（## 139）：归档不再是独立页签，
+       勾选后请求 /api/projects?scope=all&include_archived=true。 */
+    .tech-archived-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tech-archived-filter[hidden] { display: none; }
+
     .search-input {
       padding: 6px 10px;
       background-color: var(--bg-page);
@@ -1326,6 +1339,10 @@
             <div class="list-tab active">全部报价</div>
           </div>
           <div class="search-box">
+            <label class="tech-archived-filter" id="techArchivedFilter" hidden
+                   title="勾选后「全部项目」会一并列出已归档项目">
+              <input type="checkbox" id="techIncludeArchived">包含已归档
+            </label>
             <input type="text" class="search-input" placeholder="支持通过客户名&创建人搜索">
             <button class="search-btn">查询</button>
             <button class="new-quote-btn">
@@ -1482,8 +1499,8 @@
 
   <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
        而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
-  <!-- 批次 10：首页唯一口径模块（五个入口 + 卡片渲染口径），必须在业务脚本之前加载 -->
-  <script src="tech-home-board.js?v=b10"></script>
+  <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
+  <script src="tech-home-board.js?v=b11"></script>
   <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
@@ -1593,14 +1610,27 @@
       wfBadge();
     }
 
-    // 「待办任务」标签上的红点计数
+    // 「待办任务」标签上的红点计数。
+    // 口径唯一来自 tech-home-board.js 的 todoCount（报价与技术工艺同一份数字）：
+    // 待办 = 别人转交给我 ∪ 定向我的角色 ∪ 公共池 ∪ 我已领取未完成；
+    // 我发起还没人领取的、终态任务、以及「我名下的项目」都不算。
+    // 整段逻辑必须留在这个函数体内：本函数会被单测单独抽出去在无 window 的
+    // 沙箱里跑（批次 2），模块或登录态不可用时退回「只数还能做的」等价兜底。
     function wfBadge() {
-      const tabs = document.querySelectorAll('.list-tab');
-      tabs.forEach(t => {
+      const tasks = (typeof WF !== 'undefined' && WF && WF.tasks) || [];
+      const me = (typeof wfUser === 'function') ? wfUser() : null;
+      const board = (typeof window !== 'undefined' && window.TechHomeBoard) || null;
+      const todoCount = board ? board.todoCount : null;
+      let n = null;
+      if (typeof todoCount === 'function' && me) {
+        try { n = Number(todoCount(tasks, me)) || 0; } catch (e) { n = null; }
+      }
+      if (n === null) {
+        n = tasks.filter(t => t && t.status !== 'cancelled' && t.status !== 'completed').length;
+      }
+      document.querySelectorAll('.list-tab').forEach(t => {
         if (t.textContent.trim().indexOf('待办任务') !== 0) return;
-        // 待办计数只算还能做的任务：终态（已撤回 / 已完成）会留在列表里，
-        // 但不能被算成待办。
-        const n = WF.tasks.filter(t => t.status !== 'cancelled' && t.status !== 'completed').length;
+        // 整段重写而不是追加：连续调用不得出现「待办任务 (3) (3)」。
         t.textContent = n ? '待办任务 (' + n + ')' : '待办任务';
       });
     }
@@ -1907,7 +1937,9 @@
       if (info) info.textContent = '';
       if (ctrl) ctrl.innerHTML = '';
       if (!wfUser()) {
-        cardGrid.innerHTML = '<div class="cards-empty">登录后可查看同事转交给你的报价任务。' +
+        cardGrid.innerHTML = '<div class="cards-empty">' + (currentMode === 'tech'
+          ? '登录后可查看同事转交给你的任务。'
+          : '登录后可查看同事转交给你的报价任务。') +
           '<br><a href="javascript:;" onclick="cpqAuth.open()">去登录</a></div>';
         return;
       }
@@ -1915,7 +1947,9 @@
         ((t.title || '') + (t.customer || '') + (t.from_display_name || '')).toLowerCase().indexOf(q) >= 0);
       if (!list.length) {
         cardGrid.innerHTML = '<div class="cards-empty">' +
-          (q ? '没有匹配「' + escH(q) + '」的任务。' : '暂时没有分派给你的报价任务。') + '</div>';
+          (q ? '没有匹配「' + escH(q) + '」的任务。'
+             : (currentMode === 'tech' ? '暂时没有分派给你的任务。'
+                                       : '暂时没有分派给你的报价任务。')) + '</div>';
         return;
       }
       cardGrid.innerHTML = list.map(taskCardHtml).join('');
@@ -1944,11 +1978,15 @@
       }
       const q = ((searchInput && searchInput.value) || '').trim().toLowerCase();
       const tab = currentTab();
+      // 「包含已归档」只属于技术工艺的「全部项目」页签（## 139）。
+      if (techArchivedFilterEl) {
+        techArchivedFilterEl.hidden = !(mode === 'tech' && techEntryId(tab) === 'all');
+      }
 
-      // 「待办任务」（报价）：登录后展示转交给我的卡片。
-      // 技术工艺的「待办任务」按批次 10 §6.2 改走 scope=todo 的项目清单（只列我此刻
-      // 能动手的）；报价类任务仍回报价工作台。
-      if (mode === 'quote' && tab.indexOf('待办任务') === 0) {
+      // 「待办任务」：报价与技术工艺同构 —— 都展示「有人转交给我的任务」的任务卡。
+      // 口径由 tech-home-board.js 的唯一纯函数给出（## 139），技术工艺不再改走
+      // 项目清单，所以这里不按 mode 分叉。
+      if (tab.indexOf('待办任务') === 0) {
         renderTaskTab(q, info, ctrl);
         return;
       }
@@ -2043,6 +2081,7 @@
     const newQuoteBtn = document.querySelector('.new-quote-btn');
     const sendBtn = document.querySelector('.send-btn');
     const cardGrid = document.querySelector('.card-grid');
+    const techArchivedFilterEl = document.getElementById('techArchivedFilter');
     let pickedFiles = [];       // 文件名
     let pickedContents = [];    // { name, text, truncated } —— 提取出的文字，带到工作台
     let homeParsing = false;    // 附件解析进行中
@@ -2204,22 +2243,33 @@
       if (label.includes('工艺') || label.includes('技术')) return 'tech';
       return label.includes('配置') ? 'config' : (label.includes('规则') ? 'rule' : 'quote');
     }
-    /* ===== 批次 10：首页五入口（唯一口径来自 tech-home-board.js）=====
+    /* ===== 批次 10 / ## 139：首页三页签（唯一口径来自 tech-home-board.js）=====
        入口定义与卡片渲染都交给该模块；本机只记住「先给你看哪几条」，归属永远问后端。 */
-    const TECH_SCOPE_ROWS = { mine: null, all: null, todo: null, archived: null };
+    const TECH_SCOPE_ROWS = { mine: null, all: null, allArchived: null };
+    let TECH_INCLUDE_ARCHIVED = false;   // 「全部项目」的「包含已归档」开关
     function techEntries() {
       const board = window.TechHomeBoard;
       if (board && typeof board.entries === 'function') {
         const rows = board.entries();
         if (Array.isArray(rows) && rows.length) return rows;
       }
-      return [{ id: 'mine', label: '我的清单', scope: 'mine', source: 'server' },
-              { id: 'all', label: '全部清单', scope: 'all', source: 'server' },
-              { id: 'todo', label: '待办任务', scope: 'todo', source: 'server' }];
+      return [{ id: 'mine', label: '我的项目', scope: 'mine', source: 'server' },
+              { id: 'todo', label: '待办任务', scope: '', source: 'tasks' },
+              { id: 'all', label: '全部项目', scope: 'all', source: 'server' }];
     }
+    // 页签文案可能被徽标改写成「待办任务 (28)」：按「标签 + 边界（行尾 / 空白 / 括号）」
+    // 匹配，徽标只影响显示，不影响路由（## 139）。
     function techEntryId(tab) {
       const rows = techEntries();
-      for (let i = 0; i < rows.length; i++) if (rows[i].label === tab) return rows[i].id;
+      const text = String(tab == null ? '' : tab).trim();
+      for (let i = 0; i < rows.length; i++) {
+        const label = String(rows[i].label || '');
+        if (!label) continue;
+        if (text === label) return rows[i].id;
+        if (text.indexOf(label) !== 0) continue;
+        const next = text.charAt(label.length);
+        if (!next || /\s/.test(next) || next === '(' || next === '（') return rows[i].id;
+      }
       return 'mine';
     }
     function techRowOf(pp) {
@@ -2234,32 +2284,31 @@
         card: pp.card || null,
       };
     }
-    async function techLoadScope(scope) {
-      TECH_SCOPE_ROWS[scope] = null;
+    async function techLoadScope(scope, includeArchived) {
+      const key = includeArchived ? 'allArchived' : scope;
+      TECH_SCOPE_ROWS[key] = null;
       try {
-        const data = await window.cpqAuth.api('/api/projects?scope=' + encodeURIComponent(scope));
+        const url = '/api/projects?scope=' + encodeURIComponent(scope) +
+          (includeArchived ? '&include_archived=true' : '');
+        const data = await window.cpqAuth.api(url);
         const arr = Array.isArray(data) ? data : (data && data.projects) || [];
-        TECH_SCOPE_ROWS[scope] = arr.map(techRowOf);
+        TECH_SCOPE_ROWS[key] = arr.map(techRowOf);
       } catch (e) {
-        TECH_SCOPE_ROWS[scope] = [];
+        TECH_SCOPE_ROWS[key] = [];
         SESSION_ERROR = (e && e.message) || '读取失败';
       }
       if (currentMode === 'tech') renderCards();
     }
     // 返回该入口要渲染的行；undefined 表示正在加载（已排好下一次渲染）。
+    // 「全部项目」按 TECH_INCLUDE_ARCHIVED 决定是否带上已归档（后端 include_archived）。
     function techScopedRows(entryId) {
-      if (entryId === 'all' || entryId === 'todo' || entryId === 'archived') {
-        const rows = TECH_SCOPE_ROWS[entryId];
-        if (rows === null || rows === undefined) { techLoadScope(entryId); return undefined; }
+      if (entryId === 'all') {
+        const rows = TECH_SCOPE_ROWS[TECH_INCLUDE_ARCHIVED ? 'allArchived' : 'all'];
+        if (rows === null || rows === undefined) {
+          techLoadScope('all', TECH_INCLUDE_ARCHIVED);
+          return undefined;
+        }
         return rows;
-      }
-      if (entryId === 'recent') {
-        const board = window.TechHomeBoard;
-        const ids = (board && typeof board.localRecent === 'function') ? board.localRecent() : [];
-        const pool = (TECH_SCOPE_ROWS.mine || SESSIONS.tech || []).concat(TECH_SCOPE_ROWS.all || []);
-        const byId = {};
-        pool.forEach(s => { byId[s.id] = s; });
-        return ids.map(id => byId[id]).filter(Boolean);
       }
       return SESSIONS.tech;
     }
@@ -2276,8 +2325,8 @@
       if (newQuoteBtn) newQuoteBtn.innerHTML = '<i class="ti ti-plus"></i> ' + m.newBtn;
       const tabsWrap = document.querySelector('.list-tabs');
       if (tabsWrap) {
-        // 批次 10：技术工艺的五个入口（我的项目 / 全部项目 / 待办任务 / 最近访问 /
-        // 已归档）一律由唯一口径模块 tech-home-board.js 给出，其它助手沿用各自的 tabs。
+        // 批次 10 / ## 139：技术工艺固定三个页签（我的项目 / 待办任务 / 全部项目），
+        // 一律由唯一口径模块 tech-home-board.js 给出，其它助手沿用各自的 tabs。
         const labels = mode === 'tech' ? techEntries().map(e => e.label) : m.tabs;
         const activeIdx = mode === 'tech' ? Math.max(0, labels.indexOf('我的项目')) : m.activeTab;
         tabsWrap.innerHTML = labels.map((tab, idx) =>
@@ -2523,6 +2572,18 @@
     if (searchInput) {
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
+    }
+    // 技术工艺「全部项目」的「包含已归档」开关（## 139）：勾选 / 取消都重新拉一次
+    // /api/projects?scope=all[&include_archived=true]；后端参数语义不变。
+    const techIncludeArchivedEl = document.getElementById('techIncludeArchived');
+    if (techIncludeArchivedEl) {
+      techIncludeArchivedEl.addEventListener('change', function () {
+        TECH_INCLUDE_ARCHIVED = !!this.checked;
+        TECH_SCOPE_ROWS.all = null;
+        TECH_SCOPE_ROWS.allArchived = null;
+        PAGE = 1;
+        if (currentMode === 'tech') renderCards();
+      });
     }
     // 初始化：URL ?assistant=quote|config|rule|tech 可直接进入对应助手，否则默认报价助手。
     // 技术工艺与其它三个助手共用同一主页壳：?assistant=tech 与点击顶部「技术工艺」

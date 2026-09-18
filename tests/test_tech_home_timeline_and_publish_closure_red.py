@@ -2,7 +2,8 @@
 
 用户口径（批次 10 原文要点）：
 
-  · 首页信息架构固定为 我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档；
+  · 首页信息架构固定为 我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档
+    （**本批 ## 139 已取代**：首页改回三页签，见下方 HomeBoardModuleTest 的说明）；
   · 历史 Drawer 不能成为找回首页遗漏业务项目的补救入口；
   · 最近访问不是业务数据的事实源；待办只显示需要当前用户执行的动作；
   · 项目卡显示 owner、当前阶段、等待谁、最后业务事件、是否有异常；点击能恢复真实 project/stage/task；
@@ -35,7 +36,8 @@
     （三张票 = 三个账号），真 store 建项目 / IR / business_case / 失败任务 / 已发布报告 /
     整机计划，再逐接口断言结构、状态与只读性。
   · 前端级：node 跑新增的 tech-home-board.js（只桩 window / localStorage），
-    断言五个入口、cardOf 原样透出、stageText/waitingText 不回落到本地映射表、
+    断言入口集合（**## 139 起为三页签**：我的项目 / 待办任务 / 全部项目）、
+    cardOf 原样透出、stageText/waitingText 不回落到本地映射表、
     rememberRecent 只写 localStorage。
 
 Spec：docs/specs/tech-home-timeline-and-publish-closure.md
@@ -346,7 +348,7 @@ def card_in(rows, pid):
 
 
 class HomeCardTest(NodeCase):
-    """10A：首页五个入口与后端卡片摘要。"""
+    """10A（## 139 起为三页签）：首页入口与后端卡片摘要。"""
 
     def test_four_scopes_are_served_and_invalid_scope_still_400(self):
         out = self.run_child("cards")
@@ -778,20 +780,30 @@ class HomeBoardModuleTest(unittest.TestCase):
         self.assertTrue(str(out.get("recent_key") or "").strip(),
                         "必须声明 localStorage 键 RECENT_KEY")
 
-    def test_five_entries_with_exactly_one_local_source(self):
+    def test_three_entries_and_no_local_tab(self):
+        """## 139 取代了 §7.4 的五入口决定：首页固定三页签。
+
+        用户口径：技术工艺首页「应该是和报价一样的三个页签而不是五个」，后两个
+        （最近访问 / 已归档）常年为空。三页签与待办任务口径的完整契约见
+        docs/specs/tech-home-three-tabs-and-todo-tasks.md 与
+        tests/test_tech_home_three_tabs_and_todo_tasks_red.py。
+        """
         out = self.run_driver()
         entries = out.get("entries") or []
-        self.assertEqual(5, len(entries), f"首页必须恰好五个入口（Spec §7.4）：{entries}")
+        self.assertEqual(3, len(entries),
+                         f"首页必须恰好三个入口（## 139 Spec §5.1）：{entries}")
         ids = [str(entry.get("id") or "") for entry in entries]
-        self.assertEqual(["mine", "all", "todo", "recent", "archived"], ids,
-                         f"入口的 id 与顺序必须固定（Spec §7.4）：{ids}")
+        self.assertEqual(["mine", "todo", "all"], ids,
+                         f"入口的 id 与顺序必须固定（## 139 Spec §5.1）：{ids}")
         local = [str(entry.get("id")) for entry in entries
                  if str(entry.get("source") or "") == "local"]
-        self.assertEqual(["recent"], local,
-                         "只有「最近访问」是本机口径，其余四个必须问后端（Spec §7.4）")
+        self.assertEqual([], local,
+                         "首页不得再有本机数据源页签：最近访问 / 已归档 已下线（## 139 §5.1）")
         scopes = {str(entry.get("id")): str(entry.get("scope") or "") for entry in entries}
-        self.assertEqual("todo", scopes.get("todo"), "待办任务必须走 scope=todo")
-        self.assertEqual("archived", scopes.get("archived"), "已归档必须走 scope=archived")
+        self.assertEqual("", scopes.get("todo") or "",
+                         "待办任务不再走项目 scope=todo（## 139 §5.1）")
+        self.assertEqual("mine", scopes.get("mine"))
+        self.assertEqual("all", scopes.get("all"))
 
     def test_card_of_returns_the_backend_block_verbatim(self):
         out = self.run_driver()

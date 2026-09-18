@@ -1,5 +1,14 @@
 # 统一首页信息架构、跨流程时间线与报告发布收口（批次 10）
 
+> **部分被取代（批次 ## 139）**：本文件 §6.2 / §7.4 里「首页固定五个入口（我的项目 /
+> 全部项目 / 待办任务 / 最近访问 / 已归档）」的产品决定已被
+> `docs/specs/tech-home-three-tabs-and-todo-tasks.md` 取代 —— 首页改回**三个页签**
+> （我的项目 / 待办任务 / 全部项目），技术工艺「待办任务」改读 `GET /wf/tasks`
+> 任务口径，不再读 `scope=todo` 项目清单；「最近访问」只保留本机排序能力，
+> 「已归档」改由「全部项目」的 `include_archived` 触达。本文件其余契约（10A 项目卡的
+> 字段口径、10B 时间线、10C 发布收口、后端 `scope=mine|all|todo|archived` 与
+> `include_archived` 能力）继续有效。
+
 假设批次 1–9 已实现。本批是**产品体验收口批**，只做三件事，全部是「把已经算准的
 状态送到用户眼前」：
 
@@ -380,6 +389,11 @@ draft ─→ revised（new_version 后回到 draft，version+1）
 8. 不可见 / 不存在的项目 → 404「项目不存在」。
 
 ### 7.4 前端首页唯一口径模块 `tech_app/frontend/tech-home-board.js`
+
+> **批次 ## 139 取代该入口清单**：`ENTRIES` 现为三项
+> （`mine` 我的项目 / `todo` 待办任务 / `all` 全部项目），`todo` 的 `source` 为
+> `tasks` 且不再带项目 `scope`；`recent` / `archived` 不再是页签。
+> `RECENT_KEY` / `rememberRecent` / `localRecent` 继续保留。
 
 首页（`报价首页.html`）与项目页不得各自维护状态映射。新增一个模块承担两件事：
 **入口定义**与**卡片渲染口径**。

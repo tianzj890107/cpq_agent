@@ -6269,3 +6269,110 @@ local  HEAD（提交时）      = 9f1cbcbe26f4dba436589686a51c9bbb8d7ea3b7
   本轮未改测试、未放宽断言，是否退役由用户决定。
 - `tests/test_quote_tech_process_row_product_contract_red.py` 里补的 6 行 `isCollapsed` helper
   属本轮**明确的越界**（原话是「不许动 tests/**」），理由与影响见 `## 137`；不认可时 revert 该 hunk 即可。
+
+## 139. 技术工艺首页三页签与待办任务口径（9-18，Codex 只改 Spec + 红测）
+
+- 用户口径（原文要点）：
+  1. 技术工艺首页「应该是和报价一样的**三个页签**而不是五个，反正后两个里面也没内容」；
+  2. 「**待办的卡片应该自己的样式**」；
+  3. 「待办怎么现在是 **28** 个，应该报价转交过来的才是待办，就是反正有人转交给这个人的
+     才是这个人的待办，或者是转交到谁都能领取的池子里。**报价和工艺的逻辑都应该是这样的**」。
+- 查实的根因（只读实测，不是推断）：
+  · `tech_app/frontend/tech-home-board.js:15-19` 的 `ENTRIES` 是五项
+    `mine / all / todo / recent / archived`；node 实跑该模块得到
+    `ids=["mine","all","todo","recent","archived"]`、`sources=[...,"local",...]` ——
+    「最近访问」是本机 localStorage 排序（默认空）、「已归档」只有归档后才有内容，
+    用户看到的就是两个空页签；
+  · `报价首页.html:1948-1951` 把待办分流写死成 `if (mode === 'quote' && tab.indexOf('待办任务') === 0)`：
+    报价侧走 `renderTaskTab()`（`/wf/tasks` 任务卡），**技术工艺侧走 `scope=todo` 的项目清单**
+    （`project_access.visible_projects`：有 `primary_action` 且当前子步骤对我 `actionable` 的项目）——
+    这是「我此刻能动手的项目」，不是「有人交给我的活」，于是条数（28）远大于真实待办；
+  · `报价首页.html:1604` 的 `wfBadge()` 把页签文案改写成 `待办任务 (N)`，而
+    `报价首页.html:2220-2224` 的 `techEntryId()` 逐字比对文案：node 实跑
+    `techEntryId('待办任务')='todo'`、**`techEntryId('待办任务 (28)')='mine'`** ——
+    徽标一挂上，待办页签就解析成「我的项目」：数字、页签、内容三者互不对应；
+  · 技术工艺待办渲染的是项目卡 `cardHtml()`（`.request-card`，无 `wf-task`），
+    报价待办渲染的是任务卡 `taskCardHtml()`（`.request-card.wf-task` + 来源 / 第 N 步 / 领取 CTA）；
+  · 「已归档」目前是独立页签，摘掉页签后首页没有 `include_archived` 出口（能力会掉）。
+- 新增 Spec：`docs/specs/tech-home-three-tabs-and-todo-tasks.md` —— 明确三页签
+  （我的项目 / 待办任务 / 全部项目，`todo` 入口 `source='tasks'`）、待办唯一口径
+  （`isTodoTask` / `todoTasks` / `todoCount`：`open` 且非我发起且命中 公共池 / 我的角色 / 我，
+  或 `claimed` 且领取人是我；终态、我发起未领取的、我名下没有任务的项目都不算）、
+  待办卡走任务卡、`techEntryId` 容忍徽标、`renderCards` 待办分支不再限定 quote、
+  归档改由「全部项目」的 `include_archived` 触达；非目标 / 权限 / 并发幂等 / 历史兼容 /
+  可自动化验收 / 人工验收 / 不允许减少的既有能力逐条写明。
+- 新增红测：`tests/test_tech_home_three_tabs_and_todo_tasks_red.py`（14 个用例，A-E 五组；
+  node 侧真加载 `tech-home-board.js`、并从 `报价首页.html` 取真函数 `techEntries` /
+  `techEntryId` / `taskCardHtml` / `cardHtml` 实跑；后端复用批次 2 的受控假库 `Workbench` 真跑
+  `cpq_wf` SQL）。
+- 红测实测（实现前）：`Ran 14 tests / FAILED (failures=10)`：
+  · 红：`test_board_exposes_exactly_three_tabs`（`3 != 5`）、
+    `test_todo_tab_is_backed_by_tasks_not_a_project_scope`（`'tasks' != 'server'`）、
+    `test_is_todo_task_matrix` / `test_role_target_does_not_match_a_user_without_role` /
+    `test_todo_tasks_and_count_agree`（三个新函数不存在）、
+    `test_tech_entry_id_resolves_a_badged_todo_tab`（`'todo' != 'mine'`）、
+    `test_todo_branch_is_not_quote_only`（条件里仍有 `mode === 'quote'`）、
+    `test_tech_mode_no_longer_serves_a_todo_project_list`（`TECH_SCOPE_ROWS = { mine, all, todo, archived }`）、
+    `test_archived_still_reachable_from_all_tab`（首页无 `include_archived`）、
+    `test_quote_and_tech_todo_share_one_count_source`（`wfBadge` 未走 `todoCount`）；
+  · 绿（守卫项，防回归）：`test_task_card_and_project_card_are_distinguishable`、
+    `InboxSourceTest` 三条（批次 2 的 `inbox()` 只认任务行、终态不算、我名下没任务的项目不算）。
+- 同步被取代的旧断言（只改这**一条**，其余一字不动）：
+  `tests/test_tech_home_timeline_and_publish_closure_red.py` 的
+  `test_five_entries_with_exactly_one_local_source` → `test_three_entries_and_no_local_tab`
+  （钉的是 ## 139 已取代的五入口产品决定）；该文件现 `Ran 35 tests / FAILED (failures=1)`，
+  唯一失败即这条新三页签断言。`docs/specs/tech-home-timeline-and-publish-closure.md`
+  顶部与 §7.4 加了「被 ## 139 取代」的说明，正文其余契约原样保留。
+- 相关回归（未改实现，仅确认没有踩到别处）：`test_quote_task_coexistence_and_atomic_claim_red`
+  + `test_tech_project_acl_scope_red` + `test_tech_home_quote_shell_red` +
+  `test_unified_tech_cost_workbench_red` + `test_tech_home_project_cards_and_agent_history_red`
+  → `Ran 94 tests / OK`。
+- 未改任何生产实现（`报价首页.html` / `tech-home-board.js` / 后端）；未迁移或删除任何数据；
+  未 commit / push / MR / tag / Release / 部署；实现提示词只在会话中交付，未落盘 `prompts/`。
+
+## 140. 技术工艺首页三页签与待办任务口径落地（9-18，Codex 实现）
+
+- 按 `## 139` 的 Spec / 红测落地，只改两个文件：`tech_app/frontend/tech-home-board.js`、
+  `报价首页.html`（含 `tech-home-board.js?v=b10 → b11`）。
+- **三页签**：`ENTRIES` 由五项改为三项、顺序固定 `mine / todo / all`
+  （我的项目 / 待办任务 / 全部项目），`todo` 为 `source:'tasks'` 且 `scope:''`，
+  `recent` / `archived` 不再是页签、页面不再有 `source:'local'` 页签；
+  `RECENT_KEY` / `rememberRecent` / `localRecent` / `cardOf` / `stageText` / `waitingText`
+  全部保留（`openTechProject()` 仍调 `rememberRecent`，「最近访问」只做本机排序）。
+- **待办唯一口径**：模块新增并导出纯函数 `isTodoTask / todoTasks / todoCount` ——
+  `open` 且非我发起 且（`public` / `role` 命中我的 `role_code` / `user` 命中我的 `user_id`），
+  或 `claimed` 且 `claimed_by_user_id` 是我；我发起未领取的、终态、别人领走的、缺字段的
+  脏数据、以及「我名下没有任务的项目」一律 false。比较全按字符串，过滤不就地改动入参。
+- **两侧同构**：`renderCards()` 的待办分支去掉 `mode === 'quote'`，报价与技术工艺同走
+  `renderTaskTab()` + `taskCardHtml()`（`.request-card.wf-task`，带来源 / 第 N 步 / 领取 CTA）；
+  空态与未登录文案按模式区分（技术工艺：「暂时没有分派给你的任务。」/
+  「登录后可查看同事转交给你的任务。」）。
+- **页签路由**：`techEntryId()` 改为「标签 + 边界（行尾 / 空白 / `(` / `（`）」匹配，
+  `待办任务 (28)` → `todo`，徽标只影响显示不影响路由；未知页签仍兜底 `mine`。
+- **归档出口**：`TECH_SCOPE_ROWS` 去掉 `todo`，技术工艺不再请求 `scope=todo` 项目清单；
+  「全部项目」旁新增「包含已归档」开关（仅技术工艺可见），勾选后请求
+  `/api/projects?scope=all&include_archived=true`，后端 `scope=mine|all|todo|archived`
+  与 `include_archived` 参数语义一个字未改。
+- **计数同源**：`wfBadge()` 的待办数字改走 `TechHomeBoard.todoCount(WF.tasks, cpqAuth.user())`；
+  连续调用整段重写文案，不会出现「待办任务 (3) (3)」。
+- **一处必须说明的实现取舍**：`wfBadge()` 的整段逻辑留在函数体内（没有另起 `wfTodoCount()` 帮手）——
+  批次 2 的 `test_quote_home_badge_counts_only_actionable_tasks` 会把该函数单独抽出去、
+  在没有 `window`、没有 `wfUser` 的 node 沙箱里跑；因此模块 / 登录态不可用时退回
+  「只数非终态任务」的既有等价兜底（守卫该用例 `待办任务 (1)` 的期望）。
+- 实测（原始输出）：
+  · `tests.test_tech_home_three_tabs_and_todo_tasks_red` → **`Ran 14 tests / OK`**（实现前 10 失败）；
+  · `tests.test_tech_home_timeline_and_publish_closure_red`（`## 139` 已把五入口那一条改成三页签）
+    → **`Ran 35 tests / OK`**（改前该条红）；
+  · `tests.test_quote_task_coexistence_and_atomic_claim_red` + `tests.test_tech_project_acl_scope_red`
+    + `tests.test_tech_home_quote_shell_red` + `tests.test_unified_tech_cost_workbench_red` +
+    `tests.test_tech_home_project_cards_and_agent_history_red` → **`Ran 94 tests / OK`**；
+  · 另跑其余引用首页的 9 个模块（品牌色 / 首页鉴权色 / 卡片等高 / agent shell / 单点登录 /
+    空 IR / 历史抽屉 / 历史还原 / ACL contribute）→ **`Ran 133 tests / OK`**；
+  · `node --check tech_app/frontend/tech-home-board.js` 通过；`报价首页.html` 内联脚本抽出后
+    `node --check` 通过；`git diff --check` 干净。
+- 运行时探针（node 直跑页面真函数，非单测）：`ids=["mine","todo","all"]`、
+  `labels=["我的项目","待办任务","全部项目"]`、`sources=["server","tasks","server"]`、
+  `scopes=["mine","","all"]`、`techEntryId('待办任务 (28)')="todo"`；开开关后确实请求
+  `/api/projects?scope=all&include_archived=true` 并返回归档行。
+- 未改后端、未改权限、未迁移 / 删除数据、未改 `font-family`；本批未 commit / push / 部署
+  （提交、双远端推送与 34 部署见 `## 141`）。
