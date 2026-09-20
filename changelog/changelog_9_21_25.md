@@ -1799,3 +1799,266 @@ SHA-256）、`B` 单来源申报 8 条、`C` `verbatim_equivalent` 7 条（含 `
 - **红测缺陷（实现无法修复）**：`rule_snapshot::a10` 的 `KeyError`。
 - 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；`裕同包装项目-待开发/` 仍只读未纳管。
 
+## 171. DWG 支持第 1 批「文件能力契约 / 格式预检 / 正确失败」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+用两份真实图纸（`裕同包装项目-待开发/酒盒.dwg` 686195 B、`圆盘盒.dwg` 889062 B，文件头均为
+`AC1027`）跑「上传 → 2.1 解析 → 3D 入口」后确认：**包装业务后半段骨架在，但真实包装图纸入口没打通**，
+而且失败方式本身是错的——系统**自己已经判定不支持，却仍然把 DWG 原始字节当图片发给视觉模型**，再拿
+模型报错当结论。本条只落 DWG 第 1 批的 Spec / 红测 / changelog，**不写业务实现、不装转换器**。
+
+### 实测根因（代码定位 + 运行结果，均可复现）
+
+- `services/vision.py:184-202` `build_input_manifest()` **只按扩展名分类**：`.png/.jpg/.jpeg/.webp/.gif/.bmp`
+  → `image/vision`；`.pdf/.docx` → `document`；`.txt/.md/...` → `text`；**其余一律 `unsupported/none`**，
+  没有任何 magic / `AC10xx` 版本判断。DWG 落 `unsupported`。
+- `services/vision.py:504-518` `_base_blocks()` **不读 manifest**，**无条件**执行
+  `claude_client.image_block(image_bytes, filename)`；`services/qwen_client.py:191-201`
+  `_media_type_for()` 对 `.dwg` 兜底返回 `image/png` → 请求体出现
+  `data:image/png;base64,<DWG 原始字节>` → Qwen 返回 `The image format is illegal and cannot be opened`。
+  **分类结果从未参与门禁**，模型报错被当成了判定依据。换 3.8-Max 不改变结论。
+- `main.py:1425` `POST /api/projects/3d` **没有格式门禁**：先 `store.create_project()`，再
+  `tasks.submit(project_id, "import_3d", job, cad=True, …)`；`job()` 调
+  `step_import.import_step()`，而 `services/step_import.py:99` 用 `suffix = Path(filename).suffix or ".step"`
+  写临时文件后调 `cq.importers.importStep` → 异步报 `STEP File could not be loaded`。
+  即**先建项目、再建注定失败的任务**，用户看到的却是"已受理"。
+- `main.py:1119` `_read_upload_limited()` 只有大小上限（413），无内容嗅探、无空文件/截断/扩展名与内容
+  不符的区分。
+- 前端 4 处入口把 DWG 列为支持格式（`home.js:253`、`tech-task.js:132`、`requirement.js:7`、
+  `requirement-create.js:26`），而 `app.js:1438` 同时写着「1.1 允许上传的 PDF / DWG / DXF 到这一步还
+  解析不了」——同一产品里两种说法并存。
+
+### 产物
+
+Spec `docs/specs/dwg-file-capability-preflight.md`：
+
+1. **统一文件预检**：新增 `tech_app/backend/services/file_preflight.py`（纯函数、不联网、不调模型）：
+   `detect_file_format(filename, content)` 返回 `detected_format`（闭集 `dwg`/`dxf`/`step`/`iges`/`stl`/
+   `pdf`/`raster_image`/`text`/`docx`/`unsupported`）、`magic`、`dwg_version`（`AC10xx`）、
+   `extension_content_mismatch`、`file_size`、`sha256`、`is_empty`、`is_truncated`、`content_kind`；
+   `capabilities_of()` 返回 `direct_vision`/`cad_vector_parse`/`converter_required`/`converter_available`/
+   `step_import`/`document_text`/`geometry_3d`。**DWG 的 `direct_vision` 必须为 `false`。**
+2. **稳定错误码闭集**（`STABLE_ERROR_CODES`）：`FILE_EMPTY`(400)、`FILE_TOO_LARGE`(413)、
+   `FILE_EXTENSION_CONTENT_MISMATCH`(422)、`FILE_CORRUPTED`(422)、`DWG_CONVERTER_NOT_INSTALLED`(415)、
+   `DWG_NOT_A_3D_MODEL`(415, 不可重试)、`FILE_FORMAT_UNSUPPORTED`(415)、`DWG_CONVERSION_FAILED`(502)、
+   `DWG_PARSE_FAILED`(502)，每条带中文文案与 `retryable`；统一异常 `FileCapabilityError`
+   （`stable_error_code`/`http_status`/`detected`/`retryable`/`message`）。
+3. **模型调用门禁**（本批核心）：`parse_drawing`/`verify_drawing` 在 `direct_vision == false` 时必须在
+   构造内容块**之前**抛出 `FileCapabilityError`，**不得**出现 image 块、**不得**调用 `claude_client.run`；
+   DWG 附件只发文本占位（须写明"需要 CAD 转换服务"）。
+4. **3D 入口同步拒绝**：格式预检排在 `step_import.AVAILABLE` 检查**之前**，DWG 固定
+   `DWG_NOT_A_3D_MODEL`(415)，**不得**建项目、**不得**建异步任务、**不得**调 `import_step`；
+   改名为 `.step` 的 DWG 同样拒绝；真 STEP 路径不回归。
+5. **前端能力真实化**：四处入口统一说明「可上传，DWG 需 CAD 转换服务解析（当前环境未安装）」，
+   文案同源；未转换的 DWG 不得标成"解析完成"；`app.js:1438` 的诚实说明保留。
+6. **保全/审计/可重试**：审计含 `original_filename`/`detected_format`/`extension`/`magic`/`dwg_version`/
+   `file_size`/`sha256`/`selected_pipeline`/`converter_available`/`parse_status`/`stable_error_code`/
+   `retryable`，**不含**原始字节、base64、密钥、堆栈、部署路径；失败不删除项目与附件，装转换器后可重试。
+7. **非目标**：不装转换器、不解析 DXF、不识别盒型、不改 Agent/看板、不改 3D 分流实现（第 6 批）、
+   不改包装成本与三行业。
+
+红测 `tests/test_dwg_file_capability_preflight_red.py`（29 条）：`A` 真实样本识别 7 条、`B` 能力向量 4 条、
+`C` 错误码闭集 2 条、`D` 模型调用门禁 6 条（含"DWG 绝不进 image 块"、PNG 路径不回归）、
+`E` 3D 入口门禁 6 条（直接调 `upload_3d` 并 mock `store.create_project`/`tasks.submit`/`import_step`
+断言调用边界，**不写库、不起服务**）、`F` 前端能力文案 4 条。
+
+### 验收实跑
+
+- 新红测：`Ran 29 tests ... FAILED (failures=25)` —— **25 条红 / 4 条绿**。红的三条代表（原文）：
+  - `DModelCallGate.test_d1`：`AssertionError: _StopCall() is an instance of <class '__main__._StopCall'> :
+    DWG 在调用视觉模型之前就必须被拦下，实测却调用了模型`
+  - `EThreeDGate.test_e1`：`AssertionError: {'project_id': ..., 'task_id': ...} is not None :
+    DWG 不得返回 project_id/task_id`
+  - `FFrontendClaims.test_f1`：四个入口都缺"需要转换"说明。
+  4 条绿的是**故意锁住不许动的既有行为**：`e5` 真 STEP 仍进 3D 流水线、`f2` 前端未宣称 DWG 可直接解析、
+  `f3` 首页保留 DWG/STEP 格式标签、`f4` `app.js:1438` 诚实说明仍在。
+- 全量 `python /tmp/run_pkg.py 1`：`TOTAL ran=3056 failures=48 errors=1 skipped=2`。其中
+  **25 条**是本条新增红测；其余 17 个失败 id 是：既有 17 条里仍在的
+  （`process_row_running_info_and_fold_red` 14、`tech_model_call_row_merged_and_summary_detail_red` 2、
+  `cpq_eval_ci_contract` 1）与包装成本**待裁决/冻结值**家族
+  （`packaging_cost_engine_red` `c1`/`c2`/`c4`、`packaging_cost_minimum_charge_red` `d5`、
+  `packaging_cost_rule_routing_red` `f3`、`packaging_cost_rule_snapshot_red` `a10`/`e1`）。
+- 附带观察：工作区里 **DeepSeek 已把包装成本四条修复批次实现全部落地**（见 `## 166`–`## 170`；
+  `packaging_cost.py`、`da_seed_packaging.py` 有改动，新增
+  `tech_app/agent_knowledge/rules/packaging_cost_rules.json` 与 `tech_app/tools/extract_packaging_rules.py`），
+  因此 `rule_routing` 32→1、`minimum_charge` 47→1、`column_evidence` 29→0、`rule_snapshot` 37→2。
+  这属于另一条任务线，Codex 尚未逐条审查。
+
+### 剩余
+
+- DWG 第 2–6 批（转换服务 / DXF 解析与 CAD IR / 包装语义 / Agent 与看板贯通 / 3D 分流与真实样本 E2E）
+  尚未开写；**第 2 批必须先拍板真实可合法部署的 DWG 转换器**，否则只能完成编排层与 fake adapter。
+- 包装成本最低收费口径（①/②/③）仍待业务裁决。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；两份真实 DWG 与
+  `裕同包装项目-待开发/` 只读、未纳管。
+
+## 172. DWG 支持第 2 批「受控转换服务（转换适配器层）」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+第 2 批要的是 `DWG → DXF + 预览图` 的受控、可审计、可替换**转换层**。本条只落 Spec / 红测 /
+changelog：**不装转换器、不写业务实现**，并把「本机没有任何转换器、所以只能验收编排层（A 层）」这件事
+写成红测里的硬约束，避免以后拿 fake 产物冒充「已支持 DWG」。
+
+### 产物（本任务新增，均为未跟踪新文件）
+
+- `docs/specs/dwg-controlled-conversion-adapter.md`（13 节）：适配器协议、manifest/产物契约、
+  错误码与状态机、安全硬约束、ODA/APS/LibreDWG 七个维度选型对比、本地/CI/生产三环境能力配置、
+  A/B 两层验收、回滚策略、第 3 批稳定接口。
+- `tests/test_dwg_conversion_adapter_red.py`（42 条，A–I 九组）。
+- 顺带对齐第 1 批：`docs/specs/dwg-file-capability-preflight.md` §3 的错误码闭集已从 9 条扩到
+  **15 条**（新增 6 条转换专用码），`tests/test_dwg_file_capability_preflight_red.py` 的
+  `ERROR_CODES` 同步扩到 15 条，保持「第 1 批 §3 是唯一权威闭集、第 2 批只能取子集」。
+  另外把第 1 批红测的 `b1` 改成显式 `CAD_CONVERTER=none` 下断言 `converter_available=False`，
+  以免第 2 批把该字段接成动态值后误伤；两条 Spec 都补了「第 2 批负责接线」的说明。
+
+### 本机转换器现状（实测，不是推断）
+
+- `command -v` 逐个探测 `ODAFileConverter` / `dwg2dxf` / `dwgread` / `libredwg` / `soffice` /
+  `libreoffice` / `inkscape` / `teigha` → **全部不存在**。
+- Python 侧 `ezdxf` 可用（在 `open-claude/.venv`），`dxfgrabber` / `libredwg` / `pyautocad` 全部
+  `ModuleNotFoundError`；`requirements.txt:14` 只有 `openpyxl==3.1.5`，`cadquery` 在 `:44` 仍被注释，
+  **没有 `ezdxf`**。
+- `tech_app/backend/services/` 下没有任何 DWG/DXF/转换模块；`drawing2d.py` 是 OCCT 出图，
+  `step_import.py` 只认 STEP/STP。
+
+→ 结论：**当前生产只能保持「转换能力未安装」**，本批可交付的是编排层 + fake adapter；
+真实转换器必须先由用户单独拍板，拍板前不得把 `converter_available` 置真、不得把 fake 当默认。
+
+### 关键口径（写进 Spec，红测按此断言）
+
+1. **两层验收**：A 层=编排层（fake adapter 驱动，安全/错误/幂等/并发/manifest 全绿）；
+   B 层=真实转换器（两份样本真出可打开的 DXF + 预览、实体数与图层数非零）。
+   只完成 A 层只能写「DWG 编排能力完成，真实转换能力未验收」；本批 `capability().dwg_supported`
+   **恒为 `False`**、`support_claim != "real"`，不许宣称「支持 DWG」。
+2. **适配器接口**：`cad_converter/` 包内 `capability()/get_adapter()/convert_drawing()/
+   load_manifest()/list_conversions()/latest_manifest()`；适配器协议 5 个方法
+   `capability/inspect/convert_to_dxf/render_preview/convert_3d_if_supported`；
+   本地 CLI、外部服务（扩展点）、fake、未安装四态都要有明确状态。
+3. **manifest**：`source_sha256/source_format/detected_dwg_version/converter_name/converter_version/
+   conversion_options/output_files/output_sha256/warnings/started_at/finished_at/status/error_code`
+   再加 `conversion_id/project_id/attachment_name/drawing_version/original_filename/is_simulated/
+   acceptance_level/cache_key/converter_stderr_digest`；`output_sha256` 必须能从磁盘重算一致。
+4. **错误码**：`CONVERSION_ERROR_CODES` 是第 1 批 15 码闭集的子集（8 条），HTTP 与 `retryable`
+   逐条一致；失败统一 `FileCapabilityError`，**不得**透传转换器 stderr/堆栈，只存
+   `converter_stderr_digest`（sha256）。
+5. **安全**：独立 `mkdtemp(prefix="dwg-conv-")`、输入固定名 `source.dwg`（用户原名只进 manifest 且
+   仅 basename）、输出 realpath 必须落在 `output_dir`、`subprocess` 不许 `shell=True`、
+   超时/大小/文件数上限、失败清理临时目录、按 `source_sha256`+适配器版本幂等、并发同键只转一次、
+   失败不覆盖上次成功产物、原附件只读且可重试。
+6. **边界**：本批不 `import ezdxf`（第 3 批）、不 import `vision/qwen_client/claude_client/step_import`、
+   不把转换器逻辑写进 Agent、不让 Agent 决定命令行参数、不改成本、不写生产实现。
+
+### 验收实跑（原文数字）
+
+- 新红测：`./open-claude/.venv/bin/python tests/test_dwg_conversion_adapter_red.py`
+  → `Ran 42 tests ... FAILED (failures=40)` —— **40 条红 / 2 条绿**。
+  红的三条代表：`AAdapterContract.test_a1` / `BManifestAndArtifacts.test_b1` /
+  `HTwoLayerAcceptance.test_h1` 全部以 `AssertionError: 缺少 tech_app/backend/services/cad_converter/
+  （本批 Spec §2）` 失败。
+  2 条绿的是**故意锁住的既有行为**：`i1` PNG 仍走既有视觉路径（`vision._base_blocks` 产出中立图片块
+  `_neutral_image` 且携带 PNG 原始字节）、`i2` `app.js` 的「解析不了」诚实说明仍在。
+  `h1`（真实转换器 B 层）在实现后若本机仍无真实转换器，会 `skipTest` 并明确「A 层已验收 / B 层未验收」。
+  （`## 173` 引用的是本条补入 `test_a10` 之前的 `Ran 41 ... failures=39` 基线；补一条后为 42/40，
+  多出来的那一条是「本批 8 码必须是第 1 批权威闭集的子集且值逐条一致」。）
+- **第 1 批实现已在本条写作期间由 ds1 落地**：`tech_app/backend/services/file_preflight.py`（22608 B，
+  `detect_file_format`/`capabilities_of`/`STABLE_ERROR_CODES`/`FileCapabilityError`）+ `main.py`、
+  `vision.py` 与 4 个前端入口。实测 `STABLE_ERROR_CODES` 就是 Spec §3 的 15 码（HTTP/retryable 逐条一致），
+  `capabilities_of(DWG)` = `direct_vision=False / converter_required=True / converter_available=False`。
+  第 1 批红测复跑：`Ran 29 tests ... OK`（原 25 红全部转绿，实现与红测口径一致）。
+- 全量回归：`./open-claude/.venv/bin/python /tmp/run_pkg.py 1` →
+  `TOTAL ran=3098 failures=63 errors=1 skipped=2`。除本条 40 条新红外，其余失败全在既有集合内：
+  `process_row_running_info_and_fold_red` 14、`packaging_cost_engine_red` 3、
+  `tech_model_call_row_merged_and_summary_detail_red` 2，以及
+  `packaging_cost_rule_snapshot_red`（1 错 1 败）、`packaging_cost_rule_routing_red` 1、
+  `packaging_cost_minimum_charge_red` 1、`cpq_eval_ci_contract` 1 —— **无新增回归**。
+
+### 剩余与风险
+
+- **必须先拍板真实可合法部署的 DWG 转换器**（ODA File Converter / Autodesk APS / LibreDWG / 其他），
+  否则第 3–6 批最多只能做到 fake adapter 级别的编排验收。
+- `ezdxf` 尚未进 `requirements.txt`（第 3 批正式依赖），B 层 smoke 脚本当前只能降级为「DXF 可打开性未验证」。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；两份真实 DWG 与
+  `裕同包装项目-待开发/` 只读、未纳管。
+
+## 173. DWG 支持第 1 批「文件能力契约 / 格式预检 / 正确失败」实现（9-20，Codex）
+
+Spec 见 `## 171`（`docs/specs/dwg-file-capability-preflight.md`），红测
+`tests/test_dwg_file_capability_preflight_red.py`（29 条）。本条是**实现**：把「只按扩展名分类、却仍然把
+DWG 原始字节当图片喂模型」改成「按内容识别 + 调用前门禁 + 稳定错误码 + 可审计可重试」。**不装转换器、
+不解析 DXF、不识别盒型、不改成本、不改三行业、不动两份真实 DWG 样本。**
+
+### 产物
+
+- 新增 `tech_app/backend/services/file_preflight.py`（纯函数：不联网、不调模型、不读写库、不装依赖）：
+  · `detect_file_format(filename, content)`：`detected_format`（闭集 10 值）/ `magic`（前 16 字节可打印
+    形式）/ `dwg_version`（`AC10xx`，样本 `AC1027`）/ `extension_content_mismatch` / `file_size` /
+    `sha256` / `is_empty` / `is_truncated` / `content_kind`。DWG 判定看**文件头**（`AC1006`–`AC1032`），
+    R2004+ 还用 0x80 处固定掩码解出的 `AcFssFcAJMB` 哨兵判文件头是否完整（16 字节 stub 判截断）。
+  · `capabilities_of()`：`direct_vision` / `cad_vector_parse` / `converter_required` /
+    `converter_available`（本批恒 `false`）/ `step_import` / `geometry_3d` / `document_text`。
+    **DWG/DXF 的 `direct_vision` 恒为 `false`**。
+  · `STABLE_ERROR_CODES`：15 条闭集（`## 171` 写的 9 条 + 第 2 批转换服务提出的 6 条），每条带
+    `http_status` / `retryable` / 中文 `message`；`FileCapabilityError` 带
+    `stable_error_code`/`http_status`/`detected`/`retryable`/`message` 与 `as_detail()` 四键响应体。
+  · `vision_gate_error()` / `import_3d_gate_error()`：图纸解析入口与 3D 入口的**唯一**门禁判定。
+- `tech_app/backend/services/vision.py`：`build_input_manifest()` 改为**内容判定**（清单项逐条带预检字段、
+  `selected_pipeline`、`parse_status`，主文件另带 `stable_error_code`/`retryable`），
+  **DWG 不再落 `unsupported/none`**；`_base_blocks()` 第一件事就是主文件门禁（构造任何内容块之前失败）；
+  `parse_drawing()`/`verify_drawing()` 同步；`_attachment_blocks()` 里 DWG/DXF 与「扩展名与内容不一致」
+  的附件只发**文本占位**（含"需要 CAD 转换服务"），不再当图片。新增 `_dispatch_model()`：把中立内容块
+  先用分派层自己的翻译器翻成本次目标提供商的方言再交给 `llm_client.run`（**请求体逐字节不变**，
+  只是把翻译提前到可观察的位置）。
+- `tech_app/backend/main.py` `upload_3d`：格式预检排在 `step_import.AVAILABLE` **之前**，
+  拒绝方式统一 `HTTPException(415/422, detail={stable_error_code,message,detected,retryable})`；
+  413 也统一成四键；**不建项目、不提交任务、不调 `import_step`**；真 STEP 路径不变。
+- 前端 4 处入口（`home.js` / `tech-task.js` / `requirement.js` / `requirement-create.js`）：文案改为
+  同一句「可上传，DWG 需 CAD 转换服务解析（当前环境未安装）」，由 `window.CPQ_DWG_CAPABILITY_NOTE`
+  单点定义、其余入口读同一个全局；`app.js:1438` 的诚实说明未动，也没有任何入口宣称"模型可解析 DWG"。
+
+### 验收实跑（原文数字）
+
+- 实现前：`./open-claude/.venv/bin/python tests/test_dwg_file_capability_preflight_red.py`
+  → `Ran 29 tests ... FAILED (failures=25)`。
+- 实现后：同一条命令 → `Ran 29 tests in 1.602s` / `OK`（29/29 全绿）。
+- 全量 `./open-claude/.venv/bin/python /tmp/run_pkg.py 1`
+  → `TOTAL ran=3097 failures=62 errors=1 skipped=2`，失败分布**只有**四族：
+  `test_dwg_conversion_adapter_red` 39（第 2 批 `## 172` 的红测，未实现，单独跑 `Ran 41 ... failures=39`
+  与 `## 172` 基线逐条一致）、既有 17 条（`process_row_running_info_and_fold_red` 14、
+  `tech_model_call_row_merged_and_summary_detail_red` 2、`cpq_eval_ci_contract` 1）、
+  包装成本待裁决/冻结值 7 条（`packaging_cost_engine_red` c1/c2/c4、`rule_snapshot` a10/e1、
+  `minimum_charge` d5、`rule_routing` f3）。**本批 25 条红全部转绿，本批之外零新增失败。**
+- `python -m py_compile` 覆盖 `file_preflight.py` / `vision.py` / `main.py`；`node --check` 覆盖 4 个
+  前端文件；`git diff --check` 干净。
+- 人工验收（单元级复现，不写真实 `tech_data`/不起服务、不调模型）：`酒盒.dwg` →
+  `DWG_CONVERTER_NOT_INSTALLED`(415, retryable) 文案「已识别为 DWG（AC1027）；当前环境尚未安装 CAD
+  转换服务，暂时无法解析」且 `claude_client.run` 调用数 **0**；`圆盘盒.dwg` 走 `POST /api/projects/3d`
+  → `415 DWG_NOT_A_3D_MODEL`、`create_project`/`submit`/`import_step` 全部未调用；
+  `酒盒.png` / `酒盒.step` → `FILE_EXTENSION_CONTENT_MISMATCH`(422)「内容实为 DWG AC1027」、同样不调模型。
+  审计（解析任务在建项目后、调模型**之前**落盘的 `drawing_parse_stage:manifest`）含
+  `original_filename`/`detected_format`/`extension`/`magic`/`dwg_version`/`file_size`/`sha256`/
+  `selected_pipeline`/`converter_available`/`parse_status`/`stable_error_code`/`retryable`，
+  不含原始字节、base64、密钥、堆栈与绝对路径。
+
+### 口径说明（与 `## 171` 文字的差异及原因）
+
+1. 错误码闭集是**15 条**而不是 9 条：红测 `ERROR_CODES`（与 Spec §3 表）已把第 2 批的 6 条收进同一闭集，
+   `STABLE_ERROR_CODES` 必须逐条一致；本批没有转换器，那 6 条只登记、不触发。
+2. `file_size`/`sha256` 是**前 80 MiB 采样**的结果（`PREFLIGHT_SAMPLE_LIMIT_BYTES`）：预检只需文件头与
+   段落标记，不为此把 GB 级文件整体读进内存。真实上传上限仍是接口层 `MAX_UPLOAD_BYTES`（50 MiB），
+   生产上不会走到这个上限；红测 `a6` 也正是把超大文件的 `file_size` 钉在 80 MiB。
+3. 图纸解析入口的门禁判据是「`direct_vision` **或** `document_text` 可消费」：DWG/DXF/3D/未知格式一律
+   在构造内容块之前失败，而 PDF/DOCX/TXT 的既有本地文本路径**不回归**（Spec §4 最后一条）。
+4. 截断的 DWG 走 `FILE_CORRUPTED`(422)，完整的 DWG 才走 Spec §4 固定的
+   `DWG_CONVERTER_NOT_INSTALLED`(415)；扩展名与内容不一致时优先报
+   `FILE_EXTENSION_CONTENT_MISMATCH`（Spec §10 要求改名上传报这个码）。
+
+### 剩余与风险
+
+- **第 2–6 批仍未开写**；转换器选型（ODA / Autodesk APS / LibreDWG / 其他）仍待拍板，在此之前只能做
+  编排层与 fake adapter 级验收（`## 172`）。
+- 2.1 上传仍允许选择 `.step/.stp/.sldprt/.stl/.sat` 后缀，但主文件是 3D 模型时现在会被干净拒绝
+  （`FILE_FORMAT_UNSUPPORTED`）——「3D 走 3D 入口」的分流属第 6 批，本批只保证**不再把 3D 字节当图片**。
+- 3D 入口的拒绝发生在建项目之前，因此没有项目可挂审计条目；码/文案/`detected`/`retryable` 随响应体返回。
+- `vision._dispatch_model()` 复用了分派层的 `_module_for`/`_translate`（私有但同包、且是唯一一份方言表）；
+  若日后分派层改签名需同步这一处。
+- 前端 `?v=` 缓存号未提升：`main.py` 的响应加固对 `.js` 已经统一 `no-cache, no-store`，无需改 HTML。
+- 包装成本最低收费口径仍待业务裁决；本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**，
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。

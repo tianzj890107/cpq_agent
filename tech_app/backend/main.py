@@ -68,7 +68,8 @@ from .services import (
     acting_user, cpq_auth_client, user_llm,
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
-    cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
+    cost_flow, cost_review, file_preflight, industry_templates, integration,
+    manufacturing, report_workflow,
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
     packaging_match,
@@ -1428,14 +1429,33 @@ async def upload_3d(
     user: dict = Depends(current_user),
 ):
     """上传 3D 模型(STEP/STP),用 OCCT 反解出零件/结构树/几何属性,
-    并直接据原始实体生成 3D(STEP/STL) 与 2D 工程图。"""
+    并直接据原始实体生成 3D(STEP/STL) 与 2D 工程图。
+
+    同步前置门禁（Spec `dwg-file-capability-preflight.md` §5）：先按**内容**判格式，
+    非 STEP 一律当场拒绝，绝不「先建项目、再建注定失败的 import_3d 任务」——
+    过去 DWG 就是这么被受理的，用户看到的是"已受理"，最后才等到
+    `STEP File could not be loaded`。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    try:
+        content = await _read_upload_limited(file, label="3D 模型")
+    except HTTPException as exc:
+        # 上传侧的大小门禁也统一成四键结构化错误（Spec §3），不再只回自由文本。
+        if exc.status_code != 413:
+            raise
+        raise HTTPException(413, detail=file_preflight.FileCapabilityError(
+            "FILE_TOO_LARGE").as_detail()) from exc
+    fname = file.filename or "model.step"
+    # 格式预检必须排在 `step_import.AVAILABLE` **之前**：环境没装 CadQuery 时，
+    # DWG 也必须先得到「DWG 不是 3D 模型」的准确结论，而不是含糊的 503。
+    detected = file_preflight.detect_file_format(fname, content)
+    gate = file_preflight.import_3d_gate_error(detected)
+    if gate is not None:
+        # 拒绝发生在建项目之前（没有项目可挂审计），预检结果随响应体返回给调用方/
+        # 前端展示：码、文案、detected、retryable 四键齐全（Spec §3/§5）。
+        raise HTTPException(gate.http_status, detail=gate.as_detail())
     if not step_import.AVAILABLE:
         raise HTTPException(503, "CadQuery 未安装，STEP 导入不可用。")
-    content = await _read_upload_limited(file, label="3D 模型")
-    if not content:
-        raise HTTPException(400, "空文件")
-    fname = file.filename or "model.step"
     project_id = store.create_project(
         fname, content, note=note,
         owner=user.get("username", "system"),

@@ -18,6 +18,14 @@
 (function () {
   'use strict';
 
+  /* DWG 能力说明**唯一口径**（Spec `dwg-file-capability-preflight.md` §6）：
+     本批不装 CAD 转换器，DWG 只能上传、不能解析；文案只在这里定义一次，其余入口读
+     同一个全局 `window.CPQ_DWG_CAPABILITY_NOTE`，避免四处各说各话（更不许写成
+     「模型可直接解析 DWG」）。 */
+  window.CPQ_DWG_CAPABILITY_NOTE = window.CPQ_DWG_CAPABILITY_NOTE
+    || '可上传，DWG 需 CAD 转换服务解析（当前环境未安装）';
+  var ttDwgNote = window.CPQ_DWG_CAPABILITY_NOTE;
+
   const CPQ_TOKEN_KEY = 'cpq_auth_token';
   const taskId = new URLSearchParams(location.search).get('tech_task')
     || new URLSearchParams(location.search).get('task')
@@ -126,6 +134,7 @@
       + '<h2>上传图纸，创建工艺评估需求</h2>'
       + '<p class="tt-tip">图纸是必填项 —— 2.1 的解析、零件拆分与成本测算全部由它起头。'
       + '需求正文已按报价原文预填，可以直接改。</p>'
+      + '<p class="tt-tip">' + ttDwgNote + '</p>'
       + '<div class="tt-uploads">'
       + '<label class="tt-upload">＋ 上传模型图纸'
       + '<input type="file" id="ttModel" multiple '

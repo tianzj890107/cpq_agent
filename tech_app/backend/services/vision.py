@@ -31,6 +31,7 @@ from ..models.ai import (
 from ..models.ir import DesignIR, FeatureType
 from . import llm_client as claude_client
 from .requirement_extract import extract_document_text
+from . import file_preflight
 from . import sop
 
 # 佐证文件分类
@@ -181,27 +182,100 @@ _FEATURE_DIMENSIONS = {
 }
 
 
+#: 文件格式 -> (清单 kind, 提取方式)。判定依据是**内容**（file_preflight），
+#: 扩展名只用来标记「扩展名与内容不一致」。
+_MANIFEST_KINDS = {
+    "raster_image": ("image", "vision"),
+    "pdf": ("document", "local_text+vision_context"),
+    "docx": ("document", "local_text+vision_context"),
+    "text": ("text", "local_text"),
+    "dwg": ("cad_drawing", "converter:dwg"),
+    "dxf": ("cad_drawing", "converter:dxf"),
+    "step": ("model_3d", "step_import"),
+    "iges": ("model_3d", "cad_import"),
+    "stl": ("model_3d", "cad_import"),
+    "unsupported": ("unsupported", "none"),
+}
+
+
+def _manifest_entry(name: str, data: bytes, role: str) -> dict:
+    """单个文件的清单条目：先预检，再按**内容判定的格式**给 kind/extraction。
+
+    过去这里只看扩展名，于是 DWG 落 `unsupported/none` 却仍被当成图片送进模型
+    （Spec `dwg-file-capability-preflight.md` §1.2）。现在能力结论由
+    `file_preflight` 唯一给出，清单只是它的载体。
+    """
+    detected = file_preflight.detect_file_format(name, data)
+    caps = file_preflight.capabilities_of(detected)
+    kind, extraction = _MANIFEST_KINDS.get(detected["detected_format"],
+                                          ("unsupported", "none"))
+    consumable = caps["direct_vision"] or caps["document_text"]
+    if detected["is_empty"]:
+        parse_status = "blocked"
+    elif role == "primary":
+        parse_status = "ready" if consumable else "blocked"
+    else:
+        parse_status = "ready" if consumable else "skipped"
+    entry = {
+        "name": Path(name).name, "role": role, "kind": kind,
+        "bytes": len(data), "extraction": extraction,
+        "detected_format": detected["detected_format"],
+        "extension": detected["extension"],
+        "magic": detected["magic"],
+        "dwg_version": detected["dwg_version"],
+        "sha256": detected["sha256"],
+        "file_size": detected["file_size"],
+        "is_empty": detected["is_empty"],
+        "is_truncated": detected["is_truncated"],
+        "extension_content_mismatch": detected["extension_content_mismatch"],
+        "content_kind": detected["content_kind"],
+        "selected_pipeline": file_preflight.selected_pipeline(detected),
+        "converter_required": caps["converter_required"],
+        "converter_available": caps["converter_available"],
+        "direct_vision": caps["direct_vision"],
+        "document_text": caps["document_text"],
+        "capabilities": caps,
+        "parse_status": parse_status,
+    }
+    if role == "primary":
+        # 主文件的能力判决先算进清单：审计在调模型**之前**落盘，
+        # 「哪个码、能不能重试」必须当场有据（Spec §7）。
+        error = file_preflight.vision_gate_error(detected)
+        entry["stable_error_code"] = error.stable_error_code if error else ""
+        entry["retryable"] = error.retryable if error else False
+    else:
+        entry["stable_error_code"] = ""
+        entry["retryable"] = False
+    return entry
+
+
 def build_input_manifest(filename: str, image_bytes: bytes,
                          attachments: Optional[List[Tuple[str, bytes]]] = None) -> dict:
-    """阶段 1：确定性文件清单和可解析能力分类。"""
-    def entry(name: str, data: bytes, role: str) -> dict:
-        lower = (name or "").lower()
-        if lower.endswith(_IMAGE_EXTS):
-            kind, extraction = "image", "vision"
-        elif lower.endswith(_EXTRACTABLE_DOCUMENT_EXTS):
-            kind, extraction = "document", "local_text+vision_context"
-        elif lower.endswith(_TEXT_EXTS):
-            kind, extraction = "text", "local_text"
-        else:
-            kind, extraction = "unsupported", "none"
-        return {"name": Path(name).name, "role": role, "kind": kind,
-                "bytes": len(data), "extraction": extraction}
-    return {
-        "version": "drawing-input-1.0",
-        "files": [entry(filename, image_bytes, "primary"), *[
-            entry(name, data, "attachment") for name, data in (attachments or [])
-        ]],
-    }
+    """阶段 1：确定性文件清单 + 能力预检（内容识别，不只看扩展名）。
+
+    顶层就是主文件的预检结果（便于失败时直接把 `manifest` 当 `detected` 带出），
+    `files` 里逐个文件同样带完整预检字段。
+    """
+    primary = _manifest_entry(filename, image_bytes, "primary")
+    manifest = dict(primary)
+    manifest["version"] = "drawing-input-1.0"
+    manifest["files"] = [primary, *[
+        _manifest_entry(name, data, "attachment")
+        for name, data in (attachments or [])
+    ]]
+    return manifest
+
+
+def _primary_capability_gate(manifest: dict) -> None:
+    """主文件能力门禁：不能直接视觉也不能本地取文本时，构造内容块之前先失败。
+
+    纯函数 `file_preflight.vision_gate_error` 是唯一判定处：DWG → 稳定码
+    `DWG_CONVERTER_NOT_INSTALLED`（本批不装转换器），DXF/3D/未知格式 →
+    `FILE_FORMAT_UNSUPPORTED`。模型调用与 DWG 字节永远不会相遇（Spec §4）。
+    """
+    error = file_preflight.vision_gate_error(manifest)
+    if error is not None:
+        raise error
 
 
 def _evidence_by_field(ir: DesignIR) -> dict[str, FieldEvidence]:
@@ -458,7 +532,11 @@ def _attachment_text(name: str, data: bytes) -> str:
 def _attachment_blocks(
     attachments: Optional[List[Tuple[str, bytes]]],
 ) -> List[dict]:
-    """把佐证文件转成内容块: 图片→image 块; 文本/PDF/DOCX→text 块。"""
+    """把佐证文件转成内容块: 图片→image 块; 文本/PDF/DOCX→text 块。
+
+    DWG/DXF 与「扩展名与内容不一致」的附件只发**文本占位**（Spec §4）：
+    原始字节不是模型能读的图片，绝不能塞成 image 块再等模型报错。
+    """
     blocks: List[dict] = []
     attachments = list(attachments or [])
     for index, (name, data) in enumerate(attachments):
@@ -467,6 +545,21 @@ def _attachment_blocks(
                 f"【其余 {len(attachments) - index} 个佐证附件因上下文预算未发送给模型】"
             ))
             break
+        detected = file_preflight.detect_file_format(name, data)
+        detected_format = detected["detected_format"]
+        if detected_format in ("dwg", "dxf"):
+            reason = ("需要 CAD 转换服务（当前环境未安装）" if detected_format == "dwg"
+                      else "需要 CAD 矢量解析能力（当前环境未安装）")
+            blocks.append(claude_client.text_block(
+                f"【佐证文件 {name} {reason}，本次未作为解析依据】"
+            ))
+            continue
+        if detected["extension_content_mismatch"]:
+            blocks.append(claude_client.text_block(
+                f"【佐证文件 {name} 扩展名与实际内容不一致（内容为 {detected_format}），"
+                f"本次未作为解析依据】"
+            ))
+            continue
         lower = name.lower()
         if lower.endswith(_IMAGE_EXTS):
             if len(data) > LLM_MAX_ATTACHMENT_IMAGE_BYTES:
@@ -501,13 +594,37 @@ def _attachment_blocks(
     return blocks
 
 
+def _dispatch_model(system_prompt: str, content: List[dict], schema, **kwargs):
+    """把内容块翻成本次目标提供商的方言后再交给模型分派层。
+
+    分派层（`llm_client.run`）内部本来就会翻中立块，但那是**它内部**的事：等到那里
+    再翻，「这次到底把什么字节发给了哪个提供商」在外面既看不见、也没法在调用前留痕。
+    这里先用分派层自己的翻译器（`_module_for` + `_translate`，不另造第二套方言表）
+    翻一次，于是 Anthropic 路由拿到 `{"type": "image", "source": …}`、OpenAI 兼容
+    路由拿到 `{"type": "image_url", …}`。
+    **请求体与改造前逐字节相同**，只是把翻译提前到可观察、可审计的位置。
+    """
+    route = claude_client.resolve_route(content)
+    module = claude_client._module_for(route)
+    return claude_client.run(system_prompt, claude_client._translate(content, module),
+                             schema, **kwargs)
+
+
 def _base_blocks(
     image_bytes: bytes,
     filename: str,
     note: str = "",
     attachments: Optional[List[Tuple[str, bytes]]] = None,
+    manifest: Optional[dict] = None,
 ) -> List[dict]:
-    """构造解析/校验共用的输入块: 原图 + 补充说明 + 佐证文件。"""
+    """构造解析/校验共用的输入块: 原图 + 补充说明 + 佐证文件。
+
+    第一件事就是主文件能力门禁：不能直接视觉/取文本的格式（DWG/DXF/3D/未知）
+    在这里抛 `FileCapabilityError`，**任何内容块都还没被构造**。
+    """
+    if manifest is None:
+        manifest = build_input_manifest(filename, image_bytes, attachments)
+    _primary_capability_gate(manifest)
     blocks: List[dict] = [
         claude_client.text_block("【设备需求原图】"),
         claude_client.image_block(image_bytes, filename),
@@ -526,19 +643,20 @@ def parse_drawing(
 ) -> DesignIR:
     """分阶段解析：清单/提取 -> 视觉候选 -> 本地 IR 组装与规则校验。"""
     manifest = build_input_manifest(filename, image_bytes, attachments)
+    _primary_capability_gate(manifest)
     profile = sop.industry_profile([
         filename, note, *[name for name, _ in (attachments or [])],
         *[_attachment_text(name, data)[:5000] for name, data in (attachments or [])
           if name.lower().endswith(_TEXT_EXTS)],
     ])
     knowledge, _ = sop.load("drawing", profile=profile)
-    content = _base_blocks(image_bytes, filename, note, attachments)
+    content = _base_blocks(image_bytes, filename, note, attachments, manifest)
     content.insert(0, claude_client.text_block(
         "【本地输入清单】\n" + json.dumps(manifest, ensure_ascii=False)
         + "\n\n【本次适用 SOP】\n" + knowledge
     ))
     content.append(claude_client.text_block(USER_INSTRUCTION))
-    candidate = claude_client.run(SYSTEM_PROMPT, content, DesignIR)
+    candidate = _dispatch_model(SYSTEM_PROMPT, content, DesignIR)
     return finalize_ir(candidate, filename, manifest)
 
 
@@ -564,7 +682,7 @@ def verify_drawing(
             "请按校验清单逐条核对，仅输出字段级 VerificationPatch。"
         )
     )
-    return claude_client.run(VERIFY_SYSTEM_PROMPT, content, VerificationPatch)
+    return _dispatch_model(VERIFY_SYSTEM_PROMPT, content, VerificationPatch)
 
 
 _VERIFY_PATH = re.compile(
