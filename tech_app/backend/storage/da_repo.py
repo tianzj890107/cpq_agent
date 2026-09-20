@@ -783,6 +783,217 @@ def load_packaging_bom(project_id: str, requirement_no: str = "") -> list[dict]:
     )
 
 
+
+
+# ========================================================================== #
+# 包装工艺路线与标准工时(包装第 6 批):同一 (project_id, requirement_no) 整体替换;
+# 重算一律回到 draft 并清空 confirmed_*(已冻结的版本快照只增不改)。
+# ========================================================================== #
+_PACKAGING_ROUTE_COLUMNS = (
+    "industry", "engine_version", "generated_at", "box_type_code", "total_seconds",
+    "batch_seconds", "has_incomplete_time", "status", "stale", "stale_reasons",
+    "steps_fingerprint", "surface_json", "quote_quantity", "updated_at",
+)
+
+_PACKAGING_ROUTE_STEP_COLUMNS = (
+    "step_no", "step_name", "rank", "workstation", "work_content", "standard_seconds",
+    "needs_standard_time", "automation", "control_point", "parallel_ok", "depends_on",
+    "source", "requirement_field", "note",
+)
+
+
+def save_packaging_route(project_id: str, requirement_no: str, route: dict,
+                         steps: list) -> None:
+    """按 (project_id, requirement_no) 整体替换路线:先删工序行、再重建,主表 upsert。
+
+    `route` 里没带的人工确认列(`confirmed_by` / `confirmed_at`)在重算后**一律清空**
+    —— 通用 upsert 会跳过 None 值列,所以这里补一条显式 UPDATE(Spec §3.2:内容变了
+    就必须重新确认)。已冻结的版本快照不在本函数职责内,一行都不动。
+    """
+    requirement_no = requirement_no or ""
+    now = db.now()
+    row = {key: route.get(key) for key in _PACKAGING_ROUTE_COLUMNS}
+    row["project_id"] = project_id
+    row["requirement_no"] = requirement_no
+    row["industry"] = route.get("industry") or "packaging"
+    row["engine_version"] = route.get("engine_version") or "packaging_route_v1"
+    row["generated_at"] = route.get("generated_at") or now
+    row["status"] = "draft"
+    row["stale"] = 0
+    row["stale_reasons"] = _bom_json(route.get("stale_reasons") or [])
+    row["updated_at"] = now
+    db.upsert("wip_packaging_process_route", row,
+              keys=("project_id", "requirement_no"))
+    db.execute(
+        "UPDATE wip_packaging_process_route SET confirmed_by = NULL, confirmed_at = NULL "
+        "WHERE project_id = ? AND requirement_no = ?",
+        (project_id, requirement_no),
+    )
+    db.execute(
+        "DELETE FROM wip_packaging_process_route_step "
+        "WHERE project_id = ? AND requirement_no = ?",
+        (project_id, requirement_no),
+    )
+    for step in steps or []:
+        step_row = {key: step.get(key) for key in _PACKAGING_ROUTE_STEP_COLUMNS}
+        step_row["project_id"] = project_id
+        step_row["requirement_no"] = requirement_no
+        step_row["parallel_ok"] = 1 if step.get("parallel_ok") else 0
+        step_row["needs_standard_time"] = 1 if step.get("needs_standard_time") else 0
+        # step_no 是主键的一部分,None 一律落成 0 而不是被 upsert 过滤掉列。
+        step_row["step_no"] = step.get("step_no") or 0
+        db.upsert("wip_packaging_process_route_step", step_row,
+                  keys=("project_id", "requirement_no", "step_no"))
+
+
+def load_packaging_route(project_id: str, requirement_no: str = "") -> Optional[dict]:
+    """读单条路线主表;没有则 None(由服务层给 built=false,不报错)。"""
+    return db.query_one(
+        "SELECT * FROM wip_packaging_process_route "
+        "WHERE project_id = ? AND requirement_no = ?",
+        (project_id, requirement_no or ""),
+    )
+
+
+def load_packaging_route_steps(project_id: str, requirement_no: str = "") -> list[dict]:
+    """读回路线工序(按 step_no 升序);没有行时给空列表。"""
+    return db.query(
+        "SELECT * FROM wip_packaging_process_route_step "
+        "WHERE project_id = ? AND requirement_no = ? ORDER BY step_no ASC",
+        (project_id, requirement_no or ""),
+    )
+
+
+def append_packaging_route_version(record: dict) -> int:
+    """追加一条冻结版本快照。只允许 INSERT:本模块不提供更新/删除该表的函数。"""
+    return db.insert("wip_packaging_process_route_version", {
+        "project_id": record["project_id"],
+        "requirement_no": record.get("requirement_no") or "",
+        "version": int(record.get("version") or 1),
+        "confirmed_by": record.get("confirmed_by") or None,
+        "confirmed_at": record.get("confirmed_at") or db.now(),
+        "box_type_code": record.get("box_type_code") or None,
+        "steps_fingerprint": record.get("steps_fingerprint") or None,
+        "surface_json": record.get("surface_json") or None,
+        "quote_quantity": record.get("quote_quantity"),
+        "total_seconds": record.get("total_seconds"),
+        "has_incomplete_time": 1 if record.get("has_incomplete_time") else 0,
+        "steps_json": record.get("steps_json") or "[]",
+    })
+
+
+def packaging_route_versions(project_id: str, requirement_no: str = "") -> list[dict]:
+    """按版本号升序读回快照;历史快照不被后续重算/确认改写。"""
+    return db.query(
+        "SELECT * FROM wip_packaging_process_route_version "
+        "WHERE project_id = ? AND requirement_no = ? ORDER BY version ASC",
+        (project_id, requirement_no or ""),
+    )
+
+
+
+
+# ========================================================================== #
+# 包装成本测算(包装第 7 批):一个 (项目, 需求单, 场景) 一条当前值;
+# 重算先删该 estimate 的明细行再重建,estimate 行按唯一键 upsert。
+# ========================================================================== #
+_PACKAGING_COST_COLUMNS = (
+    "quote_quantity", "currency", "tax_rate", "loss_base_scope", "quantity_tier",
+    "trial_or_mass_production", "included_components", "material_total", "process_total",
+    "labor_total", "tooling_total", "packaging_total", "freight_total", "other_total",
+    "subtotal", "loss_amount", "total_cost", "has_gaps", "computed_at",
+)
+
+_PACKAGING_COST_ITEM_COLUMNS = (
+    "seq", "part_code", "part_name", "cost_category", "formula_code", "formula_version",
+    "content_code", "tooling_code", "rate_code", "quantity_basis", "quantity", "unit",
+    "unit_price", "amount", "min_charge_applied", "loss_rate", "amount_with_loss",
+    "expression", "inputs_json", "source_ref", "source", "note",
+)
+
+
+def save_packaging_cost(project_id: str, requirement_no: str, scenario: str,
+                        estimate: dict, items: list) -> int:
+    """落一条成本测算:estimate 行 upsert,明细行先删后建(同一 estimate 不翻倍)。"""
+    requirement_no = requirement_no or ""
+    scenario = scenario or "default"
+    estimate_id = str(estimate["estimate_id"])
+    now = db.now()
+    row = {key: estimate.get(key) for key in _PACKAGING_COST_COLUMNS}
+    row.update({
+        "estimate_id": estimate_id,
+        "project_id": project_id,
+        "requirement_no": requirement_no,
+        "scenario_code": scenario,
+        "industry": estimate.get("industry") or "packaging",
+        "engine_version": estimate.get("engine_version") or "packaging_cost_v1",
+        "cost_profile": estimate.get("cost_profile") or "packaging_v1",
+        "loss_base_scope": estimate.get("loss_base_scope") or "material_process_and_labor",
+        "has_gaps": 1 if estimate.get("has_gaps") else 0,
+        "gaps_json": _box_match_json(estimate.get("gaps") or []),
+        "assumptions_json": _box_match_json(estimate.get("assumptions") or []),
+        "computed_at": estimate.get("computed_at") or now,
+        "created_at": estimate.get("created_at") or now,
+        "updated_at": now,
+    })
+    db.upsert("wip_packaging_cost_estimate", row,
+              keys=("project_id", "requirement_no", "scenario_code"))
+    db.execute("DELETE FROM wip_packaging_cost_item WHERE estimate_id = ?", (estimate_id,))
+    written = 0
+    for index, item in enumerate(items or []):
+        item_row = {key: item.get(key) for key in _PACKAGING_COST_ITEM_COLUMNS}
+        item_row["estimate_id"] = estimate_id
+        item_row["seq"] = item.get("seq") or (index + 1)
+        item_row["cost_category"] = item.get("cost_category") or ""
+        item_row["amount"] = item.get("amount") or 0.0
+        item_row["amount_with_loss"] = item.get("amount_with_loss")
+        if item_row["amount_with_loss"] is None:
+            item_row["amount_with_loss"] = item.get("amount") or 0.0
+        item_row["min_charge_applied"] = 1 if item.get("min_charge_applied") else 0
+        item_row["source"] = item.get("source") or "kb"
+        db.insert("wip_packaging_cost_item", item_row)
+        written += 1
+    return written
+
+
+def load_packaging_cost(project_id: str, requirement_no: str = "",
+                        scenario: str = "") -> Optional[dict]:
+    """读一条成本测算:指定场景优先,否则先 `default`,再取最近算过的一条。"""
+    params: list = [project_id, requirement_no or ""]
+    if scenario:
+        return db.query_one(
+            "SELECT * FROM wip_packaging_cost_estimate "
+            "WHERE project_id = ? AND requirement_no = ? AND scenario_code = ?",
+            (*params, scenario))
+    row = db.query_one(
+        "SELECT * FROM wip_packaging_cost_estimate "
+        "WHERE project_id = ? AND requirement_no = ? AND scenario_code = 'default'", params)
+    if row:
+        return row
+    return db.query_one(
+        "SELECT * FROM wip_packaging_cost_estimate "
+        "WHERE project_id = ? AND requirement_no = ? "
+        "ORDER BY computed_at DESC, scenario_code ASC LIMIT 1", params)
+
+
+def load_packaging_cost_items(estimate_id: str) -> list[dict]:
+    """按 seq 升序读明细行;没有行时给空列表。"""
+    return db.query(
+        "SELECT * FROM wip_packaging_cost_item WHERE estimate_id = ? ORDER BY seq ASC",
+        (estimate_id,))
+
+
+def packaging_cost_estimates(project_id: str, requirement_no: str = "") -> list[dict]:
+    """同一 (项目, 需求单) 的全部场景(按数量降序、场景码升序),供成本曲线用。"""
+    rows = db.query(
+        "SELECT * FROM wip_packaging_cost_estimate "
+        "WHERE project_id = ? AND requirement_no = ?",
+        (project_id, requirement_no or ""))
+    rows.sort(key=lambda r: (-float(r.get("quote_quantity") or 0.0),
+                             str(r.get("scenario_code") or "")))
+    return rows
+
+
 # ========================================================================== #
 # L3 · 评估结果
 # ========================================================================== #

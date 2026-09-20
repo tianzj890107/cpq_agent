@@ -919,6 +919,23 @@ def packaging_logistics_rules() -> list[dict]:
     return _sort_rows(_table("kb_packaging_logistics_rule"), ("rule_code", "asc"))
 
 
+def packaging_cost_contents() -> list[dict]:
+    """包材明细全量（按编码升序）。
+
+    包装第 7 批的成本引擎逐条套 FORMULA_CATALOG 的 `PKG-P-*` 公式；本模块只读快照，
+    不做任何计算、不缓存派生结果。
+    """
+    return _sort_rows(_table("kb_packaging_cost_content"), ("content_code", "asc"))
+
+
+def packaging_tooling_rules() -> list[dict]:
+    """工装/刀模规则全量（按编码升序）。
+
+    `mode` 是五种分摊方式的闭集，业务改分摊方式只改这张表，不改代码（包装第 7 批）。
+    """
+    return _sort_rows(_table("kb_packaging_tooling_rule"), ("tooling_code", "asc"))
+
+
 def save_standard_part(part: dict) -> str:
     row = dict(part)
     row.setdefault("std_id", _uid("STD"))

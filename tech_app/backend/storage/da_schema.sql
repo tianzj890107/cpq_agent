@@ -564,6 +564,8 @@ CREATE TABLE IF NOT EXISTS kb_packaging_logistics_rule (
     units_per_pallet    INTEGER,
     shipping_mode       TEXT,
     min_freight         REAL,
+    -- 包装第 7 批新增：托盘/整车单托运费（空 = 该分支无效，运输只走最低运费）。
+    pallet_freight      REAL,
     loading_rate        TEXT,
     quantity_tier       TEXT,
     refund_condition    TEXT,
@@ -593,6 +595,109 @@ CREATE TABLE IF NOT EXISTS kb_packaging_match_weight (
     created_at          TEXT,
     updated_at          TEXT
 );
+
+-- 包材明细（包装第 7 批，0903「包装运输」Sheet 的 11 行）：逐条单件包装成本。
+-- 单件成本 = kb_packaging_cost_formula 里 PKG-P-* 的表达式结果（表达式内已含 ÷ 装数）。
+CREATE TABLE IF NOT EXISTS kb_packaging_cost_content (
+    content_code     TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    category         TEXT,                 -- 纸箱/平卡/隔卡/胶袋/护角/卡板/标签…
+    material_spec    TEXT,
+    length_mm        REAL,
+    width_mm         REAL,
+    height_mm        REAL,
+    gsm              REAL,
+    usage_qty        REAL,                 -- 用量
+    material_price   REAL,                 -- 材料单价
+    units_per_pack   REAL,                 -- 装数
+    formula_code     TEXT,                 -- FORMULA_CATALOG 的 PKG-P-*
+    industry         TEXT NOT NULL DEFAULT 'packaging',
+    source           TEXT, version TEXT, effective_from TEXT,
+    status           TEXT NOT NULL DEFAULT 'active',
+    note             TEXT, created_at TEXT, updated_at TEXT
+);
+
+-- 工装/刀模规则（包装第 7 批）：寿命、承诺量、达量返还；mode 是五种分摊方式闭集。
+CREATE TABLE IF NOT EXISTS kb_packaging_tooling_rule (
+    tooling_code     TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    process_code     TEXT,                 -- 烫金/丝印/击凹凸/模切/装配线
+    mode             TEXT NOT NULL CHECK (mode IN (
+                         'one_off', 'lifetime', 'committed', 'refund', 'customer_supplied')),
+    tooling_cost     REAL,
+    tooling_lifetime REAL,
+    refund_threshold REAL,
+    refundable       INTEGER NOT NULL DEFAULT 0 CHECK (refundable IN (0, 1)),
+    industry         TEXT NOT NULL DEFAULT 'packaging',
+    source           TEXT, version TEXT, effective_from TEXT,
+    status           TEXT NOT NULL DEFAULT 'active',
+    note             TEXT, created_at TEXT, updated_at TEXT
+);
+
+-- 包装成本测算结果（包装第 7 批）：一个 (项目, 需求单, 场景) 一条当前值。
+-- 重算先删该 estimate 的明细行再重建；estimate 行按唯一键 upsert。
+CREATE TABLE IF NOT EXISTS wip_packaging_cost_estimate (
+    estimate_id      TEXT PRIMARY KEY,          -- pkgcost:<project>:<requirement>:<scenario>
+    project_id       TEXT NOT NULL,
+    requirement_no   TEXT NOT NULL DEFAULT '',
+    scenario_code    TEXT NOT NULL DEFAULT 'default',
+    industry         TEXT NOT NULL DEFAULT 'packaging',
+    engine_version   TEXT NOT NULL,
+    cost_profile     TEXT NOT NULL,             -- packaging_v1
+    quote_quantity   REAL,
+    currency         TEXT NOT NULL DEFAULT 'CNY',
+    tax_rate         REAL,
+    loss_base_scope  TEXT NOT NULL DEFAULT 'material_process_and_labor',
+    quantity_tier    TEXT,
+    trial_or_mass_production TEXT,
+    included_components TEXT,
+    material_total   REAL NOT NULL DEFAULT 0,
+    process_total    REAL NOT NULL DEFAULT 0,
+    labor_total      REAL NOT NULL DEFAULT 0,
+    tooling_total    REAL NOT NULL DEFAULT 0,
+    packaging_total  REAL NOT NULL DEFAULT 0,
+    freight_total    REAL NOT NULL DEFAULT 0,
+    other_total      REAL NOT NULL DEFAULT 0,
+    subtotal         REAL NOT NULL DEFAULT 0,   -- 含损耗的部件行合计
+    loss_amount      REAL NOT NULL DEFAULT 0,
+    total_cost       REAL NOT NULL DEFAULT 0,
+    has_gaps         INTEGER NOT NULL DEFAULT 0 CHECK (has_gaps IN (0, 1)),
+    gaps_json        TEXT,
+    assumptions_json TEXT,
+    computed_at      TEXT,
+    created_at       TEXT, updated_at TEXT,
+    UNIQUE (project_id, requirement_no, scenario_code)
+);
+
+-- 成本明细行（包装第 7 批）：一行 = (部件 × 成本类别) 或项目级行（部件为空）。
+CREATE TABLE IF NOT EXISTS wip_packaging_cost_item (
+    item_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    estimate_id      TEXT NOT NULL REFERENCES wip_packaging_cost_estimate(estimate_id) ON DELETE CASCADE,
+    seq              INTEGER NOT NULL,
+    part_code        TEXT,                      -- 项目级行为空
+    part_name        TEXT,
+    cost_category    TEXT NOT NULL,             -- COST_CATEGORIES / PROJECT_COST_CATEGORIES
+    formula_code     TEXT,
+    formula_version  TEXT,
+    content_code     TEXT,                      -- 包材行
+    tooling_code     TEXT,                      -- 工装行
+    rate_code        TEXT,
+    quantity_basis   TEXT,                      -- 按单件/按批/按寿命/按承诺量
+    quantity         REAL, unit TEXT,
+    unit_price       REAL,
+    amount           REAL NOT NULL DEFAULT 0,   -- 未计损耗
+    min_charge_applied INTEGER NOT NULL DEFAULT 0 CHECK (min_charge_applied IN (0, 1)),
+    loss_rate        REAL,
+    amount_with_loss REAL NOT NULL DEFAULT 0,
+    expression       TEXT,                      -- 求值用的表达式（可解释）
+    inputs_json      TEXT,                      -- 输入变量快照
+    source_ref       TEXT,                      -- 0903 单元格 / 工序 step_no / 材料码
+    source           TEXT NOT NULL DEFAULT 'kb' CHECK (source IN ('kb', 'formula', 'human')),
+    note             TEXT,
+    UNIQUE (estimate_id, seq)
+);
+CREATE INDEX IF NOT EXISTS ix_packaging_cost_item ON wip_packaging_cost_item(estimate_id, cost_category);
+
 
 -- =========================================================================
 -- L1 · 项目输入(数据源侧,只读)
@@ -1072,6 +1177,71 @@ CREATE TABLE IF NOT EXISTS wip_packaging_bom_item (
     PRIMARY KEY (project_id, requirement_no, bom_category, item_key)
 );
 CREATE INDEX IF NOT EXISTS ix_packaging_bom_status ON wip_packaging_bom_item(project_id, requirement_no, status);
+
+-- 包装工艺路线与标准工时(包装第 6 批):一条需求一张路线,同一
+-- (project_id, requirement_no) 整体替换;工序行先删后建,不保留历史。
+-- 位次与顺序由服务层 packaging_route.PROCESS_CATALOG 定义(kb 的 seq 只是里程碑分组)。
+CREATE TABLE IF NOT EXISTS wip_packaging_process_route (
+    project_id        TEXT NOT NULL,
+    requirement_no    TEXT NOT NULL DEFAULT '',
+    industry          TEXT NOT NULL DEFAULT 'packaging',
+    engine_version    TEXT NOT NULL,
+    generated_at      TEXT NOT NULL,
+    box_type_code     TEXT,
+    total_seconds     REAL,
+    batch_seconds     REAL,
+    has_incomplete_time INTEGER NOT NULL DEFAULT 0 CHECK (has_incomplete_time IN (0, 1)),
+    status            TEXT NOT NULL DEFAULT 'draft'
+                      CHECK (status IN ('draft', 'confirmed')),
+    confirmed_by      TEXT,
+    confirmed_at      TEXT,
+    stale             INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+    stale_reasons     TEXT,          -- JSON 数组
+    steps_fingerprint TEXT,          -- 工序序列指纹
+    surface_json      TEXT,          -- 判定用到的需求表面字段快照
+    quote_quantity    REAL,
+    updated_at        TEXT,
+    PRIMARY KEY (project_id, requirement_no)
+);
+
+CREATE TABLE IF NOT EXISTS wip_packaging_process_route_step (
+    project_id     TEXT NOT NULL,
+    requirement_no TEXT NOT NULL DEFAULT '',
+    step_no        INTEGER NOT NULL,
+    step_name      TEXT NOT NULL,
+    rank           INTEGER,
+    workstation    TEXT,
+    work_content   TEXT,
+    standard_seconds REAL,
+    needs_standard_time INTEGER NOT NULL DEFAULT 0 CHECK (needs_standard_time IN (0, 1)),
+    automation     TEXT,
+    control_point  TEXT,
+    parallel_ok    INTEGER NOT NULL DEFAULT 0 CHECK (parallel_ok IN (0, 1)),
+    depends_on     INTEGER,
+    source         TEXT,
+    requirement_field TEXT,
+    note           TEXT,
+    PRIMARY KEY (project_id, requirement_no, step_no)
+);
+
+-- 版本快照:只增不改(仓库层不提供 UPDATE/DELETE)
+CREATE TABLE IF NOT EXISTS wip_packaging_process_route_version (
+    version_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id     TEXT NOT NULL,
+    requirement_no TEXT NOT NULL DEFAULT '',
+    version        INTEGER NOT NULL,
+    confirmed_by   TEXT,
+    confirmed_at   TEXT NOT NULL,
+    box_type_code  TEXT,
+    steps_fingerprint TEXT,
+    surface_json   TEXT,
+    quote_quantity REAL,
+    total_seconds  REAL,
+    has_incomplete_time INTEGER NOT NULL DEFAULT 0,
+    steps_json     TEXT NOT NULL,
+    UNIQUE (project_id, requirement_no, version)
+);
+CREATE INDEX IF NOT EXISTS ix_packaging_route_status ON wip_packaging_process_route(project_id, requirement_no, status);
 
 
 -- =========================================================================

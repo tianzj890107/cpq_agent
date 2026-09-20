@@ -372,3 +372,382 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     new MutationObserver(() => { if (!document.querySelector('#packagingBomPanel')) pbStart(); }).observe(pbApp, {childList: true});
   }
 })();
+
+/* ------------------------------------------------------------------------ *
+ * 包装第 6 批：工艺路线与标准工时面板
+ * （Spec docs/specs/packaging-process-route.md §4）
+ * 1.2 需求确认页里，包装需求单多一块路线面板：工序表（位次 / 设备 / 标准工时 /
+ * 自动化 / 质控点）、待补工时缺口、聚合工序缺口、顺序违规、确认并冻结版本、
+ * 版本快照列表与 stale 提示。
+ * 只在 industry=packaging 的需求单上出现；其它行业完全不挂载（一条请求都不发）。
+ * 接口：/api/projects/<pid>/requirement/packaging-route[/confirm|/versions]
+ * ------------------------------------------------------------------------ */
+(function () {
+  const PR_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
+  const PR_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
+  const PR_STATUS_LABELS = {draft: '草稿（未确认）', confirmed: '已确认'};
+  const PR_STALE_LABELS = {route_changed: '工序序列已变', requirement_changed: '表面工艺字段已变', quantity_changed: '报价数量已变'};
+  let prPid = '';
+  let prBusy = false;
+
+  function prEsc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+  }
+  function prToast(message, error) {
+    if (typeof toast === 'function') { toast(message, error ? 4200 : 3000); return; }
+    const el = document.createElement('div');
+    el.className = `page-toast${error ? ' error' : ''}`;
+    el.textContent = message;
+    document.body.append(el);
+    setTimeout(() => el.remove(), 3600);
+  }
+  async function prApi(url, options) {
+    const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
+    if (!response.ok) {
+      let detail = '';
+      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      throw new Error(detail || `请求失败（${response.status}）`);
+    }
+    return response.json();
+  }
+  function prProjectId() {
+    if (prPid) return prPid;
+    const query = new URLSearchParams(location.search);
+    prPid = query.get('project_id') || query.get('pid') || document.body.dataset.projectId || '';
+    return prPid;
+  }
+  function prRoles() {
+    try { return (window.techSession && techSession.roles && techSession.roles()) || []; } catch (error) { return []; }
+  }
+  function prCanWrite() {
+    const user = (typeof currentUser === 'function') ? (currentUser() || {}) : {};
+    const role = String(user.role || user.cpq_role_code || '');
+    if (PR_WRITE_ROLES.indexOf(role) >= 0) return true;
+    return prRoles().some(item => PR_WRITE_ROLES.indexOf(String(item)) >= 0);
+  }
+  function prSeconds(value) {
+    return (value === null || value === undefined || value === '') ? '待补' : `${value}s`;
+  }
+  function prSource(item) {
+    const source = String(item.source || '');
+    if (source.indexOf('requirement:') === 0) return `需求补齐（${prEsc(source.slice('requirement:'.length))}）`;
+    if (source.indexOf('template:') === 0) return `模板展开（${prEsc(source.slice('template:'.length))}）`;
+    if (source === 'template') return '模板';
+    return prEsc(source || '—');
+  }
+  function prRow(item) {
+    const needsTime = item.needs_standard_time || item.standard_seconds === null || item.standard_seconds === undefined;
+    return `<tr class="pr-step${needsTime ? ' pr-step-pending' : ''}" data-step-no="${prEsc(item.step_no)}">
+      <td class="pr-no">${prEsc(item.step_no)}</td>
+      <td class="pr-name">${prEsc(item.step_name)}</td>
+      <td class="pr-station">${prEsc(item.workstation || '—')}</td>
+      <td class="pr-seconds">${needsTime ? '<span class="pr-todo">待补</span>' : prEsc(prSeconds(item.standard_seconds))}</td>
+      <td class="pr-auto">${prEsc(item.automation || '—')}</td>
+      <td class="pr-control">${prEsc(item.control_point || '—')}</td>
+      <td class="pr-source">${prSource(item)}</td>
+    </tr>`;
+  }
+  function prPanel(record, writable, versions) {
+    const route = record || {};
+    const steps = route.steps || [];
+    const stats = route.stats || {};
+    const gaps = route.gaps || {};
+    const built = !!route.built;
+    const title = `工艺路线与标准工时${route.box_type_code ? `（${prEsc(route.box_type_code)}）` : ''}`;
+    const status = String(route.status || 'draft');
+    const confirmed = route.confirmed_by
+      ? `<span class="pr-confirmed">已确认：${prEsc(route.confirmed_by)} · ${prEsc(route.confirmed_at || '—')}</span>` : '';
+    const stale = route.stale
+      ? `<div class="pr-stale">输入已变化，请重新确认：${prEsc((route.stale_reasons || []).map(code => PR_STALE_LABELS[code] || code).join('、'))}</div>` : '';
+    const needsTime = (gaps.needs_standard_time || []);
+    const aggregate = (gaps.aggregate_steps || []);
+    const violations = (gaps.order_violations || []);
+    const gapLines = [
+      needsTime.length ? `<div class="pr-gap">待补标准工时：${prEsc(needsTime.join('、'))}（模板没有这道工序的秒数，不编数）</div>` : '',
+      aggregate.length ? `<div class="pr-gap">未拆开的聚合工序：${prEsc(aggregate.join('、'))}（需求没填覆膜/烫金/UV，保留模板原样）</div>` : '',
+      violations.length ? `<div class="pr-gap pr-gap-error">顺序违规：${prEsc(violations.join('；'))}（不改好不能确认）</div>` : '',
+    ].join('');
+    const table = steps.length
+      ? `<table class="pr-table">
+          <thead><tr><th>序号</th><th>工序</th><th>设备</th><th>标准工时</th><th>自动化</th><th>质控点</th><th>来源</th></tr></thead>
+          <tbody>${steps.map(prRow).join('')}</tbody>
+        </table>`
+      : '<div class="pr-empty">还没有工艺路线。确认盒型并生成包装 BOM 后，点「重算工艺路线」开始。</div>';
+    const versionList = (versions || []).length
+      ? `<ol class="pr-versions">${versions.map(item => `<li class="pr-version">
+          <span class="pr-version-no">v${prEsc(item.version)}</span>
+          <span class="pr-version-meta">${prEsc(item.confirmed_by || '—')} · ${prEsc(item.confirmed_at || '—')}</span>
+          <span class="pr-version-meta">工序 ${prEsc((JSON.parse(item.steps_json || '[]') || []).length)} 道 · 单件 ${prEsc(item.total_seconds === null || item.total_seconds === undefined ? '—' : `${item.total_seconds}s`)}</span>
+          <span class="pr-version-meta">指纹 ${prEsc(String(item.steps_fingerprint || '').slice(0, 8) || '—')}</span>
+        </li>`).join('')}</ol>`
+      : '<div class="pr-empty">还没有冻结版本。工艺经理确认后会出现第 1 条快照。</div>';
+    return `<section class="card section pr-panel" id="packagingRoutePanel">
+      <h2>${title}</h2>
+      <div class="pr-hint">工序顺序按第 6 批的规范位次排（不用知识库的里程碑分组）；顺序违规 / 待补工时都是显式缺口，不编数。状态：${prEsc(PR_STATUS_LABELS[status] || status)}${confirmed ? ` · ${confirmed}` : ''}</div>
+      ${stale}
+      <div class="pr-hint">共 ${prEsc(stats.step_count || 0)} 道 · 模板工序 ${prEsc(stats.template_steps || 0)} · 需求补齐 ${prEsc(stats.synthetic_steps || 0)} · 手工 ${prEsc(stats.manual_steps || 0)} · 自动 ${prEsc(stats.auto_steps || 0)} · 已冻结 ${prEsc(stats.confirmed_versions || 0)} 版。单件合计 ${prEsc(route.total_seconds === null || route.total_seconds === undefined ? '—' : `${route.total_seconds}s`)} · 批量 ${prEsc(route.batch_seconds === null || route.batch_seconds === undefined ? '—' : `${route.batch_seconds}s`)}。</div>
+      ${gapLines}
+      <div class="pr-actions">
+        <button class="btn secondary" data-pr-build="1" ${writable ? '' : 'disabled'}>重算工艺路线</button>
+        <button class="btn primary" data-pr-confirm="1" ${writable && built && !violations.length ? '' : 'disabled'}>确认并冻结版本</button>
+      </div>
+      ${writable ? '' : `<div class="pr-hint">${PR_WRITE_HINT}，当前为只读。</div>`}
+      ${table}
+      <h3>版本快照</h3>
+      ${versionList}
+      <div class="pr-hint">本批只排路线与标准工时，不算成本价格、不做利润报价、不排产能与设备日历（第 7、8 批）。</div>
+    </section>`;
+  }
+
+  async function prRefresh() {
+    const pid = prProjectId();
+    const host = document.querySelector('#packagingRoutePanel');
+    if (!pid || !host) return;
+    const payload = await prApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-route`);
+    const record = (payload || {}).route || {};
+    let versions = [];
+    if (record.built) {
+      const versionPayload = await prApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-route/versions`);
+      versions = (versionPayload || {}).versions || [];
+    }
+    host.outerHTML = prPanel(record, prCanWrite(), versions);
+    prBind(pid);
+  }
+  function prBind(pid) {
+    const build = document.querySelector('[data-pr-build]');
+    if (build) build.onclick = () => prSubmit(pid, '/requirement/packaging-route', {}, '工艺路线已重算');
+    const confirm = document.querySelector('[data-pr-confirm]');
+    if (confirm) confirm.onclick = () => prSubmit(pid, '/requirement/packaging-route/confirm', {}, '已确认并冻结版本');
+  }
+  async function prSubmit(pid, suffix, body, okMessage) {
+    if (prBusy) return;
+    prBusy = true;
+    try {
+      await prApi(`/api/projects/${encodeURIComponent(pid)}/requirement${suffix}`, {method: 'POST', body: JSON.stringify(body)});
+      prToast(okMessage);
+      prBusy = false;
+      await prRefresh();
+    } catch (error) {
+      prBusy = false;
+      prToast((error && error.message) || '包装工艺路线操作失败', true);
+    }
+  }
+
+  // 需求单不是包装行业就不挂载（其它行业一条请求都不发）。
+  let prMounting = false;
+  let prFailures = 0;
+  async function prMaybeMount() {
+    if (prMounting || prFailures >= 2) return;
+    const host = document.querySelector('#app .footer-actions');
+    if (!host || document.querySelector('#packagingRoutePanel')) return;
+    const pid = prProjectId();
+    if (!pid) return;
+    prMounting = true;
+    try {
+      const requirement = await prApi(`/api/projects/${encodeURIComponent(pid)}/requirement`);
+      const industry = String((((requirement || {}).requirement || {}).data || {}).industry || '').trim();
+      if (industry !== 'packaging') return;
+      const placeholder = document.createElement('section');
+      placeholder.id = 'packagingRoutePanel';
+      placeholder.className = 'card section pr-panel';
+      placeholder.dataset.pending = '1';
+      placeholder.innerHTML = '<h2>工艺路线与标准工时</h2><div class="pr-empty">正在读取工艺路线…</div>';
+      host.parentNode.insertBefore(placeholder, host);
+      await prRefresh();
+    } catch (error) {
+      prFailures += 1;
+      const pending = document.querySelector('#packagingRoutePanel[data-pending="1"]');
+      if (pending) pending.remove();
+    } finally {
+      prMounting = false;
+    }
+  }
+
+  window.CfPackagingRoutePanel = {mount: prMaybeMount, refresh: prRefresh};
+  const prStart = () => { prMaybeMount().catch(() => {}); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', prStart);
+  else prStart();
+  const prApp = document.querySelector('#app');
+  if (prApp && typeof MutationObserver === 'function') {
+    new MutationObserver(() => { if (!document.querySelector('#packagingRoutePanel')) prStart(); }).observe(prApp, {childList: true});
+  }
+})();
+
+/* ------------------------------------------------------------------------ *
+ * 包装第 7 批：专用成本测算面板
+ * （Spec docs/specs/packaging-cost-engine.md §4 / §8）
+ * 1.2 需求确认页里，包装需求单多一块成本面板：三层汇总（部件 / 项目 / 成本类别）、
+ * 24 个成本类别、10 个报告分组、逐行明细、缺口（缺料价 / 缺费率 / 缺工时 → 明确
+ * 「待询价」，绝不当 0 静默计入）与工装分摊 / 最低收费命中标记。
+ * 只在 industry=packaging 且已有确认盒型 + BOM + 路线时出现；其它行业一条请求都不发。
+ * 接口：/api/projects/<pid>/requirement/packaging-cost[/items]
+ * ------------------------------------------------------------------------ */
+(function () {
+  const PC_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
+  const PC_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
+  const PC_GROUP_ORDER = ['材料', '印刷', '覆膜', '烫金', '丝印', '裱纸', '模切', '开槽', '手工', '包装'];
+  let pcPid = '';
+  let pcBusy = false;
+
+  function pcEsc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+  }
+  function pcMoney(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(6) : '—';
+  }
+  function pcToast(message, error) {
+    if (typeof toast === 'function') { toast(message, error ? 4200 : 3000); return; }
+    const el = document.createElement('div');
+    el.className = `page-toast${error ? ' error' : ''}`;
+    el.textContent = message;
+    document.body.append(el);
+    setTimeout(() => el.remove(), 3600);
+  }
+  async function pcApi(url, options) {
+    const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
+    if (!response.ok) {
+      let detail = '';
+      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      throw new Error(detail || `请求失败（${response.status}）`);
+    }
+    return response.json();
+  }
+  function pcProjectId() {
+    if (pcPid) return pcPid;
+    const query = new URLSearchParams(location.search);
+    pcPid = query.get('project_id') || query.get('pid') || document.body.dataset.projectId || '';
+    return pcPid;
+  }
+  function pcRoles() {
+    try { return (window.techSession && techSession.roles && techSession.roles()) || []; } catch (error) { return []; }
+  }
+  function pcCanWrite() {
+    const user = (typeof currentUser === 'function') ? (currentUser() || {}) : {};
+    const role = String(user.role || user.cpq_role_code || '');
+    if (PC_WRITE_ROLES.indexOf(role) >= 0) return true;
+    return pcRoles().some(item => PC_WRITE_ROLES.indexOf(String(item)) >= 0);
+  }
+  function pcGapLine(gap) {
+    const detail = gap.detail || gap.code || '';
+    return `<div class="pc-gap">待询价：${pcEsc(detail)}</div>`;
+  }
+  function pcCategoryRows(cost) {
+    const categories = cost.categories || {};
+    const labels = cost.category_labels || {};
+    const codes = Object.keys(categories);
+    return codes.map(code => {
+      const name = labels[code] || code;
+      const amount = categories[code];
+      const zero = amount === null || amount === undefined || Number(amount) === 0;
+      return `<tr><td>${pcEsc(name)}</td><td class="pc-num${zero ? ' pc-zero' : ''}">${pcMoney(amount)}</td></tr>`;
+    }).join('');
+  }
+  function pcGroupRows(cost) {
+    const groups = cost.report_groups || {};
+    return PC_GROUP_ORDER.filter(name => name in groups).map(name =>
+      `<tr><td>${pcEsc(name)}</td><td class="pc-num">${pcMoney(groups[name])}</td></tr>`).join('');
+  }
+  function pcItemRows(items) {
+    if (!items.length) return '<div class="pc-empty">还没有成本明细行。</div>';
+    return `<table class="pc-table"><thead><tr><th>部件</th><th>类别</th><th class="pc-num">金额</th><th class="pc-num">含损耗</th><th>来源</th></tr></thead><tbody>`
+      + items.map(item => {
+        const flag = item.min_charge_applied ? ' <span class="pc-flag">最低收费</span>' : '';
+        return `<tr><td>${pcEsc(item.part_name || '—')}</td><td>${pcEsc(item.cost_category || '—')}</td>`
+          + `<td class="pc-num">${pcMoney(item.amount)}${flag}</td><td class="pc-num">${pcMoney(item.amount_with_loss)}</td>`
+          + `<td class="pc-source">${pcEsc(item.source_ref || item.source || '—')}</td></tr>`;
+      }).join('') + '</tbody></table>';
+  }
+  function pcPanel(cost, items, writable) {
+    const record = cost || {};
+    const built = !!record.built;
+    const gaps = record.gaps || [];
+    const gapLines = gaps.map(pcGapLine).join('');
+    const summary = `<div class="pc-hint">材料 ${pcMoney(record.material_total)} · 加工 ${pcMoney(record.process_total)} · 人工 ${pcMoney(record.labor_total)} · 工装 ${pcMoney(record.tooling_total)} · 包装 ${pcMoney(record.packaging_total)} · 运输 ${pcMoney(record.freight_total)} · 其他 ${pcMoney(record.other_total)}</div>`;
+    const totals = `<div class="pc-hint">小计（含损耗）${pcMoney(record.subtotal)} · 损耗 ${pcMoney(record.loss_amount)} · 总成本 ${pcMoney(record.total_cost)} ${pcEsc(record.currency || 'CNY')}</div>`;
+    const head = built
+      ? `<div class="pc-hint">引擎 ${pcEsc(record.engine_version || '—')} · 口径 ${pcEsc(record.cost_profile || '—')} · 数量 ${pcEsc(record.quote_quantity ?? '—')} · 场景 ${pcEsc(record.scenario_code || 'default')}</div>`
+      : '<div class="pc-empty">还没有成本测算，点「重算成本」按已确认盒型 + BOM + 路线生成。</div>';
+    const tables = built
+      ? `<h3>成本类别</h3><table class="pc-table"><thead><tr><th>类别</th><th class="pc-num">金额</th></tr></thead><tbody>${pcCategoryRows(record)}</tbody></table>`
+        + `<h3>报告分组</h3><table class="pc-table"><thead><tr><th>分组</th><th class="pc-num">金额</th></tr></thead><tbody>${pcGroupRows(record)}</tbody></table>`
+        + `<h3>明细行</h3>${pcItemRows(items)}`
+      : '';
+    return `<section class="card section pc-panel" id="packagingCostPanel">
+      <h2>包装成本测算</h2>
+      <div class="pc-hint">逐部件 × 逐成本类别；缺料价 / 缺费率 / 缺工时一律出「待询价」缺口，合计不含该金额。本批只出成本，不出售价 / 利润（第 8 批）。</div>
+      ${head}${summary}${totals}
+      ${gapLines}
+      <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button></div>
+      ${writable ? '' : `<div class="pc-hint">${PC_WRITE_HINT}，当前为只读。</div>`}
+      ${tables}
+    </section>`;
+  }
+
+  async function pcRefresh() {
+    const pid = pcProjectId();
+    const host = document.querySelector('#packagingCostPanel');
+    if (!pid || !host) return;
+    const payload = await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-cost`);
+    const cost = (payload || {}).cost || {};
+    const items = (cost.items || []);
+    host.outerHTML = pcPanel(cost, items, pcCanWrite());
+    pcBind(pid);
+  }
+  function pcBind(pid) {
+    const build = document.querySelector('[data-pc-build]');
+    if (build) build.onclick = () => pcSubmit(pid);
+  }
+  async function pcSubmit(pid) {
+    if (pcBusy) return;
+    pcBusy = true;
+    try {
+      await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-cost`, {method: 'POST', body: JSON.stringify({})});
+      pcToast('包装成本已重算');
+      pcBusy = false;
+      await pcRefresh();
+    } catch (error) {
+      pcBusy = false;
+      pcToast((error && error.message) || '包装成本操作失败', true);
+    }
+  }
+
+  let pcMounting = false;
+  let pcFailures = 0;
+  async function pcMaybeMount() {
+    if (pcMounting || pcFailures >= 2) return;
+    const host = document.querySelector('#app .footer-actions');
+    if (!host || document.querySelector('#packagingCostPanel')) return;
+    const pid = pcProjectId();
+    if (!pid) return;
+    pcMounting = true;
+    try {
+      const requirement = await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement`);
+      const industry = String((((requirement || {}).requirement || {}).data || {}).industry || '').trim();
+      if (industry !== 'packaging') return;
+      const placeholder = document.createElement('section');
+      placeholder.id = 'packagingCostPanel';
+      placeholder.className = 'card section pc-panel';
+      placeholder.dataset.pending = '1';
+      placeholder.innerHTML = '<h2>包装成本测算</h2><div class="pc-empty">正在读取成本测算…</div>';
+      host.parentNode.insertBefore(placeholder, host);
+      await pcRefresh();
+    } catch (error) {
+      pcFailures += 1;
+      const pending = document.querySelector('#packagingCostPanel[data-pending="1"]');
+      if (pending) pending.remove();
+    } finally {
+      pcMounting = false;
+    }
+  }
+
+  window.CfPackagingCostPanel = {mount: pcMaybeMount, refresh: pcRefresh};
+  const pcStart = () => { pcMaybeMount().catch(() => {}); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pcStart);
+  else pcStart();
+  const pcApp = document.querySelector('#app');
+  if (pcApp && typeof MutationObserver === 'function') {
+    new MutationObserver(() => { if (!document.querySelector('#packagingCostPanel')) pcStart(); }).observe(pcApp, {childList: true});
+  }
+})();

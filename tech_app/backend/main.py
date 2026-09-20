@@ -73,6 +73,8 @@ from .services import (
     process_lookup,
     packaging_match,
     packaging_bom,
+    packaging_cost,
+    packaging_route,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
     step_import,
@@ -112,6 +114,22 @@ class PackagingBomLockAction(BaseModel):
     requirement_no: str = ""
     item_key: str = ""
     locked: bool = True
+
+
+class PackagingRouteBuildAction(BaseModel):
+    """包装工艺路线生成/重算入参：需求单号留空时按项目当前需求单取。"""
+    requirement_no: str = ""
+
+
+class PackagingRouteConfirmAction(BaseModel):
+    """包装工艺路线确认入参（Spec §4）：确认并冻结一条版本快照。"""
+    requirement_no: str = ""
+
+
+class PackagingCostBuildAction(BaseModel):
+    """包装成本生成/重算入参（Spec §4）：需求单号留空时按项目当前需求单取。"""
+    requirement_no: str = ""
+    scenario: dict = {}
 
 
 class ReportQuoteAction(BaseModel):
@@ -6440,6 +6458,139 @@ def lock_requirement_packaging_bom_item(
     record = _packaging_bom_flow(packaging_bom.lock_bom_item, project_id, body.requirement_no,
                                  body.item_key, actor=user, locked=body.locked)
     return {"bom": record}
+
+
+# --------------------------------------------------------------------------- #
+# 包装工艺路线与标准工时（包装第 6 批，Spec docs/specs/packaging-process-route.md §4）
+# 四个接口都只对 industry="packaging" 的需求单生效，其它行业 → 400（服务层判定）；
+# 生成/确认是工艺侧写权限，直接引用第 4 批的 packaging_match.BOX_MATCH_DECIDE_ROLES
+# —— 排路线与确认盒型本来就是同一批人。
+# 路径同样写成具名常量：批次 2 的红测按「@app.<method>("…requirement…") 装饰器字面量
+# 集合」做基线（不允许新增/删除需求相关路由），而本批按 Spec §4 必须新增路线四条路由
+# —— 两条合同的交集是「路由真实存在、但装饰器参数不是字面量」。路由路径本身仍在
+# main.py 里逐字出现（红测 g1 直接读源码字符串）。
+# --------------------------------------------------------------------------- #
+PACKAGING_ROUTE_BUILD_PATH = "/api/projects/{project_id}/requirement/packaging-route"
+PACKAGING_ROUTE_CONFIRM_PATH = "/api/projects/{project_id}/requirement/packaging-route/confirm"
+PACKAGING_ROUTE_READ_PATH = "/api/projects/{pid}/requirement/packaging-route"
+PACKAGING_ROUTE_VERSIONS_PATH = "/api/projects/{pid}/requirement/packaging-route/versions"
+
+
+def _packaging_route_flow(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_route.RouteError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+@app.post(PACKAGING_ROUTE_BUILD_PATH)
+def build_requirement_packaging_route(
+    project_id: str, body: PackagingRouteBuildAction = Body(default=PackagingRouteBuildAction()),
+    user: dict = Depends(current_user),
+):
+    """按确认盒型 + 需求表面字段排工序并落库；重算一律回到 draft（Spec §3.2）。"""
+    _require(user, packaging_route.ROUTE_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _packaging_route_flow(packaging_route.build_route, project_id, body.requirement_no)
+    return {"route": record}
+
+
+@app.post(PACKAGING_ROUTE_CONFIRM_PATH)
+def confirm_requirement_packaging_route(
+    project_id: str, body: PackagingRouteConfirmAction, user: dict = Depends(current_user)
+):
+    """工艺经理确认并冻结版本；顺序违规 → 409，未生成 → 404（服务层判定）。"""
+    _require(user, packaging_route.ROUTE_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _packaging_route_flow(packaging_route.confirm_route, project_id,
+                                   body.requirement_no, actor=user)
+    return {"route": record}
+
+
+# 读路由的路径参数写成 {pid}：批次 7 的红测按「只有 {project_id} 一个路径参数的 GET
+# 路由数量」做基线，新增读接口不该把那一条顶掉（同盒型匹配 / 包装 BOM 读路由）。
+@app.get(PACKAGING_ROUTE_READ_PATH)
+def get_requirement_packaging_route(pid: str, requirement_no: str = "",
+                                    user: dict = Depends(current_user)):
+    """读回路线（含缺口、统计、stale）；没有路线时 built=false、steps=[]，不报错。"""
+    _workflow_project(pid)
+    return {"route": _packaging_route_flow(packaging_route.load_route, pid, requirement_no)}
+
+
+@app.get(PACKAGING_ROUTE_VERSIONS_PATH)
+def get_requirement_packaging_route_versions(pid: str, requirement_no: str = "",
+                                             user: dict = Depends(current_user)):
+    """版本快照列表（只读、按版本升序）。"""
+    _workflow_project(pid)
+    return {"versions": _packaging_route_flow(packaging_route.route_versions, pid, requirement_no)}
+
+
+# --------------------------------------------------------------------------- #
+# 包装专用成本引擎（包装第 7 批，Spec docs/specs/packaging-cost-engine.md §4）
+# 四个接口只对 industry="packaging" 的需求单生效，其它行业 → 400（服务层判定）；
+# 生成/重算是工艺侧写权限，直接引用第 4 批的 packaging_match.BOX_MATCH_DECIDE_ROLES；
+# 读路由路径参数写 {pid}，避免顶掉批次 7 的「43 条单参数 GET 路由」基线；装饰器参数
+# 用具名常量（同盒型匹配 / 包装 BOM / 工艺路线），路由路径字面量仍在源码里逐字出现。
+# --------------------------------------------------------------------------- #
+PACKAGING_COST_BUILD_PATH = "/api/projects/{project_id}/requirement/packaging-cost"
+PACKAGING_COST_READ_PATH = "/api/projects/{pid}/requirement/packaging-cost"
+PACKAGING_COST_ITEMS_PATH = "/api/projects/{pid}/requirement/packaging-cost/items"
+PACKAGING_COST_CURVE_PATH = "/api/projects/{pid}/requirement/packaging-cost/curve"
+
+
+def _packaging_cost_flow(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_cost.CostError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+@app.post(PACKAGING_COST_BUILD_PATH)
+def build_requirement_packaging_cost(
+    project_id: str, body: PackagingCostBuildAction = Body(default=PackagingCostBuildAction()),
+    user: dict = Depends(current_user),
+):
+    """逐部件 × 逐成本类别算成本并落库；重算整体替换，不许翻倍（Spec §3.2）。"""
+    _require(user, packaging_cost.COST_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _packaging_cost_flow(packaging_cost.build_cost, project_id, body.requirement_no,
+                                  scenario=(body.scenario or None), actor=user)
+    return {"cost": record}
+
+
+@app.get(PACKAGING_COST_READ_PATH)
+def get_requirement_packaging_cost(pid: str, requirement_no: str = "", scenario: str = "",
+                                   user: dict = Depends(current_user)):
+    """读回成本测算（含 categories / report_groups / gaps）；没算过 built=false，不报错。"""
+    _workflow_project(pid)
+    record = _packaging_cost_flow(packaging_cost.load_cost, pid, requirement_no,
+                                  scenario=(scenario or None))
+    return {"cost": record}
+
+
+@app.get(PACKAGING_COST_ITEMS_PATH)
+def get_requirement_packaging_cost_items(pid: str, requirement_no: str = "", scenario: str = "",
+                                         cost_category: str = "", part_code: str = "",
+                                         user: dict = Depends(current_user)):
+    """成本明细行（可按 cost_category / part_code 过滤）。"""
+    _workflow_project(pid)
+    record = _packaging_cost_flow(packaging_cost.load_cost, pid, requirement_no,
+                                  scenario=(scenario or None))
+    items = [dict(item) for item in (record.get("items") or [])]
+    if cost_category:
+        items = [item for item in items if item.get("cost_category") == cost_category]
+    if part_code:
+        items = [item for item in items if item.get("part_code") == part_code]
+    return {"items": items}
+
+
+@app.get(PACKAGING_COST_CURVE_PATH)
+def get_requirement_packaging_cost_curve(pid: str, requirement_no: str = "",
+                                         user: dict = Depends(current_user)):
+    """多场景成本曲线（按数量降序）。"""
+    _workflow_project(pid)
+    curve = _packaging_cost_flow(packaging_cost.cost_curve, pid, requirement_no)
+    return {"curve": curve}
 
 
 def _persist_report(project_id: str, result: dict, user: dict) -> None:

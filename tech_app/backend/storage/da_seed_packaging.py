@@ -48,6 +48,8 @@ SOURCE_COST = "报价逻辑-0903.xlsx / 包装成本口径"
 SOURCE_MATERIAL = "报价逻辑-0903.xlsx / 包装材料价"
 SOURCE_LOGISTICS = "报价逻辑-0903.xlsx / 包装物流规则"
 SOURCE_MATCH_WEIGHT = "报价逻辑-0903.xlsx / 盒型五维匹配权重"
+SOURCE_COST_CONTENT = "报价逻辑-0903.xlsx / 包装运输"
+SOURCE_TOOLING = "报价逻辑-0903.xlsx / 包装运输 / 工装刀模"
 
 
 BOX_TYPES = [
@@ -546,6 +548,81 @@ COST_FORMULAS = [
      "review_status": "draft"},
 ]
 
+# 包材明细（包装第 7 批）：对齐 0903「包装运输 (2)」Sheet 的第 2–12 行（11 行）。
+# 单价/用量/装数/尺寸逐格照抄；工作簿里空着的格子保持 None（不编数字），
+# 那一行的单件成本按工作簿口径（空单元格 = 0）算出 0，不会伪造金额。
+# 单件成本由第 7 批消费：FORMULA_CATALOG 的 PKG-P-* 表达式（表达式内已含 ÷ 装数）。
+COST_CONTENTS = [
+    {"content_code": "PKG-CT-CARTON", "name": "彩盒", "category": "纸箱",
+     "material_spec": "BC(180/120/70/120/130)", "formula_code": "PKG-P-CARTON",
+     "length_mm": 520.0, "width_mm": 420.0, "height_mm": 425.0, "usage_qty": 1.0,
+     "material_price": 3.0, "units_per_pack": 4.0,
+     "note": "0903 包装运输!J2（单件 2.1108074127397023）"},
+    {"content_code": "PKG-CT-PAD", "name": "平卡", "category": "平卡",
+     "material_spec": "A3A B坑(130/100/130)", "formula_code": "PKG-P-PAD",
+     "length_mm": 510.0, "width_mm": 410.0, "usage_qty": 2.0,
+     "material_price": 1.55, "units_per_pack": 4.0,
+     "note": "0903 包装运输!J3（单件 0.2840410194527371）"},
+    {"content_code": "PKG-CT-DIVIDER", "name": "隔卡", "category": "隔卡",
+     "material_spec": "—", "formula_code": "PKG-P-DIVIDER",
+     "material_price": 4200.0, "units_per_pack": 4.0,
+     "note": "0903 包装运输!J4：工作簿缺尺寸与用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-BAG", "name": "胶袋", "category": "胶袋",
+     "material_spec": "—", "formula_code": "PKG-P-BAG",
+     "material_price": 18.0, "units_per_pack": 4.0,
+     "note": "0903 包装运输!J5：工作簿缺尺寸与用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-CRAFT-PAPER", "name": "双胶纸", "category": "双胶纸",
+     "material_spec": "100g", "formula_code": "PKG-P-CRAFT-PAPER",
+     "gsm": 100.0, "material_price": 5800.0, "units_per_pack": 2.0,
+     "note": "0903 包装运输!J6：工作簿缺尺寸与用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-STRAP", "name": "牛皮纸轧带", "category": "牛皮纸轧带",
+     "material_spec": "30g", "formula_code": "PKG-P-STRAP",
+     "length_mm": 787.0, "width_mm": 1092.0, "gsm": 30.0, "usage_qty": 4.0,
+     "material_price": 7800.0, "units_per_pack": 4.0,
+     "note": "0903 包装运输!J7（单件 0.1803071469026549）"},
+    {"content_code": "PKG-CT-CORNER-TOP", "name": "顶部护角", "category": "护角",
+     "material_spec": "—", "formula_code": "PKG-P-CORNER-TOP",
+     "material_price": 1.9, "units_per_pack": 120.0,
+     "note": "0903 包装运输!J8：工作簿缺尺寸与用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-CORNER-PAPER", "name": "纸护角", "category": "护角",
+     "material_spec": "—", "formula_code": "PKG-P-CORNER-PAPER",
+     "material_price": 1.9, "units_per_pack": 120.0,
+     "note": "0903 包装运输!J9：工作簿缺尺寸与用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-LABEL", "name": "通用标签", "category": "标签",
+     "material_spec": "—", "formula_code": "PKG-P-LABEL",
+     "material_price": 0.05, "units_per_pack": 120.0,
+     "note": "0903 包装运输!J10：工作簿缺用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-BOARD", "name": "盖板", "category": "盖板",
+     "material_spec": "胶合木卡板", "formula_code": "PKG-P-BOARD",
+     "material_price": 30.0, "units_per_pack": 120.0,
+     "note": "0903 包装运输!J11：工作簿缺用量，按空单元格口径记 None"},
+    {"content_code": "PKG-CT-PALLET", "name": "卡板", "category": "卡板",
+     "material_spec": "胶卡板或木卡板(四侧脚柱喷绿色YUTO字样）", "formula_code": "PKG-P-PALLET",
+     "length_mm": 1200.0, "width_mm": 1000.0, "height_mm": 120.0, "usage_qty": 1.0,
+     "material_price": 70.0, "units_per_pack": 120.0,
+     "note": "0903 包装运输!J12（单件 0.5162241887905605）"},
+]
+
+# 工装/刀模规则（包装第 7 批）：五种 mode 各给一条演示数据，金额/寿命是演示值。
+TOOLING_RULES = [
+    {"tooling_code": "T-PKG-HOTSTAMP-LIFE", "name": "烫金版（按寿命摊销）",
+     "process_code": "烫金", "mode": "lifetime", "tooling_cost": 12000.0,
+     "tooling_lifetime": 60000.0, "note": "默认口径：模具寿命 6 万次，与订单量无关"},
+    {"tooling_code": "T-PKG-SILK-ONEOFF", "name": "丝印网版（一次性）",
+     "process_code": "丝印", "mode": "one_off", "tooling_cost": 3600.0,
+     "note": "一次性收取，按本单分摊量摊"},
+    {"tooling_code": "T-PKG-EMBOSS-COMMIT", "name": "压凹凸钢模（按承诺量）",
+     "process_code": "击凹凸", "mode": "committed", "tooling_cost": 24000.0,
+     "note": "按项目承诺总量摊"},
+    {"tooling_code": "T-PKG-DIE-REFUND", "name": "模切刀模（达量返还）",
+     "process_code": "模切", "mode": "refund", "tooling_cost": 18000.0,
+     "refund_threshold": 50000.0, "refundable": 1,
+     "note": "累计数量达门槛只改状态，冲减由报价侧（第 8 批）处理"},
+    {"tooling_code": "T-PKG-ASSEMBLY-CUSTOMER", "name": "装配线工装（客户自备）",
+     "process_code": "装配线", "mode": "customer_supplied", "tooling_cost": 0.0,
+     "note": "客户自备模具，只留痕不进成本"},
+]
+
 # 物流规则（整箱/托盘/打样快递三档），第 7 批定价时消费。
 LOGISTICS_RULES = [
     {"rule_code": "PKG-LG-CARTON-STD", "units_per_carton": 24, "carton_size": "600×400×350mm",
@@ -554,7 +631,8 @@ LOGISTICS_RULES = [
      "refund_condition": "整箱未拆封可退", "note": "标准外箱，含内衬隔板"},
     {"rule_code": "PKG-LG-PALLET-STD", "units_per_carton": 24, "carton_size": "600×400×350mm",
      "pallet_qty": 20, "units_per_pallet": 480, "shipping_mode": "整车",
-     "min_freight": 800.0, "loading_rate": "≥92%", "quantity_tier": "≥1 托盘",
+     "min_freight": 800.0, "pallet_freight": 1650.0, "loading_rate": "≥92%",
+     "quantity_tier": "≥1 托盘",
      "refund_condition": "不接受退运", "note": "托盘 1200×1000，缠膜加固"},
     {"rule_code": "PKG-LG-EXPRESS-SAMPLE", "units_per_carton": 1, "carton_size": "300×220×120mm",
      "pallet_qty": 0, "units_per_pallet": 0, "shipping_mode": "快递",
@@ -638,6 +716,12 @@ def seed_packaging(*, overwrite: bool = False) -> dict:
     counts["kb_packaging_match_weight"] = _seed_table(
         "kb_packaging_match_weight", MATCH_WEIGHTS, keys=("dimension",),
         source=SOURCE_MATCH_WEIGHT, overwrite=overwrite)
+    counts["kb_packaging_cost_content"] = _seed_table(
+        "kb_packaging_cost_content", COST_CONTENTS, keys=("content_code",),
+        source=SOURCE_COST_CONTENT, overwrite=overwrite)
+    counts["kb_packaging_tooling_rule"] = _seed_table(
+        "kb_packaging_tooling_rule", TOOLING_RULES, keys=("tooling_code",),
+        source=SOURCE_TOOLING, overwrite=overwrite)
 
     # 物料：行业维度在父表 kb_material 上（价格表没有行业列）。
     for entry in MATERIALS:
