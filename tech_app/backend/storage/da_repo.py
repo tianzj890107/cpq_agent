@@ -69,6 +69,9 @@ INDUSTRY_KEYS = tuple(cpq_industries.industry_keys()) + tuple(cpq_industries.LEG
 # 不进 src_requirement_field,否则字段表里会混进 UI 状态。
 _STRUCTURAL_DATA_KEYS = frozenset({
     "industry", "industry_selection", "industry_assessment", "template_spec_manager",
+    # 字段来源标记（包装第 2 批）：{field_key: source}，属页面状态而非业务字段，
+    # 不能进 src_requirement_field，否则会多出一批名为 inner_length 之类的字段行。
+    "field_sources",
 })
 
 

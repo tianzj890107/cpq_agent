@@ -25,6 +25,41 @@ CREDIT_LEVELS = {"", "A", "B", "C", "D"}
 # 可保存草稿的状态：一旦进入确认流程，需求单就不能再被静默改写。
 EDITABLE_STATUSES = ("draft", "rejected")
 
+# 字段来源（Spec 4.3）：封闭枚举，前端徽章与合并规则共用同一份口径。
+FIELD_SOURCES = ("user_text", "attachment", "ai_extract", "ai_recommend", "manual")
+# 已有的人工来源（用户原文 / 附件）不得被低优先级的 AI 来源降级。
+_MANUAL_SOURCES = ("user_text", "attachment")
+_WEAK_SOURCES = ("ai_extract", "ai_recommend")
+
+
+def _clean_field_sources(source_map: Optional[dict]) -> dict:
+    """只保留闭集内的来源；空键 / 空值 / 枚举外一律丢弃。"""
+    clean: dict[str, str] = {}
+    for key, value in (source_map or {}).items():
+        name = str(key or "").strip()
+        source = str(value or "").strip()
+        if name and source in FIELD_SOURCES:
+            clean[name] = source
+    return clean
+
+
+def merge_field_sources(existing: Optional[dict], incoming: Optional[dict]) -> dict:
+    """合并 `requirement.data['field_sources']` 的字段来源标记（Spec 4.3）。
+
+    规则：`manual` 永不被非 manual 覆盖；已有 `user_text` / `attachment` 不被
+    `ai_extract` / `ai_recommend` 降级；其它情况按 incoming 覆盖；未知来源丢弃。
+    返回普通 dict，不改动入参。
+    """
+    merged = _clean_field_sources(existing)
+    for name, source in _clean_field_sources(incoming).items():
+        current = merged.get(name)
+        if current == "manual" and source != "manual":
+            continue
+        if current in _MANUAL_SOURCES and source in _WEAK_SOURCES:
+            continue
+        merged[name] = source
+    return merged
+
 
 class RequirementSaveError(Exception):
     """业务规则拒绝保存。status_code 供 HTTP 路由原样映射成 HTTPException。"""
@@ -112,6 +147,11 @@ def save_requirement_draft(project_id: str, doc: RequirementDoc,
     # 结论送不回原来那张报价卡片，系统另建一张，销售点开是「无法打开该历史记录」，
     # 客户信息也只剩技术侧填过的。前端已改成合并，这里再兜一道：任何客户端都别想抹掉它们。
     doc.data = keep_quote_source((current or {}).get("data"), doc.data)
+    # 字段来源（Spec 4.3）：和报价溯源一样是「服务端写入的留痕」。整份表单 PUT 上来时
+    # 必须与旧值合并，否则「人工修改」会被下一次保存/解析悄悄降级成 AI 来源。
+    existing_sources = ((current or {}).get("data") or {}).get("field_sources")
+    incoming_sources = (doc.data or {}).get("field_sources")
+    doc.data["field_sources"] = merge_field_sources(existing_sources, incoming_sources)
     doc.requirement_no = doc.requirement_no or (current or {}).get("requirement_no") or next_requirement_no(project_id)
     doc.created_by = (current or {}).get("created_by") or user.get("username", "system")
     doc.created_at = (current or {}).get("created_at") or now_cst_str()

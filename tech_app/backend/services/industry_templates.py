@@ -158,16 +158,86 @@ APPLIANCE_SPEC: tuple[SpecBlock, ...] = (
 )
 
 # --------------------------------------------------------------------------- #
-# 包装（占位：第 2 批补齐完整 3.1–3.6 字段模板）
+# 包装（第 2 批：完整 3.1–3.6）
+# 键与顺序严格等于 docs/specs/packaging-requirement-template.md §4.6（64 个键，
+# 10 个必填）；前端 requirement-create.js 的 RC_PACKAGING_SPECS 必须与这里一致。
 # --------------------------------------------------------------------------- #
 PACKAGING_SPEC: tuple[SpecBlock, ...] = (
-    SpecBlock("3.1", "基础参数", (
-        SpecField("product_name", "产品名称", True),
-        SpecField("packaging_type", "包装类型"),
-        SpecField("box_type", "盒型"),
-        SpecField("overall_dimensions", "外形尺寸"),
-        SpecField("packaging_material", "材质"),
-        SpecField("print_process", "印刷工艺"),
+    SpecBlock("3.1", "产品与订单", (
+        SpecField("packaging_product_name", "包装产品名称", True),
+        SpecField("packaging_category", "包装品类", True),
+        SpecField("quote_quantity", "报价数量", True),
+        SpecField("moq", "最小起订量"),
+        SpecField("sample_quantity", "样品数量"),
+        SpecField("mass_quantity", "量产数量"),
+        SpecField("first_trial", "首试数量"),
+        SpecField("delivery_due", "期望交期"),
+        SpecField("destination", "交付地点"),
+        SpecField("currency", "币种"),
+        SpecField("tax_rate", "税率"),
+    )),
+    SpecBlock("3.2", "成品尺寸与盒型", (
+        SpecField("inner_length", "成品内长", True),
+        SpecField("inner_width", "成品内宽", True),
+        SpecField("inner_height", "成品内高", True),
+        SpecField("box_type", "盒型", True),
+        SpecField("box_family", "盒型系列"),
+        SpecField("fit_clearance", "配合间隙"),
+        SpecField("closure_type", "闭合方式", True),
+        SpecField("v_groove", "V槽", True),
+        SpecField("magnetic", "磁吸"),
+        SpecField("collapsible", "可折叠"),
+        SpecField("open_close_life", "开合寿命"),
+    )),
+    SpecBlock("3.3", "材料", (
+        SpecField("grey_board", "灰板"),
+        SpecField("grey_board_thickness", "灰板厚度"),
+        SpecField("face_paper", "面纸"),
+        SpecField("face_paper_gsm", "面纸克重", True),
+        SpecField("lining_paper", "里纸"),
+        SpecField("insert_type", "内衬类型"),
+        SpecField("glue", "胶水"),
+        SpecField("magnet", "磁铁"),
+        SpecField("ribbon", "丝带"),
+        SpecField("accessories", "配件"),
+        SpecField("eco_requirement", "环保要求"),
+    )),
+    SpecBlock("3.4", "印刷与表面工艺", (
+        SpecField("print_colors", "印刷色数"),
+        SpecField("spot_colors", "专色"),
+        SpecField("lamination", "覆膜"),
+        SpecField("hot_stamping", "烫金"),
+        SpecField("uv_coating", "UV 上光"),
+        SpecField("emboss_deboss", "压纹/压凹"),
+        SpecField("silk_screen", "丝印"),
+        SpecField("die_cutting", "模切"),
+        SpecField("mounting", "裱贴"),
+        SpecField("special_process", "特殊工艺"),
+        SpecField("process_area", "工艺面积"),
+    )),
+    SpecBlock("3.5", "包装与物流", (
+        SpecField("units_per_carton", "每箱数量"),
+        SpecField("carton_size", "外箱尺寸"),
+        SpecField("flat_card", "平卡"),
+        SpecField("poly_bag", "胶袋"),
+        SpecField("corner_guard", "护角"),
+        SpecField("pallet", "卡板"),
+        SpecField("units_per_pallet", "每板数量"),
+        SpecField("shipping_mode", "运输方式"),
+        SpecField("min_freight", "最小运费"),
+        SpecField("loading_rate", "装载率"),
+    )),
+    SpecBlock("3.6", "商务与价格", (
+        SpecField("need_cost_estimate", "是否需要成本估算"),
+        SpecField("loss_rate", "损耗率"),
+        SpecField("proofing_base", "打样基数"),
+        SpecField("tooling_cost", "模具费"),
+        SpecField("tooling_amortize_qty", "模具摊销数量"),
+        SpecField("target_gross_margin", "目标毛利率"),
+        SpecField("tech_premium", "技术加价"),
+        SpecField("market_adjustment", "市场调整"),
+        SpecField("other_markup", "其它加成"),
+        SpecField("discount", "折扣"),
     )),
 )
 
@@ -175,8 +245,7 @@ SPECS: dict[str, tuple[SpecBlock, ...]] = {
     "semiconductor": SEMICONDUCTOR_SPEC,
     "battery": BATTERY_SPEC,
     "appliance": APPLIANCE_SPEC,
-    # 包装（第 1 批只放最小占位块）：保证 normalize / blocks / field_keys /
-    # section_checks 对 packaging 不抛错。完整的 3.1–3.6 字段由第 2 批补齐。
+    # 包装（第 2 批：完整 3.1–3.6）。
     "packaging": PACKAGING_SPEC,
 }
 
