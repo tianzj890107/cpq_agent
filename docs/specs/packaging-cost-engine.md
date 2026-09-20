@@ -107,10 +107,17 @@ def profile_for(industry): return COST_PROFILE if industry == "packaging" else G
 | `packaging` | 包装 | `AT` = Σ 包材明细单件成本 |
 | `freight` | 运输 | `AU` = MAX(最低运费 ÷ 数量, 托盘运费 ÷ 每托装数 ÷ 装载率) |
 
-**报告分组**（`REPORT_GROUPS`，对应 `成本细分` Sheet 的 10 列，只做汇总不做计算）：
-`材料 = material + glue`、`印刷 = print + print_uv`、`覆膜 = lamination`、
-`烫金 = hot_stamp_flat + hot_stamp_round + cold_stamp`、`丝印 = silk_screen`、`裱纸 = mounting`、
-`模切 = die_cutting`、`开槽 = v_groove`、`手工 = labor`、`包装 = packaging + freight`。
+> **已修订（2026-09-20，修复第 1 批）**：`REPORT_GROUPS` 由 10 组 15 个成员改为 **13 组、恰好覆盖
+> 24 + 2 个类别**。原文只覆盖工作簿 `成本细分` 的 13 个类别列，另外 13 个类别（`transfer_film` /
+> `hot_stamp_round` / `cold_stamp` / `varnish` / `anti_scratch` / `pet_oil` / `visidi_uv` /
+> `texture` / `emboss_deboss` / `folding` / `auto_mount` / `double_tape` / `other`）在成本细分里
+> 找不到。权威定义见 `docs/specs/packaging-cost-rule-routing.md` §2。
+
+**报告分组**（`REPORT_GROUPS`，13 组，只做汇总不做计算）：分组闭集与成员划分以
+`docs/specs/packaging-cost-rule-routing.md` §2.1 为准（本处不再重复，避免两处漂移）；
+其中 `材料`/`印刷`/`覆膜`/`烫金`/`丝印`/`裱纸`/`模切`/`开槽`/`手工`/`包装` 10 个名字与工作簿
+`成本细分` 的 10 列一一对应，`表面处理`/`装订贴盒`/`其他费用` 是本引擎为工作簿未细分的类别补的
+分组。
 
 ### 2.4 变量白名单（`LINE_VARIABLES`）
 
@@ -488,7 +495,7 @@ CREATE INDEX IF NOT EXISTS ix_packaging_cost_item ON wip_packaging_cost_item(est
 | `COST_PROFILE` / `GENERIC_PROFILE` | §2.2 |
 | `COST_CATEGORIES` | §2.3 的 24 条（`tuple[tuple[str, str], ...]`，(code, 中文名)） |
 | `PROJECT_COST_CATEGORIES` | §2.3 的 2 条 |
-| `REPORT_GROUPS` | §2.3 的 10 组（`dict[str, tuple[str, ...]]`） |
+| `REPORT_GROUPS` | 13 组、覆盖 24 + 2 个类别（权威定义见 `docs/specs/packaging-cost-rule-routing.md` §2.1） |
 | `LINE_VARIABLES` | §2.4 白名单 |
 | `FORMULA_CATALOG` | §2.6（`dict[str, dict]`，含表达式/最低收费/取整/费率/来源） |
 | `STEP_RATE_MAP` | §2.6.2 工序 → `rate_code` |
@@ -499,7 +506,7 @@ CREATE INDEX IF NOT EXISTS ix_packaging_cost_item ON wip_packaging_cost_item(est
 | `loss_base_categories(scope) -> tuple[str, ...]` | 某个基数范围下「含损耗」的类别闭集（**永不含** `packaging` / `freight`） |
 | `default_loss_rate(material_text, *, rows=None) -> float\|None` | 按材料文本取 `kb_cost_factor` 的 `scrap` 费率；取不到返回 `None`（由调用方转缺口），**不许默认 0** |
 | `COST_WRITE_ROLES` | 直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES` |
-| `resolve_formula(formula_code, *, rows=None) -> dict` | 目录 + `reviewed` 覆盖（§4.6） |
+| `resolve_formula(formula_code, *, rows=None) -> dict` | 目录 + `reviewed` 覆盖（§4.6）；**全链路唯一取公式入口**，见 `docs/specs/packaging-cost-rule-routing.md` §3 |
 | `compute_line(category_code, variables, *, formula_code=None, amount=None) -> dict` | 纯函数，返回金额/最低收费命中/表达式/输入。给了 `amount` 就直接采用（`source='human'`，用于人工录入/报工/回归），不套公式、**不取整**（人工录入就是事实）；公式算出的金额按该条 `rounding` 取整 |
 | `expression_variables(expression) -> list[str]` | 取表达式里的变量名（按出现顺序），用于白名单校验 |
 | `apply_loss(amount, loss_rate, *, category, loss_base_scope="material_process_and_labor") -> float` | 单行损耗；类别不在 `loss_base_scope` 内时原样返回 |
@@ -529,6 +536,10 @@ CREATE INDEX IF NOT EXISTS ix_packaging_cost_item ON wip_packaging_cost_item(est
 `ACCESSORIES` / `MATCH_WEIGHTS` 的既有内容（第 3/5/6 批红测逐条断言）。
 
 ### 4.6 `reviewed` 公式覆盖目录
+
+> **已修订（2026-09-20，修复第 1 批）**：以下语义扩大到**所有**公式与**所有**调用点
+> （本批之前只有 `PKG-C-MATERIAL` 与 `PKG-C-LABOR` 真的走了 `resolve_formula`）。
+> 见 `docs/specs/packaging-cost-rule-routing.md` §3。
 
 `kb_packaging_cost_formula` 里 `review_status = 'reviewed'` 且 `expression` 能通过 DSL 校验的行，
 **覆盖**同 `formula_code` 的内置目录条目（表达式 + `minimum_charge` + `rounding`），

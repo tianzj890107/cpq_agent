@@ -33,6 +33,9 @@
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from . import da_db as db
 from . import kb_repo as kb
 
@@ -50,6 +53,18 @@ SOURCE_LOGISTICS = "报价逻辑-0903.xlsx / 包装物流规则"
 SOURCE_MATCH_WEIGHT = "报价逻辑-0903.xlsx / 盒型五维匹配权重"
 SOURCE_COST_CONTENT = "报价逻辑-0903.xlsx / 包装运输"
 SOURCE_TOOLING = "报价逻辑-0903.xlsx / 包装运输 / 工装刀模"
+
+#: 随代码发布的规则快照（`kb_packaging_cost_formula` 里 `source` 取这个值）。
+RULES_JSON_SOURCE = "packaging_rules_json"
+RULES_JSON_NAME = "packaging_cost_rules.json"
+
+
+def rules_json_path(path=None) -> Path:
+    """规则快照路径：默认 `tech_app/agent_knowledge/rules/packaging_cost_rules.json`。"""
+    if path:
+        return Path(path)
+    return (Path(__file__).resolve().parents[2] / "agent_knowledge" / "rules"
+            / RULES_JSON_NAME)
 
 
 BOX_TYPES = [
@@ -690,6 +705,65 @@ def _seed_table(table: str, rows: list, *, keys: tuple, source: str,
     return len(rows)
 
 
+def seed_packaging_cost_rules(*, rules_path=None, overwrite: bool = False) -> dict:
+    """把随代码发布的规则快照导入 `kb_packaging_cost_formula`（幂等，Spec 修复第 2 批 §3）。
+
+    行为（按库表现状分支，**业务人工维护的行永不覆盖**，`overwrite=True` 也不覆盖）：
+
+    | 库表现状 | 行为 |
+    | --- | --- |
+    | `formula_code` 不存在 | 插入：`review_status='reviewed'`、`source='packaging_rules_json'` |
+    | 同来源、`formula_version` 不同 | 更新（规则升级） |
+    | 同来源、`formula_version` 相同 | 跳过（幂等，重复 seed 不新增行） |
+    | 来源不是 `packaging_rules_json` | 跳过，计入 `skipped_user_modified` |
+    | `review_status='retired'` | 跳过（业务已下线，不复活） |
+
+    返回 `{"inserted", "updated", "skipped", "skipped_user_modified", "rule_set"}`。
+    """
+    path = rules_json_path(rules_path)
+    if not path.exists():
+        raise FileNotFoundError("缺少规则快照：%s（Spec 修复第 2 批 §2）" % path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rule_set = str(payload.get("rule_set") or "")
+    result = {"inserted": 0, "updated": 0, "skipped": 0, "skipped_user_modified": 0,
+              "rule_set": rule_set}
+    for item in payload.get("formulas") or []:
+        code = str(item.get("formula_code") or "")
+        if not code:
+            continue
+        row = _packaging_row({
+            "formula_code": code,
+            "cost_category": str(item.get("cost_category") or ""),
+            "rate_code": str(item.get("rate_code") or ""),
+            "expression": str(item.get("expression") or ""),
+            "minimum_charge": item.get("minimum_charge") or 0.0,
+            "loss_scope": str(item.get("loss_scope") or ""),
+            "rounding": item.get("rounding"),
+            "source_ref": str(item.get("source_ref") or ""),
+            "formula_version": rule_set,
+            "review_status": "reviewed",
+        }, RULES_JSON_SOURCE)
+        existing = db.query_one(
+            "SELECT formula_code, formula_version, review_status, source "
+            "FROM kb_packaging_cost_formula WHERE formula_code = ?", (code,))
+        if existing:
+            if str(existing.get("source") or "") != RULES_JSON_SOURCE:
+                result["skipped_user_modified"] += 1
+                continue
+            if str(existing.get("review_status") or "") == "retired":
+                result["skipped"] += 1
+                continue
+            if str(existing.get("formula_version") or "") == rule_set:
+                result["skipped"] += 1
+                continue
+            db.upsert("kb_packaging_cost_formula", row, keys=("formula_code",))
+            result["updated"] += 1
+            continue
+        db.upsert("kb_packaging_cost_formula", row, keys=("formula_code",))
+        result["inserted"] += 1
+    return result
+
+
 def seed_packaging(*, overwrite: bool = False) -> dict:
     """写入包装演示数据（幂等）。overwrite=False 时已存在的记录不覆盖。"""
     counts: dict = {}
@@ -722,6 +796,11 @@ def seed_packaging(*, overwrite: bool = False) -> dict:
     counts["kb_packaging_tooling_rule"] = _seed_table(
         "kb_packaging_tooling_rule", TOOLING_RULES, keys=("tooling_code",),
         source=SOURCE_TOOLING, overwrite=overwrite)
+    # 规则快照：20 条 reviewed 公式（第 1 批起真正参与计算）。这里只记新增/更新的行数，
+    # 保持 counts 是「表 → 条数」的 int 形状。
+    rules_result = seed_packaging_cost_rules(overwrite=overwrite)
+    counts["kb_packaging_cost_formula_rules"] = (int(rules_result["inserted"])
+                                                 + int(rules_result["updated"]))
 
     # 物料：行业维度在父表 kb_material 上（价格表没有行业列）。
     for entry in MATERIALS:

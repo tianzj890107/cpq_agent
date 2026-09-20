@@ -1302,3 +1302,500 @@ git diff --check OK
 - `报价首页.html` 只加了一个 `<script>` 与一组 `.pkg-quote-*` 样式，没有改任何既有工作台逻辑。
 - 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务**；
   `裕同包装项目-待开发/` 保持只读（客户样例不入库）。
+
+## 162. 包装验收修复第 1 批「成本报告分组闭集 + 公式取值单一入口」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+第 1–8 批包装能力已全部提交（`c0ea1f8`）。本轮先做**验收复跑**（用仓库 venv
+`./open-claude/.venv/bin/python`，不是系统 python3），再按实测结论把验收修复拆成 4 批；本条只落
+**第 1 批**的 Spec / 红测 / changelog，不改业务实现。
+
+### 验收复跑（实测原文）
+
+| 套件 | 结果 |
+| --- | --- |
+| `tests/test_packaging_quote_close_loop_red.py`（第 8 批） | `Ran 96 tests ... OK` |
+| `tests/test_packaging_cost_engine_red.py`（第 7 批） | `Ran 81 tests ... FAILED (failures=4)` |
+| 第 1–6 批 6 个套件（行业 / 需求 / 知识库 / 盒型 / BOM / 路线） | 全 `OK`（20 / 35 / 46 / 51 / 57 / 57） |
+| 全量 `python /tmp/run_pkg.py 1` | `TOTAL ran=2914 failures=44 errors=2 skipped=2` |
+
+44+2 条非通过里：**17 条**是本轮之前就存在的既有失败（`process_row_running_info_and_fold_red`
+14 + `tech_model_call_row_merged_and_summary_detail_red` 2 + `cpq_eval_ci_contract` 1）、**5 条**
+是第 7 批成本引擎、**24 条**是本条新增红测（见下）。上一轮会话报过的
+「23 failures / 8 errors（psycopg 缺失、Python 3.13 字节码不兼容）」是环境误报，不采信。
+
+### 第 7 批 4 条失败的真实性质（逐条取证）
+
+- `test_a3_report_groups_partition_every_category`：**纯缺陷**。工作簿 `报价逻辑-0903.xlsx`
+  可见 Sheet `成本细分` 第 2 行只有 10 列（F=`SUMPRODUCT(报价-行业标准!S)+SUMPRODUCT(!AN)` …
+  O=`!AT+!AU`），合计只引用 **13** 个类别；另外 13 个类别（`transfer_film` / `hot_stamp_round` /
+  `cold_stamp` / `varnish` / `anti_scratch` / `pet_oil` / `visidi_uv` / `texture` /
+  `emboss_deboss` / `folding` / `auto_mount` / `double_tape` / `other`）在任何分组里都不存在
+  —— 钱算进了 `total_cost`，成本细分里找不到。现状 `REPORT_GROUPS` 就是那 10 组 15 个成员。
+- `test_c1` / `test_c2` / `test_c4`：**口径冲突，不是实现笔误**。实测工作簿同一个 `R` 字母列在
+  两套口径下写法不同：
+  - `报价-工费率!V2 = (H2*I2/1000000*1.7/1.13/J2 + …18/1000*18.5/J2) + ((30/60 + R2/J2/5500)*
+    (197+145))/R2` → `1.376611258004827`，**没有 MAX**（该 Sheet 只有 `AU2` 运输、`AI9/AI14/AI15`
+    三处有 MAX，且这三处缓存值为空）；`X2` / `AI2` / `AK5` 同样没有 MAX。
+  - `报价-行业标准!V2 = IFERROR(MAX(200/R2, 膜料式 + 0.15/J2), "")` → `1.2934294398230088`；
+    `X2 = MAX(150/R2, …)`、`AI2 = IFERROR(MAX(100/R2, 0.15/J2), "")`、`AK5 = MAX(150/R5, 0.15)`。
+  → 第 7 批把**表达式取自 `报价-工费率`**（Spec §1.2 已声明本批不用 `报价-行业标准`）、却把
+  **最低收费门限 200/150/100/120 取自 `报价-行业标准`**，两者拼在一条公式里；而工费率的
+  换版/机台摊薄项（`(setup/60 + q/capacity)*(equip+labor)/q`）本身已高于门限（覆膜默认参数下
+  q=1000 表达式 0.2339 > 0.2；模切 `775.16/q + 0.0596` 恒大于 `100/q`，**门限永远不可能命中**）。
+  这是需要业务裁决的设计问题，归**修复第 3 批**，本批不动表达式与 `minimum_charge`（红测
+  `f3` 显式锁住 200/150/100/120 不被顺手改）。
+
+### 本批裁决与产物
+
+Spec `docs/specs/packaging-cost-rule-routing.md`（修订第 7 批 Spec §2.3 / §4.5 / §4.6）：
+
+1. **报告分组闭集**：`REPORT_GROUPS` 由 10 组 15 成员改为 **13 组、恰好覆盖 24 + 2 个类别**、
+   每类别只出现一次 —— 工作簿 10 个同名分组的名字与成员逐字不变（`覆膜` 扩为
+   `lamination + transfer_film`、`烫金` 含 `hot_stamp_flat/round/cold_stamp`，工作簿样例里这三个
+   额外类别都是 0，黄金数值不变），工作簿未细分的 13 个类别由新增的
+   `表面处理`（varnish/anti_scratch/pet_oil/visidi_uv/texture/emboss_deboss）、
+   `装订贴盒`（folding/auto_mount/double_tape）、`其他费用`（other）承载；分组名可改名但不得改
+   成员划分。
+2. **公式取值单一入口**：`resolve_formula` 扩到所有公式与所有调用点 —— `compute_line` 按类别
+   取值必须走它（`packaging` 有 11 条包材公式，按类别取值改为
+   `CostError(409, "category_needs_formula_code:packaging")`，不许静默取第一条 `PKG-P-CARTON`）、
+   `compute_content` 走它、`compute_project` 内 `kb_packaging_cost_formula` **只读一次**。
+   结果新增 `formula_source`（`kb`/`builtin`）、`formula_version`、`rule_snapshot_version`。
+   `reviewed` 行表达式写错 → 从所有调用点抛 `CostError(409, "invalid_formula:<code>")`，
+   不许静默回退内置值。
+3. 修订 `tests/test_packaging_cost_engine_red.py` 的 `EXPECTED_REPORT_GROUPS`（→13 组，a3/g2 同步
+   改为 13 组断言；`GOLDEN_REPORT_GROUPS` 的 10 组黄金值不动）。
+4. 新增红测 `tests/test_packaging_cost_rule_routing_red.py`：A 报告分组 10 条 / B 前端
+   `PC_GROUP_ORDER` 1 条 / C `compute_line` 路由 12 条 / D 包材路由 3 条 / E 全链路 3 条 /
+   F 不许动的既有契约 3 条，共 **32 条**。
+
+### 验收实跑（本条改动后，改动前 → 改动后）
+
+- 新红测：`Ran 32 tests ... FAILED (failures=22, errors=2)`（24 条红，8 条已经绿）。
+  已经绿的 8 条是**故意锁住不许动的既有行为**：`a4` 分组非空、`a5` 工作簿 10 组名保留、
+  `c4` 覆盖不得就地改写 `FORMULA_CATALOG`、`c8` 未知 code 仍 404、`c9` 无公式类别仍出
+  `no_formula` 缺口、`f1` 三行业 `generic_v1` 系数 `(1.13, 0.791, 0.3556, 0.1778, 0.0944)` 不变、
+  `f2` 非包装需求仍 400 `not_packaging`、`f3` 表达式与最低收费本批不动。
+- 第 7 批：`Ran 81 tests ... FAILED (failures=5)` = 原 `a3` + 修订后新增 `g2` + `c1`/`c2`/`c4`
+  （后三条归修复第 3 批）。
+- 第 8 批 96 条仍 `OK`；第 1–6 批 6 个套件仍 `OK`。
+
+### 剩余风险与未做
+
+- `c1`/`c2`/`c4` 需要业务先在三种写法里选一种（严格按 `报价-工费率` 无门限 / 按
+  `报价-行业标准` 的门限只作用于材料类可变项 / 两套口径并存），再改 Spec + 红测，属修复第 3 批。
+- 修复第 2 批（版本化 JSON 规则快照 + `source_sha256` + 离线 Excel→JSON 校验工具）与修复第 4 批
+  （0903 逐列忠实度 + 隐藏 Sheet 明确排除 + 黄金样例扩展）尚未开工。
+- 运行时**不读** Excel 的现状是对的：全仓 `openpyxl` / `load_workbook` 只出现在测试与一次性
+  脚本，`packaging_cost.py` 只在字符串常量里记 `source_ref`。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；`裕同包装项目-待开发/`
+  保持只读、不入库。
+
+## 163. 包装验收修复第 2 批「包装成本规则快照固化」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+修复第 1 批（`## 162`）把公式取值收敛成 `resolve_formula` 单一入口后，公式仍被人工抄在四处
+（`FORMULA_CATALOG` / `COST_FORMULAS` 的 7 条中文散文 / 库表 reviewed 行 / 红测黄金常量）。
+本条把「Excel 里的公式」固化成**随代码发布的审核快照**，并给出**离线**对账工具，让
+「工作簿缓存值 = 快照 `expected_result` = 运行时引擎复算」三者互相咬住。**不改任何公式口径。**
+
+### 产物
+
+Spec `docs/specs/packaging-cost-rule-snapshot.md`：
+
+1. **交付物 A**：`tech_app/agent_knowledge/rules/packaging_cost_rules.json`（与既有
+   `quote_product_params.json` / `process_rules.json` 同目录）。顶层
+   `rule_set / source_file / source_sha256 / source_sheets / review_status / formulas`；每条
+   `formula_code / cost_category / expression / minimum_charge / rounding / rate_code /
+   loss_scope / source_sheet / source_cell / verify_inputs / expected_result / formula_version`。
+   必须**恰好**覆盖 `FORMULA_CATALOG` 的 20 条（9 `PKG-C-*` + 11 `PKG-P-*`），表达式与最低收费
+   逐条相等；`source_sheet` 只能是可见 Sheet，三个隐藏 Sheet 一律不得出现。
+2. **交付物 B**：`da_seed_packaging.seed_packaging_cost_rules(*, rules_path=None, overwrite=False)`
+   —— 缺失则插入（`reviewed` / `formula_version=rule_set` / `source='packaging_rules_json'`）；
+   同 `source` 且版本相同则跳过（幂等）；**业务人工维护的行（`source` 非该标记）永不覆盖**，
+   计入 `skipped_user_modified`；`retired` 行不复活。`COST_FORMULAS` 的 7 条 `PKG-F-*` 中文散文
+   `draft` **一条不许删**（第 3／7 批红测逐条断言 `len == 7`）。
+3. **交付物 C**：`tech_app/tools/extract_packaging_rules.py`，IO 与判定分开
+   （`load_workbook_cells` / 纯函数 `audit_rules` / `main`），退出码 0/1/2/3/4 与问题码闭集
+   （`broken_reference` `cached_without_formula` `hidden_sheet_has_formula`
+   `cached_value_mismatch` `recompute_mismatch` `formula_set_mismatch` `write_refused` …）；
+   `--check` 绝不写文件，`--write` 遇到 `review_status='reviewed'` 先退 4、不读工作簿、不改 sha256。
+4. **运行时边界**：`tech_app/backend/**` 不得 import `openpyxl`、不得 import 该工具；只有开发期
+   才跑工作簿。
+
+### 黄金值（Spec §2.3，已用第 1 批冻结口径逐条复算核对）
+
+`报价-工费率`：`S2=0.7954641993584073`（cut 889×705、克重 157、吨价 6300、校版 450、q 1000）、
+`U2=0.9865756637168142`、`V2=1.3766112580048271`、`X2=1.3432666666666671`、
+`AI2=0.8347876923076923`、`AK5=0.816`、`AN2=0.46050199999999997`；
+`包装运输`：`J2=2.1108074127397023`、`J3=0.28404101945273708`、`J12=0.51622418879056053`。
+工作簿 SHA-256：`974d9484414824d0bbfd2c83fb0c6044e4348c7a407e1ae0f58699bb60d2acc0`。
+
+### 验收实跑
+
+- 新红测 `tests/test_packaging_cost_rule_snapshot_red.py`：`Ran 37 tests ... FAILED (failures=21,
+  errors=11)` —— **32 条红**、5 条已绿。已绿的 5 条是**故意锁住不许动的既有行为**：
+  `b8` 7 条中文散文 draft 原样保留、`d1`/`d2`/`d3` 生产后端不碰 openpyxl 与离线工具、
+  `e1` 第 1 批冻结的 7 个黄金值与 `minimum_charge` 200/150/100/120 未被顺手改。
+- 第 1 批新红测：`Ran 32 tests ... FAILED (failures=22, errors=2)`（未变，等实现）。
+- 第 7 批：`FAILED (failures=5)`（`a3`/`g2` + 待裁决的 `c1`/`c2`/`c4`）。
+- 第 3 批 seed 46 条、第 8 批 96 条、路线 57 条、BOM 57 条、需求 35 条、行业 20 条：全 `OK`。
+- 全量 `python /tmp/run_pkg.py 1`：`TOTAL ran=2951 failures=65 errors=13 skipped=2`；去掉两条新红测后
+  只剩既有 17 条（`process_row_running_info_and_fold_red` 14 + `tech_model_call_row_...` 2 +
+  `cpq_eval_ci_contract` 1）与第 7 批 5 条 —— 本批未引入任何附带回归。
+
+### 剩余
+
+- 修复第 3 批（最低收费口径裁决：`c1`/`c2`/`c4`）需要业务先在三种写法里选一种，Spec 待写。
+- 修复第 4 批（0903 逐列忠实度 + 隐藏 Sheet 排除 + 黄金样例扩展）尚未开工。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**。
+
+## 164. 包装验收修复第 4 批「逐列证据登记」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+修复第 2 批（`## 163`）把公式固化成快照后，还剩一个更根本的偏差源：**没有人记录过「0903 采用
+口径里到底哪几列真有公式」**。本条把这条事实变成机器可校验的产物，杜绝以后给没有证据的列
+（丝印 / 压纹 / 贴双面胶 / 折页装订 …）凭空补公式。**不改任何公式、费率、最低收费。**
+
+### 实测证据（`报价逻辑-0903.xlsx` 可见 Sheet `报价-工费率`，第 2–15 行逐格统计）
+
+- 有公式的部件级列只有 **9 列**：`S` 材料价 13 式/1 空、`U` UV印刷 6/8、`V` 复膜 6/8、
+  `X` 热烫-平压 3/11、`AH` 裱纸 1/13、`AI` 啤/切 13/1、`AK` V槽 2/12、`AN` 胶水 6/8、
+  `AO` 人工/全检/包装 1/13（`AO15 = (36+2)*40/180`，量纲不可核，见第 7 批 §2.6.2）。
+- **15 列一行公式都没有、也没有手填数字**：`T` 普通印刷、`W` 覆转移膜、`Y` 热烫-圆压、`Z` 冷烫、
+  `AA` 丝印、`AB` 过光油、`AC` 防刮花光/哑油、`AD` PET环保吸塑油、`AE` 视高迪UV、`AF` 压纹、
+  `AG` 击凹/凸、`AJ` 折页/装钉、`AL` 机贴盒/贴双面胶、`AM` 双面胶、`AP` 其他。
+- 项目级：`AT2 = SUM('包装运输 (2)'!$J$2:$J$12)`、`AU2 = MAX(1150/R2,1650/12/'包装运输 (2)'!$I$8/0.85)`。
+- 对照结论：现有 `FORMULA_CATALOG` 的 9 条 `PKG-C-*` 正好对应上面 9 个有公式列，**没有为无证据列
+  造过公式**；这 15 列的金额在真实报价里要出现，必须由业务给费率来源。
+
+### 产物
+
+Spec `docs/specs/packaging-cost-column-evidence.md`：
+
+1. 第 2 批的规则快照再增三个顶层字段：`source_rows: 14`、`categories`（24 + 2 条，每条
+   `cost_category` / `label` / `level` / `evidence_kind` / `source_sheet` / `source_column` /
+   `source_cell` / `formula_code` / `note`）、`column_evidence`（`S`→`AP` 24 列，逐列
+   `formula_rows` / `blank_rows` / `hand_filled_rows` / `sample_cell` / `sample_formula`）。
+   `evidence_kind` 闭集 `formula` / `hand_filled` / `no_formula_in_workbook`；`no_formula_in_workbook`
+   的类别必须 `formula_code == ""` 且不得出现在 `FORMULA_CATALOG` 里。
+2. 对账工具 `audit_rules` 追加证据校验与问题码：`category_evidence_missing`、
+   `evidence_kind_unknown`、`evidence_cell_has_no_formula`、`formula_without_evidence`、
+   `invented_formula_for_blank_column`、`column_evidence_incomplete`（仍为纯函数，可注入
+   `catalog_codes` / `runtime_categories` 供红测用）。
+3. 明确非目标：不为那 15 列实现计算；需求命中它们时保持「无公式 → `no_formula:<category>` 缺口」
+   的现状，不许静默按 0 或按材料比例估算。
+
+### 验收实跑
+
+- 新红测 `tests/test_packaging_cost_column_evidence_red.py`：`Ran 29 tests ... FAILED (failures=26,
+  errors=1)` —— **27 条红**、2 条已绿。已绿的两条是**故意锁住不许动的既有行为**：
+  `d1` 无公式类别仍返回 `no_formula:` 缺口而不是 0、`d2` 第 1 批冻结的覆膜值与 `minimum_charge` 未变。
+- 前两批新红测未受影响：`test_packaging_cost_rule_routing_red` 32 条、`test_packaging_cost_rule_snapshot_red`
+  37 条均为预期红；第 3/8 批 seed 46 条、报价闭环 96 条等仍全 `OK`。
+- 全量 `python /tmp/run_pkg.py 1`：`TOTAL ran=2980 failures=91 errors=14 skipped=2`；扣掉三条新红测
+  （24 + 32 + 27 = 83）后，只剩既有 17 条与第 7 批 5 条 —— 未引入附带回归。
+
+### 剩余
+
+- 修复第 3 批（最低收费口径裁决 `c1`/`c2`/`c4`）仍等业务在三种写法里选一种。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；`裕同包装项目-待开发/` 只读。
+
+## 165. 包装验收修复第 3 批「最低收费口径裁决」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+（写作顺序说明：本条排在 `## 164` 之后，但批号是第 3 —— 因为「哪几列真有公式」这条逐列证据
+（第 4 批）是判定最低收费口径的前提。）
+
+前两批（`## 163` 规则快照、`## 164` 逐列证据）先把**事实**固定下来；本批处理最后一件、也是最需要
+人的判断的事：`复膜 / 热烫-平压 / 啤,切 / V槽 / 裱纸` 的**最低收费**到底按哪张 Sheet 算。现状是
+**未申报的混合口径**——表达式抄 `报价-工费率`，门限抄 `报价-行业标准`。**本批不选口径**，只把裁决
+变成一行可校验的申报字段，并让「没申报就按某套静默出货」变成机器能挡下来的事。**未改任何公式、
+费率、表达式、第 7 批冻结黄金值。**
+
+### 实测证据（`报价逻辑-0903.xlsx`，两表同列原文 + 缓存值，q=1000）
+
+| 类别 | ① `报价-行业标准` | ① 值 | ② `报价-工费率` | ② 值 | 现实现值 |
+| --- | --- | --- | --- | --- | --- |
+| 复膜 | `MAX(200/R2, 膜料 + 0.15/J2)` | 1.2934294398230088 | 膜料 + `((30/60+R2/J2/5500)*(197+145))/R2`（**无 MAX**） | 1.376611258004827 | 1.3766112580048271 |
+| 热烫-平压 | `MAX(150/R2, 0.255 + 0.3/J2)` | 0.5549999999999999 | 0.255 + `((200/60+R2/J2/5000)*(193+115))/R2` | 1.343266666666667 | 1.3432666666666671 |
+| 啤/切 | `IFERROR(MAX(100/R2, 0.15/J2),"")` | 0.15 | `((120/60+R2/J2/6500)*(197.52+190.06))/R2` | 0.8347876923076923 | 0.8347876923076923 |
+| V槽 | `MAX(150/R5, 0.15)` | 0.15 | `(60/60+R5/3000)*(195+111)/R5*2` | 0.816 | 0.816 |
+| 裱纸 | `IFERROR(MAX(100/R13, H13/25.4*I13/25.4*(0.56/1000)/J13),"")` | 0.1 | `((30/60+R13/J13/3500)*(209+126))/R13` | 0.17132857142857144 | 0.1713285714285714 |
+
+- ① 的特征是**固定单件耗材/辅助项**（`0.15/J2`、`0.3/J2`、`0.08/J`、常数 `0.15`）+ 门限，**没有**机台
+  工时项；② 的特征是**机台工时项**，主行**没有**门限。② 全表只有 4 处 MAX：`AU2` 运输与
+  `AI9`/`AI14`/`AI15` 三处行级 `MAX(100/R, 0.08/J)`（实测断言在红测 `test_f6`）。
+- `PKG-C-V-GROOVE` 的 `minimum_charge = 120` **两张表里都不存在**（① 是 150、② 无门限）→ 凭空数字。
+- 于是实际算的是 `MAX(①门限/数量, ②表达式)` —— **两张表里都不存在的第三条公式**，而 `source_ref`
+  只写了 ②，读代码看不出这一点，`compute_line` 结果也不标注用的是哪套。
+
+### 三种候选口径与代价（裁决权在业务/用户）
+
+- **① `sheet_industry_standard`**（对客报价口径）：复膜/啤切/V槽/热烫/裱纸单件值全部改变，
+  **第 7 批冻结黄金值必须重算**。
+- **② `sheet_labor_rate`**（成本核算口径）：只需把门限 200/150/100/120 改为全 0，并把
+  `AI9/AI14/AI15` 登记为 `row_variants`；**第 7 批冻结黄金值不变**，代价最小。
+- **③ `declared_hybrid`**（= 现状）：在 q=1000 上与 ② **数值相同**（门限压不过表达式），所以第 7 批
+  黄金值同样不变；与 ② 的实际差别只有两处——**门限被显式声明**、**V槽 120 被改为 150**。必须逐条列出
+  两个来源并给业务理由。
+
+### 关键结论：现有 `c1`/`c2`/`c4` 没有任何一套候选口径能同时满足
+
+逐条实测复算（Spec §3.1 六行矩阵）：
+
+| 用例 | 期望 | ① | ② | ③ |
+| --- | --- | --- | --- | --- |
+| `c1` 复膜 20×20 q=1000 | 0.2 命中 | **0.2 命中** | 0.23391678809332264 不命中 | 0.23391678809332264 不命中 |
+| `c2` q=100 | 2.0 命中 | **2.0 命中** | 1.7729167880933225 不命中 | 2.0 命中 |
+| `c2` q=1000 | 0.2 命中 | **0.2 命中** | 0.23391678809332264 不命中 | 0.23391678809332264 不命中 |
+| `c2` q=10000 | 0.02 命中 | 0.15073496991150442 不命中 | 0.08001678809332262 不命中 | 0.08001678809332262 不命中 |
+| `c4` q=100 | 1.0 命中 | **1.0 命中** | 7.8112276923076935 不命中 | 7.8112276923076935 不命中 |
+| `c4` q=1000 | 不命中 | 0.15 通过 | 0.8347876923076923 通过 | 0.8347876923076923 通过 |
+
+结论写进 Spec：**裁决必须一并包含「`c1`/`c2`/`c4` 期望值按所选口径的黄金值同步修订」，而不是让
+实现迁就现有测试**；修订规则已逐口径写死在 Spec §3.1，并把这张 6 行矩阵做成快照字段
+`red_test_impact`，裁决后「该怎么改」是查表不是重新讨论。
+
+### 产物
+
+Spec `docs/specs/packaging-cost-minimum-charge.md`：
+
+1. 快照（修复第 2 批产物）新增顶层 `minimum_charge_policy`：`status`（`pending`/`chosen`）、
+   `chosen`、`decided_by`、`decided_at`、`candidates`（恰好 3 条，每条带 `authoritative_sheet`、
+   `is_declared_hybrid`、`rationale`、`golden`（5 类 × `cell`/`quantity`/`unit_amount`）、
+   `red_test_impact`（§3.1 六行））；`pending` 时 `chosen`/`decided_by` 必须为空。
+2. **单来源申报**：每条公式必须有 `source_sheet`/`source_cell`，且 `source_ref` 与二者一致；门限 > 0
+   必须再有 `minimum_charge_source_ref`；**门限表 ≠ 表达式表**时只有 `chosen == declared_hybrid`
+   才合法，否则报 `mixed_source_formula`；门限数值必须能在 `minimum_charge_source_ref` 单元格原文里
+   找到（专门挡 120）；`variable_map` 登记 `{变量: 列字母}`，内联字面量沿用 `verify_inputs`。
+3. **逐字等价** `verbatim_equivalent(expression, source_formula, variable_map, source_cell, literals)`：
+   把变量替换回 `<列><行>` 后，两边**用 `packaging_formula` 同一套解析器规范化为全括号形式**再比较
+   → 只允许「多余括号、空白、`IFERROR` 外壳、数字写法（`1e6`≡`1000000`）」四类差异，改一个字就判不等。
+4. **运行时可观测**：模块级 `MINIMUM_CHARGE_POLICY` + `minimum_charge_policy()`（每次现读，便于热
+   更新与测试注入），`compute_line` 结果行新增 `policy` 字段；未裁决时 `policy == "unresolved"` 且
+   `fallback == "sheet_labor_rate"`，**不许静默按 ③ 产出 `min_charge_applied=true`**。
+5. **9 个审计码**：`minimum_charge_policy_missing`、`minimum_charge_policy_unknown`、
+   `minimum_charge_policy_golden_mismatch`、`mixed_source_formula`、`minimum_charge_source_missing`、
+   `minimum_charge_not_in_source`、`source_cell_mismatch`、`unmapped_variable`、`hidden_sheet_source`。
+
+红测 `tests/test_packaging_cost_minimum_charge_red.py`（47 条，F 组只读工作簿取证）：
+`F` 工作簿证据 7 条（两表 5 类互不相同、`MAX` 只在 4 格、V槽门限是 150 不是 120、隐藏 Sheet 状态、
+SHA-256）、`B` 单来源申报 8 条、`C` `verbatim_equivalent` 7 条（含 `1.7→1.8` 必须判不等、声明 V2 抄
+第 3 行必须判不等）、`A` 快照 policy 块 8 条、`D` 运行时口径 6 条、`E` 审计码 11 条（含 `120` 触发
+`minimum_charge_not_in_source`、未申报 ③ 触发 `mixed_source_formula`、申报 ③ 后放行）。
+
+### 验收实跑
+
+- 新红测 `tests/test_packaging_cost_minimum_charge_red.py`：`Ran 47 tests ... FAILED (failures=38)`
+  —— **38 条红**、9 条已绿。9 条绿的是**故意锁住不许动的既有行为与证据**：`f1`–`f7`（工作簿两表
+  确实互不相同、② 全表只有 `AU2`/`AI9`/`AI14`/`AI15` 有 MAX、V槽 ① 门限 150、隐藏 Sheet 状态、
+  SHA-256）、`b4` 零门限条目不得有门限来源、`b8` 来源不得指向隐藏 Sheet。
+- 前三条修复红测未受影响：`rule_routing` `Ran 32 ... (failures=22, errors=2)`、`rule_snapshot`
+  `Ran 37 ... (failures=21, errors=11)`、`column_evidence` `Ran 29 ... (failures=26, errors=1)`。
+- 第 7 批 `test_packaging_cost_engine_red.py`：`Ran 81 tests ... FAILED (failures=5)` = `a3`/`g2`
+  （修复第 1 批）+ `c1`/`c2`/`c4`（本批待裁决）。第 3 / 8 批等仍全 `OK`。
+- 全量 `python /tmp/run_pkg.py 1`：`TOTAL ran=3027 failures=129 errors=14 skipped=2`。扣掉本轮四条
+  新红测（24 + 32 + 27 + 38 = 121）后只剩**既有 17 条**（`process_row_running_info_and_fold_red` 14
+  + `tech_model_call_row_merged_and_summary_detail_red` 2 + `cpq_eval_ci_contract` 1）与**第 7 批 5 条**
+  —— 未引入附带回归。
+
+### 剩余
+
+- 第 3 批**等业务/用户在三套口径里拍板**（`status`/`chosen`/`decided_by`）；拍板后按 Spec §3.1 修订
+  `c1`/`c2`/`c4` 期望值并落地。
+- 修复第 2 批（JSON 快照 + 幂等导入 + 离线工具）、第 4 批（`categories`/`column_evidence`）的红测
+  已就位、实现未开工。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；`裕同包装项目-待开发/` 只读。
+
+## 166. 包装验收修复第 1 批「成本报告分组闭集 + 公式取值单一入口」实现（9-20，Codex）
+
+### 产物
+
+- `tech_app/backend/services/packaging_cost.py`：`REPORT_GROUPS` 由 10 组扩到 **13 组**，把 0903
+  成本细分没细分的 13 个类别（表面处理 / 装订贴盒 / 其他费用）显式归组，`sum(report_groups)`
+  恒等于总成本（`extras["other"]` 承载工装）；新增 `formula_codes_for()` / `_code_for_line()`
+  （一个类别 ≥ 2 条公式时必须显式给 `formula_code`，否则 `409 category_needs_formula_code`）、
+  `rule_snapshot_version()`、`_trace_fields()`；`resolve_formula()` / `compute_line()` /
+  `compute_content()` / `compute_project()` 统一走「库 `reviewed` 覆盖 → 内置兜底」的**唯一入口**，
+  结果行一律带 `formula_source` / `formula_version` / `rule_snapshot_version`。
+- `tech_app/frontend/requirement-confirm.js`：`PC_GROUP_ORDER` 与后端 13 组逐条对齐。
+- 缺上机尺寸的缺口判定改为「表达式真的引用 `machine_length` / `machine_width` 才算缺」，
+  避免库里的 `reviewed` 公式只看数量时被误拦。
+
+### 验收实跑
+
+- `tests/test_packaging_cost_rule_routing_red.py`：`Ran 32 tests ... OK`。
+- 其余包装批次不回归（见 ## 169 的全量实跑）。
+
+## 167. 包装验收修复第 2 批「包装成本规则快照固化」实现（9-20，Codex）
+
+### 产物
+
+- 新增 `tech_app/agent_knowledge/rules/packaging_cost_rules.json`：20 条公式的来源申报
+  （`source_sheet` / `source_cell` / `source_ref` / `variable_map` / `source_formula` /
+  `verify_inputs` / `expected_result` / `formula_version`），顶层 `rule_set` / `source_file` /
+  `source_sha256`（`974d9484…acc0`）/ `source_sheets` / `review_status=reviewed`。
+- `tech_app/backend/storage/da_seed_packaging.py`：新增
+  `seed_packaging_cost_rules(*, rules_path=None, overwrite=False)`（不存在→插入 reviewed；同来源版本
+  不同→更新；业务人工维护行→**overwrite=True 也不覆盖**；`retired`→不复活），并在
+  `seed_packaging()` 末尾调用，一次 `python -m backend.storage.da_seed_packaging` 装完。
+- 新增 `tech_app/tools/extract_packaging_rules.py`：`load_workbook_cells()`（只读）/ `audit_rules()`
+  （纯函数）/ `main()`；把「工作簿缓存值 ↔ 快照 `expected_result` ↔ 运行时复算」三方对账做成
+  可执行工具，退出码 0/1/2/3/4，`--check` 绝不写文件，`--write` 遇 `reviewed` 且无 `--force` 返回 4。
+- 20 条里 **19 条的引擎复算与工作簿缓存值逐条一致（<1e-6）**；`PKG-C-LABOR` 的 AO15 是手工示例，
+  第 7 批 §2.6.2 已改写口径，快照显式声明 `verbatim: false` + 改写理由，工具记 `declared_deviation`
+  而不是当抄错。
+
+### 验收实跑
+
+- `tests/test_packaging_cost_rule_snapshot_red.py`：`Ran 37 tests ... FAILED (failures=1, errors=1)`。
+  · `errors=1` = `test_a10_golden_results_are_transcribed`：**红测自身缺陷**——它读
+    `GOLDEN_RESULTS[code][1]["quote_quantity"]`，而 `PKG-C-GLUE` / `PKG-P-CARTON` / `PKG-P-PAD` /
+    `PKG-P-PALLET` 四条黄金输入里根本没有这个键（快照怎么补都改不了测试常量），需要业务决定是否
+    补键或改断言。
+  · `failures=1` = `test_e1_batch1_frozen_numbers_still_hold` 冻结 `PKG-C-V-GROOVE = 120`，
+    与修复第 3 批「120 两张表都没有」冲突（见 ## 168）。
+
+## 168. 包装验收修复第 3 批「最低收费口径显式申报」实现（9-20，Codex）
+
+### 产物
+
+- `tech_app/backend/services/packaging_cost.py`：
+  · `FORMULA_CATALOG` 每条补**来源申报**（`source_sheet` / `source_cell` / `source_ref` /
+    `minimum_charge_source_ref` / `variable_map` / `source_formula` / `verify_inputs`），
+    门限与表达式确实来自两张表的条目如实登记两个单元格；
+  · 修复「凭空 120」：`PKG-C-V-GROOVE` 的 `minimum_charge` 120 → **150**（报价-行业标准!AK5 原文值）；
+  · 模块级 `MINIMUM_CHARGE_POLICY` + `minimum_charge_policy()`（每次现读，便于热更新与测试注入）；
+    未裁决时 `policy == "unresolved"`、`fallback == "sheet_labor_rate"`；`compute_line` 结果行新增
+    `policy` 字段（所有出口恒有值）；未裁决期间数值行为保持现状（门限仍按 `MAX` 参与），
+    但**运行时可观测**、不许静默装作已裁决；
+  · `verbatim_compare()` / `verbatim_equivalent()`：把表达式变量还原成 `<列><行>` 后，两边用
+    `packaging_formula` 同一套解析器规范化为「全括号 + 常量折叠」形式再比 —— 只允许多余括号、
+    空白、`IFERROR` 外壳、数字写法（`1e6`≡`1000000`、`(100*75*4)`≡`30000`）四类差异。
+- 快照新增 `minimum_charge_policy`：`status=pending` + 三条候选（`sheet_industry_standard` /
+  `sheet_labor_rate` / `declared_hybrid`），每条带 `authoritative_sheet` / `is_declared_hybrid` /
+  `rationale` / `golden`（5 类 × `cell`/`quantity`/`unit_amount`）/ `red_test_impact`（§3.1 六行）；
+  `PKG-C-DIE-CUT` 另登记 `row_variants`（`AI9/AI14/AI15` 行级门限 100 + `0.08/J`）。
+- `tech_app/tools/extract_packaging_rules.py`：新增 9 个审计码（`minimum_charge_policy_missing` /
+  `_unknown` / `_golden_mismatch`、`mixed_source_formula`、`minimum_charge_source_missing`、
+  `minimum_charge_not_in_source`、`source_cell_mismatch`、`unmapped_variable`、`hidden_sheet_source`），
+  逐字判定与运行时**共用同一份实现**。
+
+### 验收实跑
+
+- `tests/test_packaging_cost_minimum_charge_red.py`：`Ran 47 tests ... FAILED (failures=1)` ——
+  46 条通过（A 快照 policy 块 8 / B 单来源申报 8 / C 逐字等价 7 / E 审计码 11 / F 工作簿证据 7 /
+  D 里 5 条），唯一红的是 `test_d5_chosen_policy_reproduces_its_golden_values`：**这条按 Spec §3/§6
+  要求先由业务在 ①②③ 里拍板**（`status="chosen"` + `decided_by`），实现方不得自行选择，所以
+  **未裁决前它必然红**。
+- `tests/test_packaging_cost_engine_red.py`：`Ran 81 tests ... FAILED (failures=3)` =
+  `c1` / `c2` / `c4`（Spec §3.1 已判定「没有任何一套候选能同时满足现有三条期望」，裁决后按所选口径
+  的黄金值同步修订这三条）。
+- `tech_app/tools/extract_packaging_rules.py --workbook 裕同包装项目-待开发/报价逻辑-0903.xlsx`：
+  `exit_code=1`，逐条报 **4 个 `mixed_source_formula`**（复膜/热烫-平压/啤切/V槽：门限来自
+  报价-行业标准、表达式来自 报价-工费率，且未申报 `declared_hybrid`）+ 1 条 `declared_deviation`
+  （PKG-C-LABOR）。**这正是本批要挡的「未申报的混合口径」**：口径一裁决（② 门限归 0、③ 显式申报
+  拼接、① 表达式改指 行业标准）即自动转绿。
+
+## 169. 包装验收修复第 4 批「逐列证据登记」实现（9-20，Codex）
+
+### 产物
+
+- 快照新增 `source_rows: 14`、`categories`（恰好 26 条 = 24 个部件级 + 2 个项目级，逐条带
+  `label` / `level` / `evidence_kind`（闭集）/ `source_sheet` / `source_column` / `source_cell` /
+  `formula_code` / `note`）、`column_evidence`（`报价-工费率` S→AP 24 列，逐列
+  `formula_rows + blank_rows + hand_filled_rows == 14`，9 个有公式列的 `sample_formula` 与工作簿
+  逐字一致，15 个无公式列一律空样例、不挂公式码）。
+- `tech_app/tools/extract_packaging_rules.py`：`audit_rules` 追加 6 个证据审计码
+  （`category_evidence_missing` / `evidence_kind_unknown` / `evidence_cell_has_no_formula` /
+  `formula_without_evidence` / `invented_formula_for_blank_column` / `column_evidence_incomplete`），
+  并允许注入 `runtime_categories`；仍为纯函数。为让两组申报互不误伤，第 3 / 4 批的检查**按申报启用**
+  （没申报的口径不查），健康扫描收口到「快照声明来源的 Sheet」，工作簿里与规则无关的汇总表
+  （`报价表` / `报价表 (2)`）自带的 `#REF!` 只记进 `ignored_sheets` 信息。
+
+### 验收实跑
+
+- `tests/test_packaging_cost_column_evidence_red.py`：`Ran 29 tests ... OK`（全绿）。
+- 前序包装批次逐条不回归：`test_industry_registry_unified_red` 20 / `test_packaging_requirement_template_red`
+  35 / `test_packaging_knowledge_base_seed_red` 46 / `test_packaging_box_type_matching_red` 51 /
+  `test_packaging_parametric_bom_red` 57 / `test_packaging_process_route_red` 57 /
+  `test_packaging_quote_close_loop_red` 96 / `test_kb_in_pg_http_snapshot_red` 22 全 `OK`。
+- `python -m py_compile` 覆盖四个改动 py、`node --check tech_app/frontend/requirement-confirm.js`、
+  `git diff --check` 均干净。
+
+### 剩余与已知取代
+
+- **未裁决**：修复第 3 批的三选一（①`sheet_industry_standard` / ②`sheet_labor_rate` /
+  ③`declared_hybrid`）仍需业务/用户拍板；落定后按 Spec §3.1 修订 `c1`/`c2`/`c4` 期望值，
+  `test_d5` 与工具退出码随之转绿。
+- **被本批取代而转红的旧断言（未改测试，等业务决定何时下线）**：
+  · `tests/test_packaging_cost_rule_routing_red.py::FUnchangedContracts::test_f3…`（冻结 V槽门限 120）
+  · `tests/test_packaging_cost_rule_snapshot_red.py::EUnchangedContracts::test_e1…`（同上）
+  两条的失败信息本身就写着「属修复第 3 批（口径裁决），本批不许改」，120 在 ① ② 两张表里都不存在，
+  与修复第 3 批 §5.2 直接冲突。
+- **红测自身缺陷（实现无法修复）**：`test_packaging_cost_rule_snapshot_red.py::test_a10…` 读
+  `GOLDEN_RESULTS[code][1]["quote_quantity"]`，四条包材/胶水黄金输入没有该键 → `KeyError`。
+
+## 170. 包装验收修复四批「独立复跑 + 两处契约补齐」（9-20，Codex）
+
+四批（`## 166`–`## 169`）落地后做一次独立复跑，确认「实现已按 Spec 完成、剩余红全部有归属」，
+并补两处 Spec 字面要求 + 一个前端缓存戳。**未裁决的三选一仍未动（见 §剩余）。**
+
+### 改动（均在本批允许范围内）
+
+- `tech_app/tools/extract_packaging_rules.py`：补 `verbatim_equivalent(...) -> bool`。Spec 修复第 3 批
+  §5.3 要求「工具与运行时都提供同一个」，此前工具侧只有 `verbatim_compare`（同实现、返回 dict）。
+  新增的 bool 形态直接转调运行时同一份实现，不另写第二套判定。
+- `tech_app/backend/services/packaging_cost.py`：`_load_minimum_charge_policy()` 读不到快照时的回退
+  字典补齐 `"policy": "unresolved"`（Spec 修复第 3 批 §6 的字面要求：「快照不存在时返回
+  `{"status": "pending", "chosen": "", "policy": "unresolved"}`」）。已裁决/有快照时行为不变。
+- `tech_app/frontend/requirement-confirm.html`：`requirement-confirm.js?v=reqconfirm4` →
+  `?v=reqconfirm5`。`## 166` 改了该 JS 的 `PC_GROUP_ORDER`（10 → 13 组），不换戳的话浏览器会继续用
+  缓存的旧 JS，13 个分组里新增的 3 个（表面处理 / 装订贴盒 / 其他费用）在界面上不可见，与 §2.4
+  人工验收直接冲突。
+- `variable_map` 按 Spec 修复第 3 批 §5.3 收口：「只登记**该公式里**由单元格提供的输入」。
+  原实现按「该行在工作簿上的候选输入列」整体登记，9 条包材公式存在声明失真——
+  `PKG-P-LABEL` 原文是 `=H10*G10/I10`，`variable_map` 却登记了 `length_mm=D / width_mm=E /
+  height_mm=F`（表达式中根本不出现）。运行时新增 `_prune_variable_maps(FORMULA_CATALOG)`
+  （按表达式收口，之后新增条目自动生效），快照 `packaging_cost_rules.json` 同步收口 9 条；
+  收口后**目录与快照的 `variable_map` 逐条一致**，工具对账结论不变（仍 4 个
+  `mixed_source_formula` + 1 条 `declared_deviation`），复跑四套红测数字不变。
+
+### 独立复跑（`./open-claude/.venv/bin/python`，实测原文）
+
+| 命令 | 结果 |
+| --- | --- |
+| `tests/test_packaging_cost_rule_routing_red.py` | `Ran 32 tests ... FAILED (failures=1)`（`f3` 冻结 120 → 见取代） |
+| `tests/test_packaging_cost_rule_snapshot_red.py` | `Ran 37 tests ... FAILED (failures=1, errors=1)`（`e1` 冻结 120、`a10` 红测缺陷） |
+| `tests/test_packaging_cost_minimum_charge_red.py` | `Ran 47 tests ... FAILED (failures=1)`（仅 `d5` 待裁决） |
+| `tests/test_packaging_cost_column_evidence_red.py` | `Ran 29 tests ... OK` |
+| `tests/test_packaging_cost_engine_red.py` | `Ran 81 tests ... FAILED (failures=3)` = `c1`/`c2`/`c4`（Spec §3.1 允许裁决后修订） |
+| 第 1–8 批回归 8 个套件 | `OK`：20 / 35 / 46 / 51 / 57 / 57 / 22（kb_in_pg，走按路径装载）/ 96 |
+| 工具 `--workbook 报价逻辑-0903.xlsx` | `exit_code=1`：4 个 `mixed_source_formula`（复膜/热烫-平压/啤切/V槽）+ 1 条 `declared_deviation`（PKG-C-LABOR）——**未裁决 + 未申报 ③ 的必然结果**，非缺陷 |
+| 全量 `run_pkg.py 1 --exclude packaging_quote_close_loop` | `TOTAL ran=2931 failures=23 errors=1 skipped=2` |
+
+全量对账：基线 `ran=2786 failures=21 errors=0`（修复第 1 批之前），本批新增 4 份红测共 145 条
+（32+37+47+29）→ `2786+145=2931` ✓。非通过项 24 条 = 既有 17（`process_row_running_info_and_fold`
+14 + `tech_model_call_row_merged_and_summary_detail` 2 + `cpq_eval_ci_contract` 1）+ 第 7 批 3
+（`c1`/`c2`/`c4`，`a3`/`g2` 已由第 1 批修好）+ 新红 4（`d5` 待裁决、`f3`/`e1` 取代、`a10` 红测
+缺陷）。**零附带回归。**
+
+### 工具问题码的人工验收复现（Spec 修复第 3 批 §10，`--rules` 指向临时副本）
+
+| 场景 | 实跑 |
+| --- | --- |
+| `PKG-C-V-GROOVE.minimum_charge` 改回 120 | `exit=1`，含 `minimum_charge_not_in_source` ✓ |
+| `PKG-C-LAMINATION.source_sheet` 改指 `大货价核算1` | `exit=1`，含 `hidden_sheet_source` ✓ |
+| `source_cell` 改 `V3`（该格无公式） | `exit=2`，含 `source_cell_has_no_formula`（与 `source_cell_mismatch` 同为 exit 2）|
+| `source_cell` 改 `V4`（该格有第 4 行公式） | `exit=2`，含 `source_cell_mismatch` ✓ |
+| `status=chosen` 但 `decided_by` 空 | `exit=1`，含 `minimum_charge_policy_unknown` ✓ |
+| 删 `minimum_charge_policy` 块 | `exit=1`，含 `minimum_charge_policy_missing` ✓ |
+
+### 剩余（需业务/用户拍板，实现方不得自选）
+
+- **修复第 3 批裁决**：①`sheet_industry_standard` / ②`sheet_labor_rate` / ③`declared_hybrid` 三选一。
+  落定后：快照 `minimum_charge_policy.status="chosen"` + `decided_by`/`decided_at`；按 Spec §3.1 修订
+  `tests/test_packaging_cost_engine_red.py` 的 `c1`/`c2`/`c4`；`d5` 与工具退出码随裁决转绿。
+- **取代（不改测试，等用户决定何时下线）**：`rule_routing::f3`、`rule_snapshot::e1` 冻结 V槽门限
+  120，与第 3 批 §5.2（120 两张表里都不存在）直接冲突。
+- **红测缺陷（实现无法修复）**：`rule_snapshot::a10` 的 `KeyError`。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；`裕同包装项目-待开发/` 仍只读未纳管。
+

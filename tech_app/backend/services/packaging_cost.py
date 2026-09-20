@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Optional
 
 from . import industry_templates, packaging_match
@@ -65,12 +66,19 @@ COST_CATEGORIES = (
 #: 项目级类别（不计入任何部件行，Spec §2.3）。
 PROJECT_COST_CATEGORIES = (("packaging", "包装"), ("freight", "运输"))
 
-#: 10 个报告分组（Spec §2.3，对应 `成本细分` Sheet 的 10 列）。
+#: 13 个报告分组（Spec 修复第 1 批 §2.1）。前 10 组是工作簿 `成本细分` 的同名列，
+#: 组名与成员逐字保留；`表面处理` / `装订贴盒` / `其他费用` 承载工作簿没有细分、
+#: 但引擎确实算得出金额的 13 个类别 —— 否则这些钱会算进总成本却在分组里消失。
 REPORT_GROUPS = {
-    "材料": ("material", "glue"), "印刷": ("print", "print_uv"), "覆膜": ("lamination",),
+    "材料": ("material", "glue"), "印刷": ("print", "print_uv"),
+    "覆膜": ("lamination", "transfer_film"),
     "烫金": ("hot_stamp_flat", "hot_stamp_round", "cold_stamp"), "丝印": ("silk_screen",),
-    "裱纸": ("mounting",), "模切": ("die_cutting",), "开槽": ("v_groove",),
-    "手工": ("labor",), "包装": ("packaging", "freight"),
+    "表面处理": ("varnish", "anti_scratch", "pet_oil", "visidi_uv", "texture",
+                 "emboss_deboss"),
+    "裱纸": ("mounting",), "模切": ("die_cutting",),
+    "装订贴盒": ("folding", "auto_mount", "double_tape"),
+    "开槽": ("v_groove",), "手工": ("labor",), "其他费用": ("other",),
+    "包装": ("packaging", "freight"),
 }
 
 #: 变量白名单闭集（Spec §2.4）。表达式引用白名单外变量 → `CostError(409, unknown_variable:)`。
@@ -202,7 +210,7 @@ FORMULA_CATALOG = {
                      "equipment_rate": 197.52, "labor_rate": 190.06}},
     "PKG-C-V-GROOVE": {
         "formula_code": "PKG-C-V-GROOVE", "cost_category": "v_groove",
-        "expression": _V_GROOVE_EXPR, "minimum_charge": 120, "rounding": 4,
+        "expression": _V_GROOVE_EXPR, "minimum_charge": 150, "rounding": 4,
         "rate_code": "RATE-PKG-EQUIP-VGROOVE", "source_ref": _GSTAMP + "AK5",
         "defaults": {"setup_minutes": 60.0, "capacity_per_hour": 3000.0,
                      "equipment_rate": 195.0, "labor_rate": 111.0, "times": 2.0}},
@@ -262,6 +270,202 @@ FORMULA_CATALOG = {
         "expression": _PALLET_EXPR, "minimum_charge": 0, "rounding": 4,
         "rate_code": "", "source_ref": _GPACK + "J12", "defaults": {}},
 }
+
+#: 公式来源申报（Spec 修复第 3 批 §5.1–§5.3）：`source_sheet` / `source_cell` 指向该条
+#: 表达式**真实抄自**的那一格；`variable_map` 只登记由单元格提供的输入（值=列字母），
+#: `verify_inputs` 里没进 `variable_map` 的键一律视为写死在公式里的字面量；`source_formula`
+#: 是单元格原文（逐字，供 `verbatim_equivalent` 校验）；`minimum_charge_source_ref` 是
+#: 门限数值真正所在的那一格（`minimum_charge == 0` 时为空串）。`verbatim=False` 表示该条
+#: 是**已申报的改写**（不与 `source_cell` 逐字等价，理由见 `deviation`），不是抄错。
+_FORMULA_PROVENANCE = {
+    "PKG-C-MATERIAL": {
+        "source_sheet": "报价-工费率", "source_cell": "S2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/S2",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"cut_length": "K", "cut_width": "L", "gsm": "M", "ton_price": "N", "imposition_count": "J", "proof_base": "Q", "quote_quantity": "R"},
+        "source_formula": "=K2*L2/1000000*M2/1000000*N2/1.13/J2+K2*L2/1000000*M2/1000000*N2/1.13*Q2/R2",
+        "verify_inputs": {"cut_length": 889, "cut_width": 705, "gsm": 157, "ton_price": 6300, "imposition_count": 1, "tax_factor": 1.13, "proof_base": 450, "quote_quantity": 1000},
+    },
+    "PKG-C-PRINT-UV": {
+        "source_sheet": "报价-工费率", "source_cell": "U2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/U2",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"machine_length": "H", "machine_width": "I", "quote_quantity": "R", "imposition_count": "J"},
+        "source_formula": "=((30/60+R2/J2/12000)*(591+666))/R2+H2*I2/1000000*4/1000*115/1.13/J2",
+        "verify_inputs": {"machine_length": 889, "machine_width": 700, "imposition_count": 1, "setup_minutes": 30, "capacity_per_hour": 12000, "equipment_rate": 591, "labor_rate": 666, "ink_thickness_mm": 4, "ink_unit_price": 115, "tax_factor": 1.13, "quote_quantity": 1000},
+    },
+    "PKG-C-LAMINATION": {
+        "source_sheet": "报价-工费率", "source_cell": "V2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/V2",
+        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/V2",
+        "variable_map": {"machine_length": "H", "machine_width": "I", "imposition_count": "J", "quote_quantity": "R"},
+        "source_formula": "=(H2*I2/1000000*1.7/1.13/J2+H2*I2/1000000*18/1000*18.5/J2)+((30/60+R2/J2/5500)*(197+145))/R2",
+        "verify_inputs": {"machine_length": 889, "machine_width": 700, "imposition_count": 1, "setup_minutes": 30, "capacity_per_hour": 5500, "equipment_rate": 197, "labor_rate": 145, "film_price": 1.7, "film_thickness_um": 18, "film_kg_price": 18.5, "tax_factor": 1.13, "quote_quantity": 1000},
+    },
+    "PKG-C-HOT-STAMP-FLAT": {
+        "source_sheet": "报价-工费率", "source_cell": "X2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/X2",
+        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/X2",
+        "variable_map": {"imposition_count": "J", "quote_quantity": "R"},
+        "source_formula": "=((100*75*4)/1000000*8.5)+((200/60+R2/J2/5000)*(193+115))/R2",
+        "verify_inputs": {"hot_area_mm2": 30000, "imposition_count": 1, "setup_minutes": 200, "capacity_per_hour": 5000, "equipment_rate": 193, "labor_rate": 115, "foil_price": 8.5, "quote_quantity": 1000},
+    },
+    "PKG-C-MOUNTING": {
+        "source_sheet": "报价-工费率", "source_cell": "AH13",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AH13",
+        #: 裱纸 ① 有 100 门限，但引擎不采用（minimum_charge=0）→ 不许声明门限来源。
+        "minimum_charge_source_ref": "",
+        "variable_map": {"imposition_count": "J", "quote_quantity": "R"},
+        "source_formula": "=((30/60+R13/J13/3500)*(209+126))/R13",
+        "verify_inputs": {"imposition_count": 25, "setup_minutes": 30, "capacity_per_hour": 3500, "equipment_rate": 209, "labor_rate": 126, "quote_quantity": 1000},
+    },
+    "PKG-C-DIE-CUT": {
+        "source_sheet": "报价-工费率", "source_cell": "AI2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AI2",
+        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AI2",
+        "variable_map": {"imposition_count": "J", "quote_quantity": "R"},
+        "source_formula": "=((120/60+R2/J2/6500)*(197.52+190.06))/R2",
+        "verify_inputs": {"imposition_count": 1, "setup_minutes": 120, "capacity_per_hour": 6500, "equipment_rate": 197.52, "labor_rate": 190.06, "quote_quantity": 1000},
+    },
+    "PKG-C-V-GROOVE": {
+        "source_sheet": "报价-工费率", "source_cell": "AK5",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AK5",
+        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AK5",
+        "variable_map": {"quote_quantity": "R"},
+        "source_formula": "=(60/60+R5/3000)*(195+111)/R5*2",
+        "verify_inputs": {"quote_quantity": 1000, "setup_minutes": 60, "capacity_per_hour": 3000, "equipment_rate": 195, "labor_rate": 111, "times": 2},
+    },
+    "PKG-C-GLUE": {
+        "source_sheet": "报价-工费率", "source_cell": "AN2",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AN2",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"machine_length": "H", "machine_width": "I", "imposition_count": "J"},
+        "source_formula": "=H2*I2/1000000*0.74/J2",
+        "verify_inputs": {"machine_length": 889, "machine_width": 700, "imposition_count": 1, "glue_unit_price": 0.74, "quote_quantity": 1000},
+    },
+    "PKG-C-LABOR": {
+        "verbatim": False,
+        "deviation": "AO15 原文 =(36+2)*40/180 是手工示例、量纲与标准工时口径不同；本条按 "
+                     "docs/specs/packaging-cost-engine.md §2.6.2 改写为标准工时 × 费率，"
+                     "声明为改写后不再与单元格逐字等价（工具按 declared_deviation 记录，不计问题）",
+        "source_sheet": "报价-工费率", "source_cell": "AO15",
+        "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AO15",
+        "minimum_charge_source_ref": "",
+        "variable_map": {},
+        "source_formula": "=(36+2)*40/180",
+        "verify_inputs": {"labor_seconds": 36, "labor_rate": 40, "overhead_seconds": 0, "overhead_rate": 0},
+    },
+    "PKG-P-CARTON": {
+        "source_sheet": "包装运输", "source_cell": "J2",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J2",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=((E2+F2+25.4)*(D2+E2+50.8)*2*H2/1.13/645160+0.1+0.06+0.12)*1.03/0.9*G2/I2",
+        "verify_inputs": {"length_mm": 520, "width_mm": 420, "height_mm": 425, "usage_qty": 1, "material_price": 3, "units_per_pack": 4, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-PAD": {
+        "source_sheet": "包装运输", "source_cell": "J3",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J3",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=((D3+6)*(E3+6)*H3/1.13/645160+0.04)*1.03/0.9*G3/I3",
+        "verify_inputs": {"length_mm": 510, "width_mm": 410, "height_mm": 0, "usage_qty": 2, "material_price": 1.55, "units_per_pack": 4, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-DIVIDER": {
+        "source_sheet": "包装运输", "source_cell": "J4",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J4",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=(D4+6)*(E4+6)/1000000*350/1000000*H4/1.13*G4/I4",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 4200, "units_per_pack": 4, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9, "gsm": 350},
+    },
+    "PKG-P-BAG": {
+        "source_sheet": "包装运输", "source_cell": "J5",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J5",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=(D5+50)*(E5+50)*F5/100/1000*0.185*H5*G5/I5",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 18, "units_per_pack": 4, "bag_unit_price": 0.185, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-CRAFT-PAPER": {
+        "source_sheet": "包装运输", "source_cell": "J6",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J6",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=(D6+6)*(E6+6)/1000000*100/1000000*H6/1.13*G6/I6",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 5800, "units_per_pack": 4, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9, "gsm": 100},
+    },
+    "PKG-P-STRAP": {
+        "source_sheet": "包装运输", "source_cell": "J7",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J7",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=(D7+6)*(E7+6)/1000000*30/1000000*H7/1.13*G7/I7",
+        "verify_inputs": {"length_mm": 787, "width_mm": 1092, "height_mm": 0, "usage_qty": 4, "material_price": 7800, "units_per_pack": 4, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9, "gsm": 30},
+    },
+    "PKG-P-CORNER-TOP": {
+        "source_sheet": "包装运输", "source_cell": "J8",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J8",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=D8/1000*H8*G8/I8",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 1.9, "units_per_pack": 120, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-CORNER-PAPER": {
+        "source_sheet": "包装运输", "source_cell": "J9",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J9",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=D9/1000*H9*G9/I9",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 1.9, "units_per_pack": 120, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-LABEL": {
+        "source_sheet": "包装运输", "source_cell": "J10",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J10",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=H10*G10/I10",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 0.05, "units_per_pack": 120, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-BOARD": {
+        "source_sheet": "包装运输", "source_cell": "J11",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J11",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=H11/1.13*G11/I11",
+        "verify_inputs": {"length_mm": 0, "width_mm": 0, "height_mm": 0, "usage_qty": 0, "material_price": 30, "units_per_pack": 120, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+    "PKG-P-PALLET": {
+        "source_sheet": "包装运输", "source_cell": "J12",
+        "source_ref": "报价逻辑-0903.xlsx/包装运输/J12",
+        "minimum_charge_source_ref": "",
+        "variable_map": {"length_mm": "D", "width_mm": "E", "height_mm": "F", "usage_qty": "G", "material_price": "H", "units_per_pack": "I"},
+        "source_formula": "=H12/1.13*G12/I12",
+        "verify_inputs": {"length_mm": 1200, "width_mm": 1000, "height_mm": 120, "usage_qty": 1, "material_price": 70, "units_per_pack": 120, "tax_factor": 1.13, "loss_uplift": 1.03, "yield_divisor": 0.9},
+    },
+}
+for _code, _extra in _FORMULA_PROVENANCE.items():
+    FORMULA_CATALOG[_code].update(_extra)
+
+
+def _prune_variable_maps(catalog: dict) -> None:
+    """`variable_map` 只登记**该公式里**用到的单元格输入（Spec 修复第 3 批 §5.3）。
+
+    条目里按「该行在工作簿上的候选输入列」整体登记（便于人工对照），这里按表达式收口：
+    去掉不参与该条公式的列。否则 `verbatim_equivalent` 的变量还原表会把单元格里根本不存在的
+    引用也算成「已声明」，声明失真。
+    """
+    for entry in catalog.values():
+        mapping = entry.get("variable_map")
+        if not mapping:
+            continue
+        expression = entry.get("expression") or ""
+        entry["variable_map"] = {name: column for name, column in mapping.items()
+                                 if name in expression}
+
+
+_prune_variable_maps(FORMULA_CATALOG)
+
 
 #: 求值精度：Spec §2.6 说「precision 取本条 rounding」，但红测要求金额与 0903 缓存的
 #: 全精度值对齐到 1e-6；取整只写进目录元数据（`rounding`），金额本身不做二次取整。
@@ -336,6 +540,227 @@ def _loads(value: Any, default: Any) -> Any:
     except (TypeError, ValueError):
         return default
     return parsed if parsed is not None else default
+
+
+# --------------------------------------------------------------------------- #
+# 最低收费口径申报（Spec 修复第 3 批 §5.3 / §6）
+# --------------------------------------------------------------------------- #
+#: 规则快照（修复第 2 批产物）；缺失时按「未裁决」处理，绝不静默装作已裁决。
+RULES_JSON_PATH = (Path(__file__).resolve().parents[3] / "tech_app" / "agent_knowledge"
+                   / "rules" / "packaging_cost_rules.json")
+
+#: 单元格地址（`V2` / `AH13`）；表达式里已经是这个形状的标识符视为已还原。
+#: 注意：正则一律以字符串形式内联，不预编译 —— 引擎源码里不许出现动态编译相关的
+#: 调用（红测 a8 的「不执行动态代码」守卫）。
+_CELL_REF_TEXT = r"^[A-Za-z]{1,3}[0-9]{1,5}$"
+#: 科学计数法数字（`1e6`）→ 普通写法后再解析（Spec §5.3 第 3 步）。
+_SCIENTIFIC_TEXT = r"\d+(?:\.\d+)?[eE][+-]?\d+"
+
+
+def _load_minimum_charge_policy() -> dict:
+    """从快照读口径申报块；读不到 → `pending`（Spec §6）。"""
+    try:
+        data = json.loads(Path(RULES_JSON_PATH).read_text(encoding="utf-8"))
+        block = data.get("minimum_charge_policy") or {}
+    except Exception:  # noqa: BLE001 - 快照不可用不该让成本计算整体失败
+        block = {}
+    if not isinstance(block, dict):
+        block = {}
+    status = _text(block.get("status")) or "pending"
+    return {"status": status,
+            "chosen": _text(block.get("chosen")),
+            "decided_by": _text(block.get("decided_by")),
+            "decided_at": _text(block.get("decided_at")),
+            # 快照缺失/读不到时必须能直接看出「未裁决、当前按哪套回退」（Spec §6）。
+            "policy": "unresolved" if status == "pending" else _text(block.get("chosen"))}
+
+
+#: 模块级口径常量（Spec §6）：`pending` = 未裁决，运行时必须标注 `unresolved`。
+MINIMUM_CHARGE_POLICY = _load_minimum_charge_policy()
+
+
+def minimum_charge_policy() -> dict:
+    """返回本次计算所用的最低收费口径（Spec §6）。
+
+    · `status == "chosen"` → `policy == chosen`、`fallback == ""`；
+    · `status == "pending"` → `policy == "unresolved"`、`fallback == "sheet_labor_rate"`
+      （未裁决期间保持现有数值行为，但必须**标注**，不许静默装作已裁决）。
+
+    每次都从模块级 `MINIMUM_CHARGE_POLICY` **现读**，不缓存到闭包/类属性 —— 测试与热更新
+    靠替换这个常量验证口径切换。
+    """
+    block = MINIMUM_CHARGE_POLICY if isinstance(MINIMUM_CHARGE_POLICY, dict) else {}
+    status = _text(block.get("status")) or "pending"
+    chosen = _text(block.get("chosen"))
+    if status == "chosen" and chosen:
+        policy, fallback = chosen, ""
+    else:
+        status, policy, fallback = "pending", "unresolved", "sheet_labor_rate"
+    return {"status": status, "chosen": chosen, "policy": policy, "fallback": fallback,
+            "decided_by": _text(block.get("decided_by")),
+            "decided_at": _text(block.get("decided_at"))}
+
+
+def _number_text(value: Any) -> str:
+    """数字文本（Spec §5.3：整数去掉 `.0`，浮点按 12 位有效数字归一）。"""
+    try:
+        text = "%.12g" % float(value)
+    except (TypeError, ValueError):
+        return _text(value)
+    return "0" if text in ("-0", "0.0") else text
+
+
+def _expand_numbers(text: str) -> str:
+    """把 `1e6` 这类科学计数法展开成普通写法（与 `1000000` 等价）。"""
+    return re.sub(_SCIENTIFIC_TEXT, lambda m: _number_text(float(m.group(0))), str(text))
+
+
+def _source_row(source_cell: Any) -> str:
+    match = re.search(r"([0-9]+)\s*$", _text(source_cell))
+    return match.group(1) if match else ""
+
+
+def _split_top_level(text: str) -> list:
+    """按顶层逗号切分（括号里的逗号不算）。"""
+    parts: list = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return parts
+
+
+def _strip_iferror(text: Any) -> str:
+    """剥掉 `IFERROR(x,"")` 外壳（Spec §5.3：只允许这一种包裹差异）。"""
+    work = _text(text).lstrip("=").strip()
+    while work.upper().startswith("IFERROR(") and work.endswith(")"):
+        parts = _split_top_level(work[len("IFERROR("):-1])
+        if len(parts) != 2:
+            break
+        work = parts[0].strip().lstrip("=").strip()
+    return work
+
+
+def _fold_constants(node):
+    """常量折叠：只含数字的子树先算出值（`(100*75*4)` 与 `30000` 等价）。"""
+    kind = node[0]
+    if kind == "bin":
+        left, right = _fold_constants(node[2]), _fold_constants(node[3])
+        if left[0] == "num" and right[0] == "num" and node[1] in "+-*/":
+            try:
+                value = {"+": left[1] + right[1], "-": left[1] - right[1],
+                         "*": left[1] * right[1], "/": left[1] / right[1]}[node[1]]
+            except ZeroDivisionError:
+                return ("bin", node[1], left, right)
+            return ("num", value)
+        return ("bin", node[1], left, right)
+    if kind == "unary":
+        inner = _fold_constants(node[2])
+        if inner[0] == "num" and node[1] == "-":
+            return ("num", -inner[1])
+        return ("unary", node[1], inner)
+    if kind == "call":
+        return ("call", node[1], [_fold_constants(arg) for arg in node[2]])
+    if kind == "cmp":
+        return ("cmp", node[1], _fold_constants(node[2]), _fold_constants(node[3]))
+    return node
+
+
+def _print_node(node) -> str:
+    kind = node[0]
+    if kind == "num":
+        return _number_text(node[1])
+    if kind == "var":
+        return str(node[1])
+    if kind == "bin":
+        return "(%s%s%s)" % (_print_node(node[2]), node[1], _print_node(node[3]))
+    if kind == "unary":
+        return "(%s%s)" % (node[1], _print_node(node[2]))
+    if kind == "call":
+        return "%s(%s)" % (node[1], ",".join(_print_node(arg) for arg in node[2]))
+    if kind == "cmp":
+        return "(%s%s%s)" % (_print_node(node[2]), node[1], _print_node(node[3]))
+    return "?"
+
+
+def _canonical_formula(text: Any) -> Optional[str]:
+    """规范化成「全括号 + 常量折叠」的规范串；解析不了 → `None`（Spec §5.3）。"""
+    source = _strip_iferror(text)
+    if not source:
+        return None
+    try:
+        tokens = packaging_formula._tokenize(
+            _expand_numbers(packaging_formula.normalize_expression(source)))
+        node = packaging_formula._Parser(tokens).parse()
+    except Exception:  # noqa: BLE001 - 解析不了就是不等价，不抛给调用方
+        return None
+    return _print_node(_fold_constants(node))
+
+
+def _resolve_expression(expression: Any, variable_map: Any, row: str, literals: Any) -> tuple:
+    """把表达式里的标识符还原成 `<列><行>` 或字面量文本（Spec §5.3 第 2 步）。"""
+    columns = {str(key): _text(value) for key, value in (variable_map or {}).items()}
+    texts: dict = {}
+    for key, value in (literals or {}).items():
+        if value is None or isinstance(value, bool):
+            continue
+        texts[str(key)] = _number_text(value) if isinstance(value, (int, float)) else _text(value)
+    unresolved: list = []
+
+    def _swap(match):
+        name = match.group(0)
+        if name.upper() in packaging_formula.ALLOWED_FUNCTIONS:
+            return name
+        if re.match(_CELL_REF_TEXT, name):
+            return name
+        column = columns.get(name, "")
+        if column and column.isalpha():
+            return "%s%s" % (column, row)
+        if name in texts:
+            return texts[name]
+        unresolved.append(name)
+        return name
+
+    return re.sub(_NAME_PATTERN, _swap, _text(expression)), unresolved
+
+
+def verbatim_compare(expression: Any, source_formula: Any, variable_map: Any, source_cell: Any,
+                     literals: Any = None) -> dict:
+    """逐字等价判定（Spec §5.3）；返回 `{equivalent, unmapped, resolved, source, reason}`。"""
+    row = _source_row(source_cell)
+    result = {"equivalent": False, "unmapped": [], "resolved": "", "source": "", "reason": ""}
+    if not row:
+        result["reason"] = "bad_source_cell"
+        return result
+    resolved, unresolved = _resolve_expression(expression, variable_map, row, literals or {})
+    result["resolved"] = resolved
+    result["unmapped"] = unresolved
+    if unresolved:
+        result["reason"] = "unmapped_variable"
+        return result
+    left = _canonical_formula(resolved)
+    right = _canonical_formula(source_formula)
+    result["source"] = right or ""
+    if left is None or right is None:
+        result["reason"] = "unparsable"
+        return result
+    result["equivalent"] = bool(left == right)
+    result["reason"] = "" if result["equivalent"] else "differs"
+    return result
+
+
+def verbatim_equivalent(expression: Any, source_formula: Any, variable_map: Any,
+                        source_cell: Any, literals: Any = None) -> bool:
+    """`expression` 是否与 `source_cell` 的原文逐字等价（Spec §5.3）。"""
+    return bool(verbatim_compare(expression, source_formula, variable_map, source_cell,
+                                 literals)["equivalent"])
 
 
 def _industry_of(data: dict) -> str:
@@ -416,6 +841,49 @@ def _entry_for(category: str, formula_code: Optional[str] = None) -> Optional[di
     return None
 
 
+def formula_codes_for(category: str) -> list:
+    """该类别在目录里的全部 `formula_code`（按声明顺序）。"""
+    return [code for code, entry in FORMULA_CATALOG.items()
+            if entry.get("cost_category") == category]
+
+
+def _code_for_line(category: str, formula_code: Optional[str] = None) -> str:
+    """单行计算取哪条公式（Spec 修复第 1 批 §3.1）。
+
+    类别下有 ≥ 2 条公式（`packaging` 的 11 条 `PKG-P-*`）时必须显式给 `formula_code`，
+    不许静默取第一条 —— 那等于用纸箱公式算卡板/胶袋。
+    """
+    code = _text(formula_code)
+    if code:
+        return code
+    codes = formula_codes_for(category)
+    if len(codes) > 1:
+        raise CostError("类别 %s 有 %d 条公式，必须显式指定 formula_code" % (category, len(codes)),
+                        409, "category_needs_formula_code:%s" % category)
+    return codes[0] if codes else ""
+
+
+def rule_snapshot_version() -> str:
+    """本次计算读到的知识库快照版本（取不到 → `""`，绝不编造）。"""
+    try:
+        value = kb_repo.kb_version()
+    except Exception:  # noqa: BLE001 - 快照不可用不该让成本计算整体失败
+        return ""
+    return _text(value)
+
+
+def _trace_fields(entry: Optional[dict] = None, *, result: Optional[dict] = None,
+                  snapshot: str = "") -> dict:
+    """结果行的可追溯字段（Spec 修复第 1 批 §3.2）。"""
+    row = result or {}
+    base = entry or {}
+    return {"formula_source": _text(row.get("formula_source"))
+            or _text(base.get("formula_source")) or "builtin",
+            "formula_version": _text(row.get("formula_version"))
+            or _text(base.get("formula_version")) or "1.0",
+            "rule_snapshot_version": snapshot or rule_snapshot_version()}
+
+
 def resolve_formula(formula_code: str, *, rows=None) -> dict:
     """取公式：`kb_packaging_cost_formula` 里 `reviewed` 的行覆盖内置目录（Spec §4.6）。
 
@@ -428,8 +896,16 @@ def resolve_formula(formula_code: str, *, rows=None) -> dict:
         raise CostError("没有内置公式 %s" % code, 404, "unknown_formula:%s" % code)
     base = dict(FORMULA_CATALOG[code])
     base["defaults"] = dict(FORMULA_CATALOG[code].get("defaults") or {})
+    base["formula_source"] = "builtin"
+    base["formula_version"] = "1.0"
     if rows is None:
-        rows = kb_repo._table("kb_packaging_cost_formula")
+        try:
+            rows = kb_repo._table("kb_packaging_cost_formula")
+        except Exception as exc:  # noqa: BLE001
+            # 知识库快照不可用（未注入 CPQ_INTERNAL_TOKEN / 离线 / 单测环境）时用内置目录兜底：
+            # 内置目录是 0903 的冻结口径，`reviewed` 覆盖只是可选增强。异常记在 note 上，不静默。
+            base["note"] = "kb_unavailable:%s" % exc.__class__.__name__
+            return base
     candidates = [dict(row) for row in (rows or [])
                   if _text(row.get("formula_code")) == code
                   and _text(row.get("review_status")) == "reviewed"]
@@ -453,6 +929,8 @@ def resolve_formula(formula_code: str, *, rows=None) -> dict:
     if row.get("rounding") is not None:
         base["rounding"] = int(_num(row.get("rounding")) or base.get("rounding") or 4)
     base["source"] = "kb"
+    base["formula_source"] = "kb"
+    base["formula_version"] = _text(row.get("formula_version")) or "1.0"
     base["note"] = "source=kb:%s" % code
     return base
 
@@ -479,29 +957,42 @@ def _merge_variables(entry: dict, variables: dict) -> tuple:
 
 
 def compute_line(category: str, variables: Optional[dict] = None, *,
-                 formula_code: Optional[str] = None, amount: Any = None) -> dict:
-    """算一行成本（Spec §4.5 / §2.6 / §2.7）。
+                 formula_code: Optional[str] = None, amount: Any = None,
+                 rows=None) -> dict:
+    """算一行成本（Spec §4.5 / §2.6 / §2.7；修复第 1 批 §3.1 起走唯一入口）。
 
     · 显式给 `amount` → 直接采用、`source="human"`、不取整；
     · 公式路径 → `MAX(minimum_charge/quote_quantity, 表达式)`，命中最低收费时
       `min_charge_applied=true`；
+    · 公式一律经 `resolve_formula`（库 `reviewed` 覆盖内置目录），结果带
+      `formula_source` / `formula_version` / `rule_snapshot_version` 供追溯；
     · 变量缺 → `amount=None` + `gap.code = missing_variable:<名>`；白名单外变量 →
-      `CostError(409, unknown_variable:<名>)`；类别没有公式 → `no_formula:<code>`。
+      `CostError(409, unknown_variable:<名>)`；类别没有公式 → `no_formula:<code>`；
+      类别下有多条公式又没给 `formula_code` → `CostError(409, category_needs_formula_code:)`。
     """
     inputs = dict(variables or {})
+    policy = minimum_charge_policy()["policy"]
     if amount is not None:
         return {"cost_category": category, "formula_code": _text(formula_code),
                 "expression": "", "inputs": inputs, "amount": float(amount),
                 "min_charge_applied": False, "minimum_charge": 0.0, "source": "human",
-                "loss_rate": inputs.get("loss_rate"), "assumptions": []}
-    entry = _entry_for(category, formula_code)
-    if entry is None:
-        code = _text(formula_code) or category
-        return {"cost_category": category, "formula_code": code, "expression": "",
-                "inputs": inputs, "amount": None, "min_charge_applied": False,
-                "minimum_charge": 0.0, "source": "kb", "assumptions": [],
-                "gap": {"code": "no_formula:%s" % code, "where": category,
-                        "detail": "该类别没有公式，需要人工录入金额"}}
+                "loss_rate": inputs.get("loss_rate"), "assumptions": [], "policy": policy,
+                "formula_source": "human", "formula_version": "",
+                "rule_snapshot_version": rule_snapshot_version()}
+    code = _code_for_line(category, formula_code)
+    if not code:
+        return {"cost_category": category, "formula_code": _text(formula_code) or category,
+                "expression": "", "inputs": inputs, "amount": None,
+                "min_charge_applied": False, "minimum_charge": 0.0, "source": "kb",
+                "assumptions": [], "policy": policy,
+                "formula_source": "builtin", "formula_version": "",
+                "rule_snapshot_version": rule_snapshot_version(),
+                "gap": {"code": "no_formula:%s" % (_text(formula_code) or category),
+                        "where": category, "detail": "该类别没有公式，需要人工录入金额"}}
+    entry = resolve_formula(code, rows=rows)
+    trace = {"formula_source": _text(entry.get("formula_source")) or "builtin",
+             "formula_version": _text(entry.get("formula_version")) or "1.0",
+             "rule_snapshot_version": rule_snapshot_version()}
     expression = entry["expression"]
     names = expression_variables(expression)
     allowed = set(LINE_VARIABLES)
@@ -515,33 +1006,39 @@ def compute_line(category: str, variables: Optional[dict] = None, *,
     bound = {_canon(key) for key in merged}
     missing = [name for name in names if _canon(name) not in bound]
     if missing:
-        return {"cost_category": category, "formula_code": entry["formula_code"],
-                "expression": expression, "inputs": merged, "amount": None,
-                "min_charge_applied": False,
-                "minimum_charge": float(entry.get("minimum_charge") or 0.0),
-                "source": "formula", "assumptions": assumptions,
-                "gap": {"code": "missing_variable:%s" % missing[0], "where": category,
-                        "detail": "缺少输入变量：%s" % "、".join(missing)}}
+        out = {"cost_category": category, "formula_code": entry["formula_code"],
+               "expression": expression, "inputs": merged, "amount": None,
+               "min_charge_applied": False,
+               "minimum_charge": float(entry.get("minimum_charge") or 0.0),
+               "source": "formula", "assumptions": assumptions, "policy": policy,
+               "gap": {"code": "missing_variable:%s" % missing[0], "where": category,
+                       "detail": "缺少输入变量：%s" % "、".join(missing)}}
+        out.update(trace)
+        return out
     try:
         value = _formula_value(expression, merged)
     except packaging_formula.FormulaError as exc:
-        return {"cost_category": category, "formula_code": entry["formula_code"],
-                "expression": expression, "inputs": merged, "amount": None,
-                "min_charge_applied": False,
-                "minimum_charge": float(entry.get("minimum_charge") or 0.0),
-                "source": "formula", "assumptions": assumptions,
-                "gap": {"code": "formula_error:%s" % entry["formula_code"], "where": category,
-                        "detail": str(exc)}}
+        out = {"cost_category": category, "formula_code": entry["formula_code"],
+               "expression": expression, "inputs": merged, "amount": None,
+               "min_charge_applied": False,
+               "minimum_charge": float(entry.get("minimum_charge") or 0.0),
+               "source": "formula", "assumptions": assumptions, "policy": policy,
+               "gap": {"code": "formula_error:%s" % entry["formula_code"], "where": category,
+                       "detail": str(exc)}}
+        out.update(trace)
+        return out
     quantity = _num(merged.get("quote_quantity"))
     minimum_charge = float(entry.get("minimum_charge") or 0.0)
     threshold = (minimum_charge / quantity) if (minimum_charge and quantity
                                                 and quantity > 0) else 0.0
     applied = bool(minimum_charge and threshold > value)
-    return {"cost_category": category, "formula_code": entry["formula_code"],
-            "expression": expression, "inputs": merged,
-            "amount": threshold if applied else value, "min_charge_applied": applied,
-            "minimum_charge": minimum_charge, "expression_value": value,
-            "source": "formula", "assumptions": assumptions}
+    out = {"cost_category": category, "formula_code": entry["formula_code"],
+           "expression": expression, "inputs": merged,
+           "amount": threshold if applied else value, "min_charge_applied": applied,
+           "minimum_charge": minimum_charge, "expression_value": value,
+           "source": "formula", "assumptions": assumptions, "policy": policy}
+    out.update(trace)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -614,10 +1111,13 @@ def summarize(lines, *, packaging: Any = 0.0, freight: Any = 0.0, tooling=None,
             buckets[category] += with_loss
     tooling_total = sum(float(item.get("amount") or 0.0) for item in (tooling or []))
     project = {"packaging": float(packaging or 0.0), "freight": float(freight or 0.0)}
+    #: 工装行的 `cost_category` 是 `other`，但它不进 `lines`（项目级），
+    #: 因此按类别补进「其他费用」组，保证 `sum(report_groups) == total_cost`。
+    extras = {"other": tooling_total}
     groups: dict = {}
     for name, members in REPORT_GROUPS.items():
         groups[name] = sum(buckets.get(member, 0.0) + project.get(member, 0.0)
-                           for member in members)
+                           + extras.get(member, 0.0) for member in members)
     total_cost = subtotal + tooling_total + project["packaging"] + project["freight"]
     return {"lines": out, "subtotal": subtotal, "loss_amount": loss_amount,
             "tooling_total": tooling_total, "packaging_total": project["packaging"],
@@ -676,41 +1176,57 @@ def compute_tooling(rule: Optional[dict], *, quote_quantity: Any,
 # --------------------------------------------------------------------------- #
 # 包材与运输
 # --------------------------------------------------------------------------- #
-def compute_content(formula_code: str, variables: Optional[dict] = None) -> dict:
-    """单条包材单件成本（Spec §2.10）：套 `PKG-P-*` 表达式（表达式内已 ÷ 装数）。"""
+def compute_content(formula_code: str, variables: Optional[dict] = None, *,
+                    rows=None) -> dict:
+    """单条包材单件成本（Spec §2.10）：套 `PKG-P-*` 表达式（表达式内已 ÷ 装数）。
+
+    修复第 1 批 §3.1：公式同样经 `resolve_formula`，库里 `reviewed` 的包材公式覆盖内置，
+    且结果带 `formula_source` / `formula_version` / `rule_snapshot_version`。
+    """
     code = _text(formula_code)
     inputs = dict(variables or {})
-    entry = FORMULA_CATALOG.get(code)
-    if entry is None or entry.get("cost_category") != "packaging":
+    if code not in FORMULA_CATALOG or FORMULA_CATALOG[code].get("cost_category") != "packaging":
         return {"formula_code": code, "content_code": _text(inputs.get("content_code")),
                 "expression": "", "inputs": inputs, "amount": None,
                 "min_charge_applied": False, "source": "kb",
+                "formula_source": "builtin", "formula_version": "",
+                "rule_snapshot_version": rule_snapshot_version(),
                 "gap": {"code": "no_formula:%s" % code, "where": code,
                         "detail": "不是包材公式"}}
+    entry = resolve_formula(code, rows=rows)
+    trace = {"formula_source": _text(entry.get("formula_source")) or "builtin",
+             "formula_version": _text(entry.get("formula_version")) or "1.0",
+             "rule_snapshot_version": rule_snapshot_version()}
     units = _num(inputs.get("units_per_pack"))
     if not units or units <= 0:
-        return {"formula_code": code, "content_code": _text(inputs.get("content_code")),
-                "expression": entry["expression"], "inputs": inputs, "amount": None,
-                "min_charge_applied": False, "source": "formula",
-                "gap": {"code": "invalid_units_per_pack", "where": code,
-                        "detail": "装数为 0 或空，该包材行不计入"}}
+        out = {"formula_code": code, "content_code": _text(inputs.get("content_code")),
+               "expression": entry["expression"], "inputs": inputs, "amount": None,
+               "min_charge_applied": False, "source": "formula",
+               "gap": {"code": "invalid_units_per_pack", "where": code,
+                       "detail": "装数为 0 或空，该包材行不计入"}}
+        out.update(trace)
+        return out
     merged, assumptions = _merge_variables(entry, inputs)
     try:
         value = _formula_value(entry["expression"], merged)
     except packaging_formula.FormulaError as exc:
-        return {"formula_code": code, "content_code": _text(inputs.get("content_code")),
-                "expression": entry["expression"], "inputs": merged, "amount": None,
-                "min_charge_applied": False, "source": "formula", "assumptions": assumptions,
-                "gap": {"code": "content_formula_error:%s" % code, "where": code,
-                        "detail": str(exc)}}
-    return {"formula_code": code, "content_code": _text(inputs.get("content_code")),
-            "expression": entry["expression"], "inputs": merged, "amount": value,
-            "minimum_charge": 0.0, "min_charge_applied": False, "source": "formula",
-            "assumptions": assumptions}
+        out = {"formula_code": code, "content_code": _text(inputs.get("content_code")),
+               "expression": entry["expression"], "inputs": merged, "amount": None,
+               "min_charge_applied": False, "source": "formula", "assumptions": assumptions,
+               "gap": {"code": "content_formula_error:%s" % code, "where": code,
+                       "detail": str(exc)}}
+        out.update(trace)
+        return out
+    out = {"formula_code": code, "content_code": _text(inputs.get("content_code")),
+           "expression": entry["expression"], "inputs": merged, "amount": value,
+           "minimum_charge": 0.0, "min_charge_applied": False, "source": "formula",
+           "assumptions": assumptions}
+    out.update(trace)
+    return out
 
 
 def compute_packaging(rows, *, tax_factor: Any = 1.13, loss_uplift: Any = LOSS_UPLIFT,
-                      yield_divisor: Any = YIELD_DIVISOR) -> dict:
+                      yield_divisor: Any = YIELD_DIVISOR, rule_rows=None) -> dict:
     """包材合计：逐条 `compute_content` 求和（Spec §2.10）。"""
     lines: list = []
     total = 0.0
@@ -719,7 +1235,7 @@ def compute_packaging(rows, *, tax_factor: Any = 1.13, loss_uplift: Any = LOSS_U
         variables["tax_factor"] = tax_factor
         variables["loss_uplift"] = loss_uplift
         variables["yield_divisor"] = yield_divisor
-        result = compute_content(row.get("formula_code"), variables)
+        result = compute_content(row.get("formula_code"), variables, rows=rule_rows)
         if not result.get("content_code"):
             result["content_code"] = _text(row.get("content_code"))
         lines.append(result)
@@ -882,7 +1398,7 @@ def _item(seq: int, category: str, *, part_code: Optional[str] = None,
 def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formula",
                   expression: str = "") -> dict:
     inputs = line.get("inputs") or {}
-    return _item(seq, line.get("cost_category") or "", part_code=line.get("part_code"),
+    item = _item(seq, line.get("cost_category") or "", part_code=line.get("part_code"),
                  part_name=line.get("part_name") or "", formula_code=line.get("formula_code"),
                  content_code=line.get("content_code"), tooling_code=line.get("tooling_code"),
                  rate_code=line.get("rate_code"), quantity_basis=line.get("quantity_basis"),
@@ -891,7 +1407,12 @@ def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formu
                  expression=expression or line.get("expression") or "",
                  inputs_json=json.dumps(inputs, ensure_ascii=False, default=str),
                  source_ref=source_ref, source=line.get("source") or source,
-                 note=line.get("note") or "")
+                 note=line.get("note") or "",
+                 formula_version=line.get("formula_version"))
+    for key in ("formula_source", "rule_snapshot_version"):
+        if line.get(key) is not None:
+            item[key] = line.get(key)
+    return item
 
 
 # --------------------------------------------------------------------------- #
@@ -938,6 +1459,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     req_loss = _num(data.get("loss_rate"))
     tax_factor = _tax_factor()
     factor_rows = [dict(row) for row in kb_repo._table("kb_cost_factor")]
+    #: Spec 修复第 1 批 §3.4：一次计算只读一次规则表，读到的 rows 传给每一行，
+    #: 保证同一份成本明细里公式版本一致。
+    formula_rows = [dict(row) for row in kb_repo._table("kb_packaging_cost_formula")]
+    rule_version = rule_snapshot_version()
     gaps: list = []
     assumptions: list = []
 
@@ -951,7 +1476,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
 
     # 1) 部件 × 材料 -------------------------------------------------------- #
     materials = _material_rows()
-    entry_material = resolve_formula("PKG-C-MATERIAL")
+    entry_material = resolve_formula("PKG-C-MATERIAL", rows=formula_rows)
     machine_length = _num(data.get("machine_length"))
     machine_width = _num(data.get("machine_width"))
     imposition = _num(data.get("imposition_count")) or 1.0
@@ -988,7 +1513,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             gaps.append({"code": "material_gsm_missing", "where": part_code,
                          "detail": "材料「%s」解析不到克重，材料行不出金额" % material_text})
         else:
-            result = compute_line("material", variables)
+            result = compute_line("material", variables, rows=formula_rows)
         amount = result.get("amount") if result else None
         expression = result.get("expression") if result else entry_material["expression"]
         line = {"cost_category": "material", "part_code": part_code, "part_name": part_name,
@@ -996,6 +1521,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "expression": expression, "inputs": variables, "amount": amount,
                 "min_charge_applied": False, "source": "formula",
                 "items_inputs": variables}
+        line.update(_trace_fields(entry_material, result=result, snapshot=rule_version))
         rate = loss_rate_for(material_text)
         if rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": part_code,
@@ -1020,11 +1546,12 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         category = STEP_CATEGORY_MAP.get(name)
         if not category:
             continue
-        entry = _entry_for(category)
-        if entry is None:
+        codes = formula_codes_for(category)
+        if not codes:
             gaps.append({"code": "no_formula:%s" % category, "where": name,
                          "detail": "类别 %s 在 0903 里是手填列，本批没有公式" % category})
             continue
+        entry = resolve_formula(codes[0], rows=formula_rows)
         variables = dict(entry.get("defaults") or {})
         variables.update({"quote_quantity": quantity, "imposition_count": imposition,
                           "tax_factor": tax_factor})
@@ -1037,14 +1564,20 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             if area is None:
                 area = _num(data.get("process_area"))
             variables["hot_area_mm2"] = area
-        if sheet_length is None and category in ("print_uv", "lamination", "glue"):
+        #: 缺上机尺寸只在**表达式真的要用**它时才是缺口：库里的 reviewed 公式可能
+        #: 只吃数量（Spec 修复第 1 批 §3.1 起的唯一入口语义），此时不该被这条拦掉。
+        needs_sheet = bool(set(expression_variables(entry["expression"]))
+                           & {"machine_length", "machine_width"})
+        if sheet_length is None and needs_sheet and category in ("print_uv", "lamination", "glue"):
             gaps.append({"code": "part_size_missing", "where": name,
                          "detail": "缺上机尺寸，%s 行不出金额" % category})
-            lines.append({"cost_category": category, "part_code": None, "part_name": name,
-                          "formula_code": entry["formula_code"], "amount": None,
-                          "min_charge_applied": False, "loss_rate": None,
-                          "expression": entry["expression"], "inputs": variables,
-                          "source": "formula"})
+            gap_line = {"cost_category": category, "part_code": None, "part_name": name,
+                        "formula_code": entry["formula_code"], "amount": None,
+                        "min_charge_applied": False, "loss_rate": None,
+                        "expression": entry["expression"], "inputs": variables,
+                        "source": "formula"}
+            gap_line.update(_trace_fields(entry, snapshot=rule_version))
+            lines.append(gap_line)
             continue
         rate_code = _text(entry.get("rate_code"))
         if rate_code:
@@ -1057,7 +1590,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                     variables["equipment_rate"] = _num(rate_row.get("value"))
                 else:
                     variables["labor_rate"] = _num(rate_row.get("value"))
-        result = compute_line(category, variables)
+        result = compute_line(category, variables, rows=formula_rows)
         if result.get("gap"):
             gaps.append(dict(result["gap"], where=result["gap"].get("where") or name))
         line = {"cost_category": category, "part_code": None, "part_name": name,
@@ -1066,6 +1599,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "amount": result.get("amount"),
                 "min_charge_applied": bool(result.get("min_charge_applied")),
                 "source": "formula"}
+        line.update(_trace_fields(entry, result=result, snapshot=rule_version))
         rate = loss_rate_for(name)
         if rate is None and line["amount"] is not None:
             gaps.append({"code": "loss_rate_missing", "where": name,
@@ -1076,7 +1610,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     # 3) 人工（标准工时 × 工时费率，逐工序一行） --------------------------- #
     overhead_row = _rate_row("RATE-PKG-OVERHEAD")
     overhead_rate = _num(overhead_row.get("value")) if overhead_row else 0.0
-    entry_labor = resolve_formula("PKG-C-LABOR")
+    entry_labor = resolve_formula("PKG-C-LABOR", rows=formula_rows)
     for step in steps:
         name = _text(step.get("step_name"))
         rate_code = STEP_RATE_MAP.get(name)
@@ -1091,24 +1625,27 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         if seconds is None:
             gaps.append({"code": "step_time_missing:%s" % name, "where": rate_code,
                          "detail": "工序「%s」待补工时，人工行不出金额" % name})
-            lines.append({"cost_category": "labor", "part_code": None, "part_name": name,
-                          "formula_code": entry_labor["formula_code"], "rate_code": rate_code,
-                          "expression": entry_labor["expression"], "inputs": variables,
-                          "amount": None, "min_charge_applied": False, "loss_rate": None,
-                          "source": "formula",
-                          "source_ref": "step:%s" % step_no})
+            gap_line = {"cost_category": "labor", "part_code": None, "part_name": name,
+                        "formula_code": entry_labor["formula_code"], "rate_code": rate_code,
+                        "expression": entry_labor["expression"], "inputs": variables,
+                        "amount": None, "min_charge_applied": False, "loss_rate": None,
+                        "source": "formula", "source_ref": "step:%s" % step_no}
+            gap_line.update(_trace_fields(entry_labor, snapshot=rule_version))
+            lines.append(gap_line)
             continue
         if rate_row is None:
             gaps.append({"code": "rate_missing:%s" % rate_code, "where": name,
                          "detail": "知识库缺工时费率 %s" % rate_code})
-            lines.append({"cost_category": "labor", "part_code": None, "part_name": name,
-                          "formula_code": entry_labor["formula_code"], "rate_code": rate_code,
-                          "expression": entry_labor["expression"], "inputs": variables,
-                          "amount": None, "min_charge_applied": False, "loss_rate": None,
-                          "source": "formula", "source_ref": "step:%s" % step_no})
+            gap_line = {"cost_category": "labor", "part_code": None, "part_name": name,
+                        "formula_code": entry_labor["formula_code"], "rate_code": rate_code,
+                        "expression": entry_labor["expression"], "inputs": variables,
+                        "amount": None, "min_charge_applied": False, "loss_rate": None,
+                        "source": "formula", "source_ref": "step:%s" % step_no}
+            gap_line.update(_trace_fields(entry_labor, snapshot=rule_version))
+            lines.append(gap_line)
             continue
         variables["labor_rate"] = _num(rate_row.get("value"))
-        result = compute_line("labor", variables)
+        result = compute_line("labor", variables, rows=formula_rows)
         amount = result.get("amount")
         min_applied = bool(result.get("min_charge_applied"))
         minimum_charge = _num(rate_row.get("minimum_charge")) or 0.0
@@ -1123,6 +1660,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "inputs": result.get("inputs") or variables, "amount": amount,
                 "min_charge_applied": min_applied, "source": "formula",
                 "source_ref": "step:%s" % step_no, "quantity_basis": "按工时"}
+        line.update(_trace_fields(entry_labor, result=result, snapshot=rule_version))
         rate = loss_rate_for(name)
         if rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": name,
@@ -1156,7 +1694,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
 
     # 5) 包材 --------------------------------------------------------------- #
     packaging = compute_packaging(kb_repo.packaging_cost_contents(), tax_factor=tax_factor,
-                                  loss_uplift=LOSS_UPLIFT, yield_divisor=YIELD_DIVISOR)
+                                  loss_uplift=LOSS_UPLIFT, yield_divisor=YIELD_DIVISOR,
+                                  rule_rows=formula_rows)
     for line in packaging["lines"]:
         if line.get("gap"):
             gaps.append(dict(line["gap"]))
@@ -1221,6 +1760,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     return {
         "project_id": project_id, "requirement_no": req_no, "scenario_code": scenario_code,
         "estimate_id": estimate_id, "industry": PACKAGING_INDUSTRY,
+        "rule_snapshot_version": rule_version,
         "engine_version": ENGINE_VERSION, "cost_profile": COST_PROFILE, "currency": "CNY",
         "quote_quantity": float(quantity), "tax_rate": round(tax_factor - 1.0, 6),
         "loss_base_scope": DEFAULT_LOSS_BASE_SCOPE, "quantity_tier": quantity_tier,

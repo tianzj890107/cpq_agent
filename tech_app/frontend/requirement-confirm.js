@@ -585,7 +585,10 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
 (function () {
   const PC_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
   const PC_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
-  const PC_GROUP_ORDER = ['材料', '印刷', '覆膜', '烫金', '丝印', '裱纸', '模切', '开槽', '手工', '包装'];
+  // 13 个报告分组，顺序与 Spec 修复第 1 批 §2.1（packaging_cost.REPORT_GROUPS）一致；
+  // 漏写组名 = 该组金额在界面上永远不可见。
+  const PC_GROUP_ORDER = ['材料', '印刷', '覆膜', '烫金', '丝印', '表面处理', '裱纸', '模切',
+    '装订贴盒', '开槽', '手工', '其他费用', '包装'];
   let pcPid = '';
   let pcBusy = false;
 

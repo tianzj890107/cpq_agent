@@ -1,0 +1,1545 @@
+{
+  "rule_set": "packaging_cost_v1",
+  "source_file": "报价逻辑-0903.xlsx",
+  "source_sha256": "974d9484414824d0bbfd2c83fb0c6044e4348c7a407e1ae0f58699bb60d2acc0",
+  "source_sheets": [
+    "报价-工费率",
+    "包装运输",
+    "包装运输 (2)",
+    "成本细分"
+  ],
+  "review_status": "reviewed",
+  "generated_at": "2026-09-20",
+  "minimum_charge_policy": {
+    "status": "pending",
+    "chosen": "",
+    "decided_by": "",
+    "decided_at": "",
+    "candidates": [
+      {
+        "policy_id": "sheet_industry_standard",
+        "authoritative_sheet": "报价-行业标准",
+        "minimum_charge_source": "报价-行业标准",
+        "expression_source": "报价-行业标准",
+        "is_declared_hybrid": false,
+        "rationale": "对客报价口径：门限与固定单件耗材项同表（报价-行业标准），主行无机台工时项",
+        "golden": {
+          "lamination": {
+            "cell": "V2",
+            "quantity": 1000,
+            "unit_amount": 1.2934294398230088
+          },
+          "hot_stamp_flat": {
+            "cell": "X2",
+            "quantity": 1000,
+            "unit_amount": 0.5549999999999999
+          },
+          "die_cutting": {
+            "cell": "AI2",
+            "quantity": 1000,
+            "unit_amount": 0.15
+          },
+          "v_groove": {
+            "cell": "AK5",
+            "quantity": 1000,
+            "unit_amount": 0.15
+          },
+          "mounting": {
+            "cell": "AH13",
+            "quantity": 1000,
+            "unit_amount": 0.1
+          }
+        },
+        "red_test_impact": [
+          {
+            "case": "c1",
+            "quantity": 1000,
+            "applied": true,
+            "amount": 0.2
+          },
+          {
+            "case": "c2",
+            "quantity": 100,
+            "applied": true,
+            "amount": 2.0
+          },
+          {
+            "case": "c2",
+            "quantity": 1000,
+            "applied": true,
+            "amount": 0.2
+          },
+          {
+            "case": "c2",
+            "quantity": 10000,
+            "applied": false,
+            "amount": 0.15073496991150442
+          },
+          {
+            "case": "c4",
+            "quantity": 100,
+            "applied": true,
+            "amount": 1.0
+          },
+          {
+            "case": "c4",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.15
+          }
+        ]
+      },
+      {
+        "policy_id": "sheet_labor_rate",
+        "authoritative_sheet": "报价-工费率",
+        "minimum_charge_source": "",
+        "expression_source": "报价-工费率",
+        "is_declared_hybrid": false,
+        "rationale": "成本核算口径：机台工时项取报价-工费率原文；主行无门限，行级 MAX 只出现在 AI9/AI14/AI15",
+        "golden": {
+          "lamination": {
+            "cell": "V2",
+            "quantity": 1000,
+            "unit_amount": 1.376611258004827
+          },
+          "hot_stamp_flat": {
+            "cell": "X2",
+            "quantity": 1000,
+            "unit_amount": 1.343266666666667
+          },
+          "die_cutting": {
+            "cell": "AI2",
+            "quantity": 1000,
+            "unit_amount": 0.8347876923076923
+          },
+          "v_groove": {
+            "cell": "AK5",
+            "quantity": 1000,
+            "unit_amount": 0.816
+          },
+          "mounting": {
+            "cell": "AH13",
+            "quantity": 1000,
+            "unit_amount": 0.17132857142857144
+          }
+        },
+        "red_test_impact": [
+          {
+            "case": "c1",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.23391678809332264
+          },
+          {
+            "case": "c2",
+            "quantity": 100,
+            "applied": false,
+            "amount": 1.7729167880933225
+          },
+          {
+            "case": "c2",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.23391678809332264
+          },
+          {
+            "case": "c2",
+            "quantity": 10000,
+            "applied": false,
+            "amount": 0.08001678809332262
+          },
+          {
+            "case": "c4",
+            "quantity": 100,
+            "applied": false,
+            "amount": 7.8112276923076935
+          },
+          {
+            "case": "c4",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.8347876923076923
+          }
+        ]
+      },
+      {
+        "policy_id": "declared_hybrid",
+        "authoritative_sheet": "",
+        "minimum_charge_source": "报价-行业标准",
+        "expression_source": "报价-工费率",
+        "is_declared_hybrid": true,
+        "rationale": "两表拼接：MAX(报价-行业标准门限/数量, 报价-工费率表达式)，属新设计，必须逐条申报两个来源",
+        "golden": {
+          "lamination": {
+            "cell": "V2",
+            "quantity": 1000,
+            "unit_amount": 1.376611258004827
+          },
+          "hot_stamp_flat": {
+            "cell": "X2",
+            "quantity": 1000,
+            "unit_amount": 1.343266666666667
+          },
+          "die_cutting": {
+            "cell": "AI2",
+            "quantity": 1000,
+            "unit_amount": 0.8347876923076923
+          },
+          "v_groove": {
+            "cell": "AK5",
+            "quantity": 1000,
+            "unit_amount": 0.816
+          },
+          "mounting": {
+            "cell": "AH13",
+            "quantity": 1000,
+            "unit_amount": 0.17132857142857144
+          }
+        },
+        "red_test_impact": [
+          {
+            "case": "c1",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.23391678809332264
+          },
+          {
+            "case": "c2",
+            "quantity": 100,
+            "applied": true,
+            "amount": 2.0
+          },
+          {
+            "case": "c2",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.23391678809332264
+          },
+          {
+            "case": "c2",
+            "quantity": 10000,
+            "applied": false,
+            "amount": 0.08001678809332262
+          },
+          {
+            "case": "c4",
+            "quantity": 100,
+            "applied": false,
+            "amount": 7.8112276923076935
+          },
+          {
+            "case": "c4",
+            "quantity": 1000,
+            "applied": false,
+            "amount": 0.8347876923076923
+          }
+        ]
+      }
+    ]
+  },
+  "source_rows": 14,
+  "formulas": [
+    {
+      "formula_code": "PKG-C-MATERIAL",
+      "cost_category": "material",
+      "expression": "cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor/imposition_count + cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor*proof_base/quote_quantity",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/S2",
+      "defaults": {},
+      "loss_scope": "材料开料",
+      "source_sheet": "报价-工费率",
+      "source_cell": "S2",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "cut_length": "K",
+        "cut_width": "L",
+        "gsm": "M",
+        "ton_price": "N",
+        "imposition_count": "J",
+        "proof_base": "Q",
+        "quote_quantity": "R"
+      },
+      "source_formula": "=K2*L2/1000000*M2/1000000*N2/1.13/J2+K2*L2/1000000*M2/1000000*N2/1.13*Q2/R2",
+      "row_variants": [],
+      "verify_inputs": {
+        "cut_length": 889,
+        "cut_width": 705,
+        "gsm": 157,
+        "ton_price": 6300,
+        "imposition_count": 1,
+        "tax_factor": 1.13,
+        "proof_base": 450,
+        "quote_quantity": 1000
+      },
+      "expected_result": 0.795464199358,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-PRINT-UV",
+      "cost_category": "print_uv",
+      "expression": "(setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity + machine_length*machine_width/1000000*ink_thickness_mm/1000*ink_unit_price/tax_factor/imposition_count",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-EQUIP-PRINT",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/U2",
+      "defaults": {
+        "setup_minutes": 30.0,
+        "capacity_per_hour": 12000.0,
+        "equipment_rate": 591.0,
+        "labor_rate": 666.0,
+        "ink_thickness_mm": 4.0,
+        "ink_unit_price": 115.0
+      },
+      "loss_scope": "UV印刷",
+      "source_sheet": "报价-工费率",
+      "source_cell": "U2",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "machine_length": "H",
+        "machine_width": "I",
+        "quote_quantity": "R",
+        "imposition_count": "J"
+      },
+      "source_formula": "=((30/60+R2/J2/12000)*(591+666))/R2+H2*I2/1000000*4/1000*115/1.13/J2",
+      "row_variants": [],
+      "verify_inputs": {
+        "machine_length": 889,
+        "machine_width": 700,
+        "imposition_count": 1,
+        "setup_minutes": 30,
+        "capacity_per_hour": 12000,
+        "equipment_rate": 591,
+        "labor_rate": 666,
+        "ink_thickness_mm": 4,
+        "ink_unit_price": 115,
+        "tax_factor": 1.13,
+        "quote_quantity": 1000
+      },
+      "expected_result": 0.986575663717,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-LAMINATION",
+      "cost_category": "lamination",
+      "expression": "machine_length*machine_width/1000000*film_price/tax_factor/imposition_count + machine_length*machine_width/1000000*film_thickness_um/1000*film_kg_price/imposition_count + (setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
+      "minimum_charge": 200,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-EQUIP-SURFACE",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/V2",
+      "defaults": {
+        "setup_minutes": 30.0,
+        "capacity_per_hour": 5500.0,
+        "equipment_rate": 197.0,
+        "labor_rate": 145.0,
+        "film_price": 1.7,
+        "film_thickness_um": 18.0,
+        "film_kg_price": 18.5
+      },
+      "loss_scope": "复膜",
+      "source_sheet": "报价-工费率",
+      "source_cell": "V2",
+      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/V2",
+      "variable_map": {
+        "machine_length": "H",
+        "machine_width": "I",
+        "imposition_count": "J",
+        "quote_quantity": "R"
+      },
+      "source_formula": "=(H2*I2/1000000*1.7/1.13/J2+H2*I2/1000000*18/1000*18.5/J2)+((30/60+R2/J2/5500)*(197+145))/R2",
+      "row_variants": [],
+      "verify_inputs": {
+        "machine_length": 889,
+        "machine_width": 700,
+        "imposition_count": 1,
+        "setup_minutes": 30,
+        "capacity_per_hour": 5500,
+        "equipment_rate": 197,
+        "labor_rate": 145,
+        "film_price": 1.7,
+        "film_thickness_um": 18,
+        "film_kg_price": 18.5,
+        "tax_factor": 1.13,
+        "quote_quantity": 1000
+      },
+      "expected_result": 1.376611258005,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-HOT-STAMP-FLAT",
+      "cost_category": "hot_stamp_flat",
+      "expression": "hot_area_mm2/1000000*foil_price + (setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
+      "minimum_charge": 150,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-EQUIP-SURFACE",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/X2",
+      "defaults": {
+        "setup_minutes": 200.0,
+        "capacity_per_hour": 5000.0,
+        "equipment_rate": 193.0,
+        "labor_rate": 115.0,
+        "foil_price": 8.5
+      },
+      "loss_scope": "热烫-平压",
+      "source_sheet": "报价-工费率",
+      "source_cell": "X2",
+      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/X2",
+      "variable_map": {
+        "imposition_count": "J",
+        "quote_quantity": "R"
+      },
+      "source_formula": "=((100*75*4)/1000000*8.5)+((200/60+R2/J2/5000)*(193+115))/R2",
+      "row_variants": [],
+      "verify_inputs": {
+        "hot_area_mm2": 30000,
+        "imposition_count": 1,
+        "setup_minutes": 200,
+        "capacity_per_hour": 5000,
+        "equipment_rate": 193,
+        "labor_rate": 115,
+        "foil_price": 8.5,
+        "quote_quantity": 1000
+      },
+      "expected_result": 1.343266666667,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-MOUNTING",
+      "cost_category": "mounting",
+      "expression": "(setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-LABOR-LAMINATE",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AH13",
+      "defaults": {
+        "setup_minutes": 30.0,
+        "capacity_per_hour": 3500.0,
+        "equipment_rate": 209.0,
+        "labor_rate": 126.0
+      },
+      "loss_scope": "裱纸",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AH13",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "imposition_count": "J",
+        "quote_quantity": "R"
+      },
+      "source_formula": "=((30/60+R13/J13/3500)*(209+126))/R13",
+      "row_variants": [],
+      "verify_inputs": {
+        "imposition_count": 25,
+        "setup_minutes": 30,
+        "capacity_per_hour": 3500,
+        "equipment_rate": 209,
+        "labor_rate": 126,
+        "quote_quantity": 1000
+      },
+      "expected_result": 0.171328571429,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-DIE-CUT",
+      "cost_category": "die_cutting",
+      "expression": "(setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
+      "minimum_charge": 100,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-EQUIP-MOULD",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AI2",
+      "defaults": {
+        "setup_minutes": 120.0,
+        "capacity_per_hour": 6500.0,
+        "equipment_rate": 197.52,
+        "labor_rate": 190.06
+      },
+      "loss_scope": "啤/切",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AI2",
+      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AI2",
+      "variable_map": {
+        "imposition_count": "J",
+        "quote_quantity": "R"
+      },
+      "source_formula": "=((120/60+R2/J2/6500)*(197.52+190.06))/R2",
+      "row_variants": [
+        {
+          "row": 9,
+          "minimum_charge": 100,
+          "expression_extra": "0.08/J9",
+          "source_cell": "AI9"
+        },
+        {
+          "row": 14,
+          "minimum_charge": 100,
+          "expression_extra": "0.08/J14",
+          "source_cell": "AI14"
+        },
+        {
+          "row": 15,
+          "minimum_charge": 100,
+          "expression_extra": "0.08/J15",
+          "source_cell": "AI15"
+        }
+      ],
+      "verify_inputs": {
+        "imposition_count": 1,
+        "setup_minutes": 120,
+        "capacity_per_hour": 6500,
+        "equipment_rate": 197.52,
+        "labor_rate": 190.06,
+        "quote_quantity": 1000
+      },
+      "expected_result": 0.834787692308,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-V-GROOVE",
+      "cost_category": "v_groove",
+      "expression": "(setup_minutes/60 + quote_quantity/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity*times",
+      "minimum_charge": 150,
+      "rounding": 4,
+      "rate_code": "RATE-PKG-EQUIP-VGROOVE",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AK5",
+      "defaults": {
+        "setup_minutes": 60.0,
+        "capacity_per_hour": 3000.0,
+        "equipment_rate": 195.0,
+        "labor_rate": 111.0,
+        "times": 2.0
+      },
+      "loss_scope": "V槽",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AK5",
+      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AK5",
+      "variable_map": {
+        "quote_quantity": "R"
+      },
+      "source_formula": "=(60/60+R5/3000)*(195+111)/R5*2",
+      "row_variants": [],
+      "verify_inputs": {
+        "quote_quantity": 1000,
+        "setup_minutes": 60,
+        "capacity_per_hour": 3000,
+        "equipment_rate": 195,
+        "labor_rate": 111,
+        "times": 2
+      },
+      "expected_result": 0.816,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-GLUE",
+      "cost_category": "glue",
+      "expression": "machine_length*machine_width/1000000*glue_unit_price/imposition_count",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AN2",
+      "defaults": {
+        "glue_unit_price": 0.74
+      },
+      "loss_scope": "胶水",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AN2",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "machine_length": "H",
+        "machine_width": "I",
+        "imposition_count": "J"
+      },
+      "source_formula": "=H2*I2/1000000*0.74/J2",
+      "row_variants": [],
+      "verify_inputs": {
+        "machine_length": 889,
+        "machine_width": 700,
+        "imposition_count": 1,
+        "glue_unit_price": 0.74,
+        "quote_quantity": 1000
+      },
+      "expected_result": 0.460502,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-C-LABOR",
+      "cost_category": "labor",
+      "expression": "labor_seconds/3600*labor_rate + overhead_seconds/3600*overhead_rate",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AO15",
+      "defaults": {
+        "overhead_seconds": 0.0,
+        "overhead_rate": 0.0
+      },
+      "loss_scope": "人工/全检/包装",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AO15",
+      "minimum_charge_source_ref": "",
+      "variable_map": {},
+      "source_formula": "=(36+2)*40/180",
+      "row_variants": [],
+      "verify_inputs": {
+        "labor_seconds": 36,
+        "labor_rate": 40,
+        "overhead_seconds": 0,
+        "overhead_rate": 0
+      },
+      "expected_result": 0.4,
+      "formula_version": "packaging_cost_v1",
+      "verbatim": false,
+      "deviation": "AO15 原文 =(36+2)*40/180 是手工示例、量纲与标准工时口径不同；本条按 docs/specs/packaging-cost-engine.md §2.6.2 改写为标准工时 × 费率，声明为改写后不再与单元格逐字等价（工具按 declared_deviation 记录，不计问题）",
+      "note": "AO15 原文 =(36+2)*40/180 是手工示例、量纲与标准工时口径不同；本条按 docs/specs/packaging-cost-engine.md §2.6.2 改写为标准工时 × 费率"
+    },
+    {
+      "formula_code": "PKG-P-CARTON",
+      "cost_category": "packaging",
+      "expression": "((width_mm+height_mm+254/10)*(length_mm+width_mm+508/10)*2*material_price/tax_factor/645160 + 1/10+6/100+12/100)*loss_uplift/yield_divisor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J2",
+      "defaults": {},
+      "loss_scope": "彩盒",
+      "source_sheet": "包装运输",
+      "source_cell": "J2",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "height_mm": "F",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=((E2+F2+25.4)*(D2+E2+50.8)*2*H2/1.13/645160+0.1+0.06+0.12)*1.03/0.9*G2/I2",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 520,
+        "width_mm": 420,
+        "height_mm": 425,
+        "usage_qty": 1,
+        "material_price": 3,
+        "units_per_pack": 4,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 2.11080741274,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-PAD",
+      "cost_category": "packaging",
+      "expression": "((length_mm+6)*(width_mm+6)*material_price/tax_factor/645160 + 4/100)*loss_uplift/yield_divisor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J3",
+      "defaults": {},
+      "loss_scope": "平卡",
+      "source_sheet": "包装运输",
+      "source_cell": "J3",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=((D3+6)*(E3+6)*H3/1.13/645160+0.04)*1.03/0.9*G3/I3",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 510,
+        "width_mm": 410,
+        "height_mm": 0,
+        "usage_qty": 2,
+        "material_price": 1.55,
+        "units_per_pack": 4,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.284041019453,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-DIVIDER",
+      "cost_category": "packaging",
+      "expression": "(length_mm+6)*(width_mm+6)/1000000*gsm/1000000*material_price/tax_factor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J4",
+      "defaults": {},
+      "loss_scope": "隔卡",
+      "source_sheet": "包装运输",
+      "source_cell": "J4",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=(D4+6)*(E4+6)/1000000*350/1000000*H4/1.13*G4/I4",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 4200,
+        "units_per_pack": 4,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9,
+        "gsm": 350
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-BAG",
+      "cost_category": "packaging",
+      "expression": "(length_mm+50)*(width_mm+50)*height_mm/100/1000*bag_unit_price*material_price*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J5",
+      "defaults": {
+        "bag_unit_price": 0.185
+      },
+      "loss_scope": "胶袋",
+      "source_sheet": "包装运输",
+      "source_cell": "J5",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "height_mm": "F",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=(D5+50)*(E5+50)*F5/100/1000*0.185*H5*G5/I5",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 18,
+        "units_per_pack": 4,
+        "bag_unit_price": 0.185,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-CRAFT-PAPER",
+      "cost_category": "packaging",
+      "expression": "(length_mm+6)*(width_mm+6)/1000000*gsm/1000000*material_price/tax_factor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J6",
+      "defaults": {},
+      "loss_scope": "双胶纸",
+      "source_sheet": "包装运输",
+      "source_cell": "J6",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=(D6+6)*(E6+6)/1000000*100/1000000*H6/1.13*G6/I6",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 5800,
+        "units_per_pack": 4,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9,
+        "gsm": 100
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-STRAP",
+      "cost_category": "packaging",
+      "expression": "(length_mm+6)*(width_mm+6)/1000000*gsm/1000000*material_price/tax_factor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J7",
+      "defaults": {},
+      "loss_scope": "牛皮纸轧带",
+      "source_sheet": "包装运输",
+      "source_cell": "J7",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "width_mm": "E",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=(D7+6)*(E7+6)/1000000*30/1000000*H7/1.13*G7/I7",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 787,
+        "width_mm": 1092,
+        "height_mm": 0,
+        "usage_qty": 4,
+        "material_price": 7800,
+        "units_per_pack": 4,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9,
+        "gsm": 30
+      },
+      "expected_result": 0.180307146903,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-CORNER-TOP",
+      "cost_category": "packaging",
+      "expression": "length_mm/1000*material_price*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J8",
+      "defaults": {},
+      "loss_scope": "顶部护角",
+      "source_sheet": "包装运输",
+      "source_cell": "J8",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=D8/1000*H8*G8/I8",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 1.9,
+        "units_per_pack": 120,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-CORNER-PAPER",
+      "cost_category": "packaging",
+      "expression": "length_mm/1000*material_price*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J9",
+      "defaults": {},
+      "loss_scope": "纸护角",
+      "source_sheet": "包装运输",
+      "source_cell": "J9",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "length_mm": "D",
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=D9/1000*H9*G9/I9",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 1.9,
+        "units_per_pack": 120,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-LABEL",
+      "cost_category": "packaging",
+      "expression": "material_price*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J10",
+      "defaults": {},
+      "loss_scope": "通用标签",
+      "source_sheet": "包装运输",
+      "source_cell": "J10",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=H10*G10/I10",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 0.05,
+        "units_per_pack": 120,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-BOARD",
+      "cost_category": "packaging",
+      "expression": "material_price/tax_factor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J11",
+      "defaults": {},
+      "loss_scope": "盖板",
+      "source_sheet": "包装运输",
+      "source_cell": "J11",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=H11/1.13*G11/I11",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 0,
+        "width_mm": 0,
+        "height_mm": 0,
+        "usage_qty": 0,
+        "material_price": 30,
+        "units_per_pack": 120,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.0,
+      "formula_version": "packaging_cost_v1"
+    },
+    {
+      "formula_code": "PKG-P-PALLET",
+      "cost_category": "packaging",
+      "expression": "material_price/tax_factor*usage_qty/units_per_pack",
+      "minimum_charge": 0,
+      "rounding": 4,
+      "rate_code": "",
+      "source_ref": "报价逻辑-0903.xlsx/包装运输/J12",
+      "defaults": {},
+      "loss_scope": "卡板",
+      "source_sheet": "包装运输",
+      "source_cell": "J12",
+      "minimum_charge_source_ref": "",
+      "variable_map": {
+        "usage_qty": "G",
+        "material_price": "H",
+        "units_per_pack": "I"
+      },
+      "source_formula": "=H12/1.13*G12/I12",
+      "row_variants": [],
+      "verify_inputs": {
+        "length_mm": 1200,
+        "width_mm": 1000,
+        "height_mm": 120,
+        "usage_qty": 1,
+        "material_price": 70,
+        "units_per_pack": 120,
+        "tax_factor": 1.13,
+        "loss_uplift": 1.03,
+        "yield_divisor": 0.9
+      },
+      "expected_result": 0.516224188791,
+      "formula_version": "packaging_cost_v1"
+    }
+  ],
+  "categories": [
+    {
+      "cost_category": "material",
+      "label": "材料价",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "S2",
+      "source_column": "S",
+      "formula_code": "PKG-C-MATERIAL",
+      "note": "0903 采用口径该列 13 行有公式"
+    },
+    {
+      "cost_category": "print",
+      "label": "普通印刷",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "T",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "print_uv",
+      "label": "UV印刷",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "U2",
+      "source_column": "U",
+      "formula_code": "PKG-C-PRINT-UV",
+      "note": "0903 采用口径该列 6 行有公式"
+    },
+    {
+      "cost_category": "lamination",
+      "label": "复膜",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "V2",
+      "source_column": "V",
+      "formula_code": "PKG-C-LAMINATION",
+      "note": "0903 采用口径该列 6 行有公式"
+    },
+    {
+      "cost_category": "transfer_film",
+      "label": "覆转移膜",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "W",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "hot_stamp_flat",
+      "label": "热烫-平压",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "X2",
+      "source_column": "X",
+      "formula_code": "PKG-C-HOT-STAMP-FLAT",
+      "note": "0903 采用口径该列 3 行有公式"
+    },
+    {
+      "cost_category": "hot_stamp_round",
+      "label": "热烫-圆压",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "Y",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "cold_stamp",
+      "label": "冷烫",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "Z",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "silk_screen",
+      "label": "丝印",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AA",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "varnish",
+      "label": "过光油",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AB",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "anti_scratch",
+      "label": "防刮花光/哑油",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AC",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "pet_oil",
+      "label": "PET环保吸塑油",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AD",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "visidi_uv",
+      "label": "视高迪UV",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AE",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "texture",
+      "label": "压纹",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AF",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "emboss_deboss",
+      "label": "击凹/凸",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AG",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "mounting",
+      "label": "裱纸",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AH13",
+      "source_column": "AH",
+      "formula_code": "PKG-C-MOUNTING",
+      "note": "0903 采用口径该列 1 行有公式"
+    },
+    {
+      "cost_category": "die_cutting",
+      "label": "啤/切",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AI2",
+      "source_column": "AI",
+      "formula_code": "PKG-C-DIE-CUT",
+      "note": "0903 采用口径该列 13 行有公式"
+    },
+    {
+      "cost_category": "folding",
+      "label": "折页/装钉",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AJ",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "v_groove",
+      "label": "V槽",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AK5",
+      "source_column": "AK",
+      "formula_code": "PKG-C-V-GROOVE",
+      "note": "0903 采用口径该列 2 行有公式"
+    },
+    {
+      "cost_category": "auto_mount",
+      "label": "机贴盒/贴双面胶",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AL",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "double_tape",
+      "label": "双面胶",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AM",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "glue",
+      "label": "胶水",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AN2",
+      "source_column": "AN",
+      "formula_code": "PKG-C-GLUE",
+      "note": "0903 采用口径该列 6 行有公式"
+    },
+    {
+      "cost_category": "labor",
+      "label": "人工/全检/包装",
+      "level": "part",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AO15",
+      "source_column": "AO",
+      "formula_code": "PKG-C-LABOR",
+      "note": "0903 采用口径该列 1 行有公式"
+    },
+    {
+      "cost_category": "other",
+      "label": "其他",
+      "level": "part",
+      "evidence_kind": "no_formula_in_workbook",
+      "source_sheet": "报价-工费率",
+      "source_cell": "",
+      "source_column": "AP",
+      "formula_code": "",
+      "note": "0903 采用口径该列 14 行无公式、无手填；出现时必须由业务给费率来源"
+    },
+    {
+      "cost_category": "packaging",
+      "label": "包装",
+      "level": "project",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AT2",
+      "source_column": "AT",
+      "formula_code": "",
+      "note": "包材合计（包装运输 第 2–12 行）"
+    },
+    {
+      "cost_category": "freight",
+      "label": "运输",
+      "level": "project",
+      "evidence_kind": "formula",
+      "source_sheet": "报价-工费率",
+      "source_cell": "AU2",
+      "source_column": "AU",
+      "formula_code": "",
+      "note": "运输（最低运费 / 托盘分支）"
+    }
+  ],
+  "column_evidence": [
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "S",
+      "header": "材料价",
+      "formula_rows": 13,
+      "blank_rows": 1,
+      "hand_filled_rows": 0,
+      "sample_cell": "S2",
+      "sample_formula": "=K2*L2/1000000*M2/1000000*N2/1.13/J2+K2*L2/1000000*M2/1000000*N2/1.13*Q2/R2",
+      "cost_category": "material"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "T",
+      "header": "普通印刷",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "print"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "U",
+      "header": "UV印刷",
+      "formula_rows": 6,
+      "blank_rows": 8,
+      "hand_filled_rows": 0,
+      "sample_cell": "U2",
+      "sample_formula": "=((30/60+R2/J2/12000)*(591+666))/R2+H2*I2/1000000*4/1000*115/1.13/J2",
+      "cost_category": "print_uv"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "V",
+      "header": "复膜",
+      "formula_rows": 6,
+      "blank_rows": 8,
+      "hand_filled_rows": 0,
+      "sample_cell": "V2",
+      "sample_formula": "=(H2*I2/1000000*1.7/1.13/J2+H2*I2/1000000*18/1000*18.5/J2)+((30/60+R2/J2/5500)*(197+145))/R2",
+      "cost_category": "lamination"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "W",
+      "header": "覆转移膜",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "transfer_film"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "X",
+      "header": "热烫-平压",
+      "formula_rows": 3,
+      "blank_rows": 11,
+      "hand_filled_rows": 0,
+      "sample_cell": "X2",
+      "sample_formula": "=((100*75*4)/1000000*8.5)+((200/60+R2/J2/5000)*(193+115))/R2",
+      "cost_category": "hot_stamp_flat"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "Y",
+      "header": "热烫-圆压",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "hot_stamp_round"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "Z",
+      "header": "冷烫",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "cold_stamp"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AA",
+      "header": "丝印",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "silk_screen"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AB",
+      "header": "过光油",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "varnish"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AC",
+      "header": "防刮花光/哑油",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "anti_scratch"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AD",
+      "header": "PET环保吸塑油",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "pet_oil"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AE",
+      "header": "视高迪UV",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "visidi_uv"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AF",
+      "header": "压纹",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "texture"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AG",
+      "header": "击凹/凸",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "emboss_deboss"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AH",
+      "header": "裱纸",
+      "formula_rows": 1,
+      "blank_rows": 13,
+      "hand_filled_rows": 0,
+      "sample_cell": "AH13",
+      "sample_formula": "=((30/60+R13/J13/3500)*(209+126))/R13",
+      "cost_category": "mounting"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AI",
+      "header": "啤/切",
+      "formula_rows": 13,
+      "blank_rows": 1,
+      "hand_filled_rows": 0,
+      "sample_cell": "AI2",
+      "sample_formula": "=((120/60+R2/J2/6500)*(197.52+190.06))/R2",
+      "cost_category": "die_cutting"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AJ",
+      "header": "折页/装钉",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "folding"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AK",
+      "header": "V槽",
+      "formula_rows": 2,
+      "blank_rows": 12,
+      "hand_filled_rows": 0,
+      "sample_cell": "AK5",
+      "sample_formula": "=(60/60+R5/3000)*(195+111)/R5*2",
+      "cost_category": "v_groove"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AL",
+      "header": "机贴盒/贴双面胶",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "auto_mount"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AM",
+      "header": "双面胶",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "double_tape"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AN",
+      "header": "胶水",
+      "formula_rows": 6,
+      "blank_rows": 8,
+      "hand_filled_rows": 0,
+      "sample_cell": "AN2",
+      "sample_formula": "=H2*I2/1000000*0.74/J2",
+      "cost_category": "glue"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AO",
+      "header": "人工/全检/包装",
+      "formula_rows": 1,
+      "blank_rows": 13,
+      "hand_filled_rows": 0,
+      "sample_cell": "AO15",
+      "sample_formula": "=(36+2)*40/180",
+      "cost_category": "labor"
+    },
+    {
+      "source_sheet": "报价-工费率",
+      "source_column": "AP",
+      "header": "其他",
+      "formula_rows": 0,
+      "blank_rows": 14,
+      "hand_filled_rows": 0,
+      "sample_cell": "",
+      "sample_formula": "",
+      "cost_category": "other"
+    }
+  ]
+}

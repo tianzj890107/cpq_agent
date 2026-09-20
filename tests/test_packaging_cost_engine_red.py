@@ -388,11 +388,18 @@ EXPECTED_CATEGORIES = (
     ("v_groove", "V槽"), ("auto_mount", "机贴盒/贴双面胶"), ("double_tape", "双面胶"),
     ("glue", "胶水"), ("labor", "人工/全检/包装"), ("other", "其他"),
 )
+# 13 组、恰好覆盖 24 + 2 个类别（2026-09-20 修复第 1 批修订，权威定义见
+# docs/specs/packaging-cost-rule-routing.md §2.1）。原 10 组只覆盖工作簿 成本细分 的 13 个类别列，
+# 另外 13 个类别在成本细分里找不到 —— 修订后由「表面处理 / 装订贴盒 / 其他费用」承载。
 EXPECTED_REPORT_GROUPS = {
-    "材料": ("material", "glue"), "印刷": ("print", "print_uv"), "覆膜": ("lamination",),
+    "材料": ("material", "glue"), "印刷": ("print", "print_uv"),
+    "覆膜": ("lamination", "transfer_film"),
     "烫金": ("hot_stamp_flat", "hot_stamp_round", "cold_stamp"), "丝印": ("silk_screen",),
-    "裱纸": ("mounting",), "模切": ("die_cutting",), "开槽": ("v_groove",),
-    "手工": ("labor",), "包装": ("packaging", "freight"),
+    "表面处理": ("varnish", "anti_scratch", "pet_oil", "visidi_uv", "texture", "emboss_deboss"),
+    "裱纸": ("mounting",), "模切": ("die_cutting",),
+    "装订贴盒": ("folding", "auto_mount", "double_tape"),
+    "开槽": ("v_groove",), "手工": ("labor",), "其他费用": ("other",),
+    "包装": ("packaging", "freight"),
 }
 CATEGORIES_WITH_FORMULA = {
     "material", "print_uv", "lamination", "hot_stamp_flat", "mounting", "die_cutting",
@@ -422,7 +429,8 @@ class ACatalogAndClosures(CostCase):
     def test_a3_report_groups_partition_every_category(self):
         module = self.cost_mod()
         groups = {key: tuple(value) for key, value in module.REPORT_GROUPS.items()}
-        self.assertEqual(groups, EXPECTED_REPORT_GROUPS, "10 个报告分组必须与 成本细分 Sheet 一致")
+        self.assertEqual(groups, EXPECTED_REPORT_GROUPS,
+                         "13 个报告分组必须覆盖 24+2 个类别（Spec 修复第 1 批 §2.1）")
         flattened = [code for members in groups.values() for code in members]
         self.assertEqual(len(flattened), len(set(flattened)), "报告分组不得重复归类")
         known = {code for code, _ in EXPECTED_CATEGORIES} | {"packaging", "freight"}
@@ -868,7 +876,7 @@ class GThreeLayers(CostCase):
     def test_g2_every_report_group_is_present(self):
         summary = self.summary()
         self.assertEqual(set(summary["report_groups"]), set(EXPECTED_REPORT_GROUPS),
-                         "报告分组必须正好是 成本细分 的 10 组")
+                         "报告分组必须正好是 Spec 修复第 1 批 §2.1 的 13 组")
 
     def test_g3_report_groups_add_up_to_the_total(self):
         summary = self.summary()
