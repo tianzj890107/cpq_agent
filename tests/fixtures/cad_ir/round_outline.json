@@ -1,0 +1,148 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 1,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 1
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 11309.7336,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        120,
+        120
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:B0",
+      "evidence_ref": "ev:E:B0",
+      "handle": "B0",
+      "layer": "CUT",
+      "length": 376.9911,
+      "length_mm": 376.9911,
+      "space": "model",
+      "type": "CIRCLE"
+    }
+  ],
+  "evidence": {
+    "ev:E:B0": {
+      "handle": "B0",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [],
+    "components": [],
+    "holes": [
+      {
+        "center": [
+          60.0,
+          60.0
+        ],
+        "diameter": 120.0,
+        "entity_id": "ent:model:B0",
+        "evidence_ref": "ev:E:B0",
+        "kind": "circle",
+        "radius": 60.0
+      }
+    ],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "e55fd805c9e3ae57eba3d89c5e9005405ddbec422b9417cad209e1f9efaf0661",
+  "ir_id": "91856c0b0250c77b",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "787c520d1611e230",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "52d008175935197332776bc33612e3f86b98193a1199efd79c8fe5fb677c359d",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "fdd024cf0f88cf05527cce215446fcc451ac6fc9667004666913c6f4cccfec59"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 1,
+    "closed_outline_total": 0,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 1,
+    "layer_total": 1,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 0
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

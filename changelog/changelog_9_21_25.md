@@ -2062,3 +2062,891 @@ DWG 原始字节当图片喂模型」改成「按内容识别 + 调用前门禁 
 - 前端 `?v=` 缓存号未提升：`main.py` 的响应加固对 `.js` 已经统一 `no-cache, no-store`，无需改 HTML。
 - 包装成本最低收费口径仍待业务裁决；本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**，
   两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。
+
+## 174. DWG 支持第 2 批「受控转换服务（转换适配器层）」实现（9-20，Codex）
+
+按 `docs/specs/dwg-controlled-conversion-adapter.md` 落地 **A 层（编排层）**：新增包
+`tech_app/backend/services/cad_converter/`（`__init__` / `service` / `persistence` / `errors` +
+`adapters/{base,fake,local_cli,remote}`）、只读接口 `GET /api/capabilities/cad-converter` 与
+`/api/health` 的 `cad_converter` 能力块、冒烟工具 `tech_app/tools/dwg_conversion_smoke.py`，
+并把第 1 批的 `file_preflight.capabilities_of()["converter_available"]` 接到
+`cad_converter.capability()["available"]`（§2.6 的唯一既有行为改动）。
+
+**结论口径：DWG 编排能力完成，真实转换能力未验收**（`support_claim == "orchestration_only"`、
+`dwg_supported is False`）。本机 8 个转换器可执行文件全部不存在，Python 侧只有 `ezdxf`（且属第 3 批
+依赖，未进 `requirements.txt`）→ 本批**没有新增任何系统依赖或许可证要求**，B 层要等选型拍板。
+
+### 验收实跑（原文数字）
+
+- 实现前：`./open-claude/.venv/bin/python tests/test_dwg_conversion_adapter_red.py`
+  → `Ran 42 tests ... FAILED (failures=40)`（0 error；绿的两条是 i1/i2 护栏）。
+- 实现后：同一条命令 → `Ran 42 tests in 2.365s` / `OK (skipped=1)`——40 条红全绿，i1/i2 保持绿，
+  唯一的 skip 是 `h1`（未装真实转换器时的 B 层用例，Spec §8.2 要求如实 skip）。
+- 第 1 批不回归：`tests/test_dwg_file_capability_preflight_red.py` → `Ran 29 tests in 1.659s` / `OK`
+  （含外部新增的 2 条 CAD IR 码，见下节）。
+- 全量：`./open-claude/.venv/bin/python /tmp/run_pkg.py 1`
+  → `TOTAL ran=3138 failures=60 errors=1 skipped=4`。扣掉**外部中途落盘、尚未实现**的第 3 批红测
+  `test_dxf_cad_ir_red`（单跑 `Ran 40 tests ... FAILED (failures=37, skipped=1)`，缺
+  `tech_app/backend/services/cad_ir/`），剩下 24 条全部落在既有集合里，**本批之外零新增失败**：
+  `process_row_running_info_and_fold_red` 14、包装成本待裁决/冻结值 7（`packaging_cost_engine_red`
+  c1/c2/c4、`rule_routing` f3、`minimum_charge` d5、`rule_snapshot` e1 + a10 的 `KeyError`）、
+  `tech_model_call_row_merged_and_summary_detail_red` 2、`cpq_eval_ci_contract` 1。
+  （23 F + 1 E = 24 与上述族逐条对上；60 = 24 + 第 3 批的 37。）
+- 冒烟：`./open-claude/.venv/bin/python tech_app/tools/dwg_conversion_smoke.py`
+  → 打印 `capability()`（`available=false`、`DWG_CONVERTER_NOT_INSTALLED`）后输出
+  `SKIP（未安装真实转换器）：A 层已验收 / B 层未验收`、`结论：A 层通过`，退出码 **0**。
+- `python -m py_compile` 覆盖 11 个改动的 py 文件；`node --check tech_app/frontend/tech-task.js`；
+  `git diff --check` 干净。
+
+### 实现要点（与 Spec 的对应）
+
+- **受控调用面**：适配器只拿 `ConversionRequest`——输入固定 `source.dwg`、`output_dir` 是唯一可写目录、
+  看不到项目目录/数据库/路由；`ConversionRequest.source_filename` 是常量，用户原名只进
+  `manifest.original_filename`（已清洗成单一 basename，`../`、`\`、`/`、NUL 一律剥掉）。
+- **超时**：编排层用线程 `join(timeout)` 兜底（不指望适配器自己退出），统一
+  `DWG_CONVERSION_TIMEOUT`；本地 CLI 适配器另用 `subprocess.run(argv 列表, timeout=…, check=False)`，
+  包内无 `shell=True` / `os.system(` / 命令字符串拼接。
+- **产物校验**：`realpath` 后必须仍在 `output_dir` 内（否则 `DWG_CONVERTER_UNSAFE_PATH` 且不复制）、
+  非空、单文件与总量不超 `CAD_CONVERTER_MAX_OUTPUT_BYTES`（默认 256 MiB）、文件数不超
+  `CAD_CONVERTER_MAX_OUTPUT_FILES`（默认 20）、DXF 必须含 `SECTION`、预览必须是 PNG/PDF/SVG 魔数。
+- **manifest**：22 个必含字段齐全，`output_sha256` 可从磁盘重算；失败同样写 `status="failed"` 的
+  manifest（含 `error_code`），但不动上一次成功产物——`latest_manifest(project_id, status="ok")`
+  仍返回上一次成功版本；失败只留 `converter_stderr_digest`（sha256），**不落 stderr 原文**。
+- **临时目录**：`tempfile.mkdtemp(prefix="dwg-conv-")`，成功与失败都在 `finally` 里清理。
+- **幂等与并发**：`cache_key = sha256(source_sha256 + adapter_name + adapter_version + options_digest)`；
+  同一 cache_key 加进程内锁串行，8 线程并发只做一次真实转换并共用同一结果。
+- **能力如实**：`CAD_CONVERTER=auto` 只探测真实适配器（**不**回退 fake）；`fake` 需非生产且
+  `CAD_CONVERTER_ALLOW_SIMULATED=true`，否则 `FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION`；
+  具名未知适配器一律视为未安装；`none` 锁死未安装。环境变量在**调用时**读取。
+- **边界**：包内不出现模型客户端、STEP 导入器与 DXF 实体解析依赖；`service.py` 不联网
+  （网络只允许出现在文件名含 `remote`/`aps` 的适配器，本批只留空壳）。
+
+### 外部耦合：第 3 批中途改了第 1 批的权威闭集（本条已一并满足）
+
+实现过程中，第 3 批「DXF 确定性解析与统一 CAD IR」的 Spec 与红测由外部落盘，其中**改动了第 1 批**：
+`docs/specs/dwg-file-capability-preflight.md` 的错误码表与
+`tests/test_dwg_file_capability_preflight_red.py::CErrorCodes::test_c1` 同时加入
+`CAD_IR_SOURCE_MISSING`(422/可重试) 与 `CAD_IR_ENTITY_LIMIT_EXCEEDED`(413/不可重试)，闭集从 15 条
+变 17 条并要求 `set(STABLE_ERROR_CODES)` **完全相等**。因此 `file_preflight.STABLE_ERROR_CODES`
+补登记这 2 条（文案逐字取自第 1 批 Spec 表）——否则第 1 批红测会挂在 28/29。这 2 条在本批
+**只登记、不触发**（没有解析器），不影响 DWG 任何既有行为，也不改动第 1 批的判定结果；
+真正的抛出方是第 3 批的 `cad_ir`（尚未实现）。第 2 批的 `CONVERSION_ERROR_CODES`（8 条）仍是它的子集。
+
+### 两处需要说明的实现选择
+
+1. **`conversion_id` 与 `cache_key` 的粒度不同**：`conversion_id`（=产物目录名）只认
+   「同一份图纸 + 同一转换器 + 同一图纸版本」，**不含展示名**；`cache_key` 仍严格按 Spec §3.2
+   把选项（含 `original_filename`/`attachment_name`）算进去。红测 `e1` 要求同一份 DWG 换 4 个恶意
+   文件名上传后，产物始终落在**同一个**转换目录里、且每次 manifest 的 `original_filename` 是本次的
+   ——只有这个组合能同时满足。后果是同一张图改名重传会重跑一次并就地更新该目录的 manifest
+   （不新增第二份产物目录），`c1`/`c3` 的「同一幂等键只转一次」不受影响。
+2. **`FakeAdapter` 的声明版本含故障注入模式**（`0.0.0+nonzero_exit`）：注入故障的 fake 与干净的
+   fake 不是同一个转换器，`cache_key` 必须随之变化，否则 `c4`「失败不得覆盖上一次成功」与 `d10`
+   「失败后可重试」会命中上一次成功的缓存而根本跑不到适配器。只影响测试适配器。
+
+### 剩余与风险
+
+- **真实转换器未验收（B 层）**：选型（ODA File Converter / Autodesk APS / LibreDWG / 其他）仍待拍板；
+  拍板前 `converter_available` 在生产只能是 `false`，界面照实显示「未安装」。
+  `adapters/local_cli.py` 只是骨架（候选探测 + argv 调用形状），未对任何真实转换器验证过参数与产物。
+- `adapters/remote.py` 仅有接口留白，接入需要先过数据出境与合规评审。
+- `converter_available` 目前只在 `converter_required` 的格式行（DWG/DXF）上被真实值覆盖；DXF 的
+  `cad_vector_parse` 仍为假（第 3 批），所以 DXF 的门禁语义未变。
+- 前端只让「新增工艺任务」页（`tech-task.js`，缓存号 `techtask3` → `techtask4`）从该接口读取能力并区分
+  「未安装 / 已安装」；其余入口仍读同一个全局文案 `window.CPQ_DWG_CAPABILITY_NOTE`，属第 5 批统一。
+- 包装成本最低收费口径仍待业务裁决；本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**，
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。
+
+## 175. DWG 支持第 3 批「DXF 确定性解析与统一 CAD IR」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+第 3 批要的是把第 2 批转出来的 DXF **确定性地**解析成统一 CAD IR：几何、图层、文字、标注、
+块变换、单位、证据引用全部来自 CAD 矢量事实，模型只做语义辅助（且本批根本不调模型）。
+本条只落 Spec / 红测 / 夹具 / changelog：**不写 `cad_ir/` 实现**。
+
+### 产物（本任务新增，均为未跟踪新文件）
+
+- `docs/specs/dxf-cad-ir.md`（15 节 / 362 行）：两条 IR 的关系、模块与冻结接口、IR 数据结构、
+  稳定标识、几何口径、图层与角色、规范排序与哈希、单位不许猜、块与变换、错误模型与状态机、
+  版本迁移、持久化接口、证据与可回放、性能与安全限制、夹具、真实样本基线、与 STEP IR 的隔离、
+  非目标、第 4 批依赖接口、自动化/人工验收。
+- `tests/test_dxf_cad_ir_red.py`（803 行 / 43 条，A–I 九组）：A 算法 18 · B 单位 4 · C 失败与限制 5 ·
+  D 与第 2 批接线 5 · E 真实样本 2 · F 夹具自检 2 · G 隔离 2 · H 版本 3 · I 幂等 2。
+- `tests/fixtures/dxf/`：22 个可直接打开核对的小 DXF（248 KB）+ `build_fixtures.py`（354 行，
+  `--check` 只校验已入库夹具能否被 ezdxf 读回，不重写文件）。
+- 顺带对齐第 1 批权威闭集：`docs/specs/dwg-file-capability-preflight.md` §3 的错误码表从 15 条扩到
+  **17 条**（新增 `CAD_IR_SOURCE_MISSING`(422, 可重试) / `CAD_IR_ENTITY_LIMIT_EXCEEDED`(413, 不可重试)），
+  `tests/test_dwg_file_capability_preflight_red.py` 的 `ERROR_CODES` 同步扩到 17 条。
+  第 3 批的解析器只允许抛本表内的码，闭集之外视为实现缺陷。
+
+### 关键口径（写进 Spec，红测按此断言）
+
+1. **模块与接口**：`tech_app/backend/services/cad_ir/{model,parser,geometry,units,blocks,persistence}.py`；
+   对外 `CAD_IR_VERSION="cad-ir/1"`、`capability()`、`parse_dxf(content, filename=…, source=…, limits=…)`
+   （纯函数、不碰 I/O）、`parse_conversion(project_id, …)`、`load_ir/list_irs/ir_hash/migrate/summarize`。
+2. **两条 IR 互不覆盖**：CAD IR 用**新 doc key `cad_ir`**，不进 `store.save_ir/load_ir`、不动 `models/ir.py`
+   的 `DesignIR`；`store.PARSE_STAGE_DOCS` 必须加 `cad_ir`（「本次任务从头开始」要能清掉它）。
+   STEP/3D 链路 (`stage="parsed_3d"`) 与 2D 出图链路语义不变。
+3. **稳定 ID 必须可回放**：`entity_id = ent:<space>:<handle>`，块内实体带
+   `block_path=[{block, insert_handle}…]`（形如 `ent:model:1A/3F`）；证据 `ev:E:<handle>` /
+   `ev:L:<layer>` / `ev:D:<handle>` / `ev:B:<handle>`；**不许**用数组下标当长期证据 ID。
+4. **几何口径（先确定性基础，不判盒型）**：`closed_outlines` 只收**闭合折线/多段线**；
+   `CIRCLE/ELLIPSE/ARC/SPLINE` 进 `geometry.holes`；`LINE` 与未闭合折线进 `open_outlines`；
+   弧长/圆周长必须真实计算；`length_mm/area_mm2` 只在 `unit_status=="confirmed"` 时给值，否则为 `null`。
+5. **单位不许猜**：`$INSUNITS=4→mm`、`1→inch(25.4)`；`0/缺失` → `unit_status="needs_confirmation"`、
+   `drawing_units != "mm"`、`scale_to_mm=null`、`unit_confidence <= 0.5`、给 `candidates`、
+   追加 `unit_unconfirmed` 警告。依赖绝对尺寸的字段不得自动确认。
+6. **块与变换**：嵌套 / 平移 / 旋转 / 缩放 / 镜像 / 同块多引用都要按完整变换算出**绝对坐标**；
+   循环引用要 `block_cycle` 警告 + 有界截断（深度上限 8）。
+7. **不支持的实体只警告不丢图**：登记进 `unsupported[]` + `unsupported` 警告，其余实体照常解析。
+8. **完全离线**：解析不调模型/网络（红测补丁 `vision.parse_drawing` / `claude_client.run` /
+   `urllib.request.urlopen`，调用即失败）；`summarize()` 必须 < 4000 字符且不含实体明细
+   （不许把 DXF 原文塞进 Agent 上下文）。
+9. **错误与限制**：`CAD_IR_MAX_ENTITIES=200000`（超出报 `CAD_IR_ENTITY_LIMIT_EXCEEDED`，**不许静默截断**）、
+   `CAD_IR_MAX_LAYERS=5000`、`CAD_IR_MAX_BLOCK_DEPTH=8`、`CAD_IR_MAX_DXF_BYTES=256MiB`、
+   解析超时 120s、证据上限 50000；失败**不写 IR、不写 `cad_ir_parsed` 审计、不改项目阶段**。
+10. **依赖**：`ezdxf` 必须正式写进 `requirements.txt`（当前 `ci_contract` 红测已经在报这条）；
+    不引入 shapely / dxfgrabber / pythonocc。
+
+### 现状取证（实测，不是推断）
+
+- **红测实跑**：`./open-claude/.venv/bin/python tests/test_dxf_cad_ir_red.py`
+  → `Ran 43 tests ... FAILED (failures=40, skipped=1)`。40 条红里 **38 条**是
+  `AssertionError: 缺少 tech_app/backend/services/cad_ir/（本批 Spec §2）`，**1 条**是
+  `g2` 的真实契约缺口（`store.PARSE_STAGE_DOCS` 现为 `('ir','drawing_analysis',…,'ai_results')`，
+  没有 `cad_ir`），**1 条**是 `e1`（真实样本，见下）。绿的是 F 组 2 条夹具自检；
+  `e2` 因缺少人工复核过的 golden 基线而 skip（**不许**自动生成 snapshot 让测试变绿）。
+- **夹具金标独立复核**（另写 ezdxf 探针，只跑在 `/tmp`，不入库）：
+  `rect_10x5` 面积 50 / 周长 30 / `$INSUNITS=4`；`hole_plate` 圆孔直径 `[3.0, 6.0]`；
+  弧长 `15.707963`（= π·10/2）、圆周长 `12.566371`（= 2π·2）、椭圆 bbox `[30, 40, 70, 60]`；
+  `layers_cut_crease` 计数 CUT 1 / CREASE 2 / PRINT 1 / FRAME 1（CREASE `color=3` `DASHED`）；
+  `dims_override` 标注文字 `'70'` 而 `get_measurement()=72.0`、矩形 handle `33` 周长 `184.0`；
+  旋转块 bbox `[95, 0, 100, 10]`；嵌套块并集 `[-2, 0, 64, 74]`；
+  镜像（含 `extrusion=(0,0,-1)` 翻转版）面积恒 `51.0`；`order_a/order_b` 三个实体句柄相同、书写顺序不同；
+  `r12_polyline` 闭合、周长 `34.142136`；`many_entities` 200 条 LINE；`unsupported_entities` 含
+  `3DFACE` + `REGION`。→ 红测里所有硬编码数字都由夹具本身复核过，不是凭空写的期望值。
+- **依赖现状变了**：本机现在**真的装了 LibreDWG 0.14**（`/opt/homebrew/bin/dwg2dxf`、`dwgread`），
+  所以 `cad_converter.capability()` 现在是 `available=true / simulated=false / adapter_name=local_cli`
+  （不再是 `## 173`/`## 174` 时的「未安装」）。但它**还不能算通过 B 层**：
+  `adapters/local_cli.py` 用的是 ODA File Converter 的 argv 形状
+  （`dwg2dxf <源文件> <输出目录>` 且期待 `<输出目录>/converted.dxf`），而 LibreDWG 的 CLI 是
+  `dwg2dxf -o <out.dxf> -y <in.dwg>`。实测 `dwg2dxf source.dwg /tmp/dwgprobe2` → 退出码 1、
+  `READ ERROR 0x1000`、**无产物**；改用 `dwg2dxf -o wine.dxf -y source.dwg` → 退出码 0、
+  3,826,412 B。因此 `tech_app/tools/dwg_conversion_smoke.py` 现在报 `DWG_CONVERSION_FAILED`，
+  B 层仍然不通过（属第 2 批适配器修复项，不是第 3 批）。
+- **真实转换产物统计**（手工用正确 argv 转出、只落 `/tmp`，不入库）：
+  `酒盒.dwg` → 3,826,412 B / `AC1027` / `$INSUNITS=4`(mm)，模型空间 6711 个实体
+  （LINE 5598 · DIMENSION 316 · ARC 311 · SPLINE 310 · TEXT 70 · MTEXT 57 · ELLIPSE 21 · ATTDEF 15），
+  7 个图层（`0` `DESIGN` `CUTTER` `图层 2` `SAMPLE` `轮廓线` `_U+56FE_U+5C42 1`），719 blocks / 3 layouts；
+  `圆盘盒.dwg` → 4,088,695 B，模型空间 3457 个实体（LINE 1632 · LWPOLYLINE 1237 · INSERT 234 ·
+  DIMENSION 141 · MTEXT 87 · ARC 66 · CIRCLE 56 · POLYLINE 4），4 个图层
+  （`0` `_U+56FE_U+5C42 1` `全穿刀` `压线 Crease`），494 blocks。
+  → 两份都是**二维**图纸、单位毫米、实体量远低于 20 万上限；这也第一次证明「第 3 批的解析目标
+  是真能拿到的」，并且印证第 4 批的刀线/压痕语义确实藏在图层名里（本批**只保留原样、不判角色**）。
+
+### 验收实跑（原文数字）
+
+- 新红测：`Ran 43 tests ... FAILED (failures=40, skipped=1)`（分组红：A 18 / B 4 / C 5 / D 5 / E 1 /
+  G 2 / H 3 / I 2；F 2 绿；E 2 skip）。
+- 第 1 批红测（闭集扩到 17 码后重跑）：`Ran 29 tests ... OK`。
+- 夹具自检：`build_fixtures.py --check` 退出码 0，末尾 `wrote 22 fixtures`，无 `READ FAILED`。
+- 全量回归（工作区**正在被并行的第 2 批实现方改动**，数字带此前提）：
+  `TOTAL ran=3141 failures=63 errors=1 skipped=4`；本批占 40 条红（其余为既有红：
+  `process_row_running_info_and_fold_red` 14、包装成本待裁决/冻结值 7、
+  `tech_model_call_row_merged_and_summary_detail_red` 2、`cpq_eval_ci_contract` 1 —— 该条现在额外报
+  `ezdxf` 未进 `requirements.txt`）。本批新增红之外**没有新增其它失败**。
+
+### LibreDWG 0.14 装好后的影响（9-20 补测，回答“对第 2/3 批有没有变化”）
+
+- 本机工具链（逐个 `--version` 实测）：`dwg2dxf` / `dwgread` / `dwg2SVG` / `dwglayers` /
+  `dwgrewrite` / `dwgfilter` / `dwgwrite` / `dxf2dwg` / `dwgadd` / `dwgbmp` 全部 **0.14**，
+  在 `/opt/homebrew/bin`；Homebrew formula 声明 `license "GPL-3.0-or-later"`。
+- **对第 2 批**：`capability()` 从「未安装」变成 `available=true / simulated=false /
+  adapter_name=local_cli`，B 层第一次**可做**。用正确 argv 实测两份样本都能真转：
+  `dwg2dxf -o <out>.dxf -y <in>.dwg` → 酒盒 686,195 B → 3,826,412 B DXF（退出码 0）、
+  圆盘盒 889,062 B → 4,088,695 B DXF（退出码 0）。**但当前适配器仍转不出来**：
+  `adapters/local_cli.py` 按 ODA 的 `dwg2dxf <源文件> <输出目录>` 调用并期待
+  `<输出目录>/converted.dxf`，实测退出码 1 / `READ ERROR 0x1000` / 无产物 → 冒烟报
+  `DWG_CONVERSION_FAILED`。所以 B 层结论**不变：仍未通过**，要修的是第 2 批适配器的 argv
+  （按转换器家族分派参数），不是第 3 批。
+- 预览能力顺带可得：`dwg2SVG --mspace <in>.dwg > <out>.svg`（该工具没有 `-o`，只能重定向 stdout）
+  两份样本都成功 —— 酒盒 2,031,603 B（8105 个 `<path>` + 70 个 `<text>`）、圆盘盒 1,861,437 B
+  （8440 个 `<path>` + 6 个 `<text>`）。第 2 批的 `preview_render` 因此可从 `false` 变为真实可用；
+  但视觉模型要的是**栅格图**，SVG 还需再栅格化，这一条留到第 4 批。
+- **对第 3 批**：解析目标真实可达 —— 两份转换产物都能被 `ezdxf` 1.4.4 读出（酒盒 6711 实体 /
+  7 个在用图层 / 719 个块定义 / 3 layouts；圆盘盒 3457 实体 / 4 个在用图层 / 494 个块定义），
+  单位都是 `$INSUNITS=4`(mm)。但实测暴露出 Spec 的 4 处空白，已按证据补齐（Spec 362 → 408 行，
+  红测 40 → 43 条，夹具 19 → 22 个）：
+  1. 真实产物里 **HATCH 真的存在**（酒盒 11 个 HATCH / 18 条边界路径），原 Spec 通篇没写 HATCH
+     → 补 §3.5 实体覆盖清单（`LINE`/`LWPOLYLINE`/`POLYLINE`/`ARC`/`CIRCLE`/`ELLIPSE`/`SPLINE`/
+     `INSERT`/`HATCH`/`TEXT`/`MTEXT`/`DIMENSION`/`LEADER` 的去向与关键字段；HATCH **只登记边界、
+     不进闭合轮廓**），夹具 `hatch_boundary.dxf` + 红测 `A18`。
+  2. 真实产物的中文是**明文 UTF-8**（`材质...`/`350g粉灰`/`2.5mm灰板`），不是 AutoCAD 那种
+     `\U+XXXX` 转义 → 补 §3.6 归一化规则（存在才解码、**禁止二次解码**），夹具
+     `text_predecoded.dxf` + 红测 `A16`。
+  3. 真实标注绝大多数 `text` 为空串（`get_measurement()` 才是有值的那一侧）→ 补 §3.7 回落规则
+     （`declared_value` 回落到 `measured_value`、`delta=0`、禁止 NaN），夹具
+     `dim_empty_text.dxf` + 红测 `A17`。
+  4. LibreDWG 对 HATCH 会打印 `Skip HATCH common handles`、对圆盘盒打印 `bit_read_BD/BL` 报错，
+     产物仍可用 → 把「边界 best-effort + 警告、不因单个实体让整图失败」写进 §3.5；另外酒盒
+     model space 里 `INSERT` 为 0（719 个块定义未被引用）→ 补 §3.8：真实样本**不许**断言
+     `block_ref_total > 0`，并钉死 model space / paper space 的统计口径。
+- 未变的部分：CAD IR 契约、稳定 ID 与证据引用、错误码与限制、完全离线要求、与 STEP IR 的隔离
+  都不受装机影响；`e1` 仍然红，但红的原因从「没有转换器」变成「第 2 批适配器转不出产物」，
+  红测语义（不许用夹具或 fake 产物顶替真实样本）一字不变。
+
+### 口径说明
+
+1. `closed_outlines` 只数**闭合折线/多段线**，圆/椭圆/弧/样条一律进 `holes`：真实包装展开图的
+   外轮廓是折线拼出来的，把圆当「轮廓」会让第 4 批的展开边界判断从第一步就错。
+2. `inferred_role` 本批**恒为 `null`**，图层名原样保留（含 LibreDWG 转出来的 `_U+56FE_U+5C42 1`
+   这种转义残留）：刀线/压痕判定是第 4 批的事，且必须走客户可配置规则，不许在解析层硬编码。
+3. `length_mm/area_mm2` 在单位未确认时为 `null`（不是 0、不是原始值冒充毫米），配 `unit_status` /
+   `unit_confidence` / `candidates` 让第 4–5 批把「待确认」如实展示给用户。
+4. `e1` 的 skip 门槛只看**真实转换能力**（`available` 且非 `simulated`）：本机现在有 LibreDWG，
+   所以它不再 skip 而是**红**——这正是我们要的语义：`e1` 通过 = 真实转换产物能被解析，
+   不许用夹具或 fake 产物顶替。
+5. `migrate()` 对**缺版本号**的旧 IR 返回 `needs_rebuild`（重建，不猜），对未知版本 `raise ValueError`：
+   宁可让旧数据重算，也不许按当前版本硬读出一份看似正常的 IR。
+
+### 剩余与风险
+
+- **第 2 批 B 层仍未通过**：LibreDWG 0.14 已装但 `local_cli` 适配器 argv 形状错（`## 174` 自己
+  也写了「未对任何真实转换器验证过参数与产物」）。不修这个，第 3 批 `e1` 永远红。
+  另外 LibreDWG 是 **GPLv3**，生产部署的许可证结论仍待用户拍板；且它现在只装在这台开发机上，
+  属于第 6 批「不依赖开发者机器上偶然安装的软件」要清掉的门禁项。
+- **`ezdxf` 尚未进 `requirements.txt`**（`ci_contract` 已红），属实现方任务；生产/CI 环境因此
+  仍不能保证解析器可用。
+- 第 4–6 批未开写；第 4 批依赖的接口已在 Spec §13 冻结（`parse_conversion` / `ir_hash` /
+  `entity_id` / `geometry.*` / `layers[]` / `dimensions[]` / `texts[]` / `units.*` / `evidence` / `summarize`）。
+- 真实样本 golden 基线（`tests/fixtures/real_baselines/酒盒.golden.json` / `圆盘盒.golden.json`）
+  **必须人工复核后写入**，本条没有代笔；`e2` 会一直 skip 到那时。
+- 包装成本最低收费口径仍待业务裁决；本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**，
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管；本机未安装任何新依赖（LibreDWG 是他人装的，
+  本条只是如实取证）。
+
+## 176. DWG 支持第 2 批补正：本地 CLI 适配器真实 argv（LibreDWG 0.14 实测）（9-20，Codex）
+
+`## 174` 交付的 `adapters/local_cli.py` 当时只写了「候选探测 + 一个通用 argv 形状」，
+未对任何真实转换器验证过；`## 175` 也把「argv 形状错 → 真实转换转不出产物」列为第 3 批 `e1`
+的红因。本条把**每个转换器的真实命令行形状**分开落地，并用本机新出现的 LibreDWG 0.14 实测。
+
+### 改了什么
+
+- `adapters/local_cli.py` 重构为「驱动」表：`CANDIDATE_COMMANDS` 由 2 元组变 3 元组
+  `(配置名, 可执行文件, 驱动)`，`DRIVERS` 逐个声明 argv 构造、产物文件名、版本探测参数与
+  `argv_verified` 标记。
+  - `libredwg_dwg2dxf`（`dwg2dxf`）：`dwg2dxf -y -o <out.dxf> <source.dwg>`，**已本机实测**。
+  - `libredwg_dwgread`（`dwgread`）：`dwgread -O DXF -o <out.dxf> <source.dwg>`，**已本机实测**。
+  - `oda_file_converter`（ODA / Teigha）：`<exe> <inDir> <outDir> <outVer> <outFormat> <recurse> <audit>`，
+    产物名 `source.dxf`；**未安装、未验证**，`capability()["argv_verified"] == false` 如实标注。
+- 新增 `probe_version()`：跑一次 `--version` 解析版本号（正则取第一个 `主.次[.补]`），**按可执行文件路径
+  记忆化**（`capability()` 被预检链路频繁调用，不能每次都起进程），失败只让版本为空串、绝不拖住预检。
+  版本号进 `cache_key` 与 `conversion_id` 的转换器指纹，所以装完转换器升级后旧缓存自然失效。
+- `build()` 现在把**命中的配置名**（`libredwg` / `libredwg-cli` / `oda` / `teigha`）写进
+  `adapter_name`，不再一律回落到 `"local_cli"`：manifest 的 `converter_name` 因此可读。
+- 真实适配器把「退出码 0 但没写文件」交回编排层分类（`DWG_CONVERTER_OUTPUT_MISSING`），
+  不在适配器里把空产物伪装成成功；超时用 `subprocess.run(timeout=…)` 报 `DWG_CONVERSION_TIMEOUT`；
+  stderr 只留 sha256 摘要 + 一条「输出了 N 字节诊断信息」的告警（LibreDWG 对大图会刷大量 Warning）。
+- **Spec §9 的 `stale_reason`**：旧产物被**同源**的新成功转换取代时，`list_conversions()` /
+  `load_manifest()` / `latest_manifest()` **读时**给出 `converter_version_changed`（换了转换器
+  版本）或 `drawing_version_changed`（图纸版本前进），取代不了的给 `superseded_by_newer_conversion`；
+  失败的转换没有产物，不构成取代。索引与历史 manifest **一字不改**（与既有 `stale/stale_reason`
+  的读时装饰约定一致），新写的 manifest 自身带 `stale_reason: ""`。
+- 顺手清场：仓库根目录多出的 3.8 MB `source.dxf`（早期手工探测的落盘产物，未被任何代码/测试引用）
+  移到 `/tmp/cpq-stray-source.dxf`，保持工作区干净。
+
+### 验收实跑（原文数字）
+
+- `tests/test_dwg_conversion_adapter_red.py` → `Ran 42 tests in 2.649s` / `OK (skipped=1)`。
+  唯一的 skip 仍是 `h1`，但原因变了：不是「本机没装转换器」，而是**红测环境自己把
+  `CAD_CONVERTER` 固定成 `fake`**（`DEFAULT_ENV`），于是 `capability().simulated is True` 命中
+  Spec §8.2 的「simulated 不算 B 层证据」分支。真实 B 层改用冒烟脚本单独取证。
+- `tests/test_dwg_file_capability_preflight_red.py` → `Ran 29 tests in 1.710s` / `OK`（第 1 批不回归）。
+- 冒烟 `tech_app/tools/dwg_conversion_smoke.py`：本机 `capability()` =
+  `available=true / adapter_name="libredwg" / converter_version="0.14" / simulated=false /
+  preview_render=false / dwg_supported=false / support_claim="conversion_available"`；
+  两份样本**真转成功**，最终 `结论：A 层通过`、`B 层未通过`、退出码 **1**。
+- 全量 `./open-claude/.venv/bin/python /tmp/run_pkg.py 1` → `TOTAL ran=3141 failures=63 errors=1 skipped=4`。
+  63 = 第 3 批未实现红测 40（`test_dxf_cad_ir_red` 单跑 `Ran 43 tests ... FAILED (failures=40,
+  skipped=1)`，其中 39 条是「缺少 `cad_ir/`」、1 条是 `store.PARSE_STAGE_DOCS` 没有 `cad_ir`）
+  + 既有集合 23 F + 1 E（`process_row_running_info_and_fold_red` 14、包装成本待裁决 6 F + 1 E
+  = `packaging_cost_engine_red` c1/c2/c4、`rule_routing` f3、`minimum_charge` d5、`rule_snapshot` e1
+  + a10 的 `KeyError`、`tech_model_call_row_merged_and_summary_detail_red` 2、`cpq_eval_ci_contract` 1）。
+  **本批零新增失败**。
+- `python -m py_compile` 覆盖 12 个改动 py；`node --check tech_app/frontend/tech-task.js`；
+  `git diff --check` 干净。
+
+### 两份真实 DWG 的实际输出（manifest 摘要，不贴原文）
+
+| 样本 | 大小 | 检出 | 产物 | 说明 |
+| --- | --- | --- | --- | --- |
+| 酒盒.dwg | 686195 B | AC1027 | `converted.dxf` 3826412 B（sha256 `01bda52c…`） | `status=ok`、`acceptance_level=real`、`is_simulated=false` |
+| 圆盘盒.dwg | 889062 B | AC1027 | `converted.dxf` 4088695 B（sha256 `3c48b720…`） | 同上；stderr 摘要 15152 B 诊断信息 |
+
+用 venv 里的 `ezdxf 1.4.4` 复核酒盒产物：`readfile()` 可打开、**modelspace 6711 个实体 / 8 个图层**。
+→ 「DXF 可打开且非空图」成立；「预览非空白」不成立（LibreDWG 不渲染预览）。
+
+### Spec §9 旧产物标记实测（内存 persistence 驱动）
+
+同一份 `酒盒.dwg` 依次用 fake `1.0.0` → `2.0.0` → `2.0.0 + drawing_version=2` 转换，再注入一次
+`nonzero_exit` 失败：
+
+```
+2.0.0 dv=2 ok -> ''                      # 最新
+2.0.0 dv=1 ok -> 'drawing_version_changed'
+1.0.0 dv=1 ok -> 'converter_version_changed'
+latest_manifest -> ''                    # 成功的最新一份
+load_manifest(第一份) -> 'converter_version_changed'
+注入失败后 latest_manifest(status="ok") -> ''   # 失败不取代通过
+```
+
+`src_requirement` 之外的既有读接口（`load_manifest` 返回 None 的语义、`list_conversions` 新→旧）
+与顺序一字不变——只是每条多一个 `stale_reason` 字段。
+
+### 能力声明（唯一口径）
+
+**A 层通过；B 层未通过**（缺预览渲染，Spec §8.2 要求预览非空且非空白）。
+`dwg_supported` 仍恒为 `false`，本条**不得**被读成「支持 DWG」。
+
+### 剩余与风险
+
+- **转换器选型仍未拍板**：本机出现的是 LibreDWG 0.14（Homebrew，2026-09-20 17:40 装上，非本批
+  代码引入、本批未安装任何转换器）。LibreDWG 是 **GPLv3**，商用集成的许可证结论要法务拍板；
+  且它是「开发者机器上偶然装的软件」，生产部署不能依赖它（第 6 批门禁项）。
+- **预览渲染缺口**：LibreDWG 只能出 DXF，出不了预览图 → B 层缺一项；要么换/加装能出预览的转换器，
+  要么单独接一个渲染通道（本批不做）。
+- **生产环境语义**：若生产机上真的装了 LibreDWG，`auto` 会让 `converter_available` 变真；但第 1 批
+  视觉门禁对 DWG 抛的码仍是写死的 `DWG_CONVERTER_NOT_INSTALLED`（Spec §2.6 要求本批不动它），
+  文案与实际能力会不一致——这个错位要由第 3 批（DXF 解析链路接管 DWG 主文件）收口。
+- `ezdxf` 在 venv 里是 1.4.4，但**未进 `requirements.txt`**（属第 3 批正式依赖，`ci_contract` 已红）。
+- `adapters/remote.py` 仍是接口留白；ODA / Teigha 的 argv 形状本机无法验证，接入选型后必须复验。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署**；两份真实 DWG 与
+  `裕同包装项目-待开发/` 只读、未纳管（未 `git add`）。
+
+## 177. DWG 第 1/2 批修复（LibreDWG 0.14 就绪）：转换器配置、质量门槛与转换状态 Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+用户已在本机与 34 服务器装好 **LibreDWG 0.14**（`/opt/homebrew/bin/dwg2dxf`、
+`/home/data/cpq-tools/current/bin/dwg2dxf`）并实测两份真实 DWG 能转出非空 DXF。本条据此把
+`## 171`/`## 173`（第 1 批）与 `## 172`/`## 174`/`## 176`（第 2 批）的缺口收口成一份**修复规格**
+和一套**实现前必然失败的红测**，供实现方落地。第 3–6 批不动，只冻结第 3 批要透传的字段名。
+
+### 现状取证（决定这份规格写什么）
+
+| 事实 | 数据 |
+| --- | --- |
+| 酒盒.dwg → DXF | 3,826,412 B、warning **1520**、error 0、退出码 0 |
+| 圆盘盒.dwg → DXF | 4,088,695 B、warning **252**、error **3**（`bit_read_BD`×2、`bit_read_BL`×1）、退出码 0 |
+| 预览工具 | `dwg2SVG --mspace <src>` **输出走 stdout**，酒盒 2,031,603 B / 圆盘盒 1,861,437 B |
+| 许可证 | LibreDWG = **GPL-3.0-or-later**；ODA File Converter 官方限定非会员非商业用途，故未采用 |
+
+五个缺口：只看退出码、无 warning/error 计数、无 `success_with_warnings`、无服务器可注入的
+转换器配置（只靠 `shutil.which`）、预览未接线（B 层因此卡在「没有预览产物」）。
+
+### 改了什么（只 Spec + 红测）
+
+- 新增 `docs/specs/dwg-conversion-quality-repair.md`（214 行），把修复拆成契约 A–G：
+  - **A 转换器配置**：`DWG_CONVERTER_PROVIDER`(`libredwg`/`oda`/`fake`/`none`/`auto`) /
+    `DWG_CONVERTER_BINARY`（绝对路径优先、**不经 PATH**）/ `DWG_CONVERTER_VERSION`（期望版本）/
+    `DWG_CONVERTER_PREVIEW_BINARY`（缺省取转换器同目录 `dwg2SVG`）；旧名 `CAD_CONVERTER*`
+    继续可用且 `DWG_CONVERTER_*` 优先，冲突写 `converter_config_shadowed` 警告。
+    `capability()` **新增** `provider`/`binary`/`converter_version`/`expected_version`/`version_ok`/
+    `argv_verified`/`preview_available`（现有字段一个不删、`dwg_supported` 仍恒 `false`），
+    且**不抛异常**；解释器（`sh`/`bash`/`zsh`/`python*`/`env`）当二进制 → 直接拒绝。
+  - **B 驱动 argv**：按驱动分派（`libredwg_dwg2dxf` = `-y -o <out> <src>`、`libredwg_dwgread` =
+    `-O DXF -o <out> <src>`、`oda_file_converter` 未验证 → `argv_verified=false` 且文案不得声称已验证）；
+    SVG 预览只作页面预览，**禁止**当图片送视觉模型。
+  - **C 质量门槛**：退出码 0 → DXF 非空 → **结构完整**（ezdxf 只读表结构；没有 ezdxf 时退化
+    字节级并 `quality.verified=false`）→ `entity_count>0` 且 `layer_count>0`；任一条不满足 →
+    `DWG_CONVERTER_OUTPUT_INVALID`。manifest 新增 `quality` 块，并冻结计数口径
+    （顶层实体不展开块、`layer_count` 与第 3 批 `stats.layer_total` 同口径）。
+  - **D 诊断与状态**：`warning_count`/`error_count` 从 stderr+stdout 统计，`warning_codes` 归一化
+    模板去重（最多 20 条 + `warning_codes_truncated`），诊断原文不入库只留
+    `diagnostics_bytes`/`diagnostics_sha256`；**状态闭集 `{ok, success_with_warnings, failed}`**，
+    只有 `ok` 才允许说「无损/lossless」。
+  - **E 错误码**：新增 `DWG_CONVERTER_BINARY_UNUSABLE`(500, 不可重试)，并**回填第 1 批闭集**
+    （`docs/specs/dwg-file-capability-preflight.md` §3 的表 + 「17 条」→「**18 条**」）。
+  - **F 第 3 批联动**：IR `source` 透传 `conversion_status`/`warning_count`/`error_count`/`quality`/
+    `crosscheck`（IR 侧减 manifest 侧，全 0 → `match=true`）；不等 → `conversion_degraded` /
+    `ir_manifest_mismatch` 警告。**只冻结字段名，实现归第 3 批。**
+  - **G 环境边界**：34 服务器注入示例（本轮**不执行**）、本机路径、CI 默认 `fake`、
+    缺 `ezdxf` 时不许假装验过。
+- 新增 `tests/test_dwg_conversion_quality_repair_red.py`（640 行 / **28 条**：A7 B4 C4 D6 E4 F3）。
+  用 `sh` 写的假 CLI 夹具（记录 argv 到旁车文件、可注入 `__WARN__`/`__DISTINCT__`/`__ERR__`、
+  输出模式 `tidy|empty|truncated|no_entities`）+ 内存 persistence 驱动，**不依赖真二进制也不
+  依赖生产服务**；真实样本只在 E 组用，缺二进制时 skip。
+- `tests/test_dwg_file_capability_preflight_red.py` 的 `ERROR_CODES` 同步加
+  `DWG_CONVERTER_BINARY_UNUSABLE`（第 1 批闭集从 17 条变 18 条，随即产生 1 条预期红）。
+
+### 红测实跑（原文数字，实现前）
+
+- `test_dwg_conversion_quality_repair_red.py` → `Ran 28 tests in 0.526s` /
+  `FAILED (failures=27)`：**27 红 / 1 绿**（绿的 `D3` 是「现有实现天然没写『无损』字样」）。
+  代表性红因：`DWG_CONVERTER_*` 全不认、二进制不存在仍 `available=true`、版本不匹配仍
+  `available=true`、`/bin/sh` 被当转换器、`DWG_CONVERTER_BINARY_UNUSABLE` 不在闭集、
+  `success_with_warnings` 不存在、预览未产出、审计缺 `provider`。
+- `test_dwg_file_capability_preflight_red.py` → `Ran 29 tests in 1.728s` / `FAILED (failures=1)`
+  （唯一红 = 新闭集码未落地；实现后应回到 `OK`）。
+- `test_dxf_cad_ir_red.py` → `Ran 45 tests in 0.494s` / `FAILED (failures=42, skipped=1)`。
+- `test_dwg_conversion_adapter_red.py` → `Ran 42 tests in 2.634s` / `OK (skipped=1)`。
+- 夹具自检 `tests/fixtures/dxf/build_fixtures.py --check` → 退出码 **0**（22 个 DXF fixture）。
+- 全量 `./open-claude/.venv/bin/python /tmp/run_pkg.py 1` → `TOTAL ran=3171 failures=93 errors=1
+  skipped=4`；对比 `## 176` 的基线 `3141/63/1/4` = **ran +30、failures +30**（28 条新修复红 +
+  2 条第 3 批新增 `E3`/`E4` + 1 条第 1 批闭集红），**零意外新增失败**。
+- 新红暴露的额外缺陷：206 字节的 `AC1015` 垃圾 DWG 当前会被判「转换成功」（C 组 3 条
+  `期望 DWG_CONVERTER_OUTPUT_INVALID，实际成功返回`）。
+
+### 能力声明（唯一口径）
+
+**A 层通过 / B 层仍未通过**；`dwg_supported` 仍恒 `false`。本条只是「让修复可验收」，
+**不得**读成「已支持 DWG」，也不得读成修复已实现。
+
+### 剩余与风险
+
+- **GPLv3 许可证结论仍缺法务拍板**（LibreDWG 是 GPL-3.0-or-later），且「服务器上装了转换器」
+  不等于「生产部署可依赖它」——属第 6 批门禁项。
+- `ezdxf` 仍未进 `requirements.txt`（`ci_contract` 沿用 1 条红），质量门槛在缺 `ezdxf` 的
+  环境只会退化，不会因此变绿。
+- 转换质量本身有损：圆盘盒有 3 条位流错误、酒盒 1520 条警告 → 状态必须是
+  `success_with_warnings`，第 3 批必须用 DXF 解析器交叉核对，不许静默当无损。
+- 并行的实现方正在改同一批文件（`main.py`、`file_preflight.py`、`tech-task.js/html`、
+  `cad_converter/`、`dwg_conversion_smoke.py`）；本条只动 Spec + 红测 + 本 changelog。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。
+
+## 178. DWG 支持第 4 批「包装图纸语义、刀线压痕线与需求字段证据」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+第 3 批（CAD IR）由实现方并行落地中，用户在开第 5 批前先要第 4 批。本条把「通用 CAD IR →
+包装行业结构化信息 + 带证据的字段候选」这份规格与验收红测冻结下来，供实现方落地。
+
+### 现状取证（决定这份规格写什么）
+
+- 全仓**没有任何包装图纸语义代码**：`grep -rn "刀线\|crease\|half_cut" --include=*.py tech_app/backend/`
+  零命中；`services/dxf_inspect.py` 只是 DXF 概览（图层/实体计数），不含角色判定、轮廓候选、字段证据。
+- 需求侧只有 `field_sources` 的 **5 值闭集**（`requirement_service.py:29`），
+  `_STRUCTURAL_DATA_KEYS` 已收 `field_sources`（`da_repo.py:70-75`）——
+  但**没有** `field_provenance`（origin/status/confidence/evidence_refs/conflicts），
+  也**没有**「未确认不写值」的约束。
+- 规则快照约定已存在：`tech_app/agent_knowledge/rules/*.json`（`packaging_cost_rules.json` 等），
+  本批的图层规则沿用同一目录；**默认模板里不许出现任何「颜色编号 = 角色」的映射**。
+- 模型调用只有一条缝：`vision.py:607-609` 经 `claude_client.run`；红测 patch 这一处即可计数。
+- LibreDWG 附带的 `dwgbmp` 实测只出 `220×140` 缩略图（BMP 内容），**不足以读标题栏** →
+  只作为可选弱证据，本批的模型输入仍要求调用方给栅格预览。
+
+### 改了什么（只 Spec + 红测）
+
+- 新增 `docs/specs/packaging-drawing-semantics.md`（443 行），契约 A–K：
+  - **A 模块与接口**：`tech_app/backend/services/packaging_semantics/`（10 个文件）；
+    冻结 `capability/analyze/analyze_conversion/load_semantics/list_semantics/field_candidates/
+    apply_to_requirement/summarize/migrate`；`persistence.py` 是唯一写盘入口，
+    包级接口一律转调它（红测在 persistence 层注入内存实现）。
+  - **B 语义文档**：`semantics_version/semantics_id/semantics_hash/source/layers/roles_summary/
+    outline/dimensions/texts/box_candidates/fields/unresolved/model_assist/warnings/stats/reviewable`；
+    每个候选都要有能在输入 IR 里**回查**的 `evidence_refs`；固定排序保证哈希稳定。
+  - **C 图层规则**：`agent_knowledge/rules/packaging_layer_rules.json`（`rule_set` + `review_status`
+    + `templates`）；角色闭集 `cut/crease/half_cut/v_groove/glue_flap/print/bleed/frame/hole/unknown`，
+    `unknown` 只许由「没命中」产生；**颜色与线型的含义只能来自客户模板配置**，
+    线型命中只能是 `WEAK` 且 `role_confidence<=0.5`；`rules_version` = 文件字节 sha256 前 12 位。
+  - **D 字段来源与冲突**：origin 闭集（`confirmed_from_cad`/`inferred_from_geometry`/
+    `inferred_from_text`/`inferred_by_model`/`user_confirmed`/`conflict`/`missing`）+ status 闭集
+    （`confirmed`/`needs_confirmation`/`conflict`/`missing`）+ 上界表；**7 条铁律**：
+    未确认不写值、单位未确认不许确认绝对尺寸、模型不许覆盖 CAD、冲突不静默且阻断下游、
+    不覆盖用户确认值、文件名不是证据、缺什么就 missing；写看板**双写**
+    `field_provenance` + 既有 `field_sources`（映射回 5 值闭集，不新增取值）。
+  - **E 模型辅助**：输入必须是栅格预览（`{"bytes","media_type"}`，SVG/XML 一律按不可用）；
+    只经 `claude_client.run`；输出键闭集 + `extra="allow"` 让越权键可被记录；
+    非法 JSON → `PACKAGING_MODEL_OUTPUT_INVALID` 且确定性结果保留；模型结论恒
+    `inferred_by_model` + `needs_confirmation` + `WEAK`；不许记预览 Base64、DXF 原文、思维链。
+  - **F 只出候选**：字段白名单取自 `industry_templates.PACKAGING_SPEC`；盒型候选类型闭集；
+    `box_type` 永不 confirmed；不许调用 `packaging_match`。
+  - **G 幂等与版本**：同 IR 同规则 → 同 `semantics_id`；新图纸版本 → 新版本且旧证据仍可回看，
+    字段证据的 `ir_id/ir_hash` 必须指向产生它的那一版；`migrate()` 三分支。
+  - **H 错误码**：新增 `PACKAGING_SEMANTICS_SOURCE_MISSING`(422, 可重试) 与
+    `PACKAGING_LAYER_RULES_INVALID`(500, 不可重试)，**并入第 1 批权威闭集 18 → 20 条**。
+  - **I** 性能与安全上限；**J** 夹具与红测清单；**K** 真实样本人工金标（审查包 + golden annotation）。
+- 新增夹具 `tests/fixtures/cad_ir/`（**15 份冻结的 CAD IR 文档** + 生成脚本 `build_fixtures.py`，465 行）。
+  `ir_id`/`ir_hash` 是**不透明版本锚点**：第 4 批只透传、不重算，避免与第 3 批的规范化实现耦合。
+  小夹具验证算法、真实样本验证兼容性，两者不混。
+- 新增红测 `tests/test_packaging_semantics_red.py`（939 行 / **59 条**：A11 B5 C5 D10 E10 F4 G3 H4 I5 J2）。
+- 回填第 1 批闭集：`docs/specs/dwg-file-capability-preflight.md` §3 加两条码、计数改 **20 条**；
+  `tests/test_dwg_file_capability_preflight_red.py` 的 `ERROR_CODES` 同步。
+
+### 红测实跑（原文数字，实现前）
+
+- `tests/test_packaging_semantics_red.py` → `Ran 59 tests in 0.339s` /
+  `FAILED (failures=58, skipped=1)`。失败原因分四类：
+  51 条「缺少 `packaging_semantics/`」、3 条规则文件路径与模板校验、
+  1 条 `_STRUCTURAL_DATA_KEYS` 缺 `field_provenance`、1 条两条新码不在闭集里、
+  1 条依赖第 3 批（`cad_ir` 未实现）。唯一 skip 是 `J2`（真实基线未人工复核）。
+- `tests/test_dwg_file_capability_preflight_red.py` → `Ran 29 tests in 1.840s` / `FAILED (failures=1)`
+  （唯一红 = 两条新码未落地；`DWG_CONVERTER_BINARY_UNUSABLE` 已被实现方补上，不再红）。
+- 夹具自检：`build_fixtures.py --check` → 退出码 **0**（15 份全部是合法 CAD IR 文档、证据可回查）；
+  `tests/fixtures/dxf/build_fixtures.py --check` → 退出码 **0**。
+- 顺带核实：**前两批修复的红测已全绿** —— `tests/test_dwg_conversion_quality_repair_red.py`
+  → `Ran 28 tests in 13.762s` / `OK`（`## 177` 落地时为 27 红）；`test_dwg_conversion_adapter_red.py`
+  → `Ran 42 tests in 2.524s` / `OK (skipped=1)`。
+- 全量 `./open-claude/.venv/bin/python /tmp/run_pkg.py 1` → `TOTAL ran=3230 failures=124 errors=1
+  skipped=5`。对比 `## 177` 的 `3171/93/1/4`：**ran +59（正是本批新增 59 条）、failures +31**
+  = 本批新红 58 − 前两批修复转绿 27 + 第 1 批换码后的 1（净 0）… 逐文件核对后差额全部来自
+  本批与已转绿项，**零意外新增失败**；skipped +1 = `J2`。
+
+### 能力声明（唯一口径）
+
+第 4 批**未实现**（规格与红测就绪）；第 3 批 CAD IR **未落地**；`dwg_supported` 仍恒 `false`。
+本条**不得**被读成「已支持 DWG」或「已完成包装语义」。
+
+### 剩余与风险
+
+- 第 3 批（`cad_ir/`）仍在并行实现中；本批主体验（A–I 组）用冻结 IR 夹具，**不依赖**第 3 批进度，
+  只有 `H1`/`J1` 明确标注为顺序依赖。
+- `tech_app/agent_knowledge/rules/packaging_layer_rules.json` 尚未交付（`B4` 会红）；
+  该文件的颜色/线型表必须为空，否则 `B3/B4` 会红。
+- 真实样本 golden annotation 必须**人工复核**后再写，不许测试作者编造尺寸；
+  `round_outline`/`hole_plate` 这类夹具是测试用假数据，不得读成真实样本尺寸。
+- 并行的实现方正在改同一批文件（`main.py`、`file_preflight.py`、`cad_converter/`、
+  `dxf_inspect.py`、`tech-task.js/html` 等）；本条只动 Spec + 红测 + 本 changelog。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。
+
+## 179. DWG 第 1/2 批修复实现：转换器配置、质量门槛与转换状态（9-20，Codex）
+
+> 编号说明：并行的 DWG 第 4 批会话先占了 `## 178`，本条顺延为 `## 179`，两条互不重复。
+
+Spec 与红测见 `## 177`。本条把修复真正落地：`test_dwg_conversion_quality_repair_red.py`
+从 `Ran 28 tests / FAILED (failures=3, errors=17)`（20 红）变成 `Ran 28 tests / OK`，
+第 1 批闭集红随之回到 `OK`，全量 `failures` **93 → 65**（28 条修复红全部转绿，零意外新增）。
+
+### 实现（逐条对 Spec 契约）
+
+- **契约 A 配置**（`cad_converter/service.py`）：`DWG_CONVERTER_PROVIDER / BINARY / VERSION /
+  PREVIEW_BINARY` 四个配置项落地；旧名 `CAD_CONVERTER*` 继续可用、`DWG_CONVERTER_*` 优先，两者
+  冲突时写一条 `converter_config_shadowed` 告警（进 `capability().warnings` 与 manifest）。
+  `capability()` 新增 `provider / binary / converter_version / expected_version / version_ok /
+  argv_verified / preview_available`（原有字段一个不删，`dwg_supported` 仍恒 `false`）；二进制
+  不存在/不可执行/是解释器/版本不符时 **不抛异常**，只回 `available=false` +
+  `DWG_CONVERTER_BINARY_UNUSABLE` + 配置现场；`convert_drawing()` 才 `raise`，`detected` 带
+  `provider / binary / expected_version / actual_version`。显式绝对路径不经 `PATH`；`sh / bash /
+  zsh / python* / env` 当二进制一律拒绝；配置了 `libredwg` 但二进制不可用**绝不回退 fake**。
+- **契约 B 驱动 argv**（`cad_converter/adapters/local_cli.py`）：按驱动分派
+  `dwg2dxf -y -o <out.dxf> <src>` 与 `dwgread -O DXF -o <out.dxf> <src>`（已按 0.14 实测，
+  `argv_verified=true`），ODA 六参数形状 `argv_verified=false` 且文案不说「已验证」；预览用
+  `dwg2SVG --mspace <src>`，该工具没有 `-o`，由适配器把 **stdout 落盘**成 `converted.svg` 并校验
+  非空且含 `<svg`（SVG 只作页面预览，不当图片送视觉模型）。
+- **契约 C 质量门槛**：新增 `tech_app/backend/services/dxf_inspect.py`（放在转换包**之外**——第 2 批
+  g2 护栏不许包内出现 `ezdxf`），优先真解析（`verified=true`，计数是模型空间顶层实体、图层表条目
+  数）；解析器不可用时退化为字节级结构检查并置 `quality.verified=false`，绝不假装验过。编排层按
+  `exit_code → non_empty → structure → entities → layers` 五道门槛放行，任一条不过即
+  `DWG_CONVERTER_OUTPUT_INVALID`（退出码 0 不再等于成功）。manifest 新增 `quality`（12 键 +
+  `checks`，失败时保留已跑过的 check 与 `problem`）。
+- **契约 D 诊断与状态**：从 stdout/stderr 逐行统计 warning/error（`Warning` / `warning:` /
+  `ERROR` / `error:` 全部覆盖），归一化成模板（`0x…`→`0xN`、4 位以上数字→`N`、只留严重性 + 前 3
+  个词）后最多 20 条，超出置 `warning_codes_truncated=true`，而 `warning_count` 始终是完整条数；
+  manifest 只放 `diagnostics_bytes` + `diagnostics_sha256`，**stderr 原文、绝对路径、堆栈一律不
+  入库**（模板只留签名，回带报文正文即等于把原文写进 manifest）。状态闭集 `ok /
+  success_with_warnings / failed`，`degraded = warning_count or error_count`；只有 `ok` 才允许
+  「无损/lossless/完全一致」字样——实现里根本不用这三个词，有损时如实写「报告了 N 条警告、M 条
+  错误」。预览工具的 stdout 是 SVG 产物，不算诊断，只收它的 stderr。
+- **契约 E 错误码**：`DWG_CONVERTER_BINARY_UNUSABLE`（500、不可重试）进
+  `file_preflight.STABLE_ERROR_CODES`，既有码的数值与文案一字未改。
+- **审计**：`dwg.convert*` 追加 `provider` / `binary`（只记 basename）/ `converter_version` /
+  `status` / `warning_count` / `error_count` / `quality.entity_count` / `quality.layer_count`。
+- **冒烟**（`tools/dwg_conversion_smoke.py`）：除 DXF/预览产物外，新增状态闭集、`quality.verified`、
+  `entity_count / layer_count` 检查，结论从「A 层通过」变成「**A+B 通过**」时把质量门槛一并说清。
+- **前端**（`tech-task.js`，缓存戳 `techtask4 → techtask5`）：能力文案区分「未安装」与「已配置但
+  二进制不可用（缺失 / 不可执行 / 版本不符）」，仍从 `/api/capabilities/cad-converter` 读，
+  不写死「已安装」，也不把未转换的 DWG 说成「解析完成」。
+
+### 一处跨批的追加（请 owner 拍板）
+
+`docs/specs/dwg-file-capability-preflight.md` §3 的权威闭集在本轮被**并行的 DWG 第 4 批**
+（`packaging-drawing-semantics.md`）从 18 条扩到 **20 条**，第 1 批红测同步断言这两条。为了让
+「本表 = 权威闭集」继续成立，`file_preflight.STABLE_ERROR_CODES` **只追加**了两条**登记项**：
+
+- `PACKAGING_SEMANTICS_SOURCE_MISSING`（422 / 可重试）、`PACKAGING_LAYER_RULES_INVALID`
+  （500 / 不可重试），数值与文案**照抄 Spec 表**；
+
+既有 18 条的数值与文案零改动，第 4 批「谁在什么条件下抛这两条」仍是第 4 批的实现范围，本条不碰。
+
+### 验收（实跑原文）
+
+- `tests/test_dwg_conversion_quality_repair_red.py` → `Ran 28 tests in 12.368s` / `OK`
+  （E 组两条真实 DWG 用例**真跑**，未 skip）。
+- `tests/test_dwg_file_capability_preflight_red.py` → `Ran 29 tests in 1.655s` / `OK`。
+- `tests/test_dwg_conversion_adapter_red.py` → `Ran 42 tests in 2.453s` / `OK (skipped=1)`
+  （skip 的是 `H1`：它用 `CAD_CONVERTER=fake` 的基线环境，属既有约定，不是回归）。
+- `tests/test_dxf_cad_ir_red.py` → `Ran 45 tests in 0.389s` / `FAILED (failures=42, skipped=1)`：
+  第 3 批（CAD IR）尚未实现，红全部落在 `cad_ir` 缺失上，与本条无关。
+- `tests/fixtures/dxf/build_fixtures.py --check` → 退出码 **0**（22 个夹具 + `broken.dxf` 预期失败）。
+- `python tech_app/tools/dwg_conversion_smoke.py` → `B 层通过：两份样本都转出了非空 DXF 与合法
+  预览，且质量门槛（结构/实体/图层）全过。` / `结论：A+B 通过`；`DWG_CONVERTER_PROVIDER=none`
+  时如实回到 `SKIP（未安装真实转换器）：A 层已验收 / B 层未验收`。
+- 全量 `./open-claude/.venv/bin/python /tmp/run_pkg.py 1` →
+  `TOTAL ran=3230 failures=122 errors=1 skipped=5`；按文件拆分：
+  `packaging_semantics_red 57`（**并行第 4 批新红，非本条**）、`dxf_cad_ir_red 42`（第 3 批未实现）、
+  `process_row_running_info_and_fold_red 14`、`packaging_cost_engine_red 3`、
+  `tech_model_call_row_merged_and_summary_detail_red 2`、`packaging_cost_rule_snapshot_red 2`
+  （1 F + 1 E）、`packaging_cost_rule_routing_red 1`、`packaging_cost_minimum_charge_red 1`、
+  `cpq_eval_ci_contract 1`。**扣掉并行第 4 批的 57 条即 65 条既有失败，与 `## 177` 基线的
+  `93 - 28 = 65` 完全一致，零意外新增。**
+- `python -m py_compile` 覆盖 `cad_converter/service.py`、`adapters/local_cli.py`、
+  `services/dxf_inspect.py`、`services/file_preflight.py`、`tools/dwg_conversion_smoke.py`；
+  `node --check tech_app/frontend/tech-task.js`；`git diff --check` 干净。
+
+### 两份真实 DWG 的实测输出（本机 LibreDWG 0.14）
+
+`DWG_CONVERTER_PROVIDER=libredwg`、`DWG_CONVERTER_BINARY=/opt/homebrew/bin/dwg2dxf`、
+`DWG_CONVERTER_VERSION=0.14`：
+
+| 样本 | 源 | 源 sha256（前 16） | status | warning | error | DXF | 预览 | quality |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | 686,195 B | `0991c8b0a9646d1f` | `success_with_warnings` | **1520** | **0** | 3,826,412 B | 2,031,603 B SVG | `verified=true` / 6711 实体 / 8 图层 / AC1027 |
+| `圆盘盒.dwg` | 889,062 B | `4c70ce7b3774c2a1` | `success_with_warnings` | 252 | **3** | 4,088,695 B | 1,861,437 B SVG | `verified=true` / 3457 实体 / 32 图层 / AC1027 |
+
+- 圆盘盒的 3 条错误实测为 `bit_read_BD` ×2 + `bit_read_BL` ×1（与 Spec §1.2 一致）；
+  酒盒 0 条错误、1520 条警告，模板前三类为 `Warning: Object handle…`(850) /
+  `Warning: Unstable Class…`(351) / `Warning: Unknown flag…`(308)。
+- `diagnostics_bytes`：酒盒 126,413 B、圆盘盒 24,693 B（只含转换器与预览的 stderr + 转换器
+  stdout；预览的 SVG stdout 不计入诊断），`diagnostics_sha256` 均为 64 位十六进制。
+- 审计实跑一条：
+  `{"provider":"libredwg","binary":"dwg2dxf","converter_version":"0.14","status":"success_with_warnings","warning_count":1520,"error_count":0,"quality.entity_count":6711,"quality.layer_count":8}`。
+
+### 能力声明（唯一口径）
+
+**A+B 通过**（本机装了 LibreDWG 0.14 才有 B 层）。但按第 6 批门禁，`capability().dwg_supported`
+**仍恒为 `false`**、`support_claim` 只到 `conversion_available`——「能转换」不等于「支持 DWG」。
+
+### 剩余与风险
+
+- **已知文案缺口（不在本批范围，转给第 6 批）**：转换器装好后，
+  `file_preflight.vision_gate_error` 与 `vision._attachment_blocks` 仍写死「当前环境尚未安装
+  CAD 转换服务」。第 6 批把转换服务真正接进解析链路时应改成能力感知的文案；本批**不动**这两处
+  （一是跨批行为，二是第 1 批既有码的文案不许改）。已核对 `converter_available` 目前只出现在
+  `vision.py:234` 的 manifest 字段里、没有任何行为分支，所以本批**没有**把第 6 批的转换行为偷带进解析链路。
+- `quality.verified=true` 依赖 `ezdxf`（**未进 `requirements.txt`**，属第 3 批依赖，本机 venv 里
+  已有 1.4.4）。34 服务器上若没有 `ezdxf`，质量门槛会退化成字节级检查并如实标
+  `verified=false`，不会假装验过——**要让生产也拿到 `verified=true`，得先落第 3 批的依赖**。
+- LibreDWG 是 **GPL-3.0-or-later**，商用/分发仍需法务拍板；本机装的是 Homebrew 版，
+  「开发者机器上能转」不等于「生产可依赖」（服务器稳定别名
+  `/home/data/cpq-tools/current/bin/dwg2dxf` 本轮没有连过、没有改过配置、没有重启服务）。
+- 转换本身有损：两份样本都不是 `ok`，下游（第 3 批 CAD IR）必须带
+  `conversion_status / warning_count / error_count` 与 `crosscheck`。
+- 修复第 2～4 批（规则路由 / 快照固化 / 最低收费申报 / 逐列证据）与 DWG 第 3/4 批仍在并行推进，
+  本条只覆盖「DWG 前两批修复」。
+- 本条**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  两份真实 DWG 与 `裕同包装项目-待开发/` 只读、未纳管。工作区里同时存在**并行会话**新建的
+  `packaging-drawing-semantics` 与 `packaging_semantics_red`（第 4 批），提交前请一并确认归属。
+
+## 180. DWG 第 4 批实现：包装图纸语义、刀线压痕线与需求字段证据（9-20，Codex）
+
+Spec 与红测见 `## 178`，本条把实现落地。红测
+`tests/test_packaging_semantics_red.py`：实现前 `Ran 59 tests / FAILED (failures=57, skipped=1)`
+（J2 真实基线 skip），实现后 `Ran 59 tests / FAILED (failures=2, errors=1, skipped=1)`——
+只剩 3 条**非本批可控**项，逐条见下方「未转绿的三条」，**不是实现缺口**。全量
+`python /tmp/run_pkg.py 1`：`TOTAL ran=3230 failures=67 errors=2 skipped=5`，其中本批只占 3 条，
+其余 66 条与第 3 批（`cad_ir` 未落地）、第 7 批最低收费、既有前端行型等历史失败逐条对得上。
+
+### 新增文件
+
+- `tech_app/backend/services/packaging_semantics/`（9 模块）：
+  `__init__.py`（冻结接口） / `model.py`（枚举闭集、置信度上界、规范哈希、模型 schema） /
+  `rules.py`（图层规则读取与校验） / `roles.py`（图层→角色） /
+  `geometry_semantics.py`（轮廓/出血/开窗/孔位/拼版候选） / `fields.py`（长宽高、材料工艺文字、盒型候选） /
+  `provenance.py`（字段来源与写看板） / `model_assist.py`（唯一模型缝） /
+  `persistence.py`（唯一落盘入口，doc key `packaging_semantics`）。
+- `tech_app/agent_knowledge/rules/packaging_layer_rules.json`：9 条名称规则、`colors` /
+  `line_types` **默认空**（颜色与线型的含义只能来自客户模板）。
+- `tech_app/tools/packaging_semantics_review_pack.py`：人工审查包（`report.md` + `summary.json`，
+  九节），纯本地、`use_model=False`、不自动生成金标。
+
+### 既有文件（只加列/加表项）
+
+- `tech_app/backend/storage/da_repo.py`：`_STRUCTURAL_DATA_KEYS` 增加 `field_provenance`
+  （与 `field_sources` 同理，属页面状态，混进字段行会多出一批同名业务字段）。
+
+### 逐条对契约
+
+- **契约 A/B 接口与结构**：`SEMANTICS_VERSION = "packaging-semantics/1"`；`analyze()` 纯函数
+  （不落盘、不调模型）；`persistence.py` 是唯一写盘入口，包级 `load_semantics` /
+  `list_semantics` / `apply_to_requirement` 一律转调（红测在 persistence 层打桩即生效）；
+  结构含 16 个必需键、`stats` 恰好 8 键，`layers` 按 name、轮廓按 `(is_closed desc, -area,
+  outline_id)`、`fields` 按 key、`unresolved` 按 `(field, reason)`、`warnings` 按 `(code, message)`
+  排序；每个候选/字段的 `evidence_refs` 都在输入 CAD IR 的 `evidence` 里回查得到（A8 逐条过）。
+  `source` 只透传 `ir_id / ir_hash / ir_version / drawing_version`，**不重算**。
+- **契约 C 图层规则**：默认模板无颜色表、无线型表；匹配优先级 名称 → 颜色 → 线型；线型命中恒
+  `WEAK` + `role_confidence=0.5` + `role_source=line_type_weak`；未命中 `unknown` +
+  `role_confidence=0.3` + `role_source=none`；`rules_version` = 文件字节 sha256 前 12 位；
+  配置缺失 / JSON 非法 / 模板不存在 → `PACKAGING_LAYER_RULES_INVALID`，无内置兜底；请求级
+  `rules=` 注入时**不读仓库文件**。
+- **契约 D 字段与冲突**：长宽高三分支按 Spec §5.3 落地（容差内取 `declared_value`、超容差
+  `conflict` + 两条证据 + 如实 `delta`、其余几何推断 + `PACKAGING_UNIT_UNCONFIRMED`）；
+  `inner_height` 只认标注文字或模型；双写 `field_provenance` + `field_sources`（映射回既有 5 值
+  闭集，不新增取值）；未确认不写值；用户已确认只追加 `alternatives` + 警告；写入只经
+  `requirement_service.save_requirement_draft()` 且**恰好一次**。
+- **契约 E 模型辅助**：只收 `{"bytes", "media_type"}` 栅格预览（SVG/XML 零调用且不可用）；
+  只经 `claude_client.run`；`PackagingAssistResult` 用 `extra="allow"`，越权键只留键名进
+  `extra_fields_dropped`；dict 与 pydantic 两种返回都能吃；异常/非法 JSON →
+  `PACKAGING_MODEL_OUTPUT_INVALID` 且确定性结果原样保留；模型结论恒
+  `inferred_by_model` + `needs_confirmation` + `WEAK`，同字段已有 CAD 证据只进 `alternatives`；
+  预览 Base64、DXF 原文、思维链不入库不入响应。
+- **契约 F/G**：只出候选——`box_type` 永不 confirmed，候选类型取自闭集，`panel` 只报
+  `panel_count / multi_up / candidates`；同输入同 `semantics_id`/`semantics_hash`，同 IR 重跑不新增
+  版本条目，新 IR 版本产生新 id 且旧版本与旧 `field_provenance` 仍可回看（`ir_id`/`ir_hash` 指向
+  产生值的那一版）；`migrate()` 三分支。
+- **契约 H/I**：两条新码已在第 1 批权威闭集里（20 条），`test_dwg_file_capability_preflight_red.py`
+  29/29 `OK`；包内不 import `vision` / `step_import` / `packaging_match`，`claude_client` 只出现在
+  `model_assist.py`；`summarize()` 不含实体明细与整份证据字典，实测 7 KB 上限内。
+- **契约 K**：`packaging_semantics_review_pack.py --help` 可跑；审查包只读输入、不调模型、不写
+  需求看板，金标必须人工写（本批**没有**生成任何 golden）。
+
+### 未转绿的三条（**不是实现缺口**）
+
+- `H1 test_h1_missing_cad_ir_uses_the_new_code` 与 `J1 test_j1_cad_ir_is_available`：硬依赖
+  DWG 第 3 批的 `tech_app/backend/services/cad_ir/`（本轮实测仍不存在，`ModuleNotFoundError`）。
+  两条都在**进入本批代码之前**就失败（H1 的 `importlib.import_module("...cad_ir")`）。
+  第 3 批落地后自动转绿，本批不代做第 3 批。
+- `A7 test_a7_analyze_writes_nothing`（ERROR）：红测自身笔误 —— 该方法写
+  `persistence = self.memory_persistence()`，而该 helper 返回 `(persistence_module, state)`
+  二元组，于是 `mock.patch.object(<tuple>, "save_semantics", ...)` 在 `__enter__` 抛
+  `AttributeError`，`self.analyze()` 根本没被调用。**断言意图已实测满足**：把 patch 打在下标
+  `[0]` 上复跑同一逻辑，得到 `model calls: 0 | save_semantics calls: 0`。红测本轮冻结不许改，
+  故如实报为红测缺陷。
+
+### 追加自检（红测之外，2026-09-20）
+
+红测只覆盖 15 份夹具里的少量断言；本轮另跑了三层自检（脚本在 `/tmp`，未入库）：
+
+- **全夹具不变量扫描**（15/15 通过）：证据引用全部可在输入 IR 的 `evidence` 回查、规范排序、
+  `stats` 与内容一致、两次调用同哈希、**打乱 entities/layers/轮廓顺序后哈希不变**、
+  **改文件名后 `fields`/`box_candidates`/哈希不变**、闭集校验（origin/status/evidence_level/盒型）、
+  `box_type` 永不 confirmed、`summarize()` < 8000 B 且无实体明细、栅格预览恰好 1 次模型调用 /
+  SVG 0 次、禁用词不出现。
+- **看板写入扫描**（20/20 通过）：写入是增量的（报价溯源键 `source`/`source_task_id`、
+  `customer_name`、未涉及字段与未涉及来源逐字保留）、重复应用不改值与来源、
+  `save_requirement_draft` 恰好 1 次、需求单不存在时明确报错、未确认字段只进 provenance、
+  `field_provenance` 的 `ir_hash` 指向产生值的那版、用户确认值不被覆盖。
+- **H1 反向验证**：用内存里的假 `cad_ir`（`load_ir → None`）跑 `analyze_conversion`，实测抛出
+  `PACKAGING_SEMANTICS_SOURCE_MISSING / 422 / retryable=True`，与 H1 期望逐字一致；给 `ir=` 时
+  `load_ir` 调用次数 0。→ H1/J1 未转绿的**唯一**原因是第 3 批模块不存在，不是本批代码路径问题。
+- **畸形输入扫描**（19/19 通过）：把上游 CAD IR 的计数字段弄脏（`repeated_groups[].count="两"`、
+  `layers[].entity_count=None` / 字符串 / `NaN` / `±Inf`）后再跑 `analyze()`，此前会从
+  `geometry_semantics._panel()` 的 `int(...)` 冒泡 `ValueError`。本轮给
+  `geometry_semantics.py` 与 `roles.py` 各加一个 `_int_of()`（脏值/非有限值一律归 0），
+  替换全部 7 处裸 `int(...)`；`analyze()` 现在对畸形计数只做降级（拼版候选退化为
+  `panel_count=1`、图层 `entity_count=0`），不再中断整条链。此项红测未覆盖，属主动加固。
+
+### 剩余与风险
+
+- 真实样本输出**本批拿不到**：语义层的输入是第 3 批的 CAD IR，`cad_ir` 未落地 → 无法对
+  `酒盒.dwg` / `圆盘盒.dwg` 产出「图层角色统计 / 轮廓孔位候选 / 字段候选与未确认项」，`J2`
+  按 Spec §11 保持 `skipTest`。**不编造任何尺寸或候选**。
+- 模型缝按 Spec §6 固定在 `claude_client.run`（红测据此计数）；本机生效模型是 qwen 兼容路由，
+  路由/方言翻译走 `llm_client`，但 `run` 出口仍是 `claude_client`——`use_model` 默认 `False`，
+  等第 5 批接会话时再决定是否要按 provider 分派。
+- `rules_path_kind` 在请求级注入时取 `inline`（Spec §3 只举了 `default|override` 两个值），
+  这是新增的可观测取值，不影响既有两条。
+- 图层角色置信度用规则自带值（Spec §3 示例 CUT=0.9），只做 [0,1] 收敛；这与字段的
+  「origin 置信度上界表」不是同一张表，别混读。
+- 本批**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  未装任何新依赖（不引 shapely / cairosvg / PIL / dxfgrabber）；两份真实 DWG 与
+  `裕同包装项目-待开发/` 只读、未纳管。工作区同时存在并行会话的第 3 批产物
+  （`cad_converter/`、`dxf_inspect.py`、`tests/test_dxf_cad_ir_red.py` 等），提交前请一并确认归属。
+
+## 181. DWG 支持第 5 批「Agent 会话、右侧看板与包装业务流程贯通」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+第 3 批（CAD IR）仍未落地（实测 `tech_app/backend/services/cad_ir/` 不存在），第 4 批（包装语义）
+已由实现方落地（见 `## 180`）。本条把「上传 → 解析会话 → 右侧需求看板 → 待确认 → 盒型匹配 →
+包装 BOM → 工艺路线 → 成本测算 → 报价草稿」这条贯通链的规格与验收红测冻结下来，供实现方落地。
+**本条不写生产实现。**
+
+### 现状取证（决定这份规格写什么）
+
+- 全仓没有 `tech_app/backend/services/packaging_drawing_flow*`：没有领域步骤链，会话里看不出
+  "现在轮到哪一步"。
+- `/agent/event`（`main.py:2498`）只做"入队 + 幂等"，没有领域步骤语义；`main.py` 里没有
+  `/drawing-flow` 路由（红测 `G28` 的失败原文就是这个）。
+- 门禁基本只有"project exists"：`grep -rn "minimum_charge_policy" tech_app/backend/` 只命中
+  `packaging_cost.py` 的读取与标注，**没有任何一处用它拦下游**。
+- `grep -rn "source_versions\|requirement_snapshot_version" tech_app/backend/` **零命中** ——
+  盒型 / BOM / 路线 / 成本 / 报价之间没有版本六元组。
+- 图纸维度的 stale 不存在：`packaging_match.load_box_match` 与 `packaging_route._stale_reasons`
+  都只比需求字段。
+- 复用而不新增的既有契约：Tool List 卡片（`docs/specs/quote-tech-unified-tool-list-and-conversation.md`）、
+  用户气泡（`docs/specs/tech-agent-echo-bubble-and-single-exec-card.md`）、`SESSION_WRITE_ROLES`、
+  `merge_field_sources`、`invalidate_confirmations`、`package_access` 角色表、`packaging_*` 既有 stale。
+
+### 改了什么（只 Spec + 红测）
+
+- 新增 `docs/specs/dwg-semantics-agent-flow.md`（796 行，契约 A–K）：
+  - **A 模块与接口**：`tech_app/backend/services/packaging_drawing_flow/`（`__init__`/`model`/
+    `steps`/`gates`/`anchor`/`persistence`）；冻结 `capability/steps/run_id_for/start/run_step/
+    run_flow/flow_state/gates/require_gate/inheritance/current_anchor/requirement_snapshot_version/
+    stale_view/mark_downstream_stale/clear_downstream_stale/summarize/migrate` + `DrawingFlowError`；
+    `persistence.py` 是唯一写盘入口，三个新文档位全部进 `store.PARSE_STAGE_DOCS`。
+  - **B 七步闭集**：`file_preflight → dwg_convert → cad_ir_parse → packaging_semantics →
+    field_write → pending_confirm → downstream_prepare`；状态闭集
+    `pending/running/completed/failed/blocked/unavailable/skipped`；没跑过的步骤也必须以
+    `pending` 出现在 `flow_state["steps"]` 里（依赖缺失时后续步骤保持 `pending`，不许跳号）。
+  - **C 会话与看板**：**不新增 kind** —— 只用既有 `user` / `task` / `session-note`；
+    `task.id = flow:<run_id>:<step_id>`；字段过程行按 `key` 就地更新、**边写边播**（不许跑完再补），
+    `board` 闭集 `written/pending/conflict/missing/preserved/skipped`；禁用词（绝对路径、`/tmp/`、
+    `data:image`、`base64`、`thinking`、`Traceback`）逐个断言。
+  - **D 门禁矩阵（核心）**：六段 `box_match/bom/route/cost/quote_draft/quote_publish`，
+    逐段 `requires` 冻结；**确认只认人工确认**（`field_sources=manual` 或 `origin=user_confirmed`），
+    `confirmed_from_cad` 只写看板、不解锁下游；`blocking[].code` 十值闭集，每段的 blocking
+    计算方式逐格写死；`quote_draft` 恒 `open`（缺口随包传递）；被拦抛 `PACKAGING_GATE_BLOCKED`。
+  - **E 版本继承与 stale（核心）**：六元组
+    `source_drawing_version/source_ir_version/requirement_snapshot_version/confirmed_by/
+    confirmed_at/unresolved_gaps` 逐段携带；`stage_chain` 盒型→BOM→路线→成本；
+    `reqsnap/1:` 快照排除 `field_sources`/`field_provenance`/`history`/时间戳；
+    stale 只标不覆盖正文（不许动 `pricing` 与已发布报告）。
+  - **F/H 重跑与错误码**：同附件重跑复用 run（`run_step(retry_of=…)` 成功后继续跑完剩余
+    `pending` 步）；错误码闭集 20 → 22（新增 `PACKAGING_GATE_BLOCKED` 409/可重试、
+    `PACKAGING_FLOW_DEPENDENCY_MISSING` 500/不可重试）。
+  - **G 权限**：读 `GET /drawing-flow` 只要登录 + 项目可读；写 `POST /drawing-flow/run` 走
+    `SESSION_WRITE_ROLES`；Agent 对话仍走 `WRITE_ROLES`（不放宽）；本批**不新增**任何颜色契约。
+- 新增 `tests/test_packaging_drawing_flow_red.py`（1538 行，54 条，真仓库 54 红）：
+  `A`(12) 步骤链与安全、`B`(7) 看板同步、`C`(9) 门禁与版本链条、`D`(7) 锚点与 stale、
+  `E`(5) 重跑重试、`F`(4) 恢复与历史、`G`(3) 权限、`H`(4) 不新增第二套前端契约、`I`(3) 依赖现状。
+  自带 `FakeConverter`/`FakeCadIr`/`FakeSemantics`/`FakeEngines`（与真实模块同名同参），
+  经 `run_flow(..., deps={...})` 注入；存储用真 `store` + 临时目录上的
+  `JsonMetaBackend`/`LocalBlobBackend`（不碰真实运行数据）。
+
+### 依赖隔离（本批最重要的一条纪律）
+
+- 除 `I` 组外，全部红测通过 `deps={...}` 注入 fake，因此**红全部落在第 5 批自己的缺口**
+  （服务不存在 / 门禁不存在 / 版本继承不存在 / stale 不传播），不会因为第 3、4 批没落地而误红。
+- `I3` 是唯一按设计会因依赖未落地而红的：它核对第 3/4 批是否导出冻结签名的函数，失败文案明确
+  写明"本条的失败不是第 5 批的缺口"。**第 5 批验收只看前 53 条。**
+
+### 红测自洽性验证（本轮新增做法）
+
+红测写完先在 `/tmp` 的一次性 stub 上跑绿一次，证明断言彼此不矛盾、可满足（stub 不入库、不作为
+实现）：实跑 `Ran 54 tests / failures=1`，唯一红的就是 `I3`。这轮抓出并修掉 **6 个红测自身的缺陷**
+（`A5` falsy-0 把 `index=0` 判成 `-1`、`A10` 把包内相对 import 误判为违规、`G18` 调了不存在的方法、
+`FakeEngines.route_versions` 属性把自己同名方法覆盖掉、`D14` 断言与既有 `store.replace_source()`
+→`invalidate_confirmations()` 行为冲突而不可能成立、`E23` 两条断言自相矛盾），改完复核真仓库仍 54 红。
+
+### 验收实跑原文数字（2026-09-20）
+
+- 本批红测：`Ran 54 tests ... FAILED (failures=54)` —— 53 条"缺少 `packaging_drawing_flow/`"
+  + 1 条"`main.py` 里没有以 `/drawing-flow` 结尾的路由"。
+- 依赖现状（不回归）：`test_packaging_semantics_red` `Ran 59 / failures=2, errors=1, skipped=1`
+  （第 4 批已落地）；`test_dxf_cad_ir_red` `Ran 45 / failures=42, skipped=1`（第 3 批未落地）。
+- 全量回归：`TOTAL ran=3284 failures=121 errors=2 skipped=5`；本轮基线为
+  `ran=3230 failures=67 errors=2 skipped=5`，差值恰好 +54（本批新增文件），其余文件未回归。
+
+### 能力声明（不许含糊）
+
+- 本批**只交付规格与红测**。DWG 仍**未受支持**：连"编排能力完成"也还不能声明 —— 编排代码尚未实现。
+- 第 4 批已落地但第 3 批未落地，第 5 批的验收一律用 fake 隔离，**不把依赖状态算成本批验收条件**。
+- 两份真实 DWG（`裕同包装项目-待开发/酒盒.dwg`、`圆盘盒.dwg`）本轮只读、未入库，
+  文件名不得作为证据。
+
+### 剩余与风险
+
+- 第 5 批红测只证明"契约可满足"，不证明业务正确；落地后仍需第 6 批用两份真实 DWG 做 E2E。
+- `minimum_charge_policy` 仍 `pending`（`tech_app/agent_knowledge/rules/packaging_cost_rules.json`）：
+  本批只要求"未裁决时不许发布正式报价"，**未改任何费率或口径**。
+- 工作区同时存在并行会话的第 3 批产物（`cad_converter/`、`dxf_inspect.py`、`tests/test_dxf_cad_ir_red.py`）
+  与第 4 批产物（`packaging_semantics/`、图层规则 JSON），提交前请一并确认归属。
+- 本批**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  未装任何新依赖。

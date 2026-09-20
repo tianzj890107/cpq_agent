@@ -72,6 +72,9 @@ _STRUCTURAL_DATA_KEYS = frozenset({
     # 字段来源标记（包装第 2 批）：{field_key: source}，属页面状态而非业务字段，
     # 不能进 src_requirement_field，否则会多出一批名为 inner_length 之类的字段行。
     "field_sources",
+    # 字段证据留痕（DWG 第 4 批 Spec §5.4）：{field_key: {origin/status/confidence/...}}，
+    # 与 field_sources 一样是页面状态；混进字段行会让需求单多出一批同名业务字段。
+    "field_provenance",
 })
 
 

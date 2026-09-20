@@ -1,0 +1,221 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 2,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 2
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0,
+        20,
+        100,
+        20
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:30",
+      "evidence_ref": "ev:E:30",
+      "handle": "30",
+      "layer": "LAYER_A",
+      "length": 100.0,
+      "length_mm": 100.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": 6000.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        100,
+        60
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:31",
+      "evidence_ref": "ev:E:31",
+      "handle": "31",
+      "layer": "LAYER_B",
+      "length": 320.0,
+      "length_mm": 320.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    }
+  ],
+  "evidence": {
+    "ev:E:30": {
+      "handle": "30",
+      "kind": "entity",
+      "layer": "LAYER_A",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:31": {
+      "handle": "31",
+      "kind": "entity",
+      "layer": "LAYER_B",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:LAYER_A": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "LAYER_A",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:LAYER_B": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "LAYER_B",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 6000.0,
+        "area_mm2": 6000.0,
+        "bbox": [
+          0,
+          0,
+          100,
+          60
+        ],
+        "entity_id": "ent:model:31",
+        "evidence_ref": "ev:E:31",
+        "layer": "LAYER_B",
+        "length": 320.0,
+        "length_mm": 320.0,
+        "outline_id": "out:model:31"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          0,
+          20,
+          100,
+          20
+        ],
+        "entity_id": "ent:model:30",
+        "evidence_ref": "ev:E:30",
+        "layer": "LAYER_A",
+        "length": 100.0,
+        "length_mm": 100.0,
+        "outline_id": "out:model:30"
+      }
+    ],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "8a1c211f1da62f896ef12e92757f15b949a9fddd6ae7511797ad064028eb90ad",
+  "ir_id": "893aa5a6f3aa2356",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:LAYER_A"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "DASHED",
+      "name": "LAYER_A",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:LAYER_B"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "LAYER_B",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "dd7020f916fa2d28",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "56418e6f55cd027fd5eec51a9d4f31df7fd59ba302f390e3774d9b7d22d3427b",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "89466239c3f0d6bab0d3e3f5320b4661d930aaaef3ba751c9ac3827d68cee103"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 2,
+    "layer_total": 2,
+    "open_outline_total": 1,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 0
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

@@ -79,6 +79,7 @@ from .services import (
     packaging_route,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
+    cad_converter,
     step_import,
     summary as summary_svc, tasks, timeline, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
@@ -882,6 +883,8 @@ def health():
             text["provider"]: bool(text["api_key"]),
         },
         "cadquery_available": geometry.CADQUERY_AVAILABLE,
+        # DWG 转换能力以服务端为准（Spec §7）：装了没有、能不能转，前端不许写死。
+        "cad_converter": cad_converter.capability(),
         "auth_enabled": (AUTH_ENABLED and not AUTH_AUTO_ADMIN) or CPQ_SSO_ENABLED,
         # /api/health 是免登录接口：前端未登录时也要能问出"该跳哪个登录入口"。
         # session-guard.js 靠它决定不要跳本地 auth.html。
@@ -894,6 +897,16 @@ def _llm_settings_rights(user: dict) -> dict:
     role = (user or {}).get("role")
     return {"can_edit": role in auth.LLM_SETTINGS_ROLES,
             "can_edit_secrets": role in auth.ADMIN_ROLES}
+
+
+@app.get("/api/capabilities/cad-converter")
+def cad_converter_capability():
+    """DWG 转换能力查询（Spec §7）。
+
+    免登录：前端在没登录时也要能如实显示「当前环境尚未安装 DWG 转换能力」，
+    而不是留一句写死的「已安装」。返回的是**能力**，不含任何密钥或部署路径。
+    """
+    return cad_converter.capability()
 
 
 @app.get("/api/llm/settings")

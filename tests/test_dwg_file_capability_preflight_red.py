@@ -55,6 +55,14 @@ ERROR_CODES = {
     "DWG_CONVERTER_UNSAFE_PATH": (500, False),
     "FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION": (500, False),
     "DWG_PARSE_FAILED": (502, True),
+    # 以下 2 条由第 3 批「DXF 确定性解析与 CAD IR」提出，第 1 批 Spec §3 已收进同一闭集。
+    "CAD_IR_SOURCE_MISSING": (422, True),
+    "CAD_IR_ENTITY_LIMIT_EXCEEDED": (413, False),
+    # 以下 1 条由第 1/2 批修复「转换质量门槛与转换器配置」提出，第 1 批 Spec §3 已收进同一闭集。
+    "DWG_CONVERTER_BINARY_UNUSABLE": (500, False),
+    # 以下 2 条由第 4 批「包装图纸语义」提出，第 1 批 Spec §3 已收进同一闭集。
+    "PACKAGING_SEMANTICS_SOURCE_MISSING": (422, True),
+    "PACKAGING_LAYER_RULES_INVALID": (500, False),
 }
 DETECTED_FORMATS = {"dwg", "dxf", "step", "iges", "stl", "pdf", "raster_image", "text",
                     "docx", "unsupported"}

@@ -1,0 +1,207 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 2,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 2
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 2400.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        60,
+        40
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:A0",
+      "evidence_ref": "ev:E:A0",
+      "handle": "A0",
+      "layer": "CUT",
+      "length": 200.0,
+      "length_mm": 200.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": 2400.0,
+      "attributes": {},
+      "bbox": [
+        80,
+        0,
+        140,
+        40
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:A1",
+      "evidence_ref": "ev:E:A1",
+      "handle": "A1",
+      "layer": "CUT",
+      "length": 200.0,
+      "length_mm": 200.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    }
+  ],
+  "evidence": {
+    "ev:E:A0": {
+      "handle": "A0",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:A1": {
+      "handle": "A1",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 2400.0,
+        "area_mm2": 2400.0,
+        "bbox": [
+          0,
+          0,
+          60,
+          40
+        ],
+        "entity_id": "ent:model:A0",
+        "evidence_ref": "ev:E:A0",
+        "layer": "CUT",
+        "length": 200.0,
+        "length_mm": 200.0,
+        "outline_id": "out:model:A0"
+      },
+      {
+        "area": 2400.0,
+        "area_mm2": 2400.0,
+        "bbox": [
+          80,
+          0,
+          140,
+          40
+        ],
+        "entity_id": "ent:model:A1",
+        "evidence_ref": "ev:E:A1",
+        "layer": "CUT",
+        "length": 200.0,
+        "length_mm": 200.0,
+        "outline_id": "out:model:A1"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [
+      {
+        "count": 2,
+        "entity_ids": [
+          "ent:model:A0",
+          "ent:model:A1"
+        ],
+        "signature": "LWPOLYLINE:4:closed"
+      }
+    ],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "14d65e25ff462712a5653b02f5c651bc6184e4fe9c46f0e5a236961949bf3dbc",
+  "ir_id": "59b12c97cf687e62",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 2,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "bc9c3964b65c3846",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "651fe677648b9769c8fdfa91bf61c0c719cf02282690e1f607d9d7064e2dae3d",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "825057319fae2a0a297e7134a153be631b2ede9a3190aa0580eef1133fcd00cb"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 2,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 2,
+    "layer_total": 1,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 0
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

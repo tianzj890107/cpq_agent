@@ -1,0 +1,284 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 4,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 4
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 3200.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        80,
+        40
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:20",
+      "evidence_ref": "ev:E:20",
+      "handle": "20",
+      "layer": "LAYER1",
+      "length": 240.0,
+      "length_mm": 240.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0,
+        20,
+        80,
+        20
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:21",
+      "evidence_ref": "ev:E:21",
+      "handle": "21",
+      "layer": "LAYER2",
+      "length": 80.0,
+      "length_mm": 80.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        40,
+        0,
+        40,
+        40
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:22",
+      "evidence_ref": "ev:E:22",
+      "handle": "22",
+      "layer": "LAYER2",
+      "length": 40.0,
+      "length_mm": 40.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        2,
+        2,
+        11,
+        2
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:23",
+      "evidence_ref": "ev:E:23",
+      "handle": "23",
+      "layer": "LAYER3",
+      "length": 9.0,
+      "length_mm": 9.0,
+      "space": "model",
+      "type": "LINE"
+    }
+  ],
+  "evidence": {
+    "ev:E:20": {
+      "handle": "20",
+      "kind": "entity",
+      "layer": "LAYER1",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:21": {
+      "handle": "21",
+      "kind": "entity",
+      "layer": "LAYER2",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:22": {
+      "handle": "22",
+      "kind": "entity",
+      "layer": "LAYER2",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:23": {
+      "handle": "23",
+      "kind": "entity",
+      "layer": "LAYER3",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:LAYER1": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "LAYER1",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:LAYER2": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "LAYER2",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:LAYER3": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "LAYER3",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 3200.0,
+        "area_mm2": 3200.0,
+        "bbox": [
+          0,
+          0,
+          80,
+          40
+        ],
+        "entity_id": "ent:model:20",
+        "evidence_ref": "ev:E:20",
+        "layer": "LAYER1",
+        "length": 240.0,
+        "length_mm": 240.0,
+        "outline_id": "out:model:20"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "86fae544fc01a0b00e6a788ab6be4ca694ca6ff185a04aa82cf915397471f177",
+  "ir_id": "061d8fa61e202195",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 3,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:LAYER1"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "LAYER1",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 5,
+      "entity_count": 2,
+      "evidence_refs": [
+        "ev:L:LAYER2"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "LAYER2",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 1,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:LAYER3"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "LAYER3",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "dd3ffa9e950186aa",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "5e5605d9a62f83b57a27c854f5c275280fffcbe77b530209ea04a097809838f6",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "cd9d3e98800bd4ece1d3678ca2259ea66bdd04673a3108956e39006097ba7c42"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 4,
+    "layer_total": 3,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 0
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

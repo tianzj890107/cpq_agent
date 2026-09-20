@@ -134,7 +134,7 @@
       + '<h2>上传图纸，创建工艺评估需求</h2>'
       + '<p class="tt-tip">图纸是必填项 —— 2.1 的解析、零件拆分与成本测算全部由它起头。'
       + '需求正文已按报价原文预填，可以直接改。</p>'
-      + '<p class="tt-tip">' + ttDwgNote + '</p>'
+      + '<p class="tt-tip" id="ttDwgNote">' + ttDwgNote + '</p>'
       + '<div class="tt-uploads">'
       + '<label class="tt-upload">＋ 上传模型图纸'
       + '<input type="file" id="ttModel" multiple '
@@ -169,6 +169,42 @@
     // 报价原文可能很长，这里不像首页那样限 200 字：需求单本身没有这个限制。
     document.getElementById('ttNote').value = (payload.requirement_text || '').trim();
     renderFiles();
+    loadDwgCapability();
+  }
+
+  /* DWG 转换能力**以后端为准**（Spec `dwg-controlled-conversion-adapter.md` §7）：
+     装没装转换服务由服务端如实回答，前端不许写死「已安装」，也不许在未安装时显示
+     「解析完成」。探测失败就保留诚实的默认文案。 */
+  function dwgNoteFor(cap) {
+    if (cap && cap.available) {
+      var who = [cap.adapter_name, cap.converter_version].filter(Boolean).join(' ');
+      return '可上传，DWG 由已安装的 CAD 转换服务解析（' + (who || '转换器已就绪')
+        + '）；真实解析能力以服务端返回为准。';
+    }
+    if (cap && cap.stable_error_code === 'DWG_CONVERTER_BINARY_UNUSABLE') {
+      // 配置了转换器但二进制不可用（缺失/不可执行/版本不符）：这跟「没装」是两回事。
+      return '可上传，DWG 转换服务已配置但当前不可用（二进制缺失/不可执行或版本不符），'
+        + '暂时无法解析 DWG';
+    }
+    return '可上传，DWG 需 CAD 转换服务解析（当前环境未安装）';
+  }
+
+  function applyDwgCapability(cap) {
+    var note = dwgNoteFor(cap);
+    ttDwgNote = note;
+    window.CPQ_DWG_CAPABILITY_NOTE = note;
+    var noteEl = document.getElementById('ttDwgNote');
+    if (noteEl) noteEl.textContent = note;
+  }
+
+  async function loadDwgCapability() {
+    try {
+      var response = await fetch('/api/capabilities/cad-converter', {
+        headers: { Authorization: 'Bearer ' + token() },
+      });
+      if (!response.ok) return;
+      applyDwgCapability(await response.json());
+    } catch (error) { /* 探测失败：保留默认的「未安装」文案，绝不写成「已安装」 */ }
   }
 
   function addFiles(event, bucket) {

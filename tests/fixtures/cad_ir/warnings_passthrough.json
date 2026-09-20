@@ -1,0 +1,226 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 2,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 2
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 4500.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        90,
+        50
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:D0",
+      "evidence_ref": "ev:E:D0",
+      "handle": "D0",
+      "layer": "CUT",
+      "length": 280.0,
+      "length_mm": 280.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        10,
+        10
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:D1",
+      "evidence_ref": "ev:E:D1",
+      "handle": "D1",
+      "layer": "FRAME",
+      "length": null,
+      "length_mm": null,
+      "space": "model",
+      "type": "3DFACE"
+    }
+  ],
+  "evidence": {
+    "ev:E:D0": {
+      "handle": "D0",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:D1": {
+      "handle": "D1",
+      "kind": "entity",
+      "layer": "FRAME",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:FRAME": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "FRAME",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 4500.0,
+        "area_mm2": 4500.0,
+        "bbox": [
+          0,
+          0,
+          90,
+          50
+        ],
+        "entity_id": "ent:model:D0",
+        "evidence_ref": "ev:E:D0",
+        "layer": "CUT",
+        "length": 280.0,
+        "length_mm": 280.0,
+        "outline_id": "out:model:D0"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "e715930772ddd8a8cd3ea7f940f10ec36979b5d1337c96631eda2f2dd4ae1639",
+  "ir_id": "1c76e436e5b8bd65",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:FRAME"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "FRAME",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "738d78f5ca0c5b6f",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "2575e4bb0aa8a733e6b7a3ffd12848f6ff02ae50e0cf1c3f2bdbb124feade201",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "0a4e386de8ab09cb4ecf508f7eb3cb75323c19ec6f72a6c16760e5f2353678f6"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 2,
+    "layer_total": 2,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 1
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [
+    {
+      "count": 1,
+      "handles": [
+        "D1"
+      ],
+      "type": "3DFACE",
+      "warning": "不支持的实体已跳过"
+    }
+  ],
+  "warnings": [
+    {
+      "code": "conversion_degraded",
+      "evidence_refs": [],
+      "message": "上游转换有 252 条警告、3 条错误"
+    },
+    {
+      "code": "unsupported_entity",
+      "evidence_refs": [
+        "ev:E:D1"
+      ],
+      "message": "1 个 3DFACE 未解析"
+    }
+  ]
+}

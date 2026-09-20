@@ -121,10 +121,28 @@ capabilities_of(detected: dict) -> dict
 | `DWG_CONVERTER_UNSAFE_PATH` | 500 | 转换器返回了不安全的输出路径 | 否 |
 | `FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION` | 500 | 测试用转换器不允许在生产环境启用 | 否 |
 | `DWG_PARSE_FAILED` | 502 | DWG 转换成功但图纸解析失败 | 是 |
+| `CAD_IR_SOURCE_MISSING` | 422 | 项目里没有可用的 DXF 转换产物，请先重跑图纸转换 | 是 |
+| `CAD_IR_ENTITY_LIMIT_EXCEEDED` | 413 | 图纸实体数超过解析上限，请拆分图纸或提高上限后重试 | 否 |
+| `DWG_CONVERTER_BINARY_UNUSABLE` | 500 | 已配置的 DWG 转换器不可用（不存在 / 不可执行 / 版本不符） | 否 |
+| `PACKAGING_SEMANTICS_SOURCE_MISSING` | 422 | 项目里没有可用的 CAD 图纸解析结果，请先重跑图纸解析 | 是 |
+| `PACKAGING_LAYER_RULES_INVALID` | 500 | 包装图纸图层规则配置缺失或不可用，请联系系统管理员 | 否 |
 
 后 6 条（`DWG_CONVERSION_TIMEOUT` / `…OUTPUT_MISSING` / `…OUTPUT_INVALID` / `…OUTPUT_TOO_LARGE` /
 `…UNSAFE_PATH` / `FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION`）由 DWG 第 2 批「受控转换服务」提出，
 本节表即为其唯一权威来源；第 2 批的 `CONVERSION_ERROR_CODES` 必须是本表的子集且数值逐条一致。
+
+末 2 条（`CAD_IR_SOURCE_MISSING` / `CAD_IR_ENTITY_LIMIT_EXCEEDED`）由 DWG 第 3 批「DXF 确定性解析与
+统一 CAD IR」提出（见 `docs/specs/dxf-cad-ir.md` §6.1），同样并入本表闭集：第 3 批的解析器只允许
+抛本表内的码，不许自创。
+
+末条（`DWG_CONVERTER_BINARY_UNUSABLE`）由 DWG 第 1/2 批修复「转换质量门槛与转换器配置」提出
+（见 `docs/specs/dwg-conversion-quality-repair.md` §6）：配置的二进制不存在、不可执行、是
+`sh`/`bash`/`python*` 之类解释器，或实际版本与 `DWG_CONVERTER_VERSION` 不一致时抛此码，
+`detected` 必须带 `provider` / `binary` / `expected_version` / `actual_version`。
+末 2 条（`PACKAGING_SEMANTICS_SOURCE_MISSING` / `PACKAGING_LAYER_RULES_INVALID`）由 DWG 第 4 批
+「包装图纸语义」提出（见 `docs/specs/packaging-drawing-semantics.md` §9），同样并入本表闭集。
+前 15 条 + 第 2 批 6 条 + 第 3 批 2 条 + 本修复 1 条 + 第 4 批 2 条 = **20 条**，
+闭集之外一律视为实现缺陷。
 
 - 每条响应体必须含 `stable_error_code`、`message`、`detected`（预检结果）、`retryable`，
   **不得**只回自由文本异常，**不得**把第三方/模型原始报错或堆栈透传给用户。

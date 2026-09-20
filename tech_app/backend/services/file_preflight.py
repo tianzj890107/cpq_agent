@@ -90,6 +90,33 @@ STABLE_ERROR_CODES: Dict[str, Dict[str, Any]] = {
         "http_status": 500, "retryable": False,
         "message": "测试用转换器不允许在生产环境启用",
     },
+    # 以下 2 条由 DWG 第 3 批「DXF 确定性解析与统一 CAD IR」提出，Spec §3 已把它们收进
+    # **同一闭集**（同批 Spec `dxf-cad-ir.md` §6.1 只允许抛本表内的码）。本批没有解析器，
+    # 因此这两条只登记、不触发。
+    "CAD_IR_SOURCE_MISSING": {
+        "http_status": 422, "retryable": True,
+        "message": "项目里没有可用的 DXF 转换产物，请先重跑图纸转换",
+    },
+    "CAD_IR_ENTITY_LIMIT_EXCEEDED": {
+        "http_status": 413, "retryable": False,
+        "message": "图纸实体数超过解析上限，请拆分图纸或提高上限后重试",
+    },
+    # 由 DWG 前两批修复「转换质量门槛与转换器配置」提出（Spec §6）：配置的转换器不可用
+    # （不存在 / 不可执行 / 是解释器 / 版本不符）时报这一条，**不**回退到别的转换器或 fake。
+    "DWG_CONVERTER_BINARY_UNUSABLE": {
+        "http_status": 500, "retryable": False,
+        "message": "已配置的 DWG 转换器不可用（不存在 / 不可执行 / 版本不符），请检查转换器安装与配置",
+    },
+    # 由 DWG 第 4 批「包装图纸语义」提出（Spec §9），按本表「唯一权威来源」的口径并入同一闭集：
+    # 这两条由第 4 批的实现负责抛出，本表只登记；未实现前它们不会出现在任何响应里。
+    "PACKAGING_SEMANTICS_SOURCE_MISSING": {
+        "http_status": 422, "retryable": True,
+        "message": "项目里没有可用的 CAD 图纸解析结果，请先重跑图纸解析",
+    },
+    "PACKAGING_LAYER_RULES_INVALID": {
+        "http_status": 500, "retryable": False,
+        "message": "包装图纸图层规则配置缺失或不可用，请联系系统管理员",
+    },
 }
 
 # --------------------------------------------------------------------------- #
@@ -413,11 +440,29 @@ def detect_file_format(filename: str, content: Any) -> dict:
     }
 
 
+def converter_available() -> bool:
+    """本环境有没有可用的 DWG 转换适配器（DWG 第 2 批的接线点）。
+
+    默认环境（`CAD_CONVERTER=auto` 且本机没装真转换器）依旧返回 False —— 第 1 批
+    「DWG 不进视觉模型、不进 3D 入口」的门禁语义因此一字不变；`CAD_CONVERTER=none`
+    用来把「未安装」态锁死（本地 / CI）。转换层缺失或异常时也一律按未安装处理。
+    """
+    try:
+        from . import cad_converter
+        return bool(cad_converter.capability().get("available"))
+    except Exception:
+        return False
+
+
 def capabilities_of(detected: Optional[dict]) -> dict:
     """按预检结果给出本环境可用能力（Spec §2）；未知格式一律按 unsupported。"""
     detected_format = str((detected or {}).get("detected_format") or "unsupported")
-    caps = _CAPABILITIES.get(detected_format) or _CAPABILITIES["unsupported"]
-    return dict(caps)
+    caps = dict(_CAPABILITIES.get(detected_format) or _CAPABILITIES["unsupported"])
+    # `converter_required` 与 `converter_available` 是一对：需要转换器的格式，能不能
+    # 解析就取决于本环境到底装没装转换器。其余格式（视觉 / 文本 / STEP）不受影响。
+    if caps.get("converter_required"):
+        caps["converter_available"] = converter_available()
+    return caps
 
 
 def selected_pipeline(detected: Optional[dict]) -> str:

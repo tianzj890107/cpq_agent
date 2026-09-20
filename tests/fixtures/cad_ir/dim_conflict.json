@@ -1,0 +1,231 @@
+{
+  "dimensions": [
+    {
+      "confidence": 0.8,
+      "declared_value": 70.0,
+      "delta": -2.0,
+      "dim_type": "linear",
+      "entity_id": "ent:model:41",
+      "evidence_ref": "ev:D:41",
+      "layer": "DIM",
+      "measured_value": 72.0,
+      "normalized_text": "70.0",
+      "raw_text": "70.0",
+      "target_entity_ids": [
+        "ent:model:40"
+      ],
+      "tolerance": 0.5,
+      "unit": "mm"
+    }
+  ],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 2,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 2
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 3600.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        72,
+        50
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:40",
+      "evidence_ref": "ev:E:40",
+      "handle": "40",
+      "layer": "CUT",
+      "length": 244.0,
+      "length_mm": 244.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0,
+        -8,
+        72,
+        -6
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:41",
+      "evidence_ref": "ev:E:41",
+      "handle": "41",
+      "layer": "DIM",
+      "length": null,
+      "length_mm": null,
+      "space": "model",
+      "type": "DIMENSION"
+    }
+  ],
+  "evidence": {
+    "ev:D:41": {
+      "handle": "41",
+      "kind": "dimension",
+      "layer": "DIM",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:40": {
+      "handle": "40",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:41": {
+      "handle": "41",
+      "kind": "entity",
+      "layer": "DIM",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:DIM": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "DIM",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 3600.0,
+        "area_mm2": 3600.0,
+        "bbox": [
+          0,
+          0,
+          72,
+          50
+        ],
+        "entity_id": "ent:model:40",
+        "evidence_ref": "ev:E:40",
+        "layer": "CUT",
+        "length": 244.0,
+        "length_mm": 244.0,
+        "outline_id": "out:model:40"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "b5f7e6767e574e935084f8333d2ede88bca84007e0b5b31cd8117ec60186ae5d",
+  "ir_id": "fd963f1bc86e2d44",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:DIM"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "DIM",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "fe14175fdc92197d",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "c5399136d9d7dd8b74edd048ca65cb22dbab35c77b0dce979b82f55c3cb75e6f",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "8bf7da16e2f12a38c7c496406c349940d32d2e13c4710229ac5fe3269e03cb65"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 1,
+    "ellipse_total": 0,
+    "entity_total": 2,
+    "layer_total": 2,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 0,
+    "unsupported_total": 0
+  },
+  "texts": [],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

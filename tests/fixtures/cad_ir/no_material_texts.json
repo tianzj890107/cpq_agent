@@ -1,0 +1,218 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 2,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 2
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": 6000.0,
+      "attributes": {},
+      "bbox": [
+        0,
+        0,
+        100,
+        60
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:80",
+      "evidence_ref": "ev:E:80",
+      "handle": "80",
+      "layer": "CUT",
+      "length": 320.0,
+      "length_mm": 320.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        4,
+        62,
+        40,
+        66
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:81",
+      "evidence_ref": "ev:E:81",
+      "handle": "81",
+      "layer": "DIM",
+      "length": null,
+      "length_mm": null,
+      "space": "model",
+      "type": "TEXT"
+    }
+  ],
+  "evidence": {
+    "ev:E:80": {
+      "handle": "80",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:81": {
+      "handle": "81",
+      "kind": "entity",
+      "layer": "DIM",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:DIM": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "DIM",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 6000.0,
+        "area_mm2": 6000.0,
+        "bbox": [
+          0,
+          0,
+          100,
+          60
+        ],
+        "entity_id": "ent:model:80",
+        "evidence_ref": "ev:E:80",
+        "layer": "CUT",
+        "length": 320.0,
+        "length_mm": 320.0,
+        "outline_id": "out:model:80"
+      }
+    ],
+    "components": [],
+    "holes": [],
+    "open_outlines": [],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "7e223ede5e8e66bf373257df3f98f9a19330718dd14a0ad52e4b3375d4e0a307",
+  "ir_id": "d7f9bdf697e55e1c",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:DIM"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "DIM",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "cccd4639ee4e6a3b",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "564b05e5053b3adfdb9fa22a3ba1e0915196d42656772a31502530b1e174d726",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "78c24c2aabc0acf5b5ee3c70760c1e2d3b8723218634160038de08ead11033b3"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 2,
+    "layer_total": 2,
+    "open_outline_total": 0,
+    "spline_total": 0,
+    "text_total": 1,
+    "unsupported_total": 0
+  },
+  "texts": [
+    {
+      "entity_id": "ent:model:81",
+      "evidence_ref": "ev:E:81",
+      "height": 2.5,
+      "layer": "DIM",
+      "normalized_text": "100",
+      "position": [
+        4,
+        64
+      ],
+      "raw_text": "100",
+      "type": "TEXT"
+    }
+  ],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}
