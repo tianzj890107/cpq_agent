@@ -1200,3 +1200,68 @@ def decide_promotion(promo_id: int, decision: str, reviewer: str, note: str = ""
         "UPDATE ops_kb_promotion SET status = ?, reviewer = ?, review_note = ?, decided_at = ? "
         "WHERE promo_id = ?", (decision, reviewer, note, db.now(), promo_id),
     )
+
+
+# ========================================================================== #
+# 包装成本回传报价(包装第 8 批):只追加,靠 UNIQUE 裁决幂等
+# ========================================================================== #
+_PACKAGING_HANDOFF_COLUMNS = (
+    "handoff_no", "project_id", "requirement_no", "scenario_code", "version_no",
+    "industry", "engine_version", "handoff_version", "handoff_kind", "cost_profile",
+    "pricing_profile", "cost_result_version", "package_fingerprint", "package_json",
+    "has_gaps", "gap_codes_json", "gap_waiver_json", "target_quote_session_id",
+    "target_task_id", "target_business_case_id", "sent_by", "sent_at", "created_at",
+)
+
+
+def _handoff_row(row: Optional[dict]) -> Optional[dict]:
+    """把交接记录里的 JSON 列读成 list/dict;has_gaps 归一成 bool。没有行给 None。"""
+    if not row:
+        return None
+    out = dict(row)
+    out["has_gaps"] = bool(out.get("has_gaps"))
+    out["package"] = db.decode_json(out.get("package_json"), {})
+    out["gap_codes"] = db.decode_json(out.get("gap_codes_json"), [])
+    out["gap_waiver"] = db.decode_json(out.get("gap_waiver_json"), None)
+    return out
+
+
+def save_packaging_handoff(record: dict) -> str:
+    """插一条交接记录(只增不改)。
+
+    幂等由表上的 UNIQUE(project_id, requirement_no, scenario_code,
+    package_fingerprint) 裁决 —— 调用方先按指纹查过,这里只负责 INSERT,
+    绝不 UPDATE 既有行(Spec §3.1)。
+    """
+    row = {key: record.get(key) for key in _PACKAGING_HANDOFF_COLUMNS}
+    row["project_id"] = record["project_id"]
+    row["requirement_no"] = record.get("requirement_no") or ""
+    row["scenario_code"] = record.get("scenario_code") or "default"
+    row["version_no"] = int(record.get("version_no") or 1)
+    db.insert("wip_packaging_handoff", row)
+    return str(row["handoff_no"])
+
+
+def load_packaging_handoff(project_id: str, requirement_no: str = "",
+                           fingerprint: str = "") -> Optional[dict]:
+    """读最近一版交接记录(version_no 降序取第一条);没有给 None。
+
+    fingerprint 非空时只按该指纹查 —— 幂等判断用的就是这一条。
+    """
+    sql = ("SELECT * FROM wip_packaging_handoff "
+           "WHERE project_id = ? AND requirement_no = ?")
+    params: list = [project_id, requirement_no or ""]
+    if fingerprint:
+        sql += " AND package_fingerprint = ?"
+        params.append(fingerprint)
+    sql += " ORDER BY version_no DESC LIMIT 1"
+    return _handoff_row(db.query_one(sql, params))
+
+
+def packaging_handoffs(project_id: str, requirement_no: str = "") -> list[dict]:
+    """全部交接版本(按 version_no 升序);历史版本不被后续回传改写。"""
+    rows = db.query(
+        "SELECT * FROM wip_packaging_handoff "
+        "WHERE project_id = ? AND requirement_no = ? ORDER BY version_no ASC",
+        (project_id, requirement_no or ""))
+    return [_handoff_row(row) for row in rows]

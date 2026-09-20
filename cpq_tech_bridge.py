@@ -615,11 +615,18 @@ def _handoff_key(session_id: str, tech_project_id: str, handoff_kind: str,
 
 
 # 四种回传类型（Spec 5.1）：它们是**同一条**业务命令的四个 kind，不是四套实现。
+# 包装第 8 批把包装成本回传也并进同一条命令（第五个 kind）：它同样是"技术侧把结果
+# 交给报价"，只是快照与落点按包装口径走（见 packaging_snapshot / HANDOFF_KIND）。
 HANDOFF_KINDS = ("cost_to_quote", "cost_to_process", "process_to_quote",
-                 "report_to_quote")
+                 "report_to_quote", "packaging_cost_to_quote")
+# 包装成本回传的 kind（与 packaging_handoff.HANDOFF_KIND 同值；这里不 import
+# tech_app，避免报价侧反向依赖技术工艺 —— Spec §2.1）。
+PACKAGING_HANDOFF_KIND = "packaging_cost_to_quote"
 # 会推进报价第 2 步的两种：成本回传销售 / 工艺经理确认后回传销售。
 # cost_to_process 是支线（只提交给工艺经理复核），report_to_quote 只合并快照。
-_HANDOFF_ADVANCE_KINDS = ("cost_to_quote", "process_to_quote")
+# 包装成本回传与 cost_to_quote 一样推进第 2 步（确认工艺 → 定价）。
+_HANDOFF_ADVANCE_KINDS = ("cost_to_quote", "process_to_quote",
+                          PACKAGING_HANDOFF_KIND)
 # 不往第 2 步快照里写东西的 kind：成本还没定稿，工艺经理复核前不该当成结论回填。
 _HANDOFF_NO_SNAPSHOT_KINDS = ("cost_to_process",)
 # 目标任务的 task_kind：三种回传给销售用 handoff；成本提交复核是既有的支线类型。
@@ -629,6 +636,7 @@ _HANDOFF_LABELS = {
     "cost_to_process": "成本提交工艺经理复核",
     "process_to_quote": "工艺确认后回传销售",
     "report_to_quote": "已发布报告回传销售",
+    PACKAGING_HANDOFF_KIND: "包装成本回传报价",
 }
 
 
@@ -810,6 +818,10 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         raise BridgeError("缺少会话 ID")
     result = result or {}
     report = report or {}
+    # 包装口径的两道拒绝必须在**任何写之前**：非包装结果、成本仍有缺口都不许落任务
+    # （Spec §2.3 / §4.3）。三个原行业的四种 kind 不走这条分支。
+    if handoff_kind == PACKAGING_HANDOFF_KIND:
+        _guard_packaging_result(result)
     # 技术项目号（溯源用）与报价会话号（真正落点）是两回事，不要混用。
     tech_project_id = session_id
     result_version = str(result_version or "").strip()
@@ -905,7 +917,14 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
 
         # ⑤ 第 2 步：只进不退；快照**只合并**（老键保留、同名覆盖），绝不整份覆盖 ——
         # 第 2 步里还有别人填过的东西（s1_basic 之类），一次回传不该把它们抹掉。
-        fresh = {} if handoff_kind in _HANDOFF_NO_SNAPSHOT_KINDS else _step2_snapshot(result)
+        if handoff_kind == PACKAGING_HANDOFF_KIND:
+            # 包装的第 2 步快照走专用投影：盒型 / 参数 / BOM / 路线 / 成本 / 缺口全带上，
+            # 外加完整整包（原样保真），不让包装数据在报价卡片上只剩一句 note。
+            fresh = packaging_snapshot(result)
+        elif handoff_kind in _HANDOFF_NO_SNAPSHOT_KINDS:
+            fresh = {}
+        else:
+            fresh = _step2_snapshot(result)
         if report:
             fresh = _merge_report_snapshot(fresh, report)
         returned_sections = sorted(fresh.keys())
@@ -954,6 +973,10 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
             "tech_project_id": tech_project_id,
             "quote_session_id": quote_session_id,
         }
+        if handoff_kind == PACKAGING_HANDOFF_KIND:
+            # 任务 payload 带整包：不能只有任务卡没有业务数据（Spec §4.3）。
+            payload["packaging_package"] = (fresh.get("packaging_package")
+                                            or _packaging_package_of(result))
         target = _handoff_target(source, task_kind, target_type, target_role_code,
                                  target_user_id)
         sent = cpq_wf.send_task(
@@ -1012,6 +1035,94 @@ def _commit_card_steps(conn, card, user) -> dict:
                     "技术工艺推送：前置步骤在技术工艺流程中已完成")
     cpq_wf._commit(conn)
     return card
+
+
+#: 包装第 2 步快照的栏目（Spec §4.3）：盒型 / 参数 / BOM / 路线 / 成本不能丢。
+PACKAGING_SNAPSHOT_SECTIONS = ("s2_packaging", "s2_packaging_cost", "packaging_package")
+
+
+def _packaging_package_of(result: dict) -> dict:
+    """回传正文里的整包：``bridge_result`` 给的是 ``packaging_package``；直接传整包时就是它自己。"""
+    package = (result or {}).get("packaging_package")
+    if isinstance(package, dict) and package:
+        return package
+    return dict(result or {})
+
+
+def _guard_packaging_result(result: dict) -> None:
+    """包装口径的两道拒绝（Spec §2.3 / §4.3）：非包装、成本仍有缺口。
+
+    必须在任何写之前调用 —— 被拒绝的回传不许建任务、不许留半完成状态。
+    """
+    result = result or {}
+    if str(result.get("industry") or "").strip() != "packaging":
+        raise BridgeError(
+            "包装成本回传只接受 industry=packaging 的技术结果；"
+            f"当前是「{str(result.get('industry') or '未标明')}」。"
+            "三个原行业的成本回传请用 cost_to_quote。")
+    package = _packaging_package_of(result)
+    cost = package.get("cost") or result.get("cost") or {}
+    gaps = list(cost.get("gaps") or package.get("gaps") or result.get("gaps") or [])
+    if cost.get("has_gaps") or gaps:
+        codes = []
+        for item in gaps:
+            code = str((item or {}).get("code") or "").strip() if isinstance(item, dict) else ""
+            if code and code not in codes:
+                codes.append(code)
+        named = "、".join(codes) or "未标明缺口"
+        raise BridgeError(f"成本仍有缺口（{named}），不能落成正式报价；"
+                          "请先补齐，或由财务/工艺写明原因走放行留痕后再回传。")
+
+
+def packaging_snapshot(result: dict) -> dict:
+    """包装专用第 2 步快照：盒型 + 参数 + 数量 + 场景 / 成本分项 + 缺口数 + 成本版本 /
+    完整整包（原样保真，供历史与看板重建）。三行业不走这条分支（Spec §4.3）。"""
+    package = _packaging_package_of(result)
+    requirement = package.get("requirement") or {}
+    box = package.get("box_type") or {}
+    params = package.get("params") or {}
+    cost = package.get("cost") or {}
+    source = package.get("source") or {}
+    gaps = list(cost.get("gaps") or package.get("gaps") or [])
+    box_code = (str(box.get("confirmed_box_type") or "").strip()
+                or str(requirement.get("box_type") or "").strip())
+    packaging_row = {
+        "行业": "包装",
+        "盒型": box_code,
+        "盒型状态": str(box.get("decision") or ""),
+        "闭合方式": requirement.get("closure_type") or params.get("closure_type") or "",
+        "内长": params.get("inner_length"), "内宽": params.get("inner_width"),
+        "内高": params.get("inner_height"),
+        "配合间隙": params.get("fit_clearance"),
+        "面纸克重": requirement.get("face_paper_gsm"),
+        "V槽": requirement.get("v_groove"),
+        "报价数量": requirement.get("quote_quantity"),
+        "场景": str(source.get("scenario_code") or "default"),
+        "需求单号": str(source.get("requirement_no") or ""),
+        "成本结果版本": str(source.get("result_version") or package.get("result_version") or ""),
+    }
+    cost_row = {
+        "单件总成本": "%.2f" % float(cost.get("total_cost") or 0.0),
+        "小计": "%.2f" % float(cost.get("subtotal") or 0.0),
+        "材料": "%.2f" % float(cost.get("material_total") or 0.0),
+        "工艺": "%.2f" % float(cost.get("process_total") or 0.0),
+        "人工": "%.2f" % float(cost.get("labor_total") or 0.0),
+        "工装": "%.2f" % float(cost.get("tooling_total") or 0.0),
+        "包装": "%.2f" % float(cost.get("packaging_total") or 0.0),
+        "运输": "%.2f" % float(cost.get("freight_total") or 0.0),
+        "损耗": "%.2f" % float(cost.get("loss_amount") or 0.0),
+        "缺口数": len(gaps),
+        "成本引擎版本": str(cost.get("engine_version") or ""),
+        "成本档位": str(cost.get("cost_profile") or ""),
+        "是否含缺口": bool(cost.get("has_gaps")),
+    }
+    return {
+        "s2_packaging": {"kind": "packaging", "title": "包装：盒型与参数",
+                         "数据": [packaging_row]},
+        "s2_packaging_cost": {"kind": "packaging", "title": "包装：成本构成",
+                              "数据": [cost_row]},
+        "packaging_package": package,
+    }
 
 
 def _merge_report_snapshot(snapshot: dict, report: dict) -> dict:

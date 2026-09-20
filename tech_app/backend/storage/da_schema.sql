@@ -1473,3 +1473,39 @@ CREATE TABLE IF NOT EXISTS ops_kb_change_log (
     at              TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_kb_change ON ops_kb_change_log(kb_table, kb_id, at);
+
+-- ==========================================================================
+-- 包装成本回传报价（包装第 8 批，Spec docs/specs/packaging-quote-close-loop.md §3.1）
+-- 只追加：没有 updated_at，没有 UPDATE 路径。幂等由
+-- UNIQUE (project_id, requirement_no, scenario_code, package_fingerprint) 裁决 ——
+-- 同一个包重复发送命中唯一约束 → 复用已有行（already_sent=True），不新增行、不再建报价任务；
+-- 成本重算导致 package_fingerprint 变了 → 新行 version_no + 1，旧行逐字不动。
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS wip_packaging_handoff (
+    handoff_no          TEXT PRIMARY KEY,      -- pkghandoff:<project>:<requirement>:<scenario>:<version_no>
+    project_id          TEXT NOT NULL,
+    requirement_no      TEXT NOT NULL DEFAULT '',
+    scenario_code       TEXT NOT NULL DEFAULT 'default',
+    version_no          INTEGER NOT NULL DEFAULT 1,
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    engine_version      TEXT NOT NULL,
+    handoff_version     TEXT NOT NULL,
+    handoff_kind        TEXT NOT NULL,          -- packaging_cost_to_quote
+    cost_profile        TEXT NOT NULL,          -- packaging_v1
+    pricing_profile     TEXT NOT NULL,          -- packaging_margin_v1
+    cost_result_version TEXT,
+    package_fingerprint TEXT NOT NULL,
+    package_json        TEXT,
+    has_gaps            INTEGER NOT NULL DEFAULT 0 CHECK (has_gaps IN (0, 1)),
+    gap_codes_json      TEXT,
+    gap_waiver_json     TEXT,
+    target_quote_session_id TEXT NOT NULL DEFAULT '',
+    target_task_id      TEXT NOT NULL DEFAULT '',
+    target_business_case_id TEXT NOT NULL DEFAULT '',
+    sent_by             TEXT NOT NULL DEFAULT '',
+    sent_at             TEXT,
+    created_at          TEXT,
+    UNIQUE (project_id, requirement_no, scenario_code, package_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS ix_packaging_handoff_project
+    ON wip_packaging_handoff(project_id, requirement_no, version_no);

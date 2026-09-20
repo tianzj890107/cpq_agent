@@ -1099,6 +1099,11 @@ def _extract_json_obj(out: str):
 #   规则取数走纯 SQL（确定性），模型只负责按规则语义算金额并说明命中过程。
 # ---------------------------------------------------------------------------
 
+# 包装定价入口（包装第 8 批，Spec §4.4）：与三个原行业的 /api/markup/fill 并存，
+# **不依赖大模型** —— 包装的定价口径是确定的除式（成本 ÷ (1-毛利率)），不由模型决定。
+# "无模型"模式下这一条路径也必须能算，这是包装与三行业定价路径的根本区别。
+PACKAGING_QUOTE_PRICE_PATH = "/api/packaging-quote/price"
+
 # context = 发给模型的上下文分区。前面步骤的信息一律带全（缺了规则就算不出来），
 # 只是各步的**主依据**不同：第 3 步看产品与技术参数，第 4 步还要看基本信息/目的地/付款/物流。
 _ALL_CTX = ("basic", "dest", "products", "techparams", "payment", "logistics")
@@ -1310,6 +1315,42 @@ _SQL_FORBIDDEN = re.compile(
 # 表访问边界：报价助手做数据提取时，只能查 亿纬锂能DA梳理 配置助手页/规则助手页 的表（md_* 主数据），
 # 报价助手页的实际业务表（clm_calc_* 价格测算单 / clm_quote_* 报价单）是「导入数据库」的写入目标，禁止查询。
 _SQL_BLOCKED_TABLES = re.compile(r"\bclm_(?:calc|quote)_\w+", re.IGNORECASE)
+
+
+def _handle_packaging_quote_price(data: dict, emit=None) -> dict:
+    """POST /api/packaging-quote/price —— 包装定价（**不依赖大模型**）。
+
+    入参：``{"package": {...}, "gross_margin_rate": …, "markup_rate": …, "pricing_mode": …,
+    "addons": [...], "discount": {...}, "tax_rate": …}``；出参：
+    ``{"ok": True, "quote": …, "sections": …, "document": …}`` /
+    ``{"ok": False, "error": …}``（失败**不抛给调用方**）。
+
+    算法只有一份：``cpq_packaging_quote.price()`` —— 路由、Agent 工具、这里都调它。
+    """
+    data = data if isinstance(data, dict) else {}
+    try:
+        import cpq_packaging_quote as pkg_quote
+        package = data.get("package") if isinstance(data.get("package"), dict) else {}
+        kwargs = {}
+        if "gross_margin_rate" in data:
+            kwargs["gross_margin_rate"] = data.get("gross_margin_rate")
+        if "markup_rate" in data:
+            kwargs["markup_rate"] = data.get("markup_rate")
+        if data.get("pricing_mode"):
+            kwargs["pricing_mode"] = data.get("pricing_mode")
+        if "addons" in data:
+            kwargs["addons"] = data.get("addons")
+        if "discount" in data:
+            kwargs["discount"] = data.get("discount")
+        if "tax_rate" in data:
+            kwargs["tax_rate"] = data.get("tax_rate")
+        if "quote_quantity" in data:
+            kwargs["quote_quantity"] = data.get("quote_quantity")
+        quote = pkg_quote.price(package, **kwargs)
+        return {"ok": True, "quote": quote, "sections": pkg_quote.sections(quote),
+                "document": pkg_quote.document(quote)}
+    except Exception as exc:                                   # noqa: BLE001 - 失败要回给调用方
+        return {"ok": False, "error": str(exc) or "包装定价失败"}
 
 
 def _handle_sql_query(tool_input: dict) -> str:
@@ -3010,7 +3051,12 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_step1_stream()
         elif path == "/api/markup/fill":
             # 第 3/4 步加价计算：SQL 取规则 + 一次大模型调用（**流式**）
+            # —— 三个原行业的路径逐字不动（Spec §9）。
             self._handle_markup_stream()
+        elif path == PACKAGING_QUOTE_PRICE_PATH:
+            # 包装定价（包装第 8 批）：确定性计算，不取规则、不调模型。
+            data = self._read_body()
+            self._send_json(_handle_packaging_quote_price(data))
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()

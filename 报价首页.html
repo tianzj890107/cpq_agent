@@ -1501,8 +1501,21 @@
 
   <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
        而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <!-- 包装第 8 批：包装报价分区渲染入口（包装卡片的 s3/s4/s5 四段分区）。
+       只在快照里确实有 packaging_package 时生效，非包装卡片原样走既有工作台。 -->
+  <style>
+    .pkg-quote-section { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px; }
+    .pkg-quote-section-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+    .pkg-quote-fields { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
+    .pkg-quote-fields dt { color: var(--color-text-muted, #6b7280); }
+    .pkg-quote-fields dd { margin: 0; }
+    .pkg-quote-rows { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .pkg-quote-rows td { padding: 3px 6px; border-bottom: 1px solid var(--color-border, #f0f1f3); vertical-align: top; }
+    .pkg-quote-empty { margin: 6px 0; font-size: 12px; color: var(--color-text-muted, #6b7280); }
+  </style>
   <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
   <script src="tech-home-board.js?v=b11"></script>
+  <script src="packaging-quote-panel.js?v=pqp1"></script>
   <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起

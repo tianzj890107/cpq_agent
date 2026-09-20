@@ -234,6 +234,49 @@ def _ddl_pg(schema: str) -> list:
                 created_by_user_id      bigint,
                 created_at              timestamptz NOT NULL DEFAULT now()
             )""",
+        # 报价版本（包装第 8 批，Spec §3.2）：包装定价的每一次落版本一行。
+        # **只增不改**：只有 INSERT 与 SELECT，没有 UPDATE 路径，所以表内没有 updated_at ——
+        # 「原报价成本 vs 新成本」两版必须同时存在（cpq_wf_card_step.data_snapshot 是
+        # 同名覆盖的合并快照，重算会盖掉上一版）。
+        # UNIQUE (quote_session_id, quote_fingerprint) 是"同一次定价重复点击不新建版本"
+        # 的裁判；换了成本 → quote_fingerprint 变了 → 新版本 + previous_version_no /
+        # previous_cost_total。三个原行业不写这张表，行为逐字不变。
+        f"""CREATE TABLE IF NOT EXISTS {schema}.cpq_wf_quote_version (
+                quote_version_id     bigint       PRIMARY KEY,
+                business_case_id     varchar(64)  NOT NULL DEFAULT '',
+                quote_session_id     varchar(64)  NOT NULL DEFAULT '',
+                card_id              bigint,
+                requirement_no       varchar(64)  NOT NULL DEFAULT '',
+                scenario_code        varchar(64)  NOT NULL DEFAULT 'default',
+                industry             varchar(32)  NOT NULL DEFAULT 'packaging',
+                engine_version       varchar(32)  NOT NULL,
+                pricing_profile      varchar(32)  NOT NULL,
+                version_no           int          NOT NULL DEFAULT 1,
+                quote_fingerprint    varchar(64)  NOT NULL,
+                pricing_mode         varchar(16)  NOT NULL DEFAULT 'gross_margin',
+                cost_total           numeric(18,6) NOT NULL DEFAULT 0,
+                previous_cost_total  numeric(18,6),
+                previous_version_no  int,
+                quote_quantity       numeric(18,3),
+                gross_margin_rate    numeric(9,6),
+                markup_rate          numeric(9,6),
+                tax_rate             numeric(9,6),
+                untaxed_unit_price   numeric(18,6) NOT NULL DEFAULT 0,
+                untaxed_total        numeric(18,6) NOT NULL DEFAULT 0,
+                addon_total          numeric(18,6) NOT NULL DEFAULT 0,
+                discount_amount      numeric(18,6) NOT NULL DEFAULT 0,
+                tax_amount           numeric(18,6) NOT NULL DEFAULT 0,
+                taxed_total          numeric(18,6) NOT NULL DEFAULT 0,
+                addons_json          text,
+                discount_json        text,
+                document_md          text,
+                inputs_json          text,
+                source_tech_project_id varchar(64) NOT NULL DEFAULT '',
+                source_handoff_id    varchar(64) NOT NULL DEFAULT '',
+                created_by_user_id   bigint,
+                created_at           timestamp,
+                UNIQUE (quote_session_id, quote_fingerprint)
+            )""",
         # 业务实例号（批次 6）：跨系统、跨重建认回报价卡片的唯一线索。老库靠
         # ADD COLUMN IF NOT EXISTS 补齐；索引要排在下面的 CREATE INDEX 之前（列先存在）。
         f"ALTER TABLE {schema}.cpq_wf_card ADD COLUMN IF NOT EXISTS business_case_id varchar(64)",
@@ -254,6 +297,10 @@ def _ddl_pg(schema: str) -> list:
         f"CREATE INDEX IF NOT EXISTS idx_wf_task_status ON {schema}.cpq_wf_task(status)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_cardstep_card ON {schema}.cpq_wf_card_step(card_id)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_msg_user ON {schema}.cpq_wf_message(user_id, is_read)",
+        f"CREATE INDEX IF NOT EXISTS idx_wf_quote_version_session"
+        f" ON {schema}.cpq_wf_quote_version(quote_session_id, version_no)",
+        f"CREATE INDEX IF NOT EXISTS idx_wf_quote_version_case"
+        f" ON {schema}.cpq_wf_quote_version(business_case_id, version_no)",
     ]
 
 def init() -> str:
@@ -277,7 +324,8 @@ def init() -> str:
                     conn, "INSERT INTO cpq_wf_step_perm (id, assistant_type, step_no, step_name, role_code)"
                           " VALUES (%s,%s,%s,%s,%s)",
                     (_new_id(conn), ASSISTANT, no, name, role))
-        return f"报价工作流表已就绪（{len(QUOTE_STEPS)} 步角色种子）"
+        return (f"报价工作流表已就绪（{len(QUOTE_STEPS)} 步角色种子；"
+                "含回传记录 cpq_wf_handoff 与报价版本 cpq_wf_quote_version）")
     finally:
         conn.close()
 

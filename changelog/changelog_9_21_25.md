@@ -1020,3 +1020,285 @@ BOM、以及包装知识库的费率/系数，算成**逐部件 × 逐成本类�
   空单元格口径处理（不编数字）。
 - 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务**；
   `裕同包装项目-待开发/` 保持只读。
+
+## 160. 包装第 8 批「包装报价闭环（回传 / 定价 / 报价单 / 版本）」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+包装 8 批计划的**最后一批**（第 1–7 批已全部落地，第 7 批实现见 `f0f540b`）。本批把「包装成本」
+变成「对客户的报价」：技术侧把 10 组业务数据整包回传报价卡片，报价侧用**确定的除式**定价、
+加价、折扣、税金、出报价单、存只增不改的报价版本，并保证历史打开能恢复全过程。三个原行业的
+成本与定价链路（`generic_v1` + `md_clm_material_price_rule` + 模型）一个字都不动。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-quote-close-loop.md`（417 行）。
+- 红测：新增 `tests/test_packaging_quote_close_loop_red.py`（**96 条**）。
+- 红测分组：A 契约与命名（10）、B 交接包 10 组（14）、C 交接前置与拒绝（9）、D 落库与幂等（8）、
+  E 定价引擎（17）、F 报价单（8）、G 报价版本（10）、H 桥接落点（9）、I 报价服务入口（5）、
+  J 端到端与四行业回归（6）。
+
+### 已查实现状（实测，非推断）
+
+- `tech_app/backend/services/packaging_handoff.py`、`cpq_packaging_quote.py` **都不存在**：
+  全仓没有任何「包装 → 报价」交接与包装定价 / 报价单 / 报价版本实现（96 条红测里 90 条的
+  失败点直接落在「模块不存在」）。
+- 报价侧第 3/4 步加价今天是模型驱动：`cpq_agent_server._handle_markup_fill()` 从
+  `md_clm_material_price_rule` 取 `rule_classification='定价'/'报价'` 规则，交大模型逐条判命中
+  —— 包装这单在报价库里**没有成品编码、没有规则行**（0903 `报价表!B2 = '报价-行业标准'!#REF!`
+  就是同一件事的现场），而且包装定价是确定除式，不该由模型决定。
+- 报价**没有版本表**：`cpq_wf_card_step.data_snapshot` 是 `cpq_wf.merge_step_snapshot` 的
+  **同名覆盖**，重算会盖掉上一版；而 0903 `报价表 (2)` 里同时存在「新成本 77.6852」与
+  「原报价成本 60.0494」两列 —— 两版必须同时在。
+- `cpq_tech_bridge.HANDOFF_KINDS`（`:618`）只有 cost_to_quote / cost_to_process /
+  process_to_quote / report_to_quote，没有包装口径；`_step2_snapshot(result)` 只认
+  `material`/`params`/`cost.total` 与固定模板列 —— 包装的盒型 / 参数 / BOM / 路线 / 缺口 /
+  公式依据**装不进快照就会整段丢**（受控假库实测：一次包装口径回传直接被拒
+  `BridgeError('回传类型无效：packaging_cost_to_quote')`，快照 `null`、任务 0 条）。
+- `cpq_bridge.send_to_quote()` 把 `handoff_kind` 写死成 `"cost_to_quote"`（签名里没有这个参数），
+  技术侧发不出包装口径。
+- `tech_app` 侧交接只有设计 IR 口径的 `cost_flow.integration_quote_result()`（成品编码 / 四项成本
+  / 参数行），包装没有成品编码。
+- 第 7 批的 `wip_packaging_cost_estimate.gross_margin_rate` 只存不算，也没有消费方。
+
+### 关键口径（Spec §1.2 / §2，实现不得自行加默认值）
+
+- **定价是一个除式，不是「成本 + 利润率」**。0903 的公式是 `未税单价 = 总成本 ÷ (1 - 毛利率)`：
+  `报价-工费率!AX2 = AV2/(1-AW2)`（77.68520189964802 / 0.25 → **103.58026919953069**）、
+  `报价表!I2 = G2/(1-H2)`、`成本细分!R2 = P2/(1-Q2)`（60.04940812974125 / 0.25 →
+  **80.06587750632167**）。同一个工作簿的 `问题点!A30` 文字却写「会直接在总成本上+利润率报给客户」
+  → `60.04940812974125×1.25 = 75.06176016217657`，两者差 **5.004117344145101**（6.7%）。
+  处理方式与第 7 批的损耗歧义一致：**默认 `pricing_mode='gross_margin'` 忠实复现公式**，
+  文字口径保留为可配置的 `pricing_mode='markup'`，两种模式的字段名不同
+  （`gross_margin_rate` / `markup_rate`），且记录里必须存 `pricing_mode`。
+- **计算顺序固定**：毛利（除式）→ 加价（技术溢价 / 市场调节 / 其他加价，按单件）→ 折扣（比例）
+  → 税金（`net × tax_rate`，默认 0.13）→ 总量 = 单价 × 数量。每一步进 `lines`（公式 / 输入 /
+  结果 / 来源 / 版本），`recompute(quote)` 必须逐项相等。
+- **加价项是闭集**：`tech_premium` / `market_adjustment` / `other_addon` + `discount`；闭集外的
+  key 抛 `unknown_addon`，**不许静默忽略**。
+- **交接包 10 组**：`industry` / `requirement` / `box_type` / `params` / `bom` / `route` / `cost` /
+  `gaps` / `formulas` / `source`，逐组来自第 2–7 批既有读接口（**不得另算**）；`industry` 是
+  **字符串**（桥接层要能直接判 `result["industry"]`）；成本段**不许出现售价字段**
+  （`unit_price` / `untaxed_price` / `total_price` / `quote_amount` / `margin_rate`）。
+- **缺口不放行**：成本有缺口时 `send_to_quote` 拒绝（`cost_gaps_unresolved`，错误里点名缺什么），
+  只有显式 `allow_gaps=True` **且写了原因**才放行，并把 `gap_waiver`（谁 / 何时 / 为什么）写进
+  交接记录；报价侧拿到 `has_gaps=True` 的包只能出草稿，`price()` 直接拒绝。
+- **只增不改**：`wip_packaging_handoff`（技术侧）与 `cpq_wf_quote_version`（报价侧）都是追加表，
+  同 `fingerprint` 命中唯一约束 → 复用并回 `already_sent` / `already_saved`；成本变了才新建版本，
+  并记 `previous_version_no` / `previous_cost_total`；两版都必须留着。
+- **角色分离**：回传 `HANDOFF_WRITE_ROLES = {finance_manager, process_manager,
+  process_director, admin}`；定价落版本 `WRITE_ROLES = {sales_mgr, admin}` —— 两边只有 admin 交集。
+- **包装定价不依赖大模型**：`POST /api/packaging-quote/price` → `_handle_packaging_quote_price()`
+  在「无模型」模式下必须成功（红测把 `cpq_agent_server.bridge` 换成任何属性访问都抛错的哨兵，
+  仍要求定价成功）；三行业的 `/api/markup/fill` → 模型路径**不动**。
+
+### 黄金数据（内联为常量，测试不读工作簿）
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 总成本（第 7 批采用口径） | 77.685201899648021 | `报价-工费率!AV2` |
+| 总成本（粗算口径） | 60.049408129741252 | `报价表!G2` / `报价-行业标准!AV2` |
+| 毛利率 | 0.25 | `报价-工费率!AW2` |
+| 未税单价（除式） | 103.58026919953069 / 80.06587750632167 | `AX2` / `报价表!I2` |
+| 未税单价（文字口径） | 75.06176016217657 | `问题点!A30` |
+| 税金 / 含税单价 | 10.408564075821818 / 90.47444158214348 | `80.06587750632167 × 0.13 / ×1.13` |
+| 链式样例（+2 加价、5% 折扣、13% 税） | 88.0977195030363 | Spec §2.4 的顺序 |
+
+### 红测实跑（原文）
+
+```
+Ran 96 tests in 2.149s
+FAILED (failures=93)
+```
+
+- 93 条失败全部指向真实缺口（模块不存在 / 桥接口径不存在 / 路由不存在），**0 error**；
+- 3 条未失败的是**回归守卫**（不是红测）：`HBridgeLanding.test_h8_three_industries_unchanged`
+  （三行业 `cost_to_quote` 的快照与 payload 不得出现包装栏目）、
+  `JEndToEnd.test_j2_three_industry_cost_model_unchanged`（`cost_model.derive(100.0)` =
+  100 / 8.31 / 4.16 / 2.21 / 114.68 逐位不变）、
+  `JEndToEnd.test_j3_industry_registry_unchanged`（四行业与顺序、三行业 `generic_margin_v1` 不变）。
+
+### 回归实跑（原文）
+
+前 7 批红测：
+
+```
+test_industry_registry_unified_red        Ran 20 tests  OK
+test_packaging_requirement_template_red   Ran 35 tests  OK
+test_packaging_knowledge_base_seed_red    Ran 46 tests  OK
+test_packaging_box_type_matching_red      Ran 51 tests  OK
+test_packaging_parametric_bom_red         Ran 57 tests  OK
+test_packaging_process_route_red          Ran 57 tests  OK
+test_packaging_cost_engine_red            Ran 81 tests  FAILED (failures=4)
+```
+
+全量（去掉本批新红测，`tests/` 无 `__init__.py`，用 `/tmp/run_pkg.py` 按路径装载）：
+
+```
+Ran 2786 tests in 214.083s
+FAILED (failures=21, skipped=2)
+TOTAL ran=2786 failures=21 errors=0 skipped=2
+```
+
+21 条失败与批次无关，逐条对得上改动前基线：`process_row_running_info_and_fold_red` 14 条、
+`tech_model_call_row_merged_and_summary_detail_red` 2 条、`cpq_eval_ci_contract` 1 条（CI
+requirements 出处）—— 合计 17 条既有失败；再加 `packaging_cost_engine_red` 的 4 条
+（`a3` / `c1` / `c2` / `c4`，第 7 批实现已在 `## 159` 说明是红测自身把「最低收费」与「纯表达式」
+两套口径混在一条断言里，**留在红侧由用户裁决**）。
+
+### 与本批衔接的既有能力（不许改）
+
+`cost_flow` 的四个去向、`cpq_tech_bridge` 的四种交接口径、`cpq_wf_card_step` 的合并语义、
+第 5/6/7 批的包装 BOM / 路线 / 成本与缺口闭集、三行业 `generic_v1` 与模型加价路径 —— 全部保持
+原行为；本批只在 `cpq_bridge.send_to_quote` 加一个默认值为 `"cost_to_quote"` 的关键字参数。
+
+### 剩余风险 / 待裁决
+
+- `markup` 与 `gross_margin` 到底哪个是对外口径，需要业务确认；本批默认按**公式**（除式），
+  文字口径留成配置项，两边都不删。
+- 报价版本按 `(quote_session_id, quote_fingerprint)` 幂等：同一次定价重复点击不会新建版本；
+  如果业务要「每次点击都留一版」，需要改成按操作次数计版本。
+- 本批仍不做阶梯报价的多方案比选界面（第 7 批的 `cost_curve` 已给多场景成本，可各自定价成版本）、
+  不做 BPM 审批流、不做议价模型链路。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务**；
+  `裕同包装项目-待开发/` 保持只读（工作簿是客户样例，不入库）。
+- 实现提示词按仓库约定只在会话里交付，未落盘 `prompts/`。
+
+---
+
+## 161. 包装第 8 批「包装报价闭环（回传 / 定价 / 报价单 / 版本）」实现（9-20，Codex）
+
+Spec 见 `## 160` / `docs/specs/packaging-quote-close-loop.md`。本批把第 2–7 批的包装读接口
+（需求 / 盒型 / 参数 / BOM / 路线 / 成本 / 缺口 / 公式依据）拼成一份**只读**交接包，落一条只追加的
+交接记录，经既有回传客户端发到报价侧；报价侧用**确定的除式**定价、出八节报价单、存只增不改的
+报价版本。三个原行业的成本（`generic_v1`）与定价（`md_clm_material_price_rule` + 模型）链路
+**一行未改**：`_handle_markup_fill` / `/api/markup/fill` / `MARKUP_STEPS=[3,4]` 逐字不动，
+`_step2_snapshot` 不动，`cpq_wf_card_step` 的合并语义不动。
+
+### 修改文件清单
+
+后端（新增）
+
+- `tech_app/backend/services/packaging_handoff.py`（新）：`PACKAGE_SECTIONS` 10 组、`HandoffError`、
+  `handoff_package` / `package_fingerprint` / `bridge_result` / `send_to_quote` / `load_handoff` /
+  `handoff_versions`。缺口两道门（拒绝 / 写明原因放行留痕），成本段递归剔除
+  `unit_price|untaxed_price|total_price|quote_amount|margin_rate|gross_margin_rate|markup_rate`。
+- `cpq_packaging_quote.py`（新）：`untaxed_unit_price` / `price` / `recompute` /
+  `quote_fingerprint` / `sections`（s3_markup / s4_markup / s5_basic / s5_detail）/
+  `document`（八节）/ `save_version` / `versions` / `latest` / `restore`。
+- `tech_app/frontend/packaging-quote-panel.js`（新）：包装报价分区渲染入口（唯一全局
+  `window.PackagingQuotePanel`）；只在快照里确实有 `packaging_package` 时生效。
+
+后端（修改）
+
+- `tech_app/backend/storage/da_schema.sql`：**只追加** `wip_packaging_handoff`（Spec §3.1 逐列照抄，
+  含 `UNIQUE(project_id, requirement_no, scenario_code, package_fingerprint)`，无 `updated_at`）。
+- `tech_app/backend/storage/da_repo.py`：**只追加** `save_packaging_handoff` /
+  `load_packaging_handoff` / `packaging_handoffs` 三个访问器（只增不改，JSON 列读成 list/dict）。
+- `tech_app/backend/main.py`：追加 4 条路由 + `PackagingQuoteSendAction`；写路由
+  `send_requirement_packaging_quote(project_id, body, user, request=None)` 引用
+  `packaging_handoff.HANDOFF_WRITE_ROLES`（不另抄一份），读路由路径参数写 `{pid}`。
+- `tech_app/backend/services/cpq_bridge.py`：`send_to_quote` 追加
+  `handoff_kind="cost_to_quote"` 关键字（默认值保证三行业调用点一字不改），payload 用传入值。
+- `cpq_tech_bridge.py`：`HANDOFF_KINDS` / `_HANDOFF_ADVANCE_KINDS` / `_HANDOFF_LABELS` 增加包装口径；
+  新增 `packaging_snapshot()`（s2_packaging / s2_packaging_cost / packaging_package）与两道拒绝
+  （非 packaging、成本仍有缺口，都在**任何写之前**）；任务 payload 增加 `packaging_package`
+  （只对包装 kind 生效）。
+- `cpq_wf.py`：`_ddl_pg` 追加 `cpq_wf_quote_version`（Spec §3.2 逐列照抄，含
+  `UNIQUE(quote_session_id, quote_fingerprint)`，无 `updated_at`）+ 两条索引；`init()` 返回文案带上它。
+- `cpq_agent_server.py`：`PACKAGING_QUOTE_PRICE_PATH` + `_handle_packaging_quote_price(data, emit=None)`
+  （失败返回 `{"ok": False, "error": …}` 不抛；**不依赖大模型**）+ `do_POST` 派发。
+- `报价首页.html`：加载 `packaging-quote-panel.js?v=pqp1`（在业务脚本之前）+ 一组
+  `.pkg-quote-*` 作用域样式；不触碰三行业工作台脚本。
+
+### 验收命令（实跑原文）
+
+本批（直接按路径执行也有效，单文件用例数与 runner 一致）：
+
+```
+$ ./open-claude/.venv/bin/python tests/test_packaging_quote_close_loop_red.py
+Ran 96 tests in 2.597s
+OK
+
+$ ./open-claude/.venv/bin/python /tmp/run_pkg.py packaging_quote_close_loop
+files=1 skipped=0
+Ran 96 tests in 2.680s
+OK
+TOTAL ran=96 failures=0 errors=0 skipped=0
+```
+
+批次 1–6 回归（红测口径 20 / 35 / 46 / 51 / 57 / 57）：
+
+```
+$ ./open-claude/.venv/bin/python /tmp/run_pkg.py industry_registry_unified requirement_template \
+    knowledge_base_seed parametric_bom process_route box_type_matching
+Ran 266 tests in 3.922s
+OK
+files=6 skipped=0
+TOTAL ran=266 failures=0 errors=0 skipped=0
+```
+
+批次 4（单跑）：
+
+```
+$ ./open-claude/.venv/bin/python /tmp/run_pkg.py packaging_box_type
+Ran 51 tests in 2.203s
+OK
+```
+
+第 7 批（允许仍 failures=4，红测自身口径冲突，见 `## 159`）：
+
+```
+$ ./open-claude/.venv/bin/python tests/test_packaging_cost_engine_red.py
+Ran 81 tests in 1.047s
+FAILED (failures=4)
+```
+
+全量基线（用按路径装载的 runner，`tests/` 无 `__init__.py`）：
+
+```
+$ ./open-claude/.venv/bin/python /tmp/run_pkg.py 1 --exclude packaging_quote_close_loop
+Ran 2786 tests in 221.464s
+FAILED (failures=21, skipped=2)
+TOTAL ran=2786 failures=21 errors=0 skipped=2
+```
+
+21 条与改动前基线**逐条一致**（`packaging_cost_engine_red` 4 + `process_row_running_info_and_fold_red`
+14 + `tech_model_call_row_merged_and_summary_detail_red` 2 + `cpq_eval_ci_contract` 1），
+**没有新增失败**。
+
+语法与空白：
+
+```
+$ ./open-claude/.venv/bin/python -m py_compile cpq_packaging_quote.py cpq_tech_bridge.py cpq_wf.py \
+    cpq_agent_server.py tech_app/backend/services/packaging_handoff.py \
+    tech_app/backend/services/cpq_bridge.py tech_app/backend/main.py \
+    tech_app/backend/storage/da_repo.py
+py_compile OK
+$ node --check tech_app/frontend/packaging-quote-panel.js
+node --check OK
+$ git diff --check
+git diff --check OK
+```
+
+### 实现中的两处口径判断（不是放宽断言）
+
+1. **折扣入参形状**：`DEDUCTION_CATEGORIES=("discount",)` 是**折扣类别**闭集，调用方给的是
+   `{"rate": 0.05}`。实现按「`rate/code/category/label/amount` 为合法字段；显式声明类别且不在
+   闭集内 → `unknown_addon`」处理 —— 既守住闭集，也不把 `rate` 误判成类别。
+2. **缺口码来源**：`has_gaps=True` 但成本明细里没有逐条缺口时（D 组夹具就是把 `gaps` 放进了需求单
+   data），拒绝文案必须点名缺什么，否则用户看不见缺在哪。实现按
+   「成本段缺口 → 需求单缺口清单 → 包级 gaps」依次取码，只用于**报错文案与放行留痕**，
+   不改 `package["gaps"]`（红测 b9 要求它逐条等于 `cost["gaps"]`）。
+
+### 剩余风险
+
+- 交接幂等判定是「先按指纹查、再插」，`UNIQUE` 仍是数据库侧的最终裁判；并发同指纹双发时后者会
+  命中唯一约束抛错（不产生第二行），但没有像 `cpq_wf_handoff` 那样把它收敛成 `already_sent=True`。
+  真实并发下同一包重复点击回传会看到一次报错，重试即复用。可后续按 `insert_handoff_placeholder`
+  的写法补 `ON CONFLICT DO NOTHING` + 回读。
+- `wip_packaging_handoff` 只记录「回传到哪个会话 / 哪条任务」，不存报价任务是否被领取 —— 那是
+  报价侧 `cpq_wf_task` 的事实，本批不复制。
+- 前端只加了渲染入口（`window.PackagingQuotePanel.renderCard(snapshot, target)`），没有改三行业
+  工作台的分区渲染路径；包装卡片的实际挂载点由工作台在拿到第 2 步快照时调用，属人工验收项。
+- `报价首页.html` 只加了一个 `<script>` 与一组 `.pkg-quote-*` 样式，没有改任何既有工作台逻辑。
+- 本次**未 commit / 未 push / 未 MR / 未 tag / 未 Release / 未部署 / 未重启服务**；
+  `裕同包装项目-待开发/` 保持只读（客户样例不入库）。

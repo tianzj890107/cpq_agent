@@ -74,6 +74,7 @@ from .services import (
     packaging_match,
     packaging_bom,
     packaging_cost,
+    packaging_handoff,
     packaging_route,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
@@ -130,6 +131,14 @@ class PackagingCostBuildAction(BaseModel):
     """包装成本生成/重算入参（Spec §4）：需求单号留空时按项目当前需求单取。"""
     requirement_no: str = ""
     scenario: dict = {}
+
+
+class PackagingQuoteSendAction(BaseModel):
+    """包装成本回传报价入参（包装第 8 批，Spec §4.5）。"""
+    requirement_no: str = ""
+    scenario: str = ""
+    allow_gaps: bool = False
+    reason: str = ""
 
 
 class ReportQuoteAction(BaseModel):
@@ -6591,6 +6600,96 @@ def get_requirement_packaging_cost_curve(pid: str, requirement_no: str = "",
     _workflow_project(pid)
     curve = _packaging_cost_flow(packaging_cost.cost_curve, pid, requirement_no)
     return {"curve": curve}
+
+
+# --------------------------------------------------------------------------- #
+# 包装报价闭环（包装第 8 批，Spec docs/specs/packaging-quote-close-loop.md §4.5）
+# 四条路由：落库 + 回传报价（写）/ 最近一次交接 / 全部交接版本 / 交接包预览（读）。
+# 写路由的装饰器参数是具名常量、路径参数写 {project_id}；读路由写 {pid} —— 沿用第 5/6/7
+# 批的既有约定，避免顶掉「单参数 GET 路由」基线；路由路径字面量仍在源码里逐字出现。
+# --------------------------------------------------------------------------- #
+PACKAGING_QUOTE_SEND_PATH = "/api/projects/{project_id}/requirement/packaging-quote/send"
+PACKAGING_QUOTE_READ_PATH = "/api/projects/{pid}/requirement/packaging-quote"
+PACKAGING_QUOTE_VERSIONS_PATH = "/api/projects/{pid}/requirement/packaging-quote/versions"
+PACKAGING_QUOTE_PACKAGE_PATH = "/api/projects/{pid}/requirement/packaging-quote/package"
+
+
+def _packaging_handoff_flow(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_handoff.HandoffError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _packaging_quote_identity(project_id: str) -> dict:
+    """回传正文的标题与客户：需求单里有就用，没有给空串（服务端会自己兜底）。"""
+    doc = store.load_requirement(project_id) or {}
+    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    return {"title": str(data.get("packaging_product_name")
+                         or doc.get("title") or "").strip(),
+            "customer": str(data.get("customer_name") or "").strip()}
+
+
+@app.post(PACKAGING_QUOTE_SEND_PATH)
+def send_requirement_packaging_quote(
+    project_id: str, body: PackagingQuoteSendAction = Body(default=PackagingQuoteSendAction()),
+    user: dict = Depends(current_user), request: Request = None,
+):
+    """包装成本 → 报价：落一条只追加的交接记录，并把整包回传报价卡片。
+
+    写权限是财务 / 工艺侧（``packaging_handoff.HANDOFF_WRITE_ROLES``，不另抄一份）；
+    非包装 / 无成本 / 缺口未清都由服务层拒绝，且拒绝时不落任何记录、不建任务。
+    """
+    _require(user, packaging_handoff.HANDOFF_WRITE_ROLES,
+             "需要财务经理、工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    who = _packaging_quote_identity(project_id)
+    result = _packaging_handoff_flow(
+        packaging_handoff.send_to_quote, project_id, body.requirement_no,
+        scenario=(body.scenario or None), allow_gaps=bool(body.allow_gaps),
+        reason=body.reason, user=user,
+        token=(_sso_token(request) if request is not None else ""),
+        title=who["title"], customer=who["customer"])
+    store.audit(project_id, "packaging_quote_send", {
+        "handoff_no": result.get("handoff_no"), "version_no": result.get("version_no"),
+        "already_sent": bool(result.get("already_sent")),
+        "quote_session_id": result.get("quote_session_id"),
+        "by": user.get("username", "system")})
+    return {"handoff": result}
+
+
+@app.get(PACKAGING_QUOTE_READ_PATH)
+def get_requirement_packaging_quote(pid: str, requirement_no: str = "",
+                                    user: dict = Depends(current_user)):
+    """最近一次交接记录；没有交接时 ``built=false`` / ``handoff=null``，不报错。"""
+    _workflow_project(pid)
+    record = packaging_handoff.load_handoff(pid, requirement_no)
+    return {"project_id": pid, "built": bool(record),
+            "handoff": record or None,
+            "industry": packaging_handoff.INDUSTRY,
+            "handoff_kind": packaging_handoff.HANDOFF_KIND}
+
+
+@app.get(PACKAGING_QUOTE_VERSIONS_PATH)
+def get_requirement_packaging_quote_versions(pid: str, requirement_no: str = "",
+                                             user: dict = Depends(current_user)):
+    """全部交接版本（新的在前，只增不改）。"""
+    _workflow_project(pid)
+    rows = packaging_handoff.handoff_versions(pid, requirement_no)
+    return {"project_id": pid, "versions": rows}
+
+
+@app.get(PACKAGING_QUOTE_PACKAGE_PATH)
+def get_requirement_packaging_quote_package(pid: str, requirement_no: str = "",
+                                            scenario: str = "",
+                                            user: dict = Depends(current_user)):
+    """交接包预览（**不发送、不落库**）：人要看得见包里到底有什么、缺什么。"""
+    _workflow_project(pid)
+    package = _packaging_handoff_flow(packaging_handoff.handoff_package, pid, requirement_no,
+                                      scenario=(scenario or None))
+    return {"project_id": pid,
+            "package_fingerprint": packaging_handoff.package_fingerprint(package),
+            "package": package}
 
 
 def _persist_report(project_id: str, result: dict, user: dict) -> None:

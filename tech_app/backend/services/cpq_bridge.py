@@ -155,7 +155,8 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
                   source_task_id: str = "", result: Optional[dict] = None,
                   source_session_id: str = "", result_version: str = "",
                   business_case_id: str = "", create_new: bool = False,
-                  create_reason: str = "") -> dict:
+                  create_reason: str = "",
+                  handoff_kind: str = "cost_to_quote") -> dict:
     """确认工艺（报价第 2 步）并把卡片推进到第 3 步定价，通知销售经理。
 
     source_task_id 是当初那条「新增工艺」任务：给了它，一体化服务会回到**原来那张
@@ -169,6 +170,8 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
     的唯一裁决依据**（唯一候选自动关联、多候选停下来让人选、无候选不再静默新建）。
     create_new / create_reason 只在无候选、且用户明确确认"新建报价卡片"并写了原因时
     才为非空；服务端把这些字段原样带回来（business_case_id / candidates / recovery）。
+    handoff_kind 默认 "cost_to_quote"（三个原行业的四个调用点逐字不变）；包装成本走
+    "packaging_cost_to_quote"，由服务端按它分流快照与落点（包装第 8 批，Spec §4.3）。
     """
     return _post("/wf/tech/handoff", token, {
         "session_id": session_id,
@@ -179,7 +182,7 @@ def send_to_quote(token: str, session_id: str, title: str, customer: str = "",
         "source_task_id": source_task_id,
         "source_session_id": source_session_id,
         "result": result or {},
-        "handoff_kind": "cost_to_quote",
+        "handoff_kind": str(handoff_kind or "cost_to_quote"),
         "result_version": result_version,
         "business_case_id": business_case_id,
         "create_new": bool(create_new),
