@@ -424,10 +424,10 @@ CREATE TABLE IF NOT EXISTS src_requirement (
     project_id          TEXT NOT NULL REFERENCES src_project(project_id) ON DELETE CASCADE,
     title               TEXT,
     -- 需求单选用的行业模板。决定 Section C 有哪些字段,也决定后续各阶段
-    -- 该到知识库的哪一套物料/工序/费率里去找。flexible 是已下线的历史模板,
-    -- 仅为兼容早期草稿保留。
+    -- 该到知识库的哪一套物料/工序/费率里去找。清单的唯一事实源是仓库根的
+    -- cpq_industries.py；flexible 是已下线的历史模板,仅为兼容早期草稿保留。
     industry            TEXT NOT NULL DEFAULT 'semiconductor'
-                        CHECK (industry IN ('semiconductor', 'battery', 'appliance', 'flexible')),
+                        CHECK (industry IN ('semiconductor', 'battery', 'appliance', 'packaging', 'flexible')),
     status              TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
                             'draft', 'pending_confirmation', 'pending_review',
                             'approved', 'rejected')),

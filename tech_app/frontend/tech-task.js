@@ -78,14 +78,16 @@
      （industry_templates.DEFAULT_INDUSTRY）—— 这一页原来根本没给选择，建出来的单
      一律是半导体模板：1.1 的产品技术规格问的是晶圆尺寸、静电吸盘类型，2.x 取的也是
      半导体那套物料与费率，等发现时已经填了一整张表。所以这里显式给出选择，默认电池。 */
-  const TT_INDUSTRIES = [['battery', '电池'], ['semiconductor', '半导体'], ['appliance', '电器']];
+  // 与仓库根 cpq_industries.py 的可选行业同集合（顺序按本页习惯，默认仍是电池）。
+  const TT_INDUSTRIES = ['battery', 'semiconductor', 'appliance', 'packaging'];
+  const TT_INDUSTRY_LABELS = { battery: '电池', semiconductor: '半导体', appliance: '电器', packaging: '包装' };
   const TT_INDUSTRY_KEY = 'cpq:tech:industry';
   const TT_DEFAULT_INDUSTRY = 'battery';
 
   /** 当前选中的行业：优先读页面上的下拉，其次上次选过的，最后默认电池。 */
   function industryChoice() {
     const picked = document.getElementById('ttIndustry');
-    const codes = TT_INDUSTRIES.map(item => item[0]);
+    const codes = TT_INDUSTRIES;
     if (picked && codes.includes(picked.value)) return picked.value;
     let saved = '';
     try { saved = localStorage.getItem(TT_INDUSTRY_KEY) || ''; } catch (error) { saved = ''; }
@@ -135,8 +137,9 @@
       + '<div class="tt-files" id="ttFiles"></div>'
       + '<label class="tt-field"><span>行业模板</span>'
       + '<select id="ttIndustry">'
-      + TT_INDUSTRIES.map(item => '<option value="' + item[0] + '"'
-          + (item[0] === industryChoice() ? ' selected' : '') + '>' + item[1] + '</option>').join('')
+      + TT_INDUSTRIES.map(key => '<option value="' + key + '"'
+          + (key === industryChoice() ? ' selected' : '') + '>'
+          + (TT_INDUSTRY_LABELS[key] || key) + '</option>').join('')
       + '</select>'
       + '<i class="tt-hint">决定需求单「三、产品技术规格」用哪套字段，以及 2.x 取哪套'
       + '物料/工序/费率。建单后要改得回 1.1 改。</i></label>'

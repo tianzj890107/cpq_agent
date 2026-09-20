@@ -13,10 +13,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import uuid
+from pathlib import Path as _Path
 from typing import Any, Iterable, Optional, Sequence
 
+from ..config import ROOT_DIR
+
 from . import da_db as db
+
+# 行业清单的唯一事实源在仓库根 cpq_industries.py（与报价侧共用）。
+_REPO_ROOT = _Path(ROOT_DIR).resolve().parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import cpq_industries                                                # noqa: E402
 
 _FEATURE_COLUMNS = (
     "length", "width", "thickness", "height", "diameter", "radius", "distance",
@@ -52,7 +63,7 @@ def ensure_project(project_id: str, meta: Optional[dict] = None) -> str:
 # 行业模板是需求单的结构性属性(决定 Section C 有哪些字段),单独成列而不是混在
 # 字段行里;后续阶段据此到知识库的对应行业数据中检索。
 # flexible 已从页面下线,仅兼容早期草稿。
-INDUSTRY_KEYS = ("semiconductor", "battery", "appliance", "flexible")
+INDUSTRY_KEYS = tuple(cpq_industries.industry_keys()) + tuple(cpq_industries.LEGACY_INDUSTRY_KEYS)
 
 # RequirementDoc.data 里这几个键描述的是「表单怎么渲染」而非业务内容,
 # 不进 src_requirement_field,否则字段表里会混进 UI 状态。
@@ -62,8 +73,8 @@ _STRUCTURAL_DATA_KEYS = frozenset({
 
 
 def _normalized_industry(value: object) -> str:
-    text = str(value or "").strip().lower()
-    return text if text in INDUSTRY_KEYS else "semiconductor"
+    """归一化行业；未知 / 空值落默认行业，历史键（flexible）原样保留。"""
+    return cpq_industries.normalize(value)
 
 
 def save_requirement(doc: dict) -> str:

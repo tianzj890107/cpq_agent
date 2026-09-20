@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -103,6 +104,7 @@ def init_db(path: Optional[Path] = None, *, force: bool = False) -> Path:
         try:
             conn.executescript(ddl)
             _add_missing_columns(conn)
+            _upgrade_requirement_industry_check(conn)
             conn.execute(
                 "INSERT INTO schema_meta(key, value, updated_at) VALUES('schema_version', ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -135,6 +137,56 @@ def _add_missing_columns(conn: sqlite3.Connection) -> list[str]:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         added.append(f"{table}.{column}")
     return added
+
+
+def _upgrade_requirement_industry_check(conn: sqlite3.Connection) -> bool:
+    """给已建的库放开 src_requirement.industry 的 CHECK（把 packaging 列进白名单）。
+
+    SQLite 不能直接改 CHECK，只能按官方 ALTER TABLE 步骤重建表：建新表 → 整表拷贝 →
+    删旧表 → 换名。整段在同一个显式事务里，失败即回滚，不会留下半张表；已经迁过
+    （建表语句里已含 packaging）直接跳过，所以重复执行无副作用。迁移期间临时关闭
+    外键，避免 DROP 旧表时把 src_requirement_field 的子行级联删掉；数据一行不改写。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='src_requirement'"
+    ).fetchone()
+    if not row or not row[0]:
+        return False
+    if "'packaging'" in row[0]:
+        return False
+    ddl = SCHEMA_FILE.read_text(encoding="utf-8")
+    m = re.search(r"CREATE TABLE IF NOT EXISTS\s+src_requirement\s*\(.*?\n\)\s*;", ddl, re.S)
+    if not m:
+        return False
+    new_ddl = re.sub(r"CREATE TABLE IF NOT EXISTS\s+src_requirement",
+                     "CREATE TABLE src_requirement__new", m.group(0), count=1)
+    columns = [r["name"] for r in conn.execute("PRAGMA table_info(src_requirement)")]
+    if not columns:
+        return False
+    collist = ", ".join(columns)
+    isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN")
+        try:
+            conn.execute(new_ddl)
+            conn.execute(
+                f"INSERT INTO src_requirement__new ({collist})"
+                f" SELECT {collist} FROM src_requirement")
+            conn.execute("DROP TABLE src_requirement")
+            conn.execute("ALTER TABLE src_requirement__new RENAME TO src_requirement")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_requirement_project"
+                " ON src_requirement(project_id, status)")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.isolation_level = isolation
+    return True
 
 
 def table_names(conn: Optional[sqlite3.Connection] = None) -> list[str]:

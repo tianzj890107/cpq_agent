@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import cpq_industries
 import json
 import uuid
 from datetime import datetime, timezone
@@ -118,6 +119,7 @@ def _ddl_pg(schema: str) -> list:
                 title            varchar(255),
                 customer         varchar(128),
                 project_name     varchar(128),
+                industry         varchar(32),
                 current_step     int         NOT NULL DEFAULT 1,
                 overall_status   varchar(24) NOT NULL DEFAULT 'draft',
                 creator_user_id  bigint
@@ -235,6 +237,9 @@ def _ddl_pg(schema: str) -> list:
         # 业务实例号（批次 6）：跨系统、跨重建认回报价卡片的唯一线索。老库靠
         # ADD COLUMN IF NOT EXISTS 补齐；索引要排在下面的 CREATE INDEX 之前（列先存在）。
         f"ALTER TABLE {schema}.cpq_wf_card ADD COLUMN IF NOT EXISTS business_case_id varchar(64)",
+        # 行业（包装第 1 批）：报价卡片也要知道自己属于哪个行业，转技术工艺时不丢。
+        # 老库靠 ADD COLUMN IF NOT EXISTS 补齐；老卡片该列为 NULL，读回空串，不猜不回填。
+        f"ALTER TABLE {schema}.cpq_wf_card ADD COLUMN IF NOT EXISTS industry varchar(32)",
         f"ALTER TABLE {schema}.cpq_wf_handoff ADD COLUMN IF NOT EXISTS"
         f" business_case_id varchar(64)",
         f"CREATE INDEX IF NOT EXISTS idx_wf_card_case"
@@ -508,7 +513,7 @@ def can_do_step(user: dict, step_no: int) -> bool:
 # ---------------------------------------------------------------------------
 _CARD_COLS = ("card_id", "session_id", "assistant_type", "title", "customer", "project_name",
               "current_step", "overall_status", "creator_user_id", "current_owner",
-              "created_at", "updated_at", "business_case_id")
+              "created_at", "updated_at", "business_case_id", "industry")
 
 
 def _card_row(row) -> dict:
@@ -519,6 +524,8 @@ def _card_row(row) -> dict:
         d[k] = _uid(d[k])
     for k in ("created_at", "updated_at"):
         d[k] = _iso(d[k])
+    # 老卡片没有行业 → 空串（调用方按默认行业处理），不猜、不回填。
+    d["industry"] = str(d.get("industry") or "")
     return d
 
 
@@ -539,12 +546,14 @@ def get_card(session_id: str) -> dict:
 
 def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
               project_name: str = "", current_step: int = None, conn=None,
-              business_case_id: str = "") -> dict:
+              business_case_id: str = "", industry: str = "") -> dict:
     """新建或更新卡片（报价会话每次保存/推进时由前端调用）。
     创建人 = 首次同步的登录用户；current_owner 首次同步时也归他。
 
     conn：给了就并进调用方的事务（回传命令新建报价会话时用），不自己 commit / close。
-    business_case_id：业务实例号（批次 6）。留空时建卡自动生成；同一会话再次同步不换号。"""
+    business_case_id：业务实例号（批次 6）。留空时建卡自动生成；同一会话再次同步不换号。
+    industry：行业键（包装第 1 批）。非空才写入，未知值落默认行业；留空时新卡片写 NULL、
+    老卡片保持原值（读回空串表示「没有行业」），不猜也不回填。"""
     session_id = (session_id or "").strip()
     if not session_id:
         raise WfError("缺少会话 ID")
@@ -555,16 +564,20 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
     try:
         card = _fetch_card(conn, session_id)
         now = _now()
+        # 只有显式传了行业才归一化写入；留空表示「这次没有行业信息」，不拿默认值覆盖。
+        wanted_industry = (cpq_industries.normalize(industry)
+                           if str(industry or "").strip() else "")
         if not card:
             cid = _new_id(conn)
             case_id = str(business_case_id or "").strip() or new_business_case_id()
             cpq_auth._exec(
                 conn, "INSERT INTO cpq_wf_card (card_id, session_id, assistant_type, title,"
                       " customer, project_name, current_step, overall_status, creator_user_id,"
-                      " current_owner, created_at, updated_at, business_case_id)"
-                      " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                      " current_owner, created_at, updated_at, business_case_id, industry)"
+                      " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (cid, session_id, ASSISTANT, title or None, customer or None, project_name or None,
-                 int(current_step or 1), "draft", uid, uid, _ts(now), _ts(now), case_id))
+                 int(current_step or 1), "draft", uid, uid, _ts(now), _ts(now), case_id,
+                 wanted_industry or None))
             _log(conn, cid, None, uid, "create", None, int(current_step or 1), "创建报价卡片")
             _ensure_steps(conn, cid)
             _commit(conn)
@@ -581,6 +594,10 @@ def sync_card(session_id: str, user: dict, title: str = "", customer: str = "",
         if wanted_case and not str(card.get("business_case_id") or "").strip():
             sets.append("business_case_id = %s")
             args.append(wanted_case)
+        # 行业同样是「非空才更新」：不传就保持原值，传了就覆盖成归一化后的值。
+        if wanted_industry:
+            sets.append("industry = %s")
+            args.append(wanted_industry)
         step = int(current_step or 0)
         if step and step > int(card["current_step"] or 1):
             sets.append("current_step = %s")

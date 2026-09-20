@@ -54,6 +54,8 @@ EXTRACTABLE_FIELDS = {
     "battery_process_other", "vda_dimensions", "slim_cell_dimensions", "battery_form_factor",
     # 电器行业固定规格模板（1.1 Section C）。
     *industry_templates.field_keys("appliance"),
+    # 包装行业固定规格模板（1.1 Section C；第 1 批为占位，第 2 批补齐）。
+    *industry_templates.field_keys("packaging"),
 }
 
 # 只有必填字段允许使用兜底推荐；非必填字段没有资料时保持空白。
@@ -89,6 +91,10 @@ _APPLIANCE_RECOMMENDATION_FIELDS = _COMMON_RECOMMENDATION_FIELDS | set(
     industry_templates.field_keys("appliance")
 )
 
+_PACKAGING_RECOMMENDATION_FIELDS = _COMMON_RECOMMENDATION_FIELDS | set(
+    industry_templates.field_keys("packaging")
+)
+
 _COMMON_REQUIRED_RECOMMENDATION_FIELDS = {
     "requirement_type", "priority", "bu", "disclosure", "description",
     "customer_type", "customer_industry", "account_manager", "final_customer_name",
@@ -105,6 +111,9 @@ _BATTERY_REQUIRED_RECOMMENDATION_FIELDS = _COMMON_REQUIRED_RECOMMENDATION_FIELDS
 }
 _APPLIANCE_REQUIRED_RECOMMENDATION_FIELDS = (
     _COMMON_REQUIRED_RECOMMENDATION_FIELDS | industry_templates.required_keys("appliance")
+)
+_PACKAGING_REQUIRED_RECOMMENDATION_FIELDS = (
+    _COMMON_REQUIRED_RECOMMENDATION_FIELDS | industry_templates.required_keys("packaging")
 )
 
 # 这些字段对应 1.1 页面已有的 select/tag 选项。AI 只能返回这里的 value，
@@ -180,6 +189,8 @@ def _extractable_fields_for_industry(industry: str) -> set[str]:
         return _BATTERY_RECOMMENDATION_FIELDS | _BATTERY_REQUIRED_RECOMMENDATION_FIELDS
     if industry == "appliance":
         return _APPLIANCE_RECOMMENDATION_FIELDS | _APPLIANCE_REQUIRED_RECOMMENDATION_FIELDS
+    if industry == "packaging":
+        return _PACKAGING_RECOMMENDATION_FIELDS | _PACKAGING_REQUIRED_RECOMMENDATION_FIELDS
     if industry == "flexible":
         # 历史草稿：规格字段由 AI 动态生成，只保留跨行业通用字段。
         return _COMMON_RECOMMENDATION_FIELDS | _COMMON_REQUIRED_RECOMMENDATION_FIELDS
@@ -191,6 +202,8 @@ def _required_recommendation_fields_for_industry(industry: str) -> set[str]:
         return _BATTERY_REQUIRED_RECOMMENDATION_FIELDS
     if industry == "appliance":
         return _APPLIANCE_REQUIRED_RECOMMENDATION_FIELDS
+    if industry == "packaging":
+        return _PACKAGING_REQUIRED_RECOMMENDATION_FIELDS
     if industry == "flexible":
         return _COMMON_REQUIRED_RECOMMENDATION_FIELDS
     return _SEMICONDUCTOR_REQUIRED_RECOMMENDATION_FIELDS
@@ -268,12 +281,14 @@ key 只能含小写字母、数字和下划线。
 
 _INDUSTRY_PROMPT = """
 你还必须输出 industry、industry_confidence、industry_reason：
-- industry 只能是 semiconductor、battery、appliance；
+- industry 只能是 semiconductor、battery、appliance、packaging；
 - semiconductor 仅用于半导体制造、晶圆、真空腔体、静电吸盘、半导体设备及其明确零部件；
 - battery 仅用于锂电池、动力电池、储能电池、电芯、模组、PACK 与其明确零部件；
 - appliance 仅用于家用电器整机及其明确部件（冰箱、洗衣机、空调、厨电、小家电、
   以及压缩机、家电电机、控制板、箱体门体等）；
-- 三者都不匹配或依据不足时，选最接近的一个并把 industry_confidence 压低到 0.4 以下，
+- packaging 仅用于包装印刷类业务（彩盒、礼品盒、纸箱、说明书、标签、缓冲内衬，
+  以及烫金、覆膜、模切、裱纸等表面与印后工艺）；
+- 以上都不匹配或依据不足时，选最接近的一个并把 industry_confidence 压低到 0.4 以下，
   由人工在页面上改选，不要臆造行业；
 - industry_confidence 为 0 到 1 的数字，industry_reason 不超过 80 字。
 """
@@ -394,7 +409,7 @@ def extract_requirement_fields(prepared: PreparedDocuments, industry_selection: 
     if not prepared.text:
         raise ValueError("没有可供解析的技术文档文本")
     selection = str(industry_selection or "semiconductor").strip().lower()
-    # flexible 是历史草稿模板，仍允许沿用；新建需求只会传三个受支持行业之一。
+    # flexible 是历史草稿模板，仍允许沿用；新建需求只会传受支持行业之一。
     manual_industry = selection if selection in (*industry_templates.INDUSTRIES, "flexible") else ""
     system_prompt = _SYSTEM_PROMPT + _INDUSTRY_PROMPT
     if manual_industry:

@@ -1313,15 +1313,17 @@
             <input id="techReqInput" type="file" multiple hidden
               accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.json,image/*">
           </div>
-          <!-- 技术工艺：行业模板（仅 tech 模式显示）。它决定需求单「三、产品技术规格」
-               整段用哪套字段（半导体/电池/电器各一套），所以必须在建单前选。 -->
-          <div class="upload-section" id="techIndustryBox" style="display:none" title="决定需求单产品技术规格用哪套字段">
+          <!-- 行业模板：报价模式与技术工艺模式共用同一个下拉（不再按模式隐藏）。
+               它决定需求单「三、产品技术规格」整段用哪套字段，所以必须在建单前选。
+               选项清单的唯一事实源是仓库根 cpq_industries.py，这里保持同序同值。 -->
+          <div class="upload-section" id="techIndustryBox" title="决定需求单产品技术规格用哪套字段">
             <i class="ti ti-category-2"></i>
             <select id="techIndustry" aria-label="行业模板"
               style="border:none;background:transparent;color:inherit;font-size:13px;font-weight:600;cursor:pointer;outline:none">
               <option value="semiconductor">半导体</option>
               <option value="battery">电池</option>
               <option value="appliance">电器</option>
+              <option value="packaging">包装</option>
             </select>
           </div>
           <div class="char-counter">0/500</div>
@@ -2162,30 +2164,34 @@
       if (techDrawLabel) techDrawLabel.textContent = '上传图纸';
       if (techReqLabel) techReqLabel.textContent = '上传需求文档';
     }
-    // tech 模式切到「图纸 / 需求文档」两个槽 + 行业模板，隐藏通用「上传文件」；离开 tech 时还原。
+    // tech 模式切到「图纸 / 需求文档」两个槽，隐藏通用「上传文件」；离开 tech 时还原。
+    // 行业模板两种模式都要能选（报价也要带行业），所以这里不再按模式隐藏。
     function applyUploadMode(mode) {
       const isTech = mode === 'tech';
       if (uploadSection) uploadSection.style.display = isTech ? 'none' : '';
       if (techUploadDraw) techUploadDraw.style.display = isTech ? '' : 'none';
       if (techUploadReq) techUploadReq.style.display = isTech ? '' : 'none';
-      const ib = document.getElementById('techIndustryBox');
-      if (ib) ib.style.display = isTech ? '' : 'none';
       if (isTech) resetTechUpload();
     }
     /* 行业模板：记住上次选择——同一个人通常连着建同一行业的单子，
-       每次都退回「半导体」等于每次都要重选。 */
+       每次都退回「半导体」等于每次都要重选。
+       可选清单的唯一事实源是仓库根 cpq_industries.py；这里直接读下拉自己的
+       option，不再维护第二份硬编码行业数组，避免加行业时两边跑偏。 */
     const TECH_INDUSTRY_KEY = 'cpq:tech:industry';
-    const TECH_INDUSTRIES = ['semiconductor', 'battery', 'appliance'];
+    function techIndustryOptions() {
+      const el = document.getElementById('techIndustry');
+      return el ? Array.prototype.map.call(el.options, option => option.value) : [];
+    }
     function techIndustry() {
       const el = document.getElementById('techIndustry');
       const v = (el && el.value) || '';
-      return TECH_INDUSTRIES.includes(v) ? v : 'semiconductor';
+      return techIndustryOptions().includes(v) ? v : 'semiconductor';
     }
     (function initTechIndustry() {
       const el = document.getElementById('techIndustry');
       if (!el) return;
       const saved = localStorage.getItem(TECH_INDUSTRY_KEY);
-      if (TECH_INDUSTRIES.includes(saved)) el.value = saved;
+      if (techIndustryOptions().includes(saved)) el.value = saved;
       el.addEventListener('change', () => localStorage.setItem(TECH_INDUSTRY_KEY, el.value));
     })();
     // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。

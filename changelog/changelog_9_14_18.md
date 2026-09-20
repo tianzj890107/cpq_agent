@@ -6532,3 +6532,290 @@ local  HEAD（提交时）      = 011e725a1d018f6f98f5f80dac9e3d4743d631b6
 - **未纳入本提交**：`裕同包装项目-待开发/**` 的 4 份业务 Excel。原因有两条：仓库既有约定不跟踪
   二进制 Office 文档（`git ls-files` 中 xlsx/xls/docx/pdf 数量为 0）；且 GitHub 镜像是可匿名访问的
   公开仓库（未登录访问仓库页返回 200，不存在的仓库返回 404）。是否入库待用户明确确认。
+
+## 144. 包装第 1 批「全局行业口径统一」Spec + 红测（9-18，Codex 只改 Spec + 红测 + changelog）
+
+包装行业 8 批计划的第一批：先统一四个行业（半导体 / 电池 / 电器 / **包装**）的唯一事实源，
+再加包装业务能力。本批只做口径与管道，不做包装字段、盒型、BOM、工艺与成本算法。
+
+- Spec：新增 `docs/specs/global-industry-registry-and-packaging.md`。
+- 红测：新增 `tests/test_industry_registry_unified_red.py`（20 条）。
+- 依据：`蜀同包装项目-待开发/` 下三份业务 Excel 与后续 `报价逻辑-0903.xlsx`（只作口径与
+  黄金样例来源，不运行 Excel 公式）。
+- 已查实现状（实测，非推断）：
+  · `industry_templates.INDUSTRIES` = `('semiconductor','battery','appliance')`，无 packaging；
+  · `da_repo._normalized_industry('packaging')` → `'semiconductor'`（**静默改行业**）；
+  · `da_schema.sql` 的 `src_requirement.industry` CHECK 拒收 `packaging`（sqlite 复现）；
+  · `cpq_wf._ddl_pg('cpq_wf')` 里 `cpq_wf_card` 完全没有 industry 列，报价侧无行业概念；
+  · 行业清单散落在 `报价首页.html`、`cpq-industry.js`、`tech-task.js`、`requirement-create.js`、
+    `home.js`、`industry_templates.py`、`da_repo.py`、`da_schema.sql`、`main.py` 共 10 处各自维护；
+  · `tests/` 下此前**没有任何测试**引用 industry，这块零回归保护。
+- 红测分组：A 注册表契约（5）、B 消费方派生 + 抽取入口（4）、C 存储与历史兼容（4）、
+  D 报价卡片携带行业（4）、E 前端选项一致（3）。
+- 红测实测：`Ran 20 tests / FAILED (failures=20)`，0 个 ERROR（无导入/环境假红）。
+  失败点分别落在：注册表缺失、`packaging` 静默变半导体、CHECK 拒收 packaging、
+  卡片无 industry 列与参数、AI 抽取不认 packaging、报价模式看不到行业下拉。
+- 单一事实源用**子进程探针**验证：先往 `cpq_industries.INDUSTRY_KEYS` 注入 `probe_x`
+  再导入消费方，消费方必须看到探针行业（自己硬编码就看不到）。
+- 本批只改 Spec / 红测 / changelog，未改任何生产实现、未提交推送、未重启服务。
+
+## 145. 包装第 1 批「全局行业口径统一」实现（9-18，Codex）
+
+落地 `## 144` 定稿的 Spec 与红测：把「半导体 / 电池 / 电器 / 包装」四个行业的唯一事实源
+收进仓库根 `cpq_industries.py`，报价与技术工艺共用；本批只做口径与管道，不做包装字段、
+盒型、BOM、工艺路线与成本/定价公式（第 2–8 批）。
+
+### 新增
+
+- `cpq_industries.py`（仓库根，报价与技术工艺共同导入）：`INDUSTRY_KEYS`（四行业）、
+  `LEGACY_INDUSTRY_KEYS=("flexible",)`、`DEFAULT_INDUSTRY="semiconductor"`、`INDUSTRIES`
+  （每项含 key/label/enabled/quote_template/process_template/knowledge_scope/cost_profile/
+  pricing_profile；packaging → label「包装」/`packaging_v1`/`packaging_margin_v1`）与
+  函数 `industry_keys() / all_industries() / is_supported() / is_legacy() / is_known() /
+  normalize() / label_of() / profile_of()`。`normalize` 去空白小写；可选与历史键原样返回；
+  其余（含 NULL/''/空白/未知）一律落 `DEFAULT_INDUSTRY`。
+
+### 修改（12）
+
+- `tech_app/backend/services/industry_templates.py`：`INDUSTRIES` / `DEFAULT_INDUSTRY` /
+  `INDUSTRY_LABELS` 改为从注册表派生（`INDUSTRY_LABELS` 再并入 `LEGACY_LABELS`）；
+  新增 `PACKAGING_SPEC` 最小占位块（3.1 基础参数 6 字段），保证
+  `normalize/blocks/field_keys/section_checks` 对 packaging 不抛错。完整 3.1–3.6 待第 2 批。
+- `tech_app/backend/storage/da_repo.py`：`INDUSTRY_KEYS` 由注册表派生
+  （`industry_keys() + LEGACY_INDUSTRY_KEYS`）；`_normalized_industry` 改走
+  `cpq_industries.normalize`（修掉 `'packaging'` 被静默改成 `'semiconductor'`）。
+- `tech_app/backend/storage/da_schema.sql`：`src_requirement.industry` 的 CHECK 加入
+  `packaging`。
+- `tech_app/backend/storage/da_db.py`：新增 `_upgrade_requirement_industry_check()`（SQLite
+  官方表重建式幂等迁移，迁移期临时 `PRAGMA foreign_keys=OFF` 以保住
+  `src_requirement_field` 子行），在 `init_db` 调用；老库升到新 CHECK，非法值仍拒。
+- `tech_app/backend/services/requirement_extract.py`：行业白名单、可抽取/推荐字段与必填集合、
+  `_INDUSTRY_PROMPT` 认 packaging。
+- `cpq_wf.py`：`import cpq_industries`；`cpq_wf_card` 加 `industry varchar(32)`，
+  `_ddl_pg` 同时 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS industry varchar(32)`（照
+  `business_case_id` 写法）；`_CARD_COLS` 加 `industry`；`_card_row` 把 industry 归一成
+  `str(... or "")`；`sync_card(..., industry: str = "")` 非空才归一写入、未知值落默认、
+  留空新卡写 NULL、老卡保持原值（读回 `""`）。
+- `报价首页.html`：`#techIndustryBox` 去掉默认 `display:none`，`applyUploadMode` 删掉按模式
+  隐藏行业框的分支（报价模式也能选行业）；下拉加「包装」option；删掉硬编码
+  `TECH_INDUSTRIES` 三元组，改 `techIndustryOptions()` 读下拉自身 option。
+- `tech_app/frontend/cpq-industry.js`：`OK` 加 `packaging`。
+- `tech_app/frontend/tech-task.js`：`TT_INDUSTRIES` 改为扁平键数组（含 packaging），新增
+  `TT_INDUSTRY_LABELS` 映射，渲染处同步。
+- `tech_app/frontend/requirement-create.js`：`rcIndustryLabel` 加 packaging；`#rcIndustry`
+  下拉加「包装」option。
+- `tech_app/frontend/home.js`：`#homeIndustry` 加「包装」option。
+- 当周 changelog（本条）。
+
+### 测试
+
+- 红测：`./open-claude/.venv/bin/python -m unittest tests.test_industry_registry_unified_red`
+  → **`Ran 20 tests / OK`**（实现前为 `FAILED (failures=20)`，0 ERROR）。
+- 必需回归：`tests.test_quote_task_coexistence_and_atomic_claim_red` → `Ran 41 tests / OK`。
+- 相关 15 模块回归：`Ran 311 tests / OK (skipped=2)`。
+- 全量 `discover`：`Ran 2459 tests / FAILED (failures=17, skipped=2)`。
+- **17 条失败全部为本批之前既有，无新增回归**（已用干净 worktree `29e4f21` 复跑同批证实）：
+  · 16 条属 `test_process_row_running_info_and_fold_red`（14）+
+    `test_tech_model_call_row_merged_and_summary_detail_red`（2）—— 基线同样 16 条；
+  · 1 条 `test_cpq_eval_ci_contract.CiDependencyCoverageTest.
+    test_every_production_import_has_a_requirement` —— 基线与改后断言文本逐字相同。
+- `node --check` 覆盖四个改动 JS 与首页内联脚本，全过。
+
+### 剩余风险
+
+- 包装 `PACKAGING_SPEC` 只有 6 个占位字段，第 2 批补齐 3.1–3.6 前，包装需求单的产品技术规格
+  段字段不完整。
+- `packaging_v1` / `packaging_margin_v1` 只落路由标识，成本与定价计算尚未实现（第 3 批起）。
+- 报价模式现在也能看到「行业模板」下拉（原仅 tech 模式可见），属口径变化，需人工验收确认。
+- 老报价卡片 / 归档卡片 `industry` 读回 `""`；不迁移、不回填、不猜。
+
+### 说明
+
+- 本批未改红测 `tests/test_industry_registry_unified_red.py`（一个字符未动）；未改三行业默认行为
+  与计算结果；未删改任何历史数据；`裕同包装项目-待开发/` 只读未动。
+- 未 commit / push / MR / tag / Release / 部署 / 重启服务。
+
+## 146. 包装第 2 批「包装需求模板与会话/看板联动」Spec + 红测（9-18，Codex 只改 Spec + 红测 + changelog）
+
+包装 8 批计划的第 2 批：把第 1 批接入的 `packaging` 行业从占位补成真实需求模板，并加上
+字段级来源与完整性门禁。本批**不做**盒型匹配、参数化 BOM、工艺路线与成本/定价
+（第 3–8 批），也不改 AI 抽取通道与后端协议。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-requirement-template.md`（含 4.5 前端来源徽章合同与
+  4.6 精确 64 字段 / 10 必填清单）。
+- 红测：新增 `tests/test_packaging_requirement_template_red.py`（35 条）。
+- 红测分组：A 后端模板（9）、B 前端模板与渲染（7）、C 字段来源（8）、D 完整性门禁（6）、
+  E 非回归与来源徽章（5）。
+- 依据：`蜀同包装项目-待开发/YTBZ-报价业务流程-20260907.xlsx` 的包装流程与五维盒型匹配。
+
+### 已查实现状（实测，非推断）
+
+- `industry_templates.PACKAGING_SPEC` 仍是第 1 批的占位块：只有 `3.1 基础参数` 6 个字段
+  （product_name / packaging_type / box_type / overall_dimensions / packaging_material /
+  print_process），`required_keys('packaging')` 只剩 `{'product_name'}`；
+- `FILE_BLOCK_SECTION['packaging'] == '3.2'`（应为 `3.7`）；
+- `requirement-create.js` 没有 `RC_PACKAGING_SPECS`；生效的 `rcReplaceProductSpec()`
+  只有 semiconductor / battery / appliance 三支，packaging 落 `rcManagedFlexibleSpec()`
+  历史路径；图纸块只对 battery/appliance 改名到 3.5；
+- `requirement_service` 没有 `merge_field_sources()`，全仓库没有 `field_sources` 结构；
+- `da_repo._STRUCTURAL_DATA_KEYS` 不含 `field_sources`；
+- 前端没有字段级来源徽章（用户输入 / 附件 / AI 抽取 / AI 推荐 / 人工修改）；
+- packaging 空需求单 `requirement_precheck` 的 `gaps.keys` 里没有 inner_length 等包装必填项，
+  Section C 只报 `product_name`。
+
+### 红测实测
+
+`./open-claude/.venv/bin/python -m unittest tests.test_packaging_requirement_template_red`
+→ **`Ran 35 tests / FAILED (failures=28)`**，**0 个 ERROR**（无导入/路径/语法假红）。
+
+- 28 条失败逐条对应本批缺口：包装 3.1–3.6 模板缺失（A1–A5、A7、A9）、前端
+  `RC_PACKAGING_SPECS` 与 packaging 分支/3.7/横幅缺失（B1–B6）、`merge_field_sources`
+  与 `field_sources` 结构性键缺失（C1–C8）、包装确认页缺口口径缺失（D1、D2、D4、D5、D6）、
+  来源标签与「人工修改」徽章缺失（E4、E5）。
+- 7 条已通过（属第 1 批已完成或守护用例）：A6 `label('packaging')=='包装'`、
+  A8 包装未混入半导体字段、B7 既有渲染链未被替换、D3 未按半导体模板报缺口、
+  E1–E3 三行业模板 / `flexible` 归一 / `precheck` 返回结构未回归。无「假绿掩盖缺口」。
+- 前端行为用最小 Node DOM harness 执行真实 `rcReplaceProductSpec()` 与 `rcAiBadge()`
+  源码片段断言，不是纯正则匹配。
+- 回归：相关 33 个模块 `Ran 499 tests / FAILED (failures=28)`（失败数与本批红测一致，无新增
+  回归）；`tests.test_industry_registry_unified_red` → `Ran 20 tests / OK`；
+  需求四模块 `Ran 57 tests / OK`。
+
+### 剩余风险
+
+- 第 1 批遗留：`PACKAGING_SPEC` 占位字段要等本批实现完成后才真正补齐。
+- 红测已把前端字段键与后端 `field_keys('packaging')` 做精确比对，实现时若两边漂移会直接红。
+- `field_sources` 的写入集成点（AI 抽取结果落库、保存时合并）本批只锁 `merge_field_sources`
+  纯函数与结构性键，端到端落库需在实现回归中人工验收。
+- 依赖第 1 批注册表；若第 1 批实现回退，本批 A/B 组会连带失败（属预期耦合，非假红）。
+
+### 说明
+
+- 本批只改 Spec / 红测 / changelog；**未修改任何生产实现**，未让红测迁就实现。
+- 未 commit / push / MR / tag / Release / 部署 / 重启服务；`蜀同包装项目-待开发/` 只读未动。
+
+## 147. 包装第 2 批「包装需求模板与会话/看板联动」实现 + 复核（9-18 落地 / 9-20 复核，Codex）
+
+落地 `## 146` 定稿的 Spec 与红测（`docs/specs/packaging-requirement-template.md` +
+`tests/test_packaging_requirement_template_red.py`）。本批只做包装需求输入与来源留痕，不做
+盒型匹配、参数化 BOM、工艺路线与成本/定价（第 3–8 批）。
+
+### 实现（工作区已落地，未提交）
+
+- `tech_app/backend/services/industry_templates.py`：`PACKAGING_SPEC` 由第 1 批的 3.1 占位块
+  补成完整 3.1–3.6 六段共 **64** 个字段，必填 **10** 个（packaging_product_name /
+  packaging_category / quote_quantity / inner_length / inner_width / inner_height /
+  box_type / closure_type / v_groove / face_paper_gsm）。`FILE_BLOCK_SECTION['packaging']`
+  由既有的 `3.{len(blocks)+1}` 自动得到 `3.7`，未另写死。
+- `tech_app/backend/services/requirement_service.py`：新增 `FIELD_SOURCES` 闭集与
+  `merge_field_sources(existing, incoming)`（manual 不被非 manual 覆盖；user_text /
+  attachment 不被 ai_extract / ai_recommend 降级；未知来源丢弃；返回新 dict 不改入参），
+  并在 `save_requirement_draft()` 里与旧值合并后写回 `data['field_sources']`，防止整表 PUT
+  把「人工修改」留痕抹掉（照 `keep_quote_source` 的既有写法）。
+- `tech_app/backend/storage/da_repo.py`：`_STRUCTURAL_DATA_KEYS` 增加 `field_sources`，
+  避免它被拆成 `src_requirement_field` 字段行。
+- `tech_app/frontend/requirement-create.js`：新增 `RC_PACKAGING_SPECS`（六段，键与顺序对齐
+  后端）；生效的 `rcReplaceProductSpec()` 增加 packaging 分支走
+  `rcStaticSpec(RC_PACKAGING_SPECS)`，不再落 `rcManagedFlexibleSpec()` 历史路径；图纸块
+  编号按行业取 3.4 / 3.5 / **3.7**；行业横幅为 packaging 单独给「已加载包装（盒型/材料/
+  印刷/物流）规格字段」；新增 `RC_FIELD_SOURCE_LABELS`，`rcAiBadge()` 优先读
+  `data.field_sources` 渲染来源徽章（复用既有 `ai-filled-badge`），无来源时保持原有
+  「AI 带入 / AI 推荐 / 历史决策」行为。
+- `tech_app/frontend/requirement-create.html`：缓存戳 `requirement-create.js?v=reqcreate19`
+  → `reqcreate20`。
+
+### 复核结果（9-20 实跑）
+
+- `tests.test_packaging_requirement_template_red` → **`Ran 35 tests / OK`**（实现前为
+  `FAILED (failures=28)`、0 ERROR）。
+- `tests.test_industry_registry_unified_red` → `Ran 20 tests / OK`。
+- 相关 33 个模块回归（含 requirement / industry / da_repo / 技术工艺看板链路）→
+  `Ran 499 tests / OK`，无新增回归。
+- `node --check tech_app/frontend/requirement-create.js` 通过。
+- 结构复核：`blocks('packaging')` = 3.1/11、3.2/11、3.3/11、3.4/11、3.5/10、3.6/10；
+  `field_keys` 64 个；`required_keys` 10 个；`FILE_BLOCK_SECTION['packaging']=='3.7'`；
+  `da_repo._STRUCTURAL_DATA_KEYS` 含 `field_sources`。
+- AI 抽取侧无需另改：`requirement_extract.py` 的 packaging 可抽取/必填集合本就从
+  `industry_templates.field_keys/required_keys('packaging')` 派生，补完模板后自动生效。
+
+### 剩余风险
+
+- `rcAiBadge()` 内部用了一份内联来源标签表，与 `RC_FIELD_SOURCE_LABELS` 重复，后续改文案
+  存在两边漂移风险（当前取值一致，功能无缺口）。
+- `field_sources` 的端到端落库（AI 抽取结果写入、刷新后徽章恢复）已验证保存合并路径，仍需
+  页面人工验收。
+- 本批实现仍在工作区，未提交、未推送；`packaging_v1` / `packaging_margin_v1` 仍只有路由
+  标识，成本与定价属第 3 批起。
+
+### 说明
+
+- 本次复核未修改任何生产实现或其红测；仅追加本条 changelog。
+- 未 commit / push / MR / tag / Release / 部署 / 重启服务。
+
+## 148. 包装第 3 批「包装知识库扩展表、行业维度与演示数据导入」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+包装 8 批计划的第 3 批：把包装的盒型 / 部件模板 / 工艺模板 / 内托配件 / 成本公式 / 物流规则 /
+匹配权重灌成可靠演示数据，并给 `kb_*` 补上**行业维度**，避免包装数据串进半导体 / 电池 /
+电器的检索。本批**只建数据与隔离**：不做盒型匹配打分（第 4 批）、参数化 BOM（第 5 批）、
+工艺路线生成（第 6 批）、成本公式求值（第 7 批）。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-knowledge-base-mock-seed.md`。
+- 红测：新增 `tests/test_packaging_knowledge_base_seed_red.py`（46 条）。
+- 红测分组：A 表结构与行业列（10）、B 演示数据与幂等（17）、C 行业隔离检索（14）、
+  D 导入器与快照（2）、E 非回归（3）。
+- 依据：`裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx` 四个 Sheet 实测 12 盒型 / 31 部件 /
+  23 工艺路线步骤 / 12 内托与配件；`报价逻辑-0903.xlsx` 的成本分类与最低收费口径。
+
+### 关键前提（本批与前两批不同的架构事实）
+
+知识库事实源已搬家（`kb-in-pg-http-snapshot` 已实现）：
+
+- DDL 与整包快照在 `cpq_kb.py`；技术工艺 `kb_repo` 经 `cpq_kb_client` 拉 HTTP 快照，
+  **不再读本地 SQLite**；本地 `tech_app/tech_data/da.db` 只是 `scripts/import_da_kb_to_pg.py`
+  的导入源。因此包装数据必须同时落在 `da_schema.sql`、`cpq_kb.py`、`da_seed_packaging.py`
+  三处，只改一处就会出现「本地有、快照没有」或「快照有、导入器不认识」的静默缺口。
+
+### 已查实现状（实测，非推断）
+
+- `kb_*` 20 张表**没有一张带行业列**；`kb_repo.list_materials / current_price /
+  effective_rate / effective_factor / recommend_components / recommend_routes` 全部在全库上
+  过滤 —— 加包装物料/费率后三行业会直接命中包装数据。
+- 7 张包装扩展表在 SQLite 与 `cpq_kb.KB_TABLES` / `KB_KEYS` 两侧都不存在。
+- `tech_app/backend/storage/da_seed_packaging.py` 不存在。
+- `cpq_kb.KB_TABLES` 仍只有 20 张表，快照与导入器都看不见包装数据。
+
+### 红测实测
+
+`./open-claude/.venv/bin/python -m unittest tests.test_packaging_knowledge_base_seed_red`
+→ **`Ran 46 tests / FAILED (failures=42)`**，**0 个 ERROR**（无导入/路径/语法假红）。
+
+- 42 条失败逐条对应本批缺口：`cpq_kb.KB_TABLES`/`KB_KEYS`/DDL 与 `da_schema.sql` 缺 7 张包装表
+  与 `industry` 列、`_ADDED_COLUMNS` 没有增量列（A 组 9 条）、`da_seed_packaging` 缺失导致
+  12/31/23/12 数据与幂等无法验证（B 组 17 条）、六个检索函数缺 `industry=` 参数与 4 个包装
+  查询函数缺失（C 组 13 条）、导入器统计里没有包装表（D 组 1 条）、`industry` 默认值不是
+  `None`（E 组 1 条）。
+- 4 条已通过（守护用例，无空洞断言）：既有 20 张表名与顺序不变、不传 `industry` 时保持全库
+  行为、既有种子模块仍可导入、`da_schema.sql` 既有 20 张表仍在。
+- C 组用**最小快照注入**（`kb_repo._CACHE`）真跑检索函数：两个包络完全一致、仅行业不同的
+  候选件，过滤器关闭时两个都命中、按行业收口后各自只命中自己，确保测的是行业隔离本身。
+- 回归：`tests.test_kb_in_pg_http_snapshot_red` + 第 1/2 批红测 → `Ran 77 tests / OK`；
+  kb/cpq_kb/da_seed 相关模块 → `Ran 59 tests / OK`。
+
+### 剩余风险
+
+- 行业维度加在 11 张主体表上，EAV/子表（`kb_component_param`、`kb_material_price`、
+  `kb_process_route_step`）靠父表继承；`current_price` 必须先用 `kb_material` 解析行业，
+  实现时容易漏。
+- `da_schema.sql`（SQLite）、`cpq_kb.py`（PG DDL）与 `KB_KEYS` 三处主键必须逐字一致，否则
+  导入器幂等会静默退化成 `DO NOTHING`。
+- 演示数据是样例工作簿口径，**不是**正式主数据；第 7 批成本引擎消费前仍需业务确认。
+- 本批不写 PG；把包装数据真正送进 `cpq_kb` 仍要跑既有导入器（默认 dry-run）。
+
+### 说明
+
+- 本批只改 Spec / 红测 / changelog；**未修改任何生产实现**，未让红测迁就实现。
+- 未 commit / push / MR / tag / Release / 部署 / 重启服务；`裕同包装项目-待开发/` 只读未动。

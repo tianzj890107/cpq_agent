@@ -343,7 +343,7 @@ function renderHomeAttachments() {
 function homeMountIndustrySelector() {
   const content = document.querySelector('.unified-content');
   if (!content || document.querySelector('#homeIndustry')) return;
-  content.insertAdjacentHTML('beforeend', `<label class="home-industry-picker">行业模板<select id="homeIndustry" aria-label="选择行业模板"><option value="semiconductor">半导体</option><option value="battery">电池</option><option value="appliance">电器</option></select></label>`);
+  content.insertAdjacentHTML('beforeend', `<label class="home-industry-picker">行业模板<select id="homeIndustry" aria-label="选择行业模板"><option value="semiconductor">半导体</option><option value="battery">电池</option><option value="appliance">电器</option><option value="packaging">包装</option></select></label>`);
   const select = document.querySelector('#homeIndustry');
   select.value = homeIndustry;
   select.onchange = () => { homeIndustry = select.value; };

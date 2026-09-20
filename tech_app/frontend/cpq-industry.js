@@ -1,5 +1,5 @@
 /* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
-   需求单的行业模板（半导体/电池/电器）决定「三、产品技术规格」整段用哪套字段，
+   需求单的行业模板（半导体/电池/电器/包装）决定「三、产品技术规格」整段用哪套字段，
    所以必须在建单前选。上游是在 tech_app 自己的 home.html 里选（home.js 的
    #homeIndustry）；而嵌进 CPQ 后入口换成了「报价首页.html 的技术工艺标签」，
    那里选完通过 URL ?industry= 带过来。
@@ -11,7 +11,8 @@
        「半导体」（rcData() 是空的），用户在首页选的「电池」会被静默丢掉。
        本文件补上这一段：先用 URL 带来的值渲染，并在第一次保存时写进需求单。 */
 (function () {
-  const OK = ['semiconductor', 'battery', 'appliance'];
+  // 与仓库根 cpq_industries.py 的可选行业同序同值（含包装）；加行业时两边一起改。
+  const OK = ['semiconductor', 'battery', 'appliance', 'packaging'];
   const fromUrl = String(new URLSearchParams(location.search).get('industry') || '').toLowerCase();
   if (!OK.includes(fromUrl)) return;          // 没带参数就完全不介入，保持上游行为
   let pending = fromUrl;                      // 还没落库的行业选择

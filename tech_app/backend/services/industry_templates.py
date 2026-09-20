@@ -11,21 +11,27 @@ tests/test_industry_templates.py 会比对前端 JS 中的键名，防止两边�
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Iterable, NamedTuple
 
-# 平台当前支持的行业模板。与 storage/da_mock.py 的 INDUSTRIES 键保持一致，
-# 需求单选的行业能直接对上知识库里那一套物料/工序/费率。
-INDUSTRIES: tuple[str, ...] = ("semiconductor", "battery", "appliance")
-DEFAULT_INDUSTRY = "semiconductor"
+# 行业清单的唯一事实源在仓库根 cpq_industries.py（报价侧与技术工艺侧共用）。
+from ..config import ROOT_DIR
 
-INDUSTRY_LABELS = {
-    "semiconductor": "半导体",
-    "battery": "电池",
-    "appliance": "电器",
-    # 历史草稿可能仍是「灵活（AI 生成字段）」模板。它已不在可选项里，
-    # 但旧需求单必须还能打开，所以保留标签与渲染兜底。
-    "flexible": "灵活",
-}
+REPO_ROOT = Path(ROOT_DIR).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import cpq_industries                                                # noqa: E402
+
+# 全部由注册表派生，本模块不再自己写行业字面量。
+INDUSTRIES: tuple[str, ...] = tuple(cpq_industries.industry_keys())
+DEFAULT_INDUSTRY = cpq_industries.DEFAULT_INDUSTRY
+
+INDUSTRY_LABELS = {key: str(item["label"]) for key, item in cpq_industries.INDUSTRIES.items()}
+# 历史草稿可能仍是「灵活（AI 生成字段）」模板。它已不在可选项里，
+# 但旧需求单必须还能打开，所以保留标签与渲染兜底。
+INDUSTRY_LABELS.update(cpq_industries.LEGACY_LABELS)
 
 
 class SpecField(NamedTuple):
@@ -151,10 +157,27 @@ APPLIANCE_SPEC: tuple[SpecBlock, ...] = (
     )),
 )
 
+# --------------------------------------------------------------------------- #
+# 包装（占位：第 2 批补齐完整 3.1–3.6 字段模板）
+# --------------------------------------------------------------------------- #
+PACKAGING_SPEC: tuple[SpecBlock, ...] = (
+    SpecBlock("3.1", "基础参数", (
+        SpecField("product_name", "产品名称", True),
+        SpecField("packaging_type", "包装类型"),
+        SpecField("box_type", "盒型"),
+        SpecField("overall_dimensions", "外形尺寸"),
+        SpecField("packaging_material", "材质"),
+        SpecField("print_process", "印刷工艺"),
+    )),
+)
+
 SPECS: dict[str, tuple[SpecBlock, ...]] = {
     "semiconductor": SEMICONDUCTOR_SPEC,
     "battery": BATTERY_SPEC,
     "appliance": APPLIANCE_SPEC,
+    # 包装（第 1 批只放最小占位块）：保证 normalize / blocks / field_keys /
+    # section_checks 对 packaging 不抛错。完整的 3.1–3.6 字段由第 2 批补齐。
+    "packaging": PACKAGING_SPEC,
 }
 
 # 各行业 Section C 之后「图纸与技术资料」块的编号:模板块数 + 1。
