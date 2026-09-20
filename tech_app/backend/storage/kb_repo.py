@@ -901,6 +901,15 @@ def packaging_insert_accessories() -> list[dict]:
     return _sort_rows(_table("kb_packaging_insert_accessory"), ("accessory_code", "asc"))
 
 
+def packaging_match_weights() -> list[dict]:
+    """盒型五维匹配的权重与硬门槛（按 dimension 升序）。
+
+    维度闭集、权重与 hard_gate 一律以表为准：匹配引擎不得在代码里写死数字，
+    业务调权重只改 `kb_packaging_match_weight`，不改代码。
+    """
+    return _sort_rows(_table("kb_packaging_match_weight"), ("dimension", "asc"))
+
+
 def save_standard_part(part: dict) -> str:
     row = dict(part)
     row.setdefault("std_id", _uid("STD"))

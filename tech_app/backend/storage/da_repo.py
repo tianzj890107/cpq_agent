@@ -640,6 +640,89 @@ def stage_states(project_id: str) -> list[dict]:
 
 
 # ========================================================================== #
+# 包装盒型匹配(包装第 4 批):匹配结果可重跑,人工确认不可被覆盖,审计只增不改
+# ========================================================================== #
+_BOX_MATCH_DECISION_COLUMNS = (
+    "decision", "confirmed_box_type", "confirmed_by", "confirmed_at", "note", "updated_at",
+)
+
+
+def _box_match_json(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def save_box_match(record: dict) -> None:
+    """按 (project_id, requirement_no) 幂等写匹配结果。
+
+    只写算法侧列(引擎版本/时间/输入快照/候选/缺失项/推荐盒型) —— `decision` 与
+    `confirmed_*` 属人工确认,重跑匹配一律不碰(新建行由表默认值落 `pending`)。
+    """
+    db.upsert("wip_packaging_box_match", {
+        "project_id": record["project_id"],
+        "requirement_no": record.get("requirement_no") or "",
+        "industry": record.get("industry") or "packaging",
+        "engine_version": record.get("engine_version") or "",
+        "matched_at": record.get("matched_at") or db.now(),
+        "inputs_json": _box_match_json(record.get("inputs") if "inputs" in record
+                                       else record.get("inputs_json")),
+        "candidates_json": _box_match_json(record.get("candidates") if "candidates" in record
+                                          else record.get("candidates_json")),
+        "missing_inputs_json": _box_match_json(record.get("missing_inputs") if "missing_inputs" in record
+                                               else record.get("missing_inputs_json")),
+        "suggested_box_type": record.get("suggested_box_type") or "",
+        "updated_at": db.now(),
+    }, keys=("project_id", "requirement_no"))
+
+
+def load_box_match(project_id: str, requirement_no: str = "") -> Optional[dict]:
+    """读单条匹配记录;没有则 None(GET 语义由服务层补 decision='none')。"""
+    return db.query_one(
+        "SELECT * FROM wip_packaging_box_match WHERE project_id = ? AND requirement_no = ?",
+        (project_id, requirement_no or ""),
+    )
+
+
+def update_box_match_decision(project_id: str, requirement_no: str = "", **fields) -> None:
+    """只更新人工决策列;算法侧的候选/快照不在可写白名单里。"""
+    columns = {key: value for key, value in fields.items()
+               if key in _BOX_MATCH_DECISION_COLUMNS}
+    if not columns:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in columns)
+    db.execute(
+        f"UPDATE wip_packaging_box_match SET {assignments} "
+        "WHERE project_id = ? AND requirement_no = ?",
+        [*columns.values(), project_id, requirement_no or ""],
+    )
+
+
+def append_box_match_audit(project_id: str, requirement_no: str = "", action: str = "",
+                           box_type_code: Optional[str] = None, actor: Optional[str] = None,
+                           detail: Any = None) -> int:
+    """明细审计只允许 INSERT;本模块不提供任何更新/删除该表的函数(Spec §3.4)。"""
+    return db.insert("wip_packaging_box_match_audit", {
+        "project_id": project_id,
+        "requirement_no": requirement_no or "",
+        "action": action,
+        "box_type_code": box_type_code or None,
+        "actor": actor or None,
+        "at": db.now(),
+        "detail_json": _box_match_json(detail),
+    })
+
+
+def box_match_audit(project_id: str, requirement_no: str = "") -> list[dict]:
+    """按 audit_id 升序读回;历史不被后续决策改写。"""
+    return db.query(
+        "SELECT * FROM wip_packaging_box_match_audit "
+        "WHERE project_id = ? AND requirement_no = ? ORDER BY audit_id ASC",
+        (project_id, requirement_no or ""),
+    )
+
+
+# ========================================================================== #
 # L3 · 评估结果
 # ========================================================================== #
 def save_report(doc: dict) -> str:

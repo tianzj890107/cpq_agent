@@ -225,6 +225,10 @@ def query_one(sql: str, params: Sequence[Any] = (), *, conn: Optional[sqlite3.Co
     return rows[0] if rows else None
 
 
+# 读全量结果集的别名：与 query 同一实现，供"一次取多行"的调用方按语义取名。
+query_all = query
+
+
 def execute(sql: str, params: Sequence[Any] = (), *, conn: Optional[sqlite3.Connection] = None) -> sqlite3.Cursor:
     c = conn or get_conn()
     cur = c.execute(sql, tuple(params))

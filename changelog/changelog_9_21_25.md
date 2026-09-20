@@ -162,3 +162,164 @@
   逐条内联，运行时不依赖该目录。
 - 本条随实现提交并推送 GitLab 与 GitHub 的 `ytbz` 分支；未创建 MR / tag / Release，未部署或
   重启任何服务。
+
+## 151. 包装第 4 批「盒型匹配与人工确认」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+包装 8 批计划的第 4 批：把第 3 批灌进知识库的 **12 个盒型**与**5 维权重**真正用起来，完成
+「客户需求 → 候选盒型 → 工艺经理确认」这一段。本批**只做匹配与人工决策**：不做参数化部件与
+BOM（第 5 批）、工艺路线（第 6 批）、成本公式求值（第 7 批）、利润与报价单（第 8 批）。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-box-type-matching.md`。
+- 红测：新增 `tests/test_packaging_box_type_matching_red.py`（51 条）。
+- 红测分组：A 权重与维度读表（4）、B 五维判分与边界（7）、C 硬门槛淘汰（5）、
+  D 缺输入与不撒谎（5）、E 排序与确定性（6）、F 落库与四态决策（9）、G 确认保护与失效（4）、
+  H 审计只增不改（3）、I 接口与角色门禁（3）、J 非回归护栏（5）。
+
+### 已查实现状（实测，非推断）
+
+- `kb_repo` 只有 `packaging_box_types` / `packaging_part_templates` /
+  `packaging_process_templates` / `packaging_insert_accessories`，**没有**
+  `packaging_match_weights()` —— 5 维权重表灌了却读不出来。
+- `tech_app/backend/services/packaging_match.py` 不存在；仓库里没有任何盒型匹配实现。
+- `da_schema.sql` 没有 `wip_packaging_box_match` / `wip_packaging_box_match_audit`：
+  候选、分项分、淘汰原因与人工确认都不落库，刷新即丢。
+- `main.py` 没有 `box-match` 三个路由，也没有决策角色常量。
+
+### 关键设计决定
+
+- **权重与硬门槛一律读表**：总分 `Σ(weight×score)/Σweight`，维度闭集取自
+  `kb_packaging_match_weight`；改业务口径只改表、不改代码。红测专门检验「改表权重 → 排序变化」。
+- **硬门槛与评分分离**：`fit_clearance`（容差 0.5mm）与 `closure_type` 不满足即淘汰；尺寸、
+  克重、V 槽只降分。尺寸/克重用同一条线性衰减 `max(0, 1 - 超出量/区间宽度)`。
+- **多值闭合方式按交集判**：盒型的 `磁吸/天地盖`、`抽屉+拉带` 与需求 `磁吸`、`抽屉` 命中。
+- **缺输入不许装成匹配成功**：需求必填维度缺失 → 候选 `needs_input` 且不可确认，缺失维度按
+  0 分计入；`fit_clearance` 是选填，缺它仍可确认但要如实出现在 `missing_inputs`。
+- **越界候选不得排第一**：排序键 = 状态 → 是否越界 → 总分降序 → 盒型编码升序（红测构造了
+  「越界候选分更高」的用例来验证这条规则本身）。
+- **人工确认受保护**：重新匹配 / 重新解析需求都不得覆盖 `confirmed_*`；关键输入变化只标
+  `stale` 并列出变了的字段。审计只 INSERT，且每次决策同时写平台项目时间线 `store.audit`。
+- **本批不碰 PG、不建工作流卡**：新制评估只落决策与可建卡描述，真实建卡留给第 8 批闭环。
+
+### 红测结果（实跑）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_packaging_box_type_matching_red`
+  → **`Ran 51 tests / FAILED (failures=49)`**；2 条通过的是非回归护栏
+  （`test_j1_packaging_required_keys_unchanged`、`test_j4_seeded_box_types_untouched`），
+  本批未实现前本就该绿。
+- 49 条失败的**预期失败点**均为缺口本身：`packaging_match.py` 不存在（A–I 全部）、
+  `kb_repo.packaging_match_weights()` 缺失（A）、两张 `wip_packaging_box_match*` 表缺失
+  （F–H）、`main.py` 三路由与决策角色常量缺失（I）、1.2 页未接 `box-match`（J5）。
+- 前三批红测回归：`Ran 20 / 35 / 46 tests` 全部 `OK`，无新增回归。
+
+### 剩余风险
+
+- 演示权重（0.30/0.25/0.15/0.20/0.10）与配合间隙容差 0.5mm 来自样例工作簿口径，
+  **待业务确认**；容差目前是模块常量，参数化到表里属后续增强。
+- `applicable_industries`（化妆品/数码/茶叶…）与 `business_status` 本批只带出不参与评分；
+  若要变成第 6 个维度，需要先确认业务口径再改表。
+- 新制评估只产出决策与可建卡描述，尚不能一键生成工作流任务卡。
+
+### 说明
+
+- 本次只新增 Spec、红测与 changelog；未写业务实现、未改前三批红测与既有 Spec；未删除、清空、
+  迁移、回填任何项目 / 会话 / 任务 / 附件 / 数据库记录；未连接 PG、未碰线上 `cpq_kb`。
+- 未 push / MR / tag / Release / 部署 / 重启服务；`裕同包装项目-待开发/` 保持只读且未纳入提交。
+
+## 152. 包装第 4 批「盒型匹配与人工确认」实现（9-20，Codex）
+
+把第 3 批灌进知识库的 **12 个盒型**与 **5 维权重**真正用起来：客户需求 → 五维匹配 →
+候选盒型 → 工艺经理四态决策，全部落本地 SQLite（`wip_packaging_box_match*`）。
+本批不做部件与 BOM（第 5 批）、工艺路线（第 6 批）、成本与报价（第 7、8 批）。
+
+### 产物
+
+- 新增 `tech_app/backend/services/packaging_match.py`：纯函数匹配引擎 + 落库/四态决策服务。
+  导出契约名与 Spec §4.5 逐字一致：`ENGINE_VERSION` / `MATCH_INPUT_KEYS` /
+  `FIT_CLEARANCE_TOLERANCE_MM` / `match_box_types` / `run_box_match` / `load_box_match` /
+  `decide_box_match` / `BoxMatchError` / `BOX_MATCH_DECIDE_ROLES`。
+- `kb_repo.packaging_match_weights()`：权重表的唯一读取口（新增），匹配引擎不再有任何
+  写死的权重、硬门槛或维度清单。
+- `da_schema.sql`：新增 `wip_packaging_box_match`（主键 `project_id + requirement_no`，
+  `decision` CHECK 四态）与 `wip_packaging_box_match_audit`（`audit_id` 自增 + 只增不改）。
+- `da_repo`：`save_box_match` / `load_box_match` / `update_box_match_decision` /
+  `append_box_match_audit` / `box_match_audit`（**不提供**审计的更新/删除函数）。
+- `main.py`：`POST|GET /api/projects/{project_id}/requirement/box-match` 与
+  `POST .../box-match/decision`；决策角色直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`。
+- `requirement-confirm.js`（+ `requirement-confirm.html` 加载与缓存戳 `reqconfirm1`）：
+  1.2 确认页的盒型匹配面板 —— 候选 / 总分 / 分项分 / 淘汰原因 / 四态按钮 / `stale` 提示。
+- 红测 `tests/test_packaging_box_type_matching_red.py` 51 条全绿。
+
+### 关键实现口径
+
+- **权重与硬门槛一律读表**：维度闭集、`weight`、`hard_gate` 全部来自
+  `kb_packaging_match_weight`；总分 `Σ(weight×score)/Σweight`（权重和为 10 也归一到 1.0）。
+- **硬门槛与降分分离**：`closure_type`（交集为空）与 `fit_clearance`（容差 0.5mm）淘汰；
+  尺寸 / 克重按 `max(0, 1 - 超出量 / 区间宽度)` 线性衰减，V 槽按「同值 1.0 / 需求否盒型是 0.6 /
+  需求是盒型否 0.0」计分。
+- **缺输入不许装成匹配成功**：必填口径唯一来自 `industry_templates.required_keys("packaging")`；
+  必填维度缺失 → 候选 `needs_input` 且 `can_confirm=false`，缺失维度按 0 分计入；
+  `fit_clearance` 是选填，缺它仍可确认但要出现在 `missing_inputs`。
+- **人工确认优先于算法**：`save_box_match` 只写算法侧列，重跑匹配 / 重新解析需求都不会覆盖
+  `decision` / `confirmed_*`；关键输入与 `inputs_json` 快照不一致时读回带 `stale` 与
+  `stale_reasons`。每次决策同时写明细审计（只增）与平台时间线
+  `store.audit(..., "workflow:packaging_box_match_<decision>", ...)`。
+- **决策四态**：`confirmed`（含换成别的候选 → 审计 `switched`，带 `from_box_type`/`to_box_type`）、
+  `returned`、`new_tooling`（返回可建卡描述 `new_tooling_task`，本批不真实建卡）。
+  重复确认同一盒型幂等（`confirmed_at` 保持首次值）。
+- **非包装行业 → 400**；非决策角色 → 403；确认不可确认候选 → 409
+  （`box_type_not_confirmable` + 该候选的 `reject_reasons`）。
+- 匹配引擎是确定性纯函数：不读需求单、不落库、不调模型、不联网（红测 j2/j3 静态与行为双向校验）。
+
+### 与 Spec 的一处冲突（红测优先，已在代码与报告中标注）
+
+- Spec §2.5 写「候选排序：… 总分**降序** …」，但红测
+  `test_a3_weights_are_not_hardcoded` 的两条断言只有在「总分**升序**」下才同时成立：
+  默认权重下要求 `BOX-P`（克重差 0.85）排在 `BOX-Q`（0.90）之前，把 `v_groove` 权重抬到
+  0.90、`face_paper_gsm` 压到 0.05 后又要求 `BOX-Q`（0.47）排在 `BOX-P`（0.97）之前。
+  `Σ(w×s)` 是权重的单调函数，降序在数学上无解，故实现按红测取升序，并在
+  `_sort_key()` 里写清来龙去脉；`suggested_box_type` 仍单独取「分最高的可确认候选」，
+  避免把分最低的候选推荐给工艺经理。**建议业务确认后决定改红测还是改 Spec。**
+
+### 验收结果（实跑原文）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_packaging_box_type_matching_red`
+  → `Ran 51 tests` / `OK`。
+- `./open-claude/.venv/bin/python -m unittest tests.test_industry_registry_unified_red
+  tests.test_packaging_requirement_template_red tests.test_packaging_knowledge_base_seed_red`
+  → `Ran 101 tests` / `OK`（20 / 35 / 46）。
+- 回归（逐批实跑，全部 `OK`）：
+  · 批次 7 ACL：`tests.test_tech_project_acl_contribute_mode_red` +
+    `tests.test_tech_project_acl_scope_red` → `Ran 56 tests` / `OK`
+    （新读路由的路径参数写成 `{pid}`，未顶掉那条「43 条单参数 GET 路由」基线）；
+  · 1.2 / 1.3 需求与看板：`..._requirement_confirm_red`、`..._confirm_review_optional_note_red`、
+    `..._requirement_agent_red`、`..._requirement_review_red`、`..._requirement_stage_waiver_red`
+    （需求路由集合基线）、看板静态动作与左工具栏 2 个快照、`..._tech_ui_protocol_red`
+    → `Ran 112 tests` / `OK`；
+  · 看板注册表 / 协议 / 全宽 / 项目身份 7 个 → `Ran 80 tests` / `OK`；
+  · `..._tech_backend_get_route_smoke_dynamic`、`..._tech_home_timeline_and_publish_closure_red`、
+    `..._kb_in_pg_http_snapshot_red` → `Ran 59 tests` / `OK`。
+- `python -m py_compile` 覆盖新增与改动的 5 个 py 文件；`node --check
+  tech_app/frontend/requirement-confirm.js` 通过；`git diff --check` 干净。
+
+### 全量跑（`unittest discover -s tests`）的如实记录
+
+- `Ran 2648 tests` / `FAILED (failures=70, skipped=2)`，逐文件归因：
+  · **53 条**来自 `tests/test_packaging_parametric_bom_red.py` —— 该文件与其 Spec
+    `docs/specs/packaging-parametric-bom.md` 是**本批收尾时才出现在工作区**的下一批（包装第 5 批
+    参数化 BOM）红测，本批未实现，属预期红；
+  · **17 条**来自 `tests/test_process_row_running_info_and_fold_red.py`（14）与
+    `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`（2）+
+    `tests/test_cpq_eval_ci_contract.py::CiDependencyCoverageTest`（1）。
+    已用「备份 + `git stash` 回到 HEAD + 重跑」实测：**这 17 条在 HEAD 上同样失败**，
+    与本批无关（前两组是 ## 133 与 ## 136 两批过程行口径互相取代后的既有红；
+    第三组是 cadquery/ezdxf/fontTools 等未进 requirements 闭包的环境问题）。
+- 本批自身涉及的路径（匹配引擎、三接口、1.2 页、两张新表）在全量跑中 0 失败。
+
+### 说明
+
+- 只新增/改动本批允许的文件；未改任何红测与 Spec，未改第 1–3 批的演示数据（12 盒型 /
+  5 权重 / 31 部件逐字未动），未删除、清空、迁移、回填任何项目 / 会话 / 任务 / 附件 / 数据库记录。
+- 未写 Postgres、未建工作流任务卡、未改 `cpq_wf`；`裕同包装项目-待开发/` 保持只读且未纳入提交。
+- 未 push / MR / tag / Release / 部署 / 重启服务。

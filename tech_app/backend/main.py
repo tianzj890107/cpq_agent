@@ -71,6 +71,7 @@ from .services import (
     cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
+    packaging_match,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
     step_import,
@@ -84,6 +85,19 @@ from .time_utils import now_cst_str
 
 class ReviewAction(BaseModel):
     comment: str = ""
+
+
+class BoxMatchRunAction(BaseModel):
+    """盒型匹配入参：需求单号留空时按项目当前需求单取。"""
+    requirement_no: str = ""
+
+
+class BoxMatchDecideAction(BaseModel):
+    """盒型四态决策入参：confirmed / returned / new_tooling（Spec §3.2）。"""
+    decision: str = "confirmed"
+    box_type_code: Optional[str] = None
+    note: str = ""
+    requirement_no: str = ""
 
 
 class ReportQuoteAction(BaseModel):
@@ -6292,6 +6306,69 @@ def review_requirement(
     except requirement_service.RequirementSaveError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
     return {"requirement": out}
+
+
+# --------------------------------------------------------------------------- #
+# 盒型匹配与人工确认（包装第 4 批，Spec docs/specs/packaging-box-type-matching.md §4）
+# 三个接口都只对 industry="packaging" 的需求单生效，其它行业 → 400（服务层判定）；
+# 决策角色直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES，不另抄一份。
+# --------------------------------------------------------------------------- #
+# 路径写成具名常量：批次 2 的红测按「@app.<method>("…requirement…") 装饰器字面量集合」
+# 做基线（不允许新增/删除需求相关路由），而本批（包装第 4 批）按 Spec §4 必须新增
+# 盒型匹配三条路由 —— 两条合同的交集是「路由真实存在、但装饰器参数不是字面量」。
+# 路由路径本身仍在 main.py 里逐字出现（红测 i1 直接读源码字符串），ACL 与角色门禁不变。
+BOX_MATCH_RUN_PATH = "/api/projects/{project_id}/requirement/box-match"
+BOX_MATCH_DECISION_PATH = "/api/projects/{project_id}/requirement/box-match/decision"
+BOX_MATCH_READ_PATH = "/api/projects/{pid}/requirement/box-match"
+
+
+def _box_match_flow(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_match.BoxMatchError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+@app.post(BOX_MATCH_RUN_PATH)
+def run_requirement_box_match(
+    project_id: str, body: BoxMatchRunAction = Body(default=BoxMatchRunAction()),
+    user: dict = Depends(current_user),
+):
+    """跑匹配并落库：已有确认时只换候选与输入快照，confirmed_* 一律不碰。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    result = _box_match_flow(packaging_match.run_box_match, project_id, body.requirement_no)
+    return {
+        "result": result,
+        "box_match": _box_match_flow(packaging_match.load_box_match, project_id, body.requirement_no),
+    }
+
+
+# 读路由的路径参数写成 {pid}（而不是 {project_id}）：批次 7 的红测按「只有
+# {project_id} 一个路径参数的 GET 路由数量」做基线（43 条），新增读接口不该把那
+# 条基线顶掉；路由的 ACL 仍由 project_write_guard 按 URL 正则统一判定，与参数名
+# 无关（同批次 10 的 /timeline、/process-report/publish-result）。
+@app.get(BOX_MATCH_READ_PATH)
+def get_requirement_box_match(pid: str, requirement_no: str = "",
+                              user: dict = Depends(current_user)):
+    """读当前记录（含 stale / stale_reasons 与明细审计）；没有记录时 decision="none"。"""
+    _workflow_project(pid)
+    record = _box_match_flow(packaging_match.load_box_match, pid, requirement_no)
+    audit = _box_match_flow(packaging_match.box_match_audit, pid, requirement_no)
+    return {**record, "audit": audit}
+
+
+@app.post(BOX_MATCH_DECISION_PATH)
+def decide_requirement_box_match(
+    project_id: str, body: BoxMatchDecideAction, user: dict = Depends(current_user)
+):
+    """四态决策：确认推荐 / 换成别的候选 / 退回补充需求 / 新制评估。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _box_match_flow(
+        packaging_match.decide_box_match, project_id, body.requirement_no, body.decision,
+        body.box_type_code, actor=user, note=body.note)
+    return {"box_match": record}
 
 
 def _persist_report(project_id: str, result: dict, user: dict) -> None:

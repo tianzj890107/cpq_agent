@@ -994,6 +994,42 @@ CREATE TABLE IF NOT EXISTS wip_stage_state (
 );
 
 
+-- 包装盒型匹配结果(包装第 4 批):候选、分项分、淘汰原因与人工确认。
+-- 重新匹配只更新候选与输入快照,不得覆盖 confirmed_* —— 人工确认优先于算法。
+CREATE TABLE IF NOT EXISTS wip_packaging_box_match (
+    project_id          TEXT NOT NULL,
+    requirement_no      TEXT NOT NULL DEFAULT '',
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    engine_version      TEXT NOT NULL,
+    matched_at          TEXT NOT NULL,
+    inputs_json         TEXT,   -- 匹配时 2.1 七个键的取值快照,用于 stale 判定
+    candidates_json     TEXT,   -- 全部候选(含分项分与淘汰原因)
+    missing_inputs_json TEXT,
+    suggested_box_type  TEXT,
+    decision            TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (decision IN ('pending','confirmed','returned','new_tooling')),
+    confirmed_box_type  TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
+    note                TEXT,
+    updated_at          TEXT,
+    PRIMARY KEY (project_id, requirement_no)
+);
+
+-- 盒型匹配明细审计:只增不改(仓库层不提供 UPDATE/DELETE)
+CREATE TABLE IF NOT EXISTS wip_packaging_box_match_audit (
+    audit_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id     TEXT NOT NULL,
+    requirement_no TEXT NOT NULL DEFAULT '',
+    action         TEXT NOT NULL,   -- matched / confirmed / switched / returned / new_tooling
+    box_type_code  TEXT,
+    actor          TEXT,
+    at             TEXT NOT NULL,
+    detail_json    TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_box_match_audit ON wip_packaging_box_match_audit(project_id, requirement_no, audit_id);
+
+
 -- =========================================================================
 -- L3 · 评估结果(冻结、可分发)
 -- =========================================================================
