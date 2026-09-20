@@ -1,0 +1,1288 @@
+/* 技术工艺与成本测算统一工作台（统一壳）。
+ *
+ * 左侧：techChatPane —— 唯一常驻会话宿主，复用 agent-chat.js，切换 stage 不重建。
+ * 右侧：techWorkspaceOutlet —— 唯一工作台出口，以同源 iframe 打开九个 stage 的既有页面，
+ *       URL 一律追加 embed=1；子页面需要切步骤时向本壳 postMessage
+ *       cpq:tech-workbench:navigate，本壳校验 event.origin 与 stage 白名单后更新 URL。
+ *
+ * URL 是可恢复导航状态的事实源：
+ *   tech-workbench.html?project=<id>&stage=<stage>&task_id=<optional>
+ * 刷新、浏览器前进/后退通过 popstate 恢复；project 缺失时展示明确错误态，不创建匿名项目。
+ */
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  // 全局口径：5 个阶段 × 13 个子步骤。条目 = 阶段号 + 阶段标题 + 子步骤号 + 子步骤标题。
+  // 后端同一张表在 tech_app/backend/services/workflow_stages.py，两边必须逐行一致；
+  // stage id / 页面文件 / URL 参数一个字都不变，本批只换编号与标题。
+  const STAGES = [
+    { id: 'requirement-create',  phase: '1', phaseTitle: '工艺评估需求', no: '1.1', subTitle: '创建需求',   label: '创建',     page: 'requirement-create.html' },
+    { id: 'requirement-confirm', phase: '1', phaseTitle: '工艺评估需求', no: '1.2', subTitle: '确认需求',   label: '确认',     page: 'requirement-confirm.html' },
+    { id: 'requirement-review',  phase: '1', phaseTitle: '工艺评估需求', no: '1.3', subTitle: '审核需求',   label: '审核',     page: 'requirement-review.html' },
+    { id: 'drawing',             phase: '2', phaseTitle: '图纸解析',     no: '2.1', subTitle: '图纸解析',   label: '图纸解析', page: 'index.html' },
+    { id: 'process',             phase: '3', phaseTitle: '组装与整合',   no: '3.1', subTitle: '整合图纸',   label: '工艺方案/组装整合', page: 'assembly-integration.html' },
+    { id: 'cost',                phase: '4', phaseTitle: '成本测算',     no: '4.1', subTitle: '零件成本',   label: '成本测算', page: 'cost-review.html' },
+    { id: 'summary',             phase: '5', phaseTitle: '工艺评估报告', no: '5.1', subTitle: '汇总结果',   label: '汇总结果', page: 'summary.html' },
+    { id: 'report-review',       phase: '5', phaseTitle: '工艺评估报告', no: '5.2', subTitle: '结果审核',   label: '结果审核', page: 'report-review.html' },
+    { id: 'report-publish',      phase: '5', phaseTitle: '工艺评估报告', no: '5.3', subTitle: '发布并回传报价', label: '发布并回传报价', page: 'report-publish.html' },
+  ];
+  const stages = new Set(STAGES.map((item) => item.id));
+
+  // 顶部可见的五个大流程：9 个内部 stage 仍是内部状态与 URL 的事实源，MAJOR_STEPS 只负责
+  // 把 1.1/1.2/1.3 聚合到阶段 1、把 5.1/5.2/5.3 聚合到阶段 5 的顶部投影。
+  // title 是右侧业务区域唯一的固定大标题（不接受子页面动态标题与状态刷新覆盖）；
+  // label 仍是顶部流程导航上的原文，两者互不影响。
+  const MAJOR_STEPS = [
+    { no: '1', title: '工艺评估需求', label: '创建工艺评估需求', entry: 'requirement-create', stages: ['requirement-create', 'requirement-confirm', 'requirement-review'] },
+    { no: '2', title: '图纸解析', label: '图纸解析', entry: 'drawing', stages: ['drawing'] },
+    { no: '3', title: '组装与整合', label: '工艺方案/组装整合', entry: 'process', stages: ['process'] },
+    { no: '4', title: '成本测算', label: '成本测算', entry: 'cost', stages: ['cost'] },
+    { no: '5', title: '工艺评估报告', label: '输出工艺评估结果', entry: 'summary', stages: ['summary', 'report-review', 'report-publish'] },
+  ];
+
+  // 阶段 1、5 内部还有多步，需要在业务卡片标题行给一排上下文小流程按钮（阶段
+  // 2-4 各自只有一个内部阶段或已有子页面页签，不在父壳重复生成）。按钮显示
+  // 「子步骤号 + 名称」，stage id、页面文件与流转都不变。
+  const CONTEXT_SUBSTEPS = {
+    1: [
+      { stage: 'requirement-create',  no: '1.1', label: '创建' },
+      { stage: 'requirement-confirm', no: '1.2', label: '确认' },
+      { stage: 'requirement-review',  no: '1.3', label: '审核' },
+    ],
+    5: [
+      { stage: 'summary',        no: '5.1', label: '汇总结果' },
+      { stage: 'report-review',  no: '5.2', label: '结果审核' },
+      { stage: 'report-publish', no: '5.3', label: '发布并回传报价' },
+    ],
+  };
+
+  // 阶段 3、4 的子页面在统一工作台里已经隐藏了自带的页签行：父壳把同一组页签渲染成
+  // data-child-tab 按钮放到统一标题行右侧。这里只登记“子步骤号 + 视图名 + 文案”，点击通过
+  // TechBoardBridge.navigateView(view) 交给同源 iframe 里注册过的 view 动作，active
+  // 由看板回传的 action-state 决定 —— 父壳不认识任何子页面 id / CSS selector。
+  const CHILD_TAB_PROXY = {
+    'process': {
+      tabs: [
+        { key: 'drawings', label: '整合图纸', no: '3.1', stage: 'process', view: 'drawings' },
+        { key: 'params', label: '参数推荐', no: '3.2', stage: 'process', view: 'params' },
+        { key: 'process', label: '组装工艺', no: '3.3', stage: 'process', view: 'process' },
+      ],
+    },
+    'cost': {
+      tabs: [
+        { key: 'parts', label: '零件成本', no: '4.1', stage: 'cost', view: 'parts' },
+        { key: 'assembly', label: '组装成本', no: '4.2', stage: 'cost', view: 'assembly' },
+        { key: 'total', label: '汇总', no: '4.3', stage: 'cost', view: 'total' },
+      ],
+    },
+  };
+
+  function currentMajorStep() {
+    return MAJOR_STEPS.find(major => major.stages.includes(state.stage)) || MAJOR_STEPS[0];
+  }
+  // 大流程完成态：组内全部内部 stage 完成（来自 /workflow、/summary 的真实完成集合）才算完成。
+  function isMajorDone(major) {
+    const done = state.progress && state.progress.done;
+    return Boolean(done) && major.stages.every((stageId) => done.has(stageId));
+  }
+
+  // 9 个内部 stage 各有独立 page_context：1:1 的 stage 用「子步骤号 + 子步骤标题」
+  // （2.1 图纸解析、5.2 结果审核），跨子步骤的 stage 用「阶段号 + 阶段标题」
+  // （3 组装与整合、4 成本测算）；9 个取值互不相同，缺上下文时 stageAgentContext()
+  // 返回 null 并不回退成任何别的 stage。这里只向会话组件提供模型请求用的语义上下文，
+  // 不构造任何可见阶段卡或卡内操作；用户操作只在左侧统一操作栏与右侧看板。
+  const STAGE_AGENT_CONTEXT = {
+    'requirement-create': {
+      pageContext: '1.1 创建需求',
+      label: '创建需求',
+      hint: '可让我补全需求字段、带入附件或发起需求解析；提交确认与保存草稿请用左侧操作栏。',
+    },
+    'requirement-confirm': {
+      pageContext: '1.2 确认需求',
+      label: '确认需求',
+      hint: '可让我汇总待澄清问题与完整性检查结果；通过确认或驳回请用左侧操作栏。',
+    },
+    'requirement-review': {
+      pageContext: '1.3 审核需求',
+      label: '审核需求',
+      hint: '可让我汇总审核材料与审核摘要；审核结论由具备权限的人提交，请用左侧操作栏。',
+    },
+    'drawing': {
+      pageContext: '2.1 图纸解析',
+      label: '图纸解析',
+      hint: '右侧看板显示解析进度与零件结果；可以在这里追问解析结果，或直接说「开始解析」。',
+    },
+    'process': {
+      pageContext: '3 组装与整合',
+      label: '组装与整合',
+      hint: '可让我上传整合图纸、生成参数推荐与组装工艺；确认结果与发送财务请用底栏操作。',
+    },
+    'cost': {
+      pageContext: '4 成本测算',
+      label: '成本测算',
+      hint: '可追问成本构成与零件测算结果；重算与确认成本请用底栏操作。',
+    },
+    'summary': {
+      pageContext: '5.1 汇总结果',
+      label: '汇总结果',
+      hint: '可让我汇总各步骤数据并生成报告草稿；保存与提交审核请用左侧操作栏。',
+    },
+    'report-review': {
+      pageContext: '5.2 结果审核',
+      label: '结果审核',
+      hint: '可让我读取报告与版本、汇总审核摘要；通过或退回由具备权限的人提交。',
+    },
+    'report-publish': {
+      pageContext: '5.3 发布并回传报价',
+      label: '发布并回传报价',
+      hint: '可让我读取发布状态与回传结果；正式发布与回传报价请用左侧操作栏。',
+    },
+  };
+
+  const IGNORE_PARAMS = new Set(['project', 'stage', 'task_id', 'tech_task', 'embed', 'embedding']);
+
+  // boardStatus：最近一次由 board-status 上报的步骤状态（阶段页那行文字，原样保存）；
+  // boardNotice：未就绪 / 失败提示。两者共用一个提示位，显式提示优先。
+  const state = { stage: '', project: '', taskId: '', progress: null, progressFailed: false, boardStatus: '', boardStatusLevel: 'info', boardNotice: '', boardNoticeLevel: 'info' };
+  // 主按钮数量异常时标题行显示的那条诊断（正常帧清掉，避免盖住真实步骤状态）。
+  let primaryDiagnosticShown = '';
+  // 右侧项目标题：优先显示真实项目名称，拉取失败时退回“项目 <id>”。
+  const projectNames = new Map();
+
+  function params() { return new URLSearchParams(location.search); }
+
+  function readFromUrl() {
+    const q = params();
+    state.project = q.get('project') || '';
+    state.taskId = q.get('task_id') || q.get('tech_task') || '';
+    state.stage = stages.has(q.get('stage')) ? q.get('stage') : '';
+  }
+
+  function extraParams() {
+    const q = params();
+    const out = [];
+    q.forEach((value, key) => {
+      if (!IGNORE_PARAMS.has(key)) out.push([key, value]);
+    });
+    return out;
+  }
+
+  function stageMeta(id) { return STAGES.find((item) => item.id === id) || null; }
+  function stageIndex(id) {
+    const meta = stageMeta(id);
+    return meta ? STAGES.indexOf(meta) : -1;
+  }
+
+  /* ---------------------------------------------------------- URL 状态 */
+  function urlFor(stageId, project, taskId) {
+    const q = new URLSearchParams();
+    if (project) q.set('project', project);
+    q.set('stage', stageId);
+    if (taskId) q.set('task_id', taskId);
+    extraParams().forEach(([key, value]) => q.set(key, value));
+    const path = location.pathname.split('/').pop() || 'tech-workbench.html';
+    return `${path}?${q.toString()}`;
+  }
+  function pushState() {
+    const q = new URLSearchParams();
+    if (state.project) q.set('project', state.project);
+    q.set('stage', state.stage);
+    if (state.taskId) q.set('task_id', state.taskId);
+    extraParams().forEach(([key, value]) => q.set(key, value));
+    history.pushState({ stage: state.stage, project: state.project }, '', `${location.pathname}?${q.toString()}`);
+  }
+  window.addEventListener('popstate', () => {
+    const previous = state.stage;
+    readFromUrl();
+    if (!state.stage) state.stage = 'requirement-create';
+    const target = state.stage;
+    // 闸门放行前先退回当前步，避免用户取消后 URL 与界面不一致。
+    state.stage = previous;
+    if (target === previous) {
+      renderTop();
+      mountStageFrame();
+      syncChatProject();
+      syncAgentStageContext();
+      return;
+    }
+    guardedStage(target, 'popstate');
+  });
+
+  /* ---------------------------------------------------------- 渲染 */
+  function renderTop() {
+    const bar = $('techStepsBar');
+    if (!bar) return;
+    const current = stageMeta(state.stage);
+    const currentIdx = stageIndex(state.stage);
+    const canNav = Boolean(state.project || state.stage === 'requirement-create');
+    const activeMajor = currentMajorStep();
+    let html = '';
+    MAJOR_STEPS.forEach((major, idx) => {
+      const cls = ['tech-step-btn'];
+      const isActive = major === activeMajor;
+      const isDone = !isActive && isMajorDone(major);
+      if (isActive) cls.push('active');
+      else if (isDone) cls.push('done');
+      const allowed = canNav || major.entry === 'requirement-create';
+      const nodeInner = isDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : major.no;
+      html += `<button type="button" class="${cls.join(' ')}" data-major-step="${major.no}" data-entry="${major.entry}" ${allowed ? '' : 'disabled'} title="${major.no} ${major.label}">` +
+        `<span class="tech-step-node">${nodeInner}</span><span class="tech-step-label">${major.label}</span></button>`;
+      if (idx < MAJOR_STEPS.length - 1) html += '<span class="tech-step-line" aria-hidden="true"></span>';
+    });
+    bar.innerHTML = html;
+    bar.querySelectorAll('[data-major-step]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const step = MAJOR_STEPS.find((item) => item.no === btn.dataset.majorStep) || MAJOR_STEPS[0];
+        if (state.stage === step.entry) return;
+        if (!state.project && step.entry !== 'requirement-create') {
+          setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
+          return;
+        }
+        guardedStage(step, 'stage-switch');
+      });
+    });
+
+    const now = $('techNowLabel');
+    if (now) now.textContent = current ? current.label : '';
+    updateProjectLabel();
+    const prev = $('techPrev');
+    const next = $('techNext');
+    if (prev) prev.disabled = !canNav || currentIdx <= 0;
+    if (next) next.disabled = !canNav || currentIdx < 0 || currentIdx >= STAGES.length - 1;
+    renderContextSubsteps();
+  }
+
+  /* ---------------------------------------------------- 看板桥（TechBoardBridge）
+   * 父壳与右侧看板之间只有一条同源 postMessage 通道：命令走 executeAction /
+   * navigateView，状态来自看板主动推送的 action-state。这里读不到、也不读 iframe 的
+   * 内部 DOM，没有任何子页面 selector，更不会跨层 click。
+   * 全部读写都做能力探测，桥缺失 / 抛错时退化为“未就绪”，不影响流程导航。 */
+  function boardBridge() {
+    const bridge = window.TechBoardBridge;
+    return bridge && typeof bridge === 'object' ? bridge : null;
+  }
+  function boardSnapshot() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.snapshot !== 'function') return null;
+    try { return bridge.snapshot(); } catch (error) { return null; }
+  }
+  function boardActionState(name) {
+    const snapshot = boardSnapshot();
+    if (!snapshot || !snapshot.actions || !name) return null;
+    return snapshot.actions[name] || null;
+  }
+  function boardActiveView() {
+    const snapshot = boardSnapshot();
+    return (snapshot && snapshot.view && snapshot.view.active) || '';
+  }
+
+  // 看板的失败 / 超时 / 未就绪提示统一写进标题行的独立节点，不污染固定大标题。
+  // 提示位两种内容共存：未就绪 / 失败提示优先；提示清除后回落到最近一次收到的
+  // 步骤状态（board-status），而不是留空。
+  function setBoardNotice(message, level) {
+    const notice = $('techContextNotice');
+    if (!notice) return;
+    state.boardNotice = message || '';
+    state.boardNoticeLevel = ((level || 'info') === 'error') ? 'error' : 'info';
+    const text = state.boardNotice || state.boardStatus || '';
+    // 颜色跟随当前真正显示的那条：显式提示优先，清除后回落到步骤状态。
+    const shownLevel = state.boardNotice ? state.boardNoticeLevel : state.boardStatusLevel;
+    notice.textContent = text;
+    notice.hidden = !text;
+    notice.classList.toggle('is-error', shownLevel === 'error');
+  }
+
+  /* 代理页签的 active 以看板回传的真实视图为准，父壳只渲染，不自建状态。 */
+  function syncChildTabActive(proxy) {
+    const bar = $('techSubstepsBar');
+    if (!bar || !proxy) return;
+    const active = boardActiveView();
+    bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
+      btn.classList.toggle('active', Boolean(active) && btn.dataset.childTab === active);
+    });
+  }
+
+  /* 看板视图切换（流程 3、4 的页签）：只发语义化 view 名。 */
+  function navigateBoardView(view, label) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.navigateView !== 'function') {
+      setBoardNotice(`${label || view}：看板尚未就绪，请等待右侧步骤加载完成。`, 'error');
+      return;
+    }
+    Promise.resolve(bridge.navigateView(view, {})).then(() => {
+      setBoardNotice('');
+      syncChildTabActive(CHILD_TAB_PROXY[state.stage] || null);
+    }).catch((error) => {
+      setBoardNotice((error && error.message) || `切换到「${label || view}」失败`, 'error');
+    });
+  }
+
+  /* 统一标题行：大标题只读 MAJOR_STEPS[].title（固定名称，不被子页面动态标题或状态
+     刷新覆盖），五个大流程都显示这一行；右侧同排一组分步骤/子页面页签。
+     流程 1、5 = 父壳自己的 stage 按钮，点击回到 applyStage；
+     流程 3、4 = 代理同源 iframe 中既有页签对应的语义化 view，active 由看板回传；
+     流程 2 右侧为空 —— 只隐藏这组按钮，不隐藏大标题行。 */
+  function renderContextSubsteps() {
+    const bar = $('techSubstepsBar');
+    const header = $('techContextHeader');
+    const title = $('techContextTitle');
+    if (!bar) return;
+    const major = currentMajorStep();
+    const substeps = CONTEXT_SUBSTEPS[major.no] || [];
+    const proxy = CHILD_TAB_PROXY[state.stage] || null;
+    const canNav = Boolean(state.project || state.stage === 'requirement-create');
+    if (title) title.textContent = major.title || major.label;
+    if (header) header.hidden = false;
+    if (!substeps.length && !proxy) {
+      bar.hidden = true;
+      bar.replaceChildren();
+      return;
+    }
+    bar.hidden = false;
+    if (proxy) {
+      bar.innerHTML = proxy.tabs.map((tab) =>
+        `<button type="button" class="tech-substep-btn" data-child-tab="${escH(tab.key)}">${escH(tab.no ? `${tab.no} ${tab.label}` : tab.label)}</button>`).join('');
+      bar.querySelectorAll('[data-child-tab]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tab = proxy.tabs.find((item) => item.key === btn.dataset.childTab);
+          if (!tab) return;
+          navigateBoardView(tab.view, tab.label);
+        });
+      });
+      syncChildTabActive(proxy);
+      return;
+    }
+    bar.innerHTML = substeps.map((step) => {
+      const cls = ['tech-substep-btn'];
+      const done = Boolean(state.progress && state.progress.done && state.progress.done.has(step.stage));
+      if (step.stage === state.stage) cls.push('active');
+      else if (done) cls.push('done');
+      const allowed = canNav || step.stage === 'requirement-create';
+      return `<button type="button" class="${cls.join(' ')}" data-substep="${step.stage}" ${allowed ? '' : 'disabled'}>${escH(step.no ? `${step.no} ${step.label}` : step.label)}</button>`;
+    }).join('');
+    bar.querySelectorAll('[data-substep]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.substep;
+        if (!stages.has(target) || target === state.stage) return;
+        if (!state.project && target !== 'requirement-create') {
+          setStateView('error', '尚未绑定项目', '请先在「创建」中上传图纸并保存草稿创建项目，再进入后续步骤。');
+          return;
+        }
+        applyStage(target, { project: state.project });
+      });
+    });
+  }
+
+  // 任务显示优先级：title → source_label → task_kind_label → task_no → 关联任务。
+  function taskDisplayName(task) {
+    if (!task) return '';
+    return String(task.title || task.source_label || task.task_kind_label || task.task_no || '').trim();
+  }
+
+  // 右上角项目区展示业务名称；原始 project / task id 只放进 tooltip，不做主文字。
+  function renderProjectLabel() {
+    const label = $('techProjectLabel');
+    if (!label) return;
+    if (!state.project) {
+      label.textContent = '未绑定项目';
+      label.title = '';
+      return;
+    }
+    const known = projectNames.get(state.project) || {};
+    const projectName = known.project || '未命名项目';
+    const taskName = state.taskId ? (known.task || '') : '';
+    label.textContent = taskName ? `${projectName} · ${taskName}` : projectName;
+    label.title = `project=${state.project}` + (state.taskId ? ` task_id=${state.taskId}` : '');
+  }
+
+  function updateProjectLabel() {
+    const label = $('techProjectLabel');
+    if (!label) return;
+    const project = state.project;
+    const taskId = state.taskId;
+    if (!project) {
+      label.textContent = '未绑定项目';
+      label.title = '';
+      return;
+    }
+    const cached = projectNames.get(project);
+    if (cached && cached.project && (!taskId || cached.task)) {
+      renderProjectLabel();
+      return;
+    }
+    label.textContent = '加载项目…';
+    label.title = `project=${project}` + (taskId ? ` task_id=${taskId}` : '');
+    resolveProjectNames(project, taskId);
+  }
+
+  // 项目元数据在 /api/projects/{id} 的 meta 里，需求标题在 /requirement.requirement.title，
+  // 任务名称在 /wf/task.task；三者并行取，失败不清掉已拿到的名称。
+  async function resolveProjectNames(project, taskId) {
+    const id = encodeURIComponent(project);
+    const [projectData, requirementData, taskData] = await Promise.all([
+      fetch(`/api/projects/${id}`, { headers: authHeaders() })
+        .then((response) => response.ok ? response.json() : null).catch(() => null),
+      fetch(`/api/projects/${id}/requirement`, { headers: authHeaders() })
+        .then((response) => response.ok ? response.json() : null).catch(() => null),
+      taskId
+        ? fetch(`/wf/task?task_id=${encodeURIComponent(taskId)}`, { headers: authHeaders() })
+          .then((response) => response.ok ? response.json() : null).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    // 竞态：返回时用户可能已经切了项目 / 任务，晚到的结果不能覆盖当前目标。
+    if (state.project !== project || state.taskId !== taskId) return;
+    const entry = projectNames.get(project) || {};
+    const data = projectData || {};
+    const requirement = (requirementData && requirementData.requirement) || {};
+    const projectName = String(
+      (data.meta && data.meta.project_name)
+      || (requirement && requirement.title)
+      || (data.meta && data.meta.device_name)
+      || (data.meta && data.meta.source_filename)
+      || '').trim();
+    if (projectName) entry.project = projectName;
+    const task = (taskData && taskData.task) || null;
+    const taskName = taskDisplayName(task);
+    if (taskName) entry.task = taskName;
+    if (entry.project || entry.task) projectNames.set(project, entry);
+    renderProjectLabel();
+  }
+
+  /* ---------------------------------------------------------- 状态区 */
+  function setStateView(kind, title, message, actions) {
+    const outlet = $('techWorkspaceOutlet');
+    const frame = $('techStageFrame');
+    if (frame) frame.remove();
+    let html = `<div class="tech-wb-state ${kind === 'loading' ? '' : 'error'}">`;
+    if (kind === 'loading') {
+      html += '<div class="tech-wb-spinner"></div>';
+    } else {
+      html += '<div class="tech-wb-state-icon">⚠️</div>';
+    }
+    if (title) html += `<div class="tech-wb-state-title">${escH(title)}</div>`;
+    if (message) html += `<div>${escH(message)}</div>`;
+    if (actions && actions.length) {
+      html += '<div class="tech-wb-state-actions">' + actions.map((action) =>
+        `<button type="button" class="tech-wb-btn primary" data-wb-action="${escH(action.id)}">${escH(action.label)}</button>`).join('') + '</div>';
+    }
+    html += '</div>';
+    detachBoardBridge('state-view');
+    outlet.innerHTML = html;
+    outlet.querySelectorAll('[data-wb-action]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const action = (actions || []).find((item) => item.id === btn.dataset.wbAction);
+        if (action && action.href) window.location.href = action.href;
+        else if (action && action.stage) applyStage(action.stage, { project: state.project });
+      });
+    });
+  }
+  function escH(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
+
+  /* ---------------------------------------------------------- 工作台出口 */
+  function childUrl(stageId) {
+    const meta = stageMeta(stageId);
+    const q = new URLSearchParams();
+    if (state.project) q.set('project', state.project);
+    q.set('stage', stageId);
+    if (state.taskId) q.set('task_id', state.taskId);
+    q.set('embed', '1');
+    extraParams().forEach(([key, value]) => q.set(key, value));
+    let page = meta.page;
+    // 新增工艺待办尚无 project：右侧以 embed=1 承载原 tech-task.html 建项流程，
+    // 建项成功后由子页把真实 project 回写统一壳 URL，全程不离开两栏布局。
+    if (stageId === 'requirement-create' && !state.project && state.taskId) {
+      page = 'tech-task.html';
+    }
+    return `${page}?${q.toString()}`;
+  }
+
+  function mountStageFrame() {
+    const outlet = $('techWorkspaceOutlet');
+    if (!outlet) return;
+    // 换页先断开旧看板：pending 命令作废、状态清空，避免新页面误用上一个 stage 的按钮。
+    detachBoardBridge('stage-change');
+    // 上一步的步骤状态不能带到下一步：新页面自己的 board-status 到达前，提示位留空。
+    state.boardStatus = '';
+    state.boardStatusLevel = 'info';
+    state.boardNotice = '';
+    state.boardNoticeLevel = 'info';
+    primaryDiagnosticShown = '';
+    setBoardNotice('');
+    const meta = stageMeta(state.stage);
+    if (!meta) {
+      setStateView('error', '未知步骤', '当前 stage 不在固定白名单内，已拒绝加载。', [
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
+        { id: 'go-home', label: '返回技术工艺首页', href: 'home.html' },
+      ]);
+      return;
+    }
+    if (!state.project && state.stage !== 'requirement-create') {
+      setStateView('error', '缺少项目', 'URL 中未提供 project，工作台不会创建匿名项目。请先进入「创建」，或从项目列表进入。', [
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
+        { id: 'go-home', label: '返回技术工艺首页', href: 'home.html' },
+      ]);
+      return;
+    }
+    outlet.innerHTML = '';
+    if (!state.project) {
+      const banner = document.createElement('div');
+      banner.className = 'tech-wb-banner';
+      banner.textContent = state.taskId
+        ? '新增工艺任务：本步承载任务详情与图纸上传；创建项目后将自动进入「创建」并绑定左侧会话。'
+        : '尚未绑定项目：请在本步上传 2D 工程图并保存草稿，系统会自动创建项目并绑定到左侧会话。';
+      outlet.append(banner);
+    }
+    const iframe = document.createElement('iframe');
+    iframe.id = 'techStageFrame';
+    // 满高裁切由结果卡的 overflow:hidden 负责：iframe 自身不带圆角，避免二次圆角 /
+    // 双边框；样式契约见 tech-workbench.css 的 .tech-stage-frame。
+    iframe.className = 'tech-stage-frame';
+    iframe.title = meta.label;
+    iframe.setAttribute('data-stage', state.stage);
+    // 把本壳项目标在 iframe 上（data-project）：子页用 TechProjectContext.bind() 比对，
+    // 与父壳不一致时拒绝加载，避免「父壳 A、iframe B」这种串项目组合。
+    iframe.dataset.project = state.project || '';
+    iframe.src = childUrl(state.stage);
+    iframe.addEventListener('load', () => {
+      // iframe load 后挂上看板桥：等它 ready 后按钮状态与页签 active 全部来自
+      // action-state 消息；等待期间底栏按钮保持禁用并给出“未就绪”提示。
+      // 新增工艺待办用 tech-task.html 承载建项流程，它不属于阶段看板，没有运行时。
+      if (stagePageHasRuntime()) attachBoardBridge(iframe);
+      else setBoardNotice('');
+      syncAgentStageContext();
+      syncChatActions();
+      renderContextSubsteps();
+    });
+    outlet.append(iframe);
+    // detach 后旧看板状态已清空：先按“未就绪”渲染一次标题行与左侧操作栏，等
+    // load → ready 再用看板回传的 action-state 覆盖。
+    renderContextSubsteps();
+    syncChatActions();
+  }
+
+  /* 新增工艺待办（无 project、有 task_id）用 tech-task.html 建项，不在看板协议范围内。 */
+  function stagePageHasRuntime() {
+    return !(state.stage === 'requirement-create' && !state.project && state.taskId);
+  }
+
+  /* 挂载 / 卸载看板桥：attach 会主动同步一次状态；失败时只提示，不阻断流程。 */
+  function attachBoardBridge(frame) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.attach !== 'function' || !frame) return;
+    try {
+      Promise.resolve(bridge.attach(frame, {
+        projectId: state.project, stage: state.stage, taskId: state.taskId,
+      })).then(() => {
+        renderContextSubsteps();
+        syncAgentStageContext();
+        syncChatActions();
+      }).catch((error) => {
+        setBoardNotice((error && error.message) || '看板尚未就绪，请稍后重试。', 'error');
+        syncChatActions();
+      });
+    } catch (error) {
+      setBoardNotice('看板尚未就绪，请稍后重试。', 'error');
+    }
+  }
+  function detachBoardBridge(reason) {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.detach !== 'function') return;
+    try { bridge.detach(reason || 'stage-change'); } catch (error) { /* 忽略：切换流程优先 */ }
+  }
+
+  /* 业务动作统一出口：只发语义化动作名，真正的业务实现留在右侧看板里。看板未就绪时
+     给出明确提示，超时 / 业务失败也会显示在标题行提示位，绝不无声返回。 */
+  function runBoardAction(actionName, label, role) {
+    // 失败原因必须同时看得见：标题行提示位（红色 .is-error）+ 左侧会话一条提示。
+    // 会话提示只走 window.ocTechAgent.notice（唯一入口），父壳不在这里新建气泡。
+    const chatNotice = (message) => {
+      const agent = window.ocTechAgent;
+      if (!message || !agent || typeof agent.notice !== 'function') return;
+      try { agent.notice(message); } catch (error) { /* 会话提示失败不阻断主流程 */ }
+    };
+    if (!state.project) {
+      const message = `${label || actionName}：请先打开项目，再执行这一步的操作。`;
+      setBoardNotice(message, 'error');
+      chatNotice(message);
+      return;
+    }
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.executeAction !== 'function') {
+      const message = `${label || actionName}：看板尚未就绪，请等待右侧步骤加载完成。`;
+      setBoardNotice(message, 'error');
+      chatNotice(message);
+      return;
+    }
+    setBoardNotice('');
+    Promise.resolve(bridge.executeAction(actionName, { label, role }))
+      .then(() => { syncChatActions(); })
+      .catch((error) => {
+        // 预期内失败（切看板取消在途命令 / 必填项没填 / 当前视图没有目标输入框）：看板自己
+        // 已经就地提示过，父壳不再往会话里塞一条 ⚠，也不占标题行提示位 —— 否则每次切步骤
+        // 都会刷一片「看板已切换，命令已取消。」。技术性失败照旧两处可见。
+        if (window.TechBoardBridge && typeof window.TechBoardBridge.isQuietFailure === 'function'
+            && window.TechBoardBridge.isQuietFailure(error)) { syncChatActions(); return; }
+        const message = (error && error.message) || `${label || actionName} 执行失败`;
+        setBoardNotice(message, 'error');
+        chatNotice(message);
+        syncChatActions();
+      });
+  }
+
+  /* ---------------------------------------------------- 左侧统一操作栏（第 16 步）
+   * 唯一的业务动作入口，且只放当前步骤的业务动作：按钮完全由看板动作快照驱动，父壳
+   * 只渲染与转发，不查 iframe DOM、不写死 selector、不按动作名写分支。label / role /
+   * order / hint / visible / enabled / busy 全部来自看板；role === 'primary' 的那一个
+   * 进 #techChatPrimary 槽位，其余紧随其后描边渲染。点击一律走
+   * TechBoardBridge.executeAction。步骤导航在顶部流程条，附件在输入区 ＋，刷新类动作
+   * 只由 refresh-data 命令与 Agent 工具触发 —— 都不在这里重复出现。 */
+  function boardActionEntries() {
+    const snapshot = boardSnapshot();
+    const actions = (snapshot && snapshot.actions) || {};
+    const entries = [];
+    Object.keys(actions).forEach((name) => {
+      const entry = actions[name];
+      if (!entry || entry.visible === false) return;
+      entries.push(Object.assign({}, entry, { name }));
+    });
+    // order 升序；缺省 order 排最后，同 order 保持注册顺序（sort 稳定）。
+    entries.sort((a, b) => {
+      const ao = a.order == null ? Number.MAX_SAFE_INTEGER : Number(a.order);
+      const bo = b.order == null ? Number.MAX_SAFE_INTEGER : Number(b.order);
+      return ao - bo;
+    });
+    return entries;
+  }
+  // 唯一主按钮：只有「可见动作里恰好一个 role === 'primary'」才认。0 个（这一步没有主操作）
+  // 或多个（看板快照有毛病）都不猜、也不取数组里的第一个 —— 那等于父壳替看板决定业务
+  // 优先级；异常一律走 primaryDiagnostic() 给确定性诊断。
+  function primaryEntries(entries) {
+    return (entries || []).filter((entry) => entry && entry.role === 'primary');
+  }
+  function primaryActionName(entries) {
+    const primaries = primaryEntries(entries);
+    if (primaries.length !== 1) return '';
+    return primaries[0].name || '';
+  }
+  // 确定性诊断：带上 primary_count / stage / view / 可见动作名，父壳不吞错、不兜底。
+  function primaryDiagnostic(entries, primaries) {
+    const names = (entries || []).map((entry) => entry.name).filter(Boolean);
+    return '看板动作快照的可见主按钮数不是 1：primary_count=' + primaries.length
+      + '，stage=' + (state.stage || '') + '，view=' + ((state.view && state.view.active) || '')
+      + '，可见动作=' + (names.length ? names.join('、') : '（无）');
+  }
+  function actionTooltip(entry, opts) {
+    const options = opts || {};
+    const item = entry || {};
+    const label = item.label || options.label || item.name || '';
+    const hint = item.hint ? String(item.hint) : '';
+    if (options.busy || item.busy) return `${label}（执行中）`;
+    if (options.needsProject && !state.project) return `${label}（请先打开项目）`;
+    const text = hint ? `${label}：${hint}` : label;
+    return options.primary ? `${text}（当前步骤主操作）` : text;
+  }
+  function setChatButton(button, opts) {
+    if (!button) return;
+    const visible = opts.visible !== false;
+    button.hidden = !visible;
+    button.disabled = !visible || opts.enabled === false;
+    // 主操作 / 批量入口是报价式蓝色实心主按钮（.primary），其余导航型按钮保持白底描边；
+    // 统一在这里按 variant 标记，不在各处手写 class。
+    button.classList.toggle('primary', opts.variant === 'primary');
+    if (opts.label) button.textContent = opts.label;
+    // 悬浮 tooltip 同时写 title 与 aria-label：禁用原因由 actionTooltip() 统一给出。
+    const tooltip = opts.title || opts.label || '';
+    button.title = tooltip;
+    button.setAttribute('aria-label', tooltip);
+  }
+  // 动态业务按钮：先清掉上一批 [data-tech-action] 再重建，统一插到 #techChatPrimary
+  // 之后（主按钮在前、其余动作紧随其后、导航按钮在后），每个都带 title 与 aria-label。
+  function syncChatActionList(entries, primaryName) {
+    const bar = $('techChatActions');
+    const primaryButton = $('techChatPrimary');
+    if (!bar || !primaryButton) return;
+    bar.querySelectorAll('[data-tech-action]').forEach((node) => node.remove());
+    let anchor = primaryButton;
+    (entries || []).forEach((entry) => {
+      if (!entry || !entry.name || entry.name === primaryName) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('data-tech-action', entry.name);
+      const tooltip = actionTooltip(entry, { needsProject: !state.project });
+      button.textContent = entry.label || entry.name;
+      button.title = tooltip;
+      button.setAttribute('aria-label', tooltip);
+      button.disabled = entry.busy === true || !state.project;
+      button.addEventListener('click', () => runBoardAction(entry.name, entry.label || entry.name, 'aux'));
+      // 插到当前锚点之后：等价于 anchor.insertAdjacentElement('afterend')，返回的新
+      // 节点成为下一个锚点，保证「主按钮在前、其余动作紧随其后」的固定顺序。
+      anchor.insertAdjacentElement('afterend', button);
+      anchor = button;
+    });
+  }
+  function syncChatActions() {
+    const bar = $('techChatActions');
+    if (!bar) return;
+    // 显隐由看板动作快照决定：这一步没有可见业务动作就整栏隐藏，不看壳里的阶段导航表。
+    const entries = boardActionEntries();
+    if (!entries.length) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    // 主按钮只认看板声明的 role === 'primary'，且必须恰好一个：没有或不止一个都隐藏主槽位，
+    // 不猜、不兜底、不取第一个；异常给确定性诊断（标题行 + 控制台，同一条文案）。
+    const primaries = primaryEntries(entries);
+    const primaryName = primaryActionName(entries);
+    const primaryEntry = entries.filter((entry) => entry.name === primaryName)[0] || null;
+    if (primaries.length === 1) {
+      if (primaryDiagnosticShown) {
+        primaryDiagnosticShown = '';
+        setBoardNotice(state.boardNotice, state.boardNoticeLevel);
+      }
+    } else {
+      const detail = primaryDiagnostic(entries, primaries);
+      primaryDiagnosticShown = detail;
+      console.error('[tech-workbench] ' + detail);
+      // 两个以上主按钮是明确的快照毛病：标题行按 error 等级说出来（清除时回落步骤状态）。
+      if (primaries.length > 1) setBoardNotice(detail, 'error');
+    }
+    setChatButton($('techChatPrimary'), {
+      label: primaryEntry ? primaryEntry.label : '主要操作',
+      visible: Boolean(primaryEntry),
+      enabled: Boolean(primaryEntry) && primaryEntry.busy !== true && Boolean(state.project),
+      variant: 'primary',
+      title: primaryEntry ? actionTooltip(primaryEntry, { primary: true }) : '',
+    });
+    // 其余动作紧随主按钮动态渲染；同一个动作不会既当主按钮又出现在列表里。
+    syncChatActionList(entries, primaryName);
+  }
+  function bindChatToolbar() {
+    const primaryBtn = $('techChatPrimary');
+    // 主按钮点的是「当前快照里 role === 'primary' 的那一个动作」，不写死动作名。
+    if (primaryBtn) primaryBtn.addEventListener('click', () => {
+      const entries = boardActionEntries();
+      const primaryName = primaryActionName(entries);
+      const entry = entries.filter((item) => item.name === primaryName)[0];
+      if (entry) runBoardAction(entry.name, entry.label, 'primary');
+    });
+  }
+
+  /* ---------------------------------------------------- 左侧唯一 Agent 会话栏 */
+  /* 阶段上下文只写进父页唯一的 #techChatPane：不克隆子页面 DOM、不清空历史会话、
+     草稿或项目绑定；接口缺失、iframe 未加载或抛错时安全退出，流程切换照常。 */
+  function stageAgentContext() {
+    const context = STAGE_AGENT_CONTEXT[state.stage];
+    if (!context) return null;
+    // 只返回模型请求需要的语义上下文（stage / project / pageContext 等），
+    // 不再构造任何供可见卡片渲染的动作；用户操作走统一操作栏与看板桥。
+    return {
+      stage: state.stage,
+      project: state.project,
+      taskId: state.taskId,
+      label: context.label,
+      pageContext: context.pageContext,
+      hint: context.hint,
+    };
+  }
+
+  function syncAgentStageContext() {
+    const pane = $('techChatPane');
+    if (!pane) return;
+    let context = null;
+    try { context = stageAgentContext(); } catch (error) { context = null; }
+    // 父页先执行、agent-chat.js 后加载：除直接调用外再留一份全局供其首次承接。
+    window.ocTechStageContext = context;
+    try {
+      const api = window.ocTechAgent;
+      if (api && typeof api.setStageContext === 'function') api.setStageContext(context);
+      window.dispatchEvent(new CustomEvent('cpq:tech-agent:stage-context', { detail: context }));
+    } catch (error) {
+      /* 上下文同步失败不影响会话与流程切换 */
+    }
+  }
+
+  // tech_ui 的 set_stage：Agent 只表达「切到某一步」，这里按阶段白名单校验后走
+  // 既有 applyStage，与顶部流程 / 底栏 / 左侧操作栏共用同一条切步通道。
+  window.addEventListener('cpq:tech-agent:set-stage', (event) => {
+    const detail = event.detail || {};
+    const stage = String(detail.stage || '');
+    if (!stages.has(stage)) return;   // 只接受九个 stage 白名单，越界直接忽略
+    applyStage(stage, { project: state.project });
+  });
+
+  /* 左侧会话的项目绑定跟随本壳：换项目（历史抽屉 / 首页卡片 / 看板 set_stage / 上下一步 /
+     浏览器前进后退）都只 pushState 不重载页面，会话必须重绑到目标项目并回放它的历史，
+     否则新项目的历史永远带不回来、还会串出上一个项目的对话与任务卡。只走会话宿主导出的
+     唯一入口 window.ocTechAgent.setProject；入口缺失（旧壳 / 脚本未加载）时安全跳过。 */
+  function syncChatProject() {
+    const api = window.ocTechAgent;
+    if (!api || typeof api.setProject !== 'function') return;
+    try { api.setProject(state.project); } catch (error) { /* 会话重绑失败不阻断流程切换 */ }
+  }
+
+  /* ---------------------------------------------------------- 导航闸门（批次 8）
+   * 看板里有未保存修改时，五个导航出口（顶部大步骤 / 上一步 / 下一步 / 浏览器前进后退 /
+   * 看板要求退出项目）必须先过同一道闸门：桥去问一次看板要不要保存，用户取消就停在原地；
+   * 桥缺失（旧壳 / 纯查看页）时直接导航，不产生死路。放行的唯一判据在桥里（此刻看板
+   * 已无未保存修改），这里只负责「不放行就不切步」。
+   *
+   * 入参既接受阶段号（上一步 / 下一步 / 浏览器前进后退 / 退出项目给的都是阶段号），也接受
+   * 顶部大步骤的条目对象：大步骤的点击落点必须是该阶段的**入口子步骤**（step.entry），
+   * 不是阶段号本身（批次 5A 口径）。两种入参在这里统一成 { entry }，闸门与导航都只看它。 */
+  async function guardedStage(target, reason, opts) {
+    const options = opts || {};
+    const step = (target && typeof target === 'object') ? target : { entry: String(target || '') };
+    const bridge = window.TechBoardBridge;
+    if (bridge && typeof bridge.guardLeave === 'function') {
+      const ok = await bridge.guardLeave(reason, { target: step.entry });
+      if (!ok) return false;
+    }
+    if (options.href) { window.location.href = options.href; return true; }
+    applyStage(step.entry, { project: state.project });
+    return true;
+  }
+
+  /* 关闭 / 刷新兜底：看板里还有没保存的修改时，让浏览器弹一次原生确认。 */
+  window.addEventListener('beforeunload', (event) => {
+    const bridge = window.TechBoardBridge;
+    if (!bridge || typeof bridge.shouldWarnOnUnload !== 'function') return;
+    if (!bridge.shouldWarnOnUnload()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
+  /* ---------------------------------------------------------- 步骤切换 */
+  function applyStage(stageId, opts) {
+    if (!stages.has(stageId)) {
+      setStateView('error', '未知步骤', `stage=${stageId} 不在白名单内，已拒绝加载。`);
+      return;
+    }
+    if (opts && opts.project) state.project = opts.project;
+    if (opts && opts.taskId) state.taskId = opts.taskId;
+    state.stage = stageId;
+    // 切步：上一步的步骤状态与等级都不能带过来，否则会在新步骤显示旧文案 / 旧配色。
+    state.boardStatus = '';
+    state.boardStatusLevel = 'info';
+    state.boardNotice = '';
+    state.boardNoticeLevel = 'info';
+    primaryDiagnosticShown = '';
+    renderTop();
+    mountStageFrame();
+    pushState();
+    // 会话绑定必须跟着项目走：换项目只 pushState 不重载页面，若左侧还锁着首次进入时的
+    // 项目，目标项目的历史就永远带不回来，还会串出上一个项目的对话与任务卡。
+    syncChatProject();
+    refreshProgress();
+    syncAgentStageContext();
+    syncChatActions();
+  }
+
+  const prevBtn = $('techPrev');
+  const nextBtn = $('techNext');
+  if (prevBtn) prevBtn.addEventListener('click', () => {
+    const idx = stageIndex(state.stage);
+    if (idx <= 0) return;
+    const target = STAGES[idx - 1];
+    if (!state.project && target.id !== 'requirement-create') return;
+    guardedStage(target.id, 'prev');
+  });
+  if (nextBtn) nextBtn.addEventListener('click', () => {
+    const idx = stageIndex(state.stage);
+    if (idx < 0 || idx >= STAGES.length - 1) return;
+    const target = STAGES[idx + 1];
+    if (!state.project && target.id !== 'requirement-create') {
+      setStateView('error', '尚未绑定项目', '请先在「创建」中保存草稿创建项目，再进入下一步。');
+      return;
+    }
+    guardedStage(target.id, 'next');
+  });
+  /* ---------------------------------------------------------- 子页面导航消息 */
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin) return;              // 只接受同源消息
+    const data = event.data || {};
+    if (data.type === 'cpq:tech-workbench:exit') {
+      const target = typeof data.url === 'string' && data.url ? data.url : 'home.html';
+      // 退出项目也是导航出口：有未保存修改时先过闸门，放行后才真的离开。
+      guardedStage(target, 'exit-project', { href: target });
+      return;
+    }
+    if (data.type !== 'cpq:tech-workbench:navigate') return;
+    // 只认当前嵌入的看板 iframe 发来的导航：旧通道与看板桥一样必须校验 event.source，
+    // 否则任意同源窗口都能驱动父壳切流程，origin 校验并不足够。
+    const navigateFrame = $('techStageFrame');
+    if (!navigateFrame || event.source !== navigateFrame.contentWindow) return;
+    if (!stages.has(data.stage)) return;                       // stage 白名单校验
+    // 项目一致性校验（在 stage 白名单之后、applyStage 之前）：iframe 不能把父壳切到
+    // 另一个项目。项目身份只由共享模块判定；不一致时只提示，既不切换也不 pushState。
+    const incomingProject = data.project || state.project;
+    const contextApi = window.TechProjectContext;
+    const verdict = contextApi ? contextApi.resolve({
+      search: '?project=' + encodeURIComponent(incomingProject),
+      parentProject: state.project,
+    }) : { error: '' };
+    if (verdict.error === 'project_mismatch') {
+      const label = (stageMeta(data.stage) || {}).label || data.stage;
+      setBoardNotice(`${label}：子页面传来的项目与当前项目不一致，已拒绝。`, 'error');
+      return;
+    }
+    applyStage(data.stage, {
+      project: incomingProject,
+      taskId: data.task_id || state.taskId,
+    });
+  });
+
+  /* ---------------------------------------------------------- 后端进度（只读）
+   * 完成态与可执行性只有一个来源：后端流程投影
+   * （GET /api/projects/<id>/workflow/projection，见批次 5B 契约）。
+   * 本壳只把投影交给 tech-workflow-projection.js 换算成索引再渲染，不再自己拼
+   * 「有草稿就算完成」「有工序就算完成」这类启发式。 */
+  function authHeaders() {
+    const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+  /* 未来步骤「能看、不能做」：点进去时按唯一投影说清缺什么、谁来做（批次 5B 契约 §7）。
+     只在投影明确说 actionable=false 时提示，不覆盖子页面自己上报的状态文案。 */
+  function syncStageGateNotice() {
+    const mapped = state.progress;
+    if (!mapped || !mapped.actionable || typeof mapped.actionable.get !== 'function') return;
+    if (mapped.actionable.get(state.stage) !== false) return;
+    const reasons = (mapped.blocked && mapped.blocked.get(state.stage)) || [];
+    setBoardNotice(reasons.length ? `本步还不能执行：${reasons.join('；')}` : '本步还不能执行。', 'error');
+  }
+  async function refreshProgress() {
+    if (!state.project) return;
+    const id = encodeURIComponent(state.project);
+    const mapper = window.TechWorkflowProjection;
+    try {
+      const response = await fetch(`/api/projects/${id}/workflow/projection`, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const projection = await response.json();
+      if (!projection || projection.project_id !== state.project) throw new Error('projection-mismatch');
+      if (!mapper || typeof mapper.progress !== 'function') throw new Error('projection-mapper-missing');
+      /* 投影自报取数失败时同样按「刷新失败」处理：保留上一次状态，只提示，不清空。 */
+      if (projection.refresh_ok === false) throw new Error('refresh-failed');
+      state.progress = mapper.progress(projection);
+      state.progressFailed = false;
+      syncStageGateNotice();
+    } catch (e) {
+      /* 读取失败保留上一次 state.progress（首次读取尚未拿到时保持空），
+         绝不把完成集合清空成「全没做」。 */
+      state.progressFailed = true;
+      setBoardNotice(state.progress ? '刷新失败，以下为上次读取到的状态' : '流程状态暂时读取不到，请稍后刷新重试。', 'error');
+    }
+    renderTop();
+  }
+
+  /* ---------------------------------------------------------- 模型设置
+   * 右上角模型文字与左侧「设置」共用同一个打开函数，卡片内容复用
+   * llm-settings-panel.js（与首页、报价助手是同一份表单），不复制第二套。
+   * 卡片是 HTML 里的固定 DOM（#techModelSettingsMask / #techModelSettings），由全屏
+   * 遮罩 + flex 在视口正中居中；这里只负责开关、焦点和保存后刷新模型文字，不做任何
+   * 坐标计算。读写一律走唯一接口 /api/settings，技术工艺不再有独立设置接口。
+   * 保存后立即刷新右上角模型文字；权限只读态由接口的 editable / secrets_editable 决定。 */
+  function techModelLabel(settings) {
+    const options = (settings && settings.options) || [];
+    // 账号级模型优先：别人看到的还是平台默认，只有自己这一屏显示「我的」那一个。
+    const isMine = Boolean(settings) && settings.effective_source === 'account';
+    const id = String((settings && (isMine ? settings.effective_model : settings.model)) || '').trim();
+    const found = options.find((item) => item && item.id === id);
+    const label = (found && found.label) || id || '未配置模型';
+    return isMine && label !== '未配置模型' ? `${label}（我的）` : label;
+  }
+  async function refreshTechModelLabel() {
+    const node = $('techModelInfo');
+    if (!node) return;
+    try {
+      const settings = window.LlmSettingsPanel && typeof window.LlmSettingsPanel.load === 'function'
+        ? await window.LlmSettingsPanel.load()
+        : null;
+      const label = techModelLabel(settings);
+      node.textContent = label === '未配置模型' ? label : `· ${label}`;
+    } catch (error) {
+      node.textContent = '· 未配置模型';
+    }
+  }
+
+  const TECH_SETTINGS_FOCUSABLE =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]),'
+    + ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  let techSettingsTrigger = null;
+  function techModelSettingsOpen() {
+    const mask = $('techModelSettingsMask');
+    return Boolean(mask && !mask.hidden);
+  }
+  function closeTechSettings(restoreFocus = true) {
+    const mask = $('techModelSettingsMask');
+    if (!mask || mask.hidden) return;
+    mask.hidden = true;
+    if (restoreFocus && techSettingsTrigger && typeof techSettingsTrigger.focus === 'function') {
+      techSettingsTrigger.focus();
+    }
+    techSettingsTrigger = null;
+  }
+  function onTechSettingsKey(event) {
+    if (event.key !== 'Escape' || !techModelSettingsOpen()) return;
+    event.preventDefault();
+    closeTechSettings();
+  }
+  function openTechModelSettings(anchor) {
+    const mask = $('techModelSettingsMask');
+    const card = $('techModelSettings');
+    const body = $('techModelSettingsBody');
+    if (!window.LlmSettingsPanel || typeof window.LlmSettingsPanel.mount !== 'function' || !mask || !card || !body)
+      return setStateView('error', '设置未就绪', '模型设置面板尚未加载，请刷新页面后重试。');
+    techSettingsTrigger = anchor || document.activeElement;
+    mask.hidden = false;
+    window.LlmSettingsPanel.mount(body, { onSaved: () => refreshTechModelLabel() });
+    const focusable = body.querySelector(TECH_SETTINGS_FOCUSABLE);
+    window.setTimeout(() => (focusable || card).focus(), 0);
+  }
+  // 右侧头部 / 导航「设置」共用的模型设置入口（模型切换已不在会话输入框内）：
+  // 仍然只有这一张卡片、这一份状态，不另建第二套。
+  window.techOpenModelSettings = (anchor) => openTechModelSettings(anchor);
+  function bindTechSettingsModal() {
+    const mask = $('techModelSettingsMask');
+    if (!mask || mask.dataset.bound === '1') return;
+    mask.dataset.bound = '1';
+    // 点遮罩空白处关闭；点卡片内部（下拉、输入框、按钮）不关闭。
+    mask.addEventListener('click', (event) => {
+      if (event.target === mask) closeTechSettings();
+    });
+    const close = $('techModelSettingsClose');
+    if (close) close.addEventListener('click', () => closeTechSettings());
+    document.addEventListener('keydown', onTechSettingsKey);
+  }
+
+  /* ---------------------------------------------------------- 左侧导航
+   * Logo / 返回主页是普通链接；新对话复用 agent-chat 的会话重置能力（ocTechAgent），
+   * 消息与账户复用 cpqMsg / cpqAuth，设置复用与报价助手同一份模型设置面板。 */
+  function bindTechNav() {
+    const newChat = $('techNewChat');
+    if (newChat) newChat.addEventListener('click', () => {
+      if (!state.project) {
+        setStateView('error', '尚未绑定项目', '新对话需要先绑定项目：请先在「创建」中上传图纸并保存草稿。');
+        return;
+      }
+      if (window.ocTechAgent && typeof window.ocTechAgent.resetTask === 'function') {
+        window.ocTechAgent.resetTask();
+      } else {
+        setStateView('error', '会话未就绪', '对话组件尚未完成加载，请稍后重试。');
+      }
+    });
+    const history = $('techHistory');
+    if (history) history.addEventListener('click', openTechHistory);
+    const msg = $('techMsgBtn');
+    if (msg) msg.addEventListener('click', () => {
+      if (window.cpqMsg && typeof window.cpqMsg.open === 'function') window.cpqMsg.open();
+    });
+    const settings = $('techSettings');
+    if (settings) settings.addEventListener('click', () => openTechModelSettings(settings));
+    const modelTrigger = $('techModelInfo');
+    if (modelTrigger) modelTrigger.addEventListener('click', () => openTechModelSettings(modelTrigger));
+    const auth = $('techAuthBtn');
+    if (auth) auth.addEventListener('click', () => {
+      if (window.cpqAuth && typeof window.cpqAuth.open === 'function') window.cpqAuth.open();
+    });
+  }
+
+  /* ---------------------------------------------------------- 技术项目历史
+   * 「历史记录」打开技术项目历史抽屉：形态与报价助手一致（340px 左滑 + 全屏遮罩 +
+   * 标题/关闭 + 新建/刷新 + 历史卡片）。DOM 是 tech-workbench.html 里的静态结构，
+   * 这里只切 .show 状态，不再动态拼第二份抽屉，也不用 hidden + 定时器做动画。
+   * 数据仍是既有 /api/projects；点击项目按既有 /workflow 与项目数据换算 stage，
+   * 在同一壳里用 applyStage 恢复，不新增删除能力、不改任何历史数据。 */
+  let historyFocusReturn = null;
+
+  function setTechHistoryOpen(open) {
+    const overlay = $('techHistoryOverlay');
+    const drawer = $('techHistoryDrawer');
+    if (!overlay || !drawer) return;
+    overlay.classList.toggle('show', Boolean(open));
+    drawer.classList.toggle('show', Boolean(open));
+  }
+  function isTechHistoryOpen() {
+    const drawer = $('techHistoryDrawer');
+    return Boolean(drawer && drawer.classList.contains('show'));
+  }
+  function openTechHistory() {
+    const overlay = $('techHistoryOverlay');
+    const drawer = $('techHistoryDrawer');
+    if (!overlay || !drawer) return;
+    historyFocusReturn = document.activeElement;
+    overlay.classList.add('show');
+    drawer.classList.add('show');
+    // 焦点进入抽屉第一个操作按钮（关闭），用户不用重新找位置。
+    const close = $('techHistoryClose');
+    if (close) close.focus();
+    loadTechHistory();
+  }
+  function closeTechHistory() {
+    const overlay = $('techHistoryOverlay');
+    const drawer = $('techHistoryDrawer');
+    if (overlay) overlay.classList.remove('show');
+    if (drawer) drawer.classList.remove('show');
+    // 关闭后焦点回到历史入口，键盘用户不丢位置；入口缺失时退回打开前的焦点。
+    if ($('techHistory')) $('techHistory').focus();
+    else if (historyFocusReturn && typeof historyFocusReturn.focus === 'function') historyFocusReturn.focus();
+  }
+  function bindTechHistory() {
+    const overlay = $('techHistoryOverlay');
+    if (overlay) overlay.addEventListener('click', closeTechHistory);
+    const close = $('techHistoryClose');
+    if (close) close.addEventListener('click', closeTechHistory);
+    // 刷新只重新拉列表，不关闭抽屉。
+    const refresh = $('techHistoryRefresh');
+    if (refresh) refresh.addEventListener('click', () => loadTechHistory());
+    // 新建技术项目：关抽屉并进入统一技术主页，不调用任何删除 / 重置接口。
+    const create = $('techHistoryNew');
+    if (create) create.addEventListener('click', () => {
+      closeTechHistory();
+      location.href = '/报价首页.html?assistant=tech';
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && isTechHistoryOpen()) closeTechHistory();
+    });
+  }
+
+  async function loadTechHistory() {
+    const box = $('techHistoryList');
+    if (!box) return;
+    box.innerHTML = '<div class="tech-history-empty">加载历史项目…</div>';
+    let projects = [];
+    try {
+      const response = await fetch('/api/projects', { headers: authHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      projects = Array.isArray(data) ? data : (data && Array.isArray(data.projects) ? data.projects : []);
+    } catch (error) {
+      box.innerHTML = `<div class="tech-history-empty error">无法读取技术项目历史：${escH(error.message)}</div>`;
+      return;
+    }
+    if (!projects.length) {
+      box.innerHTML = '<div class="tech-history-empty">还没有技术项目历史。<br/>在技术工艺主页上传图纸或新建工艺评估后，会出现在这里。</div>';
+      return;
+    }
+    const rows = projects.filter((row) => row && (row.project_id || row.id));
+    rows.sort((a, b) => String(b.created_at || b.updated_at || '').localeCompare(String(a.created_at || a.updated_at || '')));
+    box.innerHTML = '';
+    rows.forEach((row) => {
+      const id = row.project_id || row.id;
+      const title = row.project_name || row.device_name || row.source_filename || `PRJ-${id}`;
+      const dateText = row.created_at || row.updated_at
+        ? ` · ${String(row.created_at || row.updated_at).slice(0, 10)}`
+        : '';
+      const current = String(id) === String(state.project);
+      // 阶段 chip：优先用列表里带的阶段，其次用当前项目在本壳里的真实 stage。
+      const stageName = row.stage_label || row.stage
+        || (current ? (stageMeta(state.stage) || {}).label : '');
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tech-history-item';
+      if (current) {
+        item.classList.add('current');
+        item.setAttribute('aria-current', 'true');
+        item.title = '当前项目';
+      }
+      const titleEl = document.createElement('span');
+      titleEl.className = 'tech-history-item-title';
+      titleEl.textContent = title;
+      const metaEl = document.createElement('span');
+      metaEl.className = 'tech-history-item-meta';
+      metaEl.textContent = `PRJ-${id}${dateText}`;
+      if (stageName) {
+        const chip = document.createElement('span');
+        chip.className = 'tech-history-chip';
+        chip.textContent = stageName;
+        metaEl.append(' ', chip);
+      }
+      item.append(titleEl, metaEl);
+      item.addEventListener('click', () => techHistoryRestore(id));
+      box.append(item);
+    });
+  }
+  /* 阶段判定的唯一实现在共享纯函数 tech-stage-restore.js（window.TechStageRestore）：
+     本文件只负责把 /workflow、/api/projects/{id}、/summary、/cost-review 取回来交给它，
+     不再自己比较「有没有 IR」。 */
+  function techStageFromProject(flow, project, signals) {
+    const restore = window.TechStageRestore;
+    if (!restore || typeof restore.fromSignals !== 'function') return 'requirement-create';
+    return restore.fromSignals(flow || {}, project || {}, signals || {});
+  }
+  async function techHistoryRestore(projectId) {
+    if (!projectId) return;
+    closeTechHistory();
+    const id = encodeURIComponent(projectId);
+    try {
+      const results = await Promise.all([
+        fetch(`/api/projects/${id}/workflow`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${id}`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${id}/summary`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {}),
+        fetch(`/api/projects/${id}/cost-review`, { headers: authHeaders() })
+          .then((r) => r.ok ? r.json() : {})
+          .catch(() => ({})),
+      ]);
+      const aggregate = results[2] || {};
+      const steps = aggregate.steps || {};
+      const stage = techStageFromProject(results[0] || {}, results[1] || {}, {
+        integration: steps.integration || {},
+        cost_review: steps.cost_review || {},
+        cost_detail: results[3] || {},
+      });
+      applyStage(stage, { project: projectId });
+    } catch (error) {
+      setStateView('error', '无法恢复历史项目', `打开项目 ${projectId} 失败：${error.message}`, [
+        { id: 'go-create', label: '去「创建」', stage: 'requirement-create' },
+      ]);
+    }
+  }
+
+  /* 看板主动推送的 action-state / selection-changed 是按钮与页签状态的唯一来源：
+     订阅后不再用定时器轮询，也不再探测子页面 DOM。 */
+  function bindBoardBridge() {
+    const bridge = boardBridge();
+    if (!bridge || typeof bridge.subscribe !== 'function') return;
+    bridge.subscribe((event) => {
+      const type = (event && event.type) || '';
+      // 长任务（deferred）的完成 / 失败由看板自己推 task-completed / task-failed，
+      // 不是 type === 'error'：失败原因必须显示到标题行提示位，否则用户只看到
+      // 「超时未响应」这类桥层兜底文案，真实原因被吞掉。
+      if (type === 'error' || type === 'task-failed') {
+        const message = event && event.payload && event.payload.message;
+        if (message) setBoardNotice(message, 'error');
+      }
+      // 阶段页把本页那行步骤状态（「已打开项目 …」/「就绪」/「本步已确认」…）原样
+      // 上报：这里只搬运 payload.text，不做二次加工，也不碰固定大标题与子页签。
+      if (type === 'board-status') {
+        state.boardStatus = String((event && event.payload && event.payload.text) || '');
+        state.boardStatusLevel = ((event && event.payload && event.payload.level) === 'error') ? 'error' : 'info';
+        setBoardNotice(state.boardNotice, state.boardNoticeLevel);
+      }
+      syncChatActions();
+      if (type === 'action-state' || type === 'selection-changed' || type === 'ready') {
+        renderContextSubsteps();
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------- 启动 */
+  readFromUrl();
+  if (!state.stage) state.stage = 'requirement-create';
+  bindBoardBridge();
+  renderTop();
+  mountStageFrame();
+  syncAgentStageContext();
+  bindChatToolbar();
+  bindTechNav();
+  bindTechHistory();
+  bindTechSettingsModal();
+  refreshTechModelLabel();
+  if (state.project) refreshProgress();
+})();

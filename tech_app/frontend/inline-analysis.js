@@ -60,9 +60,6 @@
     const partName = context.part.name || context.part.part_id;
     const title = mode === "process" ? "工艺推荐" : "成本测算";
     const icon = window.cadWorkbenchIcons?.[mode] || "";
-    const notePlaceholder = mode === "process"
-      ? "补充工艺说明，如材料状态、关键表面粗糙度、设备或检验要求…"
-      : "补充成本说明，如批量、材料价格、外购件单价或表面处理要求…";
     const quantity = mode === "cost"
       ? `<label class="inline-analysis-qty"><span>批量</span><input data-inline-quantity type="number" min="1" value="1" /></label>`
       : "";
@@ -70,11 +67,10 @@
     context.host.innerHTML = `<section class="inline-analysis" data-inline-mode-root="${mode}">
       <div class="inline-analysis-head">
       <div class="inline-analysis-title"><span class="inline-analysis-icon">${icon}</span><div><strong>${title}</strong><small>${esc(context.part.part_id)} · ${esc(partName)}</small></div></div>
-        <button type="button" class="inline-analysis-close" data-inline-close>返回零件详情</button>
+        <div class="inline-head-actions"><button type="button" class="inline-action" data-inline-generate>${mode === "process" ? "生成工艺推荐" : "生成成本测算"}</button><button type="button" class="inline-action" data-inline-edit disabled>编辑</button><button type="button" class="inline-action save" data-inline-save hidden>保存</button><button type="button" class="inline-action" data-inline-close>返回零件详情</button></div>
       </div>
       ${mode === "cost" ? `<div class="inline-analysis-tabs"><button type="button" data-inline-mode="process">工艺推荐</button><button type="button" data-inline-mode="cost" class="active">成本测算</button></div>` : ""}
-      <div class="inline-analysis-inputs"><textarea data-inline-note rows="2" placeholder="${notePlaceholder}"></textarea>${quantity}<label class="inline-file-picker"><input data-inline-files type="file" multiple accept="image/*,.txt,.md,.csv,.json,.pdf,.yaml,.yml" /><span>选择补充文件</span><em data-inline-files-name>未选择文件</em></label></div>
-      <div class="inline-analysis-actions"><button type="button" class="inline-action primary start-parse-btn" data-inline-generate>${mode === "process" ? "生成工艺推荐" : "生成成本测算"}</button><button type="button" class="inline-action" data-inline-edit disabled>编辑</button><button type="button" class="inline-action save" data-inline-save hidden>保存</button></div>
+      ${mode === "cost" ? `<div class="inline-analysis-inputs">${quantity}</div>` : ""}
       <div class="inline-analysis-status" data-inline-status></div>
       <div class="inline-analysis-body" data-inline-body>正在读取${title}…</div>
     </section>`;
@@ -92,10 +88,6 @@
     root.querySelectorAll("[data-inline-mode]").forEach(button => {
       button.onclick = () => open(button.dataset.inlineMode, state.context);
     });
-    root.querySelector("[data-inline-files]").onchange = event => {
-      const names = [...event.target.files].map(file => file.name);
-      root.querySelector("[data-inline-files-name]").textContent = names.length ? names.join("、") : "未选择文件";
-    };
     root.querySelector("[data-inline-generate]").onclick = () => generate(state);
     root.querySelector("[data-inline-edit]").onclick = () => {
       state.editing = true;
@@ -182,13 +174,6 @@
     else renderCost(state);
   }
 
-  function extraForm(state) {
-    const fd = new FormData();
-    fd.append("note", state.root.querySelector("[data-inline-note]").value || "");
-    for (const file of state.root.querySelector("[data-inline-files]").files) fd.append("attachments", file);
-    return fd;
-  }
-
   async function generate(state) {
     if (state.busy) return;
     state.busy = true;
@@ -201,7 +186,7 @@
         const quantity = Math.max(1, parseInt(state.root.querySelector("[data-inline-quantity]").value, 10) || 1);
         url += `?quantity=${quantity}`;
       }
-      const submitted = await jsonFetch(url, { method: "POST", body: extraForm(state) });
+      const submitted = await jsonFetch(url, { method: "POST", body: new FormData() });
       const result = await poll(state, submitted.task_id);
       if (active !== state) return;
       if (result.library) state.library = result.library;
@@ -231,13 +216,23 @@
       await sleep(1200);
       const task = await jsonFetch(`/api/projects/${encodeURIComponent(state.context.projectId)}/tasks/${encodeURIComponent(taskId)}`);
       // 把知识库检索的每一步同时播给 Agent 对话框，处理过程要在对话里看得见。
-      window.dispatchEvent(new CustomEvent("agent:task-progress", {
-        detail: { label: title, taskId, status: task.status,
-                  progress: task.progress || "",
-                  log: Array.isArray(task.progress_log) ? task.progress_log : [],
-                  error: task.error || "" },
-      }));
-      if (task.status === "succeeded") return task.result;
+      const taskDetail = { label: title, taskId, status: task.status,
+                progress: task.progress || "",
+                log: Array.isArray(task.progress_log) ? task.progress_log : [],
+                // 过程事件序列（model/tool/progress）：有就以它为准，无则退回 log。
+                process: Array.isArray(task.process_log) ? task.process_log : null,
+                error: task.error || "" };
+      window.dispatchEvent(new CustomEvent("agent:task-progress", { detail: taskDetail }));
+      // 同一份 detail 也经看板运行时按状态转给统一父壳（看板是 iframe）；独立打开无害。
+      if (window.TechBoardRuntime && window.TechBoardRuntime.publish) {
+        window.TechBoardRuntime.publish(
+          taskDetail.status === "failed" ? "task-failed"
+            : (taskDetail.status === "succeeded" || taskDetail.status === "partial")
+              ? "task-completed" : "task-progress",
+          "board-task", taskDetail);
+      }
+      // partial 也是终态：不再等待，也不当失败。
+      if (task.status === "succeeded" || task.status === "partial") return task.result;
       if (task.status === "failed") throw new Error(task.error || "任务失败");
       if (active === state) setStatus(state, `${title}：${task.progress || "正在处理"}…`, true);
     }

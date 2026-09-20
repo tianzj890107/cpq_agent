@@ -210,6 +210,12 @@ CPQ_SSO_ENABLED = _bool(os.getenv("CPQ_SSO", "false"))
 # 验票回调地址：CPQ 一体化服务自身。技术工艺是它拉起的子进程，默认走本机回环。
 CPQ_AUTH_BASE_URL = os.getenv("CPQ_AUTH_BASE_URL", "http://127.0.0.1:8010").rstrip("/")
 CPQ_AUTH_TIMEOUT_SECONDS = max(1.0, float(os.getenv("CPQ_AUTH_TIMEOUT_SECONDS", "5")))
+# 知识库（kb_*）快照：知识库只有一份，落在 CPQ 的 cpq_kb schema；技术工艺不读本地
+# SQLite，经一体化服务的 /wf/tech/kb/snapshot 取整包快照并在进程内缓存
+# （见 docs/specs/kb-in-pg-http-snapshot.md）。与验票同一个基址，默认走本机回环；
+# 超时给得比验票宽 —— 整包是十几张表几百行，不是一次点查。
+CPQ_KB_BASE_URL = os.getenv("CPQ_KB_BASE_URL", CPQ_AUTH_BASE_URL).rstrip("/")
+CPQ_KB_TIMEOUT_SECONDS = max(1.0, float(os.getenv("CPQ_KB_TIMEOUT_SECONDS", "30")))
 # 工艺经理是否承担技术工艺的全部环节（含 3.2 审核、3.3 发布）。CPQ 只有销售经理/
 # 工艺经理两个角色，没有"工艺技术总监"，关掉这个开关的话 3.2/3.3 无人可执行、
 # 报告永远发布不出去。置 false 需先在 CPQ 侧补出总监角色并扩充 ROLE_MAP。

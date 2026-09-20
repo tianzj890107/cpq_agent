@@ -10,7 +10,9 @@
   --oc-bg-3: #ececf1;
   --oc-border-3: #e7e7ea;
   --oc-border-2: #d9d9e3;
-  --oc-accent: #8b5cf6;
+  /* 系统主色唯一事实源在宿主主题入口（tech-workbench.css / workbench.css）。
+     这里只做兼容别名，绝不独立写死另一份蓝色，否则换主色时会与报价侧分叉。 */
+  --oc-accent: var(--color-primary);
   --oc-text-1: #1f2023;
   --oc-text-2: #62636d;
   --oc-text-3: #9a9ba6;
@@ -30,7 +32,7 @@
   /* 页脚是 fixed 的（上一步 / 解析报告，约 70px 高），小窗再高也不能盖住它。 */
   max-height: calc(100vh - 78px - 88px); overflow-y: auto;
   border: .5px solid var(--oc-border-2); border-radius: 13px; background: var(--oc-bg-1);
-  box-shadow: 0 6px 24px rgba(15, 23, 42, .1);
+  box-shadow: 0 6px 24px rgba(15,23,42, .1);
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--oc-text-1);
@@ -49,7 +51,7 @@
 .oc-dock-mark {
   display: flex; width: 24px; height: 24px; flex-shrink: 0; align-items: center;
   justify-content: center; border-radius: 8px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; font-size: 13px;
+  background: linear-gradient(135deg, #0060E6, #0050C4); color: #fff; font-size: 13px;
 }
 .oc-dock-title { flex: 1; font-size: 13px; font-weight: 600; }
 .oc-dock-count {
@@ -143,23 +145,58 @@
   font-size: 17px; cursor: pointer; transition: background .15s;
 }
 .oc-ibtn:hover { background: var(--oc-bg-2); color: var(--oc-text-1); }
+.oc-ibtn:focus-visible {
+  outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px;
+  background: var(--oc-bg-2); color: var(--oc-accent);
+}
+.oc-ibtn:disabled { opacity: .45; cursor: not-allowed; }
+.oc-ibtn[aria-expanded="true"] { background: var(--oc-bg-3); color: var(--oc-accent); }
 
 .oc-thread { flex: 1; padding: 18px 16px; overflow-y: auto; }
-.oc-tinner { display: flex; width: 100%; max-width: 640px; margin: 0 auto; flex-direction: column; gap: 16px; }
+.oc-tinner { display: flex; width: 100%; max-width: 640px; margin: 0 auto; flex-direction: column; gap: 14px; }
 
 .oc-ubub {
-  max-width: 82%; align-self: flex-end; padding: 10px 14px; border-radius: 16px;
-  background: var(--oc-bg-2); font-size: 14px; line-height: 1.6;
+  max-width: 92%; align-self: flex-end; padding: 11px 14px; border-radius: 14px;
+  /* 用户气泡沿用系统主色实心背景 + 白字（既有口径，本批不改）；
+     右下角小圆角是"用户气泡尾部"，其余三角保持常规圆角。 */
+  border-bottom-right-radius: 4px;
+  background: var(--oc-accent); color: white; font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
-.oc-amsg { display: flex; gap: 11px; }
-.oc-aav {
-  display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center;
-  justify-content: center; border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  box-shadow: 0 2px 7px rgba(99, 102, 241, .3); color: #fff; font-size: 14px;
+/* 助手回复里唯一带边框 + 白底的容器（与报价 .message-ai 逐项同值）。
+   身份靠下面那行蓝色 .oc-alabel，不再有头像。 */
+.oc-amsg {
+  display: flex; gap: 11px; background: #ffffff;
+  border: 1px solid var(--oc-border-3); border-radius: 14px; padding: 11px 14px;
 }
 .oc-abody { min-width: 0; flex: 1; }
+.oc-alabel {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+  color: #0060E6; font-size: 11px; font-weight: 500;
+}
+.oc-alabel::before {
+  content: ''; width: 6px; height: 6px; flex-shrink: 0;
+  border-radius: 50%; background: linear-gradient(135deg, #0060E6, #0050C4);
+}
+.oc-alabel-state {
+  margin-left: auto; flex-shrink: 0; padding: 1px 8px; border-radius: 999px;
+  background: var(--oc-bg-3); color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+}
+.oc-alabel-state.is-running { background: #e0edff; color: #0050C4; }
+/* 中断沿用进行中的蓝色（用户口径：就叫中断、不改配色），不是失败：不刷红。 */
+.oc-alabel-state.is-interrupted { background: #e0edff; color: #0050C4; }
+.oc-alabel-state.is-succeeded { background: #dcfce7; color: #15803d; }
+.oc-alabel-state.is-failed { background: #fee2e2; color: #b91c1c; }
+/* 阶段页过程卡沿用同一行身份时，把这一步的中文名跟在身份后面。 */
+.oc-alabel-sub { color: var(--oc-text-3); font-weight: 400; }
+/* 思考过程折叠块：唯一与工具「详情」并列的默认折叠项。它落在助手卡正文里，
+   自己不再带框 —— 一次回复只保留 .oc-amsg 那一层边框。 */
+.oc-thinking { margin-bottom: 8px; padding: 0; }
+.oc-thinking summary { cursor: pointer; color: var(--oc-text-3); font-size: 11px; }
+.oc-thinking-body {
+  margin-top: 7px; color: var(--oc-text-2); font-size: 12px;
+  line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+}
 .oc-atxt { color: var(--oc-text-1); font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
 .oc-atxt.rendered { white-space: normal; }
 .oc-atxt.rendered p { margin: 0 0 10px; }
@@ -169,14 +206,33 @@
 }
 .oc-atxt.rendered code { font-family: "SFMono-Regular", Consolas, monospace; }
 .oc-atxt.rendered :not(pre) > code {
-  padding: 1px 5px; border-radius: 5px; background: var(--oc-bg-3); font-size: 12.5px;
+  padding: 1px 5px; border-radius: 4px; background: var(--oc-bg-3); font-size: 12.5px;
+}
+
+/* 工具卡详情：业务主行在上一行，原始工具名 / 入参 / 结果收在默认折叠的 <details>。 */
+.oc-art-state { flex-shrink: 0; color: var(--oc-text-2); font-size: 13px; }
+.oc-art-detail {
+  flex-basis: 100%; min-width: 0; margin-top: 2px; padding-top: 7px;
+  border-top: .5px solid var(--oc-border-3); color: var(--oc-text-2); font-size: 11.5px;
+}
+.oc-art-detail summary { cursor: pointer; color: var(--oc-text-3); font-size: 11px; }
+.oc-art-raw {
+  margin-top: 5px; color: var(--oc-text-2);
+  font: 11px/1.5 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+}
+.oc-art-input {
+  max-height: 160px; margin: 5px 0 0; overflow: auto; padding: 7px 9px;
+  border: .5px solid var(--oc-border-3); border-radius: 8px; background: var(--oc-bg-2);
+  color: var(--oc-text-2); font: 11px/1.5 "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word;
 }
 
 /* 工具调用卡片 */
+/* 工具轨迹：助手卡里的无边框区块（.oc-art-detail 的 border-top 是分隔线，不是卡框）。 */
 .oc-art {
   display: flex; width: 100%; max-width: 460px; margin-top: 10px; align-items: center;
-  gap: 11px; padding: 11px 12px; border: .5px solid var(--oc-border-2);
-  border-radius: 13px; background: var(--oc-bg-1); text-align: left;
+  flex-wrap: wrap;   /* 详情块换行到下一行，主行密度不变 */
+  gap: 11px; padding: 0; text-align: left;
 }
 .oc-atile {
   display: flex; width: 36px; height: 36px; flex-shrink: 0; align-items: center;
@@ -194,15 +250,11 @@
   white-space: pre-wrap; word-break: break-word;
 }
 .oc-tool-result.err { border-color: #f3b4b4; color: #dc2626; }
-.oc-err-line { margin-top: 8px; color: #dc2626; font-size: 13px; }
 .oc-spin { display: inline-block; animation: oc-spin 1s linear infinite; }
 @keyframes oc-spin { to { transform: rotate(360deg); } }
 
-/* 设计意图卡：对话里的第一条内容 */
-.oc-intent-card {
-  padding: 13px 15px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
-}
+/* 设计意图卡：对话里的第一条内容。内容直接落在 .oc-abody 里，不再自成一张卡。 */
+.oc-intent-card { padding: 0; }
 .oc-intent-card h4 {
   margin: 0 0 7px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
   letter-spacing: .04em;
@@ -224,6 +276,14 @@
   transition: background .15s, border-color .15s;
 }
 .oc-chip:hover { border-color: var(--oc-accent); background: var(--oc-bg-3); }
+.oc-chip:focus-visible {
+  outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px;
+  border-color: var(--oc-accent);
+}
+.oc-chip:disabled {
+  opacity: .5; cursor: not-allowed; border-color: var(--oc-border-2);
+  background: var(--oc-bg-2); color: var(--oc-text-3);
+}
 .oc-chip .oc-chip-count {
   padding: 1px 7px; border-radius: 999px; background: var(--oc-bg-3);
   color: var(--oc-text-2); font-size: 11px; font-weight: 600;
@@ -233,9 +293,9 @@
 /* 解析报告：和前两个按钮并排，但它是"看整份结果"的收口动作，用实心蓝分出层级
    —— 三个长得一模一样的话，用户读不出哪个是终点。 */
 .oc-chip-report {
-  border-color: transparent; background: #2563eb; color: #fff; font-weight: 600;
+  border-color: transparent; background: #0060E6; color: #fff; font-weight: 600;
 }
-.oc-chip-report:hover { border-color: transparent; background: #1d4ed8; }
+.oc-chip-report:hover { border-color: transparent; background: #0050C4; }
 
 /* 任务文件：直接列在右侧小窗里，不用点开弹窗 */
 .oc-files-list { padding-top: 2px; }
@@ -260,39 +320,38 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-file-note { color: var(--oc-text-3); font-size: 11px; line-height: 1.6; word-break: break-word; }
 .oc-file-empty { padding: 18px 0; color: var(--oc-text-3); font-size: 12px; text-align: center; }
 
-/* 处理过程时间线 */
-.oc-process-card {
-  padding: 11px 13px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
-}
-.oc-process-head { display: flex; align-items: center; gap: 8px; }
-.oc-process-title { color: var(--oc-text-1); font-size: 13px; font-weight: 600; }
-.oc-process-state {
-  margin-left: auto; padding: 1px 8px; border-radius: 999px; background: var(--oc-bg-3);
-  color: var(--oc-text-2); font-size: 11px;
-}
-.oc-process-state.ok { background: #dcfce7; color: #15803d; }
-.oc-process-state.err { background: #fee2e2; color: #b91c1c; }
+/* 处理过程时间线：阶段页的过程卡与 Agent 回复是同一张卡（.oc-amsg + 身份行 +
+   同一个状态 chip），容器本身不再带第二层框，也不再有第二套状态类名。 */
 .oc-process-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
 .oc-process-step {
-  display: flex; align-items: flex-start; gap: 7px; color: var(--oc-text-2);
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px; color: var(--oc-text-2);
   font-size: 12px; line-height: 1.65;
 }
 .oc-process-dot { flex-shrink: 0; width: 10px; font-size: 9px; line-height: 1.9; text-align: center; }
 /* 结果/依据行相对动作行缩进，一眼分得清「在做什么」和「做出了什么」。 */
 .oc-process-step.sub { padding-left: 14px; color: var(--oc-text-3); }
-.oc-process-step.sub.hit { color: #15803d; }
-.oc-process-step.sub.miss { color: #b45309; }
-.oc-process-text { min-width: 0; word-break: break-word; white-space: pre-wrap; }
-.oc-process-step.hit { color: #15803d; }
-.oc-process-step.miss { color: #b45309; }
+.oc-process-text { flex: 1 1 auto; min-width: 0; word-break: break-word; white-space: pre-wrap; }
+/* 命中 / 未命中 / 按新制的颜色落在结论行自己的文字上（缩进子项与顶层结论行同一套类名）。
+   父行只带 has-hit / has-miss 标记，不再跟着变色 —— 颜色必须真的作用在文字上。 */
+.oc-process-step.hit > .oc-process-text,
+.oc-process-step.sub.hit > .oc-process-text { color: #15803d; }
+.oc-process-step.miss > .oc-process-text,
+.oc-process-step.sub.miss > .oc-process-text { color: #b45309; }
 .oc-process-step.err { color: #b91c1c; }
+/* 过程事件通道的专属色调：模型调用（model）与工具执行（tool）各一眼可辨，
+   progress 行沿用上面的默认样式（含 ↳ 缩进与命中/未命中判定），不另起一套。 */
+.oc-process-step.model { color: #0050C4; }
+.oc-process-step.tool { color: #15803d; }
+/* 结果行折进所属标题行的折叠区（默认收起）：缩进在父行下面，点标题行才展开。 */
+/* 标题行本身就是展开开关（## 136）：整行可点、hover 浅蓝、焦点可见；
+   颜色一律由系统主色 token 推导，工具项本体仍然没有背景 / 阴影 / 边框。 */
+.oc-process-body { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-left: 17px; }
+.oc-process-toggle { cursor: pointer; }
+.oc-process-toggle:hover { background: color-mix(in srgb, var(--oc-accent) 10%, transparent); border-radius: 4px; }
+.oc-process-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--oc-accent) 55%, transparent); outline-offset: 1px; }
 
-/* 零部件库检索结果 */
-.oc-match-card {
-  padding: 12px 14px; border: .5px solid var(--oc-border-2); border-radius: 13px;
-  background: var(--oc-bg-2);
-}
+/* 零部件库检索结果：与其它卡内区块一样，不再自带边框与底色。 */
+.oc-match-card { padding: 0; }
 .oc-match-card h4 {
   margin: 0 0 9px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
   letter-spacing: .04em;
@@ -343,27 +402,56 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 }
 
 /* 输入区 */
-.oc-composer { padding: 6px 16px 14px; }
+.oc-composer { padding: 10px 16px; }
 .oc-cinner { width: 100%; max-width: 640px; margin: 0 auto; }
 .oc-inputbox {
   display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 13px;
   border: .5px solid var(--oc-border-2); border-radius: 16px; background: var(--oc-bg-2);
   transition: border-color .15s, box-shadow .15s;
 }
-.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+.oc-inputbox:focus-within { border-color: var(--oc-accent); box-shadow: 0 0 0 3px rgba(0,96,230, .12); }
 .oc-inputbox textarea {
   min-width: 0; max-height: 120px; flex: 1; padding: 0; border: 0; background: transparent;
   color: var(--oc-text-1); font: 14px/1.5 inherit; outline: 0; resize: none;
 }
 .oc-send {
-  display: flex; width: 34px; height: 34px; flex-shrink: 0; align-items: center;
-  justify-content: center; border: 0; border-radius: 11px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, .3); color: #fff; font-size: 17px; cursor: pointer;
+  display: flex; width: 38px; height: 38px; flex-shrink: 0; align-items: center;
+  justify-content: center; border: none; border-radius: 11px;
+  background: linear-gradient(135deg, #0060E6, #0050C4);
+  color: #fff; cursor: pointer;
 }
-.oc-send:hover { filter: brightness(1.06); }
-.oc-send:disabled { cursor: default; opacity: .5; }
+.oc-send .ti { font-size: 18px; color: #fff; }
+.oc-send:disabled { opacity: .45; cursor: not-allowed; }
 .oc-disc { margin-top: 9px; color: var(--oc-text-3); font-size: 11px; text-align: center; }
+
+/* ---------- 统一父壳 · 单行输入区（+ / 输入 / 发送） ----------
+   只对挂 .oc-inputbox-single 的宿主生效（tech-workbench.html 的统一会话栏）：白底单行、
+   24px 大圆角；左侧圆形 + 负责新增附件，右侧是圆形发送按钮。
+   模型切换不在输入框内 —— 沿用头部 / 导航的「模型与参数设置」入口，避免挤占输入宽度。
+   独立 2.1 页（index.html）与 2.2 页（assembly-integration.html）继续用上面的 .oc-inputbox。 */
+.oc-inputbox-single {
+  min-height: 0; padding: 7px 8px 7px 12px; gap: 8px;
+  border: 1px solid var(--oc-border-3); border-radius: 24px; background: var(--oc-bg-1);
+}
+.oc-inputbox-single:focus-within { border-color: var(--oc-accent); }
+.oc-inputbox-single textarea { overflow-y: hidden; font-size: 12px; line-height: 20px; }
+.oc-inputbox-single textarea::placeholder { color: var(--oc-text-3); }
+/* 圆形 +：新增 / 上传附件（查看已有文件在会话上方的「任务文件」，两个入口不合并）。 */
+.oc-add {
+  display: flex; width: 34px; height: 34px; flex: 0 0 34px;
+  align-items: center; justify-content: center; padding: 0; border: 0;
+  border-radius: 50%; background: var(--oc-bg-2); color: var(--oc-text-1);
+  font-size: 18px; cursor: pointer; transition: background .15s;
+}
+.oc-add:hover { background: var(--oc-bg-3); }
+.oc-add:focus-visible { outline: 2px solid var(--oc-accent); outline-offset: 2px; }
+.oc-add:disabled { opacity: .5; cursor: not-allowed; }
+/* 发送：真正的圆形主色按钮（主色唯一事实源仍是 --oc-accent → --color-primary）。 */
+.oc-inputbox-single .oc-send {
+  width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; background: var(--oc-accent);
+}
+.oc-inputbox-single .oc-send:hover:not(:disabled) { filter: brightness(.94); }
+.oc-inputbox-single .oc-send .ti { font-size: 22px; }
 
 /* 弹层（模型选择 / Agent 能力 / ＋ 菜单） */
 /* fixed 而不是 absolute：位置来自 getBoundingClientRect（视口坐标），
@@ -371,7 +459,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-pop {
   position: fixed; z-index: 1300; min-width: 210px; max-height: 360px; overflow: auto;
   padding: 6px; border: .5px solid var(--oc-border-2); border-radius: 12px;
-  background: var(--oc-bg-1); box-shadow: 0 12px 34px rgba(0, 0, 0, .16);
+  background: var(--oc-bg-1); box-shadow: 0 12px 34px rgba(0,0,0, .16);
   font: 13px/1.5 inherit;
 }
 .oc-popitem {
@@ -390,7 +478,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 /* ---------- 抽屉：承载原左栏的资料与结果面板 ---------- */
 .oc-drawer-backdrop {
   position: fixed; z-index: 1200; inset: 0; border: 0; padding: 0;
-  background: rgba(15, 23, 42, .38); cursor: pointer;
+  background: rgba(15,23,42, .38); cursor: pointer;
 }
 .oc-drawer-backdrop[hidden] { display: none; }
 .oc-drawer {
@@ -398,7 +486,7 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
   /* 工艺推荐/成本测算面板搬进来之后，抽屉要容得下它的多栏表格。 */
   display: flex; width: min(760px, 96vw); flex-direction: column;
   border-left: .5px solid var(--oc-border-3); background: var(--oc-bg-1);
-  box-shadow: -18px 0 48px rgba(15, 23, 42, .18);
+  box-shadow: -18px 0 48px rgba(15,23,42, .18);
 }
 .oc-drawer[hidden] { display: none; }
 .oc-drawer-head {
@@ -425,3 +513,145 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
    不再依赖媒体查询，那两条规则随之删除。
    这条留着：抽屉窄，成本明细表有 min-width，得允许它自己横向滚动。 */
 .oc-drawer .inline-analysis-host { overflow-x: auto; }
+
+/* ---------- 统一父壳左侧会话：输入区与「任务文件」 ----------
+   输入区只剩圆形 +（新增附件）与右侧圆形发送（见上面的 .oc-inputbox-single）；
+   「任务文件」（查看已上传文件）已移到会话上方的统一工具栏，样式沿用那一条胶囊规范，
+   这里保留 .oc-files-action 的 hover / focus-visible / disabled 及其外观定义。
+   + 点击在同一次用户点击链路里直接打开隐藏文件输入框 —— 没有菜单、没有箭头、
+   不做 getBoundingClientRect 坐标计算。 */
+.oc-cinner { position: relative; }
+.oc-input-tools { display: flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.oc-files-action {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+  border: .5px solid var(--oc-border-2); border-radius: 999px; background: var(--oc-bg-1);
+  color: var(--oc-text-2); font: 12.5px/1.2 inherit; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.oc-files-action:hover { border-color: var(--oc-accent); color: var(--oc-accent); background: var(--oc-bg-3); }
+.oc-files-action:focus-visible { outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px; border-color: var(--oc-accent); }
+.oc-files-action:disabled { opacity: .5; cursor: not-allowed; border-color: var(--oc-border-2); color: var(--oc-text-3); background: var(--oc-bg-2); }
+.oc-files-action-label { white-space: nowrap; }
+
+/* ---------- 统一父壳左侧会话：任务执行进度（按 taskId 一张卡） ---------- */
+.oc-task-progress { display: flex; flex-direction: column; gap: 10px; }
+.oc-task-progress:empty { display: none; }
+/* 任务卡与助手回复同款：挂在同一个 .oc-amsg 节点上（oc-amsg oc-task-card），
+   内容落在 .oc-abody 里，身份行（.oc-alabel）与步骤区（.oc-task-steps）在体里上下排列。 */
+.oc-task-card {
+  padding: 11px 14px; border: 1px solid var(--oc-border-3); border-radius: 14px;
+  background: #ffffff;
+}
+/* 任务卡头行改用与助手回复同款的蓝色身份行：身份 + 任务中文名 + 右侧状态 chip。
+   .oc-alabel 是行内 flex，chip 靠右由这一条保证（合并进本轮助手卡时同样生效）。 */
+.oc-task-card .oc-task-state { margin-left: auto; }
+.oc-task-head { display: flex; align-items: center; gap: 8px; }
+.oc-task-title { min-width: 0; flex: 1; color: var(--oc-text-1); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-task-state {
+  flex-shrink: 0; padding: 1px 8px; border-radius: 999px; background: var(--oc-bg-3);
+  color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+}
+.oc-task-card.is-queued .oc-task-state { background: var(--oc-bg-3); color: var(--oc-text-2); }
+.oc-task-card.is-running .oc-task-state { background: #e0edff; color: #0050C4; }
+.oc-task-card.is-interrupted .oc-task-state { background: #e0edff; color: #0050C4; }
+/* 部分完成沿用中断的蓝色：它不是失败，只是有零件被跳过（不新增红色）。 */
+.oc-task-card.is-partial .oc-task-state { background: #e0edff; color: #0050C4; }
+.oc-task-card.is-succeeded .oc-task-state { background: #dcfce7; color: #15803d; }
+.oc-task-card.is-failed .oc-task-state { background: #fee2e2; color: #b91c1c; }
+.oc-task-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.oc-task-steps:empty { display: none; }
+.oc-task-error { margin-top: 8px; color: #b91c1c; font-size: 12px; word-break: break-word; }
+/* 中断的原因：如实写出来，但不用失败的红字（中断不是失败）。 */
+.oc-task-note { margin-top: 8px; color: var(--oc-text-3); font-size: 12px; word-break: break-word; }
+
+/* 1.1 创建需求的「需求解析摘要」（Agent 工具结果驱动，内容留在对话流里） */
+.oc-req-summary {
+  padding: 12px 14px; border: .5px solid var(--oc-border-2); border-radius: 13px;
+  background: var(--oc-bg-2);
+}
+.oc-req-summary h4 {
+  margin: 0 0 9px; color: var(--oc-text-2); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em;
+}
+.oc-req-line { color: var(--oc-text-1); font-size: 12.5px; line-height: 1.6; word-break: break-word; }
+.oc-req-line + .oc-req-line { margin-top: 4px; }
+.oc-req-missing { color: #b45309; }
+
+/* ---------- 统一看板视图宿主（第 5 步）----------
+   左侧入口只发 navigate-view，内容复用既有面板留在右侧看板内部；这里是承载面板的
+   看板内容宿主与任务文件 / 解析报告的呈现样式，不把业务正文搬进父壳。 */
+.board-view-host {
+  display: flex; flex-direction: column; min-height: 0; flex: 1;
+  background: var(--oc-bg-1); border-radius: 12px;
+}
+.board-view-host[hidden] { display: none; }
+.board-view-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: .5px solid var(--oc-border-3); flex-shrink: 0;
+}
+.board-view-title { color: var(--oc-text-1); font-size: 14px; font-weight: 600; }
+.board-view-back {
+  padding: 5px 12px; border: .5px solid var(--oc-border-2); border-radius: 8px;
+  background: var(--oc-bg-1); color: var(--oc-accent); font: 12.5px/1.2 inherit; cursor: pointer;
+}
+.board-view-back:hover { background: var(--oc-bg-2); border-color: var(--oc-accent); }
+.board-view-back:focus-visible { outline: 2px solid rgba(0,96,230, .35); outline-offset: 2px; }
+.board-view-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 20px; }
+.board-view-body .panel-section { margin-bottom: 14px; }
+.board-view-body .panel-section[data-drawer-hidden] { display: none; }
+.board-view-body .parts-list,
+.board-view-body .extras { max-height: none; }
+.board-report-frame { width: 100%; min-height: 72vh; border: 0; border-radius: 10px; background: var(--oc-bg-1); }
+.board-files { display: flex; flex-direction: column; gap: 12px; font-size: 12.5px; color: var(--oc-text-1); }
+.board-file-group { display: flex; flex-direction: column; gap: 4px; }
+.board-file-group-head {
+  display: flex; align-items: center; gap: 8px; padding-bottom: 4px;
+  border-bottom: .5px solid var(--oc-border-3); color: var(--oc-text-2); font-weight: 600;
+}
+.board-file-count { color: var(--oc-text-3); font-weight: 400; }
+.board-file-link { color: var(--oc-accent); text-decoration: none; word-break: break-all; }
+.board-file-link:hover { text-decoration: underline; }
+
+/* 零件清单里的批量按钮已退役：批量入口只留在左侧会话操作栏（看板动作 runAllPartProcesses）。 */
+/* 左侧入口的高亮只来自看板回传的 view.active：沿用浅色选中态，不用深色底白字。 */
+.oc-chip.is-active {
+  border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);
+}
+.oc-chip.is-active:hover {
+  border-color: var(--oc-accent); background: var(--oc-bg-1); color: var(--oc-accent);
+}
+/* 失败提示的重试按钮内联在会话流那条消息里（noteInThread 的 extras），
+   不再有独立的常驻提示行，所以只需要一点与正文的间距。 */
+.oc-chip-retry { display: inline-flex; margin-top: 6px; padding: 4px 12px; font-size: 12px; }
+
+/* tech_ui（第 17 步）：会话流内的固定确认卡片 —— 只有用户点击「确认」才执行 target，
+   不覆盖右侧看板、不建父级 Modal。 */
+.oc-confirm-card {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--oc-accent, #0060E6);
+  border-radius: 10px;
+  background: var(--oc-bg-1, #f5f8fd);
+}
+.oc-confirm-text { font-size: 13px; line-height: 1.5; color: var(--oc-text, #1f2329); white-space: pre-wrap; }
+.oc-confirm-row { display: flex; gap: 8px; margin-top: 10px; }
+.oc-confirm-ok, .oc-confirm-cancel {
+  padding: 4px 14px;
+  border-radius: 9999px;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--oc-border, #d9dce1);
+  background: #fff;
+  color: var(--oc-text, #1f2329);
+}
+.oc-confirm-ok { border-color: var(--oc-accent, #0060E6); background: var(--oc-accent, #0060E6); color: #fff; }
+.oc-confirm-ok:disabled, .oc-confirm-cancel:disabled { opacity: .5; cursor: not-allowed; }
+.oc-confirm-ok:focus-visible, .oc-confirm-cancel:focus-visible {
+  outline: 2px solid var(--oc-accent, #0060E6);
+  outline-offset: 1px;
+}
+
+/* 一次用户触发 = 一个 turn 容器（阶段页 3 组装与整合 / 4 成本测算）：容器里先放用户气泡、
+   紧随其后的执行卡，DOM 顺序就是「我：… → Agent 卡」。display:contents 让容器不生成盒子，
+   两个子节点直接排进 .oc-tinner 的 flex 列，视觉顺序与间距和改前完全一致。 */
+.oc-turn { display: contents; }

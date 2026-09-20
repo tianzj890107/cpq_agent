@@ -9,7 +9,9 @@ import base64
 import contextvars
 import json
 import os
+import re
 import threading
+import uuid
 from enum import Enum
 from types import UnionType
 from typing import Any, Dict, List, Type, TypeVar, Union, get_args, get_origin
@@ -27,6 +29,7 @@ from ..config import (
     QWEN_VISION_ENABLE_THINKING, QWEN_TEXT_ENABLE_THINKING,
 )
 from ..models.cost import WebSource
+from . import llm_output
 
 T = TypeVar("T", bound=BaseModel)
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
@@ -209,6 +212,12 @@ def image_block(image_bytes: bytes, filename: str, detail: str | None = None) ->
 
 def text_block(text: str) -> Dict[str, Any]:
     return {"type": "text", "text": text}
+
+
+def _continuation_user_content(base_user_content: List[Dict[str, Any]], partial: str) -> List[Dict[str, Any]]:
+    """续写请求：保留文字上下文，去掉图片/附件，避免重复上传与重复计费。"""
+    kept = [block for block in base_user_content if block.get("type") != "image_url"]
+    return [*kept, text_block(llm_output.continuation_instruction(partial))]
 
 
 def attachment_blocks(attachments) -> List[Dict[str, Any]]:
@@ -550,12 +559,36 @@ def complete_to_model_with_web_search(
     base_web_user_content = json.dumps(user_payload, ensure_ascii=False)
     attempted: list[str] = []
     last_error: Exception | None = None
+    initial_budget = min(max_tokens, QWEN_MAX_OUTPUT_TOKENS)
+    web_partial = ""
+    web_state: dict = {}
+
+    def _web_recovery_note(outcome: str, reason, final_budget: int, attempts: int) -> str:
+        # R6：联网核验的补救记录同样统一由 llm_output.truncation_note 生成。
+        return llm_output.truncation_note(
+            finish_reason=reason,
+            initial_budget=initial_budget,
+            final_budget=final_budget,
+            attempts=attempts,
+            limit=QWEN_MAX_OUTPUT_TOKENS,
+            path="qwen-web-search",
+            outcome=outcome,
+        )
+
     proxy = QWEN_PROXY_URL or None
     with httpx.Client(proxy=proxy, timeout=httpx.Timeout(QWEN_TIMEOUT_SECONDS, connect=30.0), trust_env=False) as client:
         for model in _web_search_model_candidates():
             attempted.append(model)
             body["model"] = model
             body["input"]["messages"][1]["content"] = base_web_user_content
+            web_state = {}
+            # 每个模型重新开启联网检索；续写分支会临时关掉它，避免重复检索计费。
+            body["parameters"]["enable_search"] = True
+            body["parameters"]["search_options"] = {
+                "forced_search": True,
+                "search_strategy": "turbo",
+                "enable_source": True,
+            }
             for repair_index in range(QWEN_SCHEMA_REPAIR_RETRIES + 1):
                 try:
                     response = client.post(
@@ -574,14 +607,61 @@ def complete_to_model_with_web_search(
                         raise error
                     message = (((payload.get("output") or {}).get("choices") or [{}])[0].get("message") or {})
                     content = message.get("content")
+                    choice0 = (((payload.get("output") or {}).get("choices") or [{}]) or [{}])[0] or {}
+                    finish_reason = choice0.get("finish_reason")
+                    if llm_output.is_truncated(finish_reason):
+                        # 联网核验同样先提升预算、再续写；续写不再重复触发检索与上传。
+                        web_partial = llm_output.stitch_fragments(web_partial, content if isinstance(content, str) else "")
+                        raised = llm_output.raised_budget(int(body["parameters"]["max_tokens"]), QWEN_MAX_OUTPUT_TOKENS)
+                        web_state["reason"] = finish_reason
+                        web_state["attempts"] = repair_index + 1
+                        if raised is None or repair_index >= QWEN_SCHEMA_REPAIR_RETRIES:
+                            llm_output.record_remediation(
+                                _web_recovery_note("失败", finish_reason,
+                                                   int(body["parameters"]["max_tokens"]), repair_index + 1)
+                            )
+                            raise llm_output.OutputTruncated(
+                                "Qwen 型号联网核验输出被截断，提升预算并续写后仍不完整。"
+                                + llm_output.truncation_note(
+                                    finish_reason=finish_reason,
+                                    initial_budget=initial_budget,
+                                    final_budget=int(body["parameters"]["max_tokens"]),
+                                    attempts=repair_index + 1,
+                                    limit=QWEN_MAX_OUTPUT_TOKENS,
+                                    path="qwen-web-search",
+                                ),
+                                finish_reason=finish_reason,
+                                limit=QWEN_MAX_OUTPUT_TOKENS,
+                                partial=web_partial,
+                            )
+                        body["parameters"]["max_tokens"] = raised
+                        # 续写只补剩余内容：关掉联网检索，避免同一份结果重复检索/重复计费。
+                        body["parameters"]["enable_search"] = False
+                        body["parameters"].pop("search_options", None)
+                        body["input"]["messages"][1]["content"] = llm_output.continuation_instruction(web_partial)
+                        llm_output.record_remediation(
+                            _web_recovery_note("续写重试", finish_reason, raised, repair_index + 1)
+                        )
+                        continue
                     if not isinstance(content, str) or not content.strip():
                         raise RuntimeError("百炼联网搜索未返回可解析内容")
-                    result = _validate_model_payload(output_model, _load_json_object(content))
+                    result = _validate_model_payload(
+                        output_model,
+                        _load_json_object(llm_output.stitch_fragments(web_partial, content)),
+                    )
+                    if web_state:
+                        llm_output.record_remediation(
+                            _web_recovery_note("成功", web_state.get("reason"),
+                                               int(body["parameters"]["max_tokens"]),
+                                               web_state.get("attempts", 1))
+                        )
                     _last_used_model.set(model)
                     usage = payload.get("usage") or {}
                     search_count = int((((usage.get("plugins") or {}).get("search") or {}).get("count")) or 0)
                     return result, {"model": model, "sources": _native_search_sources(payload), "search_count": search_count}
                 except (httpx.HTTPError, ValueError, ValidationError, json.JSONDecodeError, RuntimeError) as exc:
+                    if isinstance(exc, llm_output.OutputTruncated):
+                        raise
                     last_error = exc
                     status = getattr(exc, "status_code", None)
                     if status in {403, 404, 429}:
@@ -594,7 +674,9 @@ def complete_to_model_with_web_search(
                             + "\n\n上一次输出未通过本地结构校验，请重新完整输出合法 JSON；不要输出 Markdown。"
                             + f"校验错误：{exc}"
                         )
-                        body["parameters"]["max_tokens"] = min(QWEN_MAX_OUTPUT_TOKENS, max(max_tokens, 12000))
+                        raised = llm_output.raised_budget(int(body["parameters"]["max_tokens"]), QWEN_MAX_OUTPUT_TOKENS)
+                        if raised is not None:
+                            body["parameters"]["max_tokens"] = raised
                         continue
                     break
     suffix = f" 已按顺序尝试：{', '.join(attempted)}。" if attempted else ""
@@ -621,12 +703,173 @@ def run(
         raise RuntimeError("Qwen 路径暂不支持本项目的联网检索；请关闭“联网检索”后重试，或切回 OpenAI。")
     if sources_out is not None:
         sources_out.clear()
+    # 过程事件在**真正发起调用的这一层**发：llm_client 只做分派，再发一对会出现两份。
+    # 一次逻辑调用恰好一对（开始 + 成功/失败）；文本只出现实际模型名与规模，
+    # 绝不带上 prompt 原文、用户输入、附件内容、密钥或响应正文。
+    from . import tasks
+    vision = _is_vision(user_content)
+    planned = (_model_candidates(vision) or ("",))[0]
+    # 同一次逻辑调用共用一个配对 id：开始 / 返回 / 失败三条事件都带，界面据此把两条
+    # 事件并成一行（返回补写回原行，见 ## 99）。_invoke 内部的候选切换与 schema 修复
+    # 重试仍算同一次调用，call 不变。
+    call = uuid.uuid4().hex[:8]
+    ask = _model_input_summary(system_prompt, user_content, planned)
+    tasks.process_event("model", f"调用模型（{planned or '未配置模型'}）",
+                        detail=_model_detail(planned, vision, call, "running", ask, None))
+    try:
+        result = _invoke(system_prompt, user_content, output_model, max_tokens)
+    except Exception as exc:                            # noqa: BLE001 - 事件后原样上抛
+        reason = str(exc)[:80]
+        failed = _model_output_summary(error=exc)
+        tasks.process_event("model", f"模型调用失败（{reason}）",
+                            detail=_model_detail(planned, vision, call, "failed", None, failed))
+        raise
+    used = _last_used_model.get() or planned or "模型"
+    answer = _model_output_summary(result=result)
+    tasks.process_event("model", f"模型返回（{used}）",
+                        detail=_model_detail(used, vision, call, "ok", None, answer))
+    return result
+
+
+def _model_detail(model: str, vision: bool, call: str = "", status: str = "running",
+                  input_summary: dict | None = None,
+                  output_summary: dict | None = None) -> dict:
+    """模型事件的明细（Spec B2 / ## 99 A）：实跑模型 + provider + 是否带图 + 配对 id + 短摘要。
+
+    三键 model / provider / vision 是既有契约，保留；再补 call（同一次逻辑调用的配对
+    id）、status（running / ok / failed）与 input / output 短摘要。摘要只算计数、长度
+    与文件名，绝不落 prompt 原文、用户消息原文、附件内容或响应正文。
+    """
+    from . import llm_settings
+    try:
+        provider = llm_settings.provider_of(str(model or ""))
+    except Exception:                                   # 表外模型：如实留空，不猜
+        provider = ""
+    detail = {"model": str(model or ""), "provider": provider, "vision": bool(vision),
+              "call": str(call or ""), "status": str(status or "running")}
+    if isinstance(input_summary, dict):
+        detail["input"] = input_summary
+    if isinstance(output_summary, dict):
+        detail["output"] = output_summary
+    return detail
+
+
+# 附件名白名单：只从文本块按扩展名抓，去重保序，只留文件名不留路径（## 99 A2）。
+_ATTACHMENT_EXTS = ("png", "jpg", "jpeg", "gif", "webp", "bmp", "pdf", "dwg", "dxf",
+                    "xlsx", "xls", "docx", "doc", "txt", "md", "csv", "step", "stp")
+_ATTACHMENT_RE = re.compile(
+    r"""[^\s\\/"'<>()\[\]{}，。；：、【】]+\.(?:%s)\b""" % "|".join(_ATTACHMENT_EXTS),
+    re.IGNORECASE)
+
+
+def _attachment_names(user_content) -> list:
+    """从文本块里按扩展名抓文件名：去重、保序、最多 5 个，只留文件名不留路径。"""
+    names: list[str] = []
+    for block in user_content or []:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        for raw in _ATTACHMENT_RE.findall(text):
+            name = str(raw).replace("\\", "/").rsplit("/", 1)[-1]
+            if name and name not in names:
+                names.append(name)
+    return names[:5]
+
+
+def _model_input_summary(system_prompt: str, user_content, model: str) -> dict:
+    """「问的是什么」的短摘要（## 99 A2）：只算计数、长度与文件名，不落任何原文。"""
+    from . import llm_settings, tasks
+    try:
+        provider = llm_settings.provider_of(str(model or ""))
+    except Exception:
+        provider = ""
+    images = 0
+    texts = 0
+    text_chars = 0
+    for block in user_content or []:
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("type") or "")
+        if kind in ("image", "image_url", "input_image"):
+            images += 1
+        elif kind in ("text", "input_text"):
+            texts += 1
+            body = block.get("text")
+            if isinstance(body, str):
+                text_chars += len(body)
+    summary = {"模型": str(model or ""), "服务商": provider, "带图": images,
+               "文本段": texts, "提示字数": len(str(system_prompt or "")),
+               "消息字数": text_chars}
+    try:
+        task_name = str(tasks.current_task_name() or "")
+    except Exception:
+        task_name = ""
+    if task_name:
+        summary = {"任务": task_name, **summary}
+    names = _attachment_names(user_content)
+    if names:
+        summary["附件"] = names
+    return summary
+
+
+def _model_value_size(value):
+    """顶层字段的规模：只给计数 / 长度 / 原值，字符串绝不落正文。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return "%d 字" % len(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, dict):
+        return "%d 键" % len(value)
+    if isinstance(value, (list, tuple)):
+        return "%d 项" % len(value)
+    if value is None:
+        return "—"
+    return type(value).__name__
+
+
+def _model_output_summary(result=None, error=None) -> dict:
+    """「返回的是什么」的短摘要（## 99 A3）：状态 + 顶层字段规模 + JSON 字数。"""
+    if error is not None:
+        return {"状态": "failed", "原因": str(error)[:120]}
+    payload = result
+    if hasattr(payload, "model_dump"):
+        try:
+            payload = payload.model_dump()
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields: dict = {}
+    items = list(payload.items())
+    for key, value in items[:12]:
+        fields[str(key)] = _model_value_size(value)
+    if len(items) > 12:
+        fields["…"] = "另有 %d 键" % (len(items) - 12)
+    try:
+        size = len(json.dumps(payload, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        size = 0
+    return {"状态": "ok", "结果": fields, "规模": size}
+
+
+def _invoke(
+    system_prompt: str,
+    user_content: List[Dict[str, Any]],
+    output_model: Type[T],
+    max_tokens: int | None = None,
+) -> T:
+    """一次逻辑调用的实际执行体（多候选 / 截断续写 / schema 修复都在这里）。"""
     vision = _is_vision(user_content)
     # 「模型设置」里配的温度/最大 token/是否思考必须真的用上 —— 以前这三项只在
     # Agent 会话里生效，平台自己的解析与分析仍走 .env 里的固定值，等于设了没用。
     tuning = _tuning()
     limit = (max_tokens or tuning.get("max_tokens")
              or (QWEN_VISION_MAX_OUTPUT_TOKENS if vision else QWEN_TEXT_MAX_OUTPUT_TOKENS))
+    initial_budget = min(int(limit), QWEN_MAX_OUTPUT_TOKENS)
     thinking = tuning.get("thinking")
     base_user_content = [text_block("请按要求输出 JSON。"), *user_content]
     request_args: Dict[str, Any] = {
@@ -635,7 +878,7 @@ def run(
             {"role": "user", "content": base_user_content},
         ],
         "response_format": {"type": "json_object"},
-        "max_tokens": min(limit, QWEN_MAX_OUTPUT_TOKENS),
+        "max_tokens": initial_budget,
         "extra_body": {
             "enable_thinking": bool(thinking) if thinking is not None
             else (QWEN_VISION_ENABLE_THINKING if vision else QWEN_TEXT_ENABLE_THINKING)
@@ -648,8 +891,23 @@ def run(
     response = None
     last_error: Exception | None = None
     validation_errors: list[str] = []
+    recovery_state: dict = {}
+
+    def _recovery_note(outcome: str, reason, final_budget: int, attempts: int) -> str:
+        # R6：补救记录统一由 llm_output.truncation_note 生成（含调用路径与最终结果）。
+        return llm_output.truncation_note(
+            finish_reason=reason,
+            initial_budget=initial_budget,
+            final_budget=final_budget,
+            attempts=attempts,
+            limit=QWEN_MAX_OUTPUT_TOKENS,
+            path="qwen",
+            outcome=outcome,
+        )
+
     for model in _model_candidates(vision):
         attempted.append(model)
+        partial = ""
         for repair_index in range(QWEN_SCHEMA_REPAIR_RETRIES + 1):
             try:
                 response = get_client(vision).chat.completions.create(model=model, **request_args)
@@ -667,30 +925,75 @@ def run(
             choice = response.choices[0] if getattr(response, "choices", None) else None
             content = _message_content(choice)
             finish_reason = getattr(choice, "finish_reason", None)
-            if not content.strip() or finish_reason in {"length", "max_tokens"}:
-                last_error = RuntimeError(
-                    f"Qwen 输出未完整结束（finish_reason={finish_reason or 'unknown'}）。"
-                    + _usage_summary(response)
-                )
-                if repair_index < QWEN_SCHEMA_REPAIR_RETRIES:
-                    request_args["messages"] = [
-                        {"role": "system", "content": _instruction(system_prompt)},
-                        {"role": "user", "content": [
-                            *base_user_content,
-                            text_block("上一次没有返回完整 JSON。请重新完整输出，不要省略任何必填字段。"),
-                        ]},
-                    ]
-                    # 截断时同样放大输出预算，避免修复调用再次被 max_tokens 截断；
-                    # 与下方“未通过本地字段校验”分支保持一致的修复策略。
-                    request_args["max_tokens"] = min(
-                        QWEN_MAX_OUTPUT_TOKENS,
-                        max(int(request_args["max_tokens"]), 24000 if vision else 12000),
+            truncated = llm_output.is_truncated(finish_reason)
+            if truncated or not content.strip():
+                if content.strip():
+                    partial = llm_output.stitch_fragments(partial, content)
+                if not truncated:
+                    # 空输出：沿用原有的“整份重试”语义，不属于截断。
+                    last_error = RuntimeError(
+                        f"Qwen 输出为空（finish_reason={finish_reason or 'unknown'}）。"
+                        + _usage_summary(response)
                     )
-                    continue
-                break
+                    if repair_index < QWEN_SCHEMA_REPAIR_RETRIES:
+                        request_args["messages"] = [
+                            {"role": "system", "content": _instruction(system_prompt)},
+                            {"role": "user", "content": [
+                                *base_user_content,
+                                text_block("上一次没有返回完整 JSON。请重新完整输出，不要省略任何必填字段。"),
+                            ]},
+                        ]
+                        continue
+                    break
+                # 截断：先提升预算，再把已产出片段交回模型续写（不重复发送图片/附件）。
+                raised = llm_output.raised_budget(int(request_args["max_tokens"]), QWEN_MAX_OUTPUT_TOKENS)
+                recovery_state["reason"] = finish_reason
+                recovery_state["attempts"] = repair_index + 1
+                if raised is None or repair_index >= QWEN_SCHEMA_REPAIR_RETRIES:
+                    llm_output.record_remediation(
+                        _recovery_note("失败", finish_reason, int(request_args["max_tokens"]), repair_index + 1)
+                    )
+                    raise llm_output.OutputTruncated(
+                        "Qwen 输出被截断，提升预算并续写后仍不完整；"
+                        "请减少一次解析的文档量或改用长输出模型后重试。"
+                        + llm_output.truncation_note(
+                            finish_reason=finish_reason,
+                            initial_budget=initial_budget,
+                            final_budget=int(request_args["max_tokens"]),
+                            attempts=repair_index + 1,
+                            limit=QWEN_MAX_OUTPUT_TOKENS,
+                            path="qwen",
+                        ),
+                        finish_reason=finish_reason,
+                        limit=QWEN_MAX_OUTPUT_TOKENS,
+                        partial=partial,
+                    )
+                request_args["max_tokens"] = raised
+                request_args["messages"] = [
+                    {"role": "system", "content": _instruction(system_prompt)},
+                    {"role": "user", "content": _continuation_user_content(base_user_content, partial)},
+                ]
+                llm_output.record_remediation(
+                    _recovery_note("续写重试", finish_reason, raised, repair_index + 1)
+                )
+                continue
+            combined = llm_output.stitch_fragments(partial, content) if partial else content
             try:
-                return _validate_model_payload(output_model, _load_json_object(content))
+                validated = _validate_model_payload(output_model, _load_json_object(combined))
             except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
+                if partial and combined != content:
+                    # 模型没接上下文、只重发了本轮的完整 JSON 时，单独校验本轮内容。
+                    try:
+                        validated = _validate_model_payload(output_model, _load_json_object(content))
+                    except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+                        pass
+                    else:
+                        if recovery_state:
+                            llm_output.record_remediation(
+                                _recovery_note("成功", recovery_state.get("reason"),
+                                               int(request_args["max_tokens"]), recovery_state.get("attempts", 1))
+                            )
+                        return validated
                 validation_errors.append(f"{model}: {exc}{_usage_summary(response)}")
                 last_error = exc
                 if repair_index >= QWEN_SCHEMA_REPAIR_RETRIES:
@@ -705,16 +1008,21 @@ def run(
                         ),
                     ]},
                 ]
-                # 修复调用给视觉结果更大的输出空间，避免上一轮被截断。
-                request_args["max_tokens"] = min(
-                    QWEN_MAX_OUTPUT_TOKENS,
-                    max(int(request_args["max_tokens"]), 24000 if vision else 12000),
-                )
                 continue
+            else:
+                if recovery_state:
+                    llm_output.record_remediation(
+                        _recovery_note("成功", recovery_state.get("reason"),
+                                       int(request_args["max_tokens"]), recovery_state.get("attempts", 1))
+                    )
+                return validated
+        partial = ""
+        recovery_state = {}
         request_args["messages"] = [
             {"role": "system", "content": _instruction(system_prompt)},
             {"role": "user", "content": base_user_content},
         ]
+        request_args["max_tokens"] = initial_budget
     if response is None:
         # 只用配置的那一个模型，所以这里的失败就是"你选的模型没跑通"，
         # 必须把模型名说清楚 —— 以前会静默换个模型接着跑，问题被藏了起来。
@@ -739,7 +1047,6 @@ def run(
     if last_error:
         raise RuntimeError(str(last_error)) from last_error
     raise RuntimeError("Qwen 未返回可解析结果。")
-
 
 def parse_image_to_model(image_bytes: bytes, filename: str, system_prompt: str, user_instruction: str, output_model: Type[T]) -> T:
     return run(system_prompt, [image_block(image_bytes, filename), text_block(user_instruction)], output_model)

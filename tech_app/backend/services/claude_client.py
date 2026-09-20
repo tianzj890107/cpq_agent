@@ -5,6 +5,9 @@ import contextvars
 
 import base64
 import functools
+import json
+import re
+import uuid
 from typing import Any, Dict, List, Type, TypeVar
 
 import anthropic
@@ -178,38 +181,181 @@ def run(system_prompt: str, user_content: List[Dict[str, Any]], output_model: Ty
             sources_out.extend({"title": acc[url], "url": url} for url in acc)
         return model
 
-    response = _create_until_done(
-        client, system, tools, [{"role": "user", "content": user_content}], max_tokens, acc,
-        model=route["model"], thinking=bool(tuning.get("thinking", True)))
-    data = _extract_tool_input(response, _TOOL_NAME)
-    error = None
-    if data is not None:
-        try:
-            return finish(output_model.model_validate(data))
-        except ValidationError as exc:
-            error = str(exc)
-    else:
-        error = "未调用 emit_design_ir 工具。"
-
-    repair = user_content + [{"type": "text", "text": (
-        f"上一次未能得到合规结果({error})。请务必调用 {_TOOL_NAME} 工具，"
-        "严格按其 input_schema 输出，确保所有必填字段齐全、类型正确。"
-    )}]
-    # 修复重试必须用同一个模型与同样的思考设置 —— 漏传就会悄悄退回 .env 里的
-    # CLAUDE_MODEL，等于"第一次用你选的模型，重试时换成别的"。
-    response = _create_until_done(
-        client, system, tools, [{"role": "user", "content": repair}], max_tokens, acc,
-        model=route["model"], thinking=bool(tuning.get("thinking", True)))
-    data = _extract_tool_input(response, _TOOL_NAME)
-    if data is None:
-        raise RuntimeError(
-            f"{route['model']} 未能产出结构化结果 (stop_reason={response.stop_reason})。")
+    # 过程事件在**真正发起调用的这一层**发：llm_client 只做分派，再发一对会出现两份。
+    # 一次逻辑调用恰好一对（开始 + 成功/失败）——run 内部为修复重试再跑一轮，仍算这一对。
+    # 文本只出现实际使用的模型名，绝不带上 prompt 原文、用户输入、附件内容、密钥或响应正文。
+    from . import tasks
+    # 同一次逻辑调用共用一个配对 id：开始 / 返回 / 失败三条事件都带，界面据此把两条
+    # 事件并成一行（返回补写回原行，见 ## 99）；run 内部为修复重试再跑一轮仍是这一次。
+    call = uuid.uuid4().hex[:8]
+    ask = _model_input_summary(system_prompt, user_content, route)
+    tasks.process_event("model", f"调用模型（{route['model']}）",
+                        detail=_model_detail(route, vision, call, "running", ask, None))
+    outcome: T | None = None
     try:
-        return finish(output_model.model_validate(data))
-    except ValidationError as exc:
-        # 报出实际跑的那个模型，不要写死"Claude" —— 这条路径也可能跑的是别的
-        # Anthropic 模型，用户看到的名字必须和「模型设置」里选的对得上。
-        raise RuntimeError(f"{route['model']} 输出未通过 schema 校验: {exc}") from exc
+        response = _create_until_done(
+            client, system, tools, [{"role": "user", "content": user_content}], max_tokens, acc,
+            model=route["model"], thinking=bool(tuning.get("thinking", True)))
+        data = _extract_tool_input(response, _TOOL_NAME)
+        error = None
+        if data is not None:
+            try:
+                outcome = finish(output_model.model_validate(data))
+            except ValidationError as exc:
+                error = str(exc)
+        else:
+            error = "未调用 emit_design_ir 工具。"
+
+        if outcome is None:
+            repair = user_content + [{"type": "text", "text": (
+                f"上一次未能得到合规结果({error})。请务必调用 {_TOOL_NAME} 工具，"
+                "严格按其 input_schema 输出，确保所有必填字段齐全、类型正确。"
+            )}]
+            # 修复重试必须用同一个模型与同样的思考设置 —— 漏传就会悄悄退回 .env 里的
+            # CLAUDE_MODEL，等于"第一次用你选的模型，重试时换成别的"。
+            response = _create_until_done(
+                client, system, tools, [{"role": "user", "content": repair}], max_tokens, acc,
+                model=route["model"], thinking=bool(tuning.get("thinking", True)))
+            data = _extract_tool_input(response, _TOOL_NAME)
+            if data is None:
+                raise RuntimeError(
+                    f"{route['model']} 未能产出结构化结果 (stop_reason={response.stop_reason})。")
+            try:
+                outcome = finish(output_model.model_validate(data))
+            except ValidationError as exc:
+                # 报出实际跑的那个模型，不要写死"Claude" —— 这条路径也可能跑的是别的
+                # Anthropic 模型，用户看到的名字必须和「模型设置」里选的对得上。
+                raise RuntimeError(f"{route['model']} 输出未通过 schema 校验: {exc}") from exc
+    except Exception as exc:                            # noqa: BLE001 - 事件后原样上抛
+        reason = str(exc)[:80]
+        failed = _model_output_summary(error=exc)
+        tasks.process_event("model", f"模型调用失败（{reason}）",
+                            detail=_model_detail(route, vision, call, "failed", None, failed))
+        raise
+    answer = _model_output_summary(result=outcome)
+    tasks.process_event("model", f"模型返回（{route['model']}）",
+                        detail=_model_detail(route, vision, call, "ok", None, answer))
+    return outcome
+
+
+def _model_detail(route: dict, vision: bool, call: str = "", status: str = "running",
+                  input_summary: dict | None = None,
+                  output_summary: dict | None = None) -> dict:
+    """模型事件的明细（Spec B2 / ## 99 A）：实跑模型 + provider + 是否带图 + 配对 id + 短摘要。
+
+    三键 model / provider / vision 是既有契约，保留；再补 call（同一次逻辑调用的配对
+    id）、status（running / ok / failed）与 input / output 短摘要。摘要只算计数、长度
+    与文件名，绝不落 prompt 原文、用户消息原文、附件内容或响应正文。
+    """
+    detail = {"model": str((route or {}).get("model") or ""),
+              "provider": str((route or {}).get("provider") or ""),
+              "vision": bool(vision), "call": str(call or ""),
+              "status": str(status or "running")}
+    if isinstance(input_summary, dict):
+        detail["input"] = input_summary
+    if isinstance(output_summary, dict):
+        detail["output"] = output_summary
+    return detail
+
+
+# 附件名白名单：只从文本块按扩展名抓，去重保序，只留文件名不留路径（## 99 A2）。
+_ATTACHMENT_EXTS = ("png", "jpg", "jpeg", "gif", "webp", "bmp", "pdf", "dwg", "dxf",
+                    "xlsx", "xls", "docx", "doc", "txt", "md", "csv", "step", "stp")
+_ATTACHMENT_RE = re.compile(
+    r"""[^\s\\/"'<>()\[\]{}，。；：、【】]+\.(?:%s)\b""" % "|".join(_ATTACHMENT_EXTS),
+    re.IGNORECASE)
+
+
+def _attachment_names(user_content) -> list:
+    """从文本块里按扩展名抓文件名：去重、保序、最多 5 个，只留文件名不留路径。"""
+    names: list[str] = []
+    for block in user_content or []:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        for raw in _ATTACHMENT_RE.findall(text):
+            name = str(raw).replace("\\", "/").rsplit("/", 1)[-1]
+            if name and name not in names:
+                names.append(name)
+    return names[:5]
+
+
+def _model_input_summary(system_prompt: str, user_content, route: dict) -> dict:
+    """「问的是什么」的短摘要（## 99 A2）：只算计数、长度与文件名，不落任何原文。"""
+    from . import tasks
+    route = route or {}
+    model = str(route.get("model") or "")
+    images = 0
+    texts = 0
+    text_chars = 0
+    for block in user_content or []:
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("type") or "")
+        if kind in ("image", "image_url", "input_image"):
+            images += 1
+        elif kind in ("text", "input_text"):
+            texts += 1
+            body = block.get("text")
+            if isinstance(body, str):
+                text_chars += len(body)
+    summary = {"模型": model, "服务商": str(route.get("provider") or ""),
+               "带图": images, "文本段": texts,
+               "提示字数": len(str(system_prompt or "")), "消息字数": text_chars}
+    try:
+        task_name = str(tasks.current_task_name() or "")
+    except Exception:
+        task_name = ""
+    if task_name:
+        summary = {"任务": task_name, **summary}
+    names = _attachment_names(user_content)
+    if names:
+        summary["附件"] = names
+    return summary
+
+
+def _model_value_size(value):
+    """顶层字段的规模：只给计数 / 长度 / 原值，字符串绝不落正文。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return "%d 字" % len(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, dict):
+        return "%d 键" % len(value)
+    if isinstance(value, (list, tuple)):
+        return "%d 项" % len(value)
+    if value is None:
+        return "—"
+    return type(value).__name__
+
+
+def _model_output_summary(result=None, error=None) -> dict:
+    """「返回的是什么」的短摘要（## 99 A3）：状态 + 顶层字段规模 + JSON 字数。"""
+    if error is not None:
+        return {"状态": "failed", "原因": str(error)[:120]}
+    payload = result
+    if hasattr(payload, "model_dump"):
+        try:
+            payload = payload.model_dump()
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    fields: dict = {}
+    items = list(payload.items())
+    for key, value in items[:12]:
+        fields[str(key)] = _model_value_size(value)
+    if len(items) > 12:
+        fields["…"] = "另有 %d 键" % (len(items) - 12)
+    try:
+        size = len(json.dumps(payload, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        size = 0
+    return {"状态": "ok", "结果": fields, "规模": size}
 
 
 def parse_image_to_model(image_bytes: bytes, filename: str, system_prompt: str,

@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0060E6;
+      --color-secondary: #0060E6;
+      --gradient-ai: linear-gradient(135deg, #0060E6, #0050C4);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #00419F;
+      --color-primary-page: #F4F8FF;
+      --color-primary-border: #B4D0F8;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -74,7 +77,7 @@
       width: 36px;
       height: 36px;
       border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0060E6, #0050C4);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -201,12 +204,19 @@
       color: var(--color-secondary);
     }
 
+    /* AI 徽标：常态浅蓝描边，hover 才转实心深蓝（与报价 Agent / 技术工艺一致）。 */
     .ai-badge {
       font-size: 11px;
       padding: 2px 8px;
       border-radius: 9999px;
-      background: var(--gradient-ai);
+      background: var(--color-primary-page);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
+    }
+    .ai-badge:hover {
+      background: var(--color-primary-active);
       color: white;
+      border-color: var(--color-primary-active);
     }
 
     .header-actions {
@@ -348,7 +358,7 @@
       font-size: 11px;
       padding: 3px 10px;
       border-radius: 9999px;
-      background: rgba(99, 102, 241, 0.12);
+      background: rgba(0,96,230,.12);
       color: var(--color-primary);
       font-weight: 500;
     }
@@ -443,20 +453,20 @@
     }
 
     .tag.blue {
-      background: rgba(99, 102, 241, 0.1);
-      border-color: rgba(99, 102, 241, 0.3);
+      background: rgba(0,96,230,.10);
+      border-color: rgba(0,96,230,.30);
       color: var(--color-primary);
     }
 
     .tag.green {
-      background: rgba(16, 185, 129, 0.1);
-      border-color: rgba(16, 185, 129, 0.3);
+      background: rgba(16,185,129, 0.1);
+      border-color: rgba(16,185,129, 0.3);
       color: var(--color-success);
     }
 
     .tag.orange {
-      background: rgba(249, 115, 22, 0.1);
-      border-color: rgba(249, 115, 22, 0.3);
+      background: rgba(249,115,22, 0.1);
+      border-color: rgba(249,115,22, 0.3);
       color: #f97316;
     }
 
@@ -496,12 +506,12 @@
 
     .config-bom-preview:hover {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.05);
+      background: rgba(0,96,230,.05);
     }
 
     .config-bom-preview.active {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(0,96,230,.10);
     }
 
     .config-bom-title {
@@ -576,7 +586,7 @@
     }
 
     .bom-tag.exclusive {
-      background: rgba(249, 115, 22, 0.15);
+      background: rgba(249,115,22, 0.15);
       color: #f97316;
     }
 
@@ -619,7 +629,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12);
     }
 
     .chat-send {
@@ -627,7 +637,7 @@
       height: 38px;
       border: none;
       border-radius: 11px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0060E6, #0050C4);
       color: white;
       cursor: pointer;
       display: flex;
@@ -817,7 +827,7 @@
 
     .module-item.selected {
       border-color: var(--color-primary);
-      background: rgba(99, 102, 241, 0.05);
+      background: rgba(0,96,230,.05);
     }
 
     .module-info {
@@ -912,8 +922,8 @@
 
     .param-tag {
       padding: 2px 8px;
-      background: rgba(99, 102, 241, 0.1);
-      border: 0.5px solid rgba(99, 102, 241, 0.3);
+      background: rgba(0,96,230,.10);
+      border: 0.5px solid rgba(0,96,230,.30);
       border-radius: 4px;
       font-size: 11px;
       color: var(--color-primary);
@@ -997,8 +1007,8 @@
     .bomtree .exp-btn .ti { font-size: 12px; }
     .bomtree .exp-spacer { width: 18px; flex-shrink: 0; }
     .bomtree .lvl-badge { font-size: 10px; font-weight: 600; padding: 2px 5px; border-radius: 3px; flex-shrink: 0; }
-    .bomtree .lvl-badge.l1 { background: #eef2ff; color: #6366f1; }
-    .bomtree .lvl-badge.l2 { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+    .bomtree .lvl-badge.l1 { background: #E6F0FD; color: #0060E6; }
+    .bomtree .lvl-badge.l2 { background: rgba(0,96,230,.10); color: #0060E6; }
     .bomtree .lvl-badge.l3 { background: #f3f4f6; color: #62636d; }
     .bomtree .lvl-badge.l4 { background: #f9fafb; color: #9ca3af; }
     .bomtree tr.bom-child { display: none; }
@@ -1139,15 +1149,15 @@
 
     /* ---- Agent 驱动新增：步骤状态 / 附件 / 可编辑BOM表 ---- */
     .step-icon.pending { background: var(--bg-tertiary, #E5E7EB); color: var(--text-tertiary, #9CA3AF); }
-    .step-icon.running { background: linear-gradient(135deg, var(--color-purple, #8b5cf6), var(--color-primary, #6366f1)); }
-    .step-icon.done { background: var(--color-primary, #6366f1); }
+    .step-icon.running { background: linear-gradient(135deg, var(--color-purple, #0060E6), var(--color-primary, #0060E6)); }
+    .step-icon.done { background: var(--color-primary, #0060E6); }
     @keyframes xspin { to { transform: rotate(360deg); } }
     .step-icon.running .ti-loader-2, .ti-loader-2 { animation: xspin 0.9s linear infinite; }
     .step-result:empty { display: none; }
     .step-result { margin-top: 4px; }
     .attach-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--bg-hover, #F9FAFB);
       border: 0.5px solid var(--border-color, #E5E7EB); border-radius: 9999px; padding: 3px 8px; font-size: 12px; color: var(--text-secondary, #6B7280); }
-    .attach-chip .ti { font-size: 13px; color: var(--color-primary, #6366f1); }
+    .attach-chip .ti { font-size: 13px; color: var(--color-primary, #0060E6); }
     .attach-chip .rm { cursor: pointer; color: var(--text-tertiary, #9CA3AF); }
     .attach-chip .rm:hover { color: var(--color-red, #EF4444); }
     .bom-table .row-del { border: none; background: transparent; color: var(--text-tertiary, #9CA3AF); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
@@ -1164,7 +1174,7 @@
     .rule-count { font-size: 12px; color: var(--text-secondary); margin: 2px 0 8px; }
     .rule-opt { display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
     .rule-opt:hover { border-color: var(--color-primary); }
-    .rule-opt.checked { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .rule-opt.checked { border-color: var(--color-primary); background: rgba(0,96,230,.05); }
     .rule-opt input { margin-top: 3px; flex-shrink: 0; }
     .rule-opt .r-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
     .rule-opt .r-badge { font-size: 10px; background: var(--gradient-ai); color: #fff; border-radius: 9999px; padding: 1px 7px; margin-left: 6px; }
@@ -1215,8 +1225,8 @@
       padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg-page);
       transition: border-color 0.15s, box-shadow 0.15s; position: relative;
     }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
-    .hist-item.current { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,96,230,.12); }
+    .hist-item.current { border-color: var(--color-primary); background: rgba(0,96,230,.05); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px;
@@ -1255,7 +1265,7 @@
       background: white; outline: none;
     }
     .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -1409,10 +1419,6 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
-          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
-          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
-        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -1432,34 +1438,6 @@
           <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
           <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
-        </div>
-
-        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 模型设置</label>
-          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
-            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
-            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
-          <label>多模态模型（图纸识别）</label>
-          <select id="setTechVision"></select>
-          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
-          <select id="setTechText"></select>
-          <div class="field-row" style="margin-top:8px">
-            <div style="flex:1">
-              <label>Temperature（留空＝模型默认）</label>
-              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
-            </div>
-            <div style="flex:1">
-              <label>最大输出 Tokens（留空＝默认）</label>
-              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
-            </div>
-          </div>
-          <label class="check-row" style="margin-top:8px">
-            <input type="checkbox" id="setTechThinking"> 开启思考
-          </label>
-          <label>API Key（按提供商分别保存；留空表示不修改）</label>
-          <select id="setTechKeyProvider"></select>
-          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
-          <div class="hint" id="techLlmMsg"></div>
         </div>
 
         <label class="check-row" style="margin-top:16px">
@@ -1487,11 +1465,14 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeOverlays()">取消</button>
-        <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存</button>
+        <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
       </div>
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     'use strict';
     // 默认同源 /agents/config（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47294。
@@ -1886,7 +1867,7 @@
       const project = (sessionStorage.getItem('cpq:projectName') || '').trim();
       const btn = $('btnImportDb'); const old = btn.textContent; btn.disabled = true; btn.textContent = '导入中…';
       try {
-        const j = await fetch(AGENT_URL + '/api/import', {
+        const j = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ product, project, params, rows })
         }).then(r => r.json());
@@ -1917,7 +1898,7 @@
       if (step) body.step = step; // 人工模式下上报本地进度（用于历史/首页卡片状态）
       if (display !== undefined) body.display = display; else if (!echo) body.display = '';
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
         setConn(true);
         const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -1960,7 +1941,7 @@
     async function extractFile(f) {
       if (TEXT_EXT.test(f.name)) { try { return { text: (await f.text()).slice(0, 200000) }; } catch (e) { return { err: '读取失败' }; } }
       if (DOC_EXT.test(f.name)) { try { const b = await fileB64(f);
-        const r = await fetch(AGENT_URL + '/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: b }) });
+        const r = await cpqAuthFetch(AGENT_URL + '/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: f.name, data: b }) });
         const d = await r.json(); if (d && d.ok) return { text: d.text, truncated: d.truncated }; return { err: (d && d.error) || '解析失败' }; } catch (e) { return { err: '无法连接解析服务' }; } }
       return { err: '该类型暂不支持' };
     }
@@ -2007,10 +1988,10 @@
       } catch {}
       if ($('configPanelTitle') && projectName) $('configPanelTitle').textContent = '配置BOM - ' + projectName;
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json()); setConn(true);
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json()); setConn(true);
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || null;
         try { // 记入「我的配置」（首页「我的」标签按本机创建的会话过滤）
           const mine = JSON.parse(localStorage.getItem('xbom:mySessions') || '[]');
@@ -2077,7 +2058,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -2109,14 +2090,14 @@
     async function openSession(id) {
       if (busy) { alert('请等当前回合结束再切换历史。'); return; }
       let data;
-      try { data = await fetch(AGENT_URL + '/api/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(r => r.ok ? r.json() : null); }
+      try { data = await cpqAuthFetch(AGENT_URL + '/api/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(r => r.ok ? r.json() : null); }
       catch (e) { data = null; }
       if (!data || !data.id) { alert('无法打开该历史记录。'); return; }
       currentSessionId = data.id; closeOverlays(); replaySession(data);
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
-      try { await fetch((src && src.base || AGENT_URL) + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
+      try { await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); } catch (e) {}
       loadHistoryList();
     }
     function replaySession(data) {
@@ -2142,7 +2123,7 @@
     }
     async function loadModels() {
       const sel = $('setModel'); sel.innerHTML = ''; let cur = null;
-      try { const r = await fetch(AGENT_URL + '/api/models').then(r => r.json()); MODELS = r.models || []; cur = r.current; } catch (e) { MODELS = []; }
+      try { const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json()); MODELS = r.models || []; cur = r.current; } catch (e) { MODELS = []; }
       const groups = {};
       MODELS.forEach(m => { (groups[m.provider_label] = groups[m.provider_label] || []).push(m); });
       Object.keys(groups).forEach(gl => {
@@ -2150,7 +2131,7 @@
         groups[gl].forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.label + (m.configured ? '' : '（未配置 Key）'); o.dataset.provider = m.provider; o.dataset.providerLabel = m.provider_label; o.dataset.configured = m.configured ? '1' : ''; og.appendChild(o); });
         sel.appendChild(og);
       });
-      let st = {}; try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      let st = {}; try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model; else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
       const lc = st.local || {};
@@ -2165,7 +2146,6 @@
       $('setThinking').checked = !!st.thinking; $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      await loadTechLlm();
     }
     function selectedModelOption() { const sel = $('setModel'); return sel.options[sel.selectedIndex] || null; }
     function onModelChange() {
@@ -2183,149 +2163,9 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
-    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
-       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
-                                  temperature,max_tokens,thinking,providers[],editable}
-       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
-       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
-       选了一个后端不认的 id，保存时才报错。 */
-    let TECH_LLM = null;
-    function _techFillSelect(sel, options, current) {
-      if (!sel) return;
-      sel.innerHTML = '';
-      (options || []).forEach(o => {
-        const el = document.createElement('option');
-        el.value = o.id;
-        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
-        sel.appendChild(el);
-      });
-      if (current) sel.value = current;
-    }
-    async function loadTechLlm() {
-      try {
-        const r = await fetch('/api/llm/settings');
-        if (!r.ok) throw new Error(r.status);
-        TECH_LLM = await r.json();
-      } catch (e) {
-        TECH_LLM = null;
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
-        return;
-      }
-      const t = TECH_LLM;
-      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
-      _techFillSelect($('setTechText'), t.text_options, t.text_model);
-      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
-      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
-      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
-      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
-      const kp = $('setTechKeyProvider');
-      if (kp) {
-        kp.innerHTML = '';
-        (t.providers || []).forEach(p => {
-          const el = document.createElement('option');
-          el.value = p.provider;
-          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
-          kp.appendChild(el);
-        });
-      }
-      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
-      if ($('techLlmMsg')) {
-        $('techLlmMsg').textContent = miss.length
-          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
-          : '当前所选模型的 Key 均已配置。';
-      }
-    }
-    async function saveTechLlm() {
-      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
-      const body = {};
-      const v = $('setTechVision') && $('setTechVision').value;
-      const x = $('setTechText') && $('setTechText').value;
-      if (v) body.vision_model = v;
-      if (x) body.text_model = x;
-      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
-      body.temperature = tp === '' ? null : Number(tp);
-      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
-      body.max_tokens = mt === '' ? null : Number(mt);
-      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (key) {
-        body.api_key = key;
-        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
-        if (!body.api_key_provider) {
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
-          return;
-        }
-      }
-      try {
-        const r = await fetch('/api/llm/settings', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
-          return;
-        }
-        if ($('setTechKey')) $('setTechKey').value = '';
-        TECH_LLM = await r.json().catch(() => null);
-        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
-      } catch (e) {
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
-      }
-    }
-    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
-    let SETTINGS_TAB = 'agents';
-    function switchSettingsTab(which) {
-      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
-      const body = document.querySelector('#settingsModal .modal-body');
-      if (body) {
-        Array.from(body.children).forEach(ch => {
-          if (ch.id === 'setTabs') return;
-          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
-          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
-          ch.style.display = SETTINGS_TAB === 'agents'
-            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
-            : 'none';
-        });
-      }
-      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
-        const b = $(id);
-        if (!b) return;
-        const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
-      });
-      const sb = $('saveSettingsBtn');
-      if (sb) {
-        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
-        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
-      }
-      if (SETTINGS_TAB === 'agents') {
-        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
-        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
-      }
-    }
-    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
-    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
-    if (typeof onModelChange === 'function') {
-      const _omcOrig = onModelChange;
-      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
-    }
-    if (typeof onThinkingChange === 'function') {
-      const _otcOrig = onThinkingChange;
-      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
-    }
-    async function saveActiveSettings() {
-      if (SETTINGS_TAB === 'tech') {
-        const m = $('techLlmMsg');
-        if (m) m.textContent = '保存中…';
-        await saveTechLlm();
-      } else {
-        await saveSettings();
-      }
-    }
-    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
+    /* 模型配置已统一：报价、配置、规则与技术工艺共用报价的 /api/settings 与
+       cpq_settings.json，不再有「助手模型 / 技术工艺模型」双页签；技术工艺侧只在
+       服务端保留一条兼容委托路由，前端不再直接依赖它，也不再保存第二份模型状态。 */
     async function saveSettings() {
       const o = selectedModelOption();
       const payload = { model: $('setModel').value, temperature: $('setTempEnable').checked ? Number($('setTemp').value) : null, max_tokens: $('setMaxTokens').value === '' ? null : Number($('setMaxTokens').value), thinking: $('setThinking').checked, thinking_budget: $('setThinkBudget').value === '' ? 8000 : Number($('setThinkBudget').value) };
@@ -2340,7 +2180,7 @@
       } else if (key && o) { payload.api_key = key; payload.provider = o.dataset.provider; }
       const msg = $('settingsMsg'); msg.className = 'hint'; msg.textContent = '保存中…'; $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(r => r.json());
         $('setApiKey').value = '';
         const wasManual = manualMode;
         manualMode = (r.model || payload.model) === 'none';
@@ -2364,10 +2204,28 @@
           const en = { name: file.name, text: null, status: 'parsing', err: null }; chatFiles.push(en); renderChips();
           const res = await extractFile(file); en.text = res.text; en.err = res.err; en.truncated = res.truncated; en.status = res.text ? 'ok' : 'err'; renderChips();
         } fi.value = ''; }); }
-      boot();
+      startAgentUi();
+    });
+
+    /* ---------- 启动 / 登录态变化（CPQ SSO） ---------- */
+    let agentUiStarted = false;
+    // 未登录时 /agents/* 一律 401（cpqAuthFetch 会顺手拉起 CPQ 登录框），那时拿不到
+    // 会话 id；登录成功后必须真正重跑一遍，而不是停在「未连接」的报错上。
+    function startAgentUi() {
+      if (agentUiStarted) return;
+      agentUiStarted = true;
+      Promise.resolve(boot()).catch(() => {}).then(() => {
+        if (!currentSessionId) agentUiStarted = false;
+      });
+    }
+    document.addEventListener('cpq-auth-change', (e) => {
+      // 只在登录成功时重拉：退出登录时保留屏幕上已有的会话内容
+      if (!(e && e.detail && e.detail.user)) return;
+      loadHistoryList();
+      loadModels();
+      startAgentUi();
     });
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

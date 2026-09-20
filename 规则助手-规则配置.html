@@ -7,11 +7,14 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
+      --color-primary: #0060E6;
+      --color-secondary: #0060E6;
       --color-success: #10b981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #00419F;
+      --color-primary-page: #F4F8FF;
+      --color-primary-border: #B4D0F8;
       --bg-page: #fff;
       --bg-soft: #f7f7f8;
       --bg-hover: #ececf1;
@@ -20,7 +23,7 @@
       --text-primary: #1f2023;
       --text-secondary: #62636d;
       --text-tertiary: #9a9ba6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --gradient-ai: linear-gradient(135deg, #0060E6, #0050C4);
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-lg: 12px;
@@ -120,13 +123,20 @@
       color: var(--color-primary);
     }
 
+    /* AI 徽标：常态浅蓝描边，hover 才转实心深蓝（与报价 Agent / 技术工艺一致）。 */
     .ai-badge {
       font-size: 11px;
       padding: 2px 8px;
       border-radius: 999px;
-      background: var(--gradient-ai);
-      color: #fff;
+      background: var(--color-primary-page);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
       font-weight: 500;
+    }
+    .ai-badge:hover {
+      background: var(--color-primary-active);
+      color: white;
+      border-color: var(--color-primary-active);
     }
 
     .chat-messages {
@@ -249,8 +259,8 @@
 
     .tag.blue {
       color: var(--color-primary);
-      background: rgba(99,102,241,.1);
-      border-color: rgba(99,102,241,.28);
+      background: rgba(0,96,230,.10);
+      border-color: rgba(0,96,230,.30);
     }
 
     .tag.green {
@@ -296,7 +306,7 @@
     .chat-attach:hover {
       color: var(--color-primary);
       border-color: var(--color-primary);
-      background: rgba(99,102,241,.08);
+      background: rgba(0,96,230,.08);
     }
 
     .chat-input {
@@ -312,7 +322,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12);
     }
 
     .chat-send,
@@ -725,12 +735,12 @@
 
     .hist-item:hover {
       border-color: var(--color-primary);
-      box-shadow: 0 2px 10px rgba(99,102,241,0.12);
+      box-shadow: 0 2px 10px rgba(0,96,230,.12);
     }
 
     .hist-item.current {
       border-color: var(--color-primary);
-      background: rgba(99,102,241,0.05);
+      background: rgba(0,96,230,.05);
     }
 
     .hist-item .h-title {
@@ -845,7 +855,7 @@
     .modal-body select:focus,
     .modal-body input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12);
     }
 
     .hint {
@@ -934,7 +944,7 @@
       border-radius: 4px; transition: border-color .15s, background .15s; font-family: inherit;
     }
     .table-row .td input:hover { border-color: var(--border); background: #fff; }
-    .table-row .td input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .table-row .td input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(0,96,230,.12); }
     .table-row .td.groovy-td { padding: 6px 8px; align-items: stretch; }
     .code-display {
       display: block; width: 100%; font-family: 'Courier New', monospace; font-size: 11px;
@@ -943,7 +953,7 @@
       min-height: 40px; text-align: left; resize: vertical; outline: none;
     }
     .code-display:hover { border-color: var(--color-primary); background: #f0f4ff; }
-    .code-display:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(99,102,241,.12); }
+    .code-display:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 2px rgba(0,96,230,.12); }
     .code-display.placeholder { color: var(--text-tertiary); font-family: inherit; font-style: italic; }
     .checkbox { width: 15px; height: 15px; cursor: pointer; accent-color: var(--color-primary); }
     .add-row { padding: 9px 12px; color: var(--color-primary); font-size: 13px; cursor: pointer; background: var(--bg-page); border-top: 0.5px solid var(--border); }
@@ -963,7 +973,7 @@
     .btn-secondary:hover { background: var(--bg-soft); border-color: var(--color-primary); }
     .btn-danger { background: var(--bg-page); color: var(--color-danger); border-color: var(--color-danger); }
     .btn-danger:hover { background: rgba(239,68,68,.08); }
-    .btn-primary { background: var(--gradient-ai); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(99,102,241,.3); }
+    .btn-primary { background: var(--gradient-ai); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(0,96,230,.30); }
     .btn-primary:hover { filter: brightness(1.06); }
     .btn-success { background: var(--color-success); color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(16,185,129,.3); }
     .btn-success:hover { filter: brightness(1.06); }
@@ -1132,10 +1142,6 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
-          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
-          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
-        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -1155,34 +1161,6 @@
           <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
           <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
-        </div>
-
-        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 模型设置</label>
-          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
-            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
-            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
-          <label>多模态模型（图纸识别）</label>
-          <select id="setTechVision"></select>
-          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
-          <select id="setTechText"></select>
-          <div class="field-row" style="margin-top:8px">
-            <div style="flex:1">
-              <label>Temperature（留空＝模型默认）</label>
-              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
-            </div>
-            <div style="flex:1">
-              <label>最大输出 Tokens（留空＝默认）</label>
-              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
-            </div>
-          </div>
-          <label class="check-row" style="margin-top:8px">
-            <input type="checkbox" id="setTechThinking"> 开启思考
-          </label>
-          <label>API Key（按提供商分别保存；留空表示不修改）</label>
-          <select id="setTechKeyProvider"></select>
-          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
-          <div class="hint" id="techLlmMsg"></div>
         </div>
 
         <label class="check-row">
@@ -1210,11 +1188,14 @@
       </div>
       <div class="modal-footer">
         <button class="btn" onclick="closeOverlays()">取消</button>
-        <button class="btn primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存设置</button>
+        <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">保存设置</button>
       </div>
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     // 默认同源 /agents/rule（cpq_suite_server.py 一体化服务）；file:// 打开时退回独立服务 47296。
     const AGENT_URL = (localStorage.getItem('cpq:ruleAgentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47296' : '/agents/rule')).replace(/\/$/, '');
@@ -1481,7 +1462,7 @@
       const btn = document.getElementById('btnImportDb');
       if (btn) btn.disabled = true;
       try {
-        const res = await fetch(AGENT_URL + '/api/import', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules }),
@@ -1555,7 +1536,7 @@
       }
       try {
         const b64 = await fileToBase64(file);
-        const res = await fetch(AGENT_URL + '/api/extract', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: file.name, data: b64 }),
@@ -1586,7 +1567,7 @@
       let receivedAnything = false;
 
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text, display, sid: currentSessionId || undefined }), // sid：会话隔离，路由到本会话专属 Bridge
@@ -1699,7 +1680,7 @@
       if (busy) return;
       closeOverlays();
       try {
-        const r = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json());
         currentSessionId = r.id || null;
       } catch (e) {}
       const messages = document.querySelector('.chat-messages');
@@ -1726,7 +1707,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const res = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const res = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (res.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -1766,7 +1747,7 @@
       }
       let data = null;
       try {
-        data = await fetch(AGENT_URL + '/api/session/open', {
+        data = await cpqAuthFetch(AGENT_URL + '/api/session/open', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
@@ -1784,7 +1765,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
@@ -1813,7 +1794,7 @@
       sel.innerHTML = '';
       let current = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         current = r.current;
       } catch (e) {
@@ -1837,7 +1818,7 @@
       });
 
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model; else if (current) sel.value = current;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
       const lc = st.local || {};
@@ -1855,7 +1836,6 @@
       $('setThinkBudget').value = st.thinking_budget != null ? st.thinking_budget : 8000;
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      await loadTechLlm();
     }
 
     function selectedModelOption() {
@@ -1894,149 +1874,9 @@
       $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none';
     }
 
-    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
-       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
-                                  temperature,max_tokens,thinking,providers[],editable}
-       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
-       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
-       选了一个后端不认的 id，保存时才报错。 */
-    let TECH_LLM = null;
-    function _techFillSelect(sel, options, current) {
-      if (!sel) return;
-      sel.innerHTML = '';
-      (options || []).forEach(o => {
-        const el = document.createElement('option');
-        el.value = o.id;
-        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
-        sel.appendChild(el);
-      });
-      if (current) sel.value = current;
-    }
-    async function loadTechLlm() {
-      try {
-        const r = await fetch('/api/llm/settings');
-        if (!r.ok) throw new Error(r.status);
-        TECH_LLM = await r.json();
-      } catch (e) {
-        TECH_LLM = null;
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
-        return;
-      }
-      const t = TECH_LLM;
-      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
-      _techFillSelect($('setTechText'), t.text_options, t.text_model);
-      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
-      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
-      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
-      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
-      const kp = $('setTechKeyProvider');
-      if (kp) {
-        kp.innerHTML = '';
-        (t.providers || []).forEach(p => {
-          const el = document.createElement('option');
-          el.value = p.provider;
-          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
-          kp.appendChild(el);
-        });
-      }
-      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
-      if ($('techLlmMsg')) {
-        $('techLlmMsg').textContent = miss.length
-          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
-          : '当前所选模型的 Key 均已配置。';
-      }
-    }
-    async function saveTechLlm() {
-      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
-      const body = {};
-      const v = $('setTechVision') && $('setTechVision').value;
-      const x = $('setTechText') && $('setTechText').value;
-      if (v) body.vision_model = v;
-      if (x) body.text_model = x;
-      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
-      body.temperature = tp === '' ? null : Number(tp);
-      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
-      body.max_tokens = mt === '' ? null : Number(mt);
-      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (key) {
-        body.api_key = key;
-        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
-        if (!body.api_key_provider) {
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
-          return;
-        }
-      }
-      try {
-        const r = await fetch('/api/llm/settings', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
-          return;
-        }
-        if ($('setTechKey')) $('setTechKey').value = '';
-        TECH_LLM = await r.json().catch(() => null);
-        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
-      } catch (e) {
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
-      }
-    }
-    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
-    let SETTINGS_TAB = 'agents';
-    function switchSettingsTab(which) {
-      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
-      const body = document.querySelector('#settingsModal .modal-body');
-      if (body) {
-        Array.from(body.children).forEach(ch => {
-          if (ch.id === 'setTabs') return;
-          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
-          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
-          ch.style.display = SETTINGS_TAB === 'agents'
-            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
-            : 'none';
-        });
-      }
-      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
-        const b = $(id);
-        if (!b) return;
-        const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
-      });
-      const sb = $('saveSettingsBtn');
-      if (sb) {
-        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
-        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
-      }
-      if (SETTINGS_TAB === 'agents') {
-        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
-        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
-      }
-    }
-    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
-    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
-    if (typeof onModelChange === 'function') {
-      const _omcOrig = onModelChange;
-      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
-    }
-    if (typeof onThinkingChange === 'function') {
-      const _otcOrig = onThinkingChange;
-      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
-    }
-    async function saveActiveSettings() {
-      if (SETTINGS_TAB === 'tech') {
-        const m = $('techLlmMsg');
-        if (m) m.textContent = '保存中…';
-        await saveTechLlm();
-      } else {
-        await saveSettings();
-      }
-    }
-    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
+    /* 模型配置已统一：报价、配置、规则与技术工艺共用报价的 /api/settings 与
+       cpq_settings.json，不再有「助手模型 / 技术工艺模型」双页签；技术工艺侧只在
+       服务端保留一条兼容委托路由，前端不再直接依赖它，也不再保存第二份模型状态。 */
     async function saveSettings() {
       const option = selectedModelOption();
       const payload = {
@@ -2071,7 +1911,7 @@
       msg.textContent = '保存中...';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -2100,12 +1940,12 @@
 
     async function initAgentMeta() {
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true, '已连接');
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model && $('modelInfo')) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         // 每个打开的页面申请自己的会话 id（会话隔离，多人同时用互不串扰）
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || currentSessionId;
         try { // 记入「我的规则」（首页「我的」标签按本机创建的会话过滤）
           const mine = JSON.parse(localStorage.getItem('rule:mySessions') || '[]');
@@ -2120,10 +1960,28 @@
       }
     }
 
-    // 先取 meta（含 manualMode 判定）再处理首页带入的需求，保证无模型模式判定生效
-    initAgentMeta().then(initFromHomepage);
+    // 先取 meta（含 manualMode 判定）再处理首页带入的需求，保证无模型模式判定生效。
+    // 未登录时 /agents/* 一律 401（cpqAuthFetch 会顺手拉起 CPQ 登录框），那时拿不到
+    // 会话 id；登录成功后必须真正重跑一遍，而不是停在空列表。
+    let agentUiStarted = false;
+    function startAgentUi() {
+      if (agentUiStarted) return;
+      agentUiStarted = true;
+      initAgentMeta().then(initFromHomepage).then(() => {
+        if (!currentSessionId) agentUiStarted = false;
+      });
+    }
+
+    document.addEventListener('cpq-auth-change', (e) => {
+      // 只在登录成功时重拉：退出登录时保留屏幕上已有的会话内容
+      if (!(e && e.detail && e.detail.user)) return;
+      loadHistoryList();
+      loadModels();
+      startAgentUi();
+    });
+
+    startAgentUi();
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

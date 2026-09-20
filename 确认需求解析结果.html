@@ -7,12 +7,19 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0060E6;
+      --color-secondary: #0060E6;
+      --gradient-ai: linear-gradient(135deg, #0060E6, #0050C4);
+      --gradient-primary: linear-gradient(135deg, #0060E6 0%, #0050C4 100%);
+      --gradient-primary-hover: linear-gradient(135deg, #0050C4 0%, #00419F 100%);
+      --gradient-primary-soft: linear-gradient(135deg, #FFFFFF 0%, #F4F8FF 100%);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #00419F;
+      --color-primary-page: #F4F8FF;
+      --color-primary-light: #E6F0FD;
+      --color-primary-border: #B4D0F8;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -66,6 +73,7 @@
       margin-bottom: 8px; cursor: pointer;
     }
     .nav-logo svg { width: 22px; height: 22px; }
+    a.nav-logo { color: inherit; text-decoration: none; }
     .nav-divider { width: 32px; height: 1px; background: var(--border-color); margin: var(--space-sm) 0; }
     .nav-icon {
       width: 40px; height: 40px; border-radius: 10px;
@@ -101,9 +109,9 @@
       display: flex; align-items: center; gap: var(--space-sm);
     }
     .chat-title .ti { font-size: 20px; color: var(--color-secondary); }
+    /* AI 徽标的外观由下方「报价智能体强调控件」统一决定：常态浅蓝描边，hover 实心深蓝。 */
     .ai-badge {
       font-size: 11px; padding: 2px 8px; border-radius: 9999px;
-      background: var(--gradient-ai); color: white;
     }
     .conn-status { font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 5px; }
     .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-tertiary); }
@@ -121,9 +129,9 @@
     .message { display: flex; flex-direction: column; max-width: 92%; }
     .message-ai {
       align-self: flex-start;
-      background: var(--bg-secondary);
-      border: 0.5px solid var(--border-color);
-      border-radius: 14px; border-bottom-left-radius: 4px;
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
       padding: 11px 14px;
     }
     .message-label {
@@ -135,6 +143,23 @@
       content: ''; width: 6px; height: 6px;
       background: var(--gradient-ai); border-radius: 50%; flex-shrink: 0;
     }
+    /* 身份行右侧状态 chip：与技术侧同款三态配色，就地翻转不新增第二行。 */
+    .message-label-state {
+      margin-left: auto; flex-shrink: 0; padding: 1px 8px; border-radius: 999px;
+      background: var(--bg-tertiary); color: var(--text-secondary);
+      font-size: 11px; font-weight: 600;
+    }
+    .message-label-state.is-running { background: #e0edff; color: #0050C4; }
+    .message-label-state.is-succeeded { background: #dcfce7; color: #15803d; }
+    .message-label-state.is-failed { background: #fee2e2; color: #b91c1c; }
+    /* 思考过程折叠块：唯一默认折叠项之一（另一个是工具轨迹），白底 + 边框。 */
+    /* 助手回复只保留 .message-ai 一层边框：思考块并进那张卡，不再自成一张。 */
+    .thinking-block { margin-bottom: 8px; padding: 0; }
+    .thinking-block summary { cursor: pointer; color: var(--text-tertiary); font-size: 11px; }
+    .thinking-body {
+      margin-top: 7px; color: var(--text-secondary); font-size: 12px;
+      line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+    }
     .message-text { font-size: 14px; color: var(--text-primary); line-height: 1.7; word-break: break-word; }
     .message-text p { margin: 4px 0; }
     .message-text ul, .message-text ol { margin: 4px 0 4px 20px; }
@@ -143,22 +168,22 @@
       padding: 1px 5px; font-size: 12.5px;
       font-family: Consolas, Menlo, monospace;
     }
+    /* 用户气泡沿用系统主色实心蓝底 + 白字；右下角小圆角是气泡尾部。 */
     .message-user {
-      align-self: flex-end;
-      background: var(--gradient-ai); color: white;
-      border-radius: 14px; border-bottom-right-radius: 4px;
-      padding: 11px 14px;
+      align-self: flex-end; background: var(--color-primary);
+      color: white; border-radius: 14px;
+      border-bottom-right-radius: 4px; padding: 11px 14px;
     }
-    .message-user .message-label { color: rgba(255,255,255,0.85); flex-direction: row-reverse; }
-    .message-user .message-label::before { background: rgba(255,255,255,0.7); }
+    .message-user .message-label { color: white; flex-direction: row-reverse; } .message-user .message-label::before { background: white; }
     .message-user .message-text { color: white; white-space: pre-wrap; }
+    .message-error { color: var(--color-danger); }
     .message-error .message-text { color: var(--color-danger); }
 
     /* ===== 第1步 产品推荐清单（对话框内） ===== */
     .cand-block .message-text { max-width: 100%; }
     .cand-head { font-size: 12px; margin-bottom: 4px; }
     .cand-sub { font-size: 11px; color: var(--text-tertiary); line-height: 1.6; margin-bottom: 8px; }
-    .cand-src { font-size: 11px; color: var(--color-primary); background: rgba(99,102,241,.07);
+    .cand-src { font-size: 11px; color: var(--color-primary); background: rgba(0,96,230,.08);
       border-radius: 6px; padding: 5px 8px; margin: 4px 0 6px; word-break: break-all; }
     .cand-src .ti { font-size: 12px; }
     .cand-warn { background: rgba(239,68,68,.10); color: #b91c1c; border: 1px solid rgba(239,68,68,.25);
@@ -215,21 +240,30 @@
     @keyframes blink { 0%, 70%, 100% { opacity: 0.25; } 35% { opacity: 1; } }
 
     .chat-input-area { padding: 10px 16px; border-top: 0.5px solid var(--border-color); flex-shrink: 0; }
-    .chat-input-wrapper { display: flex; gap: var(--space-sm); align-items: center; }
-    .chat-input {
-      flex: 1; padding: 9px 10px;
-      border: 0.5px solid var(--border-secondary);
-      border-radius: 11px; background: var(--bg-secondary);
-      font-size: 14px; font-family: inherit; resize: none; outline: none;
+    /* 输入框下方说明行：口径与 agent-chat.css 的 .oc-disc 一致，正常文档流内撑出高度，
+       使报价与技术工艺两个工作台的输入区底边落在同一视觉基线上。 */
+    .oc-disc { margin-top: 9px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+    /* 单行圆角输入框：几何尺寸（min-height / border-radius / gap）与技术工艺
+       .oc-inputbox-single 逐项相等，配色改用本页 token。 */
+    .chat-input-wrapper {
+      display: flex; align-items: center; gap: 8px; min-height: 0;
+      padding: 7px 8px 7px 12px;
+      border: 1px solid var(--border-color); border-radius: 24px; background: var(--bg-page);
     }
-    .chat-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12); }
+    .chat-input-wrapper:focus-within { border-color: var(--color-primary); }
+    .chat-input {
+      flex: 1; min-width: 0; max-height: 120px; padding: 0;
+      border: 0; background: transparent; color: var(--text-primary);
+      font-size: 12px; line-height: 20px; font-family: inherit; resize: none; outline: none;
+    }
+    .chat-input:focus { border-color: var(--color-primary); }
     .chat-send {
-      width: 38px; height: 38px; border: none; border-radius: 11px;
-      background: var(--gradient-ai); color: white; cursor: pointer;
+      width: 36px; height: 36px; flex: 0 0 36px; border: none; border-radius: 50%;
+      background: var(--color-primary); color: white; cursor: pointer;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     .chat-send:disabled { opacity: 0.45; cursor: not-allowed; }
-    .chat-send .ti { font-size: 18px; color: white; }
+    .chat-send .ti { font-size: 22px; color: white; }
 
     /* ---------- 右侧区域 ---------- */
     .right-panel { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--bg-page); }
@@ -242,6 +276,15 @@
     .project-label { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
     .project-name { font-size: 14px; font-weight: 500; }
     .project-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); }
+    /* 右上角模型入口：紧凑文本按钮，点击复用既有设置弹窗（与左侧设置按钮同一份）。 */
+    #modelInfo {
+      border: 0; background: transparent; padding: 0; margin: 0;
+      font: inherit; color: inherit; cursor: pointer; border-radius: 5px;
+    }
+    #modelInfo:hover { color: var(--color-primary); text-decoration: underline; }
+    #modelInfo:focus-visible {
+      outline: 2px solid var(--color-primary-light); outline-offset: 2px; color: var(--color-primary);
+    }
     .status-dot { width: 8px; height: 8px; background: var(--color-success); border-radius: 50%; }
 
     .progress-bar {
@@ -259,11 +302,11 @@
       display: flex; align-items: center; justify-content: center;
       font-weight: 600; font-size: 13px; flex-shrink: 0; transition: transform 0.15s;
     }
-    .step-node.completed { background: var(--color-primary); color: white; }
-    .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(99,102,241,0.15); }
-    .step-node.pending { background: var(--bg-tertiary); color: var(--text-tertiary); border: 0.5px solid var(--border-color); }
+    .step-node.completed { background: var(--color-primary-light); color: var(--color-primary); border: 1px solid var(--color-primary-border); }
+    .step-node.active { background: var(--gradient-ai); color: white; box-shadow: 0 0 0 4px rgba(0,96,230,.12); }
+    .step-node.pending { background: var(--color-primary-light); color: var(--color-primary); border: 1px solid var(--color-primary-border); }
     /* 正在查看（非当前步骤）的节点：描边提示 */
-    .step-node.viewing { box-shadow: 0 0 0 3px rgba(139,92,246,0.35); }
+    .step-node.viewing { box-shadow: 0 0 0 3px rgba(0,96,230,.35); }
     .step-node .ti { font-size: 15px; }
     .step-label { margin-left: 6px; font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
     .progress-step.active .step-label { color: var(--color-primary); font-weight: 600; }
@@ -289,7 +332,7 @@
     /* 查看历史步骤时的提示条 */
     .view-bar {
       display: none; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 8px 16px; background: rgba(139,92,246,0.07);
+      padding: 8px 16px; background: rgba(0,96,230,.08);
       border-top: 0.5px solid var(--border-color); flex-shrink: 0; font-size: 12.5px;
     }
     .view-bar.show { display: flex; }
@@ -300,20 +343,34 @@
 
     .results-area {
       background: var(--bg-page);
-      border: 0.5px solid var(--border-color);
+      border: 0;
       display: flex; flex-direction: column;
       flex: 1; overflow: hidden;
-      margin: var(--space-lg);
-      border-radius: var(--radius-lg);
+      margin: 0;
+      border-radius: 0;
     }
     .results-header {
       padding: var(--space-md) var(--space-lg);
       border-bottom: 0.5px solid var(--border-color);
       display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
     }
-    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); }
+    .results-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
+    .results-title > #stepTitle, .results-title > .section-badge { flex: 0 0 auto; }
+    /* 流程 / 权限提示：固定标题行里的一枚胶囊，单行省略、悬浮看全文。
+       不参与结果卡的文档流，因此不会挤掉业务内容与上一步/下一步。 */
+    .wf-note {
+      margin-left: auto; min-width: 0; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      border-radius: 9999px;
+    }
+    .wf-note i.ti { margin-right: 4px; }
+    .wf-note a { color: inherit; }
+    .wf-note-danger { background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.35); color: #b91c1c; }
+    .wf-note-primary { background: rgba(0,96,230,.10); border-color: var(--color-primary); color: #00419F; }
+    .wf-note-ok { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.35); color: #15803d; }
+    .wf-note-readonly { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary-active); }
     .section-badge { font-size: 11px; padding: 3px 10px; border-radius: 9999px; font-weight: 500; }
-    .badge-active { background: rgba(99, 102, 241, 0.12); color: var(--color-primary); }
+    .badge-active { background: rgba(0,96,230,.12); color: var(--color-primary); }
     .results-content { padding: var(--space-lg); flex: 1; overflow-y: auto; }
 
     .panel-placeholder {
@@ -362,11 +419,12 @@
     .sec-status {
       font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 9999px; margin-left: 2px;
     }
-    .sec-status.active { background: rgba(99,102,241,0.14); color: var(--color-primary); }
+    .sec-status.active { background: rgba(0,96,230,.12); color: var(--color-primary); }
     .sec-status.done { background: rgba(16,185,129,0.14); color: var(--color-success); }
-    /* 无依据的推测值：琥珀色高亮，让用户一眼看出哪些是猜的 */
+    /* 无依据的推测值：用系统主色浅蓝高亮，让用户一眼看出哪些是猜的。
+       语义只是「智能体猜的、待人工确认」，不是 warning，所以不再用琥珀色。 */
     .info-table input.guessed, .list-table input.guessed, .info-table span.guessed, .list-table td.guessed {
-      background: #FEF3C7; border-color: var(--color-warning); color: #92400e; font-weight: 500;
+      background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary-active); font-weight: 500;
     }
     .sec-source {
       font-size: 11px; color: var(--text-tertiary); margin: 2px 0 8px;
@@ -375,8 +433,8 @@
     .sec-source .ti { font-size: 13px; color: var(--color-secondary); }
 
     /* 数据来源 / 操作轨迹（比原「更新工作台」更具体） */
-    .tool-activity.trace { color: var(--text-secondary); background: var(--bg-secondary);
-      border: 0.5px solid var(--border-color); border-radius: 8px; padding: 5px 9px; gap: 7px; }
+    .tool-activity.trace { color: var(--text-secondary); background: #ffffff;
+      border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 12px; gap: 7px; }
     .tool-activity.trace .ti { color: var(--color-secondary); }
     .tool-activity.trace .ti-check { color: var(--color-success); }
     .tool-activity.trace .src { color: var(--text-tertiary); }
@@ -391,12 +449,15 @@
     .attach-chip .ti { font-size: 13px; color: var(--color-secondary); }
     .attach-chip .rm { cursor: pointer; color: var(--text-tertiary); font-size: 13px; }
     .attach-chip .rm:hover { color: var(--color-danger); }
+    /* 圆形 +：新增 / 上传附件，与技术工艺 .oc-add 同尺寸（查看已有文件仍在上方「任务文件」）。 */
     .chat-attach-btn {
-      width: 38px; height: 38px; border: 0.5px solid var(--border-secondary); border-radius: 11px;
-      background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
+      width: 34px; height: 34px; flex: 0 0 34px; border: 0; border-radius: 50%;
+      background: var(--bg-secondary); color: var(--text-primary); cursor: pointer;
       display: flex; align-items: center; justify-content: center;
     }
-    .chat-attach-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .chat-attach-btn:hover { background: var(--bg-tertiary); }
+    .chat-attach-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .chat-attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .chat-attach-btn .ti { font-size: 18px; }
 
     /* 键值表单 */
@@ -416,7 +477,7 @@
       color: var(--text-primary); background: white; outline: none;
     }
     .info-table input:focus, .info-table select:focus, .info-table textarea:focus {
-      border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+      border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(0,96,230,.10);
     }
     .info-table textarea { resize: vertical; min-height: 48px; }
 
@@ -437,7 +498,7 @@
       padding: 4px 6px; font-size: 13px; font-family: inherit;
       color: var(--text-primary); background: white; outline: none;
     }
-    .list-table input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1); }
+    .list-table input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px rgba(0,96,230,.10); }
     /* BOM 树形显示（参考 BOM层级结构.html）：缩进 + Ln 徽标 + 展开/收起。仅改显示，数据列原样保留 */
     .bomtree .lvl-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
     .bomtree .exp-btn { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #9ca3af; transition: transform .2s; flex-shrink: 0; }
@@ -446,8 +507,8 @@
     .bomtree .exp-btn .ti { font-size: 12px; }
     .bomtree .exp-spacer { width: 18px; flex-shrink: 0; }
     .bomtree .lvl-badge { font-size: 10px; font-weight: 600; padding: 2px 5px; border-radius: 3px; flex-shrink: 0; }
-    .bomtree .lvl-badge.l1 { background: #eef2ff; color: #6366f1; }
-    .bomtree .lvl-badge.l2 { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+    .bomtree .lvl-badge.l1 { background: #E6F0FD; color: #0060E6; }
+    .bomtree .lvl-badge.l2 { background: rgba(0,96,230,.10); color: #0060E6; }
     .bomtree .lvl-badge.l3 { background: #f3f4f6; color: #62636d; }
     .bomtree .lvl-badge.l4 { background: #f9fafb; color: #9ca3af; }
     .bomtree tr.bom-child { display: none; }
@@ -461,7 +522,7 @@
       padding: 4px 6px; background: transparent; color: var(--text-tertiary);
       border: none; border-radius: 4px; cursor: pointer; transition: all 0.15s;
     }
-    .btn-delete:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+    .btn-delete:hover { background: rgba(239,68,68, 0.1); color: #ef4444; }
     .btn-delete .ti { font-size: 14px; }
     .list-toolbar { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
     .list-add-link {
@@ -492,6 +553,15 @@
       padding: 12px 16px;
       border-top: 0.5px solid var(--border-color); flex-shrink: 0;
     }
+    /* 全页按钮基础规则：底部栏 / view-bar / 设置弹窗共用同一套圆角与内边距。
+       此前只有 .bottom-bar .btn 一条作用域规则，底部栏之外的按钮没有倒角。 */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px; justify-content: center;
+      padding: 9px 20px; border: none; border-radius: 10px;
+      font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+    }
+    /* view-bar 里的两颗按钮比底部栏小一档，尺寸由这条规则接管（不再用行内样式）。 */
+    .view-bar .vb-actions .btn { padding: 7px 14px; min-width: 0; }
     .bottom-bar .btn {
       padding: 9px 20px; font-size: 14px; font-weight: 500;
       border-radius: 10px; min-width: 110px; justify-content: center;
@@ -503,9 +573,38 @@
     .btn-secondary:hover:not(:disabled) { background: var(--bg-secondary); border-color: var(--color-primary); }
     .btn-primary {
       background: var(--gradient-ai); color: white; border: none;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,96,230,.30);
     }
     .btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+
+    /* 报价智能体强调控件（AI 徽标 / 当前步骤圆点 / 强行填满 / 确认下一步）：
+       徽标与步骤圆点常态浅底蓝字描边，仅悬浮进入深蓝选中态；
+       两个按钮常态使用柔和白→浅蓝渐变描边，仅非禁用悬浮进入深蓝渐变。 */
+    .ai-badge,
+    .step-node.active {
+      background: var(--color-primary-page);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
+    }
+    #qaFillStep,
+    #btnNext {
+      background: var(--gradient-primary-soft);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
+    }
+    .ai-badge:hover,
+    .step-node.active:hover {
+      background: var(--color-primary-active);
+      color: white;
+      border-color: var(--color-primary-active);
+    }
+    #qaFillStep:hover:not(:disabled),
+    #btnNext:hover:not(:disabled) {
+      background: var(--gradient-primary-hover);
+      color: white;
+      border-color: var(--color-primary-active);
+      filter: none;
+    }
     .bottom-bar .btn .ti { font-size: 16px; }
 
     @media (max-width: 1024px) { .main-container { grid-template-columns: 56px 340px 1fr; } }
@@ -555,8 +654,8 @@
       padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: var(--bg-page);
       transition: border-color 0.15s, box-shadow 0.15s; position: relative;
     }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
-    .hist-item.current { border-color: var(--color-primary); background: rgba(99,102,241,0.05); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,96,230,.12); }
+    .hist-item.current { border-color: var(--color-primary); background: rgba(0,96,230,.05); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px;
@@ -595,7 +694,7 @@
       background: white; outline: none;
     }
     .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -608,20 +707,35 @@
       padding: 14px 18px; border-top: 0.5px solid var(--border-color);
     }
     .modal-footer .btn { min-width: 92px; }
-  </style>
+      /* 过程行（Tool List）：状态图标 + 原句标题，产品侧结果直接可见 —— 没有折叠、
+       没有按钮；命中 / 未命中的颜色落在结论文字上。 */
+    .oc-process-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px; }
+    .oc-process-dot { flex-shrink: 0; width: 12px; text-align: center; font-size: 12px; line-height: 1.6; }
+    .oc-process-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+    .oc-process-row.hit .oc-process-text { color: var(--color-success); }
+    .oc-process-row.miss .oc-process-text { color: #b45309; }
+    [data-agent-role="tool-item"][data-state="completed"] [data-agent-role="tool-state-icon"] {
+      color: var(--color-success);
+    /* 结果行折进标题行的折叠区：默认收起；点标题行（开关）展开 / 再点收起。 */
+    .oc-process-body { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-left: 19px; }
+    .oc-process-toggle { cursor: pointer; }
+    .oc-process-toggle:hover { background: color-mix(in srgb, var(--color-primary) 10%, transparent); border-radius: 4px; }
+    .oc-process-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent); outline-offset: 1px; }
+    }
+</style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
 <body>
   <div class="main-container">
     <!-- 最左侧导航 -->
     <div class="nav-panel">
-      <div class="nav-logo" title="报价管理">
+      <a class="nav-logo" title="报价管理" href="/报价首页.html?assistant=quote">
         <svg viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="8" stroke="white" stroke-width="1.5"/>
           <circle cx="12" cy="12" r="3" fill="white"/>
           <path d="M12 4V8M12 16V20M4 12H8M16 12H20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
-      </div>
+      </a>
       <div class="nav-icon active" onclick="restartSession()">
         <i class="ti ti-plus"></i>
         <span class="nav-tooltip">新对话（重置流程）</span>
@@ -678,15 +792,16 @@
         <div class="attach-chips" id="attachChips"></div>
         <div class="chat-input-wrapper">
           <button class="chat-attach-btn" id="chatAttachBtn" title="上传需求文档（Word/PDF/表格/图片/文本）">
-            <i class="ti ti-paperclip"></i>
+            <i class="ti ti-plus"></i>
           </button>
           <input id="chatFileInput" type="file" multiple hidden
             accept=".doc,.docx,.pdf,.xls,.xlsx,.csv,.md,.txt,.json,.png,.jpg,.jpeg">
-          <textarea class="chat-input" id="chatInput" rows="2" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea class="chat-input" id="chatInput" rows="1" placeholder="输入您的消息…（Enter 发送，Shift+Enter 换行）"></textarea>
           <button class="chat-send" id="chatSend" onclick="sendFromInput()">
             <i class="ti ti-send"></i>
           </button>
         </div>
+        <div class="oc-disc">会话绑定当前项目；右侧工作台只承载业务步骤，不重复会话。</div>
       </div>
     </div>
 
@@ -700,7 +815,7 @@
         <div class="project-status">
           <span class="status-dot"></span>
           <span>报价测算流程</span>
-          <span id="modelInfo"></span>
+          <button type="button" id="modelInfo" aria-label="修改报价模型设置" title="点击修改模型设置" onclick="openSettings()"></button>
         </div>
       </div>
 
@@ -737,8 +852,8 @@
         <div class="view-bar" id="viewBar">
           <span class="vb-text"><i class="ti ti-eye"></i> <span id="viewBarText">正在查看历史步骤（可编辑）</span></span>
           <div class="vb-actions">
-            <button class="btn btn-secondary" style="padding:7px 14px;min-width:0" onclick="backToCurrentStep()">回到当前步骤</button>
-            <button class="btn btn-primary" style="padding:7px 14px;min-width:0" onclick="saveStepEdits()"><i class="ti ti-device-floppy"></i> 保存修改并重算</button>
+            <button class="btn btn-secondary" onclick="backToCurrentStep()">回到当前步骤</button>
+            <button class="btn btn-primary" onclick="saveStepEdits()"><i class="ti ti-device-floppy"></i> 保存修改并重算</button>
           </div>
         </div>
       </div>
@@ -769,10 +884,6 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
-          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
-          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
-        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -792,34 +903,6 @@
           <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
           <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
-        </div>
-
-        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 模型设置</label>
-          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
-            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
-            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
-          <label>多模态模型（图纸识别）</label>
-          <select id="setTechVision"></select>
-          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
-          <select id="setTechText"></select>
-          <div class="field-row" style="margin-top:8px">
-            <div style="flex:1">
-              <label>Temperature（留空＝模型默认）</label>
-              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
-            </div>
-            <div style="flex:1">
-              <label>最大输出 Tokens（留空＝默认）</label>
-              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
-            </div>
-          </div>
-          <label class="check-row" style="margin-top:8px">
-            <input type="checkbox" id="setTechThinking"> 开启思考
-          </label>
-          <label>API Key（按提供商分别保存；留空表示不修改）</label>
-          <select id="setTechKeyProvider"></select>
-          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
-          <div class="hint" id="techLlmMsg"></div>
         </div>
 
         <label class="check-row" style="margin-top:16px">
@@ -847,11 +930,14 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeOverlays()">取消</button>
-        <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存</button>
+        <button class="btn btn-primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
       </div>
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <script src="cpq_auth.js"></script>
   <script>
     'use strict';
 
@@ -935,10 +1021,29 @@
     function addUserBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-user';
-      div.innerHTML = '<div class="message-label">我</div><div class="message-text"></div>';
+      // 用户气泡也是会话流里的一等条目：与助手卡共用同一套 root 合同标记。
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">我</div>'
+        + '<div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').textContent = text;
       chatEl.appendChild(div);
       scrollChat();
+    }
+
+    /* 唯一 turn helper：一次「用户主动触发的新回合」先经它插用户气泡。真人打字、快捷动作、
+       确认 / 返回上一步 / 保存、kickoff 与 runStep1、转交任务说明都走它；addUserBubble()
+       仍是气泡的底层原语。同一轮里同一句话只插一条（气泡还挂在流末尾才算是同一轮）。 */
+    let lastUserTurn = null;
+    function beginUserTurn(text) {
+      const value = String(text == null ? '' : text);
+      if (lastUserTurn && lastUserTurn.text === value && lastUserTurn.bubble
+          && lastUserTurn.bubble === chatEl.lastElementChild) {
+        return lastUserTurn.bubble;
+      }
+      addUserBubble(value);
+      lastUserTurn = { text: value, bubble: chatEl.lastElementChild };
+      return lastUserTurn.bubble;
     }
 
     let streamBubble = null, streamBuf = '';
@@ -946,12 +1051,70 @@
       if (!streamBubble) {
         streamBubble = document.createElement('div');
         streamBubble.className = 'message message-ai';
-        streamBubble.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+        streamBubble.setAttribute('data-agent-card', '');
+        streamBubble.setAttribute('data-status', 'running');
+        streamBubble.innerHTML = '<div class="message-label" data-agent-role="header">'
+          + '<span data-agent-role="identity">报价单智能体</span>'
+          + '<span class="message-label-state is-running" data-agent-role="status">◌ 运行中</span>'
+          + '</div><div class="message-text" data-agent-role="body"></div>';
         chatEl.appendChild(streamBubble);
         streamBuf = '';
       }
       return streamBubble;
     }
+    // 思考过程折叠块：默认关闭、点击展开；空文本不建块。插入位置固定在该轮
+    // .message-ai 内、.message-text 之前（身份行 → 思考过程 → 正文）。
+    function appendThinkingText(text) {
+      const value = String(text || '');
+      if (!value) return;
+      const bubble = streamBubble || ensureStreamBubble();
+      let block = bubble.querySelector('.thinking-block');
+      if (!block) {
+        block = document.createElement('details');
+        block.className = 'thinking-block';
+        block.setAttribute('data-agent-role', 'thinking');
+        block.innerHTML = '<summary>思考过程</summary><div class="thinking-body"></div>';
+        const textEl = bubble.querySelector('.message-text');
+        if (textEl) bubble.insertBefore(block, textEl);
+        else bubble.appendChild(block);
+      }
+      block.querySelector('.thinking-body').textContent += value;
+      scrollChat();
+    }
+    // 报价系统提示强制模型按「🤔 思考 / 📋 规划 / ⚙️ 执行 / ✅ 结果」输出；前三段属于
+    // 过程，收进默认折叠的「思考过程」，正文只保留 ✅ 结果及之后内容。真正的实现自包含
+    // （只用 JS 内置方法，入参原文，返回 { body, thinking }）。装配函数把它挂到同名全局：
+    // 这样实现体被单独取出执行时同样可用，页面在脚本加载时装配一次，之后同名引用即实现。
+    function splitReasoningSections() {
+      function splitReasoningSections(raw) {
+        var text = String(raw == null ? "" : raw);
+        var lines = text.split("\n");
+        var markOf = function (line) {
+          var trimmed = line.replace(/^\s+/, "");
+          if (trimmed.indexOf("🤔") === 0 || trimmed.indexOf("📋") === 0
+            || trimmed.indexOf("⚙️") === 0) return "reasoning";
+          if (trimmed.indexOf("✅") === 0) return "result";
+          return "";
+        };
+        var hasReasoning = false;
+        for (var i = 0; i < lines.length; i += 1) {
+          if (markOf(lines[i]) === "reasoning") { hasReasoning = true; break; }
+        }
+        if (!hasReasoning) return { body: text, thinking: "" };
+        var bodyParts = [];
+        var thinkingParts = [];
+        var inReasoning = false;
+        for (var j = 0; j < lines.length; j += 1) {
+          var mark = markOf(lines[j]);
+          if (mark === "reasoning") { inReasoning = true; thinkingParts.push(lines[j]); continue; }
+          if (mark === "result") { inReasoning = false; bodyParts.push(lines[j]); continue; }
+          if (inReasoning) thinkingParts.push(lines[j]); else bodyParts.push(lines[j]);
+        }
+        return { body: bodyParts.join("\n"), thinking: thinkingParts.join("\n") };
+      }
+      globalThis.splitReasoningSections = splitReasoningSections;
+    }
+    splitReasoningSections();
     function appendStreamText(t) {
       const b = ensureStreamBubble();
       streamBuf += t;
@@ -959,10 +1122,23 @@
       scrollChat();
     }
     function finishStreamBubble() {
-      if (streamBubble && streamBuf.trim()) {
-        streamBubble.querySelector('.message-text').innerHTML = renderMarkdown(streamBuf);
-      } else if (streamBubble) {
-        streamBubble.remove();
+      if (streamBubble) {
+        const chip = streamBubble.querySelector('.message-label-state');
+        const sections = streamBuf.trim()
+          ? splitReasoningSections(streamBuf)
+          : { body: '', thinking: '' };
+        if (sections.thinking) appendThinkingText(sections.thinking);
+        const hasThinking = !!streamBubble.querySelector('.thinking-block');
+        if (streamBuf.trim() || hasThinking) {
+          if (chip) {
+            chip.className = 'message-label-state is-succeeded';
+            chip.textContent = '✓ 已完成';
+          }
+          streamBubble.querySelector('.message-text').innerHTML =
+            sections.body ? renderMarkdown(sections.body) : '';
+        } else {
+          streamBubble.remove();
+        }
       }
       streamBubble = null; streamBuf = '';
       scrollChat();
@@ -970,27 +1146,157 @@
     function addErrorBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-ai message-error';
-      div.innerHTML = '<div class="message-label">系统</div><div class="message-text"></div>';
+      // 失败态只是修饰符：root 仍是统一执行卡，状态就地写进 data-status。
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'failed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">系统</span>'
+        + '<span class="message-label-state is-failed" data-agent-role="status">⚠ 失败</span>'
+        + '</div><div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').textContent = text;
       chatEl.appendChild(div);
       scrollChat();
     }
     function addToolActivity(main, source) {
       finishStreamBubble(); // 工具调用把当前文本气泡截断
+      const ROLE_DETAIL = 'tool-detail';
+      const ROLE_TOGGLE = 'tool-toggle';
+      // 折叠区只认自己这一层的直接子节点：子项里还有更深的折叠区，别串台。
+      function detailBoxOf(item) {
+        const kids = (item && item.children) || [];
+        for (let i = 0; i < kids.length; i += 1) {
+          const kid = kids[i];
+          if (kid.getAttribute && kid.getAttribute('data-agent-role') === ROLE_DETAIL) return kid;
+        }
+        return null;
+      }
+      function toggleDetail(toggle, item) {
+        if (!toggle || !item) return false;
+        const box = detailBoxOf(item);
+        if (!box) return false;
+        const next = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        box.hidden = !next;
+        if (next) {
+          if (box.removeAttribute) box.removeAttribute('hidden');
+          box.setAttribute('aria-hidden', 'false');
+        } else {
+          box.setAttribute('hidden', '');
+          box.setAttribute('aria-hidden', 'true');
+        }
+        return next;
+      }
+      // 标题行本身就是展开开关（与技术工艺同一套合同）：原句搬进可点节点，aria 与键盘
+      // 语义都挂在它身上；界面上不再有第二个开关。
+      function wireToggle(item) {
+        const title = item.querySelector('[data-agent-role="tool-title"]');
+        if (!title || title.__ocToggle) return null;
+        const toggle = document.createElement('span');
+        toggle.className = 'oc-process-toggle';
+        toggle.setAttribute('data-agent-role', ROLE_TOGGLE);
+        toggle.setAttribute('role', 'button');
+        toggle.setAttribute('tabindex', '0');
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.textContent = String(title.textContent || '');
+        toggle.addEventListener('click', () => toggleDetail(toggle, item));
+        toggle.addEventListener('keydown', (event) => {
+          const key = String((event && event.key) || '');
+          if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+          if (event && typeof event.preventDefault === 'function') event.preventDefault();
+          toggleDetail(toggle, item);
+        });
+        title.textContent = '';
+        title.append(toggle);
+        title.__ocToggle = toggle;
+        return toggle;
+      }
+      // 有内容可展开的行才有折叠区：折叠区与标题行开关成对出现，不造空折叠。
+      function toolDetailBox(item) {
+        let box = detailBoxOf(item);
+        if (box) return box;
+        wireToggle(item);
+        box = document.createElement('div');
+        box.className = 'oc-process-body';
+        box.setAttribute('data-agent-role', ROLE_DETAIL);
+        box.hidden = true;
+        box.setAttribute('hidden', '');
+        box.setAttribute('aria-hidden', 'true');
+        item.append(box);
+        return box;
+      }
+      const rowTone = (value) => (/命中|可改制|可复用/.test(value) ? 'hit'
+        : (/无同类件|未命中|按新制|未匹配/.test(value) ? 'miss' : ''));
+      // 过程行：状态图标 + 原句标题；命中 / 未命中的颜色落在结论文字上。
+      function makeItem(text, tone, sourceText) {
+        const item = document.createElement('div');
+        item.setAttribute('data-agent-role', 'tool-item');
+        item.setAttribute('data-state', 'running');
+        const row = document.createElement('div');
+        row.className = 'oc-process-row';
+        if (tone) row.classList.add(tone);
+        const i = document.createElement('span');
+        i.className = 'oc-process-dot';
+        i.setAttribute('data-agent-role', 'tool-state-icon');
+        i.textContent = '○';
+        const s = document.createElement('span');
+        s.className = 'oc-process-text';
+        s.setAttribute('data-agent-role', 'tool-title');
+        s.textContent = text;
+        row.appendChild(i); row.appendChild(s);
+        if (sourceText) {
+          const sp = document.createElement('span');
+          sp.className = 'src';
+          sp.textContent = ' · 来源：' + sourceText;
+          row.appendChild(sp);
+        }
+        item.appendChild(row);
+        return item;
+      }
+      const raw = String(main == null ? '' : main);
+      // 前导 2+ 空格 / ↳ / · 表示「这条是上一条的结果或依据」：折进上一条的折叠区，
+      // 不再与父项平级。顶层行数只等于业务过程的个数。
+      const sub = /^\s{2,}/.test(raw) || /^[\s]*[↳·]/.test(raw);
+      const text = raw.replace(/^[\s]*[↳·]?\s*/, '').trim();
+      const items = chatEl.querySelectorAll('[data-agent-role="tool-item"]');
+      const parent = items.length ? items[items.length - 1] : null;
+      if (sub && parent) {
+        const tone = rowTone(text);
+        toolDetailBox(parent).append(makeItem(text, tone, ''));
+        if (tone) parent.classList.add(`has-${tone}`);
+        scrollChat();
+        return parent.closest ? (parent.closest('.tool-activity') || parent) : parent;
+      }
       const div = document.createElement('div');
       div.className = 'tool-activity trace';
-      const i = document.createElement('i'); i.className = 'ti ti-loader-2';
-      const s = document.createElement('span'); s.textContent = main;
-      div.appendChild(i); div.appendChild(s);
-      if (source) {
-        const sp = document.createElement('span');
-        sp.className = 'src';
-        sp.textContent = ' · 来源：' + source;
-        div.appendChild(sp);
-      }
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'running');
+      const tools = document.createElement('div');
+      tools.setAttribute('data-agent-role', 'tools');
+      tools.appendChild(makeItem(text, rowTone(text), source));
+      div.appendChild(tools);
       chatEl.appendChild(div);
       scrollChat();
       return div;
+    }
+    /* 过程行完成：把进行中的圆圈就地收成 ✓（与 addToolActivity 同一套状态图标）。 */
+    function markTraceDone(scope) {
+      const root = scope || chatEl;
+      root.querySelectorAll('[data-agent-role="tool-item"]').forEach(item => {
+        item.setAttribute('data-state', 'completed');
+        const icon = item.querySelector('[data-agent-role="tool-state-icon"]');
+        if (icon) icon.textContent = '✓';
+      });
+    }
+    /* 进度轨迹就地换文案：色调跟着新文案走，命中 / 未命中不因为换了例子就丢色。 */
+    function titleElUpdate(node, text) {
+      if (!node) return;
+      const toggle = node.querySelector ? node.querySelector('[data-agent-role="tool-toggle"]') : null;
+      if (toggle) toggle.textContent = text; else node.textContent = text;
+      const row = node.parentNode;
+      if (!row || !row.classList) return;
+      row.classList.remove('hit', 'miss');
+      if (/命中|可改制|可复用/.test(text)) row.classList.add('hit');
+      else if (/无同类件|未命中|按新制|未匹配/.test(text)) row.classList.add('miss');
     }
     /* 进度轨迹：一条原地更新的行，专门显示"模型正在做什么、等了多久"。
        和 addToolActivity 的区别是它**只有一条**、随时被后面的 stage 覆盖，
@@ -1001,14 +1307,31 @@
         finishStreamBubble();
         stageEl = document.createElement("div");
         stageEl.className = "tool-activity trace";
-        const i = document.createElement("i");
-        i.className = "ti ti-loader-2";
+        stageEl.setAttribute("data-agent-card", "");
+        stageEl.setAttribute("data-status", "running");
+        const tools = document.createElement("div");
+        tools.setAttribute("data-agent-role", "tools");
+        const item = document.createElement("div");
+        item.setAttribute("data-agent-role", "tool-item");
+        item.setAttribute("data-state", "running");
+        // 与 addToolActivity 同一套过程行合同：状态图标 + 原句标题，没有折叠 / 按钮。
+        const row = document.createElement("div");
+        row.className = "oc-process-row";
+        const i = document.createElement("span");
+        i.className = "oc-process-dot";
+        i.setAttribute("data-agent-role", "tool-state-icon");
+        i.textContent = "○";
         const sp = document.createElement("span");
-        stageEl.appendChild(i);
-        stageEl.appendChild(sp);
+        sp.className = "oc-process-text";
+        sp.setAttribute("data-agent-role", "tool-title");
+        row.appendChild(i);
+        row.appendChild(sp);
+        item.appendChild(row);
+        tools.appendChild(item);
+        stageEl.appendChild(tools);
         chatEl.appendChild(stageEl);
       }
-      stageEl.querySelector("span").textContent = text;
+      titleElUpdate(stageEl.querySelector('[data-agent-role="tool-title"]'), text);
       scrollChat();
     }
     function clearStage() {
@@ -1019,7 +1342,11 @@
     function addAiBubble(md) {
       const div = document.createElement('div');
       div.className = 'message message-ai';
-      div.innerHTML = '<div class="message-label">报价单智能体</div><div class="message-text"></div>';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body"></div>';
       div.querySelector('.message-text').innerHTML = renderMarkdown(md);
       chatEl.appendChild(div);
       scrollChat();
@@ -1203,7 +1530,7 @@
       };
       if (be) be.disabled = true;
       try {
-        const resp = await fetch(AGENT_URL + '/api/export/docx', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/export/docx', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
         if (!resp.ok) { const t = await resp.json().catch(() => ({})); throw new Error(t.error || ('HTTP ' + resp.status)); }
@@ -1232,7 +1559,7 @@
       addAiBubble('🗄️ 开始导入数据库，共 ' + Object.keys(all).length + ' 个分区，逐个写入目标表…');
       if (bi) { bi.disabled = true; bi.textContent = '导入中…'; }
       try {
-        const res = await fetch(AGENT_URL + '/api/import', {
+        const res = await cpqAuthFetch(AGENT_URL + '/api/import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sections: all, sid: currentSessionId }),
         }).then(r => r.json());
@@ -1257,7 +1584,9 @@
       const n = shownStep;
       const data = collectStepData(n);
       const stepName = STEPS[n - 1];
-      addUserBubble(`修改第 ${n} 步「${stepName}」并保存。`);
+      // 唯一 turn helper（隔离执行时退回底层气泡原语）：保存修改也是用户主动触发的新回合。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say(`修改第 ${n} 步「${stepName}」并保存。`);
       sendToAgent(
         `【表单修改】用户在第 ${n} 步「${stepName}」修改了工作台数据(JSON)如下：\n` +
         JSON.stringify(data, null, 1) +
@@ -1647,6 +1976,8 @@
       const list = ui.products || [];
       const div = document.createElement('div');
       div.className = 'message message-ai cand-block';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
       const reqTxt = Object.entries(ui.requirement || {})
         .map(([k, v]) => CAND_REQ_LABEL[k] || k).length
         ? Object.entries(ui.requirement || {}).map(([k, v]) =>
@@ -1654,7 +1985,8 @@
         : '（需求未给限定条件）';
       const dims = list.length ? Object.keys(list[0].detail || {}) : [];
 
-      let html = '<div class="message-label">产品推荐</div><div class="message-text">' +
+      let html = '<div class="message-label" data-agent-role="header">产品推荐</div>'
+        + '<div class="message-text" data-agent-role="body">' +
         '<div class="cand-head"><b>匹配需求</b>　' + reqTxt + '</div>' +
         (ui.source && ui.source.sql
           ? '<div class="cand-src"><i class="ti ti-database"></i> 数据来源：' +
@@ -1671,7 +2003,7 @@
           ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
       }
       if (opts.repick && opts.picked) {
-        html += '<div class="cand-sub" style="color:var(--color-primary,#4f46e5)">' +
+        html += '<div class="cand-sub" style="color:var(--color-primary,#0060E6)">' +
           '<i class="ti ti-user-check"></i> 销售经理已选：<b>' + escapeHtml(opts.picked) +
           '</b>。如工艺上需要变更，点其他产品的「改选此产品」，右侧参数与价格会自动更新。</div>';
       }
@@ -1765,7 +2097,7 @@
       btn.innerHTML = '<i class="ti ti-loader-2"></i>取价中…';
       let d;
       try {
-        d = await fetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code))
+        d = await cpqAuthFetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code))
           .then(r => r.json());
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
@@ -1849,7 +2181,7 @@
     async function _sseCall(url, body) {
       let d = null, gotText = false;
       try {
-        const resp = await fetch(url, {
+        const resp = await cpqAuthFetch(url, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
@@ -1896,8 +2228,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
 
       if (d && d.stage === 'intent') {     // 信息不齐：到此为止
         STEP1_REINPUT = true;
@@ -1930,8 +2262,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
       if (!d || !d.ok) {
         addErrorBubble('产品匹配失败：' + ((d && d.error) || '未知错误'));
         return false;
@@ -1995,6 +2327,12 @@
       if (STEP1_FORM_TASK) {
         const task = STEP1_FORM_TASK;
         STEP1_FORM_TASK = null;
+        // kickoff / 表单通道的 User 文案就是 display；非空时必须先出用户气泡再出 Agent 卡。
+        const shown = String(displayText || '').trim();
+        if (shown) {
+          const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+          say(shown);
+        }
         await sendToAgent(task, { echo: false, display: '', step: 1 });
       }
       // ③ 智能体填完之后，才做产品匹配
@@ -2096,7 +2434,7 @@
       if (display !== undefined) body.display = display;
       else if (!echo) body.display = '';
       try {
-        const resp = await fetch(AGENT_URL + '/api/send', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -2129,8 +2467,8 @@
         hideTyping();
         clearStage();
         finishStreamBubble();
-        // 清理转圈图标
-        chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
+        // 过程行收尾：进行中的圆圈 → ✓
+        markTraceDone(chatEl);
         // 偶发：服务连上了但本轮无任何内容（模型空回/瞬时过载）—— 给出可重试提示
         // （无模型模式下【…】记录消息本来就静默，不提示）
         if (!turnHadError && !turnGotContent && !manualMode) {
@@ -2147,6 +2485,9 @@
           hideTyping();
           clearStage();
           appendStreamText(ev.text);
+          break;
+        case 'thinking':
+          appendThinkingText(ev.text);
           break;
         case 'tool_use': {
           hideTyping();
@@ -2207,7 +2548,7 @@
       if (DOC_EXT.test(file.name)) {
         try {
           const b64 = await fileToBase64(file);
-          const r = await fetch(AGENT_URL + '/api/extract', {
+          const r = await cpqAuthFetch(AGENT_URL + '/api/extract', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: file.name, data: b64 }),
           });
@@ -2281,7 +2622,9 @@
       input.value = '';
       chatFiles = [];
       renderAttachChips();
-      addUserBubble(echo);          // 聊天里显示用户的话/附件说明
+      // 聊天里显示用户的话/附件说明（唯一 turn helper；隔离执行时退回底层气泡原语）
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say(echo);
       // 意图识别门槛未过（缺尺寸/应用范围/工作温度）：这条输入按「补充需求」处理，
       // 与原需求合并后重新走第 1 步快速匹配通道，不发给智能体
       if (STEP1_REINPUT && currentStep === 1) {
@@ -2305,7 +2648,9 @@
       if (manualMode) { addAiBubble('当前为「无模型」模式，无法自动填写。请直接在右侧人工填写各字段。'); return; }
       const n = currentStep;
       const name = STEPS[n - 1] || '';
-      addUserBubble('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
+      // 唯一 turn helper：先出用户气泡，再出 Agent 卡（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
       sendToAgent(
         '【强行推荐】用户要求把当前第 ' + n + ' 步「' + name + '」的**所有固定分区的每一个字段/单元格都填满、绝不留空**：\n' +
         '1) 能从需求文档拿到的先填文档值；2) 文档没有的用 sql_query 查数据库补；3) 文档和库都没有的，' +
@@ -2319,6 +2664,9 @@
 
     async function confirmStep() {
       if (busy) return;
+      // 唯一 turn helper：确认（含流程完成 / 待转交两条分支）同样是用户主动触发的新回合，
+      // 用户气泡必须先于 Agent 输出；隔离执行时退回底层气泡原语。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
       if (shownStep !== currentStep) showStep(currentStep); // 确认前先回到当前步骤
       const cur = currentStep;
       // 角色限步：登录后，本步必须由对应角色确认（第2步工艺确认=工艺经理，其余=销售经理）
@@ -2330,7 +2678,7 @@
       if (cur >= STEPS.length) {
         const done = '报价流程已完成。';
         if (!(await wfCompleteStep(cur, collectStepData(cur)))) return;
-        addUserBubble(done);
+        say(done);
         if (manualMode) {
           addAiBubble('报价流程已完成。可点「生成报价单(Word)」导出。');
           sendToAgent('【流程完成·人工模式】报价流程已人工完成。', { echo: false, display: done, step: STEPS.length });
@@ -2347,7 +2695,7 @@
       // 下一步不归我：右侧进度如实前进到下一步，但**左侧不开工**——只提醒推送，等接手人自己开始
       if (WF.pendingHandoff) {
         const h = WF.pendingHandoff;
-        addUserBubble(`确认第 ${cur} 步「${stepName}」。`);
+        say(`确认第 ${cur} 步「${stepName}」。`);
         setStep(next);
         if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
         await wfRefresh();
@@ -2369,7 +2717,7 @@
         return;   // ← 关键：不通知智能体开始下一步
       }
       const bubble = `确认第 ${cur} 步「${stepName}」，进入第 ${next} 步「${STEPS[next - 1]}」。`;
-      addUserBubble(bubble);
+      say(bubble);
       setStep(next); // ← 前端直接跳到下一步（并预渲染该步骨架），右边立刻切换，不等模型 set_step
       // 第 2 步「工艺确认」：把第 1 步已确认的产品信息/技术参数原样沿用过来，只读展示供人工核对（不调用智能体）
       if (CARRY_MAP[next]) carryProducts(next);   // 2/3/4 步：先把第 1 步选定的产品带过去，再让智能体做该步
@@ -2504,7 +2852,8 @@
 
     /* ================= 准入闸门 =================
        报价流程按角色分工，**未登录一律不开工**：不解析需求、不做产品推荐、不调智能体。
-       登录后按角色决定：能做第 1 步 -> 请他点「开始」；不能做 -> 要求转交任务。 */
+       登录后按角色决定：本步归我 -> 自动开始；不归我 -> 只在右侧看板 #wfBar 显示一条
+       只读提示（左侧会话不再插重复气泡），需要交接时用页脚/快捷操作里的「转交任务」。 */
     let GATE_BLOCKED = false;   // true = 未登录/未就绪，锁住输入与操作
 
     function wfGate() {
@@ -2523,8 +2872,10 @@
         removeGateBubble();
         if (WF.canEdit) {
           wfMaybePromptStart();                    // 角色匹配 -> 「开始第 N 步」
-        } else if (PENDING_KICKOFF || !WF.stepStarted) {
-          showGateBubble('handoff');               // 角色不符 -> 要求转交
+        } else {
+          // 角色不符：只由右侧看板的 #wfBar 给一条只读提示，不再往左侧会话插重复气泡；
+          // 权限没有放宽，按钮仍禁用，后端仍会按角色校验，「转交任务」入口照旧。
+          removeGateBubble();
         }
       }
       wfRenderBar();
@@ -2561,7 +2912,10 @@
           (PENDING_KICKOFF ? '你填写/上传的需求已随本卡片保存。' : '') +
           '请点下方「转交任务」把卡片推送给' + escapeHtml(WF.needRole) + '，对方开始后即可继续。</div>';
       }
-      div.innerHTML = '<div class="message-label">流程</div><div class="message-text">' + body + '</div>';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'pending');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">流程</div>'
+        + '<div class="message-text" data-agent-role="body">' + body + '</div>';
       chatEl.appendChild(div);
       const btn = $('wfGateLogin');
       if (btn) btn.onclick = () => cpqAuth.open();
@@ -2627,7 +2981,9 @@
         return true;
       }
       const name = STEPS[step - 1];
-      addUserBubble('开始第 ' + step + ' 步「' + name + '」。');
+      // 唯一 turn helper：开始某一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('开始第 ' + step + ' 步「' + name + '」。');
       if (step === 2) {
         // 工艺确认是人工核对：沿用第 1 步数据展示，不调智能体
         // （本地没有第 1 步数据时先从卡片快照恢复——交接过来的卡片就是这种情况）
@@ -2681,60 +3037,61 @@
       return true;
     }
 
-    // 顶部提示条：当前步骤该谁做 / 我能不能做
+    // 权限 / 流程提示：固定标题行里的一枚单行省略状态胶囊（不再以普通流横条插到
+    // resultsContent 前面 —— 那会把业务内容、底栏和上一步/下一步一起往下顶）。
+    // 角色判定、待领取 / 待转交 / 只读 / 可编辑语义与按钮禁用逻辑一律不变。
     function wfRenderBar() {
       let bar = $('wfBar');
       const u = wfUser();
       if (!bar) {
-        bar = document.createElement('div');
+        bar = document.createElement('span');
         bar.id = 'wfBar';
-        bar.style.cssText = 'display:none;margin:0 0 10px;padding:8px 12px;border-radius:8px;' +
+        bar.className = 'wf-note';
+        bar.setAttribute('role', 'status');
+        bar.style.cssText = 'display:none;padding:3px 10px;' +
           'font-size:12px;line-height:1.5;border:1px solid var(--border-color);';
-        const host = $('resultsContent');
-        if (host && host.parentElement) host.parentElement.insertBefore(bar, host);
+        // 只挂进既有的固定标题行（.results-title 是 .results-header 的 flex-shrink:0 子项），
+        // 不新增横条、不改 resultsContent 的有效高度。
+        const titleRow = document.querySelector('.results-title');
+        if (titleRow) titleRow.appendChild(bar);
       }
+      const wfShow = (cls, html) => {
+        bar.className = 'wf-note ' + cls;
+        bar.innerHTML = html;
+        bar.title = String(bar.textContent || '').replace(/\s+/g, ' ').trim();
+        bar.style.display = 'inline-block';
+      };
       if (!u) {
-        bar.style.display = 'block';
-        bar.style.background = 'rgba(239,68,68,.10)';
-        bar.style.color = '#b91c1c';
-        bar.innerHTML = '<i class="ti ti-lock"></i> <b>未登录</b>：报价流程按角色分工，' +
+        wfShow('wf-note-danger', '<i class="ti ti-lock"></i> <b>未登录</b>：报价流程按角色分工，' +
           '登录后系统才能判断这一步归谁做。请先登录。' +
-          '<a href="javascript:;" onclick="cpqAuth.open()" style="margin-left:6px">去登录</a>';
+          '<a href="javascript:;" onclick="cpqAuth.open()" style="margin-left:6px">去登录</a>');
         return;
       }
       if (!WF.loaded) { bar.style.display = 'none'; return; }
-      bar.style.display = 'block';
       // 待转交：本步已完成、下一步归别人，卡片必须推送出去才算交接完成
       if (WF.awaiting) {
-        bar.style.background = 'rgba(239,68,68,.10)';
-        bar.style.color = '#b91c1c';
-        bar.innerHTML = '<i class="ti ti-send"></i> <b>待转交</b>：第 ' + currentStep + ' 步「' +
+        wfShow('wf-note-danger', '<i class="ti ti-send"></i> <b>待转交</b>：第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
-          '</b>完成。请把卡片<a href="javascript:;" onclick="wfOpenSend(true)" style="margin:0 4px">推送给某人或发布到公共任务池</a>。';
+          '</b>完成。请把卡片<a href="javascript:;" onclick="wfOpenSend(true)" style="margin:0 4px">推送给某人或发布到公共任务池</a>。');
         return;
       }
       // 已推送、等待对方领取
       if (WF.pendingTask) {
-        bar.style.background = 'rgba(99,102,241,.10)';
-        bar.style.color = '#4338ca';
-        bar.innerHTML = '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
+        wfShow('wf-note-primary', '<i class="ti ti-clock"></i> <b>已转交·待领取</b>：' +
           escapeHtml(WF.pendingTask.source_label || '') + '。对方领取后即可继续第 ' +
-          WF.pendingTask.next_step_no + ' 步。';
+          WF.pendingTask.next_step_no + ' 步。');
         return;
       }
       if (WF.canEdit) {
-        bar.style.background = 'rgba(34,197,94,.10)';
-        bar.style.color = '#15803d';
-        bar.innerHTML = '<i class="ti ti-user-check"></i> 第 ' + currentStep + ' 步「' +
+        wfShow('wf-note-ok', '<i class="ti ti-user-check"></i> 第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」由<b>' + escapeHtml(WF.needRole) +
-          '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。';
+          '</b>负责，你是' + escapeHtml(u.role_name) + '，可以完成本步。');
       } else {
-        bar.style.background = 'rgba(234,179,8,.12)';
-        bar.style.color = '#a16207';
-        bar.innerHTML = '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
+        // 只读角色：主色浅蓝底 + 蓝色边框 + 深蓝文字（与「已转交·待领取」同一条主色语义）
+        wfShow('wf-note-readonly', '<i class="ti ti-lock"></i> 第 ' + currentStep + ' 步「' +
           escapeHtml(STEPS[currentStep - 1]) + '」需要<b>' + escapeHtml(WF.needRole) +
           '</b>完成，你是' + escapeHtml(u.role_name) + '，只能查看。' +
-          '可点下方「转交任务」把卡片发给' + escapeHtml(WF.needRole) + '。';
+          '可点下方「转交任务」把卡片发给' + escapeHtml(WF.needRole) + '。');
       }
     }
 
@@ -2775,8 +3132,12 @@
       const div = document.createElement('div');
       div.className = 'message message-ai';
       div.id = 'wfTechNewBubble';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
       div.innerHTML =
-        '<div class="message-label">报价单智能体</div><div class="message-text">' +
+        '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body">' +
         '<div style="margin-bottom:8px"><b>⚠ 最高匹配分 ' +
         escapeHtml(String(best.total != null ? best.total : '—')) + ' 分，低于 ' +
         escapeHtml(String(m.threshold != null ? m.threshold : 70)) + ' 分</b><br>' +
@@ -2993,6 +3354,11 @@
         try {
           const d = await wfApi('/wf/task/send', { method: 'POST', body });
           mask.remove();
+          // 转交也是「用户点按钮 → 会话区出 Agent 输出」：先出用户气泡再出说明。
+          const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+          say(techNew
+            ? '把本单需求转交工艺经理，做新增工艺评估。'
+            : '把这张报价卡片转交给' + (d.source_label || '接手人') + '继续。');
           if (techNew) {
             const bubble = document.getElementById('wfTechNewBubble');
             if (bubble) bubble.remove();
@@ -3315,7 +3681,7 @@
       showTyping();
       let d = null, gotText = false;
       try {
-        const resp = await fetch(AGENT_URL + '/api/markup/fill', {
+        const resp = await cpqAuthFetch(AGENT_URL + '/api/markup/fill', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
@@ -3350,8 +3716,8 @@
       hideTyping();
       finishStreamBubble();
       setBusy(false);
-      chatEl.querySelectorAll('.tool-activity .ti-loader-2').forEach(i => { i.className = 'ti ti-check'; });
-      if (act) { const i = act.querySelector('.ti-loader-2'); if (i) i.className = 'ti ti-check'; }
+      markTraceDone(chatEl);
+      if (act) markTraceDone(act);
       if (!d || !d.ok) {
         addErrorBubble('第 ' + step + ' 步' + cfg.column + '计算失败：' + ((d && d.error) || '未知错误'));
         return false;
@@ -3612,7 +3978,9 @@
     function goPrev() {
       if (busy || currentStep <= 1) return;
       const prev = currentStep - 1;
-      addUserBubble('返回第 ' + prev + ' 步「' + STEPS[prev - 1] + '」。');
+      // 唯一 turn helper：返回上一步也是用户主动触发的新回合（隔离执行时退回底层气泡原语）。
+      const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
+      say('返回第 ' + prev + ' 步「' + STEPS[prev - 1] + '」。');
       setStep(prev); // 前端直接回退，右边立刻切换
       if (manualMode) {
         sendToAgent('【返回上一步·人工模式】回到第 ' + prev + ' 步。', { echo: false, display: '返回第 ' + prev + ' 步', step: prev });
@@ -3662,7 +4030,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -3709,7 +4077,7 @@
       if (busy) { alert('请等当前回合结束再切换历史。'); return; }
       let data;
       try {
-        data = await fetch(AGENT_URL + '/api/session/open', {
+        data = await cpqAuthFetch(AGENT_URL + '/api/session/open', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         }).then(r => r.ok ? r.json() : null);
@@ -3728,7 +4096,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -3748,8 +4116,7 @@
         else if (ev.type === 'tool_use') {
           const d = describeTool(ev.name, ev.input || {});
           const el = addToolActivity(d.main, d.source);
-          const ic = el.querySelector('.ti-loader-2');
-          if (ic) ic.className = 'ti ti-check';
+          markTraceDone(el);
         } else if (ev.type === 'ui') {
           applyUiEvent(ev.ui || {});
         }
@@ -3758,8 +4125,7 @@
       $('stepBadge').textContent = '历史记录';
       setBusy(false);
       const info = addToolActivity('已载入历史报价「' + (data.title || '') + '」，可继续对话补充或修改。');
-      const ii = info.querySelector('.ti-loader-2');
-      if (ii) ii.className = 'ti ti-history';
+      markTraceDone(info);
     }
 
     /* ================= 设置（模型 / 参数 / API Key） ================= */
@@ -3775,7 +4141,7 @@
       sel.innerHTML = '';
       let cur = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         cur = r.current;
       } catch (e) { MODELS = []; }
@@ -3798,7 +4164,7 @@
       });
       // 载入当前设置
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model;
       else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
@@ -3817,7 +4183,23 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      await loadTechLlm();
+    }
+    // 报价模型名不一定等得到流程事件；用既有报价模型配置兜底初始化，避免长期为空。
+    async function initModelInfoFallback() {
+      const node = $('modelInfo');
+      if (!node || node.textContent.trim()) return;
+      try {
+        const st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json());
+        if (st && st.model === 'none') {
+          manualMode = true;
+          node.textContent = ' · 无模型（人工填写）';
+          return;
+        }
+        const id = st && st.model;
+        if (!id) return;
+        const found = (MODELS || []).find(m => m.id === id);
+        node.textContent = ' · ' + (found ? found.label : id);
+      } catch (e) {}
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -3847,149 +4229,9 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
-    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
-       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
-                                  temperature,max_tokens,thinking,providers[],editable}
-       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
-       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
-       选了一个后端不认的 id，保存时才报错。 */
-    let TECH_LLM = null;
-    function _techFillSelect(sel, options, current) {
-      if (!sel) return;
-      sel.innerHTML = '';
-      (options || []).forEach(o => {
-        const el = document.createElement('option');
-        el.value = o.id;
-        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
-        sel.appendChild(el);
-      });
-      if (current) sel.value = current;
-    }
-    async function loadTechLlm() {
-      try {
-        const r = await fetch('/api/llm/settings');
-        if (!r.ok) throw new Error(r.status);
-        TECH_LLM = await r.json();
-      } catch (e) {
-        TECH_LLM = null;
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
-        return;
-      }
-      const t = TECH_LLM;
-      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
-      _techFillSelect($('setTechText'), t.text_options, t.text_model);
-      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
-      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
-      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
-      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
-      const kp = $('setTechKeyProvider');
-      if (kp) {
-        kp.innerHTML = '';
-        (t.providers || []).forEach(p => {
-          const el = document.createElement('option');
-          el.value = p.provider;
-          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
-          kp.appendChild(el);
-        });
-      }
-      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
-      if ($('techLlmMsg')) {
-        $('techLlmMsg').textContent = miss.length
-          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
-          : '当前所选模型的 Key 均已配置。';
-      }
-    }
-    async function saveTechLlm() {
-      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
-      const body = {};
-      const v = $('setTechVision') && $('setTechVision').value;
-      const x = $('setTechText') && $('setTechText').value;
-      if (v) body.vision_model = v;
-      if (x) body.text_model = x;
-      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
-      body.temperature = tp === '' ? null : Number(tp);
-      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
-      body.max_tokens = mt === '' ? null : Number(mt);
-      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (key) {
-        body.api_key = key;
-        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
-        if (!body.api_key_provider) {
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
-          return;
-        }
-      }
-      try {
-        const r = await fetch('/api/llm/settings', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
-          return;
-        }
-        if ($('setTechKey')) $('setTechKey').value = '';
-        TECH_LLM = await r.json().catch(() => null);
-        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
-      } catch (e) {
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
-      }
-    }
-    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
-    let SETTINGS_TAB = 'agents';
-    function switchSettingsTab(which) {
-      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
-      const body = document.querySelector('#settingsModal .modal-body');
-      if (body) {
-        Array.from(body.children).forEach(ch => {
-          if (ch.id === 'setTabs') return;
-          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
-          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
-          ch.style.display = SETTINGS_TAB === 'agents'
-            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
-            : 'none';
-        });
-      }
-      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
-        const b = $(id);
-        if (!b) return;
-        const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
-      });
-      const sb = $('saveSettingsBtn');
-      if (sb) {
-        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
-        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
-      }
-      if (SETTINGS_TAB === 'agents') {
-        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
-        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
-      }
-    }
-    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
-    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
-    if (typeof onModelChange === 'function') {
-      const _omcOrig = onModelChange;
-      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
-    }
-    if (typeof onThinkingChange === 'function') {
-      const _otcOrig = onThinkingChange;
-      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
-    }
-    async function saveActiveSettings() {
-      if (SETTINGS_TAB === 'tech') {
-        const m = $('techLlmMsg');
-        if (m) m.textContent = '保存中…';
-        await saveTechLlm();
-      } else {
-        await saveSettings();
-      }
-    }
-    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
+    /* 模型配置已统一：报价、配置、规则与技术工艺共用报价的 /api/settings 与
+       cpq_settings.json，不再有「助手模型 / 技术工艺模型」双页签；技术工艺侧只在
+       服务端保留一条兼容委托路由，前端不再直接依赖它，也不再保存第二份模型状态。 */
     async function saveSettings() {
       const o = selectedModelOption();
       const payload = {
@@ -4022,7 +4264,7 @@
       msg.textContent = '保存中…';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         }).then(r => r.json());
@@ -4071,15 +4313,16 @@
       } catch {}
       // 顶部「当前项目」用用户填写的项目名（不再写死波兰项目）
       if ($('projectName')) $('projectName').textContent = projectName || '未命名报价项目';
+      initModelInfoFallback();
 
       // 探测服务 & 重置会话
       try {
-        const meta = await fetch(AGENT_URL + '/api/meta').then(r => r.json());
+        const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true);
         FORMS = meta.forms || []; // 写死的表结构（用于预渲染骨架）
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
-        const nw = await fetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+        const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
         currentSessionId = nw.id || meta.session_id || null;
         try { // 记入「我的报价」（未登录时首页「我的」标签仍按本机会话过滤）
           const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
@@ -4163,7 +4406,6 @@
 
     boot();
   </script>
-  <script src="cpq_auth.js"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

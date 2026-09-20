@@ -18,25 +18,69 @@
  *      根本发不出去，前端自己伪造了一个 403，还带着"仅限工艺经理"的文案 ——
  *      后端权限改对了也没用。现在按**能力**分别放行：can_write 管工艺侧，
  *      can_cost 管成本相关接口。
+ *
+ *      同一类误拦还出现过第二次：2.3 的真业务动作放行了，可这些动作**伴随写**的
+ *      会话时间线（POST /agent/event）不在成本白名单里，于是点「测算」业务成功、
+ *      页面却弹「这一步归工艺经理办理」。会话内容属于项目数据、不是业务产出，
+ *      它的路径一并归进成本这一侧（Agent 对话 /agent/send 仍归工艺侧）。
+ *
+ *      第三次是 3.2/3.3：报告审核与发布归 process_director（CPQ 的「工艺技术总监」），
+ *      他只审不发之外的写操作一概没有。这里再按能力补两档：can_review 放行
+ *      /versions/<n>/approve|reject，can_publish 放行报告审核、发布、需求审核与发布范围。
  */
 (function () {
   'use strict';
 
   var CPQ_TOKEN_KEY = 'cpq_auth_token';
-  var MIRROR_KEYS = ['authToken', 'cad_engine_token'];
   var state = { enabled: false, user: null, canWrite: false, canCost: false,
-                roleName: '', checked: false };
+                canReview: false, canPublish: false, roleName: '', checked: false };
 
-  /* 成本相关接口：2.3 本体，以及零件/整机成本与整合参数（都随成本搬去了 2.3）。
-     只列**写**接口的路径特征，判定仍以后端 COST_ROLES 为准。 */
+  /* 登录态的唯一事实源入口（tech-auth-session.js）。旧壳 / 脚本未加载时为 null，
+     本文件一律安全降级：不抛错、不重载。 */
+  function techAuth() {
+    return (window.TechAuth && typeof window.TechAuth === 'object') ? window.TechAuth : null;
+  }
+
+  /* 成本相关接口：2.3 本体，以及零件/整机成本。只列**写**接口的路径特征，
+     判定仍以后端 COST_ROLES 为准。（「整合参数」曾随成本短暂搬去 2.3，后来搬回 2.2
+     的「参数推荐」，接口是 /integration/params/*，归工艺经理的 WRITE_ROLES ——
+     这里再放行给财务，等于让他在 2.2 点出一个注定 403 的按钮。） */
   var COST_URL_PATTERNS = [
     /\/cost-review(\/|$|\?)/,
     /\/parts\/[^/]+\/cost(\/|$|\?)/,
     /\/integration\/cost(\/|$|\?)/,
-    /\/integration\/params\/(autofill|finalize)(\/|$|\?)/,
+  ];
+  /* 2.3 页面除了业务动作，还要**伴随写**自己那几条会话时间线：cost-review.js 的
+     crPersistNote() 每条过程文字都 POST /agent/event 落库。那是项目数据、不是业务
+     产出，却原本落在上面那份白名单之外 —— 财务经理点「测算」业务动作成功了，这条
+     伴随写却被前端伪 403 拦下并弹「这一步归工艺经理办理」，请求根本没发出去。
+     只放行这一条写路径：Agent 对话 /agent/send 、/agent/new 仍归工艺侧；
+     GET /agent/events 是只读，本来就不经过写拦截。 */
+  var COST_SESSION_URL_PATTERNS = [
+    /\/agent\/event(\?|$)/,
   ];
   function isCostUrl(url) {
-    return COST_URL_PATTERNS.some(function (re) { return re.test(url); });
+    return COST_URL_PATTERNS.concat(COST_SESSION_URL_PATTERNS)
+      .some(function (re) { return re.test(url); });
+  }
+
+  /* 3.2「报告审核」：审签通过与驳回。归 can_review（REVIEW_ROLES）。 */
+  var REVIEW_URL_PATTERNS = [
+    /\/versions\/[^/]+\/approve(\?|$)/,
+    /\/versions\/[^/]+\/reject(\?|$)/,
+  ];
+  /* 3.3「报告发布」与需求终审：归 can_publish（DIRECTOR_ROLES）。 */
+  var PUBLISH_URL_PATTERNS = [
+    /\/process-report\/review(\?|$)/,
+    /\/process-report\/publish(\?|$)/,
+    /\/requirement\/review(\?|$)/,
+    /\/process-report\/distribution(\?|$)/,
+  ];
+  function isReviewUrl(url) {
+    return REVIEW_URL_PATTERNS.some(function (re) { return re.test(url); });
+  }
+  function isPublishUrl(url) {
+    return PUBLISH_URL_PATTERNS.some(function (re) { return re.test(url); });
   }
 
   function ls(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
@@ -44,37 +88,62 @@
     try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch (e) {}
   }
 
-  /** 把 CPQ 令牌镜像成技术工艺各页面在用的键。CPQ 登出后同步清掉，避免拿着过期票转圈。 */
+  /** 登录态读取：TechAuth 在时一律走它（唯一事实源，含兼容键兜底）。 */
+  function currentToken() {
+    var auth = techAuth();
+    if (auth && typeof auth.token === 'function') {
+      try { return String(auth.token() || ''); } catch (error) { /* 降级到 CPQ 自己的键 */ }
+    }
+    return ls(CPQ_TOKEN_KEY);
+  }
+
+  /** 兼容键的抄写职责整体收进 TechAuth（唯一写入口）：这里只调用它，不自己写 key。
+      技术工艺仍有页面在脚本求值时直接读 authToken / cad_engine_token，所以既要把兼容键
+      迁移进唯一事实源，也要把生效值镜像回去 —— 否则那些页面的每个请求都不带票。 */
   function mirrorToken() {
+    var auth = techAuth();
     var token = ls(CPQ_TOKEN_KEY);
-    MIRROR_KEYS.forEach(function (key) {
-      if (ls(key) !== token) setLs(key, token);
-    });
+    if (auth && typeof auth.migrate === 'function') {
+      try { token = String(auth.migrate() || ''); } catch (error) { token = ls(CPQ_TOKEN_KEY); }
+    }
+    if (auth && typeof auth.setToken === 'function') {
+      try { auth.setToken(token, { silent: true, source: 'mirror' }); } catch (error) { /* 镜像失败不影响身份 */ }
+    }
     return token;
+  }
+
+  /** 清掉登录态：同样只能经 TechAuth，绝不自己写兼容键。 */
+  function clearToken() {
+    var auth = techAuth();
+    if (auth && typeof auth.clear === 'function') {
+      try { auth.clear(); return; } catch (error) { /* 降级到 CPQ 自己的键 */ }
+    }
+    setLs(CPQ_TOKEN_KEY, '');
   }
 
   mirrorToken();          // 同步执行：必须早于任何读 authToken 的脚本
 
-  // CPQ 那边登录/登出会写同一个 key。两条通知缺一不可：
-  //   · storage —— 只在**别的**标签页触发（规范如此），管跨标签页同步；
-  //   · cpq-auth-change —— cpq_auth.js 登录/登出成功后在本标签页派发的事件。
-  // 早先只监听 storage，于是在本页弹出 CPQ 登录框、登录成功之后没有任何人收到通知，
-  // 那张「请先登录」的遮罩就一直挂着。
-  window.addEventListener('storage', function (event) {
-    if (event.key === CPQ_TOKEN_KEY) onIdentityChanged();
-  });
-  document.addEventListener('cpq-auth-change', onIdentityChanged);
+  /* CPQ 那边登录/登出会写同一个 key，通知两条缺一不可：
+       · storage —— 只在**别的**标签页触发（规范如此），管跨标签页同步；
+       · cpq-auth-change —— cpq_auth.js 登录/登出成功后在本标签页派发的事件。
+     TechAuth 在时它已经把这两条收成一条订阅，本文件只订阅它一次，避免同一次变化查两遍；
+     旧壳（TechAuth 缺失）才由本文件自己挂。 */
+  function watchIdentity() {
+    var auth = techAuth();
+    if (auth && typeof auth.subscribe === 'function') {
+      try { auth.subscribe(onIdentityChanged); return; } catch (error) { /* 退回自带监听 */ }
+    }
+    window.addEventListener('storage', function (event) {
+      if (event.key === CPQ_TOKEN_KEY) onIdentityChanged();
+    });
+    document.addEventListener('cpq-auth-change', onIdentityChanged);
+  }
 
-  /* 登录态变了就整页重载，而不是就地把遮罩摘掉。
-     技术工艺有十几个页面在**脚本求值时**就把 authToken 读进了局部变量
-     （app.js: `let authToken = readToken()` 等）。登录前那一刻它们读到的是空串，
-     只摘遮罩的话页面看着能用，之后每个请求都不带 Authorization —— 比遮罩不消失更难查。
-     重载后所有脚本重新读一遍镜像过的令牌，状态天然一致。 */
+  /* 身份变化的收敛手段从「整页重载」改成「就地重取身份」：重载会丢掉用户正在填的表单、
+     会话滚动位置与当前 project / stage（后两者由 TechAuth.context() 原样保留）。 */
   function onIdentityChanged() {
-    var before = ls(MIRROR_KEYS[0]);
-    var after = mirrorToken();
-    if (before === after) return;      // 没真的变（重复事件）就别白刷一次页面
-    location.reload();
+    mirrorToken();
+    check();
   }
 
   function esc(value) {
@@ -88,19 +157,13 @@
     var style = document.createElement('style');
     style.id = 'cpqSsoCss';
     style.textContent = [
-      '.cpq-sso-bar{position:sticky;top:0;z-index:9998;display:flex;align-items:center;gap:10px;',
-      'padding:9px 16px;background:#fef3c7;color:#92400e;font-size:13px;line-height:1.6;',
-      'border-bottom:1px solid #fde68a;}',
-      '.cpq-sso-bar b{font-weight:650;}',
-      '.cpq-sso-bar button{margin-left:auto;padding:5px 14px;border:none;border-radius:7px;',
-      'background:#92400e;color:#fff;font-size:12.5px;cursor:pointer;}',
       '.cpq-sso-mask{position:fixed;inset:0;z-index:99998;display:flex;align-items:center;',
       'justify-content:center;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);}',
       '.cpq-sso-card{width:400px;max-width:92vw;padding:26px 28px;border-radius:14px;background:#fff;',
       'color:#0f172a;box-shadow:0 24px 60px rgba(0,0,0,.28);font-size:14px;text-align:center;}',
       '.cpq-sso-card h3{margin:0 0 10px;font-size:17px;font-weight:650;}',
       '.cpq-sso-card p{margin:0 0 18px;color:#64748b;font-size:13px;line-height:1.75;}',
-      '.cpq-sso-card button{padding:9px 22px;border:none;border-radius:8px;background:#6366f1;',
+      '.cpq-sso-card button{padding:9px 22px;border:none;border-radius:8px;background:#0060E6;',
       'color:#fff;font-size:13px;font-weight:600;cursor:pointer;}',
       '.cpq-sso-toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:99999;',
       'padding:11px 18px;border-radius:10px;background:#b91c1c;color:#fff;font-size:13px;',
@@ -150,21 +213,9 @@
     document.body.appendChild(mask);
   }
 
-  function showReadonlyBar() {
-    injectCss();
-    if (document.querySelector('.cpq-sso-bar')) return;
-    var bar = document.createElement('div');
-    bar.className = 'cpq-sso-bar';
-    bar.innerHTML = '<span>当前以 <b>' + esc(state.roleName || '非工艺经理') +
-      '</b> 身份登录，' + (state.canCost
-        ? '你负责 <b>2.3 成本测算</b>：那一步可以测算、确认并对外发送；' +
-          '2.1 图纸解析与 2.2 组装整合归工艺经理，这里是只读。'
-        : '技术工艺为<b>只读</b>：可以查看项目与结果，' +
-          '解析、生成、保存、确认、发布等操作仅限工艺经理。') + '</span>' +
-      '<button type="button">切换账号</button>';
-    bar.querySelector('button').onclick = openCpqLogin;
-    document.body.insertBefore(bar, document.body.firstChild);
-  }
+  /* 只读横幅已按用户要求整体下线：外层工作台与嵌入阶段页各自都会加载本文件，
+     那条「当前以某身份登录 / 其余步骤只读」的归属说明会同时出现两处。权限提示改由
+     写请求被拦时的 toast 就地给出（见下面的写请求拦截），不再常驻一条横幅。 */
 
   function ready(fn) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
@@ -181,11 +232,16 @@
     var method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
     var isWrite = method !== 'GET' && method !== 'HEAD' && url.indexOf('/api/') !== -1;
     // 有对应能力就放行，让后端逐接口判定：拦截只是省一次往返，不是权限本身。
+    // 四档能力：can_write（工艺侧）、can_cost（成本侧，唯一入口 isCostUrl）、
+    // can_review（3.2 审签）、can_publish（3.3 发布）。
     var allowed = state.canWrite || (state.canCost && isCostUrl(url));
+    if (!allowed && state.canReview && isReviewUrl(url)) allowed = true;
+    if (!allowed && state.canPublish && isPublishUrl(url)) allowed = true;
     if (isWrite && state.enabled && state.checked && !allowed) {
+      // 文案不按能力位反推归属：成本 / 审核 / 发布的写都已在上面按能力放行，
+      // 真被拦下来的一定是工艺侧动作，所以统一告诉用户「这一步归工艺经理」。
       var detail = state.canCost
-        ? '这一步归工艺经理；' + (state.roleName || '当前账号') +
-          '负责的是 2.3 成本测算，其余步骤只读'
+        ? '这一步归工艺经理办理；' + (state.roleName || '当前账号') + '没有这一步的操作权限'
         : '技术工艺的操作仅限工艺经理；' + (state.roleName || '当前账号') +
           '只能浏览，不能执行本操作';
       toast(detail);
@@ -197,7 +253,8 @@
       // 会话在使用中过期：立刻挡住页面，而不是让后续每个动作各报一次错。
       if (response.status === 401 && url.indexOf('/api/') !== -1 && state.enabled) {
         state.user = null; state.canWrite = false;
-        MIRROR_KEYS.forEach(function (key) { setLs(key, ''); });
+        state.canReview = false; state.canPublish = false;
+        clearToken();
         ready(function () { showLoginWall('登录状态已失效，请在配置报价 CPQ 中重新登录。'); });
       }
       return response;
@@ -216,13 +273,15 @@
     state.user = (data && data.user) || null;
     state.canWrite = !!sso.can_write;
     state.canCost = !!sso.can_cost;
+    state.canReview = !!sso.can_review;        // 3.2 审签通过 / 驳回
+    state.canPublish = !!sso.can_publish;      // 3.3 报告发布 / 需求终审
     state.roleName = sso.role_name || '';
     state.checked = true;
     // 身份已确认：无论此前因为未登录还是登录服务故障挂了遮罩，这里都要收掉。
     // 正常路径靠重载走到这里，但 CpqSso.refresh() 也能被单独调用，不能只依赖重载。
     ready(removeLoginWall);
     if (!state.enabled) return;                    // 未开 SSO：保持原有本地行为
-    if (!state.canWrite) ready(showReadonlyBar);
+    // 不再挂只读横幅：能力差异只在真正要写的时候提示一次。
     document.dispatchEvent(new CustomEvent('cpq-sso-ready', { detail: state }));
   }
 
@@ -230,7 +289,7 @@
     var path = location.pathname;
     // auth.html 是技术工艺自带的登录页，SSO 模式下已停用，不在它上面再弹一层。
     if (path.indexOf('/auth.html') !== -1) return;
-    nativeFetch('/api/me', { headers: { Authorization: 'Bearer ' + ls(CPQ_TOKEN_KEY) } })
+    nativeFetch('/api/me', { headers: { Authorization: 'Bearer ' + currentToken() } })
       .then(function (response) {
         if (response.status === 401) {
           state.enabled = true; state.checked = true;
@@ -254,11 +313,12 @@
 
   window.CpqSso = {
     state: function () { return state; },
-    token: function () { return ls(CPQ_TOKEN_KEY); },
+    token: function () { return currentToken(); },
     canWrite: function () { return !state.enabled || state.canWrite; },
     login: openCpqLogin,
     refresh: check,
   };
 
+  watchIdentity();
   check();
 })();

@@ -1,3 +1,5 @@
+/* embed=1：本页在技术工艺统一工作台（tech-workbench.html）右侧打开，会话宿主在父壳 techChatPane。 */
+const __techEmbedMode__ = new URLSearchParams(location.search).get('embed') === '1';
 // 成本分析页: 读取 ?project=&part=, 生成/展示/编辑该零件的结构化成本拆解(支持联网检索行情)。
 const API = "";
 const authToken = localStorage.getItem("authToken") || "";
@@ -102,7 +104,7 @@ async function pollTask(taskId) {
     let t;
     try { t = await fetch(`${API}/api/projects/${PID}/tasks/${taskId}`).then(r => r.json()); }
     catch { continue; }
-    if (t.status === "succeeded") return t.result;
+    if (t.status === "succeeded" || t.status === "partial") return t.result;  // partial 也是终态
     if (t.status === "failed") throw new Error(t.error || "任务失败");
     status(`成本分析：${t.progress || "正在处理"}…`, true);
   }

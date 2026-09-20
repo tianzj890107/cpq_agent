@@ -33,73 +33,165 @@ class GeometryUnavailable(RuntimeError):
     """CadQuery 未安装时抛出。"""
 
 
+CADQUERY_UNAVAILABLE_CODE = "CADQUERY_UNAVAILABLE"
+
+# 预检的确定性规则表：判据、code、修复动作三件套只在这里定义一份，
+# 单零件重生成（preflight_parts）与批量计划（plan_batch）共用同一套逐件结果。
+_BASE_REQUIRED = {
+    FeatureType.plate: ("length", "width", "thickness"),
+    FeatureType.box: ("length", "width", "height"),
+    FeatureType.cylinder: ("diameter", "height"),
+}
+_FEATURE_REQUIRED = {
+    FeatureType.hole: ("diameter",),
+    FeatureType.hole_pattern: ("diameter",),
+    FeatureType.fillet: ("radius",),
+    FeatureType.chamfer: ("distance",),
+}
+
+
+def _issue(part: Part, code: str, field_name: str, message: str,
+           severity: str = "blocking_for_part", repair: str = "none") -> dict:
+    """结构化预检问题：前端据此决定「补参数」还是「再次生成」。
+
+    severity: blocking_for_part（只挡这个零件）/ blocking_for_batch（挡整批）。
+    repair:   initialize_base_feature / fill_base_feature_dimensions /
+              replace_base_feature / fill_feature_dimensions / regenerate /
+              install_cadquery / none。
+    """
+    return {
+        "part_id": part.part_id, "part_name": part.name, "scope": "geometry",
+        "code": code, "field": field_name, "severity": severity,
+        "repair": repair, "message": message,
+    }
+
+
+def runtime_issue(part_id: str, part_name: str, message: str) -> dict:
+    """预检通过、但 CAD 运行期失败：只有这种失败才适合「再次生成」。"""
+    return {
+        "part_id": part_id, "part_name": part_name, "scope": "geometry",
+        "code": "CAD_GENERATION_FAILED", "field": "cad",
+        "severity": "blocking_for_part", "repair": "regenerate",
+        "message": message,
+    }
+
+
+def preflight_part(part: Part, seen_ids: Optional[set] = None) -> List[dict]:
+    """单个零件的结构化几何预检（纯本地：不调 LLM、不调 CAD）。
+
+    ``seen_ids`` 传入时顺带做 part_id 去重（批量计划按顺序累积）。
+    """
+    issues: List[dict] = []
+    if seen_ids is not None:
+        if part.part_id in seen_ids:
+            issues.append(_issue(part, "PART_ID_DUPLICATE", "part_id", "part_id 重复"))
+        seen_ids.add(part.part_id)
+    if part.quantity < 1:
+        issues.append(_issue(part, "QUANTITY_INVALID", "quantity", "quantity 必须至少为 1"))
+    if not part.features:
+        issues.append(_issue(
+            part, "BASE_FEATURE_MISSING", "features[0]",
+            "缺少基体特征（plate / box / cylinder）",
+            repair="initialize_base_feature",
+        ))
+        return issues
+
+    base = part.features[0]
+    required = _BASE_REQUIRED.get(base.type)
+    if required is None:
+        issues.append(_issue(
+            part, "BASE_FEATURE_INVALID_TYPE", "features[0].type",
+            f"第 1 个特征必须是 plate / box / cylinder，当前为 {base.type.value}",
+            repair="replace_base_feature",
+        ))
+    else:
+        for field_name in required:
+            value = getattr(base, field_name)
+            field_path = f"features[0].{field_name}"
+            if value is None:
+                issues.append(_issue(
+                    part, "BASE_FEATURE_DIMENSION_MISSING", field_path,
+                    f"基体缺少 {base.type.value}.{field_name}",
+                    repair="fill_base_feature_dimensions",
+                ))
+            elif value <= 0:
+                issues.append(_issue(
+                    part, "BASE_FEATURE_DIMENSION_INVALID", field_path,
+                    f"基体 {base.type.value}.{field_name} 必须大于 0",
+                    repair="fill_base_feature_dimensions",
+                ))
+
+    for index, feature in enumerate(part.features[1:], start=1):
+        shown = index + 1  # 人话里的「第 N 个特征」是 1 起数
+        for field_name in _FEATURE_REQUIRED.get(feature.type, ()):
+            value = getattr(feature, field_name)
+            field_path = f"features[{index}].{field_name}"
+            if value is None:
+                issues.append(_issue(
+                    part, "FEATURE_DIMENSION_MISSING", field_path,
+                    f"第 {shown} 个特征 {feature.type.value} 缺少 {field_name}",
+                    repair="fill_feature_dimensions",
+                ))
+            elif value <= 0:
+                issues.append(_issue(
+                    part, "FEATURE_DIMENSION_INVALID", field_path,
+                    f"第 {shown} 个特征 {feature.type.value}.{field_name} 必须大于 0",
+                    repair="fill_feature_dimensions",
+                ))
+        if feature.type == FeatureType.hole_pattern:
+            for count_name, spacing_name in (("count_x", "spacing_x"), ("count_y", "spacing_y")):
+                count = getattr(feature, count_name) or 1
+                spacing = getattr(feature, spacing_name)
+                if count < 1:
+                    issues.append(_issue(
+                        part, "FEATURE_DIMENSION_INVALID", f"features[{index}].{count_name}",
+                        f"{count_name} 必须至少为 1", repair="fill_feature_dimensions",
+                    ))
+                if count > 1 and (spacing is None or spacing <= 0):
+                    issues.append(_issue(
+                        part,
+                        "FEATURE_DIMENSION_MISSING" if spacing is None else "FEATURE_DIMENSION_INVALID",
+                        f"features[{index}].{spacing_name}",
+                        f"{count_name} 大于 1 时必须提供正数 {spacing_name}",
+                        repair="fill_feature_dimensions",
+                    ))
+    return issues
+
+
 def preflight_parts(parts: List[Part]) -> List[str]:
     """在 CAD 调用前检查模型无法安全补齐的几何必填项。
 
     这是纯本地校验，不会调用 LLM；让用户在生成前看到精确缺失字段，
     避免因模型格式问题重复付费解析。
-    """
-    issues: List[str] = []
-    seen_ids: set[str] = set()
-    base_required = {
-        FeatureType.plate: ("length", "width", "thickness"),
-        FeatureType.box: ("length", "width", "height"),
-        FeatureType.cylinder: ("diameter", "height"),
-    }
-    feature_required = {
-        FeatureType.hole: ("diameter",),
-        FeatureType.hole_pattern: ("diameter",),
-        FeatureType.fillet: ("radius",),
-        FeatureType.chamfer: ("distance",),
-    }
 
+    返回的字符串形状（``零件 P-001（上盖）: …``）是既有的对外契约，
+    vision.py 与单零件重生成的 409 都靠它，这里只是把逐件结构化结果拼成人话。
+    """
+    messages: List[str] = []
+    seen_ids: set[str] = set()
     for part in parts:
         label = f"零件 {part.part_id}（{part.name}）"
-        if part.part_id in seen_ids:
-            issues.append(f"{label}: part_id 重复")
-        seen_ids.add(part.part_id)
-        if part.quantity < 1:
-            issues.append(f"{label}: quantity 必须至少为 1")
-        if not part.features:
-            issues.append(f"{label}: 缺少基体特征（plate / box / cylinder）")
-            continue
+        for issue in preflight_part(part, seen_ids):
+            messages.append(f"{label}: {issue['message']}")
+    return messages
 
-        base = part.features[0]
-        required = base_required.get(base.type)
-        if required is None:
-            issues.append(
-                f"{label}: 第 1 个特征必须是 plate / box / cylinder，当前为 {base.type.value}"
-            )
+
+def plan_batch(parts: List[Part]):
+    """批量生成计划：能生成的零件 + 被挡零件的结构化问题（C1）。
+
+    预检是确定性的，所以在**提交异步任务之前**就能跑完：被挡零件不进任务，
+    同一份 IR 反复点击也不会再堆出一串一模一样的失败任务（C7）。
+    """
+    processable: List[Part] = []
+    blocked: List[dict] = []
+    seen_ids: set[str] = set()
+    for part in parts:
+        issues = preflight_part(part, seen_ids)
+        if issues:
+            blocked.extend(issues)
         else:
-            for field_name in required:
-                value = getattr(base, field_name)
-                if value is None:
-                    issues.append(f"{label}: 基体缺少 {base.type.value}.{field_name}")
-                elif value <= 0:
-                    issues.append(f"{label}: 基体 {base.type.value}.{field_name} 必须大于 0")
-
-        for index, feature in enumerate(part.features[1:], start=2):
-            for field_name in feature_required.get(feature.type, ()):
-                value = getattr(feature, field_name)
-                if value is None:
-                    issues.append(
-                        f"{label}: 第 {index} 个特征 {feature.type.value} 缺少 {field_name}"
-                    )
-                elif value <= 0:
-                    issues.append(
-                        f"{label}: 第 {index} 个特征 {feature.type.value}.{field_name} 必须大于 0"
-                    )
-            if feature.type == FeatureType.hole_pattern:
-                for count_name, spacing_name in (("count_x", "spacing_x"), ("count_y", "spacing_y")):
-                    count = getattr(feature, count_name) or 1
-                    spacing = getattr(feature, spacing_name)
-                    if count < 1:
-                        issues.append(f"{label}: {count_name} 必须至少为 1")
-                    if count > 1 and (spacing is None or spacing <= 0):
-                        issues.append(
-                            f"{label}: {count_name} 大于 1 时必须提供正数 {spacing_name}"
-                        )
-    return issues
+            processable.append(part)
+    return processable, blocked
 
 
 @dataclass

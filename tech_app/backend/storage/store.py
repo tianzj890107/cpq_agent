@@ -256,6 +256,32 @@ def append_task_progress(project_id: str, task_id: str, line: str) -> Optional[d
     return None
 
 
+PROCESS_LOG_LIMIT = 400
+
+
+def append_task_process(project_id: str, task_id: str, entry: dict) -> Optional[dict]:
+    """追加一条「过程事件」（phase=model/tool/progress），与进度日志同一把锁。
+
+    过程序列是**只增不改**的一条流：序号在本任务内从 1 单调递增，由这里在锁内分配，
+    并发写入不会撞号。落库与回放都按 seq 排序，顺序唯一。
+    """
+    with _task_lock:
+        data = _meta().get_doc(project_id, "tasks") or {"items": []}
+        for task in data.get("items", []):
+            if task.get("task_id") != task_id:
+                continue
+            log = task.get("process_log")
+            if not isinstance(log, list):
+                log = []
+            row = dict(entry or {})
+            row["seq"] = max((int((old or {}).get("seq") or 0) for old in log), default=0) + 1
+            log.append(row)
+            task["process_log"] = log[-PROCESS_LOG_LIMIT:]
+            _meta().put_doc(project_id, "tasks", data)
+            return task.copy()
+    return None
+
+
 def get_task(project_id: str, task_id: str) -> Optional[dict]:
     with _task_lock:
         data = _meta().get_doc(project_id, "tasks") or {"items": []}
@@ -323,6 +349,36 @@ def load_meta(project_id: str) -> Optional[dict]:
     return _meta().get_meta(project_id)
 
 
+# 统一业务实例号（business_case_id）随项目 meta 落盘：报价—技术—财务—报告共用同
+# 一份身份，重启后仍能凭它认回原报价卡片。文档键固定，合并写入，不抹掉既有键。
+BUSINESS_CASE_KIND = "business_case"
+BUSINESS_CASE_KEYS = ("business_case_id", "quote_session_id", "source_task_id",
+                      "linked_by", "linked_at", "recovered_from_project_id",
+                      "recovery_reason", "recovered_by", "recovered_at")
+
+
+def load_business_case(project_id: str) -> dict:
+    """读回项目的业务实例关联；没有则空 dict（绝不现编实例号）。"""
+    doc = _meta().get_doc(project_id, BUSINESS_CASE_KIND) or {}
+    if not doc:
+        doc = (load_meta(project_id) or {}).get(BUSINESS_CASE_KIND) or {}
+    return dict(doc)
+
+
+def save_business_case(project_id: str, link: dict, author: str = "system") -> dict:
+    """合并写入 meta["business_case"]：只传部分键（如 recovery_reason）不得抹掉既有键。"""
+    with _document_lock:
+        merged = load_business_case(project_id)
+        merged.update(dict(link or {}))
+        merged["updated_at"] = _now()
+        meta = load_meta(project_id)
+        if meta is not None:
+            meta[BUSINESS_CASE_KIND] = merged
+            _meta().put_meta(project_id, meta)
+        _meta().put_doc(project_id, BUSINESS_CASE_KIND, merged)
+    return dict(merged)
+
+
 def list_projects(include_archived: bool = False) -> List[dict]:
     out = []
     for meta in _meta().list_metas():
@@ -338,6 +394,97 @@ def list_projects(include_archived: bool = False) -> List[dict]:
         meta["device_name"] = (ir or {}).get("device_name")
         out.append(meta)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# 项目参与者 / 当前持有人（批次 7）：项目级 ACL 的落点，仍在 meta 文档里，不新建表。
+# 老项目没有这两个字段时按「只有 owner」处理，不迁移、不改写历史 meta。
+# --------------------------------------------------------------------------- #
+PARTICIPANT_SOURCES = ("manual", "quote_owner", "cost_task_assignee")
+
+
+def list_participants(project_id: str) -> List[dict]:
+    """项目的参与者清单（老项目没有该字段时返回空列表）。"""
+    meta = load_meta(project_id) or {}
+    rows = meta.get("participants") or []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def add_participant(project_id: str, username: str, *, role: str = "",
+                    source: str = "manual", assignee: bool = False,
+                    author: str = "system") -> List[dict]:
+    """加入参与者：幂等 —— 同一 username + source 已存在时只更新 role / assignee，不追加重复项。"""
+    username = str(username or "").strip()
+    if not username:
+        return list_participants(project_id)
+    source = str(source or "manual").strip() or "manual"
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return []
+        rows = [dict(row) for row in (meta.get("participants") or []) if isinstance(row, dict)]
+        found = None
+        for row in rows:
+            if str(row.get("username") or "") == username and str(row.get("source") or "") == source:
+                found = row
+                break
+        if found is None:
+            rows.append({"username": username, "role": str(role or ""), "source": source,
+                         "assignee": bool(assignee), "added_at": _now(), "added_by": author})
+        else:
+            if role:
+                found["role"] = str(role)
+            if assignee:
+                found["assignee"] = True
+            found["updated_at"] = _now()
+            found["updated_by"] = author
+        meta["participants"] = rows
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "add_participant",
+          {"username": username, "source": source, "role": role,
+           "assignee": bool(assignee), "by": author})
+    return rows
+
+
+def remove_participant(project_id: str, username: str, *, source: str = "",
+                       author: str = "system") -> List[dict]:
+    """移除参与者：不存在时安静返回（幂等）。传 source 只移除该来源的那一条。"""
+    username = str(username or "").strip()
+    source = str(source or "").strip()
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return []
+        rows = [dict(row) for row in (meta.get("participants") or []) if isinstance(row, dict)]
+        kept = [row for row in rows
+                if not (str(row.get("username") or "") == username
+                        and (not source or str(row.get("source") or "") == source))]
+        if len(kept) == len(rows):
+            return rows
+        meta["participants"] = kept
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "remove_participant",
+          {"username": username, "source": source or "*", "by": author})
+    return kept
+
+
+def current_holder(project_id: str) -> str:
+    """项目当前持有人；缺省 = 创建人（读取时兜底，不写回 meta）。"""
+    meta = load_meta(project_id) or {}
+    return str(meta.get("current_holder") or meta.get("owner") or "system")
+
+
+def set_current_holder(project_id: str, username: str, author: str = "system") -> str:
+    """覆盖写当前持有人，并留审计（幂等：同一人重复设无副作用）。"""
+    username = str(username or "").strip()
+    with _document_lock:
+        meta = load_meta(project_id)
+        if meta is None:
+            return ""
+        meta["current_holder"] = username
+        _meta().put_meta(project_id, meta)
+    audit(project_id, "set_current_holder", {"username": username, "by": author})
+    return username
 
 
 def backfill_legacy_mine_owner(owner: str) -> int:
@@ -372,8 +519,11 @@ def save_ir(project_id: str, ir_dict: dict, stage: str = "parsed", author: str =
         meta = load_meta(project_id) or {}
         meta["ir_revision"] = int(meta.get("ir_revision") or 0) + 1
         meta["ir_input_revision"] = int(meta.get("input_revision") or 1)
-        meta["derived_results_stale"] = True
-        meta["derived_results_stale_reason"] = "设计 IR 已变化，请重新生成下游工艺或几何结果"
+        # 这里**不再**无条件把 derived_results_stale 置真：IR 一变就说「整份下游结果作废」
+        # 会把没被改到的零件一起判过期。逐件过期由结果条目自带的 source_part_hash /
+        # source_attr_hash 判断（见 docs/specs/tech-per-part-result-staleness.md）。
+        # 这个标记只留给「输入被替换 / 解析被重置」（replace_source / add_attachment /
+        # reset），它们是真正影响整份结果的输入变化。
         meta.setdefault("stages", {})[stage] = _now()
         _meta().put_meta(project_id, meta)
         audit(project_id, f"save_ir:{stage}", {"parts": len(ir_dict.get("parts", [])), "note": note})
@@ -395,7 +545,8 @@ def load_ir(project_id: str) -> Optional[dict]:
 # 2.1 图纸解析这一步产出的全部东西。「本次任务从头开始」清的就是这一串。
 PARSE_STAGE_DOCS = (
     "ir", "drawing_analysis", "verification_report", "model_lookup",
-    "component_match", "geometry", "drawings",
+    "component_match", "component_match_unavailable",
+    "geometry", "drawings",
     "process", "cost", "process_lookup", "cost_lookup", "ai_results",
 )
 
@@ -431,11 +582,34 @@ def save_component_match(project_id: str, report: dict) -> None:
     """图纸拆解阶段的零部件库检索报告（哪些可复用/可改制/未匹配）。"""
     with _document_lock:
         _meta().put_doc(project_id, "component_match", report)
+        # 这一次查成了：把上一次的"未检索"现场清掉（本仓库的清空约定是写空 dict，
+        # 见 reset_parse_stage）。重试成功 = 看板上的红色警示消失。
+        _meta().put_doc(project_id, "component_match_unavailable", {})
         audit(project_id, "component_match", report.get("summary", {}))
 
 
 def load_component_match(project_id: str) -> Optional[dict]:
     return _meta().get_doc(project_id, "component_match")
+
+
+def save_component_match_unavailable(project_id: str, info: dict) -> None:
+    """零部件库**这次没查到**（知识库连不上 / 检索报错）——把现场留下。
+
+    和 component_match 报告是两件事：报告缺失只说明"还没检索过"，这一条才说明
+    "检索过、但没查成"。前端拿它把"库里没有可复用零件"与"压根没查到"分开，
+    并且它**落盘**，所以切换看板、刷新页面之后现场仍在（## 92）。
+
+    字段（由调用方给全）：reason / message / error / at。
+    """
+    payload = dict(info or {})
+    with _document_lock:
+        _meta().put_doc(project_id, "component_match_unavailable", payload)
+    audit(project_id, "component_match_unavailable", payload)
+
+
+def load_component_match_unavailable(project_id: str) -> Optional[dict]:
+    """上一次"没查到"的现场；从没记录过（或已被成功检索清空）时返回 None。"""
+    return _meta().get_doc(project_id, "component_match_unavailable") or None
 
 
 # --------------------------------------------------------------------------- #
@@ -1172,3 +1346,110 @@ def _touch_stage(project_id: str, stage: str) -> None:
     meta = load_meta(project_id) or {}
     meta.setdefault("stages", {})[stage] = _now()
     _meta().put_meta(project_id, meta)
+
+
+# --------------------------------------------------------------------------- #
+# 项目会话时间线（左侧会话的持久化事实源）
+#
+# 左侧会话里除了 OpenClaude 的 JSONL 消息，还有任务进度卡与各阶段页的过程文字 —— 它们
+# 以前只存在 DOM 里，重进项目就没了，而且任务卡被固定在会话底部、和消息两套顺序。
+# 这里给它们一份项目级、只追加、有序的存储：seq 由服务端分配（等于追加顺序），
+# 带 key 的条目幂等且就地更新（同一张卡重复提交不会多出一行、位置也不动）。
+#
+# 与业务数据无关：时间线只存「会话可见内容」，成本 / 工艺 / 报告仍各写自己的文件与库。
+# --------------------------------------------------------------------------- #
+SESSION_EVENTS_KIND = "session_events"
+
+
+def _session_events(project_id: str) -> dict:
+    data = _meta().get_doc(project_id, SESSION_EVENTS_KIND) or {}
+    items = data.get("items")
+    if not isinstance(items, list):
+        items = []
+    return {"items": items}
+
+
+def _merge_task_entry(previous: dict, incoming: dict) -> dict:
+    """同一张任务卡的合并口径：进度行按行去重追加，状态 / 错误就地更新。
+
+    与前端 tech-session-timeline.js 的 applyTaskProgress() 是同一套口径 —— 否则
+    「左栏渲染出来的卡」和「落库里的卡」会漂移。
+    """
+    merged = dict(previous or {})
+    for field, value in (incoming or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        merged[field] = value
+    steps: List[str] = []
+    for row in list((previous or {}).get("steps") or []) + list((incoming or {}).get("steps") or []):
+        text = str(row)
+        if text and text not in steps:
+            steps.append(text)
+    merged["steps"] = steps
+    # process 是「过程事件」序列：按 seq 取并集、按 seq 升序，**不按文本去重** ——
+    # 不同零件说同一句话（"库内无同类件"）是合法的，不能像 steps 那样被吃掉。
+    previous_process = (previous or {}).get("process")
+    incoming_process = (incoming or {}).get("process")
+    if isinstance(previous_process, list) or isinstance(incoming_process, list):
+        by_seq: dict[int, dict] = {}
+        for row in list(incoming_process or []) + list(previous_process or []):
+            if not isinstance(row, dict):
+                continue
+            try:
+                seq = int(row.get("seq"))
+            except (TypeError, ValueError):
+                continue
+            by_seq.setdefault(seq, row)
+        merged["process"] = [by_seq[key] for key in sorted(by_seq)]
+    return merged
+
+
+def append_session_event(project_id: str, event: dict) -> dict:
+    """追加一条会话条目（或就地更新同一 key / 同一 task.id 的那一条）。
+
+    返回**存下来**的那条：新条目带服务端分配的 seq；就地更新的条目保留原 seq 与原位置。
+    """
+    incoming = dict(event or {})
+    kind = str(incoming.get("kind") or "").strip()
+    if not kind:
+        raise ValueError("会话事件缺少 kind")
+    incoming.pop("seq", None)
+    incoming["kind"] = kind
+    incoming.setdefault("ts", _now())
+    key = str(incoming.get("key") or "").strip()
+    task_id = str(((incoming.get("task") or {}) or {}).get("id") or "").strip()
+    with _document_lock:
+        data = _session_events(project_id)
+        items = data["items"]
+        index = None
+        if key:
+            index = next((i for i, row in enumerate(items)
+                          if str((row or {}).get("key") or "") == key), None)
+        if index is None and task_id:
+            # 任务卡按 task.id 幂等：同一个任务无论 key 怎么写都只有一张卡。
+            index = next((i for i, row in enumerate(items)
+                          if str(((row or {}).get("task") or {}).get("id") or "") == task_id), None)
+        if index is None:
+            incoming["seq"] = max((int((row or {}).get("seq") or 0) for row in items), default=0) + 1
+            items.append(incoming)
+            stored = incoming
+        else:
+            previous = dict(items[index] or {})
+            merged = dict(previous)
+            # 空值不覆盖：进度提交常常只带增量字段（比如只报状态），不能把已有内容抹掉。
+            merged.update({k: v for k, v in incoming.items() if v not in (None, "", [], {})})
+            merged["seq"] = previous.get("seq")
+            if merged.get("task") is not None and previous.get("task") is not None:
+                merged["task"] = _merge_task_entry(previous.get("task"), incoming.get("task"))
+            items[index] = merged
+            stored = merged
+        data["items"] = items
+        _meta().put_doc(project_id, SESSION_EVENTS_KIND, data)
+        return dict(stored)
+
+
+def load_session_events(project_id: str) -> List[dict]:
+    """按 seq 升序返回该项目的会话时间线（不重排、不合并）。"""
+    rows = [dict(row) for row in _session_events(project_id)["items"] if isinstance(row, dict)]
+    rows.sort(key=lambda row: int(row.get("seq") or 0))
+    return rows

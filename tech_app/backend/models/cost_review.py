@@ -23,6 +23,22 @@ class CostAction(BaseModel):
     by: Optional[str] = None
 
 
+class CostReviewWaiver(BaseModel):
+    """2.3「确认成本」的一次缺口签字。
+
+    与需求阶段 / 2.2 的签字同一套语义：缺口以**服务端算出的编码集合**为准，
+    后来补上的缺口不该抹掉历史签字，所以只追加、不覆盖；签字之后新冒出的缺口会让
+    集合变大，覆盖判定因此失败、必须重新签。
+    """
+    stage: str = Field("cost_review", description="签字发生在哪一步")
+    missing_codes: List[str] = Field(default_factory=list, description="缺口编码（比对键）")
+    missing_fields: List[str] = Field(default_factory=list, description="缺口中文名，给人看")
+    reason: str = Field("", description="允许为空，服务端补默认原因")
+    waived_by: Optional[str] = None
+    waived_at: Optional[str] = None
+    reused: bool = Field(False, description="复用已有签字，而不是重新签一次")
+
+
 class CostReview(BaseModel):
     """2.3 的评审状态。成本数字不在这里，见模块 docstring。"""
     project_id: Optional[str] = None
@@ -35,6 +51,10 @@ class CostReview(BaseModel):
     confirmed_by: Optional[str] = None
     confirmed_at: Optional[str] = None
     actions: List[CostAction] = Field(default_factory=list, description="历次对外动作")
+    # 「带缺口继续」的签字：未算零件 / 整机未算 / 算出来是 0 元时，人签一次字放行。
+    # 只追加不覆盖 —— 后来补上的缺口不该把历史签字抹掉（与 2.2、需求阶段同一套）。
+    waivers: List[CostReviewWaiver] = Field(
+        default_factory=list, description="历次「带缺口继续」的签字（L2 缺口豁免）")
     updated_at: Optional[str] = None
 
     @property
@@ -48,12 +68,25 @@ class CostReviewBody(BaseModel):
     quantity: int = 1
 
 
+class CostConfirmBody(BaseModel):
+    """「确认成本」的可选请求体：缺口没算齐时由前端弹「仍要继续」，点继续才带上签字。
+
+    不带请求体的老调用（Agent 工具 / 既有脚本）行为不变：有缺口就如实拒绝。
+    """
+    waiver: Optional[dict] = Field(
+        None, description="人的签字；只取 reason，缺口以服务端算出的为准")
+
+
 class CostActionBody(BaseModel):
     """三个去向动作共用的入参。"""
     product_name: str = ""
     spec: str = ""
     note: str = ""
-    target_user_id: str = Field("", description="退回工艺经理时可指定到人；留空按角色发")
+    target_user_id: str = Field("", description="提交工艺经理确认时可指定到人；留空按角色发")
+    # 统一工作台从待办点进来时 URL 上带着 task_id：完成正式去向后按它关闭原来的
+    # claimed 财务待办。留空不影响老入口（Agent / 直接打开页面）继续可用。
+    source_task_id: str = Field(
+        "", description="来源待办任务号；完成后据此把已领取的 tech_cost 任务置为完成")
 
 
 def merge_totals(rows: List[dict]) -> dict:

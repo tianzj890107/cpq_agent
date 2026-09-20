@@ -78,54 +78,69 @@ function homeCanManage(item) {
   return role === 'admin' || role === 'process_manager' || (role === 'engineer' && homeOwner(item) === homeUser.username);
 }
 function homeCacheKey(projectId) { return `cad_engine:last_page:${projectId}`; }
+function homeStageUrl(stage, projectId, taskId) {
+  let url = 'tech-workbench.html?stage=' + encodeURIComponent(stage)
+    + '&project=' + encodeURIComponent(projectId || '');
+  if (taskId) url += '&task_id=' + encodeURIComponent(taskId);
+  return url;
+}
+function homeStageFromStatus(status) {
+  if (status === 'draft' || status === 'rejected') return 'requirement-create';
+  if (status === 'pending_confirmation') return 'requirement-confirm';
+  if (status === 'pending_review') return 'requirement-review';
+  return '';
+}
+function homeDefaultStage(item) {
+  const requirement = item.requirement || {};
+  const stage = homeStageFromStatus(requirement.status || '');
+  if (stage) return stage;
+  // 只有项目没有需求单/流程记录：先去 1.1 建需求。
+  if (!requirement.requirement_no && !requirement.status) return 'requirement-create';
+  const hasIr = Boolean(item.project?.has_ir || item.project?.stages?.parsed);
+  return hasIr ? 'process' : 'drawing';
+}
 function homeCachedTarget(projectId) {
   const saved = localStorage.getItem(homeCacheKey(projectId));
   if (!saved) return '';
   try {
     const url = new URL(saved, location.origin);
-    if (url.origin !== location.origin || url.searchParams.get('project') !== projectId || url.pathname.endsWith('/home.html')) return '';
-    // 2.2–2.6 是连续的技术工艺子步骤。首页恢复项目时统一回到 2.1，
-    // 避免脱离图纸解析上下文直接进入中间步骤。
-    if (url.pathname.startsWith('/apps/tech-process/')) return homeProjectPage('index.html', projectId);
-    return `${url.pathname}${url.search}${url.hash}`;
+    if (url.origin !== location.origin || url.searchParams.get('project') !== projectId) return '';
+    // 只有统一工作台的缓存可以直接恢复；旧流程页/独立主页缓存一律忽略，
+    // 由 homeCurrentTarget 依据真实流程状态重算 stage。
+    if ((url.pathname.split('/').pop() || '') === 'tech-workbench.html') return `${url.pathname}${url.search}`;
+    return '';
   } catch { return ''; }
 }
 function homeTarget(item) {
   const projectId = item.project?.project_id;
   if (!projectId) return 'home.html';
-  return homeCachedTarget(projectId) || `requirement-detail.html?project=${encodeURIComponent(projectId)}`;
+  return homeCachedTarget(projectId) || homeStageUrl(homeDefaultStage(item), projectId);
 }
 function homeStepHas(value) {
   if (Array.isArray(value)) return value.some(homeStepHas);
   if (value && typeof value === 'object') return Object.entries(value).some(([key, item]) => !['project_id','updated_at','timing','confirmed','confirmed_by','confirmed_at'].includes(key) && homeStepHas(item));
   return typeof value === 'string' ? Boolean(value.trim()) : value !== null && value !== undefined && value !== false;
 }
-function homeProjectPage(page, projectId) { return `${page}?project=${encodeURIComponent(projectId)}`; }
-function homeTechPage(projectId, step) { return `/apps/tech-process/?biz=tech&project=${encodeURIComponent(projectId)}&step=${step}`; }
 async function homeCurrentTarget(item) {
   const projectId = item.project?.project_id;
   const cached = homeCachedTarget(projectId);
   if (cached) return cached;
-  const [flow, projectData, aggregate] = await Promise.all([
+  const [flow, projectData] = await Promise.all([
     api(`/api/projects/${encodeURIComponent(projectId)}/workflow`),
     api(`/api/projects/${encodeURIComponent(projectId)}`),
-    api(`/api/projects/${encodeURIComponent(projectId)}/summary`).catch(() => ({steps:{}})),
   ]);
   const requirement = flow.requirement || item.requirement || null;
   const status = requirement?.status || '';
-  if (['draft','rejected'].includes(status)) return homeProjectPage('requirement-create.html', projectId);
-  if (status === 'pending_confirmation') return homeProjectPage('requirement-confirm.html', projectId);
-  if (status === 'pending_review') return homeProjectPage('requirement-review.html', projectId);
+  const stage = homeStageFromStatus(status);
+  if (stage) return homeStageUrl(stage, projectId);
   const report = flow.report || null;
   if (report) {
-    if (report.status === 'in_review') return homeProjectPage('report-review.html', projectId);
-    if (['approved','published'].includes(report.status)) return homeProjectPage('report-publish.html', projectId);
-    return homeProjectPage('summary.html', projectId);
+    if (report.status === 'in_review') return homeStageUrl('report-review', projectId);
+    if (report.status === 'approved' || report.status === 'published') return homeStageUrl('report-publish', projectId);
+    return homeStageUrl('summary', projectId);
   }
   const hasIr = Boolean(projectData.ir?.parts?.length || projectData.meta?.has_ir || item.project?.has_ir || item.project?.stages?.parsed);
-  if (!hasIr) return homeProjectPage('index.html', projectId);
-  // 即便 2.2–2.6 已有保存结果，也不从首页直达这些子页；统一先进入 2.1。
-  return homeProjectPage('index.html', projectId);
+  return homeStageUrl(hasIr ? 'process' : 'drawing', projectId);
 }
 async function homeOpenProject(item, card) {
   const projectId = item.project?.project_id;
@@ -373,7 +388,7 @@ function bindHome() {
     renderCards();
   };
   document.querySelectorAll('[data-home-view]').forEach(el=>el.onclick=()=>switchHomeView(el.dataset.homeView));
-  const goCreate = () => { location.href='requirement-create.html'; };
+  const goCreate = () => { location.href = 'tech-workbench.html?stage=requirement-create'; };
   document.querySelector('#homeNavCreate').onclick=goCreate;
   document.querySelector('#homeNavCreatePanel').onclick=goCreate;
   document.querySelector('#homeNavHistory').onclick=()=>toggleNav(true);
@@ -444,12 +459,12 @@ async function createFromHome() {
       // 图纸已安全创建时，不应把用户困在首页；1.1 可继续读取图纸并保存完整草稿。
       setProject(created.project_id);
       homeToast(`图纸已创建，但 1.1 草稿预填失败：${draftError.message}；已进入 1.1，可继续填写。`, true);
-      location.href=`requirement-create.html?project=${encodeURIComponent(created.project_id)}`;
+      location.href=homeStageUrl('requirement-create', created.project_id);
       return;
     }
     // 首页发送只保存上传内容和需求草稿；AI 文档解析由 1.1 的按钮显式触发。
     setProject(created.project_id);
-    location.href=`requirement-create.html?project=${encodeURIComponent(created.project_id)}`;
+    location.href=homeStageUrl('requirement-create', created.project_id);
   } catch(err){homeToast(err.message||'创建需求失败',true);button.disabled=false;button.removeAttribute('aria-busy');}
 }
 async function startHome() {

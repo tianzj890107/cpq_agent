@@ -8,11 +8,14 @@
   <!-- 离线部署：Inter 网络字体已移除，回退系统字体 -->
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-primary-hover: #4f46e5;
-      --color-primary-light: #eef2ff;
-      --color-purple: #8b5cf6;
-      --color-purple-light: #f5f3ff;
+      --color-primary: #0060E6;
+      --color-primary-hover: #0050C4;
+      --color-primary-light: #E6F0FD;
+      --color-primary-active: #00419F;
+      --color-primary-page: #F4F8FF;
+      --color-primary-border: #B4D0F8;
+      --color-purple: #0060E6;
+      --color-purple-light: #F4F8FF;
       --color-green: #10B981;
       --color-green-light: #ECFDF5;
       --color-warning: #F59E0B;
@@ -32,8 +35,8 @@
       --border-color: #E5E7EB;
       --border-light: #F3F4F6;
 
-      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      --shadow-sm: 0 1px 2px rgba(0,0,0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0,0,0, 0.1);
 
       --space-xs: 4px;
       --space-sm: 8px;
@@ -50,7 +53,7 @@
       --transition-fast: 150ms ease;
 
       /* 与工作台一致的别名变量（供历史抽屉/设置弹窗复用） */
-      --gradient-ai: linear-gradient(135deg, var(--color-purple), var(--color-primary));
+      --gradient-ai: linear-gradient(135deg, #0060E6, #0050C4);
       --color-secondary: var(--color-purple);
       --color-success: var(--color-green);
       --color-danger: var(--color-red);
@@ -63,7 +66,7 @@
 
     body {
       font-family: 'Inter', 'PingFang SC', -apple-system, sans-serif;
-      background: linear-gradient(135deg, #f5f3ff 0%, #eff6ff 100%);
+      background: linear-gradient(135deg, #F4F8FF 0%, #F4F8FF 100%);
       color: var(--text-primary);
       font-size: 14px;
       line-height: 1.5;
@@ -523,7 +526,7 @@
       border: 1px solid var(--border-color);
       padding: 24px;
       margin-bottom: 30px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 2px 8px rgba(0,0,0, 0.04);
     }
 
     .unified-content {
@@ -633,7 +636,7 @@
 
     .send-btn:hover {
       transform: scale(1.05);
-      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+      box-shadow: 0 4px 12px rgba(0,96,230,.30);
     }
 
     .send-btn i {
@@ -662,9 +665,12 @@
     }
 
     /* 待办任务卡片：除了左侧那条蓝边，其余与另外三个助手的卡片完全一样。
-       它以前多一排 chip 和一块备注，同一行里卡片就高矮不齐、长文本还会顶出边框。 */
+       以前它多一排 chip 和一块备注，行数随内容变，同一行里卡片就高矮不齐、
+       长文本还会顶出边框；现在高度由网格拉伸统一，备注行只在有备注时才渲染。 */
     .request-card.wf-task { border-left: 3px solid var(--color-primary); }
-    /* 备注那一行没内容时也占位，四张卡的页脚才对得齐（空时填 &nbsp;）。 */
+    /* 卡片等高靠网格的 align-items:stretch 拉伸 + 卡片 height:100% 吃满格高，
+       页脚再由 footer 的 margin-top:auto 贴底对齐。备注为空时整行不渲染，
+       不再用占位内容凑高度。 */
     .request-note { font-style: italic; color: var(--text-tertiary); }
 
     .list-tab {
@@ -694,6 +700,19 @@
       display: flex;
       gap: 6px;
     }
+
+    /* 技术工艺「全部项目」的归档开关（## 139）：归档不再是独立页签，
+       勾选后请求 /api/projects?scope=all&include_archived=true。 */
+    .tech-archived-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tech-archived-filter[hidden] { display: none; }
 
     .search-input {
       padding: 6px 10px;
@@ -737,6 +756,8 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 10px;
       margin-bottom: 12px;
+      /* 同一行卡片等高：拉伸格子里的卡片吃满行高，再由 footer margin-top:auto 对齐页脚。 */
+      align-items: stretch;
     }
 
     .cards-empty { grid-column: 1 / -1; text-align: center; color: var(--text-tertiary); font-size: 13.5px; line-height: 1.9; padding: 44px 12px; }
@@ -753,6 +774,7 @@
          内容多一行少一行都不会看起来"大小不一"。 */
       display: flex;
       flex-direction: column;
+      height: 100%;              /* 吃满网格单元高度，同一行卡片才会等高 */
       min-width: 0;
       overflow: hidden;
     }
@@ -917,13 +939,22 @@
       color: var(--text-tertiary);
     }
 
+    /* 会话卡（我的报价 / 全部报价）与待办卡等高：待办卡比会话卡多一行「来自 … 第 N 步」。
+       会话卡不补假内容行，改成把「客户名称」这一行整体下移半行（11px × 1.5 ÷ 2 = 8.25px），
+       再由页脚 margin-top:auto 贴底，卡片总高仍与待办卡一致。 */
+    .request-card:not(.wf-task) .request-info { margin-top: 8.25px; }
+
+    /* 「来自 … 第 N 步」这一行：上下行距各减一半（原来的 4px → 2px）。卡片是 flex 列，
+       子项外边距不折叠，所以用 -2px 抵消上一行的 4px 下边距，下方再把 4px 收到 2px。 */
+    .request-info.request-from { margin-top: -2px; margin-bottom: 2px; }
+
     .request-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
       margin-top: auto;          /* 页脚贴底：同一行的卡片页脚对齐 */
-      padding-top: 8px;
+      padding-top: 0;            /* 「…负责」这一行上方不再留间距 */
       border-top: 1px solid var(--border-light);
     }
 
@@ -1031,7 +1062,7 @@
     .btn-mini .ti { font-size: 15px; }
     .drawer-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
     .hist-item { border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; background: #fff; transition: border-color 0.15s, box-shadow 0.15s; position: relative; }
-    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(99,102,241,0.12); }
+    .hist-item:hover { border-color: var(--color-primary); box-shadow: 0 2px 10px rgba(0,96,230,.12); }
     .hist-item .h-title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
     .hist-item .h-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .hist-item .h-chip { background: var(--bg-tertiary); border-radius: 9999px; padding: 1px 7px; color: var(--text-secondary); }
@@ -1047,7 +1078,7 @@
     .modal-body label { display: block; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); margin: 14px 0 6px; }
     .modal-body label:first-child { margin-top: 0; }
     .modal-body select, .modal-body input[type="text"], .modal-body input[type="password"], .modal-body input[type="number"] { width: 100%; border: 1px solid var(--border-secondary); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text-primary); background: white; outline: none; }
-    .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .modal-body select:focus, .modal-body input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,96,230,.12); }
     .modal-body .hint { font-size: 11.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
     .modal-body .hint.warn { color: var(--color-warning); }
     .modal-body .hint.ok { color: var(--color-success); }
@@ -1062,7 +1093,7 @@
     .modal-btn.primary { background: var(--gradient-ai); color: white; border: none; }
     .modal-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
     .modal-body textarea { width: 100%; border: 1px solid var(--border-secondary); border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; color: var(--text-primary); background: white; outline: none; resize: vertical; }
-    .modal-body textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .modal-body textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0,96,230,.12); }
     .pj-upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .pj-upload-row .modal-btn { min-width: 0; padding: 7px 12px; }
     .pj-upload-row .hint { flex: 1; }
@@ -1308,6 +1339,10 @@
             <div class="list-tab active">全部报价</div>
           </div>
           <div class="search-box">
+            <label class="tech-archived-filter" id="techArchivedFilter" hidden
+                   title="勾选后「全部项目」会一并列出已归档项目">
+              <input type="checkbox" id="techIncludeArchived">包含已归档
+            </label>
             <input type="text" class="search-input" placeholder="支持通过客户名&创建人搜索">
             <button class="search-btn">查询</button>
             <button class="new-quote-btn">
@@ -1411,10 +1446,6 @@
         <button class="icon-btn" onclick="closeOverlays()"><i class="ti ti-x"></i></button>
       </div>
       <div class="modal-body">
-        <div id="setTabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border-color,#ddd);padding-bottom:8px">
-          <button type="button" id="setTabAgents" onclick="switchSettingsTab('agents')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">助手模型（报价/配置/规则）</button>
-          <button type="button" id="setTabTech" onclick="switchSettingsTab('tech')" style="padding:6px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;color:var(--text-secondary,#666)">技术工艺模型</button>
-        </div>
         <label>模型</label>
         <select id="setModel" onchange="onModelChange()"></select>
         <div class="hint" id="modelHint"></div>
@@ -1434,34 +1465,6 @@
           <label>截断提示 Tokens（truncate_prompt_tokens，留空不传）</label>
           <input id="setLocalTrunc" type="number" min="1024" max="1000000" placeholder="128000">
           <div class="hint">API Key 填上方输入框；Temperature / 最大输出 Tokens 用本弹窗通用设置。</div>
-        </div>
-
-        <div id="techVisionBox" style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:10px 12px;margin-top:10px">
-          <label style="font-weight:600">技术工艺 · 模型设置</label>
-          <div class="hint">技术工艺 App 的可选模型由服务端下发（受控白名单：模型 → 提供商 → 该提供商的官方网关），
-            所以这里不再填 Base URL。CPQ 配好本地网关时列表里会多一条「本地网关 · …」——选它就与报价/配置/规则三个助手共用同一个端点。
-            多模态模型用于图纸识别；语言模型同时用于工艺推荐、报告与 2.1 图纸解析的 Agent 对话。</div>
-          <label>多模态模型（图纸识别）</label>
-          <select id="setTechVision"></select>
-          <label>语言模型（工艺推荐 / 报告 / Agent 对话）</label>
-          <select id="setTechText"></select>
-          <div class="field-row" style="margin-top:8px">
-            <div style="flex:1">
-              <label>Temperature（留空＝模型默认）</label>
-              <input id="setTechTemp" type="number" step="0.1" min="0" max="1" placeholder="模型默认">
-            </div>
-            <div style="flex:1">
-              <label>最大输出 Tokens（留空＝默认）</label>
-              <input id="setTechMaxTokens" type="number" min="256" max="64000" placeholder="默认">
-            </div>
-          </div>
-          <label class="check-row" style="margin-top:8px">
-            <input type="checkbox" id="setTechThinking"> 开启思考
-          </label>
-          <label>API Key（按提供商分别保存；留空表示不修改）</label>
-          <select id="setTechKeyProvider"></select>
-          <input id="setTechKey" type="password" placeholder="所选提供商的 API Key" autocomplete="off" style="margin-top:6px">
-          <div class="hint" id="techLlmMsg"></div>
         </div>
 
         <label class="check-row" style="margin-top:16px">
@@ -1489,11 +1492,16 @@
       </div>
       <div class="modal-footer">
         <button class="modal-btn secondary" onclick="closeOverlays()">取消</button>
-        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveActiveSettings()">保存</button>
+        <button class="modal-btn primary" id="saveSettingsBtn" onclick="saveSettings()">保存</button>
       </div>
     </div>
   </div>
 
+  <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
+       而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
+  <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
+  <script src="tech-home-board.js?v=b11"></script>
+  <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
     function toggleNav() {
@@ -1549,7 +1557,7 @@
       quote: '确认需求解析结果.html',
       config: 'XBOM智能体-配置BOM生成.html',
       rule: '规则助手-规则配置.html',
-      tech: 'requirement-create.html',  // 技术工艺进入 process_drawing 步骤页（图纸+需求文档分开上传→下一步），8010 反向代理
+      tech: 'tech-workbench.html',  // 技术工艺统一工作台：左会话 + 右九步工作台（1.1→3.3），同源 8010 反向代理
     };
     const MODES = {
       quote:  { tag: '报价助手', intro: '请输入需求描述，或直接上传文件内容（表格、文档或图片等），帮你一键智能报价。',
@@ -1566,7 +1574,7 @@
                 title: '<span class="highlight">创作无限可能</span>，智能助手' },
       tech:   { tag: '技术工艺助手', intro: '请上传零件图纸与需求/工艺说明文档（可分开上传），或直接描述零件与工艺要求，帮你评估并拆解出结构化工艺路线。',
                 ph: '请输入零件与工艺评估需求…（例如：45钢法兰盘，批量500，关键面Ra1.6，评估加工工艺路线）', newBtn: '新建工艺评估',
-                tabs: ['我的评估', '全部评估'], activeTab: 1, searchPh: '支持通过名称&编号搜索',
+                tabs: ['我的清单', '待办任务', '全部清单'], activeTab: 2, searchPh: '支持通过名称&编号搜索',
                 title: '<span class="highlight">创作无限可能</span>，智能工艺' },
     };
 
@@ -1577,6 +1585,7 @@
     const NUM_PREFIX = { quote: 'BJD', config: 'PZ', rule: 'GZ', tech: 'GY' };
     const PAGE_SIZE = 6;
     let PAGE = 1;
+    let SESSION_ERROR = null;   // 最近一次列表读取失败的真实原因（null=无错误）
 
     function modeBase(mode) {
       if (mode === 'quote') return AGENT_URL;
@@ -1601,12 +1610,27 @@
       wfBadge();
     }
 
-    // 「待办任务」标签上的红点计数
+    // 「待办任务」标签上的红点计数。
+    // 口径唯一来自 tech-home-board.js 的 todoCount（报价与技术工艺同一份数字）：
+    // 待办 = 别人转交给我 ∪ 定向我的角色 ∪ 公共池 ∪ 我已领取未完成；
+    // 我发起还没人领取的、终态任务、以及「我名下的项目」都不算。
+    // 整段逻辑必须留在这个函数体内：本函数会被单测单独抽出去在无 window 的
+    // 沙箱里跑（批次 2），模块或登录态不可用时退回「只数还能做的」等价兜底。
     function wfBadge() {
-      const tabs = document.querySelectorAll('.list-tab');
-      tabs.forEach(t => {
+      const tasks = (typeof WF !== 'undefined' && WF && WF.tasks) || [];
+      const me = (typeof wfUser === 'function') ? wfUser() : null;
+      const board = (typeof window !== 'undefined' && window.TechHomeBoard) || null;
+      const todoCount = board ? board.todoCount : null;
+      let n = null;
+      if (typeof todoCount === 'function' && me) {
+        try { n = Number(todoCount(tasks, me)) || 0; } catch (e) { n = null; }
+      }
+      if (n === null) {
+        n = tasks.filter(t => t && t.status !== 'cancelled' && t.status !== 'completed').length;
+      }
+      document.querySelectorAll('.list-tab').forEach(t => {
         if (t.textContent.trim().indexOf('待办任务') !== 0) return;
-        const n = WF.tasks.length;
+        // 整段重写而不是追加：连续调用不得出现「待办任务 (3) (3)」。
         t.textContent = n ? '待办任务 (' + n + ')' : '待办任务';
       });
     }
@@ -1631,41 +1655,95 @@
     // 待办任务卡片：带时间 / 来源 / 步骤标记
     function taskCardHtml(t) {
       const claimed = t.status === 'claimed';
+      // 终态（已撤回 / 已完成）：留在列表里给一个明确出口，但不再挂领取入口。
+      const closed = t.status === 'cancelled' || t.status === 'completed';
+      const replacedBy = closed ? (t.replaced_by_task_no || '') : '';
       const techNew = t.task_kind === 'tech_new_product';
       // 支线任务用任务类型本身作标题，比"定向角色"有信息量得多。
       const side = { tech_new_product: '新增工艺', tech_cost: '成本测算',
                      tech_cost_return: '成本结果复核' }[t.task_kind];
       const way = side || (t.target_type === 'public' ? '公共任务'
         : t.target_type === 'role' ? '定向角色' : '指派给我');
+      // 状态胶囊显示中文状态（待领取 / 进行中 / 已完成 / 已撤回），不再一律显示成待领取。
+      const statusLabel = t.status_label || (closed ? '已撤回' : (claimed ? '进行中' : '待领取'));
+      const cta = closed ? (replacedBy ? '被新任务替代' : '已关闭')
+        : (side ? (claimed ? '继续处理' : '领取并去技术工艺')
+                : (claimed ? '继续处理' : '领取并继续'));
       return '<div class="request-card wf-task' + (techNew ? ' wf-task-technew' : '') +
+        (closed ? ' wf-task-closed' : '') +
         '" data-task="' + escH(t.task_id) + '" data-session="' + escH(t.session_id) +
         '" data-kind="' + escH(t.task_kind || 'handoff') + '">' +
         '<div class="request-card-header"><span class="request-id">' + escH(way) +
         (side && t.task_no ? ' · ' + escH(t.task_no) : '') + '</span>' +
-        '<span class="request-status ' + (claimed ? 'status-reviewing' : 'status-draft') + '">' +
-        (claimed ? '进行中' : '待领取') + '</span></div>' +
+        '<span class="request-status ' + (claimed ? 'status-reviewing' : closed ? 'status-closed' : 'status-draft') + '">' +
+        escH(statusLabel) + '</span></div>' +
         '<div class="request-title">' + escH(t.title || '未命名报价') + '</div>' +
         /* 与另外三个助手的卡片同一套骨架：标题 → 两行 request-info → footer。
            原来这里多了一排 wf-chip 和一块备注，行数随内容变，同一行里卡片高矮不一，
            长备注还会顶出边框。信息一条没少，只是改成同样会截断的单行。 */
         '<div class="request-info">客户名称：<span>' + escH(t.customer || '—') + '</span></div>' +
-        '<div class="request-info">来自 <span>' + escH(t.from_display_name || '—') +
+        '<div class="request-info request-from">来自 <span>' + escH(t.from_display_name || '—') +
         '（' + escH(t.from_role_name || '') + '）</span> · 第 ' + escH(t.next_step_no) +
         ' 步 <span>' + escH(t.next_step_name) + '</span></div>' +
-        '<div class="request-info request-note">' +
-        (t.note ? '“' + escH(t.note) + '”' : '&nbsp;') + '</div>' +
+        (replacedBy ? '<div class="request-info request-replaced">被新任务替代：<span>' +
+          escH(replacedBy) + '</span></div>' : '') +
+        (t.note ? '<div class="request-info request-note">“' + escH(t.note) + '”</div>' : '') +
         '<div class="request-footer"><div class="request-creator">' +
         '<div class="creator-avatar">' + escH(String(t.from_display_name || '?').charAt(0)) + '</div>' +
         escH(fmtTime(t.created_at)) + ' · ' + escH(t.next_role_name) + '负责</div>' +
-        '<span class="request-detail">' +
-        (side ? (claimed ? '继续处理' : '领取并去技术工艺')
-              : (claimed ? '继续处理' : '领取并继续')) + '</span></div></div>';
+        '<span class="request-detail">' + cta + '</span></div></div>';
+    }
+
+    // 技术工艺清单/历史卡片统一入口：按项目真实状态换算 stage，进入左会话+右工作台。
+    // 2.2「组装与整合」是本页唯一固定落点的阶段 —— 有 IR、还没出报告的项目打开它，
+    // 第 5 大步确认后需要返工也回到这里；所以单独写成常量，避免各处拼错。
+    const TECH_PROCESS_URL = 'tech-workbench.html?stage=process&project=';
+    function techWorkbenchUrl(stage, projectId, taskId) {
+      let url = (stage === 'process')
+        ? TECH_PROCESS_URL + encodeURIComponent(projectId || '')
+        : 'tech-workbench.html?stage=' + encodeURIComponent(stage)
+          + '&project=' + encodeURIComponent(projectId || '');
+      if (taskId) url += '&task_id=' + encodeURIComponent(taskId);
+      return url;
+    }
+    // 阶段判定的唯一实现在共享纯函数 tech-stage-restore.js：本页只取数后委托，
+    // 不再自己用「有没有 IR」猜 2.1 / 2.2。
+    function techStageFromFlow(flow, projectData, signals) {
+      const restore = window.TechStageRestore;
+      if (!restore || typeof restore.fromSignals !== 'function') return 'requirement-create';
+      return restore.fromSignals(flow || {}, projectData || {}, signals || {});
+    }
+    async function openTechProject(projectId) {
+      if (!projectId) return;
+      let stage = 'requirement-create';
+      const id = encodeURIComponent(projectId);
+      try {
+        const [flow, projectData, aggregate, costDetail] = await Promise.all([
+          cpqAuthFetch('/api/projects/' + id + '/workflow')
+            .then(r => r.ok ? r.json() : null),
+          cpqAuthFetch('/api/projects/' + id)
+            .then(r => r.ok ? r.json() : null),
+          cpqAuthFetch('/api/projects/' + id + '/summary')
+            .then(r => r.ok ? r.json() : null),
+          cpqAuthFetch('/api/projects/' + id + '/cost-review')
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null),
+        ]);
+        const steps = (aggregate && aggregate.steps) || {};
+        stage = techStageFromFlow(flow, projectData, {
+          integration: steps.integration || {},
+          cost_review: steps.cost_review || {},
+          cost_detail: costDetail || {},
+        }) || stage;
+      } catch (e) { /* 拉不到状态时落 1.1，页内可继续定位 */ }
+      try { if (window.TechHomeBoard) window.TechHomeBoard.rememberRecent(projectId); } catch (e) {}
+      window.location.href = techWorkbenchUrl(stage, projectId);
     }
 
     // 领取任务并打开对应的工作台。
-    // 「新增工艺」去的是技术工艺的任务专属页（带任务编号），不是报价工作台 —— 那条支线
-    // 要做的是图纸解析与工艺测算，不是继续填报价。专属页里任务编码、客户需求、需求文档、
-    // 图纸上传、建单一屏闭环，不再把这些塞进技术工艺首页。
+    // 「新增工艺」进入统一工作台 1.1（右侧承载带任务编号的建项流程）：那条支线要做的是
+    // 图纸解析与工艺测算，不是继续填报价；成本测算 / 成本结果复核按任务类型落到
+    // stage=cost / stage=process，任务编码、项目与 task_id 全部随 URL 带过去。
     async function wfClaimAndOpen(taskId, sessionId, claimed, kind) {
       let claim = null;
       try {
@@ -1674,14 +1752,22 @@
       } catch (e) { alert(e.message || '领取失败'); return; }
       const k = (claim && claim.task_kind) || kind;
       if (k === 'tech_new_product') {
-        window.location.href = '/tech-task.html?tech_task=' + encodeURIComponent(taskId);
+        // 新增工艺：尚无技术项目，先进统一两栏壳的 1.1，由右侧 tech-task 建项后回写 project。
+        window.location.href = 'tech-workbench.html?stage=requirement-create&task_id='
+          + encodeURIComponent(taskId);
         return;
       }
-      // 成本测算（财务经理）与成本结果复核（工艺经理）都在技术工艺里做，
-      // 项目号就是卡片的 session_id —— 直接落到对应的那一步。
-      if (k === 'tech_cost' || k === 'tech_cost_return') {
-        const page = k === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
-        window.location.href = page + '?project=' + encodeURIComponent(sessionId || '');
+      // 成本测算（财务经理）与成本结果确认（工艺经理）都在技术工艺里做，
+      // 项目号就是卡片的 session_id。后者落到第 5 大步「工艺评估报告」：工艺经理在那里
+      // 做最终工艺确认、汇总、审核和发布，不回到第 3 大步重新建参数与工艺。
+      if (k === 'tech_cost') {
+        window.location.href = 'tech-workbench.html?stage=cost&project='
+          + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
+        return;
+      }
+      if (k === 'tech_cost_return') {
+        window.location.href = 'tech-workbench.html?stage=summary&project='
+          + encodeURIComponent(sessionId || '') + '&task_id=' + encodeURIComponent(taskId);
         return;
       }
       try { sessionStorage.setItem(OPEN_KEYS.quote, sessionId); } catch (e) {}
@@ -1698,7 +1784,9 @@
     // 状态由真实进度推导：报价 7 步 / 配置 6 步；规则按是否已有内容
     function statusOf(mode, s) {
       if (mode === 'rule') return (s.turns || 0) > 0 ? ['已录入', 'status-confirmed'] : ['草稿', 'status-draft'];
-      if (mode === 'tech') { const m = { draft: ['待提交', 'status-draft'], pending_confirmation: ['待确认', 'status-reviewing'], pending_review: ['待审核', 'status-reviewing'], approved: ['已通过', 'status-confirmed'], published: ['已完成', 'status-confirmed'], rejected: ['已退回', 'status-reviewing'], uploaded: ['待图纸解析', 'status-draft'], parsed: ['图纸已解析', 'status-reviewing'], tech_record: ['工艺已录入', 'status-confirmed'] }; return m[s.status] || ['处理中', 'status-draft']; }
+      // 技术工艺：阶段文案一律来自后端 card（批次 10A 唯一口径），这里不再维护第二套
+      // status → 中文 映射表；没有 card（老数据 / 接口未升级）时给中性占位。
+      if (mode === 'tech') return techCardStage(s) || ['处理中', 'status-draft'];
       // 报价：登录后优先用卡片的流转状态（待转交 / 已转交待领取 …），比"第N步"更能说明现在卡在哪
       if (mode === 'quote') {
         const c = wfCardOf(s.id);
@@ -1720,14 +1808,35 @@
       if (st > 1) return ['第' + st + '步·' + (mode === 'quote' ? '测算中' : '配置中'), 'status-reviewing'];
       return ['草稿', 'status-draft'];
     }
+    // 技术工艺卡片的「当前阶段」与「在等谁」只认后端 card；没有就返回 null / 空串，
+    // 绝不回落到本地状态映射表（批次 10 §7.4）。
+    function techCardStage(s) {
+      const board = window.TechHomeBoard;
+      if (!board || typeof board.stageText !== 'function') return null;
+      const text = board.stageText(board.cardOf ? board.cardOf(s) : null);
+      return (text && text !== '—') ? [text, 'status-reviewing'] : null;
+    }
+    function techCardMeta(s) {
+      const board = window.TechHomeBoard;
+      if (!board || typeof board.cardOf !== 'function') return '';
+      const card = board.cardOf(s);
+      if (!card) return '';
+      const stage = board.stageText(card);
+      const wait = board.waitingText(card);
+      const anomaly = card.anomaly && card.anomaly.has_anomaly;
+      let out = (stage && stage !== '—') ? '<br>当前阶段：<span>' + escH(stage) + '</span>' : '';
+      if (wait) out += (out ? ' · ' : '<br>') + '在等：<span>' + escH(wait) + '</span>';
+      if (anomaly) out += ' · <span style="color:var(--color-red)">有异常</span>';
+      return out;
+    }
     function cardHtml(mode, s) {
-      const st = statusOf(mode, s);
+      const st = techCardStage(s) || statusOf(mode, s);
       const info = mode === 'quote'
         ? '客户名称：<span>' + escH(s.customer || '—') + '</span>'
         : mode === 'config'
           ? '项目名称：<span>' + escH(s.project || '—') + '</span>'
           : mode === 'tech'
-            ? '评估对象：<span>' + escH(s.project || s.title || '—') + '</span>'
+            ? '评估对象：<span>' + escH(s.project || s.title || '—') + '</span>' + techCardMeta(s)
             : '使用模型：<span>' + escH(s.model || '—') + '</span>';
       const title = s.title || '未命名会话';
       const date = (s.updated || s.created || '').replace('T', ' ').slice(0, 16);
@@ -1742,37 +1851,95 @@
         '<span><span class="request-detail">详情</span>' +
         (mode === 'tech' ? '' : '<button class="card-del" title="删除该记录"><i class="ti ti-trash"></i></button>') + '</span></div></div>';
     }
+    /* ===== 认证就绪：技术清单必须等 window.cpqAuth 加载并完成首次登录态刷新 =====
+       直接打开 ?assistant=tech 时，这段内联脚本先于页面末尾的 cpq_auth.js 执行，
+       window.cpqAuth 还不存在。这里显式等 cpq-auth-ready；模块缺失或超时都抛明确错误，
+       既不读裸变量 cpqAuth，也不允许无限等待，监听器和定时器用完即清。 */
+    let HOME_AUTH_WAIT = null;          // 并发调用共用同一次等待
+    const HOME_AUTH_TIMEOUT = 8000;
+    function homeAuthReady() {
+      return Boolean(window.cpqAuth && typeof window.cpqAuth.ready === 'function' && window.cpqAuth.ready());
+    }
+    function waitForHomeAuth(timeoutMs) {
+      if (homeAuthReady()) return Promise.resolve(window.cpqAuth);
+      if (HOME_AUTH_WAIT) return HOME_AUTH_WAIT;
+      HOME_AUTH_WAIT = new Promise((resolve, reject) => {
+        let timer = 0;
+        const settle = (fn, value) => {
+          document.removeEventListener('cpq-auth-ready', onReady);
+          if (timer) { clearTimeout(timer); timer = 0; }
+          HOME_AUTH_WAIT = null;
+          fn(value);
+        };
+        const onReady = () => settle(resolve, window.cpqAuth);
+        document.addEventListener('cpq-auth-ready', onReady);
+        timer = setTimeout(() => {
+          const err = new Error(window.cpqAuth
+            ? '等待登录状态刷新超时，请检查认证服务后重试'
+            : '登录模块未加载或加载失败，请刷新页面重试');
+          err.homeAuthCode = window.cpqAuth ? 'auth-timeout' : 'auth-missing';
+          settle(reject, err);
+        }, Number(timeoutMs) || HOME_AUTH_TIMEOUT);
+      });
+      return HOME_AUTH_WAIT;
+    }
+
+    /* 同一模式的并发加载合并成一次（初始化和 cpq-auth-ready 可能同时触发）；
+       本次请求结束就释放，失败不会被缓存，登录态变化后仍然重试。 */
+    const LOAD_INFLIGHT = {};
     async function loadCards(mode) {
       if (!cardGrid) return;
-      cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
-      try {
-        if (mode === 'tech') {
-          // 技术工艺 = 内嵌 process_drawing：列表来自 tech_app /api/projects（同源 8010 反向代理）
-          const arr = await fetch('/api/projects').then(r => r.json());
-          SESSIONS.tech = (Array.isArray(arr) ? arr : []).map(pp => ({
-            id: pp.project_id,
-            title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
-            project: pp.project_name || pp.device_name || pp.source_filename || '',
-            created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
-            status: pp.status || '', turns: 0,
-          }));
-        } else {
-          const r = await fetch(modeBase(mode) + '/api/sessions').then(r => r.json());
-          SESSIONS[mode] = r.sessions || [];
+      if (LOAD_INFLIGHT[mode]) return LOAD_INFLIGHT[mode];
+      const run = (async () => {
+        cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
+        SESSION_ERROR = null;
+        try {
+          if (mode === 'tech') {
+            // 技术工艺项目与历史 Drawer 同源：都走带登录凭证的 window.cpqAuth.api('/api/projects')。
+            // 时序上必须先等认证就绪，否则会抛 cpqAuth is not defined，再被误报成后端服务异常。
+            await waitForHomeAuth();
+            if (!wfUser()) throw new Error('尚未登录，请先登录后再查看技术工艺项目');
+            let data;
+            try {
+              data = await window.cpqAuth.api('/api/projects');
+            } catch (e) {
+              throw new Error('项目接口读取失败：' + ((e && e.message) || '未知错误'));
+            }
+            const arr = Array.isArray(data) ? data : (data && data.projects) || [];
+            SESSIONS.tech = arr.map(pp => ({
+              id: pp.project_id,
+              owner: pp.owner,
+              ownerName: pp.owner_display_name || pp.owner || '',
+              title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
+              project: pp.project_name || pp.device_name || pp.source_filename || '',
+              created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
+              status: pp.status || '', turns: 0,
+              card: pp.card || null,
+            }));
+            TECH_SCOPE_ROWS.mine = SESSIONS.tech;
+          } else {
+            const r = await cpqAuthFetch(modeBase(mode) + '/api/sessions').then(r => r.json());
+            SESSIONS[mode] = r.sessions || [];
+          }
+        } catch (e) {
+          SESSIONS[mode] = null;
+          SESSION_ERROR = (e && e.message) || '读取失败';
         }
-      } catch (e) {
-        SESSIONS[mode] = null;
-      }
-      if (mode === 'quote') await wfLoad();   // 报价：同时拉取我的卡片与待办任务
-      PAGE = 1;
-      renderCards();
+        if (mode === 'quote' || mode === 'tech') await wfLoad();   // 我的卡片 + 待办任务（含技术工艺支线）
+        PAGE = 1;
+        renderCards();
+      })();
+      LOAD_INFLIGHT[mode] = run;
+      try { return await run; } finally { delete LOAD_INFLIGHT[mode]; }
     }
     // 「待办任务」标签内容：未登录提示登录；已登录列出转交给我的任务卡片
     function renderTaskTab(q, info, ctrl) {
       if (info) info.textContent = '';
       if (ctrl) ctrl.innerHTML = '';
       if (!wfUser()) {
-        cardGrid.innerHTML = '<div class="cards-empty">登录后可查看同事转交给你的报价任务。' +
+        cardGrid.innerHTML = '<div class="cards-empty">' + (currentMode === 'tech'
+          ? '登录后可查看同事转交给你的任务。'
+          : '登录后可查看同事转交给你的报价任务。') +
           '<br><a href="javascript:;" onclick="cpqAuth.open()">去登录</a></div>';
         return;
       }
@@ -1780,7 +1947,9 @@
         ((t.title || '') + (t.customer || '') + (t.from_display_name || '')).toLowerCase().indexOf(q) >= 0);
       if (!list.length) {
         cardGrid.innerHTML = '<div class="cards-empty">' +
-          (q ? '没有匹配「' + escH(q) + '」的任务。' : '暂时没有分派给你的报价任务。') + '</div>';
+          (q ? '没有匹配「' + escH(q) + '」的任务。'
+             : (currentMode === 'tech' ? '暂时没有分派给你的任务。'
+                                       : '暂时没有分派给你的报价任务。')) + '</div>';
         return;
       }
       cardGrid.innerHTML = list.map(taskCardHtml).join('');
@@ -1795,29 +1964,38 @@
     function renderCards() {
       if (!cardGrid) return;
       const mode = currentMode;
-      const rows = SESSIONS[mode];
+      let rows = SESSIONS[mode];
       const info = document.querySelector('.pagination-info');
       const ctrl = document.querySelector('.pagination-controls');
       if (rows === null) {
-        cardGrid.innerHTML = '<div class="cards-empty">无法连接助手服务，读不到数据。<br>请先启动 cpq_suite_server.py 后刷新。</div>';
+        // 这里直接显示真实原因（认证未就绪 / 未登录 / 项目接口失败），
+        // 不再统一补一句「请检查后端服务」把真正的原因盖掉。
+        cardGrid.innerHTML = '<div class="cards-empty">读取' + escH(MODES[mode].tag) + '数据失败：'
+          + escH(SESSION_ERROR || '服务不可达') + '。<br>请确认登录状态后重试。</div>';
         if (info) info.textContent = '';
         if (ctrl) ctrl.innerHTML = '';
         return;
       }
       const q = ((searchInput && searchInput.value) || '').trim().toLowerCase();
       const tab = currentTab();
+      // 「包含已归档」只属于技术工艺的「全部项目」页签（## 139）。
+      if (techArchivedFilterEl) {
+        techArchivedFilterEl.hidden = !(mode === 'tech' && techEntryId(tab) === 'all');
+      }
 
-      // 报价「待办任务」：别人转交给我的卡片（登录后可用）
-      if (mode === 'quote' && tab.indexOf('待办任务') === 0) {
+      // 「待办任务」：报价与技术工艺同构 —— 都展示「有人转交给我的任务」的任务卡。
+      // 口径由 tech-home-board.js 的唯一纯函数给出（## 139），技术工艺不再改走
+      // 项目清单，所以这里不按 mode 分叉。
+      if (tab.indexOf('待办任务') === 0) {
         renderTaskTab(q, info, ctrl);
         return;
       }
 
       const mineOnly = tab.indexOf('我的') === 0;
-      // 「我的报价」严格按登录账号归属（我创建 / 我持有 / 我领取过），不再用本机 localStorage 兜底：
-      // 未登录时不展示任何单据，直接引导登录，避免"换个人登录还看到别人的单子"。
-      if (mode === 'quote' && mineOnly && !wfUser()) {
-        cardGrid.innerHTML = '<div class="cards-empty">「我的报价」按登录账号归属显示。' +
+      // 「我的报价」与「我的清单」都严格按登录账号归属：报价看创建 / 持有 / 领取，技术工艺
+      // 看项目 owner === 当前登录用户名；已登录才展示，避免"换个人登录还看到别人的单子"。
+      if ((mode === 'quote' || mode === 'tech') && mineOnly && !wfUser()) {
+        cardGrid.innerHTML = '<div class="cards-empty">「' + escH(MODES[mode].tag) + '」按登录账号归属显示。' +
           '<br><a href="javascript:;" onclick="cpqAuth.open()">请先登录</a></div>';
         if (info) info.textContent = '';
         if (ctrl) ctrl.innerHTML = '';
@@ -1825,10 +2003,29 @@
       }
       const wfMine = (mode === 'quote' && mineOnly)
         ? new Set((WF.cards || []).map(c => c.session_id)) : null;
+      // 技术工艺按项目 owner 归属（历史项目沿用后端 owner / backfill 的结果），
+      // 不用 localStorage 猜测归属。
+      const loginUser = wfUser();
+      const techOwner = (mode === 'tech' && mineOnly)
+        ? String((loginUser && (loginUser.username || loginUser.user_name)) || '') : '';
+      if (mode === 'tech') {
+        const entryId = techEntryId(tab);
+        if (entryId !== 'mine') {
+          const scoped = techScopedRows(entryId);
+          if (scoped === undefined) {
+            cardGrid.innerHTML = '<div class="cards-empty">加载中…</div>';
+            if (info) info.textContent = '';
+            if (ctrl) ctrl.innerHTML = '';
+            return;
+          }
+          rows = scoped;
+        }
+      }
       const my = mySessionSet(mode);
       const filtered = (rows || []).filter(s => {
         if (mineOnly && mode === 'quote') { if (!wfMine.has(s.id)) return false; }
-        else if (mineOnly && mode !== 'tech' && !my.has(s.id)) return false;
+        else if (mineOnly && mode === 'tech') { if (!techOwner || s.owner !== techOwner) return false; }
+        else if (mineOnly && !my.has(s.id)) return false;
         if (!q) return true;
         const hay = ((s.title || '') + ' ' + (s.customer || '') + ' ' + (s.project || '') + ' ' + quoteNo(mode, s)).toLowerCase();
         return hay.indexOf(q) >= 0;
@@ -1840,6 +2037,8 @@
         const emptyMsg = q ? '没有匹配「' + escH(q) + '」的结果。'
           : (mineOnly && mode === 'quote')
             ? '你名下还没有报价单。点右上角「' + MODES[mode].newBtn + '」开始，或到「待办任务」领取同事转交的卡片。'
+          : (mineOnly && mode === 'tech')
+            ? '你名下还没有技术工艺项目。点右上角「' + MODES[mode].newBtn + '」开始，或到「待办任务」领取同事转交的卡片。'
           : mineOnly ? '本机还没有创建过记录。点右上角「' + MODES[mode].newBtn + '」开始。'
           : '还没有数据。点右上角「' + MODES[mode].newBtn + '」创建第一条。';
         cardGrid.innerHTML = '<div class="cards-empty">' + emptyMsg + '</div>';
@@ -1849,7 +2048,7 @@
         cardGrid.querySelectorAll('.request-card').forEach((card, i) => {
           card.addEventListener('click', (e) => {
             if (e.target.closest('.card-del')) return;   // 点删除不进详情
-            if (mode === 'tech') { window.location.href = 'requirement-detail.html?project=' + encodeURIComponent(card.dataset.id); return; }
+            if (mode === 'tech') { openTechProject(card.dataset.id); return; }
             try { sessionStorage.setItem(OPEN_KEYS[mode], card.dataset.id); } catch (e2) {}
             window.location.href = encodeURI(PAGES[mode]);
           });
@@ -1882,6 +2081,7 @@
     const newQuoteBtn = document.querySelector('.new-quote-btn');
     const sendBtn = document.querySelector('.send-btn');
     const cardGrid = document.querySelector('.card-grid');
+    const techArchivedFilterEl = document.getElementById('techArchivedFilter');
     let pickedFiles = [];       // 文件名
     let pickedContents = [];    // { name, text, truncated } —— 提取出的文字，带到工作台
     let homeParsing = false;    // 附件解析进行中
@@ -1904,7 +2104,7 @@
       if (DOC_EXT_H.test(file.name)) {
         try {
           const b64 = await fileToBase64(file);
-          const r = await fetch(AGENT_URL + '/api/extract', {
+          const r = await cpqAuthFetch(AGENT_URL + '/api/extract', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: file.name, data: b64 }),
           });
@@ -1988,13 +2188,13 @@
       if (TECH_INDUSTRIES.includes(saved)) el.value = saved;
       el.addEventListener('change', () => localStorage.setItem(TECH_INDUSTRY_KEY, el.value));
     })();
-    // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入 requirement-create（图纸已关联）。
+    // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。
     async function techCreateAndGo() {
       const industry = techIndustry();
       if (!techDrawFiles.length) {
-        // 没传图纸 → 直接进入需求页现场分开上传。行业用 URL 带过去，否则这里选的
-        // 「电池」到了需求页会静默变回默认的「半导体」。
-        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
+        // 没传图纸 → 进入统一工作台 1.1，在页面内现场分开上传。行业用 URL 带过去，
+        // 否则这里选的「电池」到了需求页会静默变回默认的「半导体」。
+        window.location.href = 'tech-workbench.html?stage=requirement-create&industry=' + encodeURIComponent(industry);
         return;
       }
       const sendBtnEl = document.querySelector('.send-btn');
@@ -2005,7 +2205,7 @@
         fd.append('note', (textarea && textarea.value.trim()) || '');
         for (let i = 1; i < techDrawFiles.length; i++) fd.append('attachments', techDrawFiles[i]);
         for (const f of techReqFiles) fd.append('attachments', f);
-        const created = await fetch('/api/projects', { method: 'POST', body: fd }).then(r => r.json());
+        const created = await cpqAuthFetch('/api/projects', { method: 'POST', body: fd }).then(r => r.json());
         const pid = created && created.project_id;
         if (!pid) throw new Error('返回无 project_id');
         // 关键：建项目后立即存一版需求草稿，否则 requirement-create 里点「AI 解析」会因
@@ -2014,7 +2214,7 @@
         const reqNames = techReqFiles.map(f => f.name);
         const title = (note.split(/\n|。|；|;/)[0] || '').slice(0, 40) || '工艺评估需求单';
         try {
-          await fetch('/api/projects/' + encodeURIComponent(pid) + '/requirement', {
+          await cpqAuthFetch('/api/projects/' + encodeURIComponent(pid) + '/requirement', {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               project_id: pid, requirement_no: '', title, status: 'draft',
@@ -2030,10 +2230,10 @@
             }),
           });
         } catch (e) { /* 草稿存失败不阻断跳转：用户可在页内「保存草稿」后再解析 */ }
-        window.location.href = 'requirement-create.html?project=' + encodeURIComponent(pid);
+        window.location.href = 'tech-workbench.html?stage=requirement-create&project=' + encodeURIComponent(pid);
       } catch (e) {
         alert('技术工艺项目创建失败：' + (e && e.message || e) + '。将进入需求页，请在该页手动上传。');
-        window.location.href = 'requirement-create.html?industry=' + encodeURIComponent(industry);
+        window.location.href = 'tech-workbench.html?stage=requirement-create&industry=' + encodeURIComponent(industry);
       } finally {
         if (sendBtnEl) sendBtnEl.disabled = false;
       }
@@ -2042,6 +2242,75 @@
     function tagToMode(label) {
       if (label.includes('工艺') || label.includes('技术')) return 'tech';
       return label.includes('配置') ? 'config' : (label.includes('规则') ? 'rule' : 'quote');
+    }
+    /* ===== 批次 10 / ## 139：首页三页签（唯一口径来自 tech-home-board.js）=====
+       入口定义与卡片渲染都交给该模块；本机只记住「先给你看哪几条」，归属永远问后端。 */
+    const TECH_SCOPE_ROWS = { mine: null, all: null, allArchived: null };
+    let TECH_INCLUDE_ARCHIVED = false;   // 「全部项目」的「包含已归档」开关
+    function techEntries() {
+      const board = window.TechHomeBoard;
+      if (board && typeof board.entries === 'function') {
+        const rows = board.entries();
+        if (Array.isArray(rows) && rows.length) return rows;
+      }
+      return [{ id: 'mine', label: '我的项目', scope: 'mine', source: 'server' },
+              { id: 'todo', label: '待办任务', scope: '', source: 'tasks' },
+              { id: 'all', label: '全部项目', scope: 'all', source: 'server' }];
+    }
+    // 页签文案可能被徽标改写成「待办任务 (28)」：按「标签 + 边界（行尾 / 空白 / 括号）」
+    // 匹配，徽标只影响显示，不影响路由（## 139）。
+    function techEntryId(tab) {
+      const rows = techEntries();
+      const text = String(tab == null ? '' : tab).trim();
+      for (let i = 0; i < rows.length; i++) {
+        const label = String(rows[i].label || '');
+        if (!label) continue;
+        if (text === label) return rows[i].id;
+        if (text.indexOf(label) !== 0) continue;
+        const next = text.charAt(label.length);
+        if (!next || /\s/.test(next) || next === '(' || next === '（') return rows[i].id;
+      }
+      return 'mine';
+    }
+    function techRowOf(pp) {
+      return {
+        id: pp.project_id,
+        owner: pp.owner,
+        ownerName: pp.owner_display_name || pp.owner || '',
+        title: pp.project_name || pp.device_name || pp.source_filename || '未命名工艺项目',
+        project: pp.project_name || pp.device_name || pp.source_filename || '',
+        created: pp.created_at || '', updated: pp.updated_at || pp.created_at || '',
+        status: pp.status || '', turns: 0,
+        card: pp.card || null,
+      };
+    }
+    async function techLoadScope(scope, includeArchived) {
+      const key = includeArchived ? 'allArchived' : scope;
+      TECH_SCOPE_ROWS[key] = null;
+      try {
+        const url = '/api/projects?scope=' + encodeURIComponent(scope) +
+          (includeArchived ? '&include_archived=true' : '');
+        const data = await window.cpqAuth.api(url);
+        const arr = Array.isArray(data) ? data : (data && data.projects) || [];
+        TECH_SCOPE_ROWS[key] = arr.map(techRowOf);
+      } catch (e) {
+        TECH_SCOPE_ROWS[key] = [];
+        SESSION_ERROR = (e && e.message) || '读取失败';
+      }
+      if (currentMode === 'tech') renderCards();
+    }
+    // 返回该入口要渲染的行；undefined 表示正在加载（已排好下一次渲染）。
+    // 「全部项目」按 TECH_INCLUDE_ARCHIVED 决定是否带上已归档（后端 include_archived）。
+    function techScopedRows(entryId) {
+      if (entryId === 'all') {
+        const rows = TECH_SCOPE_ROWS[TECH_INCLUDE_ARCHIVED ? 'allArchived' : 'all'];
+        if (rows === null || rows === undefined) {
+          techLoadScope('all', TECH_INCLUDE_ARCHIVED);
+          return undefined;
+        }
+        return rows;
+      }
+      return SESSIONS.tech;
     }
     // 切换助手模式：更新高亮 + 引导语 + 输入框占位 + 「新建」按钮文案
     function setMode(mode) {
@@ -2056,8 +2325,12 @@
       if (newQuoteBtn) newQuoteBtn.innerHTML = '<i class="ti ti-plus"></i> ' + m.newBtn;
       const tabsWrap = document.querySelector('.list-tabs');
       if (tabsWrap) {
-        tabsWrap.innerHTML = m.tabs.map((tab, idx) =>
-          `<div class="list-tab${idx === m.activeTab ? ' active' : ''}">${tab}</div>`
+        // 批次 10 / ## 139：技术工艺固定三个页签（我的项目 / 待办任务 / 全部项目），
+        // 一律由唯一口径模块 tech-home-board.js 给出，其它助手沿用各自的 tabs。
+        const labels = mode === 'tech' ? techEntries().map(e => e.label) : m.tabs;
+        const activeIdx = mode === 'tech' ? Math.max(0, labels.indexOf('我的项目')) : m.activeTab;
+        tabsWrap.innerHTML = labels.map((tab, idx) =>
+          `<div class="list-tab${idx === activeIdx ? ' active' : ''}">${tab}</div>`
         ).join('');
         wireListTabs();
       }
@@ -2067,18 +2340,24 @@
       }
       applyUploadMode(mode); // tech 模式显示「图纸/需求文档」两个上传槽，其它模式用通用上传
       loadCards(mode); // 拉取该助手的真实历史会话并渲染卡片
+      syncAssistantUrl(mode); // 用 replaceState 同步 ?assistant=，刷新/分享可恢复同一模式
+    }
+    function syncAssistantUrl(mode) {
+      try {
+        const q = new URLSearchParams(location.search);
+        if (q.get('assistant') === mode) return;
+        q.set('assistant', mode);
+        history.replaceState(null, '', location.pathname + '?' + q.toString());
+      } catch (e) { /* file:// 或受限环境不报错，仅不写地址栏 */ }
     }
 
     /* 顶部标签点击 = 切换助手模式；发送 / 新建 / 卡片详情进入对应页面。
-       「技术工艺」是例外：它整套工作台（需求单/图纸解析/工艺路径/…）是内嵌的
-       tech_app，有自己的首页，所以这里不切内嵌标签，直接跳过去。
-       走 /home.html 而不是写死 127.0.0.1:8012 —— 8010 会把它反代到 tech_app，
-       同源、同一套登录，换机器或进 Docker 也不用改。 */
-    const TECH_HOME_URL = '/home.html';
+       四个助手（报价 / 配置 / 规则 / 技术工艺）共用同一个主页壳：技术工艺不再
+       整页跳转 tech_app 的独立 /home.html，而是在同一页面里 setMode('tech')，
+       保留左侧导航、页面高度、消息/设置/登录按钮与响应式布局。 */
     document.querySelectorAll('.category-tag').forEach((tag) => {
       tag.addEventListener('click', () => {
         const mode = tagToMode(tag.textContent);
-        if (mode === 'tech') { window.location.href = TECH_HOME_URL; return; }
         setMode(mode);
       });
     });
@@ -2294,10 +2573,21 @@
       searchInput.addEventListener('input', applyFilter);
       searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyFilter(); } });
     }
-    // 初始化：URL ?assistant=quote|config|rule（技术工艺首页的顶部标签跳回来时带）
-    // 可直接进入对应助手，否则默认报价助手。
-    // 注：?assistant=tech 仍能打开下面那套内嵌的技术工艺标签页，但已没有任何入口指向它 ——
-    // 技术工艺现在有自己的首页（/home.html，即 tech_app），点顶部标签直接跳过去。
+    // 技术工艺「全部项目」的「包含已归档」开关（## 139）：勾选 / 取消都重新拉一次
+    // /api/projects?scope=all[&include_archived=true]；后端参数语义不变。
+    const techIncludeArchivedEl = document.getElementById('techIncludeArchived');
+    if (techIncludeArchivedEl) {
+      techIncludeArchivedEl.addEventListener('change', function () {
+        TECH_INCLUDE_ARCHIVED = !!this.checked;
+        TECH_SCOPE_ROWS.all = null;
+        TECH_SCOPE_ROWS.allArchived = null;
+        PAGE = 1;
+        if (currentMode === 'tech') renderCards();
+      });
+    }
+    // 初始化：URL ?assistant=quote|config|rule|tech 可直接进入对应助手，否则默认报价助手。
+    // 技术工艺与其它三个助手共用同一主页壳：?assistant=tech 与点击顶部「技术工艺」
+    // 标签结果一致（都在本页 setMode('tech')，不跳转独立 /home.html）。
     (function initAssistantMode() {
       let m = 'quote';
       try { const a = new URLSearchParams(location.search).get('assistant'); if (a && MODES[a]) m = a; } catch (e) {}
@@ -2306,8 +2596,10 @@
     // 从工作台返回（含 bfcache）时刷新卡片，让新建/推进的单据立即出现
     window.addEventListener('pageshow', (e) => { if (e.persisted) loadCards(currentMode); });
     // 登录/登出后重拉「我的报价」与「待办任务」（两者都按账号归属）
-    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
-    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote') wfLoad().then(renderCards); });
+    // 登录态就绪/变化后重新拉取清单：技术工艺要从失败或未加载状态真正重试，
+    // 不能只 renderCards() 渲染旧数组。
+    document.addEventListener('cpq-auth-ready', () => { if (currentMode === 'quote' || currentMode === 'tech') loadCards(currentMode); });
+    document.addEventListener('cpq-auth-change', () => { if (currentMode === 'quote' || currentMode === 'tech') loadCards(currentMode); });
 
     /* ================= 历史记录 / 设置（与工作台一致，连同一 Agent 服务） ================= */
     const $ = (id) => document.getElementById(id);
@@ -2342,7 +2634,7 @@
       let anyOk = false;
       await Promise.all(HIST_SOURCES.map(async src => {
         try {
-          const r = await fetch(src.base + '/api/sessions').then(r => r.json());
+          const r = await cpqAuthFetch(src.base + '/api/sessions').then(r => r.json());
           anyOk = true;
           (r.sessions || []).forEach(s => sessions.push(Object.assign({}, s, { _src: src })));
         } catch (e) {}
@@ -2382,7 +2674,7 @@
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;
       try {
-        await fetch((src && src.base || AGENT_URL) + '/api/session/delete', {
+        await cpqAuthFetch((src && src.base || AGENT_URL) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -2393,7 +2685,7 @@
     async function deleteCard(mode, id, title) {
       if (!confirm('删除「' + (title || id) + '」？会话记录将被删除，此操作不可恢复。')) return;
       try {
-        await fetch(modeBase(mode) + '/api/session/delete', {
+        await cpqAuthFetch(modeBase(mode) + '/api/session/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         });
@@ -2416,7 +2708,7 @@
       sel.innerHTML = '';
       let cur = null;
       try {
-        const r = await fetch(AGENT_URL + '/api/models').then(r => r.json());
+        const r = await cpqAuthFetch(AGENT_URL + '/api/models').then(r => r.json());
         MODELS = r.models || [];
         cur = r.current;
       } catch (e) { MODELS = []; }
@@ -2437,7 +2729,7 @@
         sel.appendChild(og);
       });
       let st = {};
-      try { st = await fetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
+      try { st = await cpqAuthFetch(AGENT_URL + '/api/settings').then(r => r.json()); } catch (e) {}
       if (st.model) sel.value = st.model;
       else if (cur) sel.value = cur;
       if (st.provider === 'local') sel.value = '__local__';   // 本地模型：模型名不在选项里，选中「本地模型」项
@@ -2456,7 +2748,6 @@
       $('setThinkBudget').value = (st.thinking_budget != null ? st.thinking_budget : 8000);
       $('thinkBudgetRow').style.display = st.thinking ? '' : 'none';
       onModelChange();
-      await loadTechLlm();
     }
     function selectedModelOption() {
       const sel = $('setModel');
@@ -2486,149 +2777,9 @@
     }
     function onTempEnableChange() { $('setTemp').disabled = !$('setTempEnable').checked; }
     function onThinkingChange() { $('thinkBudgetRow').style.display = $('setThinking').checked ? '' : 'none'; }
-    // 技术工艺多模态模型 -> tech_app 运行时设置（立即生效并持久化到 tech_app/data）
-    /* ——— 技术工艺模型设置（新版 tech_app：服务端受控白名单）———
-       GET  /api/llm/settings -> {vision_model,text_model,vision_options[],text_options[],
-                                  temperature,max_tokens,thinking,providers[],editable}
-       PUT  同路径，只传要改的字段；api_key 必须连 api_key_provider 一起传。
-       两个下拉的选项**全部来自服务端**：写死在前端就会和后端白名单对不上，
-       选了一个后端不认的 id，保存时才报错。 */
-    let TECH_LLM = null;
-    function _techFillSelect(sel, options, current) {
-      if (!sel) return;
-      sel.innerHTML = '';
-      (options || []).forEach(o => {
-        const el = document.createElement('option');
-        el.value = o.id;
-        el.textContent = o.label + (o.provider ? '（' + o.provider + '）' : '');
-        sel.appendChild(el);
-      });
-      if (current) sel.value = current;
-    }
-    async function loadTechLlm() {
-      try {
-        const r = await fetch('/api/llm/settings');
-        if (!r.ok) throw new Error(r.status);
-        TECH_LLM = await r.json();
-      } catch (e) {
-        TECH_LLM = null;
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺服务未就绪，模型设置暂不可用。';
-        return;
-      }
-      const t = TECH_LLM;
-      _techFillSelect($('setTechVision'), t.vision_options, t.vision_model);
-      _techFillSelect($('setTechText'), t.text_options, t.text_model);
-      if ($('setTechTemp')) $('setTechTemp').value = (t.temperature != null ? t.temperature : '');
-      if ($('setTechMaxTokens')) $('setTechMaxTokens').value = (t.max_tokens != null ? t.max_tokens : '');
-      if ($('setTechThinking')) $('setTechThinking').checked = !!t.thinking;
-      // Key 下拉只列当前两个模型实际用到的提供商——没用到的摆出来只是噪声
-      const kp = $('setTechKeyProvider');
-      if (kp) {
-        kp.innerHTML = '';
-        (t.providers || []).forEach(p => {
-          const el = document.createElement('option');
-          el.value = p.provider;
-          el.textContent = p.label + (p.key_set ? '（已配置 ' + (p.key_hint || '') + '）' : '（未配置）');
-          kp.appendChild(el);
-        });
-      }
-      const miss = (t.providers || []).filter(p => !p.key_set).map(p => p.label);
-      if ($('techLlmMsg')) {
-        $('techLlmMsg').textContent = miss.length
-          ? ('以下提供商尚未配置 Key：' + miss.join('、'))
-          : '当前所选模型的 Key 均已配置。';
-      }
-    }
-    async function saveTechLlm() {
-      if (!TECH_LLM) { await loadTechLlm(); if (!TECH_LLM) return; }
-      const body = {};
-      const v = $('setTechVision') && $('setTechVision').value;
-      const x = $('setTechText') && $('setTechText').value;
-      if (v) body.vision_model = v;
-      if (x) body.text_model = x;
-      const tp = $('setTechTemp') ? $('setTechTemp').value.trim() : '';
-      body.temperature = tp === '' ? null : Number(tp);
-      const mt = $('setTechMaxTokens') ? $('setTechMaxTokens').value.trim() : '';
-      body.max_tokens = mt === '' ? null : Number(mt);
-      if ($('setTechThinking')) body.thinking = $('setTechThinking').checked;
-      const key = ($('setTechKey') && $('setTechKey').value.trim()) || '';
-      if (key) {
-        body.api_key = key;
-        body.api_key_provider = ($('setTechKeyProvider') && $('setTechKeyProvider').value) || '';
-        if (!body.api_key_provider) {
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '填了 Key 就必须选它属于哪个提供商。';
-          return;
-        }
-      }
-      try {
-        const r = await fetch('/api/llm/settings', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({}));
-          if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：' + (e.detail || r.status);
-          return;
-        }
-        if ($('setTechKey')) $('setTechKey').value = '';
-        TECH_LLM = await r.json().catch(() => null);
-        await loadTechLlm();          // 用服务端回的最新状态刷新（含 Key 是否已配置）
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型已保存并生效。';
-      } catch (e) {
-        if ($('techLlmMsg')) $('techLlmMsg').textContent = '技术工艺模型保存失败：技术工艺服务未就绪。';
-      }
-    }
-    /* 设置弹窗页签：助手模型（报价/配置/规则三个助手共用）与 技术工艺模型 相互独立、各自保存 */
-    let SETTINGS_TAB = 'agents';
-    function switchSettingsTab(which) {
-      SETTINGS_TAB = which === 'tech' ? 'tech' : 'agents';
-      const body = document.querySelector('#settingsModal .modal-body');
-      if (body) {
-        Array.from(body.children).forEach(ch => {
-          if (ch.id === 'setTabs') return;
-          if (ch.id === 'techVisionBox') { ch.style.display = SETTINGS_TAB === 'tech' ? '' : 'none'; return; }
-          // 助手页签内容：条件行先藏起，由 onModelChange/onThinkingChange 按原逻辑恢复
-          ch.style.display = SETTINGS_TAB === 'agents'
-            ? ((ch.id === 'localCfgBox' || ch.id === 'thinkBudgetRow') ? 'none' : '')
-            : 'none';
-        });
-      }
-      [['setTabAgents', 'agents'], ['setTabTech', 'tech']].forEach(([id, w]) => {
-        const b = $(id);
-        if (!b) return;
-        const on = SETTINGS_TAB === w;
-        b.style.background = on ? 'var(--color-primary,#4f46e5)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--text-secondary,#666)';
-      });
-      const sb = $('saveSettingsBtn');
-      if (sb) {
-        if (!sb.dataset.orig) sb.dataset.orig = sb.textContent;
-        sb.textContent = SETTINGS_TAB === 'tech' ? '保存技术工艺模型' : sb.dataset.orig;
-      }
-      if (SETTINGS_TAB === 'agents') {
-        if (typeof onModelChange === 'function') try { onModelChange(); } catch (e) {}
-        if (typeof onThinkingChange === 'function') try { onThinkingChange(); } catch (e) {}
-      }
-    }
-    // 技术工艺页签打开时，别让异步 loadModels 里的 onModelChange/onThinkingChange
-    // 把助手页签的条件行（本地网关框/思考预算）重新显示出来
-    if (typeof onModelChange === 'function') {
-      const _omcOrig = onModelChange;
-      onModelChange = function () { if (SETTINGS_TAB !== 'agents') return; return _omcOrig(); };
-    }
-    if (typeof onThinkingChange === 'function') {
-      const _otcOrig = onThinkingChange;
-      onThinkingChange = function () { if (SETTINGS_TAB !== 'agents') return; return _otcOrig(); };
-    }
-    async function saveActiveSettings() {
-      if (SETTINGS_TAB === 'tech') {
-        const m = $('techLlmMsg');
-        if (m) m.textContent = '保存中…';
-        await saveTechLlm();
-      } else {
-        await saveSettings();
-      }
-    }
-    switchSettingsTab('agents');   // 初始：显示助手页签，隐藏技术工艺页
+    /* 模型配置已统一：报价、配置、规则与技术工艺共用报价的 /api/settings 与
+       cpq_settings.json，不再有「助手模型 / 技术工艺模型」双页签；技术工艺侧只在
+       服务端保留一条兼容委托路由，前端不再直接依赖它，也不再保存第二份模型状态。 */
     async function saveSettings() {
       const o = selectedModelOption();
       const payload = {
@@ -2660,7 +2811,7 @@
       msg.textContent = '保存中…';
       $('saveSettingsBtn').disabled = true;
       try {
-        const r = await fetch(AGENT_URL + '/api/settings', {
+        const r = await cpqAuthFetch(AGENT_URL + '/api/settings', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         }).then(r => r.json());
@@ -2682,7 +2833,7 @@
     }
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
   </script>
-  <script src="cpq_auth.js"></script>
+  <script src="tech-stage-restore.js?v=tsr1"></script>
   <script src="cpq_msg.js"></script>
 </body>
 </html>

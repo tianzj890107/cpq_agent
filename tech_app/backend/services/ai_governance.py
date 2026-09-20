@@ -48,8 +48,8 @@ def _model(kind: str) -> str:
     try:
         from . import llm_client, llm_settings
 
-        return llm_client.last_used_model() or llm_settings.selected_model(
-            vision=(kind == "parse"))
+        # 兜底也要按**生效模型**（账号可覆盖）：留痕记的必须是真正会用的那一个。
+        return llm_client.last_used_model() or llm_settings.effective()["model"]
     except Exception:                                   # pragma: no cover - 配置异常
         return active_model() if kind == "parse" else active_text_model()
 

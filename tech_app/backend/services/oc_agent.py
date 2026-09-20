@@ -25,6 +25,7 @@ open_claude.repl.execute_tool，命中平台工具就自己处理，否则原样
 from __future__ import annotations
 
 import contextvars
+import ipaddress
 import json
 import os
 import sys
@@ -32,9 +33,11 @@ import threading
 import traceback
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
+from urllib.parse import urlsplit
 
 from ..config import DATA_DIR, ROOT_DIR
 from ..storage import store
+from . import llm_settings, workflow_stages
 
 OPEN_CLAUDE_DIR = Path(os.getenv("OPEN_CLAUDE_DIR", ROOT_DIR / "open-claude"))
 
@@ -55,9 +58,101 @@ class AgentUnavailable(RuntimeError):
 _ACTOR: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_actor",
                                                             default="system")
 
+# 发起本轮对话的用户令牌（CPQ SSO）。发送财务要代表用户去调一体化服务，而该请求
+# 必须带用户自己的 Bearer 令牌 —— 与 _ACTOR 同理：worker 线程拿不到请求上下文，
+# 接口层在 stream_sse 时注入。令牌只用于出站调用，绝不进日志、工具结果或异常文案。
+_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar("oc_agent_token",
+                                                             default="")
+
 
 def current_actor() -> str:
     return _ACTOR.get() or "system"
+
+
+def current_token() -> str:
+    return _TOKEN.get() or ""
+
+
+# --------------------------------------------------------------------------- #
+# 统一结构化 UI 事件 tech_ui（第 17 步）：与报价 cpq_ui 同构 —— Agent 只表达意图，
+# 右侧看板按固定结构渲染。模型不能提供 HTML / 原始结构 / 字段集 / 列定义，服务端也
+# 不拼接 HTML。每轮会话里 tech_ui 调用产生的事件先入线程本地队列，工具批次执行完后
+# 随 SSE 下发；线程隔离即会话隔离，多会话并发不会互相串。
+# --------------------------------------------------------------------------- #
+_TECH_UI_TLS = threading.local()
+
+# action 固定八项，不得增删；未知 action 一律拒绝且不入队。
+TECH_UI_ACTIONS = (
+    "focus_view", "refresh_view", "fill_fields", "select_part",
+    "show_result_actions", "show_progress", "set_stage", "request_confirmation",
+)
+# 9 个内部 stage（与前端 STAGES / TECH_UI 白名单一致）。id 一律取自后端口径表
+# workflow_stages，下面这份字面表只是它的镜像，导入时逐项校验，避免两处漂移。
+TECH_UI_STAGES = (
+    "requirement-create", "requirement-confirm", "requirement-review",
+    "drawing", "process", "cost",
+    "summary", "report-review", "report-publish",
+)
+if TECH_UI_STAGES != workflow_stages.stage_ids():
+    raise RuntimeError("TECH_UI_STAGES 与 workflow_stages.stage_ids() 不一致")
+# 看板已注册的视图白名单（app.js / assembly-integration.js / cost-review.js）。
+TECH_UI_VIEWS = (
+    "parts", "questions", "report", "evidence", "review", "files", "upload", "import3d",
+    "drawing-overview", "parts-list", "part-detail", "part-process", "part-cost",
+    "drawings", "params", "process", "assembly", "total",
+)
+
+
+def _tech_ui_events() -> list:
+    lst = getattr(_TECH_UI_TLS, "events", None)
+    if lst is None:
+        lst = _TECH_UI_TLS.events = []
+    return lst
+
+
+def _handle_tech_ui(tool_input: dict) -> str:
+    """执行 tech_ui：校验白名单、归一化后入队，给模型返回简短回执。
+
+    越界 action / stage / view 一律拒绝且不入队；服务端只归一化结构，不拼 HTML，
+    也不接受任何自由字段集、列定义或脚本 —— 模型只能表达意图，渲染交给看板。
+    """
+    if not isinstance(tool_input, dict):
+        return "tech_ui 入参必须是 JSON 对象"
+    action = str(tool_input.get("action") or "").strip()
+    if action not in TECH_UI_ACTIONS:
+        return f"未知的 tech_ui action：{action or '(空)'}，不在白名单内"
+    stage = str(tool_input.get("stage") or "").strip()
+    if stage and stage not in TECH_UI_STAGES:
+        return f"未知 stage：{stage}，不在阶段白名单内"
+    view = str(tool_input.get("view") or "").strip()
+    if view and view not in TECH_UI_VIEWS:
+        return f"未知 view：{view}，不在看板视图白名单内"
+    if action == "set_stage" and stage not in TECH_UI_STAGES:
+        return "set_stage 必须提供阶段白名单内的 stage"
+    if action == "focus_view" and view not in TECH_UI_VIEWS:
+        return "focus_view 必须提供看板视图白名单内的 view"
+    fields = tool_input.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return "fields 必须是字符串键值对象"
+    normalized: dict[str, Any] = {"action": action}
+    if stage:
+        normalized["stage"] = stage
+    if view:
+        normalized["view"] = view
+    if isinstance(fields, dict):
+        normalized["fields"] = {str(k): str(v) for k, v in fields.items()}
+    for key in ("part_id", "note", "label", "target"):
+        value = tool_input.get(key)
+        if value not in (None, ""):
+            normalized[key] = str(value)
+    _tech_ui_events().append(normalized)
+    if action == "set_stage":
+        return f"已请求切换到步骤 {stage}"
+    if action == "focus_view":
+        return f"已请求看板聚焦视图 {view}"
+    if action == "request_confirmation":
+        return "已请用户确认后再执行（等待用户点击确认）"
+    return f"已请求看板执行 {action}"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -82,7 +177,8 @@ def _import_open_claude():
         from open_claude.api import stream_message                  # noqa: WPS433
         from open_claude.config import AVAILABLE_MODELS             # noqa: WPS433
         from open_claude.profile import load_profile                # noqa: WPS433
-        from open_claude.sessions import SessionStore               # noqa: WPS433
+        from open_claude.sessions import (SessionStore, latest_session_id,  # noqa: WPS433
+                                          load_session)
         from open_claude.skills.registry import get_registry        # noqa: WPS433
     except Exception as exc:                                        # pragma: no cover - 环境相关
         raise AgentUnavailable(f"open-claude 导入失败：{exc}") from exc
@@ -90,17 +186,164 @@ def _import_open_claude():
         "repl": oc_repl, "stream_message": stream_message,
         "AVAILABLE_MODELS": AVAILABLE_MODELS, "load_profile": load_profile,
         "SessionStore": SessionStore, "get_registry": get_registry,
+        "latest_session_id": latest_session_id, "load_session": load_session,
     }
 
 
+# --------------------------------------------------------------------------- #
+# 模型路由：Agent 用哪个模型由「模型设置」决定，不是由某一家厂商的 Key 决定
+# --------------------------------------------------------------------------- #
+# 非 Anthropic 的 provider（qwen / openai / deepseek / cpq_local 本地网关）都走
+# OpenAI 兼容协议，由 open-claude 的 openai_compat 客户端发出；只有 anthropic
+# 走原生 SDK。provider 表本身来自 llm_settings.PROVIDERS —— 这里不复制第二份配置。
+OPENAI_COMPATIBLE_PROVIDERS = ("qwen", "openai", "deepseek", "cpq_local")
+
+
+def agent_route() -> dict[str, Any]:
+    """Agent 当前该用的模型路由（model/provider/base_url/native/api_key）。
+
+    唯一事实源是 llm_settings：默认语言模型是 Qwen，所以 Anthropic 的 Key
+    从来都不该是前提。
+    """
+    return llm_settings.resolve(vision=False)
+
+
+def _provider_env_names(provider: str) -> tuple[str, ...]:
+    """某个 provider 的 Key 环境变量名，取自 llm_settings 的 provider 表。"""
+    spec = llm_settings.PROVIDERS.get(provider) or {}
+    return tuple(spec.get("env") or ())
+
+
+def _route_host(base_url: str) -> str:
+    """从网关地址里取主机名；解析不出来时返回空串，绝不抛异常。"""
+    try:
+        return (urlsplit(str(base_url or "")).hostname or "").strip()
+    except Exception:                                            # pragma: no cover - 异常输入兜底
+        return ""
+
+
+def _is_loopback_host(host: str) -> bool:
+    """主机名是否指向本机（127.0.0.0/8、::1、localhost）。"""
+    name = (host or "").strip().strip("[]").lower()
+    if not name:
+        return False
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _exclude_loopback_from_proxy(base_url: str) -> None:
+    """把本机网关补进 NO_PROXY / no_proxy，避免被进程级代理拦走。
+
+    OpenAI SDK 底层的 httpx 默认 trust_env=True，建 client 时会读 HTTP_PROXY /
+    HTTPS_PROXY / ALL_PROXY。部署环境设置了企业代理、而 NO_PROXY 没有排除本机时，
+    指向 127.0.0.1 的 CPQ 本地网关请求会被送进代理，本地网关收不到请求（表现为
+    SDK 报 502）。这里只在主机确实是本机时追加缺失条目：既有的运维配置
+    （内网域名、网段）原样保留，重复调用幂等，公网域名与 "*" 一律不写入。
+    """
+    host = _route_host(base_url)
+    if not _is_loopback_host(host):
+        return
+    for env_name in ("NO_PROXY", "no_proxy"):
+        entries = [part.strip() for part in os.environ.get(env_name, "").split(",")]
+        kept = [part for part in entries if part]
+        if any(part.strip("[]").lower() == host.strip("[]").lower() for part in kept):
+            continue
+        os.environ[env_name] = ",".join([*kept, host])
+
+
+def sync_route_environment(route: dict[str, Any]) -> None:
+    """把当前路由（模型 / provider / Key / 网关）同步给 open-claude。
+
+    open-claude 自己按模型推断 provider，并从该 provider 的 Key 环境变量与
+    `<PROVIDER>_BASE_URL` 读连接信息，所以这里只做搬运：
+
+      · CLAUDE_MODEL          让 open-claude 选中同一个模型，而不是回到默认 Claude；
+      · provider 的 Key       官方 provider 各写自己的环境变量；
+      · 自定义网关            CPQ 注入的 cpq_local 这类 open-claude 不认识的 provider
+                              在运行时按 llm_settings 的表注册（不改包内文件）。
+
+    路由变化后必须重建 client 才能生效，见 ProjectAgent.apply/_rebuild_client。
+    任何情况下都不打印、不返回 Key。
+    """
+    provider = str(route["provider"] or "").strip()
+    api_key = str(route["api_key"] or "").strip()
+    model = str(route.get("model") or "").strip()
+    base_url = str(route["base_url"] or "").strip()
+    # 必须早于任何 client 构造：httpx 只在建 client 时读一次代理环境变量。
+    _exclude_loopback_from_proxy(base_url)
+    if model:
+        os.environ["CLAUDE_MODEL"] = model
+    if provider:
+        for env_name in _provider_env_names(provider):
+            if api_key:
+                os.environ[env_name] = api_key
+        if base_url:
+            # open-claude 的既有约定：<PROVIDER>_BASE_URL 覆盖该 provider 的网关。
+            # 只在部署未显式配置时兜底写入：运维用 QWEN_BASE_URL 指了业务空间专属
+            # 域名（见 .env.example）时不能被默认网关覆盖回去。
+            os.environ.setdefault(f"{provider.upper()}_BASE_URL", base_url)
+    _register_runtime_provider(route)
+
+
+def _register_runtime_provider(route: dict[str, Any]) -> None:
+    """把 open-claude 不认识的 provider（CPQ 本地网关）注册进它的 provider 表。
+
+    官方 provider 已经内置，只补环境变量即可；只有 base_url 由外部注入的
+    cpq_local 需要登记 provider 与「模型 → provider」映射，否则模型名会被前缀
+    推断成别的厂商，请求就发错了地方。
+    """
+    provider = str(route["provider"] or "").strip()
+    model = str(route.get("model") or "").strip()
+    if not provider or not model:
+        return
+    try:
+        _ensure_path()
+        from open_claude import config as oc_config               # noqa: WPS433
+    except Exception:                                            # pragma: no cover - 环境相关
+        return
+    providers = getattr(oc_config, "PROVIDERS", None)
+    if isinstance(providers, dict) and provider not in providers:
+        # 只有 OpenAI 兼容的自定义网关才能按这套表接进来；原生 SDK 的 provider
+        # 不在这里伪造，否则请求会被发到不存在的协议上。
+        if provider not in OPENAI_COMPATIBLE_PROVIDERS:
+            return
+        providers[provider] = {
+            "label": str(route.get("provider_label") or provider),
+            "env": list(_provider_env_names(provider)),
+            "base_url": str(route["base_url"] or "").strip() or None,
+        }
+    mapping = getattr(oc_config, "_MODEL_PROVIDERS", None)
+    if isinstance(mapping, dict):
+        mapping[model] = provider
+
+
 def available() -> tuple[bool, str]:
-    """探测 Agent 是否可用。用于页面加载时给出明确原因而不是静默失败。"""
-    if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-        return (False, "未配置 ANTHROPIC_API_KEY，Agent 无法启动")
+    """探测 Agent 是否可用：按**当前所选语言模型**的 provider 与 Key 判断。
+
+    默认语言模型是 Qwen，因此只配了 Qwen Key 时 Agent 必须可用；只有真正选中
+    Anthropic 模型时，缺 Anthropic Key 才是原因。错误信息只报当前 provider，
+    不含任何 Key 内容。
+    """
+    try:
+        route = llm_settings.resolve(vision=False)
+    except Exception as exc:                                     # pragma: no cover - 配置损坏
+        return (False, f"读取模型设置失败：{exc}")
+    model = str(route.get("model") or "").strip()
+    if not model:
+        return (False, "未配置语言模型，Agent 无法启动")
+    if not str(route["api_key"] or "").strip():
+        label = str(route.get("provider_label") or route["provider"] or "当前模型")
+        gap = " " if label.isascii() else ""
+        return (False, f"未配置{gap}{label} API Key，Agent 无法启动")
     try:
         _import_open_claude()
     except AgentUnavailable as exc:
         return (False, str(exc))
+    sync_route_environment(route)
     return (True, "")
 
 
@@ -212,6 +455,26 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         },
                         "required": ["feature_index", "field", "value"],
                     },
+                },
+                "base_feature": {
+                    "type": "object",
+                    "description": "为没有可建模特征的零件建立简化基体，或把非法基体换成合法基体。"
+                                   "**用户没有给出全部尺寸时不得调用**：绝对不得编造尺寸、"
+                                   "不得按常识或型号推测、也不得填默认值，必须先把需要哪些尺寸"
+                                   "问清楚（例如「这个零件要按长方体简化吗？需要长、宽、高三个"
+                                   "尺寸」），等用户明确回答后再调用。"
+                                   "只允许 plate / box / cylinder 三种模板与它们的固定字段，"
+                                   "不得自行增加字段。",
+                    "properties": {
+                        "type": {"type": "string", "enum": ["plate", "box", "cylinder"],
+                                 "description": "基体类型：plate 板件 / box 长方体 / cylinder 圆柱体"},
+                        "length": {"type": "number", "description": "长（plate / box）mm"},
+                        "width": {"type": "number", "description": "宽（plate / box）mm"},
+                        "thickness": {"type": "number", "description": "厚（plate）mm"},
+                        "height": {"type": "number", "description": "高（box / cylinder）mm"},
+                        "diameter": {"type": "number", "description": "直径（cylinder）mm"},
+                    },
+                    "required": ["type"],
                 },
                 "reason": {"type": "string", "description": "本次修改的依据，会写进版本说明"},
             },
@@ -330,6 +593,603 @@ PLATFORM_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "GetRequirementDraft",
+        "description": "读取当前项目 1.1「创建需求」的草稿：需求单号、标题、状态（draft / "
+                       "pending_confirmation / …）、已填字段、附件角色与上一次 AI 解析摘要。"
+                       "回答任何与需求单内容有关的问题前都应先调用它。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateRequirementFields",
+        "description": "补充 1.1 需求单的**空白**字段。**这是会写业务数据的工具**，只在用户"
+                       "明确要求「把…填上 / 补充…」并给出具体值时调用。\n"
+                       "规则：只补空白字段，已有内容（人工或 AI 填写的）一律不覆盖；客户信用等级、"
+                       "报价溯源等受限字段不允许修改；需求一旦进入确认流程就不能再改。\n"
+                       "字段 key 必须来自 GetRequirementDraft 的字段清单；改写会留审计，"
+                       "写完后刷新页面即可看到新值。用户只是问「该怎么填」时不要调用本工具。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "object",
+                    "description": "要补充的字段：{字段 key: 值}；只填当前为空的字段",
+                    "additionalProperties": {"type": "string"},
+                },
+                "reason": {"type": "string", "description": "补充依据，会写进审计"},
+            },
+            "required": ["fields"],
+        },
+    },
+    {
+        "name": "AttachRequirementFiles",
+        "description": "登记 / 读取 1.1 需求单的附件清单（技术规格说明书、3D 模型、BOM 等）。"
+                       "附件正文只能由页面上传接口保存，本工具**不上传文件**；传入已有的文件名"
+                       "与角色时，只把该附件关联到对应区域并留审计。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "已在项目附件里的文件名；留空则只读取清单"},
+                "role": {"type": "string",
+                         "description": "附件角色，如 technical_spec / model_3d / bom_assembly"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ExtractRequirement",
+        "description": "请求平台对已上传的技术文档执行一键解析，自动补齐 1.1 需求单字段并生成"
+                       "AI 推荐默认值。用户说「解析需求」「读一下技术资料」「自动填需求单」时调用。\n"
+                       "注意：本工具只向界面发出请求，真正的提取由平台既有流水线执行并在界面回显"
+                       "进度；调用后不要虚构字段或推荐值，等结果写回后再用 GetRequirementAiFill 回答。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "触发解析的简短理由"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "GetRequirementTask",
+        "description": "读取需求解析任务的真实状态与进度日志。传入 task_id 查单个任务；"
+                       "留空返回本项目最近的需求相关任务。用户问「解析到哪了」「好了没有」时调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string", "description": "任务 id；留空列出最近的解析任务"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "GetRequirementAiFill",
+        "description": "读取 1.1 上一次 AI 解析的结论：AI 从技术资料带入的字段、AI 推荐的"
+                       "默认值及置信度、仍缺失的必填项与待澄清问题。回答「AI 填了什么」「还缺什么」"
+                       "「推荐值靠不靠谱」时调用；没有解析结果时如实说明。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SubmitRequirementConfirmation",
+        "description": "把 1.1 需求草稿提交到 1.2 待确认。用户明确说「提交需求」「提交确认」时"
+                       "调用；只允许从 draft / rejected 进入 pending_confirmation。\n"
+                       "提交后仍由人工在 1.2 确认或退回，本工具不代替审批；权限不足或状态不对时"
+                       "如实返回失败原因，不要谎报已提交。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"comment": {"type": "string", "description": "提交说明，会写进需求单留痕"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "GetRequirementPrecheck",
+        "description": "读取 1.2 确认页的**确定性**完整性检查结果：每个区块的 ok / need_info 与"
+                       "整体结论（generated_note）。回答「这单能不能确认」「还缺什么」时先调用它；"
+                       "结果由既有规则算出，不经模型。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetRequirementClarifications",
+        "description": "读取 1.2 待澄清问题：把同一份确定性预检里 status == need_info 的条目"
+                       "投影成问题清单。回答「还有哪些要补充」时调用；不要自己编造问题。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveRequirementConfirmationNote",
+        "description": "把确认意见**带进 1.2 看板**的提交意见框（#confirmationNote），与 RequestParse"
+                       " 同模式：只向界面发请求，本工具**不落盘**。真正写入需求单由用户点击通过 / "
+                       "驳回时携带的 comment 完成。用户说「把意见填上」「起草确认意见」时调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"note": {"type": "string", "description": "要带入确认意见框的文本"}},
+            "required": ["note"],
+        },
+    },
+    {
+        "name": "ConfirmRequirement",
+        "description": "通过 1.2 需求确认（pending_confirmation → pending_review）。"
+                       "**必须由用户明确确认**：只有用户在本轮明确说「确认通过」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不能代替人工审批。"
+                       "需要工艺技术经理或管理员权限，状态不符会如实返回失败原因。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认通过；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "确认意见，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "ReturnRequirementToDraft",
+        "description": "把 1.2 需求退回草稿（pending_confirmation → draft），供创建人补充后重新提交。"
+                       "**必须由用户明确确认**：只有用户明确说「退回 / 驳回」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，不得静默退回。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "GetRequirementReviewMaterials",
+        "description": "读取 1.3 审核材料：需求单关键字段、原始图纸与附件清单、确认信息、"
+                       "确定性预检与历史留痕。回答「审核要看哪些材料」时调用；只读取，不改状态。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetRequirementReviewSummary",
+        "description": "生成 1.3 审核摘要：由同一份确定性预检与关键字段汇总出 summary / items / "
+                       "need_info / decision_options，**不调用模型、不编造结论**。用户问「这份需求能不能"
+                       "过审」「审核结论建议」时调用。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveRequirementReviewNote",
+        "description": "把审核意见与审核结果**带进 1.3 看板**（选中审核结果单选 + 写入 #reviewText），"
+                       "与 RequestParse 同模式：只向界面发请求，本工具**不落盘**。真正写入需求单由"
+                       "用户点击提交审核时完成。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision": {"type": "string", "enum": ["approve", "reject", ""],
+                             "description": "审核结果：approve 通过 / reject 退回 / 留空只带入意见"},
+                "note": {"type": "string", "description": "要带入审核说明的文本"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ApproveRequirementReview",
+        "description": "审核通过 1.3 需求（pending_review → approved）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：只有用户明确说「审核通过」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不代替人工审批。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核通过；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "审核意见，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "RejectRequirementReview",
+        "description": "审核退回 1.3 需求（pending_review → rejected）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：只有用户明确说「退回 / 驳回」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，不得静默退回。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核退回；必须是 true 才执行流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进需求单留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "UploadIntegrationDrawing",
+        "description": "请用户上传 2.2 整合图纸（装配图 / 爆炸图 / 接线图）。与 RequestParse 同模式："
+                       "本工具**只发请求、不接收二进制、不落盘**——Agent 无法替用户上传文件，"
+                       "请告诉用户在右侧看板的「整合图纸」页签上传。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "为什么要补图纸"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ConfirmIntegrationParams",
+        "description": "确认 2.2「参数推荐」这一环节（整机参数、连接关系与 BOM 已由人核对）。"
+                       "复用看板同一个 POST /integration/params/confirm 实现，只改状态、不重算；"
+                       "执行前应向用户复述待确认要点，得到同意后再调用。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ConfirmIntegrationProcess",
+        "description": "确认 2.2「组装工艺」。这是把任务推给财务的闸门：确认之后才允许发送财务。"
+                       "复用看板同一个 POST /integration/process/confirm 实现，只改状态、不重算。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SendIntegrationToFinance",
+        "description": "把 2.2 定稿的工艺与整机参数发送给财务做成本测算（对外动作）。"
+                       "**必须由用户明确确认**：只有用户明确说「发送 / 交给财务」后，才能带 "
+                       "confirmed=true 调用；否则先返回回执征求意见，绝不代替用户触发外呼。"
+                       "既有闸门不变：参数推荐与组装工艺都必须已确认才能发送。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发送财务；必须是 true 才执行外呼"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "note": {"type": "string", "description": "给财务的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "GetCostReviewState",
+        "description": "读取 2.3 成本测算的状态：评审是否已确认、零件 / 整机成本的完成与缺口"
+                       "（counts）、零件小计与整机合计、成品编码情况。只读；数据复用既有 "
+                       "services.cost_review，成本数字请让用户看右侧 2.3 看板。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ListCostReviewParts",
+        "description": "列出 2.3 的逐零件成本与整机行（每行的单件成本、用量、小计、是否已算）。"
+                       "只读；回答「哪个零件花了多少」时调用，不要让模型自己算，也不要编造数字。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "RunCostReviewPart",
+        "description": "测算单个零件的成本。**本工具不自己测算**：只向界面发出请求，由右侧 2.3 看板"
+                       "调既有接口跑平台流水线；参数要与看板一致，进度与结果都在看板。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "part_id": {"type": "string", "description": "零件编号，先用 ListCostReviewParts 确认"},
+                "quantity": {"type": "integer", "description": "核算批量（默认 1）"},
+                "reason": {"type": "string", "description": "为什么要重算"},
+            },
+            "required": ["part_id"],
+        },
+    },
+    {
+        "name": "RunCostReviewAssembly",
+        "description": "测算整机（组装）成本。**本工具不自己测算**：只向界面发出请求，由右侧 2.3 看板"
+                       "调既有接口执行；整机成本依赖各零件的单件成本，请先确保零件算齐。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "为什么要重算"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "RunCostReviewAll",
+        "description": "逐件测算并汇总（先算所有缺成本的零件，再算整机）。**本工具不自己测算**："
+                       "只向界面发出请求，由右侧 2.3 看板跑既有流水线；本步不联网。",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "description": "为什么要重算"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "UpdateCostReviewNote",
+        "description": "保存财务的补充说明与核算批量（会作为下一次测算的输入）。复用看板 "
+                       "PUT /cost-review 的同一份实现；只改说明与批量，不改成本数字、不改状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "成本说明 / 测算口径备注"},
+                "quantity": {"type": "integer", "description": "核算批量（默认 1）"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ConfirmCostReview",
+        "description": "确认 2.3 的本步成本。**必须由用户明确确认**：确认后写入数据库 / 发送报价 / "
+                       "退回工艺都以这份数为准；未 confirmed=true 时只返回回执，绝不改状态。"
+                       "沿用既有闸门：零件没算齐、整机没算、或哪一项是 0 元都不放行。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认本步成本；必须是 true 才生效"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "WriteCostReviewMaterial",
+        "description": "去向①：把确认过的成本写入业务主数据（新建成品编码 + 物料成本配置），"
+                       "属于对外写库动作。**必须由用户明确确认**：未 confirmed=true 只回执，绝不写库。"
+                       "需先确认成本。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认写入数据库；必须是 true 才写库"},
+                "product_name": {"type": "string", "description": "成品名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "ReturnCostReviewToProcess",
+        "description": "去向③：把成本结果退回工艺经理复核（成本高在工序或用量上时用它）。"
+                       "属于对外动作，**必须由用户明确确认**：未 confirmed=true 只回执，绝不退回。"
+                       "沿用既有口径：不要求先确认成本。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回工艺；必须是 true 才退回"},
+                "note": {"type": "string", "description": "退回说明，会随任务发给工艺经理"},
+                "target_user_id": {"type": "string", "description": "指定接收人，留空按角色派发"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "SendCostReviewToQuote",
+        "description": "去向②：把成本与整机参数发送至报价（卡片推进到定价步骤），属于对外动作。"
+                       "**必须由用户明确确认**：未 confirmed=true 只回执，绝不发送。"
+                       "沿用既有闸门：必须已确认成本且报价必填参数齐全。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发送报价；必须是 true 才发送"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+                "note": {"type": "string", "description": "给报价侧的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    # ---- 3.1 汇总报告 ----
+    {
+        "name": "GetSummaryData",
+        "description": "读取 3.1 汇总数据（各环节结论，与「汇总结果」页面同一份）。只读，"
+                       "不触发模型汇总、不落盘。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetProcessReport",
+        "description": "准备报告：读取当前报告草稿与送审就绪缺口（确定性检查，不调模型）。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GenerateProcessReportDraft",
+        "description": "生成 3.1 报告草稿（与「生成报告草稿」按钮同一实现），不改单据号与留痕。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateProcessReportFields",
+        "description": "更新报告字段。只接受白名单字段：title / overview / highlights / risks / "
+                       "conclusion / distribution_scope / distribution_cc；单据号、编制人、审核与"
+                       "发布留痕、版本号一律服务端维护，不能通过本工具改写。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "报告标题"},
+                "overview": {"type": "string", "description": "概述"},
+                "highlights": {"type": "array", "items": {"type": "string"}, "description": "亮点"},
+                "risks": {"type": "array", "items": {"type": "string"}, "description": "风险"},
+                "conclusion": {"type": "string", "description": "总结论"},
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "SaveProcessReportDistribution",
+        "description": "保存 3.1 发布范围与抄送对象（与既有发布设置同一实现），不改变审核状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "SubmitProcessReportReview",
+        "description": "把 3.1 报告提交审核（draft/rejected → in_review）。**必须由用户明确确认**："
+                       "只有用户明确说「提交审核」后才能带 confirmed=true 调用；未确认只回执，"
+                       "绝不改状态。报告需先满足送审就绪检查。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认送审；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "送审说明，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    # ---- 3.2 审核报告 ----
+    {
+        "name": "GetProcessReportReview",
+        "description": "读取 3.2 报告与版本链（与审核页面同一份），只读、不改状态。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "GetReportReviewSummary",
+        "description": "输出 3.2 确定性审核摘要：报告材料、评估项、来源快照一致性与待补充项。"
+                       "不调模型、不编造结论。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "SaveReportReviewNote",
+        "description": "把审核意见带入 3.2 看板表单（仅回填，不落盘、不改状态、不提交）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "decision": {"type": "string", "enum": ["approve", "reject", ""],
+                             "description": "倾向的审核结论，留空表示仅记录意见"},
+                "note": {"type": "string", "description": "审核意见"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ApproveProcessReport",
+        "description": "审核通过 3.2 报告（in_review → approved）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，绝不代替人工审批。"
+                       "通过仍受内容检查与来源快照一致性约束。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认审核通过；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "审核意见，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "RejectProcessReport",
+        "description": "退回 3.2 报告汇总修改（in_review → rejected）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，不得静默退回。"
+                       "退回不受内容检查约束。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认退回；必须是 true 才流转"},
+                "comment": {"type": "string", "description": "退回原因，会写进报告留痕"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    # ---- 3.3 发布并回传报价 ----
+    {
+        "name": "GetReportPublishState",
+        "description": "读取 3.3 发布状态与发布前置缺口（报告状态、是否 approved / published）。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ListReportPublishRecipients",
+        "description": "读取 3.3 发布对象与发布范围 / 抄送（与发布设置同一份）。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "UpdateReportDistribution",
+        "description": "更新 3.3 发布范围与抄送对象（与既有发布设置同一实现），不改变发布状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "distribution_scope": {"type": "string", "description": "发布范围"},
+                "distribution_cc": {"type": "string", "description": "抄送对象"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "PublishProcessReport",
+        "description": "正式发布 3.3 报告（approved → published）。**必须由用户明确确认**，"
+                       "且需工艺技术总监或管理员权限：未 confirmed=true 只回执，绝不发布。"
+                       "保留「审核通过(approved)」状态闸门、来源快照校验与发布对象非空校验。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认发布；必须是 true 才发布"},
+                "comment": {"type": "string", "description": "发布说明，会写进报告留痕"},
+                "recipients": {
+                    "type": "array",
+                    "description": "正式发布对象；至少一项，每项含 name / organization / channel",
+                    "items": {"type": "object"},
+                },
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "SendReportToQuote",
+        "description": "把 3.3 报告回传报价（复用既有回传正文）。**必须由用户明确确认**："
+                       "未 confirmed=true 只回执，绝不外呼；回传要求报告已发布(published)。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认回传报价；必须是 true 才外呼"},
+                "product_name": {"type": "string", "description": "成品 / 任务名称，留空取整机名称"},
+                "spec": {"type": "string", "description": "规格"},
+                "note": {"type": "string", "description": "给报价侧的说明"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "CreateReportNewVersion",
+        "description": "基于已发布报告创建下一版草稿。**必须由用户明确确认**，且需工艺技术经理"
+                       "或管理员权限：未 confirmed=true 只回执，绝不新建版本；只有已正式发布的报告才允许新建下一版。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "confirmed": {"type": "boolean",
+                              "description": "用户是否已明确确认新建版本；必须是 true 才执行"},
+            },
+            "required": ["confirmed"],
+        },
+    },
+    {
+        "name": "GetReportPublishResult",
+        "description": "读取 3.3 发布结果：报告、版本链与（如已回传）报价回执。只读。",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "tech_ui",
+        "description": (
+            "驱动技术工艺右侧看板的结构化界面动作。你只表达意图，看板按固定模板渲染："
+            "聚焦/刷新视图、回填白名单字段、在看板选中零件、展示结果入口、展示任务进度、"
+            "切换九个步骤、请求用户确认后再执行。本工具不接受任何自由 HTML、原始结构、"
+            "自定义字段集或列定义，服务端也不会据此拼接界面；未知 action / stage / view "
+            "会被拒绝且不产生任何界面动作。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["focus_view", "refresh_view", "fill_fields", "select_part",
+                             "show_result_actions", "show_progress", "set_stage",
+                             "request_confirmation"],
+                    "description": (
+                        "focus_view=聚焦右侧看板的某个视图；refresh_view=让看板重新拉取并渲染；"
+                        "fill_fields=把白名单字段回填当前步骤表单；select_part=在看板内选中/打开零件；"
+                        "show_result_actions=展示结果入口；show_progress=展示任务执行进度；"
+                        "set_stage=切换到九个步骤之一；request_confirmation=请求用户明确确认后再执行 target"
+                    ),
+                },
+                "stage": {"type": "string",
+                          "description": "九个 stage id 之一：requirement-create / requirement-confirm / requirement-review / drawing / process / cost / summary / report-review / report-publish"},
+                "view": {"type": "string",
+                         "description": "看板视图白名单内的视图名（focus_view / refresh_view 用）"},
+                "fields": {"type": "object", "additionalProperties": {"type": "string"},
+                           "description": "回填字段：键值均为字符串（fill_fields 用）"},
+                "part_id": {"type": "string", "description": "零件 id（select_part 用）"},
+                "note": {"type": "string", "description": "展示给用户的简短说明"},
+                "label": {"type": "string", "description": "按钮 / 入口文案"},
+                "target": {"type": "string",
+                           "description": "request_confirmation 中，用户确认后要执行的动作名"},
+            },
+            "required": ["action"],
+        },
+    },
 ]
 PLATFORM_TOOL_NAMES = {schema["name"] for schema in PLATFORM_TOOL_SCHEMAS}
 
@@ -342,6 +1202,49 @@ UI_ACTION_TOOLS = {
     "UpdateIntegrationParams": "refresh-integration",
     "UpdateIntegrationProcess": "refresh-integration",
     "RequestIntegrationStep": "integration-step",
+    # 2.2：整合图纸上传请用户在看板完成；参数 / 工序确认后刷新看板确认态。
+    # 发送财务是对外动作，只映射成「刷新看板」，绝不映射成 tool_use 阶段就自动执行的动作。
+    "UploadIntegrationDrawing": "open-integration-drawings",
+    "ConfirmIntegrationParams": "refresh-integration",
+    "ConfirmIntegrationProcess": "refresh-integration",
+    "SendIntegrationToFinance": "refresh-integration",
+    # 2.3：测算类只发请求，由看板跑既有 cost-review 流水线；编辑说明与确认 / 写库 /
+    # 退回 / 发报价都只刷新看板 —— 绝不映射成 tool_use 阶段就自动执行的动作，
+    # 否则父壳会在用户确认之前就把成本写进数据库或发去报价。
+    "RunCostReviewPart": "cost-step",
+    "RunCostReviewAssembly": "cost-step",
+    "RunCostReviewAll": "cost-step",
+    "UpdateCostReviewNote": "refresh-cost-review",
+    "ConfirmCostReview": "refresh-cost-review",
+    "WriteCostReviewMaterial": "refresh-cost-review",
+    "ReturnCostReviewToProcess": "refresh-cost-review",
+    "SendCostReviewToQuote": "refresh-cost-review",
+    # 1.1：一键解析与字段补充都由右侧看板执行（Agent 只发请求），补完刷新 1.1 表单。
+    "ExtractRequirement": "extract-requirement",
+    "UpdateRequirementFields": "refresh-requirement",
+    "AttachRequirementFiles": "refresh-requirement",
+    # 1.2 确认需求：确认意见带入看板；通过 / 退回有显式确认门，绝不能映射成
+    # 会在 tool_use 阶段就自动执行的动作（否则父壳会在工具跑之前绕过确认门直接审批）。
+    "SaveRequirementConfirmationNote": "fill-confirmation-note",
+    "ConfirmRequirement": "refresh-requirement",
+    "ReturnRequirementToDraft": "refresh-requirement",
+    # 1.3 审核需求：审核意见带入看板；通过 / 退回同样只刷新，不自动审批。
+    "SaveRequirementReviewNote": "fill-review-note",
+    "ApproveRequirementReview": "refresh-requirement",
+    "RejectRequirementReview": "refresh-requirement",
+    # 3.1 / 3.2 / 3.3：报告类写入动作统一只刷新右侧看板；送审 / 审核 / 发布 / 回传 /
+    # 新建版本都有显式确认门，绝不映射成 tool_use 阶段就自动执行的动作。
+    "GenerateProcessReportDraft": "refresh-report",
+    "UpdateProcessReportFields": "refresh-report",
+    "SaveProcessReportDistribution": "refresh-report",
+    "SubmitProcessReportReview": "refresh-report",
+    "SaveReportReviewNote": "fill-report-review-note",
+    "ApproveProcessReport": "refresh-report",
+    "RejectProcessReport": "refresh-report",
+    "UpdateReportDistribution": "refresh-report",
+    "PublishProcessReport": "refresh-report",
+    "SendReportToQuote": "refresh-report",
+    "CreateReportNewVersion": "refresh-report",
 }
 
 
@@ -408,7 +1311,954 @@ def _run_platform_tool(name: str, params: dict, cwd: str) -> str:
             "note": "已向界面发出请求。生成由平台流水线异步执行，进度与结果显示在对话与"
                     "中间面板；请勿自行编造参数、工序或金额。",
         }, ensure_ascii=False)
+    if name == "UploadIntegrationDrawing":
+        return json.dumps({
+            "requested": True,
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出上传请求。Agent 无法替用户上传文件，请在右侧看板的"
+                    "「整合图纸」页签上传装配图 / 爆炸图 / 接线图；上传后看板会刷新图纸清单。",
+        }, ensure_ascii=False)
+    if name == "ConfirmIntegrationParams":
+        return json.dumps(_confirm_integration_params(project_id),
+                          ensure_ascii=False, indent=2)
+    if name == "ConfirmIntegrationProcess":
+        return json.dumps(_confirm_integration_process(project_id),
+                          ensure_ascii=False, indent=2)
+    if name == "SendIntegrationToFinance":
+        # 显式确认门：没有用户明确的确认，绝不触发对外调用。
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-to-finance",
+                "status": _integration_status(project_id),
+                "note": "发送财务会把任务推给财务经理做成本测算，属于对外动作，必须由用户明确确认。"
+                        "请先复述整机参数与组装工艺的确认状态，得到同意后再带 confirmed=true 重新调用；"
+                        "参数推荐与组装工艺都必须先确认，否则财务算出来的成本没有依据。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _send_integration_to_finance(project_id, str(params.get("product_name") or ""),
+                                         str(params.get("note") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "GetCostReviewState":
+        from . import cost_review
+        ir, plan, review = _cost_review_context(project_id)
+        data = cost_review.summarize(project_id, ir, plan)
+        written = plan.material_writes[-1] if plan.material_writes else None
+        return json.dumps({
+            "project_id": project_id,
+            "confirmed": bool(review.confirmed),
+            "review": review.model_dump(),
+            "counts": data["counts"],
+            "parts_total": data["parts_total"],
+            "final": data["final"],
+            "quantity": plan.quantity,
+            "material": ({"number": written.number, "name": written.name,
+                          "unit_price": written.material_unit_price} if written else None),
+            "note": "数据来自既有 services.cost_review；具体数字请在右侧 2.3 看板查看。",
+        }, ensure_ascii=False, indent=2)
+    if name == "ListCostReviewParts":
+        from . import cost_review
+        ir, plan, review = _cost_review_context(project_id)
+        data = cost_review.summarize(project_id, ir, plan)
+        return json.dumps({
+            "project_id": project_id,
+            "counts": data["counts"],
+            "parts": data["parts"],
+            "assembly": data.get("assembly"),
+            "parts_total": data["parts_total"],
+            "final": data["final"],
+            "note": "逐零件成本来自既有 services.cost_review，不要自行推算；"
+                    "明细在右侧 2.3 看板。",
+        }, ensure_ascii=False, indent=2)
+    if name == "RunCostReviewPart":
+        return json.dumps({
+            "requested": True,
+            "step": "part",
+            "part_id": str(params.get("part_id") or ""),
+            "quantity": int(params.get("quantity") or 1),
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。零件成本由右侧 2.3 看板调既有接口测算，本步不联网；"
+                    "请勿自行编造成本数字。",
+        }, ensure_ascii=False)
+    if name == "RunCostReviewAssembly":
+        return json.dumps({
+            "requested": True,
+            "step": "assembly",
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。整机成本由右侧 2.3 看板调既有接口测算；"
+                    "它依赖各零件的单件成本，请先确保零件算齐。",
+        }, ensure_ascii=False)
+    if name == "RunCostReviewAll":
+        return json.dumps({
+            "requested": True,
+            "step": "all",
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出请求。逐件 + 整机测算由右侧 2.3 看板跑既有流水线；"
+                    "进度与结果显示在对话与看板。",
+        }, ensure_ascii=False)
+    if name == "UpdateCostReviewNote":
+        return json.dumps(_update_cost_review_note(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "ConfirmCostReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "confirm-cost-review",
+                "status": _cost_review_status(project_id),
+                "note": "确认成本后，写入数据库 / 发送报价 / 退回工艺都以这份数为准，必须由用户"
+                        "明确确认。请先复述零件缺口与整机合计，得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_confirm_cost_review(project_id), ensure_ascii=False, indent=2)
+    if name == "WriteCostReviewMaterial":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "write-cost-review-material",
+                "status": _cost_review_status(project_id),
+                "note": "写入数据库会在业务主数据里新建成品编码与物料成本配置，属于对外写库动作，"
+                        "必须由用户明确确认。请先说明将写入的成品名称与单价，得到同意后再带 "
+                        "confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _write_cost_review_material(project_id, str(params.get("product_name") or ""),
+                                        str(params.get("spec") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "ReturnCostReviewToProcess":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "return-cost-review-to-process",
+                "status": _cost_review_status(project_id),
+                "note": "退回工艺经理会把任务发回给工艺侧，必须由用户明确确认。请先复述退回原因，"
+                        "得到同意后再带 confirmed=true 重新调用；不要求先确认成本。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _return_cost_review_to_process(project_id, str(params.get("note") or ""),
+                                           str(params.get("target_user_id") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "SendCostReviewToQuote":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-cost-review-to-quote",
+                "status": _cost_review_status(project_id),
+                "note": "发送报价会把成本与整机参数推给销售侧做定价，属于对外动作，必须由用户明确"
+                        "确认。需先确认成本、且报价必填参数齐全；得到同意后再带 confirmed=true 调用。",
+            }, ensure_ascii=False)
+        return json.dumps(
+            _send_cost_review_to_quote(project_id, str(params.get("product_name") or ""),
+                                       str(params.get("spec") or ""),
+                                       str(params.get("note") or "")),
+            ensure_ascii=False, indent=2)
+    if name == "GetRequirementDraft":
+        return json.dumps(_requirement_draft(project_id), ensure_ascii=False, indent=2)
+    if name == "UpdateRequirementFields":
+        return json.dumps(_update_requirement_fields(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "AttachRequirementFiles":
+        return json.dumps(_requirement_attachments(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "ExtractRequirement":
+        return json.dumps({
+            "requested": True,
+            "reason": str(params.get("reason") or "")[:200],
+            "note": "已向界面发出需求解析请求。提取由平台既有流水线（技术文档 → 1.1 草稿）"
+                    "异步执行，进度与结果显示在对话与右侧 1.1 看板；请勿自行编造字段或推荐值。",
+        }, ensure_ascii=False)
+    if name == "GetRequirementTask":
+        return json.dumps(_requirement_task(project_id, params), ensure_ascii=False, indent=2)
+    if name == "GetRequirementAiFill":
+        return json.dumps(_requirement_ai_fill(project_id), ensure_ascii=False, indent=2)
+    if name == "SubmitRequirementConfirmation":
+        return json.dumps(_submit_requirement_confirmation(project_id, params),
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementPrecheck":
+        return json.dumps(_requirement_precheck_data(project_id), ensure_ascii=False, indent=2)
+    if name == "GetRequirementClarifications":
+        return json.dumps(_requirement_clarifications(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveRequirementConfirmationNote":
+        note = str(params.get("note") or "")[:2000]
+        return json.dumps({
+            "requested": True,
+            "note": note,
+            "note_target": "confirmationNote",
+            "note_style": "append",
+            "note_hint": "已请求看板把这段文字带进「提交意见」；本工具不落盘，"
+                         "真正写入需求单由用户点击通过 / 驳回时完成。",
+        }, ensure_ascii=False)
+    if name == "ConfirmRequirement":
+        # 显式确认门：没有用户明确的确认，绝不改状态。
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "confirm",
+                "status": _requirement_status(project_id),
+                "note": "通过需求会推进到 1.3 审核，必须由用户明确确认。请先向用户复述待确认要点，"
+                        "得到同意后再带 confirmed=true 重新调用；不要代替用户做决定。",
+            }, ensure_ascii=False)
+        return json.dumps(_confirm_requirement(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "ReturnRequirementToDraft":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "return",
+                "status": _requirement_status(project_id),
+                "note": "退回需求会让创建人重新补充，必须由用户明确确认。请先征得用户同意，"
+                        "再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_return_requirement_to_draft(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementReviewMaterials":
+        return json.dumps({"review_materials": _requirement_review_materials(project_id)},
+                          ensure_ascii=False, indent=2)
+    if name == "GetRequirementReviewSummary":
+        return json.dumps(_requirement_review_summary(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveRequirementReviewNote":
+        decision = str(params.get("decision") or "").strip().lower()
+        if decision not in ("approve", "reject", ""):
+            return json.dumps({"requested": False,
+                               "error": "decision 只能是 approve / reject 或留空"},
+                              ensure_ascii=False)
+        return json.dumps({
+            "requested": True,
+            "decision": decision,
+            "note": str(params.get("note") or "")[:2000],
+            "note_target": "reviewText",
+            "note_hint": "已请求看板选中审核结果并带入审核说明；本工具不落盘，"
+                         "真正写入需求单由用户点击提交审核时完成。",
+        }, ensure_ascii=False)
+    if name == "ApproveRequirementReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "approve",
+                "status": _requirement_status(project_id),
+                "note": "审核通过会推进到图纸解析，必须由用户明确确认，且需工艺技术总监或管理员"
+                        "权限。请先征得用户同意，再带 confirmed=true 重新调用；绝不代替人工审批。",
+            }, ensure_ascii=False)
+        return json.dumps(_approve_requirement_review(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "RejectRequirementReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "reject",
+                "status": _requirement_status(project_id),
+                "note": "审核退回会把需求打回，必须由用户明确确认，且需工艺技术总监或管理员权限。"
+                        "请先征得用户同意，再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_reject_requirement_review(project_id, str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.1 汇总报告
+    if name == "GetSummaryData":
+        from . import summary as summary_svc
+        return json.dumps(_summary_read(project_id, summary_svc.aggregate(project_id)),
+                          ensure_ascii=False, indent=2)
+    if name == "GetProcessReport":
+        saved = store.load_process_report(project_id)
+        return json.dumps(_report_prepare_read(project_id, saved), ensure_ascii=False, indent=2)
+    if name == "GenerateProcessReportDraft":
+        return json.dumps(_report_call(project_id, "prepare"), ensure_ascii=False, indent=2)
+    if name == "UpdateProcessReportFields":
+        fields = {key: params.get(key) for key in _report_field_keys() if key in params}
+        return json.dumps(_report_call(project_id, "update_fields", fields=fields),
+                          ensure_ascii=False, indent=2)
+    if name == "SaveProcessReportDistribution":
+        return json.dumps(_report_call(project_id, "update_distribution",
+                                       distribution_scope=str(params.get("distribution_scope") or ""),
+                                       distribution_cc=str(params.get("distribution_cc") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "SubmitProcessReportReview":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "submit-review",
+                "status": _report_status(project_id),
+                "note": "提交审核会把报告推进到「待审核」，必须由用户明确确认。请先复述送审就绪"
+                        "缺口，得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_call(project_id, "submit_review",
+                                       comment=str(params.get("comment") or "")),
+                          ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.2 审核报告
+    if name == "GetProcessReportReview":
+        saved = store.load_process_report(project_id)
+        versions = store.list_process_report_versions(project_id)
+        return json.dumps({"report": saved, "versions": versions}, ensure_ascii=False, indent=2)
+    if name == "GetReportReviewSummary":
+        return json.dumps(_report_summary(project_id), ensure_ascii=False, indent=2)
+    if name == "SaveReportReviewNote":
+        decision = str(params.get("decision") or "").strip().lower()
+        if decision not in ("approve", "reject", ""):
+            decision = ""
+        return json.dumps({
+            "requested": True,
+            "decision": decision,
+            "note": str(params.get("note") or ""),
+            "note_target": "review",
+            "note_hint": "审核意见已带入看板；请人工确认后再提交，Agent 不代替审批。",
+        }, ensure_ascii=False, indent=2)
+    if name == "ApproveProcessReport":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "approve",
+                "status": _report_status(project_id),
+                "note": "审核通过会推进到发布，必须由用户明确确认，且需工艺技术总监或管理员权限。"
+                        "请先征得用户同意，再带 confirmed=true 重新调用；绝不代替人工审批。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_review(project_id, "approve", params),
+                          ensure_ascii=False, indent=2)
+    if name == "RejectProcessReport":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "reject",
+                "status": _report_status(project_id),
+                "note": "退回会把报告打回汇总修改，必须由用户明确确认，且需工艺技术总监或管理员"
+                        "权限。请先征得用户同意，再带 confirmed=true 重新调用；不得静默退回。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_review(project_id, "reject", params),
+                          ensure_ascii=False, indent=2)
+    # ---------------------------------------------------------------- 3.3 发布并回传报价
+    if name == "GetReportPublishState":
+        saved = store.load_process_report(project_id)
+        return json.dumps(_report_publish_state(project_id, saved), ensure_ascii=False, indent=2)
+    if name == "ListReportPublishRecipients":
+        return json.dumps(_report_recipients(project_id), ensure_ascii=False, indent=2)
+    if name == "UpdateReportDistribution":
+        return json.dumps(_report_call(project_id, "update_distribution",
+                                       distribution_scope=str(params.get("distribution_scope") or ""),
+                                       distribution_cc=str(params.get("distribution_cc") or "")),
+                          ensure_ascii=False, indent=2)
+    if name == "PublishProcessReport":
+        saved = store.load_process_report(project_id)
+        if str((saved or {}).get("status") or "") != "approved":
+            return json.dumps({
+                "error": "报告须先审核通过(approved)后才能正式发布",
+                "status": (saved or {}).get("status") or "missing",
+            }, ensure_ascii=False)
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "publish",
+                "status": _report_status(project_id),
+                "note": "正式发布是对外动作，必须由用户明确确认。请先确认发布范围与发布对象，"
+                        "得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_publish(project_id, params), ensure_ascii=False, indent=2)
+    if name == "SendReportToQuote":
+        saved = store.load_process_report(project_id)
+        if str((saved or {}).get("status") or "") != "published":
+            return json.dumps({
+                "error": "报告须已正式发布(published)后才能回传报价",
+                "status": (saved or {}).get("status") or "missing",
+            }, ensure_ascii=False)
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "send-to-quote",
+                "status": _report_status(project_id),
+                "note": "回传报价会把报告推给销售侧做定价，属于对外动作，必须由用户明确确认。"
+                        "得到同意后再带 confirmed=true 重新调用。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_send_to_quote(project_id, params), ensure_ascii=False, indent=2)
+    if name == "CreateReportNewVersion":
+        if params.get("confirmed") is not True:
+            return json.dumps({
+                "requires_confirmation": True,
+                "action": "new-version",
+                "status": _report_status(project_id),
+                "note": "新建报告版本会生成下一版草稿，必须由用户明确确认。得到同意后再带 "
+                        "confirmed=true 重新调用；只有已正式发布的报告才允许新建下一版。",
+            }, ensure_ascii=False)
+        return json.dumps(_report_call(project_id, "new_version"), ensure_ascii=False, indent=2)
+    if name == "GetReportPublishResult":
+        saved = store.load_process_report(project_id)
+        versions = store.list_process_report_versions(project_id)
+        return json.dumps({"report": saved, "versions": versions,
+                           "quote_handoff": _report_quote_handoff(project_id)},
+                          ensure_ascii=False, indent=2)
+    if name == "tech_ui":
+        return _handle_tech_ui(params if isinstance(params, dict) else {})
     return f"未知的平台工具：{name}"
+
+
+# --------------------------------------------------------------------------- #
+# 3.1 / 3.2 / 3.3 汇总报告：与 HTTP 路由共用 services.report_workflow
+# --------------------------------------------------------------------------- #
+def _report_field_keys():
+    """Agent 可改写的报告字段白名单（唯一来源在共享 service）。"""
+    from . import report_workflow
+    return report_workflow.ALLOWED_REPORT_FIELDS
+
+
+def _report_apply(project_id: str, result: dict) -> dict:
+    """落盘 + 审计并返回报告：业务判断在 service，落盘与留痕交给 service 的 commit。"""
+    from . import report_workflow
+    return report_workflow.commit(project_id, result, _actor_user())
+
+
+def _report_error(exc) -> dict:
+    return {"error": getattr(exc, "message", str(exc)),
+            "status_code": getattr(exc, "status_code", 400)}
+
+
+def _report_status(project_id: str) -> dict:
+    saved = store.load_process_report(project_id) or {}
+    return {"status": saved.get("status") or "missing",
+            "report_no": saved.get("report_no") or "",
+            "version": saved.get("version") or 0}
+
+
+def _summary_read(project_id: str, aggregate: dict) -> dict:
+    aggregate = aggregate or {}
+    return {
+        "project_id": project_id,
+        "device_name": aggregate.get("device_name") or "",
+        "summary": aggregate.get("summary") or {},
+        "steps": aggregate.get("steps") or {},
+    }
+
+
+def _report_prepare_read(project_id: str, saved) -> dict:
+    from . import report_workflow
+    try:
+        gaps = report_workflow.ready_gaps(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return {"report": saved, "error": exc.message, "status_code": exc.status_code}
+    return {"report": saved, "ready": not gaps, "gaps": gaps}
+
+
+def _report_call(project_id: str, op: str, **kwargs) -> dict:
+    """把 Agent 工具参数接到共享 report_workflow；业务拒绝转成结构化错误。"""
+    from . import report_workflow
+    user = _actor_user()
+    try:
+        if op == "prepare":
+            return _report_apply(project_id, report_workflow.prepare(project_id, user))
+        if op == "update_fields":
+            return _report_apply(project_id, report_workflow.update_fields(
+                project_id, kwargs.get("fields") or {}, user))
+        if op == "save":
+            return _report_apply(project_id, report_workflow.save(
+                project_id, kwargs.get("doc"), user))
+        if op == "update_distribution":
+            return _report_apply(project_id, report_workflow.update_distribution(
+                project_id, distribution_scope=kwargs.get("distribution_scope", ""),
+                distribution_cc=kwargs.get("distribution_cc", ""), user=user))
+        if op == "submit_review":
+            return _report_apply(project_id, report_workflow.submit_review(
+                project_id, user, comment=kwargs.get("comment", "")))
+        if op == "new_version":
+            return _report_apply(project_id, report_workflow.new_version(project_id, user))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return {"error": f"未知的报告流程动作：{op}"}
+
+
+def _report_summary(project_id: str) -> dict:
+    from . import report_workflow
+    try:
+        return report_workflow.review_summary(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+
+
+def _report_review(project_id: str, decision: str, params: dict) -> dict:
+    from . import report_workflow
+    try:
+        result = report_workflow.review(
+            project_id, _actor_user(), decision=decision,
+            comment=str(params.get("comment") or ""))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return _report_apply(project_id, result)
+
+
+def _report_publish_state(project_id: str, saved) -> dict:
+    from . import report_workflow
+    try:
+        state = report_workflow.publish_state(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return {"report": state.get("report", saved),
+            "status": state.get("status"), "approved": state.get("approved"),
+            "published": state.get("published"), "can_publish": state.get("can_publish"),
+            "gaps": state.get("gaps"), "recipient_count": state.get("recipient_count")}
+
+
+def _report_recipients(project_id: str) -> dict:
+    from . import report_workflow
+    try:
+        return report_workflow.distribution_recipients(project_id)
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+
+
+def _report_publish(project_id: str, params: dict) -> dict:
+    from . import report_workflow
+    try:
+        result = report_workflow.publish(
+            project_id, _actor_user(), recipients=params.get("recipients") or [],
+            comment=str(params.get("comment") or ""))
+    except report_workflow.ReportWorkflowError as exc:
+        return _report_error(exc)
+    return _report_apply(project_id, result)
+
+
+def _report_send_to_quote(project_id: str, params: dict) -> dict:
+    """3.3 回传报价复用 2.2/2.3 共用正文；令牌取用户 SSO，不落日志。"""
+    from . import cost_flow
+    try:
+        return cost_flow.integration_send_to_quote_body(
+            project_id,
+            product_name=str(params.get("product_name") or ""),
+            spec=str(params.get("spec") or ""),
+            note=str(params.get("note") or ""),
+            token=current_token(), user=_actor_user())
+    except cost_flow.CostFlowError as exc:
+        return _report_error(exc)
+
+
+def _report_quote_handoff(project_id: str) -> dict:
+    try:
+        from . import integration
+        plan = integration.load_plan(project_id)
+        return (plan.quote_handoff.model_dump() if plan and plan.quote_handoff else {}) or {}
+    except Exception:
+        return {}
+
+
+# --------------------------------------------------------------------------- #
+# 1.1 创建需求
+# --------------------------------------------------------------------------- #
+def _requirement_doc(saved: dict):
+    """按需构造需求单模型。
+
+    pydantic 只在这里需要：把 import 留在函数内，oc_agent 才能在只装了轻量依赖的
+    解释器里被导入（loopback / provider readiness 等动态测试依赖这一点）。
+    """
+    from ..models.workflow import RequirementDoc
+
+    return RequirementDoc(**saved)
+
+
+def _actor_user() -> dict:
+    """Agent 工具的调用者。stream_sse 只带用户名，角色回查用户表补齐（与接口同权）。"""
+    username = current_actor()
+    record = store.get_user(username) or {}
+    return {"username": username, "role": str(record.get("role") or "")}
+
+
+def _requirement_industry(data: dict) -> str:
+    from . import industry_templates
+
+    industry = str((data or {}).get("industry_selection")
+                   or (data or {}).get("industry") or "").strip().lower()
+    if industry in (*industry_templates.INDUSTRIES, "flexible"):
+        return industry
+    return industry_templates.DEFAULT_INDUSTRY
+
+
+def _requirement_allowed_fields(data: dict) -> set[str]:
+    """Agent 可补充的字段白名单：直接复用提取服务的 1.1 表单字段表，不另立一份。"""
+    from . import requirement_extract
+
+    return set(requirement_extract._extractable_fields_for_industry(_requirement_industry(data)))
+
+
+def _requirement_draft(project_id: str) -> dict:
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"exists": False,
+                "note": "还没有 1.1 需求单草稿；请先在需求单页面保存草稿，或先上传技术资料。"}
+    data = saved.get("data") or {}
+    meta = store.load_meta(project_id) or {}
+    extraction = data.get("document_extraction") or {}
+    return {
+        "exists": True,
+        "project_id": project_id,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "editable": saved.get("status") in ("draft", "rejected"),
+        "fields": {key: value for key, value in data.items() if not isinstance(value, (dict, list))},
+        "file_roles": data.get("file_roles") or {},
+        "source_filename": meta.get("source_filename", ""),
+        "attachments": meta.get("attachments", []),
+        "document_extraction": {
+            "filled_fields": extraction.get("filled_fields") or [],
+            "recommended_fields": extraction.get("recommended_fields") or [],
+            "extracted_at": extraction.get("extracted_at") or "",
+        },
+    }
+
+
+def _update_requirement_fields(project_id: str, params: dict) -> dict:
+    fields = params.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return {"applied": False, "error": "fields 必须是非空对象：{字段 key: 要补充的值}"}
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"applied": False, "error": "还没有 1.1 需求单草稿，请先在需求单页面保存草稿。"}
+    if saved.get("status") not in ("draft", "rejected"):
+        return {"applied": False, "error": "需求已进入确认流程，不能自动修改；请先退回草稿。"}
+    doc = _requirement_doc(saved)
+    data = dict(doc.data or {})
+    allowed = _requirement_allowed_fields(data)
+    filled: dict[str, str] = {}
+    skipped: dict[str, str] = {}
+    for raw_key, raw_value in fields.items():
+        key = str(raw_key or "").strip()
+        text = str(raw_value if raw_value is not None else "").strip()
+        if not key or not text:
+            continue
+        if key == "customer_credit":
+            skipped[key] = "客户信用等级为受限字段，Agent 不得修改"
+            continue
+        if key == "title":
+            if str(doc.title or "").strip():
+                skipped[key] = "已有内容，不覆盖"
+            else:
+                doc.title = text
+                data[key] = text
+                filled[key] = text
+            continue
+        if key not in allowed:
+            skipped[key] = "不在 1.1 可补字段白名单内"
+            continue
+        if str(data.get(key) or "").strip():
+            skipped[key] = "已有内容，不覆盖"
+            continue
+        data[key] = text
+        filled[key] = text
+    if not filled:
+        return {"applied": False, "filled_fields": [], "skipped_fields": skipped,
+                "note": "没有可补充的空字段；人工已填内容与受限字段都没有改动。"}
+    doc.data = data
+    from . import requirement_service
+
+    try:
+        result = requirement_service.save_requirement_draft(
+            project_id, doc, _actor_user(), current=saved)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    store.audit(project_id, "workflow:requirement_fields_filled_by_agent", {
+        "by": current_actor(), "filled_fields": sorted(filled), "skipped_fields": sorted(skipped),
+    })
+    return {
+        "applied": True,
+        "requirement_no": result.get("requirement_no", ""),
+        "filled_fields": sorted(filled),
+        "skipped_fields": skipped,
+        "note": "只补了空白字段；人工已填内容与客户信用等级等受限字段都没有被覆盖。"
+                "刷新右侧 1.1 看板即可看到新值。",
+    }
+
+
+def _requirement_attachments(project_id: str, params: dict) -> dict:
+    """附件正文由既有上传接口保存；本工具只登记 / 读取附件清单。"""
+    names = [name for name, _ in store.load_attachments(project_id)]
+    saved = store.load_requirement(project_id) or {}
+    data = dict(saved.get("data") or {})
+    meta = store.load_meta(project_id) or {}
+    role = str(params.get("role") or "").strip()
+    filename = str(params.get("filename") or "").strip()
+    registered: list[str] = []
+    if role and filename:
+        if filename not in names:
+            return {"registered": False, "attachments": names,
+                    "error": f"附件 {filename} 尚未上传；请先在 1.1 页面上传，再由本工具登记。"}
+        if not saved:
+            return {"registered": False, "attachments": names,
+                    "error": "还没有 1.1 需求单草稿；请先保存草稿再登记附件。"}
+        file_roles = dict(data.get("file_roles") or {})
+        current = list(file_roles.get(role) or [])
+        if filename not in current:
+            current.append(filename)
+            file_roles[role] = current
+            data["file_roles"] = file_roles
+            doc = _requirement_doc(saved)
+            doc.data = data
+            from . import requirement_service
+
+            try:
+                requirement_service.save_requirement_draft(
+                    project_id, doc, _actor_user(), current=saved)
+            except requirement_service.RequirementSaveError as exc:
+                return {"registered": False, "error": str(exc), "attachments": names}
+            store.audit(project_id, "workflow:requirement_attachment_linked", {
+                "by": current_actor(), "role": role, "file": filename,
+            })
+            registered = [filename]
+    return {
+        "project_id": project_id,
+        "attachments": names,
+        "source_filename": meta.get("source_filename", ""),
+        "file_roles": data.get("file_roles") or {},
+        "registered": registered,
+        "note": "附件只能由既有上传接口保存；本工具只登记 / 读取附件清单，不上传、不改写文件正文。",
+    }
+
+
+def _task_brief(task: dict) -> dict:
+    return {
+        "task_id": task.get("task_id", ""),
+        "kind": task.get("kind", ""),
+        "status": task.get("status", ""),
+        "progress": task.get("progress", ""),
+        "progress_log": list(task.get("progress_log") or [])[-8:],
+        "error": task.get("error") or "",
+        "created_at": task.get("created_at") or "",
+        "finished_at": task.get("finished_at") or "",
+    }
+
+
+def _requirement_task(project_id: str, params: dict) -> dict:
+    task_id = str(params.get("task_id") or "").strip()
+    if task_id:
+        task = store.get_task(project_id, task_id)
+        if not task:
+            return {"found": False, "error": f"没有找到任务 {task_id}"}
+        return {"found": True, "task": _task_brief(task)}
+    rows = [task for task in store.list_tasks(project_id)
+            if "requirement" in str(task.get("kind") or "")]
+    rows.sort(key=lambda task: str(task.get("created_at") or ""), reverse=True)
+    return {"tasks": [_task_brief(task) for task in rows[:5]],
+            "note": "只返回需求相关任务的最近 5 条；没有记录说明还没发起过解析。"}
+
+
+def _requirement_ai_fill(project_id: str) -> dict:
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "note": "还没有 1.1 需求单草稿。"}
+    data = saved.get("data") or {}
+    info = data.get("document_extraction") or {}
+    if not info:
+        return {"available": False,
+                "note": "还没有 AI 解析结果；请先上传技术资料并执行 ExtractRequirement。"}
+    from . import requirement_extract
+
+    recommendations = dict(info.get("recommendations") or {})
+    required = sorted(requirement_extract._required_recommendation_fields_for_industry(
+        _requirement_industry(data)))
+    # 仍缺的必填项：既没有值，也没有 AI 推荐默认值。
+    missing = [key for key in required
+               if not str(data.get(key) or "").strip()
+               and not str(recommendations.get(key) or "").strip()]
+    return {
+        "available": True,
+        "industry": _requirement_industry(data),
+        "model": info.get("model", ""),
+        "extracted_at": info.get("extracted_at", ""),
+        "summary": info.get("summary", ""),
+        "filled_fields": list(info.get("all_filled_fields") or info.get("filled_fields") or []),
+        "recommended_fields": list(info.get("all_recommended_fields")
+                                   or info.get("recommended_fields") or []),
+        "recommendation_confidence": dict(info.get("recommendation_confidence") or {}),
+        "recommendations": recommendations,
+        "missing_required_fields": missing,
+        "open_questions": list(info.get("open_questions") or []),
+    }
+
+
+def _submit_requirement_confirmation(project_id: str, params: dict) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"submitted": False,
+                "error": "提交需求确认需要工艺技术经理或管理员权限；请由对应角色在 1.1 页面提交。"}
+    comment = str(params.get("comment") or "需求创建人已提交，等待需求确认。")
+    try:
+        out = requirement_service.submit_requirement_confirmation(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"submitted": False, "error": str(exc)}
+    return {"submitted": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "已提交到 1.2 待确认；后续仍由人工确认或退回，Agent 不代替审批。"}
+
+
+# --------------------------------------------------------------------------- #
+# 1.2 确认需求 / 1.3 审核需求
+# --------------------------------------------------------------------------- #
+# 预检、确认、退回、审核的状态流转都只有一份实现（services/requirement_service.py），
+# 这里只是把同一份结果投影成 Agent 可读的结构，绝不自己重写规则或状态机。
+def _requirement_status(project_id: str) -> str:
+    saved = store.load_requirement(project_id) or {}
+    return str(saved.get("status") or "")
+
+
+def _requirement_precheck_data(project_id: str) -> dict:
+    from . import requirement_service
+
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "status": "",
+                "note": "还没有需求单；请先在 1.1 创建需求并提交到 1.2 确认。"}
+    result = requirement_service.requirement_precheck(project_id, _requirement_doc(saved))
+    needs = [row for row in result.get("items") or [] if row.get("status") == "need_info"]
+    return {
+        "available": True,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "items": result.get("items") or [],
+        "need_info": [{"item": row.get("item", ""), "detail": row.get("detail", "")}
+                      for row in needs],
+        "ok": result.get("ok") is True,
+        "generated_note": result.get("generated_note", ""),
+        "engine": result.get("engine", ""),
+    }
+
+
+def _requirement_clarifications(project_id: str) -> dict:
+    """只把同一份预检里 status == need_info 的条目投影成待澄清问题。"""
+    precheck = _requirement_precheck_data(project_id)
+    if not precheck.get("available"):
+        return {"available": False, "status": "", "count": 0, "questions": [],
+                "note": precheck.get("note", "")}
+    questions = list(precheck.get("need_info") or [])
+    return {
+        "available": True,
+        "requirement_no": precheck.get("requirement_no", ""),
+        "status": precheck.get("status", ""),
+        "count": len(questions),
+        "questions": questions,
+        "generated_note": precheck.get("generated_note", ""),
+        "note": ("以上问题来自既有确定性预检的 need_info 项，未另立规则、未调用模型。"
+                 if questions else "既有确定性预检没有待澄清项。"),
+    }
+
+
+def _confirm_requirement(project_id: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"applied": False, "error": "通过需求确认需要工艺技术经理或管理员权限。"}
+    try:
+        out = requirement_service.confirm_requirement(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    return {"applied": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "需求已进入 1.3 待审核；请刷新右侧看板查看状态与流程留痕。"}
+
+
+def _return_requirement_to_draft(project_id: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.MANAGER_ROLES:
+        return {"applied": False, "error": "退回需求需要工艺技术经理或管理员权限。"}
+    try:
+        out = requirement_service.return_requirement_to_draft(project_id, user, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "error": str(exc)}
+    return {"applied": True, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "需求已退回 1.1 草稿；请刷新右侧看板查看状态与流程留痕。"}
+
+
+def _requirement_review_materials(project_id: str) -> dict:
+    """1.3 审核材料：需求关键字段 + 附件 + 确认信息 + 确定性预检 + 历史留痕（只读）。"""
+    saved = store.load_requirement(project_id)
+    if not saved:
+        return {"available": False, "note": "还没有需求单；请先完成 1.1 创建与 1.2 确认。"}
+    meta = store.load_meta(project_id) or {}
+    data = saved.get("data") or {}
+    precheck = _requirement_precheck_data(project_id)
+    attachments = [name for name, _ in store.load_attachments(project_id)]
+    history = [dict(row) for row in (saved.get("history") or [])][-10:]
+    return {
+        "available": True,
+        "requirement_no": saved.get("requirement_no", ""),
+        "title": saved.get("title", ""),
+        "status": saved.get("status", ""),
+        "created_by": saved.get("created_by", ""),
+        "created_at": saved.get("created_at", ""),
+        "confirmed_by": saved.get("confirmed_by", ""),
+        "confirmed_at": saved.get("confirmed_at", ""),
+        "confirmation_note": saved.get("confirmation_note", ""),
+        "source_filename": meta.get("source_filename", ""),
+        "attachments": attachments,
+        "file_roles": data.get("file_roles") or {},
+        "key_fields": {
+            "requirement_type": data.get("requirement_type", ""),
+            "priority": data.get("priority", ""),
+            "bu": data.get("bu", ""),
+            "customer_type": data.get("customer_type", ""),
+            "final_customer_name": data.get("final_customer_name", ""),
+            "project_name": data.get("project_name", ""),
+            "project_code": data.get("project_code", ""),
+            "annual_forecast": data.get("annual_forecast", ""),
+            "first_sample_due": data.get("first_sample_due", ""),
+            "mass_production_due": data.get("mass_production_due", ""),
+        },
+        "precheck": {"ok": precheck.get("ok"), "generated_note": precheck.get("generated_note", ""),
+                     "items": precheck.get("items") or []},
+        "history": history,
+        "note": "以上材料全部来自既有 store 与确定性预检，只读，不改任何状态、不调模型。",
+    }
+
+
+def _requirement_review_summary(project_id: str) -> dict:
+    """由同一份预检 + 关键字段做确定性汇总，不调模型、不编造结论。"""
+    materials = _requirement_review_materials(project_id)
+    if not materials.get("available"):
+        return {"available": False, "note": materials.get("note", "")}
+    precheck = materials.get("precheck") or {}
+    items = list(precheck.get("items") or [])
+    needs = [row for row in items if row.get("status") == "need_info"]
+    summary = ("确定性检查未发现待补充项，资料齐备，可提交审核通过。"
+               if not needs else
+               f"确定性检查仍有 {len(needs)} 个待补充项，建议先退回补充再审核通过。")
+    return {
+        "available": True,
+        "review_summary": {
+            "requirement_no": materials.get("requirement_no", ""),
+            "title": materials.get("title", ""),
+            "status": materials.get("status", ""),
+            "summary": summary,
+            "generated_note": precheck.get("generated_note", ""),
+            "items": items,
+            "need_info": [{"item": row.get("item", ""), "detail": row.get("detail", "")}
+                          for row in needs],
+            "key_fields": materials.get("key_fields") or {},
+            "decision_options": [
+                {"decision": "approve", "label": "审核通过", "requires_confirmation": True},
+                {"decision": "reject", "label": "退回修改", "requires_confirmation": True},
+            ],
+        },
+        "note": "确定性汇总，不调用模型、不代替人工审批；通过 / 退回都需用户明确确认。",
+    }
+
+
+def _approve_requirement_review(project_id: str, comment: str) -> dict:
+    return _run_requirement_review(project_id, "approve", comment)
+
+
+def _reject_requirement_review(project_id: str, comment: str) -> dict:
+    return _run_requirement_review(project_id, "reject", comment)
+
+
+def _run_requirement_review(project_id: str, decision: str, comment: str) -> dict:
+    from . import auth, requirement_service
+
+    user = _actor_user()
+    if user.get("role") not in auth.DIRECTOR_ROLES:
+        return {"applied": False, "decision": decision,
+                "error": "审核需求需要工艺技术总监或管理员权限。"}
+    try:
+        out = requirement_service.review_requirement(project_id, user, decision, comment)
+    except requirement_service.RequirementSaveError as exc:
+        return {"applied": False, "decision": decision, "error": str(exc)}
+    return {"applied": True, "decision": decision, "status": out.get("status", ""),
+            "requirement_no": out.get("requirement_no", ""),
+            "note": "审核结果已落盘；请刷新右侧看板查看审核状态与流程留痕。"}
 
 
 # --------------------------------------------------------------------------- #
@@ -589,6 +2439,173 @@ def _update_integration_process(project_id: str, params: dict) -> dict:
             "note": "工序已写入。成本是按工序与物料算的，改完工序建议重跑「成本测算」。"}
 
 
+def _integration_status(project_id: str) -> str:
+    from . import integration
+
+    return integration.status(integration.load_plan(project_id))
+
+
+def _confirm_integration_params(project_id: str) -> dict:
+    """确认 2.2「参数推荐」：与看板 POST /integration/params/confirm 同一份实现，不重算、不另写状态。"""
+    from . import integration
+
+    try:
+        plan = integration.confirm_params(project_id, _actor_user())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "confirm-params", "error": str(exc)}
+    return {"applied": True, "action": "confirm-params", "params_confirmed": True,
+            "confirmed_by": plan.params_confirmed_by or "",
+            "status": _integration_status(project_id),
+            "note": "「参数推荐」已确认；请刷新右侧看板查看确认状态。"}
+
+
+def _confirm_integration_process(project_id: str) -> dict:
+    """确认 2.2「组装工艺」：与看板 POST /integration/process/confirm 同一份实现。"""
+    from . import integration
+
+    try:
+        plan = integration.confirm_process(project_id, _actor_user())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "confirm-process", "error": str(exc)}
+    return {"applied": True, "action": "confirm-process", "process_confirmed": True,
+            "confirmed_by": plan.process_confirmed_by or "",
+            "status": _integration_status(project_id),
+            "note": "「组装工艺」已确认；请刷新右侧看板查看确认状态。"}
+
+
+def _send_integration_to_finance(project_id: str, product_name: str, note: str) -> dict:
+    """2.2 出口：把工艺与整机参数发送给财务。对外调用与看板同一份实现，只在这里翻译错误。"""
+    from . import cpq_bridge, integration
+
+    try:
+        plan = integration.send_to_finance(
+            project_id, _actor_user(), product_name=product_name, note=note,
+            token=current_token())
+    except integration.IntegrationFlowError as exc:
+        return {"applied": False, "action": "send-to-finance", "error": str(exc)}
+    except cpq_bridge.BridgeRejected as exc:
+        return {"applied": False, "action": "send-to-finance",
+                "error": f"CPQ 服务拒绝了这次发送财务：{exc}"}
+    except cpq_bridge.BridgeUnavailable as exc:
+        return {"applied": False, "action": "send-to-finance",
+                "error": f"发送财务失败：{exc}"}
+    handoff = plan.finance_handoff
+    return {"applied": True, "action": "send-to-finance",
+            "task_no": handoff.task_no if handoff else "",
+            "sent_to": handoff.target_role_name if handoff else "",
+            "status": _integration_status(project_id),
+            "note": "已发送财务做成本测算；请刷新右侧看板查看发送状态与接收人。"}
+
+
+# --------------------------------------------------------------------------- #
+# 2.3 成本测算
+#
+# 读取复用既有 services.cost_review；确认 / 写库 / 发报价 / 退回这四类流转复用
+# services.cost_flow 的同一份实现（路由与平台工具共用一个函数），oc_agent 不直写
+# 评审状态、不拼桥接调用、不另算成本。
+# --------------------------------------------------------------------------- #
+def _cost_review_context(project_id: str):
+    """2.3 的三样输入（与 main.py 的 _cost_review_ctx 同源，不复制数据）。"""
+    from ..models.ir import DesignIR
+    from . import cost_review, integration
+
+    ir_dict = store.load_ir(project_id)
+    ir = DesignIR(**ir_dict) if ir_dict else None
+    return ir, integration.load_plan(project_id), cost_review.load_review(project_id)
+
+
+def _cost_review_status(project_id: str) -> dict:
+    """确认门前给模型的状态摘要（只读）。"""
+    from . import cost_review
+
+    ir, plan, review = _cost_review_context(project_id)
+    data = cost_review.summarize(project_id, ir, plan)
+    return {"confirmed": bool(review.confirmed), "counts": data["counts"],
+            "parts_total": data["parts_total"], "final": data["final"]}
+
+
+def _update_cost_review_note(project_id: str, params: dict) -> dict:
+    """保存财务说明与核算批量：与看板 PUT /cost-review 同一份实现。"""
+    from . import cost_flow
+
+    try:
+        quantity = int(params.get("quantity") or 1)
+    except (TypeError, ValueError):
+        return {"updated": False, "error": "quantity 必须是整数"}
+    try:
+        data = cost_flow.save_note(project_id, _actor_user(),
+                                   note=str(params.get("note") or "")[:2000],
+                                   quantity=quantity)
+    except cost_flow.CostFlowError as exc:
+        return {"updated": False, "error": str(exc)}
+    review = (data or {}).get("review") or {}
+    return {"updated": True, "note": review.get("note", ""),
+            "quantity": (data or {}).get("quantity"),
+            "note": "说明与核算批量已保存；请刷新右侧 2.3 看板查看。"}
+
+
+def _confirm_cost_review(project_id: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.confirm_review(project_id, _actor_user()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "confirm-cost-review", "error": str(exc)}
+    return {"applied": True, "action": "confirm-cost-review",
+            "confirmed": bool((data.get("review") or {}).get("confirmed")),
+            "counts": data.get("counts"), "final": data.get("final"),
+            "note": "成本已确认；请刷新右侧 2.3 看板查看确认状态。"}
+
+
+def _write_cost_review_material(project_id: str, product_name: str, spec: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.write_material(project_id, _actor_user(),
+                                        product_name=product_name, spec=spec,
+                                        token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "write-cost-review-material", "error": str(exc)}
+    written = data.get("written") or {}
+    return {"applied": True, "action": "write-cost-review-material",
+            "material": {"number": written.get("number"), "name": written.get("name"),
+                         "unit_price": written.get("material_unit_price")},
+            "note": "成品编码与物料成本已写入业务主数据；请刷新右侧看板查看。"}
+
+
+def _return_cost_review_to_process(project_id: str, note: str, target_user_id: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.return_to_process(project_id, _actor_user(), note=note,
+                                           target_user_id=target_user_id,
+                                           token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "return-cost-review-to-process", "error": str(exc)}
+    returned = data.get("returned") or {}
+    return {"applied": True, "action": "return-cost-review-to-process",
+            "task_no": returned.get("task_no"),
+            "sent_to": returned.get("target_role_name") or "工艺经理",
+            "note": "已把成本结果退回工艺经理复核；请刷新右侧看板查看去向留痕。"}
+
+
+def _send_cost_review_to_quote(project_id: str, product_name: str, spec: str,
+                               note: str) -> dict:
+    from . import cost_flow
+
+    try:
+        data = cost_flow.send_to_quote(project_id, _actor_user(), product_name=product_name,
+                                       spec=spec, note=note, token=current_token()) or {}
+    except cost_flow.CostFlowError as exc:
+        return {"applied": False, "action": "send-cost-review-to-quote", "error": str(exc)}
+    handoff = data.get("handoff") or {}
+    return {"applied": True, "action": "send-cost-review-to-quote",
+            "task_no": handoff.get("task_id"),
+            "next_step_name": handoff.get("next_step_name") or "",
+            "returned_to_sender": bool(handoff.get("returned_to_sender")),
+            "note": "已发送至报价；请刷新右侧看板查看去向留痕。"}
+
+
 def _project_state(project_id: str) -> dict:
     meta = store.load_meta(project_id) or {}
     ir = _ir_of(project_id)
@@ -683,13 +2700,32 @@ def _update_part(project_id: str, params: dict) -> dict:
                 "available": [item.part_id for item in ir.parts]}
 
     try:
-        changes, geometry_changed = part_edit.apply_edit(
+        # 先补基体，再改其它字段：补基体是可选的独立动作，只有在用户明确给出
+        # 类型与全部尺寸时才会走到这里（尺寸不全一律被 part_edit 拒绝）。
+        changes: list[dict] = []
+        geometry_changed = False
+        base_feature = params.get("base_feature")
+        if base_feature:
+            if not isinstance(base_feature, dict):
+                raise part_edit.PartEditError(
+                    f"base_feature 需要一个 {{type, 尺寸…}} 的结构，收到 {base_feature!r}")
+            base_type = base_feature.get("type")
+            dimensions = {key: value for key, value in base_feature.items() if key != "type"}
+            if part.features:
+                changes, geometry_changed = part_edit.replace_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+            else:
+                changes, geometry_changed = part_edit.initialize_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+        extra_changes, extra_geometry = part_edit.apply_edit(
             part,
             name=params.get("name"),
             quantity=params.get("quantity"),
             material_spec=params.get("material_spec"),
             feature_updates=params.get("feature_updates") or (),
         )
+        changes = changes + extra_changes
+        geometry_changed = geometry_changed or extra_geometry
     except part_edit.PartEditError as exc:
         return {"error": str(exc), "applied": False}
 
@@ -785,6 +2821,17 @@ def _install_tool_dispatch(oc_repl) -> None:
     _patched = True
 
 
+# 落点表（系统提示词用）：5 个阶段 × 13 个子步骤。它是后端口径表
+# workflow_stages.prompt_table() 的渲染结果 —— 导入时逐行校验，两处口径一漂移就直接报错，
+# 不会出现"提示词说 2.2、屏幕说第 3 阶段"这种自相矛盾。
+TECH_STAGE_TABLE = """\
+- 阶段 1 工艺评估需求：1.1 创建需求（requirement-create） / 1.2 确认需求（requirement-confirm） / 1.3 审核需求（requirement-review）
+- 阶段 2 图纸解析：2.1 图纸解析（drawing）
+- 阶段 3 组装与整合：3.1 整合图纸（process / drawings） / 3.2 参数推荐（process / params） / 3.3 组装工艺（process / process）
+- 阶段 4 成本测算：4.1 零件成本（cost / parts） / 4.2 组装成本（cost / assembly） / 4.3 汇总（cost / total）
+- 阶段 5 工艺评估报告：5.1 汇总结果（summary） / 5.2 结果审核（report-review） / 5.3 发布并回传报价（report-publish）"""
+
+
 SYSTEM_APPENDIX = """
 你现在是「AI 工艺评估平台」的工艺助手，服务对象是工艺工程师。同一个项目会在两个页面
 和你对话，每条消息末尾的 [当前页面：…] 标明用户此刻在哪一步 —— 按那一步选工具。
@@ -794,7 +2841,7 @@ SYSTEM_APPENDIX = """
 - 讨论零件结构、材料、公差、可制造性与待澄清风险；
 - 用户要求开始/重新解析时调用 RequestParse，由平台执行，你不要自行编造解析结果。
 
-2.2 组装与整合（把 2.1 的零件装回一台整机）：
+3 组装与整合（把 2.1 图纸解析的零件装回一台整机）：
 - 先用 GetIntegrationState 取状态，再用 ListIntegrationParams 看参数缺口，不要拿 2.1 的
   零件数据代替整机结论；
 - 用户要改整机参数用 UpdateIntegrationParams、要改组装工序用 UpdateIntegrationProcess，
@@ -808,7 +2855,43 @@ SYSTEM_APPENDIX = """
   绝不按行业惯例填补数值 —— 这些数字会进入工艺方案与报价。
 - 回答用中文，简洁、结论先行；涉及数值时标注它来自哪个零件或哪份资料。
 - 当前会话的文件系统是只读的，你不能修改项目文件。
+
+结果呈现（所有阶段都适用）：
+- 数据与明细一律放到右侧看板：右侧看板是唯一真源，聊天里不再重复一份，避免左右两份对不上。
+- 绝不允许只把表格写在聊天文字里；聊天里不要贴 Markdown 表格（|---| 那种），也不要贴大段 JSON
+  或字段清单 —— 会话栏很窄，贴出来就是一行行竖线。聊天只给 2~3 句结论、依据与下一步。
+- 需要把结果落到右侧看板时用 tech_ui：focus_view 切到对应视图、refresh_view 让看板重新拉取，
+  再把结果入口给用户。只有当右侧看板已注册该视图时才调用 focus_view。
+
+五阶段落点表（阶段 1–5 / 子步骤 1.1–5.3，stage 只能用这九个 id）：
+- 阶段 1 工艺评估需求：1.1 创建需求（requirement-create） / 1.2 确认需求（requirement-confirm） / 1.3 审核需求（requirement-review）
+- 阶段 2 图纸解析：2.1 图纸解析（drawing）
+- 阶段 3 组装与整合：3.1 整合图纸（process / drawings） / 3.2 参数推荐（process / params） / 3.3 组装工艺（process / process）
+- 阶段 4 成本测算：4.1 零件成本（cost / parts） / 4.2 组装成本（cost / assembly） / 4.3 汇总（cost / total）
+- 阶段 5 工艺评估报告：5.1 汇总结果（summary） / 5.2 结果审核（report-review） / 5.3 发布并回传报价（report-publish）
+
+按 stage 决定要不要发 focus_view：
+- requirement-create / requirement-confirm / requirement-review（阶段 1 工艺评估需求）：
+  这些页面只有表单和状态、没有注册看板视图，不要发 focus_view；用 fill_fields 回填字段，
+  再用 refresh_view 让看板刷新。
+- drawing（2.1 图纸解析）：可 focus_view 到 parts / questions / report / evidence / review / files。
+- process（3 组装与整合）：可 focus_view 到 drawings / params / process；
+  刷新由业务工具返回后自动完成。
+- cost（4 成本测算）：可 focus_view 到 parts / assembly / total / params；
+  刷新由业务工具返回后自动完成。
+- summary（5.1 汇总结果）/ report-review（5.2 结果审核）/ report-publish（5.3 发布并回传报价）：
+  这些页面没有注册看板视图，不要发 focus_view；刷新由报告类工具返回后自动完成。
 """
+
+
+def _stage_table_drift() -> list:
+    """落点表与 workflow_stages（以及提示词正文）的差异行（应为空）。"""
+    return [line for line in workflow_stages.prompt_table().splitlines()
+            if line and (line not in TECH_STAGE_TABLE or line not in SYSTEM_APPENDIX)]
+
+
+if _stage_table_drift():                                 # pragma: no cover - 口径漂移才会命中
+    raise RuntimeError(f"Agent 落点表与 workflow_stages 口径不一致：{_stage_table_drift()}")
 
 
 # --------------------------------------------------------------------------- #
@@ -827,8 +2910,21 @@ class ProjectAgent:
 
         self.project_id = project_id
         self.cwd = str(_project_workdir(project_id))
+        # 会话必须建在当前所选模型的路由上：open-claude 在构造时就把 provider 与 Key
+        # 读进去了，先同步环境再建会话，否则选了 Qwen 也会被发去 Anthropic。
+        try:
+            sync_route_environment(agent_route())
+        except Exception:                                        # pragma: no cover - 配置不可读时退回 open-claude 默认
+            pass
         profile = modules["load_profile"](profile_name, self.cwd) if profile_name else None
-        self.conv = oc_repl.Conversation(self.cwd, permission_mode="always_allow", profile=profile)
+        # 会话按项目持久化：进程重建后接着磁盘上最近一次会话继续，否则新一轮会写到
+        # 新文件，用户刷新时只能看到最后一段，「完整会话恢复」就不成立。
+        try:
+            resume_id = modules["latest_session_id"](self.cwd) or None
+        except Exception:                                        # pragma: no cover - 会话目录不可读
+            resume_id = None
+        self.conv = oc_repl.Conversation(self.cwd, permission_mode="always_allow",
+                                         resume_session_id=resume_id, profile=profile)
         # 没有终端可以回答 y/n，任何询问都直接放行（只读限制仍然生效）。
         self.conv.permissions._prompt_user = lambda *args, **kwargs: (True, "")
 
@@ -894,8 +2990,26 @@ class ProjectAgent:
             if params.get("max_iterations"):
                 profile.max_iterations = int(params["max_iterations"])
             if rebuild_client:
-                # 换密钥必须重建 client：open-claude 在构造时就把 key 读进去了。
-                self.conv.client = self._oc["repl"].create_client()
+                self._rebuild_client()
+
+    def _rebuild_client(self) -> None:
+        """按最新路由重建 client（调用方需已持有 self.lock）。
+
+        换 provider 或换 Key 必须重建：open-claude 在构造 client 时就把 provider
+        与 Key 读进去了，沿用旧 client 会把新模型发给旧厂商。
+        """
+        try:
+            route = agent_route()
+        except Exception:                                        # pragma: no cover - 配置不可读
+            route = {}
+        if route:
+            try:
+                sync_route_environment(route)
+            except Exception:                                    # pragma: no cover - 环境相关
+                pass
+            if route.get("model"):
+                self.conv.model = str(route["model"])
+        self.conv.client = self._oc["repl"].create_client()
 
     # -- 一轮对话（镜像 Conversation.run_turn，改为产出事件）--------------- #
     def stream_turn(self, text: str, emit: Callable[[dict], None]) -> None:
@@ -909,7 +3023,12 @@ class ProjectAgent:
                     if stop_reason != "tool_use":
                         break
                     # 复用 open-claude 自己的执行路径（权限、钩子、Agent/MCP 分派）。
+                    _tech_ui_events().clear()
                     conv._execute_pending_tools()
+                    # tech_ui 调用产生的结构化界面事件随本轮 SSE 下发，随后清空队列。
+                    for tech_ui_event in _tech_ui_events():
+                        emit({"type": "tech_ui", "tech_ui": tech_ui_event})
+                    _tech_ui_events().clear()
                     last = conv.messages[-1] if conv.messages else None
                     if last and last.get("role") == "user" and isinstance(last.get("content"), list):
                         for block in last["content"]:
@@ -946,14 +3065,38 @@ class ProjectAgent:
             if kind == "text_delta":
                 text_buffer.append(event["text"])
                 emit({"type": "text", "text": event["text"]})
+            elif kind == "thinking_delta":
+                # 供应商的思维链增量只透传给前端做默认折叠的「思考过程」，
+                # 不写入会话事件、不落库、不进历史回放（见 _serialize_history）。
+                emit({"type": "thinking",
+                      "text": str(event.get("thinking") or event.get("text") or "")})
             elif kind == "tool_use_end":
                 tool_uses.append({"type": "tool_use", "id": event["id"],
                                   "name": event["name"], "input": event["input"]})
-                emit({"type": "tool_use", "id": event["id"], "name": event["name"],
-                      "input": event["input"],
-                      "ui_action": UI_ACTION_TOOLS.get(event["name"], "")})
+                if event["name"] == "tech_ui":
+                    # tech_ui 走独立的 tech_ui 帧：tool_use 只透传轻量元信息，不带整份 fields。
+                    tech_input = event["input"] if isinstance(event["input"], dict) else {}
+                    emit({"type": "tool_use", "id": event["id"], "name": event["name"],
+                          "input": {"action": tech_input.get("action", ""),
+                                    "stage": tech_input.get("stage", "")},
+                          "ui_action": ""})
+                else:
+                    emit({"type": "tool_use", "id": event["id"], "name": event["name"],
+                          "input": event["input"],
+                          "ui_action": UI_ACTION_TOOLS.get(event["name"], "")})
             elif kind == "message_end":
                 stop_reason = event.get("stop_reason", "end_turn")
+                if stop_reason == "max_tokens":
+                    # 输出被 provider 输出上限截断：已产出的文本已通过 text 帧下发并写入
+                    # 会话历史（下面仍会 append），这里再发一条可识别信号，让前端提示重试，
+                    # 绝不能当作正常 end_turn 静默收尾。
+                    emit({
+                        "type": "error",
+                        "stop_reason": "max_tokens",
+                        "truncated": True,
+                        "error": "模型输出达到 max_tokens 上限被截断，已保留已生成内容；"
+                                 "请重试，或减少一次解析/生成的输出量。",
+                    })
                 usage = event.get("usage", {})
                 conv.cost_tracker.add_usage(
                     conv.model,
@@ -998,6 +3141,93 @@ def _stringify(content: Any) -> str:
                 parts.append(str(block))
         return "\n".join(part for part in parts if part)
     return json.dumps(content, ensure_ascii=False, default=str)
+
+
+# --------------------------------------------------------------------------- #
+# 会话历史：只读回放（用户 / 助手 / 工具轨迹）
+# --------------------------------------------------------------------------- #
+_HISTORY_TEXT_LIMIT = 20000
+
+
+def _history_text(value: Any) -> str:
+    """工具结果正文可能是字符串或分块列表：统一成可直接展示的文本。"""
+    text = value if isinstance(value, str) else _stringify(value)
+    if len(text) > _HISTORY_TEXT_LIMIT:
+        return text[:_HISTORY_TEXT_LIMIT] + "\n… (已截断)"
+    return text
+
+
+def _serialize_history(raw: list) -> list[dict]:
+    """把 open-claude 的消息还原成前端可回放的有序事件。
+
+    兼容旧消息与异常数据：content 既可能是字符串，也可能是 text / tool_use /
+    tool_result 分块列表；无法识别的块直接跳过，绝不让整段历史读不出来。
+    """
+    events: list[dict] = []
+    for message in raw:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        output = "user" if role == "user" else "assistant"
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                events.append({"type": output, "text": text})
+            continue
+        if not isinstance(content, list):
+            continue
+        for chunk in content:
+            if not isinstance(chunk, dict):
+                continue
+            kind = str(chunk.get("type") or "")
+            if kind == "text":
+                text = str(chunk.get("text") or "").strip()
+                if text:
+                    events.append({"type": output, "text": text})
+            elif kind == "tool_use":
+                events.append({
+                    "type": "tool_use",
+                    "id": str(chunk.get("id") or ""),
+                    "name": str(chunk.get("name") or ""),
+                    "input": chunk.get("input") if isinstance(chunk.get("input"), dict) else {},
+                })
+            elif kind == "tool_result":
+                events.append({
+                    "type": "tool_result",
+                    "tool_use_id": str(chunk.get("tool_use_id") or ""),
+                    "content": _history_text(chunk.get("content")),
+                    "is_error": bool(chunk.get("is_error")),
+                })
+    return events
+
+
+def load_history(project_id: str) -> dict[str, Any]:
+    """只读回放该项目已持久化的 Agent 会话（用户 / 助手 / 工具轨迹）。
+
+    与 Conversation 共用同一份 open-claude SessionStore：ProjectAgent 创建时接着最近
+    一次会话继续，所以「继续发送」仍写回同一文件；进程重建（没有在线会话）时回退到
+    磁盘上最近一次会话，服务重启后照样能恢复。只返回可渲染的消息事件，不返回系统
+    提示词、模型 Key 或工作目录。
+    """
+    modules = _import_open_claude()
+    cwd = str(_project_workdir(project_id))
+    with _lock:
+        agent = _sessions.get(project_id)
+    session_id = ""
+    if agent is not None:
+        session = getattr(getattr(agent, "conv", None), "session", None)
+        session_id = str(getattr(session, "session_id", "") or "")
+    if not session_id:
+        session_id = str(modules["latest_session_id"](cwd) or "")
+    raw = modules["load_session"](cwd, session_id) if session_id else None
+    messages = _serialize_history(raw or [])
+    return {
+        "project_id": project_id,
+        "session_id": session_id,
+        "messages": messages,
+        "message_count": len(messages),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -1047,7 +3277,8 @@ def sse(event: dict) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-def stream_sse(project_id: str, message: str, actor: str = "system") -> Iterator[str]:
+def stream_sse(project_id: str, message: str, actor: str = "system",
+               token: str = "") -> Iterator[str]:
     """把一轮对话产出为 SSE 帧序列。事件通过队列跨线程传递，保证边生成边下发。"""
     import queue
 
@@ -1058,6 +3289,8 @@ def stream_sse(project_id: str, message: str, actor: str = "system") -> Iterator
         # ContextVar 不会自动跨线程传播，必须在 worker 内部再设一次，
         # 否则 UpdatePartParameters 的审计只会记到 system。
         _ACTOR.set(actor or "system")
+        # 同理：SendIntegrationToFinance 代表用户去调一体化服务需要用户令牌。
+        _TOKEN.set(token or "")
         try:
             agent.stream_turn(message, channel.put)
         except Exception as exc:                         # pragma: no cover - 依赖外部服务

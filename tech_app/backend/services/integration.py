@@ -22,10 +22,13 @@ from typing import Callable, List, Optional, Tuple
 from ..config import DATA_DIR
 from ..models.cost import CostAnalysis, WebSource
 from ..models.integration import (
-    IntegrationParam, IntegrationParamFillPlan, IntegrationParamPlan, IntegrationPlan)
+    FinanceHandoff, IntegrationParam, IntegrationParamFillPlan, IntegrationParamPlan,
+    IntegrationPlan, IntegrationWaiver)
 from ..models.ir import DesignIR
 from ..models.process import ProcessOutline, ProcessPlan, ProcessStep
 from ..storage import store
+from ..time_utils import now_cst_str
+from . import cpq_bridge
 from . import llm_client as claude_client
 from . import cost as cost_svc
 from . import process as process_svc
@@ -574,7 +577,14 @@ def status(plan: IntegrationPlan) -> dict:
         # 成品编码是「写入数据库」生成的，不算在 required_missing 里（那是给人补的清单），
         # 但它同样是发报价的前提 —— 单独给前端一个标志，按钮才说得清自己为什么是灰的。
         "has_material_code": bool(plan.material_writes),
-        "required_missing": len(product_params.missing_required(plan.params)) if plan.params else 0,
+        "required_missing": len(missing_required(plan)),
+        # 报价必填是否一项不差。与 params_final 分开：那个是"人按过确认"，
+        # 这个是"数真的齐了" —— 带缺口继续时前者会被签字补掉，后者照样是 False，
+        # 财务据此知道这台成品还有格子空着。
+        "params_complete": not missing_required(plan) if plan.params else False,
+        # 最近一条「带缺口继续」的签字：下游（2.3 财务看板、报价前检查）据此知道
+        # 这个缺口是人签过字的，不再按同一批缺口拦第二次；没有签字时为 None。
+        "waiver": waiver_summary(plan),
         "confirmed": bool(plan.confirmed),
     }
 
@@ -785,3 +795,311 @@ def payload(project_id: str, plan: IntegrationPlan) -> dict:
         "cost_lookup": store.load_cost_lookup(project_id, ASSEMBLY_PART_ID),
         "process_coverage": store.load_process_coverage(project_id, ASSEMBLY_PART_ID),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 2.2 流转：参数确认 / 工序确认 / 发送财务
+#
+# 这三个动作既来自 HTTP 路由（人工在看板上点按钮），也来自平台 Agent 工具
+# （ConfirmIntegrationParams / ConfirmIntegrationProcess / SendIntegrationToFinance）。
+# 两条路必须落在同一份实现上，否则 Agent 确认过的状态和看板显示的会对不上。
+# --------------------------------------------------------------------------- #
+class IntegrationFlowError(Exception):
+    """2.2 流转的业务拒绝：前置结果缺失或还没确认，调用方映射成 HTTP 400。"""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _flow_actor(user: Optional[dict]) -> Tuple[str, str]:
+    """返回 (审计用的用户名, 展示名)。两者可能不同，审计与界面各取所需。"""
+    user = user or {}
+    username = user.get("username", "system")
+    return username, (user.get("display_name") or user.get("username") or "")
+
+
+# --------------------------------------------------------------------------- #
+# 依赖分级与「带缺口继续」的签字（L2 缺口豁免）
+#
+# 2.2 的出口按依赖性质分两级：L1 是**生成依赖**（参数推荐 / 组装工艺跑过没有），
+# 没有它后面根本算不出成本，签字也不放行；L2 是**质量依赖**（报价必填缺口、三项内部
+# 确认），属于"数不够准但不影响往下走"，可以由本人在「仍要继续」上签一次字带缺口
+# 放行 —— 签字落进 plan.waivers，同一批缺口之后不再拦第二次。
+#
+# 比对键是**字段编码集合**：签过字之后又冒出新缺口（编码集合变大）必须重新签，
+# 否则一次签字会把后来才暴露的缺口一并放过。L4（权限、写库、回传报价、审核、发布）
+# 不在豁免范围，见各自动作的硬门禁。
+# --------------------------------------------------------------------------- #
+CONFIRMATION_ORDER = ("params_final", "params_confirmed", "process_confirmed")
+CONFIRMATION_LABELS = {
+    "params_final": "「确认参数已齐」",
+    "params_confirmed": "「确认参数推荐」",
+    "process_confirmed": "「确认组装工艺」",
+}
+
+
+def pending_confirmations(plan: IntegrationPlan) -> List[str]:
+    """还没点过的内部确认环节（顺序固定，便于比对与展示）。"""
+    pending: List[str] = []
+    if not plan.params_final:
+        pending.append("params_final")
+    if not plan.params_confirmed:
+        pending.append("params_confirmed")
+    if not plan.process_confirmed:
+        pending.append("process_confirmed")
+    return pending
+
+
+def missing_required(plan: IntegrationPlan) -> List[dict]:
+    """报价必填、但还没有值的字段。plan.params 为空时没有清单，按空处理。"""
+    return product_params.missing_required(plan.params) if plan.params else []
+
+
+def gap_message(missing: List[dict], pending: Optional[List[str]] = None) -> str:
+    """把 L2 缺口一次说全：报价必填缺哪些、哪些环节还没点确认、可以怎么办。
+
+    前端「仍要继续」弹窗与后端拒绝消息共用这一份，两处不许各写一套。
+    """
+    parts: List[str] = []
+    if missing:
+        names = "、".join(str(field.get("name") or field.get("code") or "")
+                          for field in missing[:8])
+        more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
+        parts.append(f"报价必填的成品参数还缺 {len(missing)} 项：{names}{more}")
+    labels = [CONFIRMATION_LABELS.get(item, item) for item in (pending or [])]
+    if labels:
+        parts.append("还没点确认的环节：" + "、".join(labels))
+    detail = "；".join(parts) or "依赖还没齐"
+    return (f"{detail}。可以点「仍要继续」带缺口发给财务 —— 等同于本人签字确认，"
+            f"平台会留下签字记录，之后不再按同一批缺口拦你。")
+
+
+def _apply_confirmations(plan: IntegrationPlan, items: List[str], display: str) -> None:
+    """带缺口放行时顺手把内部确认补掉 —— 人已经在签字框里表过态，不再要求逐页再点。"""
+    if not items:
+        return
+    stamp = now_cst_str()
+    if "params_final" in items:
+        plan.params_final = True
+        plan.params_final_by = display
+        plan.params_final_at = stamp
+    if "params_confirmed" in items:
+        plan.params_confirmed = True
+        plan.params_confirmed_by = display
+        plan.params_confirmed_at = stamp
+    if "process_confirmed" in items:
+        plan.process_confirmed = True
+        plan.process_confirmed_by = display
+        plan.process_confirmed_at = stamp
+
+
+def record_waiver(plan: IntegrationPlan, stage: str, *,
+                  missing_codes: Optional[List[str]] = None,
+                  missing_fields: Optional[List[str]] = None,
+                  confirmations: Optional[List[str]] = None,
+                  reason: str = "", actor: Optional[dict] = None) -> IntegrationWaiver:
+    """把一次「带缺口继续」的签字落进 plan —— 唯一实现，写入人手与时间。
+
+    reason 允许为空，由服务端补一句能追溯的默认原因（哪个环节、放行了哪些缺口）。
+    只追加、不覆盖：后来补上的缺口不该把历史签字抹掉。
+    """
+    username, display = _flow_actor(actor)
+    codes = sorted({str(item).strip() for item in (missing_codes or []) if str(item).strip()})
+    names = [str(item) for item in (missing_fields or []) if str(item).strip()]
+    chosen = [str(item) for item in (confirmations or []) if str(item).strip()]
+    waived = [item for item in CONFIRMATION_ORDER if item in chosen]
+    text = str(reason or "").strip()
+    if not text:
+        names_text = "、".join(names[:8]) or "（未指名）"
+        more = f" 等 {len(names)} 项" if len(names) > 8 else ""
+        text = (f"带缺口继续：报价必填缺 {len(codes)} 项：{names_text}{more}，"
+                f"已在 {stage} 由本人签字放行")
+    waiver = IntegrationWaiver(
+        stage=stage, missing_codes=codes, missing_fields=names,
+        waived_confirmations=waived, reason=text,
+        waived_by=display or username, waived_at=now_cst_str())
+    plan.waivers = list(plan.waivers or []) + [waiver]
+    return waiver
+
+
+def waiver_covers(plan: IntegrationPlan, missing_codes: Optional[List[str]],
+                  confirmations: Optional[List[str]] = None,
+                  stage: Optional[str] = None) -> Optional[IntegrationWaiver]:
+    """找一条能覆盖当前缺口的已有签字；没有就返回 None（调用方据此要求重新签）。
+
+    比对键是**字段编码集合**：签字之后又冒出新缺口时集合变大、覆盖不成立，
+    必须重新签。`confirmations` 同样要已被覆盖 —— 否则签字放行的范围被后续动作
+    拉大了，就不算同一批缺口。
+    """
+    codes = {str(item) for item in (missing_codes or []) if str(item)}
+    pending = {str(item) for item in (confirmations or []) if str(item)}
+    for waiver in reversed(list(plan.waivers or [])):
+        if stage and waiver.stage != stage:
+            continue
+        covered = {str(item) for item in (waiver.missing_codes or [])}
+        if not codes <= covered:
+            continue
+        released = {str(item) for item in (waiver.waived_confirmations or [])}
+        if not pending <= released:
+            continue
+        return waiver
+    return None
+
+
+def waiver_summary(plan: IntegrationPlan) -> Optional[dict]:
+    """最近一条「带缺口继续」的签字摘要（前端与 2.3 财务看板共用）。没有则 None。"""
+    waivers = list(plan.waivers or [])
+    if not waivers:
+        return None
+    waiver = waivers[-1]
+    return {
+        "stage": waiver.stage,
+        "missing_codes": list(waiver.missing_codes),
+        "missing_fields": list(waiver.missing_fields),
+        "waived_confirmations": list(waiver.waived_confirmations),
+        "reason": waiver.reason,
+        "waived_by": waiver.waived_by,
+        "waived_at": waiver.waived_at,
+        "reused": bool(waiver.reused),
+        "count": len(waivers),
+    }
+
+
+def confirm_params(project_id: str, user: Optional[dict] = None) -> IntegrationPlan:
+    """确认「参数推荐」这一环节：整机参数、连接关系与 BOM 由人核对过了。
+
+    与「整合参数」的确认是两件事：那个是交给报价前的最后收口（必填要齐），
+    这个只是本环节定稿 —— 缺口在这里不拦，但要如实说出来。
+    """
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.params is None:
+        raise IntegrationFlowError("还没有参数推荐结果，无法确认")
+    plan.params_confirmed = True
+    plan.params_confirmed_by = display
+    plan.params_confirmed_at = now_cst_str()
+    save_plan(project_id, plan, username)
+    store.audit(project_id, "integration_params_confirm",
+                {"by": display,
+                 "missing_required": len(product_params.missing_required(plan.params))})
+    return plan
+
+
+def confirm_process(project_id: str, user: Optional[dict] = None) -> IntegrationPlan:
+    """确认「组装工艺」。这是 2.2 的闸门：确认之后才允许把任务推给财务经理算成本。
+
+    不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
+    """
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.process is None:
+        raise IntegrationFlowError("还没有组装工艺结果，无法确认")
+    plan.process_confirmed = True
+    plan.process_confirmed_by = display
+    plan.process_confirmed_at = now_cst_str()
+    save_plan(project_id, plan, username)
+    store.audit(project_id, "integration_process_confirm",
+                {"by": display, "steps": len(plan.process.steps)})
+    return plan
+
+
+def send_to_finance(project_id: str, user: Optional[dict] = None, *,
+                    product_name: str = "", note: str = "",
+                    target_type: str = "", target_role_code: str = "",
+                    target_user_id: str = "", token: str = "",
+                    waiver: Optional[dict] = None) -> IntegrationPlan:
+    """组装与整合的出口：确认工艺并发送至财务做成本测算。
+
+    成本不再由工艺经理算 —— 他交的是工艺、参数与用量，成本的数字归后一步的财务。
+    所以这里**不要求成本已完成**，出口按依赖分级判定：
+
+      · L1 生成依赖（没有参数推荐 / 没有组装工艺）**不可豁免** —— 后面根本算不出成本；
+      · L2 质量依赖（报价必填缺口、三项内部确认）可以由本人在「仍要继续」上签字
+        带缺口放行：``waiver`` 一给就成交，缺口按**服务端算出的**为准落进
+        ``plan.waivers``，顺手把还没点的确认补掉；同一批缺口在「参数推荐」已经签过
+        字的（``waiver_covers``）不再要第二次签字，只追加一条 ``reused`` 记录。
+
+    对外调用由 ``cpq_bridge`` 完成，可能抛 BridgeRejected / BridgeUnavailable；
+    调用方（HTTP 路由或 Agent 工具）各自把它翻译成用户能看懂的形式。
+    """
+    # cost_review 反向依赖本模块，函数内延迟导入，避免形成导入环。
+    from . import cost_review
+
+    username, display = _flow_actor(user)
+    plan = load_plan(project_id)
+    if plan.params is None:
+        raise IntegrationFlowError("请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
+    if plan.process is None:
+        raise IntegrationFlowError("请先完成组装工艺：组装成本要按工序与工时算")
+
+    # L2 质量依赖：报价必填缺口 + 三项还没点的内部确认。缺口一次说全 —— 缺了什么、
+    # 哪个环节没确认都写在同一句话里，不让人逐页倒查。
+    missing = missing_required(plan)
+    missing_codes = sorted({str(field.get("code") or "") for field in missing
+                            if str(field.get("code") or "")})
+    missing_names = [str(field.get("name") or field.get("code") or "") for field in missing]
+    pending = pending_confirmations(plan)
+    if missing or pending:
+        # 同一批缺口签过字就不再要第二次；新冒出来的缺口（编码集合变大）不算覆盖。
+        covered = waiver_covers(plan, missing_codes, pending, stage="params")
+        if covered is None and waiver is None:
+            raise IntegrationFlowError(gap_message(missing, pending))
+        # 签字放行：以服务端算出的缺口为准记一笔（前端传上来的只表达"要不要放行"，
+        # 缺口与顺带补掉的确认都由后端定，前端伪造不了豁免范围）。
+        note_reason = str((waiver or {}).get("reason") or "").strip()
+        record = record_waiver(plan, "finance_handoff",
+                               missing_codes=missing_codes, missing_fields=missing_names,
+                               confirmations=pending, reason=note_reason, actor=user)
+        if covered is not None:
+            # 「参数推荐」已经为同一批缺口签过字：这里是复用，不是第二次签字。
+            record.reused = True
+            record.waived_by = covered.waived_by or record.waived_by
+        _apply_confirmations(plan, pending, display)
+        store.audit(project_id, "integration_send_to_finance_waived",
+                    {"stage": "finance_handoff", "by": record.waived_by,
+                     "missing_codes": missing_codes,
+                     "confirmations": list(pending), "reused": bool(record.reused)})
+
+    title = (product_name or "").strip() or (
+        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
+    requirement = store.load_requirement(project_id) or {}
+    req_data = requirement.get("data") or {}
+    result = cpq_bridge.send_to_finance(
+        token, project_id, title,
+        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
+        str(requirement.get("product_name") or ""),
+        note or "工艺与整机参数已确认，请做成本测算",
+        {"tech_cost": {"project_id": project_id, "product_name": title,
+                       "quantity": plan.quantity,
+                       "process_step_count": len(plan.process.steps),
+                       "part_refs": len(plan.params.part_refs)}},
+        target_type, target_role_code, target_user_id)
+
+    # 交给财务就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
+    if not plan.confirmed:
+        plan.confirmed = True
+        plan.confirmed_by = username
+        plan.confirmed_at = now_cst_str()
+        plan.timing.status = "done"
+        plan.timing.completed = True
+        plan.timing.finished_at = plan.confirmed_at
+    plan.finance_handoff = FinanceHandoff(
+        task_id=str(result.get("task_id") or "") or None,
+        task_no=str(result.get("task_no") or ""),
+        target_role_name=str(result.get("target_role_name") or "财务经理"),
+        target_type=str(result.get("target_type") or "role"),
+        target_name=str(result.get("target_name") or ""),
+        sent_at=now_cst_str(),
+        sent_by=display,
+    )
+    save_plan(project_id, plan, username)
+    # 财务那一步的入口状态：谁交来的、什么时候
+    review = cost_review.load_review(project_id)
+    review.received_from = plan.finance_handoff.sent_by
+    review.received_at = plan.finance_handoff.sent_at
+    cost_review.save_review(project_id, review, username)
+    store.audit(project_id, "integration_send_to_finance",
+                {"task_no": plan.finance_handoff.task_no,
+                 "by": plan.finance_handoff.sent_by})
+    return plan

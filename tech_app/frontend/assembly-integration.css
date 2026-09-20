@@ -6,16 +6,54 @@
   padding: 5px 12px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 999px;
   background: transparent; color: var(--oc-text-2, #4b5563); font-size: 12.5px; cursor: pointer;
 }
-.ai-tabs button:hover { background: var(--oc-bg-3, #f3f4f6); }
+/* 未选中的页签只做浅蓝 hover；选中页签是描边态而不是深色填充：
+   白底 + 品牌蓝字 + 1px 品牌蓝边框，hover / focus 时也不翻成深蓝底白字。 */
+.ai-tabs button:hover:not(.active) {
+  background: var(--color-primary-light, #E6F0FD);
+  color: var(--oc-accent, #0060E6);
+  border-color: var(--color-primary-border, #B4D0F8);
+}
+.ai-tabs button:focus-visible {
+  outline: 2px solid rgba(0,96,230, .25);
+  outline-offset: 2px;
+}
 .ai-tabs button.active {
-  border-color: transparent; background: var(--oc-accent, #2563eb); color: #fff; font-weight: 600;
+  background: #fff;
+  color: var(--oc-accent, #0060E6);
+  border: 1px solid var(--color-primary-border, #B4D0F8);
+  font-weight: 600;
+}
+.ai-tabs button.active:hover,
+.ai-tabs button.active:focus-visible {
+  background: #fff;
+  color: var(--oc-accent, #0060E6);
+  border-color: var(--oc-accent, #0060E6);
 }
 
 .ai-actions {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 12px 16px 0;
 }
-.ai-actions .inline-action:disabled { opacity: .6; cursor: wait; }
+.ai-actions .inline-action:disabled { opacity: .6; cursor: not-allowed; }
+/* disabled 只说明业务闸门没过，不代表任务在跑；只有显式 busy 的控件才用等待光标，
+   spinner 也只跟 busy 一起出现。规则放在 disabled 之后，保证 busy 优先。 */
+.ai-actions .inline-action[aria-busy="true"]:disabled { cursor: wait; }
+
+/* 上传整合图纸、生成/重新生成参数推荐与组装工艺：常态为白底/柔和浅蓝底的描边次要操作
+   （品牌蓝字 + 1px 品牌浅蓝边框），只有非禁用 hover 才切换成深蓝同色系渐变白字。
+   disabled 时不响应 hover；真正的生成中由 -[aria-busy="true"] 表达。 */
+#aiUploadBtn,
+#aiGenerate {
+  background: var(--gradient-primary-soft, linear-gradient(135deg, #FFFFFF 0%, #F4F8FF 100%));
+  color: var(--oc-accent, #0060E6);
+  border: 1px solid var(--color-primary-border, #B4D0F8);
+}
+#aiUploadBtn:hover:not(:disabled),
+#aiGenerate:hover:not(:disabled) {
+  background: var(--gradient-primary-hover, linear-gradient(135deg, #0050C4 0%, #00419F 100%));
+  color: #fff;
+  border-color: var(--color-primary-active, #00419F);
+}
 .ai-hint { color: var(--oc-text-3, #9ca3af); font-size: 12px; line-height: 1.6; }
 
 .ai-status { padding: 8px 16px 0; color: var(--oc-text-3, #9ca3af); font-size: 12px; min-height: 18px; }
@@ -31,7 +69,7 @@
   padding: 8px 10px; border: .5px solid var(--oc-border-3, #e2e5ea); border-radius: 10px;
   margin-top: 6px;
 }
-.ai-drawing a { color: var(--oc-accent, #2563eb); font-size: 13px; text-decoration: none; }
+.ai-drawing a { color: var(--oc-accent, #0060E6); font-size: 13px; text-decoration: none; }
 .ai-drawing a:hover { text-decoration: underline; }
 .ai-drawing small { color: var(--oc-text-3, #9ca3af); font-size: 11.5px; }
 .ai-drawing .inline-action { margin-left: auto; }
@@ -43,7 +81,7 @@
   background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
   font-family: inherit; font-size: 13px; line-height: 1.7; resize: vertical;
 }
-.ai-requirement:focus { outline: none; border-color: var(--oc-accent, #2563eb); }
+.ai-requirement:focus { outline: none; border-color: var(--oc-accent, #0060E6); }
 
 .ai-qty { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
 .ai-qty input {
@@ -96,7 +134,7 @@ tr.ai-missing td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
   background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827);
   font-family: inherit; font-size: 13px;
 }
-.ai-op-field input:focus { outline: none; border-color: var(--oc-accent, #2563eb); }
+.ai-op-field input:focus { outline: none; border-color: var(--oc-accent, #0060E6); }
 
 /* 为什么点不了：贴在按钮正下方，用警示色，别让人去下面的说明里找。 */
 .ai-op-why {
@@ -121,7 +159,7 @@ tr.ai-missing td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
   font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .ai-op-btn:hover:not(:disabled) { background: var(--oc-bg-3, #f3f4f6); }
-.ai-op-btn.primary { border-color: transparent; background: var(--oc-accent, #2563eb); color: #fff; font-weight: 600; }
+.ai-op-btn.primary { border-color: transparent; background: var(--oc-accent, #0060E6); color: #fff; font-weight: 600; }
 .ai-op-btn:disabled { opacity: .5; cursor: not-allowed; }
 .ai-op-done { color: #15803d; font-size: 11.5px; line-height: 1.75; }
 
@@ -144,10 +182,10 @@ tr.ai-missing td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
 }
 
 /* 智能补全填进来的建议：必须一眼看出"这是 AI 猜的，还没保存"。 */
-tr.ai-suggested td { background: #f5f3ff; }
-tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
+tr.ai-suggested td { background: #F4F8FF; }
+tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #0060E6; }
 .ai-sug {
-  display: block; margin-top: 3px; color: #6d28d9; font-size: 10.5px; line-height: 1.5;
+  display: block; margin-top: 3px; color: #00419F; font-size: 10.5px; line-height: 1.5;
 }
 
 /* Agent 对话：工具调用一行一条，和正文区分开；流式中的气泡给个光标提示。 */
@@ -155,7 +193,7 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
   display: flex; align-items: center; gap: 6px; margin: 4px 0;
   color: var(--oc-text-3, #9ca3af); font-size: 11.5px;
 }
-.ai-tool-dot { color: var(--oc-accent, #2563eb); font-size: 9px; }
+.ai-tool-dot { color: var(--oc-accent, #0060E6); font-size: 9px; }
 .oc-atxt.oc-streaming::after {
   content: '▍'; margin-left: 2px; color: var(--oc-text-3, #9ca3af);
   animation: ai-blink 1s steps(2) infinite;
@@ -166,7 +204,7 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
 .ai-toast {
   position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 9999;
   padding: 10px 18px; border-radius: 10px; background: #111827; color: #fff;
-  font-size: 13px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+  font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0, .18);
 }
 .ai-toast.error { background: #b91c1c; }
 
@@ -180,11 +218,11 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
 .ai-send-mask {
   position: fixed; inset: 0; z-index: 9999;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(15, 23, 42, .45);
+  background: rgba(15,23,42, .45);
 }
 .ai-send-box {
   width: 400px; max-width: 92vw; overflow: hidden;
-  border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .28);
+  border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0, .28);
   background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827); font-size: 13px;
 }
 .ai-send-box h3 { margin: 0; font-size: 16px; }
@@ -210,5 +248,45 @@ tr.ai-suggested td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .ai-send-foot .cancel { background: var(--oc-bg-3, #f3f4f6); color: var(--oc-text-2, #4b5563); }
-.ai-send-foot .send { background: var(--oc-accent, #2563eb); color: #fff; }
+.ai-send-foot .send { background: var(--oc-accent, #0060E6); color: #fff; }
 .ai-send-foot button:disabled { opacity: .6; cursor: not-allowed; }
+
+/* 「还有没完成的项，确定要继续吗」的软闸门确认框（2.2 与 2.3 共用）。
+   只承载「人点了确认才继续」这件事，不参与页面布局：fixed 覆盖在整页之上，
+   关掉之后页面回到原样，不会把底栏或上下步按钮顶走。 */
+.ai-confirm-mask {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15,23,42, .45);
+}
+.ai-confirm-box {
+  width: 420px; max-width: 92vw; padding: 18px 22px 16px;
+  border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0, .28);
+  background: var(--oc-bg-1, #fff); color: var(--oc-text-1, #111827); font-size: 13px;
+}
+.ai-confirm-head { margin-bottom: 8px; font-size: 15px; font-weight: 600; }
+.ai-confirm-body { white-space: pre-wrap; line-height: 1.7; color: var(--oc-text-2, #4b5563); }
+.ai-confirm-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.ai-confirm-foot button {
+  padding: 7px 16px; border-radius: 8px; font-family: inherit; font-size: 13px; cursor: pointer;
+}
+.ai-confirm-foot .cancel {
+  border: 1px solid var(--oc-border-2, #e2e5ea); background: #fff; color: var(--oc-text-2, #4b5563);
+}
+.ai-confirm-foot .go {
+  border: 1px solid transparent; background: var(--color-primary, #0060E6); color: #fff;
+}
+
+/* 【CPQ 定制 · 本文件不来自 process_drawing，同步上游时保留】
+   2.2 / 2.3 阶段页自己的 .center-panel 是多余的一层圆角卡片：标题已被页签取代，
+   嵌入态页签又被 tech-embed.js 隐藏，只剩一层白底描边。这里把它归零成透明容器。
+   只改外观 —— display / flex 方向 / 高度上限 / 滚动 / position 一个都不许动。
+   本文件在两页里最后加载，且 `.oc-work .center-panel` 的特异性高于 `.center-panel`。 */
+.oc-work .center-panel {
+  background: transparent; border: 0; border-radius: 0; box-shadow: none;
+}
+
+/* 删掉重复标题后，这一行只剩页签，而嵌入态页签已被 tech-embed.js 隐藏 ——
+   不收起来会留一条空白条 + 一条分隔线。必须限定在 .tech-embed：
+   独立打开这两个阶段页时，页签行照旧显示。 */
+.tech-embed .oc-work .center-panel > .center-header { display: none; }

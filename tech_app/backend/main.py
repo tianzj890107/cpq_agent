@@ -8,11 +8,13 @@ FastAPI 应用: 图纸解析与生成平台后端。
 """
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import re
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -41,7 +43,8 @@ from .models.approval import QuoteApproval
 from .models.ai import VerificationPatch, VerificationPatchDecision
 from .models.cleaning import CleaningPlan
 from .models.cost import CostAnalysis
-from .models.cost_review import CostActionBody, CostAction, CostReviewBody
+from .models.cost_review import (CostAction, CostActionBody, CostConfirmBody,
+                                 CostReviewBody)
 from .models.costest import CostEstimate
 from .models.integration import (
     FinanceHandoff, IntegrationDrawing, IntegrationParamPlan, MaterialWrite, QuoteHandoff,
@@ -62,13 +65,18 @@ from .models.workflow import (
     WorkflowAction, WorkflowReview,
 )
 from .services import (
+    acting_user, cpq_auth_client, user_llm,
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
-    cost_review, industry_templates, integration, manufacturing,
-    llm_settings, material, negotiation, oc_agent, part_edit, pricenego, pricing, process_lookup,
-    process, product_params, production, requirement_extract, step_import,
-    summary as summary_svc, tasks, tree,
+    cost_flow, cost_review, industry_templates, integration, manufacturing, report_workflow,
+    llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
+    process_lookup,
+    process, product_params, production, requirement_extract, requirement_service,
+    project_access,
+    step_import,
+    summary as summary_svc, tasks, timeline, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
+    workflow_projection,
 )
 from .storage import store
 from .time_utils import now_cst_str
@@ -76,6 +84,16 @@ from .time_utils import now_cst_str
 
 class ReviewAction(BaseModel):
     comment: str = ""
+
+
+class ReportQuoteAction(BaseModel):
+    """3.3 已发布报告回传销售经理的入参。"""
+    note: str = ""
+    # 派发方式与其它转交一致：留空时由报价那边落到该任务的默认角色（销售经理）。
+    target_type: str = ""
+    target_role_code: str = ""
+    target_user_id: str = ""
+    source_task_id: str = Field("", description="来源待办任务号，随 URL 带进来")
 
 
 class LoginBody(BaseModel):
@@ -110,11 +128,14 @@ class UpdateUserRole(BaseModel):
 class LlmSettingsBody(BaseModel):
     """全局模型配置。首页与 2.1 Agent 小窗提交的是同一个结构。
 
-    只有六项可改：多模态模型、语言模型、温度、最大 token、是否思考、API Key。
+    只有五项可改：模型、温度、最大 token、是否思考、API Key。
     未传的字段保持不变，因此全部可选；API Key 只允许写入，绝不回显。
     """
 
-    # 多模态用于图纸解析；语言模型同时用于文档分析与 Agent 对话。
+    # 唯一模型：图纸解析、文档分析、工艺推荐、成本测算和 Agent 对话都用它。
+    model: Optional[str] = Field(default=None, max_length=120)
+    # 兼容字段：升级前的客户端还会发这两个名字。它们不再代表"两套模型"，
+    # 服务端只把它们当作同一个 model 的老写法（见 update_runtime_llm_settings）。
     vision_model: Optional[str] = Field(default=None, max_length=120)
     text_model: Optional[str] = Field(default=None, max_length=120)
     temperature: Optional[float] = None
@@ -179,6 +200,9 @@ class WorkbenchPartEdit(BaseModel):
     quantity: Optional[int] = Field(default=None, ge=1, le=100000)
     material_spec: Optional[str] = Field(default=None, max_length=160)
     feature_updates: List[WorkbenchFeatureEdit] = Field(default_factory=list, max_length=30)
+    # 空特征零件补基体（或把非法基体换成合法基体）：只认 plate / box / cylinder 三种
+    # 模板与它们的固定尺寸，具体校验在 services.part_edit，两条会话入口共用同一份。
+    base_feature: Optional[dict] = None
     explanation: str = Field(default="", max_length=1000)
 
     @field_validator("feature_updates", mode="before")
@@ -337,6 +361,20 @@ def _sso_token(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
+def _bind_acting_user(user: dict) -> dict:
+    """把「这一轮是谁」设入上下文，与 request.state.user 同一处落地。
+
+    模型/密钥是「全局默认 + 每个账号可覆盖」，服务层得知道发起账号才能选。
+    这里设的是**请求上下文**，之后同一个请求里调用的任务提交、解析、Agent 都读得到；
+    真正给用户算「我的 / 生效」的接口仍显式用 current_user，不依赖上下文传递。
+    """
+    try:
+        acting_user.set_acting_user((user or {}).get("username", ""))
+    except Exception:                                     # pragma: no cover - 上下文异常不影响鉴权
+        pass
+    return user
+
+
 async def _cpq_sso_guard(request: Request) -> None:
     """【CPQ 定制】身份来自 CPQ 的登录系统。见 services/cpq_sso.py。"""
     path = request.url.path
@@ -350,7 +388,10 @@ async def _cpq_sso_guard(request: Request) -> None:
         raise HTTPException(503, f"登录服务暂不可用，无法校验身份：{exc}") from exc
     if not user:
         raise HTTPException(401, "请先在配置报价 CPQ 中登录")
-    request.state.user = user
+    # 账号级模型与密钥也只有 PG 一处：这里把**用户自己的票**交给 cpq_auth_client，
+    # 「我的模型与密钥」这类本人接口才能以本人身份回调 CPQ（写操作走内部通道）。
+    cpq_auth_client.set_request_token(_sso_token(request))
+    request.state.user = _bind_acting_user(user)
 
 
 async def auth_guard(request: Request):
@@ -359,15 +400,15 @@ async def auth_guard(request: Request):
         return
     if AUTH_AUTO_ADMIN:
         # 演示/内网临时模式：不展示登录页，但仍以管理员身份通过所有业务权限检查。
-        request.state.user = {
+        request.state.user = _bind_acting_user({
             "username": DEFAULT_ADMIN_USER,
             "role": "admin",
             "display_name": "默认管理员",
             "is_system": False,
-        }
+        })
         return
     if not AUTH_ENABLED:
-        request.state.user = auth.SYSTEM_USER
+        request.state.user = _bind_acting_user(auth.SYSTEM_USER)
         return
     path = request.url.path
     if path in _PUBLIC_PATHS or not path.startswith("/api/"):
@@ -382,7 +423,7 @@ async def auth_guard(request: Request):
     u = store.get_user(payload.get("sub", ""))
     if not u:
         raise HTTPException(401, "用户不存在")
-    request.state.user = auth.public_user(u)
+    request.state.user = _bind_acting_user(auth.public_user(u))
 
 
 def current_user(request: Request) -> dict:
@@ -390,22 +431,34 @@ def current_user(request: Request) -> dict:
 
 
 async def project_write_guard(request: Request):
-    """工程师的项目写操作必须属于本人；经理和管理员可跨项目管理。"""
-    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
-        return
+    """项目级唯一 ACL：`/api/projects/{project_id}/**` 的读与写开工前先过 project_access。
+
+    批次 7 把原来只覆盖「工程师写本人项目」的这一条扩成唯一入口：读 → require_project_access(pid,
+    user, "read")，专属业务动作 → "contribute"（只判可见 + 未归档），其余写 → "write"。不可见 /
+    归档要写一律按「项目不存在」404（与真不存在的响应逐字相同，不泄露存在性）；可见但项目级
+    写权不够 → 403。非项目路径、公开路径、非 12 位项目号一律原样放行，既有 `_require` 的角色
+    门禁不受影响（Spec §18.2：ACL 只回答「能不能进入项目」，能不能做这一步归接口自己）。
+    """
     match = re.match(r"^/api/projects/([0-9a-f]{12})(?:/|$)", request.url.path)
     if not match:
         return
-    user = current_user(request)
-    # 只在工程师角色做“本人项目”限制；总监等角色仍交由具体业务接口授权。
-    if user.get("role") != "engineer":
+    if request.url.path in _PUBLIC_PATHS:
         return
-    project_id = match.group(1)
-    meta = store.load_meta(project_id)
-    if not meta or meta.get("deleted_at"):
-        raise HTTPException(404, "项目不存在")
-    if not auth.can_edit_project(user, meta):
-        raise HTTPException(403, "工艺工程师只能修改本人创建的项目")
+    user = current_user(request)
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        mode = "read"
+    elif project_access.is_contribute_route(request.method, request.url.path):
+        # 白名单里的专属业务动作（财务确认成本 / 总监审核发布 / 报告回传…）：ACL 不得
+        # 提前否决，否则接口自己的 _require 永远没有执行机会（Spec §18.4 / §18.5）。
+        mode = "contribute"
+    else:
+        mode = "write"
+    try:
+        project_access.require_project_access(match.group(1), user, mode)
+    except project_access.ProjectAccessError as exc:
+        if exc.code == "not_found":
+            raise HTTPException(404, "项目不存在") from exc
+        raise HTTPException(403, exc.message or "无权访问该项目") from exc
 
 
 def _require(user: dict, allowed: set, msg: str) -> None:
@@ -474,6 +527,16 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(cpq_auth_client.CpqAuthUnavailable)
+async def cpq_auth_unavailable_handler(_request: Request, exc: Exception):
+    """账号级设置的来源（配置报价 CPQ）不可用：明确 503。
+
+    回 401 会把在线的人当成"没登录"，回 500 又像是本服务自己崩了 —— 都不是实情。
+    """
+    return JSONResponse(status_code=503, content={
+        "detail": f"账号级模型与密钥暂时读不到：{exc}"})
+
+
 @app.middleware("http")
 async def project_id_guard(request: Request, call_next):
     if not _valid_project_path(request.url.path):
@@ -495,22 +558,109 @@ async def response_hardening(request: Request, call_next):
     return response
 
 
+# 错误追踪 ID（批次 9 §7.3）：每个请求一个，响应头 X-Trace-Id + status>=400 的
+# JSON 体里的 trace_id 逐字相同。用户把屏幕上这个 ID 报给运维，就能一次定位到那条日志。
+TRACE_HEADER = "X-Trace-Id"
+
+
+def _trace_json_body(headers, body: bytes, trace_id: str):
+    """给 >=400 的 JSON 响应体补一个顶层 trace_id；不改其它形态的响应。"""
+    content_type = ""
+    for key, value in headers:
+        if key.lower() == b"content-type":
+            content_type = value.decode("latin-1").lower()
+            break
+    if "json" not in content_type or not body:
+        return None
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["trace_id"] = trace_id
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+class TraceIdMiddleware:
+    """给每个 HTTP 响应分配追踪 ID，并把它写进 >=400 的错误体。
+
+    写在 ASGI 层而不是 BaseHTTPMiddleware：错误体是内层（异常处理器、项目号守卫、
+    鉴权依赖）生成的，只有拿到**最终** body 才能补字段，而 http 中间件在流式响应上
+    拿不到它。响应缓冲到 body 结束再一次性发出，不改变分块行为。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        trace_id = uuid.uuid4().hex[:16]
+        state = {"start": None, "chunks": [], "sent": False}
+
+        async def flush():
+            if state["sent"] or state["start"] is None:
+                return
+            state["sent"] = True
+            start = state["start"]
+            body = b"".join(state["chunks"])
+            headers = [(key, value) for key, value in (start.get("headers") or [])
+                       if key.lower() not in (b"x-trace-id", b"content-length")]
+            headers.append((b"x-trace-id", trace_id.encode("ascii")))
+            if int(start.get("status") or 200) >= 400:
+                patched = _trace_json_body(headers, body, trace_id)
+                if patched is not None:
+                    body = patched
+            if body:
+                headers.append((b"content-length", str(len(body)).encode("ascii")))
+            await send({"type": "http.response.start", "status": start["status"],
+                        "headers": headers})
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+
+        async def send_wrapper(message):
+            kind = message.get("type")
+            if kind == "http.response.start":
+                state["start"] = dict(message)
+                return
+            if kind == "http.response.body":
+                state["chunks"].append(message.get("body") or b"")
+                if not message.get("more_body"):
+                    await flush()
+                return
+            await send(message)
+
+        failed = False
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if not failed:
+                await flush()
+
+
+# 必须最后注册：中间件是「后注册的在外层」，只有最外层才看得到其余中间件
+# （含项目号守卫）产生的响应。
+app.add_middleware(TraceIdMiddleware)
+
+
 def _startup_housekeeping():
     if CPQ_SSO_ENABLED and CPQ_MANAGER_FULL_TECH:
         # CPQ 只有销售经理/工艺经理两个角色，技术工艺的全部环节由工艺经理承担。
         # 详见 auth.enable_cpq_single_manager 的注释（含职责分离的代价）。
         auth.enable_cpq_single_manager()
     if AUTH_ENABLED and not CPQ_SSO_ENABLED:
-        # Do not silently expose an authenticated deployment with the source-code
-        # fallback secret. Existing installations with a custom secret keep their
-        # original behaviour; new deployments get a clear, actionable failure.
-        if AUTH_SECRET == "dev-insecure-secret-change-me":
-            raise RuntimeError("开启 AUTH_ENABLED 时必须在 .env 设置随机 AUTH_SECRET")
-        if not store.list_users() and DEFAULT_ADMIN_PASSWORD == "admin123":
-            raise RuntimeError("首次开启 AUTH_ENABLED 时必须在 .env 设置非默认 DEFAULT_ADMIN_PASSWORD")
-        auth.ensure_default_admin(store)
-        auth.ensure_system_user(store)
-        store.backfill_legacy_mine_owner(DEFAULT_ADMIN_USER)
+        # 用户数据已经只有 PG 一处（配置报价 CPQ 的 cpq_wf），技术工艺的本地账号库
+        # 已退役：留着 AUTH_ENABLED=true + CPQ_SSO=false 这条路，只能得到一个
+        # "登录页永远密码错误"的假象。当场说清楚，并给出两条出路。
+        raise RuntimeError(
+            "AUTH_ENABLED=true 且 CPQ_SSO=false：用户数据已统一到配置报价 CPQ 的 "
+            "Postgres，技术工艺不再有本地账号库，这条登录路径没有用户来源。"
+            "两条出路：① 设 CPQ_SSO=true 并配置 CPQ_AUTH_BASE_URL 指向配置报价 CPQ"
+            "（推荐）；② 本地开发设 AUTH_ENABLED=false。")
     # ThreadPoolExecutor 任务只在当前进程中存在。服务重启后明确结束旧任务，
     # 使轮询端能恢复操作，而不是永久停留在“处理中”。
     if TASK_RECOVER_ON_START:
@@ -518,14 +668,29 @@ def _startup_housekeeping():
 
 
 def _reject_local_login() -> None:
-    """SSO 模式下本地登录必须明确拒绝，不能"看着能用"。
+    """本地登录必须明确拒绝，不能"看着能用"。
 
-    放着不管的话它照样发一张 tech_app 令牌，而 SSO 守卫只认 CPQ 的票 —— 用户会看到
-    "登录成功"然后每个接口都 401，无从判断是密码错了还是别的。
+    SSO 模式下放着不管的话它照样发一张 tech_app 令牌，而 SSO 守卫只认 CPQ 的票 ——
+    用户会看到"登录成功"然后每个接口都 401，无从判断是密码错了还是别的。
+
+    独立模式（CPQ_SSO=false）同样拒绝：本地账号库已退役，用户数据只剩 PG 一处，
+    再让它"看起来能登录"只会得到一个永远密码错误的登录框。路由保留（前端还在引用），
+    但入口一律指路配置报价 CPQ。
     """
     if CPQ_SSO_ENABLED:
         raise HTTPException(
             409, "技术工艺已接入配置报价 CPQ 的统一登录，请在 CPQ 中以工艺经理身份登录")
+    raise HTTPException(
+        409, "技术工艺的账号与角色已统一在配置报价 CPQ 中维护，本机不再保存用户数据；"
+             "请在 CPQ 里登录（本地开发请设 AUTH_ENABLED=false）。")
+
+
+def _users_moved_to_cpq() -> None:
+    """用户与权限的路由保留，但明确 409 指路 —— 不允许再回本地用户数据。"""
+    raise HTTPException(
+        409, "用户与权限在配置报价 CPQ 中维护：请到 CPQ 的「用户管理」里建号、改角色、"
+             "停用账号或重置口令（技术工艺不再保存本地账号；存量账号见 "
+             "scripts/migrate_users_to_pg.py）。")
 
 
 @app.post("/api/login")
@@ -575,13 +740,24 @@ def whoami(user: dict = Depends(current_user)):
         "sso": {
             "enabled": CPQ_SSO_ENABLED,
             "provider": "配置报价 CPQ",
-            "required_role_name": "工艺经理",
+            # 前端要按 user_id 管账号（改角色 / 停用 / 重置口令都在 CPQ 的
+            # /auth/users/{user_id} 上），username 只作登录名与展示。
+            "user_id": (user or {}).get("user_id") or (user or {}).get("cpq_user_id") or "",
+            # 登录提示要跟开关一致：全权模式下工艺经理一个人做完，关掉之后 3.2 审核 /
+            # 3.3 发布归「工艺技术总监」，再声称"只能工艺经理使用"会把人挡在门外。
+            "required_role_name": "工艺经理" if CPQ_MANAGER_FULL_TECH else "工艺技术总监",
             # can_write 是**工艺侧**的写权限（2.1/2.2 解析、生成、确认）。
             # can_cost 是 2.3 成本测算 —— 那是财务经理的步骤，他在工艺侧只读，
             # 但绝不能因此被前端一刀切拦成"什么都不能做"（cpq-sso.js 的写拦截
             # 原来只看 can_write，财务经理点测算连请求都发不出去）。
             "can_write": (user or {}).get("role") in auth.WRITE_ROLES,
             "can_cost": (user or {}).get("role") in auth.COST_ROLES,
+            # can_review = 3.2 报告审核（REVIEW_ROLES）、can_publish = 3.3 报告发布
+            # （DIRECTOR_ROLES）。前端据此放行对应按钮，否则工艺技术总监点「审核通过」
+            # 「发布」会被前端伪 403 挡下（和当初财务经理点「测算」是同一个坑）；
+            # 最终判定仍在后端 _require。
+            "can_review": (user or {}).get("role") in auth.REVIEW_ROLES,
+            "can_publish": (user or {}).get("role") in auth.DIRECTOR_ROLES,
             "role_name": (user or {}).get("cpq_role_name") or auth.ROLE_LABEL.get(
                 (user or {}).get("role", ""), ""),
         } if CPQ_SSO_ENABLED else {"enabled": False},
@@ -590,57 +766,38 @@ def whoami(user: dict = Depends(current_user)):
 
 @app.put("/api/me")
 def update_my_profile(body: UpdateMyProfile, user: dict = Depends(current_user)):
-    username = user.get("username", "")
-    saved = store.get_user(username)
-    if not saved:
-        raise HTTPException(404, "用户不存在")
+    """改本人的显示名 / 密码。用户数据只剩 PG 一处，改动转发给配置报价 CPQ。"""
+    if not CPQ_SSO_ENABLED:
+        raise HTTPException(
+            409, "账号资料在配置报价 CPQ 中维护：请在 CPQ 里改显示名与密码"
+                 "（本地开发模式没有用户来源，不签发技术工艺自己的令牌）。")
     display_name = body.display_name.strip()
     if display_name:
-        saved["display_name"] = display_name
+        cpq_auth_client.update_profile(display_name)
     if body.new_password:
-        if not body.current_password or not auth.verify_password(body.current_password, saved.get("password_hash", "")):
-            raise HTTPException(400, "当前密码不正确")
-        if len(body.new_password) < 8:
-            raise HTTPException(400, "新密码至少需要 8 位")
-        saved["password_hash"] = auth.hash_password(body.new_password)
-    store.save_user(username, saved)
-    public = auth.public_user(saved)
-    return {"user": public, "token": auth.make_token(public["username"], public["role"])}
+        if not body.current_password:
+            raise HTTPException(400, "请输入当前密码")
+        cpq_auth_client.change_password(body.current_password, body.new_password)
+    profile = dict(user)
+    if display_name:
+        profile["display_name"] = display_name
+    return {"user": profile, "message": "资料已更新（以配置报价 CPQ 的账号为准）"}
 
 
 @app.get("/api/users")
 def list_users_ep(user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    return {"users": [auth.public_user(u) for u in store.list_users()]}
+    # 路由保留（前端仍在引用），但用户数据只在 CPQ 一处：不允许再回本地账号。
+    _users_moved_to_cpq()
 
 
 @app.post("/api/users")
 def create_user_ep(body: NewUser, user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    username = _valid_username(body.username)
-    if body.role not in auth.ROLES:
-        raise HTTPException(400, f"非法角色,可选: {', '.join(auth.ROLES)}")
-    if store.get_user(username):
-        raise HTTPException(409, "用户名已存在")
-    rec = auth.make_user(username, body.password, body.role, body.display_name)
-    store.save_user(rec["username"], rec)
-    return auth.public_user(rec)
+    _users_moved_to_cpq()
 
 
 @app.put("/api/users/{username}/role")
 def update_user_role_ep(username: str, body: UpdateUserRole, user: dict = Depends(current_user)):
-    _require(user, auth.ADMIN_ROLES, "需要管理员权限")
-    if body.role not in auth.ROLES or body.role == "admin":
-        raise HTTPException(400, "仅可授予业务角色；管理员角色不可通过此接口授予")
-    target = store.get_user(username)
-    if not target:
-        raise HTTPException(404, "用户不存在")
-    if target.get("is_system"):
-        raise HTTPException(400, "system 为历史项目归档账号，不能修改角色")
-    target["role"] = body.role
-    target["requested_role"] = body.role
-    store.save_user(username, target)
-    return {"user": auth.public_user(target)}
+    _users_moved_to_cpq()
 
 
 # --------------------------------------------------------------------------- #
@@ -650,7 +807,12 @@ def update_user_role_ep(username: str, body: UpdateUserRole, user: dict = Depend
 def health():
     # 一律以「模型设置」为准。以前这里按 .env 的 LLM_PROVIDER 分支、再读 qwen 的
     # 模型池，界面上改了模型健康检查却还报旧值。
-    vision = llm_settings.resolve(vision=True)
+    # 当前模型不支持图像时 resolve(vision=True) 会如实报错，健康检查不能因此 500：
+    # 健康检查要回答的是"服务起没起来"，能力不匹配由图纸解析那一步去报。
+    try:
+        vision = llm_settings.resolve(vision=True)
+    except ValueError:
+        vision = llm_settings.resolve(vision=False)
     text = llm_settings.resolve(vision=False)
     return {
         "status": "ok",
@@ -684,6 +846,9 @@ def get_runtime_llm_settings(user: dict = Depends(current_user)):
 
     所有已登录用户都能看；工艺经理及以上能改模型与参数，API Key 只有管理员能改。
     密钥永远只回「是否已配置」。
+
+    兼容保留：真正的读写只有一份实现（下面 /api/settings 是同一个函数），
+    技术工艺前端与业务逻辑一律走 /api/settings，这里不再保存任何独立状态。
     """
     return llm_settings.snapshot(**_llm_settings_rights(user))
 
@@ -695,6 +860,13 @@ def update_runtime_llm_settings(body: LlmSettingsBody, user: dict = Depends(curr
     # 用 exclude_none 的话，temperature=null（恢复模型默认值）会被整个丢掉，
     # 界面上"留空"就永远生效不了。
     patch = body.model_dump(exclude_unset=True)
+    # 旧客户端的 vision_model / text_model 只是同一个 model 的老名字。
+    if not patch.get("model"):
+        legacy = patch.get("vision_model") or patch.get("text_model")
+        if legacy:
+            patch["model"] = legacy
+    patch.pop("vision_model", None)
+    patch.pop("text_model", None)
     if not patch:
         raise HTTPException(400, "没有要修改的设置项")
     try:
@@ -716,9 +888,149 @@ def audit_llm_settings_change(user: dict, patch: dict) -> None:
     })
 
 
+class MyLlmSettingsBody(BaseModel):
+    """账号级「我的模型与密钥」入参。
+
+    只有 model 与 api_key 两项（推理参数归全局）。请求体里就算带 username / user /
+    actor 也一律忽略：这三个接口只作用于 current_user，不接受指定他人。
+    """
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_provider: Optional[str] = None
+
+
+def audit_user_llm_settings_change(user: dict, fields: list, secrets_changed: bool) -> None:
+    """账号级改动的审计口径与全局一致：只记字段名与「是否改了密钥」，不记任何值。"""
+    store.audit("_global", "user_llm_settings_update", {
+        "actor": (user or {}).get("username", "system"),
+        "fields": sorted(set(fields)),
+        "secrets_changed": bool(secrets_changed),
+    })
+
+
+def _my_llm_username(user: dict) -> str:
+    """账号级接口只认 current_user 的 username —— 显式取，不依赖上下文传递。"""
+    return str((user or {}).get("username", "") or "").strip()
+
+
+def _my_provider_rows(username: str) -> list:
+    """该账号各 provider 的个人 Key 状态：只有 configured 与打码，永不回明文。"""
+    personal = (user_llm.summary(username).get("keys") or {})
+    rows = []
+    for provider, spec in (llm_settings.PROVIDERS or {}).items():
+        entry = personal.get(provider) or {}
+        rows.append({
+            "provider": provider,
+            "label": (spec or {}).get("label") or provider,
+            "base_url": llm_settings.base_url_of(provider),
+            "configured": bool(entry.get("configured")),
+            "hint": entry.get("hint") or "",
+        })
+    return sorted(rows, key=lambda row: row["provider"])
+
+
+def _my_llm_payload(username: str) -> dict:
+    """账号级设置 + 生效模型/来源（给界面显示"现在用的是谁的模型"）。"""
+    summary = user_llm.summary(username)
+    eff = llm_settings.effective(username)
+    return {
+        "username": username,
+        "model": summary.get("model") or "",
+        "has_model": bool(summary.get("has_model")),
+        "keys": summary.get("keys") or {},
+        "effective_model": eff.get("model") or "",
+        "effective_source": eff.get("source") or "global",
+        "key_source": eff.get("key_source") or "missing",
+    }
+
+
+# 「我的模型与密钥」：每个登录账号管自己的那一层，不设置就回落平台默认。
+@app.get("/api/my/settings")
+def get_my_llm_settings(user: dict = Depends(current_user)):
+    """读**自己**的账号级设置；任何账号都看不到别人的（连打码都不行）。"""
+    username = _my_llm_username(user)
+    return {**_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
+@app.put("/api/my/settings")
+def update_my_llm_settings(body: MyLlmSettingsBody, user: dict = Depends(current_user)):
+    """写**自己**的账号级设置。
+
+    model 缺键 = 不改；空串/null = 清除个人模型（回落平台默认）；api_key 必须与
+    api_key_provider 成对且非空才写（留空 = 不修改，与全局设置一致）。
+    """
+    username = _my_llm_username(user)
+    if not username:
+        raise HTTPException(400, "无法确定当前账号，无法保存账号级模型设置")
+    patch = body.model_dump(exclude_unset=True)
+    fields: list = []
+    secrets_changed = False
+    try:
+        if "model" in patch:
+            user_llm.set_model(username, patch.get("model") or "")
+            fields.append("model")
+        key = str(patch.get("api_key") or "").strip()
+        if key:
+            provider = str(patch.get("api_key_provider") or "").strip()
+            if not provider:
+                raise ValueError("保存账号级 API Key 时必须指明提供商")
+            user_llm.set_key(username, provider, key)
+            fields.append("api_key")
+            secrets_changed = True
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if fields:
+        audit_user_llm_settings_change(user, fields, secrets_changed)
+    return {"ok": True, "message": "已保存到「我的模型与密钥」，只对本账号生效",
+            **_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
+@app.delete("/api/my/settings/keys/{provider}")
+def delete_my_llm_key(provider: str, user: dict = Depends(current_user)):
+    """删除**自己**在某个 provider 的个人 Key（模板 Key 不动）。"""
+    username = _my_llm_username(user)
+    if not username:
+        raise HTTPException(400, "无法确定当前账号，无法删除账号级密钥")
+    try:
+        user_llm.set_key(username, provider, "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit_user_llm_settings_change(user, ["api_key"], True)
+    return {"ok": True, **_my_llm_payload(username), "providers": _my_provider_rows(username)}
+
+
+# 四个入口（报价 / 配置 / 规则 / 技术工艺）共用的「模型设置」接口。
+# 与 /api/llm/settings 是同一份实现、同一份配置、同一套角色校验，只是路径更直白。
+@app.get("/api/settings")
+def get_shared_model_settings(user: dict = Depends(current_user)):
+    # 额外附上「我的」摘要与生效模型：面板要在同一屏里说清"平台默认是什么、
+    # 我现在实际用的是谁的"。仍然只回 configured + 打码，不回明文。
+    username = _my_llm_username(user)
+    eff = llm_settings.effective(username)
+    return {
+        **get_runtime_llm_settings(user),
+        "mine": user_llm.summary(username),
+        "effective_model": eff.get("model") or "",
+        "effective_source": eff.get("source") or "global",
+    }
+
+
+@app.put("/api/settings")
+def update_shared_model_settings(body: LlmSettingsBody,
+                                 user: dict = Depends(current_user)):
+    return update_runtime_llm_settings(body, user)
+
+
 @app.get("/api/projects")
-def projects():
-    return store.list_projects()
+def projects(scope: str = "mine", include_archived: bool = False,
+             user: dict = Depends(current_user)):
+    """项目列表：默认「我的」；?scope=all 是我权限范围内的全部（不是全公司）；archived 是归档。
+
+    返回形状仍是 list（既有消费方不必改结构），每项新增 `access` 块。非法 scope → 400。
+    """
+    if scope not in project_access.SCOPES:
+        raise HTTPException(400, f"scope 取值不合法：{scope}")
+    return project_access.visible_projects(user, scope, include_archived=include_archived)
 
 
 @app.patch("/api/projects/{project_id}/management")
@@ -969,19 +1281,76 @@ def list_project_files(project_id: str):
     }
 
 
-def _geometry_payload(project_id: str, results) -> dict:
+def _geometry_entry(project_id: str, r) -> dict:
     base = f"/api/projects/{project_id}/geometry"
     return {
-        "parts": [
-            {
-                "part_id": r.part_id, "name": r.name, "ok": r.ok,
-                "volume_mm3": r.volume_mm3, "mass_g": r.mass_g, "bbox": r.bbox,
-                "warnings": r.warnings, "error": r.error,
-                "stl_url": f"{base}/{r.part_id}.stl" if r.ok else None,
-                "step_url": f"{base}/{r.part_id}.step" if r.ok else None,
-            }
-            for r in results
-        ]
+        "part_id": r.part_id, "name": r.name, "ok": r.ok,
+        "volume_mm3": r.volume_mm3, "mass_g": r.mass_g, "bbox": r.bbox,
+        "warnings": r.warnings, "error": r.error,
+        "stl_url": f"{base}/{r.part_id}.stl" if r.ok else None,
+        "step_url": f"{base}/{r.part_id}.step" if r.ok else None,
+    }
+
+
+def _geometry_payload(project_id: str, results) -> dict:
+    return {"parts": [_geometry_entry(project_id, r) for r in results]}
+
+
+def _drawings_entry(project_id: str, r) -> dict:
+    base = f"/api/projects/{project_id}/geometry"
+    return {
+        "part_id": r.part_id, "name": r.name, "ok": r.ok,
+        "views": {v: f"{base}/{fn}" for v, fn in r.views.items()},
+        "dxf_url": f"{base}/{r.dxf}" if r.dxf else None,
+        "warnings": r.warnings, "error": r.error,
+    }
+
+
+def _assemble_batch(project_id: str, parts, results, blocked, build_entry) -> dict:
+    """把逐件结果拼成「覆盖 IR 全部零件、保持 IR 顺序」的批量结果（C1）。
+
+    被预检挡下的零件根本没进 CAD：条目带 skipped=True 与结构化 issues，
+    与成功件一起落库 —— 重进项目 / 重载看板才能看到「4 成功 + 1 待补」。
+    计数口径：succeeded + failed + skipped == total，
+    预检被挡算 skipped，预检通过但运行期报错算 failed。
+    """
+    by_id = {r.part_id: r for r in results}
+    issues_by_id: dict = {}
+    for issue in blocked:
+        issues_by_id.setdefault(issue.get("part_id"), []).append(issue)
+    entries: list[dict] = []
+    skipped_parts: list[str] = []
+    succeeded = failed = skipped = 0
+    for part in parts:
+        result = by_id.get(part.part_id)
+        if result is None:
+            issues = issues_by_id.get(part.part_id) or []
+            entries.append(part_versions.stamp_entry({
+                "part_id": part.part_id, "name": part.name, "ok": False,
+                "warnings": [], "skipped": True, "issues": issues,
+                "error": issues[0]["message"] if issues else "该零件未生成",
+            }, part))
+            skipped += 1
+            skipped_parts.append(part.part_id)
+            continue
+        entry = build_entry(project_id, result)
+        # 逐件来源指纹（C1）：重进项目时才知道这个条目是不是当前形状生成的。
+        part_versions.stamp_entry(entry, part)
+        entry["skipped"] = False
+        if result.ok:
+            succeeded += 1
+            entry["issues"] = []
+        else:
+            failed += 1
+            # 预检通过却运行期失败：只有这种才适合「再次生成」，与缺参数区分开。
+            entry["issues"] = [geometry.runtime_issue(
+                result.part_id, result.name, result.error or "CAD 生成失败")]
+        entries.append(entry)
+    return {
+        "status": "succeeded" if not skipped and not failed else "partial",
+        "total": len(parts), "succeeded": succeeded, "failed": failed,
+        "skipped": skipped, "skipped_parts": skipped_parts,
+        "blocked": blocked, "parts": entries,
     }
 
 
@@ -995,18 +1364,7 @@ def _upsert_part(payload: dict, part_entry: dict) -> None:
 
 
 def _drawings_payload(project_id: str, results) -> dict:
-    base = f"/api/projects/{project_id}/geometry"
-    return {
-        "parts": [
-            {
-                "part_id": r.part_id, "name": r.name, "ok": r.ok,
-                "views": {v: f"{base}/{fn}" for v, fn in r.views.items()},
-                "dxf_url": f"{base}/{r.dxf}" if r.dxf else None,
-                "warnings": r.warnings, "error": r.error,
-            }
-            for r in results
-        ]
-    }
+    return {"parts": [_drawings_entry(project_id, r) for r in results]}
 
 
 @app.post("/api/projects/3d")
@@ -1068,6 +1426,35 @@ async def upload_3d(
     return {"project_id": project_id, "task_id": task_id}
 
 
+def _kb_unavailable_info(exc: BaseException) -> dict:
+    """把"知识库这次没查到"整理成 store 要的固定字段（reason/message/error/at）。
+
+    「库里没有可复用零件」与「压根没查到」必须能分开：前者仍是一份正常报告，
+    后者落成 component_match_unavailable，由看板顶部与结论区如实显示（## 92）。
+    """
+    kb_down = isinstance(exc, component_match.KbUnavailable)
+    return {
+        "reason": "kb_unavailable" if kb_down else "kb_error",
+        "message": ("零件库连不上，本次未检索" if kb_down
+                    else "零件库检索失败，本次未检索"),
+        "error": str(exc)[:200],
+        "at": store._now(),
+    }
+
+
+def _tool_detail(tool: str, title: str, *, status: str,
+                 input: Optional[dict] = None, output: Optional[dict] = None) -> dict:
+    """过程事件的工具明细统一五键形状（Spec B1）：tool / title / input / output / status。
+
+    只放事实（件号、序号、查询条件、判定、匹配度、差异、计数）——密钥、prompt 原文、
+    附件内容与候选件完整数组一律不进明细；**规模与结构摘要**（字数 / 段落数 / 图片数 /
+    顶层字段规模）与**文件名**（非路径）例外，允许放进明细。
+    """
+    return {"tool": str(tool or ""), "title": str(title or ""),
+            "input": dict(input or {}), "status": str(status or "running"),
+            "output": dict(output or {})}
+
+
 def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> None:
     """把当前零件清单拿到零部件库里比一遍，标出可复用/可改制/未匹配。
 
@@ -1076,16 +1463,37 @@ def _refresh_component_match(project_id: str, payload: dict, *, kept: str) -> No
 
     检索本身不调模型、只读本地库，所以顺手跑不增加成本；但它失败也**不能**让
     已经拿到的解析/推荐结果作废 —— 那是花了模型钱的，检索只是附加信息。
+    但"没查到"这件事必须**留下现场**（落盘 + 左边提示），不能只写一条审计就完事：
+    审计是给事后追溯的，用户当场看不到，刷新页面后现场就没了。
     """
+    tasks.process_event("tool", "检索零部件库开始",
+                        detail=_tool_detail("component_match", "零部件库检索",
+                                            status="running"))
     try:
         report = component_match.match_project(
             project_id, payload, progress=tasks.report_progress,
         )
-        component_match.save_report(project_id, report)
+        component_match.save_report(project_id, report)   # 成功即清掉"未检索"状态
         payload["component_match"] = report
+        summary = report.get("summary") or {}
+        reuse = summary.get("reuse", 0)
+        modify = summary.get("modify", 0)
+        tasks.process_event("tool", f"  ↳ 命中可复用 {reuse} 件、可改制 {modify} 件",
+                            detail=_tool_detail(
+                                "component_match", "零部件库检索", status="ok",
+                                output={"total": summary.get("total", 0), "reuse": reuse,
+                                        "modify": modify, "new": summary.get("new", 0),
+                                        "library_size": report.get("library_size", 0)}))
     except Exception as exc:
-        tasks.report_progress(f"  ↳ 零部件库检索失败：{str(exc)[:120]}（不影响已得到的{kept}）")
+        info = _kb_unavailable_info(exc)
+        reason = str(exc)[:120]
+        tasks.report_progress(f"  ↳ {info['message']}：{reason}（不影响已得到的{kept}）")
+        tasks.process_event("tool", f"  ↳ 零部件库检索失败：{reason}",
+                            detail=_tool_detail("component_match", "零部件库检索",
+                                                status="failed",
+                                                output={"reason": reason}))
         store.audit(project_id, "component_match_failed", {"error": str(exc)[:200]})
+        store.save_component_match_unavailable(project_id, info)
 
 
 @app.post("/api/projects/{project_id}/parse")
@@ -1109,7 +1517,9 @@ def parse(project_id: str, user: dict = Depends(current_user)):
             f"读取输入：{name}"
             + (f"、技术文档 {len(atts)} 份" if atts else "")
             + (f"、补充说明 {len(note.strip())} 字" if note.strip() else ""))
-        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.snapshot()['vision_model']}）")
+        # 显示**生效模型**：发起账号（谁点的解析）可能有自己的模型，
+        # 写死全局默认会让人对着日志找不到实际用的是哪个模型。
+        tasks.report_progress(f"调用多模态模型解析图纸（{llm_settings.effective()['model']}）")
         ir = vision.parse_drawing(data, name, note=note, attachments=atts)
         tasks.report_progress(
             f"  ↳ 解析完成：{len(ir.parts)} 个零件、{len(ir.open_questions or [])} 个待澄清问题、"
@@ -1138,10 +1548,23 @@ def parse(project_id: str, user: dict = Depends(current_user)):
 
 @app.get("/api/projects/{project_id}/component-match")
 def get_component_match(project_id: str, user: dict = Depends(current_user)):
-    """图纸拆解时的零部件库检索报告。尚未解析或库为空时返回空报告。"""
+    """图纸拆解时的零部件库检索报告 + 本次"没查到"的状态。
+
+    报告缺失只说明"还没检索过"；`unavailable` 非空才说明"检索了但没查成"。
+    前端靠这个字段把"库里没有可复用零件"与"压根没查到"分开（## 92 C3）。
+
+    没查到时不回 `library_size: 0`：那是把故障说成"库内 0 条"。上一次成功结论的
+    真实计数照旧带出（可能已过期，由前端标注），本来就没有报告时才给 null。
+    """
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
-    return store.load_component_match(project_id) or {"items": [], "summary": {}}
+    unavailable = store.load_component_match_unavailable(project_id)
+    report = store.load_component_match(project_id)
+    body = dict(report) if report else {"items": [], "summary": {}}
+    body["unavailable"] = unavailable or None
+    if unavailable and not body.get("library_size"):
+        body["library_size"] = None
+    return body
 
 
 @app.post("/api/projects/{project_id}/component-match")
@@ -1153,8 +1576,16 @@ def run_component_match(project_id: str, user: dict = Depends(current_user)):
         raise HTTPException(400, "尚未完成图纸解析")
 
     def job():
-        report = component_match.match_project(project_id, ir, progress=tasks.report_progress)
-        component_match.save_report(project_id, report)
+        try:
+            report = component_match.match_project(
+                project_id, ir, progress=tasks.report_progress,
+            )
+        except Exception as exc:
+            # 任务照样失败（异常继续上抛），但先把"没查到"落成状态：
+            # 刷新页面、换台机器打开，看板顶部的警示都还在。
+            store.save_component_match_unavailable(project_id, _kb_unavailable_info(exc))
+            raise
+        component_match.save_report(project_id, report)   # 成功即清掉"未检索"状态
         return report
 
     return {"task_id": tasks.submit(project_id, "component_match", job)}
@@ -1175,20 +1606,43 @@ def _match_for_part(project_id: str, part_id: str) -> Optional[dict]:
 
 
 def _process_lookup_for(project_id: str, part_id: str, part: dict) -> Optional[dict]:
+    tasks.process_event("tool", f"检索企业工艺库（{part_id}）",
+                        detail=_tool_detail("process_lookup", "企业工艺库检索",
+                                            status="running", input={"part_id": part_id}))
     try:
         report = process_lookup.lookup_part(
             part, match=_match_for_part(project_id, part_id),
             progress=tasks.report_progress,
         )
         process_lookup.save_report(project_id, part_id, report)
+        summary = report.get("summary") or {}
+        route_code = (report.get("route") or {}).get("route_code") or ""
+        route_steps = summary.get("route_steps", 0)
+        extra_steps = summary.get("extra_steps", 0)
+        tasks.process_event("tool", f"  ↳ 命中 {route_steps} 道工序、补充工序 {extra_steps} 条",
+                            detail=_tool_detail(
+                                "process_lookup", "企业工艺库检索", status="ok",
+                                input={"part_id": part_id},
+                                output={"route_code": route_code, "route_steps": route_steps,
+                                        "extra_steps": extra_steps,
+                                        "feature_gaps": len(report.get("feature_gaps") or []),
+                                        "library_steps": summary.get("library_steps", 0)}))
         return report
     except Exception as exc:
+        reason = str(exc)[:120]
+        tasks.process_event("tool", f"  ↳ 企业工艺库检索失败：{reason}",
+                            detail=_tool_detail("process_lookup", "企业工艺库检索",
+                                                status="failed", input={"part_id": part_id},
+                                                output={"reason": reason}))
         store.audit(project_id, "process_lookup_failed",
                     {"part_id": part_id, "error": str(exc)[:200]})
         return None
 
 
 def _cost_lookup_for(project_id: str, part_id: str, part: dict, quantity: int) -> Optional[dict]:
+    tasks.process_event("tool", f"检索企业成本库（{part_id}）",
+                        detail=_tool_detail("cost_lookup", "企业成本库检索", status="running",
+                                            input={"part_id": part_id, "quantity": quantity}))
     try:
         report = cost_lookup.lookup_part(
             part, quantity=quantity, match=_match_for_part(project_id, part_id),
@@ -1196,8 +1650,23 @@ def _cost_lookup_for(project_id: str, part_id: str, part: dict, quantity: int) -
             progress=tasks.report_progress,
         )
         cost_lookup.save_report(project_id, part_id, report)
+        summary = report.get("summary") or {}
+        materials = summary.get("materials", 0)
+        rates = summary.get("rates", 0)
+        tasks.process_event("tool", f"  ↳ 命中物料价 {materials} 条、费率 {rates} 条",
+                            detail=_tool_detail(
+                                "cost_lookup", "企业成本库检索", status="ok",
+                                input={"part_id": part_id, "quantity": quantity},
+                                output={"materials": materials, "rates": rates,
+                                        "factors": summary.get("factors", 0)}))
         return report
     except Exception as exc:
+        reason = str(exc)[:120]
+        tasks.process_event("tool", f"  ↳ 企业成本库检索失败：{reason}",
+                            detail=_tool_detail("cost_lookup", "企业成本库检索",
+                                                status="failed",
+                                                input={"part_id": part_id, "quantity": quantity},
+                                                output={"reason": reason}))
         store.audit(project_id, "cost_lookup_failed",
                     {"part_id": part_id, "error": str(exc)[:200]})
         return None
@@ -1384,7 +1853,28 @@ def model_lookup_search(project_id: str, user: dict = Depends(current_user)):
 
     def job():
         tasks.report_progress("正在调用模型识别候选型号")
-        result = model_lookup.identify_models(DesignIR(**ir_dict), attachments)
+        tasks.process_event("tool", "联网核验型号",
+                            detail=_tool_detail("model_lookup", "型号联网核验",
+                                                status="running"))
+        try:
+            result = model_lookup.identify_models(DesignIR(**ir_dict), attachments)
+        except Exception as exc:
+            reason = str(exc)[:120]
+            tasks.process_event("tool", f"  ↳ 型号联网核验失败：{reason}",
+                                detail=_tool_detail("model_lookup", "型号联网核验",
+                                                    status="failed",
+                                                    output={"reason": reason}))
+            raise
+        identifications = list(result.identifications or [])
+        counts = {"matched": 0, "ambiguous": 0, "not_found": 0, "not_a_model": 0}
+        for item in identifications:
+            decision = str(getattr(item, "status", "") or "").strip().lower()
+            if decision in counts:
+                counts[decision] += 1
+        candidate_count = len(identifications)
+        tasks.process_event("tool", f"  ↳ 命中 {candidate_count} 个型号候选",
+                            detail=_tool_detail("model_lookup", "型号联网核验", status="ok",
+                                                output=counts))
         tasks.report_progress("型号候选已返回，正在去重并保存待确认结果")
         _assert_ir_unchanged(project_id, expected_ir)
         payload = result.model_dump()
@@ -1520,7 +2010,11 @@ def decompose_recommend(project_id: str, user: dict = Depends(current_user)):
 
 @app.post("/api/projects/{project_id}/generate")
 def generate(project_id: str, user: dict = Depends(current_user)):
-    """据 IR 用 CAD 内核生成各零件几何(STEP/STL) + 校验(异步任务)。"""
+    """据 IR 用 CAD 内核生成各零件几何(STEP/STL) + 校验(异步任务)。
+
+    预检是逐件的：能生成的零件先全部生成，被挡零件就地带着结构化原因返回。
+    一个零件缺参数不再让整批 3D 一起失败（C1）。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir_dict = store.load_ir(project_id)
     if not ir_dict:
@@ -1530,31 +2024,61 @@ def generate(project_id: str, user: dict = Depends(current_user)):
             503, "CadQuery 未安装，几何生成不可用。请 `pip install cadquery` 后重试。"
         )
     expected_ir = _digest_value(ir_dict)
+    ir = DesignIR(**ir_dict)
+    # 确定性预检在提交异步任务之前同步跑完（C7）：被挡零件不进任务，同一份 IR
+    # 反复点击也不会再堆出一串一模一样的失败任务。
+    processable, blocked = geometry.plan_batch(ir.parts)
+    part_ids = [p.part_id for p in processable]
+    if not part_ids:
+        return {
+            # 一个可生成零件都没有 ⇒ 一个成功件都不会有，所以这不是 partial（C3-4）：
+            # 不起异步任务、不留任何任务记录，直接把结构化原因交回前端就地显示。
+            "task_id": None, "status": "failed", "total": len(ir.parts),
+            "processable": 0, "blocked": blocked,
+        }
 
     def job():
-        ir = DesignIR(**ir_dict)
-        issues = geometry.preflight_parts(ir.parts)
-        if issues:
+        out_dir = store.geometry_dir(project_id)
+        results = []
+        try:
+            for part in DesignIR(**ir_dict).parts:
+                if part.part_id in part_ids:
+                    results.append(geometry.generate_part(part, out_dir))
+        except geometry.GeometryUnavailable as exc:
+            # 内核整体不可用属于整批失败（C3-1），不得被吞成「5 个零件各自失败」。
+            raise geometry.GeometryUnavailable(
+                f"{exc}（{geometry.CADQUERY_UNAVAILABLE_CODE}）") from exc
+        if not any(r.ok for r in results):
             raise RuntimeError(
-                "CAD 几何预检未通过（未调用模型，也不会产生 API 费用）：\n- "
-                + "\n- ".join(issues)
+                "CAD 几何生成失败：所有可生成零件都在运行期报错\n- "
+                + "\n- ".join(f"{r.part_id}: {r.error}" for r in results)
             )
-        results = geometry.generate_all(ir.parts, store.geometry_dir(project_id))
         _assert_ir_unchanged(project_id, expected_ir)
-        payload = _geometry_payload(project_id, results)
+        payload = _assemble_batch(project_id, ir.parts, results, blocked, _geometry_entry)
         payload["source_ir_hash"] = expected_ir
+        # 生成时的输入版本：之后原图 / 附件被替换（input_revision 变了）才整份过期（C3-1）。
+        payload["input_revision"] = _input_revision(project_id)
         store.save_geometry_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
 
-    return {"task_id": tasks.submit(
-        project_id, "generate", job, cad=True, dedup_key=_task_key("generate", expected_ir)
-    )}
+    return {
+        "task_id": tasks.submit(
+            project_id, "generate", job, cad=True,
+            dedup_key=_task_key("generate", expected_ir),
+        ),
+        "status": "queued", "total": len(ir.parts),
+        "processable": len(part_ids), "blocked": blocked,
+    }
 
 
 @app.post("/api/projects/{project_id}/drawings")
 def drawings(project_id: str, user: dict = Depends(current_user)):
-    """据 IR 用 CAD 内核生成各零件 2D 工程图(三视图 SVG + 下料 DXF,异步任务)。"""
+    """据 IR 用 CAD 内核生成各零件 2D 工程图(三视图 SVG + 下料 DXF,异步任务)。
+
+    2D 从 IR 重建实体（不读已保存的 3D 文件），所以与 3D 共用同一套逐件模型、
+    同样不要求 3D 全成功（C2）。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir_dict = store.load_ir(project_id)
     if not ir_dict:
@@ -1562,26 +2086,41 @@ def drawings(project_id: str, user: dict = Depends(current_user)):
     if not drawing2d.AVAILABLE:
         raise HTTPException(503, "CadQuery 未安装，2D 工程图生成不可用。")
     expected_ir = _digest_value(ir_dict)
+    ir = DesignIR(**ir_dict)
+    processable, blocked = geometry.plan_batch(ir.parts)
+    part_ids = [p.part_id for p in processable]
+    if not part_ids:
+        return {
+            # 2D 与 3D 同形：没有可生成零件时不会出现 partial，整批就地失败。
+            "task_id": None, "status": "failed", "total": len(ir.parts),
+            "processable": 0, "blocked": blocked,
+        }
 
     def job():
-        ir = DesignIR(**ir_dict)
-        issues = geometry.preflight_parts(ir.parts)
-        if issues:
+        out_dir = store.geometry_dir(project_id)
+        results = [drawing2d.generate_drawings(part, out_dir)
+                   for part in DesignIR(**ir_dict).parts if part.part_id in part_ids]
+        if not any(r.ok for r in results):
             raise RuntimeError(
-                "2D 工程图几何预检未通过（未调用模型，也不会产生 API 费用）：\n- "
-                + "\n- ".join(dict.fromkeys(issues))
+                "2D 工程图生成失败：所有可生成零件都在运行期报错\n- "
+                + "\n- ".join(f"{r.part_id}: {r.error}" for r in results)
             )
-        results = drawing2d.generate_all(ir.parts, store.geometry_dir(project_id))
         _assert_ir_unchanged(project_id, expected_ir)
-        payload = _drawings_payload(project_id, results)
+        payload = _assemble_batch(project_id, ir.parts, results, blocked, _drawings_entry)
         payload["source_ir_hash"] = expected_ir
+        payload["input_revision"] = _input_revision(project_id)
         store.save_drawings_result(project_id, payload)
         store.sync_geometry(project_id)  # 同步到对象存储(Local 后端空操作)
         return payload
 
-    return {"task_id": tasks.submit(
-        project_id, "drawings", job, cad=True, dedup_key=_task_key("drawings", expected_ir)
-    )}
+    return {
+        "task_id": tasks.submit(
+            project_id, "drawings", job, cad=True,
+            dedup_key=_task_key("drawings", expected_ir),
+        ),
+        "status": "queued", "total": len(ir.parts),
+        "processable": len(part_ids), "blocked": blocked,
+    }
 
 
 @app.get("/api/projects/{project_id}/bom.csv")
@@ -1654,9 +2193,12 @@ def _save_project_chat_turn(project_id: str, user_message: str, answer: str, use
     """只追加本次问答，保留同一项目在每个页面之间连续的会话。"""
     messages = store.load_project_chat(project_id).get("messages", [])
     timestamp = now_cst_str()
+    # 每一轮都带上项目的业务实例号：报价—技术—财务—报告共用同一份身份，回溯会话时
+    # 能认出这轮问答属于哪张业务实例。项目还没有实例号时给空串，绝不现编。
+    business_case_id = str((store.load_business_case(project_id) or {}).get("business_case_id") or "")
     messages.extend([
-        {"role": "user", "content": user_message.strip(), "at": timestamp, "by": user.get("username", "system"), "page": page_context[:160]},
-        {"role": "assistant", "content": answer.strip(), "at": timestamp, "page": page_context[:160]},
+        {"role": "user", "content": user_message.strip(), "at": timestamp, "by": user.get("username", "system"), "page": page_context[:160], "business_case_id": business_case_id},
+        {"role": "assistant", "content": answer.strip(), "at": timestamp, "page": page_context[:160], "business_case_id": business_case_id},
     ])
     store.save_project_chat(project_id, messages, author=user.get("username", "system"))
 
@@ -1667,10 +2209,24 @@ def _apply_workbench_chat_edit(part, edit: WorkbenchPartEdit) -> tuple[list[dict
     两条会话入口不能各有一套规则。
     """
     try:
-        return part_edit.apply_edit(
+        changes: list[dict] = []
+        geometry_changed = False
+        # 老入口也要能提出同样的受控补基体，规则与 2.1 页的 Agent 完全一致。
+        base_feature = edit.base_feature if isinstance(edit.base_feature, dict) else None
+        if base_feature:
+            base_type = base_feature.get("type")
+            dimensions = {key: value for key, value in base_feature.items() if key != "type"}
+            if part.features:
+                changes, geometry_changed = part_edit.replace_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+            else:
+                changes, geometry_changed = part_edit.initialize_base_feature(
+                    part, feature_type=base_type, dimensions=dimensions)
+        extra_changes, extra_geometry = part_edit.apply_edit(
             part, name=edit.name, quantity=edit.quantity,
             material_spec=edit.material_spec, feature_updates=edit.feature_updates,
         )
+        return changes + extra_changes, geometry_changed or extra_geometry
     except part_edit.PartEditError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -1772,7 +2328,8 @@ def workbench_chat(
         "model": model,
         "question_length": len(body.message),
     })
-    _save_project_chat_turn(project_id, body.message, answer, user, body.page_context or "2.1 图纸解析")
+    # 无上下文时用中性空值，不冒充任何具体步骤（第 19 步：九阶段各有独立 page_context）。
+    _save_project_chat_turn(project_id, body.message, answer, user, body.page_context or "")
     return {"answer": answer, "model": model, "edit_applied": edit_applied}
 
 
@@ -1785,6 +2342,22 @@ def workbench_chat(
 class AgentSendRequest(BaseModel):
     message: str = ""
     page_context: str = ""
+
+
+class AgentEventBody(BaseModel):
+    """项目会话时间线的一条条目（任务卡 / 过程文字 / tech_ui 卡 / shell note）。
+
+    与 store.append_session_event 的条目形状一致：kind 必填，其余可选；带 key 的
+    条目幂等且就地更新（同一张卡重复提交不会多出一行）。
+    """
+    kind: str = ""
+    source: str = ""
+    stage: str = ""
+    text: str = ""
+    task: Optional[Dict[str, Any]] = None
+    ui: Optional[Dict[str, Any]] = None
+    key: str = ""
+    ts: str = ""
 
 
 def _agent_project(project_id: str) -> None:
@@ -1800,6 +2373,10 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
     if not ok:
         # 不抛 500：页面需要显示「为什么用不了」，而不是一个红色报错。
         return {"available": False, "reason": reason}
+    # 报价侧可能刚换过模型 / 网关 / Key：先把当前路由推给已建会话，页面上的模型名
+    # 与实际请求才会一致（技术工艺与报价是两个进程，收不到对方的保存回调）。
+    # 按**发起账号**推：账号级模型/Key 与全局不同，换人说话就得换路由。
+    llm_settings.sync_live_agents(user=user.get("username", ""))
     try:
         meta = oc_agent.get_agent(project_id).meta()
     except oc_agent.AgentUnavailable as exc:
@@ -1807,8 +2384,72 @@ def agent_meta(project_id: str, user: dict = Depends(current_user)):
     return {"available": True, "reason": "", **meta}
 
 
+@app.get("/api/projects/{project_id}/agent/history")
+def agent_history(project_id: str, user: dict = Depends(current_user)):
+    """只读回放：该项目已持久化的完整 Agent 会话（用户 / 助手 / 工具轨迹）。
+
+    与左侧会话共用同一条 open-claude 会话事实源：打开历史项目时前端先取这份历史，
+    再进入正常会话状态。只读，不创建新会话，也不触发 /agent/new。
+    """
+    _agent_project(project_id)
+    # 项目会话时间线是本地持久化的那一半（任务卡 / 过程文字 / tech_ui 卡），与 Agent 层
+    # 是否可用无关：会话层连不上时也必须回放出来，否则重进项目又只剩空白会话。
+    timeline = store.load_session_events(project_id)
+    try:
+        data = oc_agent.load_history(project_id)
+    except oc_agent.AgentUnavailable as exc:
+        # 与 /agent/meta 一致：会话层不可用时不抛 500，让页面显示真实原因而不是空白会话。
+        return {"available": False, "reason": str(exc), "project_id": project_id,
+                "session_id": "", "messages": [], "message_count": 0, "timeline": timeline}
+    data = dict(data or {})
+    data.setdefault("project_id", project_id)
+    data["timeline"] = timeline
+    return data
+
+
+@app.post("/api/projects/{project_id}/agent/event")
+def agent_event(project_id: str, body: AgentEventBody, user: dict = Depends(current_user)):
+    """追加一条会话时间线条目（任务卡 / 过程文字 / tech_ui 卡 / shell note）。
+
+    会话内容属于项目数据，不是业务产出：seq 由服务端分配（等于追加顺序），带 key 的条目
+    幂等且就地更新 —— 前端进度轮询只提交新出现的进度行，不会每次追加整段。
+
+    权限也按这个定位来：不是"谁能改工艺参数"，而是"谁在这个项目里能动手"
+    （见 auth.SESSION_WRITE_ROLES）。2.3 的操作者是财务经理，他写自己那几条过程
+    文字曾经被这里的 WRITE_ROLES 拦下 —— 业务动作成功、时间线却丢了，前端还会先
+    弹一次伪 403。Agent 对话（/agent/send、/agent/new）不在放宽之列。
+    """
+    _require(user, auth.SESSION_WRITE_ROLES, "需要工程师及以上权限")
+    _agent_project(project_id)
+    event = body.model_dump()
+    if not str(event.get("kind") or "").strip():
+        raise HTTPException(400, "会话事件缺少 kind")
+    stored = store.append_session_event(project_id, event)
+    return {"seq": stored.get("seq"), "event": stored}
+
+
+@app.get("/api/projects/{project_id}/agent/events")
+def agent_events(project_id: str, stage: str = "", kinds: str = "", source: str = "",
+                 user: dict = Depends(current_user)):
+    """按 seq 升序回放项目会话时间线，可按阶段 / 类型 / 来源过滤（只读）。
+
+    阶段页加载完成后用它取回自己那一份过程文字（stage + source=board），父壳取全量。
+    """
+    _agent_project(project_id)
+    rows = store.load_session_events(project_id)
+    if stage:
+        rows = [row for row in rows if str(row.get("stage") or "") == stage]
+    if source:
+        rows = [row for row in rows if str(row.get("source") or "") == source]
+    wanted = [item.strip() for item in str(kinds or "").split(",") if item.strip()]
+    if wanted:
+        rows = [row for row in rows if str(row.get("kind") or "") in wanted]
+    return {"events": rows, "count": len(rows)}
+
+
 @app.post("/api/projects/{project_id}/agent/send")
-def agent_send(project_id: str, body: AgentSendRequest, user: dict = Depends(current_user)):
+def agent_send(project_id: str, body: AgentSendRequest, request: Request,
+               user: dict = Depends(current_user)):
     """一轮 Agent 对话，SSE 流式返回文本、工具调用与工具结果。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     _agent_project(project_id)
@@ -1818,11 +2459,16 @@ def agent_send(project_id: str, body: AgentSendRequest, user: dict = Depends(cur
     ok, reason = oc_agent.available()
     if not ok:
         raise HTTPException(503, reason)
+    # 报价保存设置后技术工艺不重启也要生效：比对当前路由，变了就重建 client，
+    # 否则这一轮还会把新模型发给旧厂商。账号级模型/Key 也在这里换人换路由。
+    llm_settings.sync_live_agents(user=user.get("username", ""))
     if body.page_context.strip():
         message = f"{message}\n\n[当前页面：{body.page_context.strip()[:160]}]"
     return StreamingResponse(
         # 带上操作人：Agent 能改零件参数，审计必须记「是谁让它改的」。
-        oc_agent.stream_sse(project_id, message, actor=user.get("username", "system")),
+        # 同时带上用户令牌：SendIntegrationToFinance 要代表用户去调一体化服务。
+        oc_agent.stream_sse(project_id, message, actor=user.get("username", "system"),
+                            token=_sso_token(request)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1957,12 +2603,16 @@ def regenerate_part(project_id: str, part_id: str, user: dict = Depends(current_
     g = geometry.generate_part(part, out_dir)
     gp = store.load_geometry_result(project_id) or {"parts": []}
     g_entry = _geometry_payload(project_id, [g])["parts"][0]
+    # 只刷新这一个零件的来源指纹：其他零件的指纹 / URL / 数值一字不动，
+    # 顶层 source_ir_hash 也保持原值 —— 逐件指纹才是判据（C6）。
+    part_versions.stamp_entry(g_entry, part)
     _upsert_part(gp, g_entry)
     store.save_geometry_result(project_id, gp)
 
     d = drawing2d.generate_drawings(part, out_dir)
     dp = store.load_drawings_result(project_id) or {"parts": []}
     d_entry = _drawings_payload(project_id, [d])["parts"][0]
+    part_versions.stamp_entry(d_entry, part)
     _upsert_part(dp, d_entry)
     store.save_drawings_result(project_id, dp)
 
@@ -1975,14 +2625,27 @@ def regenerate_part(project_id: str, part_id: str, user: dict = Depends(current_
 # 工艺拆解(把单个零件拆成结构化工艺路线,CAPP)
 # --------------------------------------------------------------------------- #
 def _geom_for_part(project_id: str, part_id: str):
+    """取单个零件的几何属性（工艺 / 成本的口子）。
+
+    判据是**逐件形状指纹**，不是整份 IR 哈希：别的零件被改过不该让这个零件取不到；
+    本零件自己的尺寸变了才返回 None（沿用既有语义，让上游提示先重生成）。
+    """
     gp = store.load_geometry_result(project_id) or {}
-    source_ir_hash = str(gp.get("source_ir_hash") or "")
-    if source_ir_hash and source_ir_hash != _ir_snapshot(project_id):
+    entry = next((p for p in gp.get("parts", []) if p.get("part_id") == part_id), None)
+    if entry is None:
         return None
-    for p in gp.get("parts", []):
-        if p.get("part_id") == part_id:
-            return {"bbox": p.get("bbox"), "volume_mm3": p.get("volume_mm3"), "mass_g": p.get("mass_g")}
-    return None
+    stored_hash = str(entry.get("source_part_hash") or "")
+    if stored_hash:
+        ir_dict = store.load_ir(project_id) or {}
+        part = next((p for p in ir_dict.get("parts") or []
+                     if str(p.get("part_id")) == part_id), None)
+        if part is None or part_versions.part_fingerprint(part) != stored_hash:
+            return None
+    elif (store.load_meta(project_id) or {}).get("derived_results_stale"):
+        # 老结果没有逐件指纹：只剩「输入被替换 / 解析被重置」这一条底线判断（C7）。
+        return None
+    return {"bbox": entry.get("bbox"), "volume_mm3": entry.get("volume_mm3"),
+            "mass_g": entry.get("mass_g")}
 
 
 async def _read_attachments(attachments: List[UploadFile]):
@@ -2288,6 +2951,11 @@ async def generate_integration_params(
         # 参数变了，下游的工艺与成本就不再是依据当前参数算的。这里不静默保留旧值，
         # 由前端提示重新生成 —— 留着会让人以为整机成本已经跟着新参数更新过了。
         plan.confirmed = False
+        # 「确认参数已齐」也是针对当时那一版参数按下的：整份重推之后必须重新确认，
+        # 否则新参数带着旧确认发到财务，缺项没人看得见。
+        plan.params_final = False
+        plan.params_final_by = None
+        plan.params_final_at = None
         integration.save_plan(project_id, plan, author)
         return _integration_payload(project_id, plan)
 
@@ -2325,20 +2993,12 @@ def update_integration_params(project_id: str, params: IntegrationParamPlan,
 def confirm_integration_params(project_id: str, user: dict = Depends(current_user)):
     """确认「参数推荐」这一环节：整机参数、连接关系与 BOM 由人核对过了。
 
-    与「整合参数」的确认是两件事：那个是交给报价前的最后收口（必填要齐），
+    与「确认参数已齐」是两件事：那个是交给报价前的最后收口（报价必填要齐），
     这个只是本环节定稿 —— 缺口在这里不拦，但要如实说出来。
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = integration.load_plan(project_id)
-    if plan.params is None:
-        raise HTTPException(400, "还没有参数推荐结果，无法确认")
-    plan.params_confirmed = True
-    plan.params_confirmed_by = user.get("display_name") or user.get("username") or ""
-    plan.params_confirmed_at = now_cst_str()
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_params_confirm",
-                {"by": plan.params_confirmed_by,
-                 "missing_required": len(product_params.missing_required(plan.params))})
+    # 实现唯一：与 Agent 的 ConfirmIntegrationParams 走同一份 services.integration。
+    plan = _integration_flow(integration.confirm_params, project_id, user)
     return _integration_payload(project_id, plan)
 
 
@@ -2349,15 +3009,8 @@ def confirm_integration_process(project_id: str, user: dict = Depends(current_us
     不校验工序条数 —— 有的整机确实只有两三道；但必须**跑过**，空的工艺没什么可确认。
     """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = integration.load_plan(project_id)
-    if plan.process is None:
-        raise HTTPException(400, "还没有组装工艺结果，无法确认")
-    plan.process_confirmed = True
-    plan.process_confirmed_by = user.get("display_name") or user.get("username") or ""
-    plan.process_confirmed_at = now_cst_str()
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_process_confirm",
-                {"by": plan.process_confirmed_by, "steps": len(plan.process.steps)})
+    # 实现唯一：与 Agent 的 ConfirmIntegrationProcess 走同一份 services.integration。
+    plan = _integration_flow(integration.confirm_process, project_id, user)
     return _integration_payload(project_id, plan)
 
 
@@ -2365,14 +3018,15 @@ def confirm_integration_process(project_id: str, user: dict = Depends(current_us
 async def autofill_integration_params(
     project_id: str, note: str = Form(""), user: dict = Depends(current_user),
 ):
-    """整合参数 · 智能补全：只给还缺的字段出**建议值**，不落库。
+    """参数推荐 · 智能补全：只给还缺的字段出**建议值**，不落库。
 
-    这一步随「整合参数」一起搬到了 2.3（财务经理），所以权限也跟着走。
+    这是第 3 阶段「组装与整合 · 3.2 参数推荐」里的能力：整机参数、连接关系与 BOM 在这一步
+    定稿，报价必填项自然也在这里补齐，所以沿用技术工艺写权限。
 
     不直接写入是有意的：补全里必然混着"靠常识凑的"，直接写进去，报价那头就分不清
     哪些是算出来的、哪些是猜的。建议回到界面上由工艺经理逐项过目再保存。
     """
-    _require(user, auth.COST_ROLES, "「整合参数」在 2.3，由财务经理负责")
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     ir = _integration_ir(project_id)
     if integration.load_plan(project_id).params is None:
         raise HTTPException(400, "请先完成参数推荐：智能补全只补它没给出的那些字段")
@@ -2388,24 +3042,28 @@ async def autofill_integration_params(
 
 
 class IntegrationFinalizeBody(BaseModel):
-    """「整合参数」环节：人工补填的值 + 是否就此确认。
+    """「参数推荐」环节：人工补填的值 + 是否就此确认。
 
     values 按**字段编码**给：{"rated_voltage": {"value": "14.4", "unit": "V"}}。
     confirm=False 只保存（补一半先存着），True 才校验必填齐不齐并落确认。
     """
     values: Dict[str, Any] = Field(default_factory=dict)
     confirm: bool = False
+    # 可选：参数推荐页的「仍要继续」签字。confirm=False 且带 waiver 时，把缺口与签字
+    # 一起落库（params_final 仍然保持 False —— 签的是"可以带缺口往下走"，不是"参数已齐"）。
+    waiver: Optional[dict] = None
 
 
 @app.post("/api/projects/{project_id}/integration/params/finalize")
 def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
                                 user: dict = Depends(current_user)):
-    """整合参数：把人工补填的值合进整机参数，必填齐了才允许确认。
+    """参数推荐：把人工补填的值合进整机参数，必填齐了才允许最终确认。
 
-    这一步是 2.2 与报价之间的验收口径 —— 报价测算单按 DA 字段取数，必填项缺一格，
-    那边就是一格空白，而且要等销售回头来问才发现。宁可在这里挡住。
+    这是第 3 阶段「组装与整合 · 3.2 参数推荐」与报价之间的验收口径 —— 报价测算单按 DA
+    字段取数，必填项缺一格，那边就是一格空白，而且要等销售回头来问才发现。宁可在这里
+    挡住，也不把补齐的活儿推给后面的成本步骤。
     """
-    _require(user, auth.COST_ROLES, "「整合参数」在 2.3，由财务经理负责")
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     plan = integration.load_plan(project_id)
     integration.finalize_params(plan, body.values)
     if body.confirm:
@@ -2414,7 +3072,7 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
             names = "、".join(field["name"] for field in missing[:8])
             more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
             raise HTTPException(
-                400, f"报价必填的成品参数还缺：{names}{more}。请在「整合参数」里补填后再确认")
+                400, f"报价必填的成品参数还缺：{names}{more}。请在「参数推荐」里补填后再确认")
         plan.params_final = True
         plan.params_final_by = user.get("display_name") or user.get("username") or ""
         plan.params_final_at = now_cst_str()
@@ -2423,6 +3081,21 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
         plan.params_final = False
         plan.params_final_by = None
         plan.params_final_at = None
+        if body.waiver:
+            # 「仍要继续」：人签了字，缺口原样留档 —— 参数推荐这一步的签字记在
+            # stage='params'，发送财务时同一批缺口凭它复用，不再要第二次签字。
+            missing = integration.missing_required(plan)
+            integration.record_waiver(
+                plan, "params",
+                missing_codes=[str(field.get("code") or "") for field in missing],
+                missing_fields=[str(field.get("name") or field.get("code") or "")
+                                for field in missing],
+                confirmations=integration.pending_confirmations(plan),
+                reason=str((body.waiver or {}).get("reason") or ""),
+                actor=user)
+            store.audit(project_id, "integration_params_finalize_waived",
+                        {"missing": len(missing),
+                         "by": user.get("display_name") or user.get("username") or ""})
     integration.save_plan(project_id, plan, user.get("username", "system"))
     store.audit(project_id, "integration_params_finalize",
                 {"filled": len(body.values or {}), "confirmed": bool(plan.params_final),
@@ -2592,39 +3265,9 @@ class IntegrationPublishBody(BaseModel):
     target_type: str = ""
     target_role_code: str = ""
     target_user_id: str = ""
-
-
-def _integration_quote_result(project_id: str, plan, title: str) -> dict:
-    """随「确认工艺并发送至报价」一起回传的整机结论。
-
-    报价那头要的不是 2.2 的界面，而是能落进测算单的三样东西：成品编码与名称、
-    单件成本的四项拆解、以及按 DA 字段拉平的整机参数。参数按**字段编码**给 ——
-    报价的产品技术参数表是按 DA 列取数的，用 2.2 自己的参数名对不上号。
-    """
-    breakdown = cost_model.breakdown(plan.cost.model_dump()) if plan.cost else {}
-    written = plan.material_writes[-1] if plan.material_writes else None
-    return {
-        "project_id": project_id,
-        "product_name": title,
-        "assembly_name": (plan.params.assembly_name if plan.params else "") or title,
-        "quantity": plan.quantity,
-        # 写库是另一个按钮，可能还没点 —— 没有成品编码不该挡住推送，但要说清楚。
-        "material": ({"number": written.number, "name": written.name,
-                      "material_id": written.material_id,
-                      "unit_price": written.material_unit_price} if written else None),
-        "cost": breakdown,
-        "params": product_params.rows_for_quote(plan.params) if plan.params else None,
-        "process_step_count": len(plan.process.steps) if plan.process else 0,
-        "params_final": bool(plan.params_final),
-    }
-
-
-def _integration_ready_cost(project_id: str):
-    """取出可以对外的 2.2 结果。成本没算完就不该往主数据和报价里送。"""
-    plan = integration.load_plan(project_id)
-    if not (plan.cost and plan.cost.items):
-        raise HTTPException(400, "请先完成整机成本测算，再写入数据库或发送至报价")
-    return plan
+    # 可选：发送财务时携带的「仍要继续」签字（L2 缺口豁免）。真正记进 plan.waivers 的
+    # 缺口以服务端算出的为准，这里只是本人"可以带缺口继续"的意愿与原因。
+    waiver: Optional[dict] = None
 
 
 def _bridge_call(action, *args, **kwargs):
@@ -2640,45 +3283,15 @@ def _bridge_call(action, *args, **kwargs):
         raise HTTPException(503, f"业务数据库/报价服务暂不可用：{exc}") from exc
 
 
-def _integration_do_material_write(project_id: str, plan, body: IntegrationPublishBody,
-                                   token: str, user: dict) -> MaterialWrite:
-    """取号 + 写两张主数据表 + 把编码回填进整机参数。就地改 plan，不落盘。
-
-    抽出来是因为「发送至报价」也要用它：成品编码只能由系统生成，但不该逼着人先去点
-    另一个按钮 —— 发的时候没有编码，这里顺手补一个。
-    """
-    product_name = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or ""
-    if not product_name:
-        raise HTTPException(400, "缺少产品名称：请先完成参数推荐，或在写入时填写产品名称")
-    breakdown = cost_model.breakdown(plan.cost.model_dump())
-    result = _bridge_call(cpq_bridge.write_material, token,
-                          product_name, breakdown["total"], breakdown, body.spec)
-    record = MaterialWrite(
-        material_id=str(result.get("material_id") or ""),
-        number=str(result.get("number") or ""),
-        name=str(result.get("name") or product_name),
-        material_unit_price=result.get("material_unit_price"),
-        breakdown=breakdown,
-        tables=result.get("tables") or [],
-        written_at=now_cst_str(),
-        written_by=user.get("display_name") or user.get("username") or "",
-    )
-    plan.material_writes.append(record)
-    # 成品编码回填进整机参数：报价按成品编码匹配定价/加价规则，产品行没有编码，
-    # 那边规则查得到、加价值却落不到产品上（见 services/integration.apply_material_code）。
-    integration.apply_material_code(plan, record.number, record.name)
-    return record
-
-
 @app.post("/api/projects/{project_id}/integration/material-write")
 def integration_write_material(project_id: str, body: IntegrationPublishBody,
                                request: Request, user: dict = Depends(current_user)):
     """写入数据库：新建成品编码，落 md_clm_material_base_info + md_clm_material_cost_cnf。"""
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
-    plan = _integration_ready_cost(project_id)
-    record = _integration_do_material_write(
-        project_id, plan, body, _sso_token(request), user)
+    plan = _cost_flow(cost_flow.integration_ready_cost, project_id)
+    record = _cost_flow(cost_flow.integration_material_write_record, project_id, plan,
+                        product_name=body.product_name, spec=body.spec,
+                        token=_sso_token(request), user=user)
     integration.save_plan(project_id, plan, user.get("username", "system"))
     store.audit(project_id, "integration_material_write",
                 {"number": record.number, "price": record.material_unit_price,
@@ -2695,59 +3308,14 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
     （技术工艺 2.3）。所以这一步**不要求成本已完成**，只要求工艺与参数到位。
     """
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
-    plan = integration.load_plan(project_id)
-    if plan.params is None:
-        raise HTTPException(400, "请先完成参数推荐：财务要按整机 BOM 与参数核算成本")
-    if plan.process is None:
-        raise HTTPException(400, "请先完成组装工艺：组装成本要按工序与工时算")
-    # 闸门是**两个确认**，不是报价必填参数 —— 那些参数由财务在 2.3 的「整合参数」补齐。
-    if not plan.params_confirmed:
-        raise HTTPException(400, "请先在「参数推荐」里点「确认参数推荐」")
-    if not plan.process_confirmed:
-        raise HTTPException(400, "请先在「组装工艺」里点「确认组装工艺」——"
-                                 "工序与用量定稿了，财务算出来的成本才有意义")
-
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-    result = _bridge_call(
-        cpq_bridge.send_to_finance, _sso_token(request), project_id, title,
-        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
-        str(requirement.get("product_name") or ""),
-        body.note or "工艺与整机参数已确认，请做成本测算",
-        {"tech_cost": {"project_id": project_id, "product_name": title,
-                       "quantity": plan.quantity,
-                       "process_step_count": len(plan.process.steps),
-                       "part_refs": len(plan.params.part_refs)}},
-        body.target_type, body.target_role_code, body.target_user_id)
-
-    # 交给财务就意味着工艺侧定稿；顺手把 2.2 标成已确认，省得再点一次。
-    if not plan.confirmed:
-        plan.confirmed = True
-        plan.confirmed_by = user.get("username", "system")
-        plan.confirmed_at = now_cst_str()
-        plan.timing.status = "done"
-        plan.timing.completed = True
-        plan.timing.finished_at = plan.confirmed_at
-    plan.finance_handoff = FinanceHandoff(
-        task_id=str(result.get("task_id") or "") or None,
-        task_no=str(result.get("task_no") or ""),
-        target_role_name=str(result.get("target_role_name") or "财务经理"),
-        target_type=str(result.get("target_type") or "role"),
-        target_name=str(result.get("target_name") or ""),
-        sent_at=now_cst_str(),
-        sent_by=user.get("display_name") or user.get("username") or "",
-    )
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    # 财务那一步的入口状态：谁交来的、什么时候
-    review = cost_review.load_review(project_id)
-    review.received_from = plan.finance_handoff.sent_by
-    review.received_at = plan.finance_handoff.sent_at
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    store.audit(project_id, "integration_send_to_finance",
-                {"task_no": plan.finance_handoff.task_no,
-                 "by": plan.finance_handoff.sent_by})
+    # 实现唯一：与 Agent 的 SendIntegrationToFinance 走同一份 services.integration，
+    # 两个确认闸门与对外调用都在那里，路由只做权限与错误翻译。
+    plan = _bridge_call(
+        _integration_flow, integration.send_to_finance, project_id, user,
+        product_name=body.product_name, note=body.note,
+        target_type=body.target_type, target_role_code=body.target_role_code,
+        target_user_id=body.target_user_id, token=_sso_token(request),
+        waiver=body.waiver)
     return {**_integration_payload(project_id, plan),
             "finance": plan.finance_handoff.model_dump()}
 
@@ -2757,136 +3325,17 @@ def integration_send_to_quote(project_id: str, body: IntegrationPublishBody,
                               request: Request, user: dict = Depends(current_user)):
     """确认工艺并发送至报价：卡片推进到第 3 步「定价-利润加成」，销售经理收到任务。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
-    return _integration_do_send_to_quote(project_id, body, request, user)
-
-
-def _requirement_customer(requirement: dict, req_data: dict) -> str:
-    """需求单里的客户名。
-
-    客户信息是销售在报价那头填的，经「新增工艺」任务带进技术工艺的需求单。它落在哪
-    一层历来不统一（顶层 / data / 早期的 customer），少查一处，推回报价时卡片上的
-    客户就是空的 —— 销售看到的是一张没有客户的报价单。所以这里逐个兜底。
-    """
-    for value in (requirement.get("customer_name"), req_data.get("customer_name"),
-                  requirement.get("customer"), req_data.get("customer"),
-                  (req_data.get("quote") or {}).get("customer")):
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _integration_do_send_to_quote(project_id: str, body: IntegrationPublishBody,
-                                  request: Request, user: dict) -> dict:
-    """「发送至报价」的正文。**不含权限判断** —— 由调用方各自把门。
-
-    两个入口：2.2 归工艺经理（MANAGER_ROLES），2.3 归财务经理（COST_ROLES）。
-    早先 2.3 是直接调用上面那个路由函数来复用逻辑的，于是又撞上一次 MANAGER_ROLES：
-    财务经理点「发送至报价」被拒，文案还把他指去找工艺经理。权限和正文必须分开，
-    复用正文的人才不会连带继承另一步的权限。
-    """
-    plan = _integration_ready_cost(project_id)
-    # 报价必填项没齐就不给发：这些参数就是这次要**回传**给报价的东西，
-    # 缺一格，那边的测算单上就是一格空白，还得等销售回头来问。「整合参数」环节补。
-    missing = product_params.missing_required(plan.params) if plan.params else []
-    if missing:
-        names = "、".join(field["name"] for field in missing[:8])
-        more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
-        raise HTTPException(
-            400, f"报价必填的成品参数还缺：{names}{more}。请先在「整合参数」环节补填并确认")
-    # 成品编码必须有 —— 报价的定价与加价规则是按**产品行里的那串字符**匹配的
-    # （cpq_agent_server::_handle_markup_fill 里 `code in codes`），编码为空时那边规则
-    # 查得到、加价值却落不到产品上，最终价格 = 基础成本，既没有利润也没有加价。
-    #
-    # 但它不该成为一道门：编码只能由系统生成，那就在这里生成。业务主数据写不进去
-    # （库连不上/没权限）也**不中断推送** —— 改用本地临时号，参数照样送到报价。
-    # 报价的匹配并不查主数据里有没有这个号，所以定价那一步照样跑得通；等库恢复了
-    # 再点「写入数据库」补写即可。这一切都要如实告诉用户，不能假装写成功了。
-    auto_written = None
-    code_fallback = None
-    if not plan.material_writes:
-        try:
-            auto_written = _integration_do_material_write(
-                project_id, plan, body, _sso_token(request), user)
-            store.audit(project_id, "integration_material_write", {
-                "number": auto_written.number, "price": auto_written.material_unit_price,
-                "by": auto_written.written_by, "auto": "发送至报价时自动生成"})
-        except HTTPException as exc:
-            number = integration.next_local_code()
-            integration.apply_material_code(
-                plan, number,
-                (body.product_name or "").strip()
-                or (plan.params.assembly_name if plan.params else "") or f"整机 {project_id}",
-                source="临时编码", basis="业务主数据暂不可用，发送至报价时本地生成")
-            code_fallback = {"number": number, "reason": str(exc.detail)[:300]}
-            store.audit(project_id, "integration_material_write_fallback",
-                        {"number": number, "reason": code_fallback["reason"][:200],
-                         "by": user.get("username", "system")})
-        integration.save_plan(project_id, plan, user.get("username", "system"))
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-
-    result = _bridge_call(
-        cpq_bridge.send_to_quote, _sso_token(request), project_id, title,
-        _requirement_customer(requirement, req_data),
-        str(requirement.get("product_name") or req_data.get("product_name") or ""),
-        body.note or "技术工艺已确认，请进入定价",
-        # 这单是从报价的「新增工艺」任务过来的：原样退回给当初发起的那个人，
-        # 而不是新开一张卡片再群发给销售角色。来源写在 1.1 的需求单里
-        # （frontend/tech-task.js 建单时落的 source_task_id / source_session_id）。
-        str(req_data.get("source_task_id") or ""),
-        _integration_quote_result(project_id, plan, title),
-        # 任务行被删/被后来的任务顶掉时，会话号是认回原卡片的最后一条线索。
-        str(req_data.get("source_session_id") or ""))
-    handoff = result.get("handoff") or result.get("auto_handoff") or {}
-    plan.quote_handoff = QuoteHandoff(
-        # 从「新增工艺」过来的单子推回的是**原来那张报价卡片**，会话号不是项目号。
-        session_id=str(result.get("quote_session_id") or project_id),
-        next_step_no=result.get("next_step_no"),
-        next_step_name=result.get("next_step_name") or "",
-        target_role_name=(handoff.get("target_role_name")
-                          or result.get("next_role_name") or ""),
-        target_name=str(handoff.get("target_name") or ""),
-        returned_to_sender=bool(handoff.get("returned_to_sender")),
-        source_task_no=str(handoff.get("source_task_no") or ""),
-        returned_sections=list(result.get("returned_sections") or []),
-        task_id=str(handoff.get("task_id") or "") or None,
-        sent_at=now_cst_str(),
-        sent_by=user.get("display_name") or user.get("username") or "",
-    )
-    # 发到报价意味着工艺侧定稿；这里顺手把 2.2 标成已确认，省得再点一次。
-    if not plan.confirmed:
-        plan.confirmed = True
-        plan.confirmed_by = user.get("username", "system")
-        plan.confirmed_at = plan.quote_handoff.sent_at
-        plan.timing.status = "done"
-        plan.timing.completed = True
-        plan.timing.finished_at = plan.confirmed_at
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    store.audit(project_id, "integration_send_to_quote",
-                {"next_step": plan.quote_handoff.next_step_name,
-                 "task_id": plan.quote_handoff.task_id, "by": plan.quote_handoff.sent_by})
-    return {**_integration_payload(project_id, plan),
-            "handoff": plan.quote_handoff.model_dump(),
-            # 这次顺手生成的成品编码要回给界面：用户没点写库，但主数据里确实多了一行，
-            # 不说出来就成了"背着人写库"。
-            "auto_written": auto_written.model_dump() if auto_written else None,
-            # 主数据没写进去、改用了本地临时号：更要说，否则人会以为已经入库了。
-            "code_fallback": code_fallback,
-            # 结论落到哪张报价卡片：task=原任务 / session=原会话号 / new=新建。
-            # new 的时候销售那边打不开会话历史、也没有原始客户信息，界面要照实说。
-            "linked_by": result.get("linked_by") or "",
-            "new_card": bool(result.get("new_card"))}
+    return _cost_flow(cost_flow.integration_send_to_quote_body, project_id,
+                      product_name=body.product_name, spec=body.spec, note=body.note,
+                      token=_sso_token(request), user=user)
 
 
 # --------------------------------------------------------------------------- #
 # 2.3 成本测算 —— 财务经理的步骤
 #
 # 分工：工艺经理在 2.1/2.2 出工艺与用量，2.2 结束时把项目交给财务；财务在这一步
-# 逐个零件 + 整机算成本、汇总，然后选三个去向之一：写入数据库 / 发送至报价 /
-# 退回工艺经理复核。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
+# 逐个零件 + 整机算成本、汇总，然后选三个去向之一：写入数据库 / 回传销售经理继续报价 /
+# 提交工艺经理确认。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
 # --------------------------------------------------------------------------- #
 def _cost_review_ctx(project_id: str):
     """2.3 的三样输入：IR（零件）、2.2 的整机方案、本步的评审状态。"""
@@ -2902,6 +3351,18 @@ def _cost_review_payload(project_id: str):
     return cost_review.payload(project_id, ir, plan, review)
 
 
+def _cost_flow(fn, *args, **kwargs):
+    """2.3 流转的统一出口：共享 service 的业务错误原样映射成 HTTPException。
+
+    Agent 工具（ConfirmCostReview / WriteCostReviewMaterial / SendCostReviewToQuote /
+    ReturnCostReviewToProcess）调用的是同一份 service 函数，这里只负责 HTTP 这一层。
+    """
+    try:
+        return fn(*args, **kwargs)
+    except cost_flow.CostFlowError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/cost-review")
 def get_cost_review(project_id: str):
     """2.3 全貌：零件逐项成本 + 整机成本 + 两种口径的合计 + 评审状态。"""
@@ -2913,15 +3374,8 @@ def update_cost_review(project_id: str, body: CostReviewBody,
                        user: dict = Depends(current_user)):
     """保存财务的补充说明（会作为下一次测算的输入）。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    review.note = body.note
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    # 核算批量存在 2.2 的 plan 上（成本测算与写库都读它），这一步负责改。
-    quantity = max(1, int(body.quantity or 1))
-    if plan.quantity != quantity:
-        plan.quantity = quantity
-        integration.save_plan(project_id, plan, user.get("username", "system"))
-    return cost_review.payload(project_id, ir, plan, review)
+    return _cost_flow(cost_flow.save_note, project_id, user,
+                      note=body.note, quantity=body.quantity)
 
 
 @app.post("/api/projects/{project_id}/cost-review/parts/{part_id}")
@@ -2952,6 +3406,20 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
     ir, plan, review = _cost_review_ctx(project_id)
     if plan.process is None:
         raise HTTPException(400, "请先由工艺经理完成 2.2 组装工艺：组装成本要按它来算")
+    # 整机成本要引用每个零件的单件成本：缺一件就会算出一份偏低的整机成本，还白花一次
+    # 模型钱。所以同步判定（提交任务之前）—— 口径复用 summarize() 的 counts.missing，
+    # 不另算一份，也不靠前端"第一件失败就提前 return"顺带兜住。
+    summary = cost_review.summarize(project_id, ir, plan)
+    missing = list((summary.get("counts") or {}).get("missing") or [])
+    if missing:
+        names = {str(row.get("id")): row.get("name") for row in summary.get("parts") or []}
+        detail = "、".join(
+            f"{part_id}（{names.get(part_id)}）" if names.get(part_id) else str(part_id)
+            for part_id in missing)
+        raise HTTPException(
+            409,
+            f"还有 {len(missing)} 个零件没算出成本：{detail}。"
+            "请先在「零件」页逐个算完（或点「仅重试失败项」补算缺的那几个），再算整机成本。")
     author = user.get("username", "system")
 
     def job():
@@ -2967,122 +3435,55 @@ def run_cost_review_assembly(project_id: str, user: dict = Depends(current_user)
 
 
 @app.post("/api/projects/{project_id}/cost-review/confirm")
-def confirm_cost_review(project_id: str, user: dict = Depends(current_user)):
-    """财务确认本步成本。零件没算齐、或者哪一项是 0，都要先解决。"""
+def confirm_cost_review(project_id: str, body: Optional[CostConfirmBody] = None,
+                        user: dict = Depends(current_user)):
+    """财务确认本步成本。
+
+    缺口分两级：「一个零件都没有」是 L1 硬拦（签字也不放行）；未算零件 / 整机未算 /
+    算出来是 0 元是 L2 缺口 —— 前端弹一次「仍要继续」，点继续才带着签字进 body.waiver，
+    同一批缺口不再拦第二次。不带请求体的老调用（Agent 工具）行为不变：有缺口就如实拒绝。
+    """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    data = cost_review.summarize(project_id, ir, plan)
-    counts = data["counts"]
-    if counts["missing"]:
-        raise HTTPException(400, f"还有零件没算成本：{'、'.join(counts['missing'])}")
-    if not counts["assembly_costed"]:
-        raise HTTPException(400, "整机（组装）成本还没算")
-    if counts["zero"]:
-        raise HTTPException(
-            400, f"这些行算出来是 0 元：{'、'.join(counts['zero'])}。"
-                 "请重算或人工补上材料明细 —— 0 元送到报价那头会变成没有成本的产品")
-    review.confirmed = True
-    review.confirmed_by = user.get("display_name") or user.get("username") or ""
-    review.confirmed_at = now_cst_str()
-    cost_review.save_review(project_id, review, user.get("username", "system"))
-    store.audit(project_id, "cost_review_confirm",
-                {"by": review.confirmed_by, "total": data["final"].get("total")})
-    return cost_review.payload(project_id, ir, plan, review)
-
-
-def _cost_review_ready(project_id: str):
-    """三个去向动作的共同前置：成本得先算齐并确认。"""
-    ir, plan, review = _cost_review_ctx(project_id)
-    if not review.confirmed:
-        raise HTTPException(400, "请先点「确认成本」：三个去向都以确认过的成本为准")
-    return ir, plan, review
-
-
-def _record_cost_action(project_id: str, review, kind: str, label: str, detail: str,
-                        user: dict) -> None:
-    review.actions.append(CostAction(
-        kind=kind, label=label, detail=detail[:300], at=now_cst_str(),
-        by=user.get("display_name") or user.get("username") or ""))
-    cost_review.save_review(project_id, review, user.get("username", "system"))
+    return _cost_flow(cost_flow.confirm_review, project_id, user,
+                      waiver=(body.waiver if body else None))
 
 
 @app.post("/api/projects/{project_id}/cost-review/material-write")
-def cost_review_material_write(project_id: str, body: CostActionBody,
+def write_cost_review_material(project_id: str, body: CostActionBody,
                                request: Request, user: dict = Depends(current_user)):
     """去向①：写入数据库（新建成品编码 + 物料成本配置）。"""
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ready(project_id)
-    record = _integration_do_material_write(
-        project_id, plan,
-        IntegrationPublishBody(product_name=body.product_name, spec=body.spec),
-        _sso_token(request), user)
-    integration.save_plan(project_id, plan, user.get("username", "system"))
-    _record_cost_action(project_id, review, "material-write", "写入数据库",
-                        f"成品编码 {record.number}「{record.name}」，"
-                        f"单价 {record.material_unit_price} 元", user)
-    store.audit(project_id, "cost_review_material_write",
-                {"number": record.number, "by": user.get("username", "system")})
-    return {**cost_review.payload(project_id, ir, plan, review),
-            "written": record.model_dump()}
+    return _cost_flow(cost_flow.write_material, project_id, user,
+                      product_name=body.product_name, spec=body.spec,
+                      token=_sso_token(request))
 
 
 @app.post("/api/projects/{project_id}/cost-review/send-to-quote")
-def cost_review_send_to_quote(project_id: str, body: CostActionBody,
+def send_cost_review_to_quote(project_id: str, body: CostActionBody,
                               request: Request, user: dict = Depends(current_user)):
-    """去向②：发送至报价（复用 2.2 那条推送，成本与参数一并带回）。"""
+    """去向②：回传销售经理继续报价（复用 2.2 那条推送，成本与参数一并带回）。
+
+    完成后按 body.source_task_id 关闭来源的 claimed 财务待办（在 cost_flow 里做）。
+    """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    _cost_review_ready(project_id)
-    # 走正文，不走 2.2 那个路由函数：那里的 _require 认的是工艺经理。
-    result = _integration_do_send_to_quote(
-        project_id,
-        IntegrationPublishBody(product_name=body.product_name, spec=body.spec,
-                               note=body.note),
-        request, user)
-    ir, plan, review = _cost_review_ctx(project_id)
-    handoff = result.get("handoff") or {}
-    _record_cost_action(
-        project_id, review, "send-to-quote", "发送至报价",
-        f"卡片进入第 {handoff.get('next_step_no') or 3} 步"
-        f"「{handoff.get('next_step_name') or '定价-利润加成'}」"
-        + (f"，已退回给{handoff.get('target_name')}" if handoff.get("returned_to_sender")
-           else f"，已通知{handoff.get('target_role_name') or '销售经理'}"), user)
-    return {**cost_review.payload(project_id, ir, plan, review),
-            "handoff": handoff, "auto_written": result.get("auto_written"),
-            "code_fallback": result.get("code_fallback"),
-            "linked_by": result.get("linked_by") or "",
-            "new_card": bool(result.get("new_card"))}
+    return _cost_flow(cost_flow.send_to_quote, project_id, user,
+                      product_name=body.product_name, spec=body.spec, note=body.note,
+                      token=_sso_token(request), source_task_id=body.source_task_id)
 
 
 @app.post("/api/projects/{project_id}/cost-review/return-to-process")
 def cost_review_return_to_process(project_id: str, body: CostActionBody,
                                   request: Request, user: dict = Depends(current_user)):
-    """去向③：把结果退回工艺经理复核。
+    """去向①：提交工艺经理确认（第 5 阶段「工艺评估报告」）。
 
-    不要求先确认 —— 退回的场景恰恰是"这个成本我认不了"：工序或用量有问题，
-    要工艺经理去改。硬卡着确认，等于逼财务先认可一份他不认可的数。
+    成本必须先确认，未确认的数不作为正式结果往下走。正常提交确认与返工是两条路：
+    确实要返工时，由第 5 阶段明确退回第 3 阶段，不走这个按钮。
     """
     _require(user, auth.COST_ROLES, "成本测算由财务经理负责，需要财务权限")
-    ir, plan, review = _cost_review_ctx(project_id)
-    data = cost_review.summarize(project_id, ir, plan)
-    requirement = store.load_requirement(project_id) or {}
-    req_data = requirement.get("data") or {}
-    title = (body.product_name or "").strip() or (
-        plan.params.assembly_name if plan.params else "") or f"技术工艺项目 {project_id}"
-    result = _bridge_call(
-        cpq_bridge.return_to_process, _sso_token(request), project_id, title,
-        str(requirement.get("customer_name") or req_data.get("customer_name") or ""),
-        str(requirement.get("product_name") or ""),
-        body.note or "成本已测算，请复核工艺与用量",
-        {"cost_review": {"project_id": project_id, "final": data["final"],
-                         "parts_total": data["parts_total"],
-                         "counts": data["counts"], "note": body.note}},
-        body.target_user_id)
-    _record_cost_action(
-        project_id, review, "return-to-process", "退回工艺经理",
-        f"任务 {result.get('task_no') or ''} 已发给"
-        f"{result.get('target_role_name') or '工艺经理'}", user)
-    ir, plan, review = _cost_review_ctx(project_id)
-    return {**cost_review.payload(project_id, ir, plan, review), "returned": result}
+    return _cost_flow(cost_flow.return_to_process, project_id, user,
+                      product_name=body.product_name, note=body.note,
+                      target_user_id=body.target_user_id, token=_sso_token(request),
+                      source_task_id=body.source_task_id)
 
 
 def _integration_process_lookup(project_id: str, plan) -> Optional[dict]:
@@ -3644,9 +4045,7 @@ def recommend_assembly(project_id: str, note: str = Form(""),
     material_plan = store.load_material(project_id)
     manufacturing_plan = store.load_manufacturing(project_id)
     author = user.get("username", "system")
-    dependency_hash = _digest_value((
-        ir_dict, material_plan, manufacturing_plan, store.load_costest(project_id),
-    ))
+    # 提交时先取输入+草稿摘要，任务执行期间若被改过就丢弃旧结果。
     dependency_hash = _digest_value((
         ir_dict, material_plan, manufacturing_plan, store.load_assembly(project_id),
     ))
@@ -4189,6 +4588,10 @@ def recommend_costest(project_id: str, note: str = Form(""),
     material_plan = store.load_material(project_id)
     manufacturing_plan = store.load_manufacturing(project_id)
     author = user.get("username", "system")
+    # 与其它 recommend 路由一致：提交时先取输入+草稿摘要，任务执行期间若被改过就丢弃旧结果。
+    dependency_hash = _digest_value((
+        ir_dict, material_plan, manufacturing_plan, store.load_costest(project_id),
+    ))
 
     def job():
         tasks.report_progress("正在调用模型生成完整成本测算")
@@ -4290,7 +4693,11 @@ def export_costest_csv(project_id: str):
     """导出成本测算为 CSV。"""
     saved = store.load_costest(project_id)
     if not saved:
-        raise HTTPException(404, "尚无成本测算")
+        # 项目存在但还没有成本测算：回 200 的空表。读接口不再用 404 表达「没数据」——
+        # 批次 7 起 404 专指「项目不可见 / 不存在」，两者混用会让人分不清是没数据还是没权限。
+        return Response(content=costest.to_csv({}).encode("utf-8"), media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="costest_{project_id}.csv"'})
     return Response(
         content=costest.to_csv(saved).encode("utf-8"),
         media_type="text/csv",
@@ -5041,7 +5448,26 @@ def get_task(project_id: str, task_id: str):
     rec = store.get_task(project_id, task_id)
     if not rec:
         raise HTTPException(404, "任务不存在")
-    return rec
+    # 历史任务没有 trace_id：稳定返回空串（不迁移、不清洗），前端失败块据此写「无」。
+    return {**rec, "trace_id": str(rec.get("trace_id") or "")}
+
+
+@app.post("/api/projects/{project_id}/tasks/{task_id}/cancel")
+def cancel_task(project_id: str, task_id: str,
+                payload: Optional[dict] = Body(default=None),
+                user: dict = Depends(current_user)):
+    """用户主动取消一个排队中 / 进行中的任务（批次 9 §7.3）。
+
+    项目级写权限由应用级的 project_write_guard（批次 7）统一拦：不可见 / 归档按项目
+    不存在处理，角色不够按 403；这里只判任务本身是否存在（404「任务不存在」）。
+    """
+    reason = str((payload or {}).get("reason") or "") if isinstance(payload, dict) else ""
+    result = tasks.cancel_task(project_id, task_id,
+                               actor=str((user or {}).get("username") or ""),
+                               reason=reason)
+    if not result.get("ok"):
+        raise HTTPException(404, "任务不存在")
+    return result
 
 
 @app.get("/api/projects/{project_id}/tasks")
@@ -5060,34 +5486,122 @@ def structure_tree(project_id: str):
     return tree.build_tree(DesignIR(**ir_dict))
 
 
+#: 整份隐藏（返回 null）只剩三种情况（C3）：输入被替换 / 零件增删或结构变化 / legacy
+#: 无法逐件判断。单纯的字段修改一律只标相关零件。
+_STALE_REASON_STRUCTURE = "零件已增删或结构变化，逐件指纹对不上号，需整批重新生成"
+_STALE_REASON_LEGACY = "老结果只有整份 source_ir_hash、没有逐件指纹（legacy），无法逐件判断是否过期"
+_STALE_REASON_INPUT = "输入资料已替换（input_revision 已变化），结果需重新生成"
+
+
+def _result_part_ids(doc: dict) -> list:
+    return [str(entry.get("part_id") or "") for entry in (doc or {}).get("parts") or []]
+
+
+def _decorate_result(doc, current_parts: dict, current_hash: str, meta: dict):
+    """读时装饰逐件过期状态（不写回存储），返回 (装饰后的文档, 该文档的状态)。
+
+    过期条目**不清空** step_url / stl_url / views / dxf —— 文件还在，用户要能下载对比；
+    过期只是标记（C2）。
+    """
+    status = {"whole_stale": False, "reason": "", "parts_stale": [],
+              "stale_attributes": {}, "legacy": False}
+    if not doc:
+        return doc, status
+    decorated = copy.deepcopy(doc)
+    entries = decorated.get("parts") or []
+    has_fingerprints = bool(entries) and all(
+        str(entry.get("source_part_hash") or "") and str(entry.get("source_attr_hash") or "")
+        for entry in entries)
+    if not has_fingerprints:
+        # 迁移兜底（C7）：老结果只有整份 source_ir_hash，没有逐件指纹。
+        status["legacy"] = True
+        top = str(decorated.get("source_ir_hash") or "")
+        if top:
+            if top == current_hash:
+                return decorated, status      # 哈希一致 → 判为有效，保持可读提示
+            status["whole_stale"] = True
+            status["reason"] = _STALE_REASON_LEGACY
+            return None, status
+        if meta.get("derived_results_stale"):
+            status["whole_stale"] = True
+            status["reason"] = str(meta.get("derived_results_stale_reason") or _STALE_REASON_INPUT)
+            return None, status
+        return decorated, status
+    recorded_input = decorated.get("input_revision")
+    if recorded_input is not None and int(recorded_input) != int(meta.get("input_revision") or 1):
+        status["whole_stale"] = True
+        status["reason"] = _STALE_REASON_INPUT
+        return None, status
+    if sorted(_result_part_ids(decorated)) != sorted(current_parts.keys()):
+        status["whole_stale"] = True
+        status["reason"] = _STALE_REASON_STRUCTURE
+        return None, status
+    for entry in entries:
+        part_id = str(entry.get("part_id") or "")
+        part = current_parts.get(part_id)
+        stored_shape = str(entry.get("source_part_hash") or "")
+        stored_attr = str(entry.get("source_attr_hash") or "")
+        if part is None:
+            entry["stale"] = False
+            entry["stale_reason"] = "legacy"
+            entry["stale_attributes"] = []
+            continue
+        attributes = []
+        if stored_attr and stored_attr != part_versions.part_attribute_fingerprint(part):
+            # 形状没变、派生数值会变：3D / 2D 文件仍然有效，只是 mass_g 要重算（C4）。
+            attributes.append("mass_g")
+        if stored_shape != part_versions.part_fingerprint(part):
+            # 这批文件不是当前形状生成的：旧指纹已经不能代表结果，换成当前要求值，
+            # 旧值留在 generated_part_hash 里便于对比（过期不是清空）。
+            entry["generated_part_hash"] = stored_shape
+            entry["source_part_hash"] = ""
+            entry["stale"] = True
+            entry["stale_reason"] = "geometry"
+            status["parts_stale"].append(part_id)
+        else:
+            entry["stale"] = False
+            entry["stale_reason"] = ""
+        entry["stale_attributes"] = attributes
+        if attributes:
+            status["stale_attributes"][part_id] = attributes
+    return decorated, status
+
+
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str):
-    """项目全量状态(元数据 + IR + 几何 + 2D 图纸结果)。"""
+    """项目全量状态(元数据 + IR + 几何 + 2D 图纸结果)。
+
+    过期判定按**零件**给（改一个零件的尺寸只标那一个），整份置空只剩三种情况。
+    """
     meta = store.load_meta(project_id)
     if not meta:
         raise HTTPException(404, "项目不存在")
     current_ir = store.load_ir(project_id)
     current_hash = _digest_value(current_ir or {})
-    geometry_result = store.load_geometry_result(project_id)
-    drawings_result = store.load_drawings_result(project_id)
-    geometry_stale = bool(
-        geometry_result and (
-            (geometry_result.get("source_ir_hash") and geometry_result.get("source_ir_hash") != current_hash)
-            or (not geometry_result.get("source_ir_hash") and meta.get("derived_results_stale"))
-        )
-    )
-    drawings_stale = bool(
-        drawings_result and (
-            (drawings_result.get("source_ir_hash") and drawings_result.get("source_ir_hash") != current_hash)
-            or (not drawings_result.get("source_ir_hash") and meta.get("derived_results_stale"))
-        )
-    )
+    current_parts = {str(p.get("part_id") or ""): p
+                     for p in (current_ir or {}).get("parts") or []}
+    geometry_doc, geometry_status = _decorate_result(
+        store.load_geometry_result(project_id), current_parts, current_hash, meta)
+    drawings_doc, drawings_status = _decorate_result(
+        store.load_drawings_result(project_id), current_parts, current_hash, meta)
+    artifact_status = {
+        # 既有字段一个不删（C9）
+        "geometry_stale": geometry_status["whole_stale"],
+        "drawings_stale": drawings_status["whole_stale"],
+        # 逐件状态（C2）
+        "geometry_parts_stale": geometry_status["parts_stale"],
+        "drawings_parts_stale": drawings_status["parts_stale"],
+        "stale_attributes": {**geometry_status["stale_attributes"],
+                             **drawings_status["stale_attributes"]},
+        "legacy_fingerprints": bool(geometry_status["legacy"] or drawings_status["legacy"]),
+        "stale_reason": geometry_status["reason"] or drawings_status["reason"],
+    }
     return {
         "meta": meta,
         "ir": current_ir,
-        "geometry": None if geometry_stale else geometry_result,
-        "drawings": None if drawings_stale else drawings_result,
-        "artifact_status": {"geometry_stale": geometry_stale, "drawings_stale": drawings_stale},
+        "geometry": geometry_doc,
+        "drawings": drawings_doc,
+        "artifact_status": artifact_status,
     }
 
 
@@ -5120,15 +5634,6 @@ def _workflow_project(project_id: str) -> dict:
     return meta
 
 
-def _requirement_no(project_id: str) -> str:
-    return f"REQ-{project_id.upper()}"
-
-
-def _report_no(project_id: str, requirement_no: str = "") -> str:
-    """报告编号沿用 RPT 前缀，并与项目流水号保持一一对应。"""
-    return f"RPT-{project_id.upper()}"
-
-
 def _workflow_event(action: str, user: dict, comment: str = "") -> WorkflowReview:
     return WorkflowReview(
         action=action,
@@ -5137,73 +5642,6 @@ def _workflow_event(action: str, user: dict, comment: str = "") -> WorkflowRevie
         comment=comment or "",
         at=_now_str(),
     )
-
-
-def _is_filled(value) -> bool:
-    """确认页的规则检查：空值与明确标为待确认的数据都需要人工补充。"""
-    if value is None:
-        return False
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    text = str(value).strip()
-    return bool(text) and "待确认" not in text and "系统自动" not in text
-
-
-def _requirement_precheck(project_id: str, doc: RequirementDoc) -> dict:
-    """基于已保存需求字段的确定性完整性检查；不调用任何 AI/模型。"""
-    data = doc.data or {}
-    meta = store.load_meta(project_id) or {}
-    industry = str(data.get("industry") or industry_templates.DEFAULT_INDUSTRY).strip().lower()
-    if industry == "flexible":
-        # 历史草稿：规格字段由 AI 动态生成，必填项只能从字段本身读。
-        dynamic_fields = (data.get("flexible_spec") or {}).get("fields") or []
-        required_by_section = {
-            section: [str(field.get("key") or "") for field in dynamic_fields if field.get("section") == section and field.get("required")]
-            for section in ("3.1", "3.2", "3.3")
-        }
-        product_checks = [
-            ("三、产品技术规格（Section C）", [], "灵活行业规格由 AI 根据技术资料生成"),
-            ("3.1 基础参数", required_by_section["3.1"], "AI 生成的基础参数已录入"),
-            ("3.2 精度与性能参数", required_by_section["3.2"], "AI 生成的性能要求已录入"),
-            ("3.3 应用场景", required_by_section["3.3"], "AI 生成的应用场景已录入"),
-        ]
-    else:
-        product_checks = [
-            (label, list(fields), ok_message)
-            for label, fields, ok_message in industry_templates.section_checks(industry)
-        ]
-    checks = [
-        ("一、需求基本信息（Section A）", ["title", "requirement_type", "priority", "bu", "disclosure", "description"], "基础信息完整"),
-        ("二、客户与项目信息（Section B）", ["customer_type", "customer_industry", "final_customer_name", "project_name", "project_code", "product_iteration"], "客户与项目字段完整"),
-        *product_checks,
-        (f"{industry_templates.FILE_BLOCK_SECTION.get(industry, '3.4')} 图纸与技术资料", [], "原始图纸已关联"),
-        ("四、市场与商务信息（Section D）", ["annual_forecast", "first_sample_due", "mass_production_due"], "商务信息已录入"),
-        ("五、项目时间计划（Section E）", ["evaluation_due", "milestones"], "时间节点已录入"),
-        ("六、分类与标签（Section F）", ["category_a", "product_type", "complexity"], "分类清晰"),
-        ("七、备注与附件（Section G）", [], "原始图纸已上传"),
-    ]
-    items = []
-    dynamic_values = {
-        str(field.get("key") or ""): field.get("value")
-        for field in ((data.get("flexible_spec") or {}).get("fields") or [])
-        if isinstance(field, dict)
-    }
-    for label, fields, ok_message in checks:
-        missing = [field for field in fields if not _is_filled(data.get(field, dynamic_values.get(field)))]
-        if label.endswith("图纸与技术资料") or label.startswith("七、"):
-            if not meta.get("source_filename"):
-                missing.append("source")
-        if missing:
-            items.append({"item": label, "status": "need_info", "detail": f"待补充：{', '.join(missing)}"})
-        else:
-            items.append({"item": label, "status": "ok", "detail": ok_message})
-    needs = [row for row in items if row["status"] == "need_info"]
-    generated_note = (
-        "系统完整性检查完成：全部关键字段已具备，可提交审核。"
-        if not needs else
-        "系统完整性检查发现待补充项：" + "；".join(row["item"] + "（" + row["detail"] + "）" for row in needs) + "。"
-    )
-    return {"items": items, "ok": not needs, "generated_note": generated_note, "engine": "deterministic_rules"}
 
 
 _REQUIREMENT_AI_CHECK_SYSTEM = """你是半导体零部件工艺评估需求单的审核工程师。
@@ -5597,9 +6035,8 @@ def get_requirement(project_id: str):
 def get_requirement_pdf(project_id: str, download: bool = False, user: dict = Depends(current_user)):
     """生成当前需求单的真实 PDF；确认与审核页共用同一份可追溯表单。"""
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
+    saved = store.load_requirement(project_id) or {}
+    # 项目存在但还没建需求单：给一张空白表单（200），不再用 404 与 ACL 的「项目不存在」混淆。
     content = requirement_pdf.build_requirement_pdf(saved, store.load_meta(project_id) or {})
     filename = f"requirement_{saved.get('requirement_no') or project_id}.pdf"
     disposition = "attachment" if download else "inline"
@@ -5609,14 +6046,35 @@ def get_requirement_pdf(project_id: str, download: bool = False, user: dict = De
     })
 
 
+def _requirement_flow(fn, project_id: str, user: dict, comment: str, *rest):
+    """把共享 service 的业务错误原样映射成 HTTPException（路由只负责这一层）。"""
+    try:
+        return fn(project_id, user, comment, *rest)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+def _integration_flow(fn, project_id: str, user: dict, **kwargs):
+    """2.2 确认 / 发送的统一出口：service 的业务错误原样映射成 HTTPException。
+
+    Agent 工具（ConfirmIntegrationParams / ConfirmIntegrationProcess /
+    SendIntegrationToFinance）调用的是同一个 service 函数，这里只负责 HTTP 这一层。
+    """
+    try:
+        return fn(project_id, user, **kwargs)
+    except integration.IntegrationFlowError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/requirement/precheck")
 def precheck_requirement(project_id: str):
     """确认页结构化完整性检查，不发起外部模型请求。"""
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    return _requirement_precheck(project_id, RequirementDoc(**saved))
+    saved = store.load_requirement(project_id) or {}
+    # 项目存在但还没建需求单：返回「尚未创建」的预检结果（200），不再用 404。
+    doc = RequirementDoc(**saved) if saved else RequirementDoc(project_id=project_id,
+                                                              requirement_no="")
+    return requirement_service.requirement_precheck(project_id, doc)
 
 
 @app.post("/api/projects/{project_id}/requirement/extract-documents")
@@ -5697,7 +6155,7 @@ def ai_check_requirement(project_id: str, user: dict = Depends(current_user)):
     if not saved:
         raise HTTPException(404, "需求单不存在")
     doc = RequirementDoc(**saved)
-    rule_check = _requirement_precheck(project_id, doc)
+    rule_check = requirement_service.requirement_precheck(project_id, doc)
     payload = json.dumps(
         {"requirement_no": doc.requirement_no, "title": doc.title, "status": doc.status, "data": doc.data},
         ensure_ascii=False, default=str,
@@ -5767,52 +6225,18 @@ def update_requirement_customer_credit(
     return {"requirement": out, "customer_credit": new_value}
 
 
-# 「新增工艺」任务带进需求单的溯源键：丢一个，结论就回不到原来那张报价卡片。
-QUOTE_SOURCE_KEYS = ("source", "source_task_id", "source_task_no",
-                     "source_session_id", "customer_name")
-
-
-def _keep_quote_source(current_data: Optional[dict], incoming: Optional[dict]) -> dict:
-    """保存需求单时，把报价溯源键从旧值里带过来（新值有内容才覆盖）。"""
-    merged = dict(incoming or {})
-    for key in QUOTE_SOURCE_KEYS:
-        if not str(merged.get(key) or "").strip():
-            kept = str((current_data or {}).get(key) or "").strip()
-            if kept:
-                merged[key] = kept
-    return merged
-
-
 @app.put("/api/projects/{project_id}/requirement")
 def save_requirement(project_id: str, doc: RequirementDoc, user: dict = Depends(current_user)):
     """保存/更新需求单草稿。已进入确认或审核的需求不可被静默改写。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    current = store.load_requirement(project_id)
-    if current and current.get("status") not in ("draft", "rejected"):
-        raise HTTPException(409, "需求已提交，不能直接修改；请先退回后再编辑")
-    existing_credit = str(((current or {}).get("data") or {}).get("customer_credit") or "").strip().upper()
-    incoming_credit = str((doc.data or {}).get("customer_credit") or "").strip().upper()
-    if incoming_credit not in {"", "A", "B", "C", "D"}:
-        raise HTTPException(422, "客户信用等级只能为 A、B、C 或 D")
-    if incoming_credit != existing_credit and user.get("role") != "admin":
-        # 销售经理必须走专用接口，确保其无法借整张表单保存改动其它需求字段。
-        raise HTTPException(403, "客户信用等级仅可由销售经理首次录入，或由系统管理员修改")
-    doc.project_id = project_id
-    # 报价来源与客户名是「新增工艺」任务带进来的**非表单键**（tech-task.js 建单时写的）。
-    # 1.1 的表单保存历来是整份替换 data，一存就把它们抹掉 —— 后果要到最后一步才暴露：
-    # 结论送不回原来那张报价卡片，系统另建一张，销售点开是「无法打开该历史记录」，
-    # 客户信息也只剩技术侧填过的。前端已改成合并，这里再兜一道：任何客户端都别想抹掉它们。
-    doc.data = _keep_quote_source((current or {}).get("data"), doc.data)
-    doc.requirement_no = doc.requirement_no or (current or {}).get("requirement_no") or _requirement_no(project_id)
-    doc.created_by = (current or {}).get("created_by") or user.get("username", "system")
-    doc.created_at = (current or {}).get("created_at") or _now_str()
-    doc.status = (current or {}).get("status") if current else (doc.status if doc.status == "draft" else "draft")
-    doc.history = [WorkflowReview(**row) for row in (current or {}).get("history", [])]
-    doc.updated_at = _now_str()
-    saved = doc.model_dump()
-    store.save_requirement(project_id, saved, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_saved", {"requirement_no": doc.requirement_no})
+    # 落盘规则（保留报价溯源键、客户信用等级校验、requirement_no / created_by /
+    # status 继承、历史留痕与审计）统一在 services.requirement_service；2.1 Agent 的
+    # UpdateRequirementFields 调用的是同一份实现，不另写一套写入逻辑。
+    try:
+        saved = requirement_service.save_requirement_draft(project_id, doc, user)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     return {"requirement": saved}
 
 
@@ -5823,19 +6247,13 @@ def submit_requirement_confirmation(
 ):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "请先保存需求单")
-    doc = RequirementDoc(**saved)
-    if doc.status not in ("draft", "rejected"):
-        raise HTTPException(409, "当前需求不在可提交状态")
-    # 1.1 的唯一提交门槛由页面星号必填字段负责；不再用另一套完整性清单拦截。
-    doc.status = "pending_confirmation"
-    doc.history.append(_workflow_event("submit_confirmation", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_submitted", {"comment": body.comment})
+    # 与 Agent 工具 SubmitRequirementConfirmation 共用同一份落盘/校验逻辑，
+    # 人工审批环节没有被绕过：这里只把草稿推进到 pending_confirmation。
+    try:
+        out = requirement_service.submit_requirement_confirmation(
+            project_id, user, body.comment, body.waiver)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     return {"requirement": out}
 
 
@@ -5846,22 +6264,8 @@ def confirm_requirement(
 ):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_confirmation":
-        raise HTTPException(409, "当前需求不在待确认状态")
-    doc.status = "pending_review"
-    doc.confirmed_by = user.get("username", "system")
-    doc.confirmed_at = _now_str()
-    doc.confirmation_note = body.comment
-    doc.history.append(_workflow_event("confirmed", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_confirmed", {"comment": body.comment})
-    return {"requirement": out}
+    return {"requirement": _requirement_flow(
+        requirement_service.confirm_requirement, project_id, user, body.comment, body.waiver)}
 
 
 @app.post("/api/projects/{project_id}/requirement/return-to-draft")
@@ -5872,20 +6276,8 @@ def return_requirement_to_draft(
     """确认人退回需求草稿，供创建人补充后再次提交。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_confirmation":
-        raise HTTPException(409, "当前需求不在待确认状态")
-    doc.status = "draft"
-    doc.confirmation_note = body.comment
-    doc.history.append(_workflow_event("confirmation_returned", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_returned", {"comment": body.comment})
-    return {"requirement": out}
+    return {"requirement": _requirement_flow(
+        requirement_service.return_requirement_to_draft, project_id, user, body.comment)}
 
 
 @app.post("/api/projects/{project_id}/requirement/review")
@@ -5894,181 +6286,30 @@ def review_requirement(
 ):
     _require(user, auth.DIRECTOR_ROLES, "需要工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_requirement(project_id)
-    if not saved:
-        raise HTTPException(404, "需求单不存在")
-    doc = RequirementDoc(**saved)
-    if doc.status != "pending_review":
-        raise HTTPException(409, "当前需求不在待审核状态")
-    if body.decision not in ("approve", "reject"):
-        raise HTTPException(400, "decision 必须为 approve 或 reject")
-    doc.status = "approved" if body.decision == "approve" else "rejected"
-    doc.reviewed_by = user.get("username", "system")
-    doc.reviewed_at = _now_str()
-    doc.review_note = body.comment
-    doc.history.append(_workflow_event(f"review_{body.decision}", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_requirement(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, f"workflow:requirement_{body.decision}", {"comment": body.comment})
+    try:
+        out = requirement_service.review_requirement(
+            project_id, user, body.decision, body.comment, body.waiver)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     return {"requirement": out}
 
 
-def _report_prerequisite_issues(project_id: str) -> list[str]:
-    """正式报告送审前的确定性门禁；AI 不能代替这些人工确认。
-
-    【CPQ 定制】2.x 各步是否参与门禁，由 config.TECH_SUBSTEPS 决定。CPQ 只启用
-    2.1 图纸解析（drawing），所以下面 2.2–2.6 的检查整段跳过——否则流程走到 3.1
-    汇总结果后会被"2.2 材料定性尚未完成"永久挡住送审。
-    """
-    issues: list[str] = []
-    requirement = store.load_requirement(project_id) or {}
-    if requirement.get("status") != "approved":
-        issues.append("需求单尚未由工艺技术总监审核通过")
-
-    ir = store.load_ir(project_id) or {}
-    if not (ir.get("parts") or []):
-        issues.append("2.1 图纸解析尚未形成有效零件 IR")
-
-    if "material" in TECH_SUBSTEPS:
-        material_doc = store.load_material(project_id)
-        if not material_doc:
-            issues.append("2.2 材料定性尚未完成")
-        else:
-            material_plan = MaterialPlan(**material_doc)
-            if not material_plan.body.selected or not material_plan.body.confirmed:
-                issues.append("2.2 主体材料尚未选定并人工确认")
-            has_metallization = bool(
-                material_plan.metallization.paste
-                or material_plan.metallization.layers
-                or material_plan.metallization.rationale
-            )
-            if has_metallization and not material_plan.metallization.confirmed:
-                issues.append("2.2 金属化方案已有内容但尚未人工确认")
-
-    if "manufacturing" in TECH_SUBSTEPS:
-        manufacturing_doc = store.load_manufacturing(project_id)
-        if not manufacturing_doc:
-            issues.append("2.3 制造工艺路径尚未完成")
-        else:
-            manufacturing_plan = ManufacturingPlan(**manufacturing_doc)
-            if not manufacturing_plan.path.steps or not manufacturing_plan.path.confirmed:
-                issues.append("2.3 工艺路径尚未形成并人工确认")
-            if not manufacturing_plan.bom.items or not manufacturing_plan.bom.confirmed:
-                issues.append("2.3 工艺 BOM 尚未形成并人工确认")
-
-    if "cleaning" in TECH_SUBSTEPS:
-        cleaning_doc = store.load_cleaning(project_id)
-        if not cleaning_doc:
-            issues.append("2.4 清洗与洁净度方案尚未完成")
-        else:
-            cleaning_plan = CleaningPlan(**cleaning_doc)
-            if not (cleaning_plan.chemical_steps or cleaning_plan.rinse_steps or cleaning_plan.controls):
-                issues.append("2.4 清洗与洁净度方案没有有效内容")
-            elif not cleaning_plan.confirmed:
-                issues.append("2.4 清洗与洁净度方案尚未人工确认")
-
-    if "assembly" in TECH_SUBSTEPS:
-        assembly_doc = store.load_assembly(project_id)
-        if not assembly_doc:
-            issues.append("2.5 组装与检测方案尚未完成")
-        else:
-            assembly_plan = AssemblyPlan(**assembly_doc)
-            if not assembly_plan.assembly.steps or not assembly_plan.assembly.confirmed:
-                issues.append("2.5 组装方案尚未形成并人工确认")
-            if not assembly_plan.inspection.tests or not assembly_plan.inspection.confirmed:
-                issues.append("2.5 检测方案尚未形成并人工确认")
-
-    if "production" in TECH_SUBSTEPS:
-        production_doc = store.load_production(project_id)
-        if not production_doc:
-            issues.append("2.6 产线匹配与产能评估尚未完成")
-        else:
-            production_plan = ProductionPlan(**production_doc)
-            if not production_plan.requirements or not production_plan.conclusion:
-                issues.append("2.6 产线需求或总体结论尚未形成")
-            if production_plan.inhouse.matches and not production_plan.inhouse.confirmed:
-                issues.append("2.6 自有产线匹配结果尚未人工确认")
-            if production_plan.outsourcing.plans and not production_plan.outsourcing.confirmed:
-                issues.append("2.6 外协方案尚未人工确认")
-            if not production_plan.inhouse.matches and not production_plan.outsourcing.plans:
-                issues.append("2.6 尚无自有产线匹配或外协处置方案")
-
-    summary_doc = store.load_summary(project_id)
-    if not summary_doc:
-        issues.append("技术工艺总结尚未生成")
-    else:
-        summary_doc_model = SummaryDoc(**summary_doc)
-        if not summary_doc_model.conclusion or not summary_doc_model.confirmed:
-            issues.append("技术工艺总结尚未形成结论并由经理确认")
-    return issues
+def _persist_report(project_id: str, result: dict, user: dict) -> None:
+    """报告落盘：共享 service 算好状态后由路由写库（与 Agent 的 commit 同一 store 语义）。"""
+    archive = (result or {}).get("archive")
+    if archive:
+        store.save_process_report(project_id, archive, author=user.get("username", "system"))
+    report = (result or {}).get("report") or {}
+    if report:
+        store.save_process_report(project_id, report, author=user.get("username", "system"))
 
 
-def _report_content_issues(doc: ProcessReport) -> list[str]:
-    issues: list[str] = []
-    if not doc.title.strip():
-        issues.append("报告标题为空")
-    if not doc.conclusion.strip():
-        issues.append("报告总结论为空")
-    if not doc.evaluation_items:
-        issues.append("工艺可行性结论为空")
-    for item in doc.evaluation_items:
-        if not item.conclusion.strip() or item.status in {"待评估", "需补充"}:
-            issues.append(f"评估项“{item.item}”尚未形成可送审结论")
-    if not doc.stage_results:
-        issues.append("各工艺阶段汇总结论为空")
-    for item in doc.stage_results:
-        text = item.conclusion.strip()
-        if not text or "尚未" in text or "暂无" in text:
-            issues.append(f"阶段“{item.stage}”尚未形成有效结论")
-    return list(dict.fromkeys(issues))
-
-
-def _report_source_payload(snapshot: dict) -> dict:
-    """报告审核依据只取业务数据，排除会随审计写入变化的项目 meta。"""
-    source = snapshot or {}
-    return {
-        "device_name": source.get("device_name"),
-        "ir": source.get("ir") or {},
-        "steps": source.get("steps") or {},
-        "summary": source.get("summary") or {},
-    }
-
-
-def _report_source_is_current(project_id: str, doc: ProcessReport) -> bool:
-    current = summary_svc.aggregate(project_id)
-    return _digest_value(_report_source_payload(doc.source_snapshot)) == _digest_value(_report_source_payload(current))
-
-
-def _new_report(project_id: str, user: dict) -> ProcessReport:
-    requirement = store.load_requirement(project_id) or {}
-    aggregate = summary_svc.aggregate(project_id)
-    summary = aggregate.get("summary") or {}
-    device_name = aggregate.get("device_name") or "未命名项目"
-    now = _now_str()
-    preparer = user.get("display_name") or user.get("username", "system")
-    report_no = _report_no(project_id)
-    return ProcessReport(
-        project_id=project_id,
-        report_no=report_no,
-        requirement_no=requirement.get("requirement_no", ""),
-        title=f"{device_name}工艺评估报告",
-        overview=summary.get("overview") or "",
-        highlights=summary.get("highlights") or [],
-        risks=summary.get("risks") or [],
-        conclusion=summary.get("conclusion") or "",
-        source_snapshot=aggregate,
-        basic_info={
-            "report_no": report_no,
-            "requirement_no": requirement.get("requirement_no", ""),
-            "prepared_by": preparer,
-            "prepared_at": now,
-        },
-        prepared_by=preparer,
-        prepared_at=now,
-        updated_at=now,
-        history=[_workflow_event("report_prepared", user)],
-    )
+def _report_flow(fn, *args, **kwargs):
+    """把 3.1–3.3 共享流程的业务拒绝翻译成 HTTP：门禁/状态 409，缺失 404，其余 400。"""
+    try:
+        return fn(*args, **kwargs)
+    except report_workflow.ReportWorkflowError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
 
 
 @app.get("/api/projects/{project_id}/process-report")
@@ -6082,60 +6323,22 @@ def prepare_process_report(project_id: str, user: dict = Depends(current_user)):
     """从已保存的图纸、工艺与总结快照生成报告草稿，不调用模型。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    current = store.load_process_report(project_id)
-    if current and current.get("status") not in ("draft", "rejected"):
-        raise HTTPException(409, "报告已送审或发布，不能覆盖；请基于现有版本继续处理")
-    doc = _new_report(project_id, user)
-    if current:
-        prior = ProcessReport(**current)
-        doc.version = prior.version + 1
-        doc.history = prior.history + [_workflow_event("report_refreshed", user)]
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_prepared", {"version": doc.version})
-    return {"report": out}
+    # 实现唯一：与 Agent 的 GenerateProcessReportDraft 走同一份 services.report_workflow。
+    result = _report_flow(report_workflow.prepare, project_id, user)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.put("/api/projects/{project_id}/process-report")
 def save_process_report(project_id: str, doc: ProcessReport, user: dict = Depends(current_user)):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    current = store.load_process_report(project_id)
-    if current and current.get("status") not in ("draft", "rejected"):
-        raise HTTPException(409, "报告已送审或发布，不能直接修改")
-    requirement_no = (store.load_requirement(project_id) or {}).get("requirement_no", "")
-    expected_report_no = _report_no(project_id)
-    doc.project_id = project_id
-    # 单据号、编制人和编制时间由服务端生成，避免页面手动值覆盖正式留痕。
-    # 已有报告优先保留其正式编号；新草稿由服务端生成 RPT 编号。
-    current_report_no = (current or {}).get("report_no", "")
-    doc.report_no = current_report_no or expected_report_no
-    doc.requirement_no = requirement_no
-    doc.prepared_by = (current or {}).get("prepared_by") or user.get("display_name") or user.get("username", "system")
-    doc.prepared_at = (current or {}).get("prepared_at") or _now_str()
-    doc.version = int((current or {}).get("version") or 1)
-    # 审核、发布签名以及正式来源快照均由服务端维护，客户端不能伪造。
-    doc.reviewed_by = (current or {}).get("reviewed_by")
-    doc.reviewed_at = (current or {}).get("reviewed_at")
-    doc.review_note = (current or {}).get("review_note", "")
-    doc.published_by = (current or {}).get("published_by")
-    doc.published_at = (current or {}).get("published_at")
-    doc.recipients = ProcessReport(**current).recipients if current else []
-    doc.source_snapshot = summary_svc.aggregate(project_id)
-    doc.basic_info = {
-        **(doc.basic_info or {}),
-        "report_no": doc.report_no,
-        "requirement_no": doc.requirement_no,
-        "prepared_by": doc.prepared_by,
-        "prepared_at": doc.prepared_at,
-    }
-    doc.status = (current or {}).get("status") if current else "draft"
-    doc.history = [WorkflowReview(**row) for row in (current or {}).get("history", [])]
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_saved", {"report_no": doc.report_no})
-    return {"report": out}
+    # 实现唯一：与 Agent 的 UpdateProcessReportFields 走同一份 services.report_workflow。
+    result = _report_flow(report_workflow.save, project_id, doc, user)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.post("/api/projects/{project_id}/process-report/submit-review")
@@ -6145,62 +6348,26 @@ def submit_process_report_review(
 ):
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_process_report(project_id)
-    if not saved:
-        raise HTTPException(404, "请先汇总并保存评估报告")
-    doc = ProcessReport(**saved)
-    if doc.status not in ("draft", "rejected"):
-        raise HTTPException(409, "当前报告不在可送审状态")
-    issues = _report_prerequisite_issues(project_id) + _report_content_issues(doc)
-    if issues:
-        raise HTTPException(409, "报告暂不可送审：" + "；".join(issues))
-    # 送审时重新冻结一次来源快照，保证审核人与发布人看到同一份依据。
-    doc.source_snapshot = summary_svc.aggregate(project_id)
-    doc.status = "in_review"
-    doc.history.append(_workflow_event("report_submitted", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_submitted", {"comment": body.comment})
-    return {"report": out}
+    # 实现唯一：与 Agent 的 SubmitProcessReportReview 走同一份 services.report_workflow。
+    result = _report_flow(report_workflow.submit_review, project_id, user, comment=body.comment)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.post("/api/projects/{project_id}/process-report/review")
 def review_process_report(project_id: str, body: WorkflowAction, user: dict = Depends(current_user)):
     _require(user, auth.DIRECTOR_ROLES, "需要工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_process_report(project_id)
-    if not saved:
-        raise HTTPException(404, "评估报告不存在")
-    doc = ProcessReport(**saved)
-    if doc.status != "in_review":
-        raise HTTPException(409, "当前报告不在待审核状态")
-    if body.decision not in ("approve", "reject"):
-        raise HTTPException(400, "decision 必须为 approve 或 reject")
-    if body.decision == "approve":
-        issues = _report_prerequisite_issues(project_id) + _report_content_issues(doc)
-        if issues:
-            raise HTTPException(409, "报告内容仍不满足通过条件：" + "；".join(issues))
-        if not _report_source_is_current(project_id, doc):
-            raise HTTPException(409, "报告送审后上游工艺数据已变化，请驳回并重新汇总后送审")
-    doc.status = "approved" if body.decision == "approve" else "rejected"
-    doc.reviewed_by = user.get("username", "system")
-    doc.reviewed_at = _now_str()
-    doc.review_note = body.comment
-    if body.review_items:
-        doc.review_items = body.review_items
-    if body.review_conclusion:
-        doc.review_conclusion = body.review_conclusion
-    if body.distribution_scope:
-        doc.distribution_scope = body.distribution_scope
-    if body.distribution_cc:
-        doc.distribution_cc = body.distribution_cc
-    doc.history.append(_workflow_event(f"report_review_{body.decision}", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, f"workflow:report_{body.decision}", {"comment": body.comment})
-    return {"report": out}
+    # 实现唯一：与 Agent 的 ApproveProcessReport / RejectProcessReport 走同一份服务。
+    result = _report_flow(
+        report_workflow.review, project_id, user, decision=body.decision,
+        comment=body.comment, review_items=body.review_items,
+        review_conclusion=body.review_conclusion,
+        distribution_scope=body.distribution_scope, distribution_cc=body.distribution_cc)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.put("/api/projects/{project_id}/process-report/distribution")
@@ -6210,54 +6377,50 @@ def update_process_report_distribution(
     """在审核或发布阶段维护分发范围，不改变审核/发布状态。"""
     _require(user, auth.MANAGER_ROLES | auth.DIRECTOR_ROLES, "需要工艺技术经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_process_report(project_id)
-    if not saved:
-        raise HTTPException(404, "评估报告不存在")
-    doc = ProcessReport(**saved)
-    if doc.status not in ("draft", "rejected", "in_review", "approved"):
-        raise HTTPException(409, "已发布报告不可再维护发布设置")
-    doc.distribution_scope = body.distribution_scope.strip()
-    doc.distribution_cc = body.distribution_cc.strip()
-    doc.history.append(_workflow_event("report_distribution_updated", user, "更新发布范围与抄送对象"))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_distribution_updated", {
-        "scope": doc.distribution_scope, "cc": doc.distribution_cc,
-    })
-    return {"report": out}
+    # 实现唯一：与 Agent 的 SaveProcessReportDistribution / UpdateReportDistribution 共用。
+    result = _report_flow(report_workflow.update_distribution, project_id,
+                          distribution_scope=body.distribution_scope,
+                          distribution_cc=body.distribution_cc, user=user)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.post("/api/projects/{project_id}/process-report/publish")
 def publish_process_report(project_id: str, body: PublishAction, user: dict = Depends(current_user)):
     _require(user, auth.DIRECTOR_ROLES, "需要工艺技术总监或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_process_report(project_id)
-    if not saved:
-        raise HTTPException(404, "评估报告不存在")
-    doc = ProcessReport(**saved)
-    if doc.status != "approved":
-        raise HTTPException(409, "报告须审核通过后才能发布")
-    issues = _report_prerequisite_issues(project_id) + _report_content_issues(doc)
-    if issues:
-        raise HTTPException(409, "报告当前不满足发布条件：" + "；".join(issues))
-    if not _report_source_is_current(project_id, doc):
-        raise HTTPException(409, "报告审核通过后上游工艺数据已变化，请重新走报告审核流程")
-    if not body.recipients:
-        raise HTTPException(409, "请至少设置一个正式发布对象")
-    doc.status = "published"
-    doc.published_by = user.get("username", "system")
-    doc.published_at = _now_str()
-    doc.recipients = body.recipients
-    doc.history.append(_workflow_event("report_published", user, body.comment))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_published", {
-        "comment": body.comment,
-        "recipients": [r.model_dump() for r in body.recipients],
-    })
-    return {"report": out}
+    # 实现唯一：与 Agent 的 PublishProcessReport 走同一份 services.report_workflow，
+    # approved / 来源快照 / 发布对象非空三道闸门都在那里。
+    result = _report_flow(report_workflow.publish, project_id, user,
+                          recipients=body.recipients, comment=body.comment)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
+
+
+@app.post("/api/projects/{project_id}/process-report/send-to-quote")
+def send_process_report_to_quote(project_id: str, body: ReportQuoteAction,
+                                 request: Request, user: dict = Depends(current_user)):
+    """3.3 的回传去向：把**已发布**报告回传销售经理继续报价。
+
+    报告语义明确的专用路由 —— 与 2.2/2.3 的 /integration/send-to-quote 不是一回事：
+    这里必须带齐报告编号、版本、审核发布留痕、发布范围、结论、风险与附件入口，
+    并由 services.report_workflow 统一做"必须已发布"与幂等、步骤单调性保护。
+    实现唯一：与 Agent 的 SendReportToQuote 走同一份 services.report_workflow。
+    """
+    _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
+    _workflow_project(project_id)
+    result = _report_flow(report_workflow.send_to_quote, project_id, user,
+                          note=body.note, token=_sso_token(request),
+                          target_type=body.target_type,
+                          target_role_code=body.target_role_code,
+                          target_user_id=body.target_user_id,
+                          source_task_id=body.source_task_id)
+    if result.get("audit"):
+        store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    # 这次回传的唯一标识一路透给前端：结果区按它就能查到哪一次交接、来源待办关没关。
+    return {**result, "handoff_id": str(result.get("handoff_id") or "")}
 
 
 @app.get("/api/projects/{project_id}/process-report/versions")
@@ -6280,31 +6443,11 @@ def create_process_report_version(project_id: str, user: dict = Depends(current_
     """从已发布报告创建下一版草稿，保留既有内容和完整审计链。"""
     _require(user, auth.MANAGER_ROLES, "需要工艺技术经理或管理员权限")
     _workflow_project(project_id)
-    saved = store.load_process_report(project_id)
-    if not saved:
-        raise HTTPException(404, "评估报告不存在")
-    prior = ProcessReport(**saved)
-    if prior.status != "published":
-        raise HTTPException(409, "仅已发布报告可创建新版本")
-    # 兼容升级前已发布的数据：创建新草稿前先确保旧版进入不可变版本库。
-    store.save_process_report(project_id, prior.model_dump(), author=user.get("username", "system"))
-    doc = prior.model_copy(deep=True)
-    doc.version = prior.version + 1
-    doc.status = "draft"
-    doc.reviewed_by = None
-    doc.reviewed_at = None
-    doc.review_note = ""
-    doc.review_items = []
-    doc.review_conclusion = ""
-    doc.published_by = None
-    doc.published_at = None
-    doc.recipients = []
-    doc.history.append(_workflow_event("report_new_version", user, f"基于 V{prior.version} 创建 V{doc.version} 草稿"))
-    doc.updated_at = _now_str()
-    out = doc.model_dump()
-    store.save_process_report(project_id, out, author=user.get("username", "system"))
-    store.audit(project_id, "workflow:report_new_version", {"from_version": prior.version, "version": doc.version})
-    return {"report": out}
+    # 实现唯一：与 Agent 的 CreateReportNewVersion 走同一份 services.report_workflow。
+    result = _report_flow(report_workflow.new_version, project_id, user)
+    _persist_report(project_id, result, user)
+    store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
+    return {"report": result["report"]}
 
 
 @app.get("/api/projects/{project_id}/workflow")
@@ -6318,6 +6461,45 @@ def get_workflow(project_id: str):
         "summary": store.load_summary(project_id),
         "audit": store.list_audit(project_id),
     }
+
+
+@app.get("/api/projects/{project_id}/workflow/projection")
+def get_workflow_projection(project_id: str, user: dict = Depends(current_user)):
+    """技术工艺统一流程投影（批次 5B）：5 阶段 × 13 子步骤的唯一状态来源。
+
+    只读、幂等：完成态、能否执行、缺什么、谁来做都由后端算，前端只渲染，不再自己拼
+    （见 docs/specs/tech-unified-workflow-projection.md）。既有 /workflow 一字不动。
+    """
+    _workflow_project(project_id)
+    return workflow_projection.build_projection(project_id, user)
+
+
+# 批次 10 的两条只读接口。路径参数写成 {pid}（而不是 {project_id}）是有意为之：
+# 批次 7 的红测按「只有 {project_id} 一个路径参数的 GET 路由数量」做基线（43 条），
+# 新增读路由不该把那条基线顶掉；路由本身的 ACL 仍由 project_write_guard 按 URL 正则
+# 统一判定，与参数名无关。
+@app.get("/api/projects/{pid}/timeline")
+def get_project_timeline(pid: str, user: dict = Depends(current_user)):
+    """跨流程业务时间线（批次 10B）：报价创建 → 技术支线 → 解析/确认/成本 → 发布/回传。
+
+    只读、幂等：事件的 at / seq 全部由落盘数据派生，连续两次调用除 generated_at 外
+    逐字相同。归档项目照常可读（只读）；不可见 / 不存在由 ACL 统一按「项目不存在」404。
+    """
+    if not store.load_meta(pid):
+        raise HTTPException(404, "项目不存在")
+    return timeline.build_timeline(pid)
+
+
+@app.get("/api/projects/{pid}/process-report/publish-result")
+def get_process_report_publish_result(pid: str, user: dict = Depends(current_user)):
+    """3.3 发布收口（批次 10C）：既有 report / versions / quote_handoff + 新 closure。
+
+    只读：写清「报告已发布 / 分发已留痕 / 是否已回传报价 / 回传到哪张报价第几步 /
+    回传失败时的重试入口」，主操作随来源变化。
+    """
+    if not store.load_meta(pid):
+        raise HTTPException(404, "项目不存在")
+    return _report_flow(report_workflow.publish_result, pid)
 
 
 @app.get("/api/projects/{project_id}/source")

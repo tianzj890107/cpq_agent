@@ -1,5 +1,5 @@
 /* 3.2 审核页：只读取当前项目的报告与 2.1 图纸解析的真实聚合结果。 */
-const rrPid = new URLSearchParams(location.search).get('project') || localStorage.getItem('cad_engine_project_id') || '';
+const rrPid = TechProjectContext.bind().project;
 const rrIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
 let rrReport, rrAggregate, rrView;
 const rrEsc=value=>esc(value??'');
@@ -8,9 +8,9 @@ function rrToast(message,error=false){const el=document.createElement('div');el.
 function rrHas(value){if(Array.isArray(value))return value.some(rrHas);if(value&&typeof value==='object')return Object.entries(value).some(([key,item])=>!['project_id','updated_at','timing','confirmed','confirmed_by','confirmed_at'].includes(key)&&rrHas(item));return typeof value==='string'?Boolean(value.trim()):value!==null&&value!==undefined&&value!==false;}
 function rrCard(title,content){return `<section class="summary-card"><div class="summary-card-header"><div class="summary-card-title">${rrIcon}${title}</div></div>${content}</section>`;}
 function rrReviewBody(decision){return {decision,comment:decision==='approve'?'审核通过，准予发布。':'退回汇总修改。',review_items:rrView.items,review_conclusion:rrView.conclusion,distribution_scope:rrView.scope,distribution_cc:rrView.cc};}
-async function rrApproveThenPublish(){try{if(!rrReport||rrReport.status==='draft'||rrReport.status==='rejected')return rrToast('请先在 3.1 汇总结果中保存并提交报告。',true);if(rrReport.status==='in_review'){await api(`/api/projects/${encodeURIComponent(rrPid)}/process-report/review`,{method:'POST',body:JSON.stringify(rrReviewBody('approve'))});}if(['in_review','approved'].includes(rrReport.status))location.href=`report-publish.html?project=${encodeURIComponent(rrPid)}`;else if(rrReport.status==='published')location.href=`report-publish.html?project=${encodeURIComponent(rrPid)}`;}catch(error){rrToast(error.message||'审核操作失败',true);}}
-async function rrReject(){try{await api(`/api/projects/${encodeURIComponent(rrPid)}/process-report/review`,{method:'POST',body:JSON.stringify(rrReviewBody('reject'))});location.href=`summary.html?project=${encodeURIComponent(rrPid)}`;}catch(error){rrToast(error.message||'退回失败',true);}}
-async function rrStart(){if(!rrPid){location.href='home.html';return;}try{const [reportResult,aggregate]=await Promise.all([api(`/api/projects/${encodeURIComponent(rrPid)}/process-report`),api(`/api/projects/${encodeURIComponent(rrPid)}/summary`)]);rrReport=reportResult.report||{project_id:rrPid,status:'draft',basic_info:{}};rrAggregate=aggregate;rrView=rrLiveView(rrReport,aggregate);rrRender();}catch(error){document.querySelector('#app').innerHTML=`<section class="title-section"><h1 class="form-title">审核工艺评估报告</h1><p style="color:#6b7280">页面加载失败：${rrEsc(error.message)}</p></section>`;}}
+async function rrApproveThenPublish(){try{if(!rrReport||rrReport.status==='draft'||rrReport.status==='rejected')return rrToast('请先在 3.1 汇总结果中保存并提交报告。',true);if(rrReport.status==='in_review'){await api(`/api/projects/${encodeURIComponent(rrPid)}/process-report/review`,{method:'POST',body:JSON.stringify(rrReviewBody('approve'))});}const rrNext=()=>{window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('report-publish.html',rrPid):location.href=`report-publish.html?project=${encodeURIComponent(rrPid)}`;};if(['in_review','approved'].includes(rrReport.status))rrNext();else if(rrReport.status==='published')rrNext();}catch(error){rrToast(error.message||'审核操作失败',true);}}
+async function rrReject(){try{await api(`/api/projects/${encodeURIComponent(rrPid)}/process-report/review`,{method:'POST',body:JSON.stringify(rrReviewBody('reject'))});window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('summary.html',rrPid):location.href=`summary.html?project=${encodeURIComponent(rrPid)}`;}catch(error){rrToast(error.message||'退回失败',true);}}
+async function rrStart(){if(!rrPid){if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;}location.href='home.html';return;}try{const [reportResult,aggregate]=await Promise.all([api(`/api/projects/${encodeURIComponent(rrPid)}/process-report`),api(`/api/projects/${encodeURIComponent(rrPid)}/summary`)]);rrReport=reportResult.report||{project_id:rrPid,status:'draft',basic_info:{}};rrAggregate=aggregate;rrView=rrLiveView(rrReport,aggregate);rrRender();}catch(error){document.querySelector('#app').innerHTML=`<section class="title-section"><h1 class="form-title">审核工艺评估报告</h1><p style="color:#6b7280">页面加载失败：${rrEsc(error.message)}</p></section>`;}}
 // 3.2 只呈现项目已产生的内容；不再以参考稿补齐审核结论、附件或发布状态。
 function rrText(...values){for(const value of values){if(typeof value==='string'&&value.trim())return value.trim();if(Array.isArray(value)&&value.length)return value.map(item=>typeof item==='string'?item:JSON.stringify(item)).join('；');}return '暂无数据（待前序步骤完成）';}
 function rrAttachments(report){const rows=report?.attachments||[];if(rows.length)return rows.map(row=>Array.isArray(row)?{name:row[0],source:row[1],href:String(row[2]||'#').replace('{project}',encodeURIComponent(rrPid))}:{...row,href:String(row.href||'#').replace('{project}',encodeURIComponent(rrPid))});const output=[];if(rrAggregate?.ir){output.push({name:'图纸解析报告',source:'2.1 图纸解析',href:`report.html?project=${encodeURIComponent(rrPid)}`});output.push({name:'当前 BOM 清单',source:'2.1 图纸解析',href:`/api/projects/${encodeURIComponent(rrPid)}/bom.csv`});}return output;}
@@ -22,3 +22,98 @@ async function rrSaveDistributionSettings(quiet=false){const scope=document.quer
 const rrBaseRender=rrRender;
 rrRender=function(){rrBaseRender();if(rrView?.status==='published')return;const footer=document.querySelector('.footer-bar');if(!footer)return;footer.insertAdjacentHTML('beforebegin',`<section class="summary-card distribution-maintain-card"><div class="summary-card-header"><div class="summary-card-title">${rrIcon}发布设置</div></div><div style="display:grid;gap:14px;padding:18px 20px"><label style="display:grid;gap:6px;font-size:13px;color:#475569">发布范围（以顿号、逗号或换行分隔）<textarea id="rrDistributionScope" class="table-input" rows="3" placeholder="例如：销售部、工艺工程部、质量管理部">${rrEsc(rrView.scope||'')}</textarea></label><label style="display:grid;gap:6px;font-size:13px;color:#475569">抄送对象（以顿号、逗号或换行分隔）<textarea id="rrDistributionCc" class="table-input" rows="2" placeholder="例如：项目经理、客户接口人">${rrEsc(rrView.cc||'')}</textarea></label><div><button type="button" id="rrSaveDistribution" class="summary-btn secondary">保存发布设置</button></div></div></section>`);document.querySelector('#rrSaveDistribution').onclick=()=>rrSaveDistributionSettings();const publish=document.querySelector('#rrPublish');if(publish){const replacement=publish.cloneNode(true);publish.replaceWith(replacement);replacement.onclick=async()=>{if(await rrSaveDistributionSettings(true))rrApproveThenPublish();};}const reject=document.querySelector('#rrReject');if(reject){const replacement=reject.cloneNode(true);reject.replaceWith(replacement);replacement.onclick=async()=>{if(await rrSaveDistributionSettings(true))rrReject();};}};
 rrStart();
+
+/* 统一看板协议：3.2 的通过 / 退回复用既有 rrApproveThenPublish 与 rrReject。 */
+(function rrRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let rrBoardBusy = false;
+  function rrBoardPublish(name, extra) {
+    const runtime = window.TechBoardRuntime;
+    if (!runtime || typeof runtime.publish !== 'function') return;
+    try { runtime.publish(name, 'report', Object.assign({ action: name }, extra || {})); }
+    catch { /* 进度上报失败不影响业务本身 */ }
+  }
+  async function rrRefreshReport() {
+    const [reportResult, aggregate] = await Promise.all([
+      api(`/api/projects/${encodeURIComponent(rrPid)}/process-report`),
+      api(`/api/projects/${encodeURIComponent(rrPid)}/summary`),
+    ]);
+    rrReport = reportResult.report || rrReport;
+    rrAggregate = aggregate;
+    rrView = rrLiveView(rrReport, rrAggregate);
+    rrRender();
+    return { ok: true };
+  }
+  function rrApplyReviewNote(payload) {
+    const data = payload || {};
+    const decision = String(data.decision || '').toLowerCase();
+    const note = String(data.note || '');
+    // 只回填看板：写入既有意见输入框（不覆盖人工已写内容），不落盘、不改状态。
+    let target = document.querySelector('#reviewText') || document.querySelector('#rrReviewNote');
+    if (!target) {
+      const publish = document.querySelector('#rrPublish');
+      if (publish) {
+        target = document.createElement('textarea');
+        target.id = 'rrReviewNote';
+        target.className = 'table-input';
+        target.rows = 3;
+        target.placeholder = '审核意见';
+        publish.parentNode.insertBefore(target, publish);
+      }
+    }
+    if (target) target.value = target.value ? `${target.value}\n${note}` : note;
+    rrBoardPublish('task-completed', { taskId: 'report-review-note', label: '带入审核意见', status: 'succeeded' });
+    rrToast(decision === 'approve' ? '审核通过意见已带入看板，请人工确认后提交。' : decision === 'reject' ? '退回意见已带入看板，请人工确认后提交。' : '审核意见已带入看板。');
+    return { ok: true, decision: decision, note: note };
+  }
+  window.TechBoardRuntime.registerActions({
+    approveProcessReport: {
+      label: '审核通过并进入下一步',
+      role: 'primary',
+      order: 10,
+      run: async () => {
+        if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
+        rrBoardBusy = true;
+        try { await rrApproveThenPublish(); return { ok: true }; }
+        catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '审核操作失败' } }; }
+        finally { rrBoardBusy = false; }
+      },
+      getState: () => {
+        const button = document.querySelector('#rrPublish');
+        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rrBoardBusy, busy: rrBoardBusy };
+      },
+    },
+    rejectProcessReport: {
+      label: '退回汇总',
+      role: 'aux',
+      order: 20,
+      run: async () => {
+        if (rrBoardBusy) return { ok: false, error: { code: 'busy', message: '正在处理，请稍候。' } };
+        rrBoardBusy = true;
+        try { await rrReject(); return { ok: true }; }
+        catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '退回失败' } }; }
+        finally { rrBoardBusy = false; }
+      },
+      getState: () => {
+        const button = document.querySelector('#rrReject');
+        return { visible: Boolean(button), enabled: Boolean(button) && !button.disabled && !rrBoardBusy, busy: rrBoardBusy };
+      },
+    },
+    refreshProcessReport: {
+      label: '刷新审核报告',
+      role: 'aux',
+      order: 40,
+      silent: true,
+      run: async () => { try { return await rrRefreshReport(); } catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '刷新报告失败' } }; } },
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: !rrBoardBusy, busy: rrBoardBusy }),
+    },
+    applyReportReviewNote: {
+      label: '带入审核意见',
+      role: 'aux',
+      order: 30,
+      run: (payload) => rrApplyReviewNote(payload || {}),
+      getState: () => ({ visible: true, enabled: !rrBoardBusy, busy: rrBoardBusy }),
+    }
+  });
+})();

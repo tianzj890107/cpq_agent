@@ -21,6 +21,23 @@ class WorkflowReview(BaseModel):
     at: str
 
 
+class RequirementWaiver(BaseModel):
+    """需求阶段（1.1 / 1.2 / 1.3）的「带缺口继续」签字记录。
+
+    缺口属于 L2（质量依赖）：允许带着未完成字段继续，但必须留下签字 ——
+    缺口编码（比对键）、中文名、签字人、签字时间与原因，供审核人与下游追溯。
+    权限、人工审批点击与状态机前置属于 L4/L1，不在这里表达。
+    """
+
+    stage: str                                              # submit_confirmation | confirm | review
+    missing_keys: StrList = Field(default_factory=list)     # 缺口字段编码（比对键）
+    missing_fields: StrList = Field(default_factory=list)   # 缺口字段中文名，给人看
+    reason: str = ""                                        # 允许为空，服务端补默认原因
+    waived_by: Optional[str] = None
+    waived_at: Optional[str] = None
+    reused: bool = False                                    # 复用已有签字，而不是重新签一次
+
+
 class RequirementDoc(BaseModel):
     project_id: str
     requirement_no: str
@@ -39,6 +56,8 @@ class RequirementDoc(BaseModel):
     reviewed_at: Optional[str] = None
     review_note: str = ""
     history: List[WorkflowReview] = Field(default_factory=list)
+    # 需求阶段的缺口签字记录：与 history 一样随文档快照保存，保存草稿时要继承。
+    waivers: List[RequirementWaiver] = Field(default_factory=list)
     updated_at: Optional[str] = None
 
 
@@ -201,6 +220,8 @@ class ProcessReport(BaseModel):
 class WorkflowAction(BaseModel):
     comment: str = ""
     decision: str = "approve"
+    # 可选缺口签字（1.1 / 1.2 / 1.3）：只表达「人已确认带缺口继续」，缺口本身以服务端算出为准。
+    waiver: Optional[dict] = None
     review_items: List[ReportReviewItem] = Field(default_factory=list)
     review_conclusion: str = ""
     distribution_scope: str = ""

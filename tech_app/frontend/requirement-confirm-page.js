@@ -1,5 +1,5 @@
 /* 1.2 确认需求：默认展示本地规则；仅点击“AI 检查”才会调用模型。 */
-const cfPid = new URLSearchParams(location.search).get('project') || localStorage.getItem('cad_engine_project_id') || '';
+const cfPid = TechProjectContext.bind().project;
 let cfRequirement = null, cfProject = null, cfPrecheck = null;
 const cfEsc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
 
@@ -24,6 +24,14 @@ function cfPrecheckRows() {
     return `<tr class="${rowClass.trim()}"><td class="item-name">${cfEsc(item)}</td><td class="confirm-result"><span class="${status === 'ok' ? 'ok' : 'need-info'}">${result}</span></td><td class="confirm-supplement">${cfEsc(detail)}</td></tr>`;
   }).join('');
 }
+// 缺口口径只来自后端预检（/requirement/precheck 的 gaps 或 AI 检查结果），本页不另写一套。
+function cfGaps() {
+  const gaps = cfPrecheck && cfPrecheck.gaps;
+  if (gaps && Array.isArray(gaps.labels) && gaps.labels.length) return gaps.labels.slice();
+  const items = Array.isArray(cfPrecheck?.items) ? cfPrecheck.items : [];
+  return items.filter(row => String(row?.status || '').toLowerCase() !== 'ok')
+    .map(row => String(row?.item || '').trim()).filter(Boolean);
+}
 function cfSourceUrl() { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const base = `/api/projects/${encodeURIComponent(cfPid)}/source`; return token ? `${base}?token=${encodeURIComponent(token)}` : base; }
 function cfPdfUrl(download = false) { const token = localStorage.getItem('authToken') || localStorage.getItem('cad_engine_token'); const params = new URLSearchParams(); if (download) params.set('download', 'true'); if (token) params.set('token', token); const query = params.toString(); return `/api/projects/${encodeURIComponent(cfPid)}/requirement/pdf${query ? `?${query}` : ''}`; }
 
@@ -31,9 +39,13 @@ function cfRender() {
   const data = cfRequirement.data || {};
   const status = cfRequirement.status === 'pending_confirmation' ? '待确认' : cfRequirement.status === 'draft' ? '草稿（请先提交）' : statusLabel(cfRequirement.status);
   const fields = [['需求编号',cfRequirement.requirement_no],['需求名称',cfRequirement.title],['需求类型',cfLabel('requirement_type',data.requirement_type)],['优先级',cfLabel('priority',data.priority)],['BU',cfLabel('bu',data.bu)],['创建人',cfRequirement.created_by],['新旧客户',cfLabel('customer_type',data.customer_type)],['最终客户',data.final_customer_name],['客户行业',cfLabel('customer_industry',data.customer_industry)],['项目编码',data.project_code],['年预测量',data.annual_forecast],['期望交付',data.first_sample_due]];
-  document.querySelector('#app').innerHTML = `<section class="workflow-section"><div class="main-workflow"><div class="main-step-wrapper"><div class="main-step active"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div><div class="sub-labels-row"><span class="sub-label completed">1.1 创建</span><span class="sub-label-arrow">→</span><span class="sub-label active">1.2 确认</span><span class="sub-label-arrow">→</span><span class="sub-label">1.3 审核</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div></div></section><section class="title-section"><div class="title-row"><h1 class="form-title">${cfEsc(cfRequirement.title || '工艺评估需求单')}</h1><span class="status-badge">${cfEsc(status)}</span></div></section><section class="pdf-section"><div class="pdf-header"><div class="pdf-title">${cfIcon('doc')}工艺评估需求表单（点击查看详情）</div></div><div class="pdf-preview"><button class="pdf-thumbnail" id="previewForm" type="button">${cfIcon('pdf')}<span>预览 PDF</span></button><div class="pdf-info"><div class="pdf-info-title">需求基本信息</div><div class="info-list">${fields.map(([label,value]) => `<div class="info-item"><span class="info-label">${label}</span><span class="info-value">${cfEsc(value || '—')}</span></div>`).join('')}</div><div class="pdf-actions"><button class="pdf-action-btn" id="viewForm" type="button">◉ 查看完整表单</button><button class="pdf-action-btn" id="downloadForm" type="button">⇩ 下载 PDF</button><button class="pdf-action-btn ai-check-btn" id="runAiCheck" type="button">⚡ AI 检查</button></div></div></div></section><section class="ai-check-section"><div class="section-title">⚡ AI 检查结果</div><div class="ai-result-box"><div class="ai-result-header"><span class="ai-badge">⚡ 工艺评估需求单确认表</span><span class="ai-note">${cfEsc(cfAiNote())}</span></div><table class="confirm-table"><thead><tr><th>确认项目</th><th>确认结果</th><th>补充说明</th></tr></thead><tbody>${cfPrecheckRows()}</tbody></table></div></section><section class="opinion-section"><div class="section-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>提交意见</div><textarea id="confirmationNote" class="opinion-textarea" maxlength="3000" placeholder="请输入审批意见...">${cfEsc(cfRequirement.confirmation_note || '')}</textarea><div class="opinion-hint"><span style="color:var(--color-red)">*</span> 必填，最多可输入 3000 字</div></section><footer class="footer-bar"><div class="footer-left"><a class="btn btn-secondary" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">← 上一步</a></div><div class="footer-right"><button class="btn btn-secondary" id="bringAi" type="button">⚡ AI 结果带入</button><button class="btn btn-danger" id="returnDraft" type="button">× 驳回</button><button class="btn btn-primary" id="confirmPass" type="button">✓ 通过</button></div></footer><div class="modal-overlay" id="formModal"><div class="modal"><div class="modal-header"><span class="modal-title">工艺评估需求单</span><button class="modal-close" id="closeModal" type="button">×</button></div><div class="modal-content"><img class="source-preview" src="${cfSourceUrl()}" alt="项目原始图纸"><a class="modal-link" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">打开可编辑的完整需求表单</a></div></div></div>`;
+  document.querySelector('#app').innerHTML = `<section class="workflow-section"><div class="main-workflow"><div class="main-step-wrapper"><div class="main-step active"><div class="main-step-number">1</div><span>接受工艺评估需求</span></div><div class="sub-labels-row"><span class="sub-label completed">1.1 创建</span><span class="sub-label-arrow">→</span><span class="sub-label active">1.2 确认</span><span class="sub-label-arrow">→</span><span class="sub-label">1.3 审核</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">2</div><span>解析技术工艺过程</span></div></div><div class="main-connector"></div><div class="main-step-wrapper"><div class="main-step pending"><div class="main-step-number">3</div><span>输出工艺评估结果</span></div></div></div></section><section class="title-section"><div class="title-row"><h1 class="form-title">${cfEsc(cfRequirement.title || '工艺评估需求单')}</h1><span class="status-badge">${cfEsc(status)}</span></div></section><section class="pdf-section"><div class="pdf-header"><div class="pdf-title">${cfIcon('doc')}工艺评估需求表单（点击查看详情）</div></div><div class="pdf-preview"><button class="pdf-thumbnail" id="previewForm" type="button">${cfIcon('pdf')}<span>预览 PDF</span></button><div class="pdf-info"><div class="pdf-info-title">需求基本信息</div><div class="info-list">${fields.map(([label,value]) => `<div class="info-item"><span class="info-label">${label}</span><span class="info-value">${cfEsc(value || '—')}</span></div>`).join('')}</div><div class="pdf-actions"><button class="pdf-action-btn" id="viewForm" type="button">◉ 查看完整表单</button><button class="pdf-action-btn" id="downloadForm" type="button">⇩ 下载 PDF</button><button class="pdf-action-btn ai-check-btn" id="runAiCheck" type="button">⚡ AI 检查</button></div></div></div></section><section class="ai-check-section"><div class="section-title">⚡ AI 检查结果</div><div class="ai-result-box"><div class="ai-result-header"><span class="ai-badge">⚡ 工艺评估需求单确认表</span><span class="ai-note">${cfEsc(cfAiNote())}</span></div><table class="confirm-table"><thead><tr><th>确认项目</th><th>确认结果</th><th>补充说明</th></tr></thead><tbody>${cfPrecheckRows()}</tbody></table></div></section><section class="opinion-section"><div class="section-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>提交意见</div><textarea id="confirmationNote" class="opinion-textarea" maxlength="3000" placeholder="请输入审批意见...">${cfEsc(cfRequirement.confirmation_note || '')}</textarea><div class="opinion-hint">选填，最多可输入 3000 字</div></section><footer class="footer-bar"><div class="footer-left"><a class="btn btn-secondary" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">← 上一步</a></div><div class="footer-right"><button class="btn btn-secondary" id="bringAi" type="button">⚡ AI 结果带入</button><button class="btn btn-danger" id="returnDraft" type="button">× 驳回</button><button class="btn btn-primary" id="confirmPass" type="button">✓ 通过确认</button></div></footer><div class="modal-overlay" id="formModal"><div class="modal"><div class="modal-header"><span class="modal-title">工艺评估需求单</span><button class="modal-close" id="closeModal" type="button">×</button></div><div class="modal-content"><img class="source-preview" src="${cfSourceUrl()}" alt="项目原始图纸"><a class="modal-link" href="requirement-create.html?project=${encodeURIComponent(cfPid)}">打开可编辑的完整需求表单</a></div></div></div>`;
   cfBind();
+  cfPublishStatus();
 }
+
+// 渲染出的状态徽标文本原样上报给父壳（统一标题行提示位）；独立打开（无运行时）时不通信。
+function cfPublishStatus(){const badge=document.querySelector('.title-section .title-row .status-badge');const text=(badge&&badge.textContent||'').trim();const runtime=window.TechBoardRuntime;if(runtime&&typeof runtime.publishStatus==='function')runtime.publishStatus(text,'info');}
 
 function cfBind() {
   cfMountRecommendationSection();
@@ -55,16 +67,58 @@ async function cfRunAiCheck() {
   catch (err) { button.disabled = false; button.textContent = '⚡ AI 检查'; cfToast(`AI 检查失败：${err.message}`, true); }
 }
 
+// 确认进度经统一看板协议上报父壳（独立打开时静默），不能只发 iframe 内 window 事件。
+function cfPublishTaskEvent(type, extra) {
+  try {
+    if (window.TechBoardRuntime && typeof window.TechBoardRuntime.publish === 'function') {
+      window.TechBoardRuntime.publish(type, 'confirmRequirement', extra || {});
+    }
+  } catch (_) { /* 独立打开无运行时 */ }
+}
+
+// 复用 #bringAi 的「带入」写法：只追加，不覆盖人工已写内容，也不重复追加同一段。
+function cfAppendNote(note) {
+  const area = document.querySelector('#confirmationNote');
+  const text = String(note || '').trim();
+  if (!area || !text) return false;
+  area.value = area.value ? (area.value.includes(text) ? area.value : `${area.value}\n${text}`) : text;
+  area.focus();
+  return true;
+}
+
 async function cfAct(kind) {
+  // 提交意见是选填：空意见按 comment: "" 交给既有接口，不再拦在页面上。
   const comment = document.querySelector('#confirmationNote').value.trim();
-  if (!comment) return cfToast('请填写提交意见。', true);
-  if (cfRequirement.status !== 'pending_confirmation') return cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true);
-  try { const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`; await api(url,{method:'POST',body:JSON.stringify({comment})}); location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`; } catch (err) { cfToast(err.message, true); }
+  if (cfRequirement.status !== 'pending_confirmation') { cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求尚未提交至确认环节。' } }; }
+  // L2 缺口不硬拦：有没完成的项时先问「仍要继续」，点继续就把签字交给既有 /requirement/confirm。
+  let waiver = null;
+  if (kind === 'confirm') {
+    const gaps = cfGaps();
+    if (gaps.length) {
+      const go = window.confirm(`这一步还有 ${gaps.length} 项没完成：\n${gaps.join('、')}\n\n确定要带着这些缺口继续吗？（点「确定」＝仍要继续）`);
+      if (!go) { cfToast(`已停在确认这一步，请先补齐：${gaps.join('、')}`, true); return { ok: false, error: { code: 'gap-unconfirmed', message: `还有没完成的项：${gaps.join('、')}` } }; }
+      waiver = { reason: `带缺口继续：${gaps.join('、')}`, missing_fields: gaps };
+    }
+  }
+  const taskId = `requirement-confirm-${kind}`;
+  const label = kind === 'confirm' ? '通过确认' : '退回草稿';
+  cfPublishTaskEvent('task-progress', { taskId, status: 'running', progress: `正在${label}…` });
+  try {
+    const url = kind === 'confirm' ? `/api/projects/${cfPid}/requirement/confirm` : `/api/projects/${cfPid}/requirement/return-to-draft`;
+    await api(url,{method:'POST',body:JSON.stringify(waiver?{comment,waiver}:{comment})});
+    cfPublishTaskEvent('task-completed', { taskId, status: 'succeeded' });
+    if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate(kind==='confirm'?'requirement-review':'requirement-create',cfPid);}else{location.href = kind === 'confirm' ? `requirement-review.html?project=${encodeURIComponent(cfPid)}` : `requirement-create.html?project=${encodeURIComponent(cfPid)}`;}
+    return { ok: true };
+  } catch (err) {
+    cfPublishTaskEvent('task-failed', { taskId, status: 'failed', error: err.message });
+    cfToast(err.message, true);
+    return { ok: false, error: { code: 'action-failed', message: err.message } };
+  }
 }
 
 async function cfStart() {
-  if (!cfPid) { location.href = 'home.html'; return; }
-  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfRequirement.ai_check?.engine === 'qwen' ? cfRequirement.ai_check : ruleCheck; cfRender(); }
+  if (!cfPid) { if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;} location.href = 'home.html'; return; }
+  try { const [req,project,ruleCheck] = await Promise.all([api(`/api/projects/${cfPid}/requirement`),api(`/api/projects/${cfPid}`),api(`/api/projects/${cfPid}/requirement/precheck`)]); cfRequirement = req.requirement; if (!cfRequirement) { window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('requirement-create.html',cfPid):location.href = `requirement-create.html?project=${encodeURIComponent(cfPid)}`; return; } cfProject = project; cfPrecheck = cfRequirement.ai_check?.engine === 'qwen' ? cfRequirement.ai_check : ruleCheck; cfRender(); }
   catch (err) { document.querySelector('#app').innerHTML = `<div class="page-toast error" style="position:static">页面加载失败：${cfEsc(err.message)}</div>`; }
 }
 cfStart();
@@ -78,3 +132,62 @@ cfRender = function () {
   const value = String(cfRequirement?.data?.customer_credit || '').trim() || '—';
   list.insertAdjacentHTML('beforeend', `<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${cfEsc(value)}</span></div>`);
 };
+
+/* 统一看板协议：确认 / 驳回复用既有 cfAct，父壳只发动作名。 */
+(function cfRegisterTechBoardActions() {
+  if (!window.TechBoardRuntime || typeof window.TechBoardRuntime.registerActions !== 'function') return;
+  let cfBoardBusy = false;
+  function cfButtonState() {
+    const pass = document.querySelector('#confirmPass');
+    const back = document.querySelector('#returnDraft');
+    return { enabled: Boolean(pass && !pass.disabled && !cfBoardBusy), busy: cfBoardBusy, back: Boolean(back && !back.disabled) };
+  }
+  async function cfBoardRun(kind) {
+    if (cfBoardBusy) return { ok: false, error: { code: 'busy', message: '正在提交，请稍候。' } };
+    cfBoardBusy = true;
+    try { return await cfAct(kind); }
+    catch (error) { return { ok: false, error: { code: 'action-failed', message: (error && error.message) || '提交失败' } }; }
+    finally { cfBoardBusy = false; }
+  }
+  window.TechBoardRuntime.registerActions({
+    // Agent（SaveRequirementConfirmationNote）起草的确认意见带回看板：复用 cfAppendNote
+    // 的追加写法写入既有 #confirmationNote，不覆盖人工已写内容，也不动任何状态。
+    applyConfirmationNote: {
+      label: '带入确认意见',
+      role: 'aux',
+      order: 30,
+      run: ({ note } = {}) => {
+        // 当前视图没有确认意见输入框（或 Agent 没给正文）不是故障：如实回传 applied=false
+        // 即可，不再返回失败码 —— 否则每次带入意见都会在会话里留一条 ⚠ 卡。
+        const applied = cfAppendNote(note);
+        return { ok: true, result: { applied: applied, reason: applied ? '' : 'target-missing' } };
+      },
+      getState: () => ({ visible: true, enabled: Boolean(document.querySelector('#confirmationNote')), busy: cfBoardBusy }),
+    },
+    // Agent 改完状态（ConfirmRequirement / ReturnRequirementToDraft）后左侧只发
+    // refresh-data：复用既有 cfStart() 重新拉需求单与预检并重绘，不新增读取逻辑。
+    refreshData: {
+      label: '刷新需求确认页',
+      role: 'aux',
+      order: 40,
+      silent: true,
+      run: async () => { await cfStart(); return { ok: true }; },
+      // 只退出左侧栏：刷新仍由 refresh-data 命令与 Agent 工具走 executeAction 触发。
+      getState: () => ({ visible: false, enabled: Boolean(document.querySelector('#confirmPass')), busy: cfBoardBusy }),
+    },
+    confirmRequirement: {
+      label: '✓ 通过确认',
+      role: 'primary',
+      order: 10,
+      run: () => cfBoardRun('confirm'),
+      getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.enabled, busy: state.busy }; },
+    },
+    returnRequirementDraft: {
+      label: '× 驳回',
+      role: 'aux',
+      order: 20,
+      run: () => cfBoardRun('return'),
+      getState: () => { const state = cfButtonState(); return { visible: true, enabled: state.back && !state.busy, busy: state.busy }; },
+    },
+  });
+})();

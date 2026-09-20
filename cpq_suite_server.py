@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import re
+import secrets as _secrets
 import sys
 import traceback
 import urllib.parse
@@ -44,14 +45,33 @@ for _stream in (sys.stdout, sys.stderr):
 # 与各 agent main() 一致：兜底只读文件系统（须在构建 Bridge 前设置）
 os.environ["OC_READONLY_FS"] = "1"
 
+# 启动即读配置文件。以前 8010 的配置（PG 连接、内部令牌、账号级密钥的加密材料）只能靠
+# 手工 export —— 换台机器、换个人就复发。与 tech_app/backend/config.py 同一套语义：
+#   ① 设了 CPQ_ENV_FILE → 用它指向的文件（便于把密钥放在仓库外，git 碰不到）；
+#   ② 否则用仓库根 .env。
+# python-dotenv 认 `export KEY=VALUE` 这种 shell 写法；文件不存在不算错误。
+# override=False：已经显式 export 的同名变量优先，文件不得覆盖它。
+# **必须**排在下面对 cpq_auth / cpq_wf / 三个 agent 模块的 import 之前：这些模块在
+# 导入期就会读 CPQ_PG_* / CPQ_INTERNAL_TOKEN 等变量。
+try:
+    from dotenv import load_dotenv
+except ImportError:                                    # pragma: no cover - 缺依赖时降级
+    load_dotenv = None
+if load_dotenv:
+    load_dotenv(os.environ.get("CPQ_ENV_FILE") or os.path.join(SCRIPT_DIR, ".env"),
+                override=False)
+
 # 三个 Agent 模块（import 即完成各自的工具注入/execute_tool 补丁，三者链式共存：
 # 各自只接管自己的工具名；sql_query 三份实现等价、都是同库只读，谁接都一样）
 import cpq_agent_server as quote_agent    # noqa: E402
 import xbom_agent_server as config_agent  # noqa: E402
 import rule_agent_server as rule_agent    # noqa: E402
 import cpq_auth                            # noqa: E402  登录与角色系统（/auth/*）
+import cpq_user_secrets                   # noqa: E402  账号级密钥的加密封装（缺密钥要说清）
 import cpq_wf                              # noqa: E402  报价工作流：卡片/步骤/任务（/wf/*）
 import cpq_tech_bridge                     # noqa: E402  技术工艺回调：写主数据 / 推送到报价
+import cpq_case_link                       # noqa: E402  业务实例关联：回传落点判定（批次 6）
+import cpq_kb                             # noqa: E402  知识库（kb_*）：快照接口，事实源在 PG cpq_kb
 import cpq_image_server                    # noqa: E402  产品图片维护服务（独立端口，见下）
 
 AGENTS = {
@@ -61,7 +81,38 @@ AGENTS = {
 }
 AGENT_LABELS = {"quote": "报价助手", "config": "配置助手", "rule": "规则助手"}
 
+# 服务间内部令牌。技术工艺改完模型/密钥要把设置广播回报价侧
+# （POST /agents/quote/api/settings），而 /agents/* 本批起要验票 —— 它没有用户票据。
+# 这个令牌由一体化服务自己生成、只注入技术工艺子进程，仅用于服务间同步：
+#   · 环境变量里已经有了就不覆盖（多进程/重复拉起时不变）；
+#   · 没配置就关闭这条通道（fail-closed），绝不做"来源是 127.0.0.1 就放行"的兜底；
+#   · 外部用户拿不到它，也用不了它跳过用户级权限判定。
+CPQ_INTERNAL_TOKEN = (os.environ.get("CPQ_INTERNAL_TOKEN") or "").strip() or _secrets.token_urlsafe(32)
+os.environ["CPQ_INTERNAL_TOKEN"] = CPQ_INTERNAL_TOKEN
+INTERNAL_TOKEN_HEADER = "X-Internal-Token"
+
 _AGENT_RE = re.compile(r"^/agents/(quote|config|rule)(/.*)?$")
+_AUTH_USER_RE = re.compile(r"^/auth/users/(?P<uid>[0-9]+)$")
+_AUTH_USER_PW_RE = re.compile(r"^/auth/users/(?P<uid>[0-9]+)/password$")
+_AUTH_MY_KEY_RE = re.compile(r"^/auth/my/llm/keys/(?P<provider>[^/]+)$")
+
+
+def _auth_user_by_login(username: str):
+    """内部通道把登录名换成账号：先查名单（一次查询，通常是几十条），
+    名单里没有（停用/归档账号不在默认名单里）再按登录名精确查一次。"""
+    name = str(username or "").strip()
+    if not name:
+        return None
+    try:
+        for row in cpq_auth.list_users():
+            if str((row or {}).get("username") or "") == name:
+                return row
+    except Exception:
+        pass
+    try:
+        return cpq_auth.find_user(name)
+    except Exception:
+        return None
 
 # ---------------------------------------------------------------- 技术工艺 App（反向代理）
 # 第四个助手「技术工艺」= 照搬 process_drawing 的 FastAPI 全链路（tech_app/），由本服务
@@ -134,13 +185,48 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def _agent_token(self) -> str:
+        """/agents/* 的票据：Authorization: Bearer <token> 优先，其次 ?token=<token>
+        （与 tech_app 既有约定一致，供发不出请求头的场景），两者走同一条校验。"""
+        token = self._token()
+        if token:
+            return token
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        return (query.get("token") or [""])[0].strip()
+
+    def _internal_token_ok(self) -> bool:
+        """服务间调用：X-Internal-Token 必须与 env 里的值严格相等。env 未设置时该通道
+        关闭（fail-closed）—— 不做「来源是 127.0.0.1 就放行」的兜底。"""
+        expected = (os.environ.get("CPQ_INTERNAL_TOKEN") or "").strip()
+        if not expected:
+            return False
+        got = (self.headers.get(INTERNAL_TOKEN_HEADER) or "").strip()
+        return bool(got) and _secrets.compare_digest(got, expected)
+
+    def _authorize_agent(self) -> bool:
+        """验票必须在调用 Agent 处理函数**之前**完成：被拒绝的请求不得有任何副作用
+        （不写历史、不落盘、不调模型）。登录库不可用回 503，而不是把在线的人静默踢成
+        401。这里只认 CPQ 的票与内部令牌，独立模式的 Agent 服务不经过本方法。"""
+        if self._internal_token_ok():
+            return True
+        if cpq_auth._backend is None:
+            self._send_json(503, {"ok": False, "error": "登录服务暂不可用，请稍后重试"})
+            return False
+        if not cpq_auth.whoami(self._agent_token()):
+            self._send_json(401, {"ok": False, "error": "请先登录"})
+            return False
+        return True
+
     def _dispatch_agent(self, method_name: str) -> bool:
-        """匹配 /agents/<name>/... 前缀；命中则剥掉前缀，把本次请求整体交给对应
-        Agent 模块的 Handler 处理（临时切换 __class__，让 _send_json/_handle_send
-        及模块全局 bridge 等全部解析到该模块），处理完恢复。"""
+        """匹配 /agents/<name>/... 前缀；命中则**先验票**，再剥掉前缀把本次请求整体交给
+        对应 Agent 模块的 Handler 处理（临时切换 __class__，让 _send_json/_handle_send
+        及模块全局 bridge 等全部解析到该模块），处理完恢复。
+        OPTIONS 是浏览器预检（不带 Authorization），不验票，照旧交给 Agent 回 204+CORS。"""
         m = _AGENT_RE.match(self.path)
         if not m:
             return False
+        if method_name != "do_OPTIONS" and not self._authorize_agent():
+            return True
         mod = AGENTS[m.group(1)]
         self.path = m.group(2) or "/"
         self.__class__ = mod.Handler
@@ -280,12 +366,25 @@ class Handler(BaseHTTPRequestHandler):
         return (fwd or self.client_address[0] or "")[:45]
 
     def _dispatch_auth(self) -> bool:
-        """/auth/* 登录与角色接口。命中返回 True。"""
+        """/auth/* 登录、用户管理与账号级设置接口。命中返回 True。
+
+        用户数据只有 PG 一处（`cpq_wf`），所以这里是**唯一**的读写出口：
+
+          · 公开：/auth/roles、/auth/login、/auth/register（注册一律落地只读）；
+          · admin：/auth/users*（建号 / 改角色 / 停用 / 重置口令）；
+          · 本人：/auth/my/*（改资料、改密码、账号级模型与密钥），请求体里的
+            user_id / username / actor 一律忽略 —— 只认票上的人；
+          · 服务间：/auth/internal/user-llm（X-Internal-Token），后台任务线程没有
+            用户票，靠它读账号级设置，也是**唯一**回明文 Key 的通道。
+        """
+        parsed = urllib.parse.urlparse(self.path)
         # 注意：根路径 "/" 去掉尾斜杠后是空串，绝不能兜底成 "/auth"，否则首页会被当成认证接口而 404
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        path = parsed.path.rstrip("/") or "/"
         if not path.startswith("/auth"):
             return False
         m = self.command
+        q = urllib.parse.parse_qs(parsed.query)
+        arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
         # 角色字典是代码里的静态常量、当前登录态查询也能安全降级，二者都**不依赖数据库**，
         # 必须放在下面的 503 守卫之前——否则库一断，注册表单的角色下拉会是空的、根本没法选。
         if path == "/auth/roles" and m == "GET":
@@ -302,14 +401,26 @@ class Handler(BaseHTTPRequestHandler):
                                   "登录系统未就绪：未能连接服务器 Postgres，请联系管理员检查网络与数据库配置。"})
             return True
         try:
+            user = cpq_auth.whoami(self._token())
             if path == "/auth/register" and m == "POST":
                 d = self._read_json()
+                role_code = str(d.get("role_code") or "").strip()
+                requested = str(d.get("requested_role") or "").strip()
+                # 自助注册不能自己选角色：指定任意角色的建号能力只在 admin 的
+                # POST /auth/users 里（否则加了 admin 之后谁都能把自己变成管理员）。
+                if role_code == "admin" or requested == "admin":
+                    self._send_json(400, {"ok": False, "error":
+                                          "管理员账号只能由现有管理员创建；注册只发放只读权限。"})
+                    return True
+                if not requested and role_code and role_code != "viewer":
+                    requested = role_code
                 user = cpq_auth.register(d.get("username", ""), d.get("password", ""),
-                                         d.get("display_name", ""), d.get("role_code", ""),
-                                         d.get("email", ""))
+                                         d.get("display_name", ""), "viewer",
+                                         d.get("email", ""), requested_role=requested)
                 # 注册成功直接发放会话，免去再登录一次
                 out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
-                self._send_json(200, {"ok": True, "user": user, "token": out["token"]})
+                self._send_json(200, {"ok": True, "user": user, "token": out["token"],
+                                      "message": "注册成功，当前为只读权限；请由系统管理员授予业务角色。"})
             elif path == "/auth/login" and m == "POST":
                 d = self._read_json()
                 out = cpq_auth.login(d.get("username", ""), d.get("password", ""), self._client_ip())
@@ -318,20 +429,182 @@ class Handler(BaseHTTPRequestHandler):
                 cpq_auth.logout(self._token())
                 self._send_json(200, {"ok": True})
             elif path == "/auth/users" and m == "GET":
-                # 供后续「按角色搜索并派发任务」使用；需登录
-                if not cpq_auth.whoami(self._token()):
+                # 供「按角色搜索并派发任务」与用户管理页使用；需登录。
+                if not user:
                     self._send_json(401, {"ok": False, "error": "未登录"})
                 else:
-                    q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                    self._send_json(200, {"users": cpq_auth.list_users((q.get("role") or [""])[0])})
+                    rows = cpq_auth.list_users(arg("role"), arg("status"))
+                    self._send_json(200, {"users": [self._user_view(r, user) for r in rows]})
+            elif path == "/auth/users" and m == "POST":
+                if not self._require_admin(user):
+                    return True
+                d = self._read_json()
+                row = cpq_auth.create_user(d.get("username", ""), d.get("password", ""),
+                                           d.get("display_name", ""), d.get("role_code", ""),
+                                           d.get("email", ""),
+                                           requested_role=d.get("requested_role", ""))
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif m == "PUT" and _AUTH_USER_RE.match(path):
+                if not self._require_admin(user):
+                    return True
+                uid = _AUTH_USER_RE.match(path).group("uid")
+                body = self._read_json()
+                # 作用对象永远是路径里的 user_id：请求体里的 user_id 一律忽略。
+                patch = {k: body[k] for k in
+                         ("display_name", "email", "status", "role_code", "requested_role")
+                         if k in body}
+                row = cpq_auth.update_user(uid, patch)
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif m == "PUT" and _AUTH_USER_PW_RE.match(path):
+                if not self._require_admin(user):
+                    return True
+                uid = _AUTH_USER_PW_RE.match(path).group("uid")
+                cpq_auth.set_password(uid, self._read_json().get("password", ""))
+                self._send_json(200, {"ok": True})
+            elif path == "/auth/my/profile" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                # 只认票上的人：请求体里的 user_id / username / actor 一概忽略。
+                row = cpq_auth.update_user(user.get("user_id"),
+                                           {"display_name": self._read_json().get("display_name", "")})
+                self._send_json(200, {"ok": True, "user": self._user_view(row, user)})
+            elif path == "/auth/my/password" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                d = self._read_json()
+                cpq_auth.change_password(user.get("user_id"), d.get("current_password", ""),
+                                         d.get("new_password", ""))
+                self._send_json(200, {"ok": True, "message": "密码已更新"})
+            elif path == "/auth/my/llm" and m == "GET":
+                if not self._require_self(user):
+                    return True
+                entry = cpq_auth.get_user_llm(user.get("user_id"))
+                self._send_json(200, self._llm_summary(user, entry))
+            elif path == "/auth/my/llm" and m == "PUT":
+                if not self._require_self(user):
+                    return True
+                d = self._read_json()
+                model, provider, key = self._llm_patch(d)
+                entry = cpq_auth.set_user_llm(user.get("user_id"), model=model,
+                                              provider=provider, key=key)
+                self._send_json(200, {"ok": True, **self._llm_summary(user, entry)})
+            elif m == "DELETE" and _AUTH_MY_KEY_RE.match(path):
+                if not self._require_self(user):
+                    return True
+                provider = urllib.parse.unquote(_AUTH_MY_KEY_RE.match(path).group("provider"))
+                cpq_auth.delete_user_llm_key(user.get("user_id"), provider)
+                entry = cpq_auth.get_user_llm(user.get("user_id"))
+                self._send_json(200, {"ok": True, **self._llm_summary(user, entry)})
+            elif path == "/auth/internal/user-llm" and m in ("GET", "PUT"):
+                # 服务间通道：后台任务线程没有用户票，用内部令牌换账号级设置。
+                # 令牌不对时**一个字节的用户数据都不能回**。
+                if not self._internal_token_ok():
+                    self._send_json(403, {"ok": False, "error": "内部令牌无效"})
+                    return True
+                if m == "GET":
+                    row = _auth_user_by_login(arg("username"))
+                    if not row:
+                        self._send_json(404, {"ok": False, "error": "账号不存在"})
+                    else:
+                        entry = cpq_auth.get_user_llm(row.get("user_id"))
+                        self._send_json(200, {"user_id": row.get("user_id"),
+                                              "username": row.get("username"),
+                                              "model": entry.get("model") or "",
+                                              "api_keys": entry.get("api_keys") or {}})
+                else:
+                    d = self._read_json()
+                    row = _auth_user_by_login(d.get("username"))
+                    if not row:
+                        self._send_json(404, {"ok": False, "error": "账号不存在"})
+                    else:
+                        provider = str(d.get("api_key_provider") or "").strip()
+                        key = str(d.get("api_key") or "")
+                        model = d.get("model") if "model" in d else None
+                        if key and not provider:
+                            raise cpq_auth.AuthError("写账号级 API Key 时必须指明 api_key_provider")
+                        entry = cpq_auth.set_user_llm(row.get("user_id"), model=model,
+                                                      provider=provider or None,
+                                                      key=key if provider else None)
+                        self._send_json(200, {"ok": True, "user_id": row.get("user_id"),
+                                              "username": row.get("username"),
+                                              "model": entry.get("model") or "",
+                                              "api_keys": entry.get("api_keys") or {}})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
         except cpq_auth.AuthError as e:
             self._send_json(400, {"ok": False, "error": str(e)})
+        except cpq_user_secrets.SecretKeyMissing as e:
+            # 缺账号级加密密钥是**配置缺口**，不是"服务异常"：回 503 并把下一步写清楚，
+            # 免得被前端翻译成"登录服务暂不可用"（## 93）。必须排在通用 except 之前
+            # （SecretKeyMissing 是 RuntimeError 子类）。绝不明文落库，也不回显密钥材料。
+            print(f"[cpq-suite] 账号级密钥不可用: {e}", file=sys.stderr)
+            self._send_json(503, {"ok": False, "error": (
+                "账号级模型与密钥的加密密钥 CPQ_USER_SECRET_KEY 未配置或不可用："
+                "请在 8010 的启动环境里配置 32 字节 base64/hex 的 CPQ_USER_SECRET_KEY"
+                " 后重启服务；启用后不可更换。")})
         except Exception as e:
             print(f"[cpq-suite] /auth 出错: {e}", file=sys.stderr)
             self._send_json(500, {"ok": False, "error": "服务异常，请稍后重试"})
         return True
+
+    # ---------------------------------------------------------------- /auth 小工具
+    # 用户管理端点的路径形状。user_id 是雪花 ID（出接口是字符串），只允许数字，
+    # 免得 /auth/users/my/xxx 之类被当成 ID。
+    def _require_admin(self, user) -> bool:
+        if not user:
+            self._send_json(401, {"ok": False, "error": "未登录"})
+            return False
+        if str(user.get("role_code") or "") != "admin":
+            self._send_json(403, {"ok": False, "error":
+                                  "这一步只有系统管理员（admin）能做：账号与角色统一在配置报价 CPQ 里维护。"})
+            return False
+        return True
+
+    def _require_self(self, user) -> bool:
+        """"本人"端点：只认票上的人。请求体里的 user_id / username / actor 一律忽略。"""
+        if not user:
+            self._send_json(401, {"ok": False, "error": "未登录"})
+            return False
+        return True
+
+    def _user_view(self, row: dict, viewer: dict) -> dict:
+        """名单出参：非 admin 只给公开列；admin 才看得到 email / status / 申请角色等。"""
+        row = row or {}
+        public = {k: row.get(k) for k in
+                  ("user_id", "username", "display_name", "role_code", "role_name")}
+        if str((viewer or {}).get("role_code") or "") != "admin":
+            return public
+        for key in ("email", "status", "requested_role", "is_system",
+                    "last_login_at", "created_at"):
+            public[key] = row.get(key)
+        return public
+
+    def _llm_patch(self, body: dict):
+        """{model?, api_key?, api_key_provider?} -> (model, provider, key)，语义按 Spec C6。"""
+        model = body.get("model") if "model" in body else None
+        if model is not None:
+            model = str(model or "")
+        provider = str(body.get("api_key_provider") or "").strip()
+        key = str(body.get("api_key") or "")
+        if key and not provider:
+            raise cpq_auth.AuthError("写账号级 API Key 时必须指明 api_key_provider")
+        return model, (provider or None), (key if provider else None)
+
+    def _llm_summary(self, user: dict, entry: dict) -> dict:
+        """账号级设置摘要：**只有 configured 与打码**，明文永不出这条路径。"""
+        try:
+            import cpq_shared_settings as shared
+            mask = shared.mask
+        except Exception:                                   # pragma: no cover - 独立运行兜底
+            def mask(value):
+                text = str(value or "")
+                return f"{text[:7]}…{text[-4:]}" if len(text) > 14 else ("已配置" if text else "")
+        keys = {}
+        for provider, value in ((entry or {}).get("api_keys") or {}).items():
+            keys[str(provider)] = {"configured": True, "hint": mask(value)}
+        model = str((entry or {}).get("model") or "")
+        return {"user_id": user.get("user_id"), "username": user.get("username"),
+                "model": model, "has_model": bool(model), "keys": keys}
 
     # ------------------------------------------------------------ 报价工作流 /wf/*
     def _dispatch_wf(self) -> bool:
@@ -343,6 +616,26 @@ class Handler(BaseHTTPRequestHandler):
             return False
         q = urllib.parse.parse_qs(parsed.query)
         arg = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+        # ---- 知识库快照（技术工艺取数通道）----
+        # 放在登录库守卫与用户票校验**之前**：这是服务间调用，后台刷新线程没有用户票，
+        # 只认 X-Internal-Token（与 /agents/* 同一套 fail-closed 判定）。
+        # PG / schema 不可用时回 503 + 原因 —— 绝不回空表：那会被读侧误判成
+        # "库里没有可复用零件"（正是本批要消灭的假象）。
+        if path == "/wf/tech/kb/snapshot" and self.command == "GET":
+            if not self._internal_token_ok():
+                self._send_json(403, {"ok": False, "error": "内部令牌校验失败"})
+                return True
+            try:
+                snap = cpq_kb.snapshot(since=arg("since") or None)
+            except Exception as e:                             # noqa: BLE001
+                traceback.print_exc()
+                print(f"[cpq-suite] 知识库快照失败: {type(e).__name__}: {e}", file=sys.stderr)
+                detail = (f"{type(e).__name__}: {str(e).splitlines()[0][:300]}" if str(e)
+                          else type(e).__name__)
+                self._send_json(503, {"ok": False, "error": detail})
+                return True
+            self._send_json(200, {"ok": True, **(snap or {})})
+            return True
         if cpq_auth._backend is None:      # 同上：工作流与登录共用同一后端
             self._send_json(503, {"ok": False, "error":
                                   "工作流未就绪：未能连接服务器 Postgres。"})
@@ -411,7 +704,9 @@ class Handler(BaseHTTPRequestHandler):
                 d = self._read_json()
                 out = cpq_tech_bridge.write_material(
                     user, d.get("product_name", ""), d.get("unit_price"),
-                    d.get("breakdown") or {}, d.get("spec", ""))
+                    d.get("breakdown") or {}, d.get("spec", ""),
+                    project_id=d.get("project_id", ""),
+                    result_version=d.get("result_version", ""))
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/finance" and m == "POST":
                 d = self._read_json()
@@ -423,10 +718,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/return-process" and m == "POST":
                 d = self._read_json()
+                # 幂等五元组里的两项由路由显式透传：交接类型固定 cost_to_process，
+                # 结果版本优先取调用方给的、否则沿用交接包里已经算好的那一份
+                # （cost_flow.result_version(plan)）。两者都进 payload，服务端据此算键。
+                payload = dict(d.get("payload") or {})
+                payload.setdefault("handoff_kind", d.get("handoff_kind") or "cost_to_process")
+                payload.setdefault("result_version", d.get("result_version", ""))
+                if d.get("source_task_no"):
+                    payload.setdefault("source_task_no", d.get("source_task_no"))
                 out = cpq_tech_bridge.return_to_process(
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
-                    d.get("payload") or {}, d.get("target_user_id", ""))
+                    payload, d.get("target_user_id", ""),
+                    d.get("source_task_id", ""))
                 self._send_json(200, {"ok": True, **out})
             elif path == "/wf/tech/handoff" and m == "POST":
                 d = self._read_json()
@@ -434,10 +738,34 @@ class Handler(BaseHTTPRequestHandler):
                     user, d.get("session_id", ""), d.get("title", ""),
                     d.get("customer", ""), d.get("project_name", ""), d.get("note", ""),
                     d.get("source_task_id", ""), d.get("result") or {},
-                    d.get("source_session_id", ""))
+                    d.get("source_session_id", ""), d.get("report") or {},
+                    d.get("handoff_kind") or "cost_to_quote",
+                    d.get("result_version", ""), d.get("source_task_no", ""),
+                    d.get("target_user_id", ""), d.get("target_type", ""),
+                    d.get("target_role_code", ""),
+                    # 批次 6：业务实例号与「明确要求新建 + 原因」由路由原样透传，
+                    # 没有线索时不再静默新建（会抛 no_candidate，走下面的 409）。
+                    business_case_id=d.get("business_case_id", ""),
+                    create_new=bool(d.get("create_new")),
+                    create_reason=d.get("create_reason", ""))
+                self._send_json(200, {"ok": True, **out})
+            # 技术工艺完成正式去向后关闭来源 claimed 待办：任务表在报价工作流这一侧，
+            # 校验（领取人 / 归属 / 状态 / 幂等）统一由 cpq_wf 做，不散落 SQL。
+            elif path == "/wf/tech/complete-task" and m == "POST":
+                d = self._read_json()
+                out = cpq_wf.complete_claimed_task(
+                    d.get("task_id", ""), user,
+                    card_session_id=d.get("card_session_id", ""),
+                    comment=d.get("comment", ""))
                 self._send_json(200, {"ok": True, **out})
             else:
                 self._send_json(404, {"ok": False, "error": "未知接口"})
+        except cpq_case_link.CaseLinkError as e:
+            # 落点定不下来是**业务冲突**，不是服务异常：把 code 与候选清单原样回给
+            # 调用方，报价侧才能列候选让人选、或先问一句"要不要新建报价卡片"。
+            self._send_json(409, {"ok": False, "code": e.code,
+                                  "candidates": list(e.candidates or []),
+                                  "error": e.message})
         except cpq_tech_bridge.BridgeError as e:
             self._send_json(400, {"ok": False, "error": str(e)})
         except cpq_wf.WfError as e:
@@ -537,12 +865,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_PUT(self):
+        # /auth/* 的新端点（改账号、改本人资料/密码/账号级设置）走 PUT，
+        # 不分发就会变成 404 而不是该有的 401/403/400。
+        if self._dispatch_auth():
+            return
         if self._is_tech_path():
             self._proxy_tech()
         else:
             self.send_error(404)
 
     def do_DELETE(self):
+        if self._dispatch_auth():
+            return
         if self._is_tech_path():
             self._proxy_tech()
         else:
@@ -613,6 +947,8 @@ def _start_tech_app(suite_port: int = 8010):
         return
     env = dict(os.environ)
     env.setdefault("CPQ_AUTH_BASE_URL", f"http://{TECH_HOST}:{suite_port}")
+    # 技术工艺要把设置广播回报价侧，而 /agents/* 已验票：把内部令牌给它。
+    env["CPQ_INTERNAL_TOKEN"] = CPQ_INTERNAL_TOKEN
     try:
         _tech_proc = subprocess.Popen(
             [sys.executable, launcher, "--host", TECH_HOST, "--port", str(TECH_PORT)],
@@ -696,7 +1032,12 @@ def main():
     # 没有任何本地存储回落；连不上就让 /auth/* /wf/* 回 503，绝不静默写本地。
     try:
         print(f"[cpq-suite] 登录系统 /auth/*  存储={cpq_auth.init()}")
+        # 用户表为空时按环境变量引导首个管理员（不配则只打印提示，不影响启动）。
+        cpq_auth.bootstrap_admin()
         print(f"[cpq-suite] 工作流 /wf/*   {cpq_wf.init()}")
+        # 成品写入记录表：没有它就判不了幂等（同一个版本会重复取号），所以与上面两张表
+        # 一起建；建表失败必须让本次启动看得见，不能等到用户点「写入数据库」才发现。
+        print(f"[cpq-suite] 成品写入记录表   {cpq_tech_bridge.init()}")
     except cpq_auth.BackendUnavailable as e:
         print(f"[cpq-suite] 错误: {e}", file=sys.stderr)
         print("[cpq-suite] 登录与工作流接口将不可用（/auth/* /wf/* 返回 503），"

@@ -4,13 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 工艺 - 图纸解析</title>
-  <link rel="stylesheet" href="workbench.css?v=20260819-pane1" />
-  <link rel="stylesheet" href="inline-analysis.css?v=20260819-flat5" />
+  <script src="tech-auth-session.js?v=tas1"></script>
+  <script src="tech-project-context.js?v=20260917-pid1"></script>
+  <link rel="stylesheet" href="workbench.css?v=20260917-filepreview1" />
+  <link rel="stylesheet" href="inline-analysis.css?v=20260917-headgap1" />
   <link rel="stylesheet" href="parse-loading.css?v=parse-loading2" />
-  <link rel="stylesheet" href="agent-chat.css?v=20260819-layout1" />
+  <link rel="stylesheet" href="agent-chat.css?v=20260918-fold1" />
   <link rel="stylesheet" href="/vendor/tabler-icons/tabler-icons.min.css" />
   <link rel="stylesheet" href="tech-rail.css?v=rail2" />
-  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set1" />
+  <link rel="stylesheet" href="llm-settings-panel.css?v=llm-set3" />
   <!-- three 必须走本地副本，不能挂公网 CDN。app.js 是 ES module，import 没解析完
        它一行都不跑：按钮、图纸、任务文件全停在 HTML 初始态，界面看上去就像
        "前面步骤的东西没传过来"。unpkg 在内网实测要 5~7 秒，断网则是永久卡住 ——
@@ -31,7 +33,8 @@
   <script type="importmap">
   {"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}
   </script>
-  <script src="cpq-sso.js?v=sso2"></script>
+  <script src="cpq-sso.js?v=sso6"></script>
+  <script src="tech-embed.js?v=twb5"></script>
 </head>
 <body>
   <div class="oc-app">
@@ -135,7 +138,6 @@
                 <!-- 设计意图作为对话里的第一条内容；开始解析按钮就在它下方。
                      #intent 与 #btnParse 保留原 id，app.js 无需改动即可继续驱动。 -->
                 <div class="oc-amsg">
-                  <div class="oc-aav" aria-hidden="true">✦</div>
                   <div class="oc-abody">
                     <div class="oc-intent-card">
                       <h4>设计意图</h4>
@@ -167,7 +169,7 @@
                 <div class="oc-inputbox">
                   <button class="oc-ibtn" id="ocPlus" type="button" aria-label="补充资料与审查" style="width:30px;height:30px;flex-shrink:0;">＋</button>
                   <textarea id="ocInput" rows="1" maxlength="4000" placeholder="向 Agent 描述需求，或直接说「开始解析」…" aria-label="向 Agent 发送消息"></textarea>
-                  <button class="oc-send" id="ocSend" type="button" aria-label="发送">↑</button>
+                  <button class="oc-send" id="ocSend" type="button" aria-label="发送"><i class="ti ti-send" aria-hidden="true"></i></button>
                 </div>
                 <div class="oc-disc">Agent 会读取本项目资料并可发起解析。尺寸与材料以图纸为准，请核实关键信息。</div>
               </div>
@@ -175,7 +177,17 @@
           </section>
 
           <div class="center-panel">
-            <div class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="report-btn" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button></div></div></div>
+            <!-- 2.1 固定两栏：左栏零件清单独立滚动，右栏 3D / 零件信息 / 参数 / 工艺 / 成本。
+                 #secParts / #tree 全页唯一，不再放进抽屉，也不再被搬进覆盖式结果宿主。 -->
+            <div class="drawing-board-split">
+              <section class="drawing-parts-column" aria-label="零件清单">
+                <div class="panel-section" id="secParts">
+                  <div class="section-title">零件清单</div>
+                  <div id="tree" class="parts-list empty-state">完成解析后显示零件清单</div>
+                </div>
+              </section>
+              <section class="drawing-model-column" aria-label="3D 视图">
+              <header class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="inline-action" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
             <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（零件工艺推荐）。
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
@@ -187,11 +199,10 @@
             <!-- 零件工艺推荐：原来渲染在左侧零件行下面，又窄又要滚动，
                  而它们本来就是这一步的主要产出。现在占满右侧工作区。 -->
             <section id="analysisPanel" class="analysis-panel" hidden aria-label="零件分析">
-              <div class="analysis-panel-bar">
-                <button id="btnBackToModel" class="report-btn" type="button">← 返回 3D 视图</button>
-              </div>
               <div id="analysisHost" class="inline-analysis-host"></div>
             </section>
+              </section>
+            </div>
           </div>
         </div>
 
@@ -229,10 +240,6 @@
         </div>
       </details>
 
-      <div class="panel-section" id="secParts" data-drawer-section>
-        <div class="section-title">零件清单</div><div id="tree" class="parts-list empty-state">完成解析后显示零件清单</div>
-      </div>
-
       <details class="panel-section workbench-disclosure clarification-disclosure" id="secQuestions" data-drawer-section open>
         <summary class="section-title warning">待澄清问题</summary><div id="extras" class="extras">暂无待澄清问题</div>
       </details>
@@ -256,8 +263,17 @@
   </section>
 
   <div id="loginOverlay" class="login-overlay" style="display:none"><form id="loginForm" class="login-card"><h2>登录</h2><div class="login-sub">图纸解析与生成平台 · 私有化部署</div><input id="loginUser" placeholder="用户名" autocomplete="username" /><input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" /><div id="loginErr" class="login-err"></div><button type="submit">登 录</button></form></div>
+  <div id="boardCardMask" class="board-card-mask" role="presentation" hidden>
+    <section id="boardCard" class="board-card" role="dialog" aria-modal="true" aria-labelledby="boardCardTitle" tabindex="-1">
+      <header class="board-card-head">
+        <div class="board-card-title" id="boardCardTitle"></div>
+        <button type="button" class="board-card-close" id="boardCardClose" aria-label="关闭">×</button>
+      </header>
+      <div class="board-card-body" id="boardCardBody"></div>
+    </section>
+  </div>
   <span id="health" hidden></span><span id="statusCard" hidden></span><span id="workflowHint" hidden></span>
   <link rel="stylesheet" href="workflow-navigation.css?v=workflow-nav4" />
-  <script src="workflow-navigation.js?v=workflow-nav5"></script><script src="inline-analysis.js?v=20260819-flat5"></script><script type="module" src="app.js?v=20260819-show1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set1"></script><script src="agent-chat.js?v=20260819-match1"></script><script src="home-link.js?v=home6"></script>
+<script src="workflow-navigation.js?v=workflow-nav6"></script><script src="inline-analysis.js?v=20260917-partchrome1"></script><script src="tech-board-runtime.js?v=tbr3"></script><script src="tech-session-timeline.js?v=tst1"></script><script type="module" src="app.js?v=20260917-pid1"></script><script src="/cpq_auth.js"></script><script src="/cpq_msg.js"></script><script src="llm-settings-panel.js?v=llm-set3"></script><script src="agent-chat.js?v=20260918-fold1"></script><script src="home-link.js?v=home6"></script>
 </body>
 </html>

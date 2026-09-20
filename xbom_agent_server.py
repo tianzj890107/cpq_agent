@@ -1233,6 +1233,17 @@ class Bridge:
                 self.events.append({"type": "tool_use", "name": ev["name"], "input": tu_input})
             elif t == "message_end":
                 stop_reason = ev.get("stop_reason", "end_turn")
+                if stop_reason == "max_tokens":
+                    # 输出被 provider 输出上限截断：保留已产出文本，写入会话事件并发出
+                    # 可识别提示，让前端可以提示重试；不得当作正常结束静默收尾。
+                    truncated_ev = {
+                        "type": "truncated",
+                        "stop_reason": "max_tokens",
+                        "message": "模型输出达到 max_tokens 上限被截断，已保留已生成内容；"
+                                   "请重试，或减少一次生成的输出量。",
+                    }
+                    self.events.append(dict(truncated_ev))
+                    emit({**truncated_ev, "type": "error", "error": truncated_ev["message"]})
                 u = ev.get("usage", {})
                 conv.cost_tracker.add_usage(
                     conv.model,

@@ -121,24 +121,19 @@ class JsonMetaBackend(MetaBackend):
         with self._lock:
             return self._read(self.data_dir / pid / "audit.json") or []
 
-    # 用户(集中存于 data_dir/_auth_users.json: {username: record})
-    def _users_path(self) -> Path:
-        return self.data_dir / "_auth_users.json"
-
+    # 用户：本地用户表已退役。用户数据只有一份 —— 配置报价 CPQ 的 PG（cpq_wf），
+    # 技术工艺只经 /auth/* 的 HTTP 通道取身份与名单。这里不再读写任何本地用户文件，
+    # 存量账号由 scripts/migrate_users_to_pg.py 一次性搬走。
     def get_user(self, username: str) -> Optional[dict]:
-        with self._lock:
-            return (self._read(self._users_path()) or {}).get(username)
+        return None
 
     def put_user(self, username: str, data: dict) -> None:
-        with self._lock:
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            users = self._read(self._users_path()) or {}
-            users[username] = data
-            self._write(self._users_path(), users)
+        raise RuntimeError(
+            "本地用户表已退役：账号与角色统一在配置报价 CPQ 中维护，技术工艺不再落本地用户文件"
+            "（存量账号见 scripts/migrate_users_to_pg.py）。")
 
     def list_users(self) -> List[dict]:
-        with self._lock:
-            return list((self._read(self._users_path()) or {}).values())
+        return []
 
 
 # --------------------------------------------------------------------------- #
@@ -275,33 +270,17 @@ class SqlMetaBackend(MetaBackend):
             })
         return out
 
+    # 同上：用户数据统一到配置报价 CPQ，SQL 后端也不再维护第二份用户表。
     def get_user(self, username: str) -> Optional[dict]:
-        from sqlalchemy import select
-        with self.engine.connect() as c:
-            row = c.execute(
-                select(self.users.c.data).where(self.users.c.username == username)
-            ).first()
-        return dict(row[0]) if row else None
+        return None
 
     def put_user(self, username: str, data: dict) -> None:
-        from sqlalchemy import insert, select, update
-        with self._lock, self.engine.begin() as c:
-            exists = c.execute(
-                select(self.users.c.username).where(self.users.c.username == username)
-            ).first()
-            if exists:
-                c.execute(update(self.users).where(
-                    self.users.c.username == username).values(data=data))
-            else:
-                c.execute(insert(self.users).values(
-                    username=username, data=data,
-                    created_at=data.get("created_at") or _now()))
+        raise RuntimeError(
+            "本地用户表已退役：账号与角色统一在配置报价 CPQ 中维护，技术工艺不再落本地用户表"
+            "（存量账号见 scripts/migrate_users_to_pg.py）。")
 
     def list_users(self) -> List[dict]:
-        from sqlalchemy import select
-        with self.engine.connect() as c:
-            rows = c.execute(select(self.users.c.data)).all()
-        return [dict(r[0]) for r in rows]
+        return []
 
 
 # --------------------------------------------------------------------------- #

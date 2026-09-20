@@ -21,9 +21,20 @@ from ..config import (
     OPENAI_TEXT_MODEL, OPENAI_TIMEOUT_SECONDS, OPENAI_VISION_MAX_OUTPUT_TOKENS,
 )
 
+from . import llm_output
+
 T = TypeVar("T", bound=BaseModel)
 _MAX_OUTPUT_TOKENS = OPENAI_MAX_OUTPUT_TOKENS
 _BACKGROUND_POLL_INTERVAL_SECONDS = 2.0
+
+def _record_truncation(note: str) -> None:
+    """记录一次「提升预算 + 续写」补救（R6）：统一落到 llm_output 的共享记录里。"""
+    llm_output.record_remediation(note)
+
+
+def recent_truncation_notes() -> List[str]:
+    """返回最近的截断补救记录副本。"""
+    return llm_output.remediation_notes()
 
 
 def _json_output_rule(has_tools: bool) -> str:
@@ -256,15 +267,15 @@ def _background_error_detail(response) -> str:
         details = _value_from(response, "incomplete_details")
         reason = _value_from(details, "reason") if details else None
         max_tokens = _value_from(response, "max_output_tokens")
-        if reason in {"max_output_tokens", "max_tokens"}:
+        if llm_output.is_truncated(reason):
             limit = f"（本次上限 {max_tokens}）" if isinstance(max_tokens, int) else ""
             return (
-                f"模型达到 max_output_tokens 上限{limit}，输出或推理未完成。"
-                "系统未自动重试，避免再次发送图纸产生额外费用。"
+                f"模型达到 max_output_tokens 上限{limit}，输出或推理未完成；"
+                "已交由调用方提升预算并续写。"
             )
         if reason == "content_filter":
             return "模型输出触发内容安全过滤而未完成；提高 token 上限或延长等待均无效。"
-        return "模型输出未完成，服务端未提供可识别原因；系统未自动重试。"
+        return "模型输出未完成，服务端未提供可识别原因；请重试或降低单次输出量。"
     return f"状态为 {status or 'unknown'}"
 
 
@@ -303,6 +314,30 @@ def _is_vision_request(content: List[Dict[str, Any]]) -> bool:
     return any(block.get("type") == "input_image" for block in content)
 
 
+def _output_text_of(response) -> str:
+    """读取已产出文本；缺省返回空串，便于截断时保留可用片段。"""
+    text = _value_from(response, "output_text")
+    return text if isinstance(text, str) else ""
+
+
+def _incomplete_truncation(response) -> "tuple[str, int | None] | None":
+    """识别 Responses 因输出上限中断：返回 (finish_reason, limit)，否则 None。"""
+    if _value_from(response, "status") != "incomplete":
+        return None
+    details = _value_from(response, "incomplete_details")
+    reason = _value_from(details, "reason") if details else None
+    if not llm_output.is_truncated(reason):
+        return None
+    limit = _value_from(response, "max_output_tokens")
+    return (str(reason), limit if isinstance(limit, int) else None)
+
+
+def _continuation_content(user_content: List[Dict[str, Any]], partial: str) -> List[Dict[str, Any]]:
+    """续写只回传已产出的 JSON 片段，剔除图纸/附件块，避免重复计费与联网检索。"""
+    kept = [block for block in user_content if block.get("type") != "input_image"]
+    return [*kept, text_block(llm_output.continuation_instruction(partial))]
+
+
 def _cancel_background_response(response) -> None:
     """本地等待上限到达时尽力取消远端任务，避免后台继续消耗额度。"""
     response_id = getattr(response, "id", None)
@@ -328,7 +363,7 @@ def _format_output_validation_error(exc: Exception, response=None) -> str:
         detail = str(exc)
     return (
         "OpenAI 已返回结果，但字段未通过本地数据校验。"
-        "为避免再次发送图纸并产生额外费用，系统未自动重试。\n"
+        "该失败发生在本地校验阶段，系统不会再次上传图纸/附件。\n"
         f"校验详情: {detail}"
         + (_background_usage_summary(response) if response is not None else "")
     )
@@ -351,8 +386,12 @@ def _is_retryable_poll_exception(exc: Exception) -> bool:
     return False
 
 
-def _wait_for_background_response(response):
-    """短连接轮询同一后台任务；查询失败不重复提交原图。"""
+def _wait_for_background_response(response, requested_limit: int | None = None):
+    """短连接轮询同一后台任务；查询失败不重复提交原图。
+
+    若任务因输出上限 `incomplete`，抛 `llm_output.OutputTruncated` 并带上已产出片段，
+    让 `run()` 用「提升预算 + 续写」补救，而不是直接失败或整份重来。
+    """
     deadline = time.monotonic() + OPENAI_BACKGROUND_TIMEOUT_SECONDS
     last_poll_error: Exception | None = None
     while getattr(response, "status", None) in {"queued", "in_progress"}:
@@ -386,6 +425,25 @@ def _wait_for_background_response(response):
             ) from exc
 
     if getattr(response, "status", None) != "completed":
+        truncation = _incomplete_truncation(response)
+        if truncation is not None:
+            reason, reported_limit = truncation
+            limit = reported_limit or requested_limit or _MAX_OUTPUT_TOKENS
+            raise llm_output.OutputTruncated(
+                "OpenAI 输出被截断（finish_reason="
+                f"{reason}，本次上限 {limit}），"
+                + llm_output.truncation_note(
+                    finish_reason=reason,
+                    initial_budget=requested_limit if requested_limit is not None else limit,
+                    final_budget=requested_limit if requested_limit is not None else limit,
+                    attempts=0,
+                    limit=limit,
+                    path="openai",
+                ),
+                finish_reason=reason,
+                limit=limit,
+                partial=_output_text_of(response),
+            )
         raise RuntimeError(
             "OpenAI 后台任务未完成："
             + _background_error_detail(response)
@@ -446,15 +504,105 @@ def run(
             raise RuntimeError(
                 format_openai_exception(exc, submission_state_unknown=True)
             ) from exc
-        return _wait_for_background_response(response)
+        return _wait_for_background_response(response, requested_limit=output_limit)
 
-    response = request(user_content)
+    truncation_state: Dict[str, Any] = {}
+
+    def request_with_recovery(
+        content: List[Dict[str, Any]],
+        request_tools: List[Dict[str, Any]] | None = None,
+    ):
+        """请求 + 截断恢复：先提升预算，再把已产出片段交回模型续写（不重发图纸）。"""
+        nonlocal output_limit
+        base_limit = output_limit
+        partial = ""
+        attempts = 0
+        while True:
+            continuation = bool(partial)
+            try:
+                response = request(
+                    _continuation_content(content, partial) if continuation else content,
+                    # 续写不再触发联网检索，也不重复上传图纸/附件。
+                    request_tools=[] if continuation else request_tools,
+                )
+            except llm_output.OutputTruncated as exc:
+                if exc.partial:
+                    partial = llm_output.stitch_fragments(partial, exc.partial)
+                raised = llm_output.raised_budget(output_limit, _MAX_OUTPUT_TOKENS)
+                truncation_state["finish_reason"] = exc.finish_reason
+                truncation_state.setdefault("initial_budget", base_limit)
+                truncation_state["attempts"] = attempts + 1
+                if raised is None or attempts >= OPENAI_SCHEMA_REPAIR_RETRIES:
+                    _record_truncation(
+                        llm_output.truncation_note(
+                            finish_reason=exc.finish_reason,
+                            initial_budget=base_limit,
+                            final_budget=output_limit,
+                            attempts=attempts + 1,
+                            limit=_MAX_OUTPUT_TOKENS,
+                            path="openai",
+                            outcome="失败",
+                        )
+                    )
+                    raise llm_output.OutputTruncated(
+                        "OpenAI 输出被截断，提升预算并续写后仍不完整；"
+                        "请减少一次解析的文档量或改用长输出模型后重试。"
+                        + llm_output.truncation_note(
+                            finish_reason=exc.finish_reason,
+                            initial_budget=base_limit,
+                            final_budget=output_limit,
+                            attempts=attempts + 1,
+                            limit=_MAX_OUTPUT_TOKENS,
+                            path="openai",
+                        ),
+                        finish_reason=exc.finish_reason,
+                        limit=exc.limit or _MAX_OUTPUT_TOKENS,
+                        partial=partial,
+                    ) from exc
+                output_limit = raised
+                attempts += 1
+                _record_truncation(
+                    llm_output.truncation_note(
+                        finish_reason=exc.finish_reason,
+                        initial_budget=base_limit,
+                        final_budget=raised,
+                        attempts=attempts,
+                        limit=_MAX_OUTPUT_TOKENS,
+                        path="openai",
+                        outcome="续写重试",
+                    )
+                )
+                continue
+            return response, partial
+
+    def note_recovery_outcome(outcome: str) -> None:
+        """补救最终成功时补一条带结果的记录（失败已在重试耗尽处记录）。"""
+        if not truncation_state:
+            return
+        _record_truncation(
+            llm_output.truncation_note(
+                finish_reason=truncation_state.get("finish_reason"),
+                initial_budget=truncation_state.get("initial_budget"),
+                final_budget=output_limit,
+                attempts=truncation_state.get("attempts"),
+                limit=_MAX_OUTPUT_TOKENS,
+                path="openai",
+                outcome=outcome,
+            )
+        )
+
+    def produced_text(resp, prefix: str) -> str:
+        """把续写片段与已产出片段拼接成完整文本（无续写时就是原始输出）。"""
+        return llm_output.stitch_fragments(prefix, _output_text_of(resp))
+
+    response, prefix = request_with_recovery(user_content)
     _collect_web_sources(response, sources_out)
     if getattr(response, "refusal", None):
         raise RuntimeError(f"OpenAI 拒绝了该请求: {response.refusal}")
 
+    produced = produced_text(response, prefix)
     try:
-        return output_model.model_validate(json.loads(response.output_text))
+        validated = output_model.model_validate(json.loads(produced))
     except (json.JSONDecodeError, ValidationError) as exc:
         if OPENAI_SCHEMA_REPAIR_RETRIES <= 0:
             raise RuntimeError(_format_output_validation_error(exc, response)) from exc
@@ -463,23 +611,27 @@ def run(
         repair = [text_block(
             "下面这份 JSON 未通过数据校验。只修复结构/缺失字段，"
             "不得补造图纸上没有的尺寸或材料信息；只输出完整 JSON。\n\n"
-            f"校验错误: {exc}\n\n原 JSON:\n{response.output_text}"
+            f"校验错误: {exc}\n\n原 JSON:\n{produced}"
         )]
         last_exc: Exception = exc
         for _ in range(OPENAI_SCHEMA_REPAIR_RETRIES):
             # 修复只处理已有 JSON，禁止再次上传图纸或调用联网工具。
-            response = request(repair, request_tools=[])
+            response, prefix = request_with_recovery(repair, request_tools=[])
             _collect_web_sources(response, sources_out)
+            produced = produced_text(response, prefix)
             try:
-                return output_model.model_validate(json.loads(response.output_text))
+                validated = output_model.model_validate(json.loads(produced))
             except (json.JSONDecodeError, ValidationError) as repair_exc:
                 last_exc = repair_exc
                 repair = [text_block(
                     "上一份修复后的 JSON 仍未通过校验。只修复下列错误并输出完整 JSON，"
                     "不要添加解释。\n\n"
-                    f"校验错误: {repair_exc}\n\n原 JSON:\n{response.output_text}"
+                    f"校验错误: {repair_exc}\n\n原 JSON:\n{produced}"
                 )]
         raise RuntimeError(_format_output_validation_error(last_exc, response)) from last_exc
+    else:
+        note_recovery_outcome("成功")
+        return validated
 
 
 def parse_image_to_model(

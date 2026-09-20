@@ -53,11 +53,11 @@
     style.id = 'cpqInboxCss';
     style.textContent = [
       '.cpq-inbox-card{cursor:pointer}',
-      '.cpq-inbox-card.technew{border-left:3px solid #1d4ed8}',
+      '.cpq-inbox-card.technew{border-left:3px solid #0060E6}',
       '.cpq-inbox-meta{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}',
       '.cpq-inbox-chip{padding:2px 9px;border-radius:999px;background:var(--bg-page,#f3f4f6);',
       'color:var(--text-secondary,#64748b);font-size:11.5px}',
-      '.cpq-inbox-chip.no{background:#1d4ed8;color:#fff;font-weight:700;letter-spacing:.03em}',
+      '.cpq-inbox-chip.no{background:#0060E6;color:#fff;font-weight:700;letter-spacing:.03em}',
       '.cpq-inbox-note{margin-top:7px;padding:7px 10px;border-radius:8px;',
       'background:var(--bg-page,#f8fafc);color:var(--text-secondary,#64748b);font-size:12px}',
       '.cpq-tab-badge{margin-left:6px;padding:0 6px;border-radius:999px;background:#ef4444;',
@@ -105,15 +105,22 @@
   /* ------------------------------------------------------------ 渲染 */
   function taskCard(t) {
     const claimed = t.status === 'claimed';
+    // 终态（已撤回 / 已完成）：留在列表里给一个明确出口，但不再挂领取入口。
+    const closed = t.status === 'cancelled' || t.status === 'completed';
+    const replacedBy = closed ? (t.replaced_by_task_no || '') : '';
     const techNew = t.task_kind === 'tech_new_product';
     // 支线任务用任务类型本身作标题，比"定向角色"有信息量得多。
     const side = { tech_new_product: '新增工艺', tech_cost: '成本测算',
                    tech_cost_return: '成本结果复核' }[t.task_kind];
     const way = side || (t.target_type === 'public' ? '公共任务'
       : t.target_type === 'role' ? '定向角色' : '指派给我');
-    return `<article class="request-card cpq-inbox-card${techNew ? ' technew' : ''}" data-inbox-task="${esc(t.task_id)}">
+    // 状态胶囊显示中文状态（待领取 / 进行中 / 已完成 / 已撤回），不再一律显示成待领取。
+    const statusLabel = t.status_label || (closed ? '已撤回' : (claimed ? '进行中' : '待领取'));
+    const cta = closed ? (replacedBy ? '被新任务替代' : '已关闭')
+      : (claimed ? '继续处理' : (techNew ? '领取并开始' : '领取并去报价'));
+    return `<article class="request-card cpq-inbox-card${techNew ? ' technew' : ''}${closed ? ' closed' : ''}" data-inbox-task="${esc(t.task_id)}">
       <div class="request-card-header"><span class="request-id">${esc(way)}</span>
-        <span class="request-status ${claimed ? 'status-reviewing' : 'status-draft'}">${claimed ? '进行中' : '待领取'}</span></div>
+        <span class="request-status ${claimed ? 'status-reviewing' : closed ? 'status-closed' : 'status-draft'}">${esc(statusLabel)}</span></div>
       <div class="request-title" title="${esc(t.title || '')}">${esc(t.title || '未命名报价')}</div>
       <div class="cpq-inbox-meta">
         ${side && t.task_no ? `<span class="cpq-inbox-chip no">${esc(t.task_no)}</span>` : ''}
@@ -122,11 +129,12 @@
         <span class="cpq-inbox-chip">${esc(fmtTime(t.created_at))}</span>
         <span class="cpq-inbox-chip">来自 ${esc(t.from_display_name || '—')}（${esc(t.from_role_name || '')}）</span>
       </div>
+      ${replacedBy ? `<div class="cpq-inbox-note">被新任务替代：${esc(replacedBy)}</div>` : ''}
       ${t.note ? `<div class="cpq-inbox-note">“${esc(t.note)}”</div>` : ''}
       <div class="request-footer"><div class="request-creator">
         <span class="creator-avatar">${esc(String(t.from_display_name || '?').charAt(0))}</span>
         <span>${esc(t.next_role_name || '')}负责</span></div>
-        <span class="request-detail">${claimed ? '继续处理' : (techNew ? '领取并开始' : '领取并去报价')}</span>
+        <span class="request-detail">${cta}</span>
       </div></article>`;
   }
 
@@ -169,14 +177,23 @@
     }
     const kind = (claim && claim.task_kind) || task.task_kind;
     if (kind === 'tech_new_product') {
-      location.href = '/tech-task.html?tech_task=' + encodeURIComponent(task.task_id);
+      // 新增工艺：尚无技术项目，先进统一两栏壳的 1.1，由右侧 tech-task 建项后回写 project。
+      location.href = '/tech-workbench.html?stage=requirement-create&task_id='
+        + encodeURIComponent(task.task_id);
       return;
     }
-    // 成本测算（财务经理）→ 2.3；成本结果复核（工艺经理）→ 2.2 改工序/用量。
-    // 这两条支线的 session_id 就是技术工艺的项目号。
-    if (kind === 'tech_cost' || kind === 'tech_cost_return') {
-      const page = kind === 'tech_cost' ? '/cost-review.html' : '/assembly-integration.html';
-      location.href = page + '?project=' + encodeURIComponent(task.session_id || '');
+    // 成本测算（财务经理）→ stage=cost；成本结果确认（工艺经理）→ stage=summary。
+    // 后者的落点是第 5 阶段「工艺评估报告」：工艺经理在那里做最终工艺确认、汇总、
+    // 审核和发布，而不是回到第 3 阶段重新建参数与工艺（返工由第 5 阶段另行发起）。
+    // 这两条支线的 session_id 就是技术工艺的项目号，task_id 一并带给右侧步骤页。
+    if (kind === 'tech_cost') {
+      location.href = '/tech-workbench.html?stage=cost&project='
+        + encodeURIComponent(task.session_id || '') + '&task_id=' + encodeURIComponent(task.task_id);
+      return;
+    }
+    if (kind === 'tech_cost_return') {
+      location.href = '/tech-workbench.html?stage=summary&project='
+        + encodeURIComponent(task.session_id || '') + '&task_id=' + encodeURIComponent(task.task_id);
       return;
     }
     // 工艺确认这一步是在报价工作台里做的（回显第 1 步需求 + 产品推荐表），不在技术工艺。

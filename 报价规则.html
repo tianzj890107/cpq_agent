@@ -7,12 +7,15 @@
   <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <style>
     :root {
-      --color-primary: #6366f1;
-      --color-secondary: #8b5cf6;
-      --gradient-ai: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --color-primary: #0060E6;
+      --color-secondary: #0060E6;
+      --gradient-ai: linear-gradient(135deg, #0060E6, #0050C4);
       --color-success: #10B981;
       --color-warning: #f59e0b;
       --color-danger: #ef4444;
+      --color-primary-active: #00419F;
+      --color-primary-page: #F4F8FF;
+      --color-primary-border: #B4D0F8;
       --bg-page: #ffffff;
       --bg-secondary: #f7f7f8;
       --bg-tertiary: #ececf1;
@@ -72,13 +75,13 @@
       width: 36px;
       height: 36px;
       border-radius: 10px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0060E6, #0050C4);
       display: flex;
       align-items: center;
       justify-content: center;
       margin-bottom: 8px;
       cursor: pointer;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+      box-shadow: 0 2px 8px rgba(0,96,230,.40);
     }
 
     .nav-logo svg {
@@ -183,12 +186,19 @@
       color: var(--color-secondary);
     }
 
+    /* AI 徽标：常态浅蓝描边，hover 才转实心深蓝（与报价 Agent / 技术工艺一致）。 */
     .ai-badge {
       font-size: 11px;
       padding: 2px 8px;
       border-radius: 9999px;
-      background: var(--gradient-ai);
+      background: var(--color-primary-page);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary-border);
+    }
+    .ai-badge:hover {
+      background: var(--color-primary-active);
       color: white;
+      border-color: var(--color-primary-active);
     }
 
     /* 滚动条样式 */
@@ -307,7 +317,7 @@
 
     .chat-input:focus {
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 3px rgba(0,96,230,.12);
     }
 
     .chat-send {
@@ -315,13 +325,13 @@
       height: 38px;
       border: none;
       border-radius: 11px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0060E6, #0050C4);
       color: white;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,96,230,.30);
       flex-shrink: 0;
     }
 
@@ -583,7 +593,7 @@
     .table-row .td select:focus {
       border-color: var(--color-primary);
       background: white;
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 2px rgba(0,96,230,.12);
     }
 
     /* Groovy表达式样式 */
@@ -629,7 +639,7 @@
     }
 
     .expr-input-wrapper textarea:focus {
-      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.12);
+      box-shadow: 0 0 0 2px rgba(0,96,230,.12);
     }
 
     /* 代码展示样式 */
@@ -657,7 +667,7 @@
     }
 
     .code-display .keyword {
-      color: #3b82f6;
+      color: #0060E6;
       font-weight: 500;
     }
 
@@ -671,7 +681,7 @@
     }
 
     .code-display .brace {
-      color: #8b5cf6;
+      color: #475569;
     }
 
     .code-display .return {
@@ -717,17 +727,17 @@
     }
 
     .category-tag.discount {
-      background: rgba(99, 102, 241, 0.12);
+      background: rgba(0,96,230,.12);
       color: var(--color-primary);
     }
 
     .category-tag.cost {
-      background: rgba(16, 185, 129, 0.12);
+      background: rgba(16,185,129, 0.12);
       color: var(--color-success);
     }
 
     .category-tag.margin {
-      background: rgba(245, 158, 11, 0.12);
+      background: rgba(245,158,11, 0.12);
       color: var(--color-warning);
     }
 
@@ -742,12 +752,12 @@
     }
 
     .action-btn.delete {
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(239,68,68, 0.1);
       color: var(--color-danger);
     }
 
     .action-btn.delete:hover {
-      background: rgba(239, 68, 68, 0.2);
+      background: rgba(239,68,68, 0.2);
     }
 
     /* 按钮样式 */
@@ -783,19 +793,19 @@
     }
 
     .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.1);
+      background: rgba(239,68,68, 0.1);
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      background: linear-gradient(135deg, #0060E6, #0050C4);
       color: white;
       border: none;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+      box-shadow: 0 2px 8px rgba(0,96,230,.30);
     }
 
     .btn-primary:hover {
       filter: brightness(1.06);
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+      box-shadow: 0 4px 12px rgba(0,96,230,.40);
     }
 
     .btn .ti {

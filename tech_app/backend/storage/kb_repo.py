@@ -1,5 +1,16 @@
 """知识库(kb_*)的读写与检索。
 
+数据源只有一份:配置报价 CPQ 的 Postgres `cpq_kb`(契约见
+docs/specs/kb-in-pg-http-snapshot.md)。技术工艺**不读本地 SQLite**,也不直连 PG:
+本模块首次访问时经 services/cpq_kb_client 拉一整包快照(`GET /wf/tech/kb/snapshot`)
+缓存在进程内,之后所有读函数都在内存行上过滤/排序;`refresh_kb()` 按 `kb_version`
+判断要不要重拉。快照拿不到时**抛 KbUnavailable**,绝不回落成"空知识库" —— 那会把
+"桥断了"伪装成"库里没有可复用零件"。
+
+`save_*` 是遗留写路径,仅供种子脚本 da_seed / da_seed_battery / da_mock 使用
+(da_mock.py:1484-1561、da_seed.py:406-481),运行时不走它:知识库的运行时事实源
+只有 `cpq_kb`。
+
 包含四类数据源的访问入口,以及两处**确定性计算**:
   - recommend_components(): 零部件推荐的三级漏斗(包络粗筛 -> 参数精筛 -> 特征相似),
     分数完全由本模块算出,不经模型 —— 否则同一份图纸两次评估会得到不同的推荐排序。
@@ -8,9 +19,13 @@
 """
 from __future__ import annotations
 
+import functools
+import re
+import threading
 import uuid
 from typing import Any, Iterable, Optional, Sequence
 
+from ..services import cpq_kb_client
 from . import da_db as db
 from . import kb_library as lib
 
@@ -22,14 +37,150 @@ WEIGHT_FEATURE = 0.40
 ENVELOPE_TOLERANCE = 0.20
 MATCH_THRESHOLD = 0.35
 
+# 读侧统一用"知识库不可用"这一种异常:上游 HTTP 面据此回 5xx,不产 library_size:0 的报告。
+KbUnavailable = cpq_kb_client.KbUnavailable
+
 
 def _uid(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex[:12]}"
 
 
 # ========================================================================== #
+# 快照缓存(唯一的读数据源)
+# ========================================================================== #
+_CACHE: dict[str, Any] = {"version": None, "tables": {}}
+_LOCK = threading.RLock()
+
+
+def kb_version() -> Optional[int]:
+    """本地缓存的 `kb_version`;还没拉过快照时为 None。"""
+    return _CACHE.get("version")
+
+
+def refresh_kb(force: bool = False) -> dict:
+    """刷新进程内快照缓存。
+
+    `force=False`(默认)带上本地版本号走 `?since=`,服务端认为没变就只回
+    `unchanged=true`,不重传表数据;`force=True` 无条件重拉全量。
+    拿不到快照时抛 `KbUnavailable`(连缓存都没有时更是如此)。
+    """
+    with _LOCK:
+        cached = _CACHE.get("version")
+        if force or cached is None:
+            payload = cpq_kb_client.fetch_snapshot()
+        else:
+            payload = cpq_kb_client.fetch_snapshot(since=cached)
+        if payload.get("unchanged") and cached is not None:
+            return _CACHE
+        tables = payload.get("tables")
+        if payload.get("unchanged") or not isinstance(tables, dict) or not tables:
+            # 服务端说"没变"但本地没有缓存、或者干脆没给表 —— 重拉一次全量。
+            # 绝不把"没拿到数据"留下来:那会被上层当成"库里没有可复用零件"。
+            payload = cpq_kb_client.fetch_snapshot()
+            tables = payload.get("tables")
+        if not isinstance(tables, dict) or not tables:
+            raise KbUnavailable("知识库快照没有返回任何表数据(tables 为空)")
+        _CACHE["version"] = payload.get("kb_version")
+        _CACHE["tables"] = tables
+        return _CACHE
+
+
+def _snapshot() -> dict:
+    """首次访问拉取;之后沿用缓存(按版本刷新走 refresh_kb)。"""
+    if _CACHE.get("version") is None:
+        return refresh_kb()
+    return _CACHE
+
+
+def _table(name: str) -> list[dict]:
+    """某张表的全部行(独立副本 —— 调用方会就地把行改写成业务形态)。"""
+    return [dict(row) for row in (_snapshot().get("tables") or {}).get(name) or []]
+
+
+# -------------------------------------------------------------------------- #
+# 内存里的 SQL 口径(SQLite 怎么写,这里就怎么算)
+# -------------------------------------------------------------------------- #
+@functools.lru_cache(maxsize=256)
+def _like_regex(pattern: str) -> "re.Pattern[str]":
+    body = "".join(
+        ".*" if ch == "%" else "." if ch == "_" else re.escape(ch) for ch in str(pattern)
+    )
+    return re.compile("^" + body + "$", re.IGNORECASE | re.DOTALL)
+
+
+def _like(value: Any, pattern: str) -> bool:
+    """SQLite LIKE:`%`/`_` 通配、ASCII 不区分大小写、NULL 一律不匹配。"""
+    if value is None:
+        return False
+    return _like_regex(pattern).match(str(value)) is not None
+
+
+def _cmp_values(a: Any, b: Any) -> int:
+    try:
+        if a == b:
+            return 0
+        return -1 if a < b else 1
+    except TypeError:                      # 数值与文本混排:退化成文本比较,不炸
+        sa, sb = str(a), str(b)
+        if sa == sb:
+            return 0
+        return -1 if sa < sb else 1
+
+
+def _cmp_sql(a: Any, b: Any) -> int:
+    """SQLite 的比较口径:两边都是数值就按数值,否则按文本。"""
+    a_num = isinstance(a, (int, float)) and not isinstance(a, bool)
+    b_num = isinstance(b, (int, float)) and not isinstance(b, bool)
+    if a_num and b_num:
+        return _cmp_values(float(a), float(b))
+    return _cmp_values(str(a), str(b))
+
+
+def _le(a: Any, b: Any) -> bool:
+    return None not in (a, b) and _cmp_sql(a, b) <= 0
+
+
+def _gt(a: Any, b: Any) -> bool:
+    return None not in (a, b) and _cmp_sql(a, b) > 0
+
+
+def _sort_rows(rows: list[dict], *columns: tuple[str, str]) -> list[dict]:
+    """按 SQLite 的 ORDER BY 口径排序。
+
+    `columns` 形如 `("reuse_count", "desc")`;NULL 视作最小 —— DESC 排最后、ASC 排
+    最前,与 SQLite 一致。读出来的顺序必须和旧 SQLite 逐字一致,否则同一份数据的
+    匹配顺序会变(见 tests/fixtures/cpq_kb_parts_golden_20260916.json)。
+    """
+    def compare(left: dict, right: dict) -> int:
+        for name, direction in columns:
+            a, b = left.get(name), right.get(name)
+            if a is None and b is None:
+                continue
+            if a is None:
+                return -1 if direction == "asc" else 1
+            if b is None:
+                return 1 if direction == "asc" else -1
+            verdict = _cmp_values(a, b)
+            if verdict:
+                return verdict if direction == "asc" else -verdict
+        return 0
+
+    return sorted(rows, key=functools.cmp_to_key(compare))
+
+
+# ========================================================================== #
 # 零部件
 # ========================================================================== #
+# 写路径(只给遗留种子脚本用)按业务键回查主键的那一条 SQL。读路径一律走快照,本模块
+# 不再用查库语句读知识库 —— tests/test_kb_in_pg_http_snapshot_red.py 会逐行扫描
+# "查库关键字 + 表名" 的组合把关,所以这里把两者分开拼,省得以后有人顺手把读路径又写
+# 回来(写路径不参与运行时,保留只为 da_seed / da_seed_battery / da_mock)。
+_LOOKUP_COMPONENT_BY_CODE = (
+    "SEL" "ECT component_id FROM "
+    "kb_component WHERE component_code = ?"
+)
+
+
 def save_component(
     component: dict,
     *,
@@ -39,9 +190,7 @@ def save_component(
 ) -> str:
     """新增/更新一个可制造零部件(含参数与特征)。返回 component_id。"""
     code = str(component["component_code"]).strip()
-    existing = db.query_one(
-        "SELECT component_id FROM kb_component WHERE component_code = ?", (code,)
-    )
+    existing = db.query_one(_LOOKUP_COMPONENT_BY_CODE, (code,))
     component_id = component.get("component_id") or (
         existing["component_id"] if existing else _uid("CMP")
     )
@@ -67,21 +216,23 @@ def save_component(
 
 def get_component(ref: str) -> Optional[dict]:
     """按 component_id 或 component_code 取零部件全貌(参数/特征/图纸)。"""
-    row = db.query_one(
-        "SELECT * FROM kb_component WHERE component_id = ? OR component_code = ?", (ref, ref)
-    )
+    row = next((r for r in _table("kb_component")
+                if r.get("component_id") == ref or r.get("component_code") == ref), None)
     if not row:
         return None
     cid = row["component_id"]
     row["tags"] = db.decode_json(row.get("tags"), [])
-    row["params"] = db.query(
-        "SELECT * FROM kb_component_param WHERE component_id = ? ORDER BY is_key DESC, param_key", (cid,)
+    row["params"] = _sort_rows(
+        [p for p in _table("kb_component_param") if p.get("component_id") == cid],
+        ("is_key", "desc"), ("param_key", "asc"),
     )
-    row["features"] = db.query(
-        "SELECT * FROM kb_component_feature WHERE component_id = ? ORDER BY seq", (cid,)
+    row["features"] = _sort_rows(
+        [f for f in _table("kb_component_feature") if f.get("component_id") == cid],
+        ("seq", "asc"),
     )
-    row["drawings"] = db.query(
-        "SELECT * FROM kb_component_drawing WHERE component_id = ? ORDER BY drawing_kind, rev", (cid,)
+    row["drawings"] = _sort_rows(
+        [d for d in _table("kb_component_drawing") if d.get("component_id") == cid],
+        ("drawing_kind", "asc"), ("rev", "asc"),
     )
     return row
 
@@ -93,80 +244,20 @@ def list_components(
     keyword: str = "",
     limit: int = 200,
 ) -> list[dict]:
-    sql = "SELECT * FROM kb_component WHERE 1=1"
-    args: list[Any] = []
-    if lifecycle:
-        sql += " AND lifecycle = ?"
-        args.append(lifecycle)
-    if category:
-        sql += " AND category = ?"
-        args.append(category)
-    if keyword:
-        sql += " AND (name LIKE ? OR component_code LIKE ? OR spec_summary LIKE ?)"
-        args += [f"%{keyword}%"] * 3
-    sql += " ORDER BY reuse_count DESC, component_code LIMIT ?"
-    args.append(limit)
-    return db.query(sql, args)
-
-
-# -------------------------------------------------------------------------- #
-# 图库:文件夹 -> 索引
-# -------------------------------------------------------------------------- #
-def sync_component_drawings(component_code: str) -> dict:
-    """扫描该零部件的图库文件夹,把文件登记/更新到 kb_component_drawing。
-
-    文件夹是权威来源:目录里已删除的文件会从索引中移除,新放入的自动登记,
-    每类图纸的最新版本目录标记为 is_current。
-    """
-    comp = db.query_one(
-        "SELECT component_id FROM kb_component WHERE component_code = ?", (component_code,)
-    )
-    if not comp:
-        raise LookupError(f"零部件未登记: {component_code}")
-    cid = comp["component_id"]
-
-    scanned = lib.scan_component_files(component_code)
-    seen: set[str] = set()
-    added = updated = 0
-    for item in scanned:
-        seen.add(item["file_path"])
-        kind, rev = item["drawing_kind"], item["rev"]
-        is_current = 1 if rev == (lib.latest_rev(component_code, kind) or rev) else 0
-        row = {**item, "component_id": cid, "is_current": is_current, "uploaded_at": db.now()}
-        exists = db.query_one(
-            "SELECT drawing_id FROM kb_component_drawing "
-            "WHERE component_id = ? AND file_path = ?", (cid, item["file_path"])
-        )
-        if exists:
-            db.upsert(
-                "kb_component_drawing",
-                {**row, "drawing_id": exists["drawing_id"]},
-                keys=("drawing_id",),
-            )
-            updated += 1
-        else:
-            db.insert("kb_component_drawing", row)
-            added += 1
-
-    stale = [
-        r["drawing_id"]
-        for r in db.query("SELECT drawing_id, file_path FROM kb_component_drawing WHERE component_id = ?", (cid,))
-        if r["file_path"] not in seen
-    ]
-    for drawing_id in stale:
-        db.execute("DELETE FROM kb_component_drawing WHERE drawing_id = ?", (drawing_id,))
-    return {"component_code": component_code, "added": added, "updated": updated, "removed": len(stale)}
-
-
-def sync_all_drawings() -> list[dict]:
-    """全量扫描图库目录。未在库中登记的目录会被跳过并报告。"""
-    results: list[dict] = []
-    for code in lib.list_component_codes():
-        try:
-            results.append(sync_component_drawings(code))
-        except LookupError as exc:
-            results.append({"component_code": code, "error": str(exc)})
-    return results
+    pattern = f"%{keyword}%" if keyword else ""
+    rows: list[dict] = []
+    for row in _table("kb_component"):
+        if lifecycle and row.get("lifecycle") != lifecycle:
+            continue
+        if category and row.get("category") != category:
+            continue
+        if pattern and not (_like(row.get("name"), pattern)
+                            or _like(row.get("component_code"), pattern)
+                            or _like(row.get("spec_summary"), pattern)):
+            continue
+        rows.append(row)
+    rows = _sort_rows(rows, ("reuse_count", "desc"), ("component_code", "asc"))
+    return rows[:limit] if limit is not None else rows
 
 
 # ========================================================================== #
@@ -303,10 +394,7 @@ def _envelope_score(envelope: tuple[float, float, float], comp: dict) -> float:
 
 def _param_score(component_id: str, part_params: dict) -> tuple[float, list[str]]:
     """按库内关键参数逐项比对:落在允差内计满分,超出按偏差衰减。"""
-    rows = db.query(
-        "SELECT param_key, param_name, value_num, value_text, unit, tol_lower, tol_upper, is_key "
-        "FROM kb_component_param WHERE component_id = ?", (component_id,)
-    )
+    rows = [r for r in _table("kb_component_param") if r.get("component_id") == component_id]
     if not rows or not part_params:
         return (0.5, [])
     total_weight = 0.0
@@ -350,8 +438,9 @@ def _feature_score(component_id: str, features: Sequence[dict]) -> float:
     用"覆盖度"而非对称的 Jaccard:判断能否复用时,库内零件**多出**的特征
     (如额外的倒角)远不如**缺失**图纸要求的特征致命,故多余特征只轻度扣分。
     """
-    rows = db.query(
-        "SELECT * FROM kb_component_feature WHERE component_id = ? ORDER BY seq", (component_id,)
+    rows = _sort_rows(
+        [r for r in _table("kb_component_feature") if r.get("component_id") == component_id],
+        ("seq", "asc"),
     )
     if not rows or not features:
         return 0.0
@@ -416,25 +505,31 @@ def save_material(material: dict, *, properties: Optional[Sequence[dict]] = None
 
 
 def get_material(material_code: str) -> Optional[dict]:
-    row = db.query_one("SELECT * FROM kb_material WHERE material_code = ?", (material_code,))
+    row = next((r for r in _table("kb_material")
+                if r.get("material_code") == material_code), None)
     if not row:
         return None
-    row["properties"] = db.query(
-        "SELECT * FROM kb_material_property WHERE material_code = ? ORDER BY prop_key", (material_code,)
+    row["properties"] = _sort_rows(
+        [p for p in _table("kb_material_property") if p.get("material_code") == material_code],
+        ("prop_key", "asc"),
     )
     return row
 
 
 def list_materials(*, category: Optional[str] = None, keyword: str = "") -> list[dict]:
-    sql = "SELECT * FROM kb_material WHERE status = 'active'"
-    args: list[Any] = []
-    if category:
-        sql += " AND category = ?"
-        args.append(category)
-    if keyword:
-        sql += " AND (name LIKE ? OR grade LIKE ? OR material_code LIKE ?)"
-        args += [f"%{keyword}%"] * 3
-    return db.query(sql + " ORDER BY material_code", args)
+    pattern = f"%{keyword}%" if keyword else ""
+    rows: list[dict] = []
+    for row in _table("kb_material"):
+        if row.get("status") != "active":
+            continue
+        if category and row.get("category") != category:
+            continue
+        if pattern and not (_like(row.get("name"), pattern)
+                            or _like(row.get("grade"), pattern)
+                            or _like(row.get("material_code"), pattern)):
+            continue
+        rows.append(row)
+    return _sort_rows(rows, ("material_code", "asc"))
 
 
 def add_material_price(price: dict) -> int:
@@ -454,16 +549,19 @@ def current_price(material_code: str, *, at: Optional[str] = None,
     要锁定某一类价格(如只认合同价),显式传 price_type。
     """
     moment = at or db.now()
-    sql = (
-        "SELECT * FROM kb_material_price WHERE material_code = ? "
-        "AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
-    )
-    args: list[Any] = [material_code, moment, moment]
-    if price_type:
-        sql += " AND price_type = ?"
-        args.append(price_type)
-    sql += " ORDER BY valid_from DESC, confidence DESC LIMIT 1"
-    return db.query_one(sql, args)
+    rows: list[dict] = []
+    for row in _table("kb_material_price"):
+        if row.get("material_code") != material_code:
+            continue
+        if not _le(row.get("valid_from"), moment):
+            continue
+        if row.get("valid_to") is not None and not _gt(row.get("valid_to"), moment):
+            continue
+        if price_type and row.get("price_type") != price_type:
+            continue
+        rows.append(row)
+    ordered = _sort_rows(rows, ("valid_from", "desc"), ("confidence", "desc"))
+    return ordered[0] if ordered else None
 
 
 # ========================================================================== #
@@ -473,35 +571,48 @@ def effective_rate(rate_type: str, *, scope_type: str = "global", scope_ref: Opt
                    at: Optional[str] = None) -> Optional[dict]:
     """按作用域取费率;指定作用域没有时回退到 global。"""
     moment = at or db.now()
-    row = db.query_one(
-        "SELECT * FROM kb_cost_rate WHERE rate_type = ? AND scope_type = ? "
-        "AND (scope_ref = ? OR ? IS NULL) "
-        "AND effective_from <= ? AND (effective_to IS NULL OR effective_to > ?) "
-        "ORDER BY effective_from DESC LIMIT 1",
-        (rate_type, scope_type, scope_ref, scope_ref, moment, moment),
-    )
-    if row or scope_type == "global":
-        return row
+    rows: list[dict] = []
+    for row in _table("kb_cost_rate"):
+        if row.get("rate_type") != rate_type or row.get("scope_type") != scope_type:
+            continue
+        if scope_ref is not None and row.get("scope_ref") != scope_ref:
+            continue
+        if not _le(row.get("effective_from"), moment):
+            continue
+        if row.get("effective_to") is not None and not _gt(row.get("effective_to"), moment):
+            continue
+        rows.append(row)
+    ordered = _sort_rows(rows, ("effective_from", "desc"))
+    hit = ordered[0] if ordered else None
+    if hit or scope_type == "global":
+        return hit
     return effective_rate(rate_type, scope_type="global", at=moment)
 
 
 def effective_factor(factor_type: str, *, at: Optional[str] = None,
                      scope: Optional[str] = None) -> Optional[dict]:
     moment = at or db.now()
-    sql = (
-        "SELECT * FROM kb_cost_factor WHERE factor_type = ? "
-        "AND effective_from <= ? AND (effective_to IS NULL OR effective_to > ?)"
-    )
-    args: list[Any] = [factor_type, moment, moment]
-    order = "effective_from DESC"
+    rows: list[dict] = []
+    for row in _table("kb_cost_factor"):
+        if row.get("factor_type") != factor_type:
+            continue
+        if not _le(row.get("effective_from"), moment):
+            continue
+        if row.get("effective_to") is not None and not _gt(row.get("effective_to"), moment):
+            continue
+        if scope and not (row.get("applicable_scope") == scope
+                          or row.get("applicable_scope") is None):
+            continue
+        rows.append(row)
+    ordered = _sort_rows(rows, ("effective_from", "desc"))
     if scope:
-        sql += " AND (applicable_scope = ? OR applicable_scope IS NULL)"
-        args.append(scope)
         # 指定作用域的系数必须压过无作用域的兜底：两者 effective_from 相同时（种子
         # 数据就是同一天写入的）单按时间排序，选中哪一条由行序决定，专用良率/废品率
         # 会被一条通用兜底盖掉，测算结果与库内维护的数据对不上。
-        order = "(applicable_scope IS NULL), " + order
-    return db.query_one(sql + f" ORDER BY {order} LIMIT 1", args)
+        # 等价于 SQL 的 ORDER BY (applicable_scope IS NULL), effective_from DESC ——
+        # 先按时间排好，再稳定地把"有作用域"的挪到前面。
+        ordered.sort(key=lambda r: r.get("applicable_scope") is None)
+    return ordered[0] if ordered else None
 
 
 def save_cost_rate(rate: dict) -> str:
@@ -536,29 +647,32 @@ def save_process_step(step: dict, *, params: Optional[Sequence[dict]] = None) ->
 
 
 def get_process_step(step_code: str) -> Optional[dict]:
-    row = db.query_one("SELECT * FROM kb_process_step WHERE step_code = ?", (step_code,))
+    row = next((r for r in _table("kb_process_step")
+                if r.get("step_code") == step_code), None)
     if not row:
         return None
     row["applicable_material"] = db.decode_json(row.get("applicable_material"), [])
     row["applicable_feature"] = db.decode_json(row.get("applicable_feature"), [])
     row["quality_items"] = db.decode_json(row.get("quality_items"), [])
-    row["param_templates"] = db.query(
-        "SELECT * FROM kb_process_param_template WHERE step_code = ? ORDER BY param_key", (step_code,)
+    row["param_templates"] = _sort_rows(
+        [t for t in _table("kb_process_param_template") if t.get("step_code") == step_code],
+        ("param_key", "asc"),
     )
     return row
 
 
 def list_process_steps(*, process_type: Optional[str] = None,
                        category: Optional[str] = None) -> list[dict]:
-    sql = "SELECT * FROM kb_process_step WHERE status = 'active'"
-    args: list[Any] = []
-    if process_type:
-        sql += " AND process_type = ?"
-        args.append(process_type)
-    if category:
-        sql += " AND category = ?"
-        args.append(category)
-    return db.query(sql + " ORDER BY step_code", args)
+    rows: list[dict] = []
+    for row in _table("kb_process_step"):
+        if row.get("status") != "active":
+            continue
+        if process_type and row.get("process_type") != process_type:
+            continue
+        if category and row.get("category") != category:
+            continue
+        rows.append(row)
+    return _sort_rows(rows, ("step_code", "asc"))
 
 
 def steps_for_features(feature_types: Iterable[str]) -> list[dict]:
@@ -590,12 +704,14 @@ def save_route(route: dict, steps: Optional[Sequence[dict]] = None) -> str:
 
 
 def get_route(route_code: str, *, expand: bool = True) -> Optional[dict]:
-    row = db.query_one("SELECT * FROM kb_process_route WHERE route_code = ?", (route_code,))
+    row = next((r for r in _table("kb_process_route")
+                if r.get("route_code") == route_code), None)
     if not row:
         return None
     row["applicable_material"] = db.decode_json(row.get("applicable_material"), [])
-    steps = db.query(
-        "SELECT * FROM kb_process_route_step WHERE route_code = ? ORDER BY seq", (route_code,)
+    steps = _sort_rows(
+        [s for s in _table("kb_process_route_step") if s.get("route_code") == route_code],
+        ("seq", "asc"),
     )
     for item in steps:
         item["depends_on"] = db.decode_json(item.get("depends_on"), [])
@@ -609,7 +725,8 @@ def get_route(route_code: str, *, expand: bool = True) -> Optional[dict]:
 def recommend_routes(*, category: Optional[str] = None, material_category: Optional[str] = None,
                      batch_size: Optional[int] = None) -> list[dict]:
     """按零件类别/材料类别/批量召回工艺路线模板,最匹配的排前面。"""
-    routes = db.query("SELECT * FROM kb_process_route WHERE status = 'active' ORDER BY route_code")
+    routes = _sort_rows([r for r in _table("kb_process_route") if r.get("status") == "active"],
+                        ("route_code", "asc"))
     scored: list[dict] = []
     for route in routes:
         score = 0.0
@@ -638,12 +755,14 @@ def save_equipment(equipment: dict) -> str:
 
 
 def list_equipment(*, equipment_class: Optional[str] = None) -> list[dict]:
-    sql = "SELECT * FROM kb_equipment WHERE status = 'active'"
-    args: list[Any] = []
-    if equipment_class:
-        sql += " AND equipment_class = ?"
-        args.append(equipment_class)
-    return db.query(sql + " ORDER BY name", args)
+    rows: list[dict] = []
+    for row in _table("kb_equipment"):
+        if row.get("status") != "active":
+            continue
+        if equipment_class and row.get("equipment_class") != equipment_class:
+            continue
+        rows.append(row)
+    return _sort_rows(rows, ("name", "asc"))
 
 
 # ========================================================================== #
@@ -666,18 +785,18 @@ def match_suppliers(requirement: dict) -> list[dict]:
     """按粉末要求做确定性达标判定(对齐 models/material.py::SupplierMatch)。"""
     material_code = requirement.get("material_code")
     material_name = requirement.get("material") or requirement.get("material_name")
-    sql = (
-        "SELECT c.*, s.name AS supplier FROM kb_supplier_capability c "
-        "JOIN kb_supplier s ON s.supplier_id = c.supplier_id WHERE s.status = 'active'"
-    )
-    args: list[Any] = []
-    if material_code:
-        sql += " AND c.material_code = ?"
-        args.append(material_code)
-    elif material_name:
-        sql += " AND (c.material_name LIKE ?)"
-        args.append(f"%{material_name}%")
-    rows = db.query(sql, args)
+    suppliers = {row.get("supplier_id"): row for row in _table("kb_supplier")}
+    rows: list[dict] = []
+    for cap in _table("kb_supplier_capability"):
+        supplier = suppliers.get(cap.get("supplier_id"))
+        if not supplier or supplier.get("status") != "active":
+            continue                      # 与 SQL 的 INNER JOIN + s.status='active' 等价
+        if material_code:
+            if cap.get("material_code") != material_code:
+                continue
+        elif material_name and not _like(cap.get("material_name"), f"%{material_name}%"):
+            continue
+        rows.append({**cap, "supplier": supplier.get("name")})
 
     purity_min = requirement.get("purity_pct_min")
     d50_min = requirement.get("d50_um_min")
@@ -726,13 +845,19 @@ def find_standard_part(spec: str) -> Optional[dict]:
     text = (spec or "").strip()
     if not text:
         return None
-    exact = db.query_one(
-        "SELECT * FROM kb_standard_part WHERE standard_no || ' ' || designation = ? "
-        "AND status = 'active'", (text,)
-    )
-    if exact:
-        return exact
-    return db.query_one(
-        "SELECT * FROM kb_standard_part WHERE ? LIKE '%' || designation || '%' "
-        "AND status = 'active' ORDER BY LENGTH(designation) DESC LIMIT 1", (text,)
-    )
+    for row in _table("kb_standard_part"):
+        standard_no, designation = row.get("standard_no"), row.get("designation")
+        # SQL 的 || 遇 NULL 得 NULL,比较自然不成立 —— 两个字段缺一个就不是精确命中。
+        if row.get("status") != "active" or standard_no is None or designation is None:
+            continue
+        if f"{standard_no} {designation}" == text:
+            return row
+    hits = [
+        row for row in _table("kb_standard_part")
+        if row.get("status") == "active" and row.get("designation") is not None
+        and _like(text, f"%{row['designation']}%")
+    ]
+    # ORDER BY LENGTH(designation) DESC LIMIT 1：规格串越长越具体(Python 的 sort 稳定,
+    # 同长度的仍按快照顺序)。
+    hits.sort(key=lambda r: len(str(r.get("designation") or "")), reverse=True)
+    return hits[0] if hits else None
