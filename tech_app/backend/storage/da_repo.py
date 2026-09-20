@@ -723,6 +723,67 @@ def box_match_audit(project_id: str, requirement_no: str = "") -> list[dict]:
 
 
 # ========================================================================== #
+# 包装参数化 BOM(包装第 5 批):重算整体替换,locked = 1 的行原样保留
+# ========================================================================== #
+_PACKAGING_BOM_COLUMNS = (
+    "industry", "engine_version", "generated_at", "bom_category", "item_key",
+    "item_name", "source", "part_code", "component", "material", "material_code", "quantity",
+    "unit", "size_length_expr", "size_width_expr", "size_height_expr", "length_mm",
+    "width_mm", "height_mm", "size_source_json", "status", "missing_variables",
+    "is_optional", "locked", "locked_by", "locked_at", "note", "updated_at",
+)
+
+
+def _bom_json(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def save_packaging_bom(project_id: str, requirement_no: str, items: list) -> int:
+    """按 (project_id, requirement_no) 整体替换未锁定的行;locked = 1 的行原样保留。
+
+    返回写入的行数。同一份 items 重复写是幂等的(先删未锁定行,再按主键 upsert)。
+    """
+    requirement_no = requirement_no or ""
+    now = db.now()
+    db.execute(
+        "DELETE FROM wip_packaging_bom_item "
+        "WHERE project_id = ? AND requirement_no = ? AND locked = 0",
+        (project_id, requirement_no),
+    )
+    written = 0
+    for item in items or []:
+        row = {key: item.get(key) for key in _PACKAGING_BOM_COLUMNS}
+        row["project_id"] = project_id
+        row["requirement_no"] = requirement_no
+        row["industry"] = item.get("industry") or "packaging"
+        row["engine_version"] = item.get("engine_version") or "packaging_bom_v1"
+        row["generated_at"] = item.get("generated_at") or now
+        row["bom_category"] = item.get("bom_category")
+        row["item_key"] = item.get("item_key")
+        row["missing_variables"] = _bom_json(item.get("missing_variables") or [])
+        row["size_source_json"] = _bom_json(item.get("size_source_json"))
+        row["updated_at"] = now
+        db.upsert("wip_packaging_bom_item", row,
+                  keys=("project_id", "requirement_no", "bom_category", "item_key"))
+        written += 1
+    return written
+
+
+def load_packaging_bom(project_id: str, requirement_no: str = "") -> list[dict]:
+    """读回某个项目的包装 BOM 行(按类别、行键升序);没有行时给空列表,不报错。"""
+    return db.query(
+        "SELECT * FROM wip_packaging_bom_item "
+        "WHERE project_id = ? AND requirement_no = ? "
+        "ORDER BY bom_category ASC, item_key ASC",
+        (project_id, requirement_no or ""),
+    )
+
+
+# ========================================================================== #
 # L3 · 评估结果
 # ========================================================================== #
 def save_report(doc: dict) -> str:

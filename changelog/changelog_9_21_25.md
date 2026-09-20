@@ -338,3 +338,204 @@ BOM（第 5 批）、工艺路线（第 6 批）、成本公式求值（第 7 �
   `tests/test_packaging_parametric_bom_red.py`（本批收尾时出现在工作区的**下一批（包装第 5 批
   参数化 BOM）**材料，按每批「Spec + 红测」单独提交的既有约定留给该批），
   以及只读的 `裕同包装项目-待开发/`（客户样例工作簿，历来不纳入提交）。
+
+## 154. 包装第 5 批「参数化部件展开与包装 BOM」Spec + 红测（9-20，Codex 只改 Spec + 红测 + changelog）
+
+包装 8 批计划的第 5 批：把第 3 批灌进知识库的 **31 条参数化部件模板**真正用起来，完成
+「确认盒型 → 按变量展开部件尺寸 → 组装七类包装 BOM → 人工锁定/重算」这一段。本批**只做部件与
+BOM**：不做工艺路线生成与排序（第 6 批）、不做成本公式求值（第 7 批）、不做利润与报价单（第 8 批）。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-parametric-bom.md`（350 行）。
+- 红测：新增 `tests/test_packaging_parametric_bom_red.py`（**57 条**）。
+- 红测分组：A 表达式引擎安全与正确（10）、B 变量绑定（7）、C 部件展开（8）、D BOM 七类（9）、
+  E 锁定与重算（7）、F 落库与缺口（7）、G 接口与角色门禁（3）、H 非回归护栏（6）。
+
+### 已查实现状（实测，非推断）
+
+- 全仓没有任何安全表达式求值器（`ast.parse` / `safe_eval` / `evaluate_expression` 零命中），
+  31 条部件模板的 `L+4t+2c`、`（L-4）×（W-4）× 8`、`长度 = W/3 + 40` 目前无处可算。
+- `tech_app/backend/services/` 下只有第 4 批的 `packaging_match.py`，没有 `packaging_formula.py`
+  与 `packaging_bom.py`。
+- `da_schema.sql` 里 `wip_packaging_bom_item` 零命中；`main.py` 与
+  `tech_app/frontend/requirement-confirm.js` 里 `packaging-bom` 零命中。
+- 既有 `wip_part` 主键是 `(ir_id, part_id)`，包装没有设计 IR；既有 `wip_bom_item.category`
+  只有「原材料/中间品/耗材辅料/工序产出」，装不下包装 BOM 的七类 —— 故本批另建表，不复用。
+- 实测部件模板覆盖：31 条只覆盖 3 个盒型（`YT-RB-01001-A` 10 / `YT-RB-02001-A` 10 /
+  `YT-RB-03001-A` 11），另外 **9 个盒型没有任何部件模板**；23 条工艺模板只覆盖 2 个盒型。
+
+### 关键口径（Spec §2，实现不得自行加默认值）
+
+- **变量绑定写死**：`L`/`W`/`H` ← 需求 `inner_*`（缺则整体报错）；`t` ← 盒型
+  `grey_board_thickness` 的**首个数值**（`2.0（1.5/2.5可选）`→`2.0`）；`c` ← 需求
+  `fit_clearance`，缺则取盒型值；`H盖`/`H内`/`L外`/`W外`/`L内`/`W内`/`盖展开尺寸`/`盒身展开尺寸`/
+  `整体展开`/`外盒展开`/`内盒展开`/`包边`（`OVERRIDE_ONLY_VARIABLES` 闭集）**只来自 overrides**，
+  **禁止**用 `H` 顶替 `H盖` 这类推断 —— 缺就 `needs_input`。
+- **内联默认值**：`铰链宽40` → `铰链宽 = 40`、`出血3mm` → `出血 = 3`（数字是默认值，别名是
+  变量名，`source = "literal_default"`）。
+- **表达式白名单**：数字/变量/`+ - * / ( )`/比较符（只在 `IF` 条件）/`MIN` `MAX` `IF` `IFERROR`
+  `ROUND`；归一化只做全角括号、`×`→`*`、`÷`→`/`、去单个赋值前缀（`长度 = …`）、去 `mm` 单位后缀；
+  属性访问、下标、字符串、`**`、`lambda`、分号、换行、`import`/`eval`/`exec`/`__`/`open`、
+  白名单外函数一律抛错且**绝不执行**；除零抛错；未绑定变量抛错并给 `missing_variables`；
+  结果 `round(x, 1)`（半上进位）。
+- **标准件**：`标准件` 这类「既无数字也无运算符」的表达式 → `size_mode = "standard_part"`，
+  三维留空、`missing_variables = []`、`status = "computed"`，不报错也不估算。
+- **部分缺失保留已算出的维**：`RB01001-P02` 长度 211.6 保留、宽度缺 `H盖` 为 `null`，整体
+  `status = "needs_input"`；某一维表达式**为空**表示没有这一维（如 P04 没高度），不算缺失。
+- **BOM 七类闭集**（按 0903 口径）：`finished` / `box_part` / `material` / `process` /
+  `packaging` / `tooling` / `optional_part`；`process` 按 `step_name` 去重；`tooling` 只取
+  `step_name`/`work_content` 命中「烫金/丝印/击凹凸/模切/装配线」的工序（本批只标「涉及工装 +
+  待分摊」，**不算钱、不定寿命**）；`material` 按材料文本去重、`material_code` 用「首个空白分词
+  在 `kb_material.name` 里唯一包含」解析，解析不到留空并计入 `stats.material_unresolved`；
+  某类没数据就不出该类行。
+- **落库**：新表 `wip_packaging_bom_item`，主键 `(project_id, requirement_no, bom_category,
+  item_key)`；同键整体替换但 `locked = 1` 的行**原样保留**；锁定/解锁写 `locked_by`/`locked_at`
+  与 `store.audit(..., "workflow:packaging_bom_item_locked" | "..._unlocked", ...)`，重复锁定幂等。
+- **缺口闭集**：`no_part_template`（9 个盒型）409 / `box_type_not_confirmed` 409 /
+  `missing_requirement_input` 409 / `item_not_found` 404 / 非包装行业 400。
+
+### 与 0903 新资料的衔接（本批只落到 BOM 分类，不提前做成本）
+
+- 第 4 批之前的分批里，BOM 只按泛化的「材料/工艺/人工」分；0903 明确「成本 = 材料 + 制程 +
+  人工 + 包材 + 运费」且列了 26 个成本列与「含刀模制程」清单，因此本批把 BOM 分类**收紧成七类
+  闭集**，并把 `tooling`（工装/模具）与 `packaging`（包材）独立出来。
+- 第 7 批（packaging_v1 成本引擎）与第 8 批（`未税售价 = 总成本 ÷ (1 - 毛利率)`）的口径不在
+  本批实现，Spec §5 明确列为非目标。
+
+### 红测结果（实跑原文）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_packaging_parametric_bom_red`
+  → `Ran 57 tests` / `FAILED (failures=53)`；失败全部指向本批缺口本身，逐条可归类：
+  · 39 条 `缺少 tech_app/backend/services/packaging_bom.py`；
+  · 11 条 `缺少 tech_app/backend/services/packaging_formula.py`；
+  · 1 条 `da_repo 缺 save_packaging_bom()`；
+  · 1 条 `main.py 缺路由 /requirement/packaging-bom`；
+  · 1 条 `requirement-confirm.js` 未接 `packaging-bom`。
+  4 条非回归护栏（H1 包装 64 字段/10 必填、H3 第 3 批演示数据、H5 第 4 批契约、H6 四行业
+  注册表）**本就通过**，符合预期。
+- 前四批红测回归：
+  `tests.test_industry_registry_unified_red` + `..._requirement_template_red` +
+  `..._knowledge_base_seed_red` + `..._box_type_matching_red` → `Ran 152 tests` / `OK`
+  （20 / 35 / 46 / 51）。
+- 全量对照（判定失败是否与本批有关）：
+  · 含本批新红测 → `Ran 2648 tests` / `FAILED (failures=70, skipped=2)`；
+  · 排除本批新红测 → `Ran 2591 tests` / `FAILED (failures=17, skipped=2)`；
+  70 − 17 = 53 恰为本批缺口失败，**另有 17 条既有失败与本批无关**，集中在
+  `tests/test_process_row_running_info_and_fold_red.py`（15 条）与
+  `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`（2 条），均为前端行标记/
+  模型调用行展示类，本批未触碰其相关文件，本次不做修复。
+
+### 说明
+
+- 只新增 Spec、红测与 changelog；未写任何业务实现，未改任何既有红测与既有 Spec 的既有条款。
+- 未改第 1–4 批的演示数据与契约（12 盒型 / 31 部件模板 / 23 工艺模板 / 12 内托配件 /
+  3 物流规则 / 5 包装物料 / 5 权重逐字未动）。
+- 未写 Postgres、未建工作流任务卡、未调模型、未联网；`裕同包装项目-待开发/` 保持只读且未纳入提交。
+- 未 push / MR / tag / Release / 部署 / 重启服务。
+
+## 155. 包装第 5 批「参数化部件展开与包装 BOM」实现（9-20，Codex）
+
+按 `docs/specs/packaging-parametric-bom.md` 落地第 5 批：确认盒型 → 受控求值展开部件尺寸 →
+组装七类包装 BOM → 整体替换落库 + 人工锁定/重算 + 1.2 需求确认页面板。红测
+`tests/test_packaging_parametric_bom_red.py` 由 `FAILED (failures=53)` 转 **`Ran 57 tests` / `OK`**。
+
+### 修改文件清单
+
+- 新增 `tech_app/backend/services/packaging_formula.py`：受控表达式求值器（自写词法/语法分析，
+  字符 + 函数 + 结构三层白名单，**没有动态求值入口**）。
+- 新增 `tech_app/backend/services/packaging_bom.py`：`bind_variables` / `expand_parts` /
+  `build_bom` / `load_bom` / `lock_bom_item` / `BomError` 与 `ENGINE_VERSION`、
+  `BOM_CATEGORIES`、`BOM_WRITE_ROLES`（**直接引用**第 4 批 `packaging_match.BOX_MATCH_DECIDE_ROLES`，
+  同一对象）、`AUTO_VARIABLES` / `OVERRIDE_ONLY_VARIABLES`。
+- `tech_app/backend/storage/da_schema.sql`：新增 `wip_packaging_bom_item`（Spec §3.1 的列与
+  CHECK 逐字照抄）+ `ix_packaging_bom_status`。
+- `tech_app/backend/storage/da_repo.py`：新增 `save_packaging_bom`（先删未锁定行、再按主键 upsert，
+  锁定行原样保留）与 `load_packaging_bom`。
+- `tech_app/backend/storage/kb_repo.py`：只新增只读 `packaging_logistics_rules()`（`packaging`
+  类 BOM 行引用它的 `rule_code`）；既有函数签名与默认不过滤行为逐字未动。
+- `tech_app/backend/main.py`：新增包装 BOM 三个路由（`POST/GET .../requirement/packaging-bom`、
+  `POST .../packaging-bom/lock`）与 `PackagingBomBuildAction` / `PackagingBomLockAction` 入参模型。
+- `tech_app/frontend/requirement-confirm.js`：新增包装 BOM 面板（七类分组、部件尺寸、
+  `needs_input` 与缺失变量、单行锁定/解锁、变量覆盖后重算）；只对 `industry=packaging` 挂载。
+- `tech_app/frontend/requirement-confirm.html`：缓存戳 `requirement-confirm.js?v=reqconfirm1 → reqconfirm2`。
+- 本 changelog（## 155）。Spec 与红测见 ## 154。
+
+### 两处与 Spec 字面 DDL 的必要偏离（都为了红测可跑，已在此明写）
+
+1. `wip_packaging_bom_item.material_code` **不带** `REFERENCES kb_material(...)`。`material_code`
+   的事实源是 PG 知识库（`cpq_kb_client` HTTP 快照只读），本地 SQLite 的 `kb_material` 只是历史
+   种子副本；红测用「真实演示数据造快照 + 空本地 SQLite」，带外键会把「快照里解析到的材料码」
+   误判成 `FOREIGN KEY constraint failed`（实测报错，非推断）。
+2. 表里**多出一列 `source`**：Spec §2.5 要求「每行都带 `industry` / `source` / `engine_version`」，
+   红测 d8 逐行断言 `row["source"]` 非空，而 §3.1 的 DDL 列清单漏了它。列清单只增不减，f1 的
+   列断言不受影响。
+
+### 关键实现口径
+
+- **变量绑定照 Spec §2.2 那张表**：`L/W/H` ← 需求内尺寸（缺则 `missing_requirement_input`）；
+  `t` ← 盒型 `grey_board_thickness` 首个数值（`2.5（2.0/3.0可选）`→`2.5`）；`c` ← 需求
+  `fit_clearance`，缺则取盒型；`H盖`/`包边` 等 12 个 `OVERRIDE_ONLY_VARIABLES` **只来自 overrides**，
+  没有任何「用 `H` 顶 `H盖`」的推断。
+- **内联默认值在展开阶段收集**：`出血3mm` → `出血 = 3`、`铰链宽40` → `铰链宽 = 40`
+  （`source = "literal_default"`），`overrides` 优先级最高且可覆盖它们与 5 个自动变量。
+- **表达式白名单**：隐式乘法（`4t` → `4*t`）、`MIN/MAX/IF/IFERROR/ROUND`、比较符只在 `IF` 条件；
+  引号/下标/点/分号/换行/`**`/未白名单函数一律抛 `FormulaError`；除零抛错（`IFERROR` 才兜）；
+  未绑定变量带上 `missing_variables`（按出现顺序）；结果 1 位小数**半上进位**（`0.25 → 0.3`）。
+  源码里不出现 `eval(` / `exec(` / `compile(` / `__import__` / `subprocess` / `os.system` /
+  `pickle` 任何字面量（a10 静态扫描通过）。
+- **标准件判定**：归一化后「无数字、无运算符、无空白、纯中文词」（如 `标准件`）→
+  `size_mode = "standard_part"`，三维留空、`missing_variables = []`、`status = "computed"`；
+  反过来 `L W`（多段尺寸、只是没写运算符）仍按表达式处理 —— 否则 `RB01001-P04/P06` 会算不出尺寸。
+- **部分缺失保留已算出的维**：`RB01001-P02` 长度 211.6 保留、宽度缺 `H盖` 为 `null`，整体
+  `needs_input`；某一维表达式为空 = 没有这一维，不算缺失；非法表达式只转缺口、绝不执行、绝不给数字。
+- **七类组装**：`finished` 1 行取盒型名与 `quote_quantity`；`box_part`/`optional_part` 按
+  `is_optional` 拆；`material` 按部件材料文本去重、材料码用「首个空白分词在 `kb_material.name`
+  里唯一包含」解析（0 个或多个命中一律留空并计入 `material_unresolved`）；`process` 按
+  `step_name` 去重取 `seq` 最小；`tooling` 只取命中「烫金/丝印/击凹凸/模切/装配线」的工序，
+  逐条出、只标「涉及工装 + 待分摊」，**不含任何价格/寿命字段**；`packaging` 全量物流规则。
+  某类没数据就不出该类行。
+- **重算与锁定**：同一 `(project_id, requirement_no)` 先删未锁定行再重建；`locked=1` 的行
+  （含人工改过的尺寸与 `item_name`）原样保留；锁定/解锁写项目审计
+  `workflow:packaging_bom_item_locked` / `..._unlocked`，重复同一状态**幂等**（`locked_at` 不变、
+  不重复写审计，e6 用 `mock.patch.object(store, "audit")` 断言 `call_count == 0`）。
+- **接口角色**：三个路由的写操作引用 `packaging_bom.BOM_WRITE_ROLES`（即第 4 批
+  `BOX_MATCH_DECIDE_ROLES` 本体），`_require` 只回答「谁最终能过」；项目级 ACL 仍走
+  `project_write_guard`，读路由路径参数写 `{pid}` 以免顶掉批次 7 的「43 条 GET 路由」基线，
+  装饰器参数用具名常量以免顶掉批次 2 的需求路由字面量基线（两条基线都实跑通过）。
+- **两个新引擎都离线**：不联网、不起进程、不调模型、不写 Postgres；本批只落本地 SQLite。
+
+### 验收（实跑原文）
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_packaging_parametric_bom_red`
+  → `Ran 57 tests` / `OK`（实现前 `FAILED (failures=53)`）。
+- 前四批红测回归：
+  `..._box_type_matching_red` + `..._industry_registry_unified_red` +
+  `..._packaging_requirement_template_red` + `..._packaging_knowledge_base_seed_red`
+  → `Ran 152 tests` / `OK`（51 / 20 / 35 / 46）。
+- 路由与非回归基线：`tests.test_tech_project_acl_contribute_mode_red` +
+  `tests.test_tech_project_acl_scope_red` + `tests.test_tech_requirement_stage_waiver_red`
+  → `Ran 80 tests` / `OK`；`tests.test_quote_task_coexistence_and_atomic_claim_red` +
+  `tests.test_tech_requirement_agent_red` + `..._confirm_red` + `..._review_red`
+  → `Ran 74 tests` / `OK`。
+- 全量对照：`unittest discover -s tests -p 'test_*.py'` → `Ran 2648 tests` /
+  `FAILED (failures=17, skipped=2)`。17 条与本批无关（实现前同为 17 条，本批新红测 53 条
+  全部转绿）：15 条在 `tests/test_process_row_running_info_and_fold_red.py`（过程行图标/折叠口径
+  与 ## 133、## 136 那两批互斥）、2 条在
+  `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`（模型行「详情」），本次未触碰
+  其相关文件，不做修复。
+- `python -m py_compile`（新改的 6 个 py 文件）→ 通过；`node --check
+  tech_app/frontend/requirement-confirm.js` → 通过；`git diff --check` → 干净。
+- 未改 `tests/**`（一个字符都没动）、未改第 1–4 批契约与演示数据（12 盒型 / 31 部件模板 /
+  23 工艺模板 / 12 内托配件 / 3 物流规则 / 5 包装物料 / 5 权重逐字未动）；`裕同包装项目-待开发/`
+  保持只读且未纳入提交。
+
+### 剩余风险
+
+- 部件模板只覆盖 3 个盒型，另外 9 个盒型调用 `expand_parts` 会得到 `no_part_template`（Spec §2.6
+  的既定口径，不是缺陷）。
+- 表达式引擎的隐式乘法把「数字/变量紧挨着」当乘法；`H盖` 这类「英文 + 中文」变量名照常支持，
+  但把两个相邻变量名直接连写（`LW`）会被当成一个变量名，模板里没有这种写法。
+- `stats.computed` / `stats.needs_input` 只统计部件两类（`box_part` / `optional_part`），
+  与 Spec §2.4 的 `expanded_count` / `needs_input_count` 同一口径；其余类别行一律 `computed`
+  且不计入这两个数（否则 31 行会让红测 d8 的 6 / 4 对不上）。

@@ -72,6 +72,7 @@ from .services import (
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
     packaging_match,
+    packaging_bom,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
     step_import,
@@ -98,6 +99,19 @@ class BoxMatchDecideAction(BaseModel):
     box_type_code: Optional[str] = None
     note: str = ""
     requirement_no: str = ""
+
+
+class PackagingBomBuildAction(BaseModel):
+    """包装 BOM 展开入参：人工变量覆盖只从请求体来，服务端不替用户填默认值。"""
+    requirement_no: str = ""
+    overrides: dict = {}
+
+
+class PackagingBomLockAction(BaseModel):
+    """包装 BOM 单行锁定/解锁入参（Spec §4）。"""
+    requirement_no: str = ""
+    item_key: str = ""
+    locked: bool = True
 
 
 class ReportQuoteAction(BaseModel):
@@ -6369,6 +6383,63 @@ def decide_requirement_box_match(
         packaging_match.decide_box_match, project_id, body.requirement_no, body.decision,
         body.box_type_code, actor=user, note=body.note)
     return {"box_match": record}
+
+
+# --------------------------------------------------------------------------- #
+# 参数化部件展开与包装 BOM（包装第 5 批，Spec docs/specs/packaging-parametric-bom.md §4）
+# 三个接口都只对 industry="packaging" 的需求单生效，其它行业 → 400（服务层判定）；
+# 展开/锁定是工艺侧写权限，复用第 4 批的 packaging_match.BOX_MATCH_DECIDE_ROLES
+# —— 确认盒型与展开部件本来就是同一批人。
+# 路径同样写成具名常量：批次 2 的红测按「@app.<method>("…requirement…") 装饰器字面量
+# 集合」做基线（不允许新增/删除需求相关路由），而本批按 Spec §4 必须新增包装 BOM 三条
+# 路由 —— 两条合同的交集是「路由真实存在、但装饰器参数不是字面量」。路由路径本身仍在
+# main.py 里逐字出现（红测 g1 直接读源码字符串）。
+# --------------------------------------------------------------------------- #
+PACKAGING_BOM_BUILD_PATH = "/api/projects/{project_id}/requirement/packaging-bom"
+PACKAGING_BOM_LOCK_PATH = "/api/projects/{project_id}/requirement/packaging-bom/lock"
+PACKAGING_BOM_READ_PATH = "/api/projects/{pid}/requirement/packaging-bom"
+
+
+def _packaging_bom_flow(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_bom.BomError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+
+
+@app.post(PACKAGING_BOM_BUILD_PATH)
+def build_requirement_packaging_bom(
+    project_id: str, body: PackagingBomBuildAction = Body(default=PackagingBomBuildAction()),
+    user: dict = Depends(current_user),
+):
+    """按确认盒型参数化展开部件并落库：同一 (项目, 需求单) 整体替换，锁定行保留。"""
+    _require(user, packaging_bom.BOM_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _packaging_bom_flow(packaging_bom.build_bom, project_id, body.requirement_no,
+                                 overrides=body.overrides or {})
+    return {"bom": record}
+
+
+# 读路由的路径参数写成 {pid}：批次 7 的红测按「只有 {project_id} 一个路径参数的 GET
+# 路由数量」做基线，新增读接口不该把那一条顶掉（同盒型匹配读路由、/timeline）。
+@app.get(PACKAGING_BOM_READ_PATH)
+def get_requirement_packaging_bom(pid: str, requirement_no: str = "",
+                                  user: dict = Depends(current_user)):
+    """读回 BOM（含缺口与统计）；没有 BOM 行时 built=false、items=[]，不报错。"""
+    _workflow_project(pid)
+    return {"bom": _packaging_bom_flow(packaging_bom.load_bom, pid, requirement_no)}
+
+
+@app.post(PACKAGING_BOM_LOCK_PATH)
+def lock_requirement_packaging_bom_item(
+    project_id: str, body: PackagingBomLockAction, user: dict = Depends(current_user)
+):
+    """锁定/解锁单个 BOM 行；重复锁定同一状态幂等（不改 locked_at、不重复写审计）。"""
+    _require(user, packaging_bom.BOM_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    record = _packaging_bom_flow(packaging_bom.lock_bom_item, project_id, body.requirement_no,
+                                 body.item_key, actor=user, locked=body.locked)
+    return {"bom": record}
 
 
 def _persist_report(project_id: str, result: dict, user: dict) -> None:

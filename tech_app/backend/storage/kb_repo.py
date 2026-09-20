@@ -910,6 +910,15 @@ def packaging_match_weights() -> list[dict]:
     return _sort_rows(_table("kb_packaging_match_weight"), ("dimension", "asc"))
 
 
+def packaging_logistics_rules() -> list[dict]:
+    """包装物流规则（整箱/托盘/打样快递，按 rule_code 升序）。
+
+    包装第 5 批的 `packaging` 类 BOM 行直接引用这张表的 rule_code；本批只带出规则，
+    不算运费（第 7 批）。
+    """
+    return _sort_rows(_table("kb_packaging_logistics_rule"), ("rule_code", "asc"))
+
+
 def save_standard_part(part: dict) -> str:
     row = dict(part)
     row.setdefault("std_id", _uid("STD"))

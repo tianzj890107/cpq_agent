@@ -180,3 +180,195 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     new MutationObserver(() => { if (!document.querySelector('#boxMatchPanel')) bmStart(); }).observe(bmApp, {childList: true});
   }
 })();
+
+/* ------------------------------------------------------------------------ *
+ * 包装第 5 批：参数化部件展开与包装 BOM 面板
+ * （Spec docs/specs/packaging-parametric-bom.md §4）
+ * 1.2 需求确认页里，已确认盒型的包装需求单多一块 BOM 面板：七类分组、部件尺寸、
+ * needs_input 与缺失变量、单行锁定/解锁、变量覆盖后重算。
+ * 只在 industry=packaging 的需求单上出现；其它行业完全不挂载（一条请求都不发）。
+ * 接口：/api/projects/<pid>/requirement/packaging-bom[/lock]
+ * ------------------------------------------------------------------------ */
+(function () {
+  const PB_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
+  const PB_ORDER = ['finished', 'box_part', 'optional_part', 'material', 'process', 'tooling', 'packaging'];
+  const PB_CATEGORY_LABELS = {finished: '成品', box_part: '盒型部件', material: '材料', process: '工艺', packaging: '包材', tooling: '工装/模具', optional_part: '可选部件'};
+  const PB_STATUS_LABELS = {computed: '已算出', needs_input: '缺输入', locked: '已锁定'};
+  const PB_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
+  let pbPid = '';
+  let pbBusy = false;
+
+  function pbEsc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+  }
+  function pbToast(message, error) {
+    if (typeof toast === 'function') { toast(message, error ? 4200 : 3000); return; }
+    const el = document.createElement('div');
+    el.className = `page-toast${error ? ' error' : ''}`;
+    el.textContent = message;
+    document.body.append(el);
+    setTimeout(() => el.remove(), 3600);
+  }
+  async function pbApi(url, options) {
+    const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
+    if (!response.ok) {
+      let detail = '';
+      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      throw new Error(detail || `请求失败（${response.status}）`);
+    }
+    return response.json();
+  }
+  function pbProjectId() {
+    if (pbPid) return pbPid;
+    const query = new URLSearchParams(location.search);
+    pbPid = query.get('project_id') || query.get('pid') || document.body.dataset.projectId || '';
+    return pbPid;
+  }
+  function pbRoles() {
+    try { return (window.techSession && techSession.roles && techSession.roles()) || []; } catch (error) { return []; }
+  }
+  function pbCanWrite() {
+    const user = (typeof currentUser === 'function') ? (currentUser() || {}) : {};
+    const role = String(user.role || user.cpq_role_code || '');
+    if (PB_WRITE_ROLES.indexOf(role) >= 0) return true;
+    return pbRoles().some(item => PB_WRITE_ROLES.indexOf(String(item)) >= 0);
+  }
+  function pbNumber(value) {
+    return (value === null || value === undefined || value === '') ? '—' : value;
+  }
+  function pbSize(item) {
+    return `${pbNumber(item.length_mm)} × ${pbNumber(item.width_mm)} × ${pbNumber(item.height_mm)}`;
+  }
+  function pbRow(item, writable) {
+    const status = String(item.status || 'computed');
+    const missing = (item.missing_variables || []).length
+      ? `<div class="pb-missing">缺失变量：${pbEsc(item.missing_variables.join('、'))}</div>` : '';
+    const toggle = writable
+      ? `<button class="btn secondary" data-pb-lock="${pbEsc(item.item_key)}" data-pb-locked="${status === 'locked' ? '1' : '0'}">${status === 'locked' ? '解锁' : '锁定'}</button>`
+      : '';
+    return `<li class="pb-item" data-status="${pbEsc(status)}">
+      <div class="pb-item-head">
+        <span class="pb-key">${pbEsc(item.item_key)}</span>
+        <span class="pb-name">${pbEsc(item.item_name || '')}</span>
+        <span class="pb-status">${pbEsc(PB_STATUS_LABELS[status] || status)}</span>
+        ${toggle}
+      </div>
+      <div class="pb-dims">尺寸：${pbEsc(pbSize(item))}${item.quantity ? ` · 数量 ${pbEsc(item.quantity)}` : ''}</div>
+      ${item.material ? `<div class="pb-material">材料：${pbEsc(item.material)}${item.material_code ? `（${pbEsc(item.material_code)}）` : ''}</div>` : ''}
+      ${item.component ? `<div class="pb-component">${pbEsc(item.component)}</div>` : ''}
+      ${missing}
+    </li>`;
+  }
+  function pbPanel(record, writable, boxTypeCode) {
+    const items = (record && record.items) || [];
+    const stats = (record && record.stats) || {};
+    const gaps = (record || {}).gaps || {};
+    const groups = PB_ORDER.filter(category => items.some(item => item.bom_category === category));
+    const body = groups.length
+      ? groups.map(category => `<section class="pb-group">
+          <h3>${pbEsc(PB_CATEGORY_LABELS[category] || category)}（${items.filter(item => item.bom_category === category).length}）</h3>
+          <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable)).join('')}</ul>
+        </section>`).join('')
+      : '<div class="pb-empty">还没有包装 BOM，先在盒型匹配里确认盒型，再点「展开部件并生成 BOM」。</div>';
+    const unresolved = (gaps.material_unresolved || []).length
+      ? `<div class="pb-hint">解析不到材料码（已在库外）：${pbEsc(gaps.material_unresolved.join('、'))}</div>` : '';
+    return `<section class="card section pb-panel" id="packagingBomPanel">
+      <h2>部件展开与包装 BOM${boxTypeCode ? `（${pbEsc(boxTypeCode)}）` : ''}</h2>
+      <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。</div>
+      ${unresolved}
+      <div class="pb-actions">
+        <input id="pbOverrides" placeholder="变量覆盖，如：H盖=30, 包边=15" ${writable ? '' : 'disabled'}>
+        <button class="btn primary" data-pb-build="1" ${writable ? '' : 'disabled'}>展开部件并生成 BOM</button>
+      </div>
+      ${writable ? '' : `<div class="pb-hint">${PB_WRITE_HINT}，当前为只读。</div>`}
+      ${body}
+      <div class="pb-hint">本批只做分类与关联，不算钱、不查价、不排工艺顺序（第 6、7 批）。</div>
+    </section>`;
+  }
+
+  function pbParseOverrides() {
+    const input = document.querySelector('#pbOverrides');
+    const out = {};
+    if (!input || !input.value) return out;
+    input.value.split(/[,，;；]/).forEach(part => {
+      const pair = part.split('=');
+      if (pair.length !== 2) return;
+      const name = String(pair[0]).trim();
+      const value = parseFloat(String(pair[1]).trim());
+      if (name && !isNaN(value)) out[name] = value;
+    });
+    return out;
+  }
+  async function pbRefresh() {
+    const pid = pbProjectId();
+    const host = document.querySelector('#packagingBomPanel');
+    if (!pid || !host) return;
+    const payload = await pbApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-bom`);
+    const record = (payload || {}).bom || {};
+    host.outerHTML = pbPanel(record, pbCanWrite(), record.box_type_code);
+    pbBind(pid);
+  }
+  function pbBind(pid) {
+    const build = document.querySelector('[data-pb-build]');
+    if (build) {
+      build.onclick = () => pbSubmit(pid, 'build', '/requirement/packaging-bom', {overrides: pbParseOverrides()}, '部件已展开、BOM 已更新');
+    }
+    document.querySelectorAll('[data-pb-lock]').forEach(button => {
+      button.onclick = () => pbSubmit(pid, 'lock', '/requirement/packaging-bom/lock',
+        {item_key: button.dataset.pbLock, locked: button.dataset.pbLocked !== '1'},
+        button.dataset.pbLocked !== '1' ? '已锁定该行' : '已解锁该行');
+    });
+  }
+  async function pbSubmit(pid, kind, suffix, body, okMessage) {
+    if (pbBusy) return;
+    pbBusy = true;
+    try {
+      await pbApi(`/api/projects/${encodeURIComponent(pid)}/requirement${suffix}`, {method: 'POST', body: JSON.stringify(body)});
+      pbToast(okMessage);
+      pbBusy = false;
+      await pbRefresh();
+    } catch (error) {
+      pbBusy = false;
+      pbToast((error && error.message) || '包装 BOM 操作失败', true);
+    }
+  }
+
+  // 需求单不是包装行业就不挂载（其它行业一条请求都不发）。
+  let pbMounting = false;
+  let pbFailures = 0;
+  async function pbMaybeMount() {
+    if (pbMounting || pbFailures >= 2) return;
+    const host = document.querySelector('#app .footer-actions');
+    if (!host || document.querySelector('#packagingBomPanel')) return;
+    const pid = pbProjectId();
+    if (!pid) return;
+    pbMounting = true;
+    try {
+      const requirement = await pbApi(`/api/projects/${encodeURIComponent(pid)}/requirement`);
+      const industry = String((((requirement || {}).requirement || {}).data || {}).industry || '').trim();
+      if (industry !== 'packaging') return;
+      const placeholder = document.createElement('section');
+      placeholder.id = 'packagingBomPanel';
+      placeholder.className = 'card section pb-panel';
+      placeholder.dataset.pending = '1';
+      placeholder.innerHTML = '<h2>部件展开与包装 BOM</h2><div class="pb-empty">正在读取包装 BOM…</div>';
+      host.parentNode.insertBefore(placeholder, host);
+      await pbRefresh();
+    } catch (error) {
+      pbFailures += 1;
+      const pending = document.querySelector('#packagingBomPanel[data-pending="1"]');
+      if (pending) pending.remove();
+    } finally {
+      pbMounting = false;
+    }
+  }
+
+  window.CfPackagingBomPanel = {mount: pbMaybeMount, refresh: pbRefresh};
+  const pbStart = () => { pbMaybeMount().catch(() => {}); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pbStart);
+  else pbStart();
+  const pbApp = document.querySelector('#app');
+  if (pbApp && typeof MutationObserver === 'function') {
+    new MutationObserver(() => { if (!document.querySelector('#packagingBomPanel')) pbStart(); }).observe(pbApp, {childList: true});
+  }
+})();

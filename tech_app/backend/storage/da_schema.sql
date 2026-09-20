@@ -1030,6 +1030,50 @@ CREATE TABLE IF NOT EXISTS wip_packaging_box_match_audit (
 CREATE INDEX IF NOT EXISTS ix_box_match_audit ON wip_packaging_box_match_audit(project_id, requirement_no, audit_id);
 
 
+-- 包装参数化展开结果(包装第 5 批):确认盒型后的部件尺寸与七类 BOM。
+-- 重算按 (project_id, requirement_no) 整体替换;locked = 1 的行原样保留,不参与替换。
+CREATE TABLE IF NOT EXISTS wip_packaging_bom_item (
+    project_id      TEXT NOT NULL,
+    requirement_no  TEXT NOT NULL DEFAULT '',
+    industry        TEXT NOT NULL DEFAULT 'packaging',
+    engine_version  TEXT NOT NULL,
+    generated_at    TEXT NOT NULL,
+    bom_category    TEXT NOT NULL CHECK (bom_category IN (
+                        'finished', 'box_part', 'material', 'process',
+                        'packaging', 'tooling', 'optional_part')),
+    item_key        TEXT NOT NULL,
+    item_name       TEXT,
+    -- 溯源（盒型 / 需求 / 知识库表名）：Spec §2.5 要求每行都带。
+    source          TEXT,
+    part_code       TEXT,
+    component       TEXT,
+    material        TEXT,
+    -- 不带外键:material_code 的事实源是 PG 知识库(HTTP 快照只读),本地 SQLite 的
+    -- kb_material 只是历史种子副本;加外键会把"快照里解析到的材料码"误判成违约。
+    material_code   TEXT,
+    quantity        REAL,
+    unit            TEXT,
+    size_length_expr TEXT,
+    size_width_expr  TEXT,
+    size_height_expr TEXT,
+    length_mm       REAL,
+    width_mm        REAL,
+    height_mm       REAL,
+    size_source_json TEXT,
+    status          TEXT NOT NULL DEFAULT 'computed' CHECK (status IN (
+                        'computed', 'needs_input', 'locked')),
+    missing_variables TEXT,
+    is_optional     INTEGER NOT NULL DEFAULT 0 CHECK (is_optional IN (0, 1)),
+    locked          INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    locked_by       TEXT,
+    locked_at       TEXT,
+    note            TEXT,
+    updated_at      TEXT,
+    PRIMARY KEY (project_id, requirement_no, bom_category, item_key)
+);
+CREATE INDEX IF NOT EXISTS ix_packaging_bom_status ON wip_packaging_bom_item(project_id, requirement_no, status);
+
+
 -- =========================================================================
 -- L3 · 评估结果(冻结、可分发)
 -- =========================================================================
