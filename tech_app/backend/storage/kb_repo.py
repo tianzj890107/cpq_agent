@@ -97,6 +97,19 @@ def _table(name: str) -> list[dict]:
     return [dict(row) for row in (_snapshot().get("tables") or {}).get(name) or []]
 
 
+def _industry_visible(row: dict, industry: Optional[str]) -> bool:
+    """行业可见性（唯一口径，见 docs/specs/packaging-knowledge-base-mock-seed.md 2.4）。
+
+    `industry` 为空 / None → 不过滤，行为与加行业列之前逐字一致；
+    传了行业 → 只看 `row.industry` 为空/NULL（通用，任何行业都可见）或等于该行业的行。
+    快照缺 `industry` 键的老行按通用处理（不抛错）。绝不跨行业回落。
+    """
+    if not industry:
+        return True
+    value = str(row.get("industry") or "").strip()
+    return not value or value == industry
+
+
 # -------------------------------------------------------------------------- #
 # 内存里的 SQL 口径(SQLite 怎么写,这里就怎么算)
 # -------------------------------------------------------------------------- #
@@ -243,6 +256,7 @@ def list_components(
     lifecycle: str = "active",
     keyword: str = "",
     limit: int = 200,
+    industry: Optional[str] = None,
 ) -> list[dict]:
     pattern = f"%{keyword}%" if keyword else ""
     rows: list[dict] = []
@@ -250,6 +264,8 @@ def list_components(
         if lifecycle and row.get("lifecycle") != lifecycle:
             continue
         if category and row.get("category") != category:
+            continue
+        if not _industry_visible(row, industry):
             continue
         if pattern and not (_like(row.get("name"), pattern)
                             or _like(row.get("component_code"), pattern)
@@ -263,7 +279,8 @@ def list_components(
 # ========================================================================== #
 # 零部件推荐:三级漏斗(确定性)
 # ========================================================================== #
-def recommend_components(part: dict, *, limit: int = 5, category: Optional[str] = None) -> list[dict]:
+def recommend_components(part: dict, *, limit: int = 5, category: Optional[str] = None,
+                         industry: Optional[str] = None) -> list[dict]:
     """给一个拆解出的零件推荐可复用的库内零部件。
 
     part 形如 models/ir.py::Part 的 dict:{name, features: [...], material: {...}},
@@ -274,7 +291,7 @@ def recommend_components(part: dict, *, limit: int = 5, category: Optional[str] 
     part_params = dict(part.get("params") or {})
     material_code = part.get("material_code")
 
-    candidates = list_components(category=category, limit=500)
+    candidates = list_components(category=category, limit=500, industry=industry)
     scored: list[dict] = []
     for comp in candidates:
         env = _envelope_score(envelope, comp)
@@ -516,11 +533,15 @@ def get_material(material_code: str) -> Optional[dict]:
     return row
 
 
-def list_materials(*, category: Optional[str] = None, keyword: str = "") -> list[dict]:
+def list_materials(*, category: Optional[str] = None, keyword: str = "",
+                   industry: Optional[str] = None) -> list[dict]:
+    """物料主数据。industry 为空不过滤；传了行业只看该行业 + 通用行（Spec 2.4）。"""
     pattern = f"%{keyword}%" if keyword else ""
     rows: list[dict] = []
     for row in _table("kb_material"):
         if row.get("status") != "active":
+            continue
+        if not _industry_visible(row, industry):
             continue
         if category and row.get("category") != category:
             continue
@@ -540,7 +561,8 @@ def add_material_price(price: dict) -> int:
 
 
 def current_price(material_code: str, *, at: Optional[str] = None,
-                  price_type: Optional[str] = None) -> Optional[dict]:
+                  price_type: Optional[str] = None,
+                  industry: Optional[str] = None) -> Optional[dict]:
     """取指定时点有效的价格。成本测算必须带上返回的 price_id 以便复现。
 
     排序口径:**最新的价格优先**,同一天的多条再按可信度取。
@@ -548,6 +570,13 @@ def current_price(material_code: str, *, at: Optional[str] = None,
     半年后的最新行情,材料涨跌完全反映不到测算里。
     要锁定某一类价格(如只认合同价),显式传 price_type。
     """
+    if industry:
+        # 价格表本身没有行业列，行业由父表 kb_material 继承：父表查不到、或父表不属
+        # 于该行业（且非通用）时直接返回 None —— 绝不拿同编码的别的行业价格顶上。
+        parent = next((r for r in _table("kb_material")
+                       if r.get("material_code") == material_code), None)
+        if not parent or not _industry_visible(parent, industry):
+            return None
     moment = at or db.now()
     rows: list[dict] = []
     for row in _table("kb_material_price"):
@@ -568,12 +597,14 @@ def current_price(material_code: str, *, at: Optional[str] = None,
 # 费率 & 系数
 # ========================================================================== #
 def effective_rate(rate_type: str, *, scope_type: str = "global", scope_ref: Optional[str] = None,
-                   at: Optional[str] = None) -> Optional[dict]:
-    """按作用域取费率;指定作用域没有时回退到 global。"""
+                   at: Optional[str] = None, industry: Optional[str] = None) -> Optional[dict]:
+    """按作用域取费率;指定作用域没有时回退到 global。industry 见 _industry_visible。"""
     moment = at or db.now()
     rows: list[dict] = []
     for row in _table("kb_cost_rate"):
         if row.get("rate_type") != rate_type or row.get("scope_type") != scope_type:
+            continue
+        if not _industry_visible(row, industry):
             continue
         if scope_ref is not None and row.get("scope_ref") != scope_ref:
             continue
@@ -586,15 +617,18 @@ def effective_rate(rate_type: str, *, scope_type: str = "global", scope_ref: Opt
     hit = ordered[0] if ordered else None
     if hit or scope_type == "global":
         return hit
-    return effective_rate(rate_type, scope_type="global", at=moment)
+    return effective_rate(rate_type, scope_type="global", at=moment, industry=industry)
 
 
 def effective_factor(factor_type: str, *, at: Optional[str] = None,
-                     scope: Optional[str] = None) -> Optional[dict]:
+                     scope: Optional[str] = None,
+                     industry: Optional[str] = None) -> Optional[dict]:
     moment = at or db.now()
     rows: list[dict] = []
     for row in _table("kb_cost_factor"):
         if row.get("factor_type") != factor_type:
+            continue
+        if not _industry_visible(row, industry):
             continue
         if not _le(row.get("effective_from"), moment):
             continue
@@ -723,9 +757,11 @@ def get_route(route_code: str, *, expand: bool = True) -> Optional[dict]:
 
 
 def recommend_routes(*, category: Optional[str] = None, material_category: Optional[str] = None,
-                     batch_size: Optional[int] = None) -> list[dict]:
-    """按零件类别/材料类别/批量召回工艺路线模板,最匹配的排前面。"""
-    routes = _sort_rows([r for r in _table("kb_process_route") if r.get("status") == "active"],
+                     batch_size: Optional[int] = None,
+                     industry: Optional[str] = None) -> list[dict]:
+    """按零件类别/材料类别/批量召回工艺路线模板,最匹配的排前面。industry 见 _industry_visible。"""
+    routes = _sort_rows([r for r in _table("kb_process_route")
+                         if r.get("status") == "active" and _industry_visible(r, industry)],
                         ("route_code", "asc"))
     scored: list[dict] = []
     for route in routes:
@@ -833,6 +869,38 @@ def match_suppliers(requirement: dict) -> list[dict]:
 # ========================================================================== #
 # 标准件
 # ========================================================================== #
+# ========================================================================== #
+# 包装专用查询（包装第 3 批；都只读快照，行业固定 packaging）
+# 口径见 docs/specs/packaging-knowledge-base-mock-seed.md 2.5。示例数据不参与计算。
+# ========================================================================== #
+def packaging_box_types() -> list[dict]:
+    """全部包装盒型（按编码升序）。"""
+    return _sort_rows(_table("kb_packaging_box_type"), ("box_type_code", "asc"))
+
+
+def packaging_part_templates(box_type_code: str) -> list[dict]:
+    """某个盒型的部件构成模板（按部件编码升序）。"""
+    return _sort_rows([r for r in _table("kb_packaging_part_template")
+                       if r.get("box_type_code") == box_type_code],
+                      ("part_code", "asc"))
+
+
+def packaging_process_templates(*, box_type_code: Optional[str] = None,
+                                part_code: Optional[str] = None) -> list[dict]:
+    """包装工艺路线模板；可按盒型/部件过滤（按盒型、部件、工序号升序）。"""
+    rows = _table("kb_packaging_process_template")
+    if box_type_code is not None:
+        rows = [r for r in rows if r.get("box_type_code") == box_type_code]
+    if part_code is not None:
+        rows = [r for r in rows if r.get("part_code") == part_code]
+    return _sort_rows(rows, ("box_type_code", "asc"), ("part_code", "asc"), ("seq", "asc"))
+
+
+def packaging_insert_accessories() -> list[dict]:
+    """内托与配件库全量（按编码升序）。"""
+    return _sort_rows(_table("kb_packaging_insert_accessory"), ("accessory_code", "asc"))
+
+
 def save_standard_part(part: dict) -> str:
     row = dict(part)
     row.setdefault("std_id", _uid("STD"))

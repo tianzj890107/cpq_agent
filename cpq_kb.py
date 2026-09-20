@@ -56,6 +56,14 @@ KB_TABLES = (
     "kb_supplier_capability",
     "kb_cost_rate",
     "kb_cost_factor",
+    # 包装扩展表（包装第 3 批）；前 20 张的名字与顺序是快照契约，不得变动。
+    "kb_packaging_box_type",
+    "kb_packaging_part_template",
+    "kb_packaging_process_template",
+    "kb_packaging_insert_accessory",
+    "kb_packaging_cost_formula",
+    "kb_packaging_logistics_rule",
+    "kb_packaging_match_weight",
 )
 
 # 每张表的业务主键（ON CONFLICT 的目标）。取值与 da_schema.sql 的
@@ -81,6 +89,13 @@ KB_KEYS = {
     "kb_supplier_capability": ("cap_id",),
     "kb_cost_rate": ("rate_code",),
     "kb_cost_factor": ("factor_code",),
+    "kb_packaging_box_type": ("box_type_code",),
+    "kb_packaging_part_template": ("part_code",),
+    "kb_packaging_process_template": ("box_type_code", "part_code", "seq"),
+    "kb_packaging_insert_accessory": ("accessory_code",),
+    "kb_packaging_cost_formula": ("formula_code",),
+    "kb_packaging_logistics_rule": ("rule_code",),
+    "kb_packaging_match_weight": ("dimension",),
 }
 
 # 单项也必须写成 1-元组 ("x",)：少了那个逗号就退化成字符串，ON CONFLICT ("c","o",...)
@@ -115,7 +130,8 @@ _DDL_TEMPLATE = [
     owner               text,
     created_by          text,
     created_at          text,
-    updated_at          text
+    updated_at          text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_component_param (
     param_id        bigserial PRIMARY KEY,
@@ -187,13 +203,15 @@ _DDL_TEMPLATE = [
     note                text,
     status              text NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'deprecated')),
+    industry            text,  -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
     UNIQUE (standard_no, designation)
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_equipment_class (
     class_code      text PRIMARY KEY,                  -- EQC-CNC-VMC
     name            text NOT NULL,
     category        text,
-    note            text
+    note            text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_equipment (
     equipment_id            text PRIMARY KEY,
@@ -211,7 +229,8 @@ _DDL_TEMPLATE = [
     status                  text NOT NULL DEFAULT 'active'
                             CHECK (status IN ('active', 'maintenance', 'retired')),
     note                    text,
-    updated_at              text
+    updated_at              text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_process_step (
     step_code               text PRIMARY KEY,          -- PS-MILL-ROUGH
@@ -239,7 +258,8 @@ _DDL_TEMPLATE = [
                             CHECK (status IN ('draft', 'active', 'deprecated')),
     note                    text,
     created_at              text,
-    updated_at              text
+    updated_at              text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_process_param_template (
     tpl_id          bigserial PRIMARY KEY,
@@ -266,7 +286,8 @@ _DDL_TEMPLATE = [
     status              text NOT NULL DEFAULT 'active'
                         CHECK (status IN ('draft', 'active', 'deprecated')),
     created_at          text,
-    updated_at          text
+    updated_at          text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_process_route_step (
     route_code      text NOT NULL REFERENCES {{schema}}.kb_process_route(route_code) ON DELETE CASCADE,
@@ -287,7 +308,8 @@ _DDL_TEMPLATE = [
     sampling_rule       text,
     acceptance_criteria text,
     cost_per_item       double precision,
-    note                text
+    note                text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_material (
     material_code       text PRIMARY KEY,              -- MAT-STL-Q235
@@ -305,7 +327,8 @@ _DDL_TEMPLATE = [
                         CHECK (status IN ('draft', 'active', 'deprecated')),
     note                text,
     created_at          text,
-    updated_at          text
+    updated_at          text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_material_property (
     prop_id         bigserial PRIMARY KEY,
@@ -348,7 +371,8 @@ _DDL_TEMPLATE = [
     status          text NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'blacklist', 'inactive')),
     note            text,
-    updated_at      text
+    updated_at      text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_supplier_capability (
     cap_id          bigserial PRIMARY KEY,
@@ -380,7 +404,9 @@ _DDL_TEMPLATE = [
     effective_to    text,
     source          text,
     approved_by     text,
-    note            text
+    note            text,
+    industry            text,  -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
+    minimum_charge  double precision   -- 最低收费（元）；NULL/0 = 不设门槛
 );""",
     f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_cost_factor (
     factor_code     text PRIMARY KEY,
@@ -393,7 +419,167 @@ _DDL_TEMPLATE = [
     effective_from  text NOT NULL,
     effective_to    text,
     source          text,
-    note            text
+    note            text,
+    industry            text   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_box_type (
+    box_type_code         text PRIMARY KEY,
+    name                  text NOT NULL,
+    name_en               text,
+    family                text,
+    size_l_min            double precision,
+    size_l_max            double precision,
+    size_w_min            double precision,
+    size_w_max            double precision,
+    size_h_min            double precision,
+    size_h_max            double precision,
+    fit_clearance         double precision,
+    grey_board_thickness  text,
+    face_paper_gsm        text,
+    closure_type          text,
+    part_count            bigint,
+    v_groove              text,
+    hand_mount_ratio      text,
+    standard_seconds      double precision,
+    automation_level      text,
+    moq                   bigint,
+    sample_lead_days      bigint,
+    mass_lead_days        bigint,
+    load_kg               double precision,
+    standard_cost         double precision,
+    standardization_level text,
+    applicable_industries text,
+    business_status       text,
+    industry              text NOT NULL DEFAULT 'packaging',
+    source                text,
+    version               text,
+    effective_from        text,
+    status                text NOT NULL DEFAULT 'active',
+    created_at            text,
+    updated_at            text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_part_template (
+    part_code          text PRIMARY KEY,
+    box_type_code      text REFERENCES {{schema}}.kb_packaging_box_type(box_type_code) ON DELETE CASCADE,
+    seq                bigint,
+    name               text,
+    component          text,
+    material           text,
+    quantity           bigint,
+    size_expr          text,
+    size_length_expr   text,
+    size_width_expr    text,
+    size_height_expr   text,
+    sample_value       text,
+    key_process        text,
+    is_optional        bigint NOT NULL DEFAULT 0 CHECK (is_optional IN (0, 1)),
+    note               text,
+    industry           text NOT NULL DEFAULT 'packaging',
+    source             text,
+    version            text,
+    effective_from     text,
+    status             text NOT NULL DEFAULT 'active',
+    created_at         text,
+    updated_at         text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_process_template (
+    box_type_code      text NOT NULL REFERENCES {{schema}}.kb_packaging_box_type(box_type_code) ON DELETE CASCADE,
+    part_code          text NOT NULL,
+    seq                bigint NOT NULL,
+    step_name          text,
+    workstation        text,
+    work_content       text,
+    standard_seconds   double precision,
+    automation         text,
+    control_point      text,
+    parallel_ok        bigint,
+    industry           text NOT NULL DEFAULT 'packaging',
+    source             text,
+    version            text,
+    effective_from     text,
+    status             text NOT NULL DEFAULT 'active',
+    created_at         text,
+    updated_at         text,
+    PRIMARY KEY (box_type_code, part_code, seq)
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_insert_accessory (
+    accessory_code      text PRIMARY KEY,
+    name                text NOT NULL,
+    material            text,
+    thickness_spec      text,
+    forming             text,
+    tooling_cost        double precision,
+    unit_cost_min       double precision,
+    unit_cost_max       double precision,
+    eco_attr            text,
+    applicable_category text,
+    moq                 bigint,
+    note                text,
+    industry            text NOT NULL DEFAULT 'packaging',
+    source              text,
+    version             text,
+    effective_from      text,
+    status              text NOT NULL DEFAULT 'active',
+    created_at          text,
+    updated_at          text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_cost_formula (
+    formula_code        text PRIMARY KEY,
+    cost_category       text,
+    process_code        text,
+    rate_code           text,
+    expression          text,
+    minimum_charge      double precision,
+    quantity_basis      text,
+    amortization_basis  text,
+    loss_scope          text,
+    rounding            text,
+    source_ref          text,
+    formula_version     text,
+    review_status       text NOT NULL DEFAULT 'draft'
+                        CHECK (review_status IN ('draft', 'reviewed', 'retired')),
+    industry            text NOT NULL DEFAULT 'packaging',
+    source              text,
+    version             text,
+    effective_from      text,
+    status              text NOT NULL DEFAULT 'active',
+    created_at          text,
+    updated_at          text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_logistics_rule (
+    rule_code          text PRIMARY KEY,
+    units_per_carton   bigint,
+    carton_size        text,
+    pallet_qty         bigint,
+    units_per_pallet   bigint,
+    shipping_mode      text,
+    min_freight        double precision,
+    loading_rate       text,
+    quantity_tier      text,
+    refund_condition   text,
+    note               text,
+    industry           text NOT NULL DEFAULT 'packaging',
+    source             text,
+    version            text,
+    effective_from     text,
+    status             text NOT NULL DEFAULT 'active',
+    created_at         text,
+    updated_at         text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_match_weight (
+    dimension          text PRIMARY KEY
+                       CHECK (dimension IN ('size_range', 'fit_clearance', 'face_paper_gsm',
+                                            'closure_type', 'v_groove')),
+    weight             double precision,
+    hard_gate          bigint,
+    rule_expr          text,
+    industry           text NOT NULL DEFAULT 'packaging',
+    source             text,
+    version            text,
+    effective_from     text,
+    status             text NOT NULL DEFAULT 'active',
+    created_at         text,
+    updated_at         text
 );"""
 ]
 
@@ -404,8 +590,22 @@ _KB_META_DDL = (
     " updated_at timestamptz DEFAULT now())"
 )
 # 增量列：老库上 CREATE TABLE IF NOT EXISTS 不会补列，必须显式 ALTER（幂等）。
-# 本批表结构随 da_schema.sql 冻结，暂时为空；保留这条通路给后续加列。
-_ADDED_COLUMNS: tuple = ()
+# 包装第 3 批：11 张行业主体表补 industry（空 = 通用，三行业默认行为不变），
+# 费率库另补 minimum_charge（包装费率的最低收费）。
+_ADDED_COLUMNS: tuple = (
+    ("kb_component", "industry", "text"),
+    ("kb_standard_part", "industry", "text"),
+    ("kb_equipment_class", "industry", "text"),
+    ("kb_equipment", "industry", "text"),
+    ("kb_process_step", "industry", "text"),
+    ("kb_process_route", "industry", "text"),
+    ("kb_inspection_item", "industry", "text"),
+    ("kb_material", "industry", "text"),
+    ("kb_supplier", "industry", "text"),
+    ("kb_cost_rate", "industry", "text"),
+    ("kb_cost_factor", "industry", "text"),
+    ("kb_cost_rate", "minimum_charge", "double precision"),
+)
 
 
 def _q(name: str) -> str:

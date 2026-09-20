@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS kb_component (
     owner               TEXT,
     created_by          TEXT,
     created_at          TEXT,
-    updated_at          TEXT
+    updated_at          TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 CREATE INDEX IF NOT EXISTS ix_component_category  ON kb_component(category, lifecycle);
 CREATE INDEX IF NOT EXISTS ix_component_material  ON kb_component(default_material_code);
@@ -148,6 +149,7 @@ CREATE TABLE IF NOT EXISTS kb_standard_part (
     note                TEXT,
     status              TEXT NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'deprecated')),
+    industry            TEXT,  -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
     UNIQUE (standard_no, designation)
 );
 
@@ -161,7 +163,8 @@ CREATE TABLE IF NOT EXISTS kb_equipment_class (
     class_code      TEXT PRIMARY KEY,                  -- EQC-CNC-VMC
     name            TEXT NOT NULL,
     category        TEXT,
-    note            TEXT
+    note            TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 
 -- 4.4 设备资源库(现有 data/equipment.json 的扩展目标)
@@ -181,7 +184,8 @@ CREATE TABLE IF NOT EXISTS kb_equipment (
     status                  TEXT NOT NULL DEFAULT 'active'
                             CHECK (status IN ('active', 'maintenance', 'retired')),
     note                    TEXT,
-    updated_at              TEXT
+    updated_at              TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 CREATE INDEX IF NOT EXISTS ix_equipment_class ON kb_equipment(equipment_class, status);
 
@@ -212,7 +216,8 @@ CREATE TABLE IF NOT EXISTS kb_process_step (
                             CHECK (status IN ('draft', 'active', 'deprecated')),
     note                    TEXT,
     created_at              TEXT,
-    updated_at              TEXT
+    updated_at              TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 CREATE INDEX IF NOT EXISTS ix_step_type ON kb_process_step(process_type, status);
 
@@ -244,7 +249,8 @@ CREATE TABLE IF NOT EXISTS kb_process_route (
     status              TEXT NOT NULL DEFAULT 'active'
                         CHECK (status IN ('draft', 'active', 'deprecated')),
     created_at          TEXT,
-    updated_at          TEXT
+    updated_at          TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 
 CREATE TABLE IF NOT EXISTS kb_process_route_step (
@@ -268,7 +274,8 @@ CREATE TABLE IF NOT EXISTS kb_inspection_item (
     sampling_rule       TEXT,
     acceptance_criteria TEXT,
     cost_per_item       REAL,
-    note                TEXT
+    note                TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 
 
@@ -293,7 +300,8 @@ CREATE TABLE IF NOT EXISTS kb_material (
                         CHECK (status IN ('draft', 'active', 'deprecated')),
     note                TEXT,
     created_at          TEXT,
-    updated_at          TEXT
+    updated_at          TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 CREATE INDEX IF NOT EXISTS ix_material_category ON kb_material(category, status);
 CREATE INDEX IF NOT EXISTS ix_material_grade    ON kb_material(grade);
@@ -345,7 +353,8 @@ CREATE TABLE IF NOT EXISTS kb_supplier (
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'blacklist', 'inactive')),
     note            TEXT,
-    updated_at      TEXT
+    updated_at      TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 
 CREATE TABLE IF NOT EXISTS kb_supplier_capability (
@@ -381,7 +390,9 @@ CREATE TABLE IF NOT EXISTS kb_cost_rate (
     effective_to    TEXT,
     source          TEXT,
     approved_by     TEXT,
-    note            TEXT
+    note            TEXT,
+    industry            TEXT,  -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
+    minimum_charge  REAL   -- 最低收费（元）；NULL/0 = 不设门槛
 );
 CREATE INDEX IF NOT EXISTS ix_rate_lookup ON kb_cost_rate(rate_type, scope_type, scope_ref);
 
@@ -397,9 +408,191 @@ CREATE TABLE IF NOT EXISTS kb_cost_factor (
     effective_from  TEXT NOT NULL,
     effective_to    TEXT,
     source          TEXT,
-    note            TEXT
+    note            TEXT,
+    industry            TEXT   -- 行业键；空/NULL = 通用（任何行业可见），见 docs/specs/packaging-knowledge-base-mock-seed.md 2.1
 );
 
+-- =========================================================================
+-- L0 · 知识库:包装扩展（包装第 3 批）
+-- 口径见 docs/specs/packaging-knowledge-base-mock-seed.md 2.2；主键必须与
+-- cpq_kb.KB_KEYS 逐字一致（导入器幂等 upsert 依赖主键）。
+-- =========================================================================
+
+-- 盒型库（样例工作簿 Sheet 01盒型）
+CREATE TABLE IF NOT EXISTS kb_packaging_box_type (
+    box_type_code       TEXT PRIMARY KEY,              -- YT-RB-01001-A
+    name                TEXT NOT NULL,
+    name_en             TEXT,
+    family              TEXT,                          -- 01天地盖/02书型盒...
+    size_l_min          REAL,                          -- 可生产尺寸区间（非某一订单）
+    size_l_max          REAL,
+    size_w_min          REAL,
+    size_w_max          REAL,
+    size_h_min          REAL,
+    size_h_max          REAL,
+    fit_clearance       REAL,                          -- 配合间隙 mm（单边）
+    grey_board_thickness TEXT,                         -- 2.0（1.5/2.5可选）
+    face_paper_gsm      TEXT,                          -- 157-250
+    closure_type        TEXT,
+    part_count          INTEGER,
+    v_groove            TEXT,                          -- 是/否
+    hand_mount_ratio    TEXT,                          -- 手裱比例
+    standard_seconds    REAL,                          -- 标准工时（秒/个）
+    automation_level    TEXT,
+    moq                 INTEGER,                       -- MOQ(个)
+    sample_lead_days    INTEGER,                       -- 打样天数
+    mass_lead_days      INTEGER,                       -- 量产天数
+    load_kg             REAL,                          -- 承重 kg
+    standard_cost       REAL,                          -- 参考规格标准成本（元）
+    standardization_level TEXT,                        -- 标准共用/半定制/全定制
+    applicable_industries TEXT,
+    business_status     TEXT,                          -- 样例工作簿的「状态」列（标准/试用）
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pkg_box_family ON kb_packaging_box_type(family, status);
+
+-- 部件构成模板（Sheet 02-盒型-部件构成）：尺寸公式是参数化配置引擎的核心
+CREATE TABLE IF NOT EXISTS kb_packaging_part_template (
+    part_code           TEXT PRIMARY KEY,              -- RB01001-P01
+    box_type_code       TEXT REFERENCES kb_packaging_box_type(box_type_code) ON DELETE CASCADE,
+    seq                 INTEGER,
+    name                TEXT,
+    component           TEXT,                          -- 上盖/下底/面纸/内托/配件
+    material            TEXT,
+    quantity            INTEGER,
+    size_expr           TEXT,                          -- 原式，如 L+4t+2c × W+4t+2c
+    size_length_expr    TEXT,                          -- 拆项（参数化展开用）
+    size_width_expr     TEXT,
+    size_height_expr    TEXT,
+    sample_value        TEXT,                          -- 示例值(mm)
+    key_process         TEXT,
+    is_optional         INTEGER NOT NULL DEFAULT 0,
+    note                TEXT,
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pkg_part_box ON kb_packaging_part_template(box_type_code, seq);
+
+-- 工艺路线与标准工时（Sheet 03-盒型+部件-工艺路线与工时）
+CREATE TABLE IF NOT EXISTS kb_packaging_process_template (
+    box_type_code       TEXT NOT NULL REFERENCES kb_packaging_box_type(box_type_code) ON DELETE CASCADE,
+    part_code           TEXT NOT NULL,
+    seq                 INTEGER NOT NULL,              -- 工序号 10/20/30...
+    step_name           TEXT,
+    workstation         TEXT,
+    work_content        TEXT,
+    standard_seconds    REAL,
+    automation          TEXT,                          -- 自动/手工
+    control_point       TEXT,
+    parallel_ok         INTEGER,                       -- 可并行 1/0
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT,
+    PRIMARY KEY (box_type_code, part_code, seq)
+);
+CREATE INDEX IF NOT EXISTS ix_pkg_process_part ON kb_packaging_process_template(part_code, seq);
+
+-- 内托与配件库（Sheet 04-内托与配件库）
+CREATE TABLE IF NOT EXISTS kb_packaging_insert_accessory (
+    accessory_code      TEXT PRIMARY KEY,              -- YT-IN-001 / YT-AC-001
+    name                TEXT NOT NULL,
+    material            TEXT,
+    thickness_spec      TEXT,                          -- 常用厚度(mm)
+    forming             TEXT,                          -- 成型方式
+    tooling_cost        REAL,                          -- 模具费(元)
+    unit_cost_min       REAL,                          -- 单件成本区间
+    unit_cost_max       REAL,
+    eco_attr            TEXT,                          -- 环保属性
+    applicable_category TEXT,                          -- 适配品类
+    moq                 INTEGER,
+    note                TEXT,
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
+
+-- 成本公式占位（第 7 批求值；本批 review_status='draft'，不参与任何计算）
+CREATE TABLE IF NOT EXISTS kb_packaging_cost_formula (
+    formula_code        TEXT PRIMARY KEY,
+    cost_category       TEXT,
+    process_code        TEXT,
+    rate_code           TEXT,
+    expression          TEXT,
+    minimum_charge      REAL,                          -- 最低收费（元）；0 = 不设门槛
+    quantity_basis      TEXT,
+    amortization_basis  TEXT,
+    loss_scope          TEXT,
+    rounding            TEXT,
+    source_ref          TEXT,
+    formula_version     TEXT,
+    review_status       TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (review_status IN ('draft', 'reviewed', 'retired')),
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
+
+-- 物流规则
+CREATE TABLE IF NOT EXISTS kb_packaging_logistics_rule (
+    rule_code           TEXT PRIMARY KEY,
+    units_per_carton    INTEGER,
+    carton_size         TEXT,
+    pallet_qty          INTEGER,
+    units_per_pallet    INTEGER,
+    shipping_mode       TEXT,
+    min_freight         REAL,
+    loading_rate        TEXT,
+    quantity_tier       TEXT,
+    refund_condition    TEXT,
+    note                TEXT,
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
+
+-- 盒型匹配权重（第 4 批五维匹配的权重与硬门槛；dimension 取值闭集）
+CREATE TABLE IF NOT EXISTS kb_packaging_match_weight (
+    dimension           TEXT PRIMARY KEY
+                        CHECK (dimension IN ('size_range', 'fit_clearance', 'face_paper_gsm',
+                                             'closure_type', 'v_groove')),
+    weight              REAL,
+    hard_gate           INTEGER,                       -- 1 = 硬门槛（不满足直接淘汰）
+    rule_expr           TEXT,
+    industry            TEXT NOT NULL DEFAULT 'packaging',
+    source              TEXT,
+    version             TEXT,
+    effective_from      TEXT,
+    status              TEXT NOT NULL DEFAULT 'active',
+    created_at          TEXT,
+    updated_at          TEXT
+);
 
 -- =========================================================================
 -- L1 · 项目输入(数据源侧,只读)

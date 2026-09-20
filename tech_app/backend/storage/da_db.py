@@ -28,6 +28,21 @@ SCHEMA_VERSION = "2"
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # v2: 需求单记录选用的行业模板(半导体/电池/电器)。
     ("src_requirement", "industry", "TEXT NOT NULL DEFAULT 'semiconductor'"),
+    # 包装第 3 批: 行业主体表补行业键(空/NULL = 通用, 三行业默认行为不变)。
+    # 与 cpq_kb._ADDED_COLUMNS 一一对应, 两侧老库补列口径必须一致。
+    ("kb_component", "industry", "TEXT"),
+    ("kb_standard_part", "industry", "TEXT"),
+    ("kb_equipment_class", "industry", "TEXT"),
+    ("kb_equipment", "industry", "TEXT"),
+    ("kb_process_step", "industry", "TEXT"),
+    ("kb_process_route", "industry", "TEXT"),
+    ("kb_inspection_item", "industry", "TEXT"),
+    ("kb_material", "industry", "TEXT"),
+    ("kb_supplier", "industry", "TEXT"),
+    ("kb_cost_rate", "industry", "TEXT"),
+    ("kb_cost_factor", "industry", "TEXT"),
+    # 费率库另补最低收费(包装费率的最低收费门槛)。
+    ("kb_cost_rate", "minimum_charge", "REAL"),
 )
 
 _local = threading.local()
