@@ -1,0 +1,46 @@
+{
+  "approval": {
+    "approved_at": "2026-09-21T18:00:00+08:00",
+    "approved_by": "zhangzhen",
+    "note": "统计字段由 tech_app/tools/dwg_sample_e2e.py 于 2026-09-21 机器采集（libredwg 0.14 / dwg2dxf，主转换器、未回退）；业务结论（刀线/压痕线图层、盒型候选、关键尺寸、待确认项）**留空待人工复核**，不许由脚本编造。审批人记的是本批需求方授权，业务复核人另填 reviewed_by。"
+  },
+  "artifacts": {
+    "dxf_sha256": "01bda52cd6461afdaf0d499cc209bf853a4f3c9ec2819f488531c3e53de6fa80",
+    "preview_non_blank": true,
+    "preview_sha256": "a80cb58eef06a0c759b0b1e135ee0a439d0579cb9a959a11f46735ae32ce1129"
+  },
+  "box_candidates": [],
+  "converter": {
+    "fallback_used": false,
+    "name": "libredwg",
+    "role": "primary",
+    "version": "0.14"
+  },
+  "crease_layers": [],
+  "cut_layers": [],
+  "detected_dwg_version": "AC1027",
+  "forbidden_fields": [
+    "material",
+    "paper_gsm",
+    "board_thickness",
+    "surface_treatment",
+    "unit_price",
+    "quantity"
+  ],
+  "golden_version": "2026-09-21.1",
+  "key_dimensions": [],
+  "required_unresolved": [],
+  "reviewed_at": "",
+  "reviewed_by": "",
+  "sample_filename": "酒盒.dwg",
+  "source_sha256": "0991c8b0a9646d1fea6571d2ae6155923351c05ca2aeeb6ed544ef19df93f3e0",
+  "stats": {
+    "block_total": 0,
+    "dimension_total": 316,
+    "entity_total": 6711,
+    "layer_total": 8,
+    "text_total": 127
+  },
+  "three_d_status": "3d_absent",
+  "unit_status": ""
+}

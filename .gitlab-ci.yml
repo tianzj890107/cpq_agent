@@ -37,6 +37,28 @@ python_contract:
   script:
     - python -m unittest discover -s tests -p 'test_*.py'
     - python -m py_compile cpq_suite_server.py cpq_auth.py cpq_wf.py cpq_tech_bridge.py
+# --------------------------------------------------------------------------- #
+# 真实样本 DWG 端到端冒烟（DWG 支持第 6 批 Spec §5 契约 E）
+#
+# 与 python_contract 分开：这里会真的调用 CAD 转换器转两份客户样本（酒盒.dwg /
+# 圆盘盒.dwg），耗时、依赖真实环境与仓外样本，因此**必须人工触发**、不许
+# allow_failure，也绝不进 python_contract（那边只跑 L1–L3，缺前置条件时 L4 自行 skip）。
+# 样本不入库：跑之前把那两份 DWG 放到运行器上的 `裕同包装项目-待开发/`，或设
+# DWG_ACCEPTANCE_SAMPLES_DIR 指向它们。
+# --------------------------------------------------------------------------- #
+dwg_real_samples:
+  stage: test
+  image: python:3.10-slim
+  extends: .pip_base
+  when: manual
+  allow_failure: false
+  variables:
+    CPQ_DWG_REAL_SAMPLES: "1"
+  script:
+    - python tech_app/tools/dwg_sample_e2e.py --sample "裕同包装项目-待开发/酒盒.dwg" --out /tmp/dwg-l4/wine --json
+    - python tech_app/tools/dwg_sample_e2e.py --sample "裕同包装项目-待开发/圆盘盒.dwg" --out /tmp/dwg-l4/round --json
+    - python tech_app/tools/dwg_acceptance_report.py --verify --json
+
 
 docker_build:
   stage: build

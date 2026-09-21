@@ -81,6 +81,7 @@ from .services import (
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
     cad_converter,
+    dwg_dispatch,
     step_import,
     summary as summary_svc, tasks, timeline, tree,
     versioning, vision, qwen_client, llm_client, model_lookup, requirement_pdf,
@@ -908,6 +909,21 @@ def cad_converter_capability():
     而不是留一句写死的「已安装」。返回的是**能力**，不含任何密钥或部署路径。
     """
     return cad_converter.capability()
+
+
+@app.get("/api/projects/{pid}/drawing-routing")
+def project_drawing_routing(pid: str, user: dict = Depends(current_user)):
+    """图纸 2D/3D 分流结论（Spec §2.3，只读）。
+
+    只回答"这份图现在怎么走"：不写盘、不改数据、不建任务；`project_access.can_read`
+    是这里的读权限口径，写权限与本路由无关（写入口沿用既有上传/解析）。
+    """
+    meta = store.load_meta(pid)
+    if not meta:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if not project_access.can_read(user, meta):
+        raise HTTPException(status_code=403, detail="无权访问该项目")
+    return dwg_dispatch.routing_view(pid)
 
 
 @app.get("/api/llm/settings")

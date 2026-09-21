@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional
 
 from ...time_utils import now_cst_str
 from .. import dxf_inspect, file_preflight
+from ..dwg_acceptance import acceptance as _acceptance_state
+from ..dwg_acceptance import support_claim as _acceptance_claim
 from . import persistence
 from .adapters.base import SOURCE_FILENAME, ConversionRequest, result_field
 from .adapters.fake import FakeAdapter
@@ -240,6 +242,42 @@ def list_adapters() -> List[str]:
     return names
 
 
+#: `capability()["three_d"]` 的键闭集（Spec §2.1）。
+THREE_D_STATUS_KEYS = ("declared", "supported", "available", "status", "reason")
+#: `three_d.status` 的闭集（Spec §2.1）。
+THREE_D_STATUS_VALUES = ("supported", "unsupported", "unavailable", "unknown")
+#: `capability()["acceptance"]` 的键闭集（Spec §3.1）。
+ACCEPTANCE_KEYS = ("present", "valid", "reason", "approved_by", "approved_at",
+                   "golden_version")
+
+
+def _three_d_segment(*, documented: bool, available: bool, provider: str) -> dict:
+    """把"这台机器能不能做三维"如实转述成四个状态（Spec §2.1）。
+
+    注意：这**不是**"这份图纸有没有三维"——那份结论在 `dwg_dispatch` 的六态里，
+    两张表不许互相推导。
+    """
+    if not available:
+        status, reason = "unavailable", "当前环境没有可用的 DWG 转换服务"
+    elif documented:
+        status, reason = "supported", "适配器声明支持导出三维中间格式"
+    else:
+        status, reason = "unsupported", "适配器声明不支持导出三维中间格式"
+    return {"declared": bool(documented), "supported": bool(documented),
+            "available": bool(available and documented), "status": status,
+            "reason": reason}
+
+
+def _acceptance_segment() -> dict:
+    """验收记录当前状态（现读；Spec §3.1）；读不到一律给稳定原因码。"""
+    try:
+        state = _acceptance_state()
+    except Exception:                                     # noqa: BLE001 - 只读查询不许抛
+        state = {"present": False, "valid": False, "reason": "missing_record",
+                 "approved_by": "", "approved_at": "", "golden_version": ""}
+    return {key: state.get(key) for key in ACCEPTANCE_KEYS}
+
+
 def capability(*, env: Optional[str] = None) -> dict:
     """本环境的 DWG 转换能力（Spec §2.1）。
 
@@ -279,6 +317,15 @@ def capability(*, env: Optional[str] = None) -> dict:
         message = str(file_preflight.STABLE_ERROR_CODES.get(error_code, {}).get("message")
                       or "当前环境尚未安装 CAD 转换服务，暂时无法解析 DWG")
 
+    # 声明推导（第 6 批 Spec §3.2）：装了转换器 ≠ 支持 DWG；只有验收记录有效才行。
+    claim = {"support_claim": "orchestration_only", "dwg_supported": False}
+    try:
+        claim = _acceptance_claim(adapter={"available": available, "simulated": simulated},
+                                  record_state=_acceptance_segment())
+    except Exception:                                     # noqa: BLE001 - 能力查询绝不许 500
+        claim = {"support_claim": ("conversion_available" if (available and not simulated)
+                                   else "orchestration_only"), "dwg_supported": False}
+
     return {
         "available": available,
         "simulated": simulated,
@@ -296,9 +343,12 @@ def capability(*, env: Optional[str] = None) -> dict:
         "dwg_conversion": bool(declaration.get("dwg_conversion")),
         "three_d_conversion": bool(declaration.get("three_d_conversion")),
         "env": env_name,
-        "support_claim": ("conversion_available" if (available and not simulated)
-                          else "orchestration_only"),
-        "dwg_supported": False,
+        # 三维能力是**声明**，不是"这份图纸有三维"（Spec §2.1 的两张表不许互相推导）。
+        "three_d": _three_d_segment(documented=bool(declaration.get("three_d_conversion")),
+                                    available=available, provider=provider),
+        "acceptance": _acceptance_segment(),
+        "support_claim": claim["support_claim"],
+        "dwg_supported": bool(claim["dwg_supported"]),
         "stable_error_code": "" if available else error_code,
         "message": message,
     }

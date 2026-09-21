@@ -1,0 +1,42 @@
+{
+  "converter": {
+    "fallback_used": false,
+    "name": "libredwg",
+    "role": "primary",
+    "version": "0.14"
+  },
+  "created_at": "2026-09-21T18:00:00+08:00",
+  "golden_version": "2026-09-21.1",
+  "note": "统计字段由 tech_app/tools/dwg_sample_e2e.py 于 2026-09-21 机器采集（libredwg 0.14 / dwg2dxf，主转换器、未回退）；业务结论（刀线/压痕线图层、盒型候选、关键尺寸、待确认项）**留空待人工复核**，不许由脚本编造。审批人记的是本批需求方授权，业务复核人另填 reviewed_by。",
+  "samples": {
+    "圆盘盒.dwg": {
+      "approved": true,
+      "detected_dwg_version": "AC1027",
+      "golden_file": "圆盘盒.json",
+      "source_sha256": "4c70ce7b3774c2a1803a942341a606c92758228cf982c3bf1016642be44a531b",
+      "stats": {
+        "block_total": 234,
+        "dimension_total": 141,
+        "entity_total": 3457,
+        "layer_total": 32,
+        "text_total": 87
+      },
+      "three_d_status": "3d_absent"
+    },
+    "酒盒.dwg": {
+      "approved": true,
+      "detected_dwg_version": "AC1027",
+      "golden_file": "酒盒.json",
+      "source_sha256": "0991c8b0a9646d1fea6571d2ae6155923351c05ca2aeeb6ed544ef19df93f3e0",
+      "stats": {
+        "block_total": 0,
+        "dimension_total": 316,
+        "entity_total": 6711,
+        "layer_total": 8,
+        "text_total": 127
+      },
+      "three_d_status": "3d_absent"
+    }
+  },
+  "source": "tech_app/tools/dwg_sample_e2e.py（真实转换，只读样本、只写临时目录）"
+}

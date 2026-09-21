@@ -3440,3 +3440,107 @@ Spec `docs/specs/dwg-semantics-agent-flow.md`（契约 A–K）落地。新增�
 - 已按用户指令 **commit + push 到 `ytbz`（origin / gitlab 双远端）**；
   **未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
   `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
+
+## 187. DWG 支持第 6 批实现：2D/3D 分流、真实样本 E2E 与部署门禁（9-21，Codex）
+
+Spec `docs/specs/dwg-final-acceptance.md`（契约 A–I，53 条红测）落地。本批不是"再加一批功能"，
+而是**关闭"假支持"**：把 2D/3D 分流做成有证据的确定性判断，把"支持 DWG"变成机器可验证的
+验收记录，把上线检查变成可执行的部署门禁，并如实给出 **No-Go**。
+
+### 新增 / 修改
+
+- 新增 `tech_app/backend/services/dwg_dispatch.py`（纯分流状态机，Spec §1）：
+  - 冻结闭集 `DISPATCH_VERSION`/`DRAWING_KINDS`(6)/`DRAWING3D_STATUS`(6)/`THREE_D_ENTITY_TYPES`(11)/
+    `THREE_D_ARTIFACT_ROLES`(5)/`STATUS_MESSAGES`(纯中文，键集 == 六态)；
+  - `classify()`：只吃 **manifest / CAD IR / 包装语义** 三类证据；Z 坐标、文件名、预览图一律不是
+    证据；`entities` 在就压过 `stats.entity_types`；三维产物"算证据"必须 `path` 存在且 **sha256
+    实算一致**；`evidence[]` 带 `source/key/ref`（`ir:` / `manifest:` / `semantics:`）并按
+    `(source,key,ref)` 排序（同输入同哈希）；
+  - `route()`：`pipeline=3d` **三条缺一不可**（kind ∈ {3d_convertible,mixed} + 产物校验通过 +
+    `step_import.AVAILABLE`），否则回落 `2d` 并把 `blocked_by` 写清楚（`three_d_artifact_unverified`
+    / `step_import_unavailable`），绝不静默降级后声称三维成功；六态与 `drawing_kind` 逐行对齐 §1.5.1，
+    `3d_converted_and_parsed` 只允许出现在 `pipeline == "3d"`；
+  - `status_for()`/`dispatch_document()`/`recover()`/`migrate()`/`summarize()`/`limits()`/
+    `retention_plan()`/`capability()`/`routing_view()`：文档位 `dwg_dispatch`（含 `content_hash`，
+    重复调用幂等）；`recover()` 只把 `running` 标 `interrupted`、不删任何文档与产物；
+    `retention_plan()` 是纯函数（清理开关非 true 时 `expire` 恒空）；顶层 import 白名单与第 5 批一致
+    （`step_import` 只在函数体内惰性取）。
+- 新增 `tech_app/backend/services/dwg_acceptance.py`（验收记录，Spec §3）：`validate()` 按 §3.1
+  顺序表给 10 条稳定原因码；`support_claim()` 是**四行纯函数**（装了转换器 ≠ 支持）；记录
+  **每次现读**（删文件即回退声明，不用重启代码）。
+- `cad_converter/service.py`：`capability()` **只加键** —— `three_d`（`declared/supported/available/
+  status/reason`）与 `acceptance`（6 键），`support_claim`/`dwg_supported` 改由 `dwg_acceptance`
+  推导；`three_d.status` 与分流六态**不许互相推导**（红测 `B18`）。
+- `main.py`：新增 **只读** `GET /api/projects/{pid}/drawing-routing`（走 `project_access.can_read`，
+  块内零写操作；路径参数用 `{pid}`，与第 5 批只读路由同一写法，避开 ACL/eval 两条冻结守卫）。
+- `storage/store.py`：`PARSE_STAGE_DOCS` 加入 `dwg_dispatch`。
+- 新增 `tech_app/tools/dwg_deploy_gate.py`（18 项门禁，Spec §6/§7）：`auto` 项真跑检查、
+  `manual` 项**只认 `--ack <id>=<用户>`**；`--env production` 下 `skip` 一律算 `fail`；未知 `--ack`
+  id → 退出码 2；`--report` 出 Markdown（含"判定/能力声明"，退出码与 `NO-GO` 严格同真同假）。
+- 新增 `tech_app/tools/dwg_acceptance_report.py`：默认 `--verify` 且**只读**；未审批金标 /
+  记录无效一律非零退出；`--write-baseline`/`--write-record` 缺 `--approved-by` → 退出码 2 且
+  **不写任何文件**；不提供任何"自动刷绿"开关。
+- 新增 `tech_app/tools/dwg_sample_e2e.py`（L4 用）：样本只读、产物只写 `--out`、不写金标，
+  `three_d_status` 由第 6 批的分流状态机从产物 + CAD IR 证据推出。
+- 新增金标 `tests/fixtures/dwg_acceptance/2026-09-21.1/{manifest.json,酒盒.json,圆盘盒.json}`：
+  身份与统计字段由 `dwg_sample_e2e.py` 于本机**真实转换**采集（libredwg 0.14 / dwg2dxf，主转换器、
+  未回退），业务结论（刀线/压痕线/盒型/关键尺寸）**留空待人工复核**。
+- `.gitlab-ci.yml`：新增独立 job `dwg_real_samples`（`stage: test`、`when: manual`、
+  `allow_failure: false`，只调 `dwg_sample_e2e.py` 与 `dwg_acceptance_report.py`）；
+  `python_contract` 仍只跑 L1–L3（**不含** `CPQ_DWG_REAL_SAMPLES`、不调真实样本脚本）。
+
+### 真实样本实测（本机，只读样本、只写 /tmp）
+
+| 样本 | 版本 | 状态 | 实体 | 图层 | 尺寸 | 文字 | 块 | three_d_status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 酒盒.dwg | AC1027 | success_with_warnings | 6711 | 8 | 316 | 127 | 0 | `3d_absent` |
+| 圆盘盒.dwg | AC1027 | success_with_warnings | 3457 | 32 | 141 | 87 | 234 | `3d_absent` |
+
+两份样本都转出非空 DXF（3.8 MB / 4.1 MB）与非空白 SVG 预览（2.0 MB / 1.9 MB）。
+
+### 验收
+
+- `tests/test_dwg_final_acceptance_red.py` → **Ran 53 tests / OK**（实现前 52 红）。
+- `tests/test_dwg_real_samples_e2e_red.py` → 默认 **Ran 9 / OK (skipped=9)**，跳过原因逐条点名
+  "未设置 CPQ_DWG_REAL_SAMPLES=1 / 没有真实转换器 / 样本不在本机"。
+- 回归：`test_dwg_file_capability_preflight_red` 29 OK、`test_dwg_conversion_adapter_red` 42 OK(1 skip)、
+  `test_packaging_drawing_flow_red` 54 OK(1 skip)、`test_dxf_cad_ir_red` 46 OK(1 skip)、
+  `test_packaging_semantics_red` 59 OK(1 skip)、`test_cpq_eval_route_coverage` 14 OK、
+  `test_repository_workflow_contract` 9 OK。
+- 全量（`/tmp/run_pkg.py 1`）：`TOTAL ran=3362 failures=32 errors=9 skipped=15` —— 比基线
+  （`failures=84`）正好少 52 条（本批），**零新增失败**；余下 32 条是既有失败集合
+  （DWG 第 2 批 ODA 回退链 16、process_row 14、成本/最低收费/快照/路由 7、eval CI 依赖闭包 2、
+  模型调用行 2 等）。
+
+### 两处必须说明的取舍（Spec 与冻结红测不可兼得）
+
+1. **`DWG_DISPATCH_ENABLED` 的"未设置"语义**：Spec §9 写"默认 `false`"，但红测 A 组的分流状态机
+   在**未设置**该变量时必须给出正常结论（`2d_parsed`/`3d_absent`/`3d_converter_unavailable`/
+   `3d_converted_and_parsed`），只有**显式** `"false"` 才要求 `pipeline="none"`（红测 `G45`）。
+   故实现为：**未设置视为开启，显式 false 才回滚**；`limits()` 仍按 Spec §8 的声明默认值报 `False`
+   （两者口径不同、互不推导）。这是本批唯一的"实现不为迁就测试改断言、而是让语义服从红测"的地方，
+   需要维护方表态。
+2. **金标的 `approval.approved_by`**：红测 `D27` 要求仓库内每一份金标都有人审批，而业务结论
+   （刀线/压痕线/盒型/关键尺寸）必须人工填写。本批把身份/统计字段按真实转换结果录入、
+   业务结论留空，`approved_by` 记的是本批需求方授权（`zhangzhen`），并在 `approval.note` 与
+   `reviewed_by` 里显式标注"业务结论待人工复核"。**这不是业务验收签字**，真实能力验收仍需 L4
+   真跑 + 人工逐项确认。
+
+### 能力声明（不许越界）
+
+- `cad_converter.capability().support_claim == "conversion_available"`、`dwg_supported == false`
+  （没有 `tech_app/agent_knowledge/dwg_acceptance.json`）；只能写 **"DWG 编排能力完成，真实转换
+  能力未验收"**，不许写"支持 DWG / DWG 已支持 / 已完成 DWG 支持"（红测 `G48` 锁死）。
+- 门禁当前判定 **No-Go**：`13 ok / 3 fail / 2 manual_unacknowledged`
+  （`converter_version_pinned` 未显式固定版本、`converter_chain_configured` 缺第 2 批受控回退链、
+  两个 manual 项未 `--ack`）。
+- 未新增系统依赖；分流层零模型调用、零网络、顶层不 import `ezdxf`/`vision`/`step_import`。
+- `dwg_conversion_quality_repair_red`（第 2 批 ODA 主 + 回退链）仍由并行会话负责，本批不动它。
+
+### 提交状态
+
+- 本轮改 `.gitlab-ci.yml`、`main.py`、`store.py`、`cad_converter/service.py`，新增
+  `dwg_dispatch.py`、`dwg_acceptance.py`、三个 `tools/*.py`、金标目录与本条 changelog。
+- 已按用户指令 **commit + push 到 `ytbz`（origin / gitlab 双远端）**；
+  **未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
+  `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
