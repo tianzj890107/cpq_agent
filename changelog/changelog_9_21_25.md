@@ -10211,3 +10211,46 @@ tests.test_packaging_parse_to_downstream_seams_red  Ran 13 OK
   `gaps` 逐字不变（B3 护栏）；绑定行数照旧 4 行、锁定行照旧不绑（D4 / D5 护栏）；
 - 未改零件提取的阈值与 `size_source` 闭集、未改成本公式与费率、未动前端、未加接口、未改数据库 schema；
 - 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 277. 卡片步进不再倒回：`current_step` 取「第一个还没做完的步」，补做/乱序/重放都不打回进度（9-22，Codex 实现）
+
+Spec `docs/specs/quote-card-step-order-and-replay.md` 的 §2 / §3 落地。34 实测会话 `a001739dec31`
+（项目 `bc0d1aeb4547`）：1、3、4、5、6 步先做完 → 卡片 `current_step=6` / `completed`；工艺经理补做
+第 2 步之后卡片退回 **`current_step=3` / `handoff_pending`** —— 六步全 done 的卡片反而显示"待转交 3"，
+只能把 3–6 步按原快照再确认一遍才救回来。根因是 `complete_step()` 一律写 `current_step = step_no + 1`，
+`cpq_wf_card_step` 里其它行的状态**一次都没读**。
+
+### 实现（只改 `cpq_wf.py`）
+
+| 面 | 做了什么 |
+| --- | --- |
+| 纯函数（§2.1） | 新增 `next_pending_step(done_steps, last_step=LAST_STEP)`：第一个不在 `done_steps` 里的步号，全做完给 `None`；非数字项跳过、不抛 |
+| 只读取数 | 新增 `_done_step_numbers(conn, card_id)`：`SELECT step_no, status FROM cpq_wf_card_step WHERE card_id = %s`，只把 `status == 'done'` 的算进集合 |
+| `complete_step()` | 写完本步 `UPDATE` 后按**库里实际状态**算 `nxt`；卡片写 `LAST_STEP if done_all else nxt`；`next_role` / `need_handoff` / `overall_status` 全由 `nxt` 推导；`next_step_no` 空值口径不变，只改它指向哪一步 |
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_quote_card_step_order_and_replay_red          Ran 6 OK（实现前 failures=4：A1/A2/B1/C2）
+tests.test_quote_task_coexistence_and_atomic_claim_red   Ran 41 OK
+tests.test_quote_tech_handoff_button_red                 Ran 19 OK
+tests.test_tech_handoff_atomic_idempotent_red            Ran 35 OK
+tests.test_tech_cost_report_handoff_continuity_red       Ran 14 OK
+tests.test_tech_home_three_tabs_and_todo_tasks_red       Ran 14 OK
+tests.test_tech_home_timeline_and_publish_closure_red    Ran 35 OK
+tests.test_tech_quote_agent_parity_matrix_red            Ran 7 OK
+tests.test_tech_quote_business_case_linkage_red          Ran 39 OK
+tests.test_quote_home_industry_carryover_red             Ran 28 OK
+tests.test_cpq_eval_business_cases                       Ran 15 OK
+tests.test_packaging_quote_close_loop_red                Ran 96 OK
+tests.test_packaging_quote_version_persistence_red       Ran 8 OK
+tests.test_quote_first_project_entry_red                 Ran 22 OK
+```
+
+### 边界
+
+- 未改 `QUOTE_STEPS` 的步骤名 / 角色归属 / `LAST_STEP`；未把"补做"改成"拒绝执行"；
+- 未改 `start_step()` / `send_task()` 语义；未改 `cpq_wf_card_step` 的既有列，其它行一行未被覆盖写；
+- 读取路径只读（新加的 SELECT 不带任何写）；留痕照旧写一条 `step_done`（§3.6 护栏绿）；
+- 未改成本 / 报价 / 技术侧口径、未改前端、未改任何 `tests/`；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。

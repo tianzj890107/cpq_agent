@@ -560,6 +560,39 @@ def can_do_step(user: dict, step_no: int) -> bool:
     return bool(user) and user.get("role_code") == role_of_step(step_no)
 
 
+def next_pending_step(done_steps, last_step: int = LAST_STEP):
+    """第一个**还没做完**的步；全做完给 ``None``（纯函数，不碰库）。
+
+    Spec `quote-card-step-order-and-replay.md` §2.1：进度条指的是"下一步该做哪一步"，
+    不是"刚做完的那一步 + 1" —— 补做 / 乱序 / 重放都按这条算，卡片状态才不会倒回去。
+    """
+    done = set()
+    for value in (done_steps or ()):
+        try:
+            done.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    for step_no in range(1, int(last_step or 0) + 1):
+        if step_no not in done:
+            return step_no
+    return None
+
+
+def _done_step_numbers(conn, card_id: int) -> set:
+    """这张卡片上已经 ``done`` 的步号（只读；§2.1 判据的唯一来源）。"""
+    cur = cpq_auth._exec(
+        conn, "SELECT step_no, status FROM cpq_wf_card_step WHERE card_id = %s",
+        (int(card_id),))
+    done = set()
+    for row in (cur.fetchall() or []):
+        if str(row[1] or "").strip().lower() == "done":
+            try:
+                done.add(int(row[0]))
+            except (TypeError, ValueError):
+                continue
+    return done
+
+
 # ---------------------------------------------------------------------------
 # 卡片
 # ---------------------------------------------------------------------------
@@ -898,15 +931,19 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
                     _log(conn, cid, None, int(user["user_id"]), "quote_version_skipped",
                          step_no, step_no,
                          f"第 {step_no} 步报价未落版本：{exc}")
-        # 下一步归属哪个角色 -> 决定卡片新状态：本人还能继续=in_progress；换人做=awaiting_handoff（待转交）
-        done_all = step_no >= LAST_STEP
-        nxt = min(step_no + 1, LAST_STEP)
+        # 下一步归属哪个角色 -> 决定卡片新状态：本人还能继续=in_progress；换人做=awaiting_handoff（待转交）。
+        # `current_step` 取**第一个还没做完的步**，不是"本步 + 1"（Spec
+        # `quote-card-step-order-and-replay.md` §2.1）：补做靠前的步、乱序完成、重放已 done 的步，
+        # 都不许把用户看到的进度条倒回去（34 实测：六步全做完的卡片补做第 2 步后退回"待转交 3"）。
+        nxt = next_pending_step(_done_step_numbers(conn, cid), LAST_STEP)
+        done_all = nxt is None
+        card_step = LAST_STEP if done_all else nxt
         next_role = "" if done_all else role_of_step(nxt)
         need_handoff = bool(next_role) and next_role != user.get("role_code")
         status = "completed" if done_all else ("awaiting_handoff" if need_handoff else "in_progress")
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_card SET current_step = %s, overall_status = %s, updated_at = %s"
-                  " WHERE card_id = %s", (nxt, status, _ts(now), cid))
+                  " WHERE card_id = %s", (card_step, status, _ts(now), cid))
         # 我因某个任务接手这张卡片、现在把那一步做完了 -> 该任务随之结束，不再滞留在「我的任务」里
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_task SET status = 'completed', completed_at = %s"
@@ -914,7 +951,7 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
             (_ts(now), cid, int(user["user_id"])))
         # 代办要写进留痕：卡片上这一步显示"已完成"，但完成的人不是它的归属角色，
         # 事后追溯必须看得出是谁、以什么名义做的。
-        _log(conn, cid, None, int(user["user_id"]), "step_done", step_no, nxt,
+        _log(conn, cid, None, int(user["user_id"]), "step_done", step_no, card_step,
              f"{user.get('display_name')} 完成第 {step_no} 步"
              + (f"（{user.get('role_name')} 代「{ROLES.get(stand_in, stand_in)}」，"
                 f"技术工艺 2.3 成本测算后回传）" if stand_in_used else ""))
