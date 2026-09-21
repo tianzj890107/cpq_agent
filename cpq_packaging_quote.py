@@ -215,12 +215,20 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
           pricing_mode: str = DEFAULT_PRICING_MODE, addons: Any = None,
           discount: Any = None, tax_rate: Any = DEFAULT_TAX_RATE,
           quote_quantity: Any = None, actor: Any = None,
-          previous: Any = None) -> dict:
+          previous: Any = None, publish: bool = False) -> dict:
     """交接包 → 报价（纯函数：不改入参、不读写库、不调模型、不联网）。
 
     计算顺序（每一步都进 ``lines``，含公式 / 输入 / 结果 / 来源 / 版本）：
       成本总额 → 毛利后单价 → 加价合计 → 加价后单价 → 折扣 → 未税单价 → 税金 →
       含税单价 → 未税 / 含税总额
+
+    缺口包（Spec `packaging-quote-draft-and-card-visibility.md` §3.1）：
+
+      · 包里**逐条列了缺口**（交接包 builder 产出的 `gaps` 就是 `cost.gaps` 的副本）且
+        ``publish=False`` → 照常出**草稿**报价：数字链完整、缺口原样带出、
+        ``draft=True`` / ``publish_blocked=True``；``publish=True``（正式报价单）→ 照旧拒绝；
+      · 只抬了 ``has_gaps`` 而**没有任何逐条清单**的包（历史形状）= 包不完整，照旧拒绝
+        （第 8 批既有契约，冻结红测 E14 / F5）。
     """
     pkg = package or {}
     if _text(pkg.get("industry")) != INDUSTRY:
@@ -228,9 +236,16 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
             f"这不是包装交接包（industry={_text(pkg.get('industry')) or '未标明'}），"
             "包装定价只接管 industry=packaging 的包", 400, "not_packaging")
     cost = pkg.get("cost") if isinstance(pkg.get("cost"), dict) else {}
-    if cost.get("has_gaps") or list(pkg.get("gaps") or []):
+    gaps = copy.deepcopy(list(pkg.get("gaps") or []))
+    has_gaps_flag = bool(cost.get("has_gaps")) or bool(gaps)
+    if has_gaps_flag and publish:
         raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",
                            409, "cost_gaps_unresolved")
+    if has_gaps_flag and not gaps:
+        # 缺口只有标志、没有逐条清单：草稿说不出缺什么，按"包不完整"照旧拒绝。
+        raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",
+                           409, "cost_gaps_unresolved")
+    draft = bool(has_gaps_flag and gaps)
 
     mode = _text(pricing_mode) or DEFAULT_PRICING_MODE
     if mode not in PRICING_MODES:
@@ -307,7 +322,12 @@ def price(package: dict, *, gross_margin_rate=None, markup_rate=None,
         "cost_categories": copy.deepcopy(cost.get("categories") or {}),
         "cost_report_groups": copy.deepcopy(cost.get("report_groups") or {}),
         "cost_engine_version": _text(cost.get("engine_version")),
-        "gaps": copy.deepcopy(list(pkg.get("gaps") or [])),
+        "gaps": gaps,
+        # 草稿 / 正式的分界（Spec §3.1）：缺口逐条在案 → 草稿可出、正式单拦住。
+        "draft": draft,
+        "publish_blocked": draft,
+        "publish_block_reason": "cost_gaps_unresolved" if draft else "",
+        "gap_count": len(gaps),
         "priced_at": _stamp(),
         "inputs": {
             "cost_total": total_cost,
@@ -437,14 +457,28 @@ def quote_fingerprint(quote: dict) -> str:
 # --------------------------------------------------------------------------- #
 # 报价单（八节）
 # --------------------------------------------------------------------------- #
-def document(quote: dict) -> dict:
+def document(quote: dict, *, publish: bool = False) -> dict:
     """报价单：``{"title", "markdown", "sections"}``；数字与 ``quote`` 逐个一致。
 
     不许带时间戳 / 随机数 —— 历史打开要能逐字恢复（Spec §2.5）。
+
+    ``publish=True`` 是「对外正式报价单」：缺口未清时同样拒绝；``publish=False``（缺省）是
+    草稿，正文里必须写明**不得对外发布**（Spec §3.1）。
     """
     q = quote or {}
+    gaps = list(q.get("gaps") or [])
+    if publish and (gaps or q.get("draft")):
+        raise PricingError("成本仍有缺口，只能出成本与草稿，不得生成正式报价单",
+                           409, "cost_gaps_unresolved")
     sections = _doc_sections(q)
     lines = ["# " + _doc_title(q), ""]
+    if gaps or q.get("draft"):
+        count = q.get("gap_count")
+        if not isinstance(count, int) or isinstance(count, bool):
+            count = len(gaps)
+        lines.append("> 本报价为缺口草稿，不得对外发布（缺口 %d 项；清账后重新定价才能出正式报价单）。"
+                     % count)
+        lines.append("")
     for section in sections:
         lines.append("## " + section["title"])
         for row in section["rows"]:

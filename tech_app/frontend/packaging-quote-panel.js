@@ -15,6 +15,31 @@
   "use strict";
 
   var PRICE_PATH = "/api/packaging-quote/price";
+  /* 定价基址：与报价页其它 Agent 调用同源（页面上的 AGENT_URL = "/agents/quote"）。
+     可注入（options.base / options.agentUrl / options.agentBase，或全局 PACKAGING_QUOTE_BASE），
+     缺省取页面 AGENT_URL，最后才退回基址相对路径 —— 根相对的 /api/* 在 8010 上会被代理给
+     技术工艺侧，包装定价拿不到（34 实测 405，Spec packaging-quote-draft-and-card-visibility §1.2）。 */
+  var DEFAULT_AGENT_BASE = "/agents/quote";
+  var BASE_KEYS = ["base", "agentUrl", "agentBase"];
+
+  function agentBase(options) {
+    var injected = "";
+    if (options && typeof options === "object") {
+      for (var i = 0; i < BASE_KEYS.length; i += 1) {
+        if (options[BASE_KEYS[i]]) { injected = options[BASE_KEYS[i]]; break; }
+      }
+    }
+    if (!injected && global.PACKAGING_QUOTE_BASE) injected = global.PACKAGING_QUOTE_BASE;
+    if (!injected && typeof global.AGENT_URL === "string") injected = global.AGENT_URL;
+    if (!injected) injected = DEFAULT_AGENT_BASE;
+    return String(injected).replace(/\/$/, "");
+  }
+
+  /** 定价 URL：基址 + PRICE_PATH；基址为空（显式要求基址相对）时退回 PRICE_PATH。 */
+  function pricePath(options) {
+    var base = agentBase(options);
+    return base ? base + PRICE_PATH : PRICE_PATH;
+  }
   var SECTION_ORDER = ["s3_markup", "s4_markup", "s5_basic", "s5_detail"];
   var SECTION_TITLES = {
     s3_markup: "定价-利润加成",
@@ -48,15 +73,17 @@
     });
   }
 
-  /** 定价：唯一算法在服务端 cpq_packaging_quote.price()，前端只负责传参。 */
+  /** 定价：唯一算法在服务端 cpq_packaging_quote.price()，前端只负责传参。
+      `publish` 缺省 false = 出草稿（缺口如实带出）；显式 true 才要求缺口清零。 */
   function price(options) {
     options = options || {};
     var body = { package: options.package || {} };
     ["gross_margin_rate", "markup_rate", "pricing_mode", "addons", "discount",
-      "tax_rate", "quote_quantity"].forEach(function (key) {
+      "tax_rate", "quote_quantity", "publish"].forEach(function (key) {
       if (options[key] !== undefined) body[key] = options[key];
     });
-    return apiFetch(PRICE_PATH, body).then(function (resp) { return resp.json(); });
+    var request = { base: agentBase(options) };
+    return apiFetch(pricePath(request), body).then(function (resp) { return resp.json(); });
   }
 
   function cell(row, keys) {
@@ -139,8 +166,12 @@
     if (!pkg) return null;
     options = options || {};
     var body = {};
-    Object.keys(options).forEach(function (key) { body[key] = options[key]; });
+    Object.keys(options).forEach(function (key) {
+      if (BASE_KEYS.indexOf(key) >= 0) return;          // 基址是调用参数，不进请求体
+      body[key] = options[key];
+    });
     body.package = pkg;
+    body.base = agentBase(options);
     return price(body).then(function (result) {
       render(target, result);
       return result;
@@ -149,6 +180,9 @@
 
   global.PackagingQuotePanel = {
     PRICE_PATH: PRICE_PATH,
+    DEFAULT_AGENT_BASE: DEFAULT_AGENT_BASE,
+    agentBase: agentBase,
+    pricePath: pricePath,
     SECTION_ORDER: SECTION_ORDER,
     packageOf: packageOf,
     isPackaging: isPackaging,

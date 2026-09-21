@@ -222,6 +222,12 @@ _BI_SECTIONS = {
     # —— 第 5 步 报价方案 —— 报价基本信息 + 报价明细
     "s5_basic":      ("form",  "报价基本信息",             ("报价单", "报价基本信息"),     True),
     "s5_detail":     ("table", "报价明细",                 ("报价单", "报价明细"),         True),
+    # —— 包装行业（图纸项目回传的整包）：第 2 步的盒型/参数与成本构成 ——
+    # kind/title 必须与 cpq_tech_bridge.packaging_snapshot() 产出的分区**逐字一致**，
+    # 否则报价页 wfRestoreStepData() 匹配不到 section_id，包装分区恢复不出来
+    # （Spec packaging-quote-draft-and-card-visibility §3.2）。内容由快照注入，不取本体字段。
+    "s2_packaging":      ("table", "包装：盒型与参数", ("价格测算单", "包装：盒型与参数"), False),
+    "s2_packaging_cost": ("table", "包装：成本构成",   ("价格测算单", "包装：成本构成"),   False),
 }
 
 # 计算类分区：已无（BPM 审批流已按需求取消，第 6 步只生成报价单文档）。
@@ -1811,6 +1817,9 @@ def _handle_packaging_quote_price(data: dict, emit=None) -> dict:
             kwargs["tax_rate"] = data.get("tax_rate")
         if "quote_quantity" in data:
             kwargs["quote_quantity"] = data.get("quote_quantity")
+        # 草稿 / 正式的分界（Spec packaging-quote-draft-and-card-visibility §2.2）：
+        # 缺省 False = 出草稿；只有显式 publish=True 才要求缺口清零。
+        kwargs["publish"] = bool(data.get("publish"))
         quote = pkg_quote.price(package, **kwargs)
         return {"ok": True, "quote": quote, "sections": pkg_quote.sections(quote),
                 "document": pkg_quote.document(quote)}

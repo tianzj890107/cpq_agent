@@ -9338,3 +9338,46 @@ tests.test_packaging_route_template_closure_red                        Ran 15 OK
 
 线上口径：从"图纸盒型永远不能确认路线 → 成本 route_not_confirmed → 零件下游全断"，变成
 **两份权威实样的路线都能确认**；`/api/health` 的 build 段与 git HEAD 逐字一致。
+
+
+## 261. 缺口包的草稿报价 + 报价卡片里的包装分区：`packaging-quote-draft-and-card-visibility` 的实现（9-22，Codex 实现 + 全量回归）
+
+Spec：`docs/specs/packaging-quote-draft-and-card-visibility.md`；红测：`tests/test_packaging_quote_draft_and_card_visibility_red.py`（10 条，实现前 7 红 + 2 错）。
+
+### 修的三处
+
+1. `cpq_packaging_quote.price(..., publish=False)`：缺口包**能出草稿**了 —— 数字链（cost_total →
+   margin_price → addon_total → subtotal_unit → discount_amount → net_unit_price → tax_amount →
+   taxed_unit_price）完整，`gaps` 原样带出，附 `draft` / `publish_blocked` /
+   `publish_block_reason="cost_gaps_unresolved"` / `gap_count`；`publish=True`（正式报价单）
+   照旧 `PricingError(409, cost_gaps_unresolved)`。`document(quote, publish=False)` 同样是草稿，
+   markdown 第一行之后写明「本报价为缺口草稿，不得对外发布」。
+2. `cpq_agent_server`：定价处理器透传 `publish`（缺省 False）；`_BI_SECTIONS` 增
+   `s2_packaging`（"包装：盒型与参数"）与 `s2_packaging_cost`（"包装：成本构成"），
+   kind/title 与 `cpq_tech_bridge.packaging_snapshot()` 逐字一致 —— 报价页
+   `wfRestoreStepData()` 才恢复得出这两张表。
+3. 报价页 + 面板：`确认需求解析结果.html` 引用 `packaging-quote-panel.js`，并在快照里带
+   `packaging_package` 时调 `PackagingQuotePanel.renderCard()`（面板定价 → 渲染 3–5 步四段分区，
+   标题旁标出「可发布 / 缺口草稿·不得对外发布（缺口 N 项）」）；面板的定价基址**可注入**
+   （`options.base` / 全局 `PACKAGING_QUOTE_BASE` / 页面 `AGENT_URL`，缺省 `/agents/quote`），
+   不再把根相对 `/api/packaging-quote/price` 当唯一入口（34 上那是 405）。
+
+### 一处口径（冻结面逼出来的边界，写在这里免得后人再踩）
+
+第 8 批的冻结红测 E14 / F5 要求「缺口包调 `price()` 必须抛」，本批的 A1 要求「缺口包调
+`price()` 返回草稿」——两者的差别只有**缺口有没有逐条清单**：真实交接包 builder 里
+`package["gaps"]` 就是 `cost["gaps"]` 的副本（`packaging_handoff.py:158/199`），所以
+「逐条在案 → 草稿」「只抬了 `has_gaps` 没有任何清单 → 包不完整，照旧拒绝」既满足 A1，
+也让 E14 / F5 保持绿。这不是绕：草稿的意义就是**如实列出缺什么**，列不出来就没法出草稿。
+
+### 实跑证据
+
+```
+tests.test_packaging_quote_draft_and_card_visibility_red        Ran 10 OK
+冻结面：quote_close_loop / downstream_blockers / drawing_flow /
+        quote_agent_industry_alignment / cost_engine            Ran 284 OK (skipped=1)
+前端面：drawing_board_two_column_parts_and_3d / drawing_flow_frontend_wiring /
+        parse_terminal_signal / parts_extraction / parts_panel /
+        quote_home_industry_carryover                            Ran 131 OK
+报价页两段内联脚本 node --check 均通过；packaging-quote-panel.js node --check 通过
+```

@@ -995,6 +995,9 @@
   <!-- 快速报价面板（批 1 建、批 3 追加四列对比表 renderDiffTable）。
        同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
   <script src="quick-quote-panel.js?v=qqp2"></script>
+  <!-- 包装报价面板（Spec packaging-quote-draft-and-card-visibility §3.2）：图纸项目回传的整包
+       （快照里的 packaging_package）由它定价，并渲染第 3–5 步四段分区（草稿/正式的分界在服务端）。 -->
+  <script src="packaging-quote-panel.js?v=pqp1"></script>
   <script>
     /* 快速报价工作区的页面级入口（Spec 批 3 §2.6）：容器 + 展开/收起。
        只做搬运：rows 由后端工作区（diff_table）给，金额与单位都已在行里排好版；
@@ -3865,6 +3868,69 @@
        交接过来的卡片，接手人本地没有前面步骤的数据——第 1 步的产品信息/技术参数是
        「选用产品」时前端直接填的，不在智能体事件流里，replaySession 重放不出来，
        只能从 card_step.data_snapshot 读回。 */
+    /* 包装报价分区（Spec packaging-quote-draft-and-card-visibility §3.2）：
+       快照里带 packaging_package 时调面板脚本定价 → 渲染第 3–5 步四段分区。
+       基址与页面其它 Agent 调用一致（AGENT_URL）；同一份包只定价一次。 */
+    let PACKAGING_PANEL_KEY = '';
+
+    /* 毛利率从第 3 步「定价规则（利润加成）」的已渲染行里读（页面上没有单独的输入框）；
+       读不到就交给服务端报"缺费率"并把原因显示在面板上 —— 不猜数字。 */
+    function packagingMarginRate() {
+      if (typeof window.PACKAGING_QUOTE_MARGIN_RATE === 'number') return window.PACKAGING_QUOTE_MARGIN_RATE;
+      const rows = extractSectionRows('s3_markup');
+      for (const row of rows) {
+        for (const key of Object.keys(row || {})) {
+          if (!/毛利|加成|利润率|rate/i.test(key)) continue;
+          const m = String(row[key] === undefined || row[key] === null ? '' : row[key]).match(/-?\d+(\.\d+)?/);
+          if (!m) continue;
+          const v = parseFloat(m[0]);
+          return v > 1 ? v / 100 : v;                 // 页面里可能写成百分数
+        }
+      }
+      return null;
+    }
+
+    async function renderPackagingQuotePanel(snap) {
+      const pkg = snap && snap.packaging_package;
+      if (!pkg || !window.PackagingQuotePanel) return null;
+      const key = [((pkg.box_type || {}).confirmed_box_type || ''),
+                   ((pkg.source || {}).result_version || pkg.result_version || ''),
+                   ((pkg.cost || {}).total_cost === undefined ? '' : (pkg.cost || {}).total_cost)].join('|');
+      if (key === PACKAGING_PANEL_KEY) return null;   // 同一份包不重复定价
+      PACKAGING_PANEL_KEY = key;
+      let host = document.getElementById('packagingQuotePanel');
+      if (!host) {
+        host = document.createElement('section');
+        host.id = 'packagingQuotePanel';
+        host.className = 'collapse-block open';
+        $('resultsContent').insertBefore(host, null);
+      }
+      host.innerHTML =
+        '<div class="collapse-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
+          '<div class="collapse-title"><span class="num">包</span>包装：定价与报价分区' +
+          '<span class="readonly-chip" id="packagingPanelChip">系统计算</span></div>' +
+          '<i class="ti ti-chevron-down collapse-arrow"></i>' +
+        '</div><div class="collapse-content"></div>';
+      const content = host.querySelector('.collapse-content');
+      const rate = packagingMarginRate();
+      const options = { base: AGENT_URL };
+      if (rate !== null) { options.pricing_mode = 'gross_margin'; options.gross_margin_rate = rate; }
+      try {
+        const result = await window.PackagingQuotePanel.renderCard(snap, content, options);
+        const quote = (result && result.quote) || {};
+        const chip = document.getElementById('packagingPanelChip');
+        if (chip) {
+          chip.textContent = quote.draft
+            ? '缺口草稿·不得对外发布（缺口 ' + (quote.gap_count || 0) + ' 项）'
+            : '可发布';
+        }
+        return result;
+      } catch (e) {
+        content.textContent = '包装定价失败：' + ((e && e.message) || e);
+        return null;
+      }
+    }
+
     async function wfRestoreStepData(step) {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
       let snap = null;
@@ -3901,6 +3967,8 @@
           restored = true;
         }
       });
+      // 包装卡片：快照里带整包 → 交给面板脚本定价并渲染分区（Spec §3.2）。
+      try { await renderPackagingQuotePanel(snap); } catch (e) {}
       return restored;
     }
 
