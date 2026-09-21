@@ -6693,3 +6693,82 @@ CRLF）。审查该文件请用 `git diff --ignore-cr-at-eol -- tech_app/fronten
 - 本批只覆盖图形语义；`真图零件 role` 从此不再全是 `unknown`（酒盒 `CUTTER`→cut、
   圆盘盒 `全穿刀`→cut / `压线 Crease`→crease），## 230 里那句「## 223 未实现」的口径
   以本条为准。
+
+## 232. 提交 / 推送 ytbz 并部署 34（## 231 真实刀模图层名 + 拼版排除 + 产品级盒型候选）（9-21，Codex 执行）
+
+把 ## 231 的实现落成一次提交并上线，并在 **34 上用部署后的代码复核两份真实样本的语义结论**
+（不再只看"转换成功"）。
+
+### 提交（8d2395d）
+
+`真实刀模图层名 + 拼版/图框/整张排除 + 产品级盒型候选：实现（## 231）`（8 个文件：
+`changelog_9_21_25.md`、`docs/specs/packaging-product-outline-and-die-layer-roles.md`、
+`packaging_layer_rules.json`、`packaging_semantics/{__init__,fields,geometry_semantics,roles,rules}.py`）。
+`git diff --check` 干净；`scripts/tmp_import_dwg_cases.py` 与 `裕同包装项目-待开发/` 仍未入库。
+
+### 推送
+
+| 远端 | 分支 | 结果 | 回读 |
+| --- | --- | --- | --- |
+| GitLab `gitlab` | `ytbz` | `2957dd7..8d2395d` | `8d2395d` ✓ |
+| GitHub `origin` | `ytbz` | `2957dd7..8d2395d` | `8d2395d` ✓ |
+
+纯快进，未创建 MR / tag / Release。
+
+### 部署 34（074d4da → 8d2395d，`scripts/deploy_34_bare.sh ytbz`）
+
+- `HEAD 074d4da → 8d2395d`；`8010 pid=3221112`；`/api/health` `status=ok`；
+  `/proc/<pid>/environ` 的 `PATH` 含 `/home/data/cpq-tools/xvfb-user/root/usr/bin` ✓。
+- 部署脚本内建真转（脚本会把 `converter_role` 与能力探测交叉核对）：
+
+| 样本 | status | converter_role | fallback_used | 版本 | output_version | verified | 实体 | 图层 | 产物 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | ok | **primary** | false | ODA 27.1 | ACAD2018 | true | 6711 | 8 | dxf + preview |
+| `圆盘盒.dwg` | ok | **primary** | false | ODA 27.1 | ACAD2018 | true | 3457 | 32 | dxf + preview |
+
+- 能力探测与真转同源：`{"available": true, "role": "primary", "version": "27.1", "source": "oda"}`。
+
+### 34 侧语义复核（部署后的代码，走 `dwg_sample_e2e.py` → `cad_ir` → `analyze()`）
+
+| 复核项 | `酒盒.dwg` | `圆盘盒.dwg` |
+| --- | --- | --- |
+| 识别到的角色图层 | `CUTTER=cut` | `全穿刀=cut`、`压线 Crease=crease`、`图框层=frame`、`排图层=frame` |
+| cut / crease / frame 层数 | 1 / 0 / 0 | 1 / 1 / 2 |
+| `box_candidates` | `[irregular]` | `[round_tube, irregular]` |
+| `fields.box_type` | `irregular` / needs_confirmation | `round_tube` / needs_confirmation |
+| 成品长宽 | `None` / **missing**（不再出现 `1705.9507596530002 × 713.2989662779999`） | `404.0 × 404.0` / needs_confirmation（不再出现 `15639.372814358998 × 6318.280258252999`） |
+| `outline.rejected` | 2 条，全 `panel_repeat` | 200 条，全 `panel_repeat`（候选上限截断） |
+| `unresolved` 的 `product_outline_uncertain` | `inner_length`、`inner_width` | 无 |
+| 新警告码 | `PACKAGING_OUTLINE_SHEET_FRAME_REJECTED` + `PACKAGING_PRODUCT_OUTLINE_UNCERTAIN` | `PACKAGING_OUTLINE_SHEET_FRAME_REJECTED` |
+
+**与本地逐项一致**（本地同一命令结果见 ## 231），即 34 的 DWG 解析结论 = 本地结论。
+
+### 34 上想看到 2.1 界面结果还缺什么（不是本批缺口）
+
+- 34 当前 `store.list_projects()` = **0**：没有任何可展示的 DWG 项目。
+- 早期占位项目 `bf99bec0d274` / `ce9d5aae9631` 的 flow 仍是 `pending`、`run_id` 为空，
+  且 `preconditions()` 返回 `REQUIREMENT_DRAFT_MISSING`（severity=blocking）——
+  链路会停在字段写入（## 224 的既有口径：缺需求草稿必须明说、不许静默补数据）。
+- 因此要在 2.1 上看到上面的候选与零件，需要**用户在 UI 里新建项目 + 建一张需求草稿**
+  后再跑一次「一键解析」。本批没有替用户建项目、也没有写任何生产业务数据。
+
+### 用户可自己跑的复现命令
+
+```bash
+# 本地：本批红测（应 OK (skipped=1)，D 组默认跳过）
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_product_outline_red -v
+# 本地：真实样本门（需要本机转换器 + 两份样本；应 6 条里 5 绿、D1 见 ## 231 的说明）
+CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
+    tests.test_packaging_product_outline_red.RealSampleProductOutline -v
+# 34：部署（在 34 上、以 wugefei 身份）
+bash scripts/deploy_34_bare.sh ytbz
+# 34：复跑真样本语义（先 source cpq_env.sh 并把 xvfb 目录加进 PATH）
+PATH=/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH \
+  ./open-claude/.venv/bin/python tech_app/tools/dwg_sample_e2e.py \
+  --sample 裕同包装项目-待开发/酒盒.dwg --out /tmp/verify --json
+```
+
+### 未做
+
+- 未创建 MR / tag / Release；未改任何 `tests/` 文件；未引入新依赖；
+  未替用户建项目或需求草稿，未改任何生产业务数据（只跑了样本转换与只读状态查询）。
