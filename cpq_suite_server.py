@@ -667,8 +667,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "card": card})
             elif path == "/wf/card/step-data" and m == "GET":
                 # 某一步确认时的表单快照：接手人用它恢复前面步骤的表格
-                self._send_json(200, {"ok": True,
-                                      "data": cpq_wf.step_snapshot(arg("session_id"), arg("step_no"))})
+                body = {"ok": True,
+                        "data": cpq_wf.step_snapshot(arg("session_id"), arg("step_no"))}
+                # 第 5 步「报价方案」额外带出**历史报价版本**（只读；Spec
+                # `packaging-quote-version-persistence.md` §2.2/§3.4）：重开这张卡片要能
+                # 列出历次报价并打开旧版本，而不只是看到被同名覆盖的最后一份。
+                try:
+                    step_no = int(arg("step_no") or 0)
+                except (TypeError, ValueError):
+                    step_no = 0
+                if step_no == cpq_wf.QUOTE_VERSION_STEP and arg("session_id"):
+                    state = cpq_wf.quote_version_state(arg("session_id"))
+                    body["packaging_quote_versions"] = state.get("versions") or []
+                    body["latest_quote_version"] = state.get("latest") or {}
+                self._send_json(200, body)
             elif path == "/wf/card/step-start" and m == "POST":
                 d = self._read_json()
                 card = cpq_wf.start_step(d.get("session_id", ""), d.get("step_no"), user)

@@ -10132,3 +10132,49 @@ tests.test_packaging_drawing_flow_red                FAILED (failures=1, skipped
 - 未改 `gates.py` 的判定条件与稳定码闭集，只加披露字段；`cost_gaps_unresolved` 一条不少；
 - 未动前端、成本公式与费率、知识库；未改数据库 schema；
 - 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 275. 报价版本终于有生产入口：卡片第 5 步确认落一版、重开卡片第 5 步读回全部历史（9-22，Codex 实现）
+
+Spec `docs/specs/packaging-quote-version-persistence.md` 的 §2 / §3 落地。第 8 批把版本表、幂等键、
+`versions()` / `latest()` / `restore()` 都写好了，但**没有任何生产路径调用它**：`save_version(` 在全仓
+生产代码里只命中它自己的定义，`cpq_wf_quote_version` 永远空。本批接上「确认 = 落一版、回来 = 读全部」。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 落版本（§2.1） | `cpq_wf.py` | `complete_step()` 在第 5 步（`QUOTE_VERSION_STEP = 5`）且快照带得出报价时，于**同一个 `conn`** 上调用 `save_version(conn, quote, user=user)`；`save_version` 自身不 commit。只捕 `PricingError`（角色不符 / 报价不可解析）→ 跳过落版本、`_log(..., "quote_version_skipped", ...)` 留痕、**步骤照旧 `done`**（落不了版本不许把整步拖死）；返回体加 `quote_version` |
+| 报价判据（§3.1） | `cpq_wf.py` | 新增 `QUOTE_SNAPSHOT_KEYS = ("packaging_quote","packaging_package")`、`_quote_like()`、`_packaging_quote_of()`：认两个顶层键，或 `s5_*` 分区里 `数据`/`data` **同时**有 `cost_total` 与 `quote_quantity` |
+| 读回（§2.2） | `cpq_wf.py` + `cpq_suite_server.py` | 新增只读 `quote_version_state(session_id)`（函数级 import `versions()` / `latest()` 避开模块级循环）；`/wf/card/step-data` GET 在 `step_no == 5` 时带出 `packaging_quote_versions`（新的在前）与 `latest_quote_version`，其它步不加 |
+| 前端（§2.3） | `确认需求解析结果.html` | 定价成功后存 `LAST_PACKAGING_QUOTE`，`wfCompleteStep` 第 5 步随快照带 `packaging_quote`；新增 `quoteVersionIsDraft()` / `money()` / `renderQuoteVersions()`（宿主 `#packagingQuoteVersions`，草稿行带「草稿·不得对外」）；`wfRestoreStepData(5)` 渲染版本列表、`showStep(5)` 触发读回 |
+
+### 两处判据收紧（写进 Spec §2.5，都是加法，不是放宽）
+
+1. `_quote_like()` 除"键在不在"外还要求**同时**带 `cost_total` 与 `quote_quantity`。只认键会让一份
+   **没定价过**的整包（只有 `cost.total_cost`）落成一条 `cost_total=0` 的假报价，而版本表是只增不改的
+   —— 宁可这一版不落，也不往里塞垃圾。
+2. 归档用的 `quote_session_id` **强制**取当前卡片的 `session_id`（不信任快照里的值），
+   `business_case_id` 缺省时回落到卡片上那一个：版本是"这张卡片的这一版"，读回路径就是按卡片会话号查的。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_packaging_quote_version_persistence_red          Ran 8 OK（实现前 8 红）
+tests.test_packaging_quote_close_loop_red \
+  tests.test_packaging_quote_draft_and_card_visibility_red \
+  tests.test_quote_first_project_entry_red \
+  tests.test_packaging_quote_send_recovery_red              Ran 142，唯一红是既有
+                                                            `send_recovery::C1`（夹具自遮挡，
+                                                            Spec `packaging-quote-send-recovery.md`
+                                                            §2.5 已记，与本批无关）
+node --check（`确认需求解析结果.html` 两段内联脚本）        ALL OK
+```
+
+### 边界
+
+- 未改 `save_version` / `versions` / `latest` / `restore` 的签名与不变式（§2.6 冻结，C3 护栏）；
+- 读取路径（`/wf/card/step-data`）里没有任何写入（B1 护栏）；版本表无 UPDATE / DELETE（C1 护栏）；
+  `INSERT INTO cpq_wf_quote_version` 只在 `cpq_packaging_quote.py` 里（C2 护栏）；
+- 未改成本 / 定价口径、未改数据库 schema、未改前端其它步骤的字段形状；
+- `restore()` 的自动回填、版本回滚/删除、跨会话对比、技术侧版本读取面本批不做（Spec §6）；
+- 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。

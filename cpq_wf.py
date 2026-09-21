@@ -43,6 +43,10 @@ QUOTE_STEPS = [
 ASSISTANT = "quote"
 LAST_STEP = len(QUOTE_STEPS)
 
+#: 报价方案那一步（第 5 步）：确认时把当次报价落成一版
+#: （Spec `packaging-quote-version-persistence.md` §2.1 / §3.1）。
+QUOTE_VERSION_STEP = 5
+
 TARGET_TYPES = ("role", "user", "public")
 
 # 任务类型。第 1 步匹配不到合适标品（cpq_match 最高分低于 70）时，销售经理不是把
@@ -765,6 +769,62 @@ def step_snapshot(session_id: str, step_no: int, conn=None):
         return None
 
 
+#: 快照里可能带着报价的两个键（Spec `packaging-quote-version-persistence.md` §3.1 第 1 条）。
+QUOTE_SNAPSHOT_KEYS = ("packaging_quote", "packaging_package")
+
+
+def _quote_like(row) -> dict:
+    """这份东西像不像一份**报价**：既是字典，又同时带得出成本总额与报价数量。
+
+    §3.1 只认"键在不在"，但一份**没定价过**的整包（只有 `cost.total_cost`）落进版本表
+    会写出一条 `cost_total=0` 的假报价 —— 宁可这一版不落（第 5 步照旧完成），
+    也不往只增不改的版本表里塞垃圾。真落版本的那一份由报价页在确认第 5 步时随快照带回。
+    """
+    if not isinstance(row, dict) or not row:
+        return {}
+    if "cost_total" not in row or "quote_quantity" not in row:
+        return {}
+    return dict(row)
+
+
+def _packaging_quote_of(snapshot) -> dict:
+    """第 5 步快照 → 待落版本的报价；取不到给 `{}`（非包装卡片、或没定价过就不落版本）。"""
+    snap = _snapshot_dict(snapshot)
+    if not snap:
+        return {}
+    for key in QUOTE_SNAPSHOT_KEYS:
+        quote = _quote_like(snap.get(key))
+        if quote:
+            return quote
+    # 或者：`s5_*` 分区的数据里同时有 cost_total 与 quote_quantity（§3.1 第 2 条）。
+    for name, value in snap.items():
+        if not str(name).startswith("s5_") or not isinstance(value, dict):
+            continue
+        for candidate in (value.get("数据"), value.get("data"), value):
+            quote = _quote_like(candidate)
+            if quote:
+                return quote
+    return {}
+
+
+def quote_version_state(session_id: str) -> dict:
+    """卡片第 5 步的历史报价版本（**只读**；Spec §2.2 / §3.4）。
+
+    版本相关查询一律复用 `cpq_packaging_quote.versions()` / `latest()`，本模块不新写 SQL。
+    函数级导入是为了避开 `cpq_packaging_quote` ↔ `cpq_wf` 的模块级循环。
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"versions": [], "latest": {}}
+    from cpq_packaging_quote import latest, versions      # noqa: PLC0415 - 见 docstring
+    conn = cpq_auth._connect()
+    try:
+        return {"versions": versions(conn, quote_session_id=sid),
+                "latest": latest(conn, quote_session_id=sid)}
+    finally:
+        conn.close()
+
+
 def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
                   on_behalf_of: str = "", conn=None) -> dict:
     """把某一步标记为完成（角色不符会被拒绝）。
@@ -818,6 +878,26 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
                   " data_snapshot = %s::jsonb, completed_at = %s,"
                   " started_at = COALESCE(started_at, %s) WHERE card_id = %s AND step_no = %s",
             (int(user["user_id"]), snap, _ts(now), _ts(now), cid, step_no))
+        # 第 5 步「报价方案」确认 = 把当次报价落成一版（只增不改；Spec §2.1）。
+        # 快照里带得出报价才落：非包装卡片 / 第 1–4 步 / 没定价过的一律不落。
+        # 落版本失败**不许**把整步确认拖死（§3.3）：只捕业务拒绝 PricingError，留痕写明原因。
+        quote_version = None
+        if step_no == QUOTE_VERSION_STEP:
+            quote = _packaging_quote_of(snap)
+            if quote:
+                # 版本按**这张卡片**的会话号归档（页面就是用它回来读历史），
+                # 业务实例号优先取快照里的，取不到用卡片上那一个。
+                quote["quote_session_id"] = session_id
+                if not str(quote.get("business_case_id") or "").strip():
+                    quote["business_case_id"] = str(card.get("business_case_id") or "")
+                try:
+                    from cpq_packaging_quote import PricingError, save_version
+                    quote_version = save_version(conn, quote, user=user)
+                except PricingError as exc:
+                    quote_version = None
+                    _log(conn, cid, None, int(user["user_id"]), "quote_version_skipped",
+                         step_no, step_no,
+                         f"第 {step_no} 步报价未落版本：{exc}")
         # 下一步归属哪个角色 -> 决定卡片新状态：本人还能继续=in_progress；换人做=awaiting_handoff（待转交）
         done_all = step_no >= LAST_STEP
         nxt = min(step_no + 1, LAST_STEP)
@@ -864,6 +944,8 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
             "next_role_code": next_role,
             "next_role_name": ROLES.get(next_role, next_role),
         }
+        if quote_version:
+            result["quote_version"] = quote_version
     finally:
         if own:
             conn.close()

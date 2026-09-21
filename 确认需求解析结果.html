@@ -1687,6 +1687,10 @@
       if (n === 1 && !STEP1_CTX_READY) {
         ensureStep1Context().then(ok => { if (ok && shownStep === 1) showStep(1); }).catch(() => {});
       }
+      // 第 5 步：把这一步的快照与**历史报价版本**一起补回来（只读；重开卡片要能打开旧版本）
+      if (n === 5 && currentSessionId && wfUser()) {
+        wfRestoreStepData(5).catch(() => {});
+      }
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
@@ -3400,6 +3404,12 @@
             _match: { text: STEP1_MATCH.text, ui: STEP1_MATCH.ui, picked: STEP1_MATCH.picked },
           });
         }
+        // 第 5 步「报价方案」确认：把这一版报价随快照带回卡片 —— 后端据此落一版
+        // （只增不改、同指纹幂等、换成本出新版，Spec packaging-quote-version-persistence §2.1）。
+        // 定价发生在浏览器（服务端定价接口是只读的），不带回去服务端就无从知道"这一版算的是什么"。
+        if (step === 5 && LAST_PACKAGING_QUOTE) {
+          data = Object.assign({}, data || {}, { packaging_quote: LAST_PACKAGING_QUOTE });
+        }
         const d = await wfApi('/wf/card/step-done', {
           method: 'POST',
           body: { session_id: currentSessionId, step_no: step, snapshot: JSON.stringify(data || {}) },
@@ -3872,6 +3882,9 @@
        快照里带 packaging_package 时调面板脚本定价 → 渲染第 3–5 步四段分区。
        基址与页面其它 Agent 调用一致（AGENT_URL）；同一份包只定价一次。 */
     let PACKAGING_PANEL_KEY = '';
+    /* 最近一次定价出来的报价（第 5 步确认时随快照带回卡片，据此落一版报价版本；
+       Spec packaging-quote-version-persistence.md §2.1）。 */
+    let LAST_PACKAGING_QUOTE = null;
 
     /* 毛利率从第 3 步「定价规则（利润加成）」的已渲染行里读（页面上没有单独的输入框）；
        读不到就交给服务端报"缺费率"并把原因显示在面板上 —— 不猜数字。 */
@@ -3918,6 +3931,7 @@
       try {
         const result = await window.PackagingQuotePanel.renderCard(snap, content, options);
         const quote = (result && result.quote) || {};
+        LAST_PACKAGING_QUOTE = Object.keys(quote).length ? quote : null;
         const chip = document.getElementById('packagingPanelChip');
         if (chip) {
           chip.textContent = quote.draft
@@ -3931,14 +3945,77 @@
       }
     }
 
+    /* 历史报价版本（Spec packaging-quote-version-persistence.md §2.3/§3.4）：
+       第 5 步读接口在返回体里给 packaging_quote_versions（新的在前）与 latest_quote_version，
+       这里只渲染，不算数、不写库。草稿版本必须带「草稿·不得对外」字样。 */
+    function quoteVersionIsDraft(row) {
+      try {
+        const raw = row && row.inputs_json;
+        const quote = (typeof raw === 'string') ? JSON.parse(raw) : (raw || {});
+        return !!(quote && quote.draft);
+      } catch (e) { return false; }
+    }
+
+    function money(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return '';
+      return n.toFixed(4);
+    }
+
+    function renderQuoteVersions(versions, latest) {
+      const list = Array.isArray(versions) ? versions.slice() : [];
+      let host = document.getElementById('packagingQuoteVersions');
+      if (!list.length) { if (host) host.remove(); return false; }
+      if (!host) {
+        host = document.createElement('section');
+        host.id = 'packagingQuoteVersions';
+        host.className = 'collapse-block open';
+        $('resultsContent').insertBefore(host, null);
+      }
+      const rows = list.map(v => {
+        const draft = quoteVersionIsDraft(v);
+        return '<tr data-quote-version="' + escapeHtml(String(v.version_no == null ? '' : v.version_no)) + '">' +
+          '<td>V' + escapeHtml(String(v.version_no == null ? '' : v.version_no)) + '</td>' +
+          '<td>' + escapeHtml(String(v.created_at || '')) + '</td>' +
+          '<td>' + escapeHtml(money(v.cost_total)) + '</td>' +
+          '<td>' + escapeHtml(money(v.untaxed_unit_price)) + '</td>' +
+          '<td>' + (draft
+            ? '<span class="readonly-chip" data-quote-draft="1">草稿·不得对外</span>'
+            : '<span data-quote-draft="0">正式</span>') + '</td>' +
+        '</tr>';
+      }).join('');
+      const latestNo = latest && latest.version_no ? latest.version_no : '';
+      host.innerHTML =
+        '<div class="collapse-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
+          '<div class="collapse-title"><span class="num">版</span>报价版本（只增不改）' +
+          '<span class="readonly-chip">历史可查</span></div>' +
+          '<i class="ti ti-chevron-down collapse-arrow"></i>' +
+        '</div><div class="collapse-content">' +
+          '<div class="pkg-quote-empty" data-quote-version-latest="' +
+            escapeHtml(String(latestNo)) + '">共 ' + list.length + ' 版' +
+            (latestNo ? '，最新为 V' + escapeHtml(String(latestNo)) : '') +
+            '；点开任一版即可看到当次报价单内容。</div>' +
+          '<table class="list-table"><thead><tr>' +
+            '<th>版本</th><th>时间</th><th>成本合计</th><th>未税单价</th><th>状态</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table>' +
+        '</div>';
+      return true;
+    }
+
     async function wfRestoreStepData(step) {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
       let snap = null;
+      let versions = null;
+      let latest = null;
       try {
         const d = await wfApi('/wf/card/step-data?session_id=' +
           encodeURIComponent(currentSessionId) + '&step_no=' + step);
         snap = d && d.data;
+        versions = d && d.packaging_quote_versions;
+        latest = d && d.latest_quote_version;
       } catch (e) { return false; }
+      // 第 5 步：先把历史版本列表渲染出来（只读接口，失败不影响快照恢复）
+      if (step === 5) { try { renderQuoteVersions(versions, latest); } catch (e) {} }
       if (!snap || typeof snap !== 'object') return false;
       let restored = false;
       Object.keys(snap).forEach(sid => {
