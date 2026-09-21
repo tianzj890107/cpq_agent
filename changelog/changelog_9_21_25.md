@@ -7386,3 +7386,100 @@ inner_length   200.0 -> 210.0  | priced: True | delta: 0.12
 本条的提交也没有把它们的一个字带进去）。
 未引入任何第三方依赖（三个新模块只用标准库 + 仓内模块）；未新建表（只在 `KB_TABLES` 末尾追加第 32 张）；
 未改精准报价（`cpq_packaging_quote.py` 一个字没动，其守卫 H2 仍绿）；未改 `cpq_tech_bridge.HANDOFF_KINDS`。
+
+## 240. 34 上 DWG 端到端复验：本地 LibreDWG ≡ 线上 ODA（预览逐字节相同）+ 生产门禁跑法（9-21，Codex 执行）
+
+### 做了什么
+
+`## 239` 只写了「两份样本 `converter_role=primary` / `verified=true`」。本条把「34 上到底能不能
+解析 DWG」这件事**换成可复算的证据**，并把生产门禁（`dwg_deploy_gate.py --env production`）
+的正确跑法写清楚 —— 这条命令**不 source env 会出一模一样的假 fail**。
+
+```
+部署：34 上 05e6d0b → d162759（纯 changelog 快进；代码与 05e6d0b 完全等价）
+34 HEAD = d162759 = 本机 HEAD = gitlab/ytbz = origin/ytbz
+```
+
+### 34 上真跑 DWG 端到端（`tech_app/tools/dwg_sample_e2e.py`，两份真实样本）
+
+先 source env 文件并把 `xvfb-run` 目录放进 `PATH`（否则探不到转换器）：
+
+```bash
+cd /home/wugefei/CPQ/cpq_agent
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"
+./open-claude/.venv/bin/python tech_app/tools/dwg_sample_e2e.py \
+    --sample 裕同包装项目-待开发/酒盒.dwg --out /tmp/dwg_e2e_34 --json
+```
+
+34（ODA 27.1）原文：
+
+```
+圆盘盒.dwg  status=ok  dwg=AC1027  entities=3457 layers=32 blocks=234 dims=141 texts=87
+            dxf 4138973 B sha256=0ba3bf5b1c78d4dba752956158b11ffc2c12339a39b6f9c6823bd2c4a2b1a1f7
+            svg 1861437 B sha256=7c708b81c864fd5be4ff01d909a9dbdcc9ec2827960cd62e99787ef664181d7f
+酒盒.dwg    status=ok  dwg=AC1027  entities=6711 layers=8  blocks=0   dims=316 texts=127
+            dxf 2693480 B sha256=01090f7f151c8d1a293dc29201f54de0387efc5ff134dfeaae9ebfcb72bbb800
+            svg 2031603 B sha256=a80cb58eef06a0c759b0b1e135ee0a439d0579cb9a959a11f46735ae32ce1129
+three_d_status=3d_absent（两份都没有三维实体，不是失败）
+```
+
+### 本机同一工具、同一命令（本机只有 LibreDWG 0.14，没有 ODA）
+
+```
+圆盘盒.dwg  status=success_with_warnings  entities=3457 layers=32 blocks=234 dims=141 texts=87
+            dxf 4088695 B sha256=3c48b720679867527351ceaaac9e64f2a399db0bd96f892f01fcbec28c4b5328
+            svg 1861437 B sha256=7c708b81c864fd5be4ff01d909a9dbdcc9ec2827960cd62e99787ef664181d7f
+酒盒.dwg    status=success_with_warnings  entities=6711 layers=8  blocks=0   dims=316 texts=127
+            dxf 3826412 B sha256=01bda52cd6461afdaf0d499cc209bf853a4f3c9ec2819f488531c3e53de6fa80
+            svg 2031603 B sha256=a80cb58eef06a0c759b0b1e135ee0a439d0579cb9a959a11f46735ae32ce1129
+```
+
+**逐字节比对的结论**（这是「本地和线上跑的是不是一回事」的直接答案）：
+
+| 项 | 本地 LibreDWG 0.14 | 34 ODA 27.1 | 结论 |
+| --- | --- | --- | --- |
+| 实体 / 图层 / 块 / 标注 / 文字 | 3457 / 32 / 234 / 141 / 87（圆盘盒）· 6711 / 8 / 0 / 316 / 127（酒盒） | 同上 | **完全相同** |
+| 预览 SVG 字节 | `7c708b81…` / `a80cb58e…` | `7c708b81…` / `a80cb58e…` | **逐字节相同** |
+| DXF 字节 | `3c48b720…` / `01bda52c…` | `0ba3bf5b…` / `01090f7f…` | 不同（两个写出器，ODA 文件更小更干净） |
+| 返回状态 | `success_with_warnings` | `ok` | ODA 无警告 |
+
+即：**几何与渲染一致、语法层（DXF 字节）不同** —— 所以「本机能跑通」不等于「线上字节一致」，
+但下游（IR / 语义 / 零件 / 成本）吃的是几何，两侧结论同源。
+
+### 生产门禁的正确跑法（不 source env 会出假 fail）
+
+```
+不 source env（错）：
+  converter_version_pinned | auto | fail | 本环境没有可用的 DWG 转换器（DWG_CONVERTER_NOT_INSTALLED）
+  verdict=no_go  summary={ok:16, fail:1, manual:2}
+
+source env + PATH（对）：
+  verdict=no_go  summary={ok:17, fail:0, manual:2}
+  reasons=['converter_license', 'real_samples_e2e_passed']
+  converter_license        | manual | manual_unacknowledged | 需 --ack converter_license=<用户>
+  real_samples_e2e_passed  | manual | manual_unacknowledged | 需 --ack real_samples_e2e_passed=<用户>
+```
+
+正确命令：
+
+```bash
+cd /home/wugefei/CPQ/cpq_agent
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"
+./open-claude/.venv/bin/python tech_app/tools/dwg_deploy_gate.py --env production
+```
+
+**为什么会有那个假 fail**：门禁自己**不读 env 文件**（`_check_converter_version_pinned()` 直接调
+`cad_converter.capability()`，只看当前进程环境），而 `8010` 的转换器配置在**仓库外的 env 文件 +
+启动命令行的 `PATH` 前缀**里。所以「部署脚本的同一次会话里跑门禁」是对的，**在裸 shell 里跑会误报**。
+本脚本 `scripts/deploy_34_bare.sh` 第 6 步打印的那行门禁命令**没带 source env**，
+照着抄会看到那条假 fail —— 已记在此处，未改脚本（改脚本要动 18/19 项冻结口径之外的东西，
+不在本批范围）。
+
+### 边界
+
+`18 项 auto 全过、只剩两项人工签字` 才是 34 现在的真实状态：**未 `--ack`**，
+所以门禁仍是 `no_go` —— 这是设计如此（生产 go 需要人工确认），不是能力缺失。
+未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话的未跟踪文件；
+未引入第三方依赖；未装任何新软件（34 上用的还是 ODA 27.1 + LibreDWG 0.14）。
