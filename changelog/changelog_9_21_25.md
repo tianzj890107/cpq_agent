@@ -5328,3 +5328,145 @@ tests.test_dwg_conversion_quality_repair_red      Ran 105 tests OK (skipped=1)
 
 未新增依赖；未改 `cad_converter` 既有口径与任何 `tests/test_*_red.py`；未动
 `裕同包装项目-待开发/`（不入库）；未改服务器配置。
+
+---
+
+## 213. 逆向快速报价五批 Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+新需求：做一个**只走报价侧**的「逆向快速报价」——销售拿一个跟以前做过的礼盒很接近的需求，
+直接从标准报价案例库里挑最像的成交案例，改几个差异项，就出一份有依据的快速报价。
+核心链路全部停留在报价工作台：
+
+```
+输入需求/上传文件 → 识别包装关键参数 → 查标准报价案例库 → 返回相似案例
+→ 人工选基准案例 → 改少量差异参数 → 算差异价格 → 生成快速报价
+```
+
+明确不做：不自动关联工程师电脑里的历史 BOM/工艺文件、不生成新技术工艺、不重建完整 BOM、
+不做精准成本核算、不走技术工艺审批、不发布回传报告。
+
+### 产物（五批一次交付，每批都假设前一批已实现）
+
+| 批次 | Spec | 红测 | 条数（红/绿护栏） |
+| --- | --- | --- | --- |
+| 1 快速报价模式与标准案例数据模型 | `docs/specs/quick-quote-1-mode-and-case-model.md` | `tests/test_quick_quote_mode_and_case_model_red.py` | 39（36 红 / 3 绿） |
+| 2 相似案例检索与候选选择 | `docs/specs/quick-quote-2-case-retrieval.md` | `tests/test_quick_quote_case_retrieval_red.py` | 36（36 红） |
+| 3 字段工作区修改与差异价格计算 | `docs/specs/quick-quote-3-field-workspace-and-delta-price.md` | `tests/test_quick_quote_field_workspace_red.py` | 53（53 红） |
+| 4 快速报价生成、风险提示与转精准报价 | `docs/specs/quick-quote-4-quick-quote-and-handoff.md` | `tests/test_quick_quote_generation_red.py` | 46（43 红 / 3 绿） |
+| 5 文件解析接入与真实案例验收 | `docs/specs/quick-quote-5-file-parsing.md` | `tests/test_quick_quote_file_parsing_red.py` | 37（35 红 / 2 绿） |
+
+### 契约要点
+
+- 批 1：新增 `cpq_quick_quote_case.py`（`quick_quote_case_v1`）——「精准报价 / 快速报价」两种模式、
+  案例字段闭集、来源分层**复用** `cpq_kb.SOURCE_TYPES`（`demo` 演示数据与 `unknown` 历史入库
+  一律不可用于快速报价）、人工审核 `draft/reviewed/retired`、有效期按来源天数推算且**过期不删**、
+  准入 `reason_code` 六级优先级；`报价首页.html` 包装行业下新增「精准报价 / 快速报价」两个入口。
+  从既有报价沉淀的案例默认 `draft`（必须人工审到 `reviewed` 才能用）。
+- 批 2：新增 `cpq_quick_quote_match.py`（`quick_quote_case_match_v1`）——先按盒型/盒族/闭合方式/
+  内托硬筛选，再按尺寸/克重/印刷/工艺/数量加权打分（权重读 `kb_quick_quote_match_weight`，
+  代码不写死）；候选 3～5 个，带相同项/差异项/来源/审核/排名理由；**成交价默认不返回**；
+  `requires_manual_selection=True`、`confirmed_case_code` 必空，基准案例只能由销售 `build_baseline()`
+  明确选中（需要角色，未审核/过期/演示案例一律拒绝）。
+- 批 3：新增 `cpq_quick_quote_workspace.py`（`quick_quote_workspace_v1`）——左侧 Agent 是自然语言入口、
+  右侧工作区是权威编辑与确认入口：Agent 建议进 `pending`，未确认不得进 `current`、不得落库；
+  差异价四种口径（`rate`/`step`/`band`/`direct`）全部读 `kb_quick_quote_delta_rule`，
+  无规则字段**不编价格**；对比表四列「参数/基准案例/当前报价/差异价格」，
+  业务示例逐项对得上（数量 5000→3000 = +0.27、面纸 200→250g = +0.31、烫金 无→有 = +0.18、
+  内长 200→210mm = +0.12）；歧义指令「改成 250」不猜；落库复用卡片第 2 步快照，不新建表。
+- 批 4：新增 `cpq_quick_quote_price.py`（`quick_quote_v1`）——快速报价 = 基准案例价 + 各项差异；
+  六项适用门槛（已审核案例 / 未过期 / 盒型结构未变 / 尺寸在阈值内 / 数量在区间内 / 无无依据的新增工艺），
+  不过门槛**直接报错并给「建议转精准报价」**，不先算一个"仅供参考"的价；保留完整依据（基准案例编号、
+  基准价、每项加减、规则版本）；给建议价格区间与预估偏差（无价格依据的差异项按每项 +2% 扩大偏差并点名）；
+  一键转精准报价**复用既有「转技术工艺」任务口径**（`cpq_wf.TASK_KIND_TECH_NEW`），
+  已填数据整包带走、不新增交接口径闭集、不直接派发。
+- 批 5：新增 `cpq_quick_quote_file.py`（`quick_quote_file_v1`）——文字/Excel/PDF/图片先走既有
+  `/api/extract`（不依赖 DWG），DWG/DXF 走服务器**统一解析服务**（`CPQ_UNIFIED_PARSE_URL`，
+  先把能力问清楚：provider / 版本 / `dwg` 布尔），报价侧只当客户端、**不装第二套 ODA/LibreDWG**；
+  只索取匹配所需字段并统一换算到 mm，解析不出的键进 `missing` 不猜，`fallback` 补齐要标来源；
+  新增 `/api/quick-quote/parse` 路由并回传能力段（吸取上次"页面宣称支持、实际不支持"的教训），
+  `DEPLOYMENT.md` 登记该 env。
+
+### 红测实跑（原文）
+
+```
+tests.test_quick_quote_mode_and_case_model_red    Ran 39 tests  FAILED (failures=36)
+tests.test_quick_quote_case_retrieval_red         Ran 36 tests  FAILED (failures=36)
+tests.test_quick_quote_field_workspace_red        Ran 53 tests  FAILED (failures=53)
+tests.test_quick_quote_generation_red             Ran 46 tests  FAILED (failures=43)
+tests.test_quick_quote_file_parsing_red           Ran 37 tests  FAILED (failures=35)
+五份合计：Ran 211 tests  FAILED (failures=203)  → 8 条绿的是本批刻意保留的护栏
+```
+
+- 失败原因如实分两类：① 目标模块/前端文件不存在（批 1–5 各自的实现缺口）；
+  ② 批 2/批 3 的部分用例失败原因是**前置批次未实现**（批 2 依赖批 1 的案例模型、
+  批 3 依赖批 1/批 2），这正是"每批假设上一批已实现"的预期表现。
+- 8 条绿护栏：批 1/批 4 的既有 6 步报价流程与 `cpq_kb.SOURCE_TYPES`、`HANDOFF_KINDS`、
+  既有包装定价口径未被改动；批 4 的 `TASK_KIND_TECH_NEW` 未变；批 5 的"报价侧无第二套 ODA"、
+  真实 DWG 样本文件头 `AC1027` 可读。
+
+### 边界
+
+本批**只新增 Spec 与红测**（外加本 changelog 条目）：未写任何业务实现、未改既有测试、
+未改任何 `cpq_*.py` 与前端资源；未连 Postgres、未调模型、未起服务、未真发 HTTP、
+未读真实凭据、未动 `裕同包装项目-待开发/` 里的客户样本（只读）；
+未 push / MR / tag / Release / 部署 / 重启服务。
+
+## 213
+
+**34 线上「DWG → DXF → CAD IR」全链路实测通过**（2026-09-21，`13d7b5b` 部署后）。
+
+### 怎么验的（隔离跑，不碰生产数据）
+
+`tech_app/backend/config.py` 的 `DATA_DIR` 可被环境变量覆盖，于是用
+`DATA_DIR=/tmp/cpq_dwg_parse_e2e` 起了一份**与生产同一套代码、同一套转换器配置**的隔离存储，
+把 `裕同包装项目-待开发/酒盒.dwg` 建为项目后跑真实的 `packaging_drawing_flow.run_flow()`
+（与 `POST /api/projects/{pid}/drawing-flow/run` 同一条链路）：
+
+```
+project_id = d846f45c9076 | DATA_DIR = /tmp/cpq_dwg_parse_e2e
+  步骤 file_preflight       completed
+  步骤 dwg_convert          completed      ← 真转换（ODA 27.1 主）
+  步骤 cad_ir_parse         completed      ← 真解析 DXF
+  步骤 packaging_semantics  completed
+  步骤 field_write          failed         ← 见下，隔离项目的必然结果
+  步骤 pending_confirm      pending
+  步骤 downstream_prepare   pending
+```
+
+`cad_ir` 落盘内容：`entities=6569`、`layers=8`，实体类型
+`LINE 5598 / DIMENSION 316 / ARC 311 / SPLINE 310 / ELLIPSE 21 / HATCH 11 / LWPOLYLINE 2`
+—— `DIMENSION=316`、`layers=8` 与金标 `tests/fixtures/dwg_acceptance/2026-09-21.1` 逐项一致。
+`packaging_semantics` 也产出了 `box_candidates` / `dimensions` / `layers` / `outline` /
+`roles_summary`。
+
+### `field_write` 的 `REQUIREMENT_SAVE_FAILED` 是隔离项目的产物，不是线上缺陷
+
+流记录里是 `error_code=REQUIREMENT_SAVE_FAILED`、`detail.written=[]`；直接调
+`packaging_semantics.apply_to_requirement()` 拿到真实异常原文：
+
+```
+ValueError: 需求单不存在，请先创建需求草稿
+  packaging_semantics/provenance.py:55 → apply_to_requirement()
+```
+
+隔离项目是脚本直接 `store.create_project()` 建的，**没有 1.1 的需求单**，所以这一步必然失败。
+从报价/需求入口建的项目有需求单，不存在这个问题。`steps.py` 这里把任意异常都吞成了
+`REQUIREMENT_SAVE_FAILED`，**错误码分类偏粗**（真因看不出是"没有需求单"），记为待改进项，
+本批未动。
+
+### 仍然存在的缺口（**UI 未接这条链路**）
+
+服务端这条链路完整，但界面上仍会看到「不是位图…请上传 PNG」：`tech_app/frontend/app.js:1436`
+的 `blockedReason` 用 `isImg = /\.(png|jpe?g|webp|gif|bmp)$/` 判死，`app.js:1457`
+`$("btnParse").disabled = !isImg` 把「▶ 开始解析」也一起禁掉；而 2.1 的
+`parseDrawing()`（`app.js:906`）打的是 `POST /parse`，那是**视觉模型**路径
+（`vision.parse_drawing`），不是 `drawing-flow`。前端全文没有 `drawing-flow` 字样。
+
+也就是说：要让用户在上传 `酒盒.dwg` 之后真的看到解析结果，还需要
+「DWG/DXF 项目 → 改走 `POST /api/projects/{pid}/drawing-flow/run` → 渲染 cad_ir」这一层前端接线
+（外加把 `blockedReason` 换成如实说明）。这属于下一批，**本批未改前端**。
+
+### 边界
+
+未改任何生产数据（全程 `DATA_DIR=/tmp/cpq_dwg_parse_e2e`）；未改 `cad_converter` /
+`packaging_drawing_flow` / `packaging_semantics` 既有口径；未新增依赖。
