@@ -3655,3 +3655,86 @@ wrapper 逐项排在 exe 之前且不经 shell；版本口径三态；回退链�
 `fallback_used=true`；审计出现 `dwg.convert` 与 `dwg.convert.fallback` 两条。⚠️ 这是**编排层 + 驱动
 形状**的真机验证，**不等于** L4 验收：没有已审批金标与验收记录，`support_claim` 仍为
 `conversion_available`、`dwg_supported` 仍为 `false`。
+
+---
+
+## 189. 报价助手行业化（需求门禁 + 产品技术参数）Spec + 红测（9-21，Codex 只改 Spec + 红测 + changelog）
+
+### 背景（用户报的两个现场问题）
+
+**问题一**：报价助手输入
+
+```
+数码天地盒  尺寸（mm）30*30*20；盖面纸 铜版纸，亮膜；底面纸 铜版纸，哑膜；盖板材 灰板，厚度2.5mm
+```
+
+回的是
+
+```
+⚠ 需求信息不齐，暂不进行任何操作（不查库、不推荐产品、不填表）——缺少：工作温度。
+产品匹配必须同时给出 尺寸、应用范围/使用场景、工作温度 三项。
+```
+
+**问题二**：右侧「④ 产品技术参数」要调整成**盒型库的技术参数**。
+
+### 根因（取证，不是推断）
+
+- `cpq_agent_server.py:866` `_STEP1_REQUIRED = (("max_dimension","尺寸"),
+  ("application_scope","应用范围/使用场景"), ("operating_temperature","工作温度"))`；
+  `cpq_agent_server.py:869` `_step1_missing(req)` **不接受行业参数**；两处调用点
+  `cpq_agent_server.py:790`（`match_products` 工具）与 `:1041`（`/api/step1/match` 的
+  `phase="intent"`）都把「缺工作温度」当成「需求不齐」→ 包装需求信息其实已齐，却停在意图识别。
+  前端同一条硬编码文案在 `确认需求解析结果.html:2241`。
+- `cpq_agent_server.py:191` 把 `s1_techparams` 定为「④ 产品技术参数」，
+  `:1429` 把事实源钉死为 `clm_calc_product_tech` —— 《亿纬锂能DA梳理.xlsx》的电池/光伏/储能
+  成品参数表；包装选出的盒型落不进这张表。
+- `grep -c industry cpq_agent_server.py` → **0**：报价助手完全没有行业概念，
+  `cpq_industries` / `industry_templates.PACKAGING_SPEC` 在报价侧从未被读取。
+- 已具备但未接线：`cpq_packaging_quote.py`（无任何模块 import）、
+  `tech_app/frontend/packaging-quote-panel.js`（无任何页面引用）。
+
+### 本轮产出（只改 Spec + 红测 + changelog）
+
+- `docs/specs/quote-agent-industry-alignment.md`（新，214 行）：契约 A 行业化需求门禁 /
+  契约 B ④产品技术参数换源到盒型库 / 契约 C 报价侧与工艺侧字段同源（防漂移）/
+  非目标 / 可自动化验收 / 人工验收 / 不允许减少的既有能力。
+- `tests/test_quote_agent_industry_alignment_red.py`（新，33 条）：
+  A 门禁行业化 11 / B 产品技术参数 11 / C 前后端同源 6 / D 不回归 5。
+
+冻结口径（本批关键）：**三行业（半导体/电池/电器）沿用既有三项门禁键，逐字不变**；
+`packaging` 的必填集合**恰好等于** `industry_templates.required_keys('packaging')`（10 项）且不得含
+`operating_temperature`。取证过程中发现 `required_keys('semiconductor')` 是另外 14 个键，
+三项门禁键**不在**需求模板里（是报价助手的匹配输入），因此 Spec 与 `A5` 按"三行业沿用、
+包装派生"收口，避免造出一条不可实现的红。
+
+### 红测实跑（原文数字）
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_agent_industry_alignment_red
+Ran 33 tests in 0.417s
+FAILED (failures=24)
+```
+
+- 红的 24 条：`A1 A2 A3 A4 A5 A6 A7 A8 A9 A10 A11`（门禁无 `step1_required` / 不认行业）、
+  `B12 B13 B14 B15 B16 B17 B18 B19 B20 B21 B22`（无 `tech_param_source` / `tech_param_columns` /
+  `tech_param_row`）、`C24`（前端未用后端下发的 `techparams_columns`）、
+  `C28`（前端仍在用「尺寸、应用范围/使用场景、工作温度」通用必填文案）。
+- 绿的 9 条是守卫项：`C23 C25 C26 C27`（前端不硬编码电池口径/不抄第二份包装字段清单/
+  行业清单单一来源/`RC_PACKAGING_SPECS` 与后端一致）与 `D29–D33`（包装模板仍 64 字段 10 必填、
+  行业注册表仍四行业、半导体字段不变、包装报价引擎仍可导入、行业归一化稳定）。
+- 相关既有套件回归：`tests.test_packaging_requirement_template_red` +
+  `tests.test_industry_registry_unified_red` → `Ran 55 tests … OK`。
+- 夹具自查：本轮修掉两处**自身缺陷**（`A6` 的正则漏 `(?m)` 导致空跑通过；
+  `A5` 曾要求三项门禁键出现在需求模板里，属不可实现的红），断言口径同步进 Spec。
+
+### 能力声明
+
+本批只产出 Spec + 红测，**未实现任何业务代码**：报价助手的门禁与 ④产品技术参数
+**仍是半导体口径**，包装需求仍会被「缺少：工作温度」拦住。
+
+### 提交状态
+
+- 本轮新增 2 个文件（Spec、红测）与本条 changelog；**未 commit、未 push、未 MR、未 tag、
+  未 Release、未部署、未重启服务、未改服务器配置**；未新增依赖。
+- `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
+
