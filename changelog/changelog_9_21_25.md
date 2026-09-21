@@ -9843,3 +9843,74 @@ tests.test_packaging_parts_material_attribution_red   Ran 27 OK
 - 未改第 3 层任何一条拒绝口径（`PACKAGING_PART_NOT_CLOSED` / `PACKAGING_PART_MATERIAL_UNKNOWN` / `PACKAGING_PART_THICKNESS_UNKNOWN` 语义不变），未给无出处的默认值硬算；
 - 未改任何 `tests/` 文件、未改成本公式与费率；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。
+
+
+## 269. 部署自检卡死 22 分 54 秒的定位 + 两套新 Spec/红测：零件链路的时间预算、自检要指着原因说话（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+用户要的是"把现在实现了的提交推送部署到 34，全流程能看见零件"。这一轮真的照做了，也真的
+在部署这一步**撞到一个会拖死链路的问题**，下面是实况与两套新 Spec/红测。
+
+### 提交 / 推送 / 部署（本轮）
+
+- `2b56e2d`（changelog ## 263）→ `9f4fcfe`（## 264 重复边折叠/外轮廓重判入库，由我核对红测与冻结面后
+  提交）→ 推送双远端 `ytbz` → 34 部署；
+- 期间并行会话继续落 `d3205a1`（## 264.1 奇度顶点配对改 `O(n log n)`）、`6fd70ca`（## 266）、
+  `5b1ae47`（## 267）、`0d8884d`（## 268 材料/厚度归属分层）；我把当前 HEAD 一并推送并重新部署，
+  34 现为 `build.commit=0d8884d`（`/api/health status=ok`，两份样本 `converter_role=primary /
+  fallback_used=false`）。
+
+### 撞到的问题：9f4fcfe 的第 6b 步（隔离端到端自检）**不会结束**
+
+```
+# 34，部署 9f4fcfe 之后
+$ ps -o pid,etime,time,pcpu -p 521916
+    PID     ELAPSED     TIME %CPU
+ 521916       22:54 00:22:58  100
+```
+
+- 同一步在 `2b56e2d` 上是 **~20 秒**跑完并打印两行样本结论；到 `9f4fcfe` 变成 **22 分 54 秒纯 CPU、
+  零输出**，而且**没有任何东西会停下来**：第 6b 步没有内部超时（只能被外部 expect 的 1800s 杀掉），
+  也没有逐样本输出 —— "自检在跑"和"自检卡死"在日志里长得一模一样；
+- 同一提交下 **8010 服务侧**跑同一份 `酒盒.dwg` 是正常的（并行会话实测八步 19.2s、64 件、
+  `closed_ratio=0.938`）⇒ 不是"图纸太难"，而是**逐件诊断里有一条超线性路径**，且"服务侧快、
+  自检侧卡死"这件事本身说明两条路的口径没有钉在一起；
+- 定位：`extract()` 对**每一个分量**都无条件算 `_nearest_gap_mm()`（奇度顶点配对），`9f4fcfe` 的写法是
+  "每轮取最近的一对、移除后重扫全部点对"⇒ `O(N^3)`（真图一个分量上千个奇度顶点就是分钟级到小时级）。
+  **并行会话的 `d3205a1` 已把它改成排序配对的 `O(n log n)`**，并写了"真图上一个分量可能有上千个
+  奇度顶点"的注释 —— 这是本轮最贵的一个 bug，值得单独两套红测钉住（见下）。
+
+### 部署 `0d8884d` 后的第 6b 步实测（自检**未通过**，如实记）
+
+```
+· 酒盒.dwg：八步 8/8 completed；零件 64 件（closed_ratio=0.938）；可算 9 / 可挤出 6
+· 圆盘盒.dwg：八步 8/8 completed；零件 9 件（closed_ratio=0.889）；可算 0 / 可挤出 0
+{"isolated_downstream_selfcheck": "failed",
+ "problems": ["圆盘盒.dwg：没有一件能跑工艺", "圆盘盒.dwg：没有一件能挤出 3D"]}
+✗ 隔离端到端自检未通过（见上）
+```
+
+- `酒盒.dwg` 相对 `2b56e2d`（可算 4 / 可挤 1）**明显变好**（可算 9 / 可挤 6，`closed_ratio` 0.797 → 0.938），
+  整段自检从"22 分钟卡死"回到"全程 < 90 秒"；
+- `圆盘盒.dwg` 反而**从 1 / 7 掉到 0 / 0**：9 件的轮廓是闭合的（0.889），断在 `processability()` 的
+  材料/厚度那两项 —— 归属改成四层口径（## 268）后，这份样本**没有件级/成组标注、需求草稿里也没有材料**，
+  于是全件 `PACKAGING_PART_MATERIAL_UNKNOWN`。门禁是对的（自检 failed、脚本非零退出），**没有为了发车放宽**。
+
+### 本轮新增的两套 Spec + 红测（都先跑红，实现由实现方做）
+
+| Spec | 红测 | 现在为什么红 |
+| --- | --- | --- |
+| `docs/specs/packaging-parts-pipeline-time-budget.md` | `tests/test_packaging_parts_pipeline_time_budget_red.py`（13 例） | A 组用**距离计算次数**钉复杂度（`N` 个奇度顶点 ≤ `4N` 次、翻倍不超 2.2 倍）：在 `9f4fcfe` 上 **Ran 13 / failures=7**（A1/A2 + B1/B2 + C1/C2/C3）；并行会话的 `O(n log n)` 落地后 A 组已绿，剩下的 B 组（`TIME_BUDGET_MS`、诊断 `elapsed_ms`）与 C 组（第 6b 步必须有 `timeout <= 900`、超时非零退出并点名样本、逐样本 `flush=True`）仍红：**Ran 13 / failures=5** |
+| `docs/specs/packaging-parts-selfcheck-diagnostics.md` | `tests/test_packaging_parts_selfcheck_diagnostics_red.py`（11 例） | 要求 `summarize()` 出两把账 `unprocessable_reason_mix` / `solid_reason_mix`（分母与 `processable_ratio` 一致、空文档给 `{}`、排序确定），并要求第 6b 步**当场**打印"不可算原因：PACKAGING_PART_MATERIAL_UNKNOWN×9"这样的汇总：**Ran 11 / failures=7**（A1–A4 + C1–C3 红，B/D 组是护栏已绿） |
+
+这两套针对的正是本轮踩到的两个坑：**"卡死没人知道"** 与 **"失败了只看到一句'没有一件能跑工艺'"**
+（后者若有账，`圆盘盒` 那一行会直接告诉我们"9 件全是缺材料"，而不是让人再逐件翻接口）。
+
+### 边界
+
+- 只改 Spec + 红测 + changelog：没有写业务实现、没有改生产数据、没有动并行会话正在改的
+  `main.py` / `packaging_part_solids.py` / `app.js`；
+- 为定位"自检卡死"，本轮在 34 上终止了**我自己那次部署**遗留的两个进程（第 6b 步的
+  `python -` 与它的父脚本），未触碰 8010/8012 服务与其数据；服务在清理后仍 `status=ok`；
+- 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 **L2（可信）**，未签字不得声明 L3；
+- 34 现在跑的是 `0d8884d`，其第 6b 步**未通过**（`圆盘盒` 0 可算 / 0 可挤）—— 部署命令是成功的，
+  自检结论是"未通过"，两件事不许混为一谈。
