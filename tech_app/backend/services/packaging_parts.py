@@ -546,22 +546,15 @@ def _collapse_edges(edges: List[Tuple[Any, Any, str, str]]
 
 
 def _nearest_gap_mm(keys: List[Any], vertices: Dict[Any, Tuple[float, float]]) -> float:
-    """奇度顶点两两**最近配对**后，取配对间隙的最大值（没有奇度顶点 → 0.0）。"""
-    pending = [(float(vertices[key][0]), float(vertices[key][1])) for key in keys
-               if key in vertices]
-    gaps: List[float] = []
-    while len(pending) >= 2:
-        best: Optional[Tuple[float, int, int]] = None
-        for first in range(len(pending)):
-            for second in range(first + 1, len(pending)):
-                gap = cad_geometry.distance(pending[first], pending[second])
-                if best is None or gap < best[0]:
-                    best = (gap, first, second)
-        if best is None:
-            break
-        gaps.append(best[0])
-        pending = [point for index, point in enumerate(pending)
-                   if index not in (best[1], best[2])]
+    """奇度顶点两两**最近的配对**后，取配对间隙的最大值（没有奇度顶点 → 0.0）。
+
+    按坐标排序后取相邻配对 —— 真图上一个分量可能有上千个奇度顶点（开放链的刀口），
+    逐对求最近是 O(n^3)，会把整条链路拖死；排序配对是 O(n log n) 且结果确定。
+    """
+    pending = sorted((float(vertices[key][0]), float(vertices[key][1])) for key in keys
+                     if key in vertices)
+    gaps = [cad_geometry.distance(pending[index], pending[index + 1])
+            for index in range(0, len(pending) - 1, 2)]
     return max(gaps) if gaps else 0.0
 
 
