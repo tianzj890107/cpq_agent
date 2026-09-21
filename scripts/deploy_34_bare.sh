@@ -331,11 +331,18 @@ SELFCHECK_DIR="${TMPDIR:-/tmp}/cpq-parts-selfcheck.$$"
 # 知识库走"服务间内部令牌 + HTTP 快照"（技术工艺不直连 Postgres），令牌由 8010 启动时生成并
 # 只传给它的 8012 子进程 —— 外部脚本要从**正在跑的 8010 进程 environ**里取同一个值，
 # 否则权威实样那条自检只能跳过（"自检没跑"正是要防的失效模式）。
-SELFCHECK_TOKEN="$(tr '\0' '\n' < "/proc/$PID/environ" 2>/dev/null | sed -n 's/^CPQ_INTERNAL_TOKEN=//p' | head -1)"
+# 令牌由 8010 进程自己生成（cpq_suite_server 导入期 `secrets.token_urlsafe` 后 putenv），
+# **只以环境变量形式传给它的 8012 子进程**：`/proc/8010/environ` 看不到 putenv 之后的改动，
+# 而子进程是 execve 继承的，能读到 —— 所以先找 8012，再兜底 8010（env 里显式给了令牌时）。
+SELFCHECK_TOKEN=""
+for _p in $(pgrep -f 'tech_app_launch.py --host 127.0.0.1 --port 8012' 2>/dev/null) "$PID"; do
+  SELFCHECK_TOKEN="$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^CPQ_INTERNAL_TOKEN=//p' | head -1)"
+  [ -n "$SELFCHECK_TOKEN" ] && break
+done
 if [ -n "$SELFCHECK_TOKEN" ]; then
-  echo "· 已从 8010（pid=$PID）取到服务间内部令牌，知识库自检可以真跑"
+  echo "· 已从运行中的服务进程取到服务间内部令牌，知识库自检可以真跑"
 else
-  echo "· 取不到 8010 的内部令牌，知识库自检会打印原因跳过"
+  echo "· 取不到服务间内部令牌，知识库自检会打印原因跳过"
 fi
 DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" "$PY" - <<'PY'
 import json
