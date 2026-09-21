@@ -84,12 +84,29 @@
 
 **样本项目 id 必须由用户提供**（不许脚本自己猜、不许拿生产项目当试验田）；未提供时该步 `skip` 并打印原因。
 
+### 6.1 隔离端到端（不需要项目 id；2026-09-21 补）
+
+第 6 步要一个**真实项目**，所以线上还没人点过"一键解析"时它只能 `skip` —— 那一步证明不了
+"这台机器上这条链路真的能跑通"。因此新增第 6b 步，它**不需要任何项目**：
+
+1. 只管把 `DATA_DIR` 指到一个临时目录（`tech_app/backend/config.py` 的
+   `os.getenv("DATA_DIR", ROOT/"data")`），在隔离目录里建项目 → 建需求草稿 →
+   `packaging_drawing_flow.run_flow()` 跑完整条八步；
+2. 读零件文档与单件详情：任一份样本出现「有步骤非 `completed` / 零件 0 件 / 无可算 / 无可挤出」
+   即非零退出（`unsupported` 的挤出结论不算失败，与第 6 步同口径）；
+3. 跑完删掉临时目录，并**核对 `tech_app/data/*/meta.json` 的数量前后不变** —— 生产数据目录一个
+   字节不写；数量变了直接判失败（这条是给"少写一个环境变量前缀就在生产目录里建了项目"兜底的）。
+
+样本仍必须来自 `裕同包装项目-待开发/`（第 5 步已强制两份样本存在）。两步互补：第 6 步证明
+"某一个真实项目的数据是对的"，第 6b 步证明"这台机器的链路是通的"。
+
 ## 7. 允许修改范围
 
 1. `tech_app/backend/services/packaging_parts.py`：`summarize()` 补 §2 指标（`closed_ratio` 第 1 层已有）。
 2. 新建 `tech_app/tools/packaging_parts_gate.py`。
 3. `DEPLOYMENT.md`：三级声明表 + 当前级别。
-4. `scripts/deploy_34_bare.sh`：新增第 6 步（可 `skip`）。
+4. `scripts/deploy_34_bare.sh`：新增第 6 步（可 `skip`）与第 6b 步（隔离端到端，不需要
+   项目 id、不写生产数据；见 §6.1）。
 5. `changelog/changelog_9_21_25.md`：按周记录。
 
 ## 8. 禁止事项

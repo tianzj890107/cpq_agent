@@ -294,6 +294,96 @@ PY
 fi
 
 # --------------------------------------------------------------------------- #
+step "6b. 下游连通自检（隔离端到端：不需要项目 id，也不写任何项目数据）"
+# 第 6 步要一个**真实项目** id，线上还没人点过"一键解析"时它只能 skip —— 那一步证明不了
+# "这台机器上这条链路真的能跑通"。这一步补上不需要项目的那条：把 store 的数据根目录指到临时
+# 目录（`DATA_DIR`，见 `tech_app/backend/config.py`），在隔离目录里建项目 → 建需求草稿 → 跑完整条
+# 八步 flow → 读零件文档 → 单件详情 → 挤出，跑完删掉临时目录。**生产数据目录一个字节不写。**
+# 口径见 Spec `packaging-parts-downstream-acceptance.md` §6.1。
+META_BEFORE="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
+SELFCHECK_DIR="${TMPDIR:-/tmp}/cpq-parts-selfcheck.$$"
+DATA_DIR="$SELFCHECK_DIR/data" "$PY" - <<'PY'
+import json
+import os
+import pathlib
+import sys
+import traceback
+
+sys.path.insert(0, os.getcwd())
+from tech_app.backend.storage import store
+from tech_app.backend.models.workflow import RequirementDoc
+from tech_app.backend.services import (packaging_drawing_flow, packaging_part_solids,
+                                       packaging_parts, requirement_service)
+
+SAMPLES = ("酒盒.dwg", "圆盘盒.dwg")
+bad = []
+for name in SAMPLES:
+    source = pathlib.Path("裕同包装项目-待开发") / name
+    if not source.is_file():
+        bad.append("%s：样本缺失" % name)
+        continue
+    try:
+        pid = store.create_project(name, source.read_bytes(),
+                                   note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
+                                   owner_display_name="deploy-selfcheck")
+        requirement_service.save_requirement_draft(
+            pid, RequirementDoc(project_id=pid, requirement_no="",
+                                title="部署自检 " + name, data={"customer_credit": "A"}),
+            user={"username": "deploy-selfcheck", "role": "admin"})
+        flow = packaging_drawing_flow.run_flow(pid, prompt="", actor="deploy-selfcheck")
+    except Exception:                                     # noqa: BLE001 - 检查失败如实报
+        traceback.print_exc()
+        bad.append("%s：跑不动（见上面的栈）" % name)
+        continue
+    steps = {str(row.get("step_id")): str(row.get("status"))
+             for row in (flow.get("steps") or [])}
+    not_done = {key: value for key, value in steps.items() if value != "completed"}
+    doc = packaging_parts.load_parts(pid) or {}
+    summary = packaging_parts.summarize(doc)
+    rows = doc.get("parts") or []
+    ready = [row for row in rows if packaging_parts.processability(row).get("ok")]
+    solids = [(row, packaging_part_solids.extrude(row)) for row in rows]
+    solids = [(row, out) for row, out in solids if out.get("status") == "ok"]
+    print("· %s：八步 %d/%d completed；零件 %d 件（closed_ratio=%.3f）；可算 %d / 可挤出 %d"
+          % (name, len(steps) - len(not_done), len(steps), len(rows),
+             float(summary["closed_ratio"]), len(ready), len(solids)))
+    if not_done:
+        bad.append("%s：有步骤没跑完 %r" % (name, not_done))
+    if not rows:
+        bad.append("%s：零件文档是空的" % name)
+    if not ready:
+        bad.append("%s：没有一件能跑工艺" % name)
+    if not solids:
+        bad.append("%s：没有一件能挤出 3D" % name)
+    if rows:
+        row = (ready or rows)[0]
+        out = packaging_part_solids.extrude(row)
+        print("   · 代表件 %s：outline_status=%s size_source=%s 挤出=%s"
+              % (row.get("part_code"), row.get("outline_status"),
+                 row.get("size_source"), out.get("status")))
+print(json.dumps({"isolated_downstream_selfcheck": "ok" if not bad else "failed",
+                  "problems": bad}, ensure_ascii=False))
+if bad:
+    print("\n隔离端到端自检未通过：", file=sys.stderr)
+    for reason in bad:
+        print("  · " + reason, file=sys.stderr)
+    sys.exit(1)
+print("隔离端到端自检通过（建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）")
+PY
+SELFCHECK_RC=$?
+"$PY" - "$SELFCHECK_DIR" <<'PY'
+import shutil
+import sys
+
+shutil.rmtree(sys.argv[1], ignore_errors=True)
+print("· 已删除隔离目录 %s" % sys.argv[1])
+PY
+META_AFTER="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
+echo "· 生产数据目录未被写入（meta.json 数量 $META_BEFORE → $META_AFTER）"
+[ "$META_BEFORE" = "$META_AFTER" ] || fail "隔离自检动了生产数据目录（meta.json $META_BEFORE → $META_AFTER）"
+[ "$SELFCHECK_RC" = "0" ] || fail "隔离端到端自检未通过（见上）"
+
+# --------------------------------------------------------------------------- #
 step "7. 结论"
 echo "部署完成：$OLD_HEAD → $NEW_HEAD（ref=$REF）"
 echo "8010 pid=$PID；env 文件=$ENVF；日志=nohup.out"
