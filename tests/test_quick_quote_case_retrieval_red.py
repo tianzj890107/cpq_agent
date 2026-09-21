@@ -174,7 +174,10 @@ class TestANamingContract(Base):
         rows = list(module.DEFAULT_WEIGHTS)
         self.assertEqual(DIMENSIONS, tuple(row["dimension"] for row in rows))
         total = sum(float(row["weight"]) for row in rows)
-        self.assertAlmostEqual(1.0, total, places=9, msg="权重之和必须为 1")
+        # 九条种子按 Spec §2.1 逐字给出，加总本来就是 0.9：相似度是**按权重和归一**的
+        # （`similarity = 加权和 / 权重和`，d1 用"完全一致 → 1.0"钉住这条），
+        # 所以这里断言的是"种子没被改过"，不是"九条必须凑成 1"。
+        self.assertAlmostEqual(0.9, total, places=9, msg="权重种子之和（Spec §2.1）不得被改动")
         self.assertEqual(DEFAULT_WEIGHTS, tuple(dict(row) for row in rows),
                          "权重表种子必须与 Spec §2.1 一致")
 
@@ -329,7 +332,9 @@ class TestDSimilarityAndRanking(Base):
     def test_d3_sorted_by_similarity_then_case_code(self):
         module = self.module()
         cases = [
-            case_row("QQ-CLOSE", face_paper_gsm=200.0),
+            # 面纸比需求(200)高 5g：与需求**不相等**才算"近"（原写 200.0 与需求逐字相同，
+            # 于是它与 QQ-SAME 同为 1.0，同分按 case_code 升序时 QQ-CLOSE 必然排在前面）。
+            case_row("QQ-CLOSE", face_paper_gsm=205.0),
             case_row("QQ-FAR", face_paper_gsm=260.0),
             case_row("QQ-SAME"),
         ]

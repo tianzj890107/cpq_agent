@@ -6928,3 +6928,130 @@ cd /Users/sher/Boulderaitech/cpq_agent && git push origin ytbz:ytbz    # 221f80f
 ```
 
 （未做任何变通：没有改远端、没有强推、没有动 20260909 / master。）
+
+## 235. 逆向快速报价第 2 批：相似案例检索与候选选择（`cpq_quick_quote_match.py` + 权重表第 31 张）（9-21，Codex 实现 + 回归）
+
+Spec `docs/specs/quick-quote-2-case-retrieval.md`，红测 `tests/test_quick_quote_case_retrieval_red.py`（36 条）。
+本批把「标准报价案例库」变成可检索的候选列表：需求输入 → 硬筛选（盒型/盒族/闭合方式/内托）→
+相似度打分（尺寸/克重/色数/覆膜/烫金/V槽/磁铁/数量）→ 3～5 个候选（相同项 / 差异项 / 来源 /
+审核 / 排名理由）→ **人工**选一个基准案例。不出价、不落库、不联网、不碰技术工艺链路。
+
+### 红测前后（原文）
+
+```
+实现前： Ran 36 tests in 0.002s   FAILED (failures=36)      # 模块不存在
+实现后： Ran 36 tests in 0.054s   OK
+```
+
+实现首跑只红两条，且两条都是**红测自身写错**（不是实现口径问题），实测原文：
+
+```
+FAIL: test_a5_default_weights_shape_matches_table_contract
+AssertionError: 1.0 != 0.9000000000000001 within 9 places (0.09999999999999987 difference) : 权重之和必须为 1
+
+FAIL: test_d3_sorted_by_similarity_then_case_code
+AssertionError: 'QQ-SAME' != 'QQ-CLOSE'
+```
+
+### 这两条红测缺陷与修法（只改测试文件里写错的那一处，口径一个字没动）
+
+| 缺陷 | 事实 | 修法 |
+| --- | --- | --- |
+| A5 断言「九条权重之和必须为 1」 | Spec §2.1 的九条**逐字**给出就是 0.9（0.30+0.10+0.10+0.05+0.05+0.08+0.05+0.05+0.12）；同一条用例又要求 `DEFAULT_WEIGHTS` 与这九条逐字相等 —— 两个断言数学上不可能同时成立 | 断言改成 `0.9`（「种子没被改过」），并在注释里点明相似度是**按权重和归一**的（D1「完全一致 → 1.0」正是这条的护栏），所以「凑成 1」从来不是契约 |
+| D3 的 `QQ-CLOSE` 用了 `face_paper_gsm=200.0` | 需求默认面纸也是 200.0 → 这条「近的案例」与 `QQ-SAME` 的相似度同为 1.0；同分按 `case_code` 升序时 `QQ-CLOSE` 必然排前，`assertEqual("QQ-SAME", codes[0])` 不可能成立 | 把该案例改成 `205.0`（比需求高 5g）：保住「完全一致 > 接近 > 远」的原意与全部三条断言，排序规则仍是 Spec 的「同分按 case_code 升序」 |
+
+> 纪律说明：本仓库测试与期望值归 Codex，实现方不得改测试。这两处是**测试文件自身写错**（且互相矛盾、任何实现都无法同时满足），
+> 因此由测试所有者按 Spec 原意修正；断言口径、判定语义、排序规则都没有放宽。
+
+### 落地内容（5 个文件）
+
+| 文件 | 改了/新增什么 |
+| --- | --- |
+| `cpq_quick_quote_match.py`（新，约 690 行） | 契约常量（`ENGINE_VERSION` / `QUICK_MATCH_INPUT_KEYS` / `HARD_GATE_DIMENSIONS` / `DIMENSIONS` / `WEIGHT_TABLE` / `DEFAULT_TOP_N=5` / `MIN_CANDIDATES=3`）、`load_weights()`（注入优先；读不到或表为空 → `CaseLibraryUnavailable`，**不回落种子**）、`_hard_gate()`（缺失 = `needs_input`，不静默当冲突、也不给高分）、九维打分（容差读权重行）、`match_cases()`（排序：命中在前 → 可用在前 → 相似度降序 → 案例编号升序；`suggested_case_code` 只从可用候选里出）、`explain()`、`build_baseline()`（角色门禁 + 可选性门禁 + 基准档单价）、`seed_rows()` / `seed_weights()`（幂等灌库，只在确有变化时 +1 `kb_version`） |
+| `cpq_quick_quote_case.py` | 新增 `normalize_print_colors()`（`4C`/`CMYK`/`四色` → `CMYK`，专色保留原值；空值仍空），并让 `normalize_case()` 用它 —— 色数口径全仓只有一份，批 2 不另写 |
+| `cpq_kb.py` | `KB_TABLES` / `KB_KEYS` / `_DDL_TEMPLATE` **追加**第 31 张 `kb_quick_quote_match_weight`（主键 `("dimension",)`；列含 weight/hard_gate/tolerance/industry/source_type/source_ref/version/review_status）；前 30 张相对顺序未动 |
+| `DEPLOYMENT.md` | 「快速报价（标准案例库）」一节补上权重表：落地顺序加第 31 张表与 `seed_weights()`、验证命令加 `load_weights(None)`、说明「表空 = 明确报错，不会假装用默认权重」，并新增「相似案例检索（批 2）：自己跑一遍」小节（可直接照抄的 `match_cases()` 片段 + 怎么读结果；同时写明 `seed_weights()` 是**恢复出厂**口径，业务改过权重后不要再跑） |
+| `changelog/changelog_9_21_25.md` | 本条目 |
+
+### 权重表为什么要灌（不灌会怎样）
+
+Spec §2.1 明确「表读不到 / 表为空都抛错，不回落代码里的默认权重」——这是刻意的：
+权重是业务口径，回落会把「没人配」伪装成「配好了」。所以本批同时给出唯一的灌库入口
+（幂等、带 version/source_ref/review_status），并在 `DEPLOYMENT.md` 写明命令。
+
+### 本地真库跑通（不是只跑单测，原文）
+
+```
+① ensure_schema → tables = 31 | kb_version = 2（新表刚建出来，0 行）
+② seed_weights(first)  → {"ok": true, "table": "kb_quick_quote_match_weight", "rows": 9, "changed": 9, "kb_version": 3}
+③ seed_weights(again)  → {"ok": true, ..., "rows": 9, "changed": 0, "kb_version": 3}     # 幂等：没有变化就不涨版本
+④ load_weights(None)   → 9 行；[('face_paper_gsm', 0.1, 0.3), ('grey_board_gsm', 0.1, 0.3), ('hot_stamping', 0.08, 0.0)] …
+⑤ match_cases(真库案例表) → candidates = 0 | weights_version = '1'
+   no_candidate_reason: 现有标准案例里没有盒型 / 结构对得上的候选：该需求与标准案例库差异较大，
+                        建议转精准报价；若这是常做品类，请先按标准格式补一个案例再走快速报价。
+```
+
+案例表是 0 行（批 1 不代造数据），所以第 ⑤ 步如实给 0 候选 + 转精准报价建议 —— **不是**悄悄返回空列表。
+把一条标准案例灌进去（来源 workbook、已审核、有效期内）后，`match_cases` 立刻给候选并按相似度排序，
+这条在红测里是用注入案例钉住的（D 组 / E 组 / F 组）。
+
+同一条链在**真库**上再跑一遍（临时案例，跑完已 DELETE，案例表回到 0 行）：
+
+```
+① save_case(QQ-SMOKE-0002) → 入库成功（版本 1）
+② match_cases(真库案例表 + 真库权重表) → weights_version='1'，1 个候选，inputs_complete=True
+     QQ-SMOKE-0002  matched  90.740741
+     rank_reason: 命中盒型 / 盒族 / 闭合方式 / 内托，相似度 90.7407%；可用于快速报价
+     差异项: [('face_paper_gsm', 200.0, 250.0, '面纸克重 200 → 250（+50）')]
+     相同项: box_type / box_family / closure_type / inner_* / grey_board_gsm / insert_type /
+             print_colors / lamination / hot_stamping / v_groove / magnet / quantity
+③ build_baseline(QQ-SMOKE-0002) → base_price=80.065878、base_currency=CNY、base_quantity=3000.0、
+     base_tier_qty=3000.0、base_tier_matched=True、base_unit_price=10.8、valid_until=2027-06-01
+④ 角色门禁 → role_forbidden（viewer 不能选基准案例）
+⑤ DELETE 临时案例 → 案例表行数 = 0
+```
+
+注意第 ② 步：需求写的是 `print_colors="4C"`，案例是 `CMYK` —— 归一后算「相同项」，这就是
+`normalize_print_colors()` 那份唯一实现的作用（色数口径不各写一份）。
+
+### 红线（都在红测里有护栏）
+
+1. **权重只从表来**：代码里除种子常量外没有任何数字权重（B4 全文扫描 `0.30/0.20/0.15/0.12`）；换一张权重表就换一个排序（B1）；
+2. **缺失 ≠ 冲突**：硬筛选维度任一边没填 → 该案例 `status="needs_input"` + `reason_code="missing_input"`，排在命中之后、淘汰之前（C4）；
+3. **不 eligible 也要看得见**：未审核 / 演示 / 过期案例照常返回，但排在可用案例之后并在 `rank_reason` 点名原因（D4）；
+   `suggested_case_code` 只从可用候选里出，`confirmed_case_code` **恒为空**（F1）—— 不替用户决定；
+4. **成交价默认不返回**（E3）：`include_deal_price=False` 时候选里没有 `deal_price` 键；
+5. **准入判定不重写**：`quote_eligibility is cpq_quick_quote_case.quote_eligibility`、异常类同一个对象（A3）。
+
+### 回归（原文）
+
+```
+tests.test_quick_quote_case_retrieval_red            Ran 36 tests   OK
+tests.test_quick_quote_mode_and_case_model_red       Ran 39 tests   OK
+tests.test_packaging_kb_authoritative_rollout_red    Ran 20 tests   OK
+tests.test_kb_in_pg_http_snapshot_red                Ran 22 tests   OK
+tests.test_packaging_knowledge_base_seed_red         Ran 46 tests   OK
+tests.test_packaging_quote_close_loop_red            Ran 96 tests   OK
+tests.test_quote_packaging_box_selection_red         Ran 20 tests   OK
+tests.test_packaging_box_type_matching_red           Ran 51 tests   OK
+```
+
+全量（211 套件，同一份代码）：
+
+```
+批 2 实现前： Ran 4043 tests   FAILED (failures=185, skipped=17)
+批 2 实现后： Ran 4043 tests   FAILED (failures=149, skipped=17)     # 185 - 36 = 149，零新增失败
+```
+
+逐条对比失败名单：**新增失败 0 条**；转绿的正好是 `pkg_test_quick_quote_case_retrieval_red` 的 36 条
+（`comm -13` / `comm -23` 比对，不是只看总数）。
+
+批 3 / 批 4 / 批 5 的红测（字段工作区 / 生成与门槛 / 文件解析）仍按预期红 —— 它们对应实现还没做，
+且失败原因与本批无关（逐条核对：没有一条失败提到 `cpq_quick_quote_match`）。
+
+### 本批不做（后续批次）
+
+字段工作区与差异价（批 3）、最终快速报价与门槛（批 4）、DWG 解析接入（批 5）；
+也**没有**新增 HTTP 路由与前端面板 —— Spec 批 2 的契约只在模块层，界面接线在批 3/4/5。
+
+未提交、未推送、未部署（当时状态）。未引入任何第三方依赖。

@@ -79,6 +79,9 @@ KB_TABLES = (
     # 逆向快速报价（批 1）：案例库的有效期口径 / 阈值等配置，一行一个 key 的 JSON。
     # 只能追加：前面所有表的相对顺序是快照契约（同名单测 a2 冻结）。
     "kb_quick_quote_config",
+    # 逆向快速报价（批 2）：相似案例检索的相似度权重 / 容差口径，一行一个维度。
+    # 读不到或表为空 → `load_weights()` 直接报错（不回落代码里的种子）。
+    "kb_quick_quote_match_weight",
 )
 
 # 每张表的业务主键（ON CONFLICT 的目标）。取值与 da_schema.sql 的
@@ -114,6 +117,7 @@ KB_KEYS = {
     "kb_packaging_cost_content": ("content_code",),
     "kb_packaging_tooling_rule": ("tooling_code",),
     "kb_quick_quote_config": ("key",),
+    "kb_quick_quote_match_weight": ("dimension",),
 }
 
 # 单项也必须写成 1-元组 ("x",)：少了那个逗号就退化成字符串，ON CONFLICT ("c","o",...)
@@ -698,6 +702,23 @@ _DDL_TEMPLATE = [
     key              text PRIMARY KEY,      -- 配置块名，如 quick_quote
     value_json       text,                  -- 该块的 JSON（缺失键由调用方按默认值补齐）
     version          text,
+    updated_at       text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_quick_quote_match_weight (
+    dimension        text PRIMARY KEY
+                     CHECK (dimension IN ('size_range', 'grey_board_gsm', 'face_paper_gsm',
+                                          'print_colors', 'lamination', 'hot_stamping',
+                                          'v_groove', 'magnet', 'quantity')),
+    weight           double precision NOT NULL DEFAULT 0,   -- 相对权重；打分时按权重和归一
+    hard_gate        bigint NOT NULL DEFAULT 0,
+    tolerance        double precision NOT NULL DEFAULT 0,   -- 相对差容差（0 = 只有相等才算命中）
+    industry         text NOT NULL DEFAULT 'packaging',
+    source_type      text NOT NULL DEFAULT 'unknown'
+                     CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref       text,
+    version          text,
+    review_status    text NOT NULL DEFAULT 'draft'
+                     CHECK (review_status IN ('draft', 'reviewed', 'retired')),
     updated_at       text
 );"""]
 

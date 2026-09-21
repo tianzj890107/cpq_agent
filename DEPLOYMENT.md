@@ -367,7 +367,8 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 
 口径：`cpq_kb` 是包装知识库的唯一事实源，建表、版本号、快照、导入都在 `cpq_kb.py`
 （DDL 与 `tech_app/backend/storage/da_schema.sql` 的 `kb_*` 定义 1:1，共 **30** 张表 ——
-9-21 追加第 30 张 `kb_quick_quote_config`，见「快速报价（标准案例库）」一节）。
+9-21 追加第 30 张 `kb_quick_quote_config` 与第 31 张 `kb_quick_quote_match_weight`，
+见「快速报价（标准案例库）」一节）。
 技术工艺（8012）不直连 PG，只读快照；`kb_version` 是快照失效的唯一依据。
 
 ### 落地顺序（在能连到 PG 的机器上执行）
@@ -535,38 +536,96 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 
 ## 快速报价（标准案例库）
 
-逆向快速报价的**唯一事实源**是两张表：案例表 `cpq_wf.cpq_qq_standard_case`（报价侧，与
-`cpq_wf_*` 同 schema）与配置表 `cpq_kb.kb_quick_quote_config`（知识库侧，`key` / `value_json` /
-`version` / `updated_at`）。建表都是幂等的，可以反复执行；**少任何一张，接口都会明确报错**
-（`CaseLibraryUnavailable`），不会回落成"库里没有案例"。
+逆向快速报价的**唯一事实源**是三张表：案例表 `cpq_wf.cpq_qq_standard_case`（报价侧，与
+`cpq_wf_*` 同 schema）、配置表 `cpq_kb.kb_quick_quote_config`（知识库侧，`key` / `value_json` /
+`version` / `updated_at`）与权重表 `cpq_kb.kb_quick_quote_match_weight`（知识库侧，一行一个相似度
+维度：`dimension` / `weight` / `hard_gate` / `tolerance` / `industry` / `source_type` / `source_ref` /
+`version` / `review_status`）。建表都是幂等的，可以反复执行；**少任何一张，调用都会明确报错**
+（`CaseLibraryUnavailable`），不会回落成"库里没有案例"、也不会回落成"用代码里的默认权重"。
 
-口径与代码位置：`cpq_quick_quote_case.py`（模型 / 准入 / 取数），
-Spec `docs/specs/quick-quote-1-mode-and-case-model.md`。
+口径与代码位置：`cpq_quick_quote_case.py`（模型 / 准入 / 取数）、`cpq_quick_quote_match.py`
+（相似案例检索 / 权重 / 人工选基准），Spec `docs/specs/quick-quote-1-mode-and-case-model.md` 与
+`docs/specs/quick-quote-2-case-retrieval.md`。
 
 ### 落地顺序（在能连到 PG 的机器上执行）
 
 ```bash
-# ① 知识库侧：建 kb_quick_quote_config（第 30 张 kb_* 表；幂等）
+# ① 知识库侧：建 kb_quick_quote_config + kb_quick_quote_match_weight（第 30、31 张 kb_* 表；幂等）
 ./open-claude/.venv/bin/python -c "import cpq_kb; cpq_kb.ensure_schema(); print('kb tables', len(cpq_kb.KB_TABLES))"
 
-# ② 报价侧：建案例表 + 索引 + DWG 通道增量列（幂等，须在 cpq_auth.init() 之后）
+# ② 相似度权重：把种子灌进 kb_quick_quote_match_weight（幂等；只在确有变化时 +1 kb_version）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_match as m; print(m.seed_weights())"
+
+# ③ 报价侧：建案例表 + 索引 + DWG 通道增量列（幂等，须在 cpq_auth.init() 之后）
 ./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as q; print(q.init())"
 ```
+
+> 权重表**必须**灌（第 ② 步），否则 `load_weights()` 会直接抛 `CaseLibraryUnavailable`
+> —— 这是刻意的：权重是业务口径，回落成代码里的默认值会把"没人配"伪装成"配好了"。
+>
+> `seed_weights()` 的口径是**恢复出厂**：它按 `dimension` upsert，业务改过的行会被种子值覆盖
+> （幂等指的是"同一份种子重复跑只有第一次涨 `kb_version`"，不是"不覆盖业务改动"）。
+> 业务改过权重之后**不要再跑它**；要改权重直接 `UPDATE cpq_kb.kb_quick_quote_match_weight`，
+> 代码里没有第二份数字。
 
 ### 怎么验证通了（不看人，自己跑）
 
 ```bash
-# ③ 配置读得到（读的就是 cpq_kb 快照里的 kb_quick_quote_config）
+# ④ 配置读得到（读的就是 cpq_kb 快照里的 kb_quick_quote_config）
 ./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as q; print(q.load_config(None))"
 
-# ④ 案例清单接口（8010 上的报价助手，注意是 /agents/quote 前缀）
+# ⑤ 权重读得到（读的就是 cpq_kb 快照里的 kb_quick_quote_match_weight；表空 / 库不可用会明确抛错）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_match as m; print(m.load_weights(None))"
+
+# ⑥ 案例清单接口（8010 上的报价助手，注意是 /agents/quote 前缀）
 curl -s -H "X-Internal-Token: $CPQ_INTERNAL_TOKEN" \
   http://127.0.0.1:8010/agents/quote/api/quick-quote/cases | head -c 400
 
-# ⑤ 页面上：报价首页 → 行业选「包装」→ 出现「精准报价 / 快速报价」两个入口，
+# ⑦ 页面上：报价首页 → 行业选「包装」→ 出现「精准报价 / 快速报价」两个入口，
 #    点「快速报价」弹出面板，里面是案例清单与每条的可用性 + 原因。
 #    非包装行业不显示快速报价入口（标准案例库是包装案例库）。
 ```
+
+### 相似案例检索（批 2）：自己跑一遍
+
+批 2 的契约在**模块层**（还没有页面入口，页面接线在批 3/4/5）。下面这段可以直接照抄执行，
+用的就是同一份权重表与同一张案例表：
+
+```bash
+cd /Users/sher/Boulderaitech/cpq_agent
+./open-claude/.venv/bin/python - <<'PY'
+import json
+import cpq_quick_quote_match as m
+
+inputs = {
+    "box_type": "YT-RB-01001-A", "box_family": "01天地盖", "closure_type": "磁吸",
+    "inner_length": 200, "inner_width": 150, "inner_height": 80,
+    "grey_board_gsm": 1200, "face_paper_gsm": 200, "insert_type": "EVA内托",
+    "print_colors": "CMYK", "lamination": True, "hot_stamping": True,
+    "v_groove": True, "magnet": True, "quantity": 3000,
+}
+result = m.match_cases(inputs)          # 权重读 kb_quick_quote_match_weight，案例读案例表
+print("权重版本:", result["weights_version"], "| 候选数:", len(result["candidates"]),
+      "| 需人工选:", result["requires_manual_selection"])
+for row in result["candidates"]:
+    print(row["case_code"], row["status"], row["similarity_pct"], row["rank_reason"])
+print("建议:", result["suggested_case_code"], "| 已确认:", repr(result["confirmed_case_code"]))
+print("0 候选原因:", result["no_candidate_reason"])
+
+# 人工选基准案例（角色必须是 sales_mgr / admin）；选中后才是批 3 字段工作区的输入
+# print(json.dumps(m.build_baseline(inputs, result["suggested_case_code"],
+#       user={"user_id": "1", "username": "张三", "role_code": "sales_mgr"}), ensure_ascii=False))
+PY
+```
+
+怎么读结果：
+
+- **候选**：`status="matched"`（命中硬筛选）在前、`needs_input`（硬筛选维度没填）居中，各自按相似度降序；
+  未审核 / 演示 / 过期案例照常列出，但排在可用案例之后，`rank_reason` 里点名原因；
+- **不替用户决定**：`requires_manual_selection` 恒为 true、`confirmed_case_code` 恒为空，
+  选案例必须走 `build_baseline()`（带登录用户）；
+- **0 候选**：`no_candidate_reason` 会给中文原因并建议转精准报价 —— 不会因为"库里没有"就静默返回空列表；
+- **成交价默认不返回**（`include_deal_price=True` 才带），避免商务敏感信息躺在候选列表里。
 
 ### 现在是空的，为什么，以及怎么变成可用
 
@@ -584,5 +643,6 @@ curl -s -H "X-Internal-Token: $CPQ_INTERNAL_TOKEN" \
 
 ### 本批不做（后续批次）
 
-相似案例检索排序、字段工作区与差异价、最终快速报价与门槛、文件（DWG）解析接入分别是
-批 2–5；本批只把两条报价路径分开并立住案例模型与准入口径。
+字段工作区与差异价、最终快速报价与门槛、文件（DWG）解析接入分别是批 3–5；
+批 1 只把两条报价路径分开并立住案例模型与准入口径，批 2 只做相似案例检索与人工选基准
+（页面入口与差异价在批 3/4/5）。

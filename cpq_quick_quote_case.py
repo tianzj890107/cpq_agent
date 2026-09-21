@@ -281,6 +281,25 @@ def _tiers(value) -> List[dict]:
     return out
 
 
+#: 印刷色数的同义写法（`4C` / `四色` 与 `CMYK` 是同一个色数口径）。只在归一里出现一份，
+#: 案例模型与相似案例检索都调 `normalize_print_colors()`，不各写一份。
+_PRINT_COLOR_ALIASES = {
+    "4c": "CMYK", "4/c": "CMYK", "4色": "CMYK", "四色": "CMYK", "cmyk": "CMYK",
+    "4cmyk": "CMYK",
+}
+
+
+def normalize_print_colors(value) -> str:
+    """印刷色数归一：`4C` / `CMYK` / `四色` → `CMYK`；`PANTONE 877C` 这类专色保留原值。
+
+    空值 → `""`（**不猜**成 CMYK）。专色写法无限多，只归一同义的四色写法。
+    """
+    text = _text(value)
+    if not text:
+        return ""
+    return _PRINT_COLOR_ALIASES.get(text.replace(" ", "").lower(), text)
+
+
 def _coerce(key: str, value):
     if key in _TEXT_FIELDS:
         return _text(value)
@@ -300,6 +319,7 @@ def normalize_case(case) -> dict:
     src = case if isinstance(case, dict) else {}
     row: Dict[str, Any] = {key: _coerce(key, copy.deepcopy(src.get(key)))
                            for key in CASE_FIELDS}
+    row["print_colors"] = normalize_print_colors(src.get("print_colors"))
     row["quantity_tiers"] = _tiers(src.get("quantity_tiers"))
     if not row["industry"]:
         row["industry"] = INDUSTRY
