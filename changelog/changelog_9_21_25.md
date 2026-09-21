@@ -7997,3 +7997,71 @@ export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"   # ② xvfb-run
 
 未改任何业务实现（`cpq_quick_quote_*.py`、`tech_app/**` 一个字节没动）；未 push、未部署；
 34 上跑的还是 `47ea407` 时代的代码。
+
+## 246. 34 上隔离端到端复验：一键解析整条链路八步全 completed（不碰生产数据）（9-21，Codex 执行）
+
+### 为什么还要再跑一次
+
+## 245 证明的是"转换器 + 零件指标"这一层，以及 34 上的门禁是 `go`。但**门禁不跑 store、不跑
+`packaging_drawing_flow` 的八步编排**，而线上从来没人点过"一键解析图纸"（`tech_app/data/*/packaging_parts.json`
+一个都没有）。所以"34 能不能整条跑通"当时只是推断，不是事实。这条补上。
+
+### 跑法：`DATA_DIR` 指到临时目录的隔离端到端
+
+`DATA_DIR` 是 `tech_app/backend/config.py` 里 `os.getenv("DATA_DIR", ROOT/"data")` 出来的，
+所以整条链路（store 建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）可以在
+`DATA_DIR=/tmp/parts-e2e/data` 下真跑，**生产数据目录一个字节不写**：
+
+```bash
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"
+DATA_DIR=/tmp/parts-e2e/data ./open-claude/.venv/bin/python - <<'PY'
+# store.create_project(样本) → requirement_service.save_requirement_draft(...)
+# → packaging_drawing_flow.run_flow(pid) → packaging_parts.load_parts(pid)
+# → main.get_requirement_packaging_part(...) → packaging_part_solids.extrude(...)
+PY
+```
+
+### 结果（34，`640395c`，生产 ODA 27.1）
+
+两份样本的八步（`file_preflight / dwg_convert / cad_ir_parse / packaging_semantics /
+parts_extract / field_write / pending_confirm / downstream_prepare`）**全部 `completed`**：
+
+| 样本 | 零件 | closed_ratio | role_known | size_source_mix | 可算 | 可挤出 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | 64 | 0.797 | 0.000 | closed_outline 51 / component_bbox 13 | 4 | 1 |
+| `圆盘盒.dwg` | 9 | 0.889 | 0.111 | closed_outline 8 / component_bbox 1 | 1 | 7 |
+
+- 单件详情（与右栏面板同一条数据源 `GET …/requirement/packaging-parts/{part_code}` 的处理函数）：
+  酒盒 `DWG-P07` `found=true built=true outline_status=closed size_source=closed_outline evidence=47`；
+  圆盘盒 `DWG-P04` `outline_status=closed evidence=3`。
+- 挤出（`packaging_part_solids.extrude`，ASCII STL 以 `solid packagin…` 开头）：
+  酒盒 `DWG-P35` 12 面 / `volume_mm3=84729.3235`；圆盘盒 `DWG-P02` 20 面 / `volume_mm3=392413.0`。
+- 工艺入口前置判定：`processability(DWG-P07) = {"ok": true, "missing_variables": []}`。
+
+本地同一份代码跑出的数字与上面**逐项相同** —— 线上不是"另有一套行为"。
+
+### 如实披露：一次越界与它的清理
+
+上面那份**不加 `DATA_DIR=` 的批量脚本（第一版跑通后我又跑了一遍两样本版）漏了那个环境变量前缀**，
+于是在 34 的**生产数据目录**里多建了两个临时项目：`f0740644d5bf`（酒盒）、`7db60aedf165`（圆盘盒），
+各自带 `meta.json / source.dwg / conversions / cad_ir / requirement.json / session_events.json /
+packaging_drawing_flow.json / packaging_parts.json`。发现后立刻做了三件事：
+
+1. 整体删除这两个目录（`shutil.rmtree`，非 `rm -rf`）；
+2. 复核：`tech_app/data/*/packaging_parts.json` 回到 **0 个**；`tech_app/data` 下现存 6 个目录
+   （`deploy-selfcheck` / `dwg-svc-892b655` / `dwg-svc2-892b655` / `dwg-verify-892b655` /
+   `dwg-verify-892b655b` / `parts-verify-34`）**全部没有 `meta.json`**，即历史上各次验证留下的
+   脚手架目录，不出现在任何项目列表里；**没有删除或改写任何既有项目、需求、图纸与产物**；
+3. 顺手删掉 ## 245 那轮我自己留下的 `parts-verify-34`（只有 conversions，无 `meta.json`）。
+
+根因是脚本里少写一个环境变量前缀，不是产品行为；隔离跑法本身（`DATA_DIR=/tmp/...`）已经验证有
+隔离效果（那份脚本跑前跑后 `packaging_parts.json` 都是 0）。**结论仍以上面那份隔离跑的数据为准**，
+误建的两个目录没有参与任何结论，也已不存在。
+
+### 边界
+
+- 本次只追加本条目（`changelog`），**未改任何业务代码、未改任何 `tests/` 文件**。
+- 未连数据库、未写 PG、未创建 MR / tag / Release；未引入任何新依赖。
+- 34 上生产数据目录的最终状态：**0 个项目、0 份零件文档**（与本次操作前一致）。
+- 能力声明口径不变：`parts_demo_script` 未签字前仍是 **L2（可信）**。
