@@ -3738,3 +3738,71 @@ FAILED (failures=24)
   未 Release、未部署、未重启服务、未改服务器配置**；未新增依赖。
 - `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
 
+---
+
+## 190. DWG 修复批红测夹具缺陷落修（G2/G3/G4 转绿，断言未动）（9-21，Codex 只改红测 + changelog）
+
+### 背景
+
+`## 188` 记的**唯一阻塞**是红测夹具自身缺陷：`tests/test_dwg_conversion_quality_repair_red.py`
+把假转换器的行为放在**共享环境变量** `FAKE_DXF_MODE` 里（`set_fake_payload()` 写、
+两个假脚本在运行时读 `${FAKE_DXF_MODE:-tidy}`）。`GFallbackChain.chain()` **先建回退再建主**，
+于是该变量最终等于**主**的 mode —— 回退跳次被迫复用主的分支：
+
+- `G2`（主非 0 退出）→ 回退也走 `fail`，`ERROR`；
+- `G3`（主超时 `hang`）→ 假 LibreDWG **没有** `hang` 分支，落 `esac` 后 `exit 0` 且不写产物，`ERROR`；
+- `G4`（主产物为空）→ 回退也走 `empty`，`ERROR`。
+
+`## 188` 已定性为夹具缺陷（**不是**实现缺口）、记明修法与取证，并按当批禁令「不许为了让红测
+转绿而改测试」未落修，等测试维护方处理。
+
+### 本轮落修（4 行；断言一字未动）
+
+- 两个脚本模板的 `case "${FAKE_DXF_MODE:-tidy}" in` → `case "__MODE__" in`；
+- `fake_cli()` / `fake_oda_cli()` 各补一条 `.replace("__MODE__", str(mode))`，
+  把 mode **烧进脚本本身**，使主/回退各自的行为可独立表达。
+
+未改任何断言、未改阈值、未删测试、未放宽口径。
+
+### 实跑证据
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_dwg_conversion_quality_repair_red
+Ran 43 tests in 23.540s
+OK
+```
+
+落修前同一文件：`Ran 43 tests … FAILED (errors=3)`（`G2`/`G3`/`G4`）。
+
+### DWG 全套件当前状态（本轮复跑，逐条实跑）
+
+| 套件 | 结果 |
+| --- | --- |
+| `tests.test_dwg_conversion_quality_repair_red` | `Ran 43 … OK` |
+| `tests.test_dxf_cad_ir_red` | `Ran 46 … OK (skipped=1)` |
+| `tests.test_packaging_semantics_red` | `Ran 59 … OK (skipped=1)` |
+| `tests.test_packaging_drawing_flow_red` | `Ran 54 … OK (skipped=1)` |
+| `tests.test_dwg_final_acceptance_red` | `Ran 53 … OK`（复跑两次一致） |
+
+⚠️ 说明：本轮早先一次同批运行读到 `test_dwg_final_acceptance_red` `Ran 53 … FAILED (failures=52)`
+（耗时 0.242s，像是模块未就绪的快速失败）；随后复跑两次均为 `OK`（12.8s / 13.1s），
+且 `git status` 无并行改动、相关模块 mtime 早于该次运行。按**可复现的当前状态**为准记为 OK，
+早先读数无法复现，留档以免误判。
+
+### 门禁现状（`--env local`，实跑）
+
+`summary: {ok: 14, fail: 2, manual: 2}`，`verdict: no_go`。
+2 个 fail = `converter_version_pinned`（本机未固定 `DWG_CONVERTER_VERSION`）、
+`no_secrets_in_logs_or_fixtures`（扫描到疑似机密字样）；2 个 manual 未 ack。**判定仍是 No-Go**。
+
+### 能力声明
+
+`support_claim` 仍为 `conversion_available`、`dwg_supported` 仍为 `false`：
+本批只修红测夹具，**没有**跑 L4 真实样本 E2E、**没有**已审批金标与验收记录。
+仍只允许写「**DWG 编排能力完成，真实转换能力未验收**」，不许写「支持 DWG」。
+
+### 提交状态
+
+- 本轮改 `tests/test_dwg_conversion_quality_repair_red.py` 与本条 changelog；
+  **未 commit、未 push、未 MR、未 tag、未 Release、未部署、未重启服务、未改服务器配置**；
+  未新增依赖；两份真实 DWG 与 `裕同包装项目-待开发/` 保持只读、未入库。

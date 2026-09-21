@@ -104,7 +104,7 @@ while [ $i -lt __ERR__ ]; do
   echo "ERROR: bit_read_BD: unexpected 2-bit code: '11'" >&2
   i=$((i+1))
 done
-case "${FAKE_DXF_MODE:-tidy}" in
+case "__MODE__" in
   fail) echo "ERROR: dwg2dxf aborted on this drawing" >&2; exit 6 ;;
   tidy) cp "$FAKE_DXF_PAYLOAD" "$OUT" ;;
   empty) : > "$OUT" ;;
@@ -147,7 +147,7 @@ while [ $i -lt __ERR__ ]; do
   echo "ERROR: audit reported 1 error" >&2
   i=$((i+1))
 done
-case "${FAKE_DXF_MODE:-tidy}" in
+case "__MODE__" in
   fail) echo "ERROR: converter aborted on this drawing" >&2; exit 2 ;;
   hang) sleep 30; exit 0 ;;
   tidy) cp "$FAKE_DXF_PAYLOAD" "$2/source.dxf" ;;
@@ -322,6 +322,7 @@ class RepairCase(unittest.TestCase):
         payload = FIXTURES / "rect_10x5.dxf"
         self.assertTrue(payload.exists(), "需要夹具 %s" % payload.name)
         text = (FAKE_CLI.replace("__SIDECAR__", str(sidecar))
+                .replace("__MODE__", str(mode))
                 .replace("__WARN__", str(int(warnings)))
                 .replace("__DISTINCT__", str(int(distinct)))
                 .replace("__ERR__", str(int(errors)))
@@ -338,6 +339,7 @@ class RepairCase(unittest.TestCase):
         directory.mkdir(parents=True, exist_ok=True)
         sidecar = self.sidecar(directory / name)
         text = (FAKE_ODA_CLI.replace("__SIDECAR__", str(sidecar))
+                .replace("__MODE__", str(mode))
                 .replace("__WARN__", str(int(warnings)))
                 .replace("__ERR__", str(int(errors)))
                 .replace("__NOENT__", NO_ENTITIES_DXF))
