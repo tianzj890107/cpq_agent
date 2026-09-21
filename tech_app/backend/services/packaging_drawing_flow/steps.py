@@ -252,6 +252,25 @@ def _previous_ir(ctx: Dict[str, Any]) -> Any:
 # --------------------------------------------------------------------------- #
 # 5 零件提取（DWG 图纸 → 零件，Spec `packaging-dwg-parts-extraction.md` C6）
 # --------------------------------------------------------------------------- #
+def _packaging_material_requirement(ctx: Dict[str, Any], module: Any) -> Dict[str, Any]:
+    """需求 3.3 的整盒材料口径 → 零件材料归属的兜底层
+    （Spec `packaging-parts-material-attribution.md` §5.2）。
+
+    取不到就**不传**（零件照旧提，材料留空由 `processability()` 拒绝并说清缺什么）——
+    绝不在这一步给零件编默认料厚。
+    """
+    project_id = str(ctx.get("project_id") or "")
+    if not project_id:
+        return {}
+    fields = getattr(module, "REQUIREMENT_MATERIAL_FIELDS", ())
+    try:
+        requirement = store.load_requirement(project_id) or {}
+    except Exception:  # noqa: BLE001 - 需求读不到不该让零件提取这一步失败
+        return {}
+    data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
+    return {name: data.get(name) for name in fields if data.get(name) not in (None, "")}
+
+
 def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """按 CAD IR 的连通分量提零件并落一版（纯提取 + 一次版本化落库）。
 
@@ -279,8 +298,10 @@ def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
                         {"dependency": "cad_ir"},
                         action="先跑一键解析图纸（前四步）再来提取零件")
     semantics = ctx.get("semantics") if isinstance(ctx.get("semantics"), dict) else None
+    requirement = _packaging_material_requirement(ctx, module)
     try:
-        doc = extract(ir, semantics)
+        doc = extract(ir, semantics,
+                      options={"requirement": requirement} if requirement else None)
     except Exception as exc:
         return _failed("PACKAGING_PARTS_FAILED", str(exc) or "零件提取失败，请重试",
                        {"reason": type(exc).__name__})

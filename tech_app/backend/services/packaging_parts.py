@@ -138,10 +138,14 @@ OUTLINE_OPEN_REASONS = ("no_curve_entity", "unit_unconfirmed", "loop_budget_exha
 # 图纸标注里的材料 / 厚度（Spec `packaging-parts-downstream-process-and-cost.md` §3）
 # --------------------------------------------------------------------------- #
 # 材料与厚度**不是猜出来的**，是图纸自己写着的东西（标题栏的「包装材料说明」与引出标注）。
-# 取法两档，都留痕到 row 的 material_source / thickness_source：
-#   1. 件级：贴着这一件（距该件包围盒 ≤ max(25% 对角线, 50mm)）的最近一条标注；
-#   2. 图级兜底：**只在这张图上该字段只有一个候选值**时才用 —— 两个值以上就是有歧义，
-#      宁可不填（缺料由 processability 拒绝并说清缺什么，绝不用默认值硬算）。
+# 真图上它是**成组**写着的（整体材料说明 + 分件引出标注 + 分区注记），所以取法是四层归属
+# （Spec `packaging-parts-material-attribution.md` §2），每层都留痕到 row 的
+# material_source / thickness_source：
+#   1. 件级引出标注（贴着这一件、且不同时贴 ≥2 件）；
+#   2. 成组注记（KV 文本 / 分区注记，一条覆盖多件）；
+#   3. 图层名带材料（只给材质）；
+#   4. 需求 3.3 的整盒口径兜底（必须标 needs_confirmation）。
+# 四层都取不到就留空（缺料由 processability 拒绝并说清缺什么，绝不用默认值硬算）。
 MATERIAL_KEYWORDS = ("灰板", "白卡", "粉灰", "铜版纸", "双铜", "卡纸", "牛皮纸", "坑纸",
                      "瓦楞", "PET", "光银", "哑胶", "E坑", "BC坑", "B坑", "裱")
 
@@ -149,15 +153,42 @@ MATERIAL_KEYWORDS = ("灰板", "白卡", "粉灰", "铜版纸", "双铜", "卡�
 THICKNESS_MIN_MM = 0.2
 THICKNESS_MAX_MM = 20.0
 
-#: 件级半径：贴着这一件才算这一件的标注。
-NOTE_DISTANCE_RATIO = 0.25
-NOTE_DISTANCE_MIN_MM = 50.0
-
 #: 标注文本留痕长度上限。
 NOTE_TEXT_MAX = 60
 
+#: 材料与厚度归属的规则号与来源闭集（顺序即优先级，Spec
+#: `packaging-parts-material-attribution.md` §2）。真图上材料是**成组**写着的
+#: （整体材料说明 + 分件引出标注 + 分区注记），"一件一件按最近标注取"必然覆盖不到。
+MATERIAL_ATTRIBUTION_RULE_ID = "part_material_attribution_v1"
+ATTRIBUTION_KINDS = ("part_note", "group_note", "layer_name", "requirement_default")
+
+#: 件级半径 = min(0.25 × 对角线, 硬上限)：0.25 在整版大件上会放大到 160mm+，把图纸整体
+#: 材料说明误归给大件（实测 4 件 open 大件全错），所以必须加硬上限。
+NOTE_DISTANCE_RATIO = 0.25
+NOTE_DISTANCE_MAX_MM = 150.0
+
+#: 成组注记的覆盖半径（按**轴对齐方框**判定：两个方向的最大间隙 ≤ 该值）。
+GROUP_NOTE_RADIUS_MM = 300.0
+
+#: 分区词（盒结构的"哪一块"）；出现在注记里就从原文摘进 `attribution.partition`。
+PARTITION_KEYWORDS = ("左盒", "右盒", "内盒", "外盒", "盒盖", "底盒", "底板", "围条", "内托",
+                      "面纸", "衬纸")
+
+#: 需求 3.3 的整盒材料口径（键名取自 `industry_templates.PACKAGING_SPEC`，不另立一套）。
+REQUIREMENT_MATERIAL_FIELDS = ("grey_board", "grey_board_thickness",
+                               "face_paper", "face_paper_gsm", "lining_paper")
+
+#: 最近两条候选的距离差 ≤ 该值且取值不同 → 弃权（Spec §2.1 第 3 条）。
+AMBIGUOUS_DISTANCE_MM = 5.0
+
 _THICKNESS_EXPLICIT = re.compile(r"厚(?:度)?\s*[:：]?\s*(\d+(?:\.\d+)?)")
 _THICKNESS_MM = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm|MM)(?![0-9A-Za-z])")
+#: KV 前缀（`名称：` / `材料：` / `材质：`）—— 必须切掉，不许把整句塞进 material。
+_MATERIAL_KV = re.compile(r"(名称|材料|材质)\s*[:：]")
+#: 克重（`350g` / `350克`）：它跟在材质词前后都是规格，统一挪到标签后面。
+_GRAMMAGE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:g|G|克)(?![0-9A-Za-z])")
+#: 标签尾部要剪掉的标点。
+_LABEL_TRIM = " \t，,。；;、:：/|"
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +206,16 @@ def _num(value: Any) -> Optional[float]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _trim_number(value: Any) -> str:
+    """数字 → 不带多余小数位的文本（350.0 → "350"；2.5 → "2.5"）。"""
+    number = _num(value)
+    if number is None:
+        return ""
+    if float(number).is_integer():
+        return str(int(number))
+    return ("%s" % number).rstrip("0").rstrip(".")
 
 
 def _round(value: Optional[float]) -> Optional[float]:
@@ -267,9 +308,52 @@ def _note_thickness(text: str, has_material: bool) -> Optional[float]:
     return value
 
 
+def _material_label(text: str) -> Tuple[str, str]:
+    """标注文本 → (material 短标签, partition)（Spec §3 结构化切分）。
+
+    - KV 前缀（`名称：`/`材料：`/`材质：`）切掉，优先取 `材料：` 那一段；
+    - 标签 = 从**材质词**开始到该段结尾（含后面的复合词，如 `灰板裱光银纸`）；
+    - 克重（`350g`）统一挪到标签后面（`350g粉灰` → `粉灰 350g`）；
+    - 分区词从**原文**摘出写进 partition，绝不因为它是分区词就把材质词删掉。
+    """
+    raw = " ".join(_text(text).split())
+    if not raw:
+        return "", ""
+    focus = raw
+    segments = [segment for segment in _MATERIAL_KV.split(raw) if segment]
+    # `re.split` 给出 [前置, 键, 值, 键, 值]：值在奇数位；优先 `材料/材质` 那一对。
+    pairs = [(segments[index - 1], segments[index]) for index in range(1, len(segments))]
+    for key, value in pairs:
+        if key in ("材料", "材质") and value.strip():
+            focus = value.strip()
+            break
+    else:
+        if pairs and pairs[0][1].strip():
+            focus = pairs[0][1].strip()
+    label = ""
+    index = min((focus.find(word) for word in MATERIAL_KEYWORDS if focus.find(word) >= 0),
+                default=-1)
+    if index >= 0:
+        label = focus[index:].strip().strip(_LABEL_TRIM)
+        gram = _GRAMMAGE.search(focus[:index]) or _GRAMMAGE.search(raw)
+        if gram and not _GRAMMAGE.search(label):
+            label = "%s %sg" % (label, _trim_number(_num(gram.group(1))))
+    partition = ""
+    best_at: Optional[int] = None
+    for word in PARTITION_KEYWORDS:
+        match = re.search(re.escape(word) + r"(\d*)", raw)
+        if not match:
+            continue
+        if best_at is None or match.start() < best_at or (
+                match.start() == best_at and len(match.group(0)) > len(partition)):
+            best_at = match.start()
+            partition = match.group(0)
+    return label, partition
+
+
 def _note_material(text: str) -> str:
-    """标注里的材料：命中材料词才认（「面纸转越南」这种备注不是材料）。"""
-    return text[:NOTE_TEXT_MAX] if any(word in text for word in MATERIAL_KEYWORDS) else ""
+    """标注里的材料短标签：命中材料词才认（「面纸转越南」这种备注不是材料）。"""
+    return _material_label(text)[0]
 
 
 def drawing_notes(ir: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -285,12 +369,16 @@ def drawing_notes(ir: Dict[str, Any]) -> List[Dict[str, Any]]:
         thickness = _note_thickness(text, bool(material))
         if not material and thickness is None:
             continue
+        _label, partition = _material_label(text)
         position = item.get("position")
         position = [float(value) for value in position] \
             if isinstance(position, (list, tuple)) and len(position) >= 2 else None
         rows.append({"entity_id": _text(item.get("entity_id")),
                      "text": text[:NOTE_TEXT_MAX], "material": material,
                      "thickness_mm": thickness, "position": position,
+                     "partition": partition,
+                     # 成组注记的判据（Spec §2 层 2）：能解析出 `材料：X` 或带分区词。
+                     "group": bool(_MATERIAL_KV.search(text)) or bool(partition),
                      "evidence_ref": _text(item.get("evidence_ref"))})
     rows.sort(key=lambda row: (row["entity_id"], row["text"]))
     return rows
@@ -304,60 +392,214 @@ def _distance_to_bbox(position: List[float], bbox: List[float]) -> float:
     return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
 
 
-def _note_radius(bbox: List[float]) -> float:
-    return max(NOTE_DISTANCE_RATIO * math.hypot(float(bbox[2]) - float(bbox[0]),
-                                                float(bbox[3]) - float(bbox[1])),
-               NOTE_DISTANCE_MIN_MM)
+def _part_note_radius(bbox: List[float]) -> float:
+    """件级半径 = min(0.25 × 对角线, `NOTE_DISTANCE_MAX_MM`)（Spec §2 层 1）。"""
+    diagonal = math.hypot(abs(float(bbox[2]) - float(bbox[0])),
+                          abs(float(bbox[3]) - float(bbox[1])))
+    return min(NOTE_DISTANCE_RATIO * diagonal, NOTE_DISTANCE_MAX_MM)
 
 
-def _nearest_note(notes: List[Dict[str, Any]], bbox: Optional[List[float]],
-                  field: str) -> Optional[Tuple[Dict[str, Any], float]]:
-    """件级：贴着这一件（≤ 半径）的最近一条标注；并列取 entity_id 小的。"""
-    if not bbox:
-        return None
-    radius = _note_radius(bbox)
-    best: Optional[Tuple[Dict[str, Any], float]] = None
-    for note in notes:
-        if not note.get(field) or not note.get("position"):
+def _note_reach(position: List[float], bbox: List[float]) -> float:
+    """注记点到包围盒的**轴对齐方框**距离（两个方向间隙的最大值）—— 成组注记按它判覆盖。"""
+    x, y = float(position[0]), float(position[1])
+    x0, x1 = sorted((float(bbox[0]), float(bbox[2])))
+    y0, y1 = sorted((float(bbox[1]), float(bbox[3])))
+    return max(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
+
+
+def _pick_candidate(candidates: List[Tuple[float, int, Dict[str, Any], Any]]
+                    ) -> Tuple[Any, Optional[Tuple[float, int, Dict[str, Any], Any]], bool]:
+    """同一层的候选 → `(值, 选中的那条, 是否弃权)`。
+
+    最近者优先（距离并列取 entity_id 小的那条）；最近两条距离差
+    `<= AMBIGUOUS_DISTANCE_MM` 且**取值不同** → 弃权（`value=None`、`ambiguous=True`），
+    绝不许"取最近那条"了事（Spec §2.1 第 3 条）。
+    """
+    usable = sorted([item for item in candidates if item[3] not in (None, "")],
+                    key=lambda item: (item[0], item[1]))
+    if not usable:
+        return None, None, False
+    best = usable[0]
+    if (len(usable) > 1 and (usable[1][0] - best[0]) <= AMBIGUOUS_DISTANCE_MM
+            and usable[1][3] != best[3]):
+        return None, None, True
+    return best[3], best, False
+
+
+def _requirement_defaults(requirement: Any) -> Dict[str, Any]:
+    """需求 3.3 → 整盒兜底口径（材料取面纸+克重，厚度取灰板厚度；取不到就不给）。"""
+    data = requirement if isinstance(requirement, dict) else {}
+    face = _text(data.get("face_paper"))
+    gsm = _num(data.get("face_paper_gsm"))
+    board = _text(data.get("grey_board"))
+    lining = _text(data.get("lining_paper"))
+    out: Dict[str, Any] = {}
+    if face:
+        out["material"] = "%s %sg" % (face, _trim_number(gsm)) if gsm else face
+        out["material_ref"] = "requirement.face_paper"
+    elif board:
+        out["material"], out["material_ref"] = board, "requirement.grey_board"
+    elif lining:
+        out["material"], out["material_ref"] = lining, "requirement.lining_paper"
+    thickness = _num(data.get("grey_board_thickness"))
+    if thickness and THICKNESS_MIN_MM <= thickness <= THICKNESS_MAX_MM:
+        out["thickness_mm"] = thickness
+        out["thickness_ref"] = "requirement.grey_board_thickness"
+    return out
+
+
+def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Dict[str, Any]:
+    """四层材料归属（纯函数）→ `{component_id: 归属结果}`（Spec §2）。
+
+    顺序即优先级：件级引出标注 > 成组注记 > 图层名 > 需求整盒口径。每一层都**只填还没定下的
+    字段**（跨层不许倒挂），并且只在 `outline_status == "closed"` 的件上生效 —— 非闭合件的
+    "最近标注"是偶然命中（实测 9 件全错），宁可不填。
+    """
+    parts = [row for row in (rows or []) if isinstance(row, dict)]
+    notes = [note for note in (notes or []) if isinstance(note, dict)]
+    notes = sorted(notes, key=lambda note: (_text(note.get("entity_id")), _text(note.get("text"))))
+    state: Dict[str, Dict[str, Any]] = {}
+    for row in parts:
+        cid = _text(row.get("component_id"))
+        if not cid:
             continue
-        distance = _distance_to_bbox(note["position"], bbox)
-        if distance > radius:
+        bbox = row.get("bbox") if isinstance(row.get("bbox"), (list, tuple)) else None
+        state[cid] = {
+            "component_id": cid, "bbox": list(bbox) if bbox else None,
+            "closed": _text(row.get("outline_status")) == "closed",
+            "layers": [_text(name) for name in (row.get("layers") or []) if _text(name)],
+            "material": None, "thickness_mm": None,
+            "material_source": None, "thickness_source": None,
+            "needs_confirmation": False, "assumption_refs": [], "note_refs": [],
+            "notes": [], "covers": [], "partition": "", "kind": "",
+            "done": set(),  # 已判定（含"蓄意弃权"）的字段：下层不许再填
+        }
+
+    def _apply(cid: str, kind: str, candidates: List[Tuple[float, int, Dict[str, Any], Any]],
+               *, covers: Optional[List[str]] = None) -> None:
+        item = state[cid]
+        for field in ("material", "thickness_mm"):
+            if field in item["done"]:
+                continue
+            picked = [(distance, order, note, note.get(field))
+                      for distance, order, note, _value in candidates if note.get(field)]
+            value, best, ambiguous = _pick_candidate(picked)
+            if ambiguous:
+                item["done"].add(field)
+                item["notes"].append("ambiguous:%d" % len(picked))
+                continue
+            if best is None:
+                continue
+            distance, order, note, _value = best
+            item[field] = value
+            source = {"kind": kind, "text": _text(note.get("text")),
+                      "evidence_ref": _text(note.get("evidence_ref")),
+                      "distance_mm": _round(distance)}
+            if _text(note.get("partition")):
+                source["partition"] = _text(note.get("partition"))
+            if covers is not None:
+                source["covers"] = list(covers)
+            item["%s_source" % ("material" if field == "material" else "thickness")] = source
+            item["done"].add(field)
+            if not item["kind"]:
+                item["kind"] = kind
+            if not item["partition"]:
+                item["partition"] = _text(note.get("partition"))
+            if covers is not None:
+                item["covers"] = list(covers)
+            ref = _text(note.get("evidence_ref"))
+            if ref:
+                item["note_refs"].append(ref)
+
+    # —— 层 1：件级引出标注（一条注记同时贴 ≥2 件时不是件级标注，交给层 2）——
+    reached: Dict[int, Dict[str, float]] = {}
+    for order, note in enumerate(notes):
+        position = note.get("position")
+        if not isinstance(position, (list, tuple)) or len(position) < 2:
             continue
-        if best is None or (distance, note["entity_id"]) < (best[1], best[0]["entity_id"]):
-            best = (note, distance)
-    return best
-
-
-def _single_value(notes: List[Dict[str, Any]], field: str) -> Any:
-    """图级兜底：**只有**全图该字段只有一个候选值时才用（两个值以上就是有歧义）。"""
-    values = sorted({note[field] for note in notes if note.get(field)})
-    return values[0] if len(values) == 1 else None
-
-
-def _size_notes(notes: List[Dict[str, Any]], bbox: Optional[List[float]]) -> Dict[str, Any]:
-    """给一件定材料与厚度：件级优先，图级唯一值兜底，都不成立就留空并写清为什么。"""
-    out: Dict[str, Any] = {"thickness_mm": None, "material": None,
-                           "thickness_source": None, "material_source": None,
-                           "note_refs": []}
-    for field, key in (("thickness_mm", "thickness"), ("material", "material")):
-        found = _nearest_note(notes, bbox, field)
-        if found is not None:
-            note, distance = found
-            out[field] = note[field]
-            out["%s_source" % key] = {"kind": "part_note", "text": note["text"],
-                                      "evidence_ref": note["evidence_ref"],
-                                      "distance_mm": _round(distance)}
-            if note["evidence_ref"]:
-                out["note_refs"].append(note["evidence_ref"])
+        for cid in sorted(state):
+            item = state[cid]
+            if not item["closed"] or not item["bbox"]:
+                continue
+            distance = _distance_to_bbox([float(position[0]), float(position[1])], item["bbox"])
+            if distance <= _part_note_radius(item["bbox"]):
+                reached.setdefault(order, {})[cid] = distance
+    single: Dict[str, List[Tuple[float, int, Dict[str, Any], Any]]] = {}
+    for order, hits in sorted(reached.items()):
+        if len(hits) != 1:
             continue
-        value = _single_value(notes, field)
-        if value is None:
+        cid, distance = next(iter(hits.items()))
+        single.setdefault(cid, []).append((distance, order, notes[order], None))
+    for cid in sorted(single):
+        _apply(cid, "part_note", single[cid])
+
+    # —— 层 2：成组注记（KV 文本 / 分区注记），一条覆盖多件，covers 逐件列全 ——
+    for order, note in enumerate(notes):
+        if not note.get("group"):
             continue
-        out[field] = value
-        out["%s_source" % key] = {"kind": "drawing_note",
-                                  "text": next(row["text"] for row in notes
-                                               if row[field] == value),
-                                  "evidence_ref": "", "distance_mm": None}
+        position = note.get("position")
+        if not isinstance(position, (list, tuple)) or len(position) < 2:
+            continue
+        point = [float(position[0]), float(position[1])]
+        hits = sorted(cid for cid in state
+                      if state[cid]["closed"] and state[cid]["bbox"]
+                      and _note_reach(point, state[cid]["bbox"]) <= GROUP_NOTE_RADIUS_MM)
+        if not hits:
+            continue
+        for cid in hits:
+            distance = _note_reach(point, state[cid]["bbox"])
+            _apply(cid, "group_note", [(distance, order, note, None)], covers=hits)
+
+    # —— 层 3：图层名带材料（只给材质，不许给厚度）——
+    for cid in sorted(state):
+        item = state[cid]
+        if not item["closed"] or "material" in item["done"]:
+            continue
+        for name in item["layers"]:
+            if any(word in name for word in MATERIAL_KEYWORDS):
+                item["material"] = name
+                item["material_source"] = {"kind": "layer_name", "text": name,
+                                           "evidence_ref": "ev:L:%s" % name,
+                                           "distance_mm": None}
+                item["done"].add("material")
+                if not item["kind"]:
+                    item["kind"] = "layer_name"
+                break
+
+    # —— 层 4：需求整盒口径兜底（必须逐件可见：needs_confirmation + assumption_refs）——
+    defaults = _requirement_defaults(requirement)
+    for cid in sorted(state):
+        item = state[cid]
+        if not item["closed"]:
+            continue
+        for field, key in (("material", "material"), ("thickness_mm", "thickness")):
+            if field in item["done"] or defaults.get(field) in (None, ""):
+                continue
+            ref = _text(defaults.get("%s_ref" % key)) or "requirement"
+            item[field] = defaults[field]
+            item["%s_source" % key] = {"kind": "requirement_default", "text": ref,
+                                       "evidence_ref": ref, "distance_mm": None}
+            item["done"].add(field)
+            item["needs_confirmation"] = True
+            item["assumption_refs"].append(ref)
+            if not item["kind"]:
+                item["kind"] = "requirement_default"
+
+    out: Dict[str, Any] = {}
+    for cid, item in state.items():
+        out[cid] = {
+            "material": item["material"], "thickness_mm": item["thickness_mm"],
+            "material_source": item["material_source"],
+            "thickness_source": item["thickness_source"],
+            "needs_confirmation": bool(item["needs_confirmation"]),
+            "assumption_refs": sorted(set(item["assumption_refs"])),
+            "note_refs": sorted(set(item["note_refs"])),
+            "attribution": {"rule_id": MATERIAL_ATTRIBUTION_RULE_ID,
+                            "kind": item["kind"] or None,
+                            "partition": item["partition"],
+                            "covers": list(item["covers"]),
+                            "notes": list(item["notes"])},
+        }
     return out
 
 
@@ -726,6 +968,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     if not isinstance(ir, dict):
         raise TypeError("extract() 需要一份 CAD IR 文档")
     config = _options(options)
+    # 需求 3.3 的整盒材料口径（Spec `packaging-parts-material-attribution.md` §2 层 4）；
+    # 由调用方通过 options 传进来（图纸流步骤读需求），取不到就不兜底。
+    requirement = options.get("requirement") if isinstance(options, dict) else None
     geometry = ir.get("geometry") if isinstance(ir.get("geometry"), dict) else {}
     components = [row for row in (geometry.get("components") or []) if isinstance(row, dict)]
     entities = {str((row or {}).get("entity_id")): row
@@ -828,8 +1073,6 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                               if _text(entity.get("layer"))})
         refs = [str(entity.get("evidence_ref") or "") for entity in curves]
         refs += ["ev:L:%s" % name for name in layer_names]
-        size_notes = _size_notes(notes, bbox)
-        refs += [ref for ref in size_notes["note_refs"] if ref in known]
         evidence_refs = sorted({ref for ref in refs if ref and ref in known})
         kept.append({
             "component_id": component_id,
@@ -847,11 +1090,31 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "outline_reason": outline_reason,
             "outline_diagnosis": evidence["diagnosis"],
             "size_source": size_source,
-            "thickness_mm": size_notes["thickness_mm"],
-            "material": size_notes["material"],
-            "thickness_source": size_notes["thickness_source"],
-            "material_source": size_notes["material_source"],
+            # 材料/厚度归属在**整份零件表**上算（一条成组注记要覆盖多件、件级标注要看
+            # 它是否同时贴多件），所以这里先留空，等 kept 收齐后统一填（Spec §2）。
+            "thickness_mm": None,
+            "material": None,
+            "thickness_source": None,
+            "material_source": None,
+            "needs_confirmation": False,
+            "assumption_refs": [],
+            "attribution": None,
         })
+
+    # —— 材料/厚度四层归属（Spec `packaging-parts-material-attribution.md` §2）——
+    attribution = attribute_materials(kept, notes, requirement=requirement)
+    for row in kept:
+        info = attribution.get(row["component_id"]) or {}
+        row["material"] = info.get("material")
+        row["thickness_mm"] = info.get("thickness_mm")
+        row["material_source"] = info.get("material_source")
+        row["thickness_source"] = info.get("thickness_source")
+        row["needs_confirmation"] = bool(info.get("needs_confirmation"))
+        row["assumption_refs"] = list(info.get("assumption_refs") or [])
+        row["attribution"] = info.get("attribution")
+        refs = [ref for ref in (info.get("note_refs") or []) if ref in known]
+        if refs:
+            row["evidence_refs"] = sorted(set(row["evidence_refs"]) | set(refs))
 
     # 排序：面积降序、component_id 升序（input 书写顺序不影响输出）。
     kept.sort(key=lambda row: (-(row["area"] or 0.0), row["component_id"]))
@@ -888,6 +1151,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "material": row["material"],
             "thickness_source": row["thickness_source"],
             "material_source": row["material_source"],
+            "needs_confirmation": bool(row.get("needs_confirmation")),
+            "assumption_refs": list(row.get("assumption_refs") or []),
+            "attribution": row.get("attribution"),
         })
 
     max_parts = int(config["max_parts"])
@@ -1018,6 +1284,19 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         source = _text(row.get("size_source"))
         if source in mix:
             mix[source] += 1
+    # 材料/厚度归属的账（Spec `packaging-parts-material-attribution.md` §4）：
+    # 覆盖率与"多少件是靠需求整盒口径兜底的"必须能一眼看出来。
+    material_known = sum(1 for row in rows if _material_spec(row.get("material")))
+    thickness_known = sum(1 for row in rows if _num(row.get("thickness_mm")) is not None)
+    material_default = 0
+    kind_mix = {name: 0 for name in ATTRIBUTION_KINDS}
+    kind_mix["none"] = 0
+    for row in rows:
+        source = row.get("material_source") if isinstance(row.get("material_source"), dict) else {}
+        kind = _text(source.get("kind"))
+        if kind == "requirement_default":
+            material_default += 1
+        kind_mix[kind if kind in ATTRIBUTION_KINDS else "none"] += 1
     # 闭合判定的账（Spec `packaging-parts-outline-chaining.md` §3）：一律由零件行现算，
     # 页面/门禁据此说清"这一版到底折叠了多少重复边、救回几件、还剩几件开线、为什么"。
     collapsed_edge_total = 0
@@ -1049,6 +1328,10 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "solid_ok_ratio": _ratio(solid_ok),
         "processable_ratio": _ratio(processable),
         "size_source_mix": mix,
+        "material_known_ratio": _ratio(material_known),
+        "thickness_known_ratio": _ratio(thickness_known),
+        "material_default_ratio": _ratio(material_default),
+        "attribution_kind_mix": kind_mix,
         "collapsed_edge_total": collapsed_edge_total,
         "collapsed_rescue_total": collapsed_rescue_total,
         "budget_exhausted_total": budget_exhausted_total,

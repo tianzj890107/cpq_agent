@@ -6749,6 +6749,16 @@ def _parts_body(record: Any) -> Dict[str, Any]:
     return body
 
 
+def _packaging_requirement_materials(project_id: str) -> Dict[str, Any]:
+    """需求 3.3 的整盒材料口径 → 零件材料归属的兜底层（Spec
+    `packaging-parts-material-attribution.md` §5.2）。与图纸流步骤同口径：读不到就回空
+    dict（零件照旧提，材料留空由 `processability()` 拒绝）。"""
+    requirement = store.load_requirement(project_id) or {}
+    data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
+    return {name: data.get(name) for name in packaging_parts.REQUIREMENT_MATERIAL_FIELDS
+            if data.get(name) not in (None, "")}
+
+
 @app.get(PACKAGING_PARTS_READ_PATH)
 def get_requirement_packaging_parts(pid: str, parts_id: str = "",
                                     user: dict = Depends(current_user)):
@@ -6770,9 +6780,10 @@ def extract_requirement_packaging_parts(
     ir = cad_ir.load_ir(project_id, body.ir_id) if body.ir_id else cad_ir.load_ir(project_id)
     if not isinstance(ir, dict):
         raise HTTPException(409, "项目里还没有可用的 CAD 图纸解析结果，请先跑一键解析图纸")
-    saved = packaging_parts.save_parts(project_id,
-                                      packaging_parts.extract(
-                                          ir, packaging_semantics.load_semantics(project_id)))
+    materials = _packaging_requirement_materials(project_id)
+    saved = packaging_parts.save_parts(project_id, packaging_parts.extract(
+        ir, packaging_semantics.load_semantics(project_id),
+        options={"requirement": materials} if materials else None))
     store.audit(project_id, "workflow:packaging_parts_extracted", {
         "parts_id": saved.get("parts_id"),
         "parts_total": saved["stats"]["part_total"],
@@ -7484,12 +7495,15 @@ async def packaging_part_process(
             tasks.report_progress("  ↳ %s" % overall_note)
         validation = process.compute(plan_dict)
         lookup = _packaging_part_lookup(pid, part, "process")
+        assumptions = _packaging_part_box_wide_note(row)
+        if assumptions:
+            tasks.report_progress("  ↳ %s" % assumptions[0])
         packaging_parts.save_part_process(pid, {
             "part_code": row.get("part_code"),
             "parts_id": str((loaded.get("record") or {}).get("parts_id") or ""),
             "engine_version": packaging_parts.ENGINE_VERSION,
             "plan": plan_dict, "validation": validation, "coverage": coverage,
-            "lookup": lookup,
+            "lookup": lookup, "assumptions": assumptions,
             "source": {"task_id": tasks.current_task_id(),
                        "computed_at": now_cst_str(),
                        "actor": str(user.get("username") or "")},
@@ -7551,6 +7565,13 @@ def _packaging_part_cost_analysis(row: Dict[str, Any], line: Dict[str, Any],
     if gap:
         assumptions.append("缺输入：%s（%s）" % (gap.get("code") or "",
                                               gap.get("detail") or ""))
+    # 兜底口径必须看得见（Spec `packaging-parts-material-attribution.md` §2.1 第 5 条）：
+    # 材料/厚度里凡有一条按**需求整盒口径**取用，结论就带上 assumption_refs 与那句人话。
+    box_wide = packaging_cost.assumption_refs(row.get("material_source"),
+                                              row.get("thickness_source"))
+    if box_wide:
+        assumptions.append("材料/厚度按需求整盒口径取用（%s），需业务确认"
+                           % "、".join(box_wide))
     return {"part_id": part_id, "part_name": str(row.get("name") or ""),
             "material": str(row.get("material") or ""), "quantity": quantity,
             "currency": "CNY",
@@ -7558,7 +7579,17 @@ def _packaging_part_cost_analysis(row: Dict[str, Any], line: Dict[str, Any],
                        % (row.get("part_code"), line.get("rule_snapshot_version") or ""),
             "items": [item], "unit_cost": amount,
             "price_references": [], "search_sources": [],
-            "assumptions": assumptions, "open_questions": []}
+            "assumptions": assumptions, "assumption_refs": box_wide,
+            "open_questions": []}
+
+
+def _packaging_part_box_wide_note(row: Dict[str, Any]) -> List[str]:
+    """这一件的材料/厚度是否靠需求整盒口径兜底 → 结论里要写出来的那句话（可为空）。"""
+    refs = packaging_cost.assumption_refs(row.get("material_source"),
+                                          row.get("thickness_source"))
+    if not refs:
+        return []
+    return ["按需求整盒口径取用材料/厚度（%s），需业务确认" % "、".join(refs)]
 
 
 @app.post(PACKAGING_PART_COST_PATH)
@@ -7636,6 +7667,7 @@ def get_packaging_part_process(pid: str, part_code: str,
     return {"part_code": str(record.get("part_code") or part_code),
             "plan": record.get("plan"), "validation": record.get("validation"),
             "coverage": record.get("coverage"),
+            "assumptions": list(record.get("assumptions") or []),
             "source": record.get("source") if isinstance(record.get("source"), dict) else {}}
 
 

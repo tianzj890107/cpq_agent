@@ -9817,3 +9817,29 @@ tests.test_process_row_running_info_and_fold_red     Ran N，14 条既有红（�
 
 - 未改 `tests/` 任何文件；`processability()` 三道门槛、任务状态机与 `dedup_key` 口径、结论不写技术 IR 一字未动；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型（`lookup_part` 只在任务里跑，单测不触发）。
+
+## 268. 零件材料/厚度的归属分层：`packaging-parts-material-attribution` 的实现（9-22，Codex 实现 + 相邻面复跑）
+
+真图上材料/厚度是**成组**写着的一张图一条，按"每件取最近标注"在真图上必然覆盖不到（64 件里只有 12 件有材料、8 件有厚度、4 件可算）。本批把归属改成分层取法并留出处。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 归属算法 | `tech_app/backend/services/packaging_parts.py` | 新常量 `MATERIAL_ATTRIBUTION_RULE_ID` / `ATTRIBUTION_KINDS` / `NOTE_DISTANCE_RATIO` / `NOTE_DISTANCE_MAX_MM` / `GROUP_NOTE_RADIUS_MM` / `PARTITION_KEYWORDS` / `REQUIREMENT_MATERIAL_FIELDS` / `AMBIGUOUS_DISTANCE_MM`；`_material_label()` 把引出标注切成（材质短标签, 分区）；`attribute_materials()` 四层 `件级引出标注 > 成组注记 > 图层名 > 需求整盒口径`，跨层不倒挂（`done` 集合），只有 `outline_status=="closed"` 的件参与；最近两条距离差 ≤5mm 且取值不同 → 弃权并写 `ambiguous:<n>`；层 4 写 `needs_confirmation` + `assumption_refs`；`extract()` 行上新增 `needs_confirmation` / `assumption_refs` / `attribution`，`summarize()` 增 `material_known_ratio` / `thickness_known_ratio` / `material_default_ratio` / `attribution_kind_mix` |
+| 需求兜底取值 | `tech_app/backend/services/packaging_drawing_flow/steps.py` | `parts_extract` 用 `module.REQUIREMENT_MATERIAL_FIELDS` 从需求 `data` 取 5 键（取不到回 `{}`）传 `options={"requirement": …}` |
+| 兜底口径上报 | `tech_app/backend/main.py` | `_packaging_requirement_materials(project_id)`；`packaging_cost.py` 新增 `assumption_refs(*sources)`（只认 `kind=="requirement_default"`），成本任务与工艺任务都上报「材料/厚度按需求整盒口径取用（…），需业务确认」并落进零件文档 `assumptions` / `GET …/process` 回传 |
+
+### 实跑（本机 `./open-claude/.venv/bin/python`）
+
+```
+tests.test_packaging_parts_material_attribution_red   Ran 27 OK
+```
+
+真样本 E 组：酒盒 `material_known_ratio ≥ 0.75` / `thickness_known_ratio ≥ 0.75` / `processable_ratio ≥ 0.70`；open 件材料厚度全空；兜底件带 `needs_confirmation`。
+
+### 边界
+
+- 未改第 3 层任何一条拒绝口径（`PACKAGING_PART_NOT_CLOSED` / `PACKAGING_PART_MATERIAL_UNKNOWN` / `PACKAGING_PART_THICKNESS_UNKNOWN` 语义不变），未给无出处的默认值硬算；
+- 未改任何 `tests/` 文件、未改成本公式与费率；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。

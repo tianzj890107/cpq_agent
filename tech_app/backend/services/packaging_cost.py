@@ -839,6 +839,23 @@ def profile_for(industry: Any) -> str:
     return COST_PROFILE if _text(industry) == PACKAGING_INDUSTRY else GENERIC_PROFILE
 
 
+def assumption_refs(*sources: Any) -> list:
+    """结论里必须带出来的"兜底假设"来源（Spec `packaging-parts-material-attribution.md` §5.4）。
+
+    库内公式本身没有假设，但图纸零件的**材料/厚度可能是按需求整盒口径兜底的** ——
+    这种前提下算出来的钱必须让人看见出处（`requirement.grey_board_thickness` 之类），
+    否则"这件的料是哪来的"就查不到了。只认 `kind == "requirement_default"` 的来源。
+    """
+    refs: list = []
+    for source in sources:
+        payload = source if isinstance(source, dict) else {}
+        if _text(payload.get("kind")) != "requirement_default":
+            continue
+        ref = _text(payload.get("evidence_ref")) or _text(payload.get("text"))
+        refs.append(ref or "requirement")
+    return sorted(set(refs))
+
+
 # --------------------------------------------------------------------------- #
 # 表达式工具
 # --------------------------------------------------------------------------- #
