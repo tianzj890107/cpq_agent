@@ -7737,3 +7737,84 @@ OK (skipped=1)
   `context.endpointBase`）、`index.html`、`drawing-flow.css`、`DEPLOYMENT.md`、`scripts/deploy_34_bare.sh`、
   5 份 Spec（回写）与 3 份红测（修夹具/调用参数）。
 - **未引入新依赖**（不引入 numpy/trimesh/shapely；三角化与 STL 自己写）。
+
+## 244. 两份 DWG 实样沉淀成标准报价案例并写入共享 PG（9-21，Codex 执行）
+
+用户口径：「把两个 dwg 导进去作为真实案例库」→「直接导进去 pg」。这是**数据导入**，不是新功能：
+把 `cpq_wf.cpq_qq_standard_case` 从 0 行变成 2 行，让快速报价的候选列表里真的能看到那两份 DWG 实样。
+
+### 做了什么
+
+- 新增 `scripts/import_dwg_quick_quote_cases.py`（默认 dry-run，`--confirm` 才写库）：
+  读知识库侧 `cpq_kb.kb_packaging_box_type` 里 `box_type_code` 以 `YT-DWG` 开头的盒型，
+  连同它的零件模板与工序模板，按 `cpq_quick_quote_case` 的口径派生成案例行。
+  **不另抄一份数据**：案例与盒型同源，改盒型后重跑即可同步。
+- 只写报价侧那张案例表；没碰盒型表、成本规则、差异费率表，也没碰技术工艺。
+
+### 实测证据
+
+```
+dry-run                                → 2 条 insert，准入 missing_fields（缺标准单价）
+--confirm                              → 案例表共 2 行
+再跑两次                               → 两条都 unchanged（幂等：不新增行、不升版本）
+load_cases(None)                       → 2 行，dwg_confirmed / draft / eligible=False
+GET /api/quick-quote/cases（直调 handler）→ ok=true，case_total=2，eligible_total=0
+```
+
+入库的两行：
+
+| case_code | 盒族 | 内长×内宽×内高（mm） | 闭合 | 内托 | 来源 | 审核 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `QQ-YT-DWG-WINE-700ML` | 书型盒/双开门礼盒 | 220.5×90×90 | 双开门/对开 | EVA内托 | `dwg_confirmed` | `draft` |
+| `QQ-YT-DWG-ROUND-10PC` | 圆盒/天地盖 | 408×408×50.5 | 天地盖/纸管套合 | 灰板内托 | `dwg_confirmed` | `draft` |
+
+两条都带上了 DWG 溯源三列（`source_sha256` = 两份 DWG 的真实 sha256、`parser_version` =
+`ODA File Converter 27.1 + ezdxf 1.4.4`、`confirmed_by` = `system_dwg_parser`），BOM 摘要与工艺摘要
+分别来自 11/14 条零件模板与 8 条工序模板。
+
+### 口径（写进案例行的取舍）
+
+- **尺寸取 DWG 标注区间的上限**（盒型表存的是区间，如 219.0–220.5）：案例需要一个确定值，
+  取上限并把原区间写进 `source_ref`，不假装它是扣过配合间隙的内尺寸。
+- **只填 DWG 明确写了的字段**：`v_groove`、面纸克重、能读出「哑胶」的覆膜为真；
+  磁铁 / 丝带 / 开窗 / 烫金 / 印刷色数一律留空 —— 不确定就不填，宁可缺。
+- **灰板不填克重**：盒型表里给的是板厚 mm（1.8/2.0/2.5），不是克重，不换算、不填错单位。
+- **客户名留空**：DWG 里没有客户信息，编一个「华东客户A」比留空更糟。
+- **价格留空**：两份 DWG 里**没有任何价格**（实测：酒盒 127 条、圆盘盒 87 条图纸文字，
+  含「元/价/报价/单价」的 0 条），所以 `standard_price` / `standard_cost` 不填，准入判据
+  如实报 `missing_fields`，绝不拿一个来路不明的数当基准价。
+
+### 实现期发现（两个真缺口，未改业务代码）
+
+1. **`save_case()` 落不了 DWG 通道三列**：`save_case()` 走 `normalize_case()`，而它只保留
+   `CASE_FIELDS`，所以 `source_sha256` / `parser_version` / `confirmed_by` / `confirmed_at`
+   永远写不进库。本脚本用参数化 `UPDATE` 显式补齐（**绕开缺口，不是替代**），缺口本身要单独修
+   `normalize_case()` / `save_case()`。
+2. **案例表价格列 `NOT NULL` 但 `normalize_case()` 允许 `None`**：不给价格的案例直接走
+   `save_case()` 会抛 `NotNullViolation`（DETAIL 指向 `standard_cost`）。本脚本按列缺省写 0
+   （0 在 `_is_blank()` 里本就等同「没有基准价」，准入判定照样报 `missing_fields`），
+   没有把 0 当成一个价。
+
+### 当前还不能用于快速报价（如实声明）
+
+两条案例的资格原因都是 `missing_fields`（缺**标准单价**），所以 `eligible_total=0`、
+`quick_quote_cases()` 仍为 0 条。要让它们真的出价，还差两件**业务输入**（本脚本都留了口子）：
+
+```bash
+./open-claude/.venv/bin/python scripts/import_dwg_quick_quote_cases.py \
+    --price <业务口径标准单价> --cost <标准成本> --review-status reviewed --confirm
+```
+
+- **标准单价**：DWG 给不了，精准链路也还没为这两份图跑出报价（`cpq_wf_quote_version` 0 行）。
+- **审核状态 `reviewed`**：现在刻意是 `draft`（没人审过就不写 reviewed）。
+- `created_by_user_id` 为空：`cpq_wf_user` 的 23 个账号里没有 `wugefei`（那是服务器账号），
+  没有拿别人的身份顶替；`--user <真实账号>` 可留正确的痕。
+
+### 边界
+
+本地与 34 共用同一台 PG（`172.16.5.181:32444/metabase`），所以**这两行数据 34 上立刻可见，
+不需要部署**；34 上跑的还是 `47ea407` 的代码，本次没有 push、没有部署。
+未改 `20260909` / `master`；未动未跟踪的 `scripts/tmp_import_dwg_cases.py`（那份写的是 SQLite
+盒型表，不是案例表）与 `裕同包装项目-待开发/`。
+回归：`test_quick_quote_mode_and_case_model_red` + `case_retrieval` 75 OK、
+`field_workspace` + `generation` + `file_parsing` 136 OK（skipped=1），零新增红。
