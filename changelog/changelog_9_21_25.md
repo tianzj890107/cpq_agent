@@ -7927,3 +7927,62 @@ export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"   # ② xvfb-run
 - 未动未跟踪的 `scripts/tmp_import_dwg_cases.py`、`scripts/import_dwg_quick_quote_cases.py`、
   `裕同包装项目-待开发/`（客户真实样本）。
 - 能力声明口径不变：**L2（可信）**，未签字不得声明 L3（`DEPLOYMENT.md` 三级表）。
+
+## 245. 逆向快速报价剩余三处缺口：Spec + 红测（批 6 / 7 / 8）（9-21，Codex 写 Spec 与红测）
+
+用户口径：「现在再看看这些有没有实现，然后给出 spec 红测 提示词」。先把三处缺口的**现状重测**一遍
+（不是复用旧结论），再按「一批一个可验收的 spec + 能复现缺口的红测」写下来。**本批不写业务实现**，
+实现提示词另行交付。
+
+### 重测结果（2026-09-21）
+
+| 缺口 | 实测 |
+| --- | --- |
+| 案例库 | `cpq_wf.cpq_qq_standard_case` = **2 行**（`## 244` 导入的两份 DWG 实样），`load_cases(None)` → `eligible = 0`；两条都是 `dwg_confirmed / draft`、`standard_price = 0`；`GET /api/quick-quote/cases` → `case_total=2, eligible_total=0` |
+| 统一解析服务 | `GET  http://172.16.10.34:8010/api/file/parse/capability` → **404**；`POST /api/file/parse` → **405**。`cpq_suite_server.py` 把 `/api/*` 反代给 8012，所以 404 来自技术工艺侧**没有这个路由**（报价侧客户端已在，服务端从未实现） |
+| 差异价费率 | `cpq_kb.kb_quick_quote_delta_rule` = 4 行，`source_type=demo` / `review_status=draft`（`QQQ-DEMO-HOTSTEP` / `LEN-RATE` / `PAPER-RATE` / `QTY-BAND`）；现状只有 `_rule_note()` 的**文本**告警，出价与落库都不区分权威/演示 |
+
+顺带确认：批 1–5 的 211 条用例仍全绿（`Ran 211 OK (skipped=1)`）。
+
+### 三批 Spec 与红测（只改 Spec / 红测 / 文档）
+
+| 批 | Spec | 红测 | 用例 | 现在 |
+| --- | --- | --- | --- | --- |
+| 6 案例库现状话术与 DWG 实样导入 | `docs/specs/quick-quote-6-case-library-readiness.md` | `tests/test_quick_quote_case_library_readiness_red.py` | 31 | 30 红 / 1 绿 |
+| 7 统一解析服务端点 | `docs/specs/quick-quote-7-unified-parse-service.md` | `tests/test_quick_quote_parse_service_red.py` | 33 | 31 红 / 2 skip（34 端到端要显式开） |
+| 8 差异价费率权威化与出价守卫 | `docs/specs/quick-quote-8-rate-authority.md` | `tests/test_quick_quote_delta_rule_authority_red.py` | 29 | 27 红 / 2 绿 |
+
+合计 93 条用例，88 条红（既有的 211 条一条没动）。
+
+### 三批各自锁定的东西
+
+- **批 6**：把「库为空」与「有案例但 0 条可用」在**接口与页面**上分开 —— 新增
+  `library_readiness()`（三态 `empty / no_eligible / ready`、`blocked_by` 按 count 降序 + 原因升序、
+  `next_actions` 闭集）与 `case_fix_plan()`（`fill / review / extend / retire`），
+  `GET /api/quick-quote/cases` 出 `readiness` 段，前端 `renderReadiness` + `data-qq-*` 属性。
+  同时把 `## 244` 撞出的两处入库缺口写成必做项：`normalize_case()` 必须保留 DWG 通道四列、
+  价格列为空时 `_row_value()` 必须写 0（不许再撞 `NOT NULL`）。
+- **批 7**：把服务端那一半补上 —— 新模块 `tech_app/backend/services/unified_parse.py`
+  （`capability()` / `parse_payload()` / `fields_from_ir()`，可注入 `deps`），
+  只回被请求的 `PARSE_FIELDS`（与报价侧 `QUICK_FIELDS` **逐字相等**，红测直接比对两个元组），
+  6 个错误码各自的 `http_status`，**不 import 业务存储**；`main.py` 挂两条路由。
+  字段口径只取 CAD IR 能确定的（图层/块/标注/文字/图纸范围），关键词命中的 `v_groove` 等
+  只给 `True`、未命中进 `missing`（**不给 False**）。
+- **批 8**：把「费率能不能用于正式报价」变成一等概念 —— `rule_authority()` /
+  `authority_summary()`（`AUTHORITATIVE_RATE_SOURCES = ("workbook",)`），
+  `price()` 出演示费率告警、`is_formal()`，`save(formal=True)` 非权威一律拒且不落库；
+  前端 `renderQuote()` + `data-qq-rate-authority="trial"` + 出价 / 转精准两个动作。
+
+### 口径说明（写 Spec 时的取舍）
+
+- 红测**全部离线**：不连 PG、不真发 HTTP、不真跑 ODA（批 7 用注入的假 `deps`），
+  只有批 7 的 H 组在**有转换器的本机**真读一次 `酒盒.dwg`（金标：layers 8 / 标注 316 / 文字 127），
+  I 组要 `CPQ_PARSE_SERVICE_E2E=1` 才打 34。
+- 批 6 的 2 条、批 8 的 2 条现在是绿的：它们是**守卫用例**（断言修完之后的老行为不许变），
+  不是漏写的红测。
+- 没有落盘任何实现提示词（`prompts/` 不存在），提示词在会话里交付。
+
+### 边界
+
+未改任何业务实现（`cpq_quick_quote_*.py`、`tech_app/**` 一个字节没动）；未 push、未部署；
+34 上跑的还是 `47ea407` 时代的代码。
