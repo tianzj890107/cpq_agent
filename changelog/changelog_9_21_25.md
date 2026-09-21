@@ -8940,6 +8940,40 @@ self.assertIsInstance(getattr(bridge, "_guard_packaging_result", None), type(bri
 - 34 上只**新增**项目 `325effd296a5` 与会话 `e2e-fullflow-a856a046`（以及该流程自身的任务/交接记录），
   未删除、清空或覆盖任何既有项目、会话与数据；驱动脚本只在 `/tmp/cpq_e2e_mine/`，不入库。
 
+### 258.1 部署 5e2dc33 之后的复核：两处绕行已在线关掉 + 补一份"报价版本落库"Spec/红测
+
+34 上现在跑的是 `5e2dc33`（`GET /api/health` 的 `build.commit`），本条目记的三处卡点里有两处
+已经由同批实现上线，**绕行不再需要**；剩下的一处与新发现的一处照旧只写 Spec + 红测。
+
+| 卡点 | 现在（34 实测） |
+| --- | --- |
+| 权威实样工序名不在闭集 | 已实现上线（`## 260`），实样路线在线上 confirm 成功，不再需要改确认标准盒型 |
+| 缺口包出不了草稿报价 | 已实现上线（`## 261`）：`POST /agents/quote/api/packaging-quote/price`（缺口包原样）→ **HTTP 200**，`draft=true` / `publish_blocked=true` / `publish_block_reason=cost_gaps_unresolved` / `gap_count=20`；`publish=true` 仍被拒（"成本仍有缺口，只能出成本与草稿"）；同一路径 `/api/packaging-quote/price` 仍是 **405**，所以面板必须走 `/agents/quote` 基址 |
+| 门禁 `field_unconfirmed` 没有人工确认入口 | 仍未实现，归 `packaging-manual-field-confirmation.md` / `packaging-parse-to-downstream-seams.md` |
+| 零件下游只剩 4/64 可算、0 件能挤 | 仍未实现，归同批三份 Spec（材料归属 / 环搜索 / 挤出覆盖率） |
+
+卡片与零件复核（只读，未改任何数据）：会话 `e2e-fullflow-a856a046` 六步全 `done`、`overall_status=completed`；
+`GET /api/projects/325effd296a5/requirement/packaging-parts` → 200、**64 件**、`closed_ratio=0.797`，
+其中轮廓闭合且材料/厚度齐全、下游工艺与成本能算的仍是 `DWG-P07 / P14 / P24 / P35` 四件；
+第 6 步快照里 64 件清单与 8 节报价单都还在。红测复跑：`test_packaging_route_template_closure_red` **Ran 15 OK**、
+`test_packaging_quote_draft_and_card_visibility_red` **Ran 10 OK** —— 本条目当初写的两套都已转绿（实现方落地，
+Spec 与红测字面常量未被改动）。
+
+**新 Spec + 红测（本条目 §1 之外唯一还欠着的一条）**：`save_version()` / `versions()` / `latest()` /
+`restore()` 这一整套报价版本实现**全仓没有生产调用点**（生产代码里 `save_version(` 只命中它自己的定义
+`cpq_packaging_quote.py:682`），卡片第 5 步的快照又是同名覆盖 —— 用户要的"到最后再回去"因此拿不到历史版本。
+写成 `docs/specs/packaging-quote-version-persistence.md` + `tests/test_packaging_quote_version_persistence_red.py`，
+实跑 **Ran 8，failures=4**（4 条护栏绿：读取路径不写版本、版本表只增不改、不许绕过 `save_version` 写 INSERT、
+四个函数签名冻结）。
+
+**复核时发现的两处仓库不一致（未自行改动，登记待处理）**：
+
+1. `tests/test_packaging_quote_draft_and_card_visibility_red.py` **没有入库**：它的 Spec
+   （`docs/specs/packaging-quote-draft-and-card-visibility.md`）与实现已在 `5e2dc33` 里，
+   `## 261` 的正文还逐字引用了这个路径 —— 也就是说仓库里引用了一份只存在于工作区的红测；
+2. 本周 changelog 出现**重复编号**：`## 260` 两份（工序名归一化实现 / 第二轮真跑）、`## 261` 两份
+   （零件链路三份 Spec / 草稿报价与卡片分区实现），是并行会话各自取号导致的。
+
 ## 259. 六套「Spec + 红测」的实现：部署版本身份 / 成本缺口推导 / 案例维护写路径 / 权威费率导入 / Spec 状态自检 / 样本与一次性脚本归属（9-22，Codex 实现）
 
 `## 256` 与 `## 257` 那五份（+ 批 12 / 批 13 两份）Spec 与红测由测试侧写就，本轮**全部落实现**；
@@ -9424,3 +9458,43 @@ tests.test_packaging_quote_draft_and_card_visibility_red        Ran 10 OK
 - 只入库 Spec + 红测 + changelog；没有写业务实现、没有改生产数据；
 - 34 上部署与全流程复跑见同日本条后续记录；能力声明仍是
   **DWG 编排能力完成，真实转换能力未验收**，零件闭环 L2（可信），未签字不得声明 L3。
+
+
+## 262. 人工录入/确认的需求字段必须能让图纸链路门禁转绿：`packaging-manual-field-confirmation` 的实现（9-22，Codex 实现 + 全量回归）
+
+Spec：`docs/specs/packaging-manual-field-confirmation.md`；红测：`tests/test_packaging_manual_field_confirmation_red.py`（13 条，实现前 7 红）。
+
+### 修的三处（都按 Spec §2 落地）
+
+1. `packaging_semantics/provenance.py` 的人工确认分支：不再用 `setdefault` 改一份**已经带 status**
+   的候选快照，而是显式写死 `origin="user_confirmed"` / `status="confirmed"` /
+   `value=<当前值>`（候选只进 `alternatives`）—— 34 实测的"值在、来源 manual、看板 missing、
+   门禁 unconfirmed"这处三头不一致到此为止。
+2. `packaging_drawing_flow/gates.py::_is_confirmed()`：两条**互相独立**的证据路径由「与」改回「或」——
+   ① 图纸/模型证据 `status == "confirmed"`；② 人工录入/确认**且当前有值**
+   （`field_sources == "manual"` 或 `origin == "user_confirmed"`）。
+   拒绝口径一个字没放宽：空值仍 `field_missing`、冲突证据仍 `field_conflict`（两者在
+   `_field_blocking` 里排在前面），单位未确认的 `unit_unconfirmed` 判定没动。
+3. 确认通道可写：`steps.py` 的 `field_write` 不再恒传 `accept=()`，改传
+   `_manual_accept_fields(data, sources)`（"来源 manual 且值非空"的真实字段集）。
+
+### 一处**真冲突**（没有放宽任何断言，按 Spec 落地并上报测试侧）
+
+`tests/test_packaging_drawing_flow_red.py::CGates::test_c8_user_confirmation_opens_the_blocked_stages`
+的 before 夹具与本批 B5 的夹具**逐键同形**（人工/图纸都在、`status="confirmed"`、
+`source="attachment"`、`origin="confirmed_from_cad"`），却一个要 `blocked`、一个要 `open`；
+C8 那份还多带 flow 看板 `board="written"` 与真实 anchor，即"证据更多反而要更严"，不存在能把两者
+分开的可信度判据。本批按 Spec §1.2/§2.1 落地（那处"与"逻辑正是本批要修的缺陷），
+因此 C8 的 before 断言由绿转红：**451 条相邻/冻结测试里只此 1 条**。
+测试侧一行修法（本批不动 tests/）：把 C8 的 before 夹具换成 `status != "confirmed"` 的形态
+（如 `origin="inferred_from_geometry"`），before=blocked / after=open 的故事不变，两套即可同时全绿。
+已写进 Spec §2.4。
+
+### 实跑证据
+
+```
+tests.test_packaging_manual_field_confirmation_red                    Ran 13 OK
+相邻/冻结面（drawing_flow / semantics / requirement_state / downstream_blockers /
+            quote_close_loop / board_two_column / process_route / cost_engine /
+            parametric_bom）                                          Ran 451，failures=1（仅上述 C8），skipped=2
+```

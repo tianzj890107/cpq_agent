@@ -41,13 +41,25 @@ def _has_value(data: Dict[str, Any], field: str) -> bool:
 
 def _is_confirmed(data: Dict[str, Any], provenance: Dict[str, Any], sources: Dict[str, Any],
                   field: str) -> bool:
+    """这个字段算不算"已确认"（Spec `packaging-manual-field-confirmation.md` §2.1）。
+
+    两条**互相独立**的证据路径，**任一**成立即可 —— 原来写成"与"，于是两条路各自都走不通：
+    人工填的字段卡在 `status`（几何看板给的是 missing），图纸已确认的字段卡在来源/来源口径。
+
+      ① 图纸 / 模型证据已确认：`status == "confirmed"`；
+      ② 人工录入 / 人工确认**且当前有值**：`data[field]` 有值 且
+         （`field_sources == "manual"` 或 `origin == "user_confirmed"`）。
+
+    拒绝口径一个字没放宽：值为空先走 `field_missing`（值判定在 `_field_blocking` 里排在前面）、
+    冲突证据先走 `field_conflict`（同样排在前面）。
+    """
     row = provenance.get(field) if isinstance(provenance.get(field), dict) else {}
     status = str(row.get("status") or "")
     origin = str(row.get("origin") or "")
     source = str(sources.get(field) or "")
-    if status != "confirmed":
-        return False
-    return source == "manual" or origin == "user_confirmed"
+    if status == "confirmed":                                   # ① 图纸/模型证据
+        return True
+    return _has_value(data, field) and (source == "manual" or origin == "user_confirmed")  # ② 人工
 
 
 def _field_blocking(requires: Tuple[str, ...], requirement: Dict[str, Any],

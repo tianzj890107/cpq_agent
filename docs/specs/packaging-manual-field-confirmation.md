@@ -3,7 +3,7 @@
 血缘：承接 `packaging-drawing-semantics.md`（§5 字段来源与看板）、`packaging-downstream-blockers-close-loop.md`
 （§1.3 人工来源但值为空）、`drawing-flow-error-taxonomy.md`。
 
-- 状态：Spec + 红测（未实现）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_packaging_manual_field_confirmation_red.py`
 - 依赖：包装语义第 4 批（`packaging_semantics/provenance.py`）、图纸链路第 5 批（`packaging_drawing_flow/gates.py`）
 
@@ -109,12 +109,31 @@ return source == "manual" or origin == "user_confirmed"
   `accept` 必须有一条非空调用路径）；
 - D 组：回归护栏（第 4 批 `packaging_semantics`、第 5 批 `packaging_drawing_flow` 红测全绿不变）。
 
+### 2.4 实现记录：与既有红测 `drawing_flow_red::C8` 的一处**真冲突**（实现方按本 Spec 落地，已上报测试侧）
+
+本 Spec §2.1 的第 1 条（图纸/模型证据已确认 → 门禁开放）与 `tests/test_packaging_drawing_flow_red.py`
+的 `CGates::test_c8_user_confirmation_opens_the_blocked_stages` **在同一份输入上互相矛盾**：
+
+| | `C8` 的 before 状态（实测打印） | 本 Spec B5 的夹具 |
+| --- | --- | --- |
+| `data[field]` | `70.0 / 40.0 / 120.0 / "tuck"` | `200.0 / 150.0 / 80.0 / "天地盖"` |
+| `field_sources` | 四个字段全 `attachment` | 四个字段全 `attachment` |
+| `field_provenance[field]` | `status="confirmed"`、`origin="confirmed_from_cad"`、`evidence_level="STRONG"` | 同左（只差 `confidence` 与 `evidence_refs` 的具体值） |
+| 期望 | **blocked**（"字段还没人工确认时不许开放盒型匹配") | **open**（"图纸已确认这条路径不许被本批改坏"） |
+
+两边的 `provenance` 形态逐键一致，且 C8 那份还带着**更多**证据（flow 看板 `board="written"`、
+`ir_id/ir_hash`、真实 anchor）—— 换句话说，不存在任何"更可信才放行"的判据能把两者分开。
+本批按 Spec §2.1 落地（**§1.2 明写这处"与"逻辑是缺陷、B5 把反方向钉住**），因此 C8 的 before
+断言由绿转红。测试侧的**一行修法**（本批不动 tests/）：把 C8 的 before 夹具改成"字段已写入但
+`status != "confirmed"`"（例如 provenance 用 `origin="inferred_from_geometry"` / `status="missing"`），
+这样 before=blocked（field_unconfirmed）、after=open 的故事仍然成立，两套红测即可同时全绿。
+
 ## 4. 命令与期望
 
 ```
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_manual_field_confirmation_red -v   # 先红后绿
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_semantics_red                      # 59 OK (skipped=1)
-./open-claude/.venv/bin/python -m unittest tests.test_packaging_drawing_flow_red                   # 54 OK (skipped=1)
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_drawing_flow_red                   # 53 OK / 1 FAILED（C8，见 §2.4）
 ./open-claude/.venv/bin/python -m unittest tests.test_drawing_flow_requirement_state_red           # 17 OK
 ```
 

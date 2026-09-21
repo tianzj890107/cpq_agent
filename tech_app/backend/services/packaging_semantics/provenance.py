@@ -3,8 +3,10 @@
 写盘纪律：
   · 双写 `requirement.data["field_provenance"]` 与既有闭集的 `field_sources`；
   · `status != confirmed` 的字段**绝不**写进 `requirement.data[field]`（未确认不写值）；
-  · 用户已确认（`origin == user_confirmed` 或 `field_sources == manual`）→ 只追加
-    `alternatives` + `PACKAGING_FIELD_USER_CONFIRMED` 警告，不改值、不降级来源；
+  · 用户已确认（`origin == user_confirmed` 或 `field_sources == manual`）**且当前有值** →
+    看板显式写成 `origin="user_confirmed"` / `status="confirmed"` / `value=<当前值>`，
+    图纸候选只追加进 `alternatives` + `PACKAGING_FIELD_USER_CONFIRMED` 警告，不改值、不降级来源
+    （Spec `packaging-manual-field-confirmation.md` §2.2）；
   · 增量写入，且只经 `requirement_service.save_requirement_draft()` 落盘。
 """
 from __future__ import annotations
@@ -116,8 +118,14 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
             if candidate.get("value") is not None or candidate.get("status") != "missing":
                 alternatives.append(_alternative(candidate))
             entry["alternatives"] = alternatives
-            entry.setdefault("origin", "user_confirmed")
-            entry.setdefault("status", "confirmed")
+            # 人工事实为准（Spec `packaging-manual-field-confirmation.md` §2.2）：**显式写死**
+            # origin / status / value，不用 `setdefault` —— 候选快照本身带着
+            # `status="missing"` / `origin="inferred_from_geometry"`，setdefault 抢不过它，
+            # 看板就永远停在 missing（34 实测：值在、来源 manual、看板 missing、门禁 unconfirmed）。
+            entry["origin"] = "user_confirmed"
+            entry["status"] = "confirmed"
+            entry["value"] = data.get(key)
+            entry.setdefault("confidence", 1.0)
             provenance[key] = entry
             kept[key] = {"reason": "user_confirmed"}
             _append_warning(warnings, USER_CONFIRMED_WARNING,

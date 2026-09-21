@@ -371,6 +371,27 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _manual_accept_fields(data: Dict[str, Any], sources: Dict[str, Any]) -> tuple:
+    """人工录入/确认**且当前有值**的字段集 —— 字段确认通道的入参（Spec §2.3）。
+
+    只收"来源 manual 且值非空"的字段：值为空的字段不存在"人工确认过的值"，让它照旧走图纸证据
+    （批 12 §3.3 的既有口径）；非空的人工值一个都不许被图纸候选覆盖，这里把它们显式确认下来。
+    """
+    out = []
+    for key, source in (sources or {}).items():
+        if str(source or "") != "manual":
+            continue
+        value = (data or {}).get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, tuple, dict, set)) and not value:
+            continue
+        out.append(str(key))
+    return tuple(sorted(out))
+
+
 def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
     module = _resolve(ctx, "packaging_semantics")
     if module is None:
@@ -394,8 +415,13 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
         entry = fields[key] if isinstance(fields[key], dict) else {}
         rows[key] = _field_row(key, entry, _board_of(key, entry, provenance, sources, unit_ok),
                                ir_id, ir_hash)
+    # 人工确认通道（Spec `packaging-manual-field-confirmation.md` §2.3）：把需求里
+    # "人工录入/确认且当前有值"的字段作为真实字段集交给确认通道 —— 人工值一个字都不许被
+    # 图纸候选覆盖，看板与门禁必须同时认它（`accept` 不再是恒空集）。
+    manual_fields = _manual_accept_fields(data, sources)
     try:
-        apply_fn(project_id, semantics, accept=(), author=str(ctx.get("actor") or "system"))
+        apply_fn(project_id, semantics, accept=manual_fields,
+                 author=str(ctx.get("actor") or "system"))
     except Exception as exc:
         # 分类只在**一处**判：异常自带稳定码就认它（码 → HTTP / 可重试查登记表），
         # 没有稳定码才按类型区分"真写失败"与"未识别异常"，不靠 str(exc) 关键字匹配
