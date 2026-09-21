@@ -5828,3 +5828,59 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
 
 未改任何业务实现（实现由会话另一侧完成）；未动 `裕同包装项目-待开发/` 客户样本；
 未提交他人临时脚本 `scripts/tmp_import_dwg_cases.py`；未创建 MR / tag / Release。
+
+## 220. 提交 / 推送 / 部署 34（9-21，Codex 执行）
+
+按"把已经改好的先上线"执行完毕。
+
+### 提交与推送
+
+- `a2292a0` 五批产品缺口实现 + 审查 / 回归 / 三处旧守卫按新口径更新（`## 218–219`），
+  25 个文件、+1085 / −80。
+- 推送并回读：`gitlab/ytbz` 与 `origin/ytbz` 均为 `a2292a0`（`git ls-remote` 逐条回读）。
+- **偏离说明（沿用 `## 217`）**：`AGENTS.md` 要求 push 走 `20260909`，
+  `scripts/push_remotes.py --check` 仍按预期拒绝（"只允许从 20260909 推送"）；34 的实际部署线是
+  `ytbz`（`deploy_34_bare.sh` 默认 `REF=ytbz`），本次按"能真正到 34"的口径推 `ytbz`，
+  未动 `20260909` / `master`，未创建 MR / tag / Release。
+
+### 34 部署（`scripts/deploy_34_bare.sh ytbz`，经 expect 包装密码登录）
+
+- `HEAD b627d24 → a2292a0`（`Fast-forward`，工作区 tracked 干净）；
+- `8010 pid=2816234`（子进程 `8012 pid=2816306`），`/api/health` `status=ok`，
+  启动 PATH 含 `/home/data/cpq-tools/xvfb-user/root/usr/bin`；
+- 部署自检新增的**能力探测与真转交叉核对**首次在生产上生效：
+  `converter_probe = {available:true, role:"primary", version:"27.1", source:"oda"}`，
+  与两份样本的 `manifest.converter_role` 一致；
+- 真转两份样本：`酒盒.dwg` 6711 实体 / 8 图层、`圆盘盒.dwg` 3457 实体 / 32 图层，
+  均 `fallback_used=false`、`output_version=ACAD2018`、`verified=true`、`dxf + preview` 齐全。
+
+### 生效复核（不看部署日志，直接读线上产物）
+
+- `http://172.16.10.34:8010/app.js`：`renderDrawingEntry` 4 处、`drawing-flow/run` 1 处、
+  旧规则 `$("btnParse").disabled = !isImg` **0 处**；`/drawing-flow.css` 200；
+  `/index.html` 含 `drawing-flow.css?v=drawing-flow1`。
+- `/api/health` 的 `cad_converter` 块：`available=true`、`provider=oda`、`27.1`、
+  `primary_unavailable_reason=""`、`preview_render=true`、`fallback.available=true`。
+- 服务端逐文件核对：`DWG_USE_DRAWING_FLOW` 2 处、`detect_converter_availability` 4 处、
+  `promote_rows` 1 处、`authority_missing` 4 处、`preconditions` 1 处、
+  `RequirementDraftMissing` 2 处、`openpyxl` 2 处、`drawing-flow.css` 与
+  `packaging_sources.json` 均在位。
+
+### 上线后读到的两个业务事实（不是本批引入，但要记）
+
+1. **34 的 PG 知识库里现在有数据了**：`kb_version=2`，`kb_packaging_box_type=14`、
+   `part_template=56`、`process_template=39`、`insert_accessory=12`、`material=36`、
+   `cost_rate=33`…（此前 `## 215` 报告的状态是"30 张表建好、数据未灌"）。
+   来源分层：`demo=109 / workbook=20 / dwg_confirmed=43 / unknown=0`。
+2. 但生产预检结论仍是 **no-go**，且这正是本批新规则第一次在生产库上说话：
+   4 张关键表报 `authority_missing`（有 demo 行且 `authority_ref` 为空）、
+   3 张报 `demo_only`。要让包装报价在生产可用，需要业务在
+   `tech_app/agent_knowledge/provenance/packaging_sources.json` 里给这 109 行补
+   `owner / decided_at / sha256`（脚本会拒收没主的行，不会静默放行）。
+
+### 未做 / 遗留
+
+- 未部署其它环境；未动 `20260909` / `master`；未创建 MR / tag / Release。
+- 成本批剩余 4 条业务红仍等业务裁决（①行业标准 / ②工费率 / ③混合），实现方按纪律未拍数。
+- 未提交：`scripts/tmp_import_dwg_cases.py`（他人临时脚本）、
+  `裕同包装项目-待开发/`（客户样本）。
