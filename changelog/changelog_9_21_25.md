@@ -4099,3 +4099,282 @@ git diff --check                                         -> 干净
   掩盖）、第 2 步「工艺确认」无非标承载位（`CARRY_MAP` 只认标品行，非标两张表必为 0 条）、
   第 3 步 `runMarkupStep()` 的归因文案错误。这些问题都需要单独批次与 Spec，不在本批范围。
 - 未部署、未重启服务、未改服务器配置；未引入新的系统依赖或第三方库。
+
+---
+
+## 195. A 档补齐：第 3/4 步提示归因 + 行业与需求不一致软提示（Spec + 红测，26 红）（9-21，Codex 只写 Spec 与红测+changelog）
+
+### 背景
+
+A 档三件事里的第二、三件（第一件「转技术工艺」按钮已由 `## 194` 实现并转绿）。
+本批**只写 Spec 与红测，未改任何生产代码**；B 档（非标判定、第 2 步承载位、推荐值边界）
+与 C 档（包装选品接盒型库、④表头与行同源）按用户要求一律不动。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/quote-markup-gate-advice.md` | P4：第 3/4 步拿不到产品行时的可执行提示。新增纯函数 `markupGateAdvice(step, column)`，文案同时说清两种原因（①前面还没选定产品 ②产品库没有适配标品、需转技术工艺新增产品），并挂上 `wfOpenSend(false, 'tech_new_product')`；仍 `return false`、仍走 `addErrorBubble`，门禁行为不变 |
+| `tests/test_quote_markup_gate_advice_red.py` | 18 条（A 7 / B 5 / C 2 / D 4） |
+| `docs/specs/quote-industry-mismatch-notice.md` | P9：行业与需求不一致的**软提示**。`cpq_industries` 新增 `INDUSTRY_HINTS` + `INDUSTRY_HINT_MIN_HITS` + 纯函数 `industry_hint(text, industry)`；服务端意图识别返回体带 `industry_hint`；前端 `step1Intent()` 出提示气泡，**不自动改行业下拉** |
+| `tests/test_quote_industry_mismatch_notice_red.py` | 19 条（A 4 / B 8 / C 4 / D 3） |
+
+### 现场问题（实测）
+
+- P4：`确认需求解析结果.html:3749` 空产品分支只有一句
+  `'第 ' + step + ' 步无法计算' + cfg.column + '：前面步骤还没有产品信息。'`，
+  对非标定制是错误归因（库里根本没有适配标品），且**不带任何可执行动作**。
+- P9：现场会话头部行业下拉停在「半导体」，用户输入的是包装需求，系统一个字都不说；
+  `hasattr(cpq_industries, "INDUSTRY_HINTS")` → False、`industry_hint` → False。
+
+### 红测实测原文（实现前）
+
+```
+tests.test_quote_markup_gate_advice_red          Ran 18 tests  FAILED (failures=12)
+tests.test_quote_industry_mismatch_notice_red    Ran 19 tests  FAILED (failures=14)
+```
+
+红点分布：P4 = A 组 7 全红 + B 组 3（b1/b2/b5）+ C 组 2 全红；P9 = A 组 4 全红 + B 组 8 全红 +
+C 组 2（c1/c3）。其余为护栏（不许动 `carryProducts`/`CARRY_MAP`/门禁、不许改行业下拉、
+不许新增依赖、不许把 UI 逻辑塞进后端），当前即绿。
+
+### 最小实现预演（红测可满足性验证，未落盘生产代码）
+
+- P4：按 Spec §3.1/§3.2 加 `markupGateAdvice` + `addGateActionBubble` 并替换空产品分支后，
+  同一套判定跑在内存副本上 **18/18 PASS**。
+- P9：按 Spec §3.1/§3.2 加词表与纯函数后，A 组 4 条 + B 组 8 条 **12/12 PASS**；
+  现场文本实跑返回
+  `suggested='packaging'，hits=['天地盒','刀模','压痕','灰板','面纸','每箱数量']`。
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_tech_handoff_button_red（## 194 已实现）      Ran 19 tests  OK
+tests.test_quote_agent_industry_alignment_red                  Ran 33 tests  OK
+tests.test_quote_task_coexistence_and_atomic_claim_red         Ran 41 tests  OK
+tests.test_packaging_box_type_matching_red                     Ran 51 tests  OK
+```
+
+### 未完成的能力声明
+
+- 本次只交付 Spec + 红测：P4/P9 生产代码一行未改，26 条红测仍红。
+- A 档第一件（按钮）已实现并提交（`67f4cb3`，`## 194`），本轮未再改动它。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务；未引入新依赖。
+
+---
+
+## 196. A 档补齐（实现）：第 3/4 步可执行提示 + 行业与需求不一致软提示（26 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 195` 交付的 Spec + 红测（26 红）本批全部转绿。只做用户点名的 A 档 P4 + P9；
+不引入任何非标判定（`below_threshold`/`nonstandard`/`WF.matchResult` 在该批新增代码里一律未出现），
+不动门禁、不动 `carryProducts`/`CARRY_MAP`、不动匹配来源，新增零依赖。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `cpq_industries.py` | 新增 `INDUSTRY_HINTS`（四行业特征词，每行 ≥8 个不重复词）、`INDUSTRY_HINT_MIN_HITS = 2`、纯函数 `industry_hint(text, industry=None, *, min_hits=None)`（命中门槛 + 严格大于当前行业 + 候选≠当前行业才返回；返回键恰好 6 个；`text` 含两个中文行业名与「不会自动切换行业」） |
+| `cpq_agent_server.py` | `_handle_step1_match()` 意图识别段新增旁路字段 `industry_hint`（缺必填项与识别通过两个返回体都带，未命中为 `None`）；`stage`/`missing`/门禁结果逐字不变 |
+| `确认需求解析结果.html` | ① `runMarkupStep` 之前新增 `markupGateAdvice(step, column)` 与 `addGateActionBubble(label, action)`；空产品分支改为 错误气泡 + 主色「转技术工艺」按钮，仍 `return false`；② `step1Intent()` 收到 `d.industry_hint` 时出一条普通 AI 气泡（主色、非警告橙），同一会话同一 `suggested` 只提示一次；**不给下拉赋值、不改 `CURRENT_INDUSTRY`、不阻断原有分支** |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD + 红测，git worktree 复现）
+tests.test_quote_markup_gate_advice_red          Ran 18 tests  FAILED (failures=12)
+tests.test_quote_industry_mismatch_notice_red    Ran 19 tests  FAILED (failures=14)
+
+# 实现后
+tests.test_quote_markup_gate_advice_red          Ran 18 tests  OK
+tests.test_quote_industry_mismatch_notice_red    Ran 19 tests  OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_tech_handoff_button_red                  Ran 19 tests  OK
+tests.test_quote_agent_industry_alignment_red             Ran 33 tests  OK
+tests.test_quote_tech_unified_tool_list_conversation_red  Ran 35 tests  OK   # 字体指纹行号基线未位移
+```
+
+`grep -l -E "cpq_industries|确认需求解析结果" tests/test_*.py` 的 37 份套件全跑：
+`TOTAL ran=668 failures=16 errors=0 skipped=0`，16 条全部是既有红
+（`process_row_running_info_and_fold_red` 14、`tech_model_call_row_merged_and_summary_detail_red` 2），本批零新增失败。
+
+### 能力声明与边界
+
+- 只做 A 档 P4 + P9，未越界到 B/C 档；未新增依赖。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务、未改服务器配置。
+
+---
+
+## 197. 包装选品接到盒型库（Spec + 红测，20 条 18 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+用户业务拍板第 5 条：**包装行业的选品这一轮要真的接到盒型库**。本批**只写 Spec 与红测，
+未改任何生产代码**；同批的非标路径治理（拍板 1/2/3/4/6）见
+`docs/specs/quote-nonstandard-path.md` 与 `tests/test_quote_nonstandard_path_red.py`。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/quote-packaging-box-library-selection.md` | 包装选品接盒型库 Spec（194 行）。本轮补齐三处命名/行为契约：①报价侧新模块 `cpq_packaging_match.py` 必须导出 `ENGINE_VERSION` / `MATCH_INPUT_KEYS` / `match_box_types(inputs, boxes=None, weights=None)` / `load_box_type(code, boxes=None)` / 异常类 `QuoteKbUnavailable`；②包装分支门禁输入用整份 `tool_input`（仍按需求模板 10 项必填判定，不因换源而放宽）；③`chat_candidates` 事件字段与 `needs_new_tooling` 的两处固定措辞（「没有适配」+「转技术工艺」） |
+| `tests/test_quote_packaging_box_selection_red.py` | 20 条（A 报价侧匹配器 5 / B 两侧口径逐字段一致 4 / C 入口按行业分流 4 / D 选用与 ④ 同源 3 / E 接不住给出口与不回归 4） |
+
+### 现场问题（实测）
+
+- `cpq_agent_server.py:805` `_handle_match_products()` 不带行业，直接调 `cpq_match.match()`；
+  `cpq_match.py:25` `PRODUCT_TABLE = "product_para_value"`（电池成品参数表）→ 包装询盘
+  （数码天地盒 100*90*40）的 Top3 是三个锂亚电池，「用途/场景契合」只有 30 分。
+- 仓库里没有报价侧盒型匹配器：`cpq_packaging_match.py` **不存在**；
+  工艺侧 `tech_app/backend/services/packaging_match.py:339` 早已有五维纯函数
+  `match_box_types()`，但两侧没有任何一致性约束。
+- `pick_product()`（`cpq_agent_server.py:702`）「选用」只查 `product_para_value`，
+  盒型编码在电池表里必然取不到行 → 包装选用走不通。
+- `确认需求解析结果.html` 里 `grep -c needs_new_tooling` → 0：盒型库接不住时没有出口。
+
+### 红测实测原文（实现前）
+
+```
+tests.test_quote_packaging_box_selection_red     Ran 20 tests  FAILED (failures=22)
+```
+
+红点分布：A 组 5 全红、B 组 4 全红（含 6 个子用例，故计数为 22）、C 组 4 全红、
+D 组 2（d1 `load_box_type` 缺、d2 包装选用仍查电池表）、E 组 3（e1 出口文案、e2 前端
+`needs_new_tooling`、e3 库读不到必须抛错）。绿 2 条护栏：D3（`tech_param_row` 与 ④ 表头
+同源，`## 191` 已实现）、E4（非包装行业与工艺侧口径不被改动）。
+
+### 关键契约（实现提示词照抄）
+
+```python
+cpq_packaging_match.ENGINE_VERSION  == "packaging_match_v1" == 工艺侧同值
+cpq_packaging_match.MATCH_INPUT_KEYS == 工艺侧同值、同序
+match_box_types(inputs, boxes=None, weights=None)   # None 时才读 cpq_kb；库读不到抛 QuoteKbUnavailable
+load_box_type("BOX-A", boxes=[...])                 # 命中回整行；无此编码回 {}，不编造
+```
+
+同真值下（同一 `boxes` + `weights` + `inputs`）报价侧与工艺侧必须逐字段相同：
+`dimensions`（维度/权重/硬门槛/顺序）、每个候选的 `status` / `can_confirm` / `total_score` /
+`dimension_scores` / `out_of_range` / `reject_reasons`、以及 `suggested_box_type` /
+`needs_new_tooling` / `new_tooling_reason`。红测含**缺选填配合间隙**用例（`total_weight`
+归一化口径必须一致）与**全淘汰**用例（`needs_new_tooling=True`、`suggested="")`。
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_tech_handoff_button_red                   Ran 19 tests  OK
+tests.test_quote_markup_gate_advice_red                    Ran 18 tests  OK
+tests.test_quote_industry_mismatch_notice_red              Ran 19 tests  OK
+tests.test_quote_nonstandard_path_red                      Ran 25 tests  FAILED (failures=14, errors=3)   # 另一批的红测，未实现
+tests.test_quote_packaging_box_selection_red               Ran 20 tests  FAILED (failures=22)           # 本批红测
+tests.test_quote_agent_industry_alignment_red              Ran 33 tests  OK
+tests.test_quote_task_coexistence_and_atomic_claim_red     Ran 41 tests  OK
+tests.test_packaging_box_type_matching_red                 Ran 51 tests  OK
+```
+
+### 未完成的能力声明
+
+- 本批只交付 Spec + 红测：`cpq_packaging_match.py`、`_handle_match_products()`、
+  `pick_product()`、前端 `chat_candidates` 一行生产代码未改，18 条红测仍红。
+- 非标路径治理（`docs/specs/quote-nonstandard-path.md`，25 条 17 红）同样**未实现**。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务；未引入新依赖。
+
+---
+
+## 198. 非标路径治理 + 包装选品接盒型库（实现，45 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 195/197` 交付的两套 Spec + 红测本批全部转绿：非标路径治理 25 条（实现前
+`FAILED (failures=14, errors=3)`，后 4 红 3 错转绿）与包装选品接盒型库 20 条
+（实现前 `FAILED (failures=22)`）。两批共用同一组后端解析入口，故一并落地；
+未动 `RECOMMEND_THRESHOLD`、六维权重、三行业门禁、`industry_templates` 模板与
+`tech_app/backend/services/packaging_match.py` 既有口径，新增零依赖。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `cpq_match.py` | 新增 `NONSTANDARD_DIM_FLOORS = {"scope": 60.0}` 与模块级 `_nonstandard(top, best, below)`；`match()` 返回值新增 `nonstandard`（`triggered` / `reasons[{key,label,actual,threshold,reason}]` / `suggested_task_kind` / `best_code` / `best_total`）。规则 1 `below` → `key="total"`；规则 2 任一维度低于 floor → `key=<维度>`。`suggested_task_kind` 经 `cpq_wf.TASK_KIND_TECH_NEW` 取值（导入失败退字面量）。其余键逐字不变 |
+| `cpq_packaging_match.py` | **新增**：`ENGINE_VERSION="packaging_match_v1"`、`MATCH_INPUT_KEYS`（7 键，与工艺侧同序同值）、`QuoteKbUnavailable`、`match_box_types(inputs, boxes=None, weights=None)`、`load_box_type(box_type_code, boxes=None)`。五个维度打分器与汇总段从工艺侧逐字搬运；`boxes`/`weights` 为 `None` 时经 `cpq_kb.snapshot()` 读 `cpq_kb`，读不到一律抛 `QuoteKbUnavailable`（绝不回落空表）。纯函数：不写库、不联网、不改入参、不 import `cpq_match` |
+| `cpq_agent_server.py` | ① `_BI_SECTIONS` 新增 `s2_custom_spec`（form，只读，第 4 位 `False`）、`_FALLBACK_FIELDS` 给出非标七字段；② 新增 `READONLY_FIELDS = ("测算状态",)`，`_enforce_fixed_template()` 对其置空值并附 `readonly: True`（table 分支同口径附 `row["_readonly"]`），系统提示同步引用；③ `_handle_match_products()` 按行业分流：包装走 `cpq_packaging_match.match_box_types()`，门禁仍按需求模板 10 项必填（传整份 `tool_input`）；④ 非包装分支事件新增 `nonstandard`；⑤ 新增 `_render_box_match()` / `_box_products()` / `_box_notes()`，包装事件带 `engine_version` / `dimensions` / `inputs_complete` / `missing_inputs` / `suggested_box_type` / `needs_new_tooling` / `new_tooling_reason` / `candidates`；⑥ `pick_product()` 包装分支经 `_pick_packaging_box()` 取盒型行、`tech_param_row('packaging', …)` 生成 ④ 行、盒型编码写进产品行，不再查电池成品参数表 |
+| `确认需求解析结果.html` | ① `renderFormSection()`/`makeTableRow()` 支持只读字段（`_readonly` 列不走 input，空骨架时值也为 `""`）；② `carryProducts()` 末对非标单渲染只读 `s2_custom_spec`；③ `renderCandidates()` 记录 `nonstandard`、处理 `needs_new_tooling`（行内按钮 → `wfOpenSend(false,'tech_new_product')`）；④ 新增 `renderTechResultCard()` / `applyTechResult()`（工艺回传唯一写入点，含冲突提示）与 `checkTechResultHandoff()`；⑤ `markupGateAdvice()` 文案同时含「可以继续」与「重算」，仍 `return false` |
+| `cpq_tech_bridge.py` | `send_to_quote()` payload 新增 `needs_confirmation: True`；全文仍不含 `s1_products` / `s1_techparams` |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前
+tests.test_quote_nonstandard_path_red           Ran 25 tests  FAILED (failures=14, errors=3)
+tests.test_quote_packaging_box_selection_red    Ran 20 tests  FAILED (failures=22)
+
+# 实现后
+tests.test_quote_nonstandard_path_red           Ran 25 tests  OK
+tests.test_quote_packaging_box_selection_red    Ran 20 tests  OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_agent_industry_alignment_red              Ran 33 tests   OK
+tests.test_quote_markup_gate_advice_red                    Ran 18 tests   OK
+tests.test_quote_industry_mismatch_notice_red              Ran 19 tests   OK
+tests.test_quote_tech_handoff_button_red                   Ran 19 tests   OK
+tests.test_packaging_box_type_matching_red                 Ran 51 tests   OK
+tests.test_quote_tech_unified_tool_list_conversation_red   Ran 35 tests   OK   # 行号基线未位移
+```
+
+`grep -l -E "cpq_industries|确认需求解析结果|cpq_match|cpq_packaging_match|cpq_tech_bridge"`
+命中的 44 份套件全跑：`TOTAL ran=858 failures=16 errors=0`，16 条全部是既有红
+（`process_row_running_info_and_fold_red` 14、`tech_model_call_row_merged_and_summary_detail_red` 2），
+本批零新增失败。静态检查：`py_compile` 4 个 Python 文件 OK；HTML 唯一内联脚本
+`node --check` rc=0；`git diff --check` 干净。
+
+### 收尾修正（同批）
+
+`_render_box_match()` 在「一条候选都不可确认」（`needs_new_tooling=True`）时，原先把摘要头写成
+「按五维加权评分推荐 TopN（已渲染到左侧供用户点选）」——与紧随其后的「⚠ 盒型库里**没有适配**的盒型」自相矛盾。
+现改为 `列出候选供参考（**均不可确认**，不可照此选定）`，避免让模型与用户误以为可以直接点选下单。
+仅改文案分支，候选表、评分与事件字段不变；两条红测复跑仍 `OK`。
+
+人工路径实测（注入单条磁吸盒型、需求为天地盖，工艺侧同输入逐字段一致）：
+
+```
+🔎 已查盒型库 kb_packaging_box_type（packaging_match_v1）：共评估 1 个盒型，按五维加权评分列出候选供参考（**均不可确认**，不可照此选定）：
+1. BOX-MAG 磁吸盒　总分 73.3　（闭合方式0；面纸克重100；配合间隙0；尺寸区间100；V槽100）
+   ⚠ 闭合方式不匹配
+⚠ 盒型库里**没有适配**的盒型（原因：all_rejected）。请**转技术工艺**新增盒型后再回到报价；**不要编造盒型编码或尺寸**。
+```
+
+#### 选用路径独立实测（`pick_product('BOX-A', 'packaging')`，只 stub `cpq_kb.snapshot()`）
+
+```
+ok: True | code: BOX-A | price: '' （第 1 步不取成品价格，留给成本测算）
+techparams_source: kb_packaging_box_type
+techparams_columns == tech_param_columns('packaging') 同源: True
+techparams_row 键集合 ⊆ 列集合: True；缺列已留空字符串
+products_row: {"成品编码": "BOX-A"}   # 盒型编码写进产品行，可追溯
+```
+
+同时把 `cpq_db.run_select` 换成会抛 `AssertionError` 的桩：包装选用路径**全程未触碰**
+`product_para_value` / `md_clm_material_cost_cnf`。错误分支同样如实：编码不存在 →
+「盒型库里找不到盒型编码 NOPE」；空编码 →「缺少成品编码」；库读不到 →
+「盒型库读取失败：…」。（`v_groove` 等布尔列按 Spec「原样带出」渲染为 `True`，未做本地化改写。）
+
+另附独立同源性核验（不复用红测夹具）：6 组人工用例（正常 / 缺选填配合间隙 / 全淘汰 / 高度越界 /
+缺必填 / 字符串与数字混用）下，`cpq_packaging_match.match_box_types()` 与工艺侧
+`tech_app/backend/services/packaging_match.match_box_types()` 的 JSON 逐字节相同，
+且两侧入参均未被就地修改；15 个内部函数体经 AST 比对差异仅为类型注解。
+
+### 能力声明与边界
+
+- 非标路径已可走通（识别 → 承载位 → 归因 → 回写标记 → 只读状态），但**非标判定仍只
+  依赖 `RECOMMEND_THRESHOLD` 与 `NONSTANDARD_DIM_FLOORS` 的硬编码维度下限**，未做权重调优。
+- 包装选品已接盒型库，与工艺侧五维口径逐字段同源；库不可读时抛 `QuoteKbUnavailable`，
+  不伪装空库。
+- 未做：真实盒型库数据验证（依赖部署环境 `cpq_kb` 快照）、工艺回传真实端到端联调。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务、未改服务器配置；未引入新依赖。

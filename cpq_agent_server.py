@@ -53,6 +53,8 @@ import cpq_ontology
 import cpq_msgutil
 import cpq_llm
 import cpq_shared_settings
+# 报价侧盒型五维匹配（与工艺侧 tech_app packaging_match.py 同口径）：包装行业选品的事实源。
+import cpq_packaging_match
 # 行业注册表与技术工艺侧的行业模板/成品参数字典（报价助手行业化的唯一事实源）。
 # 报价助手不再自己写一份行业清单或必填项：行业键取 cpq_industries，字段/必填/标签取
 # tech_app 的 industry_templates，半导体技术参数取 product_params。
@@ -200,6 +202,9 @@ _BI_SECTIONS = {
     # —— 第 2 步 工艺确认 —— 人工核对产品信息列表 + 产品技术参数（沿用第1步，仅展示确认），不调用智能体
     "s2_products":   ("table", "产品信息列表（沿用·仅确认）", ("价格测算单", "产品信息"),     False),
     "s2_techparams": ("table", "产品技术参数（沿用·仅确认）", ("价格测算单", "产品技术参数"), False),
+    # 非标路径的**只读**汇总（第 4 位 False = 不可编辑）：内容从第 1 步已有信息自动生成，
+    # 不给人加任何要填的东西、也不加任何额外确认步骤（Spec §2.2）。
+    "s2_custom_spec": ("form", "定制技术要求（非标）", ("价格测算单", "定制技术要求"), False),
     # —— 第 3 步 定价-利润加成 —— 产品信息仅展示 + 定价规则表
     "s3_products":   ("table", "产品信息（沿用·仅展示）", ("价格测算单", "产品信息"),     False),
     "s3_markup":     ("table", "定价规则（利润加成）",     ("价格测算单", "加价明细"),     False),
@@ -221,7 +226,14 @@ FIXED_FORMS: dict = {}  # section_id -> {kind, title, fields:[{key,label,example
 
 
 # 新库 quote_assistant_fields 里没有的逻辑实体，用这里的固定字段兜底。
-_FALLBACK_FIELDS = {}
+_FALLBACK_FIELDS = {
+    # 非标路径的只读汇总：DA 本体没有「定制技术要求」逻辑实体，字段在这里兜底（Spec §2.2）。
+    "定制技术要求": ["尺寸(mm)", "纸张与膜系", "板材与厚度", "数量", "交期", "随附图纸", "判定原因"],
+}
+
+#: 流程状态字段（DA 业务中文名）：**只让系统改，AI 只读**（Spec §2.5）。
+#: `_enforce_fixed_template()` 会丢弃模型给的值并标记 readonly；系统提示词引用同一份清单。
+READONLY_FIELDS = ("测算状态",)
 
 
 # 按需求隐藏的展示字段（xlsx 里有、但前端各分区不展示）：产品信息不展示这 3 个字段（所有步骤）。
@@ -381,6 +393,12 @@ def _enforce_fixed_template(ti: dict) -> dict:
             }
             if reco:
                 fld["reco"] = True  # 推荐值：前端只做颜色高亮，不显示标记文字
+            if f["key"] in READONLY_FIELDS:
+                # 流程状态：只由系统工作流改写。丢弃模型给的值并标记只读，
+                # 前端保留页面已有值、不覆盖（Spec §2.5）。
+                fld["value"] = ""
+                fld["readonly"] = True
+                fld.pop("reco", None)
             ti["fields"].append(fld)
         ti.pop("columns", None); ti.pop("rows", None); ti.pop("values", None)
     else:
@@ -400,14 +418,21 @@ def _enforce_fixed_template(ti: dict) -> dict:
             nr = {_norm_key(k): v for k, v in r.items()}
             row = {}
             reco_cols = []
+            reco_cols_readonly = []
             for k in keys:
                 v = _pick(r, k, nr)
                 val, reco = _strip_reco(v)
-                row[k] = val
+                if k in READONLY_FIELDS:
+                    row[k] = ""            # 流程状态：AI 写不进来（Spec §2.5）
+                    reco_cols_readonly.append(k)
+                else:
+                    row[k] = val
                 if reco:
                     reco_cols.append(k)
             if reco_cols:
                 row["_reco"] = reco_cols  # 推荐值所在列：前端据此高亮，不作为数据列
+            if reco_cols_readonly:
+                row["_readonly"] = reco_cols_readonly  # 只读列：前端保留已有值
             out_rows.append(row)
         ti["rows"] = out_rows
         ti.pop("fields", None); ti.pop("values", None)
@@ -712,6 +737,9 @@ def pick_product(code: str, industry=None) -> dict:
     if not code:
         return {"ok": False, "error": "缺少成品编码"}
     industry_key = _industry_of(None, industry)
+    if industry_key == PACKAGING_INDUSTRY:
+        # 包装「选用」走盒型库口径（Spec §2.4）：不再查电池成品参数表。
+        return _pick_packaging_box(code, industry_key)
 
     # ① 产品参数
     try:
@@ -802,16 +830,76 @@ def pick_product(code: str, industry=None) -> dict:
             "params": prow}
 
 
+def _pick_packaging_box(code: str, industry_key: str) -> dict:
+    """包装「选用」：盒型库口径 —— ④ 表头与行同源，盒型编码写进产品行（Spec §2.4）。
+
+    价格不由第 1 步取（盒型库没有成品价格），交由成本测算；绝不落回电池表的取价 SQL。
+    """
+    try:
+        box = cpq_packaging_match.load_box_type(code)
+    except cpq_packaging_match.QuoteKbUnavailable as e:
+        return {"ok": False, "error": "盒型库读取失败：" + str(e).splitlines()[0][:160]}
+    except Exception as e:                           # noqa: BLE001 - 原文回给前端
+        traceback.print_exc()
+        return {"ok": False, "error": "盒型库读取失败：" + str(e)}
+    if not box:
+        return {"ok": False, "error": "盒型库里找不到盒型编码 " + code}
+    tech_row = tech_param_row(industry_key, box)
+    by_norm = {_norm_key(k): ("" if v is None else str(v)) for k, v in box.items()}
+    prod_row = {}
+    for col in (FIXED_FORMS.get("s1_products") or {}).get("columns", []):
+        value = by_norm.get(_norm_key(col["key"]), "")
+        if value:
+            prod_row[col["key"]] = value
+    # 盒型编码必须写进产品行（可追溯）：落到「成品编码」列。
+    code_col = None
+    for col in (FIXED_FORMS.get("s1_products") or {}).get("columns", []):
+        if _norm_key(col["key"]) == _norm_key("成品编码"):
+            code_col = col["key"]
+            break
+    prod_row[code_col or "成品编码"] = code
+    return {"ok": True, "code": code,
+            "name": box.get("name") or "",
+            "price": "",
+            "price_note": "盒型库口径：第 1 步不取成品价格，价格由后续成本测算给出",
+            "techparams_row": tech_row, "products_row": prod_row,
+            "techparams_columns": tech_param_columns(industry_key),
+            "techparams_source": tech_param_source(industry_key),
+            "industry": industry_key,
+            "params": box}
+
+
 def _handle_match_products(tool_input: dict) -> str:
     """执行产品匹配：确定性打分 -> UI 事件渲染到左侧对话框 -> 给模型返回文字摘要。"""
     if not isinstance(tool_input, dict):
         return "match_products 入参必须是 JSON 对象"
+    # 入口按行业分流（Spec §2.3）：包装走报价侧盒型库匹配器 cpq_packaging_match
+    # （不再查电池成品参数表 product_para_value）；其余行业保持既有六维匹配逐字不变。
+    industry = _industry_of(None, tool_input.get("industry"))
+    if industry == PACKAGING_INDUSTRY:
+        inputs = {key: tool_input.get(key) for key in cpq_packaging_match.MATCH_INPUT_KEYS}
+        # 门禁输入用整份 tool_input（键名与需求模板一致）：仍按包装 10 项必填判定
+        missing = step1_missing(tool_input, industry=industry)
+        if missing:
+            return ("❌ 需求缺少必备匹配参数：" + "、".join(missing) +
+                    "。**不允许开始匹配，也不要编造参数**。请提醒用户补充需求"
+                    "（" + "、".join(label for _key, label in step1_required(industry)) +
+                    " 必须齐全），补齐后再重新匹配。")
+        try:
+            box_res = cpq_packaging_match.match_box_types(inputs)
+        except cpq_packaging_match.QuoteKbUnavailable as e:
+            return ("❌ 盒型库读取失败，暂时无法推荐：" + str(e).splitlines()[0][:160] +
+                    "。**不要编造盒型**，请如实告诉用户「盒型库读取失败，暂时无法给出推荐清单」，"
+                    "并请他联系管理员检查知识库连接。")
+        except Exception as e:                       # noqa: BLE001 - 原文回给模型
+            traceback.print_exc()
+            return f"盒型匹配失败：{e}"
+        return _render_box_match(inputs, box_res)
     req = {k: tool_input.get(k) for k in
            ("max_dimension", "dimension_tolerance_pct", "application_scope",
             "operating_temperature", "service_life", "hermeticity")}
     # 意图识别门槛：尺寸/应用范围/工作温度缺一不可，缺了不匹配
     # 门禁按行业取必填项：半导体/电池/电器是三项，包装是需求模板的 10 项必填
-    industry = _industry_of(req, tool_input.get("industry"))
     missing = step1_missing(req, industry=industry)
     if missing:
         return ("❌ 需求缺少必备匹配参数：" + "、".join(missing) +
@@ -840,6 +928,8 @@ def _handle_match_products(tool_input: dict) -> str:
         "threshold": res["threshold"], "below_threshold": res["below_threshold"],
         "advice": res["advice"], "all_count": res["all_count"],
         "source": src,          # 取数出处：库、表、SQL、行数（前端展示，便于核对确实查了库）
+        # 非标判定（Spec §2.1）：总分阈值 + 关键维度下限，任一命中即触发。
+        "nonstandard": res.get("nonstandard"),
     })
 
     lines = [f"🔎 已查库：{src.get('sql', '')} —— {src.get('db', '')}，取回 {src.get('rows', 0)} 行。",
@@ -852,8 +942,133 @@ def _handle_match_products(tool_input: dict) -> str:
     if res["below_threshold"]:
         lines.append(f"最高分 {res['products'][0]['total']:g} 低于阈值 {res['threshold']:g}："
                      f"{res['advice']}")
+    ns = res.get("nonstandard") or {}
+    if ns.get("triggered"):
+        # 非标：如实说明为什么接不住，并给出可执行出口（新增工艺）。
+        why = "；".join(
+            f"{r.get('label') or r.get('key')} {float(r.get('actual') or 0):g} 分"
+            f"（下限 {float(r.get('threshold') or 0):g}）"
+            for r in (ns.get("reasons") or []))
+        lines.append(f"⚠ 判为非标：{why}。库里没有能直接接住的标品，"
+                     "建议**转技术工艺新增工艺/新增产品**后再回到报价（**不要编造产品**）。")
     lines.append("请等用户在左侧点「选用」确定产品后，再查 md_clm_material_cost_cnf 取价格填表；"
                  "**不要替用户擅自选定**。")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# 包装行业：盒型库候选渲染（与工艺侧同口径，Spec §2.3）
+# --------------------------------------------------------------------------- #
+#: 盒型五维的中文名（只用于展示；权重/门槛一律来自权重表，不在此写死数字）。
+_BOX_DIMENSION_LABELS = {
+    "size_range": "尺寸区间",
+    "fit_clearance": "配合间隙",
+    "face_paper_gsm": "面纸克重",
+    "closure_type": "闭合方式",
+    "v_groove": "V槽",
+}
+
+
+def _box_notes(cand: dict) -> list:
+    """候选的告警/淘汰原因（中文说明，供表格 warnings 与五维明细用）。"""
+    notes = []
+    if cand.get("out_of_range"):
+        notes.append("尺寸超出该盒型适用区间（已扣分）")
+    for reason in cand.get("reject_reasons") or []:
+        notes.append({
+            "fit_clearance_out_of_tolerance": "配合间隙超出容差",
+            "closure_type_mismatch": "闭合方式不匹配",
+            "gsm_unparsable": "盒型面纸克重不可解析",
+            "v_groove_required_but_unsupported": "需要 V 槽但该盒型不支持",
+        }.get(str(reason), str(reason)))
+    for dim in cand.get("undecidable_dimensions") or []:
+        notes.append("%s 数据缺失，无法判定" % _BOX_DIMENSION_LABELS.get(dim, dim))
+    if cand.get("status") == "needs_input":
+        notes.append("需求缺必填匹配输入")
+    return notes
+
+
+def _box_products(box_res: dict) -> list:
+    """把盒型候选转成前端既有候选表格的口径（code/name/total/detail/warnings）。"""
+    dims = box_res.get("dimensions") or []
+    products = []
+    for cand in box_res.get("candidates") or []:
+        notes = _box_notes(cand)
+        detail = {}
+        for d in dims:
+            dim = d["dimension"]
+            score = float((cand.get("dimension_scores") or {}).get(dim, 0.0))
+            weight = float(d.get("weight") or 0.0)
+            detail[dim] = {
+                "label": _BOX_DIMENSION_LABELS.get(dim, dim),
+                "score": round(score * 100, 1),
+                "weight": int(round(weight * 100)),
+                "reason": "；".join(notes) or "按盒型库权重表计分",
+                "weighted": round(score * weight * 100, 2),
+            }
+        products.append({
+            "code": cand.get("box_type_code") or "",
+            "name": cand.get("name") or cand.get("family") or "",
+            "total": round(float(cand.get("total_score") or 0.0) * 100, 1),
+            "detail": detail,
+            "warnings": notes,
+            "status": cand.get("status"),
+            "can_confirm": bool(cand.get("can_confirm")),
+        })
+    return products
+
+
+def _render_box_match(inputs: dict, box_res: dict) -> str:
+    """把盒型库候选渲染成 chat_candidates 事件，并给模型返回文字摘要。"""
+    products = _box_products(box_res)
+    weights = {}
+    for d in box_res.get("dimensions") or []:
+        weights[_BOX_DIMENSION_LABELS.get(d["dimension"], d["dimension"])] = \
+            "%d%%" % int(round(float(d.get("weight") or 0.0) * 100))
+    _ui_events().append({
+        "action": "chat_candidates", "step": 1, "industry": PACKAGING_INDUSTRY,
+        "requirement": {k: v for k, v in inputs.items() if str(v or "").strip()},
+        "products": products, "weights": weights,
+        "threshold": None,
+        # 盒型库没有「总分阈值」这一说：接不住由 needs_new_tooling 决定，不在此另写数字。
+        "below_threshold": bool(box_res.get("needs_new_tooling")),
+        "advice": "", "all_count": len(box_res.get("candidates") or []),
+        "source": {"db": DB_NAME, "table": "kb_packaging_box_type",
+                   "sql": "SELECT * FROM kb_packaging_box_type",
+                   "rows": len(box_res.get("candidates") or [])},
+        # 盒型库口径（Spec §2.3，前端据此画表格与出口）
+        "engine_version": box_res.get("engine_version"),
+        "dimensions": box_res.get("dimensions"),
+        "inputs_complete": box_res.get("inputs_complete"),
+        "missing_inputs": box_res.get("missing_inputs"),
+        "suggested_box_type": box_res.get("suggested_box_type"),
+        "needs_new_tooling": box_res.get("needs_new_tooling"),
+        "new_tooling_reason": box_res.get("new_tooling_reason"),
+        "candidates": box_res.get("candidates"),
+    })
+    # 一条候选都不可确认时不得写「推荐 TopN…供点选」：如实说成仅供参考。
+    if box_res.get("needs_new_tooling"):
+        lines = ["🔎 已查盒型库 kb_packaging_box_type（%s）：共评估 %d 个盒型，"
+                 "按五维加权评分列出候选供参考（**均不可确认**，不可照此选定）："
+                 % (box_res.get("engine_version") or "",
+                    len(box_res.get("candidates") or []))]
+    else:
+        lines = ["🔎 已查盒型库 kb_packaging_box_type（%s）：共评估 %d 个盒型，"
+                 "按五维加权评分推荐 Top%d（已渲染到左侧供用户点选）："
+                 % (box_res.get("engine_version") or "", len(box_res.get("candidates") or []),
+                    len(products))]
+    for i, p in enumerate(products, 1):
+        ds = "；".join("%s%s" % (v["label"], ("%g" % v["score"]))
+                       for v in p["detail"].values())
+        lines.append("%d. %s %s　总分 %g　（%s）" % (i, p["code"], p["name"], p["total"], ds))
+        for w in p["warnings"]:
+            lines.append("   ⚠ %s" % w)
+    if box_res.get("needs_new_tooling"):
+        lines.append("⚠ 盒型库里**没有适配**的盒型（原因：%s）。请**转技术工艺**新增盒型后再回到报价；"
+                     "**不要编造盒型编码或尺寸**。"
+                     % (box_res.get("new_tooling_reason") or "no_confirmable_candidate"))
+    else:
+        lines.append("请等用户在左侧点「选用」确定盒型后，再查价格填表；**不要替用户擅自选定**。")
     return "\n".join(lines)
 
 
@@ -1190,7 +1405,10 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         return {"ok": False, "error": "缺少需求文本"}
     # 行业来源优先级：请求体显式 industry → 需求里的 industry → 默认行业（Spec §3.2）
     industry_key = _industry_of(None, data.get("industry"))
-    _trace(f"开始：需求文本 {len(text)} 字，行业 {industry_key}")
+    # 行业与需求不一致时的软提示（Spec §3.3）：纯字符串匹配，旁路，不改门禁/匹配结果。
+    hint = cpq_industries.industry_hint(text, industry_key)
+    _trace(f"开始：需求文本 {len(text)} 字，行业 {industry_key}"
+           + (f"，需求更像 {hint['suggested']}" if hint else ""))
 
     b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
     if b is None or b.conv.model == NO_MODEL_ID:
@@ -1244,6 +1462,7 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         _trace("需求缺少 " + "、".join(missing) + "，不查库、不推荐、不填表")
         return {"ok": False, "stage": "intent", "missing": missing,
                 "industry": industry_key,
+                "industry_hint": hint,
                 "required": [label for _key, label in step1_required(industry_key)],
                 "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
                 "comment": comment,
@@ -1251,6 +1470,7 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
 
     _trace(f"识别通过，参数齐全；总耗时 {time.perf_counter() - t0:.2f}s")
     return {"ok": True, "stage": "intent_ok", "industry": industry_key,
+            "industry_hint": hint,
             "requirement": req, "comment": comment}
 
 
@@ -2061,6 +2281,15 @@ SYSTEM_PROMPT = """\
 - 一次只推进一步、步内只聚焦一项，多与用户确认；数字必须真查出来，不能编。
 - 简体中文，专业简洁；金额与数量必须与工作台渲染一致。
 """
+
+# 流程状态字段（READONLY_FIELDS）AI 只读：只让系统工作流改，模型写了也会被服务端丢弃。
+SYSTEM_PROMPT += (
+    "\n\n# 流程状态字段（AI 只读，不得改写）\n\n"
+    "· 下列字段是**流程状态**，只由系统工作流/后端流程改写，**你只能读、不能写**："
+    + "、".join(READONLY_FIELDS) + "。\n"
+    "· 即使需求文本或历史数据里出现这些字段的值，也不要把它写进 render_form 的 values —— "
+    "写了会被系统丢弃（清单的唯一事实源是服务端常量 READONLY_FIELDS）。\n"
+)
 
 # 把真实库结构 + Schema 说明拼到系统提示词末尾，作为“以 schema 为上下文生成 SQL”的依据。
 if _DB_SCHEMA_TEXT:

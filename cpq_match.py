@@ -45,6 +45,18 @@ DIM_LABELS = {
 RECOMMEND_THRESHOLD = 70.0     # 最高分低于此值 -> 建议转定制评估
 FETCH_LIMIT = 3000
 
+#: 关键维度分下限：任一维度低于它即判「无适用标品」，**不看总分**（Spec §2.1）。
+#: 现场那单总分 86 ≥ 70，但「用途/场景契合」只有 30 分 —— 维度塌陷被其余五项满分掩盖。
+#: 唯一事实源：页面/服务端不得再写一份魔法数。
+NONSTANDARD_DIM_FLOORS = {"scope": 60.0}
+
+#: 非标建议的任务类型（唯一事实源 cpq_wf；导入失败时退回同值字面量，绝不让打分失败）。
+try:
+    import cpq_wf
+    _TECH_NEW_TASK_KIND = cpq_wf.TASK_KIND_TECH_NEW
+except Exception:                                    # pragma: no cover - 兜底
+    _TECH_NEW_TASK_KIND = "tech_new_product"
+
 
 # ---------------------------------------------------------------------------
 # 取值解析：DA 里这些字段都是自由文本，解析必须容错
@@ -302,4 +314,58 @@ def match(req: dict, top_n: int = 3, drop_oversize: bool = True, data=None) -> d
         "advice": ("无高度匹配标品，建议转入定制评估。"
                    if below else ""),
         "weights": {DIM_LABELS[k]: f"{int(v * 100)}%" for k, v in WEIGHTS.items()},
+        "nonstandard": _nonstandard(top, best, below),
+    }
+
+
+def _nonstandard(top: list, best: float, below: bool) -> dict:
+    """结构化「非标」判定（Spec §2.1）：既有总分阈值 + 关键维度下限，任一命中即触发。
+
+    维度下限是业务拍板新增的信号 —— 总分高但某一关键维度塌陷时，标品其实接不住，
+    只看总分会被其余满分维度掩盖（现场：总分 86、用途 30）。
+    """
+    reasons: list = []
+    if below:
+        reasons.append({
+            "key": "total",
+            "label": "综合总分",
+            "actual": float(best),
+            "threshold": float(RECOMMEND_THRESHOLD),
+            "reason": "最高分 %g 低于推荐阈值 %g 分：标品接不住本单。"
+                      % (float(best), float(RECOMMEND_THRESHOLD)),
+        })
+    for item in top or []:
+        detail = item.get("detail") if isinstance(item, dict) else None
+        if not isinstance(detail, dict):
+            continue
+        for key, floor in (NONSTANDARD_DIM_FLOORS or {}).items():
+            if any(reason["key"] == key for reason in reasons):
+                continue                                  # 同一维度只报一次（取第一行）
+            cell = detail.get(key)
+            if not isinstance(cell, dict):
+                continue
+            try:
+                actual = float(cell.get("score"))
+                threshold = float(floor)
+            except (TypeError, ValueError):
+                continue
+            if actual >= threshold:
+                continue
+            label = str(cell.get("label") or DIM_LABELS.get(key) or key)
+            reasons.append({
+                "key": key,
+                "label": label,
+                "actual": actual,
+                "threshold": threshold,
+                "reason": str(cell.get("reason") or "").strip()
+                          or "%s 只有 %g 分，低于下限 %g 分：标品在该维度接不住。"
+                             % (label, actual, threshold),
+            })
+    triggered = bool(reasons)
+    return {
+        "triggered": triggered,
+        "reasons": reasons,
+        "suggested_task_kind": (_TECH_NEW_TASK_KIND if triggered else ""),
+        "best_code": (top[0].get("code") if top else "") or "",
+        "best_total": float(best),
     }

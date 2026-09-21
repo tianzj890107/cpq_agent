@@ -1735,6 +1735,20 @@
     }
 
     function renderFormSection(ui) {
+      // 只读字段（流程状态）：保留页面已有值、不覆盖（Spec §2.5）。旧值必须在
+      // sectionShell() 重建 DOM 之前读出来。
+      const keep = {};
+      const prev = sections.get(ui.section_id);
+      if (prev && prev.el) {
+        (ui.fields || []).forEach(f => {
+          if (!f || !f.readonly) return;
+          const el = prev.el.querySelector('[data-key="' + CSS.escape(f.key) + '"]');
+          if (!el) return;
+          const v = ('value' in el) ? el.value
+            : (el.dataset.value != null ? el.dataset.value : el.textContent);
+          if (v) keep[f.key] = v;
+        });
+      }
       const sec = sectionShell(ui);
       sec.kind = 'form';
       const content = sec.el.querySelector('.collapse-content');
@@ -1743,14 +1757,17 @@
       const fields = ui.fields || [];
       for (let i = 0; i < fields.length; i += 2) {
         const tr = document.createElement('tr');
-        for (const f of [fields[i], fields[i + 1]]) {
+        for (let f of [fields[i], fields[i + 1]]) {
           if (!f) { tr.insertAdjacentHTML('beforeend', '<td class="label"></td><td class="value"></td>'); continue; }
+          if (f.readonly) {
+            f = Object.assign({}, f, { value: (keep[f.key] != null ? keep[f.key] : (f.value || '')) });
+          }
           const label = document.createElement('td');
           label.className = 'label';
           label.innerHTML = (f.required ? '<span class="required">*</span>' : '') + escapeHtml(f.label);
           const value = document.createElement('td');
           value.className = 'value';
-          value.appendChild(makeFieldInput(f, sec.editable));
+          value.appendChild(makeFieldInput(f, f.readonly ? false : sec.editable));
           tr.appendChild(label); tr.appendChild(value);
         }
         table.appendChild(tr);
@@ -2000,11 +2017,12 @@
     function makeTableRow(sec, row) {
       const tr = document.createElement('tr');
       const recoCols = Array.isArray(row._reco) ? row._reco : []; // 后端标出的推荐值列
+      const readonlyCols = Array.isArray(row._readonly) ? row._readonly : []; // 只读列（流程状态）
       for (const c of sec.columns) {
         const td = document.createElement('td');
         const val = row[c.key] == null ? '' : String(row[c.key]);
         const reco = recoCols.includes(c.key);
-        if (sec.editable) {
+        if (sec.editable && !readonlyCols.includes(c.key)) {
           const input = document.createElement('input');
           input.value = val;
           input.dataset.key = c.key;
@@ -2061,6 +2079,9 @@
         const t = STEP1_LAST_DISPLAY || STEP1_LAST_REQ;
         if (t) STEP1_MATCH.text = t;
       }
+      // 非标判定（Spec §2.1）：第 2 步的只读汇总与出口都读这一份，不在前端另判。
+      STEP1_MATCH.nonstandard = ui.nonstandard || null;
+      WF.nonstandard = ui.nonstandard || null;
       const list = ui.products || [];
       const div = document.createElement('div');
       div.className = 'message message-ai cand-block';
@@ -2090,6 +2111,12 @@
         html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 最高分低于阈值 ' +
           ui.threshold + ' 分：' + escapeHtml(ui.advice || '') + '</div>';
       }
+      // 盒型库接不住（Spec §2.5）：如实说明，并给「转技术工艺」出口，而不是照常画「选用」。
+      if (ui.needs_new_tooling) {
+        html += '<div class="cand-warn"><i class="ti ti-alert-triangle"></i> 盒型库里没有适配的盒型' +
+          (ui.new_tooling_reason ? '（' + escapeHtml(ui.new_tooling_reason) + '）' : '') +
+          '：请转技术工艺新增盒型后再回到报价。</div>';
+      }
       if (opts.repick && opts.picked) {
         html += '<div class="cand-sub" style="color:var(--color-primary,#0060E6)">' +
           '<i class="ti ti-user-check"></i> 销售经理已选：<b>' + escapeHtml(opts.picked) +
@@ -2116,11 +2143,13 @@
           }).join('') +
           '<td class="cand-ops">' +
           '<button class="cand-btn img" data-img="' + escapeHtml(p.code) + '"><i class="ti ti-photo"></i>图片</button>' +
-          ((opts.picked && p.code === opts.picked)
-            ? '<button class="cand-btn pick picked" disabled><i class="ti ti-check"></i>' +
-              (opts.repick ? '销售经理已选' : '已选用') + '</button>'
-            : '<button class="cand-btn pick" data-pick="' + i + '">' +
-              (opts.repick ? '<i class="ti ti-refresh"></i>改选此产品' : '<i class="ti ti-check"></i>选用') + '</button>') +
+          (ui.needs_new_tooling
+            ? '<button class="cand-btn pick" data-handoff="1"><i class="ti ti-tools"></i>转技术工艺</button>'
+            : ((opts.picked && p.code === opts.picked)
+              ? '<button class="cand-btn pick picked" disabled><i class="ti ti-check"></i>' +
+                (opts.repick ? '销售经理已选' : '已选用') + '</button>'
+              : '<button class="cand-btn pick" data-pick="' + i + '">' +
+                (opts.repick ? '<i class="ti ti-refresh"></i>改选此产品' : '<i class="ti ti-check"></i>选用') + '</button>')) +
           '</td></tr>';
         // 逐维度说明 + 告警（默认折叠在第二行，点总分展开）
         html += '<tr class="cand-why" data-why="' + escapeHtml(p.code) + '"><td></td><td colspan="' +
@@ -2173,6 +2202,10 @@
       // 选用：直接走后端 SQL 取参数与价格并填表，**不调用智能体**
       div.querySelectorAll('[data-pick]').forEach(btn => {
         btn.onclick = () => pickProduct(list[Number(btn.dataset.pick)], div, btn);
+      });
+      // 盒型库接不住：出口与按钮区同一个转交弹窗（预选「新增工艺」），不伪造盒型。
+      div.querySelectorAll('[data-handoff]').forEach(btn => {
+        btn.onclick = () => wfOpenSend(false, 'tech_new_product');
       });
       scrollChat();
     }
@@ -2267,6 +2300,7 @@
     let STEP1_LAST_DISPLAY = ''; // 用户实际输入的文字（第 2 步回显用，不带附件正文/系统指令）
     let STEP1_REINPUT = false;   // true = 缺必备参数，下一条聊天输入按「补充需求」重新识别
     let STEP1_FORM_TASK = null;  // 待办的「智能体填表」任务（需求全文），识别通过后才发出
+    let STEP1_HINTED = new Set(); // 已提示过的「需求更像的行业」建议（同一会话同一建议只提示一次）
 
     // SSE 读取：把 text 事件流式写进气泡，stage 事件记成轨迹，返回最终 result
     async function _sseCall(url, body) {
@@ -2321,6 +2355,13 @@
       setBusy(false);
       markTraceDone(chatEl);
       if (act) markTraceDone(act);
+
+      // 行业与需求不一致：只提示、不自动切换行业（Spec §3.4）；同一会话同一建议只提示一次。
+      if (d && d.industry_hint && d.industry_hint.text
+          && !STEP1_HINTED.has(d.industry_hint.suggested)) {
+        STEP1_HINTED.add(d.industry_hint.suggested);
+        addAiBubble(d.industry_hint.text);
+      }
 
       if (d && d.stage === 'intent') {     // 信息不齐：到此为止
         STEP1_REINPUT = true;
@@ -3256,6 +3297,110 @@
       scrollChat();
     }
 
+    /* ---------------- 工艺回传的「待确认」结果（Spec §2.4） ----------------
+       技术工艺确认/成本回传后，报价任务 payload 里带 tech_result + needs_confirmation=true。
+       这里渲染一块**只读**卡片 + 一个「确认写入」动作：价格只提示销售确认，不自动替换；
+       只有 applyTechResult() 会写 s1_products / s1_techparams（写入集中在这一处）。 */
+    function techResultSummary(result) {
+      if (!result || typeof result !== 'object') return '';
+      const bits = [];
+      const code = result.code || result.product_code || result.box_type_code;
+      if (code) bits.push('成品/盒型编码：' + code);
+      if (result.name) bits.push('名称：' + result.name);
+      if (result.price !== undefined && result.price !== '') bits.push('价格：' + result.price);
+      const rows = result.products || result.products_rows || [];
+      if (rows.length) bits.push('产品行：' + rows.length + ' 条');
+      if (result.techparams_row) bits.push('技术参数：1 行');
+      return bits.join('；') || '（技术工艺回传结果，详见任务卡）';
+    }
+
+    function renderTechResultCard(task) {
+      const payload = (task && (task.payload || task.data)) || {};
+      const result = payload.tech_result;
+      if (!result || payload.needs_confirmation !== true) return false;
+      const old = document.getElementById('wfTechResultBubble');
+      if (old) old.remove();
+      const div = document.createElement('div');
+      div.className = 'message message-ai';
+      div.id = 'wfTechResultBubble';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body">'
+        + '<div style="margin-bottom:8px"><b>工艺回传结果（待确认）</b><br>'
+        + escapeHtml(techResultSummary(result)) + '<br>'
+        + '<span style="color:var(--text-secondary,#64748b)">确认写入前不会改动报价单的价格；'
+        + '目标行已有值时先提示两组值，由你决定。</span></div>'
+        + '<button id="wfTechResultApplyBtn" style="padding:7px 16px;border:none;border-radius:8px;'
+        + 'background:var(--color-primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer">'
+        + '<i class="ti ti-check"></i> 确认写入</button></div>';
+      chatEl.appendChild(div);
+      document.getElementById('wfTechResultApplyBtn').onclick = () => applyTechResult(result, task);
+      scrollChat();
+      return true;
+    }
+
+    /* 唯一写入点：只有销售点了「确认写入」才把工艺回传结果写进报价单
+       （s1_products / s1_techparams），且已有值先提示两组值，绝不静默替换（Spec §2.4）。 */
+    function applyTechResult(result, task) {
+      if (!result || typeof result !== 'object') return false;
+      const rows = result.products || result.products_rows || [];
+      const params = result.techparams_row || result.techparams || null;
+      const targets = [];
+      if (rows.length) targets.push(['s1_products', Object.assign({}, rows[0])]);
+      if (params && Object.keys(params).length) targets.push(['s1_techparams', Object.assign({}, params)]);
+      if (!targets.length) {
+        addErrorBubble('工艺回传结果里没有可写入的产品行或技术参数，未做任何改动。');
+        return false;
+      }
+      if (result.price !== undefined && result.price !== '' && targets[0][0] === 's1_products') {
+        targets[0][1]['价格'] = String(result.price);   // 价格来源注明为工艺回传
+      }
+      const conflicts = [];
+      targets.forEach(([sid, row]) => {
+        const cur = extractSectionRows(sid)[0] || {};
+        Object.keys(row || {}).forEach(k => {
+          const before = cur[k];
+          if (String(before == null ? '' : before).trim() && String(before) !== String(row[k])) {
+            conflicts.push(sid + '｜' + k + '：现有「' + before + '」→ 工艺回传「' + row[k] + '」');
+          }
+        });
+      });
+      if (conflicts.length &&
+          !confirm('以下单元格已有值，确认用工艺回传结果替换？\n\n' + conflicts.join('\n'))) {
+        return false;
+      }
+      targets.forEach(([sid, row]) => {
+        const f = FORMS.find(x => x.section_id === sid);
+        if (!f || !row) return;
+        renderTableSection({
+          action: 'render_table', step: f.step, section_id: sid,
+          title: f.title, editable: f.editable, columns: f.columns || [], rows: [row],
+        });
+      });
+      const bubble = document.getElementById('wfTechResultBubble');
+      if (bubble) bubble.remove();
+      addAiBubble('✅ 已按你的确认把工艺回传结果写入报价单（产品信息与技术参数，价格来源：工艺回传）。'
+        + '请核对右侧内容后继续下一步。');
+      return true;
+    }
+
+    /* 页面加载/刷新时找出「带 tech_result 且 needs_confirmation」的本会话任务并渲染卡片。 */
+    async function checkTechResultHandoff() {
+      if (!wfUser() || !currentSessionId) return false;
+      try {
+        const d = await wfApi('/wf/tasks');
+        for (const t of ((d && d.tasks) || [])) {
+          const payload = (t && t.payload) || {};
+          if (payload.needs_confirmation !== true || !payload.tech_result) continue;
+          if (payload.quote_session_id && payload.quote_session_id !== currentSessionId) continue;
+          return renderTechResultCard(t);
+        }
+      } catch (e) { /* 未登录 / 接口不可用：静默跳过，不影响主流程 */ }
+      return false;
+    }
+
     /* 随「新增工艺」任务带给工艺经理的资料：客户需求正文、随需求上传的文档、
        以及这次匹配为什么不达标。工艺经理在技术工艺的任务专属页直接看到这些，
        不用回头翻报价会话。 */
@@ -3518,10 +3663,46 @@
           title: f.title, editable: f.editable, columns: f.columns || [], rows,
         });
       });
+      // 非标路径：第 2 步多一块**只读**汇总 s2_custom_spec（Spec §2.2）。
+      // 内容全部从第 1 步已有信息 + 非标判定原因自动生成；不加人工填写、不加额外步骤。
+      if (step === 2 && WF.nonstandard && WF.nonstandard.triggered) renderCustomSpecSection();
       // 若该步当前正显示，确保切换后可见
       if (shownStep === step) sections.forEach(sec => { if (sec.step === step) sec.el.style.display = ''; });
     }
     function syncStep2FromStep1() { carryProducts(2); }   // 兼容旧调用名
+
+    /* 非标路径的只读「定制技术要求」汇总（s2_custom_spec，Spec §2.2）：
+       数据只从第 1 步已有信息（测算基本信息 / 需求文本 / 随附文件）与非标判定原因取，
+       页面上只读、不渲染输入框、不做必填校验、不新增确认动作。 */
+    function renderCustomSpecSection() {
+      const f = FORMS.find(x => x.section_id === 's2_custom_spec');
+      if (!f || !Array.isArray(f.fields)) return;
+      const req = STEP1_MATCH.requirement || {};
+      const ns = WF.nonstandard || {};
+      const basic = extractSectionRows('s1_basic')[0] || {};
+      const reason = (ns.reasons || []).map(r =>
+        (r.label || r.key) + ' ' + (r.actual != null ? r.actual : '') + ' 分（下限 ' +
+        (r.threshold != null ? r.threshold : '') + ' 分）：' + (r.reason || '')).join('；');
+      const dim = [req.inner_length, req.inner_width, req.inner_height]
+        .filter(v => v != null && String(v).trim() !== '').join('*');
+      const values = {
+        '尺寸(mm)': dim || req.max_dimension || basic['规格'] || '',
+        '纸张与膜系': req.face_paper_gsm ? ('面纸 ' + req.face_paper_gsm + ' g/m²') : '',
+        '板材与厚度': basic['质量专控要求'] || '',
+        '数量': req.quote_quantity || basic['数量'] || '',
+        '交期': basic['出厂时间'] || '',
+        '随附图纸': (typeof chatFiles !== 'undefined' ? chatFiles : [])
+          .map(x => x && x.name).filter(Boolean).join('、'),
+        '判定原因': reason,
+      };
+      renderFormSection({
+        action: 'render_form', step: 2, section_id: 's2_custom_spec',
+        title: f.title, editable: false,
+        fields: f.fields.map(c => ({
+          key: c.key, label: c.label, type: 'text', value: values[c.key] || '',
+        })),
+      });
+    }
 
     /* 进入/显示第 2 步时自愈：只要第 2 步两张表还是空的、而第 1 步有数据，就自动沿用过来。
        覆盖所有进入路径——接手人打开卡片被纠正到第 2 步、点进度条回看、刷新页面、
@@ -3736,6 +3917,41 @@
       return row;
     }
 
+    /* 第 3/4 步拿不到产品行时的可执行提示。
+       原来只有一种归因（「前面步骤还没有产品信息。」），对非标定制是错的：产品行为空
+       可能是①前面还没有选定产品，也可能是②产品库里没有适配标品、需要转技术工艺新增产品。
+       两种都说清，并给出同一个出口 ── 转技术工艺（与按钮区那个按钮同一条任务）。 */
+    function markupGateAdvice(step, column) {
+      return {
+        text: '第 ' + step + ' 步无法计算「' + column + '」：本单还没有可用的产品行。' +
+              '①前面还没有选定产品 —— 可以先在产品推荐清单里点「选用」，再回到本步重算；' +
+              '②产品库里没有适配的标品 —— 本步**可以继续**（POC 阶段接受本步先算不出），' +
+              '转技术工艺新增产品后再回来重算。',
+        actionLabel: '转技术工艺',
+        action: "wfOpenSend(false, 'tech_new_product')",
+      };
+    }
+
+    /* 提示气泡里的可点出口：一条 AI 气泡 + 一个主色按钮。
+       只打开转交弹窗（预选「新增工艺」），不弹 alert/confirm、不自动发送。 */
+    function addGateActionBubble(label, action) {
+      const div = document.createElement('div');
+      div.className = 'message message-ai';
+      div.setAttribute('data-agent-card', '');
+      div.setAttribute('data-status', 'completed');
+      div.innerHTML = '<div class="message-label" data-agent-role="header">'
+        + '<span data-agent-role="identity">报价单智能体</span></div>'
+        + '<div class="message-text" data-agent-role="body">'
+        + '<button style="padding:7px 16px;border:none;border-radius:8px;'
+        + 'background:var(--color-primary);color:#fff;font-size:13px;font-weight:600;cursor:pointer">'
+        + '<i class="ti ti-tools"></i> ' + escapeHtml(label) + '</button>'
+        + '</div>';
+      chatEl.appendChild(div);
+      const btn = div.querySelector('button');
+      if (btn) btn.onclick = () => eval(action);
+      scrollChat();
+    }
+
     async function runMarkupStep(step) {
       const cfg = MARKUP_CFG[step];
       if (!cfg || !FORMS.length) return false;
@@ -3747,7 +3963,9 @@
       if (!products.length) products = extractSectionRows('s3_products');
       if (!products.length) products = extractSectionRows('s1_products');
       if (!products.length) {
-        addErrorBubble('第 ' + step + ' 步无法计算' + cfg.column + '：前面步骤还没有产品信息。');
+        const advice = markupGateAdvice(step, cfg.column);
+        addErrorBubble(advice.text);
+        addGateActionBubble(advice.actionLabel, advice.action);
         return false;
       }
       const d1 = collectStepData(1) || {};
@@ -4431,6 +4649,7 @@
         if (openId) { BOOT_PENDING = false; await openSession(openId); return; }
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
         await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
+        await checkTechResultHandoff();   // 工艺回传的待确认结果：登录后自动渲染（Spec §2.4）
       } catch {
         setConn(false);
         $('panelPlaceholder').innerHTML =

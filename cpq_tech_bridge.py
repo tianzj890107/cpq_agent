@@ -960,6 +960,9 @@ def send_to_quote(user: dict, session_id: str, title: str, customer: str = "",
         # ⑥ 目标任务：create-or-reuse 沿用批次 2 的同类复用规则；payload 带完整技术结果
         payload = {
             "tech_result": result,
+            # 待确认标记（Spec §2.4）：工艺回传的是**待确认结果**，不是可直接用的价格；
+            # 报价侧只提示销售确认，绝不自动替换产品行与价格。
+            "needs_confirmation": True,
             "report": report,
             "handoff_id": str(handoff_id),
             "handoff_key": key,

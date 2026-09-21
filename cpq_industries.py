@@ -108,3 +108,55 @@ def profile_of(value: object) -> dict:
         return _profile(key, LEGACY_LABELS.get(key, key),
                         cost_profile="generic_v1", pricing_profile="generic_margin_v1")
     return INDUSTRIES[DEFAULT_INDUSTRY]
+
+
+#: 行业特征词：只用于「需求文本更像哪个行业」的软提示，**不用于自动切换行业**。
+#: 取值口径 —— 客户在需求文本里真正会写的词（行业模板字段名 + 业务口语词）。
+INDUSTRY_HINTS: dict[str, tuple[str, ...]] = {
+    "semiconductor": ("晶圆", "静电吸盘", "温区", "陶瓷基体", "金属基座", "微孔",
+                      "氦气漏率", "洁净度", "TTV", "平面度", "吸附力均匀性"),
+    "battery": ("电芯", "正极材料", "负极材料", "标称电压", "能量密度", "DCIR",
+                "直流内阻", "循环寿命", "日历寿命", "叠片", "VDA", "热失控"),
+    "appliance": ("额定功率", "能效等级", "整机外形", "耐压测试", "接地电阻", "EMC",
+                  "安规", "噪声限值", "待机功耗", "关键成型工艺"),
+    "packaging": ("盒型", "天地盒", "彩盒", "礼盒", "酒盒", "刀模", "压痕", "开窗",
+                  "灰板", "面纸", "覆膜", "烫金", "模切", "裱贴", "V槽", "内衬",
+                  "每箱数量", "外箱尺寸", "卡板"),
+}
+
+#: 命中门槛：候选行业至少命中这么多个不同特征词，才允许提示（防误报）。
+INDUSTRY_HINT_MIN_HITS: int = 2
+
+
+def industry_hint(text: object, industry: object = None, *,
+                  min_hits: object = None) -> "dict | None":
+    """需求文本更像另一个行业时的**软提示**；否则 None。
+
+    纯函数：不联网、不读库、不调模型、不修改任何全局状态。判定见
+    docs/specs/quote-industry-mismatch-notice.md §3.2（确定性、同样输入同样输出）。
+    """
+    if not isinstance(text, str) or not text.strip():
+        return None
+    key = normalize(industry)
+    if key not in INDUSTRY_HINTS:                 # 历史键（flexible）也按默认行业处理
+        key = DEFAULT_INDUSTRY
+    threshold = INDUSTRY_HINT_MIN_HITS if min_hits is None else min_hits
+    # 候选 = 命中最多者；并列取 INDUSTRY_KEYS 靠前者（严格大于才换人，保证稳定）。
+    best_key, best_hits = key, []
+    for cand in INDUSTRY_KEYS:
+        hits = [word for word in INDUSTRY_HINTS[cand] if word in text]
+        if len(hits) > len(best_hits):
+            best_key, best_hits = cand, hits
+    current_hits = [word for word in INDUSTRY_HINTS[key] if word in text]
+    if best_key == key or len(best_hits) < threshold or len(best_hits) <= len(current_hits):
+        return None
+    return {
+        "industry": key,
+        "industry_label": label_of(key),
+        "suggested": best_key,
+        "suggested_label": label_of(best_key),
+        "hits": best_hits,
+        "text": ("需求内容更像「" + label_of(best_key) + "」行业（命中："
+                 + "、".join(best_hits) + "），但当前选择的行业是「" + label_of(key)
+                 + "」。请确认行业下拉是否需要调整；本提示不会自动切换行业。"),
+    }
