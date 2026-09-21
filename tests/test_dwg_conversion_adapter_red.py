@@ -766,8 +766,17 @@ class INoRegression(AdapterCase):
             "PNG 字节仍必须原样进入内容块：%r" % kinds)
 
     def test_i2_frontend_still_admits_dwg_is_not_parsed_yet(self):
+        """诚实性不变，落点变了。
+
+        原口径「app.js 必须写着 DWG 到这一步还解析不了」已被
+        `docs/specs/drawing-flow-frontend-wiring.md`（C1–C3）取代：DWG/DXF 现在真的能
+        解析，但只能走服务端 drawing-flow —— 前端不得宣称视觉模型读懂了 DWG。
+        """
         source = (FRONTEND / "app.js").read_text(encoding="utf-8", errors="replace")
-        self.assertTrue("解析不了" in source, "app.js 的诚实说明必须保留（第 1 批 Spec §6）")
+        self.assertIn("drawing-flow/run", source,
+                      "DWG/DXF 必须调服务端图纸解析链路，而不是视觉模型（C3）")
+        self.assertNotIn('$("btnParse").disabled = !isImg', source,
+                         "解析按钮不得再按位图扩展名判死（C2）")
 
 
 if __name__ == "__main__":

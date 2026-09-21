@@ -48,6 +48,7 @@ let currentDrawings = null;
 // GET /api/projects/{id} 给的逐件过期状态：改一个零件只标那一个，不再整份清空。
 let artifact_status = null;
 let currentIsImg = true;       // 是否为"图→IR"项目(3D 导入项目不可改参重生)
+let currentDrawingEntry = "vision";  // 入口判定结果 renderDrawingEntry()，决定 2.1 走哪条链路
 let currentSelectedId = null;  // 当前选中的零件 id
 let viewerBroken = false;      // WebGL 不可用：3D 预览降级，其余流程照常
 let diffPick = [];             // 版本对比已选的两个版本号
@@ -877,6 +878,24 @@ $("btnUpload").onclick = async () => {
   setWorkflow("parse", "图纸已保存。确认后可开始 AI 解析。");
 };
 
+/* 2.1 的入口判定：决定这个项目走哪条解析链路。
+   · DWG / DXF → drawing_flow（服务端：DWG→DXF→CAD IR→包装语义，能力只有服务端一份）；
+   · PNG / JPG / WEBP / GIF / BMP → vision（既有视觉模型路径，本批不动）；
+   · STEP / IGES / STL → blocked_3d（几何来自原始实体，不该按图纸重建）；
+   · 其余（PDF / DOCX / 空名）→ blocked_other。
+   纯函数：不碰 DOM，可被 node 直接执行（与 resolveInitialIndustry 同一条纪律）。 */
+function renderDrawingEntry(filename) {
+  const name = String(filename || "").trim().toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot < 0 ? "" : name.slice(dot);
+  if (ext === ".dwg" || ext === ".dxf") return "drawing_flow";
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".webp"
+      || ext === ".gif" || ext === ".bmp") return "vision";
+  if (ext === ".step" || ext === ".stp" || ext === ".iges" || ext === ".igs"
+      || ext === ".stl") return "blocked_3d";
+  return "blocked_other";
+}
+
 /* 2.1「这一步做到哪了」的唯一判定：有解析结果（零件或标准件）才算有效。
    左侧主按钮的 role、收口动作的可见性都由它推导，不许各处各写一份。 */
 function drawingParsed() {
@@ -911,8 +930,14 @@ async function parseDrawing() {
   parseButton.setAttribute("aria-busy", "true");
   parseButton.setAttribute("aria-label", "正在解析");
   parseButton.innerHTML = '<span class="parse-spinner" aria-hidden="true"></span><span>正在解析…</span>';
-  status("模型正在解析图纸与技术文档需求为结构化 IR（含视觉理解，稍候）...", true);
   try {
+    // DWG / DXF 不走视觉模型：服务端已有图纸解析链路，前端只点一次、把结果摆出来。
+    if (currentDrawingEntry === "drawing_flow") {
+      await runDrawingFlowParse();
+      parseDrawingError = "";
+      return null;
+    }
+    status("模型正在解析图纸与技术文档需求为结构化 IR（含视觉理解，稍候）...", true);
     currentIR = await runTask(currentProject, `/api/projects/${currentProject}/parse`, "解析");
     renderIR(currentIR);
     syncActionSheet(currentIR);
@@ -945,6 +970,122 @@ async function parseDrawing() {
     parseButton.textContent = "▶ 开始解析";
   }
 }
+/* ---------------- 2.1 DWG / DXF：服务端图纸解析链路 ---------------- */
+// 步骤名与状态的中文口径只在这里一份；未知值原样显示，不臆造。
+const DRAWING_FLOW_STEP_LABEL = {
+  file_preflight: "文件预检", dwg_convert: "DWG → DXF 转换", cad_ir_parse: "CAD 矢量解析",
+  packaging_semantics: "包装语义识别", field_write: "字段回填",
+  pending_confirm: "待确认", downstream_prepare: "下游准备",
+};
+const DRAWING_FLOW_STATUS_LABEL = {
+  completed: "已完成", running: "进行中", pending: "待执行",
+  failed: "失败", unavailable: "不可用", blocked: "被阻断", skipped: "已跳过",
+};
+
+function ensureDrawingFlowPanel() {
+  let panel = document.getElementById("drawingFlowPanel");
+  if (panel) return panel;
+  panel = document.createElement("div");
+  panel.id = "drawingFlowPanel";
+  panel.className = "drawing-flow-panel";
+  const anchor = document.querySelector(".image-wrap");
+  if (anchor && anchor.parentNode) anchor.parentNode.appendChild(panel);
+  else document.body.appendChild(panel);
+  return panel;
+}
+
+function drawingFlowSteps(payload) {
+  const flow = (payload && payload.flow) || payload || {};
+  return Array.isArray(flow.steps) ? flow.steps : [];
+}
+
+// cad_ir 摘要只读服务端给的事实（步骤 detail 与步骤带回的 ir），前端不重解析 DWG。
+function cadIrSummaryOf(payload) {
+  const steps = drawingFlowSteps(payload);
+  const step = steps.filter(s => s && s.step_id === "cad_ir_parse")[0] || {};
+  const detail = step.detail || {};
+  const ir = (step.ir && typeof step.ir === "object") ? step.ir : {};
+  const entities = Array.isArray(ir.entities) ? ir.entities : [];
+  const counts = {};
+  entities.forEach(e => {
+    const type = String((e && e.type) || "").toUpperCase();
+    if (type) counts[type] = (counts[type] || 0) + 1;
+  });
+  const fallback = (detail.counts && typeof detail.counts === "object") ? detail.counts : {};
+  Object.keys(fallback).forEach(k => { counts[k] = Number(fallback[k] || 0) || 0; });
+  return {
+    ir_id: String(detail.ir_id || ir.ir_id || ""),
+    entities: entities.length || Number(detail.entity_total || 0) || 0,
+    layers: (Array.isArray(ir.layers) ? ir.layers.length : 0) || Number(detail.layer_total || 0) || 0,
+    unit_status: String(detail.unit_status || ""),
+    counts: counts,
+  };
+}
+
+function renderDrawingFlowPanel(payload) {
+  const panel = ensureDrawingFlowPanel();
+  panel.hidden = false;
+  const steps = drawingFlowSteps(payload);
+  const summary = cadIrSummaryOf(payload);
+  const rows = steps.map(s => {
+    const id = String((s && s.step_id) || "");
+    const status = String((s && s.status) || "pending");
+    const code = String((s && s.error_code) || "");
+    const message = String((s && s.error_message) || "");
+    // 失败必须看得见原因：稳定错误码 + 服务端原文，不许收敛成"解析失败，请重试"。
+    const err = (code || message)
+      ? `<div class="drawing-flow-error">${esc((code ? "[" + code + "] " : "") + message)}</div>` : "";
+    return `<tr class="drawing-flow-row drawing-flow-${esc(status)}">`
+      + `<td class="drawing-flow-step">${esc(DRAWING_FLOW_STEP_LABEL[id] || id)}</td>`
+      + `<td class="drawing-flow-status">${esc(DRAWING_FLOW_STATUS_LABEL[status] || status)}</td>`
+      + `<td class="drawing-flow-detail">${err || esc(String((s && s.title) || ""))}</td></tr>`;
+  }).join("");
+  const types = Object.keys(summary.counts).sort()
+    .map(k => `${esc(k)} ${summary.counts[k]}`).join(" / ");
+  const cadIr = (summary.entities || summary.layers)
+    ? `<div class="drawing-flow-cad-ir">CAD IR：实体 <b>${summary.entities}</b> · 图层 <b>${summary.layers}</b>`
+      + `${summary.unit_status ? " · 单位 " + esc(summary.unit_status) : ""}`
+      + `${types ? `<div class="drawing-flow-types">${types}</div>` : ""}</div>`
+    : '<div class="drawing-flow-cad-ir drawing-flow-empty">CAD IR：尚无解析结果</div>';
+  panel.innerHTML = '<div class="drawing-flow-title">图纸解析链路（DWG / DXF）</div>'
+    + (rows ? `<table class="drawing-flow-table"><tbody>${rows}</tbody></table>` : "")
+    + cadIr;
+}
+
+async function fetchDrawingFlowState() {
+  const res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow`);
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+async function loadDrawingFlowPanel() {
+  const state = await fetchDrawingFlowState().catch(() => null);
+  if (state) renderDrawingFlowPanel(state);
+}
+
+async function runDrawingFlowParse() {
+  status("正在跑图纸解析链路（DWG → DXF → CAD IR → 包装语义），稍候…", true);
+  const res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "" }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = (payload && (payload.detail || payload.message)) || "";
+    throw new Error(typeof detail === "string" && detail
+      ? detail : `图纸解析请求失败（HTTP ${res.status}）`);
+  }
+  const state = await fetchDrawingFlowState().catch(() => null);
+  renderDrawingFlowPanel(state || payload);
+  const summary = cadIrSummaryOf(state || payload);
+  status(summary.entities
+    ? `图纸解析完成：CAD IR 实体 ${summary.entities} · 图层 ${summary.layers}`
+    : "图纸解析链路已跑完，详见下方步骤表。");
+  setWorkflow("review", "DWG / DXF 已由服务端图纸解析链路处理，请核对步骤与 CAD IR 摘要。");
+  return payload;
+}
+
 $("btnParse").onclick = parseDrawing;
 
 // 具名函数：原 #btnModelLookup 点击逻辑原样搬过来，页面按钮与统一看板动作
@@ -1430,13 +1571,14 @@ async function openProject(pid) {
   const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(fname);
   const is3d = /\.(step|stp|iges|igs|stl)$/i.test(fname);
   currentIsImg = isImg;
-  // 非位图有两种，原来都当成"3D 导入项目"，于是 1.1 传上来的 PDF 图纸会被标成
-  // 「3D 模型导入项目：无 2D 原图」—— 说法是错的，也没解释为什么不能解析。
-  const blockedReason = isImg ? ""
-    : is3d ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
-    : `「${fname}」不是位图。2.1 的图纸解析走视觉模型，目前只能读 PNG / JPG / WEBP / GIF / BMP；`
-      + "1.1 允许上传的 PDF / DWG / DXF 到这一步还解析不了。"
-      + "请在「＋ → 补充需求图纸」上传该图纸的 PNG 或 JPG 后再解析。";
+  // 走哪条链路由 renderDrawingEntry() 一处判定；这里只把结论翻译成界面事实。
+  const entry = renderDrawingEntry(fname);
+  currentDrawingEntry = entry;
+  const blockedReason = (entry === "vision" || entry === "drawing_flow") ? ""
+    : entry === "blocked_3d"
+      ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
+      : `「${fname}」既不是位图也不是 DWG / DXF。2.1 支持 PNG / JPG / WEBP / GIF / BMP（走视觉模型）`
+        + "与 DWG / DXF（走服务端图纸解析链路）；其它格式请先转成 PNG / JPG（或另存 DXF）再上传。";
   const img = $("sourceImg");
   const wrap = document.querySelector(".image-wrap");
   const ph = wrap.querySelector(".placeholder");
@@ -1447,17 +1589,24 @@ async function openProject(pid) {
   } else {
     img.style.display = "none";
     if (ph) ph.remove();
-    const d = document.createElement("div");
-    d.className = "placeholder";
-    d.textContent = blockedReason;
-    wrap.appendChild(d);
+    // drawing_flow 项目有链路状态可看，不该落进"为什么不能解析"的占位分支；
+    // 占位只服务 blocked_3d / blocked_other。
+    if (blockedReason) {
+      const d = document.createElement("div");
+      d.className = "placeholder";
+      d.textContent = blockedReason;
+      wrap.appendChild(d);
+    }
   }
+  if (entry === "drawing_flow") loadDrawingFlowPanel();
 
   // 3D 导入项目: 几何/2D 已由原始实体生成,禁用"基于图/特征重建"的按钮,避免覆盖精确几何
-  $("btnParse").disabled = !isImg;
-  // 灰按钮必须自己说明为什么灰 —— 理由原来只写在抽屉里的占位文字上，
-  // 而抽屉默认是关的，主界面上没有任何线索。
-  $("btnParse").title = blockedReason || "";
+  // 可用性由入口判定给结论：位图走视觉、DWG/DXF 走服务端链路，两者都可点；
+  // 3D 与未知格式置灰并写明原因（灰按钮必须自己说明为什么灰）。
+  $("btnParse").disabled = !(entry === "vision" || entry === "drawing_flow");
+  $("btnParse").title = blockedReason || (entry === "drawing_flow"
+    ? "DWG / DXF 图纸：走服务端图纸解析链路（DWG → DXF → CAD IR → 包装语义）"
+    : "");
   syncActionSheet(currentIR);
   if (data.ir) renderIR(data.ir);
   loadModelLookup(pid);

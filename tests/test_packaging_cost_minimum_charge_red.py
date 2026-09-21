@@ -38,6 +38,12 @@ if str(ROOT) not in sys.path:
 RULES_JSON = ROOT / "tech_app" / "agent_knowledge" / "rules" / "packaging_cost_rules.json"
 TOOL_PY = ROOT / "tech_app" / "tools" / "extract_packaging_rules.py"
 WORKBOOK = ROOT / "裕同包装项目-待开发" / "报价逻辑-0903.xlsx"
+
+
+#: 工作簿证据类测试的依赖：缺它必须 **skip**，不能报 ERROR。
+#: 为什么：ERROR 会混进"N 条红"的数字里，让真正的业务红失去可读性（Spec
+#: `packaging-cost-red-closure.md` C1）。装依赖：pip install -r tech_app/requirements.txt
+OPENPYXL_SKIP_REASON = "缺 openpyxl（工作簿证据类测试）：pip install -r tech_app/requirements.txt"
 WORKBOOK_SHA256 = "974d9484414824d0bbfd2c83fb0c6044e4348c7a407e1ae0f58699bb60d2acc0"
 
 VISIBLE_SHEETS = ("问题点", "报价-行业标准", "包装运输", "报价表", "成本细分", "报价-工费率",
@@ -254,6 +260,8 @@ def synthetic_workbook_cells(cells):
 # --------------------------------------------------------------------------- #
 # F. 工作簿证据（现在就该绿：锁住「口径冲突是真实的」）
 # --------------------------------------------------------------------------- #
+@unittest.skipUnless(importlib.util.find_spec("openpyxl") is not None,
+                     OPENPYXL_SKIP_REASON)
 class FWorkbookEvidence(unittest.TestCase):
     """不依赖任何实现；只用工作簿证明 ① 与 ② 是两套不同的公式。"""
 

@@ -17,11 +17,16 @@
 | `empty_required_table` | 关键包装表（7 张主体表）行数为 0 |
 | `kb_version_missing` | `kb_version` 为 None 或 0 |
 | `demo_only` | `env == "production"` 且任一关键表**全部**是 `source_type='demo'` |
+| `authority_missing` | `env == "production"` 且关键表存在 `source_type='demo'` 的行、而这些行没有申报权威出处（`authority_ref` 为空） |
 | `unclassified_rows` | `env == "production"` 且存在 `source_type='unknown'` 的行 |
 | `below_min_rows` | `--min-rows 表=下限` 指定的表行数低于下限 |
 
 `provenance` / `unclassified_rows` **只统计 9 张包装扩展表**：其余 `kb_*` 表没有
 `source_type` 列，不得因此被判成 unknown。
+
+`demo_only` 与 `authority_missing` 的分工：一张关键表**整表都是 demo 且一行都没申报**时，
+报 `demo_only`（"没用权威数据"）；部分升格、仍有没申报的 demo 行时报 `authority_missing`
+（"还有没人认领的样例行"）。两者都不改 `local` / `ci` 的结论 —— 那两个环境本来就跑样例。
 
 用法：
 
@@ -74,6 +79,13 @@ def _source_type(row) -> str:
     return code if code in cpq_kb.SOURCE_TYPES else UNKNOWN
 
 
+def _authority_ref(row) -> str:
+    """取一行的权威出处（升格时按 `cpq_kb.promote_rows` 写入）；空 = 没人认领。"""
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("authority_ref") or "").strip()
+
+
 def _version_int(kb_version) -> int:
     if kb_version is None:
         return 0
@@ -118,10 +130,19 @@ def preflight(tables: dict, *, env: str = "local", kb_version=None,
     if production:
         for name in REQUIRED_TABLES:
             rows = tables.get(name) or []
-            if rows and all(_source_type(row) == DEMO for row in rows):
+            demo_rows = [row for row in rows if _source_type(row) == DEMO]
+            if not demo_rows:
+                continue
+            unclaimed = [row for row in demo_rows if not _authority_ref(row)]
+            if all(_source_type(row) == DEMO for row in rows) and len(unclaimed) == len(rows):
                 problems.append(_problem("demo_only", name,
-                                         "%s 全是演示数据：生产库不得用演示盒型/工艺/费率报价"
-                                         % name))
+                                         "%s 全是演示数据且没有一行申报权威出处："
+                                         "生产库不得用演示盒型/工艺/费率报价" % name))
+            elif unclaimed:
+                problems.append(_problem("authority_missing", name,
+                                         "%s 有 %d 行还是演示数据且没有申报权威出处"
+                                         "（authority_ref 为空）：生产库不得用没人认领的样例数据报价"
+                                         % (name, len(unclaimed))))
         if provenance[UNKNOWN] > 0:
             problems.append(_problem("unclassified_rows", "",
                                      "有 %d 行 source_type='unknown'：生产库不得含未分类数据"

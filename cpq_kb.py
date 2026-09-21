@@ -705,6 +705,9 @@ _KB_META_DDL = (
 _PACKAGING_PROVENANCE_COLUMNS: tuple = (
     ("source_type", "text NOT NULL DEFAULT 'unknown'"),
     ("source_ref", "text"),
+    # 权威出处（升格时按 C2 写入，如 `礼盒盒型库_数据样例.xlsx#01盒型@sha12`）。
+    # 没有它，`kb_deploy_preflight` 就无法区分"业务确认过的权威行"与"没人认领的 demo 行"。
+    ("authority_ref", "text"),
     ("source_sha256", "text"),
     ("parser_version", "text"),
     ("confirmed_by", "text"),
@@ -712,6 +715,62 @@ _PACKAGING_PROVENANCE_COLUMNS: tuple = (
 )
 #: 9 张包装扩展表 —— 数据分层的适用范围。`kb_deploy_preflight` 的 provenance /
 #: unclassified_rows 只统计这些表；其余 kb_* 表没有 source_type 列，不得因此判 unknown。
+#: 升格只允许这一条：demo（样例工作簿固化的演示行）→ workbook（业务确认过的权威来源）。
+#: 反方向、跨级、以及 unknown / dwg_confirmed 一律拒绝 —— 权威只能由业务给，不能由代码猜。
+_PROMOTION_TARGETS = {"workbook": "demo"}
+
+#: 出处必须齐备，少一项就拒绝升格（宁可停下来问，也不要写一个没主的数据）。
+_PROMOTION_AUTHORITY_FIELDS = ("workbook", "sheet", "owner", "decided_at", "sha256")
+
+
+def authority_ref(authority) -> str:
+    """把出处压成一行可回查的引用：`工作簿#工作表@校验和前 12 位`。"""
+    return "%s#%s@%s" % (str((authority or {}).get("workbook") or "").strip(),
+                         str((authority or {}).get("sheet") or "").strip(),
+                         str((authority or {}).get("sha256") or "").strip()[:12])
+
+
+def promote_rows(rows, *, target: str = "workbook", authority) -> list:
+    """把样例行升格为权威行（Spec `kb-authoritative-promotion-and-load.md` §3 C2）。
+
+    · 只允许 `demo → workbook`；已是 `workbook` 幂等；`unknown` / 其它值抛 `ValueError`；
+    · `authority` 必须齐备（workbook/sheet/owner/decided_at/sha256），缺一项抛 `ValueError`；
+    · **只碰来源列**（`source_type` / `authority_ref`），业务值（尺寸区间、工时、费率、
+      公式…）逐字不动；
+    · 一旦是权威，出处保留原值 —— 后来的 seed 覆盖业务列可以，但不得把出处改回"没主"。
+
+    纯函数：不写库、不联网、不改入参（返回新行）。
+    """
+    target = str(target or "").strip()
+    source_type = _PROMOTION_TARGETS.get(target)
+    if source_type is None:
+        raise ValueError("不支持的升格目标：%r（只允许 demo → workbook）" % (target,))
+    if not isinstance(authority, dict):
+        raise ValueError("升格必须提供 authority（workbook/sheet/owner/decided_at/sha256）")
+    missing = [name for name in _PROMOTION_AUTHORITY_FIELDS
+               if not str(authority.get(name) or "").strip()]
+    if missing:
+        raise ValueError("authority 缺少字段：%s" % "、".join(missing))
+    ref = authority_ref(authority)
+    promoted = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        current = str(row.get("source_type") or "").strip().lower()
+        out = dict(row)
+        if current == source_type:
+            out["source_type"] = target
+            out["authority_ref"] = ref
+        elif current == target:
+            if not str(out.get("authority_ref") or "").strip():
+                out["authority_ref"] = ref
+        else:
+            raise ValueError("不能升格 source_type=%r 的行（只允许 %s → %s）"
+                             % (current or "unknown", source_type, target))
+        promoted.append(out)
+    return promoted
+
+
 PACKAGING_TABLES: tuple = (
     "kb_packaging_box_type", "kb_packaging_part_template", "kb_packaging_process_template",
     "kb_packaging_insert_accessory", "kb_packaging_cost_formula",
@@ -1044,18 +1103,76 @@ def _bump_version(cur, changed: int) -> int:
     return version
 
 
-def import_from_sqlite(path, *, confirm: bool = False) -> dict:
+def _packaging_source_distribution(rows: dict) -> dict:
+    """按表统计 source_type 分布（只统计 9 张包装表；其余 kb_* 没有这一列）。"""
+    out = {}
+    for name in PACKAGING_TABLES:
+        bucket = {}
+        for row in rows.get(name) or []:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("source_type") or "").strip().lower() or "unknown"
+            bucket[code] = bucket.get(code, 0) + 1
+        out[name] = bucket
+    return out
+
+
+def _authority_for_table(authority, table: str) -> dict:
+    """从出处文件里取某张表的 authority（`defaults` 打底，同名条目覆盖）。"""
+    if not isinstance(authority, dict):
+        raise ValueError("升格必须提供出处文件（workbook/sheet/owner/decided_at/sha256）")
+    merged = dict(authority.get("defaults") or {})
+    for item in authority.get("sources") or []:
+        if isinstance(item, dict) and str(item.get("table") or "") == table:
+            for key in _PROMOTION_AUTHORITY_FIELDS:
+                if str(item.get(key) or "").strip():
+                    merged[key] = item.get(key)
+            break
+    return merged
+
+
+def _promote_packaging_rows(rows: dict, *, target: str, authority) -> dict:
+    """只对 9 张包装表做升格；其它 kb_* 表没有来源列，本就不在分层范围内。
+
+    出处不齐就**停在这一张表上**并把表名说清楚：宁可不灌，也不要把没主的数据
+    写进生产库（剩下的 demo 行会被 `kb_deploy_preflight` 的 `authority_missing`
+    拦下 —— 这里先拦，省一次往返）。
+    """
+    out = dict(rows)
+    for name in PACKAGING_TABLES:
+        got = rows.get(name)
+        if not got:
+            continue
+        try:
+            out[name] = promote_rows(got, target=target,
+                                     authority=_authority_for_table(authority, name))
+        except ValueError as exc:
+            raise ValueError(
+                "%s 无法升格：%s。请在出处文件里补齐这张表的 "
+                "workbook/sheet/owner/decided_at/sha256（缺哪项补哪项，"
+                "出处不明的行宁可留在 demo，由业务确认后再灌）" % (name, exc)) from None
+    return out
+
+
+def import_from_sqlite(path, *, confirm: bool = False, promote: str = "",
+                       authority=None) -> dict:
     """把 da.db 的 kb_* 全表导入 cpq_kb。
 
     默认 dry-run：只统计不写库、**不连 PG**（"看一眼要搬多少行"不该因为连不上库而失败）；
     `--confirm` 才真写：单事务、按主键 upsert（幂等），只在确有变化时递增 kb_version。
+    `promote="workbook"` + `authority=<出处文件内容>`：灌库前按 C2 把 demo 行升格为权威，
+    出处逐表取自 C3 的申报文件（dry-run 也照升，方便先看计划）。
     """
     rows, counts = _read_source(path)
+    if promote:
+        rows = _promote_packaging_rows(rows, target=promote, authority=authority)
+    source_types = _packaging_source_distribution(rows)
     total = sum(counts.values())
     if not confirm:
         # 不连库：dry-run 的职责是出计划。kb_version 只在真写时才谈得上。
         return {"ok": True, "dry_run": True, "kb_version": 0,
-                "tables": counts, "rows": total}
+                "tables": counts, "rows": total, "promote": str(promote or ""),
+                "source_types": source_types}
 
     conn = _connect()
     try:
@@ -1076,4 +1193,5 @@ def import_from_sqlite(path, *, confirm: bool = False) -> dict:
     finally:
         conn.close()
     return {"ok": True, "dry_run": False, "kb_version": version,
-            "tables": counts, "rows": total, "changed": changed}
+            "tables": counts, "rows": total, "changed": changed,
+            "promote": str(promote or ""), "source_types": source_types}

@@ -1,0 +1,146 @@
+{
+  "version": "packaging-sources/1",
+  "updated_at": "2026-09-21",
+  "note": "包装知识库的出处申报。sources[].source 必须与 tech_app/backend/storage/da_seed_packaging.py 的 SOURCE_* 常量逐字一致；rows 是该来源在 seed 里的实际条数。sheet_exists=false 表示常量里写的工作表在该工作簿里并不存在（历史标签失真），业务重新出表后请改成真实名字。",
+  "defaults": {
+    "workbook": "",
+    "sheet": "",
+    "owner": "",
+    "decided_at": "",
+    "sha256": ""
+  },
+  "sources": [
+    {
+      "source": "裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx",
+      "workbook": "礼盒盒型库_数据样例.xlsx",
+      "sheet": "",
+      "rows": 4,
+      "table": "",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "工作簿本体（4 个 Sheet 的根路径常量 SOURCE_XLSX）。"
+    },
+    {
+      "source": "裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx / 01盒型",
+      "workbook": "礼盒盒型库_数据样例.xlsx",
+      "sheet": "01盒型",
+      "rows": 12,
+      "table": "kb_packaging_box_type",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "盒型主数据（BOX_TYPES）。"
+    },
+    {
+      "source": "裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx / 02-盒型-部件构成",
+      "workbook": "礼盒盒型库_数据样例.xlsx",
+      "sheet": "02-盒型-部件构成",
+      "rows": 31,
+      "table": "kb_packaging_part_template",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "盒型-部件构成（PART_TEMPLATES）。"
+    },
+    {
+      "source": "裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx / 03-盒型+部件-工艺路线与工时",
+      "workbook": "礼盒盒型库_数据样例.xlsx",
+      "sheet": "03-盒型+部件-工艺路线与工时",
+      "rows": 23,
+      "table": "kb_packaging_process_template",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "工艺路线与工时（PROCESS_TEMPLATES）。"
+    },
+    {
+      "source": "裕同包装项目-待开发/礼盒盒型库_数据样例.xlsx / 04-内托与配件库",
+      "workbook": "礼盒盒型库_数据样例.xlsx",
+      "sheet": "04-内托与配件库",
+      "rows": 12,
+      "table": "kb_packaging_insert_accessory",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "内托与配件（ACCESSORIES）。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 包装成本口径",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "",
+      "rows": 9,
+      "table": "kb_packaging_cost_formula",
+      "sheet_exists": false,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "该工作簿里没有名为「包装成本口径」的工作表（实测 12 个 Sheet 里无此名）；行数按 seed 的成本公式常量统计。业务重新出表后请补真实 Sheet 名与校验和。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 包装材料价",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "",
+      "rows": 5,
+      "table": "kb_material",
+      "sheet_exists": false,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "该工作簿里没有名为「包装材料价」的工作表；行数按 MATERIALS 统计。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 包装物流规则",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "",
+      "rows": 3,
+      "table": "kb_packaging_logistics_rule",
+      "sheet_exists": false,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "该工作簿里没有名为「包装物流规则」的工作表；行数按 LOGISTICS_RULES 统计。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 盒型五维匹配权重",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "",
+      "rows": 5,
+      "table": "kb_packaging_match_weight",
+      "sheet_exists": false,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "该工作簿里没有名为「盒型五维匹配权重」的工作表；行数按 MATCH_WEIGHTS 统计。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 包装运输",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "包装运输",
+      "rows": 11,
+      "table": "kb_packaging_cost_content",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "工作簿里确有「包装运输」工作表；行数按 COST_CONTENTS 统计。"
+    },
+    {
+      "source": "报价逻辑-0903.xlsx / 包装运输 / 工装刀模",
+      "workbook": "报价逻辑-0903.xlsx",
+      "sheet": "包装运输",
+      "rows": 5,
+      "table": "kb_packaging_tooling_rule",
+      "sheet_exists": true,
+      "owner": "",
+      "decided_at": "",
+      "sha256": "",
+      "note": "常量写的是「包装运输 / 工装刀模」二级标签；工作表只到「包装运输」，行数按 TOOLING_RULES 统计。"
+    }
+  ]
+}

@@ -35,6 +35,17 @@ def _unavailable(name: str) -> Dict[str, Any]:
             "retryable": retryable, "detail": {"dependency": name, "http_status": http_status}}
 
 
+def _blocked(code: str, message: str, detail: Optional[dict] = None,
+             action: str = "") -> Dict[str, Any]:
+    """前置条件缺失：不是执行失败，因此 `retryable=False`（重试同一入口必然再失败）。"""
+    payload = dict(detail or {})
+    if action:
+        payload["action"] = str(action)
+    return {"status": "blocked", "error_code": str(code),
+            "error_message": str(message), "retryable": False,
+            "detail": payload}
+
+
 def _failed(code: str, message: str, detail: Optional[dict] = None,
             retryable: bool = True) -> Dict[str, Any]:
     return {"status": "failed", "error_code": str(code),
@@ -108,7 +119,9 @@ def dwg_convert(ctx: Dict[str, Any]) -> Dict[str, Any]:
                            drawing_version=model._as_int(ctx.get("drawing_version"), 1))
     except Exception as exc:
         code = str(getattr(exc, "stable_error_code", "") or "DWG_CONVERSION_FAILED")
-        message = str(getattr(exc, "message", "") or "图纸转换失败，请重试或联系管理员")
+        # 真因优先：我们自己的 DrawingFlowError 的 str() 就是它带的消息，别的异常打印
+        # 自身文案 —— 不再 sniff 一个多数异常都没有的 `.message`（Spec C2）。
+        message = str(exc) or "图纸转换失败，请重试或联系管理员"
         return _failed(code, message, {"reason": type(exc).__name__})
     manifest = manifest if isinstance(manifest, dict) else {}
     status = str(manifest.get("status") or "")
@@ -157,16 +170,31 @@ def cad_ir_parse(ctx: Dict[str, Any]) -> Dict[str, Any]:
                    drawing_version=model._as_int(ctx.get("drawing_version"), 1))
     except Exception as exc:
         code = str(getattr(exc, "stable_error_code", "") or "CAD_IR_SOURCE_MISSING")
-        return _failed(code, str(getattr(exc, "message", "") or "CAD 矢量解析失败，请重试"))
+        return _failed(code, str(exc) or "CAD 矢量解析失败，请重试",
+                       {"reason": type(exc).__name__})
     ir = ir if isinstance(ir, dict) else {}
     summary = summarize(ir) if callable(summarize) else {}
     summary = summary if isinstance(summary, dict) else {}
+    # 真实 `cad_ir.summarize()` 把计数放在 `stats` 里、单位放在 `units` 里（它自己的 Spec 口径），
+    # 而本步骤的替身会直接摊平在顶层。两种形状都读，否则前端看到的是"实体 0 / 图层 0"，而
+    # 实际图纸有 6569 个实体（实测 酒盒.dwg）。
+    stats = summary.get("stats") if isinstance(summary.get("stats"), dict) else {}
+    units = summary.get("units") if isinstance(summary.get("units"), dict) else {}
+
+    def _count(key: str) -> int:
+        value = summary.get(key)
+        return model._as_int(value if value is not None else stats.get(key))
+
+    counters = {key: model._as_int(value) for key, value in stats.items()
+                if key.endswith("_total")}
     detail = {"ir_id": str(summary.get("ir_id") or ir.get("ir_id") or ""),
               "ir_hash": str(summary.get("ir_hash") or ir.get("ir_hash") or ""),
               "ir_version": str(summary.get("ir_version") or ir.get("ir_version") or ""),
-              "layer_total": model._as_int(summary.get("layer_total")),
-              "entity_total": model._as_int(summary.get("entity_total")),
-              "unit_status": str(summary.get("unit_status") or "")}
+              "layer_total": _count("layer_total"),
+              "entity_total": _count("entity_total"),
+              "unit_status": str(summary.get("unit_status")
+                                 or units.get("unit_status") or ""),
+              "counts": counters}
     return {"status": "completed", "detail": detail,
             "anchor_updates": {"ir_id": detail["ir_id"], "ir_hash": detail["ir_hash"],
                                "ir_version": detail["ir_version"],
@@ -191,7 +219,8 @@ def packaging_semantics(ctx: Dict[str, Any]) -> Dict[str, Any]:
         doc = analyze(ctx.get("project_id"), ir=ir)
     except Exception as exc:
         code = str(getattr(exc, "stable_error_code", "") or "PACKAGING_SEMANTICS_FAILED")
-        return _failed(code, str(getattr(exc, "message", "") or "包装语义识别失败，请重试"))
+        return _failed(code, str(exc) or "包装语义识别失败，请重试",
+                       {"reason": type(exc).__name__})
     doc = doc if isinstance(doc, dict) else {}
     source = doc.get("source") if isinstance(doc.get("source"), dict) else {}
     stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
@@ -304,9 +333,25 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
     try:
         apply_fn(project_id, semantics, accept=(), author=str(ctx.get("actor") or "system"))
     except Exception as exc:
-        code = str(getattr(exc, "stable_error_code", "") or "REQUIREMENT_SAVE_FAILED")
-        return _failed(code, str(getattr(exc, "message", "") or "需求字段写入失败，请重试"),
-                       {"written": []})
+        # 分类只在**一处**判：异常自带稳定码就认它，其次按类型区分"真写失败"与"未识别异常"，
+        # 不靠 str(exc) 关键字匹配（Spec `drawing-flow-error-taxonomy.md` C1/C2）。
+        code = str(getattr(exc, "stable_error_code", "") or "")
+        reason = type(exc).__name__
+        detail = {"written": []}
+        if code in model.PRECONDITION_BLOCKERS:
+            spec = model.PRECONDITION_BLOCKERS[code]
+            message = str(exc) or str(spec["message"])
+            detail["reason"] = reason
+            blocked = _blocked(code, message, detail,
+                               action=str(spec.get("action") or ""))
+            # 字段看板照旧有得看（缺前置条件不等于"这次识别没结果"）。
+            blocked["fields"] = rows
+            return blocked
+        code = code or ("REQUIREMENT_SAVE_FAILED" if isinstance(exc, (OSError, IOError))
+                        else "PACKAGING_FLOW_STEP_FAILED")
+        message = str(exc) or "需求字段写入失败，请重试"
+        detail["reason"] = reason
+        return _failed(code, message, detail)
     requirement_no = str(requirement.get("requirement_no") or "")
     for key in sorted(rows):
         row = rows[key]

@@ -35,6 +35,12 @@ RULES_JSON = ROOT / "tech_app" / "agent_knowledge" / "rules" / "packaging_cost_r
 TOOL_PY = ROOT / "tech_app" / "tools" / "extract_packaging_rules.py"
 SEED_MODULE = "tech_app.backend.storage.da_seed_packaging"
 WORKBOOK = ROOT / "裕同包装项目-待开发" / "报价逻辑-0903.xlsx"
+
+
+#: 工作簿证据类测试的依赖：缺它必须 **skip**，不能报 ERROR。
+#: 为什么：ERROR 会混进"N 条红"的数字里，让真正的业务红失去可读性（Spec
+#: `packaging-cost-red-closure.md` C1）。装依赖：pip install -r tech_app/requirements.txt
+OPENPYXL_SKIP_REASON = "缺 openpyxl（工作簿证据类测试）：pip install -r tech_app/requirements.txt"
 WORKBOOK_SHA256 = "974d9484414824d0bbfd2c83fb0c6044e4348c7a407e1ae0f58699bb60d2acc0"
 
 VISIBLE_SHEETS = ("报价-工费率", "包装运输", "包装运输 (2)", "成本细分", "报价-行业标准",
@@ -483,6 +489,8 @@ class COfflineTool(SnapshotCase):
                          "目标 JSON 是 reviewed 时必须拒绝覆盖（Spec §4.2 write_refused）")
         self.assertEqual(rules_path.read_text(encoding="utf-8"), before)
 
+    @unittest.skipUnless(importlib.util.find_spec("openpyxl") is not None,
+                         OPENPYXL_SKIP_REASON)
     def test_c13_real_workbook_sheets_are_readable(self):
         if not WORKBOOK.exists():
             self.skipTest("客户工作簿不在本机（不入库），跳过真实工作簿读取")

@@ -317,12 +317,30 @@ class OnlyFiveActionsDeclarePrompt(unittest.TestCase):
     def test_no_other_action_declares_a_prompt(self):
         for path, expected in PROMPT_COUNT_PER_FILE.items():
             with self.subTest(path=path.name):
-                found = len(re.findall(r"\bprompt\s*:", read(path)))
+                found = len(self.bubble_prompt_declarations(read(path)))
                 self.assertEqual(
                     found, expected,
                     f"{path.name} 里 prompt 声明数量是 {found}，应为 {expected}："
                     "第 6 / 7 类动作不加气泡文案",
                 )
+
+    @staticmethod
+    def bubble_prompt_declarations(text):
+        """只数"动作声明的气泡文案"，不数别处的同名键。
+
+        `prompt:` 这个写法还会出现在 HTTP 请求体里（例如图纸解析链路提交
+        `JSON.stringify({ prompt: "" })`）——那是给服务端的入参，不是动作气泡文案，
+        计入会让本断言假红。声明所在的整行必然同时出现 `prompt` 与引号/函数，
+        且不属于请求体；这条排除规则只放行"请求体"这一种来源。
+        """
+        hits = []
+        for line in text.splitlines():
+            if not re.search(r"\bprompt\s*:", line):
+                continue
+            if "JSON.stringify" in line or "body:" in line:
+                continue
+            hits.append(line)
+        return hits
 
     def test_prompt_is_not_smuggled_into_get_state(self):
         for action, path in ECHO_ACTIONS.items():

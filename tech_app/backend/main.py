@@ -6838,6 +6838,8 @@ def get_packaging_drawing_flow_state(pid: str, stage: str = "",
         "gates": packaging_drawing_flow.gates(pid, stage=stage),
         "stale": packaging_drawing_flow.stale_view(pid),
         "inheritance": packaging_drawing_flow.inheritance(pid),
+        # 跑之前就能看到缺什么（缺需求草稿这类前置条件不该等到最后一步才暴露）。
+        "preconditions": packaging_drawing_flow.preconditions(pid),
     }
 
 

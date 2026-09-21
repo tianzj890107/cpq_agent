@@ -28,6 +28,21 @@ PROVENANCE_KEYS = ("origin", "status", "value", "confidence", "evidence_level",
 
 USER_CONFIRMED_WARNING = "PACKAGING_FIELD_USER_CONFIRMED"
 
+#: 稳定错误码：字段写入的**前置条件**缺失（这里=没有需求草稿）。它与"写库真的失败"
+#: 是两回事：重试同一入口必然再失败，所以调用方要按 blocked 处理，而不是 failed。
+#: 见 docs/specs/drawing-flow-error-taxonomy.md C1/C4。
+REQUIREMENT_DRAFT_MISSING = "REQUIREMENT_DRAFT_MISSING"
+
+
+class RequirementDraftMissing(ValueError):
+    """缺需求草稿：没法写入任何字段。带上稳定码，别让调用方靠关键字猜。"""
+
+    stable_error_code = REQUIREMENT_DRAFT_MISSING
+
+    def __init__(self, message: str = "需求单不存在，请先创建需求草稿"):
+        super().__init__(message)
+        self.message = str(message)
+
 
 def _entry_snapshot(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return {key: candidate.get(key) for key in PROVENANCE_KEYS}
@@ -52,7 +67,7 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
         raise ValueError("apply_to_requirement() 需要一份语义文档")
     current = requirement_service.store.load_requirement(project_id)
     if not current:
-        raise ValueError("需求单不存在，请先创建需求草稿")
+        raise RequirementDraftMissing()
 
     data: Dict[str, Any] = dict(current.get("data") or {})
     provenance: Dict[str, Any] = dict(data.get("field_provenance") or {})

@@ -433,11 +433,33 @@ def run_flow(project_id: str, *, prompt: Any = "", actor: str = "system",
     return flow_state(project_id)
 
 
+def preconditions(project_id: str) -> List[Dict[str, Any]]:
+    """跑链路**之前**就能知道缺什么：`[{code, severity, message, action}]`。
+
+    只读、幂等、不写库、不建数据（Spec `drawing-flow-error-taxonomy.md` C3）。
+    缺需求草稿时前端可以先提示"去哪建草稿"，而不是让用户跑完整条链路才看到
+    「字段写入失败，请重试」——那句重试是永远不会成功的。
+    """
+    items: List[Dict[str, Any]] = []
+    if not str(project_id or "").strip():
+        return items
+    try:
+        requirement = store.load_requirement(str(project_id))
+    except Exception:                                   # noqa: BLE001 - 读不到就按缺前置条件报
+        requirement = None
+    if not requirement:
+        spec = model.PRECONDITION_BLOCKERS["REQUIREMENT_DRAFT_MISSING"]
+        items.append({"code": "REQUIREMENT_DRAFT_MISSING", "severity": "blocking",
+                      "message": str(spec["message"]), "action": str(spec["action"])})
+    return items
+
+
 __all__ = [
     "ANCHOR_VERSION", "DEPENDENCIES", "FIELD_BOARD_STATES", "FLOW_VERSION",
     "GATE_STAGES", "STALE_REASONS", "STALE_VERSION", "STEP_IDS", "STEP_STATUSES",
     "STEP_TITLES", "capability", "clear_downstream_stale", "current_anchor",
     "flow_state", "gates", "inheritance", "mark_downstream_stale", "migrate",
+    "preconditions",
     "require_gate", "requirement_snapshot_version", "run_flow", "run_id_for",
     "run_step", "stale_view", "start", "steps", "summarize",
 ]

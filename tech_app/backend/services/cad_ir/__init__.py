@@ -61,10 +61,23 @@ def parse_conversion(project_id: str, *, conversion_id: Optional[str] = None,
                      {"converter": cap.get("adapter_name") or "",
                       "support_claim": cap.get("support_claim") or ""})
 
+    # 可用的转换产物有两种状态（`dwg-semantics-agent-flow.md` §3 第 2 步的门槛就是
+    # `status in ("ok","success_with_warnings")`）：ODA 干净转换给 `ok`，LibreDWG 有告警但
+    # 图纸可用给 `success_with_warnings`。`latest_manifest()` 缺省只要 `ok`，直接调它会把
+    # LibreDWG 的产物当成"没有产物"，本地链路在第三步就断（线上因为主用 ODA 才看不出来）。
+    # 这里按门槛逐个状态取最近一条，仍然只走第 2 批的产物定位函数。
+    acceptable = [str(code) for code in getattr(
+        cad_converter, "SUCCESS_STATUSES", ("ok", "success_with_warnings"))]
+    manifest = None
     if conversion_id:
-        manifest = cad_converter.load_manifest(project_id, conversion_id)
+        candidate = cad_converter.load_manifest(project_id, conversion_id)
+        if candidate and str(candidate.get("status") or "") in acceptable:
+            manifest = candidate
     else:
-        manifest = cad_converter.latest_manifest(project_id)
+        for accepted in acceptable:
+            manifest = cad_converter.latest_manifest(project_id, status=accepted)
+            if manifest:
+                break
     if not manifest:
         raise _error("CAD_IR_SOURCE_MISSING",
                      "项目里没有可用的 DXF 转换产物，请先重跑图纸转换",

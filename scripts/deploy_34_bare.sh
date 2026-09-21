@@ -167,9 +167,17 @@ import os
 import sys
 
 from tech_app.backend.services import cad_converter
+from tech_app.backend.services import file_preflight
 
 SAMPLES = "裕同包装项目-待开发"
 bad = []
+# 能力事实与部署自检同源（Spec docs/specs/dwg-capability-truth-and-audit.md §3 C6）：
+# 应用侧报的"有没有转换器"必须就是这里探测出来的结论，否则会出现
+# "部署说装好了、应用说没装"的两套事实。
+probe = file_preflight.detect_converter_availability()
+print(json.dumps({"converter_probe": probe}, ensure_ascii=False))
+if not probe.get("available") or probe.get("role") != "primary":
+    bad.append("能力探测：detect_converter_availability() = %r（应为 primary 可用）" % (probe,))
 for name in ("酒盒.dwg", "圆盘盒.dwg"):
     path = os.path.join(SAMPLES, name)
     if not os.path.exists(path):
@@ -193,6 +201,9 @@ for name in ("酒盒.dwg", "圆盘盒.dwg"):
     if manifest.get("fallback_used") or manifest.get("converter_role") != "primary":
         bad.append("%s：主转换器未生效（converter_role=%r、primary_failure_code=%r）"
                    % (name, manifest.get("converter_role"), manifest.get("primary_failure_code")))
+    if str(manifest.get("converter_role") or "") != str(probe.get("role") or ""):
+        bad.append("%s：能力探测与真转的角色不一致（probe.role=%r、manifest.converter_role=%r）"
+                   % (name, probe.get("role"), manifest.get("converter_role")))
     if str(manifest.get("status")) not in ("ok", "success_with_warnings"):
         bad.append("%s：status=%r" % (name, manifest.get("status")))
     if not quality.get("verified"):

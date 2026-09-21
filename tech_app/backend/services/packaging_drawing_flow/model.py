@@ -29,8 +29,19 @@ STEP_TITLES = {
 STEP_STATUSES = ("pending", "running", "completed", "failed", "blocked",
                  "unavailable", "skipped")
 
-#: 终态（其后步骤必须保持 pending）。
+#: 终态（其后步骤必须保持 pending）。**blocked 不在其中**：缺前置条件不是"这一步坏了"，
+#: 后续步骤照样要跑到终态（见 Spec `drawing-flow-error-taxonomy.md` C4）。
 STEP_TERMINAL_FAILURES = ("failed", "unavailable")
+
+#: 前置条件缺失 → 稳定码、对外文案与下一步动作（同一份给 `steps.field_write` 与
+#: `preconditions()` 用，免得两处各写一句、越走越远）。
+#: 这类问题的共同点是"重试同一个入口必然再失败"，所以 `status=blocked`、`retryable=False`。
+PRECONDITION_BLOCKERS = {
+    "REQUIREMENT_DRAFT_MISSING": {
+        "message": "需求单不存在，请先创建需求草稿（缺前置条件，重试不会成功）",
+        "action": "先在需求看板为这个项目建一张需求草稿，再回到图纸解析重跑",
+    },
+}
 
 FIELD_BOARD_STATES = ("written", "pending", "conflict", "missing", "preserved", "skipped")
 

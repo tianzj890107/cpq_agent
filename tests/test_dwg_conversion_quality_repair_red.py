@@ -505,7 +505,12 @@ class AConfiguration(RepairCase):
         cap = self.capability(DWG_CONVERTER_PROVIDER="none", DWG_CONVERTER_BINARY=str(script))
         self.assertFalse(cap.get("available"), cap)
         self.assertEqual(cap.get("stable_error_code"), "DWG_CONVERTER_NOT_INSTALLED")
-        self.assertIn("未安装", str(cap.get("message") or ""))
+        # 文案口径由 `docs/specs/dwg-capability-truth-and-audit.md` §3 C4 收敛：这条默认
+        # message 现在只在"确实探测不到转换器"时才用得上，所以去掉了"既成事实"的口气。
+        # 本断言原为「必须含『未安装』」，随该 Spec 改为「不再断言尚未安装」。
+        message = str(cap.get("message") or "")
+        self.assertIn("转换", message)
+        self.assertNotIn("尚未安装", message)
 
     def test_a6_legacy_names_still_work_and_the_new_names_win(self):
         self.memory_persistence()

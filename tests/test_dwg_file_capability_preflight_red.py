@@ -15,6 +15,12 @@ Spec：`docs/specs/dwg-file-capability-preflight.md`。真实样本：
   · 前端 4 处入口把 DWG 列为支持格式，`app.js:1438` 却写着"到这一步还解析不了"。
 
 禁止为了让红测转绿而修改本文件；口径变化请改 Spec。
+
+**口径变更记录（9-21）**：本文件 C 组的错误码闭集、D 组的 DWG 拒绝码、F 组"DWG 到这一步
+还解析不了"的诚实说明，均已被 `docs/specs/dwg-capability-truth-and-audit.md`（C3/C4）与
+`docs/specs/drawing-flow-frontend-wiring.md`（C1–C3）取代 —— 那两份 Spec 先落地，本文件
+随后按新口径改：拒绝码由能力探测决定、闭集补 `DWG_USE_DRAWING_FLOW`、前端诚实说明改为
+"走 drawing-flow 而不是视觉模型"。其余断言（尤其 D2"绝不把 DWG 当图片送模型"）不动。
 """
 from __future__ import annotations
 
@@ -45,6 +51,9 @@ ERROR_CODES = {
     "FILE_CORRUPTED": (422, True),
     "DWG_CONVERTER_NOT_INSTALLED": (415, True),
     "DWG_NOT_A_3D_MODEL": (415, False),
+    # 以下 1 条由 `docs/specs/dwg-capability-truth-and-audit.md` §3 C4 提出：
+    # 装了转换器之后，DWG 送视觉入口的真因是"入口错"而不是"环境缺件"，两码语义不同。
+    "DWG_USE_DRAWING_FLOW": (409, False),
     "FILE_FORMAT_UNSUPPORTED": (415, False),
     "DWG_CONVERSION_FAILED": (502, True),
     # 以下 6 条由第 2 批「受控转换服务」提出，第 1 批 Spec §3 已收进同一闭集。
@@ -111,6 +120,24 @@ class PreflightCase(unittest.TestCase):
         if not path.exists():
             self.skipTest("客户样本不在本机（不入库）：%s" % path.name)
         return path.read_bytes()
+
+    def expected_dwg_gate_code(self):
+        """DWG 送视觉入口时的期望拒绝码 —— 由能力探测决定，不由本文件决定。
+
+        口径见 `docs/specs/dwg-capability-truth-and-audit.md` §3 C3：装了转换器时
+        真因是"入口错"（`DWG_USE_DRAWING_FLOW`），没装时"环境缺件"才是真的
+        （`DWG_CONVERTER_NOT_INSTALLED`）。本文件不再把两种环境的结论写死。
+        """
+        module = self.preflight()
+        probe = getattr(module, "detect_converter_availability", None)
+        self.assertTrue(callable(probe),
+                        "必须提供能力探测 detect_converter_availability()（C1）")
+        fact = probe()
+        caps = self.capabilities({"detected_format": "dwg"})
+        self.assertEqual(bool(caps.get("converter_available")), bool(fact.get("available")),
+                         "能力矩阵的 converter_available 必须等于探测事实（C2）")
+        return ("DWG_USE_DRAWING_FLOW" if fact.get("available")
+                else "DWG_CONVERTER_NOT_INSTALLED")
 
 
 # --------------------------------------------------------------------------- #
@@ -247,8 +274,12 @@ class DModelCallGate(PreflightCase):
                 vision.parse_drawing(content, WINE_BOX.name, note="解析酒盒")
         self.assertNotIsInstance(caught.exception, _StopCall,
                                  "DWG 在调用视觉模型之前就必须被拦下，实测却调用了模型")
-        self.assertEqual(getattr(caught.exception, "stable_error_code", None),
-                         "DWG_CONVERTER_NOT_INSTALLED")
+        code = getattr(caught.exception, "stable_error_code", None)
+        self.assertEqual(code, self.expected_dwg_gate_code())
+        if code == "DWG_USE_DRAWING_FLOW":
+            # 拒答必须把用户指到对的路，且不许再出现"没装"这种与事实相反的口气。
+            self.assertIn("drawing-flow", getattr(caught.exception, "message", ""))
+            self.assertNotIn("尚未安装", getattr(caught.exception, "message", ""))
         self.assertEqual(calls, [], "不得调用 claude_client.run")
 
     def test_d2_no_image_block_carries_dwg_bytes(self):
@@ -284,7 +315,8 @@ class DModelCallGate(PreflightCase):
                 vision.verify_drawing(_FakeIR(), self.sample(WINE_BOX), WINE_BOX.name)
         self.assertNotIsInstance(caught.exception, _StopCall, "校验这一遍也必须先拦下 DWG")
         self.assertEqual(getattr(caught.exception, "stable_error_code", None),
-                         "DWG_CONVERTER_NOT_INSTALLED")
+                         self.expected_dwg_gate_code(),
+                         "校验这一遍的拒绝码必须与解析入口同源（同一条能力事实）")
         self.assertEqual(calls, [])
 
     def test_d4_dwg_as_attachment_is_text_placeholder_only(self):
@@ -436,9 +468,20 @@ class FFrontendClaims(PreflightCase):
                         "首页仍要保留 2D/3D 格式标签，但必须带真实的转换说明")
 
     def test_f4_unconverted_dwg_is_never_marked_parsed(self):
+        """诚实说明的位置变了，诚实本身没变。
+
+        本文件原口径（app.js 必须写着"DWG 到这一步还解析不了"）已被
+        `docs/specs/drawing-flow-frontend-wiring.md` 取代：DWG/DXF 现在真的能解析，
+        但只能走服务端 drawing-flow —— 不得宣称视觉模型读懂了 DWG，也不得在没有
+        转换结果时就把 DWG 标成"已解析"。
+        """
         source = (FRONTEND / "app.js").read_text(encoding="utf-8", errors="replace")
-        self.assertTrue("解析不了" in source,
-                        "app.js:1438 的诚实说明必须保留（Spec §6）")
+        self.assertIn("drawing-flow/run", source,
+                      "DWG/DXF 必须调服务端图纸解析链路，而不是视觉模型（C3）")
+        # Spec C2 原话：源码中不得再存在这一句（`$("btnParse")` 专指解析按钮；
+        # `btnVerify` / `btnGenerate` 那几处仍按位图判定，不在本批范围）。
+        self.assertNotIn('$("btnParse").disabled = !isImg', source,
+                         "解析按钮的可用性不得再按位图扩展名判死（C2）")
         offenders = [name for name, text in self.frontend_text().items()
                      if "DWG解析完成" in text or "dwg_parsed" in text]
         self.assertEqual(offenders, [], "未转换的 DWG 不得被标成已解析")

@@ -5688,3 +5688,143 @@ stash 条目仍保留，避免误丢。
 - 未提交：`scripts/tmp_import_dwg_cases.py`（他人临时脚本）与
   `裕同包装项目-待开发/`（客户样本）；stash `carryover-wip2` 仍保留未删。
 - `/tmp/cpq_deploy_34.exp` 留在本机（无密码），可自行删除。
+
+## 218. 五批产品缺口实现（9-21，Codex 实现）：前端接线 / 能力事实 / KB 升格 / flow 错误分类 / 成本收口
+
+按 `## 215` 落地的五份 Spec + 红测实现（会话交付）。逐批实跑：
+
+| 批次 | 红测（实现前 → 实现后） | 状态 |
+| --- | --- | --- |
+| 1 前端接线 | `test_drawing_flow_frontend_wiring_red` 12 红 → **Ran 12 OK** | 完成 |
+| 2 能力事实与审计 | `test_dwg_capability_truth_red` 13 红 → **Ran 13 OK** | 完成 |
+| 3 KB 权威升格与灌库 | `test_kb_authoritative_promotion_red` 15 红 → **Ran 15 OK** | 完成 |
+| 4 flow 错误分类与前置条件 | `test_drawing_flow_error_taxonomy_red` 14 红 → **Ran 14 OK** | 完成 |
+| 5 成本红测收口 | `test_packaging_cost_red_closure_red` 8 红 → **4 红** | 环境类归零；业务类等裁决（见下） |
+
+**第 1 批（前端接线）**：`tech_app/frontend/app.js` 新增纯函数 `renderDrawingEntry(filename)`
+（`vision`/`drawing_flow`/`blocked_3d`/`blocked_other`）、`runDrawingFlowParse()`、
+`renderDrawingFlowPanel()`、`cadIrSummaryOf()`、`fetchDrawingFlowState()`；删掉
+`$("btnParse").disabled = !isImg`；DWG/DXF 走 `POST /api/projects/{pid}/drawing-flow/run`
+与 `GET .../drawing-flow`，渲染 `flow.steps`（title/status/error_code/error_message）与
+cad_ir 摘要；新增 `tech_app/frontend/drawing-flow.css`，`index.html` 引它。
+
+**第 2 批（能力事实，单一来源）**：`file_preflight.py` 新增
+`detect_converter_availability()` → `{available, role, version, source, checked_at}`
+（来源 `cad_converter.capability()`，失败按不可用返回、不抛裸异常）；
+`capabilities_of(detected, *, converter=None)` 由探测决定，`_CAPABILITIES` 里 10 处
+`"converter_available": False` 字面量清零；新增稳定码 `DWG_USE_DRAWING_FLOW`（409/不可重试，
+文案指向 drawing-flow），`DWG_CONVERTER_NOT_INSTALLED` 文案去掉"尚未安装"；
+`audit_entry(..., converter=...)` 输出真实可用性 + `converter_role`/`converter_version`；
+`scripts/deploy_34_bare.sh` 自检与探测同源（与 manifest 的 `converter_role` 交叉核对）。
+
+**第 3 批（KB 权威升格）**：`cpq_kb.py` 新增 `promote_rows()`（只允许 demo→workbook、
+`authority` 五字段缺一即拒、只改来源列、幂等）、9 张包装表补 `authority_ref` 列、
+`import_from_sqlite(..., promote=, authority=)` 支持升格并返回 `source_types` 分布；
+新增 `tech_app/agent_knowledge/provenance/packaging_sources.json`（11 条，覆盖全部
+`SOURCE_*`，其中 4 条 `sheet_exists:false` 如实记明"名字在该工作簿里不存在"）；
+`kb_deploy_preflight.py` 新增 `authority_missing`（关键表有 demo 行且无 `authority_ref`
+即 no-go，`local`/`ci` 不受影响）；`scripts/import_da_kb_to_pg.py` 新增
+`--promote`/`--authority-file`（默认仍 dry-run）、打印 `kb_version` 与各包装表来源分布，
+并在源库没数据时提示另一份 `da.db`（本地 `DATA_DIR` 与 34 的 `tech_app/tech_data` 不是同一个
+目录，这行提示就是为了不再出现"本地 seed 过、导入 0 行"）。
+
+**第 4 批（flow 错误分类）**：`provenance.py` 新增 `RequirementDraftMissing`
+（`stable_error_code=REQUIREMENT_DRAFT_MISSING`）并替换那句裸 `ValueError`；
+`packaging_drawing_flow/steps.py` 的 `field_write` 改成分类捕获 → 缺前置条件返回
+`status=blocked`、`retryable=False`、文案保留真因、`detail.action` 给出下一步，真写失败
+仍 `REQUIREMENT_SAVE_FAILED`（可重试）、未识别异常归 `PACKAGING_FLOW_STEP_FAILED`；
+`getattr(exc, "message")` 这种吞真因的写法全部换成 `str(exc)`；新增
+`packaging_drawing_flow.preconditions(project_id)`，`GET /drawing-flow` 响应带
+`preconditions`（只读、不开数据）。实测无需求草稿项目跑 `run_flow`：`field_write=blocked
+REQUIREMENT_DRAFT_MISSING retryable=False`、`flow.status=completed`、
+`pending_confirm`/`downstream_prepare` 均有终态。
+
+**第 5 批（成本收口）**：环境类归零 —— `tech_app/requirements.txt` 补 `openpyxl==3.1.5`
+（根清单有、后端清单没有，照后端清单装环境必然缺依赖），工作簿证据类测试补
+`skipUnless(openpyxl)` 守卫（缺依赖表现为 skip + 安装命令，不再是 ERROR）；
+`packaging_cost.py` 的四条冻结条目补 `frozen_minimum_charge`，新增
+`_MIN_CHARGE_DECISIONS` 登记 `PKG-C-V-GROOVE` 的 120（第 1 批冻结，工作簿里不存在）
+vs 150（`报价-行业标准!AK5` 原文 `MAX(150/R5,0.15)`）冲突。
+**业务类未转绿，未由实现方拍数**：`docs/specs/packaging-cost-minimum-charge.md` §3.1 已
+实测"没有任何一套候选口径能同时满足现有 c1/c2/c4"，裁决必须一并包含"按所选口径修订
+c1/c2/c4 的期望值"；`packaging-cost-red-closure.md` 却要求 6 条业务红"裁决后全部转绿"且
+不许改断言 —— 两者矛盾，按纪律停下报告，等业务在 ①行业标准 / ②工费率 / ③混合 之间裁决。
+剩余 4 条红即等签字的两条 + 规则快照 `minimum_charge_policy` 落地。
+
+**口径变更（既有红测，非放宽）**：`tests/test_dwg_file_capability_preflight_red.py` 按其
+docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能力探测决定、错误码闭集补
+`DWG_USE_DRAWING_FLOW`、前端诚实说明改为"走 drawing-flow"）；`tests/` 下仅
+`test_packaging_cost_minimum_charge_red.py`、`test_packaging_cost_rule_snapshot_red.py`
+补 skip 守卫（Spec 明文允许）。安全断言（DWG 绝不进视觉模型）一字未动。
+
+**同批修掉两处"本地看不见、线上才看得见"的接线**（本机真跑 酒盒.dwg 时暴露）：
+
+- `cad_ir.parse_conversion()` 原先只认 `latest_manifest(status="ok")`，而 LibreDWG 的产物状态是
+  `success_with_warnings`（ODA 才是 `ok`）→ 本机链路在第四步 `cad_ir_parse` 直接
+  `CAD_IR_SOURCE_MISSING`，线上因主用 ODA 才看不出来。现按依赖缝自己声明的门槛
+  `cad_converter.SUCCESS_STATUSES = ("ok","success_with_warnings")` 逐个状态取最近一条产物
+  （`cad_converter/__init__.py` 顺带导出这两个常量与元组，不再有第二处字面量）。
+- `packaging_drawing_flow.steps.cad_ir_parse` 的 detail 原先只读顶层的 `layer_total/entity_total`，
+  而真实 `cad_ir.summarize()` 把计数放在 `stats`、单位放在 `units` → 前端会显示"实体 0 / 图层 0"。
+  现兼容两种形状并额外带出 `counts`；`app.js` 的 `cadIrSummaryOf()` 在拿不到实体明细时回落到
+  `detail.counts`。
+
+本机实测（`DATA_DIR=/tmp/cpq-probe-data` 真跑，不调模型）：
+`file_preflight completed` → `dwg_convert completed`（libredwg 0.14、`success_with_warnings`、
+`verified=true`、6711 实体/8 图层）→ `cad_ir_parse completed`（`layer_total=8`、`entity_total=6569`、
+`unit_status=confirmed`）。两份样本 DWG 均在（`酒盒.dwg` / `圆盘盒.dwg`）。
+
+未引入新依赖（只补了声明文件）；未提交、未推送、未部署、未重启服务。
+
+## 219. 五批缺口的审查 / 回归 / 提交（9-21，Codex）
+
+对 `## 218` 的五批实现做独立审查与回归（**不看实现方自述，自己跑**），并按 AGENTS.md
+把仓库里"实测已稳定"的部分提交。
+
+### 逐批复核（实跑，非转述）
+
+- 第 1 批 `test_drawing_flow_frontend_wiring_red` → **Ran 12 OK**；实读 `app.js` 确认
+  `renderDrawingEntry()` 无 DOM 引用、`$("btnParse").disabled = !isImg` 已消失、
+  `drawing-flow/run` 与 `drawing-flow` 两个端点都在，`cad_ir` 摘要只做聚合不重解析 DWG。
+- 第 2 批 `test_dwg_capability_truth_red` → **Ran 13 OK**；`_CAPABILITIES` 里
+  `converter_available` 字面量确已清零，探测失败按不可用返回。
+- 第 3 批 `test_kb_authoritative_promotion_red` → **Ran 15 OK**；另跑 dry-run 实测：
+  `--source tech_app/tech_data/da.db --dry-run` 读到 162 行（`kb_packaging_box_type` 12 /
+  `part_template` 31 / `process_template` 23 / `insert_accessory` 12 …），带
+  `--promote workbook --authority-file …` 时**如实拒绝**并指名缺 `owner、decided_at、sha256`
+  —— 出处没齐就不放行，符合"权威只能由业务给"。
+- 第 4 批 `test_drawing_flow_error_taxonomy_red` → **Ran 14 OK**。
+- 第 5 批 `test_packaging_cost_red_closure_red` 8 红 → **4 红**（环境类 4 条归零：
+  `requirements.txt` 补 `openpyxl` + 工作簿类测试补 skip 守卫）。剩下 4 条是业务裁决项，
+  实现方按纪律停手未拍数，属预期而非漏做。
+
+### 回归对比（`b627d24` 工作树 vs 当前工作树，205 个测试模块逐个跑）
+
+- 相关模块新增红：**0**；转绿：**11**（`test_packaging_cost_minimum_charge_red` 6、
+  `test_packaging_cost_red_closure_red` 4、`test_packaging_cost_rule_snapshot_red` 1）。
+- 五份新 Spec 的红测：3 份 12/13/15 全绿 → 5 份全绿（第 5 批见上）。
+- 结论：本批没有把任何既有断言跑红（下面三处是**按新口径更新旧守卫**，不是放宽）。
+
+### 按新 Spec 更新三处旧守卫（非放宽，逐条说明）
+
+实现落地后有 3 条**旧守卫**由红变绿的前提消失，按纪律先确认"Spec 已先落地"再改断言：
+
+1. `test_dwg_file_capability_preflight_red.py`（4 处）——该文件 docstring 里新增
+   "口径变更记录"：错误码闭集补 `DWG_USE_DRAWING_FLOW`、DWG 拒绝码改由
+   `detect_converter_availability()` 决定（`test_a5`/`test_d3` 不再写死单一环境结论，
+   而是交叉核对能力矩阵与探测同源）、`test_f4` 的"前端必须写着 DWG 解析不了"改为
+   "走 drawing-flow 而不是视觉模型"。
+2. `test_dwg_conversion_adapter_red.py::test_i2` ——同上口径（诚实说明换落点）。
+3. `test_dwg_conversion_quality_repair_red.py::test_a5` ——`DWG_CONVERTER_NOT_INSTALLED`
+   文案按 C4 去掉"尚未安装"。
+4. `test_tech_agent_echo_bubble_and_single_exec_card_red.py::test_no_other_action_declares_a_prompt`
+   ——该断言数的是 `app.js` 里 `prompt:` 的出现次数，新的图纸解析请求体
+   `JSON.stringify({ prompt: "" })` 也被计入导致假红；改为只数动作声明的气泡文案
+   （排除请求体），"只有 5 个动作声明气泡"这条不变。
+
+安全类断言（DWG 绝不进视觉模型、绝不把 DWG 当图片块、转换器不可用时如实报错）**一字未动**。
+
+### 边界
+
+未改任何业务实现（实现由会话另一侧完成）；未动 `裕同包装项目-待开发/` 客户样本；
+未提交他人临时脚本 `scripts/tmp_import_dwg_cases.py`；未创建 MR / tag / Release。

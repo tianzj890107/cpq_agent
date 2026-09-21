@@ -45,7 +45,13 @@ STABLE_ERROR_CODES: Dict[str, Dict[str, Any]] = {
     },
     "DWG_CONVERTER_NOT_INSTALLED": {
         "http_status": 415, "retryable": True,
-        "message": "已识别为 DWG；当前环境尚未安装 CAD 转换服务，暂时无法解析",
+        "message": "已识别为 DWG；未检测到可用的 CAD 转换服务，暂时无法解析",
+    },
+    # DWG 被送进视觉入口时的拒答：真因不是"环境故障"而是"入口选错"——DWG 有
+    # 自己的图纸解析链路（drawing-flow），不该走视觉模型。不可重试（同一入口必然再失败）。
+    "DWG_USE_DRAWING_FLOW": {
+        "http_status": 409, "retryable": False,
+        "message": "DWG 请走图纸解析链路（drawing-flow）",
     },
     "DWG_NOT_A_3D_MODEL": {
         "http_status": 415, "retryable": False,
@@ -201,41 +207,46 @@ _PIPELINE_BY_FORMAT: Dict[str, str] = {
     "unsupported": "none",
 }
 
-#: 能力矩阵（Spec §2）。第 1 批不装转换器，`converter_available` 恒为 False。
+#: 能力矩阵（Spec §2）。`converter_available` **不在表里**：它是运行时事实，
+#: 由 `capabilities_of(..., converter=...)` 用探测结果填（能力事实只有一个来源）。
 _CAPABILITIES: Dict[str, Dict[str, bool]] = {
     "dwg": {"direct_vision": False, "cad_vector_parse": False,
-            "converter_required": True, "converter_available": False,
+            "converter_required": True,
             "step_import": False, "geometry_3d": False, "document_text": False},
     "dxf": {"direct_vision": False, "cad_vector_parse": False,
-            "converter_required": True, "converter_available": False,
+            "converter_required": True,
             "step_import": False, "geometry_3d": False, "document_text": False},
     "step": {"direct_vision": False, "cad_vector_parse": False,
-             "converter_required": False, "converter_available": False,
+             "converter_required": False,
              "step_import": True, "geometry_3d": True, "document_text": False},
     "iges": {"direct_vision": False, "cad_vector_parse": False,
-             "converter_required": False, "converter_available": False,
+             "converter_required": False,
              "step_import": False, "geometry_3d": False, "document_text": False},
     "stl": {"direct_vision": False, "cad_vector_parse": False,
-            "converter_required": False, "converter_available": False,
+            "converter_required": False,
             "step_import": False, "geometry_3d": False, "document_text": False},
     "pdf": {"direct_vision": True, "cad_vector_parse": False,
-            "converter_required": False, "converter_available": False,
+            "converter_required": False,
             "step_import": False, "geometry_3d": False, "document_text": True},
     "raster_image": {"direct_vision": True, "cad_vector_parse": False,
-                     "converter_required": False, "converter_available": False,
+                     "converter_required": False,
                      "step_import": False, "geometry_3d": False,
                      "document_text": False},
     "text": {"direct_vision": False, "cad_vector_parse": False,
-             "converter_required": False, "converter_available": False,
+             "converter_required": False,
              "step_import": False, "geometry_3d": False, "document_text": True},
     "docx": {"direct_vision": False, "cad_vector_parse": False,
-             "converter_required": False, "converter_available": False,
+             "converter_required": False,
              "step_import": False, "geometry_3d": False, "document_text": True},
     "unsupported": {"direct_vision": False, "cad_vector_parse": False,
-                    "converter_required": False, "converter_available": False,
+                    "converter_required": False,
                     "step_import": False, "geometry_3d": False,
                     "document_text": False},
 }
+
+#: 位图在 `detected_format` 里的规范值是 `raster_image`；调用方若直接给具体类型
+#: （png/jpg/...），能力口径按同一行处理 —— 否则同一张图会因为写法不同被判"不支持"。
+_RASTER_FORMAT_ALIASES = ("png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff")
 
 #: 主文件能走「直接视觉」或「本地文本提取」以外的格式，需要额外能力才能解析。
 #: 失败码是本批的**稳定口径**：DWG 固定 DWG_CONVERTER_NOT_INSTALLED，
@@ -440,45 +451,85 @@ def detect_file_format(filename: str, content: Any) -> dict:
     }
 
 
-def converter_available() -> bool:
-    """本环境有没有可用的 DWG 转换适配器（DWG 第 2 批的接线点）。
+def detect_converter_availability() -> Dict[str, Any]:
+    """本环境有没有可用的 DWG 转换器 —— **能力事实的唯一来源**（Spec §3 C1）。
 
-    默认环境（`CAD_CONVERTER=auto` 且本机没装真转换器）依旧返回 False —— 第 1 批
-    「DWG 不进视觉模型、不进 3D 入口」的门禁语义因此一字不变；`CAD_CONVERTER=none`
-    用来把「未安装」态锁死（本地 / CI）。转换层缺失或异常时也一律按未安装处理。
+    判定来自运行时探测（`cad_converter.capability()`，与部署自检同一判据），不读常量：
+    常量会在装好转换器之后继续说假话，34 上已经发生过一次。
+
+    `role` 区分"主转换器可用"与"只剩回退可用"——两者的用户口径不同，不能合并；
+    探测失败按"没有"返回（`available=False, role="none"`），绝不抛裸异常：
+    能力查询失败必须能被上层当作"不可用"处理，而不是把 500 抛给用户。
     """
+    checked_at = ""
+    try:
+        from ..time_utils import now_cst_str
+        checked_at = now_cst_str()
+    except Exception:                                   # noqa: BLE001 - 时间戳缺失不影响探测
+        checked_at = ""
+    caps: Dict[str, Any] = {}
     try:
         from . import cad_converter
-        return bool(cad_converter.capability().get("available"))
-    except Exception:
-        return False
+        caps = cad_converter.capability()
+    except Exception:                                   # noqa: BLE001 - 探测失败=不可用
+        caps = {}
+    caps = caps if isinstance(caps, dict) else {}
+    available = bool(caps.get("available"))
+    # 主可用 ⇔ 链路可用且主侧没有被记下不可用原因（cad_converter.capability() 的口径）。
+    primary_ok = available and not str(caps.get("primary_unavailable_reason") or "")
+    fallback = caps.get("fallback") if isinstance(caps.get("fallback"), dict) else {}
+    if primary_ok:
+        role = "primary"
+        version = str(caps.get("converter_version") or "")
+        source = str(caps.get("provider") or caps.get("adapter_name") or "")
+    elif available:
+        role = "fallback"
+        version = str(fallback.get("converter_version") or "")
+        source = str(fallback.get("provider") or "")
+    else:
+        role, version, source = "none", "", "none"
+    return {"available": available, "role": role, "version": version,
+            "source": source, "checked_at": checked_at}
 
 
-def capabilities_of(detected: Optional[dict]) -> dict:
-    """按预检结果给出本环境可用能力（Spec §2）；未知格式一律按 unsupported。"""
+def converter_available() -> bool:
+    """本环境有没有可用的 DWG 转换适配器（保留既有调用点，口径与 C1 同源）。"""
+    return bool(detect_converter_availability()["available"])
+
+
+def capabilities_of(detected: Optional[dict], *, converter: Optional[dict] = None) -> dict:
+    """按预检结果给出本环境可用能力（Spec §2）；未知格式一律按 unsupported。
+
+    `converter` 可注入（测试 / 调用方已有探测结果时），不传就现探测 —— 矩阵里的
+    `converter_available` 永远等于探测事实，不再是表里的常量。
+    """
     detected_format = str((detected or {}).get("detected_format") or "unsupported")
+    if detected_format in _RASTER_FORMAT_ALIASES:
+        detected_format = "raster_image"
     caps = dict(_CAPABILITIES.get(detected_format) or _CAPABILITIES["unsupported"])
+    fact = converter if isinstance(converter, dict) else detect_converter_availability()
     # `converter_required` 与 `converter_available` 是一对：需要转换器的格式，能不能
     # 解析就取决于本环境到底装没装转换器。其余格式（视觉 / 文本 / STEP）不受影响。
-    if caps.get("converter_required"):
-        caps["converter_available"] = converter_available()
+    caps["converter_available"] = (bool(fact.get("available"))
+                                   if caps.get("converter_required") else False)
     return caps
 
 
 def selected_pipeline(detected: Optional[dict]) -> str:
-    """本次该走哪条管线（审计字段；DWG 是 `dwg_converter`，本批未安装）。"""
+    """本次该走哪条管线（审计字段；DWG 是 `dwg_converter`，能不能跑由探测决定）。"""
     detected_format = str((detected or {}).get("detected_format") or "unsupported")
     return _PIPELINE_BY_FORMAT.get(detected_format, "none")
 
 
-def vision_gate_error(detected: Optional[dict]) -> Optional[FileCapabilityError]:
+def vision_gate_error(detected: Optional[dict],
+                      *, converter: Optional[dict] = None) -> Optional[FileCapabilityError]:
     """图纸解析入口（视觉/文本）门禁：构造内容块**之前**判定，绝不把
     模型读不了的文件字节塞成图像块。
 
     可消费 = 直接视觉（图片/PDF）或本地文本提取（PDF/DOCX/TXT）；其余
     （DWG/DXF/3D 模型/未知格式）一律先失败。
     """
-    caps = capabilities_of(detected)
+    caps = capabilities_of(detected, converter=converter)
     if caps["direct_vision"] or caps["document_text"]:
         return None
     info = detected or {}
@@ -496,12 +547,20 @@ def vision_gate_error(detected: Optional[dict]) -> Optional[FileCapabilityError]
             message=_mismatch_message(detected_format, version))
     if info.get("is_truncated") and detected_format in {"dwg", "dxf"}:
         return FileCapabilityError("FILE_CORRUPTED", detected=detected)
+    label = _FORMAT_LABELS["dwg"]
+    if detected_format == "dwg" and caps.get("converter_available"):
+        # 真因是入口选错，不是环境故障：DWG 有自己的图纸解析链路（drawing-flow）。
+        # 报"没装转换器"会把排查方向整体带偏——34 上就发生过一次。
+        message = (f"已识别为 {label}（{version}）；该项目请使用图纸解析链路"
+                   f"（drawing-flow）解析，不要送视觉模型") if version else (
+            f"已识别为 {label}；该项目请使用图纸解析链路（drawing-flow）解析，不要送视觉模型")
+        return FileCapabilityError("DWG_USE_DRAWING_FLOW", detected=detected, message=message)
     code = _GATE_ERROR_CODE.get(detected_format, "FILE_FORMAT_UNSUPPORTED")
     message = None
     if detected_format == "dwg":
         # 用户该看到的是「识别到了什么」：版本号让「已识别为 DWG」这句话有据可查。
-        message = (f"已识别为 {_FORMAT_LABELS['dwg']}（{version}）；"
-                   f"当前环境尚未安装 CAD 转换服务，暂时无法解析") if version else None
+        message = (f"已识别为 {label}（{version}）；"
+                   f"未检测到可用的 CAD 转换服务，暂时无法解析") if version else None
     return FileCapabilityError(code, detected=detected, message=message)
 
 
@@ -539,9 +598,15 @@ def _mismatch_message(detected_format: str, version: str = "") -> str:
 
 def audit_entry(detected: Optional[dict], *, selected: Optional[str] = None,
                 parse_status: str = "blocked",
-                error: Optional[FileCapabilityError] = None) -> dict:
-    """Spec §7 的审计字段（不含原始字节/base64/密钥/堆栈/绝对路径）。"""
+                error: Optional[FileCapabilityError] = None,
+                converter: Optional[dict] = None) -> dict:
+    """Spec §7 的审计字段（不含原始字节/base64/密钥/堆栈/绝对路径）。
+
+    审计里的转换器事实必须与能力矩阵同源（同一份探测结果）——审计写"没装转换器"而
+    实际装了，事后就无法区分"环境故障"与"入口错误"。
+    """
     info = detected or {}
+    fact = converter if isinstance(converter, dict) else detect_converter_availability()
     return {
         "original_filename": info.get("original_filename") or "",
         "detected_format": info.get("detected_format") or "unsupported",
@@ -551,7 +616,9 @@ def audit_entry(detected: Optional[dict], *, selected: Optional[str] = None,
         "file_size": int(info.get("file_size") or 0),
         "sha256": info.get("sha256") or "",
         "selected_pipeline": selected or selected_pipeline(info),
-        "converter_available": bool(capabilities_of(info)["converter_available"]),
+        "converter_available": bool(capabilities_of(info, converter=fact)["converter_available"]),
+        "converter_role": str(fact.get("role") or "none"),
+        "converter_version": str(fact.get("version") or ""),
         "parse_status": str(parse_status or ""),
         "stable_error_code": error.stable_error_code if error else "",
         "retryable": bool(error.retryable) if error else False,
