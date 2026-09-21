@@ -108,6 +108,15 @@ MIN_LOOP_EDGES = 3
 OUTLINE_STATUSES = ("closed", "open", "unavailable")
 SIZE_SOURCES = ("closed_outline", "component_bbox", "dwg_outline")
 
+#: 尺寸可信两档（Spec `packaging-bom-part-size-provenance.md` §2.1）：真展开 vs 包围盒。
+#: 回填行上必须能一眼认出这两类数字 —— 它们在下游长得一样时，材料费就无从解释。
+SIZE_QUALITY_UNFOLDED = "unfolded"
+SIZE_QUALITY_BBOX = "bbox_only"
+SIZE_QUALITIES = (SIZE_QUALITY_UNFOLDED, SIZE_QUALITY_BBOX)
+
+#: 只有这两个来源算"真展开"；其余（含缺失）一律按包围盒档，不许把没证据的数字说成展开。
+UNFOLDED_SIZE_SOURCES = ("closed_outline", "dwg_outline")
+
 #: 求环只吃这几类实体；DIMENSION / HATCH / INSERT / TEXT 一律不参与（Spec §3 第 1 步）。
 LOOP_TYPES = ("LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE")
 
@@ -1664,6 +1673,16 @@ def _size_source_of(row: Dict[str, Any]) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def size_quality_of(size_source: Any) -> str:
+    """尺寸来源 → 可信两档（Spec `packaging-bom-part-size-provenance.md` §2.1 / §3 A2）。
+
+    `closed_outline` / `dwg_outline` → `unfolded`（真展开）；其余（含来源缺失）→ `bbox_only`。
+    缺失时**宁可说包围盒**：没有证据的数字不许被下游当成展开尺寸（§3 D3）。
+    """
+    return (SIZE_QUALITY_UNFOLDED if _text(size_source) in UNFOLDED_SIZE_SOURCES
+            else SIZE_QUALITY_BBOX)
+
+
 def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
     """把图纸零件回填进算不出尺寸的 BOM 行；纯函数：不改入参、不落库。
 
@@ -1718,6 +1737,9 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
         if row_class is not None and part_class is not None:
             material_match = row_class == part_class
         source = _size_source_of(row)
+        # 尺寸来源一路带到底（Spec `packaging-bom-part-size-provenance.md` §2.1）：
+        # 回填行上的长宽和零件文档那一行是同一个数字，就必须带同一份来源 ——
+        # 否则"未闭合零件的包围盒"和"闭合轮廓的真展开"在任何读接口上都长得一样。
         source["dwg_binding"] = {
             "component_id": _text(part.get("component_id")),
             "part_code": _text(part.get("part_code")),
@@ -1726,6 +1748,9 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
             "original_missing_variables": original_missing,
             "pairing_basis": basis,
             "material_match": material_match,
+            "size_source": _text(part.get("size_source")),
+            "outline_status": _text(part.get("outline_status")),
+            "size_quality": size_quality_of(part.get("size_source")),
         }
         if material_match is False:
             pairing_review.append({

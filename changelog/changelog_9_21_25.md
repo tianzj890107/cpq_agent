@@ -10178,3 +10178,36 @@ node --check（`确认需求解析结果.html` 两段内联脚本）        ALL 
 - 未改成本 / 定价口径、未改数据库 schema、未改前端其它步骤的字段形状；
 - `restore()` 的自动回填、版本回滚/删除、跨会话对比、技术侧版本读取面本批不做（Spec §6）；
 - 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 276. BOM 回填的零件尺寸终于带来源：闭合轮廓 ≠ 包围盒，读接口上分得开（9-22，Codex 实现）
+
+Spec `docs/specs/packaging-bom-part-size-provenance.md` 的 §2 / §3 落地。34 实测的项目 `5416443be409`
+（`酒盒.dwg`，BOM 33 行）里 4 行走 `source=dwg_parts`，其中 **3 行的长宽其实是未闭合零件的包围盒**，
+但在 BOM 的 `size_source_json.dwg_binding` 里**一个字的来源都没有** —— 真展开与包围盒长得一模一样，
+成本按 `cut_length × cut_width` 算出来的材料费无从解释。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 回填带来源（§2.1） | `tech_app/backend/services/packaging_parts.py` | `bind_rows()` 拼 `size_source["dwg_binding"]` 时补三个键：`size_source` / `outline_status`（逐字取零件文档那一行）、`size_quality`；新增 `SIZE_QUALITY_UNFOLDED` / `SIZE_QUALITY_BBOX` / `SIZE_QUALITIES` / `UNFOLDED_SIZE_SOURCES` 与纯函数 `size_quality_of(size_source)` |
+| 判据（§3 A2 / D3） | 同上 | 只有 `closed_outline` / `dwg_outline` 算 `unfolded`；**其余（含来源缺失）一律 `bbox_only`** —— 没证据的数字不许被下游当成展开尺寸 |
+| 透传（§2.2） | `tech_app/backend/services/packaging_bom.py` | **一行未改**：`dwg_binding` 本来就在 `size_source` 里，`_assemble()` 序列化成 `size_source_json` 列、落库、`load_bom()` 原样读回 —— B1（`build_bom()` 返回值）与 B2（`load_bom()` 读回）自然同时成立 |
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_packaging_bom_part_size_provenance_red   Ran 15 OK（实现前 failures=8：A1/A2/B1/B2/C1/C2/C3/D2）
+tests.test_packaging_parts_extraction_red           Ran 32 OK
+tests.test_packaging_parametric_bom_red             Ran 57 OK
+tests.test_packaging_parse_to_downstream_seams_red  Ran 13 OK
+```
+
+### 边界
+
+- 既有七个绑定键（`component_id` / `part_code` / `rule_id` / `fallback_paired` /
+  `original_missing_variables` / `pairing_basis` / `material_match`）取值与顺序一字未动（A4 护栏）；
+- 配对规则（位置配对：待绑行顺序 ↔ 面积降序）没碰（A3 护栏）；`length_mm` / `width_mm` / `stats` /
+  `gaps` 逐字不变（B3 护栏）；绑定行数照旧 4 行、锁定行照旧不绑（D4 / D5 护栏）；
+- 未改零件提取的阈值与 `size_source` 闭集、未改成本公式与费率、未动前端、未加接口、未改数据库 schema；
+- 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
