@@ -5884,3 +5884,36 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
 - 成本批剩余 4 条业务红仍等业务裁决（①行业标准 / ②工费率 / ③混合），实现方按纪律未拍数。
 - 未提交：`scripts/tmp_import_dwg_cases.py`（他人临时脚本）、
   `裕同包装项目-待开发/`（客户样本）。
+
+## 221. 生产库复核：包装盒型匹配在 34 上真的出候选了（9-21，Codex 只读复核）
+
+用 `cpq_kb.snapshot()` 直连生产 PG（**只读**，不写库、不建表、不改数据）复核"一个盒型都匹配不出来"
+这条现场问题：
+
+- `kb_version=2`，29 张 `kb_*` 全在；包装表有数据：`kb_packaging_box_type=14`、
+  `part_template=56`、`process_template=39`、`insert_accessory=12`、`cost_formula=27`、
+  `logistics_rule=3`、`match_weight=5`、`cost_content=11`、`tooling_rule=5`；
+  来源分层 `demo=109 / workbook=20 / dwg_confirmed=43 / unknown=0`。
+- 生产预检（新规则首次在生产库上说话）**no-go**：3 条 `authority_missing`
+  （`box_type`/`part_template`/`process_template`/`cost_formula` 有 demo 行且无 `authority_ref`）
+  + 3 条 `demo_only`（`insert_accessory`/`logistics_rule`/`match_weight` 整表 demo）——
+  这正是"生产库不得用没人认领的样例数据报价"该有的样子，不是故障。
+- 匹配端到端（报价侧 `cpq_packaging_match` 走快照）：
+  `酒盒 219×86×86 / 双开门/对开` → 建议 **`YT-DWG-WINE-700ML`**（matched，`needs_new_tooling=False`）；
+  `圆盘盒 400×400×48 / 天地盖/纸管套合` → 建议 **`YT-DWG-ROUND-10PC`**（matched）。
+  即两份真实 DWG 样本（`dwg_confirmed`）已经能被选出来，现场"0 候选"已不复现。
+- 报价侧与工艺侧**同真值逐字段相同**（把生产行按依赖缝注进工艺侧内存后比对
+  `candidates`/`suggested_box_type`/`needs_new_tooling`/`new_tooling_reason`，三组用例全 True）。
+
+复核中读到的两个**数据 / 口径**问题（不属本批实现，未擅自改）：
+
+1. **两条 `dwg_confirmed` 盒型没有 `fit_clearance`**（14 条里只有这 2 条为空，12 条 demo 都有）。
+   该维度权重 0.25 且是硬门槛，但"盒型侧为空"时既不放行也不归一化权重 —— 结果是这两条真实样本的
+   总分上限被压到 0.75（实测 0.75 / 0.65），而"需求侧缺该项"时却是按 `total_weight` 归一化的
+   （实测把 `fit_clearance` 去掉后同一条候选 total=1.0）。同一张表两种缺法两种口径，建议业务定：
+   要么把两条真实盒型的配合间隙补上，要么"盒型侧缺项"也按归一化处理。
+2. **`size_range` 是软维度且没有下限**：`30×30×20` 的天线盒需求与 `396.5–408mm` 的圆盘盒
+   `size_range=0.0`，但仍返回 `status=matched`、`can_confirm=True`、`needs_new_tooling=False`
+   （两侧引擎一致）。尺寸差一个数量级还能"可确认"，建议给 `size_range` 加门槛或加"越界即需新开模"。
+
+未提交（本轮只读复核）；未推送；未部署。若上面两点要改，那是新的口径裁决，得先签字。
