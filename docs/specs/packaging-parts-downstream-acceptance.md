@@ -1,0 +1,123 @@
+# 包装图纸零件：下游闭环的验收、门禁与能力声明（第 5 层）
+
+血缘：收口第 1～4 层（真实轮廓 → 可选中面板 → 工艺/成本 → 3D 挤出）。
+本层解决**"做完了但说不清到底做到了哪一步"**。
+
+## 0. 一句话目标
+
+把前四层变成**可验收、可声明、可回滚**：固化质量指标、给一条只读门禁、把能力声明分三级写死，
+并把下游连通性纳入部署自检。
+
+## 1. 为什么要单独一层
+
+这一整条链路（## 231 → 本批）已经出现过三次"测试全绿但能力不成立"：
+
+- `test_drawing_board_two_column_parts_and_3d_red` 只按名字断言 `aria-label="3D 视图"`，DWG 项目下
+  那块画布其实是空的；
+- 零件清单 64 行看着像零件，实测只有 27 种尺寸、18 组重复、闭合数 0；
+- 工艺推荐按钮与左栏 64 行自相矛盾（一个说"还没有零件"）。
+
+所以本层不写新能力，只写**度量与门槛**：没有门槛，"做完"永远只是感觉。
+
+## 2. 指标固化（零件文档 `stats`）
+
+`packaging_parts.summarize(doc)` 必须返回（第 1 层已有 `closed_ratio`，其余本层新增）：
+
+| 指标 | 定义 |
+| --- | --- |
+| `closed_ratio` | `closed_total / part_total` |
+| `role_known_ratio` | `role != "unknown"` 的件数 / `part_total` |
+| `solid_ok_ratio` | `status == "ok"` 的挤出结果数 / `part_total`（无固体文档时 `0.0`） |
+| `processable_ratio` | `processability.ok` 的件数 / `part_total` |
+| `size_source_mix` | `{"closed_outline": n, "component_bbox": n, "dwg_outline": n}` |
+
+`part_total = 0` 时所有比值一律 `0.0`（不许 `null`、不许抛错）。
+
+## 3. 真实样本门槛（红线，两份样本都跑）
+
+| 样本 | 门槛 |
+| --- | --- |
+| `酒盒.dwg` | `closed_ratio >= 0.10` |
+| `圆盘盒.dwg` | `closed_ratio >= 0.50` 且 `role_known_ratio >= 0.10` |
+| 两份 | 各自至少 **1 件** `processability.ok` 且 `extrude` 返回 `ok` |
+
+门槛值写进本 Spec，**改门槛必须改本文件**并说明依据（不许在代码里手调）。
+
+## 4. 只读门禁 `tech_app/tools/packaging_parts_gate.py`
+
+- 用法：`python tech_app/tools/packaging_parts_gate.py --env local|production`
+- 输出形状与退出码**与既有 `dwg_deploy_gate.py` 完全一致**：
+  `{gate_version, env, items: [...], summary: {ok, fail, manual, skip, acknowledged}, verdict, reasons}`；
+  有 `fail` → 非零退出。
+- 项（`id` 固定，不许改名）：
+
+| id | kind | 判据 |
+| --- | --- | --- |
+| `parts_outline_engine` | auto | 第 1 层常量（`LOOP_TOLERANCE_MM` / `OUTLINE_STATUSES` / `SIZE_SOURCES`）在位 |
+| `parts_outline_real_sample` | auto | §3 的两样本门槛（本机无样本时 `skip`） |
+| `parts_panel_wired` | auto | 第 2 层三件在位：行可点、面板容器、三态文案 |
+| `parts_downstream_wired` | auto | 第 3 层：两个下游路由 + `processability` 在位 |
+| `parts_3d_wired` | auto | 第 4 层：solid 路由 + 前端复用 `loadSTL` |
+| `parts_demo_script` | manual | 演示脚本经用户签字（`--ack parts_demo_script=<用户>`） |
+
+- 门禁**只读**：不连生产库、不写文件、不调模型、不联网。
+
+## 5. 能力声明三级（写进 `DEPLOYMENT.md`）
+
+| 级别 | 名称 | 成立条件 |
+| --- | --- | --- |
+| L1 | 编排 | DWG → DXF → CAD IR → 语义 → 零件文档，2.1 左栏出清单 |
+| L2 | 可信 | L1 + `closed_ratio` 过 §3 门槛 + 角色可识别 |
+| L3 | 闭环 | L2 + 可点（面板）+ 可算（工艺/成本过 `processability`）+ 可看（3D 挤出） |
+
+- 未签字前**不得**声明 L3；`DEPLOYMENT.md` 必须把当前级别写在显眼处。
+- 每次部署后按门禁实际结果更新级别；级别只升不降（降级必须写明原因）。
+
+## 6. 部署自检扩展
+
+`scripts/deploy_34_bare.sh` 增加一步「下游连通自检」（只读 HTTP，任一项不过非零退出）：
+
+1. `GET /api/projects/{pid}/requirement/packaging-parts` → `built` 与 `stats.part_total`；
+2. `GET …/packaging-parts/DWG-P01` → `found` 与 `outline.status`；
+3. 若第 2 步 `outline.status == "closed"`：`POST …/DWG-P01/solid` 必须返回 `status ∈ {ok, unsupported}`
+   （`unsupported` 是结论，不算失败）。
+
+**样本项目 id 必须由用户提供**（不许脚本自己猜、不许拿生产项目当试验田）；未提供时该步 `skip` 并打印原因。
+
+## 7. 允许修改范围
+
+1. `tech_app/backend/services/packaging_parts.py`：`summarize()` 补 §2 指标（`closed_ratio` 第 1 层已有）。
+2. 新建 `tech_app/tools/packaging_parts_gate.py`。
+3. `DEPLOYMENT.md`：三级声明表 + 当前级别。
+4. `scripts/deploy_34_bare.sh`：新增第 6 步（可 `skip`）。
+5. `changelog/changelog_9_21_25.md`：按周记录。
+
+## 8. 禁止事项
+
+- 不许改前四层的口径与红测；
+- 门禁不许连生产库、不许写数据、不许把 `manual` 项自动置为 `ok`；
+- 不许在没有真实样本证据时把能力声明写成 L3；
+- 不许改既有 `dwg_deploy_gate.py` 的输出形状（只允许**新增**项）。
+
+## 9. 红测
+
+`tests/test_packaging_parts_downstream_gate_red.py`（实现前必须失败）：
+
+- A 指标：`summarize()` 含 §2 五个指标；`part_total=0` 时全 `0.0` 不抛错。
+- B 门禁脚本：文件存在；`--env` 可跑；输出 JSON 含 `items/summary/verdict`；六项 `id` 齐全；
+  有 `fail` 时退出码非零。
+- C 门禁只读：源码里不出现生产库连接串 / `psycopg` / 写文件调用。
+- D 能力声明：`DEPLOYMENT.md` 含 L1/L2/L3 三级表与当前级别字样。
+- E 部署自检：`deploy_34_bare.sh` 含下游自检步骤与 `skip` 分支。
+- F 真实样本门槛（本地有样本才跑）：§3 的表格逐项断言。
+
+## 10. 验收命令
+
+```bash
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_downstream_gate_red -v   # 全绿
+./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env local             # 退出码 0
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_outline_red             # 第 1 层
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_panel_red               # 第 2 层
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_downstream_red          # 第 3 层
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_3d_red                  # 第 4 层
+```

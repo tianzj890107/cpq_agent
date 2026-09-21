@@ -7126,6 +7126,85 @@ GET /                                                 → HTTP 200
 未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话在写的
 `docs/specs/packaging-parts-*.md` 与 `tests/test_packaging_parts_*_red.py`（工作区里它们仍是未跟踪文件）。
 未引入任何第三方依赖。GitHub `origin` 未推送（DNS，见上）。
+
+## 237. 图纸零件下游闭环：五层 Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+**问题**：本批（## 226 零件提取 → ## 231 图层角色）交付的是"看得见"，下游一个都没接——
+右栏 3D 空、点零件没反应、工艺推荐回「还没有零件」、成本/3D/BOM 全绑在旧的视觉 IR 上。
+本轮把"后续下游全都跑通"拆成**五层**，每层一份 Spec + 一份红测（**不改任何业务实现**）。
+
+### 五层与文件
+
+| 层 | 解决什么 | Spec | 红测 |
+| --- | --- | --- | --- |
+| 1 | 零件可信：真实闭合轮廓 + 可信尺寸 | `docs/specs/packaging-parts-true-outline.md` | `tests/test_packaging_parts_outline_red.py` |
+| 2 | 能点：零件行可选中 + 右栏零件面板 | `docs/specs/packaging-parts-selectable-panel.md` | `tests/test_packaging_parts_panel_red.py` |
+| 3 | 能算：工艺推荐 + 成本（id 映射 + 缺料拒绝） | `docs/specs/packaging-parts-downstream-process-and-cost.md` | `tests/test_packaging_parts_downstream_red.py` |
+| 4 | 3D：闭合轮廓 × 厚度直线挤出 + 复用 viewer | `docs/specs/packaging-parts-3d-extrusion.md` | `tests/test_packaging_parts_3d_red.py` |
+| 5 | 门禁：指标固化 + 只读门禁 + 三级能力声明 | `docs/specs/packaging-parts-downstream-acceptance.md` | `tests/test_packaging_parts_downstream_gate_red.py` |
+
+红测合计 **94 条**，实现前 **88 红 / 6 绿**（6 条绿全是"旧键/旧路由/旧 viewer 不许回退"的护栏）：
+
+| 套件 | 结果 |
+| --- | --- |
+| `test_packaging_parts_outline_red` | Ran 20，19 红（5 fail + 14 error） |
+| `test_packaging_parts_panel_red` | Ran 19，18 红 |
+| `test_packaging_parts_downstream_red` | Ran 20，17 红（13 + 4） |
+| `test_packaging_parts_3d_red` | Ran 18，17 红（16 + 1） |
+| `test_packaging_parts_downstream_gate_red` | Ran 17，17 红（11 + 6） |
+
+### 本轮的实测依据（写 Spec 前先量的，不是推断）
+
+- `酒盒.dwg`：实体 6569（LINE 5598 / SPLINE 310 / ARC 311 / LWPOLYLINE **2**）；分量 402，
+  其中**只有 2 个含闭合实体**，而这 2 个正是整版图框（已被 `edge_over_max + area_over_max` 挡掉）；
+  因此 kept 的 64 件**覆盖闭合实体的 = 0 / 64**，`by_role = {unknown: 64}`；
+  64 件只有 **27 种不同尺寸**（18 组重复，最大一组 7 件同尺寸）。
+- `area = length * width`（`packaging_parts.py:178`）= **包围盒面积**，过滤阈值与排序都建在它上面。
+- `圆盘盒.dwg` 对照：分量 14 / 含闭合 12 / kept 9 件里 8 件含闭合 → 规则型图纸本来就能出闭合件。
+- **IR 是丢信息的**：`attributes` 里 LINE 有 `start/end`、ARC 有 `center/radius/起止角`、CIRCLE 有
+  `center/radius`，但 **LWPOLYLINE / POLYLINE 只留 `vertices` 数量、SPLINE 只留点数量**
+  （`cad_ir/parser.py:335` 把坐标丢掉）。所以第 1 层必须**先补 IR 顶点落盘**，否则"真实轮廓"
+  对以 LWPOLYLINE 为主的图纸永远落不了地。
+- 下游为何报"没有零件"：工艺推荐判 `currentIR.parts`（`app.js:2860`），而图纸链路把 CAD IR 写进
+  自己那份文档、不回写 `store.load_ir()`（`main.py:5862` 读的是后者）；
+  `POST /parts/{part_id}/process`（`main.py:2894`）第一句就是 `store.load_ir()`，为空直接 404。
+- DWG 零件行**没有点击绑定**：`renderTree()` 的 drawing_flow 分支里
+  `dataset.partId` / `addEventListener` / `selectPart` 出现 **0 次**。
+- 3D 画布不是坏了：`#viewer` 已初始化（挂着 `AxesHelper`），只是 `currentGeometry` 恒为 null。
+
+### 关键口径（各层写死，实现不得自选）
+
+- **第 1 层**：`LOOP_TOLERANCE_MM = 1.0`、`MIN_LOOP_EDGES = 3`；链式闭合（端点图求简单环）取
+  **面积最大**环，面积用鞋带公式；尺寸取环 bbox；求不出环 → `outline_status="open"` +
+  `outline_reason="no_closed_loop"` / `"loop_too_small"` + `size_source="component_bbox"`（**必须留痕**）；
+  单位未确认 → `unavailable` + 尺寸 `None`；`stats` 新增 `closed_total/open_total/
+  outline_unavailable_total/closed_ratio`。
+- **第 2 层**：新增 `GET …/requirement/packaging-parts/{part_code}` 单件详情（纯读，只回这一件的点）；
+  前端新增 `selectPackagingPart()`（**不许复用 `selectPart`**）+ `#packagingPartPanel`（`#modelPanes` 内、
+  默认 hidden）；三态文案一一对应；图纸项目下 `#viewerPartName` 不再写"3D 视图 · 选择零件后查看"。
+- **第 3 层**：`part_id = part_code` + `part_id_namespace="packaging_parts/1"`；新增纯函数
+  `as_ir_part()` / `processability()`，拒绝码 `PACKAGING_PART_NOT_CLOSED` /
+  `PACKAGING_PART_MATERIAL_UNKNOWN`（`missing_variables` 列字段）/ `PACKAGING_PART_NOT_FOUND`；
+  缺厚度/材料**绝不许给默认值**。
+- **第 4 层**：新服务 `packaging_part_solids`，只做**直线挤出**（不做折弯/装配/真实刀模重建）；
+  矩形 4 点 = 12 三角形；STL 用 ASCII；凹多边形标 `concave_polygon`；不引入新依赖（三角化自己写）。
+- **第 5 层**：`summarize()` 固化五个指标；只读门禁 `tech_app/tools/packaging_parts_gate.py`
+  （**六项 id 固定**，形状与 `dwg_deploy_gate.py` 一致，有 fail 非零退出）；能力声明分 L1 编排 /
+  L2 可信 / L3 闭环，**未签字不得声明 L3**；`deploy_34_bare.sh` 新增"下游连通自检"（样本项目 id 需用户提供，否则 skip）。
+
+### 本批门槛（超过就不许声明，Spec §3）
+
+- `酒盒.dwg`：`closed_ratio >= 0.10`（今天 **0**）。
+- `圆盘盒.dwg`：`closed_ratio >= 0.50` 且 `role_known_ratio >= 0.10`。
+- 两份样本各自至少 **1 件** `processability.ok` 且能挤出 3D。
+
+### 已知与未做
+
+- **未提交、未推送、未部署**：本轮只新增 5 份 Spec 与 5 份红测（工作区里是未跟踪文件），
+  没有改任何业务实现、没有动前三层/快速报价的代码，也没有跑全量回归。
+- 五份实现提示词只在会话里交付（按仓库约定不落 `prompts/`）。
+- 本轮**新增发现**（前几批没写到的）：IR 折线顶点被丢弃，是"真实轮廓"的前置缺口（已写进第 1 层 Spec §2）。
+
 ## 238. 逆向快速报价第 3/4/5 批：字段工作区与差异价 → 出价与转精准 → 文件解析客户端（9-21，Codex 实现 + 回归）
 
 **本批交付三件事**（Spec 都在 `docs/specs/quick-quote-{3,4,5}-*.md`）：
