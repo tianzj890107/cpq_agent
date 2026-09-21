@@ -16,16 +16,29 @@
 
 ## 0. 当前状态实证（决定本批要证伪什么）
 
-实测（2026-09-20，本仓库工作区）：
+实测（2026-09-21，本仓库工作区；括号内为 9-20 的历史数字）：
 
-- **第 3 批 `cad_ir` 未落地**：`tests/test_dxf_cad_ir_red.py` 实测 `Ran 45 / failures=42, skipped=1`。
+- **第 1/2 批修复（ODA 修订）未落地**：`tests/test_dwg_conversion_quality_repair_red.py` 实测
+  `Ran 43 / failures=8, errors=8` —— 16 条红全部来自
+  `docs/specs/dwg-conversion-quality-repair.md`（`/2`）的 ODA 主 + 回退链要求。
+- **第 3 批 `cad_ir` 已落地**：`tests/test_dxf_cad_ir_red.py` 实测 `Ran 46 / failures=1, skipped=1`
+  （9-20 为 `Ran 45 / failures=42, skipped=1`）；唯一红是 ODA 修订新增的 `E5`
+  （回退产物必须在 IR 里留痕：`source.converter_role`/`source.fallback_used` +
+  `conversion_fallback_used` 警告）。
+- **第 4 批 `packaging_semantics` 已落地**：`tests/test_packaging_semantics_red.py` 实测
+  `Ran 59 / OK (skipped=1)`。
 - **第 5 批 `packaging_drawing_flow` 未落地**：`tests/test_packaging_drawing_flow_red.py` 实测
   `Ran 54 / failures=54`。
 - **2D/3D 分流完全不存在**：全仓没有 `dwg_dispatch*`；
   `grep -rn "three_d" tech_app/backend/services/cad_converter/` 只命中 `capability()` 的一行声明
   （`service.py:297`），**manifest 里不持久化任何三维证据** → 现在无法回答"这份图到底有没有 3D"。
-- **转换器真实可用**：本机 `/opt/homebrew/bin/dwg2dxf`（LibreDWG 0.14）、34 服务器
-  `/home/data/cpq-tools/current/bin/dwg2dxf`；两份真实样本转换已由第 2 批 B 层验收覆盖。
+- **转换器真实可用（ODA 主 + LibreDWG 回退）**：本机 ODA 27.1
+  （`/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter`）与 `/opt/homebrew/bin/dwg2dxf`
+  （LibreDWG 0.14）；34 服务器 ODA 27.1（`/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun`，
+  经 `xvfb-run`）+ `/home/data/cpq-tools/current/bin/dwg2dxf`。许可口径、argv 与**受控回退链**见
+  `docs/specs/dwg-conversion-quality-repair.md`（`dwg-conversion-repair/2`）；两份真实样本转换已由
+  第 2 批 B 层验收覆盖。**两套驱动都只导出二维 DXF** → 含三维实体的图纸当前只能得到
+  `3d_converter_unavailable`。
 - **"支持 DWG"目前只能否**：`cad_converter/capability()` 的
   `support_claim == "conversion_available"`、`dwg_supported is False`（第 2 批 Spec §2.1 明确
   "第 6 批金标通过后才可能为真"）；`__init__.py` 文档也写着这一口径。
@@ -181,7 +194,7 @@ class DispatchError(Exception): ...      # stable_error_code / http_status / ret
 
 | 输入 | 读取键 |
 | --- | --- |
-| `manifest`（第 2 批 manifest） | `status`、`converter.name`、`converter.version`、`conversion_id`、`output_files[].role`、`output_files[].sha256`、`output_files[].path`、可选 `three_d.status` |
+| `manifest`（第 2 批 manifest） | `status`、`converter_name`、`converter_version`、`converter_role`、`fallback_used`、`primary_failure_code`、`conversion_id`、`output_files[].role`、`output_files[].sha256`、`output_files[].path`、可选 `three_d.status` |
 | `ir`（第 3 批 CAD IR） | `ir_id`、`entities[].type`（**大写比较**）、`entities[].layer`、`entities[].z`（可选，非零即"带 Z 坐标"，**只用于 `z_only_ignored`，不构成三维证据**）、可选 `stats.entity_types`（dict 或 list）、`layers[].name`、`layers[].role` |
 | `semantics`（第 4 批语义） | `semantics_version`、`layers[].name`、`layers[].role` |
 
@@ -265,7 +278,7 @@ def summarize(record_state) -> dict
 
 ```json
 {"record_version": "dwg-acceptance/1",
- "converter": {"name": "libredwg", "version": "0.14", "binary_sha256": "…"},
+ "converter": {"name": "oda", "version": "27.1", "binary_sha256": "…"},
  "samples": [{"filename": "酒盒.dwg", "sha256": "…", "dxf_sha256": "…",
               "preview_sha256": "…", "layer_count": 0, "entity_count": 0, "non_blank": true},
              {"filename": "圆盘盒.dwg", "sha256": "…", "dxf_sha256": "…",
@@ -274,6 +287,11 @@ def summarize(record_state) -> dict
  "golden_version": "2026-09-20.1",
  "approved_by": "…", "approved_at": "…"}
 ```
+
+- `converter` 段记的是**主**转换器身份（`DWG_CONVERTER_PROVIDER` 的生效 provider + 显式声明的
+  版本 + 主二进制 sha256）：**回退转换器不许冒充主转换器**。E2E 期间若发生过回退，
+  `e2e.report` 必须写明 `fallback_used=true` 与 `primary_failure_code`，门禁第 1/2 项仍按主转换器判定；
+  回退产物**不得**作为「主转换器能力已验收」的证据。
 
 ### 3.2 声明推导（冻结）
 
@@ -287,7 +305,7 @@ def summarize(record_state) -> dict
 - `support_claim` 闭集扩展为 `("orchestration_only", "conversion_available", "supported")`
   （第 2 批的 `"real"` 继续禁止出现在任何位置）。
 - **记录有效** = 全部满足：文件存在且可解析、`record_version` 受支持、
-  `converter.name/version` 与现场一致、`binary_sha256` 与现场二进制一致、
+  `converter.name/version` 与现场**主**转换器一致、`binary_sha256` 与现场主二进制一致、
   两份样本的 `sha256` 与现场样本一致、`approved_by` 非空、`approved_at` 可解析、
   `e2e.report_sha256` 与该报告文件一致。
 - **禁止**由"装了转换器"推导 `supported`（红测 `C20`）。
@@ -325,7 +343,7 @@ tests/fixtures/dwg_acceptance/<golden_version>/圆盘盒.json
 ```json
 {"golden_version": "2026-09-20.1", "sample_filename": "酒盒.dwg",
  "source_sha256": "…", "detected_dwg_version": "AC1027",
- "converter": {"name": "libredwg", "version": "0.14"},
+ "converter": {"name": "oda", "version": "27.1", "role": "primary", "fallback_used": false},
  "artifacts": {"dxf_sha256": "…", "preview_sha256": "…", "preview_non_blank": true},
  "stats": {"layer_total": 0, "entity_total": 0, "dimension_total": 0, "text_total": 0,
            "block_total": 0},
@@ -339,6 +357,10 @@ tests/fixtures/dwg_acceptance/<golden_version>/圆盘盒.json
   业务结论（`cut_layers` / `key_dimensions` / `box_candidates` / `required_unresolved`）
   必须人工填写——**测试作者不许凭感觉编造酒盒/圆盘盒的尺寸**（第 4 批铁律延续）。
 - `forbidden_fields` **必须非空**：明确写出"这份图上不该出现的幻觉字段"（如无依据的材料、克重）。
+- `converter` 段必须写明产出方身份与跳次：`{"name": "oda", "version": "27.1", "role": "primary",
+  "fallback_used": false}`。金标**只认主转换器产物**（`role == "primary"` 且 `fallback_used is false`）：
+  只有回退产物可用的环境**不能**生成"支持 DWG"的基线，必须如实降级为
+  `conversion_available`，门禁判定为 No-Go（红测 `D26`）。
 
 ### 4.2 审批与"不许自动刷绿"
 
@@ -400,7 +422,7 @@ python tech_app/tools/dwg_sample_e2e.py --sample <样本.dwg> --out <目录> [--
 ## 6. 契约 F：部署门禁脚本（`tech_app/tools/dwg_deploy_gate.py`）
 
 - `GATE_VERSION = "dwg-deploy-gate/1"`。
-- `GATE_ITEMS`：**§7 的 17 项**，逐项 `{"id", "kind", "title"}`，
+- `GATE_ITEMS`：**§7 的 18 项**，逐项 `{"id", "kind", "title"}`，
   `kind ∈ ("auto", "manual")`（闭集，红测 `E34` 逐项比对 id/kind）。
 - 用法与输出：
 
@@ -426,15 +448,15 @@ python tech_app/tools/dwg_deploy_gate.py --env local|ci|production [--json] [--r
   4. `--env production` 下 `skip` 一律算 fail。
 - **禁止**：读 `.env` / 任何密钥；联网；把 `manual` 项报成 `ok`；把 skip 计进 ok；
   在输出里打印密钥、token、绝对部署路径以外的敏感值（红测 `E38`/`E39`）。
-- 未知的 `--ack <item_id>=<用户>`（id 不在 17 项里）→ 用法错误，**退出码 2**，不许静默忽略。
+- 未知的 `--ack <item_id>=<用户>`（id 不在 18 项里）→ 用法错误，**退出码 2**，不许静默忽略。
 - `--report PATH` 写 Markdown 报告（模板见 §10.1），报告本身也要过"禁用词"检查。
 
-## 7. 契约 G：部署门禁清单（17 项，逐项判定方式）
+## 7. 契约 G：部署门禁清单（18 项，逐项判定方式）
 
 | # | id | kind | 判定方式（可执行） | 不通过后果 |
 | --- | --- | --- | --- | --- |
-| 1 | `converter_license` | manual | 人工确认：许可证与部署方式合法（LibreDWG GPLv3+ 已确认；ODA 非会员仅限非商业，未采用） | No-Go |
-| 2 | `converter_version_pinned` | auto | `DWG_CONVERTER_VERSION` 非空且与 `local_cli.probe_version(binary)` 一致；无转换器时在 `env == "ci"` 记 `skip`（原因必须写明"CI 无转换器"），在 `env == "production"` 记 `fail` | No-Go |
+| 1 | `converter_license` | manual | 人工确认：许可证与部署方式合法（**ODA 27.1 非会员限非商业用途，已由业务/法务确认可用于本 CPQ 生产环境**；LibreDWG GPLv3+ 作为回退） | No-Go |
+| 2 | `converter_version_pinned` | auto | `DWG_CONVERTER_VERSION` 非空且 `version_ok == true`；LibreDWG 系驱动还必须与 `local_cli.probe_version(binary)` 一致（`version_source="probed"`）；ODA 无法自证版本（`version_source="config_declared"`），只校验显式声明非空。无转换器时在 `env == "ci"` 记 `skip`（原因必须写明"CI 无转换器"），在 `env == "production"` 记 `fail` | No-Go |
 | 3 | `health_reports_capability` | auto | `cad_converter.capability()` 含 §2.1 全部键且 `status_for` 六态可用 | No-Go |
 | 4 | `tmp_dir_permissions` | auto | 转换临时目录存在、可写、不在仓库内、非世界可写 | No-Go |
 | 5 | `disk_quota_and_cleanup` | auto | `limits()["retention_days"] > 0` 且清理入口存在（`retention_plan()` 可用） | No-Go |
@@ -450,6 +472,7 @@ python tech_app/tools/dwg_deploy_gate.py --env local|ci|production [--json] [--r
 | 15 | `no_dev_machine_dependency` | auto | 无转换器环境下 L1–L3 仍可跑完（不 import 失败、不联网） | No-Go |
 | 16 | `ci_separates_adapter_and_real_smoke` | auto | `.gitlab-ci.yml` 有 `dwg_real_samples` job（`when: manual`）且 `python_contract` 不含真实冒烟 | No-Go |
 | 17 | `real_samples_e2e_passed` | manual | 两份真实样本 L4 通过 + 金标已人工审批 + 验收记录有效 | No-Go |
+| 18 | `converter_chain_configured` | auto | 受控回退链在位：`capability().fallback` 段存在且 `provider`/`version` 显式配置、`manifest` 契约含 `converter_role`/`fallback_used`/`primary_failure_code`/`attempts`、且用 fake 适配器验证「主成功不回退、主失败才回退」（`docs/specs/dwg-conversion-quality-repair.md` §7） | No-Go |
 
 ## 8. 契约 H：性能与稳定性上限
 
@@ -524,7 +547,7 @@ python tech_app/tools/dwg_deploy_gate.py --env local|ci|production [--json] [--r
 - 包装语义：刀线/压痕线确认、盒型候选、必须待确认项
 - 3D 状态：<六态之一>（逐样本，含判据）
 - 金标：版本/审批人/审批时间
-- 部署门禁：17 项逐项状态（ok/fail/manual_unacknowledged/skip）
+- 部署门禁：18 项逐项状态（ok/fail/manual_unacknowledged/skip）
 - 能力声明：<一句话，必须与 support_claim 一致>
 - 判定：GO / NO-GO　理由：<列点>
 - 未决风险与后续动作：<列点>
@@ -537,16 +560,16 @@ python tech_app/tools/dwg_deploy_gate.py --env local|ci|production [--json] [--r
 2. L4 两份真实样本通过，且证据文件（报告 + 金标）在仓外留存、哈希写进验收记录；
 3. 金标已人工审批（`approval.approved_by` 非空）；
 4. 验收记录通过 §3.2 全部校验；
-5. 部署门禁 17 项无 `fail`、无 `manual_unacknowledged`；
+5. 部署门禁 18 项无 `fail`、无 `manual_unacknowledged`；
 6. `capability().support_claim == "supported"` 且与报告"能力声明"逐字一致；
 7. 无未决 critical 风险（含性能/内存/磁盘）；
 8. 回滚开关可用且已验证（关掉后 `pipeline == "none"`）。
 
-### 10.3 当前判定：**No-Go**（实测，2026-09-20）
+### 10.3 当前判定：**No-Go**（实测，2026-09-21）
 
 | 失败条件 | 实测证据 |
 | --- | --- |
-| L1–L3 未全绿 | 第 3 批 `cad_ir` 42 红、第 5 批 `packaging_drawing_flow` 54 红 |
+| L1–L3 未全绿 | 第 1/2 批修复（ODA 修订）16 红、第 3 批 `cad_ir` 1 红（回退留痕）、第 5 批 `packaging_drawing_flow` 54 红、第 6 批本文件 52 红 |
 | 分流模块不存在 | 全仓无 `dwg_dispatch*` |
 | L4 未跑过 | 无 `CPQ_DWG_REAL_SAMPLES` 执行记录、无 E2E 报告 |
 | 金标未建立/未审批 | `tests/fixtures/dwg_acceptance/` 不存在 |
@@ -593,5 +616,6 @@ python tech_app/tools/dwg_deploy_gate.py --env local|ci|production [--json] [--r
   人工逐项确认（尤其业务字段）→ 写 `approval` → 更新验收记录 → 重新出报告。
   任何一步缺失 → `support_claim` 必须退回 `conversion_available`。
 - **样本改动**：`酒盒.dwg` / `圆盘盒.dwg` 的 sha256 变化即视为**新样本**，旧金标与旧验收记录立即失效。
-- **门禁脚本**：17 项 id 闭集只增不改；新增项必须同时更新本节与红测 `E34`。
+- **门禁脚本**：18 项 id 闭集只增不改（新增项一律追加在末尾，避免重排既有 id）；新增项必须同时
+  更新本节与红测 `E34`。
 - **每次升级 3D/转换器**：必须重跑 L2 契约测试 + L4；`three_d.status` 变化必须同步到报告。

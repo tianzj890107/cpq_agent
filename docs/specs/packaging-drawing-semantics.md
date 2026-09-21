@@ -37,6 +37,9 @@
 - LibreDWG 附带 `dwgbmp` 能导出**缩略图**：`圆盘盒.dwg → 31,878 B`、`酒盒.dwg → 31,878 B`
   （实测），内容为 `220×140`、8 位索引 **BMP**（即使文件名叫 `.png`）。**分辨率不足以读标题栏**，
   只可作为「有这么一张小图」的弱证据（§6）。
+- 注意：`dwgbmp` / `dwg2SVG` 都是 **LibreDWG 附带工具**，主转换器 ODA 27.1 **不产预览**
+  （见 `docs/specs/dwg-conversion-quality-repair.md` §3）。因此生产环境**必须同时装 LibreDWG** 才有
+  预览与视觉辅助；只装 ODA 时 `preview_available=false`，本批的模型辅助路径必须能整体关闭而不是报错。
 
 ## 2. 契约 A：模块结构与对外稳定接口
 

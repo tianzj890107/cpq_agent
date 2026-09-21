@@ -216,7 +216,10 @@ class CadIrCase(unittest.TestCase):
 
     def fake_conversion(self, *, available=True, dxf_bytes=None, conversion_id="conv0001",
                         filename="drawing.dxf", manifest_missing=False, tmp=None,
-                        status="ok", quality=None, warning_count=0, error_count=0):
+                        status="ok", quality=None, warning_count=0, error_count=0,
+                        converter_name="fake", converter_version="0.0.0",
+                        converter_role="primary", fallback_used=False,
+                        primary_failure_code=""):
         """模拟第 2 批的产物与 manifest（第 2 批未实现时本组按"依赖第 2 批"失败）。"""
         converter = self.converter()
         dxf_bytes = dxf_bytes if dxf_bytes is not None else self.fixture_bytes("rect_10x5.dxf")
@@ -233,7 +236,9 @@ class CadIrCase(unittest.TestCase):
             "drawing_version": 2, "original_filename": "酒盒.dwg",
             "source_sha256": "a" * 64, "source_format": "dwg",
             "detected_dwg_version": "AC1027",
-            "converter_name": "fake", "converter_version": "0.0.0",
+            "converter_name": converter_name, "converter_version": converter_version,
+            "converter_role": converter_role, "fallback_used": bool(fallback_used),
+            "primary_failure_code": primary_failure_code,
             "output_files": [{"role": "dxf", "filename": filename,
                               "sha256": hashlib.sha256(dxf_bytes).hexdigest(),
                               "bytes": len(dxf_bytes)}],
@@ -641,7 +646,9 @@ class ERealSamples(CadIrCase):
             content = self.sample(sample)
             manifest = converter.convert_drawing("cad-ir-realsample", sample.name, content,
                                                  adapter=adapter)
-            self.assertEqual(manifest["status"], "ok", sample.name)
+            # 干净与「有警告」都是可用产物：具体哪个转换器给哪个状态由第 2 批修复 Spec §5 判
+            # （ODA 主链路实测 stderr 为空 → ok；LibreDWG 回退 → success_with_warnings）。
+            self.assertIn(manifest["status"], {"ok", "success_with_warnings"}, sample.name)
             dxf_item = [item for item in manifest["output_files"] if item["role"] == "dxf"][0]
             dxf_path = converter.persistence.artifact_dir(
                 "cad-ir-realsample", manifest["conversion_id"]) / dxf_item["filename"]
@@ -655,7 +662,7 @@ class ERealSamples(CadIrCase):
             self.evidence_ok(ir)
 
     def test_e3_ir_cross_checks_the_conversion_manifest(self):
-        """第 2 批的质量计数必须与第 3 批解析出的统计一致（修复 Spec §7）。"""
+        """第 2 批的质量计数必须与第 3 批解析出的统计一致（第 3 批 Spec §3.9）。"""
         self.memory_persistence()
         quality = {"verified": True, "entity_count": 1, "layer_count": 6,
                    "text_count": 0, "dimension_count": 0, "block_ref_count": 0}
@@ -664,8 +671,8 @@ class ERealSamples(CadIrCase):
         ir = self.parse_conversion("cad-ir-project")
         source = ir["source"]
         self.assertEqual(source.get("conversion_status"), "success_with_warnings")
-        self.assertEqual(source.get("warning_count"), 252, "告警计数必须透传（Spec §7）")
-        self.assertEqual(source.get("error_count"), 3, "错误计数必须透传（Spec §7）")
+        self.assertEqual(source.get("warning_count"), 252, "告警计数必须透传（Spec §3.9）")
+        self.assertEqual(source.get("error_count"), 3, "错误计数必须透传（Spec §3.9）")
         self.assertTrue((source.get("quality") or {}).get("verified"))
         crosscheck = source.get("crosscheck") or {}
         self.assertTrue(crosscheck.get("match"),
@@ -684,9 +691,27 @@ class ERealSamples(CadIrCase):
         crosscheck = (ir["source"] or {}).get("crosscheck") or {}
         self.assertFalse(crosscheck.get("match"), "计数不一致必须 match=false：%r" % crosscheck)
         self.assertEqual((crosscheck.get("deltas") or {}).get("entity_count"), -98,
-                         "差值口径是 IR 侧 − manifest 侧（Spec §7）：%r" % crosscheck.get("deltas"))
+                         "差值口径是 IR 侧 − manifest 侧（Spec §3.9）：%r" % crosscheck.get("deltas"))
         codes = " ".join(str(item.get("code")) for item in ir["warnings"])
         self.assertIn("ir_manifest_mismatch", codes, "不一致不许静默：%r" % codes)
+
+    def test_e5_fallback_conversion_is_marked_in_the_ir(self):
+        self.memory_persistence()
+        self.fake_conversion(status="success_with_warnings",
+                            quality={"verified": True, "entity_count": 1, "layer_count": 6},
+                            warning_count=3, error_count=0,
+                            converter_name="libredwg", converter_version="0.14",
+                            converter_role="fallback", fallback_used=True,
+                            primary_failure_code="DWG_CONVERSION_FAILED")
+        ir = self.parse_conversion("cad-ir-project")
+        source = ir["source"]
+        self.assertEqual(source.get("converter_name"), "libredwg")
+        self.assertEqual(source.get("converter_role"), "fallback",
+                         "产出方身份必须透传（Spec §3.9）：%r" % source)
+        self.assertTrue(source.get("fallback_used"), source)
+        codes = " ".join(str(item.get("code")) for item in ir["warnings"])
+        self.assertIn("conversion_fallback_used", codes,
+                      "回退产物必须在 IR 里留痕（Spec §3.9）：%r" % ir["warnings"])
 
     def test_e2_golden_baseline_must_be_human_reviewed(self):
         missing = [name for name in ("酒盒.golden.json", "圆盘盒.golden.json")

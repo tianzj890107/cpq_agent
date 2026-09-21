@@ -368,7 +368,7 @@ class AStructureAndDeterminism(SemanticsCase):
         self.assertEqual(keys, sorted(keys), "unresolved 必须按 (field, reason) 排序（Spec §3）")
 
     def test_a7_analyze_writes_nothing(self):
-        persistence = self.memory_persistence()
+        persistence, _state = self.memory_persistence()
         calls = self.patch_model(result={})
         writer = mock.Mock(side_effect=_StopCall("analyze 不许落盘"))
         with mock.patch.object(persistence, "save_semantics", writer):
@@ -936,4 +936,3 @@ class JDependenciesAndRealSamples(SemanticsCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

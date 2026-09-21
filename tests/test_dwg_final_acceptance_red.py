@@ -123,6 +123,7 @@ GATE_ITEMS = (
     ("no_dev_machine_dependency", "auto"),
     ("ci_separates_adapter_and_real_smoke", "auto"),
     ("real_samples_e2e_passed", "manual"),
+    ("converter_chain_configured", "auto"),
 )
 LIMIT_KEYS = (
     "CAD_CONVERTER_TIMEOUT_SECONDS", "CAD_CONVERTER_MAX_OUTPUT_BYTES",
@@ -266,12 +267,17 @@ class FinalAcceptanceCase(unittest.TestCase):
                 "bytes": len(payload)}
 
     def manifest_doc(self, *, conversion_id="conv-0001", status="success_with_warnings",
-                     output_files=(), three_d=None, name="libredwg", version="0.14"):
+                     output_files=(), three_d=None, name="oda", version="27.1",
+                     converter_role="primary", fallback_used=False, primary_failure_code=""):
         doc = {
             "manifest_version": "dwg-conversion-manifest/1",
             "conversion_id": conversion_id,
             "status": status,
-            "converter": {"name": name, "version": version},
+            "converter_name": name,
+            "converter_version": version,
+            "converter_role": converter_role,
+            "fallback_used": fallback_used,
+            "primary_failure_code": primary_failure_code,
             "output_files": [dict(item) for item in output_files],
             "warnings": [],
             "error_code": "",
@@ -737,14 +743,14 @@ class BCapabilityOutput(FinalAcceptanceCase):
 # C. 验收声明（Spec §3）
 # --------------------------------------------------------------------------- #
 class CAcceptanceClaim(FinalAcceptanceCase):
-    def live(self, *, name="libredwg", version="0.14", binary="b" * 64, samples=None):
+    def live(self, *, name="oda", version="27.1", binary="b" * 64, samples=None):
         return {"converter_name": name, "converter_version": version,
                 "binary_sha256": binary,
                 "samples": dict(samples if samples is not None
                                 else {WINE_BOX: "a" * 64, ROUND_BOX: "c" * 64})}
 
     def record_env(self, *, approved_by="zhangzhen",
-                   approved_at="2026-09-20T13:00:00+08:00", version="0.14",
+                   approved_at="2026-09-20T13:00:00+08:00", version="27.1",
                    report_payload=b"# E2E report\n"):
         root = self.tmpdir("dwg-b6-acc-")
         samples_dir = root / "samples"
@@ -759,7 +765,7 @@ class CAcceptanceClaim(FinalAcceptanceCase):
         live = self.live(samples=hashes)
         record = {
             "record_version": ACCEPTANCE_RECORD_VERSION,
-            "converter": {"name": "libredwg", "version": version, "binary_sha256": "b" * 64},
+            "converter": {"name": "oda", "version": version, "binary_sha256": "b" * 64},
             "samples": [{"filename": name, "sha256": digest, "dxf_sha256": "d" * 64,
                          "preview_sha256": "e" * 64, "layer_count": 12, "entity_count": 340,
                          "non_blank": True} for name, digest in sorted(hashes.items())],
@@ -842,7 +848,7 @@ class CAcceptanceClaim(FinalAcceptanceCase):
         self.assertEqual(self.state(other, live=live, samples_dir=samples_dir)["reason"],
                          "converter_mismatch", "转换器版本不一致必须点名（Spec §3.2）")
         renamed = json.loads(json.dumps(record))
-        renamed["converter"]["name"] = "oda"
+        renamed["converter"]["name"] = "libredwg"
         self.assertEqual(self.state(renamed, live=live, samples_dir=samples_dir)["reason"],
                          "converter_mismatch", "转换器改名必须点名（Spec §3.2）")
         swapped = json.loads(json.dumps(record))
@@ -951,6 +957,11 @@ class DGoldenBaseline(FinalAcceptanceCase):
                 self.assertTrue(self.SAMPLE_KEYS <= set(doc),
                                 "%s 缺少字段 %r（Spec §4.1）"
                                 % (path.name, sorted(self.SAMPLE_KEYS - set(doc))))
+                converter = doc.get("converter") or {}
+                self.assertEqual(converter.get("role"), "primary",
+                                 "%s 的金标只许记主转换器产物（Spec §4.1）" % path.name)
+                self.assertFalse(converter.get("fallback_used"),
+                                 "%s 的金标不许把回退产物当主转换器证据（Spec §4.1）" % path.name)
                 self.assertEqual(len(str(doc["source_sha256"])), 64,
                                  "%s 的 source_sha256 必须是 sha256（Spec §4.1）" % path.name)
                 self.assertTrue(doc["forbidden_fields"],
@@ -1129,7 +1140,7 @@ class EDeployGate(FinalAcceptanceCase):
         payload, _ = self.gate_json()
         actual = tuple((item["id"], item["kind"]) for item in payload["items"])
         self.assertEqual(actual, GATE_ITEMS,
-                         "门禁清单必须与 Spec §7 的 17 项逐项一致（id/kind 都冻结）")
+                         "门禁清单必须与 Spec §7 的 18 项逐项一致（id/kind 都冻结）")
 
     def test_e35_exit_code_follows_the_verdict(self):
         payload, result = self.gate_json()

@@ -765,8 +765,12 @@ migrate({"flow_version": "packaging-drawing-flow/99"}) # → raise ValueError（
 1. **第 3 批 `cad_ir` 必须真的落地**：本批的 `cad_ir_parse` 步骤在它缺失时只能 `unavailable`。
 2. **第 4 批 `packaging_semantics` 的稳定接口对齐**：`analyze_conversion` / `apply_to_requirement`
    / `summarize` 的签名若与第 4 批最终实现不一致，第 5 批要按实际冻结名对齐（不许两边各留一套）。
-3. **真实转换器在目标环境的许可证与版本固定**（LibreDWG GPLv3 待法务拍板；34 服务器
-   `/home/data/cpq-tools/current/bin/dwg2dxf` 未接入本仓）。
+3. **真实转换器在目标环境的许可证与版本固定**：已拍板 —— 主转换器 ODA File Converter 27.1
+   （非会员限非商业用途，**业务/法务已确认可用于本 CPQ 生产环境**），回退 LibreDWG 0.14（GPLv3+）；
+   34 服务器上 ODA 走 `xvfb-run` + `squashfs-root/AppRun`，LibreDWG 走
+   `/home/data/cpq-tools/current/bin/dwg2dxf`。配置项、argv、wrapper 与回退链契约见
+   `docs/specs/dwg-conversion-quality-repair.md`（`/2`）；本批只消费 `manifest` 的
+   `converter_name`/`converter_version`/`converter_role`/`fallback_used`，不自己判断转换器。
 4. **最低收费口径裁决**：`pending` 期间 `quote_publish` 恒 `blocked` —— 这是**有意**的，
    第 6 批不能为了让 E2E 变绿而放开。
 5. **跨系统正式报价闸门**：`publishable=false` 需要报价侧真的遵守（第 6 批 L4 验）。

@@ -542,9 +542,27 @@ def load_ir(project_id: str) -> Optional[dict]:
     return _meta().get_doc(project_id, "ir")
 
 
+def save_cad_ir(project_id: str, ir_dict: dict) -> None:
+    """CAD IR（DXF 确定性解析结果，DWG 第 3 批）落自己的文档位。
+
+    与 DesignIR 的 `save_ir()` 是**两条互不相干的链路**：这里不碰 `ir` 文档位、
+    不递增 `ir_revision`、也不触发下游「设计 IR 已更新」的确认失效。
+    """
+    with _document_lock:
+        _meta().put_doc(project_id, "cad_ir", ir_dict)
+        meta = load_meta(project_id) or {}
+        meta["cad_ir_rev"] = int(meta.get("cad_ir_rev") or 0) + 1
+        meta["cad_ir_updated_at"] = _now()
+        _meta().put_meta(project_id, meta)
+
+
+def load_cad_ir(project_id: str) -> Optional[dict]:
+    return _meta().get_doc(project_id, "cad_ir")
+
+
 # 2.1 图纸解析这一步产出的全部东西。「本次任务从头开始」清的就是这一串。
 PARSE_STAGE_DOCS = (
-    "ir", "drawing_analysis", "verification_report", "model_lookup",
+    "ir", "cad_ir", "drawing_analysis", "verification_report", "model_lookup",
     "component_match", "component_match_unavailable",
     "geometry", "drawings",
     "process", "cost", "process_lookup", "cost_lookup", "ai_results",

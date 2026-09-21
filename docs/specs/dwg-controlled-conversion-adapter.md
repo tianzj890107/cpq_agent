@@ -208,13 +208,15 @@ class FakeAdapter:
 | `project_id` / `attachment_name` / `drawing_version` | 关联信息 |
 | `original_filename` | **仅 basename**，不含路径分隔符 |
 | `source_sha256` / `source_format` / `detected_dwg_version` | 来源与版本（`AC10xx`） |
-| `converter_name` / `converter_version` | 适配器身份 |
+| `converter_name` / `converter_version` | 适配器身份（**生效**的那一个：回退成功时是回退转换器） |
+| `converter_role` / `fallback_used` / `primary_failure_code` / `attempts` | 受控回退链留痕（字段含义见修复 Spec `/2` §7；无回退时 `role="primary"`、其余为空/单条 attempt） |
+| `quality` / `warning_count` / `error_count` / `warning_codes` / `diagnostics_*` | 产物质量门槛与诊断计数（修复 Spec `/2` §4/§5） |
 | `conversion_options` | 本次选项（含超时、上限、`output_dir` 无关项） |
 | `output_files` | `[{"role","filename","sha256","bytes"}]`，角色 ∈ {`dxf`,`preview`} |
 | `output_sha256` | `{filename: sha256}`，必须能从磁盘文件重算一致 |
 | `warnings` | 转换器警告（已脱敏） |
 | `started_at` / `finished_at` | 非空字符串 |
-| `status` | `ok` / `failed` |
+| `status` | `ok` / `success_with_warnings` / `failed`（修复 Spec `/2` §5 的状态闭集） |
 | `error_code` | 成功为 `None`，失败为 §4 稳定码 |
 | `is_simulated` | fake → `True` |
 | `acceptance_level` | `real` / `orchestration_only` |
@@ -290,13 +292,21 @@ class FakeAdapter:
 | 文字/尺寸/块/图层 | 保留较完整 | 保留（转换器输出为准） | 文字/尺寸丢失风险高 |
 | 2D/3D 实体 | 2D+3D，取决于输出格式 | 可出 STEP/IGES（需付费能力） | 基本只做 2D |
 | 部署方式 | 本地二进制（含 GUI 依赖，需 headless 验证） | HTTPS 上传下载，需出网 | 本地库/CLI，易装 |
-| 授权/许可证 | 需商业授权，**服务器批量转换需确认条款** | 按量收费，需账号与合规评审 | GPLv3，商用集成需法务确认 |
+| 授权/许可证 | 免费版限非商业；**已由业务/法务确认可用于本 CPQ 生产环境** | 按量收费，需账号与合规评审 | GPLv3，作为回退保留 |
 | 服务器批量 | 需确认（非交互、并发、临时目录） | 支持，但受配额/时长限制 | 支持，但产出质量需评估 |
 | 离线/联网 | 完全离线 | 必须联网（数据出境风险） | 完全离线 |
 
 - 本批**不安装**任何一个；只把接口留好。选型由用户在第二批单独拍板。
 - 未拍板时的默认配置：`CAD_CONVERTER=auto` 且探测不到任何真实适配器 → `capability().available == False`，
   `stable_error_code == "DWG_CONVERTER_NOT_INSTALLED"`，UI 显示「当前环境尚未安装 DWG 转换能力」。
+
+**9-21 拍板结论（上表的落地）**：主转换器 = **ODA File Converter 27.1**
+（`ACAD2018`/DXF + Audit/Repair），回退 = **LibreDWG 0.14**，只在主转换器明确失败时启用。
+两份真实样本实测：模型空间实体类型与数量、图层名、文字/尺寸文本、包围盒、渲染像素完全一致
+（0 像素差）；ODA 的块定义更干净、转换 stderr 为空。配置项（`DWG_CONVERTER_PROVIDER/BINARY/VERSION/
+WRAPPER`、`DWG_CONVERTER_FALLBACK_*`）、argv 形状、wrapper 校验、`auto` 顺序与回退链留痕契约
+一律以 `docs/specs/dwg-conversion-quality-repair.md`（`dwg-conversion-repair/2`）为准；本文件
+§1.1 的「本机没有任何 DWG 转换器」是 9-20 的历史取证，现状见修复 Spec §1。
 
 ## 7. 契约 E：三环境能力配置
 

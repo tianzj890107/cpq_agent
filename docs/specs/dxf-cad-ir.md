@@ -78,7 +78,9 @@ def summarize(ir: dict) -> dict               # 给 Agent/看板用的安全摘�
   "ir_hash": "<sha256 hex>",
   "source": {"kind": "dxf_2d", "project_id": "", "attachment_name": "", "source_sha256": "",
              "conversion_id": "", "dxf_artifact": "", "dxf_sha256": "",
-             "converter_name": "", "converter_version": "", "detected_dwg_version": "",
+             "converter_name": "", "converter_version": "", "converter_role": "primary",
+             "fallback_used": false, "output_version": "", "audit_enabled": false,
+             "detected_dwg_version": "",
              "drawing_version": 1},
   "parser": {"name": "ezdxf", "version": "1.4.4", "options": {...}},
   "units": {"drawing_units": "mm|inch|unitless|unknown", "unit_status": "confirmed|needs_confirmation|unknown",
@@ -171,13 +173,16 @@ def summarize(ir: dict) -> dict               # 给 Agent/看板用的安全摘�
 | 其他（`3DFACE`/`REGION`/`SOLID`/…） | `unsupported` + warning | `type`/`count`/`handles` | 只警告，**图不消失**（红测 `A11`） |
 
 - 以上任一类型解析时抛异常：该实体进 `unsupported` + warning，**不许**让整次解析失败（Spec §8 上限除外）。
-- HATCH 在真实样本里存在且边界可能不完整（LibreDWG 会打印 `Skip HATCH common handles`）：边界按
-  best-effort 登记，缺边界 → warning，不当成解析失败。
+- HATCH 在真实样本里存在且边界可能不完整（回退转换器 LibreDWG 会打印 `Skip HATCH common handles`；
+  ODA 主链路不打印该警告）：边界按 best-effort 登记，缺边界 → warning，不当成解析失败。
 
 ### 3.6 文字归一化（两种来源都要读对）
 
 - AutoCAD 系写出的 DXF 把非 ASCII 存成 `\U+XXXX` 转义；**LibreDWG 0.14 转出的 DXF 直接写明文 UTF-8**
   （实测 `酒盒.dwg → dxf` 的 MTEXT 就是 `材质...`/`350g粉灰` 这类明文）。两种都必须读对。
+- **主转换器换成 ODA 后同样两种都会出现**：实测 ODA 27.1 转出的 `酒盒.dxf` 里既有明文图层
+  `轮廓线`，也有 `_U+56FE_U+5C42 1` 这类转义残留名 —— 解析层**不得**把后者当乱码丢弃或改名
+  （红测 `A16` 的扩展：`\U+` / `_U+` 形态都要能落成可读文本或如实保留原样）。
 - `normalized_text` = 先解码 `\U+XXXX`（**存在才解**）→ 去掉 MTEXT 格式码（`\f`/`\H…;`/`\C…;`/
   花括号/`\P` 折行）→ `strip()`。
 - **禁止二次解码**：对已是明文的字符串再做一次转义解码，或让 `normalized_text` 里出现 `\U+` 字面量，
@@ -196,8 +201,32 @@ def summarize(ir: dict) -> dict               # 给 Agent/看板用的安全摘�
 - `entities` 与 `stats` **默认只统计 model space**（含块展开出来的实体，`space="model"`）。
 - `document.paper_space` 只给 `{entity_count, layouts[]}`，默认**不**并入 `entities`；
   `limits.include_paper_space=True` 时才并入（`space="paper"`）。
-- 真实样本 `酒盒.dwg` 的 model space 里 `INSERT` 为 0（719 个块定义未被引用），所以
-  **不许**把 `block_ref_total > 0` 写成真实样本的硬性验收条件。
+- 真实样本 `酒盒.dwg` 的 model space 顶层 `INSERT` 为 0（块定义未被引用：LibreDWG 0.14 转了 719 个，
+  ODA 27.1 转了 319 个，其中约 316 个是与 `DIMENSION` 对应的匿名尺寸块；两个转换器的计数口径不同），
+  所以**不许**把 `block_ref_total > 0` 写成真实样本的硬性验收条件，也不许把块定义数写死。
+
+### 3.9 与第 2 批 manifest 的交叉核对（冻结）
+
+`parse_conversion()` 必须把转换质量与**产出方身份**透传进 `source`，并做一次计数交叉核对：
+
+```json
+{"conversion_status": "ok", "warning_count": 0, "error_count": 0,
+ "converter_name": "oda", "converter_version": "27.1", "converter_role": "primary",
+ "fallback_used": false, "output_version": "ACAD2018", "audit_enabled": true,
+ "quality": {"…manifest.quality 原样透传…": 0},
+ "crosscheck": {"match": true,
+                "deltas": {"entity_count": 0, "layer_count": 0, "text_count": 0,
+                           "dimension_count": 0, "block_ref_count": 0}}}
+```
+
+- 差值口径：**IR 侧 − manifest 侧**（`deltas[K] = ir_stats[K] − quality[K]`）。
+- IR 侧统计必须是**模型空间顶层**实体/文字/标注/块引用/图层（与第 2 批 §4 同口径）；全为 0 → `match=true`。
+- `conversion_status != "ok"` → `warnings` 必须含 `conversion_degraded`（带计数）。
+- `fallback_used == true` → `warnings` 必须含 `conversion_fallback_used`（带生效 provider 与主失败码）；
+  第 4 批据此降低相关字段可信度（出处在 `docs/specs/dwg-conversion-quality-repair.md` §8）。
+- `crosscheck.match == false` → 追加 `ir_manifest_mismatch`（带 deltas），**不得**静默改数或丢掉不一致。
+- manifest 缺 `quality` / 缺 `converter_role`（老版本产物）→ 按"没有质量证据"处理：`crosscheck.match`
+  记 `null` 并加一条 `conversion_quality_missing` 警告，**不许**伪造 `match=true`。
 
 ## 4. 契约 C：单位不许猜
 
@@ -344,7 +373,8 @@ def list_irs(project_id: str) -> list[dict]         # 时间倒序
   `tech_app/tech_data/<project_id>/review/cad_ir/<ir_id>/`（含 `report.md` + `summary.json`），
   **不再生成第二套几何结论**。
 - 人工看完审查包后写 `tests/fixtures/real_baselines/<sample>.golden.json`，字段：
-  `source_sha256` / `detected_dwg_version` / `converter_name` / `layer_total` / `entity_total` /
+  `source_sha256` / `detected_dwg_version` / `converter_name` / `converter_role` / `fallback_used` /
+  `layer_total` / `entity_total` /
   `unit_status` / `closed_outline_total` / `must_have` / `must_not_have` / `unresolved` / `reviewed_by` / `reviewed_at`。
 - 红测行为：`golden` 不存在 → `skipTest("真实基线未人工复核")`；存在 → 逐条核对
   （且**只核对金标里写明的项**，不许自动更新 snapshot）。
@@ -382,6 +412,7 @@ def list_irs(project_id: str) -> list[dict]         # 时间倒序
 | `texts[].normalized_text` / `layer` | 标题栏/材料文字抽取 |
 | `units.unit_status` / `drawing_units` / `scale_to_mm` | 绝对尺寸是否可用于确认 |
 | `evidence`（`ev:*`） | 每个字段的证据引用 |
+| `source.converter_role` / `source.fallback_used` / `source.conversion_status` | 判断「这份图是主转换器产出的还是回退产出的」；回退或降级时降低字段可信度 |
 | `warnings` / `unsupported` | 不确定项与"看不出来的东西"清单 |
 | `summarize(ir)` | 第 5 批 Agent 只用摘要，不把实体明细塞进上下文 |
 

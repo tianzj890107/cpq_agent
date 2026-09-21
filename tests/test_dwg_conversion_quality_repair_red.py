@@ -1,4 +1,4 @@
-"""红测：DWG 前两批修复 —— LibreDWG 0.14 接入后的配置、质量门槛与转换状态。
+"""红测：DWG 前两批修复 —— ODA 27.1 主转换器 + LibreDWG 0.14 回退链。
 
 Spec：`docs/specs/dwg-conversion-quality-repair.md`
 前置：第 1 批 `docs/specs/dwg-file-capability-preflight.md`（错误码闭集是唯一权威）、
@@ -7,20 +7,20 @@ Spec：`docs/specs/dwg-conversion-quality-repair.md`
 本文件只覆盖「前两批的修复」，不重复第 2 批已有的安全/幂等/并发用例。
 
 分组：
-  A 配置契约（provider/binary/version/预览二进制/新错误码）· B 驱动 argv ·
+  A 配置契约（provider/binary/version/wrapper/回退/新错误码）· B 驱动 argv ·
   C 产物质量门槛（不许只看退出码）· D 诊断计数与状态机 · E 真实二进制（否 则 skip）·
-  F 审计与用户可见文案
+  F 审计与用户可见文案 · G 受控回退链（只在主转换器明确失败时回退）
 
-首次运行时**必须失败**（当前实现的实际缺口）：
-  · `DWG_CONVERTER_PROVIDER/BINARY/VERSION/PREVIEW_BINARY` 四个配置项都不存在（只认 `CAD_CONVERTER`）；
-  · `capability()` 没有 provider/binary/expected_version/version_ok/argv_verified/preview_available；
-  · manifest 没有 `quality` / `warning_count` / `error_count` / `warning_codes` / `diagnostics_*`；
-  · 状态只有 `ok` / `failed`，没有 `success_with_warnings`——所以「圆盘盒有 3 条位流错误」也报 ok；
-  · 第 1 批闭集里还没有 `DWG_CONVERTER_BINARY_UNUSABLE`。
+首版（`/1`）的缺口已实现。本版（Spec `/2`）新增的**未实现缺口**（新用例因此先失败）：
+  · ODA 驱动仍写 `argv_verified=False`、argv 只有 6 个参数（缺 `'*.dwg'`）、还用 `--version` 探测版本；
+  · `DWG_CONVERTER_WRAPPER` 与 `DWG_CONVERTER_FALLBACK_*` 全部不存在；
+  · `capability()` 没有 version_source / binary_reason / wrapper / fallback / primary_unavailable_reason；
+  · manifest 没有 fallback_used / primary_failure_code / attempts / converter_role；
+  · 主转换器失败时没有回退链（`G` 组整体先失败）。
 
 夹具策略（Spec §9）：小规模用**假 CLI 脚本**验判定逻辑（可注入警告/错误/空输出/截断/零实体），
-真实样本只用真二进制验兼容性；两类不得混为一类。假脚本模拟 LibreDWG 0.14 的 argv 形状
-（`-y -o <out> <src>`），给错形状（例如 ODA 的 `<src> <dir>`）就退出非 0。
+真实样本只用真二进制验兼容性；两类不得混为一类。假 LibreDWG 只认 `-y -o <out> <src>`，
+假 ODA 只认真机形状 `<inDir> <outDir> ACAD2018 DXF 0 1 *.dwg`，给错形状就退出非 0。
 
 禁止为了让红测转绿而修改本文件；口径变化请改 Spec。
 """
@@ -64,7 +64,10 @@ CONVERTER_KEYS = (
     "CAD_CONVERTER", "CAD_CONVERTER_ALLOW_SIMULATED", "CAD_CONVERTER_TIMEOUT_SECONDS",
     "CAD_CONVERTER_MAX_OUTPUT_BYTES", "CAD_CONVERTER_MAX_OUTPUT_FILES",
     "DWG_CONVERTER_PROVIDER", "DWG_CONVERTER_BINARY", "DWG_CONVERTER_VERSION",
-    "DWG_CONVERTER_PREVIEW_BINARY",
+    "DWG_CONVERTER_PREVIEW_BINARY", "DWG_CONVERTER_WRAPPER",
+    "DWG_CONVERTER_FALLBACK_PROVIDER", "DWG_CONVERTER_FALLBACK_BINARY",
+    "DWG_CONVERTER_FALLBACK_VERSION", "DWG_CONVERTER_FALLBACK_WRAPPER",
+    "DWG_CONVERTER_FALLBACK_PREVIEW_BINARY",
 )
 
 #: 假转换器脚本：形状与诊断都可注入。占位符用 replace 填充，避免 shell 转义地狱。
@@ -102,6 +105,7 @@ while [ $i -lt __ERR__ ]; do
   i=$((i+1))
 done
 case "${FAKE_DXF_MODE:-tidy}" in
+  fail) echo "ERROR: dwg2dxf aborted on this drawing" >&2; exit 6 ;;
   tidy) cp "$FAKE_DXF_PAYLOAD" "$OUT" ;;
   empty) : > "$OUT" ;;
   truncated) printf '0\\nSECTION\\n2\\nENTITIES\\n0\\nLWPOLYLINE\\n90\\n4\\n10\\n0.0\\n' > "$OUT" ;;
@@ -109,6 +113,51 @@ case "${FAKE_DXF_MODE:-tidy}" in
 esac
 exit 0
 """
+
+#: 假 ODA File Converter：只认真机形状 `<inDir> <outDir> ACAD2018 DXF 0 1 *.dwg`。
+#: 每次调用都用 `--` 分隔追加记录 argv（误用 `--version` 探测也会留下痕迹）。
+FAKE_ODA_CLI = """#!/bin/sh
+SIDECAR="__SIDECAR__"
+printf '%s\\n' "--" >> "$SIDECAR"
+printf '%s\\n' "$0" >> "$SIDECAR"
+for arg in "$@"; do printf '%s\\n' "$arg" >> "$SIDECAR"; done
+if [ "$1" = "--version" ]; then
+  echo "ODAFileConverter: unrecognized option '--version'" >&2
+  exit 9
+fi
+if [ "$#" -ne 7 ]; then
+  echo "ERROR: usage: ODAFileConverter inDir outDir ACAD2018 DXF 0 1 *.dwg" >&2
+  exit 3
+fi
+if [ "$3" != "ACAD2018" ] || [ "$4" != "DXF" ] || [ "$5" != "0" ] || [ "$6" != "1" ] || [ "$7" != "*.dwg" ]; then
+  echo "ERROR: unexpected ODA argument shape" >&2
+  exit 4
+fi
+if [ ! -f "$1/source.dwg" ]; then
+  echo "ERROR: input source.dwg not found in $1" >&2
+  exit 5
+fi
+i=0
+while [ $i -lt __WARN__ ]; do
+  echo "Warning: DIMASSOC 2 group code out of order" >&2
+  i=$((i+1))
+done
+i=0
+while [ $i -lt __ERR__ ]; do
+  echo "ERROR: audit reported 1 error" >&2
+  i=$((i+1))
+done
+case "${FAKE_DXF_MODE:-tidy}" in
+  fail) echo "ERROR: converter aborted on this drawing" >&2; exit 2 ;;
+  hang) sleep 30; exit 0 ;;
+  tidy) cp "$FAKE_DXF_PAYLOAD" "$2/source.dxf" ;;
+  empty) : > "$2/source.dxf" ;;
+  truncated) printf '0\\nSECTION\\n2\\nENTITIES\\n0\\nLWPOLYLINE\\n' > "$2/source.dxf" ;;
+  no_entities) printf '__NOENT__' > "$2/source.dxf" ;;
+esac
+exit 0
+"""
+
 
 #: 合法但 0 实体的 DXF（用于「结构完整但没实体」这一档）
 NO_ENTITIES_DXF = (
@@ -242,10 +291,34 @@ class RepairCase(unittest.TestCase):
         return state
 
     # ---------------------------------------------------------------- 假转换器
-    def fake_cli(self, name="dwg2dxf", mode="tidy", warnings=0, errors=0, distinct=0):
-        directory = pathlib.Path(tempfile.mkdtemp(prefix="dwg-fake-cli-"))
+    def workdir(self, prefix):
+        directory = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
         self.addCleanup(shutil.rmtree, directory, True)
-        sidecar = directory / "argv.txt"
+        return directory
+
+    def sidecar(self, script):
+        """每个假二进制一个侧车文件，记录它被调用时的 argv。"""
+        return script.parent / (script.name + ".args")
+
+    def write_script(self, script, text):
+        script.write_text(text, encoding="utf-8")
+        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return script
+
+    def set_fake_payload(self, mode):
+        payload = FIXTURES / "rect_10x5.dxf"
+        self.assertTrue(payload.exists(), "需要夹具 %s" % payload.name)
+        os.environ["FAKE_DXF_PAYLOAD"] = str(payload)
+        os.environ["FAKE_DXF_MODE"] = mode
+        self.addCleanup(os.environ.pop, "FAKE_DXF_PAYLOAD", None)
+        self.addCleanup(os.environ.pop, "FAKE_DXF_MODE", None)
+
+    def fake_cli(self, name="dwg2dxf", mode="tidy", warnings=0, errors=0, distinct=0,
+                 directory=None):
+        """假 LibreDWG CLI：只认 `-y -o <out> <src>`，给错形状就退出非 0。"""
+        directory = pathlib.Path(directory) if directory is not None else self.workdir("dwg-fake-cli-")
+        directory.mkdir(parents=True, exist_ok=True)
+        sidecar = self.sidecar(directory / name)
         payload = FIXTURES / "rect_10x5.dxf"
         self.assertTrue(payload.exists(), "需要夹具 %s" % payload.name)
         text = (FAKE_CLI.replace("__SIDECAR__", str(sidecar))
@@ -254,13 +327,37 @@ class RepairCase(unittest.TestCase):
                 .replace("__ERR__", str(int(errors)))
                 .replace("__NOENT__", NO_ENTITIES_DXF))
         script = directory / name
-        script.write_text(text, encoding="utf-8")
-        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        os.environ["FAKE_DXF_PAYLOAD"] = str(payload)
-        os.environ["FAKE_DXF_MODE"] = mode
-        self.addCleanup(os.environ.pop, "FAKE_DXF_PAYLOAD", None)
-        self.addCleanup(os.environ.pop, "FAKE_DXF_MODE", None)
+        self.write_script(script, text)
+        self.set_fake_payload(mode)
         return script
+
+    def fake_oda_cli(self, mode="tidy", warnings=0, errors=0, directory=None):
+        """假 ODA File Converter：只认真机形状 `<inDir> <outDir> ACAD2018 DXF 0 1 *.dwg`。"""
+        name = "ODAFileConverter"
+        directory = pathlib.Path(directory) if directory is not None else self.workdir("dwg-fake-oda-")
+        directory.mkdir(parents=True, exist_ok=True)
+        sidecar = self.sidecar(directory / name)
+        text = (FAKE_ODA_CLI.replace("__SIDECAR__", str(sidecar))
+                .replace("__WARN__", str(int(warnings)))
+                .replace("__ERR__", str(int(errors)))
+                .replace("__NOENT__", NO_ENTITIES_DXF))
+        script = directory / name
+        self.write_script(script, text)
+        self.set_fake_payload(mode)
+        return script
+
+    def fake_wrapper(self, name="xvfb-run"):
+        """假包装前缀（xvfb-run）：记录一次调用，丢掉前缀项后 exec 真正的转换器。"""
+        directory = self.workdir("dwg-fake-wrapper-")
+        script = directory / name
+        text = ('#!/bin/sh\nprintf \'%s\\n\' "$@" > "__MARKER__"\nshift\nexec "$@"\n'
+                .replace("__MARKER__", str(self.sidecar(script))))
+        return self.write_script(script, text)
+
+    def prepend_path(self, directory):
+        saved = os.environ.get("PATH", "")
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        os.environ["PATH"] = "%s%s%s" % (directory, os.pathsep, saved)
 
     def fake_svg(self):
         """假 dwg2SVG：只把 SVG 写到 stdout（真实工具就是这么用的，没有 -o）。"""
@@ -273,10 +370,28 @@ class RepairCase(unittest.TestCase):
         return script
 
     def fake_argv(self, script):
-        sidecar = script.parent / "argv.txt"
+        """扁平 argv（假 LibreDWG 每次调用都会截断侧车文件）。"""
+        sidecar = self.sidecar(script)
         if not sidecar.exists():
             self.fail("假转换器没有被调用（没有 argv 记录）")
         return [line for line in sidecar.read_text(encoding="utf-8").splitlines() if line]
+
+    def fake_calls(self, script):
+        """按 `--` 分隔读回「每次调用的 argv 列表」（假 ODA 用追加 + 分隔符）。"""
+        sidecar = self.sidecar(script)
+        if not sidecar.exists():
+            return []
+        calls, current = [], []
+        for line in sidecar.read_text(encoding="utf-8").splitlines():
+            if line == "--":
+                if current:
+                    calls.append(current)
+                current = []
+            elif line:
+                current.append(line)
+        if current:
+            calls.append(current)
+        return calls
 
     def artifact_path(self, state, manifest, item):
         return (state["root"] / str(manifest["project_id"])
@@ -293,6 +408,31 @@ class RepairCase(unittest.TestCase):
         env = {"DWG_CONVERTER_PROVIDER": "libredwg",
                "DWG_CONVERTER_BINARY": self.real_binary(),
                "DWG_CONVERTER_VERSION": "0.14"}
+        preview = self.real_preview()
+        if preview:
+            env["DWG_CONVERTER_PREVIEW_BINARY"] = preview
+        return env
+
+    #: ODA 在受支持平台上的已知安装位置（本机 macOS / 34 服务器）。
+    ODA_CANDIDATES = (
+        "/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter",
+        "/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun",
+    )
+
+    def real_oda_binary(self):
+        found = shutil.which("ODAFileConverter")
+        if found:
+            return found
+        for path in self.ODA_CANDIDATES:
+            if os.access(path, os.X_OK):
+                return path
+        return ""
+
+    def oda_env(self):
+        env = {"DWG_CONVERTER_PROVIDER": "oda",
+               "DWG_CONVERTER_BINARY": self.real_oda_binary(),
+               "DWG_CONVERTER_VERSION": "27.1",
+               "DWG_CONVERTER_FALLBACK_PROVIDER": "none"}
         preview = self.real_preview()
         if preview:
             env["DWG_CONVERTER_PREVIEW_BINARY"] = preview
@@ -389,9 +529,73 @@ class AConfiguration(RepairCase):
             self.assertEqual(table[code].get("retryable"), retryable, code)
             self.assertTrue(table[code].get("message"), "%s 必须有中文文案" % code)
 
+    def test_a8_auto_probes_oda_before_libredwg(self):
+        directory = self.workdir("dwg-probe-")
+        self.fake_cli(directory=directory)
+        self.fake_oda_cli(directory=directory)
+        self.prepend_path(directory)
+        cap = self.capability(DWG_CONVERTER_PROVIDER="auto", DWG_CONVERTER_VERSION="27.1",
+                              DWG_CONVERTER_FALLBACK_PROVIDER="none")
+        self.assertTrue(cap.get("available"), cap)
+        self.assertEqual(cap.get("provider"), "oda",
+                         "auto 必须以 ODA 为主转换器（Spec §2.4）：%r" % cap)
+        self.assertTrue(str(cap.get("binary") or "").endswith("ODAFileConverter"), cap)
+
+    def test_a9_wrapper_is_prepended_to_the_converter_argv(self):
+        self.memory_persistence()
+        script = self.fake_oda_cli()
+        wrapper = self.fake_wrapper()
+        marker = self.sidecar(wrapper)
+        self.use_env(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                     DWG_CONVERTER_VERSION="27.1",
+                     DWG_CONVERTER_WRAPPER="%s -a" % wrapper,
+                     DWG_CONVERTER_FALLBACK_PROVIDER="none")
+        cap = self.pkg().capability()
+        self.assertEqual(cap.get("wrapper"), [str(wrapper), "-a"],
+                         "capability 必须如实返回生效的 wrapper（Spec §2.7）：%r" % cap)
+        manifest = self.convert()
+        self.assertIn(manifest.get("status"), STATUSES, manifest)
+        self.assertTrue(marker.exists(), "wrapper 必须被调用（逐项排在 exe 之前）：%r" % cap)
+        calls = self.fake_calls(script)
+        self.assertEqual(len(calls), 1, "只应发生一次转换调用：%r" % calls)
+        self.assertEqual(calls[0][0], str(script),
+                         "wrapper 之后必须紧跟配置的转换器：%r" % calls[0])
+        self.assertEqual(len(calls[0]), 8, calls[0])
+
+    def test_a10_illegal_wrapper_is_rejected(self):
+        script = self.fake_oda_cli()
+        cap = self.capability(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                              DWG_CONVERTER_VERSION="27.1",
+                              DWG_CONVERTER_WRAPPER="xvfb-run -a; rm -rf /")
+        self.assertFalse(cap.get("available"), "含 shell 元字符的 wrapper 必须被拒：%r" % cap)
+        self.assertEqual(cap.get("stable_error_code"), "DWG_CONVERTER_BINARY_UNUSABLE", cap)
+        self.assertEqual(cap.get("binary_reason"), "wrapper_invalid", cap)
+        error = self.expect_error("DWG_CONVERTER_BINARY_UNUSABLE", self.convert)
+        self.assertEqual((error.detected or {}).get("binary_reason"), "wrapper_invalid")
+
+    def test_a11_oda_version_must_be_declared_and_is_never_probed(self):
+        script = self.fake_oda_cli()
+        undeclared = self.capability(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                                     DWG_CONVERTER_FALLBACK_PROVIDER="none")
+        self.assertTrue(undeclared.get("available"),
+                        "ODA 二进制可用就不能因为「探测不到版本」说不可用：%r" % undeclared)
+        self.assertFalse(undeclared.get("version_ok"), undeclared)
+        self.assertEqual(undeclared.get("version_source"), "unverifiable", undeclared)
+        self.assertEqual(undeclared.get("converter_version"), "", undeclared)
+        self.assertIn("版本", str(undeclared.get("message") or ""))
+        self.assertEqual(self.fake_calls(script), [],
+                         "ODA 不支持 --version，探测不许执行子进程（Spec §2.5）")
+        declared = self.capability(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                                   DWG_CONVERTER_VERSION="27.1",
+                                   DWG_CONVERTER_FALLBACK_PROVIDER="none")
+        self.assertTrue(declared.get("version_ok"), declared)
+        self.assertEqual(declared.get("converter_version"), "27.1", declared)
+        self.assertEqual(declared.get("version_source"), "config_declared", declared)
+        self.assertEqual(self.fake_calls(script), [], "ODA 的版本探测不许执行子进程")
+
 
 # --------------------------------------------------------------------------- #
-# B. 驱动 argv（按驱动分派，未验证的驱动不许声称已验证）
+# B. 驱动 argv（按驱动分派；ODA 已真机验证，未经真机验证的驱动不许声称已验证）
 # --------------------------------------------------------------------------- #
 class BDriverArgv(RepairCase):
     def test_b1_libredwg_argv_shape_is_exact(self):
@@ -407,13 +611,16 @@ class BDriverArgv(RepairCase):
         self.assertTrue(argv[2].endswith("converted.dxf"), argv)
         self.assertTrue(argv[3].endswith("source.dwg"), "输入必须用固定名 source.dwg：%r" % argv)
 
-    def test_b2_oda_driver_is_never_claimed_verified(self):
-        script = self.fake_cli(name="ODAFileConverter")
-        cap = self.capability(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script))
+    def test_b2_oda_driver_is_verified_and_never_probed_for_a_version(self):
+        script = self.fake_oda_cli()
+        cap = self.capability(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                              DWG_CONVERTER_VERSION="27.1",
+                              DWG_CONVERTER_FALLBACK_PROVIDER="none")
         self.assertEqual(cap.get("provider"), "oda")
-        self.assertFalse(cap.get("argv_verified"),
-                         "ODA/Teigha 本批没有真机验证，argv_verified 必须为 false：%r" % cap)
-        self.assertNotIn("已验证", str(cap.get("message") or ""))
+        self.assertTrue(cap.get("argv_verified"),
+                        "ODA 已按 27.1 真机实测（两份样本转换成功），argv_verified 必须为 true：%r" % cap)
+        self.assertEqual(self.fake_calls(script), [],
+                         "ODA 不支持 `--version`，驱动不许拿它探测版本（Spec §2.5）")
 
     def test_b3_preview_uses_the_svg_tool(self):
         state = self.memory_persistence()
@@ -434,6 +641,29 @@ class BDriverArgv(RepairCase):
         cap = self.capability(DWG_CONVERTER_PROVIDER="libredwg", DWG_CONVERTER_BINARY="/bin/sh")
         self.assertFalse(cap.get("available"), "不许把解释器当转换器：%r" % cap)
         self.assertEqual(cap.get("stable_error_code"), "DWG_CONVERTER_BINARY_UNUSABLE")
+
+    def test_b5_oda_argv_shape_is_exact(self):
+        self.memory_persistence()
+        script = self.fake_oda_cli()
+        self.use_env(DWG_CONVERTER_PROVIDER="oda", DWG_CONVERTER_BINARY=str(script),
+                     DWG_CONVERTER_VERSION="27.1", DWG_CONVERTER_FALLBACK_PROVIDER="none")
+        manifest = self.convert()
+        self.assertIn(manifest.get("status"), STATUSES, manifest)
+        calls = self.fake_calls(script)
+        self.assertEqual(len(calls), 1, "ODA 只许被调用一次（不许先探测版本）：%r" % calls)
+        argv = calls[0]
+        self.assertEqual(len(argv), 8, "argv 必须是 exe + 6 个位置参数：%r" % argv)
+        self.assertEqual(argv[0], str(script), argv)
+        self.assertTrue(pathlib.Path(argv[1]).is_dir(), argv)
+        self.assertTrue(pathlib.Path(argv[2]).is_dir(), argv)
+        self.assertEqual(argv[3:], ["ACAD2018", "DXF", "0", "1", "*.dwg"],
+                         "ODA 位置参数必须逐字一致（含 '*.dwg' 过滤）：%r" % argv)
+        self.assertEqual(manifest.get("converter_name"), "oda", manifest)
+        self.assertEqual(manifest.get("converter_version"), "27.1", manifest)
+        quality = manifest.get("quality") or {}
+        self.assertEqual(quality.get("output_version"), "ACAD2018", quality)
+        self.assertTrue(quality.get("audit_enabled"),
+                        "ODA 开了 Audit/Repair 就必须留痕（Spec §4）：%r" % quality)
 
 
 # --------------------------------------------------------------------------- #
@@ -593,6 +823,53 @@ class ERealBinary(RepairCase):
             data = self.artifact_path(state, manifest, item).read_bytes()
             self.assertGreater(len(data), 0, "预览不得为空")
 
+    def test_e5_real_oda_converts_both_samples_cleanly(self):
+        binary = self.real_oda_binary()
+        if not binary:
+            self.skipTest("本机没有 ODA File Converter：ODA 真实转换未验证")
+        state = self.memory_persistence()
+        for path in (WINE_BOX, ROUND_BOX):
+            self.use_env(**self.oda_env())
+            manifest = self.convert(path.read_bytes(), filename=path.name)
+            self.assertEqual(manifest.get("status"), "ok",
+                             "ODA 实测 stderr 为空，%s 不许被判成有损：%r"
+                             % (path.name, manifest.get("warning_codes")))
+            self.assertEqual(manifest.get("warning_count"), 0, path.name)
+            self.assertEqual(manifest.get("error_count"), 0, path.name)
+            quality = manifest.get("quality") or {}
+            self.assertTrue(quality.get("verified"), path.name)
+            self.assertEqual(quality.get("output_version"), "ACAD2018", path.name)
+            self.assertTrue(quality.get("audit_enabled"), path.name)
+            self.assertGreater(int(quality.get("entity_count") or 0), 0, path.name)
+            self.assertGreater(int(quality.get("layer_count") or 0), 0, path.name)
+            dxf = [item for item in manifest["output_files"] if item["role"] == "dxf"]
+            self.assertTrue(dxf, "%s 必须有 DXF 产物：%r" % (path.name, manifest["output_files"]))
+            self.assertGreater(
+                len(self.artifact_path(state, manifest, dxf[0]).read_bytes()), 0, path.name)
+
+    def test_e6_real_fallback_chain_runs_when_the_primary_is_missing(self):
+        fallback = self.real_binary()
+        if not fallback:
+            self.skipTest("本机没有 LibreDWG dwg2dxf：真实回退链未验证")
+        self.memory_persistence()
+        self.use_env(DWG_CONVERTER_PROVIDER="oda",
+                     DWG_CONVERTER_BINARY="/nonexistent/cpq-tools/ODAFileConverter",
+                     DWG_CONVERTER_VERSION="27.1",
+                     DWG_CONVERTER_FALLBACK_PROVIDER="libredwg",
+                     DWG_CONVERTER_FALLBACK_BINARY=fallback,
+                     DWG_CONVERTER_FALLBACK_VERSION="0.14")
+        manifest = self.convert(WINE_BOX.read_bytes(), filename=WINE_BOX.name)
+        self.assertTrue(manifest.get("fallback_used"),
+                        "主转换器不可用时必须走回退链（Spec §7）：%r" % manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "DWG_CONVERTER_BINARY_UNUSABLE",
+                         manifest)
+        self.assertEqual(manifest.get("converter_role"), "fallback", manifest)
+        self.assertEqual(manifest.get("converter_name"), "libredwg", manifest)
+        self.assertIn(manifest.get("status"), {"ok", "success_with_warnings"}, manifest)
+        quality = manifest.get("quality") or {}
+        self.assertTrue(quality.get("verified"), quality)
+        self.assertGreater(int(quality.get("entity_count") or 0), 0, quality)
+
 
 # --------------------------------------------------------------------------- #
 # F. 审计与用户可见文案
@@ -634,6 +911,138 @@ class FAuditAndCopy(RepairCase):
         blob = json.dumps(latest, ensure_ascii=False, default=str)
         self.assertNotIn("无损", blob)
         self.assertNotIn("成功", blob)
+
+# --------------------------------------------------------------------------- #
+# G. 受控回退链（只在主转换器明确失败时回退，Spec §7）
+# --------------------------------------------------------------------------- #
+class GFallbackChain(RepairCase):
+    def chain(self, *, state=None, primary_mode="tidy", fallback_mode="tidy",
+              primary_binary=None, fallback_provider="libredwg", **extra):
+        """建一条 ODA(主) → LibreDWG(回退) 的链；`primary_binary` 覆盖主二进制路径。"""
+        state = state if state is not None else self.memory_persistence()
+        fallback = self.fake_cli(name="dwg2dxf", mode=fallback_mode)
+        primary = None
+        if primary_binary is None:
+            primary = self.fake_oda_cli(mode=primary_mode)
+            primary_binary = str(primary)
+        env = {"DWG_CONVERTER_PROVIDER": "oda", "DWG_CONVERTER_BINARY": primary_binary,
+               "DWG_CONVERTER_VERSION": "27.1",
+               "DWG_CONVERTER_FALLBACK_PROVIDER": fallback_provider,
+               "DWG_CONVERTER_FALLBACK_BINARY": str(fallback),
+               "DWG_CONVERTER_FALLBACK_VERSION": "0.14"}
+        env.update(extra)
+        self.use_env(**env)
+        return state, primary, fallback
+
+    def test_g1_primary_success_never_touches_the_fallback(self):
+        _state, primary, fallback = self.chain()
+        manifest = self.convert()
+        self.assertEqual(manifest.get("status"), "ok", manifest)
+        self.assertFalse(manifest.get("fallback_used"), manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "", manifest)
+        self.assertEqual(manifest.get("converter_role"), "primary", manifest)
+        self.assertEqual(manifest.get("converter_name"), "oda", manifest)
+        attempts = manifest.get("attempts")
+        self.assertEqual(len(attempts or []), 1, "主成功不该有多余跳次：%r" % attempts)
+        self.assertEqual((attempts or [{}])[0].get("role"), "primary", attempts)
+        self.assertFalse(self.sidecar(fallback).exists(), "主转换器成功时不许调用回退转换器")
+        self.assertEqual(len(self.fake_calls(primary)), 1, "主转换器只许被调用一次")
+
+    def test_g2_nonzero_exit_falls_back_and_is_recorded(self):
+        state, primary, fallback = self.chain(primary_mode="fail")
+        manifest = self.convert()
+        self.assertTrue(manifest.get("fallback_used"), manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "DWG_CONVERSION_FAILED", manifest)
+        self.assertEqual(manifest.get("converter_role"), "fallback", manifest)
+        self.assertEqual(manifest.get("converter_name"), "libredwg", manifest)
+        self.assertEqual(manifest.get("converter_version"), "0.14", manifest)
+        self.assertIn(manifest.get("status"), {"ok", "success_with_warnings"}, manifest)
+        attempts = manifest.get("attempts") or []
+        self.assertEqual(len(attempts), 2, attempts)
+        self.assertEqual(attempts[0].get("role"), "primary", attempts)
+        self.assertEqual(attempts[0].get("error_code"), "DWG_CONVERSION_FAILED", attempts)
+        self.assertEqual(attempts[1].get("role"), "fallback", attempts)
+        names = [str(item.get("filename")) for item in manifest["output_files"]]
+        self.assertIn("converted.dxf", names, names)
+        self.assertEqual(len(self.fake_calls(primary)), 1, "主转换器只许被调用一次")
+        self.assertTrue(self.sidecar(fallback).exists(), "回退转换器必须被调用")
+        blob = json.dumps(state["audits"], ensure_ascii=False, default=str)
+        self.assertIn("fallback", blob, "回退必须留审计（Spec §7.2）：%r" % state["audits"])
+
+    def test_g3_timeout_falls_back_and_is_recorded(self):
+        _state, _primary, _fallback = self.chain(primary_mode="hang",
+                                                 CAD_CONVERTER_TIMEOUT_SECONDS="1")
+        manifest = self.convert()
+        self.assertTrue(manifest.get("fallback_used"), manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "DWG_CONVERSION_TIMEOUT", manifest)
+        self.assertEqual(manifest.get("converter_role"), "fallback", manifest)
+        self.assertIn(manifest.get("status"), {"ok", "success_with_warnings"}, manifest)
+
+    def test_g4_invalid_primary_output_falls_back_without_publishing_it(self):
+        _state, _primary, _fallback = self.chain(primary_mode="empty")
+        manifest = self.convert()
+        self.assertTrue(manifest.get("fallback_used"), manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "DWG_CONVERTER_OUTPUT_INVALID",
+                         manifest)
+        names = [str(item.get("filename")) for item in manifest["output_files"]]
+        self.assertIn("converted.dxf", names, names)
+        self.assertNotIn("source.dxf", names, "主转换器失败留下的半成品不许进产物：%r" % names)
+
+    def test_g5_both_failures_surface_the_primary_code_and_both_attempts(self):
+        state, _primary, _fallback = self.chain(primary_mode="fail", fallback_mode="fail")
+        error = self.expect_error("DWG_CONVERSION_FAILED", self.convert)
+        detected = error.detected or {}
+        self.assertIn("primary", detected, "必须能看出主转换器为什么失败：%r" % detected)
+        self.assertIn("fallback", detected, "必须能看出回退也失败了：%r" % detected)
+        self.assertEqual((detected.get("primary") or {}).get("error_code"),
+                         "DWG_CONVERSION_FAILED", detected)
+        self.assertEqual((detected.get("fallback") or {}).get("error_code"),
+                         "DWG_CONVERSION_FAILED", detected)
+        stored = list(state["manifests"].values())
+        self.assertEqual(len(stored), 1, stored)
+        manifest = stored[0]
+        self.assertEqual(manifest.get("status"), "failed", manifest)
+        self.assertTrue(manifest.get("fallback_used"), manifest)
+        self.assertEqual(manifest.get("primary_failure_code"), "DWG_CONVERSION_FAILED", manifest)
+        self.assertEqual(len(manifest.get("attempts") or []), 2, manifest.get("attempts"))
+        self.assertEqual(manifest.get("output_files"), [], manifest)
+
+    def test_g6_fallback_provider_none_disables_the_chain(self):
+        state, _primary, fallback = self.chain(primary_mode="fail", fallback_provider="none")
+        self.expect_error("DWG_CONVERSION_FAILED", self.convert)
+        self.assertFalse(self.sidecar(fallback).exists(), "回退被关闭后不许调用回退转换器")
+        stored = list(state["manifests"].values())
+        self.assertEqual(len(stored), 1, stored)
+        self.assertFalse(stored[0].get("fallback_used"), stored[0])
+        self.assertEqual(stored[0].get("primary_failure_code"), "", stored[0])
+        self.assertEqual(len(stored[0].get("attempts") or []), 1, stored[0].get("attempts"))
+
+    def test_g7_cache_never_reuses_a_fallback_result_as_the_primary(self):
+        state, _primary, _fallback = self.chain(
+            primary_binary="/nonexistent/cpq-tools/ODAFileConverter")
+        first = self.convert()
+        self.assertTrue(first.get("fallback_used"), first)
+        self.assertEqual(first.get("converter_role"), "fallback", first)
+        _state2, primary, _fallback2 = self.chain(state=state)
+        second = self.convert()
+        self.assertEqual(second.get("converter_role"), "primary",
+                         "主转换器恢复后必须重新调用主转换器，不许复用回退产物：%r" % second)
+        self.assertFalse(second.get("fallback_used"), second)
+        self.assertEqual(len(self.fake_calls(primary)), 1, "主转换器必须真的被调用")
+        self.assertEqual(first.get("conversion_id"), second.get("conversion_id"),
+                         "回退不许分裂产物目录（Spec §7.3）")
+
+    def test_g8_configuration_errors_never_fall_back(self):
+        state, primary, fallback = self.chain(DWG_CONVERTER_WRAPPER="xvfb-run -a; rm -rf /")
+        error = self.expect_error("DWG_CONVERTER_BINARY_UNUSABLE", self.convert)
+        self.assertEqual((error.detected or {}).get("binary_reason"), "wrapper_invalid",
+                         error.detected)
+        self.assertFalse(self.sidecar(primary).exists(), "配置错误时不许调用主转换器")
+        self.assertFalse(self.sidecar(fallback).exists(), "配置错误时不许回退（Spec §7.1）")
+        stored = list(state["manifests"].values())
+        self.assertEqual(len(stored), 1, stored)
+        self.assertFalse(stored[0].get("fallback_used"), stored[0])
+        self.assertEqual(len(stored[0].get("attempts") or []), 1, stored[0].get("attempts"))
 
 
 if __name__ == "__main__":
