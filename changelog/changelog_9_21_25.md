@@ -8119,3 +8119,54 @@ skip：未提供样本项目 id，跳过下游连通自检
   未改任何 `tests/` 文件，**未引入任何新依赖**。
 - 34 上生产数据目录：**0 个项目、0 份零件文档**，与跑之前逐项一致；未连数据库、未写 PG。
 - 未创建 MR / tag / Release；能力声明仍是 **L2（可信）**（`parts_demo_script` 未签字）。
+
+## 248. 验收已完成实现并部署 34：快速报价批 1–5 与图纸零件下游闭环（7312eca）（9-21，Codex 执行）
+
+本次只验收**已经完成**的实现，不包含并行会话正在开发的批 6 / 7 / 8（案例库就绪度、统一解析服务、
+差异价规则权威化）。结论：已完成件**复验通过并部署**，未产生新的代码提交（`7312eca` 已含全部
+已完成实现，工作区无本任务的未提交改动）。
+
+### 验收
+
+- 全量回归：`Ran 4137 tests` → `failures=19 errors=0 skipped=18`。19 条逐条对齐既有基线（14 条
+  `process_row_running_info_and_fold_red`、2 条 `tech_model_call_row_merged`、2 条
+  `cpq_eval_ci_contract`、1 条 `tech_params_autofill_and_soft_gates`），**零新增**。
+- 范围内红测复跑（含并行会话刚改过的 `cpq_quick_quote_case.py`）：快速报价批 1–5 五套 + 零件提取
+  `Ran 243 tests ... OK (skipped=1)`。
+- 提交与推送：本任务无新增代码改动；`ytbz` 的 GitLab 与 GitHub 双远端均已在 `7312eca`
+  （`git ls-remote` 逐条回读一致）。
+
+### 部署（34 上 `bash scripts/deploy_34_bare.sh ytbz`）
+
+八步全过，`HEAD 7312eca → 7312eca`（无新提交，属幂等重部署）：
+
+- 第 4 步 `health：status=ok`（8010 pid=4096976），启动 PATH 含 xvfb 目录 ✓；
+- 第 5 步两份真样本均由主转换器完成：`酒盒.dwg` 6711 entities / 8 layers、`圆盘盒.dwg` 3457 / 32，
+  两侧均 `converter_role=primary`、`fallback_used=false`、ODA 27.1 / ACAD2018、dxf + preview 齐全；
+- 第 6 步未提供 `CPQ_PARTS_PROJECT_ID`，仍 `skip`（预期）；
+- 第 6b 步隔离端到端自检：`酒盒.dwg` 八步 8/8 completed、零件 64 件（`closed_ratio=0.797`）、
+  可算 4 / 可挤出 1；`圆盘盒.dwg` 八步 8/8、9 件（`0.889`）、可算 1 / 可挤出 7；
+  `{"isolated_downstream_selfcheck": "ok", "problems": []}`；隔离目录跑完即删，生产数据目录
+  `meta.json` 数量 **0 → 0**（未写生产数据）。
+
+### 部署后复验（本机打 34）
+
+- `/` → 200、`/api/health` → `status=ok`、`/quick-quote-panel.js` → 200；
+- 快速报价案例路由挂在 `/agents/quote/api/quick-quote/cases`：**无登录票 401、有票可达**；同一路径
+  在 `/api/quick-quote/cases` 上回 404，因为 8010 把 `/api/*` 反代给 8012 技术工艺 —— 面板默认基址
+  就是 `/agents/quote`（`quick-quote-panel.js` 的 `agentBase()`），**不是缺口**；
+- 快速报价差异价、字段工作区、案例检索前端脚本均可从 8010 正常取到。
+
+### 数据侧现状（只读核对共享 PG，仅供演示前判断）
+
+- 标准报价案例 **2 条**：`QQ-YT-DWG-WINE-700ML`、`QQ-YT-DWG-ROUND-10PC`（## 244 从两份 DWG 实样
+  沉淀），两条均为 `draft` 且缺必需字段「标准单价」 → `library_readiness` 判 **0 条可用于快速报价**；
+  面板会如实显示「2 条案例，0 条可用于快速报价」并给补齐路径，不会静默拿 draft 案例出价。
+- 差异价规则仍是 demo 口径（`QQQ-DEMO-*`，带「演示数据，出价前必须换权威费率」告警）。
+
+### 边界
+
+- 只追加本条目；未改任何业务实现与 `tests/` 文件（并行会话在工作区的未提交改动**未被暂存、未被
+  提交**）；未创建 MR / tag / Release；未删除、迁移或清空任何数据；未写 PG 业务表（仅只读查询）。
+- 能力声明口径不变：**DWG 编排能力完成，真实转换能力未验收**；`parts_demo_script` 未签字前仍是
+  **L2（可信）**。
