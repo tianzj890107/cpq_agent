@@ -31,7 +31,7 @@ from ..models.summary import SummaryDoc
 from ..models.workflow import ProcessReport, ReportRecipient, WorkflowReview
 from ..storage import store
 from ..time_utils import now_cst_str
-from . import auth, cpq_bridge, summary as summary_svc
+from . import auth, cpq_bridge, manufacturing_snapshot, summary as summary_svc
 
 # 3.1 允许 Agent / 看板改写的报告字段；单据号、编制人、审核发布留痕、版本号一律服务端维护。
 ALLOWED_REPORT_FIELDS = (
@@ -107,14 +107,93 @@ def digest_value(value) -> str:
 
 
 def report_source_payload(snapshot: dict) -> dict:
-    """报告审核依据只取业务数据，排除会随审计写入变化的项目 meta。"""
+    """报告审核依据只取业务数据，排除会随审计写入变化的项目 meta。
+
+    包装项目没有 legacy `steps`，它的依据是统一制造快照（零件 / BOM / 工艺路线 /
+    成本），所以那一份也进摘要 —— 否则包装报告会拿着空 IR 生成、0 零件 0 成本
+    （Spec `e2e-packaging-downstream-handoff-report.md` §5）。
+    """
     source = snapshot or {}
+    manufacturing = source.get("manufacturing") or {}
     return {
         "device_name": source.get("device_name"),
         "ir": source.get("ir") or {},
         "steps": source.get("steps") or {},
         "summary": source.get("summary") or {},
+        "manufacturing": manufacturing,
+        "source_fingerprints": manufacturing.get("source_fingerprints") or {},
     }
+
+
+def manufacturing_source(project_id: str) -> dict:
+    """这次报告依据的统一制造快照（Spec §2）。
+
+    `loaded_at` 是"什么时候读的"，不是业务依据 —— 摘进来会让同一份数据的摘要每次
+    都变，`source_is_current()` 就永远为假。指纹仍按业务数据算，不含它。
+    """
+    snapshot = manufacturing_snapshot.load_snapshot(project_id)
+    snapshot.pop("loaded_at", None)
+    return snapshot
+
+
+def packaging_conclusion(snapshot: dict) -> str:
+    """包装项目的报告结论句：如实说清零件/工序/成本与缺口，不留"尚未接入"式占位。"""
+    summary = manufacturing_snapshot.summarize(snapshot or {})
+    cost = (snapshot or {}).get("cost") or {}
+    parts_total = summary.get("parts_total") or 0
+    process_total = summary.get("process_total") or 0
+    cost_total = summary.get("cost_total") or 0.0
+    gaps_total = summary.get("gaps_total") or 0
+    text = ("包装链路已出零件 %d 件、工序 %d 道，成本合计 %s CNY"
+            % (parts_total, process_total, cost_total))
+    if summary.get("cost_ready") and gaps_total:
+        text += "；仍有 %d 项缺口，报价前需补齐或由业务签字带缺口放行" % gaps_total
+    elif not summary.get("cost_ready"):
+        text += "；成本尚未测算完成"
+    else:
+        text += "；成本已闭合，无待补缺口"
+    try:
+        estimate_id = str(cost.get("estimate_id") or "")
+    except Exception:                       # noqa: BLE001
+        estimate_id = ""
+    if estimate_id:
+        text += "（estimate_id=%s）" % estimate_id
+    return text
+
+
+def _aggregate_with_snapshot(project_id: str) -> dict:
+    """`summary.aggregate()` + 统一制造快照：报告与来源一致性判定必须用同一份。"""
+    aggregate = summary_svc.aggregate(project_id)
+    aggregate["manufacturing"] = manufacturing_source(project_id)
+    return aggregate
+
+
+def packaging_report_lines(snapshot: dict) -> dict:
+    """包装项目的报告要点/风险（Spec §2.1）：缺口如实展示，不以"IR 为空"代替。"""
+    payload = snapshot or {}
+    summary = manufacturing_snapshot.summarize(payload)
+    if not summary.get("source") and not summary.get("ready"):
+        return {"highlights": [], "risks": []}
+    cost = payload.get("cost") or {}
+    highlights: list = []
+    if summary.get("parts_total"):
+        highlights.append("零件 %d 件" % summary["parts_total"])
+    if summary.get("bom_items"):
+        highlights.append("BOM %d 行" % summary["bom_items"])
+    if summary.get("process_total"):
+        highlights.append("工序 %d 道" % summary["process_total"])
+    if summary.get("cost_ready"):
+        highlights.append("成本合计 %s CNY" % summary.get("cost_total"))
+    risks: list = []
+    for gap in (cost.get("gaps") or []):
+        text = gap.get("detail") or gap.get("code") or ""
+        if text:
+            risks.append(str(text))
+    for item in (payload.get("unavailable") or []):
+        text = item.get("message") or item.get("code") or ""
+        if text:
+            risks.append(str(text))
+    return {"highlights": highlights, "risks": list(dict.fromkeys(risks))}
 
 
 def _ensure_project(project_id: str) -> None:
@@ -149,9 +228,11 @@ def prerequisite_issues(project_id: str) -> list[str]:
     if requirement.get("status") != "approved":
         issues.append("需求单尚未由工艺技术总监审核通过")
 
-    ir = store.load_ir(project_id) or {}
-    if not (ir.get("parts") or []):
-        issues.append("2.1 图纸解析尚未形成有效零件 IR")
+    # 2.1 的零件清单以**统一制造快照**为准：包装链路的零件在 packaging parts 文档里，
+    # 只读 legacy IR 会把"已经跑完 2.1"的包装项目判成"未完成"（Spec §5）。
+    snapshot = manufacturing_source(project_id)
+    if not snapshot.get("ready"):
+        issues.append(manufacturing_snapshot.blocked_message(snapshot))
 
     if "material" in TECH_SUBSTEPS:
         material_doc = store.load_material(project_id)
@@ -257,7 +338,8 @@ def content_issues(doc: ProcessReport) -> list[str]:
 
 
 def source_is_current(project_id: str, doc: ProcessReport) -> bool:
-    current = summary_svc.aggregate(project_id)
+    # 与 new_report() 用同一份投影：一边带快照、一边不带，就会永远判成"来源已变"。
+    current = _aggregate_with_snapshot(project_id)
     return digest_value(report_source_payload(doc.source_snapshot)) == digest_value(
         report_source_payload(current))
 
@@ -278,9 +360,22 @@ def ready_gaps(project_id: str, doc: Optional[ProcessReport] = None) -> list[str
 # --------------------------------------------------------------------------- #
 def new_report(project_id: str, user: dict) -> ProcessReport:
     requirement = store.load_requirement(project_id) or {}
-    aggregate = summary_svc.aggregate(project_id)
-    summary = aggregate.get("summary") or {}
-    device_name = aggregate.get("device_name") or "未命名项目"
+    # 统一制造快照进依据：包装项目据此拿到零件 / BOM / 工序 / 成本与缺口（Spec §5）。
+    aggregate = _aggregate_with_snapshot(project_id)
+    snapshot = aggregate.get("manufacturing") or {}
+    summary = dict(aggregate.get("summary") or {})
+    snapshot_lines = packaging_report_lines(snapshot)
+    if not summary.get("highlights"):
+        summary["highlights"] = snapshot_lines["highlights"]
+    if not summary.get("risks"):
+        summary["risks"] = snapshot_lines["risks"]
+    # 包装项目没有 legacy 摘要：结论句由制造快照的现状生成，不留空结论
+    # （否则 3.1 会以"没有内容"为由挡住送审，而其实零件与成本都在）。
+    if not summary.get("conclusion") and snapshot.get("ready"):
+        summary["conclusion"] = packaging_conclusion(snapshot)
+    device_name = (aggregate.get("device_name")
+                   or (store.load_requirement(project_id) or {}).get("product_name")
+                   or "未命名项目")
     now = now_str()
     preparer = (user or {}).get("display_name") or (user or {}).get("username", "system")
     number = report_no(project_id)
@@ -850,7 +945,27 @@ def _technical_result(project_id: str, title: str) -> dict:
     except Exception:
         return {"tech_project_id": project_id}
     if plan is None or not (plan.cost and plan.cost.items):
-        return {"tech_project_id": project_id}
+        # 包装链路没有 2.2 的整合方案（成本在 packaging_cost 文档里），原来在这里直接
+        # 返回空结果 —— 销售接着报价时看不到零件/工序/成本（Spec §5）。改读统一制造快照。
+        snapshot = manufacturing_source(project_id)
+        if not snapshot.get("ready"):
+            return {"tech_project_id": project_id}
+        cost = snapshot.get("cost") or {}
+        return {
+            "tech_project_id": project_id,
+            "project_id": project_id,
+            "source": snapshot.get("source"),
+            "business_case_id": store.load_business_case(project_id).get("business_case_id", ""),
+            "manufacturing": manufacturing_snapshot.summarize(snapshot),
+            "parts_total": snapshot.get("parts_total") or 0,
+            "process_total": snapshot.get("process_total") or 0,
+            "cost": {key: cost.get(key) for key in
+                     ("estimate_id", "total_cost", "material_total", "process_total",
+                      "labor_total", "tooling_total", "packaging_total", "freight_total",
+                      "has_gaps", "currency", "quote_quantity")},
+            "gaps": list(cost.get("gaps") or []),
+            "source_fingerprints": snapshot.get("source_fingerprints") or {},
+        }
     requirement = store.load_requirement(project_id) or {}
     return cost_flow.integration_quote_result(project_id, plan, title, requirement)
 

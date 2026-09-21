@@ -10358,3 +10358,69 @@ node --check tech_app/frontend/quick-quote-panel.js     OK
   在建的 baseline/workspace 不跨重启；本批不新增持久化表。
 - 未改 `cpq_quick_quote_*` 的业务口径、未改案例库/检索/差异价/门禁判据、未改数据库 schema；
 - 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 280. 包装零件 → 工艺 → 成本 → 财务 → 报告：统一制造快照 + 任务参与权 + 成本正式/暂定（9-22，Codex 实现）
+
+红测 `tests/test_e2e_packaging_downstream_handoff_red.py`（12 条，实现前 12 红）全绿。Spec：
+`docs/specs/e2e-packaging-downstream-handoff-report.md`（已补 §7 实现记录）。
+
+### 根因（实测）
+
+包装专用链路已经产出 64 个零件 / BOM / 12 道工序 / `7.274860582846279 CNY/件`，但：
+
+- `main.py::_integration_ir()`（2.2）与 `_cost_review_ctx()`（2.3）、
+  `report_workflow.new_report()`（报告）都只读 legacy `DesignIR`；包装链路**不写**那份 IR
+  ⇒ 2.2 报「请先完成 2.1」、报告 0 零件 0 成本；
+- 财务任务由报价侧角色池承接，技术项目这侧没有任何「这条待办归谁」的记录
+  ⇒ FI 领了正确任务、打开成本工作台却是「项目不存在」；
+- `has_gaps` 只有一句布尔值：「这份成本能不能用于正式报价」在数据里不是一个概念，
+  24 个缺口（缺 GSM、无权威价、缺损耗率、缺公式、模具分摊依据、未绑定变量）不可裁决、
+  不可补数、也不可署名放行。
+
+### 落点
+
+- 新增 `tech_app/backend/services/manufacturing_snapshot.py`：唯一的项目制造快照适配层
+  （`parts / bom / process_route / cost / requirement_revision / source_fingerprints`，
+  指纹 = 稳定 JSON 的 sha256）；`as_design_ir()` 是唯一投影点（复用
+  `packaging_parts.as_ir_part()`）。
+- `main.py`：2.2/2.3 改读快照；`/integration/send-to-finance` 指派到人时
+  `cost_flow.grant_task_project_access()`。
+- `cost_flow.py`：`grant_task_project_access` / `claimed_task_by` /
+  `explicit_business_case_is_authoritative` / `assert_distinct_project_and_quote_session` /
+  `handoff_operation_id` / `resume_incomplete_handoff` / `source_task_closed` /
+  `record_handoff_operation`；回传与关任务成为同一操作号下的可重试状态机
+  （重试只补关任务，不重发报价、不新建卡片）。
+- `project_access.py`：`claimed_task_project_access()` 接进 `can_read()`；
+  「已领取但不可读」（归档）返回 **403** 而不是 404。
+- `packaging_cost.py`：`packaging_cost_readiness_gate` / `gap_evidence` /
+  `missing_variable` / `affected_amount` / `resolution_action` /
+  `reject_silent_zero_fallback` / `formal_cost_or_raise`；结果里新增 `readiness`
+  （`formal` / `provisional`），缺口未清零或存在静默按 0 的行一律 `provisional`。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_e2e_packaging_downstream_handoff_red         Ran 12 OK（实现前 12 红）
+tests.test_tech_summary_report_includes_cost_review_red Ran 14 OK
+tests.test_tech_summary_report_agent_red                Ran 12 OK
+tests.test_tech_report_publish_agent_red                Ran 14 OK
+tests.test_tech_report_review_agent_red                 Ran 14 OK
+tests.test_tech_cost_report_handoff_continuity_red      Ran 14 OK
+tests.test_packaging_cost_finance_access_red            Ran 10 OK
+tests.test_tech_integration_confirm_finance_flow_red    Ran 12 OK
+tests.test_cost_review_single_primary_and_drop_run_step_red Ran 23 OK
+tests.test_tech_cost_review_agent_red                   Ran 14 OK
+（上面九套 + 报告/流程相关三套合并跑：Ran 78 OK / Ran 88 OK）
+tests.test_tech_project_acl_contribute_mode_red + scope  Ran 56 OK
+tests.test_packaging_cost_engine_red / routing / snapshot /
+  column_evidence / minimum_charge / red_closure / policy_decision
+                                                         Ran 255, 1 既有红（j6 别名，Spec 已记）
+```
+
+功能冒烟（临时目录 + 假项目）：包装快照 `ready=True`、`as_design_ir()` 出 1 件、
+`prerequisite_issues()` 不再报 2.1 未完成、报告依据带 `manufacturing` 且
+`source_is_current()` 为真、`claimed_task_project_access()` 认领取人、归档后领取人得到 403。
+
+### 边界
+
+未改任何 `tests/`；未改成本表达式/费率/权重/门槛；未连 PG、未写生产数据；未 push / 未部署。

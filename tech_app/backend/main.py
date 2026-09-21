@@ -70,7 +70,7 @@ from .services import (
     decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_flow, cost_review, entry_origin, file_preflight, industry_templates, integration,
-    manufacturing, report_workflow,
+    manufacturing, manufacturing_snapshot, report_workflow,
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
     packaging_match,
@@ -3127,10 +3127,20 @@ class IntegrationSettings(BaseModel):
 
 
 def _integration_ir(project_id: str) -> DesignIR:
-    ir_dict = store.load_ir(project_id)
-    if not ir_dict:
-        raise HTTPException(400, "请先完成 2.1 图纸解析，2.2 需要已确认的零件清单")
-    return DesignIR(**ir_dict)
+    """2.2 的零件来源：**统一制造快照**（Spec `e2e-packaging-downstream-handoff-report.md` §2）。
+
+    包装链路的零件落在 packaging parts 文档里，不写 legacy `DesignIR`；这里原来只读
+    `store.load_ir()`，于是包装项目一律报"请先完成 2.1"，而 2.1 其实早就跑完了。改成先
+    取统一快照（packaging → packaging parts / bom / route / cost；其它行业 → legacy IR），
+    由 `manufacturing_snapshot.as_design_ir()` 做唯一一次投影。
+    """
+    snapshot = manufacturing_snapshot.load_snapshot(project_id)
+    if not snapshot.get("ready"):
+        raise HTTPException(400, manufacturing_snapshot.blocked_message(snapshot))
+    try:
+        return manufacturing_snapshot.as_design_ir(project_id, snapshot)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _integration_payload(project_id: str, plan) -> dict:
@@ -3623,8 +3633,18 @@ def integration_send_to_finance(project_id: str, body: IntegrationPublishBody,
         target_type=body.target_type, target_role_code=body.target_role_code,
         target_user_id=body.target_user_id, token=_sso_token(request),
         waiver=body.waiver)
+    # 任务创建与项目参与权在**同一处**完成（Spec `e2e-packaging-downstream-handoff-report.md`
+    # §3.2）：指派到人时把他的参与权一并写下，他领取后打开 2.3 才不会是「项目不存在」。
+    access = None
+    target_user = str(body.target_user_id or "").strip()
+    if target_user and str(body.target_type or "user") == "user":
+        access = cost_flow.grant_task_project_access(
+            project_id, username=target_user,
+            task_id=str(plan.finance_handoff.task_id or ""),
+            role="finance_manager", author=user.get("username", "system"))
     return {**_integration_payload(project_id, plan),
-            "finance": plan.finance_handoff.model_dump()}
+            "finance": plan.finance_handoff.model_dump(),
+            "task_access": access}
 
 
 @app.post("/api/projects/{project_id}/integration/send-to-quote")
@@ -3645,11 +3665,22 @@ def integration_send_to_quote(project_id: str, body: IntegrationPublishBody,
 # 提交工艺经理确认。**本步不联网**：只依据企业成本库与工程经验，见 services/cost_review.py。
 # --------------------------------------------------------------------------- #
 def _cost_review_ctx(project_id: str):
-    """2.3 的三样输入：IR（零件）、2.2 的整机方案、本步的评审状态。"""
+    """2.3 的三样输入：统一制造快照（零件）、2.2 的整机方案、本步的评审状态。
+
+    第 2、3 样照旧；第 1 样不再直接 `store.load_ir()` —— 包装项目的零件在 packaging
+    parts 文档里，只有 `manufacturing_snapshot` 知道该读哪一份（Spec
+    `e2e-packaging-downstream-handoff-report.md` §2）。快照同时透出包装成本，2.3 的
+    缺口与权威性判据（§2.1）也从同一份快照取。
+    """
     if not store.load_meta(project_id):
         raise HTTPException(404, "项目不存在")
-    ir_dict = store.load_ir(project_id)
-    ir = DesignIR(**ir_dict) if ir_dict else None
+    snapshot = manufacturing_snapshot.load_snapshot(project_id)
+    ir = None
+    if snapshot.get("ready"):
+        try:
+            ir = manufacturing_snapshot.as_design_ir(project_id, snapshot)
+        except Exception:                      # noqa: BLE001 - 投影失败按"没有零件"处理
+            ir = None
     return ir, integration.load_plan(project_id), cost_review.load_review(project_id)
 
 

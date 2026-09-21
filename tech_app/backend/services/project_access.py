@@ -97,6 +97,9 @@ PARTICIPANT_SOURCES = ("manual", QUOTE_OWNER_SOURCE, COST_TASK_SOURCE)
 
 NOT_FOUND_MESSAGE = "项目不存在"
 FORBIDDEN_MESSAGE = "你的角色只能查看该项目，不能修改"
+# 已领取这条待办、但项目本身对本人不可读（例如已归档）时用这句（Spec §3.4）：
+# 「已领取」不能用 404 藏起来，要如实说清是无权。
+CLAIMED_FORBIDDEN_MESSAGE = "这个项目当前不可访问：你领取的任务已失效或项目已归档"
 
 
 class ProjectAccessError(Exception):
@@ -208,6 +211,28 @@ def _packaging_cost_visible(project_id: str) -> bool:
     return bool(cost.get("built"))
 
 
+def claimed_task_project_access(project_id: str, user: dict) -> bool:
+    """财务「领取人」依据（Spec `e2e-packaging-downstream-handoff-report.md` §3.2）。纯读。
+
+    与 `_finance_handoff_visible()` 的区别：那条判的是「项目有没有送过财务」（角色池），
+    这条判的是「这条待办到底归谁领」—— 领取人在报价侧才确定，技术项目这一侧由
+    `cost_flow.grant_task_project_access()` 在领取/创建任务时落一条 `cost_task_assignee`
+    参与者与一条任务记录。有了它，FI 领取正确任务后打开成本工作台不再是
+    「项目不存在」，而是**能打开**（Spec §3.2 / §6 PE1）。
+
+    不写项目、不写参与者、不产生审计；读不到一律按「没领过」处理。
+    """
+    name = _username(user)
+    if not project_id or not name:
+        return False
+    from . import cost_flow      # 函数级延迟 import：避开 services 之间的导入顺序问题
+
+    try:
+        return bool(cost_flow.claimed_task_by(project_id, name))
+    except Exception:            # noqa: BLE001 - 读不出来按「没领过」处理
+        return False
+
+
 def _participants(meta: dict) -> List[dict]:
     rows = (meta or {}).get("participants") or []
     return [row for row in rows if isinstance(row, dict)]
@@ -264,11 +289,15 @@ def can_read(user: dict, meta: dict) -> bool:
         return True
     if _is_sales(user) and _has_source(meta, _username(user), QUOTE_OWNER_SOURCE):
         return True
-    if _is_finance(user) and _has_source(meta, _username(user), COST_TASK_SOURCE):
+    project_id = _text(meta.get("project_id"))
+    if _has_source(meta, _username(user), COST_TASK_SOURCE):
+        return True
+    # 领取人依据（Spec §6 PE1）：这条财务待办是本人领的 —— 角色池判的是"项目送过财务"，
+    # 这里判的是"这条任务归我"，两者都要。
+    if project_id and claimed_task_project_access(project_id, user):
         return True
     # 角色池（Spec §18.3）：按**项目状态**判定，不绑定具体领取人。放在归档判断之后 ——
     # 归档项目不因关联而解锁。
-    project_id = _text(meta.get("project_id"))
     if _is_finance(user) and _finance_handoff_visible(project_id):
         return True
     if _is_finance(user) and _packaging_cost_visible(project_id):
@@ -312,7 +341,13 @@ def require_project_access(project_id: str, user: dict, mode: str = "read") -> d
     避免从响应里反推出「它其实存在只是我没权限」。
     """
     meta = store.load_meta(project_id)
-    if not meta or not can_read(user, meta):
+    if not meta:
+        raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
+    if not can_read(user, meta):
+        # 真不存在才 404；**已领取但不可读**（归档等）如实给 403（Spec §3.4）——
+        # 用「项目不存在」藏起一条自己领过的待办，用户只会以为数据丢了。
+        if claimed_task_project_access(project_id, user):
+            raise ProjectAccessError("forbidden", CLAIMED_FORBIDDEN_MESSAGE)
         raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
     if mode == "contribute":
         # 归档对角色池一律按不存在处理；否则放行（角色判断留给接口自己）。

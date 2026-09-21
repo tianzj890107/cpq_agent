@@ -52,6 +52,225 @@ HANDOFF_KIND_COST = "cost_to_quote"
 HANDOFF_KIND_COST_CONFIRM = "cost_to_process"
 
 
+# --------------------------------------------------------------------------- #
+# 任务 ACL：任务创建与项目参与权是**同一次动作**（Spec
+# `e2e-packaging-downstream-handoff-report.md` §3.2）
+#
+# 在这之前：财务任务由报价侧的角色池承接，领取人是到报价侧才知道的，技术项目这一侧
+# 从来没记过「这条待办归谁」—— 于是 FI 领取了正确的任务、打开成本工作台却是
+# 「项目不存在」。这里把「领取」落成一条项目参与者记录（`cost_task_assignee`），
+# 由 `project_access.claimed_task_project_access()` 读回；两边共用同一份记录，
+# 不再各自猜。
+# --------------------------------------------------------------------------- #
+#: 参与者来源（与 `store.PARTICIPANT_SOURCES` 逐字一致）。
+COST_TASK_SOURCE = "cost_task_assignee"
+#: 任务 → 领取人的落盘文档键（项目 meta 文档，不新建表）。
+TASK_ACCESS_KIND = "task_access"
+#: 回传报价与关闭来源任务的原子状态机落点（同一份文档键）。
+HANDOFF_STATE_KIND = "cost_handoff_state"
+
+
+def _doc(project_id: str, kind: str) -> dict:
+    try:
+        value = store._meta().get_doc(project_id, kind)      # noqa: SLF001 - 同包的稳定内部接口
+    except Exception:                                        # noqa: BLE001
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _put_doc(project_id: str, kind: str, payload: dict) -> dict:
+    try:
+        store._meta().put_doc(project_id, kind, dict(payload))   # noqa: SLF001
+    except Exception:                                        # noqa: BLE001 - 落盘失败不吞业务结果
+        return dict(payload)
+    return dict(payload)
+
+
+def task_access_records(project_id: str) -> list:
+    """这个项目的「哪条任务归谁领」记录（读不到给空列表，不抛错、不现编）。"""
+    rows = _doc(project_id, TASK_ACCESS_KIND).get("items") or []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def claimed_task_by(project_id: str, username: str) -> bool:
+    """`username` 是否领取过这个项目上的任务（参与者记录或任务记录任一命中）。"""
+    name = str(username or "").strip()
+    if not name:
+        return False
+    for row in store.list_participants(project_id):
+        if (str(row.get("username") or "") == name
+                and str(row.get("source") or "") == COST_TASK_SOURCE):
+            return True
+    return any(str(row.get("username") or "") == name for row in task_access_records(project_id))
+
+
+def grant_task_project_access(project_id: str, *, username: str = "", task_id: str = "",
+                              role: str = "", source: str = COST_TASK_SOURCE,
+                              author: str = "") -> dict:
+    """创建/领取财务任务时**同时**授予项目参与权（幂等，Spec §3.2）。
+
+    「同一事务」在这里是同一处调用：参与者记录与任务记录一起落，任何一半失败都不会
+    留下「任务在、项目看不到」的半截状态。纯本地写，不联网、不发任务。
+    """
+    name = str(username or "").strip()
+    if not project_id or not name:
+        return {"granted": False, "reason": "missing_project_or_username",
+                "project_id": project_id, "username": name, "task_id": str(task_id or "")}
+    if not store.load_meta(project_id):
+        return {"granted": False, "reason": "project_not_found",
+                "project_id": project_id, "username": name, "task_id": str(task_id or "")}
+    store.add_participant(project_id, name, role=role, source=source, assignee=True,
+                          author=author or "system")
+    doc = _doc(project_id, TASK_ACCESS_KIND)
+    rows = [dict(row) for row in (doc.get("items") or []) if isinstance(row, dict)]
+    task_id_text = str(task_id or "")
+    hit = None
+    for row in rows:
+        if (str(row.get("username") or "") == name
+                and str(row.get("task_id") or "") == task_id_text):
+            hit = row
+            break
+    if hit is None:
+        rows.append({"username": name, "task_id": task_id_text, "role": str(role or ""),
+                     "source": source, "granted_at": now_cst_str(),
+                     "granted_by": author or "system"})
+    else:
+        hit["granted_at"] = now_cst_str()
+        if role:
+            hit["role"] = str(role)
+    _put_doc(project_id, TASK_ACCESS_KIND, {"items": rows})
+    store.audit(project_id, "cost_task_project_access_granted",
+                {"username": name, "task_id": task_id_text, "role": str(role or ""),
+                 "by": author or "system"})
+    return {"granted": True, "project_id": project_id, "username": name,
+            "task_id": task_id_text, "source": source}
+
+
+# --------------------------------------------------------------------------- #
+# 唯一关联（Spec §4）：显式 business_case_id 是消歧主键
+# --------------------------------------------------------------------------- #
+def explicit_business_case_is_authoritative(business_case_id: str = "", *,
+                                            candidates=None) -> dict:
+    """显式给的实例号**就是**落点，来源任务候选不得再并进来（Spec §4）。
+
+    在这之前：带着 `source_task_id` 反而"无法消歧"—— 服务端把显式实例号与来源任务
+    候选混在一起，命中多张就判冲突。判据统一收在这里：显式给了就只认它，来源候选
+    只作为**被忽略的线索**如实回给界面。
+    """
+    explicit = str(business_case_id or "").strip()
+    rows = [str(item) for item in (candidates or []) if str(item or "").strip()]
+    if explicit:
+        return {"business_case_id": explicit, "authoritative": True,
+                "mode": "explicit", "candidates": [], "ignored_candidates": rows,
+                "merged_candidates": False}
+    return {"business_case_id": "", "authoritative": False, "mode": "candidate",
+            "candidates": sorted(set(rows)), "ignored_candidates": [],
+            "merged_candidates": True}
+
+
+def assert_distinct_project_and_quote_session(project_id: str, quote_session_id: str = "",
+                                              *, kind: str = "") -> tuple:
+    """技术项目号与报价会话号必须是**两个字段**（Spec §3.1）。
+
+    任务上的 `session_id/project_id` 只能是技术项目 ID；报价会话号只放关联字段。
+    把两者塞进同一个值时立刻拒绝 —— 否则财务领取后打开的是报价卡片，成本工作台报
+    「项目不存在」（这正是线上那条 `TP-95255258` 的现象）。
+    """
+    project = str(project_id or "").strip()
+    session = str(quote_session_id or "").strip()
+    if project and session and project == session:
+        raise CostFlowError(
+            "技术项目号与报价会话号不能是同一个值：任务只能挂技术项目，报价会话放关联字段",
+            409, code="project_quote_session_conflated")
+    return project, session
+
+
+# --------------------------------------------------------------------------- #
+# 回传报价 ↔ 关闭来源任务：可重试的原子状态机（Spec §4）
+# --------------------------------------------------------------------------- #
+def handoff_operation_id(project_id: str, result_version: str = "",
+                         kind: str = HANDOFF_KIND_COST) -> str:
+    """一次回传操作号：项目 + 交接类型 + 结果版本，同一版重复点只会是同一个号。"""
+    raw = "|".join([str(project_id or ""), str(kind or ""), str(result_version or "")])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def load_handoff_state(project_id: str) -> dict:
+    """这次项目最近一次回传的状态（Spec §4）：没跑过给空壳，不抛错。"""
+    doc = _doc(project_id, HANDOFF_STATE_KIND)
+    state = doc.get("current") if isinstance(doc.get("current"), dict) else {}
+    return dict(state or {})
+
+
+def save_handoff_state(project_id: str, state: dict, author: str = "") -> dict:
+    payload = dict(state or {})
+    payload["updated_at"] = now_cst_str()
+    if author:
+        payload["updated_by"] = str(author)
+    _put_doc(project_id, HANDOFF_STATE_KIND, {"current": payload})
+    return payload
+
+
+def source_task_closed(project_id: str, operation_id: str = "") -> bool:
+    """来源任务是否已关（Spec §4）。给了操作号只认那一次的操作，没给看最近一次。"""
+    state = load_handoff_state(project_id)
+    if not state:
+        return False
+    if operation_id and str(state.get("operation_id") or "") != str(operation_id):
+        return False
+    return bool(state.get("source_task_closed"))
+
+
+def record_handoff_operation(project_id: str, *, operation_id: str = "",
+                            result_version: str = "", kind: str = HANDOFF_KIND_COST,
+                            quote_session_id: str = "", source_task_id: str = "",
+                            handoff_id: str = "", closed: bool = False,
+                            author: str = "") -> dict:
+    """记一次回传的结果：报价侧成不成、来源任务关没关，各写各的状态（可恢复）。"""
+    op_id = str(operation_id or "") or handoff_operation_id(project_id, result_version, kind)
+    state = load_handoff_state(project_id)
+    if str(state.get("operation_id") or "") != op_id:
+        state = {"operation_id": op_id}
+    state.update({
+        "operation_id": op_id, "handoff_kind": str(kind or ""),
+        "result_version": str(result_version or ""),
+        "quote_session_id": str(quote_session_id or ""),
+        "source_task_id": str(source_task_id or ""),
+        "handoff_id": str(handoff_id or ""),
+        "source_task_closed": bool(closed),
+        "quote_handoff_done": True,
+    })
+    if closed:
+        state["source_task_closed_at"] = now_cst_str()
+    return save_handoff_state(project_id, state, author)
+
+
+def resume_incomplete_handoff(project_id: str, user: Optional[dict] = None, *,
+                              token: str = "") -> dict:
+    """把上一次"报价已回传、来源任务没关成"的半截状态补成完整（幂等，Spec §4）。
+
+    只补**关闭来源任务**这一步（`cpq_wf` 的 complete-task 本身幂等）；不会重发报价、
+    不会新建卡片、不会新建消息。没有半截状态就什么都不做。
+    """
+    state = load_handoff_state(project_id)
+    if not state or state.get("source_task_closed"):
+        return {"resumed": False, "reason": "nothing_to_resume"}
+    task_id = str(state.get("source_task_id") or "")
+    if not task_id:
+        return {"resumed": False, "reason": "missing_source_task_id"}
+    outcome = close_source_task(project_id, user, token, task_id,
+                               comment="成本结果已提交工艺经理确认（补关来源待办）")
+    closed = bool(outcome.get("closed"))
+    if closed:
+        state["source_task_closed"] = True
+        state["source_task_closed_at"] = now_cst_str()
+        state["resumed_at"] = now_cst_str()
+        save_handoff_state(project_id, state, (user or {}).get("username", "system"))
+    return {"resumed": closed, "operation_id": str(state.get("operation_id") or ""),
+            "source_task_id": task_id, "source_task_closed": closed,
+            "result": outcome}
+
+
 def bridge_call(action, *args, **kwargs):
     """把桥接层的两类失败翻译成业务错误：业务拒绝 400，服务不可用 503。"""
     try:
@@ -359,6 +578,13 @@ def close_source_task(project_id: str, user: Optional[dict], token: str,
         store.audit(project_id, "cost_review_source_task_closed",
                     {"task_id": task_id, "by": (user or {}).get("username", "system"),
                      "already": bool(outcome.get("already"))})
+        # 原子状态机的另一半（Spec §4）：来源任务真关掉了才把状态标成完整，
+        # 半截状态留给 resume_incomplete_handoff() 重试。
+        state = load_handoff_state(project_id)
+        if state and str(state.get("source_task_id") or "") == task_id:
+            state["source_task_closed"] = True
+            state["source_task_closed_at"] = now_cst_str()
+            save_handoff_state(project_id, state, (user or {}).get("username", "system"))
         return {"closed": True, **outcome}
     except CostFlowError as exc:
         # 关不掉旧待办不能反过来吞掉已经成功的业务去向：如实回给界面，让人能手动处理。
@@ -418,6 +644,9 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     """
     user = user or {}
     plan = integration_ready_cost(project_id)
+    # 上一次回传可能只成功了一半（报价回了、来源任务没关成）：先把它补完整，
+    # 再决定这次要不要重发。补不成不影响这一次回传继续走。
+    resume_incomplete_handoff(project_id, user, token=token)
     # 报价必填项没齐就不给发：这些参数就是这次要**回传**给报价的东西，缺一格，
     # 那边的测算单上就是一格空白。「参数推荐」环节补。
     #
@@ -480,6 +709,11 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     quote_source_task_id = str(req_data.get("source_task_id") or "")
     quote_source_session_id = str(req_data.get("source_session_id") or "")
     quote_result = integration_quote_result(project_id, plan, title, requirement)
+    # 技术项目号与报价会话号必须是两个字段（Spec §3.1）：混成一个值就会让财务领取后
+    # 打开报价卡片、成本工作台报「项目不存在」。
+    assert_distinct_project_and_quote_session(
+        project_id, quote_result.get("quote_session_id"), kind=HANDOFF_KIND_COST)
+
 
     result = bridge_call(
         cpq_bridge.send_to_quote, token, project_id, title,
@@ -520,12 +754,27 @@ def integration_send_to_quote_body(project_id: str, *, product_name: str = "",
     store.audit(project_id, "integration_send_to_quote",
                 {"next_step": plan.quote_handoff.next_step_name,
                  "task_id": plan.quote_handoff.task_id, "by": plan.quote_handoff.sent_by})
+    # 回传与关任务是**一次可重试的操作**（Spec §4）：两件事的结果都记在同一个操作号下。
+    source_task = result.get("source_task") or {"closed": False, "skipped": "not_reported"}
+    handoff_state = record_handoff_operation(
+        project_id,
+        operation_id=handoff_operation_id(project_id, quote_result.get("result_version"),
+                                          HANDOFF_KIND_COST),
+        result_version=str(quote_result.get("result_version") or ""),
+        kind=HANDOFF_KIND_COST,
+        quote_session_id=str(result.get("quote_session_id")
+                             or plan.quote_handoff.session_id or ""),
+        source_task_id=quote_source_task_id,
+        handoff_id=str(result.get("handoff_id") or ""),
+        closed=bool(source_task.get("closed")),
+        author=user.get("username", "system"))
     return {**integration.payload(project_id, plan),
             "handoff": plan.quote_handoff.model_dump(),
             # 服务端这一次回传的唯一标识与来源待办结果：一路透到 2.3 的界面与审计里。
             "handoff_id": str(result.get("handoff_id") or ""),
-            "source_task": result.get("source_task")
-            or {"closed": False, "skipped": "not_reported"},
+            "handoff_operation_id": str(handoff_state.get("operation_id") or ""),
+            "source_task_closed": bool(handoff_state.get("source_task_closed")),
+            "source_task": source_task,
             "auto_written": auto_written.model_dump() if auto_written else None,
             "code_fallback": code_fallback,
             "linked_by": result.get("linked_by") or "",

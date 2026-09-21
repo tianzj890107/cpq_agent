@@ -1576,6 +1576,218 @@ def _requirement_context(project_id: str, requirement_no: str, scenario: Optiona
     return data, overrides
 
 
+# --------------------------------------------------------------------------- #
+# 成本权威性：正式 / 暂定（Spec `e2e-packaging-downstream-handoff-report.md` §2.1）
+#
+# 线上那条 7.27 元/件的试算带着 24 个缺口（缺 GSM、无权威价、缺损耗率、缺公式、
+# 模具分摊依据缺失、内容公式引用未绑定变量），但出价与落库都只有一句 `has_gaps` ——
+# 「这份成本能不能用于正式报价」在数据里根本不是一个概念。这里把它补成一等公民：
+#
+#     · 缺口结构化：规则 + 变量 + 影响金额 + 补数入口（`missing_variable` /
+#       `affected_amount` / `resolution_action`）；
+#     · 结论二值化：`formal`（缺口清零）/ `provisional`（带缺口，只能按 POC 豁免流转）；
+#     · 静默兜底一律拒绝：`reject_silent_zero_fallback()` 抓住"变量缺失、表达式却照出
+#       金额"的行，命中就不许进正式成本。
+#
+# 本层不重算任何金额，只读 `compute_project()` 的结果。
+# --------------------------------------------------------------------------- #
+READINESS_VERSION = "packaging-cost-readiness/1"
+READINESS_FORMAL = "formal"
+READINESS_PROVISIONAL = "provisional"
+
+#: 缺口码前缀 → 结构化字段（变量 / 补数入口 / 严重度）。有冒号的码按前缀匹配。
+GAP_RESOLUTIONS = {
+    "part_size_missing": {"missing_variable": ["length_mm", "width_mm"],
+                          "resolution_action": "补零件展开尺寸（2.1 零件提取或盒型尺寸确认）",
+                          "entry": "packaging-parts", "severity": "blocking"},
+    "material_price_missing": {"missing_variable": ["price"],
+                               "resolution_action": "在物料主数据里补该材料的权威单价",
+                               "entry": "kb_material_price", "severity": "blocking"},
+    "material_gsm_missing": {"missing_variable": ["gsm"],
+                             "resolution_action": "补材料克重/厚度换算（灰板必须给 GSM）",
+                             "entry": "kb_material", "severity": "blocking"},
+    "loss_rate_missing": {"missing_variable": ["loss_rate"],
+                          "resolution_action": "补该材料的损耗率（或确认按 0 计并签字）",
+                          "entry": "kb_cost_factor", "severity": "advisory"},
+    "rate_missing": {"missing_variable": ["labor_rate", "equipment_rate"],
+                     "resolution_action": "知识库补这条工费率",
+                     "entry": "kb_cost_rate", "severity": "blocking"},
+    "step_time_missing": {"missing_variable": ["standard_seconds", "labor_seconds"],
+                          "resolution_action": "工序补标准工时（工艺路线页）",
+                          "entry": "packaging-route", "severity": "blocking"},
+    "tooling_basis_missing": {"missing_variable": ["tooling_basis"],
+                              "resolution_action": "补模具/工装分摊依据与一次投入金额",
+                              "entry": "kb_packaging_tooling", "severity": "blocking"},
+    "no_formula": {"missing_variable": [], "resolution_action": "该类别还没有公式：先抽规则再算",
+                   "entry": "packaging_cost_rules.json", "severity": "blocking"},
+    "content_formula_error": {"missing_variable": [], "resolution_action": "绑定包材公式引用的变量",
+                              "entry": "packaging_cost_formula", "severity": "blocking"},
+    "invalid_units_per_pack": {"missing_variable": ["units_per_pack"],
+                               "resolution_action": "补装数（units_per_pack）",
+                               "entry": "kb_packaging_cost_content", "severity": "blocking"},
+    "freight_rule_missing": {"missing_variable": ["loading_rate"],
+                             "resolution_action": "补运输规则",
+                             "entry": "kb_packaging_logistics_rule", "severity": "advisory"},
+    "below_moq": {"missing_variable": [], "resolution_action": "确认是否按 MOQ 数量报价（业务裁决）",
+                  "entry": "quote", "severity": "advisory"},
+}
+
+#: 这些"解决方式"等于把缺口按 0 糊过去 —— 不算补齐（Spec §2.1）。
+SILENT_ZERO_RESOLUTIONS = ("manual_zero", "assume_zero", "skip", "ignore", "waive_without_signoff")
+
+
+def _gap_rule(code: str) -> dict:
+    text = _text(code)
+    if not text:
+        return {}
+    if text in GAP_RESOLUTIONS:
+        return dict(GAP_RESOLUTIONS[text])
+    head = text.split(":", 1)[0]
+    return dict(GAP_RESOLUTIONS.get(head) or {})
+
+
+def gap_variables(gap: Any) -> list:
+    """这条缺口点名了哪些缺失变量（表里有就用表里的；没有就从报错文案里解析）。"""
+    payload = gap if isinstance(gap, dict) else {}
+    rule = _gap_rule(payload.get("code"))
+    names = [str(name) for name in (rule.get("missing_variable") or []) if str(name)]
+    detail = _text(payload.get("detail"))
+    # 内容公式报错会把未绑定变量名写在文案里（`unbound variable: gsm` 之类）。
+    for name in expression_variables(detail):
+        if name in LINE_VARIABLES and name not in names:
+            names.append(name)
+    return names
+
+
+def reject_silent_zero_fallback(gap: Any, item: Any = None, resolution: Any = None) -> bool:
+    """这条缺口是不是被「静默按 0」糊过去了（Spec §2.1）—— 命中就不许进正式成本。
+
+    两个判据，任一命中即拒绝：
+
+      · 缺口点名了缺失变量，而对应明细行**照样出了金额**（那格在表达式里被当成 0 算
+        进去了；金额看着有，其实少算）；
+      · 缺口被标成"已解决"，但解决方式是手填 0 / 假定 0 / 直接跳过。
+    """
+    if isinstance(resolution, dict) and resolution:
+        kind = _text(resolution.get("kind"))
+        if kind in SILENT_ZERO_RESOLUTIONS:
+            return True
+    payload = gap if isinstance(gap, dict) else {}
+    row = item if isinstance(item, dict) else {}
+    if not row:
+        return False
+    if _num(row.get("amount")) is None:
+        return False
+    if not _text(row.get("expression")):
+        return False
+    variables = row.get("inputs") if isinstance(row.get("inputs"), dict) else {}
+    empty = sorted(str(key) for key, value in variables.items() if value is None)
+    if not empty:
+        return False
+    names = {_canon(name) for name in gap_variables(payload)}
+    if not names:
+        return True
+    return any(_canon(name) in names for name in empty)
+
+
+def _item_for_gap(cost: dict, gap: dict) -> dict:
+    where = _text(gap.get("where"))
+    if not where:
+        return {}
+    for item in (cost.get("items") or []):
+        if not isinstance(item, dict):
+            continue
+        if _text(item.get("part_code")) == where or _text(item.get("part_name")) == where:
+            return item
+    return {}
+
+
+def gap_evidence(cost: Any, gap: Any) -> dict:
+    """一条缺口的结构化证据：规则 / 变量 / 物料 / 影响金额 / 补数入口（Spec §2.1）。"""
+    payload = cost if isinstance(cost, dict) else {}
+    row = gap if isinstance(gap, dict) else {}
+    rule = _gap_rule(row.get("code"))
+    item = _item_for_gap(payload, row)
+    amount = _num(item.get("amount"))
+    where = _text(row.get("where"))
+    return {
+        "code": _text(row.get("code")),
+        "where": where,
+        "detail": _text(row.get("detail")),
+        "missing_variable": gap_variables(row),
+        "material": _text(item.get("part_name") or item.get("material") or where),
+        # 影响金额：有明细行就给那一行当前金额（少算的**上界**），算不出来就 None ——
+        # 绝不为了"看起来完整"编一个数。
+        "affected_amount": amount,
+        "affected_amount_status": "line_amount" if amount is not None else "unknown",
+        "resolution_action": _text(rule.get("resolution_action")),
+        "resolution_entry": _text(rule.get("entry")),
+        "severity": _text(rule.get("severity")) or "advisory",
+        "silent_zero_fallback": reject_silent_zero_fallback(row, item),
+        "rule_snapshot_version": _text(payload.get("rule_snapshot_version")),
+    }
+
+
+def packaging_cost_readiness_gate(cost: Any) -> dict:
+    """这份成本是 `formal` 还是 `provisional`（Spec §2.1）—— 缺口的唯一裁决点。
+
+    缺口清零且没有被静默兜底的行 → `formal`；否则 `provisional`：可以按 POC 豁免流转，
+    但**不得**标成正式成本、不得在报价或报告里隐藏缺口。
+    """
+    payload = cost if isinstance(cost, dict) else {}
+    gaps = [gap for gap in (payload.get("gaps") or []) if isinstance(gap, dict)]
+    evidence = [gap_evidence(payload, gap) for gap in gaps]
+    blocking = [row for row in evidence if row["severity"] == "blocking"]
+    silent = [row for row in evidence if row["silent_zero_fallback"]]
+    quantified = sum(row["affected_amount"] or 0.0 for row in evidence
+                     if row["affected_amount"] is not None)
+    reasons: list = []
+    if blocking:
+        reasons.append("%d 项阻断缺口未清零" % len(blocking))
+    if silent:
+        reasons.append("%d 行存在静默按 0 兜底：%s"
+                       % (len(silent), "、".join(sorted({row["code"] for row in silent}))))
+    if not gaps and payload.get("built") is False:
+        reasons.append("成本尚未测算")
+    verdict = READINESS_PROVISIONAL if (gaps or silent) else READINESS_FORMAL
+    return {
+        "version": READINESS_VERSION,
+        "verdict": verdict,
+        "formal_ready": verdict == READINESS_FORMAL,
+        "has_gaps": bool(gaps),
+        "gap_total": len(evidence),
+        "blocking_total": len(blocking),
+        "silent_zero_total": len(silent),
+        "rejected_silent_zero_fallback": bool(silent),
+        "affected_amount_total": round(quantified, 6),
+        "unquantified_total": sum(1 for row in evidence
+                                  if row["affected_amount"] is None),
+        "gaps": evidence,
+        "reasons": reasons,
+        "rule_snapshot_version": _text(payload.get("rule_snapshot_version")),
+        "estimate_id": _text(payload.get("estimate_id")),
+    }
+
+
+def formal_cost_or_raise(cost: Any, waiver: Any = None) -> dict:
+    """正式成本才放行；带缺口必须有 POC 豁免签字（Spec §2.1）。
+
+    `waiver` 只表达"业务签字带缺口继续"，缺口本身以服务端算出的为准（调用方不得
+    用前端传来的缺口清单替换这里的结果）。
+    """
+    gate = packaging_cost_readiness_gate(cost)
+    if gate["formal_ready"]:
+        return gate
+    if isinstance(waiver, dict) and (waiver.get("signed_by") or waiver.get("reason")):
+        return {**gate, "waived": True,
+                "waived_by": _text(waiver.get("signed_by") or waiver.get("by")),
+                "waiver_reason": _text(waiver.get("reason"))}
+    raise CostError(
+        "这份成本还是暂定（%s）：%s。补齐缺口，或由业务签字带缺口放行"
+        % (gate["verdict"], "；".join(gate["reasons"]) or "存在未清零缺口"),
+        409, "packaging_cost_not_formal")
+
+
 def compute_project(project_id: str, requirement_no: str = "", *,
                     scenario: Optional[dict] = None, actor: Any = None) -> dict:
     """组装 → 逐行算 → 三层汇总（**不落库**，Spec §4.5）。
@@ -1934,10 +2146,18 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     }
 
 
+def _with_readiness(result: dict) -> dict:
+    """给成本结果挂上正式/暂定裁决（Spec §2.1）：出价、落库、报告都读同一个字段。"""
+    payload = dict(result or {})
+    payload["readiness"] = packaging_cost_readiness_gate(payload)
+    return payload
+
+
 def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
                scenario: Optional[dict] = None) -> dict:
     """算 + 落库：同一 `(项目, 需求单, 场景)` 先删明细再重建，写项目审计（Spec §3.2）。"""
-    cost = compute_project(project_id, requirement_no, scenario=scenario, actor=actor)
+    cost = _with_readiness(compute_project(project_id, requirement_no,
+                                           scenario=scenario, actor=actor))
     da_repo.save_packaging_cost(cost["project_id"], cost["requirement_no"],
                                 cost["scenario_code"], cost, cost["items"])
     store.audit(project_id, "workflow:packaging_cost_rebuilt",
@@ -1986,6 +2206,10 @@ def _rehydrate(row: dict, items: list) -> dict:
     }
 
 
+def _rehydrate_with_readiness(result: dict) -> dict:
+    return _with_readiness(result)
+
+
 def load_cost(project_id: str, requirement_no: str = "", *,
               scenario: Optional[str] = None) -> dict:
     """读回成本测算 + 24 类别 + 10 分组 + 缺口；没算过时 `built=false`，不报错。"""
@@ -1993,16 +2217,17 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     row = da_repo.load_packaging_cost(project_id, req_no, _text(scenario))
     upstream = _upstream_route_version(project_id, req_no)
     if not row:
-        return {"built": False, "project_id": project_id, "requirement_no": req_no,
-                "scenario_code": _text(scenario) or "default", "engine_version": ENGINE_VERSION,
-                "source_versions": {"route_version": upstream, "engine_version": ENGINE_VERSION},
-                "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
-                "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
-                "report_groups": {name: 0.0 for name in REPORT_GROUPS},
-                "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,
-                "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0}
+        return _with_readiness(
+            {"built": False, "project_id": project_id, "requirement_no": req_no,
+             "scenario_code": _text(scenario) or "default", "engine_version": ENGINE_VERSION,
+             "source_versions": {"route_version": upstream, "engine_version": ENGINE_VERSION},
+             "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
+             "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
+             "report_groups": {name: 0.0 for name in REPORT_GROUPS},
+             "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,
+             "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0})
     items = da_repo.load_packaging_cost_items(row["estimate_id"])
-    result = _rehydrate(row, items)
+    result = _rehydrate_with_readiness(_rehydrate(row, items))
     # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：成本必须带出它照着哪一版确认路线算的。
     result["source_versions"] = {"route_version": upstream, "engine_version": ENGINE_VERSION}
     return result
