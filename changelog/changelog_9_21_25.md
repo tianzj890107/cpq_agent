@@ -8065,3 +8065,57 @@ packaging_drawing_flow.json / packaging_parts.json`。发现后立刻做了三�
 - 未连数据库、未写 PG、未创建 MR / tag / Release；未引入任何新依赖。
 - 34 上生产数据目录的最终状态：**0 个项目、0 份零件文档**（与本次操作前一致）。
 - 能力声明口径不变：`parts_demo_script` 未签字前仍是 **L2（可信）**。
+
+## 247. 部署脚本第 6b 步：隔离端到端下游自检（每次部署都跑，不需要项目 id、不写生产数据）（9-21，Codex 实现 + 部署）
+
+### 为什么加
+
+第 6 步要一个**真实项目** id，线上还没人点过"一键解析"时它只能 `skip`（本环境至今如此），于是
+"34 上这条链路到底能不能跑通"只由 ## 246 那次**手工**跑证明过 —— 手工的东西下次部署不会重跑，
+等于没兜住。这一步把它变成**每次部署都会跑、不过就非零退出**的自检。
+
+### 第 6b 步做什么
+
+1. `DATA_DIR` 指到临时目录（`tech_app/backend/config.py`：`os.getenv("DATA_DIR", ROOT/"data")`），
+   在隔离目录里：`store.create_project(样本)` → `requirement_service.save_requirement_draft(...)`
+   → `packaging_drawing_flow.run_flow(pid)` 跑完整条八步；
+2. 读零件文档 / 单件详情 / 挤出。任一份样本「有步骤非 `completed` / 零件 0 件 / 无可算 /
+   无可挤出」或样本缺失 → 非零退出（`unsupported` 的挤出结论不算失败，与第 6 步同口径）；
+3. 跑完删掉临时目录，并**核对 `tech_app/data/*/meta.json` 数量前后不变** —— 变了直接判失败。
+   这条是专门给 ## 246 那次"少写一个环境变量前缀就在生产目录里建了项目"兜底的：脚本自己会抓。
+
+第 6 步一行未改（真实项目那条路、未给 id 仍 `skip`）。两步互补：第 6 步证明「某个真实项目的数据
+是对的」，第 6b 步证明「这台机器的链路是通的」。Spec §6.1 / §7 与 `DEPLOYMENT.md` 同步写清。
+
+### 验收（本地先跑，再上 34）
+
+- 本地把这段 python 从脚本里抽出来单跑：`酒盒 8/8 completed、64 件、closed_ratio 0.797、可算 4 /
+  可挤出 1；圆盘盒 8/8、9 件、0.889、可算 1 / 可挤出 7`，`isolated_downstream_selfcheck=ok`；
+- 门禁红测 `Ran 17 tests ... OK`（E1/E2 未被顶掉：第 6 步的 `skip` 分支仍在原文窗口内）；
+- `bash -n scripts/deploy_34_bare.sh` 通过。
+
+### 34 上实跑（部署 1398463 → 6ca6732）
+
+```
+== 6. 下游连通自检 ==            （未提供项目 id → 仍 skip，如实打印跑法）
+skip：未提供样本项目 id，跳过下游连通自检
+== 6b. 下游连通自检（隔离端到端） ==
+· 酒盒.dwg：八步 8/8 completed；零件 64 件（closed_ratio=0.797）；可算 4 / 可挤出 1
+   · 代表件 DWG-P07：outline_status=closed size_source=closed_outline 挤出=unsupported
+· 圆盘盒.dwg：八步 8/8 completed；零件 9 件（closed_ratio=0.889）；可算 1 / 可挤出 7
+   · 代表件 DWG-P04：outline_status=closed size_source=closed_outline 挤出=ok
+{"isolated_downstream_selfcheck": "ok", "problems": []}
+隔离端到端自检通过（建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）
+· 已删除隔离目录 /tmp/cpq-parts-selfcheck.4021940
+· 生产数据目录未被写入（meta.json 数量 0 → 0）
+```
+
+第 4 步 `health：status=ok`（`8010 pid=4022146`）、第 5 步两份样本仍由主转换器完成
+（`converter_role=primary`、`fallback_used=false`、ODA 27.1 / ACAD2018）。
+
+### 边界
+
+- 只改 `scripts/deploy_34_bare.sh` + Spec §6.1/§7 + `DEPLOYMENT.md` + 本条目；未改任何业务代码、
+  未改任何 `tests/` 文件，**未引入任何新依赖**。
+- 34 上生产数据目录：**0 个项目、0 份零件文档**，与跑之前逐项一致；未连数据库、未写 PG。
+- 未创建 MR / tag / Release；能力声明仍是 **L2（可信）**（`parts_demo_script` 未签字）。
