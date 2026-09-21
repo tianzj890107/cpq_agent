@@ -28,6 +28,10 @@ Ran 226 tests  FAILED (failures=6, errors=8)     # 共 14 条红，不是 7 条
 
 **B. 6 条 FAIL = 最低收费口径未裁决（真业务红）**
 
+> 2026-09-21 更新：本条已由业务裁决收敛（取 ② 报价-工费率，主行无门限），
+> 落地契约与期望值变更见 `docs/specs/packaging-cost-minimum-charge-decision.md`。
+> 下面这段"未裁决"的现场描述作为当时的问题陈述保留。
+
 - `test_d5_chosen_policy_reproduces_its_golden_values`：断言
   `minimum_charge_policy.status == "chosen"`，实测 `pending`
   —— 红测自己的注释写明「本批必须先由业务/用户裁决；未裁决时这条必然失败」；

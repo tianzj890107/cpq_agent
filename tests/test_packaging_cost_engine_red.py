@@ -588,32 +588,40 @@ class BGoldenSamples(CostCase):
 
 
 # --------------------------------------------------------------------------- #
-# C. 最低收费（MAX 最低收费/数量）
+# C. 最低收费（② 报价-工费率 落地后主行无门限：只按表达式摊到单件）
 # --------------------------------------------------------------------------- #
 class CMinimumCharge(CostCase):
+    """2026-09-21 口径裁决取 ②（`docs/specs/packaging-cost-minimum-charge-decision.md`）。
+
+    本组 c1/c2/c4 的期望值按裁决更新：四个码的 `minimum_charge` 归零，`c3`（表达式更高）
+    与 `c5`（本来就是 0）不变；第 1 批冻结值改由 `frozen_minimum_charge` 留证。
+    """
+
     LAMINATION = {"machine_length": 889, "machine_width": 700, "imposition_count": 1,
                   "setup_minutes": 30, "capacity_per_hour": 5500, "equipment_rate": 197,
                   "labor_rate": 145, "film_price": 1.7, "film_thickness_um": 18,
                   "film_kg_price": 18.5, "tax_factor": 1.13}
 
-    def test_c1_minimum_charge_kicks_in_when_expression_is_low(self):
+    def test_c1_low_expression_does_not_hit_a_minimum_charge(self):
         module = self.cost_mod()
         variables = dict(self.LAMINATION, quote_quantity=1000,
                          machine_length=20, machine_width=20)
         line = module.compute_line("lamination", variables)
-        self.assertTrue(line["min_charge_applied"], "表达式远低于 200/1000 时必须命中最低收费")
-        self.assertAlmostEqual(line["amount"], 0.2, places=6,
-                               msg="MAX(200/1000, 表达式) = 0.2")
+        self.assertFalse(line["min_charge_applied"],
+                         "② 报价-工费率主行无门限，表达式再低也不许命中最低收费")
+        self.assertAlmostEqual(line["amount"], 0.233916788093, places=6,
+                               msg="必须复现 ② 口径的表达式值")
 
-    def test_c2_minimum_charge_divides_by_quantity(self):
+    def test_c2_low_expression_scales_by_quantity_without_a_floor(self):
         module = self.cost_mod()
-        for quantity, expected in ((100, 2.0), (1000, 0.2), (10000, 0.02)):
+        for quantity, expected in ((100, 1.772916788093), (1000, 0.233916788093),
+                                   (10000, 0.080016788093)):
             line = module.compute_line("lamination", dict(
                 self.LAMINATION, quote_quantity=quantity,
                 machine_length=20, machine_width=20))
-            self.assertTrue(line["min_charge_applied"])
+            self.assertFalse(line["min_charge_applied"], "q=%d 不许命中门限" % quantity)
             self.assertAlmostEqual(line["amount"], expected, places=6,
-                                   msg="最低收费按数量摊：200/%d" % quantity)
+                                   msg="② 口径下只按表达式摊到单件：q=%d" % quantity)
 
     def test_c3_expression_wins_when_it_is_higher(self):
         module = self.cost_mod()
@@ -621,15 +629,16 @@ class CMinimumCharge(CostCase):
         self.assertFalse(line["min_charge_applied"])
         self.assertAlmostEqual(line["amount"], 1.3766112580048271, places=6)
 
-    def test_c4_die_cut_minimum_charge_is_100(self):
+    def test_c4_die_cut_has_no_minimum_charge(self):
         module = self.cost_mod()
         base = {"imposition_count": 1, "setup_minutes": 120, "capacity_per_hour": 6500,
                 "equipment_rate": 197.52, "labor_rate": 190.06}
         low = module.compute_line("die_cutting", dict(base, quote_quantity=100))
-        self.assertTrue(low["min_charge_applied"], "100 件时 100/100 = 1.0 > 0.8348")
-        self.assertAlmostEqual(low["amount"], 1.0, places=6)
+        self.assertFalse(low["min_charge_applied"], "啤/切主行不许再有 100 件门限")
+        self.assertAlmostEqual(low["amount"], 7.811227692308, places=6)
         high = module.compute_line("die_cutting", dict(base, quote_quantity=1000))
-        self.assertFalse(high["min_charge_applied"], "1000 件时 100/1000 = 0.1 < 0.8348")
+        self.assertFalse(high["min_charge_applied"])
+        self.assertAlmostEqual(high["amount"], 0.834787692308, places=6)
 
     def test_c5_zero_minimum_charge_never_applies(self):
         module = self.cost_mod()

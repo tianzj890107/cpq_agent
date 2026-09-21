@@ -169,8 +169,14 @@ class CRegressionGuards(unittest.TestCase):
 
     def test_c5_red_tests_are_not_loosened(self):
         src = (ROOT / "tests" / "test_packaging_cost_engine_red.py").read_text(encoding="utf-8")
-        self.assertIn("must call", src.replace("必须命中最低收费", "must call"),
-                      "引擎红测的断言文本必须保持原样（禁止靠放宽断言转绿）")
+        # 2026-09-21 口径裁决取 ② 报价-工费率（主行无门限），引擎红测的锚点文本随之更新；
+        # 锚点仍是「裁决后的具体数值 + 口径声明」，实现方不许靠放宽断言或改数值转绿。
+        for anchor in ("② 报价-工费率主行无门限", "0.233916788093", "1.772916788093",
+                       "7.811227692308"):
+            self.assertIn(anchor, src,
+                          "引擎红测的裁决锚点 %r 必须保持原样（禁止靠放宽断言转绿）" % anchor)
+        self.assertNotIn("MAX(200/1000, 表达式)", src,
+                         "①/混合口径的旧断言文本不得回潮（裁决已改为 ②）")
 
 
 if __name__ == "__main__":

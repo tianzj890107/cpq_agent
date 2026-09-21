@@ -80,8 +80,11 @@ LAMINATION_VARS = {"machine_length": 889, "machine_width": 700, "imposition_coun
 GOLDEN_LAMINATION = 1.3766112580048271
 GOLDEN_DIE_CUT = 0.8347876923076923
 GOLDEN_GLUE = 0.46050199999999997
-GOLDEN_MINIMUM_CHARGES = {"PKG-C-LAMINATION": 200, "PKG-C-HOT-STAMP-FLAT": 150,
-                          "PKG-C-DIE-CUT": 100, "PKG-C-V-GROOVE": 120}
+#: 2026-09-21 口径裁决（`docs/specs/packaging-cost-minimum-charge-decision.md`）：
+#: 取 ② 报价-工费率，主行无门限，四个码的 minimum_charge 一律归零。第 1 批冻结值
+#: 200/150/100/120 只作证据留在 `FORMULA_CATALOG[*]["frozen_minimum_charge"]`，不再参与命中判定。
+DECIDED_MINIMUM_CHARGES = {"PKG-C-LAMINATION": 0, "PKG-C-HOT-STAMP-FLAT": 0,
+                           "PKG-C-DIE-CUT": 0, "PKG-C-V-GROOVE": 0}
 
 
 def load_cost_module():
@@ -516,9 +519,10 @@ class FUnchangedContracts(RoutingCase):
             module.compute_line("glue", {"machine_length": 889, "machine_width": 700,
                                          "imposition_count": 1, "glue_unit_price": 0.74})["amount"],
             GOLDEN_GLUE, places=6)
-        for code, expected in GOLDEN_MINIMUM_CHARGES.items():
+        for code, expected in DECIDED_MINIMUM_CHARGES.items():
             self.assertEqual(module.FORMULA_CATALOG[code]["minimum_charge"], expected,
-                             "%s 的最低收费属修复第 3 批（口径裁决），本批不许改" % code)
+                             "%s 的最低收费已按 2026-09-21 的 ② 裁决归零"
+                             "（docs/specs/packaging-cost-minimum-charge-decision.md）" % code)
 
 
 if __name__ == "__main__":

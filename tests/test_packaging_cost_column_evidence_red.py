@@ -379,7 +379,9 @@ class DRegressionGuards(EvidenceCase):
             "labor_rate": 145, "film_price": 1.7, "film_thickness_um": 18,
             "film_kg_price": 18.5, "tax_factor": 1.13, "quote_quantity": 1000})
         self.assertAlmostEqual(line["amount"], 1.3766112580048271, places=6)
-        for code, expected in (("PKG-C-LAMINATION", 200), ("PKG-C-DIE-CUT", 100)):
+        # 2026-09-21 口径裁决取 ② 报价-工费率（主行无门限），门限归零
+        # （见 docs/specs/packaging-cost-minimum-charge-decision.md §4）。
+        for code, expected in (("PKG-C-LAMINATION", 0), ("PKG-C-DIE-CUT", 0)):
             self.assertEqual(module.FORMULA_CATALOG[code]["minimum_charge"], expected)
 
     def test_d3_snapshot_formulas_are_unchanged_by_this_batch(self):

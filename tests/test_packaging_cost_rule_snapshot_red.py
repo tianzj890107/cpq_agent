@@ -276,9 +276,17 @@ class ARulesSnapshot(SnapshotCase):
             item = items[code]
             self.assertAlmostEqual(item["expected_result"], expected, places=9,
                                    msg="%s 的 expected_result 必须逐字照抄 0903 缓存值" % code)
-            self.assertAlmostEqual(item["verify_inputs"]["quote_quantity"], inputs["quote_quantity"],
-                                   places=6,
-                                   msg="%s 的 verify_inputs 必须取 0903 同一行的输入" % code)
+            # 金标输入**逐键**核对。旧写法只核对 `quote_quantity`，而
+            # `PKG-C-GLUE` / `PKG-P-CARTON` / `PKG-P-PAD` / `PKG-P-PALLET` 这 4 条金标本来就
+            # 没有这个键，于是旧写法对这 4 条抛 KeyError —— 是测试自己写坏了（只覆盖了
+            # 6/10 条），不是快照缺数据。改成逐键核对后覆盖面从 6 条变成 10 条全量，
+            # 断言强度只增不减。
+            for key, value in inputs.items():
+                self.assertIn(key, item["verify_inputs"],
+                              "%s 的 verify_inputs 缺金标输入 %s" % (code, key))
+                self.assertAlmostEqual(float(item["verify_inputs"][key]), float(value), places=6,
+                                       msg="%s 的 verify_inputs.%s 必须取 0903 同一行的输入"
+                                           % (code, key))
 
     def test_a11_formula_version_is_the_rule_set(self):
         rules = read_rules()
@@ -541,10 +549,15 @@ class EUnchangedContracts(SnapshotCase):
             line = module.compute_line(item["cost_category"], dict(inputs), formula_code=code)
             self.assertAlmostEqual(line["amount"], expected, places=6,
                                    msg="%s 的本批不允许改口径（第 1 批 f3 已冻结）" % code)
-        for code, expected in (("PKG-C-LAMINATION", 200), ("PKG-C-HOT-STAMP-FLAT", 150),
-                               ("PKG-C-DIE-CUT", 100), ("PKG-C-V-GROOVE", 120)):
-            self.assertEqual(module.FORMULA_CATALOG[code]["minimum_charge"], expected,
-                             "%s 的最低收费属第 3 批口径裁决，本批不许改" % code)
+        # 2026-09-21 口径裁决取 ② 报价-工费率（主行无门限）：minimum_charge 归零，
+        # 第 1 批冻结值 200/150/100/120 留在 frozen_minimum_charge 作证据，不再参与命中判定
+        # （见 docs/specs/packaging-cost-minimum-charge-decision.md §4）。
+        for code, frozen in (("PKG-C-LAMINATION", 200), ("PKG-C-HOT-STAMP-FLAT", 150),
+                             ("PKG-C-DIE-CUT", 100), ("PKG-C-V-GROOVE", 120)):
+            self.assertEqual(module.FORMULA_CATALOG[code]["minimum_charge"], 0,
+                             "%s 的最低收费已按 ② 裁决归零" % code)
+            self.assertEqual(module.FORMULA_CATALOG[code]["frozen_minimum_charge"], frozen,
+                             "%s 的第 1 批冻结值必须留证" % code)
 
 
 if __name__ == "__main__":

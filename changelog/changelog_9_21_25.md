@@ -5917,3 +5917,53 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
    （两侧引擎一致）。尺寸差一个数量级还能"可确认"，建议给 `size_range` 加门槛或加"越界即需新开模"。
 
 未提交（本轮只读复核）；未推送；未部署。若上面两点要改，那是新的口径裁决，得先签字。
+
+## 222. 最低收费口径裁决（②）+ 盒型匹配两处口径缺口：Spec + 红测 + 期望值按裁决更新（9-21，Codex 只改 Spec / 红测 / changelog）
+
+背景（## 221 复核提出的三件事）已由业务给结论（「全都按照你的建议」）：
+最低收费取 **② 报价-工费率**；盒型缺 `fit_clearance` **两侧对称处理**（不计分但要看得见）；
+尺寸 **越界就不推荐**。本批把三条结论写成可验收的 Spec 与红测，并按裁决更新了 6 处旧期望值。
+**不含任何业务实现**（实现提示词只在会话中交付，不入仓）。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-cost-minimum-charge-decision.md`（裁决记录 + 契约 C1–C5 + 口径变更清单）、
+  `docs/specs/packaging-match-undecidable-and-size-guard.md`（契约 C1–C5：对称不计分 / `data_gaps` /
+  布尔写法归一 / 越界不推荐 / 权威盒型必须登记配合间隙）。
+- 红测：新增 `tests/test_packaging_cost_policy_decision_red.py`（15 条，7 红）、
+  `tests/test_packaging_match_undecidable_and_size_guard_red.py`（23 条，12 红；A–E 组管工艺侧，
+  F 组专门管**报价侧同口径模块同步**——`cpq_packaging_match.py` 是同一口径的第二份实现，
+  只改工艺侧等于报价工作台没修，而现有 parity 用例恰好覆盖不到这三种输入）。
+- 期望值按裁决更新（Codex 的测试职责，属裁决落地范围）：`test_packaging_cost_engine_red.py`
+  的 `c1/c2/c4` 改按 ② 口径（`minimum_charge` 归零 → 只按表达式摊到单件）、
+  `test_packaging_cost_rule_routing_red.py` 的 `f3`、`test_packaging_cost_rule_snapshot_red.py` 的 `e1`、
+  `test_packaging_cost_column_evidence_red.py` 的 `d2` 三处护栏杆一律改成 `0 / 0 / 0 / 0`，
+  并把第 1 批冻结值改由 `frozen_minimum_charge` 留证（不再参与命中判定）。
+- 红测自身缺陷修复：`test_packaging_cost_rule_snapshot_red.py::test_a10_golden_results_are_transcribed`
+  原来只按 `GOLDEN_RESULTS[code]["quote_quantity"]` 取值，而 4 条金标（GLUE / CARTON / PAD / PALLET）
+  本就没有该键 → 抛 `KeyError`；改为**逐键核对**，覆盖面 6 条 → 10 条，断言只增不减。
+- 锚点守卫随裁决重指：`test_packaging_cost_red_closure_red.py::test_c5_red_tests_are_not_loosened`
+  原来断言引擎红测里还有 `必须命中最低收费` 这句①口径文本；裁决后该文本按 §4 被替换，守卫因此改指
+  裁决后的契约（口径声明 + 三个 ② 数值），并新增「①/混合口径旧断言文本不得回潮」——断言强度只增不减。
+- `docs/specs/packaging-cost-red-closure.md` §B 加一行指针（那条「未裁决」现场陈述作为历史保留）。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`；本机 `pytest` 未装、`openpyxl` 仅在该 venv，故用 unittest 跑）
+
+- 新红测按预期红：`policy_decision` `Ran 15, failures=7`（A1/A2/A4/A5、B1/B2、C2）；
+  `match_undecidable_and_size_guard` `Ran 23, failures=12`（A1/A2、B1/B2、C1/C2、D1、E1、F1–F4）。
+- 期望值更新后：`snapshot` `Ran 37, failures=1`（只剩 `e1`，`200 != 0`，等实现）、
+  `engine` `Ran 81, failures=1`（只剩 `c2`：q=100 现为 `max(200/100, 1.7729) = 2.0`；
+  `c1/c4` 在 ② 语义下本来就绿）、`routing + column_evidence` `Ran 61, failures=2`（`f3`、`d2`）。
+- 保护网未破：`test_packaging_box_type_matching_red`（51）+ `test_quote_packaging_box_selection_red`
+  + `test_kb_authoritative_promotion_red` 合计 86 条 **全绿**。
+- 等裁决的红集合**没有扩大**：`minimum_charge_red + red_closure` 仍是 `Ran 61, failures=5`
+  （`d5`、`a3`、`a4`、`b1`、`b2`），与裁决前逐条相同；锚点守卫 `c5` 重指后仍为绿。
+- 说明：红测先行会使红色总数在实现落地前上升（本批新增 2 条业务红 + 3 处护栏杆转红），这是期望值先行的正常状态。
+
+### 未做 / 遗留
+
+- 未写业务实现（`packaging_cost.py` 的门限归零 / `packaging_cost_rules.json` 裁决落档 /
+  `_MIN_CHARGE_DECISIONS` 四条全登记 / `packaging_match.py` 两处口径 / 预检问题码
+  `box_type_missing_fit_clearance`），等 DeepSeek 按提示词实现。
+- 未提交 `scripts/tmp_import_dwg_cases.py`（他人临时脚本）与 `裕同包装项目-待开发/`（客户样本）。
+- 未 push / MR / tag / Release / 部署；未动 `20260909` / `master`；未改动任何生产数据。
