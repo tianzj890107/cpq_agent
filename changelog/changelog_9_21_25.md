@@ -8274,3 +8274,86 @@ skip：未提供样本项目 id，跳过下游连通自检
   批 7 的提示词明令「不改批 5 客户端」，所以留一行给下一批：客户端忽略 `source=="document_extents"`
   的外形尺寸（并兼容裸数字），或服务侧补 `axis`。
 - 未提交、未推送、未部署：本条目前只改工作区（3 批实现 + 本节 changelog）。
+
+## 250. 补记：统一解析服务在 34 上被 app 级鉴权挡成 401 → 两条路由进免登录白名单，并当场端到端复验（f7b099c）（9-21，Codex 实现 + 部署）
+
+### 现象（实测，不是推断）
+
+部署 `## 249`（`ed68ae2`）后打 34：`GET http://172.16.10.34:8010/api/file/parse/capability`
+→ **401**。链路上有两层，逐层排掉后确认 401 来自**技术工艺 app 自己的 app 级鉴权守卫**：
+
+- 8010（`cpq_suite_server`）对 `/api/*` 是**无鉴权原样反代**给 8012（`_is_tech_path()` +
+  `_proxy_tech()`，不带票也转发）；
+- 401 是 tech app 的 `auth_guard` / `_cpq_sso_guard` 给的：`/api/*` 一律要票，只放行
+  `_PUBLIC_PATHS` 里的 health / login / register。路由本身没写 `Depends(current_user)`，
+  但守卫在 app 层 —— 所以我在 `## 249` 里写的「免登录」当时是**说大了**。
+
+### 为什么必须免登录
+
+- 报价侧快速通道是**纯 HTTP 客户端**：`cpq_quick_quote_file.DEFAULT_PARSE_URL`
+  = `http://127.0.0.1:8010/api/file/parse`，请求里**没有任何票**（客户端也拿不到票）；
+- Spec 批 7 §2.6 的端到端红测（I 组）就是**不带票**直连并期望 200；
+- 批 7 的提示词明令「不改批 5 客户端」，所以只能把这两条路径做成公开路径。
+
+### 改法（只动 2 个文件，都在批 7 的允许范围内）
+
+- `unified_parse.py` 新增 `SERVICE_PATH` / `CAPABILITY_PATH` 两个常量（路由路径的唯一事实源）；
+- `main.py`：`_PUBLIC_PATHS.update({unified_parse.SERVICE_PATH, unified_parse.CAPABILITY_PATH})`，
+  并写清为什么可以公开：两个端点**只读**、不写业务数据、转换另有 `MAX_PARSE_BYTES`(64MB) 上限与
+  转换器超时，与 `/api/health` 同类。
+- 一处实现细节（免得后人踩）：白名单那里**不能**直写 `"/api/file/parse"` 字面量 —— 红测
+  `test_g2_parse_error_status_is_passed_through` 取 `text.find("/api/file/parse")` 的 ±4000 字符
+  窗口断言里面有 `http_status` / `code`，而白名单在文件前部，会把窗口整个挪走。所以路径走常量，
+  字面量仍留在装饰器上（也便于按路由快速定位）。
+
+### 复验：34 上真跑（`f7b099c`，8010 pid=48238）
+
+统一解析服务端点（不带票直连 8010）：
+
+```
+GET  /api/file/parse/capability -> 200 {"service":"cpq-unified-parse","provider":"oda",
+     "provider_version":"27.1","dwg":true,"dxf":true,"preview":true}
+POST /api/file/parse（真样本 酒盒.dwg）-> 200 ok=True provider=oda 27.1 elapsed_ms=11497
+     layers(8): ['0','CUTTER','DESIGN','Defpoints','SAMPLE','_U+56FE_U+5C42 1','图层 2','轮廓线']
+     annotated_dimensions=316  text_annotations=127  v_groove=True  units=mm
+     outline_size={'width':14362.15,'height':6151.80,'source':'document_extents'}
+错误路径：需求.docx -> 400 unsupported_format（advice 指向 /api/extract）；
+         坏 base64 -> 400 bad_payload；空文件 -> 400 empty_file
+```
+
+报价侧**客户端**（`cpq_quick_quote_file`，就是面板走的那条路）在 34 上直接跑：
+
+```
+DEFAULT_PARSE_URL = http://127.0.0.1:8010/api/file/parse
+capability via client: {"provider":"oda","provider_version":"27.1","dwg":true,...}
+parse_file kind=drawing layers=8 dims=316 texts=127 v_groove=True
+to_match_inputs -> {"inner_width":14362.15,"inner_height":6151.80,"v_groove":true}
+```
+
+案例库现状（批 6 readiness，读的是共享 PG 真数据）：
+
+```
+cases=2 eligible=0 verdict=no_eligible
+headline: 2 条案例，0 条可用于快速报价
+blocked: missing_fields 2 —— 补齐缺的必需字段：标准单价
+next_actions: ['fill_case_fields', 'transfer_to_precise']
+```
+
+### 仍然要人做的事（写在这里，别当成已通）
+
+- **批 7 与批 5 客户端之间那条集成缝仍然在**（`## 249` 已记）：`to_match_inputs()` 把**图纸幅面**
+  `14362×6152` 当成了 `inner_width` / `inner_height`（上一条复验里的 `inputs` 就是实锤）。
+  今天不会算错价（2 条案例本身 `needs_input`、会排在可用案例之后），但案例补齐后就会失真。
+  修法是一行（客户端忽略 `source=="document_extents"` 的外形尺寸，并兼容裸 `measured_value`），
+  属批 5 客户端 → 留给下一批，本轮没动。
+- 案例库里那 2 条仍是 `draft` 且缺「标准单价」：要业务补价并审到 `reviewed` 才可能 `eligible > 0`
+  （`## 244` 导入时就是待补状态，页面已如实显示）。
+- 差异价费率仍 4 条 `demo` / `draft`：批 8 现在会让它们显示成 `trial` + 演示告警、并拦住
+  `formal=True` 落库；换成权威口径要业务签字（流程见 `DEPLOYMENT.md`）。
+
+### 回归
+
+- 快速报价八套：`Ran 304 tests` → OK (skipped=3)；
+- 鉴权 / ACL 相关 9 个文件：`Ran 207 tests` → OK（app 级白名单是安全敏感面，专门跑过）；
+- 全量回归：`Ran 4230 tests` → failures=19 errors=0 skipped=20，与基线（`## 248`）**逐条相同，
+  零新增**。
