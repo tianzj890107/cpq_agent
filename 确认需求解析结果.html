@@ -981,6 +981,62 @@
       return v || CURRENT_INDUSTRY || '';
     }
 
+    // 行业是从「报价首页建单」带进来的：URL 管首次进入（?industry=），记忆键管刷新/回退。
+    // 两者都可能没有 —— 这时才落到服务端下发的默认行业。
+    function urlIndustry() {
+      try { return new URLSearchParams(location.search).get('industry') || ''; } catch (e) { return ''; }
+    }
+    function storedIndustry() {
+      try { return sessionStorage.getItem('cpq:industry') || ''; } catch (e) { return ''; }
+    }
+
+    /* 行业初始值只有这一处判定，优先级：卡片 > URL > 记忆键 > 服务端默认。
+       逐级先 trim + 小写（与 cpq_industries.normalize 同口径），非空且在服务端下发的
+       清单里才算有效；非法值（含历史键 flexible）视为该级缺失、继续往下找；
+       全部无效才落 defaultIndustry —— 不引入新默认，也不硬编码第二份行业清单。
+       纯函数：不读全局、不写全局，同样输入同样输出。 */
+    function resolveInitialIndustry(cardIndustry, urlIndustry, storedIndustry, defaultIndustry,
+                                    knownIndustries) {
+      const known = (Array.isArray(knownIndustries) ? knownIndustries : [])
+        .map(function (item) { return String(item || '').trim().toLowerCase(); })
+        .filter(Boolean);
+      const pick = function (raw) {
+        const value = String(raw || '').trim().toLowerCase();
+        return (value && known.indexOf(value) >= 0) ? value : '';
+      };
+      return pick(cardIndustry) || pick(urlIndustry) || pick(storedIndustry)
+        || String(defaultIndustry || '').trim().toLowerCase();
+    }
+
+    function industryLabel(key) {
+      const hit = INDUSTRIES.filter(function (item) { return String(item.key) === key; })[0];
+      return (hit && (hit.label || hit.key)) || key;
+    }
+
+    // 下拉改行业要一起做四件事：更新当前行业 → 写回记忆键 → 换 ④产品技术参数 表头 →
+    // 同步卡片。四件事必须同源，否则会出现「页面按包装算、卡片仍记半导体」这种半截状态。
+    // 事件只当触发信号，取值一律以下拉的当前值为准（程序化赋值不触发 change）。
+    function bindIndustrySelect(el, apply) {
+      return function () { apply(el.value || ''); };
+    }
+
+    /* 卡片里的行业才是这张单据的权威记录：打开已有卡片时以它为准（非空且合法才覆盖），
+       并给一条可见提示 —— 静默把用户刚选的行业改掉比不改更糟。老卡片没有行业
+       （cpq_wf 读回空串），此时保持请求级顺序（URL / 记忆键 / 默认）。 */
+    function applyCardIndustry(card) {
+      const value = String((card && card.industry) || '').trim().toLowerCase();
+      const known = INDUSTRIES.some(function (item) { return String(item.key) === value; });
+      if (!value || !known) return false;
+      const el = $('industrySelect');
+      const before = CURRENT_INDUSTRY;
+      CURRENT_INDUSTRY = value;
+      if (el) el.value = value;
+      if (before && before !== value && typeof addAiBubble === 'function') {
+        addAiBubble('本单行业：' + industryLabel(value) + '（以这张报价卡片已保存的行业为准）');
+      }
+      return true;
+    }
+
     function renderIndustrySelect() {
       const el = $('industrySelect');
       if (!el) return;
@@ -988,12 +1044,14 @@
         '<option value="' + escapeHtml(i.key) + '">' + escapeHtml(i.label || i.key) + '</option>').join('');
       if (!CURRENT_INDUSTRY) CURRENT_INDUSTRY = (INDUSTRIES[0] && INDUSTRIES[0].key) || '';
       el.value = CURRENT_INDUSTRY;
-      el.onchange = () => {
-        CURRENT_INDUSTRY = el.value || '';
-        // ④产品技术参数的表头随行业换源：表头**只能**由服务端给（/api/meta?industry=），
-        // 前端不判断行业名、也不自己拼列。行数据由下一次 s1/s2_techparams 事件带回。
+      // ④产品技术参数的表头随行业换源：表头**只能**由服务端给（/api/meta?industry=），
+      // 前端不判断行业名、也不自己拼列。行数据由下一次 s1/s2_techparams 事件带回。
+      el.onchange = bindIndustrySelect(el, (industry) => {
+        CURRENT_INDUSTRY = industry || '';
+        try { sessionStorage.setItem('cpq:industry', CURRENT_INDUSTRY); } catch (e) {}
         refreshIndustryForms(CURRENT_INDUSTRY);
-      };
+        wfSyncCard();
+      });
     }
 
     // 把服务端按行业下发的 ④产品技术参数表头同步到已预渲染的骨架；
@@ -2939,6 +2997,7 @@
             customer: (sessionStorage.getItem('cpq:customer') || ''),
             project_name: (sessionStorage.getItem('cpq:projectName') || ''),
             current_step: step || currentStep,
+            industry: currentIndustry(),
           },
         });
         WF.card = d.card;
@@ -2963,6 +3022,10 @@
       try {
         const d = await wfApi('/wf/card?session_id=' + encodeURIComponent(currentSessionId));
         WF.card = d.card; WF.steps = d.steps || [];
+        // 卡片里的行业是本单权威记录：非空就压过 URL/记忆键，并给可见提示（不静默）
+        if (applyCardIndustry(WF.card)) {
+          try { sessionStorage.setItem('cpq:industry', CURRENT_INDUSTRY); } catch (e) {}
+        }
         WF.canEdit = !!d.can_edit; WF.needRole = d.need_role_name || '';
         WF.awaiting = !!d.awaiting_handoff;      // 本步已完成、还没推送出去
         WF.pendingTask = d.pending_task || null; // 已推送、等人领取
@@ -4305,6 +4368,8 @@
     async function startNewQuote() {
       if (busy) return;
       try {
+        // 行业记忆键**故意**不在清理清单里：与技术工艺路径「记住上次选的行业」一致，
+        // 同一个人通常连着建同一行业的单子，每次都退回默认行业等于每次都要重选。
         ['cpq:requirement', 'cpq:files', 'cpq:fileContents', 'cpq:projectName', 'cpq:projectCode', 'cpq:customer']
           .forEach(k => sessionStorage.removeItem(k));
       } catch {}
@@ -4633,7 +4698,12 @@
         setConn(true);
         FORMS = meta.forms || []; // 写死的表结构（用于预渲染骨架）
         INDUSTRIES = meta.industries || [];              // 行业清单由服务端下发
-        CURRENT_INDUSTRY = CURRENT_INDUSTRY || meta.default_industry || '';
+        // 行业不是「服务端默认」一条路：首页建单带过来的 URL / 记忆键优先，卡片最高
+        //（卡片在 openSession / wfRefresh 里读回，见 applyCardIndustry）。
+        CURRENT_INDUSTRY = resolveInitialIndustry(
+          '', urlIndustry(), storedIndustry(), meta.default_industry || '',
+          INDUSTRIES.map(function (item) { return item.key; }));
+        try { sessionStorage.setItem('cpq:industry', CURRENT_INDUSTRY); } catch (e) {}
         renderIndustrySelect();
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);

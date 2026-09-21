@@ -5605,3 +5605,38 @@ FAILED (failures=28, errors=11, skipped=2)
 `裕同包装项目-待开发/` 仍是未跟踪目录；本批 5 份 Spec 与 5 份红测、以及 `## 213`/`## 214`
 同样处于本地未提交状态。本文件里 `## 213` 与 `## 214` 各出现过两次（历史条目编号碰撞），
 按「历史记录不改写」保留原样，未重排。
+
+## 216. 报价建单的行业带过去：实现提交（9-21，DeepSeek 实现 / Codex 审查 + 提交）
+
+`## 214` 的 Spec + 红测（`Ran 28 tests FAILED (failures=12)`）已由实现补齐，
+本条目只记录**实现落地与审查结论**。
+
+### 改了什么（3 个文件）
+
+- `cpq_suite_server.py`：`/wf/card/sync` 把 `industry` 透传给
+  `cpq_wf.sync_card(..., industry=...)`（该函数本就支持「非空才写、留空不猜」）。
+- `报价首页.html`：报价分支写 `sessionStorage['cpq:industry']`（复用既有 `techIndustry()`），
+  并在跳转 URL 上带 `?industry=`；配置/规则分支刻意不带（与行业模板无关）。
+- `确认需求解析结果.html`：新增纯函数
+  `resolveInitialIndustry(cardIndustry, urlIndustry, storedIndustry, defaultIndustry, knownIndustries)`
+  （优先级 卡片 > URL > 记忆键 > 服务端默认，逐级 trim+小写并按下发清单校验）；
+  启动接入；下拉改动写回记忆键并 `wfSyncCard()`；打开已有卡片且卡片行业非空时以卡片为准
+  （给可见提示，不静默）；「新报价」保留行业记忆键。
+
+### 审查结论（Codex 对照 `docs/specs/quote-home-industry-carryover.md`）
+
+`python3 -m unittest tests.test_quote_home_industry_carryover_red` → **Ran 28 tests OK**（12 红转绿）。
+逐条核对通过：纯函数无全局引用、优先级与非法值处理、`/wf/card/sync` 透传、
+老卡片空串语义不变、`startNewQuote()` 不被清理、行业清单仍只由 `/api/meta` 下发（前端不硬编码第二份）。
+未发现阻塞项；`CURRENT_INDUSTRY` 在启动时即写入记忆键属"记住上次选择"的既有语义，不视为缺陷。
+
+### 来源与恢复
+
+该实现此前被 `git stash` 收进 `stash@{0}: carryover-wip2`（2026-09-21 16:32:25，
+`+89 / -9`），工作区表现为"实现消失"。本次以 `git stash apply`（**不是 pop**）就地恢复，
+stash 条目仍保留，避免误丢。
+
+### 边界
+
+本条只提交实现 + changelog：未改既有红测、未动 `裕同包装项目-待开发/` 客户样本、
+未提交他人临时脚本 `scripts/tmp_import_dwg_cases.py`。

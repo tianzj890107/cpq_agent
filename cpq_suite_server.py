@@ -657,11 +657,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"tasks": cpq_wf.inbox(user)})
             elif path == "/wf/card" and m == "GET":
                 self._send_json(200, cpq_wf.card_detail(arg("session_id"), user))
-            elif path == "/wf/card/sync" and m == "POST":
+            # 报价卡片同步：industry 原样透传，cpq_wf.sync_card() 非空才写、留空不猜，
+            # 老卡片保持原值（读回空串）。
+            elif path == "/wf/card/sync" and m == "POST":  # payload(session_id/title/customer/project_name/current_step/industry)
                 d = self._read_json()
                 card = cpq_wf.sync_card(d.get("session_id", ""), user, d.get("title", ""),
                                         d.get("customer", ""), d.get("project_name", ""),
-                                        d.get("current_step"))
+                                        d.get("current_step"), industry=d.get("industry", ""))
                 self._send_json(200, {"ok": True, "card": card})
             elif path == "/wf/card/step-data" and m == "GET":
                 # 某一步确认时的表单快照：接手人用它恢复前面步骤的表格

@@ -2507,6 +2507,10 @@
         sessionStorage.setItem('cpq:projectCode', code);
         if (intent === 'quote') sessionStorage.setItem('cpq:customer', cust);
         else sessionStorage.removeItem('cpq:customer');
+        if (intent === 'quote') sessionStorage.setItem('cpq:industry', techIndustry());
+        // 行业必须跟着走（与技术工艺路径复用同一个 techIndustry()）：工作台第 1 步的必填
+        // 门禁、④产品技术参数换源、候选匹配源都按它算——漏带就等于让包装询盘按半导体口径走。
+        // 配置/规则与行业模板无关，上面刻意只挂在报价分支里，不给后续建单塞假行业。
       } catch (e) {}
       const ruleKind = intent === 'rule' ? getRuleKind() : '';
       const ruleMeta = RULE_KIND_META[ruleKind] || null;
@@ -2544,7 +2548,11 @@
         sessionStorage.setItem('cpq:fileContents',
           JSON.stringify((files && files.length) ? pickedContents : []));
       } catch (e) {}
-      window.location.href = page;
+      // 行业还要带上 URL：storage 管刷新/回退，URL 管首次进入（技术工艺路径早就是这么做的，
+      // 否则这里选的行业到了需求页会静默变回默认值）。配置/规则页与行业模板无关，不带。
+      window.location.href = (intent === 'quote')
+        ? page + '?industry=' + encodeURIComponent(techIndustry())
+        : page;
     }
 
     async function submitRequirement() {
