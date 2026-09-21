@@ -9958,3 +9958,47 @@ tests.test_packaging_parts_downstream_readback_red   Ran 17 OK
   路由的路径与权限、`packaging-parts-3d-extrusion.md` 的其余条款；
 - 未给缺失料厚默认值（`thickness_unknown` 仍是拒绝）、未用凸包近似提覆盖率、未引入 numpy/trimesh/shapely；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。
+
+## 271. 零件链路的时间预算与自检诊断：逐件诊断带墙钟账、挤出改扫描线、第 6b 步有超时 + 两把账（9-22，Codex 实现 + 相邻面复跑）
+
+`## 269` 记的两个坑（"卡死没人知道"、"失败了只看到一句没有一件能跑工艺"）一起收口。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 预算可见 | `tech_app/backend/services/packaging_parts.py` | 新增 `TIME_BUDGET_MS = 2000`；`outline_diagnosis()` 的返回带 `elapsed_ms` / `budget_exceeded`（超预算**不抛异常、不挂住**，结论仍走既有开线原因闭集）；`extract()` 里的逐件诊断**保持逐字确定**（秒表只在上报口，塞进零件文档会破坏"同一份 IR 两次跑逐字相同"的既有 D 组红测——这一条写回了 Spec §3.4/§3.5） |
+| 挤出提速 | `tech_app/backend/services/packaging_part_solids.py` | `_self_intersects()`：凸多边形**不可能**自交 → 先判凸性直接返回；凹件改按 x 排序的扫描线（只跟 x/y 区间都重叠的边做精确相交判定）。`MAX_POINTS=2000` 的凸多边形从 **2501ms → <1ms**（Spec §3.7 上界 500ms） |
+| 两把账 | `tech_app/backend/services/packaging_parts.py` | `summarize()` 新增 `unprocessable_reason_mix`（逐件 `processability().code`，只统计 `ok == False`）与 `solid_reason_mix`（逐件挤出 `reason`，`ok` 计 `ok`）；排序固定为件数降序 → code 字典序；空文档给 `{}`；分母与 `processable_ratio` 同源（同一循环算出来） |
+| 自检有超时 | `scripts/deploy_34_bare.sh` 第 6b 步 | 自检 python 落成临时文件后用 `timeout 900` 包住（`timeout` 不在 PATH 时用 `SECONDS` 看门狗兜底，同样 900s）；超时 → `SELFCHECK_RC=124` → `fail "第 6b 步：隔离端到端自检超时（上限 900s）…"`（非零退出且点名"卡在哪个样本见上一行"） |
+| 自检有进度 | 同上 | 每个样本**开始**就打一行 `· <样本>：开始跑隔离链路…`，跑完的汇总行与两把账都带 `flush=True`；两把账取 `summarize()` 的**同一份**（脚本不重算），空账不打印；挤出结论改用 `extrude_all()` 一次算完 |
+
+### 实跑（本机 `./open-claude/.venv/bin/python`，串行）
+
+```
+tests.test_packaging_parts_pipeline_time_budget_red   Ran 13 OK（A 组调用计数 / B 组墙钟 / C 组静态 / D 组护栏）
+tests.test_packaging_parts_selfcheck_diagnostics_red  Ran 11 OK
+相邻面（material_attribution + solid_coverage + 3d + extraction + outline_chaining
+        + panel + downstream + downstream_readback）   Ran 176 OK
+tests.test_packaging_parts_downstream_gate_red        Ran 17 OK（108.2s）
+```
+
+本机把第 6b 步的 python **原样**跑了一遍（`DATA_DIR` 指向临时目录，`裕同包装项目-待开发/` 两份样本）：
+
+```
+· 酒盒.dwg：八步 8/8 completed；零件 64 件（closed_ratio=0.938）；可算 9 / 可挤出 9
+   · 不可算原因：PACKAGING_PART_MATERIAL_UNKNOWN×51、PACKAGING_PART_NOT_CLOSED×4
+   · 不可挤出原因：thickness_unknown×51、ok×9、outline_open×4
+· 圆盘盒.dwg：八步 8/8 completed；零件 9 件（closed_ratio=0.889）；可算 1 / 可挤出 8
+   · 不可算原因：PACKAGING_PART_MATERIAL_UNKNOWN×7、PACKAGING_PART_NOT_CLOSED×1
+   · 不可挤出原因：ok×8、outline_open×1
+{"isolated_downstream_selfcheck": "ok", "problems": []}   # RC=0
+```
+
+（本地没有服务间令牌，权威实样路线自检照旧打印原因跳过；酒盒可挤出 6 → 9 是 `## 270` 耳切三角化带来的。）
+
+### 边界
+
+- 未改任何 `tests/`；未改 `LOOP_TOLERANCE_MM` / `OUTLINE_BBOX_COVER_RATIO` / `OUTLINE_OPEN_REASONS` /
+  `MAX_LOOP_*` 口径，未改 `processability()` 判据与 `PACKAGING_PART_*` 错误码；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。

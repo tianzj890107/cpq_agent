@@ -344,7 +344,8 @@ if [ -n "$SELFCHECK_TOKEN" ]; then
 else
   echo "· 取不到服务间内部令牌，知识库自检会打印原因跳过"
 fi
-DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" "$PY" - <<'PY'
+mkdir -p "$SELFCHECK_DIR"
+cat > "$SELFCHECK_DIR/selfcheck.py" <<'PY'
 import json
 import os
 import pathlib
@@ -357,6 +358,14 @@ from tech_app.backend.models.workflow import RequirementDoc
 from tech_app.backend.services import (packaging_drawing_flow, packaging_part_solids,
                                        packaging_parts, requirement_service)
 
+
+def mix_text(mix):
+    """账 → `CODE×n`（空账 → 空串，调用方据此决定打不打印这一行，Spec §3）。"""
+    if not isinstance(mix, dict) or not mix:
+        return ""
+    return "、".join("%s×%d" % (key, int(value)) for key, value in mix.items())
+
+
 SAMPLES = ("酒盒.dwg", "圆盘盒.dwg")
 bad = []
 for name in SAMPLES:
@@ -364,6 +373,8 @@ for name in SAMPLES:
     if not source.is_file():
         bad.append("%s：样本缺失" % name)
         continue
+    # 每个样本**当场**输出（Spec §4.10）：否则"卡在第一份"和"卡在第二份"在日志里分不出来。
+    print("· %s：开始跑隔离链路…" % name, flush=True)
     try:
         pid = store.create_project(name, source.read_bytes(),
                                    note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
@@ -381,14 +392,24 @@ for name in SAMPLES:
              for row in (flow.get("steps") or [])}
     not_done = {key: value for key, value in steps.items() if value != "completed"}
     doc = packaging_parts.load_parts(pid) or {}
-    summary = packaging_parts.summarize(doc)
     rows = doc.get("parts") or []
+    # 整份零件文档一次算完（Spec `packaging-parts-solid-coverage.md` §2.2）——覆盖率与
+    # "不可挤出原因"都从这一份结论来，不在脚本里另算一套。
+    batch = packaging_part_solids.extrude_all(rows)
+    summary = packaging_parts.summarize(doc, solids={"parts": batch.get("parts") or []})
     ready = [row for row in rows if packaging_parts.processability(row).get("ok")]
-    solids = [(row, packaging_part_solids.extrude(row)) for row in rows]
-    solids = [(row, out) for row, out in solids if out.get("status") == "ok"]
+    solids = [item for item in (batch.get("parts") or []) if item.get("status") == "ok"]
     print("· %s：八步 %d/%d completed；零件 %d 件（closed_ratio=%.3f）；可算 %d / 可挤出 %d"
           % (name, len(steps) - len(not_done), len(steps), len(rows),
-             float(summary["closed_ratio"]), len(ready), len(solids)))
+             float(summary["closed_ratio"]), len(ready), len(solids)), flush=True)
+    # 失败时必须一眼看出断在哪一环（Spec `packaging-parts-selfcheck-diagnostics.md` §3）：
+    # 打的是 summarize() 的**同一份账**，不在这里重算。
+    unprocessable = mix_text(summary.get("unprocessable_reason_mix"))
+    if unprocessable:
+        print("   · 不可算原因：%s" % unprocessable, flush=True)
+    solid_mix = mix_text(summary.get("solid_reason_mix"))
+    if solid_mix:
+        print("   · 不可挤出原因：%s" % solid_mix, flush=True)
     if not_done:
         bad.append("%s：有步骤没跑完 %r" % (name, not_done))
     if not rows:
@@ -402,7 +423,7 @@ for name in SAMPLES:
         out = packaging_part_solids.extrude(row)
         print("   · 代表件 %s：outline_status=%s size_source=%s 挤出=%s"
               % (row.get("part_code"), row.get("outline_status"),
-                 row.get("size_source"), out.get("status")))
+                 row.get("size_source"), out.get("status")), flush=True)
 # 权威实样盒型的工艺路线必须能确认（Spec `packaging-route-template-closure.md` §3.4）：
 # 模板工序名在 build 时归一化到 19 条闭集内；闭集外又没映射的名字在入库时就被点名拒绝。
 # 少了这一条，盒型会以"永远 confirm 不了"（409 route_not_confirmable）的状态入库，直到
@@ -474,7 +495,37 @@ if bad:
     sys.exit(1)
 print("隔离端到端自检通过（建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）")
 PY
-SELFCHECK_RC=$?
+# 第 6b 步必须有**内部超时**（Spec `packaging-parts-pipeline-time-budget.md` §4.8/§4.9）：
+# 今天没有超时，卡住只能被外部的 expect 杀掉，而"在跑"和"卡死"在日志里长得一模一样。
+if command -v timeout >/dev/null 2>&1; then
+  DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" \
+    timeout 900 "$PY" "$SELFCHECK_DIR/selfcheck.py"
+  SELFCHECK_RC=$?
+else
+  # `timeout` 不在 PATH（受限 shell / 精简系统）也不许无限等：SECONDS 看门狗，上限同为 900s。
+  SECONDS=0
+  DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" \
+    "$PY" "$SELFCHECK_DIR/selfcheck.py" &
+  SELFCHECK_PID=$!
+  SELFCHECK_RC=0
+  while kill -0 "$SELFCHECK_PID" 2>/dev/null; do
+    sleep 5
+    if [ "$SECONDS" -ge 900 ]; then
+      kill -TERM "$SELFCHECK_PID" 2>/dev/null
+      SELFCHECK_RC=124
+      break
+    fi
+  done
+  if [ "$SELFCHECK_RC" = "0" ]; then
+    wait "$SELFCHECK_PID"
+    SELFCHECK_RC=$?
+  else
+    wait "$SELFCHECK_PID" 2>/dev/null || true
+  fi
+fi
+if [ "$SELFCHECK_RC" = "124" ]; then
+  fail "第 6b 步：隔离端到端自检超时（上限 900s），卡在哪个样本见上面最后一行输出"
+fi
 "$PY" - "$SELFCHECK_DIR" <<'PY'
 import shutil
 import sys

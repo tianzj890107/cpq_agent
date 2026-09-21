@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import math
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..storage.meta_backend import get_backend
@@ -116,6 +117,10 @@ CIRCLE_SAMPLES = 32
 #: 求环的计算预算：真图 402 个分量，必须给硬上限（结果仍确定，只是到点就停）。
 MAX_LOOP_CYCLES = 256
 MAX_LOOP_STATES = 20000
+
+#: 逐件诊断的墙钟预算（毫秒）（Spec `packaging-parts-pipeline-time-budget.md` §3.5）。
+#: 超了**不许抛异常、不许挂住**：诊断里带 `budget_exceeded=True`，结论仍走既有开线原因闭集。
+TIME_BUDGET_MS = 2000
 
 # —— 重复边折叠与外轮廓重判（Spec `packaging-parts-outline-chaining.md` §2）——
 #: 真刀模图里同一条边常被重复画 2～4 份。环搜索把这些重复边当成**不同的边**，分支爆炸后撞上
@@ -889,8 +894,17 @@ def outline_diagnosis(members: List[Dict[str, Any]]) -> Dict[str, Any]:
     """逐件诊断（Spec §2.3）：重复边 / 环数 / 预算中止 / 奇度顶点 / 最近配对间隙。
 
     统计口径与 `_component_edges` 一致（端点按 `LOOP_TOLERANCE_MM` 量化）；纯函数。
+
+    墙钟账（`elapsed_ms` / `budget_exceeded`，Spec `packaging-parts-pipeline-time-budget.md`
+    §3.4/§3.5）**只在这里**上报：零件文档里的逐件诊断必须两次跑逐字相同，塞一个秒表进去
+    就破坏了"同一份 IR 两次跑必须一样"（既有红测 D 组）。
     """
-    return _outline_evidence(list(members or []))["diagnosis"]
+    started = time.perf_counter()
+    diagnosis = dict(_outline_evidence(list(members or []))["diagnosis"])
+    elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+    diagnosis["elapsed_ms"] = elapsed_ms
+    diagnosis["budget_exceeded"] = elapsed_ms > TIME_BUDGET_MS
+    return diagnosis
 
 
 def _largest_loop(loops: List[Dict[str, Any]], edges: List[Tuple[Any, Any, str, str]],
@@ -1279,6 +1293,11 @@ def _identity(doc: Dict[str, Any]) -> Tuple[str, str]:
     return "parts:" + digest[:16], digest
 
 
+def _sorted_mix(mix: Dict[str, int]) -> Dict[str, int]:
+    """账的排序：件数降序 → code 字典序（Spec `packaging-parts-selfcheck-diagnostics.md` §3）。"""
+    return {key: mix[key] for key in sorted(mix, key=lambda name: (-mix[name], name))}
+
+
 def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     """摘要（不含 entity_ids / 证据明细）：给会话、看板与门禁用。
 
@@ -1307,6 +1326,8 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     rows = [row for row in (payload.get("parts") or []) if isinstance(row, dict)]
     solid_status = {str(row.get("part_code") or ""): _text(row.get("solid_status"))
                     for row in rows if row.get("solid_status")}
+    solid_reason = {str(row.get("part_code") or ""): _text(row.get("solid_reason"))
+                    for row in rows if row.get("solid_status")}
     if isinstance(solids, dict):
         for item in (solids.get("parts") or []):
             if not isinstance(item, dict):
@@ -1314,10 +1335,31 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
             code = _text(item.get("part_code"))
             if code:
                 solid_status[code] = _text(item.get("status"))
+                solid_reason[code] = _text(item.get("reason"))
     closed_total = sum(1 for row in rows
                        if _text(row.get("outline_status")) == "closed")
     role_known = sum(1 for row in rows if _text(row.get("role")) not in ("", "unknown"))
-    processable = sum(1 for row in rows if processability(row).get("ok"))
+    # 不可算 / 不可挤出的两把账（Spec `packaging-parts-selfcheck-diagnostics.md` §2）：
+    # 自检失败时必须一眼看出断在哪一环，而不是只有一句"没有一件能跑工艺"。
+    unprocessable_reason_mix: Dict[str, int] = {}
+    processable = 0
+    for row in rows:
+        verdict = processability(row)
+        if verdict.get("ok"):
+            processable += 1
+            continue
+        code = _text(verdict.get("code")) or "unknown"
+        unprocessable_reason_mix[code] = unprocessable_reason_mix.get(code, 0) + 1
+    solid_reason_mix: Dict[str, int] = {}
+    for row in rows:
+        code = _text(row.get("part_code"))
+        status = solid_status.get(code)
+        if not status:
+            continue                      # 没有结论的件不进账："还没算"不等于"算不出来"
+        reason = "ok" if status == "ok" else (solid_reason.get(code) or status)
+        solid_reason_mix[reason] = solid_reason_mix.get(reason, 0) + 1
+    unprocessable_reason_mix = _sorted_mix(unprocessable_reason_mix)
+    solid_reason_mix = _sorted_mix(solid_reason_mix)
     solid_ok = sum(1 for row in rows
                    if solid_status.get(_text(row.get("part_code"))) == "ok")
     mix = {name: 0 for name in SIZE_SOURCES}
@@ -1376,6 +1418,8 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "collapsed_edge_total": collapsed_edge_total,
         "collapsed_rescue_total": collapsed_rescue_total,
         "budget_exhausted_total": budget_exhausted_total,
+        "unprocessable_reason_mix": unprocessable_reason_mix,
+        "solid_reason_mix": solid_reason_mix,
         "open_reason_mix": open_reason_mix,
         "open_total": sum(1 for row in rows if _text(row.get("outline_status")) == "open"),
         "parts": parts,

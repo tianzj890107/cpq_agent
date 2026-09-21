@@ -3,7 +3,7 @@
 血缘：承接 `packaging-parts-true-outline.md`（第 1 层真实轮廓）、`packaging-parts-outline-chaining.md`
 （重复边折叠 + 外轮廓重判）、`packaging-parts-downstream-acceptance.md` §6.1（部署自检 6b）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_packaging_parts_pipeline_time_budget_red.py`
 - 依赖：`tech_app/backend/services/packaging_parts.py`、`packaging_part_solids.py`、
   `scripts/deploy_34_bare.sh` 第 6b 步

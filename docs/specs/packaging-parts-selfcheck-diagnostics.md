@@ -3,7 +3,7 @@
 血缘：承接 `packaging-parts-downstream-acceptance.md` §2/§3（指标与样本门槛）、§6.1（部署自检 6b）、
 `packaging-parts-material-attribution.md`（材料/厚度归属）、`packaging-parts-solid-coverage.md`（挤出覆盖率）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_packaging_parts_selfcheck_diagnostics_red.py`
 - 依赖：`tech_app/backend/services/packaging_parts.py`（`summarize`）、`scripts/deploy_34_bare.sh` 第 6b 步
 

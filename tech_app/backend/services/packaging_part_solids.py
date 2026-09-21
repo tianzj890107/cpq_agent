@@ -161,15 +161,37 @@ def _properly_cross(a: List[float], b: List[float], c: List[float],
 
 
 def _self_intersects(points: List[List[float]]) -> bool:
-    """轮廓是否自交（bowtie 这类边相交）。相邻边共享端点，跳过。"""
+    """轮廓是否自交（bowtie 这类边相交）。相邻边共享端点，跳过。
+
+    凸多边形**不可能**自交 —— 先判凸性直接返回，最坏形状（`MAX_POINTS` 个点）也就不会被
+    逐对扫描拖垮（Spec `packaging-parts-pipeline-time-budget.md` §3.7：单件挤出 <= 500ms）。
+    凹件走按 x 排序的扫描线：只和"x 区间还重叠、y 区间也重叠"的边做精确相交判定。
+    """
     count = len(points)
-    for i in range(count):
-        a, b = points[i], points[(i + 1) % count]
-        for j in range(i + 1, count):
-            if j == i or (j + 1) % count == i or (i + 1) % count == j:
+    if count < 4:
+        return False
+    if is_convex(points):
+        return False
+    segments = []
+    for index in range(count):
+        first, second = points[index], points[(index + 1) % count]
+        segments.append((min(first[0], second[0]), max(first[0], second[0]),
+                         min(first[1], second[1]), max(first[1], second[1]), index))
+    segments.sort()
+    active: List[Tuple[float, float, float, float, int]] = []
+    for x_min, x_max, y_min, y_max, index in segments:
+        active = [item for item in active if item[1] >= x_min]
+        next_index = (index + 1) % count
+        for other in active:
+            other_index = other[4]
+            if other[3] < y_min or y_max < other[2]:
                 continue
-            if _properly_cross(a, b, points[j], points[(j + 1) % count]):
+            if (other_index + 1) % count == index or next_index == other_index:
+                continue
+            if _properly_cross(points[other_index], points[(other_index + 1) % count],
+                               points[index], points[next_index]):
                 return True
+        active.append((x_min, x_max, y_min, y_max, index))
     return False
 
 
