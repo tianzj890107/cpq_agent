@@ -8149,6 +8149,10 @@ skip：未提供样本项目 id，跳过下游连通自检
   `{"isolated_downstream_selfcheck": "ok", "problems": []}`；隔离目录跑完即删，生产数据目录
   `meta.json` 数量 **0 → 0**（未写生产数据）。
 
+- 本条目提交并推送后，为让 34 与分支 HEAD 一致**重跑了一次部署**：`HEAD 7312eca → 5ec90a6`（差异只有本
+  changelog 条目），八步与第 6b 步结果与上面逐项一致（`8010 pid=4120082`、两份样本仍
+  `converter_role=primary`、隔离端到端自检 `ok`、生产 `meta.json` 0 → 0）。
+
 ### 部署后复验（本机打 34）
 
 - `/` → 200、`/api/health` → `status=ok`、`/quick-quote-panel.js` → 200；
