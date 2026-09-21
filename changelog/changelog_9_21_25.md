@@ -5470,3 +5470,138 @@ ValueError: 需求单不存在，请先创建需求草稿
 
 未改任何生产数据（全程 `DATA_DIR=/tmp/cpq_dwg_parse_e2e`）；未改 `cad_converter` /
 `packaging_drawing_flow` / `packaging_semantics` 既有口径；未新增依赖。
+
+---
+
+## 214. 报价建单的行业带过去（首页 → 工作台 → 卡片）Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+现场问题：客户在报价首页选「包装」→「新建报价」→ 进第 1 步，行业下拉仍然显示**半导体**。
+排查确认是三个断点叠在一起（详见 `docs/specs/quote-home-industry-carryover.md` §1）：
+
+- **首页报价路径没带行业**：`techCreateAndGo()`（技术工艺）早就用 `?industry=` 修过同一类问题，
+  而 `confirmProjectAndGo()` / `goToAssistant()` 只带项目名/编码/客户/需求/附件，
+  报价路径一个字节的行业都没传；
+- **工作台只能落默认值**：`确认需求解析结果.html` 没有 `URLSearchParams`、不读行业 storage，
+  `CURRENT_INDUSTRY` 只能取 `meta.default_industry` 或 `INDUSTRIES[0]`，两者都是半导体；
+- **行业没进卡片**：`wfSyncCard()` 不带 industry，`/wf/card/sync` 也没透传，
+  而 `cpq_wf.sync_card()` 本来就支持 `industry=` → 卡片行业一直是 NULL，转技术工艺时还会丢。
+
+业务影响不只是显示：第 1 步的必填门禁、④产品技术参数换源、候选匹配源都按上报行业算，
+所以包装询盘会按半导体口径走 —— 即 ## 189/191 修过的「包装询盘 Top3 全是锂亚电池」换个入口重现。
+
+### 产物
+
+- Spec：`docs/specs/quote-home-industry-carryover.md`。
+- 红测：`tests/test_quote_home_industry_carryover_red.py`（28 条：**12 红 / 16 绿护栏**）。
+
+### 契约要点
+
+- 首页报价路径写 `sessionStorage['cpq:industry']` 并在跳转 URL 上带 `?industry=`（两者都要：
+  storage 供刷新/回退，URL 供首次进入）；配置/规则路径不写；技术工艺既有 `?industry=` 不变。
+- 工作台新增**纯函数** `resolveInitialIndustry(cardIndustry, urlIndustry, storedIndustry,
+  defaultIndustry, knownIndustries)`，优先级 **卡片 > URL > storage > `meta.default_industry`**，
+  逐级先 trim + 小写再按下发清单校验，非法值（含历史键 `flexible`）视为该级缺失继续往下找；
+  「新报价」保留行业记忆（与技术工艺路径一致），下拉改动写回 storage 并换 ④产品技术参数表头。
+- 卡片落库：`wfSyncCard()` 带 `industry: currentIndustry()`、`/wf/card/sync` 透传、
+  `cpq_wf.sync_card()` 既有「非空才写、留空不猜」语义不变；打开已有卡片且卡片行业非空时以卡片为准
+  并给可见提示，不静默。
+- 行业清单仍是 `cpq_industries.py` 一份：首页下拉按现状保留静态 option 但必须与
+  `INDUSTRY_KEYS` 同序同值、标签与 `label_of()` 一致；工作台下拉只能由 `/api/meta` 下发。
+
+### 红测实跑（原文）
+
+```
+tests.test_quote_home_industry_carryover_red   Ran 28 tests  FAILED (failures=12)
+```
+
+12 条红正好覆盖三个断点：A 组首页携带 3 条（写 storage / 复用 `techIndustry()` / URL 带
+`industry=`）、B 组工作台优先级 5 条（纯函数存在且 `document`/`sessionStorage` 等全局零引用、
+优先级顺序、URL 与 storage 读取、接入启动赋值、下拉写回）、C 组卡片与透传 3 条
+（`wfSyncCard` 带行业、`/wf/card/sync` 透传、读卡片行业）、B 组校验口径 1 条。
+16 条绿护栏：既有建单字段、技术工艺 `?industry=`、`cpq_wf.sync_card` 契约与老卡片空串语义、
+`_industry_of()` 唯一入口、两页 `node --check` 语法、首页行业记忆键、历史键可读、默认行业不变。
+
+其中 B 组前端规则用 `node` **实际执行** `resolveInitialIndustry()`（按大括号配对从页面里抽出函数体
+再喂 7 组输入），不是文本 grep；已用一份参考实现验证该 harness 能全绿（证明红测可转绿）。
+
+### 边界
+
+本批只新增 Spec 与红测（外加本 changelog 条目）：未写任何业务实现、未改任何
+`cpq_*.py` / HTML / JS；未连 Postgres、未调模型、未起服务、未真发 HTTP；
+未 push / MR / tag / Release / 部署 / 重启服务。
+
+## 215. 34 报告暴露的 5 类产品缺口：Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+上一份 34 报告（DWG→DXF→CAD IR 全链路实测通过）里暴露的 5 类缺口，逐条落成可验收的
+Spec 与实现前必失败的红测。**本批只写 Spec / 红测 / changelog，未写任何业务实现。**
+
+### 产物
+
+| 批次 | Spec | 红测（实跑） |
+| --- | --- | --- |
+| 1 前端接线 | `docs/specs/drawing-flow-frontend-wiring.md` | `tests/test_drawing_flow_frontend_wiring_red.py`：Ran 12 / **8 红 / 4 绿** |
+| 2 能力事实与审计 | `docs/specs/dwg-capability-truth-and-audit.md` | `tests/test_dwg_capability_truth_red.py`：Ran 13 / **12 红 / 1 绿** |
+| 3 知识库权威升格与灌库 | `docs/specs/kb-authoritative-promotion-and-load.md` | `tests/test_kb_authoritative_promotion_red.py`：Ran 15 / **6 红 / 7 绿 / 2 skip** |
+| 4 flow 错误分类与前置条件 | `docs/specs/drawing-flow-error-taxonomy.md` | `tests/test_drawing_flow_error_taxonomy_red.py`：Ran 14 / **5 红 / 9 绿** |
+| 5 成本红测收口 | `docs/specs/packaging-cost-red-closure.md` | `tests/test_packaging_cost_red_closure_red.py`：Ran 14 / **8 红 / 6 绿** |
+
+合计 `Ran 68 tests  FAILED (failures=28, errors=11, skipped=2)` —— 39 红 / 27 绿护栏 / 2 skip。
+
+### 本批新查实的事实（都进了 Spec，替换掉报告里的粗略描述）
+
+1. **前端确实够不到**：`app.js:1436` 的 `isImg` 正则与 `app.js:1457`
+   `$("btnParse").disabled = !isImg` 把 DWG 判成"不是位图"，前端全文 0 处 `drawing-flow`，
+   `app.js:916` 打的是 `/parse`（视觉路径）；服务端入口 `main.py:6831`/`:6844` 早已存在。
+2. **能力矩阵与审计在说假话**：`file_preflight.py:204-225` 的 `converter_available` 恒 False、
+   `:244` 的 DWG 错误码硬编码 `DWG_CONVERTER_NOT_INSTALLED`、`:46-48` 文案写死"尚未安装"，
+   而 34 上 ODA 27.1 主转换器已实测出 DXF —— `audit_entry()` 也跟着恒 False。
+3. **知识库不是"没写"，是三层各断一次**（回答"怎么这么久还没灌进去"）：
+   - 样例早已固化成代码：`da_seed_packaging.py` 的 `BOX_TYPES=12` / `PART_TEMPLATES=31` /
+     `PROCESS_TEMPLATES=23` / `ACCESSORIES=12`，与 `礼盒盒型库_数据样例.xlsx` 的 4 个 Sheet 逐字对应；
+   - 本地 `tech_app/tech_data/da.db` 里**没有** `kb_packaging_*` 任何一张表（`kb_material` 等也是 0 行）
+     → seed 在本机从未跑过；
+   - 运行时读的不是 sqlite：`kb_repo.py:70` → `cpq_kb_client.fetch_snapshot()`
+     → `GET /wf/tech/kb/snapshot`（需 `CPQ_INTERNAL_TOKEN`，缺令牌抛 `KbUnavailable`，
+     明确拒绝静默降级成空库），而 PG `cpq_kb` 是空表 → 匹配 0 候选；
+   - 且 seed 行 `source_type="demo"`，生产预检 `demo_only` 判 no-go，**而 demo → 权威没有任何代码路径**。
+   实测把 seed 灌进临时 sqlite 再喂给快照：`match_box_types()` 立刻出 **12 个候选**、
+   建议盒型 `YT-RB-01001-A`、`needs_new_tooling=False`（红测里作为绿护栏钉住）。
+4. **field_write 的错误确实在骗人**（可复现）：stub 抛
+   `ValueError("需求单不存在，请先创建需求草稿")` → 实测
+   `status=failed | code=REQUIREMENT_SAVE_FAILED | msg=需求字段写入失败，请重试 | retryable=True`。
+   真因被 `getattr(exc, "message", ...)`（ValueError 无此属性）吞掉；且
+   `model.py:28` + `__init__.py:431-432` 会在终态失败时 break，后续
+   `pending_confirm` / `downstream_prepare` 永不执行。
+5. **"7 条既有红"口径不准**：本机实跑 5 个 `packaging_cost_*_red.py` 是
+   `Ran 226 tests  FAILED (failures=6, errors=8)` = **14 条**；其中 8 条是
+   `ModuleNotFoundError: openpyxl`（根 `requirements.txt:14` 有、**`tech_app/requirements.txt` 没有**，
+   清单不一致），6 条是最低收费口径未裁决（`minimum_charge_policy.status=pending`、
+   `PKG-C-V-GROOVE` 150 vs 第 1 批冻结 120、`lamination` 低档实测 `amount=0.233916788093`
+   > 最低收费 0.2，即**表达式本身高于最低收费**，属口径分歧而非"少收钱"）。
+
+### 红测实跑（原文）
+
+```
+python3 -m unittest tests.test_drawing_flow_frontend_wiring_red tests.test_dwg_capability_truth_red \
+  tests.test_kb_authoritative_promotion_red tests.test_drawing_flow_error_taxonomy_red \
+  tests.test_packaging_cost_red_closure_red
+Ran 68 tests in 0.255s
+FAILED (failures=28, errors=11, skipped=2)
+```
+
+第 1 批的入口判定用 `node` **实际执行** `renderDrawingEntry()`（按大括号配对抽函数体，
+喂 17 组文件名），不是文本 grep；第 3 批的匹配护栏在临时 sqlite 上真跑 seed + 真跑
+`match_box_types()`。
+
+### 边界
+
+本批只新增 5 份 Spec、5 份红测与本周 changelog 条目：未写任何业务实现、未改任何
+`cpq_*.py` / `tech_app/backend/**` / 前端资源 / 既有红测；未连 Postgres、未调模型、
+未起服务、未真发 HTTP；只读使用 `裕同包装项目-待开发/` 的客户样本（不修改、不入库）；
+未 push / MR / tag / Release / 部署 / 重启服务。
+
+### 待办（不在本批，需用户点名）
+
+`裕同包装项目-待开发/` 仍是未跟踪目录；本批 5 份 Spec 与 5 份红测、以及 `## 213`/`## 214`
+同样处于本地未提交状态。本文件里 `## 213` 与 `## 214` 各出现过两次（历史条目编号碰撞），
+按「历史记录不改写」保留原样，未重排。
