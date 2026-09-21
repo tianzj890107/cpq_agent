@@ -7918,6 +7918,17 @@ export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"   # ② xvfb-run
   --ack parts_demo_script=<签字人> --json      # 演示脚本签字后 manual 归 0
 ```
 
+### 补记（同日，同一提交线）
+
+`DEPLOYMENT.md` 的"自己跑"一节补了两处用户照抄就会踩的坑与一条找项目 id 的命令（都不是新口径，
+只是把 ## 240 / ## 241 已经踩过的坑写进正文）：
+
+1. 34 上跑门禁前必须先 `set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a` **且**把
+   `/home/data/cpq-tools/xvfb-user/root/usr/bin` 加进 `PATH`；缺任一项 `parts_outline_real_sample`
+   只能停在"应用内转换器可用=False"，生产环境算 fail——这是环境没带齐，不是能力缺失。
+2. 部署脚本第 6 步要的 `CPQ_PARTS_PROJECT_ID` 从 `ls -1 tech_app/data/*/packaging_parts.json | cut -d/ -f3`
+   里取；**没有这个文件就说明该环境还没跑过"一键解析图纸"，先去页面跑一次，不许凭空造项目**。
+
 ### 边界
 
 - 未改任何 `tests/` 文件、未改任何业务实现（第 1～4 层与后端一行未动）、未改 `dwg_deploy_gate.py` /

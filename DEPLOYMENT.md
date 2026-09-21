@@ -744,15 +744,23 @@ LibreDWG（`cpq_*.py` 里不得出现 `ODAFileConverter` / `dwg2dxf` / `LibreDWG
 L3 需要业务对「两张真实样本各至少一件能跑工艺、能挤出 3D」签字（门禁里的
 `parts_demo_script` 人工项），签字后才把这一格改成 L3。级别**只升不降**，降级必须写明原因。
 
-自己跑（只读门禁，六项；`parts_demo_script` 是人工项，要显式确认）：
+自己跑（只读门禁，六项；`parts_demo_script` 是人工项，要显式确认）。
+
+**34 上必须先做准备，否则门禁会探不到转换器（本机跑 `--env local` 不需要这两步）：**
 
 ```bash
+ssh wugefei@172.16.10.34
 cd /home/wugefei/CPQ/cpq_agent
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a                    # ① 不 source 就没有 DWG_CONVERTER_*
+export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"   # ② xvfb-run 按名字调同目录的 Xvfb
 ./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env local
 # 人工项签字后才可能 verdict=go 的完整写法：
 ./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env production \
   --ack parts_demo_script=<签字人>
 ```
+
+没有 `DWG_CONVERTER_*` 与那条 `PATH` 时，`parts_outline_real_sample` 只能停在
+「应用内转换器可用=False」→ 生产环境算 fail —— 这不是能力缺失，是环境没带齐，先补这两步再判。
 
 门禁**只读**：不连库、不调模型、不联网，真实项目数据一个字节不写（转换产物 / 清单 / 审计全落到
 临时目录，项目 id 固定为 `packaging-parts-gate`）；`parts_outline_real_sample` 在没有样本或**一个可用
@@ -764,6 +772,9 @@ cd /home/wugefei/CPQ/cpq_agent
 样本项目 id **必须由用户提供**，脚本不猜项目、也不拿生产项目当试验田：
 
 ```bash
+# 项目 id 从哪儿来：跑过"一键解析图纸"的项目才有零件文档，下列命令直接把 id 打出来
+ls -1 tech_app/data/*/packaging_parts.json 2>/dev/null | cut -d/ -f3
 CPQ_PARTS_PROJECT_ID=<项目id> bash scripts/deploy_34_bare.sh ytbz
-# 不提供时这一步 skip 并打印原因
+# 不提供时这一步 skip 并打印原因；没有上面那个文件就说明还没人在这个环境点过"一键解析"，
+# 先去页面跑一次，别凭空造项目
 ```
