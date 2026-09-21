@@ -111,6 +111,22 @@ CIRCLE_SAMPLES = 32
 MAX_LOOP_CYCLES = 256
 MAX_LOOP_STATES = 20000
 
+# —— 重复边折叠与外轮廓重判（Spec `packaging-parts-outline-chaining.md` §2）——
+#: 真刀模图里同一条边常被重复画 2～4 份。环搜索把这些重复边当成**不同的边**，分支爆炸后撞上
+#: 预算提前中止，却对外报"图纸没闭合"——把"我们没算完"说成了"图纸的结论"。
+#: 折叠只作用于**找环**：证据（entity_ids）仍然逐条保留。
+CHAIN_RULE_ID = "part_outline_chaining_v1"
+EDGE_COLLAPSE_TOLERANCE_MM = 1.0
+
+#: rescue 准入条件：折叠后最大环的 bbox 必须覆盖分量 bbox 的这个比例才算外轮廓。
+#: 依据：已验收的闭合件里有 12 件的环只覆盖分量 bbox 的 49%～95%（那是内圈/局部环），
+#: 所以覆盖率只能当"救判错的件"的准入条件，不能反过来重算已闭合件。
+OUTLINE_BBOX_COVER_RATIO = 0.95
+
+#: 开线原因闭集（顺序即判定顺序，Spec §2.4）；笼统的"没找到闭合环"从代码里消失。
+OUTLINE_OPEN_REASONS = ("no_curve_entity", "unit_unconfirmed", "loop_budget_exhausted",
+                        "odd_endpoints", "loop_too_small")
+
 
 # --------------------------------------------------------------------------- #
 # 图纸标注里的材料 / 厚度（Spec `packaging-parts-downstream-process-and-cost.md` §3）
@@ -451,20 +467,28 @@ def _two_core(adjacency: Dict[Any, List[Tuple[Any, int]]]) -> Dict[Any, List[Tup
 
 def _find_cycles(adjacency: Dict[Any, List[Tuple[Any, int]]], *,
                  min_edges: int = MIN_LOOP_EDGES, max_cycles: int = MAX_LOOP_CYCLES,
-                 max_states: int = MAX_LOOP_STATES) -> List[Dict[str, Any]]:
+                 max_states: int = MAX_LOOP_STATES
+                 ) -> Tuple[List[Dict[str, Any]], bool]:
     """找简单环：顶点不重复、边不重复、首尾相接（Spec §3 第 3 步）。
 
     起点固定为环里最小的节点（neighbour < start 剪枝），同一个环只报一次。
     预算是硬上限：到点就停，但结果仍确定（同一份 IR 两次跑一模一样）。
+    返回 `(loops, exhausted)`：`exhausted` 表示搜索**撞上预算提前中止**（结论不完整），
+    调用方据此说"我们没算完"，而不是把中止当成"没有环"（Spec §2.4 序 3）。
     """
     loops: List[Dict[str, Any]] = []
     states = [0]
+    exhausted = [False]
+    # 环只可能活在 2-core 里（真图多数分量是长开放链）：先剥掉度 < 2 的顶点，省掉无用搜索。
+    # 这一步只改**速度**：度 < 2 的顶点不可能落在任何简单环上，结果逐字不变。
+    adjacency = _two_core(adjacency)
 
     def walk(start: Any, node: Any, path_nodes: List[Any], path_edges: List[int],
              used: set) -> None:
         for neighbour, edge in adjacency.get(node) or ():
             states[0] += 1
             if states[0] >= max_states or len(loops) >= max_cycles:
+                exhausted[0] = True
                 return
             if edge in path_edges:
                 continue
@@ -484,29 +508,124 @@ def _find_cycles(adjacency: Dict[Any, List[Tuple[Any, int]]], *,
 
     for start in sorted(adjacency):
         if states[0] >= max_states or len(loops) >= max_cycles:
+            exhausted[0] = True
             break
         walk(start, start, [start], [], {start})
-    return loops
+    return loops, exhausted[0]
 
 
-def _largest_loop(members: List[Dict[str, Any]], min_area: float
-                  ) -> Tuple[Optional[Dict[str, Any]], bool, bool]:
-    """件内求最大闭合环 → (outline, saw_loop, has_coordinates)。
-
-    saw_loop 表示确实找到了环（哪怕面积被门槛挡掉）；has_coordinates 表示这件里至少有
-    实体给出了可用坐标 —— 拿不到坐标时分量只能沿用 DWG 自己的包围盒（Spec §3）。
-    """
-    edges, vertices = _component_edges(members)
-    if not edges:
-        return None, False, False
+def _adjacency_of(edges: List[Tuple[Any, Any, str, str]]
+                  ) -> Dict[Any, List[Tuple[Any, int]]]:
+    """边表 → 邻接表（边序号即 edges 里的下标）。"""
     adjacency: Dict[Any, List[Tuple[Any, int]]] = {}
     for index, (first, second, _entity_id, _approximation) in enumerate(edges):
         adjacency.setdefault(first, []).append((second, index))
         adjacency.setdefault(second, []).append((first, index))
+    return adjacency
+
+
+def _edge_key(first: Any, second: Any) -> Tuple[Any, Any]:
+    """边的无向键（方向无关，量化端点已归并）。"""
+    return (first, second) if first <= second else (second, first)
+
+
+def _collapse_edges(edges: List[Tuple[Any, Any, str, str]]
+                    ) -> List[Tuple[Any, Any, str, str]]:
+    """同一对量化端点之间的重复边折成一条（代表边 = entity_id 最小那条，Spec §2.1）。
+
+    折叠只影响**找环**：`outline.entity_ids` 仍列该件里全部相关实体，证据可回查。
+    输出按边键排序 —— 同一份 IR 两次跑逐字相同。
+    """
+    best: Dict[Tuple[Any, Any], Tuple[Any, Any, str, str]] = {}
+    for edge in edges:
+        key = _edge_key(edge[0], edge[1])
+        current = best.get(key)
+        if current is None or edge[2] < current[2]:
+            best[key] = edge
+    return [best[key] for key in sorted(best)]
+
+
+def _nearest_gap_mm(keys: List[Any], vertices: Dict[Any, Tuple[float, float]]) -> float:
+    """奇度顶点两两**最近配对**后，取配对间隙的最大值（没有奇度顶点 → 0.0）。"""
+    pending = [(float(vertices[key][0]), float(vertices[key][1])) for key in keys
+               if key in vertices]
+    gaps: List[float] = []
+    while len(pending) >= 2:
+        best: Optional[Tuple[float, int, int]] = None
+        for first in range(len(pending)):
+            for second in range(first + 1, len(pending)):
+                gap = cad_geometry.distance(pending[first], pending[second])
+                if best is None or gap < best[0]:
+                    best = (gap, first, second)
+        if best is None:
+            break
+        gaps.append(best[0])
+        pending = [point for index, point in enumerate(pending)
+                   if index not in (best[1], best[2])]
+    return max(gaps) if gaps else 0.0
+
+
+def _outline_evidence(members: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """一次算好三件事（Spec §2.1/§2.3）：未折叠图、折叠图、逐件诊断。
+
+    未折叠图是**今天的口径**：已经判成 closed 的件必须逐字保持它的结果，所以两条路都要算
+    （只有存在重复边时才真的各跑一次搜索；没有重复边时折叠图 == 未折叠图，复用同一个结果）。
+    """
+    edges, vertices = _component_edges(members)
+    unique = _collapse_edges(edges)
+    duplicated = len(unique) != len(edges)
+    if unique:
+        loops_collapsed, exhausted_collapsed = _find_cycles(_adjacency_of(unique))
+    else:
+        loops_collapsed, exhausted_collapsed = [], False
+    if duplicated:
+        loops_original, _exhausted_original = _find_cycles(_adjacency_of(edges))
+    else:
+        loops_original = loops_collapsed
+    degree: Dict[Any, int] = {}
+    for first, second, _entity_id, _approximation in unique:
+        degree[first] = degree.get(first, 0) + 1
+        degree[second] = degree.get(second, 0) + 1
+    odd = [key for key in sorted(degree) if degree[key] % 2]
+    # 预算中止**且一个环都没找到**才算"我们没算完"：找到环的件，中止不影响结论。
+    budget_exhausted = bool(exhausted_collapsed) and not loops_collapsed
+    diagnosis = {
+        "edges_total": len(edges),
+        "edges_unique": len(unique),
+        "collapsed_total": len(edges) - len(unique),
+        "cycles_found": len(loops_collapsed),
+        "budget_exhausted": budget_exhausted,
+        "odd_degree_vertices": len(odd),
+        "nearest_gap_mm": _round(_nearest_gap_mm(odd, vertices)),
+    }
+    return {"edges": edges, "unique": unique, "vertices": vertices,
+            "loops_original": loops_original, "loops_collapsed": loops_collapsed,
+            "diagnosis": diagnosis}
+
+
+def outline_diagnosis(members: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """逐件诊断（Spec §2.3）：重复边 / 环数 / 预算中止 / 奇度顶点 / 最近配对间隙。
+
+    统计口径与 `_component_edges` 一致（端点按 `LOOP_TOLERANCE_MM` 量化）；纯函数。
+    """
+    return _outline_evidence(list(members or []))["diagnosis"]
+
+
+def _largest_loop(loops: List[Dict[str, Any]], edges: List[Tuple[Any, Any, str, str]],
+                  vertices: Dict[Any, Tuple[float, float]], min_area: float
+                  ) -> Dict[str, Any]:
+    """给定额度内的环集合 → 最大闭合环（`{outline, loop, saw_loop, has_coordinates}`）。
+
+    saw_loop 表示确实找到了环（哪怕面积被门槛挡掉）；has_coordinates 表示这件里至少有
+    实体给出了可用坐标 —— 拿不到坐标时分量只能沿用 DWG 自己的包围盒（Spec §3）。
+    """
+    if not edges:
+        return {"outline": None, "loop": None, "saw_loop": False, "has_coordinates": False}
     best: Optional[Dict[str, Any]] = None
+    best_loop: Optional[Dict[str, Any]] = None
     best_area = 0.0
     saw_loop = False
-    for loop in _find_cycles(_two_core(adjacency)):
+    for loop in loops:
         polygon = [vertices[key] for key in loop["nodes"]]
         if len(polygon) < MIN_LOOP_EDGES:
             continue
@@ -526,8 +645,80 @@ def _largest_loop(members: List[Dict[str, Any]], min_area: float
             # 一个环里混了弧段与样条时，弧段优先（近似口径只留一条）。
             outline["approximation"] = ("arc_endpoints" if "arc_endpoints" in approximations
                                        else approximations[0])
-        best, best_area = outline, area
-    return best, saw_loop, True
+        best, best_loop, best_area = outline, loop, area
+    return {"outline": best, "loop": best_loop, "saw_loop": saw_loop, "has_coordinates": True}
+
+
+def _bbox_cover(loop_box: Optional[List[float]], component_box: Optional[List[float]],
+                tolerance: float = LOOP_TOLERANCE_MM) -> float:
+    """环 bbox 覆盖分量 bbox 的比例（每一边按 `tolerance` 容差；Spec §2.2）。
+
+    两个方向各算一个比例（缺多少 / 分量跨度），取较小者 —— 只有**四边都盖住**才是外轮廓。
+    """
+    if not loop_box or not component_box:
+        return 0.0
+    width = abs(float(component_box[2]) - float(component_box[0]))
+    height = abs(float(component_box[3]) - float(component_box[1]))
+    if width <= 0 or height <= 0:
+        return 1.0
+
+    def axis_ratio(loop_low: float, loop_high: float, low: float, high: float, span: float) -> float:
+        missing = max(0.0, loop_low - low - tolerance) + max(0.0, high - loop_high - tolerance)
+        return max(0.0, min(1.0, 1.0 - missing / span))
+
+    return min(axis_ratio(float(loop_box[0]), float(loop_box[2]),
+                          float(component_box[0]), float(component_box[2]), width),
+               axis_ratio(float(loop_box[1]), float(loop_box[3]),
+                          float(component_box[1]), float(component_box[3]), height))
+
+
+def _rescue_outline(evidence: Dict[str, Any], component_box: Optional[List[float]],
+                    min_area: float) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """外轮廓重判（rescue）：折叠图上重找环 → `(outline, compose)`；不满足就 `(None, None)`。
+
+    两个条件缺一不可（Spec §2.2）：① 折叠前判成 open（调用方保证）；② 最大环 bbox 覆盖
+    分量 bbox >= `OUTLINE_BBOX_COVER_RATIO`。`compose` 只在 rescue 成功的件上出现 ——
+    便于核对"到底动了谁"。
+    """
+    found = _largest_loop(evidence["loops_collapsed"], evidence["unique"],
+                          evidence["vertices"], min_area)
+    outline = found["outline"]
+    if outline is None or not component_box:
+        return None, None
+    cover = _bbox_cover(outline.get("bbox"), component_box)
+    if cover < OUTLINE_BBOX_COVER_RATIO:
+        return None, None
+    pairs = {_edge_key(evidence["unique"][index][0], evidence["unique"][index][1])
+             for index in (found["loop"] or {}).get("edges") or []}
+    merged = dict(outline)
+    # 折叠只作用于找环：证据（含被折叠掉的重复实体）仍然逐条列出来回查（Spec §2.1）。
+    merged["entity_ids"] = sorted({edge[2] for edge in evidence["edges"]
+                                   if _edge_key(edge[0], edge[1]) in pairs})
+    compose = {
+        "kind": "collapsed_cycle",
+        "rule_id": CHAIN_RULE_ID,
+        "edges_total": len(evidence["edges"]),
+        "edges_unique": len(evidence["unique"]),
+        "collapsed_total": len(evidence["edges"]) - len(evidence["unique"]),
+        "bbox_cover": _round(cover),
+    }
+    return merged, compose
+
+
+def _open_outline_reason(*, has_curve: bool, diagnosis: Dict[str, Any],
+                         saw_loop: bool) -> str:
+    """判成 open 的具体原因（闭集，按 Spec §2.4 的顺序判定）。"""
+    if not has_curve:
+        return "no_curve_entity"
+    if diagnosis.get("budget_exhausted"):
+        return "loop_budget_exhausted"
+    if int(diagnosis.get("odd_degree_vertices") or 0) > 0 \
+            and float(diagnosis.get("nearest_gap_mm") or 0.0) > LOOP_TOLERANCE_MM:
+        return "odd_endpoints"
+    if saw_loop or int(diagnosis.get("cycles_found") or 0) > 0:
+        return "loop_too_small"
+    # 有边却既无环也无奇度顶点在图论上不存在；真到了这里宁可说"断口"也不许笼统。
+    return "odd_endpoints"
 
 
 def extract(ir: Dict[str, Any], semantics: Any = None, *,
@@ -566,11 +757,26 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
 
         # —— 真实轮廓：件内求最大闭合环（Spec `packaging-parts-true-outline.md` §3）——
         # 单位未确认时求环没有意义（没有可信的 mm），直接标 unavailable。
+        # —— 重复边折叠 + 外轮廓重判（Spec `packaging-parts-outline-chaining.md` §2）——
+        # 先按**今天的口径**（未折叠图）判一次：已经判成 closed 的件必须逐字保持原样；
+        # 只有判成 open 的件才走 rescue（折叠图重找环 + 外轮廓覆盖率准入）。
+        evidence = _outline_evidence(members)
+        outline: Optional[Dict[str, Any]] = None
+        compose: Optional[Dict[str, Any]] = None
+        saw_loop = False
+        has_coordinates = False
         if unit_ok:
-            outline, saw_loop, has_coordinates = _largest_loop(
-                members, float(config["min_area_mm2"]))
-        else:
-            outline, saw_loop, has_coordinates = None, False, False
+            verdict = _largest_loop(evidence["loops_original"], evidence["edges"],
+                                    evidence["vertices"], float(config["min_area_mm2"]))
+            outline = verdict["outline"]
+            saw_loop = verdict["saw_loop"]
+            has_coordinates = verdict["has_coordinates"]
+            if outline is None:
+                outline, compose = _rescue_outline(evidence, bbox,
+                                                   float(config["min_area_mm2"]))
+                if outline is not None:
+                    saw_loop = True
+                    has_coordinates = True
         if not unit_ok:
             outline_status, outline_reason = "unavailable", "unit_unconfirmed"
             size_source = "dwg_outline"
@@ -578,6 +784,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             area = 0.0
         elif outline is not None:
             outline_status, outline_reason, size_source = "closed", "", "closed_outline"
+            if compose:
+                outline = dict(outline)
+                outline["compose"] = compose
             loop_box = outline.get("bbox") or bbox
             length = abs(loop_box[2] - loop_box[0])
             width = abs(loop_box[3] - loop_box[1])
@@ -585,7 +794,8 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         else:
             # 求不出环 → 退回分量包围盒**并留痕**（绝不许把包围盒说成轮廓尺寸）。
             outline_status = "open"
-            outline_reason = "loop_too_small" if saw_loop else "no_closed_loop"
+            outline_reason = _open_outline_reason(
+                has_curve=bool(curves), diagnosis=evidence["diagnosis"], saw_loop=saw_loop)
             # 分量里一条可用坐标都没有时，尺寸来自 DWG 自己的包围盒（与今天口径一致）。
             size_source = "component_bbox" if has_coordinates else "dwg_outline"
             length, width, area = box_length, box_width, box_area
@@ -636,6 +846,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "outline_status": outline_status,
             "outline": outline,
             "outline_reason": outline_reason,
+            "outline_diagnosis": evidence["diagnosis"],
             "size_source": size_source,
             "thickness_mm": size_notes["thickness_mm"],
             "material": size_notes["material"],
@@ -672,6 +883,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "outline_status": row["outline_status"],
             "outline": row["outline"],
             "outline_reason": row["outline_reason"],
+            "outline_diagnosis": row["outline_diagnosis"],
             "size_source": row["size_source"],
             "thickness_mm": row["thickness_mm"],
             "material": row["material"],
@@ -688,6 +900,20 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     outline_unavailable_total = sum(1 for row in parts
                                     if row["outline_status"] == "unavailable")
     closed_ratio = (float(closed_total) / float(len(parts))) if parts else 0.0
+    # 重复边折叠与外轮廓重判的账（Spec `packaging-parts-outline-chaining.md` §3）：
+    # 「闭合判定」这一层到底做了多少事，必须由零件文档自己说清楚，而不是靠页面猜。
+    collapsed_edge_total = sum(int((row.get("outline_diagnosis") or {}).get("collapsed_total") or 0)
+                               for row in parts)
+    collapsed_rescue_total = sum(1 for row in parts
+                                 if (row.get("outline") or {}).get("compose"))
+    budget_exhausted_total = sum(1 for row in parts
+                                 if (row.get("outline_diagnosis") or {}).get("budget_exhausted"))
+    open_reason_mix: Dict[str, int] = {}
+    for row in parts:
+        if row["outline_status"] != "open":
+            continue
+        reason = _text(row.get("outline_reason"))
+        open_reason_mix[reason] = open_reason_mix.get(reason, 0) + 1
 
     unavailable: List[Dict[str, Any]] = []
     if not components:
@@ -716,7 +942,11 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                   "truncated": truncated, "by_role": by_role,
                   "closed_total": closed_total, "open_total": open_total,
                   "outline_unavailable_total": outline_unavailable_total,
-                  "closed_ratio": _round(closed_ratio)},
+                  "closed_ratio": _round(closed_ratio),
+                  "collapsed_edge_total": collapsed_edge_total,
+                  "collapsed_rescue_total": collapsed_rescue_total,
+                  "budget_exhausted_total": budget_exhausted_total,
+                  "open_reason_mix": open_reason_mix},
         "source": {
             "ir_id": _text(ir.get("ir_id")),
             "ir_hash": _text(ir.get("ir_hash")),
@@ -789,6 +1019,24 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         source = _text(row.get("size_source"))
         if source in mix:
             mix[source] += 1
+    # 闭合判定的账（Spec `packaging-parts-outline-chaining.md` §3）：一律由零件行现算，
+    # 页面/门禁据此说清"这一版到底折叠了多少重复边、救回几件、还剩几件开线、为什么"。
+    collapsed_edge_total = 0
+    collapsed_rescue_total = 0
+    budget_exhausted_total = 0
+    open_reason_mix: Dict[str, int] = {}
+    for row in rows:
+        diagnosis = row.get("outline_diagnosis") if isinstance(row.get("outline_diagnosis"), dict) else {}
+        collapsed_total = _num(diagnosis.get("collapsed_total"))
+        collapsed_edge_total += max(0, int(collapsed_total or 0))
+        if diagnosis.get("budget_exhausted"):
+            budget_exhausted_total += 1
+        outline = row.get("outline") if isinstance(row.get("outline"), dict) else {}
+        if outline.get("compose"):
+            collapsed_rescue_total += 1
+        if _text(row.get("outline_status")) == "open":
+            reason = _text(row.get("outline_reason"))
+            open_reason_mix[reason] = open_reason_mix.get(reason, 0) + 1
 
     def _ratio(count: int) -> float:
         return _round(float(count) / float(total)) if total else 0.0
@@ -802,6 +1050,11 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "solid_ok_ratio": _ratio(solid_ok),
         "processable_ratio": _ratio(processable),
         "size_source_mix": mix,
+        "collapsed_edge_total": collapsed_edge_total,
+        "collapsed_rescue_total": collapsed_rescue_total,
+        "budget_exhausted_total": budget_exhausted_total,
+        "open_reason_mix": open_reason_mix,
+        "open_total": sum(1 for row in rows if _text(row.get("outline_status")) == "open"),
         "parts": parts,
         "filtered": [{"component_id": _text(row.get("component_id")),
                       "reasons": list(row.get("reasons") or [])}
@@ -891,7 +1144,7 @@ def processability(row: Any, *, options: Any = None) -> Dict[str, Any]:
     if _text(payload.get("outline_status")) != "closed":
         return {"ok": False, "code": "PACKAGING_PART_NOT_CLOSED",
                 "message": "这一件没有可信的闭合轮廓（%s），不能拿包围盒尺寸去排工艺"
-                           % (_text(payload.get("outline_reason")) or "no_closed_loop"),
+                           % (_text(payload.get("outline_reason")) or "odd_endpoints"),
                 "missing_variables": ["outline"], "part": None}
     missing: List[str] = []
     if not _material_spec(payload.get("material")):
