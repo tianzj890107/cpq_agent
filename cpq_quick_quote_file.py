@@ -56,6 +56,10 @@ MATCH_INPUT_MAP = {"outline_size": ("inner_length", "inner_width", "inner_height
 MATCH_INPUT_KEYS = tuple(qq_match.QUICK_MATCH_INPUT_KEYS)
 
 #: 尺寸轴名 → 匹配键（标注尺寸用轴名，外形尺寸按长/宽/高顺序兜底）。
+#: 图纸幅面类来源（Spec 批 9 §1.1）：这些 `outline_size` 是**整张图的幅面**，不是成品内尺寸，
+#: 一律不得当内尺寸用 —— 否则 14362×6152 的图框会被当成盒子的内宽/内高（`## 250` 实测）。
+SHEET_SIZE_SOURCES = ("document_extents",)
+
 _AXIS_KEYS = {"inner_length": "inner_length", "inner_width": "inner_width",
               "inner_height": "inner_height", "length": "inner_length",
               "width": "inner_width", "height": "inner_height"}
@@ -238,25 +242,47 @@ def _unit_factor(units: str, warnings: List[str]) -> float:
     return 1.0
 
 
-def _dimensions(fields: dict, factor: float) -> Dict[str, float]:
-    """标注内尺寸优先，外形尺寸兜底（Spec §2.4 第 2 条）。"""
+def _dimensions(fields: dict, factor: float,
+                warnings: Optional[List[str]] = None) -> Dict[str, float]:
+    """标注内尺寸优先，外形尺寸兜底（Spec 批 5 §2.4 第 2 条）。
+
+    批 9 的两条收紧（Spec `quick-quote-9-parse-field-alignment.md` §1.2）：
+      · `outline_size.source` 命中 `SHEET_SIZE_SOURCES` → 是**图纸幅面**，一个尺寸都不用，
+        并记一条 warning（说清它不是成品内尺寸、要人工补）；
+      · `annotated_dimensions` 只认带 `axis` + `value` 的 dict；元素是**裸数字**时（统一解析服务
+        按 Spec 批 7 §2.4 回的就是 `measured_value`）**不猜轴**，并记一条 warning 说明原因。
+
+    两条都不改变既有口径：没标 source 的外形尺寸照旧兜底，带轴的标注照旧优先。
+    """
+    warnings = warnings if warnings is not None else []
     out: Dict[str, float] = {}
     annotated = fields.get("annotated_dimensions")
     if isinstance(annotated, (list, tuple)):
+        bare = 0
         for item in annotated:
             if not isinstance(item, dict):
+                if _num(item) is not None:
+                    bare += 1
                 continue
             key = _AXIS_KEYS.get(_text(item.get("axis")).lower())
             value = _num(item.get("value"))
             if key and value is not None and key not in out:
                 out[key] = value * factor
+        if bare:
+            warnings.append("图纸标注尺寸只有实测值、没有轴名（axis）：未用于内尺寸，"
+                            "请人工确认哪条是内长/内宽/内高（不按顺序猜）")
     outline = fields.get("outline_size")
     if isinstance(outline, dict):
-        for raw_key in ("length", "width", "height"):
-            key = _AXIS_KEYS[raw_key]
-            value = _num(outline.get(raw_key))
-            if value is not None and key not in out:
-                out[key] = value * factor
+        source = _text(outline.get("source")).lower()
+        if source in SHEET_SIZE_SOURCES:
+            warnings.append("图纸范围（outline_size.source=%s）是整张图的幅面、不是成品内尺寸："
+                            "未用于内尺寸，请人工补内长/内宽/内高" % source)
+        else:
+            for raw_key in ("length", "width", "height"):
+                key = _AXIS_KEYS[raw_key]
+                value = _num(outline.get(raw_key))
+                if value is not None and key not in out:
+                    out[key] = value * factor
     return out
 
 
@@ -292,7 +318,7 @@ def to_match_inputs(parsed, *, fallback=None) -> dict:
     inputs: Dict[str, Any] = {}
     sources: Dict[str, str] = {}
 
-    for key, value in _dimensions(fields, factor).items():
+    for key, value in _dimensions(fields, factor, warnings).items():
         inputs[key] = value
         sources[key] = "parse"
 

@@ -8357,3 +8357,57 @@ next_actions: ['fill_case_fields', 'transfer_to_precise']
 - 鉴权 / ACL 相关 9 个文件：`Ran 207 tests` → OK（app 级白名单是安全敏感面，专门跑过）；
 - 全量回归：`Ran 4230 tests` → failures=19 errors=0 skipped=20，与基线（`## 248`）**逐条相同，
   零新增**。
+
+## 251. 逆向快速报价批 9：统一解析服务的字段形状 → 报价侧匹配输入（收口 `## 250` 记下的那条集成缝）（9-21，Codex 实现 + 全量回归）
+
+`## 249` 与 `## 250` 都记过这条缝，本轮把它做掉：Spec
+`docs/specs/quick-quote-9-parse-field-alignment.md` + 红测
+`tests/test_quick_quote_parse_field_alignment_red.py`（20 条，实现前 **8 红 / 12 绿护栏**），
+再实现到全绿。
+
+### 缝在哪（`## 250` 在 34 上真跑出来的）
+
+```
+parse_file kind=drawing layers=8 dims=316 texts=127 v_groove=True     ← 解析本身是对的
+to_match_inputs -> {"inner_width": 14362.15, "inner_height": 6151.80, "v_groove": true}
+```
+
+`14362×6152` 是**整张图纸的幅面**，被批 5 客户端当成了盒子的内宽 / 内高；而服务按 Spec 批 7
+回的 `annotated_dimensions` 是**裸实测值**（CAD IR 的 DIMENSION 行没有轴名），客户端一个都用不上
+且不说原因。两条口径各自都对，**接起来**才错，而且错得看不出来（`missing` 里没有 `inner_*`）。
+
+### 改法（只动消费方 `cpq_quick_quote_file.py`，服务侧口径一个字不改）
+
+- 新增 `SHEET_SIZE_SOURCES = ("document_extents",)`；
+- `_dimensions(fields, factor, warnings=None)` 两条收紧：
+  - `outline_size.source` 命中 `SHEET_SIZE_SOURCES` → **一个尺寸都不用**，并记一条含「图纸范围」的
+    warning（说清这是整张图的幅面、要人工补内尺寸）；
+  - `annotated_dimensions` 里元素是**裸数字**时**不猜轴**，并记一条含「轴」的 warning；
+  - 其余逐字不变：没标 `source` 的外形尺寸照旧兜底、带 `axis`+`value` 的标注照旧优先。
+- `to_match_inputs()` 把 `warnings` 传下去，出参形状不变；尺寸没拿到时 `inner_*` 如实进 `missing`。
+
+### 真样本复核（本机，服务 + 客户端同跑）
+
+```
+inputs: {"v_groove": true}
+missing: […, 'inner_length', 'inner_width', 'inner_height', …]
+warnings:
+  · 图纸标注尺寸只有实测值、没有轴名（axis）：未用于内尺寸，请人工确认哪条是内长/内宽/内高（不按顺序猜）
+  · 图纸范围（outline_size.source=document_extents）是整张图的幅面、不是成品内尺寸：未用于内尺寸，请人工补内长/内宽/内高
+```
+
+即：**不再**把 14362×6152 塞进 `inner_width`/`inner_height`，而是明说"尺寸没拿到、为什么、怎么办"。
+
+### 回归
+
+- 红测：`Ran 20 tests` → OK；
+- 快速报价九套（批 1–5 + 6/7/8/9）：`Ran 324 tests` → OK (skipped=3)；
+- 全量：`Ran 4250 tests` → failures=19 errors=0 skipped=20，与基线（4237 → 本轮 +20 只多出本批红测）
+  **逐条相同，零新增**。
+
+### 顺带记下的另一个缺口（本轮**没**动）
+
+真图 `酒盒.dwg` 的两条材料标注是「235g白卡底PET光银裱A9 E坑」「名称：左盖面纸\n材料：225G铜版底PET光银」，
+客户端的克重识别只认「灰板 / 纸板 / 面纸 / 面 / face / cover」+ **小写 g**，所以 `face_paper_gsm`
+一条都读不出来（大写 `225G` 不匹配、`白卡` 不在词表）。这属客户端关键词口径，与本次的尺寸缝是两件事，
+留给下一批（红测本批已用「面纸 250g」证明这条通路没被打坏）。
