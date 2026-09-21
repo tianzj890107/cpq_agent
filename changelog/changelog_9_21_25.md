@@ -8541,3 +8541,325 @@ cd /Users/sher/Boulderaitech/cpq_agent
   tests.test_quick_quote_file_parsing_red tests.test_quick_quote_parse_field_alignment_red
 curl -s http://127.0.0.1:8010/api/file/parse/capability        # 在 34 上
 ```
+
+## 253. DWG 下游全流程剩余三处缝：放行留痕过桥 / 需求退回草稿 / 人工来源空值 —— Spec + 红测（9-22，Codex 只改 Spec / 红测 / changelog）
+
+34 上"八步跑得完、最后一步 500 / 中途永久卡住"的复盘收口。三处缝都有线上实测证据（项目
+`cbef817fb1da`，酒盒.dwg，全新项目，未改代码），本批**只写 Spec 与红测**，业务实现交给实现方。
+
+### 三处缝（代码事实）
+
+- **报价侧桥读不到放行留痕（P0，34 上实测 500）**：技术侧 `packaging_handoff._guard_gaps()` 已经接受
+  `allow_gaps=True + reason` 并把 `gap_waiver = {by, at, reason, codes}` 写进交接记录（冻结红测 C5 守），
+  但交给桥的正文里**没有**这份留痕；`cpq_tech_bridge._guard_packaging_result()` 只看
+  `cost.has_gaps or gaps` → "财务写明原因放行"这条官方路径在报价侧必然 500。技术侧留了痕，报价侧的
+  门不认，这不是权限问题，是缝没合上。
+- **需求被批准后没有合法退回路径（P0）**：`return_requirement_to_draft()` 只接受
+  `pending_confirmation`，而 `EDITABLE_STATUSES` 只有 `draft/rejected`。需求一旦 `approved`，
+  `packaging_drawing_flow.preconditions()` 会如实报 `REQUIREMENT_NOT_EDITABLE` 并让用户"先退回草稿"，
+  而退回按钮返回 409 —— `field_write` 永久 blocked，系统给的 action 里有一半做不到。
+- **人工来源但值为空（P0）**：`packaging_semantics/provenance._is_user_confirmed()` 只看
+  `field_sources == "manual"`、不看值是否为空 → `data.closure_type = ""` 而
+  `field_provenance` 写 `user_confirmed`，图纸里读到的 `磁吸` 永远只进 `alternatives`。
+- **回填配对静默（P1）**：`packaging_parts.bind_rows()` 的配对是纯位置（行顺序 ↔ 面积降序），34 上把
+  `RB02001-P08`（磁铁）配到 443.5×492.6 的纸面板上，报告里没有任何地方能看出这个配对不可信。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-downstream-blockers-close-loop.md`（口径逐条写死：放行留痕的
+  合法判据与缺口覆盖、退回草稿的状态集合、人工来源空值三档、回填披露的键名与"披露不等于拒绝"、
+  以及 §1.5 五类要业务给数的成本缺口）。
+- 红测：新增 `tests/test_packaging_downstream_blockers_red.py`（20 条；A 组 5 / B 组 2 / C 组 5 /
+  D 组 4 / E 组 4）。夹具**复用**既有冻结测试模块（报价侧受控假库 `QuoteStoreCase`、需求写入内存
+  沙盘 `SemanticsCase`、KB 沙盘 `PartsCase`），不复制常量、不连线上库。
+- 红测实测（实现前，必须真的红）：`Ran 20 tests → FAILED (failures=6, errors=4)`；
+  10 条绿的是负向护栏（无留痕仍拒绝、留痕不缺项才算、非包装不被留痕顶开、
+  `EDITABLE_STATUSES` 不许被加宽、非空人工值不许被覆盖、零件侧材料未知不算不匹配……）。
+
+### 不回归（本批改完复跑，逐条实测）
+
+```
+tests.test_packaging_quote_close_loop_red        OK
+tests.test_packaging_parts_extraction_red        OK（32）
+tests.test_packaging_semantics_red               OK (skipped=1)（59）
+tests.test_packaging_process_route_red           OK
+tests.test_packaging_parametric_bom_red          OK（57）
+tests.test_packaging_drawing_flow_red            OK (skipped=1)（54）
+tests.test_tech_requirement_stage_waiver_red     OK
+tests.test_tech_requirement_confirm_red          OK
+tests.test_tech_requirement_review_red           OK
+```
+
+### 本批**不**做（写在这里，别当成已通）
+
+- §1.5 的成本缺口五类（灰板按 mm 厚度的克重换算、无价材料、损耗率、`no_formula:print`、
+  工装退还依据）要业务给数或给口径。
+  **更正（同日实测，见 `## 254`）**：这里原写的"`content_formula_error:PKG-P-*` 是变量绑定 bug、
+  实现侧能自己收口"是**错的** —— 那 7 行的尺寸/用量在源工作簿里本来就是空单元格。
+- BOM 行 ↔ 零件的**正式对应表**（替代位置配对）要业务签字，签字后需同步改冻结红测 E2/E6 的期望值；
+  本批只要求披露。
+- `packaging_route._AGGREGATE_EXPANSION = ("覆膜","烫金","UV 上光")` 与 `SURFACE_REQUIREMENTS`
+  的取值永远不可能相等（`覆膜`/`烫金` 在 `HARD_ORDER_CHAIN` 里、不在 `PROCESS_CATALOG` 独立位），
+  属死规则，清理单独一批。
+- 双数据目录（`tech_app/data` vs `tech_app/tech_data`）与财务角色对无财务交接项目的 404 属环境问题。
+
+### 边界
+
+- 只新增 1 份 Spec + 1 个红测文件 + 本条目；未改任何业务实现，未动 `tests/` 下既有冻结文件一个字；
+  未提交、未推送、未建 MR/tag/Release、未部署、未重启服务、未连线上库、未写业务数据。
+- 顺带记下：本文件里 `## 226` 出现两次（`226` 零件口径 与 `226` 一键解析终态），是并行会话撞号，
+  编号未改（历史事实保留）。
+
+## 254. 成本缺口里"引擎自己能算却算不出来"的那一类 + 两处误判更正：Spec + 红测（9-22，Codex 只改 Spec / 红测 / changelog）
+
+`## 253` 把 34 上那 24 条缺口逐条查证之后，发现**只有一类是实现侧能自己收口的**，其余都要业务给数或
+给口径。本批就只做那一类，并把上一轮的两处错误判断更正掉。
+
+### 逐条查证结果（本机用种子全量复算 + 34 上的条目一一对照）
+
+| 缺口 | 条数 | 真实性质 |
+| --- | --- | --- |
+| `material_gsm_missing` | 6 | **引擎能自己算**：`灰板 2.0mm` 的 `grade=2.0mm`、材料表 `density=0.75 g/cm³` → 克重 = 2.0×0.75×1000 = **1500 g/㎡**；引擎只认 `gsm` 与 `grade` 里的 `NNNg`，于是 6 行纸板全部不出金额 |
+| `content_formula_error:PKG-P-*` | 7 | **数据不是 bug**：源工作簿 `包装运输!D..G` 本来就是空（隔卡 / 胶袋 / 双胶纸 / 护角 / 标签 / 盖板），Spec（第 7 批）要求"记 None、由缺口披露" |
+| `loss_rate_missing` | 6 | 数据：非纸类材料在 `kb_cost_factor` 里没有对应损耗率（纸板类有 `F-PKG-LOSS-GREYBOARD`） |
+| `material_price_missing` | 3 | 数据：装帧布 / 钕铁硼 / 海绵裱绒 无价 |
+| `no_formula:print` | 1 | **设计如此**：print 在 0903 里是手填列（冻结红测 `test_h6` 守）；带印刷的盒子必然带这条缺口 → 正式报价走 `## 253` 的放行留痕 |
+| `tooling_basis_missing:T-PKG-DIE-REFUND` | 1 | 口径未定：刀模 18000 元的分摊基数是商务决定（本单量 / 承诺量 / 寿命），不许实现方拍 |
+
+顺带查明第三条实现缺口：`_material_rows()` **不 join** `kb_material_property`，而 `EVA 片材`
+（`grade=38°`）的厚度 `10mm` 只写在属性表里，所以那类材料也永远报克重缺口。
+
+### 两处更正（上一轮说错了，已在 Spec 与 `## 253` 里逐处标注）
+
+- `content_formula_error:PKG-P-*` **不是**"变量绑定 bug"（见上表）；
+- `packaging_route._AGGREGATE_EXPANSION = ("覆膜","烫金","UV 上光")` **不是**死规则：
+  这三个工序名正是 `SURFACE_REQUIREMENTS` 的取值（`lamination/hot_stamping/uv_coating`），脚本我上一轮
+  比对的对象搞错了。本批**不动** `packaging_route.py`。
+
+### 产物（只 Spec + 红测，不含实现）
+
+- Spec：新增 `docs/specs/packaging-cost-gaps-closure.md`（推导口径逐条写死：只认明写的厚度与密度、
+  `gsm = 厚度(mm) × 密度(g/cm³) × 1000` 四舍五入到 0.1、`grade` 里的 `NNNg` 优先、单位非 mm 不推导、
+  留痕 `gsm_source` 闭集；并列出要业务给数的四类"谁给什么、给完之后行为是什么"）。
+- 红测：新增 `tests/test_packaging_cost_gaps_red.py`（10 条：G 组 5 条推导 + H 组 4 条护栏 +
+  1 条属性表 join）。夹具复用冻结的 `tests.test_packaging_cost_engine_red.CostCase`，并补上冻结夹具
+  漏掉的价格列 `valid_from`（真实库每行都有；不补就会把"缺价格"误当成"缺克重"）。
+- 红测实测（实现前，必须真的红）：`Ran 10 tests → FAILED (failures=6)`；绿的 4 条是护栏
+  （缺密度不许猜、缺价格不许顺手补、7 条包材缺口不许藏、`print`/刀模缺口不许造默认值）。
+- 不回归（改完复跑）：`cost_engine 81 OK` / `cost_rule_routing OK` / `cost_red_closure 14 OK` /
+  `cost_column_evidence OK` / `cost_policy_decision 15 OK` / `cost_minimum_charge 47 OK (skipped=1)`。
+
+### 同批并行落地的实现（`## 253` 那批）已验收
+
+`## 253` 的 20 条红测（实现前 `failures=6, errors=4` = 10 红）在并行实现落地后**全绿**，逐条对照
+Spec 复核过：
+
+- `cpq_tech_bridge._guard_packaging_result()` 增加放行分支，判据与 Spec §3.1 逐条一致
+  （`by`/`at`/`reason` 非空 + `codes` 必须是这份包缺口码的**超集**；包里没有逐条码时才允许 `codes` 空）；
+- `packaging_handoff.send_to_quote()` 只在有缺口时把 `gap_waiver` 塞进交桥正文，无缺口时正文与今天逐字相同；
+- `return_requirement_to_draft()` 新增 `RETURNABLE_TO_DRAFT_STATUSES`，**没有**改 `EDITABLE_STATUSES`；
+- `provenance._is_user_confirmed()` 改成"人工来源**且**当前有值"才算确认，空值时按正常路径补值、
+  来源仍标 `manual`；
+- `packaging_parts.bind_rows()` 逐行留痕 `pairing_basis` / `material_match` 并新增 `pairing_review`，
+  `bound`/`unbound`/`gaps` 口径未变。
+
+红测本身有一处笔误在实现落地后暴露并已修正：`test_a1` 里多写了一句
+`assertIsInstance(..., type(module))`（永远不成立），删掉后 20 条 OK。上一轮记录的"实现前 10 红"基线
+不受影响（当时 a1 是因为真守卫抛错而红）。
+
+### 边界
+
+- 只新增 1 份 Spec + 1 个红测文件 + 本条目（另对 `## 253` 的一处事实错误就地标注更正）；未改任何业务实现
+  （上面那批实现是并行的实现方落的，本条目只做 Spec/红测/复核/记录）；未动 `tests/` 下既有冻结文件；
+  未提交、未推送、未建 MR/tag/Release、未部署、未重启服务、未连线上库、未写业务数据。
+
+## 254. 逆向快速报价批 11 实现：快速报价面板的图纸/文件入口（9-22，Codex 写 Spec / 红测 / 实现）
+
+批 5 的服务端路由、批 2 的候选检索、批 9/10 的解析口径全都做完了，**页面上却没有地方丢图纸**：
+
+```
+grep -rn "QUICK_QUOTE_PARSE_PATH\|/api/quick-quote/parse" 前端目录   → 0 处
+34：POST /agents/quote/api/quick-quote/parse                        → 401「请先登录」（登录后可用）
+报价首页点「快速报价」                                               → 只列案例库，没有上传入口
+```
+
+Spec `docs/specs/quick-quote-11-panel-parse-entry.md`；红测
+`tests/test_quick_quote_panel_parse_entry_red.py`（29 条，实现前 **22 红 / 7 绿护栏**）。
+
+### 改法（只动 3 个文件）
+
+- `tech_app/frontend/quick-quote-panel.js`：`PARSE_PATH`（与
+  `cpq_quick_quote_file.QUICK_QUOTE_PARSE_PATH` 同值）/`PARSE_ACCEPT`；纯函数
+  `quickQuoteParseView(result)`（体内无 DOM / 全局 / 网络，红测把函数体单独交给 node 跑）；
+  `renderParse()` 上屏能力段 / 匹配输入 / 要补的字段 / 告警 / 候选 / advice；`parseFile()`
+  只读字节 + base64 后 POST；`renderParseEntry()` 把入口插在面板标题与案例库之间。
+- `cpq_quick_quote_match.py`：新增公开出口 `input_labels(keys)` —— 字段中文名的**唯一事实源**
+  仍在后端（`FIELD_LABELS` + `_INPUT_LABELS`），前端不许自带第二份表。
+- `cpq_agent_server.py`：`/api/quick-quote/parse` 出参**只加** `labels`，其余键一字不动。
+
+### 红 → 绿
+
+```
+tests.test_quick_quote_panel_parse_entry_red   实现前 Ran 29 FAILED (failures=22) → 实现后 Ran 29 OK
+快速报价十一套（批 1–11）                       Ran 390 OK (skipped=3)
+```
+
+### 边界（逐条守住）
+
+面板不引技术工艺链路（无 `/api/projects/` / `drawing-flow` / `cpq_tech_bridge`）、不做浏览器侧转换
+（无 `dwg2dxf` / `ODAFileConverter` / `xvfb`）；候选与理由一律后端给什么显示什么（前端不排序、不算相似度）；
+图纸幅面不进内尺寸（批 9 口径不动）；既有 14 个导出与 `QUOTE_ACTIONS` 闭集一个不少。
+
+## 255. `## 253` 的实现：DWG 下游三处缝（放行留痕过桥 / 需求退回草稿 / 人工来源空值 / 回填披露）（9-22，Codex 实现）
+
+`## 253` 的 Spec（`docs/specs/packaging-downstream-blockers-close-loop.md`）与红测
+（`tests/test_packaging_downstream_blockers_red.py`，20 条）由测试侧写就，本轮落实现。
+
+```
+tests.test_packaging_downstream_blockers_red   实现前 Ran 20 FAILED (failures=6, errors=4)
+                                              实现后 Ran 20 FAILED (failures=1)  ← 只剩 A1，见下
+```
+
+### 四处实现（都只碰 Spec §2 允许的文件）
+
+1. **放行留痕过桥（技术侧）** `packaging_handoff.send_to_quote()`：把已算出的 `waiver` 放进交给桥的
+   正文（`{**bridge_result(package), "gap_waiver": waiver}`）；**没有缺口时不放这个键**，正文与今天
+   逐字一致（B2 守）。
+2. **报价侧认留痕** `cpq_tech_bridge`：新增 `_waiver_covers()`，`_guard_packaging_result()` 增加放行
+   分支 —— `by` / `at` / `reason` 去空白后非空才算签字，包里能逐条列举缺口码时 `codes` 必须**全覆盖**
+   （新缺口不在 codes 里照旧拒绝）；非包装、留痕不全、码不覆盖一律照旧 `BridgeError` 并点名缺口；
+   放行返回那份留痕，落点 `payload["tech_result"]["gap_waiver"]` 读得到原因（A2 守）。
+3. **需求退回草稿** `requirement_service`：新增 `RETURNABLE_TO_DRAFT_STATUSES =
+   ("pending_confirmation", "pending_review", "approved")`；`draft` 幂等返回自身（不写库）；
+   其它状态照旧 409。**`EDITABLE_STATUSES` 逐字未动**（C5 守）—— 退回是动作，编辑是动作之后的判定。
+4. **人工来源空值** `packaging_semantics/provenance.py`：拆出 `_has_value()` / `_is_manual_source()`，
+   `_is_user_confirmed(previous, source, value)` 改成"人工**且当前有值**"；人工来源但值为空（或键不存在）
+   时走正常写入 —— 图纸值补上、`field_sources` 仍是 `manual`、`origin` 记 `user_confirmed`；
+   非空一律不许覆盖（冻结 D7 守）。
+5. **回填披露** `packaging_parts.bind_rows()`：逐行 `dwg_binding.pairing_basis`（非空，写清"行顺序 ↔
+   面积降序"的第几对、是否循环取件）与 `material_match`（闭集：纸/板/卡/坑/牛皮 · 磁铁/钕铁硼/磁石 ·
+   五金/铁/铝 · 丝带/织带/布/绒 · EVA/海绵/PET/PVC/塑料，**闭集外一律 None**）；两类材料都已知且不同类
+   → `material_match=false` 并进 `pairing_review`（带 `row_material` / `part_material`）。
+   **披露不是拒绝**：行照旧绑定、`bound` / `unbound` / `gaps` 口径逐字不变（E2 守）。
+
+### 不回归（Spec §5 的冻结面，逐条实跑）
+
+```
+包装下游九套（quote_close_loop / parts_extraction / semantics / process_route /
+             parametric_bom / drawing_flow / tech_requirement_stage_waiver /
+             confirm / review）                       Ran 402 OK (skipped=2)
+```
+
+### 一条**红测本身不可满足**的断言（没有改红测，报给测试侧）
+
+`tests/test_packaging_downstream_blockers_red.py:111`：
+
+```python
+self.assertIsInstance(getattr(bridge, "_guard_packaging_result", None), type(bridge))
+```
+
+`bridge` 是模块，`type(bridge)` 是 `<class 'module'>`，而 `_guard_packaging_result` 是**函数** ——
+这条断言在任何实现下都不可能成立（实测：`<function …> is not an instance of <class 'module'>`）。
+同一个用例的**前两条断言已经通过**（放行没有抛错、任务真的落地），紧跟着的下一行
+`assertTrue(callable(...))` 才是原意。按"不许改红测"的纪律本批**没有动它**，A1 因此保持红：
+请测试侧把它改成 `types.FunctionType`（或删掉这一行）后本批即 20/20 全绿。
+
+## 256. 针对已发现缺口补齐三份 Spec + 红测：案例维护写路径 / 权威费率导入 / 部署版本身份（9-22，Codex 只改 Spec + 红测）
+
+这三份都是**我一个人在验收与复验期间实测到、而仓库里还没有对应 Spec/红测**的缺口（同批次的
+批 1–11 与图纸下游那几份由并行会话负责，本条目不重复、不重叠）。三套红测都**先跑红**，
+再交实现方（AGENTS.md：Codex 不写业务实现）。
+
+### 12. 案例库的维护写路径 —— `docs/specs/quick-quote-12-case-maintenance.md`
+
+- 缺口（实测）：`cpq_agent_server.py` 只有 `GET /api/quick-quote/cases`（只读）；案例库里 2 条
+  `draft` 案例缺「标准单价」→ `eligible_total = 0`；`quick-quote-panel.js` 的
+  `renderReadiness()` 把 `fill_case_fields` / `review_case` 画成按钮，但 `open()` 没有
+  `onAction`、`报价首页.html` 也只传 `onPrecise` —— **两个按钮点下去不发任何请求**，
+  补价 + 审核只能靠 SSH 跑运维脚本。
+- 契约：`case_edit_patch()`（局部补字段：白名单 / 身份列不可改 / 值域 / 等值幂等 / `CASE_FIELDS`
+  键序）、`case_review_patch()`（状态机 + 原因必填 + 审核人留痕）、
+  `case_write_allowed()`（复用 `WRITE_ROLES`）、两条写路由
+  `POST /api/quick-quote/cases/{case_code}/fields|review`（先校验后写、出参带 `readiness`），
+  面板 `onAction` + `data-qq-action-pending`。
+- 验收口径：把两条真实案例补价 + 审到 `reviewed` 后，`library_readiness()` 必须由
+  `no_eligible` 变 `ready`、`eligible_total` 由 0 变 2。
+- 红测 `tests/test_quick_quote_case_maintenance_red.py`：**Ran 29，failures=29（全红，0 error）**。
+
+### 13. 权威费率的导入路径 —— `docs/specs/quick-quote-13-authoritative-rate-import.md`
+
+- 缺口（实测）：`kb_quick_quote_delta_rule` 4 条费率全是 `demo` / `draft` →
+  `authority_summary()["authoritative"] = False` → `is_formal()` 永远为假、**正式快速报价不可达**；
+  批 8 只把流程写进文档，仓库里没有任何工具/接口能把权威费率导进去，4 条 demo 也不会自动退场。
+- 契约：`rate_import_plan()`（逐行校验 → `write` / `retire` / `blocked` / `projected` /
+  `counts` / `authoritative`，`projected` 与 `authority_summary()` 同源）、
+  `RATE_IMPORT_REQUIRED_KEYS`、工具 `scripts/import_quick_quote_rates.py`（默认 dry-run、
+  `--confirm`、`--keep-demo`、`blocked` 非空非零退出）、`DEPLOYMENT.md` 登记。
+- 验收口径：4 条 demo 退役 + 权威行写入后 `authoritative is True` 且 `is_formal()` 为真。
+- 红测 `tests/test_quick_quote_authoritative_rate_import_red.py`：**Ran 23，failures=23（全红）**。
+
+### 部署版本身份 —— `docs/specs/deploy-build-identity.md`
+
+- 缺口（实测）：`/api/health` 没有任何版本字段，`scripts/deploy_34_bare.sh` 只在结论打印一行文本 ——
+  验收期间判断「34 跑的是哪个 commit」只能靠功能差异反推，或再部署一次把 HEAD 对齐（当晚确实
+  因此多跑了一次部署）。
+- 契约：新增 `tech_app/backend/services/build_identity.py`（`build_info()` 读 stamp，
+  坏 / 缺 → 回退 `git rev-parse` → 再回退 `source=unknown`，**任何情况不抛**）、
+  `/api/health` 顶层加 `build` 段、部署脚本写 `cpq_build.json` 并用 `BUILD_COMMIT` /
+  `HEAD_COMMIT` 比对（不一致非零退出）、`DEPLOYMENT.md` 给外部对账命令。
+- 红测 `tests/test_deploy_build_identity_red.py`：**Ran 15，failures=15（全红）**。
+
+### 复跑与边界
+
+- 三套新红测合计 `Ran 67，failures=67`（预期红）；既有快速报价十套复跑 `Ran 361 OK (skipped=3)`，
+  **零回归**（新文件纯增量，未改任何既有实现与既有测试）。
+- 本条目只加 Spec + 红测 + changelog：未改业务实现、未改既有红测、未连库写数据、未提交 / 未推送 /
+  未部署（等用户点名）。
+- 另外两处我实测到、但**刻意没写成红测**的项（都不是产品行为契约，写红测会变成对文档格式的断言）：
+  ① Spec 的「状态」字段与实际实现漂移（批 10 的 Spec 头写「待实现」时它的 37 条红测已经全绿）；
+  ② 仓库里仍留着未跟踪的 `scripts/tmp_import_dwg_cases.py` 与 3.7M 的
+  `裕同包装项目-待开发/` 样本目录（有意不入库，但缺一份「样本与临时脚本归属」的说明）。
+
+## 257. 把剩下两处自检也写成 Spec + 红测：Spec 状态行与实际一致 / 样本与一次性脚本归属（9-22，Codex 只改 Spec + 红测）
+
+`## 256` 里记的两处"我实测到但没写成红测"的项，本次补齐 —— 它们同样**先跑红**，实现侧要做的
+只是改文档（不动任何实现与红测）。
+
+### 状态行与红测实际结果一致 —— `docs/specs/spec-status-consistency.md`
+
+- 实测漂移：`quick-quote-10` 头部写「待实现」而它的 37 条红测已全绿；同系列另有 9 份同样写着
+  「未实现」而红测早已全绿；写法还有三种（`**待实现**` / `Spec（**未实现**）` /
+  `Spec + 红测 + **实现**`），机器读不了。
+- 契约：`docs/specs/quick-quote-*.md` 的状态行必须用 `状态：Spec + 红测（未实现）` 或
+  `状态：Spec + 红测（已实现）`（允许后缀说明）；必须能解析出存在的 `红测：` 路径；
+  **声明必须与跑出来的结果一致**（未实现 → 该红测当前必须有失败；已实现 → 必须全绿）。
+- 红测 `tests/test_spec_status_consistency_red.py`：**Ran 4，failures=3**（A1 字面量、C1 一致性；
+  跑 13 份 Spec 的红测子进程，本次 14.7s）。
+
+### 样本与一次性脚本的归属 —— `docs/specs/repo-leftovers-and-sample-data.md`
+
+- 实测：未跟踪的 `scripts/tmp_import_dwg_cases.py` 与 3.7 MB 未跟踪样本目录
+  `裕同包装项目-待开发/` 长期挂着；`.gitignore` 一条相关规则都没有；`scripts/` 没有 README，
+  没人知道 `tmp_` 脚本与正式脚本 `scripts/import_dwg_quick_quote_cases.py` 的关系。
+- 契约：`.gitignore` 必须显式覆盖样本目录与 `scripts/tmp_*.py`；新增 `scripts/README.md` 写清
+  一次性脚本的地位（不参与部署、可删）、正式入口与样本目录的归属；入库脚本不得引用 `tmp_` 脚本。
+- 红测 `tests/test_repo_leftovers_red.py`：**Ran 6，failures=5**（C 组"入库脚本不引用 tmp_ 脚本"
+  已绿，是护栏）。
+- **非目标（写进 Spec）**：不删除、不移动、不提交样本与一次性脚本 —— 用户文件一个字节不动，
+  本批只加"忽略 + 说明"。
+
+### 汇总（本次两轮共 5 份 Spec + 5 套红测）
+
+| Spec | 红测 | 结果 |
+| --- | --- | --- |
+| `quick-quote-12-case-maintenance.md` | `test_quick_quote_case_maintenance_red.py` | Ran 29，failures=29 |
+| `quick-quote-13-authoritative-rate-import.md` | `test_quick_quote_authoritative_rate_import_red.py` | Ran 23，failures=23 |
+| `deploy-build-identity.md` | `test_deploy_build_identity_red.py` | Ran 15，failures=15 |
+| `spec-status-consistency.md` | `test_spec_status_consistency_red.py` | Ran 4，failures=3 |
+| `repo-leftovers-and-sample-data.md` | `test_repo_leftovers_red.py` | Ran 6，failures=5 |
+| 合计 | 五套一起跑 | **Ran 77，failures=75**（2 条护栏绿） |
+
+既有快速报价十套复跑 `Ran 361 OK (skipped=3)`，**零回归**；`py_compile` 与 `git diff --check` 通过。
+
+边界：本轮只新增 5 份 Spec + 5 套红测 + 本条目；未改任何实现、未改任何既有红测、未连库写数据、
+未提交 / 未推送 / 未部署（等用户点名）。
