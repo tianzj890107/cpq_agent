@@ -8974,6 +8974,61 @@ Spec 与红测字面常量未被改动）。
 2. 本周 changelog 出现**重复编号**：`## 260` 两份（工序名归一化实现 / 第二轮真跑）、`## 261` 两份
    （零件链路三份 Spec / 草稿报价与卡片分区实现），是并行会话各自取号导致的。
 
+### 258.2 换到 9f4fcfe 之后：自己从头再跑一遍，跑到卡片第 6 步
+
+用户要的"从头到尾、我能看到、能走到最后再回去"，这一轮用**我自己写的驱动**在线上重跑了一遍
+（不是复用上一轮的会话）。部署版本从 `5e2dc33` 换成了 `9f4fcfe`（中途 01:14 有约 1 分钟
+`/api/health` 502「tech_app 未就绪」，是并行会话部署重启，我的第一版驱动正好卡在那 1 分钟里）。
+
+新跑出来的那张卡片（可点）：
+
+| 项 | 值 |
+| --- | --- |
+| 会话 / 卡片 | `a001739dec31`「700ML双开门酒盒（全流程复跑 0116）」/ `card_id=3991223431646420867` |
+| 技术项目 / 业务实例 | `bc0d1aeb4547` / `bc_215f5e047817` |
+| 八步解析 | **8/8 completed**（19.2s，`酒盒.dwg` 686195 bytes） |
+| 零件 | **64 件**，`closed_ratio=0.938`（上一轮 0.797；`## 264` 的重复边折叠在线上生效）、`processable_ratio=0.062`、`solid_ok_ratio=0.0` |
+| 下游能算的件 | `DWG-P07 / P14 / P27 / P38` 四件（轮廓闭合 + 材料 + 厚度齐全） |
+| 盒型 | 匹配 14 个候选 → 确认 `YT-RB-02001-A` |
+| BOM / 路线 | BOM 33 行；工艺路线 **13 道**，`order_violations` 空，`needs_standard_time=[覆膜, 烫金]`（1:N 续道口径） |
+| 成本 | `total_cost=11.9879`，缺口 20 条 |
+| 回传 | `pkghandoff:bc0d1aeb4547:REQ-BC0D1AEB4547:default:1` |
+| 线上定价（缺口包原样） | HTTP 200、`draft=true`：未税 15.9838 / 含税 18.0617；加价+折扣后未税 16.2771 / 含税 18.3932 |
+| 卡片终态 | 1–6 步全 `done`、`overall_status=completed`；第 2 步快照带 `s2_packaging`/`s2_packaging_cost`/`packaging_package`；第 6 步快照落 **64 件零件表 + 8 节报价单** |
+
+驱动里自己踩出来 / 仍然必须绕的三处（都是实测，不是推断）：
+
+1. **第 2 步归工艺经理**：SM1 直接做第 2 步 → 400；必须 PE1 做（或走集成通道的代做）。补做会
+   把卡片退回 `handoff_pending`，得把 3–6 步按原快照再确认一遍才回到 `completed`；
+2. **财务 FI1 跑成本 → 404「项目不存在」**：财务没有被加进技术项目（`store.add_participant`
+   的生产调用点为 0），本轮改用 PE1 跑成本 —— 这条归同批 `packaging-cost-finance-access.md`；
+3. **加价项入参形状**：`addons` 必须是 `{类别: 单件金额}` 字典，传列表会被 400 拒
+   （"加价项必须是 {类别: 单件金额} 形式"）；另外盒型候选在 `result.candidates` 而不是顶层
+   —— 后者是我驱动的解析错，不是服务问题。
+
+零件下游仍然是 `4/64`（材料归属 / 环搜索 / 挤出覆盖率），归同批三份零件 Spec；本轮把闭环做到
+"64 件看得见 + 能算的 4 件能算 + 报价卡片六步走完并能回去"，没有动任何既有数据。
+
+### 258.3 同一趟跑出来的新缺陷：卡片步进会倒回 —— 新 Spec + 红测
+
+这趟真跑为了把第 2 步（归工艺经理）补上，撞出一个谁都没想到的状态机缺陷：**六步全做完的卡片，
+补做一次靠前的步就会被倒回**。
+
+| 事实（34 实测，会话 `a001739dec31`） | 值 |
+| --- | --- |
+| 1、3、4、5、6 步做完后 | `current_step=6`、`overall_status=completed` |
+| 工艺经理补做第 2 步后 | **`current_step=3`、`overall_status=handoff_pending`** |
+| 恢复方式 | 把 3、4、5、6 步按原快照再确认一遍 |
+
+根因：`cpq_wf.complete_step()` 一律 `current_step = step_no + 1`，`done_all` 只判"本步是不是最后一步"，
+**从不读 `cpq_wf_card_step` 里其它行的状态** —— 所以补做、乱序、重放（前端重试/双重提交）
+任何一个动作都会让进度条倒回去。
+
+写成 `docs/specs/quote-card-step-order-and-replay.md` + `tests/test_quote_card_step_order_and_replay_red.py`：
+`current_step` 必须是**第一个还没做完的步**、全做完即 `completed`、重放幂等、返回体与卡片同源。
+红测用**受控假连接**驱动真的 `cpq_wf.complete_step`（只认那条路径真正会发的 SQL，本地不连 PG、
+不写文件），实跑 **Ran 6，failures=4**（两条护栏绿：顺序推进不变、补做照样留 `step_done` 事件）。
+
 ## 259. 六套「Spec + 红测」的实现：部署版本身份 / 成本缺口推导 / 案例维护写路径 / 权威费率导入 / Spec 状态自检 / 样本与一次性脚本归属（9-22，Codex 实现）
 
 `## 256` 与 `## 257` 那五份（+ 批 12 / 批 13 两份）Spec 与红测由测试侧写就，本轮**全部落实现**；
@@ -9576,3 +9631,159 @@ tests.test_packaging_manual_field_confirmation_red                    Ran 13 OK
   或改走等价接口，没有放宽任何门禁；
 - 工作区仍有并行会话的未跟踪 Spec / 红测，本轮未动、未提交；
 - 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 L2（可信），未签字不得声明 L3。
+
+## 265. 34 上全流程再跑一遍（酒盒 + 圆盘盒双样本）+ 2.1 零件面板链路逐段核验 + 新 Spec：BOM 回填的尺寸来源（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+（编号跳过 `264`：`9f4fcfe` 的提交信息占用了 `## 264`，但该条目至今没有落进本文件，故本条目取 `265`，
+不去补一个不属于本轮的号。）
+
+用户要"从头到尾从报价到零件拆出来、我能看到，再回去；关键是要能看到拆出来的那些零件"。
+本轮在 34 上重跑了一遍（全新会话，不复用上一轮），并且把 2.1 零件面板真正用到的四个端点逐段打了一遍。
+
+### 一、真跑结果（全新一条，可点、可复现）
+
+| 环节 | 值 |
+| --- | --- |
+| 报价卡片 | 会话 `fullchain-425ddfdd`「包装报价 · 酒盒 700ML 双开门礼盒（演示 0922-B）」，`card_id=3991214210276138833`，实例 `bc_658d85212bff`，SM1 建卡 |
+| 技术项目 / 需求 | `5416443be409` / `REQ-5416443BE409`（PE1 上传 `酒盒.dwg` 686195 bytes，`entry_origin=quote`） |
+| 解析链路 | **8/8 completed**（`flow-576b9d05d67be56e`，ODA 27.1，IR `21d94f35bd75a5d2`，`unit_status=confirmed`） |
+| ★ 零件 | **64 件**（`closed 51 / open 13`，`closed_ratio 0.797`，过滤 192、截断 146，`by_role={"unknown":64}`） |
+| 盒型 / BOM | 14 个候选 → 确认 `YT-RB-02001-A`；BOM 33 行，其中 **4 行 `source=dwg_parts`** |
+| 工艺路线 | **12 道**、`status=confirmed`、`violations=[]` |
+| 成本 | `total_cost=11.3201`、`has_gaps=True`、缺口 18 条 |
+| 回传 | `POST .../packaging-quote/send` → **200**，`handoff_no=pkghandoff:5416443be409:REQ-5416443BE409:default:1` |
+| 回到报价侧 | 卡片 `current_step=3`、`overall_status=handoff_pending`；SM1 收件箱新增 `TP-92106051`（待领取，「包装成本已确认，请进入定价」） |
+
+**第二个样本（新增覆盖）**：`圆盘盒.dwg`（889062 bytes）走同一条链路 → 项目 `7b24f67f74f5`，
+八步全 `completed`，**9 件零件**（`closed 8 / open 1`，`closed_ratio 0.889`，`truncated 0`，
+`by_role={"unknown":8,"cut":1}`），其中 `DWG-P04` 还读出了图纸注释「隔卡 B坑 5PCS 用法：上下.每2个盒子隔1个」。
+此前所有真样本验收都只用 `酒盒.dwg`，本轮把第二张权威图也跑通了。
+
+### 二、2.1 零件面板链路逐段核验（前端真正调用的四个端点）
+
+前端口径：左栏零件树读 `GET /api/projects/{pid}/requirement/packaging-parts`（`index.html:184` 的
+`.drawing-parts-column`），点一件读 `.../{part_code}`，右栏两条下游走 `.../{part_code}/{process|cost}`。
+
+| 端点 | 酒盒 `DWG-P07`（项目 5416443be409） | 圆盘盒 `DWG-P04`（项目 7b24f67f74f5） |
+| --- | --- | --- |
+| ① 列表 | 200，64 件，`parts_id=parts:1508ec744d6c4281` | 200，9 件，`parts_id=parts:00ff27073ac177df` |
+| ② 单件 | 200，261.303×434.968，轮廓 32 点、47 条 evidence | 200，407.5×428.0，轮廓 4 点、3 条 evidence |
+| ③ `/{code}/process` | 200 `{"plan":null,"validation":null,"coverage":null}` | 同 |
+| ④ `/{code}/cost` | 200 `{"analysis":null,"summary":null}` | 同 |
+
+→ **列表与单件可用**（这就是"能看到零件"）；③④ 两条 GET 是**恒空桩**，而结果只在 POST 的异步任务里、
+不落库，所以刷新/重开就没了。**这条已经有 Spec 与红测，本批不重复立**：
+`docs/specs/packaging-parts-downstream-readback.md` +
+`tests/test_packaging_parts_downstream_readback_red.py`（本轮实测 **Ran 17，failures=14**）。
+
+### 三、本轮发现的五件事，逐条判定"是不是缺陷"
+
+| # | 现象（34 实测） | 判定 | 本批 |
+| --- | --- | --- | --- |
+| 1 | BOM 那 4 行 `dwg_parts` 里 **3 行**的 `length_mm/width_mm` 来自**未闭合零件的包围盒**（`outline_status=open` + `size_source=component_bbox`），而回填行 `dwg_binding` 里**来源一个字都没有** | **真缺陷** | **本批新 Spec + 红测**（§四） |
+| 2 | 盒型候选列表不按 `total_score` 降序（实际 `1.0, 0.9784, 0.9983, …`） | **不是缺陷** | `_sort_key` 的 docstring 明确写"状态 → 是否越界 → 总分**升序**"，且被 `tests/test_packaging_box_type_matching_red.py::test_a3_weights_are_not_hardcoded` 钉住（同分无解的数学论证写在注释里）；`suggested_box_type` 另行取最高分，所以推荐是对的 |
+| 3 | 同一张图，成本 `6.577` → `11.3201`、缺口 `24` → `18` | **不是缺陷** | 两轮之间夹了一次部署（`## 259` 成本缺口推导）：能算出来的缺口更多，材料费自然上升 |
+| 4 | 盒型匹配 `missing_inputs=["fit_clearance"]` | **不是缺陷** | `fit_clearance` 是需求侧字段，`requirement-create.js:126` 有录入位（"配合间隙"），是本轮驱动脚本没填 |
+| 5 | 驱动打印 `score=None` | **不是缺陷** | 驱动读错了键名，实际字段是 `total_score` |
+
+第 1 条的现场证据（同一个项目，零件侧与 BOM 侧对着看）：
+
+```
+零件侧（64 件里 13 件是 bbox 来源）
+  DWG-P01  443.523 × 492.620   open    component_bbox   ← 未闭合，数字是包围盒
+  DWG-P02  440.123 × 482.920   open    component_bbox
+  DWG-P03  440.123 × 482.920   open    component_bbox
+  DWG-P04  398.024 × 446.320   closed  closed_outline   ← 闭合轮廓，真展开
+
+BOM 侧（4 行 dwg_parts 的 size_source_json.dwg_binding）
+  RB02001-P02 ← DWG-P01   {component_id, part_code, rule_id, fallback_paired,
+  RB02001-P03 ← DWG-P02    original_missing_variables, pairing_basis, material_match}
+  RB02001-P08 ← DWG-P03    ← 七个键里没有 size_source / outline_status
+  RB02001-P09 ← DWG-P04    ← 也没有任何"这个数字是不是包围盒"的标记
+```
+
+后果：成本按 `PKG-C-MATERIAL`（`cut_length × cut_width`）算材料，拿到的就是包围盒面积；
+界面上"展开尺寸"两类数字长得一模一样；同一份 BOM 里磁铁（钕铁硼 Ø10×2mm）那行拿到 440.123 × 482.92。
+
+### 四、本轮新增的 Spec + 红测
+
+- Spec：`docs/specs/packaging-bom-part-size-provenance.md`
+  （回填行必须带 `size_source` / `outline_status` / `size_quality`；`size_quality` 闭集
+  `{unfolded, bbox_only}`；**只加来源、不改数字、不改配对规则、不改 stats/gaps**）。
+- 红测：`tests/test_packaging_bom_part_size_provenance_red.py`，15 例。
+- 实测（实现前，必须真的红）：**Ran 15，failures=8** ——
+  A1 / A2 / B1 / B2 / C1 / C2 / C3 / D2 红；
+  A3 / A4 / B3 / D1 / D3 / D4 / D5 七条为护栏绿（配对规则不变、既有七个键不少、数字与统计不变、
+  无来源证据时不许猜成 `unfolded`、锁定行仍绝不绑）。
+
+> 去重说明：本轮先核了两处"看起来像缺陷"的东西，都不是缺陷（上表 #2 / #4 / #5）；
+> 又核了一处确实是缺陷的东西（单件工艺/成本 GET 恒空、结果不落库），发现**已有 Spec + 红测在跟**
+> （`packaging-parts-downstream-readback.md`），因此本批只立"尺寸来源"这一条，不重复立第二套。
+
+### 五、顺带校正：本批 Spec 的状态行按实测更新
+
+`docs/specs/packaging-parse-to-downstream-seams.md` 的 §3.1 已由并行会话的 `## 262` 实现
+（`provenance` 显式写 `user_confirmed`、`gates` 两条独立证据路径），
+该文件红测从 `failures=7` 变成 **`Ran 13，failures=4`**（B1 / B2 / B3 / C1 仍红，A 组三条转为回归锚点）。
+状态行已按实测改写，避免"Spec 说未实现、红测已绿"这类对不上的情况。
+
+冻结面复跑（本批之后）：
+
+```
+tests.test_packaging_parts_extraction_red            Ran 32 OK
+tests.test_packaging_parametric_bom_red              Ran 57 OK
+tests.test_packaging_parse_to_downstream_seams_red   Ran 13，failures=4（B / C 组未实现，预期红）
+tests.test_packaging_bom_part_size_provenance_red    Ran 15，failures=8（本批红测，预期红）
+```
+
+### 边界
+
+- 仓库侧：新增 1 份 Spec + 1 套红测，按实测改 1 处 Spec 状态行，加本条目；**未改任何业务实现**、
+  未动既有冻结红测一个字、未提交 / 未推送 / 未建 MR / 未打 tag / 未部署；
+- 34 上只**新增**：卡片 `fullchain-425ddfdd`、项目 `5416443be409` 与 `7b24f67f74f5`、
+  以及它们自己的需求/BOM/路线/成本/交接记录，外加 `/tmp` 里的只读回读脚本（全部 `GET`）；
+  第一轮那套（`fullchain-a05627f2` / `559892f033b9`）原样保留，未删改任何既有项目、会话与数据；
+- 能力声明不变：**DWG 编排与零件提取能力完成，真实转换能力仍未验收**；零件闭环 L2（可信），
+  未签字不得声明 L3。
+
+## 266. 零件外轮廓「重复边折叠 + 外轮廓重判」补齐：`packaging-parts-outline-chaining` 的实现收口（9-22，Codex 实现 + 冻结面复跑）
+
+`## 264` 只落了服务端的折叠与 rescue；本条目补齐该 Spec 的其余验收面（路由透出 / 面板文案 /
+冲突上报），并把一处**会把链路拖死**的性能缺陷按实测修掉。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 奇度顶点配对 | `tech_app/backend/services/packaging_parts.py` | 逐对求最近是 O(n³)：真图单个分量可有上千个奇度顶点（开放链的刀口），把 `outline_diagnosis()` 拖到分钟级；改成按坐标排序后相邻配对（O(n log n)，结果确定） |
+| 单件详情的留痕 | `tech_app/backend/main.py` | `_part_outline()` 透出 `outline.compose`（只有 rescue 成功的件有）；响应新增 `outline_diagnosis`（Spec §5.2） |
+| 面板文案 | `tech_app/frontend/app.js` | `PACKAGING_OUTLINE_REASONS` 补 `odd_endpoints` / `loop_budget_exhausted` / `no_curve_entity`，open 件的灰按钮点名**具体**原因（Spec §5.3）；旧键 `no_closed_loop` 保留（老文档里仍有该值，面板红测 D5 也要求该字面在表里） |
+
+### 与既有红测的真冲突（已上报，未改测试）
+
+`tests/test_packaging_parts_outline_red.py::DDegrade::test_d1_open_component_says_so`（第 1 层，已验收）
+逐字断言 `outline_reason == "no_closed_loop"`，而本 Spec §2.5 第 1 条要求该字面从源码里消失
+（chaining 红测 D1 直接扫源码）—— 两条断言结构上不可能同时为真。落地后该第 1 层用例由绿转红，
+相邻冻结面 451 条里**只此 1 条**。测试侧一行修法已写进 Spec §9（`assertIn(..., OUTLINE_OPEN_REASONS)`
++ `assertNotEqual(..., "no_closed_loop")`，实际值为 `odd_endpoints`）。
+
+### 实跑（本机 `./open-claude/.venv/bin/python`）
+
+```
+tests.test_packaging_parts_outline_chaining_red   Ran 20 OK（A 4 / B 3 / C 5 / D 4 / E 4，E 组是真样本 酒盒.dwg 跑完折叠+rescue 的门槛断言）
+tests.test_packaging_parts_outline_red            Ran 20，failures=1（仅上述 test_d1，预期红）
+tests.test_packaging_parts_panel_red              Ran 10 OK
+tests.test_packaging_parts_downstream_gate_red    Ran 13 OK（111.8s，串行单跑）
+tests.test_packaging_parts_downstream_red         Ran 17 OK
+tests.test_packaging_parts_extraction_red         Ran 32 OK
+```
+
+`test_packaging_parts_downstream_gate_red` / `..._outline_red` 一度在**并发跑**时 600s 超时；
+串行单跑分别是 111.8s / 31.8s —— 记在这里，避免下次把机器负载误当成链路缺陷。
+
+### 边界
+
+- 只改 3 个文件（`packaging_parts.py` 的性能修正在 `## 264.1`；本条为 `main.py` / `app.js` / 本 Spec）
+  + 本条目；未动任何 `tests/` 文件一个字、未改第 1 层 `LOOP_TOLERANCE_MM` / `OUTLINE_STATUSES` /
+  `SIZE_SOURCES` / `MAX_LOOP_*` 字面、未放宽第 3 层 `PACKAGING_PART_NOT_CLOSED`；
+- 未 push、未建 MR / tag / Release、未部署、未连库。

@@ -1,6 +1,6 @@
 # 包装图纸零件：重复边折叠与外轮廓重判（"open 件"其实是我们没算完）
 
-状态：Spec + 红测（未实现）
+状态：Spec + 红测（已实现）
 红测：`tests/test_packaging_parts_outline_chaining_red.py`
 
 血缘：承接 `packaging-parts-true-outline.md`（第 1 层：件内求最大闭合环）、
@@ -173,3 +173,26 @@ def outline_diagnosis(members) -> dict
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_downstream_red -v         # 不回归
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_extraction_red -v     # 不回归
 ```
+
+## 9. 与既有红测的已知冲突（已上报；本批未改测试）
+
+`tests/test_packaging_parts_outline_red.py::DDegrade::test_d1_open_component_says_so`
+（第 1 层 `packaging-parts-true-outline.md`，已验收）断言逐字
+`assertEqual(row["outline_reason"], "no_closed_loop")`；本 Spec §2.5 第 1 条要求该字面
+**从源码里消失**（`tests/test_packaging_parts_outline_chaining_red.py::DGuards::test_d1`
+直接扫 `packaging_parts.py` 源码）。两条断言**结构上不可能同时为真**；按本 Spec 落地后，
+那条第 1 层用例由绿转红（相邻冻结面 451 条里只此 1 条）。
+
+测试侧一行修法（本批**未**改测试，等测试侧点一下头）：
+
+```diff
+-        self.assertEqual(row["outline_reason"], "no_closed_loop")
++        self.assertIn(row["outline_reason"], packaging_parts.OUTLINE_OPEN_REASONS)
++        self.assertNotEqual(row["outline_reason"], "no_closed_loop")
+```
+
+该夹具是三条互不相接的线段（6 个奇度顶点、最近配对间隙 ≈100mm）→ 落地后的实际值为
+`odd_endpoints`，落在本 Spec §2.4 的闭集里，语义更准（"断口 > 1mm" 而不是"没找到闭合环"）。
+`PACKAGING_OUTLINE_REASONS` 前端文案表**保留** `no_closed_loop` 键（老零件文档里仍可能有该值，
+`test_packaging_parts_panel_red.py::DStatusCopy` 也要求该字面在表里）——被禁的是"服务端只说得
+出这个笼统值"。

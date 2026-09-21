@@ -7344,6 +7344,10 @@ def _part_outline(part: Dict[str, Any]) -> Dict[str, Any]:
     }
     if raw.get("approximation"):
         outline["approximation"] = str(raw["approximation"])
+    # 重复边折叠 + 外轮廓重判的留痕（Spec `packaging-parts-outline-chaining.md` §5.2）：
+    # 只有 rescue 成功的件才有 compose —— 页面据此说清"这一件的闭合是我们折叠后算出来的"。
+    if isinstance(raw.get("compose"), dict):
+        outline["compose"] = raw["compose"]
     return outline
 
 
@@ -7369,6 +7373,8 @@ def get_requirement_packaging_part(pid: str, part_code: str, parts_id: str = "",
         "built": True,
         "part": part,
         "outline": _part_outline(part),
+        "outline_diagnosis": (part.get("outline_diagnosis")
+                              if isinstance(part.get("outline_diagnosis"), dict) else {}),
         "component_bbox": part.get("bbox"),
         "evidence": _part_evidence(pid, part),
         "size_source": str(part.get("size_source") or ""),

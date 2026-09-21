@@ -1117,10 +1117,15 @@ const PACKAGING_OUTLINE_COPY = {
   unavailable: "图纸单位未确认，不给出尺寸；请先确认单位后再解析。",
 };
 // 降级原因的人话：与后端 outline_reason 一一对应（Spec §3.4 第 2 行要求点名原因）。
+// 新闭集（Spec packaging-parts-outline-chaining.md §2.4）点名的是**具体**原因：
+// 「断口 > 1mm」「预算中止」「没算完」与"图纸真的没有闭合环"必须能分开说。
 const PACKAGING_OUTLINE_REASONS = {
   no_closed_loop: "件内没有首尾相接的闭合环",
   loop_too_small: "找到了环但面积低于最小面积门槛",
   unit_unconfirmed: "图纸单位未确认",
+  odd_endpoints: "这一件在图纸里没有闭合轮廓（缺口 > 1mm）",
+  loop_budget_exhausted: "这一件的环搜索没算完（图太密），暂时给不出轮廓结论",
+  no_curve_entity: "这一件里没有可用的曲线/坐标",
 };
 // 尺寸口径（后端 size_source）的人话，避免把"包围盒"说成"轮廓"。
 const PACKAGING_SIZE_SOURCE_COPY = {
