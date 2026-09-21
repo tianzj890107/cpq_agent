@@ -324,13 +324,20 @@ def _guard_gaps(package: dict, *, allow_gaps: bool, reason: str,
 
 def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Optional[str] = None,
                   allow_gaps: bool = False, reason: str = "", user: Optional[dict] = None,
-                  token: str = "", title: str = "", customer: str = "") -> dict:
+                  token: str = "", title: str = "", customer: str = "",
+                  business_case_id: str = "", create_new: bool = False,
+                  create_reason: str = "") -> dict:
     """落库 + 回传报价。返回 ``handoff_no`` / ``version_no`` / ``already_sent`` /
     ``quote_session_id`` / ``handoff``（目标任务与落点）。
 
     任何一个拒绝（越权 / 非包装 / 无成本 / 缺口未清）都发生在落库之前 —— 被拒绝的
     回传不留交接记录、不建任务。同包重发命中唯一约束：复用已有行，不再发一次。
+
+    ``business_case_id`` / ``create_new`` / ``create_reason`` 是**落点恢复三件套**
+    （Spec `packaging-quote-send-recovery.md` §2.1/§2.2）：桥早就支持，包装这条链以前
+    一个都没传 —— 于是服务端回「请填写新建原因后重试」时，界面无处可填。
     """
+
     user = user or {}
     role = _text(user.get("role_code") or user.get("role"))
     if role not in HANDOFF_WRITE_ROLES:
@@ -341,6 +348,11 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
     waiver = _guard_gaps(package, allow_gaps=allow_gaps, reason=reason, user=user)
 
     pid = _text(project_id)
+    # 复用项目 meta 里**已有的**恢复留痕（`/quote-link/recover` 写过的那次「明确新建」）：
+    # 人已经答过一次的问题不许再问一遍；本次请求里写明的值优先（Spec §2.2）。
+    restored = store.load_business_case(pid) or {}
+    effective_new = bool(create_new) or bool(restored.get("create_new"))
+    effective_reason = _text(create_reason) or _text(restored.get("create_reason"))
     req_no = _text(package["source"].get("requirement_no"))
     scenario_code = _text(package["source"].get("scenario_code")) or _SCENARIO_DEFAULT
     fingerprint = package_fingerprint(package)
@@ -364,7 +376,8 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         "包装成本已确认，请进入定价", _text(source.get("source_task_id")),
         body, _text(source.get("source_session_id")),
         _text(source.get("result_version")),
-        business_case_id=_text(source.get("business_case_id")),
+        business_case_id=(_text(business_case_id) or _text(source.get("business_case_id"))),
+        create_new=effective_new, create_reason=effective_reason,
         handoff_kind=HANDOFF_KIND)
     result = result if isinstance(result, dict) else {}
 

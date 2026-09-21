@@ -144,11 +144,17 @@ class PackagingCostBuildAction(BaseModel):
 
 
 class PackagingQuoteSendAction(BaseModel):
-    """包装成本回传报价入参（包装第 8 批，Spec §4.5）。"""
+    """包装成本回传报价入参（包装第 8 批，Spec §4.5 + 落点恢复三件套）。"""
     requirement_no: str = ""
     scenario: str = ""
     allow_gaps: bool = False
     reason: str = ""
+    # 落点冲突的恢复三件套：与 ReportQuoteAction 逐字同名同默认值 —— 报告侧修过这个 P0，
+    # 包装侧当时漏了，于是服务端回「确认要新建报价卡片时，请填写新建原因后重试」时，
+    # 界面**根本无处可填**（Spec `packaging-quote-send-recovery.md` §2.1）。
+    business_case_id: str = Field("", description="业务实例号；留空时走项目 meta / 上一次回传")
+    create_new: bool = Field(False, description="明确要求新建报价卡片（与 create_reason 成对）")
+    create_reason: str = Field("", description="新建报价卡片的原因，服务端要求非空")
 
 
 class ReportQuoteAction(BaseModel):
@@ -7026,6 +7032,14 @@ def _packaging_handoff_flow(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except packaging_handoff.HandoffError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
+    except cpq_bridge.BridgeRejected as exc:
+        # 落点冲突必须是**可操作**的 409 + 结构化 detail（code / candidates /
+        # business_case_id），与报告侧 `_report_flow` 同一份出口 —— 以前它冒到全局
+        # RuntimeError 处理器，变成一句无法执行的 500（Spec
+        # `packaging-quote-send-recovery.md` §2.3）。
+        raise _bridge_http_error(exc) from exc
+    except cpq_bridge.BridgeUnavailable as exc:
+        raise HTTPException(503, f"业务数据库/报价服务暂不可用：{exc}") from exc
 
 
 def _packaging_quote_identity(project_id: str) -> dict:
@@ -7055,6 +7069,8 @@ def send_requirement_packaging_quote(
         packaging_handoff.send_to_quote, project_id, body.requirement_no,
         scenario=(body.scenario or None), allow_gaps=bool(body.allow_gaps),
         reason=body.reason, user=user,
+        business_case_id=body.business_case_id, create_new=bool(body.create_new),
+        create_reason=body.create_reason,
         token=(_sso_token(request) if request is not None else ""),
         title=who["title"], customer=who["customer"])
     store.audit(project_id, "packaging_quote_send", {

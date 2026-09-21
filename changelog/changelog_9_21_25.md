@@ -10002,3 +10002,44 @@ tests.test_packaging_parts_downstream_gate_red        Ran 17 OK（108.2s）
 - 未改任何 `tests/`；未改 `LOOP_TOLERANCE_MM` / `OUTLINE_BBOX_COVER_RATIO` / `OUTLINE_OPEN_REASONS` /
   `MAX_LOOP_*` 口径，未改 `processability()` 判据与 `PACKAGING_PART_*` 错误码；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。
+
+## 272. 包装回传报价：落点冲突改可恢复的 409、恢复三件套真的收得到（9-22，Codex 实现）
+
+Spec `docs/specs/packaging-quote-send-recovery.md` 落地。34 实测那条「`POST .../packaging-quote/send`
+→ 500，逐字『没有找到这条业务实例对应的报价卡片。确认要新建报价卡片时，请填写新建原因后重试。』」
+的现场 P0，根因是两处：请求模型没有恢复字段、错误出口漏捕 `BridgeRejected`。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 请求模型 | `tech_app/backend/main.py` | `PackagingQuoteSendAction` 增 `business_case_id` / `create_new` / `create_reason`（名字、默认值与 `ReportQuoteAction` 逐字一致），路由原样透传 |
+| 错误出口 | `tech_app/backend/main.py` | `_packaging_handoff_flow` 增捕 `cpq_bridge.BridgeRejected` → 复用既有 `_bridge_http_error(exc)`（落点冲突 409 + `conflict_detail`），另捕 `BridgeUnavailable` → 503；不再冒到全局 `RuntimeError` 处理器变 500 纯字符串 |
+| 服务层透传 | `tech_app/backend/services/packaging_handoff.py` | `send_to_quote(..., business_case_id="", create_new=False, create_reason="")`；交给桥的 `business_case_id` 优先本次请求、其次交接包 source |
+| meta 恢复留痕 | 同上 | 落库前读 `store.load_business_case(pid)`：本次请求优先，其次复用 `/quote-link/recover` 写下的 `create_new` / `create_reason`（人答过一次的问题不再问） |
+
+不许放宽的三条保持原样：`allow_gaps=False` 有缺口仍 409 `cost_gaps_unresolved`；放行必须写原因
+`gap_reason_required`；多候选时带 `create_new` 也不自动挑一张（`cpq_case_link.decide` 未动）。
+
+### 与红测的一处**真冲突**（已上报，未改测试）
+
+`CMetaRecovery::test_c1_meta_create_new_is_reused_without_asking_again` 是夹具自遮挡，非业务缺陷：
+测试体在外层 `with patch(load_business_case → {create_new: True})`，而 `SendRecoveryCase.send()`
+（红测 :118 / :136-138）在**内层**把同一目标又 patch 成 `{}`；`mock.patch.object` 后 start 者生效，
+调用期间读到的恒是 `{}` —— 实现怎么写都拿不到外层那份 meta。已把判据、实测与**一行修法**（把那条
+patch 从 `send()` 挪进 `SendRecoveryCase.setUp()`）写进 Spec §2.5。落地后本套为 **13 OK / 1 FAILED（仅 C1）**。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_packaging_quote_send_recovery_red      Ran 14, failures=1（仅 C1，见上）
+tests.test_packaging_quote_close_loop_red
+tests.test_quote_first_project_entry_red
+tests.test_packaging_downstream_blockers_red      Ran 138 OK
+```
+
+### 边界
+
+- 只改 2 个文件（`main.py` / `packaging_handoff.py`）+ 本 Spec 状态行与 §2.5 + 本条目；未动任何 `tests/`；
+- 未改 `cpq_bridge` / `cpq_case_link` / `require_project_access` 口径；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。

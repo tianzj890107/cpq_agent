@@ -3,7 +3,7 @@
 血缘：承接 `packaging-quote-close-loop.md`（第 8 批回传）、`quote-first-project-entry.md`（报告侧同类 P0）、
 `cpq_case_link.py`（落点四态：linked / multiple_candidates / create_new / no_candidate）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：**已实现**（`tests/test_packaging_quote_send_recovery_red.py` 14 条 → 13 绿 / 1 恒红，恒红那条是夹具自遮挡，见 §2.5）
 - 红测：`tests/test_packaging_quote_send_recovery_red.py`
 - 依赖：`tech_app/backend/main.py`（回传路由与桥接错误出口）、`packaging_handoff.py`、`cpq_bridge.py`
 
@@ -78,6 +78,29 @@ POST /api/projects/f1417060ae9d/requirement/packaging-quote/send  → 500，逐�
 - 放行必须写明原因（`gap_reason_required`）；多候选时即使带了 `create_new` 也不许自动挑一张
   （`cpq_case_link.decide` 的既有规则，本批不动）。
 
+### 2.5 实现记录：`C1` 是夹具自遮挡（实现方按 Spec 落地，红测原文未改）
+
+落地后本套 14 条为 **13 绿 / 1 红**，唯一红的是
+`CMetaRecovery::test_c1_meta_create_new_is_reused_without_asking_again`，且这条**不是业务实现能转绿的**：
+
+| 事实 | 证据 |
+| --- | --- |
+| 测试体是**外层** patch：`with mock.patch.object(HANDOFF.store, "load_business_case", lambda pid: {...create_new...}): captured = self.send()` | 红测 :194-200 |
+| `SendRecoveryCase.send()` 在**内层**又 patch 同一个目标成空字典：`mock.patch.object(HANDOFF.store, "load_business_case", lambda pid: {})` + `patch.start()` | 红测 :118、:136-138 |
+| `mock.patch.object` 是「后 start 者生效」：内层 start 在 `send()` 里、晚于测试体的 `with`，所以调用期间 `store.load_business_case` 返回的是 **`{}`** | 本机实测：`HANDOFF.store.load_business_case("x")` 在嵌套期间为 `{}`，停内层后恢复外层 `{"create_new": True}` |
+| 结论：`send_to_quote` 无论怎么写，都读不到外层那份 `{"create_new": True}`，`bool(restored.get("create_new"))` 恒为 `False` | — |
+
+换句话说，C1 的断言（"meta 里已有留痕必须复用"）与它自己的夹具互相矛盾：夹具把被断言的那份 meta
+在调用期间遮成了空。业务实现已按 Spec §2.2 落地（`send_to_quote` 读 `store.load_business_case(pid)` 并复用
+`create_new` / `create_reason`，本次请求优先），13 条里覆盖同一行为的 `C2`（本次请求优先于 meta）与
+`B1`（真的进了桥）都是绿的。
+
+测试侧的**一行修法**（本批不动 `tests/`）：把 `send()` 的 `patches` 列表里那条
+`mock.patch.object(HANDOFF.store, "load_business_case", lambda pid: {})`（:118）**挪到
+`SendRecoveryCase.setUp()`**（`p = mock.patch.object(...); p.start(); self.addCleanup(p.stop)`）。
+`setUp` 先于测试体执行，于是测试体的 `with` 变成内层、恢复成"可被覆盖"的默认值 —— 此时 B 组仍拿到
+`{}`（空默认），C1 拿到 `{"create_new": True}`（外层生效），C2 仍绿，14 条全绿。
+
 ## 3. 验收（红测逐条对应）
 
 - A 组：请求模型 / 服务层签名（三个字段在位，默认值形状与报告侧一致）；
@@ -89,7 +112,7 @@ POST /api/projects/f1417060ae9d/requirement/packaging-quote/send  → 500，逐�
 ## 4. 命令与期望
 
 ```
-./open-claude/.venv/bin/python -m unittest tests.test_packaging_quote_send_recovery_red -v
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_quote_send_recovery_red   # 13 OK / 1 FAILED（仅 C1，见 §2.5）
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_quote_close_loop_red     # OK
 ./open-claude/.venv/bin/python -m unittest tests.test_quote_first_project_entry_red      # 22 OK
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_downstream_blockers_red  # OK
