@@ -7055,3 +7055,74 @@ tests.test_packaging_box_type_matching_red           Ran 51 tests   OK
 也**没有**新增 HTTP 路由与前端面板 —— Spec 批 2 的契约只在模块层，界面接线在批 3/4/5。
 
 未提交、未推送、未部署（当时状态）。未引入任何第三方依赖。
+
+## 236. 提交 / 推送 gitlab 并部署 34（## 235 快速报价第 2 批：相似案例检索 + 权重表第 31 张）（9-21，Codex 执行）
+
+### 做了什么
+
+```
+提交：f3c23fe  逆向快速报价第 2 批：相似案例检索与候选选择（## 235）（6 文件，+990/-16）
+推送：gitlab（http://gitlab.boulderaitech.com/ai-team/cpq_agent.git）ytbz：2c3a3bc → f3c23fe
+部署：34 上 221f80f → f3c23fe（scripts/deploy_34_bare.sh，纯快进）
+```
+
+本机 DNS 全断（`github.com` / `gitlab.boulderaitech.com` 都解析不了），`git push` 直连必然失败，
+因此按老路子走：本地 `git bundle`（`2c3a3bc..ytbz`，19.7 KB）→ base64 经 ssh 传到 34 →
+34 `git fetch /tmp/qq2_b235.bundle` → `git push gitlab`。**SHA 原样保留**（34 上打印的
+`bundle head` 与本地 `git rev-parse ytbz` 都是 `f3c23fe`）。
+`origin`（GitHub）本轮**没推**（34 上没有 GitHub 凭据，本机 DNS 不通）；本机网络恢复后补一条：
+
+```bash
+cd /Users/sher/Boulderaitech/cpq_agent && git push origin ytbz:ytbz    # f3c23fe
+```
+
+### 部署原文（关键行）
+
+```
+HEAD 221f80f → f3c23fe
+health：status=ok
+8010 pid=3408309
+PATH：含 /home/data/cpq-tools/xvfb-user/root/usr/bin ✓
+{"file": "酒盒.dwg",  "status": "ok", "converter_role": "primary", "fallback_used": false, "entity_count": 6711}
+{"file": "圆盘盒.dwg", "status": "ok", "converter_role": "primary", "fallback_used": false, "entity_count": 3457}
+两份样本均由主转换器完成，dxf + preview 齐全
+```
+
+### 34 上真库（权重表第 31 张）
+
+```
+① ensure_schema → kb tables = 31 | kb_version = 3 | 权重表行数 = 9
+② seed_weights(first) → {"ok": true, "rows": 9, "changed": 0, "kb_version": 3}
+③ seed_weights(again) → {"ok": true, "rows": 9, "changed": 0, "kb_version": 3}
+④ load_weights(None) → 9 行，全部 source_type='workbook' / review_status='reviewed'
+     [('face_paper_gsm', 0.1, 0.3), ('grey_board_gsm', 0.1, 0.3), ('hot_stamping', 0.08, 0.0),
+      ('lamination', 0.05, 0.0), ('magnet', 0.05, 0.0), ('print_colors', 0.05, 0.0),
+      ('quantity', 0.12, 0.0), ('size_range', 0.3, 0.2), ('v_groove', 0.05, 0.0)]
+⑤ match_cases(真库) → 权重版本 = '1' | 候选 = 0 | inputs_complete = True | few = True
+   0 候选原因：现有标准案例里没有盒型 / 结构对得上的候选：……建议转精准报价……
+```
+
+**要记一笔的事实**：本地与 34 用的是**同一台 PG**（`172.16.5.181:32444/metabase`，两侧打印一致）。
+所以本地那次 `ensure_schema + seed_weights` 已经写进了线上库（`kb_version` 2 → 3，9 行权重），
+34 上再跑一遍自然是 `changed=0` —— 这正好也验了幂等。案例表两侧都是 **0 行**
+（本地做真库冒烟时临时存的 `QQ-SMOKE-0002` 已 `DELETE`，跑完核对回 0 行）。
+
+### 34 上真 HTTP（原文）
+
+```
+内部令牌来源：8012 子进程环境（8010 启动时生成并下发给子进程；不打印内容）
+不带票 GET /agents/quote/api/quick-quote/cases        → HTTP 401 {"ok": false, "error": "请先登录"}
+带票   GET /agents/quote/api/quick-quote/cases        → HTTP 200 {"ok": true, "engine_version": "quick_quote_case_v1", …}
+GET /quick-quote-panel.js                             → HTTP 200
+GET /                                                 → HTTP 200
+```
+
+批 2 本身**没有新增路由**（Spec 批 2 的契约只在模块层），所以上面验的是"部署后 8010 起得来、
+批 1 的入口与静态件没被打回"。批 2 的真实验证在 34 上跑的就是上面第 ⑤ 步 —— 用的是**线上那份权重表**
+和**线上那张案例表**，不是注入的假数据。
+
+### 边界
+
+未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话在写的
+`docs/specs/packaging-parts-*.md` 与 `tests/test_packaging_parts_*_red.py`（工作区里它们仍是未跟踪文件）。
+未引入任何第三方依赖。GitHub `origin` 未推送（DNS，见上）。
