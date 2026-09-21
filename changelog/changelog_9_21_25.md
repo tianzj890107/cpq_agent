@@ -8411,3 +8411,22 @@ warnings:
 客户端的克重识别只认「灰板 / 纸板 / 面纸 / 面 / face / cover」+ **小写 g**，所以 `face_paper_gsm`
 一条都读不出来（大写 `225G` 不匹配、`白卡` 不在词表）。这属客户端关键词口径，与本次的尺寸缝是两件事，
 留给下一批（红测本批已用「面纸 250g」证明这条通路没被打坏）。
+
+### 251.1 部署复验（34，`d4a81b6`，8010 pid=112965）
+
+八步与第 6b 步全过（两份样本仍 `converter_role=primary`、隔离端到端自检 `ok`、生产 `meta.json` 0 → 0）。
+报价侧客户端在 34 上再跑一遍真样本，**缝已经合上**：
+
+```
+parse_file kind=drawing layers=8 dims=316 texts=127 v_groove=True
+inputs: {"v_groove": true}                       ← 不再是 14362×6152
+missing: [box_type, box_family, closure_type, inner_length, inner_width, inner_height,
+          grey_board_gsm, face_paper_gsm, …]
+warnings:
+  · 图纸标注尺寸只有实测值、没有轴名（axis）：未用于内尺寸，请人工确认哪条是内长/内宽/内高（不按顺序猜）
+  · 图纸范围（outline_size.source=document_extents）是整张图的幅面、不是成品内尺寸：未用于内尺寸，请人工补内长/内宽/内高
+```
+
+案例库现状不变（2 条 `draft`、缺「标准单价」→ `no_eligible`，`next_actions=[fill_case_fields,
+transfer_to_precise]`）：**要把 DWG 走成一份能出价的快速报价，还差业务把这两条案例补价并审到
+`reviewed`** —— 页面已经把这件事如实说出来了，不会拿 `draft` 案例出价。
