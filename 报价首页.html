@@ -2834,7 +2834,15 @@
     // 首页打开历史 = 跳到对应助手页面并自动载入该会话
     function openSession(src, id) {
       try { sessionStorage.setItem(src.key, id); } catch (e) {}
-      window.location.href = encodeURI(src.page);
+      window.location.href = encodeURI(pageWithSession(src.page, id));
+    }
+    /* 打开一张卡片/一条历史时，把会话身份**显式带进 URL**（Spec
+       `e2e-quote-session-and-completion-closure.md` §2.1）：刷新、复制链接、换标签页都要能
+       回到同一个业务实例。sessionStorage 仍然写（兼容老路径），但不再是唯一身份来源。 */
+    function pageWithSession(page, sessionId) {
+      if (!sessionId) return page;
+      if (page === '确认需求解析结果.html') return page + '?session_id=' + encodeURIComponent(sessionId);
+      return page;
     }
     async function deleteSession(src, id, title) {
       if (!confirm('删除历史记录「' + (title || id) + '」？此操作不可恢复。')) return;

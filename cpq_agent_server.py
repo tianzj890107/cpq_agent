@@ -3619,6 +3619,294 @@ def _build_quote_docx(data: dict):
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------------------
+# 报价会话身份 / 步骤完成门禁 / 财务回传结构化载荷
+# （Spec `e2e-quote-session-and-completion-closure.md` §2 / §3 / §4）
+# ---------------------------------------------------------------------------
+#: 业务实例身份链的四个键（Spec §2.2）：任一环退化都必须显式报错，不许猜。
+BUSINESS_IDENTITY_KEYS = ("session_id", "business_case_id", "tech_project_id", "source_task_id")
+
+#: 技术/财务回传成本**必须**带的结构化字段（Spec §3）：只写进备注不算落地。
+FINANCE_HANDOFF_FIELDS = ("business_case_id", "quote_session_id", "tech_project_id",
+                          "source_task_id", "industry", "quantity", "unit_cost",
+                          "currency", "cost_status", "gap_count", "cost_fingerprint",
+                          "provisional")
+
+
+def _gate_num(value):
+    """宽松取数：None / "" / 非数字 → None（**不把缺失当成 0**，Spec §4 最后一句）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "").replace("，", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _gate_rows(data, *section_ids):
+    """从步骤快照里取某个分区的表行（`{section: {"数据": [...]}}`，键名兼容 data）。"""
+    if not isinstance(data, dict):
+        return []
+    for sid in section_ids:
+        section = data.get(sid)
+        if not isinstance(section, dict):
+            continue
+        rows = section.get("数据", section.get("data"))
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _row_number(row, *keywords):
+    """按**列名关键字**取这一行里第一个能解析成数的值（列名是业务中文名，不写死具体列）。"""
+    for key, value in (row or {}).items():
+        if not any(word in str(key) for word in keywords):
+            continue
+        got = _gate_num(value)
+        if got is not None:
+            return got
+    return None
+
+
+def _gate_blocker(code, message, action="", *, fixable_by_fill=True):
+    return {"code": code, "message": message, "action": action,
+            "fixable_by_fill": bool(fixable_by_fill)}
+
+
+def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
+                               detail_fingerprint: str = "", business_case_id: str = "") -> dict:
+    """第 3–6 步的完成门禁（Spec §4）：返回 ``{ok, step_no, code, message, action, blocking}``。
+
+    判定只看**已落地的数据**（派上来的步骤快照），不做任何推断、不补默认值：
+    「强行填满」与前端提示都不能代替这条（§4 最后一句）。
+    """
+    step = int(step_no or 0)
+    blockers = []
+    if step == 3:
+        rows = _gate_rows(data, "s3_products", "s2_products", "s1_products")
+        if not rows:
+            blockers.append(_gate_blocker(
+                "no_product_rows", "本单还没有产品行（第 1 步未完成产品匹配）。",
+                "回第 1 步完成需求配置与产品匹配；产品行由系统匹配产生，不能靠填表造出来。",
+                fixable_by_fill=False))
+        elif not any((_row_number(row, "基础成本", "成本", "价格") or 0) > 0 for row in rows):
+            blockers.append(_gate_blocker(
+                "no_base_cost", "产品行没有正数基础成本，无法确认第 3 步。",
+                "点「强行填满本步骤」或「重算利润加成」，让基础成本落地后再确认。"))
+    elif step == 4:
+        rows = _gate_rows(data, "s4_products", "s3_products", "s2_products", "s1_products")
+        if not rows:
+            blockers.append(_gate_blocker(
+                "no_product_rows", "本单还没有产品行，无法确认第 4 步。",
+                "回第 1 步完成产品匹配。", fixable_by_fill=False))
+        else:
+            explainable = []
+            for row in rows:
+                price = _row_number(row, "价格")
+                base = _row_number(row, "基础成本", "成本")
+                has_evidence = any(("加价" in str(k) or "规则" in str(k)) and str(v or "").strip()
+                                   for k, v in (row or {}).items())
+                if price is not None and price > 0 and (base is not None or has_evidence):
+                    explainable.append(row)
+            if not explainable:
+                blockers.append(_gate_blocker(
+                    "no_markup_evidence", "产品行没有可解释的加价结果（价格或加价依据为空）。",
+                    "点「强行填满本步骤」按定价规则重算加价，或人工填写加价依据。"))
+    elif step == 5:
+        rows = _gate_rows(data, "s5_detail")
+        products = _gate_rows(data, "s4_products", "s3_products", "s2_products", "s1_products")
+        if not rows:
+            blockers.append(_gate_blocker(
+                "no_detail_rows", "报价明细为空：至少要有 1 行。",
+                "回到第 4 步确认产品行后，第 5 步会自动生成报价明细。",
+                fixable_by_fill=bool(products)))
+        else:
+            for index, row in enumerate(rows, start=1):
+                tag = "第 %d 行" % index
+                qty = _row_number(row, "数量")
+                unit = _row_number(row, "报价", "单价")
+                after = _row_number(row, "折后价格", "折后价")
+                total = _row_number(row, "总金额", "金额")
+                currency = str(row.get("币种") or "").strip()
+                if qty is None or qty <= 0:
+                    blockers.append(_gate_blocker("invalid_quantity", tag + "数量无效。",
+                                                  "填写正数数量。"))
+                if unit is None or unit <= 0:
+                    blockers.append(_gate_blocker("invalid_unit_price", tag + "单价（报价）无效。",
+                                                  "填写正数单价。"))
+                if not currency:
+                    blockers.append(_gate_blocker("invalid_currency", tag + "币种为空。",
+                                                  "填写币种（如 人民币）。"))
+                if after is None or total is None:
+                    blockers.append(_gate_blocker("total_not_recomputable",
+                                                  tag + "总金额/折后价格缺失，无法复算。",
+                                                  "点「报价方案」重算明细，让总金额按公式生成。"))
+                elif abs(total - after * (qty if qty is not None else 1.0)) > 0.01:
+                    blockers.append(_gate_blocker(
+                        "total_not_recomputable",
+                        tag + "总金额 %.4f ≠ 折后价格 %.4f × 数量 %s。" % (total, after, qty),
+                        "点「报价方案」重算明细。"))
+    elif step == 6:
+        rows = _gate_rows(data, "s5_detail")
+        if not rows:
+            blockers.append(_gate_blocker("no_detail_rows", "报价明细为空，不能生成报价单。",
+                                          "回到第 5 步补全报价明细。"))
+        if rows and quote_fingerprint and detail_fingerprint and quote_fingerprint != detail_fingerprint:
+            blockers.append(_gate_blocker(
+                "detail_changed_after_step5_confirm",
+                "报价明细在第 5 步确认之后被改动过，不能照旧生成报价单。",
+                "回第 5 步核对明细后重新确认第 5 步，再生成报价单。",
+                fixable_by_fill=False))
+    head = blockers[0] if blockers else {}
+    return {"ok": not blockers,
+            "step_no": step,
+            "code": "" if not blockers else head.get("code", ""),
+            "message": ("第 %d 步可以完成。" % step) if not blockers
+                       else head.get("message", "这一步还不能完成。"),
+            "action": "" if not blockers else head.get("action", ""),
+            "business_case_id": str(business_case_id or ""),
+            "blocking": blockers,
+            "fixable_by_fill": bool(blockers) and all(b.get("fixable_by_fill") for b in blockers)}
+
+
+def _identity_query(sql: str, args=()):
+    """只读查身份表（参数化；连不上抛出去，由调用方兜底成可读错误）。"""
+    conn = cpq_db.connect(readonly=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, args)
+            cols = [d.name for d in cur.description] if cur.description else []
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def validate_business_identity(session_id: str, *, business_case_id: str = "") -> dict:
+    """把报价会话解析成**唯一**的业务实例身份链（Spec §2.2）。
+
+    链：``session_id → business_case_id → tech_project_id → source_task_id``。
+    出现多个候选、或显式给的 ``business_case_id`` 与卡片对不上时，返回
+    ``ok=False / code=ambiguous_business_case / status=409``——**不猜**（§2.2 / §3）。
+    读不到库时返回 ``identity_unavailable``（503），同样不放行。
+    """
+    sid = str(session_id or "").strip()
+    explicit = str(business_case_id or "").strip()
+    out = {"ok": False, "code": "", "status": 200, "message": "",
+           "session_id": sid, "business_case_id": explicit,
+           "tech_project_id": "", "source_task_id": "", "candidates": []}
+    if not sid:
+        out.update(code="session_id_required", status=400,
+                   message="缺少 session_id：报价会话身份必须显式给出（Spec §2.1）。")
+        return out
+    try:
+        cards = _identity_query(
+            "SELECT card_id, session_id, business_case_id, title, current_step "
+            "FROM cpq_wf_card WHERE session_id = %s", (sid,))
+    except Exception as exc:                                    # noqa: BLE001 - 连不上要把话说清楚
+        out.update(code="identity_unavailable", status=503,
+                   message="读不到卡片身份（%s），无法确认业务实例。" % type(exc).__name__)
+        return out
+    if len(cards) > 1:
+        out.update(code="ambiguous_business_case", status=409,
+                   message="同一个 session_id 对应多张卡片，无法确定业务实例。",
+                   candidates=[str(c.get("business_case_id") or "") for c in cards])
+        return out
+    card = cards[0] if cards else {}
+    card_case = str(card.get("business_case_id") or "").strip()
+    if explicit and card_case and explicit != card_case:
+        out.update(code="ambiguous_business_case", status=409,
+                   message="显式给的 business_case_id 与卡片记录不一致，拒绝按任一猜测继续。",
+                   candidates=[card_case, explicit])
+        return out
+    case_id = explicit or card_case
+    out["business_case_id"] = case_id
+    if card.get("card_id") is not None:
+        try:
+            tasks = _identity_query(
+                "SELECT DISTINCT payload->>'tech_project_id' AS tech_project_id, "
+                "payload->>'source_task_id' AS source_task_id "
+                "FROM cpq_wf_task WHERE card_id = %s", (int(card["card_id"]),))
+        except Exception as exc:                                # noqa: BLE001
+            out.update(code="identity_unavailable", status=503,
+                       message="读不到任务来源（%s），无法确认技术项目。" % type(exc).__name__)
+            return out
+        projects = sorted({str(t.get("tech_project_id") or "").strip()
+                           for t in tasks if str(t.get("tech_project_id") or "").strip()})
+        sources = sorted({str(t.get("source_task_id") or "").strip()
+                          for t in tasks if str(t.get("source_task_id") or "").strip()})
+        if len(projects) > 1:
+            out.update(code="ambiguous_business_case", status=409,
+                       message="这张卡片关联到多个技术项目，业务实例不唯一。", candidates=projects)
+            return out
+        out["tech_project_id"] = projects[0] if projects else ""
+        out["source_task_id"] = sources[0] if sources else ""
+    out.update(ok=True, status=200, message="业务实例身份唯一。")
+    return out
+
+
+def normalize_finance_handoff(payload, *, session_id: str = "") -> dict:
+    """技术/财务回传载荷 → 结构化成本记录（Spec §3）。
+
+    字段名固定（`FINANCE_HANDOFF_FIELDS`）：缺什么进 ``missing`` 显式说出来，**不猜数**、
+    也不把成本只写进备注——报价侧据此落产品行（基础成本 + ``provisional`` 暂估标记）。
+    """
+    raw = payload if isinstance(payload, dict) else {}
+    cost = raw.get("tech_result") if isinstance(raw.get("tech_result"), dict) else raw
+    record = {}
+    for name in FINANCE_HANDOFF_FIELDS:
+        record[name] = cost.get(name, raw.get(name))
+    if not record.get("quote_session_id") and session_id:
+        record["quote_session_id"] = session_id
+    gaps = _gate_num(record.get("gap_count"))
+    record["gap_count"] = int(gaps) if gaps is not None else 0
+    record["unit_cost"] = _gate_num(record.get("unit_cost"))
+    record["quantity"] = _gate_num(record.get("quantity"))
+    # 有缺口（或成本本身没到）→ 暂估；暂估不得伪装成正式成本（Spec §3）。
+    record["provisional"] = bool(record["gap_count"] > 0 or record["unit_cost"] is None
+                                 or str(record.get("cost_status") or "").strip() in ("provisional", "draft"))
+    record["missing"] = [name for name in ("tech_project_id", "quantity", "unit_cost")
+                         if record.get(name) in (None, "")]
+    record["cost_status"] = str(record.get("cost_status")
+                                or ("provisional" if record["provisional"] else "formal"))
+    return record
+
+
+def _handle_quote_step_gate(data: dict) -> dict:
+    """POST /api/quote/step-gate —— 第 3–6 步的完成门禁（只读：不写任何表）。"""
+    body = data if isinstance(data, dict) else {}
+    return quote_step_completion_gate(
+        body.get("step_no"), body.get("data") if isinstance(body.get("data"), dict) else {},
+        quote_fingerprint=str(body.get("quote_fingerprint") or ""),
+        detail_fingerprint=str(body.get("detail_fingerprint") or ""),
+        business_case_id=str(body.get("business_case_id") or ""))
+
+
+def _handle_quote_identity(params) -> dict:
+    """GET /api/quote/identity —— 业务实例身份链（只读）。"""
+    query = params if isinstance(params, dict) else {}
+
+    def arg(name):
+        got = query.get(name)
+        if isinstance(got, (list, tuple)):
+            got = got[0] if got else ""
+        return str(got or "").strip()
+
+    return validate_business_identity(arg("session_id"), business_case_id=arg("business_case_id"))
+
+
+def _handle_quote_cost_handoff(data: dict) -> dict:
+    """POST /api/quote/cost-handoff —— 把财务回传归一成结构化成本记录（只读，不落库）。"""
+    body = data if isinstance(data, dict) else {}
+    return {"ok": True, "cost": normalize_finance_handoff(
+        body.get("payload") or body.get("task") or body,
+        session_id=str(body.get("session_id") or ""))}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -3704,6 +3992,11 @@ class Handler(BaseHTTPRequestHandler):
             # 快速报价标准案例列表（逆向快速报价第 1 批）：只读；库不可用回 503 + 错误体。
             payload = _handle_quick_quote_cases(parse_qs(parsed.query))
             self._send_json(payload, 200 if payload.get("ok") else 503)
+        elif path == "/api/quote/identity":
+            # 业务实例身份链（Spec `e2e-quote-session-and-completion-closure.md` §2.2）：只读；
+            # 不唯一/读不到就回对应状态码，绝不猜一个继续。
+            payload = _handle_quote_identity(parse_qs(parsed.query))
+            self._send_json(payload, int(payload.get("status") or 200) if not payload.get("ok") else 200)
         elif path in ("/", "/index.html"):
             self._send_json({"service": "cpq-quote-agent", "steps": STEPS,
                              "hint": "工作台页面由 serve.py(:8010) 提供，本服务只出 API。"})
@@ -3744,6 +4037,14 @@ class Handler(BaseHTTPRequestHandler):
             # 包装定价（包装第 8 批）：确定性计算，不取规则、不调模型。
             data = self._read_body()
             self._send_json(_handle_packaging_quote_price(data))
+        elif path == "/api/quote/step-gate":
+            # 第 3–6 步完成门禁（Spec §4）：只读，判据来自 cpq_agent_server.quote_step_completion_gate。
+            data = self._read_body()
+            payload = _handle_quote_step_gate(data)
+            self._send_json(payload, 200 if payload.get("ok") else 409)
+        elif path == "/api/quote/cost-handoff":
+            # 财务/技术回传载荷归一成结构化成本记录（Spec §3）：只读，不落库。
+            self._send_json(_handle_quote_cost_handoff(self._read_body()))
         elif QUICK_QUOTE_CASE_ACTION_RE.match(path):
             # 快速报价案例维护（逆向快速报价第 12 批）：补字段 / 改审核状态。只认票上的人。
             params = _quick_quote_case_route(path)

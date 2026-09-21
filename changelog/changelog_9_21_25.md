@@ -10254,3 +10254,57 @@ tests.test_quote_first_project_entry_red                 Ran 22 OK
 - 读取路径只读（新加的 SELECT 不带任何写）；留痕照旧写一条 `step_done`（§3.6 护栏绿）；
 - 未改成本 / 报价 / 技术侧口径、未改前端、未改任何 `tests/`；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 278. 报价会话身份只认 URL + 卡片、完成门禁落服务端、财务回传成本结构化（9-22，Codex 实现）
+
+Spec `docs/specs/e2e-quote-session-and-completion-closure.md` 的 §2 / §3 / §4 / §5 落地。线上证据：
+精准报价会话 `d6088e377375` 从技术工艺返回后能进第 3 步，刷新却可能回到空白第 1 步并显示电池字段；
+回传成本 `7.2749 元/件` 但第 3 步产品行为 0，仍可依次确认 3–6 步，最终生成 `QUO202609001`
+（明细 0 行、金额为空）还显示「流程完成」。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 身份进 URL（§2.1） | `报价首页.html` | 新增 `pageWithSession(page, sessionId)`；`openSession()` 打开卡片/历史时 URL 显式带 `?session_id=`，`sessionStorage['cpq:openSession']` 降为兼容兜底 |
+| URL 优先恢复（§2.1） | `确认需求解析结果.html` | `boot()` 先读 `URLSearchParams.get('session_id')`，URL 优先于「上次打开的会话」 |
+| 身份唯一（§2.2） | `cpq_agent_server.py` | 新增 `validate_business_identity()` + `GET /api/quote/identity`：解析 session→business_case→tech_project→source_task；多候选/与卡片冲突 → `409 ambiguous_business_case`，库读不到 → `503 identity_unavailable`（都不猜、不放行） |
+| 完成门禁（§4） | `cpq_agent_server.py` | 新增 `quote_step_completion_gate(step_no, data, …)` + `POST /api/quote/step-gate`（只读）：第 3 步要正数基础成本、第 4 步要可解释加价、第 5 步要明细有效且总金额可复算、第 6 步要明细非空且第 5 步确认后指纹未变 |
+| 门禁接线（§4） | `确认需求解析结果.html` | `canCompleteQuoteStep` / `quoteCompletionGate` / `quoteDetailFingerprint` / `quoteGateText` / `quoteGateFillBlockers`；`confirmStep` 不 ok 就保留当前步骤并给修复入口；`fillStepRecommend` 改 async、同步读判定 |
+| 成本结构化（§3） | `cpq_agent_server.py` | `FINANCE_HANDOFF_FIELDS` + `normalize_finance_handoff()` + `POST /api/quote/cost-handoff`（只读）：`unit_cost`/`cost_fingerprint`/`gap_count`/`provisional`，缺字段进 `missing`，不猜数 |
+| 落产品行（§3） | `确认需求解析结果.html` | `applyTechResult` 改 async 并先调该端点：`unit_cost` 落成**基础成本** + 成本指纹 + 暂估提示；`unit_cost` 缺失时不写并说明 |
+| 导出/导入硬校验（§4/§5） | `确认需求解析结果.html` | 新增 `assertQuoteExportable()`，`exportDocx()` 与 `importQuoteDb()` 动手前都先过：空明细不能导出、不能落库 |
+
+### 两条实现选择（都写进 Spec §7，不是放宽）
+
+1. **「强行填满」只在"填表也修不了"时停手**：门禁给每个阻断项标 `fixable_by_fill`；只有
+   `false`（本单根本没有产品行、明细在第 5 步确认后被改过）才拒绝填充并给修复入口。
+   若一律拒绝会死锁——第 3 步的条件（正数基础成本）恰恰是填表填出来的。
+   硬拦在「确认，进入下一步」：`confirmStep` 拿不到服务端 ok 就不推进。
+2. **列名按关键字匹配**：产品行/报价明细的中文列名由 DA 本体下发（`cpq_db.bi_fields`），
+   门禁不写死具体列名，用「基础成本/成本/价格」「数量」「报价/单价」「折后价格」「总金额」「币种」等
+   关键字取数；取不到就是取不到（`None`），**绝不当成 0**。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_e2e_quote_session_completion_red              Ran 7 OK（实现前 7 红）
+tests.test_quote_tech_unified_tool_list_conversation_red Ran 35 OK（node 真跑 fillStepRecommend）
+tests.test_quote_nonstandard_path_red                    Ran 25 OK
+tests.test_quote_tech_handoff_button_red                 Ran 19 OK
+tests.test_quote_agent_emphasis_hover_red                Ran 4 OK
+tests.test_quote_home_industry_carryover_red             Ran 28 OK
+tests.test_quote_first_project_entry_red                 Ran 22 OK
+tests.test_packaging_quote_version_persistence_red       Ran 8 OK
+tests.test_packaging_quote_close_loop_red                Ran 96 OK
+tests.test_quote_packaging_box_selection_red             Ran 20 OK
+node --check（确认需求解析结果.html 两段内联脚本）        ALL OK
+```
+
+### 边界 / 未做
+
+- **门禁没有接到 `/wf/card/step-done`**：绕过 UI 直接打卡片步进接口仍能落步；要彻底堵死需另立一批
+  把 `quote_step_completion_gate` 接进 `cpq_suite_server.py` / `cpq_wf.py`（Spec §7.4 已记）；
+- 未改 `cpq_wf.py` / `cpq_suite_server.py`；未改成本/定价口径、未改数据库 schema；
+- `applyTechResult` 仍是唯一写入点（既有红测 D4/D5 未回归）；
+- 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。

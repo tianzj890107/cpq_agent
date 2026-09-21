@@ -1751,6 +1751,9 @@
         if (secs.length) stepsData.push({ step: n, name: STEPS[n - 1], sections: secs });
       }
       if (!stepsData.length) { alert('还没有可导出的内容。'); return; }
+      // 导出前硬校验（Spec §4 / §5）：明细非空、数量/币种/单价有效、总金额可复算。
+      const xc = assertQuoteExportable();
+      if (!xc.ok) { alert('还不能生成报价单：\n· ' + xc.problems.join('\n· ')); return; }
       const payload = {
         projectName: ($('projectName') && $('projectName').textContent) || '报价单',
         customer: '', projectCode: '', steps: stepsData,
@@ -1781,6 +1784,9 @@
       const all = {};
       for (let n = 1; n <= STEPS.length; n++) Object.assign(all, collectStepData(n));
       if (!Object.keys(all).length) { alert('还没有可导入的内容。'); return; }
+      // 导入前硬校验（Spec §4 / §5）：与导出同一份判据，不允许空明细落库。
+      const xc = assertQuoteExportable();
+      if (!xc.ok) { alert('还不能导入数据库：\n· ' + xc.problems.join('\n· ')); return; }
       if (!confirm('把本次报价的全部表单数据导入目标数据库？')) return;
       addUserBubble('导入数据库');
       addAiBubble('🗄️ 开始导入数据库，共 ' + Object.keys(all).length + ' 个分区，逐个写入目标表…');
@@ -2933,7 +2939,7 @@
     });
 
     // 快捷动作：强行把本大步骤所有表单/表格【填满】——查不到的也用知识+推理补上，无依据的标"（推测）"
-    function fillStepRecommend() {
+    async function fillStepRecommend() {
       if (busy) return;
       if (manualMode) { addAiBubble('当前为「无模型」模式，无法自动填写。请直接在右侧人工填写各字段。'); return; }
       const n = currentStep;
@@ -2941,6 +2947,18 @@
       // 唯一 turn helper：先出用户气泡，再出 Agent 卡（隔离执行时退回底层气泡原语）。
       const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
       say('强行填满第 ' + n + ' 步「' + name + '」的所有表单（含推测标记）。');
+      // 门禁：强行填满**不是**绕过步骤完成条件的后门（Spec §4）。这里同步读最近一次服务端判定
+      // （quoteCompletionGate / canCompleteQuoteStep 由「确认本步」写入缓存）：判定指出
+      // 「填表也修不了」的阻断（例如本单根本没有产品行、或明细在第 5 步确认后被改过）就停手，
+      // 把修复入口告诉用户；其余阻断照旧可以填（填表正是修它的手段）。
+      const gate = (typeof quoteCompletionGate === 'function') ? quoteCompletionGate(n) : null;
+      const blocked = (typeof quoteGateFillBlockers === 'function') ? quoteGateFillBlockers(gate) : [];
+      if (blocked.length) {
+        addAiBubble('⛔ 第 ' + n + ' 步「' + name + '」现在填也推不动：'
+          + blocked.map(b => b.message || b.code || '').join('；')
+          + (blocked[0].action ? '\n\n修复入口：' + blocked[0].action : ''));
+        return;
+      }
       sendToAgent(
         '【强行推荐】用户要求把当前第 ' + n + ' 步「' + name + '」的**所有固定分区的每一个字段/单元格都填满、绝不留空**：\n' +
         '1) 能从需求文档拿到的先填文档值；2) 文档没有的用 sql_query 查数据库补；3) 文档和库都没有的，' +
@@ -2967,6 +2985,12 @@
       }
       if (cur >= STEPS.length) {
         const done = '报价流程已完成。';
+        // 业务门禁（Spec §4）：拿不到服务端「可以完成」的判定就不推进，保留当前步骤并给修复入口。
+        const gate6 = await canCompleteQuoteStep(cur, collectStepData(cur));
+        if (!gate6.ok) {
+          addAiBubble('⛔ 第 ' + cur + ' 步「' + STEPS[cur - 1] + '」还不能确认：\n' + quoteGateText(gate6));
+          return;
+        }
         if (!(await wfCompleteStep(cur, collectStepData(cur)))) return;
         say(done);
         if (manualMode) {
@@ -2980,8 +3004,17 @@
       const data = collectStepData(cur);
       const stepName = STEPS[cur - 1];
       const next = cur + 1;
+      // 业务门禁（Spec §4）：第 3/4/5 步各有硬条件（要有正数基础成本 / 可解释的加价 / 有效明细）。
+      // 判定由服务端给（同一份 quote_step_completion_gate），前端提示与「强行填满」都不能代替它。
+      const gate = await canCompleteQuoteStep(cur, data);
+      if (!gate.ok) {
+        addAiBubble('⛔ 第 ' + cur + ' 步「' + stepName + '」还不能确认：\n' + quoteGateText(gate));
+        return;
+      }
       // 登录状态下先把本步落库（角色不符会被后端拒绝，拒绝则不推进）
       if (!(await wfCompleteStep(cur, data))) return;
+      // 第 5 步确认的那一版报价明细指纹：第 6 步据此判断「明细有没有被改过」（Spec §4）。
+      if (cur === 5) LAST_QUOTE_FINGERPRINT = quoteDetailFingerprint(quoteDetailRows());
       // 下一步不归我：右侧进度如实前进到下一步，但**左侧不开工**——只提醒推送，等接手人自己开始
       if (WF.pendingHandoff) {
         const h = WF.pendingHandoff;
@@ -3509,8 +3542,21 @@
 
     /* 唯一写入点：只有销售点了「确认写入」才把工艺回传结果写进报价单
        （s1_products / s1_techparams），且已有值先提示两组值，绝不静默替换（Spec §2.4）。 */
-    function applyTechResult(result, task) {
+    async function applyTechResult(result, task) {
       if (!result || typeof result !== 'object') return false;
+      /* 财务/技术回传的成本要落成**结构化**的一条（不是只写备注；Spec
+         `e2e-quote-session-and-completion-closure.md` §3）：字段名与缺口数由服务端
+         `cpq_agent_server.normalize_finance_handoff` 归一（unit_cost / cost_fingerprint /
+         gap_count / provisional 等）。拿不到归一结果时照旧写原值，不丢数字、也不假装正式。 */
+      let finance = null;
+      try {
+        const norm = await cpqAuthFetch(AGENT_URL + '/api/quote/cost-handoff', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: currentSessionId, source_task_id: (task && task.task_id) || '',
+                                 payload: { tech_result: result } }),
+        }).then(r => r.json());
+        finance = (norm && norm.cost) || null;
+      } catch (e) { finance = null; }
       const rows = result.products || result.products_rows || [];
       const params = result.techparams_row || result.techparams || null;
       const targets = [];
@@ -3522,6 +3568,21 @@
       }
       if (result.price !== undefined && result.price !== '' && targets[0][0] === 's1_products') {
         targets[0][1]['价格'] = String(result.price);   // 价格来源注明为工艺回传
+      }
+      // 财务回传的单位成本落成**基础成本**（第 3 步门禁认的就是这一列的正数），
+      // 并带上暂估标记与缺口数：有缺口时按 POC 允许流转，但绝不能标成正式成本（Spec §3 / §4）。
+      if (finance && finance.unit_cost != null && targets[0][0] === 's1_products') {
+        targets[0][1]['基础成本'] = String(finance.unit_cost);
+        if (finance.cost_fingerprint) targets[0][1]['成本指纹'] = String(finance.cost_fingerprint);
+        if (finance.provisional) {
+          targets[0][1]['成本状态'] = '暂估';
+          addAiBubble('⚠️ 这条成本是**暂估**（缺口 ' + (finance.gap_count || 0) +
+                      ' 项，来源任务 ' + (finance.source_task_id || '—') + '）。可以按 POC 继续，' +
+                      '但正式报价前必须补齐缺口。');
+        }
+      } else if (finance && finance.unit_cost == null) {
+        addAiBubble('⚠️ 回传里没有可用的单位成本（缺 ' + ((finance.missing || []).join('、') || '—') +
+                    '），未写入基础成本 —— 不猜数字。');
       }
       const conflicts = [];
       targets.forEach(([sid, row]) => {
@@ -3796,6 +3857,110 @@
         rows.push(row);
       });
       return rows;
+    }
+
+    /* ============ 步骤完成门禁（Spec `e2e-quote-session-and-completion-closure.md` §4） ============
+       业务判定的唯一事实源在服务端（cpq_agent_server.quote_step_completion_gate，走
+       POST /api/quote/step-gate）。前端这两件事：
+         ① 「确认，进入下一步」前**必须**拿到服务端 ok，否则保留当前步骤并显示修复入口；
+         ② 把最近一次判定缓存下来给「强行填满」读 —— 强行填满只是填表动作，不是绕过完成条件的后门。 */
+    let STEP_GATE_VERDICTS = {};        // step -> 最近一次服务端判定
+    let LAST_QUOTE_FINGERPRINT = '';    // 第 5 步确认时的报价明细指纹（第 6 步据此判「明细没被改过」）
+
+    function quoteDetailRows() {
+      try { return extractSectionRows('s5_detail') || []; } catch (e) { return []; }
+    }
+
+    /* 报价明细指纹：把行内容规范化后排序再哈希（不含时间/随机数），只用来判断
+       「第 5 步确认之后明细有没有被改过」，不做任何金额判断。 */
+    function quoteDetailFingerprint(rows) {
+      const keys = ['成品编码', '成品描述', '数量', '报价', '折扣', '税率', '币种'];
+      const items = (rows || []).map(r => keys.map(k => String((r && r[k]) == null ? '' : r[k]).trim())
+        .join('\u0001')).sort();
+      const text = items.join('\u0002');
+      let hash = 5381;
+      for (let i = 0; i < text.length; i++) hash = (((hash * 33) ^ text.charCodeAt(i)) >>> 0);
+      return 'qd' + hash.toString(16) + '-' + items.length;
+    }
+
+    // 同步读最近一次判定（null = 还没问过服务端；隔离沙箱里没有这个函数时也走这条）。
+    function quoteCompletionGate(step) {
+      const verdict = STEP_GATE_VERDICTS[Number(step) || 0];
+      return verdict ? verdict : null;
+    }
+
+    /* 问服务端「这一步能不能完成」。拿不到判定一律当**拦**（不许静默放行），
+       并把判定缓存下来给「强行填满」读。 */
+    async function canCompleteQuoteStep(step, data) {
+      const n = Number(step) || 0;
+      let payload = null;
+      try {
+        payload = data || collectStepData(n);
+        const d = await cpqAuthFetch(AGENT_URL + '/api/quote/step-gate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            step_no: n, session_id: currentSessionId, data: payload,
+            business_case_id: (WF && WF.card && WF.card.business_case_id) || '',
+            detail_fingerprint: (n === 6) ? quoteDetailFingerprint(quoteDetailRows()) : '',
+            quote_fingerprint: (n === 6) ? LAST_QUOTE_FINGERPRINT : '',
+          }),
+        }).then(r => r.json());
+        const verdict = Object.assign(
+          { ok: false, code: 'gate_unavailable', message: '无法取得完成门禁判定。', action: '' }, d || {});
+        STEP_GATE_VERDICTS[n] = verdict;
+        return verdict;
+      } catch (e) {
+        const verdict = { ok: false, code: 'gate_unavailable',
+                          message: '无法连接报价助手服务，拿不到完成门禁判定。',
+                          action: '确认报价助手服务已启动后重试。' };
+        STEP_GATE_VERDICTS[n] = verdict;
+        return verdict;
+      }
+    }
+
+    /* 把一份判定渲染成人话（阻断项 + 修复入口）。 */
+    function quoteGateText(verdict) {
+      if (!verdict) return '';
+      const parts = (verdict.blocking || []).map(b => '· ' + (b.message || b.code || ''));
+      const head = verdict.message || '这一步还不能完成。';
+      return head + (parts.length ? '\n' + parts.join('\n') : '')
+        + ((verdict.action || (verdict.blocking || []).map(b => b.action).filter(Boolean)[0])
+           ? '\n\n修复入口：' + (verdict.action || (verdict.blocking || []).map(b => b.action).filter(Boolean)[0]) : '');
+    }
+
+    // 判定里是否存在「填表也修不了」的阻断项（例如根本没有产品行 / 明细在第 5 步确认后被改过）。
+    function quoteGateFillBlockers(verdict) {
+      if (!verdict || verdict.ok) return [];
+      const items = (verdict.blocking || []);
+      if (items.length) return items.filter(b => b.fixable_by_fill === false);
+      return verdict.fixable_by_fill === false ? [verdict] : [];
+    }
+
+    /* 生成 Word / 导入数据库前的硬校验（Spec §4 / §5）：报价明细至少一行，数量、币种、单价有效，
+       且总金额 = 折后价格 × 数量 可确定性复算。返回 {ok, problems, rows}。 */
+    function assertQuoteExportable() {
+      const rows = quoteDetailRows();
+      const problems = [];
+      if (!rows.length) {
+        problems.push('报价明细为空：至少要有 1 行（第 5 步）。');
+        return { ok: false, problems: problems, rows: 0 };
+      }
+      rows.forEach((row, i) => {
+        const tag = '第 ' + (i + 1) + ' 行';
+        const qty = _numOf(row['数量']);
+        const unit = _numOf(row['报价']);
+        const after = _numOf(row['折后价格']);
+        const total = _numOf(row['总金额']);
+        const cur = String(row['币种'] == null ? '' : row['币种']).trim();
+        if (qty == null || qty <= 0) problems.push(tag + '：数量无效（' + (row['数量'] || '空') + '）。');
+        if (unit == null || unit <= 0) problems.push(tag + '：单价（报价）无效（' + (row['报价'] || '空') + '）。');
+        if (!cur) problems.push(tag + '：币种为空。');
+        if (after == null || total == null) problems.push(tag + '：总金额/折后价格缺失，无法复算。');
+        else if (Math.abs(total - after * (qty == null ? 1 : qty)) > 0.01) {
+          problems.push(tag + '：总金额 ' + total + ' ≠ 折后价格 ' + after + ' × 数量 ' + (qty == null ? 1 : qty) + '。');
+        }
+      });
+      return { ok: !problems.length, problems: problems, rows: rows.length };
     }
 
     // 工艺确认（第2步）：把第1步的产品信息列表 s1_products / 产品技术参数 s1_techparams
@@ -4914,6 +5079,11 @@
       await waitForAuth();   // 先拿到登录态，后面才能正确匹配角色、决定是否等用户点「开始」
 
       let requirement = '', files = [], fileContents = [];
+      // 会话身份：URL 上的 session_id 优先（刷新、复制链接、从首页卡片/历史点进来都带它），
+      // 其次才是「上次打开的那个会话」——只靠本机临时状态定位不到项目
+      //（Spec `e2e-quote-session-and-completion-closure.md` §2.1）。
+      let urlSessionId = '';
+      try { urlSessionId = (new URLSearchParams(location.search).get('session_id') || '').trim(); } catch (e) {}
       let projectName = '', projectCode = '', customer = '';
       try {
         requirement = sessionStorage.getItem('cpq:requirement') || '';
@@ -4948,9 +5118,14 @@
           const mine = JSON.parse(localStorage.getItem('cpq:mySessions') || '[]');
           if (nw.id && mine.indexOf(nw.id) < 0) { mine.push(nw.id); localStorage.setItem('cpq:mySessions', JSON.stringify(mine.slice(-200))); }
         } catch (e) {}
-        // 从首页「历史记录」点进来的：直接载入该会话，跳过新对话
-        let openId = '';
-        try { openId = sessionStorage.getItem('cpq:openSession') || ''; sessionStorage.removeItem('cpq:openSession'); } catch {}
+        // 从首页「历史记录」/卡片点进来的：直接载入该会话，跳过新对话。
+        // URL 上的 session_id 是权威身份（刷新也还在），sessionStorage 只作老路径兜底。
+        let openId = urlSessionId;
+        try {
+          const lastOpen = sessionStorage.getItem('cpq:openSession') || '';
+          sessionStorage.removeItem('cpq:openSession');
+          if (!openId) openId = lastOpen;
+        } catch (e) {}
         if (openId) { BOOT_PENDING = false; await openSession(openId); return; }
         await wfSyncCard(1);   // 登录后：新会话登记为一张报价卡片（创建人=当前用户）
         await wfRefresh();     // 先匹配角色：第 1 步归谁做、我能不能做（决定下面是否自动开工）
