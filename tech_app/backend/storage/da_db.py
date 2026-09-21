@@ -45,6 +45,35 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("kb_cost_rate", "minimum_charge", "REAL"),
 )
 
+# 上线闭环第 2 批: 9 张包装扩展表补「数据来源分层」列(demo/workbook/dwg_confirmed/
+# unknown, Spec §3)。老库上 CREATE TABLE IF NOT EXISTS 不补列, 不补就会写不进去。
+# 表名清单与 cpq_kb 的 9 张包装表同集合、同顺序; 两侧补列口径必须一致。
+_PACKAGING_PROVENANCE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("source_type", "TEXT NOT NULL DEFAULT 'unknown'"),
+    ("source_ref", "TEXT"),
+    ("source_sha256", "TEXT"),
+    ("parser_version", "TEXT"),
+    ("confirmed_by", "TEXT"),
+    ("confirmed_at", "TEXT"),
+)
+_PACKAGING_PROVENANCE_TABLES: tuple[str, ...] = (
+    "kb_packaging_box_type",
+    "kb_packaging_part_template",
+    "kb_packaging_process_template",
+    "kb_packaging_insert_accessory",
+    "kb_packaging_cost_formula",
+    "kb_packaging_logistics_rule",
+    "kb_packaging_match_weight",
+    "kb_packaging_cost_content",
+    "kb_packaging_tooling_rule",
+)
+
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = _ADDED_COLUMNS + tuple(
+    (table, column, definition)
+    for table in _PACKAGING_PROVENANCE_TABLES
+    for column, definition in _PACKAGING_PROVENANCE_COLUMNS
+)
+
 _local = threading.local()
 _init_lock = threading.RLock()
 _initialized: set[str] = set()

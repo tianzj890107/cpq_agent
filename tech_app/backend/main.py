@@ -68,7 +68,7 @@ from .services import (
     acting_user, cpq_auth_client, user_llm,
     approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
-    cost_flow, cost_review, file_preflight, industry_templates, integration,
+    cost_flow, cost_review, entry_origin, file_preflight, industry_templates, integration,
     manufacturing, report_workflow,
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
@@ -153,6 +153,27 @@ class ReportQuoteAction(BaseModel):
     target_role_code: str = ""
     target_user_id: str = ""
     source_task_id: str = Field("", description="来源待办任务号，随 URL 带进来")
+    # 落点冲突的恢复三件套：服务端已经判出「没有找到报价卡片」，界面必须能把
+    # 「认回哪张实例」或「明确新建 + 原因」送回来 —— 否则那句「请填写新建原因后重试」
+    # 在界面上根本无处执行（现场 P0）。
+    business_case_id: str = Field("", description="业务实例号；留空时走项目 meta / 上一次回传")
+    create_new: bool = Field(False, description="明确要求新建报价卡片（与 create_reason 成对）")
+    create_reason: str = Field("", description="新建报价卡片的原因，服务端要求非空")
+
+
+class QuoteLinkRecoveryBody(BaseModel):
+    """历史项目一次性恢复「报价关联」的入参（Spec §6）。
+
+    只写技术侧事实：把线索记进项目 meta 并留痕；**不建、不改任何报价卡片** ——
+    卡片的新建仍然只能由回传命令带 create_new + create_reason 完成。
+    """
+    business_case_id: str = ""
+    quote_session_id: str = ""
+    source_task_id: str = ""
+    source_session_id: str = ""
+    create_new: bool = False
+    create_reason: str = ""
+    note: str = ""
 
 
 class LoginBody(BaseModel):
@@ -1208,9 +1229,19 @@ async def upload_project(
     files: List[UploadFile] = File(default=[]),
     note: str = Form(""),
     attachments: List[UploadFile] = File(default=[]),
+    # 报价线索（Spec §2）：报价侧「新增工艺」建项时会带上，用来判定这是不是正式入口。
+    # 三个都可选 —— 不传就是内部测试入口，照建，但会被明确标出来并留痕。
+    business_case_id: str = Form(""),
+    source_task_id: str = Form(""),
+    source_session_id: str = Form(""),
     user: dict = Depends(current_user),
 ):
-    """上传一个或多个设备需求图纸，首份为原图，其余保留为可追溯图纸附件。"""
+    """上传一个或多个设备需求图纸，首份为原图，其余保留为可追溯图纸附件。
+
+    入口分级由 `services.entry_origin.classify_entry` 唯一判定：带报价线索 = 正式报价
+    入口（`quote`），全空 = 内部测试入口（`internal_test`）。内部测试入口不是错误，
+    但必须留痕并原样回给前端，避免默默建出一张将来回传不了报价的项目。
+    """
     _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
     drawing_files = [item for item in ([file] if file else []) + list(files or []) if item and item.filename]
     if not drawing_files:
@@ -1226,6 +1257,27 @@ async def upload_project(
     )
     extra_drawings = []
     author = user.get("username", "system")
+    entry = entry_origin.classify_entry(
+        business_case_id=business_case_id,
+        source_task_id=source_task_id,
+        source_session_id=source_session_id,
+    )
+    # 入口事实落进项目 meta：cost_flow.business_case_of 在第一次回传之前就能读到实例号，
+    # 不必等到"上一次回传"才有来源。
+    store.save_business_case(project_id, {
+        "entry_origin": entry["origin"],
+        "internal_test": entry["internal_test"],
+        "clues": list(entry["clues"]),
+        "business_case_id": str(business_case_id or "").strip(),
+        "source_task_id": str(source_task_id or "").strip(),
+        "source_session_id": str(source_session_id or "").strip(),
+    }, author=author)
+    if entry["internal_test"]:
+        # 内部测试入口必须留痕：事后要能一眼分清哪些项目是正式报价来的。
+        store.audit(project_id, "project:internal_test_entry", {
+            "by": author, "entry_origin": entry["origin"],
+            "internal_test": True, "reason": entry["reason"],
+        })
     for drawing in drawing_files[1:]:
         data = await _read_upload_limited(drawing, label="补充模型图纸")
         if data:
@@ -1240,7 +1292,81 @@ async def upload_project(
         store.audit(project_id, "upload_additional_drawings", {
             "by": user.get("username", "system"), "files": extra_drawings,
         })
-    return {"project_id": project_id, "source_filename": primary.filename, "additional_drawings": extra_drawings}
+    return {"project_id": project_id, "source_filename": primary.filename,
+            "additional_drawings": extra_drawings, "entry_origin": entry}
+
+
+def _route(method_and_path: str):
+    """`@_route("POST /api/projects/{id}/…")`：把方法名与路径写在同一个字符串里再注册。
+
+    本仓库的验收红测按「方法 + 路径」这一个字符串读路由表（见
+    tests/test_quote_first_project_entry_red.py 的 routes()）：方法与路径写在一处、
+    注册时再拆开，就不会出现"文档里写 POST、代码里注册成 GET"的漂移。
+    """
+    method, _, path = method_and_path.partition(" ")
+    return app.api_route(path.strip(), methods=[method.strip().upper()])
+
+
+@_route("POST /api/projects/{project_id}/quote-link/recover")
+def recover_quote_link(project_id: str, body: QuoteLinkRecoveryBody,
+                       user: dict = Depends(current_user)):
+    """历史项目一次性恢复「报价关联」：只写技术侧事实，绝不建、改报价卡片。
+
+    判定与既有的落点四态语义一致（linked / multiple_candidates / create_new / no_candidate）：
+    至少要有一个线索（业务实例号 / 报价会话 / 来源任务 / 来源会话），或者明确要求新建报价
+    卡片并写明原因。恢复动作只做两件事：把线索合并写进项目 meta，并写一条审计留痕 ——
+    报价卡片的新建仍然只能由回传命令带 create_new + create_reason 完成，这里不代劳。
+    """
+    _require(user, auth.WRITE_ROLES, "需要工程师及以上权限")
+    if not store.load_meta(project_id):
+        raise HTTPException(404, "项目不存在")
+    clues = {
+        "business_case_id": str(body.business_case_id or "").strip(),
+        "quote_session_id": str(body.quote_session_id or "").strip(),
+        "source_task_id": str(body.source_task_id or "").strip(),
+        "source_session_id": str(body.source_session_id or "").strip(),
+    }
+    reason = str(body.create_reason or "").strip()
+    if not any(clues.values()) and not body.create_new:
+        raise HTTPException(400, "请至少提供一个报价线索（业务实例号 / 报价会话 / 来源任务 / "
+                                "来源会话），或明确新建报价卡片并写明原因")
+    if body.create_new and not reason:
+        raise HTTPException(400, "明确新建报价卡片时必须写明新建原因")
+    author = user.get("username", "system")
+    # 「明确新建」同样是一次报价侧动作（下一次回传就会把这张卡片建出来），所以它也算正式入口；
+    # 只给线索的恢复按线索本身判定，不为通过判定而编造来源。
+    entry = entry_origin.classify_entry(
+        business_case_id=clues["business_case_id"],
+        source_task_id=clues["source_task_id"] or clues["quote_session_id"],
+        source_session_id=clues["source_session_id"],
+        source="明确新建报价卡片" if body.create_new else "",
+    )
+    recovery = {
+        # 被恢复的就是这个项目本身：历史项目没有来源线索，恢复动作发生在这里。
+        "recovered_from_project_id": project_id,
+        "recovery_reason": reason or str(body.note or "").strip() or "历史项目一次性恢复报价关联",
+        "recovered_by": author,
+        "recovered_at": now_cst_str(),
+    }
+    store.save_business_case(project_id, {
+        **{key: value for key, value in clues.items() if value},
+        "entry_origin": entry["origin"],
+        "internal_test": entry["internal_test"],
+        "clues": list(entry["clues"]),
+        "create_new": bool(body.create_new),
+        **recovery,
+    }, author=author)
+    store.audit(project_id, "quote_link:recovered", {
+        "by": author, "create_new": bool(body.create_new),
+        "business_case_id": clues["business_case_id"],
+        "quote_session_id": clues["quote_session_id"],
+        "source_task_id": clues["source_task_id"],
+        "source_session_id": clues["source_session_id"],
+        "recovery_reason": recovery["recovery_reason"],
+    })
+    return {"business_case_id": clues["business_case_id"],
+            "quote_session_id": clues["quote_session_id"],
+            "entry_origin": entry, "recovery": recovery}
 
 
 @app.post("/api/projects/{project_id}/attachments")
@@ -3080,7 +3206,7 @@ def update_integration_params(project_id: str, params: IntegrationParamPlan,
     integration.reconcile_part_refs(params, DesignIR(**ir_dict) if ir_dict else None)
     # 人工改过的参数同样要对回报价字典：改了名字就得重新认 param_code，
     # 否则这条参数在报价那头会突然失去落点，而界面上看不出任何异常。
-    params.product_family = product_params.align(params)
+    params.product_family = product_params.align(params, integration.project_family(project_id))
     plan = integration.load_plan(project_id)
     plan.params = params
     # 参数改了，之前那两次确认都不再作数 —— 确认针对的是当时那一版，不是这个项目。
@@ -3172,7 +3298,10 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
     plan = integration.load_plan(project_id)
     integration.finalize_params(plan, body.values)
     if body.confirm:
-        missing = product_params.missing_required(plan.params)
+        # 必填补齐门禁按行业锁定的族校验：包装项目要的是盒型/内尺寸这 10 项，
+        # 不是电池的「工作温度」。
+        missing = product_params.missing_required(plan.params,
+                                                  integration.project_family(project_id))
         if missing:
             names = "、".join(field["name"] for field in missing[:8])
             more = f" 等 {len(missing)} 项" if len(missing) > 8 else ""
@@ -3189,7 +3318,7 @@ def finalize_integration_params(project_id: str, body: IntegrationFinalizeBody,
         if body.waiver:
             # 「仍要继续」：人签了字，缺口原样留档 —— 参数推荐这一步的签字记在
             # stage='params'，发送财务时同一批缺口凭它复用，不再要第二次签字。
-            missing = integration.missing_required(plan)
+            missing = integration.missing_required(plan, integration.project_family(project_id))
             integration.record_waiver(
                 plan, "params",
                 missing_codes=[str(field.get("code") or "") for field in missing],
@@ -3375,6 +3504,15 @@ class IntegrationPublishBody(BaseModel):
     waiver: Optional[dict] = None
 
 
+def _bridge_http_error(exc: Exception) -> HTTPException:
+    """桥接层的业务拒绝 → HTTP：落点冲突 409 + 结构化 detail，其余 400 + 纯字符串。"""
+    if cpq_bridge.is_conflict(exc):
+        # 落点冲突不是"你的参数不对"，是"这张卡片认不回来"：409 + 结构化 detail，
+        # 界面据此弹「选择已有 / 明确新建（写原因）」，不再只有一句无法执行的文案。
+        return HTTPException(409, cpq_bridge.conflict_detail(exc))
+    return HTTPException(400, str(exc))
+
+
 def _bridge_call(action, *args, **kwargs):
     """把桥接层的两类失败翻译成 HTTP：业务拒绝 400，服务不可用 503。
 
@@ -3383,9 +3521,21 @@ def _bridge_call(action, *args, **kwargs):
     try:
         return action(*args, **kwargs)
     except cpq_bridge.BridgeRejected as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise _bridge_http_error(exc) from exc
     except cpq_bridge.BridgeUnavailable as exc:
         raise HTTPException(503, f"业务数据库/报价服务暂不可用：{exc}") from exc
+
+
+def _flow_http_error(exc) -> HTTPException:
+    """2.3 与 5.3 的 service 业务错误 → HTTP（两条链路同一口径）。
+
+    落点冲突回 409 + `{code, candidates, message}`；其余按 service 自己给的状态码回
+    纯字符串 —— 既有路由的响应形状一律不变。
+    """
+    if cpq_bridge.is_conflict(exc):
+        return HTTPException(409, cpq_bridge.conflict_detail(exc))
+    return HTTPException(int(getattr(exc, "status_code", 400) or 400),
+                         getattr(exc, "message", None) or str(exc))
 
 
 @app.post("/api/projects/{project_id}/integration/material-write")
@@ -3465,7 +3615,10 @@ def _cost_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except cost_flow.CostFlowError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise _flow_http_error(exc) from exc
+    except cpq_bridge.BridgeRejected as exc:
+        # service 直接把桥接拒绝透出来时，出口口径与上面完全一致（同一份判定与文案）。
+        raise _bridge_http_error(exc) from exc
 
 
 @app.get("/api/projects/{project_id}/cost-review")
@@ -6810,7 +6963,10 @@ def _report_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except report_workflow.ReportWorkflowError as exc:
-        raise HTTPException(exc.status_code, exc.message) from exc
+        raise _flow_http_error(exc) from exc
+    except cpq_bridge.BridgeRejected as exc:
+        # service 直接把桥接拒绝透出来时，出口口径与上面完全一致（同一份判定与文案）。
+        raise _bridge_http_error(exc) from exc
 
 
 @app.get("/api/projects/{project_id}/process-report")
@@ -6917,10 +7073,15 @@ def send_process_report_to_quote(project_id: str, body: ReportQuoteAction,
                           target_type=body.target_type,
                           target_role_code=body.target_role_code,
                           target_user_id=body.target_user_id,
-                          source_task_id=body.source_task_id)
+                          source_task_id=body.source_task_id,
+                          # 落点冲突的恢复三件套原样转发：服务端凭它认回实例或明确新建。
+                          business_case_id=body.business_case_id,
+                          create_new=body.create_new,
+                          create_reason=body.create_reason)
     if result.get("audit"):
         store.audit(project_id, result["audit"]["action"], result["audit"]["payload"])
     # 这次回传的唯一标识一路透给前端：结果区按它就能查到哪一次交接、来源待办关没关。
+    # business_case_id / candidates / recovery 由 service 给（与成本侧同一份口径）。
     return {**result, "handoff_id": str(result.get("handoff_id") or "")}
 
 

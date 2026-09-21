@@ -56,15 +56,33 @@ GATE_ITEMS = (
     ("ci_separates_adapter_and_real_smoke", "auto", "CI 区分适配器测试与真实样本冒烟"),
     ("real_samples_e2e_passed", "manual", "两份真实样本 L4 通过且金标已人工审批"),
     ("converter_chain_configured", "auto", "受控回退链与 manifest 契约在位"),
+    ("converter_rollout_documented", "auto", "部署文档已写明转换器配置、生效方式与验收命令"),
 )
 
 GATE_STATUSES = ("ok", "fail", "manual_unacknowledged", "acknowledged", "skip")
 
 #: 需要扫描密钥的目录/文件（有界，不递归整个仓库）。
+#: 34 的转换器目标取值（上线批 Spec §2 表；仅用于核对部署文档是否写明，不参与运行）。
+_ODA_TARGET_BINARY = "/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun"
+_ODA_TARGET_VERSION = "27.1"
+_XVFB_RUN = "/home/data/cpq-tools/xvfb-user/root/usr/bin/xvfb-run"
+_TOOLS_ROOT = "/home/data/cpq-tools"
+_FALLBACK_PROVIDER = "libredwg"
+_FALLBACK_TARGET_BINARY = "/home/data/cpq-tools/current/bin/dwg2dxf"
+_CLAIM_LINE = "DWG 编排能力完成，真实转换能力未验收"
+_SMOKE_TOOL = "dwg_conversion_smoke.py"
+_SAMPLE_TOOL = "dwg_sample_e2e.py"
+_GATE_TOOL = "dwg_deploy_gate.py"
+
 SECRET_SCAN_ROOTS = ("tech_app/tools", "tech_app/backend/services/dwg_dispatch.py",
                      "tech_app/backend/services/cad_converter",
                      "tech_app/backend/services/dwg_acceptance.py")
 SECRET_PATTERNS = ("-----BEGIN", "AKIA", "sk-live", "password=", "passwd=")
+#: 模式表所在文件：扫描前先剔掉**定义行**。模式表本身必然含模式字面量（就在上面那一行
+#: 里），把它算成"疑似泄露"会让门禁在本地与 34 上都永远判 fail —— 门禁也就失去了意义。
+#: 只剔定义行，文件其余部分照常扫描：真被粘进来的密钥照样抓得到。
+SECRET_PATTERN_FILE = CPQ_DIR / "tech_app" / "tools" / "dwg_deploy_gate.py"
+_SECRET_PATTERN_DECL = re.compile(r"^\s*SECRET_PATTERNS\s*=")
 
 MANUAL_IDS = tuple(item_id for item_id, kind, _title in GATE_ITEMS if kind == "manual")
 
@@ -289,6 +307,18 @@ def _check_step_flow_no_regression() -> dict:
                    "STEP/三维既有入口与门禁在位", evidence)
 
 
+def _secret_scan_text(path, text: str) -> str:
+    """扫描用文本：模式定义行不算"泄露"（否则扫描器把自己判成 fail，见上）。"""
+    try:
+        is_definition = path.resolve() == SECRET_PATTERN_FILE.resolve()
+    except OSError:
+        is_definition = False
+    if not is_definition:
+        return text
+    return "\n".join(line for line in text.splitlines()
+                     if not _SECRET_PATTERN_DECL.match(line))
+
+
 def _check_no_secrets() -> dict:
     hits = []
     for root in SECRET_SCAN_ROOTS:
@@ -297,7 +327,7 @@ def _check_no_secrets() -> dict:
         for path in paths:
             if not path.is_file() or path.suffix not in (".py", ".json", ".md", ".yml"):
                 continue
-            text = _read_text(path)
+            text = _secret_scan_text(path, _read_text(path))
             if any(pattern in text for pattern in SECRET_PATTERNS):
                 hits.append(_rel(path))
     evidence = {"scanned": len(SECRET_SCAN_ROOTS), "flagged": hits}
@@ -372,6 +402,49 @@ def _check_converter_chain_configured() -> dict:
                    "受控回退链与 manifest 契约在位", evidence)
 
 
+def _check_converter_rollout_documented(env: str) -> dict:  # noqa: ARG001 - 与其它检查同签名
+    """部署文档是否写清了转换器配置、生效方式与验收命令（上线批 Spec §3）。
+
+    34 上线漏配 `DWG_CONVERTER_*` 的直接原因就是「文档里没有这段、漏配没人拦」，
+    所以这一项只查 `DEPLOYMENT.md`：**缺段即 `fail`，不许 `skip`**。env 名从
+    `cad_converter.service` 常量取，不手抄字符串。
+    """
+    from tech_app.backend.services.cad_converter import service as cc
+
+    doc = _read_text(CPQ_DIR / "DEPLOYMENT.md")
+    envs = (cc.PROVIDER_ENV, cc.BINARY_ENV, cc.VERSION_ENV, cc.WRAPPER_ENV,
+            cc.FALLBACK_PROVIDER_ENV, cc.FALLBACK_BINARY_ENV, cc.FALLBACK_VERSION_ENV)
+    markers = {
+        "章节标题": "DWG 转换器（包装图纸）" in doc,
+        "env 名齐全": all(name in doc for name in envs),
+        "ODA 主用取值": all(token in doc for token in
+                        (_ODA_TARGET_BINARY, _ODA_TARGET_VERSION, "ACAD2018", "DXF", "*.dwg")),
+        "xvfb wrapper": all(token in doc for token in
+                            (cc.WRAPPER_ENV, _XVFB_RUN, "xvfb-run")),
+        "LibreDWG 回退取值": all(token in doc for token in
+                            (cc.FALLBACK_PROVIDER_ENV, _FALLBACK_PROVIDER,
+                             _FALLBACK_TARGET_BINARY)),
+        # 回退只在主转换器「明确失败」时启用（Spec §2.4）；配置类问题绝不回退。
+        "只主失败才回退": bool(re.search("明确失败", doc)),
+        "生效方式": all(token in doc for token in ("CPQ_ENV_FILE", "0600", "重启")),
+        "运行用户权限": (_TOOLS_ROOT in doc and bool(re.search("可读可执行|可执行", doc))),
+        "健康检查期望": all(token in doc for token in
+                        ("capability", "provider", "converter_version", "fallback", "available")),
+        "上线三件套": all(token in doc for token in
+                      (_SMOKE_TOOL, _SAMPLE_TOOL, _GATE_TOOL, "--env production")),
+        "声明口径原文": _CLAIM_LINE in doc,
+        "两条硬禁令": (bool(re.search("不得.{0,12}模型", doc)) and "STEP" in doc),
+    }
+    missing = [name for name, ok in markers.items() if not ok]
+    evidence = {"missing": missing, "doc_bytes": len(doc)}
+    if missing:
+        return _result("converter_rollout_documented", "auto", "fail",
+                       "部署文档没有写明转换器配置：缺 %s（Spec §3）" % "、".join(missing),
+                       evidence)
+    return _result("converter_rollout_documented", "auto", "ok",
+                   "部署文档已写明转换器配置、生效方式与上线三件套", evidence)
+
+
 AUTO_CHECKS = (
     ("converter_version_pinned", lambda env: _check_converter_version_pinned(env)),
     ("health_reports_capability", lambda env: _check_health_reports_capability()),
@@ -389,6 +462,7 @@ AUTO_CHECKS = (
     ("no_dev_machine_dependency", lambda env: _check_no_dev_machine_dependency()),
     ("ci_separates_adapter_and_real_smoke", lambda env: _check_ci_separation()),
     ("converter_chain_configured", lambda env: _check_converter_chain_configured()),
+    ("converter_rollout_documented", lambda env: _check_converter_rollout_documented(env)),
 )
 
 

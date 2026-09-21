@@ -29,11 +29,20 @@ from . import cost_model, cost_review, cpq_bridge, integration, product_params
 
 
 class CostFlowError(Exception):
-    """2.3 流转的业务拒绝：前置结果缺失、未确认或桥接失败，调用方映射成 HTTP。"""
+    """2.3 流转的业务拒绝：前置结果缺失、未确认或桥接失败，调用方映射成 HTTP。
 
-    def __init__(self, message: str, status_code: int = 400):
+    `code` / `candidates` 只在**落点冲突**（`no_candidate` / `multiple_candidates`）时非空：
+    FastAPI 层靠这两个字段把响应翻成 409 + 结构化 detail，界面才能弹「认回 / 明确新建」。
+    其余业务错误保持原样（400 + 一句文案）。
+    """
+
+    def __init__(self, message: str, status_code: int = 400, *,
+                 code: str = "", candidates=None):
         super().__init__(message)
+        self.message = str(message)
         self.status_code = status_code
+        self.code = str(code or "")
+        self.candidates = list(candidates or [])
 
 
 # 成本结果回传的语义与版本：任务 payload 与审计里都带上，重复点击时用它做幂等键。
@@ -48,7 +57,10 @@ def bridge_call(action, *args, **kwargs):
     try:
         return action(*args, **kwargs)
     except cpq_bridge.BridgeRejected as exc:
-        raise CostFlowError(str(exc), 400) from exc
+        # 落点冲突保留 code / candidates 并升成 409；其余拒绝照旧 400 + 文案。
+        raise CostFlowError(str(exc), 409 if cpq_bridge.is_conflict(exc) else 400,
+                            code=getattr(exc, "code", ""),
+                            candidates=getattr(exc, "candidates", [])) from exc
     except cpq_bridge.BridgeUnavailable as exc:
         raise CostFlowError(f"业务数据库/报价服务暂不可用：{exc}", 503) from exc
 

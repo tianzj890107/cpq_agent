@@ -24,6 +24,12 @@ from ..config import ROOT_DIR
 SPEC_PATH = ROOT_DIR / "agent_knowledge" / "rules" / "quote_product_params.json"
 DEFAULT_FAMILY = "other"
 
+#: 包装族（第 4 批新增，唯一入口）。族 key 一旦定下不得改名 —— 快照与验收都按它取值。
+PACKAGING_FAMILY = "pkg_box"
+PACKAGING_FAMILY_NAME = "包装盒"
+PACKAGING_FAMILY_HINT = ("包装盒 / 天地盒 / 彩盒：内尺寸、盒型、材料与工艺"
+                         "（从需求单 3.1–3.6 直接来）")
+
 
 @lru_cache(maxsize=1)
 def spec() -> dict:
@@ -35,8 +41,57 @@ def spec() -> dict:
         return {"families": [], "groups": [], "fields": [], "aliases": {}}
 
 
+@lru_cache(maxsize=1)
+def _packaging_spec() -> dict:
+    """包装族在字典里的表示（族条目 / 分组 / 字段）—— **只由 PACKAGING_SPEC 派生**。
+
+    为什么不能等 DA 快照：`quote_product_params.json` 是《亿纬锂能DA梳理》的产品技术参数
+    表，那是锂原/储能/光伏三条线的并集，本来就没有包装行。等它补行等于本地与线上都
+    没有包装族，包装项目只能落进「其他成品」，被问工作温度与机械号（现场就是这样）。
+    所以包装族的唯一来源是需求单模板 `industry_templates.PACKAGING_SPEC`，
+    从此处派生，不在这里另抄一份字段清单。
+    """
+    from . import industry_templates, packaging_match
+
+    industry = packaging_match.PACKAGING_INDUSTRY
+    groups: list[dict] = []
+    fields: list[dict] = []
+    for block in industry_templates.blocks(industry):
+        # 分组 key 与需求单章节一一对应（3.1 / 3.2 …），界面上两处能对上号。
+        group_key = "pkg_%s" % str(block.section).replace(".", "_")
+        groups.append({"key": group_key, "name": "%s %s" % (block.section, block.title),
+                       "families": [PACKAGING_FAMILY]})
+        for field in block.fields:
+            fields.append({"code": field.key, "name": field.label, "group": group_key,
+                           "required": bool(field.required), "type": "", "unit": "",
+                           "options": [], "example": "", "da_name": "",
+                           "source": "industry_templates.PACKAGING_SPEC"})
+    return {"family": {"key": PACKAGING_FAMILY, "name": PACKAGING_FAMILY_NAME,
+                       "hint": PACKAGING_FAMILY_HINT},
+            "groups": groups, "fields": fields}
+
+
+def packaging_family_fields() -> list[dict]:
+    """包装族字段清单（code = SpecField.key、name = label、required = required）。"""
+    return list(_packaging_spec()["fields"])
+
+
+def family_for_industry(industry) -> Optional[str]:
+    """行业 → 锁定的产品族；返回 None 表示沿用既有口径（由模型判定 product_family）。
+
+    本批**只锁包装**：包装项目的 3.2 参数推荐与 4.3 成本清单必须用需求单 3.1–3.6 的字段，
+    不能再被当成「其他成品」去问工作温度 / 机械号。其它行业一字不改地沿用旧行为。
+    """
+    from . import industry_templates, packaging_match
+
+    if str(industry_templates.normalize(industry) or "") == packaging_match.PACKAGING_INDUSTRY:
+        return PACKAGING_FAMILY
+    return None
+
+
 def families() -> list[dict]:
-    return spec().get("families", [])
+    # DA 五个族（顺序是既有契约）+ 追加的包装族；只允许追加，不允许插队。
+    return list(spec().get("families", [])) + [_packaging_spec()["family"]]
 
 
 def family_keys() -> list[str]:
@@ -48,6 +103,10 @@ def resolve_family(value: Optional[str]) -> str:
     text = str(value or "").strip()
     if not text:
         return DEFAULT_FAMILY
+    # 包装族不进 DA 快照，必须先认：模型写「包装盒」「pkg_box」都要落回包装族，
+    # 否则包装项目的 3.2 会被静默退回「其他成品」。
+    if text == PACKAGING_FAMILY or text == PACKAGING_FAMILY_NAME:
+        return PACKAGING_FAMILY
     for item in families():
         if text == item["key"] or text == item["name"]:
             return item["key"]
@@ -55,15 +114,30 @@ def resolve_family(value: Optional[str]) -> str:
     for item in families():
         if text in item["name"] or item["name"] in text:
             return item["key"]
+    if PACKAGING_FAMILY_NAME in text or text in PACKAGING_FAMILY_NAME:
+        return PACKAGING_FAMILY
     return DEFAULT_FAMILY
 
 
 def _groups_of(family: str) -> list[dict]:
+    if family == PACKAGING_FAMILY:
+        return list(_packaging_spec()["groups"])
     return [g for g in spec().get("groups", []) if family in (g.get("families") or [])]
 
 
+def _all_groups() -> list[dict]:
+    """DA 分组 + 包装分组：分组名的唯一取值处（align / prompt 都用它）。"""
+    return list(spec().get("groups", [])) + list(_packaging_spec()["groups"])
+
+
+def _group_names() -> dict[str, str]:
+    return {g["key"]: g["name"] for g in _all_groups()}
+
+
 def fields_for(family: str) -> list[dict]:
-    """某产品族适用的字段，按 DA 分组顺序排。"""
+    """某产品族适用的字段，按分组顺序排。"""
+    if family == PACKAGING_FAMILY:
+        return packaging_family_fields()
     order = {g["key"]: index for index, g in enumerate(_groups_of(family))}
     return sorted(
         (f for f in spec().get("fields", []) if f.get("group") in order),
@@ -91,12 +165,16 @@ def _name_index() -> dict[str, str]:
                 index.setdefault(_key(label), field["code"])
     for label, code in (spec().get("aliases") or {}).items():
         index.setdefault(_key(label), code)
+    # 包装字段按需求单标签也认一次（DA 别名表里没有包装行）。
+    for field in _packaging_spec()["fields"]:
+        index.setdefault(_key(field["name"]), field["code"])
     return index
 
 
 @lru_cache(maxsize=1)
 def _by_code() -> dict[str, dict]:
-    return {field["code"]: field for field in spec().get("fields", [])}
+    fields = list(spec().get("fields", [])) + packaging_family_fields()
+    return {field["code"]: field for field in fields}
 
 
 def match_code(param) -> Optional[str]:
@@ -118,7 +196,7 @@ def align(plan, family: Optional[str] = None) -> str:
     和 DA 的分组是两套口径，同一张表里混着两种分类没法看。
     """
     key = resolve_family(family if family is not None else getattr(plan, "product_family", None))
-    group_name = {g["key"]: g["name"] for g in spec().get("groups", [])}
+    group_name = _group_names()
     # 丢掉无名行：IntegrationParam.name 放宽成可空是为了别让一条坏数据毁掉整份参数表，
     # 但没有名字的参数在界面和报价里都无处安放，留着只会变成一行空白。
     rows = [p for p in (getattr(plan, "params", None) or [])
@@ -309,7 +387,7 @@ def as_prompt(family: Optional[str] = None) -> str:
         lines.append(f"◆ product_family = {key}（{family_name(key)}）适用 {len(applicable)} 项：")
         current = ""
         for field in applicable:
-            group = next((g["name"] for g in spec()["groups"] if g["key"] == field["group"]), "")
+            group = _group_names().get(field["group"], "")
             if group != current:
                 current = group
                 lines.append(f"  · {group}")
@@ -341,5 +419,6 @@ def as_prompt(family: Optional[str] = None) -> str:
 def reload_spec() -> None:
     """重跑生成脚本后不重启服务也能生效（运维用）。"""
     spec.cache_clear()
+    _packaging_spec.cache_clear()
     _name_index.cache_clear()
     _by_code.cache_clear()

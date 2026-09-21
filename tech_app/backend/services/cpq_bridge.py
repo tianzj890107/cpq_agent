@@ -27,8 +27,48 @@ class BridgeUnavailable(RuntimeError):
     """连不上一体化服务，或它连不上业务库。"""
 
 
+#: 落点冲突的两个稳定码（服务端 409 回的就是这两个）。界面靠它们弹「认回 / 新建」，
+#: 其余业务拒绝仍旧只是 400 + 一句文案。
+CONFLICT_CODES = ("no_candidate", "multiple_candidates")
+
+#: 落点冲突给用户看的统一文案（界面与 HTTP 层只有这一份，不再各写一句）。
+CONFLICT_MESSAGES = {
+    "no_candidate": "没有找到这张报价卡片。可以『选择已有报价卡片』或"
+                    "『新建报价卡片』（必须写原因）。",
+    "multiple_candidates": "这条回传命中了多张报价卡片，请先选定要落回的那一张。",
+}
+
+
+def is_conflict(exc) -> bool:
+    """这个业务错误是不是落点冲突（只有它需要 409 + 结构化 detail）。"""
+    return str(getattr(exc, "code", "") or "") in CONFLICT_CODES
+
+
+def conflict_detail(exc) -> dict:
+    """落点冲突的结构化 detail：`code` / `candidates` / `message` 三键，前端直接消费。"""
+    code = str(getattr(exc, "code", "") or "")
+    return {"code": code,
+            "candidates": list(getattr(exc, "candidates", []) or []),
+            "message": CONFLICT_MESSAGES.get(code)
+                       or str(getattr(exc, "message", "") or exc)}
+
+
 class BridgeRejected(RuntimeError):
-    """业务侧明确拒绝（权限、数据不合法…）。文案可直接给用户看。"""
+    """业务侧明确拒绝（权限、数据不合法…）。文案可直接给用户看。
+
+    `code` / `candidates` / `status` 是给**落点冲突**用的：服务端已经用 409 回了
+    「没有找到报价卡片 / 命中多张报价卡片」，如果在这里压成一句话，界面就只能显示
+    "回传失败"，用户无从选择。三个字段都有默认值，老调用点 `BridgeRejected("文案")`
+    的行为逐字不变（`code=""`、`status=400`）。
+    """
+
+    def __init__(self, message: str, *, code: str = "",
+                 candidates: Optional[list] = None, status: int = 400):
+        super().__init__(message)
+        self.message = str(message)
+        self.code = str(code or "")
+        self.candidates = list(candidates or [])
+        self.status = int(status or 400)
 
 
 def _post(path: str, token: str, payload: dict) -> dict:
@@ -44,12 +84,17 @@ def _post(path: str, token: str, payload: dict) -> dict:
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
         try:
-            message = (json.loads(raw) or {}).get("error") or raw
+            body = json.loads(raw)
+            body = body if isinstance(body, dict) else {}
         except json.JSONDecodeError:
-            message = raw
-        # 400/401/403 是业务判定，原样回给用户；5xx/503 是服务本身的问题。
+            body = {}
+        message = body.get("error") or raw
+        # 400/401/403/409 是业务判定，原样回给用户；5xx/503 是服务本身的问题。
         if exc.code in (400, 401, 403, 409):
-            raise BridgeRejected(str(message)[:400]) from exc
+            # 409 的载荷里带着 code 与 candidates：原样带走，交给 HTTP 层翻成结构化响应。
+            raise BridgeRejected(str(message)[:400], code=str(body.get("code") or ""),
+                                 candidates=body.get("candidates") or [],
+                                 status=exc.code) from exc
         raise BridgeUnavailable(f"CPQ 服务返回 {exc.code}：{str(message)[:200]}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise BridgeUnavailable(f"连不上 CPQ 服务（{CPQ_AUTH_BASE_URL}）：{exc}") from exc

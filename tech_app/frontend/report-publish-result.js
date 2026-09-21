@@ -33,25 +33,72 @@ function rpNowLocal(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `
 function rpRememberHandoff(result){try{const row=result||{};localStorage.setItem(`${RP_HANDOFF_NOTE_KEY}:${rpPid}`,JSON.stringify({handoff_id:String(row.handoff_id||''),task_no:String((row.handoff||{}).task_no||''),source:rpSourceState(row.source_task,row.handoff_id),at:rpNowLocal()}));}catch{/* 展示用摘要，写不进去不影响回传本身 */}}
 function rpHandoffNote(){try{const last=JSON.parse(localStorage.getItem(`${RP_HANDOFF_NOTE_KEY}:${rpPid}`)||'null');if(!last)return '——';return [`交接编号 ${last.handoff_id||'——'}`,last.task_no?`任务 ${last.task_no}`:'',last.source||'',last.at?`记录于 ${last.at}`:''].filter(Boolean).join(' · ');}catch{return '——';}}
 async function rpPrimaryAction(){try{if(rpReport.status==='published'){await api(`/api/projects/${encodeURIComponent(rpPid)}/process-report/new-version`,{method:'POST'});window.TechEmbed&&window.TechEmbed.embedded?window.TechEmbed.navigateToFile('summary.html',rpPid):location.href=`summary.html?project=${encodeURIComponent(rpPid)}`;return;}if(rpReport.status==='approved'){const recipients=rpView.scope.map(name=>({name,organization:'',channel:'平台通知'}));await api(`/api/projects/${encodeURIComponent(rpPid)}/process-report/publish`,{method:'POST',body:JSON.stringify({recipients,comment:'工艺评估报告已正式发布。'})});rpToast('报告已正式发布。');setTimeout(()=>location.reload(),450);return;}rpToast('报告尚未审核通过，请先在 3.2 审核报告完成审核。',true);}catch(error){rpToast(error.message||'发布操作失败',true);}}
+/* 项目实例号：页面已知就用，未知给空串 —— 服务端会用项目 meta 里的同一份实例号兜底
+   （cost_flow.business_case_of，与成本回传同一条口径），绝不在这里现编一个。 */
+function rpBusinessCaseId(){return String(rpReport?.business_case_id||rpAggregate?.business_case?.business_case_id||rpAggregate?.business_case_id||'');}
+/* 回传 / 重试的唯一出口：只有一处拼 body，避免恢复路径漏参数。 */
+function rpSendHandoff(extra){const body=Object.assign({note:'工艺评估报告已发布，回传销售经理继续报价。'},extra||{});return api(`/api/projects/${encodeURIComponent(rpPid)}/process-report/send-to-quote`,{method:'POST',body:JSON.stringify(body)});}
+/* 回传成功的说明行：既有文案逐字保留，另加"这一版是认回的"那种恢复留痕。 */
+async function rpHandoffLines(result){const row=result||{},handoff=row.handoff||{};const lines=[
+  `任务 ${handoff.task_no||''} 已发给${handoff.target_role_name||handoff.target_name||'销售经理'}`,
+  `进入报价第 ${row.next_step_no||3} 步「${row.next_step_name||'定价-利润加成'}」`,
+  row.already_sent?'同一版报告已经回传过，沿用已有交接':'',
+  row.new_card?'没有原报价卡片，已建立新的报价会话':'',
+  `随包带上报告 ${row.report_no||''} V${row.version||''}`,
+  row.handoff_id?`交接编号 ${row.handoff_id}`:'',
+].filter(Boolean);lines.push(await rpSourceLine(row.source_task,row.handoff_id));
+  const recovery=row.recovery||{};if(recovery.recovered_by||recovery.recovery_reason){lines.push(`这一版是认回原报价卡片：${[recovery.recovered_by,recovery.recovered_at,recovery.recovery_reason].filter(Boolean).join(' · ')}`);}
+  return lines.join(' · ');}
+/* 冲突恢复后的重试：成功后照常留一条交接摘要并刷新报告。 */
+async function rpRetryHandoff(extra,failureText){try{const result=await rpSendHandoff(extra);rpToast(await rpHandoffLines(result));rpRememberHandoff(result);await rpRefreshReport();}catch(error){rpToast(error.message||failureText,true);rpShowFailure(String((error&&error.code)||'handoff_failed'),error.message||failureText,error&&error.trace_id);}}
+/* 回传销售经理：带项目实例号发出；命中落点冲突时按服务端给的结构化出口**就地恢复** ——
+   · no_candidate        → 让用户选「认回已有 / 明确新建」（新建必须写原因）；
+   · multiple_candidates → 列出候选（会话号 / 标题 / 匹配方式）让人选定，不许替他挑。
+   没有用户确认绝不自动新建卡片；用户取消就什么都不做。 */
 async function rpSendReportToSales(){
   if((rpReport?.status||'')!=='published'){rpToast('报告尚未正式发布，不能回传销售经理。',true);return;}
   if(!window.confirm('确认把已发布的工艺评估报告回传销售经理继续报价？'))return;
   try{
-    const result=await api(`/api/projects/${encodeURIComponent(rpPid)}/process-report/send-to-quote`,{method:'POST',body:JSON.stringify({note:'工艺评估报告已发布，回传销售经理继续报价。'})});
-    const handoff=result.handoff||{};
-    const lines=[
-      `任务 ${handoff.task_no||''} 已发给${handoff.target_role_name||handoff.target_name||'销售经理'}`,
-      `进入报价第 ${result.next_step_no||3} 步「${result.next_step_name||'定价-利润加成'}」`,
-      result.already_sent?'同一版报告已经回传过，沿用已有交接':'',
-      result.new_card?'没有原报价卡片，已建立新的报价会话':'',
-      `随包带上报告 ${result.report_no||''} V${result.version||''}`,
-      result.handoff_id?`交接编号 ${result.handoff_id}`:'',
-    ].filter(Boolean);
-    lines.push(await rpSourceLine(result.source_task,result.handoff_id));
+    const result=await rpSendHandoff({business_case_id:rpBusinessCaseId()});
+    rpToast(await rpHandoffLines(result));
     rpRememberHandoff(result);
-    rpToast(lines.join(' · '));
     await rpRefreshReport();
-  }catch(error){rpToast(error.message||'回传销售经理失败',true);rpShowFailure((error&&error.code)||'handoff_failed',error.message||'回传销售经理失败',error&&error.trace_id);}
+  }catch(error){
+    const code=String((error&&error.code)||'');
+    const candidates=((error&&error.candidates)||[]).filter(Boolean);
+    if(code==='no_candidate'){
+      if(candidates.length){
+        const lines=candidates.map((row,index)=>`${index+1}. 会话 ${row.quote_session_id||row.session_id||'——'} · ${row.title||'报价卡片'} · ${row.linked_by||''}`);
+        const picked=window.prompt(`没有找到这张报价卡片。可以「选择已有报价卡片」，或「新建报价卡片」（必须写原因）。\n${lines.join('\n')}\n\n输入要落回的序号；取消则先不动：`,'1');
+        if(picked===null)return;
+        const chosen=candidates[Number(String(picked).trim())-1];
+        const caseId=String((chosen||{}).business_case_id||'');
+        if(!caseId){rpShowFailure(code,'候选里没有带业务实例号，无法自动认回；请在报价侧确认这张卡片后重试。');return;}
+        await rpRetryHandoff({business_case_id:caseId},'回传销售经理失败');
+        return;
+      }
+      const reason=window.prompt('没有找到这张报价卡片。可以「选择已有报价卡片」，或「新建报价卡片」（必须写原因）。\n请输入新建原因；取消则先不新建：','');
+      if(reason===null)return;
+      const text=String(reason).trim();
+      if(!text){rpToast('新建报价卡片必须写明原因，未提交。',true);return;}
+      await rpRetryHandoff({create_new:true,create_reason:text},'回传销售经理失败');
+      return;
+    }
+    if(code==='multiple_candidates'){
+      if(!candidates.length){rpShowFailure(code,'这条回传命中了多张报价卡片，但没有可选的候选清单，请让报价侧确认后再试。');return;}
+      const lines=candidates.map((row,index)=>`${index+1}. 会话 ${row.quote_session_id||row.session_id||'——'} · ${row.title||'报价卡片'} · ${row.linked_by||''}`);
+      const picked=window.prompt(`这条回传命中了多张报价卡片，请先选定要落回的那一张：\n${lines.join('\n')}\n\n输入序号：`,'1');
+      if(picked===null)return;
+      const chosen=candidates[Number(String(picked).trim())-1];
+      if(!chosen){rpToast('没有选中有效的候选报价卡片，未提交。',true);return;}
+      const caseId=String(chosen.business_case_id||'');
+      if(!caseId){rpShowFailure(code,'候选里没有带业务实例号，无法自动认回；请在报价侧确认这张卡片后重试。');return;}
+      await rpRetryHandoff({business_case_id:caseId},'回传销售经理失败');
+      return;
+    }
+    rpToast(error.message||'回传销售经理失败',true);
+    rpShowFailure(code||'handoff_failed',error.message||'回传销售经理失败',error&&error.trace_id);
+  }
 }
 async function rpStart(){if(!rpPid){if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.exitToTechHome();return;}location.href='home.html';return;}try{const [reportResult,aggregate]=await Promise.all([api(`/api/projects/${encodeURIComponent(rpPid)}/process-report`),api(`/api/projects/${encodeURIComponent(rpPid)}/summary`)]);rpReport=reportResult.report||{project_id:rpPid,status:'draft'};rpAggregate=aggregate;rpView=rpLiveView(rpReport,aggregate);rpRender();}catch(error){document.querySelector('#app').innerHTML=`<section class="title-section"><h1 class="form-title">发布工艺评估报告</h1><p style="color:#6b7280">页面加载失败：${rpEsc(error.message)}</p></section>`;}}
 // 3.3 只展示真实报告与真实发布记录，未产生的信息不再回填参考项目的默认数据。

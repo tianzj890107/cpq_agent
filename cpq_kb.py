@@ -19,10 +19,12 @@ IF NOT EXISTS`，与 cpq_auth.py 同套路。
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
 import sqlite3
+from datetime import datetime
 from typing import Any, Optional
 
 import cpq_db
@@ -34,6 +36,12 @@ SCHEMA = (os.getenv("CPQ_KB_SCHEMA") or "cpq_kb").strip() or "cpq_kb"
 class KbUnavailable(RuntimeError):
     """PG 连不上 / schema 或表缺失。不回落空表，直接让调用方报错。"""
 
+
+#: 数据来源分层（Spec §3）：demo = 演示基线；workbook = 权威工作簿规则；
+#: dwg_confirmed = 真实 DWG 解析 + 人工确认；unknown = 历史入库未分类（生产预检据此阻断）。
+SOURCE_TYPES = ("demo", "workbook", "dwg_confirmed", "unknown")
+#: 人工复核状态闭集（与 kb_packaging_cost_formula.review_status 的 CHECK 一致）。
+REVIEW_STATUSES = ("draft", "reviewed", "retired")
 
 KB_TABLES = (
     "kb_component",
@@ -64,6 +72,10 @@ KB_TABLES = (
     "kb_packaging_cost_formula",
     "kb_packaging_logistics_rule",
     "kb_packaging_match_weight",
+    # 第 2 批（上线闭环）补齐：本地 da_schema.sql 有、PG 快照此前没有的两张包装表。
+    # 缺这两张 → 走 PG 快照的 34 上它们永远是空的（kb_repo.py:928/936 在读）。
+    "kb_packaging_cost_content",
+    "kb_packaging_tooling_rule",
 )
 
 # 每张表的业务主键（ON CONFLICT 的目标）。取值与 da_schema.sql 的
@@ -96,6 +108,8 @@ KB_KEYS = {
     "kb_packaging_cost_formula": ("formula_code",),
     "kb_packaging_logistics_rule": ("rule_code",),
     "kb_packaging_match_weight": ("dimension",),
+    "kb_packaging_cost_content": ("content_code",),
+    "kb_packaging_tooling_rule": ("tooling_code",),
 }
 
 # 单项也必须写成 1-元组 ("x",)：少了那个逗号就退化成字符串，ON CONFLICT ("c","o",...)
@@ -451,6 +465,13 @@ _DDL_TEMPLATE = [
     applicable_industries text,
     business_status       text,
     industry              text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source                text,
     version               text,
     effective_from        text,
@@ -475,6 +496,13 @@ _DDL_TEMPLATE = [
     is_optional        bigint NOT NULL DEFAULT 0 CHECK (is_optional IN (0, 1)),
     note               text,
     industry           text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source             text,
     version            text,
     effective_from     text,
@@ -494,6 +522,13 @@ _DDL_TEMPLATE = [
     control_point      text,
     parallel_ok        bigint,
     industry           text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source             text,
     version            text,
     effective_from     text,
@@ -516,6 +551,13 @@ _DDL_TEMPLATE = [
     moq                 bigint,
     note                text,
     industry            text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source              text,
     version             text,
     effective_from      text,
@@ -539,6 +581,12 @@ _DDL_TEMPLATE = [
     review_status       text NOT NULL DEFAULT 'draft'
                         CHECK (review_status IN ('draft', 'reviewed', 'retired')),
     industry            text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source              text,
     version             text,
     effective_from      text,
@@ -559,6 +607,13 @@ _DDL_TEMPLATE = [
     refund_condition   text,
     note               text,
     industry           text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source             text,
     version            text,
     effective_from     text,
@@ -574,14 +629,67 @@ _DDL_TEMPLATE = [
     hard_gate          bigint,
     rule_expr          text,
     industry           text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
     source             text,
     version            text,
     effective_from     text,
     status             text NOT NULL DEFAULT 'active',
     created_at         text,
     updated_at         text
-);"""
-]
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_cost_content (
+    content_code     text PRIMARY KEY,
+    name             text NOT NULL,
+    category         text,                 -- 纸箱/平卡/隔卡/胶袋/护角/卡板/标签…
+    material_spec    text,
+    length_mm        double precision,
+    width_mm         double precision,
+    height_mm        double precision,
+    gsm              double precision,
+    usage_qty        double precision,                 -- 用量
+    material_price   double precision,                 -- 材料单价
+    units_per_pack   double precision,                 -- 装数
+    formula_code     text,                 -- FORMULA_CATALOG 的 PKG-P-*
+    industry         text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
+    source           text, version text, effective_from text,
+    status           text NOT NULL DEFAULT 'active',
+    note             text, created_at text, updated_at text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_packaging_tooling_rule (
+    tooling_code     text PRIMARY KEY,
+    name             text NOT NULL,
+    process_code     text,                 -- 烫金/丝印/击凹凸/模切/装配线
+    mode             text NOT NULL CHECK (mode IN (
+                         'one_off', 'lifetime', 'committed', 'refund', 'customer_supplied')),
+    tooling_cost     double precision,
+    tooling_lifetime double precision,
+    refund_threshold double precision,
+    refundable       bigint NOT NULL DEFAULT 0 CHECK (refundable IN (0, 1)),
+    industry         text NOT NULL DEFAULT 'packaging',
+    source_type         text NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          text,
+    source_sha256       text,
+    parser_version      text,
+    confirmed_by        text,
+    confirmed_at        text,
+    source           text, version text, effective_from text,
+    status           text NOT NULL DEFAULT 'active',
+    note             text, created_at text, updated_at text
+);"""]
 
 _KB_META_DDL = (
     "CREATE TABLE IF NOT EXISTS {schema}.kb_meta ("
@@ -592,6 +700,29 @@ _KB_META_DDL = (
 # 增量列：老库上 CREATE TABLE IF NOT EXISTS 不会补列，必须显式 ALTER（幂等）。
 # 包装第 3 批：11 张行业主体表补 industry（空 = 通用，三行业默认行为不变），
 # 费率库另补 minimum_charge（包装费率的最低收费）。
+# 第 2 批（上线闭环）：9 张包装表补数据来源分层列（老库上 CREATE TABLE IF NOT EXISTS 不补列）。
+# 与 da_db._ADDED_COLUMNS 一一对应；两侧老库补列口径必须一致。
+_PACKAGING_PROVENANCE_COLUMNS: tuple = (
+    ("source_type", "text NOT NULL DEFAULT 'unknown'"),
+    ("source_ref", "text"),
+    ("source_sha256", "text"),
+    ("parser_version", "text"),
+    ("confirmed_by", "text"),
+    ("confirmed_at", "text"),
+)
+#: 9 张包装扩展表 —— 数据分层的适用范围。`kb_deploy_preflight` 的 provenance /
+#: unclassified_rows 只统计这些表；其余 kb_* 表没有 source_type 列，不得因此判 unknown。
+PACKAGING_TABLES: tuple = (
+    "kb_packaging_box_type", "kb_packaging_part_template", "kb_packaging_process_template",
+    "kb_packaging_insert_accessory", "kb_packaging_cost_formula",
+    "kb_packaging_logistics_rule", "kb_packaging_match_weight",
+    "kb_packaging_cost_content", "kb_packaging_tooling_rule",
+)
+#: 关键主体表：上线预检要求这几张非空（缺行 = 知识库没灌进去）。
+PACKAGING_REQUIRED_TABLES: tuple = PACKAGING_TABLES[:7]
+
+_PACKAGING_PROVENANCE_TABLES: tuple = PACKAGING_TABLES
+
 _ADDED_COLUMNS: tuple = (
     ("kb_component", "industry", "text"),
     ("kb_standard_part", "industry", "text"),
@@ -621,6 +752,12 @@ _REFERENCE_RE = re.compile(r"REFERENCES \{schema\}\.(\w+)")
 
 def _statement_name(statement: str) -> str:
     return _TABLE_NAME_RE.search(statement).group(1)
+
+# 包装分层列：9 张包装表逐列补（老库上 CREATE TABLE IF NOT EXISTS 不补列）。
+_ADDED_COLUMNS = tuple(_ADDED_COLUMNS) + tuple(
+    (table, column, definition)
+    for table in _PACKAGING_PROVENANCE_TABLES
+    for column, definition in _PACKAGING_PROVENANCE_COLUMNS)
 
 
 def _build_create_order(statements: list) -> tuple:
@@ -783,6 +920,28 @@ def snapshot(since: Optional[Any] = None) -> dict:
                             % (SCHEMA, str(exc).splitlines()[0][:160])) from exc
     finally:
         conn.close()
+
+
+def export_snapshot(path=None) -> dict:
+    """导入前留底：把当前整包快照（含 `kb_version`）导成 JSON，用于回滚与差异比对。
+
+    **只读**：不写库、不动 `kb_version`（`snapshot()` 本身也只读）；`path` 为空时
+    只返回 dict、不落盘。DEPLOYMENT.md 的「知识库（cpq_kb）上线」小节是它的使用口径：
+    先导出留底 → 再 `--confirm` 导入，出问题就按这份 JSON 恢复。
+    """
+    snap = snapshot()
+    payload = {"export_version": "kb-snapshot-export/1",
+               "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+               "schema": SCHEMA,
+               "kb_version": snap.get("kb_version"),
+               "tables": snap.get("tables") or {}}
+    if path:
+        target = pathlib.Path(path).expanduser()
+        if target.parent and not target.parent.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                          encoding="utf-8")
+    return payload
 
 
 # --------------------------------------------------------------------------- #

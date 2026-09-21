@@ -448,6 +448,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_box_type (
     applicable_industries TEXT,
     business_status     TEXT,                          -- 样例工作簿的「状态」列（标准/试用）
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -475,6 +482,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_part_template (
     is_optional         INTEGER NOT NULL DEFAULT 0,
     note                TEXT,
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -497,6 +511,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_process_template (
     control_point       TEXT,
     parallel_ok         INTEGER,                       -- 可并行 1/0
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -522,6 +543,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_insert_accessory (
     moq                 INTEGER,
     note                TEXT,
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -547,6 +575,12 @@ CREATE TABLE IF NOT EXISTS kb_packaging_cost_formula (
     review_status       TEXT NOT NULL DEFAULT 'draft'
                         CHECK (review_status IN ('draft', 'reviewed', 'retired')),
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -571,6 +605,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_logistics_rule (
     refund_condition    TEXT,
     note                TEXT,
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -588,6 +629,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_match_weight (
     hard_gate           INTEGER,                       -- 1 = 硬门槛（不满足直接淘汰）
     rule_expr           TEXT,
     industry            TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source              TEXT,
     version             TEXT,
     effective_from      TEXT,
@@ -612,6 +660,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_cost_content (
     units_per_pack   REAL,                 -- 装数
     formula_code     TEXT,                 -- FORMULA_CATALOG 的 PKG-P-*
     industry         TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source           TEXT, version TEXT, effective_from TEXT,
     status           TEXT NOT NULL DEFAULT 'active',
     note             TEXT, created_at TEXT, updated_at TEXT
@@ -629,6 +684,13 @@ CREATE TABLE IF NOT EXISTS kb_packaging_tooling_rule (
     refund_threshold REAL,
     refundable       INTEGER NOT NULL DEFAULT 0 CHECK (refundable IN (0, 1)),
     industry         TEXT NOT NULL DEFAULT 'packaging',
+    source_type         TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref          TEXT,
+    source_sha256       TEXT,
+    parser_version      TEXT,
+    confirmed_by        TEXT,
+    confirmed_at        TEXT,
     source           TEXT, version TEXT, effective_from TEXT,
     status           TEXT NOT NULL DEFAULT 'active',
     note             TEXT, created_at TEXT, updated_at TEXT

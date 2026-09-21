@@ -673,11 +673,16 @@ MATCH_WEIGHTS = [
 INDUSTRY = "packaging"
 
 
-def _packaging_row(row: dict, source: str) -> dict:
-    """给一条包装扩展表数据补公共列（industry/source/version/effective_from/status/时间戳）。"""
+def _packaging_row(row: dict, source: str, *, source_type: str = "") -> dict:
+    """给一条包装扩展表数据补公共列（industry/source/version/effective_from/status/时间戳）。
+    第 2 批 §3（数据分层）：`source_type` 缺省写 `demo` —— 本模块 seed 的全是演示基线，
+    可以被读、被展示，但不得静默参与正式测算；`seed_packaging_cost_rules()` 显式传
+    `workbook`（权威规则行）。
+    """
     out = dict(row)
     out["industry"] = INDUSTRY
     out["source"] = source
+    out["source_type"] = source_type or "demo"
     out.setdefault("version", VERSION)
     out.setdefault("effective_from", SEED_DATE)
     out.setdefault("status", "active")
@@ -712,7 +717,7 @@ def seed_packaging_cost_rules(*, rules_path=None, overwrite: bool = False) -> di
 
     | 库表现状 | 行为 |
     | --- | --- |
-    | `formula_code` 不存在 | 插入：`review_status='reviewed'`、`source='packaging_rules_json'` |
+    | `formula_code` 不存在 | 插入：`review_status='reviewed'`、`source='packaging_rules_json'`、`source_type='workbook'` |
     | 同来源、`formula_version` 不同 | 更新（规则升级） |
     | 同来源、`formula_version` 相同 | 跳过（幂等，重复 seed 不新增行） |
     | 来源不是 `packaging_rules_json` | 跳过，计入 `skipped_user_modified` |
@@ -742,7 +747,7 @@ def seed_packaging_cost_rules(*, rules_path=None, overwrite: bool = False) -> di
             "source_ref": str(item.get("source_ref") or ""),
             "formula_version": rule_set,
             "review_status": "reviewed",
-        }, RULES_JSON_SOURCE)
+        }, RULES_JSON_SOURCE, source_type="workbook")
         existing = db.query_one(
             "SELECT formula_code, formula_version, review_status, source "
             "FROM kb_packaging_cost_formula WHERE formula_code = ?", (code,))

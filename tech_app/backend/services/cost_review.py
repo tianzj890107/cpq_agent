@@ -249,13 +249,16 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
     written = plan.material_writes[-1] if plan.material_writes else None
     # 「整合参数」这个收口环节从 2.2 搬到了这里：报价必填项要在**出成本、发报价之前**
     # 补齐，而发报价已经是财务的动作。表格的行由 DA 字典定，见 product_params。
-    checklist = product_params.checklist(plan.params) if plan.params else None
+    # 4.3 的价格测算单按行业锁定的族出清单：包装项目看的是盒型/内尺寸，不是工作温度。
+    family = integration.project_family(project_id)
+    checklist = product_params.checklist(plan.params, family) if plan.params else None
     review_dict = review.model_dump()
     review_dict["params_final"] = bool(plan.params_final)
     # 「带缺口继续」的签字与"报价必填到底齐没齐"要一并交给财务：缺口是**人签过字的**，
     # 就不能再按同一批缺口把财务拦在门口（L1 生成依赖与 L4 写库 / 发报价 / 审核发布
     # 仍各自硬校验，不受影响）。复用 integration 的唯一实现，这里不另算一份。
-    review_dict["params_complete"] = bool(plan.params) and not integration.missing_required(plan)
+    review_dict["params_complete"] = (bool(plan.params)
+                                      and not integration.missing_required(plan, family))
     review_dict["waiver"] = integration.waiver_summary(plan)
     # 本步自己的缺口与签字：前端据此决定「仍要继续」还弹不弹 —— 同一批缺口签过字就
     # 不弹第二次；缺口本身如实带出去（签字只放行，不抹掉）。
@@ -265,7 +268,7 @@ def payload(project_id: str, ir: Optional[DesignIR], plan, review: CostReview) -
         "review": review_dict,
         "param_checklist": checklist,
         "params_plan": plan.params.model_dump() if plan.params else None,
-        "required_missing": len(integration.missing_required(plan)),
+        "required_missing": len(integration.missing_required(plan, family)),
         # 参数表里「成品编码」那一格要按它决定是显示「由系统生成」还是给出警告，
         # 说明手上这个号主数据里并不存在。
         "has_material_code": bool(plan.material_writes),

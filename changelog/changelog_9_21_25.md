@@ -4418,3 +4418,828 @@ github : e1ef784e41f1af7214d588650f8adbcad529511b
 - `裕同包装项目-待开发/`：内含 `酒盒.dwg` / `圆盘盒.dwg` 真实客户图纸与
   `报价逻辑-0903.xlsx`、`成本测算明细.xlsx` 等业务表格，按既有约定（见 ## 153）
   一律只读、不纳入提交；本批未改动其中任何文件。
+
+---
+
+## 200. DWG 转换器在 34 生产上线（配置 / 部署文档 / 上线门禁）Spec + 红测（20 条 10 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+新五批（上线闭环）**第 1 批**。前提已完成、不在本批范围：ODA File Converter 27.1 与
+LibreDWG 0.14 已在本机与 34 安装并完成转换质量对比（两份样本主要二维几何一致、渲染 0 像素
+差异、ODA 的 DXF 更干净），业务/法务已确认 ODA 可用于本 CPQ 生产环境 → **ODA 主用、仅在
+主转换器明确失败时回退 LibreDWG**。
+
+本批**只写 Spec 与红测，未改任何生产代码**；目标是让 34 上的 8010 真的调到转换器，并把
+「怎么配、怎么验、怎么判定」固化成可执行、可审计、可复现的部署口径。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/dwg-converter-production-rollout.md` | 批次 Spec（177 行）：§2 配置取值表（env 名一律取自 `cad_converter.service` 常量，不手抄）、§3 部署文档必备内容、§4 门禁追加项、§5 真机验收证据要求、§6 正确失败口径、§8 禁止事项（不授权部署） |
+| `tests/test_dwg_converter_production_rollout_red.py` | 20 条（A 部署文档 10 / B 配置口径 4 / C 门禁与失败 3 / D 证据链 3），全部离线 |
+
+### 现场问题（实测）
+
+- `DEPLOYMENT.md` 全文 `grep -E "DWG|转换器|dwg_deploy_gate|dwg_conversion_smoke|dwg_sample_e2e"`
+  → **0 命中**：部署文档没有任何转换器配置段，34 上线时没人给 8010 配 `DWG_CONVERTER_*`，
+  这正是「线上 2.1 说 DWG 不能解析、只能退化成看 PNG」的直接原因。
+- `dwg_deploy_gate.py` 现有 18 项门禁里没有「部署文档已写明转换器配置」，漏配无人拦。
+- 代码侧已就绪且本地红测全绿（实测）：`test_dwg_file_capability_preflight_red` 29 OK、
+  `test_dwg_conversion_adapter_red` 42 OK(1 skip)、`test_dwg_conversion_quality_repair_red` 43 OK、
+  `test_dxf_cad_ir_red` 46 OK(1 skip)、`test_dwg_final_acceptance_red` 53 OK。
+
+### 红测实测原文（实现前）
+
+```
+tests.test_dwg_converter_production_rollout_red    Ran 20 tests  FAILED (failures=10)
+```
+
+红点：A 组 9 条（a1/a2/a3/a4/a5/a7/a8/a9/a10）+ C1（`GATE_ITEMS` 缺
+`converter_rollout_documented`）。绿 10 条护栏：a6（生效方式，文档已有通用说明）、
+B1–B4（`AUTO_PROBE` 首选 oda、ODA 7 参数形状、wrapper 逐项排在 exe 前且非法 wrapper 判
+`wrapper_invalid`、未装转换器时 `support_claim=orchestration_only`）、C2（production 下
+`skip` 一律算 `fail`）、C3（配 oda 但二进制缺失 → 稳定错误码、不换适配器、不启用未配置回退）、
+D1–D3（fake 产物永不判 B 层通过、样本 E2E 输出 sha256/转换器/版本、写验收记录必须给审批人）。
+
+### 回归（实跑原文）
+
+```
+tests.test_dwg_converter_production_rollout_red            Ran 20 tests  FAILED (failures=10)   # 本批红测
+tests.test_dwg_file_capability_preflight_red               Ran 29 tests  OK
+tests.test_dwg_conversion_adapter_red                      Ran 42 tests  OK (skipped=1)
+tests.test_dwg_conversion_quality_repair_red               Ran 43 tests  OK
+tests.test_dxf_cad_ir_red                                  Ran 46 tests  OK (skipped=1)
+tests.test_dwg_final_acceptance_red                        Ran 53 tests  OK
+tests.test_quote_nonstandard_path_red                      Ran 25 tests  OK
+tests.test_quote_packaging_box_selection_red               Ran 20 tests  OK
+```
+
+### 未完成的能力声明
+
+- 本条只交付 Spec + 红测（交付时 `DEPLOYMENT.md` 与 `dwg_deploy_gate.py` 一行未改，10 条红测红）。
+- 记录时点复测：工作区已有**实现方未提交**的改动（`DEPLOYMENT.md` 新增「DWG 转换器（包装图纸）」
+  段）→ A 组 10 条转绿；该套红测实测 `Ran 20 tests  FAILED (failures=1)`，唯一红点是
+  `test_c1_gate_has_a_documented_rollout_item`：`dwg_deploy_gate.py` 的
+  `converter_rollout_documented` 项尚未落地（`GATE_ITEMS` 仍为 18 项）。实现是否入库以
+  实现方提交为准，本条不代为实现方声明。
+- 34 上的转换器**仍未接入 8010**：本规格不授权部署、不重启服务、不连服务器。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未引入新依赖。
+
+---
+
+## 201. 包装知识库权威数据入库与 34 上线预检（Spec + 红测，20 条 15 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+新五批（上线闭环）**第 2 批**。用户口径：知识库表要真的写进 34；现有 mock 数据只能作演示/测试
+基线；新拆出来的权威规则要按来源入库。本批**只写 Spec 与红测，未改任何生产代码**。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/packaging-kb-authoritative-rollout.md` | 批次 Spec（192 行）：§2 三处一致（SQLite schema / PG DDL / 快照清单）、§3 三类数据分层与追溯列、§4 导入器与版本/回滚、§5 上线预检纯函数与五条 no-go 判定、§6 部署文档小节 |
+| `tests/test_packaging_kb_authoritative_rollout_red.py` | 20 条（A 三处一致 5 / B 数据分层 6 / C 导入器与回滚 4 / D 上线预检与文档 5），全部离线 |
+
+### 现场问题（实测）
+
+1. 34 上 `relation "cpq_kb.kb_packaging_box_type" does not exist`：包装知识库检索 503、`4.1`
+   成本全部失败；本地有 DDL 与 seed，但**没有任何上线预检**，缺表照样上线。
+2. **三处不一致（本次实跑）**：
+
+   ```
+   sqlite kb tables: 29    pg KB_TABLES: 27
+   in sqlite not in pg: ['kb_packaging_cost_content', 'kb_packaging_tooling_rule']
+   ```
+
+   `kb_repo.py:928/936` 正是从快照读这两张表（`_table("kb_packaging_cost_content")` /
+   `_table("kb_packaging_tooling_rule")`），`da_seed_packaging.py` 也 seed 它们，但
+   `cpq_kb.py` 全文 `grep -c` 两张表 → **0** → 走 PG 快照的 34 上这两张表**永远是空的**。
+3. 9 张包装表没有「演示 vs 权威」的可判定字段（`grep -c source_type cpq_kb.py` → 0）：
+   演示的 12 条盒型一旦灌进生产，会被当成真实可报价盒型推荐给客户。
+
+### 红测实测原文（实现前）
+
+```
+tests.test_packaging_kb_authoritative_rollout_red    Ran 20 tests  FAILED (failures=15)
+```
+
+红 15 条：A1/A3/A4/A5（缺表 + 读点与 seed 写点不在快照清单）、B1–B5（无分层常量、
+两张 schema 无 `source_type`、演示行未标 demo、规则行未标 workbook、缺 DWG 确认样本列）、
+C3（无导入前快照/回滚入口）、D1–D5（无 `kb_deploy_preflight.py` 与部署文档小节）。
+绿 5 条护栏：A2（`KB_KEYS` 覆盖 + 既有 27 张相对顺序）、B6（成本引擎只认 `reviewed`）、
+C1（导入器默认 dry-run）、C2（`kb_version` 只在 changed 非零时递增）、C4（导入报告逐表行数）。
+
+### 回归（实跑原文）
+
+```
+tests.test_packaging_kb_authoritative_rollout_red    Ran 20 tests  FAILED (failures=15)   # 本批红测
+tests.test_kb_in_pg_http_snapshot_red                Ran 22 tests  OK
+tests.test_packaging_knowledge_base_seed_red         Ran 46 tests  OK
+tests.test_packaging_quote_close_loop_red            Ran 96 tests  OK
+tests.test_packaging_box_type_matching_red           Ran 51 tests  OK
+tests.test_quote_packaging_box_selection_red         Ran 20 tests  OK
+```
+
+`test_packaging_cost_engine_red`（3 红）与 `test_packaging_cost_rule_routing_red`（1 红）是
+**既有红**（最低收费口径裁决，与 `PKG-C-V-GROOVE` 最低收费 150/120 的条款冲突），本批零新增失败。
+
+### 未完成的能力声明
+
+- 本条只交付 Spec + 红测：`cpq_kb.py`、`da_schema.sql`、`da_seed_packaging.py`、
+  `scripts/`、`DEPLOYMENT.md` 一行未改，15 条红测仍红。
+- 34 上的包装知识库**仍未建表/灌数**：本规格不授权部署、不连服务器、不写生产库。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未引入新依赖。
+
+## 202. 项目必须从报价开始（统一入口 / 落点分种类 / 恢复通道）Spec + 红测（22 条 21 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+新五批（上线闭环）**第 3 批**。用户拍板：一个项目应该从报价开始；知识库与 DWG 原生解析另批处理。
+本批解决**流程身份与回传落点**：技术项目建项时就带报价来源，入口分「正式报价」与「内部测试」两种；
+来源缺失时 4→5 与 5.3 两条回传不再把人堵在一句无法执行的文案上。只写 Spec 与红测，**未改任何生产代码**。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/quote-first-project-entry.md` | 批次 Spec（188 行）：§2 入口分级纯函数、§3 报价→技术建项携带实例号、§4 落点冲突的结构化出口（桥 → HTTP → 前端）、§5 5.3 回传销售恢复通道、§6 历史项目一次性恢复 |
+| `tests/test_quote_first_project_entry_red.py` | 22 条（A 入口分级 6 / B 建项携带实例号 3 / C 落点冲突出口 6（含 1 条受控假库护栏）/ D 5.3 恢复通道 5 / E 恢复接口 2），全部离线 |
+
+### 现场问题（实测）
+
+1. **P0：独立技术项目卡死在 5.3**。服务器实测（项目 `96a959b0264c`，报告已发布）回传销售报
+   「没有找到这条业务实例对应的报价卡片。确认要新建报价卡片时，请填写新建原因后重试。」
+   而 `ReportQuoteAction`（`tech_app/backend/main.py:148`）只有 `note` / `target_type` /
+   `target_role_code` / `target_user_id` / `source_task_id` —— **没有** `create_new` /
+   `create_reason`，发布页也没有这两个交互：用户**无处填写**，只能反复点重试。
+2. **结构化冲突字段在桥接层就被丢掉**（本次实测）：
+   - `cpq_suite_server.py:763` 已经用 409 回 `{code, candidates, error}`；
+   - `tech_app/backend/services/cpq_bridge.py:44` 的 `_post` 把它收敛成 `BridgeRejected(str(message))`；
+   - `main.py:3385` / `cost_flow.py:50` / `report_workflow.py:796` 三处翻译统一变成「400 + 纯字符串」；
+   - `tech_app/frontend/workflow.js:30` 的 `apiError` 只返回字符串，`api()` 抛 `new Error(文案)`，
+     于是 `report-publish-result.js:54` 读的 `error.code` **恒为 undefined**。
+3. **技术侧独立建项无门禁**：`POST /api/projects`（`main.py:1208` `upload_project`）的表单字段只有
+   `file` / `files` / `note` / `attachments`，不带任何报价线索也能建项 —— 现场那次独立建项就是这么来的。
+4. **报价 → 技术建项不带实例号**：`grep -c business_case_id tech_app/frontend/tech-task.js` → **0**；
+   `requirement_service.QUOTE_SOURCE_KEYS` 只有 5 个键；全仓 `save_business_case` 的**生产调用点为 0**
+   （只有 `store.py` 定义 + `tests/` + `scripts/cpq_eval/prodkit.py` 在用）。
+5. **没有历史项目恢复入口**：全仓 `grep -rn "entry_origin|internal_test|classify_entry|quote-link/recover"`
+   → 无（`project_access.py:179` 的 `_quote_link_visible` 只是只读可见性判断）。
+
+### 红测实跑原文
+
+```
+tests.test_quote_first_project_entry_red    Ran 22 tests  FAILED (failures=21)
+```
+
+红点 21 条：A1–A6（`tech_app/backend/services/entry_origin.py` 不存在）、B1–B3、C1–C4 与 C6、D1–D5、E1–E2。
+绿 1 条护栏：C5 —— 带线索的 `cost_to_process` 目前**仍正确**落在原报价卡片上（本批只补出口，
+不许动这段裁决）。典型失败原文：
+
+```
+AssertionError: cpq_bridge.BridgeRejected 必须接受 code / candidates / status（Spec §4）：
+BridgeRejected() takes no keyword arguments
+AssertionError: 3.3 回传销售的入参缺 ['business_case_id', 'create_new', 'create_reason']
+AssertionError: 缺少 tech_app/backend/services/entry_origin.py（Spec §2）
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_first_project_entry_red             Ran 22 tests  FAILED (failures=21)   # 本批红测
+tests.test_tech_quote_business_case_linkage_red      Ran 39 tests  OK
+tests.test_tech_handoff_atomic_idempotent_red        Ran 35 tests  OK
+tests.test_tech_home_timeline_and_publish_closure_red Ran 35 tests OK
+tests.test_packaging_quote_close_loop_red            Ran 96 tests  OK
+```
+
+本批只新增 `docs/specs/` 与 `tests/` 两个文件，既有红测口径（`cpq_case_link.decide` 四态、
+五元组幂等键、包装 10 项必填、`RECOMMEND_THRESHOLD` 70）零改动、零新增失败。
+
+### 未完成的能力声明
+
+- 本条只交付 Spec + 红测：`tech_app/backend/`、`tech_app/frontend/`、`cpq_tech_bridge.py`、
+  `cpq_suite_server.py` 一行未改，21 条红测仍红。
+- 技术侧独立建项入口、5.3 恢复交互、历史项目恢复接口**都还没实现**：现场 5.3 仍会卡死。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未引入新依赖。
+
+## 203. 包装专属参数族与技术侧包装闭环收口（Spec + 红测，20 条 17 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+新五批（上线闭环）**第 4 批**。用户拍板口径：包装使用同一套字段字典；技术侧 3.2 不再出现
+工作温度、机械号这类电池/通用成品字段；盒型确认后生成参数化 BOM 并进工艺路线与成本。
+本批**只写 Spec 与红测，未改任何生产代码**。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/packaging-tech-param-bom-route-cost-closure.md` | 批次 Spec（168 行）：§2 包装族与 `family_for_industry`、§3 3.2/4.3 按行业锁族、§4 与盒型匹配/BOM 的键名与必填对齐 |
+| `tests/test_packaging_tech_param_bom_route_cost_closure_red.py` | 20 条（A 包装族 6 / B 单一来源 3 / C 按行业锁族 4 / D 成本与链路对齐 4 / E 基线护栏 3），全部离线 |
+
+### 现场问题（实测）
+
+1. 服务器实测：酒盒项目在技术侧 **3.2 参数推荐**被判成「产品族：其他成品」，随后要求填写
+   产品系列 / 产品型号 / 重量 / 工作温度 / 机械号。本地取证与该表现逐项对应：
+
+   ```
+   pp.family_keys()      -> ['li_primary','li_ion_pack','ess','pv_module','other']   # 没有包装族
+   pp.fields_for("other") -> 14 项，必填 7 项：product_series / product_model /
+                             product_item_code / product_item_name / max_dimension /
+                             weight / operating_temperature
+   ```
+
+2. `as_prompt / align / checklist / missing_required` **都已支持 `family=`**，但四个调用点全部按默认走：
+   `integration.py:228/240`、`main.py:3083/3175`、`cost_review.py:252` —— 族由模型自由决定；
+   `resolve_family` 对不认识的值一律退回 `other`（`product_params.py:47`），模型写「包装盒」也没用。
+3. 包装需求字段 `industry_templates.PACKAGING_SPEC`（实测 **64 键 / 10 必填**）目前只被
+   1.1 表单、需求抽取、需求单 PDF、完整性预检使用，**3.2 与 4.3 都不用它**。
+4. 包装链路本身已建好（本批只对齐参数来源，不重做），既有红测实跑全绿：
+   `test_packaging_parametric_bom_red` 57 OK、`test_packaging_process_route_red` 57 OK、
+   `test_packaging_box_type_matching_red` 51 OK、`test_packaging_requirement_template_red` 35 OK。
+   缺口只是：`packaging_bom.INNER_DIM_KEYS` 要的 `inner_length/inner_width/inner_height`
+   正是包装字段，而 3.2 交给工艺经理填的却是 `weight` / `operating_temperature`。
+
+### 红测实跑原文
+
+```
+tests.test_packaging_tech_param_bom_route_cost_closure_red    Ran 20 tests  FAILED (failures=17)
+```
+
+红点 17 条：A1–A6、B1–B3、C1–C4、D1–D4。绿 3 条护栏：E1（`other` 族仍 14 项）、
+E2（需求模板仍 64 键 / 10 必填）、E3（DA 五族相对顺序未变）。典型失败原文：
+
+```
+AssertionError: product_params 必须定义 PACKAGING_FAMILY（包装族的 key，Spec §2）——
+现在只有 li_primary/li_ion_pack/ess/pv_module/other 五个族，包装项目无处可去，只能落进「其他成品」
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_packaging_tech_param_bom_route_cost_closure_red   Ran 20 tests  FAILED (failures=17)  # 本批红测
+tests.test_packaging_requirement_template_red                Ran 35 tests  OK
+tests.test_packaging_box_type_matching_red                   Ran 51 tests  OK
+tests.test_packaging_parametric_bom_red                      Ran 57 tests  OK
+tests.test_packaging_process_route_red                       Ran 57 tests  OK
+tests.test_industry_registry_unified_red                     Ran 20 tests  OK
+tests.test_packaging_semantics_red                           Ran 59 tests  OK (skipped=1)
+```
+
+本批只新增 `docs/specs/` 与 `tests/` 两个文件，既有包装链路与行业模板口径零改动、零新增失败。
+
+### 未完成的能力声明
+
+- 本条只交付 Spec + 红测：`product_params.py`、`integration.py`、`cost_review.py`、`main.py`
+  一行未改，17 条红测仍红 —— **线上 3.2 仍会把包装项目当「其他成品」**。
+- 本批不重做盒型匹配 / BOM / 工艺路线 / 成本引擎（第 2 批与包装第 5–8 批已交付），
+  只保证参数来源与它们要的键一致。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未引入新依赖。
+
+---
+
+## 204. 从报价开始的包装 DWG 终验（E2E 链路 / Go-No-Go / 报告与回滚）Spec + 红测（20 条 17 红）（9-21，Codex 只写 Spec 与红测 + changelog）
+
+### 背景
+
+新五批（上线闭环）**第 5 批 · 收尾**。前四批分别解决：转换器上线、知识库权威数据入库、
+项目必须从报价开始、包装专属参数族与技术侧闭环。本批不再加功能，而是把"是否真的支持"
+变成一处可执行口径：从报价开始的五角色 12 步链路、门禁清单、Go/No-Go 纯函数、验收报告
+模板与金标人工审批、失败回滚。本批**只写 Spec 与红测，未改任何生产代码**。
+
+### 交付物
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/quote-first-final-acceptance.md` | 批次 Spec（222 行）：§2 链路与新增工具 `tech_app/tools/quote_first_acceptance.py`、§3 门禁 10 项、§4 `go_no_go` 纯函数与两句 claim 原文、§5 报告字段与金标 10 小节、§6 `DEPLOYMENT.md` 终验小节、§7 红测、§8 禁止事项、§9 收尾口径 |
+| `tests/test_quote_first_final_acceptance_red.py` | 20 条（A 链路 5 / B 门禁 4 / C Go-No-Go 4 / D 报告与金标 4 / E 文档与护栏 3），全部离线 |
+
+### 现场问题（实测）
+
+1. 全仓没有任何一处声明"从报价开始的五角色交接（销售 → 工艺 → 财务 → 工艺 → 销售）"：
+   每一步的账号、前置门禁、必须留下的证据现在只散在现场记录里，代码里查不到
+   `ROLE_CHAIN` / `go_no_go` / `GO_BLOCKERS`。
+2. `dwg_deploy_gate.GATE_ITEMS` 已 19 项，但**全是转换器侧**的：没有任何一条覆盖"项目是否
+   真的从报价开始""知识库是否权威数据""包装闭环是否真的走通""stale 结果是否被当成有效报价"。
+3. `dwg_acceptance.SUPPORT_CLAIMS` 已禁止 `real` 这类模糊声明，金标目录
+   `tests/fixtures/dwg_acceptance/2026-09-21.1/` 也在位 —— 缺的是把"能力声明"挂到业务验收
+   链路上，以及 Go/No-Go 的纯函数判定。
+4. `DEPLOYMENT.md` 已有第 1 批转换器小节与第 2 批知识库小节，**没有**终验小节。
+
+### 红测实跑原文
+
+```
+tests.test_quote_first_final_acceptance_red    Ran 20 tests  FAILED (failures=17)
+```
+
+红点 17 条：A1–A5、B1–B4、C1–C4、D1–D3、E1。绿 3 条护栏：E2（`SUPPORT_CLAIMS` 仍不含
+`real`）、E3（`GATE_ITEMS` 仍 19 项且含 `converter_rollout_documented`）、D4（金标目录在位，
+manifest 指向的两份样本 JSON 真实存在）。典型失败原文：
+
+```
+AssertionError: 缺少 tech_app/tools/quote_first_acceptance.py（Spec §2）—— 终验链路、门禁清单
+与 Go/No-Go 判定必须有一处唯一口径，现在散在现场记录里
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_first_final_acceptance_red                Ran 20 tests  FAILED (failures=17)  # 本批红测
+tests.test_dwg_final_acceptance_red                        Ran 93 tests  OK  # 与下列两条合并跑
+tests.test_dwg_converter_production_rollout_red            （含在上行 93 内）
+tests.test_packaging_kb_authoritative_rollout_red          （含在上行 93 内）
+tests.test_quote_first_project_entry_red                   Ran 22 tests  FAILED (failures=21)  # 第 3 批待实现
+tests.test_packaging_tech_param_bom_route_cost_closure_red Ran 20 tests  FAILED (failures=17)  # 第 4 批待实现
+```
+
+第 3 / 4 批红测仍按预期红（对应实现未合入），第 1 / 2 批红测与既有 DWG 终验红测全绿；
+本批只新增 `docs/specs/` 与 `tests/` 两个文件，既有机制口径零改动、零新增失败。
+
+### 未完成的能力声明
+
+- 本条只交付 Spec + 红测：`tech_app/tools/quote_first_acceptance.py` 与 `DEPLOYMENT.md` 终验
+  小节尚未创建，17 条红测仍红 —— **目前仍不能对外声明「包装行业 DWG 支持完成」**。
+- 若前四批中任何一批在终验时未合入，`go_no_go` 的 `blockers` 必须如实列出，不许用"跳过该项"
+  凑出 go。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未引入新依赖。
+
+## 205. DWG 转换器在 34 生产上线（实现）：部署文档补段 + 上线门禁第 19 项（20 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 200` 交付的 Spec + 红测（20 条，10 红）本批全部转绿。根因实测：代码侧早就绪且全绿，
+`DEPLOYMENT.md` 全文 `grep -E "DWG|转换器|dwg_deploy_gate|dwg_conversion_smoke|dwg_sample_e2e"`
+**0 命中** —— 34 上线漏配 `DWG_CONVERTER_*` 不是代码 bug，是**没写进部署文档**。
+
+追加闸门由用户拍板（「这个加，尽早知道 dwg 解析不了」）：允许为此修改
+**DWG 第 6 批红测（`test_dwg_final_acceptance_red.py`）里的冻结清单一行**，代价换「部署时自动拦住漏配」。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `DEPLOYMENT.md` | 新增「## DWG 转换器（包装图纸）」段（+111 行）：配置取值表（env 名取自 `cad_converter/service.py` 常量）、生效方式（仓库外 env 文件 / `CPQ_ENV_FILE` + 重启 8010）、PATH 与运行用户权限、健康检查期望字段、上线三件套命令、宣传口径与两条硬禁令、失败时的正确行为；两处修正：段首不再引用当时不存在的门禁项；**两份样本必须用两个不同 `--out` 目录**（实测同目录连跑会静默覆盖第一份证据） |
+| `tech_app/tools/dwg_deploy_gate.py` | `GATE_ITEMS` 末尾追加第 19 项 `("converter_rollout_documented", "auto")` + `_check_converter_rollout_documented()`（文档缺段即 `fail`，不许 `skip`）；34 目标取值常量一并落下；`GATE_VERSION` 与既有 18 项 id/顺序/结论口径未动 |
+| `tests/test_dwg_final_acceptance_red.py` | 冻结清单追加一行（**用户批准**，附注释）；其余 52 条断言未动 |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD 的 DEPLOYMENT.md + HEAD 的 18 项门禁，git archive 复现）
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  FAILED (failures=10)
+# 写文档后、门禁第 19 项落地前
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  FAILED (failures=1)   # 唯一红点 C1
+
+# 实现后
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  OK
+tests.test_dwg_final_acceptance_red               Ran 53 tests  OK   # 改冻结清单后仍全绿
+```
+
+### 门禁实跑（`--env production --json`，原文摘录）
+
+```
+converter_rollout_documented  ok    {"doc_bytes": 11992, "missing": []}
+summary {"ok": 15, "fail": 2, "manual": 2, "acknowledged": 0, "skip": 0}   verdict = no_go
+```
+
+两条 `fail` 与本批无关、本批未修（均早于本批存在）：
+
+- `converter_version_pinned`：本机自动探到 `libredwg 0.14`（`version_source="probed"`），
+  未显式固定版本 → 34 上配 `DWG_CONVERTER_VERSION=27.1` 后即消失；
+- `no_secrets_in_logs_or_fixtures`：**扫描器扫到自己** —— `dwg_deploy_gate.py` 的
+  `SECRET_PATTERNS` 元组里含 `password=` 等字面量，被自己判成疑似机密。这是既有缺陷，
+  本批 Spec 只授权「追加一项」，故未动；**在修掉之前 `verdict` 不可能等于 `go`**。
+
+### 回归（实跑原文）
+
+```
+tests.test_dwg_file_capability_preflight_red   Ran 29 tests  OK
+tests.test_dwg_conversion_adapter_red          Ran 42 tests  OK (skipped=1)
+tests.test_dwg_conversion_quality_repair_red   Ran 43 tests  OK
+tests.test_dxf_cad_ir_red                      Ran 46 tests  OK (skipped=1)
+tests.test_dwg_final_acceptance_red            Ran 53 tests  OK
+tests.test_packaging_semantics_red             Ran 59 tests  OK (skipped=1)
+tests.test_packaging_drawing_flow_red          Ran 54 tests  OK (skipped=1)
+```
+
+### 34 上仍需执行（本批未执行、未授权）
+
+1. 把 7 个 `DWG_CONVERTER_*` 写进 `/home/wugefei/CPQ/cpq_env.sh`（**不要再配** `CAD_CONVERTER`）；
+2. `PATH` 前置 `xvfb-run` 所在目录；确认运行用户对 `/home/data/cpq-tools` 可读可执行；
+3. 重启 8010，核对 `/api/health` 的 `cad_converter` 段；
+4. 跑上线三件套，`dwg_deploy_gate.py --env production` 必须 `go`。
+
+### 能力声明与边界
+
+- **DWG 编排能力完成，真实转换能力未验收**：`dwg_supported` 仍为 `false`，
+  `acceptance.present=false`（两份真实样本的已审批金标尚未产出）。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未重启服务；未新增依赖。
+
+---
+
+## 206. 包装知识库权威数据入库与 34 上线预检（实现）：三处一致 + 数据分层 + 预检工具（20 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 201` 交付的 Spec + 红测（20 条，15 红）本批全部转绿。三条实测缺口：①34 上
+`relation "cpq_kb.kb_packaging_box_type" does not exist`（本地有 DDL 却没有任何上线预检，
+缺表照样上线）；②`da_schema.sql` 29 张 `kb_*` vs `cpq_kb.KB_TABLES` 27 张，
+`kb_packaging_cost_content` / `kb_packaging_tooling_rule` 永远进不了 PG 快照（本地有值、
+34 永远是空的）；③演示数据与权威数据无任何可判定区分，12 条演示盒型灌进生产就会被当真实盒型报价。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/backend/storage/da_schema.sql` | 9 张包装表补 6 个分层列（`source_type` + CHECK / `source_ref` / `source_sha256` / `parser_version` / `confirmed_by` / `confirmed_at`） |
+| `cpq_kb.py` | ① `KB_TABLES` 追加两张包装表（29 张，既有 27 张顺序未动）、`KB_KEYS` 追加两条主键；② `SOURCE_TYPES` / `REVIEW_STATUSES` 常量；③ 7 张包装表补分层列 + 两张新表的 PG DDL（共 29 条 `_DDL_TEMPLATE`）；④ 9 张新老库补列（`_ADDED_COLUMNS` 12 → 66 条）；⑤ 新增只读 `export_snapshot(path=None)`（导入前留底 / 回滚比对） |
+| `tech_app/backend/storage/da_db.py` | `_ADDED_COLUMNS` 与 `cpq_kb` 一一对应补上 9 张 × 6 列（老 SQLite 库不补列就写不进去） |
+| `tech_app/backend/storage/da_seed_packaging.py` | `_packaging_row()` 新增 `source_type`（缺省 `demo`）；`seed_packaging_cost_rules()` 一律 `workbook` + `source_ref` 逐条来自快照 |
+| `tech_app/tools/kb_deploy_preflight.py`（新增） | 纯函数 `preflight(tables, *, env, kb_version, min_rows)` + 只读 CLI（`--env/--json/--min-rows`，go→0 否则非零）；判定与 IO 分离 |
+| `DEPLOYMENT.md` | 新增「## 知识库（cpq_kb）上线」段：建表 → 导出留底 → dry-run → `--confirm` → 预检 → 回滚 |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD，git archive 复现）
+tests.test_packaging_kb_authoritative_rollout_red   Ran 20 tests  FAILED (failures=15)
+
+# 实现后
+tests.test_packaging_kb_authoritative_rollout_red   Ran 20 tests  OK
+```
+
+### 老库迁移与导入计划（本地实测，临时 SQLite，不碰生产库）
+
+把 9 张包装表的分层列从 schema 文本里删掉造一个「上线前的老库」，再走正常初始化：
+
+```
+kb_packaging_box_type       补列=['confirmed_at','confirmed_by','parser_version','source_ref','source_sha256','source_type']
+kb_packaging_cost_content   补列=[同上 6 列]
+kb_packaging_tooling_rule   补列=[同上 6 列]
+
+导入计划：29 张表 / 162 行
+  kb_packaging_box_type             12 行  {'demo': 12}
+  kb_packaging_part_template        31 行  {'demo': 31}
+  kb_packaging_process_template     23 行  {'demo': 23}
+  kb_packaging_insert_accessory     12 行  {'demo': 12}
+  kb_packaging_cost_formula         27 行  {'demo': 7, 'workbook': 20}
+  kb_packaging_logistics_rule        3 行  {'demo': 3}
+  kb_packaging_match_weight          5 行  {'demo': 5}
+  kb_packaging_cost_content         11 行  {'demo': 11}   ← 此前永远进不了快照
+  kb_packaging_tooling_rule          5 行  {'demo': 5}    ← 此前永远进不了快照
+  规则快照行 20 条，source_ref 示例='报价逻辑-0903.xlsx/报价-工费率/S2'
+```
+
+### 预检实跑（本机 PG，只读）
+
+```
+$ python tech_app/tools/kb_deploy_preflight.py --env local --json
+取不到 cpq_kb 快照：读取知识库快照失败（schema=cpq_kb）：relation "cpq_kb.kb_packaging_box_type" does not exist
+退出码 2
+```
+
+本机 PG 实测只有 **21** 张（20 张基础表 + `kb_meta`），**9 张包装表全缺** ——
+与 34 的现象逐字相同。这正是本批要消灭的「缺表也能上线」：预检现在会拦住它。
+
+### 回归（实跑原文）
+
+```
+tests.test_kb_in_pg_http_snapshot_red               Ran 22 tests  OK
+tests.test_packaging_knowledge_base_seed_red        Ran 46 tests  OK
+tests.test_packaging_quote_close_loop_red           Ran 96 tests  OK
+tests.test_packaging_box_type_matching_red          Ran 51 tests  OK
+tests.test_quote_packaging_box_selection_red        Ran 20 tests  OK
+```
+
+### 34 上仍需执行（本批未执行、未授权）
+
+1. `cpq_kb.ensure_schema()`（29 张表 + 补列，幂等）；
+2. 先 `export_snapshot()` 留底，再 `import_da_kb_to_pg.py --confirm`；
+3. `kb_deploy_preflight.py --env production` 必须 `go` 才算上线成功；
+4. 生产库若仍是演示数据，预检会判 `demo_only` —— 必须换成 `workbook` / `dwg_confirmed` 权威行。
+
+### 能力声明与边界
+
+- **知识库只是「可上线」，不是「已上线」**：34 上面包包装表的建表与导入**尚未执行**；
+  本机 PG 同样缺 9 张包装表。演示数据（12 条盒型 / 31 条部件 / 23 条工艺 / 12 条内托）仍
+  标 `demo`，不得当作可报价权威数据。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未写生产库、未重启服务；未新增依赖。
+
+---
+
+## 207. 项目必须从报价开始（实现）：统一入口分级 + 落点冲突结构化 + 恢复通道（22 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 202` 交付的 Spec + 红测（22 条，21 红）本批全部转绿。四个实测缺口：①
+`ReportQuoteAction` 只有 5 个字段，没有 `create_new` / `create_reason`，发布页也没有交互 ——
+服务端那句「请填写新建原因后重试」在界面上根本无法执行；②`cpq_bridge._post` 把服务器 409 的
+`code`/`candidates` 压成一句文案，前端 `api()` 抛的 `new Error(文案)` 里 `error.code` 恒为
+`undefined`；③`tech-task.js` 只写 `source_task_id`/`source_session_id`，全仓 `save_business_case`
+的生产调用点为 0，技术项目 meta 里从来没有实例号；④技术侧 `POST /api/projects` 无来源门禁，
+也没有历史项目恢复入口 —— 独立技术项目无法回传报价卡片（现场 P0）。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/backend/services/entry_origin.py`（新增） | 纯函数 `classify_entry(*, business_case_id, source_task_id, source_session_id, source)` → 恰好 `origin`/`internal_test`/`clues`/`reason` 四键；任一非空线索 = `quote`，全空 = `internal_test` 且 `reason` 非空 |
+| `tech_app/backend/main.py` | `upload_project` 增 3 个可选表单字段 + `entry_origin` 响应 + `store.save_business_case` + `internal_test` 时 `store.audit(..., "project:internal_test_entry", ...)`；`ReportQuoteAction` 增 `business_case_id`/`create_new`/`create_reason`；新增 `_flow_http_error()` / `_bridge_http_error()`，`_bridge_call`/`_cost_flow`/`_report_flow` 只在落点冲突时回 409 + 结构化 detail，其余业务拒绝保持 400 字符串；新增 `POST /api/projects/{project_id}/quote-link/recover`（只写 `save_business_case` + `store.audit(..., "quote_link:recovered", ...)`，不建/不改报价卡片） |
+| `tech_app/backend/services/cpq_bridge.py` | `CONFLICT_CODES`/`CONFLICT_MESSAGES`/`is_conflict()`/`conflict_detail()`；`BridgeRejected(message, *, code="", candidates=None, status=400)` 向后兼容；`_post` 409 时原样带 `code`/`candidates`/`status` |
+| `tech_app/backend/services/cost_flow.py` | `CostFlowError` 带 `code`/`candidates`；落点冲突升 409 |
+| `tech_app/backend/services/report_workflow.py` | `ReportWorkflowError` 同上；`send_to_quote` 增同名三参数并透传给 `cpq_bridge.report_handoff`；返回体补 `business_case_id`/`candidates`/`recovery` |
+| `tech_app/backend/services/requirement_service.py` | `QUOTE_SOURCE_KEYS` 追加 `business_case_id`（既有 5 键不动） |
+| `tech_app/frontend/workflow.js` | `api()` 抛出的错误对象带 `code`/`candidates`/`status` |
+| `tech_app/frontend/tech-task.js` | `linkProject` 追加 `business_case_id` |
+| `tech_app/frontend/report-publish-result.js` | 「无候选 → 填原因新建」「多候选 → 列候选让人选」 |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD，git archive 复现）
+tests.test_quote_first_project_entry_red   Ran 22 tests  FAILED (failures=21)
+
+# 实现后
+tests.test_quote_first_project_entry_red   Ran 22 tests  OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_tech_quote_business_case_linkage_red                   Ran 39 tests  OK
+tests.test_tech_handoff_atomic_idempotent_red                     Ran 35 tests  OK
+tests.test_tech_home_timeline_and_publish_closure_red             Ran 35 tests  OK
+tests.test_packaging_quote_close_loop_red                         Ran 96 tests  OK
+tests.test_tech_cost_report_handoff_continuity_red                Ran 14 tests  OK
+tests.test_tech_cpq_bridge_send_to_quote_single_definition_red    Ran 12 tests  OK
+tests.test_tech_project_identity_single_source_red                Ran 24 tests  OK
+tests.test_tech_long_task_recovery_and_fixed_error_guide_red      Ran 34 tests  OK
+```
+
+### 边界
+
+- 未改 `cpq_case_link.decide` 的四态语义与 `cpq_tech_bridge` 的落点裁决/幂等五元组；
+  恢复接口不建/不改报价卡片、不自动确认模型推断、不绕角色门禁。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未重启服务；未新增依赖。
+
+---
+
+## 208. 包装专属参数族与技术侧包装闭环收口（实现）：3.2/4.3 按行业锁族（20 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 203` 交付的 Spec + 红测（20 条，17 红）本批全部转绿。现场缺口：酒盒项目在技术侧
+**3.2 参数推荐**被判成「产品族：其他成品」，随后被要求填产品系列 / 产品型号 / 重量 /
+工作温度 / 机械号 —— 那是锂电产品的字段。根因是 `product_params` 只有 DA 五个族，
+`as_prompt()`/`align()`/`checklist()`/`missing_required()` 四个调用点全部按默认走，
+族由模型自由决定，模型写「包装盒」还会被 `resolve_family` 静默退回 `other`。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/backend/services/product_params.py` | 新增 `PACKAGING_FAMILY="pkg_box"` / `PACKAGING_FAMILY_NAME="包装盒"` / `packaging_family_fields()` / `family_for_industry()`；包装族**只由 `industry_templates.PACKAGING_SPEC` 派生**（不抄字段清单），分组 key `pkg_3_1…pkg_3_6`；`resolve_family` 先认 `pkg_box`/`包装盒`、末尾再兜包含匹配；`families()`/`family_keys()`/`_by_code()`/`_name_index()`/`_groups_of()`/`fields_for()` 接包装族 |
+| `tech_app/backend/services/integration.py` | 新增 `requirement_industry(project_id)` / `project_family(project_id)`（行业读取唯一口径）；`recommend_params` 按行业锁族（`as_prompt(family)` + `align(result, family)`）；`_report_param_coverage(params, progress, family)`；`missing_required(plan, family=None)` / 新增 `missing_all(plan, family=None)`；`autofill_params` 同一份族 |
+| `tech_app/backend/main.py` | `update_integration_params` 保存时 `align(params, integration.project_family(project_id))`；`finalize_integration_params` 必填补齐门禁按同一份族校验（含 waiver 分支） |
+| `tech_app/backend/services/cost_review.py` | `payload` 的 `checklist` / `missing_required`（`params_complete` 与 `required_missing` 两处）按同一份族 |
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD，git archive 复现）
+tests.test_packaging_tech_param_bom_route_cost_closure_red   Ran 20 tests  FAILED (failures=17)
+
+# 实现后
+tests.test_packaging_tech_param_bom_route_cost_closure_red   Ran 20 tests  OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_packaging_parametric_bom_red            Ran 57 tests  OK
+tests.test_packaging_process_route_red             Ran 57 tests  OK
+tests.test_packaging_box_type_matching_red         Ran 51 tests  OK
+tests.test_quote_packaging_box_selection_red       Ran 20 tests  OK
+tests.test_packaging_requirement_template_red      Ran 35 tests  OK
+tests.test_packaging_quote_close_loop_red          Ran 96 tests  OK
+tests.test_tech_cpq_bridge_send_to_quote_single_definition_red  Ran 12 tests  OK
+```
+
+### 边界与仍需人工确认
+
+- 只锁**包装**：半导体 / 家电 / 电池 / 空值 / 未知值一律 `family_for_industry(...) is None`，
+  行为逐字不变；`other` 族仍 14 项、需求模板仍 64 键 / 10 必填、DA 五族相对顺序未动。
+- 包装族字段的 name/required 逐条来自 `SpecField.label` / `SpecField.required`，与
+  `required_keys("packaging")` 的 10 项同源 —— 3.2 的门禁口径与盒型匹配的必填口径不再各说一套。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未连 34、未重启服务；未新增依赖。
+
+---
+
+## 209. 从报价开始的包装 DWG 终验（实现）：12 步链路 + 10 项业务门禁 + Go/No-Go（20 红转绿）（9-21，Codex）
+
+### 背景
+
+`## 204` 交付的 Spec + 红测（20 条，17 红）本批全部转绿。缺的是「从报价开始」这条业务链路的
+唯一口径：全仓 `grep -rn "ROLE_CHAIN\|go_no_go\|GO_BLOCKERS"` → **0**，五角色交接只存在于现场
+记录里；`dwg_deploy_gate` 那 19 项全是**转换器侧**的，没有一条覆盖"项目是否真的从报价开始"
+"知识库是否权威数据""包装闭环是否走通""历史会话是否恢复""stale 结果是否被当成有效报价"。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/tools/quote_first_acceptance.py`（新增） | `MODULE_VERSION="quote-first-acceptance/1"`、`ROLE_CHAIN`（销售→工艺→财务→工艺→销售）、`STEPS` 12 步（每步 `no`/`key`/`title`/`role`/`gate`/`evidence`）、`STEP_KEYS`、`GATE_ITEMS` 10 项（id 与第 1 批转换器门禁**零重叠**）、`GATE_KINDS`、`GO_BLOCKERS` 10 项闭集、`go_no_go(evidence)` 纯函数、两句 claim 原文、`REPORT_FIELDS` 11 项、`GOLDEN_BUSINESS_SECTIONS` 10 项、`APPROVAL_FIELDS`（沿用 `dwg_acceptance` 的 `approved_by`/`approved_at`）、`ROLLBACK_PLAN`、只读 CLI（`--evidence` / `--json` / `--template`） |
+| `DEPLOYMENT.md` | 新增「## 从报价开始的终验（包装 DWG）」：12 步链路表（含角色 / 前置门禁 / 证据）+ 门禁清单与 Go/No-Go 口径（含 claim 原文）+ 报告字段与金标人工审批 + 失败回滚四步 |
+
+`go_no_go()` 判定（缺键一律按不满足处理、blockers 按 `GO_BLOCKERS` 声明顺序稳定输出、
+不改入参、每次返回新 dict）：全满足且 `real_converter=True` → `go` + `claim="包装行业 DWG
+支持完成"`；否则 `no_go`，且 `real_converter=False`（只跑过 fake converter）时唯一允许的
+声明是原文 `DWG 编排能力完成，真实转换能力未验收` —— 绝不许说「支持 DWG」。
+
+### 红测原文（实现前 → 实现后）
+
+```
+# 实现前（HEAD，git archive 复现）
+tests.test_quote_first_final_acceptance_red   Ran 20 tests  FAILED (failures=17)
+
+# 实现后
+tests.test_quote_first_final_acceptance_red   Ran 20 tests  OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_dwg_converter_production_rollout_red                  Ran 20 tests  OK   （第 1 批）
+tests.test_packaging_kb_authoritative_rollout_red                Ran 20 tests  OK   （第 2 批）
+tests.test_quote_first_project_entry_red                         Ran 22 tests  OK   （第 3 批）
+tests.test_packaging_tech_param_bom_route_cost_closure_red       Ran 20 tests  OK   （第 4 批）
+tests.test_quote_first_final_acceptance_red                      Ran 20 tests  OK   （第 5 批）
+tests.test_dwg_final_acceptance_red                              Ran 53 tests  OK   （转换器终验）
+
+# 全量（/tmp/run_pkg.py，按文件路径）
+TOTAL ran=3598 failures=24 errors=1 skipped=15
+```
+
+剩余 24 失败 + 1 错误逐套件与 HEAD 基线**逐条相同**（`process_row_running_info_and_fold_red`
+14 / `tech_model_call_row_merged_and_summary_detail_red` 2 / `cpq_eval_ci_contract` 2 /
+`packaging_cost_engine_red` 3 / `packaging_cost_minimum_charge_red` 1 /
+`packaging_cost_rule_routing_red` 1 / `packaging_cost_rule_snapshot_red` 1+1错误），
+均在 `/tmp/base_kb_baseline`（HEAD 复现）上实测复现同样数字 —— **本会话零新增失败**。
+
+### 边界
+
+- 终验是**声明**的唯一依据：只有 `go_no_go` 返回 `go` 且金标人工审批通过，才允许把
+  「包装行业 DWG 支持完成」写进对外说明。
+- 不自动更新金标快照让红测转绿；`approved_by` / `approved_at` 只能人工签字。
+- 本批**不授权部署**：未改服务器、未连 34、未重启服务、未执行 `deploy_server.sh`；
+  未提交、未推送、未创建 MR/tag/Release；未新增依赖。
+
+---
+
+## 210. 门禁自检误报修复：`no_secrets_in_logs_or_fixtures` 不再扫到自己的模式表（9-21，Codex）
+
+### 背景（实测，非推断）
+
+把第 1 批的转换器门禁真正跑起来准备 34 上线时发现：`verdict` 在**本地与 34 上都永远不可能是
+`go`** —— `no_secrets_in_logs_or_fixtures` 恒定 `fail`，`flagged` 只有一条：
+
+```
+$ python tech_app/tools/dwg_deploy_gate.py --env production --json
+... {"id": "no_secrets_in_logs_or_fixtures", "status": "fail",
+     "evidence": {"flagged": ["tech_app/tools/dwg_deploy_gate.py"], "scanned": 4}}
+```
+
+根因是**扫描器扫到了自己**：`SECRET_SCAN_ROOTS` 含 `tech_app/tools`（扫描器本人就在里面），
+而 `SECRET_PATTERNS` 里的模式字面量（`password=` 等）必须写在**同一个文件**里 —— 于是按定义
+必然自我命中。已在 `/tmp/base_kb_baseline`（HEAD 复现）实测同样命中，属**既有缺陷**，
+不是本会话引入。
+
+后果不是"多一条红"：门禁是 34 上线的验收闸门，恒定 `fail` 意味着**它无法证明任何事**，
+上一批「照文档配好也判不通过」会直接演变成「没人再看这个门禁」。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/tools/dwg_deploy_gate.py` | 新增 `SECRET_PATTERN_FILE` / `_SECRET_PATTERN_DECL` 与 `_secret_scan_text(path, text)`：**只对模式表所在文件**剔掉 `SECRET_PATTERNS` 的定义行再扫；其余文件与其余内容一字不改地照扫 |
+
+`GATE_VERSION`、`GATE_ITEMS` 的 19 项 id/kind/顺序、判定口径与退出码**一律未动**；
+被剔掉的只有"模式表把自己的模式名写在源码里"这一处自指，真被粘进该文件的密钥（不在定义行上）
+照样会被抓出来。
+
+### 实测（本机）
+
+```
+# 修复前：恒定 2 fail（converter_version_pinned 属未配置，另一条是自指误报）
+verdict=no_go  {'acknowledged': 0, 'fail': 2, 'manual': 2, 'ok': 14, 'skip': 0}
+fails: ['converter_version_pinned', 'no_secrets_in_logs_or_fixtures']
+
+# 修复后：只剩与配置有关的那条
+verdict=no_go  {'acknowledged': 0, 'fail': 1, 'manual': 2, 'ok': 16, 'skip': 0}
+fails: ['converter_version_pinned']
+
+# 固定版本 + 人工项签字后 go 可达（本机用 libredwg 0.14 代 ODA 验证链路本身可通）
+DWG_CONVERTER_PROVIDER=libredwg DWG_CONVERTER_BINARY=/opt/homebrew/bin/dwg2dxf \
+DWG_CONVERTER_VERSION=0.14 DWG_CONVERTER_FALLBACK_PROVIDER=none \
+python tech_app/tools/dwg_deploy_gate.py --env production --json \
+  --ack converter_license=legal --ack real_samples_e2e_passed=qa
+→ verdict=go  {'acknowledged': 2, 'fail': 0, 'manual': 0, 'ok': 17, 'skip': 0}
+```
+
+34 上把 §「DWG 转换器（包装图纸）」的 7 个 `DWG_CONVERTER_*` 配齐（`converter_version_pinned`
+即 `ok`）、两份真实样本跑过并人工签字后，同样的判定链即可给出 `go`。
+
+### 回归（实跑原文）
+
+```
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  OK
+tests.test_dwg_final_acceptance_red               Ran 53 tests  OK
+tests.test_dwg_file_capability_preflight_red      Ran 29 tests  OK
+tests.test_dwg_conversion_adapter_red             Ran 42 tests  OK (skipped=1)
+tests.test_dwg_conversion_quality_repair_red      Ran 43 tests  OK
+tests.test_dxf_cad_ir_red                         Ran 46 tests  OK (skipped=1)
+```
+
+`test_dwg_final_acceptance_red` 里对门禁的既有断言（人工项不得自动报 ok、`--ack` 不得盖住
+自动项失败、production 不许 skip、`skip` 不计进 `ok`）**逐条仍绿**。
+
+### 边界
+
+- 未改 `GATE_VERSION`、未增删任何门禁项、未放宽任何判定；未提交、未推送、未部署。
+
+---
+
+## 211. 补上「预览渲染」配置口径：ODA 只出 DXF，34 上不配就仍然没有图（9-21，Codex）
+
+### 发现的差异（实测，非推断）
+
+把第 1 批的部署文档按 34 的实际取值走一遍时发现：**照文档配完，2.1 图纸解析在 34 上仍然拿不到
+预览图** —— 也就是现场那句「『酒盒.dwg』不是位图」的根因并没有被消除。本地之所以看不出问题，
+是因为本地主转换器就是 libredwg，预览渲染器会被自动兜到同目录：
+
+```
+preview_binary_for('/opt/homebrew/bin/dwg2dxf', '')                                  →  '/opt/homebrew/bin/dwg2SVG'   （本地：自动兜上）
+preview_binary_for('/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun', '')
+                                                                                     →  ''                            （34：兜不到）
+preview_binary_for('/home/data/cpq-tools/current/bin/dwg2dxf', '')                   →  '/home/data/cpq-tools/current/bin/dwg2SVG'
+```
+
+`local_cli.preview_binary_for()` 的兜底规则是「转换器**同目录**下的 `dwg2SVG`」。ODA 的 squashfs
+目录里没有这个程序，于是主转换器（ODA）**只能出 DXF、出不了预览**。用假 ODA 二进制实测同一份
+配置下的两个口径：
+
+```
+$ DWG_CONVERTER_PROVIDER=oda DWG_CONVERTER_BINARY=<假 ODA> DWG_CONVERTER_VERSION=27.1 \
+  DWG_CONVERTER_FALLBACK_PROVIDER=libredwg DWG_CONVERTER_FALLBACK_BINARY=/opt/homebrew/bin/dwg2dxf ...
+primary  preview_available: False | preview_binary: ''
+fallback preview_available: True  | preview_binary: '/opt/homebrew/bin/dwg2SVG'
+capability preview_render : True          ← 由回退侧补上的
+capability 有无 preview_binary 字段: False
+```
+
+即：**健康检查说"有预览"（回退侧能渲染），而实际转换用的是主转换器的声明，一份预览都不产**
+（`service.py` 只在 `declaration.preview_render` 为真时才渲染，为假时只记一条
+「该转换器不支持预览渲染：本次只产出 DXF」的告警）。两层都很难从界面看出来 —— 正好是
+「本地跑得通、线上跑不通」的样板。
+
+另外实测到一条容易踩的边界：显式给的预览路径**不做存在性校验**，写错路径会把"只出 DXF 的告警"
+升级成**转换整体失败**（渲染不出预览 → `DWG_CONVERTER_OUTPUT_MISSING`，fail-closed）。
+所以这一步必须先验路径再配。
+
+### 改动文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `DEPLOYMENT.md` | ① 常量口径句补上 `PREVIEW_ENV` / `FALLBACK_PREVIEW_ENV` / `FALLBACK_WRAPPER_ENV`（原先只列 7 个，代码里是 10 个）；② §取值表补三行（34 取值 `DWG_CONVERTER_PREVIEW_BINARY=/home/data/cpq-tools/current/bin/dwg2SVG`）；③ 新增「### 预览渲染（2.1 视觉解析的前提，**34 上最容易漏配的一项**）」：讲清 ODA 不产预览、`dwg2SVG` 读的是原始 DWG（与哪台转换器出的 DXF 无关）、漏配的两层后果、以及「先 `test -x` 验路径」的原因；④ 健康检查期望表补 `preview_render=true` 一行并写明"报 true 就必须真的出 `converted.svg`" |
+
+只改部署文档，**未动 `cad_converter` 任何既有口径**（红测逐条未变）。
+
+### 已识别、但本批未改的一处不一致（留给拍板）
+
+`cad_converter.service.capability()` 把回退侧的预览能力 OR 进 `preview_render`，而
+`convert_drawing()` 渲染预览时只看**生效跳次**的 `declaration`。既然 `dwg2SVG` 读的是原始 DWG、
+与 DXF 出自哪台转换器无关，更彻底的做法是：主转换器没有预览渲染器时，用链上可用的那个渲染器
+（`PREVIEW_ENV` 缺失就退回 `FALLBACK_PREVIEW_ENV`）来出预览。那属于改 `cad_converter` 既有口径，
+且会让本地与 34 的行为同时改变，**本次未动**；本次只把配置口径补全（34 显式配 `PREVIEW_ENV`），
+让 `capability()` 与实际产物重新一致。是否再加固这层，等你拍板。
+
+### 回归（实跑原文）
+
+```
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  OK
+tests.test_dwg_final_acceptance_red               Ran 53 tests  OK
+tests.test_quote_first_final_acceptance_red       Ran 20 tests  OK
+```
+
+文档断言的 A 组 10 项（含 `env 名齐全`、`ODA 主用取值`、`xvfb wrapper`、`健康检查期望`、
+`上线三件套`）与 C 组门禁第 19 项全部仍绿。
+
+### 边界
+
+未提交、未推送、未部署、未连 34、未重启服务；未新增依赖、未改任何既有红测。
+
+---

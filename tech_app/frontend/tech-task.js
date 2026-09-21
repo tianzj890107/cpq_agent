@@ -294,6 +294,9 @@
       source_task_id: String(task.task_id || ''),
       source_task_no: task.task_no || '',
       source_session_id: (payload.quote || {}).session_id || task.session_id || '',
+      // 第 3 批：报价实例号是回传时认回原报价卡片的**主**线索。任务载荷里有就直接用
+      // （quote 段兜底），没有就空串 —— 不猜、不编。
+      business_case_id: payload.business_case_id || (payload.quote || {}).business_case_id || '',
       customer_name: task.customer || (doc && doc.data && doc.data.customer_name) || '',
       // industry = 实际生效的；industry_selection = 人选的。与首页建单写的是同一对键。
       industry, industry_selection: industry,

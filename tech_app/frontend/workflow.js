@@ -59,14 +59,25 @@ function projectWriteGuard(url, options) {
   if (!current || current === target) return '';
   return `本页的项目是 ${current}，不能把这次写入发给 ${target}；已拒绝发送。请从统一工作台重新进入该项目。`;
 }
-async function api(url, options = {}) {
+async function api(url, options) {
+  options = options || {};
   const blocked = projectWriteGuard(url, options);
   if (blocked) { toast(blocked); throw new Error(blocked); }
   const headers = {...authHeaders(), ...(options.headers || {})};
   if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const res = await fetch(url, {...options, headers});
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(apiError(data, res.status));
+  if (!res.ok) {
+    /* 结构化字段必须活到调用方：落点冲突时服务端回的是 409 + {code, candidates, message}，
+       只抛 new Error(文案) 的话，界面读到的 error.code 恒为 undefined，
+       「认回哪张卡片 / 明确新建」这两个出口就永远弹不出来。 */
+    const err = new Error(apiError(data, res.status));
+    const detail = (data && data.detail) || {};
+    err.status = res.status;
+    err.code = (detail && detail.code) || (data && data.code) || '';
+    err.candidates = (detail && detail.candidates) || (data && data.candidates) || [];
+    throw err;
+  }
   return data;
 }
 function esc(value) { return String(value ?? '').replace(/[&<>'"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[s])); }

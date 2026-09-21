@@ -17,7 +17,10 @@ from ..time_utils import now_cst_str
 
 # 「新增工艺」任务带进需求单的溯源键：丢一个，结论就回不到原来那张报价卡片。
 QUOTE_SOURCE_KEYS = ("source", "source_task_id", "source_task_no",
-                     "source_session_id", "customer_name")
+                     "source_session_id", "customer_name",
+                     # 第 3 批追加：报价实例号是回传时认回原报价卡片的**主**线索，
+                     # 只靠会话号兜底会在多张卡片命中时失去判据。只追加，前 5 键不变。
+                     "business_case_id")
 
 # 客户信用等级只允许这四个取值（空 = 未录入）。
 CREDIT_LEVELS = {"", "A", "B", "C", "D"}

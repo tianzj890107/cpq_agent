@@ -124,6 +124,8 @@ GATE_ITEMS = (
     ("ci_separates_adapter_and_real_smoke", "auto"),
     ("real_samples_e2e_passed", "manual"),
     ("converter_chain_configured", "auto"),
+    # 上线批（第 1 批 Spec §4）：部署文档已写明转换器配置；追加在末尾，既有 18 项不动。
+    ("converter_rollout_documented", "auto"),
 )
 LIMIT_KEYS = (
     "CAD_CONVERTER_TIMEOUT_SECONDS", "CAD_CONVERTER_MAX_OUTPUT_BYTES",

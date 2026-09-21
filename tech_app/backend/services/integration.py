@@ -224,8 +224,11 @@ def recommend_params(project_id: str, ir: Optional[DesignIR], plan: IntegrationP
                      attachments: Optional[List[Tuple[str, bytes]]] = None,
                      progress: ProgressFn = None) -> IntegrationParamPlan:
     _report(progress, "汇总 2.1 零件、1.x 需求与本步整合图纸")
+    # 包装项目按需求单行业锁定包装族：交给模型的字典、模型回的 product_family、
+    # 以及后面的覆盖率播报都用同一份族，模型写「其他成品」也改不了它。
+    family = product_params.family_for_industry(requirement_industry(project_id))
     content = [claude_client.text_block(build_context(project_id, ir, plan))]
-    dictionary = product_params.as_prompt()
+    dictionary = product_params.as_prompt(family)
     if dictionary:
         _report(progress, f"载入报价成品参数字典（{len(product_params.spec()['fields'])} 个字段 / "
                           f"{len(product_params.families())} 个产品族）")
@@ -237,16 +240,17 @@ def recommend_params(project_id: str, ir: Optional[DesignIR], plan: IntegrationP
     if not result.assembly_name:
         result.assembly_name = (ir.device_name if ir else "") or "整机总成"
     reconcile_part_refs(result, ir)
-    result.product_family = product_params.align(result)
+    result.product_family = product_params.align(result, family)
     _report(progress, f"参数 {len(result.params)} 条、连接 {len(result.interfaces)} 处、"
                       f"BOM {len(result.part_refs)} 行")
-    _report_param_coverage(result, progress)
+    _report_param_coverage(result, progress, family)
     return result
 
 
-def _report_param_coverage(params: IntegrationParamPlan, progress: ProgressFn) -> None:
+def _report_param_coverage(params: IntegrationParamPlan, progress: ProgressFn,
+                           family: Optional[str] = None) -> None:
     """把"报价要的参数齐没齐"直接播到对话框里。缺口不提示等于没人知道。"""
-    report = product_params.checklist(params)
+    report = product_params.checklist(params, family)
     summary = report["summary"]
     if not summary["total"]:
         return
@@ -552,6 +556,22 @@ def save_plan(project_id: str, plan: IntegrationPlan, author: str = "system") ->
     return plan
 
 
+def requirement_industry(project_id: str) -> str:
+    """项目需求单上的行业。唯一口径：需求单 data.industry（不在这里写行业字面量）。"""
+    doc = store.load_requirement(project_id) or {}
+    data = doc.get("data") if isinstance(doc, dict) else None
+    return str((data or {}).get("industry") or "")
+
+
+def project_family(project_id: str) -> Optional[str]:
+    """项目行业 → 锁定的产品族；非包装项目返回 None（沿用模型判定 product_family 的旧口径）。
+
+    3.2 参数推荐、保存人工编辑、必填补齐门禁与 4.3 成本清单都从这里取同一份族，
+    否则包装项目会被当成「其他成品」去问工作温度（现场就是这样）。
+    """
+    return product_params.family_for_industry(requirement_industry(project_id))
+
+
 def status(plan: IntegrationPlan) -> dict:
     """四个环节各自完成了没有。前端据此点亮步骤条，不用自己去猜字段。"""
     return {
@@ -625,7 +645,8 @@ def autofill_params(project_id: str, ir: Optional[DesignIR], plan: IntegrationPl
 
     只返回建议、不落库 —— 补全的值要由工艺经理过目后才写进参数表。
     """
-    missing = product_params.missing_all(plan.params) if plan.params else []
+    family = project_family(project_id)
+    missing = product_params.missing_all(plan.params, family) if plan.params else []
     if not missing:
         return IntegrationParamFillPlan()
     lines = []
@@ -851,9 +872,18 @@ def pending_confirmations(plan: IntegrationPlan) -> List[str]:
     return pending
 
 
-def missing_required(plan: IntegrationPlan) -> List[dict]:
-    """报价必填、但还没有值的字段。plan.params 为空时没有清单，按空处理。"""
-    return product_params.missing_required(plan.params) if plan.params else []
+def missing_required(plan: IntegrationPlan, family: Optional[str] = None) -> List[dict]:
+    """报价必填、但还没有值的字段。plan.params 为空时没有清单，按空处理。
+
+    `family` 是行业锁定的族（`project_family`）：不传时沿用模型写在 product_family
+    里的值。包装项目必须传，否则会按电池/通用成品的必填去要工作温度。
+    """
+    return product_params.missing_required(plan.params, family) if plan.params else []
+
+
+def missing_all(plan: IntegrationPlan, family: Optional[str] = None) -> List[dict]:
+    """所有还没有值的字段（不只必填）。`family` 口径与 missing_required 一致。"""
+    return product_params.missing_all(plan.params, family) if plan.params else []
 
 
 def gap_message(missing: List[dict], pending: Optional[List[str]] = None) -> str:
@@ -982,7 +1012,8 @@ def confirm_params(project_id: str, user: Optional[dict] = None) -> IntegrationP
     save_plan(project_id, plan, username)
     store.audit(project_id, "integration_params_confirm",
                 {"by": display,
-                 "missing_required": len(product_params.missing_required(plan.params))})
+                 "missing_required": len(product_params.missing_required(
+                     plan.params, project_family(project_id)))})
     return plan
 
 

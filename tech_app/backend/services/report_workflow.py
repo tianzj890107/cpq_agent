@@ -50,12 +50,19 @@ AUDIT_SENT_TO_QUOTE = "workflow:report_sent_to_quote"
 
 
 class ReportWorkflowError(Exception):
-    """报告流程的业务拒绝：门禁未过、状态不符或数据缺失，调用方映射成 HTTP。"""
+    """报告流程的业务拒绝：门禁未过、状态不符或数据缺失，调用方映射成 HTTP。
 
-    def __init__(self, message: str, status_code: int = 400):
+    `code` / `candidates` 与 2.3 同口径：只在落点冲突时非空，HTTP 层据此回 409 + 结构化 detail
+    （发布页要拿它列候选或弹「新建 + 原因」），其余拒绝保持既有形状。
+    """
+
+    def __init__(self, message: str, status_code: int = 400, *,
+                 code: str = "", candidates=None):
         super().__init__(message)
-        self.message = message
+        self.message = str(message)
         self.status_code = status_code
+        self.code = str(code or "")
+        self.candidates = list(candidates or [])
 
 
 # --------------------------------------------------------------------------- #
@@ -794,7 +801,10 @@ def _bridge_call(action, *args, **kwargs):
     try:
         return action(*args, **kwargs)
     except cpq_bridge.BridgeRejected as exc:
-        raise ReportWorkflowError(str(exc), 400) from exc
+        # 与 2.3 同一口径：落点冲突带 code / candidates 升 409，其余仍是 400 + 文案。
+        raise ReportWorkflowError(str(exc), 409 if cpq_bridge.is_conflict(exc) else 400,
+                                  code=getattr(exc, "code", ""),
+                                  candidates=getattr(exc, "candidates", [])) from exc
     except cpq_bridge.BridgeUnavailable as exc:
         raise ReportWorkflowError(f"业务数据库/报价服务暂不可用：{exc}", 503) from exc
 
@@ -847,7 +857,9 @@ def _technical_result(project_id: str, title: str) -> dict:
 
 def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "",
                   target_type: str = "", target_role_code: str = "",
-                  target_user_id: str = "", source_task_id: str = "") -> dict:
+                  target_user_id: str = "", source_task_id: str = "",
+                  business_case_id: str = "", create_new: bool = False,
+                  create_reason: str = "") -> dict:
     """3.3 → 销售经理：把**已发布报告**回传报价，让销售接着往下走。
 
     这是报告语义明确的专用入口，不再复用 2.2/2.3 的 `/integration/send-to-quote`：
@@ -875,20 +887,31 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
     # 结果版本按**报告版本**走：同一版报告重复点击只交一次，换版后才是新的交接。
     result_version = f"report-v{doc.version}"
 
-    outcome = _bridge_call(
-        cpq_bridge.report_handoff, token, project_id, title,
-        cost_flow.requirement_customer(requirement, req_data),
-        str(requirement.get("product_name") or req_data.get("product_name") or ""),
-        note or f"已发布报告 {doc.report_no} V{doc.version}，请继续报价",
-        # 来源任务号：路由直接传进来的优先，其次才是需求单里记着的那一条；服务端会在
-        # 那一次回传命令的同一个事务里把它关掉（不再另发关闭请求）。
-        str(source_task_id or req_data.get("source_task_id") or ""),
-        str(req_data.get("source_session_id") or ""),
-        result, package, result_version,
-        str(doc.report_no or ""),
-        str(target_type or ""), str(target_role_code or ""), str(target_user_id or ""),
-        # 报告回传也带项目实例号：服务端凭它认回原报价卡片，而不是靠散落线索猜。
-        business_case_id=cost_flow.business_case_of(project_id))
+    def _handoff():
+        """真正的调用点（`_bridge_call` 只负责把桥接失败翻成业务错误）。
+
+        报告回传也带项目实例号：服务端凭它认回原报价卡片，而不是靠散落线索猜；
+        调用方显式传入优先（历史项目恢复后用它能立刻认回），未传时保持既有口径。
+        落点冲突的恢复三件套一并送出去 —— 服务端只在"没有找到卡片 / 命中多张"时才用得上。
+        """
+        return cpq_bridge.report_handoff(
+            token, project_id, title,
+            cost_flow.requirement_customer(requirement, req_data),
+            str(requirement.get("product_name") or req_data.get("product_name") or ""),
+            note or f"已发布报告 {doc.report_no} V{doc.version}，请继续报价",
+            # 来源任务号：路由直接传进来的优先，其次才是需求单里记着的那一条；服务端会在
+            # 那一次回传命令的同一个事务里把它关掉（不再另发关闭请求）。
+            str(source_task_id or req_data.get("source_task_id") or ""),
+            str(req_data.get("source_session_id") or ""),
+            result, package, result_version,
+            str(doc.report_no or ""),
+            str(target_type or ""), str(target_role_code or ""), str(target_user_id or ""),
+            business_case_id=str(business_case_id or "").strip()
+                            or cost_flow.business_case_of(project_id),
+            create_new=bool(create_new),
+            create_reason=str(create_reason or ""))
+
+    outcome = _bridge_call(_handoff)
 
     # 技术侧留痕：报告回传后整机计划里的 quote_handoff 指向同一个报价会话，
     # 历史页面与 3.3 的"回传结果"都从这一份数据读，不另存。
@@ -916,6 +939,15 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         except Exception:
             pass
 
+    # 恢复留痕（历史项目一次性认回时由 /quote-link/recover 写入）：界面要能显示
+    # "这一版是新建的还是认回的、谁在什么时候恢复的"，所以四键原样回给前端。
+    case_doc = store.load_business_case(project_id) or {}
+    recovery = {
+        "recovered_from_project_id": str(case_doc.get("recovered_from_project_id") or ""),
+        "recovery_reason": str(case_doc.get("recovery_reason") or ""),
+        "recovered_by": str(case_doc.get("recovered_by") or ""),
+        "recovered_at": str(case_doc.get("recovered_at") or ""),
+    }
     return {
         "report_no": doc.report_no,
         "version": doc.version,
@@ -923,6 +955,12 @@ def send_to_quote(project_id: str, user: dict, *, note: str = "", token: str = "
         "handoff": handoff,
         "quote_session_id": outcome.get("quote_session_id") or "",
         "linked_by": outcome.get("linked_by") or "",
+        # 与成本侧 cost_flow 对齐：这次落到了哪张报价卡片、冲突时有哪些候选、恢复留痕。
+        "business_case_id": str(outcome.get("business_case_id") or ""
+                                or business_case_id or ""
+                                or cost_flow.business_case_of(project_id)),
+        "candidates": list(outcome.get("candidates") or []),
+        "recovery": recovery,
         "new_card": bool(outcome.get("new_card")),
         "already_sent": bool(outcome.get("already_sent")),
         "already_completed": bool(outcome.get("already_completed")),
