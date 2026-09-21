@@ -8502,3 +8502,42 @@ tests.test_quick_quote_material_gsm_red                      37 条
 牛皮 / 瓦楞 / 克重 / g-m² / gsm）的行，「粉灰」不在表里被整行挡掉 —— 报价侧连看都没看到。
 这与 C2「不登记 粉灰」是两件事（一个属服务侧的标注归属，一个属报价侧的分桶）。要收口得先由业务
 对「粉灰算面纸还是灰板」签字，再由人决定扩哪张表；本批不动。
+
+### 252.1 提交 / 推送 / 部署 34 并当场复验（`3d9f1c3`，8010 pid=211095）
+
+- 提交 `3d9f1c3`（4 个文件：`cpq_quick_quote_file.py`、本批 Spec、本批红测、本条目），
+  已推送 `origin`（github）与 `gitlab` 双远端。
+- `bash scripts/deploy_34_bare.sh ytbz`：34 上 `d4a81b6 → 3d9f1c3`（纯快进），八步全过 ——
+  健康检查 ok、转换器探测 `role=primary`、两份真样本 `status=ok / fallback_used=false`、
+  第 6 步按设计 skip（未给样本项目 id）、第 6b 步隔离端到端自检 `ok`（生产数据目录未被写入）。
+- 部署后当场用**报价侧客户端 → 统一解析服务**再跑一遍两份真样本（34 本地
+  `127.0.0.1:8010`，不带票）：
+
+```
+$ curl -s http://127.0.0.1:8010/api/file/parse/capability
+{"service":"cpq-unified-parse","provider":"oda","provider_version":"27.1","dwg":true,"dxf":true,"preview":true}
+
+酒盒.dwg    layers=8  dims=316  texts=127
+  inputs : {"face_paper_gsm": 235.0, "v_groove": true}        ← 部署前只有 v_groove
+  missing: [box_type, box_family, closure_type, inner_length, inner_width, inner_height,
+            grey_board_gsm, insert_type, print_colors, lamination, hot_stamping, magnet, quantity]
+  warnings: [图纸标注尺寸只有实测值、没有轴名（axis）…, 图纸范围（outline_size.source=document_extents）…]
+            ← 不含"分不清是面纸还是灰板"（进 material_notes 的克重都配上了纸种）
+
+圆盘盒.dwg  layers=32 dims=141 texts=200
+  inputs : {"face_paper_gsm": 300.0, "grey_board_gsm": 1200.0, "v_groove": true}
+  missing: [box_type, box_family, closure_type, inner_length, inner_width, inner_height,
+            insert_type, print_colors, lamination, hot_stamping, magnet, quantity]
+```
+
+- 没做（要人点或要业务签字）：面板点一次；案例库两条仍 `draft` 且缺「标准单价」→
+  `no_eligible`；差异价费率仍 `demo` → 页面 `trial` + `formal=True` 被拦；
+  `converter_license` 与 `real_samples_e2e_passed` 仍需真人签字才可能 `go`。
+- 用户可照抄的复验命令（本机）：
+
+```bash
+cd /Users/sher/Boulderaitech/cpq_agent
+./open-claude/.venv/bin/python -m unittest tests.test_quick_quote_material_gsm_red \
+  tests.test_quick_quote_file_parsing_red tests.test_quick_quote_parse_field_alignment_red
+curl -s http://127.0.0.1:8010/api/file/parse/capability        # 在 34 上
+```
