@@ -422,6 +422,15 @@ if authoritative is not None:
     for item in authoritative:
         code = str(item.get("box_type_code") or "")
         req_no = "REQ-ROUTE-SELFCHECK"
+        # BOM 展开需要内尺寸；自检不是需求单经办，用**盒型自己登记的可生产区间上限**
+        # 填三个内尺寸（拿不到就跳过这个盒型并打印原因，不编数、不改业务口径）。
+        dims = {key: item.get(source_key)
+                for key, source_key in (("inner_length", "size_l_max"),
+                                        ("inner_width", "size_w_max"),
+                                        ("inner_height", "size_h_max"))}
+        if any(dims[key] in (None, "") for key in dims):
+            print("· 权威实样 %s：盒型行没有尺寸区间，跳过路线自检" % code)
+            continue
         try:
             pid = store.create_project("route-selfcheck-%s.dwg" % code, b"selfcheck",
                                        note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
@@ -431,7 +440,8 @@ if authoritative is not None:
                                     title="路线自检 " + code,
                                     data={"industry": "packaging", "box_type": code,
                                           "packaging_product_name": code,
-                                          "quote_quantity": 1000, "lamination": "覆光膜"}),
+                                          "quote_quantity": 1000, "lamination": "覆光膜",
+                                          **dims}),
                 user={"username": "deploy-selfcheck", "role": "admin"})
             da_repo.save_box_match({"project_id": pid, "requirement_no": req_no,
                                     "industry": "packaging",
