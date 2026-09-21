@@ -1,6 +1,7 @@
 """门禁矩阵（第 5 批 Spec §5）：哪些字段人工确认后才能做哪一段下游。"""
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tech_app.backend.storage import store
@@ -110,6 +111,60 @@ def _policy(resolve: Resolver) -> Dict[str, Any]:
     return dict(row) if isinstance(row, dict) else {}
 
 
+def _gap_codes(cost: Dict[str, Any], handoff: Dict[str, Any]) -> List[str]:
+    """当前缺口码：成本记录里的那份 + 交接记录里记下的那份（两边都读得到才校验覆盖）。
+
+    只用来回答"这条放行留痕覆盖的是不是此刻的缺口"；读不到就当作**无从校验**，
+    交给 `_gap_waiver()` 的其余四条判据（宁可不披露，也不假装放行过）。
+    """
+    codes: List[str] = []
+    for source in (cost.get("gaps"), handoff.get("gap_codes"), handoff.get("gap_codes_json")):
+        for row in source if isinstance(source, list) else []:
+            code = (row.get("code") if isinstance(row, dict) else row) or ""
+            code = str(code).strip()
+            if code and code not in codes:
+                codes.append(code)
+    return codes
+
+
+def _gap_waiver(handoff: Dict[str, Any], gap_codes: List[str]) -> Optional[Dict[str, Any]]:
+    """合法放行留痕 → 摘要对象；否则 `None`（Spec `packaging-parse-to-downstream-seams.md` §2.3）。
+
+    四条都要成立：
+
+      ① 交接记录自证这次交接**带着缺口**（`has_gaps`）—— 没缺口的记录里出现放行留痕本身就不成立；
+      ② `by` / `at` / `reason` 都非空（谁、什么时候、为什么）；
+      ③ `codes` 非空且每一项都是有效码；
+      ④ 读得到的当前缺口码必须被 `codes` **全覆盖**（漏一个就不算这条留痕放行了它）。
+
+    这是**披露**不是放宽：调用方仍然把 `cost_gaps_unresolved` 留在 `blocking` 里。
+    """
+    if not handoff.get("has_gaps"):
+        return None
+    raw = handoff.get("gap_waiver_json")
+    if isinstance(raw, str):
+        try:
+            waiver: Any = json.loads(raw) if raw.strip() else None
+        except Exception:           # noqa: BLE001 - 留痕损坏按"没有合法留痕"处理
+            waiver = None
+    else:
+        waiver = raw
+    if not isinstance(waiver, dict):
+        return None
+    by = str(waiver.get("by") or "").strip()
+    at = str(waiver.get("at") or "").strip()
+    reason = str(waiver.get("reason") or "").strip()
+    if not (by and at and reason):
+        return None
+    codes = [str(code).strip() for code in (waiver.get("codes") or [])
+             if str(code or "").strip()]
+    if not codes:
+        return None
+    if gap_codes and not set(gap_codes) <= set(codes):
+        return None
+    return {"by": by, "at": at, "reason": reason, "codes": codes}
+
+
 def _stage_entry(stage: str, project_id: str, resolve: Resolver,
                  snapshot: str) -> Dict[str, Any]:
     requirement = _requirement(project_id)
@@ -118,6 +173,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
     requires = GATE_REQUIRES[stage]
     blocking: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
+    waived: Optional[Dict[str, Any]] = None
     if stage != "quote_draft":
         blocking.extend(_field_blocking(requires, requirement, boards))
     unit_status = str(anchor_mod.current_anchor(project_id).get("unit_status") or "")
@@ -147,9 +203,19 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
             blocking.append({"code": "cost_not_built", "message": "成本尚未测算，测算后才能生成正式报价",
                              "source": "packaging_cost"})
         elif cost.get("has_gaps"):
-            blocking.append({"code": "cost_gaps_unresolved",
-                             "message": "成本仍存在缺口，缺口清零后才能生成正式报价",
-                             "source": "packaging_cost"})
+            # 「缺口未清」这条结论一个字不改（Spec §2.3 C4）；只是若财务/工艺已经按留痕放行过，
+            # 就把那份留痕一并披露出来 —— 否则界面上只有一句"缺口清零后才能生成正式报价"，
+            # 看不出这条缺口其实已经被人按什么原因放行了（34 实测两边说法相反）。
+            handoff = _engine(resolve, "packaging_handoff", "load_handoff", project_id)
+            waiver = _gap_waiver(handoff, _gap_codes(cost, handoff))
+            row: Dict[str, Any] = {"code": "cost_gaps_unresolved",
+                                   "message": "成本仍存在缺口，缺口清零后才能生成正式报价",
+                                   "source": "packaging_cost"}
+            if waiver:
+                row["waived"] = True
+                row["waiver"] = waiver
+                waived = waiver
+            blocking.append(row)
         policy = _policy(resolve)
         if str(policy.get("status") or "") != "chosen":
             blocking.append({"code": "minimum_charge_policy_unresolved",
@@ -162,9 +228,12 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
         elif cost.get("has_gaps"):
             warnings.append({"code": "cost_gaps_unresolved",
                              "message": "成本存在缺口，草稿会随包带出这些缺口"})
-    return {"stage": stage, "status": "blocked" if blocking else "open",
-            "requires": list(requires), "blocking": blocking, "warnings": warnings,
-            "snapshot": {"requirement_snapshot_version": snapshot}}
+    entry = {"stage": stage, "status": "blocked" if blocking else "open",
+             "requires": list(requires), "blocking": blocking, "warnings": warnings,
+             "snapshot": {"requirement_snapshot_version": snapshot}}
+    if waived:
+        entry["waiver"] = waived
+    return entry
 
 
 def build(project_id: str, *, resolve: Resolver = None, stage: str = "") -> Dict[str, Any]:

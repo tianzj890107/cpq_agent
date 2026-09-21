@@ -36,6 +36,11 @@ BOM_CATEGORIES = ("finished", "box_part", "material", "process",
 #: 展开/锁定是工艺侧写权限：**直接引用**第 4 批的角色常量（同一对象，不另抄一份）。
 BOM_WRITE_ROLES = packaging_match.BOX_MATCH_DECIDE_ROLES
 
+#: 配对复核的落盘 doc key（Spec `packaging-parse-to-downstream-seams.md` §2.2）：
+#: 与 `packaging_semantics` / `packaging_parts` 同一范式走 meta 文档通道，
+#: 不改数据库 schema、不加表。
+PAIRING_DOC_KEY = "packaging_bom_pairing"
+
 #: 可自动绑定的变量（Spec §2.2）。
 AUTO_VARIABLES = frozenset({"L", "W", "H", "t", "c"})
 
@@ -570,6 +575,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         },
         "generated_at": generated_at,
         "items": items,
+        # 「在报告里单列不一致项」（Spec `packaging-parse-to-downstream-seams.md` §3.2）：
+        # 键**必须存在**，没有不一致时给 `[]`；只在 build 时算得出，所以按需求单存一份文档。
+        "pairing_review": _load_pairing_review(project_id, req_no),
         "gaps": {
             "needs_input": needs_input,
             "missing_variables": missing_variables,
@@ -579,8 +587,41 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     }
 
 
-def _bind_parts(project_id: str, items: list) -> list:
+def _pairing_doc(project_id: str) -> dict:
+    """读配对复核文档（`{"by_requirement": {需求单: [...]}}`）；读不到给空壳。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, PAIRING_DOC_KEY) or {}
+    except Exception:                                   # noqa: BLE001 - 读不出来按"没有"
+        return {"by_requirement": {}}
+    rows = doc.get("by_requirement") if isinstance(doc, dict) else None
+    return {"by_requirement": rows if isinstance(rows, dict) else {}}
+
+
+def _load_pairing_review(project_id: str, requirement_no: str = "") -> list:
+    rows = _pairing_doc(project_id)["by_requirement"].get(_text(requirement_no) or "")
+    return [dict(row) for row in rows or [] if isinstance(row, dict)]
+
+
+def _save_pairing_review(project_id: str, requirement_no: str, review: list) -> None:
+    """按需求单存一份不一致项清单；写盘失败不改 BOM 结论（披露是加法）。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = _pairing_doc(project_id)
+        doc["by_requirement"][_text(requirement_no) or ""] = [dict(row) for row in review or []
+                                                             if isinstance(row, dict)]
+        get_backend().put_doc(project_id, PAIRING_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001
+        return
+
+
+def _bind_parts(project_id: str, items: list) -> tuple:
     """有零件文档就自动回填（Spec `packaging-dwg-parts-extraction.md` C7）。
+
+    返回 `(items, pairing_review)` —— 后者是"配对后材料明显不同类"的清单，由
+    `build_bom()` 落一份文档，`load_bom()` 读回来（Spec
+    `packaging-parse-to-downstream-seams.md` §3.2）；`bind_rows()` 早就算出来了，
+    以前在 `_bind_parts()` 这里被丢掉，于是没有任何读接口能看到。
 
     没有零件文档 / 读不到 → 逐字保持今天的口径（`needs_input` 一个不少），
     绝不用需求尺寸反推、也绝不编数。延迟导入是为了不让 bom ↔ parts 互相 import。
@@ -590,10 +631,13 @@ def _bind_parts(project_id: str, items: list) -> list:
 
         doc = packaging_parts.load_parts(project_id)
         if not isinstance(doc, dict) or not doc.get("parts"):
-            return items
-        return list(packaging_parts.bind_rows(items, doc).get("items") or items)
+            return items, []
+        result = packaging_parts.bind_rows(items, doc)
+        return (list(result.get("items") or items),
+                [dict(row) for row in (result.get("pairing_review") or [])
+                 if isinstance(row, dict)])
     except Exception:                                   # noqa: BLE001 - 回填失败不改既有结论
-        return items
+        return items, []
 
 
 def build_bom(project_id: str, requirement_no: str = "", *,
@@ -614,8 +658,9 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     expanded = expand_parts(box_code, data, overrides=overrides or {})
     box = _load_box_type(box_code)
     items = _assemble(expanded, box, data, req_no)
-    items = _bind_parts(project_id, items)
+    items, pairing_review = _bind_parts(project_id, items)
     da_repo.save_packaging_bom(project_id, req_no, items)
+    _save_pairing_review(project_id, req_no, pairing_review)
     return load_bom(project_id, req_no)
 
 

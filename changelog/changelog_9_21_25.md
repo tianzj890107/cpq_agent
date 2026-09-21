@@ -10090,3 +10090,45 @@ tests.test_tech_project_acl_contribute_mode_red   OK
 - 未改任何包装成本公式、费率、表达式、`packaging_match` 的 `BOX_MATCH_DECIDE_ROLES` 本身；
 - 未改 `require_project_access` 的 404-vs-403 口径；未放宽 `can_write` / `can_contribute`；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 274. 解析到下游三处未闭合的缝：人工字段不被降级、配对复核可读、放行留痕门禁认得出（9-22，Codex 实现）
+
+Spec `docs/specs/packaging-parse-to-downstream-seams.md` 的 §3.2 / §3.3 落地（§3.1 由 `## 262` 落地）。
+三处都是**加法 / 口径修正**：不放宽任何既有拒绝口径、不新增接口。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 配对复核可读（§3.2） | `tech_app/backend/services/packaging_bom.py` | `_bind_parts()` 不再只取 `items`（`bind_rows()` 早就算出 `pairing_review`，在这里被丢掉）：改为返回 `(items, pairing_review)`；按 Spec §2.2 授权的 meta 文档通道落一份 `packaging_bom_pairing`（`{"by_requirement": {需求单: [...]}}`，**不改 schema、不加表**）；`load_bom()` 读回并**总是**带 `pairing_review` 键（没有不一致时 `[]`） |
+| 放行留痕披露（§3.3） | `tech_app/backend/services/packaging_drawing_flow/gates.py` | `quote_publish` 在 `cost.has_gaps` 时按既有 `resolve()` 机制读一次 `packaging_handoff.load_handoff`：留痕合法则 `cost_gaps_unresolved` 那条**保留**在 `blocking` 里并加 `waived: true` + `waiver{by,at,reason,codes}`，entry 顶层给同一份摘要 |
+
+`items` / `bound` / `gaps` / `stats` / `blocking` 的内容逐字不变：**披露，不是放宽**。
+
+### 一处**补强**的留痕判据（写进 Spec §2.4，不是放宽）
+
+Spec §2.3 的判据里「`codes` 覆盖当前缺口码」在**拿不到当前缺口码**时无从校验（成本记录没有 `gaps`、
+交接记录没有 `gap_codes` 时任何非空 `codes` 都会被当成"覆盖"）—— 那正好把方向做反了。本版收紧成：
+① 交接记录自证带着缺口（`has_gaps`）；② `by`/`at`/`reason` 非空；③ `codes` 非空；④ **读得到**的当前
+缺口码必须被 `codes` 全覆盖。生产口径无副作用：`_guard_gaps()` 只在真带缺口时产生留痕，所以
+「有留痕 ⟹ `has_gaps=True`」恒成立。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_packaging_parse_to_downstream_seams_red   Ran 13 OK（修前 failures=4：B1/B2/B3/C1）
+tests.test_packaging_downstream_blockers_red         OK
+tests.test_packaging_parts_extraction_red            OK
+tests.test_packaging_parametric_bom_red              OK
+tests.test_packaging_quote_draft_and_card_visibility_red OK
+tests.test_packaging_drawing_flow_red                FAILED (failures=1, skipped=1) —— 唯一红是
+                                                     既有 C8（Spec `packaging-manual-field-confirmation.md`
+                                                     §2.4 已记的真冲突，与本批无关）
+```
+
+### 边界
+
+- 未改配对规则（仍是"行顺序 ↔ 面积降序"）、未把不一致变成拒绝；
+- 未改 `gates.py` 的判定条件与稳定码闭集，只加披露字段；`cost_gaps_unresolved` 一条不少；
+- 未动前端、成本公式与费率、知识库；未改数据库 schema；
+- 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
