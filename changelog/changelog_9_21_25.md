@@ -6859,3 +6859,72 @@ Ran 12 tests OK   test_drawing_flow_frontend_wiring_red
   文件（DWG）解析接入（批 5）**都还没做**；本批页面上的五步是链路骨架，只有第一步的
   "看案例库"是真能跑的；
 - 本批未引入任何新的第三方依赖。
+
+## 234. 提交 / 推送 gitlab 并部署 34（## 233 快速报价第 1 批：两条报价路径 + 标准案例模型）（9-21，Codex 执行）
+
+把 ## 233 落成一次提交、推到远端、在 34 上建表并**用真 HTTP 验证接口通了**。
+
+### 提交（221f80f）
+
+`逆向快速报价第 1 批：精准/快速两条报价路径 + 标准报价案例模型（## 233）`（8 个文件：
+`cpq_quick_quote_case.py`（新）、`tech_app/frontend/quick-quote-panel.js`（新）、`cpq_kb.py`、
+`cpq_agent_server.py`、`报价首页.html`、`DEPLOYMENT.md`、
+`docs/specs/quick-quote-1-mode-and-case-model.md`、`changelog_9_21_25.md`）。
+`git diff --check` 干净；`scripts/tmp_import_dwg_cases.py` 与 `裕同包装项目-待开发/` 仍未入库。
+
+### 推送
+
+| 远端 | 分支 | 结果 | 回读 |
+| --- | --- | --- | --- |
+| GitLab `gitlab` | `ytbz` | `22735fe..221f80f`（经 34 推送，见下） | `221f80fc913f928ff2c83614b6caf5280b184708` ✓ |
+| GitHub `origin` | `ytbz` | **未推送**（本机 DNS 不通，见"网络受限"一节） | `22735fe…`（落后一个提交） |
+
+纯快进，未创建 MR / tag / Release。
+
+**为什么这条是经 34 推的**：本机此刻接的是手机热点（`en0 172.20.10.3/28`），
+`github.com` / `gitlab.boulderaitech.com` 全部解析不了（`nodename nor servname provided`），
+SSH/HTTPS 都出不去；34 自己到 GitLab 的 HTTP 通路是好的（`git ls-remote gitlab ytbz` 通）。
+所以把本地提交打成 bundle 传到 34、再由 34 `git push gitlab` —— **SHA 原样保留**，
+不是打补丁重做提交。
+
+### 部署 34（8d2395d → 221f80f，`scripts/deploy_34_bare.sh ytbz`）
+
+- `HEAD 8d2395d → 221f80f`（Fast-forward，8 文件）；`8010 pid=3347033`；`/api/health` `status=ok`；
+  `PATH` 含 `/home/data/cpq-tools/xvfb-user/root/usr/bin` ✓；
+- 两份真实样本仍由主转换器完成（`converter_role=primary`、`fallback_used=false`、ODA 27.1、
+  `output_version=ACAD2018`、`verified=true`：酒盒 6711 实体 / 8 层，圆盘盒 3457 实体 / 32 层）。
+
+### 在 34 上真建表（幂等；只建结构，不写业务数据）
+
+```
+cpq_kb.ensure_schema()          → kb tables = 30，kb_version = 2（没变，说明没动数据）
+cpq_quick_quote_case.init()     → 标准报价案例表已就绪（cpq_wf.cpq_qq_standard_case，含 DWG 通道增量列与两个索引）
+load_config(None)               → 缺省口径（读的是 cpq_kb 快照里新建的 kb_quick_quote_config）
+load_cases(None)                → cases = 0，eligible = 0
+```
+
+### 34 上的真 HTTP 验证（不只是"服务起来了"）
+
+```
+带内部令牌 GET /agents/quote/api/quick-quote/cases   → http=200 ok=true
+    {"ok": true, "engine_version": "quick_quote_case_v1", "industry": "packaging",
+     "quote_modes": [{"mode": "precise", "label": "精准报价"},
+                     {"mode": "quick", "label": "快速报价"}], "steps": [5 步…],
+     "cases": [], "case_total": 0, "eligible_total": 0, "notes": [3 条能力边界]}
+不带票的同一路径                                      → http=401（fail-closed，票据在 8010 一层把关）
+GET /quick-quote-panel.js                             → http=200（面板脚本经 8012 静态代理可取到）
+首页 `data-quote-mode` 命中                            → 5 处（两个入口 + 3 处脚本引用）
+```
+
+令牌取自 8012 进程的 `/proc/<pid>/environ`，**只回显"有/无"，不打印值**。
+
+### 网络受限（需要人接手的一步）
+
+本机当前 **DNS 不可用**（手机热点 + VPN 残留路由），`git push origin ytbz:ytbz` 无法完成。
+网络恢复后一条命令即可补齐：
+
+```bash
+cd /Users/sher/Boulderaitech/cpq_agent && git push origin ytbz:ytbz    # 221f80f
+```
+
+（未做任何变通：没有改远端、没有强推、没有动 20260909 / master。）
