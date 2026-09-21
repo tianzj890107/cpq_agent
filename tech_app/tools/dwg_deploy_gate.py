@@ -65,7 +65,12 @@ GATE_STATUSES = ("ok", "fail", "manual_unacknowledged", "acknowledged", "skip")
 #: 34 的转换器目标取值（上线批 Spec §2 表；仅用于核对部署文档是否写明，不参与运行）。
 _ODA_TARGET_BINARY = "/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun"
 _ODA_TARGET_VERSION = "27.1"
-_XVFB_RUN = "/home/data/cpq-tools/xvfb-user/root/usr/bin/xvfb-run"
+#: `xvfb-run` 所在目录。它是个 shell 脚本，按名字去调同目录的 `Xvfb` / `xauth`，所以这个目录
+#: 必须在 **8010 进程**的 `PATH` 里；只写进 env 文件**对服务无效**（启动器读配置时 `override=False`，
+#: 而 `PATH` 本来就在进程环境里，于是文件里那一行被静默忽略）。34 上线漏过这一条 → ODA 启动即崩、
+#: 静默回退 LibreDWG。
+_XVFB_BIN_DIR = "/home/data/cpq-tools/xvfb-user/root/usr/bin"
+_XVFB_RUN = _XVFB_BIN_DIR + "/xvfb-run"
 _TOOLS_ROOT = "/home/data/cpq-tools"
 _FALLBACK_PROVIDER = "libredwg"
 _FALLBACK_TARGET_BINARY = "/home/data/cpq-tools/current/bin/dwg2dxf"
@@ -432,6 +437,13 @@ def _check_converter_rollout_documented(env: str) -> dict:  # noqa: ARG001 - 与
                         ("capability", "provider", "converter_version", "fallback", "available")),
         "上线三件套": all(token in doc for token in
                       (_SMOKE_TOOL, _SAMPLE_TOOL, _GATE_TOOL, "--env production")),
+        # 光写「PATH 要有」不够：这一条要求文档写出**为什么 env 文件不行**、以及启动命令行的
+        # 写法。缺失时生产门禁直接 fail —— 「漏配 PATH → ODA 静默回退」不该靠人记得。
+        # 文档要写清「为什么 env 文件不行」（override=False + 静默忽略）与「启动命令行怎么写」。
+        "PATH 生效方式": all(token in doc for token in
+                        ("override=False", "静默忽略", _XVFB_BIN_DIR, "PATH=")),
+        "主转换器生效口径": all(token in doc for token in
+                          ("converter_role", "fallback_used", "primary")),
         "声明口径原文": _CLAIM_LINE in doc,
         "两条硬禁令": (bool(re.search("不得.{0,12}模型", doc)) and "STEP" in doc),
     }

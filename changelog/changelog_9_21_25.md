@@ -5243,3 +5243,88 @@ tests.test_quote_first_final_acceptance_red       Ran 20 tests  OK
 未提交、未推送、未部署、未连 34、未重启服务；未新增依赖、未改任何既有红测。
 
 ---
+
+## 212
+
+**34 部署实测：DWG 转换的最后一个线上缺口是 `PATH`，不是代码**（2026-09-21）。
+
+### 怎么发现的
+
+把五批实现（`892b655`）部署到 34 后，`/api/health` 说 `available=true, provider=oda, converter_version=27.1,
+preview_render=true`，但真拿两份样本转换，manifest 里是：
+
+```
+{"status": "success_with_warnings", "converter_role": "fallback", "fallback_used": true,
+ "primary_failure_code": "DWG_CONVERSION_FAILED", "converter_version": "0.14",
+ "attempts": [{"role": "primary",  "provider": "oda",      "status": "failed",  "error_code": "DWG_CONVERSION_FAILED", "duration_ms": 349},
+              {"role": "fallback", "provider": "libredwg", "status": "success_with_warnings"}]}
+```
+
+即**主转换器 ODA 失败、LibreDWG 顶上**。页面看不出来（`status` 一样是 ok，DXF 和预览也都有），
+只有 `converter_role` / `quality.output_version`（`""` 而不是 `ACAD2018`）/ `quality.audit_enabled`
+（`false`）/ 产物名（`converted.dxf` 而不是 `source.dxf`）能区分。
+
+### 根因（实测，不是推断）
+
+手动跑 ODA 拿到原文：
+
+```
+qt.qpa.xcb: could not connect to display :109
+qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ...
+```
+
+`xvfb-run` 是个 shell 脚本，它按**名字**去调同目录的 `Xvfb` / `xauth`。8010 进程的 `PATH` 里没有
+`/home/data/cpq-tools/xvfb-user/root/usr/bin`，`Xvfb` 起不来 → Qt 连不上 display → ODA 非 0 退出。
+
+把这个目录加到 `PATH` 后立即复现成功（同一份 `酒盒.dwg`）：`source.dxf` 2 693 480 B。
+`QT_QPA_PLATFORM=offscreen` 无用（该 AppImage 只带 `xcb` 插件）。
+
+**为什么 env 文件里写 `PATH` 没用**：8010 用 `load_dotenv(..., override=False)` 读 env 文件，而
+`PATH` 在进程里**本来就存在**，`override=False` 表示文件里的同名值被静默忽略。实测：
+
+```
+只给 CPQ_ENV_FILE 启动 → in-process PATH = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+（env 文件里已写 export PATH=...xvfb-user/root/usr/bin:...，未生效）
+```
+
+所以 `PATH` **必须写在启动命令行上**。
+
+### 改了哪些文件
+
+| 文件 | 改动 |
+| --- | --- |
+| `DEPLOYMENT.md` | 「PATH 与运行用户权限」补：为什么 env 文件不行（含实测原文）、**完整启动命令行**、`/proc/$PID/environ` 核对法、前后对照表（缺/含 xvfb 目录）；「上线三件套」补 `set -a; . <env 文件>; set +a` 前置步骤与 `converter_role` 逐份核对；新增「配好之后自己怎么验证」小节（4 条命令 + 34 实测结果表） |
+| `tech_app/tools/dwg_conversion_smoke.py` | 冒烟新增一条判定：`fallback_used=true` 即报「主转换器未生效」，不再让静默回退混在 `status=ok` 里过关 |
+| `tech_app/tools/dwg_deploy_gate.py` | 只加文档 marker（`GATE_ITEMS` 19 项 id/顺序一律未动）：`PATH 生效方式`（要求文档写出 `override=False` + 静默忽略 + xvfb 目录 + `PATH=`）、`主转换器生效口径`（要求写出 `converter_role` / `fallback_used` / `primary`）；新增常量 `_XVFB_BIN_DIR` |
+| `scripts/deploy_34_bare.sh` | **新增**：34 裸进程部署的唯一可执行版本。幂等写 env 文件（env 名从 `cad_converter.service` 常量取）、纯快进、先子后父重启（启动命令带 `PATH` 前缀）、健康检查、`/proc` 核对 `PATH`、真转两份样本并核对 `converter_role="primary"`，任一项不过非零退出 |
+
+### 34 实测（部署后）
+
+```
+env -i CPQ_ENV_FILE=... PATH=<xvfb bin>:... python -c '<复刻服务启动口径>'
+酒盒.dwg   status=ok  role=primary  version=27.1  output_version=ACAD2018  audit_enabled=true
+           entity=6711 layer=8  dim=316 text=127 block=0    source.dxf + converted.svg
+圆盘盒.dwg status=ok  role=primary  version=27.1  output_version=ACAD2018  audit_enabled=true
+           entity=3457 layer=32 dim=141 text=87  block=234  source.dxf + converted.svg
+```
+
+两份预览 sha256 与本地金标（LibreDWG 采集）**逐位一致**：`a80cb58eef06a0c7…`（酒盒）、
+`7c708b81c864fd5b…`（圆盘盒）；几何统计也逐项相同。**换主转换器不改变可视化结果。**
+
+### 回归
+
+```
+tests.test_dwg_final_acceptance_red               Ran 53 tests  OK
+tests.test_quote_first_final_acceptance_red       Ran 20 tests  OK
+tests.test_dwg_converter_production_rollout_red   Ran 20 tests  OK
+tests.test_dwg_conversion_adapter_red \
+tests.test_dwg_conversion_quality_repair_red      Ran 105 tests OK (skipped=1)
+```
+
+`test_dwg_final_acceptance_red::test_e38`（门禁脚本不许出现 `dotenv` 字样）在本批踩过一次：
+新增注释里写了那个词 → 立刻改掉，改为描述机制（`override=False` / 静默忽略）。该红测逐字未动。
+
+### 边界
+
+未新增依赖；未改 `cad_converter` 既有口径与任何 `tests/test_*_red.py`；未动
+`裕同包装项目-待开发/`（不入库）；未改服务器配置。

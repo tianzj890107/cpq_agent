@@ -6,6 +6,10 @@
 - 装了 → 对两份真实样本各转一次，逐项校验 DXF 可打开性、实体/图层数、预览非空白，
   任一项不满足就打印「B 层未通过」并返回非零退出码。
 
+额外一条（上线批踩过的坑）：配了回退的环境里，**必须**核对 `converter_role="primary"`。
+主转换器崩了、LibreDWG 顶上时 `status` 一样是 `ok`，只看状态码分不出「ODA 在干活」还是
+「ODA 静默回退」—— 34 上 8010 的 `PATH` 少一个目录就是这个样子。
+
 口径纪律：
   · 样本只读（`裕同包装项目-待开发/酒盒.dwg`、`圆盘盒.dwg`），不入库、不修改；
   · 产物与 manifest 全部落在临时目录，不写真实 tech_data、不写审计；
@@ -190,6 +194,14 @@ def main() -> int:
             if manifest.get("is_simulated") or manifest.get("acceptance_level") != "real":
                 problems.append("%s：产物不是真实转换（is_simulated/acceptance_level 不符）" % name)
                 continue
+            # **主转换器有没有真的在干活**：配了回退时，`fallback_used=true` 只说明「备用
+            # 转换器成功了」，主跳次其实是失败的。现场「DWG 只能看 PNG / 不是位图」就是这样
+            # 被掩盖的 —— 两种情况的 `status` 都可能是 ok。所以这里必须单独判一次。
+            if manifest.get("fallback_used"):
+                problems.append("%s：主转换器未生效，本次由备用转换器完成"
+                                "（converter_role=%r、primary_failure_code=%r；先查 8010 的 PATH）"
+                                % (name, manifest.get("converter_role"),
+                                   manifest.get("primary_failure_code")))
             # 质量门槛（修复批 Spec §4）：退出码 0 不算数，结构/实体/图层都要过。
             status = str(manifest.get("status") or "")
             if status not in ("ok", "success_with_warnings"):

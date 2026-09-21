@@ -152,7 +152,10 @@ curl -s http://127.0.0.1:8010/api/health   # JSON 的 status 必须严格等于 
   （`0` = 不递归，`1` = 开启 Audit/Repair，`*.dwg` 逐字给出、不经 shell 展开）。
   输出格式 `DXF`、输出版本 `ACAD2018`、`audit_enabled=true`。
 - Linux 版 ODA 即使命令行运行也依赖 X Display，**必须经 `xvfb-run -a` 包装**：wrapper 逐项排在
-  exe 之前；wrapper 所在目录还要在服务进程的 `PATH` 里。
+  exe 之前。而 `xvfb-run` 自己还是个 shell 脚本、会按名字去调同目录的 `Xvfb` / `xauth`，所以
+  **那个目录必须出现在 8010 进程的 `PATH` 里**（写法见下节「PATH 与运行用户权限」）。漏了这一条
+  ODA 会启动即崩溃，然后**静默回退到 LibreDWG** —— 转换照样成功，只有 manifest 的
+  `converter_role` 会变成 `fallback`。
 - 回退**默认关闭**：不显式配 `DWG_CONVERTER_FALLBACK_PROVIDER` 就没有回退；**绝不把「这台机器
   恰好装了另一个转换器」当成可用回退**。
 - 回退**只在主转换器明确失败**时才触发（超时 / 非 0 退出 / 产物缺失 / 质量门槛不过 / 主二进制
@@ -169,10 +172,57 @@ curl -s http://127.0.0.1:8010/api/health   # JSON 的 status 必须严格等于 
 
 ### PATH 与运行用户权限
 
-- `xvfb-run` 所在目录 `/home/data/cpq-tools/xvfb-user/root/usr/bin` 必须在服务进程可见的
-  `PATH` 里（同一条启动命令行里显式前缀即可，不依赖任何个人 shell 的 rc 文件）。
+**这一节在 34 上线时真的漏过，症状就是「DWG 解析不了、只能看 PNG」。**
+
+- `xvfb-run` 所在目录 `/home/data/cpq-tools/xvfb-user/root/usr/bin` 必须在**服务进程**可见的
+  `PATH` 里：`xvfb-run` 是个 shell 脚本，它按名字去调同目录的 `Xvfb` / `xauth`；`PATH` 里没有
+  这个目录时 `Xvfb` 起不来，Qt 报 `could not connect to display :NN`，ODA 非 0 退出。
+- **只写进 env 文件是不够的 —— 服务侧不会生效**：8010 用 `load_dotenv(..., override=False)` 读
+  env 文件，而 `PATH` 在进程里**本来就存在**，`override=False` 表示文件里的同名值被**静默忽略**。
+  34 实测（2026-09-21，env 文件里已经写了 `export PATH=...xvfb-user/root/usr/bin:...`）：
+
+  ```
+  只给 CPQ_ENV_FILE 启动 → in-process PATH = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  ```
+
+  文件里那一行**对服务没有生效**（它只对「先 `source` 一遍再跑」的命令行工具起作用，见本节最后
+  一条），所以启动命令必须**显式前缀**（`$PATH` 由启动它的 shell 展开，不依赖任何个人 shell 的
+  rc 文件）。这条链路已经固化进 `scripts/deploy_34_bare.sh`，**上线就用它，不要手敲**：
+
+  ```bash
+  cd /home/wugefei/CPQ/cpq_agent
+  PATH=/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH \
+  CPQ_ENV_FILE=/home/wugefei/CPQ/cpq_env.sh \
+  setsid nohup ./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010 \
+    >> nohup.out 2>&1 < /dev/null &
+  ```
+
+  核对（这是唯一能一眼看出有没有生效的地方，`/proc` 里读到的是 exec 期的真实环境）：
+
+  ```bash
+  PID=$(pgrep -f 'cpq_suite_server.py --host 0.0.0.0 --port 8010' | head -1)
+  tr '\0' '\n' < /proc/$PID/environ | grep '^PATH=' | tr ':' '\n' | head -3
+  # 第一行必须是 /home/data/cpq-tools/xvfb-user/root/usr/bin
+  ```
+
+  前后对照（34 实测，同一份 `酒盒.dwg`、同一套配置，只差 8010 的 `PATH`）：
+
+  | 8010 的 `PATH` | `converter_role` | `quality.output_version` | `quality.audit_enabled` | DXF 名 | 警告数 |
+  | --- | --- | --- | --- | --- | --- |
+  | 缺 xvfb 目录 | `fallback` | `""` | `false` | `converted.dxf` | 1520 |
+  | 含 xvfb 目录 | `primary` | `ACAD2018` | `true` | `source.dxf` | 0 |
+
+  两行都是 `status=ok`、都有 DXF 与预览 —— **只有 `converter_role` / `output_version` /
+  `audit_enabled` 分得出主转换器有没有真的在干活**。所以验收口径是
+  「`status` 通过 **且** `converter_role="primary"`、`fallback_used=false`」，不许只看 `status`。
 - 运行 8010 的用户对 `/home/data/cpq-tools` 及其子目录必须**可读可执行**（ODA 的 squashfs 内还有
   同目录依赖库要一起可读），不依赖任何个人账号的环境变量。
+- 命令行工具（上线三件套）自己**都不读** env 文件，跑之前先把 env 文件 export 进当前 shell，
+  否则它们看到的是一台「没装转换器」的机器：
+
+  ```bash
+  set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+  ```
 
 ### 预览渲染（2.1 视觉解析的前提，**34 上最容易漏配的一项**）
 
@@ -244,6 +294,8 @@ manifest 的 `quality.output_version` / `quality.audit_enabled` 上核对（Spec
 ### 上线三件套
 
 ```bash
+# ⓪ 先把仓库外的 env 文件 export 进当前 shell（三件套都不自己读 env 文件）
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
 # ① A/B 两层冒烟（未装转换器时必须 SKIP 并打印 A/B 层结论，不得伪装通过）
 python tech_app/tools/dwg_conversion_smoke.py
 # ② 两份真实样本各跑一次（只读样本、只写 --out）
@@ -252,6 +304,42 @@ python tech_app/tools/dwg_sample_e2e.py --sample 裕同包装项目-待开发/�
 # ③ 生产门禁（verdict 必须为 go 才允许宣称上线）
 python tech_app/tools/dwg_deploy_gate.py --env production
 ```
+
+三件套里 ① 会打印每个样本的完整 manifest，**必须逐份核对 `converter_role`**：
+
+```
+"converter_role": "primary",      # ← 必须是 primary；fallback 说明主转换器没生效（先查 PATH）
+"fallback_used": false,
+"status": "ok",
+quality.output_version = "ACAD2018";  quality.audit_enabled = true;  quality.verified = true
+output_files: role=dxf 一份 + role=preview 一份
+```
+
+### 配好之后自己怎么验证（谁都能跑，不看人）
+
+```bash
+# 1) 服务起来了、能力声明对
+curl -s http://127.0.0.1:8010/api/health | python -m json.tool | head -40
+# 2) 8010 的 PATH 里确实有 xvfb 目录（见「PATH 与运行用户权限」）
+PID=$(pgrep -f 'cpq_suite_server.py --host 0.0.0.0 --port 8010' | head -1)
+tr '\0' '\n' < /proc/$PID/environ | grep '^PATH=' | grep -c '/home/data/cpq-tools/xvfb-user/root/usr/bin'
+# 3) 真转一次（两份样本），看 converter_role 是不是 primary
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+cd /home/wugefei/CPQ/cpq_agent
+python tech_app/tools/dwg_conversion_smoke.py
+# 4) 生产门禁给出可上线结论
+python tech_app/tools/dwg_deploy_gate.py --env production
+```
+
+34 于 2026-09-21 的实测结果（配置与本文件一致时应能复现）：
+
+| 样本 | `source_sha256`（前 16） | `converter_role` | `status` | entity / layer / dim / text / block | DXF 名 | 预览 sha256（前 16） |
+| --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | `0991c8b0a9646d1f` | `primary`（ODA 27.1） | `ok` | 6711 / 8 / 316 / 127 / 0 | `source.dxf` | `a80cb58eef06a0c7` |
+| `圆盘盒.dwg` | `4c70ce7b3774c2a1` | `primary`（ODA 27.1） | `ok` | 3457 / 32 / 141 / 87 / 234 | `source.dxf` | `7c708b81c864fd5b` |
+
+两份预览 sha256 与 `tests/fixtures/dwg_acceptance/2026-09-21.1/manifest.json`（LibreDWG 采集的
+金标）**逐位一致**：换主转换器不改变可视化结果，几何统计也逐项相同。
 
 ### 宣传口径与两条硬禁令
 
