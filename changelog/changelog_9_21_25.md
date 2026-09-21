@@ -9401,3 +9401,26 @@ tests.test_packaging_quote_draft_and_card_visibility_red        Ran 10 OK
 
 线上口径：报价第 3 步「定价-利润加成」从"缺口的真实单永远 409、做不下去"变成
 **草稿能出、数字链完整、缺口逐条可见**；只有 `publish=True`（正式报价单）仍被挡住。
+
+## 262. 零件链路与报价侧缺口的 Spec + 红测入库（9-22，Codex 只改 Spec / 红测 / changelog）
+
+把本会话逐轮实测发现、但还只躺在工作区的 Spec + 红测一次性入库（不含业务实现）。
+
+### 本批入库内容
+
+- **零件链路三份新 Spec + 三套红测**（`## 261` 那次实测的三个根因）：
+  `packaging-parts-material-attribution.md`（材料/厚度四层归属，27 例 / 21 红）、
+  `packaging-parts-outline-chaining.md`（重复边折叠 + 外轮廓重判，20 例 / 13 红）、
+  `packaging-parts-solid-coverage.md`（耳切三角化 + 批量挤出覆盖率，23 例 / 19 红）；
+  并按新 Spec 修订 `tests/test_packaging_parts_3d_red.py` 三处被取代的断言（凹多边形不再是拒绝理由）。
+- **报价侧四份 Spec + 四套红测**（前述轮次实测发现）：
+  `packaging-manual-field-confirmation.md`（人工字段不被解析降级；该实现已由并行会话落地，现 Ran 13 OK）、
+  `packaging-cost-finance-access.md`（FI1 读包装项目 404，7 红）、
+  `packaging-quote-send-recovery.md`（放行回传的 500/恢复路径，9 红）、
+  `packaging-parts-downstream-readback.md`（单件工艺/成本不落库与进度文案，14 红）。
+
+### 边界
+
+- 只入库 Spec + 红测 + changelog；没有写业务实现、没有改生产数据；
+- 34 上部署与全流程复跑见同日本条后续记录；能力声明仍是
+  **DWG 编排能力完成，真实转换能力未验收**，零件闭环 L2（可信），未签字不得声明 L3。

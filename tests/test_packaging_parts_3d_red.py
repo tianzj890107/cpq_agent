@@ -28,8 +28,11 @@ APP_JS = ROOT / "tech_app" / "frontend" / "app.js"
 
 ENGINE_VERSION = "packaging-part-solids/1"
 DOC_KEY = "packaging_part_solids"
+# 2026-09-22 修订（Spec `packaging-parts-solid-coverage.md` §4.5）：凹多边形不再是拒绝理由
+# （耳切三角化必须能挤），新增自交与退化两个拒绝理由。
 UNSUPPORTED_REASONS = ("outline_open", "outline_unavailable", "thickness_unknown",
-                       "concave_polygon", "too_few_points", "too_many_points")
+                       "too_few_points", "too_many_points",
+                       "self_intersecting", "degenerate_polygon")
 MAX_POINTS = 2000
 SOLID_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/solid"
 STL_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/solid.stl"
@@ -151,11 +154,13 @@ class CGates(SolidCase):
 # D 组：凹多边形
 # --------------------------------------------------------------------------- #
 class DConcave(SolidCase):
-    def test_d1_concave_is_rejected(self):
+    def test_d1_concave_is_extruded_by_ear_clipping(self):
+        # 2026-09-22 修订（Spec `packaging-parts-solid-coverage.md` §2.1）：凹件必须能挤。
         out = self.module().extrude(row(points=l_shape()))
-        self.assertEqual(out["status"], "unsupported")
-        self.assertEqual(out["reason"], "concave_polygon",
-                         "凹多边形本版不挤（不做耳切），必须显式拒绝")
+        self.assertEqual(out["status"], "ok", "凹多边形必须耳切后挤出，不再拒绝")
+        self.assertEqual(out.get("triangulation"), "ear_clipping")
+        self.assertEqual(out["triangles"], 2 * 6 + 2 * (6 - 2),
+                         "三角柱：底 4 + 顶 4 + 侧 12 = 20")
 
     def test_d2_convex_triangle_still_works(self):
         out = self.module().extrude(row(points=[[0.0, 0.0], [100.0, 0.0], [0.0, 50.0]]))
@@ -224,7 +229,7 @@ class GFrontend(SolidCase):
 
     def test_g2_unsupported_copy_is_human_readable(self):
         source = self._js()
-        for phrase in ("没有闭合轮廓", "缺厚度", "凹多边形"):
+        for phrase in ("没有闭合轮廓", "缺厚度", "自交", "退化"):
             self.assertIn(phrase, source, "unsupported 原因必须翻成人话：%s" % phrase)
 
     def test_g3_existing_viewer_untouched(self):
