@@ -119,6 +119,32 @@ NEW_HEAD="$(git -c safe.directory="$PWD" rev-parse --short HEAD)"
 echo "HEAD $OLD_HEAD → $NEW_HEAD"
 
 # --------------------------------------------------------------------------- #
+step "2b. 落版本 stamp（部署版本身份，Spec deploy-build-identity §2.3）"
+# 目的：让「这台机器上跑的是哪一版代码」变成一条命令能读出来的事实（`/api/health` 的
+# `build` 段）。stamp 落在**部署目录之外**，不脏工作区；写不进去就拒绝继续部署。
+STAMP_PATH="${CPQ_BUILD_STAMP:-$(dirname "$REPO")/cpq_build.json}"
+FULL_HEAD="$(git -c safe.directory="$PWD" rev-parse HEAD)"
+BRANCH_NOW="$(git -c safe.directory="$PWD" rev-parse --abbrev-ref HEAD)"
+DEPLOYED_AT="$(date +%Y-%m-%dT%H:%M:%S%z)"
+"$PY" - "$STAMP_PATH" "$FULL_HEAD" "$BRANCH_NOW" "$REF" "$DEPLOYED_AT" <<'STAMPEOF' || fail "写 stamp 失败"
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+commit, branch, ref, deployed_at = sys.argv[2:6]
+path.parent.mkdir(parents=True, exist_ok=True)
+payload = {"commit": commit, "branch": branch, "ref": ref, "deployed_at": deployed_at}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print("stamp 已写入：%s（commit=%s ref=%s）" % (path, commit[:12], ref))
+STAMPEOF
+BUILD_COMMIT="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("commit", ""))' "$STAMP_PATH")"
+HEAD_COMMIT="$(git -c safe.directory="$PWD" rev-parse HEAD)"
+[ -n "$BUILD_COMMIT" ] || fail "stamp 里读不到 commit：$STAMP_PATH"
+[ "$BUILD_COMMIT" = "$HEAD_COMMIT" ] || fail "stamp 的 commit（$BUILD_COMMIT）与仓库 HEAD（$HEAD_COMMIT）不一致，拒绝继续"
+echo "build.commit=${BUILD_COMMIT:0:12}（与 git HEAD 一致）"
+
+# --------------------------------------------------------------------------- #
 step "3. 重启 8010（先子后父；启动命令带 PATH 前缀）"
 mv nohup.out "nohup.out.prev.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
 pkill -f 'tech_app_launch.py --host 127.0.0.1 --port 8012' 2>/dev/null || true
@@ -129,7 +155,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 ss -ltn 2>/dev/null | grep -qE ':(8010|8012)\b' && fail "8010/8012 端口没释放，不重启（避免起两套）"
-PATH="$XVFB_BIN_DIR:$PATH" CPQ_ENV_FILE="$ENVF" setsid nohup \
+PATH="$XVFB_BIN_DIR:$PATH" CPQ_ENV_FILE="$ENVF" CPQ_BUILD_STAMP="$STAMP_PATH" setsid nohup \
   "$PY" cpq_suite_server.py --host 0.0.0.0 --port 8010 >> nohup.out 2>&1 < /dev/null &
 
 # --------------------------------------------------------------------------- #
@@ -361,6 +387,58 @@ for name in SAMPLES:
         print("   · 代表件 %s：outline_status=%s size_source=%s 挤出=%s"
               % (row.get("part_code"), row.get("outline_status"),
                  row.get("size_source"), out.get("status")))
+# 权威实样盒型的工艺路线必须能确认（Spec `packaging-route-template-closure.md` §3.4）：
+# 模板工序名在 build 时归一化到 19 条闭集内；闭集外又没映射的名字在入库时就被点名拒绝。
+# 少了这一条，盒型会以"永远 confirm 不了"（409 route_not_confirmable）的状态入库，直到
+# 零件下游全部卡死才发现。样本项目照旧建在隔离数据目录里，**不读也不写生产项目**。
+try:
+    from tech_app.backend.storage import da_db, da_repo, kb_repo
+    from tech_app.backend.services import packaging_bom, packaging_route
+
+    authoritative = [row for row in kb_repo.packaging_box_types()
+                     if str(row.get("business_status") or "").strip() == "权威实样"]
+except Exception as exc:                              # noqa: BLE001 - 读不到知识库如实报
+    print("· 权威实样路线自检：读不到知识库（%s），跳过" % exc)
+    authoritative = None
+if authoritative is not None:
+    if not authoritative:
+        print("· 权威实样路线自检：知识库里没有 business_status='权威实样' 的盒型，跳过")
+    for item in authoritative:
+        code = str(item.get("box_type_code") or "")
+        req_no = "REQ-ROUTE-SELFCHECK"
+        try:
+            pid = store.create_project("route-selfcheck-" + code, b"",
+                                       note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
+                                       owner_display_name="deploy-selfcheck")
+            requirement_service.save_requirement_draft(
+                pid, RequirementDoc(project_id=pid, requirement_no=req_no,
+                                    title="路线自检 " + code,
+                                    data={"industry": "packaging", "box_type": code,
+                                          "packaging_product_name": code,
+                                          "quote_quantity": 1000, "lamination": "覆光膜"}),
+                user={"username": "deploy-selfcheck", "role": "admin"})
+            da_repo.save_box_match({"project_id": pid, "requirement_no": req_no,
+                                    "industry": "packaging",
+                                    "engine_version": "packaging_match_v1",
+                                    "inputs": {}, "candidates": [], "missing_inputs": [],
+                                    "suggested_box_type": code})
+            da_repo.update_box_match_decision(pid, req_no, decision="confirmed",
+                                              confirmed_box_type=code,
+                                              confirmed_by="deploy-selfcheck",
+                                              confirmed_at=da_db.now())
+            packaging_bom.build_bom(pid, req_no)
+            built = packaging_route.build_route(pid, req_no)
+            confirmed = packaging_route.confirm_route(
+                pid, req_no, actor={"username": "deploy-selfcheck"})
+            print("· 权威实样 %s：路线 %d 道，confirm=%s"
+                  % (code, len(built.get("steps") or []), confirmed.get("status")))
+            if str(confirmed.get("status")) != "confirmed":
+                bad.append("权威实样 %s：confirm 结果不是 confirmed（%s）"
+                           % (code, confirmed.get("status")))
+        except Exception as exc:                      # noqa: BLE001 - 检查失败如实报
+            traceback.print_exc()
+            bad.append("权威实样 %s：工艺路线自检失败（%s）" % (code, exc))
+
 print(json.dumps({"isolated_downstream_selfcheck": "ok" if not bad else "failed",
                   "problems": bad}, ensure_ascii=False))
 if bad:
@@ -386,6 +464,7 @@ echo "· 生产数据目录未被写入（meta.json 数量 $META_BEFORE → $MET
 # --------------------------------------------------------------------------- #
 step "7. 结论"
 echo "部署完成：$OLD_HEAD → $NEW_HEAD（ref=$REF）"
+echo "build.commit=$FULL_HEAD（branch=$BRANCH_NOW；stamp=$STAMP_PATH）"
 echo "8010 pid=$PID；env 文件=$ENVF；日志=nohup.out"
 echo "能力声明口径（未通过 L4 之前只能这么说）：DWG 编排能力完成，真实转换能力未验收"
 echo "门禁（**必须带 env 与 PATH**，否则门禁探不到转换器、会误报 converter_version_pinned fail）："

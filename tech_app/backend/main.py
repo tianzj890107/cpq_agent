@@ -66,7 +66,8 @@ from .models.workflow import (
 )
 from .services import (
     acting_user, cpq_auth_client, user_llm,
-    approval as approval_svc, assembly, auth, bom, cleaning, cost, costest, decompose,
+    approval as approval_svc, assembly, auth, bom, build_identity, cleaning, cost, costest,
+    decompose,
     component_match, cost_lookup, cost_model, cpq_bridge, cpq_sso, drawing2d, geometry,
     cost_flow, cost_review, entry_origin, file_preflight, industry_templates, integration,
     manufacturing, report_workflow,
@@ -922,6 +923,10 @@ def health():
         # /api/health 是免登录接口：前端未登录时也要能问出"该跳哪个登录入口"。
         # session-guard.js 靠它决定不要跳本地 auth.html。
         "sso_enabled": CPQ_SSO_ENABLED,
+        # 部署版本身份（Spec `deploy-build-identity`）：这里跑的是哪个 commit。免登录可读，
+        # 外网 curl 一次就能与 `git rev-parse --short HEAD` 对账；读不到就回 "unknown"，
+        # 绝不让 health 因为版本信息缺失而 500。
+        "build": build_identity.build_info(),
     }
 
 

@@ -29,6 +29,11 @@
      这里只写相对路径，基址由 agentBase() 给。图纸只从这里进 —— 转换与语义都在服务端，
      浏览器不转换、不调技术工艺接口、不把图纸送视觉模型。 */
   var PARSE_PATH = "/api/quick-quote/parse";
+  /* 案例维护的两条写路由（Spec 批 12 §2.5）：模板的唯一事实源是
+     cpq_quick_quote_case.QUICK_QUOTE_CASE_FIELDS_PATH / QUICK_QUOTE_CASE_REVIEW_PATH。
+     这里由 CASES_PATH 拼出来（同值，但**不写第二份路径字面量**）——后端模板一改，这里跟着走。 */
+  var CASE_FIELDS_PATH = CASES_PATH + "/{case_code}/fields";
+  var CASE_REVIEW_PATH = CASES_PATH + "/{case_code}/review";
   /* 上传入口的 accept（Spec 批 11 C2）：图纸 + 常见需求文件。 */
   var PARSE_ACCEPT = ".dwg,.dxf,.pdf,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp";
 
@@ -139,9 +144,10 @@
    *  blocked_by / next_actions 逐字渲染，前端**不自己判断**"有没有案例"（否则接口说
    *  2 条、页面说 0 条，现场没法对账）。返回的节点带 data-qq-readiness 与 data-qq-verdict。
    */
-  function renderReadiness(readiness, options) {
+  function renderReadiness(readiness, options, payload) {
     readiness = readiness || {};
     options = options || {};
+    payload = payload || {};
     var verdict = readiness.verdict || "unknown";
     var box = el("div", "qq-readiness qq-readiness-" + verdict);
     box.setAttribute("data-qq-readiness", verdict);
@@ -171,20 +177,86 @@
         btn.type = "button";
         btn.setAttribute("data-qq-action", QUOTE_ACTION_TARGETS[row.action] || row.action || "");
         if (row.hint) btn.title = row.hint;
+        // 两个回调都没给时把"还没接线"标在 DOM 上，而不是点了没反应（Spec 批 12 §2.5）。
+        if (!actionWired(row.action, options)) {
+          btn.setAttribute("data-qq-action-pending", "1");
+        }
         btn.addEventListener("click", function () {
           if (typeof options.onAction === "function") {
             options.onAction(row.action, row);
             return;
           }
+          if (row.action === "fill_case_fields" && typeof options.onCaseFill === "function") {
+            options.onCaseFill(actionCase(payload, options));
+            return;
+          }
+          if (row.action === "review_case" && typeof options.onCaseReview === "function") {
+            options.onCaseReview(actionCase(payload, options));
+            return;
+          }
           if (row.action === "transfer_to_precise" && typeof options.onPrecise === "function") {
             options.onPrecise();
+            return;
           }
+          btn.setAttribute("data-qq-action-pending", "1");
         });
         bar.appendChild(btn);
       });
       box.appendChild(bar);
     }
     return box;
+  }
+
+  /** 这个动作有没有接线（Spec 批 12 §2.5）：没有就标 `data-qq-action-pending`。 */
+  function actionWired(action, options) {
+    options = options || {};
+    if (typeof options.onAction === "function") return true;
+    if (action === "fill_case_fields") return typeof options.onCaseFill === "function";
+    if (action === "review_case") return typeof options.onCaseReview === "function";
+    if (action === "transfer_to_precise") return typeof options.onPrecise === "function";
+    return true;
+  }
+
+  /** 动作作用在哪条案例上：优先 `options.caseCode`，否则案例表第一行。 */
+  function actionCase(payload, options) {
+    var wanted = (options || {}).caseCode;
+    var rows = (payload || {}).cases || [];
+    for (var i = 0; i < rows.length; i += 1) {
+      if (!wanted || (rows[i] || {}).case_code === wanted) return rows[i];
+    }
+    return rows[0] || null;
+  }
+
+  /** 模板 → 具体路径（`{case_code}` 替换 + 编码）；基址沿用 agentBase()。 */
+  function caseUrl(template, caseCode) {
+    return agentBase() + String(template || "").replace("{case_code}",
+                                                        encodeURIComponent(String(caseCode || "")));
+  }
+
+  /** `POST …/{case_code}/fields`：补齐案例字段（Spec 批 12 §2.4）。 */
+  function fillCaseFields(caseCode, values) {
+    return postJson(caseUrl(CASE_FIELDS_PATH, caseCode), { values: values || {} });
+  }
+
+  /** `POST …/{case_code}/review`：改审核状态（Spec 批 12 §2.4）。 */
+  function reviewCase(caseCode, status, reason) {
+    return postJson(caseUrl(CASE_REVIEW_PATH, caseCode),
+                    { status: status, reason: reason || "" });
+  }
+
+  function postJson(url, body) {
+    return apiFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; }).then(function (data) {
+        if (!resp.ok && !data.error) {
+          data = { ok: false, error: "案例维护请求失败（HTTP " + resp.status + "）" };
+        }
+        return data;
+      });
+    });
   }
 
   function renderSteps(steps) {
@@ -243,7 +315,7 @@
       // 而是把"库为空"与"有案例但 0 条可用"分开说，并给出下一步动作与转精准出口。
       var readiness = payload.readiness || null;
       if (readiness) {
-        shell.appendChild(renderReadiness(readiness, options));
+        shell.appendChild(renderReadiness(readiness, options, payload));
       }
       if ((payload.cases || []).length || !readiness) {
         shell.appendChild(renderCases(payload.cases));
@@ -674,6 +746,8 @@
     MODE_LABELS: MODE_LABELS,
     CASES_PATH: CASES_PATH,
     PARSE_PATH: PARSE_PATH,
+    CASE_FIELDS_PATH: CASE_FIELDS_PATH,
+    CASE_REVIEW_PATH: CASE_REVIEW_PATH,
     PARSE_ACCEPT: PARSE_ACCEPT,
     REASON_LABELS: REASON_LABELS,
     agentBase: agentBase,
@@ -681,6 +755,11 @@
     QUOTE_ACTIONS: QUOTE_ACTIONS,
     cases: cases,
     parseFile: parseFile,
+    actionWired: actionWired,
+    actionCase: actionCase,
+    caseUrl: caseUrl,
+    fillCaseFields: fillCaseFields,
+    reviewCase: reviewCase,
     quickQuoteParseView: quickQuoteParseView,
     renderParse: renderParse,
     renderParseEntry: renderParseEntry,

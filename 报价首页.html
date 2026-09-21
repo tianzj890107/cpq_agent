@@ -2285,10 +2285,53 @@
         alert('快速报价面板未加载（quick-quote-panel.js 没取到），请刷新页面后重试。');
         return;
       }
-      window.QuickQuotePanel.open({
+      const panel = window.QuickQuotePanel;
+      // 案例维护的动作出口（Spec 批 12 §2.5）：面板只画按钮，写请求与刷新都在这里。
+      // 面板新增的 onAction 覆盖 fill_case_fields / review_case 两类动作，
+      // 更细的 onCaseFill / onCaseReview 两个回调负责把「补哪个字段、审到什么状态」问清楚。
+      const reloadPanel = () => openQuickQuotePanel();
+      const runCaseAction = (fn) => Promise.resolve()
+        .then(fn)
+        .then((out) => {
+          if (out && out.ok === false) {
+            alert(out.error || '案例没改成功');
+            return;
+          }
+          const changed = (out && out.changed) || [];
+          if (changed.length) {
+            alert('已更新：' + changed.map((row) => (row.label || row.field) + ' → ' + row.after).join('、'));
+          }
+          reloadPanel();                      // 动作完成后刷新案例表与 readiness 文案
+        })
+        .catch((exc) => alert('案例维护失败：' + (exc && exc.message ? exc.message : exc)));
+      const onCaseFill = (row) => {
+        if (!row || !row.case_code) { alert('没有可维护的案例'); return; }
+        const price = prompt('把「' + row.case_code + '」的标准单价补上（元，留空取消）：', '');
+        if (price === null || String(price).trim() === '') return;
+        const value = Number(String(price).trim());
+        if (!isFinite(value) || value < 0) { alert('标准单价必须是不小于 0 的数字'); return; }
+        return runCaseAction(() => panel.fillCaseFields(row.case_code, { standard_price: value }));
+      };
+      const onCaseReview = (row) => {
+        if (!row || !row.case_code) { alert('没有可维护的案例'); return; }
+        const reason = prompt('把「' + row.case_code + '」审到「已审核」的理由（可留空）：', '');
+        if (reason === null) return;
+        return runCaseAction(() => panel.reviewCase(row.case_code, 'reviewed', reason));
+      };
+      panel.open({
         industry: techIndustry(),
         // 出口：快速报价里随时能退回精准报价（同一条既有链路，不另造一条）。
         onPrecise: () => requestNavigate('quote', (textarea && textarea.value.trim()) || ''),
+        onAction: (action, row) => {
+          if (action === 'fill_case_fields') return onCaseFill(row);
+          if (action === 'review_case') return onCaseReview(row);
+          if (action === 'transfer_to_precise') {
+            return requestNavigate('quote', (textarea && textarea.value.trim()) || '');
+          }
+          return undefined;                   // 其它动作照旧由面板自己兜底（标 pending）
+        },
+        onCaseFill: onCaseFill,
+        onCaseReview: onCaseReview,
       });
     }
     (function initQuoteModeEntries() {

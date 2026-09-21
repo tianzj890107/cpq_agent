@@ -35,6 +35,27 @@ set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a    # 显式导出，优先于文�
 写法也认），**已 export 的同名变量优先、不被文件覆盖**；文件不存在不算错误。env 文件放在仓库
 之外，`git pull` / `git checkout` 碰不到它，重启时也不会丢。
 
+## 部署版本身份（build commit）
+
+「这台机器上跑的是哪一版代码」不许靠人肉比对 —— `/api/health` 直接回 `build` 段，部署脚本
+负责把它写成事实。
+
+- **stamp 文件**：`cpq_build.json`，缺省路径是**部署目录之外**的 `$(dirname "$REPO")/cpq_build.json`
+  （34 上即 `/home/wugefei/CPQ/cpq_build.json`），由 `scripts/deploy_34_bare.sh` 在「取代码」之后
+  写入，内容是当次部署的 `commit` / `branch` / `ref` / `deployed_at`。放在仓库外是为了不脏工作区。
+- **`CPQ_BUILD_STAMP`**：stamp 路径的环境变量名。部署脚本把它写进启动命令行；服务侧
+  `tech_app/backend/services/build_identity.py` 读它 → `/api/health` 的 `build.source = "stamp"`。
+  没部署过（stamp 缺失）就回退 `git rev-parse HEAD` → `build.source = "git"`；两个都拿不到则
+  `build.source = "unknown"` 且各字段为空串（**health 绝不因此 500**）。
+- **部署自检**：脚本读回 stamp 的 `commit`（`BUILD_COMMIT`）与 `git rev-parse HEAD`
+  （`HEAD_COMMIT`）比对，不一致直接非零退出；结论行打印 `build.commit=`。
+- **外部核对（谁都能跑，不看人）**：
+
+```bash
+curl -s http://127.0.0.1:8010/api/health | python3 -c "import json,sys; print(json.load(sys.stdin)['build'])"
+cd <部署目录> && git rev-parse --short HEAD     # 两者必须一致
+```
+
 ## 服务器约定
 
 - 主机：`172.16.10.34`
@@ -560,22 +581,31 @@ QQQ-DEMO-QTY-BAND    quantity         band       demo         draft
 
 ### 怎么换成权威费率（谁改、改成什么）
 
-由**业务签字**后才改：不允许自动升格，也不允许实现方替业务决定费率数值。在能连 PG 的机器上把
-这 4 行改成工作簿口径 —— `source_type='workbook'` + `review_status='reviewed'`，并写
-`source_ref` 指回具体工作簿与工作表：
+由**业务签字**后才改：不允许自动升格，也不允许实现方替业务决定费率数值。费率数值只能来自权威
+工作簿，导入通道是 `scripts/import_quick_quote_rates.py`（批 13）—— **两步用法，默认 dry-run**：
 
-```sql
-UPDATE cpq_kb.kb_quick_quote_delta_rule
-   SET source_type = 'workbook',
-       review_status = 'reviewed',
-       source_ref = '差异价费率表.xlsx#费率',
-       version = version + 1
- WHERE rule_code IN ('QQQ-DEMO-HOTSTEP', 'QQQ-DEMO-LEN-RATE',
-                     'QQQ-DEMO-PAPER-RATE', 'QQQ-DEMO-QTY-BAND');
+```bash
+cd /home/wugefei/CPQ/cpq_agent
+# ① 预演（默认，只读库、不写任何字节）：看要写哪些、要退哪些、哪些行不通过（缺键 / 非 workbook /
+#    未审核 / 行业不符 / 值域 / 重复码）
+./open-claude/.venv/bin/python scripts/import_quick_quote_rates.py --file rates.json
+# 文件支持 .json（行数组）与 .csv（表头即键）；每行必填键见 RATE_IMPORT_REQUIRED_KEYS，
+# 其中 source_ref 必须指回工作簿与工作表（例如 "差异价费率表.xlsx#费率"）。
+# ② 确认无误后真写（写权威行 + 退役演示行）
+./open-claude/.venv/bin/python scripts/import_quick_quote_rates.py --file rates.json \
+    --user <签字人> --confirm
 ```
 
-改完重读一次快照确认（`cpq_quick_quote_workspace.authority_summary()` 应回
-`authoritative=true`、`blocked_by=[]`）。
+- `--keep-demo`：等价 `retire_demo=False`，**保留**演示行。演示行只要还在
+  `kb_quick_quote_delta_rule` 里，`authority_summary()` 就永远判不了权威 —— 这个开关只用于演练，
+  正式切换不要加；
+- `--confirm` 且有不通过的行时，工具**非零退出且不写任何字节**（不允许"忽略坏行继续写"）；
+- 导入后自验：`cpq_quick_quote_workspace.authority_summary()` 必须回 `authoritative=true`、
+  `blocked_by=[]`，此后 `cpq_quick_quote_price.is_formal(quote)` 才可能为真（工具结尾也会打印
+  这一条，不是权威就非零退出）。
+
+口径不变：权威 = `source_type='workbook'` + `review_status='reviewed'` + 写明 `source_ref`；
+4 条 `QQQ-DEMO-*` 演示行必须退场（工具会把它们删掉，而不是留着当"参考"）。
 
 ### 换之前页面上长什么样
 

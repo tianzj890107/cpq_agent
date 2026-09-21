@@ -769,6 +769,26 @@ def seed_packaging_cost_rules(*, rules_path=None, overwrite: bool = False) -> di
     return result
 
 
+def assert_step_names_mappable(rows) -> None:
+    """样本工艺模板的入库自检（Spec `packaging-route-template-closure.md` §2.2）：
+
+    逐行取 `step_name`，`PROCESS_CATALOG`（19 条闭集）与 `PROCESS_ALIASES`（别名表）都不认时抛
+    `ValueError("unknown_process:<工序名>")` —— 点名到具体工序，而不是"有不合法工序"。
+
+    为什么要有这道闸：闭集外名字的唯一出口是 `validate_order` → `confirm_route` 409，
+    盒型一入库就注定"永远不能确认"，直到零件下游全部卡死才被发现。这里提前拒绝。
+
+    惰性导入 `services.packaging_route`，避免 storage → services 的模块级循环导入。
+    """
+    from ..services.packaging_route import PROCESS_ALIASES, PROCESS_CATALOG
+
+    for row in rows or ():
+        name = str((row or {}).get("step_name") or "").strip()
+        if not name or name in PROCESS_CATALOG or name in PROCESS_ALIASES:
+            continue
+        raise ValueError("unknown_process:%s" % name)
+
+
 def seed_packaging(*, overwrite: bool = False) -> dict:
     """写入包装演示数据（幂等）。overwrite=False 时已存在的记录不覆盖。"""
     counts: dict = {}
@@ -779,6 +799,8 @@ def seed_packaging(*, overwrite: bool = False) -> dict:
     counts["kb_packaging_part_template"] = _seed_table(
         "kb_packaging_part_template", PART_TEMPLATES, keys=("part_code",),
         source=SOURCE_PART_TEMPLATE, overwrite=overwrite)
+    # 入库自检：闭集外又没有别名映射的工序名在落库前就被点名拒绝（Spec §2.2）。
+    assert_step_names_mappable(PROCESS_TEMPLATES)
     counts["kb_packaging_process_template"] = _seed_table(
         "kb_packaging_process_template", PROCESS_TEMPLATES,
         keys=("box_type_code", "part_code", "seq"),

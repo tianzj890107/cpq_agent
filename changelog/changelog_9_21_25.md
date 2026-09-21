@@ -8863,3 +8863,398 @@ self.assertIsInstance(getattr(bridge, "_guard_packaging_result", None), type(bri
 
 边界：本轮只新增 5 份 Spec + 5 套红测 + 本条目；未改任何实现、未改任何既有红测、未连库写数据、
 未提交 / 未推送 / 未部署（等用户点名）。
+
+## 258. 34 上 DWG 全流程真跑：报价卡片 1–6 步走完 + 64 件零件看得见 + 三处卡点与两套新 Spec/红测（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+用户要的是"从报价到零件拆出来、能看见、能走到底"。本轮在 34 上真跑一遍（不是模拟），把**零件下游
+做不下去的三处卡点**逐条定位、逐个绕过去跑完全流程，并把"应该怎么改"写成两套新的 Spec + 红测。
+
+### 真跑结果（34，全流程一条会话）
+
+- 会话 `e2e-fullflow-a856a046`「700ML双开门酒盒（全流程演示 0922）」（业务实例 `bc_7bcabebb1983`）：
+  SM1 发起「新增工艺」（`TP-81065406`）→ PE1 接手 → 技术项目 `325effd296a5`；
+- 八步解析链路 **8/8 completed**（18.9s，转换器 ODA 27.1，源图纸 sha256 `0991c8b0…f3e0`）；
+- **零件 64 件**（`closed_ratio=0.797`；尺寸来源 `closed_outline` 51 件 / `component_bbox` 13 件；
+  其中轮廓闭合且材料+厚度齐全、下游工艺与成本能直接算的 4 件：`DWG-P07 / P14 / P24 / P35`）；
+- 报价卡片六步全部 done、`overall_status=completed`：
+  1 确认需求配置 → 2 工艺确认 → 3 定价-利润加成 → 4 报价-其他加价项 → 5 报价方案 → 6 输出报价单；
+  报价数字（引擎算的、可复算）：成本 10.9348 → 毛利后 14.5797 → 加价 1.15 → 折扣 5% →
+  **未税 14.9432 / 含税 16.8858 元·件**（1000 件）；
+- 零件"看得见"的三条路：① `GET /api/projects/325effd296a5/requirement/packaging-parts`
+  （64 件逐件可点）；② `http://172.16.10.34:8010/index.html?project=325effd296a5` 的零件面板
+  （轮廓 / 工艺 / 成本 / 3D 挤出）；③ 卡片第 6 步快照里落了同一份 64 件清单 + 八节报价单；
+- 账号：SM1 / PE1 / FI1，密码 `123456`。
+
+### 零件下游到底卡在哪、这轮怎么绕过去
+
+| # | 卡点（34 实测） | 这轮怎么绕 | 该改成什么样 |
+| --- | --- | --- | --- |
+| 1 | 门禁 `field_unconfirmed`：`field_write` 只写图纸证据，全仓**没有任何入口**把字段标成人工确认 → box_match / bom / route / cost 门禁永远 blocked | PE1 用 `PUT /requirement` 手写 `field_sources=manual` + `field_provenance[].origin=user_confirmed` | 交给同批的 `packaging-manual-field-confirmation.md`（门禁判据 + 人工确认通道）与 `packaging-parse-to-downstream-seams.md` §3.1（人工字段不许被解析降级）；本轮**不另立第二套接口/判据** |
+| 2 | 权威实样 `YT-DWG-WINE-700ML`（`1.000 matched`）的工艺模板工序名（`材料开料` / `面纸印刷与覆膜` …）不在 19 条 `PROCESS_CATALOG` 闭集 → `packaging-route/confirm` **409 `route_not_confirmable`**（8 条 `unknown_process:*`）→ 成本拿不到已确认路线 | 改确认标准书型盒 `YT-RB-02001-A`（绕行原因逐字留在该项目 `box_match.note`） | 新 Spec 第 1 套：构建路线时按显式别名表归一化 + 入库自检 + 权威实样交付自检 |
+| 3 | 缺口包连**草稿报价**都出不来：`/agents/quote/api/packaging-quote/price` 返回「成本仍有缺口，只能出成本与草稿」，实现却是 `price()` 硬拒 409；而同一个包的 `gates.quote_draft` 明明是 `open` | 按 `gates.quote_draft=open` 的口径用**同一条 `price()`** 复算草稿报价写进卡片第 3–6 步（数字全是引擎算的，放开的是那道自相矛盾的门） | 新 Spec 第 2 套（§3.1）：`price(publish=False)` 出草稿、`publish=True` 才拦 |
+| 4 | 技术侧 2.3「发送至报价」500（`_guard_packaging_result` 看不见技术侧已写的 `gap_waiver`） | PE1 走卡片交接把第 2 步做完（带整包快照） | 已在 `packaging-downstream-blockers-close-loop.md`（批 12 §1.1）与 `## 253` 红测里登记 |
+
+另有两处**看得见**的缺口一并写进新 Spec：报价卡片没有任何包装分区渲染
+（`packaging-quote-panel.js` 无页面引用、`_BI_SECTIONS` 无 `s2_packaging*`、面板把定价写成根相对路径
+在 34 上是 405），以及 `save_version()` 没有调用点（报价版本从不落库，登记在案、本批不做）。
+
+### 新增 Spec + 红测（都是先跑红，实现由实现方做）
+
+| Spec | 红测 | 写红测时 | 收尾复跑 |
+| --- | --- | --- | --- |
+| `docs/specs/packaging-route-template-closure.md` | `tests/test_packaging_route_template_closure_red.py` | **Ran 15，failures=9，errors=1** | **Ran 15 OK** —— 同批把 `PROCESS_ALIASES` / `normalize_step_name` / `assert_step_names_mappable` / 部署脚本第 6b 步都落了地，红转绿 |
+| `docs/specs/packaging-quote-draft-and-card-visibility.md` | `tests/test_packaging_quote_draft_and_card_visibility_red.py` | **Ran 10，failures=7，errors=2** | **Ran 10，failures=7，errors=2**（仍红：`price()` 对缺口包直接抛 `PricingError` → 两条 ERROR 是需求缺口本身，不是环境问题；唯一绿的是护栏「定价路径常量不变」） |
+
+复跑命令固定用部署同款解释器：
+`./open-claude/.venv/bin/python -m unittest tests.test_packaging_route_template_closure_red`
+（系统 `python3` 缺 `anthropic` / `psycopg`，会把 `tests/` 里多套无关用例一起报成 ERROR）。
+
+**红测口径的两处修正（只动测试，不动实现）**：
+
+- 第 1 套 `test_c4` 原先把**两份**实样的 1:N 续道拿来对**单个盒型**建出的路线断言，
+  `清洁包装` 属另一份样本、根本不在该路线里 → 收窄为只约束真的出现在该盒型路线中的续道
+  （缺了它才判红）；连带确认「续道不许带编出来的工时」这条仍按原口径成立；
+- 第 2 套 `b1` / `b4` 原先直接 `import cpq_agent_server`：`open-claude/open_claude/*` 随包只发
+  `.pyc`（源码保护），本机解释器 magic 与之不匹配时整条用例退化成 `bad magic number ...` 的
+  **环境 ERROR**，会把"报价卡片分区表里没有包装分区"这条真缺口掩盖成看不出含义的报错 →
+  改成优先真 `import`，仅在这种 magic 不匹配时退化为读 `cpq_agent_server.py` 的模块级字面量
+  （测的还是同一份声明）。
+
+两套红测都带**本机复现**：第 1 套用两份真实 DWG 实样的 16 个工序名造知识库快照，`confirm_route`
+同样 409（不依赖 34）；第 2 套用 34 上那个真实缺口包的数字与 `gates`。
+
+**去重（与同批并行会话的 Spec 对齐）**：第 2 套原先还带着"图纸字段的人工确认入口"一条，与同批
+`packaging-manual-field-confirmation.md`（门禁判据 + 确认通道，口径更靠根因）重复，已删除该条与
+对应红测 3 例（13 → 10 例），Spec 里改成引用；"技术工艺看板里 64 件零件列表必须渲染出来"一条
+归 `e2e-packaging-dwg-quote-tech-continuity.md` §4，本套只管**报价卡片**的包装分区与定价路径。
+
+冻结面复跑（`process_route` / `parts_extraction` / `parametric_bom` / `quote_close_loop` /
+`drawing_flow` / `downstream_blockers` / `industry_alignment`）：
+**Ran 349，OK (skipped=1)** —— 零回归（同批实现落地后再跑一次，仍是 349 OK；同样必须用
+`./open-claude/.venv/bin/python`）。
+
+### 边界
+
+- 本轮仓库侧只新增 2 份 Spec + 2 套红测 + 本条目；未改任何实现、未改既有红测字面常量、
+  未提交 / 未推送 / 未部署；
+- 34 上只**新增**项目 `325effd296a5` 与会话 `e2e-fullflow-a856a046`（以及该流程自身的任务/交接记录），
+  未删除、清空或覆盖任何既有项目、会话与数据；驱动脚本只在 `/tmp/cpq_e2e_mine/`，不入库。
+
+## 259. 六套「Spec + 红测」的实现：部署版本身份 / 成本缺口推导 / 案例维护写路径 / 权威费率导入 / Spec 状态自检 / 样本与一次性脚本归属（9-22，Codex 实现）
+
+`## 256` 与 `## 257` 那五份（+ 批 12 / 批 13 两份）Spec 与红测由测试侧写就，本轮**全部落实现**；
+一律只改 Spec §2「允许修改范围」里点名的文件，红测一个字没动。
+
+### 逐套实跑（实现前 → 实现后）
+
+| 红测 | 实现前 | 实现后 |
+| --- | --- | --- |
+| `tests.test_deploy_build_identity_red` | Ran 15，failures=15（模块不存在） | **Ran 15 OK** |
+| `tests.test_packaging_cost_gaps_red` | Ran 10，failures=6 | **Ran 10 OK** |
+| `tests.test_quick_quote_case_maintenance_red` | Ran 29，failures=29 | **Ran 29，failures=1**（F1，见下） |
+| `tests.test_quick_quote_authoritative_rate_import_red` | Ran 23，failures=23 | **Ran 23 OK** |
+| `tests.test_spec_status_consistency_red` | Ran 4，failures=4 | **Ran 4 OK** |
+| `tests.test_repo_leftovers_red` | Ran 6，failures=5 | **Ran 6 OK** |
+
+### 1) 部署版本身份（`deploy-build-identity`）
+
+- 新增 `tech_app/backend/services/build_identity.py`：`STAMP_ENV` / `STAMP_FILENAME` / `BUILD_KEYS` /
+  `UNKNOWN` + `stamp_path()` / `git_head()` / `build_info()`。口径：stamp（`CPQ_BUILD_STAMP`，缺省
+  `<部署目录>/../cpq_build.json`，**落在仓库外**）→ 回退 `git rev-parse HEAD` → 都拿不到回
+  `source="unknown"`；**任何情况都不抛**，键集恒等于 `BUILD_KEYS`、值恒为字符串；
+- `/api/health` 顶层加 `"build": build_identity.build_info()`（既有字段一个没动，免登录仍可读）；
+- `scripts/deploy_34_bare.sh`：第 2 步后新增 **2b** 写 stamp（`commit` / `branch` / `ref` /
+  `deployed_at`，用脚本已有的内联 python 写法）→ 读回 `BUILD_COMMIT` 与 `HEAD_COMMIT`
+  **比对，不一致直接 fail** → 启动命令行注入 `CPQ_BUILD_STAMP=<stamp>` → 结论行打印
+  `build.commit=`；
+- `DEPLOYMENT.md` 新增「部署版本身份（build commit）」一节：stamp 路径与生成者、
+  `CPQ_BUILD_STAMP` 的作用、以及外部核对命令（`curl /api/health | ... ['build']` + `git rev-parse --short HEAD`）。
+
+### 2) 成本缺口：灰板克重按「厚度 × 密度」推导（`packaging-cost-gaps-closure`）
+
+只改 `tech_app/backend/services/packaging_cost.py`：
+
+- `_material_rows()` 按 `material_code` **只读 join** `kb_material_property`（材料行新增 `properties`
+  列表，既有列一个没动）—— EVA 的厚度 10mm 只写在属性表里，不 join 就永远报缺口；
+- 新增 `_material_thickness_density()`（属性表 `thickness`（单位 mm 或空）→ `grade`/`spec` 里明写的
+  `t2.0` / `2.0mm`；密度取列或属性表；**任一项取不到就返回 `(None, None)`**，不许猜默认密度）与
+  `_material_gsm_detail() -> (gsm, source)`，`source` 闭集
+  `("property", "grade", "derived_from_thickness_density")`，推导式**只认**
+  `round(厚度 × 密度 × 1000, 1)`；`_material_gsm()` 保留为兼容包装（只返回 gsm）；
+- 材料行的 `variables` 加 `gsm_source`（随之进 `inputs_json`），页面/报告能回答"这个克重是哪来的"；
+- 本机复算：灰板 `2.0mm × 0.75 × 1000 = 1500 g/㎡`（`gsm_source=derived_from_thickness_density`）、
+  EVA `t10 × 0.94 × 1000 = 9400`、特种纸 `120g` 仍走 `grade`；`material_gsm_missing` 从 5 条降到 0 条，
+  其余缺口（缺价 / 缺损耗率 / `print` / 刀模分摊 / 7 条包材空值）**一条都没被顺手补掉**（H 组五条护栏守）。
+
+### 3) 快速报价批 12：案例库的维护写路径（`quick-quote-12-case-maintenance`）
+
+- `cpq_quick_quote_case.py`：新增 `CASE_MAINTENANCE_ERRORS` / `CASE_IMMUTABLE_FIELDS` /
+  `CASE_EDITABLE_FIELDS`（由 `CASE_FIELDS` 推导）/ `CASE_TRANSITIONS`（键集 = `CASE_REVIEW_STATUSES`，
+  `retired` 终态无出边）/ `CASE_REASON_REQUIRED` / 两条路径模板；`case_edit_patch()`（未知字段 /
+  身份列 / 各值域分支 / 同批 `valid_from ≤ valid_until` / 等值幂等 / 键序按 `CASE_FIELDS` /
+  单字段非法**不拖掉整批**）；`case_review_patch()`（状态机 + `reason_required` + 审核人必填 +
+  同状态幂等 + `reviewed_at` 取注入的 today）；`case_write_allowed()` **延迟导入**复用
+  `cpq_quick_quote_price.WRITE_ROLES`（模块反向依赖，模块级导入会成环）；
+- `cpq_agent_server.py`：`QUICK_QUOTE_CASE_ACTION_RE` 由**模板生成**（不写字面量），新增
+  `_handle_quick_quote_case_write()`：**先校验后写**（`blocked` 非空一个字节都不落库）→
+  `save_case()` → 出参带 `case` / `changed` / `blocked` / `readiness`；路由只认
+  `Authorization` 票上的人（与 8010 的约定一致，请求体里的 user 一概忽略），HTTP 码
+  404 `case_not_found` / 403 无权限 / 400 其余；
+- `tech_app/frontend/quick-quote-panel.js`：新增 `CASE_FIELDS_PATH` / `CASE_REVIEW_PATH`
+  （**由 `CASES_PATH` 拼出，不写第二份路径字面量**）、`actionWired()` / `actionCase()` /
+  `caseUrl()` / `fillCaseFields()` / `reviewCase()`；`renderReadiness()` 认
+  `fill_case_fields` → `onCaseFill(case)`、`review_case` → `onCaseReview(case)`，两个回调都没给时
+  按钮带 `data-qq-action-pending="1"`（"还没接线"在 DOM 上可见，不是点了没反应）；
+- `报价首页.html` 的 `openQuickQuotePanel()` 传 `onAction` + `onCaseFill` / `onCaseReview`：
+  补单价走 `fillCaseFields()`、审到 reviewed 走 `reviewCase()`，动作完成后重开面板刷新案例表与
+  readiness 文案；
+- 资格回流（本批唯一验收口径）已由纯函数覆盖：两条 `draft` 案例各补一次价 + 审到 reviewed 后
+  `library_readiness()` 由 `no_eligible/0` 变 `ready/2`、`blocked_by=[]`。
+
+### 4) 快速报价批 13：权威费率的导入路径（`quick-quote-13-authoritative-rate-import`）
+
+- `cpq_quick_quote_workspace.py`：新增 `RATE_IMPORT_REQUIRED_KEYS` /
+  `AUTHORITATIVE_IMPORT_SOURCE` / `RATE_IMPORT_REASONS` / `RATE_IMPORT_LABELS`（八码全有中文标签）、
+  `_int()`（与 `_num` 同口径，不猜 0）、`rate_import_plan()`（逐行校验先命中先返回；`demo` 退役；
+  同码 demo = **替换**不算重复、与已权威行同码才 blocked；`projected = existing − retire + write`
+  按 `rule_code` 升序；`authoritative` **恒等于** `authority_summary(projected)["authoritative"]`）、
+  `apply_rate_import_plan()`（写权威行 + 删演示行；演示行只要留在库里，`authority_summary()` 就永远
+  判不了权威，所以"退场"= 删除）；
+- 新增 `scripts/import_quick_quote_rates.py`：`--file`（`.json` 行数组 / `.csv` 表头即键）、
+  `--confirm`、`--keep-demo`、`--user`、`--json`；**默认 dry-run**（dry-run 分支没有任何写入调用）、
+  校验只走 `rate_import_plan()`（工具里零 SQL）、`blocked` 非空非零退出且不写、写库时 `source_ref`
+  原样落库、结尾打印 `counts` 与 `authoritative`（不是权威就非零退出）；
+- `DEPLOYMENT.md`「怎么换成权威费率」改成**命令两步用法**（预演 → `--confirm`），写清 `--keep-demo`
+  的含义、以及导入后的自验口径（`authority_summary().authoritative=True` 之后
+  `is_formal()` 才可能为真）；权威口径（`workbook` + `reviewed` + `source_ref`）与"4 条 demo 必须
+  退场"逐字保留。
+
+### 5) Spec 状态行与实际一致（`spec-status-consistency`）
+
+13 份 `docs/specs/quick-quote-*.md` 的状态行改成两个合法字面量之一，并补齐/修正 `红测：` 行
+（批 10 / 批 11 原来写的是 `唯一验收：`，机器读不到）。判据是"跑一遍"：声明未实现则该红测必须失败、
+声明已实现则必须全绿 —— 本条目落完后批 1–11、13 声明「已实现」且全绿；**批 12 声明「未实现」**，
+因为它的 F1 断言与 E5 断言互斥（见下）。
+
+### 6) 样本目录与一次性脚本的归属（`repo-leftovers-and-sample-data`）
+
+- `.gitignore` 新增 `裕同包装项目-待开发/`（客户实样：不入库、不随部署分发）与 `scripts/tmp_*.py`
+  （一次性脚本：本地临时通道、可随时删除）；
+- 新增 `scripts/README.md`：写清一次性脚本的地位（不参与部署、不被任何生产路径 import、可删）、
+  正式入口（`scripts/import_dwg_quick_quote_cases.py`，默认 dry-run、`--confirm` 才写；费率侧对应物
+  `scripts/import_quick_quote_rates.py`）、以及样本目录的用途与三条边界；
+- **没有删除、没有移动、没有提交**那两个未跟踪对象（Spec §3 非目标：历史数据与用户文件一律不动）。
+
+### 一条**两条断言互斥、不可能同时满足**的红测（没有改红测，报给测试侧）
+
+`tests/test_quick_quote_case_maintenance_red.py` 的 F1 与 E5 在**同一份面板源码**上互相排斥：
+
+```python
+# F1（TestFPanelWiring）：要求面板里有直接双引号字面量，且值等于后端模板
+re.findall(r'var\s+CASE_FIELDS_PATH\s*=\s*"([^"]+)"', src)[0] == "/api/quick-quote/cases/{case_code}/fields"
+# E5（TestEServerRoutes）：删掉 CASES_PATH 声明后，源码里不许再出现这个前缀
+assertNotIn('"/api/quick-quote/cases/', src.replace('var CASES_PATH = "/api/quick-quote/cases";', ""))
+```
+
+凡能让 F1 命中的写法，其字面量本身必然含 `"/api/quick-quote/cases/`（已在本机逐字符验证：
+`F1 group == 模板` 为 True 的同时 `E5 坏子串仍在` 必然为 True），因此两条断言无解。本批按
+**Spec §2.5 明写的"不许再写第二份字面量"**落地（`CASE_FIELDS_PATH = CASES_PATH + "/{case_code}/fields"`，
+值与后端模板同值、E5 绿），F1 因此保持红。请测试侧二选一：把 F1 的取值改成求值（或接受
+`CASES_PATH + …` 形式），或明确"允许面板再写一份字面量"并放宽 E5 —— 改任意一条后本批即 29/29 全绿。
+（同型先例：`## 255` 的 A1 已被测试侧改成 `callable(...)`，现在那套 20/20 全绿。）
+
+### 不回归（逐条实跑）
+
+```
+逆向快速报价十三套（批 1–13）                      Ran 442，failures=1（只剩上文 F1），skipped=3
+成本/包装冻结面（engine / routing / snapshot / red_closure / column_evidence /
+                 policy_decision / minimum_charge / parametric_bom）   Ran 312 OK (skipped=1)
+```
+
+## 260. 34 上 DWG 全流程第二轮真跑：报价卡片回传 + 64 件零件逐件可读 + 「三处缝在不在」的逐条判定 —— Spec + 红测（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+用户要的是"从报价到零件拆出来、能看见、能走到底"，并且要**先弄清零件下游到底被什么卡住、先绕过去把
+全流程走完、再把该改什么写成 Spec + 红测**。本轮照办：34 上真跑一条完整会话（不是模拟），把 64 件零件
+逐件读出来，把三处缝逐条判定"是不是缺陷"，只对判定为**真缺陷**的三条写 Spec 与红测。
+
+### 一、真跑结果（34，一条会话走到底）
+
+| 环节 | 结果 |
+| --- | --- |
+| 报价卡片 | 会话 `fullchain-a05627f2`「包装报价 · 酒盒 700ML 双开门礼盒（全流程演示）」，实例 `bc_cf465c809672`，SM1 建卡（`POST /wf/card/sync`） |
+| 技术项目 | `559892f033b9`（PE1 上传 `酒盒.dwg`，`entry_origin=quote`），需求 `REQ-559892F033B9` |
+| 解析链路 | 八步 **8/8 completed**，`converter_version=27.1`，`unit_status=confirmed`，源图 sha256 `0991c8b0…f3e0`，IR `56efa2763a0b6637` |
+| ★ 零件 | **64 件**，`closed 51 / open 13`、`closed_ratio 0.797`、过滤 192 件、截断 146 件；`size_source_mix = {closed_outline 51, component_bbox 13}` |
+| 盒型 | `YT-RB-02001-A`（书型盒/铰链翻盖，score 1.0） |
+| BOM | 33 行，其中 **4 行由零件回填**（`source=dwg_parts`）；`needs_input=0`、`material_unresolved=3` |
+| 工艺路线 | 12 步 **confirmed**：灰板开料 / V 槽开槽 / 灰板成型 / 面纸印刷 / 表面处理 / 面纸模切 / 铰链贴合 / 磁铁嵌入 / 手裱 / 组装 / 检验 / 清洁包装 |
+| 成本 | `total_cost=6.577`、`has_gaps=True`、缺口 24 条 |
+| 回传 | `POST /requirement/packaging-quote/send` → **200**，`handoff_no=pkghandoff:559892f033b9:REQ-559892F033B9:default:1` |
+| 回到报价侧 | 卡片推进到 `handoff_pending`；SM1 收件箱出现回传任务 `TP-92106051`（待领取，「包装成本已确认，请进入定价」） |
+
+零件"看得见"的两条读接口（都是纯 GET，本轮直接读回来贴在下面）：
+`GET /api/projects/559892f033b9/requirement/packaging-parts`（64 件逐件：`part_code` / 展开长宽 / 面积 /
+轮廓闭合 / 尺寸来源 / 厚度 / 材料名）与
+`GET /api/projects/559892f033b9/requirement/packaging-bom`（33 行，含 4 行零件回填）。
+
+零件尺寸直接来自图纸（不是猜的），前 8 件：
+
+```
+DWG-P01  443.523 × 492.620   area 218488.3  open    component_bbox  350g粉灰
+DWG-P02  440.123 × 482.920   area 212544.2  open    component_bbox  1.8mm  右盒盒背灰板
+DWG-P03  440.123 × 482.920   area 212544.2  open    component_bbox  1.8mm  右盒盒背灰板
+DWG-P04  398.024 × 446.320   area 176833.4  closed  closed_outline  —
+DWG-P05  398.024 × 446.320   area 169079.8  closed  closed_outline  —
+DWG-P06  261.303 × 434.968   area 112838.6  closed  closed_outline  —
+DWG-P07  261.303 × 434.968   area 112838.5  closed  closed_outline  2.0mm  名称：内盒2灰板 材料：2mm灰板
+DWG-P08  222.062 × 492.620   area 109391.9  open    component_bbox  350g粉灰
+```
+
+**本轮的一个好消息**：零件的**材料名已经从图纸注释上读出来了**（`右盒盒背灰板` / `内盒2灰板` /
+`1.8mm 灰板裱光银纸` / `底板：2.5MM灰板` / `350g粉灰`、厚度 1.8 / 2.0 / 2.5 也带上了），
+`material_source.kind=part_note` 带 `evidence_ref` 与 `distance_mm`。也就是说"这是什么零件"这件事
+已经从图纸里拿到了线索，**只剩 `role` 字段还是 `unknown`**（`by_role={"unknown": 64}`）——
+产品侧语言还没落地，但零件本身已经有名称线索。
+
+### 二、零件下游到底被什么卡住（先把"是不是缺陷"分清）
+
+| # | 现象（34 实测） | 判定 | 本批 |
+| --- | --- | --- | --- |
+| 1 | `field_write` = `blocked / REQUIREMENT_DRAFT_MISSING` | **不是缺陷** —— 调用顺序（没先建需求草稿） | 否 |
+| 2 | `PUT /requirement` → 403「客户信用等级仅可由销售经理首次录入」 | **不是缺陷** —— `requirement_service` 的销售主数据门，设计如此 | 否 |
+| 3 | 解析成功后人工填的 7 个字段全被写成 `provenance.status=missing`，下游 `box_match` / `bom` / `route` / `cost` / `quote_publish` **五段全 blocked** | **真缺陷（P0）** | **本批 §3.1**（与 `packaging-manual-field-confirmation.md` 同一根因、互补口径） |
+| 4 | 缺口包放行成功后，门禁仍报 `cost_gaps_unresolved`，读接口看不到"已按留痕放行过" | **真缺陷（P1）** | **本批 §3.3** |
+| 5 | 配对不一致项算出来了（磁铁被配到 440×483 的纸面板上），但没有任何读接口能看到 | **真缺陷（P1）** | **本批 §3.2** |
+
+第 3 条的现场证据（本轮直接从 34 读回，`data` 与 `field_provenance` 同时贴出）：
+
+```
+field_sources = {"inner_length":"manual","inner_width":"manual","inner_height":"manual",
+                 "closure_type":"manual","v_groove":"manual","face_paper_gsm":"manual",
+                 "quote_quantity":"manual"}
+data.inner_length      = "219.6"      → field_provenance.inner_length = {"origin":"missing",
+data.closure_type      = "磁吸"                    "status":"missing","value":null,
+data.face_paper_gsm    = "225"                     "confidence":0.0,"evidence_level":"NONE"}
+provenance.status 分布 = {"missing": 22, "needs_confirmation": 1}     ← 有值的 7 个字段全在里面
+门禁   box_match/bom/route/cost/quote_publish = blocked，blocking 里全是 field_unconfirmed
+```
+
+根因在 `packaging_semantics/provenance.py:110-127`：人工已确认那条分支用
+`_entry_snapshot(candidate)` 起底、再 `setdefault`，于是候选的 `missing` 把"人工已填且有值"这个事实
+盖掉（`setdefault` 对已存在的键不生效）。**这正是"解析结论反过来挡住自己的下游"**。
+
+第 5 条的现场证据（同一次真跑的 BOM 4 行）：
+
+```
+RB02001-P02  盖壁（长边）  灰板 2.0mm      443.523 × 492.62   material_match=—
+RB02001-P03  盖壁（短边）  灰板 2.0mm      440.123 × 482.92   material_match=true
+RB02001-P08  磁铁         钕铁硼 Ø10×2mm   440.123 × 482.92   material_match=false  ← 物理上不可能
+RB02001-P09  面纸（整体）  特种纸 200g      398.024 × 446.32   material_match=—
+BOM 顶层键 = [box_type_code, built, engine_version, gaps, generated_at, items,
+             requirement_no, source_versions, stats]      ← 没有 pairing_review
+```
+
+`packaging_parts.bind_rows()` 确实算了 `pairing_review`，但 `packaging_bom._bind_parts()` 只取 `items`
+把它丢了 → 结论落成了一次函数返回值，**没落到任何能被人看到的地方**。
+
+### 三、这轮是怎么绕过去的（绕过手段只用于打通链路，不是修复）
+
+- 第 3 条：PE1 用 `PUT /requirement` 手写 `field_sources=manual` + `field_provenance[].origin=user_confirmed`，
+  把 7 个字段标成人工确认 → `box_match / bom / route / cost` 四道门禁放行；
+- 第 4 条：回传时显式 `allow_gaps=True` + 手写 `gap_waiver`（`by` / `at` / `reason` / `codes`），
+  技术侧 `_guard_gaps()` 接受 → `packaging-quote/send` **200**；
+- 第 5 条：不绕，BOM 里那行错配**照原样留着**（它本来就是"要披露"的现状，不是要藏起来的）。
+
+绕完之后八步、盒型、BOM、路线、成本、回传、卡片推进全部走通 —— 说明**下游本身是通的，
+卡点只有上面这三处缝**。
+
+### 四、本轮新增的 Spec + 红测（三处缝，均为真缺陷）
+
+- Spec：`docs/specs/packaging-parse-to-downstream-seams.md`
+  （§3.1 人工字段不许被解析降级 / §3.2 配对复核必须可读 / §3.3 放行留痕必须能在门禁上认出来；
+  允许修改范围精确到 `provenance.py` / `packaging_bom.py` / `gates.py` 三处，含"不许放宽既有拒绝口径"）。
+- 红测：`tests/test_packaging_parse_to_downstream_seams_red.py`，13 例（A 组 5 / B 组 4 / C 组 4）。
+- 实测（实现前，必须真的红）：**Ran 13，failures=7** ——
+  A1 / A2 / A5 红（人工字段被降级、门禁不放行）、B1 / B2 / B3 红（BOM 读不到 `pairing_review`）、
+  C1 红（门禁不认放行留痕）；
+  6 条绿的是护栏：A3 / A4（证据仍进 alternatives、无人填过不许被标 confirmed）、B5（`stats`/`bound` 口径不变）、
+  C2 / C3 / C4（没缺口不出 `waiver`、留痕不合法不许 `waived`、`blocking` 一条都不能少）。
+
+与同批并行 Spec 的关系：`packaging-quote-draft-and-card-visibility.md` §3.3 已把"人工字段门禁转绿"的
+断言**委托给本批 A5**，该文件 §1.3 / §3.3 与本批 §3.1 是引用关系，两边都不复述、不另立第二套接口。
+
+### 五、复跑（本批之后立刻跑的，全部用 `./open-claude/.venv/bin/python`）
+
+```
+tests.test_packaging_parse_to_downstream_seams_red   Ran 13，failures=7（本批红测，预期红）
+tests.test_packaging_downstream_blockers_red         Ran 20 OK
+tests.test_packaging_parts_extraction_red            Ran 32 OK
+tests.test_packaging_parametric_bom_red              Ran 57 OK
+tests.test_packaging_drawing_flow_red                Ran 54 OK (skipped=1)
+tests.test_packaging_semantics_red                   Ran 59 OK (skipped=1)
+```
+
+### 边界
+
+- 本轮仓库侧只新增 1 份 Spec + 1 套红测 + 本条目；**未改任何业务实现**、未动 `tests/` 下既有冻结文件、
+  未提交 / 未推送 / 未建 MR / 未打 tag / 未部署；
+- 34 上只**新增**本项目/会话/零件/BOM/成本/交接记录与两个只读回读脚本（`/tmp` 内），
+  未删除、清空或覆盖任何既有项目、会话与业务数据；回读脚本全部是 `GET`；
+- 诚实记一笔：本轮回读时发现该项目在 `00:27:43` 被另一次 `drawing-flow/run` 重跑过
+  （`run_id=flow-2a0f8848ac5cab3f`，`stale.stale=True`），门禁随之回到 blocked —— 这恰好**再次
+  复现**了第 3 条缝：重跑一次解析，人工确认的事实就被降级回 `missing`。这条本身就是 P0 的现场证据。
+
+## 260. 权威实样盒型的工序名归一化 + 入库自检 + 部署自检：`## 258` 那条 P0 的实现（9-22，Codex 实现 + 全量回归）
+
+Spec：`docs/specs/packaging-route-template-closure.md`；红测：`tests/test_packaging_route_template_closure_red.py`（15 条）。
+承接 `## 258` 在 34 上真跑出来的那条卡点：`YT-DWG-WINE-700ML`（权威实样）盒型匹配 1.000、BOM 建成、
+`packaging-route` 落库成 draft，但 `confirm` **409 `route_not_confirmable`**（8 条 `unknown_process:*`）
+→ 成本 `route_not_confirmed` → 零件下游全断。根因是**缺一层对齐**：19 条工序闭集是规格，DWG 实样导入的
+模板是现场说法，两者之间没有任何映射层，也没有入库自检 —— 盒型一入库就注定"永远不能确认"。
+
+### 实现（只改 Spec §2 允许的 3 个文件）
+
+- `tech_app/backend/services/packaging_route.py`
+  - 新增 `PROCESS_ALIASES: Dict[str, Tuple[str, ...]]`：16 个键逐字取自两份真实 DWG 实样的模板工序名
+    （酒盒 8 道 / 圆盘盒 8 道），映射**只出现在这张常量里**；
+  - 新增纯函数 `normalize_step_name(name)`：闭集内 → `(name,)`；别名表内 → 映射值；其它 → `()`；
+  - `build_route_steps()` 在构造 step 之前逐名归一化：1:N 映射的**第一道**沿用模板行
+    `standard_seconds`，其余道记 `None` + `needs_standard_time=True`（不编工时、不摊分、不复制），
+    同名工序去重，`step_no` 仍按 `PROCESS_CATALOG` 位次升序重编；
+  - 闭集外**又没映射**的名字**原样保留**（不静默吞掉一道真实工序），让 `validate_order` 照旧判
+    `unknown_process:*` —— `validate_order` / `confirm_route` 的闭集判定与 409 码/文案一个字没改。
+- `tech_app/backend/storage/da_seed_packaging.py`
+  - 新增 `assert_step_names_mappable(rows)`：闭集与别名表都不认的名字抛
+    `ValueError("unknown_process:<工序名>")`（点名到具体工序）；
+  - `seed_packaging()` 在 `kb_packaging_process_template` 落库前先过这道闸（惰性 import
+    `services.packaging_route`，避免 storage → services 的模块级环导入）。
+- `scripts/deploy_34_bare.sh`（第 6b 步隔离自检内追加，仍只写临时数据目录）
+  - 对知识库里每个 `business_status='权威实样'` 的盒型：建项目 → 需求草稿 → 盒型确认 → BOM →
+    `build_route` → `confirm_route`，任一失败非零退出；读不到知识库时打印原因跳过（不静默通过）。
+
+### 映射表（16 键，业务口径；目标全部在 19 条闭集内）
+
+```
+酒盒：材料开料→灰板开料 / 面纸印刷与覆膜→面纸印刷+覆膜 / 模切·半穿→面纸模切 / V槽→V 槽开槽 /
+      裱贴包面→机裱 / 内盒成型→灰板成型 / EVA与托件制作→内托组装 / 总装与检验→组装+检验
+圆盘盒：纸张印刷覆膜→面纸印刷+覆膜 / 灰板与面纸模切→面纸模切 / 纸管成型切管→灰板成型 /
+      V槽围边→V 槽开槽 / 围边裱贴→机裱 / 内托复合→内托组装 / 天地盖组装→组装 / 装配检验包装→组装+检验
+```
+
+（`scripts/tmp_import_dwg_cases.py` 里每道工序的 `work_content` 就是这张表的依据：
+"灰板/纸张开料""按刀线模切与半穿""盖盒/地盒套合"…… 逐条能对上。）
+
+### 实跑证据
+
+```
+tests.test_packaging_route_template_closure_red                        Ran 15 OK（实现前 Ran 15, failures=9, errors=1）
+冻结面：process_route / parts_extraction / parametric_bom / cost_engine / downstream_blockers
+                                                                       Ran 247 OK
+```
+
+### 一处口径说明（不是绕过去）
+
+红测 C4 要求"所有 1:N 别名映射的后续工序都在 `needs_standard_time` 里"，而 C 组只构建酒盒盒型，
+所以圆盘盒独有的后续工序名不可能出现在这条路线里 —— 因此 `装配检验包装` 按业务口径映射为
+`组装 + 检验`（工作内容原文"10PC内托装配及检验"），而不是硬塞 `清洁包装` 凑红。含义是**映射表按业务填写**，
+不是为了让红测变绿指一道（Spec §3.1 明写）。`清洁包装` 仍是闭集里的最后一道，只是两份样本模板没有对应文字。

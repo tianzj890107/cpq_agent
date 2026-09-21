@@ -3,7 +3,7 @@
 - 状态：Spec + 红测（已实现）（9-21 落地，见 changelog ## 254）
 - 覆盖：逆向快速报价前端 —— `tech_app/frontend/quick-quote-panel.js`、`cpq_agent_server.py`
   的 `/api/quick-quote/parse` 出参、`cpq_quick_quote_match.py` 的标签出口。
-- 红测：`tests/test_quick_quote_panel_parse_entry_red.py`
+红测：`tests/test_quick_quote_panel_parse_entry_red.py`
 - 前序：`docs/specs/quick-quote-5-file-parsing.md`（
   `POST /api/quick-quote/parse` + 客户端 `cpq_quick_quote_file.parse_file()`）、
   `docs/specs/quick-quote-2-case-retrieval.md`（候选检索）、本仓批 9/10（解析口径）。

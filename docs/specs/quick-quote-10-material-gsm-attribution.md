@@ -3,7 +3,7 @@
 - 状态：Spec + 红测（已实现）（9-21 落地，见 changelog ## 252）
 - 覆盖：逆向快速报价「DWG/DXF → 匹配字段」里 `material_notes` → `face_paper_gsm` /
   `grey_board_gsm` 这一段（批 5 的通路，批 9 已收口尺寸侧）。
-- 红测：`tests/test_quick_quote_material_gsm_red.py`
+红测：`tests/test_quick_quote_material_gsm_red.py`
 - 前序：`docs/specs/quick-quote-5-file-parsing.md` §2.4 规则 3（「`material_notes` 里能读出的
   克重（`200g` / `200 克` / `1200gsm`）→ `face_paper_gsm` / `grey_board_gsm`」）、
   `docs/specs/quick-quote-9-parse-field-alignment.md`。

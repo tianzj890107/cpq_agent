@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from . import industry_templates, packaging_match
 from ..storage import da_db, da_repo, kb_repo, store
@@ -35,6 +35,45 @@ PROCESS_CATALOG = {
     "铰链贴合": 110, "磁铁嵌入": 120, "机裱": 130, "手裱": 140, "内托组装": 150,
     "组装": 160, "检验": 170, "清洁包装": 180,
 }
+
+#: 闭集外模板工序名 → 闭集内工序名（Spec `packaging-route-template-closure.md` §3.1）。
+#: 键逐字取自两份真实 DWG 实样的模板工序名（现场车间说法）；**映射只允许出现在这张表里**。
+#: 1:1 用单元素 tuple；1:N 用多元素 tuple —— 第一道沿用模板行工时，其余记 None（§3.3）。
+PROCESS_ALIASES: Dict[str, Tuple[str, ...]] = {
+    # 酒盒.dwg（8 道）
+    "材料开料": ("灰板开料",),
+    "面纸印刷与覆膜": ("面纸印刷", "覆膜"),
+    "模切/半穿": ("面纸模切",),
+    "V槽": ("V 槽开槽",),
+    "裱贴包面": ("机裱",),
+    "内盒成型": ("灰板成型",),
+    "EVA与托件制作": ("内托组装",),
+    "总装与检验": ("组装", "检验"),
+    # 圆盘盒.dwg（8 道）
+    "纸张印刷覆膜": ("面纸印刷", "覆膜"),
+    "灰板与面纸模切": ("面纸模切",),
+    "纸管成型切管": ("灰板成型",),
+    "V槽围边": ("V 槽开槽",),
+    "围边裱贴": ("机裱",),
+    "内托复合": ("内托组装",),
+    "天地盖组装": ("组装",),
+    "装配检验包装": ("组装", "检验"),
+}
+
+
+def normalize_step_name(name: Any) -> Tuple[str, ...]:
+    """工序名归一化（纯函数，Spec §2.1）：
+
+    · 闭集内 → `(name,)`；
+    · 别名表内 → 映射值（1:N 时多元素）；
+    · 其它 → `()`（**不猜、不兜底**：闭集外又没映射的名字由入库自检拒绝，
+      `validate_order` 照旧判 `unknown_process:*`）。
+    """
+    text = _text(name)
+    if text in PROCESS_CATALOG:
+        return (text,)
+    return tuple(PROCESS_ALIASES.get(text) or ())
+
 
 #: 硬顺序链：两两相对顺序不得颠倒（缺项跳过）。
 HARD_ORDER_CHAIN = ("面纸印刷", "覆膜", "烫金", "丝印", "UV 上光", "压凹凸", "面纸模切")
@@ -248,7 +287,24 @@ def build_route_steps(box_type_code: str, inputs: dict) -> dict:
 
     required = required_surface_steps(data)
     aggregate_steps: list = []
-    steps = [_template_step(name, row) for name, row in templates.items()]
+    # 模板工序名在构建时归一化到工序闭集内（Spec §2.1 / §3.2）：
+    # 别名映射 1:N 时，第一道沿用模板行工时，其余道记 None 并进 needs_standard_time；
+    # 闭集外又没映射的名字原样保留，让 validate_order 照旧判 unknown_process（不静默吞掉）。
+    steps: list = []
+    seen_names: set = set()
+    for name, row in templates.items():
+        targets = normalize_step_name(name)
+        if not targets:
+            targets = (name,)
+        for index, target in enumerate(targets):
+            if target in seen_names:
+                continue
+            seen_names.add(target)
+            step = _template_step(target, row)
+            if index:
+                step.update({"standard_seconds": None, "needs_standard_time": True,
+                             "source": "template:%s" % name})
+            steps.append(step)
 
     aggregate_row = templates.get(AGGREGATE_STEP)
     expansions = [name for name in required if name in _AGGREGATE_EXPANSION]

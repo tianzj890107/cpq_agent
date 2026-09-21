@@ -122,7 +122,42 @@ CASE_FIELDS = (
     "source_type", "source_ref", "review_status", "version", "industry",
 )
 
-#: 准入必需键：缺任何一个，这个案例就不能用来做快速报价（先补数据再审）。
+
+#: 案例维护的错误码闭集（Spec 批 12 §2.1；纯函数与接口共用，不许各写一份字符串）。
+CASE_MAINTENANCE_ERRORS = ("unknown_field", "immutable_field", "invalid_value",
+                           "illegal_transition", "reason_required", "case_not_found")
+
+#: 身份列：只读（改它们 = 换了一条案例，必须走导入而不是"编辑"）。
+CASE_IMMUTABLE_FIELDS = ("case_code", "case_version", "version")
+
+#: 可改字段 = CASE_FIELDS 去掉身份列（推导而来，不许另抄一份清单）。
+CASE_EDITABLE_FIELDS = tuple(k for k in CASE_FIELDS if k not in CASE_IMMUTABLE_FIELDS)
+
+#: 人工审核状态机（键集必须等于 CASE_REVIEW_STATUSES；`retired` 是终态，没有出边）。
+CASE_TRANSITIONS = {"draft": ("reviewed", "retired"),
+                    "reviewed": ("draft", "retired"),
+                    "retired": ()}
+
+#: 需要写理由的目标状态：退回草稿、停用都要说清"为什么"。
+CASE_REASON_REQUIRED = ("draft", "retired")
+
+#: 两条写路由的**路径模板**（唯一事实源；服务端由它生成正则，前端常量与它同值）。
+QUICK_QUOTE_CASE_FIELDS_PATH = "/api/quick-quote/cases/{case_code}/fields"
+QUICK_QUOTE_CASE_REVIEW_PATH = "/api/quick-quote/cases/{case_code}/review"
+
+#: 金额列（>= 0，小数位不超过 4）。
+_MONEY_FIELDS = ("standard_cost", "standard_price", "deal_price")
+#: 尺寸 / 克重列（> 0）。
+_POSITIVE_FIELDS = ("inner_length", "inner_width", "inner_height",
+                    "grey_board_gsm", "face_paper_gsm")
+#: 配合间隙（>= 0）。
+_NON_NEGATIVE_FIELDS = ("fit_clearance",)
+#: 币种：三位**大写**字母（界面/接口都不许悄悄把 rmb 当成 RMB）。
+_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+#: ISO 日期 YYYY-MM-DD。
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+#: 准入必需键：缺任何一个，这个案例就不能用来做快速报价（先补数据再审）。#: 准入必需键：缺任何一个，这个案例就不能用来做快速报价（先补数据再审）。
 #: 只收「案例自己必须给全、缺了就没法硬筛选或算基准价」的键。数量档（quantity_tiers）
 #: 刻意**不在**这里：案例档位是参考，销售在批 3 会填自己的数量，缺档不阻断案例可用性。
 QUICK_QUOTE_REQUIRED_FIELDS = ("box_type_code", "closure_type", "insert_type",
@@ -711,6 +746,150 @@ def library_readiness(cases=None, *, today=None, config=None) -> dict:
     return {"verdict": verdict, "headline": headline, "detail": detail,
             "case_total": case_total, "eligible_total": eligible_total,
             "blocked_by": blocked_by, "next_actions": next_actions}
+
+
+
+# --------------------------------------------------------------------------- #
+# 维护写路径（Spec 批 12）：局部补字段 / 审核流转 / 写权限
+# --------------------------------------------------------------------------- #
+def _decimal_places(value) -> int:
+    text = str(value)
+    if "e" in text or "E" in text:
+        return 0                                                 # 科学计数：不据此判非法
+    return len(text.split(".", 1)[1]) if "." in text else 0
+
+
+def _invalid_edit_value(key: str, value) -> str:
+    """值域校验：返回中文原因（非空 = 非法），合法返回 ``""``（Spec 批 12 §2.2 第 3 条）。"""
+    if key in _MONEY_FIELDS:
+        number = _num(value)
+        if number is None or number < 0:
+            return "金额必须是不小于 0 的数字"
+        if _decimal_places(value) > 4:
+            return "金额最多 4 位小数"
+        return ""
+    if key in _POSITIVE_FIELDS:
+        number = _num(value)
+        return "" if (number is not None and number > 0) else "必须大于 0"
+    if key in _NON_NEGATIVE_FIELDS:
+        number = _num(value)
+        return "" if (number is not None and number >= 0) else "不许为负"
+    if key == "currency":
+        return "" if _CURRENCY_RE.match(_text(value)) else "币种必须是三位大写字母（如 CNY）"
+    if key in _DATE_FIELDS:
+        return "" if _ISO_DATE_RE.match(_text(value)) else "日期必须写成 YYYY-MM-DD"
+    if key in _BOOL_FIELDS:
+        if isinstance(value, bool) or value in (0, 1):
+            return ""
+        return "只收 true / false（或 0 / 1）"
+    if key == "industry":
+        return "" if _text(value) else "行业不许为空"
+    if key == "source_type":
+        return "" if _text(value) in CASE_SOURCES else "来源只能是 %s" % "/".join(CASE_SOURCES)
+    if key in _INT_FIELDS:
+        return "" if _int(value) is not None else "必须是整数"
+    return ""
+
+
+def _edit_blocked(key: str, reason_code: str, detail: str) -> dict:
+    return {"field": key, "reason_code": reason_code,
+            "label": FIELD_LABELS.get(key, key), "detail": detail}
+
+
+def case_edit_patch(case, values, *, today=None) -> dict:
+    """算出"这一批要改哪些字段"（**纯函数，不碰库**，Spec 批 12 §2.2）。
+
+    出参：``{"patch": {…}, "changed": [{field, before, after, label}], "blocked": [{field,
+    reason_code, label, detail}]}``。合法字段照常进 patch，非法字段只进 blocked ——
+    单字段非法**不拖掉整批**。
+    """
+    row = normalize_case(case)
+    src = values if isinstance(values, dict) else {}
+    patch: Dict[str, Any] = {}
+    changed: List[dict] = []
+    blocked: List[dict] = []
+    # 先按 CASE_FIELDS 的固定顺序过已知键，再补上"根本没这个字段"的键（确定性输出）。
+    keys = [key for key in CASE_FIELDS if key in src]
+    keys += [key for key in src if key not in CASE_FIELDS]
+    for key in keys:
+        value = src[key]
+        if key in CASE_IMMUTABLE_FIELDS:
+            blocked.append(_edit_blocked(key, "immutable_field",
+                                         "「%s」不允许修改" % FIELD_LABELS.get(key, key)))
+            continue
+        if key not in CASE_EDITABLE_FIELDS:
+            blocked.append(_edit_blocked(key, "unknown_field", "没有这个字段：%s" % key))
+            continue
+        detail = _invalid_edit_value(key, value)
+        if detail:
+            blocked.append(_edit_blocked(key, "invalid_value", detail))
+            continue
+        after = _coerce(key, copy.deepcopy(value))
+        before = row.get(key)
+        if after == before:
+            continue                                             # 幂等：等值不进 patch
+        patch[key] = after
+        changed.append({"field": key, "before": before, "after": after,
+                        "label": FIELD_LABELS.get(key, key)})
+    # 同批给出的生效日 / 截止日必须自洽（跨字段的一条判据，Spec §2.2 第 3 条）。
+    if patch.get("valid_from") and patch.get("valid_until"):
+        if _text(patch["valid_from"]) > _text(patch["valid_until"]):
+            for key in ("valid_from", "valid_until"):
+                if key in patch:
+                    patch.pop(key, None)
+                    changed[:] = [item for item in changed if item.get("field") != key]
+                    blocked.append(_edit_blocked(key, "invalid_value",
+                                                 "生效日不许晚于有效截止日"))
+    return {"patch": patch, "changed": changed, "blocked": blocked}
+
+
+def case_review_patch(case, status, *, reviewer, reason="", today=None) -> dict:
+    """审核状态流转（**纯函数**，Spec 批 12 §2.3）：状态机 + 留痕，退回/停用要理由。"""
+    row = normalize_case(case)
+    current = _text(row.get("review_status")) or "draft"
+    target = _text(status)
+    blank = {key: "" for key in ("review_status", "reviewed_by", "reviewed_at")}
+    if target not in CASE_REVIEW_STATUSES:
+        return {"patch": {}, "changed": [],
+                "blocked": [_edit_blocked("review_status", "invalid_value",
+                                          "审核状态只能是 %s"
+                                          % "/".join(CASE_REVIEW_STATUSES))]}
+    if target == current:
+        return {"patch": {}, "changed": [], "blocked": []}        # 幂等：同状态什么都不做
+    if target not in CASE_TRANSITIONS.get(current, ()):
+        return {"patch": {}, "changed": [],
+                "blocked": [_edit_blocked("review_status", "illegal_transition",
+                                          "「%s」不能直接改成「%s」" % (current, target))]}
+    if target in CASE_REASON_REQUIRED and not _text(reason):
+        return {"patch": {}, "changed": [],
+                "blocked": [_edit_blocked("review_status", "reason_required",
+                                          "改成「%s」必须写明理由" % target)]}
+    if not _text(reviewer):
+        return {"patch": {}, "changed": [],
+                "blocked": [_edit_blocked("reviewed_by", "invalid_value", "审核人必填")]}
+    day = today or dt.date.today()
+    patch = {"review_status": target, "reviewed_by": _text(reviewer),
+             "reviewed_at": day.strftime("%Y-%m-%d"),
+             "review_reason": _text(reason)}
+    return {"patch": patch,
+            "changed": [{"field": "review_status", "before": current, "after": target,
+                         "label": FIELD_LABELS.get("review_status", "review_status")}],
+            "blocked": []}
+
+
+def case_write_allowed(user) -> bool:
+    """谁能改案例：**复用**快速报价的写权限闭集（批 8 的 ``WRITE_ROLES``），不新造一份。
+
+    延迟导入：``cpq_quick_quote_price`` 反向依赖本模块，模块级导入会成环。
+    """
+    role = _text((user or {}).get("role_code"))
+    if not role:
+        return False
+    try:
+        import cpq_quick_quote_price
+    except ImportError:                                          # pragma: no cover - 防御
+        return False
+    return role in cpq_quick_quote_price.WRITE_ROLES
 
 
 def case_fix_plan(case) -> dict:

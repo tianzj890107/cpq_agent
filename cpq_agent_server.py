@@ -1541,6 +1541,27 @@ PACKAGING_QUOTE_PRICE_PATH = "/api/packaging-quote/price"
 # 事实源）；_handle_quick_quote_cases() 每次都会比对一次，两处写死也不会悄悄漂移。
 QUICK_QUOTE_CASES_PATH = "/api/quick-quote/cases"
 
+# 快速报价案例维护（逆向快速报价第 12 批，Spec §2.4）：两条**写**路由。路径模板的唯一事实源
+# 仍是 cpq_quick_quote_case.QUICK_QUOTE_CASE_*_PATH（这里不写第二份字面量，正则由模板生成）。
+QUICK_QUOTE_CASE_FIELDS_PATH = cpq_quick_quote_case.QUICK_QUOTE_CASE_FIELDS_PATH
+QUICK_QUOTE_CASE_REVIEW_PATH = cpq_quick_quote_case.QUICK_QUOTE_CASE_REVIEW_PATH
+
+
+def _case_action_regex():
+    """「模板 → 正则」：把 {case_code} 换成具名组，动作闭集由模板尾段推导（Spec §2.4）。"""
+    fields = QUICK_QUOTE_CASE_FIELDS_PATH
+    review = QUICK_QUOTE_CASE_REVIEW_PATH
+    head, _, tail = fields.partition("{case_code}")
+    head_review, _, tail_review = review.partition("{case_code}")
+    if head != head_review:                                      # pragma: no cover - 防御
+        raise ValueError("两条案例维护路由必须共用同一个前缀：%r / %r" % (fields, review))
+    actions = sorted({tail.strip("/"), tail_review.strip("/")})
+    return re.compile("^" + re.escape(head) + "(?P<case_code>[^/]+)/"
+                      + "(?P<action>" + "|".join(re.escape(a) for a in actions) + ")$")
+
+
+QUICK_QUOTE_CASE_ACTION_RE = _case_action_regex()
+
 #: 快速报价当前的能力边界：接口与前端共用同一份文案，不各写一句。
 _QUICK_QUOTE_NOTES = (
     "本接口只给标准案例库的现状与资格；检索排序、差异价、出价门槛与文件解析在后三批。",
@@ -1853,6 +1874,64 @@ def _handle_quick_quote_cases(params=None) -> dict:
         "readiness": cpq_quick_quote_case.library_readiness(rows),
         "notes": list(_QUICK_QUOTE_NOTES),
     }
+
+
+def _quick_quote_case_route(path: str) -> dict:
+    """路径 → {"case_code", "action"}；不匹配回空字典。"""
+    match = QUICK_QUOTE_CASE_ACTION_RE.match(path or "")
+    return match.groupdict() if match else {}
+
+
+def _case_actor_text(user) -> str:
+    user = user if isinstance(user, dict) else {}
+    return _text(user.get("username")) or _text(user.get("user_id"))
+
+
+def _handle_quick_quote_case_write(case_code: str, action: str, data=None, *,
+                                   user=None) -> dict:
+    """POST /api/quick-quote/cases/{case_code}/fields|review —— 案例维护写路径（Spec 批 12 §2.4）。
+
+    **先校验后写**：``case_edit_patch()`` / ``case_review_patch()`` 判出的 ``blocked`` 非空时，
+    一个字节都不落库。写权限复用 ``cpq_quick_quote_price.WRITE_ROLES``（``case_write_allowed``），
+    路由里不重写角色判断。失败出参 ``{"ok": False, "code", "error"}``；成功出参带
+    ``case`` / ``changed`` / ``blocked`` / ``readiness``。
+    """
+    data = data if isinstance(data, dict) else {}
+    if not cpq_quick_quote_case.case_write_allowed(user):
+        return {"ok": False, "code": "forbidden",
+                "error": "当前账号没有维护标准报价案例的权限"}
+    try:
+        rows = cpq_quick_quote_case.load_cases(None, include_expired=True)
+    except cpq_quick_quote_case.CaseLibraryUnavailable as exc:
+        return {"ok": False, "code": "library_unavailable", "error": str(exc)}
+    row = cpq_quick_quote_case.find_case(case_code, cases=rows)
+    if not row:
+        return {"ok": False, "code": "case_not_found",
+                "error": "案例不存在：%s" % case_code}
+    if action == "review":
+        plan = cpq_quick_quote_case.case_review_patch(
+            row, data.get("status"), reviewer=_case_actor_text(user),
+            reason=data.get("reason") or "")
+    else:
+        plan = cpq_quick_quote_case.case_edit_patch(row, data.get("values"))
+    blocked = list(plan.get("blocked") or [])
+    if blocked:
+        return {"ok": False, "code": blocked[0].get("reason_code") or "invalid_value",
+                "error": blocked[0].get("detail") or "这条案例不允许这么改",
+                "blocked": blocked}
+    merged = dict(row)
+    merged.update(plan.get("patch") or {})
+    try:
+        saved = cpq_quick_quote_case.save_case(merged, user=user)
+    except cpq_quick_quote_case.QuickQuoteCaseError as exc:
+        return {"ok": False, "code": "invalid_value", "error": str(exc)}
+    try:
+        fresh = cpq_quick_quote_case.load_cases(None, include_expired=True)
+        readiness = cpq_quick_quote_case.library_readiness(fresh)
+    except cpq_quick_quote_case.CaseLibraryUnavailable:           # pragma: no cover - 防御
+        readiness = {}
+    return {"ok": True, "case": saved, "changed": list(plan.get("changed") or []),
+            "blocked": [], "readiness": readiness}
 
 
 def _handle_quick_quote_parse(data=None) -> dict:
@@ -3551,6 +3630,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _acting_user(self) -> dict:
+        """这一轮是谁：**只认票上的人**（与 8010 的约定一致；请求体里的 user 一概忽略）。"""
+        token = ""
+        try:
+            header = self.headers.get("authorization", "") or ""
+        except Exception:                                        # pragma: no cover - 防御
+            header = ""
+        if header.lower().startswith("bearer "):
+            token = header[7:].strip()
+        if not token:
+            token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+        if not token:
+            return {}
+        try:
+            import cpq_auth
+            return cpq_auth.whoami(token) or {}
+        except Exception:                                        # pragma: no cover - 防御
+            return {}
+
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0) or 0)
         if not length:
@@ -3637,6 +3735,16 @@ class Handler(BaseHTTPRequestHandler):
             # 包装定价（包装第 8 批）：确定性计算，不取规则、不调模型。
             data = self._read_body()
             self._send_json(_handle_packaging_quote_price(data))
+        elif QUICK_QUOTE_CASE_ACTION_RE.match(path):
+            # 快速报价案例维护（逆向快速报价第 12 批）：补字段 / 改审核状态。只认票上的人。
+            params = _quick_quote_case_route(path)
+            payload = _handle_quick_quote_case_write(
+                params.get("case_code"), params.get("action"), self._read_body(),
+                user=self._acting_user())
+            status = 200
+            if not payload.get("ok"):
+                status = {"case_not_found": 404, "forbidden": 403}.get(payload.get("code"), 400)
+            self._send_json(payload, status)
         elif path == cpq_quick_quote_file.QUICK_QUOTE_PARSE_PATH:
             # 快速报价文件解析（逆向快速报价第 5 批）：报价侧只当统一解析服务的客户端。
             self._send_json(_handle_quick_quote_parse(self._read_body()))

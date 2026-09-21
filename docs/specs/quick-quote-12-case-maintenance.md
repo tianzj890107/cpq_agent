@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 12 批 —— 案例库的维护写路径（补字段 / 审核 / 停用）与面板动作接线
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（未实现）（实现已落地；F1 断言与 E5 断言互斥、不可同时成立，见 changelog ## 256，已上报测试侧）
 红测：`tests/test_quick_quote_case_maintenance_red.py`
 依赖：批 1（案例模型与准入 `case_eligible()`）、批 6（`library_readiness()` / `case_fix_plan()`）、
 批 8（`cpq_quick_quote_price.WRITE_ROLES` 写权限闭集）。

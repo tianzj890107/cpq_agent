@@ -68,6 +68,28 @@ RATE_AUTHORITY_LABELS = {
 }
 WRITE_ROLES = cpq_packaging_quote.WRITE_ROLES     # 复用既有闭集，不新造（Spec §2.5）
 
+#: 费率导入行的必填键（缺一即 `missing_key`）。`source_ref` 是批 8 要求的"指向工作簿与工作表"。
+RATE_IMPORT_REQUIRED_KEYS = ("rule_code", "field_key", "rule_kind", "unit", "industry",
+                             "source_type", "review_status", "version",
+                             "effective_from", "source_ref")
+#: 导入通道只认权威工作簿（与 AUTHORITATIVE_RATE_SOURCES 同值，不许另写一份）。
+AUTHORITATIVE_IMPORT_SOURCE = "workbook"
+#: 导入结果码闭集（纯函数、接口、工具共用）。
+RATE_IMPORT_REASONS = ("missing_key", "source_not_authoritative", "not_reviewed",
+                       "invalid_value", "duplicate_rule_code", "unknown_field_key",
+                       "unknown_rule_kind", "industry_mismatch")
+#: 每个码一句中文（工具与接口共用，不许各写一份）。
+RATE_IMPORT_LABELS = {
+    "missing_key": "缺必填键",
+    "source_not_authoritative": "来源不是权威工作簿（只收 source_type=workbook）",
+    "not_reviewed": "费率未审核（必须是 review_status=reviewed）",
+    "invalid_value": "值域不合法",
+    "duplicate_rule_code": "重复的 rule_code",
+    "unknown_field_key": "字段不在可定价字段闭集里",
+    "unknown_rule_kind": "规则种类不在闭集里",
+    "industry_mismatch": "行业与本报价口径不一致",
+}
+
 #: 字段规格（唯一事实源）：右侧工作区靠它渲染控件、做单位与范围校验。
 #: 范围口径见 Spec §2.1；`fit_clearance` 用的是**配合间隙**的量级（0–20mm），
 #: 不是内尺寸的 20–2000mm —— 见本批 changelog「实现时发现并回写 Spec 的两处口径」。
@@ -132,6 +154,21 @@ _UNIT_WORDS = (("个", "个"), ("mm", "mm"), ("毫米", "mm"), ("g/m²", "g/m²"
 # 复用同一份实现，不各写一份。
 _text = qq_case._text
 _num = qq_case._num
+
+
+def _int(value) -> Optional[int]:
+    """整数取值：拿不到整数返回 None（与 `_num` 同口径，不猜 0）。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
 _tri_bool = qq_case._bool
 _print_colors = qq_case.normalize_print_colors
 
@@ -251,6 +288,210 @@ def authority_summary(rules=None) -> dict:
     return {"rule_total": total, "authoritative_total": authoritative_total,
             "authoritative": authoritative, "blocked_by": blocked,
             "headline": headline, "detail": detail}
+
+
+# --------------------------------------------------------------------------- #
+# 权威费率的导入路径（Spec 批 13）：预演 → 校验 → 退役 demo → 落库
+# --------------------------------------------------------------------------- #
+def _import_blocked(index: int, row, reason_code: str, detail: str) -> dict:
+    row = row if isinstance(row, dict) else {}
+    return {"row_index": index, "rule_code": _text(row.get("rule_code")),
+            "reason_code": reason_code, "label": RATE_IMPORT_LABELS.get(reason_code, ""),
+            "detail": detail}
+
+
+def _valid_breakpoints(value) -> bool:
+    """`breakpoints_json` 必须是 `[[阈值, 系数], …]`（至少一条，两个数）. """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(value, (list, tuple)) or not value:
+        return False
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+            return False
+        if _num(pair[0]) is None or _num(pair[1]) is None:
+            return False
+    return True
+
+
+def _import_row_blocked(index: int, row: dict, *, existing_codes: set) -> Optional[dict]:
+    """逐条校验：先命中先返回（同一行只报第一条，Spec 批 13 §2.2 第 2 条）。"""
+    missing = [key for key in RATE_IMPORT_REQUIRED_KEYS
+               if row.get(key) is None or _text(row.get(key)) == ""]
+    if missing:
+        return _import_blocked(index, row, "missing_key",
+                               "缺必填键：" + "、".join(missing))
+    if _text(row.get("source_type")).lower() != AUTHORITATIVE_IMPORT_SOURCE:
+        return _import_blocked(index, row, "source_not_authoritative",
+                               "只收 source_type=%s 的权威工作簿行" % AUTHORITATIVE_IMPORT_SOURCE)
+    if _text(row.get("review_status")).lower() != "reviewed":
+        return _import_blocked(index, row, "not_reviewed",
+                               "必须先审到 reviewed（现在 %r）" % row.get("review_status"))
+    if _text(row.get("industry")) != INDUSTRY:
+        return _import_blocked(index, row, "industry_mismatch",
+                               "行业必须是 %s（现在 %r）" % (INDUSTRY, row.get("industry")))
+    if _text(row.get("field_key")) not in FIELD_KEYS:
+        return _import_blocked(index, row, "unknown_field_key",
+                               "字段 %r 不在可定价字段闭集里" % row.get("field_key"))
+    kind = _text(row.get("rule_kind")).lower()
+    if kind not in RULE_KINDS:
+        return _import_blocked(index, row, "unknown_rule_kind",
+                               "规则种类 %r 不在闭集 %s 里" % (row.get("rule_kind"),
+                                                               "/".join(RULE_KINDS)))
+    version = _int(row.get("version"))
+    if version is None or version <= 0:
+        return _import_blocked(index, row, "invalid_value", "version 必须是正整数")
+    started = _date(row.get("effective_from"))
+    if started is None:
+        return _import_blocked(index, row, "invalid_value",
+                               "effective_from 必须写成 ISO 日期 YYYY-MM-DD")
+    ended = _date(row.get("effective_to"))
+    if _text(row.get("effective_to")) and ended is None:
+        return _import_blocked(index, row, "invalid_value",
+                               "effective_to 必须写成 ISO 日期 YYYY-MM-DD（或留空）")
+    if ended is not None and ended < started:
+        return _import_blocked(index, row, "invalid_value", "effective_to 不许早于 effective_from")
+    if kind == "rate":
+        rate = _num(row.get("rate"))
+        if rate is None or rate <= 0:
+            return _import_blocked(index, row, "invalid_value", "rate 规则必须有大于 0 的费率")
+    if kind == "band" and not _valid_breakpoints(row.get("breakpoints_json")):
+        return _import_blocked(index, row, "invalid_value",
+                               "band 规则的 breakpoints_json 必须是 [[阈值, 系数], …]")
+    code = _text(row.get("rule_code"))
+    if code in existing_codes:
+        return _import_blocked(index, row, "duplicate_rule_code",
+                               "库里已经有同码的**权威**行 %s：不许悄悄覆盖" % code)
+    return None
+
+
+def rate_import_plan(rows, *, existing=None, today=None, retire_demo=True) -> dict:
+    """权威费率的导入**预演**（纯函数，不写库、不改入参，Spec 批 13 §2.2）。
+
+    出参：``{"write", "retire", "blocked", "projected", "counts", "authoritative",
+    "headline", "detail"}``。``blocked`` 非空**不阻断** write / retire 的计算，
+    由调用方决定是否执行。
+    """
+    source = existing if existing is not None else load_rules(None)
+    base = [copy.deepcopy(row) for row in (source or []) if isinstance(row, dict)]
+    authoritative_codes = {_text(row.get("rule_code")) for row in base
+                           if _text(row.get("source_type")).lower() != "demo"}
+    write: List[dict] = []
+    blocked: List[dict] = []
+    seen: set = set()
+    for index, raw in enumerate(list(rows or [])):
+        row = copy.deepcopy(raw) if isinstance(raw, dict) else {}
+        code = _text(row.get("rule_code"))
+        if code and code in seen:
+            blocked.append(_import_blocked(index, row, "duplicate_rule_code",
+                                           "同一批里 rule_code 重复：%s" % code))
+            continue
+        hit = _import_row_blocked(index, row, existing_codes=authoritative_codes)
+        if hit:
+            blocked.append(hit)
+            continue
+        if code:
+            seen.add(code)
+        write.append(row)
+    write.sort(key=lambda item: _text(item.get("rule_code")))
+    write_codes = {_text(row.get("rule_code")) for row in write}
+
+    retire: List[dict] = []
+    if retire_demo:
+        for row in base:
+            if _text(row.get("source_type")).lower() != "demo":
+                continue
+            code = _text(row.get("rule_code"))
+            if code in write_codes:
+                continue                                        # 同码 = 替换，不退役
+            retire.append({"rule_code": code, "reason_code": "demo_rate",
+                           "label": RATE_IMPORT_LABELS.get("demo_rate", ""),
+                           "detail": "演示费率退场：换成权威工作簿口径后不再保留演示行",
+                           "source_type": _text(row.get("source_type")),
+                           "review_status": _text(row.get("review_status"))})
+    retire.sort(key=lambda item: item["rule_code"])
+    retire_codes = {item["rule_code"] for item in retire}
+
+    projected: Dict[str, dict] = {}
+    for row in base:
+        code = _text(row.get("rule_code"))
+        if code in retire_codes:
+            continue
+        projected[code] = row
+    for row in write:                                           # 同码时以本次写入为准
+        projected[_text(row.get("rule_code"))] = row
+    projected_rows = [projected[code] for code in sorted(projected)]
+
+    try:
+        summary = authority_summary(projected_rows) if projected_rows else {}
+    except (CaseLibraryUnavailable, WorkspaceError):            # pragma: no cover - 防御
+        summary = {}
+    authoritative = bool(summary.get("authoritative"))
+    counts = {"rows": len(list(rows or [])), "write": len(write),
+              "retire": len(retire), "blocked": len(blocked)}
+    if blocked:
+        headline = ("费率导入预演：%d 行预演里有 %d 行不通过，先修数据再 --confirm"
+                    % (counts["rows"], len(blocked)))
+    elif authoritative:
+        headline = ("费率导入预演：写 %d 条、退 %d 条演示行；执行后费率为权威口径，可用于正式报价"
+                    % (len(write), len(retire)))
+    else:
+        headline = ("费率导入预演：写 %d 条、退 %d 条；执行后仍不是全权威口径"
+                    % (len(write), len(retire)))
+    detail = ("正式报价要求 source_type=workbook 且 review_status=reviewed，并写明 source_ref"
+              " 指向工作簿与工作表；演示行（demo）必须退役，否则永远判不了权威。")
+    return {"write": write, "retire": retire, "blocked": blocked,
+            "projected": projected_rows, "counts": counts,
+            "authoritative": authoritative, "headline": headline, "detail": detail}
+
+
+def apply_rate_import_plan(plan, *, conn=None) -> dict:
+    """执行预演结果：写入权威行、退役（删除）演示行。**只有 --confirm 才该走到这里。**
+
+    删除演示行而不是留着：`rule_authority()` 先看 source_type，演示行只要还在库里，
+    `authority_summary()` 就永远判不了权威（Spec 批 13 §0 的"退场"就是这个意思）。
+    """
+    plan = plan if isinstance(plan, dict) else {}
+    items = [copy.deepcopy(row) for row in (plan.get("write") or []) if isinstance(row, dict)]
+    retired = [_text(row.get("rule_code")) for row in (plan.get("retire") or [])
+               if _text(row.get("rule_code"))]
+    own = conn is None
+    if own:
+        conn = cpq_kb._connect()
+    try:
+        if own:
+            with conn.transaction():
+                cur = conn.cursor()
+                cpq_kb._ensure_schema(cur)
+                changed = cpq_kb._upsert_rows(cur, DELTA_RULE_TABLE, items)
+                removed = _delete_rule_rows(cur, retired)
+                version = cpq_kb._bump_version(cur, changed + removed)
+        else:                                                   # pragma: no cover - 事务内调用
+            cur = conn.cursor()
+            changed = cpq_kb._upsert_rows(cur, DELTA_RULE_TABLE, items)
+            removed = _delete_rule_rows(cur, retired)
+            version = cpq_kb._bump_version(cur, changed + removed)
+    except Exception as exc:                                   # noqa: BLE001 - 统一收敛
+        raise cpq_kb.KbUnavailable("费率导入失败（%s.%s）：%s"
+                                   % (cpq_kb.SCHEMA, DELTA_RULE_TABLE,
+                                      str(exc).splitlines()[0][:200])) from exc
+    finally:
+        if own:
+            conn.close()
+    return {"ok": True, "table": DELTA_RULE_TABLE, "written": len(items),
+            "retired": removed, "kb_version": int(version)}
+
+
+def _delete_rule_rows(cur, codes) -> int:
+    codes = [code for code in (codes or []) if code]
+    if not codes:
+        return 0
+    cur.execute("DELETE FROM %s.%s WHERE rule_code = ANY(%%s)" % (cpq_kb.SCHEMA, DELTA_RULE_TABLE),
+                (codes,))
+    return len(codes)
 
 
 def _rule_window(row, today) -> dict:

@@ -1341,24 +1341,99 @@ def compute_freight(rule: Optional[dict], *, quote_quantity: Any) -> dict:
 # --------------------------------------------------------------------------- #
 # 材料 / 费率取值
 # --------------------------------------------------------------------------- #
+#: 克重来源闭集（Spec `packaging-cost-gaps-closure` §2.3 / §3.2）。
+GSM_SOURCES = ("property", "grade", "derived_from_thickness_density")
+#: 属性表里厚度允许的单位（其余单位（cm / m / µm）一律**不推导**，Spec §3.1）。
+_THICKNESS_MM_UNITS = ("", "mm", "毫米", "㎜")
+
+
 def _material_rows() -> list:
-    return [dict(row) for row in kb_repo._table("kb_material")]
+    """材料主数据 + `kb_material_property`（按 `material_code` 只读 join）。
+
+    属性表里有"厚度 / 密度"这类材料自身列放不下的属性（例如 `EVA 片材` 的 10mm 只写在
+    属性表里）；不 join 就会让这类材料永远报 `material_gsm_missing`（Spec §1.3、§2.2）。
+    join 只读、只加 `properties` 键，不改材料行的既有列。
+    """
+    rows = [dict(row) for row in kb_repo._table("kb_material")]
+    by_code: dict = {}
+    for prop in kb_repo._table("kb_material_property"):
+        by_code.setdefault(_text(prop.get("material_code")), []).append(dict(prop))
+    for row in rows:
+        joined = by_code.get(_text(row.get("material_code")), [])
+        embedded = row.get("properties")
+        row["properties"] = joined or (embedded if isinstance(embedded, list) else [])
+    return rows
 
 
-def _material_gsm(material: dict) -> Optional[float]:
+def _thickness_from_text(text: str) -> Optional[float]:
+    """`grade` / `spec` 里**明写**的厚度：`2.0mm` / `t2.0` / `t10`（Spec §2.1）。"""
+    for pattern in (r"(?:^|[^0-9A-Za-z])t\s*(\d+(?:\.\d+)?)(?![\d.])",
+                    r"(\d+(?:\.\d+)?)\s*mm\b"):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _material_thickness_density(material: dict) -> tuple:
+    """材料厚度（mm）与密度（g/cm³）。
+
+    厚度来源依次：属性表 `thickness`（单位 mm 或空）→ `grade` / `spec` 里明写的
+    `t2.0` / `2.0mm`；密度取 `kb_material.density` 或属性表 `density`。
+    **任一项取不到就返回 (None, None)** —— 不许给默认密度、不许拿"常见值"顶（Spec §3.1）。
+    """
+    if not isinstance(material, dict):
+        return None, None
+    thickness, unit, density = None, "", _num(material.get("density"))
     for prop in (material.get("properties") or []):
-        if _text(prop.get("prop_key")) == "gsm":
+        key = _text(prop.get("prop_key")).lower()
+        if key == "thickness" and thickness is None:
             value = _num(prop.get("value_num"))
             if value is not None:
-                return value
+                thickness, unit = value, _text(prop.get("unit")).lower()
+        elif key == "density" and density is None:
+            value = _num(prop.get("value_num"))
+            if value is not None:
+                density = value
+    if thickness is None:
+        for text in (_text(material.get("grade")), _text(material.get("spec"))):
+            value = _thickness_from_text(text)
+            if value is not None:
+                thickness, unit = value, "mm"
+                break
+    if thickness is None or density is None or density <= 0:
+        return None, None
+    if unit not in _THICKNESS_MM_UNITS:
+        return None, None                                        # 单位不是 mm：不推导
+    return thickness, density
+
+
+def _material_gsm_detail(material: dict) -> tuple:
+    """`(gsm, source)`；`source` ∈ `GSM_SOURCES`，取不到时 `(None, None)`（Spec §2.3）。"""
+    if not isinstance(material, dict):
+        return None, None
+    for prop in (material.get("properties") or []):
+        if _text(prop.get("prop_key")).lower() == "gsm":
+            value = _num(prop.get("value_num"))
+            if value is not None:
+                return value, "property"
     grade = _text(material.get("grade"))
     match = re.search(r"\d+(?:\.\d+)?\s*g\b", grade, re.IGNORECASE)
     if match:
-        return float(re.search(r"\d+(?:\.\d+)?", match.group(0)).group(0))
+        return float(re.search(r"\d+(?:\.\d+)?", match.group(0)).group(0)), "grade"
     match = re.match(r"^(\d+(?:\.\d+)?)\s*g$", grade, re.IGNORECASE)
     if match:
-        return float(match.group(1))
-    return None
+        return float(match.group(1)), "grade"
+    thickness, density = _material_thickness_density(material)
+    if thickness is not None and density is not None:
+        # 唯一允许的推导式：厚度(mm) × 密度(g/cm³) × 1000，四舍五入到 0.1（Spec §2.3）。
+        return round(thickness * density * 1000, 1), "derived_from_thickness_density"
+    return None, None
+
+
+def _material_gsm(material: dict) -> Optional[float]:
+    """兼容包装：只要克重，不要来源。既有调用点行为不变。"""
+    return _material_gsm_detail(material)[0]
 
 
 def _resolve_material(row: dict, materials: list) -> Optional[dict]:
@@ -1524,14 +1599,15 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         length = _num(row.get("length_mm"))
         width = _num(row.get("width_mm"))
         material = _resolve_material(row, materials)
-        gsm = _material_gsm(material) if material else None
+        gsm, gsm_source = _material_gsm_detail(material) if material else (None, None)
         price = None
         if material:
             price_row = _material_price(_text(material.get("material_code")))
             if price_row:
                 price = _num(price_row.get("price"))
         variables = {"cut_length": length, "cut_width": (width + 5) if width is not None else None,
-                     "gsm": gsm, "ton_price": (price * 1000) if price is not None else None,
+                     "gsm": gsm, "gsm_source": gsm_source,
+                     "ton_price": (price * 1000) if price is not None else None,
                      "imposition_count": imposition, "proof_base": _num(data.get("proofing_base")) or 0.0,
                      "quote_quantity": quantity, "tax_factor": tax_factor,
                      "machine_length": machine_length,
