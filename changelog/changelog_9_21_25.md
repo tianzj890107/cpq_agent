@@ -9381,3 +9381,23 @@ tests.test_packaging_quote_draft_and_card_visibility_red        Ran 10 OK
         quote_home_industry_carryover                            Ran 131 OK
 报价页两段内联脚本 node --check 均通过；packaging-quote-panel.js node --check 通过
 ```
+
+
+### 261.1 部署 34 并当场复验（5e2dc33；缺口包在线上真的能出草稿了）
+
+```
+部署：161f788 → 5e2dc33（ref=ytbz，纯快进）；build.commit=5e2dc33c77e1e085aaf815c8b028479e6a7b4574（branch=ytbz）
+第 5 步真转：酒盒.dwg / 圆盘盒.dwg 均 converter_role=primary、fallback_used=false、dxf+preview 齐全
+第 6b 步隔离端到端：两份样本八步 8/8 completed；零件 64 / 9 件；可挤出 1 / 7；
+                   权威实样 YT-DWG-ROUND-10PC 路线 9 道 confirm=confirmed、YT-DWG-WINE-700ML 路线 10 道 confirm=confirmed
+线上复验（在 34 的仓库里跑同一份 gap 形状的包）：
+  price(publish 缺省) → {"draft": true, "publish_blocked": true, "reason": "cost_gaps_unresolved",
+                         "gap_count": 1, "net_unit_price": 14.579691, "taxed_unit_price": 16.47505}
+  报价单正文第 3 行 → 「本报价为缺口草稿，不得对外发布（缺口 1 项；清账后重新定价才能出正式报价单）。」
+  price(publish=True) → cost_gaps_unresolved 409（正式单照旧拦住）
+  cpq_agent_server._BI_SECTIONS → s2_packaging / s2_packaging_cost（标题 包装：盒型与参数 / 包装：成本构成）
+  线上报价卡片页 /确认需求解析结果.html（225 KB）→ 已引用 packaging-quote-panel.js 且含 PackagingQuotePanel 调用
+```
+
+线上口径：报价第 3 步「定价-利润加成」从"缺口的真实单永远 409、做不下去"变成
+**草稿能出、数字链完整、缺口逐条可见**；只有 `publish=True`（正式报价单）仍被挡住。
