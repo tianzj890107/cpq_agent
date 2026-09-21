@@ -22,7 +22,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cpq_quick_quote_match as qq_match
 
@@ -66,9 +66,19 @@ _AXIS_KEYS = {"inner_length": "inner_length", "inner_width": "inner_width",
 _UNIT_FACTORS = {"mm": 1.0, "millimeter": 1.0, "millimeters": 1.0,
                  "cm": 10.0, "m": 1000.0, "inch": 25.4, "in": 25.4,
                  "英寸": 25.4, "毫米": 1.0, "厘米": 10.0}
-_GREY_WORDS = ("灰板", "纸板", "greyboard", "grey", "gray")
-_FACE_WORDS = ("面纸", "面", "face", "cover")
-_GSM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:g/m²|g/m2|gsm|g|克)")
+#: 纸种词表（Spec 批 10 C2）：**两个桶就是唯一事实源**，不许在别处再写一份。
+#: 真图写的「白卡 / 铜版 / 单粉 / 双灰 / 全灰 / 灰卡」必须登记；「粉灰」故意不登记 ——
+#: 它既能读成便宜的面纸（单粉灰底），也能读成灰板系的粉灰板，两种口径都讲得通，
+#: 按 C4 走「不猜 + warning」，要登记得先由业务签字。
+_GREY_WORDS = ("灰板", "纸板", "greyboard", "grey", "gray", "双灰", "全灰", "灰卡")
+_FACE_WORDS = ("面纸", "面", "face", "cover", "白卡", "铜版", "单粉")
+#: 克重单位：中文图纸普遍写大写的「225G / 300G」，所以忽略大小写
+#: （技术工艺侧同名正则早就是 `re.IGNORECASE`，批 10 把报价侧对齐）。
+#: `\s*` 里不含换行以外的东西，mm / cm 厚度（`2.5MM灰板`）不受影响 —— 见 Spec C1。
+_GSM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:g/m²|g/m2|gsm|g|克)", re.IGNORECASE)
+
+#: 读出了克重但纸种分不清时的文案（Spec C4：逐字沿用，不许改措辞）。
+AMBIGUOUS_GSM_WARNING = "材料标注里读出了克重，但分不清是面纸还是灰板：请人工确认"
 
 _text = qq_match._text
 _num = qq_match._num
@@ -286,26 +296,68 @@ def _dimensions(fields: dict, factor: float,
     return out
 
 
+def _paper_spans(text: str, words) -> List[Tuple[int, int]]:
+    """词表里每个词条在 `text` 里的**所有**落位（大小写不敏感）。"""
+    spans: List[Tuple[int, int]] = []
+    lowered = text.lower()
+    for word in words:
+        token = _text(word).lower()
+        if not token:
+            continue
+        start = lowered.find(token)
+        while start >= 0:
+            spans.append((start, start + len(token)))
+            start = lowered.find(token, start + 1)
+    return spans
+
+
+def _gsm_bucket(span, face_spans, grey_spans):
+    """克重值 → 纸种桶（Spec 批 10 C3）：先取**紧跟其后**的纸种词，再取紧挨在前的。
+
+    两者都没有 → None（不可归属，不猜）。今天这条之所以必须有：`衬纸250g白卡裱1200g双灰`
+    这种一条标注两个纸种的写法，只取"第一个数字 + 命中任意词"会把 250 记成灰板克重。
+    """
+    start, end = span
+    following = [item for item in face_spans + grey_spans if item[0] >= end]
+    if following:
+        chosen = min(following, key=lambda item: (item[0], item[1]))
+    else:
+        preceding = [item for item in face_spans + grey_spans if item[1] <= start]
+        if not preceding:
+            return None
+        chosen = max(preceding, key=lambda item: (item[1], item[0]))
+    return "face" if chosen in face_spans else "grey"
+
+
 def _gsm_from_notes(notes, warnings: List[str]) -> Dict[str, float]:
+    """材料标注 → `face_paper_gsm` / `grey_board_gsm`（逐值配对，Spec 批 10 C1–C4）。
+
+    同一个桶里**先到先得**（沿用批 5 的 `setdefault` 口径，不改成最大值 / 众数）；
+    配不上的值一个键都不写，只要丢过值就在 `warnings` 里留一条（逐字沿用批 5 文案）。
+    """
     out: Dict[str, float] = {}
     if not isinstance(notes, (list, tuple, str)):
         return out
     items = [notes] if isinstance(notes, str) else list(notes)
+    dropped = False
     for note in items:
         text = _text(note)
         if not text:
             continue
-        found = _GSM_RE.search(text.replace(",", ""))
-        value = _num(found.group(0)) if found else None
-        if value is None:
-            continue
-        if any(word in text for word in _GREY_WORDS):
-            out.setdefault("grey_board_gsm", value)
-        elif any(word in text for word in _FACE_WORDS):
-            out.setdefault("face_paper_gsm", value)
-    if any(word for word in items if _text(word) and _GSM_RE.search(_text(word).replace(",", ""))):
-        if "face_paper_gsm" not in out and "grey_board_gsm" not in out:
-            warnings.append("材料标注里读出了克重，但分不清是面纸还是灰板：请人工确认")
+        text = text.replace(",", "")
+        face_spans = _paper_spans(text, _FACE_WORDS)
+        grey_spans = _paper_spans(text, _GREY_WORDS)
+        for found in _GSM_RE.finditer(text):
+            value = _num(found.group(0))
+            if value is None:
+                continue
+            bucket = _gsm_bucket((found.start(), found.end()), face_spans, grey_spans)
+            if bucket is None:
+                dropped = True
+                continue
+            out.setdefault("face_paper_gsm" if bucket == "face" else "grey_board_gsm", value)
+    if dropped:
+        warnings.append(AMBIGUOUS_GSM_WARNING)
     return out
 
 
