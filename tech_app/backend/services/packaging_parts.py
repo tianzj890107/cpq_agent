@@ -24,6 +24,12 @@ ENGINE_VERSION = "packaging-parts/1"
 #: 零件文档在项目存储里的 doc key。
 DOC_KEY = "packaging_parts"
 
+#: 单件下游结论（工艺 / 成本）各自一份版本化文档 —— 与零件文档同一套 `get_doc/put_doc`
+#: 范式，但**分开存**：它们是不同的产物，读回的时机与权限都不同
+#: （Spec `packaging-parts-downstream-readback.md` §2.1 命名契约）。
+DOC_KEY_PROCESS = "packaging_part_process"
+DOC_KEY_COST = "packaging_part_cost"
+
 #: 过滤阈值与上限：默认值**只在这里**，不许散落在判定代码里。
 DEFAULT_OPTIONS = {"min_area_mm2": 2000, "max_edge_mm": 1200,
                    "max_area_mm2": 1000000, "max_parts": 64}
@@ -1186,6 +1192,74 @@ def load_parts(project_id: str, parts_id: Optional[str] = None) -> Optional[Dict
 
 def list_parts(project_id: str) -> List[Dict[str, Any]]:
     return _load_items(project_id)
+
+
+def _part_doc_items(project_id: str, key: str) -> List[Dict[str, Any]]:
+    doc = get_backend().get_doc(project_id, key) or {}
+    items = doc.get("items") if isinstance(doc, dict) else None
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def _record_hash(payload: Dict[str, Any]) -> str:
+    from .packaging_semantics import model as sem_model
+
+    return sem_model.sha256_hex(sem_model.canonical_json(sem_model.json_safe(payload)))
+
+
+def _load_part_doc(project_id: str, key: str, part_code: str) -> Dict[str, Any]:
+    """读这一件的**最近一版**结论；没跑过就回空文档（不抛错、不 404，Spec §2.1）。"""
+    wanted = _text(part_code)
+    for item in _part_doc_items(project_id, key):
+        if _text(item.get("part_code")) == wanted:
+            return item
+    return {}
+
+
+def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """落一版单件结论：同一 `(part_code, parts_id, 结论内容)` **幂等**、最多 20 版。
+
+    幂等靠内容指纹（`record_hash`）：同一份结论重复落库**不写库、不新增版本** ——
+    34 上"刷新就没了"的另一面就是"重跑一次就多一版"，两边都得治。
+    """
+    record = copy.deepcopy(payload) if isinstance(payload, dict) else {}
+    part_code = _text(record.get("part_code"))
+    parts_id = _text(record.get("parts_id"))
+    if not part_code:
+        raise ValueError("save_part_process()/save_part_cost() 需要 part_code")
+    body = {name: value for name, value in record.items() if name != "record_hash"}
+    record["record_hash"] = _record_hash(body)
+    items = _part_doc_items(project_id, key)
+    head = items[0] if items else None
+    if (isinstance(head, dict) and _text(head.get("part_code")) == part_code
+            and _text(head.get("parts_id")) == parts_id
+            and _text(head.get("record_hash")) == record["record_hash"]):
+        return head
+    kept = [item for item in items
+            if not (_text(item.get("part_code")) == part_code
+                    and _text(item.get("parts_id")) == parts_id)]
+    kept.insert(0, record)
+    get_backend().put_doc(project_id, key, {"items": kept[:MAX_VERSIONS]})
+    return record
+
+
+def save_part_process(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """落一版单件工艺结论（Spec §2.1）。结论**不写技术 IR**。"""
+    return _save_part_doc(project_id, DOC_KEY_PROCESS, payload)
+
+
+def load_part_process(project_id: str, part_code: str) -> Dict[str, Any]:
+    """读回单件工艺结论（最近一版）；没跑过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_PROCESS, part_code)
+
+
+def save_part_cost(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """落一版单件成本结论（Spec §2.1）。"""
+    return _save_part_doc(project_id, DOC_KEY_COST, payload)
+
+
+def load_part_cost(project_id: str, part_code: str) -> Dict[str, Any]:
+    """读回单件成本结论（最近一版）；没跑过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_COST, part_code)
 
 
 # --------------------------------------------------------------------------- #

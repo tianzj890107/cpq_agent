@@ -2961,10 +2961,15 @@ async def generate_process(
             library=process_lookup.as_prompt(lookup) if lookup else "",
             lookup=lookup,
         )
+        # 进度里的工序数 = **这次产出的工序数**（`plan.steps`），库内沿用/需新建作第二个数字：
+        # 以前报的是库内计数，实测同一件零件"共 0 道工序"而结果有 4 道（Spec
+        # `packaging-parts-downstream-readback.md` §2.3）。
+        plan_steps = len(plan.model_dump().get("steps") or [])
+        library_summary = coverage.get("summary") or {}
         tasks.report_progress(
-            f"  ↳ 共 {coverage['summary']['total']} 道工序："
-            f"沿用库内 {coverage['summary']['reused']} 道、"
-            f"缺失需新建 {coverage['summary']['missing']} 道")
+            f"  ↳ 共 {plan_steps} 道工序："
+            f"沿用库内 {library_summary.get('reused', 0)} 道、"
+            f"缺失需新建 {library_summary.get('missing', 0)} 道")
         _assert_ir_unchanged(project_id, expected_ir)
         plan_dict = plan.model_dump()
         store.save_process(project_id, part_id, plan_dict, author=author)
@@ -3397,10 +3402,11 @@ async def generate_integration_process(
             project_id, ir, plan,
             library=process_lookup.as_prompt(lookup) if lookup else "",
             lookup=lookup, note=note, attachments=atts, progress=tasks.report_progress)
+        assembly_summary = coverage.get("summary") or {}
         tasks.report_progress(
-            f"  ↳ 共 {coverage['summary']['total']} 道组装工序："
-            f"沿用库内 {coverage['summary']['reused']} 道、"
-            f"缺失需新建 {coverage['summary']['missing']} 道")
+            f"  ↳ 共 {assembly_summary.get('total', 0)} 道组装工序："
+            f"沿用库内 {assembly_summary.get('reused', 0)} 道、"
+            f"缺失需新建 {assembly_summary.get('missing', 0)} 道")
         plan.process = result
         integration.save_plan(project_id, plan, author)
         store.save_process_coverage(project_id, integration.ASSEMBLY_PART_ID, coverage)
@@ -7392,6 +7398,27 @@ def get_requirement_packaging_part(pid: str, part_code: str, parts_id: str = "",
 # 绝不用默认厚度或包围盒面积硬算；写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES。
 PACKAGING_PART_PROCESS_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/process"
 PACKAGING_PART_COST_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/cost"
+#: 「依据」报告的只读路由（与既有技术链路 `/parts/{part_id}/process-lookup` 同形状）：
+#: 前端 `inline-analysis.js` 固定去读 `${mode}-lookup`，图纸零件这侧以前**没注册**，
+#: 「依据/检索报告」面板永远 404 空白（Spec `packaging-parts-downstream-readback.md` §2.2）。
+PACKAGING_PART_PROCESS_LOOKUP_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/process-lookup"
+PACKAGING_PART_COST_LOOKUP_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/cost-lookup"
+
+
+def _packaging_part_lookup(pid: str, part: Any, kind: str, *,
+                           quantity: int = 1) -> Dict[str, Any]:
+    """图纸零件的「依据」报告：逐字复用服务层的 `lookup_part`，只把数据源换成零件文档。
+
+    不写技术侧的 lookup 文档（那是技术 IR 的账），报告随结论一起落进零件自己的版本化文档；
+    库是辅助依据、不是前置条件，检索失败一律降级为 `{}`。
+    """
+    payload = part.model_dump() if hasattr(part, "model_dump") else part
+    try:
+        if kind == "process":
+            return process_lookup.lookup_part(payload) or {}
+        return cost_lookup.lookup_part(payload, quantity=max(1, int(quantity or 1))) or {}
+    except Exception:  # noqa: BLE001 - 检索失败不该让结论落不下去
+        return {}
 
 
 def _packaging_part_row(pid: str, part_code: str) -> Dict[str, Any]:
@@ -7444,14 +7471,32 @@ async def packaging_part_process(
         tasks.report_progress("模型编制工序明细（只要工序号/名称/类型/设备/工时）")
         plan, coverage = process.outline_process(part, overall=None, geom=None,
                                                  note=note, attachments=atts)
-        tasks.report_progress(
-            f"  ↳ 共 {coverage['summary']['total']} 道工序："
-            f"沿用库内 {coverage['summary']['reused']} 道、"
-            f"缺失需新建 {coverage['summary']['missing']} 道")
         plan_dict = plan.model_dump()
+        steps_total = len(plan_dict.get("steps") or [])
+        library = (coverage or {}).get("summary") or {}
+        # 进度里的工序数必须是**这次产出的工序数**（`plan_dict["steps"]`）：实测同一件零件
+        # 报的是"库内沿用 0 道"，而实际产出 4 道，用户会以为这一步没结果（Spec §2.3）。
+        tasks.report_progress(
+            f"  ↳ 本次产出 {steps_total} 道工序：库内沿用 {library.get('reused', 0)} 道、"
+            f"需新建 {library.get('missing', 0)} 道")
+        overall_note = str(plan_dict.get("overall_note") or "").strip()
+        if overall_note:
+            tasks.report_progress("  ↳ %s" % overall_note)
+        validation = process.compute(plan_dict)
+        lookup = _packaging_part_lookup(pid, part, "process")
+        packaging_parts.save_part_process(pid, {
+            "part_code": row.get("part_code"),
+            "parts_id": str((loaded.get("record") or {}).get("parts_id") or ""),
+            "engine_version": packaging_parts.ENGINE_VERSION,
+            "plan": plan_dict, "validation": validation, "coverage": coverage,
+            "lookup": lookup,
+            "source": {"task_id": tasks.current_task_id(),
+                       "computed_at": now_cst_str(),
+                       "actor": str(user.get("username") or "")},
+        })
         return {"part_code": row.get("part_code"), "part_id": part.part_id,
-                "plan": plan_dict, "validation": process.compute(plan_dict),
-                "coverage": coverage}
+                "plan": plan_dict, "validation": validation,
+                "coverage": coverage, "lookup": lookup}
 
     return {"task_id": tasks.submit(
         pid, "packaging_part_process", job,
@@ -7535,7 +7580,8 @@ async def packaging_part_cost(
     verdict = packaging_parts.processability(row)
     if not verdict["ok"]:
         raise _packaging_part_reject(verdict)
-    part_id = verdict["part"].part_id
+    part = verdict["part"]
+    part_id = part.part_id
     qty = max(1, int(quantity or 1))
     await _read_attachments(attachments)
     expected = _digest_value({"part": row, "quantity": qty})
@@ -7552,8 +7598,19 @@ async def packaging_part_cost(
             "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
             else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
         a_dict = _packaging_part_cost_analysis(row, line, qty, part_id)
-        return {"analysis": a_dict, "summary": cost.compute(a_dict),
-                "library": None, "line": line}
+        summary_dict = cost.compute(a_dict)
+        lookup = _packaging_part_lookup(pid, part, "cost", quantity=qty)
+        packaging_parts.save_part_cost(pid, {
+            "part_code": row.get("part_code"),
+            "parts_id": str((loaded.get("record") or {}).get("parts_id") or ""),
+            "engine_version": packaging_parts.ENGINE_VERSION,
+            "analysis": a_dict, "summary": summary_dict, "lookup": lookup,
+            "source": {"task_id": tasks.current_task_id(),
+                       "computed_at": now_cst_str(),
+                       "actor": str(user.get("username") or "")},
+        })
+        return {"analysis": a_dict, "summary": summary_dict,
+                "library": None, "line": line, "lookup": lookup}
 
     return {"task_id": tasks.submit(
         pid, "packaging_part_cost", job,
@@ -7565,20 +7622,61 @@ async def packaging_part_cost(
 @app.get(PACKAGING_PART_PROCESS_PATH)
 def get_packaging_part_process(pid: str, part_code: str,
                                user: dict = Depends(current_user)):
-    """读单件工艺结论：图纸零件的结论**不写进技术侧 store**（技术 IR 只由技术链路写），
-    第一版每次现算，这里如实回"还没生成"。"""
+    """读单件工艺结论：读这一件的**最近一版**落库文档（Spec §2.1）。
+
+    图纸零件的结论**不写进技术侧 store**（技术 IR 只由技术链路写），但它落进自己的
+    版本化文档 —— 以前这里恒回 `plan: null`，于是"刷新一下刚跑出来的工艺就没了"。
+    """
     _workflow_project(pid)
     _packaging_part_row(pid, part_code)
-    return {"plan": None, "validation": None, "coverage": None}
+    record = packaging_parts.load_part_process(pid, part_code) or {}
+    if not record:
+        return {"part_code": part_code, "plan": None, "validation": None,
+                "coverage": None, "source": {}}
+    return {"part_code": str(record.get("part_code") or part_code),
+            "plan": record.get("plan"), "validation": record.get("validation"),
+            "coverage": record.get("coverage"),
+            "source": record.get("source") if isinstance(record.get("source"), dict) else {}}
 
 
 @app.get(PACKAGING_PART_COST_PATH)
 def get_packaging_part_cost(pid: str, part_code: str,
                             user: dict = Depends(current_user)):
-    """读单件成本结论（同上：不落技术侧 store，未生成就是空）。"""
+    """读单件成本结论（最近一版落库文档；未跑过 → 空态，不 404，Spec §2.1）。"""
     _workflow_project(pid)
     _packaging_part_row(pid, part_code)
-    return {"analysis": None, "summary": None}
+    record = packaging_parts.load_part_cost(pid, part_code) or {}
+    if not record:
+        return {"part_code": part_code, "analysis": None, "summary": None, "source": {}}
+    return {"part_code": str(record.get("part_code") or part_code),
+            "analysis": record.get("analysis"), "summary": record.get("summary"),
+            "source": record.get("source") if isinstance(record.get("source"), dict) else {}}
+
+
+@app.get(PACKAGING_PART_PROCESS_LOOKUP_PATH)
+def get_packaging_part_process_lookup(pid: str, part_code: str,
+                                      user: dict = Depends(current_user)):
+    """单件工艺推荐的**依据**报告（与既有技术链路同形状）。
+
+    数据源是**零件文档**（`packaging_parts.as_ir_part()` 已把零件适配成 IR `Part`），
+    不读技术 IR 那条链；没跑过 → `{}`（前端把空对象当"没有依据"）。
+    """
+    _workflow_project(pid)
+    _packaging_part_row(pid, part_code)
+    record = packaging_parts.load_part_process(pid, part_code) or {}
+    lookup = record.get("lookup") if isinstance(record.get("lookup"), dict) else {}
+    return lookup or {}
+
+
+@app.get(PACKAGING_PART_COST_LOOKUP_PATH)
+def get_packaging_part_cost_lookup(pid: str, part_code: str,
+                                   user: dict = Depends(current_user)):
+    """单件成本测算的**依据**报告（同上：零件文档为数据源，未跑过 → `{}`）。"""
+    _workflow_project(pid)
+    _packaging_part_row(pid, part_code)
+    record = packaging_parts.load_part_cost(pid, part_code) or {}
+    lookup = record.get("lookup") if isinstance(record.get("lookup"), dict) else {}
+    return lookup or {}
 
 
 # --------------------------------------------------------------------------- #

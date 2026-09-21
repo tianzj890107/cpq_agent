@@ -3,7 +3,7 @@
 血缘：承接 `packaging-parts-downstream-process-and-cost.md`（第 3 层：单件工艺与成本）、
 `packaging-parts-selectable-panel.md`（第 2 层：可选中面板）、`packaging-parts-3d-extrusion.md`（第 4 层）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_packaging_parts_downstream_readback_red.py`
 - 依赖：`packaging_parts.py`、`packaging_drawing_flow`（任务层）、2.1 面板 `inline-analysis.js`
 

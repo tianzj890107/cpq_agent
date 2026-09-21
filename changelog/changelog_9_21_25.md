@@ -9787,3 +9787,33 @@ tests.test_packaging_parts_extraction_red         Ran 32 OK
   + 本条目；未动任何 `tests/` 文件一个字、未改第 1 层 `LOOP_TOLERANCE_MM` / `OUTLINE_STATUSES` /
   `SIZE_SOURCES` / `MAX_LOOP_*` 字面、未放宽第 3 层 `PACKAGING_PART_NOT_CLOSED`；
 - 未 push、未建 MR / tag / Release、未部署、未连库。
+
+## 267. 图纸零件的下游结论「读得回来」：`packaging-parts-downstream-readback` 的实现（9-22，Codex 实现 + 相邻面复跑）
+
+三处缺口一起收口：结论不落库（刷新即丢）、两个「依据」路由不存在（面板永远空）、进度文案报的是库内计数。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 结论落库 / 读回 | `tech_app/backend/services/packaging_parts.py` | 新增 `DOC_KEY_PROCESS` / `DOC_KEY_COST` 与 `save_part_process` / `load_part_process` / `save_part_cost` / `load_part_cost`（Spec §2.1 命名契约）；按 `record_hash` 内容指纹**幂等**（同一份结论重复落库不写库、不新增版本），同一 `(part_code, parts_id)` 覆盖同一条、最多 20 版 |
+| 结论读回 | `tech_app/backend/main.py` | `GET …/packaging-parts/{part_code}/process` / `…/cost` 由「恒回 null」改为读**最近一版**落库文档；没跑过仍是空态（200 + null，不 404） |
+| 依据路由 | `tech_app/backend/main.py` | 新增 `GET …/{part_code}/process-lookup` / `…/cost-lookup`：逐字复用服务层 `process_lookup.lookup_part` / `cost_lookup.lookup_part`，数据源是零件文档（`as_ir_part()` 的 `Part`），报告随结论落进零件自己的文档；检索失败降级 `{}`，不写技术侧 lookup 文档 |
+| 任务成功落版本 | `tech_app/backend/main.py` | 单件工艺/成本任务跑完即 `save_part_process` / `save_part_cost`（`source` 带 `task_id` / `computed_at` / `actor`）；`tasks.current_task_id()` 是新增的只读上下文取值（与既有 `current_task_name()` 同形） |
+| 进度文案 | `tech_app/backend/main.py` | 单件工艺进度改为**本次产出 `len(plan_dict["steps"])` 道工序**，库内沿用/需新建作第二个数字；`overall_note`（系统补通用骨架这类事实）单独上报一条；技术链路单件工艺同样改为产出数（同一处老口径），组装链路只改取值写法、**数字口径不动** |
+
+### 实跑（本机 `./open-claude/.venv/bin/python`）
+
+```
+tests.test_packaging_parts_downstream_readback_red   Ran 17 OK（A 7 / B 5 / C 2 / D 3）
+tests.test_packaging_parts_downstream_red            Ran 17 OK
+tests.test_packaging_parts_extraction_red            Ran 32 OK
+tests.test_packaging_parts_outline_chaining_red      Ran 20 OK（本会话上一批）
+tests.test_task_process_detail_red                   Ran 31 OK
+tests.test_process_row_running_info_and_fold_red     Ran N，14 条既有红（与 HEAD 基线逐条相同，属前端行渲染批，不读 main.py）
+```
+
+### 边界
+
+- 未改 `tests/` 任何文件；`processability()` 三道门槛、任务状态机与 `dedup_key` 口径、结论不写技术 IR 一字未动；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型（`lookup_part` 只在任务里跑，单测不触发）。

@@ -318,6 +318,16 @@ def current_task_name() -> str:
     return _SOP_NAMES.get(kind, ("", 0))[0]
 
 
+def current_task_id() -> str:
+    """当前异步任务的 id（没有任务上下文时返回空串）。
+
+    给"结论自己记下是哪一次任务算出来的"用：单件工艺/成本落库时要写 `source.task_id`，
+    而任务 id 是 `submit()` 返回的，job 里只能从上下文取。
+    """
+    current = _CURRENT_TASK.get()
+    return str(current[1] or "") if current else ""
+
+
 def report_progress(progress: str, detail=None) -> None:
     """更新当前异步任务的真实阶段；任务函数内可直接调用。
 
