@@ -9498,3 +9498,81 @@ tests.test_packaging_manual_field_confirmation_red                    Ran 13 OK
             quote_close_loop / board_two_column / process_route / cost_engine /
             parametric_bom）                                          Ran 451，failures=1（仅上述 C8），skipped=2
 ```
+
+
+## 263. 34 上「报价 → 需求 → 图纸 → 64 件零件 → 回传报价」全流程真跑 + 零件下游卡点定位与绕过（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+用户要的是「从头到尾从报价到零件拆出来能看见、到最后再回到报价」，并且要一张能自己点开的卡片。
+本轮在 34 上真跑一遍（账号 SM1 / PE1 / FI1，密码 `123456`），把零件下游做不下去的卡点逐条定位、
+逐个绕过去跑完整条链路，产出见下。
+
+### 真跑结果（34，本轮新建的一条会话）
+
+- 报价会话 `2c4732e65371`（SM1 发起）；PE1 上传真实 `裕同包装项目-待开发/酒盒.dwg`（686195 bytes）
+  建技术项目 **`bee7db85243f`**；
+- 需求草稿 → 人工确认字段（显式写 `field_provenance.origin=user_confirmed` + `field_sources=manual`）
+  → 八步一键解析 **8/8 completed**：`file_preflight / dwg_convert / cad_ir_parse / packaging_semantics /
+  parts_extract / field_write / pending_confirm / downstream_prepare`；
+- **零件 64 件**（`GET /api/projects/bee7db85243f/requirement/packaging-parts`）：
+  `stats = {part_total: 64, filtered_total: 192, truncated: 146, closed_total: 51, open_total: 13,
+  closed_ratio: 0.797, by_role: {unknown: 64}}`；例：`DWG-P01 443.523×492.62`、`DWG-P04 398.024×446.32`；
+- BOM **31 行**，其中 **4 行按图纸零件回填**（`source=dwg_parts`，尺寸 443.523×492.62 /
+  440.123×482.92 / 398.024×446.32），缺口 3 条；
+- 工艺路线 **11 道**、`confirm` 200（`engine_version=packaging_route_v1`）；
+- 成本（同一个接口、三种角色）**PE1 200 `total_cost=15.922560205005558`、缺口 20**；
+  **FI1 404「项目不存在」**；**SM1 403「你的角色只能查看该项目，不能修改」**；
+- 回传回报价：`quote-link/recover` 200 → `POST /wf/card/sync` 200 → `packaging-quote/send` 200，
+  `handoff_no=pkghandoff:bee7db85243f:REQ-BEE7DB85243F:default:1`；
+- 门禁：`box_match / bom / route / cost / quote_draft = open`，`quote_publish = blocked`。
+
+### 给用户看的卡片
+
+- `card_id=3991218263290814314`（`session_id=2c4732e65371`，`business_case_id=bc_d63b2fdbd3ae`）：
+  第 1 步「确认需求配置」done、第 2 步「工艺确认」done、第 3 步「定价-利润加成」pending，
+  `overall_status=handoff_pending`；待办 `task_id=3991218357905923957`
+  「工艺经理·PE1 转交 · 待办第 3 步「定价-利润加成」 · 发给「销售经理」」，note「包装成本已确认，请进入定价」；
+- 打开方式：`http://172.16.10.34:8010/index.html` 用 SM1 登录看卡片；接口
+  `GET /wf/card?session_id=2c4732e65371`；
+- 零件逐件可看：`GET /api/projects/bee7db85243f/requirement/packaging-parts`，或
+  `http://172.16.10.34:8010/index.html?project=bee7db85243f` 的零件面板。
+
+### 零件下游做不下去，卡在哪、这轮怎么绕过去、该改成什么样
+
+| # | 卡点（34 本轮实测） | 这轮怎么绕过去的 | 归属 |
+| --- | --- | --- | --- |
+| 1 | 不显式写 `field_provenance.origin=user_confirmed` + `field_sources=manual` 时门禁全是 `field_unconfirmed`，box_match / bom / route / cost 永远 blocked | 在需求草稿阶段显式写入这两项 | `packaging-manual-field-confirmation.md`（实现已由并行会话落地，现 Ran 13 OK） |
+| 2 | `POST /requirement/box-match` 的 `candidates` 为空、`result` 只回维度权重，但 `decision` 仍 200 | 盒型确认走显式 code `YT-RB-01001-A` | 本轮登记在案（未另立 Spec） |
+| 3 | 64 件里下游能算的只有 4 件：材料 / 厚度归属不到件 | 这 4 件按 `dwg_parts` 回填 BOM 行后即可算 | `packaging-parts-material-attribution.md`（27 例 / 21 红） |
+| 4 | 13 件 open 件：环搜索撞到重复边预算，轮廓判不出来 | open 件不绑 BOM，保持 `needs_input` | `packaging-parts-outline-chaining.md`（20 例 / 13 红） |
+| 5 | 3D 批量挤出全灭（`solid_ok_ratio=0.0`，凹件被当拒绝理由） | 本轮不走 3D，零件面板用展开尺寸 | `packaging-parts-solid-coverage.md`（23 例 / 19 红） |
+| 6 | 直接 `packaging-quote/send` 会 409「成本尚未测算」 | 先补跑 `packaging-cost` 再 `send`（是顺序，不是绕过门禁） | `packaging-quote-send-recovery.md`（14 例 / 9 红） |
+| 7 | FI1 读同一个包装项目 404、SM1 调同接口 403 | 成本测算这一轮用 PE1 跑通 | `packaging-cost-finance-access.md`（10 例 / 7 红） |
+| 8 | 单件工艺 / 成本不落库，`process-lookup`、`cost-lookup` 404，进度文案与产出一致性无判据 | 本轮只在整包层面出路线与成本 | `packaging-parts-downstream-readback.md`（17 例 / 14 红） |
+
+### 本轮入库的 Spec + 红测（先跑红，实现由实现方做；见 `## 262` 那条）
+
+| Spec | 红测 | 本轮复跑（9-22） |
+| --- | --- | --- |
+| `packaging-parts-material-attribution.md` | `test_packaging_parts_material_attribution_red` | Ran 27，failures=13，errors=8 |
+| `packaging-parts-outline-chaining.md` | `test_packaging_parts_outline_chaining_red` | Ran 20，failures=10，errors=3 |
+| `packaging-parts-solid-coverage.md` | `test_packaging_parts_solid_coverage_red` | Ran 23，failures=18，errors=1 |
+| （按新 Spec 修订三处断言） | `test_packaging_parts_3d_red` | Ran 18，failures=3 |
+| `packaging-manual-field-confirmation.md` | `test_packaging_manual_field_confirmation_red` | **Ran 13 OK** |
+| `packaging-cost-finance-access.md` | `test_packaging_cost_finance_access_red` | Ran 10，failures=7 |
+| `packaging-quote-send-recovery.md` | `test_packaging_quote_send_recovery_red` | Ran 14，failures=9 |
+| `packaging-parts-downstream-readback.md` | `test_packaging_parts_downstream_readback_red` | Ran 17，failures=14 |
+
+### 提交 / 推送 / 部署
+
+- 本任务入库提交 `2768e85`（7 份 Spec + 7 套红测 + 按新 Spec 修订的 3D 红测三处断言）；本条 changelog 单列一次提交；
+- 推送双远端 `ytbz`（本仓实际使用分支；`scripts/push_remotes.py` 只认 `20260909`，故用
+  `git push <remote> HEAD:refs/heads/ytbz`），推送后回读两端一致；
+- 34 部署 `bash scripts/deploy_34_bare.sh ytbz`，`/api/health status=ok`，两份真实样本
+  `converter_role=primary / fallback_used=false`。
+
+### 边界
+
+- 只改 Spec + 红测 + changelog，没有写业务实现、没有改生产数据；上表的「绕过去」都是业务侧正常操作
+  或改走等价接口，没有放宽任何门禁；
+- 工作区仍有并行会话的未跟踪 Spec / 红测，本轮未动、未提交；
+- 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 L2（可信），未签字不得声明 L3。
