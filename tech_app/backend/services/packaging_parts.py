@@ -451,9 +451,9 @@ def _requirement_defaults(requirement: Any) -> Dict[str, Any]:
 def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Dict[str, Any]:
     """四层材料归属（纯函数）→ `{component_id: 归属结果}`（Spec §2）。
 
-    顺序即优先级：件级引出标注 > 成组注记 > 图层名 > 需求整盒口径。每一层都**只填还没定下的
-    字段**（跨层不许倒挂），并且只在 `outline_status == "closed"` 的件上生效 —— 非闭合件的
-    "最近标注"是偶然命中（实测 9 件全错），宁可不填。
+    顺序即优先级：件级引出标注 > 成组注记（半径内 / 整图重复一致）> 图层名 > 需求整盒口径。
+    每一层都**只填还没定下的字段**（跨层不许倒挂），并且只在 `outline_status == "closed"` 的件上
+    生效 —— 非闭合件的"最近标注"是偶然命中（实测 9 件全错），宁可不填。
     """
     parts = [row for row in (rows or []) if isinstance(row, dict)]
     notes = [note for note in (notes or []) if isinstance(note, dict)]
@@ -549,6 +549,47 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Di
         for cid in hits:
             distance = _note_reach(point, state[cid]["bbox"])
             _apply(cid, "group_note", [(distance, order, note, None)], covers=hits)
+
+    # —— 层 2 的第二档：整图重复一致的口径（Spec §2.2）——
+    # 真图的"整图材料说明"常常离所有零件都很远（实测 圆盘盒.dwg 的 `402X50.5MM高/厚度2MM`
+    # 离最近的件 > 600mm），按半径永远够不到；但它会在**多条注记里重复出现同一个取值**，
+    # 这就是"整图口径"的证据。只在"该字段全图只有一个取值且至少 2 条注记重复它"时生效
+    # （单条孤证不算：那既可能是件级标注够不到，也可能是别人家的说明，宁可留空）。
+    closed_ids = sorted(cid for cid in state if state[cid]["closed"] and state[cid]["bbox"])
+    for field, key in (("material", "material"), ("thickness_mm", "thickness")):
+        counted: Dict[Any, int] = {}
+        for note in notes:
+            value = note.get(field)
+            if value in (None, ""):
+                continue
+            try:
+                counted[value] = counted.get(value, 0) + 1
+            except TypeError:  # 取值不可哈希（理论上不会）→ 跳过，宁可不兜底
+                counted = {}
+                break
+        if len(counted) != 1:
+            continue
+        value, repeats = next(iter(counted.items()))
+        if repeats < 2:
+            continue
+        ref_note = next(note for note in notes if note.get(field) == value)
+        for cid in closed_ids:
+            item = state[cid]
+            if field in item["done"] or item[field] not in (None, ""):
+                continue
+            item[field] = value
+            item["%s_source" % key] = {
+                "kind": "group_note", "text": _text(ref_note.get("text")),
+                "evidence_ref": _text(ref_note.get("evidence_ref")),
+                "distance_mm": None, "covers": list(closed_ids)}
+            item["done"].add(field)
+            item["covers"] = list(closed_ids)
+            item["notes"].append("drawing_wide:%s" % field)
+            if not item["kind"]:
+                item["kind"] = "group_note"
+            ref = _text(ref_note.get("evidence_ref"))
+            if ref:
+                item["note_refs"].append(ref)
 
     # —— 层 3：图层名带材料（只给材质，不许给厚度）——
     for cid in sorted(state):

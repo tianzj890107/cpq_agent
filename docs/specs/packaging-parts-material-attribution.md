@@ -1,6 +1,6 @@
 # 包装图纸零件：材料与厚度的归属（覆盖率）
 
-状态：Spec + 红测（已实现）
+状态：Spec + 红测（已实现；§2.2 为 2026-09-22 补档）
 红测：`tests/test_packaging_parts_material_attribution_red.py`
 
 血缘：承接 `packaging-dwg-parts-extraction.md`（零件提取）、`packaging-parts-true-outline.md`（真实轮廓）、
@@ -93,6 +93,27 @@ AMBIGUOUS_DISTANCE_MM = 5.0         # 最近两条候选距离差 <= 该值且�
 4. **跨层不许倒挂**：件级标注永远最可信 —— 层 2/3/4 不许覆盖层 1 已定下的字段。
 5. 层 4 兜底必须**可见**：行上带 `needs_confirmation=true`、`assumption_refs=["requirement.grey_board_thickness"]`；
    下游工艺/成本结论里必须出现"按需求整盒口径"字样（见 §5）。
+
+### 2.2 层 2 的第二档：整图重复一致的口径（2026-09-22 补）
+
+层 2 的半径档（`GROUP_NOTE_RADIUS_MM = 300`）之外，真图还有一种**离所有零件都很远**的整图口径：
+`圆盘盒.dwg` 的 `402X50.5MM高/厚度2MM` / `396.5X48MM高/厚度2MM` / `113X49.5MM高/厚度2MM` /
+`120X47MM高/厚度2MM` 都在图纸另一侧（离最近的件 > 600mm），按半径永远够不到；它们却在**多条注记里
+重复同一个取值**（6 条全是 `2.0`）。
+
+- **生效条件（两条都要）**：① 该字段在**全图所有注记**里只有一个取值；② 这个取值至少在 **2 条**注记里
+  重复出现（单条孤证不算 —— 那既可能是件级标注够不到，也可能是别的件的说明，宁可留空）。
+- **归属**：`kind` 仍是 `group_note`（就是"覆盖全图的成组注记"），`covers` = 全部闭合件，
+  `attribution.notes` 追加 `drawing_wide:<field>` 留痕；`distance_mm = None`，出处取第一条重复它的注记。
+- **位置**：在层 2 半径档之后、层 3 之前；只服务 `closed` 件、只填还没定下的字段（跨层不许倒挂）。
+- **反例（不许回归）**：单件图里一条远处的注记**不许**被当成整图口径（`test_b2`）；两条取值不同的注记
+  也**不算**（`test_b9` 的 `2.0mm灰板` vs `1.8mm白卡`）。
+
+**为什么必须有这一档**：第 5 层验收 Spec（`packaging-parts-downstream-acceptance.md` §3）写明
+"两份样本各至少 1 件 `processability.ok` 且能挤出 3D"，且该门槛**依赖本 Spec 的料厚**。
+四层口径落地后 `酒盒.dwg` 达标（可算 9 / 可挤 6），但 `圆盘盒.dwg` 从 1 / 7 掉到 **0 / 0**
+（9 件全缺料厚，全部 `PACKAGING_PART_MATERIAL_UNKNOWN`）—— 就是缺了这一档；补上后回到
+**可算 1 / 可挤 8**（`closed_ratio = 0.889`），门禁第 6b 步因此转绿。
 
 ## 3. 结构化材料文本
 

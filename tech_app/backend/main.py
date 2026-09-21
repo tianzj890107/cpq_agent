@@ -6735,17 +6735,45 @@ class PackagingPartsExtractAction(BaseModel):
     ir_id: str = ""
 
 
-def _parts_body(record: Any) -> Dict[str, Any]:
+def _packaging_solids_index(project_id: str) -> Dict[str, Dict[str, Any]]:
+    """一版挤出结论的索引：`part_code → {solid_status, solid_reason}`（Spec §2.3）。
+
+    零件文档本身**不改**（改了会换 `parts_id`、把下游落库的结论全指歪），挤出结论只
+    存在 `packaging_part_solids` 自己的版本化文档里；列表接口按件号贴上来给页面看。
+    """
+    record = packaging_part_solids.load_solids(project_id) or {}
+    index: Dict[str, Dict[str, Any]] = {}
+    for item in (record.get("parts") or []):
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("part_code") or "")
+        if code:
+            index[code] = {"solid_status": str(item.get("status") or ""),
+                           "solid_reason": str(item.get("reason") or "")}
+    return index
+
+
+def _parts_body(record: Any, project_id: str = "") -> Dict[str, Any]:
     """零件文档的响应形状 = 文档本身（Spec §4）+ `built` / `summary` 两个附加键。
 
     刻意不套一层 `{"parts": <doc>}`：文档里已经有一个 `parts`（零件数组），再套一层
     会让前端把 `parts` 读成对象、左栏永远空 —— 现场就是这么空的。
+
+    `project_id` 给了就把最近一版 3D 挤出结论贴到每行上（Spec
+    `packaging-parts-solid-coverage.md` §2.3）：覆盖率必须是**真值**，今天行上没有
+    `solid_status` 所以恒 0.0。
     """
     body = dict(record) if isinstance(record, dict) else {"parts": [], "filtered": [],
                                                           "unavailable": [], "stats": {},
                                                           "source": {}, "reviewable": True}
+    index = _packaging_solids_index(project_id) if project_id else {}
+    if index:
+        body["parts"] = [dict(row, **index[str(row.get("part_code") or "")])
+                         if isinstance(row, dict)
+                         and str(row.get("part_code") or "") in index else row
+                         for row in (body.get("parts") or [])]
     body["built"] = bool(record)
-    body["summary"] = packaging_parts.summarize(record or {})
+    body["summary"] = packaging_parts.summarize(body if index else (record or {}))
     return body
 
 
@@ -6764,7 +6792,7 @@ def get_requirement_packaging_parts(pid: str, parts_id: str = "",
                                     user: dict = Depends(current_user)):
     """读零件文档与摘要（2.1 左栏零件树的数据源）；没有就 built=false、parts=[]，不报错。"""
     _workflow_project(pid)
-    return _parts_body(packaging_parts.load_parts(pid, parts_id or None))
+    return _parts_body(packaging_parts.load_parts(pid, parts_id or None), pid)
 
 
 @app.post(PACKAGING_PARTS_EXTRACT_PATH)
@@ -6790,7 +6818,7 @@ def extract_requirement_packaging_parts(
         "filtered_total": saved["stats"]["filtered_total"],
         "by": str(user.get("username") or ""),
     })
-    return _parts_body(saved)
+    return _parts_body(saved, project_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -7770,6 +7798,57 @@ def get_packaging_part_solid_stl(pid: str, part_code: str):
     return Response(content=str(item.get("stl") or ""), media_type="application/sla",
                     headers={"Content-Disposition":
                              'attachment; filename="%s.stl"' % part_code})
+
+
+PACKAGING_PARTS_SOLIDS_PATH = "/api/projects/{pid}/requirement/packaging-parts/solids"
+PACKAGING_PARTS_SOLIDS_FAILED = "PACKAGING_PARTS_SOLIDS_FAILED"
+
+
+@app.post(PACKAGING_PARTS_SOLIDS_PATH)
+def packaging_parts_solids(pid: str, user: dict = Depends(current_user)):
+    """整份零件文档一次算完（Spec `packaging-parts-solid-coverage.md` §2.2/§2.4）。
+
+    单件 `unsupported` 是**结论**不是错误（回 200）；结论落 `packaging_part_solids`
+    自己的版本化文档，零件文档一个字不改（改了就换 `parts_id`）。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = packaging_parts.load_parts(pid)
+    rows = [row for row in ((loaded or {}).get("parts") or []) if isinstance(row, dict)]
+    if not rows:
+        raise HTTPException(status_code=409, detail={
+            "code": PACKAGING_PARTS_SOLIDS_FAILED,
+            "message": "这个项目还没有零件文档，请先跑一键解析图纸里的「零件提取」",
+        })
+    result = packaging_part_solids.extrude_all(rows)
+    record = packaging_part_solids.load_solids(pid) or {}
+    merged = {str(item.get("part_code") or ""): item
+              for item in (record.get("parts") or []) if isinstance(item, dict)}
+    for item in result.get("parts") or []:
+        merged[str(item.get("part_code") or "")] = item
+    saved = packaging_part_solids.save_solids(pid, {
+        "engine_version": packaging_part_solids.ENGINE_VERSION,
+        "stats": result.get("stats") or {},
+        "parts": sorted(merged.values(), key=lambda item: str(item.get("part_code") or "")),
+    })
+    version = int(saved.get("version") or 0)
+    store.audit(pid, "workflow:packaging_parts_solids", {
+        "parts_total": (result.get("stats") or {}).get("part_total"),
+        "ok_total": (result.get("stats") or {}).get("ok_total"),
+        "solids_version": version,
+        "by": str(user.get("username") or ""),
+    })
+    return {"parts": [{"part_code": str(item.get("part_code") or ""),
+                       "status": str(item.get("status") or ""),
+                       "reason": str(item.get("reason") or ""),
+                       "solid_status": str(item.get("solid_status") or ""),
+                       "solid_reason": str(item.get("solid_reason") or ""),
+                       "triangulation": str(item.get("triangulation") or ""),
+                       "triangles": int(item.get("triangles") or 0),
+                       "volume_mm3": item.get("volume_mm3"),
+                       "points": int(item.get("points") or 0)}
+                      for item in (result.get("parts") or [])],
+            "stats": result.get("stats") or {}, "solids_version": version}
 
 
 # --------------------------------------------------------------------------- #

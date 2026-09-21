@@ -1,6 +1,6 @@
 # 包装图纸零件：3D 挤出覆盖率（凹多边形 + 批量结论 + 真值指标）
 
-状态：Spec + 红测（未实现）
+状态：Spec + 红测（已实现）
 红测：`tests/test_packaging_parts_solid_coverage_red.py`
 
 **取代**：`packaging-parts-3d-extrusion.md` §C/D 里「凹多边形本版不挤、必须显式拒绝」这一条。

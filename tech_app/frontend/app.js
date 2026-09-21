@@ -1346,11 +1346,15 @@ function packagingPartActionsHtml(part) {
    闭合轮廓 × 已知料厚的直线挤出由后端算好（ASCII STL），前端**复用既有 #viewer 与
    loadSTL()**（不新建画布、不新建第二套 THREE 初始化）；挤不出来时把原因翻成人话
    写在面板里，不留一块空白画布。 */
+// 闭集跟着后端 `packaging_part_solids.UNSUPPORTED_REASONS` 走：凹件不再是拒绝理由
+// （Spec `packaging-parts-solid-coverage.md` §2.1：凹件必须耳切挤出），新增「轮廓自交」
+// 与「轮廓退化」两个**真缺陷**理由 —— 都不许硬挤。
 const PACKAGING_SOLID_COPY = {
   outline_open: "该件没有闭合轮廓，无法挤出",
   outline_unavailable: "图纸单位未确认，无法挤出",
   thickness_unknown: "缺厚度，无法挤出",
-  concave_polygon: "凹多边形本版不支持挤出",
+  self_intersecting: "该件轮廓自交（边与边相交），无法挤出",
+  degenerate_polygon: "该件轮廓退化（面积为零或点重合），无法挤出",
   too_few_points: "轮廓点太少，无法挤出",
   too_many_points: "轮廓点太多，本版不做简化，暂不挤出",
 };
@@ -1470,6 +1474,44 @@ function startAllPackagingPartProcesses() {
   };
   step();
   return { ok: true, result: { total: rows.length, started: ready.length, skipped: skipped } };
+}
+
+/* ---------------- 2.1 3D 覆盖率的三态（Spec packaging-parts-solid-coverage.md §2.3） ----------------
+   覆盖率必须是**真值**：一件结论都没有时显示"未生成"，绝不许把 0.0 当"都失败"糊过去。 */
+function packagingSolidCoverageText(doc) {
+  const rows = Array.isArray(doc && doc.parts) ? doc.parts : [];
+  if (!rows.length) return "3D 覆盖率未生成（还没有零件）。";
+  const concluded = rows.filter(row => String((row && row.solid_status) || ""));
+  if (!concluded.length) return "3D 覆盖率未生成（还没跑过批量挤出）。";
+  const ok = concluded.filter(row => String(row.solid_status) === "ok").length;
+  return `3D 覆盖率 ${Math.round(ok / rows.length * 100)}%（${ok}/${rows.length} 件可挤出）`;
+}
+
+// 整份零件文档一次算完：POST .../requirement/packaging-parts/solids。
+// 单件 unsupported 是结论不是错误（后端回 200），跑完把左栏与覆盖率一起刷新。
+async function packagingPartsSolidBatch() {
+  if (!currentProject) return { ok: false, error: { code: "no-project", message: "还没有打开项目。" } };
+  status("正在批量计算 3D 挤出体…", true);
+  let payload = {};
+  try {
+    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/packaging-parts/solids`,
+                            { method: "POST" });
+    payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (payload && payload.detail) || {};
+      const message = typeof detail === "string" ? detail : String(detail.message || "");
+      throw new Error(message || `批量挤出失败（HTTP ${res.status}）`);
+    }
+  } catch (error) {
+    const message = String((error && error.message) || error);
+    status(message);
+    return { ok: false, error: { code: "solids-failed", message: message } };
+  }
+  await refreshPackagingParts();
+  const stats = (payload && payload.stats) || {};
+  status(`3D 覆盖率 ${Math.round((Number(stats.solid_ok_ratio) || 0) * 100)}%`
+    + `（${stats.ok_total || 0}/${stats.part_total || 0} 件可挤出）`);
+  return { ok: true, result: payload };
 }
 
 /* ---------------- 2.1 左栏空态的原因文案（Spec C4） ---------------- */
@@ -2376,6 +2418,19 @@ function renderTree(ir) {
       tree.textContent = packagingPartsEmptyText(doc, preconditions);
       return;
     }
+    // 覆盖率行 + 批量入口：三态文案由 packagingSolidCoverageText() 给（未算过 = "未生成"）。
+    const coverage = document.createElement("div");
+    coverage.className = "packaging-solid-coverage";
+    coverage.dataset.qqSolidCoverage = "1";
+    coverage.textContent = packagingSolidCoverageText(doc);
+    const batch = document.createElement("button");
+    batch.id = "packagingPartsSolidBatch";
+    batch.className = "btn btn-secondary";
+    batch.type = "button";
+    batch.textContent = "全部挤出 3D";
+    batch.addEventListener("click", () => { packagingPartsSolidBatch(); });
+    coverage.appendChild(batch);
+    tree.appendChild(coverage);
     rows.forEach(part => {
       const row = document.createElement("div");
       row.className = "part part-item";

@@ -9914,3 +9914,47 @@ $ ps -o pid,etime,time,pcpu -p 521916
 - 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 **L2（可信）**，未签字不得声明 L3；
 - 34 现在跑的是 `0d8884d`，其第 6b 步**未通过**（`圆盘盒` 0 可算 / 0 可挤）—— 部署命令是成功的，
   自检结论是"未通过"，两件事不许混为一谈。
+
+## 270. 3D 挤出覆盖率转真值（耳切三角化 + 批量结论）与料厚「整图重复一致」档补档（9-22，Codex 实现 + 相邻面复跑）
+
+两件事一起收口：`packaging-parts-solid-coverage` 的凹件挤出 / 批量覆盖率，以及 `## 268` 四层口径漏掉的
+那一档料厚（它正是 `## 269` 里 `圆盘盒` 0 可算 / 0 可挤的真因）。
+
+### 3D 覆盖率（`packaging_part_solids.py` / `main.py` / `app.js`）
+
+| 面 | 做了什么 |
+| --- | --- |
+| 耳切三角化 | 新常量 `TRIANGULATION = "ear_clipping"`；`UNSUPPORTED_REASONS` 删掉 `concave_polygon`、新增 `self_intersecting` / `degenerate_polygon`（真自交与零面积**仍不许硬挤**，且自交**先判**——bowtie 的有符号面积正好是 0，先判退化会误报）；`_ear_clip()` 先切严格凸耳、卡住了允许共线顶点兜底；凸多边形走与既有实现**逐字相同**的扇形（扇形就是耳切的一支），凹件走通用耳切 |
+| 批量产出 | `extrude_all(rows, *, options=None) -> {"parts", "stats"}`：**纯函数**（入参行一个字节不改），逐件结论是副本并回写 `solid_status` / `solid_reason`；`stats` = `part_total` / `ok_total` / `unsupported_total` / `solid_ok_ratio` / `unsupported_reason_mix`，空输入给 `0.0` 不抛错 |
+| 覆盖率真值 | 新路由 `POST /api/projects/{pid}/requirement/packaging-parts/solids`（写权限引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`，整批无零件才 409 + `PACKAGING_PARTS_SOLIDS_FAILED`）；结论落 `packaging_part_solids` 自己的版本化文档，**零件文档一个字不改**（改了会换 `parts_id`、把下游结论全指歪）；列表接口把最近一版结论按件号贴到每行 |
+| 前端 | 删掉「凹多边形本版不支持」，新增「轮廓自交」「轮廓退化」；`packagingSolidCoverageText()` 三态（没有结论 = 「未生成」，不许拿 0% 糊）；左栏加「全部挤出 3D」批量入口 |
+
+### 料厚补档（`packaging_parts.attribute_materials()` 层 2 第二档）
+
+`圆盘盒.dwg` 的 `402X50.5MM高/厚度2MM` 等 4 条注记离最近的件 > 600mm，按半径永远够不到，但 6 条注记
+**重复同一个取值 `2.0`**。新增一档：**该字段全图只有一个取值、且至少 2 条注记重复它** → 按
+`kind="group_note"`（`covers` = 全部闭合件、`notes` 标 `drawing_wide:<field>`）填给还没定下的闭合件。
+单条孤证不算（`test_b2` 的单件图远处注记仍必须留空），取值不同的两条不算（`test_b9`）。
+
+### 实跑（本机 `./open-claude/.venv/bin/python`，串行）
+
+```
+tests.test_packaging_parts_solid_coverage_red        Ran 23 OK（含 F 组真样本）
+tests.test_packaging_parts_3d_red                    Ran 18 OK
+tests.test_packaging_parts_downstream_gate_red       Ran 17 OK（109.3s；修前 2 红：圆盘盒 0 可算 / 0 可挤）
+tests.test_packaging_parts_material_attribution_red  Ran 27 OK
+tests.test_packaging_parts_extraction_red + outline_chaining + panel + downstream   Ran 91 OK
+tests.test_packaging_parts_downstream_readback_red   Ran 17 OK
+```
+
+- `圆盘盒.dwg`：可算 **1**（`DWG-P04`，件级注记给料 + 整图档给 2.0 厚）/ 可挤 **8**；
+  `酒盒.dwg`：可算 9 / 可挤 6（`closed_ratio = 0.938`），与 `## 269` 记的数一致；
+- 已知既有红（与本批无关）：`test_packaging_drawing_flow_red` 的 `C8`（Spec §2.4 已记的真冲突）、
+  `test_process_row_running_info_and_fold_red` 的 14 条既有红。
+
+### 边界
+
+- 未改任何 `tests/` 文件；未改 `MAX_POINTS` / `ENGINE_VERSION` / `DOC_KEY` / `STL_FORMAT`、既有单件
+  路由的路径与权限、`packaging-parts-3d-extrusion.md` 的其余条款；
+- 未给缺失料厚默认值（`thickness_unknown` 仍是拒绝）、未用凸包近似提覆盖率、未引入 numpy/trimesh/shapely；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。
