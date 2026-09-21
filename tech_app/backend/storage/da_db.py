@@ -43,6 +43,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("kb_cost_factor", "industry", "TEXT"),
     # 费率库另补最低收费(包装费率的最低收费门槛)。
     ("kb_cost_rate", "minimum_charge", "REAL"),
+    # 包装 2.3 成本记录留痕(Spec packaging-cost-finance-access.md §2.3):
+    # 谁算的这一版成本;老库上 CREATE TABLE IF NOT EXISTS 不补列,不补就写不进去也读不回来。
+    ("wip_packaging_cost_estimate", "computed_by", "TEXT"),
+    ("wip_packaging_cost_estimate", "computed_by_role", "TEXT"),
 )
 
 # 上线闭环第 2 批: 9 张包装扩展表补「数据来源分层」列(demo/workbook/dwg_confirmed/

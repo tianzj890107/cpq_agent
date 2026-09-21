@@ -126,8 +126,17 @@ STEP_RATE_MAP = {
     "清洁包装": "RATE-PKG-LABOR-ASSEMBLY",
 }
 
-#: 生成/重算写权限：**直接引用**第 4 批的角色常量（同一对象，不另抄一份）。
-COST_WRITE_ROLES = packaging_match.BOX_MATCH_DECIDE_ROLES
+#: 生成/重算写权限（Spec `packaging-cost-finance-access.md` §2.2）。
+#:
+#: 刻意**不**再写成 `packaging_match.BOX_MATCH_DECIDE_ROLES` 的别名：跨批次直接引用会把
+#: 「排盒型的人」和「算成本的人」永久绑成同一批人，任何一边调整都会静默漂移。本版选**工艺代算**
+#: 这条写法 —— 工艺侧（工艺经理 / 工艺技术总监）与管理员可以算，但**必须留痕**：成本记录带
+#: `computed_by` / `computed_by_role`（§2.3），事后能回答「这一版是谁算的」。
+#:
+#: 与通用 2.3 的关系：`auth.COST_ROLES = {"finance_manager", "admin"}`（通用流程「成本只能财务改」）。
+#: 包装这条链路保留工艺代算是**显式例外**，这条注释就是那处例外本身 —— 而不是把 `COST_ROLES`
+#: 悄悄放宽成两边都认，也不是让两个口径各写一份、谁也说不清。
+COST_WRITE_ROLES = {"process_manager", "process_director", "admin"}
 
 #: 04 `PKG-C-*` 的表达式正文（DSL 白名单内；小数常量写成整数除法，见模块头注释）。
 _MATERIAL_EXPR = ("cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor/"
@@ -821,6 +830,17 @@ def _actor_name(actor: Any) -> str:
     if isinstance(actor, dict):
         return _text(actor.get("username") or actor.get("name") or actor.get("actor"))
     return _text(actor)
+
+
+def _actor_role(actor: Any) -> str:
+    """发起人的技术侧角色码（Spec `packaging-cost-finance-access.md` §2.3）。
+
+    技术侧 `role` / CPQ 映射过来的 `role_code` / `cpq_role_code` 依次取第一个非空 ——
+    成本记录留痕要的是「谁算的」，不是「他此刻能不能改项目」，所以不做角色白名单校验。
+    """
+    if isinstance(actor, dict):
+        return _text(actor.get("role_code") or actor.get("cpq_role_code") or actor.get("role"))
+    return ""
 
 
 def is_required(value: Any) -> bool:
@@ -1557,8 +1577,12 @@ def _requirement_context(project_id: str, requirement_no: str, scenario: Optiona
 
 
 def compute_project(project_id: str, requirement_no: str = "", *,
-                    scenario: Optional[dict] = None) -> dict:
-    """组装 → 逐行算 → 三层汇总（**不落库**，Spec §4.5）。"""
+                    scenario: Optional[dict] = None, actor: Any = None) -> dict:
+    """组装 → 逐行算 → 三层汇总（**不落库**，Spec §4.5）。
+
+    ``actor`` 只用于留痕（`computed_by` / `computed_by_role`，Spec §2.3），不参与算式、
+    不做权限判定 —— 权限在路由那一层由 `COST_WRITE_ROLES` 说完。
+    """
     data, overrides = _requirement_context(project_id, requirement_no, scenario)
     if _industry_of(data) != PACKAGING_INDUSTRY:
         raise _fatal("not_packaging", "包装成本引擎只对 industry='packaging' 的需求单生效", 400)
@@ -1904,13 +1928,16 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         "categories": summary["categories"], "report_groups": summary["report_groups"],
         "category_labels": dict(COST_CATEGORIES),
         "items": items, "computed_at": now,
+        # 谁算的（Spec `packaging-cost-finance-access.md` §2.3）：留痕跟着记录走，
+        # 事后不必翻审计表猜。
+        "computed_by": _actor_name(actor), "computed_by_role": _actor_role(actor),
     }
 
 
-def build_cost(project_id: str, requirement_no: str = "", *,
-               scenario: Optional[dict] = None, actor: Any = None) -> dict:
+def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
+               scenario: Optional[dict] = None) -> dict:
     """算 + 落库：同一 `(项目, 需求单, 场景)` 先删明细再重建，写项目审计（Spec §3.2）。"""
-    cost = compute_project(project_id, requirement_no, scenario=scenario)
+    cost = compute_project(project_id, requirement_no, scenario=scenario, actor=actor)
     da_repo.save_packaging_cost(cost["project_id"], cost["requirement_no"],
                                 cost["scenario_code"], cost, cost["items"])
     store.audit(project_id, "workflow:packaging_cost_rebuilt",
@@ -1954,6 +1981,8 @@ def _rehydrate(row: dict, items: list) -> dict:
         "categories": summary["categories"], "report_groups": summary["report_groups"],
         "category_labels": dict(COST_CATEGORIES),
         "items": stored, "computed_at": row.get("computed_at"),
+        "computed_by": _text(row.get("computed_by")),
+        "computed_by_role": _text(row.get("computed_by_role")),
     }
 
 

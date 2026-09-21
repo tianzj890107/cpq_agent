@@ -3,7 +3,7 @@
 血缘：承接 `packaging-cost-engine.md`（第 7 批成本引擎）、`tech-project-acl-visible-scope.md` §18（项目可见性
 与角色池）、`packaging-downstream-blockers-close-loop.md` §6（那里把这条记成了「环境问题」，本批证明是产品问题）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：**已实现**（`tests/test_packaging_cost_finance_access_red.py` 10 条全绿；`tests/test_packaging_cost_engine_red.py` 由 81 绿变 80 绿 / 1 红，唯一红的是被本 Spec §2.2 取代的那条，见 §2.4）
 - 红测：`tests/test_packaging_cost_finance_access_red.py`
 - 依赖：`tech_app/backend/services/project_access.py`、`packaging_cost.py`、`auth.py`
 
@@ -74,6 +74,26 @@ tech_app/backend/services/auth.py:54
 成本记录（`packaging_cost.build_cost()` 的 `record`）必须带 `computed_by`（账号）与
 `computed_by_role`（技术侧角色码）。今天两者都没有，事后只能翻审计表猜。
 
+### 2.4 实现记录：与既有红测 `cost_engine_red::J6` 的一处**真冲突**（实现方按本 Spec 落地，已上报测试侧）
+
+本 Spec §2.2（`COST_WRITE_ROLES` **不许**再是 `packaging_match.BOX_MATCH_DECIDE_ROLES` 的别名，必须是写死的
+字面量集合）与 `tests/test_packaging_cost_engine_red.py::JPersistAndApi::test_j6_write_roles_reuse_batch4`
+（"写权限常量必须直接引用第 4 批那一份"，断言 `assertIs(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES)`）
+在同一处互为反命题 —— 一个要求"必须是同一个对象"，一个要求"不许是那个对象"，结构上不可能同时为真。
+
+本批按**较新的**本 Spec 落地（§5 的"不改公式与费率"未越界，只改了写角色的**写法**），因此 J6 由绿转红；
+`packaging-cost-engine.md` §4 那句"直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`"由本 Spec §2.2 取代。
+本 Spec §4 原先写着"`test_packaging_cost_engine_red` OK"，是没发现这处冲突，**以本节为准**。
+
+- 本版取 §2.2 的**工艺代算**写法：`COST_WRITE_ROLES = {"process_manager", "process_director", "admin"}`
+  （与 `BOX_MATCH_DECIDE_ROLES` 当前**取值相同**，但不再共享对象），并在成本记录里写
+  `computed_by` / `computed_by_role`（§2.3）作为留痕 —— 选它不选"财务专属"是为了不打断既有工艺代算流程
+  （PE1 那条 200 的链路今天就是这么跑的）。
+- 测试侧的**一行修法**（本批不动 `tests/`）：把 `assertIs(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES, ...)`
+  改成 `assertEqual(set(module.COST_WRITE_ROLES), set(packaging_match.BOX_MATCH_DECIDE_ROLES), ...)`
+  —— 本版两集合取值仍然一致，这条断言的语义（"这两批人此刻是同一批"）保留，只是不再要求对象同一。
+  两个断言即可同时为真。
+
 ## 3. 验收（红测逐条对应）
 
 - A 组：`project_access.can_read` / `require_project_access` 对财务账号 + 已有包装成本的项目 → 不再 404；
@@ -85,7 +105,7 @@ tech_app/backend/services/auth.py:54
 
 ```
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_finance_access_red -v
-./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_engine_red          # OK
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_engine_red          # 80 OK / 1 FAILED（J6，见 §2.4）
 ./open-claude/.venv/bin/python -m unittest tests.test_tech_project_acl_scope_red          # OK
 ./open-claude/.venv/bin/python -m unittest tests.test_tech_project_acl_contribute_mode_red # 28 OK
 ```

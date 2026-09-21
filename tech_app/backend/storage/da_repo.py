@@ -905,6 +905,7 @@ _PACKAGING_COST_COLUMNS = (
     "trial_or_mass_production", "included_components", "material_total", "process_total",
     "labor_total", "tooling_total", "packaging_total", "freight_total", "other_total",
     "subtotal", "loss_amount", "total_cost", "has_gaps", "computed_at",
+    "computed_by", "computed_by_role",
 )
 
 _PACKAGING_COST_ITEM_COLUMNS = (

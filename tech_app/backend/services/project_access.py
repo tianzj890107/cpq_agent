@@ -187,6 +187,27 @@ def _quote_link_visible(project_id: str) -> bool:
     return bool(_text(case.get("quote_session_id")) or _text(case.get("source_task_id")))
 
 
+def _packaging_cost_visible(project_id: str) -> bool:
+    """财务角色池依据（Spec `packaging-cost-finance-access.md` §2.1）：项目**已经算出包装成本**。
+
+    判据是项目状态本身（成本记录 built），不是具体领取人 —— 包装链路没有「送财务」这一步、
+    也不写 `plan.finance_handoff`，而全仓 `store.add_participant` 的生产调用点为 0；于是
+    「钱已经算出来了，做成本的人却看不到项目」。成本记录本身就是关联事实，这不是放宽权限，
+    是把断掉的链路接回来。纯读：不写项目、不写参与者、不产生审计。
+
+    只给**可见性**：不给写权（`can_write` / `can_contribute` 一字不改）；归档项目不因它解锁
+    （调用点在 `can_read` 的归档判断之后）。
+    """
+    if not project_id:
+        return False
+    from . import packaging_cost   # 函数级延迟 import：避开 services 之间的导入顺序问题
+    try:
+        cost = packaging_cost.load_cost(project_id) or {}
+    except Exception:              # 读不出来（老项目 / 数据损坏）按「没算过」处理
+        return False
+    return bool(cost.get("built"))
+
+
 def _participants(meta: dict) -> List[dict]:
     rows = (meta or {}).get("participants") or []
     return [row for row in rows if isinstance(row, dict)]
@@ -249,6 +270,8 @@ def can_read(user: dict, meta: dict) -> bool:
     # 归档项目不因关联而解锁。
     project_id = _text(meta.get("project_id"))
     if _is_finance(user) and _finance_handoff_visible(project_id):
+        return True
+    if _is_finance(user) and _packaging_cost_visible(project_id):
         return True
     if _is_sales(user) and _quote_link_visible(project_id):
         return True

@@ -10043,3 +10043,50 @@ tests.test_packaging_downstream_blockers_red      Ran 138 OK
 - 只改 2 个文件（`main.py` / `packaging_handoff.py`）+ 本 Spec 状态行与 §2.5 + 本条目；未动任何 `tests/`；
 - 未改 `cpq_bridge` / `cpq_case_link` / `require_project_access` 口径；
 - 未 push / 未建 MR / 未打 tag / 未部署、未连库、未调模型。
+
+## 273. 包装 2.3 成本测算：财务看得见已算出成本的项目、写角色写死、成本记录留痕「谁算的」（9-22，Codex 实现）
+
+Spec `docs/specs/packaging-cost-finance-access.md` 落地。34 实测那条「同一个
+`POST /api/projects/f1417060ae9d/requirement/packaging-cost`，PE1 → 200（6.412359 元/件），
+FI1（CPQ 财务经理）→ 404『项目不存在』」的现场缺陷：**包装项目的 2.3 对财务永远是 404**。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 财务可见性 | `tech_app/backend/services/project_access.py` | 新增 `_packaging_cost_visible(pid)`：已算出包装成本（`packaging_cost.load_cost(pid).built`）即对财务角色池可见；`can_read` 里接在归档判断**之后**、与 `_finance_handoff_visible` 并列；纯读、不写项目/参与者/审计，只给可见性不给写权 |
+| 写角色口径 | `tech_app/backend/services/packaging_cost.py` | `COST_WRITE_ROLES` 不再别名到 `packaging_match.BOX_MATCH_DECIDE_ROLES`，改写死字面量 `{"process_manager", "process_director", "admin"}`，并在同一处注释说明与 `auth.COST_ROLES`（通用 2.3「成本只能财务改」）的关系与本例外的理由 |
+| 成本留痕 | 同上 | `compute_project(..., actor=)` / `build_cost(pid, req, actor=None, *, scenario=)` 记 `computed_by`（账号）+ `computed_by_role`（技术侧角色码）进成本记录 |
+| 留痕落库与读回 | `tech_app/backend/storage/da_schema.sql` / `da_db.py` / `da_repo.py` | `wip_packaging_cost_estimate` 增 `computed_by` / `computed_by_role` 两列；老库走 `_ADDED_COLUMNS` 的 `ALTER TABLE ADD COLUMN`（幂等）自动补列，`_PACKAGING_COST_COLUMNS` 写、`_rehydrate` 读回 —— 否则「谁算的」只在返回值里、一读库就丢 |
+
+### 与既有红测的一处**真冲突**（已上报，未改测试）
+
+本 Spec §2.2 要求 `COST_WRITE_ROLES` **不许**是 `BOX_MATCH_DECIDE_ROLES` 的别名，而
+`tests/test_packaging_cost_engine_red.py::test_j6_write_roles_reuse_batch4` 断言
+`assertIs(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES)`（"必须直接引用第 4 批那一份"）
+—— 两条互为反命题。按较新的本 Spec 落地后，engine 由 81 绿变 **80 绿 / 1 红**（仅 J6）；本 Spec §4
+原先那句"engine OK"是没发现冲突，已改成以 §2.4 为准，并给出测试侧**一行修法**
+（`assertIs(...)` → `assertEqual(set(module.COST_WRITE_ROLES), set(packaging_match.BOX_MATCH_DECIDE_ROLES), ...)`，
+本版两集合取值仍一致）。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_packaging_cost_finance_access_red      Ran 10 OK
+tests.test_packaging_cost_engine_red              Ran 81, failures=1（仅 J6，见上）
+tests.test_packaging_cost_rule_routing_red        OK
+tests.test_packaging_cost_rule_snapshot_red       OK
+tests.test_packaging_cost_column_evidence_red     OK
+tests.test_packaging_cost_red_closure_red         OK
+tests.test_packaging_cost_gaps_red                OK
+tests.test_packaging_cost_policy_decision_red     OK
+tests.test_packaging_cost_minimum_charge_red      OK (skipped=1)
+tests.test_tech_project_acl_scope_red             OK
+tests.test_tech_project_acl_contribute_mode_red   OK
+```
+
+### 边界
+
+- 未改任何包装成本公式、费率、表达式、`packaging_match` 的 `BOX_MATCH_DECIDE_ROLES` 本身；
+- 未改 `require_project_access` 的 404-vs-403 口径；未放宽 `can_write` / `can_contribute`；
+- 未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
