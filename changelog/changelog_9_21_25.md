@@ -7483,3 +7483,54 @@ export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"
 所以门禁仍是 `no_go` —— 这是设计如此（生产 go 需要人工确认），不是能力缺失。
 未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话的未跟踪文件；
 未引入第三方依赖；未装任何新软件（34 上用的还是 ODA 27.1 + LibreDWG 0.14）。
+
+## 241. 部署脚本两处修正：门禁命令带 env、env 文件不再每次多一行注释（9-21，Codex 实现）
+
+### 问题（都是「照着脚本自己跑会踩到」的）
+
+1. `scripts/deploy_34_bare.sh` 第 6 步打印的门禁命令**没带 `source env`**。门禁自己**不读 env 文件**
+   （`_check_converter_version_pinned()` 直接调 `cad_converter.capability()`，只看当前进程环境），
+   所以**照抄那行会看到一条假 fail**：
+   `converter_version_pinned | auto | fail | 本环境没有可用的 DWG 转换器（DWG_CONVERTER_NOT_INSTALLED）`，
+   而实际上同一时刻 `8010` 真转两份样本都是 `converter_role=primary / verified=true`。
+   （真相已在 `## 240` 记录；本条把脚本打印的命令改成能直接跑通的。）
+2. env 文件里那句分节注释 `# --- DWG 转换器（…）---` 不在托管变量集合里，**每部署一次就多一行**：
+   34 上现在已经有 3 行重复注释（`## 239` / `## 240` / 本条各跑过一次部署）。
+
+### 改动（只动 `scripts/deploy_34_bare.sh`，不碰任何既有口径）
+
+- 新增 `HEADER` 常量，重写 env 文件前**先丢掉上一次写的同名分节注释**；托管变量与其余自定义行一律照旧保留。
+- 第 6 步打印改成可**直接复制粘贴**的三行：
+
+```
+门禁（**必须带 env 与 PATH**，否则门禁探不到转换器、会误报 converter_version_pinned fail）：
+  cd /home/wugefei/CPQ/cpq_agent
+  set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a
+  PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH" /home/wugefei/CPQ/cpq_agent/open-claude/.venv/bin/python tech_app/tools/dwg_deploy_gate.py --env production
+```
+
+**没有**让脚本自己去跑门禁 —— 门禁在两项人工项未 `--ack` 时按设计返回非零（`no_go`），
+若在脚本里跑会把「部署成功」误判成「部署失败」。
+
+### 本机验证（改前 / 改后）
+
+```
+bash -n scripts/deploy_34_bare.sh                  → OK
+python 块单独 ast.parse                            → OK（54 行）
+
+构造一份「两行重复分节注释 + 自定义变量」的假 env 文件，跑同一段生成逻辑：
+  改前：分节注释 = 2 行
+  改后：分节注释 = 1 行 | MY_CUSTOM 保留 = 1 | CPQ_DB_URL 保留 = 1 | 权限 = -rw-------（0600）
+```
+
+回归（DWG 四套，未受影响）：
+
+```
+tests.test_dwg_converter_production_rollout_red tests.test_dwg_file_capability_preflight_red \
+tests.test_dwg_conversion_adapter_red tests.test_dwg_final_acceptance_red
+Ran 144 tests in 17.220s
+
+OK (skipped=1)
+```
+
+未改任何 `tests/`、未改 `dwg_deploy_gate.py` 的 19 项与 `GATE_VERSION`、未改 `cad_converter` 口径。

@@ -78,8 +78,13 @@ def render(name: str, value: str) -> str:
     return "export %s=%s" % (name, quoted)
 
 
+#: 本脚本写进 env 文件的分节注释；**重写前先删掉上一次写的**，否则每部署一次就多一行。
+HEADER = "# --- DWG 转换器（scripts/deploy_34_bare.sh 生成；env 名取自 cad_converter.service 常量）---"
+
 kept = []
 for line in (envf.read_text(encoding="utf-8").splitlines() if envf.exists() else []):
+    if line.strip() == HEADER:
+        continue                                    # 上一次写的分节注释，改写时不保留
     body = line[len("export "):] if line.startswith("export ") else line
     if body.split("=", 1)[0] in MANAGED:
         continue                                    # 本脚本托管这几项，重写而不是追加
@@ -87,7 +92,7 @@ for line in (envf.read_text(encoding="utf-8").splitlines() if envf.exists() else
 
 out = [line for line in kept if line.strip()] + [
     "",
-    "# --- DWG 转换器（scripts/deploy_34_bare.sh 生成；env 名取自 cad_converter.service 常量）---",
+    HEADER,
 ]
 out += [render(name, value) for name, value in VALUES.items()]
 # env 里这份 PATH 只对「先 source 再跑」的命令行工具有用；**服务侧无效**，
@@ -223,4 +228,7 @@ step "6. 结论"
 echo "部署完成：$OLD_HEAD → $NEW_HEAD（ref=$REF）"
 echo "8010 pid=$PID；env 文件=$ENVF；日志=nohup.out"
 echo "能力声明口径（未通过 L4 之前只能这么说）：DWG 编排能力完成，真实转换能力未验收"
-echo "门禁：$PY tech_app/tools/dwg_deploy_gate.py --env production"
+echo "门禁（**必须带 env 与 PATH**，否则门禁探不到转换器、会误报 converter_version_pinned fail）："
+echo "  cd $PWD"
+echo "  set -a; . $ENVF; set +a"
+echo "  PATH=\"$XVFB_BIN_DIR:\$PATH\" $PY tech_app/tools/dwg_deploy_gate.py --env production"
