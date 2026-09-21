@@ -10,7 +10,11 @@
 | --- | --- | --- | --- |
 | `libredwg_dwg2dxf` | `dwg2dxf -y -o <out.dxf> <source.dwg>` | `converted.dxf` | 已实测 `True` |
 | `libredwg_dwgread` | `dwgread -O DXF -o <out.dxf> <source.dwg>` | `converted.dxf` | 已实测 `True` |
-| `oda_file_converter` | `<exe> <inDir> <outDir> ACAD2018 DXF 0 1` | `source.dxf` | 未验证 `False` |
+| `oda_file_converter` | `<exe> <inDir> <outDir> ACAD2018 DXF 0 1 *.dwg` | `source.dxf` | 已实测 `True` |
+
+`wrapper`（如 Linux 无头必需的 `xvfb-run -a`）由配置给出，**逐项排在 exe 之前**；配置只做
+空白切分，不经过 shell，出现 `; | & $ > < * ? ~ ( )` 等元字符或首项不可执行一律判
+`wrapper_invalid`（Spec §2/§3）。
 
 预览：libredwg 用同目录的 `dwg2SVG --mspace <source.dwg>`，**输出走 stdout**（该工具没有
 `-o`），由本适配器把 stdout 落成 `converted.svg`。SVG 只用于页面预览，**不是**栅格图，
@@ -50,6 +54,15 @@ BINARY_MISSING = "binary_missing"
 BINARY_NOT_EXECUTABLE = "binary_not_executable"
 BINARY_NOT_A_FILE = "binary_not_a_file"
 BINARY_IS_INTERPRETER = "binary_is_interpreter"
+BINARY_WRAPPER_INVALID = "wrapper_invalid"
+
+#: 版本口径闭集（Spec §2.5）：`--version` 探出来的 / 配置声明的 / 无法核实的。
+VERSION_SOURCE_PROBED = "probed"
+VERSION_SOURCE_CONFIG = "config_declared"
+VERSION_SOURCE_UNVERIFIABLE = "unverifiable"
+
+#: wrapper 里绝不允许出现的 shell 元字符（Spec §2/§3）：一律按 `wrapper_invalid` 处理。
+_WRAPPER_META = re.compile(r"""[;|&$><*?~()\[\]{}`"'!]""")
 
 _VERSION_PATTERN = re.compile(rb"(\d+\.\d+(?:\.\d+)*)")
 _version_cache: Dict[str, str] = {}
@@ -72,24 +85,34 @@ def _argv_libredwg_dwgread(executable: str, source: Path, output_dir: Path, targ
 
 
 def _argv_oda_file_converter(executable: str, source: Path, output_dir: Path, target: Path) -> list:
-    # ODA File Converter 固定 6 参数：<inDir> <outDir> <outVer> <outFormat> <recurse> <audit>。
+    # ODA File Converter 真机 27.1 实测的 7 个位置参数：
+    # <inDir> <outDir> <outVer> <outFormat> <recurse> <audit> <filter>。最后一项 `*.dwg`
+    # 必须逐字给出（不经 shell 展开）；它是过滤项，不是 glob，由转换器自己解释。
     # 它按输入文件名出图（`source.dwg` → `source.dxf`），不接受单个输出路径。
     return [executable, str(source.parent), str(output_dir), _ODA_OUTPUT_VERSION,
-            _ODA_OUTPUT_FORMAT, "0", "1"]
+            _ODA_OUTPUT_FORMAT, "0", "1", "*.dwg"]
 
 
 DRIVERS: Dict[str, dict] = {
     "libredwg_dwg2dxf": {
         "argv": _argv_libredwg_dwg2dxf, "output_name": "converted.dxf",
         "version_args": ("--version",), "argv_verified": True, "provider": "libredwg",
+        "output_version": "", "audit_enabled": False,
     },
     "libredwg_dwgread": {
         "argv": _argv_libredwg_dwgread, "output_name": "converted.dxf",
         "version_args": ("--version",), "argv_verified": True, "provider": "libredwg-cli",
+        "output_version": "", "audit_enabled": False,
     },
     "oda_file_converter": {
         "argv": _argv_oda_file_converter, "output_name": "source.dxf",
-        "version_args": ("--version",), "argv_verified": False, "provider": "oda",
+        # ODA 不支持 `--version`（会以非 0 退出）；版本只能由配置显式声明，
+        # 所以 version_args 为空 = 编排层**零子进程**（Spec §2.5）。
+        "version_args": (), "argv_verified": True, "provider": "oda",
+        "output_version": _ODA_OUTPUT_VERSION, "audit_enabled": True,
+        # ODA 要的是「输入目录 + 输出目录」两个**真实目录**（不是输出文件路径），
+        # 所以编排层必须给它一个调用结束后依然存在的工作区（见 `work_dir_for`）。
+        "needs_dirs": True,
     },
 }
 
@@ -109,8 +132,9 @@ PROVIDER_DRIVERS: Dict[str, str] = {
     "teigha": "oda_file_converter",
 }
 
-#: `auto` 的探测顺序（Spec §3 的表顺序：libredwg → libredwg-cli → ODA → Teigha）
-AUTO_PROBE: Tuple[str, ...] = ("libredwg", "libredwg-cli", "oda", "teigha")
+#: `auto` 的探测顺序（Spec §2.4：**ODA 优先**，其后才是 LibreDWG 系与 Teigha）。
+#: 探测只用 `shutil.which`，不执行任何子进程。
+AUTO_PROBE: Tuple[str, ...] = ("oda", "libredwg", "libredwg-cli", "teigha")
 
 #: 已知 provider 名（含旧名 `CAD_CONVERTER` 用过的别名）
 KNOWN_PROVIDERS = ("auto", "none", "fake", "libredwg", "libredwg-cli", "oda", "teigha")
@@ -167,6 +191,53 @@ def provider_of_binary(binary: str) -> str:
     return str(DRIVERS.get(driver, {}).get("provider") or "") if driver else ""
 
 
+def parse_wrapper(raw: str) -> Tuple[list, str]:
+    """解析 `DWG_CONVERTER_WRAPPER`（Spec §2/§3）：返回 `(items, reason)`。
+
+    只按空白切分，**不做 shell 解析**（没有引号、没有变量展开、没有管道）。任何一项出现
+    shell 元字符，或首项不是存在且可执行的文件，一律 `(空, "wrapper_invalid")`。
+    空配置 → `([], "")`。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return [], ""
+    if _WRAPPER_META.search(text):
+        return [], BINARY_WRAPPER_INVALID
+    items = text.split()
+    if not items:
+        return [], ""
+    for token in items:
+        if not token or _WRAPPER_META.search(token):
+            return [], BINARY_WRAPPER_INVALID
+    first = items[0]
+    resolved = first if os.sep in first else (shutil.which(first) or "")
+    if not resolved or not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
+        return [], BINARY_WRAPPER_INVALID
+    return items, ""
+
+
+def supports_version_probe(driver: str) -> bool:
+    """该驱动是否能用 `--version` 探测版本（ODA 不行：它没有这个选项）。"""
+    return bool(DRIVERS.get(str(driver or ""), {}).get("version_args"))
+
+
+def version_source_for(driver: str, *, declared: str = "", probed: str = "") -> str:
+    """版本来源三态（Spec §2.5）：能探测的驱动报 `probed`，其余按声明与否二选一。"""
+    if supports_version_probe(driver):
+        return VERSION_SOURCE_PROBED if probed else VERSION_SOURCE_UNVERIFIABLE
+    return VERSION_SOURCE_CONFIG if declared else VERSION_SOURCE_UNVERIFIABLE
+
+
+def output_version_of(driver: str) -> str:
+    """该驱动**声明**的输出版本（ODA 恒为 ACAD2018；LibreDWG 尽力保留源版本 → 空串）。"""
+    return str(DRIVERS.get(str(driver or ""), {}).get("output_version") or "")
+
+
+def audit_enabled_of(driver: str) -> bool:
+    """该驱动是否开启转换器自带的 Audit/Repair（Spec §4.5）。"""
+    return bool(DRIVERS.get(str(driver or ""), {}).get("audit_enabled"))
+
+
 def binary_problem(binary: str) -> str:
     """二进制安全检查（Spec §2）；可用返回空串，否则返回稳定原因短码。"""
     path = str(binary or "")
@@ -212,6 +283,9 @@ def probe_version(executable: str, version_args=("--version",)) -> str:
     path = str(executable or "")
     if not path:
         return ""
+    if not version_args:
+        # 该驱动不支持版本探测（ODA）：**绝不**为了探测再执行一次子进程。
+        return ""
     with _version_lock:
         if path in _version_cache:
             return _version_cache[path]
@@ -234,13 +308,14 @@ def _read_version(path: str, version_args) -> str:
 
 
 def build(*, provider: str, binary: str, driver: str = "", expected_version: str = "",
-          preview_binary: str = "") -> "LocalCliAdapter":
+          preview_binary: str = "", wrapper=None) -> "LocalCliAdapter":
     """按已解析好的配置构造适配器（二进制是否可用由编排层判定）。"""
     resolved_driver = driver or driver_of(provider, binary) or PROVIDER_DRIVERS.get(
         str(provider or "").lower(), "libredwg_dwg2dxf")
     return LocalCliAdapter(
         executable=binary, driver=resolved_driver, provider=provider,
         expected_version=expected_version, preview_binary=preview_binary,
+        wrapper=list(wrapper or ()),
         version=probe_version(binary, DRIVERS[resolved_driver]["version_args"]),
         adapter_name=str(provider or resolved_driver),
     )
@@ -255,13 +330,14 @@ class LocalCliAdapter:
     def __init__(self, *, executable: str, version: str = "",
                  driver: str = "libredwg_dwg2dxf", provider: str = "",
                  expected_version: str = "", preview_binary: str = "",
-                 adapter_name: str = "local_cli") -> None:
+                 wrapper=None, adapter_name: str = "local_cli") -> None:
         self._executable = str(executable)
         self._version = str(version or "")
         self._driver = driver if driver in DRIVERS else "libredwg_dwg2dxf"
         self.provider = str(provider or DRIVERS[self._driver]["provider"])
         self.expected_version = str(expected_version or "")
         self.preview_binary = str(preview_binary or "")
+        self.wrapper = [str(item) for item in (wrapper or ())]
         self.adapter_name = str(adapter_name or self.provider or "local_cli")
 
     @property
@@ -290,6 +366,9 @@ class LocalCliAdapter:
             "expected_version": self.expected_version,
             "argv_verified": self.argv_verified,
             "preview_available": self.preview_available,
+            "wrapper": list(self.wrapper),
+            "output_version": output_version_of(self._driver),
+            "audit_enabled": audit_enabled_of(self._driver),
         }
 
     def inspect(self, request) -> dict:
@@ -307,7 +386,8 @@ class LocalCliAdapter:
         source = Path(getattr(request, "source_path"))
         target = output_dir / self.driver["output_name"]
         timeout = self._timeout(request)
-        argv = self.driver["argv"](self._executable, source, output_dir, target)
+        argv = list(self.wrapper) + self.driver["argv"](self._executable, source, output_dir,
+                                                        target)
         try:
             completed = subprocess.run(argv, timeout=timeout, capture_output=True, check=False)
         except subprocess.TimeoutExpired as exc:
@@ -363,6 +443,21 @@ class LocalCliAdapter:
 
     def convert_3d_if_supported(self, request) -> dict:
         return {"status": "unknown", "artifact_path": None, "error_code": None}
+
+    def work_dir_for(self, *, default, artifact_dir, role=""):
+        """本次跳次的工作区（Spec §3）。
+
+        只要「文件路径」的驱动用编排层的临时目录（随转换一起回收）。需要**输入目录 +
+        输出目录**的驱动（ODA）拿不到临时目录：临时目录在转换结束后就被删掉，连
+        `argv` 里那两个目录都无法再复核、也无法重放。这类驱动改用产物目录下的
+        `work/<role>/`——工作区本身保留，内容由编排层用完即清。
+        """
+        if not self.driver.get("needs_dirs"):
+            return default
+        target = Path(str(artifact_dir)) / "work" / (str(role or "") or "primary")
+        shutil.rmtree(target, ignore_errors=True)
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
     # ------------------------------------------------------------------ 内部
     def _timeout(self, request) -> float:

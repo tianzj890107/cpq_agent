@@ -3544,3 +3544,91 @@ Spec `docs/specs/dwg-final-acceptance.md`（契约 A–I，53 条红测）落地
 - 已按用户指令 **commit + push 到 `ytbz`（origin / gitlab 双远端）**；
   **未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；
   `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
+
+## 188. DWG 前两批修复实现：ODA 27.1 主转换器 + LibreDWG 0.14 受控回退链（9-21，Codex）
+
+Spec `docs/specs/dwg-conversion-quality-repair.md`（`/2`，43 条红测）的**实现**落地。本批不加功能，
+只把第 1/2 批的转换层钉死：ODA 27.1 做主管线、LibreDWG 0.14 **只在主转换器明确失败时**回退；
+wrapper 逐项排在 exe 之前且不经 shell；版本口径三态；回退链全程留痕；`capability()` 如实。
+
+### 新增 / 修改（只碰实现，**未碰** `tests/**` 与 `docs/specs/**`）
+
+- `tech_app/backend/services/cad_converter/adapters/local_cli.py`
+  - `_argv_oda_file_converter` 补第 7 项 `*.dwg`（真机 27.1 的 8 项形状；**不经 shell 展开**）；
+    `DRIVERS["oda_file_converter"]` 改 `version_args=()` / `argv_verified=True`，新增
+    `output_version="ACAD2018"` / `audit_enabled=True` / `needs_dirs=True`；两个 LibreDWG 驱动各补
+    `output_version=""` / `audit_enabled=False`。
+  - 版本来源闭集 `probed` / `config_declared` / `unverifiable`：`version_args` 为空 → 探测
+    **零子进程**；显式声明 `DWG_CONVERTER_VERSION` → `config_declared` + `version_ok=true`；未声明 →
+    `unverifiable`（**禁止**从目录名 / `Info.plist` / 包名推断版本）。
+  - 新增 `parse_wrapper(raw) -> (items, reason)`：只做空白切分、**不经过 shell**；出现
+    `; | & $ > < * ? ~ ( ) [ ] { } \` " ' !` 或首项不可执行 → `wrapper_invalid`；
+    调用形状固定 `argv = [*wrapper, exe, *driver_args]`、`shell=False` + 超时。
+  - `AUTO_PROBE` 改为 **ODA 优先**（探测只用 `shutil.which`，不执行子进程）；`capability()` 增
+    `wrapper` / `output_version` / `audit_enabled`；新增 `work_dir_for()`：ODA 要「输入目录 + 输出
+    目录」两个**真实目录**，因此给它持久工作区（`<artifact_dir>/work/<role>`，用完清内容、留目录）。
+- `tech_app/backend/services/cad_converter/service.py`
+  - 配置族新增 `DWG_CONVERTER_WRAPPER` 与 `DWG_CONVERTER_FALLBACK_{PROVIDER,BINARY,VERSION,
+    WRAPPER,PREVIEW_BINARY}`；旧 `CAD_CONVERTER*` 继续可用、`DWG_CONVERTER_*` 优先并写一条
+    `converter_config_shadowed` 警告（只进 manifest，**不**污染 `capability()` 顶层）。
+  - 回退**默认关闭**（`none`）：不把「本机恰好装了另一个转换器」当作回退；回退与主同 provider 一律
+    关闭；主为 fake/none 不回退；`wrapper_invalid` / 二进制是解释器 / 输入问题一律**不回退**。
+  - manifest 新增 `converter_role` / `fallback_used` / `primary_failure_code` / `attempts[]`（主成功也
+    恰好一条 `role="primary"`；`status` / 计数 / `quality` 一律指**生效跳次**）；两者都失败 → 抛主码、
+    `detected` 同时带 `primary` 与 `fallback`；失败跳次的半成品随临时目录清理、**不进** `output_files`。
+  - `cache_key` 身份段含主/生效 provider+版本与**生效二进制 sha256** → 回退产物与主产物不同键；
+    `conversion_id` 仍只由「源 sha256 + 主 provider/版本 + 图纸版本」决定（回退**不**分裂产物目录）；
+    并发锁按 `project_id + cache_key`，主/回退共用。
+  - 审计新增 `dwg.convert.fallback`；既有 `dwg.convert.*` 追加 `converter_role` /
+    `primary_failure_code` / `fallback_used`；二进制只记 basename，**不**写 stderr 原文 / 绝对路径 / 堆栈。
+
+### 实跑原文（2026-09-21）
+
+| 命令 | 结果 |
+| --- | --- |
+| `python tests/test_dwg_conversion_quality_repair_red.py` | `Ran 43 tests … FAILED (errors=3)`（起点 `failures=8, errors=8`）|
+| `python -m unittest tests.test_dwg_conversion_adapter_red` | `Ran 42 tests … OK (skipped=1)` |
+| `python -m unittest tests.test_dwg_file_capability_preflight_red` | `Ran 29 tests … OK` |
+| `python -m unittest tests.test_dxf_cad_ir_red` | `Ran 46 tests … OK (skipped=1)` |
+| `python -m unittest tests.test_packaging_semantics_red` | `Ran 59 tests … OK (skipped=1)` |
+| `python -m unittest tests.test_packaging_drawing_flow_red` | `Ran 54 tests … OK (skipped=1)` |
+| `python -m unittest tests.test_dwg_final_acceptance_red` | `Ran 53 tests … OK` |
+| `python -m unittest tests.test_dwg_real_samples_e2e_red` | `Ran 9 tests … OK (skipped=9)` |
+| `python -u /tmp/run_pkg.py 1` | `TOTAL ran=3362 failures=24 errors=4 skipped=15`（基线 `failures=32 errors=9`）|
+
+转绿的 13 条：`A8 A9 A10 A11 B2 B5 E5 E6 G1 G5 G6 G7 G8`。全量失败集合 = 既有 25 条（与本批无关）
++ 本批 3 条（见下），**零新增失败**。门禁脚本回归：`dwg_deploy_gate --env local` 从
+`13 ok / 3 fail / 2 manual` 变成 `14 ok / 2 fail / 2 manual`（`converter_chain_configured` 转 **ok**），
+仍判 **No-Go**。
+
+### 唯一阻塞：红测夹具自身缺陷（G2 / G3 / G4，**不是**实现缺口）
+
+- 现象：`test_g2_nonzero_exit_falls_back_and_is_recorded`、
+  `test_g3_timeout_falls_back_and_is_recorded`、
+  `test_g4_invalid_primary_output_falls_back_without_publishing_it` 三条一直 `ERROR`，抛的是主码，
+  即"主失败之后回退那一次**也**失败了"。
+- 根因：夹具把假转换器的行为放在**共享环境变量**里。`set_fake_payload()`（`:308-314`）写的是
+  `os.environ["FAKE_DXF_MODE"] = mode`，而两个假脚本都在**运行时**读它
+  （`FAKE_CLI:107` / `FAKE_ODA_CLI:150`：`case "${FAKE_DXF_MODE:-tidy}" in`）。
+  `GFallbackChain.chain()`（`:919-938`）**先建回退再建主** → `FAKE_DXF_MODE` 最终等于**主**的
+  `mode`（`fail` / `hang` / `empty`）→ 回退也走同一个分支。`g3` 更直接：假 LibreDWG **没有**
+  `hang` 分支，落到 `esac` 后直接 `exit 0`，连产物都不写。
+- 取证：把**同一份红测**在进程内做 4 行夹具替换（`case "${FAKE_DXF_MODE:-tidy}" in` →
+  `case "__MODE__" in`（2 处）+ 两个构造函数追加 `.replace("__MODE__", str(mode))`，**断言一字未动**）
+  再跑 → `Ran 43 tests … OK`。即：编排层是对的，卡住的是夹具**无法表达"主/回退各自的行为"**。
+- 处置：按本批禁令「不许为了让红测变绿而改测试」**未改** `tests/**`；修法（4 行，断言不动）与
+  取证已随本条留存，等需求方裁定后由测试维护方落。
+
+### 能力声明
+
+- `cad_converter.capability().support_claim` 仍为 `conversion_available`、`dwg_supported` 仍为
+  `false`（没有 `tech_app/agent_knowledge/dwg_acceptance.json`）。本批只允许写
+  **"DWG 编排能力完成，真实转换能力未验收"**，不许写"支持 DWG"。
+- 两份真实样本本批未跑 E2E（L4 仍是人工触发）；ODA 非会员许可边界由业务/法务另行确认。
+
+### 提交状态
+
+- 本轮改 `cad_converter/adapters/local_cli.py`、`cad_converter/service.py` 与本条 changelog；
+  已按用户指令 **commit + push 到 `ytbz`（origin / gitlab 双远端）**；
+  **未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；未新增依赖；
+  `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
