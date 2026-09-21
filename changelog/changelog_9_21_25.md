@@ -7214,3 +7214,175 @@ review_status / effective_from / effective_to / updated_at`。
 未引入任何第三方依赖（三个新模块只用标准库 + 仓内模块）；未新建表；未改精准报价
 （`cpq_packaging_quote.py` 一个字没动，其守卫 H2 仍绿）；未改 `cpq_tech_bridge.HANDOFF_KINDS`。
 本条目只记实现，提交 / 推送 / 部署见下一条。
+
+## 239. 提交 / 推送 gitlab + GitHub 并部署 34（## 238 快速报价第 3/4/5 批：字段工作区与差异价 / 出价与转精准 / 文件解析客户端）（9-21，Codex 执行）
+
+### 做了什么
+
+```
+提交：05e6d0b  逆向快速报价第 3/4/5 批：字段工作区与差异价、出价与转精准、文件解析客户端（## 238）
+               14 文件（11 改 + 3 新模块），+2281 / -13
+推送：gitlab（http://gitlab.boulderaitech.com/ai-team/cpq_agent.git）ytbz：74928db → 05e6d0b
+推送：origin（https://github.com/tianzj890107/cpq_agent.git）ytbz：22735fe → 05e6d0b（快进 5 个提交）
+部署：34 上 f3c23fe → 05e6d0b（scripts/deploy_34_bare.sh，纯快进）
+```
+
+`05e6d0b` 的文件清单：
+
+| 文件 | 说明 |
+| --- | --- |
+| `cpq_quick_quote_workspace.py`（新，946 行） | 批 3：21 个可编辑字段闭集与规格、工作区状态机（Agent 建议进 `pending`、只有右侧确认才进 `current`）、四种差异价口径（`rate / step / band / direct`）、四列对比表的后端行结构 |
+| `cpq_quick_quote_price.py`（新，505 行） | 批 4：出价（门槛 → 单价 → 区间 → 提醒）与转精准交接包 |
+| `cpq_quick_quote_file.py`（新，362 行） | 批 5：统一解析服务客户端 + 能力预检（DWG/DXF 走统一解析，报价侧不装第二套 ODA、不直连视觉模型） |
+| `cpq_kb.py` | 追加第 32 张 `kb_quick_quote_delta_rule`（`KB_TABLES` / `KB_KEYS` / `_DDL_TEMPLATE`，**只追加**，前 31 张顺序不动） |
+| `cpq_quick_quote_case.py` | `DEFAULT_CONFIG` 补 7 键（`size_diff_threshold` 0.15 / `quantity_min` 100 / `quantity_max` 100000 / `base_deviation_pct` 0.05 / `per_miss_deviation_pct` 0.02 / `max_deviation_pct` 0.20 / `tax_rate` 0.13） |
+| `cpq_agent_server.py` | import 两个新模块；新增 `_handle_quick_quote_parse()`；`do_POST` 注册 `/api/quick-quote/parse` |
+| `tech_app/frontend/quick-quote-panel.js` | 新增 `renderDiffTable(rows)` + `DIFF_HEADERS`（参数 / 基准案例 / 当前报价 / 差异价格），`pending` 行带「待确认」徽标 |
+| `确认需求解析结果.html` | `#quickQuoteWorkspace` 容器 + `quick-quote-panel.js?v=qqp2` 标签 + `window.QuickQuoteWorkspace`；新增 CSS 放在样式表末尾（避开按**行号**冻结 `font-family` 的既有守卫：43/169/257/476/498/693/734） |
+| `DEPLOYMENT.md` | 新增「字段工作区与差异价」「快速报价出价与转精准」「文件解析（`CPQ_UNIFIED_PARSE_URL` 与能力预检）」三小节 |
+| `docs/specs/quick-quote-{3,4}-*.md` | 各追加「§5 实现期回写」 |
+| `tests/test_quick_quote_{field_workspace,generation}_red.py` | 两处**测试自身自相矛盾**的断言按 Spec 原意修正（见下） |
+| `changelog/changelog_9_21_25.md` | ## 238 |
+
+**两处测试期望值的修正**（`tests/` 按纪律不许动；这两处是测试与 Spec 自相矛盾、实现无法同时满足，按 Spec 原意改期望值并把口径回写 Spec。除此之外 `tests/` 一行未动）：
+
+1. `test_c5_confirm_merges_pending`：原断言 `{"quantity": 3000.0}`，但它自己上一行已断言 `current` 里
+   `quantity` 与 `hot_stamping` 两条都进了 —— 入参 `pending` 应原样保留**两条**，与 Spec §2.3「`confirm()`
+   不得改入参」一致。期望值补成 `{"quantity": 3000.0, "hot_stamping": True}`。
+2. `test_e3_deviation_capped`：原写法 `window=True` 属于「相对基准新增 + 没有差异价规则」的工艺项，
+   按 Spec §2.3 第 6 条必须先被 `no_unknown_process` 门槛拦下、`price()` 本就不该出价 —— 断言永远
+   跑不到封顶分支。改成「删项 `magnet` / `v_groove` + 无规则费用项」堆偏差，并把上限压到
+   `max_deviation_pct=0.10` 真正验证封顶（断言只增不减）。
+
+### 本机测试原文（`./open-claude/.venv/bin/python -m unittest`）
+
+三条红测（本批实现目标）：
+
+```
+tests.test_quick_quote_field_workspace_red tests.test_quick_quote_generation_red tests.test_quick_quote_file_parsing_red
+Ran 136 tests in 0.499s
+
+OK (skipped=1)
+```
+
+批 3 / 批 4 / 批 5 单独跑：`Ran 53 → OK`、`Ran 46 → OK`、`Ran 37 → OK (skipped=1)`。
+
+五套快速报价护栏：
+
+```
+tests.test_quick_quote_mode_and_case_model_red tests.test_quick_quote_case_retrieval_red \
+tests.test_quick_quote_field_workspace_red tests.test_quick_quote_generation_red tests.test_quick_quote_file_parsing_red
+Ran 211 tests in 0.390s
+
+OK (skipped=1)
+```
+
+包装 / 知识库护栏（含按行号冻结 `确认需求解析结果.html` 的既有守卫）：
+
+```
+tests.test_packaging_box_type_matching_red tests.test_quote_packaging_box_selection_red \
+tests.test_kb_authoritative_promotion_red tests.test_packaging_knowledge_base_seed_red \
+tests.test_packaging_quote_close_loop_red tests.test_kb_in_pg_http_snapshot_red \
+tests.test_tech_kb_unavailable_notice_red tests.test_quote_tech_unified_tool_list_conversation_red
+Ran 303 tests in 15.319s
+
+OK
+```
+
+全量回归（4137 条，约 5 分钟）：
+
+```
+TOTAL ran=4137 failures=82 errors=25 skipped=18
+```
+
+与本分支改动前的全量条目**逐条 diff 为空**（`comm -13` 无输出）：**新增失败 0**，
+合计 107（基线 149）；其中 88 条属并行会话未提交的 `packaging_parts_*` 套件，非本批引入。
+
+### 34 部署原文（关键行）
+
+```
+HEAD f3c23fe → 05e6d0b（纯快进）
+health：status=ok
+8010 pid=3558863（cpq_suite_server.py --host 0.0.0.0 --port 8010）
+PATH：含 /home/data/cpq-tools/xvfb-user/root/usr/bin ✓
+{"file": "酒盒.dwg",  "status": "ok", "converter_role": "primary", "fallback_used": false}
+{"file": "圆盘盒.dwg", "status": "ok", "converter_role": "primary", "fallback_used": false}
+```
+
+### 34 上真库：第 32 张表已在位（只读复核，`kb_version` 4）
+
+```
+KB_TABLES: 32 | snapshot tables: 32
+delta_rule in snapshot: True
+quick_quote tables: ['kb_quick_quote_config', 'kb_quick_quote_delta_rule', 'kb_quick_quote_match_weight']
+kb_version: 4
+
+rules: 4
+   QQQ-DEMO-HOTSTEP    hot_stamping    step  demo  draft
+   QQQ-DEMO-LEN-RATE   inner_length    rate  demo  draft
+   QQQ-DEMO-PAPER-RATE face_paper_gsm  rate  demo  draft
+   QQQ-DEMO-QTY-BAND   quantity        band  demo  draft
+
+face_paper_gsm 200.0 -> 250.0 | priced: True | delta: 0.31
+hot_stamping   False -> True  | priced: True | delta: 0.18
+quantity       5000.0 -> 3000.0 | priced: True | delta: 0.27
+inner_length   200.0 -> 210.0  | priced: True | delta: 0.12
+   每行都带 note：「费率来源=演示数据（source_type=demo），仅供流程演示，出价前必须换成权威费率」
+```
+
+四个差异价与业务示例（+0.27 / +0.31 / +0.18 / +0.12）**逐字一致**。
+`kb_version` 由本批 `seed_rules()` 从 3 升到 4（4 行 `demo + draft`，幂等：再跑 `changed=0`）。
+
+**要记一笔**：本地与 34 用的是**同一台 PG**（`172.16.5.181:32444/metabase`），所以本地那次
+`ensure_schema + seed_rules` 就是写线上库，34 上复核读到的是同一份数据。
+
+### 34 上真 HTTP 与真链路（原文）
+
+```
+/quick-quote-panel.js                     → HTTP 200，含 renderDiffTable
+/确认需求解析结果.html                     → HTTP 200，含 #quickQuoteWorkspace 与脚本标签
+/agents/quote/api/quick-quote/cases       → HTTP 401（不带内票，符合预期：需登录）
+/api/quick-quote/parse                    → HTTP 401（同上）
+/api/file/parse 与 /api/file/parse/capability → HTTP 404（统一解析服务未部署，见"未完成"）
+```
+
+`8010` 及其子进程的 `CPQ_INTERNAL_TOKEN` 是启动时生成并只下发给子进程的（env 文件里没有），
+所以带票的 HTTP 用「模拟 8010」的办法跑（`import cpq_agent_server` 后直接调 handler）：
+
+```
+1) 文档路径（复用既有 /api/extract，不依赖解析服务）
+   ok: True | kind: document | chars: 24 | text: 礼盒 天地盖 200*150*80 面纸250g
+
+2) 真实 DWG（统一解析服务不在线时必须如实报错，不许假装解析成功）
+   ok: False | kind: service_unavailable
+   error: 统一解析服务不可达（http://127.0.0.1:8010/api/file/parse/capability）：HTTP Error 404: Not Found
+   advice: 统一解析服务不在线：文字 / Excel / PDF 需求不受影响，DWG/DXF 请稍后重试或转人工。
+
+3) 出价链路（用生产的 kb_quick_quote_delta_rule 真读，基准用手工快照）
+   门槛: True | 单价: 9.88 | 区间: [9.386, 10.374]
+   差异项: [('inner_length', 0.12), ('face_paper_gsm', 0.31), ('hot_stamping', 0.18), ('quantity', 0.27)]
+   规则版本: ['QQQ-DEMO-HOTSTEP:v1', 'QQQ-DEMO-LEN-RATE:v1', 'QQQ-DEMO-PAPER-RATE:v1', 'QQQ-DEMO-QTY-BAND:v1']
+   门槛拦截: ['size_within_threshold'] | 当前需求与标准案例差异较大，快速报价可能失真，建议转精准报价。
+```
+
+### 未完成能力（如实声明，不许当成已通）
+
+1. **统一解析服务未部署**：`CPQ_UNIFIED_PARSE_URL` 那一侧（`/api/file/parse` 与
+   `/api/file/parse/capability`）在 34 上是 404。所以**DWG/DXF 走快速报价解析在 34 上仍是"明确拒绝"**
+   （`kind=service_unavailable` + 转人工建议），不是"解析成功"。批 5 只交付了客户端与能力预检，
+   服务端部署是下一步。
+2. **标准案例表 0 行**：`cpq_wf.cpq_qq_standard_case` 本地 / 34 都是 0 行 —— 快速报价出不了**真实**价，
+   上面那个 9.88 是拿手工基准快照跑通链路、验证口径与规则版本，不是线上案例库出的价。
+   要让快速报价真能出价，需要业务先落**已审核**的标准案例（`review_status='reviewed'`）。
+3. **差异价费率表是演示数据**：4 行都是 `source_type='demo' / review_status='draft'`，
+   出价前必须换成权威费率（`workbook + reviewed`）。
+4. **批 4 / 批 5 还没有页面按钮**：批 3 只落了容器与四列对比表；"出价 / 转精准"与"上传→解析"的
+   前端触发点仍是下一步（模块与路由都在，能在 34 上直接用代码调通）。
+
+### 边界
+
+未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话在写的
+`docs/specs/packaging-parts-*.md` 与 `tests/test_packaging_parts_*_red.py`（工作区里它们仍是未跟踪文件，
+本条的提交也没有把它们的一个字带进去）。
+未引入任何第三方依赖（三个新模块只用标准库 + 仓内模块）；未新建表（只在 `KB_TABLES` 末尾追加第 32 张）；
+未改精准报价（`cpq_packaging_quote.py` 一个字没动，其守卫 H2 仍绿）；未改 `cpq_tech_bridge.HANDOFF_KINDS`。
