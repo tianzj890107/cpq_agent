@@ -7613,3 +7613,71 @@ OK (skipped=1)
 ```
 
 未改任何 `tests/`、未改 `dwg_deploy_gate.py` 的 19 项与 `GATE_VERSION`、未改 `cad_converter` 口径。
+
+## 242. 提交 / 推送 ytbz 双远端并部署 34（## 237 五层 Spec + 红测）（9-21，Codex 执行）
+
+把 ## 237 的五层 Spec 与五层红测落成一次提交并上线（**只包含本轮新增的 Spec / 红测 / changelog**，
+没有碰任何业务实现，也没有动并行会话的文件）。
+
+### 提交（fc14330）
+
+`图纸零件下游闭环：五层 Spec + 红测（## 237，只改 Spec / 红测 / changelog）`
+（11 个文件 / 2154 行新增）：
+
+- 5 份 Spec：`docs/specs/packaging-parts-{true-outline,selectable-panel,
+  downstream-process-and-cost,3d-extrusion,downstream-acceptance}.md`
+- 5 份红测：`tests/test_packaging_parts_{outline,panel,downstream,3d,downstream_gate}_red.py`
+- `changelog/changelog_9_21_25.md`（## 237）
+
+明确排除、**未入库**：`scripts/tmp_import_dwg_cases.py`、`裕同包装项目-待开发/`（客户真实样本）。
+
+### 验收（提交前实跑）
+
+五层红测合计 **94 条 / 88 红 / 6 绿**，与交付口径逐项一致：
+
+| 套件 | 结果 |
+| --- | --- |
+| `test_packaging_parts_outline_red` | Ran 20，19 红（5 fail + 14 error） |
+| `test_packaging_parts_panel_red` | Ran 19，18 红 |
+| `test_packaging_parts_downstream_red` | Ran 20，17 红（13 + 4） |
+| `test_packaging_parts_3d_red` | Ran 18，17 红（16 + 1） |
+| `test_packaging_parts_downstream_gate_red` | Ran 17，17 红（11 + 6） |
+
+6 条绿全部是"旧键 / 旧路由 / 旧 viewer 不许回退"的护栏，不是缺口被覆盖。
+`git diff --check` 干净；changelog 的 diff 只有 ## 237 那 79 行（确认没夹带别人的改动）。
+
+### 推送
+
+| 远端 | 分支 | 结果 | 回读 |
+| --- | --- | --- | --- |
+| GitLab `gitlab` | `ytbz` | `6f81197..fc14330` | `fc14330` ✓ |
+| GitHub `origin` | `ytbz` | `6f81197..fc14330` | `fc14330` ✓ |
+
+纯快进，未创建 MR / tag / Release。
+
+### 部署 34（6f81197 → fc14330）
+
+`scripts/deploy_34_bare.sh`（脚本自带 fetch + `merge --ff-only`、幂等重写仓库外 `cpq_env.sh`、
+先停 8012 再停 8010、带 `PATH` 前缀重启）：
+
+- `8010 pid=3661653`；`/api/health` 的 `status=ok`；
+- `/proc/<pid>/environ` 的 `PATH` **含** `/home/data/cpq-tools/xvfb-user/root/usr/bin` ✓；
+- 真转两份真实样本（脚本强制核对 `converter_role`）：
+
+| 样本 | status | converter_role | fallback_used | 版本 | 实体 | 图层 | 产物 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | ok | **primary** | false | ODA 27.1 / ACAD2018 | 6711 | 8 | dxf + preview |
+| `圆盘盒.dwg` | ok | **primary** | false | ODA 27.1 / ACAD2018 | 3457 | 32 | dxf + preview |
+
+- 外网侧复核（本机直连）：`http://172.16.10.34:8010/` **200**；`/api/health` 里
+  `cad_converter{available:true, simulated:false, adapter:oda}`。
+- 生产门禁（按 ## 241 修正后的口径：**先 source `cpq_env.sh` 再把 xvfb 目录加进 `PATH`**）：
+  **17 项 auto ok / 0 fail / 2 项 manual 待签字**，`verdict=no_go` 只因为
+  `converter_license` 与 `real_samples_e2e_passed` 两项人工签字没做（口径同 ## 232 / ## 234 / ## 236 / ## 239）。
+
+### 说明
+
+- 本次部署把 34 带到 `fc14330`，该提交在分支上位于并行会话 ## 238–241 之后，属正常快进，
+  没有覆盖或回退任何人的改动。
+- 能力声明仍只能写：**DWG 编排能力完成，真实转换能力未验收**；
+  图纸零件这条线的下游闭环停在"Spec + 红测"（实现见五份提示词，尚未开始）。
