@@ -131,7 +131,12 @@
    `verdict=no_go`。本门禁照它的**输出形状与退出码**做，但 `parts_demo_script` 未签字只体现在
    `summary.manual`（status 仍是 `manual_unacknowledged`，绝不自动置 `ok`），否则 §10 要求的
    "`--env local` 退出码 0"与 B4 的"无 fail → verdict=go"就无法同时成立。
-3. **`--env production` 下 skip 一律算 fail**（与既有门禁一致）；本机没有样本目录或没有 `dwg2dxf`
-   时按 skip 处理，`--env local` 不因此变红，但消息里写清"放上样本 / 装上 libredwg 再跑"。
+3. **`--env production` 下 skip 一律算 fail**（与既有门禁一致）；本机没有样本目录或**一个可用的 DWG
+   转换器都没有**时按 skip 处理，`--env local` 不因此变红，但消息里写清"放上样本 / 装上转换器再跑"。
+   **转换器按应用的能力判，不按 PATH 判**：线上 34 只装了 ODA（`DWG_CONVERTER_BINARY`），没有
+   libredwg 的 `dwg2dxf`，所以 `parts_outline_real_sample` 优先走 `cad_converter.convert_drawing()`
+   （与 8010 同一条链路），只有在应用内转换器不可用/转不动时才回退 `dwg2dxf`。否则门禁在线上会以
+   "本机没有 dwg2dxf" 为由 skip → 生产判 fail，把"能力成立"误报成 no-go。门禁专用项目 id
+   `packaging-parts-gate`，产物 / 清单 / 审计全部重定向到临时目录，真实项目数据一个字节不动。
 4. **当前级别写在 `DEPLOYMENT.md`**：`L2（可信）`；L3 需要人工签字的 `parts_demo_script` +
    两份样本各一件可算/可挤出，未签字不得声明。

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -87,15 +88,134 @@ def _check_outline_engine(_env: str) -> dict:
                       "/".join(packaging_parts.OUTLINE_STATUSES)))
 
 
+#: 门禁自带的转换宿主项目 id：产物只落临时目录，不进任何真实项目。
+GATE_PROJECT_ID = "packaging-parts-gate"
+
+
+@contextlib.contextmanager
+def _temp_converter_store(root: Path):
+    """把转换器的产物 / 清单 / 审计重定向到临时目录（真实项目数据一个字节都不动）。"""
+    from tech_app.backend.services.cad_converter import persistence
+
+    names = ("artifact_dir", "save_artifact", "save_manifest", "load_manifest",
+             "list_manifests", "sync", "audit")
+    saved = {name: getattr(persistence, name) for name in names}
+    manifests = {}
+
+    def artifact_dir(project_id, conversion_id):
+        target = root / str(project_id) / str(conversion_id)
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def save_artifact(project_id, conversion_id, filename, data):
+        payload = bytes(data)
+        target = artifact_dir(project_id, conversion_id) / Path(str(filename)).name
+        target.write_bytes(payload)
+        return {"filename": target.name, "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest()}
+
+    def save_manifest(project_id, manifest):
+        manifests[str(manifest.get("conversion_id"))] = dict(manifest)
+        return dict(manifest)
+
+    def load_manifest(project_id, conversion_id):
+        item = manifests.get(str(conversion_id))
+        return dict(item) if item else None
+
+    def list_manifests(project_id):
+        return [dict(item) for item in reversed(list(manifests.values()))]
+
+    def sync(project_id, conversion_id):
+        return None
+
+    def audit(project_id, action, detail=None):
+        return None
+
+    persistence.artifact_dir = artifact_dir
+    persistence.save_artifact = save_artifact
+    persistence.save_manifest = save_manifest
+    persistence.load_manifest = load_manifest
+    persistence.list_manifests = list_manifests
+    persistence.sync = sync
+    persistence.audit = audit
+    try:
+        yield manifests
+    finally:
+        for name, fn in saved.items():
+            setattr(persistence, name, fn)
+
+
+def _app_converted_dxf(path: Path) -> bytes:
+    """用**应用内转换器**（与线上 8010 同一条链路）把样本转成 DXF 字节。
+
+    线上只装了 ODA、没有 libredwg 的 `dwg2dxf`，门禁必须按应用的转换能力判，不许按
+    PATH 里有没有某个命令行工具判。产物只落临时目录。
+    """
+    from tech_app.backend.services import cad_converter
+
+    root = Path(tempfile.mkdtemp())
+    with _temp_converter_store(root):
+        manifest = cad_converter.convert_drawing(GATE_PROJECT_ID, path.name,
+                                                 path.read_bytes())
+        if bool(manifest.get("is_simulated")):
+            raise RuntimeError("应用内转换器只有模拟实现（is_simulated=true）")
+        outputs = [row for row in (manifest.get("output_files") or [])
+                   if str(row.get("role") or "") == "dxf"]
+        if not outputs:
+            raise RuntimeError("转换产物里没有 DXF（status=%s）"
+                               % str(manifest.get("status") or ""))
+        filename = Path(str(outputs[0].get("filename") or "drawing.dxf")).name
+        target = root / GATE_PROJECT_ID / str(manifest.get("conversion_id") or "") / filename
+        return target.read_bytes()
+
+
+def _libredwg_dxf(path: Path) -> bytes:
+    """回退路径：本机有 libredwg 的 `dwg2dxf` 时用它转（只在应用内转换器不可用时）。"""
+    tool = shutil.which("dwg2dxf")
+    if not tool:
+        raise RuntimeError("本机没有 libredwg 的 dwg2dxf")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    target = Path(tempfile.mkdtemp()) / ("gate_%s.dxf" % digest)
+    subprocess.run([tool, "-y", "-o", str(target), str(path)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return target.read_bytes()
+
+
+def _converter_gap() -> str:
+    """没有任何可用的 DWG 转换器时返回原因（用于 skip 文案），否则返回空串。"""
+    from tech_app.backend.services import cad_converter
+
+    notes = []
+    try:
+        cap = cad_converter.capability() or {}
+    except Exception as exc:                              # noqa: BLE001 - 探测失败如实报
+        cap = {}
+        notes.append("应用内转换器探测失败（%s）" % type(exc).__name__)
+    if bool(cap.get("available")) and not bool(cap.get("simulated")):
+        return ""
+    notes.append("应用内转换器可用=%s 模拟=%s" % (bool(cap.get("available")),
+                                                  bool(cap.get("simulated"))))
+    if shutil.which("dwg2dxf"):
+        return ""
+    notes.append("本机也没有 libredwg 的 dwg2dxf")
+    return "；".join(notes)
+
+
+def _sample_dxf(path: Path) -> tuple:
+    """样本 → (DXF 字节, 用了哪个转换器)：先应用内转换器，再回退 dwg2dxf。"""
+    try:
+        return _app_converted_dxf(path), "应用内转换器"
+    except Exception as exc:                              # noqa: BLE001 - 回退前如实记录
+        app_note = "应用内转换器转不动（%s：%s）" % (type(exc).__name__, exc)
+    return _libredwg_dxf(path), "dwg2dxf（%s）" % app_note
+
+
 def _sample_metrics(path: Path) -> dict:
     """把一份样本真跑到零件文档（DWG → DXF → CAD IR → 零件），返回指标。"""
     from tech_app.backend.services import cad_ir, packaging_part_solids, packaging_parts
 
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    target = Path(tempfile.mkdtemp()) / ("gate_%s.dxf" % digest)
-    subprocess.run(["dwg2dxf", "-y", "-o", str(target), str(path)], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ir = cad_ir.parse_dxf(target.read_bytes(), filename=target.name,
+    content, converter = _sample_dxf(path)
+    ir = cad_ir.parse_dxf(content, filename="gate_sample.dxf",
                           source={"kind": "dxf_2d", "attachment_name": path.name})
     doc = packaging_parts.extract(ir)
     summary = packaging_parts.summarize(doc)
@@ -105,6 +225,7 @@ def _sample_metrics(path: Path) -> dict:
     summary["solid_total"] = sum(1 for row in rows
                                  if packaging_part_solids.extrude(row).get("status") == "ok")
     summary["part_total"] = len(rows)
+    summary["dxf_source"] = converter
     return summary
 
 
@@ -112,9 +233,10 @@ def _check_outline_real_sample(_env: str) -> dict:
     if not SAMPLES_DIR.is_dir():
         return _result("parts_outline_real_sample", "auto", "skip",
                        "本机没有真实样本目录 %s，跳过（放上两份样本后再跑）" % SAMPLES_DIR.name)
-    if not shutil.which("dwg2dxf"):
+    gap = _converter_gap()
+    if gap:
         return _result("parts_outline_real_sample", "auto", "skip",
-                       "本机没有 libredwg 的 dwg2dxf，跳过真实样本门槛")
+                       "本机没有可用的 DWG 转换器（%s），跳过真实样本门槛" % gap)
     bad = []
     lines = []
     for name, wanted in THRESHOLDS.items():
@@ -125,11 +247,12 @@ def _check_outline_real_sample(_env: str) -> dict:
         try:
             metrics = _sample_metrics(sample)
         except Exception as exc:                          # noqa: BLE001 - 检查失败如实报
-            bad.append("%s：跑不动（%s）" % (name, type(exc).__name__))
+            bad.append("%s：跑不动（%s：%s）" % (name, type(exc).__name__, exc))
             continue
-        lines.append("%s closed_ratio=%.3f role_known_ratio=%.3f 可算 %d 可挤出 %d"
+        lines.append("%s closed_ratio=%.3f role_known_ratio=%.3f 可算 %d 可挤出 %d（%s）"
                      % (name, metrics["closed_ratio"], metrics["role_known_ratio"],
-                        metrics["processable_total"], metrics["solid_total"]))
+                        metrics["processable_total"], metrics["solid_total"],
+                        metrics.get("dxf_source") or ""))
         for key, floor in wanted.items():
             if float(metrics.get(key) or 0.0) < float(floor):
                 bad.append("%s：%s=%.3f < 门槛 %.2f" % (name, key,

@@ -754,8 +754,11 @@ cd /home/wugefei/CPQ/cpq_agent
   --ack parts_demo_script=<签字人>
 ```
 
-门禁**只读**：不连库、不写字、不调模型、不联网；`parts_outline_real_sample` 在没有样本或
-没有 `dwg2dxf` 的本机会 `skip`（`--env production` 下 skip 一律算失败）。
+门禁**只读**：不连库、不调模型、不联网，真实项目数据一个字节不写（转换产物 / 清单 / 审计全落到
+临时目录，项目 id 固定为 `packaging-parts-gate`）；`parts_outline_real_sample` 在没有样本或**一个可用
+的 DWG 转换器都没有**的本机会 `skip`（`--env production` 下 skip 一律算失败）。它按**应用的能力**判：
+优先走 `cad_converter.convert_drawing()`（与 8010 同一条链路），只有应用内转换器不可用时才回退
+`dwg2dxf`——所以线上（只有 ODA、没有 libredwg）这一项也能真跑，不会以"没有 dwg2dxf"误报 no-go。
 
 部署自检（`scripts/deploy_34_bare.sh` 第 6 步）会打一遍「零件文档 → 单件详情 → 闭合件试挤出」。
 样本项目 id **必须由用户提供**，脚本不猜项目、也不拿生产项目当试验田：
