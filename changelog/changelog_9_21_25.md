@@ -7818,3 +7818,112 @@ GET /api/quick-quote/cases（直调 handler）→ ok=true，case_total=2，eligi
 盒型表，不是案例表）与 `裕同包装项目-待开发/`。
 回归：`test_quick_quote_mode_and_case_model_red` + `case_retrieval` 75 OK、
 `field_workspace` + `generation` + `file_parsing` 136 OK（skipped=1），零新增红。
+
+## 245. 包装零件门禁改按"应用的转换能力"判 + 提交 / 推送双远端 + 部署 34 并当场复验（fafb1dd）（9-21，Codex 实现 + 部署）
+
+### 为什么要改：线上门禁在说假话
+
+`packaging_parts_gate.parts_outline_real_sample` 原来只在 `shutil.which("dwg2dxf")` 命中时才真跑两份
+样本，否则 `skip` —— 而 `--env production` 下 skip 一律算 fail。34 上只装了 ODA（`DWG_CONVERTER_BINARY`
+指向 `oda-file-converter-27.1/.../AppRun`），**没有 libredwg**，于是同一个脚本在本机 `go`、在线上
+`no_go`，把"能力其实成立"误报成"没装转换器"。这与本仓已有的"能力事实只有一个来源"口径（
+`dwg-capability-truth-and-audit.md` §3 C6）直接冲突：门禁必须问应用，不许问 PATH。
+
+### 改法（只动门禁 + 两份文档）
+
+`tech_app/tools/packaging_parts_gate.py`：
+
+- 新增 `_app_converted_dxf()`：优先走 **`cad_converter.convert_drawing()`**（与 8010 同一条链路、
+  同一套 `DWG_CONVERTER_*` 解析）；`_libredwg_dxf()` 只在应用内转换器不可用 / 转不动时才回退；
+- 新增 `_converter_gap()`：只有"应用内转换器不可用**且** PATH 里也没有 `dwg2dxf`"才给 `skip` 文案；
+- 门禁专用项目 id **`packaging-parts-gate`**，产物 / 清单 / 审计经 `_temp_converter_store()`
+  全部重定向到临时目录（`persist` 层同 `dwg_sample_e2e.py` 的做法）——**真实项目数据一个字节不写**，
+  C 组的只读断言（无 `open(` / `write_text` / `save_parts` / `put_doc` / 任何库连接）保持通过；
+- **拒收模拟转换器**：`is_simulated=true` 的产物不算证据，直接按"转不动"处理；
+- 失败消息带上真实异常文本（原来只打 `type(exc).__name__`，现场看不出原因）；样本行里注明用了哪个
+  转换器。
+
+文档回写（口径变了就必须改原文，不是加注释）：
+
+- `docs/specs/packaging-parts-downstream-acceptance.md` §11.3：把"没有 `dwg2dxf` 就 skip"改成
+  "一个可用转换器都没有才 skip"，并写明"按应用能力判、优先 `convert_drawing()`、产物只落临时目录"；
+- `DEPLOYMENT.md`（门禁小节）：同步这条口径。
+
+### 验收（本地）
+
+| 命令 | 结果 |
+| --- | --- |
+| `python -m unittest tests.test_packaging_parts_downstream_gate_red` | **Ran 17 tests OK** |
+| `python tech_app/tools/packaging_parts_gate.py --env local` | `ok 5 / fail 0 / manual 1`、`verdict=go`（退出码 0） |
+
+本地真实样本项原文：`两份样本过门槛：酒盒.dwg closed_ratio=0.797 role_known_ratio=0.000 可算 4 可挤出 1
+（应用内转换器）；圆盘盒.dwg closed_ratio=0.889 role_known_ratio=0.111 可算 1 可挤出 7（应用内转换器）`。
+
+### 提交 / 推送 / 部署
+
+- 提交 **`fafb1dd`**「包装零件门禁按应用转换器判：线上只有 ODA 也能真跑真实样本门槛」（3 个文件，
+  +145/−14：门禁脚本 + Spec §11.3 + DEPLOYMENT.md）。
+- 推送：GitLab `gitlab/ytbz` `47ea407..fafb1dd` ✓；GitHub `origin/ytbz` `47ea407..fafb1dd` ✓。
+  纯快进，**未创建 MR / tag / Release**。
+- 部署 34：`47ea407 → fafb1dd`，`health：status=ok`，`8010 pid=3904171`，
+  `/proc/<pid>/environ` 的 `PATH` 含 `/home/data/cpq-tools/xvfb-user/root/usr/bin` ✓；
+  脚本第 5 步真转两份样本均为 `converter_role=primary`、`fallback_used=false`、ODA 27.1 / ACAD2018
+  （酒盒 6711 实体 / 8 图层；圆盘盒 3457 实体 / 32 图层），`dxf + preview` 齐全。
+
+### 34 上当场复验（fafb1dd，只读）
+
+门禁（`--env production`，先 source `cpq_env.sh` 再把 xvfb 目录加进 `PATH`）：
+
+| 跑法 | 结果 |
+| --- | --- |
+| 不签字 | `verdict=go`，`ok 5 / fail 0 / manual 1 / skip 0`（只有 `parts_demo_script` 待签字） |
+| `--ack parts_demo_script=wugefei` | `verdict=go`，`ok 5 / acknowledged 1 / fail 0` |
+
+`parts_outline_real_sample` 在线上**不再是 skip**，而是真跑出来的 ok：
+
+```
+酒盒.dwg   closed_ratio=0.797  role_known_ratio=0.000  可算 4  可挤出 1（应用内转换器）
+圆盘盒.dwg closed_ratio=0.889  role_known_ratio=0.111  可算 1  可挤出 7（应用内转换器）
+```
+
+34 上直接跑"转换 → CAD IR → 零件 → 工艺 / 挤出"（与本地逐项同值，证明线上解析 DWG 的能力就是本地
+那份能力）：
+
+| 样本 | 转换 | 分量 | 零件 | closed_ratio | role_known | size_source_mix | 可算 | 可挤出 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | primary / 27.1 / 无回退 | 402 | 64 | 0.797 | 0.000 | closed_outline 51 / component_bbox 13 | 4 | 1 |
+| `圆盘盒.dwg` | primary / 27.1 / 无回退 | 14 | 9 | 0.889 | 0.111 | closed_outline 8 / component_bbox 1 | 1 | 7 |
+
+样例件：酒盒 `DWG-P07`（2mm 灰板，可算）/ `DWG-P35` 挤出 12 面、`volume_mm3=84729.3235`；
+圆盘盒 `DWG-P04`（可算）/ `DWG-P02` 挤出 20 面、`volume_mm3=392413.0`。
+
+**未做**：34 上 `tech_app/data/*/packaging_parts.json` 目前**一个都没有**（还没人在线上点过"一键解析"），
+所以 `scripts/deploy_34_bare.sh` 第 6 步（下游连通自检）按设计 skip。**没有为验证去创建试验项目**
+（不拿生产数据当试验田）。要跑那一步只需给一个真实项目 id：
+
+```bash
+# 在 34 上（样本项目必须已经跑过一键解析，即已有 packaging_parts.json）
+CPQ_PARTS_PROJECT_ID=<项目id> bash scripts/deploy_34_bare.sh ytbz
+```
+
+### 用户可照抄的跑法（两个坑）
+
+```bash
+ssh wugefei@172.16.10.34
+cd /home/wugefei/CPQ/cpq_agent
+set -a; . /home/wugefei/CPQ/cpq_env.sh; set +a           # ① 不 source 就探不到转换器
+export PATH="/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH"   # ② xvfb-run 按名字调同目录的 Xvfb
+./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env production --json
+./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env production \
+  --ack parts_demo_script=<签字人> --json      # 演示脚本签字后 manual 归 0
+```
+
+### 边界
+
+- 未改任何 `tests/` 文件、未改任何业务实现（第 1～4 层与后端一行未动）、未改 `dwg_deploy_gate.py` /
+  `kb_deploy_preflight.py` / `dwg_acceptance.py` 的既有口径。
+- **未引入任何新依赖**（只用了标准库 `contextlib` 与仓内既有的 `cad_converter`）。
+- 未连任何数据库、未写生产数据、未改需求状态、未创建项目、未重启用户服务（只按部署脚本重启了 8010）。
+- 未动未跟踪的 `scripts/tmp_import_dwg_cases.py`、`scripts/import_dwg_quick_quote_cases.py`、
+  `裕同包装项目-待开发/`（客户真实样本）。
+- 能力声明口径不变：**L2（可信）**，未签字不得声明 L3（`DEPLOYMENT.md` 三级表）。
