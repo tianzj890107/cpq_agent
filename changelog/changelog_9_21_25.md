@@ -6382,18 +6382,18 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
   `detail.action` 非空 / 字段看板 `['inner_length','inner_width']`；`node --check` 三个前端
   文件通过。
 
-### 已知冲突（**未自行改测试，需测试所有者裁决**）
+### 冻结闭集的更新（测试所有者已改，本实现方**没碰任何测试文件**）
 
-`docs/specs/packaging-dwg-parts-extraction.md` C6 要求把 `parts_extract` 插进
-`packaging_drawing_flow.model.STEP_IDS`（见 ## 228），而更早的
-`packaging-drawing-flow.md` 把「七步闭集」写死进了两处红测：
+「要新增一个步骤 / 一个事件」必然要动旧 Spec 冻结的闭集，这类更新一律由测试所有者做：
 
-- `tests/test_packaging_drawing_flow_red.py` 8 条（`a2/a3/a4/a5/d14/e26/f16/f29`，全部是
-  `len(expected)==7` 型断言）；
-- `tests/test_drawing_flow_error_taxonomy_red.py::test_d2_step_contract_unchanged` 1 条。
-
-这 9 条在 ## 228 落地后由绿转红，原因是"闭集变成八步"，不是行为回归。按纪律**没有修改任何
-测试文件**；需要测试所有者把这两处的七步闭集更新为八步（或裁定去掉 C6）。
+- 步骤闭集：`tests/test_packaging_drawing_flow_red.py` 与
+  `tests/test_drawing_flow_error_taxonomy_red.py` 已在工作区由测试所有者更新为**八步**
+  （注释写明依据 `packaging-dwg-parts-extraction.md` §4）—— 现在这两套 `54 OK(1 skip)` /
+  `14 OK`。
+- 事件闭集：`tests/test_tech_params_autofill_and_soft_gates_red.py::test_protocol_events_unchanged`
+  **仍是旧的 8 事件列表**，本批按 ## 226 Spec C3「`task-blocked` 是新增一个、不是改旧」加了
+  `task-blocked`，于是这条由绿转红 —— 需要与 ## 85 那次 `task-partial` 同样的**一行更新**
+  （把 `"task-blocked"` 加进那个 `sorted([...])` 列表）。本实现方按纪律未改测试文件。
 
 ### 未做 / 遗留
 
@@ -6456,9 +6456,9 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
   `Ran 32 tests ... OK`（H 组用真实 `酒盒.dwg` 真跑，不是 skip）。
 - 保护网全绿：`packaging_semantics_red 59 OK(1 skip)`、`packaging_parametric_bom_red 57 OK`、
   `packaging_cost_engine_red 81 OK`、`packaging_cost_red_closure_red 14 OK(1 skip)`、
-  `dxf_cad_ir_red + dwg_final_acceptance_red 99 OK`、`packaging_parts_extraction_red.D5 OK`、
-  `packaging_drawing_flow_red 54` 与 `drawing_flow_error_taxonomy_red 14` 见 ## 227 末尾的
-  「已知冲突」（八步闭集，9 条旧断言逐字冻结在旧 Spec 上）。
+  `dxf_cad_ir_red + dwg_final_acceptance_red 99 OK`、
+  `packaging_drawing_flow_red 54 OK(1 skip)` 与 `drawing_flow_error_taxonomy_red 14 OK`
+  （两套里的"七步闭集"已由测试所有者按本 Spec §4 更新为八步，见 ## 229）。
 - 现场口径（本地两份真样本，686/889 KB → dwg2dxf → cad_ir → semantics → parts）：
   · `酒盒.dwg`：实体 6569 / 图层 8 / **连通分量 402** / 闭合轮廓 2 / 开放轮廓 5598 / 单位
     confirmed → `part_total=64`（截断前 204）、`filtered_total=198`、`truncated=140`、
@@ -6501,3 +6501,84 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
 **26 增 / 4 删**，其余是整文件 `CRLF → LF` 的一次性归一化（HEAD 版本是混行结尾，551 行
 CRLF）。审查该文件请用 `git diff --ignore-cr-at-eol -- tech_app/frontend/agent-chat.js`。
 后续该文件统一按 LF 维护，不再产生同类噪声。
+
+## 230. 提交 / 推送 ytbz 并部署 34（9-21，Codex 执行）
+
+把本批「包装 DWG 零件提取 + 需求不可编辑 + 一键解析终态信号」的可跑通实现落成一次提交并上线。
+
+### 提交（074d4da）
+
+`包装 DWG 零件提取 + 需求不可编辑 + 一键解析终态信号：实现 + Spec/红测入库（## 223–229）`
+（31 个文件：本地 `8b76fa2` → `074d4da`）。逐项内容见 ## 224–229。
+
+- 明确排除、**未入库**：`scripts/tmp_import_dwg_cases.py`（临时脚本）与
+  `裕同包装项目-待开发/`（客户真实样本 DWG）——本机工作区里仍然保留，只是不进仓库。
+- `git diff --check` 干净。
+
+### 推送
+
+| 远端 | 分支 | 结果 | 回读 |
+| --- | --- | --- | --- |
+| GitLab `gitlab` | `ytbz` | `e64c005..074d4da` | `074d4da` ✓ |
+| GitHub `origin` | `ytbz` | `e64c005..074d4da` | `074d4da` ✓ |
+
+两个远端都不需要 `--force`，是纯快进。**没有**创建 MR、tag、Release。
+（`scripts/push_remotes.py` 硬编码只允许从 `20260909` 推送，而 34 的部署线是 `ytbz`，
+因此本次按 ## 217 / ## 220 的既有口径显式推送 `ytbz:ytbz`。）
+
+### 部署 34（ede3439 → 074d4da）
+
+用仓库里的 `scripts/deploy_34_bare.sh`（34 上以 `wugefei` 身份执行；脚本先 fetch + `merge --ff-only`，
+再幂等重写仓库外的 `cpq_env.sh`（0600，只打印变量名），然后**先停 8012 子进程、再停 8010 父进程**，
+带 `PATH` 前缀重启）：
+
+- `HEAD ede3439 → 074d4da`；`8010 pid=3161713`；`/api/health` 的 `status=ok`。
+- `8010` 的 `/proc/<pid>/environ` 里 `PATH` **含** `/home/data/cpq-tools/xvfb-user/root/usr/bin` ✓
+  （这条是 ODA 能否真正启动的分水岭，漏了就静默回退 LibreDWG）。
+- 真转两份真实样本（脚本最后一步强制核对 `converter_role`）：
+
+| 样本 | status | converter_role | fallback_used | 版本 | 实体 | 图层 | 产物 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | ok | **primary** | false | ODA 27.1 / ACAD2018 | 6711 | 8 | dxf + preview |
+| `圆盘盒.dwg` | ok | **primary** | false | ODA 27.1 / ACAD2018 | 3457 | 32 | dxf + preview |
+
+- 外网侧复核（本机直接访问）：`http://172.16.10.34:8010/` 200；
+  `/api/health` 里 `cad_converter{available:true, adapter_name:"oda", converter_version:"27.1", version_ok:true}`
+  —— 应用侧事实与部署自检同源。
+- 生产门禁 `tech_app/tools/dwg_deploy_gate.py --env production`（**必须 source `cpq_env.sh`
+  并把 xvfb 目录加进 `PATH` 后再跑**，否则转换器探测会报 `DWG_CONVERTER_NOT_INSTALLED` 把
+  `converter_version_pinned` 误判为 fail）：
+  **17 项 auto ok / 0 fail / 2 项 manual 待签字**，`verdict=no_go` 只因为
+  `converter_license`、`real_samples_e2e_passed` 两项人工签字没做（口径同 ## 217 / ## 220）。
+
+### 本机回归（`./open-claude/.venv/bin/python -m unittest`，全量 211 个套件）
+
+`Ran 4043 tests ... FAILED (failures=234, skipped=17)` —— 234 条**全部**是已知红，零新增、零回归：
+
+| 红测套件 | 条数 | 性质 |
+| --- | --- | --- |
+| `test_quick_quote_{field_workspace,generation,mode_and_case_model,case_retrieval,file_parsing}_red` | 203 | 逆向快速报价五批，**0 实现**（## 213 已入库 Spec + 红测） |
+| `test_packaging_product_outline_red` | 12 | ## 223 图层角色 / 成品轮廓，**0 实现** |
+| `test_process_row_running_info_and_fold_red` | 14 | 既有红 |
+| `test_cpq_eval_ci_contract` | 2 | 既有红 |
+| `test_tech_model_call_row_merged_and_summary_detail_red` | 2 | 既有红 |
+| `test_tech_params_autofill_and_soft_gates_red` | 1 | 既有红 |
+
+本批目标套件全绿：`packaging_parts_extraction_red 32`、`drawing_flow_red 54(1 skip)`、
+`drawing_flow_error_taxonomy_red 14`、`drawing_flow_parse_terminal_signal_red 30`、
+`drawing_flow_requirement_state_red 17`、`drawing_flow_frontend_wiring_red 12`、
+`drawing_board_two_column_parts_and_3d_red 10`、`packaging_parametric_bom_red 57`、
+`packaging_semantics_red 59(1 skip)`、`packaging_cost_engine_red 81`、
+`packaging_cost_red_closure_red 14`。上一轮那 7 条 `packaging_cost_*` 红已随 ## 225 转绿。
+
+### 能力声明（未通过人工签字前只能这么说）
+
+**DWG 编排能力完成，真实转换能力未验收。** 34 上主转换器与两份样本真转都已核到，
+但门禁里 `converter_license` / `real_samples_e2e_passed` 两项人工项仍待用户签字。
+
+### 遗留（不是本次引入，未擅自动）
+
+- `deploy_34_bare.sh` 第 1 步重写 `cpq_env.sh` 时，托管区块前面那行注释标记会被反复追加
+  （每部署一次多两行，纯注释、不影响取值，`PATH` 与 `DWG_CONVERTER_*` 都是重写而非追加）。
+  属部署脚本自身的整洁度问题，下次改脚本时一起收。
+- 真图零件 `role` 仍全是 `unknown`（## 223 未实现）；演示时**不要**展示 2.1 的成品长宽。
