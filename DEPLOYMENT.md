@@ -534,6 +534,55 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 > 「包装行业 DWG 支持完成」写进对外说明；否则一律按 `DWG 编排能力完成，真实转换能力未验收`
 > 如实声明，并在 `blockers` 里列全未完成项，不许用"跳过该项"凑 go。
 
+## 差异价费率的权威口径（逆向快速报价批 8）
+
+差异价规则表 `cpq_kb.kb_quick_quote_delta_rule`（4 条，字段闭集见
+`cpq_quick_quote_workspace.RULE_KINDS`）。**线上现状（2026-09-21 实测）是 4 条演示数据**：
+`source_type=demo` + `review_status=draft`：
+
+```text
+rule_code            field_key        rule_kind  source_type  review_status
+QQQ-DEMO-HOTSTEP     hot_stamping     step       demo         draft
+QQQ-DEMO-LEN-RATE    inner_length     rate       demo         draft
+QQQ-DEMO-PAPER-RATE  face_paper_gsm   rate       demo         draft
+QQQ-DEMO-QTY-BAND    quantity         band       demo         draft
+```
+
+演示费率**不等于**能出正式报价的费率：
+
+- 判定只有一处事实源：`cpq_quick_quote_workspace.rule_authority()`，闭集
+  `AUTHORITATIVE_RATE_SOURCES = ("workbook",)`，判定顺序
+  `no_source → demo_rate → source_not_authoritative → not_reviewed → ok`
+  （`demo` 先于未审核报出来，免得有人靠补审核绕过「来源是演示数据」）；
+- 出价里带 `rate_authority`；非权威时 `warnings` 至少一条点名「演示数据」；
+  `is_formal(quote)` 为假 → `save(quote, formal=True)` **直接抛错、不落库**；
+  缺省 `formal=False` 落的是**试算**（快照带 `rate_authority` + `formal=false`）。
+
+### 怎么换成权威费率（谁改、改成什么）
+
+由**业务签字**后才改：不允许自动升格，也不允许实现方替业务决定费率数值。在能连 PG 的机器上把
+这 4 行改成工作簿口径 —— `source_type='workbook'` + `review_status='reviewed'`，并写
+`source_ref` 指回具体工作簿与工作表：
+
+```sql
+UPDATE cpq_kb.kb_quick_quote_delta_rule
+   SET source_type = 'workbook',
+       review_status = 'reviewed',
+       source_ref = '差异价费率表.xlsx#费率',
+       version = version + 1
+ WHERE rule_code IN ('QQQ-DEMO-HOTSTEP', 'QQQ-DEMO-LEN-RATE',
+                     'QQQ-DEMO-PAPER-RATE', 'QQQ-DEMO-QTY-BAND');
+```
+
+改完重读一次快照确认（`cpq_quick_quote_workspace.authority_summary()` 应回
+`authoritative=true`、`blocked_by=[]`）。
+
+### 换之前页面上长什么样
+
+- `renderQuote()` 的根节点带 `data-qq-rate-authority="trial"`（权威时才 `authoritative`），
+  演示费率的告警逐条渲染成 `data-qq-warning` 节点，**不折叠、不隐藏**；
+- 这价**只能当试算**：能看、能存试算版本、能转精准报价，但不允许按 `formal=True` 落正式版本。
+
 ## 快速报价（标准案例库）
 
 逆向快速报价的**唯一事实源**是三张表：案例表 `cpq_wf.cpq_qq_standard_case`（报价侧，与
@@ -641,6 +690,38 @@ PY
 
 接口与页面都会把"为什么这条不能用"原样显示出来（`reason_code` + 中文原因），
 所以"库里有像的案例但不能用"是可见的，不会假装没有案例。
+
+### 怎么补案例：DWG 实样导入 → 审到「已审核」（批 6，2026-09-21）
+
+`cpq_wf.cpq_qq_standard_case` 现在（2026-09-21）是 **2 行 / eligible = 0** —— 两份 DWG 实样
+（`QQ-YT-DWG-WINE-700ML`、`QQ-YT-DWG-ROUND-10PC`）都是 `dwg_confirmed` + `draft` + 标准单价 0。
+这和"库是空的"在页面上**长得不一样**了：`GET /api/quick-quote/cases` 多回一个 `readiness` 段
+（`verdict ∈ empty / no_eligible / ready`、`headline`、`detail`、`blocked_by`、`next_actions`），
+页面照它渲染空态 / 全不合格态，并给出「转精准报价」出口。
+
+补案例分两步，**都不许编数据**：
+
+```bash
+# ① 把 cpq_kb.kb_packaging_box_type 里 YT-DWG 前缀的盒型（连同零件、工序模板）派生成案例行。
+#    默认 dry-run，只打印将要写什么；--confirm 才落库。幂等：同一 case_code 内容没变不新增行、
+#    不升版本，内容变了才写。
+./open-claude/.venv/bin/python scripts/import_dwg_quick_quote_cases.py
+./open-claude/.venv/bin/python scripts/import_dwg_quick_quote_cases.py \
+    --price <业务口径标准单价> --cost <标准成本> --review-status draft --user <真实账号> --confirm
+
+# ② 审到「已审核」：review_status 必须由人改成 reviewed（工作簿口径的来源才允许进快速报价）。
+#    价格没有就是没有 —— 标准单价留 0，准入如实报「缺必需字段：标准单价」，
+#    页面上这条案例显示为"缺必需字段"而不是"不可用"，按 readiness.blocked_by 补完再回来。
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as c; print(c.library_readiness())"
+```
+
+- **没有价格的案例长什么样**：`standard_price = 0`（列本身是 `NOT NULL DEFAULT 0`），
+  准入 `reason_code = missing_fields`、`fix` 明文写「补齐缺的必需字段：标准单价」；
+  页面那一行「标准单价」显示 `—`、末列显示「缺必需字段」。这条案例**不会**参与报价，
+  但它在库里、可查、可补，`readiness.next_actions` 会给出 `fill_case_fields`。
+- **DWG 实样的出处不丢**：`source_sha256` / `parser_version` / `confirmed_by` / `confirmed_at`
+  四个通道列跟着案例一起入库（批 6 修掉了 `normalize_case()` 丢列、以及空价格写 `None`
+  撞 `NOT NULL` 的两处缺口）。
 
 ### 字段工作区与差异价（批 3）：建表 + 灌费率
 

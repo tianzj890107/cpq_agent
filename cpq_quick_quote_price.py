@@ -350,6 +350,16 @@ def price(baseline, workspace, *, today=None, config=None, rules=None) -> dict:
             warnings.append("基准案例报价 %s 后到期（有效期至 %s）：请尽快确认，"
                             "过期后要重新询价" % (left, valid_until))
 
+    # 费率权威段（Spec 批 8 §2.2）："这价是按什么费率算的"必须是一等字段，不能只埋在 note 文本里。
+    rate_authority = qq_ws.authority_summary(rules=rules)
+    if not rate_authority.get("authoritative"):
+        labels = [str(row.get("label") or row.get("reason_code") or "")
+                  for row in (rate_authority.get("blocked_by") or [])]
+        kind = "演示数据" if any("演示" in label for label in labels) else "非权威费率"
+        warnings.append("费率里有%s：这份报价只能作为流程试算，出价前必须换成权威工作簿费率 —— %s"
+                        % (kind, "；".join(label for label in labels if label)
+                           or str(rate_authority.get("headline") or "")))
+
     case_code = _text(baseline.get("case_code")) or _text(case.get("case_code"))
     risk_notice = ("本报价按标准案例 %s 推导（有效期至 %s，成交日期 %s），预估偏差约 %s%%；"
                    "建议按 %s – %s 元的区间报价并注明依据，客户确认后转精准报价复核。"
@@ -386,6 +396,7 @@ def price(baseline, workspace, *, today=None, config=None, rules=None) -> dict:
         "valid_until": valid_until,
         "rule_versions": sorted(set(rule_versions)),
         "gate": gate,
+        "rate_authority": copy.deepcopy(rate_authority),
         "warnings": warnings,
         "risk_notice": risk_notice,
         "requirement": _requirement_of(current),
@@ -409,15 +420,53 @@ def _require_writer(user, action: str) -> str:
     return role
 
 
-def save(quote, *, user=None, session_id="", previous=None) -> dict:
+def is_formal(quote) -> bool:
+    """这份报价能不能当**正式报价**（Spec 批 8 §2.2）。
+
+    三条同时成立才算：费率全权威、`authoritative_total > 0`、没有任何费率告警。
+    演示费率的价永远只能算试算 —— 不给"看起来像正式版"的机会。
+    """
+    q = quote if isinstance(quote, dict) else {}
+    authority = q.get("rate_authority") if isinstance(q.get("rate_authority"), dict) else {}
+    if not authority.get("authoritative"):
+        return False
+    try:
+        total = int(authority.get("authoritative_total") or 0)
+    except (TypeError, ValueError):
+        return False
+    if total <= 0:
+        return False
+    for item in (q.get("warnings") or []):
+        text = _text(item)
+        if "费率" in text and ("演示" in text or "非权威" in text):
+            return False
+    return True
+
+
+def save(quote, *, user=None, session_id="", previous=None, formal=False) -> dict:
     """把快速报价写进卡片第 2 步快照的 `quick_quote_price` 段（Spec §2.5）。
 
     `previous` 传上一版（同一 `quick_quote_id`）时版本号递增；不读库，版本口径由调用方给。
+
+    `formal=False`（缺省）落的是**试算**：快照里带 `rate_authority` 与 `formal=False`，
+    事后能看出这价是按演示费率算的；`formal=True` 且费率不权威 → 抛错且**不落库**
+    （Spec 批 8 §2.2：不允许把演示费率的价落成正式报价版本）。
     """
     _require_writer(user, "落快速报价版本")
     session_id = _text(session_id)
     if not session_id:
         raise QuickQuoteError("缺少报价会话，请先保存报价卡片")
+    if formal and not is_formal(quote):
+        authority = (quote or {}).get("rate_authority") if isinstance(quote, dict) else None
+        authority = authority if isinstance(authority, dict) else {}
+        reasons = "；".join(str(row.get("label") or row.get("reason_code") or "")
+                           for row in (authority.get("blocked_by") or []))
+        raise QuickQuoteError(
+            "这份报价用的费率不是权威费率，不能作为正式报价落库：%s。"
+            "请先把 kb_quick_quote_delta_rule 换成权威工作簿费率（source_type=workbook + "
+            "review_status=reviewed），或改存试算（formal=False）"
+            % (reasons or str(authority.get("headline") or "费率不是权威来源")),
+            409, "rate_not_authoritative")
     payload = copy.deepcopy(quote or {})
     if not payload.get("quick_quote_id"):
         payload["quick_quote_id"] = quote_fingerprint(payload)[:16]
@@ -427,6 +476,8 @@ def save(quote, *, user=None, session_id="", previous=None) -> dict:
     payload["saved_by"] = {"user_id": _text((user or {}).get("user_id")),
                            "username": _text((user or {}).get("username")),
                            "role_code": _text((user or {}).get("role_code"))}
+    payload["rate_authority"] = copy.deepcopy(payload.get("rate_authority") or {})
+    payload["formal"] = bool(formal)
     payload["saved_at"] = dt.datetime.now().isoformat(timespec="seconds")
     merged = cpq_wf.merge_step_snapshot(session_id, QUOTE_STEP, {QUOTE_KEY: payload}) or {}
     return {"ok": True, "quick_quote_id": payload["quick_quote_id"],

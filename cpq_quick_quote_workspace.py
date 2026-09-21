@@ -52,6 +52,20 @@ DELTA_RULE_TABLE = "kb_quick_quote_delta_rule"
 DELTA_RULE_KEYS = ("rule_code",)
 RULE_KINDS = ("rate", "step", "band", "direct")
 EDIT_SOURCES = ("workspace", "agent")
+
+#: 能用于**正式报价**的费率来源（唯一闭集）。演示数据与未分类永远不行（Spec 批 8 §2.1）。
+AUTHORITATIVE_RATE_SOURCES = ("workbook",)
+#: 费率权威原因的稳定码（`ok` 排第一）。
+RATE_AUTHORITY_REASONS = ("ok", "demo_rate", "not_reviewed",
+                          "source_not_authoritative", "no_source")
+#: 每个码一句中文（接口与前端共用；前端不许自己造第二份文案）。
+RATE_AUTHORITY_LABELS = {
+    "ok": "权威工作簿费率（source_type=workbook 且 review_status=reviewed），可用于正式报价",
+    "demo_rate": "演示数据（source_type=demo）：只用于流程试算，出价前必须换成权威费率",
+    "not_reviewed": "费率未审核（review_status 不是 reviewed）：审核通过前不能用于正式报价",
+    "source_not_authoritative": "费率来源不是权威工作簿（正式报价只认 source_type=workbook）",
+    "no_source": "没有可判定的费率来源（规则行缺失或缺 rule_code）",
+}
 WRITE_ROLES = cpq_packaging_quote.WRITE_ROLES     # 复用既有闭集，不新造（Spec §2.5）
 
 #: 字段规格（唯一事实源）：右侧工作区靠它渲染控件、做单位与范围校验。
@@ -176,6 +190,69 @@ def load_rules(rules=None) -> List[dict]:
     return rows
 
 
+def rule_authority(rule) -> dict:
+    """这条费率能不能用于**正式报价**（Spec 批 8 §2.1）。
+
+    判定顺序（先命中先返回，同输入同输出）：``no_source`` → ``demo_rate`` →
+    ``source_not_authoritative`` → ``not_reviewed`` → ``ok``。``demo`` 必须先于
+    ``not_reviewed`` 报出来 —— 否则会有人去补审核、绕过「来源是演示数据」这件事。
+    """
+    if not isinstance(rule, dict) or not _text(rule.get("rule_code")):
+        return _authority_verdict("no_source")
+    source = _text(rule.get("source_type")).lower()
+    if source == "demo":
+        return _authority_verdict("demo_rate")
+    if source not in AUTHORITATIVE_RATE_SOURCES:
+        return _authority_verdict("source_not_authoritative")
+    if _text(rule.get("review_status")).lower() != "reviewed":
+        return _authority_verdict("not_reviewed")
+    return _authority_verdict("ok")
+
+
+def _authority_verdict(code: str) -> dict:
+    return {"authoritative": code == "ok", "reason_code": code,
+            "reason": RATE_AUTHORITY_LABELS.get(code, "")}
+
+
+def authority_summary(rules=None) -> dict:
+    """整份费率的权威性总览（Spec 批 8 §2.1）。
+
+    `rules=None` → 走 `load_rules(None)`：读不到照样抛 `CaseLibraryUnavailable`，
+    **绝不回落**成"没有费率告警"（否则演示费率会被当成权威费率）。
+    """
+    rows = load_rules(rules)
+    total = len(rows)
+    authoritative_total = 0
+    groups: Dict[str, List[str]] = {}
+    for row in rows:
+        verdict = rule_authority(row)
+        if verdict["authoritative"]:
+            authoritative_total += 1
+            continue
+        groups.setdefault(verdict["reason_code"], []).append(_text(row.get("rule_code")))
+    blocked = [{"reason_code": code, "label": RATE_AUTHORITY_LABELS.get(code, ""),
+                "count": len(codes), "codes": sorted(codes)}
+               for code, codes in groups.items()]
+    blocked.sort(key=lambda item: (-item["count"], item["reason_code"]))
+    authoritative = total > 0 and authoritative_total == total
+    if "demo_rate" in groups:
+        headline = ("差异价费率里有 %d 条是**演示数据**（source_type=demo）：这份报价只能当流程试算"
+                    % len(groups["demo_rate"]))
+    elif authoritative:
+        headline = "差异价费率 %d 条全部来自权威工作簿（workbook + reviewed），可用于正式报价" % total
+    else:
+        headline = ("差异价费率有 %d 条不能用于正式报价（共 %d 条）"
+                    % (total - authoritative_total, total))
+    if authoritative:
+        detail = "费率来源与审核状态都满足正式报价要求（权威 = source_type=workbook 且 review_status=reviewed）"
+    else:
+        detail = ("非权威费率只能用于流程试算，出价前必须换成权威工作簿费率"
+                  "（source_type=workbook 且 review_status=reviewed，并写明 source_ref 指向工作簿与工作表）")
+    return {"rule_total": total, "authoritative_total": authoritative_total,
+            "authoritative": authoritative, "blocked_by": blocked,
+            "headline": headline, "detail": detail}
+
+
 def _rule_window(row, today) -> dict:
     """规则有效期判定（与批 1 有效期同口径）。"""
     start = _date(row.get("effective_from"))
@@ -290,7 +367,9 @@ def delta_price(field_key, base_value, current_value, *, rules=None,
            "rule_version": row.get("version") if row else None,
            "rule_kind": row["rule_kind"] if row else "",
            "unit": row["unit"] if row else "",
-           "formula": "", "note": picked["note"]}
+           "formula": "", "note": picked["note"],
+           # 费率权威段（Spec 批 8 §2.1）：没有规则 → no_source，绝不是「没问题」。
+           "rate_authority": rule_authority(row)}
     if row is None:
         return out
 
@@ -637,6 +716,7 @@ def diff_table(workspace, *, rules=None) -> List[dict]:
             "rule_version": priced["rule_version"],
             "formula": priced["formula"],
             "note": priced["note"],
+            "rate_authority": copy.deepcopy(priced["rate_authority"]),
         })
     return rows
 

@@ -1828,6 +1828,15 @@ def _handle_quick_quote_cases(params=None) -> dict:
                 "quote_modes": _quick_quote_modes(),
                 "steps": _quick_quote_steps(),
                 "cases": [], "case": {}, "case_total": 0, "eligible_total": 0,
+                # 读不到库**不许装成"空库"**：空库是"从来没有可复用的成交经验"，
+                # 处置完全不同（一个去修连接，一个去导入案例）。verdict="unavailable"
+                # 不属于三态（那是"库读到了、库里是什么样"），前端必须照实显示。
+                "readiness": {"verdict": "unavailable", "headline": "案例库读不到",
+                              "detail": str(exc), "case_total": None, "eligible_total": None,
+                              "blocked_by": [], "next_actions": [
+                                  {"action": "transfer_to_precise",
+                                   "label": "转精准报价",
+                                   "hint": "案例库读不到时不耽误出价：改走精准报价"}]},
                 "notes": list(_QUICK_QUOTE_NOTES)}
     return {
         "ok": True,
@@ -1839,6 +1848,9 @@ def _handle_quick_quote_cases(params=None) -> dict:
         "case": cpq_quick_quote_case.find_case(wanted, cases=rows) if wanted else {},
         "case_total": len(rows),
         "eligible_total": len([row for row in rows if row.get("eligible")]),
+        # 现状话术只由 `library_readiness()` 给（接口 / 前端 / CLI 同一份）：
+        # "库是空的"与"有 2 条但 0 条可用"必须分得开。用已经取到的 rows，不再读一次库。
+        "readiness": cpq_quick_quote_case.library_readiness(rows),
         "notes": list(_QUICK_QUOTE_NOTES),
     }
 

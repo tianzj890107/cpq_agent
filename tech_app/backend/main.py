@@ -85,6 +85,7 @@ from .services import (
     project_access,
     cad_converter,
     cad_ir,
+    unified_parse,
     dwg_dispatch,
     step_import,
     summary as summary_svc, tasks, timeline, tree,
@@ -934,6 +935,31 @@ def cad_converter_capability():
     而不是留一句写死的「已安装」。返回的是**能力**，不含任何密钥或部署路径。
     """
     return cad_converter.capability()
+
+
+@app.get("/api/file/parse/capability")
+def file_parse_capability():
+    """统一解析服务能力（逆向快速报价批 7 Spec §2.5）。
+
+    免登录：报价侧的快速通道是纯 HTTP 客户端（经 8010 反代到本服务），没有用户会话，
+    与 /api/capabilities/cad-converter 同类。返回的是**能力**，不含路径与密钥。
+    """
+    return unified_parse.capability()
+
+
+@app.post("/api/file/parse")
+def file_parse(payload: dict = Body(...)):
+    """统一解析服务：一份 DWG / DXF → 快速报价所需字段（批 7 Spec §2.5）。
+
+    只读：不建业务项目、不写需求 / 零件 / 成本记录；转换产物落**隔离解析项目**目录。
+    失败按 ParseError 的稳定码回 `{ok:false, code, error, advice}`，http_status 原样透传。
+    """
+    try:
+        return unified_parse.parse_payload(payload)
+    except unified_parse.ParseError as exc:
+        return JSONResponse(status_code=exc.http_status,
+                            content={"ok": False, "code": exc.code,
+                                     "error": str(exc), "advice": exc.advice})
 
 
 @app.get("/api/projects/{pid}/drawing-routing")

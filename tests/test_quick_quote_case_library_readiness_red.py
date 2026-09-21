@@ -88,6 +88,12 @@ class Base(unittest.TestCase):
             self.fail("%s.case_fix_plan() 缺失（Spec 批 6 §2.2）" % MODULE_NAME)
         return fn(case)
 
+    def meta(self, module, name):
+        """按名取模块常量（A 组与 E 组都用；2026-09-21 修：原来只定义在 TestANaming 上，
+        E 组调用它一律 AttributeError —— 夹具笔误，不是缺口）。"""
+        self.assertTrue(hasattr(module, name), "%s.%s 缺失（Spec §2.1/§2.2）" % (MODULE_NAME, name))
+        return getattr(module, name)
+
 
 # --------------------------------------------------------------------------- #
 # A 组：命名契约
@@ -103,10 +109,6 @@ class TestANaming(Base):
                          tuple(self.meta(module, "READINESS_ACTIONS")))
         self.assertEqual(("fill", "review", "extend", "retire"),
                          tuple(self.meta(module, "CASE_FIX_KINDS")))
-
-    def meta(self, module, name):
-        self.assertTrue(hasattr(module, name), "%s.%s 缺失（Spec §2.1/§2.2）" % (MODULE_NAME, name))
-        return getattr(module, name)
 
     def test_a2_public_callables_exist(self):
         module = self.module()
@@ -390,13 +392,17 @@ class TestIWritePathGaps(Base):
         conn = FakeConn()
         # 案例根本**没有**价格键（`build_case_from_quote()` 对没有价的报价就是这个形态）。
         case = eligible_case(review_status="draft")
-        case.pop("standard_price")
-        case.pop("standard_cost")
+        # 夹具本来就没有 standard_cost 键（2026-09-21 修：pop 无缺省值会 KeyError，
+        # 那是夹具笔误 —— 被测的是"没有价格键时不许传 None"）。
+        case.pop("standard_price", None)
+        case.pop("standard_cost", None)
         module.save_case(case, conn=conn, user={"user_id": 1, "username": "tester"})
         inserts = [row for row in conn.statements if "INSERT INTO" in row[0]]
         self.assertTrue(inserts, "save_case() 应当发出 INSERT")
         sql, params = inserts[-1]
-        names = re.findall(r'"([a-z_]+)"', sql.split("VALUES")[0])
+        # 列名里允许数字（`source_sha256`）：2026-09-21 修，原正则 `[a-z_]+` 抓不到它，
+        # 与实现无关的夹具笔误。
+        names = re.findall(r'"([a-z_0-9]+)"', sql.split("VALUES")[0])
         idx = {name: i for i, name in enumerate(names)}
         for key in ("standard_price", "standard_cost"):
             self.assertIn(key, idx, "INSERT 列清单缺 %s" % key)
@@ -412,7 +418,7 @@ class TestIWritePathGaps(Base):
         module.save_case(case, conn=conn, user={"user_id": 1, "username": "tester"})
         inserts = [row for row in conn.statements if "INSERT INTO" in row[0]]
         sql, params = inserts[-1]
-        names = re.findall(r'"([a-z_]+)"', sql.split("VALUES")[0])
+        names = re.findall(r'"([a-z_0-9]+)"', sql.split("VALUES")[0])
         idx = {name: i for i, name in enumerate(names)}
         self.assertIn("source_sha256", idx, "INSERT 列清单缺 source_sha256（Spec §2.5）")
         self.assertEqual("b" * 64, params[idx["source_sha256"]],

@@ -152,6 +152,52 @@ FIELD_LABELS = {
 #: 值必须有值（=0 也算"没有价"）的价格列。
 _PRICE_FIELDS = ("standard_price",)
 
+#: `NOT NULL DEFAULT 0` 的金额列（批 6 Spec §2.5）：空值必须写 0，写 None 会直接
+#: 撞 NotNullViolation，整条案例进不了库。
+_PRICE_NOT_NULL_FIELDS = ("standard_cost", "standard_price")
+
+#: timestamp 列（空值要写 NULL，不能写空串）。
+_TIME_FIELDS = ("confirmed_at",)
+
+#: DWG 通道列（`CASE_COLUMNS` 里有、`CASE_FIELDS` 里没有）：`normalize_case()` 必须一起
+#: 归一，否则 `save_case()` 写出来永远是 NULL（批 6 Spec §2.5）。
+DWG_CHANNEL_FIELDS = ("source_sha256", "parser_version", "confirmed_by", "confirmed_at")
+
+#: 库现状的三态，顺序即判定顺序（批 6 Spec §2.1）。
+READINESS_VERDICTS = ("empty", "no_eligible", "ready")
+
+#: 「现在该怎么办」的动作闭集（接口、前端、CLI 只许用这些）。
+READINESS_ACTIONS = ("import_standard_case", "fill_case_fields", "review_case",
+                     "refresh_case", "transfer_to_precise")
+
+#: 一条案例的补数据动作种类（批 6 Spec §2.2）。
+CASE_FIX_KINDS = ("fill", "review", "extend", "retire")
+
+#: 准入原因的**中文标签唯一事实源**（前端不许再各写一份；`blocked_by[].label` 直接用它）。
+REASON_LABELS = {"ok": "可用", "missing_fields": "缺必需字段", "retired": "已停用",
+                 "industry_mismatch": "非包装案例", "source_not_authoritative": "来源不权威",
+                 "not_reviewed": "未审核", "expired": "已过期"}
+
+#: 每条原因的**动作句**（`blocked_by[].fix`）：说清"该做什么"，不是字段键堆砌。
+_REASON_FIX = {
+    "missing_fields": "补齐缺的必需字段",
+    "not_reviewed": "把审核状态审到「已审核」（reviewed）",
+    "source_not_authoritative": "把来源升格到权威口径（workbook / dwg_confirmed）",
+    "expired": "重新核价并更新有效期（valid_until）",
+    "retired": "确认是否重新启用（已停用的案例不参与快速报价）",
+    "industry_mismatch": "换用包装行业的案例",
+}
+
+#: 动作的文案（label / hint）：接口给全，前端只负责画，不自己拼判断句。
+ACTION_TEXT = {
+    "import_standard_case": ("导入标准案例",
+                             "把已成交的标准盒型沉淀成案例：scripts/import_dwg_quick_quote_cases.py"),
+    "fill_case_fields": ("补齐案例字段", "按 blocked_by 的原因补数据（价格、尺寸、盒型等）"),
+    "review_case": ("把案例审到「已审核」", "审核状态改成 reviewed 之后才可用于快速报价"),
+    "refresh_case": ("重新核价并更新有效期", "案例已过期：用新的原始报价日期与有效截止日"),
+    "transfer_to_precise": ("转精准报价", "案例不齐时不耽误出价：改走精准报价"),
+}
+
 _TEXT_FIELDS = ("case_code", "customer_masked", "box_type_code", "box_family",
                 "closure_type", "material_code", "print_colors", "insert_type",
                 "currency", "source_type", "source_ref", "review_status", "industry",
@@ -346,6 +392,10 @@ def normalize_case(case) -> dict:
     row["process_summary"] = row["process_summary"] or ""
     row["case_version"] = int(row["case_version"] or 1)
     row["version"] = int(row["version"] or 1)
+    # DWG 通道列与业务列一起归一（Spec 批 6 §2.5）：漏了它们，`save_case()` 写出来永远是
+    # NULL —— "这张案例是从哪张 DWG、哪个解析器版本来的"就永久丢了。
+    for key in DWG_CHANNEL_FIELDS:
+        row[key] = _coerce(key, copy.deepcopy(src.get(key)))
     return row
 
 
@@ -580,6 +630,122 @@ def quick_quote_cases(cases=None, *, today=None, config=None) -> List[dict]:
             if row.get("eligible") is True]
 
 
+def _action_row(action: str) -> dict:
+    """动作行（`action` 取自闭集，`label` / `hint` 是中文人话）。"""
+    label, hint = ACTION_TEXT.get(action, (action, ""))
+    return {"action": action, "label": label, "hint": hint}
+
+
+def _blocked_fix(reason_code: str, rows) -> str:
+    """一条 `blocked_by` 组的动作句；缺字段那组要点名缺哪些字段的中文标签。"""
+    head = _REASON_FIX.get(reason_code) or ("处理「%s」" % REASON_LABELS.get(reason_code, reason_code))
+    if reason_code != "missing_fields":
+        return head
+    missing = [key for key in QUICK_QUOTE_REQUIRED_FIELDS
+               if any(_is_blank(key, row.get(key)) for row in rows)]
+    return "%s：%s" % (head, _labels(missing)) if missing else head
+
+
+def library_readiness(cases=None, *, today=None, config=None) -> dict:
+    """案例库现状的**唯一事实源**（接口 / 前端 / CLI 都读它，不许各自拼文案）。
+
+    `cases=None` → 真读库；读不到抛 `CaseLibraryUnavailable`（**不回落成"空库"**：
+    "库是空的"会被当成"从来没有可复用的成交经验"，与批 1 §2.3 同一条纪律）。
+    `cases` 显式传入 → 纯离线口径（不改入参）。
+
+    三态把"没沉淀过"和"有资产但不合格"分开：两者的处置完全不同 ——
+    前者要导入案例，后者要按原因补数据 / 审到已审核，不用重新造案例。
+    """
+    rows = load_cases(cases, today=today, config=config)
+    case_total = len(rows)
+    eligible_total = len([row for row in rows if row.get("eligible") is True])
+
+    groups: Dict[str, List[dict]] = {}
+    for row in rows:
+        if row.get("eligible") is True:
+            continue
+        code = _text(row.get("reason_code")) or "unknown"
+        groups.setdefault(code, []).append(row)
+    blocked_by = [{"reason_code": code,
+                   "label": REASON_LABELS.get(code) or code,
+                   "count": len(items),
+                   "fix": _blocked_fix(code, items),
+                   "cases": sorted(_text(item.get("case_code")) for item in items)}
+                  for code, items in groups.items()]
+    # 排序在这里定死（count 降序 → reason_code 升序），前端不许再排一次。
+    blocked_by.sort(key=lambda item: (-item["count"], item["reason_code"]))
+
+    if case_total == 0:
+        verdict = "empty"
+        headline = "案例库还没有案例"
+        detail = ("还没有沉淀过标准案例，快速报价没有可复用的基准。"
+                  "可以先导入标准案例（scripts/import_dwg_quick_quote_cases.py），"
+                  "也可以改走精准报价，出价不受影响。")
+        next_actions = [_action_row("import_standard_case"), _action_row("transfer_to_precise")]
+    elif eligible_total == 0:
+        verdict = "no_eligible"
+        headline = "%d 条案例，0 条可用于快速报价" % case_total
+        detail = ("%d 条案例都在库里，但没有一条达标：%s。按 blocked_by 给出的动作补齐数据或"
+                  "审到「已审核」即可，不用重新造案例；这段期间可以改走精准报价。"
+                  % (case_total, "；".join("%s %d 条（%s）" % (row["label"], row["count"], row["fix"])
+                                           for row in blocked_by) or "原因未标注"))
+        codes = {row["reason_code"] for row in blocked_by}
+        actions = []
+        if codes & {"missing_fields", "source_not_authoritative", "industry_mismatch"}:
+            actions.append("fill_case_fields")
+        if "not_reviewed" in codes:
+            actions.append("review_case")
+        if "expired" in codes:
+            actions.append("refresh_case")
+        if not actions:
+            actions.append("fill_case_fields")
+        actions.append("transfer_to_precise")
+        next_actions = [_action_row(action) for action in actions]
+    else:
+        verdict = "ready"
+        headline = "%d 条案例可用于快速报价" % eligible_total
+        detail = ("有 %d 条达标案例可以复用（库内共 %d 条）。" % (eligible_total, case_total)
+                  if case_total != eligible_total else
+                  "库内 %d 条案例全部达标，可以直接复用。" % eligible_total)
+        next_actions = []
+    return {"verdict": verdict, "headline": headline, "detail": detail,
+            "case_total": case_total, "eligible_total": eligible_total,
+            "blocked_by": blocked_by, "next_actions": next_actions}
+
+
+def case_fix_plan(case) -> dict:
+    """一条案例的**可执行补数据清单**（比 `case_missing_fields()` 更进一步：它只给字段键）。
+
+    已停用的案例只给 `retire`：补字段没有意义（与批 1 §2.3 的优先级一致）。
+    """
+    row = normalize_case(case)
+    verdict = quote_eligibility(row)
+    missing = [key for key in QUICK_QUOTE_REQUIRED_FIELDS if _is_blank(key, row.get(key))]
+    actions: List[dict] = []
+    if row["review_status"] == "retired":
+        actions.append({"field": "review_status",
+                        "label": FIELD_LABELS.get("review_status", "review_status"),
+                        "kind": "retire"})
+    elif not verdict["eligible"]:
+        for key in missing:
+            actions.append({"field": key, "label": FIELD_LABELS.get(key, key), "kind": "fill"})
+        if row["review_status"] != "reviewed":
+            actions.append({"field": "review_status",
+                            "label": FIELD_LABELS.get("review_status", "review_status"),
+                            "kind": "review"})
+        if row["source_type"] not in QUICK_QUOTE_ALLOWED_SOURCES:
+            actions.append({"field": "source_type",
+                            "label": FIELD_LABELS.get("source_type", "source_type"),
+                            "kind": "extend"})
+    return {"case_code": row.get("case_code") or "",
+            "eligible": bool(verdict["eligible"]),
+            "reason_code": verdict["reason_code"],
+            "missing_fields": missing,
+            "missing_labels": [FIELD_LABELS.get(key, key) for key in missing],
+            "actions": actions,
+            "price_present": not _is_blank("standard_price", row.get("standard_price"))}
+
+
 def find_case(case_code, cases=None) -> dict:
     """按案例编号取一行；没有就回 `{}`（不抛错，调用方自己给文案）。"""
     code = _text(case_code)
@@ -796,12 +962,19 @@ def _fetch_case(conn, case_code: str) -> dict:
 
 
 def _row_value(key: str, value):
-    """写库前的形态转换：数量档位进 JSON 文本；空文本列写 ""；数值原样。"""
+    """写库前的形态转换：数量档位进 JSON 文本；空文本列写 ""；数值原样。
+
+    `standard_cost` / `standard_price` 是 `NOT NULL DEFAULT 0`（Spec 批 6 §2.5）：
+    没有价格就写 0，不许写 None —— 否则 `save_case()` 直接抛 NotNullViolation，
+    一条"缺价格待补"的案例根本进不了库（现场就是这么丢的）。
+    """
+    if key in _PRICE_NOT_NULL_FIELDS and value is None:
+        return 0
     if key == "quantity_tiers":
         return json.dumps(list(value or []), ensure_ascii=False)
     if isinstance(value, bool):
         return value
-    if key in _DATE_FIELDS:
+    if key in _DATE_FIELDS or key in _TIME_FIELDS:
         return _text(value) or None
     return value
 

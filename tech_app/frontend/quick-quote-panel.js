@@ -118,6 +118,66 @@
     return table;
   }
 
+  /* 后端 readiness.next_actions 的动作 id → 页面元素名（唯一的映射，别处不许再写一份）。
+   * 后端叫 `transfer_to_precise`，页面出口按既有约定写 `transfer_precise`。 */
+  var QUOTE_ACTION_TARGETS = { transfer_to_precise: "transfer_precise",
+                               import_standard_case: "import_standard_case",
+                               fill_case_fields: "fill_case_fields",
+                               review_case: "review_case",
+                               refresh_case: "refresh_case" };
+
+  /** 库现状（Spec 批 6 §2.4）：文案一律取自后端的 readiness —— headline / detail /
+   *  blocked_by / next_actions 逐字渲染，前端**不自己判断**"有没有案例"（否则接口说
+   *  2 条、页面说 0 条，现场没法对账）。返回的节点带 data-qq-readiness 与 data-qq-verdict。
+   */
+  function renderReadiness(readiness, options) {
+    readiness = readiness || {};
+    options = options || {};
+    var verdict = readiness.verdict || "unknown";
+    var box = el("div", "qq-readiness qq-readiness-" + verdict);
+    box.setAttribute("data-qq-readiness", verdict);
+    box.setAttribute("data-qq-verdict", verdict);
+    box.appendChild(el("p", "qq-readiness-headline", readiness.headline || ""));
+    if (readiness.detail) {
+      box.appendChild(el("p", "qq-readiness-detail", readiness.detail));
+    }
+    var groups = readiness.blocked_by || [];
+    if (groups.length) {
+      var list = el("ul", "qq-blocked");
+      groups.forEach(function (row) {
+        row = row || {};
+        var item = el("li", "qq-blocked-row",
+          (row.label || row.reason_code || "") + "：" + (row.count || 0) + " 条；" + (row.fix || ""));
+        item.setAttribute("data-qq-reason", row.reason_code || "");
+        list.appendChild(item);
+      });
+      box.appendChild(list);
+    }
+    var actions = readiness.next_actions || [];
+    if (actions.length) {
+      var bar = el("div", "qq-readiness-actions");
+      actions.forEach(function (row) {
+        row = row || {};
+        var btn = el("button", "qq-action", row.label || row.action || "");
+        btn.type = "button";
+        btn.setAttribute("data-qq-action", QUOTE_ACTION_TARGETS[row.action] || row.action || "");
+        if (row.hint) btn.title = row.hint;
+        btn.addEventListener("click", function () {
+          if (typeof options.onAction === "function") {
+            options.onAction(row.action, row);
+            return;
+          }
+          if (row.action === "transfer_to_precise" && typeof options.onPrecise === "function") {
+            options.onPrecise();
+          }
+        });
+        bar.appendChild(btn);
+      });
+      box.appendChild(bar);
+    }
+    return box;
+  }
+
   function renderSteps(steps) {
     var box = el("ol", "qq-steps");
     (steps || []).forEach(function (step) {
@@ -166,11 +226,14 @@
       shell.appendChild(el("p", "qq-summary",
         "案例库共 " + (payload.case_total || 0) + " 条，现在可用于快速报价的 "
         + (payload.eligible_total || 0) + " 条。"));
-      shell.appendChild(renderCases(payload.cases));
-      if (!payload.case_total) {
-        shell.appendChild(el("p", "qq-empty",
-          "标准案例库还是空的。案例有两个来源：业务工作簿固化的成交案例（人工审到「已审核」），"
-          + "或从既有报价沉淀（默认草稿，需人工审核）。"));
+      // 现状话术来自后端 readiness（headline / detail 逐字渲染）：0 行时不再画一张空表，
+      // 而是把"库为空"与"有案例但 0 条可用"分开说，并给出下一步动作与转精准出口。
+      var readiness = payload.readiness || null;
+      if (readiness) {
+        shell.appendChild(renderReadiness(readiness, options));
+      }
+      if ((payload.cases || []).length || !readiness) {
+        shell.appendChild(renderCases(payload.cases));
       }
     } else {
       shell.appendChild(el("p", "qq-error",
@@ -232,6 +295,12 @@
    */
   var DIFF_HEADERS = ["参数", "基准案例", "当前报价", "差异价格"];
 
+  /* 出价段的动作闭集（Spec 批 8 §2.3）：页面字符串必须与后端同值，只有这两个出口。 */
+  var QUOTE_ACTIONS = ["save_quote", "transfer_precise"];
+  var QUOTE_ACTION_LABELS = { save_quote: "出价（落版本）", transfer_precise: "转精准报价" };
+  /* 费率权威段缺 `reason` 时的兜底文案（后端给了就用后端的，这里只兜底，不判"能不能用"）。 */
+  var RATE_AUTHORITY_FALLBACK = "费率不是权威工作簿费率：只能作为试算，出价前必须换成权威费率";
+
   function renderDiffTable(rows) {
     rows = rows || [];
     var table = el("table", "qq-diff-table");
@@ -275,6 +344,87 @@
     return table;
   }
 
+  /* 出价段：单价 / 区间 / 偏差 / 依据 / 告警 + 两个动作入口（Spec 批 8 §2.3）。
+   *
+   * 权威口径一律取自后端 payload（rate_authority / warnings），前端不自己判断"这价能不能用"：
+   * 非权威一律标 trial；演示费率的告警逐条渲染成 data-qq-warning 节点，**不折叠、不隐藏**。
+   */
+  function renderQuote(quote, options) {
+    quote = quote || {};
+    options = options || {};
+    var authority = quote.rate_authority || {};
+    var formal = authority.authoritative === true && Number(authority.authoritative_total || 0) > 0;
+    var box = el("div", "qq-quote");
+    box.setAttribute("data-qq-quote", quote.quick_quote_id || "");
+    box.setAttribute("data-qq-rate-authority", formal ? "authoritative" : "trial");
+    box.appendChild(el("h4", "qq-quote-title",
+      formal ? "快速报价（权威费率，可用于正式报价）" : "快速报价（试算：费率未权威）"));
+
+    var facts = el("ul", "qq-quote-facts");
+    var currency = quote.base_currency || "CNY";
+    facts.appendChild(el("li", "", "单价 " + fmtAmount(quote.unit_price) + " " + currency + "/件"
+      + (quote.tax_included ? "（含税）" : "（不含税）")));
+    var range = quote.price_range || {};
+    if (range.low !== undefined && range.high !== undefined) {
+      facts.appendChild(el("li", "", "建议区间 " + fmtAmount(range.low) + " – "
+        + fmtAmount(range.high) + " " + currency + "/件"));
+    }
+    var deviation = quote.deviation || {};
+    if (deviation.est_pct !== undefined) {
+      facts.appendChild(el("li", "", "预估偏差 ±" + fmtPercent(deviation.est_pct)
+        + "（" + (deviation.basis || "按无规则差异项放宽") + "）"));
+    }
+    if (quote.case_code) {
+      facts.appendChild(el("li", "", "基准案例 " + quote.case_code + "（版本 "
+        + (quote.case_version || 0) + "），有效期至 " + (quote.valid_until || "未标")));
+    }
+    box.appendChild(facts);
+
+    // 告警逐条渲染：演示费率的告警必须显著（Spec 批 8 §2.3），不折叠不隐藏。
+    var warnings = el("ul", "qq-warnings");
+    (quote.warnings || []).forEach(function (item) {
+      var li = el("li", "qq-warning", String(item));
+      li.setAttribute("data-qq-warning", "");
+      warnings.appendChild(li);
+    });
+    if (!authority.authoritative) {
+      var authorityNote = el("li", "qq-warning qq-rate-authority",
+        authority.reason || RATE_AUTHORITY_FALLBACK);
+      authorityNote.setAttribute("data-qq-warning", "");
+      warnings.appendChild(authorityNote);
+    }
+    box.appendChild(warnings);
+
+    var basis = el("ul", "qq-quote-basis");
+    (quote.basis || []).forEach(function (line) {
+      basis.appendChild(el("li", "", line));
+    });
+    box.appendChild(basis);
+
+    var actions = el("div", "qq-quote-actions");
+    QUOTE_ACTIONS.forEach(function (action) {
+      var btn = el("button", "qq-action", QUOTE_ACTION_LABELS[action] || action);
+      btn.type = "button";
+      btn.setAttribute("data-qq-action", action);
+      btn.addEventListener("click", function () {
+        if (typeof options.onAction === "function") options.onAction(action, quote);
+      });
+      actions.appendChild(btn);
+    });
+    box.appendChild(actions);
+    return box;
+  }
+
+  function fmtAmount(value) {
+    if (value === null || value === undefined || isNaN(Number(value))) return "未标";
+    return Number(value).toFixed(4);
+  }
+
+  function fmtPercent(value) {
+    if (value === null || value === undefined || isNaN(Number(value))) return "未标";
+    return (Number(value) * 100).toFixed(2) + "%";
+  }
+
   global.QuickQuotePanel = {
     MODE_PRECISE: MODE_PRECISE,
     MODE_QUICK: MODE_QUICK,
@@ -284,8 +434,12 @@
     REASON_LABELS: REASON_LABELS,
     agentBase: agentBase,
     DIFF_HEADERS: DIFF_HEADERS,
+    QUOTE_ACTIONS: QUOTE_ACTIONS,
     cases: cases,
+    renderReadiness: renderReadiness,
     renderDiffTable: renderDiffTable,
+    QUOTE_ACTION_LABELS: QUOTE_ACTION_LABELS,
+    renderQuote: renderQuote,
     render: render,
     open: open,
     close: hide

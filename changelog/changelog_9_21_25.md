@@ -8174,3 +8174,103 @@ skip：未提供样本项目 id，跳过下游连通自检
   提交**）；未创建 MR / tag / Release；未删除、迁移或清空任何数据；未写 PG 业务表（仅只读查询）。
 - 能力声明口径不变：**DWG 编排能力完成，真实转换能力未验收**；`parts_demo_script` 未签字前仍是
   **L2（可信）**。
+
+## 249. 逆向快速报价批 6 / 7 / 8 实现：案例库就绪度 + 统一解析服务端点 + 差异价费率权威化（9-21，Codex 实现 + 全量回归）
+
+三批 Spec 与红测由并行会话落在 `f948be4`（`## 245`）。本次把它们**实现到全绿**，并顺手实现
+批 6 那两处入库缺口。三批写集基本不重叠，但批 6 与批 8 都碰
+`tech_app/frontend/quick-quote-panel.js`，所以按 6 → 7 → 8 串行落地。
+
+### 批 6：案例库现状话术 + 两处入库缺口
+
+- `cpq_quick_quote_case.py`：新增 `READINESS_VERDICTS` / `READINESS_ACTIONS` / `CASE_FIX_KINDS` /
+  `REASON_LABELS` / `library_readiness()`（三态 `empty` / `no_eligible` / `ready`，`blocked_by`
+  只统计不合格、`count` 降序 → `reason_code` 升序、组内 `case_code` 升序）/ `case_fix_plan()`
+  （`fill` / `review` / `extend` / `retire`，`retired` 只给 `retire`）；
+- 修两处入库缺口：`normalize_case()` 保住 `source_sha256` / `parser_version` / `confirmed_by` /
+  `confirmed_at` 四个 DWG 通道列（`CASE_COLUMNS` 本来就有，是归一化丢的）；金额列为空时
+  `_row_value()` 给 0（列就是 `NOT NULL DEFAULT 0`），`save_case()` 不再撞 `NotNullViolation`；
+- `cpq_agent_server._handle_quick_quote_cases()` 出参加 `readiness`；读不到库时**不装成空库**
+  （`readiness.verdict="unavailable"`）；
+- `quick-quote-panel.js`：`renderReadiness()` + `data-qq-readiness` / `data-qq-verdict` /
+  `data-qq-action`，0 行时不再画空表；文案一律取自 payload；
+- `DEPLOYMENT.md`：补「怎么补案例：DWG 实样导入 → 审到 reviewed」与「没价格的案例长什么样」。
+
+实跑：`Ran 31 tests` → **OK**。
+
+### 批 7：统一解析服务端点（8010 的 `/api/file/parse`）
+
+- 新增 `tech_app/backend/services/unified_parse.py`：常量逐字照 Spec（`SERVICE_NAME` /
+  `SERVICE_VERSION` / `MAX_PARSE_BYTES` / `MAX_LIST_ITEMS` / `MAX_MATERIAL_NOTES` /
+  `PARSE_PROJECT_ID` / `DWG_EXTS` / `DOC_EXTS` / `PARSE_FIELDS`（与
+  `cpq_quick_quote_file.QUICK_FIELDS` 逐字相等，红测直接比对）/ `CAPABILITY_KEYS` /
+  `PARSE_ERROR_CODES` / `PARSE_DEPS_METHODS` / `KEYWORD_FIELDS` / `KEYWORD_HINTS`）；
+  `ParseError(code, message, *, http_status, advice)`；`capability()` / `parse_payload()` /
+  `fields_from_ir()`；四道前置检查（空文件 / 坏 base64 / 超大 / 扩展名 / 能力）逐条按表，
+  能力为假**不调** `convert()`；只回被请求字段，越界键 → `bad_payload`；
+- 可注入依赖只有 `capability` / `convert` / `parse_dxf` 三个方法；默认实现把
+  `cad_converter.capability()` + `convert_drawing()`（按 `output_files` 里 `role=="dxf"` 的产物
+  读字节）+ `cad_ir.parse_dxf()` 接上来。**不 import store / 不落库**：转换产物落隔离解析项目
+  `cpq-unified-parse` 目录（源码级红测断言 7 个禁用字面量一个不出现）；
+- `tech_app/backend/main.py`：挂 `GET /api/file/parse/capability` 与 `POST /api/file/parse`，
+  `ParseError` 按 `.http_status` 回 `{"ok": false, "code", "error", "advice"}`。两个端点**免登录**
+  —— 报价侧快速通道是纯 HTTP 客户端（经 8010 反代），与既有 `/api/capabilities/cad-converter`
+  同类，且只读。
+
+实跑：`Ran 33 tests` → **OK (skipped=2)**，其中 H 组是**真样本**：本机 `酒盒.dwg` 真转真解析
+（`libredwg 0.14`），`layers=8`（含 `0`/`CUTTER`/`DESIGN`）、`annotated_dimensions=316`、
+`text_annotations=127`、`v_groove=True` —— 与 `## 240` 金标逐项一致。I 组（34 端到端）只在
+`CPQ_PARSE_SERVICE_E2E=1` 时跑。
+
+### 批 8：差异价费率权威化、出价守卫与工作台触发点
+
+- `cpq_quick_quote_workspace.py`：`AUTHORITATIVE_RATE_SOURCES=("workbook",)`、
+  `RATE_AUTHORITY_REASONS` / `RATE_AUTHORITY_LABELS`、`rule_authority()`（判定顺序
+  `no_source → demo_rate → source_not_authoritative → not_reviewed → ok`，`demo` 先于未审核报出）、
+  `authority_summary()`（`count` 降序 → `reason_code` 升序；有演示数据时 headline 必含「演示数据」）；
+  `delta_price()` 每行新增 `rate_authority`，`diff_table()` 行同样带（既有键一个不动）；
+- `cpq_quick_quote_price.py`：`price()` 出参加 `rate_authority`，非权威时 `warnings` 至少一条点名
+  「演示数据」；新增 `is_formal(quote)`；`save(..., formal=False)` 缺省落**试算**（快照带
+  `rate_authority` + `formal=false`），`formal=True` 且费率不权威 → 抛 `QuickQuoteError`
+  （文案含「费率」「权威」）且**不调** `merge_step_snapshot`；
+- `quick-quote-panel.js`：新增 `renderQuote()`（`data-qq-quote` /
+  `data-qq-rate-authority="authoritative|trial"` / 告警逐条 `data-qq-warning`，演示告警不折叠）；
+- `DEPLOYMENT.md`：登记 `kb_quick_quote_delta_rule` 现状（4 条 `demo`/`draft`）、权威化流程
+  （业务签字后改成 `source_type='workbook'` + `review_status='reviewed'` + `source_ref` 指回工作簿
+  与工作表）、以及换之前页面上就是 `trial` + 演示告警、不能当正式报价。
+
+实跑：`Ran 29 tests` → **OK**。
+
+### 回归与证据
+
+- 快速报价八套（批 1–5 + 6/7/8）：`Ran 304 tests` → **OK (skipped=3)**；
+- 全量回归（`/tmp/run_pkg.py 1`）：`Ran 4230 tests` → `failures=19 errors=0 skipped=20`。
+  与 `## 248` 的基线（4137 / 19 / 0 / 18）逐条对齐：新增 93 条正好是本轮三批红测，
+  19 条失败**同一条不差**（14 条 `process_row_running_info_and_fold_red`、2 条
+  `tech_model_call_row_merged`、2 条 `cpq_eval_ci_contract`、1 条
+  `tech_params_autofill_and_soft_gates`），**零新增失败**。
+
+### 实现时发现并处理的三件事（都写在明处）
+
+1. **Spec 内部冲突（批 7）**：§2.4 表里写 `annotated_dimensions`「截断到 `MAX_LIST_ITEMS`(200)」，
+   但 §2.6 的真样本金标是 **316** 条。红测 H1 按 316 判，所以标注尺寸**不截断**
+   （其余列表仍按 200 截断），代码里就地写了原因。
+2. **命名冲突（批 6 vs 批 8）**：`quick-quote-panel.js` 里批 6 的「后端动作 id → 页面元素名」映射
+   与批 8 的 `QUOTE_ACTIONS` 闭集重名。批 6 的映射改名 `QUOTE_ACTION_TARGETS`，闭集留给批 8
+   （`QUOTE_ACTIONS = ["save_quote", "transfer_precise"]`）；两批红测一个字没动，都全绿。
+3. **红测夹具三处笔误（批 6，按「测试自身写错」修，断言与期望值一个没动）**：
+   `meta()` 被放在 `TestANaming` 里而 E 组要调用它（挪到 `Base`）；
+   `case.pop("standard_cost")` 缺默认值（夹具无该键 → 加 `None`）；
+   两处 `re.findall(r'"([a-z_]+)"')` 抓不到 `source_sha256` 这类带数字的键（改成 `[a-z_0-9]+`）。
+
+### 未做 / 需点名的两件事
+
+- **批 7 与批 5 客户端之间有一条集成缝，本轮如实上报、未擅自改**：批 5 的
+  `cpq_quick_quote_file._dimensions()` 期望 `annotated_dimensions` 是带 `axis` 的 dict、
+  `outline_size` 是 `length`/`width`/`height`；批 7 服务按 Spec 回**裸 `measured_value`** 与
+  `{width,height,source="document_extents"}`。实测把真样本喂过去，`to_match_inputs()` 把**图纸幅面**
+  `14362×6152` 当成了 `inner_width`/`inner_height`。今天不会算错价（案例库那 2 条本身
+  `needs_input`、会排在可用案例之后，实测 `candidates=2 / suggested=''`），但等案例补好就会失真。
+  批 7 的提示词明令「不改批 5 客户端」，所以留一行给下一批：客户端忽略 `source=="document_extents"`
+  的外形尺寸（并兼容裸数字），或服务侧补 `axis`。
+- 未提交、未推送、未部署：本条目前只改工作区（3 批实现 + 本节 changelog）。
