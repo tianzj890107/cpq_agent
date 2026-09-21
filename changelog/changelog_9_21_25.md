@@ -9258,3 +9258,83 @@ tests.test_packaging_route_template_closure_red                        Ran 15 OK
 所以圆盘盒独有的后续工序名不可能出现在这条路线里 —— 因此 `装配检验包装` 按业务口径映射为
 `组装 + 检验`（工作内容原文"10PC内托装配及检验"），而不是硬塞 `清洁包装` 凑红。含义是**映射表按业务填写**，
 不是为了让红测变绿指一道（Spec §3.1 明写）。`清洁包装` 仍是闭集里的最后一道，只是两份样本模板没有对应文字。
+
+## 261. 零件链路「为什么 64 件里只有 4 件能算、0 件能挤」：三份 Spec + 三套红测（9-22，Codex 只改 Spec / 红测 / changelog）
+
+上一轮在 34 上把「报价 → 需求 → 图纸 → 零件 → BOM → 工艺 → 成本 → 回传报价卡片」跑通后，
+零件下游只剩 4 件可算、挤出覆盖率 0。本轮把这三个根因写成可验收的 Spec + 红测（不写实现、不给提示词）。
+
+### 实测证据（34 `172.16.10.34:8010`，项目 `f1417060ae9d`，`酒盒.dwg`，`parts:b435f8c89cf9bbeb`）
+
+| 事实 | 值 |
+| --- | --- |
+| `part_total` / `closed_ratio` / `role_known_ratio` | 64 / 0.797 / **0.0** |
+| `processable_ratio` | **0.062**（4 件：47 件缺料 + 13 件 open） |
+| `material` 非空 / `thickness_mm` 非空 | 12 件 / 8 件（**`material_known_ratio` 指标本身还不存在**） |
+| `solid_ok_ratio` | **0.0**（64 行零件没有一行带 `solid_status`） |
+| 单件挤出 | `DWG-P35` ok(12 面)、`DWG-P07` `concave_polygon`、`DWG-P01` `outline_open` |
+| 51 件闭合轮廓形状 | **34 凹 / 17 凸**（扇形三角化 + 凸性门槛 → 覆盖率天花板 17/64 = 0.266） |
+
+### 三个根因 → 三份 Spec
+
+1. **材料/厚度归属在真图上必然取不到**：两档取法（件级最近标注 + 图级"全图唯一值"兜底）在一张有 6 种
+   材料文本的图上恒不成立；件级半径 `0.25 × 对角线` 在整版件上放大到 166mm，把图级材料说明误归给 4 件
+   open 大件（`distance_mm` 2.0～62.7）；需求 3.3（`grey_board_thickness` / `face_paper_gsm`…）完全没参与。
+   → `docs/specs/packaging-parts-material-attribution.md`：四层归属（件级标注 > 成组注记 > 图层名 >
+   需求整盒口径兜底）+ 结构化材料文本 + `material_known_ratio` / `thickness_known_ratio` /
+   `material_default_ratio` / `attribution_kind_mix`，兜底必须逐件 `needs_confirmation`。
+2. **"open 件"其实是环搜索没算完**：13 件 open 全部是撞 `MAX_LOOP_STATES=20000` 中止；
+   根因是**重复边**（`DWG-P56` 64 条实体只对应 31 对唯一端点，重复度最高 4）；折叠后 12 件都能找到环，
+   其中 8 件（P01/P08/P56～P61）最大环 bbox 与分量 bbox 完全一致（即外轮廓）。
+   → `docs/specs/packaging-parts-outline-chaining.md`：找环前折叠重复边、`outline_diagnosis` 逐件留痕、
+   只对"判成 open 的件"做外轮廓重判（覆盖率 ≥ 0.95 才认），`no_closed_loop` 这个笼统值从代码里消失。
+3. **覆盖率既做不出来也说不清**：34 凹件一律 `concave_polygon`；`extrude()` 只能逐件调，没有批量入口，
+   行上也没有 `solid_status`。
+   → `docs/specs/packaging-parts-solid-coverage.md`（取代第 4 层"凹多边形本版不挤"）：耳切三角化
+   （凸件逐字同形同数）、`self_intersecting` / `degenerate_polygon`、`extrude_all()` 批量结论 + `stats`、
+   `solid_ok_ratio` 读真值、新增批量路由与前端文案。
+
+### 红测（实现前必红，均已实跑）
+
+| 红测 | 结果 |
+| --- | --- |
+| `tests/test_packaging_parts_material_attribution_red.py` | Ran 27（failures=13, errors=8 → 21 红） |
+| `tests/test_packaging_parts_outline_chaining_red.py` | Ran 20（failures=10, errors=3 → 13 红） |
+| `tests/test_packaging_parts_solid_coverage_red.py` | Ran 23（failures=18, errors=1 → 19 红） |
+| `tests/test_packaging_parts_3d_red.py`（按新 Spec 修订三处断言） | Ran 18（failures=3，即被取代的三条） |
+
+回归护栏：`test_packaging_parts_downstream_red` / `test_packaging_parts_extraction_red` /
+`test_packaging_parts_outline_red` / `test_packaging_parts_panel_red` 仍全绿（未改动其口径）。
+
+### 边界声明
+
+- 本轮**只写 Spec + 红测**（另含按新 Spec 修订的三条既有断言），没有写业务实现；
+- 本轮未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务；34 上仍是上一轮部署的版本
+  （`/api/health` status=ok，`packaging-parts` 指标与上表一致）；
+- 能力声明不变：**DWG 编排能力完成，真实转换能力未验收**；零件闭环仍为 L2（可信），未签字不得声明 L3。
+
+
+### 260.1 部署 34 并当场复验（161f788；`## 258` 那条 P0 在线上关掉）
+
+```
+部署：919b95c → ced88d7 → d4aa944 → 7395628 → 161f788（ref=ytbz，纯快进）
+/health 的 build.commit = 161f788b03401d4f7e92621f5e2330e17bfa2f7e（branch=ytbz，stamp=/home/wugefei/CPQ/cpq_build.json）
+能力探测：{"available": true, "role": "primary", "version": "27.1", "source": "oda"}
+酒盒.dwg   ：status=ok converter_role=primary fallback_used=false entity_count=6711 layer_count=8（dxf+preview）
+圆盘盒.dwg ：status=ok converter_role=primary fallback_used=false entity_count=3457 layer_count=32（dxf+preview）
+隔离端到端（第 6b 步）：两份样本八步 8/8 completed；零件 64 / 9 件；可算 4 / 1；可挤出 1 / 7
+新增的权威实样自检（真的跑了，不是 skip）：
+  · 权威实样 YT-DWG-ROUND-10PC：路线 9 道，confirm=confirmed
+  · 权威实样 YT-DWG-WINE-700ML：路线 10 道，confirm=confirmed     ← ## 258 里 409 route_not_confirmable 的那个盒型
+```
+
+自检本身也修了两轮才真跑起来（都写进了脚本注释）：
+
+- 内部令牌：知识库走"服务间令牌 + HTTP 快照"，令牌由 8010 在导入期 `secrets.token_urlsafe` 生成后
+  **只传给它的 8012 子进程**；`/proc/8010/environ` 看不到 putenv 之后的改动，`/proc/8012/environ` 才读得到
+  （先找 8012、再兜底 8010，都没有就打印原因跳过，不静默通过）；
+- 前置条件：BOM 展开要三个内尺寸，自检用**盒型自己登记的可生产区间上限**（`size_l_max/w_max/h_max`）
+  填入，拿不到就跳过该盒型并打印原因（不编数）。
+
+线上口径：从"图纸盒型永远不能确认路线 → 成本 route_not_confirmed → 零件下游全断"，变成
+**两份权威实样的路线都能确认**；`/api/health` 的 build 段与 git HEAD 逐字一致。
