@@ -3806,3 +3806,93 @@ OK
 - 本轮改 `tests/test_dwg_conversion_quality_repair_red.py` 与本条 changelog；
   **未 commit、未 push、未 MR、未 tag、未 Release、未部署、未重启服务、未改服务器配置**；
   未新增依赖；两份真实 DWG 与 `裕同包装项目-待开发/` 保持只读、未入库。
+---
+
+## 191. 报价助手行业化实现：需求门禁按行业 + ④产品技术参数换源盒型库（9-21，Codex）
+
+### 背景
+
+落地 `## 189` 的 Spec 与红测。用户现场报的两个问题：① 包装需求（数码天地盒 30*30*20 +
+铜版纸/亮膜/哑膜/灰板 2.5mm）被判「⚠ 需求信息不齐…缺少：工作温度」，链路停在意图识别；
+② 右侧「④ 产品技术参数」的字段仍是电池表口径。
+
+### 改动（只碰 `cpq_agent_server.py` 与 `确认需求解析结果.html`）
+
+`cpq_agent_server.py`
+
+- 删掉模块级单一三元组 `_STEP1_REQUIRED` 与旧的 `_step1_missing(req)`，改为按行业取：
+  `STEP1_REQUIRED_BY_INDUSTRY` / `step1_required(industry)` / `step1_missing(req, *, industry=None)`。
+  半导体/电池/电器**逐字沿用** `(("max_dimension","尺寸"),("application_scope","应用范围/使用场景"),
+  ("operating_temperature","工作温度"))`；`packaging` 由 `industry_templates.required_keys('packaging')`
+  与 `labels('packaging')` 派生（10 项，中文标签）。未知 / 空 / 历史键（`flexible`）落
+  `DEFAULT_INDUSTRY`，不抛异常。
+- 行业来源优先级（冻结）：请求体 `industry` → 需求里的 `industry` → `DEFAULT_INDUSTRY`。
+- 两处调用点接线：`match_products` 工具与 `/api/step1/match` 的 `phase="intent"`
+  （意图提取字段与系统提示一并按行业切换）；拦住时的必填项文案由 `step1_required(industry)` 拼。
+- 新增 `tech_param_source` / `tech_param_columns` / `tech_param_row`，`_PRODUCT_SOURCES` 纳入
+  `kb_packaging_box_type`；包装取盒型库 20 列（中文标签），半导体仍取
+  `product_params.spec()["fields"]` 的 code/name。
+- `fixed_forms_catalog(industry)` 给 `s1_techparams`/`s2_techparams` 附加
+  `techparams_columns`/`techparams_source`/`techparams_switched`；`Bridge.meta(industry)`、
+  `GET /api/meta?industry=`、`pick_product(code, industry)`、`GET /api/product/pick?industry=`。
+- `Bridge.meta()` 下发 `industries`（唯一来源 `cpq_industries.INDUSTRY_KEYS`）与 `default_industry`。
+
+`确认需求解析结果.html`
+
+- 顶部行业下拉（选项只由 `/api/meta.industries` 渲染，前端不写第二份行业数组）、
+  `currentIndustry()`、`renderIndustrySelect()`、`refreshIndustryForms()`。
+- ④产品技术参数表头改用服务端下发的 `techparams_columns`（`techParamsColumnsOf()`：行数据在场时按
+  「行的键与表头是否对齐」判定；空骨架按服务端的 `techparams_switched` 判定），
+  三行业的表头逐字不变。
+- 删掉写死的「尺寸、应用范围/使用场景、工作温度」通用必填文案，改用后端返回的
+  `missing`（缺什么说什么）与 `required`（当前行业必填项）。
+- 两处 `/api/step1/match` 调用与 `/api/product/pick` 带上当前行业。
+
+### 红测证据（实现前 → 实现后）
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_agent_industry_alignment_red
+（实现前）Ran 33 tests in 0.417s   FAILED (failures=24)
+（实现后）Ran 33 tests in 0.534s   OK
+```
+
+### 回归（实跑原文）
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_packaging_requirement_template_red tests.test_industry_registry_unified_red
+Ran 55 tests in 0.320s   OK
+
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_tech_unified_tool_list_conversation_red
+Ran 35 tests in 0.728s   OK
+
+$ ./open-claude/.venv/bin/python -u /tmp/run_pkg.py 1
+TOTAL ran=3395 failures=24 errors=1 skipped=15
+```
+
+25 条全部是既有失败（`process_row_running_info_and_fold_red` 14 / `tech_model_call_row_merged…` 2 /
+`packaging_cost_engine_red` 3 / `packaging_cost_rule_snapshot_red` 1 failure + 1 error /
+`cpq_eval_ci_contract` 2 / `packaging_cost_rule_routing_red` 1 / `packaging_cost_minimum_charge_red` 1），
+本批零新增。
+
+⚠️ 过程中一度把 `确认需求解析结果.html` 的 `.conn-status` 样式行误删、并让字体指纹的行号整体 +6，
+`test_quote_tech_unified_tool_list_conversation_red` 的 `f42`/`f43` 因此变红；已把行业下拉的样式移到
+`</style>` 之前（第 693 行之后）并恢复 `.conn-status`，`f42`/`f43` 复绿（Ran 35 OK）。
+另修掉一处自造的 `pick_product()` 少写形参的 `NameError`（`test_tech_backend_undefined_names_dynamic` 抓到）。
+
+### 人工路径（离线复现；跑的是页面里**同一份**函数 + 服务端**同一份**接口）
+
+- 包装：需求原文（数码天地盒 30*30*20，盖面纸铜版纸亮膜、底面纸铜版纸哑膜、盖板材灰板 2.5mm）→
+  `missing = []`（不再出现「工作温度」）；④表头 = 盒型库 20 列中文（盒型编码/盒型名称/…/自动化等级），
+  行 = 选中盒型的真实值。
+- 半导体：`{"max_dimension":"13*20"}` → `missing = ["应用范围/使用场景","工作温度"]`（门禁未被放宽）；
+  ④表头仍是 DA 成品参数列，未选品时行 = `{}`（不编造）。
+
+### 能力声明
+
+本批只做「需求门禁按行业」与「④表头换源 + 盒型行透传」。**未**实现：按包装必填项驱动盒型库的
+匹配/推荐（`match_products` 仍是成品表的六维匹配）、包装技术参数的入库与版本快照、盒型库缺列的
+补全（缺列为空字符串，不猜）。
+
+### 提交状态
+
+未部署、未重启服务、未改服务器配置；未新增依赖。

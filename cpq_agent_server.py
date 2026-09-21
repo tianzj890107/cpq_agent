@@ -53,6 +53,12 @@ import cpq_ontology
 import cpq_msgutil
 import cpq_llm
 import cpq_shared_settings
+# 行业注册表与技术工艺侧的行业模板/成品参数字典（报价助手行业化的唯一事实源）。
+# 报价助手不再自己写一份行业清单或必填项：行业键取 cpq_industries，字段/必填/标签取
+# tech_app 的 industry_templates，半导体技术参数取 product_params。
+import cpq_industries
+from tech_app.backend.services import industry_templates as quote_industry_templates
+from tech_app.backend.services import product_params as quote_product_params
 
 DB_NAME = cpq_db.DB_LABEL
 _DB_SCHEMA_TEXT = cpq_db.schema_text("quote")
@@ -419,12 +425,15 @@ def _section_step(sid: str) -> int:
     return int(m.group(1)) if m else 1
 
 
-def fixed_forms_catalog() -> list:
+def fixed_forms_catalog(industry=None) -> list:
     """把固定表单目录（写死的表结构）按分区返回，供前端预渲染骨架。
-    同一步骤内按 _BI_SECTIONS/_COMPUTED_SECTIONS 的**定义顺序**（即业务展示顺序），不按 id 字母序。"""
+
+    同一步骤内按 _BI_SECTIONS/_COMPUTED_SECTIONS 的**定义顺序**（即业务展示顺序），不按 id 字母序。
+    `industry` 只影响 ④产品技术参数（`s1_techparams`/`s2_techparams`）的表头来源，
+    不传按 `industry_templates.DEFAULT_INDUSTRY`（既有调用点行为不变）。"""
     out = []
     for idx, (sid, tpl) in enumerate(FIXED_FORMS.items()):
-        out.append({
+        entry = {
             "section_id": sid,
             "step": _section_step(sid),
             "kind": tpl["kind"],
@@ -433,7 +442,16 @@ def fixed_forms_catalog() -> list:
             "columns": list(tpl["columns"]),
             "editable": tpl["editable"],
             "_ord": idx,
-        })
+        }
+        if sid in _PPV_SECTIONS:
+            # ④产品技术参数：按行业换源后的表头随固定表单目录一起下发（Spec §4.2）
+            entry["techparams_columns"] = tech_param_columns(industry)
+            entry["techparams_source"] = tech_param_source(industry)
+            # 事实源是否已从这个行业模板之外的字典换走：前端据此决定**空骨架**要不要换表头
+            # （行数据在场时一律以「行的键是否与表头对齐」为准，与行业无关）。
+            entry["techparams_switched"] = entry["techparams_source"] != _DA_PRODUCT_SOURCE
+            entry["industry"] = quote_industry_templates.normalize(industry)
+        out.append(entry)
     out.sort(key=lambda x: (x["step"], x.pop("_ord")))
     return out
 
@@ -681,17 +699,19 @@ def _ppv_cn_map() -> dict:
     return out
 
 
-def pick_product(code: str) -> dict:
+def pick_product(code: str, industry=None) -> dict:
     """选定产品后的**确定性**取数（不经大模型）：
 
       ① 按 product_item_code 取 product_para_value 整行参数；
       ② 用同一个成品编码去 md_clm_material_cost_cnf 匹配 material_code，
          取 material_unit_price 作为价格（is_deleted = false，且在生效/失效日期内）；
-      ③ 按固定分区的列名（中文）拼好 s1_techparams / s1_products 两行，前端直接渲染。
+      ③ 按固定分区的列名（中文）拼好 s1_techparams / s1_products 两行，前端直接渲染；
+      ④ ④产品技术参数的表头按**行业**下发（包装是盒型库列，其余仍是成品参数字典）。
     """
     code = (code or "").strip()
     if not code:
         return {"ok": False, "error": "缺少成品编码"}
+    industry_key = _industry_of(None, industry)
 
     # ① 产品参数
     try:
@@ -776,6 +796,9 @@ def pick_product(code: str) -> dict:
             "name": prow.get(cpq_match.COL_NAME, ""),
             "price": price, "price_note": price_note,
             "techparams_row": tech_row, "products_row": prod_row,
+            "techparams_columns": tech_param_columns(industry_key),
+            "techparams_source": tech_param_source(industry_key),
+            "industry": industry_key,
             "params": prow}
 
 
@@ -787,11 +810,14 @@ def _handle_match_products(tool_input: dict) -> str:
            ("max_dimension", "dimension_tolerance_pct", "application_scope",
             "operating_temperature", "service_life", "hermeticity")}
     # 意图识别门槛：尺寸/应用范围/工作温度缺一不可，缺了不匹配
-    missing = _step1_missing(req)
+    # 门禁按行业取必填项：半导体/电池/电器是三项，包装是需求模板的 10 项必填
+    industry = _industry_of(req, tool_input.get("industry"))
+    missing = step1_missing(req, industry=industry)
     if missing:
         return ("❌ 需求缺少必备匹配参数：" + "、".join(missing) +
                 "。**不允许开始匹配，也不要编造参数**。请提醒用户补充需求"
-                "（尺寸、应用范围/使用场景、工作温度三项必须齐全），补齐后再重新匹配。")
+                "（" + "、".join(label for _key, label in step1_required(industry)) +
+                " 必须齐全），补齐后再重新匹配。")
     try:
         res = cpq_match.match(req, top_n=tool_input.get("top_n") or 3)
     except Exception as e:
@@ -860,30 +886,200 @@ _STEP1_EVAL_SYS = (
 _STEP1_REQ_KEYS = ("max_dimension", "dimension_tolerance_pct", "application_scope",
                    "operating_temperature", "service_life", "hermeticity")
 
-# 意图识别硬性门槛：这三项缺一不可，缺了就提醒用户补需求，不查库/不推荐/不填表
-_STEP1_REQUIRED = (("max_dimension", "尺寸"),
-                   ("application_scope", "应用范围/使用场景"),
-                   ("operating_temperature", "工作温度"))
+# ---------------------------------------------------------------------------
+# 需求完整性门禁（**按行业**取必填项）
+#
+# 报价助手原来把门禁硬编码成半导体口径（尺寸/应用范围·使用场景/工作温度），
+# 包装需求（盒型/三边内径/面纸克重…）本就不适用「工作温度」，却被判「需求信息不齐」，
+# 链路停在意图识别。现在必填项按行业取：
+#   · 半导体/电池/电器 —— 沿用既有三项（它们是产品匹配的**输入**，不是需求模板字段，
+#     `required_keys('semiconductor')` 是另外 14 个键，不许替换）；
+#   · 包装 —— 由 industry_templates 的需求模板派生（10 项必填，中文标签）。
+# 行业清单唯一来源 cpq_industries.INDUSTRY_KEYS，不在此另写行业数组。
+# ---------------------------------------------------------------------------
+
+#: 报价助手一贯的匹配门禁三项（半导体/电池/电器），逐字不变。
+_GATE_MATCH_REQUIRED = (("max_dimension", "尺寸"),
+                        ("application_scope", "应用范围/使用场景"),
+                        ("operating_temperature", "工作温度"))
+
+#: 需要按行业模板取必填项的门禁（当前只有包装）。
+PACKAGING_INDUSTRY = "packaging"
 
 
-def _step1_missing(req: dict) -> list:
-    return [label for key, label in _STEP1_REQUIRED
+def _template_gate_required(industry: str) -> tuple:
+    """按行业模板生成门禁必填项：key 与必填集合取 required_keys，标签取 labels（中文）。
+
+    包装模板保证每个必填项都有中文标签；标签缺失时不静默回退成原始 key（红测 A5 会抓）。"""
+    labels = quote_industry_templates.labels(industry)
+    return tuple((key, labels.get(key) or key)
+                 for key in quote_industry_templates.required_keys(industry))
+
+
+def _build_step1_required_by_industry() -> dict:
+    """行业 → 门禁必填项 (key, 中文标签)。行业清单来自 cpq_industries，不另写数组。"""
+    table = {key: _GATE_MATCH_REQUIRED for key in cpq_industries.INDUSTRY_KEYS}
+    if PACKAGING_INDUSTRY in table:
+        table[PACKAGING_INDUSTRY] = _template_gate_required(PACKAGING_INDUSTRY)
+    return table
+
+
+STEP1_REQUIRED_BY_INDUSTRY: dict = _build_step1_required_by_industry()
+
+
+def _industry_of(req=None, industry=None) -> str:
+    """行业来源优先级（Spec §3.2）：请求体显式 industry → 需求里的 industry → 默认行业。
+
+    只有「非空且合法」的显式值才生效；未知/空/历史键（flexible）一律落 DEFAULT_INDUSTRY。"""
+    candidates = (industry, (req or {}).get("industry") if isinstance(req, dict) else None)
+    for value in candidates:
+        key = str(value or "").strip().lower()
+        if key and quote_industry_templates.normalize(key) == key:
+            return key
+    return quote_industry_templates.normalize(None)
+
+
+def step1_required(industry=None) -> tuple:
+    """第 1 步需求完整性门禁的必填项 —— **按行业**取 (key, 中文标签)。
+
+    必填项唯一来源是行业模板：包装取 `required_keys('packaging')` 与 `labels('packaging')`；
+    半导体/电池/电器沿用既有三项（尺寸 / 应用范围·使用场景 / 工作温度）。
+    未知、空、历史键一律落 `industry_templates.DEFAULT_INDUSTRY`，不抛异常。"""
+    return STEP1_REQUIRED_BY_INDUSTRY[quote_industry_templates.normalize(industry)]
+
+
+def step1_missing(req: dict, *, industry=None) -> list:
+    """该**行业**下缺哪些必填项（返回缺失项的中文标签）。
+
+    不传行业时按 `industry_templates.DEFAULT_INDUSTRY`，既有调用点不受影响。"""
+    return [label for key, label in step1_required(_industry_of(req, industry))
             if not str((req or {}).get(key) or "").strip()]
 
 
-def _parse_step1_json(out: str):
+# ---------------------------------------------------------------------------
+# ④产品技术参数（s1_techparams / s2_techparams）：事实源按行业分流
+#
+# 半导体/电池/电器的事实源仍是《亿纬锂能DA梳理》的成品参数表（clm_calc_product_tech）；
+# 包装换成盒型库（kb_packaging_box_type）—— 电池表里不可能有盒型的尺寸区间/灰板厚度/闭合方式。
+# ---------------------------------------------------------------------------
+
+#: 半导体/电池/电器（以及默认行业）沿用的成品参数字典事实源。
+_DA_PRODUCT_SOURCE = "clm_calc_product_tech"
+
+#: 行业 → ④产品技术参数的事实源标识。
+_PRODUCT_SOURCES: dict = {
+    "semiconductor": _DA_PRODUCT_SOURCE,
+    "battery": _DA_PRODUCT_SOURCE,
+    "appliance": _DA_PRODUCT_SOURCE,
+    PACKAGING_INDUSTRY: "kb_packaging_box_type",
+}
+
+#: 盒型库（kb_packaging_box_type）的技术参数列：key = 表列名，label = 业务中文名。
+#: 表结构见 tech_app/backend/storage/da_schema.sql；这里只列 ④ 表要展示的那些列。
+_PACKAGING_BOX_COLUMNS = (
+    ("box_type_code", "盒型编码"),
+    ("name", "盒型名称"),
+    ("family", "盒型族"),
+    ("size_l_min", "内长下限（mm）"),
+    ("size_l_max", "内长上限（mm）"),
+    ("size_w_min", "内宽下限（mm）"),
+    ("size_w_max", "内宽上限（mm）"),
+    ("size_h_min", "内高下限（mm）"),
+    ("size_h_max", "内高上限（mm）"),
+    ("fit_clearance", "配合间隙（mm/单边）"),
+    ("grey_board_thickness", "灰板厚度（mm）"),
+    ("face_paper_gsm", "面纸克重（g/m²）"),
+    ("closure_type", "闭合方式"),
+    ("part_count", "部件数"),
+    ("v_groove", "V槽"),
+    ("hand_mount_ratio", "手裱比例"),
+    ("standard_seconds", "标准工时（秒/个）"),
+    ("automation_level", "自动化等级"),
+    ("applicable_industries", "适用行业"),
+    ("business_status", "业务状态"),
+)
+
+
+def tech_param_source(industry=None) -> str:
+    """该行业 ④产品技术参数 的事实源标识（行业未知/空 → 默认行业）。"""
+    return _PRODUCT_SOURCES[quote_industry_templates.normalize(industry)]
+
+
+def tech_param_columns(industry=None) -> list:
+    """该行业 ④产品技术参数 的表头定义：[{"key", "label"}, …]，label 一律中文。
+
+    半导体/电池/电器取成品参数字典（product_params）的 code/name；包装取盒型库的列定义。"""
+    key = quote_industry_templates.normalize(industry)
+    if key == PACKAGING_INDUSTRY:
+        return [{"key": k, "label": label} for k, label in _PACKAGING_BOX_COLUMNS]
+    fields = quote_product_params.spec().get("fields") or []
+    return [{"key": str(f.get("code")), "label": str(f.get("name") or f.get("code"))}
+            for f in fields if f.get("code")]
+
+
+def tech_param_row(industry=None, product=None) -> dict:
+    """由选中的产品 / 盒型生成 ④产品技术参数的一行；不足则返回 {}，**绝不编造**。"""
+    key = quote_industry_templates.normalize(industry)
+    record = product if isinstance(product, dict) else {}
+    if key == PACKAGING_INDUSTRY:
+        if not str(record.get("box_type_code") or "").strip():
+            return {}
+        return {col["key"]: ("" if record.get(col["key"]) is None else str(record.get(col["key"])))
+                for col in tech_param_columns(key)}
+    row = {}
+    for col in (FIXED_FORMS.get("s1_techparams") or {}).get("columns", []):
+        value = record.get(col["key"])
+        if value not in (None, ""):
+            row[col["key"]] = str(value)
+    return row
+
+
+def _step1_intent_keys(industry=None) -> tuple:
+    """意图识别要模型提取的字段 —— 按行业：包装是需求模板的 10 项必填，其余五个匹配参数。"""
+    if quote_industry_templates.normalize(industry) == PACKAGING_INDUSTRY:
+        return tuple(key for key, _label in step1_required(industry))
+    return tuple(_STEP1_REQ_KEYS)
+
+
+def _step1_eval_sys(industry=None) -> str:
+    """意图识别的系统提示 —— 按行业给出要提取的字段。
+
+    半导体/电池/电器**逐字沿用**既有的五个匹配参数提示；包装换成需求模板的必填项，
+    否则包装需求会提取不出包装字段、门禁必然全缺（这正是本批要修的链路）。"""
+    if quote_industry_templates.normalize(industry) != PACKAGING_INDUSTRY:
+        return _STEP1_EVAL_SYS
+    pairs = step1_required(industry)
+    guide = "；".join("%s（%s）" % (label, key) for key, label in pairs)
+    sample = "{" + ", ".join('"%s": ""' % key for key, _label in pairs) + \
+             ', "comment": "一句话说明识别结果"}'
+    return (
+        "你是报价系统第 1 步的**需求意图识别器**。输入只有用户的需求文本。\n"
+        "你的唯一任务：从需求文本里提取下列**包装需求**字段，判断信息是否齐全。"
+        "**不要做任何别的事**——不查数据库、不推荐产品、不填任何表单、不给建议方案。\n"
+        "字段（业务名（JSON 键））：" + guide + "\n"
+        "**输出分两段**：\n"
+        "第一段：用 1~3 句话说明你从需求里读到了哪些字段、还缺哪些"
+        "（这段会实时展示给用户，用自然中文，不要写 JSON、不要列表格、不要提具体产品）。\n"
+        "第二段：另起一行只写 " + _JSON_MARK + " ，然后输出一个 JSON 对象，格式：\n" +
+        sample + "\n" +
+        "值必须忠实于需求文本，没提到的一律留空字符串，**绝对不要编造或推测**。"
+    )
+
+
+def _parse_step1_json(out: str, keys=None):
     """解析大模型的一次性评估输出；失败返回 (None, '')。
 
     尽量宽容：剥掉 <think> 思考段与 ``` 代码围栏、在全文里找所有配平的 {...} 逐个试解析
     （取最后一个含预期键的），最后再对「被 max_tokens 截断的 JSON」做补右括号抢救。"""
+    keys = tuple(keys or _STEP1_REQ_KEYS)
     s = (out or "").strip()
     s = re.sub(r"<think>.*?(?:</think>|$)", "", s, flags=re.S).strip()
     s = re.sub(r"```[a-zA-Z]*", "", s).strip()
 
     def _accept(obj):
-        if not isinstance(obj, dict) or not any(k in obj for k in _STEP1_REQ_KEYS):
+        if not isinstance(obj, dict) or not any(k in obj for k in keys):
             return None
-        req = {k: obj.get(k) for k in _STEP1_REQ_KEYS}
+        req = {k: obj.get(k) for k in keys}
         return req, str(obj.get("comment") or "").strip()
 
     # 全文扫描所有配平的顶层 {...}，从后往前试（答案通常在思考/说明之后）
@@ -939,8 +1135,9 @@ def _step1_visible_text(raw: str) -> str:
 def _handle_step1_match(data: dict, emit=None) -> dict:
     """第 1 步，分两段调用（phase）：
 
-      phase="intent"（默认）—— **一次**大模型调用：只从需求文本提取五个参数并判断完整性。
-          不查库、不推荐、不填表。缺 尺寸/应用范围/工作温度 任一项返回 stage="intent"。
+      phase="intent"（默认）—— **一次**大模型调用：只从需求文本提取该行业的必填参数并判断完整性。
+          不查库、不推荐、不填表。缺必填项（半导体/电池/电器是尺寸·应用范围·工作温度三项，
+          包装是需求模板的 10 项）返回 stage="intent"。
           通过则返回 requirement，供随后的 match 段直接复用。
       phase="match" —— 拿着 intent 段给的 requirement **纯查库 + 六维加权评分**，
           不再调用大模型（所以整个第 1 步的产品匹配总共只花一次模型调用）。
@@ -991,7 +1188,9 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
     text = (data.get("text") or "").strip()
     if not text:
         return {"ok": False, "error": "缺少需求文本"}
-    _trace(f"开始：需求文本 {len(text)} 字")
+    # 行业来源优先级：请求体显式 industry → 需求里的 industry → 默认行业（Spec §3.2）
+    industry_key = _industry_of(None, data.get("industry"))
+    _trace(f"开始：需求文本 {len(text)} 字，行业 {industry_key}")
 
     b = bridge_for((data.get("sid") or "").strip(), create=False) or bridge
     if b is None or b.conv.model == NO_MODEL_ID:
@@ -1007,7 +1206,8 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         if emit:
             shown = 0
             for ev in stream_message(
-                    b.conv.client, [{"role": "user", "content": prompt}], _STEP1_EVAL_SYS,
+                    b.conv.client, [{"role": "user", "content": prompt}],
+                    _step1_eval_sys(industry_key),
                     model=b.conv.model, tools=[], max_tokens=2000):
                 if ev.get("type") == "text_delta":
                     out += ev.get("text", "")
@@ -1021,7 +1221,8 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         else:
             from open_claude.api import complete
             res = complete(
-                b.conv.client, [{"role": "user", "content": prompt}], _STEP1_EVAL_SYS,
+                b.conv.client, [{"role": "user", "content": prompt}],
+                _step1_eval_sys(industry_key),
                 model=b.conv.model, max_tokens=2000)
             out = "".join(bk.get("text", "") for bk in res.get("content", [])).strip()
     except Exception as e:
@@ -1032,22 +1233,25 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
     if not out:
         return {"ok": False, "stage": "llm",
                 "error": "需求识别返回为空，请重试或人工填写需求参数。"}
-    req, comment = _parse_step1_json(out)
+    req, comment = _parse_step1_json(out, _step1_intent_keys(industry_key))
     if req is None:
         _trace("输出不是有效 JSON，放弃。原文前 400 字：" + out[:400].replace("\n", "⏎"))
         return {"ok": False, "stage": "llm",
                 "error": "需求识别输出无法解析（不是有效 JSON），请重试或人工填写需求参数。"}
 
-    missing = _step1_missing(req)
+    missing = step1_missing(req, industry=industry_key)
     if missing:
         _trace("需求缺少 " + "、".join(missing) + "，不查库、不推荐、不填表")
         return {"ok": False, "stage": "intent", "missing": missing,
+                "industry": industry_key,
+                "required": [label for _key, label in step1_required(industry_key)],
                 "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
                 "comment": comment,
                 "error": "需求缺少必备匹配参数：" + "、".join(missing)}
 
     _trace(f"识别通过，参数齐全；总耗时 {time.perf_counter() - t0:.2f}s")
-    return {"ok": True, "stage": "intent_ok", "requirement": req, "comment": comment}
+    return {"ok": True, "stage": "intent_ok", "industry": industry_key,
+            "requirement": req, "comment": comment}
 
 
 # ---------------------------------------------------------------------------
@@ -2306,7 +2510,7 @@ class Bridge:
         if "match_products" not in names:
             self.conv.tool_schemas.append(MATCH_PRODUCTS_SCHEMA)
 
-    def meta(self) -> dict:
+    def meta(self, industry=None) -> dict:
         return {
             "model": self.conv.model,
             "profile": self.conv.profile.name,
@@ -2314,7 +2518,11 @@ class Bridge:
             "steps": STEPS,
             "session_id": self.session_id,
             "settings": self.current_settings(),
-            "forms": fixed_forms_catalog(),
+            "forms": fixed_forms_catalog(industry),
+            # 行业下拉的唯一来源（cpq_industries.INDUSTRY_KEYS）——前端不许另写行业数组
+            "industries": [{"key": key, "label": cpq_industries.INDUSTRIES[key]["label"]}
+                           for key in cpq_industries.INDUSTRY_KEYS],
+            "default_industry": cpq_industries.DEFAULT_INDUSTRY,
         }
 
     def reset(self):
@@ -2998,7 +3206,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/meta":
-            self._send_json(bridge.meta())
+            # industry 可选：只影响 ④产品技术参数的表头来源（不传按默认行业）
+            self._send_json(bridge.meta((parse_qs(parsed.query).get("industry") or [""])[0]))
         elif path == "/api/sessions":
             self._send_json({"sessions": list_history()})
         elif path == "/api/session":
@@ -3015,8 +3224,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/product/pick":
             # 选定产品：确定性取参数 + 查价（成品编码 -> md_clm_material_cost_cnf.material_code
             # -> material_unit_price），不经大模型
-            code = (parse_qs(parsed.query).get("code") or [""])[0]
-            self._send_json(pick_product(code))
+            query = parse_qs(parsed.query)
+            code = (query.get("code") or [""])[0]
+            # 行业是可选参数：不传按默认行业（既有调用点行为不变）
+            self._send_json(pick_product(code, (query.get("industry") or [""])[0]))
         elif path in ("/", "/index.html"):
             self._send_json({"service": "cpq-quote-agent", "steps": STEPS,
                              "hint": "工作台页面由 serve.py(:8010) 提供，本服务只出 API。"})

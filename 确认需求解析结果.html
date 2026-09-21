@@ -722,6 +722,13 @@
     .oc-process-toggle:hover { background: color-mix(in srgb, var(--color-primary) 10%, transparent); border-radius: 4px; }
     .oc-process-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent); outline-offset: 1px; }
     }
+    /* 行业下拉：唯一来源是 /api/meta 的 industries（cpq_industries.INDUSTRY_KEYS）。 */
+    .industry-select {
+      font-size: 11px; color: var(--text-secondary); background: var(--bg-subtle, #F9FAFB);
+      border: 0.5px solid var(--border-color); border-radius: 6px; padding: 3px 6px; margin-right: 8px;
+      max-width: 132px;
+    }
+
 </style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
@@ -777,6 +784,7 @@
           <span class="ai-badge">AI</span>
         </div>
         <div class="conn-status">
+          <select id="industrySelect" class="industry-select" title="报价行业（决定需求必填项与④产品技术参数的来源）"></select>
           <span class="conn-dot" id="connDot"></span>
           <span id="connText">连接中…</span>
         </div>
@@ -947,6 +955,8 @@
     const AGENT_URL = (localStorage.getItem('cpq:agentUrl') || (location.protocol === 'file:' ? 'http://127.0.0.1:47292' : '/agents/quote')).replace(/\/$/, '');
     const STEPS = ['确认需求配置', '工艺确认', '定价-利润加成', '报价-其他加价项', '报价方案', '输出报价单'];
     let FORMS = []; // 固定表单目录（写死的表结构，来自 /api/meta），用于预渲染骨架
+    let INDUSTRIES = [];       // 行业清单（唯一来源 /api/meta.industries，前端不许另写数组）
+    let CURRENT_INDUSTRY = ''; // 当前行业键（门禁必填项与④产品技术参数的来源）
 
     /* ================= 状态 ================= */
     let currentStep = 1;            // Agent 实际所在步骤
@@ -960,6 +970,62 @@
 
     const $ = (id) => document.getElementById(id);
     const chatEl = $('chatMessages');
+
+    /* ================= 行业（门禁与④产品技术参数的唯一开关） ================= */
+    // 行业清单只能来自服务端（cpq_industries.INDUSTRY_KEYS 经 /api/meta 下发），
+    // 前端不写第二份行业数组；不带行业时后端落 DEFAULT_INDUSTRY。
+    function currentIndustry() {
+      const el = $('industrySelect');
+      const v = (el && el.value) ? String(el.value) : '';
+      return v || CURRENT_INDUSTRY || '';
+    }
+
+    function renderIndustrySelect() {
+      const el = $('industrySelect');
+      if (!el) return;
+      el.innerHTML = INDUSTRIES.map(i =>
+        '<option value="' + escapeHtml(i.key) + '">' + escapeHtml(i.label || i.key) + '</option>').join('');
+      if (!CURRENT_INDUSTRY) CURRENT_INDUSTRY = (INDUSTRIES[0] && INDUSTRIES[0].key) || '';
+      el.value = CURRENT_INDUSTRY;
+      el.onchange = () => {
+        CURRENT_INDUSTRY = el.value || '';
+        // ④产品技术参数的表头随行业换源：表头**只能**由服务端给（/api/meta?industry=），
+        // 前端不判断行业名、也不自己拼列。行数据由下一次 s1/s2_techparams 事件带回。
+        refreshIndustryForms(CURRENT_INDUSTRY);
+      };
+    }
+
+    // 把服务端按行业下发的 ④产品技术参数表头同步到已预渲染的骨架；
+    // 拉不到就清空（宁可留原列，也不许编造列）。
+    async function refreshIndustryForms(industry) {
+      try {
+        const meta = await cpqAuthFetch(
+          AGENT_URL + '/api/meta?industry=' + encodeURIComponent(industry)).then(r => r.json());
+        const byId = new Map((meta.forms || []).map(f => [f.section_id, f]));
+        FORMS.forEach(f => {
+          const got = byId.get(f.section_id);
+          if (/_techparams$/.test(f.section_id || '') && got) {
+            f.techparams_columns = got.techparams_columns || null;
+            f.techparams_source = got.techparams_source || '';
+            f.techparams_switched = !!got.techparams_switched;
+          }
+        });
+      } catch (e) {
+        FORMS.forEach(f => { if (/_techparams$/.test(f.section_id || '')) f.techparams_columns = null; });
+      }
+      // 已经预渲染出来的④空骨架就地换表头（有数据的表不动，避免抹掉用户填的值）
+      FORMS.filter(f => /_techparams$/.test(f.section_id || '') && f.techparams_columns).forEach(f => {
+        const sec = sections.get(f.section_id);
+        if (!sec || !sec.el) return;
+        const body = sec.el.querySelector('tbody');
+        if (body && body.rows.length) return;
+        renderTableSection({
+          step: f.step, section_id: f.section_id, title: f.title, editable: f.editable,
+          columns: f.columns || [], rows: [],
+          techparams_columns: f.techparams_columns, techparams_switched: !!f.techparams_switched,
+        });
+      });
+    }
 
     /* ================= 工具函数 ================= */
     function escapeHtml(s) {
@@ -1434,6 +1500,11 @@
       FORMS.filter(f => f.step === n).forEach(f => {
         if (sections.has(f.section_id)) return; // 已有（可能 Agent 已填过）
         const ui = { step: f.step, section_id: f.section_id, title: f.title, editable: f.editable };
+        if (f.techparams_columns) {
+          // ④产品技术参数：表头由服务端按行业下发（包装是盒型库列，其余仍是 DA 成品参数字典）
+          ui.techparams_columns = f.techparams_columns;
+          ui.techparams_switched = !!f.techparams_switched;
+        }
         if (f.kind === 'form') {
           ui.action = 'render_form';
           ui.fields = (f.fields || []).map(x => ({ key: x.key, label: x.label, type: 'text', value: '' }));
@@ -1870,11 +1941,27 @@
       return tr;
     }
 
+    /* ④产品技术参数的表头：以服务端下发的 techparams_columns（按行业换源）为准。
+       仅当它与本次下发的行数据对齐（行里存在同名列）时才启用；对不齐说明这一行仍是
+       半导体/电池/电器的 DA 属性名口径，保留本分区既有列，保证三个行业逐字不变。 */
+    function techParamsColumnsOf(ui) {
+      const cols = Array.isArray(ui.techparams_columns) ? ui.techparams_columns : [];
+      if (!cols.length) return null;
+      const rows = Array.isArray(ui.rows) ? ui.rows : [];
+      if (!rows.length) {
+        // 空骨架没有行可以对齐：只有服务端明说这个行业的④事实源已换走，才换表头。
+        return ui.techparams_switched ? cols : null;
+      }
+      const first = rows[0] || {};
+      return cols.some(c => c && c.key && Object.prototype.hasOwnProperty.call(first, c.key))
+        ? cols : null;
+    }
+
     function renderTableSection(ui) {
       if (isBomSection(ui)) { renderBomTreeSection(ui); return; } // BOM 分区走树形显示
       const sec = sectionShell(ui);
       sec.kind = 'table';
-      sec.columns = ui.columns || [];
+      sec.columns = techParamsColumnsOf(ui) || ui.columns || [];
       const content = sec.el.querySelector('.collapse-content');
       const table = document.createElement('table');
       table.className = 'list-table';
@@ -2097,7 +2184,8 @@
       btn.innerHTML = '<i class="ti ti-loader-2"></i>取价中…';
       let d;
       try {
-        d = await cpqAuthFetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code))
+        d = await cpqAuthFetch(AGENT_URL + '/api/product/pick?code=' + encodeURIComponent(p.code) +
+          '&industry=' + encodeURIComponent(currentIndustry()))
           .then(r => r.json());
       } catch (e) {
         d = { ok: false, error: '无法连接报价助手服务：' + e.message };
@@ -2124,6 +2212,8 @@
         renderTableSection({
           action: 'render_table', step: f.step, section_id: sid,
           title: f.title, editable: f.editable, columns: f.columns || [], rows: [row],
+          // ④产品技术参数：把后端按行业下发的表头一起传下去（表头以它为准）
+          techparams_columns: /_techparams$/.test(sid) ? (d.techparams_columns || null) : null,
         });
       });
       if (currentStep === 1) showStep(1);
@@ -2224,7 +2314,7 @@
       const act = addToolActivity('第 1 步 · 意图识别：检查需求信息是否齐全');
       showTyping();
       const d = await _sseCall(AGENT_URL + '/api/step1/match',
-        { phase: 'intent', text: text, sid: currentSessionId });
+        { phase: 'intent', text: text, sid: currentSessionId, industry: currentIndustry() });
       hideTyping();
       finishStreamBubble();
       setBusy(false);
@@ -2235,12 +2325,13 @@
         STEP1_REINPUT = true;
         const have = Object.entries(d.requirement || {})
           .map(([k, v]) => (CAND_REQ_LABEL[k] || k) + '：' + v).join('　');
+        // 必填项按行业由后端给出（缺什么说什么）；前端不再写死任何行业的字段口径。
+        const need = (d.required || []).join('、');
         addAiBubble('⚠ **需求信息不齐，暂不进行任何操作**（不查库、不推荐产品、不填表）——缺少：**' +
           (d.missing || []).join('、') + '**。\n\n' +
           (have ? '已识别到：' + have + '\n\n' : '') +
-          '产品匹配必须同时给出 **尺寸、应用范围/使用场景、工作温度** 三项。' +
-          '请直接在下方输入框补充缺失的参数（例如「尺寸约13*20，用于水表，工作温度28℃」），' +
-          '发送后会自动与已有需求合并并重新识别。');
+          (need ? '当前行业的必填项：**' + need + '**。' : '') +
+          '请直接在下方输入框补充缺失的参数，发送后会自动与已有需求合并并重新识别。');
         return null;
       }
       if (!d || !d.ok) {
@@ -2258,7 +2349,8 @@
         'SELECT * FROM product_para_value');
       showTyping();
       const d = await _sseCall(AGENT_URL + '/api/step1/match',
-        { phase: 'match', requirement: req, comment: comment || '', sid: currentSessionId });
+        { phase: 'match', requirement: req, comment: comment || '', sid: currentSessionId,
+          industry: currentIndustry() });
       hideTyping();
       finishStreamBubble();
       setBusy(false);
@@ -4320,6 +4412,9 @@
         const meta = await cpqAuthFetch(AGENT_URL + '/api/meta').then(r => r.json());
         setConn(true);
         FORMS = meta.forms || []; // 写死的表结构（用于预渲染骨架）
+        INDUSTRIES = meta.industries || [];              // 行业清单由服务端下发
+        CURRENT_INDUSTRY = CURRENT_INDUSTRY || meta.default_industry || '';
+        renderIndustrySelect();
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
