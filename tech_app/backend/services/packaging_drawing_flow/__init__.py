@@ -12,6 +12,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from tech_app.backend.storage import store
 
+# 需求单的「可编辑状态」只有一处事实源（`requirement_service`），这里按同一份判断报前置条件：
+# 已提交的需求不许被图纸解析静默改写，重试同一个入口必然再失败（Spec
+# `drawing-flow-non-editable-requirement.md` §2/§4）。
+from ..requirement_service import EDITABLE_STATUSES, REQUIREMENT_NOT_EDITABLE
+
 from . import anchor as anchor_mod
 from . import gates as gates_mod
 from . import model
@@ -38,6 +43,7 @@ _MODULE_PATHS = {
     "requirement_service": "tech_app.backend.services.requirement_service",
     "packaging_match": "tech_app.backend.services.packaging_match",
     "packaging_bom": "tech_app.backend.services.packaging_bom",
+    "packaging_parts": "tech_app.backend.services.packaging_parts",
     "packaging_route": "tech_app.backend.services.packaging_route",
     "packaging_cost": "tech_app.backend.services.packaging_cost",
 }
@@ -147,6 +153,22 @@ def _new_step(step_id: str, run_id: str) -> Dict[str, Any]:
             "retryable": False, "detail": {}}
 
 
+#: 零件提取那一步对外承诺的 detail 键闭集（Spec `packaging-dwg-parts-extraction.md` C6）。
+#: 前端只按这张表读，缺的在这儿补齐默认值 —— 旧 run 里没有这一步时也拿到同一形状，
+#: 不用在每个消费点各写一遍 `or 0`。
+PARTS_DETAIL_DEFAULTS = {"parts_id": "", "parts_hash": "", "parts_total": 0,
+                         "filtered_total": 0, "truncated": 0, "unavailable": []}
+
+
+def _step_detail(step_id: str, detail: Any) -> Dict[str, Any]:
+    row = model.jsonable(detail or {})
+    row = row if isinstance(row, dict) else {}
+    if step_id == "parts_extract":
+        for key, default in PARTS_DETAIL_DEFAULTS.items():
+            row.setdefault(key, list(default) if isinstance(default, list) else default)
+    return row
+
+
 def _steps_index(flow: Any) -> Dict[str, Dict[str, Any]]:
     rows = (flow or {}).get("steps") if isinstance((flow or {}).get("steps"), list) else []
     return {str((row or {}).get("step_id")): dict(row) for row in rows if isinstance(row, dict)}
@@ -159,7 +181,7 @@ def _public_state(project_id: str, flow: Any) -> Dict[str, Any]:
     ordered = []
     for step_id in model.STEP_IDS:
         row = dict(index.get(step_id) or _new_step(step_id, run_id))
-        row["detail"] = model.jsonable(row.get("detail") or {})
+        row["detail"] = _step_detail(step_id, row.get("detail"))
         ordered.append(row)
     gates_payload = payload.get("gates")
     if not isinstance(gates_payload, dict) or not gates_payload:
@@ -312,9 +334,12 @@ def _context(project_id: str, step_id: str, flow: Dict[str, Any], *, run_id: str
                "content": _source_bytes(project_id, meta),
                "drawing_version": model._as_int(meta.get("input_revision"), 1),
                "anchor": anchor_mod.current_anchor(project_id)}
-    if step_id == "field_write":
+    if step_id in ("field_write", "parts_extract"):
+        # 语义文档在 packaging_semantics 那一步算一次、缓存进 flow：字段写入与零件提取
+        # 都读同一份，绝不为了拿角色再算一遍。
         cached = flow.get("_semantics")
         context["semantics"] = cached if isinstance(cached, dict) else None
+        context["ir"] = flow.get("_ir") if isinstance(flow.get("_ir"), dict) else None
     return context
 
 
@@ -375,6 +400,8 @@ def _execute_step(project_id: str, step_id: str, *, run_id: str, actor: str,
         flow["gates"] = model.jsonable(outcome["gates"])
     if step_id == "packaging_semantics" and isinstance(outcome.get("semantics"), dict):
         flow["_semantics"] = model.jsonable(outcome["semantics"])
+    if step_id == "cad_ir_parse" and isinstance(outcome.get("ir"), dict):
+        flow["_ir"] = model.jsonable(outcome["ir"])
     updates = outcome.get("anchor_updates")
     anchor_mod.refresh(project_id, updates if isinstance(updates, dict) else {},
                        actor=actor)
@@ -451,6 +478,14 @@ def preconditions(project_id: str) -> List[Dict[str, Any]]:
         spec = model.PRECONDITION_BLOCKERS["REQUIREMENT_DRAFT_MISSING"]
         items.append({"code": "REQUIREMENT_DRAFT_MISSING", "severity": "blocking",
                       "message": str(spec["message"]), "action": str(spec["action"])})
+        return items
+    status = str(requirement.get("status") or "").strip()
+    if status and status not in EDITABLE_STATUSES:
+        spec = model.PRECONDITION_BLOCKERS[REQUIREMENT_NOT_EDITABLE]
+        items.append({"code": REQUIREMENT_NOT_EDITABLE, "severity": "blocking",
+                      "message": "需求已提交（当前状态：%s），不能直接改写；请先退回草稿"
+                                 "或为该项目新建一张需求草稿（缺前置条件，重试不会成功）" % status,
+                      "action": str(spec["action"])})
     return items
 
 

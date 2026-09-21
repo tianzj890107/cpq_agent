@@ -93,3 +93,12 @@ packaging_drawing_flow.preconditions(project_id) -> [{"code", "severity", "messa
    `error_code=REQUIREMENT_DRAFT_MISSING`、`flow.status != "failed"`、
    `downstream_prepare` 有终态；
 3. 正路（从报价/需求入口建的项目）行为与本批之前逐字一致。
+
+## 6. 同型复发的补充契约（9-21）
+
+需求单**已提交**（`status=approved` 等不可编辑状态）时，`field_write` 会走到同一类
+「码与因无关 + 连真因文案都丢了 + 缺前置条件把链路判死 + 重试永不成功」的坑：
+异常是 `RequirementSaveError`（无稳定码），最终对外只剩 `PACKAGING_FLOW_STEP_FAILED`（可重试），
+`preconditions()` 返回 `[]`。补充契约见
+`docs/specs/drawing-flow-non-editable-requirement.md`（新增前置条件码 `REQUIREMENT_NOT_EDITABLE`
+与 `RequirementSaveError` 的稳定码分层）。本节只是指针，§3 的 C1–C5 契约不变。

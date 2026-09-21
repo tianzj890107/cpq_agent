@@ -250,7 +250,71 @@ def _previous_ir(ctx: Dict[str, Any]) -> Any:
 
 
 # --------------------------------------------------------------------------- #
-# 5 字段写入
+# 5 零件提取（DWG 图纸 → 零件，Spec `packaging-dwg-parts-extraction.md` C6）
+# --------------------------------------------------------------------------- #
+def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """按 CAD IR 的连通分量提零件并落一版（纯提取 + 一次版本化落库）。
+
+    没有可用 IR 是**前置条件缺失**（blocked），不是"这一步坏了"：后续步骤照旧要跑到
+    终态（Spec `drawing-flow-error-taxonomy.md` C4）。
+    """
+    module = _resolve(ctx, "packaging_parts")
+    extract = getattr(module, "extract", None) if module is not None else None
+    save = getattr(module, "save_parts", None) if module is not None else None
+    if not callable(extract):
+        # 零件是**新增的前置事实**，不是门禁：提取不出来（模块缺失 / 没有 IR）都必须是
+        # `blocked`（终态但不阻断后续步骤），否则"零件提不出来"会把字段写入、待确认、
+        # 后续任务准备一起判死（Spec C6 / `drawing-flow-error-taxonomy.md` C4）。
+        return _blocked("PACKAGING_PARTS_UNAVAILABLE",
+                        "零件提取能力当前不可用（packaging_parts），零件清单暂不可生成",
+                        {"dependency": "packaging_parts"},
+                        action="联系系统管理员确认零件提取模块已随本版本部署，再重跑这一步")
+    ir = ctx.get("ir") if isinstance(ctx.get("ir"), dict) else None
+    if ir is None:
+        ir = _previous_ir(ctx)
+    if not isinstance(ir, dict):
+        return _blocked("PACKAGING_PARTS_NO_IR",
+                        "还没有可用的 CAD 图纸解析结果，无法提取零件"
+                        "（缺前置条件，重试不会成功）",
+                        {"dependency": "cad_ir"},
+                        action="先跑一键解析图纸（前四步）再来提取零件")
+    semantics = ctx.get("semantics") if isinstance(ctx.get("semantics"), dict) else None
+    try:
+        doc = extract(ir, semantics)
+    except Exception as exc:
+        return _failed("PACKAGING_PARTS_FAILED", str(exc) or "零件提取失败，请重试",
+                       {"reason": type(exc).__name__})
+    saved = doc
+    if callable(save):
+        try:
+            saved = save(ctx.get("project_id"), doc)
+        except Exception as exc:
+            return _failed("PACKAGING_PARTS_SAVE_FAILED", "零件文档落库失败，请重试",
+                           {"reason": type(exc).__name__})
+    saved = saved if isinstance(saved, dict) else {}
+    stats = saved.get("stats") if isinstance(saved.get("stats"), dict) else {}
+    detail = {"parts_id": str(saved.get("parts_id") or ""),
+              "parts_hash": str(saved.get("parts_hash") or ""),
+              "parts_total": model._as_int(stats.get("part_total")),
+              "filtered_total": model._as_int(stats.get("filtered_total")),
+              "truncated": model._as_int(stats.get("truncated")),
+              "by_role": model.jsonable(stats.get("by_role") or {}),
+              "unavailable": [str((row or {}).get("code") or "")
+                              for row in (saved.get("unavailable") or [])
+                              if isinstance(row, dict)]}
+    if detail["parts_total"]:
+        _emit(str(ctx.get("project_id")), str(ctx.get("run_id")), "parts",
+              "零件提取：%d 件（已剔除 %d 个非零件分量）"
+              % (detail["parts_total"], detail["filtered_total"]))
+    else:
+        _emit(str(ctx.get("project_id")), str(ctx.get("run_id")), "parts",
+              "零件提取：没有提取到零件（%s）"
+              % ("、".join(detail["unavailable"]) or "原因未知"))
+    return {"status": "completed", "detail": detail, "parts": saved}
+
+
+# --------------------------------------------------------------------------- #
+# 6 字段写入
 # --------------------------------------------------------------------------- #
 def _board_of(key: str, entry: Dict[str, Any], provenance: Dict[str, Any],
               sources: Dict[str, Any], unit_ok: bool) -> str:
@@ -333,8 +397,10 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
     try:
         apply_fn(project_id, semantics, accept=(), author=str(ctx.get("actor") or "system"))
     except Exception as exc:
-        # 分类只在**一处**判：异常自带稳定码就认它，其次按类型区分"真写失败"与"未识别异常"，
-        # 不靠 str(exc) 关键字匹配（Spec `drawing-flow-error-taxonomy.md` C1/C2）。
+        # 分类只在**一处**判：异常自带稳定码就认它（码 → HTTP / 可重试查登记表），
+        # 没有稳定码才按类型区分"真写失败"与"未识别异常"，不靠 str(exc) 关键字匹配
+        # （Spec `drawing-flow-error-taxonomy.md` C1/C2、
+        #  `drawing-flow-non-editable-requirement.md` §3.2/§3.3/§3.4）。
         code = str(getattr(exc, "stable_error_code", "") or "")
         reason = type(exc).__name__
         detail = {"written": []}
@@ -347,8 +413,16 @@ def field_write(ctx: Dict[str, Any]) -> Dict[str, Any]:
             # 字段看板照旧有得看（缺前置条件不等于"这次识别没结果"）。
             blocked["fields"] = rows
             return blocked
-        code = code or ("REQUIREMENT_SAVE_FAILED" if isinstance(exc, (OSError, IOError))
-                        else "PACKAGING_FLOW_STEP_FAILED")
+        if code:
+            # 带稳定码的业务拒绝（如 REQUIREMENT_SAVE_REJECTED）：对外码就是它，
+            # 可重试性查登记表 —— 业务拒绝重试同样不会成功，不许落成"未识别故障"。
+            http_status, retryable = model.error_meta(code)
+            detail["reason"] = reason
+            detail["http_status"] = http_status
+            return _failed(code, str(exc) or "需求字段写入被业务规则拒绝", detail,
+                           retryable=retryable)
+        code = ("REQUIREMENT_SAVE_FAILED" if isinstance(exc, (OSError, IOError))
+                else "PACKAGING_FLOW_STEP_FAILED")
         message = str(exc) or "需求字段写入失败，请重试"
         detail["reason"] = reason
         return _failed(code, message, detail)
@@ -412,6 +486,7 @@ STEP_BODIES: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "dwg_convert": dwg_convert,
     "cad_ir_parse": cad_ir_parse,
     "packaging_semantics": packaging_semantics,
+    "parts_extract": parts_extract,
     "field_write": field_write,
     "pending_confirm": pending_confirm,
     "downstream_prepare": downstream_prepare,

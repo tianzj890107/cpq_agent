@@ -579,6 +579,23 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     }
 
 
+def _bind_parts(project_id: str, items: list) -> list:
+    """有零件文档就自动回填（Spec `packaging-dwg-parts-extraction.md` C7）。
+
+    没有零件文档 / 读不到 → 逐字保持今天的口径（`needs_input` 一个不少），
+    绝不用需求尺寸反推、也绝不编数。延迟导入是为了不让 bom ↔ parts 互相 import。
+    """
+    try:
+        from . import packaging_parts
+
+        doc = packaging_parts.load_parts(project_id)
+        if not isinstance(doc, dict) or not doc.get("parts"):
+            return items
+        return list(packaging_parts.bind_rows(items, doc).get("items") or items)
+    except Exception:                                   # noqa: BLE001 - 回填失败不改既有结论
+        return items
+
+
 def build_bom(project_id: str, requirement_no: str = "", *,
               overrides: Optional[dict] = None) -> dict:
     """读确认盒型 → 展开 → 组装七类 → 整体替换落库（锁定行原样保留）。"""
@@ -597,6 +614,7 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     expanded = expand_parts(box_code, data, overrides=overrides or {})
     box = _load_box_type(box_code)
     items = _assemble(expanded, box, data, req_no)
+    items = _bind_parts(project_id, items)
     da_repo.save_packaging_bom(project_id, req_no, items)
     return load_bom(project_id, req_no)
 

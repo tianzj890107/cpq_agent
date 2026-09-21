@@ -44,6 +44,7 @@
   //   action-state     动作表或某个动作的 visible/enabled/busy/label 变化；
   //   task-progress    长任务开始或有进度推进；
   //   task-completed   长任务成功结束；
+  //   task-blocked    长任务被前置条件阻断（终态，不是失败）；
   //   task-failed      长任务失败（结构化错误同时通过 result 回传）；
   //   selection-changed 看板内部选中的零件 / 视图发生变化；
   //   board-status     本页那行步骤状态（「已打开项目 …」/「就绪」/「本步已确认」…）
@@ -54,6 +55,7 @@
     TASK_PROGRESS: 'task-progress',
     TASK_COMPLETED: 'task-completed',
     TASK_PARTIAL: 'task-partial',
+    TASK_BLOCKED: 'task-blocked',
     TASK_FAILED: 'task-failed',
     SELECTION_CHANGED: 'selection-changed',
     BOARD_STATUS: 'board-status',
@@ -344,7 +346,7 @@
     function publishTaskCard(eventName, extra) {
       if (entry.silent === true) return;
       if ([EVENT.TASK_PROGRESS, EVENT.TASK_COMPLETED, EVENT.TASK_PARTIAL,
-           EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
+           EVENT.TASK_BLOCKED, EVENT.TASK_FAILED].indexOf(eventName) < 0) return;
       publish(eventName, name, extra);
     }
     // 「这一次执行」的唯一标识：同一次执行只出一次回声，两次执行各自再出一次。

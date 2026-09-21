@@ -155,10 +155,13 @@ class DRegressionGuards(unittest.TestCase):
         self.assertTrue(out.get("retryable"), "真失败仍可重试")
 
     def test_d2_step_contract_unchanged(self):
+        # 2026-09-21：零件提取批按 docs/specs/packaging-dwg-parts-extraction.md §4 在
+        # packaging_semantics 之后、field_write 之前插入 parts_extract —— 除新增这一步，
+        # 其余步骤的名称与顺序逐字未变。
         self.assertEqual(model.STEP_IDS,
                          ("file_preflight", "dwg_convert", "cad_ir_parse",
-                          "packaging_semantics", "field_write", "pending_confirm",
-                          "downstream_prepare"),
+                          "packaging_semantics", "parts_extract", "field_write",
+                          "pending_confirm", "downstream_prepare"),
                          "步骤闭集不得变动")
         self.assertEqual(set(model.STEP_TITLES), set(model.STEP_IDS),
                          "每步都必须有标题")

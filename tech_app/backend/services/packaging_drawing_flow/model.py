@@ -14,13 +14,14 @@ ANCHOR_VERSION = "packaging-flow-anchor/1"
 STALE_VERSION = "packaging-drawing-stale/1"
 
 STEP_IDS = ("file_preflight", "dwg_convert", "cad_ir_parse", "packaging_semantics",
-            "field_write", "pending_confirm", "downstream_prepare")
+            "parts_extract", "field_write", "pending_confirm", "downstream_prepare")
 
 STEP_TITLES = {
     "file_preflight": "文件预检",
     "dwg_convert": "DWG 转换",
     "cad_ir_parse": "CAD 矢量解析",
     "packaging_semantics": "包装语义识别",
+    "parts_extract": "零件提取",
     "field_write": "字段写入",
     "pending_confirm": "待确认生成",
     "downstream_prepare": "后续任务准备",
@@ -41,6 +42,12 @@ PRECONDITION_BLOCKERS = {
         "message": "需求单不存在，请先创建需求草稿（缺前置条件，重试不会成功）",
         "action": "先在需求看板为这个项目建一张需求草稿，再回到图纸解析重跑",
     },
+    # 需求已进入流程（pending_confirmation / pending_review / approved）：不许静默改写，
+    # 重试同一个入口必然再失败（Spec `drawing-flow-non-editable-requirement.md` §2/§3）。
+    "REQUIREMENT_NOT_EDITABLE": {
+        "message": "需求已提交或已进入确认/审核流程，当前状态不可直接改写（缺前置条件，重试不会成功）",
+        "action": "把这张需求单退回草稿，或为该项目新建一张需求草稿，再回到图纸解析重跑",
+    },
 }
 
 FIELD_BOARD_STATES = ("written", "pending", "conflict", "missing", "preserved", "skipped")
@@ -60,6 +67,13 @@ DEPENDENCIES = ("file_preflight", "cad_converter", "cad_ir", "packaging_semantic
 ERROR_CODES = {
     "PACKAGING_GATE_BLOCKED": (409, True),
     "PACKAGING_FLOW_DEPENDENCY_MISSING": (500, False),
+    # 需求不可编辑（前置条件）与其它业务规则拒绝：都是 409 且**重试不会成功**。
+    "REQUIREMENT_NOT_EDITABLE": (409, False),
+    "REQUIREMENT_SAVE_REJECTED": (409, False),
+    # 零件提取的前置条件（没有 IR / 提取模块不可用）：都是 409、重试不会成功，
+    # 但**不是**终态失败 —— 后续步骤照旧要跑到终态。
+    "PACKAGING_PARTS_NO_IR": (409, False),
+    "PACKAGING_PARTS_UNAVAILABLE": (409, False),
 }
 
 #: 步骤产出的"证据位"清单（steps() 的 produces）。
@@ -68,6 +82,8 @@ _PRODUCES = {
     "dwg_convert": ("conversion_id", "status", "quality", "warning_count", "error_count"),
     "cad_ir_parse": ("ir_id", "ir_hash", "ir_version", "unit_status"),
     "packaging_semantics": ("semantics_id", "semantics_hash", "stats", "unresolved_total"),
+    "parts_extract": ("parts_id", "parts_hash", "parts_total", "filtered_total", "truncated",
+                      "unavailable"),
     "field_write": ("fields", "written", "pending", "conflict", "missing", "preserved"),
     "pending_confirm": ("needs_confirmation", "conflict", "missing"),
     "downstream_prepare": ("downstream", "gates"),
@@ -78,6 +94,7 @@ _DEPENDS_ON = {
     "dwg_convert": ("file_preflight",),
     "cad_ir_parse": ("dwg_convert",),
     "packaging_semantics": ("cad_ir_parse",),
+    "parts_extract": ("packaging_semantics",),
     "field_write": ("packaging_semantics",),
     "pending_confirm": ("field_write",),
     "downstream_prepare": ("pending_confirm",),

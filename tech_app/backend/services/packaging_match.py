@@ -50,8 +50,21 @@ _SPAN_RE = re.compile(r"\d+(?:\.\d+)?")
 
 _TRUE_WORDS = {"是", "有", "需要", "要", "y", "yes", "true", "1"}
 _FALSE_WORDS = {"否", "无", "不需要", "不要", "n", "no", "false", "0"}
+#: 取值词后允许跟的说明分隔符（空白 + 开括号/引号）。只放宽**解析**：整条必须是
+#: 「取值词 + 一段说明」，`不是` / `否定的` 这类否定写法不在其中，仍判为无法识别。
+_BOOL_SUFFIX_SEPARATORS = " \t\r\n(\uff08[\u3010{\uff5b\"'\u201c\u2018"
 
 _DECISION_STATES = ("confirmed", "returned", "new_tooling")
+
+#: 缺数据说明（Spec C2）：维度 → 人话。`data_gaps` 只做展示，不改变 `status` /
+#: `can_confirm`（人工确认优先）。
+_DATA_GAP_MESSAGES = {
+    "fit_clearance": "该盒型未登记配合间隙，本维未参与打分，需补齐或人工确认",
+    "size_range": "该盒型未登记尺寸区间，本维未参与打分，需补齐或人工确认",
+    "face_paper_gsm": "该盒型未登记面纸克重，本维未参与打分，需补齐或人工确认",
+    "closure_type": "该盒型未登记闭合方式，本维未参与打分，需补齐或人工确认",
+    "v_groove": "该盒型未登记 V 槽，本维未参与打分，需补齐或人工确认",
+}
 
 
 class BoxMatchError(Exception):
@@ -115,6 +128,12 @@ def _as_bool(value: Any) -> Optional[bool]:
         return True
     if text in _FALSE_WORDS:
         return False
+    # 取值词 + 空白/括号说明（`是（90度）` / `否(无)` / `是 90度`）→ 与整词同值。
+    for words, result in ((_TRUE_WORDS, True), (_FALSE_WORDS, False)):
+        for word in sorted(words, key=len, reverse=True):
+            if len(word) < len(text) and text.startswith(word) \
+                    and text[len(word)] in _BOOL_SUFFIX_SEPARATORS:
+                return result
     return None
 
 
@@ -211,7 +230,8 @@ def _dimension_fit(inputs: dict, box: dict):
         return None, False, False, "missing_input", False
     available = _num(box.get("fit_clearance"))
     if available is None:
-        return 0.0, False, False, None, True
+        # 盒型侧没登记：与"需求未填"同路 —— 该维不计分也不淘汰，但仍要能看见（Spec C1/C2）。
+        return None, False, False, None, True
     if abs(wanted - available) <= FIT_CLEARANCE_TOLERANCE_MM:
         return 1.0, False, False, None, False
     return 0.0, False, True, "fit_clearance_out_of_tolerance", False
@@ -331,6 +351,11 @@ def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required
         "out_of_range": bool(out_of_range),
         "reject_reasons": reject_reasons,
         "undecidable_dimensions": undecidable,
+        "data_gaps": [{"dimension": dimension,
+                       "message": _DATA_GAP_MESSAGES.get(
+                           dimension,
+                           "该盒型未登记 %s，本维未参与打分，需补齐或人工确认" % dimension)}
+                      for dimension in undecidable],
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
     }
@@ -347,17 +372,23 @@ def match_box_types(inputs: dict) -> dict:
                   for box in kb_repo.packaging_box_types()]
     candidates.sort(key=_sort_key)
 
-    matched = [item for item in candidates if item["status"] == "matched"]
-    # 建议盒型取「分最高」的可确认候选：列表顺序由红测固定为升序，但把分最低的候选
+    # 可推荐 = 命中且**不越界**（Spec C4）：越界候选照旧列出、带 out_of_range，但不得被推荐。
+    matched = [item for item in candidates
+               if item["status"] == "matched" and not item.get("out_of_range")]
+    # 建议盒型取「分最高」的可推荐候选：列表顺序由红测固定为升序，但把分最低的候选
     # 推荐给工艺经理会误导确认，所以这里单独挑最优（同分按盒型编码升序）。
     best = sorted(matched, key=lambda item: (-float(item["total_score"]),
                                              _text(item["box_type_code"])))
-    if candidates and all(item["status"] == "rejected" for item in candidates):
-        reason = "all_rejected"
-    elif not candidates:
+    if not candidates:
         reason = "no_box_type"
+    elif all(item["status"] == "rejected" for item in candidates):
+        reason = "all_rejected"
     elif missing_required:
         reason = "missing_required_input"
+    elif matched:
+        reason = ""
+    elif any(item["status"] == "matched" for item in candidates):
+        reason = "size_out_of_range"
     else:
         reason = "no_confirmable_candidate"
 

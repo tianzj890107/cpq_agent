@@ -19,6 +19,7 @@
 | `demo_only` | `env == "production"` 且任一关键表**全部**是 `source_type='demo'` |
 | `authority_missing` | `env == "production"` 且关键表存在 `source_type='demo'` 的行、而这些行没有申报权威出处（`authority_ref` 为空） |
 | `unclassified_rows` | `env == "production"` 且存在 `source_type='unknown'` 的行 |
+| `box_type_missing_fit_clearance` | `env == "production"` 且 `kb_packaging_box_type` 有非 `demo` 行没登记 `fit_clearance` |
 | `below_min_rows` | `--min-rows 表=下限` 指定的表行数低于下限 |
 
 `provenance` / `unclassified_rows` **只统计 9 张包装扩展表**：其余 `kb_*` 表没有
@@ -62,6 +63,9 @@ REQUIRED_TABLES = tuple(cpq_kb.PACKAGING_REQUIRED_TABLES)
 DEMO = "demo"
 UNKNOWN = "unknown"
 
+#: 盒型库统一表名（`fit_clearance` 是匹配硬门槛维度，权威行不许留空）。
+BOX_TABLE = "kb_packaging_box_type"
+
 EXIT_GO = 0
 EXIT_NO_GO = 1
 EXIT_BROKEN = 2
@@ -84,6 +88,23 @@ def _authority_ref(row) -> str:
     if not isinstance(row, dict):
         return ""
     return str(row.get("authority_ref") or "").strip()
+
+
+def _box_row_identified(row) -> bool:
+    """这一行是否可识别为一个盒型。
+
+    `kb_packaging_box_type.box_type_code` 是主键（PostgreSQL 主键隐含 NOT NULL），
+    真实 PG 行必有编码；没有编码的行不是盒型（形状夹具/空行），不按盒型判定
+    `fit_clearance` —— 否则最小夹具也会被当成"权威盒型缺数据"而误拦上线。
+    """
+    return isinstance(row, dict) and bool(str(row.get("box_type_code") or "").strip())
+
+
+def _blank_value(value) -> bool:
+    """`fit_clearance` 之类数值列是否留空；`0` 是已登记的真实取值，不算空。"""
+    if value is None:
+        return True
+    return not str(value).strip()
 
 
 def _version_int(kb_version) -> int:
@@ -147,6 +168,16 @@ def preflight(tables: dict, *, env: str = "local", kb_version=None,
             problems.append(_problem("unclassified_rows", "",
                                      "有 %d 行 source_type='unknown'：生产库不得含未分类数据"
                                      % provenance[UNKNOWN]))
+        gap_rows = [row for row in (tables.get(BOX_TABLE) or [])
+                    if _box_row_identified(row) and _source_type(row) != DEMO
+                    and _blank_value(row.get("fit_clearance"))]
+        if gap_rows:
+            problems.append(_problem(
+                "box_type_missing_fit_clearance", BOX_TABLE,
+                "%s 有 %d 条权威盒型（source_type != demo）没登记配合间隙（fit_clearance 为空）："
+                "匹配时该维不计分、这类盒型也排不到前面；"
+                "补齐数据或走图纸确认流程后重导，样例行不受此限"
+                % (BOX_TABLE, len(gap_rows))))
 
     for name, floor in dict(min_rows or {}).items():
         floor = _version_int(floor)

@@ -933,9 +933,10 @@ async function parseDrawing() {
   try {
     // DWG / DXF 不走视觉模型：服务端已有图纸解析链路，前端只点一次、把结果摆出来。
     if (currentDrawingEntry === "drawing_flow") {
-      await runDrawingFlowParse();
+      // 把链路终态交回后台链路（parseDrawingInBackground 据此决定看板事件），不许丢掉。
+      const drawingFlowState = await runDrawingFlowParse();
       parseDrawingError = "";
-      return null;
+      return { drawing_flow: drawingFlowState };
     }
     status("模型正在解析图纸与技术文档需求为结构化 IR（含视觉理解，稍候）...", true);
     currentIR = await runTask(currentProject, `/api/projects/${currentProject}/parse`, "解析");
@@ -1063,6 +1064,89 @@ async function loadDrawingFlowPanel() {
   if (state) renderDrawingFlowPanel(state);
 }
 
+/* ---------------- 2.1 一键解析的终态信号（Spec drawing-flow-parse-terminal-signal.md C1） ---- */
+// 终态判定只有这一处：纯函数，不读 DOM / 全局 / 网络（node 可直接 eval 跑）。
+// code / message 一律逐字取服务端载荷，前端不重新措辞、不拼接猜测。
+function drawingFlowTerminalSignal(flowState, error) {
+  const state = (flowState && typeof flowState === "object") ? flowState : null;
+  const steps = (state && Array.isArray(state.steps)) ? state.steps : [];
+  const firstWithStatus = wanted => {
+    for (let index = 0; index < steps.length; index++) {
+      const row = (steps[index] && typeof steps[index] === "object") ? steps[index] : {};
+      if (wanted.indexOf(String(row.status || "")) >= 0) return row;
+    }
+    return null;
+  };
+  const detailOf = row => ((row && row.detail && typeof row.detail === "object") ? row.detail : {});
+  // blocked 优先于 failed：缺前置条件时重试必然再失败，比"失败"更该先说。
+  const blocked = firstWithStatus(["blocked"]);
+  if (blocked) {
+    return { event: "task-blocked", code: String(blocked.error_code || ""),
+             message: String(blocked.error_message || ""),
+             action: String(detailOf(blocked).action || ""), retryable: false };
+  }
+  const failed = firstWithStatus(["failed", "unavailable"]);
+  if (failed) {
+    return { event: "task-failed", code: String(failed.error_code || ""),
+             message: String(failed.error_message || ""),
+             action: String(detailOf(failed).action || ""),
+             retryable: failed.retryable !== false };
+  }
+  const runId = state ? String(state.run_id || "") : "";
+  const completed = steps.some(row => String((row && row.status) || "") === "completed");
+  if (state && runId && completed) {
+    return { event: "task-completed", code: "", message: "", action: "", retryable: true };
+  }
+  if (error) {
+    return { event: "task-failed", code: "FLOW_RUN_REJECTED", message: String(error),
+             action: "", retryable: true };
+  }
+  return { event: "task-failed", code: "FLOW_STATE_MISSING",
+           message: "图纸解析链路没有返回状态，请重新解析。", action: "", retryable: true };
+}
+
+/* ---------------- 2.1 左栏空态的原因文案（Spec C4） ---------------- */
+// 纯函数：有零件 → 空串；否则逐字给服务端的不可用原因 + 前置条件（带码与下一步动作）。
+function packagingPartsEmptyText(partsDoc, preconditions) {
+  const doc = (partsDoc && typeof partsDoc === "object") ? partsDoc : {};
+  const parts = Array.isArray(doc.parts) ? doc.parts : [];
+  if (parts.length) return "";
+  const segments = [];
+  const unavailable = Array.isArray(doc.unavailable) ? doc.unavailable : [];
+  unavailable.forEach(item => {
+    const message = String((item && item.message) || "").trim();
+    if (message) segments.push(message);
+  });
+  const gaps = Array.isArray(preconditions) ? preconditions : [];
+  gaps.forEach(item => {
+    const code = String((item && item.code) || "").trim();
+    const message = String((item && item.message) || "").trim();
+    const action = String((item && item.action) || "").trim();
+    if (!code && !message) return;
+    segments.push("[" + code + "] " + message + (action ? " → " + action : ""));
+  });
+  if (!segments.length) return "零件文档还没生成，请先跑一键解析图纸。";
+  return segments.join("；");
+}
+
+// 2.1 左栏零件文档（drawing_flow 链路）：GET .../requirement/packaging-parts。
+// 端点未上线（零件提取那批才加）时拿到 404 → 保持 null，走空态文案，不谎报"解析失败"。
+let currentPackagingParts = null;
+let currentDrawingFlowState = null;
+async function fetchPackagingParts() {
+  if (!currentProject) return null;
+  try {
+    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/packaging-parts`);
+    if (!res.ok) return null;
+    return await res.json().catch(() => null);
+  } catch (error) { return null; }
+}
+async function refreshPackagingParts() {
+  currentPackagingParts = await fetchPackagingParts();
+  renderTree(currentIR || {});
+  return currentPackagingParts;
+}
+
 async function runDrawingFlowParse() {
   status("正在跑图纸解析链路（DWG → DXF → CAD IR → 包装语义），稍候…", true);
   const res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow/run`, {
@@ -1077,13 +1161,16 @@ async function runDrawingFlowParse() {
       ? detail : `图纸解析请求失败（HTTP ${res.status}）`);
   }
   const state = await fetchDrawingFlowState().catch(() => null);
-  renderDrawingFlowPanel(state || payload);
-  const summary = cadIrSummaryOf(state || payload);
+  currentDrawingFlowState = state || payload;
+  renderDrawingFlowPanel(currentDrawingFlowState);
+  const summary = cadIrSummaryOf(currentDrawingFlowState);
   status(summary.entities
     ? `图纸解析完成：CAD IR 实体 ${summary.entities} · 图层 ${summary.layers}`
     : "图纸解析链路已跑完，详见下方步骤表。");
   setWorkflow("review", "DWG / DXF 已由服务端图纸解析链路处理，请核对步骤与 CAD IR 摘要。");
-  return payload;
+  // 左栏零件文档（端点未上线时为空态，不影响链路结论）。
+  await refreshPackagingParts().catch(() => null);
+  return currentDrawingFlowState;
 }
 
 $("btnParse").onclick = parseDrawing;
@@ -1909,6 +1996,43 @@ function renderTree(ir) {
   const tree = $("tree");
   if (!tree) return;
   tree.innerHTML = "";
+  // DWG / DXF 链路的左栏是零件文档（不是视觉 IR）：行数 = stats.part_total，
+  // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
+  if (currentDrawingEntry === "drawing_flow") {
+    const doc = currentPackagingParts || {};
+    const rows = Array.isArray(doc.parts) ? doc.parts : [];
+    const preconditions = (currentDrawingFlowState && currentDrawingFlowState.preconditions) || [];
+    tree.classList.toggle("empty-state", !rows.length);
+    if (!rows.length) {
+      tree.textContent = packagingPartsEmptyText(doc, preconditions);
+      return;
+    }
+    rows.forEach(part => {
+      const row = document.createElement("div");
+      row.className = "part part-item";
+      const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
+        ? "" : String(part.unfolded_length_mm);
+      const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)
+        ? "" : String(part.unfolded_width_mm);
+      const size = (length || width) ? `展开 ${length}×${width} mm` : "展开尺寸待确认";
+      const layers = Array.isArray(part.layers) ? part.layers.join(" / ") : "";
+      row.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
+        + `<div class="part-info"><div class="part-name">${esc(part.part_code || "")} `
+        + `${esc(part.name || "")}</div><div class="part-type">${esc(size)}`
+        + `${layers ? " · " + esc(layers) : ""}</div></div>`;
+      tree.appendChild(row);
+    });
+    // 超上限被截断时必须说清楚（Spec §5：truncated > 0 要给提示），否则用户会以为
+    // 图纸里就这么多零件。提示行用的是自己的 class，不算零件行。
+    const truncated = Number((doc.stats || {}).truncated) || 0;
+    if (truncated > 0) {
+      const note = document.createElement("div");
+      note.className = "part-truncated-note";
+      note.textContent = `还有 ${truncated} 件未列出（只显示前 ${rows.length} 件）`;
+      tree.appendChild(note);
+    }
+    return;
+  }
   tree.classList.toggle("empty-state", !(ir.parts || []).length);
   const partById = {};
   (ir.parts || []).forEach(p => { partById[p.part_id] = p; });
@@ -2750,21 +2874,42 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
   // 解析是长任务（视觉模型一轮常常远超桥的 20 秒默认超时）：动作条目声明 deferred，
   // 只负责启动后台链路并秒级回执，真正的完成 / 失败由后台结束时自己推给父壳。
   let parseDrawingBusy = false;
-  function parseDrawingSettle(event, message) {
-    try {
-      window.TechBoardRuntime.publish(event, "parseDrawing",
-        message ? { action: "parseDrawing", message: message } : { action: "parseDrawing" });
-    } catch (error) { /* 独立打开无运行时 */ }
+  // 终态事件带 code / message / action / retryable：父壳据此区分"被阻断"与"真失败"，
+  // 不用猜文案（Spec C3）。
+  function parseDrawingSettle(event, signal) {
+    const payload = { action: "parseDrawing" };
+    if (signal && typeof signal === "object") {
+      payload.code = String(signal.code || "");
+      payload.message = String(signal.message || "");
+      payload.action_text = String(signal.action || "");
+      payload.retryable = signal.retryable !== false;
+    } else if (signal) {
+      payload.message = String(signal);
+    }
+    try { window.TechBoardRuntime.publish(event, "parseDrawing", payload); }
+    catch (error) { /* 独立打开无运行时 */ }
   }
   // 后台链路放在注册表外：动作条目只负责启动它并秒级回执（deferred），
-  // 真正的完成 / 失败由这里解析完后推给父壳。
+  // 真正的完成 / 被阻断 / 失败由这里按链路终态推给父壳（Spec C2）。
   async function parseDrawingInBackground() {
     try {
       const result = await parseDrawing();
-      if (result) parseDrawingSettle("task-completed");
-      else parseDrawingSettle("task-failed", parseDrawingError || "图纸解析未完成。");
+      if (currentDrawingEntry === "drawing_flow") {
+        // GET /drawing-flow 是 {flow, gates, stale, inheritance, preconditions}；
+        // 终态判定认平铺的 flow（run_id + steps）。POST 失败时没有状态 → 由 error 兜底。
+        const state = (result && typeof result === "object") ? result.drawing_flow : null;
+        const flowState = (state && typeof state === "object" && state.flow) ? state.flow : state;
+        const signal = drawingFlowTerminalSignal(flowState, parseDrawingError);
+        parseDrawingSettle(signal.event, signal);
+      } else if (result) {
+        parseDrawingSettle("task-completed");
+      } else {
+        parseDrawingSettle("task-failed", { message: parseDrawingError || "图纸解析失败。",
+                                            retryable: true });
+      }
     } catch (error) {
-      parseDrawingSettle("task-failed", (error && error.message) || "图纸解析失败。");
+      parseDrawingSettle("task-failed", { message: (error && error.message) || "图纸解析失败。",
+                                          retryable: true });
     } finally {
       parseDrawingBusy = false;
       window.TechBoardRuntime.updateActionState("parseDrawing", { busy: false });

@@ -556,6 +556,8 @@ a.oc-file-name:hover { color: var(--oc-accent); text-decoration: underline; }
 .oc-task-card.is-interrupted .oc-task-state { background: #e0edff; color: #0050C4; }
 /* 部分完成沿用中断的蓝色：它不是失败，只是有零件被跳过（不新增红色）。 */
 .oc-task-card.is-partial .oc-task-state { background: #e0edff; color: #0050C4; }
+/* 被阻断（缺前置条件）也沿用中断的蓝色：它是终态、不是失败，重试同一条路必然再失败。 */
+.oc-task-card.is-blocked .oc-task-state { background: #e0edff; color: #0050C4; }
 .oc-task-card.is-succeeded .oc-task-state { background: #dcfce7; color: #15803d; }
 .oc-task-card.is-failed .oc-task-state { background: #fee2e2; color: #b91c1c; }
 .oc-task-steps { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }

@@ -1463,7 +1463,7 @@
   }
   function taskStatusWord(status) {
     return { queued: "排队中", running: "进行中", succeeded: "已完成", partial: "部分完成", failed: "失败",
-             interrupted: "中断" }[status] || "进行中";
+             interrupted: "中断", blocked: "被阻断" }[status] || "进行中";
   }
   function ensureTaskCard(taskId, label) {
     const key = String(taskId || label || "task");
@@ -1711,7 +1711,7 @@
   function setTaskStatus(card, status) {
     if (!card || !status || card.status === status) return;
     card.status = status;
-    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed", "is-partial", "is-interrupted");
+    card.box.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed", "is-partial", "is-interrupted", "is-blocked");
     card.box.classList.add(`is-${status}`);
     card.state.textContent = taskStatusWord(status);
   }
@@ -1783,12 +1783,16 @@
       ? String(detail.error || detail.message || "").trim() : "";
     const interruptedReason = status === "interrupted"
       ? String(detail.error || detail.message || "").trim() : "";
+    // 被阻断（缺前置条件）是终态、不是失败：它常常一秒内就结束、没有任何进度行，
+    // 但「缺什么」必须看得见，所以带原因也允许建卡。
+    const blockedReason = status === "blocked"
+      ? String(detail.message || detail.error || "").trim() : "";
     // 预期内失败（在途命令被取消、当前视图没有目标输入框…）看板自己已经就地提示过：
     // 已经在跑的卡不翻红，也不再往会话里补噪音。
     const quietFailure = status === "failed" && isQuietBoardCode(detail.code);
     const existingCard = taskProgressCards.has(String(taskId || label || "task"));
     // 有真实执行明细（进度行或过程事件）才算内容；已在运行的卡不重复建。
-    const hasContent = log.length > 0 || existingCard;
+    const hasContent = log.length > 0 || existingCard || Boolean(blockedReason);
     if (!hasContent && !streamLength) return;
     const card = ensureTaskCard(taskId, label);
     if (!card.prompt) card.prompt = String(detail.prompt || "").trim();
@@ -1843,6 +1847,20 @@
         card.errorNode.textContent = message;
       }
     }
+    // 被阻断沿用中性行的写法（红字只留给真正的失败）：正文同时给出原因与下一步动作，
+    // 且不说"请重试"——这类问题的定义就是重试必然再失败。
+    if (status === "blocked") {
+      card.done = true;
+      const diagnose = blockedReason || "任务被前置条件阻断";
+      const action = String(detail.action || detail.action_text || "").trim();
+      const text = action && action !== diagnose ? diagnose + "\n" + action : diagnose;
+      if (!card.noteNode) {
+        card.noteNode = el("div", "oc-task-note", text);
+        card.box.append(card.noteNode);
+      } else {
+        card.noteNode.textContent = text;
+      }
+    }
     // 中断沿用蓝色 chip，原因进中性行（红字只留给真正的失败），落库与回放沿用同一套。
     if (status === "interrupted") {
       card.done = true;
@@ -1862,7 +1880,7 @@
     const message = String(reason || "任务已中断").trim();
     taskProgressCards.forEach(card => {
       if (!card || card.done) return;
-      if (["succeeded", "failed", "interrupted", "partial"].indexOf(String(card.status || "")) >= 0) return;
+      if (["succeeded", "failed", "interrupted", "partial", "blocked"].indexOf(String(card.status || "")) >= 0) return;
       renderTaskProgress({ taskId: card.key, label: card.label, status: "interrupted",
                            error: message, log: [] });
     });
@@ -2348,6 +2366,10 @@
         return;
       }
       if (name === "task-partial") { renderTaskProgress({ ...payload, status: "partial" }); return; }
+      if (name === "task-blocked") {
+        renderTaskProgress(Object.assign({}, payload, { status: "blocked" }));
+        return;
+      }
       if (name === "task-failed") {
         renderTaskProgress(Object.assign({}, payload, { status: "failed" }));
         return;

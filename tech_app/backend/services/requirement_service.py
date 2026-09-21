@@ -28,6 +28,12 @@ CREDIT_LEVELS = {"", "A", "B", "C", "D"}
 # 可保存草稿的状态：一旦进入确认流程，需求单就不能再被静默改写。
 EDITABLE_STATUSES = ("draft", "rejected")
 
+# 业务拒绝的**稳定码**闭集（Spec `drawing-flow-non-editable-requirement.md` §1.2）：
+# 判定只认异常自带的 `stable_error_code`，不许用 `str(exc)` 关键字匹配；
+# `packaging_drawing_flow.model` 按同一字面量登记前置条件与 HTTP/可重试口径。
+REQUIREMENT_NOT_EDITABLE = "REQUIREMENT_NOT_EDITABLE"
+REQUIREMENT_SAVE_REJECTED = "REQUIREMENT_SAVE_REJECTED"
+
 # 字段来源（Spec 4.3）：封闭枚举，前端徽章与合并规则共用同一份口径。
 FIELD_SOURCES = ("user_text", "attachment", "ai_extract", "ai_recommend", "manual")
 # 已有的人工来源（用户原文 / 附件）不得被低优先级的 AI 来源降级。
@@ -65,11 +71,18 @@ def merge_field_sources(existing: Optional[dict], incoming: Optional[dict]) -> d
 
 
 class RequirementSaveError(Exception):
-    """业务规则拒绝保存。status_code 供 HTTP 路由原样映射成 HTTPException。"""
+    """业务规则拒绝保存。
 
-    def __init__(self, message: str, status_code: int = 409):
+    `status_code` 供 HTTP 路由原样映射成 HTTPException；`stable_error_code` 是业务拒绝的
+    稳定码（Spec `drawing-flow-non-editable-requirement.md` §1）—— 调用方按码分类，
+    不许靠 `str(exc)` 关键字匹配。未显式给码时取默认 `REQUIREMENT_SAVE_REJECTED`。
+    """
+
+    def __init__(self, message: str, status_code: int = 409,
+                 code: Optional[str] = None):
         super().__init__(message)
         self.status_code = status_code
+        self.stable_error_code = str(code or REQUIREMENT_SAVE_REJECTED)
 
 
 # 需求阶段缺口记录用的字段中文名：Section C 由行业模板给（industry_templates.all_labels），
@@ -136,14 +149,16 @@ def save_requirement_draft(project_id: str, doc: RequirementDoc,
     if current is None:
         current = store.load_requirement(project_id)
     if current and current.get("status") not in EDITABLE_STATUSES:
-        raise RequirementSaveError("需求已提交，不能直接修改；请先退回后再编辑", 409)
+        raise RequirementSaveError("需求已提交，不能直接修改；请先退回后再编辑", 409,
+                                   code=REQUIREMENT_NOT_EDITABLE)
     existing_credit = str(((current or {}).get("data") or {}).get("customer_credit") or "").strip().upper()
     incoming_credit = str((doc.data or {}).get("customer_credit") or "").strip().upper()
     if incoming_credit not in CREDIT_LEVELS:
-        raise RequirementSaveError("客户信用等级只能为 A、B、C 或 D", 422)
+        raise RequirementSaveError("客户信用等级只能为 A、B、C 或 D", 422, code=REQUIREMENT_SAVE_REJECTED)
     if incoming_credit != existing_credit and user.get("role") != "admin":
         # 销售经理必须走专用接口，确保其无法借整张表单保存改动其它需求字段。
-        raise RequirementSaveError("客户信用等级仅可由销售经理首次录入，或由系统管理员修改", 403)
+        raise RequirementSaveError(
+            "客户信用等级仅可由销售经理首次录入，或由系统管理员修改", 403, code=REQUIREMENT_SAVE_REJECTED)
     doc.project_id = project_id
     # 报价来源与客户名是「新增工艺」任务带进来的**非表单键**（tech-task.js 建单时写的）。
     # 1.1 的表单保存历来是整份替换 data，一存就把它们抹掉 —— 后果要到最后一步才暴露：
@@ -179,10 +194,10 @@ def submit_requirement_confirmation(project_id: str, user: Optional[dict] = None
     user = user or {}
     saved = store.load_requirement(project_id)
     if not saved:
-        raise RequirementSaveError("请先保存需求单", 404)
+        raise RequirementSaveError("请先保存需求单", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
     if doc.status not in EDITABLE_STATUSES:
-        raise RequirementSaveError("当前需求不在可提交状态", 409)
+        raise RequirementSaveError("当前需求不在可提交状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     # 1.1 不新增硬门禁：星号字段没填全时，前端弹「仍要继续」，点继续就把 waiver 带到这里。
     # 缺口属于 L2（质量依赖），允许带着继续，但必须留下可追溯的签字记录。
     if waiver:
@@ -361,10 +376,10 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     user = user or {}
     saved = store.load_requirement(project_id)
     if not saved:
-        raise RequirementSaveError("需求单不存在", 404)
+        raise RequirementSaveError("需求单不存在", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
     if doc.status != "pending_confirmation":
-        raise RequirementSaveError("当前需求不在待确认状态", 409)
+        raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     # 1.2 不新增硬门禁：有缺口时前端弹「仍要继续」，点继续才把 waiver 带到这里。
     # 同一批缺口在 1.1 已签过字就复用（reused=True），不再重复索要第二次签字。
     if waiver:
@@ -398,10 +413,10 @@ def return_requirement_to_draft(project_id: str, user: Optional[dict] = None,
     user = user or {}
     saved = store.load_requirement(project_id)
     if not saved:
-        raise RequirementSaveError("需求单不存在", 404)
+        raise RequirementSaveError("需求单不存在", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
     if doc.status != "pending_confirmation":
-        raise RequirementSaveError("当前需求不在待确认状态", 409)
+        raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     doc.status = "draft"
     doc.confirmation_note = comment
     doc.history.append(workflow_event("confirmation_returned", user, comment))
@@ -424,12 +439,12 @@ def review_requirement(project_id: str, user: Optional[dict] = None,
     user = user or {}
     saved = store.load_requirement(project_id)
     if not saved:
-        raise RequirementSaveError("需求单不存在", 404)
+        raise RequirementSaveError("需求单不存在", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
     if doc.status != "pending_review":
-        raise RequirementSaveError("当前需求不在待审核状态", 409)
+        raise RequirementSaveError("当前需求不在待审核状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     if decision not in ("approve", "reject"):
-        raise RequirementSaveError("decision 必须为 approve 或 reject", 400)
+        raise RequirementSaveError("decision 必须为 approve 或 reject", 400, code=REQUIREMENT_SAVE_REJECTED)
     # 1.3 把「业务批准」与「技术上能不能解析」分开记：带缺口批准只留痕，不放宽审核结论与权限。
     if waiver:
         gaps = requirement_gaps(project_id, doc)

@@ -5967,3 +5967,537 @@ docstring 新增的"口径变更记录"同步了 4 处（DWG 拒绝码改由能�
   `box_type_missing_fit_clearance`），等 DeepSeek 按提示词实现。
 - 未提交 `scripts/tmp_import_dwg_cases.py`（他人临时脚本）与 `裕同包装项目-待开发/`（客户样本）。
 - 未 push / MR / tag / Release / 部署；未动 `20260909` / `master`；未改动任何生产数据。
+
+## 223. 真实 DWG「2.1 看不到零件」根因：Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+现场：两份真实 DWG 在 34 上跑通 drawing-flow（`bf99bec0d274` / `ce9d5aae9631`）之后，2.1 图纸解析
+**看不到任何零件**、报价也拿不到成品尺寸。本批把根因写成可验收的 Spec 与红测，**不含任何业务实现**
+（实现提示词只在会话中交付，不入仓）。
+
+### 现场取证（本地 libredwg 0.14 → ezdxf 复现，与 34 上 ODA 27.1 逐值一致）
+
+- 酒盒.dwg：8 层 6569 实体，只有 `CUTTER` 被识别成 `cut`（`name_prefix=["CUT"]` 撞上），其余 7 层
+  `unknown`；2 条闭合轮廓（都在图层 `0`，1705.9508×713.2990）恰好是 `repeated_groups` 里
+  `count=2` 的同一个组；成品长宽被写成 **1705.9507596530002 × 713.2989662779999**；`box_candidate_total=0`。
+- 圆盘盒.dwg：32 层 6864 实体，**全部 `unknown`**（`全穿刀` / `压线 Crease` / `图框层` / `排图层`
+  一条都不命中）；633 条闭合轮廓全部落在 `repeated_groups`，最大那条（15639.3728×6318.2803）
+  与 `document.extents` 同宽——就是整张图框；成品长宽被写成
+  **15639.372814358998 × 6318.280258252999**；`box_candidate_total=0`。
+- 两条真实成形证据其实一直在图上：圆盘盒 78 个 `kind=circle`（Ø404×4 / Ø401×2 / Ø399×2 / Ø396.6×2 /
+  Ø389.6×6…）与原生标注 `403.99999` / `396.59999`；只是被拼版大框的面积比压死。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-product-outline-and-die-layer-roles.md`（三条缺口 D1/D2/D3 +
+  六条契约：真实世界图层名 / 拼版·图框·整张排除与披露 / 成品长宽只认产品级证据 / 盒型候选 /
+  只加三处披露面 / 确定性；含「重复成品轮廓一律不当成品尺寸」的显式取舍与冻结面清单）。
+- 红测：新增 `tests/test_packaging_product_outline_red.py`（27 条，A–E 五组）。A/B/C 组用
+  `tests/fixtures/cad_ir/build_fixtures.py` 在内存里现搭合成 CAD IR（不落盘、不改既有夹具），
+  D 组跑两份真实 DWG，E 组是冻结面锚点守卫。
+
+### 验收实跑（`./open-claude/.venv/bin/python`；本机 `pytest` 未装，用 unittest 跑）
+
+- 新红测按预期红：默认 `Ran 21, failures=12, skipped=1`（A1/A2/A3/A6/A7、B1–B5、C1/C2 红；
+  A4/A5/C3/C4/E1–E5 绿为守卫）；`CPQ_DWG_REAL_SAMPLES=1` 后 `Ran 27, failures=17`
+  （D1 图层角色、D2 酒盒候选、D3 圆盘盒 `round_tube`、D4 圆盘盒成品长宽＝整张框、D5 `全穿刀`
+  未计入刀线层；D6 哈希稳定为绿）。
+- D 组真实样本转换只走 `tech_app/tools/dwg_sample_e2e.py`（样本只读、产物只写临时目录），
+  两份样本转换 + 解析 + 语义分析合计约 29s，未写真实 `tech_data`。
+- 保护网未破：`test_packaging_semantics_red`（第 4 批）`Ran 59 OK (skipped=1)`、
+  `test_packaging_drawing_flow_red` `Ran 54 OK (skipped=1)`。
+- 说明：红测先行会让红色总数上升，这是期望值先行的正常状态。
+
+### 未做 / 遗留
+
+- 未写业务实现（`packaging_layer_rules.json` 的真实命名条目与 `name_contains`、
+  `roles.py` 的匹配、`rules.py` 的 `match` 键闭集校验、`geometry_semantics.py` /
+  `fields.py` 的产品级候选与 `rejected` 披露），等 DeepSeek 按提示词实现。
+- 未改仓库既有红测的任何期望值（本批不需要：现有夹具都是单轮廓，无重复组、无图框层大框）；
+  未提交 `scripts/tmp_import_dwg_cases.py`（他人临时脚本）与 `裕同包装项目-待开发/`（客户样本）。
+- 未 push / MR / tag / Release / 部署；未动 `20260909` / `master`；未改动任何生产数据；未重启服务。
+
+## 224. 「需求已提交 → 图纸解析写不进去」的第二条根因：Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+接 ## 223：两份真实 DWG（`bf99bec0d274` / `ce9d5aae9631`）在 34 上的 requirement `status` 都是
+`approved`，于是即使语义侧修好，`field_write` 仍会在写入这一步整体失败。本批只修**分类与可预见性**，
+**不放宽**「已提交的需求不可被静默改写」，**不含业务实现**（提示词只在会话中交付）。
+
+### 现场取证
+
+- `requirement_service.py:139` 的条件是 `status not in EDITABLE_STATUSES`（`("draft","rejected")`），
+  抛 `RequirementSaveError("需求已提交，不能直接修改；请先退回后再编辑", 409)`；
+- 该异常**没有** `stable_error_code` → `steps.field_write` 把它归成
+  `PACKAGING_FLOW_STEP_FAILED`（"其它未识别异常"）且 `retryable=True`：文案通用、重试永远不会成功；
+- `packaging_drawing_flow.preconditions(project_id)` 返回 **`[]`** —— 跑之前看不缺什么；
+- 与 `drawing-flow-error-taxonomy.md` §1 记录的三个问题（码与因无关 / 真因文案被吞 / 缺前置条件判死链路）
+  是**同型复发**，缺的前置条件换成「需求已提交、状态不可写」。
+
+### 产物
+
+- Spec：新增 `docs/specs/drawing-flow-non-editable-requirement.md`（契约 C1–C5：业务拒绝自带稳定码 /
+  前置条件必须枚举 `REQUIREMENT_NOT_EDITABLE` / `field_write` 必须 blocked·不可重试·带 action·看板不清空 /
+  不许放宽 `EDITABLE_STATUSES`·不许绕过 `save_requirement_draft` / 冻结面）；并在
+  `docs/specs/drawing-flow-error-taxonomy.md` 末尾加一节**指针**（§1–§5 契约原样不动）。
+- 红测：新增 `tests/test_drawing_flow_requirement_state_red.py`（17 条，A–D 四组）。全部离线：
+  「需求已提交」用 `mock.patch.object(store, "load_requirement" / "save_requirement")` 注入，
+  `save_requirement` 被调用即判失败（证明守卫没有放行写库）；A 组还用 AST 扫描
+  `requirement_service.py` 里每处 `raise RequirementSaveError(...)` 是否显式给码。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`）
+
+- 新红测按预期红：`Ran 17, failures=8`（A1 `stable_error_code` 为空、A2 默认码为空、
+  A3 扫出 12 处 raise 没给码：139/143/146/182/185/364/367/401/404/427/430/432、
+  A4 `failed`≠`blocked`、A5 业务拒绝仍 `retryable=True`、B1 `preconditions()` 返回 `[]`、
+  B2 三种不可编辑状态都不报、C1 未登记进 `PRECONDITION_BLOCKERS` / `ERROR_CODES`）；
+  A6/A7/B3/B4/B5/C2/D1–D3 九条为守卫（现状即绿）。
+- 保护网未破：`test_drawing_flow_error_taxonomy_red`（第 5 批）`Ran 14 OK`；
+  `test_packaging_drawing_flow_red` `Ran 54 OK (skipped=1)`；
+  `test_packaging_semantics_red` / `test_packaging_product_outline_red`（## 223）不受影响。
+
+### 未做 / 遗留
+
+- 未写业务实现（`RequirementSaveError` 的稳定码、`requirement_service` 12 处 raise 补码、
+  `model.PRECONDITION_BLOCKERS` / `ERROR_CODES` 登记、`preconditions()` 增补分支、
+  `steps` 兜底分支按登记表定 `retryable`），等 DeepSeek 按提示词实现。
+- 未改需求单状态、未自动退回、未新建草稿、未动任何生产数据；未重启服务。
+- 未提交 ## 223 与本批的 Spec / 红测（等工作区里那一批实现改动一起定），未 push / MR / tag / Release / 部署。
+
+## 225. 包装最低收费口径 ② 落地 + 盒型匹配三处口径收敛：实现（9-21，Codex 实现 + 回归）
+
+接 ## 222（裁决与红测已就位）。本批只改业务代码，**未改任何 `tests/` 文件**：五个文件、对外行为三处
+（成本门限归零 / 缺数据不计分不打折 / 越界不推荐 + 权威盒型必登配合间隙），另有 1 处口径冲突按
+"可识别盒型行"收敛，见 §4。
+
+### 1. 成本：最低收费口径 ②（报价-工费率，主行无门限）
+
+`tech_app/backend/services/packaging_cost.py`
+
+- `FORMULA_CATALOG` 四码 `minimum_charge` 200 / 150 / 100 / **150** → **0**（表达式、`rate_code`、
+  `rounding`、`defaults`、`loss_scope`、`variable_map` 一个字都没动）；四码的
+  `frozen_minimum_charge`（200 / 150 / 100 / **120**）原样留证；
+- `_MIN_CHARGE_DECISIONS` 由 1 条补成 **4 条**且填齐 `owner=张真` / `decided_at=2026-09-21` /
+  `current=0` / `frozen=<第 1 批冻结值>` / `reason`（写明"② 主行无门限，取报价-工费率原文"，
+  并指向 `PKG-C-DIE-CUT.row_variants` 的 `AI9/AI14/AI15`）；
+- `_FORMULA_PROVENANCE` 里这四条的 `minimum_charge_source_ref` 清空（`minimum_charge == 0`
+  时不许再声明门限来源格 —— 与 b4 的既有规则同口径）；`PKG-C-MOUNTING` 本来就是 0，未动。
+
+`tech_app/agent_knowledge/rules/packaging_cost_rules.json`（用 json 现读改写，逐字复现 2 空格缩进）
+
+- `minimum_charge_policy`：`status="chosen"`、`chosen="sheet_labor_rate"`、`decided_by="张真"`、
+  `decided_at="2026-09-21"`，新增 `decisions[]` 四条（`formula_code` / `minimum_charge: 0` / `reason`）；
+- 四个码所在 `formulas` 行 `minimum_charge → 0`、`minimum_charge_source_ref → ""`；
+- `candidates` 三套（含各自 `golden` / `red_test_impact`）与 `PKG-C-DIE-CUT.row_variants`
+  （`AI9/AI14/AI15`）逐字保留；`rule_set` / `source_sha256` / `review_status` / `generated_at` 未动。
+
+### 2. 匹配：缺数据不打折 + 越界不推荐 + 报价侧同口径
+
+`tech_app/backend/services/packaging_match.py` 与 `cpq_packaging_match.py`（两处逐条同步，未改成互相 import）
+
+- ① `_dimension_fit()`：**盒型侧** `fit_clearance` 缺失/不可解析 → `(None, False, False, None, True)`，
+  与"需求未填"同一条路（不计分也不淘汰，仍进 `undecidable_dimensions`）；超差仍
+  `fit_clearance_out_of_tolerance` 硬淘汰；
+- ② `_candidate()` 新增 `data_gaps`（由 `undecidable_dimensions` 生成 `{"dimension","message"}`，
+  空时为 `[]`，不改 `status` / `can_confirm`）；
+- ③ `_as_bool()` 只放宽解析：整词闭集优先，其次"取值词 + 空白/括号说明"（`是（90度）`→True、
+  `否(无)`→False、`是 90度`→True）；`不是` / `否定的` 仍判无法识别，两个闭集未扩充；
+- ④ `match_box_types()`：可推荐 = `status=="matched" and not out_of_range`；无合规候选 →
+  `suggested_box_type=""`、`needs_new_tooling=true`、`new_tooling_reason="size_out_of_range"`
+  （`no_box_type` / `all_rejected` / `missing_required_input` 优先级仍在前）；候选列表与 `_sort_key` 未动。
+
+`tech_app/tools/kb_deploy_preflight.py`
+
+- `env == "production"` 时对 `kb_packaging_box_type` 里**非 demo 且缺 `fit_clearance`** 的行报
+  `box_type_missing_fit_clearance`（沿用 `_problem()` 形状 + 可执行动作）；`demo` 行不报；
+  `local` / `ci` 结论不变；文件头问题码表格补一行。
+
+### 3. 验收实跑（`./open-claude/.venv/bin/python -m unittest`）
+
+落地前（把 5 个文件回到 `8b76fa2` 实测）→ 落地后：
+
+| 套件 | 落地前 | 落地后 |
+| --- | --- | --- |
+| `test_packaging_cost_policy_decision_red` | Ran 15 · failures=7 | **Ran 15 · OK** |
+| `test_packaging_cost_engine_red` | Ran 81 · failures=1（c2） | **Ran 81 · OK** |
+| `test_packaging_cost_rule_snapshot_red` | Ran 37 · failures=1（e1） | **Ran 37 · OK** |
+| `test_packaging_cost_rule_routing_red` | Ran 32 · failures=1（f3） | **Ran 32 · OK** |
+| `test_packaging_cost_column_evidence_red` | Ran 29 · failures=1（d2） | **Ran 29 · OK** |
+| `test_packaging_cost_minimum_charge_red` + `test_packaging_cost_red_closure_red` | Ran 61 · failures=5（d5 / a3 / a4 / b1 / b2） | **Ran 61 · OK (skipped=1)** |
+| `test_packaging_match_undecidable_and_size_guard_red` | Ran 23 · failures=12 | **Ran 23 · OK** |
+| `test_packaging_box_type_matching_red`（保护网） | Ran 51 · OK | **Ran 51 · OK** |
+| `test_quote_packaging_box_selection_red`（保护网） | Ran 20 · OK | **Ran 20 · OK** |
+| `test_kb_authoritative_promotion_red`（保护网） | Ran 15 · OK | **Ran 15 · OK** |
+
+`minimum_charge_red` 的 1 条 skip 是设计内的（`d6` 在已裁决态由 `d5` 复算黄金值覆盖）。
+
+手工复核（12 演示盒型 + 2 条 DWG 形状盒型，工艺侧 `packaging_match.match_box_types()` 与报价侧
+`cpq_packaging_match.match_box_types()` 喂同一份快照）：
+
+- 需求填齐且尺寸合规 → `suggested_box_type="YT-RB-02001-A"`、`needs_new_tooling=false`；
+- 需求 30×30×20 → `suggested_box_type=""`、`new_tooling_reason="size_out_of_range"`（12 条候选仍全部列出、带 `out_of_range=true`）；
+- 两条 DWG 形状盒型（无 `fit_clearance`）→ 该维进 `data_gaps`、`total_score=1.0`（修前是 0.75）、仍被推荐；
+- 上面三组 + "需求填间隙 vs 不填"共四组，两侧 `suggested_box_type` / `needs_new_tooling` /
+  `new_tooling_reason` 同值、每个候选 `total_score` / `data_gaps` / `status` / `out_of_range` 逐字段同值。
+
+`kb_deploy_preflight.py --env local` → `go`（kb_version=2，29 张表，demo=109 / workbook=20 / dwg_confirmed=43 / unknown=0）；
+`--env production --json` → `no-go`，其中 `box_type_missing_fit_clearance` 独立一节、指到
+`kb_packaging_box_type` 的 **2 条**权威盒型（与 `authority_missing` 分开列）。
+
+### 4. 一处口径冲突：预检新判据 vs 旧夹具（已按"可识别盒型行"收敛）
+
+新判据落下后，`tests/test_packaging_kb_authoritative_rollout_red.py::DPreflight::test_d4`（## 201 的旧绿测）
+转红：它的"权威数据齐备"夹具是 `fixture_tables(source_type="workbook")`，即
+`kb_packaging_box_type: [{"source_type": "workbook"}]` —— 一行**只有 `source_type`** 的合成行，
+没有 `fit_clearance`，于是被判 `box_type_missing_fit_clearance` → `ok=False`。
+新红测 `EAuthoritativeBoxDataGap::test_e1` 又要求同一形状（非 demo、缺 `fit_clearance`）必须报。
+
+两条断言都不能改（本批禁止改 `tests/`），收敛办法是**只对可识别的盒型行判 `fit_clearance`**：
+`kb_packaging_box_type.box_type_code` 是主键（PG 主键隐含 NOT NULL），真实快照行必有编码；
+没有编码的行不是盒型（形状夹具/空行），不参与这条判定。于是：
+
+- 34 现状的两条 DWG 盒型（**有** `box_type_code`、缺 `fit_clearance`）照旧被拦 —— 见 §3 的 `--env production` 实跑；
+- 旧夹具的 `{"source_type": "workbook"}` 不再误拦，`test_d4` 与新 `test_e1` 同时绿（58 条合跑 OK）。
+
+若产品口径要求"连没有编码的行也要拦"，请裁示：那需要同步改 `test_d4` 的夹具（改 `tests/` 由 Codex 做）。
+
+### 5. 全量回归（`/tmp/run_pkg.py 1`）
+
+`Ran 3981 tests · FAILED (failures=241, skipped=17)`。逐条归因（**本批新增失败 0 条**）：
+
+- 203 条 = 未实现的反向「快速报价」五套红测（field_workspace 53 / generation 43 / mode_and_case_model 36 /
+  case_retrieval 36 / file_parsing 35）；
+- 20 条 = 并行的 ## 223 / ## 224 红测（`packaging_product_outline_red` 12 + `drawing_flow_requirement_state_red` 8，非本批）；
+- 14 + 2 + 2 = 18 条 = 本批之前就存在的既有红（`process_row_running_info_and_fold_red` / `tech_model_call_row_merged_and_summary_detail_red` / `cpq_eval_ci_contract`）；
+- 本批涉及的 7 个套件（成本 6 + 匹配 1）与三条保护网（86 条）全绿。
+
+### 6. 未做 / 遗留
+
+- 未改任何 `tests/` 文件；未改 `SPEC` / 权重表 / `_sort_key` / `size_range` 衰减公式 / `MATCH_INPUT_KEYS` / `ENGINE_VERSION`；
+- 未跑 `extract_packaging_rules.py --write`（本批是裁决落档，不是重抽；`review_status=reviewed` 会被工具拒）；
+- 未连生产库、未写 PG、未部署、未重启服务、未装依赖；未新增第三方依赖；
+- `data_gaps` 的**前端展示**（`确认需求解析结果.html` / 工艺侧页面）不在本批，另提；
+- 工作区里 ## 223 / ## 224 的 Spec / 红测 / changelog 是并行会话的未提交改动，本批未动它们；
+  本批 5 个实现文件未提交、未 push、未创建 MR / tag / Release。
+
+## 226. 真实 DWG 出不了零件：口径改为「零件 = 连通分量」+ Spec / 夹具 / 红测（9-21，Codex 只改 Spec / 红测 / 夹具 / changelog）
+
+用户口径：「必须从 DWG 得到零件」「保证能出来零件」。本批把「DWG → 零件（展开件）」写成可验收
+的 Spec 与红测，**不含任何业务实现**（实现提示词只在会话中交付，不入仓）。
+
+### 1. 现场先复核（只读）：知识库里已经有 DWG 实样数据，但零件没有尺寸
+
+`cpq_kb` 只读复核（本机 `cpq_db.connect(readonly=True)`，未写库；`kb_version=2`，更新于 9-21 16:37）：
+
+- `kb_packaging_box_type` 14 行 = `demo` 12 + `dwg_confirmed` 2：
+  `YT-DWG-ROUND-10PC`（10PC 圆盘天地盖礼盒，396.5×396.5×47）、
+  `YT-DWG-WINE-700ML`（700ML 双开门酒盒，219×86×86），两条都是 `权威实样`。
+- `kb_packaging_part_template` 56 行 = `demo` 31 + `dwg_confirmed` 25；每盒：圆盘 14 / 酒盒 11 /
+  `YT-RB-03001-A` 11 / `YT-RB-01001-A` 10 / `YT-RB-02001-A` 10。
+- **关键缺口**：25 行 DWG 实样零件的 `size_expr / size_length_expr / size_width_expr /
+  size_height_expr` **全为空**（四列非空计数 0/0/0/0）；`demo` 31 行反而齐全
+  （expr 31、length 31、width 22、height 3）。也就是说"库里已经有零件"这句话对、
+  **但展开尺寸无处可来** —— 只能从 DWG 图纸里算出来再回填。
+- 其余包装表：`kb_packaging_process_template` 39、`kb_packaging_insert_accessory` 12、
+  `kb_packaging_cost_formula` 27、`kb_packaging_logistics_rule` 3、`kb_packaging_match_weight` 5。
+- 下游现状：2.1 的 BOM 零件行来自盒型模板，其中 4 行因缺展开尺寸标 `needs_input`；
+  成本 `material_total = 0.0`、缺口 `part_size_missing`（`packaging_cost.py:1541`）。
+
+### 2. 真图复核（本机 libredwg 0.14 `dwg2dxf` → ezdxf，与 34 上数值一致）
+
+`裕同包装项目-待开发/酒盒.dwg`：8 层 6569 实体、402 个连通分量、642 孔、
+闭合轮廓只有 **2** 条、开放轮廓 5598 条、标注 316、文字 127。两条事实定了算法形态：
+
+1. **"零件 = 闭合轮廓"在真图上不成立**（闭合 2 条 vs 开放 5598 条），零件只能按**连通分量**聚合；
+   分量里最大的两条是整张图框/标题栏（4451.8×3117.9、3927.8×967.9），必须被过滤规则挡掉。
+2. `CUTTER` 层 308 条全是 SPLINE、全部开放、**没有任何分量包含 CUTTER 实体** ——
+   所以零件角色不能只看"在刀线层"，要按分量内实体的层与角色取最高优先。
+
+### 3. 口径变更（显式 supersede，不新增需求字段）
+
+- `docs/specs/packaging-product-outline-and-die-layer-roles.md` 里"**不做展开尺寸**"的半句由本批
+  取代（该文档其余条款、图层角色、冻结面清单全部不变）；本批**不新增任何需求字段键**，
+  展开长宽的载体是新的零件文档与 BOM 行回填，不是需求 JSON。
+
+### 4. 产物
+
+- Spec：新增 `docs/specs/packaging-dwg-parts-extraction.md`（194 行）：8 条契约（C1 零件=连通分量 /
+  C2 过滤规则与 reason code / C3 排序·编号 `DWG-P%02d`·`repeat_of`·`max_parts` /
+  C4 必须出零件与 `unavailable` 码 / C5 存储 `packaging-parts/1` 与 GET·POST 路由与 stale /
+  C6 新流程步 `parts_extract` / C7 BOM 行**临时**按序配对回填（`rule_id=dwg_parts_row_pairing_v1`、
+  `fallback_paired`、`size_source.dwg_binding`、锁定行不动、可算行不变）、
+  模块与数据契约（`packaging_parts.py`、`ENGINE_VERSION`、`DEFAULT_OPTIONS`
+  `{min_area_mm2:2000, max_edge_mm:1200, max_area_mm2:1000000, max_parts:64}`、`REASON_CODES`、
+  证据编号 `ev:E:*`/`ev:L:*`）、前端接线、不做清单、验收与**三处待业务复核**。
+- 夹具：`tests/fixtures/cad_ir/build_fixtures.py` 追加 `_rect_panel()` / `parts_panels()` 并列入
+  `BUILDERS`，新落 `tests/fixtures/cad_ir/parts_panels.json`（7 个分量 / 24 实体：正常件 +
+  含 `CREASE` 边的件 + `INSERT` 层未知角色的件 + 超 `max_edge` 图框 + 面积过小件 + 只有 MTEXT 的组）；
+  重跑后其余 15 个夹具文件**逐字节不变**。
+- 红测：新增 `tests/test_packaging_parts_extraction_red.py`（592 行 / 32 条，A–H 八组）。
+
+### 5. 验收实跑（`./open-claude/.venv/bin/python -m unittest`；本机无 pytest）
+
+- 新红测按预期红：`Ran 32 tests, FAILED (failures=27)` —— 23 条（A 组 7、B 组 5、C 组 2、D1、
+  E2–E6、G3、H1/H2）报 `缺少 tech_app/backend/services/packaging_parts.py（Spec §4）`，
+  另有 4 条是接线缺口各一条：D2 `GET/POST` 零件路由未注册、D3 `STEP_IDS` 无 `parts_extract`、
+  D4 flow 依赖缝无 `packaging_parts`、D5 前端 `app.js` 无 `packaging-parts` 零件树；
+  5 条绿为守卫（E1 基线 4 行 `needs_input` 来自缺变量；F1/F2 现行成本行为；
+  G1 语义层统计不变；G2 无零件文档时 BOM 照旧）。**H 组用真实 `酒盒.dwg` 真跑**（本机 `dwg2dxf` 转换 +
+  IR 解析 + 语义分析后落在缺模块上），不是 skip。
+- 保护网未破：`test_packaging_semantics_red` 59 OK(skipped=1)、
+  `test_packaging_parametric_bom_red` 57 OK、`test_packaging_drawing_flow_red` 54 OK(skipped=1)、
+  `test_packaging_cost_engine_red` 81 OK、`test_packaging_cost_red_closure_red` 14 OK、
+  `test_dxf_cad_ir_red` + `test_dwg_final_acceptance_red` 99 OK(skipped=1)。
+- 说明：红测先行会让红色总数上升，这是期望值先行的正常状态。
+
+### 6. 未做 / 遗留
+
+- 未写业务实现（`packaging_parts.py`、BOM 回填、`parts_extract` 步、HTTP 路由、前端零件树），
+  等 DeepSeek 按会话提示词实现；未改任何既有红测的期望值。
+- 三处需业务裁示（已写进 Spec §8，不挡实现）：BOM 行与零件的**配对表**（现在是按序临时配对）、
+  零件**命名**（`DWG-P%02d` 是占位而非客户口径）、重复拼版件是否合并成数量。
+- 未提交 `scripts/tmp_import_dwg_cases.py`（他人临时脚本）与 `裕同包装项目-待开发/`（客户样本）；
+  未写 PG、未建表、未改 KB 数据（本轮 PG 全为只读 SELECT）。
+- 未 push / MR / tag / Release / 部署 / 重启服务；未动 `20260909` / `master`；
+  工作区里 ## 223 / ## 224 / ## 225 的未提交改动是并行会话的，本批未动它们。
+
+## 226. 一键解析图纸把"跑完了"报成「图纸解析未完成」+ 2.1 零件不可见：Spec + 红测（9-21，Codex 只改 Spec / 红测 / changelog）
+
+用户现场（34，两份真实 DWG）：一键解析跑完之后，**看板落一张「图纸解析未完成」的失败卡**，
+**2.1 左栏零件清单空白**。本批把根因写成可验收的 Spec 与红测，**不含任何业务实现**
+（实现提示词只在会话中交付，不入仓）。
+
+### 现场取证（源码坐标，逐条实测）
+
+- `tech_app/frontend/app.js:936-938`：drawing_flow 分支 `await runDrawingFlowParse();`
+  `parseDrawingError = ""; return null;` —— `runDrawingFlowParse()` 明明 `return` 了链路 payload，
+  却被丢掉；`app.js:2763-2766` 的 `parseDrawingInBackground()` 只按 `if (result)` 二分，
+  于是 drawing_flow 模式下**每次**都发 `task-failed` + 逐字文案「图纸解析未完成。」，
+  与链路真实结果无关（`图纸解析未完成。` 在 `app.js` 里出现 1 次，实测）。
+- 后端早就给全了判据：`packaging_drawing_flow/steps.py:38-52` 每步都带
+  `status` / `error_code` / `error_message` / `retryable` / `detail.action`，
+  `_public_state()`（`packaging_drawing_flow/__init__.py:160-189`）原样透出 —— 前端一个都没用上。
+  「缺前置条件（`blocked`、`retryable=false`）」与「真失败」在看板上长得一样。
+- `tech_app/frontend/index.html:187`：`#tree` 硬编码「完成解析后显示零件清单」；
+  `renderTree()`（`app.js:1908`）只渲染视觉 IR，drawing_flow 模式下 `currentIR` 永远为空
+  → 左栏永远空白，不说原因、不给下一步。
+- 看板事件闭集 `tech-board-runtime.js:51-60` 只有 6+2 个（无 `task-blocked`），
+  `publishTaskCard()` 白名单 `:344-348` 只放四个任务事件；父壳桥映射
+  `agent-chat.js:2348-2353`；状态词表 `:1464-1466`；终态集合 `:1865`。
+
+### 产物
+
+- Spec：新增 `docs/specs/drawing-flow-parse-terminal-signal.md`（三条缺口 D1/D2/D3 + 六条契约：
+  终态判定唯一纯函数 `drawingFlowTerminalSignal(flowState, error)` 的五条判定表 /
+  一键解析不得把成功报成失败 / `task-blocked` 事件与"被阻断"呈现 /
+  2.1 空态纯函数 `packagingPartsEmptyText(partsDoc, preconditions)` 与 `#tree` 硬编码清理 /
+  冻结面 / 确定性；含"逐字取后端载荷、前端不许改口径"的显式约束）。
+- 红测：新增 `tests/test_drawing_flow_parse_terminal_signal_red.py`（30 条，A–D 四组）。
+  A 组用 `node` **真跑** `drawingFlowTerminalSignal()`（链路状态夹具按后端透出口径造），
+  C 组同样真跑 `packagingPartsEmptyText()`；B 组才做接线源码断言；D 组是绿护栏。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`；本机无 `pytest`，`node` v26.5.0）
+
+- 新红测按预期红：`Ran 30, failures=24`（A1–A9 终态判定 9 条、B1–B7 接线 7 条、C1–C8 空态与接线
+  8 条全红；D1–D6 六条护栏现状即绿：`node --check` 三个前端文件 / 视觉 `/parse` 调用点 /
+  步骤表 `error_code`·`error_message` / 既有四事件 / `blocked: "被阻断"` / 两个 drawing-flow 端点）。
+- 保护网未破：`test_drawing_flow_frontend_wiring_red` `Ran 12 OK`、
+  `test_drawing_board_two_column_parts_and_3d_red` `Ran 10 OK`、
+  `test_drawing_flow_error_taxonomy_red` `Ran 14 OK`、
+  `test_packaging_semantics_red` `Ran 59 OK (skipped=1)`、
+  `test_packaging_drawing_flow_red` `Ran 54 OK (skipped=1)`、
+  `test_packaging_parametric_bom_red` `Ran 57 OK`。
+- 同批复核（只为给用户报"还差哪些"）：`test_packaging_product_outline_red`（## 223 语义层）
+  `Ran 21, failures=12, skipped=1` 仍红；`test_packaging_parts_extraction_red`（零件提取）
+  `Ran 32, failures=27` 仍红（`packaging_parts.py` 不存在）；
+  `test_drawing_flow_requirement_state_red`（## 224）`Ran 17 OK` —— 该批实现已在工作区落地（未提交）。
+
+### 未做 / 遗留
+
+- 未写业务实现（`drawingFlowTerminalSignal()` / `packagingPartsEmptyText()` / `parseDrawing()` 分支返回值 /
+  `parseDrawingInBackground()` 事件来源 / `tech-board-runtime.js` 的 `TASK_BLOCKED` 与白名单 /
+  `agent-chat.js` 的 `task-blocked` 分支·状态词·终态集合 / `renderTree()` 零件文档渲染与
+  `index.html` 占位删除），等 DeepSeek 按提示词实现。
+- 2.1 真正看到零件还差上游两步：语义层（## 223，真实图层名 / 产品级轮廓 / 盒型候选）与
+  零件提取（`docs/specs/packaging-dwg-parts-extraction.md`：`packaging_parts.py` + 链路
+  `parts_extract` 步 + BOM 行绑定）—— 两批都还是红测状态。
+- 未连生产库、未写 PG、未改任何业务数据；未重启服务。
+- 未 push / MR / tag / Release / 部署；未动 `20260909` / `master`；工作区里 ## 222 / ## 223 /
+  ## 224 / ## 225 与零件提取的未提交改动分属并行会话，本批未动它们。
+
+## 227. ## 224 需求不可编辑 + ## 226 一键解析终态信号：实现（9-21，Codex 实现 + 回归）
+
+把两份 Spec 从红测变成能力：**需求已提交不再让图纸解析"整体失败且只会说重试"**，
+**一键解析不再把"跑完了"报成失败**，**2.1 左栏说清"为什么没有零件"**。
+未新增判定、未改门禁、未动 `EDITABLE_STATUSES` 与视觉模型路径。
+
+### 实现（逐文件）
+
+- `tech_app/backend/services/requirement_service.py`：新增稳定码常量
+  `REQUIREMENT_NOT_EDITABLE` / `REQUIREMENT_SAVE_REJECTED`；`RequirementSaveError` 增加
+  `code` 构造参数（缺省 `REQUIREMENT_SAVE_REJECTED`）并暴露 `.stable_error_code`，
+  既有 `.status_code` 与 `str(exc)` 文案逐字不变；文件里 **12 处 `raise` 全部显式给码**，
+  "需求不在可编辑状态"那一处给 `REQUIREMENT_NOT_EDITABLE`。`EDITABLE_STATUSES` 未动。
+- `.../packaging_drawing_flow/model.py`：`PRECONDITION_BLOCKERS` 增 `REQUIREMENT_NOT_EDITABLE`；
+  `ERROR_CODES` 增 `REQUIREMENT_NOT_EDITABLE` / `REQUIREMENT_SAVE_REJECTED`（均 409、不可重试）。
+- `.../packaging_drawing_flow/__init__.py`：`preconditions()` 在"需求存在但状态不可编辑"时
+  追加 `REQUIREMENT_NOT_EDITABLE`（blocking，message 带当前 status）；无需求仍只报
+  `REQUIREMENT_DRAFT_MISSING`；draft/rejected 仍返回 `[]`；仍只读幂等不写库。
+- `.../packaging_drawing_flow/steps.py`：`field_write` 的异常分支按稳定码分派 —— 有码的
+  业务拒绝走既有 `blocked` 分支（`retryable=False`、`error_message=str(exc)` 保留真因、
+  `detail.action` 非空、字段看板照旧回填）；无码异常仍是
+  `PACKAGING_FLOW_STEP_FAILED` + `retryable=True`（真失败口径不放宽）。
+- `tech_app/frontend/app.js`：顶层新增纯函数 `drawingFlowTerminalSignal(flowState, error)`
+  （blocked 优先于 failed；code/message 逐字取后端；全 completed 且 `run_id` 非空才算成功；
+  error → `FLOW_RUN_REJECTED`；无状态 → `FLOW_STATE_MISSING`）与
+  `packagingPartsEmptyText(partsDoc, preconditions)`（有零件 → ""；`unavailable` 逐字、多条
+  用"；"连接；`[code] message → action`；全空给下一步）；`parseDrawing()` 的 drawing_flow
+  分支改为把链路终态交回后台（删除字面量「图纸解析未完成。」）；`parseDrawingInBackground()`
+  的事件只由 `drawingFlowTerminalSignal()` 决定；`parseDrawingSettle()` 载荷带
+  code/message/action_text/retryable；`renderTree()` 在 drawing_flow 时渲染零件文档
+  （`part_code + name + 展开 长×宽 mm + 图层`），空态用 `packagingPartsEmptyText()`，
+  `stats.truncated > 0` 给提示行。
+- `tech_app/frontend/tech-board-runtime.js`：事件闭集新增 `TASK_BLOCKED: 'task-blocked'`
+  并纳入 `publishTaskCard()` 白名单（与 `TASK_PARTIAL` 同级）。
+- `tech_app/frontend/agent-chat.js`：父壳桥新增 `task-blocked` →
+  `renderTaskProgress({...payload, status: "blocked"})`；`taskStatusWord()` 增
+  `blocked: "被阻断"`；`renderTaskProgress()` 里 blocked 是**终态、不翻红**（中性行）、
+  正文同时出现 message 与 action 且不说"请重试"；`interruptRunningCards()` 的终态集合加
+  `blocked`。
+- `tech_app/frontend/agent-chat.css`：`.oc-task-card.is-blocked .oc-task-state` 沿用中断的
+  蓝色 chip（与 `is-partial` / `is-interrupted` 同一处写法）。
+- `tech_app/frontend/index.html`：删掉 `#tree` 里硬编码的「完成解析后显示零件清单」。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`）
+
+- `tests.test_drawing_flow_requirement_state_red`：实现前 `Ran 17, failures=8` → 现
+  `Ran 17 tests ... OK`。
+- `tests.test_drawing_flow_parse_terminal_signal_red`：实现前 `Ran 30, failures=24` → 现
+  `Ran 30 tests ... OK`。
+- 保护网全绿：`frontend_wiring_red 12 OK`、`board_two_column_parts_and_3d_red 10 OK`、
+  `error_taxonomy_red 14 OK`（**见下**）、`packaging_drawing_flow_red 54 OK(1 skip)`
+  （**见下**）、`packaging_semantics_red 59 OK(1 skip)`、
+  `packaging_parametric_bom_red 57 OK`、`packaging_parts_extraction_red` 的 D5 OK。
+- 现场口径（本地临时项目，status=approved）：`preconditions()` →
+  `[{code: REQUIREMENT_NOT_EDITABLE, severity: blocking, …}]`；`field_write` →
+  `status=blocked` / `error_code=REQUIREMENT_NOT_EDITABLE` / `retryable=False` /
+  `detail.action` 非空 / 字段看板 `['inner_length','inner_width']`；`node --check` 三个前端
+  文件通过。
+
+### 已知冲突（**未自行改测试，需测试所有者裁决**）
+
+`docs/specs/packaging-dwg-parts-extraction.md` C6 要求把 `parts_extract` 插进
+`packaging_drawing_flow.model.STEP_IDS`（见 ## 228），而更早的
+`packaging-drawing-flow.md` 把「七步闭集」写死进了两处红测：
+
+- `tests/test_packaging_drawing_flow_red.py` 8 条（`a2/a3/a4/a5/d14/e26/f16/f29`，全部是
+  `len(expected)==7` 型断言）；
+- `tests/test_drawing_flow_error_taxonomy_red.py::test_d2_step_contract_unchanged` 1 条。
+
+这 9 条在 ## 228 落地后由绿转红，原因是"闭集变成八步"，不是行为回归。按纪律**没有修改任何
+测试文件**；需要测试所有者把这两处的七步闭集更新为八步（或裁定去掉 C6）。
+
+### 未做 / 遗留
+
+- 未提交、未推送、未建 MR/tag/Release、未部署、未重启服务、未连生产库、未写业务数据。
+- 未引入任何新依赖（`openpyxl` 早已在根 `requirements.txt`）。
+
+## 228. DWG 图纸 → 零件提取 + BOM 行回填：实现（9-21，Codex 实现 + 回归）
+
+把 `docs/specs/packaging-dwg-parts-extraction.md` 从红测变成能力：**从图纸的连通分量提出
+零件（带展开长宽），落成版本化零件文档，2.1 左栏看得到，BOM 里算不出尺寸的零件行被回填，
+材料费能算出金额**。算法口径与阈值全部来自 Spec，未新增判定、未改成本公式与费率。
+
+### 实现（逐文件）
+
+- 新增 `tech_app/backend/services/packaging_parts.py`（纯函数 + 一处版本化落库）：
+  `ENGINE_VERSION="packaging-parts/1"`、`DOC_KEY="packaging_parts"`、
+  `DEFAULT_OPTIONS{min_area_mm2:2000,max_edge_mm:1200,max_area_mm2:1000000,max_parts:64}`、
+  `CURVE_TYPES`、`REASON_CODES`、`PART_CODE_FORMAT="DWG-P%02d"`、`ROLE_PRIORITY`、
+  `BINDABLE_CATEGORIES`、`BINDING_RULE_ID="dwg_parts_row_pairing_v1"`、
+  `extract/save_parts/load_parts/bind_rows/summarize`。
+  · `extract()`：以 `geometry.components` 为唯一零件来源；bbox 优先取分量自带、缺失则由件内
+  实体合并；过滤顺序 edge_over_max / area_over_max / area_under_min / no_curve_entity；
+  排序 `(area desc, component_id asc)`；`layers` 去重升序、`entity_ids` 去重排序、
+  `evidence_refs` 只保留能在 `ir.evidence` 里回查到的（`ev:E:*` + `ev:L:*`）；
+  角色取件内曲线实体图层角色的最高优先级；同 bbox + 同实体数的第 2 件起标 `repeat_of` 且保留；
+  单位未确认 → `unavailable` 带 `no_unit` 且**不写绝对尺寸**；超 `max_parts` 截断并给
+  `stats.truncated`；一件也提不出来时给 `no_components` / `all_filtered`。
+  · `save_parts()`：同一 `parts_id` 覆盖同一条（幂等）、新内容追加，最多 20 版。
+  · `bind_rows()`：只碰 `box_part` / `optional_part` 且（`needs_input` 或**整行都没有尺寸**）
+  的行，锁定行绝不碰；行按出现顺序（模板 `seq` 升序）↔ 零件按面积降序逐行取件；留痕
+  `size_source.dwg_binding{component_id,part_code,rule_id,fallback_paired,original_missing_variables}`
+  + `source="dwg_parts"` + `missing_variables=[]`；绑不上的行给
+  `part_size_unbound:<part_code>`。
+- `tech_app/backend/services/packaging_bom.py`：新增 `_bind_parts()`，`build_bom()` 装配后
+  自动回填（有零件文档才回填；读不到一律逐字保持今天的口径，绝不用需求尺寸反推）。
+- `.../packaging_drawing_flow/model.py`：`STEP_IDS` 在 `packaging_semantics` 之后、
+  `field_write` 之前插入 `parts_extract`，`STEP_TITLES` 给「零件提取」，补 `_PRODUCES` /
+  `_DEPENDS_ON`；`ERROR_CODES` 增 `PACKAGING_PARTS_NO_IR` / `PACKAGING_PARTS_UNAVAILABLE`
+  （均 409、不可重试，但**不是终态失败**）。
+- `.../packaging_drawing_flow/steps.py`：新增 `parts_extract` 执行体（复用 `_previous_ir`
+  与上一步缓存的语义文档；detail 带 `parts_id / parts_hash / parts_total / filtered_total /
+  truncated / by_role / unavailable`，并播一条中文过程行）。**没有 IR / 模块不可用一律
+  `blocked`**：零件是新增前置事实、不是门禁，不能把字段写入、待确认、后续任务准备一起判死。
+- `.../packaging_drawing_flow/__init__.py`：`_MODULE_PATHS` 接 `packaging_parts`；
+  `PARTS_DETAIL_DEFAULTS` + `_step_detail()` 保证这一步的 detail 对外形状稳定（旧 run 也拿到
+  同一键集）；`_context` 给 `parts_extract` 一并带 `semantics` 与 `ir`；`cad_ir_parse`
+  的产物缓存进 `flow["_ir"]`（不再为提零件重解析一遍）。
+- `tech_app/backend/main.py`：新增
+  `GET /api/projects/{pid}/requirement/packaging-parts`（读零件文档，`built=false` 不报错）
+  与 `POST /api/projects/{project_id}/requirement/packaging-parts/extract`（按当前 IR 现算并
+  落一版；写权限直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`）；响应形状 = **零件文档
+  本身** + `built`/`summary`（不再套一层 `{"parts": <doc>}`，否则前端把 `parts` 读成对象、
+  左栏永远空）。
+- `tech_app/frontend/app.js`：2.1 零件树 `stats.truncated > 0` 时补一条截断提示行
+  （独立的 `part-truncated-note` class，不算零件行）。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`）
+
+- `tests.test_packaging_parts_extraction_red`：实现前 `Ran 32, failures=27` → 现
+  `Ran 32 tests ... OK`（H 组用真实 `酒盒.dwg` 真跑，不是 skip）。
+- 保护网全绿：`packaging_semantics_red 59 OK(1 skip)`、`packaging_parametric_bom_red 57 OK`、
+  `packaging_cost_engine_red 81 OK`、`packaging_cost_red_closure_red 14 OK(1 skip)`、
+  `dxf_cad_ir_red + dwg_final_acceptance_red 99 OK`、`packaging_parts_extraction_red.D5 OK`、
+  `packaging_drawing_flow_red 54` 与 `drawing_flow_error_taxonomy_red 14` 见 ## 227 末尾的
+  「已知冲突」（八步闭集，9 条旧断言逐字冻结在旧 Spec 上）。
+- 现场口径（本地两份真样本，686/889 KB → dwg2dxf → cad_ir → semantics → parts）：
+  · `酒盒.dwg`：实体 6569 / 图层 8 / **连通分量 402** / 闭合轮廓 2 / 开放轮廓 5598 / 单位
+    confirmed → `part_total=64`（截断前 204）、`filtered_total=198`、`truncated=140`、
+    `unavailable=[]`，首件 `DWG-P01 443.523×492.62 mm`；整版图框（`cmp:1`）被
+    `edge_over_max + area_over_max` 挡掉。
+  · `圆盘盒.dwg`：实体 6864 / 图层 32 / 连通分量 14 / 闭合轮廓 633 / 单位 confirmed →
+    `part_total=9`、`filtered_total=5`、`truncated=0`，首件 `DWG-P01 919.5×892.5 mm`。
+- 已知口径缺口（**不是本批引入**）：真图的 64 件 `role` 全是 `unknown` —— 语义层的真实图层名
+  （全穿刀 / 压线 Crease / 图框层）还是 `unknown`，那是 ## 223 那一批要解决的（12 条红测）。
+
+### 未做 / 遗留
+
+- 未提交、未推送、未建 MR/tag/Release、未部署、未重启服务、未连生产库（本批所有验证都是
+  本地临时目录 + 只读样本转换）。
+- 未引入任何新依赖。
+- C7 是**行级临时口径**（`fallback_paired=true` 留痕）；正式口径应是"零件 ↔ 模板行"的对应表
+  （Spec §8 已列为待业务复核）。要绑的行多于零件（模板 11 行 / 图纸只提出 4 件这类情形）时按循环取件，
+  同样带留痕；零件多于行时不浪费，剩下的零件留给下一批做正式对应表。
+
+## 229. 两条旧守卫按「链路新增零件提取步」更新 + agent-chat.js 换行归一化（9-21，Codex 只改测试 / changelog）
+
+`docs/specs/packaging-dwg-parts-extraction.md` §4 把 `parts_extract` 定为链路上的第八步
+（`packaging_semantics` 之后、`field_write` 之前），实现照 Spec 落了步。两条旧守卫当时把
+**七步闭集**逐字冻结，因此把实现正确判红；按新口径更新守卫（属 Codex 的测试脚手架职责，
+实现侧一字未动）：
+
+- `tests/test_packaging_drawing_flow_red.py`：`STEP_IDS` / `STEP_TITLES` 加入
+  `parts_extract`（标题「零件提取」，位置在 `field_write` 之前）并加注释说明依据；
+  三处「七步」措辞改「八步」。回归 `Ran 54 ... OK (skipped=1)`。
+- `tests/test_drawing_flow_error_taxonomy_red.py`：`test_d2_step_contract_unchanged`
+  的步骤闭集同步加入 `parts_extract` 并加注释。回归 `Ran 14 ... OK`。
+
+文件与阈值口径没有变化：`packaging_semantics` 的 `SEMANTICS_VERSION`、字段闭集、
+`STATS_KEYS` / `REQUIRED_KEYS`、`model.FIELD_WHITELIST` 依旧冻结；本批只动了两条守卫的
+「链路步骤清单」断言。
+
+### agent-chat.js 换行归一化
+
+本次 diff 里 `tech_app/frontend/agent-chat.js` 显示 577 增 / 555 删，真实业务改动只有
+**26 增 / 4 删**，其余是整文件 `CRLF → LF` 的一次性归一化（HEAD 版本是混行结尾，551 行
+CRLF）。审查该文件请用 `git diff --ignore-cr-at-eol -- tech_app/frontend/agent-chat.js`。
+后续该文件统一按 LF 维护，不再产生同类噪声。

@@ -1,0 +1,1381 @@
+{
+  "dimensions": [],
+  "document": {
+    "dxf_version": "AC1027",
+    "extents": [
+      0.0,
+      0.0,
+      200.0,
+      300.0
+    ],
+    "layouts": [
+      {
+        "entity_count": 24,
+        "name": "Model"
+      }
+    ],
+    "model_space": {
+      "entity_count": 24
+    },
+    "paper_space": {
+      "entity_count": 0
+    },
+    "warnings": []
+  },
+  "entities": [
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        100.0,
+        331.2,
+        100.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:B1",
+      "evidence_ref": "ev:E:B1",
+      "handle": "B1",
+      "layer": "CUT",
+      "length": 231.2,
+      "length_mm": 231.2,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        331.2,
+        100.0,
+        331.2,
+        296.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:B2",
+      "evidence_ref": "ev:E:B2",
+      "handle": "B2",
+      "layer": "CUT",
+      "length": 196.0,
+      "length_mm": 196.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        296.0,
+        331.2,
+        296.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:B3",
+      "evidence_ref": "ev:E:B3",
+      "handle": "B3",
+      "layer": "CUT",
+      "length": 231.2,
+      "length_mm": 231.2,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        100.0,
+        100.0,
+        296.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:B4",
+      "evidence_ref": "ev:E:B4",
+      "handle": "B4",
+      "layer": "CUT",
+      "length": 196.0,
+      "length_mm": 196.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        200.0,
+        296.0,
+        331.2,
+        296.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:B5",
+      "evidence_ref": "ev:E:B5",
+      "handle": "B5",
+      "layer": "CREASE",
+      "length": 131.2,
+      "length_mm": 131.2,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": 23304.96,
+      "attributes": {},
+      "bbox": [
+        400.0,
+        100.0,
+        631.2,
+        200.8
+      ],
+      "block_path": [],
+      "closed": true,
+      "entity_id": "ent:model:L1",
+      "evidence_ref": "ev:E:L1",
+      "handle": "L1",
+      "layer": "CUT",
+      "length": 664.0,
+      "length_mm": 664.0,
+      "space": "model",
+      "type": "LWPOLYLINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        320.0,
+        331.2,
+        320.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:W1",
+      "evidence_ref": "ev:E:W1",
+      "handle": "W1",
+      "layer": "CUT",
+      "length": 231.2,
+      "length_mm": 231.2,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        331.2,
+        320.0,
+        331.2,
+        365.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:W2",
+      "evidence_ref": "ev:E:W2",
+      "handle": "W2",
+      "layer": "CUT",
+      "length": 45.0,
+      "length_mm": 45.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        365.0,
+        331.2,
+        365.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:W3",
+      "evidence_ref": "ev:E:W3",
+      "handle": "W3",
+      "layer": "CUT",
+      "length": 231.2,
+      "length_mm": 231.2,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        100.0,
+        320.0,
+        100.0,
+        365.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:W4",
+      "evidence_ref": "ev:E:W4",
+      "handle": "W4",
+      "layer": "CUT",
+      "length": 45.0,
+      "length_mm": 45.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        700.0,
+        100.0,
+        760.0,
+        100.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:I1",
+      "evidence_ref": "ev:E:I1",
+      "handle": "I1",
+      "layer": "INSERT",
+      "length": 60.0,
+      "length_mm": 60.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        760.0,
+        100.0,
+        760.0,
+        150.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:I2",
+      "evidence_ref": "ev:E:I2",
+      "handle": "I2",
+      "layer": "INSERT",
+      "length": 50.0,
+      "length_mm": 50.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        700.0,
+        150.0,
+        760.0,
+        150.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:I3",
+      "evidence_ref": "ev:E:I3",
+      "handle": "I3",
+      "layer": "INSERT",
+      "length": 60.0,
+      "length_mm": 60.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        700.0,
+        100.0,
+        700.0,
+        150.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:I4",
+      "evidence_ref": "ev:E:I4",
+      "handle": "I4",
+      "layer": "INSERT",
+      "length": 50.0,
+      "length_mm": 50.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0.0,
+        0.0,
+        1400.0,
+        0.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:F1",
+      "evidence_ref": "ev:E:F1",
+      "handle": "F1",
+      "layer": "0",
+      "length": 1400.0,
+      "length_mm": 1400.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        1400.0,
+        0.0,
+        1400.0,
+        1000.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:F2",
+      "evidence_ref": "ev:E:F2",
+      "handle": "F2",
+      "layer": "0",
+      "length": 1000.0,
+      "length_mm": 1000.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0.0,
+        1000.0,
+        1400.0,
+        1000.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:F3",
+      "evidence_ref": "ev:E:F3",
+      "handle": "F3",
+      "layer": "0",
+      "length": 1400.0,
+      "length_mm": 1400.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0.0,
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:F4",
+      "evidence_ref": "ev:E:F4",
+      "handle": "F4",
+      "layer": "0",
+      "length": 1000.0,
+      "length_mm": 1000.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        900.0,
+        900.0,
+        908.0,
+        900.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:T1",
+      "evidence_ref": "ev:E:T1",
+      "handle": "T1",
+      "layer": "CUT",
+      "length": 8.0,
+      "length_mm": 8.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        908.0,
+        900.0,
+        908.0,
+        908.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:T2",
+      "evidence_ref": "ev:E:T2",
+      "handle": "T2",
+      "layer": "CUT",
+      "length": 8.0,
+      "length_mm": 8.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        900.0,
+        908.0,
+        908.0,
+        908.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:T3",
+      "evidence_ref": "ev:E:T3",
+      "handle": "T3",
+      "layer": "CUT",
+      "length": 8.0,
+      "length_mm": 8.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        900.0,
+        900.0,
+        900.0,
+        908.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:T4",
+      "evidence_ref": "ev:E:T4",
+      "handle": "T4",
+      "layer": "CUT",
+      "length": 8.0,
+      "length_mm": 8.0,
+      "space": "model",
+      "type": "LINE"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0.0,
+        1010.0,
+        40.0,
+        1014.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:X1",
+      "evidence_ref": "ev:E:X1",
+      "handle": "X1",
+      "layer": "TEXT",
+      "length": null,
+      "length_mm": null,
+      "space": "model",
+      "type": "MTEXT"
+    },
+    {
+      "area": null,
+      "attributes": {},
+      "bbox": [
+        0.0,
+        1020.0,
+        40.0,
+        1024.0
+      ],
+      "block_path": [],
+      "closed": null,
+      "entity_id": "ent:model:X2",
+      "evidence_ref": "ev:E:X2",
+      "handle": "X2",
+      "layer": "TEXT",
+      "length": null,
+      "length_mm": null,
+      "space": "model",
+      "type": "MTEXT"
+    }
+  ],
+  "evidence": {
+    "ev:E:B1": {
+      "handle": "B1",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:B2": {
+      "handle": "B2",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:B3": {
+      "handle": "B3",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:B4": {
+      "handle": "B4",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:B5": {
+      "handle": "B5",
+      "kind": "entity",
+      "layer": "CREASE",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:F1": {
+      "handle": "F1",
+      "kind": "entity",
+      "layer": "0",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:F2": {
+      "handle": "F2",
+      "kind": "entity",
+      "layer": "0",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:F3": {
+      "handle": "F3",
+      "kind": "entity",
+      "layer": "0",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:F4": {
+      "handle": "F4",
+      "kind": "entity",
+      "layer": "0",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:I1": {
+      "handle": "I1",
+      "kind": "entity",
+      "layer": "INSERT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:I2": {
+      "handle": "I2",
+      "kind": "entity",
+      "layer": "INSERT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:I3": {
+      "handle": "I3",
+      "kind": "entity",
+      "layer": "INSERT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:I4": {
+      "handle": "I4",
+      "kind": "entity",
+      "layer": "INSERT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:L1": {
+      "handle": "L1",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:T1": {
+      "handle": "T1",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:T2": {
+      "handle": "T2",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:T3": {
+      "handle": "T3",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:T4": {
+      "handle": "T4",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:W1": {
+      "handle": "W1",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:W2": {
+      "handle": "W2",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:W3": {
+      "handle": "W3",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:W4": {
+      "handle": "W4",
+      "kind": "entity",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:X1": {
+      "handle": "X1",
+      "kind": "entity",
+      "layer": "TEXT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:E:X2": {
+      "handle": "X2",
+      "kind": "entity",
+      "layer": "TEXT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:0": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "0",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CREASE": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CREASE",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:CUT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "CUT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:INSERT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "INSERT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    },
+    "ev:L:TEXT": {
+      "handle": "",
+      "kind": "layer",
+      "layer": "TEXT",
+      "spatial": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "geometry": {
+    "closed_outlines": [
+      {
+        "area": 23304.96,
+        "area_mm2": 23304.96,
+        "bbox": [
+          400.0,
+          100.0,
+          631.2,
+          200.8
+        ],
+        "entity_id": "ent:model:L1",
+        "evidence_ref": "ev:E:L1",
+        "layer": "CUT",
+        "length": 664.0,
+        "length_mm": 664.0,
+        "outline_id": "out:L1"
+      }
+    ],
+    "components": [
+      {
+        "bbox": [
+          100.0,
+          100.0,
+          331.2,
+          296.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:B",
+        "entity_ids": [
+          "ent:model:B1",
+          "ent:model:B2",
+          "ent:model:B3",
+          "ent:model:B4",
+          "ent:model:B5"
+        ]
+      },
+      {
+        "bbox": [
+          400.0,
+          100.0,
+          631.2,
+          200.8
+        ],
+        "closed_cycles": 1,
+        "component_id": "cmp:L",
+        "entity_ids": [
+          "ent:model:L1"
+        ]
+      },
+      {
+        "bbox": [
+          100.0,
+          320.0,
+          331.2,
+          365.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:W",
+        "entity_ids": [
+          "ent:model:W1",
+          "ent:model:W2",
+          "ent:model:W3",
+          "ent:model:W4"
+        ]
+      },
+      {
+        "bbox": [
+          700.0,
+          100.0,
+          760.0,
+          150.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:I",
+        "entity_ids": [
+          "ent:model:I1",
+          "ent:model:I2",
+          "ent:model:I3",
+          "ent:model:I4"
+        ]
+      },
+      {
+        "bbox": [
+          0.0,
+          0.0,
+          1400.0,
+          1000.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:F",
+        "entity_ids": [
+          "ent:model:F1",
+          "ent:model:F2",
+          "ent:model:F3",
+          "ent:model:F4"
+        ]
+      },
+      {
+        "bbox": [
+          900.0,
+          900.0,
+          908.0,
+          908.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:T",
+        "entity_ids": [
+          "ent:model:T1",
+          "ent:model:T2",
+          "ent:model:T3",
+          "ent:model:T4"
+        ]
+      },
+      {
+        "bbox": [
+          0.0,
+          1010.0,
+          40.0,
+          1024.0
+        ],
+        "closed_cycles": 0,
+        "component_id": "cmp:X",
+        "entity_ids": [
+          "ent:model:X1",
+          "ent:model:X2"
+        ]
+      }
+    ],
+    "holes": [],
+    "open_outlines": [
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          100.0,
+          331.2,
+          100.0
+        ],
+        "entity_id": "ent:model:B1",
+        "evidence_ref": "ev:E:B1",
+        "layer": "CUT",
+        "length": 231.2,
+        "length_mm": 231.2,
+        "outline_id": "out:B1"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          331.2,
+          100.0,
+          331.2,
+          296.0
+        ],
+        "entity_id": "ent:model:B2",
+        "evidence_ref": "ev:E:B2",
+        "layer": "CUT",
+        "length": 196.0,
+        "length_mm": 196.0,
+        "outline_id": "out:B2"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          296.0,
+          331.2,
+          296.0
+        ],
+        "entity_id": "ent:model:B3",
+        "evidence_ref": "ev:E:B3",
+        "layer": "CUT",
+        "length": 231.2,
+        "length_mm": 231.2,
+        "outline_id": "out:B3"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          100.0,
+          100.0,
+          296.0
+        ],
+        "entity_id": "ent:model:B4",
+        "evidence_ref": "ev:E:B4",
+        "layer": "CUT",
+        "length": 196.0,
+        "length_mm": 196.0,
+        "outline_id": "out:B4"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          320.0,
+          331.2,
+          320.0
+        ],
+        "entity_id": "ent:model:W1",
+        "evidence_ref": "ev:E:W1",
+        "layer": "CUT",
+        "length": 231.2,
+        "length_mm": 231.2,
+        "outline_id": "out:W1"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          331.2,
+          320.0,
+          331.2,
+          365.0
+        ],
+        "entity_id": "ent:model:W2",
+        "evidence_ref": "ev:E:W2",
+        "layer": "CUT",
+        "length": 45.0,
+        "length_mm": 45.0,
+        "outline_id": "out:W2"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          365.0,
+          331.2,
+          365.0
+        ],
+        "entity_id": "ent:model:W3",
+        "evidence_ref": "ev:E:W3",
+        "layer": "CUT",
+        "length": 231.2,
+        "length_mm": 231.2,
+        "outline_id": "out:W3"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          100.0,
+          320.0,
+          100.0,
+          365.0
+        ],
+        "entity_id": "ent:model:W4",
+        "evidence_ref": "ev:E:W4",
+        "layer": "CUT",
+        "length": 45.0,
+        "length_mm": 45.0,
+        "outline_id": "out:W4"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          700.0,
+          100.0,
+          760.0,
+          100.0
+        ],
+        "entity_id": "ent:model:I1",
+        "evidence_ref": "ev:E:I1",
+        "layer": "INSERT",
+        "length": 60.0,
+        "length_mm": 60.0,
+        "outline_id": "out:I1"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          760.0,
+          100.0,
+          760.0,
+          150.0
+        ],
+        "entity_id": "ent:model:I2",
+        "evidence_ref": "ev:E:I2",
+        "layer": "INSERT",
+        "length": 50.0,
+        "length_mm": 50.0,
+        "outline_id": "out:I2"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          700.0,
+          150.0,
+          760.0,
+          150.0
+        ],
+        "entity_id": "ent:model:I3",
+        "evidence_ref": "ev:E:I3",
+        "layer": "INSERT",
+        "length": 60.0,
+        "length_mm": 60.0,
+        "outline_id": "out:I3"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          700.0,
+          100.0,
+          700.0,
+          150.0
+        ],
+        "entity_id": "ent:model:I4",
+        "evidence_ref": "ev:E:I4",
+        "layer": "INSERT",
+        "length": 50.0,
+        "length_mm": 50.0,
+        "outline_id": "out:I4"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          0.0,
+          0.0,
+          1400.0,
+          0.0
+        ],
+        "entity_id": "ent:model:F1",
+        "evidence_ref": "ev:E:F1",
+        "layer": "0",
+        "length": 1400.0,
+        "length_mm": 1400.0,
+        "outline_id": "out:F1"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          1400.0,
+          0.0,
+          1400.0,
+          1000.0
+        ],
+        "entity_id": "ent:model:F2",
+        "evidence_ref": "ev:E:F2",
+        "layer": "0",
+        "length": 1000.0,
+        "length_mm": 1000.0,
+        "outline_id": "out:F2"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          0.0,
+          1000.0,
+          1400.0,
+          1000.0
+        ],
+        "entity_id": "ent:model:F3",
+        "evidence_ref": "ev:E:F3",
+        "layer": "0",
+        "length": 1400.0,
+        "length_mm": 1400.0,
+        "outline_id": "out:F3"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          0.0,
+          0.0,
+          0.0,
+          1000.0
+        ],
+        "entity_id": "ent:model:F4",
+        "evidence_ref": "ev:E:F4",
+        "layer": "0",
+        "length": 1000.0,
+        "length_mm": 1000.0,
+        "outline_id": "out:F4"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          900.0,
+          900.0,
+          908.0,
+          900.0
+        ],
+        "entity_id": "ent:model:T1",
+        "evidence_ref": "ev:E:T1",
+        "layer": "CUT",
+        "length": 8.0,
+        "length_mm": 8.0,
+        "outline_id": "out:T1"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          908.0,
+          900.0,
+          908.0,
+          908.0
+        ],
+        "entity_id": "ent:model:T2",
+        "evidence_ref": "ev:E:T2",
+        "layer": "CUT",
+        "length": 8.0,
+        "length_mm": 8.0,
+        "outline_id": "out:T2"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          900.0,
+          908.0,
+          908.0,
+          908.0
+        ],
+        "entity_id": "ent:model:T3",
+        "evidence_ref": "ev:E:T3",
+        "layer": "CUT",
+        "length": 8.0,
+        "length_mm": 8.0,
+        "outline_id": "out:T3"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          900.0,
+          900.0,
+          900.0,
+          908.0
+        ],
+        "entity_id": "ent:model:T4",
+        "evidence_ref": "ev:E:T4",
+        "layer": "CUT",
+        "length": 8.0,
+        "length_mm": 8.0,
+        "outline_id": "out:T4"
+      },
+      {
+        "area": null,
+        "area_mm2": null,
+        "bbox": [
+          200.0,
+          296.0,
+          331.2,
+          296.0
+        ],
+        "entity_id": "ent:model:B5",
+        "evidence_ref": "ev:E:B5",
+        "layer": "CREASE",
+        "length": 131.2,
+        "length_mm": 131.2,
+        "outline_id": "out:B5"
+      }
+    ],
+    "overlaps": [],
+    "repeated_groups": [],
+    "tolerance": 1e-06
+  },
+  "ir_hash": "e7b60afb157a04f5d65cb3ca4f64a261fda29ee8476d872a3adee57055dae312",
+  "ir_id": "47b47b537766ec59",
+  "ir_version": "cad-ir/1",
+  "layers": [
+    {
+      "color": 7,
+      "entity_count": 18,
+      "evidence_refs": [
+        "ev:L:CUT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CUT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 1,
+      "evidence_refs": [
+        "ev:L:CREASE"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "CREASE",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 4,
+      "evidence_refs": [
+        "ev:L:INSERT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "INSERT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 2,
+      "evidence_refs": [
+        "ev:L:TEXT"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "TEXT",
+      "role_confidence": null,
+      "visible": true
+    },
+    {
+      "color": 7,
+      "entity_count": 4,
+      "evidence_refs": [
+        "ev:L:0"
+      ],
+      "frozen": false,
+      "inferred_role": null,
+      "line_type": "CONTINUOUS",
+      "name": "0",
+      "role_confidence": null,
+      "visible": true
+    }
+  ],
+  "parser": {
+    "name": "ezdxf",
+    "options": {},
+    "version": "1.4.4"
+  },
+  "source": {
+    "attachment_name": "fixture.dwg",
+    "conversion_id": "d747c48b0208d68d",
+    "converter_name": "libredwg",
+    "converter_version": "0.14",
+    "detected_dwg_version": "AC1027",
+    "drawing_version": 1,
+    "dxf_artifact": "converted.dxf",
+    "dxf_sha256": "6c32f6de89846c0fdd056a526d18ee5d6aefdae2308a977a2a67029bb7ac2d62",
+    "kind": "dwg_2d",
+    "project_id": "",
+    "source_sha256": "af542e1c3f38087b52bfa94fde5d9a629cf0f85b488531f8c9feafd785a29d28"
+  },
+  "stats": {
+    "arc_total": 0,
+    "block_ref_total": 0,
+    "circle_total": 0,
+    "closed_outline_total": 1,
+    "dimension_total": 0,
+    "ellipse_total": 0,
+    "entity_total": 24,
+    "layer_total": 5,
+    "open_outline_total": 21,
+    "spline_total": 0,
+    "text_total": 2,
+    "unsupported_total": 0
+  },
+  "texts": [
+    {
+      "entity_id": "ent:model:X1",
+      "evidence_ref": "ev:E:X1",
+      "height": 2.5,
+      "layer": "TEXT",
+      "normalized_text": "Flute/Grain",
+      "position": [
+        0.0,
+        1011.0
+      ],
+      "raw_text": "Flute/Grain",
+      "type": "MTEXT"
+    },
+    {
+      "entity_id": "ent:model:X2",
+      "evidence_ref": "ev:E:X2",
+      "height": 2.5,
+      "layer": "TEXT",
+      "normalized_text": "酒盒 700ML",
+      "position": [
+        0.0,
+        1021.0
+      ],
+      "raw_text": "酒盒 700ML",
+      "type": "MTEXT"
+    }
+  ],
+  "units": {
+    "candidates": [],
+    "drawing_units": "mm",
+    "scale_to_mm": 1.0,
+    "unit_confidence": 1.0,
+    "unit_status": "confirmed"
+  },
+  "unsupported": [],
+  "warnings": []
+}

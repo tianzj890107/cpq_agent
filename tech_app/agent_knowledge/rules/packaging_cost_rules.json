@@ -11,10 +11,32 @@
   "review_status": "reviewed",
   "generated_at": "2026-09-20",
   "minimum_charge_policy": {
-    "status": "pending",
-    "chosen": "",
-    "decided_by": "",
-    "decided_at": "",
+    "status": "chosen",
+    "chosen": "sheet_labor_rate",
+    "decided_by": "张真",
+    "decided_at": "2026-09-21",
+    "decisions": [
+      {
+        "formula_code": "PKG-C-LAMINATION",
+        "minimum_charge": 0,
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；冻结值 200 出自 ① 报价-行业标准!V2，归零后只作冻结证据保留、不再参与命中判定。行级 MAX 见 PKG-C-DIE-CUT.row_variants。"
+      },
+      {
+        "formula_code": "PKG-C-HOT-STAMP-FLAT",
+        "minimum_charge": 0,
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；冻结值 150 出自 ① 报价-行业标准!X2，归零后只作冻结证据保留、不再参与命中判定。行级 MAX 见 PKG-C-DIE-CUT.row_variants。"
+      },
+      {
+        "formula_code": "PKG-C-DIE-CUT",
+        "minimum_charge": 0,
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；冻结值 100 出自 ① 报价-行业标准!AI2，归零后只作冻结证据保留。行级 MAX(100/R,0.08/J) 是工作簿原文，登记在本码 row_variants 的 AI9/AI14/AI15 上，不并进主行。"
+      },
+      {
+        "formula_code": "PKG-C-V-GROOVE",
+        "minimum_charge": 0,
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；冻结值 120 在该工作簿任何工作表里都不存在（① 报价-行业标准!AK5 原文是 MAX(150/R5,0.15)），随裁决一并归零。行级 MAX 见 PKG-C-DIE-CUT.row_variants。"
+      }
+    ],
     "candidates": [
       {
         "policy_id": "sheet_industry_standard",
@@ -324,7 +346,7 @@
       "formula_code": "PKG-C-LAMINATION",
       "cost_category": "lamination",
       "expression": "machine_length*machine_width/1000000*film_price/tax_factor/imposition_count + machine_length*machine_width/1000000*film_thickness_um/1000*film_kg_price/imposition_count + (setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
-      "minimum_charge": 200,
+      "minimum_charge": 0,
       "rounding": 4,
       "rate_code": "RATE-PKG-EQUIP-SURFACE",
       "source_ref": "报价逻辑-0903.xlsx/报价-工费率/V2",
@@ -340,7 +362,7 @@
       "loss_scope": "复膜",
       "source_sheet": "报价-工费率",
       "source_cell": "V2",
-      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/V2",
+      "minimum_charge_source_ref": "",
       "variable_map": {
         "machine_length": "H",
         "machine_width": "I",
@@ -370,7 +392,7 @@
       "formula_code": "PKG-C-HOT-STAMP-FLAT",
       "cost_category": "hot_stamp_flat",
       "expression": "hot_area_mm2/1000000*foil_price + (setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
-      "minimum_charge": 150,
+      "minimum_charge": 0,
       "rounding": 4,
       "rate_code": "RATE-PKG-EQUIP-SURFACE",
       "source_ref": "报价逻辑-0903.xlsx/报价-工费率/X2",
@@ -384,7 +406,7 @@
       "loss_scope": "热烫-平压",
       "source_sheet": "报价-工费率",
       "source_cell": "X2",
-      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/X2",
+      "minimum_charge_source_ref": "",
       "variable_map": {
         "imposition_count": "J",
         "quote_quantity": "R"
@@ -443,7 +465,7 @@
       "formula_code": "PKG-C-DIE-CUT",
       "cost_category": "die_cutting",
       "expression": "(setup_minutes/60 + quote_quantity/imposition_count/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity",
-      "minimum_charge": 100,
+      "minimum_charge": 0,
       "rounding": 4,
       "rate_code": "RATE-PKG-EQUIP-MOULD",
       "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AI2",
@@ -456,7 +478,7 @@
       "loss_scope": "啤/切",
       "source_sheet": "报价-工费率",
       "source_cell": "AI2",
-      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AI2",
+      "minimum_charge_source_ref": "",
       "variable_map": {
         "imposition_count": "J",
         "quote_quantity": "R"
@@ -497,7 +519,7 @@
       "formula_code": "PKG-C-V-GROOVE",
       "cost_category": "v_groove",
       "expression": "(setup_minutes/60 + quote_quantity/capacity_per_hour)*(equipment_rate+labor_rate)/quote_quantity*times",
-      "minimum_charge": 150,
+      "minimum_charge": 0,
       "rounding": 4,
       "rate_code": "RATE-PKG-EQUIP-VGROOVE",
       "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AK5",
@@ -511,7 +533,7 @@
       "loss_scope": "V槽",
       "source_sheet": "报价-工费率",
       "source_cell": "AK5",
-      "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AK5",
+      "minimum_charge_source_ref": "",
       "variable_map": {
         "quote_quantity": "R"
       },

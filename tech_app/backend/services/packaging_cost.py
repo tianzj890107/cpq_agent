@@ -185,14 +185,14 @@ FORMULA_CATALOG = {
                      "ink_thickness_mm": 4.0, "ink_unit_price": 115.0}},
     "PKG-C-LAMINATION": {
         "formula_code": "PKG-C-LAMINATION", "cost_category": "lamination",
-        "expression": _LAMINATION_EXPR, "minimum_charge": 200, "frozen_minimum_charge": 200, "rounding": 4,
+        "expression": _LAMINATION_EXPR, "minimum_charge": 0, "frozen_minimum_charge": 200, "rounding": 4,
         "rate_code": "RATE-PKG-EQUIP-SURFACE", "source_ref": _GSTAMP + "V2",
         "defaults": {"setup_minutes": 30.0, "capacity_per_hour": 5500.0,
                      "equipment_rate": 197.0, "labor_rate": 145.0, "film_price": 1.7,
                      "film_thickness_um": 18.0, "film_kg_price": 18.5}},
     "PKG-C-HOT-STAMP-FLAT": {
         "formula_code": "PKG-C-HOT-STAMP-FLAT", "cost_category": "hot_stamp_flat",
-        "expression": _HOT_STAMP_FLAT_EXPR, "minimum_charge": 150, "frozen_minimum_charge": 150, "rounding": 4,
+        "expression": _HOT_STAMP_FLAT_EXPR, "minimum_charge": 0, "frozen_minimum_charge": 150, "rounding": 4,
         "rate_code": "RATE-PKG-EQUIP-SURFACE", "source_ref": _GSTAMP + "X2",
         "defaults": {"setup_minutes": 200.0, "capacity_per_hour": 5000.0,
                      "equipment_rate": 193.0, "labor_rate": 115.0, "foil_price": 8.5}},
@@ -204,13 +204,13 @@ FORMULA_CATALOG = {
                      "equipment_rate": 209.0, "labor_rate": 126.0}},
     "PKG-C-DIE-CUT": {
         "formula_code": "PKG-C-DIE-CUT", "cost_category": "die_cutting",
-        "expression": _DIE_CUT_EXPR, "minimum_charge": 100, "frozen_minimum_charge": 100, "rounding": 4,
+        "expression": _DIE_CUT_EXPR, "minimum_charge": 0, "frozen_minimum_charge": 100, "rounding": 4,
         "rate_code": "RATE-PKG-EQUIP-MOULD", "source_ref": _GSTAMP + "AI2",
         "defaults": {"setup_minutes": 120.0, "capacity_per_hour": 6500.0,
                      "equipment_rate": 197.52, "labor_rate": 190.06}},
     "PKG-C-V-GROOVE": {
         "formula_code": "PKG-C-V-GROOVE", "cost_category": "v_groove",
-        "expression": _V_GROOVE_EXPR, "minimum_charge": 150, "frozen_minimum_charge": 120, "rounding": 4,
+        "expression": _V_GROOVE_EXPR, "minimum_charge": 0, "frozen_minimum_charge": 120, "rounding": 4,
         "rate_code": "RATE-PKG-EQUIP-VGROOVE", "source_ref": _GSTAMP + "AK5",
         "defaults": {"setup_minutes": 60.0, "capacity_per_hour": 3000.0,
                      "equipment_rate": 195.0, "labor_rate": 111.0, "times": 2.0}},
@@ -297,7 +297,7 @@ _FORMULA_PROVENANCE = {
     "PKG-C-LAMINATION": {
         "source_sheet": "报价-工费率", "source_cell": "V2",
         "source_ref": "报价逻辑-0903.xlsx/报价-工费率/V2",
-        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/V2",
+        "minimum_charge_source_ref": "",
         "variable_map": {"machine_length": "H", "machine_width": "I", "imposition_count": "J", "quote_quantity": "R"},
         "source_formula": "=(H2*I2/1000000*1.7/1.13/J2+H2*I2/1000000*18/1000*18.5/J2)+((30/60+R2/J2/5500)*(197+145))/R2",
         "verify_inputs": {"machine_length": 889, "machine_width": 700, "imposition_count": 1, "setup_minutes": 30, "capacity_per_hour": 5500, "equipment_rate": 197, "labor_rate": 145, "film_price": 1.7, "film_thickness_um": 18, "film_kg_price": 18.5, "tax_factor": 1.13, "quote_quantity": 1000},
@@ -305,7 +305,7 @@ _FORMULA_PROVENANCE = {
     "PKG-C-HOT-STAMP-FLAT": {
         "source_sheet": "报价-工费率", "source_cell": "X2",
         "source_ref": "报价逻辑-0903.xlsx/报价-工费率/X2",
-        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/X2",
+        "minimum_charge_source_ref": "",
         "variable_map": {"imposition_count": "J", "quote_quantity": "R"},
         "source_formula": "=((100*75*4)/1000000*8.5)+((200/60+R2/J2/5000)*(193+115))/R2",
         "verify_inputs": {"hot_area_mm2": 30000, "imposition_count": 1, "setup_minutes": 200, "capacity_per_hour": 5000, "equipment_rate": 193, "labor_rate": 115, "foil_price": 8.5, "quote_quantity": 1000},
@@ -322,7 +322,7 @@ _FORMULA_PROVENANCE = {
     "PKG-C-DIE-CUT": {
         "source_sheet": "报价-工费率", "source_cell": "AI2",
         "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AI2",
-        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AI2",
+        "minimum_charge_source_ref": "",
         "variable_map": {"imposition_count": "J", "quote_quantity": "R"},
         "source_formula": "=((120/60+R2/J2/6500)*(197.52+190.06))/R2",
         "verify_inputs": {"imposition_count": 1, "setup_minutes": 120, "capacity_per_hour": 6500, "equipment_rate": 197.52, "labor_rate": 190.06, "quote_quantity": 1000},
@@ -330,7 +330,7 @@ _FORMULA_PROVENANCE = {
     "PKG-C-V-GROOVE": {
         "source_sheet": "报价-工费率", "source_cell": "AK5",
         "source_ref": "报价逻辑-0903.xlsx/报价-工费率/AK5",
-        "minimum_charge_source_ref": "报价逻辑-0903.xlsx/报价-行业标准/AK5",
+        "minimum_charge_source_ref": "",
         "variable_map": {"quote_quantity": "R"},
         "source_formula": "=(60/60+R5/3000)*(195+111)/R5*2",
         "verify_inputs": {"quote_quantity": 1000, "setup_minutes": 60, "capacity_per_hour": 3000, "equipment_rate": 195, "labor_rate": 111, "times": 2},
@@ -578,19 +578,38 @@ def _load_minimum_charge_policy() -> dict:
 #: 模块级口径常量（Spec §6）：`pending` = 未裁决，运行时必须标注 `unresolved`。
 MINIMUM_CHARGE_POLICY = _load_minimum_charge_policy()
 
-#: 与第 1 批**冻结值**不一致的最低收费：逐条登记出处、差异与裁决状态（Spec
+#: 与第 1 批**冻结值**不一致的最低收费：逐条登记出处、差异与裁决（Spec
 #: `packaging-cost-red-closure.md` C3）。`frozen` = `FORMULA_CATALOG[...]["frozen_minimum_charge"]`，
 #: `current` = 运行时 `minimum_charge`。
-#: `owner` / `decided_at` 留空 = **尚未裁决**：这两个字段只能由业务/用户给，实现方不许填数
-#: （见 docs/specs/packaging-cost-minimum-charge.md §3：三种候选口径各有代价，必须业务选）。
+#: `owner` / `decided_at` 只能由业务/用户给，实现方不许填数（见
+#: docs/specs/packaging-cost-minimum-charge-decision.md §1）。2026-09-21 业务裁决：
+#: 取 ② 报价-工费率（主行无门限），四个码的门限一并归零。
 _MIN_CHARGE_DECISIONS = {
+    "PKG-C-LAMINATION": {
+        "frozen": 200, "current": 0, "owner": "张真", "decided_at": "2026-09-21",
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；第 1 批冻结的 200 出自 "
+                  "① 报价-行业标准!V2，本批归零后不再参与命中判定、只作冻结证据保留。"
+                  "行级 MAX 只出现在 报价-工费率!AI9/AI14/AI15（见 PKG-C-DIE-CUT.row_variants）。",
+    },
+    "PKG-C-HOT-STAMP-FLAT": {
+        "frozen": 150, "current": 0, "owner": "张真", "decided_at": "2026-09-21",
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；第 1 批冻结的 150 出自 "
+                  "① 报价-行业标准!X2，本批归零后不再参与命中判定、只作冻结证据保留。"
+                  "行级 MAX 只出现在 报价-工费率!AI9/AI14/AI15（见 PKG-C-DIE-CUT.row_variants）。",
+    },
+    "PKG-C-DIE-CUT": {
+        "frozen": 100, "current": 0, "owner": "张真", "decided_at": "2026-09-21",
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；第 1 批冻结的 100 出自 "
+                  "① 报价-行业标准!AI2，本批归零后不再参与命中判定、只作冻结证据保留。"
+                  "行级 MAX(100/R,0.08/J) 是工作簿原文，登记在本码 row_variants 的 "
+                  "AI9/AI14/AI15 上，不并进主行。",
+    },
     "PKG-C-V-GROOVE": {
-        "frozen": 120, "current": 150, "owner": "", "decided_at": "",
-        "reason": "报价-行业标准!AK5 原文 = MAX(150/R5,0.15)，150 有出处；"
-                  "第 1 批冻结的 120 在该工作簿任何工作表里都不存在"
-                  "（报价-工费率!AK5 无门限）。待业务在 ①行业标准 / ②工费率 / ③混合 之间裁决后，"
-                  "本条目补 owner 与 decided_at，并按裁决结果同步 FORMLA_CATALOG 与"
-                  "tests/test_packaging_cost_engine_red.py 的 c1/c2/c4 期望值。",
+        "frozen": 120, "current": 0, "owner": "张真", "decided_at": "2026-09-21",
+        "reason": "② 报价-工费率主行无门限，取报价-工费率原文；第 1 批冻结的 120 在该工作簿"
+                  "任何工作表里都不存在（① 报价-行业标准!AK5 原文是 MAX(150/R5,0.15)），"
+                  "本批随裁决一并归零，不再参与命中判定、只作冻结证据保留。"
+                  "行级 MAX 只出现在 报价-工费率!AI9/AI14/AI15（见 PKG-C-DIE-CUT.row_variants）。",
     },
 }
 

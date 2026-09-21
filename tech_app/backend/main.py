@@ -77,10 +77,13 @@ from .services import (
     packaging_cost,
     packaging_drawing_flow,
     packaging_handoff,
+    packaging_parts,
     packaging_route,
+    packaging_semantics,
     process, product_params, production, requirement_extract, requirement_service,
     project_access,
     cad_converter,
+    cad_ir,
     dwg_dispatch,
     step_import,
     summary as summary_svc, tasks, timeline, tree,
@@ -6670,6 +6673,70 @@ def lock_requirement_packaging_bom_item(
     record = _packaging_bom_flow(packaging_bom.lock_bom_item, project_id, body.requirement_no,
                                  body.item_key, actor=user, locked=body.locked)
     return {"bom": record}
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件（零件提取批，Spec docs/specs/packaging-parts-extraction.md §4/§5）
+# 两个接口：读零件文档（纯读）/ 按当前 CAD IR 现算一版零件（写）。
+# 写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES —— 零件是从图纸来的工艺事实，
+# 与确认盒型、展开部件本来就是同一批人。装饰器参数写成具名常量（避免顶掉既有"需求相关
+# 路由"基线），但路径本身在源码里逐字出现。
+# --------------------------------------------------------------------------- #
+PACKAGING_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-parts"
+PACKAGING_PARTS_EXTRACT_PATH = "/api/projects/{project_id}/requirement/packaging-parts/extract"
+
+
+class PackagingPartsExtractAction(BaseModel):
+    """零件提取入参：留空则按项目里最新一版 CAD IR 重算。"""
+
+    ir_id: str = ""
+
+
+def _parts_body(record: Any) -> Dict[str, Any]:
+    """零件文档的响应形状 = 文档本身（Spec §4）+ `built` / `summary` 两个附加键。
+
+    刻意不套一层 `{"parts": <doc>}`：文档里已经有一个 `parts`（零件数组），再套一层
+    会让前端把 `parts` 读成对象、左栏永远空 —— 现场就是这么空的。
+    """
+    body = dict(record) if isinstance(record, dict) else {"parts": [], "filtered": [],
+                                                          "unavailable": [], "stats": {},
+                                                          "source": {}, "reviewable": True}
+    body["built"] = bool(record)
+    body["summary"] = packaging_parts.summarize(record or {})
+    return body
+
+
+@app.get(PACKAGING_PARTS_READ_PATH)
+def get_requirement_packaging_parts(pid: str, parts_id: str = "",
+                                    user: dict = Depends(current_user)):
+    """读零件文档与摘要（2.1 左栏零件树的数据源）；没有就 built=false、parts=[]，不报错。"""
+    _workflow_project(pid)
+    return _parts_body(packaging_parts.load_parts(pid, parts_id or None))
+
+
+@app.post(PACKAGING_PARTS_EXTRACT_PATH)
+def extract_requirement_packaging_parts(
+    project_id: str,
+    body: PackagingPartsExtractAction = Body(default=PackagingPartsExtractAction()),
+    user: dict = Depends(current_user),
+):
+    """按当前 CAD IR 现算零件并落一版（同一 IR + 同一语义 → 同一 parts_id，幂等）。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    ir = cad_ir.load_ir(project_id, body.ir_id) if body.ir_id else cad_ir.load_ir(project_id)
+    if not isinstance(ir, dict):
+        raise HTTPException(409, "项目里还没有可用的 CAD 图纸解析结果，请先跑一键解析图纸")
+    saved = packaging_parts.save_parts(project_id,
+                                      packaging_parts.extract(
+                                          ir, packaging_semantics.load_semantics(project_id)))
+    store.audit(project_id, "workflow:packaging_parts_extracted", {
+        "parts_id": saved.get("parts_id"),
+        "parts_total": saved["stats"]["part_total"],
+        "filtered_total": saved["stats"]["filtered_total"],
+        "by": str(user.get("username") or ""),
+    })
+    return _parts_body(saved)
 
 
 # --------------------------------------------------------------------------- #

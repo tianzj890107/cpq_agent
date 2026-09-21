@@ -52,10 +52,14 @@ PACKAGING_COST = "tech_app.backend.services.packaging_cost"
 PACKAGING_HANDOFF = "tech_app.backend.services.packaging_handoff"
 
 FLOW_VERSION = "packaging-drawing-flow/1"
+#: 2026-09-21：零件提取批在 `packaging_semantics` 之后、`field_write` 之前插入
+#: `parts_extract`（`docs/specs/packaging-dwg-parts-extraction.md` §4 明确要求），
+#: 因此冻结的步骤闭集由七步扩为八步；其余顺序与中文名逐字未变。
 STEP_IDS = ("file_preflight", "dwg_convert", "cad_ir_parse", "packaging_semantics",
-            "field_write", "pending_confirm", "downstream_prepare")
+            "parts_extract", "field_write", "pending_confirm", "downstream_prepare")
 STEP_TITLES = {"file_preflight": "文件预检", "dwg_convert": "DWG 转换",
                "cad_ir_parse": "CAD 矢量解析", "packaging_semantics": "包装语义识别",
+               "parts_extract": "零件提取",
                "field_write": "字段写入", "pending_confirm": "待确认生成",
                "downstream_prepare": "后续任务准备"}
 STEP_STATUSES = {"pending", "running", "completed", "failed", "blocked",
@@ -593,7 +597,7 @@ class AFlowChainOrder(FlowCase):
         state = self.start(pid)
         cards = self.task_cards(store_mod, pid)
         self.assertEqual(len(cards), len(STEP_IDS),
-                         "七步各一张卡，不多不少（要求 2）：%r" % [c.get("key") for c in cards])
+                         "八步各一张卡，不多不少（要求 2）：%r" % [c.get("key") for c in cards])
         for row in cards:
             task = row.get("task") or {}
             self.assertTrue(str(task.get("id") or "").startswith("flow:%s:" % state["run_id"]),
@@ -1317,7 +1321,7 @@ class ERetryAndIdempotency(FlowCase):
         cards = self.task_cards(store_mod, pid)
         ids = [str((row.get("task") or {}).get("id") or "") for row in cards]
         self.assertEqual(len(ids), len(set(ids)), "并发下同一 run 的步骤卡必须唯一：%r" % ids)
-        self.assertEqual(len(ids), len(STEP_IDS), "并发下仍是七张卡")
+        self.assertEqual(len(ids), len(STEP_IDS), "并发下仍是八张卡")
         self.assertEqual(len(self.user_entries(store_mod, pid)), 1, "并发下气泡只许一条")
 
 
@@ -1369,7 +1373,7 @@ class FRestoreAndHistory(FlowCase):
             self.assertTrue(store_mod.load_meta(pid), "%s 的项目仍在历史清单里" % name)
             state = module.flow_state(pid)
             self.assertTrue(state.get("run_id"), "%s 重开后必须能恢复 run" % name)
-            self.assertEqual(len(state["steps"]), len(STEP_IDS), "%s 七步状态齐全" % name)
+            self.assertEqual(len(state["steps"]), len(STEP_IDS), "%s 八步状态齐全" % name)
 
     def test_f30_full_restore_covers_session_fields_and_status(self):
         store_mod, meta, blob, tmp = self.memory_store()

@@ -398,10 +398,78 @@ def extra_field_model():
     )
 
 
+def _rect_panel(code, x0, y0, x1, y1, layer_name="CUT"):
+    """一块矩形面板：4 条 LINE 拼出来（真实刀模图就是这样，零件不是闭合环）。
+
+    返回 (entities, open_outlines, component)。分量 bbox 由生成器直接给出 —— 真实 CAD IR
+    的 `geometry.components` 也是这样带着 bbox 的（第 3 批算好，第 4/本批只读）。
+    """
+    handles = ["%s%d" % (code, index + 1) for index in range(4)]
+    boxes = [[x0, y0, x1, y0], [x1, y0, x1, y1], [x0, y1, x1, y1], [x0, y0, x0, y1]]
+    lengths = [x1 - x0, y1 - y0, x1 - x0, y1 - y0]
+    ents = [entity(handle, "LINE", layer_name, bbox=box, length=length)
+            for handle, box, length in zip(handles, boxes, lengths)]
+    outs = [outline("out:%s" % handle, "ent:model:%s" % handle, layer_name, box, length, None)
+            for handle, box, length in zip(handles, boxes, lengths)]
+    comp = {"component_id": "cmp:%s" % code,
+            "entity_ids": ["ent:model:%s" % handle for handle in handles],
+            "bbox": [x0, y0, x1, y1], "closed_cycles": 0}
+    return ents, outs, comp
+
+
+def parts_panels():
+    """刀模/展开图形态的多零件夹具（零件由多条 LINE 拼出 + 整版框 + 标注 + 碎线）。
+
+    形态照真实 `酒盒.dwg` 的 CAD IR 统计取（**同构，非真实尺寸**）：
+    `closed_outline_total = 2` / `open_outline_total = 5598` / `components = 402`，
+    所以「零件 = 闭合轮廓」在真图上不成立 —— 必须按连通分量聚合。
+
+    7 个分量：4 件过筛（盒身展开 / 盖面 / 盖壁条 / 内托），3 件被筛
+    （整版框 = 长边超限、碎线 = 面积过小、纯文字组 = 没有可制造曲线）。
+    """
+    body_e, body_o, body_c = _rect_panel("B", 100.0, 100.0, 331.2, 296.0)
+    wall_e, wall_o, wall_c = _rect_panel("W", 100.0, 320.0, 331.2, 365.0)
+    insert_e, insert_o, insert_c = _rect_panel("I", 700.0, 100.0, 760.0, 150.0,
+                                               layer_name="INSERT")
+    frame_e, frame_o, frame_c = _rect_panel("F", 0.0, 0.0, 1400.0, 1000.0, layer_name="0")
+    tiny_e, tiny_o, tiny_c = _rect_panel("T", 900.0, 900.0, 908.0, 908.0)
+    # 盖面：闭合多段线（真图里那 2 条闭合环的同构体）。
+    lid_e = [entity("L1", "LWPOLYLINE", "CUT", closed=True, bbox=[400.0, 100.0, 631.2, 200.8],
+                    length=2 * (231.2 + 100.8), area=231.2 * 100.8)]
+    lid_o = [outline("out:L1", "ent:model:L1", "CUT", [400.0, 100.0, 631.2, 200.8],
+                     2 * (231.2 + 100.8), 231.2 * 100.8)]
+    lid_c = {"component_id": "cmp:L", "entity_ids": ["ent:model:L1"],
+             "bbox": [400.0, 100.0, 631.2, 200.8], "closed_cycles": 1}
+    # 压痕线：与盒身刀线共顶点 → 同一分量（考"件内角色优先级 cut > crease"）。
+    crease = entity("B5", "LINE", "CREASE", bbox=[200.0, 296.0, 331.2, 296.0], length=131.2)
+    body_c = dict(body_c, entity_ids=list(body_c["entity_ids"]) + ["ent:model:B5"])
+    # 纯文字组：没有可制造曲线 → 必须被筛掉。
+    text_e = [entity("X1", "MTEXT", "TEXT", bbox=[0.0, 1010.0, 40.0, 1014.0]),
+              entity("X2", "MTEXT", "TEXT", bbox=[0.0, 1020.0, 40.0, 1024.0])]
+    text_c = {"component_id": "cmp:X",
+              "entity_ids": ["ent:model:X1", "ent:model:X2"],
+              "bbox": [0.0, 1010.0, 40.0, 1024.0], "closed_cycles": 0}
+    return make(
+        "parts_panels",
+        layers=[layer("CUT", entity_count=18), layer("CREASE", entity_count=1),
+                layer("INSERT", entity_count=4), layer("TEXT", entity_count=2),
+                layer("0", entity_count=4)],
+        entities=body_e + [crease] + lid_e + wall_e + insert_e + frame_e + tiny_e + text_e,
+        texts=[text("X1", "TEXT", "Flute/Grain", "Flute/Grain", position=[0.0, 1011.0]),
+               text("X2", "TEXT", "酒盒 700ML", "酒盒 700ML", position=[0.0, 1021.0])],
+        geometry={"closed_outlines": lid_o,
+                  "open_outlines": body_o + wall_o + insert_o + frame_o + tiny_o
+                                   + [outline("out:B5", "ent:model:B5", "CREASE",
+                                              [200.0, 296.0, 331.2, 296.0], 131.2, None)],
+                  "components": [body_c, lid_c, wall_c, insert_c, frame_c, tiny_c, text_c],
+                  "holes": [], "repeated_groups": [], "overlaps": [], "tolerance": 1e-6},
+    )
+
+
 BUILDERS = (cut_crease_layers, color_only_layers, dashed_crease_layer, dim_conflict,
             dim_conflict_tolerance, unitless_dimensions, material_texts, no_material_texts,
             hole_plate, multi_panel, round_outline, ambiguous_layers, warnings_passthrough,
-            no_preview, extra_field_model)
+            no_preview, extra_field_model, parts_panels)
 
 
 def name_of(fn):
