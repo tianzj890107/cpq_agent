@@ -25,6 +25,15 @@
   /* 案例列表路由：唯一事实源是 cpq_quick_quote_case.QUICK_QUOTE_CASES_PATH；
      这里只写相对路径，基址由 agentBase() 给（页面同源 /agents/quote）。 */
   var CASES_PATH = "/api/quick-quote/cases";
+  /* 解析路由（Spec 批 11 C1）：唯一事实源是 cpq_quick_quote_file.QUICK_QUOTE_PARSE_PATH；
+     这里只写相对路径，基址由 agentBase() 给。图纸只从这里进 —— 转换与语义都在服务端，
+     浏览器不转换、不调技术工艺接口、不把图纸送视觉模型。 */
+  var PARSE_PATH = "/api/quick-quote/parse";
+  /* 上传入口的 accept（Spec 批 11 C2）：图纸 + 常见需求文件。 */
+  var PARSE_ACCEPT = ".dwg,.dxf,.pdf,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp";
+
+  /*: 最近一次解析的视图模型：面板重绘（案例列表加载完）时不把用户刚上传的结果擦掉。 */
+  var lastParseView = null;
 
   var REASON_LABELS = {
     ok: "可用",
@@ -221,6 +230,10 @@
       "拿一个跟以前做过的礼盒很接近的需求，从标准案例库里挑最像的成交案例，改几个差异项，"
       + "就出一份有依据的快速报价。全程只在报价侧：不生成技术工艺、不重建 BOM、不做成本重算。"));
 
+    // 图纸 / 文件入口（Spec 批 11）：丢一个 DWG/DXF（或 PDF/Excel/文字需求）就能看到解析出来的
+    // 匹配输入与候选案例。解析在服务端做，这里只上屏。
+    shell.appendChild(renderParseEntry(lastParseView, options));
+
     if (payload && payload.ok) {
       shell.appendChild(renderSteps(payload.steps));
       shell.appendChild(el("p", "qq-summary",
@@ -415,6 +428,235 @@
     return box;
   }
 
+  /* ── 图纸 / 文件入口（Spec 批 11） ────────────────────────────────────────── */
+
+  /* 解析结果 → 视图模型（Spec 批 11 C3）。
+   *
+   * 纯函数：体内不碰 DOM / 全局 / 网络，也不引用本模块其它函数 —— 红测会把这段函数体
+   * 单独交给 node 执行，所以只能用语言内置能力。所有中文名一律取后端下发的 labels；
+   * 计数与状态只从 payload 数出来，不在前端造第二份词表、也不判断"能不能用"。
+   */
+  function quickQuoteParseView(result) {
+    result = (result && typeof result === "object") ? result : {};
+    var ok = result.ok === true;
+    var labels = (result.labels && typeof result.labels === "object") ? result.labels : {};
+    var labelOf = function (key) {
+      var got = labels[key];
+      if (got === undefined || got === null || got === "") return String(key);
+      return String(got);
+    };
+    var rawInputs = (result.inputs && typeof result.inputs === "object") ? result.inputs : {};
+    var sources = (result.sources && typeof result.sources === "object") ? result.sources : {};
+    var keys = Object.keys(rawInputs).sort();
+    var inputs = [];
+    for (var i = 0; i < keys.length; i++) {
+      inputs.push({key: keys[i], label: labelOf(keys[i]), value: rawInputs[keys[i]],
+                   source: sources[keys[i]] === undefined ? "" : String(sources[keys[i]])});
+    }
+    var rawMissing = (result.missing && result.missing.length) ? result.missing : [];
+    var missing = [];
+    for (var j = 0; j < rawMissing.length; j++) {
+      missing.push({key: String(rawMissing[j]), label: labelOf(String(rawMissing[j]))});
+    }
+    var cap = (result.capability && typeof result.capability === "object") ? result.capability : {};
+    var provider = cap.provider ? String(cap.provider) : "";
+    var version = cap.provider_version ? String(cap.provider_version) : "";
+    var dwgKnown = (cap.dwg === true || cap.dwg === false);
+    var capability = {
+      provider: provider,
+      provider_version: version,
+      dwg: cap.dwg === true,
+      text: (provider && dwgKnown)
+        ? ("解析器 " + provider + (version ? " " + version : "")
+           + "；DWG：" + (cap.dwg === true ? "支持" : "不支持"))
+        : "解析器能力未知"
+    };
+    var match = (result.match && typeof result.match === "object") ? result.match : {};
+    var candidates = match.candidates || [];
+    var parse = (result.parse && typeof result.parse === "object") ? result.parse : {};
+    return {
+      kind: ok ? String(parse.kind || "ok") : String(result.kind || "error"),
+      ok: ok,
+      headline: ok
+        ? ("解析成功，读出 " + inputs.length + " 项匹配输入，还有 " + missing.length + " 项要人工补")
+        : String(result.error || "解析失败"),
+      advice: String(result.advice || ""),
+      retryable: (!ok && String(result.kind || "") === "service_unavailable"),
+      capability: capability,
+      inputs: inputs,
+      missing: missing,
+      warnings: (result.warnings || []).slice(),
+      candidates: candidates,
+      candidate_total: candidates.length,
+      suggested_case_code: String(match.suggested_case_code || ""),
+      no_candidate_reason: String(match.no_candidate_reason || ""),
+      inputs_complete: match.inputs_complete === true,
+      engine_version: String(match.engine_version || "")
+    };
+  }
+
+  /** 解析结果上屏（Spec 批 11 C3/C5/C6）：能力段、匹配输入、要补的字段、告警、候选。 */
+  function renderParse(view, options) {
+    view = view || {};
+    options = options || {};
+    var box = el("div", "qq-parse");
+    box.setAttribute("data-qq-parse", view.kind || "");
+
+    box.appendChild(el("p", view.ok ? "qq-summary" : "qq-error", view.headline || ""));
+
+    var cap = el("p", "qq-parse-capability", (view.capability || {}).text || "解析器能力未知");
+    cap.setAttribute("data-qq-parse-capability", (view.capability || {}).dwg ? "dwg" : "unknown");
+    box.appendChild(cap);
+
+    var inputs = view.inputs || [];
+    var table = el("table", "qq-cases qq-parse-inputs");
+    table.setAttribute("data-qq-parse-inputs", String(inputs.length));
+    var head = el("thead");
+    var hrow = el("tr");
+    ["参数", "解析值", "来源"].forEach(function (title) { hrow.appendChild(el("th", "", title)); });
+    head.appendChild(hrow);
+    table.appendChild(head);
+    var body = el("tbody");
+    if (!inputs.length) {
+      var emptyRow = el("tr", "qq-empty");
+      var emptyCell = el("td", "", "这个文件没解析出可用的匹配输入。");
+      emptyCell.setAttribute("colspan", "3");
+      emptyRow.appendChild(emptyCell);
+      body.appendChild(emptyRow);
+    }
+    inputs.forEach(function (row) {
+      var tr = el("tr", "qq-parse-input");
+      tr.setAttribute("data-qq-parse-key", row.key || "");
+      tr.appendChild(el("td", "", row.label || row.key || ""));
+      tr.appendChild(el("td", "", fmtValue(row.value)));
+      tr.appendChild(el("td", "", row.source || ""));
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    box.appendChild(table);
+
+    var missing = view.missing || [];
+    var missLine = el("p", "qq-parse-missing",
+      missing.length
+        ? ("还要人工补：" + missing.map(function (row) { return row.label || row.key; }).join("、"))
+        : "匹配输入齐了。");
+    missLine.setAttribute("data-qq-parse-missing", String(missing.length));
+    box.appendChild(missLine);
+
+    var warnings = el("ul", "qq-warnings");
+    warnings.setAttribute("data-qq-parse-warnings", String((view.warnings || []).length));
+    (view.warnings || []).forEach(function (item) {
+      var li = el("li", "qq-warning", String(item));
+      li.setAttribute("data-qq-parse-warning", "");
+      warnings.appendChild(li);
+    });
+    box.appendChild(warnings);
+
+    if (view.advice) {
+      var advice = el("p", "qq-parse-advice", view.advice + (view.retryable ? "（可重试）" : ""));
+      advice.setAttribute("data-qq-parse-advice", view.retryable ? "retryable" : "final");
+      box.appendChild(advice);
+    }
+
+    var list = el("ul", "qq-parse-candidates");
+    list.setAttribute("data-qq-parse-candidates", String(view.candidate_total || 0));
+    if (!view.candidate_total) {
+      var none = el("li", "qq-empty", view.no_candidate_reason || "没有可用于快速报价的标准案例。");
+      none.setAttribute("data-qq-parse-no-candidate", "");
+      list.appendChild(none);
+    }
+    (view.candidates || []).forEach(function (row) {
+      row = row || {};
+      var li = el("li", "qq-parse-candidate",
+        (row.case_code || "") + "（" + (row.status || "") + "，相似度 "
+        + fmtPercent((row.similarity_pct || 0) / 100) + "）");
+      li.setAttribute("data-qq-parse-case", row.case_code || "");
+      list.appendChild(li);
+    });
+    box.appendChild(list);
+    return box;
+  }
+
+  function fmtValue(value) {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }
+
+  /** 选中的文件 → `POST /api/quick-quote/parse`（Spec 批 11 C2）：浏览器只读字节 + base64。 */
+  function parseFile(file, options) {
+    options = options || {};
+    return new Promise(function (resolve, reject) {
+      var reader = new global.FileReader();
+      reader.onerror = function () {
+        reject(new Error("文件读不出来：" + ((file && file.name) || "")));
+      };
+      reader.onload = function () {
+        var text = String(reader.result || "");
+        var comma = text.indexOf(",");
+        resolve(comma >= 0 ? text.slice(comma + 1) : text);   // 去掉 data:…;base64, 前缀
+      };
+      reader.readAsDataURL(file);
+    }).then(function (b64) {
+      return apiFetch(agentBase() + PARSE_PATH, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name: (file && file.name) || "", data: b64,
+                              match: options.match === false ? false : true})
+      });
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; }).then(function (data) {
+        if (!resp.ok && !data.error) {
+          data = {ok: false, error: "解析请求失败（HTTP " + resp.status + "）"};
+        }
+        return data;
+      });
+    });
+  }
+
+  /** 上传入口 + 结果区（Spec 批 11 C2）：结果原地重绘，不动案例库那一段。 */
+  function renderParseEntry(state, options) {
+    options = options || {};
+    var box = el("div", "qq-parse-entry");
+    var head = el("div", "qq-parse-entry-head");
+    var pick = el("button", "qq-action", "选择图纸／文件");
+    pick.type = "button";
+    pick.setAttribute("data-qq-parse-pick", "");
+    var input = el("input", "qq-parse-file");
+    input.type = "file";
+    input.accept = PARSE_ACCEPT;
+    input.setAttribute("data-qq-parse-input", "");
+    input.style.display = "none";
+    pick.addEventListener("click", function () { input.click(); });
+    head.appendChild(pick);
+    head.appendChild(input);
+    head.appendChild(el("span", "qq-parse-hint",
+      "图纸（DWG/DXF）由服务端统一解析；PDF / Excel / 文字需求同样可以丢进来。"));
+    box.appendChild(head);
+
+    var holder = el("div", "qq-parse-result");
+    holder.setAttribute("data-qq-parse-result", "");
+    if (state) holder.appendChild(renderParse(state, options));
+    box.appendChild(holder);
+
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      holder.innerHTML = "";
+      holder.appendChild(el("p", "qq-summary", "正在解析 " + file.name + " …"));
+      parseFile(file, options).then(function (result) {
+        lastParseView = quickQuoteParseView(result);
+        holder.innerHTML = "";
+        holder.appendChild(renderParse(lastParseView, options));
+      }).catch(function (exc) {
+        lastParseView = quickQuoteParseView({ok: false, error: String(exc)});
+        holder.innerHTML = "";
+        holder.appendChild(renderParse(lastParseView, options));
+      });
+    });
+    return box;
+  }
+
   function fmtAmount(value) {
     if (value === null || value === undefined || isNaN(Number(value))) return "未标";
     return Number(value).toFixed(4);
@@ -431,11 +673,17 @@
     QUOTE_MODES: QUOTE_MODES,
     MODE_LABELS: MODE_LABELS,
     CASES_PATH: CASES_PATH,
+    PARSE_PATH: PARSE_PATH,
+    PARSE_ACCEPT: PARSE_ACCEPT,
     REASON_LABELS: REASON_LABELS,
     agentBase: agentBase,
     DIFF_HEADERS: DIFF_HEADERS,
     QUOTE_ACTIONS: QUOTE_ACTIONS,
     cases: cases,
+    parseFile: parseFile,
+    quickQuoteParseView: quickQuoteParseView,
+    renderParse: renderParse,
+    renderParseEntry: renderParseEntry,
     renderReadiness: renderReadiness,
     renderDiffTable: renderDiffTable,
     QUOTE_ACTION_LABELS: QUOTE_ACTION_LABELS,

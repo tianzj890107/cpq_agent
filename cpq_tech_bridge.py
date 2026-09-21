@@ -17,6 +17,7 @@ psycopg、不需要知道库在哪 —— 与登录（cpq_sso）保持同一个�
 **没有本地回落**：连不上库就抛错，绝不假装写成功。
 """
 from __future__ import annotations
+from typing import Optional
 
 import json
 import re
@@ -1052,10 +1053,31 @@ def _packaging_package_of(result: dict) -> dict:
     return dict(result or {})
 
 
-def _guard_packaging_result(result: dict) -> None:
-    """包装口径的两道拒绝（Spec §2.3 / §4.3）：非包装、成本仍有缺口。
+def _waiver_covers(waiver, codes) -> bool:
+    """放行留痕是否**合法**（Spec 批 12 §3.1）：三个人工字段非空 + 覆盖这份包的缺口码。
+
+    留痕不是"有就行"的通行证：`by` / `at` / `reason` 去空白后必须非空；包里能逐条列举缺口码时
+    `codes` 必须**全覆盖**（超集）；包里只抬了 `has_gaps` 没有逐条码时（技术侧允许这种包），
+    `codes` 允许为空。只作用于这一份包 —— 新出现的缺口不在 `codes` 里，照旧拒绝。
+    """
+    if not isinstance(waiver, dict):
+        return False
+    for key in ("by", "at", "reason"):
+        if not str(waiver.get(key) or "").strip():
+            return False
+    if not codes:
+        return True
+    covered = {str(item or "").strip() for item in (waiver.get("codes") or [])}
+    covered.discard("")
+    return all(str(code) in covered for code in codes)
+
+
+def _guard_packaging_result(result: dict) -> Optional[dict]:
+    """包装口径的两道拒绝（Spec §2.3 / §4.3）：非包装、成本仍有缺口 —— 缺口包带**合法留痕**时放行。
 
     必须在任何写之前调用 —— 被拒绝的回传不许建任务、不许留半完成状态。
+    放行时返回那份留痕（Spec 批 12 §3.1，落点从 `payload["tech_result"]["gap_waiver"]` 读得到
+    "为什么带缺口也放行了"）；没有缺口、或照旧被拒绝时返回 None / 抛 BridgeError。
     """
     result = result or {}
     if str(result.get("industry") or "").strip() != "packaging":
@@ -1072,9 +1094,13 @@ def _guard_packaging_result(result: dict) -> None:
             code = str((item or {}).get("code") or "").strip() if isinstance(item, dict) else ""
             if code and code not in codes:
                 codes.append(code)
+        waiver = result.get("gap_waiver")
+        if _waiver_covers(waiver, codes):
+            return dict(waiver)
         named = "、".join(codes) or "未标明缺口"
         raise BridgeError(f"成本仍有缺口（{named}），不能落成正式报价；"
                           "请先补齐，或由财务/工艺写明原因走放行留痕后再回传。")
+    return None
 
 
 def packaging_snapshot(result: dict) -> dict:

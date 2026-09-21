@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 6 批 —— 案例库现状话术、补数据动作与 DWG 实样导入
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quick_quote_case_library_readiness_red.py`
 依赖：批 1（案例模型与准入）、批 2（候选检索）。
 **本批假设前五批已实现**（`cpq_quick_quote_case.py` / `_match.py` / `_workspace.py` /

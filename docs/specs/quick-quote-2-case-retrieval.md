@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 2 批 —— 相似案例检索与候选选择
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quick_quote_case_retrieval_red.py`
 依赖：批 1（`docs/specs/quick-quote-1-mode-and-case-model.md`，案例模型 + 来源/审核/有效期准入）。
 **本批假设批 1 已实现**（`cpq_quick_quote_case.py` 已在仓库根，`quote_eligibility()` /

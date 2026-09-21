@@ -373,6 +373,15 @@ def _label(key: str) -> str:
     return qq_case.FIELD_LABELS.get(key) or _INPUT_LABELS.get(key) or key
 
 
+def input_labels(keys) -> Dict[str, str]:
+    """键 → 中文标签（Spec 批 11 C4）：**报价侧页面拿标签的唯一出口**。
+
+    事实源仍是 `cpq_quick_quote_case.FIELD_LABELS` + 本模块的 `_INPUT_LABELS` —— 这里不新造表，
+    没登记的键原样回键名（**不编中文**），免得页面自带第二份字段表后跟后端各说各话。
+    """
+    return {str(key): _label(str(key)) for key in (keys or ())}
+
+
 def _number_text(value) -> str:
     number = _num(value)
     if number is None:

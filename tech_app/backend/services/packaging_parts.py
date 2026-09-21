@@ -58,6 +58,29 @@ BINDABLE_CATEGORIES = ("box_part", "optional_part")
 #: 行级绑定的规则号（留痕用，正式口径定下来之前一直带这个标记）。
 BINDING_RULE_ID = "dwg_parts_row_pairing_v1"
 
+#: 材料分类的关键词闭集（Spec 批 12 §2.5）：**闭集外一律 None** —— 未知不等于不匹配。
+#: 顺序即判据顺序：先磁铁系再五金系（否则「钕铁硼磁铁」会被「铁」判成五金），
+#: 纸系在丝带/布/绒之前（「海绵裱绒」按闭集顺序落到丝带/布/绒）。
+MATERIAL_CLASS_KEYWORDS = (
+    ("paper", ("纸", "板", "卡", "坑", "牛皮")),
+    ("magnet", ("磁铁", "钕铁硼", "磁石")),
+    ("metal", ("五金", "铁", "铝")),
+    ("textile", ("丝带", "织带", "布", "绒")),
+    ("plastic", ("EVA", "海绵", "PET", "PVC", "塑料")),
+)
+
+
+def _material_class(value: Any) -> Optional[str]:
+    """材料原文 → 闭集里的类别；闭集外一律 `None`（Spec 批 12 §3.4：未知 ≠ 不同类）。"""
+    text = _text(value).upper()
+    if not text:
+        return None
+    for name, keywords in MATERIAL_CLASS_KEYWORDS:
+        for keyword in keywords:
+            if keyword.upper() in text:
+                return name
+    return None
+
 UNAVAILABLE_MESSAGES = {
     "no_components": "图纸里没有可用的连通分量，请确认上传的是 2D 刀模图",
     "all_filtered": "图纸里的分量都被过滤（整版图框 / 碎线 / 无制造曲线），没有可制造的零件",
@@ -961,8 +984,12 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
       零件比分出的行少时**循环取件**并保留 `fallback_paired=true` 留痕
       —— 口径是"先保证有数"，正式对应表是下一批的事；
     - 留痕齐备：`size_source.dwg_binding`（component_id / part_code / rule_id /
-      fallback_paired / original_missing_variables）、`source="dwg_parts"`、
-      `missing_variables` 清空。
+      fallback_paired / original_missing_variables / pairing_basis / material_match）、
+      `source="dwg_parts"`、`missing_variables` 清空；
+    - **披露配对**（Spec 批 12 §3.4，加法不改拒绝口径）：每行留一句 `pairing_basis`；
+      两类材料都已知且不同类时 `material_match=false` 并进 `pairing_review`
+      （34 实测把 `RB02001-P08` 磁铁配到纸面板上，报告里原先没有任何地方看得出来）。
+      `bound` / `unbound` / `gaps` 口径逐字不变 —— 正式对应表要业务签字后另立一批。
     """
     rows = [copy.deepcopy(row) for row in (items or []) if isinstance(row, dict)]
     available = [row for row in ((parts or {}).get("parts") or [])
@@ -972,6 +999,7 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
     bound = 0
     skipped_locked = 0
     unbound: List[str] = []
+    pairing_review: List[Dict[str, Any]] = []
     pair_index = 0
     for row in rows:
         item_key = _text(row.get("item_key"))
@@ -988,9 +1016,19 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
             unbound.append("part_size_unbound:%s" % item_key)
             continue
         part = available[pair_index % len(available)]
+        order = (pair_index % len(available)) + 1
         fallback = pair_index >= len(available)
         pair_index += 1
         original_missing = list(row.get("missing_variables") or [])
+        # 配对是纯位置的（行顺序 ↔ 面积降序），所以必须把"这一对是怎么配上的"写在行上，
+        # 再对材料明显不同类的组合单列出来 —— 披露，不是拒绝（Spec 批 12 §3.4）。
+        basis = ("位置配对：第 %d 个待绑行 ↔ 面积第 %d 大的零件%s"
+                 % (pair_index, order, "（零件少于行，循环取件）" if fallback else ""))
+        row_class = _material_class(row.get("material"))
+        part_class = _material_class(part.get("material"))
+        material_match: Optional[bool] = None
+        if row_class is not None and part_class is not None:
+            material_match = row_class == part_class
         source = _size_source_of(row)
         source["dwg_binding"] = {
             "component_id": _text(part.get("component_id")),
@@ -998,7 +1036,17 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
             "rule_id": BINDING_RULE_ID,
             "fallback_paired": bool(fallback),
             "original_missing_variables": original_missing,
+            "pairing_basis": basis,
+            "material_match": material_match,
         }
+        if material_match is False:
+            pairing_review.append({
+                "item_key": item_key,
+                "part_code": _text(part.get("part_code")),
+                "row_material": _text(row.get("material")),
+                "part_material": _text(part.get("material")),
+                "material_match": False,
+            })
         row["length_mm"] = _num(part.get("unfolded_length_mm"))
         row["width_mm"] = _num(part.get("unfolded_width_mm"))
         row["size_source"] = source
@@ -1009,4 +1057,5 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
         bound += 1
     return {"items": rows, "bound": bound, "unbound": unbound,
             "skipped_locked": skipped_locked, "gaps": list(unbound),
+            "pairing_review": pairing_review,
             "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION}

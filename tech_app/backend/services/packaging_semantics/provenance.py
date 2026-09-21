@@ -54,10 +54,36 @@ def _alternative(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return snapshot
 
 
-def _is_user_confirmed(previous: Any, source: Any) -> bool:
+def _has_value(value: Any) -> bool:
+    """这个值算不算"有值"（Spec 批 12 §3.3）：None / 空白串 / 空容器都算没有。
+
+    `0` 与 `False` **是**值 —— 只认"空"，不认"假"。
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return True
+
+
+def _is_manual_source(previous: Any, source: Any) -> bool:
+    """这个字段的来源算不算"人工"（看来源，不看值）。"""
     if isinstance(previous, dict) and str(previous.get("origin") or "") == "user_confirmed":
         return True
     return str(source or "") == "manual"
+
+
+def _is_user_confirmed(previous: Any, source: Any, value: Any = None) -> bool:
+    """人工确认过**且当前真的有值**才算确认（Spec 批 12 §3.3）。
+
+    只看来源不看值会让字段永远空着：34 实测 `data.closure_type = ""` 而
+    `field_provenance.closure_type.origin = "user_confirmed"` —— 图纸里读到的「磁吸」
+    只进 alternatives，这个字段再也补不上。值为空时不存在"用户确认过的值"，
+    必须让图纸证据按正常路径写入；值非空时一个字都不许改（冻结红测 D7）。
+    """
+    return _is_manual_source(previous, source) and _has_value(value)
 
 
 def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
@@ -83,7 +109,8 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
         if not isinstance(candidate, dict):
             continue
         previous = provenance.get(key)
-        if _is_user_confirmed(previous, sources.get(key)):
+        manual_source = _is_manual_source(previous, sources.get(key))
+        if _is_user_confirmed(previous, sources.get(key), data.get(key)):
             entry = dict(previous) if isinstance(previous, dict) and previous else _entry_snapshot(candidate)
             alternatives = list(entry.get("alternatives") or [])
             if candidate.get("value") is not None or candidate.get("status") != "missing":
@@ -107,8 +134,16 @@ def apply_to_requirement(project_id: str, semantics: Dict[str, Any], *,
 
         if confirmed:
             data[key] = candidate.get("value")
-            sources[key] = ("manual" if key in accepted and status != "confirmed"
-                            else SOURCE_MAP.get(str(candidate.get("origin") or ""), "attachment"))
+            if manual_source:
+                # 人工来源、但当前值是空的：图纸证据把值补上，**来源与留痕仍算人工确认**
+                # （Spec 批 12 §3.3 第一行）—— 只有空值才走到这里，非空值在前面就 kept 了。
+                record["origin"] = "user_confirmed"
+                record["status"] = "confirmed"
+                provenance[key] = record
+                sources[key] = "manual"
+            else:
+                sources[key] = ("manual" if key in accepted and status != "confirmed"
+                                else SOURCE_MAP.get(str(candidate.get("origin") or ""), "attachment"))
             applied[key] = {"origin": record.get("origin"), "value": candidate.get("value")}
         else:
             kept[key] = {"reason": status}

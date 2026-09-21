@@ -38,3 +38,9 @@ open-claude/.venv/
 # Claude Code 本地会话产物（权限白名单等，仅本机）
 .claude/settings.local.json
 .agents/
+
+# ---- 未入库的客户实样样本与本地一次性脚本 ----
+# 客户实样（酒盒.dwg / 圆盘盒.dwg + 业务工作簿）：仅本地/线上人工验证用，不入库、不随部署分发
+裕同包装项目-待开发/
+# 一次性脚本（scripts/tmp_*.py）：本地临时通道，不参与部署，可随时删除
+scripts/tmp_*.py

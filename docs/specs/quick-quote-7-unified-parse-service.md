@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 7 批 —— 统一解析服务端点（8010 上的 `/api/file/parse`）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quick_quote_parse_service_red.py`
 依赖：批 5（报价侧客户端 `cpq_quick_quote_file.py` 已实现）。
 

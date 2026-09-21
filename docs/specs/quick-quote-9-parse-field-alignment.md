@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 9 批 —— 统一解析服务的字段形状 → 报价侧匹配输入（收口集成缝）
 
-状态：Spec（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quick_quote_parse_field_alignment_red.py`
 依赖：批 5（报价侧客户端 `cpq_quick_quote_file.py`）、批 7（统一解析服务 `unified_parse.py`）。
 

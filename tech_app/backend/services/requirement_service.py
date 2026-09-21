@@ -28,6 +28,11 @@ CREDIT_LEVELS = {"", "A", "B", "C", "D"}
 # 可保存草稿的状态：一旦进入确认流程，需求单就不能再被静默改写。
 EDITABLE_STATUSES = ("draft", "rejected")
 
+#: 允许"退回草稿"的状态（Spec 批 12 §3.2）：待确认 / 待审核 / 已批准都能退回补充。
+#: 注意这与 `EDITABLE_STATUSES` 是两件事 —— 退回是**动作**，编辑是**动作之后**的状态判定，
+#: 不许为了修好退回路径把 `approved` 塞进可编辑闭集（那会让已批准需求被下一次保存静默改写）。
+RETURNABLE_TO_DRAFT_STATUSES = ("pending_confirmation", "pending_review", "approved")
+
 # 业务拒绝的**稳定码**闭集（Spec `drawing-flow-non-editable-requirement.md` §1.2）：
 # 判定只认异常自带的 `stable_error_code`，不许用 `str(exc)` 关键字匹配；
 # `packaging_drawing_flow.model` 按同一字面量登记前置条件与 HTTP/可重试口径。
@@ -405,17 +410,24 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
 
 def return_requirement_to_draft(project_id: str, user: Optional[dict] = None,
                                 comment: str = "") -> dict:
-    """1.2 退回草稿：pending_confirmation → draft，供创建人补充后再次提交。
+    """1.2 退回草稿：`pending_confirmation / pending_review / approved` → draft，供创建人补充后再次提交。
 
     既有 `POST /requirement/return-to-draft` 与 Agent 的 `ReturnRequirementToDraft`
     工具共用这一份。
+
+    Spec 批 12 §3.2：需求一旦被批准，`EDITABLE_STATUSES` 里没有它，本来**没有任何合法路径**回到
+    可编辑态 —— 而 `packaging_drawing_flow.preconditions()` 如实报的 `REQUIREMENT_NOT_EDITABLE`
+    却写着"请先退回草稿"。这条动作就是把那条路补上；`draft` 幂等（已经是草稿就原样返回，不写库）。
+    这是**另一个动作**：退回之后才由 `save_requirement_draft()` 判可编辑，闭集不放宽。
     """
     user = user or {}
     saved = store.load_requirement(project_id)
     if not saved:
         raise RequirementSaveError("需求单不存在", 404, code=REQUIREMENT_SAVE_REJECTED)
     doc = RequirementDoc(**saved)
-    if doc.status != "pending_confirmation":
+    if doc.status == "draft":
+        return doc.model_dump()
+    if doc.status not in RETURNABLE_TO_DRAFT_STATUSES:
         raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     doc.status = "draft"
     doc.confirmation_note = comment

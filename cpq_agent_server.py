@@ -1888,6 +1888,9 @@ def _handle_quick_quote_parse(data=None) -> dict:
     out = {"ok": True, "parse": parsed, "inputs": mapped["inputs"],
            "missing": mapped["missing"], "sources": mapped["sources"],
            "warnings": mapped["warnings"], "capability": parsed.get("capability") or {},
+           # 字段中文名的唯一事实源在后端（Spec 批 11 C4）：页面只渲染，不自带第二份标签表。
+           "labels": cpq_quick_quote_match.input_labels(
+               list(mapped["inputs"]) + list(mapped["missing"])),
            "match": {}}
     if body.get("match", True):
         try:

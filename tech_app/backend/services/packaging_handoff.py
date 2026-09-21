@@ -354,10 +354,15 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
     source = package["source"]
     gaps = list(package.get("gaps") or [])
     has_gaps = _has_gaps(package)
+    # 放行留痕必须跟着包一起过桥（Spec 批 12 §2.1）：技术侧留了痕、报价侧那道门才认得出
+    # "财务写明原因放行"这条官方路径；没有缺口时不放这个键，正文与今天逐字一致。
+    body = bridge_result(package)
+    if waiver:
+        body = {**body, "gap_waiver": waiver}
     result = cpq_bridge.send_to_quote(
         token, pid, title or f"包装报价 · {req_no}", customer, "",
         "包装成本已确认，请进入定价", _text(source.get("source_task_id")),
-        bridge_result(package), _text(source.get("source_session_id")),
+        body, _text(source.get("source_session_id")),
         _text(source.get("result_version")),
         business_case_id=_text(source.get("business_case_id")),
         handoff_kind=HANDOFF_KIND)

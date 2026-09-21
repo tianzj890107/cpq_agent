@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 1 批 —— 快速报价模式与标准报价案例数据模型
 
-状态：Spec + 红测 + **实现**（9-21 落地；`cpq_quick_quote_case.py` / `cpq_kb` /
+状态：Spec + 红测（已实现）（9-21 落地；`cpq_quick_quote_case.py` / `cpq_kb` /
 `cpq_agent_server` / `报价首页.html` / `tech_app/frontend/quick-quote-panel.js`）
 红测：`tests/test_quick_quote_mode_and_case_model_red.py`
 后续批次：批 2 相似案例检索、批 3 字段工作区与差异价、批 4 快速报价生成与转精准、批 5 文件解析接入。
