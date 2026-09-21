@@ -59,6 +59,11 @@ def _match_rule(layer: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     for prefix in rule.get("name_prefix") or ():
         if prefix and name.startswith(_normalized(prefix)):
             return True
+    # Spec §1.3：`name_contains` 命中「包含子串」（大小写不敏感、去首尾空白）。
+    for needle in rule.get("name_contains") or ():
+        text = _normalized(needle)
+        if text and text in name:
+            return True
     return False
 
 

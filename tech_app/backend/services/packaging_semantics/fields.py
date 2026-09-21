@@ -208,28 +208,52 @@ def _warn(bucket: List[Dict[str, Any]], code: str, message: str,
 # --------------------------------------------------------------------------- #
 # 盒型候选（只出候选，不锁定；Spec §7）
 # --------------------------------------------------------------------------- #
+#: Spec §3.2 —— 产品级圆的最小直径（毫米）。
+PRODUCT_CIRCLE_MIN_DIAMETER = 100.0
+
+
+def product_circles(geometry: Dict[str, Any],
+                    min_diameter: float = PRODUCT_CIRCLE_MIN_DIAMETER) -> List[Dict[str, Any]]:
+    """产品级圆（Spec §3.2/§4.1）：`kind=circle` 且直径 >= 100mm。"""
+    out: List[Dict[str, Any]] = []
+    for row in geometry.get("holes") or []:
+        if not isinstance(row, dict) or str(row.get("kind") or "") != "circle":
+            continue
+        diameter = _number(row.get("diameter"))
+        if diameter is None or diameter < min_diameter:
+            continue
+        out.append(row)
+    return out
+
+
+def product_closed_candidates(geometry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """产品级闭合候选（Spec §2）：已被 §2 排除的拼版/图框/整张候选不在内。"""
+    return [row for row in geometry.get("product_candidates") or []
+            if isinstance(row, dict) and row.get("is_closed")]
+
+
 def build_box_candidates(ir: Dict[str, Any], layers: List[Dict[str, Any]],
                          geometry: Dict[str, Any], known: Any) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
-    holes = geometry.get("holes") or []
-    closed = [row for row in geometry.get("boundary_candidates") or [] if row.get("is_closed")]
-    circle_areas = [row["area"] for row in holes
-                    if row.get("kind") == "circle" and _number(row.get("area"))]
+    closed = product_closed_candidates(geometry)
+    circles = product_circles(geometry)
+    circle_areas = [_number(row.get("area")) or 0.0 for row in circles]
     biggest_circle = max(circle_areas) if circle_areas else 0.0
     biggest_outline = max([row.get("area") or 0.0 for row in closed], default=0.0)
 
     if biggest_circle > 0.0 and biggest_circle > biggest_outline:
         refs: List[str] = []
-        for row in holes:
-            if row.get("kind") == "circle" and _number(row.get("area")) == biggest_circle:
+        for row in circles:
+            if (_number(row.get("area")) or 0.0) == biggest_circle:
                 refs.extend(row.get("evidence_refs") or [])
+        # 圆证据可能只带 ref、不带实体条目（合成夹具）：这里不再二次过滤，避免丢证据。
         candidates.append({
             "candidate_type": "round_tube",
             "confidence": model.cap_confidence("inferred_from_geometry", 0.4),
             "matched_features": ["circular_closed_boundary"],
             "missing_features": ["panel_layout"],
             "contradictory_features": [],
-            "evidence_refs": model.evidence_refs_of(known, refs),
+            "evidence_refs": list(dict.fromkeys(str(ref) for ref in refs if ref)),
         })
 
     crease_rows = [row for row in layers if row.get("role") == "crease"]
@@ -242,6 +266,24 @@ def build_box_candidates(ir: Dict[str, Any], layers: List[Dict[str, Any]],
             "confidence": model.cap_confidence("inferred_from_geometry", 0.35),
             "matched_features": ["closed_outline", "crease_lines"],
             "missing_features": ["glue_flap", "panel_layout"],
+            "contradictory_features": [],
+            "evidence_refs": model.evidence_refs_of(known, refs),
+        })
+
+    # Spec §4.3：刀线在图上、但成品轮廓拿不到 → irregular（不猜盒型，只记缺口）。
+    cut_rows = [row for row in layers if row.get("role") == "cut"]
+    if cut_rows and not closed:
+        refs = []
+        for row in cut_rows:
+            refs.extend(row.get("evidence_refs") or [])
+        for row in geometry.get("boundary_candidates") or []:
+            if row.get("role") == "cut":
+                refs.extend(row.get("evidence_refs") or [])
+        candidates.append({
+            "candidate_type": "irregular",
+            "confidence": model.cap_confidence("inferred_from_geometry", 0.35),
+            "matched_features": ["cut_lines"],
+            "missing_features": ["crease_lines", "product_outline"],
             "contradictory_features": [],
             "evidence_refs": model.evidence_refs_of(known, refs),
         })
@@ -260,8 +302,11 @@ def build_fields(ir: Dict[str, Any], layers: List[Dict[str, Any]],
     fields = {key: model.missing_entry(ir) for key in model.packaging_field_keys()}
 
     units_confirmed = str((ir.get("units") or {}).get("unit_status") or "") == "confirmed"
-    closed = [row for row in geometry.get("boundary_candidates") or [] if row.get("is_closed")]
+    # Spec §3：成品长宽只认**产品级**证据，被 §2 排除的拼版/图框/整张候选一律不作数。
+    closed = product_closed_candidates(geometry)
     primary = closed[0] if closed else None
+    #: Spec §3.3 —— 拿不到任何产品级轮廓时，这两个字段进 unresolved 的专属原因。
+    uncertain_fields: List[str] = []
 
     conflicts: List[Dict[str, Any]] = []
     if primary:
@@ -278,6 +323,27 @@ def build_fields(ir: Dict[str, Any], layers: List[Dict[str, Any]],
                 conflict = dict(conflict)
                 conflict["field"] = key
                 conflicts.append(conflict)
+    else:
+        circles = product_circles(geometry)
+        if circles:
+            # Spec §3.2：没有产品级闭合轮廓，但有产品级圆 → 用最大产品级圆的直径。
+            biggest = max(circles, key=lambda row: ((_number(row.get("diameter")) or 0.0),
+                                                    str(row.get("hole_id") or "")))
+            diameter = _number(biggest.get("diameter")) or 0.0
+            refs: List[str] = []
+            for row in circles:
+                if _number(row.get("diameter")) == diameter:
+                    refs.extend(row.get("evidence_refs") or [])
+            for key in ("inner_length", "inner_width"):
+                if key not in fields:
+                    continue
+                fields[key] = model.field_entry(
+                    ir, origin="inferred_from_geometry", status="needs_confirmation",
+                    value=diameter, confidence=0.8, evidence_level="MODERATE",
+                    evidence_refs=list(dict.fromkeys(str(ref) for ref in refs if ref)))
+        else:
+            # Spec §3.3：两者都没有 → 宁可 missing，也绝不拿展开料/拼版外框凑数。
+            uncertain_fields = [key for key in ("inner_length", "inner_width") if key in fields]
 
     if max_conflicts and len(conflicts) > max_conflicts:
         conflicts = conflicts[:max_conflicts]
@@ -325,4 +391,5 @@ def build_fields(ir: Dict[str, Any], layers: List[Dict[str, Any]],
                                is not None]),
     }
     return {"fields": fields, "box_candidates": box_candidates,
-            "dimensions": dimensions_block, "warnings": warnings}
+            "dimensions": dimensions_block, "warnings": warnings,
+            "outline_uncertain_fields": uncertain_fields}

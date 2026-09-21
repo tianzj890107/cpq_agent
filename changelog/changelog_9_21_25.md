@@ -6582,3 +6582,114 @@ CRLF）。审查该文件请用 `git diff --ignore-cr-at-eol -- tech_app/fronten
   （每部署一次多两行，纯注释、不影响取值，`PATH` 与 `DWG_CONVERTER_*` 都是重写而非追加）。
   属部署脚本自身的整洁度问题，下次改脚本时一起收。
 - 真图零件 `role` 仍全是 `unknown`（## 223 未实现）；演示时**不要**展示 2.1 的成品长宽。
+
+## 231. 真实刀模图层名 + 拼版/图框/整张排除 + 产品级盒型候选：实现（9-21，Codex 实现 + 回归）
+
+把 `docs/specs/packaging-product-outline-and-die-layer-roles.md`（DWG 第 4b 批）从 12 条红测
+变成能力：**真实刀模图层名能命中**（`全穿刀` / `压线 Crease` / `图框层` / `排图层`）、
+**拼版 / 图框 / 整张候选保留但不再冒充成品**（逐条披露到新键 `outline.rejected[]`）、
+**成品长宽只认产品级证据**（拿不到就 `missing`，绝不拿展开料/拼版外框凑数）、
+**盒型候选由产品级圆 / 产品级闭合候选支撑**（新增 `irregular` 路径）。
+冻结面未动：`SEMANTICS_VERSION`、`REQUIRED_KEYS`、`stats` 键集、`model.FIELD_WHITELIST`、
+`rule_set` / `review_status` / 空 `colors` / `line_types`；`packaging_match` 与本批无关。
+
+### 实现（逐文件）
+
+- `tech_app/agent_knowledge/rules/packaging_layer_rules.json`：`cut_name_v1` 增
+  `name_contains: ["全穿刀"]`；`crease_name_v1` 增 `name_contains: ["压线"]`；
+  `frame_name_v1` 的 `names` 增 `图框层`、`排图层`。`rule_set` / `review_status` /
+  `colors` / `line_types` 逐字未动（红测 E3 守）。
+- `tech_app/backend/services/packaging_semantics/rules.py`：新增 `match` 键闭集
+  `MATCH_KEYS = ("names", "name_prefix", "name_contains")`；规则里出现闭集外的键 →
+  `PACKAGING_LAYER_RULES_INVALID`（**不再静默丢弃**）；`LayerRulesError` 同时以 `.code`
+  暴露稳定码；`_normalize_template()` 归一化 `name_contains`。
+- `.../packaging_semantics/roles.py`：`_match_rule()` 支持 `name_contains`
+  （大小写不敏感、去首尾空白、子串命中）；匹配优先级仍是 名称 → 颜色 → 线型。
+- `.../packaging_semantics/geometry_semantics.py`：新增 `REJECT_REASONS`、
+  `SHEET_EXTENT_TOLERANCE = 0.01`、`reject_reason()`、`_split_product_candidates()`；
+  `build_geometry()` 返回值新增 `product_candidates` 与 `rejected`（元素固定五键
+  `outline_id/reason/bbox/area/evidence_refs`，按 `(reason, -area, outline_id)` 排序）；
+  `boundary_candidates` **原样保留、顺序不变**（含被排除的三类）。孔位证据在「只有 ref、
+  没有实体条目」时保留原 ref，不再把圆证据丢成空数组（`round_tube` 需要它）。
+- `.../packaging_semantics/fields.py`：新增 `product_circles()`（`kind=circle` 且直径 ≥
+  100mm）与 `product_closed_candidates()`；`build_box_candidates()` 的输入改成产品级圆 /
+  产品级闭合候选 —— `round_tube`（最大产品级圆面积 > 最大产品级闭合候选面积）、
+  `folding_carton`（有 `crease` 图层且有产品级闭合候选）、**新增 `irregular`**（有 `cut`
+  图层且无产品级闭合候选，`missing_features` 含 `crease_lines`，置信度 0.35）；
+  `build_fields()` 的成品长宽按三层走：产品级闭合候选 → 产品级圆直径
+  （`needs_confirmation`、`inferred_from_geometry`、置信度 0.8）→ `missing`，并把
+  「拿不到产品级轮廓」的字段用新键 `outline_uncertain_fields` 交回上层。
+- `.../packaging_semantics/__init__.py`：`outline` 新增 `rejected`；两个新**警告**码
+  `PACKAGING_OUTLINE_SHEET_FRAME_REJECTED`（只有存在被排除候选才出）与
+  `PACKAGING_PRODUCT_OUTLINE_UNCERTAIN`；`_unresolved()` 支持 `reason_overrides`，
+  于是 `unresolved` 里出现 `reason="product_outline_uncertain"`。
+
+### 验收实跑（`./open-claude/.venv/bin/python -m unittest`）
+
+- `tests.test_packaging_product_outline_red`：实现前 `Ran 21 tests in 0.575s
+  FAILED (failures=12, skipped=1)`（在 HEAD 的只读 worktree 里逐字复现）→ 现
+  `Ran 21 tests in 0.519s OK (skipped=1)`。
+- D 组（gated，`CPQ_DWG_REAL_SAMPLES=1` + 本机真实转换器）：实现前
+  `Ran 6 tests in 27.314s FAILED (failures=5)` → 现
+  `Ran 6 tests in 26.415s FAILED (failures=1)`；5 条转绿，唯一红点是 D1 的**样本侧假设**
+  不成立（见下节），不是实现缺口。
+- 保护网（改完复跑）：`test_packaging_semantics_red 59 OK(1 skip)`、
+  `test_packaging_parts_extraction_red 32 OK`、`test_packaging_parametric_bom_red 57 OK`、
+  `test_packaging_drawing_flow_red 54 OK(1 skip)`、`test_packaging_cost_engine_red 81 OK`、
+  `test_packaging_cost_red_closure_red 14 OK`。
+- 全量（`/tmp/run_pkg.py 1`，211 套件）：`Ran 4043 tests in 319.827s
+  FAILED (failures=222, skipped=17)` / `TOTAL ran=4043 failures=222 errors=0 skipped=17`。
+  与本批前的基线 `failures=234` 相比正好少 12 条（＝本批转绿的 12 条），**零新增失败**；
+  剩余 222 条里 203 条是快速报价那批既有红，1 条是上一批的 `task-blocked` 事件闭集（见下）。
+
+### 真样本实跑（本机 ODA 27.1 主转换器 → DXF → CAD IR → `analyze()`）
+
+- `酒盒.dwg`：`cut_layer_total=1`（`CUTTER`）/ `crease=0` / `frame=0`；
+  `box_candidates=[irregular]`、`box_type=irregular / needs_confirmation`；
+  `inner_length=inner_width=None / missing`；`rejected=2`（两条都是 `panel_repeat`）；
+  `unresolved` 有 `(inner_length, product_outline_uncertain)` 与 `(inner_width, …)`；
+  警告含 `PACKAGING_OUTLINE_SHEET_FRAME_REJECTED` + `PACKAGING_PRODUCT_OUTLINE_UNCERTAIN`。
+  ——**反例值 `1705.9507596530002 × 713.2989662779999` 不再出现在成品长宽里。**
+- `圆盘盒.dwg`：`cut=1`（`全穿刀`）/ `crease=1`（`压线 Crease`）/ `frame=2`（`图框层`、
+  `排图层`）；`box_candidates=[round_tube, irregular]`、`box_type=round_tube /
+  needs_confirmation`；`inner_length=inner_width=404.0 needs_confirmation
+  inferred_from_geometry`（落在产品级圆直径带 `[396.6, 404]` 内）；`rejected=200`
+  （全部 `panel_repeat`）。
+  ——**反例值 `15639.372814358998 × 6318.280258252999` 不再出现在成品长宽里。**
+- `semantics_hash` 稳定性（D6）在两次 `analyze()` 下一致；`semantics_version` 仍
+  `packaging-semantics/1`。
+
+### 唯一仍未绿的 D1：测试侧假设「酒盒也有 `Make2D` 图层」不成立（未改测试）
+
+- 实测：`酒盒.dwg` 转出的 DXF 里字符串 `Make2D` 出现 **0 次**（`圆盘盒.dwg` 出现 3 次）；
+  `cad_ir` 报出的酒盒图层只有 8 个：`0` / `CUTTER` / `DESIGN` / `Defpoints` / `SAMPLE` /
+  `_U+56FE_U+5C42 1` / `图层 2` / `轮廓线`。
+- 而 D1 对**两份样本**都遍历 `("DESIGN", "Defpoints", "Make2D$可见线$普通线")`，且它的
+  `role()` 帮手在图层不存在时直接 `self.fail()` → 走到「酒盒的 Make2D」必然失败，与实现无关
+  （实现前 5 条红里也包含这条，只是当时更早的一行就先红了）。
+- 最小修法（**测试所有者**二选一，本实现方按纪律未动 `tests/`）：① 把 `Make2D$可见线$普通线`
+  只对圆盘盒断言；② 让 `role()` 在图层不存在时返回 `""`（缺失的图层不可能是 cut/crease）。
+- 前 6 行断言（圆盘盒的 `全穿刀`/`压线 Crease`/`图框层`/`排图层`、酒盒的 `CUTTER`、
+  两份样本的 `DESIGN`/`Defpoints`）现在全部通过。
+
+### 与 Spec 字面的两处取舍（按字面实现，留给 Spec 所有者决定是否收紧）
+
+1. 圆盘盒同时出 `round_tube` 与 `irregular`：Spec §4.3 的字面条件是「存在 `cut` 角色图层
+   且**不存在产品级闭合候选**」，圆盘盒满足（633 条闭合候选全被 `panel_repeat` 排除），
+   于是也报 `irregular`；`fields.box_type` 按置信度取 `round_tube`（0.4 > 0.35），
+   D3「必须出 round_tube」通过。若要「有产品级圆时不再报 irregular」，是 Spec §4.3 加一句
+   「且不存在产品级圆」的事，C/D 两组红测都不受影响 —— 本批未自行改口径。
+2. `圆盘盒` 的 `rejected` 是 200 条而不是 633 条：`PACKAGING_SEMANTICS_MAX_CANDIDATES`
+   默认 200，`boundary_candidates` 先截断（同时出 `PACKAGING_SEMANTICS_CANDIDATES_TRUNCATED`
+   警告），披露覆盖的是截断后的候选集合。未改上限（属另一条口径）。
+
+### 未做 / 遗留
+
+- 未提交、未推送、未建 MR/tag/Release、未部署、未重启服务、未连生产库、未写业务数据；
+  未引入任何新依赖（`openpyxl` 早已在根 `requirements.txt`）。
+- D1 那条红与上一批遗留的 `tests/test_tech_params_autofill_and_soft_gates_red.py
+  ::test_protocol_events_unchanged`（事件闭集仍是 8 个，待加 `task-blocked`）都需要
+  **测试所有者**动一行，本实现方未改任何 `tests/` 文件。
+- 本批只覆盖图形语义；`真图零件 role` 从此不再全是 `unknown`（酒盒 `CUTTER`→cut、
+  圆盘盒 `全穿刀`→cut / `压线 Crease`→crease），## 230 里那句「## 223 未实现」的口径
+  以本条为准。

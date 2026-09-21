@@ -23,11 +23,17 @@ ENV_TEMPLATE = "PACKAGING_LAYER_TEMPLATE"
 RULES_ERROR_CODE = "PACKAGING_LAYER_RULES_INVALID"
 
 
+#: Spec §1.3 —— `match` 允许出现的键闭集（闭集外的键必须报错，不许静默丢弃）。
+MATCH_KEYS = ("names", "name_prefix", "name_contains")
+
+
 class LayerRulesError(FileCapabilityError):
     """规则配置不可用。错误文案里只给用户可读的中文，不带路径 / 堆栈（Spec §9）。"""
 
     def __init__(self, message: str):
         super().__init__(RULES_ERROR_CODE, detected={}, message=message)
+        # 稳定错误码同时以 `.code` 暴露：调用方（红测 / 上层）不必知道基类字段名。
+        self.code = RULES_ERROR_CODE
 
 
 def _package_root() -> Path:
@@ -81,6 +87,11 @@ def _normalize_template(name: str, conf: Any) -> Dict[str, Any]:
         match = rule.get("match")
         if not isinstance(match, dict):
             raise LayerRulesError("图层规则模板 %s 的第 %d 条规则缺少 match" % (name, index + 1))
+        unknown_keys = sorted(str(key) for key in match if str(key) not in MATCH_KEYS)
+        if unknown_keys:
+            raise LayerRulesError(
+                "图层规则模板 %s 的第 %d 条规则使用了 match 不支持的键：%s（只支持 %s）"
+                % (name, index + 1, "、".join(unknown_keys), "、".join(MATCH_KEYS)))
         role = _clean_role(rule.get("role"), "rule#%d" % (index + 1))
         level = str(rule.get("evidence_level") or "MODERATE").strip().upper()
         if level not in model.EVIDENCE_LEVELS or level == "NONE":
@@ -94,6 +105,8 @@ def _normalize_template(name: str, conf: Any) -> Dict[str, Any]:
             "names": [str(item).strip() for item in (match.get("names") or []) if str(item).strip()],
             "name_prefix": [str(item).strip() for item in (match.get("name_prefix") or [])
                             if str(item).strip()],
+            "name_contains": [str(item).strip() for item in (match.get("name_contains") or [])
+                              if str(item).strip()],
         })
 
     colors = {}

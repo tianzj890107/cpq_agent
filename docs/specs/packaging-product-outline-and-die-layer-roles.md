@@ -186,3 +186,23 @@ CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
 1. 用两份真实 DWG 跑 drawing-flow（2.1 图纸解析）→ 圆盘盒能看到 `round_tube` 候选与 Ø404 量级的成品尺寸候选；
    酒盒能看到 `irregular` 候选 + 「成品尺寸需人工确认」的明确披露，且不再出现 1705.95×713.30。
 2. 报价侧盒型匹配用圆盘盒/酒盒的真实规格检索 `YT-DWG-ROUND-10PC` / `YT-DWG-WINE-700ML`（KB 侧已就绪）。
+
+## 11. 实现状态（9-21，Codex 实现）
+
+§1–§10 原文未动，本节只记录落地结果（详细实跑见 `changelog_9_21_25.md` ## 231）。
+
+- 红测：`tests.test_packaging_product_outline_red` 由 `FAILED (failures=12, skipped=1)`
+  转 `OK (skipped=1)`；D 组由 `FAILED (failures=5)` 转 `FAILED (failures=1)`。
+- 落地文件：`tech_app/agent_knowledge/rules/packaging_layer_rules.json`、
+  `tech_app/backend/services/packaging_semantics/{rules,roles,geometry_semantics,fields,__init__}.py`。
+- 真样本（本机 ODA 27.1）：酒盒 → `irregular` + 成品长宽 `missing`
+  （`1705.9508 × 713.2990` 不再出现）；圆盘盒 → `round_tube` + `inner_length=inner_width=404.0`
+  （`15639.3728 × 6318.2803` 不再出现）。
+- 两处按字面取舍（留给 Spec 所有者决定是否收紧）：§4.3 的 `irregular` 在「有 `cut` 且无
+  产品级闭合候选」时一律出，因此圆盘盒同时出 `round_tube` 与 `irregular`（`box_type` 取
+  `round_tube`）；`outline.rejected[]` 覆盖的是 `PACKAGING_SEMANTICS_MAX_CANDIDATES`（默认
+  200）截断后的候选集合，圆盘盒 633 条重复候选披露 200 条并同时给出截断警告。
+- 仍未绿：D1 假设 `酒盒.dwg` 也有 `Make2D$可见线$普通线` 图层 —— 实测该图层的 DXF 里
+  `Make2D` 出现 0 次（酒盒只有 8 个图层：`0`/`CUTTER`/`DESIGN`/`Defpoints`/`SAMPLE`/
+  `_U+56FE_U+5C42 1`/`图层 2`/`轮廓线`），而 D1 的 `role()` 帮手在图层缺失时直接 `fail`。
+  需测试所有者把该项只对圆盘盒断言，或让 `role()` 对缺失图层返回空串；实现方未改测试。

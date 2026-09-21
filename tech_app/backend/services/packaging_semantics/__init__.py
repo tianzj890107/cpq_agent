@@ -39,6 +39,13 @@ ACTION_FAILED = "packaging_semantics.failed"
 _REASON_OF_STATUS = {"conflict": "conflict", "missing": "missing",
                      "needs_confirmation": "needs_confirmation"}
 
+#: Spec §2.3 / §3.3 —— 第 4b 批新增的两个**警告**码（不是 HTTP 错误码）。
+WARNING_OUTLINE_FRAME_REJECTED = "PACKAGING_OUTLINE_SHEET_FRAME_REJECTED"
+WARNING_PRODUCT_OUTLINE_UNCERTAIN = "PACKAGING_PRODUCT_OUTLINE_UNCERTAIN"
+
+#: Spec §3.3 —— 拿不到产品级轮廓时 `unresolved[].reason` 的专属取值。
+REASON_PRODUCT_OUTLINE_UNCERTAIN = "product_outline_uncertain"
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -60,7 +67,9 @@ def capability() -> Dict[str, Any]:
 # 主体：CAD IR → 包装语义
 # --------------------------------------------------------------------------- #
 def _unresolved(fields_out: Dict[str, Any], unknown_layers: List[str],
-                known: Any, box_status: str) -> List[Dict[str, Any]]:
+                known: Any, box_status: str,
+                reason_overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    overrides = dict(reason_overrides or {})
     rows: List[Dict[str, Any]] = []
     for key in sorted(fields_out):
         entry = fields_out.get(key) or {}
@@ -68,7 +77,8 @@ def _unresolved(fields_out: Dict[str, Any], unknown_layers: List[str],
             continue
         rows.append({
             "field": key,
-            "reason": _REASON_OF_STATUS.get(str(entry.get("status")), "missing"),
+            "reason": overrides.get(key) or _REASON_OF_STATUS.get(str(entry.get("status")),
+                                                                  "missing"),
             "status": str(entry.get("status") or "missing"),
             "evidence_refs": list(entry.get("evidence_refs") or [])[:4],
         })
@@ -135,19 +145,43 @@ def analyze(ir: Dict[str, Any], *, template: Optional[str] = None, rules: Any = 
         warnings.append({"code": "PACKAGING_SEMANTICS_CANDIDATES_TRUNCATED",
                          "message": "轮廓/孔位候选超过上限，已截断，请人工核对图纸",
                          "evidence_refs": []})
+    # Spec §2.3：有候选被排除（拼版/图框/整张）才出这条警告。
+    rejected = list(geometry.get("rejected") or [])
+    if rejected:
+        rejected_refs: List[str] = []
+        for row in rejected:
+            for ref in row.get("evidence_refs") or []:
+                if ref not in rejected_refs:
+                    rejected_refs.append(ref)
+        warnings.append({
+            "code": WARNING_OUTLINE_FRAME_REJECTED,
+            "message": "图纸里有拼版/图框/整张外框候选被排除，不计入成品尺寸与盒型候选，"
+                       "请人工核对成品轮廓",
+            "evidence_refs": rejected_refs,
+        })
+    uncertain_fields = list(built.get("outline_uncertain_fields") or [])
+    if uncertain_fields:
+        warnings.append({
+            "code": WARNING_PRODUCT_OUTLINE_UNCERTAIN,
+            "message": "拿不到产品级成品轮廓，成品长宽只能待人工确认（数量级可能缺失）",
+            "evidence_refs": [],
+        })
 
     assist = model_assist.evaluate(preview=preview, use_model=use_model, fields=fields_out,
                                    ir=ir, known=known)
 
     outline = {
         "boundary_candidates": geometry["boundary_candidates"],
+        "rejected": rejected,
         "bleed_candidates": geometry["bleed_candidates"],
         "windows": geometry["windows"],
         "holes": geometry["holes"],
         "panel": geometry["panel"],
     }
+    reason_overrides = {str(key): REASON_PRODUCT_OUTLINE_UNCERTAIN for key in uncertain_fields}
     unresolved = _unresolved(fields_out, unknown_layers, known,
-                             (fields_out.get("box_type") or {}).get("status"))
+                             (fields_out.get("box_type") or {}).get("status"),
+                             reason_overrides)
     src = ir.get("source") or {}
     source = {
         "project_id": str(src.get("project_id") or ""),

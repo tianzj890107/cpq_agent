@@ -7,9 +7,10 @@
     "generic": {
       "layers": [
         {"rule_id": "cut_name_v1", "role": "cut", "evidence_level": "STRONG", "confidence": 0.9,
-         "match": {"names": ["CUT", "DIE", "刀线", "模切线"], "name_prefix": ["CUT", "DIE"]}},
+         "match": {"names": ["CUT", "DIE", "刀线", "模切线"], "name_prefix": ["CUT", "DIE"],
+                   "name_contains": ["全穿刀"]}},
         {"rule_id": "crease_name_v1", "role": "crease", "evidence_level": "STRONG", "confidence": 0.9,
-         "match": {"names": ["CREASE", "FOLD", "压痕", "折痕"]}},
+         "match": {"names": ["CREASE", "FOLD", "压痕", "折痕"], "name_contains": ["压线"]}},
         {"rule_id": "half_cut_name_v1", "role": "half_cut", "evidence_level": "MODERATE", "confidence": 0.7,
          "match": {"names": ["HALFCUT", "HALF_CUT", "半切"]}},
         {"rule_id": "v_groove_name_v1", "role": "v_groove", "evidence_level": "MODERATE", "confidence": 0.7,
@@ -21,7 +22,7 @@
         {"rule_id": "bleed_name_v1", "role": "bleed", "evidence_level": "MODERATE", "confidence": 0.6,
          "match": {"names": ["BLEED", "出血"]}},
         {"rule_id": "frame_name_v1", "role": "frame", "evidence_level": "STRONG", "confidence": 0.8,
-         "match": {"names": ["FRAME", "BORDER", "图框", "标题栏"]}},
+         "match": {"names": ["FRAME", "BORDER", "图框", "标题栏", "图框层", "排图层"]}},
         {"rule_id": "hole_name_v1", "role": "hole", "evidence_level": "MODERATE", "confidence": 0.6,
          "match": {"names": ["HOLE", "孔位"]}}
       ],
