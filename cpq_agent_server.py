@@ -3907,6 +3907,255 @@ def _handle_quote_cost_handoff(data: dict) -> dict:
         session_id=str(body.get("session_id") or ""))}
 
 
+# ---------------------------------------------------------------------------
+# 快速报价工作区 HTTP 闭环（Spec `e2e-quick-quote-executable-path.md` §2–§5）
+# ---------------------------------------------------------------------------
+#: 快速报价业务实例：`POST` 建实例，其余命令都挂在它下面（session_id 就是业务实例号）。
+QUICK_QUOTE_SESSIONS_PATH = "/api/quick-quote/sessions"
+QUICK_QUOTE_SESSION_RE = re.compile(
+    r"^/api/quick-quote/sessions/(?P<session_id>[^/]+)/"
+    r"(?P<command>match|baseline|workspace|price|confirm|transfer-to-precise)$")
+
+#: 幂等键 → 上一次的响应体（Spec §3 末句）。**只复用完全相同的写请求**，不做跨命令合并。
+quick_quote_idempotency: dict = {}
+
+#: 各业务实例的在建状态（baseline / workspace / 上一次报价）。进程内存：重启后只有已落卡的
+#: 那一版能读回（`find_quote`），这是本批已知边界（Spec §7 实现记录有记录）。
+QUICK_QUOTE_SESSIONS: dict = {}
+
+
+def _json_safe_value(value):
+    """把 PG 取回来的值转成 JSON-safe（Spec §2）：datetime/date/Decimal/UUID → ISO / 字符串。"""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, datetime.timedelta):
+        return value.total_seconds()
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    text = getattr(value, "isoformat", None)          # Decimal / UUID / psycopg 的时间类型
+    if callable(text):
+        try:
+            return str(text())
+        except Exception:                              # noqa: BLE001 - 兜底成字符串
+            pass
+    return str(value)
+
+
+def _json_safe_response(obj):
+    """响应体的统一编码入口（`_send_json` 必走这里）：不让 datetime/Decimal 直接把连接打断。"""
+    return _json_safe_value(obj)
+
+
+def _qq_text(value) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _qq_state(session_id: str) -> dict:
+    return QUICK_QUOTE_SESSIONS.setdefault(
+        _qq_text(session_id),
+        {"inputs": {}, "baseline": {}, "workspace": {}, "quote": {}, "versions": 0})
+
+
+def _qq_idempotent(session_id: str, key: str, produce):
+    """写命令的幂等壳（Spec §3）：同一个 (session, key) 再来一次直接复用上一次的响应体。"""
+    token = "%s|%s" % (_qq_text(session_id), _qq_text(key))
+    if not _qq_text(key):
+        return produce()
+    if token in quick_quote_idempotency:
+        cached = dict(quick_quote_idempotency[token])
+        cached["idempotent_replay"] = True
+        return cached
+    result = produce()
+    quick_quote_idempotency[token] = result
+    return result
+
+
+def _qq_error(code: str, message: str, status: int = 400, **extra) -> dict:
+    payload = {"ok": False, "code": code, "error": message, "status": status}
+    payload.update(extra)
+    return payload
+
+
+def _handle_quick_quote_session_create(body, *, user=None) -> dict:
+    """`POST /api/quick-quote/sessions` —— 建快速报价业务实例（Spec §3 第 1 条）。"""
+    body = body if isinstance(body, dict) else {}
+    session_id = _qq_text(body.get("session_id")) or pool_new().session_id
+    try:
+        import cpq_wf
+        card = cpq_wf.sync_card(session_id, user or {}, title=_qq_text(body.get("title")),
+                                customer=_qq_text(body.get("customer")),
+                                project_name=_qq_text(body.get("project_name")),
+                                industry=_qq_text(body.get("industry")))
+    except Exception as exc:                                    # noqa: BLE001 - 建卡失败要说清
+        return _qq_error("session_create_failed", "建快速报价业务实例失败：%s" % exc, 503,
+                         quick_quote_session_id=session_id)
+    state = _qq_state(session_id)
+    state["card"] = card
+    return {"ok": True, "quick_quote_session_id": session_id, "session_id": session_id,
+            "card": card, "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
+            "steps": _quick_quote_steps(), "quote_modes": _quick_quote_modes()}
+
+
+def _handle_quick_quote_session_match(session_id: str, body) -> dict:
+    """`POST …/{id}/match` —— 候选案例 + 逐字段证据（Spec §3 第 2 条，只读）。"""
+    body = body if isinstance(body, dict) else {}
+    inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
+    state = _qq_state(session_id)
+    state["inputs"] = dict(inputs)
+    try:
+        result = cpq_quick_quote_match.match_cases(inputs, top_n=body.get("top_n"))
+    except Exception as exc:                                    # noqa: BLE001
+        return _qq_error("match_unavailable", "案例检索不可用：%s" % exc, 503)
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "match": result}
+
+
+def _handle_quick_quote_session_baseline(session_id: str, body, *, user=None) -> dict:
+    """`POST …/{id}/baseline` —— 人工选定基准案例（Spec §3 第 3 条）。"""
+    body = body if isinstance(body, dict) else {}
+    state = _qq_state(session_id)
+    inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else state.get("inputs") or {}
+    try:
+        baseline = cpq_quick_quote_match.build_baseline(inputs, body.get("case_code"), user=user)
+    except Exception as exc:                                    # noqa: BLE001
+        code = getattr(exc, "code", "") or "baseline_rejected"
+        return _qq_error(code, str(exc) or "无法选定基准案例", 409)
+    workspace = cpq_quick_quote_workspace.new_workspace(baseline, user=user)
+    state.update({"inputs": dict(inputs), "baseline": baseline, "workspace": workspace,
+                  "quote": {}, "versions": 0})
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
+            "baseline": baseline, "workspace": workspace}
+
+
+def _handle_quick_quote_session_workspace(session_id: str, body, *, user=None) -> dict:
+    """`PUT …/{id}/workspace` —— 只改白名单字段，保存 diff 与版本（Spec §3 第 4 条）。"""
+    body = body if isinstance(body, dict) else {}
+    state = _qq_state(session_id)
+    baseline = state.get("baseline") or {}
+    if not baseline:
+        return _qq_error("baseline_required", "还没有选定基准案例：先选一个基准再改参数。", 409)
+    workspace = body.get("workspace") if isinstance(body.get("workspace"), dict) else state.get("workspace") or {}
+    edits = body.get("edits") if isinstance(body.get("edits"), list) else []
+    try:
+        workspace = cpq_quick_quote_workspace.apply_edits(
+            workspace, edits, source=_qq_text(body.get("source")) or "workspace", user=user)
+    except Exception as exc:                                    # noqa: BLE001
+        return _qq_error(getattr(exc, "code", "") or "edit_rejected",
+                         str(exc) or "字段改动被拒绝", 409)
+    state["workspace"] = workspace
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "workspace": workspace,
+            "diff": cpq_quick_quote_workspace.diff_table(workspace),
+            "diff_total": cpq_quick_quote_workspace.diff_total(workspace)}
+
+
+def _handle_quick_quote_session_price(session_id: str, body, *, user=None) -> dict:
+    """`POST …/{id}/price` —— 确定性重算价格，回公式/来源/缺口（Spec §3 第 5 条）。"""
+    body = body if isinstance(body, dict) else {}
+    state = _qq_state(session_id)
+    baseline = state.get("baseline") or {}
+    workspace = state.get("workspace") or {}
+    if not baseline or not workspace:
+        return _qq_error("baseline_required", "还没有基准案例或工作区：先选基准再改参数。", 409)
+    try:
+        quote = cpq_quick_quote_price.price(baseline, workspace)
+    except Exception as exc:                                    # noqa: BLE001
+        code = getattr(exc, "code", "") or "price_blocked"
+        status = int(getattr(exc, "status_code", 0) or 409)
+        gate = getattr(exc, "result", None)
+        payload = _qq_error(code, getattr(exc, "message", "") or str(exc) or "快速报价被门禁拦下",
+                            status, action="transfer_to_precise",
+                            advice="无可用案例 / 关键字段冲突时改走精准报价：证据不足不做假结果。")
+        if isinstance(gate, dict):
+            payload["gate"] = gate
+        return payload
+    state["quote"] = quote
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "quote": quote,
+            "diff": cpq_quick_quote_workspace.diff_table(workspace),
+            "diff_total": cpq_quick_quote_workspace.diff_total(workspace)}
+
+
+def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> dict:
+    """`POST …/{id}/confirm` —— 生成可见报价卡（Spec §3 第 6 条）：
+    落卡片第 2 步快照的 `quick_quote_price` 段，返回可再次打开的身份。"""
+    body = body if isinstance(body, dict) else {}
+    state = _qq_state(session_id)
+    quote = body.get("quote") if isinstance(body.get("quote"), dict) else state.get("quote") or {}
+    if not quote:
+        return _qq_error("quote_required", "还没有可确认的快速报价：先算价。", 409)
+    try:
+        saved = cpq_quick_quote_price.save(
+            quote, user=user, session_id=_qq_text(session_id),
+            previous=state.get("quote") if state.get("quote") else None,
+            formal=bool(body.get("formal")))
+    except Exception as exc:                                    # noqa: BLE001
+        return _qq_error(getattr(exc, "code", "") or "confirm_failed",
+                         str(exc) or "快速报价确认失败", 409)
+    state["quote"] = dict(saved.get("segment") or quote)
+    state["versions"] = int(saved.get("version_no") or 1)
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
+            "quick_quote_id": saved.get("quick_quote_id"),
+            "version_no": saved.get("version_no"),
+            "segment": saved.get("segment"), "formal": bool(quote.get("formal"))}
+
+
+def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) -> dict:
+    """`POST …/{id}/transfer-to-precise` —— 证据不足时无损转精准报价（Spec §3 第 7 条）。"""
+    body = body if isinstance(body, dict) else {}
+    state = _qq_state(session_id)
+    quote = body.get("quote") if isinstance(body.get("quote"), dict) else state.get("quote") or {}
+    if not quote:
+        return _qq_error("quote_required", "还没有可转出的快速报价：先算价再转。", 409)
+    try:
+        result = cpq_quick_quote_price.transfer_to_precise(quote, user=user,
+                                                           session_id=_qq_text(session_id))
+    except Exception as exc:                                    # noqa: BLE001
+        return _qq_error(getattr(exc, "code", "") or "transfer_failed",
+                         str(exc) or "转精准报价失败", 409)
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "handoff": result}
+
+
+def _handle_quick_quote_read(session_id: str) -> dict:
+    """`GET /api/quick-quote/sessions/{id}` —— 打开/刷新后恢复（Spec §4：刷新后价格与版本一致）。"""
+    state = _qq_state(session_id)
+    saved = {}
+    try:
+        saved = cpq_quick_quote_price.find_quote("", session_id=_qq_text(session_id)) or {}
+    except Exception:                                           # noqa: BLE001 - 读不到就照实给空
+        saved = {}
+    return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
+            "inputs": state.get("inputs") or {}, "baseline": state.get("baseline") or {},
+            "workspace": state.get("workspace") or {},
+            "quote": saved or state.get("quote") or {}, "saved_quote": saved,
+            "version_no": int((saved or {}).get("version_no") or state.get("versions") or 0)}
+
+
+def _handle_quick_quote_session_write(session_id: str, command: str, body, *,
+                                      user=None, idempotency_key: str = "") -> dict:
+    """把一条写命令派到具体处理器；命中幂等键就复用上一次的响应体（Spec §3 末句）。"""
+    command = _qq_text(command)
+    sid = _qq_text(session_id)
+
+    def produce():
+        if command == "baseline":
+            return _handle_quick_quote_session_baseline(sid, body, user=user)
+        if command == "workspace":
+            return _handle_quick_quote_session_workspace(sid, body, user=user)
+        if command == "price":
+            return _handle_quick_quote_session_price(sid, body, user=user)
+        if command == "confirm":
+            return _handle_quick_quote_session_confirm(sid, body, user=user)
+        if command == "transfer-to-precise":
+            return _handle_quick_quote_session_transfer(sid, body, user=user)
+        return _qq_error("unknown_command", "未知的快速报价命令：%s" % command, 404)
+
+    return _qq_idempotent(sid, idempotency_key, produce)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -3915,11 +4164,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Idempotency-Key")
 
     def _send_json(self, obj, status=200):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        # 统一 JSON-safe 编码（Spec `e2e-quick-quote-executable-path.md` §2）：PG 直接取回的
+        # datetime / date / Decimal / UUID 必须先转成 ISO / 字符串。线上就是这里直接
+        # json.dumps 抛错，socket 被断开——连错误响应都发不出去。
+        body = json.dumps(_json_safe_response(obj), ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -3962,6 +4214,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _quick_quote_write(self, path) -> bool:
+        """快速报价写命令分发（POST / PUT 共用；Spec §3）。命中返回 True，未命中 False。"""
+        if path == QUICK_QUOTE_SESSIONS_PATH:
+            payload = _handle_quick_quote_session_create(self._read_body(), user=self._acting_user())
+        else:
+            match = QUICK_QUOTE_SESSION_RE.match(path or "")
+            if not match:
+                return False
+            params = match.groupdict()
+            body = self._read_body()
+            key = (self.headers.get("X-Idempotency-Key") or body.get("idempotency_key") or "")
+            payload = _handle_quick_quote_session_write(
+                params["session_id"], params["command"], body,
+                user=self._acting_user(), idempotency_key=key)
+        self._send_json(payload, 200 if payload.get("ok") else int(payload.get("status") or 400))
+        return True
+
+    def do_PUT(self):
+        # 快速报价工作区按 Spec §3 第 4 条走 PUT（只改白名单字段）；其余路径本服务不提供 PUT。
+        if self._quick_quote_write(urlparse(self.path).path):
+            return
+        self.send_error(404)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -3992,6 +4267,12 @@ class Handler(BaseHTTPRequestHandler):
             # 快速报价标准案例列表（逆向快速报价第 1 批）：只读；库不可用回 503 + 错误体。
             payload = _handle_quick_quote_cases(parse_qs(parsed.query))
             self._send_json(payload, 200 if payload.get("ok") else 503)
+        elif path == QUICK_QUOTE_SESSIONS_PATH or path.startswith(QUICK_QUOTE_SESSIONS_PATH + "/"):
+            # 快速报价业务实例读回（Spec §4「刷新后版本和价格一致」）：只读，不建、不写。
+            sid = path[len(QUICK_QUOTE_SESSIONS_PATH):].strip("/")
+            if not sid:
+                sid = (parse_qs(parsed.query).get("session_id") or [""])[0]
+            self._send_json(_handle_quick_quote_read(sid))
         elif path == "/api/quote/identity":
             # 业务实例身份链（Spec `e2e-quote-session-and-completion-closure.md` §2.2）：只读；
             # 不唯一/读不到就回对应状态码，绝不猜一个继续。
@@ -4045,6 +4326,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/quote/cost-handoff":
             # 财务/技术回传载荷归一成结构化成本记录（Spec §3）：只读，不落库。
             self._send_json(_handle_quote_cost_handoff(self._read_body()))
+        elif self._quick_quote_write(path):
+            # 快速报价工作区命令（Spec `e2e-quick-quote-executable-path.md` §3）：
+            # 建实例 / 匹配 / 选基准 / 改参数 / 重算 / 确认 / 转精准，响应已在上面的分支里发出。
+            pass
         elif QUICK_QUOTE_CASE_ACTION_RE.match(path):
             # 快速报价案例维护（逆向快速报价第 12 批）：补字段 / 改审核状态。只认票上的人。
             params = _quick_quote_case_route(path)

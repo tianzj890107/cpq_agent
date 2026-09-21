@@ -37,6 +37,19 @@
   /* 上传入口的 accept（Spec 批 11 C2）：图纸 + 常见需求文件。 */
   var PARSE_ACCEPT = ".dwg,.dxf,.pdf,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp";
 
+  /* 快速报价工作区的 HTTP 闭环（Spec `e2e-quick-quote-executable-path.md` §3–§5）：
+     业务实例建一次，后面所有命令都挂在它下面。`quick_quote_session_id` 就是"确认后还能
+     再打开"的那个身份（首页卡片与刷新都靠它），不再靠页面局部变量。 */
+  var SESSIONS_PATH = "/api/quick-quote/sessions";
+  /* 写命令的幂等头（Spec §3 末句）：同一次确认重发不产生重复卡片。 */
+  var IDEMPOTENCY_HEADER = "X-Idempotency-Key";
+
+  /*: 在建状态：最新一次匹配 / 基准 / 工作区 / 报价 + 业务实例身份。 */
+  var workspaceState = {
+    quick_quote_session_id: "",
+    inputs: {}, match: {}, baseline: {}, workspace: {}, quote: {}
+  };
+
   /*: 最近一次解析的视图模型：面板重绘（案例列表加载完）时不把用户刚上传的结果擦掉。 */
   var lastParseView = null;
 
@@ -102,11 +115,15 @@
   }
 
   /** 案例表格：不可用的案例也要显示 —— 销售得知道"库里有像的，但这条不能用"。 */
-  function renderCases(rows) {
+  /* 案例表格：不可用的案例也要显示 —— 销售得知道"库里有像的，但这条不能用"。
+   * 可用的案例行**可选**（Spec `e2e-quick-quote-executable-path.md` §4）：点一下就把它设为基准，
+   * 选出后回到页面由 selectQuickQuoteBaseline() 拉工作区（不改这里的渲染职责）。 */
+  function renderCases(rows, options) {
+    options = options || {};
     var table = el("table", "qq-cases");
     var head = el("thead");
     var hrow = el("tr");
-    ["案例编号", "盒型", "来源", "审核", "标准单价", "有效期", "能否快速报价"].forEach(function (title) {
+    ["案例编号", "盒型", "来源", "审核", "标准单价", "有效期", "能否快速报价", "选为基准"].forEach(function (title) {
       hrow.appendChild(el("th", "", title));
     });
     head.appendChild(hrow);
@@ -126,6 +143,19 @@
         REASON_LABELS[row.reason_code] || row.reason_code || "");
       if (!row.eligible && row.reason) verdict.title = row.reason;
       tr.appendChild(verdict);
+      var pick = el("td", "qq-case-pick");
+      if (row.eligible) {
+        var pickBtn = el("button", "qq-case-select", "选为基准");
+        pickBtn.type = "button";
+        pickBtn.setAttribute("data-qq-baseline", row.case_code || "");
+        pickBtn.addEventListener("click", function () {
+          selectQuickQuoteBaseline(row.case_code, options);
+        });
+        pick.appendChild(pickBtn);
+      } else {
+        pick.appendChild(el("span", "qq-case-disabled", "不可用"));
+      }
+      tr.appendChild(pick);
       body.appendChild(tr);
     });
     table.appendChild(body);
@@ -318,7 +348,7 @@
         shell.appendChild(renderReadiness(readiness, options, payload));
       }
       if ((payload.cases || []).length || !readiness) {
-        shell.appendChild(renderCases(payload.cases));
+        shell.appendChild(renderCases(payload.cases, options));
       }
     } else {
       shell.appendChild(el("p", "qq-error",
@@ -729,6 +759,166 @@
     return box;
   }
 
+  /* ============ 快速报价工作区命令（Spec `e2e-quick-quote-executable-path.md` §3–§5） ============
+     一条命令一个函数，逐个对应后端路由：建实例 → 匹配 → 选基准 → 改参数(PUT) → 重算 → 确认 → 转精准。
+     前端**不自己算金额**（§5：不得让大模型直接算金额，也不在这里复制公式），
+     **不复制解析器**（图纸一律交服务端统一解析服务，见 transferDwgToDrawingFlow）。 */
+
+  function newIdempotencyKey(prefix) {
+    return String(prefix || "qq") + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+  }
+
+  function quickQuoteSessionId() {
+    return String(workspaceState.quick_quote_session_id || "");
+  }
+
+  function commandUrl(command) {
+    return agentBase() + SESSIONS_PATH + "/" + encodeURIComponent(quickQuoteSessionId())
+      + "/" + command;
+  }
+
+  /* 发一条工作区命令：写请求都带幂等键（同一次确认重发不产生重复卡片）。
+     workspace 按 Spec §3 第 4 条走 PUT。返回后端原始 payload，失败不吞。 */
+  function postCommand(command, body, options) {
+    options = options || {};
+    var headers = {"Content-Type": "application/json"};
+    headers[IDEMPOTENCY_HEADER] = options.idempotencyKey || newIdempotencyKey(command);
+    return apiFetch(commandUrl(command), {
+      method: command === "workspace" ? "PUT" : "POST",
+      headers: headers,
+      body: JSON.stringify(body || {})
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; }).then(function (data) {
+        if (!resp.ok && !data.error && !data.code) {
+          data = {ok: false, error: "快速报价命令失败（HTTP " + resp.status + "）", status: resp.status};
+        }
+        return data;
+      });
+    });
+  }
+
+  function rememberCommandResult(command, data) {
+    data = data || {};
+    if (command === "match" && data.match) workspaceState.match = data.match;
+    if (command === "baseline" && data.baseline) {
+      workspaceState.baseline = data.baseline;
+      workspaceState.workspace = data.workspace || {};
+    }
+    if (command === "workspace" && data.workspace) workspaceState.workspace = data.workspace;
+    if (command === "price" && data.quote) workspaceState.quote = data.quote;
+    if (command === "confirm" && data.quick_quote_session_id) {
+      workspaceState.quick_quote_session_id = data.quick_quote_session_id;
+    }
+    return data;
+  }
+
+  /** 建（或复用）快速报价业务实例：确认后就是首页卡片要带的身份（Spec §3 第 1 条）。 */
+  function openQuickQuoteSession(options) {
+    options = options || {};
+    var body = {
+      session_id: options.sessionId || quickQuoteSessionId(),
+      title: options.title || "", customer: options.customer || "",
+      project_name: options.projectName || "", industry: options.industry || "packaging",
+      idempotency_key: options.idempotencyKey || newIdempotencyKey("session")
+    };
+    return apiFetch(agentBase() + SESSIONS_PATH, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", IDEMPOTENCY_HEADER: body.idempotency_key},
+      body: JSON.stringify(body)
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; });
+    }).then(function (data) {
+      if (data && data.quick_quote_session_id) {
+        workspaceState.quick_quote_session_id = data.quick_quote_session_id;
+      }
+      return rememberCommandResult("session", data);
+    });
+  }
+
+  /** 刷新/再次打开：按业务实例读回基准、工作区与**已落卡**的那一版报价（Spec §4）。 */
+  function openQuickQuoteWorkspace(sessionId, options) {
+    options = options || {};
+    if (sessionId) workspaceState.quick_quote_session_id = String(sessionId);
+    return apiFetch(agentBase() + SESSIONS_PATH + "/" + encodeURIComponent(quickQuoteSessionId()), {
+      method: "GET"
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; });
+    }).then(function (data) {
+      data = data || {};
+      workspaceState.inputs = data.inputs || workspaceState.inputs;
+      workspaceState.baseline = data.baseline || workspaceState.baseline;
+      workspaceState.workspace = data.workspace || workspaceState.workspace;
+      workspaceState.quote = data.quote || workspaceState.quote;
+      return data;
+    });
+  }
+
+  /** 匹配候选案例（只读）：返回排序结果与逐字段证据，供案例表与差异表渲染。 */
+  function matchQuickQuoteCases(inputs, options) {
+    options = options || {};
+    workspaceState.inputs = inputs || workspaceState.inputs || {};
+    return postCommand("match", {inputs: workspaceState.inputs, top_n: options.topN}, options)
+      .then(function (data) { return rememberCommandResult("match", data); });
+  }
+
+  /** 选为基准（案例行点一下）：只有人工显式选过，才谈得上"基准价"（Spec §3 第 3 条）。 */
+  function selectQuickQuoteBaseline(caseCode, options) {
+    options = options || {};
+    if (!quickQuoteSessionId() && options.sessionId) {
+      workspaceState.quick_quote_session_id = String(options.sessionId);
+    }
+    return postCommand("baseline", {case_code: caseCode, inputs: workspaceState.inputs}, options)
+      .then(function (data) { return rememberCommandResult("baseline", data); });
+  }
+
+  /** 保存工作区改动（PUT；只改白名单字段，后端拒绝越界字段）。 */
+  function saveQuickQuoteWorkspace(edits, options) {
+    options = options || {};
+    return postCommand("workspace",
+      {workspace: workspaceState.workspace, edits: edits || [], source: options.source || "workspace"},
+      options).then(function (data) { return rememberCommandResult("workspace", data); });
+  }
+
+  /** 确定性重算价格：公式/来源/缺口由后端给；被门禁拦下时带 action=transfer_to_precise。 */
+  function repriceQuickQuote(options) {
+    options = options || {};
+    return postCommand("price", {}, options)
+      .then(function (data) { return rememberCommandResult("price", data); });
+  }
+
+  /** 确认 → 可见报价卡：返回可再次打开的身份（quick_quote_session_id）与版本号。 */
+  function confirmQuickQuote(options) {
+    options = options || {};
+    return postCommand("confirm",
+      {quote: workspaceState.quote, formal: !!options.formal}, options)
+      .then(function (data) { return rememberCommandResult("confirm", data); });
+  }
+
+  /** 无合格案例 / 关键字段冲突：无损转精准报价（Spec §5 的出口）。 */
+  function transferQuickQuoteToPrecise(options) {
+    options = options || {};
+    return postCommand("transfer-to-precise", {quote: workspaceState.quote}, options)
+      .then(function (data) { return rememberCommandResult("transfer-to-precise", data); });
+  }
+
+  /* DWG/DXF 的唯一入口：交给服务端的统一解析服务处理（技术工艺侧的图纸链路，报价侧只当客户端）。
+     报价侧**不**本地转换、不复制解析器、不把图纸送视觉模型 —— 这里只把文件交出去并回传结果。 */
+  function transferDwgToDrawingFlow(file, options) {
+    options = options || {};
+    var name = String((file && file.name) || "").toLowerCase();
+    if (!/\.(dwg|dxf)$/.test(name)) {
+      return Promise.resolve({ok: false, code: "not_a_drawing",
+        error: "只有 .dwg/.dxf 走图纸解析链路；其它格式请走统一解析入口。"});
+    }
+    return parseFile(file, options).then(function (data) {
+      var view = quickQuoteParseView(data);
+      return {ok: !!(data && data.ok !== false), drawing_flow: true,
+              file_name: (file && file.name) || "", parse: data, view: view,
+              note: "图纸由服务端统一解析服务处理（复用技术工艺侧的图纸链路）："
+                    + "报价侧不转换、不做几何求解、不送视觉模型。"};
+    });
+  }
+
   function fmtAmount(value) {
     if (value === null || value === undefined || isNaN(Number(value))) return "未标";
     return Number(value).toFixed(4);
@@ -767,6 +957,19 @@
     renderDiffTable: renderDiffTable,
     QUOTE_ACTION_LABELS: QUOTE_ACTION_LABELS,
     renderQuote: renderQuote,
+    SESSIONS_PATH: SESSIONS_PATH,
+    IDEMPOTENCY_HEADER: IDEMPOTENCY_HEADER,
+    workspaceState: workspaceState,
+    quickQuoteSessionId: quickQuoteSessionId,
+    openQuickQuoteSession: openQuickQuoteSession,
+    openQuickQuoteWorkspace: openQuickQuoteWorkspace,
+    matchQuickQuoteCases: matchQuickQuoteCases,
+    selectQuickQuoteBaseline: selectQuickQuoteBaseline,
+    saveQuickQuoteWorkspace: saveQuickQuoteWorkspace,
+    repriceQuickQuote: repriceQuickQuote,
+    confirmQuickQuote: confirmQuickQuote,
+    transferQuickQuoteToPrecise: transferQuickQuoteToPrecise,
+    transferDwgToDrawingFlow: transferDwgToDrawingFlow,
     render: render,
     open: open,
     close: hide

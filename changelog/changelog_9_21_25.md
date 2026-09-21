@@ -10308,3 +10308,53 @@ node --check（确认需求解析结果.html 两段内联脚本）        ALL OK
 - 未改 `cpq_wf.py` / `cpq_suite_server.py`；未改成本/定价口径、未改数据库 schema；
 - `applyTechResult` 仍是唯一写入点（既有红测 D4/D5 未回归）；
 - 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
+
+## 279. 快速报价从"只能看案例"变成可执行闭环：统一 JSON-safe 编码 + 七个工作区命令 + 面板工作区出口（9-22，Codex 实现）
+
+Spec `docs/specs/e2e-quick-quote-executable-path.md` 的 §2–§5 落地。线上 `GET /api/quick-quote/cases`
+因为 PG 的 `datetime` 直接进 `json.dumps` 而**断开连接**（错误响应都发不出去）；HTTP 层只有案例读取/维护
+与文件解析，没有工作区的任何命令路由 —— 面板拿到案例也只能看，选不了、改不了、算不了、确认不了。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 统一序列化（§2） | `cpq_agent_server.py` | 新增 `_json_safe_value()` / `_json_safe_response()`；`_send_json()` 改为走它：datetime/date/time→ISO、timedelta→秒、Decimal/UUID/psycopg 类型→字符串，list/tuple/set/dict 递归 |
+| 会话式命令（§3） | `cpq_agent_server.py` | `POST /api/quick-quote/sessions`（建/复用实例 + 确保卡片）、`…/match`、`…/baseline`、`PUT …/workspace`、`…/price`、`…/confirm`、`…/transfer-to-precise`、`GET …/sessions/{id}`（读回已落卡那一版）；新增 `do_PUT`，`do_POST`/`do_PUT` 共用 `_quick_quote_write()` |
+| 幂等（§3 末句） | `cpq_agent_server.py` | `quick_quote_idempotency` + `_qq_idempotent()`：键取 `X-Idempotency-Key` 头或 body `idempotency_key`；同键复用上一次响应体并标 `idempotent_replay` |
+| 面板闭环（§4） | `tech_app/frontend/quick-quote-panel.js` | `openQuickQuoteSession` / `openQuickQuoteWorkspace` / `matchQuickQuoteCases` / `selectQuickQuoteBaseline` / `saveQuickQuoteWorkspace` / `repriceQuickQuote` / `confirmQuickQuote` / `transferQuickQuoteToPrecise` / `transferDwgToDrawingFlow` + `workspaceState`（带 `quick_quote_session_id`）；案例表加「选为基准」列（可用行可选） |
+
+### 一处跨 Spec 约束（本批踩到，已写进 Spec §7.4）
+
+`test_quick_quote_panel_parse_entry_red::test_b6` 把 **`drawing-flow` 字面量**列为面板禁用词，
+所以 DWG 出口只能叫 `transferDwgToDrawingFlow`（函数名无连字符），注释与文案改写成
+「服务端统一解析服务」。组合要求是：**不许写 `drawing-flow`，但必须提供 `transferDwgToDrawingFlow`**。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_e2e_quick_quote_executable_red              Ran 9 OK（实现前 9 红）
+tests.test_quick_quote_mode_and_case_model_red         Ran 39 OK
+tests.test_quick_quote_case_retrieval_red              Ran 36 OK
+tests.test_quick_quote_field_workspace_red             Ran 53 OK
+tests.test_quick_quote_generation_red                  Ran 46 OK
+tests.test_quick_quote_file_parsing_red                Ran 37 OK (skipped=1)
+tests.test_quick_quote_panel_parse_entry_red           Ran 29 OK（修前被 drawing-flow 字面量撞红 1 条，已改文案）
+tests.test_quick_quote_parse_service_red               Ran 33 OK (skipped=2)
+tests.test_quick_quote_delta_rule_authority_red        Ran 29 OK
+tests.test_quick_quote_case_library_readiness_red      Ran 31 OK
+tests.test_quick_quote_parse_field_alignment_red       Ran 20 OK
+tests.test_quick_quote_authoritative_rate_import_red   Ran 23 OK
+tests.test_quick_quote_material_gsm_red                Ran 37 OK
+node --check tech_app/frontend/quick-quote-panel.js     OK
+```
+
+### 已有真冲突 / 边界（都不擅自改测试）
+
+- `test_quick_quote_case_maintenance_red::test_f1` **在 HEAD 上就是红的**（与本批无关）：它与同文件
+  `test_e5` 互斥（f1 要完整路径**字面量**、e5 禁 `"/api/quick-quote/cases/`）。测试侧一行修法（Spec §7.5
+  已记）：e5 的探针改成 `'"/api/quick-quote/cases"'`。本批不动它，也不做"换一个红"的改动。
+- `QUICK_QUOTE_SESSIONS` 是进程内存：重启后只有**已落卡**的那一版能读回（走卡片第 2 步快照），
+  在建的 baseline/workspace 不跨重启；本批不新增持久化表。
+- 未改 `cpq_quick_quote_*` 的业务口径、未改案例库/检索/差异价/门禁判据、未改数据库 schema；
+- 未改任何 `tests/`；未 push / 未建 MR / 未打 tag / 未部署、未连 PG、未调模型。
