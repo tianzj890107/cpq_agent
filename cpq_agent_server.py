@@ -59,6 +59,9 @@ import cpq_packaging_match
 # 报价助手不再自己写一份行业清单或必填项：行业键取 cpq_industries，字段/必填/标签取
 # tech_app 的 industry_templates，半导体技术参数取 product_params。
 import cpq_industries
+# 逆向快速报价（批 1）：标准报价案例模型与准入判定只住在 cpq_quick_quote_case.py，
+# 这里只读它的常量与取数函数（报价侧取数，不进技术工艺链路）。
+import cpq_quick_quote_case
 from tech_app.backend.services import industry_templates as quote_industry_templates
 from tech_app.backend.services import product_params as quote_product_params
 
@@ -1528,6 +1531,18 @@ def _extract_json_obj(out: str):
 # "无模型"模式下这一条路径也必须能算，这是包装与三行业定价路径的根本区别。
 PACKAGING_QUOTE_PRICE_PATH = "/api/packaging-quote/price"
 
+# 快速报价标准案例列表（逆向快速报价第 1 批，Spec §2.6）：只读、只走报价侧。
+# 这里的字面量必须与 cpq_quick_quote_case.QUICK_QUOTE_CASES_PATH 同值（那里是唯一
+# 事实源）；_handle_quick_quote_cases() 每次都会比对一次，两处写死也不会悄悄漂移。
+QUICK_QUOTE_CASES_PATH = "/api/quick-quote/cases"
+
+#: 快速报价当前的能力边界：接口与前端共用同一份文案，不各写一句。
+_QUICK_QUOTE_NOTES = (
+    "本接口只给标准案例库的现状与资格；检索排序、差异价、出价门槛与文件解析在后三批。",
+    "演示数据（demo）与未分类数据（unknown）只用于展示，永远不能用于快速报价。",
+    "从报价沉淀出来的案例默认是草稿，人工审到「已审核」之后才会进可用列表。",
+)
+
 # context = 发给模型的上下文分区。前面步骤的信息一律带全（缺了规则就算不出来），
 # 只是各步的**主依据**不同：第 3 步看产品与技术参数，第 4 步还要看基本信息/目的地/付款/物流。
 _ALL_CTX = ("basic", "dest", "products", "techparams", "payment", "logistics")
@@ -1775,6 +1790,63 @@ def _handle_packaging_quote_price(data: dict, emit=None) -> dict:
                 "document": pkg_quote.document(quote)}
     except Exception as exc:                                   # noqa: BLE001 - 失败要回给调用方
         return {"ok": False, "error": str(exc) or "包装定价失败"}
+
+
+def _handle_quick_quote_cases(params=None) -> dict:
+    """GET /api/quick-quote/cases —— 标准报价案例列表 + 资格 + 提示（只读）。
+
+    出参：``{"ok": True, "engine_version", "industry", "quote_modes", "steps",
+    "cases", "case", "case_total", "eligible_total", "notes"}``；库不可用时
+    ``{"ok": False, "error": …}``（由调用方按 503 回 —— **不回落空列表**，空列表会被
+    当成"库里没有可复用的成交案例"）。
+
+    只走报价侧取数：不转调技术工艺、也不碰既有加价链路（Spec §2.6）。
+    """
+    query = params if isinstance(params, dict) else {}
+
+    def arg(name, default=""):
+        got = query.get(name)
+        if isinstance(got, (list, tuple)):
+            got = got[0] if got else default
+        return str(got if got is not None else default).strip()
+
+    if QUICK_QUOTE_CASES_PATH != cpq_quick_quote_case.QUICK_QUOTE_CASES_PATH:  # pragma: no cover
+        return {"ok": False, "error": "快速报价案例路由常量与 cpq_quick_quote_case 不一致"}
+    include_expired = arg("include_expired", "1").lower() not in ("0", "false", "no")
+    wanted = arg("case_code")
+    try:
+        rows = cpq_quick_quote_case.load_cases(None, include_expired=include_expired)
+    except cpq_quick_quote_case.CaseLibraryUnavailable as exc:
+        return {"ok": False, "error": str(exc),
+                "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
+                "industry": cpq_quick_quote_case.INDUSTRY,
+                "quote_modes": _quick_quote_modes(),
+                "steps": _quick_quote_steps(),
+                "cases": [], "case": {}, "case_total": 0, "eligible_total": 0,
+                "notes": list(_QUICK_QUOTE_NOTES)}
+    return {
+        "ok": True,
+        "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
+        "industry": cpq_quick_quote_case.INDUSTRY,
+        "quote_modes": _quick_quote_modes(),
+        "steps": _quick_quote_steps(),
+        "cases": rows,
+        "case": cpq_quick_quote_case.find_case(wanted, cases=rows) if wanted else {},
+        "case_total": len(rows),
+        "eligible_total": len([row for row in rows if row.get("eligible")]),
+        "notes": list(_QUICK_QUOTE_NOTES),
+    }
+
+
+def _quick_quote_modes() -> list:
+    """两条报价路径（模式键 + 中文名）：键取模块常量，页面不自己造字符串。"""
+    return [{"mode": key, "label": cpq_quick_quote_case.MODE_LABELS.get(key, key)}
+            for key in cpq_quick_quote_case.QUOTE_MODES]
+
+
+def _quick_quote_steps() -> list:
+    return [{"key": key, "label": cpq_quick_quote_case.STEP_LABELS.get(key, key)}
+            for key in cpq_quick_quote_case.QUICK_QUOTE_STEPS]
 
 
 def _handle_sql_query(tool_input: dict) -> str:
@@ -3457,6 +3529,10 @@ class Handler(BaseHTTPRequestHandler):
             code = (query.get("code") or [""])[0]
             # 行业是可选参数：不传按默认行业（既有调用点行为不变）
             self._send_json(pick_product(code, (query.get("industry") or [""])[0]))
+        elif path == QUICK_QUOTE_CASES_PATH:
+            # 快速报价标准案例列表（逆向快速报价第 1 批）：只读；库不可用回 503 + 错误体。
+            payload = _handle_quick_quote_cases(parse_qs(parsed.query))
+            self._send_json(payload, 200 if payload.get("ok") else 503)
         elif path in ("/", "/index.html"):
             self._send_json({"service": "cpq-quote-agent", "steps": STEPS,
                              "hint": "工作台页面由 serve.py(:8010) 提供，本服务只出 API。"})

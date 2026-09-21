@@ -1279,6 +1279,19 @@
         <p class="greeting-subtitle">今天我能帮你做些什么？</p>
       </div>
 
+      <!-- 报价路径：精准 / 快速（逆向快速报价第 1 批，Spec §2.6）。
+           两个入口都挂在「报价」下：精准报价走既有链路，快速报价从标准成交案例出发。
+           可见行业写在按钮的 data-industries 上（取值同仓库根 cpq_industries.INDUSTRY_KEYS），
+           由下面的 syncQuoteModeEntries() 跟着行业下拉切换 —— 页面不维护第二份行业清单。
+           非包装行业不出现快速报价：标准案例库是包装案例库（cpq_quick_quote_case.INDUSTRY）。 -->
+      <div class="quote-mode-row" id="quoteModeRow" style="display:none">
+        <span class="quote-mode-label">报价路径</span>
+        <button type="button" class="quote-mode-entry" data-quote-mode="precise"
+          data-industries="packaging">精准报价</button>
+        <button type="button" class="quote-mode-entry quote-mode-entry--quick" data-quote-mode="quick"
+          data-industries="packaging">快速报价</button>
+      </div>
+
       <!-- Category Tags -->
       <div class="category-tags">
         <span class="category-tag active"><i class="ti ti-brain"></i> 报价助手</span>
@@ -1512,10 +1525,47 @@
     .pkg-quote-rows { width: 100%; border-collapse: collapse; font-size: 12px; }
     .pkg-quote-rows td { padding: 3px 6px; border-bottom: 1px solid var(--color-border, #f0f1f3); vertical-align: top; }
     .pkg-quote-empty { margin: 6px 0; font-size: 12px; color: var(--color-text-muted, #6b7280); }
+    /* 报价路径：精准 / 快速（逆向快速报价第 1 批，Spec §2.6） */
+    .quote-mode-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+    .quote-mode-label { font-size: 12px; color: var(--text-tertiary); }
+    .quote-mode-entry { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px;
+      font-size: 13px; font-weight: 600; color: var(--color-primary); background: var(--color-primary-light);
+      border: 1px solid var(--color-primary-border); border-radius: var(--radius-full); cursor: pointer;
+      transition: background var(--transition-fast); }
+    .quote-mode-entry:hover { background: #DCE9FB; }
+    .quote-mode-entry--quick { color: #FFFFFF; background: var(--color-primary);
+      border-color: var(--color-primary); }
+    .quote-mode-entry--quick:hover { background: var(--color-primary-hover); }
+    /* 快速报价面板（quick-quote-panel.js 的容器） */
+    .qq-mask { position: fixed; inset: 0; z-index: 300; background: rgba(17, 24, 39, .45);
+      display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .qq-panel { width: min(920px, 100%); max-height: 86vh; overflow: auto; background: var(--bg-card);
+      border-radius: var(--radius-lg); box-shadow: var(--shadow-md); padding: 20px 22px; }
+    .qq-head { display: flex; align-items: center; gap: 12px; }
+    .qq-title { font-size: 16px; font-weight: 700; margin: 0; }
+    .qq-modes { display: flex; gap: 6px; margin-left: auto; }
+    .qq-mode { padding: 4px 12px; font-size: 13px; border-radius: var(--radius-full);
+      border: 1px solid var(--border-color); background: var(--bg-hover); cursor: pointer; }
+    .qq-mode.is-active { color: #FFFFFF; background: var(--color-primary); border-color: var(--color-primary); }
+    .qq-close { padding: 4px 12px; font-size: 13px; border-radius: var(--radius-md);
+      border: 1px solid var(--border-color); background: var(--bg-card); cursor: pointer; }
+    .qq-intro { margin: 12px 0; font-size: 13px; color: var(--text-secondary); }
+    .qq-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
+    .qq-steps li { padding: 3px 10px; font-size: 12px; border-radius: var(--radius-full);
+      background: var(--color-primary-page); color: var(--color-primary); }
+    .qq-summary { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+    .qq-cases { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .qq-cases th, .qq-cases td { padding: 5px 8px; border-bottom: 1px solid var(--border-light); text-align: left; }
+    .qq-blocked { color: var(--color-orange, #F97316); }
+    .qq-ok { color: var(--color-green); }
+    .qq-case-blocked td { color: var(--text-tertiary); }
+    .qq-empty, .qq-error { margin: 10px 0; font-size: 13px; color: var(--color-orange, #F97316); }
+    .qq-notes { margin: 14px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-secondary); }
   </style>
   <!-- 批次 10 / ## 139：首页唯一口径模块（三页签 + 待办口径 + 卡片渲染口径），必须在业务脚本之前加载 -->
   <script src="tech-home-board.js?v=b11"></script>
   <script src="packaging-quote-panel.js?v=pqp1"></script>
+  <script src="quick-quote-panel.js?v=qqp1"></script>
   <script src="cpq_auth.js"></script>
   <script>
     // 导航展开/收起
@@ -2206,6 +2256,51 @@
       const saved = localStorage.getItem(TECH_INDUSTRY_KEY);
       if (techIndustryOptions().includes(saved)) el.value = saved;
       el.addEventListener('change', () => localStorage.setItem(TECH_INDUSTRY_KEY, el.value));
+    })();
+    /* 报价路径：精准 / 快速（逆向快速报价第 1 批，Spec §2.6）。
+       入口的可见行业写在按钮自己的 data-industries 上（取值同 cpq_industries.INDUSTRY_KEYS），
+       这里只按当前行业显示/隐藏，不新增第二份行业清单、也不替用户切行业。
+       快速报价只对包装开放 —— 标准案例库是包装案例库，其它行业点了也只会看到一条错误。 */
+    function quoteModeEntries() {
+      // 只认首页这一行：快速报价面板里也有同名的 data-quote-mode 按钮，别把它们一起隐藏。
+      return Array.prototype.slice.call(
+        document.querySelectorAll('#quoteModeRow [data-quote-mode]'));
+    }
+    function syncQuoteModeEntries() {
+      const wrap = document.getElementById('quoteModeRow');
+      if (!wrap) return;
+      const industry = techIndustry();
+      let visible = 0;
+      quoteModeEntries().forEach((el) => {
+        const allowed = (el.getAttribute('data-industries') || '')
+          .split(',').map(v => v.trim()).filter(Boolean);
+        const show = allowed.indexOf(industry) !== -1;
+        el.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+      });
+      wrap.style.display = visible ? '' : 'none';
+    }
+    function openQuickQuotePanel() {
+      if (!window.QuickQuotePanel) {
+        alert('快速报价面板未加载（quick-quote-panel.js 没取到），请刷新页面后重试。');
+        return;
+      }
+      window.QuickQuotePanel.open({
+        industry: techIndustry(),
+        // 出口：快速报价里随时能退回精准报价（同一条既有链路，不另造一条）。
+        onPrecise: () => requestNavigate('quote', (textarea && textarea.value.trim()) || ''),
+      });
+    }
+    (function initQuoteModeEntries() {
+      const industryEl = document.getElementById('techIndustry');
+      if (industryEl) industryEl.addEventListener('change', syncQuoteModeEntries);
+      syncQuoteModeEntries();
+      quoteModeEntries().forEach((el) => {
+        el.addEventListener('click', () => {
+          if (el.getAttribute('data-quote-mode') === 'quick') openQuickQuotePanel();
+          else requestNavigate('quote', (textarea && textarea.value.trim()) || '');
+        });
+      });
     })();
     // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。
     async function techCreateAndGo() {

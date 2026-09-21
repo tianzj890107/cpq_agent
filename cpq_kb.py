@@ -76,6 +76,9 @@ KB_TABLES = (
     # 缺这两张 → 走 PG 快照的 34 上它们永远是空的（kb_repo.py:928/936 在读）。
     "kb_packaging_cost_content",
     "kb_packaging_tooling_rule",
+    # 逆向快速报价（批 1）：案例库的有效期口径 / 阈值等配置，一行一个 key 的 JSON。
+    # 只能追加：前面所有表的相对顺序是快照契约（同名单测 a2 冻结）。
+    "kb_quick_quote_config",
 )
 
 # 每张表的业务主键（ON CONFLICT 的目标）。取值与 da_schema.sql 的
@@ -110,6 +113,7 @@ KB_KEYS = {
     "kb_packaging_match_weight": ("dimension",),
     "kb_packaging_cost_content": ("content_code",),
     "kb_packaging_tooling_rule": ("tooling_code",),
+    "kb_quick_quote_config": ("key",),
 }
 
 # 单项也必须写成 1-元组 ("x",)：少了那个逗号就退化成字符串，ON CONFLICT ("c","o",...)
@@ -689,6 +693,12 @@ _DDL_TEMPLATE = [
     source           text, version text, effective_from text,
     status           text NOT NULL DEFAULT 'active',
     note             text, created_at text, updated_at text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_quick_quote_config (
+    key              text PRIMARY KEY,      -- 配置块名，如 quick_quote
+    value_json       text,                  -- 该块的 JSON（缺失键由调用方按默认值补齐）
+    version          text,
+    updated_at       text
 );"""]
 
 _KB_META_DDL = (

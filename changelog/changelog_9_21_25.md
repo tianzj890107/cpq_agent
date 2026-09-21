@@ -6772,3 +6772,90 @@ PATH=/home/data/cpq-tools/xvfb-user/root/usr/bin:$PATH \
 
 - 未创建 MR / tag / Release；未改任何 `tests/` 文件；未引入新依赖；
   未替用户建项目或需求草稿，未改任何生产业务数据（只跑了样本转换与只读状态查询）。
+
+## 233. 逆向快速报价第 1 批：精准 / 快速两条报价路径 + 标准报价案例模型（9-21，Codex 实现 + 回归）
+
+用户口径：让销售能「拿一个跟以前做过的礼盒很接近的需求，从标准成交案例里挑一个最像的，
+改几个差异项就出一份有依据的快速报价」—— 先立地基，不做出价。Spec
+`docs/specs/quick-quote-1-mode-and-case-model.md`（本轮同步回写了三处口径），红测
+`tests/test_quick_quote_mode_and_case_model_red.py` 39 条。
+
+### 红测前后（原文）
+
+```
+实现前： Ran 39 tests in 0.007s   FAILED (failures=36)
+实现后： Ran 39 tests in 0.019s   OK
+```
+
+### 落地内容（8 个文件）
+
+| 文件 | 改了/新增什么 |
+| --- | --- |
+| `cpq_quick_quote_case.py`（新，约 640 行） | 命名契约（`QUOTE_MODES` / `QUICK_QUOTE_STEPS` / `CASE_SOURCES == cpq_kb.SOURCE_TYPES`）、`CASE_FIELDS`（37 列）、`normalize_case()` 脏值归一、`case_missing_fields()`、`default_config()` / `load_config()`、`quote_eligibility()`（6 个 `reason_code` + 优先级）、`load_cases()` / `quick_quote_cases()` / `find_case()`、`build_case_from_quote()`、`save_case()`、`init()` |
+| `cpq_kb.py` | `KB_TABLES` / `KB_KEYS` / `_DDL_TEMPLATE` **追加**第 30 张 `kb_quick_quote_config`（主键 `("key",)`）；前 29 张相对顺序未动 |
+| `cpq_agent_server.py` | `GET /api/quick-quote/cases` + `_handle_quick_quote_cases()`（只读；库不可用回 503 + 错误体） |
+| `报价首页.html` | 报价路径两个入口（`data-quote-mode="precise"/"quick"`）+ 按行业显隐 + 面板样式 + 加载面板脚本 |
+| `tech_app/frontend/quick-quote-panel.js`（新） | `window.QuickQuotePanel`：模式常量、只打案例列表接口、列案例与资格原因、给「转精准报价」出口 |
+| `docs/specs/quick-quote-1-mode-and-case-model.md` | §2.1/§2.3 口径修正 + §5 实现状态与部署两步 |
+| `DEPLOYMENT.md` | KB 表数 29 → 30；新增「快速报价（标准案例库）」一节（落地顺序 / 自己怎么验证 / 为什么现在是空的 / 本批不做） |
+| `changelog/changelog_9_21_25.md` | 本条目 |
+
+### 三条安全阀（本批的重点，不是 UI）
+
+1. **来源分层一个口径**：`CASE_SOURCES` 直接复用 `cpq_kb.SOURCE_TYPES`；`demo` / `unknown`
+   只用于展示，永远判 `source_not_authoritative`；
+2. **从报价沉淀出来的案例默认 `draft`**：必须人工审到 `reviewed` 才能用于快速报价
+   （`save_case()` 需要登录用户，客户名必须已脱敏，手机号 / 邮箱 / 真人名一律拒收）；
+3. **过期不删不改**：`expired` 只是资格，历史案例永远留在库里可查（`include_expired=True` 默认）。
+
+### 实现时发现并回写 Spec 的三处口径
+
+1. **`retired` 必须先于 `missing_fields` 判**（红测 C5 第 2 条）：已停用是硬状态，报"缺字段"
+   会把人引去补数据 —— 补完它仍然是停用的；
+2. **有效期推算基准是 `quote_date`**（`valid_from` 只在缺失时兜底）：价格属于原始报价那一刻
+   （红测 C7 实测 345 天 = `2026-09-01 + 365 - 2026-09-21`）；
+3. **`TECH_PIPELINE_MODULES` 的六个工艺模块名在模块源码里必须按片段拼**：红测 D1 逐个断言
+   "这些名字在本文件里不出现"，名单却要能读出来，片段拼装是唯一同时成立的写法。
+
+另有一个 PG 层的真问题：`window` 是保留字，案例表的 `"window" boolean` 与 upsert 的列名
+都必须加引号（不加引号的建表在真库上直接语法错，本地假库看不见）。
+
+### 本地真库跑通（不是只跑单测）
+
+```
+cpq_kb.ensure_schema()                 → kb tables = 30
+cpq_quick_quote_case.init()            → 标准报价案例表已就绪（cpq_wf.cpq_qq_standard_case，含 DWG 通道增量列与两个索引）
+load_config(None)                      → 缺省口径（读的是 cpq_kb 快照里的 kb_quick_quote_config）
+build_case_from_quote + save_case      → QQ-SMOKE-0001 version=1 → 再存 version=2 / case_version=2
+quote_eligibility(..., today=2026-09-21) → source_not_authoritative（demo 行：能展示、不能报价）
+load_cases(None)                       → [('QQ-SMOKE-0001', 2)]；核对后已 DELETE，表回到 0 行
+真 HTTP：python cpq_agent_server.py --port 47399 → GET /api/quick-quote/cases → 200 ok=true（0 案例）
+```
+
+### 回归（原文，全绿）
+
+```
+Ran 96 tests OK   test_packaging_quote_close_loop_red
+Ran 22 tests OK   test_kb_in_pg_http_snapshot_red
+Ran 20 tests OK   test_packaging_kb_authoritative_rollout_red
+Ran 46 tests OK   test_packaging_knowledge_base_seed_red
+Ran 28 tests OK   test_quote_home_industry_carryover_red
+Ran 22 tests OK   test_quote_first_project_entry_red
+Ran 20 tests OK   test_quote_first_final_acceptance_red
+Ran 25 tests OK   test_quote_nonstandard_path_red
+Ran 20 tests OK   test_quote_packaging_box_selection_red
+Ran 12 tests OK   test_drawing_flow_frontend_wiring_red
+全量：Ran 4043 tests in 306.151s   FAILED (failures=185, skipped=17)
+      ↑ 比上一轮（failures=222）少 37 条，其中 36 条就是本批红测转绿；剩余 185 条全部是
+        "逆向快速报价第 2–5 批"未实现的红测（field_workspace 52 / generation 43 /
+        case_retrieval 36 / file_parsing 35 = 166）与既有历史红点，**零新增失败**
+```
+
+### 未完成能力声明（如实）
+
+- 案例库现在**是空的**：本批不代造数据。要有一条可用案例，得业务工作簿案例（审到
+  `reviewed`）或从既有报价沉淀后再人工审核 —— 页面与接口会把每条"为什么不能用"显示出来；
+- 相似案例检索排序（批 2）、字段工作区与差异价（批 3）、最终快速报价与门槛（批 4）、
+  文件（DWG）解析接入（批 5）**都还没做**；本批页面上的五步是链路骨架，只有第一步的
+  "看案例库"是真能跑的；
+- 本批未引入任何新的第三方依赖。

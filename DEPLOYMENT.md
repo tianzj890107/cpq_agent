@@ -366,7 +366,8 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 而部署文档从没写过这段——既然没写，漏做就没人在部署时发现。**本节补齐这一环。**
 
 口径：`cpq_kb` 是包装知识库的唯一事实源，建表、版本号、快照、导入都在 `cpq_kb.py`
-（DDL 与 `tech_app/backend/storage/da_schema.sql` 的 `kb_*` 定义 1:1，共 **29** 张表）。
+（DDL 与 `tech_app/backend/storage/da_schema.sql` 的 `kb_*` 定义 1:1，共 **30** 张表 ——
+9-21 追加第 30 张 `kb_quick_quote_config`，见「快速报价（标准案例库）」一节）。
 技术工艺（8012）不直连 PG，只读快照；`kb_version` 是快照失效的唯一依据。
 
 ### 落地顺序（在能连到 PG 的机器上执行）
@@ -531,3 +532,57 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 > 声明边界：只有 `go_no_go` 返回 `go` **且**金标人工审批通过，才允许把
 > 「包装行业 DWG 支持完成」写进对外说明；否则一律按 `DWG 编排能力完成，真实转换能力未验收`
 > 如实声明，并在 `blockers` 里列全未完成项，不许用"跳过该项"凑 go。
+
+## 快速报价（标准案例库）
+
+逆向快速报价的**唯一事实源**是两张表：案例表 `cpq_wf.cpq_qq_standard_case`（报价侧，与
+`cpq_wf_*` 同 schema）与配置表 `cpq_kb.kb_quick_quote_config`（知识库侧，`key` / `value_json` /
+`version` / `updated_at`）。建表都是幂等的，可以反复执行；**少任何一张，接口都会明确报错**
+（`CaseLibraryUnavailable`），不会回落成"库里没有案例"。
+
+口径与代码位置：`cpq_quick_quote_case.py`（模型 / 准入 / 取数），
+Spec `docs/specs/quick-quote-1-mode-and-case-model.md`。
+
+### 落地顺序（在能连到 PG 的机器上执行）
+
+```bash
+# ① 知识库侧：建 kb_quick_quote_config（第 30 张 kb_* 表；幂等）
+./open-claude/.venv/bin/python -c "import cpq_kb; cpq_kb.ensure_schema(); print('kb tables', len(cpq_kb.KB_TABLES))"
+
+# ② 报价侧：建案例表 + 索引 + DWG 通道增量列（幂等，须在 cpq_auth.init() 之后）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as q; print(q.init())"
+```
+
+### 怎么验证通了（不看人，自己跑）
+
+```bash
+# ③ 配置读得到（读的就是 cpq_kb 快照里的 kb_quick_quote_config）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as q; print(q.load_config(None))"
+
+# ④ 案例清单接口（8010 上的报价助手，注意是 /agents/quote 前缀）
+curl -s -H "X-Internal-Token: $CPQ_INTERNAL_TOKEN" \
+  http://127.0.0.1:8010/agents/quote/api/quick-quote/cases | head -c 400
+
+# ⑤ 页面上：报价首页 → 行业选「包装」→ 出现「精准报价 / 快速报价」两个入口，
+#    点「快速报价」弹出面板，里面是案例清单与每条的可用性 + 原因。
+#    非包装行业不显示快速报价入口（标准案例库是包装案例库）。
+```
+
+### 现在是空的，为什么，以及怎么变成可用
+
+案例库建出来是 **0 行**：本批不代造数据。要让某个案例能用于快速报价，必须同时满足
+
+1. **来源权威**：`source_type IN ('workbook','dwg_confirmed')` —— 演示数据（`demo`）与未分类
+   数据（`unknown`）在页面上照常显示，但永远判"来源不权威"，不能用；
+2. **人工审核过**：`review_status = 'reviewed'` —— 从报价沉淀出来的案例默认是 `draft`，
+   必须人工审（`save_case()` 需要登录用户，客户名必须已脱敏，手机号/邮箱/真人名一律拒收）；
+3. **在有效期内**：显式 `valid_until` 优先，否则 `quote_date + 天数`（工作簿 365 天 /
+   DWG 实样 180 天 / 演示 0 天 = 当天即过期）。
+
+接口与页面都会把"为什么这条不能用"原样显示出来（`reason_code` + 中文原因），
+所以"库里有像的案例但不能用"是可见的，不会假装没有案例。
+
+### 本批不做（后续批次）
+
+相似案例检索排序、字段工作区与差异价、最终快速报价与门槛、文件（DWG）解析接入分别是
+批 2–5；本批只把两条报价路径分开并立住案例模型与准入口径。

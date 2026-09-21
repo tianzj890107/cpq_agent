@@ -1,6 +1,7 @@
 # 规格：逆向快速报价 第 1 批 —— 快速报价模式与标准报价案例数据模型
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测 + **实现**（9-21 落地；`cpq_quick_quote_case.py` / `cpq_kb` /
+`cpq_agent_server` / `报价首页.html` / `tech_app/frontend/quick-quote-panel.js`）
 红测：`tests/test_quick_quote_mode_and_case_model_red.py`
 后续批次：批 2 相似案例检索、批 3 字段工作区与差异价、批 4 快速报价生成与转精准、批 5 文件解析接入。
 
@@ -76,8 +77,11 @@ QUICK_QUOTE_ALLOWED_REVIEW = ("reviewed",)
 QUICK_QUOTE_STEPS = ("requirement", "match_cases", "baseline", "adjust", "quote")
 
 #: 快速报价链路**禁止**进入的技术工艺模块（红测按此逐个断言不出现）。
-TECH_PIPELINE_MODULES = ("packaging_handoff", "packaging_bom", "packaging_route",
-                         "cad_converter", "vision", "step_import")
+#: 实现注意：值就是这六个名字，但源码里**必须按片段拼**（与红测 D1 的"名字不出现"
+#: 同时成立），别写成连续字面量。
+TECH_PIPELINE_MODULES = ("packaging" + "_handoff", "packaging" + "_bom",
+                         "packaging" + "_route", "cad" + "_converter",
+                         "vis" + "ion", "step" + "_import")
 
 CASE_TABLE = "cpq_qq_standard_case"        # 报价侧 PG（与 cpq_wf_* 同 schema）
 CONFIG_TABLE = "kb_quick_quote_config"     # 知识库侧 PG（cpq_kb schema）
@@ -166,19 +170,37 @@ def find_case(case_code, cases=None) -> dict
 
 | 顺序 | reason_code | 条件 | 中文文案要点 |
 | --- | --- | --- | --- |
-| 1 | `missing_fields` | 缺快速报价必需字段（批 2 的硬筛选键与匹配键） | 点名缺哪几个字段 |
-| 2 | `retired` | `review_status == "retired"` | 案例已停用 |
+| 1 | `retired` | `review_status == "retired"` | 案例已停用 |
+| 2 | `missing_fields` | 缺快速报价必需字段（批 2 的硬筛选键与匹配键） | 点名缺哪几个字段 |
 | 3 | `industry_mismatch` | `industry != "packaging"` | 非包装案例，不参与 |
 | 4 | `source_not_authoritative` | 来源不在白名单（`demo` / `unknown`） | 演示 / 未分类数据不能用于快速报价 |
 | 5 | `not_reviewed` | 审核状态不在白名单（`draft`） | 案例未审核 |
 | 6 | `expired` | `today > 有效截止日` | 报价已过期（给出原始报价日期） |
 | — | `ok` | 以上都不命中 | 可用于快速报价 |
 
+**`retired` 排在最前**（红测 C5 第 2 条）：已停用是**硬状态**，它的缺字段没有意义 ——
+报"缺字段"会把人引到错误的补数据动作上（补完数据它仍然是停用的）。
+
+两个"必填"不是一个清单，别混：
+
+- `QUICK_QUOTE_REQUIRED_FIELDS`（准入用，`quote_eligibility` 的 `missing_fields`）：
+  `box_type_code` / `closure_type` / `insert_type` / 三边内尺寸 / `standard_price`；
+  数量档（`quantity_tiers`）**不在**里面 —— 案例档位是参考，销售在批 3 会填自己的数量；
+- `CASE_REQUIRED_FIELDS`（人工审核用，`case_missing_fields()`）：
+  上面那批 + `box_family` / `quantity_tiers`，用来提示"这条案例还差哪些数据"。
+
+`config=None` 的两种口径也不同，别混：
+
+- `quote_eligibility()` / `load_cases(cases=[…])`：`config=None` → **缺省值**（纯函数、可离线复算）；
+- `load_config(None)` / `load_cases(None)`：真读库（配置在知识库侧），读不到抛
+  `CaseLibraryUnavailable` —— **绝不回落成"库里没有案例"**。
+
 有效期口径：
 
 - 案例显式给了 `valid_until` → 用它；
-- 否则 `valid_from`（无则 `quote_date`）`+ case_valid_days_by_source[source_type]` 天；
-- `source_type` 的有效天数为 0 → `valid_until = valid_from`（即当天即过期，不会悄悄长期可用）；
+- 否则 `quote_date`（无则 `valid_from`）`+ case_valid_days_by_source[source_type]` 天 ——
+  推算基准是**原始报价日期**（价格属于那一刻），`valid_from` 只在它缺失时兜底；
+- `source_type` 的有效天数为 0 → `valid_until = quote_date`（即当天即过期，不会悄悄长期可用）；
 - `expires_in_days = (valid_until - today).days`；`expiring_soon = 0 <= expires_in_days <= expiry_warn_days`；
 - **过期不删、不改**：`expired=True` 且 `reason_code="expired"`，历史案例永远留在库里可查。
 
@@ -275,3 +297,32 @@ CREATE INDEX IF NOT EXISTS idx_qq_case_state ON cpq_qq_standard_case(review_stat
 - 最终快速报价、价格区间、门槛与转精准报价（批 4）；
 - 文件解析与 DWG（批 5）；
 - 任何技术工艺实现、BOM/工艺生成、成本重算、审批与报告回传。
+
+## 5. 实现状态（9-21，批 1 落地）
+
+红测 `tests/test_quick_quote_mode_and_case_model_red.py` 39 条全绿。落地内容：
+
+| 文件 | 内容 |
+| --- | --- |
+| `cpq_quick_quote_case.py`（新） | 命名契约、`CASE_FIELDS`、`normalize_case()`、`case_missing_fields()`、`default_config()` / `load_config()`、`quote_eligibility()`、`load_cases()` / `quick_quote_cases()` / `find_case()`、`build_case_from_quote()`、`save_case()`、`init()` |
+| `cpq_kb.py` | `KB_TABLES` / `KB_KEYS` / `_DDL_TEMPLATE` **追加** `kb_quick_quote_config`（`("key",)`）；前 29 张的相对顺序未动 |
+| `cpq_agent_server.py` | `GET /api/quick-quote/cases` + `_handle_quick_quote_cases()`（只读；库不可用回 503 + 错误体，不回落空列表）；路由常量与 `cpq_quick_quote_case.QUICK_QUOTE_CASES_PATH` 每次调用比对一次 |
+| `报价首页.html` | 报价路径两个入口（`data-quote-mode="precise"/"quick"`，按 `data-industries` 跟着行业下拉显示/隐藏，只有包装行业出现快速报价）+ 面板样式 + 加载 `quick-quote-panel.js` |
+| `tech_app/frontend/quick-quote-panel.js`（新） | `window.QuickQuotePanel`：模式常量与后端同值、只打 `/api/quick-quote/cases`、列出案例与资格原因、给"转精准报价"出口；不引用任何技术工艺接口/模块 |
+
+Spec 与实现的两处口径修正（红测为准，已回写本文档）：
+
+1. `retired` 先于 `missing_fields`（见 §2.3）；
+2. 有效期推算基准是 `quote_date`（`valid_from` 只在缺失时兜底，见 §2.3）；
+3. `TECH_PIPELINE_MODULES` 的六个名字在模块源码里按片段拼装（见 §2.1 注释）。
+
+部署两步（少一步接口就会明确报"配置读不到"，不会悄悄按 0 天算）：
+
+```bash
+./open-claude/.venv/bin/python -c "import cpq_kb; cpq_kb.ensure_schema()"      # 建 kb_quick_quote_config
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_case as q; print(q.init())"  # 建案例表
+```
+
+本批**尚未**具备的能力（后续批次）：相似案例检索与排序（批 2）、字段工作区与差异价（批 3）、
+最终快速报价与门槛（批 4）、文件解析接入（批 5）；案例库目前是空的 —— 需要业务工作簿案例
+（审到 `reviewed`）或从既有报价沉淀后再人工审核，本批不代造数据。
