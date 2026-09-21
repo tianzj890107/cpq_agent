@@ -4378,3 +4378,43 @@ products_row: {"成品编码": "BOX-A"}   # 盒型编码写进产品行，可追
   不伪装空库。
 - 未做：真实盒型库数据验证（依赖部署环境 `cpq_kb` 快照）、工艺回传真实端到端联调。
 - 未提交、未推送、未创建 MR/tag/Release、未部署、未重启服务、未改服务器配置；未引入新依赖。
+
+---
+
+## 199. 补记非标路径治理与包装选品接盒型库（## 195–198）的提交与双远端推送（9-21，Codex）
+
+### 提交
+
+- `e1ef784` 「非标路径治理 + 包装选品接盒型库（## 195–198）」，
+  15 个文件、+3248 / −13：
+  - 实现：`cpq_match.py`（+66）、`cpq_packaging_match.py`（新增 368 行）、
+    `cpq_agent_server.py`（+237）、`cpq_tech_bridge.py`（+3）、`确认需求解析结果.html`（+237）、
+    `cpq_industries.py`（+52，## 196 的 A 档行业提示）
+  - Spec：`quote-industry-mismatch-notice.md`、`quote-markup-gate-advice.md`、
+    `quote-nonstandard-path.md`、`quote-packaging-box-library-selection.md`
+  - 红测：`test_quote_industry_mismatch_notice_red.py`（266 行）、
+    `test_quote_markup_gate_advice_red.py`（197 行）、`test_quote_nonstandard_path_red.py`（340 行）、
+    `test_quote_packaging_box_selection_red.py`（527 行）
+  - changelog：## 195–198 各节
+
+### 推送（双远端，回读校验）
+
+```
+local  : e1ef784e41f1af7214d588650f8adbcad529511b
+gitlab : e1ef784e41f1af7214d588650f8adbcad529511b
+github : e1ef784e41f1af7214d588650f8adbcad529511b
+```
+
+`gitlab`（上游跟踪分支）`67f4cb3..e1ef784` 4.9s 完成；`origin`（GitHub）首次尝试在协议层
+静默卡住约 9 分钟——`git push` 与子进程 `ssh` 的 CPU 时间均约 0.01s、TCP 连接 ESTABLISHED
+但无数据流动，判定为瞬时网络故障后中止重试，第二次 6s 成功。推送后三方 SHA 一致。
+
+- 更正 ## 195 / ## 196 / ## 197 / ## 198 各节的「未提交、未推送」表述：
+  **本批实现已提交并推送**（Spec 与红测一并入库，未按「Spec + 红测」单独另提）。
+- 未创建 MR / tag / Release，未部署、未重启服务、未改服务器配置；未新增依赖。
+
+### 未纳入本次提交
+
+- `裕同包装项目-待开发/`：内含 `酒盒.dwg` / `圆盘盒.dwg` 真实客户图纸与
+  `报价逻辑-0903.xlsx`、`成本测算明细.xlsx` 等业务表格，按既有约定（见 ## 153）
+  一律只读、不纳入提交；本批未改动其中任何文件。
