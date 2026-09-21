@@ -437,11 +437,19 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
     aggregate = [AGGREGATE_STEP] if any(item["step_name"] == AGGREGATE_STEP
                                         for item in steps) else []
     needs_time = [item["step_name"] for item in steps if item["needs_standard_time"]]
+    from tech_app.backend.services import packaging_bom as _bom_mod
+    bom = _bom_mod.load_bom(project_id, req_no)
     return {
         "built": True,
         "box_type_code": _text(row.get("box_type_code")),
         "requirement_no": req_no,
         "engine_version": _text(row.get("engine_version")) or ENGINE_VERSION,
+        # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：路线必须带出它基于哪一版 BOM 排的。
+        "source_versions": {
+            "bom_version": _text(bom.get("generated_at")),
+            "engine_version": _text(bom.get("engine_version")),
+            "box_type_code": _text(bom.get("box_type_code")),
+        },
         "generated_at": _text(row.get("generated_at")),
         "status": _text(row.get("status")) or "draft",
         "confirmed_by": row.get("confirmed_by") or None,

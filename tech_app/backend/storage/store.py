@@ -562,7 +562,9 @@ def load_cad_ir(project_id: str) -> Optional[dict]:
 
 # 2.1 图纸解析这一步产出的全部东西。「本次任务从头开始」清的就是这一串。
 PARSE_STAGE_DOCS = (
-    "ir", "cad_ir", "drawing_analysis", "verification_report", "model_lookup",
+    "ir", "cad_ir", "packaging_drawing_flow", "packaging_flow_anchor",
+    "packaging_downstream_stale",
+    "drawing_analysis", "verification_report", "model_lookup",
     "component_match", "component_match_unavailable",
     "geometry", "drawings",
     "process", "cost", "process_lookup", "cost_lookup", "ai_results",

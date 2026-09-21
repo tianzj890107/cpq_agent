@@ -75,6 +75,7 @@ from .services import (
     packaging_match,
     packaging_bom,
     packaging_cost,
+    packaging_drawing_flow,
     packaging_handoff,
     packaging_route,
     process, product_params, production, requirement_extract, requirement_service,
@@ -6633,6 +6634,59 @@ def get_requirement_packaging_cost_curve(pid: str, requirement_no: str = "",
     _workflow_project(pid)
     curve = _packaging_cost_flow(packaging_cost.cost_curve, pid, requirement_no)
     return {"curve": curve}
+
+
+# --------------------------------------------------------------------------- #
+# 图纸解析会话链路（DWG 支持第 5 批，Spec docs/specs/dwg-semantics-agent-flow.md §8）
+# 两条路由：读链路状态 / 门禁 / stale（登录即可）；跑链路或就地重试单步（会话写角色）。
+# 两条都用 {pid} 占位（Spec §8 的路径模板写的就是 {id}）：{project_id} 是两条冻结守卫
+# （project_access.CONTRIBUTE_ROUTES 恰好 21 条、路由快照）识别的项目级路由前缀，
+# 用 {pid} 才能既不顶掉这两条基线、也不改变运行期语义 —— 项目 ACL 守卫按**具体** 12 位
+# 项目号匹配 URL，与占位符叫什么无关。
+# --------------------------------------------------------------------------- #
+class DrawingFlowRunAction(BaseModel):
+    """跑链路 / 就地重试单步的请求体（step_id 为空则跑整条链）。"""
+
+    step_id: str = ""
+    retry_of: str = ""
+    prompt: str = ""
+
+
+def _drawing_flow_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except packaging_drawing_flow.DrawingFlowError as exc:
+        raise HTTPException(exc.http_status, exc.message) from exc
+
+
+@app.get("/api/projects/{pid}/drawing-flow")
+def get_packaging_drawing_flow_state(pid: str, stage: str = "",
+                                     user: dict = Depends(current_user)):
+    """读图纸解析链路状态、门禁结论与 stale 标注；纯读不判写权限。"""
+    _workflow_project(pid)
+    return {
+        "flow": packaging_drawing_flow.flow_state(pid),
+        "gates": packaging_drawing_flow.gates(pid, stage=stage),
+        "stale": packaging_drawing_flow.stale_view(pid),
+        "inheritance": packaging_drawing_flow.inheritance(pid),
+    }
+
+
+@app.post("/api/projects/{pid}/drawing-flow/run")
+def run_packaging_drawing_flow(
+    pid: str, body: DrawingFlowRunAction = Body(default=DrawingFlowRunAction()),
+    user: dict = Depends(current_user),
+):
+    """跑整条链路，或按 retry_of 就地重试单步（并继续跑完剩余 pending 步）。"""
+    _require(user, auth.SESSION_WRITE_ROLES, "需要工程师及以上权限")
+    _workflow_project(pid)
+    actor = str(user.get("username") or "system")
+    if body.step_id:
+        step = _drawing_flow_call(packaging_drawing_flow.run_step, pid,
+                                  body.step_id, actor=actor, retry_of=body.retry_of)
+        return {"step": step, "flow": packaging_drawing_flow.flow_state(pid)}
+    return {"flow": _drawing_flow_call(packaging_drawing_flow.run_flow, pid,
+                                       prompt=body.prompt, actor=actor)}
 
 
 # --------------------------------------------------------------------------- #

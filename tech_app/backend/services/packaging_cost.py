@@ -1834,16 +1834,34 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     """读回成本测算 + 24 类别 + 10 分组 + 缺口；没算过时 `built=false`，不报错。"""
     req_no = _resolve_requirement_no(project_id, requirement_no)
     row = da_repo.load_packaging_cost(project_id, req_no, _text(scenario))
+    upstream = _upstream_route_version(project_id, req_no)
     if not row:
         return {"built": False, "project_id": project_id, "requirement_no": req_no,
                 "scenario_code": _text(scenario) or "default", "engine_version": ENGINE_VERSION,
+                "source_versions": {"route_version": upstream, "engine_version": ENGINE_VERSION},
                 "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
                 "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
                 "report_groups": {name: 0.0 for name in REPORT_GROUPS},
                 "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,
                 "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0}
     items = da_repo.load_packaging_cost_items(row["estimate_id"])
-    return _rehydrate(row, items)
+    result = _rehydrate(row, items)
+    # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：成本必须带出它照着哪一版确认路线算的。
+    result["source_versions"] = {"route_version": upstream, "engine_version": ENGINE_VERSION}
+    return result
+
+
+def _upstream_route_version(project_id: str, requirement_no: str) -> str:
+    """成本照着哪一版确认路线算的；读不到就空串，绝不现编。"""
+    try:
+        from tech_app.backend.services import packaging_route as _route_mod
+        versions = _route_mod.route_versions(project_id, requirement_no) or []
+    except Exception:
+        return ""
+    if not versions:
+        return ""
+    latest = versions[-1] if isinstance(versions[-1], dict) else {}
+    return str(latest.get("version") or "")
 
 
 def cost_items(estimate_id: str) -> list:

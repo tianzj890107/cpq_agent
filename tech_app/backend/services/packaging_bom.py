@@ -555,11 +555,19 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
                 and _text(item.get("material"))):
             material_unresolved.append(_text(item.get("item_key")))
     generated_at = _text(items[0].get("generated_at")) if items else ""
+    box_record = da_repo.load_box_match(project_id, req_no) or {}
     return {
         "built": bool(items),
         "box_type_code": box_type_code,
         "requirement_no": req_no,
         "engine_version": ENGINE_VERSION,
+        # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：BOM 必须带出它是基于哪一版盒型确认算的。
+        "source_versions": {
+            "box_type_code": _text(box_record.get("confirmed_box_type")) or box_type_code,
+            "engine_version": _text(box_record.get("engine_version")),
+            "confirmed_by": _text(box_record.get("confirmed_by")),
+            "confirmed_at": _text(box_record.get("confirmed_at")),
+        },
         "generated_at": generated_at,
         "items": items,
         "gaps": {

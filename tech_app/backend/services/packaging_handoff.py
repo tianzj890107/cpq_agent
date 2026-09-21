@@ -200,7 +200,37 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
         "formulas": formulas,
         "source": source,
     }
+    publish_gate = _publish_gate(pid, package, cost)
+    package.update(publish_gate)
     return package
+
+
+def _publish_gate(pid: str, package: dict, cost: dict) -> dict:
+    """正式报价闸门 + 版本六元组（DWG 第 5 批 Spec §5.4/§6.1，只追加键）。
+
+    只在交接包里**读出结论**，不硬拦 `send_to_quote`（那一步的语义是"进入定价"，
+    是草稿）；正式报价单的闸门由报价侧按 `publishable` 判。
+    """
+    gates_brief: dict = {}
+    source_versions: dict = {}
+    try:
+        from tech_app.backend.services import packaging_drawing_flow as _flow
+        stages = (_flow.gates(pid).get("stages") or {})
+        for stage in ("quote_draft", "quote_publish"):
+            row = stages.get(stage) or {}
+            gates_brief[stage] = {"status": _text(row.get("status")),
+                                  "blocking": list(row.get("blocking") or [])}
+        source_versions = _flow.inheritance(pid).get("source_versions") or {}
+    except Exception:
+        gates_brief = {}
+    try:
+        policy = packaging_cost.minimum_charge_policy()
+    except Exception:
+        policy = {}
+    return {"publishable": _text((gates_brief.get("quote_publish") or {}).get("status")) == "open",
+            "gates": gates_brief,
+            "minimum_charge_policy": policy if isinstance(policy, dict) else {},
+            "source_versions": source_versions if isinstance(source_versions, dict) else {}}
 
 
 def _formulas_of(cost: dict) -> List[dict]:
