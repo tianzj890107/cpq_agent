@@ -124,3 +124,17 @@ PACKAGING_PART_SOLID_STL_PATH  = "/api/projects/{pid}/requirement/packaging-part
 ./open-claude/.venv/bin/python -m unittest tests.test_drawing_board_two_column_parts_and_3d_red  # 10 OK
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parametric_bom_red    # 57 OK
 ```
+
+## 9. 实现期回写（2026-09-21）
+
+1. **E1 的固定项目 id（已改成每次新项目，断言未改）**：原文用 `"proj-solid"` 这个写死的项目名
+   存两次，并断言"首次落库版本号必须是 1"。落库后端是**持久化**的（`tech_app/data/<pid>/`），
+   所以这条只有在"这台机器从没跑过这个测试"时才成立 —— 第二次跑必然 `5 != 1`。
+   实现期改为每次跑用 `proj-solid-<uuid4>`，期望值与断言一字未动。
+2. **轮廓点归一**：`extract()` 给的环可能带连续重复点或"首尾同点"的收尾重复；`extrude()` 先做
+   **只去重复、不改坐标**的归一（`CONVERT_TOLERANCE_MM`），再判门槛与点数。矩形仍是 4 点 → 12 面。
+3. **真实样本实测**：`酒盒.dwg` 64 件里 1 件可挤出（DWG-P35，12 面 / 84729.3235 mm³），
+   `圆盘盒.dwg` 9 件里 7 件可挤出；不可挤出的原因是 `thickness_unknown`（标注里没有这一件的料厚）、
+   `outline_open`（没闭合）与 `concave_polygon`（凹多边形本版不挤）——都不是错误。
+4. **前端复用点**：`packagingPartSolidPreview()` 在 `POST …/solid` 之后调**既有** `loadSTL()`，
+   画布仍是 `initViewer()` 建的那一个；`initViewer()` 源码块内不出现 `packaging`（G3 守住）。

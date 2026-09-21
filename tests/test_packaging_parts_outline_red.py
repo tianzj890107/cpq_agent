@@ -172,8 +172,11 @@ class BChainClosure(OutlineCase):
         entities = _rect("ent:model:R", 0.0, 0.0, 100.0, 50.0)
         broken = list(entities)
         last = dict(broken[-1])
-        last["attributes"] = {"start": [0.0, 0.0], "end": [0.4, 0.0]}
-        last["bbox"] = [0.0, 0.0, 0.4, 0.0]
+        # 夹具修正（实现期，断言未改）：`_rect` 的第 4 条边是 (0,50)->(0,0)，"端点差 0.4mm"
+        # 只能是把它改成 (0,50)->(0.4,0)；原写法写成 (0,0)->(0.4,0)，那一刻起第 4 条边就不再
+        # 连接 D(0,50)，环永远合不上（与本用例注释自相矛盾，任何实现都过不了）。
+        last["attributes"] = {"start": [0.0, 50.0], "end": [0.4, 0.0]}
+        last["bbox"] = [0.0, 0.0, 0.4, 50.0]
         broken[-1] = last
         doc = self.extract(_ir(broken, [_component("cmp:1", broken)]))
         self.assertEqual(self.part(doc)["outline_status"], "closed",
@@ -216,9 +219,13 @@ class CLargestLoop(OutlineCase):
 # --------------------------------------------------------------------------- #
 class DDegrade(OutlineCase):
     def test_d1_open_component_says_so(self):
+        # 夹具修正（实现期，断言未改）：原三条线**共线**（bbox 高度 0 → 分量面积 0），
+        # 会被 `area_under_min` 正确挡掉，零件根本不存在；而 extraction_red H1 明确要求
+        # "每件 unfolded_width_mm > 0"，即退化件不许当零件。这里给三条线各自的高度，
+        # 让它表达本用例真正要测的东西：**互不相接**（求不出环 → 显式降级）。
         entities = [_line("ent:model:A", (0.0, 0.0), (100.0, 0.0)),
-                    _line("ent:model:B", (200.0, 0.0), (300.0, 0.0)),
-                    _line("ent:model:C", (400.0, 0.0), (500.0, 0.0))]
+                    _line("ent:model:B", (200.0, 0.0), (300.0, 40.0)),
+                    _line("ent:model:C", (400.0, 0.0), (500.0, 60.0))]
         doc = self.extract(_ir(entities, [_component("cmp:1", entities)]))
         row = self.part(doc)
         self.assertEqual(row["outline_status"], "open")

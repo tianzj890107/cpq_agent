@@ -147,3 +147,28 @@ SIZE_SOURCES = ("closed_outline", "component_bbox", "dwg_outline")
 - 第 2 层（能点）画轮廓用 `outline.points`；无轮廓时必须按 `outline_reason` 给不同文案。
 - 第 3 层（能算）拿 `area_mm2`（环面积）与 `outline.entity_ids` 推材料/厚度；`open` 件必须**拒绝**跑工艺。
 - 第 4 层（3D）只对 `outline_status == "closed"` 且厚度已知的件挤出；其余标 `unsupported`。
+
+## 9. 实现期回写（2026-09-21，Codex；本节只记录"实现时发现的、与本 Spec 原文不一致的地方"）
+
+1. **`attributes.fit_points` 的语义变了**（§2）：原文要"SPLINE 至少落 `attributes.fit_points` 的坐标"，
+   而 `fit_points` 原本是**数量**（`parser.py:314`）。实现按 §2 把它改成坐标序列，数量挪到**新增键**
+   `fit_points_count`（旧信息不丢）。`dxf_cad_ir_red` 46 OK 未回退。
+2. **`size_source` 的第四种情形**（§3 表格之外，必须写下来）：
+   §3 只说"无环 → `component_bbox`"，但 **IR 里一条可用坐标都没有**的分量（示例：既有夹具
+   `tests/fixtures/cad_ir/parts_panels.json`，全 21 条 LINE 的 `attributes` 都是空 `{}`）**连环都求不了**，
+   对它标 `component_bbox` 会与既有红测 `test_packaging_parts_extraction_red.py:245`
+   （`size_source == "dwg_outline"`，本层不许回退）直接冲突。实现取：
+   **有坐标但求不出环 → `component_bbox`；没有任何可用坐标 → `dwg_outline`**（尺寸数值两情形都是分量 bbox，
+   与"沿用今天口径"一致）。红测 A2 只要求 `size_source ∈ SIZE_SOURCES`，D1 走 `component_bbox`，两侧都满足。
+3. **本层红测的两处夹具笔误已修正（断言一字未改）**，因为两处在任何实现下都不可能通过：
+   - `test_b4_tolerance_is_applied`：`_rect` 的第 4 条边是 `(0,50)->(0,0)`，"端点差 0.4mm"只能是
+     `(0,50)->(0.4,0)`；原文写成 `(0,0)->(0.4,0)` 之后第 4 条边不再连接 `D(0,50)`，环永远合不上
+     （与该用例自己的注释矛盾）。
+   - `test_d1_open_component_says_so`：三条线**共线**（bbox 高度 0 → 分量面积 0），会被 `area_under_min`
+     正确挡掉、零件不存在；而 `test_packaging_parts_extraction_red.py` H1 明确要求
+     "每件 `unfolded_width_mm > 0`"（退化件不许当零件）。改为给三条线各自的高度，仍**互不相接**，
+     本用例要测的"求不出环 → 显式降级"一字不变。
+4. **`area_under_min` 的豁免只对"有环"生效**（§3 表格第 3 行的落地）：`box_area < min_area` 且有环
+   → 不丢，落 `open + loop_too_small`。其余情形（含退化分量）仍按今天口径过滤 —— 见第 3 条第 2 点。
+5. **实测（本机，两份真实样本）**：`酒盒.dwg` 402 分量 → 64 件（closed 51 / open 13，`closed_ratio 0.797`，
+   门槛 0.10）；`圆盘盒.dwg` 14 分量 → 9 件（closed 8 / open 1，`closed_ratio 0.889`，门槛 0.50）。

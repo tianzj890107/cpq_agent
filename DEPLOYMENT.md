@@ -728,3 +728,39 @@ LibreDWG（`cpq_*.py` 里不得出现 `ODAFileConverter` / `dwg2dxf` / `LibreDWG
 批 1–5 已把「案例模型 → 相似检索 → 字段工作区/差异价 → 出价与转精准 → 文件解析客户端」
 落齐；**页面把工作区与出价串起来的那一层接线仍是下一步**（批 3 只落了容器与四列表，
 批 4/5 的模块入口还没有对应按钮）。
+
+## 包装图纸零件：下游闭环的能力级别（L1 / L2 / L3）
+
+这三条链路（DWG → DXF → CAD IR → 语义 → 零件 → 工艺/成本/3D）的能力必须**按级别**声明，
+不许把"能出零件清单"说成"闭环"。
+
+| 级别 | 名称 | 成立条件 | 现在成立吗 |
+| --- | --- | --- | --- |
+| L1 | 编排 | DWG → DXF → CAD IR → 语义 → 零件文档，2.1 左栏出清单 | 成立（本机两份真实样本已过） |
+| L2 | 可信 | L1 + `closed_ratio` 过门槛（`酒盒.dwg ≥ 0.10`、`圆盘盒.dwg ≥ 0.50`）+ 角色可识别 | 成立（本机实测 0.797 / 0.889） |
+| L3 | 闭环 | L2 + 可点（零件行 → 右栏面板）+ 可算（工艺/成本过 `processability`）+ 可看（3D 挤出） | **未签字，不得声明** |
+
+**当前能力级别：L2（可信）**；L3 的代码与门禁已就位，但**未签字前不得声明 L3** ——
+L3 需要业务对「两张真实样本各至少一件能跑工艺、能挤出 3D」签字（门禁里的
+`parts_demo_script` 人工项），签字后才把这一格改成 L3。级别**只升不降**，降级必须写明原因。
+
+自己跑（只读门禁，六项；`parts_demo_script` 是人工项，要显式确认）：
+
+```bash
+cd /home/wugefei/CPQ/cpq_agent
+./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env local
+# 人工项签字后才可能 verdict=go 的完整写法：
+./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env production \
+  --ack parts_demo_script=<签字人>
+```
+
+门禁**只读**：不连库、不写字、不调模型、不联网；`parts_outline_real_sample` 在没有样本或
+没有 `dwg2dxf` 的本机会 `skip`（`--env production` 下 skip 一律算失败）。
+
+部署自检（`scripts/deploy_34_bare.sh` 第 6 步）会打一遍「零件文档 → 单件详情 → 闭合件试挤出」。
+样本项目 id **必须由用户提供**，脚本不猜项目、也不拿生产项目当试验田：
+
+```bash
+CPQ_PARTS_PROJECT_ID=<项目id> bash scripts/deploy_34_bare.sh ytbz
+# 不提供时这一步 skip 并打印原因
+```

@@ -125,3 +125,28 @@ PACKAGING_PART_COST_PATH    = "/api/projects/{pid}/requirement/packaging-parts/{
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_outline_red          # 第 1 层不能回退
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_panel_red            # 第 2 层不能回退
 ```
+
+## 10. 实现期回写（2026-09-21）
+
+本节只记录"实现期才暴露出来、Spec 原文没写死"的口径；上面 §2–§5 的契约一条未改。
+
+1. **材料与厚度从哪来（§3 那句"来自需求/属性、不许猜"的落地规则）**：图纸零件不在技术 IR 里，
+   没有"属性"可继承，所以取**图纸自己写着的标注**（`ir["texts"]` 里的「包装材料说明」与引出标注），
+   两档、都留痕到 `row["material_source"] / row["thickness_source"]`：
+   - 件级：距该件包围盒 `≤ max(25% 对角线, 50mm)` 的最近一条标注（`kind="part_note"`，
+     记 `evidence_ref` 与 `distance_mm`）；
+   - 图级兜底：**只在这张图上该字段只有一个候选值**时才用（`kind="drawing_note"`）——
+     两个值以上就是有歧义，宁可不填。
+   实测：`酒盒.dwg` 64 件里 4 件、`圆盘盒.dwg` 9 件里 1 件因此满足 `processability.ok`。
+   取不到的件照 §3 拒绝（`PACKAGING_PART_MATERIAL_UNKNOWN`），绝不给默认料厚。
+2. **成本入口复用既有契约**：`packaging_cost.compute_line("material", variables)` 算数字，
+   结果映射进平台既有的 `CostAnalysis`（`models/cost.py`），`summary` 由既有 `cost.compute()` 生成 ——
+   前端因此不需要第二套成本渲染。变量只取"能确定的两处"：零件文档（展开尺寸、标注里的克重）
+   + 需求里已填的 `face_paper_gsm / ton_price / imposition_count / proof_base`；
+   缺的一律不给默认值，由 `compute_line()` 自己回 `gap=missing_variable:<名>`。
+3. **`inline-analysis.js` 增加 `context.endpointBase`（可选）**：默认仍是技术侧
+   `/parts/{part_id}`，图纸零件传一个函数指向 `/requirement/packaging-parts/{part_code}`，
+   渲染与任务轮询不改一个字。§5.3 的"复用既有 CadInlineAnalysis"因此是**真复用**，不是复制。
+4. **工艺 / 成本结论第一版不落技术侧 store**（`store.save_process` / `store.save_cost` 都不写），
+   免得图纸零件与技术 IR 零件在同一个文档里互相覆盖：两个 `GET` 如实回 `plan: null` /
+   `analysis: null`（前端会说"尚未生成"）。这一点在交付回执里作为"未完成能力"声明。

@@ -193,6 +193,17 @@
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
               <div id="viewer" class="view-3d-content"></div>
+              <!-- 图纸项目的右栏零件面板（包装零件第 2 层）：左栏零件行可点，
+                   选中后在这里看轮廓、事实与证据。与 #viewer / #partDetail / #parameterEditor
+                   互斥，未选中零件时保持 hidden，不留白。 -->
+              <div id="packagingPartPanel" class="packaging-part-panel" hidden>
+                <header class="packaging-part-head"><div id="packagingPartTitle" class="packaging-part-title">图纸零件</div></header>
+                <div id="packagingPartOutline" class="packaging-part-outline"></div>
+                <div id="packagingPartFacts" class="packaging-part-facts"></div>
+                <div id="packagingPartActions" class="packaging-part-actions"></div>
+                <div class="part-details-title">实体证据</div>
+                <div id="packagingPartEvidence" class="packaging-part-evidence"></div>
+              </div>
               <div class="part-details"><div class="part-details-title">零件信息</div><div id="partDetail" class="part-detail"><div class="view-3d-placeholder">从「零件清单」中选择一项，查看模型、识别依据和生成结果。</div></div></div>
               <!-- 可收起的分区一律默认展开：收起状态会让「已经算出来的结果」看起来没算。 -->
               <details class="parameter-panel" open><summary>查看并编辑零件参数（专家模式）</summary><div id="parameterEditor">选择零件后可查看参数。</div></details>

@@ -100,17 +100,27 @@
   // 与 plan/analysis 分开取 —— 人工改了工艺路线，依据不该跟着变。
   const lookupPath = mode => (mode === "process" ? "process-lookup" : "cost-lookup");
 
+  // 数据源基址：默认是技术侧 `/parts/{part_id}`；图纸零件（包装零件第 3 层）在
+  // 技术 IR 里没有位置，由调用方传 `endpointBase` 指向
+  // `/requirement/packaging-parts/{part_code}`，渲染与任务轮询完全复用本组件。
+  function endpointBase(state) {
+    const custom = state.context?.endpointBase;
+    if (typeof custom === "function") return custom();
+    return `/api/projects/${encodeURIComponent(state.context.projectId)}` +
+      `/parts/${encodeURIComponent(state.context.part.part_id)}`;
+  }
+
   async function loadLibrary(state) {
     try {
       const report = await jsonFetch(
-        `/api/projects/${encodeURIComponent(state.context.projectId)}/parts/${encodeURIComponent(state.context.part.part_id)}/${lookupPath(state.mode)}`);
+        `${endpointBase(state)}/${lookupPath(state.mode)}`);
       if (active === state) state.library = report && Object.keys(report).length ? report : null;
     } catch { /* 没有依据不影响看结果 */ }
   }
 
   async function load(state) {
     try {
-      const url = `/api/projects/${encodeURIComponent(state.context.projectId)}/parts/${encodeURIComponent(state.context.part.part_id)}/${state.mode}`;
+      const url = `${endpointBase(state)}/${state.mode}`;
       const [data] = await Promise.all([jsonFetch(url), loadLibrary(state)]);
       if (active !== state) return;
       if (state.mode === "process") {
@@ -181,7 +191,7 @@
     const title = state.mode === "process" ? "工艺推荐" : "成本测算";
     setStatus(state, `${title}生成中…`, true);
     try {
-      let url = `/api/projects/${encodeURIComponent(state.context.projectId)}/parts/${encodeURIComponent(state.context.part.part_id)}/${state.mode}`;
+      let url = `${endpointBase(state)}/${state.mode}`;
       if (state.mode === "cost") {
         const quantity = Math.max(1, parseInt(state.root.querySelector("[data-inline-quantity]").value, 10) || 1);
         url += `?quantity=${quantity}`;

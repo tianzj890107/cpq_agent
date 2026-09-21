@@ -16,6 +16,7 @@ import math
 import pathlib
 import sys
 import unittest
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -170,13 +171,16 @@ class EPersistence(SolidCase):
     def test_e1_save_load_roundtrip_and_versioning(self):
         module = self.module()
         doc = {"parts": [module.extrude(row())], "engine_version": ENGINE_VERSION}
-        first = module.save_solids("proj-solid", doc)
-        second = module.save_solids("proj-solid", doc)
+        # 每次跑用一个**新项目**：版本号是"这个项目的第几版"，复用固定项目名会让
+        # 「首次落库 = 1」这条断言随上一次运行的结果变化（落库后端是持久化的）。
+        project = "proj-solid-%s" % uuid.uuid4().hex[:8]
+        first = module.save_solids(project, doc)
+        second = module.save_solids(project, doc)
         self.assertEqual(first["version"], 1 if "version" in first else first.get("version", 1),
                          "首次落库版本号必须是 1")
         self.assertGreater(second["version"], first["version"],
                            "同内容重复落库也要长版本号（照 semantics 的版本化范式）")
-        loaded = module.load_solids("proj-solid")
+        loaded = module.load_solids(project)
         self.assertEqual(len(loaded["parts"]), 1)
         self.assertEqual(loaded["parts"][0]["part_code"], "DWG-P01")
 

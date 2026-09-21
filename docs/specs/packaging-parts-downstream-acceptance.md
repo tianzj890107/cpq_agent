@@ -121,3 +121,17 @@
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_downstream_red          # 第 3 层
 ./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_3d_red                  # 第 4 层
 ```
+
+## 11. 实现期回写（2026-09-21）
+
+1. **`solid_ok_ratio` 的数据来源**：`summarize(doc)` 只拿零件文档，拿不到挤出文档，所以它
+   按两处取"这一件挤出结论"：① 行上的 `solid_status`；② 可选参数 `summarize(doc, solids=<挤出文档>)`。
+   两处都没有就是 `0.0`（不返回 null、不抛错，§2 那条约束不变）。
+2. **门禁的 manual 项不进 `reasons`**：`dwg_deploy_gate.py` 把"人工项未签字"算进 `reasons` →
+   `verdict=no_go`。本门禁照它的**输出形状与退出码**做，但 `parts_demo_script` 未签字只体现在
+   `summary.manual`（status 仍是 `manual_unacknowledged`，绝不自动置 `ok`），否则 §10 要求的
+   "`--env local` 退出码 0"与 B4 的"无 fail → verdict=go"就无法同时成立。
+3. **`--env production` 下 skip 一律算 fail**（与既有门禁一致）；本机没有样本目录或没有 `dwg2dxf`
+   时按 skip 处理，`--env local` 不因此变红，但消息里写清"放上样本 / 装上 libredwg 再跑"。
+4. **当前级别写在 `DEPLOYMENT.md`**：`L2（可信）`；L3 需要人工签字的 `parts_demo_script` +
+   两份样本各一件可算/可挤出，未签字不得声明。

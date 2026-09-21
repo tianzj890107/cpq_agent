@@ -7681,3 +7681,59 @@ OK (skipped=1)
   没有覆盖或回退任何人的改动。
 - 能力声明仍只能写：**DWG 编排能力完成，真实转换能力未验收**；
   图纸零件这条线的下游闭环停在"Spec + 红测"（实现见五份提示词，尚未开始）。
+
+## 243. 图纸零件下游闭环五层实现：真实轮廓 → 可点面板 → 工艺/成本 → 3D 挤出 → 门禁（9-21，Codex 实现 + 全量回归）
+
+**本批把 ## 237 的五层红测（94 条 / 88 红）全部转绿**：4137 条全量回归 `failures 82→19 / errors 25→0`，
+**零新增失败**（剩下 19 条 fail 全是其它批次尚未实现的红测，逐条与实现前基线 diff 对过）。
+
+### 逐层交付
+
+| 层 | 实现 | 关键文件 |
+| --- | --- | --- |
+| 1 真实轮廓 | 折线/样条顶点落进 IR；件内端点图求最大简单环（鞋带面积）；三态 + 四类 `size_source`；`stats` 四个新键 | `cad_ir/parser.py`、`packaging_parts.py` |
+| 2 能点 | 单件只读详情路由（只回这一件的点、坐标归一到件内）；`selectPackagingPart()` + `#packagingPartPanel` + 三态文案；`#viewer` 在图纸链路下显式隐藏 | `main.py`、`app.js`、`index.html`、`drawing-flow.css` |
+| 3 能算 | `part_id = part_code` + `part_id_namespace`；纯函数 `as_ir_part()` / `processability()`；工艺/成本两条入口先过 processability（缺料 409 + `missing_variables`） | `packaging_parts.py`、`main.py`、`app.js` |
+| 4 3D 挤出 | 新服务 `packaging_part_solids`（凸多边形扇形三角化，矩形 4 点 = 12 面，ASCII STL）；`POST …/solid` 现算落版本 + `GET …/solid.stl`（`application/sla`） | `packaging_part_solids.py`、`main.py`、`app.js` |
+| 5 门禁 | `summarize()` 固化五个指标；只读门禁 `packaging_parts_gate.py`（六项 id 冻结）；`DEPLOYMENT.md` 三级能力声明；`deploy_34_bare.sh` 下游连通自检 | `packaging_parts.py`、`tools/packaging_parts_gate.py`、`DEPLOYMENT.md`、`scripts/deploy_34_bare.sh` |
+
+### 实测（本机，两份真实样本）
+
+| 样本 | 分量 → 零件 | closed_ratio（门槛） | role_known_ratio（门槛） | 可算工艺 | 可挤出 3D |
+| --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | 402 → 64 | **0.797**（≥0.10） | 0.016 | 4 | 1（DWG-P35，12 面 / 84729.3235 mm³） |
+| `圆盘盒.dwg` | 14 → 9 | **0.889**（≥0.50） | **0.111**（≥0.10） | 1 | 7 |
+
+门禁：`./open-claude/.venv/bin/python tech_app/tools/packaging_parts_gate.py --env local` → `verdict=go`
+（ok 5 / manual 1 / fail 0，退出码 0）。
+
+### 实现期发现（已回写各层 Spec 的"实现期回写"小节）
+
+- **材料/厚度只能来自图纸自己的标注**：图纸零件不在技术 IR 里，没有属性可继承。取法两档、都留痕
+  （件级：距件包围盒 ≤ max(25% 对角线, 50mm) 的最近一条；图级兜底：**只在这张图上只有一个候选值**时
+  才用）。两值以上就是有歧义 → 不填 → 按 §3 拒绝并说清缺什么，绝不给默认料厚。
+- **三处红测/夹具本身写错了**（已修夹具或调用参数，**断言与期望值一字未改**，逐条写进对应 Spec）：
+  1. 第 2 层 C1/C2 把提示语当容器传给了 `assertIn`（真正的 `html` 没传），任何实现都不可能通过；
+  2. 第 4 层 E1 用写死的项目名 `proj-solid` 存两版，落库是持久化的 → 第二次跑必然 `5 != 1`，
+     改成每次新项目；
+  3. 第 1 层的两处夹具笔误（少一条边 / 三条线共线），上一轮已修并回写。
+- **第 5 层门禁的 manual 项不进 `reasons`**：否则"`--env local` 退出码 0"（Spec §10）与"无 fail →
+  verdict=go"（B4）无法同时成立；未签字仍如实标 `manual_unacknowledged`，绝不自动置 ok。
+- **图级口径的第二个来源**：`summarize(doc, solids=…)` / 行上的 `solid_status` 给 `solid_ok_ratio` 供数。
+
+### 未完成能力（如实声明）
+
+- 工艺/成本结论**不落技术侧 store**（避免与视觉链路抢同一份零件文档）：两个 `GET` 如实回空，
+  刷新页面后要重新点一次「生成工艺推荐」。
+- 成本第一版只算**材料开料一行**（`PKG-C-MATERIAL`），吨价/克重来自需求与图纸标注；
+  需求里没填 `ton_price` 时会如实回 `missing_variable:ton_price`，不拿默认吨价算假数字。
+- 3D 只做**平板直线挤出**：凹多边形、缺料厚、开放轮廓一律 `unsupported` + 人话原因（不做耳切/折弯/装配）。
+- 零件行可编辑、工艺回存、BOM 导出仍绑在技术 IR 上，本批不动。
+
+### 交付物与状态
+
+- 新增：`tech_app/backend/services/packaging_part_solids.py`、`tech_app/tools/packaging_parts_gate.py`。
+- 修改：`main.py`、`packaging_parts.py`、`cad_ir/parser.py`、`app.js`、`inline-analysis.js`（新增可选
+  `context.endpointBase`）、`index.html`、`drawing-flow.css`、`DEPLOYMENT.md`、`scripts/deploy_34_bare.sh`、
+  5 份 Spec（回写）与 3 份红测（修夹具/调用参数）。
+- **未引入新依赖**（不引入 numpy/trimesh/shapely；三角化与 STL 自己写）。

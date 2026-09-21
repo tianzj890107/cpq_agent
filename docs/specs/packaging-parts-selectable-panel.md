@@ -132,3 +132,26 @@ PACKAGING_PART_READ_PATH = "/api/projects/{pid}/requirement/packaging-parts/{par
 - 第 3 层复用本层的"选中件"概念：面板上的「生成工艺推荐」「成本测算」按钮只在
   `outline_status == "closed"` 且材料/厚度已知时可点，其余置灰并说明原因。
 - 第 4 层复用本层的 `#packagingPartPanel` 位置放"3D 预览"tab，不再新建右栏容器。
+
+## 9. 实现期回写（2026-09-21）
+
+本节只记录"实现期发现的、与 Spec 原意冲突的事实"，口径本身未变。
+
+1. **C1/C2 两处红测漏传容器参数（已按原意补回，断言未放宽）**：
+   原文是
+   `self.assertIn('id="%s"' % PANEL_ID, "index.html 缺 #%s" % PANEL_ID)` 与
+   `self.assertIn('id="%s"' % node, "面板缺 %s" % node)` ——
+   第二个位置参数被写成了提示语，**真正的容器 `html` 根本没传**，于是断言退化成
+   "`id="packagingPartPanel"` 是否是 `index.html 缺 #packagingPartPanel` 的子串"，
+   无论实现怎么写都不可能通过。实现期补回 `html` 作为容器
+   （`assertIn(needle, html, msg)`），期望的 needle 与提示语一字未改。
+   同一批次其余 17 条不受影响；全仓 AST 扫描确认只有这两处是"提示语当容器"的写法。
+2. **`#viewer` 的隐藏方式**：C4 只要求"图纸项目分支里显式处理 `viewer`"。实现取的是
+   进入图纸链路时把 `#viewer` 置 `hidden` 并改写 `#viewerPartName`（`enterDrawingFlowPanes()`），
+   而不是清空画布内容，避免再进视觉链路时要重建 THREE 场景。
+3. **面板渲染入口的命名**：E2 用 `function\s+\w*[Pp]ackagingPart\w*\s*\(` 找渲染函数，
+   实现取 `renderPackagingPartPanel(payload)`；轮廓坐标一律来自后端
+   `GET …/packaging-parts/{part_code}`，前端只用 `viewBox` + `<g transform>` 翻转 Y。
+4. **第 3/4 层的接口缝**：`#packagingPartActions` 容器放三个按钮（生成工艺推荐 / 成本测算 / 3D 预览），
+   由 `packagingPartActionsHtml(part)` 渲染；可算性判据与后端 `packaging_parts.processability()`
+   逐条对齐（闭合轮廓 + 材料 + 料厚），灰按钮自带原因文案。

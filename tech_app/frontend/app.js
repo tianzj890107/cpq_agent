@@ -933,6 +933,8 @@ async function parseDrawing() {
   try {
     // DWG / DXF 不走视觉模型：服务端已有图纸解析链路，前端只点一次、把结果摆出来。
     if (currentDrawingEntry === "drawing_flow") {
+      // 右栏先让给零件面板：隐藏 #viewer 并换掉「3D 视图」那句承诺（Spec §3.5）。
+      enterDrawingFlowPanes();
       // 把链路终态交回后台链路（parseDrawingInBackground 据此决定看板事件），不许丢掉。
       const drawingFlowState = await runDrawingFlowParse();
       parseDrawingError = "";
@@ -1103,6 +1105,366 @@ function drawingFlowTerminalSignal(flowState, error) {
   }
   return { event: "task-failed", code: "FLOW_STATE_MISSING",
            message: "图纸解析链路没有返回状态，请重新解析。", action: "", retryable: true };
+}
+
+/* ---------------- 2.1 右栏零件面板（包装零件第 2 层，Spec packaging-parts-selectable-panel.md） ----------------
+   图纸项目的零件行是可点的：点一件 → 右栏显示这一件的轮廓（后端给的坐标）、事实与证据。
+   轮廓**不做任何前端几何求解**（环、面积、坐标变换一律后端算好），前端只用 viewBox 摆画布；
+   open 件显示虚线 + 包围盒矩形，绝不画成闭合件的样子。 */
+const PACKAGING_OUTLINE_COPY = {
+  closed: "轮廓已闭合：尺寸与面积为真实轮廓口径。",
+  open: "未找到闭合轮廓，以下尺寸来自分量包围盒，仅供估算",
+  unavailable: "图纸单位未确认，不给出尺寸；请先确认单位后再解析。",
+};
+// 降级原因的人话：与后端 outline_reason 一一对应（Spec §3.4 第 2 行要求点名原因）。
+const PACKAGING_OUTLINE_REASONS = {
+  no_closed_loop: "件内没有首尾相接的闭合环",
+  loop_too_small: "找到了环但面积低于最小面积门槛",
+  unit_unconfirmed: "图纸单位未确认",
+};
+// 尺寸口径（后端 size_source）的人话，避免把"包围盒"说成"轮廓"。
+const PACKAGING_SIZE_SOURCE_COPY = {
+  closed_outline: "真实轮廓（闭合环）",
+  component_bbox: "分量包围盒（求不出轮廓，仅供估算）",
+  dwg_outline: "图纸自带包围盒（这一件没有可用坐标）",
+};
+
+//: 当前在右栏零件面板里看的零件（独立于视觉链路的 currentSelectedId，互不污染）。
+let currentSelectedPanelPart = null;
+
+function pkgPartStatusText(part) {
+  const status = String((part && part.outline_status) || "");
+  const reason = String((part && part.outline_reason) || "");
+  const base = PACKAGING_OUTLINE_COPY[status] || "";
+  const why = PACKAGING_OUTLINE_REASONS[reason] || "";
+  if (!base) return "";
+  return why ? base + "（" + why + "）" : base;
+}
+
+function pkgPartFactRow(label, value) {
+  if (value === null || value === undefined || value === "") return "";
+  return `<div class="packaging-part-fact"><span class="label">${esc(label)}</span>`
+    + `<span class="value">${esc(String(value))}</span></div>`;
+}
+
+// 右栏零件面板：与 #viewer / #partDetail / #parameterEditor 互斥（不同时渲染两套零件内容）。
+function renderPackagingPartPanel(payload) {
+  const host = $("packagingPartPanel");
+  if (!host) return null;
+  const part = (payload && payload.part) || {};
+  const outline = (payload && payload.outline) || {};
+  const status = String(outline.status || part.outline_status || "");
+  currentSelectedPanelPart = part.part_code ? part : null;
+
+  const title = $("packagingPartTitle");
+  if (title) {
+    const name = `${part.part_code || ""} ${part.name || ""}`.trim();
+    title.textContent = name || "图纸零件";
+  }
+
+  // 轮廓：只把后端给的点串成 viewBox + polygon；Y 轴用 <g> 的 transform 翻转，JS 里不做坐标运算。
+  const outlineHost = $("packagingPartOutline");
+  if (outlineHost) {
+    const points = Array.isArray(outline.points) ? outline.points : [];
+    const box = Array.isArray(outline.bbox) && outline.bbox.length === 4 ? outline.bbox : null;
+    const width = box ? Math.max(1, Number(box[2]) - Number(box[0])) : 1;
+    const height = box ? Math.max(1, Number(box[3]) - Number(box[1])) : 1;
+    let svg = "";
+    if (box && points.length >= 3) {
+      const path = points.map(point => `${point[0]},${point[1]}`).join(" ");
+      svg = `<svg class="packaging-part-svg" viewBox="0 0 ${width} ${height}"`
+        + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="零件轮廓">`
+        + `<g transform="translate(0,${height}) scale(1,-1)">`
+        + `<polygon class="packaging-part-polygon is-${esc(status)}" points="${path}"/>`
+        + `</g></svg>`;
+    } else if (box) {
+      svg = `<svg class="packaging-part-svg" viewBox="0 0 ${width} ${height}"`
+        + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="分量包围盒">`
+        + `<rect class="packaging-part-box" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    }
+    const note = pkgPartStatusText(part);
+    outlineHost.innerHTML = (svg || `<div class="view-3d-placeholder">这一件没有可画的轮廓。</div>`)
+      + (note ? `<div class="packaging-part-note">${esc(note)}</div>` : "");
+  }
+
+  const facts = $("packagingPartFacts");
+  if (facts) {
+    const length = part.unfolded_length_mm;
+    const width = part.unfolded_width_mm;
+    const size = (length === null || length === undefined) ? "—" : `${length}×${width} mm`;
+    const layers = Array.isArray(part.layers) ? part.layers.join(" / ") : "";
+    const box = Array.isArray(payload && payload.component_bbox) ? payload.component_bbox : [];
+    facts.innerHTML = [
+      pkgPartFactRow("展开尺寸", size),
+      pkgPartFactRow("面积", part.area_mm2 === null || part.area_mm2 === undefined
+        ? "—" : `${part.area_mm2} mm²`),
+      pkgPartFactRow("尺寸口径", PACKAGING_SIZE_SOURCE_COPY[String(part.size_source || "")] || ""),
+      pkgPartFactRow("图层", layers),
+      pkgPartFactRow("角色", part.role),
+      pkgPartFactRow("分量包围盒", box.length === 4 ? box.join(", ") : ""),
+      pkgPartFactRow("与哪一件重复", part.repeat_of),
+      pkgPartFactRow("实体条数", part.entity_total),
+    ].join("");
+  }
+
+  // 两个下游按钮：可算性由 packagingPartProcessability() 判，灰按钮自己说明为什么灰。
+  const actions = $("packagingPartActions");
+  if (actions) {
+    actions.innerHTML = packagingPartActionsHtml(part);
+    const processButton = $("packagingPartProcess");
+    if (processButton) processButton.addEventListener("click", () => packagingPartAnalyze("process"));
+    const costButton = $("packagingPartCost");
+    if (costButton) costButton.addEventListener("click", () => packagingPartAnalyze("cost"));
+    const solidButton = $("packagingPartSolid");
+    // 「3D 预览」不新建画布：点下去由 packagingPartSolidPreview() 复用 #viewer 与 loadSTL()
+    // 把后端挤出的 STL 画出来；挤不出来的件把原因写回面板，不留空白画布。
+    if (solidButton) solidButton.addEventListener("click", () => packagingPartSolidPreview());
+  }
+
+  const evidence = $("packagingPartEvidence");
+  if (evidence) {
+    const rows = Array.isArray(payload && payload.evidence) ? payload.evidence : [];
+    evidence.innerHTML = rows.length
+      ? rows.map(row => `<div class="packaging-part-evidence-row">`
+        + `<span class="ref">${esc(String(row.ref || ""))}</span>`
+        + `<span class="kind">${esc(String(row.kind || ""))}</span>`
+        + `<span class="layer">${esc(String(row.layer || ""))}</span>`
+        + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("")
+      : `<div class="view-3d-placeholder">这一件没有可回查的实体证据。</div>`;
+  }
+  return host;
+}
+
+// 右栏切到"零件面板"：隐藏 3D 画布与视觉链路的零件详情/参数面板，避免两套内容同时出现。
+function showPackagingPartPane() {
+  const panel = $("packagingPartPanel");
+  if (panel) panel.hidden = false;
+  ["viewer", "partDetail", "parameterEditor"].forEach(id => {
+    const node = $(id);
+    if (!node) return;
+    node.hidden = true;
+    const wrapper = node.closest(".part-details, .parameter-panel");
+    if (wrapper) wrapper.hidden = true;
+  });
+}
+
+function hidePackagingPartPanel() {
+  const panel = $("packagingPartPanel");
+  if (panel) panel.hidden = true;
+  currentSelectedPanelPart = null;
+}
+
+// 图纸项目进入时的右栏口径：右栏是零件面板，不是 3D（Spec §3.5，别留空白画布、别承诺 3D）。
+function enterDrawingFlowPanes() {
+  hidePackagingPartPanel();
+  const viewer = $("viewer");
+  if (viewer) viewer.hidden = true;
+  const label = $("viewerPartName");
+  if (label) label.textContent = "图纸零件 · 选中后看轮廓与证据";
+}
+
+// 点左栏零件行：选中 + 读单件详情 + 渲染面板。失败时面板里给可读原因，不留白。
+async function selectPackagingPart(partCode) {
+  const code = String(partCode || "").trim();
+  if (!code) return null;
+  currentSelectedPanelPart = null;
+  setRightPane("model");
+  showPackagingPartPane();
+  markSelection(code);
+  togglePartSubActions(code);
+  const title = $("packagingPartTitle");
+  if (title) title.textContent = code;
+  const facts = $("packagingPartFacts");
+  if (facts) facts.textContent = "正在读取零件详情…";
+  const outlineHost = $("packagingPartOutline");
+  if (outlineHost) outlineHost.innerHTML = "";
+  const evidenceHost = $("packagingPartEvidence");
+  if (evidenceHost) evidenceHost.innerHTML = "";
+  try {
+    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
+      + `packaging-parts/${encodeURIComponent(code)}`);
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (payload && payload.detail) || {};
+      const message = typeof detail === "string" ? detail : String(detail.message || "");
+      throw new Error(message || `读取零件详情失败（HTTP ${res.status}）`);
+    }
+    renderPackagingPartPanel(payload);
+  } catch (error) {
+    if (facts) facts.textContent = String((error && error.message) || error);
+  }
+  return currentSelectedPanelPart;
+}
+
+
+/* ---------------- 2.1 右栏零件面板的下游按钮（包装零件第 3 层，
+   Spec packaging-parts-downstream-process-and-cost.md §5） ----------------
+   可算性以后端 packaging_parts.processability() 的同一判据为准：前端只照着置灰并
+   写明原因，绝不自己补默认材料/厚度；点击后仍复用既有 CadInlineAnalysis 渲染到
+   右栏分析区，不新建第二套工艺 / 成本渲染。 */
+function packagingPartProcessability(part) {
+  const row = (part && typeof part === "object") ? part : {};
+  if (String(row.outline_status || "") !== "closed") {
+    return { ok: false, missing: ["outline"],
+             reason: "未找到闭合轮廓（尺寸来自包围盒），不能直接排工艺" };
+  }
+  const missing = [];
+  const spec = row.material && (row.material.spec || row.material.name || row.material);
+  if (!spec) missing.push("material");
+  if (!(Number(row.thickness_mm) > 0)) missing.push("thickness_mm");
+  if (missing.length) {
+    return { ok: false, missing: missing,
+             reason: "缺材料或厚度：" + missing.join("、") + "（补全需求后重跑解析）" };
+  }
+  return { ok: true, missing: [], reason: "" };
+}
+
+function packagingPartActionsHtml(part) {
+  const verdict = packagingPartProcessability(part);
+  const off = verdict.ok ? "" : " disabled";
+  const title = esc(verdict.reason || "");
+  // 3D 预览只看"有没有闭合轮廓"：缺厚度是后端给的 unsupported 结论，不是灰按钮的理由。
+  const closed = String((part && part.outline_status) || "") === "closed";
+  const solidOff = closed ? "" : " disabled";
+  const solidTitle = closed ? "" : esc(packagingPartSolidReason("outline_open"));
+  return `<button id="packagingPartProcess" class="btn btn-secondary" type="button"${off}`
+    + ` title="${title}">生成工艺推荐</button>`
+    + `<button id="packagingPartCost" class="btn btn-secondary" type="button"${off}`
+    + ` title="${title}">成本测算</button>`
+    + `<button id="packagingPartSolid" class="btn btn-secondary" type="button"${solidOff}`
+    + ` title="${solidTitle}">3D 预览</button>`
+    + (verdict.ok ? "" : `<div class="packaging-part-note">${esc(verdict.reason)}</div>`);
+}
+
+/* ---------------- 2.1 右栏零件面板的 3D 预览（包装零件第 4 层，
+   Spec packaging-parts-3d-extrusion.md §4） ----------------
+   闭合轮廓 × 已知料厚的直线挤出由后端算好（ASCII STL），前端**复用既有 #viewer 与
+   loadSTL()**（不新建画布、不新建第二套 THREE 初始化）；挤不出来时把原因翻成人话
+   写在面板里，不留一块空白画布。 */
+const PACKAGING_SOLID_COPY = {
+  outline_open: "该件没有闭合轮廓，无法挤出",
+  outline_unavailable: "图纸单位未确认，无法挤出",
+  thickness_unknown: "缺厚度，无法挤出",
+  concave_polygon: "凹多边形本版不支持挤出",
+  too_few_points: "轮廓点太少，无法挤出",
+  too_many_points: "轮廓点太多，本版不做简化，暂不挤出",
+};
+
+function packagingPartSolidReason(reason) {
+  return PACKAGING_SOLID_COPY[String(reason || "")] || "";
+}
+
+// 3D 预览：先让后端现算一版（unsupported 也是结论），再复用 loadSTL 把它画出来。
+async function packagingPartSolidPreview() {
+  const part = currentSelectedPanelPart;
+  if (!part) return { ok: false, error: { code: "no-part", message: "未选择零件。" } };
+  if (String(part.outline_status || "") !== "closed") {
+    const message = packagingPartSolidReason("outline_open");
+    notePackagingPartSolid(message);
+    return { ok: false, error: { code: "outline_open", message: message } };
+  }
+  const code = part.part_code || "";
+  notePackagingPartSolid("正在计算 3D 挤出体…");
+  let payload = {};
+  try {
+    const res = await fetch(`${packagingPartEndpoint()}/solid`, { method: "POST" });
+    payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (payload && payload.detail) || {};
+      const message = typeof detail === "string" ? detail : String(detail.message || "");
+      throw new Error(message || `3D 挤出失败（HTTP ${res.status}）`);
+    }
+  } catch (error) {
+    const message = String((error && error.message) || error);
+    notePackagingPartSolid(message);
+    return { ok: false, error: { code: "solid-failed", message: message } };
+  }
+  if (String(payload.status || "") !== "ok") {
+    const message = packagingPartSolidReason(payload.reason)
+      || `这一件暂时挤不出来（${payload.reason || "unknown"}）`;
+    notePackagingPartSolid(message);
+    return { ok: false, error: { code: String(payload.reason || ""), message: message } };
+  }
+  notePackagingPartSolid(`已挤出：${payload.triangles || 0} 个三角形 · `
+    + `${payload.volume_mm3 || 0} mm³`);
+  setRightPane("model");
+  const label = $("viewerPartName");
+  if (label) label.textContent = `${code} · 3D 预览（平板挤出）`;
+  loadSTL(mediaUrl(`${packagingPartEndpoint()}/solid.stl`));
+  return { ok: true, result: payload };
+}
+
+// 3D 结论写回面板：面板在 3D 预览时依然留在右栏，原因/体量都看得见。
+function notePackagingPartSolid(message) {
+  const host = $("packagingPartOutline");
+  if (!host) return;
+  const note = document.createElement("div");
+  note.className = "packaging-part-note";
+  note.textContent = message;
+  host.appendChild(note);
+}
+
+// 图纸零件的两条下游入口：/api/projects/{pid}/requirement/packaging-parts/{code}/{process|cost}。
+// 技术侧 /parts/{part_id} 在图纸项目里必然 404（图纸零件不写技术 IR），所以把数据源
+// 换掉、渲染与任务轮询仍交给既有 CadInlineAnalysis。
+function packagingPartEndpoint() {
+  const part = currentSelectedPanelPart || {};
+  return `${API}/api/projects/${currentProject}/requirement/packaging-parts/`
+    + encodeURIComponent(part.part_code || "");
+}
+
+async function packagingPartAnalyze(mode) {
+  const part = currentSelectedPanelPart;
+  if (!part) return { ok: false, error: { code: "no-part", message: "未选择零件。" } };
+  const verdict = packagingPartProcessability(part);
+  if (!verdict.ok) {
+    return { ok: false, error: { code: "not-processable", message: verdict.reason } };
+  }
+  const host = $("analysisHost");
+  if (!host || !window.CadInlineAnalysis) {
+    return { ok: false,
+             error: { code: "no-analysis-host", message: "当前看板没有可用的分析渲染区。" } };
+  }
+  exitBoardViewHost();
+  const label = mode === "cost" ? "成本测算" : "工艺推荐";
+  setRightPane("analysis",
+               `${part.part_code || ""} ${part.name || ""} · ${label}`.trim());
+  window.CadInlineAnalysis.open(mode, {
+    host,
+    projectId: currentProject,
+    part: { part_id: part.part_id || part.part_code, name: part.name || part.part_code },
+    endpointBase: packagingPartEndpoint,
+    onClose: () => setRightPane("model"),
+  });
+  return { ok: true, result: { mode: mode, partCode: part.part_code || "" } };
+}
+
+// 板级「一键生成全部工艺推荐」在图纸项目下的口径：按**零件文档**计数（不是
+// currentIR.parts），逐件先过 processability，不可算的计入 skipped 并逐条说明。
+function startAllPackagingPartProcesses() {
+  const rows = (currentPackagingParts && currentPackagingParts.parts) || [];
+  const ready = [];
+  const skipped = [];
+  rows.forEach(row => {
+    const verdict = packagingPartProcessability(row);
+    if (verdict.ok) ready.push(row);
+    else skipped.push({ part_code: row.part_code || "", reason: verdict.reason });
+  });
+  if (!ready.length) {
+    const detail = skipped.map(item => `${item.part_code}（${item.reason}）`).join("；");
+    return { ok: false, error: { code: "no-parts",
+      message: rows.length ? `没有可算的零件：${detail}` : "还没有零件，请先完成图纸解析。" } };
+  }
+  // 逐件串行：一次只跑一件，右栏分析的标题与结论始终对得上。
+  const queue = ready.slice();
+  const step = () => {
+    const row = queue.shift();
+    if (!row) return;
+    selectPackagingPart(row.part_code || "").then(() => packagingPartAnalyze("process"))
+      .then(step, step);
+  };
+  step();
+  return { ok: true, result: { total: rows.length, started: ready.length, skipped: skipped } };
 }
 
 /* ---------------- 2.1 左栏空态的原因文案（Spec C4） ---------------- */
@@ -1996,6 +2358,8 @@ function renderTree(ir) {
   const tree = $("tree");
   if (!tree) return;
   tree.innerHTML = "";
+  // 视觉链路不给图纸零件面板留位置：切回视觉 IR 时把面板收掉（右栏内容互斥）。
+  if (currentDrawingEntry !== "drawing_flow") hidePackagingPartPanel();
   // DWG / DXF 链路的左栏是零件文档（不是视觉 IR）：行数 = stats.part_total，
   // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
   if (currentDrawingEntry === "drawing_flow") {
@@ -2010,6 +2374,9 @@ function renderTree(ir) {
     rows.forEach(part => {
       const row = document.createElement("div");
       row.className = "part part-item";
+      // 点得到每一件：行自带 part_code，点击走图纸零件自己的选中路径。
+      row.dataset.partId = part.part_code || "";
+      row.addEventListener("click", () => selectPackagingPart(part.part_code || ""));
       const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
         ? "" : String(part.unfolded_length_mm);
       const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)
@@ -2855,6 +3222,11 @@ function startAllPartProcesses(options) {
   }
   if (!currentProject) {
     return { ok: false, error: { code: "no-project", message: "还没有选择项目，无法生成工艺推荐。" } };
+  }
+  // 图纸项目：零件在图纸零件文档里（currentPackagingParts），不在技术 IR 的
+  // currentIR.parts 里 —— 按零件文档计数并逐件过 processability（Spec §5.4）。
+  if (currentDrawingEntry === "drawing_flow") {
+    return startAllPackagingPartProcesses();
   }
   if (!currentIR || !(currentIR.parts || []).length) {
     return { ok: false, error: { code: "no-parts", message: "还没有零件，请先完成图纸解析。" } };

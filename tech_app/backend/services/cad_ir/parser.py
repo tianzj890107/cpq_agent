@@ -311,7 +311,12 @@ def _curve_metrics(entity: Any, kind: str) -> Tuple[Optional[float], Optional[fl
             control = len(entity.control_points)
         except Exception:  # pragma: no cover
             control = 0
-        attrs.update({"control_points": control, "fit_points": len(pts), "curve": "spline"})
+        # 折线/样条的**顶点坐标必须落盘**（Spec `packaging-parts-true-outline.md` §2）：
+        # 只留数量的话，下游（零件真实轮廓）永远拿不到端点，链式闭合无从谈起。
+        # `fit_points` 由「数量」改为坐标序列，数量挪到 `fit_points_count`（新增键，不删旧信息）。
+        attrs.update({"control_points": control, "fit_points_count": len(pts),
+                      "fit_points": geometry.points_of(pts), "curve": "spline",
+                      "sampled": True, "sample_step": 0.01})
         return length, None, geometry.bbox_of(pts), attrs
     return None, None, None, attrs
 
@@ -332,7 +337,9 @@ def _polyline_row(entity: Any, kind: str, item: Dict[str, Any], builder: _Builde
     length = geometry.polyline_length(points, closed=closed)
     area = geometry.polygon_area(points) if closed else None
     return {"closed": closed, "length": length, "area": area,
-            "bbox": geometry.bbox_of(points), "attributes": {"vertices": len(points)}}
+            "bbox": geometry.bbox_of(points),
+            # 顶点坐标落盘（Spec §2）：`vertices` 仍是数量，`points` 是坐标（与它一致）。
+            "attributes": {"vertices": len(points), "points": geometry.points_of(points)}}
 
 
 def _row_for(entity: Any, item: Dict[str, Any], builder: _Builder,

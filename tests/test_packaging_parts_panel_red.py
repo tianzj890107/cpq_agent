@@ -115,7 +115,7 @@ class BClickableRows(unittest.TestCase):
 class CRightPanel(unittest.TestCase):
     def test_c1_container_exists_inside_model_panes_and_hidden(self):
         html = INDEX_HTML.read_text(encoding="utf-8", errors="replace")
-        self.assertIn('id="%s"' % PANEL_ID, "index.html 缺 #%s" % PANEL_ID)
+        self.assertIn('id="%s"' % PANEL_ID, html, "index.html 缺 #%s" % PANEL_ID)
         panes_start = html.index('id="modelPanes"')
         panes_end = html.index("analysisPanel", panes_start)
         panel_at = html.index('id="%s"' % PANEL_ID)
@@ -128,7 +128,7 @@ class CRightPanel(unittest.TestCase):
         html = INDEX_HTML.read_text(encoding="utf-8", errors="replace")
         for node in ("packagingPartTitle", "packagingPartOutline",
                      "packagingPartFacts", "packagingPartEvidence"):
-            self.assertIn('id="%s"' % node, "面板缺 %s" % node)
+            self.assertIn('id="%s"' % node, html, "面板缺 %s" % node)
 
     def test_c3_renderer_switches_the_panel(self):
         source = _app_js()

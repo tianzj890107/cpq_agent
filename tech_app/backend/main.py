@@ -73,6 +73,7 @@ from .services import (
     llm_settings, material, negotiation, oc_agent, part_edit, part_versions, pricenego, pricing,
     process_lookup,
     packaging_match,
+    packaging_part_solids,
     packaging_bom,
     packaging_cost,
     packaging_drawing_flow,
@@ -7248,6 +7249,355 @@ def get_geometry_file(project_id: str, filename: str):
     if not path or not path.exists():
         raise HTTPException(404, "几何文件不存在")
     return FileResponse(str(path))
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件：单件详情（包装零件第 2 层，Spec docs/specs/packaging-parts-selectable-panel.md §2）
+# --------------------------------------------------------------------------- #
+# 2.1 右栏的零件面板是"选一件看一件"：这里**只回这一件的点**（真图 6569 条实体，
+# 整份 IR 吐给前端会把页面拖死）。纯读：不判写权限，与列表路由 GET .../packaging-parts
+# 的口径一致；零件文档还没生成时回 200 + built:false，让前端说"先跑一键解析"，不报错。
+# 轮廓点**归一到零件自身坐标系**（相对组件 bbox 左下角，origin="part_bbox"），
+# 前端只拼 viewBox、不做任何几何求解（Spec §5）。
+PACKAGING_PART_READ_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}"
+
+# 零件不存在时的稳定错误码（前端据此区分"没这件"与"接口挂了"）。
+PACKAGING_PART_NOT_FOUND = "PACKAGING_PART_NOT_FOUND"
+
+
+def _part_evidence(pid: str, part: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """证据列表（ref / kind / layer / note）。IR 读不到就退化成只有 ref 的行，不报错。"""
+    known: Dict[str, Any] = {}
+    try:
+        ir = cad_ir.load_ir(pid)
+        if isinstance(ir, dict) and isinstance(ir.get("evidence"), dict):
+            known = ir["evidence"]
+    except Exception:  # noqa: BLE001 - 证据拿不到不该让详情接口挂掉
+        known = {}
+    rows: List[Dict[str, Any]] = []
+    for ref in part.get("evidence_refs") or []:
+        item = known.get(str(ref))
+        row: Dict[str, Any] = {"ref": str(ref), "kind": "entity", "layer": "", "note": ""}
+        if isinstance(item, dict):
+            row["kind"] = str(item.get("kind") or "entity")
+            row["layer"] = str(item.get("layer") or "")
+            row["note"] = str(item.get("note") or "")
+        rows.append(row)
+    return rows
+
+
+def _part_outline(part: Dict[str, Any]) -> Dict[str, Any]:
+    """把零件文档里的 outline 整成"单件坐标系"的只读形状（Spec §2）。"""
+    raw = part.get("outline") if isinstance(part.get("outline"), dict) else {}
+    box = raw.get("bbox") or part.get("bbox")
+    box = [float(value) for value in box] if isinstance(box, (list, tuple)) and len(box) == 4 else None
+    points = raw.get("points")
+    normalized = None
+    if box and isinstance(points, list) and points:
+        x0, y0 = box[0], box[1]
+        normalized = [[round(float(point[0]) - x0, 3), round(float(point[1]) - y0, 3)]
+                      for point in points]
+    outline: Dict[str, Any] = {
+        "status": str(part.get("outline_status") or ""),
+        "reason": str(part.get("outline_reason") or ""),
+        "points": normalized,
+        "bbox": box,
+        "area_mm2": raw.get("area_mm2"),
+        "entity_ids": list(raw.get("entity_ids") or []),
+        "origin": "part_bbox",
+    }
+    if raw.get("approximation"):
+        outline["approximation"] = str(raw["approximation"])
+    return outline
+
+
+@app.get(PACKAGING_PART_READ_PATH)
+def get_requirement_packaging_part(pid: str, part_code: str, parts_id: str = "",
+                                   user: dict = Depends(current_user)):
+    """单件详情：右栏零件面板的数据源（轮廓 / 事实 / 证据 / 尺寸口径）。"""
+    _workflow_project(pid)
+    record = packaging_parts.load_parts(pid, parts_id or None)
+    if not isinstance(record, dict) or not record:
+        return {"found": False, "built": False, "part": None, "outline": None,
+                "component_bbox": None, "evidence": [], "size_source": "",
+                "summary": packaging_parts.summarize({})}
+    part = next((row for row in (record.get("parts") or [])
+                 if str((row or {}).get("part_code") or "") == part_code), None)
+    if part is None:
+        raise HTTPException(status_code=404, detail={
+            "code": PACKAGING_PART_NOT_FOUND,
+            "message": "图纸里没有这个零件：%s" % part_code,
+        })
+    return {
+        "found": True,
+        "built": True,
+        "part": part,
+        "outline": _part_outline(part),
+        "component_bbox": part.get("bbox"),
+        "evidence": _part_evidence(pid, part),
+        "size_source": str(part.get("size_source") or ""),
+        "summary": packaging_parts.summarize(record),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件：单件工艺推荐 / 单件成本（包装零件第 3 层，
+# Spec docs/specs/packaging-parts-downstream-process-and-cost.md §3–§4）
+# --------------------------------------------------------------------------- #
+# 图纸零件不写进技术 IR（`store.save_ir()` 只由技术链路写），于是既有
+# POST /parts/{part_id}/process 在图纸项目里必然 404。这里给两条**同形状**的入口：
+# 先过 `packaging_parts.processability()` —— 缺料/未闭合一律 409 并说清缺什么，
+# 绝不用默认厚度或包围盒面积硬算；写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES。
+PACKAGING_PART_PROCESS_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/process"
+PACKAGING_PART_COST_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/cost"
+
+
+def _packaging_part_row(pid: str, part_code: str) -> Dict[str, Any]:
+    """取一行图纸零件；文档未生成 / 没有这个零件都按 404 说清（不让前端猜）。"""
+    record = packaging_parts.load_parts(pid)
+    row = None
+    if isinstance(record, dict) and record:
+        row = next((item for item in (record.get("parts") or [])
+                    if str((item or {}).get("part_code") or "") == part_code), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail={
+            "code": packaging_parts.PROCESS_REJECT_CODES[2],
+            "message": "图纸里还没有这个零件（%s），请先跑一键解析图纸" % part_code,
+        })
+    return {"row": row, "record": record}
+
+
+def _packaging_part_reject(verdict: Dict[str, Any]) -> HTTPException:
+    """前置条件不过 → 409（不可重试）+ 缺哪些变量（Spec §4）。"""
+    return HTTPException(status_code=409, detail={
+        "code": str(verdict.get("code") or ""),
+        "message": str(verdict.get("message") or ""),
+        "missing_variables": list(verdict.get("missing_variables") or []),
+        "retryable": False,
+    })
+
+
+@app.post(PACKAGING_PART_PROCESS_PATH)
+async def packaging_part_process(
+    pid: str, part_code: str,
+    note: str = Form(""),
+    attachments: List[UploadFile] = File(default=[]),
+    user: dict = Depends(current_user),
+):
+    """单件工艺推荐（异步任务，与既有工艺路由同形状：task_id + 进度上报）。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    row = loaded["row"]
+    verdict = packaging_parts.processability(row)
+    if not verdict["ok"]:
+        raise _packaging_part_reject(verdict)
+    part = verdict["part"]
+    atts = await _read_attachments(attachments)
+    expected = _digest_value({"part": row, "note": note})
+
+    def job():
+        # 复用既有工艺链路（process.outline_process 只吃 Part）：图纸零件走同一个模型口径，
+        # 不另写第二套工艺算法。整体（overall）与几何（geom）都为空 —— 图纸件没有那两样输入。
+        tasks.report_progress("模型编制工序明细（只要工序号/名称/类型/设备/工时）")
+        plan, coverage = process.outline_process(part, overall=None, geom=None,
+                                                 note=note, attachments=atts)
+        tasks.report_progress(
+            f"  ↳ 共 {coverage['summary']['total']} 道工序："
+            f"沿用库内 {coverage['summary']['reused']} 道、"
+            f"缺失需新建 {coverage['summary']['missing']} 道")
+        plan_dict = plan.model_dump()
+        return {"part_code": row.get("part_code"), "part_id": part.part_id,
+                "plan": plan_dict, "validation": process.compute(plan_dict),
+                "coverage": coverage}
+
+    return {"task_id": tasks.submit(
+        pid, "packaging_part_process", job,
+        dedup_key=_task_key("packaging_part_process", part_code, expected),
+        actor=user.get("username", ""),
+    )}
+
+
+def _packaging_part_cost_variables(pid: str, row: Dict[str, Any], quantity: int) -> Dict[str, Any]:
+    """成本输入只取**能确定**的两处：零件文档里的展开尺寸/克重 + 需求里已填的值。
+
+    缺的一律不猜：`packaging_cost.compute_line()` 自己会给 `missing_variable:<名>`，
+    页面上如实显示"缺什么"，而不是拿默认吨价算一个假数字。
+    """
+    requirement = store.load_requirement(pid) or {}
+    data = requirement.get("data") if isinstance(requirement.get("data"), dict) else {}
+    variables: Dict[str, Any] = {"cut_length": row.get("unfolded_length_mm"),
+                                 "cut_width": row.get("unfolded_width_mm"),
+                                 "quote_quantity": quantity}
+    gsm = packaging_cost._num(data.get("face_paper_gsm"))
+    if not gsm:
+        match = re.search(r"(\d+(?:\.\d+)?)\s*[gG](?![A-Za-z])",
+                          str(row.get("material") or ""))
+        gsm = packaging_cost._num(match.group(1)) if match else None
+    if gsm:
+        variables["gsm"] = gsm
+    for key in ("ton_price", "imposition_count", "proof_base", "tax_factor",
+                "material_price"):
+        value = data.get(key)
+        if value not in (None, ""):
+            variables[key] = value
+    return variables
+
+
+def _packaging_part_cost_analysis(row: Dict[str, Any], line: Dict[str, Any],
+                                  quantity: int, part_id: str) -> Dict[str, Any]:
+    """把「一行材料费」映射进平台既有的 CostAnalysis 契约（不新写成本算法）。
+
+    数字来自 `packaging_cost.compute_line()`（库内公式与费率），这里只负责把公式、
+    取值与来源交代清楚，好让 2.1 右栏用同一个成本渲染器显示。
+    """
+    gap = line.get("gap") if isinstance(line.get("gap"), dict) else None
+    amount = line.get("amount")
+    item = {"category": "material",
+            "name": "材料开料（%s）" % (line.get("formula_code") or "material"),
+            "basis": str(line.get("expression") or ""),
+            "quantity": 1, "unit": "件",
+            "unit_price": amount, "amount": amount,
+            "source": str(line.get("formula_source") or ""),
+            "confidence": 0.7 if amount is not None else 0.3}
+    assumptions = list(line.get("assumptions") or [])
+    if gap:
+        assumptions.append("缺输入：%s（%s）" % (gap.get("code") or "",
+                                              gap.get("detail") or ""))
+    return {"part_id": part_id, "part_name": str(row.get("name") or ""),
+            "material": str(row.get("material") or ""), "quantity": quantity,
+            "currency": "CNY",
+            "summary": "图纸零件 %s 的单件材料开料成本（口径：%s）"
+                       % (row.get("part_code"), line.get("rule_snapshot_version") or ""),
+            "items": [item], "unit_cost": amount,
+            "price_references": [], "search_sources": [],
+            "assumptions": assumptions, "open_questions": []}
+
+
+@app.post(PACKAGING_PART_COST_PATH)
+async def packaging_part_cost(
+    pid: str, part_code: str, quantity: int = 1,
+    note: str = Form(""),
+    attachments: List[UploadFile] = File(default=[]),
+    user: dict = Depends(current_user),
+):
+    """单件成本测算（异步任务，与既有成本路由同形状：task_id + 进度上报）。
+
+    数字一律来自 packaging_cost 的库内公式；图纸零件缺料/未闭合时**先拒绝**
+    （processability 不过 → 409），绝不用包围盒面积冒充零件面积去算。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    row = loaded["row"]
+    verdict = packaging_parts.processability(row)
+    if not verdict["ok"]:
+        raise _packaging_part_reject(verdict)
+    part_id = verdict["part"].part_id
+    qty = max(1, int(quantity or 1))
+    await _read_attachments(attachments)
+    expected = _digest_value({"part": row, "quantity": qty})
+
+    def job():
+        tasks.report_progress("按库内公式算这一件的材料开料成本")
+        try:
+            line = packaging_cost.compute_line(
+                "material", _packaging_part_cost_variables(pid, row, qty))
+        except packaging_cost.CostError as exc:
+            raise RuntimeError("%s（%s）" % (exc.message, exc.code or "cost_error"))
+        amount = line.get("amount")
+        tasks.report_progress(
+            "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
+            else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
+        a_dict = _packaging_part_cost_analysis(row, line, qty, part_id)
+        return {"analysis": a_dict, "summary": cost.compute(a_dict),
+                "library": None, "line": line}
+
+    return {"task_id": tasks.submit(
+        pid, "packaging_part_cost", job,
+        dedup_key=_task_key("packaging_part_cost", part_code, expected),
+        actor=user.get("username", ""),
+    )}
+
+
+@app.get(PACKAGING_PART_PROCESS_PATH)
+def get_packaging_part_process(pid: str, part_code: str,
+                               user: dict = Depends(current_user)):
+    """读单件工艺结论：图纸零件的结论**不写进技术侧 store**（技术 IR 只由技术链路写），
+    第一版每次现算，这里如实回"还没生成"。"""
+    _workflow_project(pid)
+    _packaging_part_row(pid, part_code)
+    return {"plan": None, "validation": None, "coverage": None}
+
+
+@app.get(PACKAGING_PART_COST_PATH)
+def get_packaging_part_cost(pid: str, part_code: str,
+                            user: dict = Depends(current_user)):
+    """读单件成本结论（同上：不落技术侧 store，未生成就是空）。"""
+    _workflow_project(pid)
+    _packaging_part_row(pid, part_code)
+    return {"analysis": None, "summary": None}
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件：平板挤出与 3D 预览（包装零件第 4 层，
+# Spec docs/specs/packaging-parts-3d-extrusion.md §4）
+# --------------------------------------------------------------------------- #
+# 只做「闭合轮廓 × 已知料厚」的直线挤出。挤不出来 = **算得出结论**（unsupported），
+# 回 200 + 原因，不回 5xx：面板据此翻人话，而不是留一块空白画布。
+# 结论**不写技术 IR**（那会与既有几何链路抢同一个文档），只落本模块自己的版本化文档。
+PACKAGING_PART_SOLID_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/solid"
+PACKAGING_PART_SOLID_STL_PATH = "/api/projects/{pid}/requirement/packaging-parts/{part_code}/solid.stl"
+PACKAGING_PART_SOLID_MISSING = "PACKAGING_PART_SOLID_MISSING"
+
+
+def _packaging_solid_public(result: Dict[str, Any], version: int) -> Dict[str, Any]:
+    """POST 的响应：不带 STL 正文（那份走 GET …/solid.stl），避免 JSON 里塞几千行。"""
+    return {"part_code": str(result.get("part_code") or ""),
+            "status": str(result.get("status") or ""),
+            "reason": str(result.get("reason") or ""),
+            "triangles": int(result.get("triangles") or 0),
+            "bbox_mm": result.get("bbox_mm") or {},
+            "volume_mm3": result.get("volume_mm3"),
+            "points": int(result.get("points") or 0),
+            "stl_bytes": len(str(result.get("stl") or "")),
+            "solids_version": version}
+
+
+@app.post(PACKAGING_PART_SOLID_PATH)
+def packaging_part_solid(pid: str, part_code: str, user: dict = Depends(current_user)):
+    """按当前零件文档现算一版挤出体（不可挤出也回 200 + unsupported + 原因）。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    result = packaging_part_solids.extrude(loaded["row"])
+    record = packaging_part_solids.load_solids(pid) or {}
+    parts = [item for item in (record.get("parts") or [])
+             if isinstance(item, dict) and str(item.get("part_code") or "") != part_code]
+    parts.append(result)
+    parts.sort(key=lambda item: str(item.get("part_code") or ""))
+    saved = packaging_part_solids.save_solids(
+        pid, {"engine_version": packaging_part_solids.ENGINE_VERSION, "parts": parts})
+    return _packaging_solid_public(result, int(saved.get("version") or 0))
+
+
+@app.get(PACKAGING_PART_SOLID_STL_PATH)
+def get_packaging_part_solid_stl(pid: str, part_code: str):
+    """下载这一件的 ASCII STL（application/sla）。没生成过就 404 + 稳定错误码。"""
+    _workflow_project(pid)
+    record = packaging_part_solids.load_solids(pid) or {}
+    item = next((row for row in (record.get("parts") or [])
+                 if isinstance(row, dict)
+                 and str(row.get("part_code") or "") == part_code
+                 and str(row.get("status") or "") == "ok" and row.get("stl")), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail={
+            "code": PACKAGING_PART_SOLID_MISSING,
+            "message": "这一件还没有可下载的 3D 挤出体，请先在右栏点「3D 预览」",
+        })
+    return Response(content=str(item.get("stl") or ""), media_type="application/sla",
+                    headers={"Content-Disposition":
+                             'attachment; filename="%s.stl"' % part_code})
 
 
 # --------------------------------------------------------------------------- #

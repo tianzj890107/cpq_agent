@@ -224,7 +224,77 @@ print("两份样本均由主转换器完成，dxf + preview 齐全")
 PY
 
 # --------------------------------------------------------------------------- #
-step "6. 结论"
+step "6. 下游连通自检（包装图纸零件：零件文档 → 单件详情 → 闭合件试挤出）"
+# 样本项目 id **必须由用户提供**（CPQ_PARTS_PROJECT_ID）：不许脚本自己猜项目，也不许拿
+# 生产项目当试验田。未提供 → skip 并打印原因（Spec packaging-parts-downstream-acceptance §6）。
+PARTS_PID="${CPQ_PARTS_PROJECT_ID:-}"
+BASE="${CPQ_BASE_URL:-http://127.0.0.1:8010}"
+if [ -z "$PARTS_PID" ]; then
+  echo "skip：未提供样本项目 id，跳过下游连通自检"
+  echo "      要跑这一步：CPQ_PARTS_PROJECT_ID=<项目id> bash scripts/deploy_34_bare.sh $REF"
+else
+  "$PY" - "$PARTS_PID" "$BASE" <<'PY' || fail "下游连通自检未通过（见上）"
+import json
+import sys
+import urllib.error
+import urllib.request
+
+pid, base = sys.argv[1], sys.argv[2]
+
+
+def call(path, method="GET"):
+    request = urllib.request.Request(base + path, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+        except Exception:                                     # noqa: BLE001
+            payload = {}
+        return exc.code, payload
+
+
+parts_path = "/api/projects/%s/requirement/packaging-parts" % pid
+status, doc = call(parts_path)
+if status in (401, 403):
+    print("skip：本地 HTTP 需要登录态（HTTP %d），无法在部署脚本里跑下游自检" % status)
+    print("     请登录后在浏览器里打开 %s 复核，或带上 ?token=<会话令牌> 再跑本步" % parts_path)
+    sys.exit(0)
+if status != 200:
+    print("✗ 零件文档读不到：HTTP %d %s" % (status, doc), file=sys.stderr)
+    sys.exit(1)
+stats = doc.get("stats") or {}
+print("· 零件文档：built=%s part_total=%s closed_ratio=%s"
+      % (bool(doc.get("parts")), stats.get("part_total"), stats.get("closed_ratio")))
+if not doc.get("parts"):
+    print("✗ 零件文档是空的：先在这个项目上跑一次「一键解析图纸」", file=sys.stderr)
+    sys.exit(1)
+
+first = str((doc.get("parts") or [{}])[0].get("part_code") or "")
+status, detail = call("%s/%s" % (parts_path, first))
+if status != 200 or not detail.get("found"):
+    print("✗ 单件详情读不到：%s HTTP %d %s" % (first, status, detail), file=sys.stderr)
+    sys.exit(1)
+outline = detail.get("outline") or {}
+print("· 单件详情：%s outline.status=%s 点数=%s"
+      % (first, outline.get("status"), len(outline.get("points") or [])))
+
+if str(outline.get("status") or "") == "closed":
+    status, solid = call("%s/%s/solid" % (parts_path, first), method="POST")
+    if status != 200 or str(solid.get("status") or "") not in ("ok", "unsupported"):
+        print("✗ 挤出结论异常：HTTP %d %s" % (status, solid), file=sys.stderr)
+        sys.exit(1)
+    print("· 3D 挤出：status=%s reason=%s（unsupported 也是结论，不算失败）"
+          % (solid.get("status"), solid.get("reason") or "-"))
+else:
+    print("· 首件不是闭合轮廓，跳过 3D 挤出（unsupported 分支由单件详情已证）")
+print("下游连通自检通过（零件文档 → 单件详情 → 挤出结论）")
+PY
+fi
+
+# --------------------------------------------------------------------------- #
+step "7. 结论"
 echo "部署完成：$OLD_HEAD → $NEW_HEAD（ref=$REF）"
 echo "8010 pid=$PID；env 文件=$ENVF；日志=nohup.out"
 echo "能力声明口径（未通过 L4 之前只能这么说）：DWG 编排能力完成，真实转换能力未验收"
