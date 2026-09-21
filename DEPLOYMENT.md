@@ -59,20 +59,22 @@ CPQ_DEPLOY_REF=vX.Y.Z bash scripts/deploy_server.sh
 
 部署成功必须同时满足三个条件：`http://127.0.0.1:8010/` 返回 2xx；`http://127.0.0.1:8010/api/health` 返回 2xx；`/api/health` 的 JSON 字段 `status` 严格等于 `ok`。该接口经父服务反向代理到技术工艺 FastAPI 子服务，是子服务启动完成的就绪信号，只看首页会在子服务未启动时误报成功。容器自身也配置了同样的 healthcheck（用运行镜像自带的 Python 标准库解析 JSON，不依赖 `curl`）。达到超时仍不健康时会打印 `docker compose logs --tail=100 cpq-suite` 并非零退出，不删除旧数据、不清理 volume。
 
-## 线上实例现状（172.16.10.34，2026-09-16 18:08 部署后核对）
+## 线上实例现状（172.16.10.34，2026-09-21 11:15 部署后核对）
 
 上面那套是**容器化**路径；这台机器上真正在跑的是另一条，换机器或换人前请重新核对本节。
 
 - 服务形态：**裸进程**，不走 `docker compose`。`8010` 由 `wugefei` 运行
   `./open-claude/.venv/bin/python cpq_suite_server.py --host 0.0.0.0 --port 8010`，父进程再拉起子进程
   `tech_app_launch.py --host 127.0.0.1 --port 8012`（父进程退出会带走子进程）。
-- 代码目录：`/home/wugefei/CPQ/cpq_agent`，分支 `20260909`，当前 `c71679b`（该目录 `origin` 指向
+- 代码目录：`/home/wugefei/CPQ/cpq_agent`，分支 **`ytbz`**，当前 **`d0504f3`**（2026-09-21 部署；此前
+  长期停在 `20260909` 的 `c71679b`，2026-09-20 起改为部署 `ytbz`）（该目录 `origin` 指向
   GitHub、`gitlab` 指向内网 `http://gitlab.boulderaitech.com/ai-team/cpq_agent.git`；**部署从
   `gitlab` 取、fetch 不需要 SSH key**）；
   另有 `/home/wugefei/CPQ2/cpq_agent`（带 `Dockerfile` / `docker-compose.yml`，不是当前线上实例）。
-- 当前进程（2026-09-16 18:08 重启后）：8010 `cpq_suite_server.py` PID **2290595**（PPID 1，已脱离会话）、
-  8012 `tech_app_launch.py` PID **2290720**（父进程 2290595 拉起）；旧日志按次归档为
-  `nohup.out.prev.<时间戳>`。
+- 当前进程（2026-09-21 11:15 重启后）：8010 `cpq_suite_server.py` PID **1515687**（PPID 1，已脱离会话）、
+  8012 `tech_app_launch.py` PID **1515764**（父进程 1515687 拉起）；旧日志按次归档为
+  `nohup.out.prev.<时间戳>`；本次回滚记录写在 `/home/wugefei/CPQ/deploy_prev_before_d0504f3.txt`
+  （内容是部署前的分支与 HEAD）。
 - 本文默认目录 `/home/data/zhangzhen_home/zhangzhen/cpq_agent` 在这台机器上**不存在**；照上面那条
   `CPQ_DEPLOY_REF=... bash scripts/deploy_server.sh` 直接执行会先失败在目录与 `origin` 校验
   （脚本要求部署目录 `origin` 是 CPQ GitLab）。
