@@ -796,6 +796,7 @@
           <button class="quick-action-btn" id="qaStep" onclick="confirmStep()"><i class="ti ti-arrow-right"></i> 进入下一大步骤</button>
           <button class="quick-action-btn" id="qaPrev" onclick="goPrev()"><i class="ti ti-arrow-left"></i> 上一步</button>
           <button class="quick-action-btn" id="qaSend" onclick="wfOpenSendDefault()"><i class="ti ti-send"></i> 转交任务</button>
+          <button class="quick-action-btn" id="qaTechNew" onclick="wfOpenSend(false, 'tech_new_product')"><i class="ti ti-tools"></i> 转技术工艺</button>
         </div>
         <div class="attach-chips" id="attachChips"></div>
         <div class="chat-input-wrapper">
@@ -2488,6 +2489,7 @@
       if (qs) qs.disabled = lock;
       if (qp) qp.disabled = lock || currentStep <= 1;
       if (qsend) qsend.disabled = lock;          // 未登录连转交也不可用（转交需要账号）
+      const qtn = $('qaTechNew'); if (qtn) qtn.disabled = lock;  // 转技术工艺同样要登录
       const inp = $('chatInput');
       if (inp) {
         inp.disabled = GATE_BLOCKED;

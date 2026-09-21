@@ -3965,3 +3965,137 @@ three_d.status = unavailable | acceptance.reason = missing_record
 分支由 `20260909`/`c71679b` 改为 **`ytbz`/`d0504f3`**（并注明 2026-09-20 起改为部署 `ytbz`），
 进程 PID 改为 8010 **1515687** / 8012 **1515764**，另补本次回滚记录路径。
 该节不含 `CPQ_ENV_FILE` / `CPQ_USER_SECRET_KEY` 等部署前置检查内容，`tests.test_cpq_secret_key_env_and_loud_503_red` 复跑 `Ran 12 tests … OK`。
+
+---
+
+## 193. 报价工作台「转技术工艺」按钮：Spec + 红测（10 红 / 9 绿）（9-21，Codex 只写 Spec 与红测+changelog）
+
+### 现场问题（用户原话「想走技术工艺流程但是走不过去」）
+
+销售在报价工作台走一条包装询盘（数码天地盒 100*90*40 / 铜版纸亮膜+哑膜 / 灰板 2.5mm /
+首批 1500 / 常温），卡在第 2 步「工艺确认」。实测链路：
+
+- 第 1 步把这单包装需求拿去查**锂亚电池**库，Top3 是 `91000226 / 91000255 / 91000365`，
+  「用途/场景契合」维度 30 分、总分 86 分；
+- 用户在对话里选了「转定制评估」，但**服务端全文只有文字**（`cpq_agent_server.py`
+  `:663` `:832` `:1179` `:1887`），没有结构化字段、不建任务、不改状态 —— 用户以为选了路，
+  系统侧什么都没发生；
+- 点「进入下一大步骤」→ 第 2 步两张表 `共 0 条`（非标无标品，`CARRY_MAP` 沿用为空）；
+  「强行填满本步骤」也无效（第 2 步是人工核对步骤，智能体不渲染）；
+- 整条链路上**没有一个可以让用户主动发起「新增工艺」的按钮**：唯一的建议气泡
+  `showTechNewSuggestion()`（`确认需求解析结果.html:3220`）只在 `:2381`
+  `if (d.below_threshold)` 出现，本次 86 分 ≥ 阈值 70 → 入口不出现；页脚「转交任务」
+  的预选值同样只看 `below`（`:3289`）。
+
+「新增工艺」能力本身早已存在（`cpq_wf.TASK_KIND_TECH_NEW`、`tech_app/frontend/tech-task.js`、
+`cpq-tech-inbox.js:179`、`cpq_tech_bridge.send_to_quote()`、`确认需求解析结果.html:3329`
+的选项），缺的只是一个看得见的常驻入口。
+
+### 本批交付（只写 Spec + 红测，未改任何生产代码）
+
+| 文件 | 说明 |
+| --- | --- |
+| `docs/specs/quote-tech-handoff-button.md` | Spec：按钮位置/外观/点击行为/常驻可用/禁用一致/发送闭环/不编造数据/禁止事项；§6 记录同现场暴露的 3 个更深问题（非标判定只看总分、第 2 步无非标承载位、第 3 步文案归因错误），明确不在本批范围 |
+| `tests/test_quote_tech_handoff_button_red.py` | 红测 19 条，全部离线只读源码 |
+
+红测契约（Spec §3）：按钮落在 `#quickActions` 内、`class="quick-action-btn"` + Tabler 图标、
+文案「转技术工艺」、`id="qaTechNew"` 唯一、`onclick` 逐字
+`wfOpenSend(false, 'tech_new_product')`；不依赖 `below_threshold`/`nonstandard`/`WF.matchResult`；
+禁用统一由 `setBusy()` 按 `lock = busy || GATE_BLOCKED` 管；发送后先出用户气泡、默认收件角色
+工艺经理、AI 回执「已发起「新增工艺」任务 …」、报价卡片停在原步骤；该路径不得写
+`s1_products`/`s1_techparams`、不得调 `render_table`/`render_form`。
+
+### 红测实测原文（实现前）
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_quote_tech_handoff_button_red
+Ran 19 tests in 0.478s
+FAILED (failures=10)
+```
+
+10 条红全部集中在 A 组（按钮存在/位置/外观 5）、B 组（常驻不依赖匹配结果 3）、
+C 组（禁用与登录一致 2）——即本次唯一要新增的能力；D/E/F 共 9 条为护栏，当前即为绿，
+用于约束实现方不许顺手动发送闭环或塞假数据。
+
+### 最小实现预演（红测可满足性验证，未落盘生产代码）
+
+按 Spec §2 加 1 个按钮 + 按 §3.3 在 `setBusy()` 加 1 行禁用语句后，把同一套判定逻辑跑在
+内存里的模拟副本上：
+
+```
+PASS A1 按钮在按钮区        PASS A2 onclick 逐字         PASS A3 同款样式+图标
+PASS A4 文案                PASS A5 id 唯一             PASS B1 不含 below_threshold
+PASS B2 不含 nonstandard    PASS B3 无 disabled 属性     PASS C1 setBusy 含 qaTechNew
+PASS C2 用同一个 lock        PASS F1 既有四按钮原样
+```
+
+### 回归
+
+```
+tests.test_quote_agent_industry_alignment_red            Ran 33 tests  OK
+tests.test_quote_task_coexistence_and_atomic_claim_red   Ran 41 tests  OK
+tests.test_packaging_box_type_matching_red               Ran 51 tests  OK
+```
+
+### 未完成的能力声明
+
+- **未实现**（本条记录当时的状态）：本次只有 Spec + 红测；生产者代码一行未改，按钮尚不存在，
+  10 条红测仍红。→ **已由 `## 194` 实现并转绿**，本条保留为当时的现场记录。
+- 未提交、未推送、未创建 MR/tag/Release、未部署、未重启任何服务。
+- 未引入新的系统依赖或第三方库（红测只用标准库 + 仓库内模块）。
+
+---
+
+## 194. 报价助手按钮区新增常驻「转技术工艺」按钮（实现，19 条红测转绿）（9-21，Codex）
+
+### 背景
+
+`## 193` 的 Spec 与红测落地实现。现场那单总分 86 ≥ `RECOMMEND_THRESHOLD=70`，
+「用途/场景契合」维度塌陷被其余五项掩盖，`below_threshold=false`，于是
+`确认需求解析结果.html` 的「新增工艺」建议气泡不出现，页脚「转交任务」也不再预选
+`tech_new_product` —— 用户在对话里选「转定制评估」只是字符串，`tech_new_product` 任务、
+技术工艺专属页、待办入口、回写报价全都已实现，缺的只是一个看得见的按钮。
+
+### 改动（只改 `确认需求解析结果.html`，共 +2 行）
+
+```
+@@ -796,6 +796,7 @@   #quickActions 内，qaSend 之后
+           <button class="quick-action-btn" id="qaSend" onclick="wfOpenSendDefault()">…转交任务</button>
++          <button class="quick-action-btn" id="qaTechNew" onclick="wfOpenSend(false, 'tech_new_product')"><i class="ti ti-tools"></i> 转技术工艺</button>
+@@ -2488,6 +2489,7 @@  setBusy() 内，既有快捷按钮禁用块
+       if (qsend) qsend.disabled = lock;          // 未登录连转交也不可用（转交需要账号）
++      const qtn = $('qaTechNew'); if (qtn) qtn.disabled = lock;  // 转技术工艺同样要登录
+```
+
+按钮是静态标签：不带 `disabled` 属性，不含 `below_threshold` / `nonstandard` /
+`WF.matchResult`（用户自己判断要走新工艺时就能点）；禁用统一由 `setBusy()` 的同一个
+`lock`（`busy || GATE_BLOCKED`）管。`wfOpenSend(forced, presetKind)` 命中既有签名，
+`TECH_NEW_ROLE='process_mgr'` 的建议角色照旧；未登录时 `wfOpenSend` 自己走 `cpqAuth.open()`。
+未动 `cpq_agent_server.py` / `cpq_wf.py` / `cpq_match.py`，未新增接口或依赖。
+
+### 红测证据（实现前 → 实现后）
+
+```
+$ ./open-claude/.venv/bin/python -m unittest tests.test_quote_tech_handoff_button_red
+（实现前）AssertionError: [] is not true : setBusy 里没有 qaTechNew 的禁用语句（Spec §3.3）
+          Ran 19 tests in 0.488s   FAILED (failures=10)
+（实现后）Ran 19 tests in 0.441s   OK
+```
+
+### 回归（实跑原文）
+
+```
+tests.test_quote_agent_industry_alignment_red            Ran 33 tests  OK
+tests.test_quote_task_coexistence_and_atomic_claim_red   Ran 41 tests  OK
+tests.test_packaging_box_type_matching_red               Ran 51 tests  OK
+tests.test_quote_tech_unified_tool_list_conversation_red Ran 35 tests  OK   ← 字体指纹护栏：+2 行未造成行号位移
+node --check（页面内联脚本）                              -> 0
+git diff --check                                         -> 干净
+```
+
+### 未完成的能力声明
+
+- 本批只补入口。**未**修 `## 193` §6 记录的三个更深问题：非标判定只看总分（维度塌陷仍会被
+  掩盖）、第 2 步「工艺确认」无非标承载位（`CARRY_MAP` 只认标品行，非标两张表必为 0 条）、
+  第 3 步 `runMarkupStep()` 的归因文案错误。这些问题都需要单独批次与 Spec，不在本批范围。
+- 未部署、未重启服务、未改服务器配置；未引入新的系统依赖或第三方库。
