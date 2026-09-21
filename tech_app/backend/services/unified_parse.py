@@ -29,6 +29,11 @@ SERVICE_VERSION = "unified_parse_v1"
 MAX_PARSE_BYTES = 64 * 1024 * 1024
 MAX_LIST_ITEMS = 200                 # 列表类字段的截断上限
 MAX_MATERIAL_NOTES = 50
+#: HTTP 路由（唯一事实源：main.py 的免登录白名单按这两个常量登记，免得两处字符串漂移；
+#: 装饰器里仍写字面量，便于按路由快速定位）。
+SERVICE_PATH = "/api/file/parse"
+CAPABILITY_PATH = "/api/file/parse/capability"
+
 #: 转换产物落这个**隔离解析项目**的目录（不是业务项目：不建卡片、不写需求/零件/成本）。
 PARSE_PROJECT_ID = "cpq-unified-parse"
 

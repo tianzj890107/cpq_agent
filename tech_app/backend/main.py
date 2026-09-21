@@ -421,6 +421,11 @@ def _sync_pricing_approval(current: Optional[PricingPlan], incoming: PricingPlan
 # 关闭鉴权时注入隐式 system/admin,保持旧行为。
 # --------------------------------------------------------------------------- #
 _PUBLIC_PATHS = {"/api/health", "/api/login", "/api/register"}
+# 逆向快速报价批 7 的统一解析服务（能力查询 + 解析两个端点）也要免登录：报价侧快速通道是
+# **纯 HTTP 客户端**（没有用户会话，见 cpq_quick_quote_file 的默认解析地址），Spec §2.6 的
+# 端到端红测同样**不带票**直连。这两个端点只读、不写业务数据，转换另有 MAX_PARSE_BYTES
+# 上限与转换器超时，所以与 health 同类。路径取自 unified_parse 的常量（唯一事实源）。
+_PUBLIC_PATHS.update({unified_parse.SERVICE_PATH, unified_parse.CAPABILITY_PATH})
 _PROJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{12}$")
 _login_lock = threading.Lock()
 _login_attempts: dict[str, list[float]] = {}
