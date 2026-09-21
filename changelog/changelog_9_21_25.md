@@ -3632,3 +3632,26 @@ wrapper 逐项排在 exe 之前且不经 shell；版本口径三态；回退链�
   已按用户指令 **commit + push 到 `ytbz`（origin / gitlab 双远端）**；
   **未 MR / 未 tag / 未 Release / 未部署 / 未重启服务 / 未改服务器配置**；未新增依赖；
   `裕同包装项目-待开发/` 保持 untracked、只读，未入库。
+
+### 真机验证（本机 ODA 27.1 / LibreDWG 0.14；样本只读、产物只写临时目录、不写真实 tech_data）
+
+主链路（`DWG_CONVERTER_PROVIDER=oda` + `DWG_CONVERTER_VERSION=27.1`）：
+
+| 样本 | 字节 / sha256 前 8 | status | 驱动 | DWG→DXF | entity / layer | text / dim / block_ref | warn / error | 产物 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `酒盒.dwg` | 686195 / `0991c8b0` | `ok` | oda primary（未回退） | AC1027 → AC1032 | 6711 / 8 | 127 / 316 / 0 | 0 / 0 | `source.dxf` 2693477 B |
+| `圆盘盒.dwg` | 889062 / `4c70ce7b` | `ok` | oda primary（未回退） | AC1027 → AC1032 | 3457 / 32 | 87 / 141 / 234 | 0 / 0 | `source.dxf` 4138969 B |
+
+两者 `quality.verified=true` / `output_version=ACAD2018` / `audit_enabled=true` / `degraded=false`。
+
+回退链路（主二进制故意指向 `/nonexistent/…`，回退 LibreDWG 0.14）：
+
+| 样本 | `primary_failure_code` | status | warn / error | 产物 |
+| --- | --- | --- | --- | --- |
+| `酒盒.dwg` | `DWG_CONVERTER_BINARY_UNUSABLE` | `success_with_warnings` | **1520 / 0** | `converted.dxf` 3826412 B + `converted.svg` 2031603 B |
+| `圆盘盒.dwg` | `DWG_CONVERTER_BINARY_UNUSABLE` | `success_with_warnings` | **252 / 3** | `converted.dxf` 4088695 B + `converted.svg` 1861437 B |
+
+两次回退都留痕：`converter_role=fallback`、`converter_name=libredwg`、`converter_version=0.14`、
+`fallback_used=true`；审计出现 `dwg.convert` 与 `dwg.convert.fallback` 两条。⚠️ 这是**编排层 + 驱动
+形状**的真机验证，**不等于** L4 验收：没有已审批金标与验收记录，`support_claim` 仍为
+`conversion_available`、`dwg_supported` 仍为 `false`。
