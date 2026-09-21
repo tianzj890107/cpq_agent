@@ -328,7 +328,16 @@ step "6b. 下游连通自检（隔离端到端：不需要项目 id，也不写�
 # 口径见 Spec `packaging-parts-downstream-acceptance.md` §6.1。
 META_BEFORE="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
 SELFCHECK_DIR="${TMPDIR:-/tmp}/cpq-parts-selfcheck.$$"
-DATA_DIR="$SELFCHECK_DIR/data" "$PY" - <<'PY'
+# 知识库走"服务间内部令牌 + HTTP 快照"（技术工艺不直连 Postgres），令牌由 8010 启动时生成并
+# 只传给它的 8012 子进程 —— 外部脚本要从**正在跑的 8010 进程 environ**里取同一个值，
+# 否则权威实样那条自检只能跳过（"自检没跑"正是要防的失效模式）。
+SELFCHECK_TOKEN="$(tr '\0' '\n' < "/proc/$PID/environ" 2>/dev/null | sed -n 's/^CPQ_INTERNAL_TOKEN=//p' | head -1)"
+if [ -n "$SELFCHECK_TOKEN" ]; then
+  echo "· 已从 8010（pid=$PID）取到服务间内部令牌，知识库自检可以真跑"
+else
+  echo "· 取不到 8010 的内部令牌，知识库自检会打印原因跳过"
+fi
+DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" "$PY" - <<'PY'
 import json
 import os
 import pathlib
@@ -407,7 +416,7 @@ if authoritative is not None:
         code = str(item.get("box_type_code") or "")
         req_no = "REQ-ROUTE-SELFCHECK"
         try:
-            pid = store.create_project("route-selfcheck-" + code, b"",
+            pid = store.create_project("route-selfcheck-%s.dwg" % code, b"selfcheck",
                                        note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
                                        owner_display_name="deploy-selfcheck")
             requirement_service.save_requirement_draft(
