@@ -409,11 +409,17 @@ class TestEDeviationAndRange(Base):
         self.assertIn("0.07", json.dumps(quote["deviation"]))
 
     def test_e3_deviation_capped(self):
+        # 实现期回写（见 Spec §5）：原写法的 window=True 属于「相对基准新增 + 没有差异价
+        # 规则」的工艺项，按 Spec §2.3 第 6 条必须先被门槛拦下，price() 不该出价；
+        # 这里改用「删项 + 无规则的费用项」堆偏差，并把上限压到 10% 真正验证封顶（断言只增不减）。
         module = self.module()
-        ws = self.workspace(dict(USER_EDITS, freight_amount=300, ribbon=False,
-                                 window=True, magnet=False, v_groove=False))
-        quote = module.price(BASELINE, ws, today=TODAY, rules=RULES)
+        ws = self.workspace(dict(USER_EDITS, freight_amount=300,
+                                 magnet=False, v_groove=False))
+        quote = module.price(BASELINE, ws, today=TODAY, rules=RULES,
+                             config={"max_deviation_pct": 0.10})
         self.assertLessEqual(float(quote["deviation"]["est_pct"]), 0.20)
+        self.assertAlmostEqual(0.10, float(quote["deviation"]["est_pct"]), places=9,
+                               msg="0.05 + 3×0.02 = 0.11，封顶 0.10")
 
     def test_e4_risk_notice_contains_key_points(self):
         module = self.module()

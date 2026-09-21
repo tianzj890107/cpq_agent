@@ -319,8 +319,8 @@ class TestCWorkspaceState(Base):
         self.assertIs(True, confirmed["current"]["hot_stamping"])
         self.assertEqual({}, dict(confirmed["pending"]))
         self.assertTrue(confirmed["confirmed"])
-        self.assertEqual({"quantity": 3000.0}, dict(ws["pending"]),
-                         "confirm() 不得改入参（Spec §2.3）")
+        self.assertEqual({"quantity": 3000.0, "hot_stamping": True}, dict(ws["pending"]),
+                         "confirm() 不得改入参（Spec §2.3）：入参应原样保留**两条**待确认项")
 
     def test_c6_confirm_requires_user(self):
         module = self.module()

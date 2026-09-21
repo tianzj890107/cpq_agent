@@ -210,3 +210,23 @@ def transfer_to_precise(quote, *, user=None, session_id="") -> dict
 - 不改精准报价的定价公式与报价单口径；
 - 不接文件解析与 DWG（批 5）；
 - 不自动派发任务：`transfer_to_precise()` 只产出交接包。
+
+## 5. 实现期回写（2026-09-21，实现时实测发现，实现按红测落地）
+
+`tests/test_quick_quote_generation_red.py::test_e3_deviation_capped` 原写法的字段组合与
+Spec §2.3 第 6 条**互相矛盾**，无论怎么实现都不可能同时成立：
+
+- 原文用 `window=True` 堆偏差。而 `window` 属于 §2.3 第 6 条的「结构/工艺字段」，
+  基准值 `False → True` 属于「相对基准**新增**」且 `kb_quick_quote_delta_rule` 里没有
+  `window` 的规则 → 必须被 `no_unknown_process` 拦下，`price()` 根本不该出价；
+- 于是「偏差封顶」这条断言永远跑不到（同一份红测的 C8 恰恰钉死了「新增工艺无规则 → 拦下」）。
+
+实现期按 Spec §2.3 的口径（也是 C8 的口径）落地，并把 E3 改成用
+「**删项**（`magnet` / `v_groove` 由 True 改为 False，属删除不是新增，不触发第 6 条）+
+无规则的费用项（`freight_amount`）」堆偏差，再用 `config={"max_deviation_pct": 0.10}`
+把上限压到 10% 真正验证封顶 —— 断言只增不减，并加了说明注释。
+
+另一处口径澄清（实现期定稿）：第 6 条的「相对基准新增」按**新增**判定 ——
+布尔字段 `False/空 → True`、文本字段 `空 → 非空`；
+删除（`True → False`）与「换成另一个非空值」不算新增，只按 §2.4 第 2 条扩大预估偏差区间
+（这类差异没有价格依据时也不得当成 0）。

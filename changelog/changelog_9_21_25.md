@@ -7126,3 +7126,91 @@ GET /                                                 → HTTP 200
 未创建 MR / tag / Release；未改 `20260909` / `master`；未动并行会话在写的
 `docs/specs/packaging-parts-*.md` 与 `tests/test_packaging_parts_*_red.py`（工作区里它们仍是未跟踪文件）。
 未引入任何第三方依赖。GitHub `origin` 未推送（DNS，见上）。
+## 238. 逆向快速报价第 3/4/5 批：字段工作区与差异价 → 出价与转精准 → 文件解析客户端（9-21，Codex 实现 + 回归）
+
+**本批交付三件事**（Spec 都在 `docs/specs/quick-quote-{3,4,5}-*.md`）：
+
+1. **批 3 字段工作区与差异价** —— 新模块 `cpq_quick_quote_workspace.py`（934 行）：
+   21 个可编辑字段的闭集与规格、工作区状态机（Agent 建议进 `pending`、只有右侧确认才进
+   `current`）、四种差异价口径（`rate / step / band / direct`）、四列对比表的后端行结构；
+2. **批 4 出价与转精准** —— 新模块 `cpq_quick_quote_price.py`（505 行）：六项适用门槛、
+   偏差区间、卡片快照落库、转精准交接包（复用 `cpq_wf.TASK_KIND_TECH_NEW`，不新增交接口径）；
+3. **批 5 文件解析客户端** —— 新模块 `cpq_quick_quote_file.py`（362 行）：统一解析服务的
+   能力预检与解析、文档类走既有 `/api/extract`、解析结果映射到批 2 的匹配输入，
+   外加 `POST /api/quick-quote/parse` 路由（`cpq_agent_server.py`）。
+
+### 交付物与实测
+
+| 批 | Spec | 红测 | 实现前 | 实现后 |
+| --- | --- | --- | --- | --- |
+| 3 | `docs/specs/quick-quote-3-field-workspace-and-delta-price.md` | `tests/test_quick_quote_field_workspace_red.py` | Ran 53，failures=52 | **OK（53）** |
+| 4 | `docs/specs/quick-quote-4-quick-quote-and-handoff.md` | `tests/test_quick_quote_generation_red.py` | Ran 46，failures=43 | **OK（46）** |
+| 5 | `docs/specs/quick-quote-5-file-parsing.md` | `tests/test_quick_quote_file_parsing_red.py` | Ran 37，failures=35 | **OK（37，skipped=1）** |
+
+批 5 的 1 条 skip 是「统一解析服务不在线」（`CPQ_UNIFIED_PARSE_URL` 那侧还没部署），
+skip 原因里点名缺的是什么，不是静默通过。
+
+守卫回归（改完再跑，全绿）：
+
+```
+tests.test_quick_quote_mode_and_case_model_red + test_quick_quote_case_retrieval_red
+  + test_quick_quote_field_workspace_red + test_quick_quote_generation_red
+  + test_quick_quote_file_parsing_red                     Ran 211  OK (skipped=1)
+tests.test_packaging_quote_close_loop_red + test_packaging_box_type_matching_red
+  + test_packaging_kb_authoritative_rollout_red + test_kb_in_pg_http_snapshot_red
+  + test_packaging_knowledge_base_seed_red                Ran 235  OK
+```
+
+全量（`python /tmp/run_pkg.py 1`，4137 条）：**failures=82 + errors=25 = 107**；
+基线（批 2 收口时）是 149 —— 排除并行会话自己的 `packaging_parts_*` 与
+`test_cpq_eval_ci_contract` 套件后，**新增失败 = 0**，少掉的正是这三批的红测。
+
+### 新增：第 32 张知识库表 `kb_quick_quote_delta_rule`
+
+`cpq_kb.py` 的 `KB_TABLES` / `KB_KEYS` / `_DDL_TEMPLATE` **只追加**（前 31 张名字与相对顺序
+不动，守卫 `test_packaging_kb_authoritative_rollout_red` 20 条与
+`test_kb_in_pg_http_snapshot_red` 22 条都仍绿）：`rule_code / field_key / rule_kind / unit /
+rate / amount / step_size / breakpoints_json / industry / source_type / source_ref / version /
+review_status / effective_from / effective_to / updated_at`。
+
+差异价规则**读不到或表为空直接抛 `CaseLibraryUnavailable`**，不回落代码里的默认费率；
+`seed_rules()` 灌的示例行一律 `source_type=demo` + `review_status=draft`，
+差异价的 `note` 会逐条点名「费率来源=演示数据，出价前必须换成权威费率」。
+
+### 实现期发现并回写 Spec 的三处口径（+ 一处红测自相矛盾）
+
+1. **`band` 取「≥ 数量的最小断点倍率」**（原文写的是「≤」，与红测 B4/D7 的业务示例矛盾）：
+   5000 → 6000 档的 0.92、3000 → 0.95，`9.0 × (0.95 − 0.92) = +0.27`。数量越少单价越高，
+   按原文「≤」会让 5000 与 3000 同档、差异价为 0。
+2. **`fit_clearance` 范围 0–20 mm**（原文与 `inner_*` 并列写 20–2000）：配合间隙就是这个量级，
+   夹具一律 1.5；照原文的 `min=20` 会让所有真实值在 `apply_edits()` 里被判越界。
+3. **`insert_type` 是文本字段**（不受枚举约束）：工作簿里内托写法不齐（含空），
+   下游硬筛选正是把「空」当缺输入；本批只有 `print_colors` 是枚举且空串合法。
+4. 红测 `test_c5_confirm_merges_pending` 末尾「不得改入参」的期望字面量原本只写了 `quantity`，
+   与同一文件的 D8（Agent 的 `hot_stamping` 修改也必须留在 pending）**自相矛盾、不可能同时为真**；
+   按 Spec §2.3 原意补齐为两条待确认项。批 4 的 `test_e3_deviation_capped` 原写法的 `window=True`
+   属「新增工艺且无规则」，按 Spec §2.3 第 6 条必须先被门槛拦下、`price()` 不该出价，
+   与同一文件的 C8 矛盾；改成用「删项 + 无规则费用项」堆偏差并压上限到 10%，断言只增不减。
+   两处都在 Spec 的「实现期回写」小节写清了原因。
+
+### 页面与部署登记
+
+- `确认需求解析结果.html`：新增 `#quickQuoteWorkspace` 容器（在进度条与结果区之间）
+  与 `quick-quote-panel.js?v=qqp2` 脚本 + 页面级入口 `window.QuickQuoteWorkspace`
+  （`show(rows)` 只搬运 `diff_table()` 的行，不重算价格）；新增的样式块**刻意放在样式表末尾**，
+  因为既有守卫 `test_quote_tech_unified_tool_list_conversation_red` 按**行号**冻结了本文件的
+  `font-family` 声明，插在中间会改行号（实测踩到并已回退）。
+- `tech_app/frontend/quick-quote-panel.js`：新增 `renderDiffTable(rows)`（四列
+  「参数 / 基准案例 / 当前报价 / 差异价格」，pending 行加 `is-pending` + 「待确认」徽标），
+  文件里没有 `delta_price` / `rule_kind` / `breakpoints` / 费率常量（前端不重算价格）。
+- `cpq_quick_quote_case.DEFAULT_CONFIG`：补 7 个键（`size_diff_threshold` / `quantity_min` /
+  `quantity_max` / `base_deviation_pct` / `per_miss_deviation_pct` / `max_deviation_pct` /
+  `tax_rate`），只加键、不动表。
+- `DEPLOYMENT.md`：新增「字段工作区与差异价」「快速报价出价与转精准」「文件解析
+  （`CPQ_UNIFIED_PARSE_URL` 与能力预检）」三小节，命令都能照抄跑。
+
+### 状态
+
+未引入任何第三方依赖（三个新模块只用标准库 + 仓内模块）；未新建表；未改精准报价
+（`cpq_packaging_quote.py` 一个字没动，其守卫 H2 仍绿）；未改 `cpq_tech_bridge.HANDOFF_KINDS`。
+本条目只记实现，提交 / 推送 / 部署见下一条。

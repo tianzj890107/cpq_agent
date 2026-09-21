@@ -90,6 +90,15 @@ DEFAULT_CONFIG = {
     "quick_quote_allowed_review": list(QUICK_QUOTE_ALLOWED_REVIEW),
     "min_candidates": 3,
     "top_n_candidates": 5,
+    # 快速报价适用门槛与偏差口径（第 4 批，Spec docs/specs/quick-quote-4-quick-quote-and-handoff.md §2.2）。
+    # 只加键、不动表结构；gate_config() 与 default_config() 同源。
+    "size_diff_threshold": 0.15,     # 三边单边相对差上限
+    "quantity_min": 100,
+    "quantity_max": 100000,
+    "base_deviation_pct": 0.05,
+    "per_miss_deviation_pct": 0.02,  # 每个「无规则差异项」增加的偏差
+    "max_deviation_pct": 0.20,
+    "tax_rate": 0.13,                # 与 cpq_packaging_quote.DEFAULT_TAX_RATE 同值
 }
 
 #: 案例字段（案例行的规范列）。数量是**档位**，不是单个数字。

@@ -550,7 +550,8 @@ python tech_app/tools/dwg_deploy_gate.py --env production
 ### 落地顺序（在能连到 PG 的机器上执行）
 
 ```bash
-# ① 知识库侧：建 kb_quick_quote_config + kb_quick_quote_match_weight（第 30、31 张 kb_* 表；幂等）
+# ① 知识库侧：建 kb_quick_quote_config + kb_quick_quote_match_weight + kb_quick_quote_delta_rule
+#   （第 30、31、32 张 kb_* 表；幂等，32 张的前后顺序是快照契约）
 ./open-claude/.venv/bin/python -c "import cpq_kb; cpq_kb.ensure_schema(); print('kb tables', len(cpq_kb.KB_TABLES))"
 
 # ② 相似度权重：把种子灌进 kb_quick_quote_match_weight（幂等；只在确有变化时 +1 kb_version）
@@ -641,8 +642,89 @@ PY
 接口与页面都会把"为什么这条不能用"原样显示出来（`reason_code` + 中文原因），
 所以"库里有像的案例但不能用"是可见的，不会假装没有案例。
 
-### 本批不做（后续批次）
+### 字段工作区与差异价（批 3）：建表 + 灌费率
 
-字段工作区与差异价、最终快速报价与门槛、文件（DWG）解析接入分别是批 3–5；
-批 1 只把两条报价路径分开并立住案例模型与准入口径，批 2 只做相似案例检索与人工选基准
-（页面入口与差异价在批 3/4/5）。
+口径与代码位置：`cpq_quick_quote_workspace.py`（字段闭集 / 校验 / 差异价 / 工作区状态机），
+Spec `docs/specs/quick-quote-3-field-workspace-and-delta-price.md`。
+
+```bash
+# ① 建第 32 张 kb_* 表：kb_quick_quote_delta_rule（幂等；再跑一次不会变 kb_version）
+./open-claude/.venv/bin/python -c "import cpq_kb; cpq_kb.ensure_schema(); print('kb tables', len(cpq_kb.KB_TABLES))"
+
+# ② 灌**示例**费率（source_type=demo + review_status=draft，幂等；只在确有变化时 +1 kb_version）
+#    业务必须用真实工作簿口径替换它们：demo 行的差异价 note 会逐条点名
+#    「费率来源=演示数据，出价前必须换成权威费率」，不会静默当成权威。
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_workspace as w; print(w.seed_rules())"
+
+# ③ 读回来确认（读不到 / 表为空会明确抛 CaseLibraryUnavailable，不回落代码里的默认费率）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_workspace as w; print([r['rule_code'] for r in w.load_rules(None)])"
+```
+
+字段工作区的四列对比表（参数 / 基准案例 / 当前报价 / 差异价格）挂在
+`确认需求解析结果.html` 的 `#quickQuoteWorkspace` 容器里，由
+`tech_app/frontend/quick-quote-panel.js` 的 `renderDiffTable(rows)` 渲染；
+行数据只能来自 `diff_table()`，页面不重算价格。
+
+### 快速报价出价与转精准（批 4）：自己跑一遍
+
+口径与代码位置：`cpq_quick_quote_price.py`（六项适用门槛 / 偏差区间 / 卡片快照落库 /
+转精准交接包），Spec `docs/specs/quick-quote-4-quick-quote-and-handoff.md`。
+**门槛不过就只给一句「建议转精准报价」，不会先算一个价再提示"仅供参考"。**
+
+```bash
+cd /Users/sher/Boulderaitech/cpq_agent
+./open-claude/.venv/bin/python - <<'PY2'
+import cpq_quick_quote_match as m
+import cpq_quick_quote_workspace as w
+import cpq_quick_quote_price as p
+
+inputs = {"box_type": "YT-RB-01001-A", "box_family": "01天地盖", "closure_type": "磁吸",
+          "inner_length": 200, "inner_width": 150, "inner_height": 80,
+          "grey_board_gsm": 1200, "face_paper_gsm": 200, "insert_type": "EVA内托",
+          "print_colors": "CMYK", "lamination": True, "hot_stamping": True,
+          "v_groove": True, "magnet": True, "quantity": 3000}
+user = {"user_id": "1", "username": "张三", "role_code": "sales_mgr"}
+
+match = m.match_cases(inputs)                       # 批 2：候选检索
+baseline = m.build_baseline(inputs, match["suggested_case_code"], user=user)   # 批 2：选基准
+ws = w.new_workspace(baseline, user=user)           # 批 3：字段工作区
+rules = w.load_rules(None)                          # 批 3：差异价规则（读 kb_quick_quote_delta_rule）
+ws = w.apply_edits(ws, {"quantity": 3000, "face_paper_gsm": 250},
+                   source="workspace", user=user, rules=rules)
+try:
+    quote = p.price(baseline, ws, rules=rules)      # 批 4：过门槛才出价
+    print("单价", round(quote["unit_price"], 4), "区间", quote["price_range"])
+    print("偏差", quote["deviation"]["est_pct"], "| 提醒", len(quote["warnings"]), "条")
+    # print(p.save(quote, user=user, session_id="<卡片 session_id>"))
+    # print(p.transfer_to_precise(quote, user=user, session_id="<卡片 session_id>"))
+except p.QuickQuoteBlocked as exc:
+    print("被门槛拦下：", exc.result["blocking"], "|", exc.result["advice"])
+PY2
+```
+
+### 文件解析（批 5）：`CPQ_UNIFIED_PARSE_URL` 与能力预检
+
+报价侧**只当客户端**：DWG/DXF 的转换器住在技术工艺侧，报价项目里不装第二套 ODA /
+LibreDWG（`cpq_*.py` 里不得出现 `ODAFileConverter` / `dwg2dxf` / `LibreDWG` 字样）。
+
+| 环境变量 | 取值（172.16.10.34） | 说明 |
+| --- | --- | --- |
+| `CPQ_UNIFIED_PARSE_URL` | `http://127.0.0.1:8010/api/file/parse` | 统一解析服务入口；**唯一来源**，代码里只有这一个默认值（`cpq_quick_quote_file.DEFAULT_PARSE_URL`） |
+
+- 能力预检走 `GET <CPQ_UNIFIED_PARSE_URL 同前缀>/capability`，返回
+  `service` / `provider` / `provider_version` / `dwg` / `dxf` / `preview`；
+  **服务不可达或返回体不是 dict 一律报错**（`ParseServiceUnavailable`），不返回空能力表；
+  `dwg=false` 时 DWG/DXF 明确拒绝（`ParseUnsupported`，带「转人工 / 转精准报价」建议）。
+- 文档类（`txt/md/csv/xlsx/xls/pdf/docx/png/jpg/jpeg`）走既有 `/api/extract`，
+  **不依赖**统一解析服务 —— DWG 没就绪不该拖死文字需求。
+
+```bash
+# 能力预检（在 34 上跑；服务没起会明确报「不可达」，不会假装支持）
+./open-claude/.venv/bin/python -c "import cpq_quick_quote_file as f; print(f.parse_url()); print(f.capability())"
+```
+
+### 后续批次
+
+批 1–5 已把「案例模型 → 相似检索 → 字段工作区/差异价 → 出价与转精准 → 文件解析客户端」
+落齐；**页面把工作区与出价串起来的那一层接线仍是下一步**（批 3 只落了容器与四列表，
+批 4/5 的模块入口还没有对应按钮）。

@@ -3,6 +3,10 @@
  * 只做一件事：把报价的「精准 / 快速」两条路径在**报价侧**分开，并让销售看到标准案例库
  * 现在到底有什么 —— 哪些案例能直接用来出快速报价、哪些不能（以及为什么不能）。
  *
+ * 批 3 追加：字段工作区的四列对比表 `renderDiffTable(rows)`（Spec
+ * docs/specs/quick-quote-3-field-workspace-and-delta-price.md §2.6）—— 仍然不算价，
+ * 只渲染后端给的行结构；未确认（pending）的行加可见标记。
+ *
  * 边界（刻意为之）：
  *   · 不碰技术工艺链路：不引用技术工艺的任何接口与模块（红测按字符串逐个断言）；
  *   · 不做检索排序、不算差异价、不出最终价 —— 那是批 2/3/4；本模块只列现状与资格，
@@ -220,6 +224,57 @@
       });
   }
 
+  /* 四列对比表（Spec 批 3 §2.6）：参数 / 基准案例 / 当前报价 / 差异价格。
+   *
+   * 数据只消费后端工作区给的行结构（field_key / label / display_base /
+   * display_current / delta_text / pending / priced / note），前端一个数字都不重算、
+   * 也不自己判断该收多少钱：金额与单位已由后端排版好，这里只做展示与标黄。
+   */
+  var DIFF_HEADERS = ["参数", "基准案例", "当前报价", "差异价格"];
+
+  function renderDiffTable(rows) {
+    rows = rows || [];
+    var table = el("table", "qq-diff-table");
+    var head = el("thead");
+    var hrow = el("tr");
+    DIFF_HEADERS.forEach(function (title) {
+      var th = el("th", "", title);
+      th.setAttribute("scope", "col");
+      hrow.appendChild(th);
+    });
+    head.appendChild(hrow);
+    table.appendChild(head);
+
+    var body = el("tbody");
+    if (!rows.length) {
+      var empty = el("tr", "qq-diff-empty");
+      var hint = cell("还没有改动的参数：改动一项就会出现基准值与新报价的对比。");
+      hint.setAttribute("colspan", String(DIFF_HEADERS.length));
+      empty.appendChild(hint);
+      body.appendChild(empty);
+    }
+    rows.forEach(function (row) {
+      row = row || {};
+      var tr = el("tr", "qq-diff-row" + (row.pending ? " is-pending" : ""));
+      tr.setAttribute("data-field-key", row.field_key || "");
+      var param = cell(row.label || row.field_key || "");
+      if (row.pending) {
+        var badge = el("span", "qq-pending", "待确认");
+        badge.setAttribute("title", "这是 Agent 的建议，还没在右侧确认，不影响已确认报价");
+        param.appendChild(badge);
+      }
+      tr.appendChild(param);
+      tr.appendChild(cell(row.display_base));
+      tr.appendChild(cell(row.display_current));
+      var delta = cell(row.priced === false ? (row.note || "不单独计差") : row.delta_text);
+      if (row.priced !== false) delta.className = "qq-diff-delta";
+      tr.appendChild(delta);
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    return table;
+  }
+
   global.QuickQuotePanel = {
     MODE_PRECISE: MODE_PRECISE,
     MODE_QUICK: MODE_QUICK,
@@ -228,7 +283,9 @@
     CASES_PATH: CASES_PATH,
     REASON_LABELS: REASON_LABELS,
     agentBase: agentBase,
+    DIFF_HEADERS: DIFF_HEADERS,
     cases: cases,
+    renderDiffTable: renderDiffTable,
     render: render,
     open: open,
     close: hide

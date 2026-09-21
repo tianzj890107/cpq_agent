@@ -52,7 +52,7 @@ FIELD_SPECS = {key: {"label": str, "group": str, "value_type": "num|bool|text|en
 FIELD_GROUPS = ("尺寸", "材料", "结构", "表面工艺", "印刷", "数量", "费用")
 
 #: 关键字段的范围/枚举口径（右侧工作区控件与后端校验共用同一份；完整表见实现）。
-#: quantity 1–1,000,000 个；inner_* / fit_clearance 20–2000 mm；
+#: quantity 1–1,000,000 个；inner_* 20–2000 mm；fit_clearance 0–20 mm（配合间隙量级）；
 #: face_paper_gsm 60–400 g/m²；grey_board_gsm 400–3000 g/m²；
 #: tooling_fee_amount / freight_amount 0–1,000,000 元；
 #: print_colors 枚举 ("", "CMYK", "专色", "CMYK+专色")，写入前先把 4C / 四色 归一为 CMYK。
@@ -105,7 +105,7 @@ def load(session_id) -> dict
 | --- | --- | --- |
 | `rate` | `delta = (current - base) × rate` | 克重、尺寸这类线性项 |
 | `step` | `steps = ceil(|current - base| / step_size)`；`delta = sign(current - base) × steps × amount` | 烫金 / 覆膜 / 内托这类开关或档位；`step_size` 默认 1.0 |
-| `band` | `delta = base_unit_price × (factor(current) - factor(base))` | 数量档；`base_unit_price` 来自批 2 的基准快照，`factor` 取「≤ 该值的最大断点倍率」 |
+| `band` | `delta = base_unit_price × (factor(current) - factor(base))` | 数量档；`base_unit_price` 来自批 2 的基准快照，`factor` 取「**≥ 该值的最小**断点倍率」（见 §5 回写第 1 条） |
 | `direct` | `delta = current - base` | 模具/版费、运输这类绝对值加减项 |
 
 要求：
@@ -248,3 +248,28 @@ def load(session_id) -> dict
 - 不出最终快速报价、不算价格区间与偏差、不做门槛与转精准报价（批 4）；
 - 不改 `cpq_packaging_quote.py` 的定价口径（批 4 才复用它的 `WRITE_ROLES`）;
 - 不做文件解析（批 5）。
+
+## 5. 实现期回写（2026-09-21，实现时实测发现，实现按红测落地）
+
+实现方在落 `cpq_quick_quote_workspace.py` 时发现 Spec 原文有三处与红测/业务冲突，
+按「红测是唯一验收标准、Spec 同步更正」处理，三处均已在正文改好：
+
+1. **`band` 的 `factor` 取「≥ 数量的最小断点倍率」**，不是原文的「≤ 该值的最大断点倍率」。
+   以红测注入的 `QTY-BAND = [[0,1.15],[1000,1.00],[3000,0.95],[6000,0.92],[10000,0.85]]`
+   为例：`5000` 落在 3000–6000 档 → 取 **6000 的 0.92**；`3000` → 0.95；
+   `delta = 9.0 × (0.95 - 0.92) = +0.27`（红测 B4/D7 逐字钉住的业务示例）。
+   业务上也只可能这样——数量越少单价越高；按原文「≤」会让 5000 与 3000 同档、差异价为 0。
+2. **`fit_clearance` 范围 0–20 mm**，不是与 `inner_*` 并列的 20–2000 mm。
+   配合间隙是「内尺寸与成品之间留多少」的量级（批 3/4/5 的夹具一律是 `1.5`）；
+   照原文的 `min=20` 会让所有真实值在 `apply_edits()` 里被判越界，工作区根本建不起来。
+   `inner_*` 仍为 20–2000 mm，未动。
+3. **`insert_type` 是文本字段，不受枚举约束**：工作簿里内托写法不齐
+   （`EVA内托` / `植绒内托` / `无内托` / 空），下游硬筛选正是把「空」当缺输入；
+   设成 `choices=("EVA内托","植绒内托","无内托")` 会让空串非法、把「没填」误判成「填错」。
+   本批只有 `print_colors` 是枚举字段，且**空串合法**（Spec §2.1 原文已含 `""`）。
+
+多处试算仍以红测为准（`tests/test_quick_quote_field_workspace_red.py`，53 条）。
+另：`tests/test_quick_quote_field_workspace_red.py::test_c5_confirm_merges_pending` 末尾
+「不得改入参」那条断言的期望字面量原本只写了 `quantity`，与同一文件的 D8（Agent 的
+`hot_stamping` 修改也必须留在 pending）自相矛盾、无论怎么实现都不可能同时为真；
+实现期按 Spec §2.3 原意补齐为**两条待确认项**，见 changelog 实现条目。

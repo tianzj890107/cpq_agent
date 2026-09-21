@@ -729,6 +729,44 @@
       max-width: 132px;
     }
 
+    /* ---------- 快速报价工作区（批 3） ----------
+       注：本块刻意放在样式表末尾 —— 既有守卫 test_quote_tech_unified_tool_list_
+       conversation_red 按**行号**冻结了本文件里的 font-family 声明，插在中间会改行号。 */
+    .quick-quote-workspace {
+      padding: 12px 16px;
+      border-bottom: 0.5px solid var(--border-color);
+      background: var(--bg-page);
+      max-height: 42vh; overflow: auto; flex-shrink: 0;
+    }
+    .quick-quote-workspace .qq-ws-head {
+      display: flex; align-items: center; gap: var(--space-sm);
+      font-size: 13px; font-weight: 600; margin-bottom: 8px;
+    }
+    .quick-quote-workspace .qq-ws-head .qq-ws-hint {
+      font-weight: 400; color: var(--text-tertiary);
+    }
+    .quick-quote-workspace .qq-diff-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    .quick-quote-workspace .qq-diff-table th,
+    .quick-quote-workspace .qq-diff-table td {
+      text-align: left; padding: 7px 10px;
+      border-bottom: 0.5px solid var(--border-color);
+      vertical-align: top;
+    }
+    .quick-quote-workspace .qq-diff-table th {
+      color: var(--text-secondary); font-weight: 500; background: var(--bg-secondary);
+      white-space: nowrap;
+    }
+    .quick-quote-workspace .qq-diff-row.is-pending { background: #FFFBF0; }
+    .quick-quote-workspace .qq-diff-delta { color: var(--color-primary); font-weight: 600; }
+    .quick-quote-workspace .qq-pending {
+      margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+      background: #FEF3C7; color: #92400E; font-size: 11px; font-weight: 500;
+    }
+    .quick-quote-workspace .qq-diff-empty td {
+      color: var(--text-tertiary); padding: 14px 10px;
+    }
 </style>
   <link rel="stylesheet" href="cpq_nav_bottom.css?v=navbottom1">
 </head>
@@ -829,6 +867,13 @@
       </div>
 
       <div class="progress-bar" id="progressBar"></div>
+
+      <!-- 快速报价工作区（Spec docs/specs/quick-quote-3-field-workspace-and-delta-price.md
+           §2.6）：四列对比表「参数 / 基准案例 / 当前报价 / 差异价格」的落点。
+           默认隐藏，由 QuickQuoteWorkspace.show(rows) 展开；行数据只能来自后端
+           工作区（cpq_quick_quote_workspace.diff_table），本页不重算价格。 -->
+      <section class="quick-quote-workspace" id="quickQuoteWorkspace" hidden
+               aria-label="快速报价工作区"></section>
 
       <div class="results-area">
         <div class="results-header">
@@ -947,6 +992,51 @@
   <!-- cpq_auth.js 必须在页面自己的脚本之前：它提供 cpqAuthFetch（统一带票），
        而页面初始化阶段就会请求 /agents/* 与技术工艺 /api/*。 -->
   <script src="cpq_auth.js"></script>
+  <!-- 快速报价面板（批 1 建、批 3 追加四列对比表 renderDiffTable）。
+       同源相对路径：8010 根上没有这个文件时会按既有规则转发给 tech_app 前端。 -->
+  <script src="quick-quote-panel.js?v=qqp2"></script>
+  <script>
+    /* 快速报价工作区的页面级入口（Spec 批 3 §2.6）：容器 + 展开/收起。
+       只做搬运：rows 由后端工作区（diff_table）给，金额与单位都已在行里排好版；
+       这里不读规则、不算价、不改值。数据没来时就明确说"还没读到"，不假装没有改动。 */
+    window.QuickQuoteWorkspace = {
+      containerId: 'quickQuoteWorkspace',
+      container: function () {
+        return document.getElementById('quickQuoteWorkspace');
+      },
+      show: function (rows, options) {
+        var box = this.container();
+        if (!box) return null;
+        options = options || {};
+        box.innerHTML = '';
+        var head = document.createElement('div');
+        head.className = 'qq-ws-head';
+        head.appendChild(document.createTextNode('参数对比'));
+        var hint = document.createElement('span');
+        hint.className = 'qq-ws-hint';
+        hint.textContent = options.hint
+          || '基准案例值 / 当前报价 / 差异价格；标「待确认」的行还没确认，不影响已确认报价。';
+        head.appendChild(hint);
+        box.appendChild(head);
+        var panel = window.QuickQuotePanel;
+        if (!panel || typeof panel.renderDiffTable !== 'function') {
+          var miss = document.createElement('div');
+          miss.className = 'qq-ws-hint';
+          miss.textContent = '快速报价面板未加载（quick-quote-panel.js），暂时无法显示对比表。';
+          box.appendChild(miss);
+          box.hidden = false;
+          return box;
+        }
+        box.appendChild(panel.renderDiffTable(rows || []));
+        box.hidden = false;
+        return box;
+      },
+      hide: function () {
+        var box = this.container();
+        if (box) { box.hidden = true; box.innerHTML = ''; }
+      }
+    };
+  </script>
   <script>
     'use strict';
 

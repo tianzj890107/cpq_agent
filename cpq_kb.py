@@ -82,6 +82,10 @@ KB_TABLES = (
     # 逆向快速报价（批 2）：相似案例检索的相似度权重 / 容差口径，一行一个维度。
     # 读不到或表为空 → `load_weights()` 直接报错（不回落代码里的种子）。
     "kb_quick_quote_match_weight",
+    # 逆向快速报价（批 3）：字段差异价规则（面纸 +50g 贵多少、烫金加一项贵多少）。
+    # 读不到或表为空 → `cpq_quick_quote_workspace.load_rules()` 直接报错（不编价）。
+    # 只能追加：前面所有表的相对顺序是快照契约（见 tests/test_packaging_kb_authoritative_rollout_red.py）。
+    "kb_quick_quote_delta_rule",
 )
 
 # 每张表的业务主键（ON CONFLICT 的目标）。取值与 da_schema.sql 的
@@ -118,6 +122,7 @@ KB_KEYS = {
     "kb_packaging_tooling_rule": ("tooling_code",),
     "kb_quick_quote_config": ("key",),
     "kb_quick_quote_match_weight": ("dimension",),
+    "kb_quick_quote_delta_rule": ("rule_code",),
 }
 
 # 单项也必须写成 1-元组 ("x",)：少了那个逗号就退化成字符串，ON CONFLICT ("c","o",...)
@@ -719,6 +724,27 @@ _DDL_TEMPLATE = [
     version          text,
     review_status    text NOT NULL DEFAULT 'draft'
                      CHECK (review_status IN ('draft', 'reviewed', 'retired')),
+    updated_at       text
+);""",
+    f"""CREATE TABLE IF NOT EXISTS {{schema}}.kb_quick_quote_delta_rule (
+    rule_code        text PRIMARY KEY,      -- QQQ-QTY-BAND / QQQ-PAPER-RATE ...
+    field_key        text NOT NULL,         -- cpq_quick_quote_workspace.FIELD_KEYS 里的字段
+    rule_kind        text NOT NULL
+                     CHECK (rule_kind IN ('rate', 'step', 'band', 'direct')),
+    unit             text,                  -- 差异价的金额单位（元 / 元/mm ...）
+    rate             double precision,      -- rate：每单位差异的金额
+    amount           double precision,      -- step / direct：每档 / 绝对金额
+    step_size        double precision,      -- step：一档的跨度（默认 1.0）
+    breakpoints_json text,                  -- band：[[阈值, 倍率], ...] JSON
+    industry         text NOT NULL DEFAULT 'packaging',
+    source_type      text NOT NULL DEFAULT 'unknown'
+                     CHECK (source_type IN ('demo', 'workbook', 'dwg_confirmed', 'unknown')),
+    source_ref       text,
+    version          text,
+    review_status    text NOT NULL DEFAULT 'draft'
+                     CHECK (review_status IN ('draft', 'reviewed', 'retired')),
+    effective_from   text,                  -- 生效日（空 = 立即生效）
+    effective_to     text,                  -- 截止日（空 = 不过期）
     updated_at       text
 );"""]
 

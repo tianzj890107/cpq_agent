@@ -62,6 +62,11 @@ import cpq_industries
 # 逆向快速报价（批 1）：标准报价案例模型与准入判定只住在 cpq_quick_quote_case.py，
 # 这里只读它的常量与取数函数（报价侧取数，不进技术工艺链路）。
 import cpq_quick_quote_case
+# 逆向快速报价（批 5）：文件解析只是**客户端** —— 地址取 CPQ_UNIFIED_PARSE_URL，
+# 转换器住在技术工艺侧，这里不装第二套、也不 import 技术工艺的解析实现（Spec 批 5 §2.1）。
+import cpq_quick_quote_file
+# 相似案例检索（批 2）：解析结果直接进它的 match_cases()，两侧不各写一套排序。
+import cpq_quick_quote_match
 from tech_app.backend.services import industry_templates as quote_industry_templates
 from tech_app.backend.services import product_params as quote_product_params
 
@@ -1838,6 +1843,50 @@ def _handle_quick_quote_cases(params=None) -> dict:
     }
 
 
+def _handle_quick_quote_parse(data=None) -> dict:
+    """POST /api/quick-quote/parse —— 销售丢文件 → 解析 → 匹配输入 →（可选）候选检索。
+
+    出参：``{"ok", "parse", "inputs", "missing", "sources", "capability", "match"}``。
+    能力段（provider / provider_version / dwg）必须原样回传：上一次 DWG 事故就是
+    「页面宣称支持、后端实际不支持」，前端要能一眼看到解析器是谁、什么版本、支不支持 DWG。
+
+    本函数只当客户端：不转调技术工艺项目接口、不自己转换图纸（Spec 批 5 §2.5）。
+    """
+    body = data if isinstance(data, dict) else {}
+    name = str(body.get("name") or "").strip()
+    raw_b64 = str(body.get("data") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少文件名（name）"}
+    if not raw_b64:
+        return {"ok": False, "error": "缺少文件内容（data，base64）"}
+    try:
+        raw = base64.b64decode(raw_b64, validate=False)
+    except Exception:                                          # noqa: BLE001 - 统一收敛
+        return {"ok": False, "error": "文件数据不是合法 base64"}
+    try:
+        parsed = cpq_quick_quote_file.parse_file(name, raw)
+    except cpq_quick_quote_file.QuickQuoteFileError as exc:
+        return {"ok": False, "error": str(exc), "kind": "unsupported",
+                "advice": getattr(exc, "advice", "")}
+    except cpq_quick_quote_file.ParseServiceUnavailable as exc:
+        return {"ok": False, "error": str(exc), "kind": "service_unavailable",
+                "advice": "统一解析服务不在线：文字 / Excel / PDF 需求不受影响，"
+                          "DWG/DXF 请稍后重试或转人工。"}
+    mapped = cpq_quick_quote_file.to_match_inputs(parsed)
+    out = {"ok": True, "parse": parsed, "inputs": mapped["inputs"],
+           "missing": mapped["missing"], "sources": mapped["sources"],
+           "warnings": mapped["warnings"], "capability": parsed.get("capability") or {},
+           "match": {}}
+    if body.get("match", True):
+        try:
+            cases = cpq_quick_quote_case.load_cases(None)
+            out["match"] = cpq_quick_quote_match.match_cases(
+                mapped["inputs"], cases=cases)
+        except Exception as exc:                               # noqa: BLE001 - 匹配失败不影响解析结果
+            out["match"] = {"error": str(exc) or "候选检索失败", "candidates": []}
+    return out
+
+
 def _quick_quote_modes() -> list:
     """两条报价路径（模式键 + 中文名）：键取模块常量，页面不自己造字符串。"""
     return [{"mode": key, "label": cpq_quick_quote_case.MODE_LABELS.get(key, key)}
@@ -3573,6 +3622,9 @@ class Handler(BaseHTTPRequestHandler):
             # 包装定价（包装第 8 批）：确定性计算，不取规则、不调模型。
             data = self._read_body()
             self._send_json(_handle_packaging_quote_price(data))
+        elif path == cpq_quick_quote_file.QUICK_QUOTE_PARSE_PATH:
+            # 快速报价文件解析（逆向快速报价第 5 批）：报价侧只当统一解析服务的客户端。
+            self._send_json(_handle_quick_quote_parse(self._read_body()))
         elif path == "/api/extract":
             data = self._read_body()
             name = (data.get("name") or "file").strip()
