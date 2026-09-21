@@ -3896,3 +3896,65 @@ TOTAL ran=3395 failures=24 errors=1 skipped=15
 ### 提交状态
 
 未部署、未重启服务、未改服务器配置；未新增依赖。
+
+---
+
+## 192. 34 部署记录：ytbz d0504f3（## 189–191 报价助手行业化 + DWG 夹具落修）（9-21）
+
+### 部署对象
+
+- 主机 `172.16.10.34`，代码目录 `/home/wugefei/CPQ/cpq_agent`，分支 `ytbz`，目标 commit
+  `d0504f3`（= `gitlab/ytbz`，与本地一致；在已部署过的 `c0ea1f8` 之后 11 个提交）。
+- 形态是**裸进程**（非容器）：8010 `cpq_suite_server.py`、8012 `tech_app_launch.py`；
+  env 走 `/home/wugefei/CPQ/cpq_env.sh`（`CPQ_ENV_FILE`）。
+- 链路沿用既有模板 `/tmp/deploy_ytbz_c0ea1f8_34.sh`：部署前状态核对（tracked 改动必须为 0）
+  → `git fetch gitlab ytbz` 并校验 `FETCH_HEAD == want` → `checkout ytbz` + `merge --ff-only`
+  → `py_compile` → 归档 `nohup.out` → 先停 8012 再停 8010、轮询端口释放 →
+  原命令行加 `CPQ_ENV_FILE` 重启 → 首页/health 健康轮询。
+- 回滚记录：`/home/wugefei/CPQ/deploy_prev_before_d0504f3.txt`（部署前的分支与 HEAD）。
+
+### 实跑原文（关键行）
+
+```
+now branch=ytbz HEAD=d0504f315220516f84412c9310ae2c59c94233dc（期望 d0504f315220516f84412c9310ae2c59c94233dc）
+py_compile ok
+8010 / 8012 已释放
+首页 200
+health {"status":"ok","model":"deepseek-v4-flash", ... }
+健康轮询 ok=1
+HEAD=d0504f3（期望 d0504f3）
+```
+
+重启后 PID：8010 = `1515687`（PPID 1），8012 = `1515764`（父进程拉起）。
+
+### 部署后能力抽查（只读）
+
+线上 8010 自查：
+
+```
+报价助手 HTML 命中 industrySelect: 3
+报价助手 HTML 命中 techparams_columns: 9
+报价助手 HTML 命中旧通用必填文案（应为 0）: 0
+服务端门禁（包装 10 项 / 半导体 3 项）: 10 3 False ['尺寸', '应用范围/使用场景', '工作温度']
+服务端④事实源: kb_packaging_box_type clm_calc_product_tech 20
+包装需求门禁不再报工作温度: []
+```
+
+本机跨网复核 `http://172.16.10.34:8010/`：
+
+```
+health http=200
+quote html http=200 bytes=241707
+industrySelect=3  techparams_columns=9  旧通用必填文案=0
+status = ok | support_claim = orchestration_only | dwg_supported = False
+three_d.status = unavailable | acceptance.reason = missing_record
+```
+
+`/api/health` 里 `cad_converter.support_claim = "orchestration_only"`、`dwg_supported = false`
+—— 服务器上没有装转换器，口径如实，未宣称支持 DWG。
+
+### 能力声明
+
+线上现在的报价助手：需求门禁按行业取必填项（包装 10 项、半导体/电池/电器仍是三项），
+④产品技术参数在包装行业换成盒型库列。**仍未**实现：按包装必填项驱动盒型库的匹配/推荐、
+包装技术参数的入库与版本快照。
