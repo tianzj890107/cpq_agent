@@ -16243,3 +16243,70 @@ B 组纯函数用 node 真跑（不是 grep）：有 / 无绑定分量、有 / �
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 375. 权威清单的两条披露（跳过的行 / 部件图归属）在读回路径上被静默吞掉：刷新一次页面，“每次送货需1%的备品（免费），请核算价格注意”就没了（9-22，Codex 实现）
+
+红测 `tests.test_packaging_authority_disclosure_on_read_red`：实现前 `Ran 21, failures=14, errors=5`
+（19 红 / 2 绿），实现后 `Ran 21 OK`。
+
+### 一、缺口（真样本实测，不是推断）
+
+1. 导入器**已经**算出了两条披露：真样本 `裕同包装项目-待开发/酒盒 报价资料.xlsx`（表
+   `零部件排版工艺`）跳过 4 行 —— 第 3 行整行空白、第 **32** 行是客户备注行（序号 29，
+   原文「客人要求每个盒子需装配两包干燥剂，每次送货需1%的备品（免费），请核算价格注意」）、
+   第 33 行「制表：秦建」、第 34 行整行空白；28 件部件图的 `thumbnail_source` 全是 `order`
+   （图片是浮动对象，归属是**按顺序推定**，不是按锚点行逐行核对）。
+2. `packaging_parts.business_parts_document()` 把这两条全丢了：文档里**没有** `authority` 块，
+   件级 `authority` 少了 `thumbnail_refs` / `thumbnail_source` / `group_hint`
+   （实测件级键只有 13 个）。
+3. `main._business_parts_body()` 出参里**没有** `authority` —— 披露只活在导入那一次的响应里
+   （`import_skipped` / `import_stats`），页面刷新一次就再也说不出来。报价的人因此看不到
+   那条与报价直接相关的客户要求。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_parts.py`：新增纯函数 `authority_disclosure(authority)`
+  → `{stats, thumbnail, skipped}`（`thumbnail.bound_by` ∈ `order` / `anchor_row` / `mixed` / `""`，
+  `missing_total` = `max(0, part_total - bound_total)`，`skipped` 的 `row/reason/message/sequence_no/text`
+  逐条照抄、缺省补 `0` / `""`；没有权威行 → `{}`）；新增 `BUSINESS_AUTHORITY_KEYS` /
+  `_business_part_authority()`；`business_parts_document()` 件级补三个披露键、文档级落 `authority` 块。
+  `_business_identity()` 全量哈希口径**不动** —— 披露变了就是新版本，下游据此判 stale。
+- `tech_app/backend/main.py`：`_business_parts_body()` 两条分支都带 `authority`
+  （已生成 → 逐字透传；未生成 → `{}`）。
+- `tech_app/frontend/app.js`：新增纯函数 `packagingAuthorityDisclosureLines(doc)`（部件图行 →
+  跳过汇总行 → 逐条带文字的跳过行）；左栏 `renderPackagingBusinessTree()` 插
+  `div.packaging-authority-disclosure[data-qq-authority-skip="1"]`（逐行 `textContent`）；
+  右栏 `openPackagingBusinessPart()` 的 `#packagingPartFacts` 新增「部件图」「清单告警」两行。
+  页面**不**显示文件名（`authority.file` 在 `app.js` 里 0 次）。
+
+### 三、复跑
+
+```
+tests.test_packaging_authority_disclosure_on_read_red        → Ran 21 OK（实现前 19 红）
+node --check tech_app/frontend/app.js                        → 通过
+相邻 5 个模块（业务部件 / 面板 / 平面图点选 / 零件面板 / BOM 尺寸来源）→ Ran 78, failures=1
+（唯一失败是既有挂账 packaging_bom_part_size_provenance::B3）
+tests/test_packaging_*.py 全域（87 个模块）→ Ran 1625, failures=5, skipped=8
+```
+
+真样本端到端（不是夹具）：导入工作簿 → `business_parts_document()` → `_business_parts_body()` →
+把 payload 交给 `node` 真跑 `packagingAuthorityDisclosureLines()`，得到 4 行文案 ——
+「部件图：28/28 件配到了图，但归属是按顺序推定（图片是浮动对象，不是按锚点行逐行核对）。」
+「清单里有 4 行被跳过（blank_row、not_a_part_row、no_sequence）：这些行不是业务部件，但文字可能影响报价。」
+「第 32 行被跳过（not_a_part_row）：客人要求每个盒子需装配两包干燥剂，每次送货需1%的备品（免费），
+请核算价格注意 —— 请人工确认是否影响报价。」「第 33 行被跳过（no_sequence）：制表：秦建 ——
+请人工确认是否影响报价。」
+
+### 四、已记录的边界（不改测试，不放宽断言）
+
+1. 本批只做**披露**，不做部件图本体：导入器只记图片锚点/序号（`xlsx_grid` 不取图像字节），
+   所以页面只能说「已配到（归属按顺序推定）」，不能把图渲染出来 —— 取图入库是另一批。
+2. `skipped` 的 `text` 是客户原文（可能含敏感信息）：按"如实披露"进读接口与业务页面，
+   不做导出、不发通知；要脱敏得先有业务口径。
+3. 披露进文档 = 进版本锚点：`business_parts_hash` 会变（真样本 `9ae465eb5c8f43f1`），
+   下游据此判 stale，`## 368` §8 的迁移口径不变。
+4. 红测里校正过两处（A4 的"逐字节相同"与 Spec §C1 的"缺省补 0/''"冲突；B1 夹具缺既有键），
+   校正后重新在未实现的代码上跑过，仍是 `failures=14, errors=5`，没有把任何红测改绿。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。

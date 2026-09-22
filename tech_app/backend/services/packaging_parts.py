@@ -3191,6 +3191,93 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
     }
 
 
+#: 件级 `authority` 要带出去的键（Spec `packaging-authority-disclosure-on-read.md` §C2）。
+#: 前面 13 个是 `## 368` 就在带的；后 3 个导入器**已经算出来**、以前却在文档层被丢掉：
+#: `thumbnail_source` 说明部件图归属是「按顺序推定」还是「按锚点行」，
+#: `thumbnail_refs` 是一行多图时的完整清单，`group_hint` 是"材料/排版/工艺与上一行同组"。
+BUSINESS_AUTHORITY_KEYS = (
+    "sequence_no", "product_size_text", "length_mm", "width_mm", "material_text",
+    "layout_text", "process_text", "note", "thumbnail_ref", "merged_from",
+    "quantity", "purchase", "source",
+    "thumbnail_refs", "thumbnail_source", "group_hint",
+)
+
+#: 上面那三个新键的缺省值：源行没有时给空清单 / 空串（不是 None）。
+BUSINESS_AUTHORITY_DEFAULTS: Dict[str, Any] = {"thumbnail_refs": [],
+                                               "thumbnail_source": "", "group_hint": ""}
+
+
+def _business_part_authority(row: Any) -> Dict[str, Any]:
+    """件级 `authority`：既有键逐字留，披露键缺省给 `[]` / `""`（Spec §C2）。"""
+    source = row if isinstance(row, dict) else {}
+    out: Dict[str, Any] = {}
+    for key in BUSINESS_AUTHORITY_KEYS:
+        if key in source:
+            out[key] = source.get(key)
+    for key, fallback in BUSINESS_AUTHORITY_DEFAULTS.items():
+        if out.get(key) is None:
+            out[key] = list(fallback) if isinstance(fallback, list) else fallback
+    return out
+
+
+def _int_or(value: Any, default: int) -> int:
+    """纯计数用的整数兜底：非数字（含 None / "x"）一律给 `default`。"""
+    number = _num(value)
+    return int(number) if number is not None else int(default)
+
+
+def authority_disclosure(authority: Any) -> Dict[str, Any]:
+    """权威清单的两条披露：跳过的行 + 部件图归属（Spec §C1）。
+
+    导入器（`packaging_part_authority.import_workbook()`）**已经**把这两件事算出来了，
+    但以前只有导入那一次响应带得出去：`business_parts_document()` 不落、读接口不给，
+    刷新一次页面披露就没了（真样本里第 32 行客户备注「每次送货需1%的备品（免费），
+    请核算报价注意」就是这样消失的）。
+
+    纯函数：无 IO、确定性、不抛异常；没有权威行时给 `{}`（让调用方自己决定怎么显示）。
+    """
+    doc = authority if isinstance(authority, dict) else {}
+    raw = doc.get("parts")
+    rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+    if not rows:
+        return {}
+    bound = sum(1 for row in rows if _text(row.get("thumbnail_ref")))
+    order = sum(1 for row in rows
+                if _text(row.get("thumbnail_ref"))
+                and _text(row.get("thumbnail_source")) == "order")
+    anchor = sum(1 for row in rows
+                 if _text(row.get("thumbnail_ref"))
+                 and _text(row.get("thumbnail_source")) == "anchor_row")
+    if order and anchor:
+        bound_by = "mixed"
+    elif order:
+        bound_by = "order"
+    elif anchor:
+        bound_by = "anchor_row"
+    else:
+        bound_by = ""
+    stats_in = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
+    part_total = _int_or(stats_in.get("part_total"), len(rows))
+    skipped = []
+    for item in (doc.get("skipped") if isinstance(doc.get("skipped"), list) else []):
+        row = item if isinstance(item, dict) else {}
+        skipped.append({"row": _int_or(row.get("row"), 0),
+                        "reason": _text(row.get("reason")),
+                        "message": _text(row.get("message")),
+                        "sequence_no": _int_or(row.get("sequence_no"), 0),
+                        "text": _text(row.get("text"))})
+    return {"stats": {"part_total": part_total,
+                      "image_total": _int_or(stats_in.get("image_total"), 0),
+                      "skipped_total": _int_or(stats_in.get("skipped_total"), len(skipped)),
+                      "thumbnail_bound_total": _int_or(stats_in.get("thumbnail_bound_total"),
+                                                       bound)},
+            "thumbnail": {"bound_total": bound, "order_total": order,
+                          "anchor_row_total": anchor,
+                          "missing_total": max(0, part_total - bound),
+                          "bound_by": bound_by},
+            "skipped": skipped}
+
+
 def business_parts_document(authority: Any, geometry: Any, *,
                             bindings: Any = None, legacy_parts_id: str = "") -> Dict[str, Any]:
     """组一份业务部件文档（Spec §2 的数据模型）。
@@ -3221,10 +3308,10 @@ def business_parts_document(authority: Any, geometry: Any, *,
         business_parts.append({
             "business_part_code": code,
             "name": _text(row.get("name")),
-            "authority": {key: row.get(key) for key in (
-                "sequence_no", "product_size_text", "length_mm", "width_mm", "material_text",
-                "layout_text", "process_text", "note", "thumbnail_ref", "merged_from",
-                "quantity", "purchase", "source") if key in row},
+            # 件级权威资料（Spec `packaging-authority-disclosure-on-read.md` §C2）：既有 13 键
+            # 逐字留，另加导入器早就有、以前被丢掉的 `thumbnail_refs` / `thumbnail_source` /
+            # `group_hint`（部件图归属是"按顺序推定"还是"按锚点行"，只有这里说得出来）。
+            "authority": _business_part_authority(row),
             "geometry_binding": binding,
         })
     stats = business_parts_stats(business_parts)
@@ -3245,6 +3332,10 @@ def business_parts_document(authority: Any, geometry: Any, *,
             "authority_file_hash": _text(authority_source.get("file_hash")),
             "authority_sheet": _text(authority_source.get("sheet")),
         },
+        # 权威清单的披露要**落在文档里**（Spec `packaging-authority-disclosure-on-read.md` §C2）：
+        # 导入响应的 `import_skipped` / `import_stats` 刷新一次就没了，页面再也说不出
+        # "哪些行被跳过""部件图归属是怎么来的"。没有权威行时给 `{}`。
+        "authority": authority_disclosure(authority_doc),
     }
     doc["business_parts_id"] = ""
     doc["business_parts_hash"] = ""

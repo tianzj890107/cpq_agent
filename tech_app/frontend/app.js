@@ -2130,6 +2130,54 @@ function packagingPartEvidenceRowsHtml(rows) {
     + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("");
 }
 
+// 权威清单的两条披露（Spec `packaging-authority-disclosure-on-read.md` §C4）：部件图归属是
+// "按顺序推定"还是"逐行核对"，以及哪些行被导入器跳过（含客户原文）—— 纯函数，可被 node 直接执行。
+// 位置与 `packagingPartEvidenceRowsHtml()` 同一段：这里离 panels 远，不挤那两个源码窗口护栏。
+function packagingAuthorityDisclosureLines(doc) {
+  const payload = (doc && typeof doc === "object") ? doc : {};
+  const authority = payload.authority;
+  if (!authority || typeof authority !== "object" || Array.isArray(authority)) return [];
+  const stats = (authority.stats && typeof authority.stats === "object") ? authority.stats : {};
+  const thumb = (authority.thumbnail && typeof authority.thumbnail === "object")
+    ? authority.thumbnail : {};
+  const skipped = Array.isArray(authority.skipped) ? authority.skipped : [];
+  const total = Number(stats.part_total) || 0;
+  const bound = Number(thumb.bound_total) || 0;
+  const boundBy = String(thumb.bound_by || "");
+  const lines = [];
+  if (total > 0) {
+    if (!bound) {
+      lines.push(`部件图：${total} 件都没配到部件图（这一版清单的图没有归属）。`);
+    } else if (boundBy === "anchor_row") {
+      lines.push(`部件图：${bound}/${total} 件配到了图，归属按锚点行。`);
+    } else if (boundBy === "mixed") {
+      lines.push(`部件图：${bound}/${total} 件配到了图，但归属来源不统一`
+        + `（部分按锚点行、部分按顺序推定），需人工核对。`);
+    } else {
+      lines.push(`部件图：${bound}/${total} 件配到了图，但归属是按顺序推定`
+        + `（图片是浮动对象，不是按锚点行逐行核对）。`);
+    }
+  }
+  const skippedTotal = Number(stats.skipped_total) || 0;
+  if (skippedTotal > 0) {
+    const reasons = [];
+    skipped.forEach(item => {
+      const reason = String((item || {}).reason || "");
+      if (reason && reasons.indexOf(reason) < 0) reasons.push(reason);
+    });
+    lines.push(`清单里有 ${skippedTotal} 行被跳过（${reasons.join("、") || "未给原因"}）：`
+      + `这些行不是业务部件，但文字可能影响报价。`);
+  }
+  skipped.forEach(item => {
+    const row = (item && typeof item === "object") ? item : {};
+    const text = String(row.text || "").trim();
+    if (!text) return;
+    lines.push(`第 ${Number(row.row) || 0} 行被跳过（${String(row.reason || "")}）：${text}`
+      + ` —— 请人工确认是否影响报价。`);
+  });
+  return lines;
+}
+
 // 业务部件面板的「依据」行（Spec `packaging-business-part-panel-evidence.md` §C2）：
 // ① 权威清单出处（表 + 行 + 文件指纹；拼不出就如实说"未记录"，不猜文件名）；
 // ② 每件绑定分量一行；③ 没绑定就补一行说明。纯函数，可被 node 直接执行。
@@ -2202,6 +2250,22 @@ function renderPackagingBusinessTree(tree, rows) {
   head.dataset.qqBusinessParts = "1";
   head.textContent = `业务部件 ${rows.length} 件（来自权威清单）`;
   tree.appendChild(head);
+  // 权威清单的披露（Spec `packaging-authority-disclosure-on-read.md` §C5）：部件图归属与
+  // 被跳过的行必须看得见 —— 跳过的行里可能有"影响报价"的客户原话。纯文本渲染，不拼 HTML。
+  const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
+  if (disclosures.length) {
+    const notice = document.createElement("div");
+    notice.className = "packaging-authority-disclosure";
+    // 属性名写字面量（Spec §C5 就点名了这个属性）：`dataset.qqAuthoritySkip` 在源码里
+    // 看不出这个名字，现场 grep 不到"这个告警块是哪来的"。
+    notice.setAttribute("data-qq-authority-skip", "1");
+    disclosures.forEach(line => {
+      const row = document.createElement("div");
+      row.textContent = line;
+      notice.appendChild(row);
+    });
+    tree.appendChild(notice);
+  }
   rows.forEach(row => {
     const code = String(row.business_part_code || "");
     const binding = row.geometry_binding || {};
@@ -2237,10 +2301,15 @@ function openPackagingBusinessPart(code) {
   if (title) title.textContent = `${wanted} ${String(row.name || "")}`.trim();
   const binding = row.geometry_binding || {};
   const authority = row.authority || {};
+  const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
   const facts = $("packagingPartFacts");
   if (facts) {
     facts.innerHTML = [
       pkgPartFactRow("权威尺寸", packagingBusinessPartSizeText(row)),
+      pkgPartFactRow("部件图", authority.thumbnail_ref
+        ? "已配到（" + (String(authority.thumbnail_source || "") === "order"
+          ? "归属按顺序推定" : "归属按锚点行") + "）" : ""),
+      pkgPartFactRow("清单告警", disclosures.join("；")),
       pkgPartFactRow("材料", authority.material_text),
       pkgPartFactRow("排版", authority.layout_text),
       pkgPartFactRow("工艺", authority.process_text),

@@ -7234,6 +7234,8 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                 "summary": packaging_parts.summarize_business_parts({}),
                 # 没有清单就没有出处：给空对象，不许编文件名（Spec §C1）。
                 "source": {},
+                # 没有清单就没有披露：给空对象，不许编"部件图归属"（Spec §C3）。
+                "authority": {},
                 "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
     return {"built": bool(record.get("business_parts")),
             "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
@@ -7247,6 +7249,10 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             # 权威清单出处（Spec `packaging-business-part-panel-evidence.md` §C1）：文件指纹 / 表 /
             # 几何 IR 版本，逐字透传；老文档没有就 `{}` —— 页面据此报"表 + 行 + 指纹"。
             "source": dict(record.get("source") or {}),
+            # 权威清单的披露（跳过的行 + 部件图归属，Spec
+            # `packaging-authority-disclosure-on-read.md` §C3）：文档里落了什么就透传什么，
+            # 老文档没有就给 `{}` —— 页面据此说"部件图归属是推定的""哪些行被跳过"。
+            "authority": dict(record.get("authority") or {}),
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
 
 
