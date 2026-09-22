@@ -15273,3 +15273,63 @@ git diff --check                          # 干净
 - 本批不改 `role=unknown` 不许自动贴业务角色的纪律，`role_known_ratio` 门禁读数不变；本批只让
   "为什么全是 unknown"可分辨。
 - 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据；工作区里别人的未提交文件没碰。
+
+## 356. 落地 `packaging-route-bom-version-pinning`：工艺路线固定"排产时照的那一版 BOM"（13/14 OK，F2 一条为红测夹具缺陷，已挂账）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_route_bom_version_pinning_red`：E1 E2 F1 F3 F4 F6 G2 G3 H1 H2 十条由红转绿，
+E3 F5 G1 三条护栏保持绿；仅 **F2** 的 `assertNotIn("bom_rebuilt")` 因夹具用哨兵指纹而不可满足（见 §三）。
+
+### 一、缺口
+
+`load_route()` 的 `source_versions` 三项（`bom_version` / `engine_version` / `box_type_code`）全部来自
+**读接口那一刻**的当前 BOM —— 字段名说的是"照着哪一版排的"，实际是"现在哪一版"，BOM 一重建数值就跟着变。
+路线主表与版本快照也**没有** BOM 来源列（`da_schema.sql` / `da_repo._PACKAGING_ROUTE_COLUMNS` /
+`da_db._ADDED_COLUMNS` 里都没有），`build_route()` 自己也不知道照的是哪一版，落库时直接丢弃。
+`_stale_reasons()` 只有工序指纹 / 表面字段 / 数量三条轴，BOM 重建后已确认路线照旧 `stale=false`；
+`confirm_route()` 的幂等判定与冻结快照都不含输入版本 —— BOM 变了、工序没变时"重复确认"原样返回旧快照。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_route.py`
+  - 新增纯函数 `bom_input_hash(rows)`（排序后 `sha256_hex(canonical_json(json_safe(...)))`，空输入 `""`）；
+  - 新增 `_current_bom_rows()`（读不到 / 空 → `bom_unavailable`，**不抛异常**）、
+    `_stored_source_versions(row)`、`_bom_drift_reasons(stored, pid, req_no) -> (reasons, unavailable)`；
+  - `build_route()` 在排产那一刻记下 `source_versions` 五项（盒型以 BOM 为准）并落库；
+  - `load_route()` 的 `source_versions` 改为**存的**那一份（历史行 → `{}`），新增 `bom_unavailable`
+    与两条新 stale 原因（`bom_rebuilt` / `provenance_missing`），附加在既有三条之后、去重，
+    且不受"有没有冻结版本"影响；
+  - `confirm_route()` 确认前先核对输入版本（`route_bom_provenance_missing` / `bom_unavailable` /
+    `bom_rebuilt` 三个 409），幂等条件追加指纹一致，冻结快照新增 `source_versions`；
+  - `route_versions()` 每条新增 `source_versions`（历史快照 `{}`）。
+- 存储：`da_schema.sql` 两张表新增 `source_versions_json TEXT`；`da_db._ADDED_COLUMNS` 老库补列；
+  `da_repo` 列清单 + `save_packaging_route()` / `append_packaging_route_version()` 序列化写入。
+- 前端 `requirement-confirm.js`：`PR_STALE_LABELS` 补两句人话，`bom_rebuilt` 时追加"请重算工艺路线"，
+  新增 `data-pr-bom-unavailable="1"` 提示，版本快照显示"照的 BOM <版本>"。
+
+### 三、已记录的偏差（红测夹具缺陷，不改测试）
+
+F2 的夹具把"存的指纹"写成哨兵 `"bom-hash-v1-old"`（注释自陈"真 sha256 永远不会等于它"），而同组 F1
+要求报 `bom_rebuilt`、F2 要求不报，两者除 BOM 行内容外输入完全相同 —— 在"存的指纹 vs 当前指纹"这条
+判据下 F2 那条断言不可能成立（`_load()` 只在传 `hash_value` 时替换 `bom_input_hash`，F1/F2 都没传）。
+Spec §4 的 F2 口径已实现并用真指纹验证：`generated_at` 变了、行没变 → `stale_reasons=[]`；行内容变了
+→ `["bom_rebuilt"]`。详见 `docs/specs/packaging-route-bom-version-pinning.md` §6.3。
+
+### 四、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_route_bom_version_pinning_red
+# Ran 14 tests ... FAILED (failures=1)  ← 只差 F2 夹具缺陷
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_process_route_red \
+    tests.test_packaging_quote_close_loop_red tests.test_packaging_parametric_bom_red \
+    tests.test_packaging_parts_extraction_red
+# Ran 242 tests ... OK
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 五、边界
+
+- 只加列，不改类型、不删列、不重建表；不做数据回填（旧路线 `source_versions={}` +
+  `provenance_missing`，必须先重算才能再确认）。
+- 不改既有键与裁决：三条既有 stale 原因、`confirm_route()` 的两条既有 409、`steps` / `gaps` / `stats`
+  口径逐字未动；`stale` 仍只标记、不拒绝读。
+- 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据；工作区里别人的未提交文件没碰。

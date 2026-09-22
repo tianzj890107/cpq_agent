@@ -1273,6 +1273,7 @@ CREATE TABLE IF NOT EXISTS wip_packaging_process_route (
     steps_fingerprint TEXT,          -- 工序序列指纹
     surface_json      TEXT,          -- 判定用到的需求表面字段快照
     quote_quantity    REAL,
+    source_versions_json TEXT,       -- JSON 对象:排产那一刻照的那一版 BOM(版本/指纹/行数/引擎/盒型)
     updated_at        TEXT,
     PRIMARY KEY (project_id, requirement_no)
 );
@@ -1312,6 +1313,7 @@ CREATE TABLE IF NOT EXISTS wip_packaging_process_route_version (
     total_seconds  REAL,
     has_incomplete_time INTEGER NOT NULL DEFAULT 0,
     steps_json     TEXT NOT NULL,
+    source_versions_json TEXT,       -- JSON 对象:这一版冻结时照的那一版 BOM(逐字等于主表那一份)
     UNIQUE (project_id, requirement_no, version)
 );
 CREATE INDEX IF NOT EXISTS ix_packaging_route_status ON wip_packaging_process_route(project_id, requirement_no, status);

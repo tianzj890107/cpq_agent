@@ -53,6 +53,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 成本单要"算时记下"输入版本(Spec packaging-cost-input-version-pinning.md §2.1):
     # 老库上 CREATE TABLE IF NOT EXISTS 不补列,不补就存不下也读不回。
     ("wip_packaging_cost_estimate", "source_versions_json", "TEXT"),
+    # 工艺路线要"排产时照的那一版 BOM"（Spec packaging-route-bom-version-pinning.md §2.1）：
+    # 老库上 CREATE TABLE IF NOT EXISTS 不补列，不补就存不下也读不回。
+    ("wip_packaging_process_route", "source_versions_json", "TEXT"),
+    ("wip_packaging_process_route_version", "source_versions_json", "TEXT"),
 )
 
 # 上线闭环第 2 批: 9 张包装扩展表补「数据来源分层」列(demo/workbook/dwg_confirmed/

@@ -532,7 +532,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   const PR_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
   const PR_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
   const PR_STATUS_LABELS = {draft: '草稿（未确认）', confirmed: '已确认'};
-  const PR_STALE_LABELS = {route_changed: '工序序列已变', requirement_changed: '表面工艺字段已变', quantity_changed: '报价数量已变'};
+  const PR_STALE_LABELS = {route_changed: '工序序列已变', requirement_changed: '表面工艺字段已变', quantity_changed: '报价数量已变', bom_rebuilt: '排产照的那一版 BOM 已变', provenance_missing: '这份路线没记下排产照的是哪一版 BOM（历史数据，请重算）'};
   let prPid = '';
   let prBusy = false;
 
@@ -610,8 +610,12 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const status = String(route.status || 'draft');
     const confirmed = route.confirmed_by
       ? `<span class="pr-confirmed">已确认：${prEsc(route.confirmed_by)} · ${prEsc(route.confirmed_at || '—')}</span>` : '';
+    const staleReasons = Array.isArray(route.stale_reasons) ? route.stale_reasons : [];
     const stale = route.stale
-      ? `<div class="pr-stale">输入已变化，请重新确认：${prEsc((route.stale_reasons || []).map(code => PR_STALE_LABELS[code] || code).join('、'))}</div>` : '';
+      ? `<div class="pr-stale" data-pr-stale="1">输入已变化，请重新确认：${prEsc(staleReasons.map(code => PR_STALE_LABELS[code] || code).join('、'))}${staleReasons.includes('bom_rebuilt') ? '（排产照的 BOM 已变，请重算工艺路线）' : ''}</div>` : '';
+    // 当前 BOM 读不到 = "比较不了"，不许说成"没有上游版本"（Spec packaging-route-bom-version-pinning.md §2.5）。
+    const bomUnknown = (route.bom_unavailable && route.bom_unavailable.code)
+      ? `<div class="pr-stale" data-pr-bom-unavailable="1">当前读不到包装 BOM，无法核对这份路线照的是哪一版（不是"没有上游版本"）。</div>` : '';
     const needsTime = (gaps.needs_standard_time || []);
     const aggregate = (gaps.aggregate_steps || []);
     const violations = (gaps.order_violations || []);
@@ -632,12 +636,14 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
           <span class="pr-version-meta">${prEsc(item.confirmed_by || '—')} · ${prEsc(item.confirmed_at || '—')}</span>
           <span class="pr-version-meta">工序 ${prEsc((JSON.parse(item.steps_json || '[]') || []).length)} 道 · 单件 ${prEsc(item.total_seconds === null || item.total_seconds === undefined ? '—' : `${item.total_seconds}s`)}</span>
           <span class="pr-version-meta">指纹 ${prEsc(String(item.steps_fingerprint || '').slice(0, 8) || '—')}</span>
+          <span class="pr-version-meta">照的 BOM ${prEsc((item.source_versions || {}).bom_version || '—（历史数据，未记录）')}</span>
         </li>`).join('')}</ol>`
       : '<div class="pr-empty">还没有冻结版本。工艺经理确认后会出现第 1 条快照。</div>';
     return `<section class="card section pr-panel" id="packagingRoutePanel">
       <h2>${title}</h2>
       <div class="pr-hint">工序顺序按第 6 批的规范位次排（不用知识库的里程碑分组）；顺序违规 / 待补工时都是显式缺口，不编数。状态：${prEsc(PR_STATUS_LABELS[status] || status)}${confirmed ? ` · ${confirmed}` : ''}</div>
       ${stale}
+      ${bomUnknown}
       <div class="pr-hint">共 ${prEsc(stats.step_count || 0)} 道 · 模板工序 ${prEsc(stats.template_steps || 0)} · 需求补齐 ${prEsc(stats.synthetic_steps || 0)} · 手工 ${prEsc(stats.manual_steps || 0)} · 自动 ${prEsc(stats.auto_steps || 0)} · 已冻结 ${prEsc(stats.confirmed_versions || 0)} 版。单件合计 ${prEsc(route.total_seconds === null || route.total_seconds === undefined ? '—' : `${route.total_seconds}s`)} · 批量 ${prEsc(route.batch_seconds === null || route.batch_seconds === undefined ? '—' : `${route.batch_seconds}s`)}。</div>
       ${gapLines}
       <div class="pr-actions">

@@ -796,7 +796,8 @@ def load_packaging_bom(project_id: str, requirement_no: str = "") -> list[dict]:
 _PACKAGING_ROUTE_COLUMNS = (
     "industry", "engine_version", "generated_at", "box_type_code", "total_seconds",
     "batch_seconds", "has_incomplete_time", "status", "stale", "stale_reasons",
-    "steps_fingerprint", "surface_json", "quote_quantity", "updated_at",
+    "steps_fingerprint", "surface_json", "quote_quantity", "source_versions_json",
+    "updated_at",
 )
 
 _PACKAGING_ROUTE_STEP_COLUMNS = (
@@ -825,6 +826,9 @@ def save_packaging_route(project_id: str, requirement_no: str, route: dict,
     row["status"] = "draft"
     row["stale"] = 0
     row["stale_reasons"] = _bom_json(route.get("stale_reasons") or [])
+    # "排产时照的那一版 BOM"（Spec packaging-route-bom-version-pinning.md §2.3）：写法与
+    # stale_reasons 一致 —— 多出来的键不丢，读侧才回答得出这个字段名说的问题。
+    row["source_versions_json"] = _bom_json(route.get("source_versions") or {})
     row["updated_at"] = now
     db.upsert("wip_packaging_process_route", row,
               keys=("project_id", "requirement_no"))
@@ -883,6 +887,7 @@ def append_packaging_route_version(record: dict) -> int:
         "total_seconds": record.get("total_seconds"),
         "has_incomplete_time": 1 if record.get("has_incomplete_time") else 0,
         "steps_json": record.get("steps_json") or "[]",
+        "source_versions_json": _bom_json(record.get("source_versions") or {}),
     })
 
 
