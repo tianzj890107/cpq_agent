@@ -227,15 +227,32 @@ function aiProcessCard(title) {
     toolDetailBox(parent).append(row);
     if (tone && parent.classList && parent.classList.add) parent.classList.add(`has-${tone}`);
   };
+  // 状态展示行（统计 / 覆盖率 / 汇总陈述，## 142 §C）：只认这四类**封闭句式**，
+  // 任务步骤行（检索工艺库 / 查询条件 / 命中 … / 正在调用模型…）一律不沾边。
+  const INFO_SENTENCE = (value) => {
+    const line = String(value == null ? '' : value).trim();
+    if (!line) return false;
+    if (/^共\s*\d+\s*(道|个|条|项|处|种)/.test(line)) return true;
+    if (/^参数\s*\d+\s*条[、,，]\s*连接\s*\d+\s*处[、,，]\s*BOM\s*\d+\s*行/i.test(line)) return true;
+    if (/已给出（必填\s*\d+\s*\/\s*\d+）/.test(line)) return true;
+    if (/仍缺[:：]/.test(line)) return true;
+    return false;
+  };
+  // 卡片是否已经收尾：只有收尾之后才把"没有显式状态"的行直接画成 ✓（## 142 §A）。
+  let settled = false;
   const rowFor = (text, tone) => {
+    // 行类型与终态（## 142 §A/§C）：状态展示行 · / info；卡片还在跑时其余行一律 ○，
+    // 收尾之后才 ✓。以前这里把每一行硬编码成 completed + ✓，所以卡片还在跑就已经满屏 ✓，
+    // done() 里的收尾翻转因此是死代码。
+    const info = INFO_SENTENCE(text);
     const row = document.createElement('div');
     row.className = `oc-process-step${tone ? ` ${tone}` : ''}`;
     row.setAttribute('data-agent-role', ROLE_ITEM);
-    row.setAttribute('data-state', 'completed');
+    row.setAttribute('data-state', info ? 'info' : settled ? 'completed' : 'running');
     const dot = document.createElement('span');
     dot.className = 'oc-process-dot';
     dot.setAttribute('data-agent-role', ROLE_ICON);
-    dot.textContent = '✓';
+    dot.textContent = info ? '·' : settled ? '✓' : '○';
     const label = document.createElement('span');
     label.className = 'oc-process-text';
     label.setAttribute('data-agent-role', ROLE_TITLE);
@@ -271,6 +288,7 @@ function aiProcessCard(title) {
       card.setAttribute('data-status', interrupted ? 'interrupted' : ok ? 'completed' : 'failed');
       state.className = `oc-alabel-state ${interrupted ? 'is-interrupted' : ok ? 'is-succeeded' : 'is-failed'}`;
       state.textContent = interrupted ? '⏸ 中断' : ok ? '✓ 已完成' : '⚠ 失败';
+      settled = true;
       // 卡片收尾：仍是「进行中」的过程行（含折叠区里的结果行）一次性收成完成 ✓，
       // 界面上不再留圆圈。
       if (!interrupted && ok) {

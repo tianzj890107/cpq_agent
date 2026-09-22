@@ -1563,9 +1563,20 @@
     const ROLE_ICON = "tool-state-icon";
     const ROLE_TOGGLE = "tool-toggle";
     const ROLE_DETAIL = "tool-detail";
-    // 状态图标：完成 ✓、进行中 ○、失败 ⚠；不再用「点」。
+    // 状态图标：完成 ✓、进行中 ○、失败 ⚠、状态展示行 ·（## 142）；不再用「点」。
     function stateIcon(state) {
-      return state === "failed" ? "⚠" : state === "running" ? "○" : "✓";
+      return state === "failed" ? "⚠" : state === "running" ? "○" : state === "info" ? "·" : "✓";
+    }
+    // 状态展示行（统计 / 覆盖率 / 汇总陈述，## 142 §C）：只认这四类**封闭句式**，
+    // 任务步骤行（检索工艺库 / 查询条件 / 命中 … / 正在调用模型…）一律不沾边。
+    function isInfoSentence(value) {
+      const line = String(value == null ? "" : value).trim();
+      if (!line) return false;
+      if (/^共\s*\d+\s*(道|个|条|项|处|种)/.test(line)) return true;
+      if (/^参数\s*\d+\s*条[、,，]\s*连接\s*\d+\s*处[、,，]\s*BOM\s*\d+\s*行/i.test(line)) return true;
+      if (/已给出（必填\s*\d+\s*\/\s*\d+）/.test(line)) return true;
+      if (/仍缺[:：]/.test(line)) return true;
+      return false;
     }
     // 产品侧色调：命中 / 可改制 → hit，未命中 / 按新制 → miss；调用方给了 tone 就用它，
     // 没给就按原句判定 —— 少传一个参数不该把颜色丢掉。
@@ -1655,8 +1666,22 @@
     // phase === "progress"（以及旧任务里没有 phase 的行）沿用默认样式，不新增类名。
     const phaseCls = phase === "model" || phase === "tool" ? ` ${phase}` : "";
     const toneName = rowTone(tone);
+    // 行类型与终态（## 142 §A/§C）：显式 detail.status==='failed' → ⚠；显式 kind==='info'
+    // 或封闭句式兜底 → · ；显式 running → ○；**其余默认 ○**，只有卡片已经成功收尾
+    // （本卡 done / data-status 已是成功终态，含历史回放）时才直接渲染 ✓ ——
+    // 以前"没有显式状态就按完成渲染"是「正在的时候就已经是 ✓ 了」的直接原因。
+    const cardStatus = String((card && card.status) || "");
+    const cardSettled = Boolean(card && (card.done || cardStatus === "succeeded"
+      || cardStatus === "completed" || cardStatus === "partial"));
+    const explicitKind = String((detail && detail.kind) || "");
+    // 封闭句式兜底只在卡片**还没收尾**时生效：历史回放的已成功卡片（§A）整卡直接渲染
+    // ✓，不留 · 也不留 ○；显式 kind==='info' 不受这条影响（§C 显式标注优先）。
+    const infoRow = explicitKind === "info"
+      || (!cardSettled && explicitKind !== "step" && isInfoSentence(body));
     const itemState = tone === "err" || (detail && String(detail.status) === "failed") ? "failed"
-      : (detail && String(detail.status) === "running") ? "running" : "completed";
+      : infoRow ? "info"
+      : (detail && String(detail.status) === "running") ? "running"
+      : cardSettled ? "completed" : "running";
     // 同一次模型调用只占一行（## 99）：开始事件建行，返回 / 失败事件把结果补写回那一行。
     const callKey = phase === "model" ? modelRowKey(detail) : "";
     if (callKey) {
@@ -1688,9 +1713,14 @@
     if (opensCall) {
       const pending = card.__ocPending || [];
       card.__ocPending = [];
+      // 先到的普通行不许裸挂成这次调用的直接子节点（## 142 §B）：裸子节点既不能折叠、
+      // 又继承父行的横向 flex 布局，用户看到的就是「多余的缩进 / 换行 + 全都显示出来」。
+      // 一律折进折叠区（默认收起），折叠区与标题行开关成对出现。
       pending.forEach((row) => {
+        // 先从 steps 上摘下来再折进折叠区：DOM 里 append 会移动节点，但测试用的 DOM 桩
+        // 按「追加」实现，不摘就会两个父节点各留一份。
         if (row.remove) row.remove();
-        item.append(row);
+        foldUnder(item, row, "");
       });
       card.steps.append(item);
     } else if (sub && parent) {

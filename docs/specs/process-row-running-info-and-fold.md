@@ -7,6 +7,9 @@
 > 本批只修三处用户仍然看得到的问题：**运行中提前变 ✓**、**裸子节点 = 假折叠**、
 > **状态展示行没有独立行类型**。
 > 红测：`tests/test_process_row_running_info_and_fold_red.py`（26 条，实现前 14 条失败）。
+> **已实现**（`## 292`）：实测 `Ran 26 OK` —— A1 / B1 / C1 / C2 / E1 / E3 / E4 七组共 14 条
+> 断言全部转绿，A2/A3/B2–B4/C3/C4/D1–D3/E2/E5 与 7 条脚手架护栏保持绿。
+> 本轮同时把「`match` 命令没被分发」补上（见 §10.4）。
 >
 > 用户另有一条硬要求：「不只是图纸解析的输出气泡，而是**报价和技术工艺所有的**都应该是统一的」，
 > 因此本批的 A/B/C 合同必须同时覆盖四个过程行入口：技术工艺左栏
@@ -184,3 +187,60 @@ E 组，同样 node 实跑真渲染器）：
   报价页也要有标题行开关。
 - 命中可复用 / 可改制绿、未命中 / 按新制橙、模型行 / 工具行色调与既有折叠内容
   （查询条件、命中件与匹配度、差异、库内条数）一条不少。
+
+## 10. 实现记录（`## 292`）
+
+改的只有 Spec §7 允许的 4 个文件，另加一处与本批同链路的服务端分发缝：
+
+| 文件 | 改动 |
+| --- | --- |
+| `tech_app/frontend/agent-chat.js` | `pushTaskStep`：① `stateIcon` 增加 `info → ·`；② 新增**封闭句式**判定 `isInfoSentence`（只认 §C 的四种句式）；③ `itemState` 改成「failed → info → running → 未标注终态按卡片状态：已成功收尾 `completed`，否则 `running`」；④ `opensCall` 分支把先到的普通行**折进折叠区**（先 `remove()` 再 `foldUnder`），不再裸挂成子节点 |
+| `tech_app/frontend/assembly-integration.js` | `aiProcessCard`：新增 `INFO_SENTENCE` 与 `settled`；`rowFor` 从硬编码 `completed/✓` 改成 `info → ·/info`、未收尾 `running/○`、收尾后 `completed/✓`；`done()` 先置 `settled` 再翻转（翻转仍只认 `data-state="running"`，`info` 行天然不参与） |
+| `tech_app/frontend/cost-review.js` | `crCard`：与 3 阶段页逐条同样的改法 |
+| `确认需求解析结果.html` | `addToolActivity`：`makeItem` 按封闭句式给 `data-state="info"` + `·`；`markTraceDone()` 跳过 `data-state="info"` 的行（步骤行照旧翻 ✓） |
+| `cpq_agent_server.py` | 与本批同链路的缝：`_handle_quick_quote_session_write` 的 `produce()` 补 `command == "match"` 分发（路由正则早已接受 `match`，分发器却漏了它 → 首页「2 匹配案例」必然落到未知命令）。由并行会话给出红测、与本批一并入库 |
+
+### 10.1 两条口径的落法（与 §A / §C 的措辞对齐）
+
+1. **封闭句式兜底只在卡片还没收尾时生效**。§A 要求「历史回放的已成功卡片整卡直接 ✓，不留圆圈」，
+   §C 要求「历史文本按封闭句式兜底判成状态展示行」；两者对**同一张已成功卡片**里的同一行
+   （如 `参数 25 条、连接 3 处、BOM 5 行`）会给出相反结论。A3 的断言是逐行 `completed` + ✓，
+   所以：显式 `detail.kind === 'info'` 永远优先（与卡片状态无关）；**句式兜底**在
+   `card.done / card.status ∈ {succeeded, completed, partial}` 时不生效。运行中建立的 info 行
+   在卡片收尾后仍是 `·`（§C：不参与收尾翻转），这条不受影响 —— 3 阶段页 / 4 阶段页 / 报价页的
+   `done()` 只翻 `data-state="running"` 的行，E3 / E4 因此覆盖「运行中」与「完成后」两个时点。
+2. **`opensCall` 折叠前必须先 `remove()`**。浏览器里 `append` 会移动节点，但红测用的 DOM 桩
+   按「追加」实现：不摘下来会同时留在 `steps` 与折叠区里，`top_level` 从 2 变 3，
+   `test_quote_tech_process_row_fold_and_done_red::A1`（## 136 的守卫）就会红。两条合同由此同时成立：
+   ## 142 要求「没有裸子节点」，## 136 要求「同一批行只能出现在折叠区里」。
+
+### 10.2 实跑
+
+```
+tests.test_process_row_running_info_and_fold_red                 Ran 26 OK（实现前 FAILED failures=14）
+tests.test_quote_tech_process_row_fold_and_done_red              Ran 12 OK（## 136 守卫）
+tests.test_quote_tech_process_row_product_contract_red           Ran 29 OK（## 133 守卫）
+tests.test_quote_tech_unified_tool_list_conversation_red         OK
+tests.test_chat_collapsible_thinking_trace_red / _chat_errors_inflow_and_drop_refresh_task_cards_red /
+  _chat_fused_assistant_card_style_red / _tech_chat_card_noise_and_quiet_board_failures_red   OK
+「引用这四个前端文件」的全部 115 个测试模块（1771 条）→ 只剩 3 条**既有红**：
+tests.test_tech_model_call_row_merged_and_summary_detail_red 的 2 条（要求模型行有「详情」+ 输入输出
+JSON，## 133 已明确退役）与 tests.test_tech_params_autofill_and_soft_gates_red::
+NoScopeCreep::test_protocol_events_unchanged（事件闭集要求里没有 `task-blocked`，## 226 已加）。
+三条都逐条对得上改动前基线，本批未触碰其相关行为。
+node --check agent-chat.js / assembly-integration.js / cost-review.js → 通过
+```
+
+### 10.3 边界
+
+未改 `tests/` 下任何既有文件、未改后端 `tasks.py` 的 `report_progress / process_event`、
+未改 SSE 载荷与 `phase ∈ {model, tool, progress}`、未改任何 CSS、未连库、未写生产数据。
+
+### 10.4 顺带修掉的一条真实断点（不在本批 Spec 的 A/B/C/D 内）
+
+首页「2 匹配案例」按钮调 `QuickQuotePanel.matchQuickQuoteCases` → `POST …/sessions/{id}/match`；
+服务端路由正则接受 `match`，但 `_handle_quick_quote_session_write` 的 `produce()` 只分发
+`baseline / workspace / price / confirm / transfer-to-precise`，`match` 必然落到未知命令。
+已补 `command == "match" → _handle_quick_quote_session_match(sid, body)`，
+并入库并行会话给的红测 `tests/test_e2e_quick_quote_executable_red.py::test_match_command_is_really_dispatched`
+（`Ran 11 OK`）。

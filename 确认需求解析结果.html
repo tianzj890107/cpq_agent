@@ -1444,18 +1444,31 @@
       }
       const rowTone = (value) => (/命中|可改制|可复用/.test(value) ? 'hit'
         : (/无同类件|未命中|按新制|未匹配/.test(value) ? 'miss' : ''));
+      // 状态展示行（统计 / 覆盖率 / 汇总陈述，## 142 §C）：只认这四类**封闭句式**，
+      // 任务步骤行（检索工艺库 / 查询条件 / 命中 … / 正在调用模型…）一律不沾边；
+      // 用 · 单独成一类，收尾时不翻 ✓。
+      const infoSentence = (value) => {
+        const line = String(value == null ? '' : value).trim();
+        if (!line) return false;
+        if (/^共\s*\d+\s*(道|个|条|项|处|种)/.test(line)) return true;
+        if (/^参数\s*\d+\s*条[、,，]\s*连接\s*\d+\s*处[、,，]\s*BOM\s*\d+\s*行/i.test(line)) return true;
+        if (/已给出（必填\s*\d+\s*\/\s*\d+）/.test(line)) return true;
+        if (/仍缺[:：]/.test(line)) return true;
+        return false;
+      };
       // 过程行：状态图标 + 原句标题；命中 / 未命中的颜色落在结论文字上。
       function makeItem(text, tone, sourceText) {
+        const info = infoSentence(text);
         const item = document.createElement('div');
         item.setAttribute('data-agent-role', 'tool-item');
-        item.setAttribute('data-state', 'running');
+        item.setAttribute('data-state', info ? 'info' : 'running');
         const row = document.createElement('div');
         row.className = 'oc-process-row';
         if (tone) row.classList.add(tone);
         const i = document.createElement('span');
         i.className = 'oc-process-dot';
         i.setAttribute('data-agent-role', 'tool-state-icon');
-        i.textContent = '○';
+        i.textContent = info ? '·' : '○';
         const s = document.createElement('span');
         s.className = 'oc-process-text';
         s.setAttribute('data-agent-role', 'tool-title');
@@ -1500,6 +1513,8 @@
     function markTraceDone(scope) {
       const root = scope || chatEl;
       root.querySelectorAll('[data-agent-role="tool-item"]').forEach(item => {
+        // 状态展示行（·）不参与收尾翻转（## 142 §C）：卡片成功后仍然是 ·。
+        if (item.getAttribute('data-state') === 'info') return;
         item.setAttribute('data-state', 'completed');
         const icon = item.querySelector('[data-agent-role="tool-state-icon"]');
         if (icon) icon.textContent = '✓';

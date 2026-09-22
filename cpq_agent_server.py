@@ -4050,7 +4050,9 @@ def _handle_quick_quote_session_workspace(session_id: str, body, *, user=None) -
     if not baseline:
         return _qq_error("baseline_required", "还没有选定基准案例：先选一个基准再改参数。", 409)
     workspace = body.get("workspace") if isinstance(body.get("workspace"), dict) else state.get("workspace") or {}
-    edits = body.get("edits") if isinstance(body.get("edits"), list) else []
+    # workspace.apply_edits() 的契约是 {field: value} 映射；以前这里只收 list，导致 UI
+    # 即使提交了盒型/数量也会在调用 `.items()` 时失败或被清成空修改。
+    edits = body.get("edits") if isinstance(body.get("edits"), dict) else {}
     try:
         workspace = cpq_quick_quote_workspace.apply_edits(
             workspace, edits, source=_qq_text(body.get("source")) or "workspace", user=user)
@@ -4105,12 +4107,17 @@ def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> 
     except Exception as exc:                                    # noqa: BLE001
         return _qq_error(getattr(exc, "code", "") or "confirm_failed",
                          str(exc) or "快速报价确认失败", 409)
-    state["quote"] = dict(saved.get("segment") or quote)
+    # price.save() 返回的 segment 是段名字符串（"quick_quote_price"），真实报价对象在
+    # snapshot[segment]。把段名 dict(...) 会直接 ValueError 并断开 HTTP 连接。
+    snapshot = saved.get("snapshot") if isinstance(saved.get("snapshot"), dict) else {}
+    segment_key = _qq_text(saved.get("segment"))
+    stored_quote = snapshot.get(segment_key) if isinstance(snapshot.get(segment_key), dict) else quote
+    state["quote"] = dict(stored_quote or {})
     state["versions"] = int(saved.get("version_no") or 1)
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
             "quick_quote_id": saved.get("quick_quote_id"),
             "version_no": saved.get("version_no"),
-            "segment": saved.get("segment"), "formal": bool(quote.get("formal"))}
+            "segment": state["quote"], "formal": bool(state["quote"].get("formal"))}
 
 
 def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) -> dict:
@@ -4164,6 +4171,8 @@ def _handle_quick_quote_session_write(session_id: str, command: str, body, *,
     sid = _qq_text(session_id)
 
     def produce():
+        if command == "match":
+            return _handle_quick_quote_session_match(sid, body)
         if command == "baseline":
             return _handle_quick_quote_session_baseline(sid, body, user=user)
         if command == "workspace":

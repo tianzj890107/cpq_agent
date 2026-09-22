@@ -122,3 +122,20 @@ node --check tech_app/frontend/quick-quote-panel.js     OK
 
 函数级自检：`_json_safe_response` 对 datetime/date/Decimal/UUID 输出 ISO / 字符串；
 `_qq_idempotent` 同键只执行一次（第二次带 `idempotent_replay`）。
+
+## 8. 指针：§3/§4/§6 的验收已在下一层收紧
+
+`## 279` 落地后，本 Spec 的 UI 组红测只断言**源码里出现过这些 token**
+（`test_e2e_quick_quote_executable_red.py` 的 `assertTrue("selectQuickQuoteBaseline" in PANEL)`），
+所以"函数写在面板里、首页一个都不调用"也能绿。34 复核实测（2026-09-22，只读）：
+
+- `报价首页.html` 对面板只调用 `open` / `fillCaseFields` / `reviewCase`，七个工作区命令 **0 次调用**；
+- 面板 `render()` 没有渲染 `renderDiffTable` / `renderQuote`，字段工作区与报价段在页面上不存在；
+- 首页没有 `#quickQuoteWorkspace` 容器，`onAction` 没接 `save_quote`；
+- `selectQuickQuoteBaseline()` 在 session 为空时仍发请求（URL 会拼成 `/sessions//baseline` → 404）；
+- `_handle_quick_quote_read()` 把 `find_quote` 的异常吞成 `saved={}`，「处理器坏了」与「还没落过卡」
+  在响应里长得一样。
+
+本 Spec §3 的**命令口径不变**（路由、幂等、角色门槛一律照旧）；
+把"页面真接上、读路径不伪装"这件事单独写成下一层：
+`docs/specs/quick-quote-home-wiring-and-read-diagnostics.md` + `tests/test_quick_quote_home_wiring_red.py`。

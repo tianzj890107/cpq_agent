@@ -36,6 +36,20 @@ class QuickQuoteHttpClosureRed(unittest.TestCase):
         self.assertTrue("quick_quote_idempotency" in SERVER,
                       "快速报价写请求必须有幂等键与结果复用")
 
+    def test_match_command_is_really_dispatched(self):
+        start = SERVER.find("def _handle_quick_quote_session_write")
+        end = SERVER.find("\n\nclass Handler", start)
+        dispatcher = SERVER[start:end]
+        self.assertTrue('command == "match"' in dispatcher,
+                        "路由正则虽接受 match，但命令分发器没有调用匹配处理器")
+
+    def test_confirm_reads_saved_quote_from_snapshot_segment(self):
+        start = SERVER.find("def _handle_quick_quote_session_confirm")
+        end = SERVER.find("\n\ndef _handle_quick_quote_session_transfer", start)
+        handler = SERVER[start:end]
+        self.assertTrue('saved.get("snapshot")' in handler and "snapshot.get(segment_key)" in handler,
+                        "price.save 的 segment 是段名；确认接口必须从 snapshot[segment] 取报价对象")
+
 
 class QuickQuoteUiClosureRed(unittest.TestCase):
     def test_case_row_is_selectable(self):
