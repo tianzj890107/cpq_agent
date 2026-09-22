@@ -7341,34 +7341,47 @@ def dispatch_project_drawing_parse(project_id: str, *, filename: str = "",
     用户以为解析能力不存在 —— 其实 drawing-flow 早就能跑。判据只有后缀，不做探测、
     不调模型、不写盘；上传完与点按钮时都走这一处，前端不必自己猜。
 
-    返回 `{"route", "reason", "suffix", "flow_available"}`：
+    返回 `{"route", "reason", "suffix", "flow_available", "probe_unavailable"}`：
       · `.dwg/.dxf` → `drawing_flow`（确定性，绝不先送视觉）；
       · 位图 → `vision`（行为与改动前逐字一致）；
       · 三维交换格式 → `blocked_3d`；
       · 其余 → `blocked_other`。
+
+    `probe_unavailable`（键必须存在，正常给 `{}`）：**探测挂了**与**确实没有转换器**必须分得开
+    （Spec `packaging-drawing-dispatch-probe-truthfulness.md` §2.1）。探测失败按被调方
+    `file_preflight.detect_converter_availability()` 的既有契约处理：**可用性说"不可用"**
+    （绝不把"不知道"渲染成"能一键解析"），但后缀判据不受影响 —— `.dwg/.dxf` 照旧走 drawing_flow。
     """
     meta = store.load_meta(project_id) or {}
     name = str(filename or meta.get("source_filename") or "")
     suffix = ("." + name.rsplit(".", 1)[1].lower()) if "." in name else ""
     if suffix in DRAWING_FLOW_SUFFIXES:
-        # 能力事实由运行时探测决定（第 2 批），这里只回答"该走哪条链路"。
-        available = True
+        # 能力事实由运行时探测决定（第 2 批），这里只回答"该走哪条链路"+"现在跑得起来吗"。
+        flow_reason = "DWG/DXF 走图纸解析链路（2.1 一键解析）"
+        probe_unavailable = {}
         try:
             available = bool(file_preflight.detect_converter_availability().get("available"))
-        except Exception:                       # noqa: BLE001 - 探测失败不挡分流
-            available = True
-        return {"route": "drawing_flow", "suffix": suffix,
-                "reason": "DWG/DXF 走图纸解析链路（2.1 一键解析）",
-                "flow_available": available}
+        except Exception as exc:                # noqa: BLE001 - 探测失败不挡分流
+            # 探测失败 = 不知道能不能跑：按"不可用"报，并**单独**说清这是"暂时探测不到"，
+            # 与 available=False 的"本环境没有 DWG 转换器"分家（后者要换格式 / 装转换器）。
+            available = False
+            probe_unavailable = {"code": "converter_probe_unavailable",
+                                 "reason": type(exc).__name__}
+            flow_reason = ("DWG/DXF 走图纸解析链路（2.1 一键解析），"
+                           "但暂时探测不到 DWG 转换器，请稍后重试")
+        return {"route": "drawing_flow", "suffix": suffix, "reason": flow_reason,
+                "flow_available": available, "probe_unavailable": probe_unavailable}
     if suffix in VISION_SUFFIXES:
         return {"route": "vision", "suffix": suffix,
-                "reason": "位图走通用视觉解析", "flow_available": False}
+                "reason": "位图走通用视觉解析", "flow_available": False,
+                "probe_unavailable": {}}
     if suffix in THREE_D_SUFFIXES:
         return {"route": "blocked_3d", "suffix": suffix,
                 "reason": "三维交换格式：二维链路与视觉解析都不适用",
-                "flow_available": False}
+                "flow_available": False, "probe_unavailable": {}}
     return {"route": "blocked_other", "suffix": suffix or "(无后缀)",
-            "reason": "无法识别的图纸格式", "flow_available": False}
+            "reason": "无法识别的图纸格式", "flow_available": False,
+            "probe_unavailable": {}}
 
 
 class DrawingFlowRunAction(BaseModel):

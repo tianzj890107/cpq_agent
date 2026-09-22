@@ -15438,3 +15438,45 @@ packaging 全域（1516 条）只剩各批未实现的红测与三处既有挂�
   步骤的 `detail` 两个新键随既有读路由自动带出。详见 Spec §6.3。
 - 只登记状态、不改判定：`find_spec` 口径、`dependencies` 的 `bool`、错误码与状态都没动；
   未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 359. 落地 `packaging-drawing-dispatch-probe-truthfulness`：分发器探测失败不再说"可用"，三种状态两两可分（5 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_drawing_dispatch_probe_red`（M 组 5 条）全绿：M1 / M2 / M3 由红转绿，
+M4（位图 / 三维 / 其他三条既有口径逐字不变）/ M5（后缀判据不受探测影响）两条护栏保持绿。
+
+### 一、缺口
+
+`main.py` 的 `dispatch_project_drawing_parse()` 在 `file_preflight.detect_converter_availability()`
+抛异常时 `available = True`（注释"探测失败不挡分流"），而被调方契约写的是"探测失败按'没有'返回
+（`available=False, role="none"`）…… 能力查询失败必须能被上层当作'不可用'处理"。两处口径相反：
+一旦探测函数本身出问题（导入失败 / 底层 `capability()` 抛出 / 实现被替换），分发器就把"不知道"
+渲染成"能一键解析"，点下去才发现不行；而且"探测挂了"与"确实没有转换器"在读回体上没有任何键能分开。
+
+### 二、改了什么
+
+- `tech_app/backend/main.py` `dispatch_project_drawing_parse()`
+  - 探测抛异常 → `flow_available: false`（不再给 `True`），并新增
+    `probe_unavailable = {"code": "converter_probe_unavailable", "reason": "<异常类名>"}`；
+  - `reason` 在探测失败时说「……但暂时探测不到 DWG 转换器，请稍后重试」（**不**说成"本环境没有
+    DWG 转换器"——那是 `available=False` 的说法）；探测成功时 `reason` 逐字不变；
+  - `probe_unavailable` 四个分支都带（位图 / 三维 / 其他 → `{}`）；
+  - 后缀判据不受探测影响：`.dwg/.dxf` 永远 `drawing_flow`。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_drawing_dispatch_probe_red
+# Ran 5 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_dwg_capability_truth_red \
+    tests.test_dwg_file_capability_preflight_red tests.test_packaging_drawing_flow_red \
+    tests.test_e2e_packaging_dwg_continuity_red
+# Ran 111 tests ... OK (skipped=1)
+```
+
+### 四、边界
+
+- Spec §2 第 2 条的前端显示**没有落点**：`tech_app/frontend/` 目前没有任何代码消费
+  `drawing/dispatch` 的返回体（只出现在建项响应的 `drawing_parse` 里）。本批不在前端造一个没人读的
+  分支，等前端真接这个字段时按 §2.2 显示。详见 Spec §5.3。
+- 只改"怎么说"：不动 `file_preflight` 契约与返回形状、不装转换器、不写盘、不调模型、不联网；
+  未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
