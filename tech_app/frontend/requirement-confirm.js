@@ -1,4 +1,30 @@
 function confirmationQuestions(req){const d=req.data||{};const rows=[];if(!d.technical_requirements)rows.push(['技术要求是否完整？','当前需求未填写技术要求与约束，请确认是否可按现有图纸推进。']);if(!d.due_date)rows.push(['期望交付日期？','当前未设置完成日期，请补充项目计划。']);if(!d.customer_project)rows.push(['客户或项目归属？','未填写客户 / 项目名称，建议确认归属以便报告分发。']);return rows.length?rows:[['需求范围确认','系统完整性检查未发现必填缺失，请确认图纸、技术目标与评估范围无误。']];}
+/* 候选盒型「选它能不能往下走」的一句披露（Spec
+   docs/specs/packaging-box-candidate-runnability-in-panel.md §C1）：
+   后端 `packaging_match._candidate()` 给 `part_template_available` 三态，
+   本函数只把它翻成一句话 —— 四态互斥，**「查不到」不许说成「没有」**
+   （Spec `packaging-silent-degradation-disclosure.md` §2.4 的同一条纪律）。
+   顶层纯函数：体内无 DOM / 无 `fetch(` / 无 `localStorage`，可被 `node -e` 抽出来真跑。 */
+function boxCandidateRunnabilityNote(row){
+  const item=(row&&typeof row==='object')?row:{};
+  const available=item.part_template_available;
+  if(available===false){
+    const total=Number(item.part_template_total);
+    const count=Number.isFinite(total)?total:0;
+    return `这个盒型还没有部件模板（${count} 条），确认后 BOM / 工艺 / 成本都跑不动；先补模板再确认`;
+  }
+  if(available===true){
+    const total=Number(item.part_template_total);
+    return (Number.isFinite(total)&&total>0)?`部件模板 ${total} 条`:'';
+  }
+  if(available===null){
+    const why=(item.part_template_unavailable&&typeof item.part_template_unavailable==='object')
+      ?item.part_template_unavailable:null;
+    const message=why?String(why.message||'').trim():'';
+    return message||'部件模板暂时查不到，请稍后重试；这不代表该盒型没有模板';
+  }
+  return '';
+}
 function renderConfirm(req){const d=req.data||{};document.querySelector('#app').innerHTML=`${header()}${workflow(1,'1.2')}<section class="title-card card"><div class="title-row"><h1>确认工艺评估需求</h1><span class="badge ${statusClass(req.status)}">${statusLabel(req.status)}</span></div><div class="ai-hint"><strong>✦ AI 辅助预检</strong><span>以下为结构化完整性检查结果，不调用模型、不产生 API 费用。请确认后送审。</span></div></section><section class="grid"><section class="card section"><h2>需求摘要</h2><div class="field"><label>需求名称</label><div>${esc(req.title)}</div></div><div class="field"><label>需求类型</label><div>${esc(d.requirement_type||'—')}</div></div><div class="field"><label>需求背景与目标</label><div>${text(d.description||'—')}</div></div><div class="field"><label>技术要求与约束</label><div>${text(d.technical_requirements||'待确认')}</div></div><a class="btn secondary" href="${href('requirement-create.html')}">返回修改需求</a></section><section class="card section"><h2>待澄清问题</h2><div id="questions">${confirmationQuestions(req).map(([q,j],i)=>`<div class="question-card"><div class="question">${i+1}. ${esc(q)}</div><div class="judgement">AI 初步判断：${esc(j)}</div><div class="confirm-row"><input id="answer${i}" placeholder="输入确认说明或补充信息"><button class="btn primary" data-answer="${i}">确认</button></div></div>`).join('')}</div><div class="field"><label>整体确认说明</label><textarea id="confirmationNote" placeholder="填写本次确认结论、补充说明或处理意见">${esc(req.confirmation_note||'')}</textarea></div></section></section><section class="card section"><h2>已有流程留痕</h2>${renderHistory(req.history)}</section><div class="footer-actions"><div class="footer-actions-inner"><a class="btn secondary" href="${href('requirement-create.html')}">上一步</a><button class="btn primary" id="confirmRequirement">确认需求并送审</button></div></div>`;loadMe();document.querySelectorAll('[data-answer]').forEach(b=>b.onclick=()=>{const input=document.querySelector(`#answer${b.dataset.answer}`);if(!input.value.trim())return toast('请先输入确认说明');b.textContent='已确认';b.disabled=true;});document.querySelector('#confirmRequirement').onclick=async()=>{try{const comment=document.querySelector('#confirmationNote').value;await api(`/api/projects/${projectId}/requirement/confirm`,{method:'POST',body:JSON.stringify({comment})});location.href=href('requirement-review.html');}catch(e){toast(e.message,4200)}};}
 
 /* ------------------------------------------------------------------------ *
@@ -108,6 +134,9 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const reasons = (row.reject_reasons || []).map(code => BM_REASON_LABELS[code] || code);
     const undecidable = (row.undecidable_dimensions || []).map(key => BM_DIMENSION_LABELS[key] || key);
     const status = BM_STATUS_LABELS[row.status] || row.status || '';
+    // 选它能不能往下走（Spec `packaging-box-candidate-runnability-in-panel.md` §C2）：
+    // 只是披露 —— **不**参与 `can_confirm`，也不禁用确认按钮。
+    const runnability = boxCandidateRunnabilityNote(row);
     return `<li class="box-match-candidate" data-status="${bmEsc(row.status)}">
       <div class="box-match-candidate-head">
         <span class="box-match-rank">${index + 1}</span>
@@ -121,6 +150,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="box-match-dims">${bmEsc(bmDimensionText(row.dimension_scores))}</div>
       ${reasons.length ? `<div class="box-match-reason">淘汰原因：${bmEsc(reasons.join('；'))}</div>` : ''}
       ${undecidable.length ? `<div class="box-match-reason">无法判定：${bmEsc(undecidable.join('、'))}</div>` : ''}
+      ${runnability ? `<div class="box-match-runnability" data-bm-runnability="1">${bmEsc(runnability)}</div>` : ''}
       <div class="box-match-candidate-actions">
         <button class="btn primary" data-bm-confirm="${bmEsc(row.box_type_code)}" ${row.can_confirm && bmCanDecide() ? '' : 'disabled'}>确认此盒型</button>
         <span class="box-match-usage">适用行业：${bmEsc(row.applicable_industries || '—')} · 状态：${bmEsc(row.business_status || '—')}</span>

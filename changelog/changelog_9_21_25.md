@@ -17393,3 +17393,38 @@ node --check tech_app/frontend/app.js  OK
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 406. 落地 `packaging-box-candidate-runnability-in-panel`：盒型候选列表说清「选它能不能往下走」（12 OK，红基 7 红）（9-22，Codex 实现）
+
+接 `## 289`（`packaging-box-candidate-rank-and-runnability.md` §7.3）明写的那条「前端接线是另一批」：
+接口早已给 `part_template_available`（`True` / `False` / `None` 三态）/ `part_template_total` /
+`part_template_unavailable`，但 `bmCandidate()` 一个字段都没渲染。
+
+`tech_app/frontend/requirement-confirm.js`：
+
+- 新增**顶层**纯函数 `boxCandidateRunnabilityNote(row)`（与 `confirmationQuestions()` 同级，
+  体内无 `document.` / `window.` / `fetch(` / `localStorage`）：`false` → 「这个盒型还没有部件模板
+  （N 条），确认后 BOM / 工艺 / 成本都跑不动；先补模板再确认」；`true` 且条数 > 0 → 「部件模板 N 条」；
+  `null` → 后端 `part_template_unavailable.message` **逐字**（拿不到给「部件模板暂时查不到，
+  请稍后重试；这不代表该盒型没有模板」）；键缺失 → `""`（老后端不替它编事实）。
+- `bmCandidate()`：新增 `const runnability = boxCandidateRunnabilityNote(row)`，在「无法判定」
+  之后、动作行之前输出 `<div class="box-match-runnability" data-bm-runnability="1">`（非空才输出）。
+  `确认此盒型` 的 `disabled` 判据仍是 `row.can_confirm && bmCanDecide()` —— **披露不是闸门**；
+  既有字段与候选顺序（`candidates.map(bmCandidate)`，无 `sort(`）逐字未动。
+- `tech_app/frontend/requirement-confirm.html` 内联 `<style>` 只加一条
+  `.box-match-panel .box-match-runnability{color:#5b6472;font-size:12px;margin-top:4px}`。
+
+后端 `packaging_match.py` 一行未改（三态口径与「读不到 → `None`，不许折成 `False`」原样）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_box_candidate_runnability_panel_red  Ran 12  FAILED (failures=7) → Ran 12  OK
+  （红基 7 条：T1–T6 + S1；护栏 S2–S6 始终绿）
+node --check tech_app/frontend/requirement-confirm.js  OK
+不回归：box_candidate_rank_and_runnability + box_type_matching + quote_packaging_box_selection
+        Ran 79  OK；cost_route_version_read_failure + cost_rule_routing +
+        downstream_block_code_http + parametric_bom + process_route          Ran 166  OK
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
