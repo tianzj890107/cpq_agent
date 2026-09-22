@@ -10558,3 +10558,45 @@ node --check tech_app/frontend/app.js                  OK
 未改任何 `tests/`；未改成本表达式/费率/权重/门槛判据；未连 PG、未写生产数据；
 「64 件分页/虚拟滚动展示」的渲染上限仍由既有零件树决定（本批只保证跑完重拉与可点击，
 不改前端渲染口径），`GET /requirement/packaging-parts` 的既有分页参数未动。
+
+## 285. 部署自检的「跳过」不许被算成「通过」：三态判决 + 令牌先验证再重取（9-22，Codex 实现）
+
+红测 `tests/test_deploy_selfcheck_skip_vs_pass_red.py`（9 条，实现前 7 红）全绿。Spec：
+`docs/specs/deploy-selfcheck-skip-vs-pass.md`（已补 §6 实现记录）。
+
+### 根因（34 实测，部署 `925c241` 的 6b 步）
+
+`权威实样路线自检：读不到知识库（… HTTP 403：内部令牌校验失败），跳过` 的下一行仍然是
+`{"isolated_downstream_selfcheck": "ok", "problems": []}` 与「隔离端到端自检通过」、退出码 0 ——
+**有一项根本没跑**，结论却和"全跑全过"长得一模一样（脚本注释里写的正是要防这个失效模式）。
+根因是**令牌取到 ≠ 能用**：重启顺序"先子后父"，取到的是上一代令牌，快照接口回 403。
+
+### 落点（`scripts/deploy_34_bare.sh` 第 6b 步）
+
+- 判决三态闭集 `{ok, failed, incomplete}` + 逐项 `checks`（状态闭集 `{pass, failed, skipped}`）
+  + 顶层 `skipped`（给门禁读的稳定形状）；退出码 = 判决（0 / 1 / 2），
+  `incomplete` 走 `fail`，「自检通过」那句只出现在 `verdict == ok` 的分支里；
+- `selfcheck_fetch_token()` 只从**正在服务**的进程取（先 8012、再 8010 兜底）；
+  `selfcheck_probe_snapshot()` 拿到令牌先打一次 `GET /wf/tech/kb/snapshot`，非 200 即视为这一代
+  不可用，并把 `HTTP <状态> <响应体>` 原样打出来；`selfcheck_wait_service_ready()` 重取前先等
+  `/api/health` 回 `ok`（最多 60s）；重取一次后仍不行 → 这一项判 `skipped`，
+  原因 `internal_token_rejected: 第 N 次：HTTP 403 …`，整条自检判 `incomplete`。
+
+### 实跑
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_deploy_selfcheck_skip_vs_pass_red  → Ran 9 OK
+bash -n scripts/deploy_34_bare.sh                                                      → OK
+34 真跑新第 6b 步（真令牌 + 两份真实 DWG + 知识库）：
+  {"isolated_downstream_selfcheck": "ok", "checks": [酒盒 pass, 圆盘盒 pass,
+   YT-DWG-ROUND-10PC pass, YT-DWG-WINE-700ML pass], "problems": [], "skipped": []}
+  · 第 6b 步判决 verdict=ok：所有检查项都真跑且通过
+令牌不可用那一路（注入 skip 原因，本机）：verdict=incomplete、逐项 checks 里
+  {"name": "权威实样路线", "status": "skipped", "reason": "internal_token_rejected: 第 1 次：HTTP 403 …"}、
+  顶层 skipped 非空、退出码 2
+```
+
+### 边界
+
+未改 `packaging-parts-downstream-acceptance.md` §3 的样本门槛、未删权威实样路线自检、
+未改 8010/8012 的启动方式与 env 文件口径、未改任何 `tests/`。

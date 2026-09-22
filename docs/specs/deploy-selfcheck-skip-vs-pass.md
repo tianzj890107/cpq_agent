@@ -3,7 +3,7 @@
 血缘：承接 `packaging-parts-downstream-acceptance.md` §6.1（第 6b 步的隔离端到端自检）、
 `deploy-build-identity.md`（部署版本身份）、`packaging-parts-selfcheck-diagnostics.md`（自检要指着原因说话）。
 
-- 状态：Spec + 红测（未实现）
+- 状态：**已实现**（红测 `tests/test_deploy_selfcheck_skip_vs_pass_red.py` 9 条全绿）
 - 红测：`tests/test_deploy_selfcheck_skip_vs_pass_red.py`
 - 依赖：`scripts/deploy_34_bare.sh` 第 6b 步（隔离自检与权威实样路线自检）
 
@@ -78,3 +78,52 @@
 - 不许把 skip 改写成 pass（例如"跳过也算过"）；不许删掉权威实样路线自检这一项；
 - 不许改 `tests/`（含本文件对应红测）、不许改两份真实 DWG 样本、不许改 8010/8012 的启动方式与
   env 文件口径（`PATH` 前缀、`load_dotenv(override=False)` 两条不变）。
+
+## 6. 实现记录
+
+### 6.1 三态判决（§2.1–§2.4）
+
+- `scripts/deploy_34_bare.sh` 第 6b 步的 `selfcheck.py`：`checks` / `skipped` 两个清单 +
+  `add_check(name, status, reason)`（`status` 闭集 `{pass, failed, skipped}`，跳过同时进
+  `checks` 与顶层 `skipped`）；判决 `verdict = "failed" if bad else ("incomplete" if skipped else "ok")`，
+  输出 `{"isolated_downstream_selfcheck", "checks", "problems", "skipped"}`。
+- 退出码 = 判决：`0` = ok、`1` = failed、`2` = incomplete；shell 侧 `case "$SELFCHECK_RC"`
+  三态分流，`incomplete` 走 `fail`（非零退出），"自检通过"那句只在 `verdict == ok` 的分支里。
+- 逐项粒度：两个样本各一项（缺失 → `skipped:sample_missing`），权威实样路线**按盒型各一项**
+  （尺寸区间缺失 → `skipped:size_range_missing`；confirm 不是 confirmed / 抛异常 → `failed`）。
+
+### 6.2 令牌先验证再使用（§3.5–§3.7）
+
+- `selfcheck_fetch_token()`：只从正在服务的进程取（先 8012 再 8010 兜底）；
+- `selfcheck_probe_snapshot()`：拿到令牌先打一次 `GET /wf/tech/kb/snapshot`，把 `HTTP <状态> <响应体>`
+  打印出来（不写"跳过"两字了事）；非 200 即视为这一代令牌不可用；
+- `selfcheck_wait_service_ready()`：重取前先等 `/api/health` 回 `ok`（最多 60s），避免拿到上一代令牌；
+- 重试一次（`for _attempt in 1 2`）；两次都不行 → `CPQ_SELFCHECK_KB_SKIP_REASON` 带上
+  `internal_token_rejected: 第 1 次：HTTP 403 … / 第 2 次：HTTP 403 …`，`selfcheck.py` 据此把
+  「权威实样路线」判 `skipped`，整条自检判 `incomplete`。
+
+### 6.3 实跑
+
+本机（`./open-claude/.venv/bin/python`）：红测 `Ran 9 OK`；
+把新第 6b 步单独搬到 34 真跑（真令牌 + 两份真实 DWG + 知识库）：
+
+```
+· 已从运行中的服务进程取到服务间内部令牌，快照校验通过（第 1 次），知识库自检可以真跑
+· 酒盒.dwg：八步 8/8 completed；零件 64 件（closed_ratio=0.938）；可算 9 / 可挤出 9
+· 圆盘盒.dwg：八步 8/8 completed；零件 9 件（closed_ratio=0.889）；可算 1 / 可挤出 8
+· 权威实样 YT-DWG-ROUND-10PC：路线 9 道，confirm=confirmed
+· 权威实样 YT-DWG-WINE-700ML：路线 10 道，confirm=confirmed
+{"isolated_downstream_selfcheck": "ok", "checks": [...4 项全 pass...], "problems": [], "skipped": []}
+隔离端到端自检通过（verdict=ok；…）
+· 第 6b 步判决 verdict=ok：所有检查项都真跑且通过
+```
+
+令牌不可用那一路用注入的 skip 原因在本机验过：`verdict=incomplete`、逐项 `checks` 里
+`{"name": "权威实样路线", "status": "skipped", "reason": "internal_token_rejected: 第 1 次：HTTP 403 …"}`、
+顶层 `skipped` 非空、退出码 `2`。
+
+### 6.4 未做 / 边界
+
+- 未改 `packaging-parts-downstream-acceptance.md` §3 的样本门槛，未删权威实样路线自检；
+- 未改 8010/8012 的启动方式与 env 文件口径（`PATH` 前缀、`load_dotenv(override=False)` 两条不变）；
+- 未改任何 `tests/`。

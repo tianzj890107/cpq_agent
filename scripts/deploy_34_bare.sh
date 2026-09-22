@@ -335,14 +335,105 @@ SELFCHECK_DIR="${TMPDIR:-/tmp}/cpq-parts-selfcheck.$$"
 # **只以环境变量形式传给它的 8012 子进程**：`/proc/8010/environ` 看不到 putenv 之后的改动，
 # 而子进程是 execve 继承的，能读到 —— 所以先找 8012，再兜底 8010（env 里显式给了令牌时）。
 SELFCHECK_TOKEN=""
-for _p in $(pgrep -f 'tech_app_launch.py --host 127.0.0.1 --port 8012' 2>/dev/null) "$PID"; do
-  SELFCHECK_TOKEN="$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^CPQ_INTERNAL_TOKEN=//p' | head -1)"
-  [ -n "$SELFCHECK_TOKEN" ] && break
+SELFCHECK_KB_SKIP_REASON=""
+SELFCHECK_TOKEN_ATTEMPTS=""
+
+# 从**正在服务的进程**里取令牌。8010 的令牌是导入期 putenv 生成的，`/proc/8010/environ`
+# 看不到；子进程是 execve 继承的，所以先找 8012、再兜底 8010。
+selfcheck_fetch_token() {
+  local _p _t
+  for _p in $(pgrep -f 'tech_app_launch.py --host 127.0.0.1 --port 8012' 2>/dev/null) "$PID"; do
+    _t="$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^CPQ_INTERNAL_TOKEN=//p' | head -1)"
+    [ -n "$_t" ] && { printf '%s' "$_t"; return 0; }
+  done
+  return 1
+}
+
+# 取到令牌 != 能用（Spec §3.5）：先拿它打一次知识库**快照**接口，非 200 就认为这一代令牌
+# 不可用；把 HTTP 状态与响应体原样打出来，不写"跳过"两个字了事。令牌只走参数，不进 env。
+selfcheck_probe_snapshot() {
+  "$PY" - "$1" <<'PROBE'
+import sys
+import urllib.error
+import urllib.request
+
+sys.path.insert(0, ".")
+from tech_app.backend.config import CPQ_AUTH_BASE_URL, CPQ_KB_TIMEOUT_SECONDS
+
+token = sys.argv[1]
+url = CPQ_AUTH_BASE_URL + "/wf/tech/kb/snapshot"
+request = urllib.request.Request(url, method="GET",
+                                 headers={"X-Internal-Token": token,
+                                          "Accept": "application/json"})
+try:
+    with urllib.request.urlopen(request, timeout=CPQ_KB_TIMEOUT_SECONDS) as response:
+        status = int(getattr(response, "status", 0) or 0)
+        body = response.read().decode("utf-8", "replace")[:300]
+except urllib.error.HTTPError as exc:
+    status = int(exc.code)
+    try:
+        body = exc.read().decode("utf-8", "replace")[:300]
+    except Exception:                                  # noqa: BLE001 - 读不到响应体就算了
+        body = str(exc.reason)
+except Exception as exc:                               # noqa: BLE001 - 连不上 / 超时 / SSL
+    status = 0
+    body = "%s: %s" % (type(exc).__name__, exc)
+print("HTTP %s %s" % (status, " ".join(body.split())))
+sys.exit(0 if status == 200 else 1)
+PROBE
+}
+
+# 服务可能刚被重启（Spec §3.7）：取令牌前先等它就绪，否则拿到的是"上一代的令牌"。最多等 60s。
+selfcheck_wait_service_ready() {
+  local _i
+  for _i in $(seq 1 30); do
+    if "$PY" - <<'READY' >/dev/null 2>&1
+import json
+import sys
+import urllib.request
+
+sys.path.insert(0, ".")
+from tech_app.backend.config import CPQ_AUTH_BASE_URL
+
+with urllib.request.urlopen(CPQ_AUTH_BASE_URL + "/api/health", timeout=5) as response:
+    payload = json.loads(response.read().decode("utf-8", "replace") or "{}")
+sys.exit(0 if str(payload.get("status") or "") == "ok" else 1)
+READY
+    then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+# 取 + 验证 + **重取重试**一次（Spec §3.6）：两次都不行才算"这一项没跑成"。
+for _attempt in 1 2; do
+  _candidate="$(selfcheck_fetch_token)" || _candidate=""
+  if [ -n "$_candidate" ]; then
+    if _probe="$(selfcheck_probe_snapshot "$_candidate")"; then
+      SELFCHECK_TOKEN="$_candidate"
+      echo "· 已从运行中的服务进程取到服务间内部令牌，快照校验通过（第 $_attempt 次），知识库自检可以真跑"
+      break
+    fi
+    _detail="$_probe"
+  else
+    _detail="取不到令牌（8012/8010 的 environ 里没有 CPQ_INTERNAL_TOKEN）"
+  fi
+  SELFCHECK_TOKEN_ATTEMPTS="${SELFCHECK_TOKEN_ATTEMPTS}第 $_attempt 次：${_detail}
+"
+  if [ "$_attempt" = "1" ]; then
+    echo "· 这一代令牌不可用（${_detail}），等服务就绪后重取一次"
+    selfcheck_wait_service_ready || true
+  fi
 done
 if [ -n "$SELFCHECK_TOKEN" ]; then
-  echo "· 已从运行中的服务进程取到服务间内部令牌，知识库自检可以真跑"
+  SELFCHECK_KB_SKIP_REASON=""
 else
-  echo "· 取不到服务间内部令牌，知识库自检会打印原因跳过"
+  SELFCHECK_TOKEN_ATTEMPTS="$(printf '%s' "$SELFCHECK_TOKEN_ATTEMPTS" | sed -e 's/[[:space:]]*$//')"
+  SELFCHECK_KB_SKIP_REASON="internal_token_rejected: ${SELFCHECK_TOKEN_ATTEMPTS}"
+  echo "· 两代令牌都不可用（知识库快照过不去）：权威实样路线这一项判 skipped，整条自检判 incomplete"
+  printf '%s\n' "$SELFCHECK_KB_SKIP_REASON" | sed 's/^/    /'
 fi
 mkdir -p "$SELFCHECK_DIR"
 cat > "$SELFCHECK_DIR/selfcheck.py" <<'PY'
@@ -368,10 +459,31 @@ def mix_text(mix):
 
 SAMPLES = ("酒盒.dwg", "圆盘盒.dwg")
 bad = []
+# 逐项三态清单（Spec `deploy-selfcheck-skip-vs-pass.md` §2.3/§2.4）：`跳过`和`通过`必须是
+# 两种不同的行 —— 判决只有 ok / failed / incomplete 三种；顶层 `skipped` 是给门禁读的稳定
+# 形状，不许只活在日志文字里。
+checks = []
+skipped = []
+
+
+def add_check(name, status, reason=""):
+    """status 闭集 {pass, failed, skipped}；skipped 同时进 checks 与顶层 skipped。"""
+    assert status in ("pass", "failed", "skipped"), status
+    row = {"name": name, "status": status}
+    if reason:
+        row["reason"] = reason
+    checks.append(row)
+    if status == "skipped":
+        skipped.append({"name": name, "reason": reason})
+    return row
+
+
 for name in SAMPLES:
     source = pathlib.Path("裕同包装项目-待开发") / name
     if not source.is_file():
-        bad.append("%s：样本缺失" % name)
+        # 样本缺失 = **没跑成**（Spec §2.1）：它既不是"通过"，也不是"有真问题"。
+        print("· %s：样本缺失，这一项没跑成" % name, flush=True)
+        add_check(name, "skipped", "sample_missing")
         continue
     # 每个样本**当场**输出（Spec §4.10）：否则"卡在第一份"和"卡在第二份"在日志里分不出来。
     print("· %s：开始跑隔离链路…" % name, flush=True)
@@ -387,6 +499,7 @@ for name in SAMPLES:
     except Exception:                                     # noqa: BLE001 - 检查失败如实报
         traceback.print_exc()
         bad.append("%s：跑不动（见上面的栈）" % name)
+        add_check(name, "failed", "flow_raised")
         continue
     steps = {str(row.get("step_id")): str(row.get("status"))
              for row in (flow.get("steps") or [])}
@@ -410,14 +523,18 @@ for name in SAMPLES:
     solid_mix = mix_text(summary.get("solid_reason_mix"))
     if solid_mix:
         print("   · 不可挤出原因：%s" % solid_mix, flush=True)
+    problems = []
     if not_done:
-        bad.append("%s：有步骤没跑完 %r" % (name, not_done))
+        problems.append("有步骤没跑完 %r" % not_done)
     if not rows:
-        bad.append("%s：零件文档是空的" % name)
+        problems.append("零件文档是空的")
     if not ready:
-        bad.append("%s：没有一件能跑工艺" % name)
+        problems.append("没有一件能跑工艺")
     if not solids:
-        bad.append("%s：没有一件能挤出 3D" % name)
+        problems.append("没有一件能挤出 3D")
+    for reason in problems:
+        bad.append("%s：%s" % (name, reason))
+    add_check(name, "failed" if problems else "pass", "；".join(problems))
     if rows:
         row = (ready or rows)[0]
         out = packaging_part_solids.extrude(row)
@@ -428,83 +545,110 @@ for name in SAMPLES:
 # 模板工序名在 build 时归一化到 19 条闭集内；闭集外又没映射的名字在入库时就被点名拒绝。
 # 少了这一条，盒型会以"永远 confirm 不了"（409 route_not_confirmable）的状态入库，直到
 # 零件下游全部卡死才发现。样本项目照旧建在隔离数据目录里，**不读也不写生产项目**。
-try:
-    from tech_app.backend.storage import da_db, da_repo, kb_repo
-    from tech_app.backend.services import packaging_bom, packaging_route
+# 令牌那一项（Spec `deploy-selfcheck-skip-vs-pass.md` §3.5–§3.7）：部署脚本已经**先验证
+# 再使用**（快照非 200 就重取一次）；两代都不可用时把原因原样带进来，这一项判 skipped。
+token_skip = (os.getenv("CPQ_SELFCHECK_KB_SKIP_REASON") or "").strip()
+authoritative = None
+if token_skip:
+    print("· 权威实样路线自检：%s（这一项没跑成）" % token_skip)
+    add_check("权威实样路线", "skipped", token_skip)
+else:
+    try:
+        from tech_app.backend.storage import da_db, da_repo, kb_repo
+        from tech_app.backend.services import packaging_bom, packaging_route
 
-    authoritative = [row for row in kb_repo.packaging_box_types()
-                     if str(row.get("business_status") or "").strip() == "权威实样"]
-except Exception as exc:                              # noqa: BLE001 - 读不到知识库如实报
-    print("· 权威实样路线自检：读不到知识库（%s），跳过" % exc)
-    authoritative = None
-if authoritative is not None:
-    if not authoritative:
-        print("· 权威实样路线自检：知识库里没有 business_status='权威实样' 的盒型，跳过")
-    for item in authoritative:
-        code = str(item.get("box_type_code") or "")
-        req_no = "REQ-ROUTE-SELFCHECK"
-        # BOM 展开需要内尺寸；自检不是需求单经办，用**盒型自己登记的可生产区间上限**
-        # 填三个内尺寸（拿不到就跳过这个盒型并打印原因，不编数、不改业务口径）。
-        dims = {key: item.get(source_key)
-                for key, source_key in (("inner_length", "size_l_max"),
-                                        ("inner_width", "size_w_max"),
-                                        ("inner_height", "size_h_max"))}
-        if any(dims[key] in (None, "") for key in dims):
-            print("· 权威实样 %s：盒型行没有尺寸区间，跳过路线自检" % code)
-            continue
-        try:
-            pid = store.create_project("route-selfcheck-%s.dwg" % code, b"selfcheck",
-                                       note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
-                                       owner_display_name="deploy-selfcheck")
-            requirement_service.save_requirement_draft(
-                pid, RequirementDoc(project_id=pid, requirement_no=req_no,
-                                    title="路线自检 " + code,
-                                    data={"industry": "packaging", "box_type": code,
-                                          "packaging_product_name": code,
-                                          "quote_quantity": 1000, "lamination": "覆光膜",
-                                          **dims}),
-                user={"username": "deploy-selfcheck", "role": "admin"})
-            da_repo.save_box_match({"project_id": pid, "requirement_no": req_no,
-                                    "industry": "packaging",
-                                    "engine_version": "packaging_match_v1",
-                                    "inputs": {}, "candidates": [], "missing_inputs": [],
-                                    "suggested_box_type": code})
-            da_repo.update_box_match_decision(pid, req_no, decision="confirmed",
-                                              confirmed_box_type=code,
-                                              confirmed_by="deploy-selfcheck",
-                                              confirmed_at=da_db.now())
-            packaging_bom.build_bom(pid, req_no)
-            built = packaging_route.build_route(pid, req_no)
-            confirmed = packaging_route.confirm_route(
-                pid, req_no, actor={"username": "deploy-selfcheck"})
-            print("· 权威实样 %s：路线 %d 道，confirm=%s"
-                  % (code, len(built.get("steps") or []), confirmed.get("status")))
-            if str(confirmed.get("status")) != "confirmed":
-                bad.append("权威实样 %s：confirm 结果不是 confirmed（%s）"
-                           % (code, confirmed.get("status")))
-        except Exception as exc:                      # noqa: BLE001 - 检查失败如实报
-            traceback.print_exc()
-            bad.append("权威实样 %s：工艺路线自检失败（%s）" % (code, exc))
+        authoritative = [row for row in kb_repo.packaging_box_types()
+                         if str(row.get("business_status") or "").strip() == "权威实样"]
+    except Exception as exc:                              # noqa: BLE001 - 读不到知识库如实报
+        print("· 权威实样路线自检：读不到知识库（%s），跳过" % exc)
+        add_check("权威实样路线", "skipped", "kb_unavailable: %s" % exc)
 
-print(json.dumps({"isolated_downstream_selfcheck": "ok" if not bad else "failed",
-                  "problems": bad}, ensure_ascii=False))
+if authoritative is not None and not authoritative:
+    print("· 权威实样路线自检：知识库里没有 business_status='权威实样' 的盒型，跳过")
+    add_check("权威实样路线", "skipped", "no_authoritative_sample")
+
+for item in (authoritative or []):
+    code = str(item.get("box_type_code") or "")
+    req_no = "REQ-ROUTE-SELFCHECK"
+    # BOM 展开需要内尺寸；自检不是需求单经办，用**盒型自己登记的可生产区间上限**
+    # 填三个内尺寸（拿不到就跳过这个盒型并打印原因，不编数、不改业务口径）。
+    dims = {key: item.get(source_key)
+            for key, source_key in (("inner_length", "size_l_max"),
+                                    ("inner_width", "size_w_max"),
+                                    ("inner_height", "size_h_max"))}
+    if any(dims[key] in (None, "") for key in dims):
+        print("· 权威实样 %s：盒型行没有尺寸区间，跳过路线自检" % code)
+        add_check("权威实样路线 %s" % code, "skipped", "size_range_missing")
+        continue
+    problems = []
+    try:
+        pid = store.create_project("route-selfcheck-%s.dwg" % code, b"selfcheck",
+                                   note="部署自检（隔离数据目录）", owner="deploy-selfcheck",
+                                   owner_display_name="deploy-selfcheck")
+        requirement_service.save_requirement_draft(
+            pid, RequirementDoc(project_id=pid, requirement_no=req_no,
+                                title="路线自检 " + code,
+                                data={"industry": "packaging", "box_type": code,
+                                      "packaging_product_name": code,
+                                      "quote_quantity": 1000, "lamination": "覆光膜",
+                                      **dims}),
+            user={"username": "deploy-selfcheck", "role": "admin"})
+        da_repo.save_box_match({"project_id": pid, "requirement_no": req_no,
+                                "industry": "packaging",
+                                "engine_version": "packaging_match_v1",
+                                "inputs": {}, "candidates": [], "missing_inputs": [],
+                                "suggested_box_type": code})
+        da_repo.update_box_match_decision(pid, req_no, decision="confirmed",
+                                          confirmed_box_type=code,
+                                          confirmed_by="deploy-selfcheck",
+                                          confirmed_at=da_db.now())
+        packaging_bom.build_bom(pid, req_no)
+        built = packaging_route.build_route(pid, req_no)
+        confirmed = packaging_route.confirm_route(
+            pid, req_no, actor={"username": "deploy-selfcheck"})
+        print("· 权威实样 %s：路线 %d 道，confirm=%s"
+              % (code, len(built.get("steps") or []), confirmed.get("status")))
+        if str(confirmed.get("status")) != "confirmed":
+            problems.append("confirm 结果不是 confirmed（%s）" % confirmed.get("status"))
+    except Exception as exc:                              # noqa: BLE001 - 检查失败如实报
+        traceback.print_exc()
+        problems.append("工艺路线自检失败（%s）" % exc)
+    for reason in problems:
+        bad.append("权威实样 %s：%s" % (code, reason))
+    add_check("权威实样路线 %s" % code, "failed" if problems else "pass", "；".join(problems))
+
+# 三态判决（Spec §2.1）：ok = **所有**项都真跑且通过；failed = 有真问题；incomplete = 有项没跑成。
+verdict = "failed" if bad else ("incomplete" if skipped else "ok")
+print(json.dumps({"isolated_downstream_selfcheck": verdict,
+                  "checks": checks, "problems": bad, "skipped": skipped},
+                 ensure_ascii=False))
 if bad:
     print("\n隔离端到端自检未通过：", file=sys.stderr)
     for reason in bad:
         print("  · " + reason, file=sys.stderr)
     sys.exit(1)
-print("隔离端到端自检通过（建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）")
+if skipped:
+    # 有项没跑成 == 没通过（Spec §2.2）：退出码非零，且不许打印"通过"。
+    print("\n隔离端到端自检没跑全（incomplete）：", file=sys.stderr)
+    for row in skipped:
+        print("  · %s：%s" % (row["name"], row["reason"]), file=sys.stderr)
+    sys.exit(2)
+# 只有 verdict == ok 才走得到这句：有 skip 时上面已经 exit 2（Spec §2.2）。
+print("隔离端到端自检通过（verdict=ok；建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）")
+
 PY
 # 第 6b 步必须有**内部超时**（Spec `packaging-parts-pipeline-time-budget.md` §4.8/§4.9）：
 # 今天没有超时，卡住只能被外部的 expect 杀掉，而"在跑"和"卡死"在日志里长得一模一样。
 if command -v timeout >/dev/null 2>&1; then
   DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" \
+    CPQ_SELFCHECK_KB_SKIP_REASON="$SELFCHECK_KB_SKIP_REASON" \
     timeout 900 "$PY" "$SELFCHECK_DIR/selfcheck.py"
   SELFCHECK_RC=$?
 else
   # `timeout` 不在 PATH（受限 shell / 精简系统）也不许无限等：SECONDS 看门狗，上限同为 900s。
   SECONDS=0
   DATA_DIR="$SELFCHECK_DIR/data" CPQ_INTERNAL_TOKEN="$SELFCHECK_TOKEN" \
+    CPQ_SELFCHECK_KB_SKIP_REASON="$SELFCHECK_KB_SKIP_REASON" \
     "$PY" "$SELFCHECK_DIR/selfcheck.py" &
   SELFCHECK_PID=$!
   SELFCHECK_RC=0
@@ -536,7 +680,14 @@ PY
 META_AFTER="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
 echo "· 生产数据目录未被写入（meta.json 数量 $META_BEFORE → $META_AFTER）"
 [ "$META_BEFORE" = "$META_AFTER" ] || fail "隔离自检动了生产数据目录（meta.json $META_BEFORE → $META_AFTER）"
-[ "$SELFCHECK_RC" = "0" ] || fail "隔离端到端自检未通过（见上）"
+# 退出码 = 三态判决（Spec `deploy-selfcheck-skip-vs-pass.md` §2.1/§2.2）：0=ok、1=failed、
+# 2=incomplete。有项没跑成（incomplete / skipped）时**绝不能**当作通过，必须非零退出（fail）
+# —— "有一项没跑"被算成"全部通过"就是这条 Spec 要消灭的那个失效模式。
+case "$SELFCHECK_RC" in
+  0) echo "· 第 6b 步判决 verdict=ok：所有检查项都真跑且通过" ;;
+  2) fail "第 6b 步判决 verdict=incomplete：有检查项没跑成（incomplete/skipped 不许当成通过；原因见上）" ;;
+  *) fail "第 6b 步判决 verdict=failed：隔离端到端自检未通过（见上）" ;;
+esac
 
 # --------------------------------------------------------------------------- #
 step "7. 结论"
