@@ -3778,3 +3778,80 @@ def business_binding_stale_reason(stored_id: Any, current_id: Any) -> str:
     if stored != current:
         return "business_parts_reimported"
     return ""
+
+
+# --------------------------------------------------------------------------- #
+# 3b 「几何件 → 业务件」的反查与结论行的业务身份
+# （Spec `packaging-part-conclusion-business-identity.md` §C1/§C2）
+# --------------------------------------------------------------------------- #
+#: 反查的原因码闭集：除了命中（`""`）之外就只有这三种"说不出是哪一件"的情形。
+BUSINESS_PART_LOOKUP_REASONS = ("", "business_doc_unavailable",
+                                "geometry_ref_missing", "geometry_unbound")
+
+#: 反查规则 id：下游结论据此说得出来"这一件是照哪条规则认到业务件的"。
+BUSINESS_PART_LOOKUP_RULE_ID = "business_part_lookup_by_component_v1"
+
+
+def _component_refs(row: Any) -> List[str]:
+    """一行零件上的组件引用集合（`component_id` + `geometry_component_ref`，单个/数组都认）。"""
+    record = row if isinstance(row, dict) else {}
+    refs: List[str] = []
+    for key in ("component_id", "geometry_component_ref"):
+        value = record.get(key)
+        values = value if isinstance(value, (list, tuple, set)) else [value]
+        for item in values:
+            if isinstance(item, dict):
+                continue
+            text = _text(item)
+            if text and text not in refs:
+                refs.append(text)
+    return refs
+
+
+def _business_row_refs(row: Any) -> List[str]:
+    """一行业务部件声明的组件引用（`geometry_binding.component_ids` 兜底 `geometry_component_ref`）。"""
+    record = row if isinstance(row, dict) else {}
+    binding = record.get("geometry_binding") if isinstance(record.get("geometry_binding"), dict) else {}
+    refs = _component_refs({"component_id": binding.get("component_ids"),
+                            "geometry_component_ref": record.get("geometry_component_ref")})
+    return refs
+
+
+def geometry_business_part(row: Any, business_doc: Any) -> Dict[str, Any]:
+    """一行几何零件 → 它绑定的业务部件（**纯读**，Spec §C1）。
+
+    这是"几何件 → 业务件"的那一半（前端 `packagingBusinessPartDownstreamTarget()` 是反向的
+    那一半）。只认 `geometry_binding` 的组件引用命中 —— **不**按编码前缀 / 尺寸 / 名字猜件；
+    多件命中取编码升序第一个（确定性，不按遍历顺序碰运气）。任何输入都不抛错。
+    """
+    record = business_doc if isinstance(business_doc, dict) else {}
+    rows = [item for item in (record.get("business_parts") or []) if isinstance(item, dict)]
+    identity = {"business_parts_id": _text(record.get("business_parts_id")),
+                "business_parts_hash": _text(record.get("business_parts_hash"))}
+    blank = {"business_part_code": "", "mapped": False, "rule_id": BUSINESS_PART_LOOKUP_RULE_ID}
+    blank.update(identity)
+    if not rows:
+        return dict(blank, reason="business_doc_unavailable")
+    refs = _component_refs(row)
+    if not refs:
+        return dict(blank, reason="geometry_ref_missing")
+    wanted = set(refs)
+    hits = sorted(_text(item.get("business_part_code")) for item in rows
+                  if wanted & set(_business_row_refs(item)))
+    hits = [code for code in hits if code]
+    if not hits:
+        return dict(blank, reason="geometry_unbound")
+    return dict(blank, business_part_code=hits[0], mapped=True, reason="")
+
+
+def business_identity_for_row(project_id: str, row: Any) -> Dict[str, str]:
+    """结论行要落的业务身份三键（Spec §C2）：读当前业务清单 + `geometry_business_part()`。
+
+    没有清单 / 读不到 → 三键全 `""`（键必须存在）；**不**写库、不抛错。三键进结论行的
+    内容指纹 —— 换了一版业务清单后重跑的结论不再被判成"同一份"。
+    """
+    doc = load_business_parts(project_id) or {}
+    found = geometry_business_part(row, doc)
+    return {"business_part_code": _text(found.get("business_part_code")),
+            "business_parts_id": _text(found.get("business_parts_id")),
+            "business_parts_hash": _text(found.get("business_parts_hash"))}

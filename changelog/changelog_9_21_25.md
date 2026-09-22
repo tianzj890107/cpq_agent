@@ -17521,3 +17521,37 @@ node --check tech_app/frontend/app.js  OK
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 410. 落地 `packaging-part-conclusion-business-identity`：单件工艺 / 成本结论带上业务部件身份（24 OK，红基 17 红）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_parts.py` / `tech_app/backend/main.py`：
+
+- 新增顶层纯函数 `geometry_business_part(row, business_doc)`（Spec §C1）：补上"几何件 →
+  业务件"的那一半（前端 `packagingBusinessPartDownstreamTarget()` 是反向）。固定六键
+  `{business_part_code, business_parts_id, business_parts_hash, mapped, reason, rule_id}`；
+  原因码闭集 `BUSINESS_PART_LOOKUP_REASONS`（`business_doc_unavailable` /
+  `geometry_ref_missing` / `geometry_unbound` / `""`）；只认 `geometry_binding` 的组件引用命中
+  —— **不**按编码前缀 / 尺寸 / 名字猜件；多件命中取编码升序第一个；任何输入都不抛错。
+- 新增 `business_identity_for_row(project_id, row)`（Spec §C2）：读当前业务清单 + 上面那个纯函数，
+  只回三键；清单读不到 → 三键全 `""`（键必须存在），不写库、不抛错。
+- 两条 POST 路由（工艺 `main.py:8428` / 成本 `:8563`）落的结论行各带一处
+  `**packaging_parts.business_identity_for_row(pid, row)`：结论说得出来自己是照**哪一版业务清单**、
+  哪一件业务部件算的；三键参与内容指纹，换版后重跑不再被判成"同一份"。既有键一字不改。
+- 读侧 `_packaging_part_conclusion_version()` 由三键扩到**七键**（Spec §C3）：新增
+  `business_part_code` / `business_parts_id` / `business_stale` / `business_stale_reason`，
+  判据只有一处调用 `packaging_parts.business_binding_stale_reason()` —— 该函数此前写好却
+  **全仓无人调用**；只有 `business_parts_reimported` 算过期，`business_parts_unknown`
+  （存的为空 / 当前清单读不到）一律 `business_stale: False`（"比较不了 ≠ 过期"）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_part_conclusion_business_identity_red   Ran 24  FAILED (failures=9, errors=8) → Ran 24  OK
+  （红基 17 条：A1–A8 / B1–B3 / B6 / C1–C2 / C4–C6；护栏 B4/B5/C3/D1–D4 七条始终绿）
+不回归：conclusion_version_readback + downstream_readback + business_parts_and_cad_plan_view +
+        binding_size_source + version_pinning + business_part_downstream_entry + parts_downstream
+        Ran 103  OK
+packaging 全域：discover -s tests -p 'test_packaging_*.py'  Ran 1901  FAILED (failures=5) ← 仍是那 5 条既有挂账
+```
+
+未改前端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。

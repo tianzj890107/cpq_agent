@@ -8422,6 +8422,10 @@ async def packaging_part_process(
         packaging_parts.save_part_process(pid, {
             "part_code": row.get("part_code"),
             "parts_id": str((loaded.get("record") or {}).get("parts_id") or ""),
+            # 业务部件身份（Spec `packaging-part-conclusion-business-identity.md` §C2）：换了一版
+            # 业务清单之后，这份结论说得出来自己是照哪一版清单算的；判据只有一处
+            # （`packaging_parts.geometry_business_part()`），不在路由里另写一套映射。
+            **packaging_parts.business_identity_for_row(pid, row),
             "engine_version": packaging_parts.ENGINE_VERSION,
             "plan": plan_dict, "validation": validation, "coverage": coverage,
             "lookup": lookup, "assumptions": assumptions,
@@ -8555,6 +8559,8 @@ async def packaging_part_cost(
         packaging_parts.save_part_cost(pid, {
             "part_code": row.get("part_code"),
             "parts_id": str((loaded.get("record") or {}).get("parts_id") or ""),
+            # 同工艺那一路（Spec §C2）：业务身份进结论行的内容指纹。
+            **packaging_parts.business_identity_for_row(pid, row),
             "engine_version": packaging_parts.ENGINE_VERSION,
             "analysis": a_dict, "summary": summary_dict, "lookup": lookup,
             "source": {"task_id": tasks.current_task_id(),
@@ -8575,22 +8581,40 @@ async def packaging_part_cost(
 #: 与 `packaging_part_solids` 的 3D 那一格同一条纪律（"比较不了 ≠ 过期"）。
 PACKAGING_PART_STALE_REASON = "parts_reparsed"
 
+#: 业务部件清单漂移里**只有**这一个算"过期"（Spec §C3，与上面同一条纪律：
+#: `business_parts_unknown` 是"比较不了"，不许当成"过期"或"没过期"）。
+PACKAGING_PART_BUSINESS_STALE_REASON = "business_parts_reimported"
+
 
 def _packaging_part_conclusion_version(pid: str, record: Any) -> Dict[str, Any]:
-    """单件结论的零件版本三键（Spec `packaging-parts-conclusion-version-readback.md` §2.2）。
+    """单件结论的版本七键：零件文档三键 + 业务部件清单四键。
 
-    判据只有一处：`packaging_parts.parts_stale_reason()`。本函数只负责**取当前零件文档**并把
-    三值翻成响应键，不在路由里另写一套比较。
+    零件那三键见 Spec `packaging-parts-conclusion-version-readback.md` §2.2；业务那四键见
+    Spec `packaging-part-conclusion-business-identity.md` §C3（业务部件身份落在结论行上，
+    业务清单重新导入后说得出来"这是上一版清单算的"）。
+
+    判据**各只有一处**：零件走 `packaging_parts.parts_stale_reason()`、业务走
+    `packaging_parts.business_binding_stale_reason()`；本函数只负责取当前两个文档并把三值
+    翻成响应键，不在路由里另写一套比较。
     """
     payload = record if isinstance(record, dict) else {}
     if not payload:
-        # 空态（没跑过）同样必须给三个键，且不是"过期"。
-        return {"parts_id": "", "stale": False, "stale_reason": ""}
+        # 空态（没跑过）同样必须给齐七键，且不是"过期"。
+        return {"parts_id": "", "stale": False, "stale_reason": "",
+                "business_part_code": "", "business_parts_id": "",
+                "business_stale": False, "business_stale_reason": ""}
     stored = str(payload.get("parts_id") or "")
     current = packaging_parts.load_parts(pid) or {}
     reason = packaging_parts.parts_stale_reason(stored, (current or {}).get("parts_id"))
+    business = packaging_parts.load_business_parts(pid)
+    business_reason = packaging_parts.business_binding_stale_reason(
+        payload.get("business_parts_id"), (business or {}).get("business_parts_id"))
     return {"parts_id": stored, "stale": reason == PACKAGING_PART_STALE_REASON,
-            "stale_reason": reason}
+            "stale_reason": reason,
+            "business_part_code": str(payload.get("business_part_code") or ""),
+            "business_parts_id": str(payload.get("business_parts_id") or ""),
+            "business_stale": business_reason == PACKAGING_PART_BUSINESS_STALE_REASON,
+            "business_stale_reason": business_reason}
 
 
 @app.get(PACKAGING_PART_PROCESS_PATH)
