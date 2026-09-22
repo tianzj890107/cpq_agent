@@ -15576,3 +15576,49 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
   详见 Spec §6.3。
 - 只标记不拒绝：不自动重发 / 不新建版本 / 不改 `send_to_quote()` 幂等口径与 `result_version_of()`
   算法；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 362. 落地 `packaging-handoff-audit-trail`：包装这条链唯一推给报价侧的动作也有了项目审计（5 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+`packaging_handoff.send_to_quote()` 落一条 `wip_packaging_handoff` 记录、调一次业务桥，然后
+`store.audit` 一次都没有 —— 同仓其它包装写动作全都写了（`packaging_bom.py workflow:packaging_bom_item_locked`、
+`packaging_match.py workflow:packaging_box_match_*`、`packaging_route.py workflow:packaging_route_rebuilt/confirmed`、
+`packaging_cost.py workflow:packaging_cost_rebuilt`），通用行业的同一动作 `cost_flow.py:776
+integration_send_to_quote` 也是写的。后果：回传后项目审计里查不到"谁把这一版推给了报价侧"；
+**同包重发**（`_reuse_outcome()` 复用旧行）与"第一次发出"在审计上完全不可分（两边都没有记录）。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_handoff.py`（只这一个文件）
+  - 新增模块常量 `AUDIT_SENT_ACTION = "workflow:packaging_handoff_sent"` 与辅助函数
+    `_audit_handoff_sent(project_id, *, requirement_no, scenario_code, handoff_no, version_no,
+    already_sent, cost_result_version, has_gaps, quote_session_id, by)`：载荷固定九键、值取本次调用的
+    真值，构造后按 `_FORBIDDEN_COST_KEYS` 逐个 `pop()`（不出现售价 / 毛利字段），**不含**
+    `user` / `token` / `package`；
+  - `send_to_quote()` 两个成功出口各写一条：首次回传在 `save_packaging_handoff(record)` 之后
+    （`already_sent=False`、`cost_result_version=source.result_version`、
+    `quote_session_id=result.quote_session_id`）；指纹命中复用路径在 `_reuse_outcome(row, package)`
+    之后，`already_sent=True`，`handoff_no` / `version_no` / `quote_session_id` /
+    `cost_result_version` / `has_gaps` **全部取被复用那一行**，不新编；
+  - 落库之前的全部拒绝路径（越权 `403 role_not_allowed`、缺口 `409 cost_gaps_unresolved` /
+    `gap_reason_required`、`404`）一条都不留；`handoff_package()` 仍不写审计；
+  - `_audit_handoff_sent()` 内 `try: store.audit(...) except Exception: pass`：写审计失败
+    不改变回传结果、不回滚已落库记录（留痕是留痕，闸门是闸门）。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_handoff_audit_red
+# Ran 5 tests ... OK（L1 / L2 / L4 由红转绿；L3 / L5 两条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_quote_close_loop_red \
+    tests.test_packaging_handoff_input_drift_red tests.test_packaging_cost_engine_red
+# Ran 184 tests ... OK
+```
+
+### 四、边界
+
+- 吞掉审计异常是 Spec §2.1 刻意为之（留痕不是闸门），代价是审计落不下去时调用方从返回值上
+  看不出来；本批红测不覆盖该分支，记在 Spec §5.3。
+- 只追加不回填：本批之前发出的交接在审计里仍查不到。未 push / 未建 MR / 未 tag / 未部署 /
+  未连库 / 未写生产数据。

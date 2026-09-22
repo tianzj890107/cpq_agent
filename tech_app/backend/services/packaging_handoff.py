@@ -277,6 +277,42 @@ def bridge_result(package: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# 回传留痕（项目审计）
+# --------------------------------------------------------------------------- #
+#: 回传动作固定审计名（Spec `packaging-handoff-audit-trail.md` §2.1）。
+AUDIT_SENT_ACTION = "workflow:packaging_handoff_sent"
+
+
+def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: str,
+                        handoff_no: str, version_no: int, already_sent: bool,
+                        cost_result_version: str, has_gaps: bool, quote_session_id: str,
+                        by: str) -> None:
+    """给"把哪一版推给了报价侧"留一条项目审计（Spec §2.1）。
+
+    载荷只放回传事实（九键），绝不带售价 / 毛利字段（`_FORBIDDEN_COST_KEYS`），也不
+    灌 `user` / `token` / 整份交接包；写审计失败**不得**改变回传结果、不得回滚已落库的
+    交接记录 —— 留痕是留痕，闸门是闸门。
+    """
+    payload = {
+        "requirement_no": _text(requirement_no),
+        "scenario_code": _text(scenario_code),
+        "handoff_no": _text(handoff_no),
+        "version_no": int(version_no or 0),
+        "already_sent": bool(already_sent),
+        "cost_result_version": _text(cost_result_version),
+        "has_gaps": bool(has_gaps),
+        "quote_session_id": _text(quote_session_id),
+        "by": _text(by),
+    }
+    for key in _FORBIDDEN_COST_KEYS:
+        payload.pop(key, None)
+    try:
+        store.audit(project_id, AUDIT_SENT_ACTION, payload)
+    except Exception:  # noqa: BLE001 — 留痕失败不许把回传判成失败
+        pass
+
+
+# --------------------------------------------------------------------------- #
 # 缺口与放行
 # --------------------------------------------------------------------------- #
 def _gap_codes(gaps: List[dict]) -> List[str]:
@@ -360,7 +396,18 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
     rows = da_repo.packaging_handoffs(pid, req_no)
     for row in rows:
         if _text(row.get("package_fingerprint")) == fingerprint:
-            return _reuse_outcome(row, package)
+            outcome = _reuse_outcome(row, package)
+            # 同包重发也是动作，留痕必须写，且写的是**被复用的那一行**（Spec §2.1）。
+            _audit_handoff_sent(
+                pid, requirement_no=_text(row.get("requirement_no")) or req_no,
+                scenario_code=_text(row.get("scenario_code")) or scenario_code,
+                handoff_no=outcome.get("handoff_no"), version_no=outcome.get("version_no"),
+                already_sent=True,
+                cost_result_version=_text(row.get("cost_result_version")),
+                has_gaps=bool(row.get("has_gaps")),
+                quote_session_id=outcome.get("quote_session_id"),
+                by=_text(user.get("username")))
+            return outcome
     version_no = max([int(row.get("version_no") or 0) for row in rows] or [0]) + 1
 
     source = package["source"]
@@ -412,6 +459,12 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         "created_at": now,
     }
     da_repo.save_packaging_handoff(record)
+    _audit_handoff_sent(pid, requirement_no=req_no, scenario_code=scenario_code,
+                        handoff_no=handoff_no, version_no=version_no, already_sent=False,
+                        cost_result_version=_text(source.get("result_version")),
+                        has_gaps=has_gaps,
+                        quote_session_id=_text(result.get("quote_session_id")),
+                        by=_text(user.get("username")))
     return {
         "handoff_no": handoff_no,
         "handoff_id": handoff_id,
