@@ -24,6 +24,8 @@
 from __future__ import annotations
 
 import copy
+import datetime
+import decimal
 import hashlib
 import json
 import time
@@ -648,6 +650,33 @@ def sections(quote: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # 报价版本（只增不改）
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 读取侧的类型归一（Spec `packaging-quote-version-card-readback-serialization.md` §2.1）
+# --------------------------------------------------------------------------- #
+def _json_safe(value: Any) -> Any:
+    """读回路径的类型归一：`datetime`/`date` → ISO 字符串、`Decimal` → 数字，其余原样。
+
+    PG 的 `timestamp` 回来是 `datetime`、`numeric` 是 `Decimal`，而卡片第 5 步要把版本行
+    直接交给 `json.dumps` —— 不归一就是 500「服务异常」。归一只服务**读取**这一侧
+    （`save_version()` 的签名 / SQL / 写入值一律不动）。
+    """
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        # 时间一律给稳定、可回读的 ISO 文本（`datetime` 用空格分隔，肉眼读也更像人话）。
+        if isinstance(value, datetime.datetime):
+            return value.isoformat(sep=" ")
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        if not value.is_finite():          # NaN / Infinity 没有 JSON 数字表示，如实给文本
+            return str(value)
+        # 整数金额给 `int`（`5000` 而不是 `5000.0`），小数给 `float`；两者都是 JSON 数字。
+        return int(value) if value == value.to_integral_value() else float(value)
+    return value
+
+
+def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: _json_safe(value) for key, value in row.items()}
+
+
 def _fetch_versions(conn, *, business_case_id: str = "",
                     quote_session_id: str = "") -> List[dict]:
     if quote_session_id:
@@ -661,7 +690,9 @@ def _fetch_versions(conn, *, business_case_id: str = "",
     else:
         return []
     cur = cpq_auth._exec(conn, sql, args)
-    rows = [dict(zip(_VERSION_COLS, row)) for row in cur.fetchall()]
+    # 读取侧归一：`versions()` / `latest()`（以及 `save_version()` 用来比较的那次读取）
+    # 拿到的每个值都是 JSON 原生类型 —— 契约在**读回路径**，不靠 `_send_json` 兜底（Spec §3）。
+    rows = [_json_safe_row(dict(zip(_VERSION_COLS, row))) for row in cur.fetchall()]
     rows.sort(key=lambda item: int(item.get("version_no") or 0), reverse=True)
     return rows
 

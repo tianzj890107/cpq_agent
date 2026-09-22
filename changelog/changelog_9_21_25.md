@@ -12290,3 +12290,48 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 本批只改 `tests/` 下 5 个文件（4 个新入库 + 1 个门槛重标定）、`docs/specs/` 下 4 份 Spec 文档、
 追加本 changelog；**未改任何业务实现**、未改 `summarize()` 的分母口径、未改成本与工艺算法、
 未连 PG、未写生产数据。
+
+## 311. 报价版本读回不再 500：读回路径加一层类型归一（`Decimal`/`datetime` → JSON 原生）（9-22，Codex 实现）
+
+`docs/specs/packaging-quote-version-card-readback-serialization.md`（并行会话 13:38 落盘，**未实现**）
+本批落地实现 —— 这是 34 上"做完报价 → 回传 → 再点开卡片第 5 步看历史"那条路的**最后一个 500**。
+
+### 现场与根因（Spec §1，34 真跑实测）
+
+`POST /wf/card/step-done` 落版本 1 成功（`quote_version_id 3991596585107592505`），紧接着
+`GET /wf/card/step-data?session_id=e2e00a1b2c3d&step_no=5` 变成 `{"ok": false, "error": "服务异常，请稍后重试"}`
+（同一张卡片 `step_no=1/3` 照旧 200）。根因是 `cpq_packaging_quote._fetch_versions()` 把 PG 原始行
+原样返回（`created_at` 是 `datetime`、`numeric(18,6)` 那些是 `Decimal`），而
+`cpq_suite_server._send_json()` 用的是裸 `json.dumps(obj, ensure_ascii=False)`
+→ `TypeError: Object of type Decimal is not JSON serializable`。
+
+### 实现（只改 1 个文件、1 条读取路径）
+
+- `cpq_packaging_quote.py`：新增 `_json_safe()` / `_json_safe_row()`，在 `_fetch_versions()`
+  组装行的地方做归一 —— `datetime` → `isoformat(sep=" ")`、`date` → `isoformat()`、
+  `Decimal` → 整数值给 `int`（`5000` 而不是 `5000.0`）/ 小数值给 `float`、非有限值给文本、
+  其余原样透传。
+- 因为 `versions()` / `latest()` / `save_version()` 都走同一条 `_fetch_versions()`，读回与
+  「保存前查重」拿到的是同一套类型；**`save_version()` 的签名 / SQL / 写入值一个字没改**，
+  `_VERSION_COLS` 的顺序与集合、`cpq_wf.quote_version_state()` 的"只读 + 复用 + finally close"
+  也都没动。
+- **没有**给 `_send_json()` 加 `default=` 兜底（Spec §3 明确禁止）：契约在读回路径这一侧，
+  否则所有接口的时间与金额字段都会"看运气"变形。
+
+### 复跑
+
+- 本批红测：`tests.test_packaging_quote_version_readback_red` `Ran 8 OK`（落地前 `Ran 8, failures=5`：
+  A 组 4 条 + B 组 1 条红，C 组 3 条护栏本来就绿）。
+- 不回归：`test_packaging_quote_version_persistence_red` + `test_packaging_semantics_red`
+  `Ran 67 OK (skipped=1)`；另跑全部引用 `cpq_packaging_quote` 的 6 份套件
+  （`quote_close_loop` / `quote_draft_and_card_visibility` / `quick_quote_field_workspace` /
+  `quick_quote_generation` / `quick_quote_mode_and_case_model` / `quote_agent_industry_alignment`）
+  `Ran 277 OK`。
+- 34 真机复验（`GET /wf/card/step-data?session_id=e2e00a1b2c3d&step_no=5` → 200 +
+  `latest_quote_version.version_no == 1`）需要部署后才能重放，本批**未部署**。
+
+### 边界
+
+只改 `cpq_packaging_quote.py`（读写侧归一）+ 该 Spec 的状态行 + 追加本 changelog；
+未改 `cpq_wf.py` / `cpq_suite_server.py` / 版本表 DDL / 既有红测，未连 PG、未发 HTTP、
+未写业务数据、未动 34。
