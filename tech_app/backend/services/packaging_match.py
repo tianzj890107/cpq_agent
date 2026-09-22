@@ -397,23 +397,47 @@ _DIMENSION_SCORERS = {
 # 匹配引擎（纯函数）
 # --------------------------------------------------------------------------- #
 def _sort_key(candidate: dict):
-    """候选排序：状态 → 是否越界 → 总分升序 → 盒型编码升序。
+    """候选排序：状态 → 是否越界 → **总分降序** → 盒型编码升序。
 
-    ⚠ 与 Spec §2.5 的「总分降序」冲突，以红测为准：
-    `tests/test_packaging_box_type_matching_red.py::test_a3_weights_are_not_hardcoded`
-    要求默认权重下 BOX-P（克重差/V 槽好，总分 0.85）排在 BOX-Q（0.90）之前，而把
-    v_groove 权重抬到 0.90、face_paper_gsm 压到 0.05 后又要求 BOX-Q（0.47）排在
-    BOX-P（0.97）之前。两条断言只有在「总分升序」下才同时成立（降序在数学上无解：
-    降序要求默认 P<Q、换权重要求 P>Q，而 P/Q 只差 gsm 与 v_groove 两维，
-    Σ(w×s) 的单调性与该要求互相矛盾）。已如实写进交付报告，请业务确认后决定改
-    红测还是改 Spec。
+    这条键的两个出处都写着「总分降序」：`packaging-box-type-matching.md` §3 与
+    `packaging-box-candidate-rank-and-runnability.md` §2.1（后者把「对**全序列**的
+    `key(c[i]) <= key(c[i+1])` 单调」写成可执行的不变量）。
+
+    ⚠ 已记录的偏差：`tests/test_packaging_box_type_matching_red.py::test_a3_weights_are_not_hardcoded`
+    的两条断言（默认权重下 `BOX-P` 0.85 要排在 `BOX-Q` 0.90 之前、换权重后 `BOX-Q` 0.47 要排在
+    `BOX-P` 0.97 之前）只有在**总分升序**下才同时成立 —— 它编码的是这份实现曾经的偏差。
+    两份 Spec 都要求降序，本版以 Spec 为准；那条红测不改（它属于另一份 Spec 的正文）。
     """
     return (
         _STATUS_RANK.get(_text(candidate.get("status")), len(_STATUS_RANK)),
         1 if candidate.get("out_of_range") else 0,
-        float(candidate.get("total_score") or 0.0),
+        -float(candidate.get("total_score") or 0.0),
         _text(candidate.get("box_type_code")),
     )
+
+
+def _part_template_count(box_type_code: str) -> int:
+    """该盒型的部件模板行数。**唯一来源**：`kb_repo.packaging_part_templates()`（与 BOM 同步）。
+
+    快照里没有这张表 / 读不到一律按 0 行（"没有模板"），与 BOM 那一步读不到模板时的结论一致。
+    """
+    code = _text(box_type_code)
+    if not code:
+        return 0
+    try:
+        return len(kb_repo.packaging_part_templates(code) or [])
+    except Exception:                  # noqa: BLE001 - 见 docstring：读不到按没有模板
+        return 0
+
+
+def _template_warnings(box_type_code: str) -> list[dict]:
+    """确认时的可判分支警告：这个盒型还没有部件模板（Spec §2.3）。有模板就给空列表。"""
+    code = _text(box_type_code)
+    if not code or _part_template_count(code):
+        return []
+    return [{"code": "box_type_without_part_template",
+             "box_type_code": code,
+             "detail": "该盒型在部件模板表里没有模板，下一步 BOM 会以 no_part_template 失败"}]
 
 
 def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required: list[str]) -> dict:
@@ -469,6 +493,11 @@ def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required
                            dimension,
                            "该盒型未登记 %s，本维未参与打分，需补齐或人工确认" % dimension)}
                       for dimension in undecidable],
+        # 「选它能不能往下走」（Spec `packaging-box-candidate-rank-and-runnability.md` §2.2）：
+        # 有没有部件模板只有一个出处 —— BOM 那一步用的就是 `kb_repo.packaging_part_templates()`。
+        # 没有模板**不**改 status / total_score / can_confirm：匹配质量与知识库完备度是两件事。
+        "part_template_available": bool(_part_template_count(_text(box.get("box_type_code")))),
+        "part_template_total": _part_template_count(_text(box.get("box_type_code"))),
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
         "industry": _text(box.get("industry")),
@@ -759,8 +788,16 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
         else:
             update["confirmed_at"] = da_db.now()
     da_repo.update_box_match_decision(project_id, requirement_no, **update)
-    detail = _audit_detail(actor, code or confirmed, score, note, **extra)
+    # 确认一个没有部件模板的盒型：不阻断，但必须留下可判分支的痕迹（Spec
+    # `packaging-box-candidate-rank-and-runnability.md` §2.3）—— 返回体与审计两处都给，
+    # 前端与事后追溯才都看得见"选了它往下走 BOM 会 409 no_part_template"。
+    warnings = _template_warnings(code) if state == "confirmed" else []
+    detail = _audit_detail(actor, code or confirmed, score, note,
+                           warnings=warnings or None, **extra)
     da_repo.append_box_match_audit(
         project_id, requirement_no, action, code or confirmed, _text(actor.get("username")), detail)
     store.audit(project_id, "workflow:packaging_box_match_%s" % state, detail)
-    return load_box_match(project_id, requirement_no)
+    out = load_box_match(project_id, requirement_no)
+    if warnings:
+        out["warnings"] = warnings
+    return out

@@ -57,6 +57,7 @@ _DATA_GAP_MESSAGES = {
 
 _BOX_TABLE = "kb_packaging_box_type"
 _WEIGHT_TABLE = "kb_packaging_match_weight"
+_PART_TEMPLATE_TABLE = "kb_packaging_part_template"
 
 
 class QuoteKbUnavailable(RuntimeError):
@@ -321,15 +322,53 @@ _DIMENSION_SCORERS = {
 # 候选与排序（与工艺侧逐字一致）
 # --------------------------------------------------------------------------- #
 def _sort_key(candidate: dict):
+    """候选排序：状态 → 是否越界 → **总分降序** → 盒型编码升序（与工艺侧同一口径）。
+
+    这条键的出处是 `packaging-box-type-matching.md` §3 与
+    `packaging-box-candidate-rank-and-runnability.md` §2.1：同一组内分数高的必须在前
+    （"点第一个候选"是最高频的动作，顺序就是推荐顺序）。
+    """
     return (
         _STATUS_RANK.get(_text(candidate.get("status")), len(_STATUS_RANK)),
         1 if candidate.get("out_of_range") else 0,
-        float(candidate.get("total_score") or 0.0),
+        -float(candidate.get("total_score") or 0.0),
         _text(candidate.get("box_type_code")),
     )
 
 
-def _candidate(box: dict, inputs: dict, dimensions: list, missing_required: list) -> dict:
+def _code_form(value) -> str:
+    """盒型编码的比较形：`-` 与 `_` 视为同一个字符、忽略大小写（与 kb_repo 同一口径）。"""
+    return _text(value).upper().replace("_", "-")
+
+
+def _part_template_counts(boxes_injected: bool, part_templates=None) -> dict:
+    """盒型编码（比较形）→ 部件模板行数；`part_template_available` 的唯一取数处。
+
+    取数**不额外连库**：没注入时就复用同一份 `cpq_kb.snapshot()` 里的模板表。
+    注入了 boxes 的用法（离线比对 / parity 用例）不发任何库请求 —— 那种用法下调用方给的
+    就是一份完整的假库，"没有模板表"按"没有模板"处理（与工艺侧快照缺表时同结论）。
+    """
+    if part_templates is not None:
+        rows = part_templates
+    elif boxes_injected:
+        rows = []
+    else:
+        try:
+            payload = cpq_kb.snapshot()
+            tables = payload.get("tables") if isinstance(payload, dict) else {}
+            rows = (tables or {}).get(_PART_TEMPLATE_TABLE) or []
+        except Exception:                    # noqa: BLE001 - 读不到按"没有模板"
+            rows = []
+    counts = {}
+    for row in rows or []:
+        code = _code_form((row or {}).get("box_type_code"))
+        if code:
+            counts[code] = counts.get(code, 0) + 1
+    return counts
+
+
+def _candidate(box: dict, inputs: dict, dimensions: list, missing_required: list,
+               template_counts: dict = None) -> dict:
     dimension_scores = {}
     reject_reasons = []
     undecidable = []
@@ -366,6 +405,8 @@ def _candidate(box: dict, inputs: dict, dimensions: list, missing_required: list
         status = "matched"
 
     total_score = (weighted / total_weight) if total_weight > 0 else 0.0
+    _template_total = int((template_counts or {}).get(
+        _code_form(box.get("box_type_code")), 0))
     return {
         "box_type_code": _text(box.get("box_type_code")),
         "name": _text(box.get("name")),
@@ -382,6 +423,10 @@ def _candidate(box: dict, inputs: dict, dimensions: list, missing_required: list
                            dimension,
                            "该盒型未登记 %s，本维未参与打分，需补齐或人工确认" % dimension)}
                       for dimension in undecidable],
+        # "选它能不能往下走"（Spec `packaging-box-candidate-rank-and-runnability.md` §2.2）：
+        # 与工艺侧同名字段、同一取数口径（部件模板行数），不看分数、不改 status。
+        "part_template_available": bool(_template_total),
+        "part_template_total": _template_total,
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
         "industry": _text(box.get("industry")),
@@ -427,7 +472,7 @@ def load_box_type(box_type_code: str, boxes=None) -> dict:
     return {}
 
 
-def match_box_types(inputs: dict, boxes=None, weights=None) -> dict:
+def match_box_types(inputs: dict, boxes=None, weights=None, part_templates=None) -> dict:
     """五维匹配候选盒型（确定性纯函数：不调模型、不落库、不改入参）。
 
     维度、权重、硬门槛一律来自权重行；排序与汇总口径与工艺侧逐字段一致（Spec §2.2）。
@@ -438,7 +483,8 @@ def match_box_types(inputs: dict, boxes=None, weights=None) -> dict:
     missing_inputs = [key for key in MATCH_INPUT_KEYS if _blank(source.get(key))]
     missing_required = [key for key in missing_inputs if key in _required_match_keys()]
 
-    candidates = [_candidate(dict(box), source, rows, missing_required)
+    template_counts = _part_template_counts(boxes is not None, part_templates)
+    candidates = [_candidate(dict(box), source, rows, missing_required, template_counts)
                   for box in box_rows]
     candidates.sort(key=_sort_key)
 

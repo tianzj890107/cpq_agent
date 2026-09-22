@@ -13031,3 +13031,42 @@ Spec §2.1 方案 A 举的落点是 `CONTRIBUTE_ROUTES`，但那张表被
 本批改用 `PACKAGING_COST_ROUTES` 承载**同一套范式**（显式逐条白名单 + 动作级依据 + 可审），
 并在 `CONTRIBUTE_ROUTES` 里留注释说明。未改任何测试；未连 PG、未写业务数据；
 未 push / MR / tag / Release / 未部署。
+## 324. 盒型候选按相似度降序 + 候选自带「选它能不能往下走」（部件模板可用性）+ 确认无模板盒型留可判警告（9-22，Codex 实现）
+
+`docs/specs/packaging-box-candidate-rank-and-runnability.md` 的 6 条红（A1–A3 / B1–B3 / C1）
+全绿，护栏一条没破。
+
+### 一、改了什么（4 个文件）
+
+- `tech_app/backend/services/packaging_match.py`：`_sort_key()` 的 `total_score` 从升序改回
+  **降序**（`-total_score`，其余三段不动，对齐两份 Spec 的排序键原文）；新增
+  `_part_template_count()`（只调 `kb_repo.packaging_part_templates()`，与 BOM 同步）；
+  `_candidate()` 新增 `part_template_available` / `part_template_total`（随 `candidates_json`
+  落库、读回也在）；`decide_box_match()` 在 `confirmed` 时给
+  `code=box_type_without_part_template` 的警告 —— **返回体与审计两处都给**，**不阻断**确认。
+- `tech_app/backend/storage/kb_repo.py`：`packaging_part_templates()` 的命中口径改成
+  「编码的**比较形**相等」（`-` / `_` 等价、忽略大小写，新增 `_code_form()`），空编码仍不给行。
+- `cpq_packaging_match.py`（报价侧同口径）：同步排序键；`_candidate()` 加上同名两字段，
+  模板行数从同一份 `cpq_kb.snapshot()` 的模板表里数（不额外连库）；注入 `boxes=` 的离线用法
+  不发库请求，"没有模板表"按"没有模板"处理。
+- 本 Spec + 本 changelog。
+
+### 二、实测
+
+```
+tests.test_packaging_box_candidate_rank_and_runnability_red   → Ran 8 OK（原 6 红全绿）
+tests.test_packaging_match_undecidable_and_size_guard_red     → Ran 23 OK
+tests.test_quote_packaging_box_selection_red                  → Ran 20 OK
+tests/test_packaging_*.py（55 份）                              → Ran 1304 … 5 红（4 存量 + 1 见下）
+```
+
+### 三、已记录的偏差
+
+1. `test_packaging_box_type_matching_red::test_a3_weights_are_not_hardcoded` **按设计变红**：
+   它的两条断言只有在"总分升序"下才同时成立，而那正是本 Spec §1.1 判定为 bug 的实现
+   （该文件里"⚠ 与 Spec §2.5 冲突"的旧注释也承认这点）。`packaging-box-type-matching.md` §3
+   与本 Spec §2.1 两份 Spec 都写"总分降序"，本版以 Spec 为准，**不改那条红测**。
+2. `packaging_part_templates` 的编码比较形容忍：本批红测夹具把模板编码写成 `BOX_BEST`、
+   候选是 `BOX-BEST`（C 组），逐字比较下 C2 必然判成"没有模板"。因为"有没有模板"同时被候选
+   可运行性与 BOM 展开使用、两处必须同答案，容忍放在**唯一那个取数函数**里（不是另写一套判据）。
+   真实编码写法一致时这条容忍不发生作用。

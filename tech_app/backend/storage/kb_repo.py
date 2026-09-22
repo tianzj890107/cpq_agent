@@ -878,10 +878,28 @@ def packaging_box_types() -> list[dict]:
     return _sort_rows(_table("kb_packaging_box_type"), ("box_type_code", "asc"))
 
 
+def _code_form(value) -> str:
+    """盒型 / 部件编码的**比较形**：`-` 与 `_` 视为同一个字符、忽略大小写。
+
+    知识库里的编码两种写法都出现过（同一份来源里 `YT-RB-01001-A` 与 `YT_RB_01001_A` 混用），
+    逐字比较会把"有模板"判成"没有模板" —— 而"这个盒型有没有部件模板"同时被**候选可运行性**
+    （`packaging_match` 的 `part_template_available`）与 **BOM 展开**（`packaging_bom`）使用，
+    两处必须给同一个答案（Spec `packaging-box-candidate-rank-and-runnability.md` §2.2）。
+    """
+    return str(value or "").strip().upper().replace("_", "-")
+
+
 def packaging_part_templates(box_type_code: str) -> list[dict]:
-    """某个盒型的部件构成模板（按部件编码升序）。"""
+    """某个盒型的部件构成模板（按部件编码升序）。
+
+    命中口径是「编码的**比较形**相等」（`-` / `_` 等价、忽略大小写，见 `_code_form()`）；
+    空编码不给任何行。
+    """
+    wanted = _code_form(box_type_code)
+    if not wanted:
+        return []
     return _sort_rows([r for r in _table("kb_packaging_part_template")
-                       if r.get("box_type_code") == box_type_code],
+                       if _code_form(r.get("box_type_code")) == wanted],
                       ("part_code", "asc"))
 
 
