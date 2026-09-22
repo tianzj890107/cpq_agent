@@ -2284,7 +2284,31 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         # 谁算的（Spec `packaging-cost-finance-access.md` §2.3）：留痕跟着记录走，
         # 事后不必翻审计表猜。
         "computed_by": _actor_name(actor), "computed_by_role": _actor_role(actor),
+        # **算的那一刻**照的输入版本（Spec `packaging-cost-input-version-pinning.md` §2.2）：
+        # 路线版本 / BOM 指纹 / BOM 行数一起落库。字段名说的是"照着哪一版算的"，
+        # 就必须在读接口那一刻**不再重取**（读侧的比对见 `load_cost()`）。
+        "source_versions": {
+            "route_version": _upstream_route_version(project_id, req_no),
+            "engine_version": ENGINE_VERSION,
+            "bom_hash": bom_input_hash(bom_rows),
+            "bom_item_total": len(bom_rows),
+        },
     }
+
+
+def bom_input_hash(rows: Any) -> str:
+    """BOM 行的**内容**指纹（Spec `packaging-cost-input-version-pinning.md` §2.1）。
+
+    范式照 `packaging_parts._record_hash`：`sha256_hex(canonical_json(json_safe(...)))`。
+    输入前**按稳定键排序** —— 行序不是内容，同一批行换个顺序必须是同一个指纹。
+    空输入给 `""`：**"没有 BOM" 不是一版内容**，不许拿它当"某一版"。
+    """
+    from .packaging_semantics import model as sem_model
+    safe = [sem_model.json_safe(row) for row in list(rows or [])]
+    if not safe:
+        return ""
+    safe.sort(key=sem_model.canonical_json)
+    return sem_model.sha256_hex(sem_model.canonical_json(safe))
 
 
 def _with_readiness(result: dict) -> dict:
@@ -2358,6 +2382,8 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     row = da_repo.load_packaging_cost(project_id, req_no, _text(scenario))
     upstream = _upstream_route_version(project_id, req_no)
     if not row:
+        # 「还没算」不是「过期」（Spec `packaging-cost-input-version-pinning.md` §2.2 末条）：
+        # 这条路径不许报 `provenance_missing`，也不许给 stale —— 除了三个新增键，逐字不变。
         return _with_readiness(
             {"built": False, "project_id": project_id, "requirement_no": req_no,
              "scenario_code": _text(scenario) or "default", "engine_version": ENGINE_VERSION,
@@ -2366,12 +2392,52 @@ def load_cost(project_id: str, requirement_no: str = "", *,
              "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
              "report_groups": {name: 0.0 for name in REPORT_GROUPS},
              "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,
-             "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0})
+             "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0,
+             "stale": False, "stale_reasons": [], "bom_unavailable": {}})
     items = da_repo.load_packaging_cost_items(row["estimate_id"])
     result = _rehydrate_with_readiness(_rehydrate(row, items))
-    # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：成本必须带出它照着哪一版确认路线算的。
-    result["source_versions"] = {"route_version": upstream, "engine_version": ENGINE_VERSION}
+    # 输入版本的埋点（Spec `packaging-cost-input-version-pinning.md` §2.2）：读侧**只读存的
+    # 那一份**（`source_versions_json`）—— 不再用 `_upstream_route_version()` 的现值覆盖，
+    # 否则字段名不副实：路线重确认一次，旧成本单的追溯字段就跟着变。
+    stored = _loads(row.get("source_versions_json"), {})
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    result["source_versions"] = stored
+    result["stale"], result["stale_reasons"], result["bom_unavailable"] = _input_drift(
+        project_id, req_no, stored, upstream)
     return result
+
+
+def _input_drift(project_id: str, requirement_no: str, stored: dict,
+                 live_route_version: str) -> tuple:
+    """读侧比对「算时记下的输入」与「当前输入」（Spec §2.2）：只报事实，绝不重算成本。
+
+    - `provenance_missing`：这份成本单没有 `source_versions_json`（本批之前算的）；
+    - `route_reconfirmed`：当前确认路线版本 ≠ 存的 `route_version`；
+    - `bom_rebuilt`：当前 BOM 指纹 ≠ 存的 `bom_hash`；
+    - `bom_unavailable`：当前 BOM **比较不了**（抛异常 / 返回空，或存的没有指纹）——
+      "比较不了" ≠ "变了"，所以此时**不给** `bom_rebuilt`。
+    """
+    if not stored:
+        return False, ["provenance_missing"], {}
+    reasons: list = []
+    if _text(stored.get("route_version")) != _text(live_route_version):
+        reasons.append("route_reconfirmed")
+    stored_hash = _text(stored.get("bom_hash"))
+    unavailable: dict = {}
+    if not stored_hash:
+        unavailable = {"code": "bom_unavailable", "reason": ""}
+    else:
+        live_rows: Optional[list] = None
+        try:
+            live_rows = [dict(item) for item in da_repo.load_packaging_bom(project_id, requirement_no)]
+        except Exception as exc:                        # noqa: BLE001 - 读不到要披露，不许炸
+            unavailable = {"code": "bom_unavailable", "reason": type(exc).__name__}
+        if live_rows is not None:
+            if not live_rows:
+                unavailable = {"code": "bom_unavailable", "reason": ""}
+            elif bom_input_hash(live_rows) != stored_hash:
+                reasons.append("bom_rebuilt")
+    return bool(reasons), reasons, unavailable
 
 
 def _upstream_route_version(project_id: str, requirement_no: str) -> str:

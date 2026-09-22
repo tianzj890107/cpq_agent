@@ -14529,3 +14529,86 @@ node --check tech_app/frontend/requirement-confirm.js → 通过
 ```
 
 未改任何既有测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 345. 换盒型之后旧工艺路线照旧"没过期"：读侧不比当前确认盒型，确认动作也认不出（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-route-box-type-drift.md` +
+`tests/test_packaging_route_box_type_drift_red.py`（7 条：J 组；现状 **4 红 3 绿**，
+3 条绿的是"盒型一致不算漂移 / 盒型一致时重复确认幂等 / 还没确认过盒型不算变了"的护栏）。
+本批不真跑任何服务：缺口由**读代码**定位，红测只用假仓库 + 纯函数，离线可复现；
+只碰工艺路线一侧，不动盒型匹配。
+
+### 缺口
+
+1. `packaging_route.py:454 _stale_reasons()` 只用**路线行里存的** `box_type_code` 重算工序指纹
+   （`:463-470`），`load_route()`（`:481`）从头到尾不读 `da_repo.load_box_match()` ——
+   盒型从 A 重新确认成 B 之后，三条既有原因一条都不命中：`stale=false`、`stale_reasons=[]`，
+   而 `box_type_code` 照旧返回 A，界面看不出"要求排的是 B"。
+2. `:592 confirm_route()` 只校验工序顺序与三条指纹，从不读当前确认盒型 ——
+   "照 A 排的路线"能被确认成冻结版本，而需求单上确认的是 B（快照 `box_type_code` 也是 A）。
+3. 读不到匹配记录 / 还没确认过盒型 / 与"盒型一致"这三种状态在读回体上分不出来。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `load_route()` / `_stale_reasons()`：读当前盒型匹配记录（只读），stale 原因**新增**
+  `box_type_reconfirmed`（仅当"当前已确认且非空"且 ≠ 行里的盒型；任一侧为空不算命中），
+  且不许被 `if not versions` 早退吞掉（与 `bom_rebuilt` 同一条纪律）；
+- 读回体**新增** `current_box_type_code`（当前确认盒型，未确认/读不到给 `""`）与
+  `box_match_unavailable`（读不到时的显式标记；此时不许报 `box_type_reconfirmed`）；
+- `confirm_route()`：盒型对不上 → `409 box_type_reconfirmed`，且一个版本快照都不留；
+  读不到 / 还没确认过盒型**不新增拒绝**（保持既有行为与两条既有 409 逐字不变）；
+- 禁项写死：不许把 stale 变成拒绝、不许在读接口里重排路线或触发盒型匹配、
+  不许改既有三条 stale 原因与 `build_route()` 的三条 409、不许改 `packaging_match.py`、
+  不许改 `tests/` 既有文件、不许连线上库 / 发 HTTP。
+
+### 复跑
+
+- `tests.test_packaging_route_box_type_drift_red`：`Ran 7, failures=3, errors=1`
+  （J1/J2/J5 失败、J4 报错；J3/J6/J7 绿）。
+- 不回归：`test_packaging_process_route_red` 57 OK、`test_packaging_quote_close_loop_red` 96 OK、
+  `test_packaging_parametric_bom_red` 57 OK、`test_packaging_box_type_matching_red` OK、
+  `test_spec_status_truth_red` 7 OK。
+- 本批只读源码 + 假仓库，`tech_app/data/` 下未新增任何测试目录（`testpid*` 计数保持 0）。
+
+## 346. 落地 `packaging-cost-input-version-pinning`：成本单"算时记下"输入版本，读时只读存的并报漂移（7 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_cost_input_version_pinning_red`（H 组 7 条）全绿：H1–H5 五条红转绿，
+H6/H7 两条护栏仍绿。
+
+### 一、缺口的本质：不是"读丢了"，是"从来没存过"
+
+`load_cost()` 的 `source_versions` 用的是**读接口那一刻**的 `_upstream_route_version()` ——
+字段名说着"照着哪一版算的"，实际是"现在哪一版"；而成本表 `_PACKAGING_COST_COLUMNS` 里根本没有
+来源列，`_rehydrate()` 也不返回来源，**落库那一刻就丢了**。BOM 逐行喂给算式
+（`compute_project()` 的 `bom_rows`），却从不比指纹。
+
+### 二、改了什么
+
+- 加列：`wip_packaging_cost_estimate.source_versions_json TEXT`（`da_schema.sql` 新库给、
+  `da_db._ADDED_COLUMNS` 老库幂等补；只加列）。
+- 落库：`da_repo.save_packaging_cost()` 把 `estimate["source_versions"]` 序列化进该列
+  （与 `gaps_json` / `assumptions_json` 同一写法）；`load_packaging_cost()` 走 `SELECT *` 读回。
+- 算时记下：新增纯函数 `packaging_cost.bom_input_hash(rows)`（范式照
+  `packaging_parts._record_hash`：`sha256_hex(canonical_json(json_safe(...)))`，
+  **先按稳定键排序**→ 行序无关，空输入给 `""`）；`compute_project()` 返回体新增
+  `source_versions` 四项（`route_version` / `engine_version` / `bom_hash` / `bom_item_total`）。
+- 读时只读存的：`load_cost()` 的 `source_versions` 逐字取 `source_versions_json`，不再现取覆盖；
+  新增 `_input_drift()` 比对并给出 `stale` / `stale_reasons`（`provenance_missing` /
+  `route_reconfirmed` / `bom_rebuilt`）与 `bom_unavailable`（BOM 读不到 / 存的没有指纹 ——
+  **"比较不了" ≠ "变了"**，此时不给 `bom_rebuilt`）。未算过的路径：三个新键之外逐字不变，
+  且**不报** `provenance_missing`（"还没算"不是"过期"）。
+- 金额照旧返回、成本照旧读得出来 —— 本批只加**标记**，不做拒绝、不在读接口重算。
+- 前端（成本面板在 `requirement-confirm.js` 的 `pcPanel()`）：`data-pc-stale` 横幅 + 逐条人话、
+  `data-pc-bom-unavailable` 分开说"读不到"。`node --check` 通过。
+
+### 三、复跑
+
+```
+tests.test_packaging_cost_input_version_pinning_red → Ran 7 … OK
+tests.test_packaging_cost_engine_red                → 81 OK
+tests.test_packaging_cost_rule_snapshot_red         → 37 OK
+tests.test_packaging_bom_size_quality_accounting_red / _bom_parts_version_binding_red → OK
+tests.test_spec_status_truth_red                    → 7 OK
+```
+
+未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

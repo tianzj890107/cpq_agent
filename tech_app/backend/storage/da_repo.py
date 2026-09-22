@@ -937,6 +937,9 @@ def save_packaging_cost(project_id: str, requirement_no: str, scenario: str,
         "has_gaps": 1 if estimate.get("has_gaps") else 0,
         "gaps_json": _box_match_json(estimate.get("gaps") or []),
         "assumptions_json": _box_match_json(estimate.get("assumptions") or []),
+        # 算的那一刻照的输入版本(Spec packaging-cost-input-version-pinning.md §2.1):
+        # 与 gaps_json / assumptions_json 同一写法;读接口读的就是这一份,不许读时现取。
+        "source_versions_json": _box_match_json(estimate.get("source_versions") or {}),
         "computed_at": estimate.get("computed_at") or now,
         "created_at": estimate.get("created_at") or now,
         "updated_at": now,

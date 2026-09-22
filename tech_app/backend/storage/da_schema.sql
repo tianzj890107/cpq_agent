@@ -729,6 +729,11 @@ CREATE TABLE IF NOT EXISTS wip_packaging_cost_estimate (
     -- 谁算的（Spec packaging-cost-finance-access.md §2.3）：财务可见性判定的依据也是这张表。
     computed_by      TEXT,
     computed_by_role TEXT,
+    -- 算的那一刻照的输入版本（Spec packaging-cost-input-version-pinning.md §2.1）：
+    -- {"route_version", "engine_version", "bom_hash", "bom_item_total"}。
+    -- 「算时记下」而不是「读时现取」—— 路线重确认 / BOM 重建之后，旧成本单必须读得出
+    -- 它当时照的是哪一版，并且能报出"输入已经变了"。
+    source_versions_json TEXT,
     computed_at      TEXT,
     created_at       TEXT, updated_at TEXT,
     UNIQUE (project_id, requirement_no, scenario_code)

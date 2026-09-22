@@ -50,6 +50,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 包装 BOM 行必须认自己的盒型(Spec packaging-bom-box-type-provenance.md §2.1):
     # 老库上 CREATE TABLE IF NOT EXISTS 不补列,不补就写不进去也读不回来。
     ("wip_packaging_bom_item", "box_type_code", "TEXT"),
+    # 成本单要"算时记下"输入版本(Spec packaging-cost-input-version-pinning.md §2.1):
+    # 老库上 CREATE TABLE IF NOT EXISTS 不补列,不补就存不下也读不回。
+    ("wip_packaging_cost_estimate", "source_versions_json", "TEXT"),
 )
 
 # 上线闭环第 2 批: 9 张包装扩展表补「数据来源分层」列(demo/workbook/dwg_confirmed/

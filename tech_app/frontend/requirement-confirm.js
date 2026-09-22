@@ -833,6 +833,31 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
           + `<td class="pc-source">${pcEsc(item.source_ref || item.source || '—')}</td></tr>`;
       }).join('') + '</tbody></table>';
   }
+  //: 成本「输入已变」的理由（Spec `packaging-cost-input-version-pinning.md` §2.2/§2.5）：
+  // 后端给的是稳定的 reason_code，人话只在这里说一次。
+  const PC_STALE_REASONS = {
+    bom_rebuilt: 'BOM 已重建（尺寸 / 材料 / 行数变了）',
+    route_reconfirmed: '工艺路线已重新确认',
+    provenance_missing: '这份成本是旧版本算的，没有记下来源（无从判断输入是否变过）',
+  };
+  function pcStaleLine(reason) {
+    return PC_STALE_REASONS[String(reason || '')] || `输入已变（${reason}）`;
+  }
+  function pcStaleBanner(record) {
+    if (!record || !record.stale) return '';
+    const reasons = Array.isArray(record.stale_reasons) ? record.stale_reasons : [];
+    const lines = reasons.length ? reasons.map(code => `<li>${pcEsc(pcStaleLine(code))}</li>`).join('')
+      : '<li>输入已变</li>';
+    return `<div class="pc-warning" data-pc-stale="${reasons.length}">输入已变（BOM / 工艺路线），请重新测算后再用这份成本 —— 现在的金额是按旧输入算出来的。`
+      + `<ul class="pc-stale-reasons">${lines}</ul></div>`;
+  }
+  // 「比较不了」与「变了」分开说（Spec `packaging-cost-input-version-pinning.md` §2.2）：
+  // 当前 BOM 读不到时既不断言"变了"，也不许看起来"没变"。
+  function pcBomUnavailableBanner(record) {
+    const flag = (record || {}).bom_unavailable || {};
+    if (!flag.code) return '';
+    return `<div class="pc-warning" data-pc-bom-unavailable="${pcEsc(flag.code)}">暂时读不到当前 BOM${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，无法判断这份成本是否还跟得上；这不代表输入没变。</div>`;
+  }
   function pcPanel(cost, items, writable) {
     const record = cost || {};
     const built = !!record.built;
@@ -851,6 +876,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     return `<section class="card section pc-panel" id="packagingCostPanel">
       <h2>包装成本测算</h2>
       <div class="pc-hint">逐部件 × 逐成本类别；缺料价 / 缺费率 / 缺工时一律出「待询价」缺口，合计不含该金额。本批只出成本，不出售价 / 利润（第 8 批）。</div>
+      ${pcStaleBanner(record)}
+      ${pcBomUnavailableBanner(record)}
       ${head}${summary}${totals}
       ${gapLines}
       <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button><button class="btn" data-pc-send-quote="1" ${built ? '' : 'disabled'}>回传销售继续报价</button></div>
