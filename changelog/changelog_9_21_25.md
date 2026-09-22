@@ -16951,3 +16951,26 @@ business_material_rows = {row_total: 14, resolved_total: 0, unresolved_total: 14
 = `Ran 196 … OK (skipped=1)`。
 
 未连 PG / 34、未 push / MR / tag / Release / 未部署。
+
+## 393. 落地 `packaging-parts-read-failure-empty-state`：2.1 左栏「零件文档读不到」不再显示成「还没生成，请先跑一键解析」（9 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- `fetchPackagingParts()`：404（端点未上线）仍 `return null`（**既有路径逐字不变**）；其余非 2xx
+  （含 5xx）返回带 `read_problem` 的空文档形状（`status` = HTTP 状态码）；`fetch` 抛异常时给
+  `status: 0`（网络错误）。两条读失败路径都清 `packagingPartsShown` —— 否则左栏会拿上一份的累加行
+  继续渲染，读失败就没有机会说话（Spec §2.1 第 2 条：`null` 一路传到空态文案是这次病根）。
+- `packagingPartsEmptyText()`：新增**第一优先**分支 —— `read_problem` 非空时给
+  `"暂时读不到零件文档（HTTP <status>），请稍后重试；这不代表这份图纸没有零件"` /
+  `"暂时读不到零件文档（网络错误），请稍后重试；这不代表这份图纸没有零件"`；既有四类空态文案与
+  优先级逐字不变（含"这份图纸没有可用的零件。"与"零件文档还没生成，请先跑一键解析图纸。"），
+  仍是纯函数（无 `document.` / `window.` / `fetch(` / `localStorage`）。
+- `loadMorePackagingParts()`（分页）一行未改（Spec §2.3 非目标：失败时仍 `return null`）。
+
+实跑：`Ran 9 … FAILED (failures=4)`（T1 T2 T3 T7）→ `Ran 9 … OK`（T4 T5 T6 T7b T8 五条护栏始终绿）；
+不回归 `test_drawing_flow_parse_terminal_signal_red` + `test_drawing_flow_frontend_wiring_red` +
+`test_packaging_parts_panel_red` + `test_packaging_parts_downstream_red` +
+`test_drawing_board_two_column_parts_and_3d_red` + `test_packaging_parts_list_visibility_red`
+= `Ran 102 … OK (skipped=1)`；`node --check tech_app/frontend/app.js` OK。
+
+未起服务、未发 HTTP、未连 PG / 34、未 push / MR / tag / Release / 未部署。

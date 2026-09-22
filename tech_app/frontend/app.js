@@ -2016,6 +2016,17 @@ async function packagingPartsSolidBatch() {
 // 纯函数：有零件 → 空串；否则逐字给服务端的不可用原因 + 前置条件（带码与下一步动作）。
 function packagingPartsEmptyText(partsDoc, preconditions) {
   const doc = (partsDoc && typeof partsDoc === "object") ? partsDoc : {};
+  // 读失败优先于其它所有空态（Spec `packaging-parts-read-failure-empty-state.md` §2.2）：
+  // "这一趟读不到零件文档"与"确实没有零件"/"还没算过"是三件事 —— 前者重跑一键解析不会有帮助
+  // （服务端此刻正返回 500），所以必须自己一句话，且不许被下面的分支抢先。
+  const problem = (doc.read_problem && typeof doc.read_problem === "object")
+    ? doc.read_problem : null;
+  if (problem) {
+    const status = Number(problem.status) || 0;
+    return status > 0
+      ? `暂时读不到零件文档（HTTP ${status}），请稍后重试；这不代表这份图纸没有零件`
+      : "暂时读不到零件文档（网络错误），请稍后重试；这不代表这份图纸没有零件";
+  }
   const parts = Array.isArray(doc.parts) ? doc.parts : [];
   if (parts.length) return "";
   const segments = [];
@@ -2397,15 +2408,33 @@ function packagingPartsQueryString(page, offset) {
 
 async function fetchPackagingParts() {
   if (!currentProject) return null;
+  // 读失败（非 404）时的空文档形状（Spec `packaging-parts-read-failure-empty-state.md` §2.1）：
+  // 左栏空态据此说"读不到"而不是"还没生成，请先跑一键解析"。`status` 取 HTTP 状态码，
+  // 网络异常（拿不到状态码）给 `0`。
+  const readProblemDoc = (status) => ({
+    parts: [], filtered: [], unavailable: [], stats: {}, source: {},
+    reviewable: false, built: false,
+    read_problem: {code: "parts_unavailable", status: Number(status) || 0, message: ""}});
+  const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
+    + `?${packagingPartsQueryString(packagingPartsPage, 0)}`;
+  let res = null;
   try {
-    const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
-      + `?${packagingPartsQueryString(packagingPartsPage, 0)}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const doc = await res.json().catch(() => null);
-    packagingPartsShown = packagingPartsItems(doc);   // 换页一律从第一页重新累加
-    return doc;
-  } catch (error) { return null; }
+    res = await fetch(url);
+  } catch (error) {
+    // 网络异常：没有状态码（给 0），与 404 / 5xx 都不同形。
+    packagingPartsShown = [];
+    return readProblemDoc(0);
+  }
+  // 404 = 端点未上线（那条既有路径逐字不变：仍返回 null，走空态文案，不谎报"解析失败"）。
+  if (Number(res.status) === 404) return null;
+  if (!res.ok) {
+    // 其余非 2xx（含 5xx）= 这一趟读不到：说清状态码，别让用户以为"还没生成"。
+    packagingPartsShown = [];
+    return readProblemDoc(res.status);
+  }
+  const doc = await res.json().catch(() => null);
+  packagingPartsShown = packagingPartsItems(doc);   // 换页一律从第一页重新累加
+  return doc;
 }
 
 // "继续加载"：拿下一页并累加（按 part_code 去重），再重画左栏 —— 不许只能看前 64 件。
