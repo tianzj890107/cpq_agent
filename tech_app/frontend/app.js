@@ -1028,6 +1028,16 @@ function cadIrSummaryOf(payload) {
 function renderDrawingFlowPanel(payload) {
   const panel = ensureDrawingFlowPanel();
   panel.hidden = false;
+  // 读失败第一优先（Spec `packaging-drawing-flow-read-failure.md` §C4）：只说"这一次没读到"，
+  // **不**渲染步骤表、**不**渲染 CAD IR 摘要 —— 那两处会把"读不到"伪装成"跑过但为空"。
+  const readProblem = (payload && payload.read_problem && typeof payload.read_problem === "object")
+    ? payload.read_problem : null;
+  if (readProblem) {
+    panel.innerHTML = '<div class="drawing-flow-title">图纸解析链路（DWG / DXF）</div>'
+      + `<div class="drawing-flow-cad-ir drawing-flow-empty">`
+      + `${esc(drawingFlowReadProblemText(readProblem))}</div>`;
+    return panel;
+  }
   const steps = drawingFlowSteps(payload);
   const summary = cadIrSummaryOf(payload);
   const rows = steps.map(s => {
@@ -1055,15 +1065,51 @@ function renderDrawingFlowPanel(payload) {
     + cadIr;
 }
 
+// 链路状态「读不到」的文案（Spec `packaging-drawing-flow-read-failure.md` §C1）：
+// 与左栏零件 / 业务部件 / 平面图那几条读路径同一套口径 —— 读失败要自己一句话，
+// 且**不**说成"这个项目没跑过一键解析"。纯函数：无 DOM / 无 `fetch(` / 无 `localStorage`。
+function drawingFlowReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : {};
+  if (!String(row.code || "").trim()) return "";
+  const status = Number(row.status) || 0;
+  return status > 0
+    ? `暂时读不到图纸解析链路状态（HTTP ${status}），这不代表这个项目没跑过一键解析`
+    : "暂时读不到图纸解析链路状态（网络错误），这不代表这个项目没跑过一键解析";
+}
+
+// 读链路状态：404（端点未上线）仍回 `null`（既有路径逐字不变，走"还没跑过"那一态）；
+// 其余非 2xx / 正文不可用 / 网络异常一律给带 `read_problem` 的空状态形状（Spec §C2）——
+// 不许再折成 `null`，否则面板会沉默、把上一次的内容当成本次结果。
 async function fetchDrawingFlowState() {
-  const res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow`);
-  if (!res.ok) return null;
-  return res.json().catch(() => null);
+  const unavailable = (code, status) => ({
+    steps: [], cad_ir: {},
+    read_problem: {code: code, status: Number(status) || 0, message: ""},
+  });
+  let res = null;
+  try {
+    res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow`);
+  } catch (error) {
+    return unavailable("drawing_flow_unavailable", 0);
+  }
+  if (Number(res.status) === 404) return null;
+  if (!res.ok) return unavailable("drawing_flow_unavailable", res.status);
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch (error) {
+    payload = null;
+  }
+  if (!payload || typeof payload !== "object") {
+    return unavailable("drawing_flow_body_unexpected", res.status);
+  }
+  return payload;
 }
 
 async function loadDrawingFlowPanel() {
   const state = await fetchDrawingFlowState().catch(() => null);
-  if (state) renderDrawingFlowPanel(state);
+  // 只有 404（端点未上线）才什么都不做；带 `read_problem` 的形状也要画出来（Spec §C3）。
+  if (!state) return null;
+  return renderDrawingFlowPanel(state);
 }
 
 /* ---------------- 2.1 一键解析的终态信号（Spec drawing-flow-parse-terminal-signal.md C1） ---- */

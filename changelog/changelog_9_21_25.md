@@ -17460,3 +17460,32 @@ node --check tech_app/frontend/app.js  OK
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 408. 落地 `packaging-drawing-flow-read-failure`：图纸解析链路面板「读不到」不再沉默（11 OK，红基 7 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `drawingFlowReadProblemText(problem)`（Spec §C1）：`code` 空 → `""`；`status > 0` →
+  「暂时读不到图纸解析链路状态（HTTP n），这不代表这个项目没跑过一键解析」；否则网络错误那一句。
+- `fetchDrawingFlowState()` 三态分家（Spec §C2）：404 → `null`（**既有路径逐字不变**）；
+  其它非 2xx → 带 `read_problem` 的空状态形状；200 但正文不是对象 →
+  `drawing_flow_body_unexpected`；`fetch` 抛异常 → `status: 0`。请求地址与方法未动。
+- `loadDrawingFlowPanel()`：`if (!state) return null;` 否则一律 `renderDrawingFlowPanel(state)` ——
+  读不到也要画（Spec §C3）。
+- `renderDrawingFlowPanel()` 新增**第一优先**的 `read_problem` 分支：只写那一句
+  （沿用 `drawing-flow-empty` 类名），**不**渲染步骤表、**不**渲染 CAD IR 摘要（否则会把
+  「读不到」伪装成「跑过但为空」）；没有 `read_problem` 时既有渲染逐字不变。
+  `drawingFlowTerminalSignal()`（终态信号那批）未动 —— 两套东西不混。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_drawing_flow_read_failure_red   Ran 11  FAILED (failures=7) → Ran 11  OK
+  （红基 7 条：T1–T7；护栏 S1–S4 始终绿）
+node --check tech_app/frontend/app.js  OK
+不回归：parse_terminal_signal + drawing_flow_frontend_wiring + parts_downstream +
+        part_detail_read_failure + cad_plan_read_failure + drawing_board_two_column
+        Ran 94  OK
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
