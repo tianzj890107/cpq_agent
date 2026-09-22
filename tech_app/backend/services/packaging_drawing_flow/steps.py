@@ -19,20 +19,42 @@ def now_iso() -> str:
 
 
 def _resolve(ctx: Dict[str, Any], name: str) -> Optional[Any]:
+    """取依赖缝（Spec `packaging-flow-dependency-probe-truth.md` §2.4）。
+
+    解析器抛异常必须登记 `import_failed` + 异常类名 + 原文（走的可能是**外部注入**的
+    resolver，所以不能只靠 `packaging_drawing_flow._dependency()` 那边的登记）；
+    解析器返回 `None` 登记 `missing`。返回值口径不变（拿不到仍是 `None`）。
+    """
     resolver = ctx.get("resolve")
     if not callable(resolver):
         return None
     try:
-        return resolver(name)
-    except Exception:
+        module = resolver(name)
+    except Exception as exc:                            # noqa: BLE001 - 真因要登记，不许吞
+        model.note_dependency_state(name, "import_failed", reason=type(exc).__name__,
+                                    message=str(exc))
         return None
+    if module is None:
+        model.note_dependency_state(name, "missing")
+    return module
 
 
 def _unavailable(name: str) -> Dict[str, Any]:
+    """依赖不可用（Spec §2.4）：既有码 / 状态 / 文案逐字不变，detail **新增**两个键。"""
     http_status, retryable = model.error_meta("PACKAGING_FLOW_DEPENDENCY_MISSING")
+    state = model.dependency_state(name)
+    snapshot = str(state.get("state") or "unknown")
+    reason = str(state.get("reason") or "")
+    message = "图纸解析链路依赖的能力尚未就绪（%s），请联系系统管理员" % name
+    if snapshot == "import_failed":
+        # 装载失败 ≠ "这个部署没有它"：前者要重启/看日志，后者要去装依赖。
+        message = ("图纸解析链路依赖的能力尚未就绪（%s）：装载失败（%s），请联系系统管理员"
+                   % (name, reason or "未知异常"))
     return {"status": "unavailable", "error_code": "PACKAGING_FLOW_DEPENDENCY_MISSING",
-            "error_message": "图纸解析链路依赖的能力尚未就绪（%s），请联系系统管理员" % name,
-            "retryable": retryable, "detail": {"dependency": name, "http_status": http_status}}
+            "error_message": message,
+            "retryable": retryable,
+            "detail": {"dependency": name, "http_status": http_status,
+                       "dependency_state": snapshot, "reason": reason}}
 
 
 def _blocked(code: str, message: str, detail: Optional[dict] = None,

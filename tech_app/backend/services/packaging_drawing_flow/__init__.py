@@ -52,17 +52,26 @@ _CACHE: Dict[str, Any] = {}
 
 
 def _dependency(name: str) -> Optional[Any]:
-    """依赖缝：解析不到就返回 None（不许把 AttributeError 抛给用户）。"""
+    """依赖缝：解析不到就返回 None（不许把 AttributeError 抛给用户）。
+
+    Spec `packaging-flow-dependency-probe-truth.md` §2.2：**失败不许进缓存**（一次失败不许被
+    钉死到进程结束，装好依赖 / 热修模块后同一进程必须能恢复），失败要登记 `missing` /
+    `import_failed` + 异常类名 + 原文前 200 字。对外的返回口径逐字不变。
+    """
     key = str(name or "")
     if key in _CACHE:
         return _CACHE[key]
     path = _MODULE_PATHS.get(key)
-    module = None
-    if path:
-        try:
-            module = importlib.import_module(path)
-        except Exception:
-            module = None
+    if not path:                                        # 这个部署里就没有这个缝
+        model.note_dependency_state(key, "missing")
+        return None
+    try:
+        module = importlib.import_module(path)
+    except Exception as exc:                            # noqa: BLE001 - 真因要登记，不许吞
+        model.note_dependency_state(key, "import_failed", reason=type(exc).__name__,
+                                    message=str(exc))
+        return None
+    model.note_dependency_state(key, "ok")
     _CACHE[key] = module
     return module
 
@@ -83,20 +92,46 @@ def _available(name: str) -> bool:
         return False
 
 
+#: 自检必须"真的导得进来"的四项（Spec §2.3）：文件在 ≠ 装载得成。
+REQUIRED_DEPENDENCIES = ("file_preflight", "cad_converter", "cad_ir", "packaging_semantics")
+
+
 def capability() -> Dict[str, Any]:
+    """部署自检入口（Spec `packaging-flow-dependency-probe-truth.md` §2.3）。
+
+    既有 `dependencies`（逐名 `bool`，`find_spec` 口径）**逐字不变**；新增
+    `dependencies_state`，必需四项的 `ok` 判定改走**真的导入**（文件在但装载失败时不许说"已就绪"）。
+    """
     dependencies = {name: _available(name) for name in model.DEPENDENCIES}
-    missing = [name for name in ("file_preflight", "cad_converter", "cad_ir",
-                                 "packaging_semantics") if not dependencies.get(name)]
-    return {"available": not missing,
+    # 必需四项真的导入一次（成功的进 `_CACHE`，失败的登记 import_failed 且不进缓存）。
+    unresolved = [name for name in REQUIRED_DEPENDENCIES if _dependency(name) is None]
+    dependencies_state = {name: model.dependency_state(name) for name in model.DEPENDENCIES}
+    import_failed = [name for name in unresolved
+                     if (dependencies_state.get(name) or {}).get("state") == "import_failed"]
+    missing = [name for name in unresolved if name not in import_failed]
+    if import_failed:
+        # 装载失败与"这个部署没有它"必须分家说：前者要重启/看日志，后者要去装依赖。
+        message = "依赖装载失败：%s，请查看服务日志后重启服务" % "、".join(
+            "%s（%s）" % (name, (dependencies_state.get(name) or {}).get("reason") or "未知异常")
+            for name in import_failed)
+    elif missing:
+        message = "图纸解析链路依赖的能力尚未就绪：%s" % "、".join(missing)
+    else:
+        message = "图纸解析链路编排层已就绪"
+    return {"available": not unresolved,
             "version": model.FLOW_VERSION,
             "steps": model.steps(),
             "dependencies": dependencies,
-            "message": ("图纸解析链路依赖的能力尚未就绪：%s" % "、".join(missing)) if missing
-                       else "图纸解析链路编排层已就绪"}
+            "dependencies_state": dependencies_state,
+            "message": message}
 
 
 def steps() -> List[Dict[str, Any]]:
     return model.steps()
+
+
+#: 依赖状态登记体（Spec §2.1）：与其它 `model` 常量同一处方言。
+dependency_state = model.dependency_state
 
 
 def run_id_for(project_id: str, *, prompt: Any = "", source_sha256: Any = "",

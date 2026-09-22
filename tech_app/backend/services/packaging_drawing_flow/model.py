@@ -63,6 +63,14 @@ DEPENDENCIES = ("file_preflight", "cad_converter", "cad_ir", "packaging_semantic
                 "requirement_service", "packaging_match", "packaging_bom",
                 "packaging_route", "packaging_cost")
 
+#: 依赖状态的闭集（Spec `packaging-flow-dependency-probe-truth.md` §2.1）：
+#: `ok` / `missing`（这个部署没有它）/ `import_failed`（装了但装载失败）/ `unknown`（没登记过）。
+DEPENDENCY_STATES = ("ok", "missing", "import_failed", "unknown")
+
+#: 依赖状态登记表：**模块级真 dict**（测试要能 clear），键为依赖名。
+#: "没登记过" ≠ "没有这个依赖"，读侧一律给 `unknown`（Spec §2.1）。
+DEPENDENCY_STATE_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
 #: Spec §9 —— 本批新增的两条码（HTTP, retryable）。
 ERROR_CODES = {
     "PACKAGING_GATE_BLOCKED": (409, True),
@@ -275,4 +283,38 @@ def iter_step_ids(start: str = "") -> Iterator[str]:
 
 def error_meta(code: str) -> Tuple[int, bool]:
     return ERROR_CODES.get(str(code), (500, False))
+
+
+def note_dependency_state(name: str, state: str, *, reason: str = "",
+                          message: str = "") -> Dict[str, Any]:
+    """登记某个依赖这一次的状态（Spec `packaging-flow-dependency-probe-truth.md` §2.1）。
+
+    唯一一处写入口：`state` 收进闭集（越界一律折成 `unknown`），`reason` 是异常类名，
+    `message` 截到前 200 字（排障要能直接看到 `No module named 'ods'` 这种原文）。
+    """
+    key = str(name or "")
+    state = str(state or "")
+    if state not in DEPENDENCY_STATES:
+        state = "unknown"
+    entry = {"name": key, "state": state,
+             "reason": str(reason or ""),
+             "message": str(message or "")[:200]}
+    if key:
+        DEPENDENCY_STATE_REGISTRY[key] = entry
+    return entry
+
+
+def dependency_state(name: str = "") -> Dict[str, Any]:
+    """依赖登记体（Spec §2.1）：给了名字给一条，没给给全表（按名字升序）。
+
+    **没有登记过 → `unknown`**（不许编成 `missing`）："没登记过" ≠ "没有这个依赖"。
+    """
+    key = str(name or "")
+    if key:
+        entry = DEPENDENCY_STATE_REGISTRY.get(key)
+        if isinstance(entry, dict):
+            return dict(entry)
+        return {"name": key, "state": "unknown", "reason": "", "message": ""}
+    return {name: dict(DEPENDENCY_STATE_REGISTRY[name])
+            for name in sorted(DEPENDENCY_STATE_REGISTRY)}
 

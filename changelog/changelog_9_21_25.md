@@ -15390,3 +15390,51 @@ packaging 全域（1516 条）只剩各批未实现的红测与三处既有挂�
   `stale` 仍只标记、不拒绝读；唯一新增的拒绝是确认动作的 `box_type_reconfirmed`（与既有的
   "不合法不许确认"同类）。
 - 不在读接口里重排路线、不触发盒型匹配；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 358. 落地 `packaging-flow-dependency-probe-truth`：自检不再"说就绪而真跑说缺失"，导入失败不进缓存、真因可读（8 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_flow_dependency_probe_truth_red`（A–D 组 8 条）全绿：A1 / A3 / B2 / C1 / D1
+由红转绿，A2（成功仍缓存）/ B1（`dependencies` 的 `find_spec` 口径）/ C2（没登记过是 `unknown`）
+三条护栏保持绿。
+
+### 一、缺口
+
+`packaging_drawing_flow/__init__.py` 的 `_dependency()` 把 `importlib.import_module` 的异常吞成
+`None` 并**连 `None` 一起写进 `_CACHE`** —— 一次导入失败在这个进程里就永远"依赖缺失"，装好依赖 /
+热修模块后只有重启才恢复，而且返回体里没有任何字段提示"这是缓存里的旧结论"；`_available()` 用
+`importlib.util.find_spec` 只证明"文件在"，模块自己的 import 失败（缺子依赖 / 语法错误 / 环境缺件）时
+自检照旧说"编排层已就绪"，而真跑第 3 步就 `unavailable`；`steps._resolve()` 的
+`except Exception: return None` 把外部注入 resolver 的异常也一并吞掉，`detail.dependency` 只给名字，
+"这个部署没有它"与"它装载失败了"逐字相同。
+
+### 二、改了什么
+
+- `packaging_drawing_flow/model.py`：新增 `DEPENDENCY_STATES`（闭集）、模块级真 dict
+  `DEPENDENCY_STATE_REGISTRY`、`note_dependency_state()`（唯一写入口，越界折 `unknown`，`message`
+  截 200 字）、`dependency_state()`（没登记 → `unknown`，不给名字给全表）。
+- `packaging_drawing_flow/__init__.py`：`_dependency()` 没有这条缝 → 登记 `missing`；抛异常 → 登记
+  `import_failed` + 异常类名 + 原文且**不写 `_CACHE`**（下次重新尝试）；成功 → 登记 `ok` + 进缓存。
+  `capability()` 新增 `dependencies_state`，必需四项改走真导入，`available` 取自真导入结果，
+  `message` 按"装载失败 / 尚未就绪 / 已就绪"三分；既有 `dependencies` 口径逐字不变。
+  导出 `dependency_state = model.dependency_state`。
+- `packaging_drawing_flow/steps.py`：`_resolve()` 登记失败（`import_failed` 带异常类名，返回 `None`
+  登记 `missing`）；`_unavailable()` 的 `detail` 新增 `dependency_state` / `reason`，既有码、状态与
+  文案形状不变。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_flow_dependency_probe_truth_red
+# Ran 8 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_drawing_flow_red \
+    tests.test_drawing_flow_error_taxonomy_red tests.test_drawing_flow_parse_terminal_signal_red
+# Ran 98 tests ... OK (skipped=1)
+```
+
+### 四、边界
+
+- Spec §3.4 提到的 `GET …/drawing-flow/capability` 路由目前**不存在**（图纸入口只有 `GET
+  /api/projects/{pid}/drawing-flow` 与 `POST …/drawing-flow/run`），因此本批没改 `main.py`；
+  步骤的 `detail` 两个新键随既有读路由自动带出。详见 Spec §6.3。
+- 只登记状态、不改判定：`find_spec` 口径、`dependencies` 的 `bool`、错误码与状态都没动；
+  未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
