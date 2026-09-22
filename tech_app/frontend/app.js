@@ -1310,20 +1310,34 @@ async function selectPackagingPart(partCode) {
   if (outlineHost) outlineHost.innerHTML = "";
   const evidenceHost = $("packagingPartEvidence");
   if (evidenceHost) evidenceHost.innerHTML = "";
+  // 读失败的两态分家（Spec `packaging-part-detail-read-failure.md` §C2）：
+  //   · 404 + `PACKAGING_PART_NOT_FOUND` → 「没这件，重新选一件」；
+  //   · 其它非 2xx（含 5xx）/ 网络异常 → 「暂时读不到，稍后重试」。
+  // 文案一律由 `packagingPartDetailReadProblemText()` 产出 —— 不再贴服务端 / 浏览器原生文本。
+  let res = null;
   try {
-    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
+    res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
       + `packaging-parts/${encodeURIComponent(code)}`);
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const detail = (payload && payload.detail) || {};
-      const message = typeof detail === "string" ? detail : String(detail.message || "");
-      throw new Error(message || `读取零件详情失败（HTTP ${res.status}）`);
-    }
-    renderPackagingPartPanel(payload);
-    highlightPackagingBusinessPartSelection(code, payload);
   } catch (error) {
-    if (facts) facts.textContent = String((error && error.message) || error);
+    if (facts) {
+      facts.textContent = packagingPartDetailReadProblemText(
+        {code: "parts_unavailable", status: 0});
+    }
+    return currentSelectedPanelPart;
   }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = (payload && payload.detail) || {};
+    const detailCode = (detail && typeof detail === "object")
+      ? String(detail.code || "") : "";
+    if (facts) {
+      facts.textContent = packagingPartDetailReadProblemText(
+        {code: detailCode || "parts_unavailable", status: res.status});
+    }
+    return currentSelectedPanelPart;
+  }
+  renderPackagingPartPanel(payload);
+  highlightPackagingBusinessPartSelection(code, payload);
   return currentSelectedPanelPart;
 }
 
@@ -2107,6 +2121,24 @@ function packagingPartsPageReadProblemText(problem) {
   return status > 0
     ? `这一页零件没读出来（HTTP ${status}），已列出的零件不受影响；点"继续加载"重试`
     : '这一页零件没读出来（网络错误），已列出的零件不受影响；点"继续加载"重试';
+}
+
+// 单件详情「读不到」/「没这件」的文案（Spec
+// `packaging-part-detail-read-failure.md` §C1）：判据顺序固定 —— **先认码、再认状态**。
+// 只有后端的 `PACKAGING_PART_NOT_FOUND` 才能说"这一件没了"（重跑过解析），
+// 其它情况一律说"稍后重试"，**不**把「读不到」说成「没这件」。
+// 纯函数：体内无 DOM / 无 `fetch(` / 无 `localStorage`，可被 `node -e` 抽出来真跑。
+function packagingPartDetailReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : {};
+  const code = String(row.code || "").trim();
+  if (!code) return "";
+  if (code === "PACKAGING_PART_NOT_FOUND") {
+    return "这一件已经不在当前的零件文档里了（可能重跑过图纸解析）；请点左栏重新选一件";
+  }
+  const status = Number(row.status) || 0;
+  return status > 0
+    ? `暂时读不到这一件（HTTP ${status}），请稍后重试；这不代表这一件没有数据`
+    : "暂时读不到这一件（网络错误），请稍后重试；这不代表这一件没有数据";
 }
 
 // 2.1 左栏零件文档（drawing_flow 链路）：GET .../requirement/packaging-parts。

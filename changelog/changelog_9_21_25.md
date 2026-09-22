@@ -17428,3 +17428,35 @@ node --check tech_app/frontend/requirement-confirm.js  OK
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 407. 落地 `packaging-part-detail-read-failure`：右栏「零件详情」的 404（没这件）与 5xx / 网络（读不到）分家（10 OK，红基 6 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingPartDetailReadProblemText(problem)`（Spec §C1，判据顺序固定 —— **先认码、再认状态**）：
+  `code` 空 → `""`；`PACKAGING_PART_NOT_FOUND` → 「这一件已经不在当前的零件文档里了（可能重跑过
+  图纸解析）；请点左栏重新选一件」；否则 `status > 0` → 「暂时读不到这一件（HTTP n），请稍后重试；
+  这不代表这一件没有数据」；再否则网络错误那一句。状态码是 404 但码不是 `PACKAGING_PART_NOT_FOUND`
+  时一律按「读不到」—— **不**把「读不到」说成「没这件」（§6 边界 3）。
+- `selectPackagingPart()`：去掉 `throw new Error(message || "读取零件详情失败（HTTP n）")` 与
+  `String((error && error.message) || error)` 两处原生文本出口，改为 `fetch` 抛异常 →
+  `status: 0`、非 2xx → `{code: detail.code || "parts_unavailable", status: res.status}`，
+  文案只出自上面那个纯函数；200 路径仍是 `renderPackagingPartPanel(payload)` +
+  `highlightPackagingBusinessPartSelection(code, payload)`（逐字未动）。
+
+**踩过一次的既有约束（已记进 Spec §7）**：新函数最初插在 `selectPackagingPart()` 之前，落进了
+`tests/test_packaging_parts_downstream_red.py::F3` 的 `packagingPartProcess` **+4000 字窗口**
+（源码 `:2250-2251` 早写明「② 不许落在 … +4000 字窗口里」），把 `CadInlineAnalysis` 顶出窗口 →
+该守卫转红；搬到 `packagingPartsPageReadProblemText()` 之后即恢复。**没有改任何测试**。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_part_detail_read_failure_red   Ran 10  FAILED (failures=6) → Ran 10  OK
+  （红基 6 条：T1–T6；护栏 S1–S4 始终绿）
+node --check tech_app/frontend/app.js  OK
+不回归：parts_panel + parts_read_failure_empty_state + parts_downstream + cad_plan_read_failure +
+        parts_extraction + parts_outline                              Ran 112  OK
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
