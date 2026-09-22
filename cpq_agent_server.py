@@ -67,6 +67,11 @@ import cpq_quick_quote_case
 import cpq_quick_quote_file
 # 相似案例检索（批 2）：解析结果直接进它的 match_cases()，两侧不各写一套排序。
 import cpq_quick_quote_match
+# 逆向快速报价（批 9）：七个工作区命令与出价/落单住在这两个模块里，HTTP 层只做转发。
+# 少这两行 import，`_handle_quick_quote_session_*` 一被调用就是 NameError → 500
+# （`test_tech_backend_undefined_names_dynamic` 抓的就是这一类"从未绑定的全局名"）。
+import cpq_quick_quote_price
+import cpq_quick_quote_workspace
 from tech_app.backend.services import industry_templates as quote_industry_templates
 from tech_app.backend.services import product_params as quote_product_params
 
@@ -1892,8 +1897,13 @@ def _quick_quote_case_route(path: str) -> dict:
 
 
 def _case_actor_text(user) -> str:
+    """案例维护/复核的操作者名（取不到用户名时退到 user_id）。
+
+    这里用的是本模块既有的 `_qq_text()`：早先写成了不存在的 `_text()` —— 那是个只在这一行
+    出现的名字，真实请求会 NameError（`test_tech_backend_undefined_names_dynamic` 抓到）。
+    """
     user = user if isinstance(user, dict) else {}
-    return _text(user.get("username")) or _text(user.get("user_id"))
+    return _qq_text(user.get("username")) or _qq_text(user.get("user_id"))
 
 
 def _handle_quick_quote_case_write(case_code: str, action: str, data=None, *,

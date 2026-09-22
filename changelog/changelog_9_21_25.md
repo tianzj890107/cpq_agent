@@ -10654,3 +10654,43 @@ role_unbound_total 1 → 0、尺寸/状态一个字未动、重放后 role_value
 
 未改角色判定（`reject_unknown_role_autobind()` 逐字未动）、未改 `BINDING_METHODS` 既有取值、
 未动数据库 schema（映射走 `size_source_json` + meta 文档通道）、未改任何 `tests/`。
+
+
+## 287. 报价会话四个处理器引用「从未 import 的模块」+ 案例操作者取了一个不存在的名字：真实请求会 500（9-22，Codex 修复）
+
+`tests/test_tech_backend_undefined_names_dynamic`（动态扫"读了从未绑定的全局名"）实测抓到 8 处，
+全在根服务 `cpq_agent_server.py`：
+
+```
+cpq_agent_server.py:_case_actor_text:_text
+cpq_agent_server.py:_handle_quick_quote_session_baseline:cpq_quick_quote_workspace
+cpq_agent_server.py:_handle_quick_quote_session_workspace:cpq_quick_quote_workspace
+cpq_agent_server.py:_handle_quick_quote_session_price:cpq_quick_quote_price
+cpq_agent_server.py:_handle_quick_quote_session_price:cpq_quick_quote_workspace
+cpq_agent_server.py:_handle_quick_quote_session_confirm:cpq_quick_quote_price
+cpq_agent_server.py:_handle_quick_quote_session_transfer:cpq_quick_quote_price
+cpq_agent_server.py:_handle_quick_quote_read:cpq_quick_quote_price
+```
+
+这些处理器都挂在真实路由上（`:4145-4149` 按 action 分发），也就是说快速报价的
+baseline / workspace / price / confirm / transfer / read 一被调用就是 `NameError` → 500 ——
+`cpq_quick_quote_workspace` / `cpq_quick_quote_price` 两个模块在文件里被用了、却从来没 import
+（同一段里 `case` / `file` / `match` 三个都是 import 了的）。
+
+### 落点
+
+- `cpq_agent_server.py`：在既有 `cpq_quick_quote_*` import 段补
+  `import cpq_quick_quote_price` 与 `import cpq_quick_quote_workspace`（并写明少这两行会 500）；
+- `_case_actor_text()`：改用本模块既有的 `_qq_text()`（原先调的 `_text()` 全文件只出现在这一行，
+  没有任何定义）。
+
+### 实跑
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_tech_backend_undefined_names_dynamic
+  → Ran 6 OK（修复前 1 红，点名上面 8 处）
+```
+
+### 边界
+
+只补 import 与一个取值助手；未改任何接口口径、未改任何断言、未改任何 `tests/`。
