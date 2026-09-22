@@ -2662,6 +2662,9 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
     `binding_method` / `bound_by`（`packaging_bom.binding_record()`）。
     """
     rows = [copy.deepcopy(row) for row in (items or []) if isinstance(row, dict)]
+    # 零件**文档**身份（不是零件行）：整份 `record` 顶层就带着，逐字取用。
+    doc_id = _text((parts or {}).get("parts_id")) if isinstance(parts, dict) else ""
+    doc_hash = _text((parts or {}).get("parts_hash")) if isinstance(parts, dict) else ""
     available = [row for row in ((parts or {}).get("parts") or [])
                  if isinstance(row, dict)
                  and _num(row.get("unfolded_length_mm")) is not None
@@ -2713,6 +2716,10 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
         size_binding = {
             "component_id": _text(part.get("component_id")),
             "part_code": _text(part.get("part_code")),
+            # 「这一对尺寸是照哪一版零件文档配的」（Spec `packaging-bom-parts-version-binding.md` §2.1）：
+            # 逐字取入参**文档**顶层那一份，文档没给就留空 —— 绝不用零件行/行号/时间编一个版本。
+            "parts_id": doc_id,
+            "parts_hash": doc_hash,
             "rule_id": BINDING_RULE_ID,
             "fallback_paired": bool(fallback),
             "original_missing_variables": original_missing,
@@ -2755,4 +2762,6 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
             "skipped_locked": skipped_locked, "gaps": list(unbound),
             "pairing_review": pairing_review,
             "role_unbound": role_unbound, "role_unbound_total": len(role_unbound),
-            "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION}
+            "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION,
+            # 顶层也带一份文档身份（Spec §2.1）：落库/比对用，缺省 `""`。
+            "parts_id": doc_id, "parts_hash": doc_hash}

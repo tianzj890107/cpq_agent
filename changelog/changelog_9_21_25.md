@@ -14123,3 +14123,90 @@ box_candidate_rank_and_runnability / box_type_matching / knowledge_base_seed
 （读侧每次现算，写不进去不影响结论）；影响"人工映射不被算没"的那条写路径已改成显式失败。
 报价侧同类第二份实现 `cpq_packaging_match.py` 本批未动（不在 Spec §2 允许范围内）。
 未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 341. 成本口径 / 规则版本 / 上游路线 / 交接闸门：把「读不到」显示成「本来就没有」（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-cost-and-handoff-static-downgrade-disclosure.md` +
+`tests/test_packaging_cost_and_handoff_static_downgrade_red.py`
+（15 条：A 组 3 / B 组 4 / C 组 3 / D 组 5；现状 **10 红 5 绿**，5 条绿的是"既有六键 / 旧读函数
+口径不许变"的护栏）。本批**不真跑任何服务**：五处都由读代码定位，红测全部离线
+（临时路径 + `mock.patch.object`，不建项目、不算成本、不连 PG、不发 HTTP）。
+
+### 缺口（`packaging-silent-degradation-disclosure.md` 那套病症在成本与交接侧的五处漏网）
+
+- `packaging_cost._load_minimum_charge_policy()`（`:580`）：快照文件丢了 / JSON 坏了 → `block = {}`
+  → `status` 退成 `pending`，与"业务还没裁决"产出**同一个返回体**（`policy=unresolved`），
+  没有任何字段能回答"是没裁决，还是根本没读到"。
+- `packaging_cost.rule_snapshot_version()`（`:948`）：读挂 → `""`；而 `kb_repo.kb_version()`
+  （`kb_repo.py:55`）在"还没拉过快照"时本来就返回 `None` → `_text(None)` 也是 `""`
+  —— **读挂了 / 从没拉过 / 版本是空**三态压成一态。冷进程实测 `kb_version() -> None`、
+  `rule_snapshot_version() -> ''`；而这个值会写进**每一条成本明细行**与成本估算行，落库当"照哪一版
+  规则算的"的审计凭据。
+- `packaging_cost._upstream_route_version()`（`:2382`）：路线模块读挂 / 导入失败 → `""`，
+  与"这条需求一条路线都没有"同形；它正是 `packaging-cost-input-version-pinning` 要记进
+  `source_versions.route_version` 的那个值。
+- `packaging_handoff._publish_gate()`（`:224`）：一个 try 同时包住 `gates()` 与 `inheritance()`。
+  实测 mock `gates()` 抛异常 → `{'publishable': False, 'gates': {}, 'source_versions': {}}`
+  —— `inheritance()` 根本没被调用，**版本六元组随闸门一起消失**，交接包（落 `package_json`、
+  回传报价侧）里只剩"不可发布"，看不出是读挂了。
+- 同函数（`:228`）：`minimum_charge_policy()` 抛异常 → `'minimum_charge_policy': {}`，
+  与正常值（至少六键）**形状都不同**，随包落库回传。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 口径块与 `minimum_charge_policy()` **新增** `source`（`snapshot` / `unavailable`）+
+  `unavailable_reason`（异常类名）；六键结论口径逐字不变（读不到仍是 `pending` / `unresolved`）。
+- 新增 `rule_snapshot_version_detail()`：`kb` / `none` / `unavailable` 三态分开；
+  `rule_snapshot_version()` 仍返回 `str`、读不到仍是 `""`（现值已被大量成本行与既有红测依赖）。
+- 新增 `upstream_route_version_detail()`：`route` / `none` / `unavailable` 三态分开；
+  `_upstream_route_version()` 行为逐字不变。
+- `compute_project()` 结果加 `rule_snapshot_source` / `rule_snapshot_unavailable`，
+  `source_versions` 加 `route_version_source` / `route_version_unavailable`，`load_cost()` 一并带回。
+- `_publish_gate()` 拆成两次 try + 四个新键（`gates_source` / `gates_unavailable` /
+  `source_versions_source` / `source_versions_unavailable`）；口径读不到时给**同形状**的
+  `pending` + `source=unavailable` 块，不许给 `{}`；`publishable` 结论口径一个字不改。
+
+### 实测
+
+```
+tests.test_packaging_cost_and_handoff_static_downgrade_red  → Ran 15 … FAILED (failures=10)
+保护网（离线）：cost_minimum_charge 47 OK / cost_policy_decision 15 OK /
+                silent_degradation 13 OK / spec_status_truth（A+B+C）7 OK
+```
+
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 341. `packaging-bom-parts-version-binding` 落地：BOM 行绑定记下零件文档版本，重解析后读接口披露漂移（7 OK）（9-22，Codex 实现）
+
+### 一、问题（Spec §1）
+
+`bind_rows()` 的 `size_binding` 不带 `parts_id` / `parts_hash`（`packaging_bom.py` 全文对这两个字的
+引用数是 0）：重解析出**新**零件文档后，行上的旧尺寸、旧 `component_id` 照旧以 `status="computed"` /
+`missing_variables=[]` 返回，2.1 的零件树与 BOM 行互相打架却两边都像"算好的"；历史行
+（有 `dwg_binding` 但没版本）既不说过期也不说无从判断。
+
+### 二、改了什么（Spec §2.1–§2.4）
+
+- `packaging_parts.bind_rows()`：`size_binding` 与返回体顶层都带 `parts_id` / `parts_hash`
+  （逐字取入参文档，缺就给 `""`，绝不编一个版本）；既有键与配对口径一个字未动。
+- `packaging_bom._parts_binding_scope()` + `load_bom()`：新增 `parts_binding_stale`
+  （`parts_reparsed` / `binding_without_version`，按 `item_key` 升序）与 `parts_document_unavailable`
+  两个必存在的键；`source_versions` 补 `parts_id` / `parts_hash`。读不到零件文档时
+  **比较不了 ≠ 不一致**：清单给 `[]` + 显式标记。过期行照旧带历史尺寸返回（不改数、不清值、不重绑）。
+- 前端 `requirement-confirm.js`：过期行逐行 `data-pb-stale` + "图纸已换版（待重新生成）"，
+  顶部 `data-pb-parts-stale` 总账 + `data-pb-parts-unavailable`；标题栏显示当前零件文档版本前 12 位。
+  `node --check` 通过。
+
+### 三、实测
+
+```
+tests.test_packaging_bom_parts_version_binding_red → Ran 7 … OK（E1/F1/F2/F4 转绿，E2/F3/F5 护栏仍绿）
+保护网：parts_extraction / parse_to_downstream_seams / parametric_bom / silent_degradation /
+part_role_manual_mapping / box_candidate_rank_and_runnability → 157 条全 OK
+```
+
+### 四、已记录的边界
+
+Spec §2 第 4 条写"`app.js` 包装 BOM 面板"，但该面板实际在 `requirement-confirm.js`
+（`#packagingBomPanel` / `pbPanel()`）—— 按意图改在真正承载面板的文件。
+未改任何测试、未放宽断言、未连 34、未 push / MR / tag / Release / 未部署。

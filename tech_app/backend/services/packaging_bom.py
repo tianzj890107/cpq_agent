@@ -978,6 +978,8 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     pairing = _pairing_scope(project_id, req_no)
     # 走 `_role_scope()` 这个既有接缝（调用方与测试都按它打桩），键一律按可选读。
     role_scope = _role_scope(project_id, req_no, items, box_type_code) or {}
+    # 零件文档版本比对（Spec `packaging-bom-parts-version-binding.md` §2.2）：只报事实，不重绑。
+    parts_scope = _parts_binding_scope(project_id, items)
     return {
         "built": bool(items),
         "box_type_code": box_type_code,
@@ -989,6 +991,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "engine_version": _text(box_record.get("engine_version")),
             "confirmed_by": _text(box_record.get("confirmed_by")),
             "confirmed_at": _text(box_record.get("confirmed_at")),
+            # 这一版 BOM 是照哪一版零件文档配的（Spec §2.2）：当前文档读不到时给 ""。
+            "parts_id": parts_scope["parts_id"],
+            "parts_hash": parts_scope["parts_hash"],
         },
         "generated_at": generated_at,
         "items": items,
@@ -1000,6 +1005,10 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         "pairing_review_unavailable": pairing["unavailable"],
         # 回填失败留痕（Spec §2.1）：键**必须存在**，没有失败时 `{}`。
         "binding_error": _bind_error_scope(project_id, req_no),
+        # 零件文档版本漂移（Spec `packaging-bom-parts-version-binding.md` §2.2）：键**必须存在**，
+        # 没有过期行时 `[]`；比对不了时 `parts_document_unavailable` 非空且清单给 `[]`。
+        "parts_binding_stale": parts_scope["stale"],
+        "parts_document_unavailable": parts_scope["unavailable"],
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
@@ -1107,6 +1116,54 @@ def _pairing_scope(project_id: str, requirement_no: str = "") -> dict:
                                 "message": str(exc)}}
     return {"review": [dict(row) for row in rows or [] if isinstance(row, dict)],
             "unavailable": {}}
+
+
+def _parts_binding_scope(project_id: str, items: list) -> dict:
+    """BOM 行绑的是**哪一版**零件文档（Spec `packaging-bom-parts-version-binding.md` §2.2）。
+
+    返回 `{"stale": [...], "unavailable": {...}, "parts_id": ..., "parts_hash": ...}`：
+
+    - 当前零件文档读不到（抛异常 / 非 dict / 没有 `parts`）→ `unavailable` 非空、`stale = []`
+      —— **比较不了 ≠ 不一致**（与 `packaging-silent-degradation-disclosure.md` 同一套纪律）；
+    - 行上有 `dwg_binding` 且带 `parts_hash`，与当前文档不同 → `parts_reparsed`；
+    - 行上有 `dwg_binding` 但没有版本 → `binding_without_version`（历史行，处置话术不同）；
+    - 行上没有 `dwg_binding`（模板行 / 人工行）→ **不进列表**；
+    - 清单按 `item_key` 升序（稳定输出）。只读、只报事实：绝不在这里重绑，也不改数、不清值。
+    """
+    def _unavailable(reason: str, message: str) -> dict:
+        return {"stale": [],
+                "unavailable": {"code": "parts_document_unavailable", "reason": reason,
+                                "message": message},
+                "parts_id": "", "parts_hash": ""}
+
+    try:
+        from . import packaging_parts
+        doc = packaging_parts.load_parts(project_id)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不挡读接口
+        return _unavailable(type(exc).__name__,
+                            "零件文档读不到（%s）：这次比对不了版本，"
+                            "别把这次当成「没有过期行」" % type(exc).__name__)
+    if not isinstance(doc, dict) or not doc.get("parts"):
+        return _unavailable("", "项目里还没有可用的零件文档：这次比对不了版本，"
+                                "别把这次当成「没有过期行」")
+    current_hash = _text(doc.get("parts_hash"))
+    stale: list = []
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+        binding = _role_binding(row)
+        if not binding:
+            continue                              # 没有 dwg_binding → 不是零件绑的行
+        bound_hash = _text(binding.get("parts_hash"))
+        if bound_hash and current_hash and bound_hash == current_hash:
+            continue                              # 版本一致
+        stale.append({"item_key": _text(row.get("item_key")),
+                      "bound_parts_hash": bound_hash,
+                      "current_parts_hash": current_hash,
+                      "reason": "parts_reparsed" if bound_hash else "binding_without_version"})
+    stale.sort(key=lambda row: row["item_key"])
+    return {"stale": stale, "unavailable": {},
+            "parts_id": _text(doc.get("parts_id")), "parts_hash": current_hash}
 
 
 def _load_pairing_review(project_id: str, requirement_no: str = "") -> list:

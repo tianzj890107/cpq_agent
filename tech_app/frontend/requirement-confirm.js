@@ -298,20 +298,33 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   function pbSize(item) {
     return `${pbNumber(item.length_mm)} × ${pbNumber(item.width_mm)} × ${pbNumber(item.height_mm)}`;
   }
-  function pbRow(item, writable) {
+  // 图纸重解析后，行上的尺寸可能来自**上一版**零件文档（Spec
+  // `packaging-bom-parts-version-binding.md` §2.4）：这些行不许继续用"已确认/无缺口"的样式展示
+  // —— 历史尺寸照旧带着（用户要能对比），但必须看得见"该重新生成 BOM 了"。
+  function pbStaleNote(stale) {
+    if (!stale) return '';
+    const why = stale.reason === 'binding_without_version'
+      ? '这一行是历史绑定，没有留下零件文档版本（无从判断）'
+      : '图纸已经重新解析过，这一行的尺寸来自上一版零件文档';
+    return `<div class="pb-stale" data-pb-stale="${pbEsc(stale.reason || '')}">${pbEsc(why)}，`
+      + `请重新生成 BOM 后再用。</div>`;
+  }
+  function pbRow(item, writable, staleMap) {
     const status = String(item.status || 'computed');
+    const stale = (staleMap || {})[String(item.item_key || '')] || null;
     const missing = (item.missing_variables || []).length
       ? `<div class="pb-missing">缺失变量：${pbEsc(item.missing_variables.join('、'))}</div>` : '';
     const toggle = writable
       ? `<button class="btn secondary" data-pb-lock="${pbEsc(item.item_key)}" data-pb-locked="${status === 'locked' ? '1' : '0'}">${status === 'locked' ? '解锁' : '锁定'}</button>`
       : '';
-    return `<li class="pb-item" data-status="${pbEsc(status)}">
+    return `<li class="pb-item${stale ? ' pb-item-stale' : ''}" data-status="${pbEsc(stale ? 'stale' : status)}"${stale ? ` data-pb-stale="${pbEsc(stale.reason || '')}"` : ''}>
       <div class="pb-item-head">
         <span class="pb-key">${pbEsc(item.item_key)}</span>
         <span class="pb-name">${pbEsc(item.item_name || '')}</span>
-        <span class="pb-status">${pbEsc(PB_STATUS_LABELS[status] || status)}</span>
+        <span class="pb-status">${pbEsc(stale ? '图纸已换版（待重新生成）' : (PB_STATUS_LABELS[status] || status))}</span>
         ${toggle}
       </div>
+      ${pbStaleNote(stale)}
       <div class="pb-dims">尺寸：${pbEsc(pbSize(item))}${item.quantity ? ` · 数量 ${pbEsc(item.quantity)}` : ''}</div>
       ${item.material ? `<div class="pb-material">材料：${pbEsc(item.material)}${item.material_code ? `（${pbEsc(item.material_code)}）` : ''}</div>` : ''}
       ${item.component ? `<div class="pb-component">${pbEsc(item.component)}</div>` : ''}
@@ -322,19 +335,36 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const items = (record && record.items) || [];
     const stats = (record && record.stats) || {};
     const gaps = (record || {}).gaps || {};
+    // 零件文档版本漂移（Spec `packaging-bom-parts-version-binding.md` §2.4）：逐行标记 + 顶部一句
+    // 总账；读不到零件文档版本时与"没有过期行"分开说。
+    const staleRows = Array.isArray(record && record.parts_binding_stale)
+      ? record.parts_binding_stale : [];
+    const staleMap = {};
+    staleRows.forEach(entry => { staleMap[String((entry || {}).item_key || '')] = entry || {}; });
+    const partsUnavailable = (record && record.parts_document_unavailable) || {};
+    const partsHash = String(((record && record.source_versions) || {}).parts_hash || '');
+    const staleBanner = staleRows.length
+      ? `<div class="pb-warning" data-pb-parts-stale="${staleRows.length}">有 ${staleRows.length} 行来自上一版图纸解析（图纸已重解析）：历史尺寸照旧带着可对比，但请重新生成 BOM 后再用。</div>`
+      : '';
+    const unavailableBanner = partsUnavailable.code
+      ? `<div class="pb-warning" data-pb-parts-unavailable="${pbEsc(partsUnavailable.code)}">暂时读不到零件文档版本（${pbEsc(partsUnavailable.code)}），请稍后重试；这不代表没有过期行。</div>`
+      : '';
     const groups = PB_ORDER.filter(category => items.some(item => item.bom_category === category));
     const body = groups.length
       ? groups.map(category => `<section class="pb-group">
           <h3>${pbEsc(PB_CATEGORY_LABELS[category] || category)}（${items.filter(item => item.bom_category === category).length}）</h3>
-          <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable)).join('')}</ul>
+          <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable, staleMap)).join('')}</ul>
         </section>`).join('')
       : '<div class="pb-empty">还没有包装 BOM，先在盒型匹配里确认盒型，再点「展开部件并生成 BOM」。</div>';
     const unresolved = (gaps.material_unresolved || []).length
       ? `<div class="pb-hint">解析不到材料码（已在库外）：${pbEsc(gaps.material_unresolved.join('、'))}</div>` : '';
     return `<section class="card section pb-panel" id="packagingBomPanel">
       <h2>部件展开与包装 BOM${boxTypeCode ? `（${pbEsc(boxTypeCode)}）` : ''}</h2>
-      <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。</div>
+      <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。`
+      + `${partsHash ? `零件文档版本：${pbEsc(partsHash.slice(0, 12))}。` : ''}</div>
       ${unresolved}
+      ${staleBanner}
+      ${unavailableBanner}
       <div class="pb-actions">
         <input id="pbOverrides" placeholder="变量覆盖，如：H盖=30, 包边=15" ${writable ? '' : 'disabled'}>
         <button class="btn primary" data-pb-build="1" ${writable ? '' : 'disabled'}>展开部件并生成 BOM</button>
