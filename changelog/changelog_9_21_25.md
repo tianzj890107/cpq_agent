@@ -12691,3 +12691,197 @@ C1（门禁仍在 1.1/1.2 两处被调用）、C2（`EDITABLE_STATUSES` 未放�
 只改 `报价首页.html` / `确认需求解析结果.html` / `tech_app/frontend/quick-quote-panel.js` /
 `cpq_agent_server.py` / 本批 Spec 状态行 / 追加本 changelog；未改 `tests/` 既有文件、未改案例数据、
 未连 PG、未发 HTTP、未部署。
+
+## 317. 纠偏 + 新 Spec：技术侧写进卡片的包装整包，被「完成本步」的**整份替换**抹掉了 —— 卡片步快照写入必须是合并（9-22，Codex 只改 Spec / 红测 / changelog）
+
+接着 `## 315` 的引子往下查：那条「卡片第 2 步快照里只有 `s2_cost / s2_route`，没有
+`packaging_package`」被记成"包装整包回传没有前端按钮 → 所以面板不出现"。**这个读法是错的**，
+本批给出纠偏，并把真因写成 Spec + 红测。
+
+### 一、纠偏：同一份代码、同一套回传通道，只差"最后谁写了这一步"
+
+| 报价会话 | 第 2 步快照键 | 最后写这一步的人 |
+| --- | --- | --- |
+| `566207eb006a` | `['packaging_package', 's2_packaging', 's2_packaging_cost']` | 回传通道（`cpq_tech_bridge` → `packaging_snapshot()`） |
+| `e2e00a1b2c3d` | 同上（3 键） | 同上 |
+| `71c5a1c26619` | 同上（3 键） | 同上 |
+| `c0239386c1c4`（`## 315` 本轮真跑） | `['s2_cost', 's2_route']` | **被脚本 `/wf/card/step-done` 覆盖过** |
+| `e59e1b382478`（`## 288` 引用的那张） | `['s2_cost', 's2_route']` | 同上（**推断**：那一轮跑法也用 step-done 收尾；`c0239386c1c4` 是本轮实测可知的一例） |
+
+结论：**包装这条链本来是通的**，技术侧那份投影（`s2_packaging` / `s2_packaging_cost` /
+`packaging_package`）确实写进了卡片；是那一步**后来又被 `/wf/card/step-done` 用一份只含
+`s2_cost`/`s2_route` 的负载整份替换**掉了。`## 288` 与 `## 315` 里"面板不会出现"的归因
+（缺前端按钮）不是这条现象的原因 —— 按钮缺失是另一件事（见下"仍待办"）。
+
+### 二、真因（代码级，逐条可复现）
+
+- `cpq_wf.complete_step()`（`cpq_wf.py:861`）的 UPDATE 逐字是
+  `… data_snapshot = %s::jsonb …`，入参 `snap` **直接落库**；空串或非法 JSON 时先被置成
+  `None` 再照写 —— 等于把该步已有快照**清空**；
+- 同一模块里**早就有**合并语义 `cpq_wf.merge_step_snapshot()`（`cpq_wf.py:1041`：
+  `merged[key] = value`），但**只有回传通道在用**；用户点按钮走的是替换那条；
+- 技术侧投影本身一行未动，键名与结构都对。
+
+后果：任何一次"重做 / 重放 / 补做这一步"，都会把第 2 步的包装分区与第 5 步要用的整包
+一起抹掉 —— 报价卡片第 3–5 步的「包装：定价与报价分区」跟着消失，第 5 步也落不出报价版本。
+
+### 三、本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/quote-card-step-snapshot-merge-on-complete.md`：
+  ① `/wf/card/step-done` 对该步快照必须是**合并**（负载里出现的键覆盖、未出现的**保留**），
+  与 `merge_step_snapshot()` 同一份实现；
+  ② **空负载不许清空**：空串 / `"{}"` / 非法 JSON → 保持原值；
+  ③ 幂等与乱序（重放、补做靠前的步）不许丢键，`current_step` 仍取"第一个未完成步"；
+  ④ 技术侧 3 个键名与形状逐字不变，**不许**为了让面板出现把 `packaging_package` 塞进 `FORMS`。
+- 新增红测 `tests/test_quote_card_step_snapshot_merge_red.py`（A1/A2 + B1/B2/B3 护栏）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_quote_card_step_snapshot_merge_red
+  → Ran 5 tests … FAILED (failures=2)
+```
+
+红的 2 条 = A1（`complete_step` 里没有"读现值再合并"的痕迹，仍是入参直接落库）、
+A2（写快照对空负载没有保护）；绿的 3 条护栏 = B1（`merge_step_snapshot` 的逐键合并还在）、
+B2（技术侧 3 键还在）、B3（`current_step` 仍取第一个未完成步）。
+
+### 四、仍待办（本批不落 Spec，留档）
+
+"包装整包回传"今天**只有 HTTP 路由**：`POST /api/projects/{pid}/requirement/packaging-quote/send`
+在前端 0 引用、Agent 也没有对应工具（`grep` 全仓只有路由与 `packaging_handoff.send_to_quote` 本体）。
+只点按钮的人做不出这一步，只能走 4.x/5.3 的通用回传（那条不带包装整包）。
+Spec `packaging-quote-close-loop.md` §2.1 写的"看板按钮与 Agent 工具共用"里，**看板按钮不存在** ——
+与本批的"合并语义"是两件独立的事，另批再收。
+
+### 五、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现
+（`cpq_wf.py` / `cpq_tech_bridge.py` 一行未动）、未改既有测试、未写 PG、未在 34 上写任何数据
+（全部只读 GET）、未删除任何项目或会话、未 push / MR / tag / Release / 未重启服务。
+
+## 318. 包装整包回传"有接口、没按钮"：只点前端按钮的人永远看不到卡片第 2 步的包装分区（9-22，Codex 只改 Spec / 红测 / changelog）
+
+接 `## 317` 的"仍待办"收尾：那条记的"包装回传只有 HTTP 路由、前端 0 引用、Agent 无工具"
+不是一句备注，本批把它写成可验收的 Spec + 红测。
+
+### 一、缺口（代码级，逐条可复现）
+
+- `POST /api/projects/{project_id}/requirement/packaging-quote/send` 的常量与处理器都在
+  （`tech_app/backend/main.py` 的 `PACKAGING_QUOTE_SEND_PATH` + `send_requirement_packaging_quote`），
+  写权限（`packaging_handoff.HANDOFF_WRITE_ROLES`）与缺口放行（`allow_gaps=True` + `reason`）也都在；
+  但 `packaging-quote/send` 这个字面量**只出现在后端源码 + tests + docs**，
+  `tech_app/frontend/**` 与仓库根 `*.html` **命中数 = 0**。
+- 前端确有"回传"按钮，走的是别的出口：`#crToQuote`（`tech_app/frontend/cost-review.html:152`
+  「➜ 回传销售经理继续报价」，`cost-review.js:1234`）→
+  `POST /api/projects/{pid}/cost-review/send-to-quote`（`main.py:3830`）；
+  `report-publish-result.js:143` → `POST /api/projects/{pid}/process-report/send-to-quote`（5.3）。
+- 这两条出口的正文都出自 `cost_flow.integration_quote_result()`（`cost_flow.py:469`）——
+  里面列了 `part_costs` / `parts_total` / `assembly_cost` / `cost_breakdown`，
+  **没有 `packaging_package`**，也没有去取包装整包。整包只有
+  `packaging_handoff.bridge_result()`（`packaging_handoff.py:270-275`）会装。
+- 面板 `packaging-quote-panel.js:54` 只认 `snapshot.packaging_package`，取不到就整块不渲染；
+  该脚本在 `报价首页.html:1588` 与 `确认需求解析结果.html:1000` 都已加载。
+  → **面板在，数据来不了**：只见按钮的用户点完全程，卡片第 2 步的「包装：定价与报价分区」
+  永远不出现。
+- 文档口径早已把它写成既有能力：`docs/specs/packaging-quote-close-loop.md:80`
+  「回传**只有一个入口** `packaging_handoff.send_to_quote()`：**看板按钮**与 Agent 工具共用」——
+  这颗"看板按钮"在代码里不存在，`packaging-quote-draft-and-card-visibility.md` §2
+  的人工验收第 2 条因此在按钮路径上不可达。
+
+### 二、本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/packaging-quote-send-button-entry.md`：
+  ① 前端必须有一颗"包装回传"按钮，直接调 `packaging-quote/send`；
+  ② 既有按钮出口（成本复核 / 工艺报告，共用 `integration_quote_result()`）在包装项目上
+  也必须把整包一起送出（`packaging_package`），取数只调既有 `packaging_handoff` /
+  `manufacturing_snapshot`，不许在 `cost_flow` 另拼一份；
+  ③ 写权限闭集与缺口放行口径、整包 10 段、既有 `#crToQuote` 按钮、面板取数键逐字不变。
+- 新增红测 `tests/test_packaging_quote_send_button_entry_red.py`（A1/A2 + B1–B4 护栏）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_quote_send_button_entry_red
+  → Ran 6 tests … FAILED (failures=2)
+```
+
+红的 2 条 = A1（前端 0 处引用 `packaging-quote/send`）、A2（`cost_flow.py` 里没有
+`packaging_package`）；绿的 4 条护栏 = B1（`bridge_result()` 的整包与 10 段不变）、
+B2（写权限 + 缺口放行要求写明原因不变）、B3（`cost-review/send-to-quote` + `#crToQuote` 仍在）、
+B4（面板仍只认 `snapshot.packaging_package`）。
+
+### 三、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现
+（`cost_flow.py` / `packaging_handoff.py` / `main.py` / 前端 一行未动）、未改既有测试、
+未在 34 上写任何数据、未 push / MR / tag / Release / 未部署 / 未重启服务。
+
+## 319. 全仓 Spec「状态」行对账收口：两份与事实不符的状态行改回合法字面量（9-22，Codex 只改 Spec / changelog）
+
+`tests/test_spec_status_truth_red.py`（全仓 232 份 Spec 的状态行守卫）本批从 3 红收到 1 红，
+两处都是本会话自己留下的：
+
+- `docs/specs/packaging-requirement-confirm-order-guard.md`：第 6 行写成 `状态：**已实现**（…）`，
+  不匹配守卫只认的两个合法字面量 → 改成 `状态：Spec + 红测（已实现）（…）`；
+- `docs/specs/packaging-parts-in-card-and-material-fill.md`：仍写「未实现」，但并行的实现轮已把
+  卡片第 6 步零件表与件级「补材料」入口落进工作区（`main.py` / `packaging_parts.py` / `app.js` /
+  `确认需求解析结果.html`，未提交），红测已 `Ran 13 tests … OK` → 状态行改成 `Spec + 红测（已实现）`，
+  §6 那份 `FAILED (failures=10)` 保留为写 Spec 当时的历史记录，另加 §7 记录复核结论。
+
+仍剩的 1 条红不属本会话、也不属本批：
+`packaging-box-candidate-rank-and-runnability.md` 与 `packaging-cost-write-role-single-source.md`
+声明「未实现」却没写明原因（C1），两份都不在本次改动范围内，留档待其归属会话收口。
+
+边界：只改 2 份 Spec 的状态行与 1 段 §7 复核记录 + 本 changelog；未改任何业务实现、未改测试判据、
+未 push / MR / tag / Release / 未部署。
+
+## 320. `## 316` 落地：阶段行序改成依赖顺序（图纸解析夹在「创建需求」与「确认需求」之间）+ 编号表收成唯一事实源 + 1.1 页面给了去解析图纸的入口（9-22，Codex 实现）
+
+`docs/specs/packaging-stage-order-equals-dependency.md` 的 3 条红（A1/A3/B1）已转绿，4 条护栏未动。
+
+### 一、改了什么
+
+- `tech_app/backend/services/workflow_stages.py`：`_STAGE_ROWS` 行序改成
+  `requirement-create → drawing → requirement-confirm → requirement-review → process → cost →
+  summary → report-review → report-publish`。行序 = 依赖顺序：图纸解析第 8 步 `field_write`
+  要按 `EDITABLE_STATUSES` 把字段回写进需求单，所以它必须早于 1.1 提交确认 / 1.2 通过确认 / 1.3 审核。
+  `PHASES`（5 阶段 × 13 子步骤的编号与标题）**一个字未改**。
+- `tech_app/backend/services/oc_agent.py`：`TECH_UI_STAGES` 同步成同一顺序（下一行就与
+  `workflow_stages.stage_ids()` 做相等校验，不一致会在 import 期直接 RuntimeError）。
+- 新增 `tech_app/frontend/workflow-stages.js`：前端口径的**唯一**事实源
+  （`window.CpqWorkflowStages`：`subLabel / subTitle / subPair / phases / phaseRows`）。
+  10 个加载 `workflow.js` 的页面（assembly-integration / cost-review / report-publish / report-review /
+  requirement-confirm / requirement-create / requirement-detail / requirement-review / summary /
+  tech-task）在它之前引入这个模块。
+- `workflow.js` / `requirement-create.js` / `requirement-confirm-page.js` / `report-publish-result.js`：
+  四个手抄编号表全部改成「只列阶段与子步骤号，标签从共享模块取」。`node --check` 全过；在 node 里
+  真跑 `workflow(1,'1.1')`，渲染出的 13 个子步骤标签与改动前逐字相同。
+- `requirement-create.js`：流程条下方新增「下一步：图纸解析 —— 先把原始图纸传上来解析（图纸里读出来的
+  字段会写回这张需求单），再回来提交确认；先确认/审核会把需求推离可编辑状态，解析会被挡下。」
+  + 一个指向 `index.html?stage=drawing&project=…` 的入口。
+
+### 二、实测
+
+```
+tests.test_packaging_stage_order_red                     → Ran 7 OK（原 3 红全绿）
+tests.test_tech_workflow_five_phase_naming_red           → Ran 26 OK
+tests.test_tech_unified_workflow_projection_red          → 1 红，见下
+tests.test_tech_*（112 份）                              → Ran 1594 … 5 红
+     4 红是既有存量（## 133 两条 + ## 226 一条）、1 红是本批「已记录的偏差」第 3 条
+```
+
+### 三、已记录的偏差（不改测试）
+
+1. `workflow_stages.STAGES` 是**全局唯一**的 13 行表、没有按行业分叉的第二份，红测 A1 也直接读它 ——
+   所以行序调整是全局的（对其它行业同样成立：图纸字段要回写需求单）。
+2. 只改**顺序**、不改**编号**：`tests/test_tech_workflow_five_phase_naming_red.py` 已把
+   「阶段 1 = 1.1/1.2/1.3、阶段 2 = 2.1 图纸解析」逐行写死，Spec §5.1 的「或等价编号」按此执行。
+3. `tests/test_tech_unified_workflow_projection_red.py::RequirementCompletionTest::test_confirmed_requirement_completes_confirm_and_opens_review`
+   **按设计变红**：投影的前置子步骤是从 `STAGES` 行序推出来的（`for prior in keys[:index]`），
+   行序改成依赖顺序后「1.3 审核」的前置里含「2.1 图纸解析」；该用例给的是「已确认但没解析过图纸」的
+   合成状态 —— 那正是 ## 313 的 `assert_requirement_drawing_parsed()` 要拦下的状态。旧断言编码的是被本
+   Spec 判定为 bug 的顺序，因此不动测试。
+
+### 四、边界
+
+本批只改上述后端/前端实现与 Spec 状态行/§7、本 changelog；未改任何测试；未连 PG、未写业务数据、
+未 push / MR / tag / Release / 未部署。

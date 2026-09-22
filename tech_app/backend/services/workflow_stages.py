@@ -24,14 +24,22 @@ PHASES = (
 
 # 13 个子步骤：(stage_id, 阶段号, 阶段标题, 子步骤号, 子步骤标题, 页签 view, 页面文件)。
 # process / cost 各跨 3 个子步骤（当前子步骤由页内页签决定），其余 7 个 stage 与子步骤 1:1。
+#
+# **行序 = 依赖顺序，不是阶段号顺序**（Spec `packaging-stage-order-equals-dependency.md` §2.1）：
+# 图纸解析第 8 步 `field_write` 要把图纸里读出来的字段**回写进那张需求单**，所以它必须在
+# 「1.1 创建需求（存草稿）」之后、「1.2 确认需求」之前 —— 1.1 提交确认 / 1.2 通过确认 /
+# 1.3 审核通过 都会把需求推离 `EDITABLE_STATUSES`，先做确认/审核再解析必 `blocked /
+# REQUIREMENT_NOT_EDITABLE`（实测 7/8）。用户顺着流程栏点下去就该是对的，所以这张表按
+# 「创建需求 → 图纸解析 → 确认需求 → 审核需求 → …」排。
+# 阶段号 / 阶段标题 / 子步骤号本身一个字不改（PHASES 与既有前端规范表同口径）。
 _STAGE_ROWS = (
     ("requirement-create", "1", "工艺评估需求", "1.1", "创建需求", "",
      "requirement-create.html"),
+    ("drawing", "2", "图纸解析", "2.1", "图纸解析", "", "index.html"),
     ("requirement-confirm", "1", "工艺评估需求", "1.2", "确认需求", "",
      "requirement-confirm.html"),
     ("requirement-review", "1", "工艺评估需求", "1.3", "审核需求", "",
      "requirement-review.html"),
-    ("drawing", "2", "图纸解析", "2.1", "图纸解析", "", "index.html"),
     ("process", "3", "组装与整合", "3.1", "整合图纸", "drawings",
      "assembly-integration.html"),
     ("process", "3", "组装与整合", "3.2", "参数推荐", "params",

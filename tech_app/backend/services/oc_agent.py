@@ -88,9 +88,11 @@ TECH_UI_ACTIONS = (
 )
 # 9 个内部 stage（与前端 STAGES / TECH_UI 白名单一致）。id 一律取自后端口径表
 # workflow_stages，下面这份字面表只是它的镜像，导入时逐项校验，避免两处漂移。
+# 顺序与 workflow_stages.stage_ids() 逐字一致（下一行就会校验）：行序即依赖顺序 ——
+# 图纸解析夹在「创建需求」与「确认需求」之间（Spec `packaging-stage-order-equals-dependency.md`）。
 TECH_UI_STAGES = (
-    "requirement-create", "requirement-confirm", "requirement-review",
-    "drawing", "process", "cost",
+    "requirement-create", "drawing", "requirement-confirm", "requirement-review",
+    "process", "cost",
     "summary", "report-review", "report-publish",
 )
 if TECH_UI_STAGES != workflow_stages.stage_ids():

@@ -95,12 +95,23 @@ function statusClass(status) { return ['approved','published'].includes(status) 
 /* 【5 阶段 × 13 子步骤】技术工艺流程栏的唯一口径（与 tech-workbench.js 的 STAGES /
    backend/services/workflow_stages.py 同源）。本页面的调用方仍按老的 active 1–3 与子步骤号
    传入（requirement-*.js / report-workflow.js 不在本批改动范围），下面只做口径换算。 */
+/* 流程栏口径（Spec `packaging-stage-order-equals-dependency.md` §2.3）：**编号表只有一处**
+   —— `workflow-stages.js` 的 `CpqWorkflowStages`；这里只列阶段与子步骤号（标题文案属页面文案）。 */
+function wfSubPair(no) {
+  const api = window.CpqWorkflowStages || {};
+  return typeof api.subPair === 'function' ? api.subPair(no)
+    : [String(no || ''), typeof api.subTitle === 'function' ? api.subTitle(no) : ''];
+}
+function wfSubLabel(no) {
+  const api = window.CpqWorkflowStages || {};
+  return typeof api.subLabel === 'function' ? api.subLabel(no) : String(no || '');
+}
 const WORKFLOW_PHASES = [
-  { no: 1, title: '工艺评估需求', subs: [['1.1', '创建'], ['1.2', '确认'], ['1.3', '审核']] },
-  { no: 2, title: '图纸解析', subs: [['2.1', '图纸解析']] },
-  { no: 3, title: '组装与整合', subs: [['3.1', '整合图纸'], ['3.2', '参数推荐'], ['3.3', '组装工艺']] },
-  { no: 4, title: '成本测算', subs: [['4.1', '零件成本'], ['4.2', '组装成本'], ['4.3', '汇总']] },
-  { no: 5, title: '工艺评估报告', subs: [['5.1', '汇总结果'], ['5.2', '结果审核'], ['5.3', '发布并回传报价']] },
+  { no: 1, title: '工艺评估需求', subs: [wfSubPair('1.1'), wfSubPair('1.2'), wfSubPair('1.3')] },
+  { no: 2, title: '图纸解析', subs: [wfSubPair('2.1')] },
+  { no: 3, title: '组装与整合', subs: [wfSubPair('3.1'), wfSubPair('3.2'), wfSubPair('3.3')] },
+  { no: 4, title: '成本测算', subs: [wfSubPair('4.1'), wfSubPair('4.2'), wfSubPair('4.3')] },
+  { no: 5, title: '工艺评估报告', subs: [wfSubPair('5.1'), wfSubPair('5.2'), wfSubPair('5.3')] },
 ];
 const WORKFLOW_LEGACY_PHASE = { 1: 1, 2: 2, 3: 5 };
 const WORKFLOW_LEGACY_SUB = { '1.1': '1.1', '1.2': '1.2', '1.3': '1.3', '2.1': '2.1',
