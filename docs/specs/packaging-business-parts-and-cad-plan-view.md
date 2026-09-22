@@ -261,8 +261,10 @@ CAD geometry 响应必须有稳定图元 id、图层、类型、坐标/路径和
 
 **已记录的边界（不许当成本批已做）**
 
-1. 左栏改成业务部件的**前提**是项目里已有业务部件文档；本批没有「导入权威清单」的按钮/接口
-   （Spec §3 的导入器只在服务层可用，`import_workbook()` 需要有人喂工作簿路径），演示前要先跑一次导入。
+1. 左栏改成业务部件的**前提**是项目里已有业务部件文档；`## 369` 已补上入口
+   （`POST .../packaging-business-parts/import` + 左栏「导入权威清单（业务部件）」按钮，
+   见下面 §12.1），但导入的是**服务器可见路径**上的工作簿 —— 客户资料不入库，部署机上要先把
+   工作簿放上去。
 2. 单件工艺 / 成本目前仍从几何零件入口发起；业务部件行的「单件工艺 / 成本」只给了说明文案，
    尚未按 `business_parts_id` 落到下游任务表 —— 这是 Spec §7「BOM/工艺/成本只遍历 business_parts」
    剩下的那一半。
@@ -275,3 +277,19 @@ CAD geometry 响应必须有稳定图元 id、图层、类型、坐标/路径和
 6. 本批**未**动 `tests/` 下任何红测；`test_packaging_business_parts_and_cad_plan_view_red.py` 的
    「备注行不是部件」一条由上游会话在 17:04 自行改成读 `cell(32,2)`（A 列确实是序号 29），
    本批按改后的断言实现，没有放宽任何断言。
+
+### 12.1 `## 369` 补的入口与端到端核对
+
+- `POST /api/projects/{pid}/requirement/packaging-business-parts/import`：`workbook_path`
+  或 `content_base64` + `sheet` + `bind`；写权限沿用 `BOX_MATCH_DECIDE_ROLES`，落一版业务部件
+  文档并写审计（`workflow:packaging_business_parts_imported`）。没有连续序号部件行 → 409 并点名
+  应该给哪张业务表；路径读不到 → 400。
+- 左栏：没有权威清单时插一条说明（`data-qq-business-missing` + `gap.message/action`）与
+  「导入权威清单（业务部件）」按钮（`#packagingBusinessImport`）—— 说清"下面列的是几何分量，
+  不是业务零件"，不再只是空白或默默列几百行。
+- 端到端实测（临时 `JsonMetaBackend` + 真样本工作簿）：
+  导入 28 件 → `bind_geometry` 出 `bound 2 / partial 2 / unbound 24` → `save_business_parts`
+  （版本 1）→ `load_business_parts` / `business_part_row("JWXR21-P01")` 回权威材料原文 →
+  `packaging_bom._business_parts_scope()` / `packaging_cost._business_parts_scope()` 读到
+  `business_parts_id/hash` 与件数 → `PUT geometry-binding` 改名后 `bound 3`、版本 2 且
+  `business_parts_id` 变化（下游据此判 stale）。

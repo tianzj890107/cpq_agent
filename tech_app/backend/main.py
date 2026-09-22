@@ -8,6 +8,7 @@ FastAPI 应用: 图纸解析与生成平台后端。
 """
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import hashlib
@@ -81,6 +82,7 @@ from .services import (
     packaging_drawing_flow,
     packaging_handoff,
     packaging_parts,
+    packaging_part_authority,
     packaging_route,
     packaging_semantics,
     process, product_params, production, requirement_extract, requirement_service,
@@ -7195,6 +7197,18 @@ PACKAGING_BUSINESS_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-
 PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geometry"
 PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
                                 "{part_code}/geometry-binding")
+PACKAGING_BUSINESS_PARTS_IMPORT_PATH = ("/api/projects/{pid}/requirement/"
+                                        "packaging-business-parts/import")
+
+
+class PackagingBusinessPartsImportAction(BaseModel):
+    """导入权威清单的入参（Spec §3/§5）：给服务器可见的工作簿路径，或直接给字节。"""
+
+    workbook_path: str = ""
+    content_base64: str = ""
+    sheet: str = ""
+    #: 是否顺带按尺寸做一次确定性几何绑定（默认做；绑不上的照旧是 `unbound`，不猜）。
+    bind: bool = True
 
 
 class PackagingGeometryBindingAction(BaseModel):
@@ -7229,6 +7243,65 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             "gap": packaging_parts.business_parts_gap_of(record),
             "summary": packaging_parts.summarize_business_parts(record),
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
+
+
+@app.post(PACKAGING_BUSINESS_PARTS_IMPORT_PATH)
+def import_packaging_business_parts(
+    pid: str,
+    body: PackagingBusinessPartsImportAction = Body(default=PackagingBusinessPartsImportAction()),
+    user: dict = Depends(current_user),
+):
+    """导入权威清单 → 生成一版业务部件文档（Spec §3/§5）。
+
+    这是业务部件层的**入口**：没有它，`business_parts` 永远不会出现，页面只能显示
+    "尚未形成业务部件清单"。导入是确定性的（不调模型），可以重复跑：同一份资料 → 同一个
+    `business_parts_id`（幂等）；换了资料 → 换 id，下游据此判 stale，旧几何/成本结果不删。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    path = str(body.workbook_path or "").strip()
+    raw = str(body.content_base64 or "").strip()
+    if not path and not raw:
+        raise HTTPException(400, "请给出权威清单工作簿（workbook_path 或 content_base64）")
+    try:
+        source = base64.b64decode(raw) if raw else path
+    except Exception as exc:                            # noqa: BLE001 - 入参问题要给人话
+        raise HTTPException(400, "content_base64 解不开（%s）" % type(exc).__name__)
+    try:
+        authority = packaging_part_authority.import_workbook(source,
+                                                            sheet=str(body.sheet or "") or None)
+    except FileNotFoundError:
+        raise HTTPException(400, "工作簿读不到：%s" % path)
+    except Exception as exc:                            # noqa: BLE001 - 读表失败要说清哪一步
+        raise HTTPException(409, "权威清单解析失败（%s）：%s" % (type(exc).__name__, exc))
+    parts = [row for row in (authority.get("parts") or []) if isinstance(row, dict)]
+    if not parts:
+        raise HTTPException(409, "这份工作簿里没有连续序号的部件行："
+                                 "请确认给的是「%s」这张业务表"
+                            % (str(body.sheet or "") or packaging_part_authority.DEFAULT_SHEET_NAME))
+    geometry = packaging_parts.load_parts(pid)
+    plan = packaging_parts.bind_geometry(parts,
+                                        packaging_parts.geometry_evidence_of(geometry or {})["components"]) \
+        if body.bind else None
+    saved = packaging_parts.save_business_parts(pid, packaging_parts.business_parts_document(
+        authority, geometry, bindings=plan,
+        legacy_parts_id=(geometry or {}).get("parts_id") if isinstance(geometry, dict) else ""))
+    store.audit(pid, "workflow:packaging_business_parts_imported", {
+        "business_parts_id": saved.get("business_parts_id"),
+        "business_part_total": (saved.get("stats") or {}).get("business_part_total"),
+        "bound_total": (saved.get("stats") or {}).get("bound_total"),
+        "authority_file_hash": (saved.get("source") or {}).get("authority_file_hash"),
+        "skipped_total": (authority.get("stats") or {}).get("skipped_total"),
+        "by": str(user.get("username") or ""),
+    })
+    result = _business_parts_body(pid, saved)
+    result["import_stats"] = dict(authority.get("stats") or {})
+    result["import_skipped"] = list(authority.get("skipped") or [])
+    result["authority"] = {"file": (authority.get("source") or {}).get("file", ""),
+                           "sheet": (authority.get("source") or {}).get("sheet", ""),
+                           "code_prefix": (authority.get("source") or {}).get("code_prefix", "")}
+    return result
 
 
 @app.get(PACKAGING_BUSINESS_PARTS_READ_PATH)

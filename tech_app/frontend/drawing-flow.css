@@ -235,3 +235,34 @@
   stroke-width: 2.5;
   filter: drop-shadow(0 0 2px rgba(31, 111, 235, 0.6));
 }
+
+/* 有几何分量但还没有业务部件清单时的左栏说明（Spec §2 第 5 条）：说清"这是几何证据，
+   不是业务零件"，并给导入权威清单的出口 —— 绝不用几百个几何分量冒充业务零件。 */
+.packaging-business-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 2px 10px;
+  border-bottom: 1px dashed var(--border, #e5e7eb);
+}
+
+.packaging-business-missing-text {
+  font-size: 12px;
+  color: var(--warning, #b7791f);
+}
+
+.packaging-business-missing-action {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}
+
+.packaging-business-head {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  padding: 4px 2px;
+}
+
+.packaging-business-part .part-note {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}

@@ -1988,6 +1988,61 @@ let packagingPartsShown = [];
 // 业务部件行（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1/4/6 条）：
 // 有权威清单时左栏就是这 28 件，绝不是几百个几何分量；未绑定不等于删除 —— 照旧列出，
 // 只把"尚未在 CAD 图中定位"写在行上。
+// 没有权威清单时的左栏出口（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 5 条）：
+// 必须说清"已识别几何区域 n 个，尚未形成业务部件清单"，并给一条补数据的路子 ——
+// 不许把几百个几何分量冒充成业务零件，也不许只留一片空白。
+function packagingBusinessImportNote(doc) {
+  if (!doc || packagingBusinessPartRows(doc).length) return null;
+  const gap = (doc && doc.gap) || {};
+  const wrap = document.createElement("div");
+  wrap.className = "packaging-business-missing";
+  wrap.dataset.qqBusinessMissing = "1";
+  const text = document.createElement("div");
+  text.className = "packaging-business-missing-text";
+  text.textContent = gap.message
+    || "已识别的几何区域还不是业务部件清单：下面列的是几何分量，不是业务零件。";
+  const action = document.createElement("div");
+  action.className = "packaging-business-missing-action";
+  action.textContent = gap.action || "导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本";
+  const button = document.createElement("button");
+  button.id = "packagingBusinessImport";
+  button.className = "btn btn-secondary";
+  button.type = "button";
+  button.textContent = "导入权威清单（业务部件）";
+  button.addEventListener("click", () => { importPackagingBusinessParts(); });
+  wrap.appendChild(text);
+  wrap.appendChild(action);
+  wrap.appendChild(button);
+  return wrap;
+}
+
+// 导入权威清单 → 落一版业务部件文档（Spec §3/§5）：确定性解析，可重复跑（同资料同 id）。
+async function importPackagingBusinessParts() {
+  if (!currentProject) return null;
+  const path = window.prompt("权威清单工作簿在服务器上的路径（.xlsx）", "");
+  if (!path) return null;
+  try {
+    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
+      + `packaging-business-parts/import`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workbook_path: path }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = (payload && payload.detail) || {};
+      const message = typeof detail === "string" ? detail : String(detail.message || "");
+      throw new Error(message || `导入权威清单失败（HTTP ${res.status}）`);
+    }
+    currentPackagingBusinessParts = payload;
+    renderTree(currentIR || {});
+    await loadPackagingCadPlan().catch(() => null);
+    return payload;
+  } catch (error) {
+    window.alert(String((error && error.message) || error));
+    return null;
+  }
+}
+
 function packagingBusinessPartRows(doc) {
   const rows = (doc && Array.isArray(doc.business_parts)) ? doc.business_parts : [];
   return rows.filter(row => row && typeof row === "object");
@@ -3201,9 +3256,17 @@ function renderTree(ir) {
     const preconditions = (currentDrawingFlowState && currentDrawingFlowState.preconditions) || [];
     tree.classList.toggle("empty-state", !rows.length);
     if (!rows.length) {
-      tree.textContent = packagingPartsEmptyText(doc, preconditions);
+      const emptyNote = packagingBusinessImportNote(currentPackagingBusinessParts);
+      if (emptyNote) tree.appendChild(emptyNote);
+      const emptyText = document.createElement("div");
+      emptyText.textContent = packagingPartsEmptyText(doc, preconditions);
+      tree.appendChild(emptyText);
       return;
     }
+    // 有几何分量但**还没有**业务部件清单：先说清"下面这些是几何证据，不是业务零件"，
+    // 并给一个导入权威清单的出口（Spec §2 第 5 条）。
+    const missingNote = packagingBusinessImportNote(currentPackagingBusinessParts);
+    if (missingNote) tree.appendChild(missingNote);
     // 覆盖率行 + 批量入口：三态文案由 packagingSolidCoverageText() 给（未算过 = "未生成"）。
     const coverage = document.createElement("div");
     coverage.className = "packaging-solid-coverage";

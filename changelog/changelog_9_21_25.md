@@ -15905,3 +15905,46 @@ CAD IR 的连通分量被直接当成"零件"：酒盒真图 402 个分量、过
   `packaging_route_bom_version_pinning::f2`），本批未新增红。
 - `tests.test_spec_status_truth_red` → `Ran 7 tests OK`；`node --check tech_app/frontend/app.js` 通过。
 - 本批未动 `tests/` 下任何红测，未 commit 别人的工作区改动，未 push / 部署。
+
+## 369. 补 `packaging-business-parts-and-cad-plan-view` 的导入入口：`POST .../packaging-business-parts/import` + 左栏「导入权威清单」按钮（9-22，Codex 实现）
+
+### 一、缺口
+
+`## 368` 把业务部件层（导入器 + 业务/几何两层文档 + 平面图查看器）落好了，但**没有任何入口能生成
+业务部件文档** —— `import_workbook()` 只在服务层可用，页面上没有按钮也没有接口。后果是：部署后
+`business_parts` 永远是空的，左栏只能列几何分量、成本/BOM 只能读 `gap=business_parts_missing`，
+整层等于没接线（Spec §12 边界第 1 条已记账）。
+
+### 二、改了什么
+
+- `tech_app/backend/main.py`：新增 `PACKAGING_BUSINESS_PARTS_IMPORT_PATH` =
+  `POST /api/projects/{pid}/requirement/packaging-business-parts/import`
+  （`PackagingBusinessPartsImportAction`：`workbook_path` / `content_base64` / `sheet` / `bind`）。
+  写权限沿用 `packaging_match.BOX_MATCH_DECIDE_ROLES`；缺入参 400、base64 解不开 400、路径读不到 400、
+  解析失败 409、没有连续序号部件行 → 409 并点名「应是哪张业务表」；成功后落一版业务部件文档
+  （幂等：同资料同 `business_parts_id`）并写审计 `workflow:packaging_business_parts_imported`
+  （id / 件数 / 已定位数 / 权威文件 hash / 跳过的行数 / 谁导的）。响应在既有业务部件体上追加
+  `import_stats` / `import_skipped` / `authority`。
+- `tech_app/frontend/app.js`：新增 `packagingBusinessImportNote()` 与 `importPackagingBusinessParts()`；
+  没有权威清单时左栏插一条说明（`data-qq-business-missing`，文案取自 `gap.message` / `gap.action`）
+  与按钮 `#packagingBusinessImport`，导入成功后重画左栏并刷新 CAD 平面图。空态（连几何分量都没有）
+  也带上这条说明与出口，不再只给一句话。
+- `tech_app/frontend/drawing-flow.css`：新增 `.packaging-business-missing*` / `.packaging-business-head`
+  / `.packaging-business-part .part-note` 样式（只新增样式，不新增设计变量）。
+
+### 三、端到端核对（临时 `JsonMetaBackend` + 真样本工作簿，非单测）
+
+导入 → `business_parts 28`、`bound 2 / partial 2 / unbound 24`；`business_part_row("JWXR21-P01")`
+回权威材料原文「225G太阳铜版底PET光银」；`packaging_bom._business_parts_scope()` 与
+`packaging_cost._business_parts_scope()` 都读到 `business_parts_id/hash`（available=True）；
+`set_geometry_binding("JWXR21-P03", ["cmp:1"])` 后 `bound 3`、落第 2 版且 `business_parts_id` 变化。
+
+### 四、复跑
+
+- `tests.test_packaging_business_parts_and_cad_plan_view_red` → 14 OK；
+  相邻 `test_drawing_flow_parse_terminal_signal_red` / `test_packaging_parts_extraction_red` /
+  `test_packaging_parts_panel_red` / `test_packaging_parts_3d_red` /
+  `test_drawing_board_two_column_parts_and_3d_red` 一起 `Ran 123 tests OK`。
+- packaging 全域 `Ran 1530 tests FAILED (failures=5, skipped=8)` —— 与 `## 368` 同样的 5 条既有挂账，
+  本批未新增红；`node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+- 仍然只有服务器可见路径上的工作簿能导入（客户资料不入库）；未 push / 未部署 / 未动他人工作区改动。
