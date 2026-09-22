@@ -323,16 +323,25 @@ def bridge_result(package: dict) -> dict:
 #: 回传动作固定审计名（Spec `packaging-handoff-audit-trail.md` §2.1）。
 AUDIT_SENT_ACTION = "workflow:packaging_handoff_sent"
 
+#: 留痕没落下时的稳定披露码（Spec `packaging-handoff-audit-availability.md` §C2）：
+#: 它只描述"审计写不进去"，**不是**回传失败的码 —— 留痕失败照样回传成功。
+AUDIT_UNAVAILABLE_CODE = "PACKAGING_HANDOFF_AUDIT_UNAVAILABLE"
+
 
 def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: str,
                         handoff_no: str, version_no: int, already_sent: bool,
                         cost_result_version: str, has_gaps: bool, quote_session_id: str,
-                        by: str) -> None:
+                        by: str) -> Dict[str, Any]:
     """给"把哪一版推给了报价侧"留一条项目审计（Spec §2.1）。
 
     载荷只放回传事实（九键），绝不带售价 / 毛利字段（`_FORBIDDEN_COST_KEYS`），也不
     灌 `user` / `token` / 整份交接包；写审计失败**不得**改变回传结果、不得回滚已落库的
     交接记录 —— 留痕是留痕，闸门是闸门。
+
+    返回值是**留痕可用性**的稳定披露体（Spec `packaging-handoff-audit-availability.md`
+    §C1，键集固定五个）：`{"attempted", "ok", "action", "code", "message"}`。
+    写成功 `ok=True` / 空码空消息；写失败 `ok=False` / `AUDIT_UNAVAILABLE_CODE` /
+    message 含异常类名与原文本 —— 但**不抛**（留痕不是闸门）。
     """
     payload = {
         "requirement_no": _text(requirement_no),
@@ -347,10 +356,17 @@ def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: 
     }
     for key in _FORBIDDEN_COST_KEYS:
         payload.pop(key, None)
+    disclosure: Dict[str, Any] = {"attempted": True, "ok": True,
+                                  "action": AUDIT_SENT_ACTION, "code": "", "message": ""}
     try:
         store.audit(project_id, AUDIT_SENT_ACTION, payload)
-    except Exception:  # noqa: BLE001 — 留痕失败不许把回传判成失败
-        pass
+    except Exception as exc:  # noqa: BLE001 — 留痕失败不许把回传判成失败
+        detail = _text(exc)
+        disclosure["ok"] = False
+        disclosure["code"] = AUDIT_UNAVAILABLE_CODE
+        disclosure["message"] = ("%s: %s" % (type(exc).__name__, detail)) if detail \
+            else type(exc).__name__
+    return disclosure
 
 
 # --------------------------------------------------------------------------- #
@@ -439,7 +455,7 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         if _text(row.get("package_fingerprint")) == fingerprint:
             outcome = _reuse_outcome(row, package)
             # 同包重发也是动作，留痕必须写，且写的是**被复用的那一行**（Spec §2.1）。
-            _audit_handoff_sent(
+            audit = _audit_handoff_sent(
                 pid, requirement_no=_text(row.get("requirement_no")) or req_no,
                 scenario_code=_text(row.get("scenario_code")) or scenario_code,
                 handoff_no=outcome.get("handoff_no"), version_no=outcome.get("version_no"),
@@ -448,6 +464,8 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
                 has_gaps=bool(row.get("has_gaps")),
                 quote_session_id=outcome.get("quote_session_id"),
                 by=_text(user.get("username")))
+            # 留痕的可用性跟着结果一起回（Spec `packaging-handoff-audit-availability.md` §C3）。
+            outcome["audit"] = audit
             return outcome
     version_no = max([int(row.get("version_no") or 0) for row in rows] or [0]) + 1
 
@@ -500,12 +518,13 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         "created_at": now,
     }
     da_repo.save_packaging_handoff(record)
-    _audit_handoff_sent(pid, requirement_no=req_no, scenario_code=scenario_code,
-                        handoff_no=handoff_no, version_no=version_no, already_sent=False,
-                        cost_result_version=_text(source.get("result_version")),
-                        has_gaps=has_gaps,
-                        quote_session_id=_text(result.get("quote_session_id")),
-                        by=_text(user.get("username")))
+    audit = _audit_handoff_sent(pid, requirement_no=req_no, scenario_code=scenario_code,
+                                handoff_no=handoff_no, version_no=version_no,
+                                already_sent=False,
+                                cost_result_version=_text(source.get("result_version")),
+                                has_gaps=has_gaps,
+                                quote_session_id=_text(result.get("quote_session_id")),
+                                by=_text(user.get("username")))
     return {
         "handoff_no": handoff_no,
         "handoff_id": handoff_id,
@@ -520,6 +539,8 @@ def send_to_quote(project_id: str, requirement_no: str = "", *, scenario: Option
         "package": package,
         "handoff": dict(handoff),
         "bridge": result,
+        # 留痕的可用性跟着结果一起回（Spec `packaging-handoff-audit-availability.md` §C3）。
+        "audit": audit,
     }
 
 

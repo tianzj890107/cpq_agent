@@ -17328,3 +17328,35 @@ tests.test_packaging_semantics_ir_read_failure_red   Ran 8  FAILED (failures=5) 
 ```
 
 未起服务、未发 HTTP、未连 PG / SQLite、未建项目、未写任何文件、未 push / MR / tag / Release / 未部署。
+
+## 404. 落地 `packaging-handoff-audit-availability`：交接留痕写不下去时调用方不许看不出来（15 OK，红基 9 红）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_handoff.py`：
+
+- 常量区新增 `AUDIT_UNAVAILABLE_CODE = "PACKAGING_HANDOFF_AUDIT_UNAVAILABLE"`（与
+  `AUDIT_SENT_ACTION` 并列）——它只描述"审计写不进去"，不是回传失败的码。
+- `_audit_handoff_sent()` 的返回类型从 `-> None` 改为 `-> Dict[str, Any]`：尾部
+  `try/except Exception` 不再 `pass` 掉了事，而是回一个键集固定的披露体
+  `{"attempted": True, "ok", "action", "code", "message"}`；写成功 `ok=True` / 空码空消息，
+  写失败 `ok=False` / `AUDIT_UNAVAILABLE_CODE` / message 含异常类名与原文本（原文为空时只给
+  类名）。**仍然不抛**、仍然不动九键载荷与 `_FORBIDDEN_COST_KEYS` 的 pop —— 本 Spec 只补
+  "读得出来"，`packaging-handoff-audit-trail.md` §2.1「留痕不是闸门」的裁决一个字未改。
+- `send_to_quote()` 的**两条**路径都把披露交给调用方：复用路径
+  `outcome["audit"] = audit`（复用也是动作，写的仍是被复用那一行），首次回传路径返回体新增
+  `"audit"` 键。既有 12 键（`handoff_no` / `handoff_id` / `version_no` / `already_sent` /
+  `industry` / `handoff_kind` / `quote_session_id` / `business_case_id` / `package_fingerprint` /
+  `package` / `handoff` / `bridge`）逐字不变；审计失败时 `already_sent` / `handoff_no` /
+  `version_no` / 落库记录与"写成功"时逐字相同。`audit` 不进 `package_fingerprint()` /
+  `_reuse_outcome()` / `_guard_gaps()`；`main.py` 的 `{"handoff": result}` 原样透传未改一行。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_handoff_audit_availability_red   Ran 15  FAILED (failures=7, errors=2) → Ran 15  OK
+  （红基 9 条：A1 A2 A3 A4 A5 / B1 B2 B3 B4；护栏 B5 与 C1–C5 六条始终绿）
+不回归：handoff_audit + handoff_input_drift + quote_send_recovery + quote_close_loop
+        Ran 122  FAILED (failures=1)  ← 唯一一条是既有挂账 quote_send_recovery::C1（夹具自遮挡，已在
+        `packaging-quote-send-recovery.md` §2.5 记账，本批未碰）
+```
+
+未改 `tests/` 下任何文件、未改路由、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
