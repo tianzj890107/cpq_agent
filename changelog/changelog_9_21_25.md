@@ -15622,3 +15622,49 @@ integration_send_to_quote` 也是写的。后果：回传后项目审计里查�
   看不出来；本批红测不覆盖该分支，记在 Spec §5.3。
 - 只追加不回填：本批之前发出的交接在审计里仍查不到。未 push / 未建 MR / 未 tag / 未部署 /
   未连库 / 未写生产数据。
+
+## 363. 落地 `packaging-cost-route-version-read-failure`：成本读侧的路线轴三态（读到了 / 确实没有 / 读不到）（10 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+`packaging_cost._upstream_route_version()` 的 `except Exception: return ""` 把"读失败"与"确实没有
+确认版本"折成同一个空串，`_input_drift()` 再拿这个空串去和存的 `route_version` 比：
+探测一挂 → 与存的那一版不等 → `stale_reasons` 含 `route_reconfirmed`（前端说"工艺路线已重新确认"），
+PE1 会为一个根本没发生的重新确认白重算一次成本；反过来存的那一版本来就是空串时，两边都空 →
+一个原因都不报、`stale=false`，"比较不了"被伪装成"没问题"。同一函数里 BOM 那条轴早有
+`bom_unavailable` 把这两件事分开，路线轴一个都没有。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_cost.py`
+  - 新增 `_route_probe(project_id, requirement_no) -> (version, unavailable)`：三态两两可分，
+    只经 `packaging_route.route_versions()` 一个入口；
+  - `_upstream_route_version(pid, req_no, *, probe=False)`：缺省仍返回那一版字符串（读挂 → `""`），
+    计算侧 `source_versions` 口径逐字不变；`probe=True` 给二元组；
+    新增 `_route_version_and_availability()` 做读侧适配（打桩只给字符串时按"读到了"处理）；
+  - `load_cost()` 两条出口都挂 `route_unavailable`（没算过 → `{}`，键必须存在）；
+  - `_input_drift(..., route_unavailable=None)`：`route_unavailable` 非空 → 跳过
+    `route_reconfirmed` 比对；读**成功**但当前无确认版本 → 口径不变（照旧按"对不上"报）；
+    BOM 那两条轴与 `provenance_missing` / `built=false` 逐字未动。
+- `tech_app/frontend/requirement-confirm.js`：新增 `pcRouteUnavailableBanner(record)`
+  （钩子 `data-pc-route-unavailable`，文案照 `pcBomUnavailableBanner()`：
+  "暂时读不到当前工艺路线版本（<reason>），无法判断这份成本是否还跟得上；这不代表输入没变。"），
+  插在 BOM 那条之后、`PC_STALE_REASONS` 一个字没动（"读不到"不是"变了"）。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_cost_route_version_read_failure_red
+# Ran 10 tests ... OK（N1/N3/N4/N6/N8 由红转绿；N2/N5/N7/N7b/N9 五条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_cost_input_version_pinning_red \
+    tests.test_packaging_cost_engine_red tests.test_packaging_route_bom_version_pinning_red
+# Ran 102 tests, 1 failure = route_bom_version_pinning::F2（## 356 已挂账的夹具哨兵指纹缺陷）
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 四、边界
+
+- 读侧路线版本会被探两次（`_route_probe()` 一次 + `_upstream_route_version()` 缺省路径一次），
+  是为了让既有打桩缝继续生效而刻意保留的双读，只读不写，记在 Spec §5.3。
+- 不许现算 / 现写盘 / 调模型 / 联网；不改路线侧任何文件；未 push / 未建 MR / 未 tag / 未部署 /
+  未连库 / 未写生产数据。

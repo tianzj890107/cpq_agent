@@ -872,6 +872,13 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (!flag.code) return '';
     return `<div class="pc-warning" data-pc-bom-unavailable="${pcEsc(flag.code)}">暂时读不到当前 BOM${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，无法判断这份成本是否还跟得上；这不代表输入没变。</div>`;
   }
+  // 路线那条轴与 BOM 那条轴各自独立披露（Spec `packaging-cost-route-version-read-failure.md` §2.2）：
+  // "读不到当前路线版本"不是"路线重新确认过"，不许混进 PC_STALE_REASONS 那张"变了"的人话表。
+  function pcRouteUnavailableBanner(record) {
+    const flag = (record || {}).route_unavailable || {};
+    if (!flag.code) return '';
+    return `<div class="pc-warning" data-pc-route-unavailable="${pcEsc(flag.code)}">暂时读不到当前工艺路线版本${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，无法判断这份成本是否还跟得上；这不代表输入没变。</div>`;
+  }
   /* 回传记录的输入漂移（Spec `packaging-handoff-input-drift-disclosure.md` §2.3）：
      "这一版回传是按哪一版成本发的、现在成本变了没有"必须在成本面板上说一句 —— 不许让人觉得
      旧回传还是当前有效。 */
@@ -918,6 +925,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pc-hint">逐部件 × 逐成本类别；缺料价 / 缺费率 / 缺工时一律出「待询价」缺口，合计不含该金额。本批只出成本，不出售价 / 利润（第 8 批）。</div>
       ${pcStaleBanner(record)}
       ${pcBomUnavailableBanner(record)}
+      ${pcRouteUnavailableBanner(record)}
       ${pcHandoffDriftBanner(handoff)}
       ${head}${summary}${totals}
       ${gapLines}

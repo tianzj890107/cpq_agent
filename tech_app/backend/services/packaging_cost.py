@@ -2446,7 +2446,7 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     """读回成本测算 + 24 类别 + 10 分组 + 缺口；没算过时 `built=false`，不报错。"""
     req_no = _resolve_requirement_no(project_id, requirement_no)
     row = da_repo.load_packaging_cost(project_id, req_no, _text(scenario))
-    upstream = _upstream_route_version(project_id, req_no)
+    upstream, route_unavailable = _route_version_and_availability(project_id, req_no)
     if not row:
         # 「还没算」不是「过期」（Spec `packaging-cost-input-version-pinning.md` §2.2 末条）：
         # 这条路径不许报 `provenance_missing`，也不许给 stale —— 除了三个新增键，逐字不变。
@@ -2459,7 +2459,9 @@ def load_cost(project_id: str, requirement_no: str = "", *,
              "report_groups": {name: 0.0 for name in REPORT_GROUPS},
              "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,
              "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0,
-             "stale": False, "stale_reasons": [], "bom_unavailable": {}})
+             "stale": False, "stale_reasons": [], "bom_unavailable": {},
+             # 「当前路线版本读不到」与「确实没有确认版本」分开（Spec §2.1）：没算过也要有键。
+             "route_unavailable": dict(route_unavailable or {})})
     items = da_repo.load_packaging_cost_items(row["estimate_id"])
     result = _rehydrate_with_readiness(_rehydrate(row, items))
     # 输入版本的埋点（Spec `packaging-cost-input-version-pinning.md` §2.2）：读侧**只读存的
@@ -2468,26 +2470,31 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     stored = _loads(row.get("source_versions_json"), {})
     stored = dict(stored) if isinstance(stored, dict) else {}
     result["source_versions"] = stored
+    result["route_unavailable"] = dict(route_unavailable or {})
     result["stale"], result["stale_reasons"], result["bom_unavailable"] = _input_drift(
-        project_id, req_no, stored, upstream)
+        project_id, req_no, stored, upstream, route_unavailable)
     return result
 
 
 def _input_drift(project_id: str, requirement_no: str, stored: dict,
-                 live_route_version: str) -> tuple:
+                 live_route_version: str, route_unavailable: Optional[dict] = None) -> tuple:
     """读侧比对「算时记下的输入」与「当前输入」（Spec §2.2）：只报事实，绝不重算成本。
 
     - `provenance_missing`：这份成本单没有 `source_versions_json`（本批之前算的）；
     - `route_reconfirmed`：当前确认路线版本 ≠ 存的 `route_version`；
     - `bom_rebuilt`：当前 BOM 指纹 ≠ 存的 `bom_hash`；
     - `bom_unavailable`：当前 BOM **比较不了**（抛异常 / 返回空，或存的没有指纹）——
-      "比较不了" ≠ "变了"，所以此时**不给** `bom_rebuilt`。
+      "比较不了" ≠ "变了"，所以此时**不给** `bom_rebuilt`；
+    - 路线那条轴同一条纪律（Spec `packaging-cost-route-version-read-failure.md` §2.1）：
+      `route_unavailable` 非空时**不给** `route_reconfirmed`（读不到不是"变了"）；读**成功**
+      但当前没有确认版本时口径不变（照旧按"对不上"报，`route_versions()` 只增不改）。
     """
     if not stored:
         return False, ["provenance_missing"], {}
     reasons: list = []
-    if _text(stored.get("route_version")) != _text(live_route_version):
-        reasons.append("route_reconfirmed")
+    if not route_unavailable:
+        if _text(stored.get("route_version")) != _text(live_route_version):
+            reasons.append("route_reconfirmed")
     stored_hash = _text(stored.get("bom_hash"))
     unavailable: dict = {}
     if not stored_hash:
@@ -2506,17 +2513,49 @@ def _input_drift(project_id: str, requirement_no: str, stored: dict,
     return bool(reasons), reasons, unavailable
 
 
-def _upstream_route_version(project_id: str, requirement_no: str) -> str:
-    """成本照着哪一版确认路线算的；读不到就空串，绝不现编。"""
+def _route_probe(project_id: str, requirement_no: str) -> tuple:
+    """探测当前确认路线版本，返回 `(version, unavailable)`。
+
+    三态两两可分（Spec `packaging-cost-route-version-read-failure.md` §2.1）：
+      · 读到了 → `("route:v3", {})`；
+      · 读到了、但当前一条确认版本都没有 → `("", {})`（"确实没有"，不是"读不到"）；
+      · 读挂 → `("", {"code": "route_unavailable", "reason": "<异常类名>"})`。
+    只经 `packaging_route.route_versions()` 一个入口，绝不绕 `da_repo`。
+    """
     try:
         from tech_app.backend.services import packaging_route as _route_mod
         versions = _route_mod.route_versions(project_id, requirement_no) or []
-    except Exception:
-        return ""
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return "", {"code": "route_unavailable", "reason": type(exc).__name__}
     if not versions:
-        return ""
+        return "", {}
     latest = versions[-1] if isinstance(versions[-1], dict) else {}
-    return str(latest.get("version") or "")
+    return str(latest.get("version") or ""), {}
+
+
+def _upstream_route_version(project_id: str, requirement_no: str, *,
+                            probe: bool = False):
+    """成本照着哪一版确认路线算的；读不到就空串，绝不现编（计算侧口径逐字不变）。
+
+    `probe=True` 时返回 `(version, unavailable)` —— 读侧要分开"读不到"与"确实没有"，
+    缺省仍是那一版字符串。
+    """
+    version, unavailable = _route_probe(project_id, requirement_no)
+    if probe:
+        return version, unavailable
+    return version
+
+
+def _route_version_and_availability(project_id: str, requirement_no: str) -> tuple:
+    """读侧要的那一份：`(version, unavailable)`。
+
+    版本仍经 `_upstream_route_version()` 取（同一模块属性，可被既有测试打桩），
+    缺省路径（打桩只给字符串）按"读到了"处理。
+    """
+    probed = _upstream_route_version(project_id, requirement_no, probe=True)
+    if isinstance(probed, tuple) and len(probed) == 2:
+        return _text(probed[0]), dict(probed[1] or {})
+    return _text(probed), {}
 
 
 def cost_items(estimate_id: str) -> list:
