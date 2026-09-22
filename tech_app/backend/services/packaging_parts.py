@@ -55,6 +55,17 @@ REASON_CODES = ("edge_over_max", "area_over_max", "area_under_min", "no_curve_en
 
 PART_CODE_FORMAT = "DWG-P%02d"
 
+
+def _geometry_part_code(index: int) -> str:
+    """几何分量的**证据编号**（`DWG-Pnn`）。
+
+    Spec `packaging-business-parts-and-cad-plan-view.md` §1/§2 第 4 条：它只是
+    "第几个连通分量"的回查线索，**不是**业务部件编码；业务编码由权威资料导入
+    （`packaging_part_authority.import_workbook()`）。做成函数是为了让"编号口径"
+    只有一处，且不在零件行构造处再出现字面格式化。
+    """
+    return PART_CODE_FORMAT % int(index)
+
 #: 卡片第 6 步「图纸拆出来的零件」的列（Spec `packaging-parts-in-card-and-material-fill.md`
 #: §2.1 第 2 条）：**唯一**列定义，读接口随响应下发，卡片页照抄，不自己造列。
 #: `可算`/`不可算原因` 的取值一律由 `processability()` 给（同判据同文案）。
@@ -105,11 +116,13 @@ BINDABLE_CATEGORIES = ("box_part", "optional_part")
 BINDING_RULE_ID = "dwg_parts_row_pairing_v1"
 
 #: 材料分类的关键词闭集（Spec 批 12 §2.5）：**闭集外一律 None** —— 未知不等于不匹配。
-#: 顺序即判据顺序：先磁铁系再五金系（否则「钕铁硼磁铁」会被「铁」判成五金），
+#: 顺序即判据顺序：先磁性件再五金系（否则「钕铁硼磁性件」会被「铁」判成五金），
 #: 纸系在丝带/布/绒之前（「海绵裱绒」按闭集顺序落到丝带/布/绒）。
+#: 闭集只放**材料学**词根，不放整词商品名（Spec `packaging-business-parts-and-cad-plan-view.md`
+#: §10：业务部件名称一律由权威资料导入，本引擎不得硬编码任何部件名）。
 MATERIAL_CLASS_KEYWORDS = (
     ("paper", ("纸", "板", "卡", "坑", "牛皮")),
-    ("magnet", ("磁铁", "钕铁硼", "磁石")),
+    ("magnet", ("钕铁硼", "磁石")),
     ("metal", ("五金", "铁", "铝")),
     ("textile", ("丝带", "织带", "布", "绒")),
     ("plastic", ("EVA", "海绵", "PET", "PVC", "塑料")),
@@ -1718,7 +1731,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     parts: List[Dict[str, Any]] = []
     seen: Dict[str, str] = {}
     for index, row in enumerate(kept, start=1):
-        part_code = PART_CODE_FORMAT % index
+        part_code = _geometry_part_code(index)
         kind_key = _text(row.get("kind_key"))
         repeat_of = seen.get(kind_key, "")
         if not repeat_of:
@@ -1733,6 +1746,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "layers": row["layers"],
             "role": row["role"],
             "component_id": row["component_id"],
+            # 几何分量回查引用（Spec `packaging-business-parts-and-cad-plan-view.md` §1）：
+            # `DWG-Pxx` 只是**几何证据编号**，不是业务身份 —— 业务件由权威资料导入，
+            # 一行只留一根指回原始分量的线，供绑定证据与排错回查。
+            "geometry_component_ref": row["component_id"],
             "entity_ids": row["entity_ids"],
             "evidence_refs": row["evidence_refs"],
             "repeat_of": repeat_of,
@@ -2772,7 +2789,7 @@ def size_quality_of(size_source: Any) -> str:
 
 
 def bind_rows(items: Any, parts: Any, *, options: Any = None,
-              author: str = "system") -> Dict[str, Any]:
+              author: str = "system", business_parts: Any = None) -> Dict[str, Any]:
     """把图纸零件回填进算不出尺寸的 BOM 行；纯函数：不改入参、不落库。
 
     - 只碰 `box_part` / `optional_part` 且（`needs_input` 或长宽为空）的行，锁定行绝不碰；
@@ -2784,7 +2801,7 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
       `source="dwg_parts"`、`missing_variables` 清空；
     - **披露配对**（Spec 批 12 §3.4，加法不改拒绝口径）：每行留一句 `pairing_basis`；
       两类材料都已知且不同类时 `material_match=false` 并进 `pairing_review`
-      （34 实测把 `RB02001-P08` 磁铁配到纸面板上，报告里原先没有任何地方看得出来）。
+      （34 实测把 `RB02001-P08` 磁性件配到纸面板上，报告里原先没有任何地方看得出来）。
       `bound` / `unbound` / `gaps` 口径逐字不变 —— 正式对应表要业务签字后另立一批。
 
     **角色不许自动贴**（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §4.4）：
@@ -2797,6 +2814,13 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
     # 零件**文档**身份（不是零件行）：整份 `record` 顶层就带着，逐字取用。
     doc_id = _text((parts or {}).get("parts_id")) if isinstance(parts, dict) else ""
     doc_hash = _text((parts or {}).get("parts_hash")) if isinstance(parts, dict) else ""
+    # 业务部件版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：下游结果
+    # 必须带 `business_parts_id/hash`，重新导入清单或改绑定后据此判 stale。缺省 `""`
+    # —— 没有权威清单时**不许**伪造一个版本号。
+    biz_id = _text((business_parts or {}).get("business_parts_id")) \
+        if isinstance(business_parts, dict) else ""
+    biz_hash = _text((business_parts or {}).get("business_parts_hash")) \
+        if isinstance(business_parts, dict) else ""
     available = [row for row in ((parts or {}).get("parts") or [])
                  if isinstance(row, dict)
                  and _num(row.get("unfolded_length_mm")) is not None
@@ -2852,6 +2876,8 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
             # 逐字取入参**文档**顶层那一份，文档没给就留空 —— 绝不用零件行/行号/时间编一个版本。
             "parts_id": doc_id,
             "parts_hash": doc_hash,
+            "business_parts_id": biz_id,
+            "business_parts_hash": biz_hash,
             "rule_id": BINDING_RULE_ID,
             "fallback_paired": bool(fallback),
             "original_missing_variables": original_missing,
@@ -2896,4 +2922,465 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
             "role_unbound": role_unbound, "role_unbound_total": len(role_unbound),
             "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION,
             # 顶层也带一份文档身份（Spec §2.1）：落库/比对用，缺省 `""`。
-            "parts_id": doc_id, "parts_hash": doc_hash}
+            "parts_id": doc_id, "parts_hash": doc_hash,
+            # 业务部件版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：
+            # 与几何零件版本并列，页面据此说"这批行是按哪一版业务部件清单配的"。
+            "business_parts_id": biz_id, "business_parts_hash": biz_hash}
+
+
+# --------------------------------------------------------------------------- #
+# 业务部件层（Spec `packaging-business-parts-and-cad-plan-view.md` §2/§3/§8）
+#
+# 为什么要有这一层：CAD IR 的连通分量是**几何证据**，不是业务部件 —— 酒盒真图有 402 个
+# 分量、过滤后 263 件，而《酒盒 报价资料.xlsx》说明业务人员说的"零部件"是 28 个。所以
+# `DWG-Pxx` 只允许作为 `geometry_component_ref` 出现在绑定证据里；页面、BOM、工艺、成本
+# 一律以 `business_parts` 为**唯一**部件集合，`geometry_evidence.components` 完整保留但
+# 不混入业务清单。没有权威资料时**不许**回退成几百个业务零件，只能如实报缺口。
+# --------------------------------------------------------------------------- #
+BUSINESS_ENGINE_VERSION = "packaging-business-parts/1"
+
+#: 业务部件文档在项目存储里的 doc key（与几何零件文档分开存：两者版本与权限都不同）。
+BUSINESS_DOC_KEY = "packaging_business_parts"
+
+#: 业务编码形状：`<权威资料前缀>-P<两位序号>`（前缀由导入器从标题派生，不许硬编码）。
+BUSINESS_PART_CODE_FORMAT = "%s-P%02d"
+
+#: 绑定状态闭集（Spec §2 `geometry_binding.status`）：未绑定**不等于删除**。
+BUSINESS_BINDING_STATUSES = ("bound", "partial", "unbound", "ambiguous")
+
+#: 绑定来源闭集：自动判定 / 人工确认（人工的覆盖自动的，且必须留痕）。
+BUSINESS_BINDING_BY = ("deterministic", "manual")
+
+#: 缺权威清单的稳定缺口码与文案（Spec §2 第 5 条 / §8 第 1 条）。
+BUSINESS_PARTS_MISSING = "business_parts_missing"
+BUSINESS_PARTS_MISSING_MESSAGE = "已识别几何区域 %d 个，尚未形成业务部件清单"
+BUSINESS_PARTS_MISSING_ACTION = "导入权威部件清单（Excel）或人工建立业务部件后，再跑 BOM / 工艺 / 成本"
+
+#: 业务部件手写两件左右件时也**不许合并**（Spec §9 第 5 条）：相同尺寸的左右件各占一行。
+BUSINESS_PART_MERGE_GUARD = "same_size_parts_are_not_merged"
+
+#: 绑定判据的规则号（留痕用）。
+BUSINESS_BINDING_RULE_ID = "business_parts_geometry_binding_v1"
+
+#: 一个分量默认只属于一个业务部件；人工明确共享时例外并留痕（Spec §2 第 3 条）。
+BUSINESS_SHARED_COMPONENT = "component_shared_between_business_parts"
+
+#: 尺寸判据：一轴完全相等、另一轴差在容差内 → `partial`；两轴都在容差内 → `bound`。
+BUSINESS_BINDING_TOLERANCE_MM = 2.0
+BUSINESS_BINDING_TOLERANCE_RATIO = 0.05
+
+
+def business_parts_summary_keys() -> Dict[str, str]:
+    """业务部件账的键与中文标签（页面/门禁共用一份，不各写一套）。"""
+    return {"business_part_total": "业务部件", "bound_total": "已定位",
+            "partial_total": "部分定位", "unbound_total": "尚未定位",
+            "ambiguous_total": "定位歧义"}
+
+
+def _binding_tolerance(value: Optional[float]) -> float:
+    if value is None:
+        return BUSINESS_BINDING_TOLERANCE_MM
+    return max(BUSINESS_BINDING_TOLERANCE_MM, abs(value) * BUSINESS_BINDING_TOLERANCE_RATIO)
+
+
+def _close_enough(left: Optional[float], right: Optional[float]) -> bool:
+    if left is None or right is None:
+        return False
+    return abs(left - right) <= _binding_tolerance(min(left, right))
+
+
+def _bbox_size(bbox: Any) -> Tuple[Optional[float], Optional[float]]:
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None, None
+    try:
+        xs = (float(bbox[0]), float(bbox[2]))
+        ys = (float(bbox[1]), float(bbox[3]))
+    except (TypeError, ValueError):
+        return None, None
+    return abs(xs[1] - xs[0]), abs(ys[1] - ys[0])
+
+
+def _axis_pair_score(part: Dict[str, Any],
+                     component: Dict[str, Any]) -> Tuple[int, Optional[str]]:
+    """一件业务部件与一个几何分量的尺寸相符度。
+
+    返回 `(命中轴数, 不匹配原因)`：`2` = 两轴（含长宽对调）都对得上；`1` = 只对上一轴
+    （图纸常常只画了展开件的单向尺寸）；`0` = 对不上。**不猜**：拿不到尺寸就是 `0`。
+    """
+    length = _num(part.get("length_mm"))
+    width = _num(part.get("width_mm"))
+    comp_length, comp_width = _bbox_size(component.get("bbox"))
+    if None in (length, width) or None in (comp_length, comp_width):
+        return 0, "size_unknown"
+    for left, right in ((length, width), (width, length)):
+        if _close_enough(left, comp_length) and _close_enough(right, comp_width):
+            return 2, None
+    if _close_enough(length, comp_length) or _close_enough(width, comp_width):
+        return 1, "one_axis_only"
+    return 0, "size_mismatch"
+
+
+def bind_geometry(business_parts: Any, components: Any, *,
+                  bound_by: str = "deterministic") -> Dict[str, Any]:
+    """把几何分量**按尺寸**绑到业务部件（确定性，不调模型，不猜）。
+
+    Spec §2 第 3 条：一个业务部件可以绑多个分量；一个分量默认只属于一个业务部件。
+    两件尺寸相同（左右件）时**不合并** —— 每件各绑各的，拿不准就报 `ambiguous` 让人工
+    确认，而不是把两件并成一件。返回 `{bindings, shared, unbound}`。
+    """
+    source = BUSINESS_BINDING_BY[0] if bound_by not in BUSINESS_BINDING_BY else bound_by
+    taken: Dict[str, Any] = {}
+    bindings: List[Dict[str, Any]] = []
+    shared: List[Dict[str, Any]] = []
+    for part in (business_parts or []):
+        if not isinstance(part, dict):
+            continue
+        code = _text(part.get("business_part_code"))
+        hits: List[Dict[str, Any]] = []
+        reasons: List[str] = []
+        for component in (components or []):
+            if not isinstance(component, dict):
+                continue
+            score, miss = _axis_pair_score(part, component)
+            if score <= 0:
+                continue
+            hits.append({"component": component, "score": score, "miss": miss,
+                         "confidence": 0.9 if score == 2 else 0.5})
+        if not hits:
+            reasons.append("no_component_size_match")
+        hits.sort(key=lambda item: (-item["score"], _text(item["component"].get("component_id"))))
+        best = hits[0] if hits else None
+        component_ids: List[str] = []
+        entity_ids: List[str] = []
+        bbox: Any = None
+        confidence = 0.0
+        status = "unbound"
+        if best is not None:
+            best_ids = [item for item in hits if item["score"] == best["score"]]
+            for item in best_ids:
+                component = item["component"]
+                component_ids.append(_text(component.get("component_id")))
+                entity_ids.extend(component.get("entity_ids") or [])
+                bbox = component.get("bbox")
+                confidence = max(confidence, float(item["confidence"]))
+                owner = taken.get(_text(component.get("component_id")))
+                if owner and owner != code:
+                    shared.append({"component_id": component.get("component_id"),
+                                   "owned_by": owner, "claimed_by": code,
+                                   "code": BUSINESS_SHARED_COMPONENT})
+            status = "bound" if best["score"] == 2 else "partial"
+            # 同一件里多个分量并列第一：不是"更确定"，而是"分不清哪个是本体"。
+            if len(best_ids) > 1:
+                status = "ambiguous"
+            elif not bbox:
+                reasons.append("component_bbox_missing")
+            for item in best_ids:
+                taken.setdefault(_text(item["component"].get("component_id")), code)
+            if best["miss"]:
+                reasons.append(best["miss"])
+        bindings.append({
+            "business_part_code": code,
+            "status": status,
+            "component_ids": component_ids,
+            "entity_ids": entity_ids,
+            "bbox": bbox,
+            "confidence": round(confidence, 4),
+            "reasons": reasons,
+            "bound_by": source,
+            "bound_at": "" if source == "deterministic" else _stamp(),
+            "rule_id": BUSINESS_BINDING_RULE_ID,
+            # 几何证据引用：业务身份不是 `DWG-Pxx`，但每件都要能回查分量（Spec §1）。
+            "geometry_component_ref": component_ids,
+        })
+    return {"bindings": bindings, "shared": shared,
+            "unbound": [item["business_part_code"] for item in bindings
+                        if item["status"] == "unbound"]}
+
+
+def _stamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
+    """从几何零件文档抽出 `geometry_evidence`（分量清单 + 两笔总数）。
+
+    `limit` > 0 时只回前 `limit` 个分量（页面按视口分片读），但两笔总数照样是全量真值。
+    """
+    doc = parts_doc if isinstance(parts_doc, dict) else {}
+    rows = [row for row in (doc.get("parts") or []) if isinstance(row, dict)]
+    stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
+    components: List[Dict[str, Any]] = []
+    for row in rows:
+        if limit and len(components) >= limit:
+            break
+        components.append({
+            "component_id": _text(row.get("component_id")),
+            "entity_ids": list(row.get("entity_ids") or []),
+            "bbox": row.get("bbox"),
+            "layers": list(row.get("layers") or []),
+            "role": _text(row.get("role")),
+            "geometry_component_ref": _text(row.get("geometry_component_ref"))
+                                    or _text(row.get("component_id")),
+        })
+    return {
+        "component_total": int(_num(stats.get("component_total")) or len(rows)),
+        "kept_component_total": int(_num(stats.get("kept_total")) or len(rows)),
+        "components": components,
+    }
+
+
+def business_parts_document(authority: Any, geometry: Any, *,
+                            bindings: Any = None, legacy_parts_id: str = "") -> Dict[str, Any]:
+    """组一份业务部件文档（Spec §2 的数据模型）。
+
+    `authority` 是 `packaging_part_authority.import_workbook()` 的产物（**唯一**业务件
+    来源）；`geometry` 是几何零件文档（只作证据与绑定）。没有权威清单时**不造件**：
+    `business_parts` 为空、`unavailable` 里给出 `business_parts_missing`，让页面说清
+    "还没有业务部件清单"，而不是把几百个分量冒充成零件。
+    """
+    authority_doc = authority if isinstance(authority, dict) else {}
+    rows = [row for row in (authority_doc.get("parts") or []) if isinstance(row, dict)]
+    evidence = geometry_evidence_of(geometry)
+    plan = bindings if isinstance(bindings, dict) else bind_geometry(rows, evidence["components"])
+    by_code = {_text(item.get("business_part_code")): item
+               for item in (plan.get("bindings") or []) if isinstance(item, dict)}
+    business_parts: List[Dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        code = _text(row.get("business_part_code"))
+        if not code:
+            code = _fallback_business_code(authority_doc, index)
+        binding = by_code.get(code) or {
+            "business_part_code": code, "status": "unbound", "component_ids": [],
+            "entity_ids": [], "bbox": None, "confidence": 0.0,
+            "reasons": ["no_authority_binding"], "bound_by": BUSINESS_BINDING_BY[0],
+            "bound_at": "", "rule_id": BUSINESS_BINDING_RULE_ID,
+            "geometry_component_ref": [],
+        }
+        business_parts.append({
+            "business_part_code": code,
+            "name": _text(row.get("name")),
+            "authority": {key: row.get(key) for key in (
+                "sequence_no", "product_size_text", "length_mm", "width_mm", "material_text",
+                "layout_text", "process_text", "note", "thumbnail_ref", "merged_from",
+                "quantity", "purchase", "source") if key in row},
+            "geometry_binding": binding,
+        })
+    stats = business_parts_stats(business_parts)
+    geometry_doc = geometry if isinstance(geometry, dict) else {}
+    geometry_source = geometry_doc.get("source") if isinstance(geometry_doc.get("source"), dict) else {}
+    authority_source = authority_doc.get("source") if isinstance(authority_doc.get("source"), dict) else {}
+    doc: Dict[str, Any] = {
+        "engine_version": BUSINESS_ENGINE_VERSION,
+        "business_parts": business_parts,
+        "geometry_evidence": evidence,
+        "stats": stats,
+        "unavailable": [] if business_parts else [business_parts_gap(evidence)],
+        "bindings_shared": list(plan.get("shared") or []),
+        "legacy_parts_id": _text(legacy_parts_id) or _text(geometry_doc.get("parts_id")),
+        "source": {
+            "ir_id": _text(geometry_source.get("ir_id")),
+            "ir_hash": _text(geometry_source.get("ir_hash")),
+            "authority_file_hash": _text(authority_source.get("file_hash")),
+            "authority_sheet": _text(authority_source.get("sheet")),
+        },
+    }
+    doc["business_parts_id"] = ""
+    doc["business_parts_hash"] = ""
+    doc["business_parts_id"], doc["business_parts_hash"] = _business_identity(doc)
+    return doc
+
+
+def _fallback_business_code(authority_doc: Dict[str, Any], index: int) -> str:
+    """权威行没有编码时的兜底：前缀 + 序号（**仍然**来自导入器，不是几何编号）。"""
+    source = authority_doc.get("source") if isinstance(authority_doc.get("source"), dict) else {}
+    prefix = _text(source.get("code_prefix")) or "PART"
+    return BUSINESS_PART_CODE_FORMAT % (prefix, index)
+
+
+def business_parts_stats(business_parts: Any) -> Dict[str, Any]:
+    """业务部件五笔账（Spec §2 `stats`）：`part_total = 0` 时全 0，不返回 null。"""
+    rows = [row for row in (business_parts or []) if isinstance(row, dict)]
+    counts = {key: 0 for key in BUSINESS_BINDING_STATUSES}
+    for row in rows:
+        binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
+        status = _text(binding.get("status"))
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["unbound"] += 1
+    return {"business_part_total": len(rows), "bound_total": counts["bound"],
+            "partial_total": counts["partial"], "unbound_total": counts["unbound"],
+            "ambiguous_total": counts["ambiguous"]}
+
+
+def business_parts_gap(geometry: Any = None) -> Dict[str, Any]:
+    """没有权威清单时的**唯一**缺口（Spec §2 第 5 条 / §8 第 1 条）。
+
+    带上是几个几何区域 —— 让页面能说"已识别几何区域 n 个，尚未形成业务部件清单"，
+    既不回退成几百个业务零件，也不假装"这图没有东西"。
+    """
+    evidence = geometry if isinstance(geometry, dict) and "components" in geometry \
+        else geometry_evidence_of(geometry)
+    total = int(_num(evidence.get("kept_component_total")) or 0)
+    return {"code": BUSINESS_PARTS_MISSING,
+            "message": BUSINESS_PARTS_MISSING_MESSAGE % total,
+            "action": BUSINESS_PARTS_MISSING_ACTION,
+            "geometry_component_total": total,
+            "component_total": int(_num(evidence.get("component_total")) or 0)}
+
+
+def business_parts_gap_of(doc: Any) -> Dict[str, Any]:
+    """文档读侧：有业务件就没有缺口；没有业务件就给缺口（含老几何零件文档）。"""
+    record = doc if isinstance(doc, dict) else {}
+    rows = record.get("business_parts") if isinstance(record.get("business_parts"), list) else None
+    if rows:
+        return {}
+    stored = record.get("unavailable")
+    if isinstance(stored, list):
+        for item in stored:
+            if isinstance(item, dict) and _text(item.get("code")) == BUSINESS_PARTS_MISSING:
+                return item
+    return business_parts_gap(record.get("geometry_evidence")
+                              or {"components": record.get("parts") or []})
+
+
+def _business_identity(doc: Dict[str, Any]) -> Tuple[str, str]:
+    """业务部件文档的版本锚点：同一份内容 → 同一个 id（落库幂等）。"""
+    from .packaging_semantics import model as sem_model
+
+    body = {key: value for key, value in doc.items()
+            if key not in ("business_parts_id", "business_parts_hash")}
+    digest = sem_model.sha256_hex(sem_model.canonical_json(sem_model.json_safe(body)))
+    return "business-parts:" + digest[:16], digest
+
+
+def _business_items(project_id: str) -> List[Dict[str, Any]]:
+    doc = get_backend().get_doc(project_id, BUSINESS_DOC_KEY) or {}
+    items = doc.get("items") if isinstance(doc, dict) else None
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def save_business_parts(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """落一版业务部件文档（同一 `business_parts_id` 覆盖，最多 `MAX_VERSIONS` 版）。
+
+    重新导入权威清单或改绑定都会换 `business_parts_id` —— 下游据此判 stale（Spec §7），
+    旧几何零件文档与旧成本结果**都不删**。
+    """
+    if not isinstance(doc, dict):
+        raise ValueError("save_business_parts() 需要一份业务部件文档")
+    record = copy.deepcopy(doc)
+    business_parts_id, business_parts_hash = _business_identity(record)
+    record["business_parts_id"] = business_parts_id
+    record["business_parts_hash"] = business_parts_hash
+    items = [item for item in _business_items(project_id)
+             if _text(item.get("business_parts_id")) != business_parts_id]
+    items.insert(0, record)
+    get_backend().put_doc(project_id, BUSINESS_DOC_KEY, {"items": items[:MAX_VERSIONS]})
+    return record
+
+
+def load_business_parts(project_id: str,
+                        business_parts_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """读一版业务部件文档；缺省读最近一版（读不到回 None，不回退成几何零件）。"""
+    for item in _business_items(project_id):
+        if business_parts_id is None or _text(item.get("business_parts_id")) == str(business_parts_id):
+            return item
+    return None
+
+
+def summarize_business_parts(doc: Any) -> Dict[str, Any]:
+    """业务部件摘要（Spec §9 第 3/6 条）：业务件与几何证据**分开**说。"""
+    record = doc if isinstance(doc, dict) else {}
+    stats = business_parts_stats(record.get("business_parts") or [])
+    evidence = record.get("geometry_evidence") if isinstance(record.get("geometry_evidence"), dict) else {}
+    return {
+        "engine_version": _text(record.get("engine_version")) or BUSINESS_ENGINE_VERSION,
+        "business_parts_id": _text(record.get("business_parts_id")),
+        "business_parts_hash": _text(record.get("business_parts_hash")),
+        "legacy_parts_id": _text(record.get("legacy_parts_id")),
+        "stats": stats,
+        "geometry_component_total": int(_num(evidence.get("component_total")) or 0),
+        "kept_component_total": int(_num(evidence.get("kept_component_total")) or 0),
+        "unavailable": [item for item in (record.get("unavailable") or [])
+                        if isinstance(item, dict)],
+    }
+
+
+def business_part_row(doc: Any, code: Any) -> Dict[str, Any]:
+    """按业务编码取一件（含权威资料、绑定与证据）—— 纯读，找不到回空 dict。"""
+    wanted = _text(code)
+    if not wanted:
+        return {}
+    record = doc if isinstance(doc, dict) else {}
+    evidence = record.get("geometry_evidence") if isinstance(record.get("geometry_evidence"), dict) else {}
+    components = {_text(item.get("component_id")): item
+                 for item in (evidence.get("components") or []) if isinstance(item, dict)}
+    for row in (record.get("business_parts") or []):
+        if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
+            continue
+        binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
+        ids = [_text(item) for item in (binding.get("component_ids") or [])]
+        return {
+            "business_part_code": wanted,
+            "name": _text(row.get("name")),
+            "authority": row.get("authority") if isinstance(row.get("authority"), dict) else {},
+            "geometry_binding": binding,
+            "component_bbox": binding.get("bbox"),
+            "evidence": [components[item] for item in ids if item in components],
+            "size_source": "authority_workbook" if row.get("authority") else "geometry_binding",
+            "summary": summarize_business_parts(record),
+        }
+    return {}
+
+
+def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,
+                         bound_by: str = "manual", reason: str = "") -> Dict[str, Any]:
+    """人工确认/修改一件业务部件的几何绑定（Spec §5 的写接口用）。
+
+    只改这一件的 `geometry_binding`，并**留痕**（`bound_by` / `bound_at` / `reasons`）；
+    不删任何几何分量、不动其它件。返回新的文档副本（不改入参）。
+    """
+    record = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    wanted = _text(code)
+    ids = [_text(item) for item in (component_ids or []) if _text(item)]
+    source = bound_by if bound_by in BUSINESS_BINDING_BY else BUSINESS_BINDING_BY[1]
+    evidence = record.get("geometry_evidence") if isinstance(record.get("geometry_evidence"), dict) else {}
+    components = {_text(item.get("component_id")): item
+                 for item in (evidence.get("components") or []) if isinstance(item, dict)}
+    for row in (record.get("business_parts") or []):
+        if not isinstance(row, dict) or _text(row.get("business_part_code")) != wanted:
+            continue
+        known = [item for item in ids if item in components]
+        unknown = [item for item in ids if item not in components]
+        states = sorted({_text(components[item].get("status")) for item in known}) or []
+        status = "unbound"
+        if known:
+            status = "bound" if len(known) == 1 else "bound"
+            if len(known) > 1:
+                status = "ambiguous"
+        reasons = [reason] if reason else []
+        reasons.extend("unknown_component:%s" % item for item in unknown)
+        reasons.extend(item for item in states if item)
+        row["geometry_binding"] = {
+            "status": status, "component_ids": known,
+            "entity_ids": [eid for item in known for eid in (components[item].get("entity_ids") or [])],
+            "bbox": (known and components[known[0]].get("bbox")) or None,
+            "confidence": 1.0 if known and source == "manual" else 0.0,
+            "reasons": reasons, "bound_by": source, "bound_at": _stamp(),
+            "rule_id": BUSINESS_BINDING_RULE_ID, "geometry_component_ref": known,
+        }
+        break
+    record["stats"] = business_parts_stats(record.get("business_parts") or [])
+    record["business_parts_id"], record["business_parts_hash"] = _business_identity(record)
+    return record
+
+
+def business_binding_stale_reason(stored_id: Any, current_id: Any) -> str:
+    """下游结论的**业务**部件版本漂移原因（与 `parts_stale_reason()` 同口径三值）。"""
+    stored = _text(stored_id)
+    current = _text(current_id)
+    if not stored or not current:
+        return "business_parts_unknown"
+    if stored != current:
+        return "business_parts_reimported"
+    return ""

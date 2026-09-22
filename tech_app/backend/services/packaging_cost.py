@@ -2056,6 +2056,9 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     # `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.2）：三态不许压成一个空串。
     rule_detail = rule_snapshot_version_detail()
     upstream_detail = upstream_route_version_detail(project_id, req_no)
+    # 业务部件层（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：成本消费的部件
+    # 集合是业务部件，几何分量只作证据；这份 scope 只披露版本与缺口，不改任何公式。
+    business_scope = _business_parts_scope(project_id)
     gaps: list = []
     assumptions: list = []
 
@@ -2419,9 +2422,23 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             "route_version_unavailable": _route_unavailable_of(upstream_detail),
             "rule_snapshot_source": _text(rule_detail.get("source")),
             "rule_snapshot_unavailable_reason": _text(rule_detail.get("reason")),
+            # 成本是照哪一版**业务部件**清单算的（Spec
+            # `packaging-business-parts-and-cad-plan-view.md` §7）：没有清单时给 ""，
+            # 与上面的路线/BOM 版本并列，下游据此判 stale。
+            "business_parts_id": business_scope["business_parts_id"],
+            "business_parts_hash": business_scope["business_parts_hash"],
         },
         "rule_snapshot_source": _text(rule_detail.get("source")),
         "rule_snapshot_unavailable": rule_snapshot_unavailable_of(rule_detail),
+        # 业务部件披露（Spec `packaging-business-parts-and-cad-plan-view.md` §7/§8）：键**必须
+        # 存在**。有清单给版本与件数；没有清单 `gap` 非空（`business_parts_missing`）。
+        "business_parts_id": business_scope["business_parts_id"],
+        "business_parts": {
+            "available": business_scope["available"],
+            "business_part_total": business_scope["business_part_total"],
+            "business_parts_hash": business_scope["business_parts_hash"],
+            "gap": dict(business_scope["gap"] or {}),
+        },
     }
 
 
@@ -2453,6 +2470,40 @@ def _with_readiness(result: dict) -> dict:
     payload = dict(result or {})
     payload["readiness"] = packaging_cost_readiness_gate(payload)
     return payload
+
+
+def _business_parts_scope(project_id: str) -> dict:
+    """成本消费的**业务部件**版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）。
+
+    成本该遍历的是 `business_parts`（权威清单里的 28 个），不是 CAD 连通分量。这里只做
+    **披露**（版本 + 可用性 + 缺口），键**必须存在**：
+
+    - 有清单 → `business_parts_id/hash` 与件数落进 `source_versions`，重新导入清单后
+      旧成本单可判 stale；
+    - 没有清单 → `gap = business_parts_missing`（"已识别几何区域 n 个，尚未形成业务部件
+      清单"），**不许**用几何件数冒充业务件数，也不许静默当成"没有部件"。
+    """
+    blank = {"business_parts_id": "", "business_parts_hash": "", "business_part_total": 0,
+             "available": False, "gap": {}}
+    try:
+        from . import packaging_parts
+        doc = packaging_parts.load_business_parts(project_id)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露
+        blank["gap"] = {"code": "business_parts_document_unavailable",
+                        "reason": type(exc).__name__,
+                        "message": "业务部件清单读不到（%s）：这次判不了这份成本是按哪一版业务"
+                                   "部件算的，别把这次当成「没有业务部件」" % type(exc).__name__}
+        return blank
+    if not isinstance(doc, dict):
+        blank["gap"] = packaging_parts.business_parts_gap({})
+        return blank
+    rows = doc.get("business_parts") if isinstance(doc.get("business_parts"), list) else []
+    stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
+    return {"business_parts_id": _text(doc.get("business_parts_id")),
+            "business_parts_hash": _text(doc.get("business_parts_hash")),
+            "business_part_total": int(stats.get("business_part_total") or len(rows)),
+            "available": bool(rows),
+            "gap": {} if rows else packaging_parts.business_parts_gap_of(doc)}
 
 
 def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,

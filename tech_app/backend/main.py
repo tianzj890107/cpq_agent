@@ -7183,6 +7183,106 @@ def extract_requirement_packaging_parts(
 
 
 # --------------------------------------------------------------------------- #
+# 包装业务部件与 CAD 平面图（Spec docs/specs/packaging-business-parts-and-cad-plan-view.md
+# §2/§5/§6）：几何分量是**证据**，业务部件是 BOM/工艺/成本该遍历的集合。
+#   · GET .../packaging-business-parts                  → 业务部件清单（权威资料 + 绑定）
+#   · GET .../packaging-geometry                        → CAD 平面图所需的图元/图层/范围
+#   · PUT .../packaging-business-parts/{code}/geometry-binding → 人工确认/修改映射
+# 读接口沿项目读权限；写接口沿用第 4 批的角色集（排盒型/算成本本来就是同一批人）。
+# 路径写成具名常量（与上面几批同口径）：路由真实存在、路径在源码里逐字可见。
+# --------------------------------------------------------------------------- #
+PACKAGING_BUSINESS_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-business-parts"
+PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geometry"
+PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
+                                "{part_code}/geometry-binding")
+
+
+class PackagingGeometryBindingAction(BaseModel):
+    """人工确认/修改「业务部件 ↔ 几何分量」映射的入参（Spec §5）。"""
+
+    component_ids: List[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+def _business_parts_body(pid: str, doc: Any = None) -> dict:
+    """业务部件读接口的响应（清单 + 几何证据 + 缺口 + 摘要）。
+
+    没有权威清单时 `built=False`、`gap` 给出 `business_parts_missing`
+    （"已识别几何区域 n 个，尚未形成业务部件清单"）—— **不**回退成几百个几何零件。
+    """
+    record = doc if isinstance(doc, dict) else (packaging_parts.load_business_parts(pid) or {})
+    if not record:
+        geometry = packaging_parts.geometry_evidence_of(packaging_parts.load_parts(pid) or {})
+        return {"built": False, "engine_version": packaging_parts.BUSINESS_ENGINE_VERSION,
+                "business_parts_id": "", "business_parts_hash": "", "business_parts": [],
+                "geometry_evidence": geometry,
+                "gap": packaging_parts.business_parts_gap(geometry),
+                "summary": packaging_parts.summarize_business_parts({}),
+                "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
+    return {"built": bool(record.get("business_parts")),
+            "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
+            "business_parts_id": record.get("business_parts_id") or "",
+            "business_parts_hash": record.get("business_parts_hash") or "",
+            "business_parts": list(record.get("business_parts") or []),
+            "geometry_evidence": record.get("geometry_evidence")
+                                  or packaging_parts.geometry_evidence_of({}),
+            "gap": packaging_parts.business_parts_gap_of(record),
+            "summary": packaging_parts.summarize_business_parts(record),
+            "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
+
+
+@app.get(PACKAGING_BUSINESS_PARTS_READ_PATH)
+def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
+    """业务部件清单（纯读）：页面 / BOM / 工艺 / 成本的**唯一**部件集合。"""
+    _workflow_project(pid)
+    return _business_parts_body(pid)
+
+
+@app.get(PACKAGING_GEOMETRY_READ_PATH)
+def read_packaging_geometry(pid: str, user: dict = Depends(current_user), limit: int = 0):
+    """CAD 平面图用的图元/图层/范围（纯读）：前端据此画图，**不**重新解析 DWG。"""
+    _workflow_project(pid)
+    doc = packaging_parts.load_parts(pid)
+    business = packaging_parts.load_business_parts(pid)
+    body = _business_parts_body(pid, business)
+    body["geometry_evidence"] = packaging_parts.geometry_evidence_of(
+        doc or {}, limit=max(0, int(limit or 0)))
+    body["parts_built"] = bool(doc and (doc.get("parts") or []))
+    body["business_parts_gap"] = body.get("gap") or {}
+    return body
+
+
+@app.put(PACKAGING_BINDING_WRITE_PATH)
+def update_packaging_geometry_binding(
+    pid: str,
+    part_code: str,
+    body: PackagingGeometryBindingAction = Body(default=PackagingGeometryBindingAction()),
+    user: dict = Depends(current_user),
+):
+    """人工确认/修改一件业务部件的几何映射（Spec §2 第 3 条 / §5）。
+
+    只改这一件的 `geometry_binding` 并留痕（`bound_by="manual"`）；不删任何几何分量、
+    不动其它件、不改业务名称与尺寸。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    doc = packaging_parts.load_business_parts(pid)
+    if not isinstance(doc, dict) or not (doc.get("business_parts") or []):
+        raise HTTPException(409, "项目里还没有业务部件清单，请先导入权威资料或人工建立业务部件")
+    updated = packaging_parts.set_geometry_binding(doc, part_code, body.component_ids,
+                                                   bound_by="manual", reason=body.reason)
+    saved = packaging_parts.save_business_parts(pid, updated)
+    store.audit(pid, "workflow:packaging_binding_updated", {
+        "business_part_code": str(part_code or ""),
+        "component_ids": [str(item) for item in (body.component_ids or [])],
+        "business_parts_id": saved.get("business_parts_id"),
+        "by": str(user.get("username") or ""),
+    })
+    return _business_parts_body(pid, saved)
+
+
+# --------------------------------------------------------------------------- #
 # 包装工艺路线与标准工时（包装第 6 批，Spec docs/specs/packaging-process-route.md §4）
 # 四个接口都只对 industry="packaging" 的需求单生效，其它行业 → 400（服务层判定）；
 # 生成/确认是工艺侧写权限，直接引用第 4 批的 packaging_match.BOX_MATCH_DECIDE_ROLES

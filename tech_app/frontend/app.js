@@ -1245,10 +1245,9 @@ function renderPackagingPartPanel(payload) {
     if (processButton) processButton.addEventListener("click", () => packagingPartAnalyze("process"));
     const costButton = $("packagingPartCost");
     if (costButton) costButton.addEventListener("click", () => packagingPartAnalyze("cost"));
-    const solidButton = $("packagingPartSolid");
-    // 「3D 预览」不新建画布：点下去由 packagingPartSolidPreview() 复用 #viewer 与 loadSTL()
-    // 把后端挤出的 STL 画出来；挤不出来的件把原因写回面板，不留空白画布。
-    if (solidButton) solidButton.addEventListener("click", () => packagingPartSolidPreview());
+    // 包装项目**不再**把「平板挤出」当主流程入口（Spec
+    // `packaging-business-parts-and-cad-plan-view.md` §6.1/§10）：右栏改成 CAD 平面图，
+    // 这里只留工艺/成本两个按钮。既有挤出结论与 STL 仍作历史数据留在库里，不删。
   }
 
   const evidence = $("packagingPartEvidence");
@@ -1289,8 +1288,11 @@ function enterDrawingFlowPanes() {
   hidePackagingPartPanel();
   const viewer = $("viewer");
   if (viewer) viewer.hidden = true;
+  const plan = packagingCadPlanViewer();
+  if (plan) plan.hidden = !packagingCadPlanApplies();
   const label = $("viewerPartName");
   if (label) label.textContent = "图纸零件 · 选中后看轮廓与证据";
+  loadPackagingCadPlan();
 }
 
 // 点左栏零件行：选中 + 读单件详情 + 渲染面板。失败时面板里给可读原因，不留白。
@@ -1320,6 +1322,7 @@ async function selectPackagingPart(partCode) {
       throw new Error(message || `读取零件详情失败（HTTP ${res.status}）`);
     }
     renderPackagingPartPanel(payload);
+    highlightPackagingBusinessPartSelection(code, payload);
   } catch (error) {
     if (facts) facts.textContent = String((error && error.message) || error);
   }
@@ -1353,24 +1356,21 @@ function packagingPartActionsHtml(part) {
   const verdict = packagingPartProcessability(part);
   const off = verdict.ok ? "" : " disabled";
   const title = esc(verdict.reason || "");
-  // 3D 预览只看"有没有闭合轮廓"：缺厚度是后端给的 unsupported 结论，不是灰按钮的理由。
-  const closed = String((part && part.outline_status) || "") === "closed";
-  const solidOff = closed ? "" : " disabled";
-  const solidTitle = closed ? "" : esc(packagingPartSolidReason("outline_open"));
+  // 包装项目的主流程按钮只有「工艺推荐」与「成本测算」（Spec
+  // `packaging-business-parts-and-cad-plan-view.md` §6.1：平板挤出不再出现在包装主流程里；
+  // 历史挤出结论保留在库里，改从证据/诊断入口回查）。
   return `<button id="packagingPartProcess" class="btn btn-secondary" type="button"${off}`
     + ` title="${title}">生成工艺推荐</button>`
     + `<button id="packagingPartCost" class="btn btn-secondary" type="button"${off}`
     + ` title="${title}">成本测算</button>`
-    + `<button id="packagingPartSolid" class="btn btn-secondary" type="button"${solidOff}`
-    + ` title="${solidTitle}">3D 预览</button>`
     + (verdict.ok ? "" : `<div class="packaging-part-note">${esc(verdict.reason)}</div>`);
 }
 
-/* ---------------- 2.1 右栏零件面板的 3D 预览（包装零件第 4 层，
-   Spec packaging-parts-3d-extrusion.md §4） ----------------
-   闭合轮廓 × 已知料厚的直线挤出由后端算好（ASCII STL），前端**复用既有 #viewer 与
-   loadSTL()**（不新建画布、不新建第二套 THREE 初始化）；挤不出来时把原因翻成人话
-   写在面板里，不留一块空白画布。 */
+/* ---------------- 平板挤出的原因文案（历史能力；包装主流程已改看 CAD 平面图，见
+   Spec `packaging-business-parts-and-cad-plan-view.md` §6.1/§8） ----------------
+   闭合轮廓 × 已知料厚的直线挤出仍由后端算好（ASCII STL），前端**复用既有 #viewer 与
+   loadSTL()**（不新建画布、不新建第二套 THREE 初始化）；包装项目默认不再暴露这个入口，
+   但结论与原因文案保留，供证据/诊断与历史数据回查。 */
 // 闭集跟着后端 `packaging_part_solids.UNSUPPORTED_REASONS` 走：凹件不再是拒绝理由
 // （Spec `packaging-parts-solid-coverage.md` §2.1：凹件必须耳切挤出），新增「轮廓自交」
 // 与「轮廓退化」两个**真缺陷**理由 —— 都不许硬挤。
@@ -1712,6 +1712,198 @@ function packagingSolidsStaleText(doc) {
 }
 
 //: 逐件行上的一句话（同上）：`stale` 为真 = 这一件的 3D 是上一版零件算的。
+/* ---------------- 包装 DWG 右栏：CAD 平面图查看器（Spec
+   packaging-business-parts-and-cad-plan-view.md §6） ----------------
+   包装 DWG 是二维刀模 / 展开图：右栏显示图纸**原本的** CAD 平面图（不是只画一个 bbox、
+   也不是简化 polygon），点左侧业务部件时整张图仍在、其它图元降权、绑定图元高亮并缩放到
+   部件范围；点图元可反查所属业务部件，未绑定的图元明说「几何证据，尚未归属业务部件」。
+
+   数据全部来自服务端（CAD IR 派生的图元 / 图层 / 范围 + 业务部件绑定文档）：前端既不
+   重新解析 DWG，也不在浏览器端重算业务尺寸、不重新拆件。
+
+   非包装项目（industry !== "packaging"）的既有 3D 与 loadSTL() 一字不改 —— 平面图只接管
+   packaging（图纸链路 drawing_flow）项目的右栏。 */
+const PACKAGING_CAD_PLAN_LABEL = "CAD 平面图";
+const PACKAGING_CAD_PLAN_ALIASES = ["包装展开图", "包装刀模图"];
+const PACKAGING_CAD_PLAN_UNBOUND = "几何证据，尚未归属业务部件";
+const PACKAGING_CAD_PLAN_EMPTY = "这份图纸还没有可显示的 CAD 图元。";
+const PACKAGING_CAD_LAYER_COLORS = {
+  cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
+  glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+  hole: "#cf222e", unknown: "#8b949e",
+};
+let currentPackagingCadPlan = null;
+let currentPackagingCadPlanBox = null;
+let currentPackagingBusinessPartCode = "";
+
+function packagingCadPlanViewer() {
+  return $("packagingCadPlanViewer");
+}
+
+// 平面图只在包装（`drawing_flow`）项目里接管右栏；其它项目的 3D 视图不动。
+function packagingCadPlanApplies() {
+  return currentDrawingEntry === "drawing_flow";
+}
+
+function packagingCadPlanLabel() {
+  return packagingCadPlanApplies() ? PACKAGING_CAD_PLAN_LABEL : "";
+}
+
+function packagingCadPlanEndpoint() {
+  return `${API}/api/projects/${currentProject}/requirement/packaging-geometry`;
+}
+
+// 一组 bbox（`[minX, minY, maxX, maxY]`）的并集；坐标不可用时回 null（不猜）。
+function packagingCadPlanRange(boxes) {
+  let box = null;
+  (boxes || []).forEach(raw => {
+    if (!Array.isArray(raw) || raw.length < 4) return;
+    const values = raw.slice(0, 4).map(Number);
+    if (values.some(value => !Number.isFinite(value))) return;
+    if (!box) { box = values.slice(); return; }
+    box[0] = Math.min(box[0], values[0]); box[1] = Math.min(box[1], values[1]);
+    box[2] = Math.max(box[2], values[2]); box[3] = Math.max(box[3], values[3]);
+  });
+  if (!box) return null;
+  return { x: box[0], y: box[1], x2: box[2], y2: box[3],
+           width: Math.max(box[2] - box[0], 1e-6), height: Math.max(box[3] - box[1], 1e-6) };
+}
+
+// SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
+function packagingCadPlanViewBox(range) {
+  if (!range) return "0 0 1 1";
+  const pad = Math.max(range.width, range.height) * 0.02;
+  return `${range.x - pad} ${-range.y2 - pad} ${range.width + pad * 2} ${range.height + pad * 2}`;
+}
+
+function fitPackagingCadPlan(range) {
+  const host = packagingCadPlanViewer();
+  const box = range || currentPackagingCadPlanBox;
+  if (!host || !box) return null;
+  const svg = host.querySelector("svg");
+  if (!svg) return null;
+  svg.setAttribute("viewBox", packagingCadPlanViewBox(box));
+  return svg.getAttribute("viewBox");
+}
+
+// 选中业务部件：绑定图元高亮、缩放到部件范围；整张图仍在（Spec §6.2）。
+function highlightPackagingBusinessPart(partCode, entity_ids) {
+  const host = packagingCadPlanViewer();
+  currentPackagingBusinessPartCode = String(partCode || "");
+  if (!host) return { part: currentPackagingBusinessPartCode, targets: 0 };
+  const wanted = new Set((entity_ids || []).map(item => String(item)));
+  const boxes = [];
+  host.querySelectorAll("[data-component-id]").forEach(node => {
+    const owned = node.getAttribute("data-business-part") || "";
+    const componentId = String(node.getAttribute("data-component-id") || "");
+    const match = wanted.size
+      ? (wanted.has(componentId) || wanted.has(String(node.getAttribute("data-component-ref") || "")))
+      : Boolean(owned) && owned === currentPackagingBusinessPartCode;
+    node.classList.toggle("is-dimmed", wanted.size > 0 && !match);
+    node.classList.toggle("is-highlighted", Boolean(match));
+    if (match) boxes.push(node.getAttribute("data-bbox"));
+  });
+  const range = packagingCadPlanRange(boxes.map(text => String(text || "").split(",").map(Number)));
+  if (range) fitPackagingCadPlan(range);
+  return { part: currentPackagingBusinessPartCode, targets: boxes.length };
+}
+
+function packagingCadPlanComponentSvg(component) {
+  const range = packagingCadPlanRange([component && component.bbox]);
+  if (!range) return "";
+  const role = String((component && component.role) || "unknown");
+  const color = PACKAGING_CAD_LAYER_COLORS[role] || PACKAGING_CAD_LAYER_COLORS.unknown;
+  const layers = ((component && component.layers) || []).join("、");
+  return `<rect class="packaging-cad-plan-entity" data-component-id="${esc(String(component.component_id || ""))}"`
+    + ` data-component-ref="${esc(String(component.geometry_component_ref || ""))}"`
+    + ` data-business-part="${esc(String(component.business_part_code || ""))}"`
+    + ` data-bbox="${esc([range.x, range.y, range.x2, range.y2].join(","))}"`
+    + ` x="${esc(String(range.x))}" y="${esc(String(-range.y2))}"`
+    + ` width="${esc(String(range.width))}" height="${esc(String(range.height))}"`
+    + ` fill="none" stroke="${esc(color)}" stroke-width="1"`
+    + ` data-layer="${esc(layers)}" data-role="${esc(role)}"></rect>`;
+}
+
+function renderPackagingCadPlan(doc) {
+  const host = packagingCadPlanViewer();
+  currentPackagingCadPlan = (doc && typeof doc === "object") ? doc : null;
+  if (!host) return null;
+  const evidence = (doc && doc.geometry_evidence) || {};
+  const components = Array.isArray(evidence.components) ? evidence.components.slice() : [];
+  const owners = {};
+  ((doc && doc.business_parts) || []).forEach(row => {
+    const binding = (row && row.geometry_binding) || {};
+    (binding.component_ids || []).forEach(id => {
+      owners[String(id)] = String((row && row.business_part_code) || "");
+    });
+  });
+  components.forEach(component => {
+    component.business_part_code = owners[String(component.component_id || "")] || "";
+  });
+  const gap = (doc && (doc.business_parts_gap || doc.gap)) || {};
+  if (!components.length) {
+    host.innerHTML = `<div class="view-3d-placeholder">${esc(gap.message || PACKAGING_CAD_PLAN_EMPTY)}</div>`;
+    return null;
+  }
+  currentPackagingCadPlanBox = packagingCadPlanRange(components.map(item => item.bbox));
+  const drawn = components.map(packagingCadPlanComponentSvg).filter(Boolean).join("");
+  const total = Number(evidence.component_total || components.length) || components.length;
+  const hasBusinessParts = Boolean((doc && doc.business_parts) || []).length;
+  host.innerHTML = `<div class="packaging-cad-plan-hint">${esc(PACKAGING_CAD_PLAN_LABEL)}`
+    + ` · 图元 ${esc(String(components.length))}/${esc(String(total))}</div>`
+    + `<svg class="packaging-cad-plan-svg" role="img" aria-label="${esc(PACKAGING_CAD_PLAN_LABEL)}"`
+    + ` viewBox="${esc(packagingCadPlanViewBox(currentPackagingCadPlanBox))}"`
+    + ` preserveAspectRatio="xMidYMid meet">${drawn}</svg>`
+    + (hasBusinessParts ? "" : `<div class="packaging-cad-plan-note">${esc(gap.message || "")}</div>`);
+  const svg = host.querySelector("svg");
+  if (svg) {
+    svg.addEventListener("click", event => {
+      const node = (event.target && event.target.closest)
+        ? event.target.closest("[data-component-id]") : null;
+      if (!node) return;
+      const owner = node.getAttribute("data-business-part") || "";
+      if (owner) { selectPackagingPart(owner); return; }
+      notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
+    });
+  }
+  return currentPackagingCadPlan;
+}
+
+// 平面图里点到未绑定图元的提示（Spec §6.2）：不假装它属于某个业务部件。
+function notePackagingPartPanel(message) {
+  const host = $("packagingPartFacts");
+  if (host) host.textContent = String(message || "");
+  return String(message || "");
+}
+
+async function loadPackagingCadPlan() {
+  if (!packagingCadPlanApplies()) return null;
+  const host = packagingCadPlanViewer();
+  if (host) host.innerHTML = `<div class="view-3d-placeholder">正在读取 CAD 平面图…</div>`;
+  try {
+    const res = await fetch(packagingCadPlanEndpoint());
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`读取 CAD 平面图失败（HTTP ${res.status}）`);
+    return renderPackagingCadPlan(payload);
+  } catch (error) {
+    if (host) {
+      host.innerHTML = `<div class="view-3d-placeholder">${esc(String((error && error.message) || error))}</div>`;
+    }
+    return null;
+  }
+}
+
+// 选中即高亮（Spec `packaging-business-parts-and-cad-plan-view.md` §6.2）：业务部件用它绑定的
+// 分量/图元，几何件用它自己的分量引用 —— 高亮只做视图，**不**在浏览器端重算尺寸、不拆件。
+function highlightPackagingBusinessPartSelection(partCode, payload) {
+  const binding = (payload && payload.geometry_binding) || {};
+  const refs = (binding.component_ids || []).concat(binding.entity_ids || []);
+  if (!refs.length && payload && payload.part) {
+    refs.push(payload.part.component_id, payload.part.geometry_component_ref);
+  }
+  return highlightPackagingBusinessPart(partCode, refs.filter(Boolean));
+}
+
 function packagingPartSolidStaleText(part) {
   const reason = String((part && part.stale_reason) || "");
   if (!reason || !(part && part.stale)) {
@@ -1784,12 +1976,106 @@ function packagingPartsEmptyText(partsDoc, preconditions) {
 // 只回 `limit` 件（缺省 64），`items` 是当前页、`total` / `kind_total` 是全量真值；"继续加载"
 // 按 `offset` 往后翻，翻回来的行**累加**在 `packagingPartsShown` 上（折叠与计数都在这上面）。
 let currentPackagingParts = null;
+// 业务部件文档（Spec `packaging-business-parts-and-cad-plan-view.md` §2）：**唯一**的业务
+// 部件集合。有它就按它列左栏；没有才退回几何分量，并如实说"尚未形成业务部件清单"。
+let currentPackagingBusinessParts = null;
 let currentDrawingFlowState = null;
 let packagingPartsPage = { offset: 0, limit: 64, kind: "", role: "",
                            outline_status: "", min_area_mm2: "" };
 let packagingPartsShown = [];
 
 // 当前页的行（`items`）：老后端只给 `parts` 时退回它，但绝不许把整份文档当页用。
+// 业务部件行（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1/4/6 条）：
+// 有权威清单时左栏就是这 28 件，绝不是几百个几何分量；未绑定不等于删除 —— 照旧列出，
+// 只把"尚未在 CAD 图中定位"写在行上。
+function packagingBusinessPartRows(doc) {
+  const rows = (doc && Array.isArray(doc.business_parts)) ? doc.business_parts : [];
+  return rows.filter(row => row && typeof row === "object");
+}
+
+const PACKAGING_BINDING_COPY = {
+  bound: "已在图纸中定位", partial: "部分定位", ambiguous: "定位待人工确认", unbound: "尚未在 CAD 图中定位",
+};
+
+function packagingBusinessPartSizeText(row) {
+  const authority = (row && row.authority) || {};
+  const text = String(authority.product_size_text || "").trim();
+  if (text) return text;
+  const length = authority.length_mm; const width = authority.width_mm;
+  if (length && width) return `${length}×${width} mm`;
+  return "";
+}
+
+function renderPackagingBusinessTree(tree, rows) {
+  const head = document.createElement("div");
+  head.className = "packaging-business-head";
+  head.dataset.qqBusinessParts = "1";
+  head.textContent = `业务部件 ${rows.length} 件（来自权威清单）`;
+  tree.appendChild(head);
+  rows.forEach(row => {
+    const code = String(row.business_part_code || "");
+    const binding = row.geometry_binding || {};
+    const status = String(binding.status || "unbound");
+    const line = document.createElement("div");
+    line.className = "part part-item packaging-business-part";
+    line.dataset.partId = code;
+    line.dataset.businessPartCode = code;
+    line.dataset.bindingStatus = status;
+    line.addEventListener("click", () => openPackagingBusinessPart(code));
+    const size = packagingBusinessPartSizeText(row);
+    const material = String(((row.authority || {}).material_text) || "");
+    line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
+      + `<div class="part-name">${esc(code)} ${esc(String(row.name || ""))}</div>`
+      + `<div class="part-meta">${esc(size)}${material ? " · " + esc(material) : ""}</div>`
+      + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`;
+    tree.appendChild(line);
+  });
+}
+
+// 点业务部件：右栏给权威资料 + 绑定状态，并在 CAD 平面图里高亮它绑定的图元
+// （Spec §6.2）。这里**不**在浏览器端重算尺寸、也**不**重新拆件。
+function openPackagingBusinessPart(code) {
+  const wanted = String(code || "");
+  const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
+  const row = rows.find(item => String(item.business_part_code || "") === wanted);
+  if (!row) return null;
+  currentSelectedPanelPart = null;
+  setRightPane("model");
+  showPackagingPartPane();
+  markSelection(wanted);
+  const title = $("packagingPartTitle");
+  if (title) title.textContent = `${wanted} ${String(row.name || "")}`.trim();
+  const binding = row.geometry_binding || {};
+  const authority = row.authority || {};
+  const facts = $("packagingPartFacts");
+  if (facts) {
+    facts.innerHTML = [
+      pkgPartFactRow("权威尺寸", packagingBusinessPartSizeText(row)),
+      pkgPartFactRow("材料", authority.material_text),
+      pkgPartFactRow("排版", authority.layout_text),
+      pkgPartFactRow("工艺", authority.process_text),
+      pkgPartFactRow("备注", authority.note),
+      pkgPartFactRow("定位状态", PACKAGING_BINDING_COPY[String(binding.status || "")] || ""),
+      pkgPartFactRow("绑定分量", (binding.component_ids || []).join(" / ")),
+      pkgPartFactRow("同组提示", authority.merged_from
+        ? "材料/排版/工艺与上一行同组（合并单元格）" : ""),
+    ].join("");
+  }
+  const outlineHost = $("packagingPartOutline");
+  if (outlineHost) {
+    outlineHost.innerHTML = `<div class="view-3d-placeholder">`
+      + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
+      + `</div>`;
+  }
+  const actions = $("packagingPartActions");
+  if (actions) {
+    actions.innerHTML = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
+      + `几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。</div>`;
+  }
+  highlightPackagingBusinessPart(wanted, (binding.component_ids || []).concat(binding.entity_ids || []));
+  return row;
+}
+
 function packagingPartsItems(doc) {
   const source = Array.isArray(doc && doc.items) ? doc.items : ((doc && doc.parts) || []);
   return source.filter(row => row && typeof row === "object");
@@ -1845,8 +2131,21 @@ async function loadMorePackagingParts() {
     return page;
   } catch (error) { return null; }
 }
+async function fetchPackagingBusinessParts() {
+  if (!currentProject) return null;
+  try {
+    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
+      + `packaging-business-parts`);
+    if (!res.ok) return null;
+    return await res.json().catch(() => null);
+  } catch (error) { return null; }
+}
+
 async function refreshPackagingParts() {
   currentPackagingParts = await fetchPackagingParts();
+  // 业务部件清单与几何零件文档一起读：页面 / BOM / 工艺 / 成本都以业务部件为唯一集合
+  // （读不到就保持 null，左栏退回几何分量并说明原因，不假装有权威清单）。
+  currentPackagingBusinessParts = await fetchPackagingBusinessParts();
   renderTree(currentIR || {});
   // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
   // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
@@ -2891,6 +3190,8 @@ function renderTree(ir) {
   // DWG / DXF 链路的左栏是零件文档（不是视觉 IR）：行数 = stats.part_total，
   // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
   if (currentDrawingEntry === "drawing_flow") {
+    const business = packagingBusinessPartRows(currentPackagingBusinessParts);
+    if (business.length) { renderPackagingBusinessTree(tree, business); return; }
     const doc = currentPackagingParts || {};
     // 已经翻过页就用累加的行；否则用本页（`items`）。文档没读到时不许用上一份的累加行。
     const rows = (currentPackagingParts && packagingPartsShown.length)

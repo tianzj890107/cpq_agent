@@ -187,12 +187,17 @@
                   <div id="tree" class="parts-list empty-state"></div>
                 </div>
               </section>
-              <section class="drawing-model-column" aria-label="3D 视图">
-              <header class="center-header"><div id="viewerPartName" class="center-title">3D 视图 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="inline-action" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
+              <section class="drawing-model-column" aria-labelledby="viewerPartName">
+              <header class="center-header"><div id="viewerPartName" class="center-title">图纸零件 · 选择零件后查看</div><div class="more-actions"><button id="btnMoreActions" class="inline-action" type="button" aria-expanded="false">更多功能 ▾</button><div id="actionSheet" class="action-sheet" hidden><button id="btnModelLookup" disabled>联网核验</button><button id="btnVerify" disabled>校验修正</button><button id="btnDecompose" disabled>拆解推荐</button><button id="btnGenerate" disabled>生成 CAD 几何</button><button id="btnDrawings" disabled>生成 2D 工程图</button><button id="btnBom" disabled>导出 BOM（CSV）</button><button id="btnMoreImport3d" disabled>导入已有 3D 模型</button><button id="btnMoreReview" disabled>版本与校核审查</button></div></div></header>
             <!-- 右侧有两种互斥的内容：看几何（3D/2D/参数）和看结论（零件工艺推荐）。
                  三块模型面板包一层，好整组切换。 -->
             <div id="modelPanes" class="model-panes">
               <div id="viewer" class="view-3d-content"></div>
+              <!-- 包装 DWG 的右栏：CAD 平面图（Spec packaging-business-parts-and-cad-plan-view.md §6）。
+                   包装是二维刀模/展开图 —— 这里复用同一块右栏空间显示图纸**原本的**平面图，
+                   点业务部件时高亮它的图元并缩放到部件范围；不显示"3D 预览/平板挤出"。
+                   非包装项目保持 #viewer 的 3D 行为不变（这块默认 hidden）。 -->
+              <div id="packagingCadPlanViewer" class="packaging-cad-plan" hidden></div>
               <!-- 图纸项目的右栏零件面板（包装零件第 2 层）：左栏零件行可点，
                    选中后在这里看轮廓、事实与证据。与 #viewer / #partDetail / #parameterEditor
                    互斥，未选中零件时保持 hidden，不留白。 -->

@@ -15843,3 +15843,65 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
   在 `tech_app/frontend/` 里 0 处引用），四个新键随接口带出但无可改的展示面，故只给成本页
   加了规则快照那一句，不做新面板；
 - 五处降级照旧不让整条链失败；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 368. 落地 `packaging-business-parts-and-cad-plan-view`：业务部件层（权威清单导入器 + 业务/几何两层文档 + CAD 平面图查看器）（14 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+CAD IR 的连通分量被直接当成"零件"：酒盒真图 402 个分量、过滤后 263 件，而客户
+《酒盒 报价资料.xlsx》「零部件排版工艺」说明业务人员说的"零部件"是 **28 个**（28 行部件 +
+28 张部件图）。于是：
+
+- 页面 / BOM / 工艺 / 成本都以几百个几何分量当业务零件，任务数与物料口径都不对；
+- 业务部件名、权威尺寸、材料、排版、工艺、部件图**根本没有入库路径**；
+- 右侧仍是 3D（DWG 下画布本来就是空的），没有任何地方能看图纸**原本的** CAD 平面图；
+- `DWG-Pxx`（按面积排序的几何编号）被当成了业务身份。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_part_authority.py`（新）：`import_workbook()` 确定性导入器 ——
+  表头语义定位列（不写死 A/B/C）、只认连续序号、说明/签名/制表/空行进 `skipped` 并写原因、
+  `merged_from` 只记锚点**不复制值**、尺寸解析保留原文、`code_prefix` 从标题派生（真样本 → `JWXR21`，
+  编码 `JWXR21-P01…P28`）。真样本实测：28 件、28 张图全部归属（锚点行浮动 → 数量相等时按顺序一一对应）、
+  `skipped = [blank_row, not_a_part_row(第 32 行客户备注), no_sequence(制表行), blank_row]`。
+- `tech_app/tools/xlsx_grid.py`（新）：唯一认识 xlsx 的模块（openpyxl 函数内才导入），后端只消费纯 dict 网格
+  —— `packaging-cost-rule-snapshot.md` §4.3「生产后端不得依赖 openpyxl」（D1/D2/D3 三条）继续成立。
+- `tech_app/backend/services/packaging_parts.py`：新增业务部件层 —— `packaging-business-parts/1` 文档
+  （`business_parts` / `geometry_evidence` / `stats` / `source` / `legacy_parts_id`）、`bind_geometry()`
+  确定性尺寸绑定（多分量可绑一件、同尺寸左右件不合并、并列即 `ambiguous`、分量共享留痕）、
+  `business_parts_missing` + 「已识别几何区域 n 个，尚未形成业务部件清单」、每件 `geometry_component_ref`
+  回查引用、`save/load/list/summarize/set_geometry_binding`；几何编号改为 `_geometry_part_code(index)`
+  （`DWG-Pxx` 只作证据编号）；`MATERIAL_CLASS_KEYWORDS` 的磁性件词根收成材料学术语
+  （`钕铁硼` / `磁石`），不再出现任何部件整词。
+- `packaging_bom.py` / `packaging_cost.py`：`_business_parts_scope()` 读业务部件文档，
+  `business_parts_id/hash` 落进 `source_versions` 与顶层 `business_parts` 披露（`available` / 件数 /
+  `gap`）—— 没有清单时 `gap=business_parts_missing`，绝不用几何件数冒充业务件数；
+  `bind_rows()` 把业务版本写进行上 `dwg_binding`。
+- `tech_app/backend/main.py`：`GET .../packaging-business-parts`、`GET .../packaging-geometry`
+  （图元/图层/范围 + 绑定）、`PUT .../packaging-business-parts/{code}/geometry-binding`
+  （人工确认映射，写权限沿用 `BOX_MATCH_DECIDE_ROLES`，改动写审计）。
+- 前端 `app.js` / `index.html` / `drawing-flow.css`：新增 `#packagingCadPlanViewer` +
+  `renderPackagingCadPlan()` / `fitPackagingCadPlan()` / `highlightPackagingBusinessPart(partCode, entity_ids)`
+  （整张图 + 点部件高亮缩放 + 点图元反查，未绑定图元明说「几何证据，尚未归属业务部件」）；
+  `drawing-model-column` 改 `aria-labelledby`、标题改「图纸零件 · 选择零件后查看」；
+  零件面板去掉平板挤出按钮（`3D 预览` 不再是包装主流程入口）；有权威清单时左栏列**业务部件**
+  （编码 + 名称 + 权威尺寸 + 定位状态），点击 `openPackagingBusinessPart()` 给权威资料与绑定高亮。
+
+### 三、已记录的边界
+
+- 没有「导入权威清单」的界面按钮；演示前要先用 `import_workbook()` 跑一次导入并落库。
+- 业务部件行的单件工艺 / 成本只有说明文案，尚未按 `business_parts_id` 落下游任务表。
+- `bind_geometry()` 是尺寸相符的确定性判据，真图上多数件仍要人工确认（Spec §10 已声明不承诺 100%）。
+- 平面图按分量 bbox 画，不是逐段折线（等 CAD IR 把折线顶点带进 `geometry_evidence`）。
+- 非包装 3D 与 `loadSTL()` 未动；挤出后端路由 / STL 保留，只是不再当包装主流程按钮。
+
+### 四、复跑
+
+- `./open-claude/.venv/bin/python -m unittest tests.test_packaging_business_parts_and_cad_plan_view_red`
+  → `Ran 14 tests OK`
+- packaging 全域 `Ran 1530 tests FAILED (failures=5, skipped=8)` —— 5 条全是既有挂账
+  （`packaging_bom_part_size_provenance::b3`、`packaging_parse_to_downstream_seams::b4`、
+  `packaging_part_manual_fill_persists::a2`、`packaging_quote_send_recovery::c1`、
+  `packaging_route_bom_version_pinning::f2`），本批未新增红。
+- `tests.test_spec_status_truth_red` → `Ran 7 tests OK`；`node --check tech_app/frontend/app.js` 通过。
+- 本批未动 `tests/` 下任何红测，未 commit 别人的工作区改动，未 push / 部署。

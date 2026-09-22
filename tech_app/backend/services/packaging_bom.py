@@ -1032,6 +1032,10 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     role_scope = _role_scope(project_id, req_no, items, box_type_code) or {}
     # 零件文档版本比对（Spec `packaging-bom-parts-version-binding.md` §2.2）：只报事实，不重绑。
     parts_scope = _parts_binding_scope(project_id, items)
+    # 业务部件层（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1 条）：BOM 消费
+    # 的部件集合是 `business_parts`，几何分量只作证据。这份 scope 只披露版本与可用性，
+    # 不改行、不改数（加法）。
+    business_scope = _business_parts_scope(project_id)
     return {
         "built": bool(items),
         "box_type_code": box_type_code,
@@ -1046,6 +1050,11 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             # 这一版 BOM 是照哪一版零件文档配的（Spec §2.2）：当前文档读不到时给 ""。
             "parts_id": parts_scope["parts_id"],
             "parts_hash": parts_scope["parts_hash"],
+            # 这一版 BOM 是照哪一版**业务部件**清单配的（Spec
+            # `packaging-business-parts-and-cad-plan-view.md` §7）：没有权威清单时给 ""
+            # —— 与零件版本并列，两把尺子分开记。
+            "business_parts_id": business_scope["business_parts_id"],
+            "business_parts_hash": business_scope["business_parts_hash"],
             # 这份 BOM 里出现过哪些盒型码（Spec `packaging-bom-box-type-provenance.md` §2.3）：
             # 去重升序；一份"干净"的 BOM 里只会有一个。既有四项口径不变，这是加法。
             "box_type_codes": box_type_codes,
@@ -1068,6 +1077,18 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         # 没有过期行时 `[]`；比对不了时 `parts_document_unavailable` 非空且清单给 `[]`。
         "parts_binding_stale": parts_scope["stale"],
         "parts_document_unavailable": parts_scope["unavailable"],
+        # 业务部件（Spec `packaging-business-parts-and-cad-plan-view.md` §7/§8）：键**必须
+        # 存在**。有清单时给版本与件数；没有清单时 `gap` 非空（`business_parts_missing`
+        # + "已识别几何区域 n 个，尚未形成业务部件清单"），绝不用几何件数冒充业务件数。
+        "business_parts_id": business_scope["business_parts_id"],
+        "business_parts": {
+            "available": business_scope["available"],
+            "business_part_total": business_scope["business_part_total"],
+            "bound_total": business_scope["bound_total"],
+            "unbound_total": business_scope["unbound_total"],
+            "business_parts_hash": business_scope["business_parts_hash"],
+            "gap": dict(business_scope["gap"] or {}),
+        },
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
@@ -1249,6 +1270,43 @@ def _parts_binding_scope(project_id: str, items: list) -> dict:
             "parts_id": _text(doc.get("parts_id")), "parts_hash": current_hash}
 
 
+def _business_parts_scope(project_id: str) -> dict:
+    """BOM 消费的**业务部件**版本与可用性（Spec
+    `packaging-business-parts-and-cad-plan-view.md` §2 第 1 条 / §7 / §8）。
+
+    为什么单列一份：几何零件文档（`packaging_parts`）是**证据**，业务部件才是 BOM / 工艺 /
+    成本该遍历的集合。没有权威清单时不许回退成几百个几何件，也不许静默 —— 所以这里把
+    `business_parts_id/hash`、件数与缺口一起披露出来，键**必须存在**。
+
+    读不到 / 还没导入 → `available=False` 且 `gap` 给出 `business_parts_missing`（含
+    "已识别几何区域 n 个，尚未形成业务部件清单"），让页面说清下一步该补什么。
+    """
+    blank = {"business_parts_id": "", "business_parts_hash": "", "business_part_total": 0,
+             "bound_total": 0, "unbound_total": 0, "available": False, "gap": {}}
+    try:
+        from . import packaging_parts
+        doc = packaging_parts.load_business_parts(project_id)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不挡读接口
+        blank["gap"] = {"code": "business_parts_document_unavailable",
+                        "reason": type(exc).__name__,
+                        "message": "业务部件清单读不到（%s）：这次判不了 BOM 是按哪一版业务"
+                                   "部件算的，别把这次当成「没有业务部件」" % type(exc).__name__}
+        return blank
+    if not isinstance(doc, dict):
+        blank["gap"] = packaging_parts.business_parts_gap({})
+        blank["gap"]["message"] = "项目里还没有业务部件清单：" + blank["gap"].get("message", "")
+        return blank
+    rows = doc.get("business_parts") if isinstance(doc.get("business_parts"), list) else []
+    stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
+    return {"business_parts_id": _text(doc.get("business_parts_id")),
+            "business_parts_hash": _text(doc.get("business_parts_hash")),
+            "business_part_total": int(stats.get("business_part_total") or len(rows)),
+            "bound_total": int(stats.get("bound_total") or 0),
+            "unbound_total": int(stats.get("unbound_total") or 0),
+            "available": bool(rows),
+            "gap": {} if rows else packaging_parts.business_parts_gap_of(doc)}
+
+
 def _load_pairing_review(project_id: str, requirement_no: str = "") -> list:
     """只读清单（读不到 → 抛 `BomError`）；披露版本请用 `_pairing_scope()`。"""
     rows = _pairing_doc(project_id)["by_requirement"].get(_text(requirement_no) or "")
@@ -1329,7 +1387,10 @@ def _bind_parts(project_id: str, items: list, requirement_no: str = "") -> tuple
         if not isinstance(doc, dict) or not doc.get("parts"):
             # 「没有零件文档」不是失败（Spec §2.1 第 3 条）：留痕必须是 {}。
             return items, [], [], {}
-        result = packaging_parts.bind_rows(items, doc)
+        # 业务部件版本（Spec `packaging-business-parts-and-cad-plan-view.md` §7）：行上的
+        # `dwg_binding` 要同时带几何零件版本与业务部件版本，重新导入清单后下游可判 stale。
+        result = packaging_parts.bind_rows(items, doc,
+                                          business_parts=packaging_parts.load_business_parts(project_id))
         return (list(result.get("items") or items),
                 [dict(row) for row in (result.get("pairing_review") or [])
                  if isinstance(row, dict)],
