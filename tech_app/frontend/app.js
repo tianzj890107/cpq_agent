@@ -1461,6 +1461,45 @@ async function packagingPartSetThickness(partCode) {
   return payload;
 }
 
+// 人工补材料（Spec `packaging-parts-in-card-and-material-fill.md` §2.3 第 2 条）：与
+// 「补料厚」同范式 —— 真图 64 件有 51 件卡在缺材料，页面上必须有地方能补，补完只重算这一件。
+async function packagingPartSetMaterial(partCode) {
+  if (!currentProject || !partCode) return null;
+  const input = window.prompt(`给 ${partCode} 补材料（如 灰板 / 白卡纸，不能为空）：`, "");
+  if (input === null) return null;
+  const spec = String(input).trim();
+  if (!spec) {
+    window.alert("材料不能为空（不许用空串表示没填）。");
+    return null;
+  }
+  const reason = window.prompt("补录理由（可留空）：", "") || "";
+  let res;
+  try {
+    res = await fetch(`${API}/api/projects/${currentProject}/requirement/packaging-parts/`
+      + `${encodeURIComponent(partCode)}/material`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spec: spec, reason: reason }),
+    });
+  } catch (error) {
+    window.alert("补材料失败：网络错误，请重试。");
+    return null;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload && payload.detail;
+    const message = (typeof detail === "string" ? detail : (detail && detail.message))
+      || (payload && payload.message) || `HTTP ${res.status}`;
+    window.alert(`补材料失败：${message}`);
+    return null;
+  }
+  const patch = { material: payload.material };
+  if (payload.material_source) patch.material_source = payload.material_source;
+  patchPackagingPartRows(partCode, patch);
+  renderTree(currentIR || {});
+  return payload;
+}
+
 // 单件结论回填：整份文档的行、当前页的行、已累加的行都要改 —— 分页之后左栏渲染的是
 // `packagingPartsShown`（Page 1 的行），只改 `doc.parts` 会让"补料厚"按钮补完还在。
 function patchPackagingPartRows(partCode, patch) {
@@ -2691,6 +2730,22 @@ function renderTree(ir) {
         + `<div class="part-info"><div class="part-name">${esc(part.part_code || "")} `
         + `${esc(part.name || "")}</div><div class="part-type">${esc(size)}`
         + `${layers ? " · " + esc(layers) : ""}</div></div>`;
+      // 材料为空的行同样必须**看得见补录入口**（Spec
+      // `packaging-parts-in-card-and-material-fill.md` §2.3 第 2 条）：与补料厚同一个渲染
+      // 循环、同一种控件形状（`part-material-fix` / `part-thickness-fix`）。
+      const materialSpec = part.material
+        && (part.material.spec || part.material.name || part.material);
+      if (!materialSpec) {
+        const matFix = document.createElement("button");
+        matFix.className = "btn btn-secondary part-material-fix";
+        matFix.type = "button";
+        matFix.textContent = "补材料";
+        matFix.addEventListener("click", (event) => {
+          event.stopPropagation();
+          packagingPartSetMaterial(part.part_code || "");
+        });
+        row.appendChild(matFix);
+      }
       // 料厚为空的行必须**看得见补录入口**（Spec `packaging-parts-thickness-facts.md` §2.5）：
       // 真图 55 件不可挤出里有 51 件卡在"没有料厚"，页面上必须有地方能补。
       if (part.thickness_mm === null || part.thickness_mm === undefined) {

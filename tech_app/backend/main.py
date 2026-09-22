@@ -7038,6 +7038,11 @@ def _parts_body(record: Any, project_id: str = "", *,
     # `max_parts` 未列出）与 `filtered_total` / `filtered_reason_mix`（被过滤掉、根本没成为
     # 零件）不是同一件事 —— 前端据此拆成两句，读接口必须两笔都给全。唯一来源是 `summarize()`。
     body["summary"] = packaging_parts.summarize(body if index else (record or {}))
+    # 卡片第 6 步「图纸拆出来的零件」的列与逐行可算性（Spec
+    # `packaging-parts-in-card-and-material-fill.md` §2.1 第 2–3 条）：列定义的**唯一**
+    # 来源在 `packaging_parts.CARD_COLUMNS`，可算性一律取 `processability()` 的同判据同文案，
+    # 前端照抄、不另写一套"能不能算"的规则。
+    body["part_columns"] = packaging_parts.card_columns()
     return body
 
 
@@ -7831,6 +7836,65 @@ def set_requirement_packaging_part_thickness(pid: str, part_code: str,
     return {"ok": True, "part_code": part_code, "part": updated,
             "thickness_mm": updated.get("thickness_mm"),
             "thickness_source": updated.get("thickness_source"),
+            "record": saved}
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件：人工补材料（Spec docs/specs/packaging-parts-in-card-and-material-fill.md §2.2）
+# 与「补料厚」逐字同形状：真图上 64 件有 51 件卡在缺材料，以前唯一出路是"回需求补全再整体
+# 重跑八步"（那条路还有顺序陷阱）。写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES，
+# 非法输入 → 400，件不存在 → 404。
+# --------------------------------------------------------------------------- #
+PACKAGING_PART_MATERIAL_PATH = ("/api/projects/{pid}/requirement/"
+                                "packaging-parts/{part_code}/material")
+
+
+class PackagingPartMaterialAction(BaseModel):
+    """人工补材料入参：材料名去掉空格后不能为空（不许用空串表示"没填"）。"""
+
+    spec: str
+    reason: str = ""
+
+
+@app.get(PACKAGING_PART_MATERIAL_PATH)
+def get_requirement_packaging_part_material(pid: str, part_code: str,
+                                           user: dict = Depends(current_user)):
+    """读回人工补过的材料（纯读）；没补过回 `manual: false`，不 404。"""
+    _workflow_project(pid)
+    saved = packaging_parts.load_part_material(pid, part_code) or {}
+    return {"part_code": part_code, "manual": bool(saved),
+            "spec": str(saved.get("spec") or ""),
+            "bound_by": str(saved.get("bound_by") or ""),
+            "reason": str(saved.get("reason") or ""),
+            "source_kind": str(saved.get("source_kind") or "")}
+
+
+@app.post(PACKAGING_PART_MATERIAL_PATH)
+def set_requirement_packaging_part_material(pid: str, part_code: str,
+                                           body: PackagingPartMaterialAction,
+                                           user: dict = Depends(current_user)):
+    """人工补一件的材料：写零件行的副本（不换 parts_id）+ 一版人工材料文档。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    row = loaded["row"]
+    try:
+        updated = packaging_parts.set_manual_material(
+            row, body.spec, bound_by=str(user.get("username") or ""),
+            reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={
+            "code": "PACKAGING_PART_MATERIAL_INVALID", "message": str(exc)}) from exc
+    saved = packaging_parts.save_part_material(
+        pid, part_code, body.spec, bound_by=str(user.get("username") or ""),
+        reason=body.reason)
+    store.audit(pid, "workflow:packaging_part_material_bound", {
+        "part_code": part_code, "spec": str(updated.get("material", {}).get("spec") or ""),
+        "by": str(user.get("username") or ""), "reason": body.reason})
+    return {"ok": True, "part_code": part_code, "part": updated,
+            "material": updated.get("material"),
+            "material_source": updated.get("material_source"),
             "record": saved}
 
 

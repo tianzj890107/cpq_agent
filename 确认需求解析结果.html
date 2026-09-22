@@ -1741,6 +1741,12 @@
       if (n === 5 && currentSessionId && wfUser()) {
         wfRestoreStepData(5).catch(() => {});
       }
+      // 第 6 步：零件表只在技术项目里（快照不一定带）——按会话反查技术项目后读零件端点，
+      // 让报价卡片第 6 步**直接**看得见拆出来的零件（Spec
+      // `packaging-parts-in-card-and-material-fill.md` §2.1）。
+      if (n === 6 && currentSessionId && wfUser()) {
+        ensureCardPackagingParts().catch(() => {});
+      }
       renderProgressBar();
       $('stepTitle').textContent = STEPS[n - 1];
       const viewingPast = (n !== currentStep);
@@ -4278,6 +4284,87 @@
       return true;
     }
 
+    /* ================= 第 6 步：图纸拆出来的零件（Spec
+       `packaging-parts-in-card-and-material-fill.md` §2.1） =================
+       零件只在技术侧的零件文档里，报价卡片快照不一定带。这里按会话号自己找技术项目
+       （`business_case.source_session_id === currentSessionId`）再读零件端点；命中不到
+       （卡片还没有技术项目）就什么都不画，**不报错、不阻塞其它步骤**。
+       列定义的唯一来源是后端 `packaging_parts.CARD_COLUMNS`（随读接口 `part_columns`
+       下发）；「可算 / 不可算原因」也一律用后端 `processability()` 的同一判据同文案 ——
+       前端不自己写第二套"能不能算"的规则，下面这份只是后端没下发时的兜底显示标签。 */
+    const PACKAGING_PART_COLUMNS = [
+      { key: 'part_code', label: '零件号' },
+      { key: 'name', label: '名称' },
+      { key: 'role', label: '角色' },
+      { key: 'material', label: '材料' },
+      { key: 'thickness_mm', label: '厚度(mm)' },
+      { key: 'unfolded_length_mm', label: '展开长(mm)' },
+      { key: 'unfolded_width_mm', label: '展开宽(mm)' },
+      { key: 'outline_status', label: '轮廓状态' },
+      { key: 'processable_text', label: '可算' },
+      { key: 'unprocessable_reason', label: '不可算原因' },
+    ];
+    const PACKAGING_PARTS_SECTION = 'packaging_parts';
+
+    function _cardPartsCell(value) {
+      return (value === null || value === undefined) ? '' : String(value);
+    }
+
+    // 行 → 表格行：只做展示规整（空值成空串、材料字典取 spec），**不做任何判定**。
+    function packagingPartCardRows(rows) {
+      return (Array.isArray(rows) ? rows : []).map(part => {
+        const row = (part && typeof part === 'object') ? part : {};
+        const material = row.material && (row.material.spec || row.material.name || row.material);
+        return Object.assign({}, row, {
+          material: material ? String(material) : '',
+          thickness_mm: _cardPartsCell(row.thickness_mm),
+          unfolded_length_mm: _cardPartsCell(row.unfolded_length_mm),
+          unfolded_width_mm: _cardPartsCell(row.unfolded_width_mm),
+          processable_text: row.processable_text || (row.processable ? '可算' : ''),
+          unprocessable_reason: row.unprocessable_reason || '',
+        });
+      });
+    }
+
+    // 按会话号找技术项目：GET /api/projects?scope=all 里 business_case.source_session_id
+    // 命中的那一个。找不到就回空串（调用方据此安静跳过）。
+    async function resolveCardTechProject() {
+      try {
+        const d = await cpqAuthFetch('/api/projects?scope=all').then(r => r.ok ? r.json() : null);
+        const list = (Array.isArray(d) && d)
+          || (d && (d.projects || d.items || d.data)) || [];
+        const hit = list.find(p => {
+          const bc = (p && p.business_case) || {};
+          const sid = bc.source_session_id || (p && p.source_session_id) || '';
+          return String(sid) === String(currentSessionId || '');
+        });
+        return (hit && (hit.project_id || hit.id)) || '';
+      } catch (e) { return ''; }
+    }
+
+    // 卡片第 6 步的零件表：快照没带就自己按会话反查技术项目后读零件端点。
+    async function ensureCardPackagingParts() {
+      if (sections.has(PACKAGING_PARTS_SECTION)) return true;   // 快照已经带回来过了
+      const projectId = await resolveCardTechProject();
+      if (!projectId) return false;                             // 还没有技术项目：安静跳过
+      let payload = null;
+      try {
+        payload = await cpqAuthFetch('/api/projects/' + encodeURIComponent(projectId)
+          + '/requirement/packaging-parts').then(r => r.ok ? r.json() : null);
+      } catch (e) { payload = null; }
+      const rows = (payload && (payload.parts || payload.items)) || [];
+      if (!rows.length) return false;                           // 还没跑一键解析
+      renderTableSection({
+        action: 'render_table', step: 6, section_id: PACKAGING_PARTS_SECTION,
+        title: '图纸拆出来的零件', editable: false,
+        columns: (payload.part_columns && payload.part_columns.length)
+          ? payload.part_columns : PACKAGING_PART_COLUMNS,
+        rows: packagingPartCardRows(rows),
+      });
+      if (shownStep !== 6) { const sec = sections.get(PACKAGING_PARTS_SECTION); if (sec) sec.el.style.display = 'none'; }
+      return true;
+    }
+
     async function wfRestoreStepData(step) {
       if (!wfUser() || !currentSessionId || !FORMS.length) return false;
       let snap = null;
@@ -4296,8 +4383,26 @@
       let restored = false;
       Object.keys(snap).forEach(sid => {
         const f = FORMS.find(x => x.section_id === sid);
-        if (!f) return;
         const payload = snap[sid] || {};
+        // 未知节：快照里只要是 kind === 'table' 的只读表（如第 6 步「图纸拆出来的零件」）
+        // 就必须渲染出来 —— 以前这里直接 return，把零件表无声丢掉（Spec
+        // `packaging-parts-in-card-and-material-fill.md` §2.1 第 1 条）。
+        if (!f) {
+          const unknownRows = payload['数据'] !== undefined ? payload['数据'] : payload.data;
+          if (String(payload.kind || '') === 'table'
+              && Array.isArray(unknownRows) && unknownRows.length) {
+            renderTableSection({
+              action: 'render_table', step: step, section_id: sid,
+              title: payload.title || sid, editable: false,
+              columns: (Array.isArray(payload.columns) && payload.columns.length)
+                ? payload.columns
+                : (sid === 'packaging_parts' ? PACKAGING_PART_COLUMNS : []),
+              rows: sid === 'packaging_parts' ? packagingPartCardRows(unknownRows) : unknownRows,
+            });
+            restored = true;
+          }
+          return;
+        }
         const data = payload['数据'] !== undefined ? payload['数据'] : payload.data;
         if (data === undefined || data === null) return;
         if (Array.isArray(data)) {

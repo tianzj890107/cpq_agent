@@ -38,6 +38,10 @@ DOC_KEY_COST = "packaging_part_cost"
 #: 与零件文档分开存 —— 补一条料厚不该换掉 `parts_id`（换了会把下游落库的结论全指歪）。
 DOC_KEY_THICKNESS = "packaging_part_thickness"
 
+#: 人工补材料自己的版本化文档（Spec `packaging-parts-in-card-and-material-fill.md` §2.2）：
+#: 与料厚逐字同口径 —— 补一条材料不该换掉 `parts_id`。
+DOC_KEY_MATERIAL = "packaging_part_material"
+
 #: 过滤阈值与上限：默认值**只在这里**，不许散落在判定代码里。
 DEFAULT_OPTIONS = {"min_area_mm2": 2000, "max_edge_mm": 1200,
                    "max_area_mm2": 1000000, "max_parts": 64}
@@ -50,6 +54,22 @@ REASON_CODES = ("edge_over_max", "area_over_max", "area_under_min", "no_curve_en
                 "no_components", "all_filtered", "no_unit")
 
 PART_CODE_FORMAT = "DWG-P%02d"
+
+#: 卡片第 6 步「图纸拆出来的零件」的列（Spec `packaging-parts-in-card-and-material-fill.md`
+#: §2.1 第 2 条）：**唯一**列定义，读接口随响应下发，卡片页照抄，不自己造列。
+#: `可算`/`不可算原因` 的取值一律由 `processability()` 给（同判据同文案）。
+CARD_COLUMNS = (
+    {"key": "part_code", "label": "零件号"},
+    {"key": "name", "label": "名称"},
+    {"key": "role", "label": "角色"},
+    {"key": "material", "label": "材料"},
+    {"key": "thickness_mm", "label": "厚度(mm)"},
+    {"key": "unfolded_length_mm", "label": "展开长(mm)"},
+    {"key": "unfolded_width_mm", "label": "展开宽(mm)"},
+    {"key": "outline_status", "label": "轮廓状态"},
+    {"key": "processable_text", "label": "可算"},
+    {"key": "unprocessable_reason", "label": "不可算原因"},
+)
 
 #: `filtered_reason_mix` 一件只记一次：主因次序与 Spec §2.4 的前端文案同序
 #: （「面积超限 X / 长边超限 Y」）—— 面积超限是"吞并块"这一层的头号信号。
@@ -274,6 +294,13 @@ ATTRIBUTION_KINDS = ("part_note", "group_note", "layer_name", "requirement_defau
 DERIVED_THICKNESS_KIND = "derived_from_gsm_density"
 MANUAL_THICKNESS_KIND = "manual"
 THICKNESS_SOURCE_KINDS = ATTRIBUTION_KINDS + (DERIVED_THICKNESS_KIND, MANUAL_THICKNESS_KIND)
+
+#: 材料来源里**多出来的**那一类：人补的（Spec `packaging-parts-in-card-and-material-fill.md`
+#: §2.2）。它与料厚的 `manual` 同形，但**不算图纸证据** —— `material_evidence_ratio`
+#: 只数图纸写着的材料，人工补的必须能被一眼分开（否则"覆盖率"会被签字撑起来）。
+MANUAL_MATERIAL_KIND = "manual"
+MATERIAL_SOURCE_KINDS = ATTRIBUTION_KINDS + (MANUAL_MATERIAL_KIND,)
+NON_EVIDENCE_MATERIAL_KINDS = ("requirement_default", MANUAL_MATERIAL_KIND)
 
 #: 克重 → 料厚的换算式（Spec §2.1，逐字）：`thickness_mm = gsm / (density * 1000)`。
 #: `gsm` 单位 g/㎡、`density` 单位 g/cm³，四舍五入到 3 位小数。**不许**放行业经验厚度表。
@@ -1744,6 +1771,11 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     thickness_manual_total = sum(
         1 for row in rows
         if _material_source_kind(row, "thickness_source") == MANUAL_THICKNESS_KIND)
+    # 材料也有一本「人补的」账（Spec `packaging-parts-in-card-and-material-fill.md` §2.2 第 5 条）：
+    # 与 `thickness_manual_total` 逐字同口径；人工值**不算图纸证据**，不许抬高 evidence_ratio。
+    material_manual_total = sum(
+        1 for row in rows
+        if _material_source_kind(row, "material_source") == MANUAL_MATERIAL_KIND)
     material_default = 0
     # 证据口径与缺口原因账（Spec `packaging-parts-coverage-truthfulness.md` §2.1 / §2.2）：
     # "有材料"与"有图纸证据"必须分开数；每一件缺材料 / 缺料厚都要说得出是哪一类原因。
@@ -1755,7 +1787,8 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         thickness_kind = _material_source_kind(row, "thickness_source")
         if thickness_kind == "requirement_default":
             thickness_default_total += 1
-        if _material_spec(row.get("material")) and material_kind != "requirement_default":
+        if (_material_spec(row.get("material"))
+                and material_kind not in NON_EVIDENCE_MATERIAL_KINDS):
             material_evidence += 1
         if _num(row.get("thickness_mm")) is not None and thickness_kind != "requirement_default":
             thickness_evidence += 1
@@ -1850,6 +1883,7 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "part_total": total,
         "closed_total": closed_total,
         "material_known_total": material_known,
+        "material_manual_total": material_manual_total,
         "processable_total": processable,
         "material_default_total": material_default,
         "thickness_default_total": thickness_default_total,
@@ -1971,9 +2005,16 @@ def processability(row: Any, *, options: Any = None) -> Dict[str, Any]:
     if not _num(payload.get("thickness_mm")):
         missing.append("thickness_mm")
     if missing:
+        # 缺什么就给什么可执行下一步（Spec `packaging-parts-in-card-and-material-fill.md` §2.3）：
+        # 材料与料厚各有件级补录入口，补完**只重算这一件**，不必回需求、不必重跑八步。
+        advice: List[str] = []
+        if "material" in missing:
+            advice.append("缺材料 → 点这一行「补材料」补上")
+        if "thickness_mm" in missing:
+            advice.append("缺料厚 → 点这一行「补料厚」补上")
         return {"ok": False, "code": "PACKAGING_PART_MATERIAL_UNKNOWN",
-                "message": "这一件缺材料/厚度：%s（请在需求里补全后重跑解析）"
-                           % "、".join(missing),
+                "message": "这一件缺材料/厚度：%s（%s）"
+                           % ("、".join(missing), "；".join(advice)),
                 "missing_variables": missing, "part": None}
     return {"ok": True, "code": "", "message": "", "missing_variables": [],
             "part": as_ir_part(payload)}
@@ -2126,6 +2167,85 @@ def save_part_thickness(project_id: str, part_code: str, thickness_mm: Any, *,
 def load_part_thickness(project_id: str, part_code: str) -> Dict[str, Any]:
     """读回这一件人工补过的料厚（最近一版）；没补过 → `{}`。"""
     return _load_part_doc(project_id, DOC_KEY_THICKNESS, part_code)
+
+
+# --------------------------------------------------------------------------- #
+# 2c 人工补材料（Spec `packaging-parts-in-card-and-material-fill.md` §2.2）
+#    与「补料厚」逐字同形的镜像：真图上 64 件有 51 件卡在缺材料，而材料以前**只能**
+#    靠"回需求补全再整体重跑八步"，那条路本身还有顺序陷阱。
+# --------------------------------------------------------------------------- #
+def set_manual_material(row: Any, spec: Any, *, bound_by: str,
+                        reason: str = "") -> Dict[str, Any]:
+    """人工补材料（**纯函数**）：返回副本，绝不原地改入参。
+
+    - 写 `material = {"spec": ..., "grade": "", "material_code": ""}`（保持行的材料字典形状，
+      `_material_spec()` 读得到）与 `material_source = {"kind": "manual", ...}`；
+    - 清掉该件 `attribution` 里同字段的 `material_unresolved`（人为签字之后，这条待办就不再挂着）；
+    - `spec` 去空格后为空 → `ValueError`（**不许**用空串表示"没填"）。
+    """
+    text = _text(spec)
+    if not text:
+        raise ValueError("人工补材料不能是空白（不许用空串表示「没填」）")
+    updated = copy.deepcopy(row) if isinstance(row, dict) else {}
+    updated["material"] = {"spec": text, "grade": "", "material_code": ""}
+    updated["material_source"] = {"kind": MANUAL_MATERIAL_KIND, "text": _text(reason),
+                                 "bound_by": _text(bound_by), "evidence_ref": "",
+                                 "distance_mm": None}
+    attribution = updated.get("attribution")
+    if isinstance(attribution, dict):
+        attribution["material_unresolved"] = []
+        if not _text(attribution.get("kind")):
+            attribution["kind"] = MANUAL_MATERIAL_KIND
+    return updated
+
+
+def save_part_material(project_id: str, part_code: str, spec: Any, *,
+                       bound_by: str, reason: str = "") -> Dict[str, Any]:
+    """落一版人工材料（同一 `(part_code, 材料, 人, 理由)` 幂等，最多 20 版）。"""
+    text = _text(spec)
+    if not text:
+        raise ValueError("人工补材料不能是空白（不许用空串表示「没填」）")
+    return _save_part_doc(project_id, DOC_KEY_MATERIAL, {
+        "part_code": _text(part_code), "spec": text,
+        "bound_by": _text(bound_by), "reason": _text(reason),
+        "source_kind": MANUAL_MATERIAL_KIND, "engine_version": ENGINE_VERSION})
+
+
+def load_part_material(project_id: str, part_code: str) -> Dict[str, Any]:
+    """读回这一件人工补过的材料（最近一版）；没补过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_MATERIAL, part_code)
+
+
+# --------------------------------------------------------------------------- #
+# 2d 卡片零件表的「可算 / 不可算原因」列（Spec `packaging-parts-in-card-and-material-fill.md`
+#    §2.1 第 2–3 条）：**唯一**判据是 `processability()`，前端不许另写一套。
+# --------------------------------------------------------------------------- #
+def card_columns() -> List[Dict[str, str]]:
+    """卡片第 6 步「图纸拆出来的零件」的列（唯一来源，前端照抄，不自己造列）。"""
+    return [dict(column) for column in CARD_COLUMNS]
+
+
+def card_row(row: Any) -> Dict[str, Any]:
+    """零件文档的一行 → 卡片表格行：数值原样、可算性取 `processability()` 的同一判据同文案。"""
+    payload = row if isinstance(row, dict) else {}
+    verdict = processability(payload)
+    return {
+        "part_code": _text(payload.get("part_code")),
+        "name": _text(payload.get("name")),
+        "role": _text(payload.get("role")),
+        "material": _material_spec(payload.get("material")),
+        "thickness_mm": _num(payload.get("thickness_mm")),
+        "unfolded_length_mm": _num(payload.get("unfolded_length_mm")),
+        "unfolded_width_mm": _num(payload.get("unfolded_width_mm")),
+        "outline_status": _text(payload.get("outline_status")),
+        "processable": bool(verdict.get("ok")),
+        "processable_text": "可算" if verdict.get("ok") else "不可算",
+        "unprocessable_reason": "" if verdict.get("ok") else _text(verdict.get("message")),
+    }
+
+
+def card_rows(rows: Any) -> List[Dict[str, Any]]:
+    return [card_row(row) for row in (rows or []) if isinstance(row, dict)]
 
 
 # --------------------------------------------------------------------------- #
