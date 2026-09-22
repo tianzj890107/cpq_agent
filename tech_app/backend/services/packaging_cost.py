@@ -1827,6 +1827,11 @@ def _line_to_item(seq: int, line: dict, *, source_ref: str, source: str = "formu
     for key in ("formula_source", "rule_snapshot_version"):
         if line.get(key) is not None:
             item[key] = line.get(key)
+    # 这一行用的是哪几个默认值（Spec `packaging-cost-assumption-disclosure.md` §C1）：
+    # `compute_line()` 已经逐字给了（`<name>=0903=<值>` / `<name>=默认=<值>`），这里只**原样带上**，
+    # 不重排、不去重、不改文案；取不到给 `[]`（不许 None —— 落库那一列要写 `"[]"`）。
+    rows = line.get("assumptions")
+    item["assumptions"] = [str(text) for text in rows] if isinstance(rows, list) else []
     return item
 
 
@@ -2526,6 +2531,9 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         "categories": summary["categories"], "report_groups": summary["report_groups"],
         "category_labels": dict(COST_CATEGORIES),
         "items": items, "computed_at": now,
+        # 整单这本账的两个计数（Spec `packaging-cost-assumption-disclosure.md` §C3）：与读侧同一个
+        # `_assumption_counts()`，只数明细行上那一份，不额外现算默认值。
+        **_assumption_counts(items),
         # 「没绑上本单」的包材缺口（Spec §2.3）：进出参只披露，**不参与 verdict**。
         "gaps_unbound_to_order": gaps_unbound_to_order,
         "content_binding": content_binding,
@@ -2644,8 +2652,31 @@ def build_cost(project_id: str, requirement_no: str = "", actor: Any = None, *,
     return cost
 
 
+def _assumption_counts(items) -> dict:
+    """从**回放后的明细行**数这本账（Spec `packaging-cost-assumption-disclosure.md` §C3）。
+
+    `assumptions_total` = 各明细行 assumptions 条数之和；`assumptions_0903_total` = 其中含
+    `=0903=` 的条数（"这一单有几个数是 0903 的常量"）。只数已经回放/算好的那一份 ——
+    读侧不许为了这两个计数去现算默认值。
+    """
+    total = 0
+    from_0903 = 0
+    for item in list(items or []):
+        rows = item.get("assumptions") if isinstance(item, dict) else None
+        if not isinstance(rows, list):
+            continue
+        total += len(rows)
+        from_0903 += sum(1 for text in rows if "=0903=" in str(text))
+    return {"assumptions_total": total, "assumptions_0903_total": from_0903}
+
+
 def _rehydrate(row: dict, items: list) -> dict:
     stored = [dict(item) for item in items]
+    # 明细行那一份默认值清单逐字回放（Spec `packaging-cost-assumption-disclosure.md` §C2）：
+    # 读的就是算时存下的 `assumptions_json`；老明细行 / 解不出 / 不是列表 → 空清单，键仍在。
+    for item in stored:
+        rows = _loads(item.get("assumptions_json"), [])
+        item["assumptions"] = rows if isinstance(rows, list) else []
     tooling = [item for item in stored if _text(item.get("tooling_code"))]
     part_lines = [item for item in stored if not _text(item.get("tooling_code"))]
     summary = summarize(part_lines, packaging=row.get("packaging_total") or 0.0,
@@ -2678,6 +2709,9 @@ def _rehydrate(row: dict, items: list) -> dict:
         "categories": summary["categories"], "report_groups": summary["report_groups"],
         "category_labels": dict(COST_CATEGORIES),
         "items": stored, "computed_at": row.get("computed_at"),
+        # 整单这本账的两个计数（Spec `packaging-cost-assumption-disclosure.md` §C3）：
+        # 只从上面**回放后的明细行**数，读侧不现算。
+        **_assumption_counts(stored),
         "computed_by": _text(row.get("computed_by")),
         "computed_by_role": _text(row.get("computed_by_role")),
         # 读侧也要说得出"绑定数据源是什么"（Spec
@@ -2715,6 +2749,8 @@ def load_cost(project_id: str, requirement_no: str = "", *,
              "rule_snapshot_source": _text(rule_detail.get("source")),
              "rule_snapshot_unavailable": rule_snapshot_unavailable_of(rule_detail),
              "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
+             # 还没算过 → 这本账的两个计数给 0（Spec §C3）：不许 null、不许抛错。
+             "assumptions_total": 0, "assumptions_0903_total": 0,
              "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
              "report_groups": {name: 0.0 for name in REPORT_GROUPS},
              "subtotal": 0.0, "loss_amount": 0.0, "tooling_total": 0.0,

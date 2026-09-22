@@ -60,6 +60,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # 成本单要"算时记下"包材绑定那一份账（Spec `packaging-cost-content-binding-replay.md` §C1）：
     # 老库上 CREATE TABLE IF NOT EXISTS 不补列，不补就存不下也读不回（读侧只能回放这一份）。
     ("wip_packaging_cost_estimate", "content_binding_json", "TEXT"),
+    # 明细行要"算时记下"这一行用了哪几个默认值（Spec `packaging-cost-assumption-disclosure.md` §C1）：
+    # 老库上 CREATE TABLE IF NOT EXISTS 不补列，不补就存不下也读不回。
+    ("wip_packaging_cost_item", "assumptions_json", "TEXT"),
 )
 
 # 上线闭环第 2 批: 9 张包装扩展表补「数据来源分层」列(demo/workbook/dwg_confirmed/

@@ -18103,3 +18103,39 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 - 冻结面：老成本单报**空串**来源而不是 `none`（"没有权威数据源"是算的那一刻的结论，老成本单不知道），也不回填、不猜；`content_binding` 的键 / 闭集 / 类型不变；写侧 `bound_content_codes_detail()` 今天仍老实报 `none` + 空集；前端**一个字没改**（空来源走既有「未知档」那句）；不加接口 / 依赖、不改成本明细表与报告口径。
 - 验证：红测 15 OK；Spec §6 不回归 6 份 `Ran 151 ... OK`；packaging 全域 `Ran 2384 ... FAILED (failures=5, skipped=8)`（仍是那 5 条既有挂账，本批未引入新红）；老库迁移演练（手工建只有 `estimate_id` / `project_id` 两列的旧表 + 一行数据 → `init_db()` 后列补上 `TEXT`、老行原样还在）；真库往返修后逐字相同；`git diff --check` 干净。
 - 边界：`bound_codes` 今天仍是空集（本批不造权威数据源）；`scenario_code` 各自回放；未改前端 / 未调模型 / 未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 433. 落地 `packaging-cost-assumption-disclosure`：成本明细行「用了几个默认值、哪几个」存得下、读得回、说得出口（18 OK，红基 15 红）（9-22，Codex 实现）
+
+`packaging-cost-engine.md` §2.4 / §2.5 早就写死「每个用默认值的变量都写进**该行**的 `assumptions`」
+「0903 的常量必须在 `assumptions` 里标注 `source=0903`」——`compute_line()` 也确实逐行给了，
+但这一份**出不了明细行**：`_line_to_item()` 只透传 `formula_source` / `rule_snapshot_version`，
+`_item()` 键表里没有 `assumptions`，明细表也没有这一列。真引擎真库实测：算完 34 行里 13 行带着
+非空 `assumptions`（合计 69 条，其中 1 条 `=0903=`），**落库后含这一份的行数 = 0**；整单顶层
+`assumptions` 只收运输那一条 → `[]`；前端 `requirement-confirm.js` 里 `assumptions` 0 处引用 ——
+一行公式「用了几个 0903 常量、哪几个」在页面上、在报告里都看不见。
+
+**后端**：
+
+- `_line_to_item()` 末尾原样带上 `line["assumptions"]`（`[str(x) for x in rows] if isinstance(rows, list)
+  else []`）：不重排、不去重、不改文案；
+- `wip_packaging_cost_item` 新增列 `assumptions_json`（`da_db._ADDED_COLUMNS` 补行 + `da_schema.sql`
+  建表块补行，老库靠 `ALTER TABLE`）；`da_repo._PACKAGING_COST_ITEM_COLUMNS` 加名，
+  `save_packaging_cost()` 用 `_box_match_json(item.get("assumptions") or [])` 写（取不到存 `"[]"`）；
+- `_rehydrate()` 开头逐行 `item["assumptions"] = _loads(item.get("assumptions_json"), [])`
+  （不是列表 → `[]`，键仍在）；读侧**不现算**：把 `compute_line` / `_merge_variables` 换成抛错的桩，
+  读回来仍一字不差；
+- 新增 `_assumption_counts(items)`：`assumptions_total`（各明细行条数之和）与
+  `assumptions_0903_total`（含 `=0903=` 的条数）挂进 `compute_project()` 返回体与 `_rehydrate()`；
+  `load_cost()` 的 `built=false` 分支给 `0`（不许 null）；顶层 `assumptions` 语义**一字不动**。
+
+**前端**（`requirement-confirm.js`）：新增 `pcAssumptions()` / `pcAssumptionsBlock()`，`pcPanel()`
+模板在 `${pcContentBindingBlock(cost)}` 之后挂 `${pcAssumptionsBlock(cost, items)}`；两个计数
+**逐字取后端**（取不到给 `null` + 「后端没给这本账…未知，不是 0」），条目按 `seq` 升序、
+部件名空 → 「项目级」，空账一句中文、不画空表。
+
+实跑：`Ran 18 … FAILED (failures=15)`（3 条绿为 B5 / D2 / D3 冻结守卫）→ `Ran 18 tests … OK`；
+成本 + 面板保护网 12 套 = `Ran 416 … OK (skipped=1)`；
+packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FAILED (failures=5, skipped=8)`
+（仍是那 5 条既有挂账，本批未引入新红）；`node --check tech_app/frontend/requirement-confirm.js` OK。
+
+未起服务、未发 HTTP、未连 PG / 34、未改公式 / 费率 / 最低收费、未 push / MR / tag / Release / 未部署。

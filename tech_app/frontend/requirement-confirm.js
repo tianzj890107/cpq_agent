@@ -1279,6 +1279,48 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
         ? `<div class="pc-hint" data-pc-content-binding-codes="${pcEsc(binding.unboundCodes.length)}">${pcEsc(codes)}</div>`
         : '');
   }
+  /* 这一单用了几个默认值、哪几个（Spec `packaging-cost-assumption-disclosure.md` §C4）：
+     两个计数**逐字取后端**（`assumptions_total` / `assumptions_0903_total`，明细行那几个
+     `=默认=` / `=0903=` 由后端数，前端不再数一遍）；明细行那本账按 seq 升序展开。
+     顶层纯函数：体内无 DOM / 无 fetch( ，可被 `node -e` 抽出来真跑。 */
+  function pcAssumptions(cost, items) {
+    const record = (cost && typeof cost === 'object') ? cost : {};
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const count = key => {
+      const raw = record[key];
+      if (raw === undefined || raw === null || raw === '') return null;
+      const number = Number(raw);
+      return (Number.isFinite(number) && number >= 0) ? number : null;
+    };
+    const total = count('assumptions_total');
+    const from0903 = count('assumptions_0903_total');
+    const rows = [];
+    (Array.isArray(items) ? items : [])
+      .map(item => ((item && typeof item === 'object') ? item : {}))
+      .sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0))
+      .forEach(item => {
+        const part = text(item.part_name) || text(item.part_code) || '项目级';
+        const texts = Array.isArray(item.assumptions) ? item.assumptions : [];
+        texts.forEach(entry => { rows.push({part: part, text: text(entry)}); });
+      });
+    let summary;
+    if (total === null || from0903 === null) {
+      summary = '后端没给这本账（assumptions_total / assumptions_0903_total）：这一单用了几个默认值是未知，不是 0。';
+    } else if (total === 0) {
+      summary = '这一单没有用默认值顶上去的参数。';
+    } else {
+      summary = `这一单有 ${total} 条默认值，其中 ${from0903} 条来自 0903 常量。`;
+    }
+    return {total: total, source0903: from0903, rows: rows, summary: summary};
+  }
+  function pcAssumptionsBlock(cost, items) {
+    const book = pcAssumptions(cost, items);
+    const total = (book.total === null) ? '' : book.total;
+    return `<div class="pc-hint" data-pc-assumptions="${pcEsc(total)}">${pcEsc(book.summary)}</div>`
+      + book.rows.map((row, index) =>
+        `<div class="pc-hint" data-pc-assumption="${index}">${pcEsc(`${row.part} · ${row.text}`)}</div>`
+      ).join('');
+  }
   function pcCategoryRows(cost) {
     const categories = cost.categories || {};
     const labels = cost.category_labels || {};
@@ -1543,6 +1585,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${pcHandoffDriftBanner(handoff)}
       ${readinessBlock}
       ${pcContentBindingBlock(cost)}
+      ${pcAssumptionsBlock(cost, items)}
       ${head}${summary}${totals}
       ${blockingGapBlock}
       ${advisoryGapBlock}

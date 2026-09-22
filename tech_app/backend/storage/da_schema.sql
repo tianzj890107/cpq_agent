@@ -763,6 +763,9 @@ CREATE TABLE IF NOT EXISTS wip_packaging_cost_item (
     amount_with_loss REAL NOT NULL DEFAULT 0,
     expression       TEXT,                      -- 求值用的表达式（可解释）
     inputs_json      TEXT,                      -- 输入变量快照
+    -- 这一行用的是哪几个默认值（Spec packaging-cost-assumption-disclosure.md §C1）：
+    -- `compute_line()` 给的那一份逐字落库，读侧逐字回放。
+    assumptions_json TEXT,
     source_ref       TEXT,                      -- 0903 单元格 / 工序 step_no / 材料码
     source           TEXT NOT NULL DEFAULT 'kb' CHECK (source IN ('kb', 'formula', 'human')),
     note             TEXT,

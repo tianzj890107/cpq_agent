@@ -918,7 +918,7 @@ _PACKAGING_COST_ITEM_COLUMNS = (
     "seq", "part_code", "part_name", "cost_category", "formula_code", "formula_version",
     "content_code", "tooling_code", "rate_code", "quantity_basis", "quantity", "unit",
     "unit_price", "amount", "min_charge_applied", "loss_rate", "amount_with_loss",
-    "expression", "inputs_json", "source_ref", "source", "note",
+    "expression", "inputs_json", "assumptions_json", "source_ref", "source", "note",
 )
 
 
@@ -966,6 +966,9 @@ def save_packaging_cost(project_id: str, requirement_no: str, scenario: str,
         if item_row["amount_with_loss"] is None:
             item_row["amount_with_loss"] = item.get("amount") or 0.0
         item_row["min_charge_applied"] = 1 if item.get("min_charge_applied") else 0
+        # 这一行用的是哪几个默认值（Spec `packaging-cost-assumption-disclosure.md` §C1）：
+        # 写法与 estimate 行 `assumptions_json` / `gaps_json` 一致；取不到存 "[]"（不是 NULL）。
+        item_row["assumptions_json"] = _box_match_json(item.get("assumptions") or [])
         item_row["source"] = item.get("source") or "kb"
         db.insert("wip_packaging_cost_item", item_row)
         written += 1
