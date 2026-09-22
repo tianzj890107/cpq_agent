@@ -11220,3 +11220,45 @@ git checkout FETCH_HEAD -- tech_app/frontend/agent-chat.js tech_app/frontend/ass
 
 **接下来必须做的**（等那两个未提交文件落地后）：`bash scripts/deploy_34_bare.sh ytbz`
 —— 让 `deploy_build.json` 的 stamp 与 HEAD（`463a02c`）对齐，并重跑第 6b 步隔离自检。
+
+## 293. 全库红面对账：`## 292` 清掉 14 条之后，剩下 13 条**全部**是测试侧冲突或环境产物（9-22，Codex 只读扫描）
+
+用户口径是「会一直有新的 Spec / 红测，你就一直做全部的实现」。为了知道"还有没有能做而没做的"，
+把 `tests/test_*_red.py` 全量（235 个模块）按 8 路并行分块跑了一遍（每块 `timeout 1500`，
+避免个别用例挂住整条扫描）：
+
+```
+chunk0 Ran 591 FAILED(failures=2, skipped=2)   chunk1 Ran 454 FAILED(failures=2, skipped=2)
+chunk2 Ran 621 OK                              chunk3 Ran 524 FAILED(errors=5, skipped=1)
+chunk4 Ran 516 OK (skipped=9)                  chunk5 Ran 595 FAILED(failures=3, skipped=1)
+chunk6 Ran 627 OK (skipped=2)                  chunk7 Ran 607 FAILED(failures=1, skipped=1)
+合计 ≈ 4535 条，13 条非通过（另有 2 条在非 `_red` 命名的 test_cpq_eval_ci_contract.py 里）
+```
+
+### 13 条逐条对账（无一条是实现缺口）
+
+| 条数 | 用例 | 归属 | 为什么不能靠实现转绿 |
+| --- | --- | --- | --- |
+| 1 | `test_packaging_cost_engine_red::JPersistAndApi::test_j6` | `## 273` | 断言 `assertIs(COST_WRITE_ROLES, BOX_MATCH_DECIDE_ROLES)` 被 `## 273`「去别名」**取代**（成本写角色刻意不再与排盒型同源，代码里那段注释就是裁决本身） |
+| 1 | `test_packaging_parts_outline_red::DDegrade::test_d1` | 外轮廓重判批 | 断言逐字 `outline_reason == "no_closed_loop"`，而该批 Spec 明确要求这个笼统字面从源码消失（现为 `odd_endpoints`） |
+| 1 | `test_packaging_drawing_flow_red::CGates::test_c8` | `## 262` | before 夹具与 B5 逐键同形（证据更多反而要求更严），不存在能区分两者的可信度判据 |
+| 1 | `test_packaging_quote_send_recovery_red::CMetaRecovery::test_c1` | `## 272` | 夹具自遮挡：`send()` 内层把 `load_business_case` 又 patch 成 `{}`，实现怎么写都拿不到外层 meta |
+| 5 | `test_packaging_requirement_confirm_order_guard_red` A1/A2/B1/B2/C2 | `## 289` | 打桩元数冲突：`blocked_prerequisite()` / `parsed_prerequisite()` 是 0 参 stub，D2 用 `lambda pid:`，两种元数无法同时满足 |
+| 1 | `test_quick_quote_case_maintenance_red::test_f1` | `## 256` | F1 与 E5 断言互斥（面板常量按拼接 vs 要求字面量），不可同时成立 |
+| 2 | `test_tech_model_call_row_merged_and_summary_detail_red` | `## 133` | 要求模型行有「详情」折叠与输入输出 JSON —— `## 133` 已明确退役该交互 |
+| 1 | `test_tech_params_autofill_and_soft_gates_red::NoScopeCreep::test_protocol_events_unchanged` | `## 226` | 事件闭集里没有 `task-blocked`，而 `## 226` 已把它加进看板事件 |
+| 2 | `test_cpq_eval_ci_contract`（非 `_red` 命名，未进上面扫描） | 环境 | 本机 venv 装了 cadquery / OCP / nlopt / vtk，生产入口 `geometry.py` 的 `import cadquery` 因此真的绑上；CI 用的干净镜像没装，这两条在 CI 是绿的 |
+
+每一条的一行修法（都在**测试侧**，本轮一个字符都没动 `tests/`）先前已分别写进各自 Spec 段落与
+changelog（`## 256` / `## 262` / `## 272` / `## 273` / `## 289` / `## 226` / 外轮廓重判批）。
+
+### 顺带清掉的那批
+
+`## 292` 把 `test_process_row_running_info_and_fold_red` 的 14 条从「既有红基线」里清掉了 ——
+此前它一直被当作"与 ## 133/## 136 互斥、不可实现"，实际只是 `pushTaskStep` 的默认终态写错 +
+`opensCall` 裸挂子节点；实现后 `Ran 26 OK`，两条守卫（## 133 29 条 / ## 136 12 条）也没破。
+
+### 边界
+
+本轮**只读**：只跑了测试、只读了源码与 changelog；未改任何业务实现（除 `## 292` 已提交的那 4 个
+前端文件与 1 处服务端分发缝）、未改任何测试、未连 PG、未写生产数据。
