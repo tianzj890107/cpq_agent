@@ -309,15 +309,38 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     return `<div class="pb-stale" data-pb-stale="${pbEsc(stale.reason || '')}">${pbEsc(why)}，`
       + `请重新生成 BOM 后再用。</div>`;
   }
-  function pbRow(item, writable, staleMap) {
+  // 尺寸口径（后端 `size_source`）的人话 —— 与 `app.js` 的 `PACKAGING_SIZE_SOURCE_COPY` 同一份说法。
+  // 本面板在 `requirement-confirm.js`，该页不加载 `app.js`，所以取不到那份词表时按同一句回退
+  // （Spec `packaging-bom-size-quality-accounting.md` §2.3 的"不许另写一套说法"指的就是这句话）。
+  function pbSizeSourceCopy(sizeSource) {
+    const shared = (typeof window !== 'undefined' && window.PACKAGING_SIZE_SOURCE_COPY) || null;
+    const key = String(sizeSource || '');
+    if (shared && shared[key]) return shared[key];
+    if (key === 'closed_outline') return '真实轮廓（闭合环）';
+    if (key === 'component_bbox') return '分量包围盒（求不出轮廓，仅供估算）';
+    if (key === 'dwg_outline') return '图纸自带包围盒（这一件没有可用坐标）';
+    return '';
+  }
+  function pbRow(item, writable, staleMap, markMap) {
     const status = String(item.status || 'computed');
     const stale = (staleMap || {})[String(item.item_key || '')] || null;
+    const mark = (markMap || {})[String(item.item_key || '')] || null;
     const missing = (item.missing_variables || []).length
       ? `<div class="pb-missing">缺失变量：${pbEsc(item.missing_variables.join('、'))}</div>` : '';
     const toggle = writable
       ? `<button class="btn secondary" data-pb-lock="${pbEsc(item.item_key)}" data-pb-locked="${status === 'locked' ? '1' : '0'}">${status === 'locked' ? '解锁' : '锁定'}</button>`
       : '';
-    return `<li class="pb-item${stale ? ' pb-item-stale' : ''}" data-status="${pbEsc(stale ? 'stale' : status)}"${stale ? ` data-pb-stale="${pbEsc(stale.reason || '')}"` : ''}>
+    const otherBoxCode = String((mark && mark.otherBox && item.box_type_code) || '');
+    const otherBox = (mark && mark.otherBox)
+      ? `<div class="pb-box-note" data-pb-other-box="${pbEsc(otherBoxCode)}">这一行属于另一个盒型（${pbEsc(otherBoxCode || '未知')}），请解锁或重新确认盒型后再算。</div>`
+      : '';
+    const unknownBox = (mark && mark.unknownBox)
+      ? '<div class="pb-box-note" data-pb-box-unknown="1">这一行的盒型未知（旧数据）。</div>'
+      : '';
+    const bboxOnly = (mark && mark.bboxOnly)
+      ? `<div class="pb-size-note" data-pb-bbox-only="1">尺寸来自包围盒（仅供估算）：${pbEsc(pbSizeSourceCopy(item.size_source))}</div>`
+      : '';
+    return `<li class="pb-item${stale ? ' pb-item-stale' : ''}" data-status="${pbEsc(stale ? 'stale' : status)}"${stale ? ` data-pb-stale="${pbEsc(stale.reason || '')}"` : ''}${mark && mark.bboxOnly ? ' data-pb-bbox-only="1"' : ''}>
       <div class="pb-item-head">
         <span class="pb-key">${pbEsc(item.item_key)}</span>
         <span class="pb-name">${pbEsc(item.item_name || '')}</span>
@@ -325,6 +348,9 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
         ${toggle}
       </div>
       ${pbStaleNote(stale)}
+      ${otherBox}
+      ${unknownBox}
+      ${bboxOnly}
       <div class="pb-dims">尺寸：${pbEsc(pbSize(item))}${item.quantity ? ` · 数量 ${pbEsc(item.quantity)}` : ''}</div>
       ${item.material ? `<div class="pb-material">材料：${pbEsc(item.material)}${item.material_code ? `（${pbEsc(item.material_code)}）` : ''}</div>` : ''}
       ${item.component ? `<div class="pb-component">${pbEsc(item.component)}</div>` : ''}
@@ -349,11 +375,39 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const unavailableBanner = partsUnavailable.code
       ? `<div class="pb-warning" data-pb-parts-unavailable="${pbEsc(partsUnavailable.code)}">暂时读不到零件文档版本（${pbEsc(partsUnavailable.code)}），请稍后重试；这不代表没有过期行。</div>`
       : '';
+    // 盒型维度（Spec `packaging-bom-box-type-provenance.md` §2.5）：逐行标记 + 顶部总账。
+    const otherBoxRows = Array.isArray(record && record.rows_from_other_box_type)
+      ? record.rows_from_other_box_type : [];
+    const unknownBoxRows = Array.isArray(record && record.rows_without_box_type)
+      ? record.rows_without_box_type : [];
+    const boxTypeCodes = ((record && record.source_versions) || {}).box_type_codes;
+    const mixedCodes = Array.isArray(boxTypeCodes) ? boxTypeCodes : [];
+    // 尺寸质量账（Spec `packaging-bom-size-quality-accounting.md` §2.3）。
+    const bboxRows = Array.isArray(gaps.bbox_only) ? gaps.bbox_only : [];
+    const markMap = {};
+    const mark = (key, patch) => {
+      const name = String((key || {}).item_key || key || '');
+      if (!name) return;
+      markMap[name] = Object.assign(markMap[name] || {}, patch);
+    };
+    otherBoxRows.forEach(entry => mark(entry, {otherBox: true}));
+    unknownBoxRows.forEach(entry => mark(entry, {unknownBox: true}));
+    bboxRows.forEach(entry => mark(entry, {bboxOnly: true}));
+    const mixedBanner = (otherBoxRows.length || mixedCodes.length > 1)
+      ? `<div class="pb-warning" data-pb-mixed-box="${mixedCodes.length || otherBoxRows.length}">这份 BOM 混了 ${pbEsc(mixedCodes.length || otherBoxRows.length)} 个盒型（${pbEsc(mixedCodes.join('、') || '—')}）：其中 ${pbEsc(otherBoxRows.length)} 行属于另一个盒型，已逐行标出，请解锁或重新确认盒型后再算。</div>`
+      : '';
+    const unknownBoxBanner = unknownBoxRows.length
+      ? `<div class="pb-warning" data-pb-box-unknown-total="${unknownBoxRows.length}">有 ${pbEsc(unknownBoxRows.length)} 行的盒型未知（旧数据，落库时还没有盒型字段）。</div>`
+      : '';
+    const bboxTotal = Number(((stats || {}).size_quality || {}).bbox_only || 0);
+    const bboxBanner = bboxTotal
+      ? `<div class="pb-warning" data-pb-bbox-total="${bboxTotal}">有 ${pbEsc(bboxTotal)} 行的尺寸来自包围盒（仅供估算，未求到真实轮廓）：料费按外接包围盒算，行内已逐行标出。</div>`
+      : '';
     const groups = PB_ORDER.filter(category => items.some(item => item.bom_category === category));
     const body = groups.length
       ? groups.map(category => `<section class="pb-group">
           <h3>${pbEsc(PB_CATEGORY_LABELS[category] || category)}（${items.filter(item => item.bom_category === category).length}）</h3>
-          <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable, staleMap)).join('')}</ul>
+          <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable, staleMap, markMap)).join('')}</ul>
         </section>`).join('')
       : '<div class="pb-empty">还没有包装 BOM，先在盒型匹配里确认盒型，再点「展开部件并生成 BOM」。</div>';
     const unresolved = (gaps.material_unresolved || []).length
@@ -363,6 +417,9 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。`
       + `${partsHash ? `零件文档版本：${pbEsc(partsHash.slice(0, 12))}。` : ''}</div>
       ${unresolved}
+      ${mixedBanner}
+      ${unknownBoxBanner}
+      ${bboxBanner}
       ${staleBanner}
       ${unavailableBanner}
       <div class="pb-actions">

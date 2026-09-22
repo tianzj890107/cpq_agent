@@ -730,7 +730,8 @@ def box_match_audit(project_id: str, requirement_no: str = "") -> list[dict]:
 # ========================================================================== #
 _PACKAGING_BOM_COLUMNS = (
     "industry", "engine_version", "generated_at", "bom_category", "item_key",
-    "item_name", "source", "part_code", "component", "material", "material_code", "quantity",
+    "item_name", "box_type_code", "source", "part_code", "component", "material",
+    "material_code", "quantity",
     "unit", "size_length_expr", "size_width_expr", "size_height_expr", "length_mm",
     "width_mm", "height_mm", "size_source_json", "status", "missing_variables",
     "is_optional", "locked", "locked_by", "locked_at", "note", "updated_at",

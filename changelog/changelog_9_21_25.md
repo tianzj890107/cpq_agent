@@ -14210,3 +14210,322 @@ part_role_manual_mapping / box_candidate_rank_and_runnability → 157 条全 OK
 Spec §2 第 4 条写"`app.js` 包装 BOM 面板"，但该面板实际在 `requirement-confirm.js`
 （`#packagingBomPanel` / `pbPanel()`）—— 按意图改在真正承载面板的文件。
 未改任何测试、未放宽断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 342. 64 件零件全是 `unknown` 角色：分不出「语义层没算出来」还是「图纸图层名不认识」（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-parts-role-lookup-disclosure.md` +
+`tests/test_packaging_parts_role_lookup_disclosure_red.py`
+（12 条：A 组 4 纯函数 / B 组 2 extract / C 组 2 summarize / D 组 1 前端源码守卫 /
+E 组 3 护栏；现状 **9 红 3 绿**）。全部离线：本机 fixture `tests/fixtures/cad_ir/parts_panels.json`
++ `mock.patch.object`，不连 PG、不连 34、不跑真 DWG 转换、不发 HTTP。
+
+### 缺口（`packaging-silent-degradation-disclosure.md` 同一病症在零件侧的角色来源）
+
+- `packaging_parts._layer_roles()`（`:440`）：`packaging_semantics.analyze()` 抛异常 → `doc = None`
+  → 退回 IR 图层兜底 → 真实 IR 没有 role 字段 → 全部 `unknown`。**失败没有留痕**，
+  与"图层名不在规则里"产出同一张 `{图层名: "unknown"}` 表。
+- 语义文档**逐层已经带** `role_source`（`rule` / `color_rule` / `line_type_weak` / `none`，见
+  `packaging-drawing-semantics.md` §2.2），`_layer_roles()` 只取 `role` 字段，
+  把"这个图层名根本不在规则里"这条唯一能解释原因的证据丢掉了。
+- 读接口上 `stats.by_role = {"unknown": N}` 同时表示三件事（语义层没跑成 / 图层名不认识 /
+  图纸确实没有可用图层名）；下游 `reject_unknown_role_autobind()` 因此拒掉全部 BOM 自动绑定
+  → 材料费 0 → 工艺推荐"没有零件"。实测 fixture：`by_role = {"cut": 3, "unknown": 1}`，
+  而 `'0' / 'INSERT' / 'TEXT'` 三个认不出的图层名与"语义层挂掉"在返回体上是同一张表。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 新增 `ROLE_LOOKUPS = ("semantics", "ir_layers", "unavailable")` 与
+  `role_lookup_state(ir, semantics=None) -> {source, reason, unknown_layers, message}`
+  （唯一一处查角色；给了语义文档不许再调 `analyze()`；`analyze()` 挂了但 IR 图层真的给出
+  已知角色才算 `ir_layers`，否则就是 `unavailable`）；
+- 抽 `_resolve_layer_roles()` 让 `_layer_roles()` 与 `role_lookup_state()` 走同一趟查找，
+  `_layer_roles()` 返回口径逐字不变；
+- `extract()` 的 `stats` 与 `summarize()` 新增 `role_lookup`（老文档给
+  `role_lookup_missing`，**不许**编成 `semantics`）；
+- 前端零件树 / 2.1 左栏按 `source` 分家说人话（"这一次没算出来，可重试；零件尺寸不受影响" vs
+  "这些图层名认不出角色"），带稳定 `data-` 钩子；
+- 禁项写死：不许动角色判定与 `reject_unknown_role_autobind()`、不许把 `unknown` 顺手变具体角色、
+  不许改任何件数口径（`part_total` / `by_role` / `role_known_ratio` …）。
+
+### 实测
+
+```
+tests.test_packaging_parts_role_lookup_disclosure_red  → Ran 12 … FAILED (failures=9)（3 条护栏绿）
+保护网（离线）：parts_extraction 32 OK / parts_downstream_gate 17 OK /
+                part_role_manual_mapping 21 OK / parts_outline 20 OK
+```
+
+### 已记录、未处理（不属本批）
+
+`tests.test_spec_status_truth_red.TestCPendingIsTrue` 现在 1 failure：`packaging-bom-box-type-provenance.md`
+与 `packaging-bom-size-quality-accounting.md` 两份 Spec 仍写「未实现」，但它们的红测已被并行批次实现成
+全绿 —— 按"不管正在做的实现"的口径，本批未改那两份 Spec 的状态行。
+
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 342. 工艺路线要固定"排产时照的那一版 BOM"：读接口在现取、BOM 重建后已确认路线照旧"没过期"（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-route-bom-version-pinning.md` +
+`tests/test_packaging_route_bom_version_pinning_red.py`（14 条：E 组 3 / F 组 6 / G 组 3 / H 组 2；
+现状 **11 红 3 绿**，3 条绿的是"重排照旧整体替换工序 / 未排过路线的形状 / BOM 没变时重复确认幂等"
+的护栏）。本批不真跑任何服务：四处缺口全部由**读代码**定位，红测只用假仓库 + 纯函数，离线可复现；
+不改成本 / BOM / 盒型匹配侧，也不动 `tests/` 下任何既有文件。
+
+### 缺口
+
+1. `packaging_route.py:504-508 load_route()` 的 `source_versions` 三项全部来自**当前** BOM 文档
+   （`:496-497` 读接口那一刻现取）—— BOM 一重建，同一条旧路线的 `bom_version` 就跟着变，
+   字段名"照哪一版排的"与实际"现在哪一版"不是一回事（`dwg-semantics-agent-flow.md` §6.1 那条
+   `box_match → bom → route → cost → quote_draft` 链在路线这一段名义满足、事实上说谎）。
+2. 路线表 `da_schema.sql:1249`、版本快照表 `:1293`、`da_repo.py:795 _PACKAGING_ROUTE_COLUMNS`、
+   `da_db.py:28 _ADDED_COLUMNS` 里都没有 BOM 来源列 —— `build_route()`（`:541`）自己也不知道
+   照的是哪一版，多出来的键在 `save_packaging_route()`（`:808`）被直接丢弃。
+3. `packaging_route.py:454 _stale_reasons()` 只有工序指纹 / 表面字段 / 数量三条轴：BOM 重建后
+   已确认路线照旧 `stale=false`、`stale_reasons=[]`，界面上看不出这版排产的上游已经不存在。
+4. `confirm_route()`（`:592`）的幂等判定（`:611-616`）与冻结快照（`:618-632`）都不含输入版本：
+   BOM 变过而工序没变时，重复确认会原样返回旧快照（版本号都不动）。
+5. `load_route()` 里 `load_bom()`（`:497`）没有保护：BOM 侧一抛错，读路线接口整体失败；
+   读不到 BOM 与"没有上游版本"在读回体上分不出来。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `bom_input_hash(rows)`（新增模块级纯函数）：BOM 行的规范形指纹，行序无关、空输入给 `""`；
+- 路线主表与版本快照**新增列** `source_versions_json`（只加列，老库幂等补列），
+  `build_route()` 在**排产那一刻**记下 `bom_version` / `bom_hash` / `bom_item_total` /
+  `engine_version` / `box_type_code`；
+- `load_route()` 返回**存的**那一份（历史路线给 `{}` 并报 `provenance_missing`），新增
+  `bom_unavailable` 标记（读不到 ≠ 变了），stale 原因新增 `bom_rebuilt`（指纹为准，
+  与是否确认过无关 —— 不许被 `if not versions` 早退吞掉）；
+- `confirm_route()`：没有来源 → `409 route_bom_provenance_missing`；来源与当前 BOM 对不上 →
+  `409 bom_rebuilt`；快照与 `route_versions()` 读回都带 `source_versions`；
+- 禁项写死：不改既有三条 stale 原因与两条既有 409、不读接口里重排、不拿当前 BOM 兜来源、
+  不改成本 / BOM / 匹配侧、不连线上库、不发 HTTP。
+
+### 复跑
+
+- `tests.test_packaging_route_bom_version_pinning_red`：`Ran 14, failures=10, errors=1`
+  （E1/E2/F1/F2/F3/F4/F6/G2/G3/H1/H2 红，E3/F5/G1 绿）。
+- 不回归：`test_packaging_process_route_red` 57 OK、`test_packaging_quote_close_loop_red` 96 OK、
+  `test_packaging_parametric_bom_red` 57 OK、`test_packaging_parts_extraction_red` 32 OK、
+  `test_spec_status_truth_red` 7 OK。
+- 本批只读源码 + 假仓库，`tech_app/data/` 下未新增任何测试目录（`testpid*` 计数保持 0）。
+
+## 343. 自查两批已落地：BOM 的尺寸质量账 / BOM 行的盒型归属（Spec 状态行翻成已实现，7 + 6 OK）（9-22，Codex 只改 Spec 正文 / changelog）
+
+触发：本仓既有护栏 `tests.test_spec_status_truth_red` 报两条"声明「未实现」但红测已经全绿"：
+`packaging-bom-size-quality-accounting.md` 与 `packaging-bom-box-type-provenance.md`。
+核对后确认**实现确实已在工作区落地**（并行会话的在途改动，未提交）：
+
+- 尺寸质量账：`packaging_bom.py:931-936 _item_out()` 提升 `size_source` / `outline_status` /
+  `size_quality`（口径唯一来源 `_size_quality_of()` → `packaging_parts.size_quality_of()`，
+  `:942-950`）、`:972-984 _stats()` 新增 `size_quality` 三档、`:1014 gaps.bbox_only`；
+- 盒型归属：`da_schema.sql` 与 `da_repo.py:731-738 _PACKAGING_BOM_COLUMNS` 补 `box_type_code`、
+  `da_db.py:52` 老库幂等补列、`packaging_bom.py:510` 每行写盒型、`:938` 行上层可读、
+  `:1016 box_type_codes` 由行汇总（不再拿"成品行"的 item_key 当整份 BOM 的盒型）。
+
+动作：把两份 Spec 的状态行从「未实现」改成「已实现」，并各补一段 `## 5. 落地` 记下实现落点与
+复跑读数 —— 状态行只说真话这一条不靠记忆，靠 `test_spec_status_truth_red` 每次跑出来。
+
+### 复跑
+
+- `tests.test_packaging_bom_size_quality_accounting_red`：`Ran 7` **OK**（G1–G7）。
+- `tests.test_packaging_bom_box_type_provenance_red`：`Ran 6` **OK**（I1–I6）。
+- `tests.test_spec_status_truth_red`：`Ran 7` **OK**（本批前是 1 failure）。
+- 不回归：`test_packaging_parametric_bom_red` 57 OK、`test_packaging_parts_extraction_red` 32 OK、
+  `test_packaging_bom_parts_version_binding_red` 7 OK。
+
+### 边界
+
+两份实现文件仍是**未提交**的工作区改动（实现不在我的边界内，我一个字都没改）；
+若它们被回退，状态行会重新变成谎言 —— 那时 `test_spec_status_truth_red` 会再次报出来。
+未 push / MR / tag / Release / 部署，未连 34，未跑任何真实服务。
+
+## 343. 角色候选「读不到」的披露，被它自己的下一个调用点丢掉了（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-bom-role-unbound-template-disclosure.md` +
+`tests/test_packaging_bom_role_unbound_template_disclosure_red.py`
+（8 条：A 组 3 / B 组 1 / D 组 1 前端源码守卫 / E 组 3 护栏；现状 **5 红 3 绿**）。
+全部离线：七处依赖一律打桩（假 da_repo / 假 meta 文档），不连 PG、不连 34、不发 HTTP、不写数据。
+
+### 缺口（`## 340` 刚落地的披露，在下一层被扔了）
+
+- `packaging_bom.role_candidates_for()`（`:860`）KB 读不到时给 `part_templates: []` **加上**
+  `templates_unavailable: {code: template_lookup_failed, reason, message}`
+  （`packaging-silent-degradation-disclosure.md` §2.3 的产物，已被 C1/C2 钉住）。
+- `packaging_bom._load_role_scope()`（`:1100`）只取 `part_templates`，**标记被丢掉**
+  （实测 `scope.get("templates_unavailable")` → `None`），而且自己又写了一处
+  `except Exception: templates = []` —— 同一个洞的第二格。
+- 后果：`GET …/packaging-bom` 的未映射清单里每行 `role_candidates: []`、
+  `role_unbound_unavailable = {}`，与"这个盒型确实没有候选角色"同形；
+  同一时刻 `GET …/packaging-bom/role-map`（`main.py:6885` 原样带出）却说"模板暂时读不到" ——
+  **两个面板对同一件事说法不一致**。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `_load_role_scope()` 返回体加 `templates_unavailable`（逐字透出；它抛异常时按同一形状留痕
+  `template_lookup_failed` + 异常类名 + 人话），清单照出、候选照旧给空（只加解释，不改结论）；
+- `load_bom()` 加 `role_unbound_templates_unavailable`（逐字等于那一份，不第二次查知识库）；
+  既有 `role_unbound` / `role_unbound_total` / `role_unbound_unavailable` 一个字不改；
+- 前端未映射清单在非空时说明"候选角色暂时读不到（可重试）；这不代表该盒型没有候选角色"，
+  带 `data-role-unbound-templates-unavailable` 钩子；
+- 禁项写死：不许折成布尔、不许写进 `role_unbound_unavailable`、不许改
+  `role_candidates_for()` 的既有形状与 `role_map_status()` 的清单口径。
+
+### 实测
+
+```
+tests.test_packaging_bom_role_unbound_template_disclosure_red → Ran 8 … FAILED (failures=5)（3 条护栏绿）
+保护网（离线）：silent_degradation 13 OK / part_role_manual_mapping 21 OK / parametric_bom 57 OK
+```
+
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 344. 回传报价记录不认"发它时那一版成本"：成本重算后旧回传照旧读起来像当前有效（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-handoff-input-drift-disclosure.md` +
+`tests/test_packaging_handoff_input_drift_red.py`（7 条：J 组；现状 **4 红 3 绿**，
+3 条绿的是"成本没变不 stale / 没有回传记录逐字给 {} / 既有键逐字不变"的护栏）。
+本批不真跑任何服务：缺口全部由**读代码**定位，红测只用假仓库 + 假成本，离线可复现；
+只碰回传记录的**读侧披露**，不动 `send_to_quote()` 的落库与幂等。
+
+### 缺口
+
+1. `packaging_handoff.py:451 load_handoff()` 把库里那一行原样吐回去：没有 `stale` /
+   `stale_reasons` / `source_versions`，调用方要自己知道去摸 `cost_result_version` 与
+   `package_fingerprint` 两个裸键。
+2. `result_version_of()`（`:128`，`"pkgcost-v1:<数量>:<总额>"`）是成本结果版本的唯一口径，
+   `send_to_quote()`（`:400`）把它落进了记录，但**读侧从不和当前成本比**：成本重算之后，
+   上一次回传记录照旧读得出来、看不出"你发出去的报价是按旧成本发的"
+   （对照 `packaging_match.py:652 load_box_match()` 与成本侧的同一条 `stale` 纪律）。
+3. `:458 handoff_versions()` 只做排序，一个漂移判定都不带。
+4. 当前成本读不到（还没算过 / 存储异常）与"成本变了"在读回体上分不出来；历史记录
+   （`cost_result_version` 为空）与"版本一致"也分不出来。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 新增模块级纯函数 `handoff_stale_reasons(record, cost)`：原因闭集
+  `cost_recomputed` / `provenance_missing`，固定顺序、去重；`cost` 给 `{}` / 没算过时
+  只允许 `provenance_missing`（"比较不了" ≠ "变了"）；
+- `load_handoff()` 新增四个必存在的键：`stale` / `stale_reasons` / `source_versions`
+  （`cost_result_version` + `handoff_version` + `package_fingerprint`，**一律来自记录**）/
+  `cost_unavailable`（读不到当前成本时的显式标记）；没有回传记录时逐字给 `{}`；
+- `handoff_versions()` 每条带同一口径的四个键，当前成本**只读一次**；
+- 禁项写死：不许因 stale 拒绝读 / 自动重发 / 改历史记录 / 在读接口里重算成本、
+  不许拿当前成本兜 `source_versions`、不许改 `result_version_of()` 与交接包 10 组、
+  不许连线上库 / 发 HTTP。
+
+### 复跑
+
+- `tests.test_packaging_handoff_input_drift_red`：`Ran 7, failures=4`（J1/J3/J4/J6 红，
+  J2/J5/J7 绿）。
+- 不回归：`test_packaging_quote_close_loop_red` 96 OK、`test_packaging_cost_engine_red` 81 OK
+  （上一批记录的 J6 存量红已由财务权限那一批改绿，两份 spec 的相关注记已按事实更新）。
+- 仓内既有红（**非本批引入**，属并行会话的在途文件）：
+  `test_packaging_cost_and_handoff_static_downgrade_red` 当前 `Ran 15, failures=10`
+  （该文件与实现都在并行会话手里，读数以当时为准）。
+- 本批只读源码 + 假仓库，`tech_app/data/` 下未新增任何测试目录（`testpid*` 计数保持 0）。
+
+## 344. 依赖自检说「编排层已就绪」、真跑说「依赖缺失」——而且导入失败会被永久缓存（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-flow-dependency-probe-truth.md` +
+`tests/test_packaging_flow_dependency_probe_truth_red.py`
+（8 条：A 组 3 / B 组 2 / C 组 2 / D 组 1；现状 **5 红 3 绿**）。
+全部离线：打桩 `importlib` + 存档/恢复 `_CACHE`，不连 34、不跑真 DWG 转换、不发 HTTP、不写数据。
+
+### 缺口（`packaging_drawing_flow` 的依赖缝）
+
+- `__init__.py:76 _available()` 用 `importlib.util.find_spec` —— 只证明**文件在不在**。
+  模块自己的 import 失败（缺子依赖 / 语法错误 / 环境缺件）时 `find_spec` 仍返回非 None →
+  `capability()["available"] is True`、"编排层已就绪"，而 `run_flow()` 到 `cad_ir_parse`
+  直接 `unavailable(PACKAGING_FLOW_DEPENDENCY_MISSING)`：**自检与真跑互相打脸**。
+- `__init__.py:62-66 _dependency()`：`except Exception: module = None` 把真因
+  （`ModuleNotFoundError: No module named 'ods'`）吞成"没有这个依赖"，返回体里只剩 `detail.dependency`。
+- 同一处 `_CACHE[key] = module` **连 `None` 一起缓存**，且 `_CACHE` 没有失效入口 ——
+  一次失败 = 这个进程里永远"依赖缺失"，运维装好依赖 / 热修模块文件后仍然报缺失，只有重启才恢复。
+- `steps.py:21 _resolve()` 的 `except Exception: return None` 把**外部注入 resolver** 的异常
+  也一并吞掉，步骤条目上同样分不出"没有"与"装载失败"。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `model.py` 新增 `DEPENDENCY_STATES = ("ok","missing","import_failed","unknown")`、
+  模块级 `DEPENDENCY_STATE_REGISTRY`、`note_dependency_state()`、`dependency_state()`
+  （`reason` 是异常类名、`message` 是异常原文前 200 字；没登记过一律 `unknown`，
+  **不许**折成 `missing`）；
+- `_dependency()`：**失败不写缓存**（只缓存成功），失败按 `missing` / `import_failed` 登记；
+  对外仍是 `Optional[Any]`、仍不抛异常、`deps=` 的 dict 依赖缝照旧可用；
+- `capability()`：新增 `dependencies_state`；**必需四项**改走"真的导入"，
+  `import_failed` 时 `available=False` 且 `message` 说"依赖装载失败：<名字>（<异常类名>），请查看服务日志后重启服务"；
+  既有 `dependencies`（`find_spec` 口径 bool）与既有键逐字不变（红测 `I1` 钉着）；
+- `steps._resolve()` 登记 resolver 的异常；`_unavailable()` 的 `detail` 加
+  `dependency_state` / `reason`，`error_code` / `status` / `retryable` / `detail.dependency` 与
+  那句"依赖的能力尚未就绪"在 `missing` / `unknown` 时逐字保留；
+- 禁项写死：不许把 `import_failed` 折成 `missing`（方向相反也不行）、不许在导入失败时静默给
+  `available: True`、不许改成"每次请求重新 import 全部依赖"。
+
+### 实测
+
+```
+tests.test_packaging_flow_dependency_probe_truth_red → Ran 8 … FAILED (failures=5)（3 条护栏绿）
+保护网（离线）：packaging_drawing_flow 54 OK(skipped=1) / drawing_flow_error_taxonomy 14 OK /
+                drawing_flow_parse_terminal_signal 30 OK
+```
+
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 345. 落地两批：BOM 行认自己的盒型 + BOM 的尺寸质量账（6 OK / 7 OK，两条旧护栏按设计变红并挂账）（9-22，Codex 实现）
+
+本批把工作区里两份红测实到位：`tests/test_packaging_bom_box_type_provenance_red`（I 组 6 条）与
+`tests/test_packaging_bom_size_quality_accounting_red`（G 组 7 条）—— 13 条全绿。
+
+### 一、盒型归属（`docs/specs/packaging-bom-box-type-provenance.md`）
+
+- `da_schema.sql`：`wip_packaging_bom_item` 新增列 `box_type_code TEXT`（只加列）；
+  `da_db._ADDED_COLUMNS` 给老库幂等补列（`("wip_packaging_bom_item", "box_type_code", "TEXT")`）；
+  `da_repo._PACKAGING_BOM_COLUMNS` 加入该列（不加就会被落库取值的字典推导丢掉）。
+- `packaging_bom._assemble()`：**返回前一处** for 循环统一盖章 `item["box_type_code"] = box_code`
+  —— 六组行字面量里各写一遍就会漏一组，正是本批要消灭的那个洞。
+- `packaging_bom.load_bom()` 新增三个**必存在**的键：`source_versions.box_type_codes`（行上盒型
+  去重升序）、`rows_from_other_box_type`（非空且 ≠ 当前确认盒型，`item_key` 升序）、
+  `rows_without_box_type`（盒型为空的历史行，`item_key` 升序）—— 两者分开列（处置话术不同）。
+  **锁定行一律不删**：混盒型是"报出来 + 让人决定"，不是自动清理。
+- 前端 `requirement-confirm.js`（BOM 面板实际所在文件）：`data-pb-other-box` /
+  `data-pb-box-unknown` 逐行标记 + `data-pb-mixed-box` / `data-pb-box-unknown-total` 顶部总账。
+
+### 二、尺寸质量账（`docs/specs/packaging-bom-size-quality-accounting.md`）
+
+- `_item_out()`：有 `dwg_binding` 的行把 `size_source` / `outline_status` / `size_quality`
+  提到行顶层；`size_quality` 缺失时转调 **唯一口径** `packaging_parts.size_quality_of()`
+  （`_size_quality_of()`，延迟导入避免循环），不另写一套映射。
+- `_stats()`：新增 `size_quality` 三档（`unfolded` / `bbox_only` / `unknown`，按行计一次，
+  只认行上留痕）；既有六个键逐字未动。
+- `load_bom().gaps`：新增 `bbox_only`（包围盒行 `item_key` 升序，无则 `[]`）—— 加法，不并进既有三个键。
+- 前端面板：`data-pb-bbox-only` 逐行"尺寸来自包围盒（仅供估算）" + `data-pb-bbox-total` 汇总条数；
+  文案与被冻结成本/报价的口径一致（**只标记，不挡**）。`node --check` 通过。
+
+### 三、两条旧护栏按设计变红（已挂账，不改测试）
+
+新增的两个**必存在的键**与两份先前护栏的"键集逐字冻结"不可能同时成立：
+
+- `tests/test_packaging_bom_part_size_provenance_red.py::B3`（`:238-245`）
+- `tests/test_packaging_parse_to_downstream_seams_red.py::B4`（`:294-305`）
+
+两条的其余断言（数字 / 绑定 / 配对复核 / `length_mm`、`width_mm` 逐字不变）仍全绿；要转绿需测试侧把
+键集断言改成"包含"（`assertLessEqual`）—— 属测试侧动作，本层不动。挂账写在
+`packaging-bom-size-quality-accounting.md` 的「已记录的偏差（不改测试）」段。
+
+### 四、边界
+
+- Spec §2 写"前端（`app.js` 包装 BOM 面板）"，但该面板实际在 `requirement-confirm.js`
+  （`#packagingBomPanel` / `pbPanel()`）；`app.js` 里只有图纸零件面板与角色映射面板 —— 按意图
+  改在真正承载面板的文件上（与 `## 341` 同一条已记边界）。
+- `main.py` 的 `GET …/requirement/packaging-bom` 原样透出（路由形状与权限门禁未动）。
+
+### 五、复跑
+
+```
+tests.test_packaging_bom_box_type_provenance_red      → Ran 6 … OK
+tests.test_packaging_bom_size_quality_accounting_red  → Ran 7 … OK
+node --check tech_app/frontend/requirement-confirm.js → 通过
+```
+
+未改任何既有测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

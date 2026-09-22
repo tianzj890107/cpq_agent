@@ -1213,6 +1213,9 @@ CREATE TABLE IF NOT EXISTS wip_packaging_bom_item (
                         'packaging', 'tooling', 'optional_part')),
     item_key        TEXT NOT NULL,
     item_name       TEXT,
+    -- 这一行属于哪个盒型（Spec `packaging-bom-box-type-provenance.md` §2.1）：
+    -- 换盒型重算后，上一版盒型留下来的锁定行不许静默冒充新盒型的部件。
+    box_type_code   TEXT,
     -- 溯源（盒型 / 需求 / 知识库表名）：Spec §2.5 要求每行都带。
     source          TEXT,
     part_code       TEXT,

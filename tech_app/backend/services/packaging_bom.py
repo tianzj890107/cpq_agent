@@ -505,6 +505,9 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str) -> lis
     for item in items:
         item["industry"] = PACKAGING_INDUSTRY
         item["engine_version"] = ENGINE_VERSION
+        # 每一行都盖章"我属于哪个盒型"（Spec `packaging-bom-box-type-provenance.md` §2.3）：
+        # **一处**统一盖，六组字面量里各写一遍就是今天这个洞（漏一组=锁定行冒充新盒型）。
+        item["box_type_code"] = box_code
     return items
 
 
@@ -923,7 +926,30 @@ def _item_out(row: dict) -> dict:
         out.setdefault("binding_method", _text(binding.get("binding_method")))
         out.setdefault("bound_by", _text(binding.get("bound_by")))
         out.setdefault("part_role", _text(binding.get("part_role")))
+        # 尺寸来源三件套也提到行顶层（Spec `packaging-bom-size-quality-accounting.md` §2.1）：
+        # BOM 面板要判"这一行的数是不是包围盒"不必再钻 `size_source_json`；
+        # `size_quality` 逐字取留痕写的那个值（口径只有一处：`packaging_parts.size_quality_of()`），
+        # 留痕里没有时用同一个函数按 `size_source` 补（**不新写第二套映射**）。
+        out.setdefault("size_source", _text(binding.get("size_source")))
+        out.setdefault("outline_status", _text(binding.get("outline_status")))
+        out.setdefault("size_quality", _text(binding.get("size_quality"))
+                       or _size_quality_of(binding.get("size_source")))
+    # 行属于哪个盒型（Spec `packaging-bom-box-type-provenance.md` §2.3）：老库/历史行给空串。
+    out["box_type_code"] = _text(row.get("box_type_code"))
     return out
+
+
+def _size_quality_of(size_source: Any) -> str:
+    """`size_source` → 尺寸质量档，**唯一来源** `packaging_parts.size_quality_of()`。
+
+    延迟导入：`packaging_parts` 在模块层 import 本模块，这里不能在模块层反向 import。
+    取不到（零件模块不可用）时按同一口径的兜底值 `bbox_only`（"缺失一律按包围盒"）。
+    """
+    try:
+        from . import packaging_parts
+        return _text(packaging_parts.size_quality_of(size_source))
+    except Exception:                                   # noqa: BLE001 - 见 docstring
+        return "bbox_only"
 
 
 def _stats(items: list) -> dict:
@@ -940,6 +966,13 @@ def _stats(items: list) -> dict:
     unresolved = [item for item in items
                   if _text(item.get("bom_category")) == "material"
                   and not _text(item.get("material_code")) and _text(item.get("material"))]
+    # 尺寸质量账（Spec `packaging-bom-size-quality-accounting.md` §2.2）：一份 33 行的 BOM 里
+    # "3 行的尺寸其实是包围盒"必须读得出来。**判据只认行上留痕**（`_item_out()` 提升的那个值），
+    # 不在这里按 `size_source` 字符串另算一套 —— 口径只有一处（`size_quality_of()`）。
+    size_quality = {"unfolded": 0, "bbox_only": 0, "unknown": 0}
+    for item in items:
+        quality = _text(item.get("size_quality"))
+        size_quality[quality if quality in ("unfolded", "bbox_only") else "unknown"] += 1
     return {
         "total": len(items),
         "by_category": {key: value for key, value in by_category.items() if value},
@@ -947,6 +980,8 @@ def _stats(items: list) -> dict:
         "needs_input": needs_input,
         "locked": sum(1 for item in items if int(item.get("locked") or 0) == 1),
         "material_unresolved": len(unresolved),
+        # 键**必须存在**（Spec §2.2）：为 0 的档也给 0，界面据此说"这份 BOM 没有包围盒行"。
+        "size_quality": size_quality,
     }
 
 
@@ -973,8 +1008,25 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         if (category == "material" and not _text(item.get("material_code"))
                 and _text(item.get("material"))):
             material_unresolved.append(_text(item.get("item_key")))
+    # 尺寸质量账（Spec `packaging-bom-size-quality-accounting.md` §2.3）：包围盒行的 item_key
+    # 升序清单。判据只认行上留痕（`_item_out()` 提升的那个值），不在这里另算一套来源映射。
+    bbox_only = sorted(_text(item.get("item_key")) for item in items
+                       if _text(item.get("size_quality")) == "bbox_only")
+    # 行属于哪个盒型（Spec `packaging-bom-box-type-provenance.md` §2.3）：读接口只报事实。
+    box_type_codes = sorted({_text(item.get("box_type_code")) for item in items
+                             if _text(item.get("box_type_code"))})
     generated_at = _text(items[0].get("generated_at")) if items else ""
     box_record = da_repo.load_box_match(project_id, req_no) or {}
+    # "当前确认盒型"（Spec `packaging-bom-box-type-provenance.md` §2.3）：与
+    # `source_versions.box_type_code` 同一处口径（盒型确认记录优先，退成品行）。
+    current_box_type = _text(box_record.get("confirmed_box_type")) or box_type_code
+    # 换盒型重算之后，上一版盒型留下来的行不许静默冒充新盒型的部件（只报，不许删）。
+    rows_from_other_box_type = sorted(
+        _text(item.get("item_key")) for item in items
+        if _text(item.get("box_type_code")) and _text(item.get("box_type_code")) != current_box_type)
+    # 本批之前落库的历史行没有盒型：**"无从判断"不许当成"同盒型"**，与上一条分开列。
+    rows_without_box_type = sorted(_text(item.get("item_key")) for item in items
+                                  if not _text(item.get("box_type_code")))
     pairing = _pairing_scope(project_id, req_no)
     # 走 `_role_scope()` 这个既有接缝（调用方与测试都按它打桩），键一律按可选读。
     role_scope = _role_scope(project_id, req_no, items, box_type_code) or {}
@@ -987,16 +1039,23 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         "engine_version": ENGINE_VERSION,
         # 上游版本的埋点（DWG 第 5 批 Spec §6.1）：BOM 必须带出它是基于哪一版盒型确认算的。
         "source_versions": {
-            "box_type_code": _text(box_record.get("confirmed_box_type")) or box_type_code,
+            "box_type_code": current_box_type,
             "engine_version": _text(box_record.get("engine_version")),
             "confirmed_by": _text(box_record.get("confirmed_by")),
             "confirmed_at": _text(box_record.get("confirmed_at")),
             # 这一版 BOM 是照哪一版零件文档配的（Spec §2.2）：当前文档读不到时给 ""。
             "parts_id": parts_scope["parts_id"],
             "parts_hash": parts_scope["parts_hash"],
+            # 这份 BOM 里出现过哪些盒型码（Spec `packaging-bom-box-type-provenance.md` §2.3）：
+            # 去重升序；一份"干净"的 BOM 里只会有一个。既有四项口径不变，这是加法。
+            "box_type_codes": box_type_codes,
         },
         "generated_at": generated_at,
         "items": items,
+        # 混盒型/无盒型的行（Spec `packaging-bom-box-type-provenance.md` §2.3）：键**必须存在**，
+        # 没有这种行时给 `[]`。锁定行一律不删 —— 处置是"报出来 + 让人决定"。
+        "rows_from_other_box_type": rows_from_other_box_type,
+        "rows_without_box_type": rows_without_box_type,
         # 「在报告里单列不一致项」（Spec `packaging-parse-to-downstream-seams.md` §3.2）：
         # 键**必须存在**，没有不一致时给 `[]`；只在 build 时算得出，所以按需求单存一份文档。
         "pairing_review": pairing["review"],
@@ -1022,6 +1081,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "needs_input": needs_input,
             "missing_variables": missing_variables,
             "material_unresolved": material_unresolved,
+            # 尺寸质量缺口（Spec `packaging-bom-size-quality-accounting.md` §2.3）：键**必须存在**，
+            # 没有包围盒行时给 `[]`。新账是**加法**，不许并进上面三个键。
+            "bbox_only": bbox_only,
         },
         "stats": _stats(items),
     }
