@@ -1148,20 +1148,72 @@ def apply_loss(amount: Any, loss_rate: Any, *, category: str,
     return value * (1.0 + rate)
 
 
-def default_loss_rate(material_text: Any, *, rows=None) -> Optional[float]:
-    """按材料/类别取 `factor_type='scrap'` 的损耗率；取不到返回 None（不许默认 0）。"""
+#: 材料行损耗率的来源闭集（Spec `packaging-cost-loss-rate-authoritative-sources` §2.1）。
+LOSS_RATE_MATERIAL_SOURCE = "material.standard_loss_rate"
+
+
+def loss_rate_detail(material_text: Any, *, rows=None,
+                     material=None) -> tuple:
+    """损耗率取数（Spec §2.1 四级）：返回 `(值, 来源)`；取不到是 `(None, None)`。
+
+    1. 材料行 `standard_loss_rate`（真列，`NOT NULL DEFAULT 0`）—— **0 是「未登记」**，
+       不是「损耗 0」，继续往下找（§2.2）；
+    2. 既有文字兜底（灰板 → `F-PKG-LOSS-GREYBOARD`；面纸/衬纸/特种纸/铜版/纸 →
+       `F-PKG-LOSS-PAPER`），一个字没删；
+    3. 因子表按作用域：`material.category` 非空时取 `factor_type='scrap'` 的因子，
+       **同作用域压过无作用域**、同级取 `effective_from` 最新（口径同
+       `kb_repo.effective_factor()`，那里也是"有作用域的挪到前面"）；
+    4. 取不到 → `(None, None)`（**不许**按 0 兜底）。
+
+    没有材料行就没有作用域（§2.3）：工序行 / 人工行只走第 2 级，**不会**随手捡一条因子。
+    """
     text = _text(material_text)
     source = rows if rows is not None else kb_repo._table("kb_cost_factor")
     factors = {_text(row.get("factor_code")): row for row in (source or [])
                if _text(row.get("factor_type")) == "scrap"}
+
+    # 1) 材料行上的标准损耗率（0 = 未登记）
+    if material:
+        registered = _num(material.get("standard_loss_rate"))
+        if registered is not None and registered > 0:
+            return registered, LOSS_RATE_MATERIAL_SOURCE
+
+    # 2) 文字兜底（既有行为）
     if "灰板" in text:
         hit = factors.get("F-PKG-LOSS-GREYBOARD")
-        return _num(hit.get("value")) if hit else None
-    for keyword in ("面纸", "衬纸", "特种纸", "铜版", "纸"):
-        if keyword in text:
-            hit = factors.get("F-PKG-LOSS-PAPER")
-            return _num(hit.get("value")) if hit else None
-    return None
+        if hit and _num(hit.get("value")) is not None:
+            return _num(hit.get("value")), "kb_cost_factor:F-PKG-LOSS-GREYBOARD"
+    else:
+        for keyword in ("面纸", "衬纸", "特种纸", "铜版", "纸"):
+            if keyword in text:
+                hit = factors.get("F-PKG-LOSS-PAPER")
+                if hit and _num(hit.get("value")) is not None:
+                    return _num(hit.get("value")), "kb_cost_factor:F-PKG-LOSS-PAPER"
+                break
+
+    # 3) 因子表按作用域（只有材料行给得出作用域时才走这一级）
+    scope = _text((material or {}).get("category")) if material else ""
+    if scope:
+        rows_scrap = list(factors.values())
+        scoped = [row for row in rows_scrap if _text(row.get("applicable_scope")) == scope]
+        pool = scoped or [row for row in rows_scrap
+                          if not _text(row.get("applicable_scope"))]
+        if pool:
+            ordered = sorted(pool, key=lambda row: _text(row.get("effective_from")),
+                             reverse=True)
+            hit = ordered[0]
+            value = _num(hit.get("value"))
+            if value is not None:
+                return value, "kb_cost_factor:%s" % _text(hit.get("factor_code"))
+
+    # 4) 取不到就是取不到
+    return None, None
+
+
+def default_loss_rate(material_text: Any, *, rows=None,
+                      material=None) -> Optional[float]:
+    """按材料/类别取 `factor_type='scrap'` 的损耗率；取不到返回 None（不许默认 0）。"""
+    return loss_rate_detail(material_text, rows=rows, material=material)[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -1835,10 +1887,13 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     gaps: list = []
     assumptions: list = []
 
-    def loss_rate_for(material_text: str) -> Optional[float]:
+    def loss_rate_with_source(material_text: str, material=None) -> tuple:
         if req_loss is not None:
-            return req_loss
-        return default_loss_rate(material_text, rows=factor_rows)
+            return req_loss, None
+        return loss_rate_detail(material_text, rows=factor_rows, material=material)
+
+    def loss_rate_for(material_text: str) -> Optional[float]:
+        return loss_rate_with_source(material_text)[0]
 
     lines: list = []
     tooling_lines: list = []
@@ -1892,11 +1947,15 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "min_charge_applied": False, "source": "formula",
                 "items_inputs": variables}
         line.update(_trace_fields(entry_material, result=result, snapshot=rule_version))
-        rate = loss_rate_for(material_text)
+        rate, rate_source = loss_rate_with_source(material_text, material)
         if rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": part_code,
                          "detail": "材料「%s」取不到损耗率，损耗按 0 计（金额保留）" % material_text})
         line["loss_rate"] = rate
+        if rate_source:
+            # §2.4 留痕：只有材料行带 loss_rate_source，工序 / 人工行不带。
+            variables["loss_rate_source"] = rate_source
+            line["inputs"] = variables
         lines.append(line)
 
     # 2) 工序类（BOM process 行 + 第 6 批工序） ---------------------------- #

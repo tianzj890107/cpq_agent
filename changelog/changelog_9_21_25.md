@@ -13132,3 +13132,494 @@ tests.test_cpq_eval_ci_contract                                 → Ran 73 … 2
 
 本批只改上述 1 个数据集文件与本 changelog；未改任何测试、未改 `tests/`、未连 PG、未写业务数据、
 未 push / MR / tag / Release、未部署。
+
+## 326. 补材料/补料厚写进了**没人读的侧档**：零件行从没被更新过，所以"补完还是 409"（9-22，Codex 只改 Spec / 红测 / changelog）
+
+`## 315` 给 64 件里 51 件缺材料的件补上了件级「补材料」入口。这次**只读代码**往下一层对账，
+发现那个入口从落地起就没真正生效过 —— 而且前端把症状盖住了，所以现场看是"好了"。
+
+### 一、根因（代码级，逐条可复现；没连 34，没跑任何写操作）
+
+- 补录**确实写库了**：`save_part_material()` → `DOC_KEY_MATERIAL = "packaging_part_material"`
+  （`packaging_parts.py:43`）、`save_part_thickness()` → `DOC_KEY_THICKNESS`
+  （`packaging_parts.py:39`）；两条写路由（`main.py:7824` / `7883`）的 docstring 都写着
+  "写零件行的副本（不换 parts_id）"。
+- 但那份"副本"是 `set_manual_material()` / `set_manual_thickness()` 返回的 **deepcopy**
+  （`packaging_parts.py:2177` / `2129`，docstring 明写"返回副本，绝不原地改入参"），
+  它**只出现在 HTTP 响应体里**；两条路由都没有随后 `save_parts()`，也没有任何 overlay
+  把侧档合回 `packaging_parts` 文档的那一行。
+- 两份侧档因此是**只写不读**：`packaging_part_thickness` / `packaging_part_material`
+  这两个字面量全仓只出现在 `packaging_parts.py` 的常量定义处；
+  `load_part_material()` / `load_part_thickness()` 的调用点**只有**它们自己的 GET 路由
+  （`main.py:7815` / `7874`）。
+- 而所有下游都从**零件行**取数：`_packaging_part_row()`（`main.py:7944`）→ `load_parts()`；
+  单件工艺路由（`main.py:7969`）→ `processability(row)`，`ok=False` 就 409；
+  `summarize()` 的 `material_manual_total` / `material_known_total` /
+  `unprocessable_reason_mix` 全由行现算（`packaging_parts.py:1776`）；
+  卡片 `card_row()`（`packaging_parts.py:2228`）的「可算 / 不可算原因」同理。
+- **前端盖住了症状**：`app.js:1496-1499` 拿 POST 的**回显**打内存补丁
+  （`patchPackagingPartRows(partCode, {material: payload.material})` + `renderTree(...)`），
+  于是本标签页里材料出现了、按钮消失了；一刷新（或换到报价卡片第 6 步）又是空的，
+  再点这件下游**照样 409**。这就是"刷新就没了"的老形状第二次出现。
+- 既有测试没盖这一层：`tests/test_packaging_parts_in_card_and_material_fill_red.py` 的 B2
+  只验侧档自己的读写、B4 只验 `processability(setter(row, …))` 这个**纯函数副本**变得可算；
+  料厚那套（`tests/test_packaging_parts_thickness_facts_red.py` D2/D3）只验函数与路由存在。
+
+### 二、本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/packaging-part-manual-fill-must-land-on-the-part-row.md`：
+  ① 补录之后 `load_parts()` 读回来的那一行必须已带上人工值（写回零件文档 **或** 读路径统一
+  overlay 两份侧档，二选一且必须唯一）；② 同一件补完即可算出（不再 409），其它件不受影响；
+  ③ `summarize()` 的 `material_manual_total` / `thickness_manual_total` 与已知/未知账必须跟着变；
+  ④ 幂等、不换 `parts_id`、侧档不许删、判据与卡片 10 列不变；⑤ 前端不许再靠回显掩盖。
+- 新增红测 `tests/test_packaging_part_manual_fill_persists_red.py`（A1–A3 + B1–B4 护栏）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_part_manual_fill_persists_red
+  → Ran 7 tests … FAILED (failures=3)
+```
+
+红的 3 条 = A1（补完材料后零件行材料仍是 `''`、这一件仍不可算）、A2（`material_manual_total`
+仍 0、`material_known_total` 与 `unprocessable_reason_mix` 都没动）、A3（料厚同形状：
+行上 `thickness_mm` 仍是 `None`、`thickness_manual_total` 仍 0）；
+绿的 4 条护栏 = B1（侧档仍写得进读得回、幂等）、B2（两个 setter 仍是纯函数 + 非法入参仍 `ValueError`）、
+B3（`processability()` 判据与 `CARD_COLUMNS` 10 列不变、`card_row()` 仍只认 `processability()`）、
+B4（写权限仍 `BOX_MATCH_DECIDE_ROLES`、审计动作名与 `part` 响应形状不变）。
+
+### 三、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现（`packaging_parts.py` /
+`main.py` / `app.js` 一行未动）、未改既有测试；**未连 34**、未跑任何写操作、未写数据库、
+未 push / MR / tag / Release / 未部署。
+
+## 327. 两处「库里给了数、引擎没去读」的缺口 + 三条第 1 层红测的错断言（9-22，Codex 只改 Spec / 红测 / changelog）
+
+只读排查后新立两份 Spec、两个红测，并把三条**编码了已被后续 Spec 判定为错的口径**的红测按 Spec 修好。
+未动任何业务实现，未连 34，未 push / 部署。
+
+### 一、新立 Spec A：损耗率取数接库里已有的两处权威源
+
+`docs/specs/packaging-cost-loss-rate-authoritative-sources.md` +
+`tests/test_packaging_cost_loss_rate_sources_red.py`。
+
+- 代码事实：`packaging_cost.default_loss_rate()`（`:1145-1158`）只按文字认「灰板」与「纸」，
+  其余一律 `None`；调用点 `loss_rate_for()`（`:1838-1841`）只传因子表，**材料行没传** ——
+  而材料行在同一循环里已经取到（`:1860 material = _resolve_material(row, materials)`）。
+- 数据事实：`kb_material.standard_loss_rate` 是 `NOT NULL DEFAULT 0` 的真列
+  （`da_schema.sql:296`），包装 5 条材料都有值（灰板 `0.08`、铜版纸 `0.06`、内衬纸 `0.05`、
+  特种纸 `0.09`、EVA `0.10`，`da_seed_packaging.py:434-466`）；`kb_cost_factor.applicable_scope`
+  也是真列（`da_schema.sql:405`），`kb_repo.effective_factor()`（`kb_repo.py:621`）早有
+  "专用作用域压过通用兜底"的现成口径，成本引擎没走那条路。
+- 后果：材料行写着 0.10 的 `EVA 片材` 照样报 `loss_rate_missing`，那一行还照出金额 → 按
+  `reject_silent_zero_fallback()` 判"静默按 0" → 整份成本 `provisional`（34 那次 9 条、影响
+  5.4831 元/件 ≈ 成本 31%）。
+- 契约：四级取数（材料行 `standard_loss_rate` > 既有文字兜底 > 因子表按作用域 > `None`）；
+  `standard_loss_rate == 0` 是**未登记**不是"损耗 0"；没有材料行就**不许**捡因子（防止用一条
+  通用兜底把缺口糊绿）；`loss_rate_source` 留痕；缺口口径一个字不放宽。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_loss_rate_sources_red
+  → Ran 8 tests … FAILED (failures=6)
+```
+
+红的 6 条 = A1（EVA 材料行 0.10 取不到）、A2（5 条材料逐条对比自己的值）、A3（特种纸 0.09 被
+「纸」兜底成 0.06）、A4（`=0` 被当成未登记）、A5（同作用域压过无作用域）、A8（源码里没有
+`standard_loss_rate` 字面）；绿的 2 条护栏 = A6（无材料行不许捡因子）、A7（灰板/纸文字兜底不许删）。
+
+### 二、新立 Spec B：就绪结论按严重度分层
+
+`docs/specs/packaging-cost-readiness-severity-layering.md` +
+`tests/test_packaging_cost_readiness_severity_layering_red.py`。
+
+- 代码事实：`verdict = PROVISIONAL if (gaps or silent) else FORMAL`（`:1752`）——
+  `severity` 算出来了却不参与结论（`blocking_total` 是死字段）；一条纯提示缺口就能把成本打成
+  "暂定"，`formal_cost_or_raise()`（`:1772-1788`）于是要求 POC 签字；`affected_amount_total`
+  把 advisory 的金额混进同一个数。
+- 契约：`blocking_total > 0` 或命中静默按 0 → `provisional`；**只有 advisory** → `formal`，
+  但必须给 `advisory_total` / `advisories`，且 `reasons` 里要有"N 项提示缺口"（不许静默）；
+  金额拆 `blocking_amount_total` / `advisory_amount_total`，`affected_amount_total` 保持兼容；
+  出口同一把尺子（提示缺口不要签字，阻断缺口照旧要）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_readiness_severity_layering_red
+  → Ran 8 tests … FAILED (failures=4)
+```
+
+红的 4 条 = A1（advisory-only 仍是 provisional）、A2（没有 `advisory_total` / `advisories`）、
+A5（金额没拆）、B1（提示缺口被要求签字，实测抛 409 `packaging_cost_not_formal`）；
+绿的 4 条护栏 = A3（阻断仍 provisional）、A4（静默按 0 仍 provisional）、B2（阻断仍要签字，
+带签字可放行）、B3（`packaging-cost-readiness/1` 字面不许动）。
+
+### 三、三条第 1 层红测的错断言（测试侧，按 Spec 修好）
+
+| 测试 | 原断言 | 为什么错 | 改成 |
+| --- | --- | --- | --- |
+| `test_packaging_parts_outline_red::DDegrade::test_d1` | `assertEqual(outline_reason, "no_closed_loop")` | `packaging-parts-outline-chaining.md` §2.5 第 1 条要求该笼统值**从源码消失**，该 Spec §9 已给出逐字修法等测试侧点头 | `assertIn(..., packaging_parts.OUTLINE_OPEN_REASONS)` + `assertNotEqual(..., "no_closed_loop")` |
+| `test_packaging_box_type_matching_red::AWeightsComeFromTheTable::test_a3_weights_are_not_hardcoded` | 「默认权重下 BOX-P 第一」（写死方向） | 该断言只有在**总分升序**下成立，与 `packaging-box-type-matching.md` §131 和 `packaging-box-candidate-rank-and-runnability.md` §2.1 的**降序**冲突；`_sort_key` 已按 Spec 改降序（`## 324`），这条于是恒红 | 保留原意：两次各自"首条必须是对应结果里分最高的" + 两次首条必须**不同**（证明权重读表） |
+| `test_packaging_drawing_flow_red::CGates::test_c8_user_confirmation_opens_the_blocked_stages` | 喂 `confirmed_sem()`（CAD 已确认）却要求 blocked | `packaging-manual-field-confirmation.md` §1.2 明确说"图纸已确认的字段也开不了门禁"是 bug，`status=confirmed` 就该解锁；该夹具测不到它名字里说的"还没人工确认" | 夹具换成**默认**语义文档（`inner_height` 缺失、`inner_width` 仅 `needs_confirmation`、无 `closure_type`），断言与后段"确认后开锁"不变 |
+
+三条修完实跑：`test_packaging_parts_outline_red` + `test_packaging_box_type_matching_red` +
+`test_packaging_drawing_flow_red` → `Ran 125 tests … OK (skipped=1)`。
+
+### 四、顺带确认（不动）
+
+- `tests/test_packaging_cost_engine_red::JPersistAndApi::test_j6_write_roles_reuse_batch4` 仍是红的，
+  且**已被记录**：它与 `packaging-cost-finance-access.md` §2.2 直接打架（后者要求 `COST_WRITE_ROLES`
+  与 `BOX_MATCH_DECIDE_ROLES` 不许互为别名），属两份 Spec 打架，等拍板。
+- `docs/specs/` 状态行守卫 `test_spec_status_truth_red` 在本批之后仍是 `Ran 7 OK`
+  （两份新 Spec 的"未实现 + 括号原因 + 点名的红测当前确实失败"三条都成立）。
+
+### 五、边界
+
+本批只新增 2 份 Spec、2 个红测文件，并修 3 个既有红测文件里的错断言；未改任何业务实现
+（`packaging_cost.py` 一行未动）、**未连 34**、未跑任何写操作、未写数据库、
+未 push / MR / tag / Release / 未部署。
+
+## 334. 轮廓未闭合的 4 件是死路：没有入口、文案也不说下一步，而且"重跑一次"不会变（9-22，Codex 只改 Spec / 红测 / changelog）
+
+接着 `## 326` 往下查同一批「零件下游做不下去」的件：64 件里 60 件闭合、**4 件未闭合**
+（34 实测 `a42e5e60a720`：`unprocessable_reason_mix.PACKAGING_PART_NOT_CLOSED = 4`，
+代表件 `DWG-P01` / `DWG-P02`）—— 这 4 件与缺材料/缺料厚那 51 件不一样：**它们没有出路**。
+
+### 一、根因（代码级，逐条可复现；只读，未连 34）
+
+- **文案不给下一步**：`packaging_parts.processability()`（`packaging_parts.py:1985`）的
+  `PACKAGING_PART_NOT_CLOSED` 分支只有「这一件没有可信的闭合轮廓（<原因码>），
+  不能拿包围盒尺寸去排工艺」；同一个函数里缺材料/料厚那条分支（`packaging_parts.py:2012-2022`）
+  却逐条写「缺材料 → 点这一行「补材料」补上」。
+- **两种原因给的是同一句话**：「这一件没算完（`loop_budget_exhausted`，可重试）」与
+  「图纸真的没闭合（`odd_endpoints`，要人处理）」除了原因码之外**一字不差** ——
+  用户分不出该重算还是该改图。
+- **没有任何件级轮廓出路**：`main.py` 的零件级写路由只有 `…/{part_code}/thickness` /
+  `material` / `process` / `cost` / `solid`（+ 两条 `-lookup`），**没有** `…/outline` 一类；
+  `packaging_parts.py` 里与轮廓相关的全是判定函数（`outline_diagnosis()` /
+  `_open_outline_reason()` / `_rescue_outline()`），没有落库/签字函数。
+- **前端只有"画出来"没有"点下去"**：`app.js:1115-1127` 有一张 `OUTLINE_STATUS_TEXT` /
+  `OUTLINE_OPEN_REASON_TEXT` 文案表（未闭合件画虚线 + 包围盒矩形），
+  零件树里却只有 `part-material-fix`（`app.js:2740`）/ `part-thickness-fix`（`app.js:2753`）两颗控件。
+- **"重跑一次"也不会变**：`_open_outline_reason()`（`packaging_parts.py:1250`）的判定是
+  **确定性**的（`outline_diagnosis()` 的 docstring 明确要求逐件诊断两次跑逐字相同；
+  `loop_budget_exhausted` 来自折叠边的搜索额度，不是墙钟）；唯一的重抽接口
+  `…/packaging-parts/extract`（`main.py:7097`）在全仓前端 **0 命中** —— 它是八步解析内部用的。
+- 闭环后果：这 4 件在任何页面上都推不到工艺/成本，入口一律 409
+  （`main.py:7969` 的 `packaging_part_process()` → `_packaging_part_reject()`），
+  卡片第 6 步的「不可算原因」也只是那句不带动作的话。
+
+### 二、本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/packaging-open-outline-part-needs-a-way-out.md`：
+  ① 未闭合件的出口文案必须给**可执行下一步**；② 文案按「可重试（`loop_budget_exhausted`）」
+  与「要人处理（`odd_endpoints` / `no_closed_loop` / `loop_too_small` / `no_curve_entity` /
+  `unit_unconfirmed`）」**分家**；③ 必须存在**一件级人工出路**（`…/{part_code}/outline/confirm`
+  签字按包围盒估算，或 `…/outline/recompute` 带更大额度的单件重算）；④ **不许**把
+  `outline_status` 写成 `"closed"` —— 人工签字必须留下可分辨的痕迹；⑤ 原因闭集、判定顺序、
+  409 形状、卡片 10 列全部冻结；⑥ 不许连坐。
+- 新增红测 `tests/test_packaging_open_outline_part_needs_a_way_out_red.py`（A1–A4 + B1–B4）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_open_outline_part_needs_a_way_out_red
+  → Ran 8 tests … FAILED (failures=4)
+```
+
+红的 4 条 = A1（出口文案没有动作指引）、A2（`loop_budget_exhausted` 与 `odd_endpoints`
+除了原因码一字不差）、A3（没有件级轮廓写路由与落库函数）、A4（前端零件树没有轮廓控件）；
+绿的 4 条护栏 = B1（`OUTLINE_OPEN_REASONS` 闭集与 `_open_outline_reason()` 判定顺序不变）、
+B2（未闭合仍 409 `PACKAGING_PART_NOT_CLOSED` + `missing_variables=["outline"]`）、
+B3（没人把 `outline_status` 写死成 `"closed"`）、B4（卡片 10 列与 `card_row()` 取数不变）。
+
+### 三、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现
+（`packaging_parts.py` / `main.py` / `app.js` 一行未动）、未改既有测试；**未连 34**、
+未跑任何写操作、未 push / MR / tag / Release / 未部署。
+
+## 328. 包装链路上五处的「静默降级」：失败与"空"在返回体上是同一个值（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-silent-degradation-disclosure.md` + `tests/test_packaging_silent_degradation_red.py`
+（13 条：A 组 3 + B 组 3 + C 组 4 + D 组 3；现状 **8 红 5 绿**，5 条绿的是"不许把既有口径改掉"的护栏）。
+本批不真跑任何服务：五处都由**读代码**定位，全部离线可复现。
+
+### 五处的形状完全一样 —— `except Exception` 之后的返回值与"本来就没有"逐字相同
+
+1. `packaging_bom.py:1039 _bind_parts()`：`except Exception: return items, [], []` ——
+   与"这个项目根本没有零件文档"同一个值。零件读接口上躺着 263 件，BOM 行却静默停在 `needs_input`、
+   材料费 0、`pairing_review` / `role_unbound` 都是空清单，没有任何地方说得出"回填这一步挂了"。
+2. `packaging_bom.py:756 _role_doc()`：读失败 `return {"by_requirement": {}}`，而
+   `apply_saved_role_map()` 是 `build_bom()` 每次都调的 —— 文档通道抖一下，
+   "重算不许把人工映射算没了"（Spec §2.8）就在最需要它的那一刻失效，且无留痕。
+3. `packaging_bom.py:832 save_role_mapping()`：留痕写失败 `return` —— 接口回 200，
+   行上的 `size_source_json` 写了、文档那份没写，下次重算读到的是旧的，"我映射了、它没了"无从追。
+4. `packaging_match.py:419 _part_template_count()`：读失败折成 `0`，于是候选被标
+   `part_template_available=False`（"选了它走不下去"，用户主动避开一个可用盒型），
+   `_template_warnings()` 还会给出"该盒型在部件模板表里没有模板"这句**断言的错话**。
+   （同一条缝的另一端：`packaging_bom.py:836 role_candidates_for()` 读失败给 `templates = []`，
+   与"这个盒型确实没有部件模板"同一个值。）
+5. `packaging_bom.py:1011 _pairing_doc()`：读失败 `return {"by_requirement": {}}`，于是
+   `load_bom()["pairing_review"]` 给 `[]` —— 与"这次配对没有任何不一致项"同一个值。
+   配对复核是 `bind_rows()` 唯一会喊"配对后材料明显不同类"的地方，读不到按"没有"处理，
+   等于让一次可疑配对在报告里凭空消失；与第 2 条是同一个洞的两端（一个管人工角色映射、
+   一个管配对复核）。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `_bind_parts()` 改 4 元组、失败给 `part_binding_failed`；`load_bom()` 新增 `binding_error` 键
+  （与 `pairing_review` / `role_unbound` 同构：键必须存在、没有失败给 `{}`）；
+- `_role_doc()` 读失败抛 `BomError(role_map_unavailable)`、`save_role_mapping()` 写失败抛
+  `BomError(role_map_save_failed)` —— 只区分"没有"与"读不到"，正常路径逐字不变；
+- `role_candidates_for()` 新增 `templates_unavailable`；匹配侧读不到模板时
+  `part_template_available` 给 `None`（未知）+ `part_template_unavailable`，警告码从
+  `box_type_without_part_template` 改成 `box_type_template_lookup_failed`；
+- `_pairing_doc()` 读失败必须让 `load_bom()` 带出 `pairing_review_unavailable`（加法键），
+  同时 `pairing_review` / `items` / `gaps` / `stats` 逐字不变 —— 只留痕、不改结论；
+- 禁项写死：不许把降级改成"整条链失败"（`load_bom()` 读不到披露文档时结论键不许变）、
+  不许改 `pairing_review` / `role_unbound` / 既有候选布尔口径、
+  不许改 `tests/` 既有文件（含 `test_packaging_box_candidate_rank_and_runnability_red.py`）。
+
+### 复跑
+
+- `tests.test_packaging_silent_degradation_red`：`Ran 13, failures=8`（A1/A2/B1/B2/C1/C3/C4/D1 红，
+  A3/B3/C2/D2/D3 绿）。
+- 不回归：`test_packaging_parse_to_downstream_seams_red` +
+  `test_packaging_part_role_manual_mapping_red` + `test_packaging_parametric_bom_red` `Ran 91 OK`；
+  `test_packaging_box_candidate_rank_and_runnability_red` `Ran 8 OK`。
+- 护栏：`tests.test_spec_status_truth_red` `Ran 7 OK`（本批 Spec 声明「未实现」与红测现状一致、
+  文档指名一致；`test_packaging_drawing_flow_red` `Ran 54 OK (skipped=1)` 不回归）。
+
+## 328. 7 条「阻断缺口」来自本单根本没绑上的包材项：整张包材明细表被无条件喂进成本（9-22，Codex 只改 Spec / 红测 / changelog）
+
+`docs/specs/packaging-cost-gaps-scoped-to-order-contents.md` +
+`tests/test_packaging_cost_gaps_scoped_to_order_contents_red.py`。
+
+### 一、问题（代码级 + 本机真实种子复现）
+
+- `packaging_cost.py:2060-2063`：`compute_packaging(kb_repo.packaging_cost_contents(), ...)`
+  把**整张**包材明细表（11 行：彩盒 / 平卡 / 隔卡 / 胶袋 / 双胶纸 / 护角 / 标签 / 盖板 …）喂进成本，
+  再把每一行的 `gap` 无条件收进 `gaps` —— "与本单 BOM 有没有关系"一个判据都没有。
+- 隔卡 / 胶袋 / 双胶纸 等行的尺寸与用量在源工作簿里本来就是空格（种子注释逐行写着
+  `0903 包装运输!J4/J5：工作簿缺尺寸与用量，按空单元格口径记 None`），
+  `packaging-cost-gaps-closure.md` §1.1 也早已判定这类是**数据不是 bug**。
+- 但这些 `content_formula_error:PKG-P-*` 的 severity 是 `blocking`（`:1629`），于是**每一单**都被
+  同一批 7 条与自己无关的缺口打成 `readiness.verdict=provisional` →
+  `gates.quote_publish=blocked / cost_gaps_unresolved`。
+- 本机复现（真实种子 + 内置 `PKG-P-*`）：
+
+```
+PKG-CT-CARTON  amount=2.11080741274    gap=None
+PKG-CT-PAD     amount=0.284041019453   gap=None
+PKG-CT-DIVIDER amount=None             gap=content_formula_error:PKG-P-DIVIDER
+PKG-CT-BAG     amount=None             gap=content_formula_error:PKG-P-BAG
+```
+
+### 二、本批采用的口径（这是唯一一处我替业务定的口径，写进 Spec 正文）
+
+包材缺口分「本单用得到的项」与「没绑上本单的项」，后者**只披露、不单独阻断**：
+
+1. 绑定事实只允许有**一处判据**：调用方把本单绑定到的包材项集合传进
+   `compute_packaging(rows, bound_content_codes=...)`，每行回 `binding.status = bound/unbound`；
+   **不传（`None`）＝今天行为逐字不变**（状态 `unknown`）—— 先立契约、后接数据的退路，
+   也保证既有冻结面不回归；
+2. 返回体新增 `bound_gaps`（进 `verdict`）与 `unbound_gaps`（只披露）；
+   **本批只收 `content_formula_error:*` 这一类**，`no_formula:*` / `invalid_units_per_pack` /
+   `material_price_missing` 等无论绑没绑上本单都照旧阻断（不放宽）；
+3. `lines[i]["gap"]` 一个字不删（披露不许消失，页面靠它说"这一项算不出来"）；
+4. `compute_project` 只把 `bound_gaps` 收进 `gaps`，`unbound_gaps` 进结果体新键
+   `gaps_unbound_to_order`；绑定集合算不出来就给**空集**（全部只披露），不许在成本引擎里另写一套
+   "猜哪一项用到"的规则；
+5. 就绪门新增 `unbound_total`，**不参与 `verdict`、不进 `blocking_total`**。
+
+### 三、红基（未实现，实跑）
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_gaps_scoped_to_order_contents_red
+  → Ran 8 tests … FAILED (failures=8)
+```
+
+八条全红 = A1（行上没有 `binding` 段）、A2（没有 `unbound_gaps`/`bound_gaps`）、
+A3（绑上的项也要留在 `bound_gaps`）、A4（不传集合必须与今天逐字相同）、
+A5（别的缺口码不许被豁免）、A6（行级 `gap` 不许删）、A7（就绪门没有 `unbound_total`）、
+A8（`compute_project` 仍在裸调 `packaging_cost_contents()`）。
+
+### 四、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现
+（`packaging_cost.py` 一行未动）、**未连 34**、未跑任何写操作、未写数据库、
+未 push / MR / tag / Release / 未部署。
+
+## 329. BOM 行上的 DWG 尺寸不记"照哪一版零件文档配的"：重解析后旧尺寸照旧当已确认结果（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-bom-parts-version-binding.md` + `tests/test_packaging_bom_parts_version_binding_red.py`
+（7 条：E 组 2 + F 组 5；现状 **4 红 3 绿**，3 条绿的是"不许改既有绑定口径 / 不许把一致说成过期 /
+不许把模板行标过期"的护栏）。本批不真跑任何服务：两处都由**读代码**定位，全部离线可复现。
+
+### 缺口：版本锚点算出来就丢，读接口也不比对
+
+1. `packaging_parts.py:2366 bind_rows()` 的 `size_binding` 带齐了 `component_id` / `part_code` /
+   `rule_id` / `pairing_basis` / `material_match` / 尺寸来源与质量，**唯独不带** `parts_id` /
+   `parts_hash` —— 而入参 `parts` 就是 `save_parts()` 落的整份文档（顶层带这两样）。
+   落库到 `wip_packaging_bom_item.size_source_json` 的那一份因此没有版本锚点；
+   `grep -c "parts_hash\|parts_id" tech_app/backend/services/packaging_bom.py` → **0**
+   （版本只在 `packaging_drawing_flow/steps.py:318` 的链路 detail 里报过一次，BOM 这一路一次都没有）。
+2. `packaging_bom.py:921 load_bom()` 的 `source_versions`（`:952`）只有盒型匹配四项，
+   没有零件文档这一路，也不比对行上的绑定版本。于是：重解析出一版**新**零件文档后，
+   用户没再点"生成 BOM"，`load_bom()` 照旧返回**旧**尺寸 + 旧的 `component_id`，
+   `status="computed"`、`missing_variables=[]`、`source="dwg_parts"` —— 2.1 的零件树与 BOM 行
+   互相打架，两边看上去都是"已算好的结果"，点进零件明细还会顺着不存在的 `component_id` 找不到那一件。
+3. 本批之前落库的行都属于"有 `dwg_binding` 但没有版本"这一类：现在既不说它过期、
+   也不说它无从判断。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `bind_rows()`：`size_binding` 末尾**新增** `parts_id` / `parts_hash`（逐字取自入参文档，
+  没有就给 `""`，**不许编**）；返回体顶层同样带一份；既有绑定留痕键位置与含义逐字不变；
+- `load_bom()`：`source_versions` **新增** `parts_id` / `parts_hash`（当前文档）；
+  **新增** `parts_binding_stale`（键必须存在，无问题给 `[]`）—— 换版给 `parts_reparsed`、
+  历史行给 `binding_without_version`、没有 `dwg_binding` 的行不进清单、按 `item_key` 升序；
+  **新增** `parts_document_unavailable`（正常给 `{}`）—— 当前文档读不到时给
+  `{"code": "parts_document_unavailable", ...}`，且此时 `parts_binding_stale` 必须是 `[]`
+  （"比较不了" ≠ "不一致"）；
+- 禁项写死：不许改数 / 清值 / 抛错 / 读接口顺手重绑、不许动配对口径与 `_identity()` 幂等口径、
+  不许把历史行当"没过期"放过、不许改 `tests/` 既有文件。
+
+### 复跑
+
+- `tests.test_packaging_bom_parts_version_binding_red`：`Ran 7, failures=4`
+  （E1 / F1 / F2 / F4 红，E2 / F3 / F5 绿）。
+- 不回归：`test_packaging_parts_extraction_red` OK、`test_packaging_parse_to_downstream_seams_red` OK、
+  `test_packaging_parametric_bom_red` OK、`test_packaging_part_role_manual_mapping_red` OK、
+  `test_spec_status_truth_red` `Ran 7 OK`。
+- 本批**未提交 / 未 push / 未部署**；工作区里并行会话的文件一个未动。
+
+## 329. 三条「测试侧待处置」的存量红收口：事件闭集、退役的折叠块、F1/E5 互斥（9-22，Codex 只改红测 / Spec 状态行 / changelog）
+
+前三批把包装侧的新契约立完后，把仓里**只剩这三条 "等测试侧点头" 的存量红**一次收掉。
+三条都只改红测（外加两份 Spec 的「状态」行翻面），未动任何业务实现。
+
+### 一、`test_tech_params_autofill_and_soft_gates_red::NoScopeCreep::test_protocol_events_unchanged`
+
+- 现象：看板 `EVENT` 常量表里多了 `task-blocked`，而这条用例把事件**闭集**钉死在 8 个 + `task-partial`。
+- 判定：`## 226` 的 Spec C3 写的就是"**新增一个、不是改旧**"——一键解析被阻断是"成功以外的第三种
+  终态"，不等于失败（此前看板分不出"被挡住"与"跑挂了"）。changelog `## 226` 第三节也逐字给出
+  了这条一行修法。
+- 改法：把 `task-blocked` 加进那条 `sorted([...])`，注释里写明两个新增事件的 Spec 出处；
+  「除已登记的两条外不得增删」这条纪律原样保留。
+
+### 二、`test_tech_model_call_row_merged_and_summary_detail_red`（2 条）
+
+- 现象：两条用例要求模型调用行长出 `oc-process-detail` 折叠块（详情里放输入/输出 JSON），
+  实测 `has_details = False`。
+- 判定：那个折叠交互**已被** `## 133`/`## 226` 两批的过程行口径取代 ——
+  `grep -rn "oc-process-detail" tech_app/frontend/*.js` → **0 处**（前端已不再渲染），
+  "问的是什么 / 返回的是什么"改由**后端事件明细的短摘要**承载（本模块 §2 的短摘要用例仍在守、全绿）。
+  本 Spec 的状态行早已写着"该交互已被 `## 133` 退役；红测保留为冲突锚点，测试侧待处置"。
+- 改法：把两条断言的方向**反过来锚定缺席**（`assertFalse(has_details)`、`input`/`output` 必须为空），
+  并在用例里写清依据，免得有人把退役掉的交互悄悄加回来；Spec 状态行由「未实现」改为「已实现」
+  （一次调用一行 + 后端短摘要本来就已经落地）。
+
+### 三、`test_quick_quote_case_maintenance_red::TestFPanelWiring::test_f1_panel_action_constants_match_backend`
+
+- 现象：F1 要求 `var CASE_FIELDS_PATH = "<模板>";` 是一份**字面量赋值**，而同模块 E5 明令
+  「面板不许再手写第二份 `/api/quick-quote/cases/...` 字面量」——两条**结构上不可能同时成立**
+  （changelog `## 256` 已记录，两个月来一直挂着）。
+- 判定：Spec §2.5 的本意是"面板常量与后端模板**同值**"，不是"必须是字面量"；
+  `CASES_PATH + "/{case_code}/fields"` 这种拼接正是 E5 要的写法。
+- 改法：F1 改成对常量**求值结果**断言（只认字面量与 `CASES_PATH + 后缀` 两种写法，别的写法直接判失败，
+  不许用"随便拼一个"糊过去）；E5 一个字没动；Spec 状态行由「未实现」改为「已实现」。
+
+### 四、实测
+
+```
+tests.test_tech_params_autofill_and_soft_gates_red              → Ran 10 OK
+tests.test_tech_model_call_row_merged_and_summary_detail_red    → Ran 21 OK
+tests.test_quick_quote_case_maintenance_red                     → Ran 29 OK
+tests.test_spec_status_truth_red                                → Ran 7 OK（两份翻面的状态行合法）
+```
+
+### 五、边界
+
+本批只改 3 个既有红测文件与 2 份 Spec 的「状态」行、追加本 changelog；未改任何业务实现、
+**未连 34**、未跑任何写操作、未写数据库、未 push / MR / tag / Release / 未部署。
+
+## 330. BOM 的尺寸质量没有账：包围盒行和真展开行在汇总/面板/报价上都长得一样（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-bom-size-quality-accounting.md` + `tests/test_packaging_bom_size_quality_accounting_red.py`
+（7 条：G 组 7；现状 **4 红 3 绿**，3 条绿的是"既有提升字段 / 既有 stats 六键 / 没有包围盒行时账为空"
+的护栏）。本批不真跑任何服务：三处都由**读代码**定位，全部离线可复现；
+**不重开** `packaging-bom-part-size-provenance.md` 里"不改配对、不挡成本"的既有决定，只补**账**。
+
+### 缺口
+
+1. `packaging_bom.py:881 _item_out()` 把 `binding_evidence` / `binding_method` / `bound_by` /
+   `part_role` 提到行顶层，**不提** `size_source` / `outline_status` / `size_quality` ——
+   BOM 面板想判断"这一行的数是不是包围盒"，只能自己钻 `size_source_json.dwg_binding`；
+   而同仓 `packaging_bom.py:657-658` 的未映射清单反而带了这两样，同一份数据两个口径。
+   `app.js` 里对 `size_quality` 的引用数是 0。
+2. `packaging_bom.py:897 _stats()` 只数 `computed` / `needs_input` / `locked` /
+   `material_unresolved` —— 整份 BOM **没有尺寸质量账**：`bbox_only` 全仓只出现在
+   `packaging_parts.py:227` 的常量与 `:2288` 的 docstring 里，
+   `grep -c "size_source\|size_quality\|outline_status" packaging_cost.py` → **0**。
+3. 后果：材料费按 `cut_length × cut_width` 算，包围盒越大越贵，而"几行、哪几行是包围盒贡献的"
+   在 BOM 与报价的任何汇总上都看不出来 —— 客户问"料费为什么这么高"时无从解释
+   （承接 `packaging-bom-part-size-provenance.md` §1.3）。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `_item_out()`：有 `dwg_binding` 的行**新增**把 `size_source` / `outline_status` /
+  `size_quality` 提到行顶层（逐字取自该 binding，缺失给 `""`）；既有四个提升字段名称与
+  `setdefault` 语义逐字不变；
+- `_stats()`：**新增** `size_quality`（键必须存在）`{"unfolded", "bbox_only", "unknown"}`
+  按行计一次 —— 有 binding 但 `size_quality` 为空/无 binding 一律计 `unknown`，
+  **不许**折进 `unfolded`，也不许在这里另写一套来源→质量的映射（复用
+  `packaging_parts.size_quality_of()` 的口径）；既有六个键逐字不变；
+- `load_bom().gaps`：**新增** `bbox_only`（键必须存在，`item_key` 升序，没有时 `[]`），
+  既有三个键不被污染；
+- 禁项写死：不许用尺寸质量挡成本/报价/BOM 行、不许改尺寸与状态取值、不许改配对口径、
+  不许改 `tests/` 既有文件（含作为本批锚点的 `test_packaging_bom_part_size_provenance_red.py`）。
+
+### 复跑
+
+- `tests.test_packaging_bom_size_quality_accounting_red`：`Ran 7, failures=4`
+  （G1 / G3 / G5 / G7 红，G2 / G4 / G6 绿）。
+- 不回归：`test_packaging_bom_part_size_provenance_red` OK、`test_packaging_parametric_bom_red` OK、
+  `test_packaging_parts_extraction_red` OK。
+- 仓内既有红（**非本批引入**，属并行会话的在途文件）：`test_spec_status_truth_red` 报
+  `quick-quote-full-flow-state-and-recovery.md` 用了非法状态字面量「待实现」、
+  `packaging-cost-loss-rate-authoritative-sources.md` 声明「未实现」但其红测已全绿 —— 本批未动这两份文件。
+
+## 335. `packaging-cost-loss-rate-authoritative-sources` 落地：损耗率接上库里已有的两处权威源（材料行标准损耗率 / 因子表作用域）（9-22，Codex 实现）
+
+### 一、改了什么（1 个文件）
+
+`tech_app/backend/services/packaging_cost.py`：
+
+- 新增 `loss_rate_detail(material_text, *, rows=None, material=None) -> (值, 来源)`：按 Spec §2.1
+  **四级**取数 —— ① 材料行 `standard_loss_rate`（`> 0` 才算命中，§2.2 的「0 = 未登记」继续往下找）
+  → ② 既有文字兜底（灰板 / 纸类两个因子，**一个字没删**）→ ③ 因子表按作用域
+  （`material.category` 非空时才走，**同作用域压过无作用域**、同级取 `effective_from` 最新，口径同
+  `kb_repo.effective_factor()`）→ ④ `(None, None)`；**没有**任何 `or 0.0` / 默认损耗率。
+- `default_loss_rate()` 保持既有签名并新增 `material=None`，改为 `loss_rate_detail(...)[0]`
+  （a8 的源码守卫：函数体里不出现 `or 0.0` / `return 0.0`）。
+- 聚合函数里 `loss_rate_for()` 拆成 `loss_rate_with_source()` + 薄包装 —— 工序 / 人工两处调用点
+  **一个字没改**（它们不传材料，按 §2.3 只走第 2 级，不会随手捡一条 scrap 因子）。
+- 材料行按 §2.4 写 `inputs_json.loss_rate_source`（闭集：`material.standard_loss_rate` /
+  `kb_cost_factor:<factor_code>`）；`req_loss` 覆盖时不写这个键（不编来源）。
+- 缺口口径一个字没放宽：取不到仍出 `loss_rate_missing`（advisory、「损耗按 0 计（金额保留）」文案不动），
+  `reject_silent_zero_fallback()` 的判据未动，`GAP_RESOLUTIONS` 的 severity 未动。
+
+### 二、实测
+
+```
+tests.test_packaging_cost_loss_rate_sources_red   → Ran 8 OK（原 6 红全绿）
+tests.test_packaging_cost_gaps_red
+tests.test_packaging_cost_engine_red
+tests.test_packaging_cost_red_closure_red
+tests.test_packaging_cost_rule_routing_red        → Ran 145 … 唯一红是存量 ## 273（J6）
+```
+
+### 三、边界
+
+只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 的状态行 + 本 changelog；未改任何测试、
+未改 DDL / 种子数据、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
