@@ -11372,3 +11372,23 @@ git show 7578b36:cpq_quick_quote_workspace.py e3ad09c5454f058d3aff17bdad7fe3d9
 
 - 未改任何既有测试与期望值；新增的守卫只读 `scripts/deploy_34_bare.sh` 文本。
 - 未连 PG、未写生产数据（第 6b 步在隔离临时目录里跑，跑完删除）。
+
+### `## 295` 复验：34 与本地逐字节一致（8 个前端文件 + 服务端）
+
+```
+34:              HEAD=7578b36  worktree 干净（git status --porcelain -uno 为空）
+34 vs 本机 md5（8/8 相同）：
+  agent-chat.js               44fa9b1738eec9ac662a5a61f271b45a
+  assembly-integration.js     f61c77c991ae07df5c5f67dd27c86602
+  cost-review.js              50a481321357a5dc36745cb93dbc44e7
+  index.html                  49a9a4c33f049564df2fd009818c589b
+  tech-workbench.html         0cb7e3c8e09da90e397b4c72c7eff303
+  assembly-integration.html   1533637b2dfdfeae912bf41235097d77
+  cost-review.html            f5264bdcd13742d25f17cb401e97e4c4
+  确认需求解析结果.html        2e315cac9ec9a86b466c0cafb23412ef
+下发核对：8012 /agent-chat.js 200 且含 isInfoSentence×2；8010 /index.html 200 且带
+agent-chat.js?v=20260922-road1；8010 /确认需求解析结果.html 200 且含 infoSentence×2
+```
+
+说明：`## 292` 那批「本地改了、34 上还是旧的」的差异已随这次整仓部署消失 —— 现在两边的
+前端与服务端都是同一个 commit `7578b36`。
