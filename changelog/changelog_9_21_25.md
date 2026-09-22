@@ -17690,3 +17690,35 @@ tests.test_packaging_business_part_process_by_authority_route_red  Ran 38  FAILE
 ```
 
 未改前端、未调模型、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 415. 落地 `packaging-business-part-process-entry`：业务部件「按权威清单排工序」的入口能点了（20 OK，红基 15 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增顶层纯函数 `packagingBusinessPartProcessTarget(row)`（Spec §C1）：判据 = 有业务编码 →
+  权威清单里有长度/宽度、且都 > 0 → **材料原文**（`authority.material_text` 兜底 `row.material`）
+  非空 → 才给入口；缺尺寸 `authority_size_missing`、缺材料 `material_missing`，文案逐字。
+  与 `## 413` 那颗成本按钮同形，多一道材料门槛 —— 工序明细离不开材料原文。纯函数，可被 `node` 直接跑。
+- `openPackagingBusinessPart()` 的动作区（Spec §C2）：没绑几何那一支在**既有原因**与 `## 413`
+  那条之后**追加** `data-qqBusinessProcess` 那行说明与 `#packagingBusinessPartProcessByAuthority`
+  （「工艺推荐（按权威清单）」）；既有原因与成本那颗按钮**一个字未改、相对顺序不变**；
+  `processTarget` 不 ok 就什么都不加（不做假入口）。
+- 新增 `packagingBusinessPartProcessByAuthority(partCode)`（Spec §C3）：复用既有内嵌
+  `CadInlineAnalysis`，`endpointBase` 指到 `.../requirement/packaging-business-parts/{code}`
+  （`## 414` 那条工艺路由，`method`/`mode` = `process`）；不走 `selectPackagingPart()` /
+  `packagingBusinessPartAnalyze()`，前端不算工序、不碰尺寸。
+- 两处**批次级冻结重指**（重指≠放宽，注释里逐个点名两颗按钮）：`## 412` 的 `E4` 计数 3 → 4、
+  `## 414` 的 `F4` 计数 3 → 4；`C6` 仍锁"两个入口各只许有一处"。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_process_entry_red  Ran 20  FAILED (failures=14, errors=1) → Ran 20  OK
+  （红基 15 条：A1–A8 / B1–B5 / C4 / C6；护栏 B6 / C1–C3 / C5 五条始终绿）
+node --check tech_app/frontend/app.js   OK
+不回归：process_by_authority_route + business_part_size_cost_entry +
+        business_part_cost_by_authority_size + business_part_downstream_entry +
+        business_parts_and_cad_plan_view + parts_panel + parts_downstream   Ran 164  OK
+```
+
+未改后端、未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。

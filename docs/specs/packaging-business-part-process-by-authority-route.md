@@ -192,19 +192,23 @@
 
 | 契约 | 落点 |
 | --- | --- |
-| §C1 纯函数 | `packaging_parts.py` `:3944 BUSINESS_PROCESS_REJECT_CODES` / `:3953 BUSINESS_PROCESS_SIZE_SOURCES` / `:3957 _business_process_grounding()` / `:3973 business_process_inputs()`：十四键；判据 = 无编码 `PACKAGING_BUSINESS_PART_NOT_FOUND` → 权威长度/宽度缺或 ≤0 `PACKAGING_BUSINESS_PART_SIZE_UNKNOWN`（`missing_variables: ["authority_size"]`）→ 材料原文空 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`（`["material"]`）→ `ok`；`grounding` 六段固定顺序、只收非空 |
-| §C2 适配点 | `:4025 business_as_ir_part(row)`：`part_id` = 业务编码、`features=[]`、`material.spec` = 权威材料原文、`confidence` 0.4（有材料）/0.3（无材料）、`provenance.note` 六段（`packaging_business_part/<code>` / `size_source=` / `size=` / `process_source=` / `outline=none` / `thickness=unknown`）；几何件那条 `as_ir_part()` 一字未动 |
-| §C3 口径句 | `:4061 business_process_assumption(inputs, *, geometry_part_code="")`：两轴取 `inputs["size_length"]` / `["size_width"]`（不解析展示文本）；`ok` 非真 → `""` |
+| §C1 纯函数 | `packaging_parts.py` `:3951 BUSINESS_PROCESS_REJECT_CODES` / `:3956 BUSINESS_PROCESS_SIZE_SOURCES` / `:3962 _business_process_grounding()` / `:3978 business_process_inputs()`：十四键；判据 = 无编码 `PACKAGING_BUSINESS_PART_NOT_FOUND` → 权威长度/宽度缺或 ≤0 `PACKAGING_BUSINESS_PART_SIZE_UNKNOWN`（`missing_variables: ["authority_size"]`）→ 材料原文空 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`（`["material"]`）→ `ok`；`grounding` 六段固定顺序、只收非空 |
+| §C2 适配点 | `:4015 business_as_ir_part(row)`：`part_id` = 业务编码、`features=[]`、`material.spec` = 权威材料原文、`confidence` 0.4（有材料）/0.3（无材料）、`provenance.note` 六段（`packaging_business_part/<code>` / `size_source=` / `size=` / `process_source=` / `outline=none` / `thickness=unknown`）；几何件那条 `as_ir_part()` 一字未动 |
+| §C3 口径句 | `:4046 business_process_assumption(inputs, *, geometry_part_code="")`：两轴取 `inputs["size_length"]` / `["size_width"]`（不解析展示文本）；`ok` 非真 → `""` |
 | §C4 发起 | `main.py` `PACKAGING_BUSINESS_PART_PROCESS_PATH` + `_packaging_business_part_process_note()` + `packaging_business_part_process()`（POST）：`_require(BOX_MATCH_DECIDE_ROLES)` → `_workflow_project` → `_packaging_business_part_row`（404）→ `business_process_inputs()` 不过 → 复用 `_packaging_business_part_reject()`（409 / `retryable: False`）→ 任务体 `process.outline_process(part, overall=None, geom=None, note=权威原文块+用户 note, attachments=本次附件)` → `process.compute()` → `save_part_process(parts_id="")`（另带 `size_source` / `size_source_ref` / `size_text` / `geometry` / `grounding` / 业务三键） |
 | §C5 读回 | 同文件的 `get_packaging_business_part_process()`（GET）：几何那一路同形的六键 + 版本七键 + 四键；空态 200（`plan: null`）、件不在清单 404、纯读不写库 |
-| §C6 冻结面 | `processability()` / `PROCESS_REJECT_CODES` / `as_ir_part()` / `process.py`（`grep business_` 在 `process.py` 里为 0 处）/ `packaging_cost.py` / 前端 3 处引用 / 业务件成本两条路由 —— 都在红测 F 组与 E4 里逐条锁住 |
+| §C6 冻结面 | `processability()` / `PROCESS_REJECT_CODES` / `as_ir_part()` / `process.py`（`grep business_` 在 `process.py` 里为 0 处）/ `packaging_cost.py` / 业务件成本两条路由 —— 都在红测 F 组与 E4 里逐条锁住 |
 
-**顺带记录的两点**：
+**顺带记录的三点**：
 
 1. 业务件走**几何**那条 `processability()` 仍然恒 `PACKAGING_PART_NOT_CLOSED`（F1 明写）—— 本批**不是**
    放宽几何门槛，而是给业务件开了另一条有自己前置条件的路；
 2. 权威清单里的 `process_text`（工艺路线原文）只作为**输入证据**进 `note` 与 `grounding`，
-   工序明细仍由既有 `outline_process()` 编制（`process.py` 里没有任何业务件分支）。
+   工序明细仍由既有 `outline_process()` 编制（`process.py` 里没有任何业务件分支）；
+3. 本批（后端）原本把前端锁在"3 处业务件路由引用一处都不许多"；`## 415`
+   （Spec `packaging-business-part-process-entry.md` §C4）把工艺那颗按钮接上面板，这条冻结随之
+   **重指**为 4 —— 重指不等于放宽：多出来的那一条只许是业务部件工艺路由那一处，`## 412` 的 `E4`
+   与 `## 414` 的 `F4` 里都逐个点名了两颗按钮。
 
 复跑（不回归）：
 

@@ -395,15 +395,22 @@ class EGuardrails(unittest.TestCase):
 
     def test_e4_no_frontend_change(self):
         # `## 412` 是后端批：这条原本是"前端一行不许动"的**批次级冻结**；`## 413` 按
-        # Spec `packaging-business-part-size-cost-entry.md` 补上了面板入口，冻结随之**重指**
-        # 为"前端只多出那一条声明的业务件成本请求"（重指不等于放宽：新入口只许有一处）。
+        # Spec `packaging-business-part-size-cost-entry.md` 补上了成本那颗按钮，冻结随之**重指**
+        # 为"前端只多出那一条声明的业务件成本请求"。`## 415` 按 Spec
+        # `packaging-business-part-process-entry.md` §C4 又把这条**重指**一次：工艺那一半也上了
+        # 面板（同样只许有一处）。**重指不等于放宽** —— 多出来的两条逐个点名：
+        #   `## 413` 的成本入口（`id="packagingBusinessPartCostBySize"`）、
+        #   `## 415` 的工艺入口（`id="packagingBusinessPartProcessByAuthority"`）；
+        # 计数从 3 变 4，多出来的那一条必须指向业务部件工艺路由（Spec §C3）。
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
-        self.assertEqual(3, src.count("packaging-business-parts/"),
-                         "多出来的那一条必须指向业务部件成本路由（Spec §C3）")
+        self.assertEqual(4, src.count("packaging-business-parts/"),
+                         "多出来的两条必须指向业务部件那两条路由（Spec §C3）")
         self.assertEqual(1, src.count('id="packagingBusinessPartCostBySize"'),
                          "面板入口的按钮只许有一处（Spec §C2）")
         self.assertEqual(1, src.count('$("packagingBusinessPartCostBySize")'),
                          "按钮的绑定点也只许有一处（Spec §C2）")
+        self.assertEqual(1, src.count('id="packagingBusinessPartProcessByAuthority"'),
+                         "`## 415` 的工艺入口也只许有一处（Spec §C2）")
 
 
 if __name__ == "__main__":

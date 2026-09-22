@@ -547,10 +547,13 @@ class FGuardrails(unittest.TestCase):
 
     def test_f4_no_frontend_change(self):
         # `## 412` 那条「前端一行不许动」的批次级冻结已被 `## 413` 重指为"只多出业务件成本那一处"；
-        # 本批（后端）**不**动前端：下一批才加那颗工艺按钮，届时会显式重指这条守卫。
+        # 本批（`## 414`，后端）原本锁"前端一处都不许多"（计数 3）。`## 415` 按 Spec
+        # `packaging-business-part-process-entry.md` §C4 把工艺那颗按钮接上面板，这条冻结随之
+        # **重指**为 4 —— **重指不等于放宽**：多出来的那一条只许是业务部件工艺路由那一处
+        # （`## 412` 的 E4 里逐个点名了两颗按钮）。
         src = _source(APP_JS)
-        self.assertEqual(3, src.count("packaging-business-parts/"),
-                         "本批前端不许新增业务件路由引用（Spec §C6）")
+        self.assertEqual(4, src.count("packaging-business-parts/"),
+                         "前端只许多出那一条声明的业务件工艺请求（Spec §C4）")
 
     def test_f5_business_cost_route_is_untouched(self):
         src = _source(MAIN_PY)

@@ -2501,6 +2501,33 @@ function packagingBusinessPartSizeCostTarget(row) {
   return {ok: true, code: "", message: "", part_code: code};
 }
 
+// 业务部件「按权威清单排工序」（Spec `packaging-business-part-process-entry.md` §C1）：
+// 与上面那颗成本按钮同形，多一道材料门槛 —— 工序明细离不开材料原文，缺了就不给假入口。
+function packagingBusinessPartProcessTarget(row) {
+  const part = (row && typeof row === "object") ? row : {};
+  const code = String(part.business_part_code || "").trim();
+  const authority = (part.authority && typeof part.authority === "object") ? part.authority : {};
+  const positive = value => {
+    const number = Number(String(value === undefined || value === null ? "" : value).trim());
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  };
+  const text = value => String(value === undefined || value === null ? "" : value).trim();
+  if (!code) {
+    return {ok: false, code: "business_part_missing", part_code: "",
+            message: "这一件没有业务部件编码，不能排工艺。"};
+  }
+  if (!positive(authority.length_mm) || !positive(authority.width_mm)) {
+    return {ok: false, code: "authority_size_missing", part_code: code,
+            message: "这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
+              + "或补录权威尺寸后再排工艺。"};
+  }
+  if (!text(authority.material_text) && !text(part.material)) {
+    return {ok: false, code: "material_missing", part_code: code,
+            message: "这一件在权威清单里没有材料原文，补上材料后再排工艺。"};
+  }
+  return {ok: true, code: "", message: "", part_code: code};
+}
+
 // 业务部件发起单件工艺 / 成本（Spec §C3）：解析出几何件编码 → 走既有取行与既有无分析入口，
 // **不**新写第二套接口 / 渲染。
 async function packagingBusinessPartAnalyze(mode, partCode) {
@@ -2539,6 +2566,35 @@ function packagingBusinessPartSizeCost(partCode) {
     onClose: () => setRightPane("model"),
   });
   return {ok: true, result: {mode: "cost", partCode: code}};
+}
+
+// 业务部件「按权威清单排工序」（Spec `packaging-business-part-process-entry.md` §C3）：
+// 端点走 `## 414` 那条工艺路由，复用既有内嵌面板；**不**走几何取行（业务编码不在零件文档里）、
+// **不**在前端算工序 —— 工序明细全部来自后端 `outline_process()`。
+function packagingBusinessPartProcessByAuthority(partCode) {
+  const code = String(partCode || "").trim();
+  if (!code) {
+    return {ok: false, error: {code: "no-part-code", message: "这一件没有业务部件编码。"}};
+  }
+  const host = $("analysisHost");
+  if (!host || !window.CadInlineAnalysis) {
+    return {ok: false,
+            error: {code: "no-analysis-host", message: "当前看板没有可用的分析渲染区。"}};
+  }
+  const row = packagingBusinessPartRows(currentPackagingBusinessParts)
+    .find(item => String(item.business_part_code || "") === code) || {};
+  const base = `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/`
+    + encodeURIComponent(code);
+  exitBoardViewHost();
+  setRightPane("analysis", `${code} · 工艺推荐（按权威清单）`);
+  window.CadInlineAnalysis.open("process", {
+    host,
+    projectId: currentProject,
+    part: {part_id: code, name: row.name || code},
+    endpointBase: () => base,
+    onClose: () => setRightPane("model"),
+  });
+  return {ok: true, result: {mode: "process", partCode: code}};
 }
 
 const PACKAGING_BINDING_COPY = {
@@ -2705,6 +2761,8 @@ function openPackagingBusinessPart(code) {
     // 没有几何的件那条路（Spec `packaging-business-part-size-cost-entry.md` §C2）：有权威尺寸
     // 才给「按权威尺寸算材料费」那颗按钮，没有就还是只给原因。
     const sizeTarget = packagingBusinessPartSizeCostTarget(row);
+    // 工艺那一半（Spec `packaging-business-part-process-entry.md` §C2）：同一条路、多一道材料门槛。
+    const processTarget = packagingBusinessPartProcessTarget(row);
     const note = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
       + `几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。</div>`;
     const downstream = target.ok
@@ -2721,6 +2779,12 @@ function openPackagingBusinessPart(code) {
              + `这一件没有几何：按权威清单的尺寸算材料费。</div>`
              + `<button id="packagingBusinessPartCostBySize" class="btn btn-secondary"`
              + ` type="button">成本测算（按权威尺寸）</button>`
+           : "")
+        + (processTarget.ok
+           ? `<div class="packaging-part-note" data-qqBusinessProcess="1">`
+             + `这一件没有几何：按权威清单的原文与尺寸排工序。</div>`
+             + `<button id="packagingBusinessPartProcessByAuthority" class="btn btn-secondary"`
+             + ` type="button">工艺推荐（按权威清单）</button>`
            : "");
     actions.innerHTML = downstream + note;
     const run = mode => {
@@ -2737,6 +2801,12 @@ function openPackagingBusinessPart(code) {
       if (bySize && sizeTarget.ok) {
         bySize.addEventListener("click", () => {
           packagingBusinessPartSizeCost(sizeTarget.part_code);
+        });
+      }
+      const byAuthority = $("packagingBusinessPartProcessByAuthority");
+      if (byAuthority && processTarget.ok) {
+        byAuthority.addEventListener("click", () => {
+          packagingBusinessPartProcessByAuthority(processTarget.part_code);
         });
       }
     }
