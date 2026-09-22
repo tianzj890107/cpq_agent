@@ -44,11 +44,24 @@
   /* 写命令的幂等头（Spec §3 末句）：同一次确认重发不产生重复卡片。 */
   var IDEMPOTENCY_HEADER = "X-Idempotency-Key";
 
-  /*: 在建状态：最新一次匹配 / 基准 / 工作区 / 报价 + 业务实例身份。 */
+  /*: 在建状态：最新一次匹配 / 基准 / 工作区 / 差异行 / 报价 + 业务实例身份 + 服务端工作流状态。 */
   var workspaceState = {
     quick_quote_session_id: "",
-    inputs: {}, match: {}, baseline: {}, workspace: {}, quote: {}
+    inputs: {}, match: {}, baseline: {}, workspace: {}, diff: [], quote: {},
+    /* 服务端状态（Spec `quick-quote-full-flow-state-and-recovery.md` §3/§4.4）：七步按钮只消费
+       它，前端不拿 `eligible_total` 或本地内存当"这一步能不能点"。 */
+    workflow_state: "created", allowed_actions: [], revision: 0, can_confirm: false
   };
+
+  /*: 重试必须复用同一个幂等键（Spec §5）：按命令缓存，**成功之后**才丢弃。 */
+  var quickQuoteOperations = {};
+
+  /** 差异行的唯一取值入口：后端放在顶层 `diff`（Spec §4.3），`diff.rows` 只是历史形状兜底。 */
+  function quickQuoteDiffRows() {
+    var diff = workspaceState.diff;
+    if (Array.isArray(diff)) return diff;
+    return (diff && diff.rows) || [];
+  }
 
   /*: 最近一次解析的视图模型：面板重绘（案例列表加载完）时不把用户刚上传的结果擦掉。 */
   var lastParseView = null;
@@ -585,7 +598,7 @@
     var workspace = el("div", "qq-workspace");
     workspace.id = "quickQuoteWorkspaceInline";
     workspace.appendChild(el("h4", "qq-workspace-title", "字段工作区（差异项）"));
-    workspace.appendChild(renderDiffTable((workspaceState.workspace || {}).rows));
+    workspace.appendChild(renderDiffTable(quickQuoteDiffRows()));
     var quoteSection = el("div", "qq-quote-section");
     quoteSection.appendChild(el("h4", "qq-workspace-title", "报价"));
     quoteSection.appendChild(renderQuote(workspaceState.quote, options));
@@ -1010,10 +1023,29 @@
 
   /* 发一条工作区命令：写请求都带幂等键（同一次确认重发不产生重复卡片）。
      workspace 按 Spec §3 第 4 条走 PUT。返回后端原始 payload，失败不吞。 */
+  /* 一次用户动作 = 一个 operation id（Spec §5）：超时重试与双击必须复用同一个
+     `X-Idempotency-Key`。以前这里每次调用都 `newIdempotencyKey(command)`，于是"点了没反应、
+     再点一次"在服务端就是两次新操作 —— 会落两个版本、两张卡。命令跑成功才丢弃这个键，
+     失败（网络超时 / 5xx）留在缓存里等下一次重试。 */
+  function operationId(command, options) {
+    options = options || {};
+    if (options.idempotencyKey) return String(options.idempotencyKey);
+    if (options.newOperation) delete quickQuoteOperations[command];
+    if (!quickQuoteOperations[command]) {
+      quickQuoteOperations[command] = newIdempotencyKey(command);
+    }
+    return quickQuoteOperations[command];
+  }
+
+  function finishOperation(command) {
+    delete quickQuoteOperations[command];
+  }
+
   function postCommand(command, body, options) {
     options = options || {};
     var headers = {"Content-Type": "application/json"};
-    headers[IDEMPOTENCY_HEADER] = options.idempotencyKey || newIdempotencyKey(command);
+    var id = operationId(command, options);
+    headers[IDEMPOTENCY_HEADER] = id;
     return apiFetch(commandUrl(command), {
       method: command === "workspace" ? "PUT" : "POST",
       headers: headers,
@@ -1023,6 +1055,8 @@
         if (!resp.ok && !data.error && !data.code) {
           data = {ok: false, error: "快速报价命令失败（HTTP " + resp.status + "）", status: resp.status};
         }
+        // 只有**成功**才算这次动作结束；失败保留同一个键，重试才是同一次操作。
+        if (data && data.ok !== false) finishOperation(command);
         return data;
       });
     });
@@ -1030,6 +1064,15 @@
 
   function rememberCommandResult(command, data) {
     data = data || {};
+    /* 服务端状态先在（Spec §4.4）：`workflow_state` / `allowed_actions` / `can_confirm` /
+       `revision` 每个成功写响应都带，页面按钮照它开关，不自己推断"到第几步了"。 */
+    if (data.workflow_state) workspaceState.workflow_state = String(data.workflow_state);
+    if (Array.isArray(data.allowed_actions)) workspaceState.allowed_actions = data.allowed_actions;
+    if (data.revision !== undefined) workspaceState.revision = Number(data.revision || 0);
+    if (data.can_confirm !== undefined) workspaceState.can_confirm = data.can_confirm === true;
+    /* 差异行**在顶层** `diff`（Spec §4.3）：后端把行放这里，以前只存 workspace 并读
+       `workspace.rows` —— 那个键后端从来不发，于是算得出差异却永远不上屏。 */
+    if (Array.isArray(data.diff)) workspaceState.diff = data.diff;
     if (command === "match" && data.match) workspaceState.match = data.match;
     if (command === "baseline" && data.baseline) {
       workspaceState.baseline = data.baseline;
@@ -1037,6 +1080,8 @@
     }
     if (command === "workspace" && data.workspace) workspaceState.workspace = data.workspace;
     if (command === "price" && data.quote) workspaceState.quote = data.quote;
+    /* 出价成功：首页同一张卡（版本 / 价格 / 状态）由后端 confirm 响应给（Spec §4.4）。 */
+    if (command === "confirm" && data.card) workspaceState.card = data.card;
     if (command === "confirm" && data.quick_quote_session_id) {
       workspaceState.quick_quote_session_id = data.quick_quote_session_id;
     }
@@ -1053,7 +1098,8 @@
       /* 报价模式是业务状态（Spec §2）：建实例时就落到服务端，刷新/卡片再打开才能恢复
          对应工作区；面板是快速报价面板，缺省就是 quick。 */
       quote_mode: options.quoteMode || MODE_QUICK,
-      idempotency_key: options.idempotencyKey || newIdempotencyKey("session")
+      // 建实例也必须幂等（Spec §5）：双击 / 超时重试复用同一个 operation id。
+      idempotency_key: operationId("session-create", options)
     };
     return apiFetch(agentBase() + SESSIONS_PATH, {
       method: "POST",
@@ -1083,6 +1129,16 @@
       workspaceState.baseline = data.baseline || workspaceState.baseline;
       workspaceState.workspace = data.workspace || workspaceState.workspace;
       workspaceState.quote = data.quote || workspaceState.quote;
+      /* 刷新 / 重启后要回到原处（Spec §6）：读契约里的差异、候选、状态、修订号一个都不许丢。 */
+      workspaceState.diff = Array.isArray(data.diff) ? data.diff : workspaceState.diff;
+      workspaceState.match = data.match || workspaceState.match;
+      workspaceState.workflow_state = String(data.workflow_state || workspaceState.workflow_state);
+      workspaceState.allowed_actions = Array.isArray(data.allowed_actions)
+        ? data.allowed_actions : workspaceState.allowed_actions;
+      workspaceState.revision = Number(data.revision || 0);
+      var servedQuote = data.quote || {};
+      workspaceState.can_confirm = (servedQuote.gaps || []).length === 0
+        && (workspaceState.workflow_state === "priced" || workspaceState.workflow_state === "confirmed");
       return data;
     });
   }
@@ -1166,6 +1222,78 @@
     });
   }
 
+  /* 差异项的内联编辑器（Spec §4.3）：业务字段**不许**走浏览器 `prompt()` —— 那里没有字段名、
+   * 单位、允许范围与来源，也没法回显，改完只剩一行没人核对过的字符串。
+   * 这里只画后端已给出的白名单差异行（`diff`），提交时把 `{字段: 新值}` 交给 `options.onSubmit`，
+   * 由调用方走 `saveQuickQuoteWorkspace()`（PUT）—— 服务端仍会按白名单再校验一遍。
+   */
+  function renderQuickQuoteEditor(rows, options) {
+    rows = rows || [];
+    options = options || {};
+    var box = el("div", "qq-editor");
+    box.setAttribute("data-qq-editor", "");
+    var table = el("table", "qq-diff-table qq-editor-table");
+    var head = el("thead");
+    var hrow = el("tr");
+    ["参数", "基准案例", "当前值", "改为"].forEach(function (title) {
+      var th = el("th", "", title);
+      th.setAttribute("scope", "col");
+      hrow.appendChild(th);
+    });
+    head.appendChild(hrow);
+    table.appendChild(head);
+
+    var body = el("tbody");
+    var inputs = {};
+    rows.forEach(function (row) {
+      row = row || {};
+      var key = String(row.field_key || "");
+      if (!key) return;
+      var tr = el("tr", "qq-editor-row");
+      tr.setAttribute("data-field-key", key);
+      tr.appendChild(cell(row.label || key));
+      tr.appendChild(cell(row.display_base));
+      tr.appendChild(cell(row.display_current));
+      var td = el("td", "qq-editor-cell");
+      var input = el("input", "qq-editor-input");
+      input.type = "text";
+      input.value = row.value === undefined || row.value === null ? "" : String(row.value);
+      input.setAttribute("data-qq-edit-key", key);
+      input.setAttribute("placeholder", row.display_current === undefined ? "" : String(row.display_current));
+      inputs[key] = input;
+      td.appendChild(input);
+      tr.appendChild(td);
+      body.appendChild(tr);
+    });
+    if (!Object.keys(inputs).length) {
+      var empty = el("tr", "qq-editor-empty");
+      var hint = cell("还没有可改的参数：先选基准案例、再「重算」，工作区才会给出可改字段。");
+      hint.setAttribute("colspan", "4");
+      empty.appendChild(hint);
+      body.appendChild(empty);
+    }
+    table.appendChild(body);
+    box.appendChild(table);
+
+    var bar = el("div", "qq-editor-bar");
+    var submit = el("button", "qq-ws-btn", "保存改动");
+    submit.type = "button";
+    submit.setAttribute("data-qq-edit-submit", "");
+    submit.addEventListener("click", function () {
+      var edits = {};
+      Object.keys(inputs).forEach(function (key) {
+        var input = inputs[key];
+        var next = input.value === undefined || input.value === null ? "" : String(input.value);
+        var before = input.getAttribute("placeholder") || "";
+        if (next !== before) edits[key] = next;
+      });
+      if (typeof options.onSubmit === "function") options.onSubmit(edits);
+    });
+    bar.appendChild(submit);
+    box.appendChild(bar);
+    return box;
+  }
+
   function fmtAmount(value) {
     if (value === null || value === undefined || isNaN(Number(value))) return "未标";
     return Number(value).toFixed(4);
@@ -1202,6 +1330,8 @@
     renderParseEntry: renderParseEntry,
     renderReadiness: renderReadiness,
     renderDiffTable: renderDiffTable,
+    renderQuickQuoteEditor: renderQuickQuoteEditor,
+    quickQuoteDiffRows: quickQuoteDiffRows,
     QUICK_MATCH_INPUT_KEYS: QUICK_MATCH_INPUT_KEYS,
     QUICK_INPUT_LABELS: QUICK_INPUT_LABELS,
     extractQuickQuoteInputs: extractQuickQuoteInputs,

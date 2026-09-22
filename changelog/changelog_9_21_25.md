@@ -14773,3 +14773,374 @@ tests.test_spec_status_truth_red → 7 OK
 ```
 
 未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 349. 自查：`packaging-solids-parts-version-binding` 已落地（6 OK），并把该 Spec 里 §2 与 §3/J3 的自相矛盾收口（9-22，Codex 只改 Spec 正文 / 红测无需改 / changelog）
+
+### 落地确认（实现侧在别处收口，我只核对与记录）
+
+`tests.test_packaging_solids_parts_version_binding_red` 现为 `Ran 6` **OK**（J1–J6，此前 4 红），
+实现落点：
+
+- `packaging_part_solids.py:394 solids_stale_reason(record, current_parts_id)` —— 唯一判据点
+  （缺席/读不到 → `parts_unknown`；真换版 → `parts_reparsed`）；
+- `main.py:8440` 写入口带 `parts_id` / `parts_hash`；`:6952-7005 _packaging_solids_scope()` +
+  `_packaging_solids_index()` 逐行给 `parts_id` / `stale` / `stale_reason`，整份文档另给
+  `rows_from_other_parts_id`（别的 `parts_id` 的件**保留不删**、只列出来）；
+- `main.py:7095-7100` 响应体带 `solids_parts_id` / `solids_rows_from_other_parts_id`；
+  `:8461-8470` STL 下载照旧 200 且带 `X-Packaging-Parts-Id`（过期时另加 stale 头）。
+
+### 我补的更正（Spec 内部矛盾）
+
+原 §2 第 2 条写「`stale = bool(stale_reason)`」，与 §3 第 4 条（"读不到当前零件文档不许当成
+过期或没过期"）以及红测 **J3**（`parts_unknown` 时 `stale` 必须为 `false`）自相矛盾。
+已在 `docs/specs/packaging-solids-parts-version-binding.md` 追加 **§6 更正**，按 §3 / J3 收口：
+`parts_reparsed` → `stale=true`；`parts_unknown` → `stale=false` 但 `stale_reason` 照旧带出来
+（"比较不了 ≠ 过期"，与 BOM / 成本两侧同一条纪律）。§2 原文保留为历史事实，以 §6 为准。
+红测一个字未改（矛盾是 Spec 措辞的问题，不是测试的问题）。
+
+### 复跑
+
+- `tests.test_packaging_solids_parts_version_binding_red`：`Ran 6` **OK**。
+- `tests.test_spec_status_truth_red`：`Ran 7` **OK**（本批之前是 1 failure：该 Spec 状态行
+  还写着「未实现」而红测已全绿 —— 状态行已随落地翻成「已实现」）。
+- 仍红（我最早那批里最后一条未实现的）：`test_packaging_parts_conclusion_version_readback_red`
+  当前 `Ran 6, failures=3, errors=1`，对应 Spec 仍声明「未实现」，两端一致。
+- 未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 350. 图纸入口"能力探测失败"被写成"可用"：探测挂了与"本环境没有转换器"在读回体上还分不出来（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-drawing-dispatch-probe-truthfulness.md` +
+`tests/test_packaging_drawing_dispatch_probe_red.py`（5 条：M1–M3 缺口 / M4–M5 护栏；
+现状 **3 红 2 绿**）。全部离线：只打桩 `file_preflight.detect_converter_availability()`
+与 `store.load_meta`，不连 PG / SQLite 生产库、不发 HTTP、不写业务数据、不跑真 DWG 转换。
+
+### 缺口（同一个"失败 vs 没有"的病症，这次在图纸入口分发器上）
+
+- `tech_app/backend/main.py:7355-7362`（`dispatch_project_drawing_parse()`）：
+
+  ```python
+  available = True
+  try:
+      available = bool(file_preflight.detect_converter_availability().get("available"))
+  except Exception:                       # noqa: BLE001 - 探测失败不挡分流
+      available = True
+  ```
+
+  探测抛异常时 `available` 被写成 `True`，返回体给 `flow_available: true`。
+- 而被调方 `tech_app/backend/services/file_preflight.py:461-462` 的契约正好相反：
+
+  > 探测失败按"没有"返回（`available=False, role="none"`），绝不抛裸异常：
+  > 能力查询失败必须能被上层当作"不可用"处理，而不是把 500 抛给用户。
+
+  即：**被调方定的是"失败 = 不可用"，调用方却在同一条失败上说"可用"**。两者只在
+  `detect_converter_availability()` 自己把异常吞成 `{}` 时才碰巧一致。
+- 第二个缺口：修好上一条之后，"探测挂了"与"探测成功但确实没有转换器"都只能给
+  `flow_available: false`，返回体里**没有任何键能区分**（它俩该说不同的话：前者
+  "暂时探测不到，请稍后重试"，后者"本环境没有 DWG 转换器"）。
+  `grep -rn "flow_available" tech_app/` 只有这一个函数在写。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 探测抛异常 → `flow_available` 必须给 `False`（**不许**再给 `True`），`reason` 说
+  "暂时探测不到 DWG 转换器，请稍后重试"；
+- 返回体**新增必存在键** `probe_unavailable`（四个分支都带）：
+  探测异常 → `{"code": "converter_probe_unavailable", "reason": "<异常类名>"}`；
+  探测成功（`available` 真假都算成功）→ `{}`；非 DWG/DXF 分支 → `{}`；
+- 三种状态（可用 / 确实不可用 / 探测不到）必须两两可分；
+- 护栏写死：后缀判据不受探测影响（`.dwg/.dxf` 永远 `drawing_flow`，不因探测失败改判成
+  位图 / 三维 / blocked）、四条既有路由的 `route` / `suffix` / `reason` / `flow_available`
+  逐字不变、不许改 `detect_converter_availability()` 的返回形状、不许把探测失败改成
+  500 / 抛错、不许在读接口里现装转换器 / 现探测后写盘 / 调模型 / 联网。
+
+### 实测
+
+```
+tests.test_packaging_drawing_dispatch_probe_red → Ran 5 … FAILED (failures=3)
+  M1 探测异常 → flow_available 期望 False，现在给 True             （红）
+  M2 探测成功 → probe_unavailable 期望 {}，现在键不存在            （红）
+  M3 探测成功但无转换器 → probe_unavailable 期望 {}，现在键不存在  （红）
+  M4 位图 / 三维 / 其他后缀 route/suffix/reason/flow_available 逐字不变（护栏绿）
+  M5 探测失败时 .dwg 仍判 drawing_flow（护栏绿）
+```
+
+不回归（分发器与能力事实的既有口径，全部离线）：
+
+```
+tests.test_dwg_capability_truth_red            Ran 13  OK
+tests.test_dwg_file_capability_preflight_red   Ran 29  OK
+tests.test_packaging_drawing_flow_red          Ran 54  OK (skipped=1)
+tests.test_spec_status_truth_red               Ran 7   OK
+```
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 351. 成本的"当前路线版本读不到"被说成"工艺路线已重新确认"：BOM 那条轴有 `bom_unavailable`，路线轴一个都没有（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-cost-route-version-read-failure.md` +
+`tests/test_packaging_cost_route_version_read_failure_red.py`（10 条：N1/N3/N4/N6/N8 缺口 /
+其余 5 条护栏；现状 **5 红 5 绿**）。全部离线：假仓库 + 只打桩
+`packaging_route.route_versions()`（读路线版本的唯一入口），不连 PG / SQLite 生产库、
+不发 HTTP、不写业务数据。
+
+### 缺口（`packaging-cost-input-version-pinning.md` 漏掉的那条轴）
+
+- `tech_app/backend/services/packaging_cost.py:2509 _upstream_route_version()`：
+
+  ```python
+  except Exception:
+      return ""                      # ← 读失败与"确实没有"折成同一个值
+  ```
+
+- `:2489 _input_drift()` 拿这个空串去和存的 `route_version` 比，于是：
+  - **读失败被渲染成"变了"**：探测一抛异常 → 空串 ≠ 存的那一版 → `stale_reasons` 含
+    `route_reconfirmed`（前端 `requirement-confirm.js:840` → "工艺路线已重新确认"）。
+    事实是**根本没读到**，PE1 会为一次没发生的重新确认白重算一遍成本，`stale=true`。
+  - **读失败被静默当成"没变"**：存的那一版本来就是空串（历史成本单 / 算时也没读到）时，
+    两边都是 `""` → 一个原因都不报，"比较不了"伪装成"没问题"。
+- 同一函数里 BOM 那条轴专门有 `bom_unavailable`（`:2496-2504`）把"比较不了"与"变了"分开，
+  路线轴没有对应物：`grep -rn "route_unavailable" tech_app/`（排除 `__pycache__`）命中数 **0**。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 读侧必须能区分三态（读到 / 确实没有 / 读不到），**不许**再用空串同时表示两件事；
+  读路线版本仍只经 `packaging_route.route_versions()` 一个入口（不许绕到 `da_repo`）。
+- `load_cost()` 结果**新增必存在键** `route_unavailable`：读抛异常 →
+  `{"code": "route_unavailable", "reason": "<异常类名>"}`；读到（哪怕一条版本都没有）→ `{}`。
+- `route_unavailable` 非空时**不许**给 `route_reconfirmed`（与 BOM 侧 `bom_unavailable`
+  逐字对齐的纪律）；读**成功**但当前没有确认版本时口径不变（照旧报 `route_reconfirmed`）。
+- `source_versions` 照旧是**存的**那一份，探测失败不许拿现场值覆盖、也不许改成 `{}`；
+  `stale` 只由真实原因决定（读失败而 BOM 没变 → `stale=false`）。
+- 前端 `requirement-confirm.js`：新增 `data-pc-route-unavailable` 独立横幅（文案照
+  `pcBomUnavailableBanner()`：读不到 ≠ 输入没变），**不许**把 `route_unavailable` 塞进
+  `PC_STALE_REASONS`（那是"变了"的人话表）。
+- 禁项写死：不许动 BOM 那两条轴、不许动路线侧任何文件、不许把两条轴合并成
+  `bom_unavailable`、不许在 `load_cost()` 里现算路线 / 现写盘 / 调模型 / 联网、
+  不许改 `compute_project()` 在算的那一刻记 `route_version` 的口径。
+
+### 实测
+
+```
+tests.test_packaging_cost_route_version_read_failure_red → Ran 10 … FAILED (failures=5)
+  N1 存的 route:v1、读路线抛异常 → 现在报 route_reconfirmed 且没有 route_unavailable  （红）
+  N2 真的换成 route:v2 → route_reconfirmed 照旧                                       （护栏绿）
+  N3 存的是空串、读路线抛异常 → 没有任何披露（"比较不了"被当成"没问题"）              （红）
+  N4 正常读到、版本一致 → route_unavailable 键不存在                                   （红）
+  N5 正常读到、当前一条版本都没有 → 不误报（"确实没有" ≠ "读不到"）                    （护栏绿）
+  N6 读路线抛异常、BOM 没变 → stale 被误标成 true                                      （红）
+  N7 / N7b 既有键与 BOM 两轴逐字不变（bom_rebuilt / bom_unavailable 独立报）           （护栏绿）
+  N8 前端没有 data-pc-route-unavailable 独立横幅                                       （红）
+  N9 探测失败时 source_versions 仍是存的那一份                                         （护栏绿）
+```
+
+不回归（成本读侧与相邻批次的既有口径，全部离线）：
+
+```
+tests.test_packaging_cost_input_version_pinning_red   Ran 7   OK
+tests.test_packaging_cost_engine_red                  Ran 81  OK
+tests.test_packaging_route_bom_version_pinning_red    Ran 14  FAILED (failures=10, errors=1)
+  —— 这是我自己 ## 342 那批的红测（路线侧的同一条纪律），Spec 里声明「未实现」，
+     与本次改动无关，也未因本批变红。
+tests.test_spec_status_truth_red                      Ran 7   OK
+```
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 352. `stage_chain` 里"这一段读不到"被显示成"这一段还没做"：盒型 → BOM → 路线 → 成本那条链把失败藏在 `status: "none"` 里（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-stage-chain-read-failure-disclosure.md` +
+`tests/test_packaging_stage_chain_read_failure_red.py`（10 条：P1–P5/P7/P8 缺口 /
+P6/P9/P10 护栏；现状 **7 红 3 绿**）。全部离线：假依赖模块 + 纯函数，
+不建项目、不写盘、不连 PG / SQLite、不发 HTTP。
+
+### 缺口（`dwg-semantics-agent-flow.md` §6.1 的那条链）
+
+`tech_app/backend/services/packaging_drawing_flow/anchor.py`：
+
+- `:195 _load()` 的 `if not callable(fn): return {}`（"这个部署没有这一段"）与
+  `:204 except Exception: return {}`（"这段读挂了"）**同形**；`_load_list()`（`:211`）
+  的 `except Exception: return []` 同上；
+- `:238-242` 的 `result_version_of(cost)` 抛异常 → `result_version = ""`，与
+  "成本没算过"同形；
+- 于是 `stage_chain()` 给这一段的 `value: ""` + `status: "none"` —— 用户在
+  `GET /api/projects/{pid}/drawing-flow`（`main.py:7386`）里读到的结论是
+  **"这一段还没做"**（去重跑下游步骤），而真相是"读不到"（重跑不会让它变好）。
+  链条上的三态（读到了 / 确实没做 / 读不到）在返回体上两两不可分。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `stage_chain()` 每一行**新增两个必存在键**：`source` ∈
+  `{"engine", "absent", "unavailable"}`（读到 / 这个部署没装 / 调用抛异常）与
+  `unavailable`（`{"code": "stage_chain_stage_unavailable", "reason": "<异常类名>"}`，
+  其余两态给 `{}`）；`route` 段以先抛出的那个入口为准（`load_route` 与 `route_versions`
+  任一抛异常都算这一段 `unavailable`）；
+- 既有键 `stage` / `value` / `status` / `engine_version` / `confirmed_by` / `confirmed_at`
+  的值与顺序**逐字不变**（`unavailable` 时 `status` 仍是 `"none"`、`value` 仍是 `""`，
+  绝不编一个版本）—— 与同族批次一样："结论不改，只留痕"；
+- `inheritance()` 新增必存在键 `stage_chain_unavailable`：全绿给 `{}`；有非 `engine` 的段给
+  `{"code": "stage_chain_stage_unavailable", "stages": {<段名>: {"source": …, "reason": …}}}`，
+  `stages` 只含非 `engine` 的段且按链条顺序（`box_match` / `bom` / `route` / `cost`）；
+- 禁项写死：不许改 `status` 的取值、不许给 `value` 编版本、不许把非 `engine` 的段从链里删掉、
+  不许让读异常抛给调用方（接口照旧 200）、不许碰 `gates.build()` 的门禁结论与前端。
+
+### 实测
+
+```
+tests.test_packaging_stage_chain_read_failure_red → Ran 10 … FAILED (failures=7)
+  P1 BOM 读抛异常 → 该行没有 source，只有 status="none"（读成"BOM 还没生成"）      （红）
+  P2 路线 route_versions 抛异常 → route 行没有 source                              （红）
+  P3 result_version_of 抛异常 → cost 行没有 source（与"成本没算过"同形）           （红）
+  P4 四段全读到 → 每行没有 source / unavailable 两个键                            （红）
+  P5 模块没装 → 与"读挂了"同形（没有 absent 这一态）                               （红）
+  P6 真的没做（built 假）→ 既有键逐字不变                                          （护栏绿）
+  P7 inheritance() 全绿 → stage_chain_unavailable 键不存在                         （红）
+  P8 有读不到时列出段名与原因、按链条顺序                                          （红）
+  P9 inheritance() 既有键逐字不变（source_versions / stage_chain / 锚点）          （护栏绿）
+  P10 依赖缝自己抛异常 → 链照旧不抛、四段照旧齐全                                  （护栏绿）
+```
+
+不回归（链条与门禁的既有口径，全部离线）：
+
+```
+tests.test_packaging_drawing_flow_red       Ran 54  OK (skipped=1)   # 含 C9/C10/C11 版本传递三条
+tests.test_packaging_quote_close_loop_red   Ran 96  OK
+tests.test_packaging_silent_degradation_red Ran 13  OK
+tests.test_spec_status_truth_red            Ran 7   OK（见下）
+```
+
+### 顺带：把 `quick-quote-full-flow-state-and-recovery` 的状态行翻成「已实现」
+
+`tests.test_spec_status_truth_red` 当时 1 failure：`quick-quote-full-flow-state-and-recovery.md`
+仍写「未实现」，但它点名的红测已由并行批次实现成 `Ran 19 … OK`（该测试自己的处置口径就是
+"该改成已实现，或说明冲突"）。按事实把该 Spec 的状态行翻成「已实现」并注明日期 ——
+正文一个字未改，红测一个字未改；`test_spec_status_truth_red` 由 1 failure 回到 **Ran 7 OK**。
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 353. 落地 `quick-quote-full-flow-state-and-recovery` 的前端 8 条：差异行认顶层 `diff`、改参数不再用 `prompt()`、按钮只认服务端状态、重试复用同一个幂等键、出价后就地 upsert 首页同一张卡（9-22，Codex 实现）
+
+红测 `tests/test_quick_quote_full_flow_state_and_recovery_red` 现为 `Ran 19` **OK**
+（后端 11 条此前已绿，本批把剩下 8 条前端断言全部转绿）。
+
+### 一、缺口（实测，`## 346` 那批记过的三条本层收口）
+
+1. 后端把差异行放在**顶层 `diff`**，前端只存 `workspace` 并渲染 `(workspaceState.workspace || {}).rows` ——
+   那个键后端从来不发，于是"算得出差异却永远不上屏"。
+2. "选为基准"用 `prompt()` 让用户手抄案例编号；"保存改动"用 `prompt()` 让人一行一条写 `字段=值` ——
+   既没有字段名/单位/范围，也无法回显改了什么。
+3. 出价按钮只按案例库 `eligible_total` 开关：库里有 2 条时恒可点（哪怕根本没算过价），
+   库没加载（`null`）时又会误开；所有按钮始终可点，没有状态机。
+4. 每次 `postCommand` 现造一个新幂等键，双击/超时重试在服务端是两次新操作。
+5. 确认成功只更新面板内存，没有契约保证首页同一张卡立刻出现版本/价格/状态。
+
+### 二、改了什么（只这 3 个文件 + 1 个后端入口参数）
+
+- `tech_app/frontend/quick-quote-panel.js`
+  - `quickQuoteDiffRows()`：差异行的唯一取值入口（顶层 `diff`，`diff.rows` 只作历史兜底）；
+    `rememberCommandResult()` 与 `openQuickQuoteWorkspace()` 都存 `data.diff`，并一并记
+    `workflow_state` / `allowed_actions` / `revision` / `can_confirm`。
+  - `renderQuickQuoteEditor(rows, options)`：内联差异项编辑器（`data-qq-editor` /
+    `data-qq-edit-key` / `data-qq-edit-submit`），提交仍走 `saveQuickQuoteWorkspace()`（PUT，后端白名单再校验）。
+  - `operationId()` / `finishOperation()`：按命令复用同一个 `X-Idempotency-Key`，**成功才丢弃**；
+    `postCommand()` 与 `openQuickQuoteSession()`（建实例也必须幂等）都走它。
+- `报价首页.html`
+  - `syncQuickQuoteActionState()` → `syncQuickQuoteWorkflowState()`：按钮开关只消费服务端
+    `workflow_state` / `allowed_actions`（`QUICK_QUOTE_BUTTON_COMMANDS` 与后端闭集同值），
+    出价另受 `can_confirm` 约束；删掉 `const blocked = quickQuoteEligibleTotal() === 0`。
+  - 快速路径改走 `openQuickQuoteHomeWorkspace()`（只展开工作区 + 给出进行中状态，**不弹遮罩**）；
+    案例库面板改由工作区里的 `qqOpenCaseLibrary` 显式打开。
+  - 选基准只剩候选行的 `data-qq-baseline` 一个入口（`openQuickQuoteCandidates()` 只把候选带到眼前）；
+    改参数改走 `openQuickQuoteEditor()`；两处 `prompt()` 从工作区命令里删除。
+  - `upsertQuickQuoteCard()`：出价成功后就地更新首页**同一张**卡（状态/版本号/单价/模式/更新时间
+    全取后端 `confirm` 响应），并顺手刷新清单那一行。
+- `cpq_agent_server.py`：`_quick_quote_write()` 的建实例分支现在把 `X-Idempotency-Key`（或体里的
+  `idempotency_key`）传进 `_handle_quick_quote_session_create()` —— 幂等壳本来就在，之前 HTTP 入口没接上。
+
+### 三、一条已记录的偏差（不改测试）
+
+`tests/test_quick_quote_home_wiring_red.py::DReadPathHonestyRed::test_d2`（用一个**从未存在过**的 id
+断言读回体里没有任何含 `error` 的键）与本 Spec §6「未知 session 一律 404 `session_not_found`、
+不得 `setdefault` 造幽灵实例」**机制互斥**：新契约下的 404 错误体按全服务统一的 `_qq_error()` 形状必然带
+`error` 键，而旧用例的前提正是 `_qq_state()` 会把该 id 建成幽灵实例。两条断言在同一输入上不可能同时成立
+（去掉 `error` 键会让同组的 D1 转红）。处理：**不改测试、不放宽断言**，偏差记在
+`quick-quote-full-flow-state-and-recovery.md` §12 与 `quick-quote-home-wiring-and-read-diagnostics.md` §6.6。
+
+### 四、复跑
+
+```
+tests.test_quick_quote_full_flow_state_and_recovery_red → Ran 19 OK
+all tests/test_quick_quote_*.py（19 个模块）→ Ran 489, failures=1（即 §12 那条偏差）, skipped=3
+tests.test_spec_status_truth_red → Ran 7 OK
+node --check tech_app/frontend/quick-quote-panel.js → 通过
+报价首页.html 内联脚本另存后 node --check → 通过
+```
+
+未改 `tests/` 下任何文件、未放宽任何断言、未连 34 / PG、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 353. `preconditions()` 里"读不到需求单"被说成"需求单不存在"：用户被劝去建一张重复的草稿，2.1 左栏还把这句错话原样渲染出来（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-preconditions-requirement-read-failure.md` +
+`tests/test_packaging_preconditions_requirement_read_failure_red.py`（9 条：Q1–Q3 缺口 /
+Q4–Q9 护栏；现状 **3 红 6 绿**）。全部离线：只打桩 `store.load_requirement`，
+不连 PG / SQLite 生产库、不发 HTTP、不写业务数据。
+
+### 缺口
+
+`tech_app/backend/services/packaging_drawing_flow/__init__.py:474-482`：
+
+```python
+    try:
+        requirement = store.load_requirement(str(project_id))
+    except Exception:                                   # noqa: BLE001 - 读不到就按缺前置条件报
+        requirement = None
+    if not requirement:
+        spec = model.PRECONDITION_BLOCKERS["REQUIREMENT_DRAFT_MISSING"]
+        items.append({"code": "REQUIREMENT_DRAFT_MISSING", "severity": "blocking", ...})
+```
+
+`model.py:41-44` 的文案是 **"需求单不存在，请先创建需求草稿（缺前置条件，重试不会成功）"**。
+于是存储通道异常（元数据后端不可用 / 锁超时 / 临时故障）时：
+
+- 接口给的是**断言**（"不存在"）＋**错误建议**（"先去建一张草稿"、"重试不会成功"）——
+  用户会建出一张重复的需求草稿，而真相只是"这一次读不到"；
+- 这条 `blocking` 前置条件挂在 `GET /api/projects/{pid}/drawing-flow`（`main.py:7399`）上，
+  并且被 2.1 左栏 `app.js:1720 packagingPartsEmptyText()` 原样渲染成
+  `[code] message → action` —— 件数为 0 时用户看到的第一句话就是这条错误指引。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `store.load_requirement()` 抛异常时给**新码** `REQUIREMENT_UNREADABLE`
+  （`severity="blocking"`、`message` 带异常类名 + "请稍后重试" + "这不代表需求单不存在"、
+  `action="稍后重试；若持续失败请让管理员检查存储通道"`），**不许**再给
+  `REQUIREMENT_DRAFT_MISSING`；
+- 读到但为空（真的没有需求单）→ `REQUIREMENT_DRAFT_MISSING` 四条键**逐字不变**；
+  读到但状态不可编辑 → `REQUIREMENT_NOT_EDITABLE` 逐字不变；
+- 每条前置条件**新增必存在键** `unavailable`：非读失败给 `{}`，读失败给
+  `{"code": "requirement_unreadable", "reason": "<异常类名>"}`；
+- 空 `project_id` 照旧 `[]`、读异常照旧不抛（接口照旧 200）；前端**不改**（照旧按
+  `[code] message → action` 原样渲染，本批只保证服务端这三样是对的）。
+
+### 实测
+
+```
+tests.test_packaging_preconditions_requirement_read_failure_red → Ran 9 … FAILED (failures=3)
+  Q1 读需求单抛异常 → 今天给 REQUIREMENT_DRAFT_MISSING（"不存在"）                    （红）
+  Q2 读异常文案红线：今天 message 说"不存在"、且没有异常类名 / 重试提示                （红）
+  Q3 前置条件没有 unavailable 键（三态不可分）                                          （红）
+  Q4/Q5/Q6/Q7 真的没有 / 可编辑 / 不可编辑 / 空 project_id 的既有口径逐字不变          （护栏绿）
+  Q8 读异常时不抛给调用方                                                               （护栏绿）
+  Q9 读接口照旧带 preconditions（源码守卫）                                             （护栏绿）
+```
+
+不回归（前置条件与错误分类的既有口径，全部离线）：
+
+```
+tests.test_drawing_flow_error_taxonomy_red    Ran 14  OK
+tests.test_drawing_flow_requirement_state_red Ran 17  OK
+tests.test_packaging_drawing_flow_red         Ran 54  OK (skipped=1)
+```
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。

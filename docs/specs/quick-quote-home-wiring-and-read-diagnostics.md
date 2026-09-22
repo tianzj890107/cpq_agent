@@ -151,3 +151,11 @@ node 打桩 `fetch` 指向面板模块：空 session 调 `selectQuickQuoteBaseli
 ### 6.5 边界
 
 未改 `tests/` 下任何文件（含本层红测）、未连 PG、未写生产数据；未改命令路由 / 费率 / 公式 / 角色门槛。
+
+### 6.6 C5 后半句被 `quick-quote-full-flow-state-and-recovery.md` §6 收窄（2026-09-22）
+
+§C5 的后半句（"正常读到空时不许出现诊断键"）**仍然成立**，但它说的是**存在的实例**里还没落过卡这一种情形。
+新 Spec §6 另外规定：**GET 一个从未存在过的 session 一律 404 `session_not_found`**（禁止 `setdefault` 造幽灵实例）。
+于是本层红测 `DReadPathHonestyRed::test_d2`（用一个从未存在的 id `wiring-probe-empty` 冒充"正常空值"）与新契约
+**在机制上互斥**：旧契约下 `_qq_state()` 会把该 id 建成幽灵实例所以读得到 200 空值，新契约下同一 id 必须是 404 错误体，
+而错误体必然带 `error` 键。这条偏差已记在 `quick-quote-full-flow-state-and-recovery.md` §12，**不改任何测试**。

@@ -27,6 +27,7 @@
 import argparse
 import base64
 import datetime
+import hashlib
 import io
 import json
 import os
@@ -37,8 +38,10 @@ import time
 import traceback
 import uuid
 from collections import OrderedDict
+from collections.abc import MutableMapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -4034,12 +4037,197 @@ QUICK_QUOTE_SESSION_RE = re.compile(
     r"^/api/quick-quote/sessions/(?P<session_id>[^/]+)/"
     r"(?P<command>match|baseline|workspace|price|confirm|transfer-to-precise)$")
 
-#: 幂等键 → 上一次的响应体（Spec §3 末句）。**只复用完全相同的写请求**，不做跨命令合并。
-quick_quote_idempotency: dict = {}
+# ---------------------------------------------------------------------------
+# 快速报价实例 / 幂等记录的**持久化仓储**（Spec `quick-quote-full-flow-state-and-recovery.md` §5/§6）
+# ---------------------------------------------------------------------------
+# 以前这两样都是进程内字典：服务一重启，行业、模式、需求输入、基准、工作区、差异与幂等记录
+# **全部消失**，只剩已落卡的报价段能读回。这里换成一个"整份映射 = 一份文档"的持久化仓储，
+# 落在 `meta_backend` 的项目文档里（与技术工艺侧同一套 doc 存取），进程重启后原样读回。
+QUICK_QUOTE_STORE_PROJECT = "cpq"
+QUICK_QUOTE_SESSIONS_KEY = "quick_quote_sessions"
+QUICK_QUOTE_IDEMPOTENCY_KEY = "quick_quote_idempotency"
 
-#: 各业务实例的在建状态（baseline / workspace / 上一次报价）。进程内存：重启后只有已落卡的
-#: 那一版能读回（`find_quote`），这是本批已知边界（Spec §7 实现记录有记录）。
-QUICK_QUOTE_SESSIONS: dict = {}
+
+class _JsonDocRepository(MutableMapping):
+    """「整个映射一份文档」的持久化仓储（读时懒加载 + 写时整份落盘）。
+
+    用法与 dict 一致（`[]` / `in` / `get` / `clear` / `setdefault` / `items` …），业务代码不必知道
+    底下是文档还是内存。落盘失败不许把业务命令打挂：内存里的状态照旧可用，错误记在
+    `last_error` 上供诊断（读接口的 `read_error` 会把它带出来）。
+    """
+
+    def __init__(self, key: str, label: str):
+        self._key = key
+        self._label = label
+        self._lock = threading.RLock()
+        self._cache: Optional[dict] = None
+        self.last_error = ""
+
+    # -- 内部：读 / 写整份文档 -------------------------------------------------
+    def _load(self) -> dict:
+        if self._cache is None:
+            rows = None
+            try:
+                from tech_app.backend.storage import meta_backend
+                doc = meta_backend.get_backend().get_doc(QUICK_QUOTE_STORE_PROJECT, self._key)
+                if isinstance(doc, dict):
+                    rows = doc.get("rows")
+            except Exception as exc:                          # noqa: BLE001 - 读不到当空仓储
+                self.last_error = "%s 读回失败：%s" % (self._label, exc)
+                rows = None
+            self._cache = dict(rows) if isinstance(rows, dict) else {}
+        return self._cache
+
+    def _flush(self) -> None:
+        try:
+            from tech_app.backend.storage import meta_backend
+            meta_backend.get_backend().put_doc(
+                QUICK_QUOTE_STORE_PROJECT, self._key,
+                {"rows": _json_safe_value(dict(self._cache or {}))})
+            self.last_error = ""
+        except Exception as exc:                              # noqa: BLE001 - 落盘失败不许打挂命令
+            self.last_error = "%s 落盘失败：%s" % (self._label, exc)
+
+    # -- MutableMapping --------------------------------------------------------
+    def __getitem__(self, key):
+        with self._lock:
+            return self._load()[key]
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            rows = self._load()
+            rows[key] = value
+            self._flush()
+
+    def __delitem__(self, key):
+        with self._lock:
+            rows = self._load()
+            del rows[key]
+            self._flush()
+
+    def __iter__(self):
+        with self._lock:
+            return iter(list(self._load().keys()))
+
+    def __len__(self):
+        with self._lock:
+            return len(self._load())
+
+    def __contains__(self, key):
+        with self._lock:
+            return key in self._load()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._load().clear()
+            self._flush()
+
+    def keys(self):
+        with self._lock:
+            return list(self._load().keys())
+
+    def values(self):
+        with self._lock:
+            return list(self._load().values())
+
+    def items(self):
+        with self._lock:
+            return list(self._load().items())
+
+    def get(self, key, default=None):
+        with self._lock:
+            return self._load().get(key, default)
+
+    def pop(self, key, *default):
+        with self._lock:
+            rows = self._load()
+            value = rows.pop(key, *default)
+            self._flush()
+            return value
+
+    def setdefault(self, key, default=None):
+        with self._lock:
+            rows = self._load()
+            if key in rows:
+                return rows[key]
+            rows[key] = default
+            self._flush()
+            return rows[key]
+
+
+#: 各业务实例的在建状态（行业 / 模式 / 输入 / 基准 / 工作区 / 差异 / 报价 / 版本 / 工作流状态）。
+#: **持久化**：服务重启后 GET 返回与重启前一致的业务状态（Spec §6）。
+quick_quote_session_repository = _JsonDocRepository(QUICK_QUOTE_SESSIONS_KEY, "快速报价实例")
+QUICK_QUOTE_SESSIONS = quick_quote_session_repository
+
+#: 幂等记录（Spec §5）：至少绑定 `(actor, session, command, request_fingerprint)`，与业务实例一起
+#: 持久化 —— 重启后重复确认**不许**再落一个版本。
+quick_quote_idempotency_repository = _JsonDocRepository(QUICK_QUOTE_IDEMPOTENCY_KEY, "快速报价幂等记录")
+quick_quote_idempotency = quick_quote_idempotency_repository
+
+
+# ---------------------------------------------------------------------------
+# 服务端工作流状态机（Spec §3）：响应里的 `workflow_state` 是页面按钮的**唯一**依据。
+# ---------------------------------------------------------------------------
+QUICK_QUOTE_WORKFLOW_STATES = ("created", "matched", "based", "edited", "priced",
+                               "confirmed", "transferred")
+
+#: 状态 → 页面允许的主要动作（前端只消费，不自己推断）。
+QUICK_QUOTE_ALLOWED_ACTIONS = {
+    "created": ("match", "transfer-to-precise"),
+    "matched": ("match", "baseline", "transfer-to-precise"),
+    "based": ("workspace", "price", "transfer-to-precise"),
+    "edited": ("workspace", "price", "transfer-to-precise"),
+    "priced": ("workspace", "price", "confirm", "transfer-to-precise"),
+    "confirmed": ("workspace", "price", "confirm", "transfer-to-precise"),
+    "transferred": ("transfer-to-precise",),
+}
+
+#: 命令 → 允许的当前状态（**服务端仍必须校验顺序**：绕过 UI 的乱序命令返回 409）。
+QUICK_QUOTE_REQUIRED_STATE = {
+    "match": ("created", "matched", "based", "edited", "priced", "confirmed"),
+    "baseline": ("matched", "based", "edited", "priced", "confirmed"),
+    "workspace": ("based", "edited", "priced", "confirmed"),
+    "price": ("based", "edited", "priced", "confirmed"),
+    "confirm": ("priced",),
+    "transfer-to-precise": ("created", "matched", "based", "edited", "priced", "confirmed"),
+}
+
+
+def _qq_workflow_state(state) -> str:
+    """实例的当前工作流状态（Spec §3）：显式字段优先，缺了才按既有字段推断。
+
+    推断是给"本批之前落进仓储、没有 `workflow_state` 字段"的实例用的，不另立一份真相。
+    """
+    payload = state if isinstance(state, dict) else {}
+    explicit = _qq_text(payload.get("workflow_state"))
+    if explicit in QUICK_QUOTE_WORKFLOW_STATES:
+        return explicit
+    if payload.get("transfer") or payload.get("handoff"):
+        return "transferred"
+    if int(payload.get("versions") or 0) > 0 and payload.get("quote"):
+        return "confirmed"
+    if payload.get("quote"):
+        return "priced"
+    if payload.get("diff"):
+        return "edited"
+    if payload.get("baseline"):
+        return "based"
+    if payload.get("match"):
+        return "matched"
+    return "created"
+
+
+def _qq_allowed_actions(state) -> list:
+    return list(QUICK_QUOTE_ALLOWED_ACTIONS.get(_qq_workflow_state(state), ()))
+
+
+def _qq_state_envelope(state) -> dict:
+    """每个响应都要带的"服务端状态 + 允许的动作 + 修订号"（Spec §3/§4.4）。"""
+    payload = state if isinstance(state, dict) else {}
+    return {"workflow_state": _qq_workflow_state(payload),
+            "allowed_actions": _qq_allowed_actions(payload),
+            "revision": int(payload.get("revision") or 0)}
 
 
 def _json_safe_value(value):
@@ -4101,24 +4289,126 @@ def quick_quote_industry_guard(industry, quote_mode="quick"):
     return key, mode, None
 
 
-def _qq_state(session_id: str) -> dict:
-    return QUICK_QUOTE_SESSIONS.setdefault(
-        _qq_text(session_id),
-        {"inputs": {}, "baseline": {}, "workspace": {}, "quote": {}, "versions": 0,
-         "quote_mode": "", "industry": ""})
+def _qq_new_state() -> dict:
+    """一份新的实例状态（Spec §6）：本批新增的字段都在这里，落库就是这一份。"""
+    return {"inputs": {}, "match": {}, "baseline": {}, "workspace": {}, "diff": [],
+            "quote": {}, "versions": 0, "quote_mode": "", "industry": "",
+            "owner_user_id": "", "participants": [], "workflow_state": "created",
+            "revision": 0, "version_no": 0, "transfer": {}, "card": {},
+            "created_at": _now_iso(), "updated_at": _now_iso()}
 
 
-def _qq_idempotent(session_id: str, key: str, produce):
-    """写命令的幂等壳（Spec §3）：同一个 (session, key) 再来一次直接复用上一次的响应体。"""
-    token = "%s|%s" % (_qq_text(session_id), _qq_text(key))
-    if not _qq_text(key):
+def _qq_state(session_id: str, *, create: bool = False) -> Optional[dict]:
+    """读实例状态；**不存在时默认不创建**（Spec §6：不许 `setdefault` 造幽灵实例）。
+
+    只有建实例那一条路传 `create=True`。读/写一个不存在的 session 一律 404 `session_not_found`。
+    """
+    sid = _qq_text(session_id)
+    if sid in QUICK_QUOTE_SESSIONS:
+        state = QUICK_QUOTE_SESSIONS.get(sid)
+        return state if isinstance(state, dict) else None
+    if not create:
+        return None
+    state = _qq_new_state()
+    QUICK_QUOTE_SESSIONS[sid] = state
+    return state
+
+
+def _qq_existing(session_id: str) -> Optional[dict]:
+    return _qq_state(session_id)
+
+
+def _qq_session_not_found(session_id: str) -> dict:
+    return _qq_error("session_not_found",
+                     "快速报价实例不存在（或已被清理）：%s" % _qq_text(session_id), 404)
+
+
+def _qq_touch(state: dict, **changes) -> dict:
+    """写一次状态：改字段 + 记 `updated_at`（页面用它显示"最近更新时间"）。"""
+    if isinstance(state, dict):
+        state.update(changes)
+        state["updated_at"] = _now_iso()
+    return state
+
+
+def _qq_actor_id(user) -> str:
+    payload = user if isinstance(user, dict) else {}
+    return _qq_text(payload.get("user_id") or payload.get("username")
+                    or payload.get("id") or payload.get("sub"))
+
+
+def _qq_actor_roles(user) -> list:
+    payload = user if isinstance(user, dict) else {}
+    raw = payload.get("roles") if isinstance(payload.get("roles"), (list, tuple, set)) else []
+    single = payload.get("role") or payload.get("cpq_role_code") or ""
+    return [str(item) for item in list(raw) + ([single] if single else [])]
+
+
+def require_quick_quote_access(session_id: str, user=None, *, write: bool = False) -> dict:
+    """逐实例读写 ACL（Spec §7）。放行返回 `{}`，否则返回可直接下发的错误载荷。
+
+    - 实例不存在 / 连读权都没有 → **404**（不泄露存在性）；
+    - 有读权但没有写权 → **403**；
+    - 本批之前建的实例没有 owner：**不因此把合法业务角色整体挡死**（照旧放行）。
+    """
+    state = _qq_existing(session_id)
+    if state is None:
+        return _qq_session_not_found(session_id)
+    owner = _qq_text(state.get("owner_user_id"))
+    participants = [str(item) for item in (state.get("participants") or [])]
+    actor = _qq_actor_id(user)
+    roles = _qq_actor_roles(user)
+    is_admin = any(role in ("admin", "administrator", "system_admin") for role in roles)
+    if not owner and not participants:
+        return {}                                   # 历史实例：没有归属信息，照旧放行
+    if is_admin or (actor and actor == owner):
+        return {}
+    if actor and actor in participants:
+        if write:
+            return _qq_error("quick_quote_read_only",
+                             "你对这个快速报价实例只有读权限：请让创建者（或管理员）来改。", 403)
+        return {}
+    if write:
+        # 无读权 → 404（不泄露存在性），与读路径同一口径。
+        return _qq_session_not_found(session_id)
+    return _qq_session_not_found(session_id)
+
+
+def _qq_fingerprint(body, command: str) -> str:
+    """请求指纹（Spec §5）：同一个幂等键用在**不同请求**上必须能被认出来，不许回放错误响应。"""
+    try:
+        raw = json.dumps(_json_safe_value(body if body is not None else {}),
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:                                          # noqa: BLE001 - 兜底成字符串
+        raw = str(body)
+    return hashlib.sha256(("%s|%s" % (command, raw)).encode("utf-8")).hexdigest()
+
+
+def _qq_idempotent(session_id: str, key: str, produce, *,
+                   actor: str = "", command: str = "", fingerprint: str = ""):
+    """写命令的幂等壳（Spec §5）：幂等键至少绑定 `(actor, session, command, 请求指纹)`。
+
+    - 同键同指纹 → 复用上一次的响应体（`idempotent_replay=True`）；
+    - 同键**不同**请求 → `409 idempotency_conflict`，绝不回放错误响应；
+    - 没有键 → 不记（既有行为：可选幂等）。
+    """
+    key = _qq_text(key)
+    if not key:
         return produce()
-    if token in quick_quote_idempotency:
-        cached = dict(quick_quote_idempotency[token])
-        cached["idempotent_replay"] = True
-        return cached
+    token = "|".join([_qq_text(session_id), _qq_text(actor), _qq_text(command), key])
+    record = quick_quote_idempotency.get(token)
+    if isinstance(record, dict):
+        if _qq_text(record.get("fingerprint")) == _qq_text(fingerprint):
+            cached = dict(record.get("payload") or {})
+            cached["idempotent_replay"] = True
+            return cached
+        return _qq_error("idempotency_conflict",
+                         "同一个幂等键被用在了另一个请求上：请换一个 operation id 再试。", 409)
     result = produce()
-    quick_quote_idempotency[token] = result
+    if isinstance(result, dict) and result.get("ok"):
+        quick_quote_idempotency[token] = {"fingerprint": _qq_text(fingerprint),
+                                          "payload": _json_safe_value(result),
+                                          "at": _now_iso()}
     return result
 
 
@@ -4128,7 +4418,7 @@ def _qq_error(code: str, message: str, status: int = 400, **extra) -> dict:
     return payload
 
 
-def _handle_quick_quote_session_create(body, *, user=None) -> dict:
+def _handle_quick_quote_session_create(body, *, user=None, idempotency_key: str = "") -> dict:
     """`POST /api/quick-quote/sessions` —— 建快速报价业务实例（Spec §3 第 1 条）。
 
     行业与报价模式都落进实例状态（Spec §2「模式必须随业务实例保存」）：刷新、
@@ -4140,43 +4430,70 @@ def _handle_quick_quote_session_create(body, *, user=None) -> dict:
         body.get("industry"), body.get("quote_mode"))
     if denied:
         return denied
-    session_id = _qq_text(body.get("session_id")) or pool_new().session_id
-    try:
-        import cpq_wf
-        card = cpq_wf.sync_card(session_id, user or {}, title=_qq_text(body.get("title")),
-                                customer=_qq_text(body.get("customer")),
-                                project_name=_qq_text(body.get("project_name")),
-                                industry=industry)
-    except Exception as exc:                                    # noqa: BLE001 - 建卡失败要说清
-        return _qq_error("session_create_failed", "建快速报价业务实例失败：%s" % exc, 503,
-                         quick_quote_session_id=session_id)
-    state = _qq_state(session_id)
-    state["card"] = card
-    state["quote_mode"] = quote_mode
-    state["industry"] = industry
-    return {"ok": True, "quick_quote_session_id": session_id, "session_id": session_id,
-            "card": card, "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
-            "industry": industry, "quote_mode": quote_mode,
-            "steps": _quick_quote_steps(), "quote_modes": _quick_quote_modes()}
+    requested_id = _qq_text(body.get("session_id"))
+    actor_id = _qq_actor_id(user)
+    fingerprint = _qq_fingerprint({key: value for key, value in body.items()
+                                   if key != "idempotency_key"}, "session-create")
+
+    def produce():
+        session_id = requested_id or pool_new().session_id
+        try:
+            import cpq_wf
+            card = cpq_wf.sync_card(session_id, user or {}, title=_qq_text(body.get("title")),
+                                    customer=_qq_text(body.get("customer")),
+                                    project_name=_qq_text(body.get("project_name")),
+                                    industry=industry)
+        except Exception as exc:                                # noqa: BLE001 - 建卡失败要说清
+            return _qq_error("session_create_failed", "建快速报价业务实例失败：%s" % exc, 503,
+                             quick_quote_session_id=session_id)
+        # 状态**持久化**（Spec §6）：行业 / 模式 / 输入 / 基准 / 工作区 / 差异 / 报价 / 版本
+        # 全部随实例走；重启后 GET 返回与重启前一致的业务状态。
+        state = _qq_state(session_id, create=True) or _qq_new_state()
+        participants = state.get("participants")
+        if not isinstance(participants, list):
+            participants = []
+        extra = body.get("participants") if isinstance(body.get("participants"), list) else []
+        for item in extra:
+            who = _qq_text(item)
+            if who and who != actor_id and who not in participants:
+                participants.append(who)
+        _qq_touch(state, owner_user_id=state.get("owner_user_id") or actor_id,
+                  participants=participants, card=card, quote_mode=quote_mode,
+                  industry=industry, workflow_state=state.get("workflow_state") or "created")
+        return {"ok": True, "quick_quote_session_id": session_id, "session_id": session_id,
+                "card": card, "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
+                "industry": industry, "quote_mode": quote_mode,
+                "owner_user_id": state.get("owner_user_id") or "",
+                "participants": list(participants),
+                "steps": _quick_quote_steps(), "quote_modes": _quick_quote_modes(),
+                **_qq_state_envelope(state)}
+
+    # 建实例也必须幂等（Spec §5）：同一用户、同一次 operation 的重复创建返回同一 session/card。
+    return _qq_idempotent(requested_id or "session-create", idempotency_key, produce,
+                          actor=actor_id, command="session-create", fingerprint=fingerprint)
 
 
 def _handle_quick_quote_session_match(session_id: str, body) -> dict:
     """`POST …/{id}/match` —— 候选案例 + 逐字段证据（Spec §3 第 2 条，只读）。"""
     body = body if isinstance(body, dict) else {}
     inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
-    state = _qq_state(session_id)
-    state["inputs"] = dict(inputs)
+    state = _qq_existing(session_id)
     try:
         result = cpq_quick_quote_match.match_cases(inputs, top_n=body.get("top_n"))
     except Exception as exc:                                    # noqa: BLE001
         return _qq_error("match_unavailable", "案例检索不可用：%s" % exc, 503)
+    # 重新匹配不**倒退**已经过去的阶段（选过基准/算过价就不许被打回 matched）。
+    state["inputs"] = dict(inputs)
+    state["match"] = result
+    if _qq_workflow_state(state) in ("created", "matched"):
+        _qq_touch(state, workflow_state="matched")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "match": result}
 
 
 def _handle_quick_quote_session_baseline(session_id: str, body, *, user=None) -> dict:
     """`POST …/{id}/baseline` —— 人工选定基准案例（Spec §3 第 3 条）。"""
     body = body if isinstance(body, dict) else {}
-    state = _qq_state(session_id)
+    state = _qq_existing(session_id)
     inputs = body.get("inputs") if isinstance(body.get("inputs"), dict) else state.get("inputs") or {}
     try:
         baseline = cpq_quick_quote_match.build_baseline(inputs, body.get("case_code"), user=user)
@@ -4185,7 +4502,8 @@ def _handle_quick_quote_session_baseline(session_id: str, body, *, user=None) ->
         return _qq_error(code, str(exc) or "无法选定基准案例", 409)
     workspace = cpq_quick_quote_workspace.new_workspace(baseline, user=user)
     state.update({"inputs": dict(inputs), "baseline": baseline, "workspace": workspace,
-                  "quote": {}, "versions": 0})
+                  "quote": {}, "diff": [], "revision": int(state.get("revision") or 0) + 1})
+    _qq_touch(state, workflow_state="based")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
             "baseline": baseline, "workspace": workspace}
 
@@ -4193,7 +4511,7 @@ def _handle_quick_quote_session_baseline(session_id: str, body, *, user=None) ->
 def _handle_quick_quote_session_workspace(session_id: str, body, *, user=None) -> dict:
     """`PUT …/{id}/workspace` —— 只改白名单字段，保存 diff 与版本（Spec §3 第 4 条）。"""
     body = body if isinstance(body, dict) else {}
-    state = _qq_state(session_id)
+    state = _qq_existing(session_id)
     baseline = state.get("baseline") or {}
     if not baseline:
         return _qq_error("baseline_required", "还没有选定基准案例：先选一个基准再改参数。", 409)
@@ -4208,15 +4526,20 @@ def _handle_quick_quote_session_workspace(session_id: str, body, *, user=None) -
         return _qq_error(getattr(exc, "code", "") or "edit_rejected",
                          str(exc) or "字段改动被拒绝", 409)
     state["workspace"] = workspace
+    # 差异行**在顶层**（Spec §4.3）：前端保存并渲染的就是这一份，不再去 workspace.rows 里找。
+    diff = cpq_quick_quote_workspace.diff_table(workspace)
+    state["diff"] = diff
+    _qq_touch(state, workflow_state="edited",
+              revision=int(state.get("revision") or 0) + 1)
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "workspace": workspace,
-            "diff": cpq_quick_quote_workspace.diff_table(workspace),
+            "diff": diff,
             "diff_total": cpq_quick_quote_workspace.diff_total(workspace)}
 
 
 def _handle_quick_quote_session_price(session_id: str, body, *, user=None) -> dict:
     """`POST …/{id}/price` —— 确定性重算价格，回公式/来源/缺口（Spec §3 第 5 条）。"""
     body = body if isinstance(body, dict) else {}
-    state = _qq_state(session_id)
+    state = _qq_existing(session_id)
     baseline = state.get("baseline") or {}
     workspace = state.get("workspace") or {}
     if not baseline or not workspace:
@@ -4234,16 +4557,21 @@ def _handle_quick_quote_session_price(session_id: str, body, *, user=None) -> di
             payload["gate"] = gate
         return payload
     state["quote"] = quote
+    diff = state.get("diff") or cpq_quick_quote_workspace.diff_table(workspace)
+    state["diff"] = diff
+    _qq_touch(state, workflow_state="priced")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "quote": quote,
-            "diff": cpq_quick_quote_workspace.diff_table(workspace),
-            "diff_total": cpq_quick_quote_workspace.diff_total(workspace)}
+            "diff": diff,
+            "diff_total": cpq_quick_quote_workspace.diff_total(workspace),
+            # 只有 `priced` 且门禁没有阻断时才允许确认（Spec §4.4）——前端照这个开关。
+            "can_confirm": not bool(quote.get("gaps"))}
 
 
 def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> dict:
     """`POST …/{id}/confirm` —— 生成可见报价卡（Spec §3 第 6 条）：
     落卡片第 2 步快照的 `quick_quote_price` 段，返回可再次打开的身份。"""
     body = body if isinstance(body, dict) else {}
-    state = _qq_state(session_id)
+    state = _qq_existing(session_id)
     quote = body.get("quote") if isinstance(body.get("quote"), dict) else state.get("quote") or {}
     if not quote:
         return _qq_error("quote_required", "还没有可确认的快速报价：先算价。", 409)
@@ -4264,16 +4592,44 @@ def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> 
     stored_quote = snapshot.get(segment_key) if isinstance(snapshot.get(segment_key), dict) else quote
     state["quote"] = dict(stored_quote or {})
     state["versions"] = int(saved.get("version_no") or 1)
+    state["version_no"] = int(saved.get("version_no") or 1)
+    _qq_touch(state, workflow_state="confirmed")
+    # 确认后首页**同一张业务卡**要立刻能看到版本、价格、状态与快速报价标识（Spec §4.4/§6）：
+    # 卡片摘要随确认响应一起回，前端据此 upsert 同一张卡，不新增第二张项目卡。
+    card = _qq_card_summary(session_id, state)
+    state["card"] = card
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
             "quick_quote_id": saved.get("quick_quote_id"),
             "version_no": saved.get("version_no"),
-            "segment": state["quote"], "formal": bool(state["quote"].get("formal"))}
+            "segment": state["quote"], "formal": bool(state["quote"].get("formal")),
+            "workflow_state": "confirmed", "card": card,
+            "can_confirm": True,
+            "revision": int(state.get("revision") or 0)}
+
+
+def _qq_card_summary(session_id: str, state) -> dict:
+    """首页那一张业务卡的摘要（Spec §4.4/§6）：版本 / 价格 / 状态 / 快速报价标识 / 更新时间。
+
+    只搬事实：`version_no`、`unit_price` / `total_price` 取已落版本的报价段，不在前端算钱。
+    """
+    payload = state if isinstance(state, dict) else {}
+    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
+    return dict(card, quick_quote=True, quick_quote_session_id=_qq_text(session_id),
+                quote_mode=_qq_text(payload.get("quote_mode")) or "quick",
+                industry=_qq_text(payload.get("industry")),
+                workflow_state=_qq_workflow_state(payload),
+                version_no=int(payload.get("version_no") or payload.get("versions") or 0),
+                unit_price=quote.get("unit_price"), total_price=quote.get("total_price"),
+                currency=quote.get("currency") or card.get("currency"),
+                formal=bool(quote.get("formal")),
+                updated_at=_qq_text(payload.get("updated_at")))
 
 
 def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) -> dict:
     """`POST …/{id}/transfer-to-precise` —— 证据不足时无损转精准报价（Spec §3 第 7 条）。"""
     body = body if isinstance(body, dict) else {}
-    state = _qq_state(session_id)
+    state = _qq_existing(session_id)
     quote = body.get("quote") if isinstance(body.get("quote"), dict) else state.get("quote") or {}
     if not quote:
         return _qq_error("quote_required", "还没有可转出的快速报价：先算价再转。", 409)
@@ -4283,10 +4639,12 @@ def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) ->
     except Exception as exc:                                    # noqa: BLE001
         return _qq_error(getattr(exc, "code", "") or "transfer_failed",
                          str(exc) or "转精准报价失败", 409)
+    state["transfer"] = result if isinstance(result, dict) else {"result": result}
+    _qq_touch(state, workflow_state="transferred")
     return {"ok": True, "quick_quote_session_id": _qq_text(session_id), "handoff": result}
 
 
-def _handle_quick_quote_read(session_id: str) -> dict:
+def _handle_quick_quote_read(session_id: str, user=None) -> dict:
     """`GET /api/quick-quote/sessions/{id}` —— 打开/刷新后恢复（Spec §4：刷新后价格与版本一致）。
 
     读路径**不许假装正常**（Spec `quick-quote-home-wiring-and-read-diagnostics.md` §C5）：
@@ -4294,7 +4652,15 @@ def _handle_quick_quote_read(session_id: str) -> dict:
     以前这里把异常吞成 `saved={}`，于是"这个会话确实还没落过卡"与"报价存储这一路坏了"
     在响应里长得一模一样，现场没法对账。**正的空值不带任何诊断键**，两种情形必须分得开。
     """
-    state = _qq_state(session_id)
+    # 不存在的实例一律 404（Spec §6）：以前 `_qq_state()` 的 setdefault 会静默新建一个
+    # "幽灵实例"，于是"没这个会话"与"有但空"在读接口上长得一模一样。
+    state = _qq_existing(session_id)
+    if state is None:
+        return _qq_session_not_found(session_id)
+    # 逐实例读 ACL（Spec §7）：无读权也回 404，不泄露存在性。
+    denied = require_quick_quote_access(session_id, user)
+    if denied:
+        return denied
     saved = {}
     read_error = None
     try:
@@ -4303,14 +4669,31 @@ def _handle_quick_quote_read(session_id: str) -> dict:
         read_error = {"type": type(exc).__name__,
                       "message": _qq_text(str(exc)) or "报价读回失败（报价存储这一路可能坏了）"}
         saved = {}
+    # 一份**可完整恢复**的读契约（Spec §6）：行业 / 模式 / 输入 / 匹配 / 基准 / 工作区 / 差异 /
+    # 报价 / 版本 / 归属 / 状态 / 修订号，缺一样刷新与重启后就恢复不到原处。
     payload = {"ok": True, "quick_quote_session_id": _qq_text(session_id),
                # 报价模式与行业随实例读回（Spec §2）：首页据此恢复"快速工作区"还是走精准链路。
                "quote_mode": _qq_text(state.get("quote_mode")),
                "industry": _qq_text(state.get("industry")),
-               "inputs": state.get("inputs") or {}, "baseline": state.get("baseline") or {},
+               "owner": _qq_text(state.get("owner_user_id")),
+               "owner_user_id": _qq_text(state.get("owner_user_id")),
+               "participants": list(state.get("participants") or []),
+               "inputs": state.get("inputs") or {},
+               "match": state.get("match") or {},
+               "baseline": state.get("baseline") or {},
                "workspace": state.get("workspace") or {},
+               "diff": state.get("diff") or [],
+               "workflow_state": _qq_workflow_state(state),
+               "allowed_actions": _qq_allowed_actions(state),
+               "revision": int(state.get("revision") or 0),
+               "card": state.get("card") or {},
+               "transfer": state.get("transfer") or {},
+               "updated_at": _qq_text(state.get("updated_at")),
                "quote": saved or state.get("quote") or {}, "saved_quote": saved,
                "version_no": int((saved or {}).get("version_no") or state.get("versions") or 0)}
+    if quick_quote_session_repository.last_error:
+        # 落盘/读回出过问题时必须说出来，不许把"仓储坏了"显示成"这个会话真的是空的"。
+        payload["read_error"] = {"type": "repository", "message": quick_quote_session_repository.last_error}
     if read_error:
         # `ok` 保持 True（刷新本身成功了），但"为什么读不到"必须看得见。
         payload["read_error"] = read_error
@@ -4319,26 +4702,54 @@ def _handle_quick_quote_read(session_id: str) -> dict:
 
 def _handle_quick_quote_session_write(session_id: str, command: str, body, *,
                                       user=None, idempotency_key: str = "") -> dict:
-    """把一条写命令派到具体处理器；命中幂等键就复用上一次的响应体（Spec §3 末句）。"""
+    """把一条写命令派到具体处理器：先查实例存在性与 ACL，再校验**工作流顺序**，最后才落幂等。
+
+    Spec `quick-quote-full-flow-state-and-recovery.md` §3/§5/§6/§7：
+    - 未知 session → 404 `session_not_found`（不许造幽灵实例）；
+    - 逐实例 ACL（`require_quick_quote_access`）：无读权 404，有读无写 403；
+    - 乱序命令 → 409 `invalid_workflow_state` + `required_state` + `current_state`；
+    - 幂等键绑定 `(actor, session, command, 请求指纹)`，记录随实例持久化。
+    """
     command = _qq_text(command)
     sid = _qq_text(session_id)
 
+    denied = require_quick_quote_access(sid, user, write=True)
+    if denied:
+        return denied
+    state = _qq_existing(sid) or {}
+    current_state = _qq_workflow_state(state)
+    required = QUICK_QUOTE_REQUIRED_STATE.get(command)
+    if required is not None and current_state not in required:
+        return _qq_error(
+            "invalid_workflow_state",
+            "这一步还没到：命令「%s」要求实例处于「%s」，当前是「%s」。" % (
+                command, required[0], current_state),
+            409, required_state=required[0], current_state=current_state,
+            allowed_actions=_qq_allowed_actions(state))
+    fingerprint = _qq_fingerprint(body, command)
+
     def produce():
         if command == "match":
-            return _handle_quick_quote_session_match(sid, body)
-        if command == "baseline":
-            return _handle_quick_quote_session_baseline(sid, body, user=user)
-        if command == "workspace":
-            return _handle_quick_quote_session_workspace(sid, body, user=user)
-        if command == "price":
-            return _handle_quick_quote_session_price(sid, body, user=user)
-        if command == "confirm":
-            return _handle_quick_quote_session_confirm(sid, body, user=user)
-        if command == "transfer-to-precise":
-            return _handle_quick_quote_session_transfer(sid, body, user=user)
-        return _qq_error("unknown_command", "未知的快速报价命令：%s" % command, 404)
+            result = _handle_quick_quote_session_match(sid, body)
+        elif command == "baseline":
+            result = _handle_quick_quote_session_baseline(sid, body, user=user)
+        elif command == "workspace":
+            result = _handle_quick_quote_session_workspace(sid, body, user=user)
+        elif command == "price":
+            result = _handle_quick_quote_session_price(sid, body, user=user)
+        elif command == "confirm":
+            result = _handle_quick_quote_session_confirm(sid, body, user=user)
+        elif command == "transfer-to-precise":
+            result = _handle_quick_quote_session_transfer(sid, body, user=user)
+        else:
+            return _qq_error("unknown_command", "未知的快速报价命令：%s" % command, 404)
+        # 每个**成功**的写响应都带服务端状态（Spec §3）：前端按钮只消费它，不自己推断。
+        if isinstance(result, dict) and result.get("ok"):
+            result.update(_qq_state_envelope(_qq_existing(sid) or {}))
+        return result
 
-    return _qq_idempotent(sid, idempotency_key, produce)
+    return _qq_idempotent(sid, idempotency_key, produce, actor=_qq_actor_id(user),
+                          command=command, fingerprint=fingerprint)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -4402,7 +4813,12 @@ class Handler(BaseHTTPRequestHandler):
     def _quick_quote_write(self, path) -> bool:
         """快速报价写命令分发（POST / PUT 共用；Spec §3）。命中返回 True，未命中 False。"""
         if path == QUICK_QUOTE_SESSIONS_PATH:
-            payload = _handle_quick_quote_session_create(self._read_body(), user=self._acting_user())
+            # 建实例也必须走幂等（Spec §5）：双击 / 超时重试复用同一个 `X-Idempotency-Key`，
+            # 否则同一动作会建出两个实例、两张卡。
+            body = self._read_body()
+            key = (self.headers.get("X-Idempotency-Key") or body.get("idempotency_key") or "")
+            payload = _handle_quick_quote_session_create(
+                body, user=self._acting_user(), idempotency_key=key)
         else:
             match = QUICK_QUOTE_SESSION_RE.match(path or "")
             if not match:
@@ -4457,7 +4873,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = path[len(QUICK_QUOTE_SESSIONS_PATH):].strip("/")
             if not sid:
                 sid = (parse_qs(parsed.query).get("session_id") or [""])[0]
-            self._send_json(_handle_quick_quote_read(sid))
+            payload = _handle_quick_quote_read(sid, user=self._acting_user())
+            self._send_json(payload, 200 if payload.get("ok") else int(payload.get("status") or 400))
         elif path == "/api/quote/identity":
             # 业务实例身份链（Spec `e2e-quote-session-and-completion-closure.md` §2.2）：只读；
             # 不唯一/读不到就回对应状态码，绝不猜一个继续。
