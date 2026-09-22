@@ -15144,3 +15144,58 @@ tests.test_packaging_drawing_flow_red         Ran 54  OK (skipped=1)
 
 `ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
 未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 354. 落地 `packaging-parts-conclusion-version-readback`：单件工艺/成本结论读侧认零件文档版本（两个 GET 回显 `parts_id`/`stale`/`stale_reason`、按 `parts_id` 精确读回那一版、右栏把"上一版零件算的"说出来）（6 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_parts_conclusion_version_readback_red`（K 组 6 条）全绿：K1 / K2 / K3 / K5
+由红转绿，K4（同版本不算过期）/ K6（不传 `parts_id` 仍是最近一版）两条护栏保持绿。
+
+### 一、缺口
+
+写侧早就记了版本（`main.py` 的工艺结论文档带 `parts_id`，成本同口径），但读侧三处都断：
+
+- 两个 GET 路由（`get_packaging_part_process()` / `get_packaging_part_cost()`）的返回体里
+  **没有 `parts_id`、也不比对当前零件文档** —— 重跑一次图纸解析换了 `parts_id` 之后，右栏照旧把
+  **上一版零件**算出的工艺/成本显示成当前结果，一个字都不说；
+- `packaging_parts.load_part_process()` / `load_part_cost()` 只按 `part_code` 取"最近一版"，
+  而文档其实按 `(part_code, parts_id)` 分段存着 —— 存得下、读不出；
+- "没跑过" / "当前版" / "上一版零件算的"三种情形在返回体上长得完全一样。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_parts.py`
+  - 新增 `parts_stale_reason(stored_parts_id, current_parts_id)`（**唯一判据点**，三值：`""` /
+    `parts_reparsed` / `parts_unknown`，与 `packaging_part_solids.solids_stale_reason()` 同一纪律）；
+  - `_load_part_doc()` 新增**可选** `parts_id`：给了就按 `(part_code, parts_id)` 精确匹配那一版，
+    不传时逐字保持"同一 part_code 的最近一版"；
+  - `load_part_process()` / `load_part_cost()` 透传这个可选参数。
+- `tech_app/backend/main.py`
+  - 新增 `PACKAGING_PART_STALE_REASON = "parts_reparsed"` 与
+    `_packaging_part_conclusion_version(pid, record)`（取当前零件文档 → 三键），
+    两个 GET 路由（**含空态分支**）都 `update()` 这三个键；
+  - 既有键（`part_code` / `plan` / `validation` / `coverage` / `assumptions` / `source`、
+    `analysis` / `summary`）名称、取值与空态形状（`plan: None` 等）逐字不变。
+- `tech_app/frontend/inline-analysis.js`：`conclusionVersionNote(data)` —— `stale` 为真显示
+  「这份结论是上一版零件算的（%s），请重新跑一次。」，`parts_unknown` 显示
+  「无法判断这份结论对应哪一版零件。」，`load()` 里优先显示在状态行。
+
+### 三、一条已记录的偏差（不改测试）
+
+Spec §2.2 原文写「`stale`：`bool(stale_reason)`」，与 §3「不许把"读不到当前零件文档"当成过期或没过期」
+以及红测 **K2**（`parts_unknown` 时 `stale` 不许为 true）自相矛盾。按 §3 / K2 实现，并在该 Spec
+追加 **§5 更正**（与 `packaging-solids-parts-version-binding.md` §6 同一条纪律："比较不了 ≠ 过期"）：
+只有 `parts_reparsed` 算 `stale=true`，`parts_unknown` → `stale=false` 且原因码照旧带出来。
+§2.2 原文保留为历史事实，以 §5 为准；红测一个字未改。
+
+### 四、复跑
+
+```
+tests.test_packaging_parts_conclusion_version_readback_red → Ran 6 OK
+tests.test_packaging_parts_*.py（18 个模块，去掉属于下一批的 role_lookup）+ solids_parts_version_binding
+  → Ran 309 OK (skipped=4)
+node --check tech_app/frontend/inline-analysis.js → 通过
+```
+
+未改 `tests/` 下任何文件（含回归锚点 `test_packaging_parts_downstream_readback_red.py`）、未放宽任何断言、
+未连 PG / SQLite 生产库、未发 HTTP、未写业务数据；`_save_part_doc()` 的 `(part_code, parts_id)` 分段 /
+幂等判据 / `MAX_VERSIONS` 一个字未改；未 push / MR / tag / Release / 未部署。

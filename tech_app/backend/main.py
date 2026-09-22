@@ -8331,6 +8331,28 @@ async def packaging_part_cost(
     )}
 
 
+#: 结论的零件版本漂移原因里**只有**这一个算"过期"（Spec §2.2）：`parts_unknown` 是"比较不了"，
+#: 与 `packaging_part_solids` 的 3D 那一格同一条纪律（"比较不了 ≠ 过期"）。
+PACKAGING_PART_STALE_REASON = "parts_reparsed"
+
+
+def _packaging_part_conclusion_version(pid: str, record: Any) -> Dict[str, Any]:
+    """单件结论的零件版本三键（Spec `packaging-parts-conclusion-version-readback.md` §2.2）。
+
+    判据只有一处：`packaging_parts.parts_stale_reason()`。本函数只负责**取当前零件文档**并把
+    三值翻成响应键，不在路由里另写一套比较。
+    """
+    payload = record if isinstance(record, dict) else {}
+    if not payload:
+        # 空态（没跑过）同样必须给三个键，且不是"过期"。
+        return {"parts_id": "", "stale": False, "stale_reason": ""}
+    stored = str(payload.get("parts_id") or "")
+    current = packaging_parts.load_parts(pid) or {}
+    reason = packaging_parts.parts_stale_reason(stored, (current or {}).get("parts_id"))
+    return {"parts_id": stored, "stale": reason == PACKAGING_PART_STALE_REASON,
+            "stale_reason": reason}
+
+
 @app.get(PACKAGING_PART_PROCESS_PATH)
 def get_packaging_part_process(pid: str, part_code: str,
                                user: dict = Depends(current_user)):
@@ -8338,32 +8360,48 @@ def get_packaging_part_process(pid: str, part_code: str,
 
     图纸零件的结论**不写进技术侧 store**（技术 IR 只由技术链路写），但它落进自己的
     版本化文档 —— 以前这里恒回 `plan: null`，于是"刷新一下刚跑出来的工艺就没了"。
+
+    另外要说得出来这份结论是照**哪一版零件文档**算的（Spec
+    `packaging-parts-conclusion-version-readback.md` §2.2）：零件重解析换了 `parts_id`
+    之后，上一版算的结论不许再以"当前有效"的样子显示 —— 但也**不删**。
     """
     _workflow_project(pid)
     _packaging_part_row(pid, part_code)
     record = packaging_parts.load_part_process(pid, part_code) or {}
     if not record:
-        return {"part_code": part_code, "plan": None, "validation": None,
+        body = {"part_code": part_code, "plan": None, "validation": None,
                 "coverage": None, "source": {}}
-    return {"part_code": str(record.get("part_code") or part_code),
+        body.update(_packaging_part_conclusion_version(pid, record))
+        return body
+    body = {"part_code": str(record.get("part_code") or part_code),
             "plan": record.get("plan"), "validation": record.get("validation"),
             "coverage": record.get("coverage"),
             "assumptions": list(record.get("assumptions") or []),
             "source": record.get("source") if isinstance(record.get("source"), dict) else {}}
+    body.update(_packaging_part_conclusion_version(pid, record))
+    return body
 
 
 @app.get(PACKAGING_PART_COST_PATH)
 def get_packaging_part_cost(pid: str, part_code: str,
                             user: dict = Depends(current_user)):
-    """读单件成本结论（最近一版落库文档；未跑过 → 空态，不 404，Spec §2.1）。"""
+    """读单件成本结论（最近一版落库文档；未跑过 → 空态，不 404，Spec §2.1）。
+
+    与工艺那一路同口径地披露"这份结论针对哪一版零件文档"（Spec
+    `packaging-parts-conclusion-version-readback.md` §2.2）。
+    """
     _workflow_project(pid)
     _packaging_part_row(pid, part_code)
     record = packaging_parts.load_part_cost(pid, part_code) or {}
     if not record:
-        return {"part_code": part_code, "analysis": None, "summary": None, "source": {}}
-    return {"part_code": str(record.get("part_code") or part_code),
+        body = {"part_code": part_code, "analysis": None, "summary": None, "source": {}}
+        body.update(_packaging_part_conclusion_version(pid, record))
+        return body
+    body = {"part_code": str(record.get("part_code") or part_code),
             "analysis": record.get("analysis"), "summary": record.get("summary"),
             "source": record.get("source") if isinstance(record.get("source"), dict) else {}}
+    body.update(_packaging_part_conclusion_version(pid, record))
+    return body
 
 
 @app.get(PACKAGING_PART_PROCESS_LOOKUP_PATH)

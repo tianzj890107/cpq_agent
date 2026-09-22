@@ -35,6 +35,20 @@
     return data;
   }
 
+  // 单件工艺/成本结论的版本披露（Spec `packaging-parts-conclusion-version-readback.md` §2.3）：
+  // `stale` 为真 → "这份结论是上一版零件算的（%s），请重新跑一次"；
+  // `stale_reason == "parts_unknown"` → "无法判断这份结论对应哪一版零件"（比较不了 ≠ 过期）。
+  function conclusionVersionNote(data) {
+    const payload = data || {};
+    if (payload.stale === true) {
+      return `这份结论是上一版零件算的（${payload.stale_reason || "parts_reparsed"}），请重新跑一次。`;
+    }
+    if (payload.stale_reason === "parts_unknown") {
+      return "无法判断这份结论对应哪一版零件。";
+    }
+    return "";
+  }
+
   function open(mode, context) {
     if (!context?.host || !context.projectId || !context.part) return;
     restoreExpertPanel(active);
@@ -46,6 +60,7 @@
       validation: null,
       analysis: null,
       summary: null,
+      versionNote: "",
       editing: false,
       busy: false,
       root: null,
@@ -123,6 +138,10 @@
       const url = `${endpointBase(state)}/${state.mode}`;
       const [data] = await Promise.all([jsonFetch(url), loadLibrary(state)]);
       if (active !== state) return;
+      // 结论的零件版本披露（Spec `packaging-parts-conclusion-version-readback.md` §2.3）：
+      // 读回体带 `parts_id` / `stale` / `stale_reason`。零件重解析之后再打开这一格，
+      // 必须说清"这份结论是上一版零件算的"，不许照旧显示成当前结果。
+      state.versionNote = conclusionVersionNote(data);
       if (state.mode === "process") {
         state.plan = data.plan;
         state.validation = data.validation;
@@ -134,9 +153,9 @@
         if (quantity && state.analysis?.quantity) quantity.value = state.analysis.quantity;
       }
       render(state);
-      setStatus(state, state.mode === "process"
+      setStatus(state, state.versionNote || (state.mode === "process"
         ? (state.plan ? "已加载工艺路线。可编辑或重新生成。" : "尚未生成工艺路线。")
-        : (state.analysis ? "已加载成本测算。可编辑或重新生成。" : "尚未生成成本测算。"));
+        : (state.analysis ? "已加载成本测算。可编辑或重新生成。" : "尚未生成成本测算。")));
     } catch (error) {
       if (active !== state) return;
       state.root.querySelector("[data-inline-body]").innerHTML = `<div class="inline-empty error">读取失败：${esc(error.message)}</div>`;

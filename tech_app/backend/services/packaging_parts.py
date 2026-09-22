@@ -2279,18 +2279,48 @@ def _part_doc_items(project_id: str, key: str) -> List[Dict[str, Any]]:
     return [item for item in (items or []) if isinstance(item, dict)]
 
 
+def parts_stale_reason(stored_parts_id: Any, current_parts_id: Any) -> str:
+    """单件工艺/成本结论的零件版本漂移原因 —— **唯一判据点**（Spec §2.1）。
+
+    - 结论里没有 `parts_id`（本批之前落的）→ `parts_unknown`；
+    - 当前零件文档读不到（空 / None）→ `parts_unknown`；
+    - 两者都有且不同 → `parts_reparsed`；
+    - 相同 → `""`。
+
+    与 `packaging_part_solids.solids_stale_reason()` 同一套三值："比较不了"一律
+    `parts_unknown`，**不许**当成"过期"或"没过期"（同一条纪律）。
+    """
+    stored = _text(stored_parts_id)
+    current = _text(current_parts_id)
+    if not stored or not current:
+        return "parts_unknown"
+    if stored != current:
+        return "parts_reparsed"
+    return ""
+
+
 def _record_hash(payload: Dict[str, Any]) -> str:
     from .packaging_semantics import model as sem_model
 
     return sem_model.sha256_hex(sem_model.canonical_json(sem_model.json_safe(payload)))
 
 
-def _load_part_doc(project_id: str, key: str, part_code: str) -> Dict[str, Any]:
-    """读这一件的**最近一版**结论；没跑过就回空文档（不抛错、不 404，Spec §2.1）。"""
+def _load_part_doc(project_id: str, key: str, part_code: str,
+                   parts_id: Optional[str] = None) -> Dict[str, Any]:
+    """读这一件的结论；没跑过就回空文档（不抛错、不 404，Spec §2.1）。
+
+    默认取**最近一版**（逐字保持今天的行为）；给了 `parts_id` 就按 `(part_code, parts_id)`
+    精确读回**那一版** —— 文档本来就按这两个键分段存（见 `_save_part_doc()`），
+    以前只按 `part_code` 取第一条，于是"上一版零件算的结论"永远读不回来。
+    """
     wanted = _text(part_code)
+    wanted_version = None if parts_id is None else _text(parts_id)
     for item in _part_doc_items(project_id, key):
-        if _text(item.get("part_code")) == wanted:
-            return item
+        if _text(item.get("part_code")) != wanted:
+            continue
+        if wanted_version is not None and _text(item.get("parts_id")) != wanted_version:
+            continue
+        return item
     return {}
 
 
@@ -2326,9 +2356,10 @@ def save_part_process(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any
     return _save_part_doc(project_id, DOC_KEY_PROCESS, payload)
 
 
-def load_part_process(project_id: str, part_code: str) -> Dict[str, Any]:
-    """读回单件工艺结论（最近一版）；没跑过 → `{}`。"""
-    return _load_part_doc(project_id, DOC_KEY_PROCESS, part_code)
+def load_part_process(project_id: str, part_code: str,
+                      parts_id: Optional[str] = None) -> Dict[str, Any]:
+    """读回单件工艺结论（默认最近一版；给了 `parts_id` 读那一版）；没跑过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_PROCESS, part_code, parts_id)
 
 
 def save_part_cost(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2336,9 +2367,10 @@ def save_part_cost(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return _save_part_doc(project_id, DOC_KEY_COST, payload)
 
 
-def load_part_cost(project_id: str, part_code: str) -> Dict[str, Any]:
-    """读回单件成本结论（最近一版）；没跑过 → `{}`。"""
-    return _load_part_doc(project_id, DOC_KEY_COST, part_code)
+def load_part_cost(project_id: str, part_code: str,
+                   parts_id: Optional[str] = None) -> Dict[str, Any]:
+    """读回单件成本结论（默认最近一版；给了 `parts_id` 读那一版）；没跑过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_COST, part_code, parts_id)
 
 
 # --------------------------------------------------------------------------- #
