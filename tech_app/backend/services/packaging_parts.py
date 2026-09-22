@@ -32,6 +32,10 @@ DOC_KEY = "packaging_parts"
 DOC_KEY_PROCESS = "packaging_part_process"
 DOC_KEY_COST = "packaging_part_cost"
 
+#: 人工补料厚自己的版本化文档（Spec `packaging-parts-thickness-facts.md` §2.5）：
+#: 与零件文档分开存 —— 补一条料厚不该换掉 `parts_id`（换了会把下游落库的结论全指歪）。
+DOC_KEY_THICKNESS = "packaging_part_thickness"
+
 #: 过滤阈值与上限：默认值**只在这里**，不许散落在判定代码里。
 DEFAULT_OPTIONS = {"min_area_mm2": 2000, "max_edge_mm": 1200,
                    "max_area_mm2": 1000000, "max_parts": 64}
@@ -44,6 +48,18 @@ REASON_CODES = ("edge_over_max", "area_over_max", "area_under_min", "no_curve_en
                 "no_components", "all_filtered", "no_unit")
 
 PART_CODE_FORMAT = "DWG-P%02d"
+
+#: `filtered_reason_mix` 一件只记一次：主因次序与 Spec §2.4 的前端文案同序
+#: （「面积超限 X / 长边超限 Y」）—— 面积超限是"吞并块"这一层的头号信号。
+#: 每一件**每一条**过滤原因各记一次的是 `filtered_<reason>_total`（见下）。
+FILTER_REASON_ACCOUNT_ORDER = ("area_over_max", "edge_over_max", "area_under_min",
+                              "no_curve_entity")
+
+#: 逐原因的件数键（一件可同时计入多个原因；与上面"一件只记一次"的两把账分开）。
+FILTER_REASON_TOTAL_KEYS = {"edge_over_max": "filtered_edge_over_max_total",
+                            "area_over_max": "filtered_area_over_max_total",
+                            "area_under_min": "filtered_area_under_min_total",
+                            "no_curve_entity": "filtered_no_curve_entity_total"}
 
 #: 零件 id 命名空间（Spec `packaging-parts-downstream-process-and-cost.md` §2）：
 #: 本版 `part_id` 逐字等于 `part_code`（图上一件就是一个零件号），不建额外映射表。
@@ -76,6 +92,76 @@ MATERIAL_CLASS_KEYWORDS = (
     ("textile", ("丝带", "织带", "布", "绒")),
     ("plastic", ("EVA", "海绵", "PET", "PVC", "塑料")),
 )
+
+
+def _account_reason(reasons: Any) -> str:
+    """一件被过滤的**主因**（一件只进 `filtered_reason_mix` 一次，Spec §2.4）。"""
+    items = [_text(item) for item in (reasons or []) if _text(item)]
+    for reason in FILTER_REASON_ACCOUNT_ORDER:
+        if reason in items:
+            return reason
+    return items[0] if items else "unknown"
+
+
+def material_words(label: Any) -> frozenset:
+    """标签 → 命中的材质词集合（`MATERIAL_KEYWORDS` 里出现在该标签中的那些词）。
+
+    只有集合**相交**才算"同一种材质"（Spec `packaging-parts-thickness-facts.md` §2.2）；
+    集合为空表示"看不出材质"，此时不判冲突（没得比）。
+    """
+    text = _text(label).upper()
+    if not text:
+        return frozenset()
+    return frozenset(word.upper() for word in MATERIAL_KEYWORDS if word.upper() in text)
+
+
+def material_table_rows(value: Any) -> List[Dict[str, Any]]:
+    """`options["material_table"]` → 规范化行（纯数据，Spec §2.3）。
+
+    只认这几个字段；密度取不到就是 `None`（**不许**给默认密度）。顺序确定（按材料码 + 名称）。
+    """
+    rows: List[Dict[str, Any]] = []
+    for item in (value or []):
+        if not isinstance(item, dict):
+            continue
+        rows.append({"material_code": _text(item.get("material_code")) or _text(item.get("code")),
+                     "name": _text(item.get("name")), "grade": _text(item.get("grade")),
+                     "spec": _text(item.get("spec")), "density": _num(item.get("density"))})
+    rows.sort(key=lambda row: (row["material_code"], row["name"]))
+    return rows
+
+
+def _material_density(row: Dict[str, Any], table: List[Dict[str, Any]]
+                      ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """件材料标签 → 材料表里**唯一**命中的那一条（Spec §2.3）。
+
+    命中 ≥2 条或一条都没命中 → `(None, reason)`；宁可不推，也不许挑一条。
+    """
+    words = material_words(row.get("material"))
+    if not words:
+        return None, "material_unknown"
+    hits = [item for item in table
+            if words & material_words(" ".join([item["name"], item["grade"], item["spec"]]))]
+    hits = [item for item in hits if (_num(item.get("density")) or 0.0) > 0.0]
+    if len(hits) == 1:
+        return hits[0], ""
+    if len(hits) >= 2:
+        return None, "material_ambiguous"
+    return None, "density_missing"
+
+
+def _grammage_of(*texts: Any) -> Optional[float]:
+    """克重（`1500g` / `350克`）—— 只从**已采纳的材料注记文本**里取（Spec §2.1）。
+
+    `2mm` / `1.8mm` / `2.5MM` 一律不是克重（沿用 `quick-quote-10-material-gsm-attribution.md` §C2）。
+    """
+    for text in texts:
+        match = _GRAMMAGE.search(_text(text))
+        if match:
+            value = _num(match.group(1))
+            if value:
+                return value
+    return None
 
 
 def _material_class(value: Any) -> Optional[str]:
@@ -176,6 +262,24 @@ NOTE_TEXT_MAX = 60
 #: （整体材料说明 + 分件引出标注 + 分区注记），"一件一件按最近标注取"必然覆盖不到。
 MATERIAL_ATTRIBUTION_RULE_ID = "part_material_attribution_v1"
 ATTRIBUTION_KINDS = ("part_note", "group_note", "layer_name", "requirement_default")
+
+#: 料厚来源的**合法闭集**（Spec `packaging-parts-thickness-facts.md` §2.4）：在四层归属之外，
+#: 多出「克重 ÷ 密度 推出来的」与「人补的」两种 —— 这两类都必须能被下游一眼认出。
+DERIVED_THICKNESS_KIND = "derived_from_gsm_density"
+MANUAL_THICKNESS_KIND = "manual"
+THICKNESS_SOURCE_KINDS = ATTRIBUTION_KINDS + (DERIVED_THICKNESS_KIND, MANUAL_THICKNESS_KIND)
+
+#: 克重 → 料厚的换算式（Spec §2.1，逐字）：`thickness_mm = gsm / (density * 1000)`。
+#: `gsm` 单位 g/㎡、`density` 单位 g/cm³，四舍五入到 3 位小数。**不许**放行业经验厚度表。
+GRAMMAGE_DENSITY_DIVISOR = 1000.0
+DERIVED_THICKNESS_PRECISION = 3
+
+#: 「有材料、却仍然没有料厚」的原因闭集（Spec §2.4）—— 推不出来必须看得见，不许静默。
+THICKNESS_UNRESOLVED_REASONS = ("density_missing", "material_ambiguous", "no_grammage",
+                                "material_unknown")
+
+#: 料厚不许跨材料串味（Spec §2.2）：注记的材质词与该件的材料标签**不相交** → 拒绝采用并留痕。
+THICKNESS_CONFLICT_REASON = "thickness_material_conflict"
 
 #: 件级半径 = min(0.25 × 对角线, 硬上限)：0.25 在整版大件上会放大到 160mm+，把图纸整体
 #: 材料说明误归给大件（实测 4 件 open 大件全错），所以必须加硬上限。
@@ -422,6 +526,33 @@ def _note_reach(position: List[float], bbox: List[float]) -> float:
     return max(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
 
 
+def _drop_conflicting_thickness(item: Dict[str, Any],
+                                 picked: List[Tuple[float, int, Dict[str, Any], Any]]
+                                 ) -> List[Tuple[float, int, Dict[str, Any], Any]]:
+    """把「材质词与本件材料不相交」的料厚候选剔掉，并逐条留痕（Spec §2.2）。
+
+    注记不带材质词（显式 `厚度2MM`）或本件材料未定 → 不判冲突，照旧采用（没得比）。
+    """
+    part_words = material_words(item.get("material"))
+    if not part_words:
+        return picked
+    kept: List[Tuple[float, int, Dict[str, Any], Any]] = []
+    for candidate in picked:
+        note = candidate[2]
+        note_words = material_words(note.get("material"))
+        if note_words and not (note_words & part_words):
+            item["conflicts"].append({
+                "reason": THICKNESS_CONFLICT_REASON,
+                "note_ref": _text(note.get("evidence_ref")),
+                "note_text": _text(note.get("text")),
+                "note_material": _text(note.get("material")),
+                "part_material": _text(item.get("material")),
+            })
+            continue
+        kept.append(candidate)
+    return kept
+
+
 def _pick_candidate(candidates: List[Tuple[float, int, Dict[str, Any], Any]]
                     ) -> Tuple[Any, Optional[Tuple[float, int, Dict[str, Any], Any]], bool]:
     """同一层的候选 → `(值, 选中的那条, 是否弃权)`。
@@ -463,7 +594,8 @@ def _requirement_defaults(requirement: Any) -> Dict[str, Any]:
     return out
 
 
-def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Dict[str, Any]:
+def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None,
+                        material_table: Any = None) -> Dict[str, Any]:
     """四层材料归属（纯函数）→ `{component_id: 归属结果}`（Spec §2）。
 
     顺序即优先级：件级引出标注 > 成组注记（半径内 / 整图重复一致）> 图层名 > 需求整盒口径。
@@ -487,6 +619,7 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Di
             "material_source": None, "thickness_source": None,
             "needs_confirmation": False, "assumption_refs": [], "note_refs": [],
             "notes": [], "covers": [], "partition": "", "kind": "",
+            "conflicts": [], "unresolved": [],
             "done": set(),  # 已判定（含"蓄意弃权"）的字段：下层不许再填
         }
 
@@ -498,6 +631,8 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Di
                 continue
             picked = [(distance, order, note, note.get(field))
                       for distance, order, note, _value in candidates if note.get(field)]
+            if field == "thickness_mm":
+                picked = _drop_conflicting_thickness(item, picked)
             value, best, ambiguous = _pick_candidate(picked)
             if ambiguous:
                 item["done"].add(field)
@@ -641,8 +776,66 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Di
             if not item["kind"]:
                 item["kind"] = "requirement_default"
 
+    # —— 层 5：克重 ÷ 密度 推料厚（Spec `packaging-parts-thickness-facts.md` §2.1）——
+    # 料厚是下游（工艺 / 成本 / 3D 挤出）共同的卡点：克重能推的必须推出来并**留痕**，
+    # 推不出来的必须看得见（`attribution.thickness_unresolved`）—— 绝不给默认厚度、
+    # 绝不放纸类"行业经验值"表。推导只走 `options["material_table"]`（不读库、不联网）。
+    table = material_table_rows(material_table)
+    for cid in sorted(state):
+        item = state[cid]
+        if not item["closed"]:
+            continue
+        if item["thickness_mm"] is not None or "thickness_mm" in item["done"]:
+            continue
+        if not item["material"]:
+            item["unresolved"].append({"reason": "material_unknown", "material": "",
+                                       "gsm": None, "material_code": ""})
+            continue
+        source = item["material_source"] if isinstance(item["material_source"], dict) else {}
+        gsm = _grammage_of(source.get("text"), item["material"])
+        if not gsm:
+            item["unresolved"].append({"reason": "no_grammage",
+                                       "material": _text(item["material"]),
+                                       "gsm": None, "material_code": ""})
+            continue
+        entry, reason = _material_density(item, table)
+        if entry is None:
+            item["unresolved"].append({"reason": reason, "material": _text(item["material"]),
+                                       "gsm": gsm, "material_code": ""})
+            continue
+        density = _num(entry.get("density"))
+        distance = _num(source.get("distance_mm"))
+        item["thickness_mm"] = round(gsm / (density * GRAMMAGE_DENSITY_DIVISOR),
+                                     DERIVED_THICKNESS_PRECISION)
+        item["thickness_source"] = {
+            "kind": DERIVED_THICKNESS_KIND, "text": _text(source.get("text")),
+            "evidence_ref": _text(source.get("evidence_ref")),
+            "gsm": gsm, "density": density,
+            "material_code": _text(entry.get("material_code")),
+            "distance_mm": _round(distance) if distance is not None else None,
+        }
+        item["done"].add("thickness_mm")
+        # 推导值能用于 3D 预览与待确认报价，但**不得**被当成已确认事实（Spec §2.1）。
+        item["needs_confirmation"] = True
+        if not item["kind"]:
+            item["kind"] = DERIVED_THICKNESS_KIND
+        ref = _text(source.get("evidence_ref"))
+        if ref:
+            item["note_refs"].append(ref)
+
     out: Dict[str, Any] = {}
     for cid, item in state.items():
+        conflicts: List[Dict[str, Any]] = []
+        seen_conflicts = set()
+        for row in sorted(item["conflicts"],
+                          key=lambda entry: (entry["note_ref"], entry["note_text"])):
+            key = (row["note_ref"], row["note_text"])
+            if key in seen_conflicts:
+                continue
+            seen_conflicts.add(key)
+            conflicts.append(row)
+        unresolved = sorted(item["unresolved"],
+                            key=lambda entry: (entry["reason"], entry["material"]))
         out[cid] = {
             "material": item["material"], "thickness_mm": item["thickness_mm"],
             "material_source": item["material_source"],
@@ -654,7 +847,10 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None) -> Di
                             "kind": item["kind"] or None,
                             "partition": item["partition"],
                             "covers": list(item["covers"]),
-                            "notes": list(item["notes"])},
+                            "notes": list(item["notes"]),
+                            # 推不出来的必须看得见；串味被拒的必须能回查注记（Spec §2.2 / §2.4）。
+                            "thickness_unresolved": unresolved,
+                            "thickness_material_conflict": conflicts},
         }
     return out
 
@@ -1128,7 +1324,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             reasons.append("no_curve_entity")
         if reasons:
             filtered.append({"component_id": component_id, "reasons": reasons,
-                             "reason": reasons[0], "bbox": bbox})
+                             "reason": reasons[0], "bbox": bbox,
+                             # 没有它就看不出"这一块是不是吞并块"（Spec §2.4）。
+                             "entity_total": len(entity_ids)})
             continue
 
         part_roles = sorted({roles.get(_layer_key(entity.get("layer")), "unknown")
@@ -1167,7 +1365,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         })
 
     # —— 材料/厚度四层归属（Spec `packaging-parts-material-attribution.md` §2）——
-    attribution = attribute_materials(kept, notes, requirement=requirement)
+    material_table = options.get("material_table") if isinstance(options, dict) else None
+    attribution = attribute_materials(kept, notes, requirement=requirement,
+                                      material_table=material_table)
     for row in kept:
         info = attribution.get(row["component_id"]) or {}
         row["material"] = info.get("material")
@@ -1245,6 +1445,26 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         reason = _text(row.get("outline_reason"))
         open_reason_mix[reason] = open_reason_mix.get(reason, 0) + 1
 
+    # —— 被丢掉的两笔账（Spec `packaging-parts-component-chaining.md` §2.4）——
+    # `truncated`（max_parts 截断）与 `filtered_*`（被过滤的分量）不是同一件事，前端分两句说。
+    filtered_reason_mix: Dict[str, int] = {}
+    for row in filtered:
+        reason = _account_reason(row.get("reasons"))
+        filtered_reason_mix[reason] = filtered_reason_mix.get(reason, 0) + 1
+    filtered_reason_mix = _sorted_mix(filtered_reason_mix)
+    filtered_reason_totals = {key: 0 for key in FILTER_REASON_TOTAL_KEYS.values()}
+    for row in filtered:
+        for reason in (row.get("reasons") or []):
+            key = FILTER_REASON_TOTAL_KEYS.get(_text(reason))
+            if key:
+                filtered_reason_totals[key] += 1
+    # 没有端点（也没同圆键）的实体不参与分组、各自成件时，必须计数（Spec §2.1）：
+    # 它们不是"碎线噪声"，是"我们看不透的实体"。
+    ungroupable_total = sum(
+        1 for entity in entities.values()
+        if _text(entity.get("type")).upper() in CURVE_TYPES
+        and cad_geometry.is_ungroupable(entity))
+
     unavailable: List[Dict[str, Any]] = []
     if not components:
         unavailable.append({"code": "no_components",
@@ -1276,7 +1496,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                   "collapsed_edge_total": collapsed_edge_total,
                   "collapsed_rescue_total": collapsed_rescue_total,
                   "budget_exhausted_total": budget_exhausted_total,
-                  "open_reason_mix": open_reason_mix},
+                  "open_reason_mix": open_reason_mix,
+                  "filtered_reason_mix": filtered_reason_mix,
+                  "ungroupable_total": ungroupable_total,
+                  **filtered_reason_totals},
         "source": {
             "ir_id": _text(ir.get("ir_id")),
             "ir_hash": _text(ir.get("ir_hash")),
@@ -1381,6 +1604,14 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     # 覆盖率与"多少件是靠需求整盒口径兜底的"必须能一眼看出来。
     material_known = sum(1 for row in rows if _material_spec(row.get("material")))
     thickness_known = sum(1 for row in rows if _num(row.get("thickness_mm")) is not None)
+    # 料厚的四本账（Spec `packaging-parts-thickness-facts.md` §2.4）：已知 / 未知 / 串味被拒 /
+    # 人工补的。前两本必须自洽（已知 + 未知 == 零件总数），后两本回答"数字是怎么来的"。
+    thickness_conflict_total = sum(
+        1 for row in rows
+        if ((row.get("attribution") or {}).get("thickness_material_conflict") or []))
+    thickness_manual_total = sum(
+        1 for row in rows
+        if _material_source_kind(row, "thickness_source") == MANUAL_THICKNESS_KIND)
     material_default = 0
     kind_mix = {name: 0 for name in ATTRIBUTION_KINDS}
     kind_mix["none"] = 0
@@ -1412,6 +1643,23 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     def _ratio(count: int) -> float:
         return _round(float(count) / float(total)) if total else 0.0
 
+    # 被丢掉的两笔账（Spec `packaging-parts-component-chaining.md` §2.4）：两笔必须都能从
+    # 读接口拿到，前端据此把"未列出（截断）"与"未成为零件（过滤）"分两句说。
+    filtered_rows = [row for row in (payload.get("filtered") or []) if isinstance(row, dict)]
+    stats_mix = stats.get("filtered_reason_mix")
+    if isinstance(stats_mix, dict):
+        filtered_reason_mix = _sorted_mix({_text(key): int(_num(value) or 0)
+                                           for key, value in stats_mix.items() if _text(key)})
+    else:
+        derived: Dict[str, int] = {}
+        for row in filtered_rows:
+            reason = _account_reason(row.get("reasons"))
+            derived[reason] = derived.get(reason, 0) + 1
+        filtered_reason_mix = _sorted_mix(derived)
+    filtered_total = stats.get("filtered_total")
+    filtered_total = (len(filtered_rows) if filtered_total is None
+                      else max(0, int(_num(filtered_total) or 0)))
+
     return {
         "engine_version": _text(payload.get("engine_version")) or ENGINE_VERSION,
         "parts_id": _text(payload.get("parts_id")),
@@ -1423,6 +1671,10 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "size_source_mix": mix,
         "material_known_ratio": _ratio(material_known),
         "thickness_known_ratio": _ratio(thickness_known),
+        "thickness_known_total": thickness_known,
+        "thickness_unknown_total": max(0, total - thickness_known),
+        "thickness_conflict_total": thickness_conflict_total,
+        "thickness_manual_total": thickness_manual_total,
         "material_default_ratio": _ratio(material_default),
         "attribution_kind_mix": kind_mix,
         "collapsed_edge_total": collapsed_edge_total,
@@ -1432,6 +1684,8 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "solid_reason_mix": solid_reason_mix,
         "open_reason_mix": open_reason_mix,
         "open_total": sum(1 for row in rows if _text(row.get("outline_status")) == "open"),
+        "filtered_total": filtered_total,
+        "filtered_reason_mix": filtered_reason_mix,
         "parts": parts,
         "filtered": [{"component_id": _text(row.get("component_id")),
                       "reasons": list(row.get("reasons") or [])}
@@ -1638,6 +1892,52 @@ def save_part_cost(project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def load_part_cost(project_id: str, part_code: str) -> Dict[str, Any]:
     """读回单件成本结论（最近一版）；没跑过 → `{}`。"""
     return _load_part_doc(project_id, DOC_KEY_COST, part_code)
+
+
+# --------------------------------------------------------------------------- #
+# 2b 人工补料厚（Spec `packaging-parts-thickness-facts.md` §2.5）
+# --------------------------------------------------------------------------- #
+def set_manual_thickness(row: Any, thickness_mm: Any, *, bound_by: str,
+                         reason: str = "") -> Dict[str, Any]:
+    """人工补料厚（**纯函数**）：返回副本，绝不原地改入参。
+
+    - 写 `thickness_mm` 与 `thickness_source = {"kind": "manual", ...}`；
+    - 清掉该件 `attribution` 里同字段的 `thickness_unresolved` / `thickness_material_conflict`
+      （人为签字之后，这两条待办就不再挂着）；
+    - `thickness_mm <= 0` 或非有限数 → `ValueError`（**不许**用 0 表示"没填"）。
+    """
+    value = _num(thickness_mm)
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError("人工补料厚必须是大于 0 的有限数（不许用 0 表示「没填」）")
+    updated = copy.deepcopy(row) if isinstance(row, dict) else {}
+    updated["thickness_mm"] = value
+    updated["thickness_source"] = {"kind": MANUAL_THICKNESS_KIND, "text": _text(reason),
+                                   "bound_by": _text(bound_by), "evidence_ref": "",
+                                   "distance_mm": None}
+    attribution = updated.get("attribution")
+    if isinstance(attribution, dict):
+        attribution["thickness_unresolved"] = []
+        attribution["thickness_material_conflict"] = []
+        if not _text(attribution.get("kind")):
+            attribution["kind"] = MANUAL_THICKNESS_KIND
+    return updated
+
+
+def save_part_thickness(project_id: str, part_code: str, thickness_mm: Any, *,
+                        bound_by: str, reason: str = "") -> Dict[str, Any]:
+    """落一版人工料厚（同一 `(part_code, 数值, 人, 理由)` 幂等，最多 20 版）。"""
+    value = _num(thickness_mm)
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError("人工补料厚必须是大于 0 的有限数（不许用 0 表示「没填」）")
+    return _save_part_doc(project_id, DOC_KEY_THICKNESS, {
+        "part_code": _text(part_code), "thickness_mm": value,
+        "bound_by": _text(bound_by), "reason": _text(reason),
+        "source_kind": MANUAL_THICKNESS_KIND, "engine_version": ENGINE_VERSION})
+
+
+def load_part_thickness(project_id: str, part_code: str) -> Dict[str, Any]:
+    """读回这一件人工补过的料厚（最近一版）；没补过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_THICKNESS, part_code)
 
 
 # --------------------------------------------------------------------------- #

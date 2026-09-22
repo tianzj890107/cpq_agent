@@ -1422,6 +1422,49 @@ function packagingPartEndpoint() {
     + encodeURIComponent(part.part_code || "");
 }
 
+// 人工补料厚（Spec `packaging-parts-thickness-facts.md` §2.5）：料厚是下游（工艺 / 成本 /
+// 3D）共同的卡点，推不出来的件必须有人能补。提交后就地更新这一行，不整页重载。
+async function packagingPartSetThickness(partCode) {
+  if (!currentProject || !partCode) return null;
+  const input = window.prompt(`给 ${partCode} 补料厚（mm，必须 > 0）：`, "");
+  if (input === null) return null;
+  const value = Number(String(input).trim());
+  if (!isFinite(value) || value <= 0) {
+    window.alert("料厚必须是大于 0 的数字（不许用 0 表示没填）。");
+    return null;
+  }
+  const reason = window.prompt("补录理由（可留空）：", "") || "";
+  let res;
+  try {
+    res = await fetch(`${API}/api/projects/${currentProject}/requirement/packaging-parts/`
+      + `${encodeURIComponent(partCode)}/thickness`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thickness_mm: value, reason: reason }),
+    });
+  } catch (error) {
+    window.alert("补料厚失败：网络错误，请重试。");
+    return null;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload && payload.detail;
+    const message = (typeof detail === "string" ? detail : (detail && detail.message))
+      || (payload && payload.message) || `HTTP ${res.status}`;
+    window.alert(`补料厚失败：${message}`);
+    return null;
+  }
+  const doc = currentPackagingParts || {};
+  (doc.parts || []).forEach(row => {
+    if ((row.part_code || "") === partCode) {
+      row.thickness_mm = payload.thickness_mm;
+      row.thickness_source = payload.thickness_source || row.thickness_source;
+    }
+  });
+  renderTree(currentIR || {});
+  return payload;
+}
+
 async function packagingPartAnalyze(mode) {
   const part = currentSelectedPanelPart;
   if (!part) return { ok: false, error: { code: "no-part", message: "未选择零件。" } };
@@ -2508,6 +2551,16 @@ function renderBboxes(ir) {
   });
 }
 
+// 被过滤分量的原因 → 中文（Spec `packaging-parts-component-chaining.md` §2.4 的第三句）。
+// 只做展示映射：值来自后端 `filtered_reason_mix`，前端不参与判定。
+const PACKAGING_FILTER_REASON_LABELS = {
+  area_over_max: "面积超限",
+  edge_over_max: "长边超限",
+  area_under_min: "面积过小",
+  no_curve_entity: "没有可制造曲线",
+  unknown: "原因未知",
+};
+
 // 零件清单树：只重建 #tree 内部（2.1 固定左栏），不碰右栏 3D 画布。
 function renderTree(ir) {
   const tree = $("tree");
@@ -2557,6 +2610,19 @@ function renderTree(ir) {
         + `<div class="part-info"><div class="part-name">${esc(part.part_code || "")} `
         + `${esc(part.name || "")}</div><div class="part-type">${esc(size)}`
         + `${layers ? " · " + esc(layers) : ""}</div></div>`;
+      // 料厚为空的行必须**看得见补录入口**（Spec `packaging-parts-thickness-facts.md` §2.5）：
+      // 真图 55 件不可挤出里有 51 件卡在"没有料厚"，页面上必须有地方能补。
+      if (part.thickness_mm === null || part.thickness_mm === undefined) {
+        const fix = document.createElement("button");
+        fix.className = "btn btn-secondary part-thickness-fix";
+        fix.type = "button";
+        fix.textContent = "补料厚";
+        fix.addEventListener("click", (event) => {
+          event.stopPropagation();
+          packagingPartSetThickness(part.part_code || "");
+        });
+        row.appendChild(fix);
+      }
       tree.appendChild(row);
     });
     // 超上限被截断时必须说清楚（Spec §5：truncated > 0 要给提示），否则用户会以为
@@ -2567,6 +2633,25 @@ function renderTree(ir) {
       note.className = "part-truncated-note";
       note.textContent = `还有 ${truncated} 件未列出（只显示前 ${rows.length} 件）`;
       tree.appendChild(note);
+    }
+    // 第三笔账（Spec `packaging-parts-component-chaining.md` §2.4）：因面积/长边超限、
+    // 面积过小、没有可制造曲线而被**过滤掉**的分量 —— 与上面"未列出（截断）"是两件事，
+    // 必须分句说，原因取前两位。原因明细来自读接口的 `filtered_reason_mix`，前端不自己猜。
+    const filteredTotal = Number((doc.stats || {}).filtered_total) || 0;
+    const filteredMix = (doc.stats || {}).filtered_reason_mix || {};
+    if (filteredTotal > 0) {
+      const top = Object.keys(filteredMix)
+        .sort((a, b) => ((filteredMix[b] || 0) - (filteredMix[a] || 0)) || (a < b ? -1 : 1))
+        .slice(0, 2)
+        .map(key => `${PACKAGING_FILTER_REASON_LABELS[key] || key} ${filteredMix[key]}`)
+        .join(" / ");
+      const filteredNote = document.createElement("div");
+      filteredNote.className = "part-filtered-note";
+      filteredNote.dataset.qqFilteredNote = "1";
+      filteredNote.textContent = top
+        ? `另有 ${filteredTotal} 个图元分组未成为零件（${top}）`
+        : `另有 ${filteredTotal} 个图元分组未成为零件`;
+      tree.appendChild(filteredNote);
     }
     return;
   }

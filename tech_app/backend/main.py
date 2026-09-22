@@ -6950,6 +6950,9 @@ def _parts_body(record: Any, project_id: str = "") -> Dict[str, Any]:
                          and str(row.get("part_code") or "") in index else row
                          for row in (body.get("parts") or [])]
     body["built"] = bool(record)
+    # 两笔账分开说（Spec `packaging-parts-component-chaining.md` §2.4）：`truncated`（因
+    # `max_parts` 未列出）与 `filtered_total` / `filtered_reason_mix`（被过滤掉、根本没成为
+    # 零件）不是同一件事 —— 前端据此拆成两句，读接口必须两笔都给全。唯一来源是 `summarize()`。
     body["summary"] = packaging_parts.summarize(body if index else (record or {}))
     return body
 
@@ -7663,6 +7666,65 @@ def get_requirement_packaging_part(pid: str, part_code: str, parts_id: str = "",
         "size_source": str(part.get("size_source") or ""),
         "summary": packaging_parts.summarize(record),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 包装图纸零件：人工补料厚（Spec docs/specs/packaging-parts-thickness-facts.md §2.5）
+# 料厚是下游（工艺 / 成本 / 3D）共同的卡点，推不出来的必须**看得见并补得进去**。
+# 写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES（与确认盒型、工艺推荐同一批人），
+# 不另抄一份角色清单；非法数值 → 400，件不存在 → 404。
+# --------------------------------------------------------------------------- #
+PACKAGING_PART_THICKNESS_PATH = ("/api/projects/{pid}/requirement/"
+                                 "packaging-parts/{part_code}/thickness")
+
+
+class PackagingPartThicknessAction(BaseModel):
+    """人工补料厚入参：数值必须是 > 0 的有限数（不许用 0 表示"没填"）。"""
+
+    thickness_mm: float
+    reason: str = ""
+
+
+@app.get(PACKAGING_PART_THICKNESS_PATH)
+def get_requirement_packaging_part_thickness(pid: str, part_code: str,
+                                             user: dict = Depends(current_user)):
+    """读回人工补过的料厚（纯读）；没补过回 `manual: false`，不 404。"""
+    _workflow_project(pid)
+    saved = packaging_parts.load_part_thickness(pid, part_code) or {}
+    return {"part_code": part_code, "manual": bool(saved),
+            "thickness_mm": saved.get("thickness_mm"),
+            "bound_by": str(saved.get("bound_by") or ""),
+            "reason": str(saved.get("reason") or ""),
+            "source_kind": str(saved.get("source_kind") or "")}
+
+
+@app.post(PACKAGING_PART_THICKNESS_PATH)
+def set_requirement_packaging_part_thickness(pid: str, part_code: str,
+                                            body: PackagingPartThicknessAction,
+                                            user: dict = Depends(current_user)):
+    """人工补一件的料厚：写零件行的副本（不换 parts_id）+ 一版人工料厚文档。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    row = loaded["row"]
+    try:
+        updated = packaging_parts.set_manual_thickness(
+            row, body.thickness_mm, bound_by=str(user.get("username") or ""),
+            reason=body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={
+            "code": "PACKAGING_PART_THICKNESS_INVALID", "message": str(exc)}) from exc
+    saved = packaging_parts.save_part_thickness(
+        pid, part_code, body.thickness_mm, bound_by=str(user.get("username") or ""),
+        reason=body.reason)
+    store.audit(pid, "workflow:packaging_part_thickness_bound", {
+        "part_code": part_code, "thickness_mm": updated.get("thickness_mm"),
+        "by": str(user.get("username") or ""), "reason": body.reason})
+    return {"ok": True, "part_code": part_code, "part": updated,
+            "thickness_mm": updated.get("thickness_mm"),
+            "thickness_source": updated.get("thickness_source"),
+            "record": saved}
 
 
 # --------------------------------------------------------------------------- #

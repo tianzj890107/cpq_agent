@@ -136,8 +136,68 @@ def boxes_touch(first: Any, second: Any, tolerance: float) -> bool:
                 or first[3] + gap < second[1] or second[3] + gap < first[1])
 
 
+def point_on_circle(center: Point, radius: float, degrees_value: float) -> Point:
+    """圆心 + 半径 + 角度 → 圆周上的点（ARC 的两个端点由它算出来）。"""
+    angle = math.radians(float(degrees_value))
+    return (float(center[0]) + float(radius) * math.cos(angle),
+            float(center[1]) + float(radius) * math.sin(angle))
+
+
+def chaining_keys(row: Dict[str, Any]) -> Dict[str, Any]:
+    """实体参与连通分组的键（Spec `packaging-parts-component-chaining.md` §2.1）。
+
+    返回 `{"points": [...], "circle": <同圆键或 None>}` —— **只有端点**参与分组，
+    `bbox` 一律不许当分组依据（一条斜线的 bbox 覆盖整块，会把落在里面的无关实体吞并）：
+
+    - `LINE` → `attributes.start` / `attributes.end`；
+    - `ARC` → 圆心 + 半径 + 起止角算出的两个端点；
+    - `LWPOLYLINE` / `POLYLINE` → `attributes.points` 首尾；
+    - `SPLINE` → `attributes.fit_points` 首尾；
+    - `CIRCLE` → 没有端点，只给"同圆键"（圆心 + 半径，只与自己同圆时相接）；
+    - 一个键都取不到 → 空（**不许**用 bbox 兜底，宁可是单件不可信）。
+    """
+    attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+    points: List[Point] = []
+    start, end = point_of(attrs.get("start")), point_of(attrs.get("end"))
+    if start is not None:
+        points.append(start)
+    if end is not None:
+        points.append(end)
+    curve = str(attrs.get("curve") or "").lower()
+    type_name = str(row.get("type") or "").upper()
+    if not points and (curve == "arc" or type_name == "ARC"):
+        center, radius = point_of(attrs.get("center")), finite(attrs.get("radius"))
+        if center is not None and radius:
+            points = [point_on_circle(center, radius, finite(attrs.get("start_angle")) or 0.0),
+                      point_on_circle(center, radius, finite(attrs.get("end_angle")) or 0.0)]
+    if not points:
+        vertices = points_of(attrs.get("points") or [])
+        if vertices:
+            points = [vertices[0], vertices[-1]]
+    if not points:
+        fit_points = points_of(attrs.get("fit_points") or [])
+        if fit_points:
+            points = [fit_points[0], fit_points[-1]]
+    circle: Optional[Tuple[str, float, float, float]] = None
+    if curve == "circle" or type_name == "CIRCLE":
+        center, radius = point_of(attrs.get("center")), finite(attrs.get("radius"))
+        if center is not None and radius is not None:
+            circle = ("circle", round6(center[0]) or 0.0, round6(center[1]) or 0.0,
+                      round6(radius) or 0.0)
+    return {"points": points, "circle": circle}
+
+
+def is_ungroupable(row: Dict[str, Any]) -> bool:
+    """没有任何端点（也没有同圆键）的实体：**不参与分组**，各自单独成件（Spec §2.1）。"""
+    keys = chaining_keys(row) if isinstance(row, dict) else {"points": [], "circle": None}
+    return not keys["points"] and keys["circle"] is None
+
+
 def components_of(rows: Sequence[Dict[str, Any]], tolerance: float) -> List[Dict[str, Any]]:
-    """按包围盒相邻关系做连通分组（只做分组与计数，不做排版/拼版优化）。"""
+    """按**端点相接**做连通分组（Spec `packaging-parts-component-chaining.md` §2.1）。
+
+    只做分组与计数，不做排版/拼版优化；`bbox` 只用于输出，不再参与分组。
+    """
     parent = list(range(len(rows)))
 
     def find(index: int) -> int:
@@ -146,12 +206,40 @@ def components_of(rows: Sequence[Dict[str, Any]], tolerance: float) -> List[Dict
             index = parent[index]
         return index
 
-    for left in range(len(rows)):
-        for right in range(left + 1, len(rows)):
-            if boxes_touch(rows[left].get("bbox"), rows[right].get("bbox"), tolerance):
-                a, b = find(left), find(right)
-                if a != b:
-                    parent[b] = a
+    def union(left: int, right: int) -> None:
+        a, b = find(left), find(right)
+        if a != b:
+            parent[b] = a
+
+    gap = max(float(tolerance), MIN_TOLERANCE)
+    keys = [chaining_keys(row) if isinstance(row, dict) else {"points": [], "circle": None}
+            for row in rows]
+    # 端点按"容差大小的格子"分桶：距离 ≤ 容差的两个点必然落在同格或相邻格（3 × 3），
+    # 于是真图 6k+ 实体不需要 O(n²) 两两比包围盒。
+    buckets: Dict[Tuple[int, int], List[Tuple[int, Point]]] = {}
+    for index, key in enumerate(keys):
+        for point in key["points"]:
+            cell = (int(math.floor(point[0] / gap)), int(math.floor(point[1] / gap)))
+            buckets.setdefault(cell, []).append((index, point))
+    for (cell_x, cell_y), members in buckets.items():
+        neighbours: List[Tuple[int, Point]] = []
+        for offset_x in (-1, 0, 1):
+            for offset_y in (-1, 0, 1):
+                neighbours.extend(buckets.get((cell_x + offset_x, cell_y + offset_y)) or [])
+        for position, (left_index, left_point) in enumerate(members):
+            for right_index, right_point in neighbours:
+                if right_index <= left_index:
+                    continue
+                if distance(left_point, right_point) <= gap:
+                    union(left_index, right_index)
+    # CIRCLE：只和"同圆"（圆心 + 半径一致）的圆相接，绝不与直线/折线相并。
+    same_circle: Dict[Tuple[str, float, float, float], List[int]] = {}
+    for index, key in enumerate(keys):
+        if key["circle"] is not None:
+            same_circle.setdefault(key["circle"], []).append(index)
+    for members in same_circle.values():
+        for other in members[1:]:
+            union(members[0], other)
 
     groups: Dict[int, List[int]] = {}
     for index in range(len(rows)):

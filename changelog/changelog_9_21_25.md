@@ -11823,3 +11823,215 @@ docs/specs/*.md                                  232 份（含 ## 301 新增的�
 
 只改 3 份文档 + 新增 1 份 Spec、1 条守卫、追加本 changelog；未改任何业务实现、未改任何既有红测的
 期望值、未改 `scripts/deploy_34_bare.sh`、未连 PG、未写生产数据、未部署。
+
+## 304. 零件下游做不下去的两处根因定位并立契约：料厚事实（克重不给厚 / 跨材料串味）与连通分量吞并（9-22，Codex 只改 Spec / 红测 / changelog；其中「连通分量」已由并行会话落地）
+
+### 现场（本机真图实测，`酒盒.dwg` 6569 实体 / 原 402 分量）
+
+- 64 件里 `material` 21 件、`thickness_mm` **9 件** → `processability()` 通过 9 件、
+  `extrude_all()` `ok_total=9` / `unsupported_total=55`（`thickness_unknown` 51 + `outline_open` 4）。
+  也就是说"3D 出不来、工艺做不下去"不是两件事，是**同一个料厚前提**。
+- 12 件材料只写克重（`225G铜版底PET光银` ×8、`350g粉灰` ×3、`235g白卡底PET光银裱A9 E坑` ×2 …），
+  `_note_thickness()` 只认 `mm`，于是**永远**给不出料厚。
+- 已有料厚的 9 件里 **2 件是跨材料串味**：`DWG-P31` / `DWG-P47` 材料是面纸 `PET光银 225g`，
+  料厚 2.0 却取自同半径另一条成组注记 `名称：内盒2灰板 材料：2mm灰板` —— 来源看着齐全、数值是别人的，
+  还会让 `solid_ok_ratio` 虚高。
+- 料厚没有任何人工入口：无 `set_manual_thickness`、无写路由、前端零件树只能看不能补。
+- `cad_ir/geometry.py:139 components_of()` 当时按 `boxes_touch(bbox, bbox)` 分组：一条
+  `(0,0)-(1000,1000)` 的斜线把落在其 bbox 里的独立件全并成一件（夹具实测 3 条互不相接的实体 → 1 个分量）。
+  真图上就是 4 个吞并块（4451.8×3117.9 / 3927.8×967.9 / 1706.0×713.3 ×2，合计 232 条实体），
+  被 `area_over_max` 整块丢掉且不留位置明细；`filtered_total=192` 里"碎线噪声"与"被吞并的真零件"混成一个数，
+  2.1 只有 `还有 N 件未列出（只显示前 M 件）` 那一句（那是 `max_parts` 截断，不是过滤）。
+
+### 新增
+
+- Spec `docs/specs/packaging-parts-thickness-facts.md`（**未实现**）：克重 → 料厚的唯一合法路径
+  （`gsm / (density × 1000)`，密度只来自入参 `options["material_table"]`，`derived_from_gsm_density`
+  必须带 `gsm/density/material_code/evidence_ref` 且 `needs_confirmation=True`；取不到就留空并记
+  `density_missing` / `material_ambiguous`）；料厚与材料必须**同源**（材质词不相交 → 拒绝采用并记
+  `thickness_material_conflict`）；`summarize()` 新增四个料厚账；人工补料厚
+  （`set_manual_thickness` / `save_part_thickness` / `POST …/{part_code}/thickness` + 前端入口）。
+- Spec `docs/specs/packaging-parts-component-chaining.md`（**已实现**）：分量分组判据改成**端点相接**，
+  bbox 只用于输出；无坐标实体单独成件并计 `stats.ungroupable_total`；`filtered_reason_mix` +
+  四个按原因的小账 + `filtered[].entity_total`；2.1 必须把"列出的件 / 未列出的件 / 未成为零件的分量"
+  **分三句**说清。
+- 红测 `tests/test_packaging_parts_thickness_facts_red.py`：`Ran 15`，**failures=10 / skipped=1**
+  （A 推导、B 串味、C 指标、D 入口为红；A4/A5/B2/B3 是防误伤护栏本来就绿 —— 仍待实现）。
+- 红测 `tests/test_packaging_parts_components_red.py`：**`Ran 13 OK (skipped=1)`**
+  （含真样本 D 组 `Ran 3 OK`：1163 个分量里"成员全是 LINE/ARC/CIRCLE/POLYLINE"的**0 个**内部端点不连通；
+  4451.8×3117.9 与 1706.0×713.3 两块在端点口径下确实自成一个连通体，所以口径定为"大件允许存在、
+  但必须带 `entity_total` 与原因记账"，而不是"消灭大件"）。
+- 真样本 D 组也顺手改掉了我自己写歪的一条判据（原写"真图上不许有长边 > 1200 的分量"，那是把
+  **正确的分组**判成错的），改成可离线复核的**结构性不变量**：多成员分量内部必须端点连通。
+
+### 落地状态（截至本次记录）
+
+- 「连通分量」实现（`cad_ir/geometry.py` + `packaging_parts.py` + `main.py` + `app.js`）由**并行会话**
+  在工作区落地，9-22 期间一度出现又被回退、再出现；本条目记录的是**最后一次实测**（`Ran 13 OK`）。
+  这些代码改动**尚未提交**，也不是本会话所写，`git status` 里与本会话的 5 个文件并存。
+- 「料厚事实」三件事（克重推导 / 防串味 / 人工补料厚）**仍未实现**，红测 10 条待转绿。
+- **新暴露的跨 Spec 冲突（不是本会话引入，但必须记）**：端点相接落地后 `酒盒.dwg` 的分量数
+  402 → **1163**，零件表仍是 `max_parts=64` 上限，于是 `filtered_total` 192 → **900**
+  （`area_under_min` 888 / `area_over_max` 6 / `edge_over_max` 6）、`truncated` 146 → **199**、
+  `ungroupable_total=21`；件数结构一变，`packaging-parts-material-attribution.md` §4 那三条真样本门槛
+  直接从"通过"变成失败：`test_packaging_parts_material_attribution_red` `Ran 20 failures=3` ——
+  `material_known_ratio` / `thickness_known_ratio` 实测 **0.625**（门槛 0.75）、
+  `processable_ratio` 实测 **0.625**（门槛 0.70）；`closed_ratio` 也正好是 0.625。
+  即：**分组越准，材料/料厚的真实覆盖率越低**（分母变成真零件数），这条要么重新校准门槛，
+  要么就得靠 `packaging-parts-thickness-facts.md` 那三件事把覆盖率补回来。
+- 不回归复跑（当时同一工作区）：`test_packaging_parts_extraction_red` / `test_packaging_parts_3d_red` /
+  `test_packaging_semantics_red` 全绿；`test_packaging_parts_material_attribution_red` 因上面这条
+  `failures=3`；`test_spec_status_consistency_red` + `test_spec_status_truth_red` 全绿
+  （声明「未实现」的 Spec 其红测确实失败，守卫自洽）。
+
+### 边界
+
+本会话只新增 2 份 Spec、2 个红测文件、追加本 changelog；未改任何业务实现、未改任何既有红测、
+未连 PG、未写生产数据、未动 34、未 commit / push / MR / tag / Release / 部署。
+
+## 305. 覆盖率口径的诚实性：三条"覆盖率"其实是同一个数、料厚 85% 靠整盒兜底 —— 立新 Spec 并取代旧门槛（9-22，Codex 只改 Spec / 红测 / changelog）
+
+### 现场（9-22 实测，本机 `酒盒.dwg` + 需求 3.3 = 灰板 2.5 / 粉灰 350g）
+
+| 指标 | 实测 |
+| --- | --- |
+| `closed_ratio` / `material_known_ratio` / `thickness_known_ratio` / `processable_ratio` | **全部 0.625**（40/64），四条逐字相等 |
+| 材料来源 | 图纸证据 15（`group_note` 10 + `part_note` 5），整盒兜底 `requirement_default` 25 |
+| 料厚来源 | 图纸证据 **6**（`group_note` 4 + `part_note` 2），整盒兜底 **34** |
+
+- 四条相等不是巧合：归属只在 `closed` 件上生效（`material_known_total <= closed_total` 恒成立），
+  层 4 整盒兜底又把**每个** closed 件填满 → 等号成立。**这三条门槛测的是"闭合轮廓占比"，不是归属质量。**
+- 直接后果：`packaging-parts-component-chaining.md` 落地（分量 402 → 1163）后 `closed_ratio` 掉到 0.625，
+  `test_packaging_parts_material_attribution_red` 的三条真样本门槛**同时从通过变失败**（failures=3）——
+  分组变**诚实**，数字反而变差。
+- 更硬的一条：`thickness_known_ratio` 的 40 里有 **34 件（85%）**来自整盒兜底，
+  而 `packaging-parts-3d-extrusion.md` §2 明写"缺料厚必须 `thickness_unknown`，**绝不许默认 2mm**"。
+  **一个模块禁止的东西，正在给另一个模块的 KPI 充数。**
+- 24 件没有材料，但没有任何读接口能说出原因（没闭合轮廓 / 图纸没写 / 只有克重）。
+
+### 新增
+
+- Spec `docs/specs/packaging-parts-coverage-truthfulness.md`（**未实现**）：① 每个指标必须给
+  分子 / 分母 / **证据口径**三件套（新增 `*_known_total` / `closed_total` / `*_default_total` /
+  `material_evidence_ratio` / `thickness_evidence_ratio`）；② `material_gap_mix` / `thickness_gap_mix`
+  逐件原因账（`no_closed_outline` / `no_material_note` / `no_thickness_note` / `grammage_only` /
+  `material_missing` / `material_ambiguous` / `unknown`，`unknown` 长期必须 0，账要与行上
+  `attribution.gap_reason` 一致）；③ **取代** `packaging-parts-material-attribution.md` §4 的门槛，
+  改为"三条地板 0.60 + 两条证据地板 0.15 / 0.08 必须同时成立"，证据地板只许升，
+  抬高它只能靠 `packaging-parts-thickness-facts.md`。
+- 红测 `tests/test_packaging_parts_coverage_truthfulness_red.py`：`Ran 11`，带 env
+  `failures=8`、不带 env（守卫口径）`failures=5 / skipped=1`；A3（空文档全 0）与 B4（材料原因闭集）
+  是本来就该绿的护栏。
+- **修订既有 Spec / 红测各一处**（口径变化，按红测自己"口径变化请改 Spec"的约定同批处理）：
+  - `docs/specs/packaging-parts-material-attribution.md` §4：门槛表标注"已由新 Spec 取代"，
+    0.75/0.75/0.70 降级为历史值；`open` 件必须全空、兜底必须可见两条**继续有效**（并入新原因账）；
+  - 同一文件 §4 状态行补记这次取代；
+  - `tests/test_packaging_parts_material_attribution_red.py` E1–E3：门槛改为 0.60 并写清为什么
+    （这三条等于 `closed_ratio`，旧数字在诚实分组下不可能满足），证据地板由新红测的 C 组断言。
+    改后 `Ran 27 OK`。
+
+### 同时收口的两个规格（都由并行会话实现，本会话只改状态与过时数字）
+
+- `packaging-parts-thickness-facts.md`：**已实现** —— 离线 15 条 + 真样本 2 条 `Ran 17 OK`；
+  其中真样本 E1 的"至少 2 件串味"是我按**旧分量集（402）**写死的样本数，分量改成 1163 后实测为 1，
+  已改成契约式的"**≥1 且逐件复核没有残留串味**"（更强，且不再随分量集漂移）。
+- `packaging-parts-component-chaining.md`：**已实现** —— `Ran 13 OK (skipped=1)`，真样本 D 组
+  `Ran 3 OK`（1163 个分量里"成员全为 LINE/ARC/CIRCLE/POLYLINE"的 **0 个**内部端点不连通）。
+
+### 边界
+
+本会话只新增 2 份 Spec（`packaging-parts-coverage-truthfulness.md` 与上一批的
+`packaging-parts-thickness-facts.md`）、新增 1 条红测、修订 1 份既有 Spec 的 §4 + 状态行、
+修订 1 个既有红测的 3 条门槛、追加本 changelog；未改任何业务实现、未连 PG、未写生产数据、
+未动 34、未 commit / push / MR / tag / Release / 部署。
+
+## 304. 零件「连通分量」改成端点相接：酒盒 402 → 1163 个真分量，被过滤的 192 → 900 一笔一笔可查（9-22，Codex 实现 + 冻结面复跑）
+
+`packaging-dwg-parts-extraction.md`（## 226）定了"零件 = 连通分量"，但没定**怎么分组**；
+`cad_ir/geometry.py` 一直按 `boxes_touch(bbox, bbox)` 并查集，于是一条 `(0,0)-(1000,1000)` 的斜线
+把它 bbox 里的无关实体全吞进同一件。本批按
+`docs/specs/packaging-parts-component-chaining.md` 的契约实现。
+
+### 实现
+
+| 文件 | 做了什么 |
+| --- | --- |
+| `tech_app/backend/services/cad_ir/geometry.py` | 新增 `chaining_keys()`（LINE 起止点 / ARC 圆心+半径+起止角算出的两端点 / 折线 `attributes.points` 首尾 / SPLINE `fit_points` 首尾 / CIRCLE 的"同圆键"）、`point_on_circle()`、`is_ungroupable()`；`components_of()` 改为**端点相接**并查集（端点按容差大小的格子分桶 → 3 × 3 邻域比较，真图 6k+ 实体不再 O(n²)），`bbox` 只用于输出 |
+| `tech_app/backend/services/packaging_parts.py` | `stats` 新增 `filtered_reason_mix` / `filtered_<reason>_total` ×4 / `ungroupable_total`（既有键一个不动）；`filtered[]` 每条加 `entity_total`；`summarize()` 透出 `filtered_total` + `filtered_reason_mix`（两把账都从读接口拿得到） |
+| `tech_app/backend/main.py` | 零件读接口显式说明两笔账（`truncated` 与 `filtered_*`）都来自 `summarize()` |
+| `tech_app/frontend/app.js` | 2.1 左栏把三笔账**分三句**说：列出的零件数 / `还有 N 件未列出（只显示前 M 件）`（原文案不动）/ `另有 K 个图元分组未成为零件（面积超限 X / 长边超限 Y）`，原因取 `filtered_reason_mix` 前两位并译中文 |
+
+### 实测（本机 `酒盒.dwg`，同一条转换链路）
+
+```
+分量数          402 → 1163        （parser 容差 1.4362e-05；圆盘盒 14 → 14，不许降）
+被过滤的分量     192 → 900         filtered_reason_mix = {area_under_min 888, area_over_max 6, edge_over_max 6}
+不可分组实体       —  → 21          （没有端点、也没同圆键：各自成件、进 ungroupable_total）
+保留零件数        64 → 64
+closed_ratio   0.938 → 0.625
+```
+
+### 测试
+
+- 新红测 `tests.test_packaging_parts_components_red`：`Ran 13 OK (skipped=1)`；真样本 D 组
+  `CPQ_DWG_REAL_SAMPLES=1 … RealSampleComponents`：`Ran 3 OK`（含**测试侧独立复算**：
+  每条多成员分量内部必须按端点串成一个连通体）。
+- 保护网未破：`test_packaging_parts_extraction_red` / `test_packaging_parametric_bom_red` /
+  `test_packaging_product_outline_red` / `test_packaging_semantics_red` / `test_packaging_parts_panel_red`
+  等 `Ran 132`，只有 `test_packaging_parts_outline_red::DDegrade::test_d1`（## 266 已记录的测试侧冲突）
+  这一条既有红。
+
+### 已记录的测试侧冲突（本批引起，8 条；**没有**改任何测试或门槛）
+
+分量变细之后**零件集本身变了**：按面积降序截断到 64 件时，前 64 名里 24 件是"开放链"
+（旧口径下它们被并进闭合件里，于是那一件被算成 closed）。于是四条旧 Spec 的真样本门槛
+（都在本机自动跑）现在红了 —— 旧数字是吞并后的产物：
+
+| 测试 | 旧门槛 | 现在 | 一行修法（测试侧） |
+| --- | --- | --- | --- |
+| `test_packaging_parts_material_attribution_red.ERealSample::test_e1_material_coverage` | ≥ 0.75 | 0.625 | 按新零件集重定基线（建议 0.60） |
+| `…::test_e2_thickness_coverage` | ≥ 0.75 | 0.625 | 同上 |
+| `…::test_e3_processable_coverage` | ≥ 0.70 | 0.625 | 同上 |
+| `test_packaging_parts_solid_coverage_red.FRealSample::test_f1_solid_ok_ratio` | ≥ 0.70 | 0.625 | 同上 |
+| `test_packaging_parts_outline_chaining_red.ERealSample::test_e1_closed_ratio` | ≥ 0.88 | 0.625 | 同上（0.88 是"开放链算成 closed"的产物） |
+| `…::test_e2_rescue_total` | ≥ 6 | 0 | 重定基线，或改成"救回数 ≥ 0 且留痕" |
+| `…::test_e4_open_reason_mix_has_no_vague_reason` | 1 ≤ 开线件 ≤ 7 | 24 | 分量变细 → 开线件自然变多，上界重定 |
+| `test_packaging_parts_thickness_facts_red.RealSampleThickness::test_e1_…`（见 ## 305） | 串味 ≥ 2 | 1 | 断言改成"全量（放大 `max_parts`）里 ≥ 2" |
+
+并行会话同日已就**同一根因**立了 `docs/specs/packaging-parts-coverage-truthfulness.md`
+（**取代** `packaging-parts-material-attribution.md` §4 的门槛表）：它把"三条覆盖率其实是同一个数"这件事
+写成了契约（`material_known_ratio` == `thickness_known_ratio` == `processable_ratio` == `closed_ratio`
+= 0.625，因为归属只在 closed 件上生效、而层 4 整盒兜底又把每个 closed 件填满），并要求 `summarize()`
+给出"分子 / 分母 / 证据口径"两套账 + `material_gap_mix` / `thickness_gap_mix`。上表里
+material-attribution 的三条已被该批重定基线（本机 `Ran 70` 只剩 4 条待办）。
+
+## 305. 零件料厚事实：克重 ÷ 密度 推料厚 + 厚度不许跨材料串味 + 人工补料厚入口（9-22，Codex 实现）
+
+料厚是下游（工艺路线 / 成本 / 3D 挤出）**唯一共同的卡点**：真图 64 件里只有 9 件有料厚，55 件
+不可挤出里 51 件卡在同一件事。本批按 `docs/specs/packaging-parts-thickness-facts.md` 实现三件事。
+
+### 实现
+
+| 面 | 文件 | 做了什么 |
+| --- | --- | --- |
+| 克重 → 料厚 | `packaging_parts.py` | 新增第五层归属：`thickness_mm = gsm / (density × 1000)`（四舍五入 3 位），`thickness_source.kind = derived_from_gsm_density`（带 `gsm` / `density` / `material_code` / 注记证据）、`needs_confirmation = true`；`gsm` 只从该件**已采纳的材料注记文本**取，密度只从 `options["material_table"]` 取（不读库、不联网，取不到就 `None`） |
+| 材料表 | `packaging_parts.py` | `material_table_rows()` 规范化 + `_material_density()`：`name`/`grade`/`spec` 里命中材质词**唯一且 density > 0** 才用，命中 ≥ 2 条**弃权**（`material_ambiguous`） |
+| 不许串味 | `packaging_parts.py` | `_drop_conflicting_thickness()`：候选注记带材质词、且与该件材料的材质词集合**不相交** → 不采用并留 `attribution.thickness_material_conflict`（`note_ref`/`note_text`/`note_material`/`part_material`，按 `(note_ref, note_text)` 排序去重）；注记不带材质词或本件材料未定 → 照旧采用（防误伤） |
+| 推不出来要看得见 | `packaging_parts.py` | `attribution.thickness_unresolved`（`density_missing` / `material_ambiguous` / `no_grammage` / `material_unknown`）；`summarize()` 新增 `thickness_known_total` / `thickness_unknown_total` / `thickness_conflict_total` / `thickness_manual_total`（既有键一个不动）；`THICKNESS_SOURCE_KINDS` 闭集补 `derived_from_gsm_density` / `manual` |
+| 人工补料厚 | `packaging_parts.py` / `main.py` / `app.js` | `set_manual_thickness()`（纯函数、返回副本、`<= 0` 抛 `ValueError`）、`save_part_thickness()` / `load_part_thickness()`（版本化，独立 doc key `packaging_part_thickness` —— 补料厚**不换** `parts_id`）；`GET|POST /api/projects/{pid}/requirement/packaging-parts/{part_code}/thickness`（写权限直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`，非法数值 400、件不存在 404）；2.1 零件树里料厚为空的行有「补料厚」按钮，提交后就地更新这一行 |
+
+### 实测
+
+- 离线红测 `tests.test_packaging_parts_thickness_facts_red`：`Ran 15 OK (skipped=1)`（A 推导 / B 串味 / C 指标 / D 入口全绿）。
+- 真样本（全量 263 件，放大 `max_parts`）：**5 件串味被拒**并逐条留痕（`DWG-P30` / `DWG-P74` /
+  `DWG-P93` / `DWG-P116` / `DWG-P249`，都是面纸 `PET光银 225g` 命中「内盒N灰板」的 2mm 成组注记）；
+  有材料 37 件、有料厚 13 件（**没有**靠猜填满）。
+- 保护网：`test_packaging_parts_material_attribution_red` / `test_packaging_parts_3d_red` /
+  `test_packaging_parts_extraction_red` 的口径未动。
+
+### 已记录的测试侧冲突（1 条）
+
+`RealSampleThickness::test_e1_wine_box_reports_conflicts_and_never_invents_thickness`
+（`CPQ_DWG_REAL_SAMPLES=1`）断言**截断后**的 64 件里串味件 ≥ 2，实测 1（全量 263 件里是 5）。
+一行修法（测试侧）：断言改成"把 `max_parts` 放大到全量后的串味件 ≥ 2"，或门槛降到 1。
+这与 `## 304` 同源（分量分组改了 → 零件集变了），**没有**改测试。
