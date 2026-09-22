@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -7909,6 +7910,111 @@ def set_requirement_packaging_part_material(pid: str, part_code: str,
 
 
 # --------------------------------------------------------------------------- #
+# 包装图纸零件：件级轮廓出路（Spec docs/specs/packaging-open-outline-part-needs-a-way-out.md §2.3）
+# 未闭合的件在整条链上是死路：既没有入口，也没人告诉你该干什么。两条出口与「补材料」/
+# 「补料厚」逐字同范式（件级侧档 + 读时合回零件行，只影响这一件）：
+#   · …/outline/confirm   —— 人工签字「这一件按包围盒估算」（几何状态仍是 open，只留痕）；
+#   · …/outline/recompute —— 只对这一件放大搜索额度重跑找环（真闭合了才改几何结论）。
+# 写权限直接引用 packaging_match.BOX_MATCH_DECIDE_ROLES；匿名签字 → 400。
+# --------------------------------------------------------------------------- #
+PACKAGING_PART_OUTLINE_CONFIRM_PATH = ("/api/projects/{pid}/requirement/"
+                                       "packaging-parts/{part_code}/outline/confirm")
+PACKAGING_PART_OUTLINE_RECOMPUTE_PATH = ("/api/projects/{pid}/requirement/"
+                                         "packaging-parts/{part_code}/outline/recompute")
+
+
+class PackagingPartOutlineAction(BaseModel):
+    """件级轮廓出路入参：理由可留空；重算可带更大的搜索额度倍数（服务端会夹到上限）。"""
+
+    reason: str = ""
+    scale: float = float(packaging_parts.RECOMPUTE_BUDGET_SCALE)
+
+
+@app.get(PACKAGING_PART_OUTLINE_CONFIRM_PATH)
+def get_requirement_packaging_part_outline(pid: str, part_code: str,
+                                           user: dict = Depends(current_user)):
+    """读回这一件的轮廓出路留痕（纯读）；没走过回 `manual: false`，不 404。"""
+    _workflow_project(pid)
+    saved = packaging_parts.load_part_outline(pid, part_code) or {}
+    return {"part_code": part_code, "manual": bool(saved),
+            "kind": str(saved.get("kind") or ""),
+            "outline_status": str(saved.get("outline_status") or ""),
+            "outline_reason": str(saved.get("outline_reason") or ""),
+            "changed": bool(saved.get("changed")),
+            "bound_by": str(saved.get("bound_by") or ""),
+            "reason": str(saved.get("reason") or ""),
+            "confirmed_at": str(saved.get("confirmed_at") or "")}
+
+
+@app.post(PACKAGING_PART_OUTLINE_CONFIRM_PATH)
+def confirm_requirement_packaging_part_outline(pid: str, part_code: str,
+                                              body: PackagingPartOutlineAction,
+                                              user: dict = Depends(current_user)):
+    """人工签字放行一件未闭合件：写侧档（不换 parts_id），几何状态仍是 open。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    row = loaded["row"]
+    by = str(user.get("username") or "")
+    at = _now_iso()
+    try:
+        updated = packaging_parts.set_manual_outline(row, bound_by=by,
+                                                    reason=body.reason, confirmed_at=at)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={
+            "code": "PACKAGING_PART_OUTLINE_CONFIRM_INVALID", "message": str(exc)}) from exc
+    saved = packaging_parts.save_part_outline(pid, part_code, bound_by=by,
+                                              reason=body.reason, confirmed_at=at)
+    store.audit(pid, "workflow:packaging_part_outline_confirmed", {
+        "part_code": part_code, "by": by, "reason": body.reason,
+        "outline_status_kept": str(updated.get("outline_status") or "open"),
+        "outline_reason": str(row.get("outline_reason") or "")})
+    return {"ok": True, "part_code": part_code, "part": updated,
+            "outline_confirmation": updated.get("outline_confirmation"),
+            "record": saved}
+
+
+@app.post(PACKAGING_PART_OUTLINE_RECOMPUTE_PATH)
+def recompute_requirement_packaging_part_outline(pid: str, part_code: str,
+                                                body: PackagingPartOutlineAction,
+                                                user: dict = Depends(current_user)):
+    """单件重算轮廓：只放大**这一件**的搜索额度再跑一次；没算出来就诚实照旧。"""
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_part_row(pid, part_code)
+    ir = cad_ir.load_ir(pid)
+    if not isinstance(ir, dict):
+        raise HTTPException(status_code=409, detail={
+            "code": "PACKAGING_PART_IR_MISSING",
+            "message": "项目里还没有可用的 CAD 图纸解析结果，请先跑一键解析图纸"})
+    by = str(user.get("username") or "")
+    at = _now_iso()
+    try:
+        record = packaging_parts.recompute_outline(loaded["row"], ir, scale=body.scale,
+                                                  bound_by=by, reason=body.reason,
+                                                  confirmed_at=at)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "PACKAGING_PART_OUTLINE_RECOMPUTE_REJECTED", "message": str(exc)}) from exc
+    saved = packaging_parts.save_part_outline_recompute(pid, record)
+    store.audit(pid, "workflow:packaging_part_outline_recomputed", {
+        "part_code": part_code, "by": by, "scale": record.get("scale"),
+        "outline_status": record.get("outline_status"),
+        "outline_reason": record.get("outline_reason"),
+        "changed": bool(record.get("changed"))})
+    reread = packaging_parts.load_parts(pid) or {}
+    row = next((item for item in (reread.get("parts") or [])
+                if str((item or {}).get("part_code") or "") == part_code), loaded["row"])
+    return {"ok": True, "part_code": part_code, "changed": bool(record.get("changed")),
+            "outline_status": str(record.get("outline_status") or ""),
+            "outline_reason": str(record.get("outline_reason") or ""),
+            "message": str(packaging_parts.outline_advice(record.get("outline_reason"))["message"]),
+            "part": row, "record": saved}
+
+
+# --------------------------------------------------------------------------- #
 # 包装图纸零件：单件工艺推荐 / 单件成本（包装零件第 3 层，
 # Spec docs/specs/packaging-parts-downstream-process-and-cost.md §3–§4）
 # --------------------------------------------------------------------------- #
@@ -7954,6 +8060,11 @@ def _packaging_part_row(pid: str, part_code: str) -> Dict[str, Any]:
             "message": "图纸里还没有这个零件（%s），请先跑一键解析图纸" % part_code,
         })
     return {"row": row, "record": record}
+
+
+def _now_iso() -> str:
+    """落痕用的时间戳（UTC，秒级）：件级人工出路要能说清"什么时候签的"。"""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _packaging_part_reject(verdict: Dict[str, Any]) -> HTTPException:

@@ -80,6 +80,17 @@
   font-size: 12px;
   color: var(--text-secondary, #62636d);
 }
+/* 件级轮廓出路（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.4）：人签的字
+   必须与几何闭合分开显示 —— 它是"人放行的"，不是"算出来的"。 */
+.part-outline-signoff {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  color: #b45309;
+  font-size: 11px;
+  white-space: nowrap;
+}
 .packaging-part-facts {
   display: flex;
   flex-direction: column;

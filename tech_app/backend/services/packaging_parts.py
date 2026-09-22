@@ -260,6 +260,34 @@ OUTLINE_BBOX_COVER_RATIO = 0.95
 OUTLINE_OPEN_REASONS = ("no_curve_entity", "unit_unconfirmed", "loop_budget_exhausted",
                         "odd_endpoints", "loop_too_small")
 
+#: 未闭合件的两条**出路**（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.2）：
+#: · `loop_budget_exhausted` = 我们**没算完**（可重试 → 放大额度只重算这一件）；
+#: · 其余 = 图纸**真的**没有闭合轮廓 / 单位没定（要人处理 → 改图重传，或按包围盒签字确认）。
+OUTLINE_RETRYABLE_REASONS = ("loop_budget_exhausted",)
+OUTLINE_MANUAL_REASONS = ("no_curve_entity", "unit_unconfirmed", "odd_endpoints",
+                          "loop_too_small")
+
+#: 两条出路的动作名（前端据 `outline_advice()["action"]` 决定按哪个出口走）。
+OUTLINE_ACTION_RECOMPUTE = "recompute"
+OUTLINE_ACTION_CONFIRM = "confirm_bbox"
+
+#: 单件重算的搜索额度放大倍数（Spec §2.3(b)）：只放大**这一件**的搜索额度；
+#: 判据、闭集与 `_open_outline_reason()` 的次序一律不变，额度再大也可能仍报同一原因。
+RECOMPUTE_BUDGET_SCALE = 8
+RECOMPUTE_BUDGET_SCALE_MAX = 32
+RECOMPUTE_RULE_ID = "part_outline_recompute_v1"
+
+#: 件级轮廓出路的两种留痕（Spec §2.4）。**几何状态一个字不改**：`closed` 只能由几何判定
+#: 给出；人签的字另立一笔（`outline_confirmation`），重算的真结论另立一笔（`outline_recompute`）。
+MANUAL_OUTLINE_KIND = "manual_bbox"
+RECOMPUTED_OUTLINE_KIND = "recomputed_outline"
+OUTLINE_EXIT_KINDS = (MANUAL_OUTLINE_KIND, RECOMPUTED_OUTLINE_KIND)
+MANUAL_OUTLINE_RULE_ID = "part_outline_manual_bbox_v1"
+
+#: 件级轮廓出路自己的版本化文档（Spec §2.3，与「补材料」/「补料厚」逐字同范式）：
+#: 签字与重算结论**不换** `parts_id`，读时合回零件行 —— 换 id 会把下游结论全指歪。
+DOC_KEY_OUTLINE = "packaging_part_outline"
+
 
 # --------------------------------------------------------------------------- #
 # 图纸标注里的材料 / 厚度（Spec `packaging-parts-downstream-process-and-cost.md` §3）
@@ -1098,21 +1126,30 @@ def _nearest_gap_mm(keys: List[Any], vertices: Dict[Any, Tuple[float, float]]) -
     return max(gaps) if gaps else 0.0
 
 
-def _outline_evidence(members: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _outline_evidence(members: List[Dict[str, Any]], *,
+                      max_states: int = MAX_LOOP_STATES,
+                      max_cycles: int = MAX_LOOP_CYCLES) -> Dict[str, Any]:
     """一次算好三件事（Spec §2.1/§2.3）：未折叠图、折叠图、逐件诊断。
 
     未折叠图是**今天的口径**：已经判成 closed 的件必须逐字保持它的结果，所以两条路都要算
     （只有存在重复边时才真的各跑一次搜索；没有重复边时折叠图 == 未折叠图，复用同一个结果）。
+
+    `max_states` 只给**单件重算**用（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.3(b)）：
+    缺省值就是今天的预算，所以既有的抽取结果逐字不变。
     """
+    state_budget = max(1, int(max_states))
+    cycle_budget = max(1, int(max_cycles))
     edges, vertices = _component_edges(members)
     unique = _collapse_edges(edges)
     duplicated = len(unique) != len(edges)
     if unique:
-        loops_collapsed, exhausted_collapsed = _find_cycles(_adjacency_of(unique))
+        loops_collapsed, exhausted_collapsed = _find_cycles(
+            _adjacency_of(unique), max_cycles=cycle_budget, max_states=state_budget)
     else:
         loops_collapsed, exhausted_collapsed = [], False
     if duplicated:
-        loops_original, _exhausted_original = _find_cycles(_adjacency_of(edges))
+        loops_original, _exhausted_original = _find_cycles(
+            _adjacency_of(edges), max_cycles=cycle_budget, max_states=state_budget)
     else:
         loops_original = loops_collapsed
     degree: Dict[Any, int] = {}
@@ -1261,6 +1298,119 @@ def _open_outline_reason(*, has_curve: bool, diagnosis: Dict[str, Any],
         return "loop_too_small"
     # 有边却既无环也无奇度顶点在图论上不存在；真到了这里宁可说"断口"也不许笼统。
     return "odd_endpoints"
+
+
+def outline_advice(reason: Any) -> Dict[str, Any]:
+    """未闭合件的「为什么卡着 + 下一步做什么」（**纯函数**，Spec §2.1/§2.2）。
+
+    两种原因分家（`OUTLINE_OPEN_REASONS` 闭集不扩）：
+
+    - `loop_budget_exhausted`：**我们没算完** —— 可重试，指向单件「重算轮廓」；
+    - 其余（`no_curve_entity` / `unit_unconfirmed` / `odd_endpoints` / `loop_too_small`）：
+      图纸**真的**没有可信的闭合轮廓 —— 指向「改图重传」或「按包围盒签字确认」。
+    """
+    name = _text(reason) or OUTLINE_MANUAL_REASONS[2]
+    if name in OUTLINE_RETRYABLE_REASONS:
+        return {
+            "reason": name,
+            "retryable": True,
+            "action": OUTLINE_ACTION_RECOMPUTE,
+            "message": ("这一件没算完（%s）：轮廓搜索额度用完，闭合环还没找全 —— "
+                        "点这一行「重算轮廓」用更大的额度只重算这一件；"
+                        "仍报同一原因就改图重传。" % name),
+        }
+    return {
+        "reason": name,
+        "retryable": False,
+        "action": OUTLINE_ACTION_CONFIRM,
+        "message": ("图纸里这一件真的没有可信的闭合轮廓（%s）—— 改图重传，"
+                    "或点这一行「按包围盒签字确认」人工放行"
+                    "（按包围盒估算，卡片上会标出这是人签的字，不是几何闭合）。" % name),
+    }
+
+
+def outline_confirmation(row: Any) -> Dict[str, Any]:
+    """这一件有没有**人签的**轮廓放行（没有 / 不完整 → `{}`）。
+
+    判据只看留痕本身（`kind` + 签名人）：签字是"人放行"，与几何判定的 `closed` 是两回事
+    （Spec §2.4）。
+    """
+    payload = row if isinstance(row, dict) else {}
+    info = payload.get("outline_confirmation")
+    if not isinstance(info, dict):
+        return {}
+    if _text(info.get("kind")) != MANUAL_OUTLINE_KIND or not _text(info.get("bound_by")):
+        return {}
+    return dict(info)
+
+
+def set_manual_outline(row: Any, *, bound_by: str, reason: str = "",
+                       confirmed_at: str = "") -> Dict[str, Any]:
+    """人工签字「这一件按包围盒估算」（**纯函数**）：返回副本，绝不原地改入参。
+
+    Spec §2.4：**几何状态一个字不改** —— `outline_status` 仍是原来的 `open`
+    （`closed` 只能由几何判定给出），人签的字单独留在 `outline_confirmation` 上
+    （谁 / 为什么 / 什么时候 / 当时是哪条原因），卡片与面板据此说"这是人放行的"。
+    签名人（`bound_by`）为空 → `ValueError`（**不许匿名放行**）。
+    """
+    by = _text(bound_by)
+    if not by:
+        raise ValueError("人工轮廓确认必须记名（不许匿名放行）")
+    updated = copy.deepcopy(row) if isinstance(row, dict) else {}
+    updated["outline_confirmation"] = {
+        "kind": MANUAL_OUTLINE_KIND,
+        "rule_id": MANUAL_OUTLINE_RULE_ID,
+        "bound_by": by,
+        "reason": _text(reason),
+        "confirmed_at": _text(confirmed_at),
+        "outline_status_kept": _text(updated.get("outline_status")) or "open",
+        "outline_reason": _text(updated.get("outline_reason")),
+        "engine_version": ENGINE_VERSION,
+    }
+    return updated
+
+
+def set_recomputed_outline(row: Any, record: Any) -> Dict[str, Any]:
+    """把一版**单件重算**结论合回零件行（**纯函数**，Spec §2.3(b)）。
+
+    - 重算**真的**算出了闭合环（`outline_status == "closed"`）：行按这次几何结论更新
+      —— 这个 `closed` 是几何判定给的（放大额度后的这次搜索），不是人写的；
+    - 仍然没算出来：只更新诊断与留痕（仍是 `open` + 原来那条原因），
+      **不许**因为"重算过"就放行（Spec §2.5 第 4 条）。
+    """
+    updated = copy.deepcopy(row) if isinstance(row, dict) else {}
+    payload = record if isinstance(record, dict) else {}
+    diagnosis = payload.get("outline_diagnosis")
+    if isinstance(diagnosis, dict) and diagnosis:
+        updated["outline_diagnosis"] = copy.deepcopy(diagnosis)
+    status = _text(payload.get("outline_status"))
+    outline = payload.get("outline")
+    if status == "closed" and isinstance(outline, dict) and outline.get("points"):
+        updated.update({
+            "outline_status": status,
+            "outline": copy.deepcopy(outline),
+            "outline_reason": "",
+            "size_source": _text(payload.get("size_source")) or "closed_outline",
+            "unfolded_length_mm": payload.get("unfolded_length_mm"),
+            "unfolded_width_mm": payload.get("unfolded_width_mm"),
+            "area_mm2": payload.get("area_mm2"),
+        })
+    elif status == "open":
+        updated["outline_reason"] = (_text(payload.get("outline_reason"))
+                                     or _text(updated.get("outline_reason"))
+                                     or OUTLINE_RETRYABLE_REASONS[0])
+    updated["outline_recompute"] = {
+        "kind": RECOMPUTED_OUTLINE_KIND,
+        "rule_id": _text(payload.get("rule_id")) or RECOMPUTE_RULE_ID,
+        "scale": payload.get("scale"),
+        "bound_by": _text(payload.get("bound_by")),
+        "reason": _text(payload.get("reason")),
+        "confirmed_at": _text(payload.get("confirmed_at")),
+        "changed": bool(payload.get("changed")),
+        "outline_status": status,
+        "outline_reason": _text(payload.get("outline_reason")),
+    }
+    return updated
 
 
 # --------------------------------------------------------------------------- #
@@ -1994,10 +2144,15 @@ def processability(row: Any, *, options: Any = None) -> Dict[str, Any]:
         return {"ok": False, "code": "PACKAGING_PART_NOT_FOUND",
                 "message": "图纸里没有这个零件，请先跑一键解析", "missing_variables": [],
                 "part": None}
-    if _text(payload.get("outline_status")) != "closed":
+    if _text(payload.get("outline_status")) != "closed" and not outline_confirmation(payload):
+        # 未闭合件不给可执行下一步就是死路（Spec `packaging-open-outline-part-needs-a-way-out.md`
+        # §2.1/§2.2）：与缺材料/料厚那条分支同形，逐条说"为什么卡着 + 下一步做什么"。
+        # 人签过字（`outline_confirmation`）的件放行 —— 放行的是**人**，几何状态仍是 open。
+        advice = outline_advice(payload.get("outline_reason"))
         return {"ok": False, "code": "PACKAGING_PART_NOT_CLOSED",
-                "message": "这一件没有可信的闭合轮廓（%s），不能拿包围盒尺寸去排工艺"
-                           % (_text(payload.get("outline_reason")) or "odd_endpoints"),
+                "message": "这一件没有可信的闭合轮廓（%s），不能拿包围盒尺寸去排工艺 —— %s"
+                           % (_text(payload.get("outline_reason"))
+                              or OUTLINE_MANUAL_REASONS[2], advice["message"]),
                 "missing_variables": ["outline"], "part": None}
     missing: List[str] = []
     if not _material_spec(payload.get("material")):
@@ -2061,12 +2216,14 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
     - 侧档内容坏掉（空值 / 非正数）只跳过这一条，**不许**让读路径抛错。
     """
     overlays: Dict[str, Dict[str, Any]] = {}
-    for key in (DOC_KEY_MATERIAL, DOC_KEY_THICKNESS):
+    for key in (DOC_KEY_MATERIAL, DOC_KEY_THICKNESS, DOC_KEY_OUTLINE):
         for item in _part_doc_items(project_id, key):
             code = _text(item.get("part_code"))
-            if not code or code in overlays:
+            if not code:
                 continue
-            overlays[code] = dict(overlays.get(code) or {}, **{key: item})
+            # 每个键只取**最近一版**（`_part_doc_items()` 已按新→旧排列），但三份侧档
+            # 要能**同时**合回同一行：材料 / 料厚 / 轮廓出路是三件事，不是三选一。
+            overlays.setdefault(code, {}).setdefault(key, item)
 
     out = copy.deepcopy(record)
     parts = out.get("parts") if isinstance(out, dict) else None
@@ -2080,6 +2237,7 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
             continue
         material = fill.get(DOC_KEY_MATERIAL)
         thickness = fill.get(DOC_KEY_THICKNESS)
+        outline = fill.get(DOC_KEY_OUTLINE)
         try:
             if material:
                 row.update(set_manual_material(row, material.get("spec"),
@@ -2089,6 +2247,16 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
                 row.update(set_manual_thickness(row, thickness.get("thickness_mm"),
                                                 bound_by=_text(thickness.get("bound_by")),
                                                 reason=_text(thickness.get("reason"))))
+            # 件级轮廓出路（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.3）：
+            # 人签的字与单件重算的结论都是**侧档**，读时合回这一行 —— 只影响这一件。
+            if outline:
+                if _text(outline.get("kind")) == MANUAL_OUTLINE_KIND:
+                    row.update(set_manual_outline(row,
+                                                  bound_by=_text(outline.get("bound_by")),
+                                                  reason=_text(outline.get("reason")),
+                                                  confirmed_at=_text(outline.get("confirmed_at"))))
+                else:
+                    row.update(set_recomputed_outline(row, outline))
         except ValueError:
             continue
     return out
@@ -2267,6 +2435,130 @@ def load_part_material(project_id: str, part_code: str) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# 2c-bis 件级轮廓出路（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.3）
+#   未闭合的件在整条链上是死路：既没有入口，也没有一句话告诉用户该干什么。
+#   两条出路与「补材料」/「补料厚」逐字同范式（件级侧档 + 读时合回零件行）：
+#     · confirm  —— 人工签字「这一件按包围盒估算」（几何状态仍是 open，另立留痕）；
+#     · recompute —— 只对这一件放大搜索额度重跑一次找环（真闭合了才改几何结论）。
+# --------------------------------------------------------------------------- #
+def save_part_outline(project_id: str, part_code: str, *, bound_by: str,
+                      reason: str = "", confirmed_at: str = "") -> Dict[str, Any]:
+    """落一版人工轮廓确认（同一 `(part_code, 人, 理由)` 幂等，最多 20 版）。"""
+    by = _text(bound_by)
+    if not by:
+        raise ValueError("人工轮廓确认必须记名（不许匿名放行）")
+    return _save_part_doc(project_id, DOC_KEY_OUTLINE, {
+        "part_code": _text(part_code), "kind": MANUAL_OUTLINE_KIND,
+        "rule_id": MANUAL_OUTLINE_RULE_ID, "bound_by": by,
+        "reason": _text(reason), "confirmed_at": _text(confirmed_at),
+        "engine_version": ENGINE_VERSION})
+
+
+def recompute_outline(row: Any, ir: Any, *, scale: Any = RECOMPUTE_BUDGET_SCALE,
+                      bound_by: str = "", reason: str = "",
+                      confirmed_at: str = "", options: Any = None) -> Dict[str, Any]:
+    """单件重算轮廓（**纯函数**：吃零件行 + CAD IR，不落库、不联网，Spec §2.3(b)）。
+
+    只对**这一件**的分量再跑一次找环，搜索额度放大 `scale` 倍；判据、开线原因闭集与
+    `_open_outline_reason()` 一律沿用（绝不新写第二套），于是"额度用完仍
+    `loop_budget_exhausted`，诚实照旧"。返回一版重算结论（`changed` 说这一件是不是
+    由 `open` 变成了 `closed`），落库与读回由调用方按侧档范式处理。
+    """
+    payload = row if isinstance(row, dict) else {}
+    part_code = _text(payload.get("part_code"))
+    if not part_code:
+        raise ValueError("recompute_outline() 需要 part_code")
+    factor = _num(scale)
+    factor = (RECOMPUTE_BUDGET_SCALE if factor is None
+              else max(1.0, min(float(RECOMPUTE_BUDGET_SCALE_MAX), float(factor))))
+    if not isinstance(ir, dict):
+        raise ValueError("recompute_outline() 需要一份 CAD IR")
+    geometry = ir.get("geometry") if isinstance(ir.get("geometry"), dict) else {}
+    components = [item for item in (geometry.get("components") or [])
+                  if isinstance(item, dict)]
+    component_id = _text(payload.get("component_id"))
+    component = next((item for item in components
+                      if _text(item.get("component_id")) == component_id), None)
+    if component is None:
+        raise ValueError("CAD IR 里找不到这一件的分量（%s），重算没有依据" % component_id)
+    entities = {str((item or {}).get("entity_id")): item
+                for item in (ir.get("entities") or []) if isinstance(item, dict)}
+    members = [entities[item] for item in (_text(one) for one in (component.get("entity_ids") or []))
+               if item in entities]
+    config = _options(options)
+    units = ir.get("units") if isinstance(ir.get("units"), dict) else {}
+    unit_ok = _text(units.get("unit_status")) == "confirmed"
+    bbox = _bbox_of(component, members)
+    curves = [entity for entity in members
+              if _text(entity.get("type")).upper() in CURVE_TYPES]
+    evidence = _outline_evidence(members, max_states=int(MAX_LOOP_STATES * factor),
+                                 max_cycles=int(MAX_LOOP_CYCLES * factor))
+    outline: Optional[Dict[str, Any]] = None
+    saw_loop = False
+    has_coordinates = False
+    if unit_ok:
+        verdict = _largest_loop(evidence["loops_original"], evidence["edges"],
+                                evidence["vertices"], float(config["min_area_mm2"]))
+        outline = verdict["outline"]
+        saw_loop = verdict["saw_loop"]
+        has_coordinates = verdict["has_coordinates"]
+        if outline is None:
+            outline, _compose = _rescue_outline(evidence, bbox,
+                                                float(config["min_area_mm2"]))
+            if outline is not None:
+                saw_loop = True
+                has_coordinates = True
+    if not unit_ok:
+        status, reason_out = "unavailable", "unit_unconfirmed"
+    elif outline is not None:
+        status, reason_out = "closed", ""
+    else:
+        status = "open"
+        reason_out = _open_outline_reason(has_curve=bool(curves),
+                                          diagnosis=evidence["diagnosis"], saw_loop=saw_loop)
+    record: Dict[str, Any] = {
+        "part_code": part_code, "kind": RECOMPUTED_OUTLINE_KIND,
+        "rule_id": RECOMPUTE_RULE_ID, "component_id": component_id,
+        "scale": factor, "outline_status": status, "outline_reason": reason_out,
+        "outline_diagnosis": dict(evidence["diagnosis"]),
+        "bound_by": _text(bound_by), "reason": _text(reason),
+        "confirmed_at": _text(confirmed_at), "engine_version": ENGINE_VERSION,
+        "changed": bool(status == "closed"
+                        and _text(payload.get("outline_status")) != "closed"),
+    }
+    if outline is not None:
+        loop_box = outline.get("bbox") or bbox
+        record["outline"] = copy.deepcopy(outline)
+        record["size_source"] = "closed_outline" if has_coordinates else "dwg_outline"
+        record["unfolded_length_mm"] = _round(abs(loop_box[2] - loop_box[0]))
+        record["unfolded_width_mm"] = _round(abs(loop_box[3] - loop_box[1]))
+        record["area_mm2"] = _round(float(outline.get("area_mm2") or 0.0))
+    return record
+
+
+def save_part_outline_recompute(project_id: str, record: Any) -> Dict[str, Any]:
+    """落一版单件重算结论（同一 `(part_code, 结论内容)` 幂等，最多 20 版）。"""
+    payload = record if isinstance(record, dict) else {}
+    part_code = _text(payload.get("part_code"))
+    if not part_code:
+        raise ValueError("save_part_outline_recompute() 需要 part_code")
+    saved: Dict[str, Any] = {"part_code": part_code, "kind": RECOMPUTED_OUTLINE_KIND,
+                             "engine_version": ENGINE_VERSION}
+    for name in ("rule_id", "component_id", "scale", "outline_status", "outline_reason",
+                 "outline_diagnosis", "outline", "size_source", "unfolded_length_mm",
+                 "unfolded_width_mm", "area_mm2", "changed", "bound_by", "reason",
+                 "confirmed_at"):
+        if name in payload:
+            saved[name] = copy.deepcopy(payload[name])
+    return _save_part_doc(project_id, DOC_KEY_OUTLINE, saved)
+
+
+def load_part_outline(project_id: str, part_code: str) -> Dict[str, Any]:
+    """读回这一件的轮廓出路留痕（最近一版）；没走过 → `{}`。"""
+    return _load_part_doc(project_id, DOC_KEY_OUTLINE, part_code)
+
+
+# --------------------------------------------------------------------------- #
 # 2d 卡片零件表的「可算 / 不可算原因」列（Spec `packaging-parts-in-card-and-material-fill.md`
 #    §2.1 第 2–3 条）：**唯一**判据是 `processability()`，前端不许另写一套。
 # --------------------------------------------------------------------------- #
@@ -2279,6 +2571,11 @@ def card_row(row: Any) -> Dict[str, Any]:
     """零件文档的一行 → 卡片表格行：数值原样、可算性取 `processability()` 的同一判据同文案。"""
     payload = row if isinstance(row, dict) else {}
     verdict = processability(payload)
+    # 人签过字的件在卡片上必须**看得出来是人放的**（Spec §2.4）：轮廓状态那一格带上签字痕，
+    # 几何列本身仍是 `open`（`closed` 只能由几何判定给出）。
+    outline_status = _text(payload.get("outline_status"))
+    if outline_confirmation(payload) and outline_status != "closed":
+        outline_status = "%s（人工签字·按包围盒估算）" % (outline_status or "open")
     return {
         "part_code": _text(payload.get("part_code")),
         "name": _text(payload.get("name")),
@@ -2287,7 +2584,7 @@ def card_row(row: Any) -> Dict[str, Any]:
         "thickness_mm": _num(payload.get("thickness_mm")),
         "unfolded_length_mm": _num(payload.get("unfolded_length_mm")),
         "unfolded_width_mm": _num(payload.get("unfolded_width_mm")),
-        "outline_status": _text(payload.get("outline_status")),
+        "outline_status": outline_status,
         "processable": bool(verdict.get("ok")),
         "processable_text": "可算" if verdict.get("ok") else "不可算",
         "unprocessable_reason": "" if verdict.get("ok") else _text(verdict.get("message")),

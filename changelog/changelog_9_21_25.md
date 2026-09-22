@@ -13913,3 +13913,113 @@ tests/test_packaging_par*.py + test_packaging_op*.py（403 条）→ 5 红 = 上
 
 只改上述 2 个实现文件 + 本 Spec 状态行/§7 + 本 changelog；未改任何测试、未删侧档、未改判据 /
 `CARD_COLUMNS` / 写权限 / 审计动作名、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
+
+## 331. 自查上一批落地：「包材绑定数据源缺失」被显示成了「没有缺口」（9-22，Codex 只改 Spec / 红测 / changelog）
+
+上一批（`## 328`）那条 Spec 的退路（绑定算不出来就给空集 = 全部只披露）落地后，我做实现自查，
+发现退路本身**没有自报家门** —— 这是同一种"失败 / 空 / 没有三者同形"的病，在成本侧的**第四处**
+（前三处归 `packaging-silent-degradation-disclosure.md`）。
+
+### 一、自查结论（实现与 Spec 的一致性）
+
+| 我立的 Spec | 落地情况 |
+| --- | --- |
+| `packaging-cost-loss-rate-authoritative-sources`（`## 335` 落地） | 四级取数、`0 = 未登记`、无材料行不捡因子、`loss_rate_source` 留痕 —— 逐条对上 |
+| `packaging-cost-readiness-severity-layering`（`44f2ff9`） | `verdict` 只由 blocking / 静默按 0 / 尚未测算决定；`advisories` / `advisory_total` / 金额拆两数 —— 逐条对上 |
+| `packaging-cost-gaps-scoped-to-order-contents`（`afef542`） | 行级 `binding`、`bound_gaps` / `unbound_gaps`、就绪门 `unbound_total` —— 逐条对上；但见下 |
+
+### 二、发现的问题（本轮新立 Spec + 红测）
+
+`packaging_cost.py::bound_content_codes()` 这一版**故意** `return set()`（没有权威绑定数据源，
+退路本身没错），可后果是：
+
+- 每一行都判成 `unbound` → `bound_gaps = []`；
+- 而"这一单真的没有包材缺口"**也是** `bound_gaps = []` —— 两者在读接口、就绪门、报告上**完全同形**；
+- 更贵的一层：**本单真的用得上**的包材项算不出金额时，也不再阻断（成本可能被**少算**），而没人说出来；
+- 就绪门虽有 `unbound_total`，但那只是条数，不回答"为什么这些缺口没进阻断"。
+
+新立 `docs/specs/packaging-cost-content-binding-source-disclosure.md` +
+`tests/test_packaging_cost_content_binding_source_disclosure_red.py`，契约三条：
+
+1. `bound_content_codes_detail(data)` 回 `{"codes": [...], "source": "authoritative" | "none"}`，
+   闭集、今天必须老实报 `"none"`（不许假装有数据）；`bound_content_codes()` 保留兼容包装；
+2. `compute_project()` 结果体新增 `content_binding`：`source` / `bound_total` / `unbound_total` /
+   `bound_codes` / `unbound_codes`（**逐条列名**，不许只给总数）；
+3. 就绪门新增 `content_binding_source`（键**总是存在**），`source == "none"` 且有 unbound 缺口时，
+   `reasons` 必须有"包材绑定数据源缺失：N 条包材缺口只披露不阻断"；`authoritative` 时不许出现这句；
+   **`verdict` 口径一个字不改**（数据源缺失不把成本打成暂定 —— 严重度分层是上一批定下的）。
+
+红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_cost_content_binding_source_disclosure_red
+  → Ran 7 tests … FAILED (failures=6)
+```
+
+6 红 = A1（没有 `bound_content_codes_detail`）、A3（`compute_project` 不带 `content_binding`）、
+B1（数据源缺失没有那句话）、B2（authoritative 判据）、B3（键不总是存在）、B4（不逐条列名）；
+1 绿护栏 = A2（兼容包装仍只回集合）。
+
+### 三、另一处小 drift（**已上报、本批未动**）
+
+`loss_rate_detail()` 在"需求单给了 `loss_rate`"时返回 `(值, None)`，于是材料行少了
+`loss_rate_source` 留痕 —— 那正是最该留痕的一种来源。上一批 Spec §2.1 的四级表里没有"需求单"这一级，
+所以实现不算违约，是**契约缺一级**；等下一批把 `"requirement"` 加进闭集时一并补红测。
+
+### 四、边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现、
+**未连 34**、未跑任何写操作、未写数据库、未 push / MR / tag / Release / 未部署。
+
+## 339. `packaging-open-outline-part-needs-a-way-out` 落地：未闭合的件有出路了（一条是放额度重算、一条是人工签字按包围盒放行），文案按"没算完 / 图纸真没有"分家（8 OK）（9-22，Codex 实现）
+
+### 一、问题（Spec §1，在 HEAD `2373214` 上逐条核对）
+
+34 实测 `a42e5e60a720`：`closed 60/64`、`unprocessable_reason_mix.PACKAGING_PART_NOT_CLOSED = 4`
+（代表件 `DWG-P01` / `DWG-P02`）。缺材料/缺料厚的件都有件级出路（「补材料」/「补料厚」），
+唯独这 4 件**既没有入口、也没有一句话说下一步**：出口文案只有"不能拿包围盒尺寸去排工艺"，
+而且 `loop_budget_exhausted`（我们没算完，可重试）与 `odd_endpoints`（图纸真没闭合，要人处理）
+**除原因码外一字不差**。重跑八步也不会变（判定是确定性的），唯一的重抽接口前端 0 命中。
+
+### 二、改了什么（Spec §2.1–§2.5）
+
+- `packaging_parts.py`
+  - `outline_advice(reason)`：未闭合件「为什么卡着 + 下一步做什么」纯函数，按闭集分家 ——
+    `loop_budget_exhausted` → 「重算轮廓」；其余 → 「改图重传 / 按包围盒签字确认」。
+    `processability()` 的 `PACKAGING_PART_NOT_CLOSED` 分支据此出带动作指引的文案
+    （与缺材料/料厚那条分支同形）。
+  - 出路 (a) 人工签字：`set_manual_outline()`（纯函数，匿名 → `ValueError`）+
+    `save_part_outline()` / `load_part_outline()`，侧档 `packaging_part_outline`
+    （`kind=manual_bbox`，留人 / 理由 / 时间 / 当时原因）。**`outline_status` 一个字不改**
+    （仍是 `open`，`closed` 只能由几何判定给出）；人签过字的件在 `processability()` 放行，
+    `card_row()` 的「轮廓状态」列带 `（人工签字·按包围盒估算）`。
+  - 出路 (b) 单件重算：`recompute_outline(row, ir, *, scale)` +
+    `save_part_outline_recompute()`。只对这一件的分量放大搜索额度
+    （`_outline_evidence(..., max_states=MAX_LOOP_STATES × scale)`，额度夹 `[1, 32]`）再跑一次；
+    真闭合了才改几何结论（`set_recomputed_outline()`），没算出来就诚实照旧 + 留痕。
+  - `_manual_fill_overlay()` 现在把三份侧档（材料 / 料厚 / 轮廓出路）都合回零件行；
+    顺手修掉上一版"同一件只取第一个键"的漏合并（材料与料厚以前互斥，现在能同时合）。
+- `main.py`：`…/packaging-parts/{part_code}/outline/confirm`（GET+POST）与
+  `…/outline/recompute`（POST）；写权限直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`，
+  匿名/无效 400、IR 缺失 409；审计 `workflow:packaging_part_outline_confirmed` /
+  `workflow:packaging_part_outline_recomputed`。
+- `frontend/app.js`：未闭合件在零件树里多出 `part-outline-fix`（与补材料/补料厚同渲染循环，
+  按 `outline_reason` 决定走重算还是签字）；已签字件显示 `part-outline-signoff`；
+  面板状态文案同时说清"人工签字"与"已重算（×N，仍/已闭合）"。`node --check` 通过。
+
+### 三、实测
+
+```
+tests.test_packaging_open_outline_part_needs_a_way_out_red  → Ran 8 … OK（原先 4 红）
+tests.test_packaging_part_manual_fill_persists_red         → 唯一红仍是已记录的 A2 第三条断言（## 338 §四）
+packaging 全域 62 份（1396 条）→ 37 红全部是尚未实现的相邻批次（silent-degradation 8 /
+bom-parts-version-binding 4 / bom-size-quality 4 / cost-input-version-pinning 5 /
+solids-parts-version-binding 4 / bom-box-type-provenance 4 / content-binding-source 6 /
+其它 2），本批 0 新增红；`## 273` / `## 262` / `## 266` 三条存量红本轮实测已转绿。
+```
+
+### 四、边界
+
+本批只改 `packaging_parts.py` / `main.py`（两条写路由 + 一条读路由）/ `app.js` /
+`drawing-flow.css` / 本 Spec 状态行 / 本 changelog；未改任何测试、未放宽任何断言、
+未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

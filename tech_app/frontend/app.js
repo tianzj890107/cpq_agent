@@ -1137,13 +1137,38 @@ const PACKAGING_SIZE_SOURCE_COPY = {
 //: 当前在右栏零件面板里看的零件（独立于视觉链路的 currentSelectedId，互不污染）。
 let currentSelectedPanelPart = null;
 
+// 未闭合原因的两条出路文案（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.2）：
+// `loop_budget_exhausted` 是"这一件没算完"（可重试 → 放额度重算），其余是"图纸真的没闭合"
+// （要人处理 → 改图重传或按包围盒签字确认）。按钮与后端两条出口一一对应。
+const PACKAGING_OUTLINE_EXITS = {
+  loop_budget_exhausted: { action: "recompute", label: "重算轮廓" },
+  no_curve_entity: { action: "confirm", label: "按包围盒签字确认" },
+  unit_unconfirmed: { action: "confirm", label: "按包围盒签字确认" },
+  odd_endpoints: { action: "confirm", label: "按包围盒签字确认" },
+  loop_too_small: { action: "confirm", label: "按包围盒签字确认" },
+};
+
+function packagingOutlineExit(part) {
+  const reason = String((part && part.outline_reason) || "");
+  return PACKAGING_OUTLINE_EXITS[reason] || PACKAGING_OUTLINE_EXITS.odd_endpoints;
+}
+
 function pkgPartStatusText(part) {
   const status = String((part && part.outline_status) || "");
   const reason = String((part && part.outline_reason) || "");
   const base = PACKAGING_OUTLINE_COPY[status] || "";
   const why = PACKAGING_OUTLINE_REASONS[reason] || "";
-  if (!base) return "";
-  return why ? base + "（" + why + "）" : base;
+  // 人签的字必须与几何闭合分开说（Spec §2.4）：几何状态仍是"未闭合"。
+  const confirmation = (part && part.outline_confirmation) || null;
+  const sign = (confirmation && confirmation.bound_by)
+    ? `人工签字放行（${confirmation.bound_by}，按包围盒估算；几何状态仍是未闭合）` : "";
+  const recompute = (part && part.outline_recompute) || null;
+  const retried = (recompute && recompute.bound_by)
+    ? `已重算轮廓（额度 ×${recompute.scale || "?"}，仍${recompute.changed ? "已闭合" : "未闭合"}）` : "";
+  const head = why ? base + "（" + why + "）" : base;
+  const notes = [retried, sign].filter(Boolean);
+  if (!head) return notes.join(" · ");
+  return notes.length ? head + " · " + notes.join(" · ") : head;
 }
 
 function pkgPartFactRow(label, value) {
@@ -1510,6 +1535,53 @@ async function packagingPartSetMaterial(partCode) {
     if (payload.material_source) patch.material_source = payload.material_source;
     patchPackagingPartRows(partCode, patch);
   }
+  renderTree(currentIR || {});
+  return payload;
+}
+
+// 件级轮廓出路（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.3）：未闭合的件
+// 以前在整条链上是死路（没有入口、也没人告诉你该干什么）。这里给两条与后端一一对应的出口，
+// 与「补材料」/「补料厚」同范式：提交后按服务端重读那一份零件文档，不整页重载。
+async function packagingPartOutlineExitPost(partCode, action) {
+  if (!currentProject || !partCode) return null;
+  const label = action === "recompute" ? "重算轮廓" : "按包围盒签字确认";
+  if (action === "recompute") {
+    const go = window.confirm(`用更大的搜索额度只重算 ${partCode} 这一件？（不会动其它件）`);
+    if (!go) return null;
+  } else {
+    const go = window.confirm(
+      `确认把 ${partCode} 按包围盒估算放行？\n`
+      + `几何状态仍是「未闭合」，卡片上会标出这是人工签字（不是几何闭合）。`);
+    if (!go) return null;
+  }
+  const reason = window.prompt(`${label}的理由（可留空）：`, "") || "";
+  const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts/`
+    + `${encodeURIComponent(partCode)}/outline/${action === "recompute" ? "recompute" : "confirm"}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason }),
+    });
+  } catch (error) {
+    window.alert(`${label}失败：网络错误，请重试。`);
+    return null;
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = payload && payload.detail;
+    const message = (typeof detail === "string" ? detail : (detail && detail.message))
+      || (payload && payload.message) || `HTTP ${res.status}`;
+    window.alert(`${label}失败：${message}`);
+    return null;
+  }
+  if (action === "recompute" && !payload.changed) {
+    window.alert(`${label}完成：这一件仍未闭合（${payload.outline_reason || ""}）。`
+      + `${payload.message || ""}`);
+  }
+  const reread = await fetchPackagingParts();
+  if (reread) currentPackagingParts = reread;
   renderTree(currentIR || {});
   return payload;
 }
@@ -2759,6 +2831,29 @@ function renderTree(ir) {
           packagingPartSetMaterial(part.part_code || "");
         });
         row.appendChild(matFix);
+      }
+      // 未闭合的件必须**看得见下一步**（Spec `packaging-open-outline-part-needs-a-way-out.md`
+      // §2.3）：与补材料 / 补料厚同一个渲染循环、同一种控件形状（`part-outline-fix`）。
+      // 「重算轮廓」走 `…/outline/recompute`（放额度只重算这一件），
+      // 「按包围盒签字确认」走 `…/outline/confirm`（几何状态仍是 open，另立留痕）。
+      const outlineConfirmed = !!(part.outline_confirmation && part.outline_confirmation.bound_by);
+      if (String(part.outline_status || "") !== "closed" && !outlineConfirmed) {
+        const exit = packagingOutlineExit(part);
+        const outlineFix = document.createElement("button");
+        outlineFix.className = "btn btn-secondary part-outline-fix";
+        outlineFix.type = "button";
+        outlineFix.textContent = exit.label;
+        outlineFix.addEventListener("click", (event) => {
+          event.stopPropagation();
+          packagingPartOutlineExitPost(part.part_code || "", exit.action);
+        });
+        row.appendChild(outlineFix);
+      } else if (outlineConfirmed) {
+        // 人签过字的件要能一眼看出"这是人放的，不是几何闭合的"（Spec §2.4）。
+        const signoff = document.createElement("span");
+        signoff.className = "part-outline-signoff";
+        signoff.textContent = "人工签字·按包围盒";
+        row.appendChild(signoff);
       }
       // 料厚为空的行必须**看得见补录入口**（Spec `packaging-parts-thickness-facts.md` §2.5）：
       // 真图 55 件不可挤出里有 51 件卡在"没有料厚"，页面上必须有地方能补。
