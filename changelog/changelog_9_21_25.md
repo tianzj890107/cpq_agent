@@ -11392,3 +11392,37 @@ agent-chat.js?v=20260922-road1；8010 /确认需求解析结果.html 200 且含 
 
 说明：`## 292` 那批「本地改了、34 上还是旧的」的差异已随这次整仓部署消失 —— 现在两边的
 前端与服务端都是同一个 commit `7578b36`。
+
+## 296. 34 上的「DWG → 字段」统一解析服务真机复验（9-22，Codex 只读验证 + 记录）
+
+背景：第 7 批 Spec（`docs/specs/quick-quote-7-unified-parse-service.md`）已实现并随 `7578b36`
+部署到 34，但那次重测（实现之前）的记录是
+`34:8010/api/file/parse/capability → 404、POST /api/file/parse → 405`。本轮用**真实样本**
+在 34 上重跑一遍，确认缺口已经关上。
+
+```
+GET  http://127.0.0.1:8012/api/file/parse/capability   code=200
+GET  http://127.0.0.1:8010/api/file/parse/capability   code=200（8010 → 8012 反代）
+  {"service":"cpq-unified-parse","provider":"oda","provider_version":"27.1",
+   "dwg":true,"dxf":true,"preview":true}
+
+POST http://127.0.0.1:8012/api/file/parse   （name=酒盒.dwg，data=base64(真实 DWG)）
+  ok=true、kind=drawing、service_version=unified_parse_v1、provider=oda、
+  provider_version=27.1、elapsed_ms≈10925
+  units                = "mm"
+  outline_size         = {width: 14362.15, height: 6151.80, source: "document_extents"}
+  layers               = ["0","CUTTER","DESIGN","Defpoints","SAMPLE","_U+56FE_U+5C42 1","图层 2","轮廓线"]
+  annotated_dimensions = 50+ 条（219.64 / 89.19 / 86.40 / 267.94 / 262.16 / 124.90 …）
+  material_notes       = ["235g白卡底PET光银裱A9 E坑","名称：左盖面纸 材料：225G铜版底PET光银" …]
+  missing_fields       = ["blocks"]（这张图没有块定义，属事实不属缺口）
+  warnings             = ["unknown_converter_binary：无法从 AppRun 的文件名识别转换器类型，argv 形状未经真机验证",
+                          "outline_from_extents：外形尺寸取的是图纸范围（document.extents），不是成品内尺寸，请人工确认"]
+```
+
+结论：**「上传 DWG → 拿到可用来匹配案例的字段」这条链路在 34 上真的能跑**（免登录接口，
+8012 直连与 8010 反代两条入口都通）。两条 warning 都是设计里写明的"把不确定说清楚"，不是失败。
+
+### 边界
+
+- 只读验证：不建项目、不写需求/零件/成本记录、不连 PG；转换产物落在统一解析服务自己的隔离解析项目目录。
+- 未改任何代码（本轮只跑 + 记录）。
