@@ -11651,3 +11651,15 @@ test_deploy_health_wait_red / test_packaging_parts_extraction_red
 
 只改第 6b 步的"数哪个目录"与该行的输出文案；不改隔离目录的用法（`DATA_DIR=$SELFCHECK_DIR/data`）、
 不改三态判决、不改任何失败判据的方向（原本该失败的仍然失败）。
+
+### `## 300` 部署复验（34，`657af0d`）
+
+```
+整仓部署：b2626f6 → 657af0d；health ok；第 5 步两份样本 primary；第 6b 步隔离自检 verdict=ok
+第 6b 步新输出（这条断言终于有意义了）：
+  · 隔离自检未写运行目录：/home/wugefei/CPQ/cpq_agent/tech_app/tech_data 项目数 60 → 60；tech_app/data 0 → 0
+```
+
+改动前那一行是 `生产数据目录未被写入（meta.json 数量 0 → 0）` —— 数的是 `tech_app/data`，
+真机上恒等于 0，什么都证明不了；现在盯的是启动器真正在用的 `tech_app/tech_data`（60 个项目），
+前后相等才算真的证明了"隔离自检没写生产数据"。
