@@ -5,10 +5,9 @@
 `quick-quote-12-case-maintenance.md`（补字段 / 审核两个入口）、
 `quick-quote-3-field-workspace-and-delta-price.md`（工作区与四列差异表）。
 
-- 状态：Spec + 红测（**已实现**）—— `tests/test_quick_quote_home_wiring_red.py` 实测 `Ran 12 OK`
-  （6 条断言红转绿；D2 / E1–E5 六条护栏保持绿）
-- 红测：`tests/test_quick_quote_home_wiring_red.py`
-- 依赖：`报价首页.html`、`tech_app/frontend/quick-quote-panel.js`、`cpq_agent_server.py`
+状态：Spec + 红测（已实现）—— 见 changelog `## 290`/`## 291`；`Ran 12 OK`
+红测：`tests/test_quick_quote_home_wiring_red.py`
+依赖：`报价首页.html`、`tech_app/frontend/quick-quote-panel.js`、`cpq_agent_server.py`
 
 ## 0. 一句话目标
 
