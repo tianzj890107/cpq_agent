@@ -17094,3 +17094,46 @@ node --check tech_app/frontend/app.js  OK
 
 未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
 未 push / MR / tag / Release / 未部署。
+
+## 398. 落地 `packaging-bom-role-unbound-note-read-failure`：BOM 读不到时不再擦掉「候选角色暂时读不到」（读失败在清理旧提示之前返回并 upsert 自己的块；8 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingRoleUnboundReadProblemText(problem)`（`refreshPackagingBomRoleUnboundNote()`
+  上方）：`code === "bom_unavailable"` 且 `Number(status) > 0` →
+  `这一次读不到 BOM（HTTP <status>），候选角色的披露也读不到；请稍后重试，这不代表这些行都有候选角色。`；
+  `bom_unavailable` 且无状态码 → 同句的「（网络错误）」版；`code === "bom_body_unexpected"` →
+  `这一次读到的 BOM 正文里没有盒型信息，候选角色的披露读不到；请稍后重试，这不代表这些行都有候选角色。`；
+  其余（`{}` / `null` / 表外码）→ `""`。无 `document.` / `window.` / `fetch(` / `localStorage`（R5）。
+- `refreshPackagingBomRoleUnboundNote()`：新增函数内 `showReadProblem(problem)` —— 先按
+  `[data-qqRoleUnboundReadProblem]` 删上一次的读失败块，再挂 `div.role-map-warning`
+  （`data-qqRoleUnboundReadProblem="1"`，文本逐字取纯函数），返回 `{read_problem: problem}`。
+  三条读失败从「并进 `flag = {}`」改成自己的形状：`!res.ok` →
+  `{code: "bom_unavailable", status: res.status}`；`res.ok` 但 `payload.bom` 不是对象 →
+  `{code: "bom_body_unexpected", status: res.status}`；`fetch` 抛异常 →
+  `{code: "bom_unavailable", status: 0}`。三条一律在 `old.remove()` **之前**返回（R6）——
+  一次读失败不再回收上一次刷新已经说过的「候选角色暂时读不到（…）」，也**不**移除
+  `[data-role-unbound-templates-unavailable]` 提示；读失败不进
+  `role_unbound_templates_unavailable`（那是"读到了、但候选角色读不到"）。
+- 成功路径逐字不变（R8）：有 `flag.code` → 既有那句 + 既有钩子；没有 `flag` →
+  `if (old) old.remove();` + `return flag`；`if (!currentProject) return null;` 与
+  `refreshPackagingParts()` 里的 `await refreshPackagingBomRoleUnboundNote()` 调用点仍在。
+
+未动的：没有 `host.innerHTML = …` 整块重写（那一栏还挂着「人工映射读不到」与既有提示）；
+`loadPackagingRoleMap()` / `renderPackagingRoleMap()` / `renderPackagingRoleMapUnavailable()`；
+服务端 `packaging-bom` 路由与 `load_bom()` 的 `role_unbound_templates_unavailable` 口径；
+无重试循环 / 自动重试 / 弹窗。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_bom_role_unbound_note_read_failure_red   Ran 8  FAILED (failures=7) → Ran 8  OK
+  （红基 R1 R2 R3 R4 R5 R6 R7；护栏 R8 始终绿）
+不回归：role_unbound_template_disclosure + part_role_manual_mapping + parse_terminal_signal
+        Ran 59  OK
+        零件面板 + 前端接线 + 分页读失败 + 第一页读失败  Ran 48  OK
+node --check tech_app/frontend/app.js  OK
+```
+
+未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
+未 push / MR / tag / Release / 未部署。

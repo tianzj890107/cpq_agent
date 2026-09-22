@@ -2552,6 +2552,25 @@ async function refreshPackagingParts() {
   return currentPackagingParts;
 }
 
+// "这一次读不到 BOM"的原因文案（Spec `packaging-bom-role-unbound-note-read-failure.md` §2.1）。
+// 纯函数：只认两个码（`bom_unavailable` / `bom_body_unexpected`），别的码 / 没有码给空串。
+// 与"读到了、但候选角色读不到"（服务端那份 `role_unbound_templates_unavailable`）是两件事，
+// 不许混进同一句话，也不许声称"这些行都有候选角色"。
+function packagingRoleUnboundReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : null;
+  const code = row ? String(row.code || "").trim() : "";
+  if (code === "bom_unavailable") {
+    const where = (Number(row.status) || 0) > 0 ? `HTTP ${Number(row.status)}` : "网络错误";
+    return `这一次读不到 BOM（${where}），候选角色的披露也读不到；`
+      + "请稍后重试，这不代表这些行都有候选角色。";
+  }
+  if (code === "bom_body_unexpected") {
+    return "这一次读到的 BOM 正文里没有盒型信息，候选角色的披露读不到；"
+      + "请稍后重试，这不代表这些行都有候选角色。";
+  }
+  return "";
+}
+
 /* BOM 未映射清单旁边的候选角色披露（Spec `packaging-bom-role-unbound-template-disclosure.md` §2.3）。
    `GET …/requirement/packaging-bom` 的 `role_unbound_templates_unavailable` 非空 =
    "这一趟候选角色没读到"，与"这个盒型确实没有候选角色"分家；`{}` 时什么也不加。 */
@@ -2559,13 +2578,41 @@ async function refreshPackagingBomRoleUnboundNote() {
   if (!currentProject) return null;
   const host = $("packagingRoleMap");
   if (!host) return null;
+  // 这一趟读不到 BOM 时，既有的"候选角色暂时读不到（…）"**一件不许回收**（Spec
+  // `packaging-bom-role-unbound-note-read-failure.md` §2.2）：老路子从不看 `res.ok`、
+  // 也把 `res.json()` 解不出 / `fetch` 抛异常一起并进 `flag = {}`，然后**无条件**清掉旧提示
+  // —— 一次读失败就把已经披露的事实擦掉，"读不到"与"本来就没有"同形。读失败一律在清理旧提示
+  // **之前**返回，改为 upsert 自己的读失败块（按钩子删自己那一块）。
+  const showReadProblem = (problem) => {
+    const stale = host.querySelector("[data-qqRoleUnboundReadProblem]");
+    if (stale) stale.remove();
+    const node = document.createElement("div");
+    node.className = "role-map-warning";
+    node.setAttribute("data-qqRoleUnboundReadProblem", "1");
+    node.textContent = packagingRoleUnboundReadProblemText(problem);
+    host.append(node);
+    return {read_problem: problem};
+  };
   let flag = {};
   try {
     const res = await fetch(API + `/api/projects/${currentProject}/requirement/packaging-bom`);
+    // 非 2xx = 这一趟读不到 BOM（既不是"没有 flag"，也不是"这些行都有候选角色"）。
+    if (!res.ok) {
+      return showReadProblem({code: "bom_unavailable", status: Number(res.status) || 0,
+                              message: ""});
+    }
     const payload = await res.json().catch(() => ({}));
-    const body = (payload && payload.bom) || {};
+    // `res.ok` 但正文里没有盒型信息（`{"detail": …}` / 解不出 / 空）：第三种情形。
+    const body = (payload && typeof payload.bom === "object" && payload.bom) || null;
+    if (!body) {
+      return showReadProblem({code: "bom_body_unexpected", status: Number(res.status) || 0,
+                              message: ""});
+    }
     flag = (body && body.role_unbound_templates_unavailable) || {};
-  } catch (error) { return null; }
+  } catch (error) {
+    // 网络异常：没有状态码（给 0），与 5xx 同码不同句。
+    return showReadProblem({code: "bom_unavailable", status: 0, message: ""});
+  }
   const old = host.querySelector("[data-role-unbound-templates-unavailable]");
   if (old) old.remove();
   if (!flag.code) return flag;
