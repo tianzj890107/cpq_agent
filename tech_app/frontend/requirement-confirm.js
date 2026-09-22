@@ -493,6 +493,57 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
         ? `<div class="pb-hint" data-pb-material-map-reasons="${rows.length}">${pbEsc(breakdown)}</div>`
         : '');
   }
+  // 这份 BOM 照哪一版**业务部件清单**配的（Spec `packaging-bom-business-parts-scope-panel.md` §C1）：
+  // 零件文档版本与业务部件清单版本是两把尺子，head 里只写了前者，这里补后者。件数**只**读
+  // `record.business_parts`（绝不用几何件数冒充业务件数），可用性**只**读 `available`
+  // （读不到不报漂移：比较不了 ≠ 变了），读不到 / 还没导入 / 一件都没有各说各的。
+  function pbBusinessPartsScope(record) {
+    const root = (record && typeof record === 'object' && !Array.isArray(record)) ? record : {};
+    const scope = (root.business_parts && typeof root.business_parts === 'object'
+      && !Array.isArray(root.business_parts)) ? root.business_parts : null;
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const count = value => {
+      const number = Number(value);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    const gap = (scope && scope.gap && typeof scope.gap === 'object' && !Array.isArray(scope.gap))
+      ? scope.gap : {};
+    const id = text(root.business_parts_id);
+    const hash = text(scope ? scope.business_parts_hash : '');
+    const total = count(scope ? scope.business_part_total : undefined);
+    const bound = count(scope ? scope.bound_total : undefined);
+    const unbound = count(scope ? scope.unbound_total : undefined);
+    const gapCode = text(gap.code);
+    const gapMessage = text(gap.message);
+    // 判据顺序（§C1）：不是对象 → 未知档；`available` 不为真 → 读不到 / 还没导入（由 gap 说清）；
+    // 件数 0 → 一件都没有；否则有清单。
+    let state = 'unknown';
+    if (scope && scope.available === true) state = total > 0 ? 'ready' : 'empty';
+    else if (scope) state = 'unavailable';
+    const headlines = {
+      ready: `这版 BOM 照的业务部件清单：${id || '—'} · 共 ${total} 件（已绑几何 ${bound} 件 · `
+        + `未绑 ${unbound} 件）· 版本 ${hash ? hash.slice(0, 12) : '—'}。`,
+      empty: '业务部件清单读到了，但一件都没有（0 件）：这版 BOM 只按几何零件配，清单要重导。',
+      unknown: '后端没给业务部件清单这一块（老载荷）：说不清这版 BOM 照哪一版业务部件算的。'
+    };
+    const fallback = '业务部件清单读不到：这版 BOM 只按几何零件配，别把这次当成「没有业务部件」。';
+    return {
+      state: state,
+      id: id, hash: hash, total: total, bound: bound, unbound: unbound,
+      gapCode: gapCode, gapMessage: gapMessage,
+      headline: state === 'unavailable' ? (gapMessage || fallback)
+        : (headlines[state] || headlines.unknown)
+    };
+  }
+  function pbBusinessPartsScopeBlock(record) {
+    const facts = pbBusinessPartsScope(record);
+    // 四态都渲染：每一态都有一句各不相同的事实（没有别的块替它说）。
+    return `<div class="pb-hint" data-pb-business-parts-state="${pbEsc(facts.state)}"`
+      + ` data-pb-business-parts-id="${pbEsc(facts.id)}"`
+      + ` data-pb-business-parts-total="${pbEsc(facts.total)}"`
+      + ` data-pb-business-parts-gap="${pbEsc(facts.gapCode)}">`
+      + `${pbEsc(facts.headline)}</div>`;
+  }
   // 配对复核 / 零件回填失败 / 业务清单换版三本账的人话与逐行清单
   // （Spec `packaging-bom-disclosure-panel.md` §C1）：只消费后端结论，前端不重判一次。
   function pbPairingMismatchRows(record) {
@@ -674,6 +725,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${unresolved}
       ${mapBlock}
       ${pbMaterialMapAccountBlock(record.business_material_rows)}
+      ${pbBusinessPartsScopeBlock(record)}
       ${pairingBlock}
       ${bindingBlock}
       ${businessStaleBlock}
