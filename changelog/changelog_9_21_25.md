@@ -11777,3 +11777,49 @@ docs/specs/*.md                                  232 份（含 ## 301 新增的�
 
 只改 `docs/specs/*.md` 的头部（状态行 / `红测：` 行 / 行内陈旧状态短语）、一份 Spec 与一条守卫、
 追加本 changelog；未改任何业务实现、未改任何既有红测的期望值、未连 PG、未写生产数据、未部署。
+
+## 303. 文档点名的路径与根目录对账：793 处路径里 1 处是真错，另加 `DEPLOYMENT.md` 第 6b 步的"数错根"（9-22，Codex 只改文档 / 红测 / changelog）
+
+`## 301`/`## 302` 收的是 **Spec 状态行**；本批收**路径与根目录**——照文档敲命令的人会直接失败，
+或者更坏：敲个语法正确但指错根的命令，拿到"恒等于 `0 → 0`"的结论还以为验过了（`## 300` 那类）。
+
+### 实测（不是推断）
+
+扫 `docs/specs/*.md` + `DEPLOYMENT.md` + `README.md` + `AGENTS.md` 反引号点名的一类路径
+（`tests/*.py` / `scripts/*.sh|py` / `tech_app/tools/*.py` / `docs/specs/*.md`）：
+
+```
+点名处（含重复）      793
+去重后路径            335
+不存在的                3
+  ├─ 已被「取代」的历史名   2（chat 系列，Spec 正文逐字写着"取代：…"，属实，不动）
+  └─ 真错                  1（…_by_state_and_nonblocking_…；真实文件是 …_and_nonblocking_…）
+```
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `docs/specs/dwg-semantics-agent-flow.md` | 测试名 `…_by_state_and_nonblocking_…` → 真实文件 `test_tech_global_single_primary_and_nonblocking_notices_red.py` |
+| `DEPLOYMENT.md` §第 6b 步 | 从"核对 `tech_app/data/*/meta.json`"改成"核对**两个根**"：运行目录 `tech_app/tech_data`（启动器 `DATA_DIR` 缺省根，34 上 60 个项目）与历史目录 `tech_app/data`（0 个项目），并写明"只盯后者等于没证明什么"；样本项目 id 命令的根改成 `tech_app/tech_data` |
+| `docs/specs/packaging-parts-3d-extrusion.md` §9 | 落库根 `tech_app/data/<pid>/` → `tech_app/tech_data/<pid>/` |
+
+**有意未动**：`docs/specs/packaging-parts-downstream-acceptance.md` §6.1 那句错的字面路径与 §12 引用它的
+更正段 —— §12 已明确"§6.1 原文不动，新段说明字面路径错在哪"，改它会毁掉那条更正记录。
+
+### 新增
+
+- Spec `docs/specs/doc-path-and-root-consistency.md`（契约 A 路径存在 / B 两个根 / C 脚本解析链）；
+- 守卫 `tests/test_doc_path_and_root_consistency_red.py`（10 条）：A 组扫 793 处路径（白名单只许
+  "取代"历史名且白名单条目一旦真实存在就报警）、B 组守 `DEPLOYMENT.md` 两个根口径（并禁止
+  `tech_app/data/*` 这种只数历史目录的 glob 回潮）、C 组守脚本 `DATA_DIR → CPQ_DATA_DIR →
+  <repo>/tech_app/tech_data` 解析链 + `bash -n`。
+- 先跑红：把三份文档退回改前字面量，同一守卫 `Ran 10, failures=4`（A1 缺的那个测试名、B1/B2/B3 的
+  单根口径）；改回后 `Ran 10 OK`。同批保护网 `tests.test_spec_status_truth_red` +
+  `test_spec_status_consistency_red` + `test_deploy_isolation_root_red` `Ran 19 OK`、
+  `test_packaging_parts_3d_red` 等 `Ran 48 OK`。
+
+### 边界
+
+只改 3 份文档 + 新增 1 份 Spec、1 条守卫、追加本 changelog；未改任何业务实现、未改任何既有红测的
+期望值、未改 `scripts/deploy_34_bare.sh`、未连 PG、未写生产数据、未部署。

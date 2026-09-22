@@ -131,7 +131,7 @@ PACKAGING_PART_SOLID_STL_PATH  = "/api/projects/{pid}/requirement/packaging-part
 ## 9. 实现期回写（2026-09-21）
 
 1. **E1 的固定项目 id（已改成每次新项目，断言未改）**：原文用 `"proj-solid"` 这个写死的项目名
-   存两次，并断言"首次落库版本号必须是 1"。落库后端是**持久化**的（`tech_app/data/<pid>/`），
+   存两次，并断言"首次落库版本号必须是 1"。落库后端是**持久化**的（`tech_app/tech_data/<pid>/`，即启动器的 `DATA_DIR` 缺省根），
    所以这条只有在"这台机器从没跑过这个测试"时才成立 —— 第二次跑必然 `5 != 1`。
    实现期改为每次跑用 `proj-solid-<uuid4>`，期望值与断言一字未动。
 2. **轮廓点归一**：`extract()` 给的环可能带连续重复点或"首尾同点"的收尾重复；`extrude()` 先做

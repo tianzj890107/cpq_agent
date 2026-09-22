@@ -625,7 +625,7 @@ migrate({"flow_version": "packaging-drawing-flow/99"}) # → raise ValueError（
   否则"合法的销售→工艺→财务流转"会被 404 挡住（红测 `G27`）。
 - 普通权限说明（如"你的角色只能查看该项目"）用系统蓝色主色提示，**不得**用橙色告警替代 ——
   该视觉口径由既有 `docs/specs/global-brand-color-0060e6.md` 与
-  `tests/test_global_brand_color_red.py` / `tests/test_tech_global_single_primary_by_state_and_nonblocking_notices_red.py`
+  `tests/test_global_brand_color_red.py` / `tests/test_tech_global_single_primary_and_nonblocking_notices_red.py`
   负责，本批**不新增**颜色/样式契约（红测 `H19`/`H20`/`H21`/`H22` 只守"没有第二套"）。
 
 ## 9. 契约 H：错误码（并入第 1 批权威闭集，20 → 22 条）
