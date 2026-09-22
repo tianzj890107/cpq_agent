@@ -103,3 +103,48 @@
   gap: 8px;
   margin-bottom: 10px;
 }
+
+/* BOM 业务角色的人工映射（Spec packaging-part-role-manual-mapping.md §4.5）：
+   「角色未映射 n 行」必须看得见，每一行都能就地选候选角色并提交。 */
+.packaging-role-map {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line, #e5e7eb);
+}
+
+.role-map-summary {
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 6px;
+}
+
+.role-map-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.role-map-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.role-map-row .role-map-key {
+  font-family: monospace;
+}
+
+.role-map-row .role-map-part {
+  color: var(--text-muted, #6b7280);
+}
+
+.role-map-row select {
+  max-width: 140px;
+}
+
+.role-map-empty,
+.role-map-note {
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+}

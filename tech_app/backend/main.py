@@ -127,6 +127,19 @@ class PackagingBomLockAction(BaseModel):
     locked: bool = True
 
 
+class PackagingBomRoleMapAction(BaseModel):
+    """人工映射一个 BOM 行的业务角色（Spec `packaging-part-role-manual-mapping.md` §4.2）。
+
+    角色**只能由人给**：服务端不接受空 / `unknown` / `unbound`，也不会自己猜一个填上。
+    """
+
+    requirement_no: str = ""
+    item_key: str = ""
+    part_code: str = ""
+    role: str = ""
+    note: str = ""
+
+
 class PackagingRouteBuildAction(BaseModel):
     """包装工艺路线生成/重算入参：需求单号留空时按项目当前需求单取。"""
     requirement_no: str = ""
@@ -6814,6 +6827,72 @@ def lock_requirement_packaging_bom_item(
     record = _packaging_bom_flow(packaging_bom.lock_bom_item, project_id, body.requirement_no,
                                  body.item_key, actor=user, locked=body.locked)
     return {"bom": record}
+
+
+# 人工映射两条（Spec `packaging-part-role-manual-mapping.md` §4.1/§4.2）：读路由的路径参数
+# 写 `{pid}`（与 BOM 读路由同一口径，不顶掉"只有一个路径参数的读路由"基线），写路由写
+# `{project_id}`（与展开/锁定同一口径）。路径在源码里逐字出现 —— 常量与路由放在一起，
+# 免得"路由存在"与"权限门禁"被一千行代码隔开。
+PACKAGING_BOM_ROLE_MAP_READ_PATH = "/api/projects/{pid}/requirement/packaging-bom/role-map"
+PACKAGING_BOM_ROLE_MAP_WRITE_PATH = "/api/projects/{project_id}/requirement/packaging-bom/role-map"
+
+
+@app.get(PACKAGING_BOM_ROLE_MAP_READ_PATH)
+def get_requirement_packaging_bom_role_map(pid: str, requirement_no: str = "",
+                                           user: dict = Depends(current_user)):
+    """读「还没映射业务角色的行」清单 + 候选角色（Spec §4.1）；纯读，不判写权限。
+
+    候选角色只来自**确认盒型的部件模板**（`role_candidates_for`），不会用模型或
+    `item_name` 拆词顶替 —— 那正是 §4.4 关掉的那条错路。
+    """
+    _workflow_project(pid)
+    req_no = packaging_bom._resolve_requirement_no(pid, requirement_no)
+    items = [row for row in packaging_bom.load_bom(pid, req_no).get("items") or []]
+    scope = packaging_bom.role_candidates_for(pid, req_no)
+    return {"role_map": packaging_bom.role_map_status(
+        items, box_type_code=scope.get("box_type_code") or "",
+        part_templates=scope.get("part_templates") or [],
+        role_map=packaging_bom.role_map_doc(pid))}
+
+
+@app.post(PACKAGING_BOM_ROLE_MAP_WRITE_PATH)
+def map_requirement_packaging_bom_role(
+    project_id: str, body: PackagingBomRoleMapAction, user: dict = Depends(current_user)
+):
+    """把一个 BOM 行的业务角色**人工**映射掉（Spec §4.2）：写角色 + 留痕 + 审计。
+
+    只改角色与留痕（尺寸/材料/状态/锁定一个字不动）；同角色重复提交 200 且 `changed=false`；
+    换角色保留旧角色与旧时间。落盘的是 BOM 行本身，文档通道留一份"谁在什么时候映射的"。
+    """
+    _require(user, packaging_bom.BOM_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(project_id)
+    req_no = packaging_bom._resolve_requirement_no(project_id, body.requirement_no)
+    bom = packaging_bom.load_bom(project_id, req_no)
+    scope = packaging_bom.role_candidates_for(project_id, req_no)
+    try:
+        result = packaging_bom.apply_role_mapping(
+            bom.get("items") or [], item_key=body.item_key, part_code=body.part_code,
+            role=body.role, candidates=scope.get("role_candidates") or [], actor=user,
+            note=body.note,
+            history=(packaging_bom.load_role_map(project_id, req_no)
+                     .get(body.item_key, {}) or {}).get("history"))
+    except packaging_bom.BomError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    if result["changed"]:
+        mapped = next((row for row in result["items"]
+                       if isinstance(row, dict)
+                       and str(row.get("item_key") or "") == str(body.item_key or "")), None)
+        if mapped is not None:
+            packaging_bom.save_role_mapping(project_id, req_no, mapped)
+        store.audit(project_id, result["audit"]["action"], {
+            key: value for key, value in result["audit"].items() if key != "action"})
+    return {"role_map": packaging_bom.role_map_status(
+                result["items"], box_type_code=scope.get("box_type_code") or "",
+                part_templates=scope.get("part_templates") or [],
+                role_map=packaging_bom.role_map_doc(project_id)),
+            "changed": bool(result["changed"]),
+            "record": result["record"],
+            "bom": packaging_bom.load_bom(project_id, req_no)}
 
 
 # --------------------------------------------------------------------------- #

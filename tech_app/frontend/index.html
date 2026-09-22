@@ -203,6 +203,12 @@
                 <div id="packagingPartActions" class="packaging-part-actions"></div>
                 <div class="part-details-title">实体证据</div>
                 <div id="packagingPartEvidence" class="packaging-part-evidence"></div>
+                <!-- BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
+                     图纸没写零件是哪个部件时，这一栏会点名"角色未映射 n 行"，逐行选候选角色提交。 -->
+                <div class="part-details-title">BOM 业务角色</div>
+                <div id="packagingRoleMap" class="packaging-role-map">
+                  <div class="role-map-summary">还没读取未映射清单。</div>
+                </div>
               </div>
               <div class="part-details"><div class="part-details-title">零件信息</div><div id="partDetail" class="part-detail"><div class="view-3d-placeholder">从「零件清单」中选择一项，查看模型、识别依据和生成结果。</div></div></div>
               <!-- 可收起的分区一律默认展开：收起状态会让「已经算出来的结果」看起来没算。 -->

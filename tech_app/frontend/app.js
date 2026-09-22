@@ -1553,7 +1553,88 @@ async function fetchPackagingParts() {
 async function refreshPackagingParts() {
   currentPackagingParts = await fetchPackagingParts();
   renderTree(currentIR || {});
+  // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
+  // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
+  await loadPackagingRoleMap().catch(() => null);
   return currentPackagingParts;
+}
+
+/* ---------------- 2.1 BOM 业务角色的人工映射（Spec packaging-part-role-manual-mapping.md §4.5） ----------------
+   `role=unknown` 的图纸零件**不许**自动贴业务角色名（连续性 Spec §4.4），所以必须有人在页面上
+   把"这一行是哪个部件"指定掉。这一栏只做两件事：把「角色未映射 n 行」显示出来，并给每一行一个
+   候选角色下拉 + 提交。候选角色**只来自后端**（确认盒型的部件模板），前端不自己拼一份清单。 */
+function packagingRoleMapUrl() {
+  return `/api/projects/${currentProject}/requirement/packaging-bom/role-map`;
+}
+
+async function loadPackagingRoleMap() {
+  if (!currentProject) return null;
+  try {
+    const res = await fetch(API + packagingRoleMapUrl());
+    if (!res.ok) return null;
+    const payload = await res.json().catch(() => ({}));
+    return renderPackagingRoleMap((payload && payload.role_map) || {});
+  } catch (error) { return null; }
+}
+
+function renderPackagingRoleMap(roleMap) {
+  const host = $("packagingRoleMap");
+  if (!host) return roleMap || null;
+  const rows = Array.isArray(roleMap && roleMap.items) ? roleMap.items : [];
+  const total = Number((roleMap && roleMap.unbound_total) || rows.length || 0);
+  const summary = `<div class="role-map-summary">角色未映射 ${total} 行</div>`;
+  if (!total) {
+    host.innerHTML = summary + '<div class="role-map-empty">每一行都有业务角色了。</div>';
+    return roleMap;
+  }
+  const fallback = Array.isArray(roleMap.role_candidates) ? roleMap.role_candidates : [];
+  const body = rows.map(row => {
+    const options = (Array.isArray(row.role_candidates) && row.role_candidates.length
+      ? row.role_candidates : fallback);
+    const optionHtml = options
+      .map(name => `<option value="${esc(String(name))}">${esc(String(name))}</option>`).join("");
+    const picker = optionHtml
+      ? `<select class="role-map-role" data-role-map-role="${esc(String(row.item_key))}">${optionHtml}</select>`
+      : '<span class="role-map-note">没有候选角色（确认盒型的部件模板为空）</span>';
+    return '<div class="role-map-row" data-role-map-row="' + esc(String(row.item_key)) + '"'
+      + ` data-part-code="${esc(String(row.part_code || ""))}">`
+      + `<span class="role-map-key">${esc(String(row.item_key))}</span>`
+      + `<span class="role-map-part">${esc(String(row.part_code || ""))}</span>`
+      + picker
+      + `<button class="btn-small" data-role-map-submit="${esc(String(row.item_key))}"`
+      + ` data-part-code="${esc(String(row.part_code || ""))}"`
+      + (optionHtml ? "" : " disabled") + ">提交</button></div>";
+  }).join("");
+  host.innerHTML = summary + `<div class="role-map-rows">${body}</div>`;
+  host.querySelectorAll("[data-role-map-submit]").forEach(button => {
+    button.addEventListener("click", () => { submitPackagingRoleMap(button); });
+  });
+  return roleMap;
+}
+
+async function submitPackagingRoleMap(button) {
+  const itemKey = String((button && button.dataset && button.dataset.roleMapSubmit) || "");
+  const partCode = String((button && button.dataset && button.dataset.partCode) || "");
+  const row = button && button.closest ? button.closest("[data-role-map-row]") : null;
+  const picker = row ? row.querySelector("[data-role-map-role]") : null;
+  const role = picker ? String(picker.value || "") : "";
+  if (!itemKey || !role) return null;
+  const res = await fetch(API + packagingRoleMapUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_key: itemKey, part_code: partCode, role }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = (payload && (payload.detail || payload.error)) || "";
+    status(typeof detail === "string" && detail ? detail : `映射提交失败（HTTP ${res.status}）`);
+    return null;
+  }
+  status(payload.changed === false
+    ? `这一行的角色本来就是「${role}」，没有变化。`
+    : `已把 ${itemKey} 的业务角色映射成「${role}」。`);
+  renderPackagingRoleMap((payload && payload.role_map) || {});
+  return payload;
 }
 
 // drawing-flow 走到终态后必须**重新拉一次**零件文档（Spec

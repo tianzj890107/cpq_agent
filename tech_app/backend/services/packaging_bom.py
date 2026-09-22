@@ -15,6 +15,7 @@ Spec：docs/specs/packaging-parametric-bom.md §2.4 / §2.5 / §3 / §4
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from typing import Any, Optional
@@ -564,6 +565,319 @@ def binding_record(part: Any, row: Any = None, *, bound_by: str = "",
             "bound_by": _text(bound_by) or "system"}
 
 
+# --------------------------------------------------------------------------- #
+# 业务角色的人工映射（Spec `packaging-part-role-manual-mapping.md` §3）
+#
+# §4.4 关掉了"零件 role=unknown 时自动贴业务角色名"这条错路，但没有给对的路：未映射清单
+# 读不回来、人工映射没有任何生产入口 —— 于是"必须先完成人工映射"永远做不完。这一节只补
+# **看得见**与**做得动**两件事，绝不猜角色：候选只来自确认盒型的部件模板，写入只改角色与留痕。
+# --------------------------------------------------------------------------- #
+#: 映射走 meta 文档通道（与 `PAIRING_DOC_KEY` 同范式）：`by_requirement[需求单][行键] = 记录`。
+ROLE_MAP_DOC_KEY = "packaging_bom_role_map"
+ROLE_MAP_ENGINE_VERSION = "packaging_bom_role_map_v1"
+ROLE_MAP_ACTION = "workflow:packaging_bom_role_mapped"
+#: 这三个取值都算"还没映射"（Spec §2.1）。
+ROLE_UNBOUND_VALUES = ("", UNKNOWN_ROLE, UNBOUND_ROLE)
+
+
+def _role_binding(row: Any) -> dict:
+    """行上的 `dwg_binding`（没有就给空壳；不改入参）。"""
+    if not isinstance(row, dict):
+        return {}
+    source = _loads(row.get("size_source_json"), {})
+    binding = source.get("dwg_binding") if isinstance(source, dict) else None
+    return dict(binding) if isinstance(binding, dict) else {}
+
+
+def _row_role(row: Any) -> str:
+    """行当前的业务角色：`dwg_binding.role_value` 优先，其次行上的 `part_role`。"""
+    if not isinstance(row, dict):
+        return ""
+    return _text(_role_binding(row).get("role_value")) or _text(row.get("part_role"))
+
+
+def _row_part_code(row: Any) -> str:
+    """行绑到的**图纸零件**号（不是 BOM 行自己的 `part_code`）。"""
+    if not isinstance(row, dict):
+        return ""
+    return _text(_role_binding(row).get("part_code")) or _text(row.get("part_code"))
+
+
+def role_candidates(part_templates: Any) -> list:
+    """候选角色 = 确认盒型部件模板里的 `component`，按模板顺序去重、丢空值（Spec §2.2）。
+
+    只认模板这一路来源：模型、自由文本、`item_name` 拆词一律**不许**当候选。
+    """
+    out: list = []
+    for row in (part_templates or []):
+        if not isinstance(row, dict):
+            continue
+        text = _text(row.get("component"))
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def role_map_status(items: Any, *, box_type_code: str = "", part_templates: Any = None,
+                    role_map: Any = None) -> dict:
+    """**未映射清单**（Spec §2.1/§3）：只有绑到零件的部件行才进，材料/工序行不进。
+
+    `mapped_total` 是"已经映射过的部件行"计数 —— 它在清单之外，用来回答"还剩几行"。
+    """
+    candidates = role_candidates(part_templates)
+    saved = role_map if isinstance(role_map, dict) else {}
+    saved_rows = saved.get("by_requirement") if isinstance(saved.get("by_requirement"), dict) else {}
+    if isinstance(saved.get("items"), dict):                # 也接受"已过滤到本需求单"的形状
+        saved_rows = saved["items"]
+    unbound: list = []
+    mapped_total = 0
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+        if _text(row.get("bom_category")) not in PART_CATEGORIES:
+            continue
+        binding = _role_binding(row)
+        part_code = _text(binding.get("part_code")) or _text(row.get("part_code"))
+        current = _text(binding.get("role_value")) or _text(row.get("part_role"))
+        if current and current not in ROLE_UNBOUND_VALUES:
+            mapped_total += 1
+            continue
+        if not part_code and not binding:
+            continue                                        # 没绑到零件：不是"未映射"，是"没零件"
+        record = saved_rows.get(_text(row.get("item_key"))) or {}
+        record = record if isinstance(record, dict) else {}
+        unbound.append({
+            "item_key": _text(row.get("item_key")),
+            "item_name": _text(row.get("item_name")),
+            "bom_category": _text(row.get("bom_category")),
+            "part_code": part_code,
+            "part_role": current or UNBOUND_ROLE,
+            "reason": "role_unknown:%s" % (part_code or "?"),
+            "role_candidates": list(candidates),
+            "size_source": _text(binding.get("size_source") or row.get("size_source")),
+            "outline_status": _text(binding.get("outline_status") or row.get("outline_status")),
+            "mapped": False,
+            "mapped_by": _text(record.get("mapped_by")),
+            "mapped_at": _text(record.get("mapped_at")),
+            "note": _text(record.get("note")),
+        })
+    return {
+        "engine_version": ROLE_MAP_ENGINE_VERSION,
+        "candidates_source": "confirmed_box_type",
+        "box_type_code": _text(box_type_code),
+        "role_candidates": list(candidates),
+        "unbound_total": len(unbound),
+        "mapped_total": mapped_total,
+        "items": unbound,
+    }
+
+
+def apply_role_mapping(items: Any, *, item_key: str, part_code: str, role: str,
+                       candidates: Any = None, actor: Any = None, note: str = "",
+                       mapped_at: str = "", history: Any = None) -> dict:
+    """把**人工**指定的业务角色写到一行上；纯函数，不改入参（Spec §2.3–§2.6/§3）。
+
+    只改角色与留痕（`part_role` + `size_source_json.dwg_binding.*`）：尺寸、材料、状态、
+    锁定一个字都不动。同角色重复提交 = 无变化（`changed=false`，`mapped_at` 不变）；
+    换角色必须保留旧角色与旧时间（`superseded_role` / `superseded_at` / `superseded_by`）。
+    """
+    wanted = _text(role)
+    if not wanted or wanted in ROLE_UNBOUND_VALUES:
+        raise BomError("业务角色不能为空，也不能是 unknown / unbound（Spec §3 失败口径表）",
+                       400, "role_required")
+    key = _text(item_key)
+    rows = [copy.deepcopy(row) if isinstance(row, dict) else row for row in (items or [])]
+    target = next((row for row in rows
+                   if isinstance(row, dict) and _text(row.get("item_key")) == key), None)
+    if target is None:
+        raise BomError("BOM 行不存在：%s（Spec §3 失败口径表）" % key, 404, "item_not_found")
+
+    binding = _role_binding(target)
+    bound_code = _text(binding.get("part_code")) or _text(target.get("part_code"))
+    given_code = _text(part_code)
+    if given_code and bound_code and given_code != bound_code:
+        raise BomError("这一行绑的是零件 %s，不是 %s（Spec §3 失败口径表）"
+                       % (bound_code, given_code), 409, "part_mismatch")
+    options = [_text(name) for name in (candidates or []) if _text(name)]
+    if options and wanted not in options:
+        raise BomError("角色 %s 不在确认盒型的部件模板里（Spec §3 失败口径表）" % wanted,
+                       400, "role_not_in_candidates")
+
+    previous_raw = _text(binding.get("role_value")) or _text(target.get("part_role"))
+    previous = previous_raw or UNBOUND_ROLE
+    previous_at = _text(binding.get("mapped_at"))
+    previous_by = _text(binding.get("bound_by"))
+    by = _actor_name(actor) or "system"
+    resolved_part = bound_code or given_code
+    record = {
+        "item_key": key, "part_code": resolved_part, "role": wanted,
+        "previous_role": previous, "superseded_role": "", "mapped_by": by,
+        "mapped_at": previous_at, "note": _text(binding.get("note")),
+        "binding_method": "manual_mapping",
+    }
+    audit = {
+        "action": ROLE_MAP_ACTION, "item_key": key, "part_code": resolved_part,
+        "role": wanted, "previous_role": previous, "by": by, "superseded": False,
+    }
+    if previous_raw not in ROLE_UNBOUND_VALUES and previous_raw == wanted:
+        # 幂等（Spec §2.5）：同角色重复提交不改任何东西，包括 `mapped_at`，也不重复写审计。
+        return {"items": rows, "changed": False, "record": record,
+                "audit": {**audit, "superseded": False, "changed": False}}
+
+    stamp = _text(mapped_at) or da_db.now()
+    superseded = "" if previous_raw in ROLE_UNBOUND_VALUES else previous_raw
+    evidence = dict(binding.get("binding_evidence") or {})
+    evidence.update({"rule_id": ROLE_MAP_ENGINE_VERSION, "mapped_at": stamp,
+                     "role_candidates": options, "note": _text(note)})
+    if superseded:
+        evidence.update({"superseded_role": superseded, "superseded_at": previous_at,
+                         "superseded_by": previous_by})
+    updated = dict(binding)
+    updated.update({"role_value": wanted, "part_role": wanted,
+                    "binding_method": "manual_mapping", "bound_by": by,
+                    "mapped_at": stamp, "note": _text(note),
+                    "binding_evidence": evidence})
+    source = _loads(target.get("size_source_json"), {})
+    source = dict(source) if isinstance(source, dict) else {}
+    source["dwg_binding"] = updated
+    target["size_source_json"] = (_json_text(source)
+                                  if isinstance(target.get("size_source_json"), str)
+                                  else source)
+    target["part_role"] = wanted
+    record.update({"previous_role": previous, "superseded_role": superseded,
+                   "mapped_by": by, "mapped_at": stamp, "note": _text(note)})
+    audit["superseded"] = bool(superseded)
+    if history is not None:
+        record["history"] = list(history) + ([{"role": superseded, "mapped_at": previous_at,
+                                               "mapped_by": previous_by}] if superseded else [])
+    return {"items": rows, "changed": True, "record": record, "audit": audit}
+
+
+def _role_doc(project_id: str) -> dict:
+    """读映射文档（`{"by_requirement": {需求单: {行键: 记录}}}`）；读不到给空壳。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, ROLE_MAP_DOC_KEY) or {}
+    except Exception:                                   # noqa: BLE001 - 读不出来按"没有"
+        return {"by_requirement": {}}
+    rows = doc.get("by_requirement") if isinstance(doc, dict) else None
+    return {"by_requirement": rows if isinstance(rows, dict) else {}}
+
+
+def role_map_doc(project_id: str) -> dict:
+    """公开的读入口：映射文档（Spec §3）。读不到给 `{"by_requirement": {}}`。"""
+    return _role_doc(project_id)
+
+
+def load_role_map(project_id: str, requirement_no: str = "") -> dict:
+    """某个需求单的 `{行键: 记录}`（没有时 `{}`）。"""
+    rows = _role_doc(project_id)["by_requirement"].get(_text(requirement_no) or "")
+    return dict(rows) if isinstance(rows, dict) else {}
+
+
+def save_role_mapping(project_id: str, requirement_no: str, row: dict) -> None:
+    """把一条人工映射落盘（Spec §3）：**BOM 行本身** + 文档通道留痕。
+
+    `row` 是 `apply_role_mapping()` 返回的 `items` 里那一行（不是 `record` 摘要）——
+    事实源是 BOM 行的 `size_source_json.dwg_binding`；文档那一份只回答"谁在什么时候映射的"，
+    并在重算 BOM 之后供 `apply_saved_role_map()` 重放。
+    """
+    if not isinstance(row, dict) or not _text(row.get("item_key")):
+        return
+    req_no = _text(requirement_no)
+    key = _text(row.get("item_key"))
+    binding = _role_binding(row)
+    if binding:
+        source = _loads(row.get("size_source_json"), {})
+        try:
+            da_db.execute(
+                "UPDATE wip_packaging_bom_item SET size_source_json = ?, updated_at = ? "
+                "WHERE project_id = ? AND requirement_no = ? AND bom_category = ? "
+                "AND item_key = ?",
+                [_json_text(source if isinstance(source, dict) else {}), da_db.now(),
+                 project_id, req_no, _text(row.get("bom_category")), key])
+        except Exception:                               # noqa: BLE001 - 落盘失败如实抛给调用方
+            raise
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = _role_doc(project_id)
+        bucket = doc["by_requirement"].setdefault(req_no, {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            doc["by_requirement"][req_no] = bucket
+        history = list(binding.get("binding_evidence", {}).get("history") or [])
+        prior = bucket.get(key)
+        if isinstance(prior, dict) and isinstance(prior.get("history"), list) and not history:
+            history = list(prior["history"])
+        previous = _text(binding.get("binding_evidence", {}).get("superseded_role"))
+        if previous:
+            history = history + [{"role": previous,
+                                  "mapped_at": _text(binding.get("binding_evidence", {})
+                                                     .get("superseded_at")),
+                                  "mapped_by": _text(binding.get("binding_evidence", {})
+                                                     .get("superseded_by"))}]
+        bucket[key] = {
+            "item_key": key,
+            "part_code": _text(binding.get("part_code")),
+            "role": _text(binding.get("role_value")),
+            "previous_role": previous or UNBOUND_ROLE,
+            "superseded_role": previous,
+            "mapped_by": _text(binding.get("bound_by")),
+            "mapped_at": _text(binding.get("mapped_at")),
+            "note": _text(binding.get("note")),
+            "binding_method": _text(binding.get("binding_method")),
+            "history": history,
+        }
+        get_backend().put_doc(project_id, ROLE_MAP_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001 - 留痕失败不改 BOM 结论
+        return
+
+
+def role_candidates_for(project_id: str, requirement_no: str = "") -> dict:
+    """当前**确认盒型**的部件模板与候选角色（读 KB；读不到给空清单，不抛）。"""
+    req_no = _resolve_requirement_no(project_id, requirement_no)
+    record = da_repo.load_box_match(project_id, req_no) or {}
+    box_code = _text(record.get("confirmed_box_type"))
+    templates: list = []
+    if box_code:
+        try:
+            templates = list(kb_repo.packaging_part_templates(box_code) or [])
+        except Exception:                               # noqa: BLE001 - 读不到知识库不挡人工映射
+            templates = []
+    return {"box_type_code": box_code, "requirement_no": req_no,
+            "part_templates": templates,
+            "role_candidates": role_candidates(templates)}
+
+
+def apply_saved_role_map(project_id: str, requirement_no: str, items: list) -> list:
+    """重算 BOM 之后**重放**已保存的人工映射（Spec §2.8）；没有映射时原样返回。
+
+    只重放"零件对得上"的那些：重算之后配对换了零件时，旧映射不套到新零件上。
+    """
+    saved = load_role_map(project_id, requirement_no)
+    if not saved:
+        return items
+    rows = [copy.deepcopy(row) if isinstance(row, dict) else row for row in (items or [])]
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        record = saved.get(_text(row.get("item_key")))
+        if not isinstance(record, dict):
+            continue
+        role = _text(record.get("role"))
+        if not role or role in ROLE_UNBOUND_VALUES:
+            continue
+        try:
+            replayed = apply_role_mapping(
+                [row], item_key=row.get("item_key"), part_code=_row_part_code(row),
+                role=role, actor=record.get("mapped_by"), note=_text(record.get("note")),
+                mapped_at=_text(record.get("mapped_at")), history=record.get("history"))
+        except BomError:
+            continue
+        rows[index] = replayed["items"][0]
+    return rows
+
+
 def _item_out(row: dict) -> dict:
     out = dict(row)
     missing = _loads(row.get("missing_variables"), [])
@@ -646,6 +960,13 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         # 「在报告里单列不一致项」（Spec `packaging-parse-to-downstream-seams.md` §3.2）：
         # 键**必须存在**，没有不一致时给 `[]`；只在 build 时算得出，所以按需求单存一份文档。
         "pairing_review": _load_pairing_review(project_id, req_no),
+        # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
+        # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
+        # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
+        # 永远一致），没有未映射行时给 `[]` / `0`，绝不省略键。
+        "role_unbound": _role_scope(project_id, req_no, items, box_type_code)["items"],
+        "role_unbound_total": _role_scope(project_id, req_no, items,
+                                          box_type_code)["unbound_total"],
         "gaps": {
             "needs_input": needs_input,
             "missing_variables": missing_variables,
@@ -653,6 +974,38 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         },
         "stats": _stats(items),
     }
+
+
+def _role_scope(project_id: str, requirement_no: str, items: list,
+                box_type_code: str = "") -> dict:
+    """未映射清单的**现算**入口（读接口与落库共用一处口径，不另存一份会过期的账）。
+
+    候选角色取当前确认盒型的部件模板；知识库读不到时清单照出（候选为空），
+    绝不因为"读不到候选"就不报"这一行还没映射"。
+    """
+    templates: list = []
+    try:
+        templates = list(role_candidates_for(project_id, requirement_no).get("part_templates") or [])
+    except Exception:                                   # noqa: BLE001 - 读不到 KB 不挡披露
+        templates = []
+    return role_map_status(items, box_type_code=box_type_code, part_templates=templates,
+                           role_map=role_map_doc(project_id))
+
+
+def _save_role_unbound(project_id: str, requirement_no: str, rows: list) -> None:
+    """把 `bind_rows()` 算出来的未映射清单留一份档（披露是加法，写盘失败不改结论）。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = _role_doc(project_id)
+        bucket = doc.setdefault("unbound", {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            doc["unbound"] = bucket
+        bucket[_text(requirement_no) or ""] = [dict(row) for row in (rows or [])
+                                              if isinstance(row, dict)]
+        get_backend().put_doc(project_id, ROLE_MAP_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001
+        return
 
 
 def _pairing_doc(project_id: str) -> dict:
@@ -683,13 +1036,14 @@ def _save_pairing_review(project_id: str, requirement_no: str, review: list) -> 
         return
 
 
-def _bind_parts(project_id: str, items: list) -> tuple:
+def _bind_parts(project_id: str, items: list, requirement_no: str = "") -> tuple:
     """有零件文档就自动回填（Spec `packaging-dwg-parts-extraction.md` C7）。
 
-    返回 `(items, pairing_review)` —— 后者是"配对后材料明显不同类"的清单，由
-    `build_bom()` 落一份文档，`load_bom()` 读回来（Spec
-    `packaging-parse-to-downstream-seams.md` §3.2）；`bind_rows()` 早就算出来了，
-    以前在 `_bind_parts()` 这里被丢掉，于是没有任何读接口能看到。
+    返回 `(items, pairing_review, role_unbound)` —— 中间那个是"配对后材料明显不同类"的
+    清单，由 `build_bom()` 落一份文档，`load_bom()` 读回来（Spec
+    `packaging-parse-to-downstream-seams.md` §3.2）；第三个是"零件没说自己是哪个部件、
+    业务角色还没映射"的清单（Spec `packaging-part-role-manual-mapping.md` §2.1/§4.3）——
+    两个都是 `bind_rows()` 早就算出来、以前在 `_bind_parts()` 这里被丢掉的。
 
     没有零件文档 / 读不到 → 逐字保持今天的口径（`needs_input` 一个不少），
     绝不用需求尺寸反推、也绝不编数。延迟导入是为了不让 bom ↔ parts 互相 import。
@@ -699,13 +1053,15 @@ def _bind_parts(project_id: str, items: list) -> tuple:
 
         doc = packaging_parts.load_parts(project_id)
         if not isinstance(doc, dict) or not doc.get("parts"):
-            return items, []
+            return items, [], []
         result = packaging_parts.bind_rows(items, doc)
         return (list(result.get("items") or items),
                 [dict(row) for row in (result.get("pairing_review") or [])
+                 if isinstance(row, dict)],
+                [dict(row) for row in (result.get("role_unbound") or [])
                  if isinstance(row, dict)])
     except Exception:                                   # noqa: BLE001 - 回填失败不改既有结论
-        return items, []
+        return items, [], []
 
 
 def build_bom(project_id: str, requirement_no: str = "", *,
@@ -726,9 +1082,13 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     expanded = expand_parts(box_code, data, overrides=overrides or {})
     box = _load_box_type(box_code)
     items = _assemble(expanded, box, data, req_no)
-    items, pairing_review = _bind_parts(project_id, items)
+    items, pairing_review, role_unbound = _bind_parts(project_id, items, req_no)
+    # 重算不许把人工映射算没了（Spec `packaging-part-role-manual-mapping.md` §2.8）：
+    # `_bind_parts()` 只认尺寸证据、不会碰角色，映射必须在这之后**重放**回来。
+    items = apply_saved_role_map(project_id, req_no, items)
     da_repo.save_packaging_bom(project_id, req_no, items)
     _save_pairing_review(project_id, req_no, pairing_review)
+    _save_role_unbound(project_id, req_no, role_unbound)
     return load_bom(project_id, req_no)
 
 

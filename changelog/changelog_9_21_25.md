@@ -10600,3 +10600,57 @@ bash -n scripts/deploy_34_bare.sh                                               
 
 未改 `packaging-parts-downstream-acceptance.md` §3 的样本门槛、未删权威实样路线自检、
 未改 8010/8012 的启动方式与 env 文件口径、未改任何 `tests/`。
+
+## 286. 图纸零件的业务角色：未映射清单读得回来 + 人工映射有生产入口（part-role-manual-mapping 21 OK）
+
+红测 `tests/test_packaging_part_role_manual_mapping_red.py`（21 条，实现前 19 红 / 2 护栏绿）
+全绿。Spec：`docs/specs/packaging-part-role-manual-mapping.md`（已补 §10 实现记录）。
+
+### 根因
+
+§4.4 关掉了「`role=unknown` 的图纸零件按行号/面积顺序自动贴业务角色名」这条错路，但没给对的路：
+`packaging_parts.bind_rows()` 早就算出 `role_unbound` / `role_unbound_total`，却在
+`packaging_bom._bind_parts()` 里被丢掉（与当年 `pairing_review` 被丢是同一个缺陷形状），
+`load_bom()` 输出里从来没有这两个键；`BINDING_METHODS` 里的 `manual_mapping` 全仓 0 个触发点，
+`build_bom()` 也没有任何重放逻辑 —— 于是「必须先完成人工映射」永远做不完，业务角色这一栏永远空着。
+
+### 落点
+
+- `packaging_bom.py`：`ROLE_MAP_DOC_KEY` / `ROLE_MAP_ENGINE_VERSION=packaging_bom_role_map_v1` /
+  `ROLE_MAP_ACTION=workflow:packaging_bom_role_mapped` / `ROLE_UNBOUND_VALUES`；
+  `role_candidates()`（只取模板 `component`，按模板顺序去重丢空）/ `role_map_status()`（只列绑到
+  零件的 `box_part`/`optional_part` 且角色仍空/unknown/unbound 的行 + 候选 + `reason=role_unknown:零件号`）/
+  `apply_role_mapping()`（只改 `part_role` + `size_source_json.dwg_binding.*`，不改入参；同角色
+  `changed=false` 且 `mapped_at` 不变；换角色写 `superseded_role/superseded_at/superseded_by` 且审计
+  `superseded=true`；失败口径 `role_required`(400)/`role_not_in_candidates`(400)/`item_not_found`(404)/
+  `part_mismatch`(409)）/ `role_map_doc()` / `load_role_map()` / `save_role_mapping()` /
+  `role_candidates_for()` / `apply_saved_role_map()`；
+- `_bind_parts()` 不再丢 `role_unbound`（返回三元组，`build_bom()` 落进文档通道）；`build_bom()`
+  落库前 `apply_saved_role_map()` 重放人工映射（重算不会把映射算没；配对换了零件时不套旧映射）；
+  `load_bom()` 新增 `role_unbound` / `role_unbound_total`（按当前行现算，没有时 `[]` / `0`）；
+- `main.py`：`GET /api/projects/{pid}/requirement/packaging-bom/role-map`（纯读）与
+  `POST /api/projects/{project_id}/requirement/packaging-bom/role-map`（过
+  `packaging_bom.BOM_WRITE_ROLES`；成功 → 落 BOM 行 + 文档留痕 + 审计；重复提交同角色 200 且
+  `changed=false`，不重复写审计）；
+- `index.html` / `app.js` / `drawing-flow.css`：零件面板新增「BOM 业务角色」区，显示
+  「角色未映射 n 行」，逐行候选 `<select>` + 提交，提交后刷新计数与 BOM；候选**只来自后端**
+  （确认盒型的部件模板），前端不拼第二份清单。
+
+### 实跑
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_part_role_manual_mapping_red
+  → Ran 21 OK（实现前 19 红 / 2 护栏绿）
+./open-claude/.venv/bin/python -m unittest tests.test_tech_backend_undefined_names_dynamic
+  → Ran 6 OK（实现前 1 红）
+node --check tech_app/frontend/app.js → OK
+相邻面（packaging-parametric-bom 57 / parts-extraction 32 / parse-to-downstream-seams 13 /
+e2e-dwg-continuity 10 / box-type-matching 51 / semantics 59 / board-two-column 10）全绿；
+「写→落盘→读回→重算重放→幂等」用临时 DATA_DIR 真跑一遍：
+role_unbound_total 1 → 0、尺寸/状态一个字未动、重放后 role_value/bound_by/mapped_at 都在。
+```
+
+### 边界
+
+未改角色判定（`reject_unknown_role_autobind()` 逐字未动）、未改 `BINDING_METHODS` 既有取值、
+未动数据库 schema（映射走 `size_source_json` + meta 文档通道）、未改任何 `tests/`。
