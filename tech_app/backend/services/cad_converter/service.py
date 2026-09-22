@@ -850,9 +850,20 @@ def _injected_chain(adapter) -> dict:
             "available": True, "warnings": []}
 
 
+#: 转换链**引擎身份**（Spec `converter-cache-engine-identity.md`）。
+#: 本文件里任何改变「解析 / 告警语义」的改动都必须 bump 这个常量：`cache_key` 靠它才能失效，
+#: 否则只改代码不改配置时，旧 manifest（连同里面的 `warnings`）会被幂等复用，代码改对了但话还是旧的。
+CHAIN_ENGINE_VERSION = "cad-converter-chain/2"
+
+
 def _chain_fingerprint(primary: dict, fallback: dict, enabled: bool) -> str:
-    """生效转换器身份段（Spec §7.3）：主 provider/version/二进制 + 回退 provider/version/二进制。"""
-    parts = [str(primary.get("provider") or ""), str(primary.get("converter_version") or ""),
+    """生效转换器身份段（Spec §7.3）：**引擎身份** + 主 provider/version/二进制 + 回退同类三项。
+
+    首段是 `CHAIN_ENGINE_VERSION`：让"我们自己代码的语义变了"也能让 `cache_key` 失效
+    （Spec `converter-cache-engine-identity.md` C2）。
+    """
+    parts = [CHAIN_ENGINE_VERSION,
+             str(primary.get("provider") or ""), str(primary.get("converter_version") or ""),
              str(primary.get("binary_sha256") or "")]
     if enabled:
         parts.extend([str(fallback.get("provider") or ""),

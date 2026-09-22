@@ -11476,3 +11476,56 @@ test_dwg_capability_truth_red / test_quick_quote_parse_service_red
 未动 `DRIVERS` 的 argv 形状与 `argv_verified` 取值、未动 `service.py` 的 note/告警管线、未动版本探测与
 回退链判据、未动任何错误码；显式给 binary 时 `provider` 字段保留配置原值（`auto` 还是 `auto`）这条既有
 口径也不改（Spec §3 已写明）。
+
+## 298. 转换缓存必须带「引擎身份」：`## 297` 部署后 34 还在念旧话，根因是旧 manifest 被幂等复用（9-22，Codex 实现）
+
+### 现象（`## 297` 部署 `22b0979` 之后，34 真机）
+
+```
+POST http://127.0.0.1:8012/api/file/parse  (真实 酒盒.dwg)
+  ok=true  provider=oda 27.1
+  warnings: ["unknown_converter_binary：无法从 AppRun 的文件名识别转换器类型，argv 形状未经真机验证"]   ← 还是它
+```
+
+同一个 venv、同一份配置，**新起进程**直调却是干净的：
+
+```
+parse_payload warnings: []
+chain.primary: {provider: oda, driver: oda_file_converter, note: "", argv_verified: true}
+```
+
+### 根因（不是代码没生效，是缓存复述旧话）
+
+`tech_app/tech_data/cpq-unified-parse/conversions/manifests.json` 里躺着 **09-21 23:13 / 23:55** 写下的两条
+manifest，`warnings` 就是当时那条假告警。`cache_key` 的构成是
+「源文件 sha256 + 主/回退 provider/version/二进制 + options」—— **代码变了它不变**，
+于是 `_cached_manifest()` 直接返回旧 manifest（连 `warnings` 一起），用户永远看不到修复。
+
+### 实现
+
+- 新 Spec `docs/specs/converter-cache-engine-identity.md`（C1–C5）；守卫
+  `tests/test_converter_cache_engine_identity_red.py`（7 条，`Ran 7 OK`）。
+- `cad_converter/service.py`：新增 `CHAIN_ENGINE_VERSION = "cad-converter-chain/2"`，
+  并作为 `_chain_fingerprint()` 的**首段**（其后才是主 provider/converter_version/二进制 sha256
+  + 回退三项）→ 引擎身份进 `cache_key`，也进 manifest 的
+  `conversion_options["converter_chain"]`（可审计）。
+
+### 保护网（改完即跑）
+
+```
+test_dwg_conversion_adapter_red / test_dwg_conversion_quality_repair_red /
+test_dwg_converter_production_rollout_red / test_dwg_file_capability_preflight_red /
+test_dwg_capability_truth_red / test_dwg_final_acceptance_red /
+test_quick_quote_parse_service_red / test_packaging_drawing_flow_red / test_dxf_cad_ir_red
+  → Ran 333，唯一红是既有冲突 test_packaging_drawing_flow_red::CGates::test_c8（## 262）
+test_packaging_parts_extraction_red / test_packaging_parts_downstream_gate_red /
+test_deploy_selfcheck_skip_vs_pass_red / test_packaging_parts_selfcheck_diagnostics_red /
+test_packaging_parts_pipeline_time_budget_red / test_deploy_build_identity_red
+  → Ran 97 OK
+```
+
+### 边界
+
+不动 `identity_digest`（`conversion_id` 与产物目录名照旧，不堆第二份目录）、不动 manifest 键集
+（不新增字段）、不动错误码与回退链判据；缓存语义仍是"同引擎同输入幂等复用"，只是多了
+「代码语义变了必须 bump 一次」这条。
