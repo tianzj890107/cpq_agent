@@ -17722,3 +17722,43 @@ node --check tech_app/frontend/app.js   OK
 ```
 
 未改后端、未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。
+
+## 416. 落地 `packaging-business-part-conclusion-basis-in-panel`：业务部件结论的「口径四键」进内嵌面板（19 OK，红基 15 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增顶层纯函数 `packagingBusinessPartBasisNote(data)`（Spec §C1）：`size_source !=
+  "authority_dimensions"`（含几何件那条路的空串）→ `{text: "", level: ""}`（**一个字都不多说**）；
+  否则 `按权威尺寸算的（<尺寸原文>；来源：<来源>）；这一件没有绑 CAD 几何。`
+  （绑了分量 → `authority_bound` + 「另绑了几何件 <编码>，本结论有意按权威尺寸算。」，
+  编码只出现一次）；两段证据缺哪段少哪段、不留空括号。level 闭集三项。纯函数，可被 `node` 直接跑。
+
+`tech_app/frontend/inline-analysis.js`：
+
+- 新增 `businessBasisRow(state)`（Spec §C2）：与 `businessIdentityRow()` 同形
+  （`data-inline-basis-note="<level>"`、空文案一个节点都不渲染）；
+- `open()` 初始状态加 `basisNote: null`；`load()` 紧接业务清单那句之后算一次；
+  `generate()` 里用 `task.result` **再算一次**（生成完立刻可见，**不**重新读一次）；
+- `renderProcess()` / `renderCost()` 正文最前面、紧接 `businessIdentityRow(state)` 之后各调一次。
+
+`tech_app/backend/main.py`（Spec §C3，**只加键**）：
+
+- 两条业务件路由的 `job()` 返回值各补 `size_source` / `size_source_ref` / `size_text` /
+  `geometry`（成本那条既有 `part_code` / `analysis` / `summary` / `line`、工艺那条既有
+  `part_code` / `part_id` / `plan` / `validation` / `coverage` 一个不动）；
+- 几何那两条路由（`packaging_part_cost()` / `packaging_part_process()`）一字未动。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_basis_in_panel_red  Ran 19  FAILED (failures=15) → Ran 19  OK
+  （红基 15 条：A1–A8 / B1–B4 / C1–C3；护栏 B5 / C4–C6 四条始终绿）
+node --check tech_app/frontend/app.js && node --check tech_app/frontend/inline-analysis.js   OK
+不回归：part_conclusion_business_identity_in_panel + business_part_cost_by_authority_size +
+        business_part_process_by_authority_route + business_part_size_cost_entry +
+        business_part_process_entry + parts_panel   Ran 134  OK
+        parts_downstream + parts_downstream_readback + parts_conclusion_version_readback +
+        part_conclusion_business_identity + business_part_downstream_entry + parts_outline  Ran 101  OK
+```
+
+未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。

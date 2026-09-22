@@ -2528,6 +2528,30 @@ function packagingBusinessPartProcessTarget(row) {
   return {ok: true, code: "", message: "", part_code: code};
 }
 
+// 业务部件结论的「口径四键」（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C1）：
+// 后端读回体与任务结果都带 `size_source` / `size_source_ref` / `size_text` / `geometry`，
+// 这一处把它们翻成一句人话 —— 几何零件那条路（`size_source` 为空）**一个字都不多说**。
+function packagingBusinessPartBasisNote(data) {
+  const payload = (data && typeof data === "object") ? data : {};
+  const source = String(payload.size_source === undefined || payload.size_source === null
+    ? "" : payload.size_source).trim();
+  if (source !== "authority_dimensions") return {text: "", level: ""};
+  const text = value => String(value === undefined || value === null ? "" : value).trim();
+  const pieces = [];
+  const sizeText = text(payload.size_text);
+  const ref = text(payload.size_source_ref);
+  if (sizeText) pieces.push(sizeText);
+  if (ref) pieces.push(`来源：${ref}`);
+  const inside = pieces.join("；");
+  const geometry = text(payload.geometry);
+  const bound = geometry.indexOf("bound:") === 0 ? geometry.slice(6).trim() : "";
+  const tail = bound
+    ? `；这一件另绑了几何件 ${bound}，本结论有意按权威尺寸算。`
+    : "；这一件没有绑 CAD 几何。";
+  return {text: `按权威尺寸算的${inside ? `（${inside}）` : ""}${tail}`,
+          level: bound ? "authority_bound" : "authority_unbound"};
+}
+
 // 业务部件发起单件工艺 / 成本（Spec §C3）：解析出几何件编码 → 走既有取行与既有无分析入口，
 // **不**新写第二套接口 / 渲染。
 async function packagingBusinessPartAnalyze(mode, partCode) {

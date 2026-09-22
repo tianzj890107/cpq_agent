@@ -8816,8 +8816,13 @@ async def packaging_business_part_cost(
                        "computed_at": now_cst_str(),
                        "actor": str(user.get("username") or "")},
         })
+        # 任务返回值里也带上口径四键（Spec `packaging-business-part-conclusion-basis-in-panel.md`
+        # §C3）：面板拿到 `task.result` 就渲染「按权威尺寸算的…」那一行，不必再读一次。
         return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
-                "line": line}
+                "line": line,
+                "size_source": inputs["size_source"],
+                "size_source_ref": inputs["size_source_ref"],
+                "size_text": inputs["size_text"], "geometry": geometry_label}
 
     return {"task_id": tasks.submit(
         pid, "packaging_business_part_cost", job,
@@ -8941,8 +8946,12 @@ async def packaging_business_part_process(
                        "computed_at": now_cst_str(),
                        "actor": str(user.get("username") or "")},
         })
+        # 同上：任务返回值带口径四键（Spec §C3），面板生成完立刻说得清按哪套尺寸编的。
         return {"part_code": inputs["part_code"], "part_id": part.part_id,
-                "plan": plan_dict, "validation": validation, "coverage": coverage}
+                "plan": plan_dict, "validation": validation, "coverage": coverage,
+                "size_source": inputs["size_source"],
+                "size_source_ref": inputs["size_source_ref"],
+                "size_text": inputs["size_text"], "geometry": geometry_label}
 
     return {"task_id": tasks.submit(
         pid, "packaging_business_part_process", job,

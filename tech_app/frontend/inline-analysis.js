@@ -58,6 +58,16 @@
       + `${esc(note.text)}</div>`;
   }
 
+  // 业务部件结论的口径那一行（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C2）：
+  // 与上面那条同形 —— 节点只在这一处构造，空文案一个节点都不渲染（几何零件那条路因此
+  // 一句话都不多说）。level 落成 data 属性。
+  function businessBasisRow(state) {
+    const note = state.basisNote || {};
+    if (!note.text) return "";
+    return `<div class="inline-warn" data-inline-basis-note="${attr(note.level || "")}">`
+      + `${esc(note.text)}</div>`;
+  }
+
   function open(mode, context) {
     if (!context?.host || !context.projectId || !context.part) return;
     restoreExpertPanel(active);
@@ -71,6 +81,7 @@
       summary: null,
       versionNote: "",
       businessNote: null,
+      basisNote: null,
       editing: false,
       busy: false,
       root: null,
@@ -155,6 +166,8 @@
       // 业务部件清单漂移（Spec `packaging-part-conclusion-business-identity.md` §C3 的读回四键）：
       // 状态行留给零件版本那句，这句进正文（两句话不互相顶掉）。
       state.businessNote = packagingPartBusinessIdentityNote(data);
+      // 结论口径（Spec `packaging-business-part-conclusion-basis-in-panel.md` §C2）：按哪套尺寸算的。
+      state.basisNote = packagingBusinessPartBasisNote(data);
       if (state.mode === "process") {
         state.plan = data.plan;
         state.validation = data.validation;
@@ -241,6 +254,8 @@
         state.summary = result.summary;
         if (state.summary?.quantity) state.root.querySelector("[data-inline-quantity]").value = state.summary.quantity;
       }
+      // 生成完**立刻**就有这一行：结果就是任务返回值，不重新读一次（Spec §C2）。
+      state.basisNote = packagingBusinessPartBasisNote(result);
       state.editing = false;
       render(state);
       setStatus(state, `${title}已完成`, false);
@@ -380,7 +395,8 @@
     // 多行工序表），塞进等宽栏里总有一栏被挤扁。工艺流程图已删 —— 和工序明细
     // 是同一份顺序信息。
     const validation = state.validation || {};
-    let html = businessIdentityRow(state) + `<div class="inline-process-stack">`;
+    let html = businessIdentityRow(state) + businessBasisRow(state)
+      + `<div class="inline-process-stack">`;
 
     html += `<section class="inline-card"><div class="inline-card-title">工序明细</div><div class="inline-steps">`;
     (plan.steps || []).forEach((step, index) => { html += processStep(step, index, state.editing); });
@@ -487,7 +503,7 @@
     }
     const summary = state.summary || {};
     const currency = summary.currency || analysis.currency || "CNY";
-    let html = businessIdentityRow(state) + `<div class="inline-cost-content"><section class="inline-card"><div class="inline-card-title">成本概览</div><div class="inline-cost-total"><strong>${money(summary.computed_total)}</strong><span>元 / 件（${esc(currency)}）</span><em>核算批量 ${analysis.quantity || 1} 件</em></div>`;
+    let html = businessIdentityRow(state) + businessBasisRow(state) + `<div class="inline-cost-content"><section class="inline-card"><div class="inline-card-title">成本概览</div><div class="inline-cost-total"><strong>${money(summary.computed_total)}</strong><span>元 / 件（${esc(currency)}）</span><em>核算批量 ${analysis.quantity || 1} 件</em></div>`;
     if (analysis.summary) html += `<div class="inline-row">${esc(analysis.summary)}</div>`;
     const byCategory = summary.by_category || {};
     const values = Object.values(byCategory).map(Number);
