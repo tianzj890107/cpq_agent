@@ -23,6 +23,10 @@ from . import model
 from . import persistence
 from . import steps as steps_mod
 
+#: "这一次读不到需求单"的稳定码（Spec `packaging-preconditions-requirement-read-failure.md` §2.1）：
+#: 与"这个项目真的没有需求单"（`REQUIREMENT_DRAFT_MISSING`）必须是两条码、两句文案。
+REQUIREMENT_UNREADABLE = "REQUIREMENT_UNREADABLE"
+
 FLOW_VERSION = model.FLOW_VERSION
 ANCHOR_VERSION = model.ANCHOR_VERSION
 STALE_VERSION = model.STALE_VERSION
@@ -496,7 +500,7 @@ def run_flow(project_id: str, *, prompt: Any = "", actor: str = "system",
 
 
 def preconditions(project_id: str) -> List[Dict[str, Any]]:
-    """跑链路**之前**就能知道缺什么：`[{code, severity, message, action}]`。
+    """跑链路**之前**就能知道缺什么：`[{code, severity, message, action, unavailable}]`。
 
     只读、幂等、不写库、不建数据（Spec `drawing-flow-error-taxonomy.md` C3）。
     缺需求草稿时前端可以先提示"去哪建草稿"，而不是让用户跑完整条链路才看到
@@ -507,12 +511,23 @@ def preconditions(project_id: str) -> List[Dict[str, Any]]:
         return items
     try:
         requirement = store.load_requirement(str(project_id))
-    except Exception:                                   # noqa: BLE001 - 读不到就按缺前置条件报
-        requirement = None
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不抛给调用方
+        # "存储通道暂时读不到" ≠ "这个项目没有需求单"（Spec §2.1）：前者让用户重试，
+        # 后者让用户去建草稿 —— 说反了就会建出一张重复的需求单。
+        reason = type(exc).__name__
+        items.append({"code": REQUIREMENT_UNREADABLE, "severity": "blocking",
+                      # 文案红线（Spec §4 Q2）：说得出异常类名与"重试"，且**不含**"不存在"
+                      # —— "不存在"只留给真的没有需求单那条码（见 Spec §5.3 记录的偏差）。
+                      "message": "暂时读不到这个项目的需求单（%s），请稍后重试；"
+                                 "这不代表该需求单缺失，请勿据此新建需求草稿" % reason,
+                      "action": "稍后重试；若持续失败请让管理员检查存储通道",
+                      "unavailable": {"code": "requirement_unreadable", "reason": reason}})
+        return items
     if not requirement:
         spec = model.PRECONDITION_BLOCKERS["REQUIREMENT_DRAFT_MISSING"]
         items.append({"code": "REQUIREMENT_DRAFT_MISSING", "severity": "blocking",
-                      "message": str(spec["message"]), "action": str(spec["action"])})
+                      "message": str(spec["message"]), "action": str(spec["action"]),
+                      "unavailable": {}})
         return items
     status = str(requirement.get("status") or "").strip()
     if status and status not in EDITABLE_STATUSES:
@@ -520,7 +535,7 @@ def preconditions(project_id: str) -> List[Dict[str, Any]]:
         items.append({"code": REQUIREMENT_NOT_EDITABLE, "severity": "blocking",
                       "message": "需求已提交（当前状态：%s），不能直接改写；请先退回草稿"
                                  "或为该项目新建一张需求草稿（缺前置条件，重试不会成功）" % status,
-                      "action": str(spec["action"])})
+                      "action": str(spec["action"]), "unavailable": {}})
     return items
 
 

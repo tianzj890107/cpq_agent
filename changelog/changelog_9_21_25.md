@@ -15668,3 +15668,43 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
   是为了让既有打桩缝继续生效而刻意保留的双读，只读不写，记在 Spec §5.3。
 - 不许现算 / 现写盘 / 调模型 / 联网；不改路线侧任何文件；未 push / 未建 MR / 未 tag / 未部署 /
   未连库 / 未写生产数据。
+
+## 364. 落地 `packaging-preconditions-requirement-read-failure`：前置条件里"读不到需求单"与"真的没有需求单"分家（9 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+`packaging_drawing_flow/__init__.py:474-482` 把 `store.load_requirement()` 的异常吞成
+`requirement = None`，于是"存储通道读不到"与"这个项目真的没有需求单"给同一条
+`REQUIREMENT_DRAFT_MISSING`（`severity=blocking`、动作"先去建一张草稿"）：元数据后端抖一下，
+用户就被劝去建一张**重复**的需求草稿，而 2.1 左栏 `packagingPartsEmptyText()` 把这条
+`[code] message → action` 原样渲染成第一句话。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_drawing_flow/__init__.py`（只这一个文件）
+  - 新增模块常量 `REQUIREMENT_UNREADABLE = "REQUIREMENT_UNREADABLE"`；
+  - `preconditions()` 的读异常分支改成新码：`severity="blocking"`、
+    `message` 带异常类名 + "重试"、`action="稍后重试；若持续失败请让管理员检查存储通道"`、
+    `unavailable={"code": "requirement_unreadable", "reason": "<异常类名>"}`；
+    **不再**给 `REQUIREMENT_DRAFT_MISSING`，异常照旧不抛给调用方（接口照旧 200）；
+  - 真的没有需求单 / 不可编辑两条只各多一个 `unavailable: {}`，`code` / `severity` /
+    `message` / `action` 逐字不变；空 `project_id` 照旧 `[]`；前端与路由未改。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_preconditions_requirement_read_failure_red
+# Ran 9 tests ... OK（Q1/Q2/Q3 由红转绿；Q4–Q9 六条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_drawing_flow_error_taxonomy_red \
+    tests.test_drawing_flow_requirement_state_red tests.test_packaging_drawing_flow_red
+# Ran 85 tests ... OK (skipped=1)
+```
+
+### 四、边界
+
+- **已记录的偏差**：Spec §2.1 的示例文案结尾是"这不代表需求单不存在"，而红测 Q2 断言
+  `message` 不得含"不存在"——两者不可同时满足，按红测落地为
+  "暂时读不到这个项目的需求单（<异常类名>），请稍后重试；这不代表该需求单缺失，请勿据此新建需求草稿"。
+  除这句文案外 §2.1 的字面要求逐条照做，详见 Spec §5.3（未改任何测试）。
+- 不许改 `PRECONDITION_BLOCKERS` 两条文案 / `provenance.py` 稳定码 / 路由形状；未 push /
+  未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
