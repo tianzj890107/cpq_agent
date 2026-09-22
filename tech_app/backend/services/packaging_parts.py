@@ -3169,6 +3169,10 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             # 闭合件取环的包络、开口件取分量包络；**只给画图**，不参与绑定尺寸（§C2）。
             "drawing_bbox": (row.get("outline") or {}).get("bbox")
                             if isinstance(row.get("outline"), dict) else None,
+            # 闭合件的真实轮廓环点（Spec `packaging-cad-plan-true-outline-polygons.md` §C1）：
+            # 只给画多边形用；开口件这里是 None（不许拿包络编点冒充轮廓）。
+            "outline_points": (row.get("outline") or {}).get("points")
+                              if _text(row.get("outline_status")) == "closed" else None,
             # 件的权威尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
             "unfolded_length_mm": row.get("unfolded_length_mm"),
             "unfolded_width_mm": row.get("unfolded_width_mm"),

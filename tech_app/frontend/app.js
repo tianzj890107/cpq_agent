@@ -1820,20 +1820,42 @@ function highlightPackagingBusinessPart(partCode, entity_ids) {
   return { part: currentPackagingBusinessPartCode, targets: boxes.length };
 }
 
+// 闭合件的真实轮廓环点串（Spec `packaging-cad-plan-true-outline-polygons.md` §C2）：
+// 只认闭合件 + 至少 3 个点，逐点写成 `x,-y`（平面图的 viewBox 已经翻过 y 轴）；有一点不可用就回空串。
+function packagingCadPlanOutlinePoints(component) {
+  const row = component || {};
+  const raw = Array.isArray(row.outline_points) ? row.outline_points : [];
+  if (String(row.outline_status || "") !== "closed" || raw.length < 3) return "";
+  const points = raw.map(point => {
+    if (!Array.isArray(point) || point.length < 2) return "";
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    return (Number.isFinite(x) && Number.isFinite(y)) ? `${x},${-y}` : "";
+  });
+  if (points.some(item => !item)) return "";
+  return points.join(" ");
+}
+
 function packagingCadPlanComponentSvg(component) {
   const range = packagingCadPlanRange([packagingCadPlanComponentBox(component)]);
   if (!range) return "";
   const role = String((component && component.role) || "unknown");
   const color = PACKAGING_CAD_LAYER_COLORS[role] || PACKAGING_CAD_LAYER_COLORS.unknown;
   const layers = ((component && component.layers) || []).join("、");
-  return `<rect class="packaging-cad-plan-entity" data-component-id="${esc(String(component.component_id || ""))}"`
+  // 多边形与矩形共用同一套数据属性：高亮/缩放/点选反查两套形状一视同仁。
+  const attributes = ` data-component-id="${esc(String(component.component_id || ""))}"`
     + ` data-component-ref="${esc(String(component.geometry_component_ref || ""))}"`
     + ` data-business-part="${esc(String(component.business_part_code || ""))}"`
     + ` data-bbox="${esc([range.x, range.y, range.x2, range.y2].join(","))}"`
-    + ` x="${esc(String(range.x))}" y="${esc(String(-range.y2))}"`
-    + ` width="${esc(String(range.width))}" height="${esc(String(range.height))}"`
     + ` fill="none" stroke="${esc(color)}" stroke-width="1"`
-    + ` data-layer="${esc(layers)}" data-role="${esc(role)}"></rect>`;
+    + ` data-layer="${esc(layers)}" data-role="${esc(role)}"`;
+  const points = packagingCadPlanOutlinePoints(component);
+  if (points) {
+    return `<polygon class="packaging-cad-plan-entity" points="${esc(points)}"${attributes}></polygon>`;
+  }
+  return `<rect class="packaging-cad-plan-entity"${attributes}`
+    + ` x="${esc(String(range.x))}" y="${esc(String(-range.y2))}"`
+    + ` width="${esc(String(range.width))}" height="${esc(String(range.height))}"></rect>`;
 }
 
 function renderPackagingCadPlan(doc) {

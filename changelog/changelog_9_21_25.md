@@ -16074,3 +16074,52 @@ tests/test_packaging_*.py 全域（84 个模块）→ Ran 1561, failures=5, skip
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 372. 平面图把闭合件画成包络矩形：134 件的真实轮廓环点（1777 点）在服务端白丢了（9-22，Codex 实现）
+
+红测 `tests/test_packaging_cad_plan_true_outline_polygons_red`：实现前 `Ran 13, failures=6`，
+实现后 `Ran 13 OK`。
+
+### 一、缺口（真样本实测，不是推断）
+
+1. `extract()` 的 134 件闭合件**每一件**都在 `outline.points` 里带着真实轮廓环（合计 1777 点、
+   单件 4…32 点）；129 件开口件一份点都没有（只有 `outline.bbox`）。
+2. `geometry_evidence_of()` 不带这份点 → 刚修好的平面图（`## 371`）只能把**每一件**画成一个
+   包络矩形：闭合件看不出真实形状 —— 形状信息在服务端白白丢掉了。
+3. 每件环点的包络与 `drawing_bbox` 逐轴相等（误差 < 0.01mm），所以把多边形与既有 `data-bbox`
+   一起用不会错位。
+
+### 二、改了什么（2 个文件）
+
+- `tech_app/backend/services/packaging_parts.py`：`geometry_evidence_of()` 每件新增
+  `outline_points` —— 只在 `outline_status == "closed"` 时逐字取 `row["outline"]["points"]`，
+  否则 `null`（不许拿包络编 4 个点冒充轮廓）。
+- `tech_app/frontend/app.js`：新增 `packagingCadPlanOutlinePoints(component)`（闭合 + ≥3 点 +
+  逐点校验，写成 `x,-y`；有一点不可用就回空串），`packagingCadPlanComponentSvg()` 优先画
+  `<polygon>`、否则画既有包络 `<rect>`；两种形状共用同一套数据属性
+  （`data-component-id` / `data-component-ref` / `data-business-part` / `data-bbox` / `data-layer`
+  / `data-role`）与同一份角色配色 —— 高亮、缩放、点选反查一个字没改。
+
+### 三、复跑
+
+```
+tests.test_packaging_cad_plan_true_outline_polygons_red  → Ran 13 OK（实现前 Ran 13, failures=6）
+node --check tech_app/frontend/app.js                    → 通过
+tests/test_packaging_*.py 全域（85 个模块）+ 图纸两列/接线两条
+                                                         → Ran 1596, failures=5, skipped=8
+（5 条仍是 B3 / B4 / A2 / F2 / C1 那批既有挂账，与本批无关）
+```
+
+### 四、已记录的边界（不改测试）
+
+1. **仍不是逐条实体折线**：真图 402 个连通分量 / 5598 条开放轮廓；把 `attributes.points` 的折线
+   逐条带上属于下一层（要单独设计分片与载荷预算）。本批只带闭合件的环点（实测 1777 点，
+   上限断言 5000）。
+2. 开口件在图上仍是一个包络矩形 —— 与第 1 层"开口件退回分量包络并写 `outline_reason`"一致，
+   不是回退；页面也不假装它有轮廓。
+3. 老文档（行上没有 `outline.points`）→ `outline_points` 为 `null` → 仍画矩形，不猜。
+4. 绑定/成本一个字没动：`outline_points` 只是绘图数据（红测里有一条护栏：只带环点的分量
+   依然 `unbound` + `size_unknown`）。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
