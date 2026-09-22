@@ -2075,8 +2075,35 @@ let packagingPartsShown = [];
 // 没有权威清单时的左栏出口（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 5 条）：
 // 必须说清"已识别几何区域 n 个，尚未形成业务部件清单"，并给一条补数据的路子 ——
 // 不许把几百个几何分量冒充成业务零件，也不许只留一片空白。
+// 业务部件清单"读不到"时的文案（纯函数，Spec `packaging-business-parts-read-failure-note.md` §2.2）：
+// 与几何零件那一侧同构（`packagingPartsEmptyText()` 的 `read_problem` 分支）—— 读失败要自己的
+// 一句话，不许被"已识别的几何区域还不是业务部件清单"抢先：那会把读失败赖到业务数据上，
+// 还把人支去**重新导入**（会落新的一版业务部件文档，不是读失败该有的下一步）。
+function packagingBusinessReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : {};
+  if (!String(row.code || "").trim()) return "";
+  const status = Number(row.status) || 0;
+  return status > 0
+    ? `暂时读不到业务部件清单（HTTP ${status}），请稍后重试；这不代表这个项目还没导入权威清单`
+    : "暂时读不到业务部件清单（网络错误），请稍后重试；这不代表这个项目还没导入权威清单";
+}
+
 function packagingBusinessImportNote(doc) {
   if (!doc || packagingBusinessPartRows(doc).length) return null;
+  // 读失败优先（Spec §2.3）：**不给**导入按钮（重新导入是错的下一步），并用自己的 data- 钩子
+  // 与"确实还没有权威清单"（`qqBusinessMissing`）分家。
+  const problem = (doc.read_problem && typeof doc.read_problem === "object")
+    ? doc.read_problem : null;
+  if (problem) {
+    const unavailable = document.createElement("div");
+    unavailable.className = "packaging-business-unavailable";
+    unavailable.dataset.qqBusinessUnavailable = "1";
+    const problemText = document.createElement("div");
+    problemText.className = "packaging-business-missing-text";
+    problemText.textContent = packagingBusinessReadProblemText(problem);
+    unavailable.appendChild(problemText);
+    return unavailable;
+  }
   const gap = (doc && doc.gap) || {};
   const wrap = document.createElement("div");
   wrap.className = "packaging-business-missing";
@@ -2465,12 +2492,23 @@ async function loadMorePackagingParts() {
 }
 async function fetchPackagingBusinessParts() {
   if (!currentProject) return null;
+  // 读失败（非 404）时的空文档形状（Spec `packaging-business-parts-read-failure-note.md` §2.1）：
+  // 面板提示据此说"读不到"而不是"已识别的几何区域还不是业务部件清单"。`status` 取 HTTP 状态码，
+  // 网络异常（拿不到状态码）给 `0`。
+  const readProblemDoc = (status) => ({
+    business_parts: [], geometry_evidence: {}, source: {},
+    read_problem: {code: "business_parts_unavailable", status: Number(status) || 0, message: ""}});
   try {
     const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
       + `packaging-business-parts`);
-    if (!res.ok) return null;
+    // 404 = 端点未上线（那条既有路径逐字不变：仍返回 null，退回几何分量并说明原因）。
+    if (Number(res.status) === 404) return null;
+    if (!res.ok) return readProblemDoc(res.status);
     return await res.json().catch(() => null);
-  } catch (error) { return null; }
+  } catch (error) {
+    // 网络异常：没有状态码（给 0）。
+    return readProblemDoc(0);
+  }
 }
 
 async function refreshPackagingParts() {

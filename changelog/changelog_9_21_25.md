@@ -16974,3 +16974,24 @@ business_material_rows = {row_total: 14, resolved_total: 0, unresolved_total: 14
 = `Ran 102 … OK (skipped=1)`；`node --check tech_app/frontend/app.js` OK。
 
 未起服务、未发 HTTP、未连 PG / 34、未 push / MR / tag / Release / 未部署。
+
+## 395. 落地 `packaging-business-parts-read-failure-note`：业务部件清单「读不到」不再显示成「已识别的几何区域还不是业务部件清单」（8 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- `fetchPackagingBusinessParts()`：404（端点未上线）仍 `return null`（**既有路径逐字不变**）；
+  其余非 2xx（含 5xx）返回带 `read_problem` 的空文档形状（`status` = HTTP 状态码），`fetch`
+  抛异常给 `status: 0`（网络错误）。
+- 新增纯函数 `packagingBusinessReadProblemText(problem)`：`code` 为空给 `""`；`status > 0` 给
+  `"暂时读不到业务部件清单（HTTP <status>），请稍后重试；这不代表这个项目还没导入权威清单"`；
+  无状态码给 `"…（网络错误）…"`。
+- `packagingBusinessImportNote(doc)`：新增**第一优先**分支 —— `doc.read_problem` 非空时只给一个
+  提示块，**不给**「导入权威清单（业务部件）」按钮（重新导入会落新的一版业务部件文档，不是读失败
+  该有的下一步），`data-` 钩子用 `qqBusinessUnavailable` 与既有的 `qqBusinessMissing` 分家；
+  没有 `read_problem` 时既有的三句文案与导入按钮逐字不变。
+
+实跑：`Ran 8 … FAILED (failures=6)`（U1 U2 U3 U4 U5 U8）→ `Ran 8 … OK`（U6 U7 两条护栏始终绿）；
+不回归业务部件面板 / 权威披露 / 部件图 / 空态七套 = `Ran 134 … OK`；
+`node --check tech_app/frontend/app.js` OK。
+
+未起服务、未发 HTTP、未连 PG / 34、未 push / MR / tag / Release / 未部署。
