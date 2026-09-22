@@ -13739,3 +13739,177 @@ tests/test_packaging_*.py（62 份 / 1370 条）                → 25 红，全
 
 只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 状态行 + 本 changelog；未改测试、
 未改前端 / 回传正文 / `packaging_handoff`、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
+
+## 332. BOM 行不认自己的盒型：换盒型重算后，上一版的锁定行静默冒充新盒型的部件（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-bom-box-type-provenance.md` + `tests/test_packaging_bom_box_type_provenance_red.py`
+（6 条：I 组 6；现状 **4 红 2 绿**，2 条绿的是"没有混盒型时清单为空 / 既有键逐字不变"的护栏）。
+本批不真跑任何服务：三处都由**读代码**定位，全部离线可复现（假仓库，不碰 SQLite / PG）。
+
+### 缺口
+
+1. `packaging_bom.py:406 _assemble()` 造六组行（成品 / 部件 / 材料 / 工艺 / …）全是字面量 dict，
+   **没有一组带盒型**；落库列清单 `da_repo.py:731 _PACKAGING_BOM_COLUMNS` 也没有 `box_type_code`。
+2. `packaging_bom.py:926-929 load_bom()` 用**成品行**的 `item_key` 当整份 BOM 的盒型，不问其余行属于谁；
+   而 `da_repo.py:748 save_packaging_bom()` 只删 `locked = 0` 的行（"锁定是用户的意思"，这条口径本批不动）——
+   于是：确认盒型从 A 换成 B → 重建 → A 的锁定行留下来、B 的行写进来，**一份 BOM 里同时有两个盒型的部件**，
+   而读接口把它整体报成 B。报价按"B + A 的残留部件"算，人工角色映射（`packaging_bom.py:621` 按当前确认盒型给候选）
+   还给 A 的行配 B 的候选角色，一个字都不说。
+3. 本批之前落库的行没有盒型字段：既说不上属于哪个盒型，也说不上"无从判断"。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 新增列 `wip_packaging_bom_item.box_type_code`（schema + 既有幂等补列 `_add_missing_columns()`，
+  只加列、不回填已有行）；`_PACKAGING_BOM_COLUMNS` 同步加列（不加就会被 `{key: item.get(key) …}` 丢掉）；
+- `_assemble()` **返回前统一盖章**（一处 for 循环，不许在六组字面量里各写一遍 —— 漏一组就是今天这个洞）；
+- `load_bom()` 新增 `source_versions.box_type_codes`（去重升序）、`rows_from_other_box_type`、
+  `rows_without_box_type`（两个清单都按 `item_key` 升序、键必须存在），既有键口径逐字不变；
+- 禁项写死：**不许删 / 清空 / 改写锁定行**（也不许"换个盒型就自动清掉异盒型行"）、
+  不许在读接口里顺手过滤或改状态、不许把"没有盒型的历史行"折进"异盒型"、
+  不许改 `_assemble()` 的成型口径与既有行取值、不许改 `tests/` 既有文件。
+
+### 复跑
+
+- `tests.test_packaging_bom_box_type_provenance_red`：`Ran 6, failures=4`（I1 / I3 / I5 / I6 红，I2 / I4 绿）。
+- 不回归：`test_packaging_parametric_bom_red` OK、`test_packaging_parts_extraction_red` OK；
+  `test_spec_status_truth_red` `Ran 7 OK`。
+- 本批相邻批次仍只红在自己声明的条数上：`test_packaging_bom_parts_version_binding_red` 4、
+  `test_packaging_bom_size_quality_accounting_red` 4、`test_packaging_silent_degradation_red` 8。
+- 本批**未提交 / 未 push / 未部署**；工作区里并行会话的文件一个未动。
+
+## 330. `## 273` 那处「两份 Spec 打架」的挂账关闭：写角色按「方案 A 的值域 + 不许别名/不许派生」裁决（9-22，Codex 只改红测 / Spec 正文 / changelog）
+
+`test_packaging_cost_engine_red::test_j6_write_roles_reuse_batch4` 是仓里最后一处"两份 Spec
+打架、谁也不动"的存量红，本轮裁决并收口。
+
+### 一、冲突本身
+
+| 出处 | 要求 |
+| --- | --- |
+| `tests/test_packaging_cost_engine_red::j6`（`packaging-cost-engine.md` §4 那句） | `COST_WRITE_ROLES` **直接引用** `packaging_match.BOX_MATCH_DECIDE_ROLES`（`assertIs`，同一个对象） |
+| `packaging-cost-finance-access.md` §2.2 | `COST_WRITE_ROLES` **不许**再是它的别名 —— 跨批次共用同一个对象会让「排盒型的人」与「算成本的人」永久绑死，任何一边调整都**静默漂移**；要么财务专属，要么显式集合含工艺侧并留痕 |
+
+两条结构上不可能同时成立（`## 273` 起挂账至今）。
+
+### 二、裁决
+
+1. **机制以 §2.2 为准**：不许共享对象、不许从别处派生，值域**显式写死**；
+2. **值域取 §2.2 的两种写法之一 = 方案 A（财务能算）**（`packaging-cost-write-role-single-source.md`
+   §2.1 已按此落地）：
+   `COST_WRITE_ROLES = {"process_manager", "process_director", "finance_manager", "admin"}`，
+   与 `auth.COST_ROLES` 的关系写在 `packaging_cost.py` 的注释里（§2.2 第三句）；
+3. `packaging-cost-engine.md` §4 那句"直接引用"按本裁决**取代**：值域与工艺侧三个相同，
+   但**不再共享对象**；
+4. 裁决文字已写进 `docs/specs/packaging-cost-write-role-single-source.md` §7 第 3 条
+   （原「本批不动其中任何一方」的挂账改为「已裁决、测试侧已收口」）。
+
+### 三、j6 的改法（测试侧，三条一起守）
+
+```
+值域逐字钉死：{"process_manager","process_director","finance_manager","admin"}
+不许别名：    assertIsNot(COST_WRITE_ROLES, BOX_MATCH_DECIDE_ROLES)
+不许派生：    赋值行里不得出现 BOX_MATCH_DECIDE_ROLES（inspect.getsource 扫那一行）
+```
+
+第三条是这次裁决的关键：值域一旦改成"派生"，§2.2 想避免的静默漂移就又回来了 ——
+所以它必须是一条**可执行**的断言，而不是注释里的一句话。
+
+### 四、实测
+
+```
+tests.test_packaging_cost_engine_red                       → Ran 82 OK（j6 由红转绿）
+tests.test_packaging_cost_write_role_single_source_red     → Ran 5 OK
+tests.test_packaging_cost_finance_access_red               → Ran 10 OK（§2.2 的冻结面未破）
+tests.test_spec_status_truth_red                           → Ran 7 OK
+```
+
+**注意**：本条**没有新红测**——裁决后的行为在当前代码里已经成立（值域已经是显式字面量、
+财务已在集合里），所以本条的交付是「裁决记录 + 一条错断言改成三条正确断言」，
+不是"先红后绿"。这一点如实记下，不拿它充红基。
+
+### 五、边界
+
+本批只改 1 个既有红测文件、1 份 Spec 正文、追加本 changelog；未改任何业务实现
+（`packaging_cost.py` 一行未动）、**未连 34**、未跑任何写操作、未写数据库、
+未 push / MR / tag / Release / 未部署。
+
+## 333. 3D 结论不认零件文档版本：重解析后旧挤出体照旧显示成"这一件有 3D"（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-solids-parts-version-binding.md` + `tests/test_packaging_solids_parts_version_binding_red.py`
+（6 条：J 组 6；现状 **4 红 2 绿**，2 条绿的是"存储层原样存取"与"既有索引键逐字不变"的护栏）。
+本批不真跑任何服务：四处都由**读代码**定位，全部离线可复现（假后端 / 假文档，不发 HTTP）。
+
+### 缺口（对照：同一批单件工艺/成本**都**记了 `parts_id`）
+
+1. `main.py:8261`（单件 `POST …/{part_code}/solid`）与 `main.py:8310-8314`（整份 `POST …/solids`）
+   两个写入口的落库体只有 `engine_version` / `stats` / `parts`，**不带 `parts_id`** ——
+   而 `main.py:8012`（单件工艺）与 `main.py:8145`（单件成本）都带了；
+   `main.py:6943` 的 docstring 自己还写着"改了会换 `parts_id`、把下游落库的结论全指歪"。
+2. `main.py:6940 _packaging_solids_index()` 只贴 `solid_status` / `solid_reason`，不比对当前零件文档；
+   `_packaging_parts_body()`（`:7033`）把它按 `part_code` 贴到列表每一行 —— 零件重解析后，
+   2.1 上"这一件有 3D / 覆盖率"看起来仍是当前零件的结论。
+3. `main.py:8265 get_packaging_part_solid_stl()` 只要 `status == "ok"` 且有 `stl` 就 200，
+   响应头没有任何版本信息：用户下的可能是上一版零件算出的挤出体。
+4. 整份入口是**合并写**（`main.py:8305-8314` 按 `part_code` 覆盖/保留），不区分版本：
+   重解析后件号重排/件数变化时，上一版的件留在文档里与新件混在一起。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `packaging_part_solids` 新增纯函数 `solids_stale_reason(record, current_parts_id)`（唯一判据点：
+  `parts_reparsed` / `parts_unknown` / `""`）；`save_solids` / `load_solids` 的整份原样存取语义
+  与 `MAX_VERSIONS` 一个字不改（红测 J5 就是这条护栏）；
+- 两个写入口落库体新增 `parts_id` / `parts_hash`，每件结论也带 `parts_id`；整份入口的合并写
+  另记 `rows_from_other_parts_id`（保留不删）；
+- `_packaging_solids_index()` 每项新增 `parts_id` / `stale` / `stale_reason`；
+  `_packaging_parts_body()` 新增 `solids_parts_id` / `solids_stale` / `solids_stale_reason` /
+  `solids_rows_from_other_parts_id`（键必须存在）；
+- STL 下载**仍 200**，响应头新增 `X-Packaging-Parts-Id` / `X-Packaging-Parts-Stale`
+  （过期时另加 `-Reason`）；
+- 禁项写死：不许删旧 STL / 旧结论、不许把过期变成 404、不许读接口自动重算 3D、
+  不许把"读不到零件文档"当成过期或没过期、不许改既有键与响应形状、不许改 `tests/` 既有文件。
+
+### 复跑
+
+- `tests.test_packaging_solids_parts_version_binding_red`：`Ran 6, failures=4`（J1 / J2 / J3 / J4 红，J5 / J6 绿）。
+- 不回归：`test_packaging_parts_extraction_red` OK、`test_packaging_parts_solid_coverage_red` OK、
+  `test_spec_status_truth_red` `Ran 7 OK`。
+- 本批相邻批次仍只红在自己声明的条数上：`test_packaging_bom_parts_version_binding_red` 4。
+- 本批**未提交 / 未 push / 未部署**；工作区里并行会话的文件一个未动。
+
+## 338. `packaging-part-manual-fill-must-land-on-the-part-row` 落地：人工补材料/补料厚改成读时合回零件行（6 OK + 1 条已记录的测试侧偏差）（9-22，Codex 实现）
+
+### 一、问题（Spec §1，本机在 HEAD `14afe4b` 上逐条核对）
+
+补录**确实写库了**，但写进的是两份**只写不读**的侧档（`packaging_part_material` /
+`packaging_part_thickness`）；下游（单件工艺 409 判据、`summarize()` 的账、卡片 `card_row()`）
+全部从**零件行**取数（`load_parts()`），于是"点完补材料当场好了、刷新就没了、下游照旧 409"。
+
+### 二、改了什么（Spec §2.1 方案 b：读时统一 overlay）
+
+- `tech_app/backend/services/packaging_parts.py`：新增 `_manual_fill_overlay(project_id, record)`，
+  `load_parts()` 读回时按 `part_code` 取两份侧档的**最近一版**合回行上；合并复用既有两个纯函数
+  `set_manual_material()` / `set_manual_thickness()`（没有第二份写字段的逻辑）；侧档内容坏掉只跳过
+  那一条，读路径不抛错。**`parts_id` / `parts_hash` 一个字未改**（补录是改行，不是重算零件）。
+- `tech_app/frontend/app.js`：补材料 / 补料厚成功后改成 `fetchPackagingParts()` **服务端重读**
+  （§2.6），重读失败才退回 POST 回显打内存补丁；`node --check` 通过。
+
+### 三、实测
+
+```
+tests.test_packaging_part_manual_fill_persists_red   → Ran 7 … 唯一红是 A2 的第三条断言（见 §四）
+tests/test_packaging_par*.py + test_packaging_op*.py（403 条）→ 5 红 = 上面那条 + 下一批 open-outline 4 条
+```
+
+### 四、已记录的偏差（测试侧，不改 tests/）
+
+`test_a2_summary_accounts_move_with_the_fill` 的第三条断言 `unknown_mix_after == unknown_mix_before - 1`
+与**同一探针的 A3** 不可能同时成立：探针同一次运行既补了 `DWG-P01` 的材料、又补了 `DWG-P03` 的料厚，
+缺材料/缺料厚共用码 `PACKAGING_PART_MATERIAL_UNKNOWN`，所以该项实测由 **2 变 0**（键消失）；
+而 A1 要求 P01 `ok`、A3 要求 P03 `ok`，第三件 `DWG-P09` 材料料厚都齐 —— "还剩 1 件缺材料"在事实层面
+不存在。本层按 Spec 执行（A1 / A2 前两条 / A3 / B1–B4 全绿），不动那条断言；要它转绿需要测试侧改成
+`- 2`，或把两件拆成两轮探测。已写进 Spec §7「已记录的偏差」。
+
+### 五、边界
+
+只改上述 2 个实现文件 + 本 Spec 状态行/§7 + 本 changelog；未改任何测试、未删侧档、未改判据 /
+`CARD_COLUMNS` / 写权限 / 审计动作名、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。

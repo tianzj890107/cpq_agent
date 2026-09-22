@@ -2044,10 +2044,60 @@ def save_parts(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
+def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    """把两份人工补录侧档**读时合并**回零件行（Spec §2.1 方案 b）。
+
+    为什么要有这一层：`save_part_material()` / `save_part_thickness()` 写的是侧档
+    （`DOC_KEY_MATERIAL` / `DOC_KEY_THICKNESS`，留痕与版本历史在它身上），而所有下游
+    （单件工艺 409 判据、`summarize()` 的账、卡片 `card_row()`）都从**零件行**取数。
+    以前两份侧档"只写不读"，于是"补完刷新就没了"。
+
+    合并口径只有这一处，且**只读**：
+
+    - 侧档按 `part_code` 取最近一版（`_part_doc_items()` 已按新→旧排列），每件只合一次；
+    - 合出来的行与逐个调 `set_manual_material()` / `set_manual_thickness()` **同一形状**
+      （直接复用这两个纯函数，不另写一份写字段的逻辑）；
+    - 零件文档的 `parts_id` / `parts_hash` 一个字不改 —— 补录是「改行」，不是「重算零件」；
+    - 侧档内容坏掉（空值 / 非正数）只跳过这一条，**不许**让读路径抛错。
+    """
+    overlays: Dict[str, Dict[str, Any]] = {}
+    for key in (DOC_KEY_MATERIAL, DOC_KEY_THICKNESS):
+        for item in _part_doc_items(project_id, key):
+            code = _text(item.get("part_code"))
+            if not code or code in overlays:
+                continue
+            overlays[code] = dict(overlays.get(code) or {}, **{key: item})
+
+    out = copy.deepcopy(record)
+    parts = out.get("parts") if isinstance(out, dict) else None
+    if not overlays or not isinstance(parts, list):
+        return out if isinstance(out, dict) else record
+    for row in parts:
+        if not isinstance(row, dict):
+            continue
+        fill = overlays.get(_text(row.get("part_code")))
+        if not fill:
+            continue
+        material = fill.get(DOC_KEY_MATERIAL)
+        thickness = fill.get(DOC_KEY_THICKNESS)
+        try:
+            if material:
+                row.update(set_manual_material(row, material.get("spec"),
+                                              bound_by=_text(material.get("bound_by")),
+                                              reason=_text(material.get("reason"))))
+            if thickness:
+                row.update(set_manual_thickness(row, thickness.get("thickness_mm"),
+                                                bound_by=_text(thickness.get("bound_by")),
+                                                reason=_text(thickness.get("reason"))))
+        except ValueError:
+            continue
+    return out
+
+
 def load_parts(project_id: str, parts_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     for item in _load_items(project_id):
         if parts_id is None or _text(item.get("parts_id")) == str(parts_id):
-            return item
+            return _manual_fill_overlay(project_id, item)
     return None
 
 

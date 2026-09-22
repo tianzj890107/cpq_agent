@@ -1454,9 +1454,15 @@ async function packagingPartSetThickness(partCode) {
     window.alert(`补料厚失败：${message}`);
     return null;
   }
-  const patch = { thickness_mm: payload.thickness_mm };
-  if (payload.thickness_source) patch.thickness_source = payload.thickness_source;
-  patchPackagingPartRows(partCode, patch);
+  // 与「补材料」逐字同范式（Spec §2.6）：先按服务端重读，读不到才退回回显补丁。
+  const reread = await fetchPackagingParts();
+  if (reread) {
+    currentPackagingParts = reread;
+  } else {
+    const patch = { thickness_mm: payload.thickness_mm };
+    if (payload.thickness_source) patch.thickness_source = payload.thickness_source;
+    patchPackagingPartRows(partCode, patch);
+  }
   renderTree(currentIR || {});
   return payload;
 }
@@ -1493,9 +1499,17 @@ async function packagingPartSetMaterial(partCode) {
     window.alert(`补材料失败：${message}`);
     return null;
   }
-  const patch = { material: payload.material };
-  if (payload.material_source) patch.material_source = payload.material_source;
-  patchPackagingPartRows(partCode, patch);
+  // Spec `packaging-part-manual-fill-must-land-on-the-part-row.md` §2.6：补录成功后那一行必须
+  // 来自**服务端重读**（补录落回零件行之后，读回的值才是真实的、刷新后一致）；重读失败才退回
+  // 用 POST 的回显打内存补丁（立刻可用，但不再是唯一来源）。
+  const reread = await fetchPackagingParts();
+  if (reread) {
+    currentPackagingParts = reread;
+  } else {
+    const patch = { material: payload.material };
+    if (payload.material_source) patch.material_source = payload.material_source;
+    patchPackagingPartRows(partCode, patch);
+  }
   renderTree(currentIR || {});
   return payload;
 }
