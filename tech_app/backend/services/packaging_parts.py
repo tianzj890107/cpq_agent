@@ -2965,6 +2965,15 @@ BUSINESS_BINDING_RULE_ID = "business_parts_geometry_binding_v1"
 #: 一个分量默认只属于一个业务部件；人工明确共享时例外并留痕（Spec §2 第 3 条）。
 BUSINESS_SHARED_COMPONENT = "component_shared_between_business_parts"
 
+#: 绑定的原因码闭集（Spec `packaging-business-parts-binding-size-source.md` §C4）：
+#: 尺寸对不上 / 拿不到尺寸 / 只对一轴 / 分量缺尺寸 / 没有候选 / 没有权威清单。
+#: 注意它与**过筛**原因码 `REASON_CODES` 是两套闭集，不许混用。
+BUSINESS_BINDING_REASONS = ("size_mismatch", "size_unknown", "one_axis_only",
+                            # `component_bbox_missing` 是历史码位（命中件没有包围盒时用过）：
+                            # 判据改读件尺寸后绑定路径不再发它，保留登记以兼容老文档与人工路径。
+                            "component_bbox_missing", "no_component_size_match",
+                            "no_authority_binding")
+
 #: 尺寸判据：一轴完全相等、另一轴差在容差内 → `partial`；两轴都在容差内 → `bound`。
 BUSINESS_BINDING_TOLERANCE_MM = 2.0
 BUSINESS_BINDING_TOLERANCE_RATIO = 0.05
@@ -3000,16 +3009,35 @@ def _bbox_size(bbox: Any) -> Tuple[Optional[float], Optional[float]]:
     return abs(xs[1] - xs[0]), abs(ys[1] - ys[0])
 
 
+def _component_size(component: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], str]:
+    """一件几何分量的**权威尺寸**与来源（Spec `packaging-business-parts-binding-size-source.md` §C1）。
+
+    件的尺寸只有一个定义（第 1 层 `packaging-parts-true-outline.md`）：闭合件取环、开口件退回
+    分量 bbox —— 两者都落在 `unfolded_length_mm` / `unfolded_width_mm` 上。`bbox` 只作**兜底**：
+    `extract()` 产出的 `parts` 行根本没有 `bbox` 键，判据若只读它会恒为 `size_unknown`
+    （真样本实测 0/28 命中）。拿不到尺寸就返回 `(None, None, "")` —— 不猜、不给默认值。
+    """
+    length = _num(component.get("unfolded_length_mm"))
+    width = _num(component.get("unfolded_width_mm"))
+    if length is not None and width is not None:
+        return length, width, _text(component.get("size_source")) or "unfolded_size"
+    bbox_length, bbox_width = _bbox_size(component.get("bbox"))
+    if bbox_length is not None and bbox_width is not None:
+        return bbox_length, bbox_width, "component_bbox"
+    return None, None, ""
+
+
 def _axis_pair_score(part: Dict[str, Any],
                      component: Dict[str, Any]) -> Tuple[int, Optional[str]]:
     """一件业务部件与一个几何分量的尺寸相符度。
 
     返回 `(命中轴数, 不匹配原因)`：`2` = 两轴（含长宽对调）都对得上；`1` = 只对上一轴
     （图纸常常只画了展开件的单向尺寸）；`0` = 对不上。**不猜**：拿不到尺寸就是 `0`。
+    尺寸一律走 `_component_size()`（件权威尺寸优先），判据与容差一个字不改。
     """
     length = _num(part.get("length_mm"))
     width = _num(part.get("width_mm"))
-    comp_length, comp_width = _bbox_size(component.get("bbox"))
+    comp_length, comp_width, _source = _component_size(component)
     if None in (length, width) or None in (comp_length, comp_width):
         return 0, "size_unknown"
     for left, right in ((length, width), (width, length)):
@@ -3038,20 +3066,34 @@ def bind_geometry(business_parts: Any, components: Any, *,
         code = _text(part.get("business_part_code"))
         hits: List[Dict[str, Any]] = []
         reasons: List[str] = []
+        candidates = 0
+        comparable = 0
         for component in (components or []):
             if not isinstance(component, dict):
                 continue
+            candidates += 1
             score, miss = _axis_pair_score(part, component)
+            size_source = _component_size(component)[2]
+            if size_source:
+                comparable += 1
             if score <= 0:
                 continue
             hits.append({"component": component, "score": score, "miss": miss,
+                         "size_source": size_source,
                          "confidence": 0.9 if score == 2 else 0.5})
         if not hits:
-            reasons.append("no_component_size_match")
+            # 三档分得开（Spec §C4）：尺寸对不上 / 拿不到尺寸 / 一个候选都没有。
+            if comparable:
+                reasons.append("size_mismatch")
+            elif candidates:
+                reasons.append("size_unknown")
+            else:
+                reasons.append("no_component_size_match")
         hits.sort(key=lambda item: (-item["score"], _text(item["component"].get("component_id"))))
         best = hits[0] if hits else None
         component_ids: List[str] = []
         entity_ids: List[str] = []
+        size_sources: List[str] = []
         bbox: Any = None
         confidence = 0.0
         status = "unbound"
@@ -3061,6 +3103,8 @@ def bind_geometry(business_parts: Any, components: Any, *,
                 component = item["component"]
                 component_ids.append(_text(component.get("component_id")))
                 entity_ids.extend(component.get("entity_ids") or [])
+                if item.get("size_source"):
+                    size_sources.append(_text(item["size_source"]))
                 bbox = component.get("bbox")
                 confidence = max(confidence, float(item["confidence"]))
                 owner = taken.get(_text(component.get("component_id")))
@@ -3072,8 +3116,6 @@ def bind_geometry(business_parts: Any, components: Any, *,
             # 同一件里多个分量并列第一：不是"更确定"，而是"分不清哪个是本体"。
             if len(best_ids) > 1:
                 status = "ambiguous"
-            elif not bbox:
-                reasons.append("component_bbox_missing")
             for item in best_ids:
                 taken.setdefault(_text(item["component"].get("component_id")), code)
             if best["miss"]:
@@ -3084,6 +3126,8 @@ def bind_geometry(business_parts: Any, components: Any, *,
             "component_ids": component_ids,
             "entity_ids": entity_ids,
             "bbox": bbox,
+            # 命中分量的尺寸来源（Spec §C5）：绑定结论要能回查到"用的是哪把尺子"。
+            "size_sources": sorted(set(size_sources)),
             "confidence": round(confidence, 4),
             "reasons": reasons,
             "bound_by": source,
@@ -3105,6 +3149,10 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
     """从几何零件文档抽出 `geometry_evidence`（分量清单 + 两笔总数）。
 
     `limit` > 0 时只回前 `limit` 个分量（页面按视口分片读），但两笔总数照样是全量真值。
+
+    每件必须带上**件权威尺寸**（`unfolded_length_mm/width_mm` + `outline_status`/`size_source`，
+    Spec `packaging-business-parts-binding-size-source.md` §C2）：`parts` 行没有 `bbox` 键，
+    不透传这份尺寸，绑定判据就永远是 `size_unknown`（真样本实测 0/28）。
     """
     doc = parts_doc if isinstance(parts_doc, dict) else {}
     rows = [row for row in (doc.get("parts") or []) if isinstance(row, dict)]
@@ -3117,6 +3165,12 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             "component_id": _text(row.get("component_id")),
             "entity_ids": list(row.get("entity_ids") or []),
             "bbox": row.get("bbox"),
+            # 件的权威尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
+            "unfolded_length_mm": row.get("unfolded_length_mm"),
+            "unfolded_width_mm": row.get("unfolded_width_mm"),
+            "outline_status": _text(row.get("outline_status")),
+            "size_source": _text(row.get("size_source")),
+            "area_mm2": row.get("area_mm2"),
             "layers": list(row.get("layers") or []),
             "role": _text(row.get("role")),
             "geometry_component_ref": _text(row.get("geometry_component_ref"))

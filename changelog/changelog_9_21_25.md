@@ -15948,3 +15948,81 @@ CAD IR 的连通分量被直接当成"零件"：酒盒真图 402 个分量、过
 - packaging 全域 `Ran 1530 tests FAILED (failures=5, skipped=8)` —— 与 `## 368` 同样的 5 条既有挂账，
   本批未新增红；`node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
 - 仍然只有服务器可见路径上的工作簿能导入（客户资料不入库）；未 push / 未部署 / 未动他人工作区改动。
+
+## 370. 业务部件 ↔ 几何分量的绑定判据读的是一个**不存在的键**：真样本 28 件全 `unbound`（0/28），改读件权威尺寸后 27 件找到候选（9-22，Codex 实现）
+
+红测 `tests/test_packaging_business_parts_binding_size_source_red`：实现前 `Ran 18, failures=13`，
+实现后 `Ran 19 OK`。
+
+### 一、缺口（真样本实测，不是推断）
+
+`裕同包装项目-待开发/酒盒.dwg`（263 个过筛分量，134 闭合 / 129 开口）× `酒盒 报价资料.xlsx`
+（28 个业务部件 `JWXR21-P01…P28`）：
+
+1. `extract()` 产出的 `parts` 行**没有** `bbox` 键 —— 件的尺寸在
+   `unfolded_length_mm / unfolded_width_mm` + `outline_status` / `size_source` 上（第 1 层口径：
+   闭合取环、开口退回分量 bbox，两者都写进这两个字段）。
+2. `geometry_evidence_of()` 只透传 `row.get("bbox")` → 证据层每个分量的 `bbox` 恒为 `null`；
+   `_axis_pair_score()` 又只读 `component["bbox"]` → 每件都 `size_unknown` → `bind_geometry()`
+   在真图上 **0 / 28 命中**，`bound/partial/ambiguous` 全是 0、28 件全 `unbound`。
+   也就是说 `## 368` 落地的绑定这一层在**生产路径上从来没接上**（`main.py` 导入路由 →
+   `geometry_evidence_of(load_parts(pid))` 走的正是这条）。
+3. 同一份数据改读件权威尺寸后：**19 件两轴命中 + 8 件单轴命中**，且多数件与环尺寸**逐位相等或
+   差 < 0.3mm**（`JWXR21-P25` 80.5×34.3 ↔ `cmp:766` 34.3×80.5 差 0.000；`JWXR21-P21` 145.0×126.0
+   ↔ `cmp:192` 126.0×145.0 差 0.000）—— 业务表的"尺寸"列与 DWG 闭合轮廓是**同一个量**，
+   不是"成品尺寸 vs 展开尺寸"两把尺子。
+
+### 二、改了什么（只 `tech_app/backend/services/packaging_parts.py` 一个文件）
+
+- 新增 `_component_size(component)`：件权威尺寸的**唯一**取值入口 —— `unfolded_length_mm/width_mm`
+  优先（来源取行上的 `size_source`：`closed_outline`/`dwg_outline`），`bbox` 降为兜底（来源
+  `component_bbox`），两者都没有 → `(None, None, "")`（不猜、不给默认值）。
+- `_axis_pair_score()` 改调它；返回仍是 `(命中轴数, 原因)`，**容差 `±max(2mm, 5%)`、长宽对调、
+  `bound/partial/ambiguous` 判定顺序与置信度一个字没改**。
+- `bind_geometry()`：命中项记 `size_source`，binding 记录新增 `size_sources`（去重升序）；
+  无命中时按"有候选但对不上 / 有候选但拿不到尺寸 / 一个候选都没有"分别报
+  `size_mismatch` / `size_unknown` / `no_component_size_match`（以前一律 `no_component_size_match`，
+  把"尺子对不上"和"没有尺子"混在一起）；删掉命中件必发的 `component_bbox_missing`。
+- 新增绑定原因码闭集 `BUSINESS_BINDING_REASONS`（6 个）—— 与**过筛**原因码 `REASON_CODES`
+  是两套闭集，不混用（`component_bbox_missing` 只保留码位）。
+- `geometry_evidence_of()`：每个分量透传 `unfolded_length_mm` / `unfolded_width_mm` /
+  `outline_status` / `size_source` / `area_mm2`；`bbox` 与既有回查键、`limit` 分片、两笔总数都不动。
+
+### 三、真样本前后对照（同一份样本、同一个函数）
+
+| | `bound` | `ambiguous` | `unbound` |
+| --- | --- | --- | --- |
+| 改判据前 | 0 | 0 | 28 |
+| 改判据后 | 1 | 26 | 1 |
+
+`size_sources` 实测出现 `closed_outline`（13 件）与 `component_bbox`（含混合 5 件），说明环尺寸
+真的被用上了。
+
+### 四、已记录的边界（不改测试、不自己拍口径）
+
+1. **"找到候选"不等于"自动定死"**：真图把同一个件画了很多遍（34.3×80.5 的分量出现 **55 次**、
+   60.0×120.8 13 次、42.0×108.0 13 次），既有并列规则（`## 368` Spec §2"并列多个 → `ambiguous`，
+   同尺寸不合并"）因此把 26/28 标成 `ambiguous`。这些件**不缺数据**（`component_ids` 已列出全部
+   相符分量），只是状态保守；要收敛需先裁决"重复分量算不算同一个件的多次出现" —— 属业务口径，
+   本批**没动**（已记 Spec §9 边界 1）。
+2. 外购/内托件（`JWXR21-P26` 687.6×228.0）在 DWG 里没有轮廓，保持 `unbound` + `size_mismatch`；
+   按 `## 368` Spec §6，几何未绑定只阻断依赖几何的尺寸/工艺，不阻断材料与采购成本。
+3. 平面图仍按分量 bbox 画（`components[].bbox` 本来就为空），本批只透传**尺寸**，没动坐标/轮廓
+   —— 与 `packaging-business-parts-and-cad-plan-view.md` §12 边界 4 同一条。
+4. 一个分量被多件认领仍按既有口径留 `shared` 记录（实测 67 条），不自动降级状态；人工确认
+   闭环 `PUT .../geometry-binding` 仍是唯一收口手段。
+
+### 五、复跑
+
+```
+tests.test_packaging_business_parts_binding_size_source_red  → Ran 19 OK（实现前 Ran 18, failures=13）
+tests.test_packaging_business_parts_and_cad_plan_view_red    → Ran 14 OK
+tests.test_packaging_parts_extraction_red                    → Ran 32 OK
+tests.test_packaging_parts_outline_red                       → Ran 20 OK
+tests.test_packaging_parts_panel_red                         → Ran 19 OK
+tests/test_packaging_*.py 全域（83 个模块）→ Ran 1549, failures=5, skipped=8
+（5 条是 `## 338`/`## 356`/`## 353` 等已记过的既有挂账：B3 / B4 / A2 / F2 / C1，不在本批范围）
+```
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未改前端、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
