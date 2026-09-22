@@ -1077,6 +1077,12 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         # 人工映射文档读不到时（Spec §2.2 改成显式失败）读接口**不许**按"没人映射过"渲染：
         # 清单留空但标记非空，界面据此说"暂时读不到，请稍后重试"。
         "role_unbound_unavailable": dict(role_scope.get("unavailable") or {}),
+        # 未映射清单旁边的候选角色披露（Spec
+        # `packaging-bom-role-unbound-template-disclosure.md` §2.2）：逐字等于 `_role_scope()`
+        # 那一份（同一处口径，不第二次查知识库）；两件事分开：这里是"候选读不到"，
+        # 上面那个是"人工映射文档读不到"。
+        "role_unbound_templates_unavailable": dict(
+            role_scope.get("templates_unavailable") or {}),
         "gaps": {
             "needs_input": needs_input,
             "missing_variables": missing_variables,
@@ -1100,10 +1106,22 @@ def _load_role_scope(project_id: str, requirement_no: str, items: list,
     （`unavailable`），**绝不**按"没人映射过"渲染。
     """
     templates: list = []
+    templates_unavailable: dict = {}
     try:
-        templates = list(role_candidates_for(project_id, requirement_no).get("part_templates") or [])
-    except Exception:                                   # noqa: BLE001 - 读不到 KB 不挡披露
+        lookup = role_candidates_for(project_id, requirement_no) or {}
+        templates = list(lookup.get("part_templates") or [])
+        # 候选"读不到"这一句必须原样透出（Spec
+        # `packaging-bom-role-unbound-template-disclosure.md` §2.1）：以前这里只取
+        # `part_templates`，`templates_unavailable` 被扔掉 —— 于是 BOM 未映射清单只给"候选：空"，
+        # 与"这个盒型确实没有候选角色"同形，而角色映射面板同一时刻却说"模板暂时读不到"。
+        flag = lookup.get("templates_unavailable")
+        templates_unavailable = dict(flag) if isinstance(flag, dict) else {}
+    except Exception as exc:                            # noqa: BLE001 - 读不到 KB 不挡披露
         templates = []
+        templates_unavailable = {
+            "code": "template_lookup_failed", "reason": type(exc).__name__,
+            "message": "部件模板暂时读不到（知识库读失败：%s），"
+                       "请稍后重试；这不代表该盒型没有部件模板" % type(exc).__name__}
     if unavailable is None:
         try:
             role_map = role_map_doc(project_id)
@@ -1111,13 +1129,16 @@ def _load_role_scope(project_id: str, requirement_no: str, items: list,
             return {"items": [], "unbound_total": 0, "mapped_total": 0,
                     "unavailable": {"code": exc.code or "role_map_unavailable",
                                     "reason": "doc_channel_unavailable",
-                                    "message": str(exc)}}
+                                    "message": str(exc)},
+                    "templates_unavailable": dict(templates_unavailable or {})}
         unavailable = {}
     else:
         role_map = {}
     status = role_map_status(items, box_type_code=box_type_code, part_templates=templates,
                              role_map=role_map)
     status["unavailable"] = dict(unavailable or {})
+    # 候选读不到的披露（Spec §2.1）：键必须存在，读得到时给 `{}`。
+    status["templates_unavailable"] = dict(templates_unavailable or {})
     return status
 
 

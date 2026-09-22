@@ -1851,7 +1851,37 @@ async function refreshPackagingParts() {
   // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
   // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
   await loadPackagingRoleMap().catch(() => null);
+  // 空下拉框必须有解释（Spec `packaging-bom-role-unbound-template-disclosure.md` §2.3）：
+  // BOM 体上的 `role_unbound_templates_unavailable` 与角色映射面板的 `templates_unavailable`
+  // 说的是同一件事，两处都要说，不能一个是空白下拉、另一个才解释。
+  await refreshPackagingBomRoleUnboundNote().catch(() => null);
   return currentPackagingParts;
+}
+
+/* BOM 未映射清单旁边的候选角色披露（Spec `packaging-bom-role-unbound-template-disclosure.md` §2.3）。
+   `GET …/requirement/packaging-bom` 的 `role_unbound_templates_unavailable` 非空 =
+   "这一趟候选角色没读到"，与"这个盒型确实没有候选角色"分家；`{}` 时什么也不加。 */
+async function refreshPackagingBomRoleUnboundNote() {
+  if (!currentProject) return null;
+  const host = $("packagingRoleMap");
+  if (!host) return null;
+  let flag = {};
+  try {
+    const res = await fetch(API + `/api/projects/${currentProject}/requirement/packaging-bom`);
+    const payload = await res.json().catch(() => ({}));
+    const body = (payload && payload.bom) || {};
+    flag = (body && body.role_unbound_templates_unavailable) || {};
+  } catch (error) { return null; }
+  const old = host.querySelector("[data-role-unbound-templates-unavailable]");
+  if (old) old.remove();
+  if (!flag.code) return flag;
+  const note = document.createElement("div");
+  note.className = "role-map-warning";
+  note.setAttribute("data-role-unbound-templates-unavailable", "1");
+  note.textContent = `候选角色暂时读不到（${String(flag.code)}），请稍后重试；`
+    + "这不代表该盒型没有候选角色。";
+  host.append(note);
+  return flag;
 }
 
 /* ---------------- 2.1 BOM 业务角色的人工映射（Spec packaging-part-role-manual-mapping.md §4.5） ----------------

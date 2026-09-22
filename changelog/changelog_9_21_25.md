@@ -15480,3 +15480,50 @@ M4（位图 / 三维 / 其他三条既有口径逐字不变）/ M5（后缀判�
   分支，等前端真接这个字段时按 §2.2 显示。详见 Spec §5.3。
 - 只改"怎么说"：不动 `file_preflight` 契约与返回形状、不装转换器、不写盘、不调模型、不联网；
   未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 360. 落地 `packaging-bom-role-unbound-template-disclosure`：候选角色"读不到"的披露不再被下一层丢掉（8 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_bom_role_unbound_template_disclosure_red`（A / B / D / E 组 8 条）全绿：
+A1 / A2 / A3 / B1 / D1 由红转绿，E1（`_load_role_scope` 既有键）/ E2（`role_map_status` 形状）/
+E3（`load_bom` 既有 `role_unbound*` 键）三条护栏保持绿。
+
+### 一、缺口
+
+`role_candidates_for()`（`packaging_bom.py`）在知识库读不到时给 `part_templates: []` **并且**
+`templates_unavailable: {"code": "template_lookup_failed", ...}`（同一份披露已被
+`packaging-silent-degradation-disclosure.md` 的红测钉住）；但 `_load_role_scope()` 只取
+`part_templates`、把标记扔掉，自己又写了一处 `except Exception: templates = []` —— 于是
+`GET …/requirement/packaging-bom` 的未映射清单只给"候选角色：空"，与"这个盒型确实没有候选角色"
+逐字相同，而同一时刻 `GET …/packaging-bom/role-map` 会显示"模板暂时读不到"：**两个面板对同一件事
+说法不一致**，用户看到空下拉只会去改盒型。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_bom.py`
+  - `_load_role_scope()`：一次调用 `role_candidates_for()`，同时取 `part_templates` 与
+    `templates_unavailable`（逐字带出）；它抛异常 → 按同一形状留
+    `template_lookup_failed` + 异常类名 + 同一句人话，清单照出（`unbound_total` 不变）；
+    `role_map_doc()` 不可读那条早退路径也带上这个键（空）；
+  - `load_bom()`：新增 `role_unbound_templates_unavailable`（逐字等于那一份；正常 `{}`），
+    与 `role_unbound_unavailable`（人工映射文档读不到）严格分开。
+- `tech_app/frontend/app.js`：新增 `refreshPackagingBomRoleUnboundNote()`，读 BOM 体的
+  `role_unbound_templates_unavailable`，非空时在角色映射面板尾部挂
+  `data-role-unbound-templates-unavailable="1"` 的说明（空下拉框必须被解释）。
+- `main.py` 的 BOM 读路由是 `{"bom": load_bom(...)}`，新键自动带出，路由形状未改。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_bom_role_unbound_template_disclosure_red
+# Ran 8 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_silent_degradation_red \
+    tests.test_packaging_part_role_manual_mapping_red tests.test_packaging_parametric_bom_red
+# Ran 91 tests ... OK
+node --check tech_app/frontend/app.js    # OK
+```
+
+### 四、边界
+
+- 只加键、只加说明："候选读不到"照旧进未映射清单，`role_candidates_for()` 的既有 code / message
+  与 `role_map_status()` 的清单口径一个字没改；两处 `unavailable` 不合并。
+- 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
