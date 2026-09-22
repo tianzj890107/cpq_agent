@@ -11170,6 +11170,13 @@ transfer-to-precise` → `match` 必然落到未知命令。已补 `command == "
 _handle_quick_quote_session_match(sid, body)`，并入库
 `tests/test_e2e_quick_quote_executable_red.py::test_match_command_is_really_dispatched`（`Ran 11 OK`）。
 
+**更正**：`cpq_agent_server.py` 那一提交**同时带进了并行会话同一文件里另外两处未提交的修**——
+`_handle_quick_quote_session_workspace` 的 `edits` 收字典（原来只收 list）、`_handle_quick_quote_session_confirm`
+的「从 `snapshot[segment]` 取报价对象」（原来 `dict("quick_quote_price")` 会 ValueError 断连）。
+那是并行会话的在途改动被我连同 match 一起 `git add` 了进去（提交前我只核过 match 那一段）。
+两处都是真修，且各自有红测守（见 `## 294`）；后续剩余的两处（首次确认的版本号、工作区盒型/数量映射）
+也在 `## 294` 一并收编入库。
+
 ### 实跑与不回归
 
 ```
@@ -11262,3 +11269,38 @@ changelog（`## 256` / `## 262` / `## 272` / `## 273` / `## 289` / `## 226` / �
 
 本轮**只读**：只跑了测试、只读了源码与 changelog；未改任何业务实现（除 `## 292` 已提交的那 4 个
 前端文件与 1 处服务端分发缝）、未改任何测试、未连 PG、未写生产数据。
+
+## 294. 快速报价「演示闭环」余下的两处修补 + 两条红测收编入库（9-22，Codex 收编并行会话在途改动）
+
+34 上两条 DWG 演示案例（`QQ-YT-DWG-ROUND-10PC` / `QQ-YT-DWG-WINE-700ML`）要真能从「可用」走到出价，
+还差两处写入侧的口径；这两处改动此前一直躺在并行会话的**未提交工作区**里（34 上也一样），
+既挡住 `scripts/deploy_34_bare.sh` 的第 0 步，也有丢失风险。本轮把它们连同两条红测收编入库。
+
+### 收编的两处修补
+
+| 文件 | 改动 | 为什么必须有 |
+| --- | --- | --- |
+| `cpq_quick_quote_workspace.py::_base_values` | ① 案例模型的字段名是 `box_type_code`，工作区/出价门禁读的是 `box_type` —— 在 `_base_values` 做唯一映射；② 数量来自 `build_baseline` 选中的数量档 `base_quantity`，不在 `case_snapshot` 顶层 | 不映射的话，**完全没改过的案例**也会被判成「盒型已改」，`missing_base_fields` 里躺着 `box_type` / `quantity`，出价门禁过不去 |
+| `cpq_agent_server.py::_handle_quick_quote_session_confirm` | `price.save(previous=…)` 只在**已经成功落过版本**（`state["versions"] > 0`）时才传上一版 | `state["quote"]` 在 `price` 命令后只是「未保存试算」；当成上一版会让**首次确认**的 `version_no` 从 2 起跳，刷新后版本号对不上 |
+
+### 收编的两条红测
+
+- `tests/test_quick_quote_demo_closure_red.py`（新，1 条）：「案例身份与所选数量必须进工作区」——
+  用两条演示案例的真实 `case_snapshot` 形状断言 `current.box_type == case_snapshot.box_type_code`、
+  `current.quantity == base_quantity`，且两者都不在 `missing_base_fields` 里。
+- `tests/test_e2e_quick_quote_executable_red.py` 追加 1 条：确认接口必须
+  `int(state.get("versions") or 0) > 0` 才传 `previous`（防止首次确认版本号从 2 起跳）。
+
+### 实跑
+
+```
+tests.test_quick_quote_*_red（16 个模块）              Ran 455，唯一红是既有冲突 test_f1（## 256），skipped=3
+tests.test_e2e_quick_quote_executable_red              Ran 11 OK（含新增那条）
+tests.test_quick_quote_demo_closure_red                Ran 1 OK
+```
+
+### 边界与归属
+
+- 这两处实现与两条红测**不是本轮新写的**，是并行会话在途改动（34 上与我本机都有）；本轮只做
+  「验证 → 收编入库 → 让 34 重新可部署」，代码内容一字未改（逐字节照收）。
+- 未改任何既有测试的期望值；未连 PG、未写生产数据。

@@ -4102,7 +4102,9 @@ def _handle_quick_quote_session_confirm(session_id: str, body, *, user=None) -> 
     try:
         saved = cpq_quick_quote_price.save(
             quote, user=user, session_id=_qq_text(session_id),
-            previous=state.get("quote") if state.get("quote") else None,
+            # state.quote 在 price 命令后只是“未保存试算”，不能当成上一版本；只有已经
+            # 成功落过版本时才传 previous，否则首次确认会从 version_no=2 起跳。
+            previous=(state.get("quote") if int(state.get("versions") or 0) > 0 else None),
             formal=bool(body.get("formal")))
     except Exception as exc:                                    # noqa: BLE001
         return _qq_error(getattr(exc, "code", "") or "confirm_failed",

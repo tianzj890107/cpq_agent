@@ -49,6 +49,8 @@ class QuickQuoteHttpClosureRed(unittest.TestCase):
         handler = SERVER[start:end]
         self.assertTrue('saved.get("snapshot")' in handler and "snapshot.get(segment_key)" in handler,
                         "price.save 的 segment 是段名；确认接口必须从 snapshot[segment] 取报价对象")
+        self.assertTrue('int(state.get("versions") or 0) > 0' in handler,
+                        "首次确认不能把未保存试算当上一版，否则版本号会从 2 开始")
 
 
 class QuickQuoteUiClosureRed(unittest.TestCase):

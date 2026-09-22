@@ -785,6 +785,13 @@ def _base_values(baseline) -> (Dict[str, Any], List[str]):
         for key in FIELD_KEYS:
             if key in snapshot:
                 values[key] = normalize_value(key, snapshot.get(key))
+        # 案例模型的字段名是 box_type_code，工作区/出价门禁的字段名是 box_type。
+        # 不在这里做唯一映射，完全未修改的案例也会被误判成“盒型已改”。
+        if "box_type" not in values and snapshot.get("box_type_code") is not None:
+            values["box_type"] = normalize_value("box_type", snapshot.get("box_type_code"))
+    # 数量来自 build_baseline 选中的数量档，不住在 case_snapshot 顶层。
+    if "quantity" not in values and src.get("base_quantity") is not None:
+        values["quantity"] = normalize_value("quantity", src.get("base_quantity"))
     explicit = src.get("base_values")
     if isinstance(explicit, dict):
         for key, value in explicit.items():
