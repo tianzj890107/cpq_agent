@@ -10425,6 +10425,109 @@ tests.test_packaging_cost_engine_red / routing / snapshot /
 
 未改任何 `tests/`；未改成本表达式/费率/权重/门槛；未连 PG、未写生产数据；未 push / 未部署。
 
+## 281. 34 上全流程第三轮真跑（当前部署版）：**零件下游已经不需要绕过** + 双样本零件可见 + 三套 Spec 落地复验（9-22，Codex 执行 + 只改 Spec 状态行 / changelog）
+
+用户要"从头到尾、我能看到、再回去；零件下游到底卡在哪、先绕过去、完了告诉我该改什么"。
+本轮在 34 上重跑了一遍，并且**先做了一个对照实验**去回答"还要不要绕"——结论变了，写在第一节。
+
+### 一、最要紧的结论：这条缝已经收口，**不再需要绕过**
+
+对照实验（`/tmp/nobypass.py`）：**全新项目 `1438c3bf910d`，全程零 `field_provenance` 写入**，
+解析完只按顺序往下走，门禁逐段自己打开：
+
+| 时点 | `box_match` | `bom` | `route` | `cost` | `quote_publish` |
+| --- | --- | --- | --- | --- | --- |
+| 解析完（零人工确认） | **open** | blocked `box_match_not_confirmed` | blocked `bom_not_built` | blocked `route_not_confirmed` | blocked `box_match_not_confirmed, cost_not_built` |
+| 盒型确认后 | open | **open** | blocked `bom_not_built` | blocked `route_not_confirmed` | blocked `cost_not_built` |
+| BOM + 路线确认后 | open | open | **open** | **open** | blocked `cost_not_built` |
+| 成本算完后 | open | open | open | open | blocked `cost_gaps_unresolved` |
+
+`PUT /requirement` 之后 `field_provenance` 里**一条都没有**（实测 `len=0`），
+而 `box_match` 直接就是 `open` —— 剩下的 blocked 全是**"还没走到那一步"的顺序门禁**
+（`box_match_not_confirmed` / `bom_not_built` / `route_not_confirmed`），
+**不是**上一轮那种 `field_unconfirmed`。
+
+对照上一轮（`## 260` / `## 265`）的答案：那时解析完是
+`box_match / bom / route / cost / quote_publish` **五段全 blocked + `field_unconfirmed`**，
+必须 PE1 手写 `field_provenance[].origin=user_confirmed` 才能往下走。
+**这条缝已由 `## 262`（`provenance` 显式写 `user_confirmed` + `gates` 两条独立证据路径）收口**，
+本轮现场复验成立。
+
+唯一还需要"放行"的是 `cost_gaps_unresolved` —— 那是**按设计**的：缺口要么清零、要么由人写明原因放行。
+
+### 二、完整链路（带卡片，一步不绕）
+
+| 环节 | 值 |
+| --- | --- |
+| 报价卡片 | 会话 `fullchain-ea16c55b`，`card_id=3991429074781216700`，实例 `bc_d4d507517416`，标题「包装报价 · 酒盒 700ML 双开门礼盒（演示 0922-D 不绕过）」 |
+| 技术项目 / 需求 | `73cdcaab61fc` / `REQ-73CDCAAB61FC`（PE1 上传 `酒盒.dwg`，`entry_origin=quote`） |
+| 解析链路 | **8/8 completed**（IR `e3c667ce99d614b6`，ODA 27.1） |
+| ★ 零件 | **64 件**，`closed 60 / open 4`、`closed_ratio 0.938`（上一轮 0.797，`## 264` 的轮廓重判在线）、过滤 192、截断 146 |
+| 盒型 / BOM | `YT-RB-02001-A` / 33 行，其中 **4 行 `source=dwg_parts`** |
+| 工艺路线 | **12 道**、`confirmed`、`violations=[]` |
+| 成本 | `total_cost=11.3847`、缺口 18 条 |
+| 回传 | **200**，`handoff_no=pkghandoff:73cdcaab61fc:REQ-73CDCAAB61FC:default:1` |
+| 回到报价侧 | 卡片第 3 步、`handoff_pending`；SM1 收件箱出现该回传任务 |
+| 第二样本 | 圆盘盒 → 项目 `86a21fded9ca`，**9 件**（8 closed / 1 open，`closed_ratio 0.889`，`by_role={"unknown":8,"cut":1}`，截断 0，`collapsed_edge_total=11`） |
+
+零件的材料名这轮读得更全，例如 `粉灰 350g` / `灰板` / `PET光银 225g` /
+`白卡底PET光银裱A9 E坑 235g` / `B坑 5PCS 用法：上下.每2个盒子隔1个`（圆盘盒 `DWG-P04`）。
+
+### 三、2.1 零件面板四个端点（前端真正调用的那四条，逐段打）
+
+| 端点 | 结果 |
+| --- | --- |
+| ① 列表 `GET .../requirement/packaging-parts` | 200，**64 件**（圆盘盒 200，9 件） |
+| ② 单件 `GET .../packaging-parts/DWG-P07` | 200，261.303×434.968，轮廓 32 点 |
+| ③ `GET .../DWG-P07/process` | 200 `{"plan":null,"validation":null,"coverage":null}` ← **仍是恒空桩** |
+| ④ `GET .../DWG-P07/cost` | 200 `{"analysis":null,"summary":null}` ← **仍是恒空桩** |
+
+③④ 的结果只活在 POST 的异步任务里、不落库，刷新/重开就没了 ——
+**这条已有 Spec + 红测在跟**（`packaging-parts-downstream-readback.md`，本轮复跑 `Ran 17，failures=14`），
+本批**不重复立**。截断也在前端如实披露（`app.js:2487`「还有 146 件未列出（只显示前 64 件）」），不是缺口。
+
+### 四、三套 Spec 全部落地，本轮复验数字
+
+| Spec | 由谁实现 | 本轮复跑 |
+| --- | --- | --- |
+| `packaging-parse-to-downstream-seams.md`（A 人工字段 / B 配对复核 / C 放行留痕） | A → `## 262`；B / C → `## 274` | **Ran 13 OK** |
+| `packaging-bom-part-size-provenance.md`（回填尺寸带来源） | `## 276` | **Ran 15 OK** |
+| 冻结面 | — | `parts_extraction` 32 OK / `parametric_bom` 57 OK |
+
+34 实测同一条 BOM 里两类来源已经分得开（这是 `## 276` 的现场验收）：
+
+```
+RB02001-P02 ← DWG-P01  440.123×482.92  size_source=component_bbox  outline_status=open    size_quality=bbox_only
+RB02001-P03 ← DWG-P02  440.123×482.92  size_source=component_bbox  outline_status=open    size_quality=bbox_only
+RB02001-P08 ← DWG-P03  398.024×446.32  size_source=closed_outline  outline_status=closed  size_quality=unfolded
+RB02001-P09 ← DWG-P04  443.523×492.62  size_source=closed_outline  outline_status=closed  size_quality=unfolded
+```
+BOM 顶层键也已含 `pairing_review`（同一批 `## 274` 的落地）。
+
+### 五、本轮**没有**新立 Spec —— 逐条核过，如实说明
+
+| 看着像缺口 | 逐条核实后的判定 |
+| --- | --- |
+| 单件工艺/成本 GET 恒空、结论不落库 | 已有 Spec + 红测在跟（`packaging-parts-downstream-readback.md`） |
+| 盒型候选不按 `total_score` 降序 | **故意**升序（`_sort_key` docstring + `test_packaging_box_type_matching_red::test_a3` 钉住），最高分另由 `suggested_box_type` 给 |
+| 成本 `6.577 → 11.3847`、缺口 `24 → 18` | 两轮之间部署了成本缺口推导，能算出来的更多，材料费随之上升 |
+| 零件截断 146 件 | 前端 `app.js:2487` 有「还有 N 件未列出」提示 |
+| 无报价卡片时 `/packaging-quote/send` → 409 `no_candidate` | `## 278` 的新口径（报价会话身份），文案给了"选择已有卡片 / 新建卡片"两条出路；带卡片的链路本轮 200 |
+| `missing_inputs=["fit_clearance"]` | 需求侧字段，`requirement-create.js:126` 有录入位（"配合间隙"） |
+| 驱动打印 `score=None` | 驱动读错键名，真字段是 `total_score` |
+
+所以本轮只做**执行 + 复验 + 状态行校正 + 记录**，不为了凑数立第二套 Spec。
+
+### 边界
+
+- 仓库侧：改 1 处 Spec 状态行的红绿数字（`packaging-bom-part-size-provenance.md`，改成 `Ran 15 OK` + 34 现场四行证据）+ 本条目；
+  **未改任何业务实现**、未动既有冻结红测、未提交 / 未推送 / 未建 MR / 未打 tag / 未部署；
+- 34 上只**新增**：卡片 `fullchain-ea16c55b`、项目 `73cdcaab61fc`（主链路）、`1438c3bf910d`（对照实验）、
+  `86a21fded9ca`（圆盘盒）及各自的需求/BOM/路线/成本/交接记录，外加 `/tmp` 里的驱动与只读回读脚本；
+  既有项目、会话与数据一个都没删改；
+- 期间观察到一次服务重启（01:14 前后 `/api/health` 短暂 502 / Connection refused，约 90s 后恢复）——
+  是并行会话在部署，不是本轮操作；本轮在服务恢复后完整重跑并取数。
+
 
 ## 282. 34 部署 `925c241` + 报价→零件全流程第三轮真跑 + 新 Spec：自检的「跳过」不许被算成「通过」（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
 
@@ -10478,6 +10581,64 @@ tests.test_packaging_cost_engine_red / routing / snapshot /
   `requirement_service.py` / `app.js` 与 `docs/specs/packaging-bom-part-size-provenance.md` 一个字未动；
 - 本轮**没有**创建 MR / tag / Release；34 部署是脚本成功、自检通过的这一次；
 - 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 **L2（可信）**，未签字不得声明 L3。
+
+## 283. 34 上"报价 → 64 件零件 → 下游"再复核一遍 + 新 Spec/红测：零件业务角色的「未映射看得见 + 人工映射做得到」（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+（编号取 `283`：`281` / `282` 已被并行会话占用，本条目写完后才发现，故顺延，不改别人条目。）
+
+接着 `## 258` / `## 263` 那条线，在 34 上把**当前部署版本**又从头到尾读了一遍（只读接口，
+不重启、不部署、不写生产数据），把"零件下游到底卡在哪"钉到了最后一个没有入口的地方。
+
+### 现场复核（34，`http://172.16.10.34:8010`，2026-09-22，SM1 / PE1 / FI1 三个账号密码都是 `123456`）
+
+- **卡片还在、还是走完的**：`GET /wf/card?session_id=71c5a1c26619` → `card_id=3991429930452787157`、
+  `current_step=6`、`overall_status=completed`、6 步全 `done`；
+  标题「700ML双开门酒盒（全流程复跑 0805）」。
+- **零件看得见（用户要的那张卡）**：`GET /wf/card/step-data?...&step_no=6` 里那块
+  「图纸拆出来的零件（**64 件**）」是一张 8 列的表（零件号 / 名称 / 材料 / 厚度 / 尺寸来源 /
+  轮廓状态 / 展开长 / 展开宽），64 行齐全；`DWG-P01` 展开 440.123 × 482.92。
+  零件端点 `GET /api/projects/648d09d57f6f/requirement/packaging-parts` 同为 64 件、
+  `closed_ratio=0.938`、`processable_ratio=0.938`、`size_source_mix={"closed_outline":60,"component_bbox":4}`。
+- **上一轮报的"财务 FI1 打开成本 404"已经在线关掉**：同一项目用 **FI1** 读包装成本 → **HTTP 200**
+  （`estimate_id=pkgcost:648d09d57f6f:REQ-648D09D57F6F:default`，`built=true`）；
+  三个账号（SM1 / PE1 / FI1）登录全部正常。
+- **仍然卡住的一处（本轮新 Spec 的对象）**：
+  · `summary.role_known_ratio = 0.0`，`stats.by_role = {"unknown": 64}` —— 真实客户图图层名是
+    `0` / `DESIGN` / `SAMPLE` / `图层 2`，语义规则一个都不命中，64 件**全部没有业务角色**；
+  · 卡片第 6 步那张零件表**没有「角色」这一列**，所以"这一件还没映射"在用户看得见的地方完全不可见；
+  · `GET /api/projects/648d09d57f6f/requirement/packaging-bom` → 32 行、`box_part` 11 行，
+    行上**没有** `role_unbound` / `role_unbound_total`（读接口里不存在这两个键）；
+  · `GET .../requirement/packaging-bom/role-map` → **404**（生产入口 0 处）。
+
+### 根因（代码级，可复现）
+
+- `packaging_parts.bind_rows()` **已经**算出 `role_unbound` / `role_unbound_total`，
+  但 `packaging_bom._bind_parts()` 只取 `items` / `pairing_review` 两项，**把未映射清单丢掉了**
+  —— 与当年 `pairing_review` 被丢掉是同一个缺陷形状，`load_bom()` 输出里因此从来没有这两个键。
+- `BINDING_METHODS` 里的 `manual_mapping` 全仓 **0 个触发点**（`main.py` / `app.js` 都搜不到
+  `role-map`）：§4.4 只关掉了"自动贴角色"这条错路，却没给"人工映射"这条对的路，
+  于是"必须先完成人工映射"永远做不完。
+- `build_bom()` 里没有任何重放逻辑：即使人工映射写进去，重算一次 BOM 也会丢。
+
+### 落点（只改 Spec / 红测 / changelog）
+
+1. 新增 Spec `docs/specs/packaging-part-role-manual-mapping.md`：未映射行的判定口径、候选角色
+   只能来自确认盒型的部件模板 `component`、映射只改角色与留痕（尺寸/材料/状态/锁定一个字不许动）、
+   幂等 + 改绑留旧值、`build_bom()` 必须重放映射、两个路由的路径与权限门禁、
+   四个失败口径（`role_required` / `role_not_in_candidates` / `item_not_found` / `part_mismatch`）、
+   以及七条纯函数签名（`role_candidates` / `role_map_status` / `apply_role_mapping` /
+   `role_map_doc` / `save_role_mapping` / `role_candidates_for` / `apply_saved_role_map`）。
+2. 新增红测 `tests/test_packaging_part_role_manual_mapping_red.py`（A–G 七组，夹具直接照 34
+   读回来的行与零件形状写死）。**实测红基**：
+   `./open-claude/.venv/bin/python -m unittest tests.test_packaging_part_role_manual_mapping_red -v`
+   → `Ran 21`，A/B/C/D/E/F 六组 **19 条全红**（纯函数不存在、两个路由 0 处、`load_bom` 无两个键、
+   `build_bom` 无重放、面板无入口），G 组 2 条**本来就是绿的**——那是"红线不许放宽"的护栏，
+   实现前后都必须绿。
+
+### 边界
+
+- 本轮**只加** Spec 与红测两个新文件 + 本条目；未改任何生产代码、未改既有测试；
+- 未连 PG 写数据、未重启服务、未部署、未 push、未建 MR / tag / Release；
+- 红测的实现（`packaging_bom.py` / `main.py` / `app.js`）按纪律交给实现方，不在本轮落。
 
 ## 284. 包装报价 → DWG → 零件/BOM 连续性：报价原文即需求证据、跨行业候选剔除、DWG 入口唯一分发、审批后换图落修订版、未知角色不再自动贴业务名（9-22，Codex 实现）
 
@@ -10559,48 +10720,77 @@ node --check tech_app/frontend/app.js                  OK
 「64 件分页/虚拟滚动展示」的渲染上限仍由既有零件树决定（本批只保证跑完重拉与可点击，
 不改前端渲染口径），`GET /requirement/packaging-parts` 的既有分页参数未动。
 
-## 285. 部署自检的「跳过」不许被算成「通过」：三态判决 + 令牌先验证再重取（9-22，Codex 实现）
+## 285. Codex 自建需求 → 平台 AI 解析 → 技术工艺从头到尾真跑（34）：卡片看得见、64 件零件看得见 + 新 Spec/红测「1.1/1.2 的顺序门禁」（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
 
-红测 `tests/test_deploy_selfcheck_skip_vs_pass_red.py`（9 条，实现前 7 红）全绿。Spec：
-`docs/specs/deploy-selfcheck-skip-vs-pass.md`（已补 §6 实现记录）。
+用户要求：**自己创建解析需求**，把**技术工艺从头到尾跑一遍**，并说清"我在哪儿能看得到这张卡片与结果"。
+本轮全部在 34 上跑真接口（只**新增**数据：1 个报价会话 / 1 个技术项目 / 1 张需求单 / 2 个回传版本 / 1 张卡片，
+没有删改任何既有记录），没有 push、没有部署、没有改生产代码。
 
-### 根因（34 实测，部署 `925c241` 的 6b 步）
+### 我自建的那条链（34，2026-09-22）
 
-`权威实样路线自检：读不到知识库（… HTTP 403：内部令牌校验失败），跳过` 的下一行仍然是
-`{"isolated_downstream_selfcheck": "ok", "problems": []}` 与「隔离端到端自检通过」、退出码 0 ——
-**有一项根本没跑**，结论却和"全跑全过"长得一模一样（脚本注释里写的正是要防这个失效模式）。
-根因是**令牌取到 ≠ 能用**：重启顺序"先子后父"，取到的是上一代令牌，快照接口回 403。
+| 环节 | 真值 |
+| --- | --- |
+| 报价会话（SM1 建） | `e59e1b382478` |
+| 技术项目（PE1 建，原图 `酒盒.dwg`） | `7267eff7d68a`；入口分级 `origin=quote`（带 `source_session_id`，不是内部测试） |
+| 需求单 | `REQ-7267EFF7D68A`，标题「700ML 双开门酒盒（Codex 自建需求 0922-0824）」 |
+| 我写的需求原文 | 作为技术资料 `需求说明_Codex自拟.txt` 上传（内尺寸 180×90×90、1000 件、灰板 2.5mm + 面纸粉灰 225g、4C/哑膜/烫金/V 槽、EVA、交期 15 天） |
+| 平台 AI 解析（1.1） | `engine=qwen_text`、`model=qwen3.5-plus`，读的就是那份 txt；**带入 4 项**（`project_name`/`annual_forecast`/`first_sample_due`/`notes`）、**推荐 16 项**（值=`待人工确认`） |
+| 人工确认（我做的） | 11 个字段按原文确认（`grey_board=灰板`/`grey_board_thickness=2.5`/`face_paper=粉灰`/`face_paper_gsm=225`/`print_colors=4C`/`lamination=哑膜`/`hot_stamping=烫金`/`v_groove=有`/`insert_type=EVA`/`packaging_product_name`/`packaging_category`），写 `field_provenance.origin=user_confirmed` |
+| 图纸解析（八步） | **8/8 completed**：`file_preflight`→`dwg_convert`→`cad_ir_parse`→`packaging_semantics`→`parts_extract`→`field_write`→`pending_confirm`→`downstream_prepare` |
+| 需求确认 / 审核 | `pending_confirmation` → `pending_review` → **`approved`** |
+| 盒型 | 14 候选 → 确认 `YT-DWG-WINE-700ML` |
+| BOM / 工艺路线 | 32 行 / **11 道**（`confirmed`） |
+| 成本（2.3） | **4.4382 CNY**，28 条缺口（材料价、损耗率、缺公式、缺工步时间…） |
+| 报告汇总 | `process-report/prepare` 200，结论文字已带零件/工序/成本与缺口数 |
+| 回传报价 | **2 个版本**：v1 未放行、**v2 带缺口放行**；`pkghandoff:7267eff7d68a:REQ-7267EFF7D68A:default:2` |
+| 线上定价 | 未税 **6.7143** / 含税 **7.5871**（`draft=true`，缺口草稿不许对外发布） |
+| 零件 | **64 件**；`closed_ratio=0.938`、`processable_ratio=0.938`、`solid_ok_ratio=0.938`、`material/thickness_known_ratio=0.938`、`role_known_ratio=0.0` |
+| 卡片 | `card_id=3991445540368815159`、`bc_50e239dd5444`、`current_step=6`、**`completed`**，6 步全 `done`（确认需求配置 / 工艺确认 / 定价-利润加成 / 报价-其他加价项 / 报价方案 / 输出报价单） |
+| 技术工艺待办 | 已给 PE1 发 `tech_new_product`，PE1 收件箱里能看到这条（共 27 条待办中 1 条属于本项目） |
 
-### 落点（`scripts/deploy_34_bare.sh` 第 6b 步）
+### 在哪儿看
 
-- 判决三态闭集 `{ok, failed, incomplete}` + 逐项 `checks`（状态闭集 `{pass, failed, skipped}`）
-  + 顶层 `skipped`（给门禁读的稳定形状）；退出码 = 判决（0 / 1 / 2），
-  `incomplete` 走 `fail`，「自检通过」那句只出现在 `verdict == ok` 的分支里；
-- `selfcheck_fetch_token()` 只从**正在服务**的进程取（先 8012、再 8010 兜底）；
-  `selfcheck_probe_snapshot()` 拿到令牌先打一次 `GET /wf/tech/kb/snapshot`，非 200 即视为这一代
-  不可用，并把 `HTTP <状态> <响应体>` 原样打出来；`selfcheck_wait_service_ready()` 重取前先等
-  `/api/health` 回 `ok`（最多 60s）；重取一次后仍不行 → 这一项判 `skipped`，
-  原因 `internal_token_rejected: 第 N 次：HTTP 403 …`，整条自检判 `incomplete`。
+- **报价首页（卡片列表）**：`http://172.16.10.34:8010/` → SM1 / `123456` → 卡片「700ML 双开门酒盒（Codex 自建需求 0922-0824）」；
+  第 6 步快照里就是「图纸拆出来的零件（64 件）」9 列表格（零件号/名称/材料/厚度/展开长宽/轮廓状态/尺寸来源/角色）。
+- **技术工艺项目板**：`http://172.16.10.34:8010/index.html?project=7267eff7d68a`（图纸解析、零件、2.1/2.2/2.3）。
+- **技术工艺统一主页（待办/任务卡）**：`http://172.16.10.34:8010/home.html` → PE1 / `123456`。
+- 只读核对用：`GET /wf/card?session_id=e59e1b382478`、`GET /wf/card/step-data?session_id=e59e1b382478&step_no=6`、
+  `GET /api/projects/7267eff7d68a/requirement/packaging-parts`（均需 Bearer 登录）。
 
-### 实跑
+### 卡点与绕行（都是真跑出来的）
 
-```
-./open-claude/.venv/bin/python -m unittest tests.test_deploy_selfcheck_skip_vs_pass_red  → Ran 9 OK
-bash -n scripts/deploy_34_bare.sh                                                      → OK
-34 真跑新第 6b 步（真令牌 + 两份真实 DWG + 知识库）：
-  {"isolated_downstream_selfcheck": "ok", "checks": [酒盒 pass, 圆盘盒 pass,
-   YT-DWG-ROUND-10PC pass, YT-DWG-WINE-700ML pass], "problems": [], "skipped": []}
-  · 第 6b 步判决 verdict=ok：所有检查项都真跑且通过
-令牌不可用那一路（注入 skip 原因，本机）：verdict=incomplete、逐项 checks 里
-  {"name": "权威实样路线", "status": "skipped", "reason": "internal_token_rejected: 第 1 次：HTTP 403 …"}、
-  顶层 skipped 非空、退出码 2
-```
+1. **顺序陷阱（本轮最大）**：`drawing-flow` 第 8 步「字段写入」要求需求处于**可编辑草稿**；先 1.1/1.2/1.3 再跑图，
+   第 8 步必 `blocked / REQUIREMENT_NOT_EDITABLE`（**7/8**，提示"请先退回草稿"）。
+   绕行：`POST /requirement/return-to-draft` → 重跑八步 → **8/8** → 再提交确认/审核。
+   **这个坑本轮踩了两次**（人工确认材料后再跑图又踩一次），不是一次性事故。
+2. **回传必须带缺口放行**：`packaging-quote/send` 不带 `allow_gaps` → 409 `cost_gaps_unresolved`（列出 8 类缺口）；
+   带 `allow_gaps=true + reason` → 200 并落 v2 交接包、写 `gap_waiver`。
+3. **财务 FI1 打开本项目成本 = 404（重跑后 403）**：财务没被授予项目访问权；绕行是 PE1（工艺经理）跑成本，
+   数字照样出（4.4382）。这一条正由未入库的 `docs/specs/packaging-cost-finance-access.md` 覆盖，线上仍未实现。
+4. **工艺可算率的真因**：AI 只"推荐"材料/克重（值=`待人工确认`）；不人工确认时零件材料/厚度已知率低，
+   实测 **processable_ratio=0.141**；人工确认 11 个字段后 → **0.938**。也就是"零件下游能不能算"取决于 1.1
+   的推荐值有没有被人工确认 —— 这是平台设计如此，但界面上没有任何提示。
+5. **AI 解析质量**：原文里明确写了「面纸 粉灰 225 g/m²」「灰板 2.5 mm」，AI 却把
+   `face_paper_gsm`/`packaging_category`/`packaging_product_name`/`v_groove` 放进"推荐（待人工确认，置信度 0.35）"，
+   同时把通用/半导体模板字段（`bu`/`disclosure`/`category_a`/`project_code`/`priority`/`annual_forecast`…）一起推荐进来。
+6. **角色仍是 0/64**（`role_known_ratio=0.0`）：`## 283` 那套人工映射 Spec 的实现**已经落在本地工作区**
+   （该红测现在 `Ran 21 OK`），但线上还是 404（未部署）。
+
+### 本轮入库
+
+- 新增 Spec `docs/specs/packaging-requirement-confirm-order-guard.md`：1.1 提交确认与 1.2 确认都必须先调用
+  **同一份** `drawing_parse_prerequisite()`（1.3 已经在用），`required and not done` → 409
+  `REQUIREMENT_DRAWING_NOT_PARSED`、不落盘、带 `waiver` 才放行并留痕；判据仍只看"有没有零件"。
+- 新增红测 `tests/test_packaging_requirement_confirm_order_guard_red.py`。**实测红基**：
+  `./open-claude/.venv/bin/python -m unittest tests.test_packaging_requirement_confirm_order_guard_red -v`
+  → `Ran 8`，**3 红**（A1 1.1 不拦 / B1 1.2 不拦 / C1 两处都没调用那份前置），其余 5 条是"行为不变 + 护栏"
+  （A2/B2/C2/D1/D2 实现前后都必须绿）。
 
 ### 边界
 
-未改 `packaging-parts-downstream-acceptance.md` §3 的样本门槛、未删权威实样路线自检、
-未改 8010/8012 的启动方式与 env 文件口径、未改任何 `tests/`。
-
+- 只加「Spec + 红测」两个新文件 + 本条目；未改任何生产代码、未改既有测试；
+- 未 push / 未建 MR / 未 tag / 未 Release / **未部署**（34 上跑的是当时的部署版本，与我本地改动无关）；
+- 服务器上只**新增**上面那条链的数据，未调用任何删除/重置接口。
 ## 286. 图纸零件的业务角色：未映射清单读得回来 + 人工映射有生产入口（part-role-manual-mapping 21 OK）
 
 红测 `tests/test_packaging_part_role_manual_mapping_red.py`（21 条，实现前 19 红 / 2 护栏绿）
@@ -10695,6 +10885,58 @@ baseline / workspace / price / confirm / transfer / read 一被调用就是 `Nam
 
 只补 import 与一个取值助手；未改任何接口口径、未改任何断言、未改任何 `tests/`。
 
+## 288. 「只点前端按钮能不能跑通」逐页核对（34 当前部署版）+ 补记退路缺口：批准之后前端再无「退回草稿」（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+用户问的是：不用那些只有 Codex 能直接调的接口，**只一步一步点前端按钮**，报价 → 需求 → 图纸 → 零件 →
+组装整合 → 成本 → 报告 → 回传报价这条链**能不能跑通、怎么才能跑通**。本轮把部署版前端逐个入口对齐，
+并把"走错顺序就没有退路"这处缺口补进同一份 Spec/红测。
+
+### 一、结论：能跑通，但顺序不能错；错一次就要有退路（退路今天缺）
+
+- **能跑通**：9 个 stage 的按钮在部署版里都在（`tech-workbench.html?project=…&stage=…` 逐个 stage 的
+  提交/确认/放行按钮都存在），包装链路专属面板（盒型匹配 / 包装 BOM / 工艺路线 / 包装成本）也都在 1.2 页上。
+- **顺序**：正确顺序是 `1.1 创建并保存草稿 → 2.1 一键解析图纸（8/8）→ 再回 1.2 确认 → 1.3 审核`。
+  按工作台左栏的自然顺序 `1.1 → 1.2 → 1.3 → 2.1` 走，第 8 步 `field_write` 必
+  `blocked / REQUIREMENT_NOT_EDITABLE`（7/8）。
+- **退路缺口（本轮新发现，已补 Spec/红测）**：需求一旦 `approved`，前端**没有任何按钮**能退回草稿 ——
+  1.2 的「× 驳回」被 `cfAct()` 开头那句 `status !== 'pending_confirmation'` 一刀切挡掉（按钮可见可点，
+  点下去只弹一句与状态不符的提示、不发请求）；1.3 的「驳回」同样被 `status !== 'pending_review'` 挡掉。
+  后端 `RETURNABLE_TO_DRAFT_STATUSES` 本来是含 `approved` 的，缺的只是前端出口。
+- 这正是"上一轮 Codex 能绕过去、只点按钮的人跑不通"的那一步：绕行方式是直接 `POST /requirement/return-to-draft`。
+
+### 二、证据（34，2026-09-22 只读复验，未写任何业务数据）
+
+| 项 | 值 |
+| --- | --- |
+| 部署版 | 前端 `app.js` md5 `084cbb61…` / `index.html` md5 `211087b5…` = 提交 `86c734c`（286/287 未部署） |
+| 卡片 | 会话 `e59e1b382478`、`card_id=3991445540368815159`、`bc_50e239dd5444`、`current_step=6`、`completed` |
+| 技术项目 / 需求 | `7267eff7d68a` / `REQ-7267EFF7D68A`（`status=approved`），原图 `酒盒.dwg` |
+| 零件 | `packaging-parts`：`part_total=64`、`closed 60 / open 4`、`closed_ratio=0.938`、`processable_ratio=0.938`、`solid_ok_ratio=0.938`、`role_known_ratio=0.0`、`by_role={"unknown":64}` |
+| 包装成本 | `built=true`、`total_cost=4.43824806385824` CNY（PE1 与 FI1 都读得到 → 财务可见性那条 Spec 已在线上生效） |
+| 2.3 通用成本 | `/cost-review` 65 条缺口（`零件 DWG-P01…P64 没算成本；整机（组装）成本还没算`）、`confirmed=false` |
+| 角色人工映射 | 部署版 `GET …/packaging-bom/role-map` → **404**（`## 286` 未部署），前端也没有该区 DOM |
+| 报价侧快照 | `GET /wf/card/step-data?session_id=e59e1b382478&step_no=2` → 只有 `s2_cost / s2_route`，**没有** `packaging_package` |
+| 退回草稿前端入口 | 全仓 `tech_app/frontend/*.js` 里只有 `requirement-confirm-page.js` 一处引用 `return-to-draft` |
+
+### 三、Spec / 红测（本轮只改这两样 + 本文件）
+
+- `docs/specs/packaging-requirement-confirm-order-guard.md` 扩写：加 §1.2「退路缺口」线上证据、
+  §2.2 退路口径 7–10 条、§3 允许修改范围加两个前端页面、§5.2 E 组红测。
+- `tests/test_packaging_requirement_confirm_order_guard_red.py` 加 E1–E5：
+  E1 退回状态集必须具名且含 `pending_confirmation/pending_review/approved`；
+  E2 `cfAct()` 里那句一刀切必须落到 `kind === 'confirm'` 之后；
+  E3 1.3 页也要有 `return-to-draft` 出口；E4/E5 是护栏（后端放行集合与 `EDITABLE_STATUSES` 不许动）。
+- 红基实跑：`Ran 13 tests … FAILED (failures=6)` —— A1 / B1 / C1 / E1 / E2 / E3 红，E4 / E5 绿护栏。
+
+  红基是在**已提交的 `fa513e4`** 上取的；取完之后工作区里另有一条并行改动正在实现后端那半
+  （`requirement_service.py` 未提交的 +35 行），因此同一份红测在**当前工作区**会报
+  `failures=3, errors=5`（A1/A2/B1/B2/C2 被那份在途实现带成 error，E1/E2/E3 仍红）。
+  相邻三套（manual-field-confirmation 13 / parse-to-downstream-seams 13 / parts-downstream 20）全绿。
+
+### 四、边界
+
+未改任何业务实现、未改测试以外的断言、未连 PG、未写生产数据；未 push / 未部署。
+
 ## 289. 1.1/1.2 的「顺序门禁」+ 批准之后的「退回草稿」前端出口（9-22，Codex 实现）
 
 `## 288` 记的两处缺口（进路不挡、退路不通）本轮落地实现，落点只有三个文件：后端
@@ -10747,3 +10989,136 @@ baseline / workspace / price / confirm / transfer / read 一被调用就是 `Nam
 
 未改任何测试文件（含本次红测）、未连 PG、未写生产数据、未动 `EDITABLE_STATUSES`；
 Spec `docs/specs/packaging-requirement-confirm-order-guard.md` 增加 §8 实现记录。
+
+## 290. 快速报价「只点前端按钮走不完」：首页七个工作区命令 0 调用 + 读路径把坏掉的存储伪装成空（9-22，Codex 只改 Spec / 红测 / changelog）
+
+用户问「快速报价我人点按钮怎么一步一步点完」。在 34 当前部署版上把 **首页 → 面板 → 命令** 逐段核对，
+结论是**点不完**：能点到第 3 步（看案例库），从第 4 步「选为基准」起就没有真实接线。
+
+### 现场（34，只读实测）
+
+| 读法 | 真实结果 |
+| --- | --- |
+| `GET /agents/quote/api/quick-quote/cases` | 200；`case_total=2`、**`eligible_total=0`**、`verdict=no_eligible` |
+| `blocked_by` | `{"reason_code":"missing_fields","fix":"补齐缺的必需字段：标准单价","cases":["QQ-YT-DWG-ROUND-10PC","QQ-YT-DWG-WINE-700ML"]}` |
+| `报价首页.html` 调用的面板 API | 只有 `open` / `fillCaseFields` / `reviewCase` —— 七个工作区命令 **0 次调用** |
+| 面板 `render()` 画出的块 | 解析入口、五步、案例库、readiness、说明 —— **没有**字段工作区、**没有**报价段 |
+| 首页工作区容器 | **不存在**（`确认需求解析结果.html:875` 有 `#quickQuoteWorkspace`） |
+| 首页 `onAction` 覆盖的动作 | `fill_case_fields` / `review_case` / `transfer_to_precise` —— **`save_quote` 没接** |
+
+### 断在两处，都不是「没写功能」，是「没接上」
+
+1. **页面没接线**：`quick-quote-panel.js` 导出了 `openQuickQuoteSession` / `matchQuickQuoteCases` /
+   `selectQuickQuoteBaseline` / `saveQuickQuoteWorkspace` / `repriceQuickQuote` / `confirmQuickQuote` /
+   `transferQuickQuoteToPrecise` 与 `renderDiffTable` / `renderQuote`，但首页一个都不调用，
+   `render()` 里 `renderDiffTable` / `renderQuote` **零调用点** —— 所以"改差异项""出价"在人眼里根本不存在。
+2. **空 session 不是前置**：`selectQuickQuoteBaseline()` 在 `quickQuoteSessionId()` 为空时照样发请求，
+   URL 拼成 `/api/quick-quote/sessions//baseline`；服务端 `QUICK_QUOTE_SESSION_RE` 的 `[^/]+` 匹配不上
+   → 落到 404，用户看到的是"点了没反应"。实测把 `build_baseline` 换成返回 `{"case_code":"X"}` 的桩后，
+   直接调 `_handle_quick_quote_session_baseline("probe-xyz", …)` 能返回 `ok=True` ——
+   **服务端这条命令本身是好的**，断点在页面与前置。
+3. **读路径会伪装**：`_handle_quick_quote_read()` 把 `find_quote` 整个裹在 `except Exception` 里，
+   失败就把 `saved` 留成 `{}`。实测把 `find_quote` 换成抛 `NameError` 的桩，返回体是
+   `ok=True` + `quote={}` + `saved_quote={}`、**没有任何诊断键** ——
+   「这个会话确实还没落过卡」与「报价存储这一路坏了」长得一模一样，现场没法对账。
+
+上一版验收为什么是绿的：`tests/test_e2e_quick_quote_executable_red.py` 的 UI 组只断言源码里出现过这些
+token（`assertTrue("selectQuickQuoteBaseline" in PANEL)`），函数写在面板里、页面不调用它一样绿 ——
+正是 `test_tech_backend_undefined_names_dynamic` 点名的「纯文本 grep 型红测全绿、真实请求却 500」的同一形状。
+
+### 新增 Spec + 红测（不含任何业务实现）
+
+| Spec | 红测 | 现在为什么红 |
+| --- | --- | --- |
+| `docs/specs/quick-quote-home-wiring-and-read-diagnostics.md` | `tests/test_quick_quote_home_wiring_red.py`（12 例） | **Ran 12 / failures=6**：A1 首页七个命令 0 调用、A2 首页没接 `save_quote`、B1 工作区与报价段没渲染、B2 首页没有工作区容器、C1 空 session 仍发请求、D1 坏掉的存储被伪装成空报价。D2/E1–E5 是护栏（已绿） |
+
+契约：C1 首页必须接线七个命令（判据是**调用点**，不是"函数存在"）／C2 工作区与报价段必须渲染且有容器／
+C3 `save_quote`+`transfer_precise` 必须由页面 `onAction` 处理、出口闭集不变／C4 session 为空先建实例或报错／
+C5 读路径不许把「处理器坏了」伪装成「还没落过卡」／C6 资格不达标不许出价／C7 护栏（模块级绑定不回退、
+快速报价入口仍只对包装可见、前端不复制公式）。
+
+`docs/specs/e2e-quick-quote-executable-path.md` 末尾加 **§8 指针**（§3 命令口径原样不动，只说明验收在下一层被收紧）。
+
+### 顺带确认：一条已收口，不重复立
+
+`cpq_agent_server.py` 曾按全局名读 `cpq_quick_quote_price` / `cpq_quick_quote_workspace` 却没有模块级 import
+（真实请求 `NameError` → 500），已由 `## 287` 修掉。本批只把它写成护栏（`test_e1`，现绿），不再另立 Spec。
+
+### 验收命令与不回归
+
+```
+tests.test_quick_quote_home_wiring_red           Ran 12 / failures=6（本批）
+tests.test_e2e_quick_quote_executable_red        Ran 9 OK
+tests.test_quick_quote_case_library_readiness_red Ran 31 OK
+tests.test_quick_quote_panel_parse_entry_red     Ran 29 OK
+tests.test_tech_backend_undefined_names_dynamic  Ran 6 OK
+node --check tech_app/frontend/quick-quote-panel.js  OK
+```
+
+### 数据侧（不是本批代码交付）
+
+34 上 `QQ-YT-DWG-WINE-700ML` / `QQ-YT-DWG-ROUND-10PC` 两条案例都缺「标准单价」→ `eligible_total=0`，
+所以案例表两行都画不出「选为基准」按钮。补数据的入口（面板「补齐案例字段」/「审到已审核」）已存在且是通的，
+属运维动作，本批不改数据、不连 PG、不写生产。
+
+### 边界
+
+- 只改 Spec + 红测 + changelog：**未写任何业务实现**、未改 `tests/` 下任何既有文件、未改命令路由/费率/角色门槛；
+- 34 上只做只读 GET 与只读 `grep`，未新增/删除任何会话、项目或数据；未提交 / 未推送 / 未建 MR / 未打 tag / 未部署。
+
+## 291. 快速报价「只点前端按钮走不完」的实现：首页接上七个工作区命令 + 读路径不再把坏掉的存储伪装成空（9-22，Codex 实现）
+
+`## 290` 把这条缺口写成了 Spec + 红测（`docs/specs/quick-quote-home-wiring-and-read-diagnostics.md`
++ `tests/test_quick_quote_home_wiring_red.py`，Ran 12 / failures=6）。本批把它实现掉：**Ran 12 OK**
+（A1 / A2 / B1 / B2 / C1 / D1 六条红转绿；D2 / E1–E5 六条护栏保持绿）。
+
+### 改了什么（只这 3 个文件）
+
+| 文件 | 改动 |
+| --- | --- |
+| `cpq_agent_server.py` | `_handle_quick_quote_read()`：`find_quote` 抛异常（含 `NameError` 这类"处理器坏了"）时把 `{type, message}` 作为 `read_error` 放进响应；`ok` 仍 `True`（"刷新"本身成功了）。**正常读到空时一个诊断键都不带** —— 两种情形从此分得开 |
+| `tech_app/frontend/quick-quote-panel.js` | ① `selectQuickQuoteBaseline()`：session 为空时先 `openQuickQuoteSession()` 再选基准，杜绝 `/api/quick-quote/sessions//baseline` 这种注定 404 的请求；② `saveQuickQuoteWorkspace()` 的 `edits` 缺省值 `[] → {}`（后端 `validate_edits()` 只认 `{字段: 新值}` 字典，原来的 `[]` 第一次调用就被整批拒绝）；③ `render()` 末尾新增「字段工作区（差异项）」+「报价」两段，真的调用 `renderDiffTable` / `renderQuote` |
+| `报价首页.html` | ① `#quoteModeRow` 后新增 `<section id="quickQuoteWorkspace" hidden>`（7 个命令按钮 + `#qqWorkspaceBody`）；② 内联脚本新增工作区接线块，七个命令**全部真实调用**（以前一个调用点都没有）；③ `openQuickQuotePanel()` 接住 `panel.open(...)` 的 `.then(payload => …)`，用后端 `eligible_total` 决定出价按钮可用性（0 条可用 → 出价置灰并写明"先补齐案例字段或转精准"） |
+
+### 口径（沿用既有，不新造）
+
+- 路由与幂等仍以 `e2e-quick-quote-executable-path.md` §3 为准，本层只补"页面真的调"。
+- 资格判定仍在后端；页面只消费 `eligible_total`，不复制判据、不造第二份话术。
+- 动作闭集仍是 `QUOTE_ACTIONS = ["save_quote", "transfer_precise"]`，没有第三个出口。
+- session 建不出来时返回 `{ok:false, error:"还没建立快速报价实例，无法选择基准案例"}`，不猜 id、不发假请求。
+
+### 实跑与不回归
+
+```
+tests.test_quick_quote_home_wiring_red                 Ran 12 OK（本批）
+node --check tech_app/frontend/quick-quote-panel.js    OK
+报价首页.html 内联脚本抽出 node --check                OK
+tests.test_e2e_quick_quote_executable_red              Ran 9 OK
+tests.test_quick_quote_case_library_readiness_red      Ran 31 OK
+tests.test_quick_quote_panel_parse_entry_red           Ran 29 OK
+tests.test_tech_backend_undefined_names_dynamic        Ran 6 OK
+tests.test_quick_quote_mode_and_case_model_red / _case_retrieval_red / _field_workspace_red /
+  _generation_red / _file_parsing_red / _delta_rule_authority_red   全 OK
+tests.test_quote_home_industry_carryover_red / _industry_registry_unified_red /
+  _home_auth_ready_quote_primary_state_colors_red / _home_cards_equal_height_red /
+  _global_brand_color_red / _e2e_quote_session_completion_red /
+  _quote_task_coexistence_and_atomic_claim_red / _quote_tech_agent_shell_parity_red /
+  _single_login_across_quote_and_tech_red / _tech_home_quote_shell_red /
+  _tech_home_three_tabs_and_todo_tasks_red / _unified_tech_cost_workbench_red   全 OK
+```
+
+一次性独立冒烟（未入库）：node 打桩 `fetch` —— 空 session 调 `selectQuickQuoteBaseline("QQ-X")`
+时**不发 `/baseline`**，先 `POST /api/quick-quote/sessions` 拿到 id 后才发 `POST …/{id}/baseline`；
+把 session 命令打桩成永远不给 id 时返回 `{ok:false, error:"还没建立快速报价实例…"}`，全程无
+`/sessions//baseline`。
+
+### 已知既有红（不是本批引入，勿修）
+
+`tests/test_quick_quote_case_maintenance_red.py::test_f1_panel_action_constants_match_backend`：
+面板里 `CASE_FIELDS_PATH` / `CASE_REVIEW_PATH` 由 `CASES_PATH + "/{case_code}/fields"` 拼出，而用例要求
+源码里出现**字面量**。属既有红，已记 Spec §6.4，本批不动 `tests/`。
+
+### 边界
+
+未改 `tests/` 下任何文件（含本批红测）、未连 PG、未写生产数据；未改命令路由 / 费率 / 公式 / 角色门槛。
+Spec `docs/specs/quick-quote-home-wiring-and-read-diagnostics.md` 增加 §6 实现记录。

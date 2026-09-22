@@ -1292,6 +1292,26 @@
           data-industries="packaging">快速报价</button>
       </div>
 
+      <!-- 快速报价工作区（Spec docs/specs/quick-quote-home-wiring-and-read-diagnostics.md §C1/§C2）：
+           建实例 → 匹配 → 选基准 → 改参数 → 重算 → 出价 → 转精准 这七个工作区命令的按钮入口，
+           以及四列对比表与报价段（出价 / 转精准）的落点。行与金额一律取后端工作区
+           （QuickQuotePanel.workspaceState），本页不重算价格、不造第二份话术。 -->
+      <section class="quick-quote-workspace" id="quickQuoteWorkspace" hidden
+               aria-label="快速报价工作区">
+        <div class="qq-ws-head">快速报价工作区（先建实例，再匹配 → 选基准 → 改参数 → 重算 → 出价）</div>
+        <div class="qq-ws-bar">
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceSession">1 建实例</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceMatch">2 匹配案例</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceBaseline">3 选为基准</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceSave">4 保存改动</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceReprice">5 重算</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspaceConfirm">出价（落版本）</button>
+          <button type="button" class="qq-ws-btn" id="qqWorkspacePrecise">转精准报价</button>
+          <span class="qq-ws-hint" id="qqWorkspaceStatus"></span>
+        </div>
+        <div class="qq-ws-body" id="qqWorkspaceBody"></div>
+      </section>
+
       <!-- Category Tags -->
       <div class="category-tags">
         <span class="category-tag active"><i class="ti ti-brain"></i> 报价助手</span>
@@ -2318,7 +2338,7 @@
         if (reason === null) return;
         return runCaseAction(() => panel.reviewCase(row.case_code, 'reviewed', reason));
       };
-      panel.open({
+      const opened = panel.open({
         industry: techIndustry(),
         // 出口：快速报价里随时能退回精准报价（同一条既有链路，不另造一条）。
         onPrecise: () => requestNavigate('quote', (textarea && textarea.value.trim()) || ''),
@@ -2333,6 +2353,15 @@
         onCaseFill: onCaseFill,
         onCaseReview: onCaseReview,
       });
+      // 案例库真实结果 → 出价按钮可用性（Spec §C6）：eligible_total=0 时不许出现可点的出价；
+      // 同时把字段工作区与报价段展开在首页（面板弹层里也会画一份，见 quick-quote-panel.js）。
+      if (opened && typeof opened.then === 'function') {
+        opened.then((payload) => {
+          lastQuickQuotePayload = payload || null;
+          syncQuickQuoteActionState();
+          renderQuickQuoteWorkspace();
+        });
+      }
     }
     (function initQuoteModeEntries() {
       const industryEl = document.getElementById('techIndustry');
@@ -2344,6 +2373,150 @@
           else requestNavigate('quote', (textarea && textarea.value.trim()) || '');
         });
       });
+    })();
+    /* ── 快速报价工作区：七个工作区命令的真正接线（Spec
+       docs/specs/quick-quote-home-wiring-and-read-diagnostics.md §C1/§C2/§C4/§C6）──────────
+       以前首页只调用 open / fillCaseFields / reviewCase —— 建实例 → 匹配 → 选基准 → 改参数 →
+       重算 → 出价 → 转精准这七个命令**一个调用点都没有**：函数躺在 quick-quote-panel.js 里，
+       "点完"只能点到案例库。这里把它们串成一条链，并把四列对比表与报价段画进
+       #quickQuoteWorkspace。只做搬运：行、金额、话术一律取后端（workspaceState / payload），
+       前端不算价、不造第二份词表、也不自己判"这价能不能用"。 */
+    let lastQuickQuotePayload = null;
+    function quickQuotePanelApi() { return window.QuickQuotePanel || null; }
+    function quickQuoteWorkspaceBox() { return document.getElementById('quickQuoteWorkspace'); }
+    function quickQuoteStatus(text, isError) {
+      const el = document.getElementById('qqWorkspaceStatus');
+      if (!el) return;
+      el.textContent = text || '';
+      el.className = 'qq-ws-hint' + (isError ? ' is-error' : '');
+    }
+    function quickQuoteEligibleTotal() {
+      return lastQuickQuotePayload ? Number(lastQuickQuotePayload.eligible_total || 0) : null;
+    }
+    /* 资格不达标时不许出价（Spec §C6）：0 条可用时出价按钮置灰并写明原因；两条出口
+       （补齐案例字段 / 转精准报价）复用既有动作出口，不新增第三个。 */
+    function syncQuickQuoteActionState() {
+      const confirmBtn = document.getElementById('qqWorkspaceConfirm');
+      if (!confirmBtn) return;
+      const blocked = quickQuoteEligibleTotal() === 0;
+      confirmBtn.disabled = blocked;
+      confirmBtn.title = blocked ? '案例库里 0 条可用：先补齐案例字段，或转精准报价' : '';
+    }
+    /* 匹配输入：只带本页真实拿得到的上下文（行业 + 需求原文），缺的字段不编，
+       交给后端回 missing —— 资格判定在后端（Spec §C6）。 */
+    function quickQuoteInputs() {
+      return {industry: techIndustry(), requirement_text: (textarea && textarea.value.trim()) || ''};
+    }
+    /* 工作区上屏：四列对比表（改差异项）+ 报价段（出价 / 转精准）。 */
+    function renderQuickQuoteWorkspace() {
+      const panel = quickQuotePanelApi();
+      const box = quickQuoteWorkspaceBox();
+      const host = document.getElementById('qqWorkspaceBody');
+      if (!box || !host) return;
+      box.hidden = false;
+      host.innerHTML = '';
+      if (!panel) {
+        quickQuoteStatus('快速报价面板未加载（quick-quote-panel.js 没取到），工作区暂时不可用。', true);
+        return;
+      }
+      const state = panel.workspaceState || {};
+      const diffHead = document.createElement('div');
+      diffHead.className = 'qq-ws-head';
+      diffHead.appendChild(document.createTextNode('参数对比'));
+      host.appendChild(diffHead);
+      host.appendChild(panel.renderDiffTable((state.workspace || {}).rows || []));
+      const quoteHead = document.createElement('div');
+      quoteHead.className = 'qq-ws-head';
+      quoteHead.appendChild(document.createTextNode('报价'));
+      host.appendChild(quoteHead);
+      host.appendChild(panel.renderQuote(state.quote || {}, {onAction: onQuickQuotePanelAction}));
+    }
+    /* 出价段的两个动作（Spec §C3）：动作闭集仍是 save_quote / transfer_precise。 */
+    function onQuickQuotePanelAction(action) {
+      if (action === 'save_quote') {
+        if (quickQuoteEligibleTotal() === 0) {
+          quickQuoteStatus('案例库里 0 条可用：先补齐案例字段，或转精准报价。', true);
+          return undefined;
+        }
+        return runQuickQuoteConfirm();
+      }
+      if (action === 'transfer_precise') return runQuickQuoteTransfer();
+      return undefined;
+    }
+    async function runQuickQuoteConfirm() {
+      const panel = quickQuotePanelApi();
+      if (!panel) return;
+      quickQuoteStatus('正在出价（落版本）…');
+      const out = await panel.confirmQuickQuote();
+      const failed = !!(out && out.ok === false);
+      quickQuoteStatus(failed ? (out.error || '出价失败') : '已出价（落版本）。', failed);
+      renderQuickQuoteWorkspace();
+    }
+    async function runQuickQuoteTransfer() {
+      const panel = quickQuotePanelApi();
+      if (!panel) return;
+      quickQuoteStatus('正在转精准报价…');
+      const out = await panel.transferQuickQuoteToPrecise();
+      const failed = !!(out && out.ok === false);
+      quickQuoteStatus(failed ? (out.error || '转精准失败') : '已转精准报价（同一条既有链路）。', failed);
+      renderQuickQuoteWorkspace();
+    }
+    /* 七个工作区命令的按钮入口：建实例 → 匹配 → 选基准 → 改参数 → 重算 → 出价 → 转精准。
+       session 为空时由面板先建实例（Spec §C4），本页不再拼 `/sessions//baseline` 这种注定 404 的请求。 */
+    async function runQuickQuoteWorkspaceCommand(command) {
+      const panel = quickQuotePanelApi();
+      if (!panel) { quickQuoteStatus('快速报价面板未加载。', true); return; }
+      try {
+        if (command === 'session') {
+          const out = await panel.openQuickQuoteSession({industry: techIndustry()});
+          const sid = out && out.quick_quote_session_id;
+          quickQuoteStatus(sid ? ('快速报价实例：' + sid) : '建实例失败，详见案例库面板提示。', !sid);
+        } else if (command === 'match') {
+          const out = await panel.matchQuickQuoteCases(quickQuoteInputs());
+          quickQuoteStatus(out && out.ok === false ? (out.error || '匹配失败') : '已按当前输入匹配候选案例。');
+        } else if (command === 'baseline') {
+          const code = prompt('把哪个案例选为基准？（案例编号，例如 QQ-YT-DWG-ROUND-10PC）', '');
+          if (code === null || String(code).trim() === '') return;
+          const out = await panel.selectQuickQuoteBaseline(String(code).trim());
+          quickQuoteStatus(out && out.ok === false ? (out.error || '选基准失败') : '已选为基准案例。');
+        } else if (command === 'save') {
+          const raw = prompt('要改哪些差异项？（每行一条：字段名=新值，例如 quantity=2000）', '');
+          if (raw === null) return;
+          const edits = {};
+          String(raw).split('\n').forEach((line) => {
+            const text = line.trim();
+            if (!text) return;
+            const cut = text.indexOf('=');
+            const key = (cut < 0 ? text : text.slice(0, cut)).trim();
+            if (key) edits[key] = cut < 0 ? '' : text.slice(cut + 1).trim();
+          });
+          const out = await panel.saveQuickQuoteWorkspace(edits);
+          const failed = !!(out && out.ok === false);
+          quickQuoteStatus(failed ? (out.error || '保存失败')
+            : ('工作区已保存（' + Object.keys(edits).length + ' 项改动）。'), failed);
+        } else if (command === 'reprice') {
+          const out = await panel.repriceQuickQuote();
+          quickQuoteStatus(out && out.ok === false ? (out.error || '重算失败') : '已按当前工作区重算。');
+        } else if (command === 'confirm') {
+          return await runQuickQuoteConfirm();
+        } else if (command === 'precise') {
+          return await runQuickQuoteTransfer();
+        }
+      } catch (exc) {
+        quickQuoteStatus('快速报价命令失败：' + (exc && exc.message ? exc.message : exc), true);
+      }
+      renderQuickQuoteWorkspace();
+    }
+    (function initQuickQuoteWorkspace() {
+      const bindings = {qqWorkspaceSession: 'session', qqWorkspaceMatch: 'match',
+                        qqWorkspaceBaseline: 'baseline', qqWorkspaceSave: 'save',
+                        qqWorkspaceReprice: 'reprice', qqWorkspaceConfirm: 'confirm',
+                        qqWorkspacePrecise: 'precise'};
+      Object.keys(bindings).forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', () => runQuickQuoteWorkspaceCommand(bindings[id]));
+      });
+      syncQuickQuoteActionState();
     })();
     // 技术工艺：用首页两槽上传的文件在 tech_app 建项目，再进入统一工作台 1.1（图纸已关联）。
     async function techCreateAndGo() {

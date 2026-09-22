@@ -361,6 +361,20 @@
     });
     shell.appendChild(notes);
 
+    // 字段工作区（可改的差异项）+ 报价段（出价 / 转精准）：七个工作区命令都在本模块里，
+    // 这里必须真的画出来 —— 否则"改差异项""出价"在人眼里根本不存在
+    // （Spec `quick-quote-home-wiring-and-read-diagnostics.md` §C2）。
+    // 行与金额一律取后端工作区（workspaceState.workspace / .quote），前端一个数字都不重算。
+    var workspace = el("div", "qq-workspace");
+    workspace.id = "quickQuoteWorkspaceInline";
+    workspace.appendChild(el("h4", "qq-workspace-title", "字段工作区（差异项）"));
+    workspace.appendChild(renderDiffTable((workspaceState.workspace || {}).rows));
+    var quoteSection = el("div", "qq-quote-section");
+    quoteSection.appendChild(el("h4", "qq-workspace-title", "报价"));
+    quoteSection.appendChild(renderQuote(workspaceState.quote, options));
+    workspace.appendChild(quoteSection);
+    shell.appendChild(workspace);
+
     target.appendChild(shell);
     return target;
   }
@@ -867,6 +881,17 @@
     if (!quickQuoteSessionId() && options.sessionId) {
       workspaceState.quick_quote_session_id = String(options.sessionId);
     }
+    if (!quickQuoteSessionId()) {
+      // session 还没建立时**不许**发请求：拼出来的 `/api/quick-quote/sessions//baseline`
+      // 与服务端正则 `[^/]+` 匹配不上，注定 404，用户看到的是"点了没反应"
+      // （Spec `quick-quote-home-wiring-and-read-diagnostics.md` §C4）。先建实例再选基准。
+      return openQuickQuoteSession(options).then(function () {
+        if (!quickQuoteSessionId()) {
+          return {ok: false, error: "还没建立快速报价实例，无法选择基准案例"};
+        }
+        return selectQuickQuoteBaseline(caseCode, options);
+      });
+    }
     return postCommand("baseline", {case_code: caseCode, inputs: workspaceState.inputs}, options)
       .then(function (data) { return rememberCommandResult("baseline", data); });
   }
@@ -875,7 +900,9 @@
   function saveQuickQuoteWorkspace(edits, options) {
     options = options || {};
     return postCommand("workspace",
-      {workspace: workspaceState.workspace, edits: edits || [], source: options.source || "workspace"},
+      // 后端 `validate_edits()` 只认 `{字段: 新值}` 字典：缺省值必须是 `{}` 而不是 `[]`，
+      // 否则"保存改动"这一路第一次调用就被整批拒绝（`<edits>` 不是字典）。
+      {workspace: workspaceState.workspace, edits: edits || {}, source: options.source || "workspace"},
       options).then(function (data) { return rememberCommandResult("workspace", data); });
   }
 

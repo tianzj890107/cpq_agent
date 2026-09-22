@@ -4130,18 +4130,31 @@ def _handle_quick_quote_session_transfer(session_id: str, body, *, user=None) ->
 
 
 def _handle_quick_quote_read(session_id: str) -> dict:
-    """`GET /api/quick-quote/sessions/{id}` —— 打开/刷新后恢复（Spec §4：刷新后价格与版本一致）。"""
+    """`GET /api/quick-quote/sessions/{id}` —— 打开/刷新后恢复（Spec §4：刷新后价格与版本一致）。
+
+    读路径**不许假装正常**（Spec `quick-quote-home-wiring-and-read-diagnostics.md` §C5）：
+    `find_quote` 抛异常时（含"处理器坏了"式的 `NameError`）必须把诊断带回响应 ——
+    以前这里把异常吞成 `saved={}`，于是"这个会话确实还没落过卡"与"报价存储这一路坏了"
+    在响应里长得一模一样，现场没法对账。**正的空值不带任何诊断键**，两种情形必须分得开。
+    """
     state = _qq_state(session_id)
     saved = {}
+    read_error = None
     try:
         saved = cpq_quick_quote_price.find_quote("", session_id=_qq_text(session_id)) or {}
-    except Exception:                                           # noqa: BLE001 - 读不到就照实给空
+    except Exception as exc:                                    # noqa: BLE001 - 读不到要如实上报，不许静默
+        read_error = {"type": type(exc).__name__,
+                      "message": _qq_text(str(exc)) or "报价读回失败（报价存储这一路可能坏了）"}
         saved = {}
-    return {"ok": True, "quick_quote_session_id": _qq_text(session_id),
-            "inputs": state.get("inputs") or {}, "baseline": state.get("baseline") or {},
-            "workspace": state.get("workspace") or {},
-            "quote": saved or state.get("quote") or {}, "saved_quote": saved,
-            "version_no": int((saved or {}).get("version_no") or state.get("versions") or 0)}
+    payload = {"ok": True, "quick_quote_session_id": _qq_text(session_id),
+               "inputs": state.get("inputs") or {}, "baseline": state.get("baseline") or {},
+               "workspace": state.get("workspace") or {},
+               "quote": saved or state.get("quote") or {}, "saved_quote": saved,
+               "version_no": int((saved or {}).get("version_no") or state.get("versions") or 0)}
+    if read_error:
+        # `ok` 保持 True（刷新本身成功了），但"为什么读不到"必须看得见。
+        payload["read_error"] = read_error
+    return payload
 
 
 def _handle_quick_quote_session_write(session_id: str, command: str, body, *,
