@@ -888,6 +888,17 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (!flag.code) return '';
     return `<div class="pc-warning" data-pc-route-unavailable="${pcEsc(flag.code)}">暂时读不到当前工艺路线版本${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，无法判断这份成本是否还跟得上；这不代表输入没变。</div>`;
   }
+  // 「这份成本照哪一版规则算的」的来源（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md`
+  // §2.2 / §3.4）：读不到与"没拉过快照"都不许显示成"版本号就是空"。
+  function pcRuleSnapshotBanner(record) {
+    const source = String((record || {}).rule_snapshot_source || '');
+    if (source !== 'unavailable' && source !== 'none') return '';
+    if (source === 'unavailable') {
+      const flag = (record || {}).rule_snapshot_unavailable || {};
+      return `<div class="pc-warning" data-pc-rule-snapshot="unavailable">暂时读不到规则快照版本${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，这份成本照哪一版规则算的暂时核实不了（可重试）。</div>`;
+    }
+    return '<div class="pc-warning" data-pc-rule-snapshot="none">这份成本算的时候还没拉过规则快照，照哪一版规则算的没有记下来 —— 不是"版本号为空"。</div>';
+  }
   /* 回传记录的输入漂移（Spec `packaging-handoff-input-drift-disclosure.md` §2.3）：
      "这一版回传是按哪一版成本发的、现在成本变了没有"必须在成本面板上说一句 —— 不许让人觉得
      旧回传还是当前有效。 */
@@ -935,6 +946,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${pcStaleBanner(record)}
       ${pcBomUnavailableBanner(record)}
       ${pcRouteUnavailableBanner(record)}
+      ${pcRuleSnapshotBanner(record)}
       ${pcHandoffDriftBanner(handoff)}
       ${head}${summary}${totals}
       ${gapLines}

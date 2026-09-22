@@ -15792,3 +15792,54 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
 - `result_version_of` 不存在只在 `cost` 段读到东西时报 `absent`，空成本仍按 `engine`（Spec §2.1 未细分
   这一组合，保留既有口径），记在 Spec §5.3；
 - 只披露不重跑、不改门禁结论；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 367. 落地 `packaging-cost-and-handoff-static-downgrade-disclosure`：成本与交接侧五处静默降级全部留痕（15 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+五处 `except Exception` 把"读挂了"折成与"业务上真的是空"逐字相同的返回值：
+最低收费口径快照退成 `pending`（与"业务还没裁决"同形）、`rule_snapshot_version()` 退成 `""`
+（与"从没拉过快照"、"版本号就是空"同形，而这个值会写进每一行成本当审计凭据）、
+`_upstream_route_version()` 退成 `""`（与"一条路线都没有"同形）、
+`packaging_handoff._publish_gate()` 里一个 try 吞两个证据源（`gates()` 抛一次异常，
+`inheritance()` 根本不会被调用、版本六元组一起消失、`publishable` 静默变 `False`）、
+口径读不到给形状都不同的 `{}`（随 package_json 落库并回传报价侧）。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_cost.py`
+  - `_load_minimum_charge_policy()` 新增 `source` / `unavailable_reason`（非 dict 块按 `TypeError`
+    记，不再静默空块）；`minimum_charge_policy()` 原样带出两键（常量缺键兜底 `snapshot` / `""`）；
+  - 新增 `rule_snapshot_version_detail()` / `rule_snapshot_unavailable_of()` /
+    `upstream_route_version_detail()` / `_route_unavailable_of()`；`rule_snapshot_version()` 与
+    `_upstream_route_version()` 逐字未动；
+  - `compute_project()` 结果新增 `rule_snapshot_source` / `rule_snapshot_unavailable`，
+    `source_versions` 新增 `route_version_source` / `route_version_unavailable`
+    （并多记 `rule_snapshot_source` / `rule_snapshot_unavailable_reason` 供读回）；
+    `load_cost()` 两条出口都带出这些键。
+- `tech_app/backend/services/packaging_handoff.py`：`_publish_gate()` 拆两次 try + 四个新键
+  （`gates_source` / `gates_unavailable` / `source_versions_source` / `source_versions_unavailable`），
+  `publishable` 结论口径逐字不变；新增 `_unavailable_policy()`（六键齐全 + `source=unavailable`，
+  绝不给 `{}`）。
+- `tech_app/frontend/requirement-confirm.js`：新增 `pcRuleSnapshotBanner(record)`
+  （`data-pc-rule-snapshot="unavailable"|"none"`）。
+- `main.py` 未改（读接口自动带出新键）。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_cost_and_handoff_static_downgrade_red
+# Ran 15 tests ... OK（A1/A2/B1/B2/B3/C1/C2/D1/D2/D4 由红转绿；A3/B4/C3/D3/D5 五条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest $(ls tests/test_packaging_*.py | sed 's#/#.#g; s#\.py$##')
+# Ran 1516 tests, failures=5（全部是既有挂账：338-A2 / 345-B3 / 272-C1 / 356-F2 / seams-B4）
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 四、边界
+
+- 读侧 `rule_snapshot_source` 优先取存的 `source_versions` 那一位；本批之前的历史行按
+  "有版本号 kb / 没版本号 none"兜底，无法回溯当时是"读挂"还是"没拉过"，记在 Spec §6.3；
+- Spec §3.4 的"交接预览"目前没有前端界面（`publishable` / `gates` / `minimum_charge_policy`
+  在 `tech_app/frontend/` 里 0 处引用），四个新键随接口带出但无可改的展示面，故只给成本页
+  加了规则快照那一句，不做新面板；
+- 五处降级照旧不让整条链失败；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。

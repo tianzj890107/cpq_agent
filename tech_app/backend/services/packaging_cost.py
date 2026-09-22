@@ -573,21 +573,29 @@ _SCIENTIFIC_TEXT = r"\d+(?:\.\d+)?[eE][+-]?\d+"
 
 
 def _load_minimum_charge_policy() -> dict:
-    """从快照读口径申报块；读不到 → `pending`（Spec §6）。"""
+    """从快照读口径申报块；读不到 → `pending`（Spec §6）。
+
+    读不到时**留痕**（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.1）：
+    新增 `source` ∈ `{"snapshot", "unavailable"}` 与 `unavailable_reason`（异常类名，不是散文），
+    既有六键口径逐字不变 —— 结论不改，只让"没裁决"与"根本没读到"分得开。
+    """
+    source, reason = "snapshot", ""
     try:
         data = json.loads(Path(RULES_JSON_PATH).read_text(encoding="utf-8"))
         block = data.get("minimum_charge_policy") or {}
-    except Exception:  # noqa: BLE001 - 快照不可用不该让成本计算整体失败
-        block = {}
-    if not isinstance(block, dict):
-        block = {}
+        if not isinstance(block, dict):
+            raise TypeError("minimum_charge_policy 不是块")
+    except Exception as exc:  # noqa: BLE001 - 快照不可用不该让成本计算整体失败
+        block, source, reason = {}, "unavailable", type(exc).__name__
     status = _text(block.get("status")) or "pending"
     return {"status": status,
             "chosen": _text(block.get("chosen")),
             "decided_by": _text(block.get("decided_by")),
             "decided_at": _text(block.get("decided_at")),
             # 快照缺失/读不到时必须能直接看出「未裁决、当前按哪套回退」（Spec §6）。
-            "policy": "unresolved" if status == "pending" else _text(block.get("chosen"))}
+            "policy": "unresolved" if status == "pending" else _text(block.get("chosen")),
+            "source": source,
+            "unavailable_reason": reason}
 
 
 #: 模块级口径常量（Spec §6）：`pending` = 未裁决，运行时必须标注 `unresolved`。
@@ -648,7 +656,11 @@ def minimum_charge_policy() -> dict:
         status, policy, fallback = "pending", "unresolved", "sheet_labor_rate"
     return {"status": status, "chosen": chosen, "policy": policy, "fallback": fallback,
             "decided_by": _text(block.get("decided_by")),
-            "decided_at": _text(block.get("decided_at"))}
+            "decided_at": _text(block.get("decided_at")),
+            # 「快照读到了没有」必须原样带出去（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md`
+            # §2.1）：常量里没有这两键（旧快照 / 热替换）时按"读到了"兜底。
+            "source": _text(block.get("source")) or "snapshot",
+            "unavailable_reason": _text(block.get("unavailable_reason"))}
 
 
 def _number_text(value: Any) -> str:
@@ -948,6 +960,51 @@ def rule_snapshot_version() -> str:
     except Exception:  # noqa: BLE001 - 快照不可用不该让成本计算整体失败
         return ""
     return _text(value)
+
+
+def rule_snapshot_version_detail() -> dict:
+    """规则快照版本的三态（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.2）。
+
+    返回 `{"version": str, "source": "kb" | "none" | "unavailable", "reason": str}`：
+    `unavailable` = 读挂（reason 是异常类名）、`none` = **从没拉过快照**（`kb_repo.kb_version()`
+    的既有语义：还没拉过给 `None`）、`kb` = 读到了。三态不许压成同一个空串。
+    """
+    try:
+        value = kb_repo.kb_version()
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return {"version": "", "source": "unavailable", "reason": type(exc).__name__}
+    text = _text(value)
+    if not text:
+        return {"version": "", "source": "none", "reason": ""}
+    return {"version": text, "source": "kb", "reason": ""}
+
+
+def rule_snapshot_unavailable_of(detail: dict) -> dict:
+    """`rule_snapshot_version_detail()` → 结果上的披露键（正常 `{}`）。"""
+    source = _text((detail or {}).get("source"))
+    if source == "unavailable":
+        return {"code": "rule_snapshot_unavailable",
+                "reason": _text((detail or {}).get("reason"))}
+    if source == "none":
+        return {"code": "rule_snapshot_not_pulled"}
+    return {}
+
+
+def upstream_route_version_detail(project_id: str, requirement_no: str) -> dict:
+    """上游确认路线版本的三态（Spec §2.3）：`{"version", "source", "reason"}`。
+
+    与 `_upstream_route_version()` 同一条读取入口、同一个取值口径（取**最后一条** dict 的
+    `version`），只是把"读挂 / 一条都没有 / 读到了"分开说。
+    """
+    try:
+        from tech_app.backend.services import packaging_route as _route_mod
+        versions = _route_mod.route_versions(project_id, requirement_no) or []
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return {"version": "", "source": "unavailable", "reason": type(exc).__name__}
+    if not versions:
+        return {"version": "", "source": "none", "reason": ""}
+    latest = versions[-1] if isinstance(versions[-1], dict) else {}
+    return {"version": str(latest.get("version") or ""), "source": "route", "reason": ""}
 
 
 def _trace_fields(entry: Optional[dict] = None, *, result: Optional[dict] = None,
@@ -1995,6 +2052,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     #: 保证同一份成本明细里公式版本一致。
     formula_rows = [dict(row) for row in kb_repo._table("kb_packaging_cost_formula")]
     rule_version = rule_snapshot_version()
+    # 「这份价照哪一版规则算的」的来源也要留痕（Spec
+    # `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.2）：三态不许压成一个空串。
+    rule_detail = rule_snapshot_version_detail()
+    upstream_detail = upstream_route_version_detail(project_id, req_no)
     gaps: list = []
     assumptions: list = []
 
@@ -2352,8 +2413,24 @@ def compute_project(project_id: str, requirement_no: str = "", *,
             "engine_version": ENGINE_VERSION,
             "bom_hash": bom_input_hash(bom_rows),
             "bom_item_total": len(bom_rows),
+            # 路线版本那条轴的三态与规则快照的来源（Spec §2.2/§2.3）：读挂与"确实没有"
+            # 不许同形；读侧把**存的**这一份原样带回。
+            "route_version_source": upstream_detail["source"],
+            "route_version_unavailable": _route_unavailable_of(upstream_detail),
+            "rule_snapshot_source": _text(rule_detail.get("source")),
+            "rule_snapshot_unavailable_reason": _text(rule_detail.get("reason")),
         },
+        "rule_snapshot_source": _text(rule_detail.get("source")),
+        "rule_snapshot_unavailable": rule_snapshot_unavailable_of(rule_detail),
     }
+
+
+def _route_unavailable_of(detail: dict) -> dict:
+    """`upstream_route_version_detail()` → 披露键（正常 `{}`）。"""
+    if _text((detail or {}).get("source")) == "unavailable":
+        return {"code": "route_version_unavailable",
+                "reason": _text((detail or {}).get("reason"))}
+    return {}
 
 
 def bom_input_hash(rows: Any) -> str:
@@ -2447,13 +2524,22 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     req_no = _resolve_requirement_no(project_id, requirement_no)
     row = da_repo.load_packaging_cost(project_id, req_no, _text(scenario))
     upstream, route_unavailable = _route_version_and_availability(project_id, req_no)
+    rule_detail = rule_snapshot_version_detail()
     if not row:
         # 「还没算」不是「过期」（Spec `packaging-cost-input-version-pinning.md` §2.2 末条）：
         # 这条路径不许报 `provenance_missing`，也不许给 stale —— 除了三个新增键，逐字不变。
         return _with_readiness(
             {"built": False, "project_id": project_id, "requirement_no": req_no,
              "scenario_code": _text(scenario) or "default", "engine_version": ENGINE_VERSION,
-             "source_versions": {"route_version": upstream, "engine_version": ENGINE_VERSION},
+             "source_versions": {"route_version": upstream, "engine_version": ENGINE_VERSION,
+                                 "route_version_source": (
+                                     "unavailable" if route_unavailable
+                                     else ("route" if _text(upstream) else "none")),
+                                 "route_version_unavailable": dict(route_unavailable or {}),
+                                 "rule_snapshot_source": _text(rule_detail.get("source")),
+                                 "rule_snapshot_unavailable_reason": _text(rule_detail.get("reason"))},
+             "rule_snapshot_source": _text(rule_detail.get("source")),
+             "rule_snapshot_unavailable": rule_snapshot_unavailable_of(rule_detail),
              "cost_profile": COST_PROFILE, "items": [], "gaps": [], "assumptions": [],
              "has_gaps": False, "categories": {code: 0.0 for code, _ in COST_CATEGORIES},
              "report_groups": {name: 0.0 for name in REPORT_GROUPS},
@@ -2470,6 +2556,19 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     stored = _loads(row.get("source_versions_json"), {})
     stored = dict(stored) if isinstance(stored, dict) else {}
     result["source_versions"] = stored
+    # "这份成本照哪一版规则算的"的来源（Spec §2.2/§3.1）：**存的**那一份里优先，
+    # 本批之前算的没有那个键 → 按"有版本号 kb / 没版本号 none"兜底（历史行无法回溯）。
+    stored_source = _text(stored.get("rule_snapshot_source")) or (
+        "kb" if _text(row.get("rule_snapshot_version")) else "none")
+    result["rule_snapshot_source"] = stored_source
+    if stored_source == "unavailable":
+        result["rule_snapshot_unavailable"] = {
+            "code": "rule_snapshot_unavailable",
+            "reason": _text(stored.get("rule_snapshot_unavailable_reason"))}
+    elif stored_source == "none":
+        result["rule_snapshot_unavailable"] = {"code": "rule_snapshot_not_pulled"}
+    else:
+        result["rule_snapshot_unavailable"] = {}
     result["route_unavailable"] = dict(route_unavailable or {})
     result["stale"], result["stale_reasons"], result["bom_unavailable"] = _input_drift(
         project_id, req_no, stored, upstream, route_unavailable)

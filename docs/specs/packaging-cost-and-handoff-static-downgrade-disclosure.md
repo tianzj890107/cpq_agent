@@ -1,6 +1,6 @@
 # 规格：成本口径 / 规则版本 / 上游路线 / 交接闸门 —— 「读不到」不许显示成「本来就没有」
 
-状态：Spec + 红测（未实现）（五处 `except Exception` 把失败折成空值：口径快照退成 `pending`、
+状态：Spec + 红测（已实现）（原状：五处 `except Exception` 把失败折成空值：口径快照退成 `pending`、
 规则版本与上游路线退成 `""`、交接闸门与口径整块退成 `{}` —— 读接口、落库包、报价侧全都分不出
 「读挂了」与「真的是空」）
 红测：`tests/test_packaging_cost_and_handoff_static_downgrade_red.py`
@@ -293,3 +293,49 @@ GET  /api/projects/{pid}/requirement/packaging-quote/package
                                                         # source_versions_unavailable /
                                                         # minimum_charge_policy.source 可读
 ```
+
+## 6. 落地状态
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_cost_and_handoff_static_downgrade_red
+# Ran 15 tests ... OK（A1/A2/B1/B2/B3/C1/C2/D1/D2/D4 由红转绿；A3/B4/C3/D3/D5 五条护栏仍绿）
+```
+
+五处静默降级现在都留痕：结论口径一个字没改，只是"读不到"能在返回体上被读出来。
+
+### 6.1 落点
+
+| 契约 | 落点 |
+| --- | --- |
+| §2.1 口径来源 | `tech_app/backend/services/packaging_cost.py`：`_load_minimum_charge_policy()` 新增 `source` ∈ `{"snapshot","unavailable"}` 与 `unavailable_reason`（异常类名）；非 dict 块按 `TypeError` 记（不再是静默空块）；`minimum_charge_policy()` 原样带出两键（常量缺键时兜底 `snapshot` / `""`） |
+| §2.2 规则快照三态 | 新增 `rule_snapshot_version_detail()` → `{"version","source"("kb"/"none"/"unavailable"),"reason"}` 与 `rule_snapshot_unavailable_of()`；`rule_snapshot_version()` 逐字未动 |
+| §2.2 结果两键 | `compute_project()` 结果新增 `rule_snapshot_source` / `rule_snapshot_unavailable`（`none` → `{"code": "rule_snapshot_not_pulled"}`，`unavailable` → `{"code": "rule_snapshot_unavailable", "reason": …}`） |
+| §2.3 上游路线三态 | 新增 `upstream_route_version_detail()`（同一入口、同一取值口径，取最后一条 dict 的 `version`）；`_upstream_route_version()` 逐字未动 |
+| §2.3 `source_versions` | `compute_project()` 的 `source_versions` 新增 `route_version_source` / `route_version_unavailable`（并按加法多记 `rule_snapshot_source` / `rule_snapshot_unavailable_reason` 供读回）；既有四键口径逐字不变；`load_cost()` 两条出口（含未算过那条）都带出这些键 |
+| §2.4 两个证据源 | `tech_app/backend/services/packaging_handoff.py`：新增 `_unavailable_policy()`；`_publish_gate()` 拆成两次 try + 四个新键 `gates_source` / `gates_unavailable` / `source_versions_source` / `source_versions_unavailable`；`publishable` 结论口径逐字不变 |
+| §2.5 口径兜底块 | `_unavailable_policy()`：六键齐全 + `source="unavailable"` + `unavailable_reason`，绝不给 `{}` |
+| §2 路由 | `main.py` 未改（成本读接口 `return {"cost": …}`、交接读 / 预览接口 `return {"handoff": …}` / `package` 整包，新键自动带出） |
+| §3 前端 | `tech_app/frontend/requirement-confirm.js`：新增 `pcRuleSnapshotBanner(record)`（`data-pc-rule-snapshot="unavailable" | "none"`），成本面板按"读不到（可重试）" / "没拉过快照"两句话说，不显示成"版本号为空" |
+
+### 6.2 复跑（不回归）
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_cost_minimum_charge_red \
+    tests.test_packaging_cost_policy_decision_red tests.test_packaging_cost_engine_red \
+    tests.test_packaging_quote_send_recovery_red tests.test_packaging_quote_close_loop_red
+# Ran 302 tests, 1 failure = quote_send_recovery::C1（## 272 既有挂账，与本批无关）
+./open-claude/.venv/bin/python -W ignore -m unittest $(ls tests/test_packaging_*.py | sed 's#/#.#g; s#\.py$##')
+# Ran 1516 tests, failures=5（全部是既有挂账：338-A2 / 345-B3 / 272-C1 / 356-F2 / seams-B4）
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 6.3 已记录的边界
+
+- 读侧的 `rule_snapshot_source` 优先取**存的** `source_versions` 里那一位；本批之前算的历史行
+  没有这一位 → 按"有版本号 `kb` / 没版本号 `none`"兜底（历史行无法回溯当时到底是"读挂了"还是
+  "没拉过"）；`unavailable` 只在存了该来源时报出。
+- Spec §3.4 的"交接预览"目前**没有前端界面**（`publishable` / `minimum_charge_policy` /
+  `gates` 在 `tech_app/frontend/` 里 0 处引用）—— 四个新键已随接口带出，但没有可改的展示面，
+  故本批只给成本页加了规则快照的那一句；不做新面板。
+- 五处降级照旧都不让整条链失败（`rule_snapshot_version()` 仍返回 `str`、`gates()` 失败仍不抛）；
+  未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。

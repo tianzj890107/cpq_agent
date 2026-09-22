@@ -205,32 +205,73 @@ def handoff_package(project_id: str, requirement_no: str = "", *,
     return package
 
 
+def _unavailable_policy(reason: str) -> dict:
+    """口径读不到时的兜底块（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.5）。
+
+    与正常返回值**同形状**（六键齐全），结论仍是"未裁决" —— "读不到"绝不等于"已裁决"，
+    也绝不给形状都不同的 `{}`（那个 `{}` 会随 package_json 落库并回传报价侧）。
+    """
+    return {"status": "pending", "chosen": "", "policy": "unresolved",
+            "fallback": "sheet_labor_rate", "decided_by": "", "decided_at": "",
+            "source": "unavailable", "unavailable_reason": _text(reason)}
+
+
 def _publish_gate(pid: str, package: dict, cost: dict) -> dict:
     """正式报价闸门 + 版本六元组（DWG 第 5 批 Spec §5.4/§6.1，只追加键）。
 
     只在交接包里**读出结论**，不硬拦 `send_to_quote`（那一步的语义是"进入定价"，
     是草稿）；正式报价单的闸门由报价侧按 `publishable` 判。
+
+    两个证据源**分开取**（Spec `packaging-cost-and-handoff-static-downgrade-disclosure.md` §2.4）：
+    `gates()` 失败不许让 `inheritance()` 也不再执行（反之亦然），各自留痕；
+    `publishable` 的结论口径逐字不变（读不到仍是 `False`）。
     """
     gates_brief: dict = {}
     source_versions: dict = {}
+    gates_source, gates_unavailable = "flow", {}
+    source_versions_source, source_versions_unavailable = "flow", {}
+    flow = None
     try:
         from tech_app.backend.services import packaging_drawing_flow as _flow
-        stages = (_flow.gates(pid).get("stages") or {})
-        for stage in ("quote_draft", "quote_publish"):
-            row = stages.get(stage) or {}
-            gates_brief[stage] = {"status": _text(row.get("status")),
-                                  "blocking": list(row.get("blocking") or [])}
-        source_versions = _flow.inheritance(pid).get("source_versions") or {}
-    except Exception:
-        gates_brief = {}
+        flow = _flow
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        reason = type(exc).__name__
+        gates_source = source_versions_source = "unavailable"
+        gates_unavailable = {"code": "packaging_flow_gates_unavailable", "reason": reason}
+        source_versions_unavailable = {"code": "packaging_flow_versions_unavailable",
+                                       "reason": reason}
+    if flow is not None:
+        try:
+            stages = (flow.gates(pid).get("stages") or {})
+            for stage in ("quote_draft", "quote_publish"):
+                row = stages.get(stage) or {}
+                gates_brief[stage] = {"status": _text(row.get("status")),
+                                      "blocking": list(row.get("blocking") or [])}
+        except Exception as exc:                        # noqa: BLE001 - 读不到要披露，不许炸
+            gates_brief = {}
+            gates_source = "unavailable"
+            gates_unavailable = {"code": "packaging_flow_gates_unavailable",
+                                 "reason": type(exc).__name__}
+        try:
+            versions = flow.inheritance(pid).get("source_versions") or {}
+            source_versions = versions if isinstance(versions, dict) else {}
+        except Exception as exc:                        # noqa: BLE001 - 读不到要披露，不许炸
+            source_versions = {}
+            source_versions_source = "unavailable"
+            source_versions_unavailable = {"code": "packaging_flow_versions_unavailable",
+                                           "reason": type(exc).__name__}
     try:
         policy = packaging_cost.minimum_charge_policy()
-    except Exception:
-        policy = {}
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        policy = _unavailable_policy(type(exc).__name__)
     return {"publishable": _text((gates_brief.get("quote_publish") or {}).get("status")) == "open",
             "gates": gates_brief,
+            "gates_source": gates_source,
+            "gates_unavailable": gates_unavailable,
             "minimum_charge_policy": policy if isinstance(policy, dict) else {},
-            "source_versions": source_versions if isinstance(source_versions, dict) else {}}
+            "source_versions": source_versions if isinstance(source_versions, dict) else {},
+            "source_versions_source": source_versions_source,
+            "source_versions_unavailable": source_versions_unavailable}
 
 
 def _formulas_of(cost: dict) -> List[dict]:
