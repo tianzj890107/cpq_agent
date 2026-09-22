@@ -17360,3 +17360,36 @@ tests.test_packaging_handoff_audit_availability_red   Ran 15  FAILED (failures=7
 ```
 
 未改 `tests/` 下任何文件、未改路由、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 405. 落地 `packaging-cad-plan-read-failure`：CAD 平面图「读不到」不再冒充「这份图纸没有图元」（12 OK，红基 8 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingCadPlanReadProblemText(problem)`（Spec §C1）：`code` 为空 → `""`；
+  有状态码 → `暂时读不到 CAD 平面图（HTTP <n>），请稍后重试；这不代表这份图纸没有图元`；
+  没有 → 网络错误那一句。与左栏零件文档 / 业务部件清单同一套口径，**不**再贴浏览器原生英文文本。
+- 新增纯函数 `packagingCadPlanEmptyText(doc)`（Spec §C2）：空态文案的**唯一出处** ——
+  `read_problem` 优先，其次 `business_parts_gap/gap.message`，最后既有常量 `PACKAGING_CAD_PLAN_EMPTY`。
+- `renderPackagingCadPlan()`：新增**第一优先**的 `read_problem` 分支（只显示读失败文案、
+  `currentPackagingCadPlanBox = null`、`return null`）；「没有分量」那一条改走 `packagingCadPlanEmptyText()`
+  （无 `read_problem` 时逐字等价）；`PACKAGING_CAD_PLAN_NO_COORDS` 一档与渲染粒度、
+  `packagingCadPlanComponentBox()` 的「先 `drawing_bbox` 再 `bbox`」一个字未改。
+- `loadPackagingCadPlan()`：去掉裸 `throw new Error("读取 CAD 平面图失败（HTTP n）")`，三态分家 ——
+  `fetch` 抛异常 → `status: 0`（网络）；`Number(res.status) === 404` → 「还没有几何证据」空文档
+  （**不**给 `read_problem`，与左栏 404 口径一致）；其它非 2xx → `read_problem` 空文档形状
+  （`code: "cad_plan_unavailable"`，图元一律为空 —— 错误只走 `read_problem`）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_cad_plan_read_failure_red   Ran 12  FAILED (failures=8) → Ran 12  OK
+  （红基 8 条：T1–T8；护栏 S1–S4 始终绿）
+node --check tech_app/frontend/app.js  OK
+不回归：cad_plan_drawing_coordinates + parts_read_failure_empty_state +
+        business_parts_read_failure_note + parts_panel            Ran 48  OK
+全域 packaging：Ran 1830  FAILED (failures=5)  ← 五条全是既有挂账（bom_part_size_provenance::B3 /
+        parse_to_downstream_seams::B4 / part_role_mapping_reaches_card::A2 /
+        quote_send_recovery::C1 / route_bom_version_pinning::F2），与本批无关
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。

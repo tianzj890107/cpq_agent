@@ -1727,6 +1727,28 @@ const PACKAGING_CAD_PLAN_UNBOUND = "几何证据，尚未归属业务部件";
 const PACKAGING_CAD_PLAN_EMPTY = "这份图纸还没有可显示的 CAD 图元。";
 // 有图元但一个坐标都没有（证据层还没带上绘图包络）时的空态：不许留一块空白画布。
 const PACKAGING_CAD_PLAN_NO_COORDS = "这批零件还没有图纸坐标，暂时画不出平面图（坐标要等 CAD IR 把折线顶点带进来）。";
+// 平面图「读不到」时的文案（Spec `packaging-cad-plan-read-failure.md` §C1）：与左栏零件文档 /
+// 业务部件清单同一套口径 —— 读失败要自己的一句话，`code` 为空就等于没有这件事；
+// 有状态码说 HTTP，没有（含 `0`、网络异常）说"网络错误"，**不**贴浏览器原生英文文本。
+function packagingCadPlanReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : {};
+  if (!String(row.code || "").trim()) return "";
+  const status = Number(row.status) || 0;
+  return status > 0
+    ? `暂时读不到 CAD 平面图（HTTP ${status}），请稍后重试；这不代表这份图纸没有图元`
+    : "暂时读不到 CAD 平面图（网络错误），请稍后重试；这不代表这份图纸没有图元";
+}
+
+// 平面图空态文案的**唯一出处**（Spec §C2）：读失败优先于 gap 文案与 `PACKAGING_CAD_PLAN_EMPTY`；
+// 没有读失败迹象时与今天逐字等价（`gap.message || PACKAGING_CAD_PLAN_EMPTY`）。
+function packagingCadPlanEmptyText(doc) {
+  const problem = (doc && doc.read_problem && typeof doc.read_problem === "object")
+    ? doc.read_problem : null;
+  if (problem) return packagingCadPlanReadProblemText(problem);
+  const gap = (doc && (doc.business_parts_gap || doc.gap)) || {};
+  if (gap && gap.message) return String(gap.message);
+  return PACKAGING_CAD_PLAN_EMPTY;
+}
 // 业务部件面板的轮廓说明（Spec `packaging-business-part-plan-click-and-bound-outline.md` §C2）：
 // 画的是**绑定分量**的形状，业务尺寸仍以权威资料为准 —— 两者不许混为一谈。
 const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以权威资料为准。";
@@ -1894,6 +1916,15 @@ function renderPackagingCadPlan(doc) {
   const host = packagingCadPlanViewer();
   currentPackagingCadPlan = (doc && typeof doc === "object") ? doc : null;
   if (!host) return null;
+  // 读失败第一优先（Spec §C3）：不许被 gap 文案 / 「还没有图元」/ 「有图元没坐标」抢先。
+  const readProblem = (doc && doc.read_problem && typeof doc.read_problem === "object")
+    ? doc.read_problem : null;
+  if (readProblem) {
+    host.innerHTML = `<div class="view-3d-placeholder">`
+      + `${esc(packagingCadPlanReadProblemText(readProblem))}</div>`;
+    currentPackagingCadPlanBox = null;
+    return null;
+  }
   const evidence = (doc && doc.geometry_evidence) || {};
   const components = Array.isArray(evidence.components) ? evidence.components.slice() : [];
   const owners = {};
@@ -1908,7 +1939,7 @@ function renderPackagingCadPlan(doc) {
   });
   const gap = (doc && (doc.business_parts_gap || doc.gap)) || {};
   if (!components.length) {
-    host.innerHTML = `<div class="view-3d-placeholder">${esc(gap.message || PACKAGING_CAD_PLAN_EMPTY)}</div>`;
+    host.innerHTML = `<div class="view-3d-placeholder">${esc(packagingCadPlanEmptyText(doc))}</div>`;
     return null;
   }
   currentPackagingCadPlanBox = packagingCadPlanRange(components.map(packagingCadPlanComponentBox));
@@ -1949,21 +1980,33 @@ function notePackagingPartPanel(message) {
   return String(message || "");
 }
 
+// 三态分家（Spec `packaging-cad-plan-read-failure.md` §C4）：
+//   · 404（路由未上线 / 还没生成）→ 按「还没有几何证据」空态渲染，**不**写成读失败；
+//   · 其它非 2xx 与 `fetch` 抛异常 → 走 `read_problem`（空文档形状：图元一律为空，
+//     错误**只**放 `read_problem`，不许塞进 `geometry_evidence.components`）；
+// 三种都照旧 `return null`（既有调用方契约不变）。
 async function loadPackagingCadPlan() {
   if (!packagingCadPlanApplies()) return null;
   const host = packagingCadPlanViewer();
   if (host) host.innerHTML = `<div class="view-3d-placeholder">正在读取 CAD 平面图…</div>`;
+  const problemDoc = (status) => ({
+    geometry_evidence: {components: []}, business_parts: [], business_parts_gap: {},
+    built: false,
+    read_problem: {code: "cad_plan_unavailable", status: Number(status) || 0, message: ""},
+  });
+  let res = null;
   try {
-    const res = await fetch(packagingCadPlanEndpoint());
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`读取 CAD 平面图失败（HTTP ${res.status}）`);
-    return renderPackagingCadPlan(payload);
+    res = await fetch(packagingCadPlanEndpoint());
   } catch (error) {
-    if (host) {
-      host.innerHTML = `<div class="view-3d-placeholder">${esc(String((error && error.message) || error))}</div>`;
-    }
-    return null;
+    return renderPackagingCadPlan(problemDoc(0));
   }
+  if (Number(res.status) === 404) {
+    return renderPackagingCadPlan({geometry_evidence: {components: []}, business_parts: [],
+                                   business_parts_gap: {}, built: false});
+  }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) return renderPackagingCadPlan(problemDoc(res.status));
+  return renderPackagingCadPlan(payload);
 }
 
 // 选中即高亮（Spec `packaging-business-parts-and-cad-plan-view.md` §6.2）：业务部件用它绑定的
