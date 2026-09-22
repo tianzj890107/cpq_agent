@@ -12230,3 +12230,63 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
   → `Ran 43 OK (skipped=1)`（A1 的 `kept_total == 70`、B3 的显式截断 `len(parts) == 2` / `truncated == 2`
   两条都在）。
 - 只改 1 个实现文件的一行 + 追加本 changelog；未改任何测试、未连 PG、未动 34、未部署。
+
+## 310. 把 `## 304/305/306/308` 的四份红测入库 + 真样本门槛按新分母重标定（9-22，Codex 只改 Spec / 红测 / changelog）
+
+### 现场
+
+`## 304`（分量端点相接）、`## 305`（料厚事实）、`## 306`（覆盖率诚实性）、`## 308`（列表可见性 + 种类）
+四批的**实现都已在仓库里**（`66a532f` / `b8f0759` / `bee469b` / `7f90c8b`），但对应的四个红测文件
+**从未入库**（一直是未跟踪状态）：`tests/test_packaging_parts_components_red.py`、
+`_thickness_facts_red.py`、`_coverage_truthfulness_red.py`、`_list_visibility_red.py` ——
+也就是说这四层能力当时**没有任何自动化保护网**，`git clean` 一下全没了。
+
+### 入库
+
+| 红测 | 条数 | 复跑（9-22） |
+| --- | --- | --- |
+| `test_packaging_parts_components_red` | 13 | OK（skipped=1） |
+| `test_packaging_parts_thickness_facts_red` | 15 | OK（skipped=1） |
+| `test_packaging_parts_coverage_truthfulness_red` | 11 | OK（离线 8 + 真样本 3） |
+| `test_packaging_parts_list_visibility_red` | 11 | OK（skipped=1） |
+
+同批把两份 Spec 的**状态行/被取代条款**对齐实现事实（纯文档，无口径改动）：
+`packaging-dwg-parts-extraction.md` §C3 的 `max_parts` 截断与 `repeat_of` 键改由
+`packaging-parts-list-visibility-and-kinds.md` 取代；`packaging-parts-material-attribution.md` §4 的
+门槛表标注为历史值并点名新出处。
+
+### 真样本门槛重标定（7 条，测试侧）
+
+`## 308` 让零件文档保留全量件（`酒盒.dwg` 64 → 263、`圆盘盒.dwg` 64 → 312）之后，
+**八条按"前 64 件"标定的真样本门槛**当场变红。分子一个都没掉（`closed_total` 40 → 134、
+`material_known_total` 40 → 134、`solid ok_total` 40 → 134、圆盘盒 `role_known_total` 8 → 9），
+掉的是分母 —— 所以修法只有一条：**把按比值标定的门槛换成绝对分子地板**。
+零件提取侧七条的判据与逐条修法写在 `docs/specs/packaging-parts-list-visibility-and-kinds.md` §6；
+覆盖率侧五条的门槛表**归 `docs/specs/packaging-parts-coverage-truthfulness.md` §2.3**
+（该表是门槛的唯一出处，本批按同一判据把比值地板改成绝对分子地板）。
+
+| 测试 | 旧断言 | 新实测 | 现断言 |
+| --- | --- | --- | --- |
+| `material_attribution_red` E1/E2/E3 | 三条比值 ≥ 0.60 | 0.51 | `material_known_total` / `thickness_known_total` / `processable_total >= 40` |
+| `downstream_gate_red::test_f2` 圆盘盒 | `role_known_ratio >= 0.10` | 0.029（9/312） | `round(role_known_ratio × part_total) >= 8` |
+| `solid_coverage_red::test_f1` | `solid_ok_ratio >= 0.70` | 0.510 | `stats["ok_total"] >= 40` |
+| `outline_chaining_red::test_e1` | `closed_ratio >= 0.88` | 0.510 | `closed_total >= 40` |
+| `outline_chaining_red::test_e4` | `1 <= open_total <= 7` | 129 | `1 <= open_total < part_total`（改为对分母无关的不变式） |
+| `coverage_truthfulness_red.RealSampleCoverage::test_c1` | 三条比值 ≥ 0.60 + 两条证据比值 ≥ 0.15 / 0.08 | 0.51 / 0.51 / 0.51 / 0.141 / 0.049 | `material_known_total` / `thickness_known_total` / `processable_total >= 40` + `material_evidence_total >= 20` + `thickness_evidence_total >= 8`（比值仍照常输出，只是不再当门槛） |
+
+`outline_chaining_red::test_e2_rescue_total`（`collapsed_rescue_total >= 6`）在 `## 304` 时代是红的，
+本层已转绿，未改断言。
+
+### 复跑
+
+`CPQ_DWG_REAL_SAMPLES=1`：`material_attribution` 27 OK、`downstream_gate` OK、`solid_coverage` OK、
+`outline_chaining` 24 OK、`coverage_truthfulness` 11 OK、`parts_extraction` OK、
+`list_visibility` 11 OK、`components` / `thickness_facts` OK、`bom_part_size_provenance` /
+`parametric_bom` / `semantics` / `parse_terminal_signal` / `frontend_wiring` 全 OK。
+既有红未动：`packaging_drawing_flow_red::CGates::test_c8`（`## 262` 已记）。
+
+### 边界
+
+本批只改 `tests/` 下 5 个文件（4 个新入库 + 1 个门槛重标定）、`docs/specs/` 下 4 份 Spec 文档、
+追加本 changelog；**未改任何业务实现**、未改 `summarize()` 的分母口径、未改成本与工艺算法、
+未连 PG、未写生产数据。

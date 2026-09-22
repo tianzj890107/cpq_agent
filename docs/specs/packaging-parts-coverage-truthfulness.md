@@ -109,17 +109,31 @@ THICKNESS_GAP_REASONS = ("no_closed_outline", "no_thickness_note", "grammage_onl
 
 | 门槛 | 值 | 今天（9-22 实测） |
 | --- | --- | --- |
-| `material_known_ratio` | `>= 0.60` | 0.625 |
-| `thickness_known_ratio` | `>= 0.60` | 0.625 |
-| `processable_ratio` | `>= 0.60` | 0.625 |
-| `material_evidence_ratio` | `>= 0.15` | 0.234 |
-| `thickness_evidence_ratio` | `>= 0.08` | 0.094 |
+| `material_known_total` | `>= 40` | 134 |
+| `thickness_known_total` | `>= 40` | 134 |
+| `processable_total` | `>= 40` | 134 |
+| `material_evidence_total` | `>= 20` | 37 |
+| `thickness_evidence_total` | `>= 8` | 13 |
 
-- 前三条是**地板**（`closed_ratio` 实测 0.625 就是它们的天花板：同一份图纸、同一套 Spec 规则）；
-- 后两条是**证据地板**，**只许升不许降**；把它们抬上去的唯一合法手段是
+**2026-09-22 重标定：五条门槛全部由"比值地板"改成"绝对分子地板"。**
+
+- 原因：比值分母（`part_total`）**会随分组口径变**。`packaging-parts-list-visibility-and-kinds.md`
+  让零件文档保留全量件之后，`酒盒.dwg` 的件数从 **64 → 263**，而分子一件都没掉
+  （`closed_total` / `material_known_total` 40 → 134、`material_evidence_total` 8 → 37、
+  `thickness_evidence_total` 3 → 13）。原来那张按"前 64 件"标定的比值表于是**五条同时**假性失败
+  （实测 0.51 / 0.51 / 0.51 / 0.141 / 0.049）—— 测的是"分母涨没涨"，不是"能力退没退步"。
+- 判据：**分母口径归 Spec，能力门槛归绝对分子。** 同一条判据也用在
+  `packaging-parts-list-visibility-and-kinds.md` §6 的另外 7 条真样本门槛上。
+- 前三条：`closed_ratio` 的天花板仍是 `closed_total / part_total`（同一份图纸、同一套 Spec 规则）；
+- 后两条是**证据地板**，**只许升不许降**（现在按绝对分子只许升）；把它们抬上去的唯一合法手段是
   `packaging-parts-thickness-facts.md`（克重 → 料厚 / 防串味 / 人工补料厚），
   不许靠"扩大整盒兜底"或"把件合并得更粗"；
+- 比值本身（`material_known_ratio` 等）仍是冻结面（§2.4），读接口照常给，只是**不再当门槛**；
 - 改任何一条门槛都必须改本文件（本表是门槛的唯一出处）。
+
+历史值（"前 64 件"分母时代，已取代）：`material_known_ratio >= 0.60`（0.625）、
+`thickness_known_ratio >= 0.60`（0.625）、`processable_ratio >= 0.60`（0.625）、
+`material_evidence_ratio >= 0.15`（0.234）、`thickness_evidence_ratio >= 0.08`（0.094）。
 
 ### 2.4 冻结面
 

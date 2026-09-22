@@ -7,7 +7,9 @@ Spec 版本：1（状态行见下）
 `docs/specs/packaging-parametric-bom.md`（第 5 批：参数化展开）、
 `docs/specs/packaging-cost-engine.md`（第 7 批：成本读 `length_mm` / `width_mm`）
 
-状态：Spec + 红测（已实现）（红测 test_packaging_drawing_flow_red 另有已记录的测试侧冲突，见 changelog ## 262）
+状态：Spec + 红测（已实现）（红测 test_packaging_drawing_flow_red 另有已记录的测试侧冲突，见 changelog ## 262；
+§C3 的 `max_parts` 截断与 `repeat_of` 键已于 9-22 由 `packaging-parts-list-visibility-and-kinds.md`
+取代/收紧，`test_packaging_parts_extraction_red` 的默认与显式两种口径都不冲突、仍全绿）
 红测：`tests/test_drawing_flow_error_taxonomy_red.py` `tests/test_packaging_drawing_flow_red.py` `tests/test_packaging_parts_extraction_red.py`
 
 ## 0. 口径变更（本批的前提，取代旧条款）
@@ -74,7 +76,15 @@ Spec 版本：1（状态行见下）
 - 排序：`(area_mm2 desc, component_id asc)`；
 - 零件号：`part_code = "DWG-P%02d"`，按上面的排序稳定编号（同一份 IR 两次跑必须逐字相同）；
 - 重复件：`bbox` + 实体数相同的第 2 件起标 `repeat_of`（指向首件 `part_code`），**不删**；
-- 上限：`max_parts`（默认 64），超出时截断并给 `stats.truncated`（> 0 时前端要提示）。
+  （2026-09-22 收紧：`repeat_of` 只允许出现在**同 `kind_key`** 之间，键不再是 `(长,宽,实体数)`
+  —— 那个键不含形状，会把同长宽的矩形与 L 形算成同一件。见
+  `packaging-parts-list-visibility-and-kinds.md` §2.2。）
+- 上限（**2026-09-22 由 `packaging-parts-list-visibility-and-kinds.md` §2.1 取代**）：
+  `extract()` 默认**不截断**、`stats.truncated` 恒 `0`，`parts` 保留**全部** kept 件；
+  只有调用方**显式**传 `options["max_parts"]`（正整数）才按本节历史行为截断并计数。
+  真图实测：不取代的话，`酒盒.dwg` 的 263 件只会留下 64 件，另外 **199 件在零件文档里根本不存在**。
+  "每页显示多少件"改由该 Spec §2.4 读接口的 `limit` 负责（缺省值仍取
+  `DEFAULT_OPTIONS["max_parts"] = 64`，所以那个常量字面不变）。
 
 ### C4 保证"能出零件"
 
@@ -166,7 +176,9 @@ summarize(doc) -> dict                                   # 摘要（不含 entit
 - `tech_app/frontend/app.js`：2.1 左栏零件树改为渲染零件文档
   （每行：`part_code` + `name` + `展开 长×宽 mm` + 图层；空态显示 `unavailable` 的中文原因）；
 - `drawingFlowPanel` 增加「零件提取」一行（沿用既有步骤渲染，不新写一套）；
-- 零件树的行数必须等于 `stats.part_total`（不许前端自己过滤），`truncated > 0` 要给提示。
+- 零件树的行数必须等于 `stats.part_total`（不许前端自己过滤），`truncated > 0` 要给提示；
+  （2026-09-22 起还要能**按种类折叠** + **继续加载下一页**：`truncated` 那一句不再是唯一的可见性提示，
+  见 `packaging-parts-list-visibility-and-kinds.md` §2.5。）
 
 ## 6. 不在本批范围
 

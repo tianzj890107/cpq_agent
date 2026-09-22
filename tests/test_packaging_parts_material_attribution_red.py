@@ -362,20 +362,30 @@ class ERealSample(AttributionCase):
         self._cache[filename] = doc
         return doc
 
+    # 2026-09-22 修订（Spec `packaging-parts-coverage-truthfulness.md` §2.3 取代本节原来的 0.75/0.75/0.70；
+    # 分母口径归 Spec `packaging-parts-list-visibility-and-kinds.md` §6 的修法）：
+    # 这三条比值**逐字等于 `closed_ratio`**（归属只在闭合件上生效 + 层 4 整盒兜底填满每个闭合件），
+    # 所以原来测的是"闭合轮廓占比"。比值分母随 `## 308`（零件文档保留全量件）从 64 变 263，
+    # 按比值标定的门槛必然假性失败；**分子一件都没掉**（`material_known_total` 40 → 134）。
+    # 于是这三条改成**绝对分子地板**：只对"能做归属的件数"提要求，不再对分母大小提要求。
+    E1_MATERIAL_KNOWN_FLOOR = 40
+    E2_THICKNESS_KNOWN_FLOOR = 40
+    E3_PROCESSABLE_FLOOR = 40
+
     def test_e1_material_coverage(self):
         summary = packaging_parts.summarize(self._doc("酒盒.dwg"))
-        self.assertGreaterEqual(float(summary["material_known_ratio"]), 0.75,
-                                "酒盒 material_known_ratio 门槛 0.75（Spec §4）")
+        self.assertGreaterEqual(int(summary["material_known_total"]), self.E1_MATERIAL_KNOWN_FLOOR,
+                                "酒盒 material_known_total 地板 40（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_e2_thickness_coverage(self):
         summary = packaging_parts.summarize(self._doc("酒盒.dwg"))
-        self.assertGreaterEqual(float(summary["thickness_known_ratio"]), 0.75,
-                                "酒盒 thickness_known_ratio 门槛 0.75（Spec §4）")
+        self.assertGreaterEqual(int(summary["thickness_known_total"]), self.E2_THICKNESS_KNOWN_FLOOR,
+                                "酒盒 thickness_known_total 地板 40（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_e3_processable_coverage(self):
         summary = packaging_parts.summarize(self._doc("酒盒.dwg"))
-        self.assertGreaterEqual(float(summary["processable_ratio"]), 0.70,
-                                "酒盒 processable_ratio 门槛 0.70（今天 0.062，Spec §4）")
+        self.assertGreaterEqual(int(summary["processable_total"]), self.E3_PROCESSABLE_FLOOR,
+                                "酒盒 processable_total 地板 40（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_e4_open_parts_have_no_attribution(self):
         doc = self._doc("酒盒.dwg")

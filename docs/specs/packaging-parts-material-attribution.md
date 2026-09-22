@@ -1,6 +1,6 @@
 # 包装图纸零件：材料与厚度的归属（覆盖率）
 
-状态：Spec + 红测（已实现）
+状态：Spec + 红测（已实现）（§4 的真实样本门槛已于 9-22 由 `packaging-parts-coverage-truthfulness.md` 取代，E1–E3 同步改为新口径，见 changelog `## 305`（「覆盖率口径的诚实性…」））
 红测：`tests/test_packaging_parts_material_attribution_red.py`
 
 血缘：承接 `packaging-dwg-parts-extraction.md`（零件提取）、`packaging-parts-true-outline.md`（真实轮廓）、
@@ -145,15 +145,27 @@ AMBIGUOUS_DISTANCE_MM = 5.0         # 最近两条候选距离差 <= 该值且�
 | `material_default_ratio` | `material_source.kind == "requirement_default"` 的件数 / `part_total` |
 | `attribution_kind_mix` | `{"part_note": n, "group_note": n, "layer_name": n, "requirement_default": n, "none": n}` |
 
-真实样本门槛（`酒盒.dwg`，本机样本 + 任一可用转换器；改门槛必须改本文件）：
+真实样本门槛（`酒盒.dwg`，本机样本 + 任一可用转换器）：
 
-| 门槛 | 值 | 今天 |
+> **2026-09-22：门槛已由 `packaging-parts-coverage-truthfulness.md` 取代，本表只作历史记录。**
+> 原因（实测）：这三条比值**逐字等于 `closed_ratio`** —— 归属只在闭合件上生效，层 4 整盒兜底又把
+> 每个闭合件都填满，所以 `material_known_ratio = thickness_known_ratio = processable_ratio =
+> closed_ratio`。`packaging-parts-component-chaining.md` 把分量从 402 改成 1163 之后，
+> `closed_ratio` 从 ≥0.75 掉到 0.625，三条门槛**同时**从通过变失败 —— 说明这个数测的不是归属质量。
+> 现行门槛（三条地板 + 两条"证据地板"，必须同时成立）见
+> `docs/specs/packaging-parts-coverage-truthfulness.md` §2.3；本表的 0.75 / 0.75 / 0.70 与
+> 下表 `今天` 一列均为历史值，**不再作为验收口径**。
+
+| 门槛（历史值，已取代） | 值 | 当时 |
 | --- | --- | --- |
 | `material_known_ratio` | `>= 0.75` | 0.188 |
 | `thickness_known_ratio` | `>= 0.75` | 0.125 |
 | `processable_ratio` | `>= 0.70` | 0.062 |
 | 误归属 | `open` 件的 `material`/`thickness_mm` **必须全空** | 9 件有值（全错） |
 | 兜底可见 | `needs_confirmation` 件数 == `requirement_default` 件数 | 无该字段 |
+
+（上表后两行——`open` 件必须全空、兜底必须可见——**继续有效**，只是把它们并入了
+`packaging-parts-coverage-truthfulness.md` 的缺口原因账。）
 
 ## 5. 允许修改范围
 

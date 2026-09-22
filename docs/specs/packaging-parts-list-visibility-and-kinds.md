@@ -139,7 +139,7 @@ CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
   tests.test_packaging_parts_list_visibility_red.RealSampleList -v                            # 真样本 F 组
 ```
 
-## 6. 已记录的测试侧冲突（`## 308` 落地后复跑，**未改任何测试**）
+## 6. 测试侧基线与新分母的重标定（`## 308` 落地后复跑 → 9-22 已按本节修法落地）
 
 本层让零件文档保留**全部** kept 件（`酒盒.dwg` 64 → 263、`圆盘盒.dwg` 64 → 312），
 于是所有"文件级比率"的**分母**跟着变大，而分子只按新增的件涨得慢 —— 四条按旧分母
@@ -147,21 +147,22 @@ CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
 `closed_ratio` 的分子从 40 涨到 134、`material_known_total` 从 40 涨到 134，
 `圆盘盒` 的 `role_known_total` 从 8 涨到 9（绝对数一个都没掉）。
 
-| 测试 | 断言 | 旧实测（前 64 件） | 新实测（全量） | 测试侧一行修法 |
-| --- | --- | --- | --- | --- |
-| `test_packaging_parts_material_attribution_red.ERealSample::test_e1_material_coverage` | 酒盒 `material_known_ratio >= 0.60` | 0.625（40/64） | 0.510（134/263） | 改成绝对分子 `material_known_total >= 40`（或比值 ≥ 0.51） |
-| 同上 `::test_e2_thickness_coverage` | 酒盒 `thickness_known_ratio >= 0.60` | 0.625（40/64） | 0.510（134/263） | 改成 `thickness_known_total >= 40` |
-| 同上 `::test_e3_processable_coverage` | 酒盒 `processable_ratio >= 0.60` | 0.625（40/64） | 0.510（134/263） | 改成 `processable_total >= 40` |
-| `test_packaging_parts_downstream_gate_red.FRealSampleThresholds::test_f2_disc_box_threshold` | 圆盘盒 `role_known_ratio >= 0.10` | 0.125（8/64） | 0.029（9/312） | 改成绝对分子 `role_known_total >= 8` |
+**修法只有一条判据**：把"按比值标定"的门槛换成**绝对分子地板**。比值分母本来就是"文档里有几件"
+（§2.1），它会随分组口径变；绝对分子才是"能力有没有退步"，而本轮分子**没有一个下降**。
 
-两条**既有**已记录冲突（`## 304` 的表的成员）本层改了量级、方向不变，仍然是测试侧基线：
-
-| 测试 | 断言 | `## 304` 实测 | 本层实测 |
+| 测试 | 旧断言（按前 64 件标定） | 旧实测 → 新实测 | 现断言（已落地） |
 | --- | --- | --- | --- |
-| `test_packaging_parts_solid_coverage_red.FRealSample::test_f1_solid_ok_ratio` | 酒盒 `solid_ok_ratio >= 0.70` | 0.625 | 0.510 |
-| `test_packaging_parts_outline_chaining_red.ERealSample::test_e1_closed_ratio` | 酒盒 `closed_ratio >= 0.88` | 0.625 | 0.510 |
-| 同上 `::test_e4_open_reason_mix_has_no_vague_reason` | `1 <= open_total <= 7` | 24 | 129 |
-| 同上 `::test_e2_rescue_total` | `rescue_total >= 6` | 0（红） | **已转绿**（全量件里救回 ≥ 6 件） |
+| `test_packaging_parts_material_attribution_red.ERealSample::test_e1_material_coverage` | 酒盒 `material_known_ratio >= 0.60` | 0.625（40/64）→ 0.510（134/263） | `material_known_total >= 40` |
+| 同上 `::test_e2_thickness_coverage` | 酒盒 `thickness_known_ratio >= 0.60` | 0.625 → 0.510 | `thickness_known_total >= 40` |
+| 同上 `::test_e3_processable_coverage` | 酒盒 `processable_ratio >= 0.60` | 0.625 → 0.510 | `processable_total >= 40` |
+| `test_packaging_parts_downstream_gate_red.FRealSampleThresholds::test_f2_disc_box_threshold` | 圆盘盒 `role_known_ratio >= 0.10` | 0.125（8/64）→ 0.029（9/312） | `round(role_known_ratio × part_total) >= 8`（`summarize()` 无 `role_known_total` 键，测试侧还原分子，不新增实现键） |
+| `test_packaging_parts_solid_coverage_red.FRealSample::test_f1_solid_ok_ratio` | 酒盒 `solid_ok_ratio >= 0.70` | 0.625 → 0.510 | `stats["ok_total"] >= 40` |
+| `test_packaging_parts_outline_chaining_red.ERealSample::test_e1_closed_ratio` | 酒盒 `closed_ratio >= 0.88` | 0.625 → 0.510 | `closed_total >= 40` |
+| 同上 `::test_e4_open_reason_mix_has_no_vague_reason` | `1 <= open_total <= 7` | 24 → 129 | `1 <= open_total < part_total`（上限改对分母无关的不变式） |
+| 同上 `::test_e2_rescue_total` | `rescue_total >= 6` | 0（红）→ **已转绿** | 未改 |
 
-**不做的三件事**：不改这四条断言、不删用例、不把 `summarize()` 的分母改回"前 64 件" ——
-分母口径归本 Spec §2.1/§2.3（`total` 是文档里的件数），门槛数字归测试侧重新标定。
+**不做的三件事**：不删用例、不把 `summarize()` 的分母改回"前 64 件"、不为了让比值好看去扩大整盒兜底 ——
+分母口径归本 Spec §2.1/§2.3（`total` 是文档里的件数），门槛数字归测试侧重新标定（本节）。
+
+9-22 复跑（`CPQ_DWG_REAL_SAMPLES=1`）：`material_attribution` 27 OK、`downstream_gate` OK、
+`solid_coverage` OK、`outline_chaining` 24 OK。

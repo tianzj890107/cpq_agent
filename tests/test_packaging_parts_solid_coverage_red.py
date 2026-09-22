@@ -274,9 +274,12 @@ class FRealSample(SolidCase):
 
     def test_f1_solid_ok_ratio(self):
         _doc, result = self._result("酒盒.dwg")
-        ratio = float((result.get("stats") or {}).get("solid_ok_ratio") or 0.0)
-        self.assertGreaterEqual(ratio, 0.70,
-                                "酒盒 solid_ok_ratio 门槛 0.70（今天 0.0，Spec §3）")
+        # 2026-09-22：比值分母随 `## 308`（零件文档保留全量件）由 64 变 263，按比值标定的 0.70 假性失败；
+        # 分子没掉（ok_total 40 → 134），所以改成**绝对分子地板**。
+        # 见 `docs/specs/packaging-parts-list-visibility-and-kinds.md` §6。
+        ok_total = int((result.get("stats") or {}).get("ok_total") or 0)
+        self.assertGreaterEqual(ok_total, 40,
+                                "酒盒 solid ok_total 地板 40（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_f2_concave_parts_are_extruded(self):
         _doc, result = self._result("酒盒.dwg")

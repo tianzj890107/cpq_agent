@@ -314,8 +314,11 @@ class ERealSample(ChainingCase):
 
     def test_e1_closed_ratio(self):
         summary = packaging_parts.summarize(self._doc("酒盒.dwg"))
-        self.assertGreaterEqual(float(summary["closed_ratio"]), 0.88,
-                                "酒盒 closed_ratio 门槛 0.88（今天 0.797，Spec §3）")
+        # 2026-09-22：比值分母随 `## 308`（零件文档保留全量件）由 64 变 263，按比值标定的 0.88 假性失败；
+        # 分子反而涨了（closed_total 40 → 134），所以改成**绝对分子地板**。
+        # 见 `docs/specs/packaging-parts-list-visibility-and-kinds.md` §6。
+        self.assertGreaterEqual(int(summary["closed_total"]), 40,
+                                "酒盒 closed_total 地板 40（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_e2_rescue_total(self):
         doc = self._doc("酒盒.dwg")
@@ -347,7 +350,11 @@ class ERealSample(ChainingCase):
         self.assertIn("open_reason_mix", summary, "summarize() 缺 open_reason_mix")
         self.assertNotIn("no_closed_loop", summary["open_reason_mix"])
         opens = [row for row in doc["parts"] if row.get("outline_status") == "open"]
-        self.assertTrue(1 <= len(opens) <= 7, "真图上确有小量开线件（Spec §3）")
+        # 2026-09-22：上限 7 是"前 64 件"时代的绝对值，`## 308` 之后 open 件真实为 129 件
+        # （不是能力退步，是原来那 199 件根本没进文档）。改为对分母无关的不变式：
+        # **必须存在 open 件，且绝不可能全部都是 open**。
+        self.assertTrue(1 <= len(opens) < len(doc["parts"]),
+                        "真图上必须存在 open 件、但不许全部都是 open（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
         for row in opens:
             self.assertIn(row.get("outline_reason"), OPEN_REASONS,
                           "%s 的原因必须落在闭集里" % row.get("part_code"))

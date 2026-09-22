@@ -194,8 +194,13 @@ class FRealSampleThresholds(unittest.TestCase):
         doc = self._doc("圆盘盒.dwg")
         summary = summarize(doc)
         self.assertGreaterEqual(float(summary["closed_ratio"]), 0.50, "圆盘盒 closed_ratio 门槛 0.50")
-        self.assertGreaterEqual(float(summary["role_known_ratio"]), 0.10,
-                                "圆盘盒 role_known_ratio 门槛 0.10")
+        # 2026-09-22：比值分母随 `## 308`（零件文档保留全量件）由 64 变 312，按比值标定的 0.10 假性失败；
+        # 分子反而涨了（8 → 9），所以改成**绝对分子地板**（`summarize()` 没有 `role_known_total` 键，
+        # 由 `role_known_ratio × part_total` 还原分子，不新增实现键）。见
+        # `docs/specs/packaging-parts-list-visibility-and-kinds.md` §6。
+        role_known_total = round(float(summary["role_known_ratio"]) * int(summary["part_total"]))
+        self.assertGreaterEqual(role_known_total, 8,
+                                "圆盘盒 role_known_total 地板 8（Spec `packaging-parts-list-visibility-and-kinds.md` §6）")
 
     def test_f3_at_least_one_part_is_computable(self):
         for name in ("酒盒.dwg", "圆盘盒.dwg"):
