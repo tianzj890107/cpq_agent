@@ -7201,12 +7201,21 @@ PACKAGING_BUSINESS_PARTS_IMPORT_PATH = ("/api/projects/{pid}/requirement/"
                                         "packaging-business-parts/import")
 
 
+def _workbook_too_large_detail(size: int, limit: int) -> str:
+    """超限文案（Spec `packaging-authority-workbook-upload.md` §C2）：说清上限与实际大小。"""
+    return ("工作簿太大（%.1f MB），单个工作簿上限 %.1f MB"
+            % (float(size) / 1048576.0, float(limit) / 1048576.0))
+
+
 class PackagingBusinessPartsImportAction(BaseModel):
     """导入权威清单的入参（Spec §3/§5）：给服务器可见的工作簿路径，或直接给字节。"""
 
     workbook_path: str = ""
     content_base64: str = ""
     sheet: str = ""
+    #: 上传（`content_base64`）时的原始文件名（Spec `packaging-authority-workbook-upload.md` §C2）：
+    #: 只用于**记出处**；路径来源那条路不看它（防冒名）。
+    file_name: str = ""
     #: 是否顺带按尺寸做一次确定性几何绑定（默认做；绑不上的照旧是 `unbound`，不猜）。
     bind: bool = True
 
@@ -7275,13 +7284,26 @@ def import_packaging_business_parts(
     raw = str(body.content_base64 or "").strip()
     if not path and not raw:
         raise HTTPException(400, "请给出权威清单工作簿（workbook_path 或 content_base64）")
+    if raw:
+        # 两道上限（Spec `packaging-authority-workbook-upload.md` §C2，上限取自既有的
+        # `MAX_UPLOAD_BYTES`、不新造常量）：先按 base64 **文本长度**粗判 —— 不许把任意大小的
+        # 载荷先解进内存；再按解码后的**真实字节数**精判。超限一律 413，且不调导入器。
+        limit = int(MAX_UPLOAD_BYTES)
+        if len(raw) > limit * 4 // 3 + 16:
+            raise HTTPException(413, _workbook_too_large_detail(len(raw) * 3 // 4, limit))
+        try:
+            source = base64.b64decode(raw)
+        except Exception as exc:                        # noqa: BLE001 - 入参问题要给人话
+            raise HTTPException(400, "content_base64 解不开（%s）" % type(exc).__name__)
+        if len(source) > limit:
+            raise HTTPException(413, _workbook_too_large_detail(len(source), limit))
+    else:
+        source = path
     try:
-        source = base64.b64decode(raw) if raw else path
-    except Exception as exc:                            # noqa: BLE001 - 入参问题要给人话
-        raise HTTPException(400, "content_base64 解不开（%s）" % type(exc).__name__)
-    try:
-        authority = packaging_part_authority.import_workbook(source,
-                                                            sheet=str(body.sheet or "") or None)
+        authority = packaging_part_authority.import_workbook(
+            source, sheet=str(body.sheet or "") or None,
+            # 文件名只在字节那一路透传（Spec §C2）：路径来源的名字由服务器路径决定。
+            file_name=(str(body.file_name or "") if raw else ""))
     except FileNotFoundError:
         raise HTTPException(400, "工作簿读不到：%s" % path)
     except Exception as exc:                            # noqa: BLE001 - 读表失败要说清哪一步

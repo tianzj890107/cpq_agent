@@ -2328,22 +2328,71 @@ function packagingBusinessImportNote(doc) {
   button.type = "button";
   button.textContent = "导入权威清单（业务部件）";
   button.addEventListener("click", () => { importPackagingBusinessParts(); });
+  // 客户工作簿入口（Spec `packaging-authority-workbook-upload.md` §C3）：客户给的 xlsx
+  // 不必先放上服务器 —— 选中文件即走同一条导入接口（只搬字节，前端不解析）。
+  const picker = document.createElement("div");
+  picker.className = "packaging-business-upload";
+  picker.setAttribute("data-qq-business-upload", "1");
+  picker.innerHTML = '<input type="file" accept=".xlsx,.xlsm" hidden>';
+  const fileInput = picker.querySelector("input");
+  const upload = document.createElement("button");
+  upload.id = "packagingBusinessImportFile";
+  upload.className = "btn btn-secondary";
+  upload.type = "button";
+  upload.textContent = "选择客户工作簿…";
+  upload.addEventListener("click", () => { if (fileInput) fileInput.click(); });
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      const picked = (fileInput.files || [])[0];
+      if (picked) importPackagingBusinessPartsFromFile(picked);
+      fileInput.value = "";
+    });
+  }
   wrap.appendChild(text);
   wrap.appendChild(action);
   wrap.appendChild(button);
+  wrap.appendChild(upload);
+  wrap.appendChild(picker);
   return wrap;
 }
 
-// 导入权威清单 → 落一版业务部件文档（Spec §3/§5）：确定性解析，可重复跑（同资料同 id）。
-async function importPackagingBusinessParts() {
+// 导入权威清单的三条路（Spec docs/specs/packaging-authority-workbook-upload.md §C3）：
+//   ① 服务器路径（部署机上直接指一个路径，原样保留）；
+//   ② 客户工作簿（选文件 → FileReader 读成 data URL → 只搬字节，前端**不**解析 xlsx）；
+//   ③ 都没有 → null（不猜、不编空载荷）。
+// 三个都是纯函数：体内无 DOM / fetch / storage，可被 `node -e` 抽出来真跑。
+function packagingAuthorityFileName(name) {
+  if (typeof name !== "string") return "";
+  const tail = name.replace(/\\/g, "/").split("/").pop() || "";
+  return tail.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+}
+function packagingAuthorityBase64Of(dataUrl) {
+  if (typeof dataUrl !== "string") return "";
+  const match = /^data:[^,]*;base64,([\s\S]*)$/.exec(dataUrl);
+  return match ? match[1].replace(/\s+/g, "") : "";
+}
+function packagingAuthorityImportBody(path, fileName, dataUrl) {
+  const serverPath = typeof path === "string" ? path.trim() : "";
+  if (serverPath) return { workbook_path: serverPath };
+  const encoded = packagingAuthorityBase64Of(dataUrl);
+  if (!encoded) return null;
+  return { content_base64: encoded, file_name: packagingAuthorityFileName(fileName) };
+}
+
+// 导入接口只有一处字面量（Spec §C3/§C4：前端业务件路由引用计数保持 4）。
+function packagingBusinessPartsImportPath() {
+  return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/import`;
+}
+
+// 路径导入与文件导入共用这一个 POST（失败一律用后端给的 message，不猜原因）。
+async function importPackagingBusinessPartsData(path, fileName, dataUrl) {
   if (!currentProject) return null;
-  const path = window.prompt("权威清单工作簿在服务器上的路径（.xlsx）", "");
-  if (!path) return null;
+  const body = packagingAuthorityImportBody(path, fileName, dataUrl);
+  if (!body) return null;
   try {
-    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/`
-      + `packaging-business-parts/import`, {
+    const res = await fetch(packagingBusinessPartsImportPath(), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workbook_path: path }),
+      body: JSON.stringify(body),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -2359,6 +2408,30 @@ async function importPackagingBusinessParts() {
     window.alert(String((error && error.message) || error));
     return null;
   }
+}
+
+// 导入权威清单 → 落一版业务部件文档（Spec §3/§5）：确定性解析，可重复跑（同资料同 id）。
+async function importPackagingBusinessParts() {
+  if (!currentProject) return null;
+  const path = window.prompt("权威清单工作簿在服务器上的路径（.xlsx）", "");
+  if (!path) return null;
+  return importPackagingBusinessPartsData(path, "", "");
+}
+
+// 客户工作簿：读成 data URL 后交给同一个 POST（只搬字节、不解析）。
+function importPackagingBusinessPartsFromFile(file) {
+  if (!file) return null;
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(importPackagingBusinessPartsData("", file.name, String(reader.result || "")));
+    };
+    reader.onerror = () => {
+      window.alert("这个文件读不出来，请重新选择");
+      resolve(null);
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 // 依据区的共用行渲染（Spec `packaging-business-part-panel-evidence.md` §C3）：

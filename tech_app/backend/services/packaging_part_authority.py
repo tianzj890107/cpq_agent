@@ -301,7 +301,16 @@ def _file_hash(source: Any) -> str:
     return digest.hexdigest()
 
 
-def import_workbook(source: Any, *, sheet: Optional[str] = None) -> Dict[str, Any]:
+def source_file_name(value: Any) -> str:
+    """文件名净化（Spec `packaging-authority-workbook-upload.md` §C1/§C3 的同一条规则）：
+    取最后一段（`/` 与 `\` 都算分隔符）、去掉控制字符、trim —— 只留名字，不留路径。"""
+    text = _text(value).replace("\\", "/")
+    tail = text.rsplit("/", 1)[-1]
+    return "".join(char for char in tail if ord(char) >= 32 and ord(char) != 127).strip()
+
+
+def import_workbook(source: Any, *, sheet: Optional[str] = None,
+                    file_name: str = "") -> Dict[str, Any]:
     """把权威资料工作簿导成业务部件清单（**确定性**、幂等、不改入参）。
 
     `source` 是路径（`str` / `Path`）或工作簿字节。返回文档见 Spec §1/§2：`parts` 是业务
@@ -311,13 +320,22 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None) -> Dict[str, An
     from tech_app.tools import xlsx_grid
 
     digest = _file_hash(source)
-    file_name = "" if isinstance(source, (bytes, bytearray)) else os.path.basename(os.fspath(source))
+    # 出处（Spec `packaging-authority-workbook-upload.md` §C1）：字节来源的文件名只能来自入参
+    # （`file_name`，没给就空着、不许编）；路径来源仍取 basename —— 那条路**不看** `file_name`，
+    # 免得路径导入被人冒名。字节数两个来源都给（`file_bytes`）。
+    if isinstance(source, (bytes, bytearray)):
+        resolved_name = source_file_name(file_name)
+        file_bytes = len(bytes(source))
+    else:
+        source_path = os.fspath(source)
+        resolved_name = os.path.basename(source_path)
+        file_bytes = os.path.getsize(source_path)
     grid = xlsx_grid.read_grid(source, with_images=True)
     current = _pick_sheet(grid, sheet)
     if current is None:
         return {"engine_version": ENGINE_VERSION, "parts": [], "skipped": [], "images": [],
-                "source": {"file": file_name, "sheet": "", "file_hash": digest,
-                           "code_prefix": PART_CODE_PREFIX_FALLBACK},
+                "source": {"file": resolved_name, "file_bytes": file_bytes, "sheet": "",
+                           "file_hash": digest, "code_prefix": PART_CODE_PREFIX_FALLBACK},
                 "stats": {"part_total": 0, "image_total": 0, "skipped_total": 0,
                           "image_bytes_total": 0},
                 "unavailable": [{"code": "authority_sheet_missing",
@@ -397,7 +415,8 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None) -> Dict[str, An
         # 部件图**本体**（Spec `packaging-authority-thumbnail-media.md` §C2）：以前只有引用字符串，
         # 字节从来没出过工具层，页面因此一张图也看不到。
         "images": images,
-        "source": {"file": file_name, "sheet": _text(current.get("name")),
+        "source": {"file": resolved_name, "file_bytes": file_bytes,
+                   "sheet": _text(current.get("name")),
                    "file_hash": digest, "code_prefix": prefix, "header_row": header_row,
                    "data_row_first": parts[0]["source"]["row"] if parts else 0,
                    "data_row_last": parts[-1]["source"]["row"] if parts else 0},

@@ -17852,3 +17852,32 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
   `tests/test_packaging_quote_send_recovery_red.py::C1`；另跑**所有引用 `requirement-confirm.js`
   的 35 个套件**：`Ran 592 … OK`。
 - 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 420. 落地 `packaging-authority-workbook-upload`：客户工作簿从页面上直接导入 + 出处如实落库（22 OK，红基 18 红）（9-22，Codex 实现）
+
+- **缺口**：`app.js` 的 `importPackagingBusinessParts()` 只会 `window.prompt(
+  "权威清单工作簿在服务器上的路径（.xlsx）")` → `{workbook_path: path}`，前端 `content_base64` /
+  `file_name` / `FileReader` / `readAsDataURL` **0 处** —— 客户给的 xlsx 必须先被人手工放上服务器；
+  `main.py` 收到 base64 直接 `b64decode`（**没有大小上限**、也不带文件名）；
+  `packaging_part_authority.import_workbook()` 对字节来源 `source["file"] = ""`、从来没有 `file_bytes`。
+- **C1 出处**：新增 `source_file_name()`（`/` 与 `\` 都算分隔符、去控制字符、trim）+
+  `import_workbook(source, *, sheet=None, file_name="")` —— 字节来源用 `file_name` 净化后的名字，
+  **路径来源仍取 basename 且不看 `file_name`（防冒名）**；两个返回分支都新增 `source["file_bytes"]`。
+- **C2 上限与透传**：`PackagingBusinessPartsImportAction.file_name` + `_workbook_too_large_detail()`；
+  路由先按 base64 **文本长度**粗判（不许把任意大小载荷先解进内存）再按**解码后字节数**精判，
+  两处都 **413** 且不调导入器；`file_name` 只在字节那一路透传；既有 400 两条文案逐字不变。
+- **C3 前端三条路**：`packagingAuthorityFileName()` / `packagingAuthorityBase64Of()` /
+  `packagingAuthorityImportBody()` 三个纯函数（`packagingAuthorityImportBody` 复用前两个）+
+  `packagingBusinessPartsImportPath()`（导入路径唯一字面量）+ 两条路共用的
+  `importPackagingBusinessPartsData()` + `importPackagingBusinessPartsFromFile(file)`
+  （`FileReader.readAsDataURL` → 同一个 POST，前端**只搬字节、不解析 xlsx**）；
+  面板导入按钮旁新增「选择客户工作簿…」与隐藏 `<input type="file" accept=".xlsx,.xlsm" hidden>`。
+- **C4 冻结面**：`packaging-business-parts/` 在 `app.js` 里仍是 **4** 处；服务器路径入口保留；
+  解析规则 / `bind` 默认 / 下游口径未动；未改 `index.html`、未加依赖；`node --check` 通过。
+- **红基**：`Ran 22 … FAILED (failures=15, errors=3)` = 18 红 / 4 绿（4 绿是「没超限照样导入 /
+  既有 400 两条 / 路由计数 4 / 语法」护栏）；**实现后** `Ran 22 … OK`。
+- **不回归**：业务件/权威/面板 6 个套件 `Ran 114 … OK`；**所有引用 `app.js` 的 131 个套件**
+  `Ran 1304 … OK (skipped=4)`；**packaging 全域** `Ran 2132 … FAILED (failures=5, skipped=8)`
+  —— 正是既有 5 条挂账（`part_role_mapping_reaches_card::A2`、`bom_part_size_provenance::B3`、
+  `parse_to_downstream_seams::B4`、`quote_send_recovery::C1`、`route_bom_version_pinning::F2`）。
+- 未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 部署。
