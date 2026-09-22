@@ -2351,6 +2351,29 @@ function renderPackagingBusinessTree(tree, rows) {
 
 // 点业务部件：右栏给权威资料 + 绑定状态，并在 CAD 平面图里高亮它绑定的图元
 // （Spec §6.2）。这里**不**在浏览器端重算尺寸、也**不**重新拆件。
+// 清单侧"这一件没有图"的原因文案（Spec `packaging-authority-thumbnail-bytes-read-failure.md` §2.1）：
+// 闭合表逐字照抄服务端 `main.py PACKAGING_THUMBNAIL_REASON_COPY` 里件级会出现的三个码；
+// **表外码照实暴露**（`部件图读不到（<码>）`），不许再断言"没入库 / 重新导入即可" ——
+// 宽泛兜底会把"字节被清理"赖到"没导入"头上，而导入不是那件事的下一步。纯函数，不碰 DOM / fetch。
+function packagingBusinessThumbnailReasonText(reason) {
+  const code = (reason === null || reason === undefined) ? "" : String(reason).trim();
+  if (!code) return "";
+  if (code === "image_bytes_unreadable") return "工作簿里的部件图读不出来（导入时就没读到字节）";
+  if (code === "thumbnail_missing") return "这份清单里这一件没有配到部件图";
+  if (code === "thumbnail_not_saved") {
+    return "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可";
+  }
+  return `部件图读不到（${code}）`;
+}
+
+// 清单里"有部件图"的那一件、这一次字节却取不到（blob 被清理 / 接口暂时读不到）时的文案
+// （Spec `packaging-authority-thumbnail-bytes-read-failure.md` §2.2）。与"这一件没有配图"、
+// "字节还没入库"是三件事，所以这句子一个字都不提它们。纯函数，不碰 DOM / fetch。
+function packagingBusinessThumbnailBytesFailureText() {
+  return "这一件清单里有部件图，但这一次没取到字节（可能已被清理，也可能是接口暂时读不到）；"
+    + "刷新或重新导入权威清单可重建";
+}
+
 function openPackagingBusinessPart(code) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
@@ -2403,13 +2426,19 @@ function openPackagingBusinessPart(code) {
         + ` src="${esc(mediaUrl(packagingBusinessPartThumbnailUrl(currentProject, wanted)))}"`
         + ` alt="${esc(alt + " 的部件图")}">`;
       thumbnailHost.hidden = false;
+      // 清单里有引用只说"这一件配了图"，**不是**"这一次取得到字节"（Spec
+      // `packaging-authority-thumbnail-bytes-read-failure.md` §2.3）：字节被清理 / 接口 500 时
+      // 浏览器只会画碎图，这里接住它，就这一块换成人话 —— 不改成"没有配图"、不动行上"已配到"。
+      const img = thumbnailHost.querySelector("img.packaging-business-thumb");
+      if (img) {
+        img.onerror = () => {
+          thumbnailHost.innerHTML = `<div class="packaging-part-note"`
+            + ` data-qqThumbBytesUnavailable="1">`
+            + `${esc(packagingBusinessThumbnailBytesFailureText())}</div>`;
+        };
+      }
     } else {
-      const reason = String(thumb.reason || "");
-      const copy = reason === "image_bytes_unreadable"
-        ? "工作簿里的部件图读不出来（导入时就没读到字节）"
-        : (reason === "thumbnail_missing"
-          ? "这份清单里这一件没有配到部件图"
-          : "部件图还没入库（重新导入权威清单即可）");
+      const copy = packagingBusinessThumbnailReasonText(String(thumb.reason || ""));
       thumbnailHost.innerHTML = `<div class="packaging-part-note">${esc(copy)}</div>`;
       thumbnailHost.hidden = false;
     }

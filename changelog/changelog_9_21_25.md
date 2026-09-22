@@ -17137,3 +17137,42 @@ node --check tech_app/frontend/app.js  OK
 
 未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
 未 push / MR / tag / Release / 未部署。
+
+## 399. 落地 `packaging-authority-thumbnail-bytes-read-failure`：清单里"有部件图"的那一件取不到字节时不再只剩碎图（新增两条纯函数 + `<img>` 接住 `onerror`；表外 reason 不再被赖成"没导入"；8 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingBusinessThumbnailReasonText(reason)`（`openPackagingBusinessPart()` 上方）：
+  **闭合表**逐字照抄服务端 `PACKAGING_THUMBNAIL_REASON_COPY` 里件级会出现的三个码 ——
+  `image_bytes_unreadable` → `工作簿里的部件图读不出来（导入时就没读到字节）`；
+  `thumbnail_missing` → `这份清单里这一件没有配到部件图`；
+  `thumbnail_not_saved` → `这件有部件图引用，但字节还没入库：重新导入一次权威清单即可`；
+  **表外非空码** → `部件图读不到（<码>）`（照实暴露，不再断言"没入库 / 重新导入即可"）；
+  空串 / `null` / 纯空白 → `""`。
+- 新增纯函数 `packagingBusinessThumbnailBytesFailureText()`（无参）：逐字返回
+  `这一件清单里有部件图，但这一次没取到字节（可能已被清理，也可能是接口暂时读不到）；刷新或重新导入权威清单可重建`。
+- `openPackagingBusinessPart()`：`thumb.available` 分支里既有的
+  `<img class="packaging-business-thumb" src="mediaUrl(packagingBusinessPartThumbnailUrl(…))" alt=…>`
+  逐字不变（T8）；新增 `img.onerror` —— 只把 `#packagingPartThumbnail` 这一块换成
+  `div.packaging-part-note[data-qqThumbBytesUnavailable="1"]`，文本取上面那条无参纯函数；
+  `else` 分支删掉内联三元式与那句宽泛兜底 `部件图还没入库（重新导入权威清单即可）`，改为
+  `packagingBusinessThumbnailReasonText(String(thumb.reason || ""))`。显示条件仍是 `thumb.available`。
+
+未动的：服务端 `PACKAGING_THUMBNAIL_REASON_COPY` 与缩略图端点（404 + reason 是对的）；行上
+`thumbnail_ref` / `bound_total` / "已配到（…）"那几行（清单事实不变）；`renderPackagingPartPanel()`
+收起缩略图那句 / `pkgPartFactRow()` / `packagingAuthorityDisclosureLines()` /
+`packaging-business-parts` 读接口；`onerror` 不重试循环 / 不自动重新导入 / 不弹窗。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_authority_thumbnail_bytes_read_failure_red   Ran 8  FAILED (failures=7) → Ran 8  OK
+  （红基 T1 T2 T3 T4 T5 T6 T7；护栏 T8 始终绿）
+不回归：authority_thumbnail_media + authority_disclosure_on_read + business_parts_read_failure_note
+        Ran 59  OK
+        业务部件面板证据 + 绑定轮廓点击 + CAD 计划视图  Ran 44  OK
+node --check tech_app/frontend/app.js  OK
+```
+
+未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
+未 push / MR / tag / Release / 未部署。
