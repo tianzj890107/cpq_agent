@@ -1703,6 +1703,33 @@ def _resolve_material(row: dict, materials: list) -> Optional[dict]:
     return None
 
 
+#: 价格单位口径（Spec `packaging-material-price-unit-truth.md` §C1）：
+#: 材料公式的 `ton_price = 单价 × 1000`（`packaging-cost-engine.md` §2.3）已经把
+#: "单价必须是 元/kg"写死进算式 —— 单位不是 kg 时**不许**照样 ×1000（那不是换算，是错算）。
+MATERIAL_PRICE_UNIT_EXPECTED = "kg"
+#: 写法 → 规范单位的闭集小表：只认 kg 与它的中文写法，`吨` / `t` / `ton` 一律不算别名。
+MATERIAL_PRICE_UNIT_ALIASES = {"kg": "kg", "千克": "kg", "公斤": "kg"}
+MATERIAL_PRICE_UNIT_STATUSES = ("ok", "unit_missing", "unit_mismatch")
+
+
+def material_price_unit_status(price_row: Any) -> tuple:
+    """一条价格行的计价单位核对（Spec `packaging-material-price-unit-truth.md` §C1）。
+
+    只报事实、**不给默认单位**，返回 `(status, unit)`：
+      · `("ok", "kg")` —— 单位归一后正是公式要求的 kg；
+      · `("unit_missing", "")` —— 行里没写单位 / 写空 / 根本不是一条价格（没核对过）；
+      · `("unit_mismatch", <原文>)` —— 写了单位但不是 kg（原文 trim 后回给用户）。
+    """
+    row = price_row if isinstance(price_row, dict) else {}
+    value = row.get("unit")
+    raw = _text(value) if isinstance(value, str) else ""
+    if not raw:
+        return "unit_missing", ""
+    if MATERIAL_PRICE_UNIT_ALIASES.get(raw.lower()):
+        return "ok", MATERIAL_PRICE_UNIT_EXPECTED
+    return "unit_mismatch", raw
+
+
 def _material_price(material_code: str) -> Optional[dict]:
     return kb_repo.current_price(material_code, industry=PACKAGING_INDUSTRY)
 
@@ -1813,6 +1840,18 @@ GAP_RESOLUTIONS = {
     "material_price_missing": {"missing_variable": ["price"],
                                "resolution_action": "在物料主数据里补该材料的权威单价",
                                "entry": "kb_material_price", "severity": "blocking"},
+    # 单位不是 kg 时拦住这一行（Spec `packaging-material-price-unit-truth.md` §C3）：
+    # 换算是业务口径，引擎不拍系数，只点名要改成什么。
+    "material_price_unit_mismatch": {
+        "missing_variable": ["price"],
+        "resolution_action": ("把 kb_material_price 的计价单位改成 元/kg（或先换算成 元/kg 再入表）："
+                              "公式按 元/kg → 元/吨（ton_price = 单价 × 1000）"),
+        "entry": "kb_material_price", "severity": "blocking"},
+    # 没写单位 → 不拦算（今天的行为不悄悄改），但必须在缺口里显形。
+    "material_price_unit_missing": {
+        "missing_variable": ["price"],
+        "resolution_action": "给这条价格补上计价单位（元/kg）后再算",
+        "entry": "kb_material_price", "severity": "advisory"},
     "material_gsm_missing": {"missing_variable": ["gsm"],
                              "resolution_action": "补材料克重/厚度换算（灰板必须给 GSM）",
                              "entry": "kb_material", "severity": "blocking"},
@@ -2110,12 +2149,17 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         material = _resolve_material(row, materials)
         gsm, gsm_source = _material_gsm_detail(material) if material else (None, None)
         price = None
+        price_row = None
         if material:
             price_row = _material_price(_text(material.get("material_code")))
             if price_row:
                 price = _num(price_row.get("price"))
+        # 计价单位核对（Spec `packaging-material-price-unit-truth.md` §C2）：读不到就是读不到，
+        # 不给默认单位；结果逐行留痕，事后能回答"这一版按什么单位算的"。
+        unit_status, price_unit = material_price_unit_status(price_row)
         variables = {"cut_length": length, "cut_width": (width + 5) if width is not None else None,
                      "gsm": gsm, "gsm_source": gsm_source,
+                     "price_unit": price_unit, "price_unit_status": unit_status,
                      "ton_price": (price * 1000) if price is not None else None,
                      "imposition_count": imposition, "proof_base": _num(data.get("proofing_base")) or 0.0,
                      "quote_quantity": quantity, "tax_factor": tax_factor,
@@ -2130,11 +2174,23 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         elif material is None or price is None:
             gaps.append({"code": "material_price_missing", "where": part_code,
                          "detail": "材料「%s」没有有效价格，材料行不出金额" % material_text})
+        elif unit_status == "unit_mismatch":
+            # 单位不是 kg：`ton_price = 单价 × 1000` 会把吨价放大 1000 倍 —— 拦住，不猜系数。
+            gaps.append({"code": "material_price_unit_mismatch", "where": part_code,
+                         "detail": "材料「%s」的价格单位是「%s」，公式按 元/kg 计价"
+                                   "（ton_price = 单价 × 1000），单位不对不出金额"
+                                   % (material_text, price_unit)})
         elif gsm is None:
             gaps.append({"code": "material_gsm_missing", "where": part_code,
                          "detail": "材料「%s」解析不到克重，材料行不出金额" % material_text})
         else:
             result = compute_line("material", variables, rows=formula_rows)
+        if unit_status == "unit_missing" and price is not None:
+            # advisory：不拦算（Spec §C2 / §6.3），只让"单位没核对过"显形。
+            gaps.append({"code": "material_price_unit_missing", "where": part_code,
+                         "detail": "材料「%s」的价格没有计价单位，本行按 元/kg 使用"
+                                   "（ton_price = 单价 × 1000），请补上计价单位后再用"
+                                   % material_text})
         amount = result.get("amount") if result else None
         # 金额 = 该行**单件**材料费 × 该行用量（Spec §2.1）；`expression` 仍是工作簿原文，
         # 用量绝不塞进表达式字符串（§2.1 / §2.3）。

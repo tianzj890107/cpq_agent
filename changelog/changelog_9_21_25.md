@@ -17941,3 +17941,37 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
   其它面板批次 8 个套件 `Ran 195 … OK`；`test_spec_status_truth_red` `Ran 7 … OK`；
   `node --check tech_app/frontend/requirement-confirm.js` 退出码 0。
 - 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 423. 落地 `packaging-material-price-unit-truth`：材料价格的计价单位必须被核对、留痕、单位不对就拦住这一行（21 OK，红基 20 红）（9-22，Codex 实现）
+
+- **Spec**：`docs/specs/packaging-material-price-unit-truth.md`（唯一权威，C1–C4 + §6 边界）；
+  依存 `packaging-cost-engine.md` §2.3 的冻结合同（`ton_price = kb_material_price.price × 1000`，
+  即"元/kg → 元/吨"）与 `packaging-cost-gaps-closure.md` §5 表（"计价单位与单价要一起给"）。
+- **红测**：`tests/test_packaging_material_price_unit_truth_red.py`（21 条，A/B/C 三组；
+  A 组纯函数真跑 + 签名/纯函数体检查，B/C 组复用 `tests.test_packaging_cost_gaps_red` 的
+  真实种子快照夹具，不复制常量、不连线上库）。
+- **现状缺口（代码级）**：`packaging_cost._material_price()`（`:1706`）取回整条价格行，
+  调用点只读 `price` —— `kb_material_price.unit` 是**死列**；`:2119` 的 `ton_price = price * 1000`
+  把"单价必须是 元/kg"写死进算式，采购写成「吨」（或「元/米」「元/张」，或空着）照样 ×1000
+  —— 吨价被放大 1000 倍、空单位被当成 kg，**行上不留任何痕迹**；`GAP_RESOLUTIONS` 的
+  `material_price_missing` 动作也没写单位要求。种子 12 条价格全是 `kg`，所以今天没暴露。
+- **C1 纯函数**：`MATERIAL_PRICE_UNIT_EXPECTED="kg"` / `MATERIAL_PRICE_UNIT_ALIASES`
+  （只认 `kg` / `千克` / `公斤`，`吨`/`t`/`ton` 不许当别名）/ `MATERIAL_PRICE_UNIT_STATUSES`
+  闭集三值 + `material_price_unit_status(price_row) -> (status, unit)`（非 dict / 非字符串 /
+  空白 → `unit_missing`；命中别名 → `("ok","kg")`；其余 → `("unit_mismatch", <原文>)`；
+  不抛错、不读库、不吃第二个入参 —— 期望单位不许被入参覆盖）。
+- **C2 行级**：材料行 `variables`/`inputs_json` 增 `price_unit` + `price_unit_status`（逐行留痕，
+  回答"这一版按什么单位算的"）；elif 链在"缺价格"之后、"缺克重"之前插一条
+  `material_price_unit_mismatch` → `amount is None`（拦住，不猜换算系数）；`price` 有值而单位
+  没核对过时**追加 advisory** 缺口 `material_price_unit_missing`（不拦算，今天的行为不悄悄改）
+  —— 两条码与 `material_price_missing` 互斥；`ton_price` 算式、`compute_line()` 映射、既有四条文案一字未动。
+- **C3 登记**：`GAP_RESOLUTIONS` 增两条（`material_price_unit_mismatch` blocking /
+  `material_price_unit_missing` advisory），四键齐备、`entry=kb_material_price`；既有 10 条的
+  `missing_variable`/`resolution_action`/`entry`/`severity` 逐字冻结（红测 C3 对照）。
+- **C4 冻结面**：取价口径（`kb_repo.current_price(..., industry=...)`）、`_MATERIAL_EXPR`、
+  最低收费/取整/损耗、几条既有缺口码、种子数据、依赖面全部未动；未改前端、未改 `tests/`。
+- **红基**：`Ran 21 … FAILED (failures=13, errors=7)` = 20 红 / 1 绿（唯一绿是"种子单位未被改写"
+  护栏）；**实现后** `Ran 21 … OK`。
+- **不回归**：Spec §5 点名的 9 个套件 `Ran 274 … OK`；**包装全域**
+  `Ran 2210 … FAILED (failures=5, skipped=8)` —— 与实现前逐条同名的既有 5 条挂账。
+- 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
