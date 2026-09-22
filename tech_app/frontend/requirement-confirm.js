@@ -993,9 +993,61 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (PC_WRITE_ROLES.indexOf(role) >= 0) return true;
     return pcRoles().some(item => PC_WRITE_ROLES.indexOf(String(item)) >= 0);
   }
-  function pcGapLine(gap) {
-    const detail = gap.detail || gap.code || '';
-    return `<div class="pc-gap">待询价：${pcEsc(detail)}</div>`;
+  // 裁决与缺口分层（Spec `packaging-cost-readiness-panel.md` §C1）：裁决**只**读后端 payload，
+  // 前端不按缺口重算"正式 / 暂定"；严重度、要补的变量与补数入口也都由后端给。
+  function pcReadinessVerdict(cost) {
+    const record = (cost && typeof cost === 'object') ? cost : {};
+    const readiness = (record.readiness && typeof record.readiness === 'object') ? record.readiness : {};
+    const raw = String(readiness.verdict === undefined || readiness.verdict === null
+      ? '' : readiness.verdict).trim();
+    const verdict = (raw === 'formal' || raw === 'provisional') ? raw : '';
+    const headlines = {
+      formal: '正式成本：缺口已清零，可用于正式报价。',
+      provisional: '暂定成本：有阻断缺口或还没测算，出价前必须走放行留痕（POC 豁免签字）。'
+    };
+    const rawReasons = Array.isArray(readiness.reasons) ? readiness.reasons : [];
+    const reasons = rawReasons
+      .map(item => String(item === undefined || item === null ? '' : item).trim())
+      .filter(item => item);
+    const count = key => {
+      const number = Number(readiness[key]);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    return {
+      verdict: verdict, formal: verdict === 'formal',
+      headline: headlines[verdict] || '这份成本没有正式/暂定的裁决（后端没给 verdict），别当成正式成本。',
+      reasons: reasons,
+      counts: {gap_total: count('gap_total'), blocking_total: count('blocking_total'),
+               advisory_total: count('advisory_total'), unbound_total: count('unbound_total')}
+    };
+  }
+  function pcGapSeverityLabel(severity) {
+    const text = typeof severity === 'string' ? severity.trim() : '';
+    if (text === 'blocking') return '阻断（挡住正式成本）';
+    if (text === 'advisory') return '提示（不影响正式/暂定）';
+    // 闭集外的严重度一律未知档：不许归到任一一档。
+    return '未知档（后端没给严重度）';
+  }
+  function pcGapActionText(gap) {
+    const row = (gap && typeof gap === 'object') ? gap : {};
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const vars = (Array.isArray(row.missing_variable) ? row.missing_variable : [])
+      .map(text).filter(item => item);
+    const action = text(row.resolution_action);
+    const entry = text(row.resolution_entry);
+    if (!vars.length && !action && !entry) return '';
+    let out = '';
+    if (vars.length) out += `要补：${vars.join('、')}`;
+    if (action) out += `；${action}`;
+    if (entry) out += `（入口：${entry}）`;
+    return out;
+  }
+  function pcGapPrefix(code) {
+    // 「待询价」只留给价格 / 费率类：缺尺寸 / 缺公式 / 缺口径不是"待询价"。
+    const quoted = ['material_price_missing', 'material_price_unit_missing',
+                    'material_price_unit_mismatch', 'rate_missing', 'freight_rule_missing'];
+    const text = typeof code === 'string' ? code.trim() : '';
+    return quoted.indexOf(text) >= 0 ? '待询价' : '待补输入';
   }
   function pcCategoryRows(cost) {
     const categories = cost.categories || {};
@@ -1172,7 +1224,45 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const record = cost || {};
     const built = !!record.built;
     const gaps = record.gaps || [];
-    const gapLines = gaps.map(pcGapLine).join('');
+    // 裁决条 + 缺口分层（Spec `packaging-cost-readiness-panel.md` §C2）：证据优先取
+    // `readiness.gaps`（逐条带 severity / 要补的变量 / 补数入口），老载荷退回 `gaps`；
+    // 两处都不许隐藏 —— "暂定但没说出来"就是静默降级。
+    const readiness = pcReadinessVerdict(cost);
+    const readinessBlock = `<div class="pc-hint" data-pc-readiness="${pcEsc(readiness.verdict || 'unknown')}">`
+      + `${pcEsc(readiness.headline)} · 阻断 ${pcEsc(readiness.counts.blocking_total)} · 提示 ${pcEsc(readiness.counts.advisory_total)} · 缺口合计 ${pcEsc(readiness.counts.gap_total)}</div>`
+      + (readiness.reasons.length
+        ? `<ul class="pc-gaps">${readiness.reasons.map((text, index) => `<li class="pc-gap" data-pc-readiness-reason="${index}">${pcEsc(text)}</li>`).join('')}</ul>`
+        : '');
+    const readinessGaps = Array.isArray((record.readiness || {}).gaps)
+      ? record.readiness.gaps.filter(row => row && typeof row === 'object') : [];
+    const gapRows = readinessGaps.length ? readinessGaps : gaps;
+    // 严重度**只**取后端原文：闭集外的值归未知档（`pcGapSeverityLabel`），不许按"有没有 severity"
+    // 猜成 blocking / advisory；两条缺口的分组顺序也保持后端给的顺序（前端不排序）。
+    const gapSeverity = row => String((row && row.severity) || '').trim();
+    const gapText = (row, key) => {
+      const raw = (row && typeof row === 'object') ? row[key] : '';
+      return String(raw === undefined || raw === null ? '' : raw).trim();
+    };
+    // 每条缺口：`data-pc-gap` = 码、`data-pc-gap-severity` = 严重度原文（Spec §C2）；
+    // 正文 = `pcGapPrefix()` + detail + `pcGapSeverityLabel()` + `pcGapActionText()`，
+    // 口径一律取自纯函数，这里只拼装。
+    const gapRow = row => {
+      const code = gapText(row, 'code');
+      const severity = gapSeverity(row);
+      const detail = gapText(row, 'detail') || code;
+      const action = pcGapActionText(row);
+      return `<div class="pc-gap" data-pc-gap="${pcEsc(code)}" data-pc-gap-severity="${pcEsc(severity)}">`
+        + `${pcEsc(pcGapPrefix(code))}：${pcEsc(detail)} · ${pcEsc(pcGapSeverityLabel(severity))}`
+        + `${action ? ` · ${pcEsc(action)}` : ''}</div>`;
+    };
+    const blockingGaps = gapRows.filter(row => gapSeverity(row) === 'blocking');
+    const advisoryGaps = gapRows.filter(row => gapSeverity(row) !== 'blocking');
+    const blockingGapBlock = blockingGaps.length
+      ? `<h3>阻断缺口（挡住正式成本）</h3><div class="pc-gap-group" data-pc-gap-blocking="${blockingGaps.length}">${blockingGaps.map(gapRow).join('')}</div>`
+      : '';
+    const advisoryGapBlock = advisoryGaps.length
+      ? `<h3>提示缺口（不影响正式/暂定）</h3><div class="pc-gap-group" data-pc-gap-advisory="${advisoryGaps.length}">${advisoryGaps.map(gapRow).join('')}</div>`
+      : '';
     const summary = `<div class="pc-hint">材料 ${pcMoney(record.material_total)} · 加工 ${pcMoney(record.process_total)} · 人工 ${pcMoney(record.labor_total)} · 工装 ${pcMoney(record.tooling_total)} · 包装 ${pcMoney(record.packaging_total)} · 运输 ${pcMoney(record.freight_total)} · 其他 ${pcMoney(record.other_total)}</div>`;
     const totals = `<div class="pc-hint">小计（含损耗）${pcMoney(record.subtotal)} · 损耗 ${pcMoney(record.loss_amount)} · 总成本 ${pcMoney(record.total_cost)} ${pcEsc(record.currency || 'CNY')}</div>`;
     const head = built
@@ -1191,8 +1281,10 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${pcRouteUnavailableBanner(record)}
       ${pcRuleSnapshotBanner(record)}
       ${pcHandoffDriftBanner(handoff)}
+      ${readinessBlock}
       ${head}${summary}${totals}
-      ${gapLines}
+      ${blockingGapBlock}
+      ${advisoryGapBlock}
       <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button><button class="btn" data-pc-send-quote="1" ${built ? '' : 'disabled'}>回传销售继续报价</button></div>
       <div class="pc-hint">回传销售继续报价：把这份成本整包（行业 / 需求 / 盒型 / 参数 / BOM / 路线 / 成本 / 缺口 / 公式依据 / 来源）发回原报价卡片，卡片第 2 步的「包装：定价与报价分区」就带上它。有缺口时必须写明原因才放行（会随包留痕）；没有权限或落点认不回来时，会按后端给的原因提示。</div>
       ${writable ? '' : `<div class="pc-hint">${PC_WRITE_HINT}，当前为只读。</div>`}

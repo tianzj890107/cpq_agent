@@ -18014,3 +18014,11 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
   §已记录的偏差，本批实现前后逐条同名）；同一份 `requirement-confirm.js` 上其它面板批次 7 个套件
   `Ran 157 … OK`；`test_spec_status_truth_red` `Ran 7 … OK`；`node --check` 退出码 0。
 - 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 425. 落地 `packaging-cost-readiness-panel`：成本面板顶部说清「正式 / 暂定」，缺口按阻断 / 提示分层并逐条给「要补什么、找谁补」（26 OK，红基 23 红）（9-22，Codex 实现）
+
+- 唯一 Spec：`docs/specs/packaging-cost-readiness-panel.md`（§C2 强制 `data-pc-gap` / `data-pc-gap-severity` 由 `pcPanel()` 落笔），红测 `tests/test_packaging_cost_readiness_panel_red.py`（26 条，实现前 23 红 / 3 绿护栏）。
+- 后端 `readiness`（`packaging_cost.load_cost()` 每份返回体都带；`verdict` / `counts` / `reasons` / 逐条带 `severity` / `missing_variable` / `resolution_action` / `resolution_entry` 的 `gaps[]`）此前在前端 **0 处引用**：用户看不出这份成本是正式还是暂定，`pcGapLine()` 还把**每一条**缺口都写成「待询价：」——缺展开尺寸 / 缺公式 / 缺分摊基数都被说成"待询价"。
+- 落点：`tech_app/frontend/requirement-confirm.js` 一个文件 —— 新增四个纯函数 `pcReadinessVerdict()` / `pcGapSeverityLabel()` / `pcGapActionText()` / `pcGapPrefix()`；`pcPanel()` 顶部新增裁决条（`data-pc-readiness="<verdict||unknown>"` + `data-pc-readiness-reason` 逐条），缺口区改成 `data-pc-gap-blocking="<N>"` / `data-pc-gap-advisory="<M>"` 两组（`0` 时整组不渲染），每条带 `data-pc-gap="<code>"` / `data-pc-gap-severity="<severity 原文>"`；原 `pcGapLine()` 并入 `pcPanel()` 的 `gapRow()`（不留死代码）。
+- 冻结面：裁决**只**读后端 `readiness.verdict`（前端不按 `gaps` 重算正式/暂定），「待询价」闭集只剩价格 / 费率那五个码（`material_price_missing` / `material_price_unit_missing` / `material_price_unit_mismatch` / `rate_missing` / `freight_rule_missing`），闭集外的 severity 一律未知档、不归 blocking / advisory 任一档，`resolution_action` 为空不编动作、不留空 `（）`；未改后端、未加接口、未改 `index.html`、未加依赖。
+- 复跑：`tests.test_packaging_cost_readiness_panel_red` 26 OK；Spec §5 不回归 8 份（`cost_readiness_severity_layering` / `cost_engine` / `cost_gaps` / `cost_column_evidence` / `cost_red_closure` / `bom_disclosure_panel` / `material_unresolved_panel` / `handoff_audit_pending_panel`）`Ran 226 ... OK`；`node --check tech_app/frontend/requirement-confirm.js` 退出码 0；`test_spec_status_truth_red` 7 OK；`git diff --check` 干净。
