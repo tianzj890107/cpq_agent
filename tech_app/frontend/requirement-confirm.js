@@ -1267,6 +1267,35 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     cost_recomputed: '成本已重算（这一版回传是按旧成本发的）',
     provenance_missing: '这一版回传没记下当时的成本版本（历史数据）',
   };
+  // 业务部件清单那条轴（`packaging-business-parts-version-pinning.md` §2.3）的读失败披露
+  // （Spec `packaging-cost-business-parts-read-failure-panel.md` §C1）：与 BOM / 路线两条轴同一条
+  // 纪律 ——「读不到」**不是**「没变」（那条轴比不了就不报漂移），所以既不进那张"变了"的人话表，
+  // 也不许静默：这一版成本只按几何零件算。
+  function pcBusinessPartsUnavailable(record) {
+    const value = (record || {}).business_parts_unavailable;
+    if (value === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
+      // 老载荷连这一栏都没有：不许当成"清单没换版"，也不许当成"读不到"。
+      return {state: 'unknown', code: '', reason: '', headline: ''};
+    }
+    const text = item => String(item === undefined || item === null ? '' : item).trim();
+    if (!Object.keys(value).length) {
+      // 后端规定正常给 `{}`：读得到就是读得到，不编话。
+      return {state: 'ok', code: '', reason: '', headline: ''};
+    }
+    return {
+      state: 'unavailable',
+      code: text(value.code) || 'business_parts_unavailable',
+      reason: text(value.reason),
+      headline: '暂时读不到业务部件清单：这一版成本只按几何零件算，'
+        + '而且判不了清单有没有换版 —— 这不代表没换版。'
+    };
+  }
+  function pcBusinessPartsBanner(record) {
+    const facts = pcBusinessPartsUnavailable(record);
+    if (facts.state !== 'unavailable') return '';
+    return `<div class="pc-warning" data-pc-business-parts-unavailable="${pcEsc(facts.code)}">`
+      + `${pcEsc(facts.headline)}${facts.reason ? `（${pcEsc(facts.reason)}）` : ''}</div>`;
+  }
   function pcHandoffDriftBanner(handoff) {
     const record = handoff || {};
     if (!record.handoff_no) return '';
@@ -1418,6 +1447,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${pcStaleBanner(record)}
       ${pcBomUnavailableBanner(record)}
       ${pcRouteUnavailableBanner(record)}
+      ${pcBusinessPartsBanner(record)}
       ${pcRuleSnapshotBanner(record)}
       ${pcHandoffDriftBanner(handoff)}
       ${readinessBlock}
