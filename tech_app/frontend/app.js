@@ -1729,6 +1729,9 @@ const PACKAGING_CAD_PLAN_UNBOUND = "几何证据，尚未归属业务部件";
 const PACKAGING_CAD_PLAN_EMPTY = "这份图纸还没有可显示的 CAD 图元。";
 // 有图元但一个坐标都没有（证据层还没带上绘图包络）时的空态：不许留一块空白画布。
 const PACKAGING_CAD_PLAN_NO_COORDS = "这批零件还没有图纸坐标，暂时画不出平面图（坐标要等 CAD IR 把折线顶点带进来）。";
+// 业务部件面板的轮廓说明（Spec `packaging-business-part-plan-click-and-bound-outline.md` §C2）：
+// 画的是**绑定分量**的形状，业务尺寸仍以权威资料为准 —— 两者不许混为一谈。
+const PACKAGING_BOUND_OUTLINE_NOTE = "这是绑定分量的形状；业务尺寸以权威资料为准。";
 const PACKAGING_CAD_LAYER_COLORS = {
   cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
   glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
@@ -1779,6 +1782,37 @@ function packagingCadPlanComponentBox(component) {
   if (!Array.isArray(raw) || raw.length < 4) return null;
   const values = raw.slice(0, 4).map(Number);
   return values.some(value => !Number.isFinite(value)) ? null : values;
+}
+
+// 平面图点选的落点（Spec `packaging-business-part-plan-click-and-bound-outline.md` §C1）：
+// `data-business-part` 装的是**业务部件编码** —— 有归属开业务部件面板，没有就走未归属提示；
+// 以前这里拿业务编码去调 `selectPackagingPart()`（几何零件通道），必然 404。
+function packagingCadPlanClickTarget(businessPartCode) {
+  const code = String(businessPartCode || "").trim();
+  return code ? { kind: "business", code } : { kind: "unbound", code: "" };
+}
+
+// 业务部件绑定的分量（Spec §C2）：只按 `component_ids` 精确取（顺序跟证据层），取不到回空。
+function packagingBusinessPartComponents(binding, components) {
+  const ids = ((binding || {}).component_ids || []).map(id => String(id));
+  if (!ids.length) return [];
+  const wanted = new Set(ids);
+  return (Array.isArray(components) ? components : [])
+    .filter(component => wanted.has(String((component || {}).component_id || "")));
+}
+
+// 业务部件面板的轮廓（Spec §C2）：复用平面图那套取框/渲染/翻转，不在浏览器端算几何；
+// 画不出来（没绑定 / 没坐标 / 一件都拼不出）就回空串，由调用方给状态文案。
+function packagingBusinessPartOutlineHtml(binding, doc) {
+  const evidence = (doc && doc.geometry_evidence) || {};
+  const components = packagingBusinessPartComponents(binding, evidence.components);
+  if (!components.length) return "";
+  const range = packagingCadPlanRange(components.map(packagingCadPlanComponentBox));
+  if (!range) return "";
+  const drawn = components.map(packagingCadPlanComponentSvg).filter(Boolean).join("");
+  if (!drawn) return "";
+  return `<svg class="packaging-part-svg" viewBox="${esc(packagingCadPlanViewBox(range))}"`
+    + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="绑定分量的形状">${drawn}</svg>`;
 }
 
 // SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
@@ -1900,8 +1934,8 @@ function renderPackagingCadPlan(doc) {
       const node = (event.target && event.target.closest)
         ? event.target.closest("[data-component-id]") : null;
       if (!node) return;
-      const owner = node.getAttribute("data-business-part") || "";
-      if (owner) { selectPackagingPart(owner); return; }
+      const target = packagingCadPlanClickTarget(node.getAttribute("data-business-part"));
+      if (target.kind === "business") { openPackagingBusinessPart(target.code); return; }
       notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
     });
   }
@@ -2157,9 +2191,13 @@ function openPackagingBusinessPart(code) {
   }
   const outlineHost = $("packagingPartOutline");
   if (outlineHost) {
-    outlineHost.innerHTML = `<div class="view-3d-placeholder">`
-      + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
-      + `</div>`;
+    // 绑定了几何分量就把它们的形状画出来（Spec §C2）；画不出来才回到绑定状态文案。
+    const outlineHtml = packagingBusinessPartOutlineHtml(binding, currentPackagingCadPlan);
+    outlineHost.innerHTML = outlineHtml
+      ? (outlineHtml + `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`)
+      : `<div class="view-3d-placeholder">`
+        + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
+        + `</div>`;
   }
   const actions = $("packagingPartActions");
   if (actions) {

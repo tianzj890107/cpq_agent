@@ -16123,3 +16123,59 @@ tests/test_packaging_*.py 全域（85 个模块）+ 图纸两列/接线两条
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 373. 平面图点业务部件走错通道（拿业务编码查几何零件 → 必然 404）+ 业务部件面板永远看不到绑定分量的形状（9-22，Codex 实现）
+
+红测 `tests.test_packaging_business_part_plan_click_and_bound_outline_red`：实现前
+`Ran 15, failures=11`，实现后 `Ran 15 OK`。
+
+### 一、缺口（源码实测，不是推断）
+
+1. `renderPackagingCadPlan()` 的点击处理拿 `data-business-part` 的值（**业务部件编码**
+   `JWXR21-P03`）去调 `selectPackagingPart()` —— 那是几何零件通道
+   （`GET .../requirement/packaging-parts/{code}`），业务编码在几何零件文档里不存在 →
+   必然 404，右栏只剩一句"读取零件详情失败"。也就是说：平面图上点已绑定的业务部件，
+   打开的从来不是它自己的面板。
+2. `openPackagingBusinessPart()` 的轮廓区只写一句 `PACKAGING_BINDING_COPY[status]` 文案：
+   业务部件即使绑定了闭合件（真轮廓点已随 `## 372` 进证据层、平面图文档也已加载），
+   面板里也永远看不到形状。
+
+### 二、改了什么（只 `tech_app/frontend/app.js`）
+
+- 新增纯函数 `packagingCadPlanClickTarget(businessPartCode)`：去空白后非空 → 业务部件；
+  空 → 未归属图元。点击分支按它分流（业务 → `openPackagingBusinessPart()`；
+  未归属 → 既有 `notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND)`），
+  删掉 `selectPackagingPart(owner)` 那一行。
+- 新增纯函数 `packagingBusinessPartComponents(binding, components)`（按 `component_ids`
+  精确取分量）与 `packagingBusinessPartOutlineHtml(binding, doc)`（复用平面图的取框
+  `packagingCadPlanComponentBox()` + 渲染 `packagingCadPlanComponentSvg()` + 翻转
+  `packagingCadPlanViewBox()` 拼只读 SVG；闭合件多边形、开口件包络矩形）。
+- 新增常量 `PACKAGING_BOUND_OUTLINE_NOTE`（「这是绑定分量的形状；业务尺寸以权威资料为准。」）；
+  面板轮廓区有形状就渲染它 + 这句说明，画不出来才回到绑定状态文案（不留白、不假装有形状）。
+
+### 三、复跑
+
+```
+tests.test_packaging_business_part_plan_click_and_bound_outline_red  → Ran 15 OK（实现前 11 红）
+node --check tech_app/frontend/app.js                                → 通过
+本次相邻 8 个模块（面板/零件/平面图/业务部件/图纸两列）合计            → Ran 125 OK
+tests/test_packaging_*.py 全域（86 个模块）→ Ran 1589, failures=5, skipped=8
+（5 条仍是 B3 / B4 / A2 / F2 / C1 那批既有挂账，与本批无关）
+```
+
+三条新纯函数用 node 真跑（不是 grep）：点选分流（业务编码 / 空 / 带空白）、按绑定取分量、
+闭合件出 `<polygon>`、开口件出 `<rect>`、画不出来回空串；红测里还有一条护栏断言它们不引用
+`document`/`sessionStorage`/`window.`/`fetch(`。
+
+### 四、已记录的边界（不改测试）
+
+1. 画的是**绑定分量**的形状，不是"业务部件自己的图纸"：业务部件没有几何，只有权威尺寸与资料
+   （面板上那句话就是为此写的）。
+2. 未绑定 / 证据层没有坐标时仍是状态文案 —— 不画、不猜、不在前端用权威尺寸造形状。
+3. 一个业务部件绑了几十个同尺寸分量时会全部画出来；"挑一个代表"属业务口径，
+   见 `packaging-business-parts-binding-size-source.md` §9 边界 1，本批不做。
+4. 本批未动后端 / 路由 / 样式表 / 几何零件面板，也未动平面图的其余交互（整图 viewBox、
+   缩放、按绑定分量高亮、未归属提示）。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
