@@ -895,24 +895,31 @@ def _handle_match_products(tool_input: dict) -> str:
     # 入口按行业分流（Spec §2.3）：包装走报价侧盒型库匹配器 cpq_packaging_match
     # （不再查电池成品参数表 product_para_value）；其余行业保持既有六维匹配逐字不变。
     industry = _industry_of(None, tool_input.get("industry"))
+    # 工具这一路与页面那一路共用同一个按行业分流服务（Spec §5）：包装分流不再只写在这里。
+    # 门禁输入用整份 tool_input（键名与需求模板一致）：仍按包装 10 项必填判定。
     if industry == PACKAGING_INDUSTRY:
-        inputs = {key: tool_input.get(key) for key in cpq_packaging_match.MATCH_INPUT_KEYS}
-        # 门禁输入用整份 tool_input（键名与需求模板一致）：仍按包装 10 项必填判定
-        missing = step1_missing(tool_input, industry=industry)
-        if missing:
-            return ("❌ 需求缺少必备匹配参数：" + "、".join(missing) +
-                    "。**不允许开始匹配，也不要编造参数**。请提醒用户补充需求"
-                    "（" + "、".join(label for _key, label in step1_required(industry)) +
-                    " 必须齐全），补齐后再重新匹配。")
-        try:
-            box_res = cpq_packaging_match.match_box_types(inputs)
-        except cpq_packaging_match.QuoteKbUnavailable as e:
-            return ("❌ 盒型库读取失败，暂时无法推荐：" + str(e).splitlines()[0][:160] +
+        payload = match_step1_by_industry(industry, tool_input, data={}, emit=None,
+                                          packaging=cpq_packaging_match)
+        if not payload.get("ok"):
+            if payload.get("stage") == "intent":
+                return ("❌ 需求缺少必备匹配参数：" + "、".join(payload.get("missing") or []) +
+                        "。**不允许开始匹配，也不要编造参数**。请提醒用户补充需求"
+                        "（" + "、".join(label for _key, label in step1_required(industry)) +
+                        " 必须齐全），补齐后再重新匹配。")
+            return ("❌ " + (payload.get("error") or "盒型库暂时不可用") +
                     "。**不要编造盒型**，请如实告诉用户「盒型库读取失败，暂时无法给出推荐清单」，"
                     "并请他联系管理员检查知识库连接。")
-        except Exception as e:                       # noqa: BLE001 - 原文回给模型
-            traceback.print_exc()
-            return f"盒型匹配失败：{e}"
+        inputs = {key: tool_input.get(key) for key in cpq_packaging_match.MATCH_INPUT_KEYS}
+        box_res = {
+            "engine_version": payload.get("engine_version"),
+            "dimensions": payload.get("dimensions"),
+            "candidates": payload.get("candidates") or [],
+            "inputs_complete": payload.get("inputs_complete"),
+            "missing_inputs": payload.get("missing_inputs"),
+            "suggested_box_type": payload.get("suggested_box_type"),
+            "needs_new_tooling": payload.get("needs_new_tooling"),
+            "new_tooling_reason": payload.get("new_tooling_reason"),
+        }
         return _render_box_match(inputs, box_res)
     req = {k: tool_input.get(k) for k in
            ("max_dimension", "dimension_tolerance_pct", "application_scope",
@@ -1366,6 +1373,118 @@ def _step1_visible_text(raw: str) -> str:
     return s
 
 
+# ---------------------------------------------------------------------------
+# 第 1 步「匹配段」的按行业分流（Spec
+# docs/specs/quick-quote-entry-routing-and-packaging-isolation.md §5）
+#
+# 以前包装分流只写在 Agent 工具 `_handle_match_products()` 里；页面真正调的
+# `/api/step1/match`（phase=match）那条路**没有**分流，无条件
+# `SELECT * FROM product_para_value` —— 于是包装需求被 19 条电池成品打成分。
+# 现在两个入口都走同一个函数：`match_step1_by_industry()`。
+# ---------------------------------------------------------------------------
+
+def step1_match_packaging(req, *, emit=None, packaging=None) -> dict:
+    """包装的「匹配段」：候选只来自报价侧盒型库，绝不查电池成品表。
+
+    `product_para_value` / 六维评分在这条路上**一次都不出现**（Spec §5 硬隔离）；
+    盒型库不可用时如实报错，不静默降级成空候选（空候选会被当成"没有可用的盒型"）。
+    """
+    pkg = packaging or cpq_packaging_match
+    req = req if isinstance(req, dict) else {}
+    missing = step1_missing(req, industry=PACKAGING_INDUSTRY)
+    if missing:
+        return {"ok": False, "stage": "intent", "industry": PACKAGING_INDUSTRY,
+                "missing": missing,
+                "required": [label for _key, label in step1_required(PACKAGING_INDUSTRY)],
+                "error": "需求缺少必备匹配参数：" + "、".join(missing)}
+    if emit:
+        emit({"type": "stage", "text": "查询盒型库 kb_packaging_box_type（包装口径，不查电池成品表）"})
+    inputs = {key: req.get(key) for key in pkg.MATCH_INPUT_KEYS}
+    try:
+        box_res = pkg.match_box_types(inputs)
+    except Exception as exc:                                    # noqa: BLE001 - 原文上报
+        traceback.print_exc()
+        return {"ok": False, "stage": "kb", "industry": PACKAGING_INDUSTRY,
+                "error": "盒型库读取失败，暂时无法推荐："
+                         + str(exc).splitlines()[0][:160]}
+    products = _box_products(box_res)
+    weights = {}
+    for d in box_res.get("dimensions") or []:
+        weights[_BOX_DIMENSION_LABELS.get(d["dimension"], d["dimension"])] = \
+            "%d%%" % int(round(float(d.get("weight") or 0.0) * 100))
+    needs_new = bool(box_res.get("needs_new_tooling"))
+    return {
+        "ok": True, "stage": "match", "industry": PACKAGING_INDUSTRY,
+        "requirement": {k: v for k, v in req.items() if str(v or "").strip()},
+        "comment": "",
+        "products": products, "weights": weights,
+        "threshold": None,               # 盒型库没有「总分阈值」：接不住由 needs_new_tooling 决定
+        "below_threshold": needs_new,
+        "advice": ("盒型库里没有可确认的现有盒型（%s），需要新制评估。"
+                   % (box_res.get("new_tooling_reason") or "无合规候选")) if needs_new else "",
+        "all_count": len(box_res.get("candidates") or []),
+        "source": {"db": DB_NAME, "table": "kb_packaging_box_type",
+                   "sql": "SELECT * FROM kb_packaging_box_type",
+                   "rows": len(box_res.get("candidates") or [])},
+        "engine_version": box_res.get("engine_version"),
+        "dimensions": box_res.get("dimensions"),
+        "inputs_complete": box_res.get("inputs_complete"),
+        "missing_inputs": box_res.get("missing_inputs"),
+        "suggested_box_type": box_res.get("suggested_box_type"),
+        "needs_new_tooling": box_res.get("needs_new_tooling"),
+        "new_tooling_reason": box_res.get("new_tooling_reason"),
+        "candidates": box_res.get("candidates"),
+    }
+
+
+def step1_match_battery(req, *, data=None, emit=None, trace=None,
+                        product_table=None) -> dict:
+    """其余行业的「匹配段」：查 `product_para_value` + 六维加权评分（既有口径逐字不变）。"""
+    def _trace(msg):
+        if callable(trace):
+            trace(msg)
+
+    data = data if isinstance(data, dict) else {}
+    table = product_table or cpq_match.PRODUCT_TABLE
+    sql = f"SELECT * FROM {table}"
+    if emit:
+        emit({"type": "stage", "text": "查询产品参数值表（远程 Postgres）"})
+    t = time.perf_counter()
+    try:
+        cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
+    except Exception as e:
+        _trace(f"查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
+        return {"ok": False, "stage": "db",
+                "error": f"读取 {table} 失败：{str(e).splitlines()[0][:160]}"}
+    _trace(f"查库完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
+    if emit:
+        emit({"type": "stage", "text": f"已取回 {len(rows)} 行，正在按六维加权规则评分…"})
+    if not rows:
+        return {"ok": False, "stage": "db",
+                "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
+    t = time.perf_counter()
+    match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
+    match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
+    match_res["comment"] = data.get("comment") or ""
+    _trace(f"六维评分完成，耗时 {time.perf_counter() - t:.2f}s")
+    return match_res
+
+
+def match_step1_by_industry(industry_key, req, *, data=None, emit=None,
+                            packaging=None, product_table=None, trace=None) -> dict:
+    """第 1 步「匹配段」的**唯一**按行业分流服务（Spec §5）。
+
+    页面入口（`POST /api/step1/match`，phase=match）与 Agent 工具（`match_products`）
+    都调它 —— 两处不再各维护一份分流。包装那一支只碰报价侧盒型库；其余行业保持既有
+    六维匹配逐字不变。
+    """
+    key = _industry_of(None, industry_key)
+    if key == PACKAGING_INDUSTRY:
+        return step1_match_packaging(req, emit=emit, packaging=packaging)
+    return step1_match_battery(req, data=data, emit=emit, trace=trace,
+                               product_table=product_table)
+
+
 def _handle_step1_match(data: dict, emit=None) -> dict:
     """第 1 步，分两段调用（phase）：
 
@@ -1396,26 +1515,15 @@ def _handle_step1_match(data: dict, emit=None) -> dict:
         req = data.get("requirement")
         if not isinstance(req, dict) or not req:
             return {"ok": False, "error": "缺少需求参数（requirement），无法匹配"}
-        sql = f"SELECT * FROM {cpq_match.PRODUCT_TABLE}"
-        _say({"type": "stage", "text": "查询产品参数值表（远程 Postgres）"})
-        t = time.perf_counter()
-        try:
-            cols, rows = cpq_db.run_select(sql, cpq_match.FETCH_LIMIT)
-        except Exception as e:
-            _trace(f"查库失败，耗时 {time.perf_counter() - t:.2f}s：{str(e).splitlines()[0][:120]}")
-            return {"ok": False, "stage": "db",
-                    "error": f"读取 {cpq_match.PRODUCT_TABLE} 失败："
-                             f"{str(e).splitlines()[0][:160]}"}
-        _trace(f"查库完成：{len(rows)} 行，耗时 {time.perf_counter() - t:.2f}s")
-        _say({"type": "stage", "text": f"已取回 {len(rows)} 行，正在按六维加权规则评分…"})
-        if not rows:
-            return {"ok": False, "stage": "db",
-                    "error": "产品参数值表为空，没有可匹配的标品，建议转入定制评估。"}
-        t = time.perf_counter()
-        match_res = cpq_match.match(req, top_n=3, data=(cols, rows))
-        match_res["requirement"] = {k: v for k, v in req.items() if str(v or "").strip()}
-        match_res["comment"] = data.get("comment") or ""
-        _trace(f"六维评分完成，耗时 {time.perf_counter() - t:.2f}s；总耗时 {time.perf_counter() - t0:.2f}s")
+        # 按行业分流（Spec quick-quote-entry-routing-and-packaging-isolation.md §5）：
+        # 包装那一支只走报价侧盒型库 cpq_packaging_match，并且必须发生在构造
+        # product_para_value 的 SQL **之前** —— 否则包装需求又会去查电池成品表。
+        # 分流实现只有一份（match_step1_by_industry），Agent 工具 match_products 也走它。
+        match_res = match_step1_by_industry(
+            _industry_of(None, data.get("industry") or req.get("industry")), req,
+            data=data, emit=emit, packaging=cpq_packaging_match,
+            product_table=cpq_match.PRODUCT_TABLE, trace=_trace)
+        _trace(f"匹配段完成，总耗时 {time.perf_counter() - t0:.2f}s")
         return match_res
 
     # ===================== ① 识别段：一次大模型调用 =====================
@@ -3966,10 +4074,38 @@ def _qq_text(value) -> str:
     return "" if value is None else str(value).strip()
 
 
+#: 快速报价只服务包装（Spec quick-quote-entry-routing-and-packaging-isolation.md §7）：
+#: 行业与报价模式都是**服务端**必须自己把住的，不靠按钮隐藏。
+QUICK_QUOTE_INDUSTRY = cpq_quick_quote_match.INDUSTRY
+QUICK_QUOTE_MODES = ("precise", "quick")
+
+
+def quick_quote_industry_guard(industry, quote_mode="quick"):
+    """快速报价 session 的行业 / 模式前置校验；返回 `(industry_key, mode, error_payload)`。
+
+    通过时 `error_payload is None`。显式给了非包装行业一律拒绝（不许"锂电需求被包装案例库
+    接住"）；完全没带行业时按包装处理（快速报价本来就是包装专线，面板也总会带行业）。
+    """
+    raw = _qq_text(industry)
+    key = _industry_of(None, raw) if raw else QUICK_QUOTE_INDUSTRY
+    mode = _qq_text(quote_mode) or "quick"
+    if key != QUICK_QUOTE_INDUSTRY:
+        return key, mode, _qq_error(
+            "quick_quote_industry_mismatch",
+            "快速报价只服务「包装」行业；这次请求的行业是「%s」："
+            "请先把行业切到「包装」，或改走精准报价。" % (key or "未指定"), 409)
+    if mode not in QUICK_QUOTE_MODES:
+        return key, mode, _qq_error(
+            "quick_quote_mode_invalid",
+            "报价模式只能是 precise / quick，收到「%s」。" % mode, 400)
+    return key, mode, None
+
+
 def _qq_state(session_id: str) -> dict:
     return QUICK_QUOTE_SESSIONS.setdefault(
         _qq_text(session_id),
-        {"inputs": {}, "baseline": {}, "workspace": {}, "quote": {}, "versions": 0})
+        {"inputs": {}, "baseline": {}, "workspace": {}, "quote": {}, "versions": 0,
+         "quote_mode": "", "industry": ""})
 
 
 def _qq_idempotent(session_id: str, key: str, produce):
@@ -3993,22 +4129,34 @@ def _qq_error(code: str, message: str, status: int = 400, **extra) -> dict:
 
 
 def _handle_quick_quote_session_create(body, *, user=None) -> dict:
-    """`POST /api/quick-quote/sessions` —— 建快速报价业务实例（Spec §3 第 1 条）。"""
+    """`POST /api/quick-quote/sessions` —— 建快速报价业务实例（Spec §3 第 1 条）。
+
+    行业与报价模式都落进实例状态（Spec §2「模式必须随业务实例保存」）：刷新、
+    首页卡片、历史卡片再次进入时，按 `quote_mode` 恢复对应工作区，不靠 DOM class
+    或页面闭包记忆。非包装行业直接拒绝（Spec §7）。
+    """
     body = body if isinstance(body, dict) else {}
+    industry, quote_mode, denied = quick_quote_industry_guard(
+        body.get("industry"), body.get("quote_mode"))
+    if denied:
+        return denied
     session_id = _qq_text(body.get("session_id")) or pool_new().session_id
     try:
         import cpq_wf
         card = cpq_wf.sync_card(session_id, user or {}, title=_qq_text(body.get("title")),
                                 customer=_qq_text(body.get("customer")),
                                 project_name=_qq_text(body.get("project_name")),
-                                industry=_qq_text(body.get("industry")))
+                                industry=industry)
     except Exception as exc:                                    # noqa: BLE001 - 建卡失败要说清
         return _qq_error("session_create_failed", "建快速报价业务实例失败：%s" % exc, 503,
                          quick_quote_session_id=session_id)
     state = _qq_state(session_id)
     state["card"] = card
+    state["quote_mode"] = quote_mode
+    state["industry"] = industry
     return {"ok": True, "quick_quote_session_id": session_id, "session_id": session_id,
             "card": card, "engine_version": cpq_quick_quote_case.ENGINE_VERSION,
+            "industry": industry, "quote_mode": quote_mode,
             "steps": _quick_quote_steps(), "quote_modes": _quick_quote_modes()}
 
 
@@ -4156,6 +4304,9 @@ def _handle_quick_quote_read(session_id: str) -> dict:
                       "message": _qq_text(str(exc)) or "报价读回失败（报价存储这一路可能坏了）"}
         saved = {}
     payload = {"ok": True, "quick_quote_session_id": _qq_text(session_id),
+               # 报价模式与行业随实例读回（Spec §2）：首页据此恢复"快速工作区"还是走精准链路。
+               "quote_mode": _qq_text(state.get("quote_mode")),
+               "industry": _qq_text(state.get("industry")),
                "inputs": state.get("inputs") or {}, "baseline": state.get("baseline") or {},
                "workspace": state.get("workspace") or {},
                "quote": saved or state.get("quote") or {}, "saved_quote": saved,

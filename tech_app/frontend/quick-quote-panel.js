@@ -69,6 +69,223 @@
     unknown: "未分类"
   };
 
+  /* ============ 需求原文 → 结构化匹配输入（Spec
+     docs/specs/quick-quote-entry-routing-and-packaging-isolation.md §4）================
+     契约键集与后端 `cpq_quick_quote_match.QUICK_MATCH_INPUT_KEYS` **逐字同值** —— 快速报价
+     只认一套匹配协议，页面不造第二份；`requirement_text` 只当证据留着，**绝不**直接送
+     `match_cases()`（那样匹配器拿不到盒型/尺寸，只能全库瞎比）。
+
+     抽取是**确定性字面匹配**：命中就给值并记下它是从哪个片段来的，没命中就进 `missing_inputs`
+     让用户补 —— 不猜、不推断、不补造（Spec §4 末句）。 */
+  var QUICK_MATCH_INPUT_KEYS = [
+    "box_type", "box_family", "closure_type",
+    "inner_length", "inner_width", "inner_height",
+    "grey_board_gsm", "face_paper_gsm",
+    "insert_type", "print_colors", "lamination", "hot_stamping", "v_groove", "magnet",
+    "quantity"
+  ];
+  var QUICK_INPUT_LABELS = {
+    box_type: "盒型编码", box_family: "盒型族", closure_type: "闭合方式",
+    inner_length: "内长(mm)", inner_width: "内宽(mm)", inner_height: "内高(mm)",
+    grey_board_gsm: "灰板克重(g/㎡)", face_paper_gsm: "面纸克重(g/㎡)",
+    insert_type: "内托类型", print_colors: "印刷色数", lamination: "覆膜",
+    hot_stamping: "烫印", v_groove: "V 槽", magnet: "磁铁", quantity: "数量"
+  };
+  /*: 关键词闭集（从左到右第一个命中为准）。只做字面包含判断，不做语义推断。 */
+  var QUICK_CLOSURE_KEYWORDS = [
+    {re: /双开门|对开/, value: "双开门/对开"},
+    {re: /天地盖/, value: "天地盖"},
+    {re: /书型盒|书形盒|书型/, value: "书型盒/双开门礼盒"},
+    {re: /抽屉/, value: "抽屉盒"},
+    {re: /翻盖|翻盖盒/, value: "翻盖盒"}
+  ];
+  var QUICK_FAMILY_KEYWORDS = [
+    {re: /圆盘盒|圆盒/, value: "圆盘盒"},
+    {re: /酒盒/, value: "书型盒/双开门礼盒"},
+    {re: /礼盒/, value: "书型盒/双开门礼盒"},
+    {re: /彩盒|纸盒/, value: "彩盒"}
+  ];
+  var QUICK_INSERT_KEYWORDS = [
+    {re: /EVA/i, value: "EVA内托"},
+    {re: /灰板内托/, value: "灰板内托"},
+    {re: /纸[质浆]内托|纸托/, value: "纸质内托"},
+    {re: /海绵/, value: "海绵内托"},
+    {re: /吸塑/, value: "吸塑内托"},
+    {re: /内托/, value: "内托"}
+  ];
+
+  function qqText(value) {
+    return value === undefined || value === null ? "" : String(value);
+  }
+
+  function qqBlank(value) {
+    if (value === undefined || value === null) return true;
+    if (typeof value === "string") return value.trim() === "";
+    if (Array.isArray(value)) return value.length === 0;
+    return false;
+  }
+
+  function qqNumber(value) {
+    var raw = qqText(value).replace(/,/g, "").trim();
+    if (!raw) return null;
+    var num = Number(raw);
+    return isFinite(num) ? num : null;
+  }
+
+  function qqKeyword(text, table) {
+    for (var i = 0; i < table.length; i += 1) {
+      if (table[i].re.test(text)) return table[i].value;
+    }
+    return "";
+  }
+
+  /** 需求原文 → `{ok, inputs, missing_inputs, evidence}`（纯函数，不碰 DOM / 网络）。 */
+  function extractQuickQuoteInputs(text) {
+    var raw = qqText(text);
+    var inputs = {};
+    var evidence = [];
+    var put = function (key, value, from) {
+      inputs[key] = value;
+      if (qqBlank(value)) return;
+      evidence.push({key: key, label: QUICK_INPUT_LABELS[key] || key,
+                     value: value, source: "text", from: from});
+    };
+
+    /* 盒型编码：唯一可追溯的锚点（YT-…／QQ-…），原文抄下来，不做模糊匹配。 */
+    var code = /\b((?:YT|QQ)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)\b/.exec(raw);
+    put("box_type", code ? code[1] : "", code ? "盒型编码" : "");
+
+    /* 尺寸串：220.5×90×90 / 408×408×50.5 —— 顺序即 长×宽×高（Spec §4 示例）。 */
+    var dim = /(\d+(?:\.\d+)?)\s*[×xX*]\s*(\d+(?:\.\d+)?)(?:\s*[×xX*]\s*(\d+(?:\.\d+)?))?/.exec(raw);
+    put("inner_length", dim ? qqNumber(dim[1]) : "", dim ? "尺寸串" : "");
+    put("inner_width", dim ? qqNumber(dim[2]) : "", dim ? "尺寸串" : "");
+    put("inner_height", dim && dim[3] ? qqNumber(dim[3]) : "", dim && dim[3] ? "尺寸串" : "");
+
+    /* 克重：必须带单位（g / 克 / gsm）才算，「灰板内托 / 1000只」里的 1000 不会被当成克重。 */
+    var face = /(?:面纸|面纸克重|face\s*paper)[^\d\n]{0,6}?(\d{2,4})\s*(?:g|gsm|克)/i.exec(raw);
+    put("face_paper_gsm", face ? qqNumber(face[1]) : "", face ? "面纸克重" : "");
+    var grey = /(?:灰板|灰板克重|grey\s*board|gray\s*board)[^\d\n]{0,6}?(\d{2,4})\s*(?:g|gsm|克)/i.exec(raw);
+    put("grey_board_gsm", grey ? qqNumber(grey[1]) : "", grey ? "灰板克重" : "");
+
+    put("box_family", qqKeyword(raw, QUICK_FAMILY_KEYWORDS), "盒型族关键词");
+    put("closure_type", qqKeyword(raw, QUICK_CLOSURE_KEYWORDS), "闭合方式关键词");
+    put("insert_type", qqKeyword(raw, QUICK_INSERT_KEYWORDS), "内托关键词");
+
+    var colors = /(\d+)\s*色/.exec(raw);
+    put("print_colors", colors ? (colors[1] + "色") : "", colors ? "印刷色数" : "");
+    put("lamination", /覆膜|哑膜|光膜|过胶|淋膜/.test(raw) ? true : "", "");
+    put("hot_stamping", /烫金|烫银|烫印/.test(raw) ? true : "", "");
+    put("v_groove", /V\s*槽|V-?groove/i.test(raw) ? true : "", "");
+    put("magnet", /磁铁|磁扣|磁吸|磁石/.test(raw) ? true : "", "");
+
+    var qty = /(?:数量|qty)\s*[:：]?\s*(\d+)/i.exec(raw)
+      || /(\d+)\s*(?:只|个|件|pcs|套)/i.exec(raw);
+    put("quantity", qty ? qqNumber(qty[1]) : "", qty ? "数量" : "");
+
+    var missing = [];
+    QUICK_MATCH_INPUT_KEYS.forEach(function (key) {
+      if (qqBlank(inputs[key])) missing.push(key);
+    });
+    /* 键集与顺序必须与后端一致：少一个键就是协议漂移，宁可在这里显式补空值。 */
+    QUICK_MATCH_INPUT_KEYS.forEach(function (key) {
+      if (!(key in inputs)) inputs[key] = "";
+    });
+    return {ok: true, engine: "quick-quote-text-extract/1", requirement_text: raw,
+            inputs: inputs, missing_inputs: missing, evidence: evidence};
+  }
+
+  /** 候选案例上屏（Spec §3 第 4/5 条）：逐条候选 + 逐字段证据 + 一眼可点的「选为基准」。
+      只渲染后端 match 结果（行、分数、是否可选用都是后端给的），前端不改口径、不自算相似度。 */
+  function renderQuickCandidates(match, options) {
+    options = options || {};
+    match = match || {};
+    var box = el("div", "qq-candidates");
+    box.appendChild(el("div", "qq-ws-head", "候选案例（标准成交案例库）"));
+    var rows = match.candidates || [];
+    if (!rows.length) {
+      box.appendChild(el("p", "qq-summary",
+        "没有候选案例（硬筛选后一条都不剩）。可以改字段重算，或转精准报价。"));
+    } else {
+      var table = el("table", "qq-candidates-table");
+      var head = el("tr");
+      ["候选", "状态", "相似度", "标准单价", "差异项", "选为基准"]
+        .forEach(function (title) { head.appendChild(el("th", "", title)); });
+      table.appendChild(head);
+      rows.forEach(function (row) {
+        var tr = el("tr");
+        tr.appendChild(cell(row.case_code));
+        tr.appendChild(cell(REASON_LABELS[row.reason_code] || row.status || ""));
+        tr.appendChild(cell(fmtPercent(row.similarity)));
+        tr.appendChild(cell(row.standard_price === null || row.standard_price === undefined
+          ? "—" : row.standard_price));
+        tr.appendChild(cell((row.diff_items || []).map(function (item) {
+          return item.label || item.key || "";
+        }).filter(Boolean).join("、") || "—"));
+        var pickCell = el("td");
+        var pick = el("button", "qq-pick", "选为基准");
+        pick.disabled = !row.eligible;
+        if (!row.eligible) pick.title = row.eligibility_reason || "这条案例不能用于快速报价";
+        pick.addEventListener("click", function () {
+          if (options.onPick) options.onPick(row.case_code);
+        });
+        pickCell.appendChild(pick);
+        tr.appendChild(pickCell);
+        table.appendChild(tr);
+      });
+      box.appendChild(table);
+    }
+    var missing = match.missing_inputs || [];
+    if (missing.length) {
+      box.appendChild(el("p", "qq-summary",
+        "还缺 " + missing.length + " 项匹配输入：" + missing.map(function (key) {
+          return QUICK_INPUT_LABELS[key] || key;
+        }).join("、")));
+    }
+    return box;
+  }
+
+  /** 抽取结果上屏（Spec §4「抽取结果必须展示给用户核对」）：逐字段 + 出处 + 缺什么。 */
+  function renderQuickInputs(view, options) {
+    options = options || {};
+    view = view || {};
+    var box = el("div", "qq-inputs");
+    box.appendChild(el("div", "qq-ws-head", "需求抽取（逐字段，未命中的必须人工补）"));
+    var rows = [];
+    QUICK_MATCH_INPUT_KEYS.forEach(function (key) {
+      var value = (view.inputs || {})[key];
+      if (qqBlank(value)) return;
+      var hit = null;
+      (view.evidence || []).forEach(function (row) {
+        if (row.key === key && !hit) hit = row;
+      });
+      rows.push([QUICK_INPUT_LABELS[key] || key, value === true ? "是" : String(value),
+                 (hit && hit.from) || "原文"]);
+    });
+    if (!rows.length) {
+      box.appendChild(el("p", "qq-summary", "这段需求里没抽出任何可用的匹配字段，请按提示补全后再匹配。"));
+    } else {
+      var table = el("table", "qq-inputs-table");
+      var head = el("tr");
+      ["字段", "解析值", "出处"].forEach(function (title) { head.appendChild(el("th", "", title)); });
+      table.appendChild(head);
+      rows.forEach(function (row) {
+        var tr = el("tr");
+        row.forEach(function (text) { tr.appendChild(cell(text)); });
+        table.appendChild(tr);
+      });
+      box.appendChild(table);
+    }
+    var missing = view.missing_inputs || [];
+    if (missing.length) {
+      var labels = missing.map(function (key) { return QUICK_INPUT_LABELS[key] || key; });
+      box.appendChild(el("p", "qq-summary",
+        "还要人工补 " + labels.length + " 项：" + labels.join("、")
+        + "（缺字段不会被编造，也不参与匹配）。"));
+    }
+    if (options.plain) return box.textContent;
+    return box;
+  }
+
   /** Agent 基址：默认同源 /agents/quote，可被 localStorage 的 cpq:agentUrl 覆盖。 */
   function agentBase() {
     try {
@@ -833,6 +1050,9 @@
       session_id: options.sessionId || quickQuoteSessionId(),
       title: options.title || "", customer: options.customer || "",
       project_name: options.projectName || "", industry: options.industry || "packaging",
+      /* 报价模式是业务状态（Spec §2）：建实例时就落到服务端，刷新/卡片再打开才能恢复
+         对应工作区；面板是快速报价面板，缺省就是 quick。 */
+      quote_mode: options.quoteMode || MODE_QUICK,
       idempotency_key: options.idempotencyKey || newIdempotencyKey("session")
     };
     return apiFetch(agentBase() + SESSIONS_PATH, {
@@ -982,6 +1202,11 @@
     renderParseEntry: renderParseEntry,
     renderReadiness: renderReadiness,
     renderDiffTable: renderDiffTable,
+    QUICK_MATCH_INPUT_KEYS: QUICK_MATCH_INPUT_KEYS,
+    QUICK_INPUT_LABELS: QUICK_INPUT_LABELS,
+    extractQuickQuoteInputs: extractQuickQuoteInputs,
+    renderQuickCandidates: renderQuickCandidates,
+    renderQuickInputs: renderQuickInputs,
     QUOTE_ACTION_LABELS: QUOTE_ACTION_LABELS,
     renderQuote: renderQuote,
     SESSIONS_PATH: SESSIONS_PATH,

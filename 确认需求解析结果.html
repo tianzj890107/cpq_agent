@@ -1147,9 +1147,12 @@
       });
     }
 
-    // 把服务端按行业下发的 ④产品技术参数表头同步到已预渲染的骨架；
-    // 拉不到就清空（宁可留原列，也不许编造列）。
-    async function refreshIndustryForms(industry) {
+    /* 固定表单目录按行业重取（Spec quick-quote-entry-routing-and-packaging-isolation §5）：
+       表结构只在服务端（`fixed_forms_catalog(industry)` 经 /api/meta?industry= 下发），
+       前端不判断行业名、也不自己拼列。包装工作台如果沿用 /api/meta（不带行业）那一份，
+       ④产品技术参数会停在默认行业的电池列上 —— 建单/切行业/恢复卡片时都必须重取一次。
+       拉不到就清空（宁可留原列，也不许编造列）。 */
+    async function refreshFixedFormsForIndustry(industry) {
       try {
         const meta = await cpqAuthFetch(
           AGENT_URL + '/api/meta?industry=' + encodeURIComponent(industry)).then(r => r.json());
@@ -1178,6 +1181,8 @@
         });
       });
     }
+    // 既有调用点沿用的名字（同一份实现，不另写一遍）。
+    function refreshIndustryForms(industry) { return refreshFixedFormsForIndustry(industry); }
 
     /* ================= 工具函数 ================= */
     function escapeHtml(s) {
@@ -1236,6 +1241,36 @@
     }
 
     /* ================= 聊天渲染 ================= */
+    /* 首页带来的需求在工作台被输出两遍（Spec quick-quote-entry-routing-and-packaging-isolation
+       §3 末句）：一条是 boot() 的本地回显，一条是 runStep1 的 display 回显。boot 那条要记账，
+       runStep1 再要插同一条时直接跳过 —— 一次按钮触发只产生一条用户消息。
+       只豁免**那一条**（记一次就消费掉）：用户之后自己再发同样的话照常出气泡。 */
+    let INITIAL_REQUIREMENT_ECHO = '';
+    let INITIAL_REQUIREMENT_ECHO_PENDING = false;
+    function normRequirementEcho(text) {
+      return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    }
+    function markInitialRequirementEcho(text) {
+      const value = normRequirementEcho(text);
+      INITIAL_REQUIREMENT_ECHO = value;
+      INITIAL_REQUIREMENT_ECHO_PENDING = !!value;
+      return value;
+    }
+    function dedupeInitialRequirementEcho(text) {
+      const target = normRequirementEcho(text);
+      if (!target || !INITIAL_REQUIREMENT_ECHO_PENDING) return false;
+      if (target !== INITIAL_REQUIREMENT_ECHO) return false;
+      INITIAL_REQUIREMENT_ECHO_PENDING = false;   // 只豁免一次
+      const nodes = chatEl ? chatEl.querySelectorAll('.message.message-user .message-text') : [];
+      for (let i = 0; i < nodes.length; i += 1) {
+        if (normRequirementEcho(nodes[i].textContent) === target) {
+          if (typeof scrollChat === 'function') scrollChat();
+          return true;
+        }
+      }
+      return false;
+    }
+
     function addUserBubble(text) {
       const div = document.createElement('div');
       div.className = 'message message-user';
@@ -2247,8 +2282,64 @@
     /* 第 1 步匹配上下文（需求全文 + Top3 推荐 + 销售经理选了谁）：
        随第 1 步快照落库（_match 键），第 2 步工艺经理开始时回显并支持改选 */
     let STEP1_MATCH = { text: '', ui: null, picked: '' };
+    /* 跨行业候选硬隔离（Spec quick-quote-entry-routing-and-packaging-isolation §5）：
+       包装项目里出现电池成品（成品编码 9100… / 取数表是 product_para_value）说明**服务端那条路
+       又串库了**。前端既不许把它渲染成可选产品，也不许默默过滤后当没事发生 —— 那等于替服务端
+       掩盖错误。这里拦下来并明确报错，让问题暴露在它该出现的地方。 */
+    const BATTERY_PRODUCT_TABLE = 'product_para_value';
+    const BATTERY_ROW_MARKERS = ['工作温度', '电压', '容量', '电芯', '电流'];
+    function candidateRowIndustry(row) {
+      return String((row && row.industry) || '').trim().toLowerCase();
+    }
+    function looksLikeBatteryRow(row) {
+      if (!row) return false;
+      const code = String(row.code || row.case_code || '').trim();
+      if (/^9\d{3}/.test(code)) return true;          // 电池成品编码段（9100…）
+      const detail = row.detail || {};
+      return BATTERY_ROW_MARKERS.some(k => Object.prototype.hasOwnProperty.call(detail, k));
+    }
+    function rejectCrossIndustryCandidates(ui) {
+      const industry = String(((typeof currentIndustry === 'function' ? currentIndustry() : '')
+        || CURRENT_INDUSTRY || '')).trim().toLowerCase();
+      const payloadIndustry = String((ui && ui.industry) || '').trim().toLowerCase();
+      const table = String((((ui || {}).source || {}).table) || '');
+      const rows = Array.isArray(ui && ui.products) ? ui.products.slice() : [];
+      if (industry !== 'packaging') return {ok: true, kept: rows, rejected: [], industry: industry};
+      if (payloadIndustry && payloadIndustry !== 'packaging') {
+        return {ok: false, kept: [], rejected: rows, industry: industry,
+                message: '服务端返回了跨行业候选（载荷行业：' + payloadIndustry + '），已全部拦截。'
+                         + '包装项目只认包装盒型候选，这是服务端错误（Spec §5），请联系管理员排查。'};
+      }
+      if (table === BATTERY_PRODUCT_TABLE) {
+        return {ok: false, kept: [], rejected: rows, industry: industry,
+                message: '服务端从电池成品参数表（' + BATTERY_PRODUCT_TABLE + '）取了候选，已全部拦截。'
+                         + '包装项目不允许查这张表（Spec §5），请联系管理员排查第 1 步的行业分流。'};
+      }
+      const kept = [], rejected = [];
+      rows.forEach(function (row) {
+        const rowIndustry = candidateRowIndustry(row);
+        if ((rowIndustry && rowIndustry !== 'packaging') || looksLikeBatteryRow(row)) rejected.push(row);
+        else kept.push(row);
+      });
+      return {ok: !rejected.length, kept: kept, rejected: rejected, industry: industry,
+              message: rejected.length
+                ? ('拦截了 ' + rejected.length + ' 条跨行业候选（包装项目只允许包装盒型）：'
+                   + '已不显示、也不可选用。这是服务端错误（Spec §5），请联系管理员排查。')
+                : ''};
+    }
+
     function renderCandidates(ui, opts) {
       opts = opts || {};
+      // 跨行业候选：先拦（Spec §5），载荷行业/取数表/行本身三处任一露馅都不渲染。
+      const scoped = rejectCrossIndustryCandidates(ui);
+      if (!scoped.ok) {
+        addErrorBubble(scoped.message || '服务端返回了跨行业候选，已全部拦截。');
+        return;
+      }
+      if (scoped.kept.length !== (Array.isArray(ui && ui.products) ? ui.products.length : 0)) {
+        ui = Object.assign({}, ui, {products: scoped.kept});
+        if (scoped.message) addErrorBubble(scoped.message);
+      }
       if (!opts.replay) {
         STEP1_MATCH.ui = ui;
         // 第 2 步回显只存用户实际输入的文字（不带附件正文/系统指令）
@@ -2639,7 +2730,12 @@
         STEP1_FORM_TASK = null;
         // kickoff / 表单通道的 User 文案就是 display；非空时必须先出用户气泡再出 Agent 卡。
         const shown = String(displayText || '').trim();
-        if (shown) {
+        // boot 已经把这段需求回显过了：这里不再插第二条（Spec §3 末句）。
+        // typeof 守卫：runStep1 会被离线走查单独抽出来跑（那种环境只带这一个函数），
+        // 少一个去重助手时按"没有回显过"处理，绝不让缺函数把整轮打断。
+        const echoedAlready = shown && typeof dedupeInitialRequirementEcho === 'function'
+          && dedupeInitialRequirementEcho(shown);
+        if (shown && !echoedAlready) {
           const say = (typeof beginUserTurn === 'function') ? beginUserTurn : addUserBubble;
           say(shown);
         }
@@ -5125,6 +5221,9 @@
           INDUSTRIES.map(function (item) { return item.key; }));
         try { sessionStorage.setItem('cpq:industry', CURRENT_INDUSTRY); } catch (e) {}
         renderIndustrySelect();
+        // /api/meta 这一份是按**默认行业**下发的：当前行业（URL / 记忆键 / 卡片）可能不是它，
+        // 必须再按当前行业重取一次固定表单目录，否则包装工作台会停在默认行业的电池列上。
+        await refreshFixedFormsForIndustry(CURRENT_INDUSTRY);
         manualMode = !!(meta.settings && meta.settings.model === 'none');
         if (meta.model) $('modelInfo').textContent = ' · ' + (manualMode ? '无模型（人工填写）' : meta.model);
         const nw = await cpqAuthFetch(AGENT_URL + '/api/new', { method: 'POST' }).then(r => r.json()).catch(() => ({}));
@@ -5159,7 +5258,11 @@
       if (projectName || customer) bubbleParts.push('项目：' + (projectName || '-') + '（客户：' + (customer || '-') + '）');
       if (requirement) bubbleParts.push(requirement);
       if (files.length) bubbleParts.push('附件：' + files.join('、'));
-      if (bubbleParts.length) { kickoffBubble = bubbleParts.join('\n'); addUserBubble(kickoffBubble); }
+      if (bubbleParts.length) {
+        kickoffBubble = bubbleParts.join('\n');
+        addUserBubble(kickoffBubble);
+        markInitialRequirementEcho(kickoffBubble);   // runStep1 再回显同一条时跳过
+      }
 
       // 右侧表结构写死、已预渲染出空骨架；进第 1 步即可看到 6 个固定分区
       setStep(1);

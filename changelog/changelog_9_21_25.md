@@ -12498,3 +12498,196 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 只新增 2 份 Spec、2 个红测文件、追加本 changelog；未改任何业务实现、未改既有测试、
 未改 `tests/` 下已有文件、未直接写 PG、未删除任何 34 上的项目或会话（本轮新建的
 `afe9e844f2ec` / `566207eb006a` 及上一轮的探测项目全部保留）。
+
+## 315. 只点前端按钮跑通「报价 → 零件 → 下游 → 回传 → 卡片」，并且这次问到了两件真话：卡片上看不见零件、缺材料的件补不进去（9-22，Codex 只改 Spec / 红测 / changelog）
+
+本批起因就是用户那句话：「关键是我要能看到拆出来的那些零件」「零件下游的任务没法做是什么卡住的，
+你先绕过去然后完成全流程」。于是这一轮**不写脚本改数据**，只用前端会走的那些接口按正确顺序点一遍，
+把链条跑到卡片终态，再把中途挡住下游的两处记成 Spec + 红测。
+
+### 全流程真跑（34，`SM1` / `PE1` / `FI1`，密码 `123456`）
+
+| 项 | 值 |
+| --- | --- |
+| 报价会话（SM1 新建） | `c0239386c1c4` |
+| 技术项目（PE1 建，`entry_origin=quote`） | `a42e5e60a720`（`business_case.source_session_id = c0239386c1c4`） |
+| 需求单 | `REQ-A42E5E60A720`「700ML 双开门酒盒（Codex 只点按钮版 0922-1333）」 |
+| 一键解析八步 | **8/8 `completed`**（`file_preflight` … `downstream_prepare`） |
+| 零件文档 | **64 件**：`closed_ratio=0.938`、`processable_ratio=0.141`（9 件可算）、`role_known_ratio=0.0`、`material_known_ratio=0.328`、过滤 192 / 截断 146 / `collapsed_edge_total=544` |
+| 不可算原因账 | `{"PACKAGING_PART_MATERIAL_UNKNOWN": 51, "PACKAGING_PART_NOT_CLOSED": 4}` |
+| 缺材料 / 缺料厚账 | `material_gap_mix={"no_material_note": 39, "no_closed_outline": 4}`；`thickness_gap_mix={"material_missing": 39, "grammage_only": 11, "no_thickness_note": 1, "no_closed_outline": 4}` |
+| ★零件下游真跑 | `DWG-P05` / `DWG-P07`：工艺推荐 `200 succeeded` **各 4 道工序**、成本测算 `200 succeeded` 各 1 条明细 |
+| 不可算件的下游（预期拒绝） | `DWG-P01` / `DWG-P02` → **409 `PACKAGING_PART_NOT_CLOSED`**「这一件没有可信的闭合轮廓（odd_endpoints），不能拿包围盒尺寸去排工艺」 |
+| 角色映射入口（`## 286`） | `GET …/packaging-bom/role-map` → 200，候选来自确认盒型 `YT-DWG-WINE-700ML` |
+| 盒型 / BOM / 路线 | `YT-DWG-WINE-700ML`（14 候选）→ BOM **32 行** → 路线 **10 道**（`confirmed`） |
+| 包装成本 | `total_cost=4.43824806385824`、缺口 27、items 31；**PE1 与 FI1 都 200**（`packaging-cost-finance-access` 的可见性修复在线上确实生效） |
+| 三个关口（1.1 / 1.2 / 1.3） | 提交确认 200 → 通过确认 200 → 审核通过 **200 `approved`**（`packaging-requirement-confirm-order-guard` 那道新门禁没有误拦） |
+| 报告 | `POST process-report/prepare` 200，`status=draft` |
+| 回传 | 未放行 → **409**（`material_price_missing`、`loss_rate_missing`、`no_formula:print`、`part_size_missing`、`step_ti…`）；带 `allow_gaps=True`+理由 → **200**，`handoff_no=pkghandoff:a42e5e60a720:REQ-A42E5E60A720:default:1`、`version_no=1`、`already_sent=true`、`quote_session_id=c0239386c1c4`、`business_case_id=bc_454820b60710` |
+| 报价侧定价 | 未税 **5.91766408514432** / 含税 **6.686960416213082**（`draft=true`、`gap_count=27`、8 章节） |
+| 卡片 | `card_id=3991598492811269436`、`current_step=6`、`overall_status=completed`，6 步全 `done`；第 6 步快照键 `['packaging_parts','s6_quote','s6_quote_markdown']` |
+| SM1 收件箱 | 1 条 `handoff` 待办（open） |
+
+注意一处读法：`packaging-quote/send` 的响应体**只有 `handoff` 段、没有 `package`**；
+整包要用独立的 `GET /api/projects/{pid}/requirement/packaging-quote/package` 读回 —— 与前几轮一致。
+
+### 挡住下游的真因（这一轮的数字）
+
+1. **材料未知 51 件**：`no_material_note` 39 件（图纸根本没材料注记）+ `grammage_only` 11 件
+   （只有克重、推不出料厚）。`processability()` 要求**材料 + 料厚同时已知**，所以这 51 件一律
+   `409 PACKAGING_PART_MATERIAL_UNKNOWN`，只有 **9/64** 可算。
+2. **未闭合 4 件**：`odd_endpoints` → `409 PACKAGING_PART_NOT_CLOSED`（这一条是**对的**，
+   不许拿包围盒硬排工艺）。
+3. **顺序陷阱**（`packaging-requirement-confirm-order-guard.md`）：必须「1.1 草稿 → 2.1 一键解析
+   8/8 → 再 1.2 / 1.3」；反过来做，第 8 步 `field_write` 必被 `REQUIREMENT_NOT_EDITABLE` 挡成 7/8。
+   本轮按正确顺序走，一次 8/8。
+4. **绕法**（本轮实际怎么绕过去的）：不可算件**不下钻**，挑 `processable` 的件（`DWG-P05`/`DWG-P07`）
+   跑工艺 / 成本，让"零件下游"这一段有真结果；未闭合件保留 409 作为预期证据。
+   对只缺材料的 39 件，今天**没有**可绕的按钮 —— 这就是下面这份 Spec 的由来。
+
+### 本轮落盘的产物（Spec + 红测，业务实现不在本批）
+
+- 新增 Spec `docs/specs/packaging-parts-in-card-and-material-fill.md`：
+  ① 卡片第 6 步必须**真的**渲染零件表（`FORMS` 目录里没有第 6 步任何一节，
+  `wfRestoreStepData()` 对未知 section 直接 `return`；卡片页 `grep "api/projects"` = 0 命中，
+  所以今天卡片上的零件表**只能靠脚本注入**），列必须含 `角色` / `可算` / `不可算原因`；
+  ② **材料**也要能人工补录（料厚那套的镜像：`set_manual_material` / `save_part_material` /
+  `load_part_material` / `GET|POST …/packaging-parts/{part_code}/material` / `material_manual_total`），
+  补完**只重算这一件**，不许再要求"回需求补全整体重跑八步"；
+  ③ `PACKAGING_PART_MATERIAL_UNKNOWN` 的文案要按缺什么分别给可执行的下一步。
+- 新增红测 `tests/test_packaging_parts_in_card_and_material_fill_red.py`（A 卡片可见性 4、
+  B 材料补录 5、C 卡住文案与入口 2、D 护栏 2）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_in_card_and_material_fill_red
+  → Ran 13 tests … FAILED (failures=10)
+```
+
+红的 10 条 = A1 / A2 / A3 / B1–B5 / C1 / C2；绿的 3 条护栏 = A4（既有 17 节固定表单 id 一个不少）、
+D1（未闭合件仍 `PACKAGING_PART_NOT_CLOSED`）、D2（`reject_unknown_role_autobind` 仍在）。
+
+### 边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；**未改任何业务实现**（`main.py` /
+`packaging_parts.py` / `app.js` / `确认需求解析结果.html` 一行未动）、未改既有测试、未写 PG、
+未删除任何 34 上的项目或会话（本轮新建的 `a42e5e60a720` / `c0239386c1c4` 全部保留）、
+未 push / MR / tag / Release / 未重启服务。
+
+## 316. 「为什么顺序是这样？顺序不就全乱了吗」——顺序没错、**页面顺序错了**：图纸解析必须夹在 1.1 存草稿与 1.1 提交确认之间（9-22，Codex 只改 Spec / 红测 / changelog）
+
+用户在 34 上质疑「1.1 存草稿 → 2.1 一键解析图纸 → 再 1.1 提交确认 / 1.2 通过确认 / 1.3 审核」
+这条顺序。查下来：**依赖是对的，呈现是错的** —— 流程栏把「2.1 图纸解析」排在
+「1.2 确认需求」「1.3 审核需求」之后，用户顺着点必然踩坑。
+
+### 根因（代码事实，逐条可复现）
+
+| # | 事实 | 出处 |
+| --- | --- | --- |
+| 1 | 图纸解析第 8 步「字段写入」把字段**回写进那张需求单**，所以需求必须可编辑 | `packaging_drawing_flow/steps.py:416` |
+| 2 | 可编辑态只有 `("draft", "rejected")` | `requirement_service.py:29` |
+| 3 | 1.1 提交确认 → `pending_confirmation`、1.2 通过确认 → `pending_review`、1.3 审核通过 → `approved`，三个都不可编辑 | `requirement_service.py:503/689` |
+| 4 | 于是按页面顺序走，第 8 步必 `blocked / REQUIREMENT_NOT_EDITABLE`（实测 7/8） | `model.PRECONDITION_BLOCKERS` |
+| 5 | 阶段表把 `1.1/1.2/1.3` 归阶段 1、`2.1 图纸解析` 归阶段 2，行序也是 `create → confirm → review → drawing` | `workflow_stages.py:17-19`、`_STAGE_ROWS` |
+| 6 | 这张编号表被手抄了 **4 份**（`workflow.js:99-100`、`requirement-create.js:41`、`requirement-confirm-page.js:42`、`report-publish-result.js:109`），抄的还是同一张错表 → 改一处没用 | 前端源码 |
+| 7 | 1.1 页面**没有**任何"先去做图纸解析"的引导或入口（门禁只拦住并说原因，不负责把人送过去） | `requirement-create.js` / `requirement.js` |
+
+对照：按依赖顺序（1.1 存草稿 → 2.1 解析 → 1.1/1.2/1.3）**8/8 completed**；
+按页面顺序（先 1.2/1.3 再 2.1）必 7/8，出口只有"退回草稿"。
+
+### 本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/packaging-stage-order-equals-dependency.md`：要求**顺序 = 依赖**（只对包装 + DWG 项目）——
+  流程栏必须读成「创建需求（存草稿）→ 图纸解析 → 确认需求 → 审核需求 → …」；
+  `stage_id` / 页面文件名 / URL 参数一律不变（历史链接不受影响），变的只有编号、标题与顺序；
+  编号表**只允许** `workflow_stages.py` 一处定义，四个前端文件不许再抄；
+  1.1 页面必须给"下一步：图纸解析"的引导 + 可点入口；**门禁与退路逐字保持**。
+- 新增红测 `tests/test_packaging_stage_order_red.py`（A1/A2/A3 顺序与事实源、B1 1.1 页面引导、
+  C1/C2/C3 护栏）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_stage_order_red
+  → Ran 7 tests … FAILED (failures=3)
+```
+
+红的 3 条 = A1（`drawing` 仍排在 `requirement-confirm` 之后）、A3（四个前端文件各有一份写死的
+编号表）、B1（1.1 页面没有引导与入口）；绿的 4 条护栏 = A2（13 个子步号唯一且形状合规）、
+C1（门禁仍在 1.1/1.2 两处被调用）、C2（`EDITABLE_STATUSES` 未放宽）、C3（`approved` 仍退得回草稿）。
+
+### 与 `## 313` 的关系
+
+`## 313` 那批（`packaging-requirement-confirm-order-guard.md`）修的是**拦住 + 给退路**：
+先确认后解析会被 409 挡住、且 `approved` 之后还能退回草稿。本批修的是**根本不让人走错**：
+页面顺序按依赖排、编号只有一个源、1.1 页面把人直接送进图纸解析。两批不重叠，也不互相放宽。
+
+### 边界
+
+本批只新增 1 份 Spec、1 个红测文件、追加本 changelog；未改任何业务实现
+（`workflow_stages.py` / 四个前端文件 / `requirement_service.py` 一行未动）、未改既有测试、
+未写 PG、未删除任何 34 上的项目或会话、未 push / MR / tag / Release / 未重启服务。
+
+## 314. 快速报价入口路由与包装行业隔离落地：首页提交单一路由 + 需求原文→结构化字段 + 第 1 步按行业分流（9-22，Codex 实现）
+
+`docs/specs/quick-quote-entry-routing-and-packaging-isolation.md` 从「待实现」转「已实现」，
+`tests/test_quick_quote_entry_routing_packaging_isolation_red.py` 由 14 红转 **Ran 15 OK**。
+
+### 复现的缺陷（前端实测，四条根因）
+
+报价首页选了「包装」点「快速报价」、粘完盒型参数发送，页面却跳到 `确认需求解析结果.html` 的
+六步精准工作台；第 1 步 `/api/step1/match` 查 `master_data.product_para_value` 的 19 条电池产品，
+把 3 条锂亚电池打成分。两条包装案例根本没参与这次请求：
+
+1. 首页「快速报价」只调 `openQuickQuotePanel()`，没有保存当前模式；
+2. 输入框与 Enter 都走 `submitRequirement() → requestNavigate('quote', …)`，无条件进精准；
+3. 精准工作台两段式匹配的 `phase=match` **没有**行业分流（包装分流只写在 Agent 工具
+   `_handle_match_products()` 里，两套实现口径漂移）；
+4. 首页只把 `{industry, requirement_text}` 送去匹配，而案例匹配器要的是结构化盒型/尺寸/材料字段。
+
+### 改了什么
+
+- **`报价首页.html`**：`activeQuoteMode`（precise|quick）+ `setActiveQuoteMode()`；两个入口按钮
+  **先存模式**再开面板；`routeQuoteSubmission()` 成为发送/Enter 的唯一分流；新增
+  `submitQuickQuoteRequirement()`（建/复用实例 → 结构化抽取 → `matchQuickQuoteCases` → 候选上屏，
+  **不跳页**）；`quickQuoteInputs()` 改走 `structuredQuickQuoteInputs()`（原文只留作证据）；
+  卡片点击先读服务端 `quote_mode`：`quick` 就地开快速工作区（`openQuickQuoteCard`），
+  否则走既有精准入口；`#qqModeBadge` 显示当前模式；行业离开 packaging 自动退回 precise 并收起工作区。
+- **`tech_app/frontend/quick-quote-panel.js`**：`QUICK_MATCH_INPUT_KEYS`（与后端
+  `cpq_quick_quote_match.QUICK_MATCH_INPUT_KEYS` 同值）；`extractQuickQuoteInputs()` 确定性抽取
+  （盒型编码 / 尺寸串 长×宽×高 / 克重必须带单位 / 闭合方式 / 内托 / V 槽 / 磁铁 / 数量 …，未命中进
+  `missing_inputs`，不猜不补造）；`renderQuickInputs()` 证据上屏、`renderQuickCandidates()` 候选上屏；
+  建实例请求体带 `quote_mode`。
+- **`cpq_agent_server.py`**：新增 `match_step1_by_industry()` —— 第 1 步匹配段的**唯一**分流服务，
+  页面（`POST /api/step1/match` phase=match）与 Agent 工具 `match_products` 都走它；
+  `_handle_step1_match` 在**构造 `product_para_value` 的 SQL 之前**分流，包装那一支只碰
+  `cpq_packaging_match`（并保留了源码上"先分流、后建 SQL"的可核对性）；新增
+  `quick_quote_industry_guard()`：session 建实例必须行业=包装、模式 ∈ {precise, quick}，
+  `quote_mode`/`industry` 落进实例状态并由读接口返回。
+- **`确认需求解析结果.html`**：`refreshFixedFormsForIndustry()`（固定表单目录按行业重取；
+  boot 时也用当前行业再取一次 —— 原来 `/api/meta` 那份是**默认行业**的，包装工作台会停在电池列）；
+  `rejectCrossIndustryCandidates()`（载荷行业 / `source.table=product_para_value` / 行本身三处
+  任一露馅即**全部拦截并显式报错**，不静默过滤掩盖服务端串库）；`dedupeInitialRequirementEcho()`
+  （首页带来的需求回显只出现一次；boot 那条记账、`runStep1` 再插同一条时跳过）。
+
+### 两处实现口径说明
+
+1. `cpq_wf_card` **没有** `quote_mode` 列。加列要动生产库 DDL，本批不做；模式改落在快速报价
+   **实例状态**（建实例写、读接口回），首页卡片点击时先读一次实例再决定开哪个工作区 ——
+   模式仍以服务端为准，前端不靠本地猜测。
+2. Spec §5 说"返回跨行业候选视为服务端错误，不由前端过滤掩盖"。实现按字面执行：拦截后**明确报错**
+   （点明载荷行业或取数表），既不渲染成可选产品，也不假装无事。
+
+### 复跑
+
+- 本批红测 `Ran 15 OK`；三个前端文件 `node --check` 通过（含两个页面的内联脚本）。
+- 不回归：quick-quote 系列 16 份 `Ran 466`（唯一 1 条红是既有 `## 256`
+  `test_quick_quote_case_maintenance_red::TestFPanelWiring::test_f1`）；quote/industry 系列 11 份
+  `Ran 290`（10 条红全属另一份未实现 Spec `packaging-parts-in-card-and-material-fill`，与本批无关）；
+  `test_quote_tech_unified_tool_list_conversation_red` `Ran 35 OK`；首页/工作台相关 30+ 份共
+  `Ran 438 OK`（2 条既有红 `## 133` 已记录）。
+
+### 边界
+
+只改 `报价首页.html` / `确认需求解析结果.html` / `tech_app/frontend/quick-quote-panel.js` /
+`cpq_agent_server.py` / 本批 Spec 状态行 / 追加本 changelog；未改 `tests/` 既有文件、未改案例数据、
+未连 PG、未发 HTTP、未部署。
