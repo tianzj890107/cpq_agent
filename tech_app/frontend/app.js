@@ -2053,6 +2053,19 @@ function packagingPartsEmptyText(partsDoc, preconditions) {
   return segments.join("；");
 }
 
+// "继续加载"这一页读不出来时的原因文案（Spec `packaging-parts-pagination-read-failure.md` §2.1）。
+// 纯函数：有 `code` 才拼句子；有状态码说 HTTP，没有（含 `0`、网络异常）说"网络错误"。
+// 与第一页的 `parts_unavailable` 分家：这一页读不到**不等于**整份零件文档没有，已列出的零件一件不动。
+function packagingPartsPageReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : null;
+  const code = row ? String(row.code || "").trim() : "";
+  if (!code) return "";
+  const status = Number(row.status) || 0;
+  return status > 0
+    ? `这一页零件没读出来（HTTP ${status}），已列出的零件不受影响；点"继续加载"重试`
+    : '这一页零件没读出来（网络错误），已列出的零件不受影响；点"继续加载"重试';
+}
+
 // 2.1 左栏零件文档（drawing_flow 链路）：GET .../requirement/packaging-parts。
 // 端点未上线（零件提取那批才加）时拿到 404 → 保持 null，走空态文案，不谎报"解析失败"。
 //
@@ -2469,13 +2482,24 @@ async function loadMorePackagingParts() {
   const doc = currentPackagingParts || {};
   if (!currentProject || !doc.has_more) return null;
   const offset = packagingPartsShown.length;
+  // 这一页读不出来时交给渲染的位置（Spec `packaging-parts-pagination-read-failure.md` §2.2）：
+  // 老路子三条失败都折成 `return null`，调用点又丢掉返回值 → 点一下什么都没发生。现在把
+  // `page_problem` 写进文档并重画左栏；已列出的零件一件不动（`packagingPartsShown` 不碰），
+  // 返回值契约不变（仍是 `null`）。文案一律由纯函数给，分页里不另写一套。
+  const failPage = (status) => {
+    const problem = {code: "parts_page_unavailable", status: Number(status) || 0, message: ""};
+    problem.message = packagingPartsPageReadProblemText(problem);
+    currentPackagingParts = Object.assign({}, doc, {page_problem: problem});
+    renderTree(currentIR || {});
+    return null;
+  };
   try {
     const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
       + `?${packagingPartsQueryString(packagingPartsPage, offset)}`;
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) return failPage(res.status);
     const page = await res.json().catch(() => null);
-    if (!page) return null;
+    if (!page) return failPage(res.status);
     const seen = {};
     packagingPartsShown.forEach(row => { seen[String(row.part_code || "")] = true; });
     packagingPartsItems(page).forEach(row => {
@@ -2485,10 +2509,11 @@ async function loadMorePackagingParts() {
       packagingPartsShown.push(row);
     });
     currentPackagingParts = Object.assign({}, doc, page,
-                                           { parts: doc.parts || packagingPartsShown });
+                                           { parts: doc.parts || packagingPartsShown,
+                                             page_problem: null });
     renderTree(currentIR || {});
     return page;
-  } catch (error) { return null; }
+  } catch (error) { return failPage(0); }
 }
 async function fetchPackagingBusinessParts() {
   if (!currentProject) return null;
@@ -3733,6 +3758,16 @@ function renderTree(ir) {
       more.disabled = !doc.has_more;
       more.addEventListener("click", () => { loadMorePackagingParts(); });
       note.appendChild(more);
+      // 这一页没读出来时当场说清（Spec `packaging-parts-pagination-read-failure.md` §2.3）：
+      // 挂在"继续加载"按钮旁边，按钮**保持可点**（重试就是再点一次）；没有读问题就不出现。
+      const pageProblemText = packagingPartsPageReadProblemText(doc.page_problem);
+      if (pageProblemText) {
+        const wrap = document.createElement("div");
+        wrap.className = "part-page-problem-note";
+        wrap.dataset.qqPartsPageProblem = "1";
+        wrap.textContent = pageProblemText;
+        note.appendChild(wrap);
+      }
       tree.appendChild(note);
     }
     // 第三笔账（Spec `packaging-parts-component-chaining.md` §2.4）：因面积/长边超限、

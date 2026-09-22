@@ -17051,3 +17051,46 @@ node --check tech_app/frontend/requirement-confirm.js  OK
 
 本批只做「版本可见 + 漂移可判」，**不**自动重建 BOM、**不**自动重算成本（那是人的决定）；
 未改任何既有测试与业务数据、未放宽任何断言、未连 PG / 34、未 push / MR / tag / Release / 未部署。
+
+## 397. 落地 `packaging-parts-pagination-read-failure`：2.1 左栏「继续加载」点了没反应 → 这一页读不出来必须当场一句话（已列出的零件一件不动；8 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingPartsPageReadProblemText(problem)`（紧邻 `packagingPartsEmptyText()`）：
+  `code` 为空 / `problem` 非对象 → `""`；`Number(problem.status) > 0` →
+  `这一页零件没读出来（HTTP <status>），已列出的零件不受影响；点"继续加载"重试`；
+  没有状态码（含 `0`、网络异常）→ 同句的「（网络错误）」版。无
+  `document.` / `window.` / `fetch(` / `localStorage`（P6）。
+- `loadMorePackagingParts()`：前置判断 `if (!currentProject || !doc.has_more) return null;` 与
+  成功路径（`packagingPartsShown.push(row)` / `Object.assign({}, doc, page, …)` /
+  `renderTree(currentIR || {})` / `return page;`）逐字不变（P7）；新增函数内 `failPage(status)`
+  —— 组 `{"code": "parts_page_unavailable", "status": Number(status) || 0, "message": ""}`，
+  `message` 由纯函数填，写进 `currentPackagingParts = Object.assign({}, doc, {page_problem: problem})`
+  后重画左栏，`return null`（**返回值契约不变**，调用点不用改）。三条失败路径
+  （其它非 2xx / `res.json()` 解不出 / `fetch` 抛异常）从「只 `return null`」改成
+  `return failPage(res.status)` / `failPage(res.status)` / `catch → failPage(0)`；
+  成功路径第三个对象里补 `page_problem: null`，清掉上一次的失败提示。
+- `renderTree()` 的「还有 N 件未列出」块：`note.appendChild(more)` 之后按
+  `packagingPartsPageReadProblemText(doc.page_problem)` 追加 `div.part-page-problem-note`
+  （`dataset.qqPartsPageProblem = "1"`），挂在「继续加载」按钮旁边；`more.disabled = !doc.has_more`
+  这一行没动（按钮**保持可点**，重试就是再点一次）；`doc.page_problem` 为空时这一块不出现
+  （今天的行为逐字不变）。
+
+未动的：失败路径不碰 `packagingPartsShown` / `packagingPartsPage` / `doc.has_more`（P8）；
+`fetchPackagingParts()`（第一页，由 `packaging-parts-read-failure-empty-state.md` 管）/
+`packagingPartsQueryString()` / `packagingPartsItems()` / 服务端路由（fail-loud 是对的）；
+无重试循环 / 自动重试 / 弹窗。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_parts_pagination_read_failure_red   Ran 8  FAILED (failures=6) → Ran 8  OK
+  （红基 P1 P2 P3 P4 P5 P6；护栏 P7 P8 始终绿）
+不回归：parts_read_failure_empty_state + business_parts_read_failure_note + parse_terminal_signal
+        Ran 47  OK
+        零件左栏可见性/面板/3D + 第一页读失败  Ran 49  OK (skipped=1)
+node --check tech_app/frontend/app.js  OK
+```
+
+未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
+未 push / MR / tag / Release / 未部署。
