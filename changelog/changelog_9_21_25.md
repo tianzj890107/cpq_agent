@@ -17211,3 +17211,38 @@ node --check tech_app/frontend/app.js  OK
 
 未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
 未 push / MR / tag / Release / 未部署。
+
+## 401. 落地 `packaging-cost-part-usage-not-applied`：BOM 行的「用量」真的进材料金额（「8 个/套」不再按 1 件算；缺用量给 `usage_qty_missing`；6 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_cost.py`：
+
+- 新增模块级 `_part_usage_qty(row)`：取这一行 `quantity`；为空 / 非数字 / ≤ 0 → `(1.0, True)`，
+  否则 `(float(value), False)`。
+- 部件 × 材料循环：新增 `usage_qty, usage_missing = _part_usage_qty(row)`；`variables` 里加
+  `"usage_qty": usage_qty`（同时进内存 `inputs` 与落库 `inputs_json` / `items_inputs`）；
+  `amount = result["amount"] × usage_qty`（用量 1 时逐字等价）；`expression` 仍是工作簿原文，
+  用量**不**进表达式字符串。
+- `GAP_RESOLUTIONS` 新增 `usage_qty_missing`（`missing_variable: ["quantity"]`、
+  `resolution_action: "补这一件的用量"`、`entry: "packaging-bom"`、`severity: "advisory"`）；
+  循环里 `usage_missing` 时 `gaps.append({"code": "usage_qty_missing", "where": part_code, …})`，
+  `gap_evidence()` 因此给出结构化 `resolution_action`。用量 > 1 的行金额里真的体现出来，
+  不许只记一个数不用。
+
+未动的：用量 1 / 没有用量的行金额与既有 `inputs` 键（`cut_length` / `cut_width` / `gsm` /
+`ton_price` / `quote_quantity` / `imposition_count` …）逐字不变；`loss_rate` / 最低收费 /
+分组口径；`kb_*` 里的公式文本（逐字证据链保住）；非材料行（工序 / 人工 / 模具）的 `inputs`
+不带 `usage_qty`（那几行是按单件口径）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_cost_part_usage_red   Ran 6  FAILED (failures=3) → Ran 6  OK
+  （红基 A1 A2 A3；护栏 B1 B2 B3 始终绿）
+不回归：cost_engine + rule_routing + rule_snapshot + column_evidence + red_closure +
+        minimum_charge + policy_decision   Ran 255  OK (skipped=1)
+        bom_business_parts_rows + bom_business_material_rows + version_pinning +
+        cost_input_version_pinning + business_parts_read_failure_note   Ran 66  OK
+```
+
+未改公式文本与费率、未改 BOM 与模板行、未改前端、未动 schema、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。

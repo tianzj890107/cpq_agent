@@ -545,6 +545,19 @@ def _num(value: Any) -> Optional[float]:
         return None
 
 
+def _part_usage_qty(row: Any) -> tuple:
+    """BOM 行的用量（Spec `packaging-cost-part-usage-not-applied.md` §2.1）。
+
+    取这一行的 `quantity`；为空 / 非数字 / ≤ 0 → 按 1 计（**不**猜、不拿别的列顶）。
+    返回 `(usage_qty, missing)`：`missing=True` 表示这一行没有可用用量，读侧必须披露
+    （`usage_qty_missing`），因为界面上的「数量 8」与材料金额会各说各话。
+    """
+    value = _num(row.get("quantity")) if isinstance(row, dict) else None
+    if value is None or value <= 0:
+        return 1.0, True
+    return float(value), False
+
+
 def _loads(value: Any, default: Any) -> Any:
     if value in (None, ""):
         return default
@@ -1827,6 +1840,10 @@ GAP_RESOLUTIONS = {
                              "entry": "kb_packaging_logistics_rule", "severity": "advisory"},
     "below_moq": {"missing_variable": [], "resolution_action": "确认是否按 MOQ 数量报价（业务裁决）",
                   "entry": "quote", "severity": "advisory"},
+    # 部件行的用量（Spec `packaging-cost-part-usage-not-applied.md` §2.2）：BOM 行没给可用用量时
+    # 材料行仍按 1 件出账，但必须披露 —— 「8 个/套」不许被按 1 件算得无声无息。
+    "usage_qty_missing": {"missing_variable": ["quantity"], "resolution_action": "补这一件的用量",
+                          "entry": "packaging-bom", "severity": "advisory"},
 }
 
 #: 这些"解决方式"等于把缺口按 0 糊过去 —— 不算补齐（Spec §2.1）。
@@ -2085,6 +2102,9 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         part_code = _text(row.get("part_code") or row.get("item_key"))
         part_name = _text(row.get("item_name"))
         material_text = _text(row.get("material") or row.get("item_name"))
+        # 这一行的用量（Spec `packaging-cost-part-usage-not-applied.md` §2.1）：部件行「8 个/套」
+        # 不许按 1 件算 —— 用量真的乘进材料金额；取不到就按 1 计并披露（§2.2）。
+        usage_qty, usage_missing = _part_usage_qty(row)
         length = _num(row.get("length_mm"))
         width = _num(row.get("width_mm"))
         material = _resolve_material(row, materials)
@@ -2099,6 +2119,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                      "ton_price": (price * 1000) if price is not None else None,
                      "imposition_count": imposition, "proof_base": _num(data.get("proofing_base")) or 0.0,
                      "quote_quantity": quantity, "tax_factor": tax_factor,
+                     "usage_qty": usage_qty,
                      "machine_length": machine_length,
                      "machine_width": machine_width if machine_width is not None
                      else ((width) if width is not None else None)}
@@ -2115,6 +2136,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         else:
             result = compute_line("material", variables, rows=formula_rows)
         amount = result.get("amount") if result else None
+        # 金额 = 该行**单件**材料费 × 该行用量（Spec §2.1）；`expression` 仍是工作簿原文，
+        # 用量绝不塞进表达式字符串（§2.1 / §2.3）。
+        if amount is not None:
+            amount = amount * usage_qty
         expression = result.get("expression") if result else entry_material["expression"]
         line = {"cost_category": "material", "part_code": part_code, "part_name": part_name,
                 "formula_code": entry_material["formula_code"], "rate_code": "",
@@ -2122,6 +2147,10 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                 "min_charge_applied": False, "source": "formula",
                 "items_inputs": variables}
         line.update(_trace_fields(entry_material, result=result, snapshot=rule_version))
+        if usage_missing:
+            gaps.append({"code": "usage_qty_missing", "where": part_code,
+                         "detail": "部件「%s」没有可用用量，材料行按 1 件计；补这一件的用量"
+                                   % part_name})
         rate, rate_source = loss_rate_with_source(material_text, material)
         if rate is None and amount is not None:
             gaps.append({"code": "loss_rate_missing", "where": part_code,
