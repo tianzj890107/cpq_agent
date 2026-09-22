@@ -544,6 +544,44 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       + ` data-pb-business-parts-gap="${pbEsc(facts.gapCode)}">`
       + `${pbEsc(facts.headline)}</div>`;
   }
+  // 这一版 BOM 的**部件组行**有多少来自权威清单（Spec `packaging-bom-business-rows-account-panel.md` §C1）：
+  // 材料组那本账由前面两块承担，这里只答部件组这一半 —— 权威清单来的行与几何零件模板展开的行在表格里
+  // 同形，只有这本账能把它们分开（既然决定「该不该去导权威清单」）。行数**只**读 `record.business_rows`
+  // （判据在后端那一块账里，前端自己按 `source` 数行就是第二套口径），老载荷（没有这一块）不许与
+  // 「0 行来自权威清单」同形。
+  function pbBusinessRowsAccount(record) {
+    const root = (record && typeof record === 'object' && !Array.isArray(record)) ? record : {};
+    const scope = (root.business_rows && typeof root.business_rows === 'object'
+      && !Array.isArray(root.business_rows)) ? root.business_rows : null;
+    const count = value => {
+      const number = Number(value);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    const total = count(scope ? scope.row_total : undefined);
+    const boxParts = count(scope ? scope.box_part_total : undefined);
+    const optionalParts = count(scope ? scope.optional_part_total : undefined);
+    const needsInput = count(scope ? scope.needs_input_total : undefined);
+    // 判据顺序（§C1）：不是对象 → 未知档；行数 > 0 → 有权威清单的行；否则这一版一行都没来自权威清单。
+    const state = scope ? (total > 0 ? 'ready' : 'empty') : 'unknown';
+    const headlines = {
+      ready: `部件组行：来自权威清单 ${total} 行（盒型件 ${boxParts} 件 · 选配件 ${optionalParts} 件），`
+        + `其中缺输入 ${needsInput} 行。`,
+      empty: '这一版 BOM 的部件组行没有一行来自权威清单（部件组是按几何零件模板展开的）。',
+      unknown: '后端没给部件组行的来源账（老载荷）：说不清这一版 BOM 的部件组行是权威清单还是模板来的。'
+    };
+    return {
+      state: state, total: total, boxParts: boxParts, optionalParts: optionalParts,
+      needsInput: needsInput, headline: headlines[state]
+    };
+  }
+  function pbBusinessRowsBlock(record) {
+    const facts = pbBusinessRowsAccount(record);
+    // 三态都渲染：每一态都有一句各不相同的事实（没有别的块替它说）。
+    return `<div class="pb-hint" data-pb-business-rows-state="${pbEsc(facts.state)}"`
+      + ` data-pb-business-rows-total="${pbEsc(facts.total)}"`
+      + ` data-pb-business-rows-needs-input="${pbEsc(facts.needsInput)}">`
+      + `${pbEsc(facts.headline)}</div>`;
+  }
   // 配对复核 / 零件回填失败 / 业务清单换版三本账的人话与逐行清单
   // （Spec `packaging-bom-disclosure-panel.md` §C1）：只消费后端结论，前端不重判一次。
   function pbPairingMismatchRows(record) {
@@ -726,6 +764,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${mapBlock}
       ${pbMaterialMapAccountBlock(record.business_material_rows)}
       ${pbBusinessPartsScopeBlock(record)}
+      ${pbBusinessRowsBlock(record)}
       ${pairingBlock}
       ${bindingBlock}
       ${businessStaleBlock}
