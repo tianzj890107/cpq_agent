@@ -1846,18 +1846,29 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
                          if isinstance(gap, dict)])
     evidence = [gap_evidence(payload, gap) for gap in gaps]
     blocking = [row for row in evidence if row["severity"] == "blocking"]
+    # 提示性缺口（Spec `packaging-cost-readiness-severity-layering` §2.2）：只披露、不决定结论。
+    advisories = [row for row in evidence if row["severity"] != "blocking"]
     silent = [row for row in evidence if row["silent_zero_fallback"]]
-    quantified = sum(row["affected_amount"] or 0.0 for row in evidence
-                     if row["affected_amount"] is not None)
+
+    def _amount(rows) -> float:
+        return sum(row["affected_amount"] or 0.0 for row in rows
+                   if row["affected_amount"] is not None)
+
+    quantified = _amount(evidence)
     reasons: list = []
     if blocking:
         reasons.append("%d 项阻断缺口未清零" % len(blocking))
     if silent:
         reasons.append("%d 行存在静默按 0 兜底：%s"
                        % (len(silent), "、".join(sorted({row["code"] for row in silent}))))
-    if not gaps and payload.get("built") is False:
+    if advisories:
+        # §2.2：带提示缺口的正式成本也要有一句 —— 提示必须看得见，不许静默。
+        reasons.append("%d 项提示缺口（不影响正式/暂定）" % len(advisories))
+    unbuilt = not gaps and payload.get("built") is False
+    if unbuilt:
         reasons.append("成本尚未测算")
-    verdict = READINESS_PROVISIONAL if (gaps or silent) else READINESS_FORMAL
+    # §2.1：结论只由 **阻断缺口 / 静默按 0 / 尚未测算** 决定，advisory 不再参与。
+    verdict = READINESS_PROVISIONAL if (blocking or silent or unbuilt) else READINESS_FORMAL
     return {
         "version": READINESS_VERSION,
         "verdict": verdict,
@@ -1866,8 +1877,12 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
         "gap_total": len(evidence),
         "blocking_total": len(blocking),
         "unbound_total": unbound_total,
+        "advisory_total": len(advisories),
+        "advisories": advisories,
         "silent_zero_total": len(silent),
         "rejected_silent_zero_fallback": bool(silent),
+        "blocking_amount_total": round(_amount(blocking), 6),
+        "advisory_amount_total": round(_amount(advisories), 6),
         "affected_amount_total": round(quantified, 6),
         "unquantified_total": sum(1 for row in evidence
                                   if row["affected_amount"] is None),

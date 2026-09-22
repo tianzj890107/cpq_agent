@@ -13658,3 +13658,84 @@ tests/test_packaging_cost*.py + bom/quote/route 一组（490 条）→ 14 红，
 只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 状态行 + 本 changelog；未改
 `GAP_RESOLUTIONS` / `SILENT_ZERO_RESOLUTIONS` / `READINESS_VERSION` / 公式 / 费率 / 种子数据，
 未改任何测试、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
+
+## 331. 成本单的输入版本是"读时现取"：路线重确认一次，旧报价的追溯字段就跟着变（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-cost-input-version-pinning.md` + `tests/test_packaging_cost_input_version_pinning_red.py`
+（7 条：H 组 7；现状 **5 红 2 绿**，2 条绿的是"既有键逐字不变 / 没算过不算过期"的护栏）。
+本批不真跑任何服务：三处都由**读代码**定位，全部离线可复现（假仓库，不碰 SQLite / PG）。
+
+### 缺口
+
+1. `packaging_cost.py:2297 load_cost()` **无条件**重写 `source_versions`，而 `upstream` 来自
+   `:2301 _upstream_route_version()`（读接口那一刻现取）—— 路线重确认一次，同一份旧成本单读出的
+   `route_version` 就跟着变：这个字段名叫"照着哪一版算的"，实际是"现在哪一版"。
+   对照同仓 `packaging_match.py:652 load_box_match()` 已有 `stale` / `stale_reasons`
+   （比对**存的快照**与当前输入）的现成范式。
+2. 成本表与读回体里**都没有来源字段**：`da_repo.py:903 _PACKAGING_COST_COLUMNS` 无来源列、
+   `packaging_cost.py:2235 _rehydrate()` 不返回来源、`da_db.py:30 _ADDED_COLUMNS` 无补列
+   —— 不是"读的时候丢了"，是从来就存不下。
+3. 成本逐行吃 BOM（`packaging_cost.py:1866`），却**没有 BOM 指纹、也从不比对**：
+   BOM 一重建（新一版零件回填 / 改尺寸材料 / 锁定行变化），旧成本照旧 `built=true`、
+   照旧带自己的 `readiness.verdict`，没有任何"输入已经变了"的标记。
+4. `load_cost()` 的"未算过"与"算过"两条路径都把 `source_versions` 写成同一对现取值 ——
+   从返回体上分不出"照哪一版算的"还是"还没算"。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 新增列 `wip_packaging_cost_estimate.source_versions_json`（schema + 既有幂等补列
+  `_add_missing_columns()`，只加列）；
+- 新增纯函数 `packaging_cost.bom_input_hash(rows)`（规范形哈希、**行序无关**、空输入给 `""`）；
+- `compute_project()` 结果**在算的那一刻**记 `source_versions`：`route_version` / `engine_version` /
+  `bom_hash` / `bom_item_total`；`save_packaging_cost()` 序列化落库；
+- `load_cost()` 改成读**存的**那一份，并新增 `stale` / `stale_reasons`
+  （`bom_rebuilt` / `route_reconfirmed` / `provenance_missing`，固定顺序去重）与
+  `bom_unavailable`（读不到时"比较不了"≠"变了"，不许给 `bom_rebuilt`）；
+- 禁项写死：不许把 `stale` 变成拒绝、不许读接口顺手重算、不许折成一个布尔、
+  不许用现取值兜 `route_version`、不许改既有键与 readiness 裁决、不许改 `tests/` 既有文件。
+
+### 复跑
+
+- `tests.test_packaging_cost_input_version_pinning_red`：`Ran 7, failures=4, errors=1`
+  （H1 / H2 / H3 / H4 红 + H5 因 `bom_input_hash` 不存在而 ERROR，H6 / H7 绿）。
+- 不回归：`test_packaging_cost_rule_snapshot_red` `Ran 37 OK`；
+  `test_packaging_bom_size_quality_accounting_red` / `test_packaging_bom_parts_version_binding_red` /
+  `test_packaging_silent_degradation_red` 仍只红在本批自己声明的那些条上。
+- **仓内既有红（非本批引入）**：`test_packaging_cost_engine_red` `Ran 81` 1 failure ——
+  `test_j6_write_roles_reuse_batch4` 断言 `COST_WRITE_ROLES is packaging_match.BOX_MATCH_DECIDE_ROLES`，
+  当前常量多了 `finance_manager`（并行会话的财务权限那批）；本批未动该文件，也在 Spec §4
+  写明"实现方不要为它改 tests/"。
+- 另一条既有红同样属并行会话：`test_spec_status_truth_red` 报
+  `packaging-cost-readiness-severity-layering.md` 声明「未实现」但其红测已全绿。
+
+## 337. `packaging-cost-readiness-severity-layering` 落地：成本结论按缺口严重度分层（blocking 决定正式/暂定，advisory 只披露）（9-22，Codex 实现）
+
+### 一、改了什么（1 个文件）
+
+`tech_app/backend/services/packaging_cost.py`：
+
+- `packaging_cost_readiness_gate()`（§2.1–§2.3）：`verdict` 从「有没有任何缺口」改成
+  **只由 `blocking_total` / 静默按 0 / 尚未测算决定**；新增 `advisory_total` 与 `advisories`
+  （形状同 `gaps`），纯 advisory 时 `verdict="formal"` 但 `reasons` 里一定有一句
+  「N 项提示缺口（不影响正式/暂定）」；新增 `blocking_amount_total` / `advisory_amount_total`，
+  `affected_amount_total` 仍是两者之和（旧读端不破）；`gaps` 原样保留全部缺口（一条没删）。
+  `built is False` 且无缺口 → `provisional`（Spec §2.1 那一行；「成本尚未测算」）。
+- `formal_cost_or_raise()`（§2.4）：只带 advisory 的成本**直接放行、不要求 POC 签字**，
+  返回体原样带出 `advisories`；`provisional` 那条路（waiver → `waived=True` / 否则
+  `CostError(409, packaging_cost_not_formal)`）一个字没改。
+- 两个方向都没放宽：静默按 0 仍一律 `provisional`；`GAP_RESOLUTIONS` / `SILENT_ZERO_RESOLUTIONS` /
+  `READINESS_VERSION`（`packaging-cost-readiness/1`）字面未动。
+
+### 二、实测
+
+```
+tests.test_packaging_cost_readiness_severity_layering_red  → Ran 8 OK（原 4 红全绿）
+tests/test_packaging_*.py（62 份 / 1370 条）                → 25 红，全部是其它批次的待办
+  （bom-parts-version 4 / bom-size-quality 4 / open-outline 4 / manual-fill 3 /
+    silent-degradation 8 / 存量 J6 / 存量 C1）—— 本批一条没碰红
+```
+
+### 三、边界
+
+只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 状态行 + 本 changelog；未改测试、
+未改前端 / 回传正文 / `packaging_handoff`、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
