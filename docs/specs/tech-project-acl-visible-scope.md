@@ -2,6 +2,9 @@
 
 假设批次 1–6 已实现。本批**只做可见范围与项目级 ACL**，不改业务状态机、不改流程门禁、不改视觉。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_project_acl_contribute_mode_red.py` `tests/test_tech_project_acl_scope_red.py`
+
 ## 1. 背景与真实问题
 
 技术工艺的所有项目读接口今天**没有项目级权限**：

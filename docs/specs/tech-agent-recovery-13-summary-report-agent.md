@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 13 步：3.1 汇总报告 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_summary_report_agent_red.py`
+
 ## 范围
 
 把 3.1「汇总工艺评估结果」补齐为可被统一左侧会话驱动。新增六项能力：

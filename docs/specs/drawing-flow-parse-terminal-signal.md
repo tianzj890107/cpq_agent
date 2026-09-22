@@ -1,11 +1,14 @@
 # 规格：一键解析图纸的终态信号 + 2.1 零件可见（DWG / DXF 链路）
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
 红测：`tests/test_drawing_flow_parse_terminal_signal_red.py`
 上游：`docs/specs/drawing-flow-frontend-wiring.md`（入口接线）、
 `docs/specs/drawing-flow-error-taxonomy.md`（`blocked` 不是"这一步坏了"）、
 `docs/specs/drawing-flow-non-editable-requirement.md`（需求不可编辑 → `blocked`）、
 `docs/specs/packaging-dwg-parts-extraction.md`（零件文档与 2.1 零件树）
+
+状态：Spec + 红测（已实现）
+红测：`tests/test_drawing_flow_parse_terminal_signal_red.py`
 
 ## 0. 现场（实测坐标，不是推断）
 

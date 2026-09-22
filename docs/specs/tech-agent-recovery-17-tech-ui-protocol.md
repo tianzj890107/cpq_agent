@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 17 步：统一结构化 UI 事件 tech_ui Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_agent_parity_matrix_red.py`
+
 ## 范围
 
 为技术工艺实现与报价 `cpq_ui` 同构的结构化 UI 事件协议 `tech_ui`：**Agent 只表达意图，

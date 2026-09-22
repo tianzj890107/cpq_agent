@@ -1,5 +1,8 @@
 # Spec：2.3 成本测算结果必须进入 3.1 汇总报告（经济可行性 + 2.3 阶段行）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_summary_report_includes_cost_review_red.py`
+
 ## 背景（用户反馈的高风险缺陷）
 
 `tech_app/frontend/summary-result.js` 里 3.1 的评估项「经济可行性」是**写死的**：

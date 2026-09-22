@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 6 步：零件清单与零件详情看板化 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_parts_views_inside_board_red.py`
+
 ## 范围
 
 本步只做 **2.1 右侧看板内部** 的零件层级视图状态机，不接 Agent 工具（第 7 步），

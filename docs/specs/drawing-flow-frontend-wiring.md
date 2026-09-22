@@ -1,6 +1,9 @@
 # 2.1 图纸解析入口接线 drawing-flow（DWG / DXF 项目）
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
+
+状态：Spec + 红测（已实现）
+红测：`tests/test_drawing_flow_frontend_wiring_red.py` `tests/test_dwg_conversion_adapter_red.py` `tests/test_dwg_file_capability_preflight_red.py`
 
 ## 1. 背景（实测，不是推断）
 

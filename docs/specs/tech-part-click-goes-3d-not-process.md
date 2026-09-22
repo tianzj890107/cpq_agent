@@ -1,5 +1,8 @@
 # Spec：零件清单点零件进 3D 视图，「工艺推荐」按钮才进工艺推荐
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_part_click_goes_3d_not_process_red.py`
+
 ## 背景（用户反馈）
 
 「零件清单点零件的话就去 3D 视图，现在点零件和点工艺推荐都是去的工艺推荐。」

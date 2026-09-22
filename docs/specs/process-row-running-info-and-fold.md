@@ -16,6 +16,9 @@
 > `agent-chat.js::pushTaskStep`、3 阶段页 `assembly-integration.js::aiProcessCard`、
 > 4 阶段页 `cost-review.js::crCard`、报价页 `确认需求解析结果.html::addToolActivity`。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_process_row_running_info_and_fold_red.py`
+
 ## 1. 背景与真实问题
 
 用户现场（技术工艺智能体，3.2 参数推荐 / 3.3 组装工艺）贴出真实渲染结果，指出：

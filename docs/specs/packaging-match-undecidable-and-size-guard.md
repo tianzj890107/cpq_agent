@@ -1,8 +1,11 @@
 # 规格：盒型匹配的"缺数据不许打折"与"尺寸越界不许推荐"
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
 红测：`tests/test_packaging_match_undecidable_and_size_guard_red.py`
 上游：`docs/specs/packaging-box-type-matching.md`（五维打分与硬门槛的既有契约，本批只补两处缺口）
+
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_match_undecidable_and_size_guard_red.py`
 
 ## 1. 背景（实测复现，不是推断）
 

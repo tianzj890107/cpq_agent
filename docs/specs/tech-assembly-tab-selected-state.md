@@ -1,5 +1,8 @@
 # 组装与整合三流程页签选中态 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_assembly_tab_selected_state_red.py`
+
 ## 范围
 
 技术工艺“工艺方案/组装整合”页面右侧卡片顶部的三个页签：

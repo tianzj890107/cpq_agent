@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 21 步：与报价 Agent 对照验收 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_agent_parity_matrix_red.py`
+
 ## 范围
 
 逐项比较技术工艺左侧会话栏与报价 Agent 左侧会话（`确认需求解析结果.html`）的**交互能力**，

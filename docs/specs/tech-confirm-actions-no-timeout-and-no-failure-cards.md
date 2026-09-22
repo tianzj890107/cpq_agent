@@ -1,5 +1,8 @@
 # 2.2 / 2.3 收口动作不再超时、失败不再建底部卡片
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_confirm_action_timeout_and_no_pinned_cards_red.py`
+
 ## 用户反馈
 
 「⚠ 确认并进入下一页签超时未响应」「⚠ aiSetTab is not defined」这些报错都不要再有卡片了，

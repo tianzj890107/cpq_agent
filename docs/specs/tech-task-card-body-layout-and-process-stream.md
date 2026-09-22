@@ -4,6 +4,9 @@
 再给这张卡接上「模型调用 + 工具摘要」的过程流（现在后台任务卡只有一句进度，看不到
 模型在干什么）。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_task_card_body_layout_red.py` `tests/test_tech_task_process_stream_red.py`
+
 ## 1. 背景（已实测，非推断）
 
 ### 1.1 卡片被挤成一行：`## 89` 引入的回归

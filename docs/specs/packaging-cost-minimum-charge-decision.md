@@ -1,8 +1,11 @@
 # 规格：包装最低收费口径裁决（②）与落地 —— 裁决记录 + 口径变更
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
 上游：`docs/specs/packaging-cost-minimum-charge.md`（候选与实测证据，**本 Spec 只负责裁决与落地**）、
 `docs/specs/packaging-cost-red-closure.md`（纠纷分两类：环境类 / 业务类）。
+
+状态：Spec + 红测（已实现）（红测 test_packaging_cost_engine_red 另有已记录的测试侧冲突，见 changelog ## 273）
+红测：`tests/test_packaging_cost_column_evidence_red.py` `tests/test_packaging_cost_engine_red.py` `tests/test_packaging_cost_policy_decision_red.py` `tests/test_packaging_cost_rule_routing_red.py` `tests/test_packaging_cost_rule_snapshot_red.py`
 
 ## 1. 裁决（业务给出，实现方与 Codex 都不得自行选）
 

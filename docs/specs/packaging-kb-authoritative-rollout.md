@@ -12,6 +12,9 @@
 
 ---
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_kb_authoritative_rollout_red.py`
+
 ## 1. 现状取证（实测）
 
 1. **34 上表根本不存在**：线上报 `relation "cpq_kb.kb_packaging_box_type" does not exist`，

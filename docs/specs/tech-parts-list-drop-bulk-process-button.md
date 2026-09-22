@@ -1,5 +1,8 @@
 # Spec：零件清单里去掉「一键生成全部工艺推荐」按钮
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_parts_list_drop_bulk_process_button_red.py`
+
 ## 背景（用户实测）
 
 2.1 图纸解析的零件清单（右侧看板固定左栏）里还有一颗蓝色批量按钮：

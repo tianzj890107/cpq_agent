@@ -32,8 +32,9 @@ if str(ROOT) not in sys.path:
 
 SPECS_DIR = ROOT / "docs" / "specs"
 LEGAL_PREFIXES = ("状态：Spec + 红测（未实现）", "状态：Spec + 红测（已实现）")
-#: 2026-09-22 对账时写了状态行的份数；只作为"规则没有空转"的下限，不做上限。
-MIN_DECLARED = 100
+#: 2026-09-22 对账后 `docs/specs/*.md` 全部 232 份都写了状态行；这个下限只防"规则悄悄空转"
+#: （有人把状态行批量删掉时能报警），不做上限。
+MIN_DECLARED = 220
 PYTHON = sys.executable
 
 

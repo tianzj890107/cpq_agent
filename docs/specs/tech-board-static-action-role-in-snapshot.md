@@ -1,5 +1,8 @@
 # Spec：看板动作的静态 role 必须在运行时快照里生效（1.2 / 1.3 / 3.2 主按钮被静默降级）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_board_static_action_role_snapshot_red.py`
+
 ## 背景（用户反馈）
 
 「通过确认」（1.2）与「提交审核意见」（1.3）在左侧统一操作栏里不是蓝色实心主按钮，

@@ -1,5 +1,8 @@
 # Spec：2.3 成本测算的会话时间线写入权限（财务经理不再被前端伪 403 拦下）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_session_timeline_write_permission_red.py`
+
 ## 背景（用户反馈）
 
 > 我在成本测算为什么会显示这一步归工艺经理办理；财务经理没有这一步的操作权限

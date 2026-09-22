@@ -9,6 +9,9 @@
 本批只做「客户需求 → 候选盒型 → 工艺经理确认」这一段。**不做**参数化部件展开与 BOM
 （第 5 批）、工艺路线生成（第 6 批）、成本公式求值（第 7 批）、利润与报价单（第 8 批）。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_box_type_matching_red.py` `tests/test_packaging_match_undecidable_and_size_guard_red.py` `tests/test_quote_packaging_box_selection_red.py`
+
 ## 1. 背景与真实问题
 
 第 3 批已经把 12 个盒型与 5 维权重灌进知识库，但到现在为止**没有任何代码消费它们**：

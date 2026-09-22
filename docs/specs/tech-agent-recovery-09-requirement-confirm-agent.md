@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 9 步：1.2 确认需求 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_requirement_confirm_red.py`
+
 ## 范围
 
 只打通 **1.2 确认需求**：Agent 能读取结构化完整性检查与待澄清问题、把确认意见

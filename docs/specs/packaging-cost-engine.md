@@ -10,6 +10,9 @@
 本批只做「已确认盒型 + 包装 BOM + 已确认工艺路线 → 包装成本」。**不做**利润/毛利率/未税售价/
 报价单（第 8 批）、不做产能排程、不做拼版优化、不改三个原行业。
 
+状态：Spec + 红测（已实现）（红测 test_packaging_cost_engine_red 另有已记录的测试侧冲突，见 changelog ## 273）
+红测：`tests/test_packaging_cost_engine_red.py` `tests/test_packaging_cost_rule_routing_red.py`
+
 ## 1. 背景与真实问题
 
 ### 1.1 现有三行业走的是固定系数模型，包装不能照搬

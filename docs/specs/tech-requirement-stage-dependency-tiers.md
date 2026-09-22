@@ -1,5 +1,8 @@
 # Spec：需求阶段（1.1 → 1.2 → 1.3）依赖分级与「带缺口继续」的缺口记录
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_requirement_stage_waiver_red.py`
+
 ## 背景（用户反馈）
 
 用户对全流程依赖分级的原话（见 `tech-dependency-tiers-and-step-waivers.md` 的统一口径）：

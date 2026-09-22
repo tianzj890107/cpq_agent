@@ -21,7 +21,16 @@ docs/specs/*.md                                  231 份
     写着「未实现 / TDD Red / 待实现」                  65 份
       其中 63 份的红测当前早已全绿（结论与事实相反）
     有 `红测：` 行                                   41 份（另 66 份没有）
-  完全没写状态行                                    124 份（历史存量，见 §4）
+  完全没写状态行                                    124 份
+```
+
+对账后（本批两个提交：`## 301` 先收 107 份已写状态行的，`## 302` 再把剩下 124 份全部补上）：
+
+```
+docs/specs/*.md                                  232 份（含本批新增的本 Spec）
+  写了「状态：」行                                 232 份（100%）
+    已实现                                        230 份（其中 11 份带"已记录的测试侧冲突"备注）
+    未实现                                          2 份（都写明原因，红测当前真的失败）
 ```
 
 两个具体后果，都不是"文档不好看"：
@@ -66,18 +75,24 @@ docs/specs/*.md                                  231 份
 
 ### 1.4 范围
 
-- **在范围**：`docs/specs/*.md` 里**已经写了** `状态：` 行的每一份（本批对账 107 份）；
-- **不在范围**：完全没写状态行的 124 份历史存量（`tech-agent-recovery-*` 早期批次、纯前端
-  样式 Spec 等）——要给它们补状态行是另一批；本批不因为它们失败，也不假装它们已对账。
+- **在范围**：`docs/specs/*.md` 的**全部 232 份**（`## 301` 收已写状态行的 107 份，`## 302`
+  把剩下 124 份按同一口径补上状态行 + `红测：` 行）；
+- 补状态行时先确定"这份 Spec 由哪个红测守着"：优先取其 `红测：` 行，其次取测试文件 docstring
+  里反指的 `docs/specs/<name>.md`，再次取同名 `tests/test_<slug>_red.py`，最后按主题逐份核对
+  （`tech-agent-recovery-*` 17 份就是这样对上的：第 4/5/6/7/8…22 步分别对应
+  `test_tech_left_chat_controls_restore_red` / `test_tech_result_entries_board_views_red` /
+  `test_tech_parts_views_inside_board_red` / `test_tech_drawing_agent_actions_red` /
+  `test_tech_requirement_agent_red` … `test_tech_e2e_acceptance_doc_current_red`）。
 
 ### 1.5 对账结果（本批，2026-09-22）
 
 | 项 | 数 | 说明 |
 | --- | --- | --- |
-| 写了状态行的 Spec | 107 | 对账前 = 对账后，份数不变 |
-| 改成 `已实现` | 105 | 点名的红测当前全绿（9 份另带 §2.2 的冲突备注） |
+| 对账后写了状态行的 Spec | 232 / 232（100%） | 对账前只有 107 份 |
+| 改成 `已实现` | 230 | 点名的红测当前全绿（11 份另带 §2.2 的冲突备注） |
 | 保留 `未实现` | 2 | `quick-quote-12-case-maintenance.md`、`tech-model-call-row-merged-and-summary-detail.md`，都补了原因 |
-| 本批实际改动文件 | 89 | 66 份「状态行 + 补 `红测：` 行」，23 份「只改状态行」 |
+| `## 301` 改动文件 | 89 | 66 份「状态行 + 补 `红测：` 行」，23 份「只改状态行」 |
+| `## 302` 改动文件 | 124 | 本批一次性补上状态行 + `红测：` 行（含 9 份顺带删掉行内 `状态：待实现（红测已就位）`） |
 
 ## 2. 本批做了哪些具名修正
 
@@ -120,9 +135,24 @@ docs/specs/*.md                                  231 份
 | B | 每个写了状态行的 Spec 都有 `红测：` 行，且点名的 `tests/*.py` 真实存在 |
 | C | 声明「未实现」的 Spec 必须写明原因；其点名的红测当前必须失败；不得出现"全部 Spec 都声明未实现"这种显然失真 |
 
+### 2.4 `## 302`：剩下 124 份按同一口径补上
+
+- 101 份由"同名红测 / 测试 docstring 反指"直接判定，全部 `已实现`（其中 9 份点名的红测里带着
+  `## 133 / ## 226 / ## 262 / ## 266 / ## 273` 记录的测试侧冲突，所以带括号备注）；
+- 17 份 `tech-agent-recovery-*` 按主题逐份对到现有红测（见 §1.4）；
+- 6 份按主题对上唯一的同名/近名红测：`tech-board-static-action-role-in-snapshot` →
+  `test_tech_board_static_action_role_snapshot_red`、`tech-confirm-actions-no-timeout-and-no-failure-cards` →
+  `test_tech_confirm_action_timeout_and_no_pinned_cards_red`、`tech-confirm-review-primary-and-optional-note` →
+  `test_tech_confirm_review_optional_note_red`、`tech-e2e-acceptance-doc-refresh` →
+  `test_tech_e2e_acceptance_doc_current_red`、`tech-summary-3-1-includes-cost-review` →
+  `test_tech_summary_report_includes_cost_review_red`、`quote-tech-chat-composer-model-removal-and-bottom-alignment`
+  → `test_quote_tech_chat_composer_alignment_red`；
+- 顺带删掉 9 份里残留的行内 `Spec 版本：1 · 状态：待实现（红测已就位）`（改成
+  `Spec 版本：1（状态行见下）`）——它和文件头的状态行是同一事实的第二个说法，正是本 Spec 要消掉的东西。
+
 ## 4. 非目标
 
-- 不给 124 份没写状态行的历史存量 Spec 补状态行（另批；本批不假装它们已对账）；
+- 不再有"没写状态行"的 Spec（`## 302` 之后 `docs/specs/*.md` 232 份全部有状态行）；
 - 不逐份跑「声明已实现 → 必须全绿」（成本与误报，理由见 §1.3；由全库红面对账流程覆盖）；
 - 不改任何业务实现、不改任何既有红测的期望值、不动 §2.2 那 5 条冲突的裁决权；
 - 不把状态做成自动生成的索引（继续只要求"字面量与事实一致"，避免再造一份事实源）。

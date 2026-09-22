@@ -1,5 +1,8 @@
 # Spec：技术工艺左侧会话跟随「打开的项目」重新绑定并回放历史
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_history_project_rebind_red.py`
+
 ## 背景（用户实测）
 
 技术工艺统一工作台里，打开一个已有项目后左侧会话带不回来，并且会话里出现

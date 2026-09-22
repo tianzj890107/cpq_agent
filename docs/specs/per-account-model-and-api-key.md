@@ -1,5 +1,8 @@
 # 账号级模型与密钥 Spec（全局默认兜底保留）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_per_account_model_and_api_key_red.py`
+
 ## 1. 目标
 
 登录进来的**每个账号**可以选自己的模型、配自己的密钥；不设置时回落到平台默认。

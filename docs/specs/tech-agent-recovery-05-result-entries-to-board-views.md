@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复 5：结果按钮改为“导航右侧看板” Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_result_entries_board_views_red.py` `tests/test_tech_result_entries_board_views_dynamic.py`
+
 ## 1. 范围与前置条件
 
 本 Spec 是《技术工艺 Agent 能力恢复》计划第 4 章“恢复 2.1 被丢失的功能”的**第 5 步**。实现时假定第 0–4 步已经完成：

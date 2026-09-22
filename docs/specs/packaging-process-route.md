@@ -10,6 +10,9 @@
 本批只做「确认盒型 + 包装 BOM → 生成工艺路线与标准工时 → 工艺经理确认并冻结版本」。**不做**
 成本公式求值（第 7 批）、利润与报价单（第 8 批）、产线排程与设备日历。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_process_route_red.py`
+
 ## 1. 背景与真实问题
 
 第 3 批把 23 条工艺模板灌进 `kb_packaging_process_template`，第 5 批只把它们当作 BOM 的

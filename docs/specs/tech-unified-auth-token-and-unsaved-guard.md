@@ -6,6 +6,9 @@
 
 ---
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_unified_auth_token_and_unsaved_guard_red.py`
+
 ## 1. 背景与真实问题
 
 ### 1.1 三份 Token，各自为政（8A）

@@ -3,6 +3,9 @@
 血缘：承接第 1 层（真实轮廓）与第 2 层（可选中 + 右栏面板）。
 本层解决**"点得动，但算不了：一律报『还没有零件』"**。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_parts_downstream_red.py`
+
 ## 0. 一句话目标
 
 图纸零件能真正跑「生成工艺推荐」和「成本测算」：**复用既有算法**（`process.outline_process`、

@@ -1,5 +1,8 @@
 # Spec：1.2 确认 / 1.3 审核的主按钮命名与「意见非必填」
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_confirm_review_optional_note_red.py`
+
 ## 背景（用户要求）
 
 - 确认需求的主按钮是「通过确认」，并且**不强制必须要有意见**。

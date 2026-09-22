@@ -1,5 +1,8 @@
 # CAD 批量生成改成「逐件容错 + 部分成功」：Spec / 红测口径（第 1 批）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cad_batch_partial_generation_red.py` `tests/test_tech_step_primary_and_drawing_entry_cleanup_red.py`
+
 ## 0. 一句话结论
 
 现在 `/generate` 与 `/drawings` 把「整批」当成了一个布尔：**只要有一个零件过不了几何预检，

@@ -1,5 +1,8 @@
 # CPQ 容器部署：运行数据持久化与完整健康检查 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_deployment_runtime_data_persistence_and_health_red.py`
+
 ## 1. 背景与已确认缺陷
 
 当前一体化容器会把两类可变业务数据写进容器文件系统：

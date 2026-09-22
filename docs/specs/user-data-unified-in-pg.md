@@ -1,5 +1,8 @@
 # 用户数据统一维护在 Postgres（配置报价 CPQ 为唯一权威）Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_user_data_unified_in_pg_red.py`
+
 ## 1. 目标
 
 全平台只有**一份**用户数据：配置报价 CPQ 的 `cpq_wf` schema（线上 Postgres）。账号、角色、

@@ -7,6 +7,9 @@
   与 `task_id` 两条恢复通道。
 - 本批不做：Token 口径、任务状态机、流程门禁（L0–L4）、视觉样式、后端接口。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_project_identity_single_source_red.py`
+
 ## 1. 背景与真实问题
 
 统一工作台父壳（`tech_app/frontend/tech-workbench.js:148-153`）本身是合规的：`state.project` 只从

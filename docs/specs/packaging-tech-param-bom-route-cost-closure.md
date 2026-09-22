@@ -14,6 +14,9 @@
 
 ---
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_tech_param_bom_route_cost_closure_red.py`
+
 ## 1. 现状取证（实测）
 
 1. **3.2 的字典里根本没有包装族**：`tech_app/tools/build_quote_product_params.py` 的 `FAMILIES`

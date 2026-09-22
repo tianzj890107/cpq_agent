@@ -1,5 +1,8 @@
 # 批量动作统一容错语义：逐件跑完 + 部分完成（partial）+ 仅重试失败项（第五批）
 
+状态：Spec + 红测（已实现）（红测 test_tech_params_autofill_and_soft_gates_red 另有已记录的测试侧冲突，见 changelog ## 226）
+红测：`tests/test_tech_batch_partial_semantics_red.py` `tests/test_tech_params_autofill_and_soft_gates_red.py`
+
 ## 0. 一句话结论
 
 第一批已经把**几何 / 2D** 的批量生成改成「逐件容错 + `partial`」，但同一套语义没有铺到

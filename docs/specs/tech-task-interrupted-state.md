@@ -1,5 +1,8 @@
 # Spec：任务终态「中断」（沿用蓝色）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_task_interrupted_state_red.py`
+
 ## 背景（用户反馈）
 
 技术工艺统一工作台左侧的任务进度卡只有四个状态：排队中 / 进行中 / 已完成 / 失败。

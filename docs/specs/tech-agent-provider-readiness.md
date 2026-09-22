@@ -1,5 +1,8 @@
 # 技术工艺 Agent 按所选模型提供商判断可用性 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_provider_readiness_red.py`
+
 ## 问题与事实
 
 技术工艺统一模型设置支持 Qwen、OpenAI、DeepSeek、Anthropic 和 CPQ 本地兼容网关，默认语言模型也是 Qwen，但 `services/oc_agent.py::available()` 仍硬编码要求 `ANTHROPIC_API_KEY`。所以即使 Qwen Key 已配置，页面仍会显示 Agent 不可用。

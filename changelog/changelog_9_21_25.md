@@ -11728,3 +11728,52 @@ tests.test_spec_status_consistency_red        Ran 4 OK（快速报价系列的�
 只改 `docs/specs/*.md` 的状态行/`红测：` 行、新增一份 Spec 与一条守卫、追加本 changelog；未改任何
 业务实现、未改任何既有红测的期望值、未连 PG、未写生产数据。124 份完全没写状态行的历史存量不在
 本批（Spec §4 明写"不假装它们已对账"）。
+
+## 302. Spec 状态行对账收口：剩下 124 份一次补齐，`docs/specs/*.md` 232 份 100% 有状态行（9-22，Codex 只改 Spec 头 / 红测 / changelog）
+
+`## 301` 只收了「已经写了状态行」的 107 份，另外 124 份连状态行都没有 —— 按 Spec 头判断
+"这份到底做了没有"时，那 124 份等于没答案。本批把它们按同一口径补齐。
+
+### 124 份是怎么对上的
+
+| 方式 | 份数 | 说明 |
+| --- | --- | --- |
+| 同名红测（`tests/test_<slug>_red.py`） | 67 | 名字逐字对应 |
+| 测试文件 docstring 反指 `docs/specs/<name>.md` | 34 | 测试自己点名了 Spec |
+| 按主题逐份核对 | 23 | 17 份 `tech-agent-recovery-*` + 6 份近名红测 |
+
+- `tech-agent-recovery-*`（17 份）：第 4 步 → `test_tech_left_chat_controls_restore_red`、第 5 步 →
+  `test_tech_result_entries_board_views_red`（+`_dynamic`）、第 6 步 → `test_tech_parts_views_inside_board_red`、
+  第 7 步 → `test_tech_drawing_agent_actions_red`、第 8 步 → `test_tech_requirement_agent_red`、
+  第 9/10 步 → `test_tech_requirement_confirm_red` / `test_tech_requirement_review_red`、
+  第 11–15 步 → `test_tech_integration_agent_red` / `test_tech_cost_review_agent_red` /
+  `test_tech_summary_report_agent_red` / `test_tech_report_review_agent_red` /
+  `test_tech_report_publish_agent_red`、第 20 步 → `test_tech_old_capability_baseline_red`、
+  第 21 步 → `test_tech_quote_agent_parity_matrix_red`、第 22 步 → `test_tech_e2e_acceptance_doc_current_red`；
+  0–3 → `test_tech_backend_capability_preservation_red` + `test_tech_ui_protocol_red` +
+  `test_tech_board_bridge_protocol_red` + `test_tech_board_action_registry_red`，0–4 →
+  `test_tech_board_state_envelope_dynamic` + `test_tech_left_chat_controls_restore_red`。
+- 6 份近名：`tech-board-static-action-role-in-snapshot` / `tech-confirm-actions-no-timeout-and-no-failure-cards` /
+  `tech-confirm-review-primary-and-optional-note` / `tech-e2e-acceptance-doc-refresh` /
+  `tech-summary-3-1-includes-cost-review` / `quote-tech-chat-composer-model-removal-and-bottom-alignment`。
+- 顺带删掉 9 份里残留的行内 `Spec 版本：1 · 状态：待实现（红测已就位）`（改成
+  `Spec 版本：1（状态行见下）`）——那是同一事实的第二个说法，正是这条 Spec 要消掉的东西。
+
+### 收口后的全仓事实
+
+```
+docs/specs/*.md                                  232 份（含 ## 301 新增的这条 Spec）
+  写了「状态：」行                                 232 份（100%）
+    已实现                                        230 份（其中 11 份状态行里带"已记录的测试侧冲突"备注）
+    未实现                                          2 份（quick-quote-12、tech-model-call-row，都写明原因）
+```
+
+- Spec `docs/specs/spec-status-consistency-repo-wide.md` 的 §0 普查块、§1.4 范围、§1.5 对账表、
+  §2.4、§4 非目标同步更新到"232 份全覆盖"；
+- 守卫 `tests/test_spec_status_truth_red.py`：`MIN_DECLARED` 100 → 220（防规则空转的下限），
+  `Ran 7 OK`；既有 `tests.test_spec_status_consistency_red` `Ran 4 OK` 未破。
+
+### 边界
+
+只改 `docs/specs/*.md` 的头部（状态行 / `红测：` 行 / 行内陈旧状态短语）、一份 Spec 与一条守卫、
+追加本 changelog；未改任何业务实现、未改任何既有红测的期望值、未连 PG、未写生产数据、未部署。

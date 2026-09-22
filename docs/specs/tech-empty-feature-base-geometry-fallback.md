@@ -1,5 +1,8 @@
 # 空特征零件回退到「plate / box / cylinder 空模板」：Spec / 红测口径（第二批，范围已按用户口径收窄）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_base_geometry_fallback_red.py`
+
 ## 0. 范围变更（以此为准，覆盖此前报告里的第二批 + 第三批）
 
 原来的第二批（基础几何初始化 + `initialize_base_feature` + Agent 询问尺寸 + 上传 STEP +

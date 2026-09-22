@@ -5,6 +5,9 @@
 > 报价与技术工艺统一」全部保留；本批把**折叠交互恢复回来**，并修掉两处遗留。
 > 红测：`tests/test_quote_tech_process_row_fold_and_done_red.py`。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_process_row_fold_and_done_red.py`
+
 ## 1. 用户反馈（原话要点）
 
 1. 「之前那个每行标题可以点击展开没有了，我需要那个展开功能恢复」；

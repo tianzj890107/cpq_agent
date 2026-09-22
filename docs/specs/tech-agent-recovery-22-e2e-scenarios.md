@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 22 步：端到端场景 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_e2e_acceptance_doc_current_red.py`
+
 ## 范围
 
 把统一工作台的全流程固化成一套**可重复执行的端到端场景清单**：每条场景写清前置、步骤、

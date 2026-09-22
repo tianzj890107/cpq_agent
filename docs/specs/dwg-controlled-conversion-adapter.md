@@ -7,6 +7,9 @@
 > 本批目标：建立 `DWG → 中间格式` 的**受控、可审计、可替换**转换层。
 > **不解析 DXF 实体（第 3 批）、不识别盒型（第 4 批）、不改 Agent/看板（第 5 批）、不改成本公式。**
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_conversion_adapter_red.py` `tests/test_dwg_conversion_quality_repair_red.py`
+
 ## 0. 术语与两层验收
 
 | 名称 | 含义 |

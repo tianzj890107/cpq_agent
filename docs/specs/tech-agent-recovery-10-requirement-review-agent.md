@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 10 步：1.3 审核需求 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_requirement_review_red.py`
+
 ## 范围
 
 只打通 **1.3 审核需求**：Agent 读取审核材料、生成审核摘要、把审核意见带入看板，

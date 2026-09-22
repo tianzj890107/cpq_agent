@@ -3,6 +3,9 @@
 血缘：收口第 1～4 层（真实轮廓 → 可选中面板 → 工艺/成本 → 3D 挤出）。
 本层解决**"做完了但说不清到底做到了哪一步"**。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_deploy_isolation_root_red.py` `tests/test_packaging_parts_downstream_gate_red.py`
+
 ## 0. 一句话目标
 
 把前四层变成**可验收、可声明、可回滚**：固化质量指标、给一条只读门禁、把能力声明分三级写死，

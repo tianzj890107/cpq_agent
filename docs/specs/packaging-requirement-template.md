@@ -4,6 +4,9 @@
 > 红测：`tests/test_packaging_requirement_template_red.py`。
 > 依据：`蜀同包装项目-待开发/YTBZ-报价业务流程-20260907.xlsx` 的包装流程与盒型匹配维度。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_requirement_template_red.py`
+
 ## 1. 背景与真实问题
 
 第 1 批把「包装」接进行业注册表后，`packaging` 还是一个空壳：后端

@@ -14,6 +14,9 @@ DXF 结构更干净（尺寸块冗余更少、ezdxf audit 无需修复、无 std
 
 ---
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_converter_production_rollout_red.py`
+
 ## 1. 现状取证（实测）
 
 - `DEPLOYMENT.md` 全文 `grep -E "DWG|转换器|dwg_deploy_gate|dwg_conversion_smoke|dwg_sample_e2e"`

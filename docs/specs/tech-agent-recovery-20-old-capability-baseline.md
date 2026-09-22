@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 20 步：旧 2.1 能力对照验收 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_old_capability_baseline_red.py`
+
 ## 范围
 
 以旧 2.1 图纸解析页（`tech_app/frontend/index.html` + `app.js`）为**能力基线**，逐项确认统一

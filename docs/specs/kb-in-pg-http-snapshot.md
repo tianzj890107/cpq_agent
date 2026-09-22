@@ -1,5 +1,8 @@
 # 知识库统一维护在 Postgres（`cpq_kb`）+ 技术工艺经 HTTP 快照读取 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_kb_in_pg_http_snapshot_red.py` `tests/test_quote_packaging_box_selection_red.py`
+
 ## 1. 目标
 
 知识库（零部件 / 物料 / 工序 / 路线 / 设备 / 供应商 / 费率 / 计价系数 / 标准件）只有**一份**：

@@ -1,5 +1,8 @@
 # Spec：历史记录 / 首页卡片恢复项目时必须落到真实当前阶段
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_history_restore_real_stage_red.py`
+
 ## 背景（用户反馈的高风险缺陷）
 
 `tech_app/frontend/tech-workbench.js:1144` 的 `techStageFromProject()` 只判断「需求状态 →

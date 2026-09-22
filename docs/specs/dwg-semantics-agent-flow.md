@@ -11,6 +11,9 @@
 > **版本锚点、门禁和 stale 传播**。
 > **不新增第二套 Tool List 契约、不新增第二条气泡路径、不改成本公式、不发布报价、不做 2D/3D 分流（第 6 批）。**
 
+状态：Spec + 红测（已实现）（红测 test_packaging_drawing_flow_red 另有已记录的测试侧冲突，见 changelog ## 262）
+红测：`tests/test_packaging_drawing_flow_red.py`
+
 ## 0. 先说清：本批"复用"什么、"新增"什么
 
 第 5 批最容易犯的错是**再造一套**。下面这张表是硬边界：左边一律复用，只有右边是新增。

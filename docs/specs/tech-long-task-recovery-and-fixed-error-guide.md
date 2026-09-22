@@ -10,6 +10,9 @@
 
 ---
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_long_task_recovery_and_fixed_error_guide_red.py`
+
 ## 1. 背景与真实问题
 
 ### 1.1 任务状态词表不封闭，`cancelled` 根本不存在

@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复 0–3：后端基线、守护、跨层协议与动作注册 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_backend_capability_preservation_red.py` `tests/test_tech_ui_protocol_red.py` `tests/test_tech_board_bridge_protocol_red.py` `tests/test_tech_board_action_registry_red.py`
+
 ## 范围
 
 本 Spec 只定义能力恢复路线的第 0–3 步，不恢复具体步骤按钮，不新增需求解析、成本或报告 Agent 工具：

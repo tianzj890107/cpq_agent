@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 18 步：统一配置落实补完 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_agent_parity_matrix_red.py`
+
 ## 范围
 
 第 18 步不新增业务能力，只把已经写好的统一配置 Spec

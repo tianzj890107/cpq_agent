@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复 4：恢复 2.1 左侧会话基础控件 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_left_chat_controls_restore_red.py`
+
 ## 1. 范围与前置条件
 
 本 Spec 是技术工艺 Agent 能力恢复的第 4 步。实现时假定第 0–3 步已经完成，即父壳与右侧看板已有标准桥协议和语义化动作注册表。

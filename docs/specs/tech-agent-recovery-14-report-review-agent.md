@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 14 步：3.2 报告审核 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_report_review_agent_red.py`
+
 ## 范围
 
 把 3.2「审核工艺评估报告」补齐为可被统一左侧会话驱动。新增五项能力：

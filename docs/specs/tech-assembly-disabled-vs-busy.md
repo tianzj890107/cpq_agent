@@ -1,5 +1,8 @@
 # 组装与整合“不可操作”与“正在处理”状态区分 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_assembly_disabled_vs_busy_red.py`
+
 ## 问题
 
 参数推荐或组装工艺尚未生成时，“确认参数推荐”“确认组装工艺”等按钮会因缺少前置结果而 disabled，但当前 `.ai-actions .inline-action:disabled` 统一使用 `cursor: wait`，鼠标悬浮看起来像任务正在转圈。此时实际含义是“暂时不能做”，应与“确认工艺并发送财务”的禁用态一致，而不是伪装成正在运行。

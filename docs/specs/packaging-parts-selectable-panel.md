@@ -3,6 +3,9 @@
 血缘：承接第 1 层 `docs/specs/packaging-parts-true-outline.md`（真实轮廓）。
 本层解决**"看得见但点不动"**。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_parts_panel_red.py`
+
 ## 0. 一句话目标
 
 2.1 左栏的图纸零件行变成**可选中**的；选中后右栏出现**零件面板**：轮廓（后端给的坐标）、

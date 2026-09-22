@@ -1,5 +1,8 @@
 # 「带缺口继续」签字的复用边界与 2.3 对外回传
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_confirm_zero_waiver_red.py` `tests/test_tech_waiver_reuse_across_handoffs_red.py`
+
 ## 一、要解决的问题
 
 2.2「参数推荐」页点「仍要继续」时，弹窗对用户是这么承诺的：

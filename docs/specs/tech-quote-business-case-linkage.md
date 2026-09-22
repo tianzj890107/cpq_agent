@@ -3,6 +3,9 @@
 依赖：批次 3 的原子回传命令（`cpq_tech_bridge.send_to_quote` + `cpq_wf_handoff`）
 与批次 5A 的五阶段口径。本批**不改**批次 3 的事务与幂等语义，只改「落点怎么定」。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_business_case_linkage_red.py`
+
 ## 1. 背景与真实问题
 
 今天把一条技术支线认回原报价卡片，靠的是三条**散落的、随时会断的**线索：

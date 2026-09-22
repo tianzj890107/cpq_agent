@@ -1,5 +1,8 @@
 # Spec：项目会话时间线 —— 所有会话条目统一持久化 + 按同一顺序拼接
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_history_project_rebind_red.py` `tests/test_tech_session_timeline_persistence_red.py`
+
 ## 背景（用户反馈）
 
 重新进入项目后只剩 Agent 对话，看板按钮跑出来的过程与结果提示全都不见了；而且同一条

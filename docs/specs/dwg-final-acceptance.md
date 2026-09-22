@@ -14,6 +14,9 @@
 把"支持 DWG"这句话变成**机器可验证的验收记录**，把上线前的检查变成**可执行的部署门禁脚本**，
 并如实给出当前 Go/No-Go。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_final_acceptance_red.py` `tests/test_dwg_real_samples_e2e_red.py`
+
 ## 0. 当前状态实证（决定本批要证伪什么）
 
 实测（2026-09-21，本仓库工作区；括号内为 9-20 的历史数字）：

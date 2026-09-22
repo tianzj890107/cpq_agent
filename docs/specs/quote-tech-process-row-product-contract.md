@@ -4,6 +4,9 @@
 > `quote-tech-unified-tool-list-and-conversation.md` §11.2 里「标题行即折叠开关」的交互合同。
 > 红测：`tests/test_quote_tech_process_row_product_contract_red.py`。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_process_row_product_contract_red.py`
+
 ## 1. 背景与真实问题
 
 用户看到的执行卡（以技术工艺「解析」为例）当前长这样：

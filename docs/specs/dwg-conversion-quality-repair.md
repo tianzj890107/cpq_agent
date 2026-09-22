@@ -11,6 +11,9 @@
 `docs/specs/dwg-controlled-conversion-adapter.md`（第 2 批，§6 选型表由本规格落地）、
 `docs/specs/dxf-cad-ir.md`（第 3 批）、`docs/specs/dwg-final-acceptance.md`（第 6 批门禁）。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_conversion_quality_repair_red.py`
+
 ## 1. 现状取证（实测）
 
 ### 1.1 两套转换器都已就位

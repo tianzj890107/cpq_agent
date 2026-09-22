@@ -1,11 +1,14 @@
 # 规格：DWG 图纸 → 零件（展开件）提取与下游回填
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
 红测：`tests/test_packaging_parts_extraction_red.py`
 夹具：`tests/fixtures/cad_ir/parts_panels.json`（由 `tests/fixtures/cad_ir/build_fixtures.py` 生成）
 上游：`docs/specs/packaging-drawing-semantics.md`（第 4 批：图层角色 / 外轮廓 / 字段证据）、
 `docs/specs/packaging-parametric-bom.md`（第 5 批：参数化展开）、
 `docs/specs/packaging-cost-engine.md`（第 7 批：成本读 `length_mm` / `width_mm`）
+
+状态：Spec + 红测（已实现）（红测 test_packaging_drawing_flow_red 另有已记录的测试侧冲突，见 changelog ## 262）
+红测：`tests/test_drawing_flow_error_taxonomy_red.py` `tests/test_packaging_drawing_flow_red.py` `tests/test_packaging_parts_extraction_red.py`
 
 ## 0. 口径变更（本批的前提，取代旧条款）
 

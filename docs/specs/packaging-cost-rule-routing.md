@@ -8,6 +8,9 @@
 > 本批只做两件事：**报告分组闭集补齐** 与 **公式取值单一入口**。
 > 不改任何表达式、不改最低收费、不改三个原行业、不引入规则快照文件（那是修复第 2 批）。
 
+状态：Spec + 红测（已实现）（红测 test_packaging_cost_engine_red 另有已记录的测试侧冲突，见 changelog ## 273）
+红测：`tests/test_packaging_cost_engine_red.py` `tests/test_packaging_cost_rule_routing_red.py` `tests/test_packaging_cost_rule_snapshot_red.py`
+
 ## 1. 为什么先修这两件（实测证据，不是推断）
 
 ### 1.1 现状：4 条第 7 批红测失败，其中 1 条是纯缺陷

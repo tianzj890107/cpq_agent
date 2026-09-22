@@ -1,5 +1,8 @@
 # Spec：技术工艺会话卡片降噪 + 看板「预期内失败」不进会话
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_chat_card_noise_and_quiet_board_failures_red.py`
+
 ## 背景（用户实测）
 
 技术工艺会话里出现两类无效内容：

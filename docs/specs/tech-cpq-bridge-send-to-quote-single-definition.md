@@ -1,5 +1,8 @@
 # Spec：成本回传报价的桥函数 `send_to_quote()` 只能有一份实现，且必须带 `handoff_kind` / `result_version`
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cpq_bridge_send_to_quote_single_definition_red.py`
+
 ## 背景（用户反馈的真实缺陷，最高优先级）
 
 `tech_app/backend/services/cpq_bridge.py` 里 `send_to_quote()` **定义了两遍**：

@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 8 步：1.1 创建需求 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_requirement_agent_red.py`
+
 ## 范围
 
 只打通 **1.1 创建需求**：左侧会话发起 → 左侧显示解析进度 → 后端填写需求单 →

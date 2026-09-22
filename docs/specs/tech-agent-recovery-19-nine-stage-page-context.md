@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 19 步：九阶段上下文修复 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_agent_parity_matrix_red.py`
+
 ## 范围
 
 九个内部阶段每一个都必须带**独立、正确**的 `page_context`，不得在缺上下文时默认冒充

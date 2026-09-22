@@ -10,6 +10,9 @@
 > 并让「没申报就按某套静默出货」变成机器能挡下来的事。
 > **本批不选口径、不改表达式、不改费率、不改第 7 批冻结黄金值。**
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_cost_minimum_charge_red.py` `tests/test_packaging_cost_policy_decision_red.py`
+
 ## 0. 术语澄清（本批最容易混淆的地方）
 
 | 名称 | 指什么 |

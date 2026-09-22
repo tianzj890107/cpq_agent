@@ -7,6 +7,9 @@
 > 本批目标：让两份真实刀模图产出**产品级**盒型候选与成品尺寸候选，使 2.1 图纸解析能看到零件、
 > 报价能拿到可用尺寸；**不锁定盒型、不算成本、不改 UI、不改数据库**。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_product_outline_red.py`
+
 ## 0. 为什么要补这一批（现场实测，9-21）
 
 两份真实 DWG 已在 34 上跑通 drawing-flow（project `bf99bec0d274` / `ce9d5aae9631`，ODA 27.1 → DXF，

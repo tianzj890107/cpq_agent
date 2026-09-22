@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 16 步：统一左侧基础按钮 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_agent_parity_matrix_red.py`
+
 ## 范围
 
 把技术工艺左侧会话栏（`#techChatPane`）的操作按钮补齐到与报价 Agent（`cpq` 工作台左侧

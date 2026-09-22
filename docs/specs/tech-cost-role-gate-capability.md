@@ -1,5 +1,8 @@
 # Spec：2.3 成本测算的角色判定改为「服务端能力位优先」
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_role_gate_capability_red.py`
+
 ## 背景（用户反馈）
 
 财务经理在 2.3 点业务动作（例：「回传销售经理继续报价」）报：

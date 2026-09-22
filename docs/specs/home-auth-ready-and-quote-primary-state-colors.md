@@ -1,5 +1,8 @@
 # 技术清单认证就绪加载与报价主色状态统一
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_home_auth_ready_and_quote_primary_state_colors_red.py`
+
 ## 1. 问题
 
 1. 直接打开 `报价首页.html?assistant=tech` 时，首页内联脚本先执行 `loadCards('tech')`，但页面末尾的 `cpq_auth.js` 尚未执行，导致 `cpqAuth is not defined`。错误随后被误报成登录或后端服务异常。

@@ -1,6 +1,9 @@
 # drawing-flow 错误分类、前置条件与"不得判死整条链路"
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
+
+状态：Spec + 红测（已实现）
+红测：`tests/test_drawing_flow_error_taxonomy_red.py` `tests/test_drawing_flow_requirement_state_red.py`
 
 ## 1. 背景（实测）
 

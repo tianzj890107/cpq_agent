@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 12 步：2.3 成本测算 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_review_agent_red.py`
+
 ## 范围
 
 把 2.3 成本测算从“只挂了上下文名称”补齐为可被统一左侧会话驱动的步骤。接通十项能力：

@@ -5,6 +5,9 @@
 有了，但只带一行文字，真正有价值的载荷（查询条件、命中件、差异）被拼成中文句子后就没法
 再展开。
 
+状态：Spec + 红测（已实现）（红测 test_tech_model_call_row_merged_and_summary_detail_red 另有已记录的测试侧冲突，见 changelog ## 133）
+红测：`tests/test_effective_model_for_vision_red.py` `tests/test_task_process_detail_red.py` `tests/test_tech_model_call_row_merged_and_summary_detail_red.py`
+
 ## 1. 背景（已实测，非推断）
 
 ### 1.1 图纸解析的能力闸门读的是平台默认，不是你的模型

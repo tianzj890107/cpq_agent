@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 7 步：修复 2.1 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_drawing_agent_actions_red.py`
+
 ## 范围
 
 本步只把 **2.1 图纸解析**的 Agent 动作接通到既有后端与既有看板实现：

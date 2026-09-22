@@ -1,5 +1,8 @@
 # Spec：技术工艺会话去掉红色报错卡片，失败信息按普通输出继续
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_chat_errors_inflow_and_drop_refresh_task_cards_red.py` `tests/test_tech_chat_drop_red_error_cards_red.py`
+
 ## 背景（用户反馈）
 
 > ⚠ 回传销售经理继续报价失败，请查看看板提示。 这些报错的红色文字的卡片全都不要了

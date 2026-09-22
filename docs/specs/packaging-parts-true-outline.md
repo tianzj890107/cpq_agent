@@ -4,6 +4,9 @@
 与 `docs/specs/packaging-product-outline-and-die-layer-roles.md`（## 223 / ## 231，图层角色与产品级候选）。
 本层解决的是**"零件看得见，但不可信"**。
 
+状态：Spec + 红测（已实现）（红测 test_packaging_parts_outline_red 另有已记录的测试侧冲突，见 changelog ## 266）
+红测：`tests/test_packaging_parts_outline_red.py`
+
 ## 0. 一句话目标
 
 把每件零件从"包围盒"升级为**可信轮廓 + 可信尺寸**：件内求**最大闭合环**（含线段首尾相接的链式闭合），

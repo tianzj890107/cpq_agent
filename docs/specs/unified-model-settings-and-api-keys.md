@@ -1,5 +1,8 @@
 # 报价与技术工艺统一模型配置、API Key 和设置弹卡 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_unified_model_settings_and_api_keys_red.py`
+
 ## 1. 目标
 
 配置报价 CPQ 只保留一套模型设置。报价助手现有模型配置是唯一事实源；配置助手、规则助手和技术工艺不得再维护第二份模型选择、生成参数或 API Key。

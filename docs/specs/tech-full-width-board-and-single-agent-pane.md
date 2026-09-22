@@ -1,5 +1,8 @@
 # 技术工艺满宽看板与唯一 Agent 会话栏 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_agent_shell_parity_red.py` `tests/test_tech_full_width_board_and_single_agent_pane_red.py`
+
 ## 目标
 
 技术工艺统一工作台只保留父页面左侧 `#techChatPane` 这一处 Agent 会话宿主。右侧 iframe 只承载当前流程的业务看板，图纸解析与成本测算必须和其他流程一样占满右侧可用宽度，不再因为子页面原有双栏、`max-width`、左右 padding 或隐藏栏位而收窄。

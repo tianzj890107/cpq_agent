@@ -3,6 +3,9 @@
 依赖：批次 5A 的「五阶段 × 13 子步骤」口径（`docs/specs/tech-workflow-five-phase-naming.md`）。
 本批的子步骤号、阶段标题一律按 5A 的表；stage id 与页面文件不变。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_unified_workflow_projection_red.py`
+
 ## 1. 背景与真实问题
 
 今天「这一步做完了没有、下一步能不能点」是**前端猜出来的**：

@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 11 步：2.2 组装与整合 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_integration_agent_red.py`
+
 ## 范围
 
 1. **先修既有缺口**：`UI_ACTION_TOOLS` 早已把 2.2 的 `refresh-integration` /

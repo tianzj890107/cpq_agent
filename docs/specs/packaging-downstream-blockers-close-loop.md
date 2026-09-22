@@ -6,6 +6,9 @@ BOM 回填）、`packaging-product-outline-and-die-layer-roles.md`（第 4b 批�
 本批解决**"每一步单独看都是通的，接起来最后一步 500 / 中途永久卡住"**的三处缝。三处都有线上实测证据，
 不是推断（证据见 §1）。本批只写 Spec + 红测；业务实现交给实现方（AGENTS.md）。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_downstream_blockers_red.py`
+
 ## 0. 一句话目标
 
 把图纸零件的下游链路从「八步能跑完」补到「**带缺口的包也能按留痕放行送到报价**、**需求被批准后仍有一条

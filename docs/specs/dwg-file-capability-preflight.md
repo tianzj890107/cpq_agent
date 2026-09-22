@@ -6,6 +6,9 @@
 > 本批**只做能力边界**：把「页面宣称支持、后端实际错误处理」的假支持改成「识别准确 + 明确拒绝 +
 > 可审计 + 可重试」。**不装转换器、不解析 DXF、不识别盒型、不改成本。**
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_conversion_adapter_red.py` `tests/test_dwg_conversion_quality_repair_red.py` `tests/test_dwg_file_capability_preflight_red.py`
+
 ## 0. 术语
 
 | 名称 | 含义 |

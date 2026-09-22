@@ -1,5 +1,8 @@
 # 几何 / 2D 结果的「逐件版本粒度」：Spec / 红测口径（第四批）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_per_part_result_staleness_red.py`
+
 ## 0. 一句话结论
 
 现在的结果过期判定只有**一整份 IR 哈希**：

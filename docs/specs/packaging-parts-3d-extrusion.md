@@ -3,6 +3,9 @@
 血缘：承接第 1 层（`outline.points` 真实轮廓）与第 3 层（材料/厚度前提）。
 本层解决**"右栏那块 3D 画布永远是空的"**。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_parts_3d_red.py`
+
 ## 0. 一句话目标
 
 对**闭合轮廓 + 厚度已知**的零件做**直线挤出**（板件），导出 STL，复用既有 `#viewer` + `loadSTL`

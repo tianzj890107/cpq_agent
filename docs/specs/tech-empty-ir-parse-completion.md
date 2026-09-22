@@ -1,5 +1,8 @@
 # Spec：图纸解析完成判定不得依赖零件数量（有效的零零件 IR 也算完成）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_empty_ir_parse_completion_red.py`
+
 ## 背景（用户反馈的边缘缺陷）
 
 `tech_app/frontend/tech-workbench.js:898` 的进度打点用零件数量当完成标志：

@@ -1,5 +1,8 @@
 # 报价与技术工艺合并为一套登录与鉴权 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_single_login_across_quote_and_tech_red.py`
+
 ## 1. 目标
 
 一体化服务（`cpq_suite_server.py`，8010）对用户是**一个站点、一个登录入口、一套角色**。

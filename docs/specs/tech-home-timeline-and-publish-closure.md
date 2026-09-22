@@ -1,5 +1,8 @@
 # 统一首页信息架构、跨流程时间线与报告发布收口（批次 10）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_home_timeline_and_publish_closure_red.py`
+
 > **部分被取代（批次 ## 139）**：本文件 §6.2 / §7.4 里「首页固定五个入口（我的项目 /
 > 全部项目 / 待办任务 / 最近访问 / 已归档）」的产品决定已被
 > `docs/specs/tech-home-three-tabs-and-todo-tasks.md` 取代 —— 首页改回**三个页签**

@@ -1,5 +1,8 @@
 # Spec：2.3 成本测算页对工艺经理只留「发送给财务」主按钮
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_process_manager_send_to_finance_red.py`
+
 ## 背景（用户反馈）
 
 「工艺经理在成本测算那一页就不是这些按钮了：确认成本 / 一键测算全部成本 / 写入数据库 /

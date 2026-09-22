@@ -1,5 +1,8 @@
 # 2.2 参数推荐：一键生成即补全必填 + 缺项的软闸门 + 这一步归工艺经理
 
+状态：Spec + 红测（已实现）（红测 test_tech_params_autofill_and_soft_gates_red 另有已记录的测试侧冲突，见 changelog ## 226）
+红测：`tests/test_tech_params_autofill_and_soft_gates_red.py`
+
 ## 背景与用户反馈
 
 用户在 2.2「参数推荐」页连续提出三件事：

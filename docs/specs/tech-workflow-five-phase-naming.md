@@ -1,5 +1,8 @@
 # 技术工艺全局口径修正：五阶段 + 子步骤编号（批次 5A）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_workflow_five_phase_naming_red.py`
+
 ## 1. 背景与真实问题
 
 技术工艺工作台现在的「阶段口径」有三套并存，互相打架：

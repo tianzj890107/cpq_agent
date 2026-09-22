@@ -4,6 +4,9 @@
 `tech-agent-recovery-04-left-chat-controls.md` 的修订补充。0–3 的协议契约不变，
 只是当前实现存在一处把整条上行通道打通的缺陷，导致第 4 步“恢复了控件但拿不到数据”。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_board_state_envelope_dynamic.py` `tests/test_tech_left_chat_controls_restore_red.py`
+
 ## 1. 已确认缺陷（实测）
 
 `tech-board-runtime.js` 的 `emit(type, name, payload)` 把**事件名**写进了信封的

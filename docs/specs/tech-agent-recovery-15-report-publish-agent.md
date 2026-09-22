@@ -1,5 +1,8 @@
 # 技术工艺 Agent 能力恢复第 15 步：3.3 发布并回传报价 Agent 动作 Spec
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_report_publish_agent_red.py`
+
 ## 范围
 
 把 3.3「正式发布报告」补齐为可被统一左侧会话驱动。新增七项能力：

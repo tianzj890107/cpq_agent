@@ -1,5 +1,8 @@
 # Spec：第 22 步端到端人工验收清单必须与当前产品一致
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_e2e_acceptance_doc_current_red.py`
+
 ## 背景（用户反馈）
 
 `docs/specs/tech-agent-recovery-22-e2e-scenarios.json` 是「第 22 步 · 端到端场景」的人工验收

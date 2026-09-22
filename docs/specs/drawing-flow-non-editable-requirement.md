@@ -5,6 +5,9 @@
 > 本批只修「需求单已提交（不可编辑）」这一条链路上的**分类与可预见性**，
 > **不放宽**「已提交的需求不可被静默改写」这条业务铁律。
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_drawing_flow_requirement_state_red.py`
+
 ## 0. 现场（实测，9-21，34 上两份真实 DWG 的图纸解析链路）
 
 `bf99bec0d274`（酒盒）与 `ce9d5aae9631`（圆盘盒）两条 requirement 的 `status` 都是 `approved`：

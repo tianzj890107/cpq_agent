@@ -1,6 +1,9 @@
 # DWG 能力事实：能力矩阵、错误码与审计不得写死
 
-Spec 版本：1 · 状态：待实现（红测已就位）
+Spec 版本：1（状态行见下）
+
+状态：Spec + 红测（已实现）
+红测：`tests/test_dwg_capability_truth_red.py` `tests/test_dwg_conversion_quality_repair_red.py` `tests/test_dwg_file_capability_preflight_red.py`
 
 ## 1. 背景（实测）
 

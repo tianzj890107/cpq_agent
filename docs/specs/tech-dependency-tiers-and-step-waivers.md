@@ -1,5 +1,8 @@
 # Spec：步骤依赖分级与「带缺口继续」的缺口豁免（waiver）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_integration_dependency_waiver_red.py`
+
 ## 背景（用户反馈）
 
 2.2「组装与整合」的出口存在逻辑矛盾，用户原话是：

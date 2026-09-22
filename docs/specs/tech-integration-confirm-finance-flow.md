@@ -1,5 +1,8 @@
 # Spec：2.2 / 3.3 收口链路修复（作用域泄漏、发送财务主按钮）
 
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_integration_confirm_finance_flow_red.py`
+
 ## 背景（用户反馈与要求）
 
 1. 点「确认并进入下一页签」报 **`aiSetTab is not defined`**，随后 **⚠ …超时未响应**；
