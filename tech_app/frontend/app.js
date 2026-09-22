@@ -2415,6 +2415,55 @@ function packagingBusinessPartRows(doc) {
   return rows.filter(row => row && typeof row === "object");
 }
 
+// 业务部件行的「单件工艺 / 成本」目标解析（Spec
+// `packaging-business-part-downstream-entry.md` §C1）：**只读**地把业务部件映射到它绑定的几何件，
+// 能算才给按钮 —— 绑不到 / 绑到的件没闭合一律说清"为什么不能算、下一步做什么"，绝不猜一个几何件。
+// 纯函数：吃两个已在内存里的文档，不读库、不写状态；体内无 DOM / `fetch(` / `localStorage`。
+function packagingBusinessPartDownstreamTarget(row, partsDoc) {
+  const part = (row && typeof row === "object") ? row : {};
+  const code = String(part.business_part_code || "").trim();
+  if (!code) {
+    return {ok: false, part_code: "", code: "business_part_missing",
+            message: "这一件没有业务部件编码，不能发起下游。"};
+  }
+  const binding = (part.geometry_binding && typeof part.geometry_binding === "object")
+    ? part.geometry_binding : {};
+  const wanted = new Set();
+  const add = value => {
+    const text = String(value === undefined || value === null ? "" : value).trim();
+    if (text) wanted.add(text);
+  };
+  (Array.isArray(binding.component_ids) ? binding.component_ids : []).forEach(add);
+  (Array.isArray(part.geometry_component_ref) ? part.geometry_component_ref : []).forEach(add);
+  const rows = (partsDoc && Array.isArray(partsDoc.parts)) ? partsDoc.parts : [];
+  const hits = rows.filter(item => item && typeof item === "object"
+    && (wanted.has(String(item.component_id || "").trim())
+        || wanted.has(String(item.geometry_component_ref || "").trim())));
+  if (!hits.length) {
+    return {ok: false, part_code: "", code: "geometry_unbound",
+            message: "这一件还没在 CAD 图中定位到几何件；先在平面图里确认几何映射，"
+              + "或按权威尺寸补录后再算。"};
+  }
+  const closed = hits.filter(item => String(item.outline_status || "") === "closed")
+    .sort((a, b) => String(a.part_code || "").localeCompare(String(b.part_code || "")));
+  if (!closed.length) {
+    return {ok: false, part_code: "", code: "outline_open",
+            message: "这一件绑定的几何件还没有闭合轮廓（尺寸来自包围盒），先把轮廓补出来再算。"};
+  }
+  return {ok: true, part_code: String(closed[0].part_code || ""), code: "", message: ""};
+}
+
+// 业务部件发起单件工艺 / 成本（Spec §C3）：解析出几何件编码 → 走既有取行与既有无分析入口，
+// **不**新写第二套接口 / 渲染。
+async function packagingBusinessPartAnalyze(mode, partCode) {
+  const code = String(partCode || "").trim();
+  if (!code) {
+    return {ok: false, error: {code: "no-part-code", message: "这一件没有可用的几何件编码。"}};
+  }
+  await selectPackagingPart(code);
+  return packagingPartAnalyze(mode);
+}
+
 const PACKAGING_BINDING_COPY = {
   bound: "已在图纸中定位", partial: "部分定位", ambiguous: "定位待人工确认", unbound: "尚未在 CAD 图中定位",
 };
@@ -2573,8 +2622,31 @@ function openPackagingBusinessPart(code) {
   }
   const actions = $("packagingPartActions");
   if (actions) {
-    actions.innerHTML = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
+    // 单件工艺 / 成本能不能发起（Spec `packaging-business-part-downstream-entry.md` §C2）：
+    // 绑到闭合几何件 → 给两个按钮（点了复用几何件那套既有入口）；否则给一行原因（为什么不能算 + 下一步）。
+    const target = packagingBusinessPartDownstreamTarget(row, currentPackagingParts || {});
+    const note = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
       + `几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。</div>`;
+    const downstream = target.ok
+      ? `<div class="packaging-part-note" data-qqBusinessDownstream="1">`
+        + '按绑定的几何件 <b>' + esc(target.part_code) + '</b> 发起单件结论。</div>'
+        + `<button id="packagingBusinessPartProcess" class="btn btn-secondary" type="button"`
+        + ` data-qqBusinessDownstreamMode="process">生成工艺推荐</button>`
+        + `<button id="packagingBusinessPartCost" class="btn btn-secondary" type="button"`
+        + ` data-qqBusinessDownstreamMode="cost">成本测算</button>`
+      : `<div class="packaging-part-note" data-qqBusinessDownstreamReason="1">`
+        + `${esc(target.message)}</div>`;
+    actions.innerHTML = downstream + note;
+    const run = mode => {
+      const button = $(mode === "cost" ? "packagingBusinessPartCost" : "packagingBusinessPartProcess");
+      if (button) button.addEventListener("click", () => {
+        packagingBusinessPartAnalyze(mode, target.part_code);
+      });
+    };
+    if (target.ok) {
+      run("process");
+      run("cost");
+    }
   }
   highlightPackagingBusinessPart(wanted, (binding.component_ids || []).concat(binding.entity_ids || []));
   return row;

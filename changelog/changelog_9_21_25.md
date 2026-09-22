@@ -17489,3 +17489,35 @@ node --check tech_app/frontend/app.js  OK
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 409. 落地 `packaging-business-part-downstream-entry`：业务部件行真能发起单件工艺 / 成本（14 OK，红基 10 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增顶层纯函数 `packagingBusinessPartDownstreamTarget(row, partsDoc)`（Spec §C1）：返回四键
+  `{ok, part_code, code, message}`；判据顺序 = 无业务部件编码 `business_part_missing` →
+  命不中几何件 `geometry_unbound` → 命中但无闭合件 `outline_open` → `ok`；多件命中按
+  `part_code` 升序取首（`localeCompare`，确定性，不按遍历顺序碰运气）；分量集合 =
+  `geometry_binding.component_ids` + 兜底 `geometry_component_ref`，全部 `String().trim()` 去空。
+  体内无 `document.` / `window.` / `fetch(` / `localStorage`。
+- `openPackagingBusinessPart()` 的动作区不再只有那句说明（Spec §C2）：能算 → 渲染
+  `#packagingBusinessPartProcess`（「生成工艺推荐」）/ `#packagingBusinessPartCost`（「成本测算」），
+  容器带 `data-qqBusinessDownstream="1"`、按钮带 `data-qqBusinessDownstreamMode`；
+  不能算 → 把 C1 的 `message` 渲染成 `data-qqBusinessDownstreamReason="1"` 一行，
+  **不给**一个点了必然失败的按钮。既有那句说明文案「单件工艺 / 成本按业务部件版本另跑；…」
+  **逐字保留**，拼在两者之后（它说的是口径，不是下一步）。
+- 新增 `packagingBusinessPartAnalyze(mode, partCode)`（Spec §C3）：`await selectPackagingPart(code)`
+  → `return packagingPartAnalyze(mode)`；复用几何件那套既有无分析入口，未新写第二套接口 / 渲染 / 端点。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_downstream_entry_red   Ran 14  FAILED (failures=10) → Ran 14  OK
+  （红基 10 条：T1–T10；护栏 S1–S4 始终绿）
+node --check tech_app/frontend/app.js  OK
+不回归：business_parts_and_cad_plan_view + business_part_panel_evidence + parts_downstream +
+        parts_panel + part_detail_read_failure + business_parts_binding_size_source
+        Ran 97  OK
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
