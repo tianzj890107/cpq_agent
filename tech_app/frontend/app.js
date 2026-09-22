@@ -1253,13 +1253,7 @@ function renderPackagingPartPanel(payload) {
   const evidence = $("packagingPartEvidence");
   if (evidence) {
     const rows = Array.isArray(payload && payload.evidence) ? payload.evidence : [];
-    evidence.innerHTML = rows.length
-      ? rows.map(row => `<div class="packaging-part-evidence-row">`
-        + `<span class="ref">${esc(String(row.ref || ""))}</span>`
-        + `<span class="kind">${esc(String(row.kind || ""))}</span>`
-        + `<span class="layer">${esc(String(row.layer || ""))}</span>`
-        + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("")
-      : `<div class="view-3d-placeholder">这一件没有可回查的实体证据。</div>`;
+    evidence.innerHTML = packagingPartEvidenceRowsHtml(rows);
   }
   return host;
 }
@@ -1939,6 +1933,8 @@ function renderPackagingCadPlan(doc) {
       notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
     });
   }
+  // 证据后到（首点竞态）：已经选中的业务部件要用新到的证据重画轮廓与依据（Spec §C4）。
+  if (currentPackagingBusinessPartCode) openPackagingBusinessPart(currentPackagingBusinessPartCode);
   return currentPackagingCadPlan;
 }
 
@@ -2116,6 +2112,72 @@ async function importPackagingBusinessParts() {
   }
 }
 
+// 依据区的共用行渲染（Spec `packaging-business-part-panel-evidence.md` §C3）：
+// 几何零件面板与业务部件面板必须长一样、空态一样 —— 两种面板块只做一次。
+// 位置有硬约束（不许前移到面板渲染函数之前）：
+//   ① `function \w*[Pp]ackagingPart\w*` 的第一命中必须仍是带 viewBox 的
+//      renderPackagingPartPanel()（tests/test_packaging_parts_panel_red.py E2）；
+//   ② 不许落在 packagingPartProcess 的 +4000 字窗口里
+//      （tests/test_packaging_parts_downstream_red.py F3 要在这个窗口里读到 CadInlineAnalysis）；
+//   ③ function 声明会提升，调用点在前不影响执行。
+function packagingPartEvidenceRowsHtml(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return `<div class="view-3d-placeholder">这一件没有可回查的实体证据。</div>`;
+  return list.map(row => `<div class="packaging-part-evidence-row">`
+    + `<span class="ref">${esc(String(row.ref || ""))}</span>`
+    + `<span class="kind">${esc(String(row.kind || ""))}</span>`
+    + `<span class="layer">${esc(String(row.layer || ""))}</span>`
+    + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("");
+}
+
+// 业务部件面板的「依据」行（Spec `packaging-business-part-panel-evidence.md` §C2）：
+// ① 权威清单出处（表 + 行 + 文件指纹；拼不出就如实说"未记录"，不猜文件名）；
+// ② 每件绑定分量一行；③ 没绑定就补一行说明。纯函数，可被 node 直接执行。
+function packagingBusinessPartEvidenceRows(row, components, source) {
+  const part = (row && typeof row === "object") ? row : {};
+  const authority = part.authority || {};
+  const own = authority.source || {};
+  const doc = (source && typeof source === "object") ? source : {};
+  const sheet = String(own.sheet || doc.authority_sheet || "").trim();
+  const line = own.row || doc.row || "";
+  const digest = String(doc.authority_file_hash || own.file_hash || "").trim().slice(0, 12);
+  const bits = [];
+  if (sheet) bits.push("表 " + sheet);
+  if (line) bits.push("第 " + line + " 行");
+  if (digest) bits.push("文件指纹 " + digest);
+  const rows = [{
+    kind: "authority", ref: bits.join(" · "), layer: sheet,
+    note: bits.length
+      ? "业务尺寸 / 材料 / 排版来自这份权威清单"
+      : "权威出处未记录（这份清单里没有留下表 / 行 / 文件指纹）",
+  }];
+  const binding = part.geometry_binding || {};
+  const ids = (binding.component_ids || []).map(id => String(id));
+  const byId = {};
+  (Array.isArray(components) ? components : []).forEach(item => {
+    const key = (item && item.component_id !== undefined && item.component_id !== null)
+      ? String(item.component_id) : "";
+    if (key) byId[key] = item;
+  });
+  ids.forEach(id => {
+    const item = byId[id] || {};
+    const layers = (Array.isArray(item.layers) ? item.layers : []).map(name => String(name)).filter(Boolean);
+    const role = String(item.role || "").trim();
+    const total = Array.isArray(item.entity_ids) ? item.entity_ids.length : 0;
+    const notes = [];
+    if (role) notes.push(role);
+    if (layers.length) notes.push(layers.join("、"));
+    if (total) notes.push("图元 " + total);
+    rows.push({ kind: "component", ref: id, layer: layers.join("、"),
+                note: notes.length ? notes.join(" · ") : "证据层没有这一件的细节" });
+  });
+  if (!ids.length) {
+    rows.push({ kind: "binding", ref: "", layer: "",
+                note: "尚未在 CAD 图中定位（几何未绑定；材料与采购项不受影响）" });
+  }
+  return rows;
+}
+
 function packagingBusinessPartRows(doc) {
   const rows = (doc && Array.isArray(doc.business_parts)) ? doc.business_parts : [];
   return rows.filter(row => row && typeof row === "object");
@@ -2198,6 +2260,13 @@ function openPackagingBusinessPart(code) {
       : `<div class="view-3d-placeholder">`
         + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
         + `</div>`;
+  }
+  const evidenceHost = $("packagingPartEvidence");
+  if (evidenceHost) {
+    // 选中即重写（Spec §C2）：不许把上一件几何零件的实体证据留在这一件的面板里。
+    const evidenceDoc = (currentPackagingBusinessParts || {}).geometry_evidence || {};
+    evidenceHost.innerHTML = packagingPartEvidenceRowsHtml(packagingBusinessPartEvidenceRows(
+      row, evidenceDoc.components, (currentPackagingBusinessParts || {}).source));
   }
   const actions = $("packagingPartActions");
   if (actions) {

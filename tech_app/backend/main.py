@@ -7232,6 +7232,8 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                 "geometry_evidence": geometry,
                 "gap": packaging_parts.business_parts_gap(geometry),
                 "summary": packaging_parts.summarize_business_parts({}),
+                # 没有清单就没有出处：给空对象，不许编文件名（Spec §C1）。
+                "source": {},
                 "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
     return {"built": bool(record.get("business_parts")),
             "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
@@ -7242,6 +7244,9 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                                   or packaging_parts.geometry_evidence_of({}),
             "gap": packaging_parts.business_parts_gap_of(record),
             "summary": packaging_parts.summarize_business_parts(record),
+            # 权威清单出处（Spec `packaging-business-part-panel-evidence.md` §C1）：文件指纹 / 表 /
+            # 几何 IR 版本，逐字透传；老文档没有就 `{}` —— 页面据此报"表 + 行 + 指纹"。
+            "source": dict(record.get("source") or {}),
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
 
 

@@ -16179,3 +16179,67 @@ tests/test_packaging_*.py 全域（86 个模块）→ Ran 1589, failures=5, skip
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 374. 业务部件面板的「依据」区张冠李戴：选业务部件不写 `#packagingPartEvidence`（上一件几何零件的实体证据一直留着）+ 读接口把权威出处整块吞掉（9-22，Codex 实现）
+
+红测 `tests.test_packaging_business_part_panel_evidence_red`：实现前
+`Ran 15, failures=12`，实现后 `Ran 15 OK`。
+
+### 一、缺口（源码实测，不是推断）
+
+1. `openPackagingBusinessPart()` 只写标题 / 轮廓 / 事实 / 绑定状态，**从不碰**
+   `#packagingPartEvidence`：点过一件几何零件（面板里已写满实体证据行）之后再看业务部件，
+   依据区会一直显示**上一件几何零件**的实体证据 —— 张冠李戴，而且看不出是残留。
+2. 读接口 `_business_parts_body()` 把文档里的 `source`（`ir_id` / `ir_hash` /
+   `authority_file_hash` / `authority_sheet`）整块丢掉：页面无从回答"这份业务资料凭什么"
+   （来自哪张表、第几行、哪一版清单）。
+3. 首点竞态：平面图（`GET .../packaging-business-parts/plan`）还没回来时点业务部件，
+   面板只有绑定状态文案；平面图到位后 `renderPackagingCadPlan()` 重画的是整图，
+   **不重画已选中的那一件** → 轮廓区永久停在"未加载"，除非用户再点一次。
+4. 「证据行」渲染与空态文案各写一份：几何零件面板内联一份，业务部件面板干脆没有 ——
+   要显示成一样就得在两边各抄一遍。
+
+### 二、改了什么（`tech_app/backend/main.py` + `tech_app/frontend/app.js`）
+
+- `main.py` `_business_parts_body()` 出参新增 `"source"`：文档已生成 → `dict(record.get("source") or {})`
+  逐字透传；未生成 → `{}`（没有清单就没有出处，不编文件名）。既有键一个不改。
+- `app.js` 新增纯函数 `packagingBusinessPartEvidenceRows(row, components, source)` →
+  `[{kind, ref, layer, note}]`：① 权威出处一行（表 + 第 n 行 + 文件指纹前 12 位；拼不出就
+  写「权威出处未记录」）② 每件绑定分量一行（`cmp:*` + 角色 + 图层 + 图元数）③ 没绑定补一行
+  「尚未在 CAD 图中定位」；不引用 `document` / `sessionStorage` / `window.` / `fetch(`。
+- `app.js` 抽出共用行渲染 `packagingPartEvidenceRowsHtml(rows)`（含共用空态
+  「这一件没有可回查的实体证据。」）：`renderPackagingPartPanel()` 改调用它（输出逐字不变），
+  `openPackagingBusinessPart()` 用它重写 `#packagingPartEvidence`。
+- `app.js` `renderPackagingCadPlan()` 末尾：`currentPackagingBusinessPartCode` 非空则
+  `openPackagingBusinessPart(...)` 重画 —— 证据后到也能补上形状与依据。
+
+### 三、复跑
+
+```
+tests.test_packaging_business_part_panel_evidence_red        → Ran 15 OK（实现前 12 红）
+相邻 7 个模块（面板 / 业务部件 / 平面图 / 绑定口径）合计      → Ran 107 OK
+node --check tech_app/frontend/app.js                        → 通过
+tests/test_packaging_*.py 全域（86 个模块）→ Ran 1604, failures=5, skipped=8
+（5 条仍是 B3 / B4 / A2 / F2 / C1 那批既有挂账，与本批无关）
+```
+
+B 组纯函数用 node 真跑（不是 grep）：有 / 无绑定分量、有 / 无 `source`、缺 `sheet` / `row` /
+指纹、分量缺细节、空绑定；并断言函数体里不出现 `document`/`sessionStorage`/`window.`/`fetch(`。
+
+### 四、已记录的边界（不改测试，不放宽断言）
+
+1. 出处只能报到**表 + 行 + 文件指纹**：导入器不保存工作簿文件名（只有 `file_hash`），
+   所以页面不许显示文件名 —— 指纹是"是不是同一份"的唯一凭据。
+2. 依据行里的分量细节取自业务文档自己的 `geometry_evidence`（与绑定同一版），不是当前
+   平面图那一份；版本不同时以绑定那一版为准。
+3. **`packagingPartEvidenceRowsHtml()` 的位置是硬约束**（本批撞了两次才定下来）：
+   不许前移到 `renderPackagingPartPanel()` 之前（`tests.test_packaging_parts_panel_red::E2`
+   取 `function \w*[Pp]ackagingPart\w*` 的第一命中并要求函数体含 `viewBox`），
+   也不许落在 `packagingPartProcess` 之后 4000 字以内（`tests.test_packaging_parts_downstream_red::F3`
+   要在这个窗口里读到 `CadInlineAnalysis`）。换名规避也不对 —— 名字是本 Spec §C3 的对外契约。
+   后续往这两段之间加代码，必须先跑这两个模块。
+4. 本批不做证据导出 / 下载，不改左栏，不动平面图其余交互（整图 viewBox、缩放、
+   按绑定分量高亮、未归属提示）。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
