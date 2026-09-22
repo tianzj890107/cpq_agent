@@ -86,10 +86,19 @@ function cfAppendNote(note) {
   return true;
 }
 
+// 退回草稿的可用状态与后端 `requirement_service.RETURNABLE_TO_DRAFT_STATUSES` 同一份口径
+// （Spec `packaging-requirement-confirm-order-guard.md` §2.2 第 7 条）：`approved` 之后也退得回
+// 草稿，否则「图纸解析」第 8 步提示的「请先退回草稿」在界面上根本没有入口。
+const CF_RETURNABLE_STATUSES = ['pending_confirmation', 'pending_review', 'approved'];
+
 async function cfAct(kind) {
   // 提交意见是选填：空意见按 comment: "" 交给既有接口，不再拦在页面上。
   const comment = document.querySelector('#confirmationNote').value.trim();
-  if (cfRequirement.status !== 'pending_confirmation') { cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求尚未提交至确认环节。' } }; }
+  const status = cfRequirement && cfRequirement.status;
+  // 前置条件**按动作分别判**（Spec §2.2 第 8 条）：一刀切用 pending_confirmation 挡掉一切，
+  // 会让 approved 之后的「× 驳回」可见、可点、点下去什么都不发生 —— 而那时它正是唯一的前端退路。
+  if (kind === 'confirm' && status !== 'pending_confirmation') { cfToast('当前需求尚未提交至确认环节，请先返回上一步点击“提交”。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求尚未提交至确认环节。' } }; }
+  if (kind === 'return' && !CF_RETURNABLE_STATUSES.includes(status)) { cfToast('当前需求已经是草稿，不需要退回。', true); return { ok: false, error: { code: 'invalid-status', message: '当前需求已经是草稿。' } }; }
   // L2 缺口不硬拦：有没完成的项时先问「仍要继续」，点继续就把签字交给既有 /requirement/confirm。
   let waiver = null;
   if (kind === 'confirm') {

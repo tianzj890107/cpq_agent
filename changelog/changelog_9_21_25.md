@@ -10694,3 +10694,56 @@ baseline / workspace / price / confirm / transfer / read 一被调用就是 `Nam
 ### 边界
 
 只补 import 与一个取值助手；未改任何接口口径、未改任何断言、未改任何 `tests/`。
+
+## 289. 1.1/1.2 的「顺序门禁」+ 批准之后的「退回草稿」前端出口（9-22，Codex 实现）
+
+`## 288` 记的两处缺口（进路不挡、退路不通）本轮落地实现，落点只有三个文件：后端
+`requirement_service.py`、前端 `requirement-confirm-page.js` 与 `requirement-review-page.js`。
+
+### 一、进路：1.1 提交确认 / 1.2 确认也挡住「图纸还没解析」
+
+- 新增共用校验 `assert_requirement_drawing_parsed(prerequisite, *, waiver=None)`：`required=False`
+  或 `done=True` 直接放行；`required=True 且 done=False` 且 waiver 的 `reason` 为空 →
+  `RequirementSaveError(message, 409, code=REQUIREMENT_DRAWING_NOT_PARSED)`，消息逐字取
+  `drawing_parse_prerequisite()` 算出的那条（与 1.3 同一句），**抛之前不落盘、不改状态**；
+  waiver 的 `reason` 非空才放行（`{"reason": "  "}` 仍被挡），留痕仍走各关口既有的
+  `workflow:requirement_submitted_waived` / `workflow:requirement_confirmed_waived`。
+- `submit_requirement_confirmation()`（1.1）与 `confirm_requirement()`（1.2）在**状态校验之后、落盘
+  之前**各调一次 `drawing_parse_prerequisite(project_id)`，交给上面那份共用校验 —— 三处关口
+  （1.1 / 1.2 / 1.3）判据只有一份，1.3 与 `return_requirement_to_draft()` 逐字未动。
+- 效果：先点 1.2/1.3 再跑图纸解析这条"错顺序"在**进路**上就被挡住，不再出现"7/8 completed、
+  第 8 步 field_write 必 blocked、只能退回草稿重跑"的循环。
+
+### 二、退路：`approved` 之后前端也退得回草稿
+
+- `requirement-confirm-page.js`：新增具名常量 `CF_RETURNABLE_STATUSES`
+  （`pending_confirmation` / `pending_review` / `approved`，与后端
+  `RETURNABLE_TO_DRAFT_STATUSES` 同一份口径）；`cfAct()` 里那句一刀切
+  `status !== 'pending_confirmation'` 改成**按动作分别判前置** —— `kind === 'confirm'` 判待确认，
+  `kind === 'return'` 判退回状态集。`approved` 之后「× 驳回」恢复可用、真的发得出去请求。
+- `requirement-review-page.js`：新增 `RR_RETURNABLE_STATUSES`（引用 1.2 页同名常量，状态集只落
+  一处）、`rrReturnToDraft()`（`POST /requirement/return-to-draft`，带 comment，走既有看板事件）
+  与 `rrMountReturnDraft()`（按状态把「× 退回草稿」挂进 `.footer-right`，复用本文件既有的
+  `rrRender` 包装写法，不动渲染模板）。1.3 对"非 `pending_review` 不许 approve/reject"的拒绝
+  **原样保留**。
+
+### 三、验证（本机，`./open-claude/.venv/bin/python -m unittest`）
+
+- `test_packaging_requirement_confirm_order_guard_red`：E1 / E2 / E3 / C1 / D1 / D2 转绿；
+  **A1 / A2 / B1 / B2 / C2 报 ERROR，原因在测试侧夹具** —— 同文件 `blocked_prerequisite()` /
+  `parsed_prerequisite()` 是 **0 参**打桩，而 `D2` 用的是 `lambda pid:`（1 参）；
+  `mock.patch.object` 传函数时不做 autospec，所以"1 参调用"与"0 参调用"**不存在同时满足两者的
+  写法**。修法是**测试侧两处一行**（给这两个 helper 补 `project_id` 形参，不动任何断言），
+  按"不许改红测"的纪律未自行修改，只在此处记录。
+- 生产实现用**形参与真实签名一致**的独立打桩复算 A1/A2/B1/B2/C2 的全部断言（409 /
+  `stable_error_code` / 未落盘 / 解析完成行为不变 / waiver 放行并留痕 / 空 reason 仍挡）→ **14/14 PASS**。
+- 回归全绿：`packaging_manual_field_confirmation`、`packaging_parse_to_downstream_seams`、
+  `packaging_parts_downstream`、`e2e_packaging_dwg_continuity`、
+  `tech_requirement_agent|confirm|review|stage_waiver`、`drawing_flow_requirement_state`、
+  `packaging_quote_draft_and_card_visibility`，以及引用这两个页面的 12 套源代码级红测；
+  `packaging_drawing_flow_red` 只剩既有红 `CGates::test_c8`。`node --check` 两个页面脚本通过。
+
+### 四、边界
+
+未改任何测试文件（含本次红测）、未连 PG、未写生产数据、未动 `EDITABLE_STATUSES`；
+Spec `docs/specs/packaging-requirement-confirm-order-guard.md` 增加 §8 实现记录。

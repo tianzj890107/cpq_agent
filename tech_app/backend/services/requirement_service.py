@@ -235,6 +235,34 @@ def drawing_parse_prerequisite(project_id: str) -> dict:
     }
 
 
+def assert_requirement_drawing_parsed(prerequisite: Optional[dict], *,
+                                      waiver: Optional[dict] = None) -> None:
+    """三个关口（1.1 提交确认 / 1.2 确认 / 1.3 审核）**共用**的顺序门禁。
+
+    Spec `packaging-requirement-confirm-order-guard.md` §2：`requirement` 的图纸还没解析完
+    （外加没有 waiver）时不许往下走 —— 否则「图纸解析」的第 8 步 `field_write` 必然
+    `blocked / REQUIREMENT_NOT_EDITABLE`，只能退回草稿重跑，每改一次需求就踩一遍。
+
+    判据**只**取 `drawing_parse_prerequisite(project_id)` 算出来的那一份（各关口自己先算，
+    不另写第二套判据）；这里只做"要不要拦"的决定，因此：
+      · `required=False` 或 `done=True`（含非包装/非 dwg-dxf 项目）→ 直接放行，不新增提示；
+      · `required=True 且 done=False` → 抛 `status_code=409` + `code=REQUIREMENT_DRAWING_NOT_PARSED`，
+        消息逐字用服务端算出的那条（与 1.3 同一句）；调用方在抛出前**不许落盘、不许改状态**；
+      · 带 waiver（`{"reason": …}` 非空）→ 放行，留痕由各关口既有的
+        `workflow:requirement_submitted_waived` / `workflow:requirement_confirmed_waived`
+        审计完成（缺口本身仍以服务端算出为准，不由 waiver 内容改写）。
+    """
+    prerequisite = prerequisite or {}
+    if not prerequisite.get("required") or prerequisite.get("done"):
+        return
+    if _waiver_reason(waiver).strip():
+        return
+    raise RequirementSaveError(
+        prerequisite.get("message")
+        or "图纸还没解析完：请先跑「一键解析图纸」再继续 —— 没有零件清单，后面 2.2/2.3 与报告都拿不到数据",
+        409, code=REQUIREMENT_DRAWING_NOT_PARSED)
+
+
 def requirement_revision(project_id: str, *, data: Optional[dict] = None) -> int:
     """需求修订版号（Spec §3.3）：没有就按 1 计，绝不返回 None。"""
     payload = data
@@ -486,6 +514,10 @@ def submit_requirement_confirmation(project_id: str, user: Optional[dict] = None
     doc = RequirementDoc(**saved)
     if doc.status not in EDITABLE_STATUSES:
         raise RequirementSaveError("当前需求不在可提交状态", 409, code=REQUIREMENT_SAVE_REJECTED)
+    # 顺序门禁（Spec `packaging-requirement-confirm-order-guard.md` §2.1/§2.3）：判据与 1.3
+    # 审核共用同一份 `drawing_parse_prerequisite()`；图纸没解析完且没有 waiver 的 .dwg/.dxf
+    # 包装项目先别提交确认（否则第 8 步 field_write 必 blocked，退回草稿重跑才过）。
+    assert_requirement_drawing_parsed(drawing_parse_prerequisite(project_id), waiver=waiver)
     # 1.1 不新增硬门禁：星号字段没填全时，前端弹「仍要继续」，点继续就把 waiver 带到这里。
     # 缺口属于 L2（质量依赖），允许带着继续，但必须留下可追溯的签字记录。
     if waiver:
@@ -668,6 +700,9 @@ def confirm_requirement(project_id: str, user: Optional[dict] = None,
     doc = RequirementDoc(**saved)
     if doc.status != "pending_confirmation":
         raise RequirementSaveError("当前需求不在待确认状态", 409, code=REQUIREMENT_SAVE_REJECTED)
+    # 顺序门禁（Spec `packaging-requirement-confirm-order-guard.md` §2.1/§2.3）：与 1.1/1.3
+    # 共用同一份判据，图纸没解析完且没有 waiver 时同样挡住（pending_confirmation → pending_review）。
+    assert_requirement_drawing_parsed(drawing_parse_prerequisite(project_id), waiver=waiver)
     # 1.2 不新增硬门禁：有缺口时前端弹「仍要继续」，点继续才把 waiver 带到这里。
     # 同一批缺口在 1.1 已签过字就复用（reused=True），不再重复索要第二次签字。
     if waiver:

@@ -19,6 +19,49 @@ function rrHistoryHtml() {
   return '';
 }
 
+// 退回草稿：与 1.2 页（`requirement-confirm-page.js` 的 `CF_RETURNABLE_STATUSES`）同一份口径
+// （Spec `packaging-requirement-confirm-order-guard.md` §2.2 第 7/9 条）。退回是**动作**，不是
+// 「待审核」动作的前置：approve 之后人就在 1.3 这一页，这里必须还能退回草稿 —— 否则图纸解析
+// 第 8 步提示的「请先退回草稿」只有直接调 API 才走得到。状态集只落一处（1.2 页声明），这里引用。
+const RR_RETURNABLE_STATUSES = (typeof CF_RETURNABLE_STATUSES !== 'undefined')
+  ? CF_RETURNABLE_STATUSES
+  : ['pending_confirmation', 'pending_review', 'approved'];
+function rrCanReturn(){return RR_RETURNABLE_STATUSES.includes(rrRequirement&&rrRequirement.status)}
+async function rrReturnToDraft(){
+  if(!rrCanReturn()){rrToast('当前需求已经是草稿，不需要退回。',true);return {ok:false,error:{code:'invalid-status',message:'当前需求已经是草稿。'}};}
+  const note=document.querySelector('#reviewText');
+  const comment=note?String(note.value||'').trim():'';
+  const taskId='requirement-review-return';
+  rrPublishTaskEvent('task-progress',{taskId,status:'running',progress:'正在退回草稿…'});
+  try{
+    await api(`/api/projects/${rrPid}/requirement/return-to-draft`,{method:'POST',body:JSON.stringify({comment})});
+    rrPublishTaskEvent('task-completed',{taskId,status:'succeeded'});
+    rrToast('需求已退回草稿，补齐后可重新提交确认。');
+    setTimeout(()=>{if(window.TechEmbed&&window.TechEmbed.embedded){window.TechEmbed.requestNavigate('requirement-create',rrPid);return;}location.href=`requirement-create.html?project=${encodeURIComponent(rrPid)}`},400);
+    return {ok:true};
+  }catch(err){
+    rrPublishTaskEvent('task-failed',{taskId,status:'failed',error:err.message});
+    rrToast(err.message,true);
+    return {ok:false,error:{code:'action-failed',message:err.message}};
+  }
+}
+// 脚注里的退路按钮按状态挂载（复用本文件既有的 rrRender 包装写法，不动 rrRender 内部模板）。
+function rrMountReturnDraft(){
+  const bar=document.querySelector('.footer-right');
+  if(!bar)return;
+  let button=bar.querySelector('#returnDraft');
+  if(!rrCanReturn()){if(button)button.remove();return;}
+  if(!button){
+    button=document.createElement('button');
+    button.type='button';
+    button.id='returnDraft';
+    button.className='btn btn-secondary';
+    button.textContent='× 退回草稿';
+    bar.insertBefore(button,bar.firstChild);
+  }
+  button.onclick=rrReturnToDraft;
+}
+
 // 审核进度经统一看板协议上报父壳（独立打开时静默），不能只发 iframe 内 window 事件。
 function rrPublishTaskEvent(type, extra) {
   try {
@@ -35,6 +78,9 @@ rrStart();
 // 审核页沿用确认页展示口径，确保信用等级在流程中可追溯。
 // 渲染出的状态徽标文本原样上报给父壳（统一标题行提示位）；独立打开（无运行时）时不通信。
 function rrPublishStatus(){const badge=document.querySelector('.title-section .title-row .status-badge');const text=(badge&&badge.textContent||'').trim();const runtime=window.TechBoardRuntime;if(runtime&&typeof runtime.publishStatus==='function')runtime.publishStatus(text,'info');}
+// 1.3 页的退路按钮随每次重绘挂载（rrPublishStatus 由 rrRender 的既有包装在重绘后调用一次）。
+const rrPublishStatusWithReturnDraft = rrPublishStatus;
+rrPublishStatus = function () { rrPublishStatusWithReturnDraft(); rrMountReturnDraft(); };
 const rrRenderWithCustomerCredit=rrRender;
 rrRender=function(){rrRenderWithCustomerCredit();rrPublishStatus();const list=document.querySelector('.info-list');if(!list)return;const value=String(rrRequirement?.data?.customer_credit||'').trim()||'—';list.insertAdjacentHTML('beforeend',`<div class="info-item"><span class="info-label">客户信用等级</span><span class="info-value">${rrEsc(value)}</span></div>`)};
 
