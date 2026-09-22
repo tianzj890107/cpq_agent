@@ -11868,8 +11868,9 @@ docs/specs/*.md                                  232 份（含 ## 301 新增的�
 
 - 「连通分量」实现（`cad_ir/geometry.py` + `packaging_parts.py` + `main.py` + `app.js`）由**并行会话**
   在工作区落地，9-22 期间一度出现又被回退、再出现；本条目记录的是**最后一次实测**（`Ran 13 OK`）。
-  这些代码改动**尚未提交**，也不是本会话所写，`git status` 里与本会话的 5 个文件并存。
-- 「料厚事实」三件事（克重推导 / 防串味 / 人工补料厚）**仍未实现**，红测 10 条待转绿。
+  这些代码改动**已随 `66a532f` 提交**（提交方是并行会话，不是本会话）。
+- 「料厚事实」三件事（克重推导 / 防串味 / 人工补料厚）当时**仍未实现**（红测 10 条待转绿）；
+  同批稍后由并行会话实现并提交（离线 15 条 + 真样本 2 条 `Ran 17 OK`，见 `## 305`）。
 - **新暴露的跨 Spec 冲突（不是本会话引入，但必须记）**：端点相接落地后 `酒盒.dwg` 的分量数
   402 → **1163**，零件表仍是 `max_parts=64` 上限，于是 `filtered_total` 192 → **900**
   （`area_under_min` 888 / `area_over_max` 6 / `edge_over_max` 6）、`truncated` 146 → **199**、
@@ -12035,3 +12036,84 @@ material-attribution 的三条已被该批重定基线（本机 `Ran 70` 只剩 
 （`CPQ_DWG_REAL_SAMPLES=1`）断言**截断后**的 64 件里串味件 ≥ 2，实测 1（全量 263 件里是 5）。
 一行修法（测试侧）：断言改成"把 `max_parts` 放大到全量后的串味件 ≥ 2"，或门槛降到 1。
 这与 `## 304` 同源（分量分组改了 → 零件集变了），**没有**改测试。
+
+## 306. 零件列表把 199 件真零件丢了、22 种形状没人看得见 —— 立「列表可见性 + 种类」契约（9-22，Codex 只改 Spec / 红测 / changelog）
+
+### 现场（9-22 实测，本机 `酒盒.dwg`）
+
+- 端点相接分组后 1163 个分量 → 过滤 900 → **263 件真零件**，但 `extract()` 在
+  `parts[:max_parts]` 处只留 **64 件**：另外 **199 件在零件文档里根本不存在**
+  （`stats.part_total=64` + `stats.truncated=199`，两个键相加才推得出 263）。
+- `kind_total` / `kind_key` / `kept_total` 三个键都不存在；列出的 64 件里其实只有 **22 种**
+  （长,宽,轮廓状态）组合、40 件是重复件 —— 这些数字今天只有本机脚本算得出来，界面与读接口都看不到。
+- `repeat_of` 的键是 `(round(length,3), round(width,3), entity_total)`：**只有长宽、没有形状**
+  → 同长宽的矩形与 L 形会被算成同一件（`kind_key` 要修的就是这个）。
+- 面板只有一句"还有 199 件未列出（只显示前 64 件）"：翻不到下一页、不能按种类看、更没法给那 199 件
+  人工映射角色 —— `packaging-part-role-manual-mapping.md` 的"看得见"前置被堵死。
+
+### 新增
+
+- Spec `docs/specs/packaging-parts-list-visibility-and-kinds.md`（**未实现**；**取代**
+  `packaging-dwg-parts-extraction.md` §5 的 `max_parts` 截断条款）：
+  ① `extract()` 保留**全部** kept 件，`truncated` 默认恒 0，只有显式传 `options["max_parts"]`
+  才按旧行为截断，新增 `stats.kept_total`；
+  ② 每件新增 `kind_key`（由 `outline.points` 量化 + 平移归零 + `outline_status` + 量化长宽算 sha256 前 12 位，
+  **不做旋转/镜像归一**）+ `kind_index`，`stats.kind_total`；`repeat_of` 只允许出现在同 `kind_key` 之间；
+  ③ `summarize()` 新增 `kept_total` / `listed_total` / `kind_total` / `repeat_total`；
+  ④ 读接口分页与筛选（`offset` / `limit`（默认取 `DEFAULT_OPTIONS["max_parts"]`，上限 500）/ `kind` /
+  `role` / `outline_status` / `min_area_mm2`），响应带 `total` / `has_more` / `kind_total`，
+  `total`/`kind_total` 永远是全量真值；非法 `limit` → 400；
+  ⑤ 面板按种类折叠 + "共 N 件（M 种形状）" + 继续加载。
+- 红测 `tests/test_packaging_parts_list_visibility_red.py`：`Ran 11`，无 env **failures=7 / skipped=1**
+  （A1 不丢件、B1–B3 种类、C1 指标、D1/D2 路由与面板为红；A2 显式截断、A3 part_code、B4 确定性、
+  C2 冻结行键是护栏本来就绿）；带 env 的真样本 E 组 `Ran 2 FAILED`
+  （实测 `part_total=64` < 263、`kind_total=0` < 22）。
+
+### 边界
+
+本会话只新增 1 份 Spec、1 条红测、追加本 changelog；未改任何业务实现、未改任何既有红测、
+未连 PG、未写生产数据、未动 34、未 commit / push / MR / tag / Release / 部署。
+
+## 306. 覆盖率的诚实性：分子 / 分母 / 证据口径三件套 + 缺口原因账（9-22，Codex 实现）
+
+`## 304` 把分组改成端点相接之后，`packaging-parts-material-attribution.md` §4 的三条真样本门槛
+（0.75 / 0.75 / 0.70）当场红了 —— 因为那三条**从来不是**"归属做得好不好"，而是"闭合轮廓占比"：
+归属只在 `outline_status == "closed"` 的件上生效，而层 4「需求整盒兜底」又把**每一个** closed 件
+填满，于是 `material_known_ratio == thickness_known_ratio == processable_ratio == closed_ratio`。
+本批按 `docs/specs/packaging-parts-coverage-truthfulness.md`（**取代**旧 §4 门槛表）实现。
+
+### 实现（`tech_app/backend/services/packaging_parts.py`）
+
+| 面 | 做了什么 |
+| --- | --- |
+| 三件套 | `summarize()` 新增 `part_total` / `closed_total` / `material_known_total` / `processable_total`（既有 `thickness_known_total` 已在 `## 305`）—— 分子分母显式化；既有六条比率**一个字不改** |
+| 证据口径 | 新增 `material_default_total` / `thickness_default_total`、`material_evidence_ratio` / `thickness_evidence_ratio`（"有材料/料厚"**且**来源不是 `requirement_default`）—— 整盒兜底再也不给"图纸证据"充数 |
+| 缺口原因账 | 新增 `MATERIAL_GAP_REASONS` / `THICKNESS_GAP_REASONS` 闭集（值为 0 的键也出现）与 `material_gap_mix` / `thickness_gap_mix`；判定优先级：非闭合 → `no_closed_outline`；材料没定 → `material_ambiguous`（歧义弃权）/ `no_material_note`（材料账）/ `material_missing`（料厚账）；材料有但料厚没有 → `grammage_only` / `no_thickness_note`；`unknown` 长期必须 0 |
+| 行账一致 | 每件的 `attribution.gap_reason` 由同一个 `gap_reason_of()` 写（Spec §2.2 的"账与行不许对不上"） |
+
+### 实测（本机 `酒盒.dwg` + 需求 3.3：灰板 2.5 / 粉灰 350g）
+
+```
+part_total 64   closed_total 40   material_known_total 40   thickness_known_total 40   processable_total 40
+material_default_total 25   thickness_default_total 34
+material_known_ratio 0.625   thickness_known_ratio 0.625   processable_ratio 0.625   closed_ratio 0.625
+material_evidence_ratio 0.234   thickness_evidence_ratio 0.094
+material_gap_mix  = {no_closed_outline 24, no_material_note 0, material_ambiguous 0, unknown 0}
+thickness_gap_mix = {no_closed_outline 24, no_thickness_note 0, grammage_only 0, material_missing 0, material_ambiguous 0, unknown 0}
+```
+
+即：拿料厚的 40 件里 **34 件是整盒兜底**、真正来自图纸证据的只有 6 件（0.094）；缺口全部是
+"这一件没有闭合轮廓"，而不是"图纸没写材料" —— 这正是本批要让读接口说得出来的事。
+
+### 测试
+
+- 新红测 `tests.test_packaging_parts_coverage_truthfulness_red`：`Ran 8 OK (skipped=1)`；
+  真样本 C 组 `CPQ_DWG_REAL_SAMPLES=1 … RealSampleCoverage`：`Ran 3 OK`（五条地板同时成立）。
+- 保护网：`test_packaging_parts_material_attribution_red`（已按本 Spec 重定基线）+
+  `test_packaging_parts_extraction_red` + `test_packaging_parts_selfcheck_diagnostics_red` +
+  `test_packaging_parts_downstream_red` + `test_packaging_parts_panel_red` +
+  `test_packaging_product_outline_red` + `test_packaging_semantics_red`：`Ran 189 OK (skipped=2)`。
+- `## 304` 记的 8 条测试侧冲突里，material-attribution 那三条已由本批（新门槛表）与并行会话的
+  重定基线消掉；仍待处理的是 `test_packaging_parts_solid_coverage_red.FRealSample::test_f1_solid_ok_ratio`
+  与 `test_packaging_parts_outline_chaining_red.ERealSample` 的 `test_e1_closed_ratio` /
+  `test_e2_rescue_total` / `test_e4_open_reason_mix_has_no_vague_reason`（同一根因，属测试侧基线）。

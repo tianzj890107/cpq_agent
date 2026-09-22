@@ -281,6 +281,13 @@ THICKNESS_UNRESOLVED_REASONS = ("density_missing", "material_ambiguous", "no_gra
 #: 料厚不许跨材料串味（Spec §2.2）：注记的材质词与该件的材料标签**不相交** → 拒绝采用并留痕。
 THICKNESS_CONFLICT_REASON = "thickness_material_conflict"
 
+#: 缺口原因账的闭集（Spec `packaging-parts-coverage-truthfulness.md` §2.2）：每一件没有材料 /
+#: 没有料厚的零件都必须说得出是**哪一类**原因，而不是只留一个数字。一件只记一次。
+#: `unknown` 长期必须为 0 —— 不为 0 就是原因判别有漏。
+MATERIAL_GAP_REASONS = ("no_closed_outline", "no_material_note", "material_ambiguous", "unknown")
+THICKNESS_GAP_REASONS = ("no_closed_outline", "no_thickness_note", "grammage_only",
+                         "material_missing", "material_ambiguous", "unknown")
+
 #: 件级半径 = min(0.25 × 对角线, 硬上限)：0.25 在整版大件上会放大到 160mm+，把图纸整体
 #: 材料说明误归给大件（实测 4 件 open 大件全错），所以必须加硬上限。
 NOTE_DISTANCE_RATIO = 0.25
@@ -1380,6 +1387,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         refs = [ref for ref in (info.get("note_refs") or []) if ref in known]
         if refs:
             row["evidence_refs"] = sorted(set(row["evidence_refs"]) | set(refs))
+        # 缺口原因写在行上（Spec `packaging-parts-coverage-truthfulness.md` §2.2）：
+        # 账（`material_gap_mix` / `thickness_gap_mix`）与行必须能对上，行上不能只有数字。
+        if isinstance(row.get("attribution"), dict):
+            row["attribution"]["gap_reason"] = gap_reason_of(row)
 
     # 排序：面积降序、component_id 升序（input 书写顺序不影响输出）。
     kept.sort(key=lambda row: (-(row["area"] or 0.0), row["component_id"]))
@@ -1516,6 +1527,44 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     return doc
 
 
+def _notes_say_ambiguous(row: Dict[str, Any]) -> bool:
+    """这一件的归属是不是"歧义弃权"（`attribute_materials` 留的 `ambiguous:N` 痕）。"""
+    attribution = row.get("attribution") if isinstance(row.get("attribution"), dict) else {}
+    return any(str(item).startswith("ambiguous:") for item in (attribution.get("notes") or []))
+
+
+def _gap_reason(row: Dict[str, Any], field: str) -> str:
+    """一件缺材料 / 缺料厚的**原因**（Spec `packaging-parts-coverage-truthfulness.md` §2.2）。
+
+    判定优先级（一件只记一次）：非闭合 → `no_closed_outline`；材料没定 → `material_ambiguous`
+    （歧义弃权）/ `material_missing`（料厚账）/ `no_material_note`（材料账）；材料有但料厚没有 →
+    只有克重 `grammage_only` / 注记里就没有厚度 `no_thickness_note`。
+    """
+    if _text(row.get("outline_status")) != "closed":
+        return "no_closed_outline"
+    if not _material_spec(row.get("material")):
+        if _notes_say_ambiguous(row):
+            return "material_ambiguous"
+        return "no_material_note" if field == "material" else "material_missing"
+    source = row.get("material_source") if isinstance(row.get("material_source"), dict) else {}
+    if _grammage_of(source.get("text"), row.get("material")):
+        return "grammage_only"
+    return "no_thickness_note"
+
+
+def gap_reason_of(row: Any) -> str:
+    """这一件贡献给账的那**一个** `gap_reason`（Spec §2.2：账与行不许对不上）。
+
+    先看材料账（没材料为主），材料有了再看料厚账；两本账都没有它就回 `""`。
+    """
+    item = row if isinstance(row, dict) else {}
+    if not _material_spec(item.get("material")):
+        return _gap_reason(item, "material")
+    if _num(item.get("thickness_mm")) is None:
+        return _gap_reason(item, "thickness")
+    return ""
+
+
 def _identity(doc: Dict[str, Any]) -> Tuple[str, str]:
     """版本锚点：同一份内容 → 同一个 id（落库幂等）。"""
     from .packaging_semantics import model as sem_model
@@ -1613,6 +1662,31 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         1 for row in rows
         if _material_source_kind(row, "thickness_source") == MANUAL_THICKNESS_KIND)
     material_default = 0
+    # 证据口径与缺口原因账（Spec `packaging-parts-coverage-truthfulness.md` §2.1 / §2.2）：
+    # "有材料"与"有图纸证据"必须分开数；每一件缺材料 / 缺料厚都要说得出是哪一类原因。
+    thickness_default_total = 0
+    material_evidence = 0
+    thickness_evidence = 0
+    for row in rows:
+        material_kind = _material_source_kind(row, "material_source")
+        thickness_kind = _material_source_kind(row, "thickness_source")
+        if thickness_kind == "requirement_default":
+            thickness_default_total += 1
+        if _material_spec(row.get("material")) and material_kind != "requirement_default":
+            material_evidence += 1
+        if _num(row.get("thickness_mm")) is not None and thickness_kind != "requirement_default":
+            thickness_evidence += 1
+    material_gap_mix = {reason: 0 for reason in MATERIAL_GAP_REASONS}
+    thickness_gap_mix = {reason: 0 for reason in THICKNESS_GAP_REASONS}
+    for row in rows:
+        if not _material_spec(row.get("material")):
+            reason = _gap_reason(row, "material")
+            if reason in material_gap_mix:
+                material_gap_mix[reason] += 1
+        if _num(row.get("thickness_mm")) is None:
+            reason = _gap_reason(row, "thickness")
+            if reason in thickness_gap_mix:
+                thickness_gap_mix[reason] += 1
     kind_mix = {name: 0 for name in ATTRIBUTION_KINDS}
     kind_mix["none"] = 0
     for row in rows:
@@ -1675,6 +1749,18 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "thickness_unknown_total": max(0, total - thickness_known),
         "thickness_conflict_total": thickness_conflict_total,
         "thickness_manual_total": thickness_manual_total,
+        # 「分子 / 分母 / 证据口径」三件套（Spec `packaging-parts-coverage-truthfulness.md` §2.1）：
+        # 既有比率一个字不改，只是把分子分母显式化，并区分「图纸证据」与「整盒兜底」。
+        "part_total": total,
+        "closed_total": closed_total,
+        "material_known_total": material_known,
+        "processable_total": processable,
+        "material_default_total": material_default,
+        "thickness_default_total": thickness_default_total,
+        "material_evidence_ratio": _ratio(material_evidence),
+        "thickness_evidence_ratio": _ratio(thickness_evidence),
+        "material_gap_mix": material_gap_mix,
+        "thickness_gap_mix": thickness_gap_mix,
         "material_default_ratio": _ratio(material_default),
         "attribution_kind_mix": kind_mix,
         "collapsed_edge_total": collapsed_edge_total,
