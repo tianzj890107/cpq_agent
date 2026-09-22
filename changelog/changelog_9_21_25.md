@@ -17649,3 +17649,44 @@ packaging 全域：仍是那 5 条既有挂账，本批未引入新红
 ```
 
 未改后端、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 414. 落地 `packaging-business-part-process-by-authority-route`：业务部件没有几何也能排出工序明细（38 OK，红基 32 红）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_parts.py`（Spec §C1–§C3）：
+
+- 新增 `BUSINESS_PROCESS_REJECT_CODES` / `BUSINESS_PROCESS_SIZE_SOURCES` / `_business_process_grounding()`
+  与**纯函数** `business_process_inputs(row)`：十四键；判据 = 无业务编码 `PACKAGING_BUSINESS_PART_NOT_FOUND` →
+  权威长度/宽度缺或 ≤0 `PACKAGING_BUSINESS_PART_SIZE_UNKNOWN`（`missing_variables: ["authority_size"]`）→
+  材料原文空 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`（`["material"]`）→ `ok`；`grounding` 是
+  尺寸原文 / 权威尺寸 / 材料 / 工艺路线 / 排版 / 备注 六段（固定顺序、只收非空、不写空段）。
+  这三个码与业务件成本那三条是**同一个事实的同一套写法**，与几何那三条 `PACKAGING_PART_*` 分家。
+- 新增 `business_as_ir_part(row)`：`part_id` = 业务编码、`features = []`（**一个几何特征都不造**，
+  给 `plate` 就是编尺寸）、材料只认权威原文、`confidence` 0.4/0.3（几何件「开口件」同一档）、
+  `provenance.note` 六段（`packaging_business_part/<code>` / `size_source=` / `size=` /
+  `process_source=` / `outline=none` / `thickness=unknown`）。几何件那条 `as_ir_part()` 一字未动。
+- 新增 `business_process_assumption(inputs, *, geometry_part_code="")`：逐字
+  `按权威清单的尺寸（300×200 mm）与材料原文编制工序，未与 CAD 几何核过：没有展开轮廓、没有排样，料厚未知`。
+
+`tech_app/backend/main.py`（Spec §C4–§C5）：
+
+- 新增 `PACKAGING_BUSINESS_PART_PROCESS_PATH`（POST / GET）与 `_packaging_business_part_process_note()`：
+  写权限直接引用 `packaging_match.BOX_MATCH_DECIDE_ROLES`；取件走 `_packaging_business_part_row()`（404）；
+  前置条件不过 → **复用** `_packaging_business_part_reject()`（409 / `retryable: False` /
+  `missing_variables`）；过了走**既有** `process.outline_process(part, overall=None, geom=None,
+  note=权威原文块+用户说明, attachments=本次附件)` 与 `process.compute()`，落一版
+  `save_part_process(parts_id="")`（另带 `size_source` / `size_source_ref` / `size_text` /
+  `geometry` / `grounding` / 业务三键）。结论**不写**技术 IR。
+- GET 形状与几何那一路逐字同形（六键 + 版本七键 + 四键）；没跑过 → 200 空态（`plan: null`）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_process_by_authority_route_red  Ran 38  FAILED (failures=6, errors=26) → Ran 38  OK
+  （红基 32 条：A1–A10 / B1–B6 / C1–C4 / D1–D8 / E1–E4；护栏 B7 / F1–F5 六条红基即绿）
+不回归：business_part_cost_by_authority_size + business_part_size_cost_entry +
+        business_part_downstream_entry + part_conclusion_business_identity +
+        business_parts_and_cad_plan_view + parts_downstream + parts_downstream_readback +
+        parts_conclusion_version_readback   Ran 134  OK
+```
+
+未改前端、未调模型、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。

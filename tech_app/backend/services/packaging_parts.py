@@ -3939,3 +3939,119 @@ def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> st
     if code:
         text += "；这一件另有闭合几何件（%s），本结论有意按权威尺寸算" % code
     return text
+
+
+# --------------------------------------------------------------------------- #
+# 3d 业务部件的工序明细：几何可以没有，工序仍要编得出来
+# （Spec `packaging-business-part-process-by-authority-route.md` §C1/§C2/§C3）
+# --------------------------------------------------------------------------- #
+#: 业务件排工艺时的拒绝码。这三个码与成本那三条（`BUSINESS_COST_REJECT_CODES`）是**同一个
+#: 事实的同一套写法**（缺编码 / 缺权威尺寸 / 缺材料），与几何那三条 `PROCESS_REJECT_CODES`
+#: 分家 —— 两条路的门槛本来就不一样（几何要闭合轮廓与料厚，业务件要权威尺寸与材料原文）。
+BUSINESS_PROCESS_REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
+                                 "PACKAGING_BUSINESS_PART_SIZE_UNKNOWN",
+                                 "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
+
+#: 尺寸口径闭集：业务件这条路**只认权威尺寸**（几何轮廓那条路走 processability）。
+BUSINESS_PROCESS_SIZE_SOURCES = ("authority_dimensions",)
+
+#: 权威原文块的段名（顺序即拼接顺序，Spec §C1）：只收非空项，一项都收不到 → 空串。
+BUSINESS_PROCESS_GROUNDING_KEYS = ("尺寸原文", "权威尺寸", "材料", "工艺路线", "排版", "备注")
+
+
+def _business_process_grounding(authority: Any, material_text: str) -> str:
+    """给模型的权威原文块（Spec §C1）：键名 + 原文，`；` 分隔，顺序固定，不写空段。"""
+    record = authority if isinstance(authority, dict) else {}
+    length = _num(record.get("length_mm"))
+    width = _num(record.get("width_mm"))
+    size = ("%s×%s mm" % (_mm_text(length), _mm_text(width))
+            if length and width and length > 0 and width > 0 else "")
+    pairs = (("尺寸原文", _text(record.get("product_size_text"))),
+             ("权威尺寸", size),
+             ("材料", _text(material_text)),
+             ("工艺路线", _text(record.get("process_text"))),
+             ("排版", _text(record.get("layout_text"))),
+             ("备注", _text(record.get("note"))))
+    return "；".join("%s：%s" % (name, value) for name, value in pairs if value)
+
+
+def business_process_inputs(row: Any) -> Dict[str, Any]:
+    """一件业务部件的工序明细输入（**纯函数**，Spec §C1）。
+
+    尺寸只认权威尺寸（`authority.length_mm` / `width_mm`）、材料只认权威清单的原文
+    （兜底行上 `material`）—— 两处都没有就**拒绝**：绝不用包围盒/默认料厚/猜出来的几何特征
+    去排工艺。`grounding` 是那份权威原文块（尺寸 / 材料 / 工艺路线 / 排版 / 备注），
+    由路由拼进既有 `process.outline_process()` 的 `note`。
+    """
+    record = row if isinstance(row, dict) else {}
+    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
+    code = _text(record.get("business_part_code"))
+    material_text = _text(authority.get("material_text")) or _text(record.get("material"))
+    base: Dict[str, Any] = {
+        "ok": False, "code": "", "message": "", "missing_variables": [],
+        "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
+        "process_text": _text(authority.get("process_text")), "grounding": "",
+        "size_source": "", "size_source_ref": _text(authority.get("source")),
+        "size_length": None, "size_width": None,
+        "size_text": _text(authority.get("product_size_text")),
+    }
+    if not code:
+        return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[0],
+                    message="这一件没有业务部件编码，不能排工艺")
+    length = _num(authority.get("length_mm"))
+    width = _num(authority.get("width_mm"))
+    if not length or not width or length <= 0 or width <= 0:
+        return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[1], missing_variables=["authority_size"],
+                    message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
+                            "或按权威清单补录尺寸后再排工艺")
+    if not material_text:
+        return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[2], missing_variables=["material"],
+                    message="这一件在权威清单里没有材料原文：补上材料后再排工艺")
+    return dict(base, ok=True, size_source=BUSINESS_PROCESS_SIZE_SOURCES[0],
+                size_length=length, size_width=width,
+                grounding=_business_process_grounding(authority, material_text))
+
+
+def business_as_ir_part(row: Any) -> Any:
+    """一行业务部件 → 既有 IR 的 `Part`（**纯函数**，Spec §C2）。
+
+    与几何件那条 `as_ir_part()` 分家的唯一理由：业务件**没有几何**。所以这里一个特征都不造
+    （给 `plate` 就是编尺寸），材料只认权威原文，置信度停在"开口件"那一档 ——
+    `process.input_gaps()` 会如实报「零件没有几何特征」，而不是拿假几何去排工艺。
+    """
+    from ..models.ir import Part, Provenance
+
+    payload = row if isinstance(row, dict) else {}
+    authority = payload.get("authority") if isinstance(payload.get("authority"), dict) else {}
+    part_id = _text(payload.get("business_part_code"))
+    name = _text(payload.get("name")) or part_id
+    material_text = _text(authority.get("material_text")) or _text(payload.get("material"))
+    length = _num(authority.get("length_mm"))
+    width = _num(authority.get("width_mm"))
+    sized = bool(length and width and length > 0 and width > 0)
+    note = " | ".join((
+        "packaging_business_part/%s" % part_id,
+        "size_source=%s" % (BUSINESS_PROCESS_SIZE_SOURCES[0] if sized else "unknown"),
+        "size=%s" % (("%s×%s mm" % (_mm_text(length), _mm_text(width))) if sized else "unknown"),
+        "process_source=%s" % ("workbook" if _text(authority.get("process_text")) else "none"),
+        "outline=none",
+        "thickness=unknown",
+    ))
+    return Part(part_id=part_id, name=name, role=None, quantity=1, features=[],
+                material={"spec": material_text} if material_text else None,
+                confidence=0.4 if material_text else 0.3,
+                provenance=Provenance(note=note))
+
+
+def business_process_assumption(inputs: Any, *, geometry_part_code: Any = "") -> str:
+    """结论里那句口径（**纯函数**，Spec §C3）：按权威清单原文编的、没与 CAD 几何核过。"""
+    payload = inputs if isinstance(inputs, dict) else {}
+    if not payload.get("ok"):
+        return ""
+    text = "按权威清单的尺寸（%s×%s mm）与材料原文编制工序，未与 CAD 几何核过：" \
+           "没有展开轮廓、没有排样，料厚未知" % (_mm_text(payload.get("size_length")),
+                                                _mm_text(payload.get("size_width")))
+    code = _text(geometry_part_code)
+    if code:
+        text += "；这一件另有闭合几何件（%s），本结论有意按权威清单编制" % code
+    return text

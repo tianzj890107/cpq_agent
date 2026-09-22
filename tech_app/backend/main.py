@@ -8850,6 +8850,133 @@ def get_packaging_business_part_cost(pid: str, code: str,
 
 
 # --------------------------------------------------------------------------- #
+# 业务部件的工序明细：没有几何也排得出来（Spec docs/specs/packaging-business-part-process-by-authority-route.md §C4/§C5）
+# --------------------------------------------------------------------------- #
+# `## 412` 把**材料费**从几何里解出来，本批把**工序明细**也解出来：权威清单里有尺寸 + 材料原文
+# 就够走既有 `process.outline_process()` 那一支；缺什么就说清缺什么（409 + missing_variables），
+# 绝不拿包围盒 / 默认料厚 / 猜出来的几何特征去排工艺。判据全在
+# `packaging_parts.business_process_inputs()`（纯函数），这里只做组装与落库。
+PACKAGING_BUSINESS_PART_PROCESS_PATH = \
+    "/api/projects/{pid}/requirement/packaging-business-parts/{code}/process"
+
+
+def _packaging_business_part_process_note(inputs: Dict[str, Any], note: str) -> str:
+    """送进既有工艺链路的 `note`：权威原文块在前、用户补充说明在后（Spec §C4）。
+
+    用户那段仍走既有「请优先采用」那一路（`process.outline_process()` 里的提示词），
+    权威原文块只负责把工作簿里写着的尺寸 / 材料 / 工艺路线摆到模型面前。
+    """
+    return "\n".join(item for item in (str(inputs.get("grounding") or "").strip(),
+                                      str(note or "").strip()) if item)
+
+
+@app.post(PACKAGING_BUSINESS_PART_PROCESS_PATH)
+async def packaging_business_part_process(
+    pid: str, code: str,
+    note: str = Form(""),
+    attachments: List[UploadFile] = File(default=[]),
+    user: dict = Depends(current_user),
+):
+    """业务部件的单件工艺推荐（异步任务，与既有工艺路由同形状：task_id + 进度上报）。
+
+    没有几何的件也走得通 —— 输入只认权威清单（尺寸 + 材料原文 + 工艺路线原文）；
+    缺尺寸 / 材料一律 409 并说清缺什么（前置条件全部来自纯函数）。工序明细仍由既有
+    `process.outline_process()` 编制，本路由不新写第二套工艺算法。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_business_part_row(pid, code)
+    row = loaded["row"]
+    doc = loaded["doc"]
+    inputs = packaging_parts.business_process_inputs(row)
+    if not inputs["ok"]:
+        raise _packaging_business_part_reject(inputs)
+    geometry_label = _packaging_business_geometry_label(row)
+    geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
+    part = packaging_parts.business_as_ir_part(row)
+    atts = await _read_attachments(attachments)
+    expected = _digest_value({"part": row, "note": note})
+
+    def job():
+        size_text = str(inputs.get("size_text") or "").strip() or "%s×%s mm" % (
+            packaging_parts._mm_text(inputs.get("size_length")),
+            packaging_parts._mm_text(inputs.get("size_width")))
+        tasks.report_progress("按权威清单原文编制这一件的工序明细（尺寸 %s / 材料 %s）"
+                              % (size_text, str(inputs.get("material_text") or "未填")))
+        # 复用既有工艺链路（`process.outline_process()` 只吃 Part）：业务件与图纸零件走
+        # **同一个**模型口径，区别只在输入 —— 这里没有整体 IR、没有几何，只有权威原文。
+        plan, coverage = process.outline_process(
+            part, overall=None, geom=None,
+            note=_packaging_business_part_process_note(inputs, note), attachments=atts)
+        plan_dict = plan.model_dump()
+        steps_total = len(plan_dict.get("steps") or [])
+        library = (coverage or {}).get("summary") or {}
+        tasks.report_progress(
+            f"  ↳ 本次产出 {steps_total} 道工序：库内沿用 {library.get('reused', 0)} 道、"
+            f"需新建 {library.get('missing', 0)} 道")
+        overall_note = str(plan_dict.get("overall_note") or "").strip()
+        if overall_note:
+            tasks.report_progress("  ↳ %s" % overall_note)
+        validation = process.compute(plan_dict)
+        assumption = packaging_parts.business_process_assumption(
+            inputs, geometry_part_code=geometry_code)
+        if assumption:
+            tasks.report_progress("  ↳ %s" % assumption)
+        packaging_parts.save_part_process(pid, {
+            "part_code": inputs["part_code"],
+            # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
+            "parts_id": "",
+            "engine_version": packaging_parts.ENGINE_VERSION,
+            "plan": plan_dict, "validation": validation, "coverage": coverage,
+            # 业务件没有知识库检索依据，不装样子（与业务件成本那条同口径）。
+            "lookup": {}, "assumptions": [assumption] if assumption else [],
+            "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
+            "size_text": inputs["size_text"], "geometry": geometry_label,
+            # 这份结论是照哪份权威原文编的 —— 刷新一次页面也说得出来。
+            "grounding": inputs["grounding"],
+            "business_part_code": inputs["part_code"],
+            "business_parts_id": str(doc.get("business_parts_id") or ""),
+            "business_parts_hash": str(doc.get("business_parts_hash") or ""),
+            "source": {"task_id": tasks.current_task_id(),
+                       "computed_at": now_cst_str(),
+                       "actor": str(user.get("username") or "")},
+        })
+        return {"part_code": inputs["part_code"], "part_id": part.part_id,
+                "plan": plan_dict, "validation": validation, "coverage": coverage}
+
+    return {"task_id": tasks.submit(
+        pid, "packaging_business_part_process", job,
+        dedup_key=_task_key("packaging_business_part_process", code, expected),
+        actor=user.get("username", ""),
+    )}
+
+
+@app.get(PACKAGING_BUSINESS_PART_PROCESS_PATH)
+def get_packaging_business_part_process(pid: str, code: str,
+                                        user: dict = Depends(current_user)):
+    """读业务部件的单件工艺结论（最近一版；未跑过 → 空态，不 404，Spec §C5）。
+
+    形状与几何零件那一路逐字同形（`part_code` / `plan` / `validation` / `coverage` /
+    `assumptions` / `source` + 版本七键），另加这四键说清"这份工序是按什么尺寸、哪条路编的"。
+    """
+    _workflow_project(pid)
+    _packaging_business_part_row(pid, code)
+    record = packaging_parts.load_part_process(pid, code) or {}
+    body = {"part_code": str(record.get("part_code") or code),
+            "plan": record.get("plan") if record else None,
+            "validation": record.get("validation") if record else None,
+            "coverage": record.get("coverage") if record else None,
+            "assumptions": list(record.get("assumptions") or []),
+            "source": (record.get("source") if isinstance(record.get("source"), dict) else {}),
+            "size_source": str(record.get("size_source") or ""),
+            "size_source_ref": str(record.get("size_source_ref") or ""),
+            "size_text": str(record.get("size_text") or ""),
+            "geometry": str(record.get("geometry") or "")}
+    body.update(_packaging_part_conclusion_version(pid, record))
+    return body
+
+
+# --------------------------------------------------------------------------- #
 # 包装图纸零件：平板挤出与 3D 预览（包装零件第 4 层，
 # Spec docs/specs/packaging-parts-3d-extrusion.md §4）
 # --------------------------------------------------------------------------- #
