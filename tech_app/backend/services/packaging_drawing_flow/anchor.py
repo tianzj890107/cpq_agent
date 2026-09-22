@@ -192,47 +192,95 @@ def _engine(resolve: Resolver, name: str) -> Optional[Any]:
         return None
 
 
-def _load(resolve: Resolver, name: str, function: str, project_id: str, requirement_no: str = "") -> Dict[str, Any]:
+#: 一段依赖的三种来源（Spec `packaging-stage-chain-read-failure-disclosure.md` §2.1）：
+#: 三态两两可分，"读不到"与"这个部署没有这一段"、"业务上真的没做"不许同形。
+STAGE_SOURCES = ("engine", "absent", "unavailable")
+_SOURCE_RANK = {"engine": 0, "absent": 1, "unavailable": 2}
+
+
+def _probe(resolve: Resolver, name: str, function: str, project_id: str,
+           requirement_no: str = "") -> tuple:
+    """探测一段依赖：返回 `(row, source, reason)`。
+
+    - `"engine"`：模块与可调用函数都在、调用成功（返回空值也算成功 ——"业务上真的没做"走这一态）；
+    - `"absent"`：模块或可调用函数不存在（"这个部署没有这一段"）；
+    - `"unavailable"`：函数存在但调用抛异常，`reason` 是异常类名。
+    """
     module = _engine(resolve, name)
     fn = getattr(module, function, None) if module is not None else None
     if not callable(fn):
-        return {}
+        return {}, "absent", ""
     try:
         row = fn(project_id, requirement_no) if requirement_no else fn(project_id)
     except TypeError:
-        row = fn(project_id)
-    except Exception:
-        return {}
-    return dict(row) if isinstance(row, dict) else {}
+        try:
+            row = fn(project_id)
+        except Exception as exc:                        # noqa: BLE001 - 读不到要披露，不许炸
+            return {}, "unavailable", type(exc).__name__
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return {}, "unavailable", type(exc).__name__
+    return (dict(row) if isinstance(row, dict) else {}), "engine", ""
 
 
-def _load_list(resolve: Resolver, name: str, function: str, project_id: str) -> List[Any]:
+def _probe_list(resolve: Resolver, name: str, function: str, project_id: str) -> tuple:
+    """`_probe()` 的列表版：返回 `(rows, source, reason)`。"""
     module = _engine(resolve, name)
     fn = getattr(module, function, None) if module is not None else None
     if not callable(fn):
-        return []
+        return [], "absent", ""
     try:
         rows = fn(project_id)
-    except Exception:
-        return []
-    return list(rows) if isinstance(rows, (list, tuple)) else []
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return [], "unavailable", type(exc).__name__
+    return (list(rows) if isinstance(rows, (list, tuple)) else []), "engine", ""
+
+
+def _worse_source(first: tuple, second: tuple) -> tuple:
+    """两个入口合看一段时取更严重的那个（`unavailable` > `absent` > `engine`）。"""
+    if _SOURCE_RANK.get(str(second[0]), 0) > _SOURCE_RANK.get(str(first[0]), 0):
+        return str(second[0]), str(second[1])
+    return str(first[0]), str(first[1])
+
+
+def _stage_disclosure(source: str, reason: str) -> dict:
+    """每一行的披露键（Spec §2.1）：只有"读不到"才带原因码，另两态给 `{}`。"""
+    if str(source) != "unavailable":
+        return {}
+    return {"code": "stage_chain_stage_unavailable", "reason": str(reason or "")}
+
+
+def _load(resolve: Resolver, name: str, function: str, project_id: str, requirement_no: str = "") -> Dict[str, Any]:
+    row, _source, _reason = _probe(resolve, name, function, project_id, requirement_no)
+    return row
+
+
+def _load_list(resolve: Resolver, name: str, function: str, project_id: str) -> List[Any]:
+    rows, _source, _reason = _probe_list(resolve, name, function, project_id)
+    return rows
 
 
 def stage_chain(project_id: str, resolve: Resolver = None, *, stage: str = "") -> List[Dict[str, Any]]:
     """上一段的版本必须传进下一段（Spec §6.1）。"""
-    box = _load(resolve, "packaging_match", "load_box_match", project_id)
-    bom = _load(resolve, "packaging_bom", "load_bom", project_id)
-    route = _load(resolve, "packaging_route", "load_route", project_id)
-    versions = _load_list(resolve, "packaging_route", "route_versions", project_id)
-    cost = _load(resolve, "packaging_cost", "load_cost", project_id)
+    box, box_source, box_reason = _probe(resolve, "packaging_match", "load_box_match", project_id)
+    bom, bom_source, bom_reason = _probe(resolve, "packaging_bom", "load_bom", project_id)
+    route, route_source, route_reason = _probe(resolve, "packaging_route", "load_route", project_id)
+    versions, versions_source, versions_reason = _probe_list(
+        resolve, "packaging_route", "route_versions", project_id)
+    # 路线段有两个入口：任一抛异常都算这一段读不到（"先抛出的那个"给原因）。
+    route_source, route_reason = _worse_source((route_source, route_reason),
+                                               (versions_source, versions_reason))
+    cost, cost_source, cost_reason = _probe(resolve, "packaging_cost", "load_cost", project_id)
     cost_module = _engine(resolve, "packaging_cost")
     result_version = ""
     result_version_of = getattr(cost_module, "result_version_of", None) if cost_module else None
-    if callable(result_version_of) and cost:
+    if cost and not callable(result_version_of):
+        # 可选函数不存在 = "这个部署没有这一段"，与"算版本时挂了"分家（Spec §2.1）。
+        cost_source, cost_reason = _worse_source((cost_source, cost_reason), ("absent", ""))
+    elif callable(result_version_of) and cost:
         try:
             result_version = str(result_version_of(cost))
-        except Exception:
-            result_version = ""
+        except Exception as exc:                        # noqa: BLE001 - 读不到要披露，不许炸
+            cost_source, cost_reason = "unavailable", type(exc).__name__
     version_row = {}
     if isinstance(versions, dict):
         version_row = versions
@@ -245,22 +293,30 @@ def stage_chain(project_id: str, resolve: Resolver = None, *, stage: str = "") -
                      "status": str(box.get("decision") or "none"),
                      "confirmed_by": str(box.get("confirmed_by") or ""),
                      "confirmed_at": str(box.get("confirmed_at") or ""),
-                     "engine_version": str(box.get("engine_version") or "")})
+                     "engine_version": str(box.get("engine_version") or ""),
+                     "source": box_source,
+                     "unavailable": _stage_disclosure(box_source, box_reason)})
     if str(stage or "") in ("route", "cost", "quote_draft", "quote_publish", ""):
         rows.append({"stage": "bom",
                      "value": str(bom.get("generated_at") or ""),
                      "status": "built" if bom.get("built") else "none",
-                     "engine_version": str(bom.get("engine_version") or "")})
+                     "engine_version": str(bom.get("engine_version") or ""),
+                     "source": bom_source,
+                     "unavailable": _stage_disclosure(bom_source, bom_reason)})
     if str(stage or "") in ("cost", "quote_draft", "quote_publish", ""):
         rows.append({"stage": "route",
                      "value": str(version_row.get("version") or ""),
                      "status": str(version_row.get("status") or route.get("status") or ""),
-                     "engine_version": str(route.get("engine_version") or "")})
+                     "engine_version": str(route.get("engine_version") or ""),
+                     "source": route_source,
+                     "unavailable": _stage_disclosure(route_source, route_reason)})
     if str(stage or "") in ("quote_draft", "quote_publish", ""):
         rows.append({"stage": "cost",
                      "value": result_version,
                      "status": "built" if cost.get("built") else "none",
-                     "engine_version": str(cost.get("engine_version") or "")})
+                     "engine_version": str(cost.get("engine_version") or ""),
+                     "source": cost_source,
+                     "unavailable": _stage_disclosure(cost_source, cost_reason)})
     return rows
 
 
@@ -308,6 +364,18 @@ def inheritance(project_id: str, resolve: Resolver = None, *, stage: str = "") -
         "stage": str(stage or ""),
         "stage_chain": chain,
     }
+    # 链条里"读不到 / 没装"的段（Spec `packaging-stage-chain-read-failure-disclosure.md` §2.1）：
+    # 全绿给 `{}`；有非 engine 的段才给码，`stages` 按链条顺序。
+    bad_stages: Dict[str, Any] = {}
+    for row in chain:
+        source = str(row.get("source") or "")
+        if source == "engine":
+            continue
+        bad_stages[str(row.get("stage"))] = {
+            "source": source,
+            "reason": str((row.get("unavailable") or {}).get("reason") or "")}
+    payload["stage_chain_unavailable"] = (
+        {"code": "stage_chain_stage_unavailable", "stages": bad_stages} if bad_stages else {})
     payload["source_versions"] = {
         "drawing_version": drawing_version,
         "ir_version": payload["source_ir_version"],

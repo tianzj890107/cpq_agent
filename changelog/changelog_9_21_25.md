@@ -15750,3 +15750,45 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
   字面口径实现，记在 Spec §5.3（既有测试没有覆盖该组合）。
 - 只标记不重排、不覆盖已存路线、不改 `build_route()` 三条 409 判据；未 push / 未建 MR /
   未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 366. 落地 `packaging-stage-chain-read-failure-disclosure`：链条里"这一段读不到"不再显示成"这一段还没做"（10 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+`packaging_drawing_flow/anchor._load()` / `_load_list()` 把"模块或函数没装"与"调用抛异常"吞成同一个
+`{}` / `[]`，`stage_chain()` 于是给这一段的 `value: ""` + `status: "none"` —— 与"这段业务上确实还
+没做"逐字相同：BOM / 路线 / 成本服务抖一下，用户读到的结论是"这一段还没做"（于是去重跑下游），
+而真相是"读不到"（重跑不会让它变好）；`result_version_of(cost)` 抛异常同样退成 `""`。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_drawing_flow/anchor.py`（只这一个文件）
+  - 新增 `STAGE_SOURCES = ("engine", "absent", "unavailable")`、`_probe()` / `_probe_list()`
+    （返回 `(row, source, reason)`）、`_worse_source()`（`unavailable` > `absent` > `engine`）、
+    `_stage_disclosure()`；
+  - `stage_chain()` 四段各加 `source` 与 `unavailable`（非 `unavailable` 给 `{}`）；`route` 段取
+    `load_route` / `route_versions` 两者较严重者；`result_version_of` 拉不到（cost 非空）→ `absent`，
+    抛异常 → `unavailable`，`result_version` 仍给 `""` 绝不编；
+  - 既有 `stage` / `value` / `status` / `engine_version` / `confirmed_by` / `confirmed_at` 逐字未动；
+    `_load()` / `_load_list()` 保留为薄封装（`unresolved_gaps()` 行为不变）；
+  - `inheritance()` 新增 `stage_chain_unavailable`（全 `engine` → `{}`；否则 `code` + 按链条顺序的
+    `stages`）；`source_versions.stage_chain` 与顶层仍是同一份；
+  - `main.py` 未改（`"inheritance": packaging_drawing_flow.inheritance(pid)` 自动带出新键）。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_stage_chain_read_failure_red
+# Ran 10 tests ... OK（P1–P5/P7/P8 由红转绿；P6/P9/P10 三条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_drawing_flow_red \
+    tests.test_packaging_quote_close_loop_red tests.test_packaging_silent_degradation_red
+# Ran 163 tests ... OK (skipped=1)
+```
+
+### 四、边界
+
+- 新实现把"第二次 `fn(project_id)` 又抛 TypeError"这一支也收进 `unavailable`（原 `_load()` 会漏出去），
+  更保守、非回归；
+- `result_version_of` 不存在只在 `cost` 段读到东西时报 `absent`，空成本仍按 `engine`（Spec §2.1 未细分
+  这一组合，保留既有口径），记在 Spec §5.3；
+- 只披露不重跑、不改门禁结论；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
