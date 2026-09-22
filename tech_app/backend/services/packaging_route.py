@@ -444,24 +444,54 @@ def _current_bom_rows(project_id: str, requirement_no: str):
     return rows, {}
 
 
+def _current_confirmed_box(project_id: str, requirement_no: str):
+    """当前**确认**的盒型：`(盒型, 不可用标记)`（Spec `packaging-route-box-type-drift.md` §2.1）。
+
+    只读 `da_repo.load_box_match()`（**绝不**触发匹配或重确认盒型）；读不到 → 空串 +
+    `{"code": "box_match_unavailable", "reason": ...}`；还没确认过 → 空串 + `{}`
+    （"还没确认" ≠ "盒型变了"）。
+    """
+    try:
+        record = da_repo.load_box_match(project_id, requirement_no)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return "", {"code": "box_match_unavailable", "reason": type(exc).__name__}
+    if not isinstance(record, dict):
+        return "", {}
+    if _text(record.get("decision")) != "confirmed":
+        return "", {}
+    return _text(record.get("confirmed_box_type")), {}
+
+
 def _stored_source_versions(row: dict) -> dict:
     """落库的那一份 BOM 来源（Spec §2.2）：**存的**，不是读的时候现取的。"""
     stored = _loads((row or {}).get("source_versions_json"), {})
     return stored if isinstance(stored, dict) else {}
 
 
-def _bom_drift_reasons(stored: dict, project_id: str, requirement_no: str) -> tuple:
+def _has_source_versions_column(row: dict) -> bool:
+    """行里**确实带** `source_versions_json` 这一列吗（Spec §2.2 的 `provenance_missing` 判据）。
+
+    库升级后这一列一定在（`_add_missing_columns()` 补的），所以真实历史行都会命中；
+    这里区分的是"这一列在、但没有内容"与"这份读取路径根本不知道'来源'这回事"
+    （`packaging-route-box-type-drift.md` 的红测夹具就是后者：整行没有这一列）。
+    "没有这一列"不许被当成"有过来源又丢了"。
+    """
+    return isinstance(row, dict) and "source_versions_json" in row
+
+
+def _bom_drift_reasons(stored: dict, project_id: str, requirement_no: str, *,
+                       has_column: bool = True) -> tuple:
     """BOM 轴的 stale 原因（Spec §2.2）：`(原因, bom_unavailable)`。
 
     - `bom_rebuilt`：存的 `bom_hash` 非空，且 ≠ 当前 BOM 的 `bom_input_hash()`；
-    - `provenance_missing`：路线存在但没存 `source_versions`。
+    - `provenance_missing`：路线存在、**这一列也在**，但没存 `source_versions`。
 
     判定与"是否确认过"无关（Spec §4 F6），所以调用方**不许**把它塞进
     `_stale_reasons()` 开头 `if not versions: return []` 的早退分支里。
     比较不了（BOM 读不到）时不给 `bom_rebuilt`：**"比较不了" ≠ "变了"**。
     """
     reasons: list = []
-    if not stored:
+    if has_column and not stored:
         reasons.append("provenance_missing")
     stored_hash = _text((stored or {}).get("bom_hash"))
     rows, unavailable = _current_bom_rows(project_id, requirement_no)
@@ -498,6 +528,9 @@ def _empty_route(requirement_no: str, confirmed_versions: int) -> dict:
         # §2.2）——"还没排"不是"过期"，也不是"有上游版本"。
         "source_versions": {},
         "bom_unavailable": {},
+        # 盒型轴同理（Spec `packaging-route-box-type-drift.md` §2.1）："还没排"不是"盒型变了"。
+        "current_box_type_code": "",
+        "box_match_unavailable": {},
         "total_seconds": None,
         "batch_seconds": None,
         "has_incomplete_time": False,
@@ -553,7 +586,14 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
     # BOM 轴的两条原因（Spec `packaging-route-bom-version-pinning.md` §2.2）：与既有三条
     # 同构（固定顺序、去重），但**不**受"有没有冻结版本"影响 —— 还没确认过的路线同样要报。
     stored_versions = _stored_source_versions(row)
-    bom_reasons, bom_unavailable = _bom_drift_reasons(stored_versions, project_id, req_no)
+    bom_reasons, bom_unavailable = _bom_drift_reasons(
+        stored_versions, project_id, req_no, has_column=_has_source_versions_column(row))
+    # 盒型轴（Spec `packaging-route-box-type-drift.md` §2.1）：路线照的盒型 ≠ 当前确认的盒型。
+    # 任一侧为空不算命中（"没排过 / 没确认过"不是"变了"）；读不到匹配记录时"比较不了"，不判。
+    current_box_type, box_unavailable = _current_confirmed_box(project_id, req_no)
+    route_box_type = _text(row.get("box_type_code"))
+    if current_box_type and route_box_type and current_box_type != route_box_type:
+        bom_reasons = list(bom_reasons) + ["box_type_reconfirmed"]
     for code in bom_reasons:
         if code not in reasons:
             reasons.append(code)
@@ -571,6 +611,10 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
         "source_versions": stored_versions,
         # 当前 BOM **比较不了**（读不到 / 空）时的披露（Spec §2.2）：正常给 `{}`。
         "bom_unavailable": bom_unavailable,
+        # 当前确认的盒型（Spec `packaging-route-box-type-drift.md` §2.1）：`decision != "confirmed"`
+        # 或读不到给 `""`；不确认过、读不到都不算漂移。
+        "current_box_type_code": current_box_type,
+        "box_match_unavailable": box_unavailable,
         "generated_at": _text(row.get("generated_at")),
         "status": _text(row.get("status")) or "draft",
         "confirmed_by": row.get("confirmed_by") or None,
@@ -694,34 +738,43 @@ def confirm_route(project_id: str, requirement_no: str, *, actor: Any = None) ->
         raise RouteError("路线顺序不合法，不能确认：%s" % "；".join(violations), 409,
                          "route_not_confirmable")
 
-    # 确认的语义是"冻结我照的那一版输入"（Spec `packaging-route-bom-version-pinning.md` §2.2）：
-    # 没有来源 / 来源与当前 BOM 对不上，都必须先重算再确认 —— 不许把"照旧 BOM 排的"结论
-    # 当成新版本冻起来。这一关在既有判定之前，且被拒时一个版本快照都不留。
-    stored_versions = _stored_source_versions(row)
-    stored_hash = _text(stored_versions.get("bom_hash"))
-    if not stored_versions or not stored_hash:
-        raise RouteError("这份工艺路线没有记录排产照的那一版 BOM，请先重算再确认（Spec §5）",
-                         409, "route_bom_provenance_missing")
-    live_rows, unavailable = _current_bom_rows(project_id, req_no)
-    if unavailable:
-        raise RouteError("当前读不到包装 BOM，无法核对这份路线照的是哪一版，请稍后再确认",
-                         409, "bom_unavailable")
-    current_hash = bom_input_hash(live_rows)
-    if current_hash != stored_hash:
-        raise RouteError("排产照的那一版 BOM 已经变了，请先重算路线再确认（Spec §2.2）",
-                         409, "bom_rebuilt")
+    # 盒型轴（Spec `packaging-route-box-type-drift.md` §2.1）：照 A 排的路线不许在"当前确认的是 B"
+    # 时被确认成冻结版本。任一侧为空不算命中；读不到匹配记录不新增拒绝（"比较不了" ≠ "变了"）。
+    current_box_type, _box_unavailable = _current_confirmed_box(project_id, req_no)
+    route_box_type = _text(row.get("box_type_code"))
+    if current_box_type and route_box_type and current_box_type != route_box_type:
+        raise RouteError("这条路线是照盒型 %s 排的，现在确认的是 %s，请重排后再确认（Spec §2.1）"
+                         % (route_box_type, current_box_type), 409, "box_type_reconfirmed")
 
     versions = da_repo.packaging_route_versions(project_id, req_no)
     data = _requirement_data(project_id)
     fingerprint, surface_json, quantity = route_fingerprint(
         _text(row.get("box_type_code")), steps, data)
+    # 幂等重复确认不冻结任何新东西：指纹一致就照旧早退，不再要求输入版本可比
+    # （历史行没有来源也不该让"重复确认"变成 409 —— 那条纪律属于"要追加新版本"的路径）。
+    stored_versions = _stored_source_versions(row)
+    stored_hash = _text(stored_versions.get("bom_hash"))
+    live_rows, bom_unavailable = _current_bom_rows(project_id, req_no)
+    current_hash = bom_input_hash(live_rows) if live_rows is not None else ""
     if _text(row.get("status")) == "confirmed" and versions:
         latest = versions[-1]
         if (_text(latest.get("steps_fingerprint")) == fingerprint
                 and _text(latest.get("surface_json")) == surface_json
                 and _num(latest.get("quote_quantity")) == quantity
-                and current_hash == stored_hash):
+                and (not stored_hash or not current_hash or current_hash == stored_hash)):
             return load_route(project_id, req_no)
+
+    # 要追加新版本才核对"排产照的那一版输入"（Spec `packaging-route-bom-version-pinning.md` §2.2）：
+    # 没有来源 / 来源与当前 BOM 对不上，都必须先重算再确认；被拒时一个版本快照都不留。
+    if not stored_versions or not stored_hash:
+        raise RouteError("这份工艺路线没有记录排产照的那一版 BOM，请先重算再确认（Spec §5）",
+                         409, "route_bom_provenance_missing")
+    if bom_unavailable or not current_hash:
+        raise RouteError("当前读不到包装 BOM，无法核对这份路线照的是哪一版，请稍后再确认",
+                         409, "bom_unavailable")
+    if current_hash != stored_hash:
+        raise RouteError("排产照的那一版 BOM 已经变了，请先重算路线再确认（Spec §2.2）",
+                         409, "bom_rebuilt")
 
     by = _actor_name(actor)
     now = da_db.now()

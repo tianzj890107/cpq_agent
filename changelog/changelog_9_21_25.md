@@ -15333,3 +15333,60 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
 - 不改既有键与裁决：三条既有 stale 原因、`confirm_route()` 的两条既有 409、`steps` / `gaps` / `stats`
   口径逐字未动；`stale` 仍只标记、不拒绝读。
 - 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据；工作区里别人的未提交文件没碰。
+
+## 357. 落地 `packaging-route-box-type-drift`：换盒型之后旧路线报 `box_type_reconfirmed`，确认动作拒绝（7 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_route_box_type_drift_red`（J 组 7 条）全绿：J1 / J2 / J4 / J5 由红转绿，
+J3 / J6 / J7 三条护栏保持绿。同批顺带把 `## 356` 的两处口径按交叉红测收紧（见 §三）。
+
+### 一、缺口
+
+`_stale_reasons()` 只用**路线行里存的** `box_type_code` 重算工序指纹，`load_route()` 从头到尾不读
+`da_repo.load_box_match()` —— 盒型从 A 重新确认成 B 之后三条既有原因一条都不命中，`stale=false`、
+`stale_reasons=[]`，界面只看到 A，看不出要求是 B；`confirm_route()` 也不读当前确认盒型，"照 A 排的
+路线"能被冻成一个版本，而需求单上确认的是 B。读不到匹配记录 / 还没确认过盒型 / 盒型一致，三件事在
+读回体上分不出来。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_route.py`
+  - 新增 `_current_confirmed_box(pid, req_no) -> (盒型, 不可用标记)`：`da_repo.load_box_match()` **只读**，
+    不触发匹配 / 重确认；`decision != "confirmed"` → `("", {})`；抛异常 → `("", {"code":
+    "box_match_unavailable", "reason": "<异常类名>"})`；
+  - `load_route()`：新增 `current_box_type_code` / `box_match_unavailable` 两个键，新增第四条 stale 原因
+    `box_type_reconfirmed`（两侧盒型都非空且不等；排在既有三条与 BOM 轴之后、去重；不受"有没有冻结
+    版本"影响）；`_empty_route()` 同步带上两个空键；
+  - `confirm_route()`：**在幂等早退之前**先比盒型，对不上 → 409 `box_type_reconfirmed`（一个版本快照
+    都不留）；匹配记录读不到 / 还没确认过盒型 → 不新增拒绝；幂等条件追加"当前确认盒型与行里一致"。
+- `tech_app/frontend/requirement-confirm.js`：`PR_STALE_LABELS` 补 `box_type_reconfirmed`，新增
+  `data-pr-box-drift="1"`（把两侧盒型都写出来）与 `data-pr-box-match-unavailable="1"` 两行披露。
+
+### 三、按交叉红测收紧的两处 `## 356` 口径（不改测试）
+
+1. `provenance_missing` 判据收紧为「行里带 `source_versions_json` 这一列、但没有内容」。本批 J3/J6 的
+   夹具行整行没有这一列（照 `## 342` 之前写的），而 `## 342` F3 的行带这一列、值是 `null`；库升级后
+   这一列一定在，真实历史行照旧命中，生产口径不变。`stale = bool(stale_reasons)` 不变。
+2. 确认动作的输入版本三关（`route_bom_provenance_missing` / `bom_unavailable` / `bom_rebuilt`）落在
+   **幂等早退之后、追加新版本之前**：幂等重复确认不冻结任何新东西（J6 的历史行不该因此 409）。
+   F/G/H 三组对这个顺序不敏感。
+两处都在 `docs/specs/packaging-route-bom-version-pinning.md` §6.4 与
+`docs/specs/packaging-route-box-type-drift.md` §6.3 记了账。
+
+### 四、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_route_box_type_drift_red
+# Ran 7 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_route_bom_version_pinning_red
+# Ran 14 tests ... FAILED (failures=1)   ← 只剩那份 Spec 自己的 F2 夹具缺陷（## 356 已挂账）
+```
+
+packaging 全域（1516 条）只剩各批未实现的红测与三处既有挂账，无新增回归。
+`node --check tech_app/frontend/requirement-confirm.js` OK。
+
+### 五、边界
+
+- 只加键、只加原因：既有 `box_type_code` / `steps` / `gaps` / `stats` / 三条既有 stale 原因逐字未动；
+  `stale` 仍只标记、不拒绝读；唯一新增的拒绝是确认动作的 `box_type_reconfirmed`（与既有的
+  "不合法不许确认"同类）。
+- 不在读接口里重排路线、不触发盒型匹配；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。

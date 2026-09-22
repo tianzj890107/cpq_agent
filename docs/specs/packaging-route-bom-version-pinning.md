@@ -255,3 +255,14 @@ Spec §4 的 F2 口径（指纹为准：`generated_at` 变了、行没变就不�
 同一场景（`stored_versions(bom_hash=bom_input_hash(bom_rows()))` + `generated_at=NEW`）得到
 `stale_reasons=[]`，而把行内容改掉（`length_mm=120`）得到 `["bom_rebuilt"]` —— 与 F1/F2 的意图
 逐条一致。本批按 §2.2 实现，不改红测；F2 那一条断言作为已知的夹具缺陷挂账。
+
+### 6.4 落地后的一处收紧（与 `packaging-route-box-type-drift.md` 交叉）
+
+`provenance_missing` 的判据在落地 `## 343`（`packaging-route-box-type-drift.md`）时收紧为
+「**行里带 `source_versions_json` 这一列、但没有内容**」（`_has_source_versions_column()`）。
+原因：那份 Spec 的红测夹具行**整行没有这一列**（照本批之前的世界写的），而 F3 的行带这一列、值为
+`null`；库升级后这一列一定在（`_add_missing_columns()` 补的），所以真实历史行照旧命中，生产口径不变。
+`stale = bool(stale_reasons)` 保持不变。详见 §6.3 与 `packaging-route-box-type-drift.md` §6.3。
+另外，确认动作的输入版本核对（§2.2 的 `route_bom_provenance_missing` / `bom_unavailable` /
+`bom_rebuilt` 三关）落在**幂等早退之后、追加新版本之前**：幂等重复确认不冻结任何新东西，不该因为
+历史行没有来源而变成 409。§2.2「确认（含幂等早退）前」按此实现为准（F/G/H 三组红测对这个顺序不敏感）。

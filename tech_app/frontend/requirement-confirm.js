@@ -532,7 +532,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   const PR_WRITE_ROLES = ['process_manager', 'process_director', 'admin'];
   const PR_WRITE_HINT = '需要工艺经理、工艺技术总监或管理员权限';
   const PR_STATUS_LABELS = {draft: '草稿（未确认）', confirmed: '已确认'};
-  const PR_STALE_LABELS = {route_changed: '工序序列已变', requirement_changed: '表面工艺字段已变', quantity_changed: '报价数量已变', bom_rebuilt: '排产照的那一版 BOM 已变', provenance_missing: '这份路线没记下排产照的是哪一版 BOM（历史数据，请重算）'};
+  const PR_STALE_LABELS = {route_changed: '工序序列已变', requirement_changed: '表面工艺字段已变', quantity_changed: '报价数量已变', bom_rebuilt: '排产照的那一版 BOM 已变', provenance_missing: '这份路线没记下排产照的是哪一版 BOM（历史数据，请重算）', box_type_reconfirmed: '确认的盒型已改'};
   let prPid = '';
   let prBusy = false;
 
@@ -616,6 +616,12 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     // 当前 BOM 读不到 = "比较不了"，不许说成"没有上游版本"（Spec packaging-route-bom-version-pinning.md §2.5）。
     const bomUnknown = (route.bom_unavailable && route.bom_unavailable.code)
       ? `<div class="pr-stale" data-pr-bom-unavailable="1">当前读不到包装 BOM，无法核对这份路线照的是哪一版（不是"没有上游版本"）。</div>` : '';
+    // 盒型轴（Spec packaging-route-box-type-drift.md §2.1）：两侧盒型都写出来，别让人猜。
+    const boxDrift = staleReasons.includes('box_type_reconfirmed')
+      ? `<div class="pr-stale" data-pr-box-drift="1">这条路线是照盒型 ${prEsc(route.box_type_code || '—')} 排的，现在确认的是 ${prEsc(route.current_box_type_code || '—')}，请重排。</div>` : '';
+    // 读不到盒型确认记录 = "比较不了"，不许说成"盒型没变"（Spec §2.3）。
+    const boxUnknown = (route.box_match_unavailable && route.box_match_unavailable.code)
+      ? `<div class="pr-stale" data-pr-box-match-unavailable="1">当前读不到盒型确认记录，无法核对这条路线照的是哪个盒型。</div>` : '';
     const needsTime = (gaps.needs_standard_time || []);
     const aggregate = (gaps.aggregate_steps || []);
     const violations = (gaps.order_violations || []);
@@ -644,6 +650,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pr-hint">工序顺序按第 6 批的规范位次排（不用知识库的里程碑分组）；顺序违规 / 待补工时都是显式缺口，不编数。状态：${prEsc(PR_STATUS_LABELS[status] || status)}${confirmed ? ` · ${confirmed}` : ''}</div>
       ${stale}
       ${bomUnknown}
+      ${boxDrift}
+      ${boxUnknown}
       <div class="pr-hint">共 ${prEsc(stats.step_count || 0)} 道 · 模板工序 ${prEsc(stats.template_steps || 0)} · 需求补齐 ${prEsc(stats.synthetic_steps || 0)} · 手工 ${prEsc(stats.manual_steps || 0)} · 自动 ${prEsc(stats.auto_steps || 0)} · 已冻结 ${prEsc(stats.confirmed_versions || 0)} 版。单件合计 ${prEsc(route.total_seconds === null || route.total_seconds === undefined ? '—' : `${route.total_seconds}s`)} · 批量 ${prEsc(route.batch_seconds === null || route.batch_seconds === undefined ? '—' : `${route.batch_seconds}s`)}。</div>
       ${gapLines}
       <div class="pr-actions">
