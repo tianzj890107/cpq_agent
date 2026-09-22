@@ -15708,3 +15708,45 @@ node --check tech_app/frontend/requirement-confirm.js    # OK
   除这句文案外 §2.1 的字面要求逐条照做，详见 Spec §5.3（未改任何测试）。
 - 不许改 `PRECONDITION_BLOCKERS` 两条文案 / `provenance.py` 稳定码 / 路由形状；未 push /
   未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 365. 落地 `packaging-route-recompute-unavailable`：路线"现在排不出来"要报出来，`gaps.no_process_template` 不再写死（4 OK）（9-22，Codex 实现）
+
+### 一、缺口
+
+`packaging_route._stale_reasons()` 里 `except RouteError: current = None` 之后把"当前指纹"顶回
+**存的**指纹 —— "现在排不出来"与"排出来一模一样"在读回体上完全同形，`route_changed` 永远不可能
+命中；`load_route()` 的 `gaps.no_process_template` 还是写死的 `False`，而 `build_route()` 在同样的
+输入下会 `409 no_process_template` —— 重排报错、读回说没缺口，界面两侧打架；`except RouteError:`
+还把 `RouteError.code` 吞掉，读接口说不出排不出来的原因。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_route.py`
+  - `_stale_reasons()` 改返回 `(reasons, route_recompute_unavailable)`：失败时记
+    `{"code": RouteError.code 逐字, "reason": RouteError.message 逐字}`，且**不给** `route_changed`
+    （"算不出来" ≠ "变过"）；重算成功时三条轴的判法与顺序逐字不变；
+  - `load_route()` 与 `source_versions` / `bom_unavailable` 同级挂 `route_recompute_unavailable`
+    （正常 `{}`）；`gaps.no_process_template` 改成"失败且 `code == "no_process_template"`"才为真，
+    `_empty_route()` 仍给 `False`；已存路线与工序照旧返回，读接口不报错；
+  - `main.py` 未改（读路由 `return {"route": …}`，新键自动带出）。
+- `tech_app/frontend/requirement-confirm.js`：`prPanel()` 新增 `data-pr-recompute-unavailable` 横幅
+  （原因码 + message 原样带出）与 `gaps.no_process_template` 的 `pr-gap-error` 一行。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_route_recompute_unavailable_red
+# Ran 4 tests ... OK（K1/K2 由红转绿；K3/K4 两条护栏仍绿）
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_process_route_red \
+    tests.test_packaging_quote_close_loop_red tests.test_packaging_route_bom_version_pinning_red \
+    tests.test_packaging_route_box_type_drift_red tests.test_packaging_parametric_bom_red
+# Ran 231 tests, 1 failure = route_bom_version_pinning::F2（## 356 已挂账的夹具哨兵指纹缺陷）
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 四、边界
+
+- 重算失败时**整条** `route_changed` 判定跳过（含"存的工序 ≠ 冻结版本"那条轴），按 Spec §2.1
+  字面口径实现，记在 Spec §5.3（既有测试没有覆盖该组合）。
+- 只标记不重排、不覆盖已存路线、不改 `build_route()` 三条 409 判据；未 push / 未建 MR /
+  未 tag / 未部署 / 未连库 / 未写生产数据。

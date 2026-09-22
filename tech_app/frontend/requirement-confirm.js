@@ -622,10 +622,18 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     // 读不到盒型确认记录 = "比较不了"，不许说成"盒型没变"（Spec §2.3）。
     const boxUnknown = (route.box_match_unavailable && route.box_match_unavailable.code)
       ? `<div class="pr-stale" data-pr-box-match-unavailable="1">当前读不到盒型确认记录，无法核对这条路线照的是哪个盒型。</div>` : '';
+    // "按当前输入排不出来"要报出来（Spec packaging-route-recompute-unavailable.md §2.3）：
+    // 披露归披露，已存的路线与工序照旧显示；原因码原样带出来，不许只报"有问题"。
+    const recomputeUnknown = (route.route_recompute_unavailable
+      && (route.route_recompute_unavailable.code || route.route_recompute_unavailable.reason))
+      ? `<div class="pr-stale" data-pr-recompute-unavailable="1">按当前输入已经排不出这条路线（原因：${prEsc(route.route_recompute_unavailable.code || '未标明')}${route.route_recompute_unavailable.reason ? ` · ${prEsc(route.route_recompute_unavailable.reason)}` : ''}），请检查盒型工艺模板。</div>` : '';
     const needsTime = (gaps.needs_standard_time || []);
     const aggregate = (gaps.aggregate_steps || []);
     const violations = (gaps.order_violations || []);
     const gapLines = [
+      // 模板没了这条缺口读回时必须是真的（Spec packaging-route-recompute-unavailable.md §2.1/§2.3）：
+      // 重排会 409、读回却说"没缺口"就是界面两侧打架。
+      gaps.no_process_template ? `<div class="pr-gap pr-gap-error">盒型 ${prEsc(route.box_type_code || '—')} 没有工艺模板，按当前输入排不出工艺路线（重排会直接失败，请先补齐模板）。</div>` : '',
       needsTime.length ? `<div class="pr-gap">待补标准工时：${prEsc(needsTime.join('、'))}（模板没有这道工序的秒数，不编数）</div>` : '',
       aggregate.length ? `<div class="pr-gap">未拆开的聚合工序：${prEsc(aggregate.join('、'))}（需求没填覆膜/烫金/UV，保留模板原样）</div>` : '',
       violations.length ? `<div class="pr-gap pr-gap-error">顺序违规：${prEsc(violations.join('；'))}（不改好不能确认）</div>` : '',
@@ -652,6 +660,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${bomUnknown}
       ${boxDrift}
       ${boxUnknown}
+      ${recomputeUnknown}
       <div class="pr-hint">共 ${prEsc(stats.step_count || 0)} 道 · 模板工序 ${prEsc(stats.template_steps || 0)} · 需求补齐 ${prEsc(stats.synthetic_steps || 0)} · 手工 ${prEsc(stats.manual_steps || 0)} · 自动 ${prEsc(stats.auto_steps || 0)} · 已冻结 ${prEsc(stats.confirmed_versions || 0)} 版。单件合计 ${prEsc(route.total_seconds === null || route.total_seconds === undefined ? '—' : `${route.total_seconds}s`)} · 批量 ${prEsc(route.batch_seconds === null || route.batch_seconds === undefined ? '—' : `${route.batch_seconds}s`)}。</div>
       ${gapLines}
       <div class="pr-actions">

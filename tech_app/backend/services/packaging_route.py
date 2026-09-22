@@ -544,31 +544,41 @@ def _empty_route(requirement_no: str, confirmed_versions: int) -> dict:
     }
 
 
-def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> list:
-    """确认后再次读取：与最近一次冻结版本比对（Spec §3.2）。"""
+def _stale_reasons(row: dict, steps: list, versions: list, project_id: str) -> tuple:
+    """确认后再次读取：与最近一次冻结版本比对（Spec §3.2）。
+
+    返回 `(reasons, route_recompute_unavailable)`（Spec `packaging-route-recompute-unavailable.md`
+    §2.1）："用当前输入重排算不出来"是**一条要披露的事实**，绝不许被折成"指纹没变"
+    ——失败时把 `RouteError.code` / `message` 逐字带出来，并且不给 `route_changed`
+    （"算不出来" ≠ "变过"）。重算成功时三条轴的判法与顺序逐字不变。
+    """
     if not versions:
-        return []
+        return [], {}
     latest = versions[-1]
     data = _requirement_data(project_id)
     box_code = _text(row.get("box_type_code"))
     current = None
+    recompute_unavailable: dict = {}
     if box_code:
         try:
             current = build_route_steps(box_code, data)
-        except RouteError:
+        except RouteError as exc:
             current = None
+            recompute_unavailable = {"code": _text(getattr(exc, "code", "")),
+                                     "reason": str(getattr(exc, "message", "") or exc)}
     stored_fingerprint = _steps_fingerprint(steps)
     current_fingerprint = (_steps_fingerprint(current["steps"]) if current
                            else stored_fingerprint)
     frozen = _text(latest.get("steps_fingerprint"))
     reasons: list = []
-    if frozen and (frozen != stored_fingerprint or frozen != current_fingerprint):
-        reasons.append("route_changed")
+    if not recompute_unavailable:
+        if frozen and (frozen != stored_fingerprint or frozen != current_fingerprint):
+            reasons.append("route_changed")
     if _text(latest.get("surface_json")) != _surface_snapshot(data):
         reasons.append("requirement_changed")
     if _num(latest.get("quote_quantity")) != _quote_quantity(data):
         reasons.append("quantity_changed")
-    return reasons
+    return reasons, recompute_unavailable
 
 
 def load_route(project_id: str, requirement_no: str = "") -> dict:
@@ -582,7 +592,7 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
     steps = [_step_out(item) for item in da_repo.load_packaging_route_steps(project_id, req_no)]
     snapshot = _loads(row.get("surface_json"), {})
     required_surface = snapshot.get("required_surface") if isinstance(snapshot, dict) else []
-    reasons = _stale_reasons(row, steps, versions, project_id)
+    reasons, recompute_unavailable = _stale_reasons(row, steps, versions, project_id)
     # BOM 轴的两条原因（Spec `packaging-route-bom-version-pinning.md` §2.2）：与既有三条
     # 同构（固定顺序、去重），但**不**受"有没有冻结版本"影响 —— 还没确认过的路线同样要报。
     stored_versions = _stored_source_versions(row)
@@ -611,6 +621,9 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
         "source_versions": stored_versions,
         # 当前 BOM **比较不了**（读不到 / 空）时的披露（Spec §2.2）：正常给 `{}`。
         "bom_unavailable": bom_unavailable,
+        # 「按当前输入重排算不出来」的披露（Spec `packaging-route-recompute-unavailable.md` §2.1）：
+        # 正常给 `{}`；失败时带 `RouteError` 的原因码与 message。已存的路线照旧返回。
+        "route_recompute_unavailable": recompute_unavailable,
         # 当前确认的盒型（Spec `packaging-route-box-type-drift.md` §2.1）：`decision != "confirmed"`
         # 或读不到给 `""`；不确认过、读不到都不算漂移。
         "current_box_type_code": current_box_type,
@@ -630,7 +643,10 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
             "needs_standard_time": needs_time,
             "order_violations": validate_order(steps),
             "aggregate_steps": aggregate,
-            "no_process_template": False,
+            # 读时实话实说（Spec `packaging-route-recompute-unavailable.md` §2.1）：只有当"按当前输入
+            # 重排算不出来、且原因就是没有工艺模板"时才为真 —— 不许再写死 False。
+            "no_process_template": bool(
+                _text(recompute_unavailable.get("code")) == "no_process_template"),
         },
         "stats": {
             "step_count": len(steps),
