@@ -17176,3 +17176,38 @@ node --check tech_app/frontend/app.js  OK
 
 未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
 未 push / MR / tag / Release / 未部署。
+
+## 400. 落地 `packaging-role-map-unreadable-body`：200 但角色映射正文不可用不再渲染成「每一行都有业务角色了」（新增形状检查 + 纯函数；8 OK）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增纯函数 `packagingRoleMapReadProblemText(problem)`：`code === "role_map_body_unexpected"` →
+  `这一次读到的角色映射正文解不出，请稍后重试；这不代表每一行都有业务角色。`；其余（`{}` / `null` /
+  表外码）→ `""`。无 `document.` / `window.` / `fetch(` / `localStorage`（S3）。
+- `loadPackagingRoleMap()`：`res.json().catch(() => ({}))` 与非 2xx 分支
+  （`payload.detail` / `detail.message || detail` / `` `HTTP ${res.status}` ``）逐字保留；`res.ok`
+  之后新增形状判据 —— `const roleMap = (payload && payload.role_map) || null;`，
+  `shaped = roleMap 是对象 && ("items" in roleMap || "unbound_total" in roleMap || "templates_unavailable" in roleMap)`；
+  `!shaped` → `{code: "role_map_body_unexpected", status: …, message: ""}` 交给
+  `renderPackagingRoleMapUnavailable(packagingRoleMapReadProblemText(problem))`（返回值契约不变，仍是 `null`）；
+  形状正常 → `return renderPackagingRoleMap(roleMap)`（合法的 `items: []` 空态照旧渲染成
+  「每一行都有业务角色了。」）。
+
+未动的：`renderPackagingRoleMap()` / `renderPackagingRoleMapUnavailable()` 的文案与钩子、
+`packagingRoleMapUrl()`、`refreshPackagingParts()` 的调用顺序；`catch` 里
+`renderPackagingRoleMapUnavailable("网络错误，请稍后重试")` 逐字不变；没有
+「任何 200 都当读不到」的放宽；没有重试循环 / 自动重试 / 弹窗 / 重写 `host.innerHTML`。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_role_map_unreadable_body_red   Ran 8  FAILED (failures=5) → Ran 8  OK
+  （红基 S1 S2 S3 S4 S5；护栏 S6 S7 S8 始终绿）
+不回归：part_role_manual_mapping + bom_role_unbound_note_read_failure + parse_terminal_signal
+        Ran 59  OK
+        role_unbound_template_disclosure + parts_panel + authority_thumbnail_media  Ran 57  OK
+node --check tech_app/frontend/app.js  OK
+```
+
+未改任何既有测试与业务数据、未放宽任何断言、未连 PG / SQLite、未起服务、未发 HTTP、
+未 push / MR / tag / Release / 未部署。

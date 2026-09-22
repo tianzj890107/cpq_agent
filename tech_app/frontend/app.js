@@ -2673,6 +2673,16 @@ function renderPackagingRoleMapUnavailable(message) {
   return null;
 }
 
+// 200 但角色映射正文不可用时的文案（Spec `packaging-role-map-unreadable-body.md` §2.1）。
+// 纯函数：只认 `role_map_body_unexpected`，别的码 / 没有码给空串。
+// 这一句存在的意义是**不许**把"正文解不出"渲染成"每一行都有业务角色了。"（那是个会被当成结论的界面）。
+function packagingRoleMapReadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : null;
+  const code = row ? String(row.code || "").trim() : "";
+  if (code !== "role_map_body_unexpected") return "";
+  return "这一次读到的角色映射正文解不出，请稍后重试；这不代表每一行都有业务角色。";
+}
+
 async function loadPackagingRoleMap() {
   if (!currentProject) return null;
   try {
@@ -2684,7 +2694,19 @@ async function loadPackagingRoleMap() {
         (detail && (detail.message || detail)) || (payload && payload.message)
         || `HTTP ${res.status}`);
     }
-    return renderPackagingRoleMap((payload && payload.role_map) || {});
+    // `res.ok` 只说明 HTTP 成功，**不是**"正文可用"（Spec `packaging-role-map-unreadable-body.md` §2.2）：
+    // 形状不对（`payload.role_map` 不是对象，或三个键一个都没有）此前会被 `|| {}` 吃掉，
+    // 渲染成"每一行都有业务角色了。"—— 最危险的结论却由一次读不到触发。合法的 `items: []` 空态照旧渲染。
+    const roleMap = (payload && payload.role_map) || null;
+    const shaped = (roleMap && typeof roleMap === "object")
+      && ("items" in roleMap || "unbound_total" in roleMap
+          || "templates_unavailable" in roleMap);
+    if (!shaped) {
+      const problem = {code: "role_map_body_unexpected", status: Number(res.status) || 0,
+                       message: ""};
+      return renderPackagingRoleMapUnavailable(packagingRoleMapReadProblemText(problem));
+    }
+    return renderPackagingRoleMap(roleMap);
   } catch (error) {
     return renderPackagingRoleMapUnavailable("网络错误，请稍后重试");
   }
