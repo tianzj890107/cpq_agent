@@ -8851,8 +8851,10 @@ async def packaging_business_part_cost(
     def job():
         tasks.report_progress("按权威尺寸（%s）算这一件的材料开料成本"
                               % (inputs.get("size_text") or
-                                 "%s×%s mm" % (_mm_text(inputs["variables"].get("cut_length")),
-                                               _mm_text(inputs["variables"].get("cut_width")))))
+                                 "%s×%s mm" % (packaging_parts._mm_text(
+                                     inputs["variables"].get("cut_length")),
+                                     packaging_parts._mm_text(
+                                         inputs["variables"].get("cut_width")))))
         line = packaging_cost.compute_line("material", dict(inputs["variables"]))
         amount = line.get("amount")
         tasks.report_progress(

@@ -18063,3 +18063,34 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 - 落点：`tech_app/frontend/requirement-confirm.js` 一个文件 —— 新增 `pbBusinessRowsAccount()`（三态闭集 `ready` / `empty` / `unknown`，判据顺序：`record.business_rows` 不是普通对象（老载荷）→ `unknown`，`row_total` 转数 `> 0` → `ready`，否则 → `empty`；四个数一律 `Number()`、非有限 / 负数 → `0`、键必存在；行数**只**读 `business_rows`，体内无 `items` / `.source` / `business_material_rows` / `stats`）与 `pbBusinessRowsBlock()`（`data-pb-business-rows-state` / `-total` / `-needs-input` + 那句人话，**三态都渲**，插值全过 `pbEsc()`）；`pbPanel()` 在业务部件清单那本账之后加**一处**调用。
 - 冻结面：不许自己按行数 `source`（那是后端那一块账的判据，前端重算就是第二套口径）、不许把"没有来自权威清单"说成"没有部件组行"、不许把老载荷显示成 0 行；`keys` 不上界面（逐行缺口与编码仍由 BOM 表格承担）；不改后端 / 接口 / 依赖 / `index.html` / `pbRow()`（逐行标记留给后面一批，Spec §6 边界 1）；既有块一字不动。
 - 复跑：`tests.test_packaging_bom_business_rows_account_panel_red` 21 OK；Spec §5 不回归 6 份（`bom_business_parts_rows` / `bom_business_material_rows` / `bom_business_parts_scope_panel` / `material_map_account_panel` / `bom_disclosure_panel` / `parametric_bom`）`Ran 168 ... OK`；`node --check tech_app/frontend/requirement-confirm.js` 退出码 0；`test_spec_status_truth_red` 7 OK；`git diff --check` 干净。
+
+## 431. 修回 `## 412` 带进来的回归：业务件「按权威尺寸算材料费」那条路由的进度文案读了一个从未绑定的全局名（守卫 `test_tech_backend_undefined_names_dynamic` 红 → 绿）（9-22，Codex 实现）
+
+- 红基（修前，`git stash` 掉本批唯一改动后实测）：
+  `./open-claude/.venv/bin/python -W ignore -m unittest tests.test_tech_backend_undefined_names_dynamic`
+  → `Ran 6 tests … FAILED (failures=1)`，正文逐字
+  `['tech_app/backend/main.py:job:_mm_text']` + "以下位置读了一个从未绑定的全局名，真实请求会 NameError → 500"。
+- 根因：`tech_app/backend/main.py` 的 `packaging_business_part_cost()`（`POST …/packaging-business-parts/{code}/cost`，
+  `## 412` 落地）里 `job()` 的进度文案写成裸 `_mm_text(...)` —— 那是
+  `tech_app/backend/services/packaging_parts.py:3956` 的**模块私有 helper**，`main.py` 里从未绑定；
+  `git blame` 指到 `17d69c4`（## 412）两处，而同一批 `## 414` 在另一条路由里写的却是正确的
+  `packaging_parts._mm_text(...)`（现有 `:8968-8969`）。触发条件：该路由的 `job()` 里
+  `inputs["size_text"]` 为空时才会求 `"%s×%s mm" % (_mm_text(...), _mm_text(...))` —— 即正好是
+  「权威尺寸读到了但没给现成文案」那条分支，线上是 `NameError → 500`（任务体，不在路由的 try 里）。
+- 落点（只改 1 个文件 1 处表达式）：`tech_app/backend/main.py` 的两处 `_mm_text(` 改成
+  `packaging_parts._mm_text(`（与同文件 `:8968-8969` 同形；未动 helper、未动 `business_cost_inputs`、
+  未动其它任何路由）。
+- 为什么没有新 Spec / 新红测：这一批没有新契约 —— 契约就是既有的 `symtable` 型守卫
+  `tests/test_tech_backend_undefined_names_dynamic.py`（零第三方依赖、真跑、不 skip），
+  它**已经**把这条缺陷逐字报出来了；本批是修回自己线带进来的回归，不动任何测试、不新增第二份同义守卫。
+- 验证（修后）：
+  - 守卫 `tests.test_tech_backend_undefined_names_dynamic` → `Ran 6 tests … OK`（含 `ROOT.glob("*.py")`
+    根目录服务端文件，故 `cpq_agent_server.py` 一侧同批一起被覆盖）；
+  - 把修后源码里的表达式用真模块全局名 `eval` 一次（证名字解析得出，不只是编译过）：
+    `packaging_parts` 已绑定 / `_mm_text` 在 `main` 全局里**不存在** /
+    `packaging_parts._mm_text(300.0) → '300'`、`(None) → ''`、`"%s×%s mm" % (…300.0, …200.0) → '300×200 mm'`；
+  - 受影响面：`business_part_cost_by_authority_size + business_part_size_cost_entry +
+    business_part_process_by_authority_route + business_part_process_entry` `Ran 97 … OK`；
+  - `ast.parse(tech_app/backend/main.py)` 通过；`git diff --check` 干净；
+  - packaging 全域 `discover -s tests -p 'test_packaging_*.py'` 与上一批同数同名单（仍是那 5 条既有挂账，本批未引入新红）。
+- 边界：未改前端、未调模型、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
