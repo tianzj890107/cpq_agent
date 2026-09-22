@@ -1355,10 +1355,31 @@ def compute_content(formula_code: str, variables: Optional[dict] = None, *,
     return out
 
 
+#: 只有这一类缺口能因为「本单没绑上」而不进结论（Spec §2.2）；别的码一律照旧阻断。
+UNBOUND_EXEMPT_GAP_PREFIX = "content_formula_error:"
+
+
 def compute_packaging(rows, *, tax_factor: Any = 1.13, loss_uplift: Any = LOSS_UPLIFT,
-                      yield_divisor: Any = YIELD_DIVISOR, rule_rows=None) -> dict:
-    """包材合计：逐条 `compute_content` 求和（Spec §2.10）。"""
+                      yield_divisor: Any = YIELD_DIVISOR, rule_rows=None,
+                      bound_content_codes=None) -> dict:
+    """包材合计：逐条 `compute_content` 求和（Spec §2.10）。
+
+    `bound_content_codes`（Spec `packaging-cost-gaps-scoped-to-order-contents` §2.1）由**调用方**算好
+    传进来：命中即 `binding.status="bound"`，没命中是 `"unbound"`；**不传（None）＝ `"unknown"`，
+    行为与今天逐字相同**（先立契约、后接数据的退路）。缺口据此分家（§2.2）：
+
+    两个列表的每一项都是 `{"content_code", "binding_status", "gap"}`（行级缺口本身留在
+    `lines[i]["gap"]`，一个字都没删）：
+
+    · `bound_gaps`：进结论的缺口（`unbound` 但**不是** `content_formula_error:*` 的也在里面）；
+    · `unbound_gaps`：只披露、不单独阻断的缺口（`unbound` 且是 `content_formula_error:*`）。
+
+    `lines[i]["gap"]` 一个字都不删 —— 披露不许消失，只是不再单独参与结论。
+    """
+    bound = None if bound_content_codes is None else {_text(code) for code in bound_content_codes}
     lines: list = []
+    bound_gaps: list = []
+    unbound_gaps: list = []
     total = 0.0
     for row in (rows or []):
         variables = dict(row)
@@ -1368,10 +1389,36 @@ def compute_packaging(rows, *, tax_factor: Any = 1.13, loss_uplift: Any = LOSS_U
         result = compute_content(row.get("formula_code"), variables, rows=rule_rows)
         if not result.get("content_code"):
             result["content_code"] = _text(row.get("content_code"))
+        code = _text(result.get("content_code"))
+        if bound is None:
+            status = "unknown"
+        else:
+            status = "bound" if code in bound else "unbound"
+        result["binding"] = {"content_code": code, "status": status}
         lines.append(result)
         if result.get("amount") is not None:
             total += result["amount"]
-    return {"amount": total, "lines": lines}
+        gap = result.get("gap")
+        if not gap:
+            continue
+        entry = {"content_code": code, "binding_status": status, "gap": dict(gap)}
+        if status == "unbound" and _text(gap.get("code")).startswith(UNBOUND_EXEMPT_GAP_PREFIX):
+            unbound_gaps.append(entry)
+        else:
+            bound_gaps.append(entry)
+    return {"amount": total, "lines": lines,
+            "bound_gaps": bound_gaps, "unbound_gaps": unbound_gaps}
+
+
+def bound_content_codes(data: Any, *, rows=None) -> set:
+    """本单「绑上的包材项」集合（Spec §2.3）—— **唯一** 一处算它的地方。
+
+    这一版故意只给**空集**：仓库里还没有「这一单到底用哪几项包材」的权威数据源（BOM 的
+    `packaging` 行目前只放物流规则，`3.5 包装与物流` 的字段也只是文本描述），
+    而 Spec 明确写「算不出来就给空集（= 全部 unbound = 只披露不阻断），不许在成本引擎里另写一套
+    猜哪一项用到的规则」。等权威绑定数据接入时，**只改这一个函数**。
+    """
+    return set()
 
 
 def parse_loading_rate(text: Any) -> Optional[float]:
@@ -1794,6 +1841,9 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     """
     payload = cost if isinstance(cost, dict) else {}
     gaps = [gap for gap in (payload.get("gaps") or []) if isinstance(gap, dict)]
+    # 「没绑上本单」的包材缺口只报数（Spec §2.4）：不进 verdict、不进 blocking_total。
+    unbound_total = len([gap for gap in (payload.get("gaps_unbound_to_order") or [])
+                         if isinstance(gap, dict)])
     evidence = [gap_evidence(payload, gap) for gap in gaps]
     blocking = [row for row in evidence if row["severity"] == "blocking"]
     silent = [row for row in evidence if row["silent_zero_fallback"]]
@@ -1815,6 +1865,7 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
         "has_gaps": bool(gaps),
         "gap_total": len(evidence),
         "blocking_total": len(blocking),
+        "unbound_total": unbound_total,
         "silent_zero_total": len(silent),
         "rejected_silent_zero_fallback": bool(silent),
         "affected_amount_total": round(quantified, 6),
@@ -2122,12 +2173,20 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         tooling_lines.append(result)
 
     # 5) 包材 --------------------------------------------------------------- #
-    packaging = compute_packaging(kb_repo.packaging_cost_contents(), tax_factor=tax_factor,
+    # 绑定集合的口径**只有一处**（Spec §2.3）：调用方算好传进来；这一版还没有「哪一项用到」
+    # 的算法，按 Spec 给**空集** —— 全部 unbound = 只披露、不单独阻断，不许在这里现猜。
+    bound_codes = bound_content_codes(data)
+    packaging = compute_packaging(kb_repo.packaging_cost_contents(),
+                                  bound_content_codes=bound_codes,
+                                  tax_factor=tax_factor,
                                   loss_uplift=LOSS_UPLIFT, yield_divisor=YIELD_DIVISOR,
                                   rule_rows=formula_rows)
-    for line in packaging["lines"]:
-        if line.get("gap"):
-            gaps.append(dict(line["gap"]))
+    for entry in (packaging.get("bound_gaps") or []):
+        gaps.append(dict(entry.get("gap") or {}))
+    gaps_unbound_to_order = [dict(entry.get("gap") or {},
+                                 content_code=entry.get("content_code"),
+                                 binding_status="unbound")
+                             for entry in (packaging.get("unbound_gaps") or [])]
 
     # 6) 运输 --------------------------------------------------------------- #
     shipping = _text(data.get("shipping_mode"))
@@ -2205,6 +2264,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         "categories": summary["categories"], "report_groups": summary["report_groups"],
         "category_labels": dict(COST_CATEGORIES),
         "items": items, "computed_at": now,
+        # 「没绑上本单」的包材缺口（Spec §2.3）：进出参只披露，**不参与 verdict**。
+        "gaps_unbound_to_order": gaps_unbound_to_order,
         # 谁算的（Spec `packaging-cost-finance-access.md` §2.3）：留痕跟着记录走，
         # 事后不必翻审计表猜。
         "computed_by": _actor_name(actor), "computed_by_role": _actor_role(actor),

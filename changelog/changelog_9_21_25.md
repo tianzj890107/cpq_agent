@@ -13623,3 +13623,38 @@ tests.test_packaging_cost_rule_routing_red        → Ran 145 … 唯一红是�
 
 只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 的状态行 + 本 changelog；未改任何测试、
 未改 DDL / 种子数据、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
+
+## 336. `packaging-cost-gaps-scoped-to-order-contents` 落地：包材缺口分「本单用得到」与「没绑上本单」，后者只披露不阻断（9-22，Codex 实现）
+
+### 一、改了什么（1 个文件）
+
+`tech_app/backend/services/packaging_cost.py`：
+
+- `compute_packaging(..., bound_content_codes=None)`（Spec §2.1）：每行结果新增
+  `binding = {"content_code", "status"}`（`bound`/`unbound`/`unknown`）；**不传集合 = `unknown`，
+  行为与今天逐字相同**（既有冻结面的退路）。返回体新增 `bound_gaps` / `unbound_gaps`，
+  每项是 `{"content_code", "binding_status", "gap"}`；`lines[i]["gap"]` **一个字没删**。
+- 分家只收 `content_formula_error:` 这一类（`UNBOUND_EXEMPT_GAP_PREFIX`）：`no_formula:*` /
+  `invalid_units_per_pack` / `material_price_missing` 等无论绑没绑上一律留在 `bound_gaps`（不放宽）。
+- `compute_project()`（§2.3）：只把 `bound_gaps` 收进 `gaps`；`unbound_gaps` 摊平成
+  `gaps_unbound_to_order`（每条带 `content_code` 与 `binding_status="unbound"`），**不参与 verdict**。
+  绑定集合由新增的纯函数 `bound_content_codes(data)` 给出 —— 这一版它**故意返回空集**：
+  仓库里还没有「这一单到底用哪几项包材」的权威数据源（BOM 的 `packaging` 行目前只放物流规则），
+  Spec §2.3 也就写了「算不出来就给空集（= 全部 unbound = 只披露不阻断），不许在成本引擎里另写一套
+  猜哪一项用到的规则」。权威绑定数据接入时只改这一个函数。
+- `packaging_cost_readiness_gate()`（§2.4）：新增 `unbound_total`，**不进 `verdict`、不进
+  `blocking_total`**。
+
+### 二、实测
+
+```
+tests.test_packaging_cost_gaps_scoped_to_order_contents_red  → Ran 8 OK（原 8 红全绿）
+tests/test_packaging_cost*.py + bom/quote/route 一组（490 条）→ 14 红，全部是其它批次的待办
+  （bom-parts-version-binding 4 / bom-size-quality 4 / readiness-severity 4 / 存量 J6 / 存量 C1）
+```
+
+### 三、边界
+
+只改 `tech_app/backend/services/packaging_cost.py` 与本 Spec 状态行 + 本 changelog；未改
+`GAP_RESOLUTIONS` / `SILENT_ZERO_RESOLUTIONS` / `READINESS_VERSION` / 公式 / 费率 / 种子数据，
+未改任何测试、未连 PG、未写业务数据、未 push / MR / tag / Release、未部署。
