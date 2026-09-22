@@ -664,6 +664,10 @@ def _business_material_scope(items: list, *, map_entries: Any = None,
         "keys": sorted(_text(row.get("item_key")) for row in rows),
         "reason_counts": {key: value for key, value in sorted(reasons.items()) if value},
         "map_hit_total": int(reasons.get("map_hit") or 0),
+        # 表本身的规模（Spec `packaging-material-map-account-panel.md` §C1）：`map_hit_total == 0`
+        # 与 `reason_counts == {}` 在"表是空的"和"表里没有这一条"两件事上同形（一条材料行都没有时
+        # 两者也空），所以必须单独给一栏。读不到映射表时一律 0（读不到就没有条数可说）。
+        "map_entry_total": len(map_entries or ()) if map_available else 0,
         "map_source": _text(map_source),
         "map_fingerprint": _text(map_fingerprint),
         "map_unavailable": unavailable,

@@ -400,6 +400,99 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const hits = Number(facts.map_hit_total || 0);
     return hits > 0 ? `材料码映射表命中 ${hits} 行。` : '';
   }
+  // 材料码映射表**自己**的账（Spec `packaging-material-map-account-panel.md` §C2）：表是空的还是
+  // 有 N 条、这一版用的是哪一份（来源 / 指纹）、这次各档几行。事实全部来自后端
+  // `business_material_rows`（`map_entry_total` / `map_source` / `map_fingerprint` /
+  // `map_unavailable` / `reason_counts`）—— 前端不重算、不猜名字、没有事实就说话。
+  function pbMaterialMapState(scope) {
+    const facts = (scope && typeof scope === 'object' && !Array.isArray(scope)) ? scope : null;
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const positive = value => {
+      const number = Number(value);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    const entries = positive(facts ? facts.map_entry_total : undefined);
+    const hits = positive(facts ? facts.map_hit_total : undefined);
+    const source = text(facts ? facts.map_source : '');
+    const fingerprint = text(facts ? facts.map_fingerprint : '');
+    const sourceLabels = {
+      default: '仓库内置',
+      override: '环境变量覆盖（影响所有项目）'
+    };
+    const unavailable = !!(facts && facts.map_unavailable
+      && typeof facts.map_unavailable === 'object'
+      && !Array.isArray(facts.map_unavailable)
+      && Object.keys(facts.map_unavailable).length);
+    // 状态判据（§C2，顺序固定）：不是对象 → 未知档；读不到 → unavailable；**没有条数这一栏**
+    // （老载荷）→ 未知档（不许当成"0 条"）；条数 <= 0 → 空表；否则有表。命中数不参与判定。
+    const rawEntryTotal = facts ? facts.map_entry_total : undefined;
+    const size = (rawEntryTotal === undefined || rawEntryTotal === null
+      || String(rawEntryTotal).trim() === '') ? NaN : Number(rawEntryTotal);
+    let state = 'unknown';
+    let headline = '后端没给材料码映射表的状态（老载荷），这一版说不清用了哪份映射。';
+    if (facts && unavailable) {
+      state = 'unavailable';
+      headline = '材料原文映射表读不到：这一版 BOM 的材料码只按既有分词规则解析。';
+    } else if (facts && Number.isFinite(size)) {
+      if (size > 0) {
+        state = 'ready';
+        headline = `材料原文映射表 ${size} 条，本次命中 ${hits} 行。`;
+      } else {
+        state = 'empty';
+        headline = '材料原文映射表读得到，但一条映射都没有（0 条）：客户原文只能按既有分词规则解析，'
+          + '解不出来的行要往表里补。';
+      }
+    }
+    return {
+      state: state, headline: headline, entries: entries, hits: hits,
+      source: source, sourceLabel: sourceLabels[source] || '来源未知', fingerprint: fingerprint
+    };
+  }
+  function pbMaterialMapBreakdown(scope) {
+    const facts = (scope && typeof scope === 'object' && !Array.isArray(scope)) ? scope : {};
+    const counts = (facts.reason_counts && typeof facts.reason_counts === 'object'
+      && !Array.isArray(facts.reason_counts)) ? facts.reason_counts : null;
+    if (!counts) return '';
+    const positive = value => {
+      const number = Number(value);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    // 闭集与顺序固定（与后端 `MATERIAL_RESOLVE_REASONS` 同一批）：档名一律给人话，
+    // 闭集外的档名**不猜**，只按总数合并成「其它档」。
+    const buckets = [['map_hit', '映射命中'], ['legacy_hit', '旧规则命中'],
+                     ['map_key_missing', '原文没映射'],
+                     ['map_entry_not_applied', '映射写了没生效'],
+                     ['map_unknown', '映射表读不到没判定']];
+    const parts = [];
+    buckets.forEach(bucket => {
+      const value = positive(counts[bucket[0]]);
+      if (value) parts.push(`${bucket[1]} ${value} 行`);
+    });
+    let other = 0;
+    Object.keys(counts).forEach(key => {
+      if (buckets.some(bucket => bucket[0] === key)) return;
+      other += positive(counts[key]);
+    });
+    if (other) parts.push(`其它档 ${other} 行`);
+    return parts.length ? `这次解析：${parts.join(' · ')}` : '';
+  }
+  function pbMaterialMapAccountBlock(scope) {
+    const facts = pbMaterialMapState(scope);
+    // 「读不到」由既有 `pbMaterialMapNote()` 那一句承担、「未知档」没有事实可说：都不在这里
+    // 重复，也不编一句话（§C2）。
+    if (facts.state !== 'ready' && facts.state !== 'empty') return '';
+    const breakdown = pbMaterialMapBreakdown(scope);
+    const rows = breakdown
+      ? breakdown.replace(/^这次解析：/, '').split(' · ').filter(item => item)
+      : [];
+    return `<div class="pb-hint" data-pb-material-map-state="${pbEsc(facts.state)}"`
+      + ` data-pb-material-map-source="${pbEsc(facts.sourceLabel)}"`
+      + ` data-pb-material-map-fingerprint="${pbEsc(facts.fingerprint)}">`
+      + `${pbEsc(facts.headline)}</div>`
+      + (rows.length
+        ? `<div class="pb-hint" data-pb-material-map-reasons="${rows.length}">${pbEsc(breakdown)}</div>`
+        : '');
+  }
   // 配对复核 / 零件回填失败 / 业务清单换版三本账的人话与逐行清单
   // （Spec `packaging-bom-disclosure-panel.md` §C1）：只消费后端结论，前端不重判一次。
   function pbPairingMismatchRows(record) {
@@ -580,6 +673,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       + `${partsHash ? `零件文档版本：${pbEsc(partsHash.slice(0, 12))}。` : ''}</div>
       ${unresolved}
       ${mapBlock}
+      ${pbMaterialMapAccountBlock(record.business_material_rows)}
       ${pairingBlock}
       ${bindingBlock}
       ${businessStaleBlock}
