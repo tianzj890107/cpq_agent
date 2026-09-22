@@ -485,6 +485,62 @@ def business_part_rows(business_doc: Any) -> list:
     return out
 
 
+def business_material_rows(business_doc: Any, *, materials: Any = None) -> list:
+    """权威清单的材料原文 → BOM 的**材料组**行（Spec `packaging-bom-business-material-rows.md` §C1）。
+
+    纯函数：不读库、不读文件、不联网、不改入参（`materials` 由调用方传进来 ——
+    传进来才做材料码解析，不传就留空串，绝不自己去摸知识库）。
+
+    - **按去重原文收**（首次出现顺序）：合并单元格表达"同上一组"的件本来就没有材料原文，
+      导入器只记 `merged_from`、不复制值 —— 这里也**不替它复制**，所以行数会明显少于件数；
+    - `material_code` 复用既有唯一口径 `_resolve_material_code()`（不新写第二套匹配），
+      解析不到就是 `""`（不许编材料码），由 `gaps.material_unresolved` 如实披露；
+    - 行形状与既有材料行逐字同形（`bom_category` / `item_key` / `item_name` / `material` /
+      `material_code` / `status` / `is_optional` / `source`），只有 `source` 换成权威来源。
+    """
+    parts = business_doc.get("business_parts") if isinstance(business_doc, dict) else None
+    if not isinstance(parts, list):
+        return []
+    texts: list = []
+    for row in parts:
+        if not isinstance(row, dict):
+            continue
+        authority = row.get("authority") if isinstance(row.get("authority"), dict) else {}
+        text = _text(authority.get("material_text"))
+        if text and text not in texts:
+            texts.append(text)
+    if not texts:
+        return []
+    index = materials if isinstance(materials, list) else []
+    out: list = []
+    for text in texts:
+        out.append({
+            "bom_category": "material",
+            "item_key": text,
+            "item_name": text,
+            "material": text,
+            "material_code": _resolve_material_code(text, index) if index else "",
+            "status": "computed",
+            "is_optional": 0,
+            "source": BUSINESS_ROW_SOURCE,
+        })
+    return out
+
+
+def _business_material_scope(items: list) -> dict:
+    """这一版 BOM 的材料组行有多少来自权威清单、其中多少解析到了材料码（Spec §C3）。"""
+    rows = [item for item in items
+            if _text(item.get("source")) == BUSINESS_ROW_SOURCE
+            and _text(item.get("bom_category")) == "material"]
+    resolved = [row for row in rows if _text(row.get("material_code"))]
+    return {
+        "row_total": len(rows),
+        "resolved_total": len(resolved),
+        "unresolved_total": len(rows) - len(resolved),
+        "keys": sorted(_text(row.get("item_key")) for row in rows),
+    }
+
+
 def _load_business_parts(project_id: str) -> Any:
     """读一版业务部件文档；读不到 / 出任何岔子都回 `None`（**绝不抛**）。
 
@@ -553,24 +609,29 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
         for entry in expanded["parts"]:
             items.append(_part_item(entry))
 
-    # 3) 材料：部件 material 去重，唯一命中才关联材料码。
+    # 3) 材料：有权威清单就按**清单里的去重原文**收（Spec
+    #    `packaging-bom-business-material-rows.md` §C2），否则逐字回到模板展开的部件材料。
     materials = _material_index()
-    seen_materials: list = []
-    for entry in expanded["parts"]:
-        text = _text(entry.get("material"))
-        if text and text not in seen_materials:
-            seen_materials.append(text)
-    for text in seen_materials:
-        items.append({
-            "bom_category": "material",
-            "item_key": text,
-            "item_name": text,
-            "material": text,
-            "material_code": _resolve_material_code(text, materials),
-            "status": "computed",
-            "is_optional": 0,
-            "source": "kb_material",
-        })
+    authority_materials = business_material_rows(business_parts, materials=materials)
+    if authority_materials:
+        items.extend(authority_materials)
+    else:
+        seen_materials: list = []
+        for entry in expanded["parts"]:
+            text = _text(entry.get("material"))
+            if text and text not in seen_materials:
+                seen_materials.append(text)
+        for text in seen_materials:
+            items.append({
+                "bom_category": "material",
+                "item_key": text,
+                "item_name": text,
+                "material": text,
+                "material_code": _resolve_material_code(text, materials),
+                "status": "computed",
+                "is_optional": 0,
+                "source": "kb_material",
+            })
 
     # 4) 工艺：按 step_name 去重，其余列取 seq 最小的一条。
     process_rows = _process_rows(box_code)
@@ -1217,6 +1278,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         # 部件组行的第二把账（Spec `packaging-bom-business-parts-rows.md` §C3）：这一版
         # BOM 里有多少部件组行来自权威清单（键**必须存在**，没有时全 0 / `[]`）。
         "business_rows": _business_rows_scope(items),
+        # 材料组的同一把账（Spec `packaging-bom-business-material-rows.md` §C3）：与上面的
+        # 部件组**分开**，键同样**必须存在**。
+        "business_material_rows": _business_material_scope(items),
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单

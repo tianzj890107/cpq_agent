@@ -240,10 +240,13 @@ class BBuildBomUsesAuthorityRows(BomCase):
         self.assertTrue(rows, "空清单不许把部件组算成 0 行")
         self.assertTrue(all(row.get("source") == TEMPLATE_SOURCE for row in rows))
 
-    def test_b4_the_other_five_groups_are_untouched(self):
+    def test_b4_the_other_groups_are_untouched(self):
+        # 材料组**不在此列**：`## 378`（packaging-bom-business-material-rows）已把那条接缝也切到
+        # 权威清单的去重材料原文，本 Spec §C2 与 §7 边界 1 都已显式 supersede（材料组由
+        # `tests/test_packaging_bom_business_material_rows_red.py` 守）。
         baseline = self.build()
         with_biz = self.build_with(real_sample_rows())
-        for category in ("finished", "material", "process", "tooling", "packaging"):
+        for category in ("finished", "process", "tooling", "packaging"):
             before = sorted(row["item_key"] for row in self.by_category(baseline, category))
             after = sorted(row["item_key"] for row in self.by_category(with_biz, category))
             self.assertEqual(before, after,

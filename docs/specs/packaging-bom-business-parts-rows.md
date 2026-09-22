@@ -72,8 +72,11 @@
   - `business_part_rows(business_parts)` **非空** → 第 2 组的部件行就是这些行
     （模板展开的部件行**不再**进入这一版 BOM）；
   - 空 / 没传 → **逐字保持今天的行为**（`_part_item()` 的模板行）。
-  - 其余五组（`finished` / `material` / `process` / `tooling` / `packaging`）逐字不变；
+  - 其余四组（`finished` / `process` / `tooling` / `packaging`）逐字不变；
     末尾统一盖 `box_type_code` / `industry` / `engine_version` 的循环不变。
+  - **材料组**：本批当时逐字不变（只切部件组）；**已被 `## 378`
+    （`docs/specs/packaging-bom-business-material-rows.md`）supersede** —— 那条接缝现在也按
+    权威清单的去重材料原文收。
 - 参数必须是**关键字带默认值**：既有调用方（红测按位置传 4 个参数）不改一行。
 - `_bind_parts()` 照旧跑：业务行有权威尺寸就是 `computed`，不进几何回填；
   缺尺寸的业务行照旧按既有口径可被回填（`dwg_binding` 留痕不变）。
@@ -180,9 +183,10 @@ tests/test_packaging_*.py 全域（91 个模块）：
 
 ## 7. 已记录的边界
 
-1. **材料组仍是模板来源**：本批只切部件组（`box_part` / `optional_part`）。
-   权威材料原文（`1.8MM双灰裱225G太阳铜版底PET光银` …）与 KB 材料码的映射是另一批的话题 ——
-   在没有映射口径前把材料组也切过去，只会让 `material_unresolved` 一夜之间暴增且无从收口。
+1. ~~**材料组仍是模板来源**~~ —— **已被 `## 378` supersede（2026-09-22）**：材料组现在也按权威清单
+   的去重材料原文收（`docs/specs/packaging-bom-business-material-rows.md`），
+   材料码仍走既有唯一解析口径、解析不到就进 `material_unresolved`（不编码）。
+   当时担心的"暴增且无从收口"改由那条 Spec 的 §C3 披露两本账（`resolved_total` / `unresolved_total`）回答。
 2. **权威原文不入库**：BOM 行表没有放长文本的列（`note` 是"备注"语义，不许挪用），
    所以工艺 / 排版 / 备注原文**不进 BOM 行**；下游要看原文走业务部件文档那一路。
 3. **重复编码只留第一条**：BOM 行的主键定死了 `item_key` 唯一。权威清单里如果出现同一个编码两行，

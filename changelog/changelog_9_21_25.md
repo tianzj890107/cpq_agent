@@ -16501,3 +16501,344 @@ tests/test_packaging_*.py 全域（91 个模块）→ Ran 1678, failures=5, skip
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 378. 人工映射的业务角色卡片上看不见：BOM 侧映射完了，零件行/卡片还是 `unknown`（9-22，Codex 只改 Spec / 红测 / changelog）
+
+`## 326` 修的是"人工补录写在侧档、没人合回零件行"（材料 / 料厚 / 轮廓三本账）。
+这次逐行对账发现**同一形状第四次出现**：**角色**这本账不在那次修复的键集合里。
+
+### 一、根因（代码级，逐条可复现；只读，未连 34）
+
+- 零件行的角色来自**图纸图层**：`extract()` 里每行的 `role` 由 `_layer_roles()`（图层名 → 角色）
+  给出；真实客户图 `layers = ["0","DESIGN"]` 无语义 → 64 件全 `unknown`
+  （34 实测 `summary.role_known_ratio = 0.0`、`stats.by_role = {"unknown": 64}`）。
+- 人工映射**只写 BOM 侧**：`…/packaging-bom/role-map`（`main.py` 的
+  `PACKAGING_BOM_ROLE_MAP_WRITE_PATH`）→ `packaging_bom.apply_role_mapping()` →
+  `save_role_mapping()`：事实源写 BOM 行的 `size_source_json.dwg_binding`
+  （`UPDATE wip_packaging_bom_item …`），留痕写 meta 文档
+  `ROLE_MAP_DOC_KEY = "packaging_bom_role_map"` 的 `by_requirement[需求单][行键]`。
+  **没有任何一步写零件文档那一行。**
+- 读回这一侧只有 `packaging_parts._manual_fill_overlay()` 挂 overlay，而它的键集合逐字只有
+  `DOC_KEY_MATERIAL` / `DOC_KEY_THICKNESS` / `DOC_KEY_OUTLINE` —— **角色不在里面**；
+  `load_parts()` 是唯一挂 overlay 的读入口（`list_parts()` 无 overlay 且全仓无调用方）。
+- 卡片与摘要都只看零件行：`summarize()` 的
+  `role_known = sum(1 for row in rows if _text(row.get("role")) not in ("", "unknown"))`
+  → `role_known_ratio`；卡片 `card_row()` 的 `"role": _text(payload.get("role"))`。
+- 后果：`packaging-part-role-manual-mapping.md` §1 当初抱怨"卡片上没有「角色」列、
+  '还没映射'不可见"，`## 315` 把列加上了，但这一列**永远只能显示 `unknown`** ——
+  唯一能让它变具体的那条路（人工映射）不在它的取数链上。用户看到的是"映射完了卡片没变"，
+  与"补完材料刷新就没"是同一个病。
+
+### 二、本批交付（Spec + 红测，业务实现不在本批）
+
+- 新增 `docs/specs/packaging-part-role-mapping-must-reach-the-card.md`：
+  ① 映射落盘后 `load_parts()` 那一行必须带上那个角色（写回零件文档 **或** 读路径再加一本账，
+  二选一且唯一）；② 卡片 `card_row()["role"]` 与 `summarize()["role_known_ratio"]` 跟着变；
+  ③ 行上必须留 `role_source`（与 `material_source` / `thickness_source` 同形状，
+  `kind = "manual_mapping"` + `bound_by` / `mapped_at`）；④ 配对键**只有** `part_code`，
+  配不上就一行都不改；⑤ `reject_unknown_role_autobind()` 与 `_layer_roles()` 的自动判定逐字不变；
+  ⑥ BOM 侧口径与卡片 10 列冻结。
+- 新增红测 `tests/test_packaging_part_role_mapping_reaches_card_red.py`（A1–A4 + B1–B4）。
+- 红基（未实现，实跑）：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_part_role_mapping_reaches_card_red
+  → Ran 8 tests … FAILED (failures=4)
+```
+
+红的 4 条 = A1（映射落盘后零件行 `role` 仍 `unknown`）、A2（`role_known_ratio` 仍 0.0）、
+A3（卡片 `card_row()["role"]` 仍 `unknown`）、A4（行上没有 `role_source` 留痕）；
+绿的 4 条护栏 = B1（`reject_unknown_role_autobind()` 与 `extract()` 的自动判定不变）、
+B2（BOM 侧五个符号仍在）、B3（配对不上就一行都不改）、
+B4（卡片 10 列与 `card_row()` 取数不变）。
+
+### 三、顺带收口：一条被实现轮记为"测试侧偏差"的断言，确认是测试错了
+
+`## 338` 落地时把 `tests/test_packaging_part_manual_fill_persists_red.py` 的 A2 第三条断言
+记为测试侧偏差。复核结果：**实现是对的、断言写错了** —— 探针里只缺材料的 `DWG-P01` 与
+只缺料厚的 `DWG-P03` 落在**同一个**原因桶 `PACKAGING_PART_MATERIAL_UNKNOWN`
+（`processability()` 对缺料厚也用这个码），所以补完两件之后那一桶是**空掉**（`2 → 缺键`），
+不是"减一"。已按事实把断言改成"补完两件后这一桶不许还剩件"（并加一条"补录前应当是 2"的前提断言）。
+改后：`tests.test_packaging_part_manual_fill_persists_red` → `Ran 7 tests … OK`。
+
+### 四、边界
+
+本批只新增 1 份 Spec、1 个红测文件、修正 1 条被记为测试侧偏差的断言、追加本 changelog；
+未改任何业务实现（`packaging_parts.py` / `packaging_bom.py` / `main.py` / `app.js` 一行未动）、
+未改既有测试的判据；**未连 34**、未跑任何写操作、未 push / MR / tag / Release / 未部署。
+
+## 379. 图纸源文件"读不到"被折成"空文件"：`sha256(b"")` 那个合法形状的常量被写进锚点，第 1 步直接判 `FILE_EMPTY`（retryable=False）（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-drawing-source-read-failure.md` +
+`tests/test_packaging_drawing_source_read_failure_red.py`（9 条：R1–R4/R6/R9 缺口 /
+R5/R7/R8 护栏；现状 **6 红 3 绿**，HEAD `2b18057` 实测）。全部离线：只打桩
+`store.load_meta` / `store._blob` / `persistence` / 假 `file_preflight` 依赖，
+不连 PG / SQLite 生产库、不发 HTTP、不建项目、不写盘。
+
+### 缺口（`tech_app/backend/services/packaging_drawing_flow/__init__.py`）
+
+```python
+252 def _source_bytes(project_id, meta) -> bytes:
+253     name = str((meta or {}).get("source_path") or "")
+254     if not name:
+255         return b""                       # 这个项目没有源附件
+256     try:
+257         data = store._blob().get_bytes("%s/%s" % (project_id, name))
+258     except Exception:
+259         return b""                       # blob 读不到 —— 与上一处同形
+```
+
+1. `start()`（`:301`）无条件 `sha256(content)` —— 读不到时**写进** `inputs.source_sha256`
+   （`:319`）与锚点（`:329`）的是 `sha256(b"")` = `e3b0c442…b855`：
+   一个**格式完全合法**的常量。它参与 `run_id_for()` 的 run 判定、`_reusable()` 的复用判定
+   与下游 stale 的 `source_sha256_changed` —— 图纸真的换了但这一次读不到时，
+   结论会是"源文件没变"。
+2. 第 1 步拿空字节预检：离线实测 `detect_file_format("酒盒.dwg", b"")` 返回
+   `is_empty=True`、`detected_format='unsupported'`、`sha256=e3b0c442…`，
+   于是 `steps.py:110` 给
+   `_failed("FILE_EMPTY", "上传的图纸是空文件，请重新上传", detail, False)` ——
+   **retryable=False**、把用户支去"重传"，而真相是 blob 通道读不到。
+3. `grep -rn "_source_bytes" tech_app/` 任何一处都没有字段能回答"这一趟是读不到源文件，
+   还是这个项目没有源文件"。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `_source_bytes()` 三态可分（`"blob"` / `"none"` / `"unavailable"`，实现形状不限）；
+  `start()` 的 `inputs` 新增必存在键 `source_content` 与 `source_content_unavailable`，
+  且 `source_sha256` **只在 `"blob"` 时**是真哈希，其余两态给 `""`（不许给 `sha256(b"")`）；
+  `_context()` 新增 `content_source` / `content_unavailable`（`content` 仍是 `bytes`）；
+- `steps.file_preflight()`：`content_source == "unavailable"` 时**在调
+  `detect_file_format()` 之前**返回 `DRAWING_SOURCE_UNAVAILABLE`（`status="failed"`、
+  `retryable=True`、文案不含"重新上传"）；`"none"` / `"blob"` / 键不存在三条路径逐字不变；
+- `model.ERROR_CODES` 新增 `"DRAWING_SOURCE_UNAVAILABLE": (503, True)`；
+- 禁项写死：不许改 `source_sha256` 算法与 `run_id_for` / `_reusable` / `_stale_reasons` 判据、
+  不许改 `file_preflight` 的既有码与文案、不许动 `dwg_convert` 及后续步骤的码。
+
+### 实测
+
+```
+tests.test_packaging_drawing_source_read_failure_red → Ran 9 … FAILED (failures=6)
+  R1/R2/R3 _context() 没有 content_source / content_unavailable（三态不可分）        （红）
+  R4 start() 在 blob 读不到时把 sha256(b"") 写进 inputs.source_sha256                （红）
+  R5 start() 读得到时哈希照旧                                                        （护栏绿）
+  R6 第 1 步给 FILE_EMPTY + "请重新上传" + retryable=False，且已调过 detect           （红）
+  R7/R8 "确实没有"与"老 ctx 没这个键"两条路径照旧                                    （护栏绿）
+  R9 model.ERROR_CODES 里没有 DRAWING_SOURCE_UNAVAILABLE                             （红）
+```
+
+不回归（链路与错误分类的既有口径，全部离线）：
+
+```
+tests.test_packaging_drawing_flow_red              Ran 54  OK (skipped=1)
+tests.test_drawing_flow_error_taxonomy_red         Ran 14  OK
+tests.test_drawing_flow_parse_terminal_signal_red  Ran 30  OK
+tests.test_drawing_flow_frontend_wiring_red        Ran 12  OK
+```
+
+### 顺带：两处 Spec 状态行按事实翻正（纯 housekeeping）
+
+`tests.test_spec_status_truth_red` 的 C2 在本次复核时 1 failure：
+`packaging-bom-business-material-rows.md` 声明「未实现」但它的红测已全绿
+（该切片随并行实现批次落地）。按该测试自己的处置口径（"该改成已实现，或说明冲突"）
+把状态行翻成「已实现」并注明日期 —— 正文与红测一个字未改。
+（另外四份我这次写的 Spec —— `packaging-drawing-dispatch-probe-truthfulness` /
+`packaging-cost-route-version-read-failure` / `packaging-stage-chain-read-failure-disclosure` /
+`packaging-preconditions-requirement-read-failure` —— 已由实现方落地并把状态行翻成「已实现」，
+对应红测现在分别 5 OK / 10 OK / 10 OK / 9 OK；本条只记录复核结论，未再改动它们。）
+`test_spec_status_truth_red` 复跑 **Ran 7 OK**。
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 380. 门禁段"读不到上游结果"被说成"这一步还没做"：`load_box_match()` 一抛异常，用户看到的就是"盒型尚未确认"（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-gate-read-failure-disclosure.md` +
+`tests/test_packaging_gate_read_failure_disclosure_red.py`（9 条：S1–S6 缺口 / S7–S9 护栏；
+现状 **6 红 3 绿**，HEAD `2b18057` 实测）。全部离线：假依赖模块 + 打桩
+`store.load_requirement` / `persistence.load_flow` / `anchor_mod`，不连 PG / SQLite 生产库、
+不发 HTTP、不写业务数据。
+
+### 缺口（`tech_app/backend/services/packaging_drawing_flow/gates.py`）
+
+```python
+ 88 def _engine(resolve, name, function, *args):
+ 91     if not callable(fn):
+ 92         return {}                       # "这个部署没有这一段"
+ 93     try:
+ 94         row = fn(*args)
+ 95     except Exception:
+ 96         return {}                       # "这段读挂了" —— 与上一处同形
+```
+
+`_stage_entry()` 拿这三个空值当判据（`:183-208`）：`box_match_not_confirmed`（"盒型尚未确认，
+确认后才能进行该步骤"）/ `bom_not_built` / `route_not_confirmed` / `cost_not_built`；
+`blocking_message()`（`:236-248`）再把其中第一条 message 当**唯一结论**交给用户与卡片。
+于是上游服务读不到时，用户被告知"这一步还没做"，去重新确认盒型 / 重新排路线也不会有用 ——
+而 `packaging_match.py:432` 那一层早就示范过正确做法（读失败给
+`template_lookup_failed` 并注明"这不代表该盒型没有模板"）。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `_engine()` / `_policy()` 三态可分（`engine` / `absent` / `unavailable`），既有判据与结论逐字不变；
+- `_stage_entry()` 新增必存在键 `reads`（依赖名 → `{"source", "reason"}`）与
+  `reads_unavailable`（`{}` / `{"code": "gate_read_unavailable", "dependencies": [...]}`）；
+- `blocking_message()`：有读失败时说"暂时读不到上游结果（依赖名…），请稍后重试；
+  这不代表这一步还没做"；没有读失败时四类既有文案与优先级逐字不变；
+- 禁项写死：不许改任何门禁结论（读不到照旧 `blocked`、不许静默变 `open`）、
+  不许改 `BLOCKING_CODES` 与既有 blocking 行的 code/source/message、不许改字段判据
+  `_field_blocking()` / `_is_confirmed()`、不许碰交接包那一侧的 `_publish_gate()`。
+
+### 实测
+
+```
+tests.test_packaging_gate_read_failure_disclosure_red → Ran 9 … FAILED (failures=6)
+  S1 bom 段读盒型抛异常 → 没有 reads / reads_unavailable，只有"盒型尚未确认"      （红）
+  S2 cost 段读路线抛异常 → 同上（"工艺路线尚未确认"）                              （红）
+  S3 quote_publish 段读成本抛异常 → 同上（"成本尚未测算"）                          （红）
+  S4 全读到 → 每段没有 reads 键                                                    （红）
+  S5 模块没装 → 与"读挂了"同形（没有 absent 这一态）                               （红）
+  S6 读失败时 blocking_message() 仍在说"尚未…"                                      （红）
+  S7 没有读失败时既有文案逐字不变（"工艺路线尚未确认，确认后才能测算成本"）        （护栏绿）
+  S8 blocking 码仍在 BLOCKING_CODES 闭集里、status 取值不变                         （护栏绿）
+  S9 缺字段照旧 field_missing                                                       （护栏绿）
+```
+
+不回归（门禁与流程的既有口径，全部离线）：
+
+```
+tests.test_packaging_drawing_flow_red        Ran 54  OK (skipped=1)
+tests.test_drawing_flow_error_taxonomy_red   Ran 14  OK
+tests.test_packaging_quote_close_loop_red    Ran 96  OK
+tests.test_packaging_downstream_block_code_red Ran 7 OK
+tests.test_spec_status_truth_red             Ran 7   OK
+```
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+## 381. 2.1 左栏"零件文档读不到"被显示成"还没生成，请先跑一键解析"：`fetchPackagingParts()` 把 404 与 500 一起折成 `null`（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-parts-read-failure-empty-state.md` +
+`tests/test_packaging_parts_read_failure_empty_state_red.py`（9 条：T1–T3/T7 缺口 /
+T4–T6/T7b/T8 护栏；现状 **4 红 5 绿**，HEAD `2b18057` 实测）。全部离线：
+`node -e` 抽 `tech_app/frontend/app.js` 的具名函数体执行（纯函数）+ 源码守卫；
+不起服务、不发 HTTP、不连 PG / SQLite、不写业务数据。
+
+### 缺口（`tech_app/frontend/app.js`）
+
+```js
+2399 async function fetchPackagingParts() {
+2404     const res = await fetch(url);
+2405     if (!res.ok) return null;                 // 404（端点没上线）与 500（读不到）同形
+2409   } catch (error) { return null; }            // 网络异常也同形
+```
+
+`packagingPartsEmptyText()`（`:2017-2042`）拿到 `null` 后既没有零件、也没有原因，
+直接回落 **"零件文档还没生成，请先跑一键解析图纸。"**。而服务端那条路是 fail-loud 的：
+`GET …/requirement/packaging-parts`（`main.py:7130`）读文档失败会抛出、FastAPI 给 500 ——
+用户于是被告知去重跑一键解析，重跑不会有帮助。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `fetchPackagingParts()`：`res.ok` 与 **404** 两条既有路径逐字不变（404 仍 `null`）；
+  其它非 2xx 与 `fetch` 抛异常时返回**带 `read_problem` 的空文档形状**
+  （`{"code": "parts_unavailable", "status": <HTTP 码或 0>, "message": ""}`），不许再 `null`；
+- `packagingPartsEmptyText()`：**新增第一优先分支** —— `read_problem` 非空即返回
+  "暂时读不到零件文档（HTTP <status>），请稍后重试；这不代表这份图纸没有零件"
+  （无状态码说"网络错误"），优先于 `parts` / `built+total===0` / `unavailable` 三类既有分支；
+  没有 `read_problem` 时四类既有文案逐字不变；仍是纯函数；
+- 非目标写死：分页 `loadMorePackagingParts()` 本批不动、服务端读路由不动（fail-loud 是对的）、
+  不许把 `read_problem` 塞进 `unavailable` 数组、不许把读失败说成"图纸解析失败"。
+
+### 实测
+
+```
+tests.test_packaging_parts_read_failure_empty_state_red → Ran 9 … FAILED (failures=4)
+  T1 read_problem.status=500 → 今天回落成"零件文档还没生成，请先跑一键解析图纸。"   （红）
+  T2 网络异常（无状态码）→ 同上                                                     （红）
+  T3 read_problem 抢不过 built+total===0 / unavailable 两类分支                     （红）
+  T7 fetchPackagingParts() 源码里既没有 404 分支、也没有 read_problem                （红）
+  T4 普通空 doc 文案逐字不变 / T5 有零件返回 "" / T6 确实没有零件那句不变 /
+  T7b 服务端 unavailable 原因原样渲染 / T8 空态仍是纯函数                          （护栏绿）
+```
+
+不回归（前端空态与接线，全部离线）：
+
+```
+tests.test_drawing_flow_parse_terminal_signal_red  Ran 30  OK
+tests.test_drawing_flow_frontend_wiring_red        Ran 12  OK
+node --check tech_app/frontend/app.js              OK
+tests.test_spec_status_truth_red                   Ran 7   OK
+```
+
+`ls tech_app/data | grep -c testpid` = 0（本批未写任何业务数据）。
+未改任何既有测试与业务实现、未放宽任何断言、未连 34、未 push / MR / tag / Release / 未部署。
+
+---
+
+## 378. BOM 的**材料组**与 28 件权威部件行自相矛盾：材料行还是模板件那几种（9-22，Codex 实现）
+
+Spec：`docs/specs/packaging-bom-business-material-rows.md`；
+红测：`tests/test_packaging_bom_business_material_rows_red.py`（15 条）。
+承接：`## 377`（部件组切到权威清单）、`## 368` §7（BOM 只遍历 `business_parts`）。
+
+### 一、缺口
+
+1. `## 377` 之后部件行是 28 件权威件，材料行却仍是**模板展开的部件材料**（`source="kb_material"`）
+   —— 一份 BOM 自相矛盾。
+2. 真样本的材料有大量**合并单元格**（"同上一组"）：导入器只记 `merged_from`、**不复制**上一行的值，
+   所以材料组必须按**去重原文**收，不能按件数收成 28 行。
+3. 材料行是"这份 BOM 需要哪些材料、哪几种还没解析到材料码"的唯一清单
+   （`gaps.material_unresolved`），今天列的是模板材料 —— 与真实待办无关。
+
+### 二、改了什么（只动 `tech_app/backend/services/packaging_bom.py`）
+
+- 新增纯函数 `business_material_rows(business_doc, *, materials=None)`：按 `authority.material_text`
+  **去重原文**（首次出现顺序）收；空原文跳过（合并单元格的件不替它复制）；行形状与既有材料行逐字同形
+  （`bom_category` / `item_key` / `item_name` / `material` / `material_code` / `status` / `is_optional` /
+  `source`），只有 `source` 换成 `packaging_business_parts_authority`；`material_code` **复用既有唯一口径**
+  `_resolve_material_code()`（不传 `materials` 就给空串，纯函数绝不自己读知识库）。
+- `_assemble()` 第 3 组：清单非空 → 材料行就是这些行；否则逐字回到模板展开。
+  `_material_index()` / `_resolve_material_code()` 一个字没改。
+- `load_bom()` 新增 `business_material_rows`：`{row_total, resolved_total, unresolved_total, keys}`
+  （与 `## 377` 的 `business_rows` 两把账分开，判据只有行上的 `source` + `bom_category`）。
+- **Supersede**：`## 377` §C2 的"其余**五**组逐字不变"与 §7 边界 1 已被本批取代（两处都留了指针），
+  `tests/test_packaging_bom_business_parts_rows_red.py::B4` 的清单收窄到其余**四**组
+  （被取代的那组由本批测试守）——**没有改任何业务断言的期望值**，只把被 supersede 的那一组从清单里去掉。
+
+### 三、复跑
+
+```
+实现前（stash 掉 packaging_bom.py 的改动）→ Ran 15 tests, FAILED (failures=9, errors=1)
+实现后                                   → Ran 15 tests, OK
+本批两个模块（377 + 378）                → Ran 38, OK
+全域（tests/test_packaging_*.py，91 个模块）→ Ran 1719, failures=20
+  20 = 4 条既有挂账（bom_part_size_provenance::B3、parse_to_downstream_seams::B4、
+       route_bom_version_pinning::F2、quote_send_recovery::C1）
+     + 16 条**本轮新到的红测**（packaging-part-role-mapping-must-reach-the-card A1–A4、
+       packaging-drawing-source-read-failure R1–R4/R6/R9、
+       packaging-gate-read-failure-disclosure S1–S6 —— 并行会话刚落的 Spec + 红测，本批未碰）
+```
+
+真样本端到端（真链路 + 真工作簿）：
+
+```
+导入前材料组 = ['EVA 植绒 5mm', '涤纶丝带 10mm', '灰板 2.0mm', '特种纸 200g']（模板材料）
+导入后材料组 = 14 条权威原文（28 件按去重原文收；合并单元格的件没有独立原文）：
+  225G太阳铜版底PET光银 / 1.8MM双灰裱225G太阳铜版底PET光银 / 350G玖龙粉灰 /
+  38度A级白色EVA 125×54×35MM异形 / 长方形镀锌双面磁铁侧吸3500GS 15×5×2MM …
+business_material_rows = {row_total: 14, resolved_total: 0, unresolved_total: 14, keys: […升序]}
+部件组行仍是 28（`## 377` 口径未被打回）；gaps.material_unresolved = 14 条
+```
+
+### 四、已记录的边界
+
+1. 材料组行数**明显少于** 28 是事实（合并单元格的件没有独立材料原文），不是漏。
+2. 材料行只报"能不能解析到材料码"，**不做**价格与计价单位 —— `material_price_missing` 在
+   `packaging-cost-gaps-closure.md` §1.1 已登记为业务/采购要给的数据。
+3. 真样本 14 条原文解析到 **0** 条材料码：种子 KB 里没有这些商品牌号（`225G太阳铜版底PET光银` 之类），
+   这是诚实结果；要能算钱，得先有"原文 → 材料码"的权威映射（业务/采购给）。
+4. 外购件（EVA / 磁铁）的原文同样进材料组，其按件/按 kg 的计价口径仍待业务裁决。
+
+未改 `tests/` 下任何既有文件（除本批 supersede 同步收窄的那一条断言清单）、未放宽任何断言、
+未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 未部署。
