@@ -11545,3 +11545,61 @@ test_packaging_parts_pipeline_time_budget_red / test_deploy_build_identity_red
 
 即：`## 297` 修的「假告警」在真机上**从此看得见**了；之前那次不是修复无效，而是旧 manifest
 把旧话接着说了一遍（本批的引擎身份段让这类缓存自然失效）。
+
+## 299. 34 上「快速报价 × DWG」真机复验：案例库已达标（2/2 可用）、丢一份真实 DWG 能出候选（9-22，Codex 只读验证 + 记录）
+
+背景：`## 245` 那批的现场记录是「34 上两条案例 `eligible_total=0`（`draft` + `standard_price=0`）」，
+本机代码侧（批 6/7/8）都已实现（`tests.test_quick_quote_case_library_readiness_red` /
+`..._parse_service_red` / `..._delta_rule_authority_red` 合计 `Ran 93 OK`）。本轮在 34 上把两件事
+各验一遍：**数据是否已补**、**客户端到服务端的整条路是否真的通**。
+
+### 一、案例库现状（`cpq_quick_quote_case.library_readiness()` 读真库）
+
+```
+{"verdict": "ready", "headline": "2 条案例可用于快速报价",
+ "case_total": 2, "eligible_total": 2, "blocked_by": [], "next_actions": []}
+
+QQ-YT-DWG-ROUND-10PC  box_type=YT-DWG-ROUND-10PC  source=dwg_confirmed  standard_price=39.8   eligible=true
+QQ-YT-DWG-WINE-700ML  box_type=YT-DWG-WINE-700ML  source=dwg_confirmed  standard_price=15.18  eligible=true
+```
+
+即 `## 245` 那条「缺标准单价 → eligible=0」的记录**已过期**：两条 DWG 实样案例现在都达标，
+快速报价这条路在 34 上有真候选可用了。
+
+### 二、HTTP 整条路（`/agents/quote/api/quick-quote/*`，用服务间内部令牌 `X-Internal-Token`）
+
+`/agents/*` 的验票通道同时认「用户票据」与「内部令牌」（`cpq_suite_server._authorize_agent()`），
+所以这一步不需要人登录：
+
+```
+GET  /agents/quote/api/quick-quote/cases?industry=packaging   code=200
+     ok=true  cases=2  readiness={"verdict":"ready","eligible_total":2, …}
+
+POST /agents/quote/api/quick-quote/parse   （真实 酒盒.dwg，base64）
+     ok=true
+     capability = {"service":"cpq-unified-parse","provider":"oda","provider_version":"27.1","dwg":true,"dxf":true}
+     inputs     = {"v_groove": true, "face_paper_gsm": 235.0}
+     missing    = [box_type, box_family, closure_type, inner_length, inner_width, inner_height,
+                   grey_board_gsm, insert_type, print_colors, lamination, hot_stamping, magnet, quantity]
+     warnings   = ["图纸标注尺寸只有实测值、没有轴名（axis）：未用于内尺寸，请人工确认哪条是内长/内宽/内高（不按顺序猜）",
+                   "图纸范围（outline_size.source=document_extents）是整张图的幅面、不是成品内尺寸：未用于内尺寸，请人工补内长/内宽/内高"]
+     match      = 2 个候选：QQ-YT-DWG-WINE-700ML（15.18）、QQ-YT-DWG-ROUND-10PC（39.8）
+```
+
+要点：
+
+- 两份 warning 是**诚实的"不知道"**（标注尺寸没有轴名、图纸幅面不是成品内尺寸），
+  `## 297`/`## 298` 修掉的那条假告警（`unknown_converter_binary`）已经不在了；
+- 一张 DWG 只能自动填出 2 个匹配输入，其余 13 项要人工补或由案例带出 —— 这是设计口径
+  （不按顺序猜内长/内宽/内高），不是缺陷。
+
+### 三、没验的那一段（需要人）
+
+`sessions → match → baseline → price → confirm` 属于**业务写路径**：要么用用户票据在界面上点，
+要么会往库里写业务实例，本轮不代跑。`/agents/*` 只认 CPQ 票据或内部令牌，而 34 上 22 个活跃账号里
+没有 ssh 那个 `wugefei`，所以这段留给用户在页面里走。
+
+### 边界
+
+只读：`library_readiness()` / `quick_quote_cases()` 是 SELECT，parse 只走统一解析服务（不建业务项目），
+未创建会话、未出价、未落业务数据；未连库写、未改代码。
