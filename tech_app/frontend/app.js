@@ -1668,6 +1668,38 @@ function packagingSolidCoverageText(doc) {
   return text + packagingSolidsStaleText(doc);
 }
 
+/* 角色是怎么查出来的（Spec `packaging-parts-role-lookup-disclosure.md` §2.4）：零件角色全
+ * `unknown` 时，「语义层这一次没跑成」（可重试）与「图纸图层名不认识」（可补规则 / 人工指定）
+ * 必须分家说人话 —— 今天这两种在返回体上逐字相同。返回节点；没有可说的就不给节点。 */
+function packagingRoleLookupNote(doc) {
+  const payload = doc || {};
+  const stats = payload.stats || {};
+  const state = stats.role_lookup || payload.role_lookup || {};
+  const source = String(state.source || "");
+  const layers = Array.isArray(state.unknown_layers) ? state.unknown_layers : [];
+  const box = document.createElement("div");
+  box.className = "part-role-lookup";
+  if (source === "unavailable") {
+    box.setAttribute("data-parts-role-lookup-unavailable", "1");
+    box.textContent = state.message
+      || "图层角色这一次没算出来，请稍后重试；零件尺寸不受影响。";
+    return box;
+  }
+  if (source === "ir_layers") {
+    box.setAttribute("data-parts-role-lookup-ir-layers", "1");
+    box.textContent = state.message
+      || "语义层这一次没算出来，角色取自图纸 IR 自带的图层角色（可重试，或人工指定角色）。";
+    return box;
+  }
+  if (source === "semantics" && layers.length) {
+    box.setAttribute("data-parts-role-lookup-unknown-layers", "1");
+    box.textContent = state.message
+      || ("这些图层名认不出角色：" + layers.join("、") + "（可补规则或人工指定）。");
+    return box;
+  }
+  return null;
+}
+
 //: 3D 结论的版本对账人话（Spec `packaging-solids-parts-version-binding.md` §2.3）。
 function packagingSolidsStaleText(doc) {
   const reason = String((doc && doc.solids_stale_reason) || "");
@@ -2857,6 +2889,10 @@ function renderTree(ir) {
     batch.addEventListener("click", () => { packagingPartsSolidBatch(); });
     coverage.appendChild(batch);
     tree.appendChild(coverage);
+    // 角色出处（Spec `packaging-parts-role-lookup-disclosure.md` §2.4）：全 `unknown` 时先说清
+    // 是"这一次没算出来"还是"这些图层名认不出"，再列零件行。
+    const roleLookupNote = packagingRoleLookupNote(doc);
+    if (roleLookupNote) tree.appendChild(roleLookupNote);
     // 一件零件的行：自带 `dataset.partId`，点击先在看板内定位（高亮这一行），再由
     // openPackagingPartInBoard() 交给图纸零件自己的选中路径 selectPackagingPart(part_code)
     // —— 留在当前看板里展开，既不跳页，也不会清空右栏（不走视觉链路的 selectPart）。

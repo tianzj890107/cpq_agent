@@ -438,25 +438,30 @@ def _bbox_of(component: Dict[str, Any], entities: List[Dict[str, Any]]) -> Optio
 
 
 def _layer_roles(ir: Dict[str, Any], semantics: Any) -> Dict[str, str]:
-    """图层名（大写）→ 角色。有语义文档就用它，否则现算一份（同一套规则）。"""
-    doc = semantics if isinstance(semantics, dict) else None
-    if doc is None:
-        try:                                              # 现算：只读规则文件，不落盘
-            from . import packaging_semantics
-            doc = packaging_semantics.analyze(ir)
-        except Exception:                                 # noqa: BLE001 - 算不出来也要出零件
-            doc = None
+    """图层名（大写）→ 角色。有语义文档就用它，否则现算一份（同一套规则）。
+
+    返回口径逐字不变；出处（`role_lookup_state()`）由同一趟查找派生 —— 不许在模块里
+    写第二套"猜角色"的逻辑。
+    """
+    roles, _state = _resolve_layer_roles(ir, semantics)
+    return roles
+
+
+#: 角色出处的闭集（Spec `packaging-parts-role-lookup-disclosure.md` §2.1）。
+ROLE_LOOKUPS = ("semantics", "ir_layers", "unavailable")
+
+#: 三态与"老文档没记出处"各自的人话（Spec §2.1 / §2.3 / §2.4）。
+ROLE_LOOKUP_MESSAGES = {
+    "unavailable": "图层角色这一次没算出来，请稍后重试；零件尺寸不受影响。",
+    "ir_layers": "语义层这一次没算出来（%s），角色取自图纸 IR 自带的图层角色。",
+    "unknown_layers": "这些图层名认不出角色：%s（可补规则或人工指定）。",
+    "missing": "这份零件文档没记录角色是怎么查出来的（本批之前落库的），无法判断是语义层给的还是兜底来的。",
+}
+
+
+def _ir_layer_roles(ir: Dict[str, Any]) -> Dict[str, str]:
+    """IR 图层自带的角色（`role` / `inferred_role`）；没有就给 `unknown`（绝不猜）。"""
     roles: Dict[str, str] = {}
-    if isinstance(doc, dict):
-        for row in doc.get("layers") or []:
-            if not isinstance(row, dict):
-                continue
-            key = _layer_key(row.get("name"))
-            if key:
-                roles[key] = _text(row.get("role")) or "unknown"
-    if roles:
-        return roles
-    # 语义层不可用时的兜底：IR 里已经带角色就用它，否则 unknown（绝不猜）。
     for row in ir.get("layers") or []:
         if not isinstance(row, dict):
             continue
@@ -464,6 +469,79 @@ def _layer_roles(ir: Dict[str, Any], semantics: Any) -> Dict[str, str]:
         if key:
             roles[key] = _text(row.get("role") or row.get("inferred_role")) or "unknown"
     return roles
+
+
+def _role_lookup_message(source: str, reason: str, unknown_layers: List[str]) -> str:
+    if source == "unavailable":
+        return ROLE_LOOKUP_MESSAGES["unavailable"] + (("（%s）" % reason) if reason else "")
+    if source == "ir_layers":
+        return ROLE_LOOKUP_MESSAGES["ir_layers"] % (reason or "未知原因")
+    if unknown_layers:
+        return ROLE_LOOKUP_MESSAGES["unknown_layers"] % "、".join(unknown_layers)
+    return ""
+
+
+def _resolve_layer_roles(ir: Dict[str, Any], semantics: Any):
+    """查角色的**唯一一趟**：返回 `(图层名(大写) → 角色, 出处 state)`（Spec §2.1）。
+
+    出处三态与 `_layer_roles()` 的返回口径由同一趟查找派生：
+
+    - `semantics`：语义文档给了角色（传入的 / 现算成功的）；
+    - `ir_layers`：语义层失败，但图纸 IR 图层**真的**给出了至少一个已知角色；
+    - `unavailable`：语义层失败且 IR 也没有角色 —— 这就是"这一次没查成"那一态。
+
+    `reason` 只在语义层抛异常时给异常类名；`unknown_layers` 大写去重升序。
+    """
+    payload = ir if isinstance(ir, dict) else {}
+    doc = semantics if isinstance(semantics, dict) else None
+    reason = ""
+    if doc is None:
+        try:                                              # 现算：只读规则文件，不落盘
+            from . import packaging_semantics
+            doc = packaging_semantics.analyze(payload)
+        except Exception as exc:                          # noqa: BLE001 - 算不出来也要出零件
+            doc = None
+            reason = type(exc).__name__
+    roles: Dict[str, str] = {}
+    doc_unknown: List[str] = []
+    if isinstance(doc, dict):
+        for row in doc.get("layers") or []:
+            if not isinstance(row, dict):
+                continue
+            key = _layer_key(row.get("name"))
+            if not key:
+                continue
+            roles[key] = _text(row.get("role")) or "unknown"
+            # `role_source == "none"` 是"规则里没有这个图层名"的唯一证据（Spec §1 第 2 条）：
+            # 以前这里只取 `role`，把这条证据扔了。
+            if roles[key] == "unknown" or _text(row.get("role_source")) == "none":
+                doc_unknown.append(key)
+    if roles:
+        unknown_layers = sorted(set(doc_unknown))
+        return roles, {"source": "semantics", "reason": "",
+                       "unknown_layers": unknown_layers,
+                       "message": _role_lookup_message("semantics", "", unknown_layers)}
+    # 语义层不可用（或压根没给角色）时的兜底：IR 里已经带角色就用它，否则 unknown（绝不猜）。
+    fallback = _ir_layer_roles(payload)
+    known = [key for key, role in fallback.items() if role and role != "unknown"]
+    source = "ir_layers" if known else "unavailable"
+    names = sorted(fallback)
+    unknown_layers = (names if source == "unavailable"
+                      else sorted(key for key, role in fallback.items()
+                                  if not role or role == "unknown"))
+    return fallback, {"source": source, "reason": reason,
+                      "unknown_layers": unknown_layers,
+                      "message": _role_lookup_message(source, reason, unknown_layers)}
+
+
+def role_lookup_state(ir: Dict[str, Any], semantics: Any = None) -> Dict[str, Any]:
+    """这一次"零件角色是怎么查出来的"（Spec §2.1）：闭集三态 + 原因 + 认不出的图层名 + 人话。
+
+    **不抛异常**（语义层失败同样要能给出 `unavailable`），也不在 `source == "semantics"`
+    时再调一次 `analyze()` —— 与 `_layer_roles()` 走同一趟查找。
+    """
+    _roles, state = _resolve_layer_roles(ir, semantics)
+    return state
 
 
 def _role_index(role: str) -> int:
@@ -1472,7 +1550,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     entities = {str((row or {}).get("entity_id")): row
                 for row in (ir.get("entities") or []) if isinstance(row, dict)}
     known = _known_evidence(ir)
-    roles = _layer_roles(ir, semantics)
+    # 角色与"这一次角色是怎么查出来的"走同一趟查找（Spec
+    # `packaging-parts-role-lookup-disclosure.md` §2.1）：全 unknown 时也不再与"语义层没跑成"同形。
+    roles, role_lookup = _resolve_layer_roles(ir, semantics)
     notes = drawing_notes(ir)
     units = ir.get("units") if isinstance(ir.get("units"), dict) else {}
     unit_status = _text(units.get("unit_status"))
@@ -1768,6 +1848,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                   "open_reason_mix": open_reason_mix,
                   "filtered_reason_mix": filtered_reason_mix,
                   "ungroupable_total": ungroupable_total,
+                  # 角色出处（Spec `packaging-parts-role-lookup-disclosure.md` §2.2）：
+                  # 全 `unknown` 时也要分得清"语义层没跑成"与"图纸图层名不认识"。既有
+                  # `by_role` 的计数口径一个字不改（这里只加出处）。
+                  "role_lookup": role_lookup,
                   **filtered_reason_totals},
         "source": {
             "ir_id": _text(ir.get("ir_id")),
@@ -1836,6 +1920,19 @@ def _identity(doc: Dict[str, Any]) -> Tuple[str, str]:
 def _sorted_mix(mix: Dict[str, int]) -> Dict[str, int]:
     """账的排序：件数降序 → code 字典序（Spec `packaging-parts-selfcheck-diagnostics.md` §3）。"""
     return {key: mix[key] for key in sorted(mix, key=lambda name: (-mix[name], name))}
+
+
+def _summary_role_lookup(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """摘要里的角色出处（Spec `packaging-parts-role-lookup-disclosure.md` §2.3）。
+
+    文档里记了就**逐字带出**；老文档（本批之前落库的）没有这个键 → `unavailable` +
+    `role_lookup_missing` —— "这份文档没带出处" ≠ "语义层这次可用"，不许猜。
+    """
+    state = stats.get("role_lookup") if isinstance(stats, dict) else None
+    if isinstance(state, dict) and _text(state.get("source")) in ROLE_LOOKUPS:
+        return state
+    return {"source": "unavailable", "reason": "role_lookup_missing", "unknown_layers": [],
+            "message": ROLE_LOOKUP_MESSAGES["missing"]}
 
 
 def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
@@ -2064,6 +2161,9 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
                      for row in (payload.get("filtered") or []) if isinstance(row, dict)],
         "unavailable": [{"code": _text(row.get("code")), "message": _text(row.get("message"))}
                         for row in (payload.get("unavailable") or []) if isinstance(row, dict)],
+        # 角色出处（Spec `packaging-parts-role-lookup-disclosure.md` §2.3）：文档里记了就逐字带出；
+        # 老文档没这个键 → `unavailable` + `role_lookup_missing`，**不编**成"语义层这次可用"。
+        "role_lookup": _summary_role_lookup(stats),
         "stats": stats,
         "source": payload.get("source") if isinstance(payload.get("source"), dict) else {},
         "reviewable": bool(payload.get("reviewable")),

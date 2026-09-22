@@ -15199,3 +15199,77 @@ node --check tech_app/frontend/inline-analysis.js → 通过
 未改 `tests/` 下任何文件（含回归锚点 `test_packaging_parts_downstream_readback_red.py`）、未放宽任何断言、
 未连 PG / SQLite 生产库、未发 HTTP、未写业务数据；`_save_part_doc()` 的 `(part_code, parts_id)` 分段 /
 幂等判据 / `MAX_VERSIONS` 一个字未改；未 push / MR / tag / Release / 未部署。
+
+## 355. 落地 `packaging-parts-role-lookup-disclosure`：零件角色全是 `unknown` 时，「语义层这一次没跑成」不再与「图纸图层名不认识」同形（12 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_parts_role_lookup_disclosure_red`（A–E 组 12 条）全绿：A1–A4 / B1–B2 /
+C1–C2 / D1 由红转绿，E1–E3 三条护栏（`_layer_roles()` 返回口径逐字不变 / `by_role` 与零件角色集合一致 /
+`summarize()` 既有键不动）保持绿。
+
+### 一、缺口
+
+`tech_app/backend/services/packaging_parts.py` 取角色只有一条路：`_layer_roles()` 现算语义文档
+（`packaging_semantics.analyze()`），挂了就 `except Exception: doc = None` 吞掉、退回 IR 图层兜底。
+两种完全不同的原因于是同形：
+
+- 语义层**这一次没跑成**（可重试）；
+- 语义层跑成了，但图纸图层名（`DESIGN` / `SAMPLE` / `0` / `轮廓线` …）不在角色规则里（要么补规则、
+  要么人工指定）；
+- 图纸确实没给任何可用图层名。
+
+三者在读回体上都是 `stats.by_role = {"unknown": N}`，用户与门禁（`role_known_ratio`）都分不出 ——
+而它直接决定下游能不能自动绑定 BOM 行（`reject_unknown_role_autobind()` 拒掉全部自动绑定 → 材料费 0）。
+语义文档逐层本来就有 `role_source ∈ rule / color_rule / line_type_weak / none`，是 `packaging_parts`
+在取角色时把它扔了。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_parts.py`
+  - 新增 `ROLE_LOOKUPS = ("semantics","ir_layers","unavailable")`、`ROLE_LOOKUP_MESSAGES`
+    （`unavailable` / `ir_layers` / `unknown_layers` / `missing` 四句人话）；
+  - 新增**唯一一趟查找** `_resolve_layer_roles(ir, semantics) -> (roles, state)`；
+    `_layer_roles()` 改为从它派生，**返回口径逐字不变**；
+  - 新增 `_ir_layer_roles(ir)`（只读 IR 自带 `role`/`inferred_role`，没有给 `unknown`）、
+    `_role_lookup_message(source, reason, unknown_layers)`、公开纯函数
+    `role_lookup_state(ir, semantics=None)`（不抛异常；`semantics` 命中时不再调 `analyze()`）；
+  - 证据补齐：语义文档逐层 `role_source == "none"` 与 `role == "unknown"` 一起进 `unknown_layers`
+    （大写去重升序）——以前只取 `role`；
+  - `extract()`：`roles, role_lookup = _resolve_layer_roles(...)`，`stats` **新增**键
+    `"role_lookup"`；`by_role` / 件数口径一个字不改（本批是加法）；
+  - 新增 `_summary_role_lookup(stats)`：`summarize()` 返回体**新增** `"role_lookup"` —— 文档里记了
+    逐字带出；老文档（本批之前落库）给 `{"source":"unavailable","reason":"role_lookup_missing",
+    "unknown_layers":[], ...}`，"没记出处" ≠ "语义层可用"，不许猜。
+- `tech_app/frontend/app.js`
+  - 新增 `packagingRoleLookupNote(doc)`：`setAttribute("data-parts-role-lookup-unavailable"/-ir-layers/
+    -unknown-layers","1")` 三态钩子，文案优先取后端 `message`；
+  - `renderTree()` 的 `drawing_flow` 分支在覆盖率行之后 `appendChild` 它。
+
+### 三、判定口径
+
+- `semantics`（传入 dict 或现算成功）→ `reason=""`，`unknown_layers` = 语义文档里 `role` 空 /
+  `unknown` **或** `role_source == "none"` 的图层名；
+- 语义层失败 → `reason = <异常类名>`；IR 图层**至少一个非 `unknown` 角色** → `source="ir_layers"`；
+  一个都没有 → `source="unavailable"`（`unknown_layers` = IR 全部图层名）；
+- 模块内没有第二套"猜角色"逻辑；`reject_unknown_role_autobind()` / `ROLE_PRIORITY` /
+  `packaging_layer_rules.json` 一个字没动。
+
+### 四、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_parts_role_lookup_disclosure_red
+# Ran 12 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_parts_extraction_red \
+    tests.test_packaging_parts_downstream_gate_red tests.test_packaging_part_role_manual_mapping_red \
+    tests.test_packaging_parts_outline_red tests.test_packaging_semantics_red
+# Ran 149 tests ... OK (skipped=1)
+node --check tech_app/frontend/app.js    # OK
+git diff --check                          # 干净
+```
+
+### 五、边界
+
+- 红测 D 组只查 `data-parts-role-lookup-unavailable` 一个钩子；`ir_layers` / `unknown_layers` 两态由
+  `packagingRoleLookupNote()` 一并渲染，但没有独立断言的钩子测试（Spec §6.4）。
+- 本批不改 `role=unknown` 不许自动贴业务角色的纪律，`role_known_ratio` 门禁读数不变；本批只让
+  "为什么全是 unknown"可分辨。
+- 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据；工作区里别人的未提交文件没碰。
