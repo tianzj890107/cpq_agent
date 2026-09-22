@@ -58,13 +58,17 @@ def _unavailable(name: str) -> Dict[str, Any]:
 
 
 def _blocked(code: str, message: str, detail: Optional[dict] = None,
-             action: str = "") -> Dict[str, Any]:
-    """前置条件缺失：不是执行失败，因此 `retryable=False`（重试同一入口必然再失败）。"""
+             action: str = "", retryable: bool = False) -> Dict[str, Any]:
+    """前置条件缺失：不是执行失败，因此默认 `retryable=False`（重试同一入口必然再失败）。
+
+    只有"这一步这一趟读不到某个本已存在的产物"（读取故障）才传 `retryable=True`
+    （Spec `packaging-parts-ir-read-failure.md` §2.3）——默认值保证既有调用点逐字不变。
+    """
     payload = dict(detail or {})
     if action:
         payload["action"] = str(action)
     return {"status": "blocked", "error_code": str(code),
-            "error_message": str(message), "retryable": False,
+            "error_message": str(message), "retryable": bool(retryable),
             "detail": payload}
 
 
@@ -246,7 +250,10 @@ def packaging_semantics(ctx: Dict[str, Any]) -> Dict[str, Any]:
         return _unavailable("packaging_semantics")
     ir = ctx.get("ir") if isinstance(ctx.get("ir"), dict) else None
     if ir is None:
-        ir = _previous_ir(ctx)
+        # 取数口改了三态（Spec `packaging-parts-ir-read-failure.md` §2.1），这里只取 `ir`；
+        # 本步自己的失败口径（`PACKAGING_SEMANTICS_*`）一个字不改（§3 非目标）。
+        probe = _previous_ir(ctx)
+        ir = probe.get("ir") if isinstance(probe, dict) else None
     try:
         doc = analyze(ctx.get("project_id"), ir=ir)
     except Exception as exc:
@@ -270,15 +277,26 @@ def packaging_semantics(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "semantics": doc}
 
 
-def _previous_ir(ctx: Dict[str, Any]) -> Any:
+def _previous_ir(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """上一版 CAD IR 的**三态**取数口（Spec `packaging-parts-ir-read-failure.md` §2.1）。
+
+    · 读到 → `{"ir": <原样那份 IR，不校验类型>, "read_problem": None}`；
+    · 这条缝不存在（没有 `cad_ir` 模块 / 没有 `load_ir`）→ `{"ir": None, "read_problem": None}`
+      —— "这个部署没有它"由前四步负责，**不算**读不到；
+    · `load_ir` 抛异常（文档通道挂了 / 正文坏了）→ `{"ir": None, "read_problem":
+      {"code": "ir_unavailable", "reason": <异常类名>, "message": <原文前 200 字>}}`
+      —— 读不到 ≠ 没有：IR 本来就在，重跑前四步不会有帮助。
+    """
     module = _resolve(ctx, "cad_ir")
     load = getattr(module, "load_ir", None) if module is not None else None
     if not callable(load):
-        return None
+        return {"ir": None, "read_problem": None}
     try:
-        return load(ctx.get("project_id"))
-    except Exception:
-        return None
+        return {"ir": load(ctx.get("project_id")), "read_problem": None}
+    except Exception as exc:  # noqa: BLE001 - 读取故障要留痕，不许折成"没有"
+        return {"ir": None,
+                "read_problem": {"code": "ir_unavailable", "reason": type(exc).__name__,
+                                 "message": str(exc)[:200]}}
 
 
 # --------------------------------------------------------------------------- #
@@ -321,8 +339,23 @@ def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
                         {"dependency": "packaging_parts"},
                         action="联系系统管理员确认零件提取模块已随本版本部署，再重跑这一步")
     ir = ctx.get("ir") if isinstance(ctx.get("ir"), dict) else None
+    read_problem = None
     if ir is None:
-        ir = _previous_ir(ctx)
+        probe = _previous_ir(ctx)
+        if isinstance(probe, dict):
+            ir = probe.get("ir")
+            read_problem = probe.get("read_problem")
+    # "这一趟读不到"与"确实还没有"必须分家（Spec `packaging-parts-ir-read-failure.md` §2.2）：
+    # 读不到 = 可重试的读取故障（blocked + retryable=True），IR 本来就在，重跑前四步不会有帮助；
+    # 不许判成 failed / unavailable（那会把字段写入 / 待确认 / 后续准备一起判死）。
+    if read_problem:
+        detail = {"dependency": "cad_ir", "read_problem": dict(read_problem), "http_status": 503}
+        return _blocked("PACKAGING_PARTS_IR_UNAVAILABLE",
+                        "这一次读不到这个项目的 CAD 图纸解析结果（%s），零件清单暂时生成不了；"
+                        "请稍后重试这一步" % str(read_problem.get("reason") or ""),
+                        detail,
+                        action="稍后重试这一步即可；不用重跑前面的步骤（解析结果本来就在）",
+                        retryable=True)
     if not isinstance(ir, dict):
         return _blocked("PACKAGING_PARTS_NO_IR",
                         "还没有可用的 CAD 图纸解析结果，无法提取零件"

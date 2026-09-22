@@ -82,6 +82,9 @@ ERROR_CODES = {
     # 但**不是**终态失败 —— 后续步骤照旧要跑到终态。
     "PACKAGING_PARTS_NO_IR": (409, False),
     "PACKAGING_PARTS_UNAVAILABLE": (409, False),
+    # 零件提取时**读不到**上一版 CAD IR（文档通道抛异常）：IR 本来就在，是**可重试的读取故障**，
+    # 不是"还没有解析结果"、也不是缺前置条件（Spec `packaging-parts-ir-read-failure.md` §2.2/§2.4）。
+    "PACKAGING_PARTS_IR_UNAVAILABLE": (503, True),
     # 源图纸"读不到"（blob 通道抛异常）：是**可重试的读取故障**，不是缺前置条件、
     # 也不是"文件是空的"（Spec `packaging-drawing-source-read-failure.md` §2.2/§2.3）。
     "DRAWING_SOURCE_UNAVAILABLE": (503, True),

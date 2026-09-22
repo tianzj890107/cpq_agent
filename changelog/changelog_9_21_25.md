@@ -17246,3 +17246,45 @@ tests.test_packaging_cost_part_usage_red   Ran 6  FAILED (failures=3) → Ran 6 
 
 未改公式文本与费率、未改 BOM 与模板行、未改前端、未动 schema、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 402. 落地 `packaging-parts-ir-read-failure`：零件提取「读不到 CAD IR」不再说成「还没有解析结果，先跑一键解析」（三态取数口 + `PACKAGING_PARTS_IR_UNAVAILABLE`（503, True）+ blocked/可重试；8 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_drawing_flow/steps.py`：
+
+- `_previous_ir(ctx)` 改成**三态**：读到 → `{"ir": <原样那份 IR>, "read_problem": None}`；
+  没有 `cad_ir` 模块 / 没有 `load_ir` → `{"ir": None, "read_problem": None}`（"这个部署没有它"
+  由前四步负责，不算读不到）；`load_ir` 抛异常 → `{"ir": None, "read_problem": {"code":
+  "ir_unavailable", "reason": <异常类名>, "message": <原文前 200 字>}}`。两个调用点都改读新形状。
+- `parts_extract()`：`ctx["ir"]` 不是 dict 时才走取数口并取出 `read_problem`；`read_problem`
+  非空 → **新码** `PACKAGING_PARTS_IR_UNAVAILABLE` + `status="blocked"`（不是 failed /
+  unavailable，字段写入 / 待确认 / 后续准备照旧跑到终态）+ `retryable=True`，message 带异常类名
+  与"请稍后重试这一步"，detail ≥ `{"dependency": "cad_ir", "read_problem": …, "http_status": 503}`，
+  action = `稍后重试这一步即可；不用重跑前面的步骤（解析结果本来就在）`；该分支**不**调 `extract()`。
+  `ir` 确实为 None 且无 `read_problem` → 既有 `PACKAGING_PARTS_NO_IR` 逐字不变。
+- `_blocked()` 新增关键字参数 `retryable: bool = False`（默认值让既有三个调用点返回体逐字不变）；
+  只有这条新分支传 `True`。
+
+`tech_app/backend/services/packaging_drawing_flow/model.py`：`ERROR_CODES` 新增
+`"PACKAGING_PARTS_IR_UNAVAILABLE": (503, True)`；`PACKAGING_PARTS_NO_IR` 仍是 `(409, False)`。
+
+未动的：`packaging_semantics()` 只改为读新形状的 `"ir"`，它自己的失败口径
+（`PACKAGING_SEMANTICS_*` / `PACKAGING_SEMANTICS_SOURCE_MISSING`）一个字没改；
+`cad_ir.load_ir()`；`_previous_ir()` 里没有重试 / 缓存 / `find_spec`。
+
+**口径差（已按红测为准，红测一字未改）**：Spec §2.2 与真机复验要求 action 逐字含
+「重跑一键解析图纸不会有帮助」，而同一 Spec 的 §4 P4 断言 action **不含**「一键解析」——
+两者自相矛盾。本批按红测实现为「稍后重试这一步即可；不用重跑前面的步骤（解析结果本来就在）」，
+语义一致、只是不含被禁字面串；已在 Spec §5 记明。若要改回 §2.2 逐字版，需先改 P4 断言。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_parts_ir_read_failure_red   Ran 8  FAILED (failures=4) → Ran 8  OK
+  （红基 P1 P2 P4 P7；护栏 P3 P5 P6 P8 始终绿）
+不回归：parts_extraction + error_taxonomy + parse_terminal_signal + drawing_source_read_failure
+        Ran 85  OK
+        drawing_flow + semantics + requirement_state  Ran 130  OK (skipped=2)
+```
+
+未起服务、未发 HTTP、未连 PG / SQLite、未建项目、未写任何文件、未跑真解析、
+未 push / MR / tag / Release / 未部署。
