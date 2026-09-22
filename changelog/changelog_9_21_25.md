@@ -16418,3 +16418,86 @@ attachments dir exists: False            # 没走 add_attachment()
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+---
+
+## 377. 权威清单里的 28 件业务部件**一件都进不了 BOM**：`_assemble()` 的部件组行只来自盒型模板展开（9-22，Codex 实现）
+
+Spec：`docs/specs/packaging-bom-business-parts-rows.md`；
+红测：`tests/test_packaging_bom_business_parts_rows_red.py`（23 条）。
+依赖：`## 368` §7（BOM 只遍历 `business_parts`）、`## 370`（绑定读件权威尺寸）、`## 375`/`## 376`（清单披露与部件图）。
+
+### 一、缺口（代码级 + 真样本实测）
+
+1. `packaging_bom.py` 的 `_assemble()` 第 2 组部件行只来自盒型模板展开
+   （`_part_item()`，`source="kb_packaging_part_template"`）；全文件里 `business_part_code` 出现 **0** 次。
+2. 真样本 `裕同包装项目-待开发/酒盒 报价资料.xlsx` 的 28 件业务部件（`JWXR21-P01…P28`）
+   **每件都有权威尺寸与材料原文**，其中 2 件是外购件（`顶托EVA`「外购，用量1个」、
+   `磁铁`「外购，用量8/套」）—— 没有一件进得了 BOM。
+3. 业务部件版本今天只以**披露**形式跟进 BOM（`source_versions.business_parts_id/hash` +
+   顶层 `business_parts` 块），行本身仍按模板走：`## 368` §7 只做了一半。
+4. 真样本首轮几何绑定是 28/28 `unbound`（§12.1 实测 2 `bound` / 2 `partial` / 24 `unbound`）
+   —— 而权威尺寸与材料**不依赖几何**；§7 明确要求"几何未绑定只阻断依赖几何的尺寸/工艺"。
+
+### 二、改了什么（只动 `tech_app/backend/services/packaging_bom.py` 一个文件）
+
+- 新增 `BUSINESS_ROW_SOURCE = "packaging_business_parts_authority"`、`PURCHASED_KEYWORDS = ("外购",)`、
+  `_positive_number()`（**只认真的数字**且 `> 0`：字符串 / 布尔 / `NaN` / 0 / 负数一律当"没有"）、
+  `_authority_size_source()`（表 + 行，拼不出给 `{}`）。
+- 新增纯函数 `business_part_rows(business_doc)`：逐件一行，**保持清单顺序**；
+  空白编码跳过、同编码只留第一条（BOM 行主键是 `(project, req, category, item_key)`）；
+  `bom_category` / `is_optional` 由权威原文里的「外购」决定（`optional_part` / `box_part`）；
+  `item_key` 与 `part_code` 都逐字给业务编码；`material` 是原文、`material_code` 一律 `""`；
+  尺寸只认权威数字，缺哪个就按 `(length_mm, width_mm)` 顺序进 `missing_variables` 并落 `needs_input`；
+  `size_source_json = {"kind": "authority_workbook", "sheet", "row"}`；
+  不写 `role`（业务角色留人工映射）、不写三个尺寸表达式。**纯函数**：体内不出现
+  `kb_repo.` / `da_repo.` / `store.` / `get_backend(`。
+- `_assemble(expanded, box, data, requirement_no, *, business_parts=None)`：清单非空 → 部件组行就是清单那些行
+  （模板展开的部件行**不再**进入这一版）；空 / 没传 → 逐字回到模板展开。
+  **参数是关键字带默认值**：既有按位置传 4 个参数的调用方（含红测）一行都不用改。
+- `build_bom()` 走 `_load_business_parts(project_id)`（延迟 import，读不到回 `None`，**绝不抛**）。
+- `load_bom()` 新增 `business_rows`：`{row_total, box_part_total, optional_part_total,
+  needs_input_total, keys}`（判据只有行上的 `source`；没有业务行时 0/0/0/0/[]）。
+- **未新增数据库列**：业务编码复用既有 `part_code` 列、来源复用 `source` 列、尺寸出处复用
+  `size_source_json` 列 —— schema 一个字没动。
+
+### 三、复跑
+
+```
+实现前 → Ran 23 tests, FAILED (failures=15, errors=1)     # 16 红 / 7 绿护栏
+实现后 → Ran 23 tests, OK
+相邻 6 个模块（parametric_bom / bom_part_size_provenance / bom_box_type_provenance /
+business_parts_and_cad_plan_view / parts_extraction / cost_engine）→ Ran 205, failures=1
+（唯一失败是既有挂账 bom_part_size_provenance::B3）
+tests/test_packaging_*.py 全域（91 个模块）→ Ran 1678, failures=5, skipped=8（与上一批逐条相同）
+```
+
+真样本端到端（真链路：种子 KB + 临时 SQLite + meta 沙盘 + 真工作簿）：
+
+```
+导入前：部件组行 = 10（模板展开），business_rows.row_total = 0
+导入后：部件组行 = 28，source 只有 packaging_business_parts_authority
+        business_rows = 28 / box_part 26 / optional_part 2 / needs_input 0
+        外购件 = JWXR21-P27（顶托EVA）、JWXR21-P28（磁铁）
+        第一行 = JWXR21-P01 左盖面纸 307.07×528.89 225G太阳铜版底PET光银
+                 size_source_json = {"kind": "authority_workbook", "sheet": "零部件排版工艺", "row": 4}
+        其余五组逐字不变：finished 1 / material 4 / process 11 / tooling 2 / packaging 3
+```
+
+### 四、已记录的边界（不改测试，不放宽断言）
+
+1. **材料组仍是模板来源**：本批只切部件组。权威材料原文与 KB 材料码的映射没有口径前，
+   把材料组一起切过去只会让 `material_unresolved` 暴增且无从收口（Spec §7 边界 1）。
+2. **权威原文不入库**：BOM 行表没有放长文本的列（`note` 不许挪用），工艺 / 排版 / 备注原文
+   留在业务部件文档那一路。
+3. **重复编码只留第一条**：清单里同编码两行属"不许猜"的清单缺陷，本批只保证不写出两行同主键。
+4. **几何回填照旧**：业务行缺尺寸时仍可能被 `bind_rows()` 按既有位置配对回填，与模板行同等待遇。
+5. 红测本身校正过一处：`A7` 拆成 `A7`（有出处）+ `A7b`（无出处给 `{}`）；`A2` 里
+   `"307.07"` 这种"看起来像数"的字符串**必须**被拒 —— 实现第一版用 `_num()` 兼容了字符串，
+   按 Spec §C1 改回"只认真的数字"，并把这条口径写进 Spec。
+6. 全域那 5 条既有挂账与本批无关（`packaging_bom_part_size_provenance::B3`、
+   `packaging_parse_to_downstream_seams::B4`、`packaging_part_manual_fill_persists::A2`、
+   `packaging_route_bom_version_pinning::F2`、`packaging_quote_send_recovery::C1`），前后条数不变。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。

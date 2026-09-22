@@ -59,6 +59,14 @@ OVERRIDE_ONLY_VARIABLES = frozenset({
 #: 部件类别（展开结果落在 BOM 里的两类）。
 PART_CATEGORIES = ("box_part", "optional_part")
 
+#: 业务部件清单派生的 BOM 部件行（Spec `packaging-bom-business-parts-rows.md` §C1）：
+#: 与 `kb_packaging_part_template`（模板展开）/ `dwg_parts`（几何回填）并列的第三类来源。
+BUSINESS_ROW_SOURCE = "packaging_business_parts_authority"
+
+#: 权威原文里出现这个词的件是**外购件**（真样本 `顶托EVA`「外购，用量1个」、
+#: `磁铁`「外购，用量8/套」）—— 只看这一个词，不做别的语义推断。
+PURCHASED_KEYWORDS = ("外购",)
+
 #: 内尺寸三键：缺一个就无法展开（Spec §2.6）。
 INNER_DIM_KEYS = ("inner_length", "inner_width", "inner_height")
 
@@ -395,6 +403,117 @@ def _part_item(entry: dict) -> dict:
     }
 
 
+def _positive_number(value: Any) -> Optional[float]:
+    """只有**真的数字**且 > 0 才算尺寸（Spec §C1）。
+
+    字符串（含 `"307.07"` 这种"看起来像数"的）一律当"没有"：权威清单的尺寸由导入器
+    解析成数字落库，这里再替它 `float()` 一次就是在替上游猜 —— 猜错的那一件没人看得见。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+        return None
+    return number
+
+
+def _authority_size_source(authority: dict) -> dict:
+    """权威清单的尺寸出处（表 + 行）；一个都拼不出就给 `{}`（不许编）。"""
+    source = authority.get("source") if isinstance(authority.get("source"), dict) else {}
+    out: dict = {"kind": "authority_workbook"}
+    sheet = _text(source.get("sheet"))
+    if sheet:
+        out["sheet"] = sheet
+    row = _num(source.get("row"))
+    if row is not None:
+        out["row"] = int(row)
+    return out if len(out) > 1 else {}
+
+
+def business_part_rows(business_doc: Any) -> list:
+    """业务部件清单 → BOM 的**部件组**行（Spec `packaging-bom-business-parts-rows.md` §C1）。
+
+    纯函数：不读库、不读文件、不联网、不改入参。`## 368` §7 要求 BOM 遍历的是
+    `business_parts`（真样本 28 件），今天这 28 件一件都进不了 BOM —— 这个方法就是那把尺子。
+
+    - 空白编码跳过、同编码只留第一条（BOM 行主键是
+      `(project_id, requirement_no, bom_category, item_key)`，`item_key` 必须唯一）；
+    - 尺寸只认权威数字（`> 0`），缺哪个就把哪个写进 `missing_variables`，**绝不反推、绝不编数**；
+    - `process_text` 里写「外购」的件归 `optional_part`（采购件），其余是 `box_part`；
+    - **不写** `role`（业务角色留给人工映射）、**不写** `material_code`（材料码映射是另一批）、
+      **不写**三个尺寸表达式（权威清单没有表达式）。
+    """
+    rows = business_doc.get("business_parts") if isinstance(business_doc, dict) else None
+    if not isinstance(rows, list):
+        return []
+    out: list = []
+    seen: set = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = _text(row.get("business_part_code"))
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        authority = row.get("authority") if isinstance(row.get("authority"), dict) else {}
+        process_text = _text(authority.get("process_text"))
+        purchased = any(word in process_text for word in PURCHASED_KEYWORDS)
+        length = _positive_number(authority.get("length_mm"))
+        width = _positive_number(authority.get("width_mm"))
+        missing = [name for name, value in (("length_mm", length), ("width_mm", width))
+                   if value is None]
+        out.append({
+            "bom_category": "optional_part" if purchased else "box_part",
+            "item_key": code,
+            "item_name": _text(row.get("name")) or code,
+            "part_code": code,
+            "material": _text(authority.get("material_text")) or None,
+            "material_code": "",
+            "quantity": _num(authority.get("quantity")),
+            "unit": "件",
+            "length_mm": length,
+            "width_mm": width,
+            "size_source_json": _json_text(_authority_size_source(authority)),
+            "status": "needs_input" if missing else "computed",
+            "missing_variables": missing,
+            "is_optional": 1 if purchased else 0,
+            "source": BUSINESS_ROW_SOURCE,
+        })
+    return out
+
+
+def _load_business_parts(project_id: str) -> Any:
+    """读一版业务部件文档；读不到 / 出任何岔子都回 `None`（**绝不抛**）。
+
+    清单读不到就按模板展开走 —— 与本批之前逐字相同，不许因为清单这一步把 BOM 算失败。
+    """
+    try:
+        from . import packaging_parts
+        return packaging_parts.load_business_parts(project_id)
+    except Exception:                                   # noqa: BLE001 - 见 docstring
+        return None
+
+
+def _business_rows_scope(items: list) -> dict:
+    """这一版 BOM 的部件组行有多少来自权威清单（Spec §C3）。判据只认行上的 `source`。"""
+    rows = [item for item in items
+            if _text(item.get("source")) == BUSINESS_ROW_SOURCE
+            and _text(item.get("bom_category")) in PART_CATEGORIES]
+    return {
+        "row_total": len(rows),
+        "box_part_total": sum(1 for row in rows
+                              if _text(row.get("bom_category")) == "box_part"),
+        "optional_part_total": sum(1 for row in rows
+                                   if _text(row.get("bom_category")) == "optional_part"),
+        "needs_input_total": sum(1 for row in rows
+                                 if _text(row.get("status")) == "needs_input"),
+        "keys": sorted(_text(row.get("item_key")) for row in rows),
+    }
+
+
 def _process_rows(box_type_code: str) -> list:
     return [dict(row) for row in
             kb_repo.packaging_process_templates(box_type_code=box_type_code)]
@@ -408,7 +527,8 @@ def _matched_keyword(row: dict) -> str:
     return ""
 
 
-def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str) -> list:
+def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
+              business_parts: Any = None) -> list:
     items: list = []
     box_code = expanded["box_type_code"]
 
@@ -424,9 +544,14 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str) -> lis
         "source": "kb_packaging_box_type",
     })
 
-    # 2) 盒型部件 / 可选部件。
-    for entry in expanded["parts"]:
-        items.append(_part_item(entry))
+    # 2) 盒型部件 / 可选部件：**有权威清单就用清单**（Spec
+    #    `packaging-bom-business-parts-rows.md` §C2），否则逐字回到模板展开。
+    authority_rows = business_part_rows(business_parts)
+    if authority_rows:
+        items.extend(authority_rows)
+    else:
+        for entry in expanded["parts"]:
+            items.append(_part_item(entry))
 
     # 3) 材料：部件 material 去重，唯一命中才关联材料码。
     materials = _material_index()
@@ -1089,6 +1214,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "business_parts_hash": business_scope["business_parts_hash"],
             "gap": dict(business_scope["gap"] or {}),
         },
+        # 部件组行的第二把账（Spec `packaging-bom-business-parts-rows.md` §C3）：这一版
+        # BOM 里有多少部件组行来自权威清单（键**必须存在**，没有时全 0 / `[]`）。
+        "business_rows": _business_rows_scope(items),
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
@@ -1425,7 +1553,10 @@ def build_bom(project_id: str, requirement_no: str = "", *,
 
     expanded = expand_parts(box_code, data, overrides=overrides or {})
     box = _load_box_type(box_code)
-    items = _assemble(expanded, box, data, req_no)
+    # 业务部件清单（Spec `packaging-bom-business-parts-rows.md` §C2）：有清单时部件组行
+    # 由清单生成（真样本 28 件），没有清单时逐字保持模板展开。
+    items = _assemble(expanded, box, data, req_no,
+                      business_parts=_load_business_parts(project_id))
     items, pairing_review, role_unbound, binding_error = _bind_parts(project_id, items, req_no)
     # 重算不许把人工映射算没了（Spec `packaging-part-role-manual-mapping.md` §2.8）：
     # `_bind_parts()` 只认尺寸证据、不会碰角色，映射必须在这之后**重放**回来。
