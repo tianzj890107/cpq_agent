@@ -896,27 +896,37 @@ def complete_step(session_id: str, step_no: int, user: dict, snapshot: str = "",
             raise WfError("卡片不存在，请先保存报价会话")
         cid = int(card["card_id"])
         now = _now()
-        # data_snapshot 按 DA 是 jsonb：前端传的是 JSON.stringify 的结果，显式 ::jsonb 转换；
-        # 空串或不是合法 JSON 时存 NULL，不能让一次快照把整步确认搞失败。
-        snap = (snapshot or "").strip()[:200000]
-        if snap:
+        # data_snapshot 按 DA 是 jsonb：前端传的是 JSON.stringify 的结果。
+        # 写快照必须**合并**，不是整份替换（Spec `quote-card-step-snapshot-merge-on-complete.md` §2.1）：
+        # 负载里出现的键覆盖，负载里没出现的键保留原值。挂在这一步上的技术侧包装投影
+        # （`s2_packaging` / `s2_packaging_cost` / `packaging_package`）是回传通道写进来的，
+        # 用户再点一次「完成本步」若整份覆盖，第 2 步的包装分区与第 5 步要落的报价版本会一起消失。
+        # 合并直接复用回传通道那条既有语义 `merge_step_snapshot()`（§2.1：不许写第二份合并逻辑）；
+        # 它只认「对象」负载，空串 / `"{}"` / 非法 JSON 一律**不碰** data_snapshot（§2.2）。
+        payload = {}
+        snap_text = (snapshot or "").strip()[:200000]
+        if snap_text:
             try:
-                json.loads(snap)
+                parsed = json.loads(snap_text)
             except ValueError:
-                snap = None
-        else:
-            snap = None
+                parsed = None
+            if isinstance(parsed, dict):
+                payload = parsed
+        if payload:
+            merge_step_snapshot(session_id, step_no, payload, conn=conn)
         cpq_auth._exec(
             conn, "UPDATE cpq_wf_card_step SET status = 'done', owner_user_id = %s,"
-                  " data_snapshot = %s::jsonb, completed_at = %s,"
+                  " completed_at = %s,"
                   " started_at = COALESCE(started_at, %s) WHERE card_id = %s AND step_no = %s",
-            (int(user["user_id"]), snap, _ts(now), _ts(now), cid, step_no))
+            (int(user["user_id"]), _ts(now), _ts(now), cid, step_no))
         # 第 5 步「报价方案」确认 = 把当次报价落成一版（只增不改；Spec §2.1）。
         # 快照里带得出报价才落：非包装卡片 / 第 1–4 步 / 没定价过的一律不落。
         # 落版本失败**不许**把整步确认拖死（§3.3）：只捕业务拒绝 PricingError，留痕写明原因。
         quote_version = None
         if step_no == QUOTE_VERSION_STEP:
-            quote = _packaging_quote_of(snap)
+            # 落版本只看**本次提交**的负载，不看合并后的整份快照：
+            # 否则一次空重放会把早先留下的报价再落一版（Spec §2.1 第 5 步口径）。
+            quote = _packaging_quote_of(payload)
             if quote:
                 # 版本按**这张卡片**的会话号归档（页面就是用它回来读历史），
                 # 业务实例号优先取快照里的，取不到用卡片上那一个。

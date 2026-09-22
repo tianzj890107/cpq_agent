@@ -12885,3 +12885,49 @@ tests.test_tech_*（112 份）                              → Ran 1594 … 5 �
 
 本批只改上述后端/前端实现与 Spec 状态行/§7、本 changelog；未改任何测试；未连 PG、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 321. `## 317` 落地：卡片「完成本步」对快照改成合并 —— 技术侧写进来的包装整包不再被一次重放抹掉（9-22，Codex 实现）
+
+`docs/specs/quote-card-step-snapshot-merge-on-complete.md` 的 2 条红（A1/A2）已转绿，3 条护栏未动；
+只改了 `cpq_wf.py` 的 `complete_step()`。
+
+### 一、改了什么
+
+- `cpq_wf.complete_step()` 写 `data_snapshot` 从「整份替换」改成**合并**：负载解析成对象后
+  直接调既有的 `merge_step_snapshot(session_id, step_no, payload, conn=conn)` —— 复用回传通道那条
+  语义（逐键覆盖、未出现的键保留），**没有**写第二份合并逻辑。`merge_step_snapshot` 结尾的
+  `_commit()` 是空实现，接 `conn` 不会把调用方的事务提前提交，回传命令的原子性不受影响。
+- 主 UPDATE 里的 `data_snapshot = %s::jsonb` 这一列**删掉**（快照由上面那一步写）；
+  `status / owner_user_id / completed_at / started_at` 一字未动。
+- 空负载口径：`""`、`"{}"`、非法 JSON、非对象（数组等）一律**不写** `data_snapshot`
+  —— 不是「写回原值」而是「不碰」，连 jsonb 里的非对象老值也不会被改写。
+- 第 5 步落版本改成只看**本次提交的负载**（`_packaging_quote_of(payload)`）：否则一次空重放会把
+  早先留下的报价再落一版（只增不改的版本表会被撑出重复版本）。带报价负载时行为与改动前一致。
+- `current_step`（仍取第一个未完成步）、`next_pending_step()`、自动推送、留痕全部未动。
+
+### 二、行为复验（`tests/fixtures/wf_handoff_harness.py` 受控假库，真调 `cpq_wf.complete_step`）
+
+- 第 2 步快照预置 `['packaging_package','s1_basic','s2_packaging']`，带负载 `{"s2_cost": …}` 再点一次
+  「完成本步」→ `['packaging_package','s1_basic','s2_cost','s2_packaging']`（旧键都在）；
+- 空负载 / 非法 JSON 再点一次 → 键集合一字不变（不再被写成 `NULL`）；
+- 第 5 步带报价负载 → 照旧落版本；随后空负载重放 → 不再落版本。
+
+### 三、实测
+
+```
+tests.test_quote_card_step_snapshot_merge_red             → Ran 5 OK（原 2 红全绿）
+tests.test_quote_card_step_order_and_replay_red           → Ran 6 OK
+tests.test_tech_handoff_atomic_idempotent_red             → Ran 35 OK
+tests.test_tech_cost_report_handoff_continuity_red        → Ran 14 OK
+tests.test_packaging_quote_version_persistence_red        → Ran 8 OK
+（五份一起：Ran 68 OK）
+tests/test_*.py 里 card|quote|handoff|wf_ 共 1524 条            → 4 红，全部与本批无关
+```
+
+### 四、边界
+
+与本批无关的 4 条红：`test_packaging_quote_send_button_entry_red` A1/A2（并行批次 `## 318` 的新红测）、
+`test_packaging_quote_send_recovery_red::CMetaRecovery::test_c1`（存量 `## 272`）、
+`test_quick_quote_case_maintenance_red::TestFPanelWiring::test_f1`（面板缺 `CASE_FIELDS_PATH`，属快速报价
+维护批次，stash 复跑确认与本批无关）。本批未改任何测试；未连 PG、未写业务数据；未 push / MR / tag /
+Release / 未部署。
