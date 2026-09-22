@@ -63,6 +63,14 @@ PART_CATEGORIES = ("box_part", "optional_part")
 #: 与 `kb_packaging_part_template`（模板展开）/ `dwg_parts`（几何回填）并列的第三类来源。
 BUSINESS_ROW_SOURCE = "packaging_business_parts_authority"
 
+#: 权威清单出处的 `size_source_json.kind`（Spec `packaging-bom-business-parts-rows.md` §C1）：
+#: 与 `dwg_binding`（几何零件）/ 模板展开并列的第三类尺寸出处。判"这一行是不是权威清单建的"
+#: 只认这个值（Spec `packaging-business-parts-version-pinning.md` §2.2 第 4 条）。
+AUTHORITY_SIZE_KIND = "authority_workbook"
+
+#: 业务部件清单版本漂移的原因闭集（Spec `packaging-business-parts-version-pinning.md` §2.2）。
+BUSINESS_PARTS_STALE_REASONS = ("business_parts_reimported", "binding_without_version")
+
 #: 权威原文里出现这个词的件是**外购件**（真样本 `顶托EVA`「外购，用量1个」、
 #: `磁铁`「外购，用量8/套」）—— 只看这一个词，不做别的语义推断。
 PURCHASED_KEYWORDS = ("外购",)
@@ -420,17 +428,28 @@ def _positive_number(value: Any) -> Optional[float]:
     return number
 
 
-def _authority_size_source(authority: dict) -> dict:
-    """权威清单的尺寸出处（表 + 行）；一个都拼不出就给 `{}`（不许编）。"""
+def _authority_size_source(authority: dict, *, business_parts_id: str = "",
+                           business_parts_hash: str = "") -> dict:
+    """权威清单的尺寸出处（表 + 行 + **建的当时那一版清单**）；一个出处都拼不出就给 `{}`。
+
+    Spec `packaging-business-parts-version-pinning.md` §2.1：与零件轴把 `parts_id` / `parts_hash`
+    写进 `size_source_json.dwg_binding` 是**同一个范式** —— 行上固定它建的时候照的那一版清单，
+    读侧才比得出"这份 BOM 是按上一版清单做的"。文档没给版本就写空串（**不许**拿时间 / 行号 /
+    当前清单顶一个）；出处本身拼不出（没有表名与行号）时与今天一样给 `{}`，一个键都不加。
+    """
     source = authority.get("source") if isinstance(authority.get("source"), dict) else {}
-    out: dict = {"kind": "authority_workbook"}
+    out: dict = {"kind": AUTHORITY_SIZE_KIND}
     sheet = _text(source.get("sheet"))
     if sheet:
         out["sheet"] = sheet
     row = _num(source.get("row"))
     if row is not None:
         out["row"] = int(row)
-    return out if len(out) > 1 else {}
+    if len(out) <= 1:
+        return {}
+    out["business_parts_id"] = _text(business_parts_id)
+    out["business_parts_hash"] = _text(business_parts_hash)
+    return out
 
 
 def business_part_rows(business_doc: Any) -> list:
@@ -449,6 +468,10 @@ def business_part_rows(business_doc: Any) -> list:
     rows = business_doc.get("business_parts") if isinstance(business_doc, dict) else None
     if not isinstance(rows, list):
         return []
+    # 这一版清单的身份（Spec `packaging-business-parts-version-pinning.md` §2.1）：逐字取文档
+    # 顶层的两个键，每行都固定住 —— 读侧靠它判"这份 BOM 是按上一版清单做的"。
+    doc_id = _text(business_doc.get("business_parts_id"))
+    doc_hash = _text(business_doc.get("business_parts_hash"))
     out: list = []
     seen: set = set()
     for row in rows:
@@ -476,7 +499,8 @@ def business_part_rows(business_doc: Any) -> list:
             "unit": "件",
             "length_mm": length,
             "width_mm": width,
-            "size_source_json": _json_text(_authority_size_source(authority)),
+            "size_source_json": _json_text(_authority_size_source(
+                authority, business_parts_id=doc_id, business_parts_hash=doc_hash)),
             "status": "needs_input" if missing else "computed",
             "missing_variables": missing,
             "is_optional": 1 if purchased else 0,
@@ -1221,7 +1245,7 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     # 业务部件层（Spec `packaging-business-parts-and-cad-plan-view.md` §2 第 1 条）：BOM 消费
     # 的部件集合是 `business_parts`，几何分量只作证据。这份 scope 只披露版本与可用性，
     # 不改行、不改数（加法）。
-    business_scope = _business_parts_scope(project_id)
+    business_scope = _business_parts_scope(project_id, items)
     return {
         "built": bool(items),
         "box_type_code": box_type_code,
@@ -1263,6 +1287,10 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         # 没有过期行时 `[]`；比对不了时 `parts_document_unavailable` 非空且清单给 `[]`。
         "parts_binding_stale": parts_scope["stale"],
         "parts_document_unavailable": parts_scope["unavailable"],
+        # 业务部件清单版本漂移（Spec `packaging-business-parts-version-pinning.md` §2.2）：
+        # 键**必须存在**，没有过期行时 `[]`；当前清单读不到 / 确实没有时也给 `[]`
+        # （那两种态由下面的 `business_parts.gap` 说清 —— 比较不了 ≠ 变了）。
+        "business_parts_stale": list(business_scope["stale"]),
         # 业务部件（Spec `packaging-business-parts-and-cad-plan-view.md` §7/§8）：键**必须
         # 存在**。有清单时给版本与件数；没有清单时 `gap` 非空（`business_parts_missing`
         # + "已识别几何区域 n 个，尚未形成业务部件清单"），绝不用几何件数冒充业务件数。
@@ -1462,7 +1490,36 @@ def _parts_binding_scope(project_id: str, items: list) -> dict:
             "parts_id": _text(doc.get("parts_id")), "parts_hash": current_hash}
 
 
-def _business_parts_scope(project_id: str) -> dict:
+def _business_parts_stale_rows(items: Any, current_hash: str) -> list:
+    """行上固定的清单版本 vs 当前清单（Spec `packaging-business-parts-version-pinning.md` §2.2）。
+
+    判据**只认行上留痕**（`size_source_json.kind == AUTHORITY_SIZE_KIND` 的
+    `business_parts_hash`），不在这里另算一套；没有权威出处的行（模板行 / 人工行）不进列表 ——
+    它们本来就没有"照哪一版清单建的"这回事。`item_key` 升序，稳定输出。
+
+    - 行上有版本、与当前不同 → `business_parts_reimported`；
+    - 行上有权威出处但**没有**版本（本批之前建的历史行）→ `binding_without_version`。
+    """
+    stale: list = []
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+        source = _loads(row.get("size_source_json"), {}) if row.get("size_source_json") else {}
+        if not isinstance(source, dict) or _text(source.get("kind")) != AUTHORITY_SIZE_KIND:
+            continue
+        bound_hash = _text(source.get("business_parts_hash"))
+        if bound_hash and current_hash and bound_hash == current_hash:
+            continue                                  # 版本一致
+        stale.append({"item_key": _text(row.get("item_key")),
+                      "bound_business_parts_hash": bound_hash,
+                      "current_business_parts_hash": current_hash,
+                      "reason": ("business_parts_reimported" if bound_hash
+                                 else "binding_without_version")})
+    stale.sort(key=lambda row: row["item_key"])
+    return stale
+
+
+def _business_parts_scope(project_id: str, items: Any = None) -> dict:
     """BOM 消费的**业务部件**版本与可用性（Spec
     `packaging-business-parts-and-cad-plan-view.md` §2 第 1 条 / §7 / §8）。
 
@@ -1472,9 +1529,13 @@ def _business_parts_scope(project_id: str) -> dict:
 
     读不到 / 还没导入 → `available=False` 且 `gap` 给出 `business_parts_missing`（含
     "已识别几何区域 n 个，尚未形成业务部件清单"），让页面说清下一步该补什么。
+
+    `items` 给出来时一并算出 `stale`（Spec `packaging-business-parts-version-pinning.md` §2.2）：
+    当前清单**读不到**或**确实没有**时一律给 `[]` —— 比较不了 ≠ 变了（与 `_parts_binding_scope()`
+    同一套三态纪律）。
     """
     blank = {"business_parts_id": "", "business_parts_hash": "", "business_part_total": 0,
-             "bound_total": 0, "unbound_total": 0, "available": False, "gap": {}}
+             "bound_total": 0, "unbound_total": 0, "available": False, "gap": {}, "stale": []}
     try:
         from . import packaging_parts
         doc = packaging_parts.load_business_parts(project_id)
@@ -1490,13 +1551,15 @@ def _business_parts_scope(project_id: str) -> dict:
         return blank
     rows = doc.get("business_parts") if isinstance(doc.get("business_parts"), list) else []
     stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}
+    current_hash = _text(doc.get("business_parts_hash"))
     return {"business_parts_id": _text(doc.get("business_parts_id")),
-            "business_parts_hash": _text(doc.get("business_parts_hash")),
+            "business_parts_hash": current_hash,
             "business_part_total": int(stats.get("business_part_total") or len(rows)),
             "bound_total": int(stats.get("bound_total") or 0),
             "unbound_total": int(stats.get("unbound_total") or 0),
             "available": bool(rows),
-            "gap": {} if rows else packaging_parts.business_parts_gap_of(doc)}
+            "gap": {} if rows else packaging_parts.business_parts_gap_of(doc),
+            "stale": _business_parts_stale_rows(items, current_hash) if rows else []}
 
 
 def _load_pairing_review(project_id: str, requirement_no: str = "") -> list:

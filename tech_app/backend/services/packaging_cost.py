@@ -2598,7 +2598,10 @@ def load_cost(project_id: str, requirement_no: str = "", *,
              "packaging_total": 0.0, "freight_total": 0.0, "total_cost": 0.0,
              "stale": False, "stale_reasons": [], "bom_unavailable": {},
              # 「当前路线版本读不到」与「确实没有确认版本」分开（Spec §2.1）：没算过也要有键。
-             "route_unavailable": dict(route_unavailable or {})})
+             "route_unavailable": dict(route_unavailable or {}),
+             # 业务部件清单那条轴（Spec `packaging-business-parts-version-pinning.md` §2.3）：
+             # 没算过当然没有版本漂移，但键**必须存在**。
+             "business_parts_unavailable": {}})
     items = da_repo.load_packaging_cost_items(row["estimate_id"])
     result = _rehydrate_with_readiness(_rehydrate(row, items))
     # 输入版本的埋点（Spec `packaging-cost-input-version-pinning.md` §2.2）：读侧**只读存的
@@ -2623,6 +2626,13 @@ def load_cost(project_id: str, requirement_no: str = "", *,
     result["route_unavailable"] = dict(route_unavailable or {})
     result["stale"], result["stale_reasons"], result["bom_unavailable"] = _input_drift(
         project_id, req_no, stored, upstream, route_unavailable)
+    # 业务部件清单那条轴（Spec `packaging-business-parts-version-pinning.md` §2.3）：与 BOM /
+    # 路线两条轴并列、各自独立披露 —— "重新导入清单后旧成本必须被标出来"这条以前没人比。
+    business_reason, business_unavailable = _business_parts_drift(project_id, stored)
+    if business_reason:
+        result["stale_reasons"] = list(result["stale_reasons"]) + [business_reason]
+    result["stale"] = bool(result["stale"] or business_reason)
+    result["business_parts_unavailable"] = dict(business_unavailable)
     return result
 
 
@@ -2661,6 +2671,57 @@ def _input_drift(project_id: str, requirement_no: str, stored: dict,
             elif bom_input_hash(live_rows) != stored_hash:
                 reasons.append("bom_rebuilt")
     return bool(reasons), reasons, unavailable
+
+
+def _business_parts_probe(project_id: str) -> tuple:
+    """探测当前业务部件清单身份，返回 `(hash, unavailable)`（Spec
+    `packaging-business-parts-version-pinning.md` §2.3，与 `_route_probe()` 同形）。
+
+    三态两两可分：
+      · 读到了 → `("<hash>", {})`；
+      · 读到了、但项目里还没有清单 / 没有行 → `("", {})`（"确实没有"，不是"读不到"）；
+      · 读挂 → `("", {"code": "business_parts_unavailable", "reason": "<异常类名>"})`。
+
+    只经 `packaging_parts.load_business_parts()` 这**一个入口**读（与
+    `_business_parts_scope()` 同源），绝不绕 `da_repo`、绝不另写第二套匹配。
+    """
+    try:
+        from . import packaging_parts
+        doc = packaging_parts.load_business_parts(project_id)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return "", {"code": "business_parts_unavailable", "reason": type(exc).__name__}
+    if not isinstance(doc, dict):
+        return "", {}
+    rows = doc.get("business_parts") if isinstance(doc.get("business_parts"), list) else []
+    if not rows:
+        return "", {}
+    return _text(doc.get("business_parts_hash")), {}
+
+
+def _business_parts_drift(project_id: str, stored: dict) -> tuple:
+    """成本单里存的业务部件版本 vs 当前清单（Spec
+    `packaging-business-parts-version-pinning.md` §2.3）：返回 `(reason, unavailable)`。
+
+    - 存的 hash 非空、且 ≠ 当前清单 hash → `("business_parts_reimported", {})`；
+    - 存的 hash 非空、与当前一致 → `("", {})`（没换就不报）；
+    - 存的**没有**版本（本批之前算的历史成本单）→ `("", {"code": "business_parts_version_missing"})`
+      ——「当时没记」≠「变了」，不许当成"没过期"，也不许报 drift；
+    - 当前清单**读不到** → `("", {"code": "business_parts_unavailable", "reason": …})`
+      —— 「比较不了」≠「变了」；这条轴与 BOM / 路线两条轴**各自独立**披露，不合并。
+    """
+    if not stored:
+        return "", {}                                   # 整份来源都没有：`provenance_missing` 已说清
+    live_hash, unavailable = _business_parts_probe(project_id)
+    if unavailable:
+        return "", dict(unavailable)
+    stored_hash = _text(stored.get("business_parts_hash"))
+    if not stored_hash:
+        return "", {"code": "business_parts_version_missing"}
+    if not live_hash:
+        return "", {}                                   # 当前确实没有清单：没有"换过"可报
+    if stored_hash != live_hash:
+        return "business_parts_reimported", {}
+    return "", {}
 
 
 def _route_probe(project_id: str, requirement_no: str) -> tuple:

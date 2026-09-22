@@ -16995,3 +16995,59 @@ business_material_rows = {row_total: 14, resolved_total: 0, unresolved_total: 14
 `node --check tech_app/frontend/app.js` OK。
 
 未起服务、未发 HTTP、未连 PG / 34、未 push / MR / tag / Release / 未部署。
+
+## 396. 落地 `packaging-business-parts-version-pinning`：权威清单的版本「建 BOM 时固定、读的时候比对」（BOM 行固定 `business_parts_id/hash` + `business_parts_stale` 三态；成本侧 `business_parts_reimported` / `business_parts_version_missing` / `business_parts_unavailable`；13 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_bom.py`：
+
+- 常量 `AUTHORITY_SIZE_KIND = "authority_workbook"`（判「这一行是不是权威清单建的」只认这个值）、
+  `BUSINESS_PARTS_STALE_REASONS = ("business_parts_reimported", "binding_without_version")`；
+- `_authority_size_source(authority, *, business_parts_id="", business_parts_hash="")`：既有
+  `kind/sheet/row` 之后**并列**写 `business_parts_id` / `business_parts_hash`；出处本身拼不出
+  （没有表名 + 行号）仍给 `{}`，一个键都不加（跟今天一样）；文档没给版本就写空串（不许拿时间 /
+  行号 / 当前清单顶一个）；
+- `business_part_rows(business_doc)`：逐字取文档顶层的 `business_parts_id` / `business_parts_hash`，
+  每行都固定住（与零件轴把 `parts_id/hash` 写进 `dwg_binding` 是同一个范式）；行数 / `source` /
+  `item_key` / `material_code` / `bom_category` 一个字不改；
+- 新增 `_business_parts_stale_rows(items, current_hash)`：判据**只认行上留痕**
+  （`size_source_json.kind == AUTHORITY_SIZE_KIND`）；行上有版本且 ≠ 当前 → `business_parts_reimported`；
+  行来自权威清单但没有版本 → `binding_without_version`；按 `item_key` 升序；读接口里不另算一套；
+- `_business_parts_scope(project_id, items=None)` 新增 `stale`（读不到清单 / 还没有清单 → `[]`，
+  比较不了 ≠ 变了）；`load_bom()` 新增 **`business_parts_stale`**（键必须存在）并把 `items` 传进 scope。
+
+`tech_app/backend/services/packaging_cost.py`：
+
+- 新增 `_business_parts_probe(project_id) -> (hash, unavailable)`（身份只经
+  `packaging_parts.load_business_parts()` **一个入口**，与既有 `_business_parts_scope()` 同源，
+  不绕 `da_repo`、不另写第二套匹配）；
+- 新增 `_business_parts_drift(project_id, stored)`：存的 `business_parts_hash` 非空且 ≠ 当前 →
+  `business_parts_reimported`；存的**没有**版本（本批之前算的历史成本单）→ 不报 drift，改披露
+  `business_parts_version_missing`（「当时没记」≠「变了」）；当前清单**读不到** → 不报
+  `business_parts_reimported`，顶层 `business_parts_unavailable` 给 `code` + `reason`（异常类名）；
+- `load_cost()`：drift 结果并入 `stale_reasons` / `stale`，并新增 **`business_parts_unavailable`**
+  键（正常 `{}`；`built=False` 早返回分支同样补上该键）。
+
+`tech_app/frontend/requirement-confirm.js`：`PC_STALE_REASONS` 新增
+`business_parts_reimported: '按上一版业务部件清单建的（权威清单重新导入过，请重建 BOM 后重算成本）'`
+（不许把码直接甩给用户）。
+
+未动的：`size_source_json` 其余键 / `source_versions` 既有键 / `stale_reasons` 既有取值
+（`provenance_missing` / `route_reconfirmed` / `bom_rebuilt`）/ `bom_unavailable` / `route_unavailable`
+/ `stats` 键集 / `size_quality` 三档；`da_repo.py` 的 `_PACKAGING_BOM_COLUMNS` 一个字不动
+（版本落在 `size_source_json` 与 `source_versions_json` 里，不新增 schema 列）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_parts_version_pinning_red   Ran 13  FAILED (failures=9) → Ran 13  OK
+  （红基 A1 A2 B1 B2 B3 B4 C1 C3 C4；护栏 A3 B5 C2 C5 始终绿）
+不回归：bom_business_parts_rows + bom_business_material_rows + cost_input_version_pinning +
+         authority_disclosure_on_read + bom_parts_version_binding + route_bom_version_pinning
+        Ran 87  FAILED (failures=1)  ← 唯一那条是既有挂账 route_bom_version_pinning_red::F2，与本批无关
+本批三套：business_parts_version_pinning + cost_input_version_pinning + cost_route_version_read_failure
+        Ran 30  OK
+node --check tech_app/frontend/requirement-confirm.js  OK
+```
+
+本批只做「版本可见 + 漂移可判」，**不**自动重建 BOM、**不**自动重算成本（那是人的决定）；
+未改任何既有测试与业务数据、未放宽任何断言、未连 PG / 34、未 push / MR / tag / Release / 未部署。

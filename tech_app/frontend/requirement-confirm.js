@@ -862,6 +862,9 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     bom_rebuilt: 'BOM 已重建（尺寸 / 材料 / 行数变了）',
     route_reconfirmed: '工艺路线已重新确认',
     provenance_missing: '这份成本是旧版本算的，没有记下来源（无从判断输入是否变过）',
+    // 权威清单重新导入 = 这份成本照的那一版业务部件清单已经换过（Spec
+    // `packaging-business-parts-version-pinning.md` §2.4）：不许把码直接甩给用户。
+    business_parts_reimported: '按上一版业务部件清单建的（权威清单重新导入过，请重建 BOM 后重算成本）',
   };
   function pcStaleLine(reason) {
     return PC_STALE_REASONS[String(reason || '')] || `输入已变（${reason}）`;
