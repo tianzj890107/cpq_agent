@@ -87,28 +87,37 @@ def _field_blocking(requires: Tuple[str, ...], requirement: Dict[str, Any],
     return rows
 
 
-def _engine(resolve: Resolver, name: str, function: str, *args: Any) -> Dict[str, Any]:
+#: 读一个上游结果的**三态**（Spec `packaging-gate-read-failure-disclosure.md` §2.1）：
+#: `engine`（模块 / 函数都在且这一次没抛，**空 dict 也算读到** —— 那是"上游说它没做"）/
+#: `absent`（这个部署没有这一段）/ `unavailable`（调用抛异常，`reason` 给异常类名）。
+READ_SOURCES = ("engine", "absent", "unavailable")
+
+#: 严重度（越大越"该说"）：同一段依赖被读多次时，最坏的那一态胜出 —— 否则
+#: `load_cost` 读挂了、随后的 `minimum_charge_policy` 恰好读到，就会把读失败盖掉。
+_READ_SEVERITY = {"engine": 0, "absent": 1, "unavailable": 2}
+
+
+def _read(resolve: Resolver, name: str, function: str, *args: Any) -> Tuple[Dict[str, Any], str, str]:
+    """读一个上游结果，返回 `(行, source, reason)`。**绝不把异常抛给调用方。**"""
     module = resolve(name) if callable(resolve) else None
     fn = getattr(module, function, None) if module is not None else None
     if not callable(fn):
-        return {}
+        return {}, "absent", ""
     try:
         row = fn(*args)
-    except Exception:
-        return {}
-    return dict(row) if isinstance(row, dict) else {}
+    except Exception as exc:                              # noqa: BLE001 - 读不到要披露，不许抛给调用方
+        return {}, "unavailable", type(exc).__name__
+    return (dict(row) if isinstance(row, dict) else {}), "engine", ""
+
+
+def _engine(resolve: Resolver, name: str, function: str, *args: Any) -> Dict[str, Any]:
+    """既有调用点的取数口径：拿不到就给 `{}`（判据与结论逐字不变）。"""
+    return _read(resolve, name, function, *args)[0]
 
 
 def _policy(resolve: Resolver) -> Dict[str, Any]:
-    module = resolve("packaging_cost") if callable(resolve) else None
-    fn = getattr(module, "minimum_charge_policy", None) if module is not None else None
-    if not callable(fn):
-        return {}
-    try:
-        row = fn()
-    except Exception:
-        return {}
-    return dict(row) if isinstance(row, dict) else {}
+    """最低收费口径（读不到就给 `{}`，判据不变）；三态请用 `_read()`。"""
+    return _read(resolve, "packaging_cost", "minimum_charge_policy")[0]
 
 
 def _gap_codes(cost: Dict[str, Any], handoff: Dict[str, Any]) -> List[str]:
@@ -174,6 +183,28 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
     blocking: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
     waived: Optional[Dict[str, Any]] = None
+    # 这一段**实际读过**的依赖与读取三态（Spec `packaging-gate-read-failure-disclosure.md` §2.1）。
+    # 判据与结论一个字不改，只是把"我到底读到没有"一并交出去 —— 否则"读不到"与"确实没做"
+    # 在返回体与用户文案上逐字相同。
+    reads: Dict[str, Dict[str, Any]] = {}
+    read_order: List[str] = []
+
+    def read(name: str, function: str, *args: Any) -> Dict[str, Any]:
+        row, source, reason = _read(resolve, name, function, *args)
+        prior = reads.get(name)
+        if prior is None:
+            read_order.append(name)
+        if prior is None or _READ_SEVERITY[source] > _READ_SEVERITY[prior["source"]]:
+            reads[name] = {"source": source, "reason": reason}
+        return row
+
+    def _finish(entry: Dict[str, Any]) -> Dict[str, Any]:
+        unavailable = [name for name in read_order if reads[name]["source"] != "engine"]
+        entry["reads"] = reads
+        entry["reads_unavailable"] = ({"code": "gate_read_unavailable",
+                                       "dependencies": unavailable} if unavailable else {})
+        return entry
+
     if stage != "quote_draft":
         blocking.extend(_field_blocking(requires, requirement, boards))
     unit_status = str(anchor_mod.current_anchor(project_id).get("unit_status") or "")
@@ -181,24 +212,24 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
         blocking.append({"code": "unit_unconfirmed", "field": "inner_width",
                          "message": "图纸未声明单位，长宽高不能按毫米确认"})
     if stage in ("bom", "quote_publish"):
-        box = _engine(resolve, "packaging_match", "load_box_match", project_id)
+        box = read("packaging_match", "load_box_match", project_id)
         if str(box.get("decision") or "") != "confirmed":
             blocking.append({"code": "box_match_not_confirmed",
                              "message": "盒型尚未确认，确认后才能进行该步骤",
                              "source": "packaging_match"})
     if stage == "route":
-        bom = _engine(resolve, "packaging_bom", "load_bom", project_id)
+        bom = read("packaging_bom", "load_bom", project_id)
         if not bom.get("built"):
             blocking.append({"code": "bom_not_built", "message": "BOM 尚未生成，生成后才能排工艺路线",
                              "source": "packaging_bom"})
     if stage == "cost":
-        route = _engine(resolve, "packaging_route", "load_route", project_id)
+        route = read("packaging_route", "load_route", project_id)
         if str(route.get("status") or "") != "confirmed":
             blocking.append({"code": "route_not_confirmed",
                              "message": "工艺路线尚未确认，确认后才能测算成本",
                              "source": "packaging_route"})
     if stage == "quote_publish":
-        cost = _engine(resolve, "packaging_cost", "load_cost", project_id)
+        cost = read("packaging_cost", "load_cost", project_id)
         if not cost.get("built"):
             blocking.append({"code": "cost_not_built", "message": "成本尚未测算，测算后才能生成正式报价",
                              "source": "packaging_cost"})
@@ -206,7 +237,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
             # 「缺口未清」这条结论一个字不改（Spec §2.3 C4）；只是若财务/工艺已经按留痕放行过，
             # 就把那份留痕一并披露出来 —— 否则界面上只有一句"缺口清零后才能生成正式报价"，
             # 看不出这条缺口其实已经被人按什么原因放行了（34 实测两边说法相反）。
-            handoff = _engine(resolve, "packaging_handoff", "load_handoff", project_id)
+            handoff = read("packaging_handoff", "load_handoff", project_id)
             waiver = _gap_waiver(handoff, _gap_codes(cost, handoff))
             row: Dict[str, Any] = {"code": "cost_gaps_unresolved",
                                    "message": "成本仍存在缺口，缺口清零后才能生成正式报价",
@@ -216,13 +247,13 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
                 row["waiver"] = waiver
                 waived = waiver
             blocking.append(row)
-        policy = _policy(resolve)
+        policy = read("packaging_cost", "minimum_charge_policy")
         if str(policy.get("status") or "") != "chosen":
             blocking.append({"code": "minimum_charge_policy_unresolved",
                              "message": "最低收费口径尚未裁决，暂不能生成正式报价（可先存草稿）",
                              "source": "packaging_cost"})
     if stage == "quote_draft":
-        cost = _engine(resolve, "packaging_cost", "load_cost", project_id)
+        cost = read("packaging_cost", "load_cost", project_id)
         if not cost.get("built"):
             warnings.append({"code": "cost_not_built", "message": "成本尚未测算，草稿里暂不体现成本"})
         elif cost.get("has_gaps"):
@@ -233,7 +264,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
              "snapshot": {"requirement_snapshot_version": snapshot}}
     if waived:
         entry["waiver"] = waived
-    return entry
+    return _finish(entry)
 
 
 def build(project_id: str, *, resolve: Resolver = None, stage: str = "") -> Dict[str, Any]:
@@ -251,6 +282,14 @@ def build(project_id: str, *, resolve: Resolver = None, stage: str = "") -> Dict
 
 def blocking_message(entry: Dict[str, Any]) -> str:
     """门禁文案：只给一处结论，短且不换行（红测 G18/C15）。"""
+    # 读不到上游结果时，那几句"尚未确认 / 尚未生成 / 尚未测算"是**假结论**：用户会去重新确认
+    # 一遍（或去问销售为什么盒型没确认），而真相只是这一趟读不到（Spec
+    # `packaging-gate-read-failure-disclosure.md` §2.1）。结论（blocked）不改，只说清为什么。
+    unavailable = (entry or {}).get("reads_unavailable") or {}
+    dependencies = [str(name) for name in (unavailable.get("dependencies") or []) if str(name)]
+    if dependencies:
+        return ("暂时读不到上游结果（%s），请稍后重试；这不代表这一步还没做"
+                % "、".join(dependencies))
     blocking = (entry or {}).get("blocking") or []
     fields = [str(item.get("field") or "") for item in blocking
               if str(item.get("code") or "") in _FIELD_CODES and str(item.get("field") or "")]

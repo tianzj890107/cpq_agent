@@ -82,6 +82,9 @@ ERROR_CODES = {
     # 但**不是**终态失败 —— 后续步骤照旧要跑到终态。
     "PACKAGING_PARTS_NO_IR": (409, False),
     "PACKAGING_PARTS_UNAVAILABLE": (409, False),
+    # 源图纸"读不到"（blob 通道抛异常）：是**可重试的读取故障**，不是缺前置条件、
+    # 也不是"文件是空的"（Spec `packaging-drawing-source-read-failure.md` §2.2/§2.3）。
+    "DRAWING_SOURCE_UNAVAILABLE": (503, True),
 }
 
 #: 步骤产出的"证据位"清单（steps() 的 produces）。
@@ -317,4 +320,3 @@ def dependency_state(name: str = "") -> Dict[str, Any]:
         return {"name": key, "state": "unknown", "reason": "", "message": ""}
     return {name: dict(DEPENDENCY_STATE_REGISTRY[name])
             for name in sorted(DEPENDENCY_STATE_REGISTRY)}
-

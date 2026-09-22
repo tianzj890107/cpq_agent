@@ -249,15 +249,43 @@ def flow_state(project_id: str) -> Dict[str, Any]:
     return _public_state(project_id, persistence.load_flow(project_id) or {})
 
 
-def _source_bytes(project_id: str, meta: Dict[str, Any]) -> bytes:
+#: 源文件这一趟到底是哪一态（Spec `packaging-drawing-source-read-failure.md` §2.1）：
+#: `blob`（读到了，含内容真的是空的）/ `none`（meta 里没有 `source_path` —— 这个项目
+#: 确实还没有源附件）/ `unavailable`（blob 通道读不到，`reason` 给异常类名）。
+SOURCE_CONTENT_STATES = ("blob", "none", "unavailable")
+
+
+def _source_bytes_detail(project_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """读这一版的源文件字节 **+ 三态披露**（Spec §2.1）。
+
+    为什么必须三态可分：`b""` 今天有两个来源 —— "这个项目还没有源附件"与"blob 读不到"。
+    两者都会被 `start()` 折成 `sha256(b"")` 这个**看起来完全合法**的常量写进锚点，之后
+    所有 stale 比对都会说"源文件没变"，而第 1 步会把"读不到"报成"上传的是空文件，请重新上传"
+    （重传救不了它）。`_source_bytes()` 的返回类型仍是 `bytes`（既有调用方逐字不变），
+    三态只有这一个来源。
+    """
     name = str((meta or {}).get("source_path") or "")
     if not name:
-        return b""
+        return {"content": b"", "source": "none", "reason": ""}
     try:
         data = store._blob().get_bytes("%s/%s" % (project_id, name))
-    except Exception:
-        return b""
-    return bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+    except Exception as exc:                              # noqa: BLE001 - 读不到要披露，不许抛给调用方
+        return {"content": b"", "source": "unavailable", "reason": type(exc).__name__}
+    content = bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+    return {"content": content, "source": "blob", "reason": ""}
+
+
+def _source_bytes(project_id: str, meta: Dict[str, Any]) -> bytes:
+    """这一版的源文件字节（返回类型仍是 `bytes`；要三态请用 `_source_bytes_detail()`）。"""
+    return _source_bytes_detail(project_id, meta)["content"]
+
+
+def _source_disclosure(detail: Dict[str, Any]) -> Dict[str, Any]:
+    """读不到时的披露形状（Spec §2.1）：`{}` / `{"code", "reason"}`。"""
+    if str((detail or {}).get("source") or "") != "unavailable":
+        return {}
+    return {"code": "drawing_source_unavailable",
+            "reason": str((detail or {}).get("reason") or "")}
 
 
 def _reusable(previous: Any, source_sha256: str, drawing_version: int,
@@ -297,8 +325,12 @@ def _stale_reasons(previous: Any, source_sha256: str, drawing_version: int,
 def start(project_id: str, *, prompt: Any = "", actor: str = "system",
           run_id: str = "") -> Dict[str, Any]:
     meta = store.load_meta(project_id) or {}
-    content = _source_bytes(project_id, meta)
-    source_sha256 = hashlib.sha256(content).hexdigest()
+    source = _source_bytes_detail(project_id, meta)
+    read_state = str(source.get("source") or "blob")
+    # 只有**真的读到内容**才允许算哈希（Spec §2.1）：`sha256(b"")` 是一个形状合法的常量，
+    # 写进锚点会让"这一次读不到"与"源文件没变"同形；读不到 / 确实没有都给 `""`。
+    source_sha256 = (hashlib.sha256(source["content"]).hexdigest()
+                     if read_state == "blob" else "")
     drawing_version = model._as_int(meta.get("input_revision"), 1)
     snapshot = anchor_mod.requirement_snapshot_version(project_id)
     previous = persistence.load_flow(project_id)
@@ -317,6 +349,8 @@ def start(project_id: str, *, prompt: Any = "", actor: str = "system",
                    "run_id": wanted, "status": "pending", "started_at": steps_mod.now_iso(),
                    "finished_at": "", "steps": [],
                    "inputs": {"source_sha256": source_sha256,
+                              "source_content": read_state,
+                              "source_content_unavailable": _source_disclosure(source),
                               "drawing_version": drawing_version,
                               "prompt": model.canonical_prompt(prompt),
                               "requirement_snapshot_version": snapshot},
@@ -367,10 +401,16 @@ def _flow_status(flow: Dict[str, Any]) -> str:
 def _context(project_id: str, step_id: str, flow: Dict[str, Any], *, run_id: str,
              actor: str, resolver: Callable[[str], Optional[Any]]) -> Dict[str, Any]:
     meta = store.load_meta(project_id) or {}
+    source = _source_bytes_detail(project_id, meta)
     context = {"project_id": project_id, "run_id": run_id, "actor": actor,
                "resolve": resolver, "flow": flow,
                "filename": str(meta.get("source_filename") or ""),
-               "content": _source_bytes(project_id, meta),
+               "content": source["content"],
+               # 三态披露（Spec `packaging-drawing-source-read-failure.md` §2.1）：`content`
+               # 仍是 `bytes`（该给 `b""` 仍给 `b""`），只是把它**是哪一态**一并交出去 ——
+               # 否则第 1 步只能拿空字节去判格式，把"读不到"说成"文件是空的"。
+               "content_source": str(source.get("source") or "blob"),
+               "content_unavailable": _source_disclosure(source),
                "drawing_version": model._as_int(meta.get("input_revision"), 1),
                "anchor": anchor_mod.current_anchor(project_id)}
     if step_id in ("field_write", "parts_extract"):

@@ -94,6 +94,16 @@ def file_preflight(ctx: Dict[str, Any]) -> Dict[str, Any]:
     detect = getattr(module, "detect_file_format", None)
     if not callable(detect):
         return _unavailable("file_preflight")
+    # 源图纸**读不到**（blob 通道抛异常）与"上传的是空文件"是两件事（Spec
+    # `packaging-drawing-source-read-failure.md` §2.2）：拿空字节去调 `detect_file_format()`
+    # 必然得出 `is_empty=True`，于是用户被支去"重新上传" —— 而重传救不了读不到。
+    # 这一态给**可重试**的读取故障码，且**不调** `detect_file_format()`。
+    if str(ctx.get("content_source") or "") == "unavailable":
+        reason = str((ctx.get("content_unavailable") or {}).get("reason") or "")
+        return _failed("DRAWING_SOURCE_UNAVAILABLE",
+                       "暂时读不到这个项目上传的图纸文件（%s），请稍后重试；"
+                       "这不代表图纸没有上传" % (reason or "读取通道异常"),
+                       {"reason": reason, "content_source": "unavailable"}, True)
     try:
         detected = detect(ctx.get("filename") or "", ctx.get("content") or b"")
     except Exception as exc:

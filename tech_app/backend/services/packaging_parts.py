@@ -344,6 +344,14 @@ MANUAL_MATERIAL_KIND = "manual"
 MATERIAL_SOURCE_KINDS = ATTRIBUTION_KINDS + (MANUAL_MATERIAL_KIND,)
 NON_EVIDENCE_MATERIAL_KINDS = ("requirement_default", MANUAL_MATERIAL_KIND)
 
+#: 人工映射的业务角色（Spec `packaging-part-role-mapping-must-reach-the-card.md` §2.3）：
+#: 角色这本账的**事实源在 BOM 侧**（`packaging_bom.save_role_mapping()` 写的 meta 文档
+#: `ROLE_MAP_DOC_KEY`），零件侧只在读路径上把命中 `part_code` 的那一行合回去 —— 与
+#: 「补材料 / 补料厚 / 轮廓出路」同一范式（读时 overlay），`parts_id` / `parts_hash`
+#: 一个字不改。留痕字段与 `material_source` / `thickness_source` 同形状（`role_source`），
+#: 人工值与 `_layer_roles()`（`extract()` 时按图层语义推定）绝不混在同一个没有留痕的字段里。
+MANUAL_ROLE_KIND = "manual_mapping"
+
 #: 克重 → 料厚的换算式（Spec §2.1，逐字）：`thickness_mm = gsm / (density * 1000)`。
 #: `gsm` 单位 g/㎡、`density` 单位 g/cm³，四舍五入到 3 位小数。**不许**放行业经验厚度表。
 GRAMMAGE_DENSITY_DIVISOR = 1000.0
@@ -2317,17 +2325,64 @@ def save_parts(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
+def _role_mapping_overlay(project_id: str) -> Dict[str, Dict[str, Any]]:
+    """人工映射记录里「零件编码 → 那一条映射记录」（Spec §2.1）。
+
+    事实源是 BOM 侧的 meta 文档（`packaging_bom.ROLE_MAP_DOC_KEY`）的
+    `by_requirement[需求单][行键] = {item_key, part_code, role, previous_role,
+    superseded_role, mapped_by, mapped_at, note, binding_method, history}`。读回**不要求
+    调用方先知道需求单号** —— 各桶都看，按 `part_code` 命中即用（与
+    `apply_saved_role_map()` 的配对口径同一件事：只有"零件编码在零件文档里找得到"才改那一行）。
+
+    只读、不抛：文档读不到 / 结构坏掉都只当"没有映射"，**不许**让读路径报错。
+    同一个 `part_code` 出现在多条记录里时，取 `(mapped_at, item_key)` 最大的那条 ——
+    口径唯一且确定（最近映射的胜出），不按遍历顺序碰运气。
+    """
+    try:
+        doc = get_backend().get_doc(project_id, packaging_bom.ROLE_MAP_DOC_KEY) or {}
+    except Exception:                                     # noqa: BLE001 - 侧档坏掉不许挡住零件读回
+        return {}
+    buckets = doc.get("by_requirement") if isinstance(doc, dict) else None
+    if not isinstance(buckets, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for bucket in buckets.values():
+        if not isinstance(bucket, dict):
+            continue
+        for record in bucket.values():
+            if not isinstance(record, dict):
+                continue
+            code = _text(record.get("part_code"))
+            role = _text(record.get("role"))
+            if not code or role in packaging_bom.ROLE_UNBOUND_VALUES:
+                continue
+            prior = out.get(code)
+            if prior is not None and _mapping_order(prior) >= _mapping_order(record):
+                continue
+            out[code] = record
+    return out
+
+
+def _mapping_order(record: Dict[str, Any]) -> Tuple[str, str]:
+    """映射记录的**确定性**排序键（`mapped_at` 升序为主、`item_key` 为副）。"""
+    return _text(record.get("mapped_at")), _text(record.get("item_key"))
+
+
 def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
-    """把两份人工补录侧档**读时合并**回零件行（Spec §2.1 方案 b）。
+    """把几本人工作业的侧档**读时合并**回零件行（Spec §2.1 方案 b）。
 
     为什么要有这一层：`save_part_material()` / `save_part_thickness()` 写的是侧档
     （`DOC_KEY_MATERIAL` / `DOC_KEY_THICKNESS`，留痕与版本历史在它身上），而所有下游
     （单件工艺 409 判据、`summarize()` 的账、卡片 `card_row()`）都从**零件行**取数。
-    以前两份侧档"只写不读"，于是"补完刷新就没了"。
+    以前两份侧档"只写不读"，于是"补完刷新就没了"。**角色那本账**（BOM 侧的人工映射，
+    `_role_mapping_overlay()`）与它们同层合并：用户在 BOM 页映射完，卡片第 6 步的
+    「角色」列与 `role_known_ratio` 必须立刻跟着变（Spec
+    `packaging-part-role-mapping-must-reach-the-card.md` §2.1）。
 
     合并口径只有这一处，且**只读**：
 
     - 侧档按 `part_code` 取最近一版（`_part_doc_items()` 已按新→旧排列），每件只合一次；
+    - 角色账按 `part_code` 命中（`_role_mapping_overlay()` 已定好哪一条胜出）；
     - 合出来的行与逐个调 `set_manual_material()` / `set_manual_thickness()` **同一形状**
       （直接复用这两个纯函数，不另写一份写字段的逻辑）；
     - 零件文档的 `parts_id` / `parts_hash` 一个字不改 —— 补录是「改行」，不是「重算零件」；
@@ -2342,20 +2397,23 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
             # 每个键只取**最近一版**（`_part_doc_items()` 已按新→旧排列），但三份侧档
             # 要能**同时**合回同一行：材料 / 料厚 / 轮廓出路是三件事，不是三选一。
             overlays.setdefault(code, {}).setdefault(key, item)
+    roles = _role_mapping_overlay(project_id)
 
     out = copy.deepcopy(record)
     parts = out.get("parts") if isinstance(out, dict) else None
-    if not overlays or not isinstance(parts, list):
+    if (not overlays and not roles) or not isinstance(parts, list):
         return out if isinstance(out, dict) else record
     for row in parts:
         if not isinstance(row, dict):
             continue
-        fill = overlays.get(_text(row.get("part_code")))
-        if not fill:
+        code = _text(row.get("part_code"))
+        fill = overlays.get(code)
+        mapped = roles.get(code)
+        if not fill and not mapped:
             continue
-        material = fill.get(DOC_KEY_MATERIAL)
-        thickness = fill.get(DOC_KEY_THICKNESS)
-        outline = fill.get(DOC_KEY_OUTLINE)
+        material = (fill or {}).get(DOC_KEY_MATERIAL)
+        thickness = (fill or {}).get(DOC_KEY_THICKNESS)
+        outline = (fill or {}).get(DOC_KEY_OUTLINE)
         try:
             if material:
                 row.update(set_manual_material(row, material.get("spec"),
@@ -2375,6 +2433,13 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
                                                   confirmed_at=_text(outline.get("confirmed_at"))))
                 else:
                     row.update(set_recomputed_outline(row, outline))
+            # 人工映射的业务角色（Spec `packaging-part-role-mapping-must-reach-the-card.md`
+            # §2.1）：只有 `part_code` 命中才改这一行，配对不上**一行都不改**。
+            if mapped:
+                row.update(set_manual_role(row, mapped.get("role"),
+                                           bound_by=_text(mapped.get("mapped_by")),
+                                           mapped_at=_text(mapped.get("mapped_at")),
+                                           note=_text(mapped.get("note"))))
         except ValueError:
             continue
     return out
@@ -2582,6 +2647,33 @@ def save_part_material(project_id: str, part_code: str, spec: Any, *,
 def load_part_material(project_id: str, part_code: str) -> Dict[str, Any]:
     """读回这一件人工补过的材料（最近一版）；没补过 → `{}`。"""
     return _load_part_doc(project_id, DOC_KEY_MATERIAL, part_code)
+
+
+# --------------------------------------------------------------------------- #
+# 2c-bis-1 人工映射的业务角色（Spec `packaging-part-role-mapping-must-reach-the-card.md` §2.3）
+#   角色这本账的**写入口径在 BOM 侧**（`packaging_bom.apply_role_mapping()` /
+#   `save_role_mapping()` → BOM 行 + meta 文档留痕），零件侧**不写**这条事实源，只在读
+#   路径上把命中 `part_code` 的那一行合回零件行（`_manual_fill_overlay()` 里调用）。
+#   与「补材料」/「补料厚」逐字同形的纯函数 + 留痕：人工值与 `extract()` 时按图层语义
+#   推定的角色绝不混在同一个没有留痕的字段里。
+# --------------------------------------------------------------------------- #
+def set_manual_role(row: Any, role: Any, *, bound_by: str = "",
+                    mapped_at: str = "", note: str = "") -> Dict[str, Any]:
+    """人工映射的业务角色（**纯函数**）：返回副本，绝不原地改入参。
+
+    - 写 `role` 与 `role_source = {"kind": "manual_mapping", "bound_by": ..., "mapped_at": ...,
+      "note": ...}`（与 `material_source` / `thickness_source` 同形状）；
+    - 角色是空串 / `unknown` / `unbound` 时 → `ValueError`：这三个值**不许**冒充"映射过了"
+      （它们正是"还没映射"的那一态，`packaging_bom.ROLE_UNBOUND_VALUES` 是唯一判据）。
+    """
+    text = _text(role)
+    if not text or text in packaging_bom.ROLE_UNBOUND_VALUES:
+        raise ValueError("人工映射的角色不能是空、unknown 或 unbound（那正是「还没映射」）")
+    updated = copy.deepcopy(row) if isinstance(row, dict) else {}
+    updated["role"] = text
+    updated["role_source"] = {"kind": MANUAL_ROLE_KIND, "bound_by": _text(bound_by),
+                              "mapped_at": _text(mapped_at), "note": _text(note)}
+    return updated
 
 
 # --------------------------------------------------------------------------- #

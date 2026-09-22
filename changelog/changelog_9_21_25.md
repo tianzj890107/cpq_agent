@@ -16842,3 +16842,112 @@ business_material_rows = {row_total: 14, resolved_total: 0, unresolved_total: 14
 
 未改 `tests/` 下任何既有文件（除本批 supersede 同步收窄的那一条断言清单）、未放宽任何断言、
 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 未部署。
+
+## 389. 落地 `packaging-part-role-mapping-must-reach-the-card`：人工映射的业务角色终于出现在零件行 / 卡片 / 摘要（A1/A3/A4 + B1–B4 全绿；A2 是 1 条夹具偏差，已记录、未改测试）（9-22，Codex 实现）
+
+### 一、落点（Spec §3 方案 b：读路径再合一本账，**没有**写回零件文档）
+
+`tech_app/backend/services/packaging_parts.py`：
+
+- 新增 `MANUAL_ROLE_KIND = "manual_mapping"`、`_role_mapping_overlay(project_id)`、
+  `_mapping_order(record)`、`set_manual_role(row, role, *, bound_by, mapped_at, note)`；
+- `_manual_fill_overlay()` 在既有三本人工账（材料 / 料厚 / 轮廓）之外**再加一本角色账**：读
+  meta 文档 `packaging_bom.ROLE_MAP_DOC_KEY` 的 `by_requirement` 各桶，按 **`part_code`**
+  命中才改那一行（不要求调用方先知道需求单号，也不按行键 / 行号 / 面积 / 顺序猜）；同一个
+  `part_code` 有多条记录时取 `(mapped_at, item_key)` 最大的一条（口径唯一且确定）；
+- 命中那行写 `role` + `role_source = {"kind": "manual_mapping", "bound_by", "mapped_at", "note"}`
+  （与 `material_source` / `thickness_source` 同形状）；角色是空 / `unknown` / `unbound` 时
+  `ValueError`（那三个值正是"还没映射"，不许冒充映射过了）；
+- 读路径**不新增** import：`packaging_parts` 模块层已 `from . import packaging_bom`，直接用
+  `packaging_bom.ROLE_MAP_DOC_KEY` / `ROLE_UNBOUND_VALUES` 这唯一事实源，无循环依赖。
+
+未动：`_layer_roles()` / `extract()` 的自动判定、`reject_unknown_role_autobind()`、BOM 侧
+`apply_role_mapping()` / `save_role_mapping()` / `apply_saved_role_map()` / `role_map_status()`、
+`CARD_COLUMNS`（10 列）、`card_row()` 的可算性取数（`processability()`）、零件文档
+`parts_id` / `parts_hash`（补录是「改行」，不是「重算零件」）。
+
+`card_row()` 与 `summarize()` **无需改** —— 它们本来就只读零件行，行上有了角色自然跟着变
+（这正是本批的病根：唯一能让那一列变具体的那条路不在它的取数链上）。
+
+### 二、实跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_part_role_mapping_reaches_card_red
+# 实现前：Ran 8 … FAILED (failures=4)   ← A1 A2 A3 A4
+# 实现后：Ran 8 … FAILED (failures=1)   ← A2（见三）
+```
+
+### 三、已记录的偏差（不改测试）
+
+`A2` 的期望值 `role_known_ratio == 1.0` 与冻结口径差一个分母：探针的零件文档是**两件**
+（`DWG-P09` 映射到 `面纸`、`DWG-P10` 未映射，`part_total = 2`），而 `role_known_ratio` 的定义是
+`role != "unknown"` 的件数 / `part_total`（`packaging-parts-downstream-acceptance.md` §2，由
+`test_packaging_parts_downstream_gate_red.py` 的 A3 逐字守着）。所以映射落盘后是 **0.5**
+（0.0 → 0.5，"把这一件算进已知"已经发生），拿不到 `1.0`；要得到 `1.0` 只能让 `DWG-P10` 也变成
+已知角色，而**同一文件**的 `B3` 明确要求它仍是 `unknown`、且不许多出 `role_source` ——
+两条断言不可能同时成立，唯一能让 A2 成立的做法（按行键 / 位置把第二条映射记录套到第二件上）
+正是 B3 与 Spec §2.5 第 5 条禁止的"猜配对"。本层按 Spec §2.1 第 1/2 条与 §2.5 第 5 条执行
+（A1 / A3 / A4 / B1–B4 全绿），**不动那条断言**；要它转绿需测试侧把 `1.0` 改成 `0.5`
+（或把探针的零件文档收成一件）。
+
+### 四、边界
+
+只改 `packaging_parts.py` 一个业务文件；未改任何测试与 BOM 侧口径；未连 PG / 34、
+未 push / MR / tag / Release / 未部署。
+
+## 390. 落地 `packaging-drawing-source-read-failure`：源图纸「读不到」不再折成「空文件」，也没有 `sha256(b"")` 冒充这一版图纸（9 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_drawing_flow/__init__.py`：
+
+- 新增 `SOURCE_CONTENT_STATES` 与 `_source_bytes_detail(project_id, meta) -> {"content", "source",
+  "reason"}`（`blob` 读到 / `none` 这个项目确实没有源附件 / `unavailable` 读不到，`reason` =
+  异常类名）；`_source_bytes()` **返回类型仍是 `bytes`**（既有调用方逐字不变）；
+  `_source_disclosure()` 给 `{}` / `{"code": "drawing_source_unavailable", "reason": …}`。
+- `start()`：`inputs` 新增 `source_content` 与 `source_content_unavailable`；`source_sha256`
+  **只有 `blob` 才**算真哈希，`none` / `unavailable` 一律 `""` —— `sha256(b"")` 那个形状合法的
+  常量再也不会被写进锚点（它会让之后所有 stale 比对都说"源文件没变"）。`drawing_version` /
+  `snapshot` / `run_id_for()` / `_reusable()` / `_stale_reasons()` 的算法与调用顺序逐字未动，
+  `start()` 照旧不抛。
+- `_context()`：新增 `content_source` / `content_unavailable` 两个必存在键；`content` 仍是
+  `bytes`（该给 `b""` 仍给 `b""`，本批只补披露）。
+- `steps.file_preflight()`：`content_source == "unavailable"` 时**在调 `detect_file_format()`
+  之前**返回 `DRAWING_SOURCE_UNAVAILABLE`（`status="failed"`、`retryable=True`、文案带异常类名、
+  **不含**"重新上传"、`detail.reason` 原样带出）；`none` / `blob` / 键不存在三路行为与返回体
+  逐字不变（向后兼容老 run 与单测）。
+- `model.ERROR_CODES` 新增 `"DRAWING_SOURCE_UNAVAILABLE": (503, True)`，既有键一个未动。
+
+实跑：`Ran 9 … FAILED (failures=6)`（R1 R2 R3 R4 R6 R9）→ `Ran 9 … OK`（R5 R7 R8 三条护栏
+始终绿）；不回归 `tests.test_packaging_drawing_flow_red` + `tests.test_drawing_flow_error_taxonomy_red`
++ `tests.test_drawing_flow_parse_terminal_signal_red` = `Ran 98 … OK (skipped=1)`。
+
+未改既有码与文案、未改 `STEP_IDS` / `STEP_TITLES` / `_DEPENDS_ON`、未连 PG / 34、
+未 push / MR / tag / Release / 未部署。
+
+## 391. 落地 `packaging-gate-read-failure-disclosure`：门禁段「读不到上游结果」不再说成「这一步还没做」（9 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_drawing_flow/gates.py`：
+
+- 新增 `READ_SOURCES = ("engine", "absent", "unavailable")`、`_READ_SEVERITY` 与
+  `_read(resolve, name, function, *args) -> (行, source, reason)`：`absent` 是"这个部署没有这一段"、
+  `unavailable` 是"调用抛异常（reason = 异常类名）"，**空 dict 也算读到** —— 那是"上游说它没做"，
+  与"读不到"是两件事。`_engine()` / `_policy()` 退化成 `_read(...)[0]`，既有调用点的判据与结论
+  逐字不变。
+- `_stage_entry()`：每读一次登记 `reads[依赖] = {"source", "reason"}`（同一依赖被读多次时
+  **最坏的一态胜出** —— 否则 `load_cost` 读挂了、随后 `minimum_charge_policy` 恰好读到，就会把
+  读失败盖掉），并给必存在键 `reads_unavailable`（全读到 `{}`；否则
+  `{"code": "gate_read_unavailable", "dependencies": […按读取顺序去重…]}`）。`box_match` 段不读
+  任何依赖 → `reads` 给 `{}`。
+- `blocking_message()`：`reads_unavailable` 非空时先说「暂时读不到上游结果（…），请稍后重试；
+  这不代表这一步还没做」；为空时既有四类文案与优先级逐字不变。
+- **结论一个字不改**：读不到时照旧 `blocked`，既有 `box_match_not_confirmed` /
+  `bom_not_built` / `route_not_confirmed` / `cost_not_built` 行照旧存在（只在其上补披露）；
+  `BLOCKING_CODES`、`requires` / `warnings` / `snapshot` / `waiver` 形状、
+  `_field_blocking()` 与 `_is_confirmed()` / `_has_value()` 口径全部未动；读异常照旧不抛给调用方
+  （`GET …/drawing-flow` 与门禁读接口照旧 200）。
+
+实跑：`Ran 9 … FAILED (failures=6)`（S1–S6）→ `Ran 9 … OK`（S7 S8 S9 三条护栏始终绿）；
+不回归门禁与流程六套（`packaging_drawing_flow` / `error_taxonomy` / `quote_close_loop` /
+`downstream_block_code` / `cost_and_handoff_static_downgrade` / `stage_chain_read_failure`）
+= `Ran 196 … OK (skipped=1)`。
+
+未连 PG / 34、未 push / MR / tag / Release / 未部署。
