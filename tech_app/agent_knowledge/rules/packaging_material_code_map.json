@@ -1,0 +1,6 @@
+{
+  "rule_set": "packaging_material_code_map_v1",
+  "review_status": "draft",
+  "note": "客户材料原文 → 材料码的唯一映射表（Spec docs/specs/packaging-business-material-code-map.md §C1）。entries 由业务/采购按客户资料签字后填写，格式：{\"text\": \"<客户原文>\", \"material_code\": \"<kb_material.material_code>\", \"note\": \"\"}。只有出现在材料清单（kb_material）里的码才会生效；这里没写的原文仍按既有分词规则解析。",
+  "entries": []
+}

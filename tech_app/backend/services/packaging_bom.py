@@ -21,6 +21,7 @@ import re
 from typing import Any, Optional
 
 from . import industry_templates, packaging_formula, packaging_match
+from . import packaging_material_map
 from ..storage import da_db, da_repo, kb_repo, store
 
 
@@ -386,6 +387,85 @@ def _resolve_material_code(material: str, rows: list) -> Optional[str]:
     return _text(hits[0].get("material_code")) or None
 
 
+#: 材料码解析优先级的**唯一入口**（Spec `packaging-business-material-code-map.md` §C2）：
+#: 映射表优先、既有分词规则兜底。既有规则（`_resolve_material_code()`）一个字没改。
+def resolve_material_code(material: str, rows: list, *, map_entries: Any = None) -> Optional[str]:
+    """材料原文 → 材料码：**映射表优先，既有分词规则兜底**（Spec §C2）。
+
+    - 映射命中（`lookup_material_code()`）时，该码**当且仅当**它出现在本次材料清单 `rows` 里
+      才用；命中但码不在清单里（映射写错了，或材料清单换了）→ 视为**没解出来**、交给缺口
+      如实披露，**不许**把清单里不存在的码写进 BOM；
+    - 映射是 `ambiguous`（同键两码）→ 同样不猜，继续走兜底规则；
+    - 映射没给 → 逐字调用 `_resolve_material_code()`（口径只加不改）。
+    """
+    text = _text(material)
+    if not text:
+        return None
+    if map_entries:
+        code, status = packaging_material_map.lookup_material_code(text, map_entries)
+        if status == "hit" and code:
+            known = {_text(row.get("material_code")) for row in (rows or [])
+                     if isinstance(row, dict)}
+            return code if code in known else None
+    return _resolve_material_code(text, rows)
+
+
+#: 读路径能推出的四档 + "映射表读不到"一档（Spec §C3）。**读接口只报事实**：
+#: "为什么没解出来（0 候选 / 多候选）"由写路径的 `resolve_material_code()` 负责，
+#: 这里不猜（那要动 BOM 表结构才能把写路径的判定持久化）。
+MATERIAL_RESOLVE_REASONS = ("map_hit", "legacy_hit", "map_key_missing",
+                            "map_entry_not_applied", "map_unknown")
+
+_MATERIAL_FIX_ACTIONS = {
+    "map_key_missing": ("在 tech_app/agent_knowledge/rules/packaging_material_code_map.json 的 "
+                        "entries 里补一条「这条材料原文 → 材料清单里的材料码」，然后重算 BOM"),
+    "map_entry_not_applied": ("核对 tech_app/agent_knowledge/rules/packaging_material_code_map.json "
+                              "里这条原文映射的材料码是否真在材料清单（kb_material）里，改对后重算 BOM"),
+    "map_unknown": ("先修好 tech_app/agent_knowledge/rules/packaging_material_code_map.json"
+                    "（读不到 / 不是合法 JSON / rule_set 不对），再重算 BOM"),
+}
+
+
+def classify_material_resolution(item: Any, *, map_entries: Any = None,
+                                 map_available: bool = True) -> str:
+    """一行材料行"码是怎么来的"（Spec §C3）：只报能从**行 + 映射表**推出的事实。"""
+    row = item if isinstance(item, dict) else {}
+    if not map_available:
+        # 映射表读不到 → 不许猜"是不是映射给的"，如实报 map_unknown。
+        return "map_unknown"
+    material = _text(row.get("material"))
+    code = _text(row.get("material_code"))
+    mapped, status = packaging_material_map.lookup_material_code(material, map_entries)
+    if code:
+        return "map_hit" if (status == "hit" and mapped == code) else "legacy_hit"
+    return "map_entry_not_applied" if status == "hit" else "map_key_missing"
+
+
+def material_unresolved_detail(items: Any, *, map_entries: Any = None,
+                               map_available: bool = True) -> list:
+    """解析不到材料码的**逐条**缺口 + 可执行动作（Spec §C3）：顺序与
+    `load_bom()` 的 `material_unresolved` 一致（同一批行、同一顺序）。"""
+    out: list = []
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        if _text(item.get("bom_category")) != "material":
+            continue
+        if _text(item.get("material_code")) or not _text(item.get("material")):
+            continue
+        reason = classify_material_resolution(item, map_entries=map_entries,
+                                              map_available=map_available)
+        out.append({"item_key": _text(item.get("item_key")), "reason": reason,
+                    "action": _MATERIAL_FIX_ACTIONS.get(reason)
+                              or _MATERIAL_FIX_ACTIONS["map_key_missing"]})
+    return out
+
+
+def material_map_facts() -> dict:
+    """这一版 BOM 用的是哪一份映射表（Spec §C3）：读不到**不抛**、也不装作"没有映射"。"""
+    return packaging_material_map.map_facts()
+
+
 def _part_item(entry: dict) -> dict:
     category = "optional_part" if entry.get("is_optional") else "box_part"
     return {
@@ -509,7 +589,8 @@ def business_part_rows(business_doc: Any) -> list:
     return out
 
 
-def business_material_rows(business_doc: Any, *, materials: Any = None) -> list:
+def business_material_rows(business_doc: Any, *, materials: Any = None,
+                          map_entries: Any = None) -> list:
     """权威清单的材料原文 → BOM 的**材料组**行（Spec `packaging-bom-business-material-rows.md` §C1）。
 
     纯函数：不读库、不读文件、不联网、不改入参（`materials` 由调用方传进来 ——
@@ -543,7 +624,8 @@ def business_material_rows(business_doc: Any, *, materials: Any = None) -> list:
             "item_key": text,
             "item_name": text,
             "material": text,
-            "material_code": _resolve_material_code(text, index) if index else "",
+            "material_code": resolve_material_code(text, index, map_entries=map_entries)
+                              if index else "",
             "status": "computed",
             "is_optional": 0,
             "source": BUSINESS_ROW_SOURCE,
@@ -551,17 +633,40 @@ def business_material_rows(business_doc: Any, *, materials: Any = None) -> list:
     return out
 
 
-def _business_material_scope(items: list) -> dict:
-    """这一版 BOM 的材料组行有多少来自权威清单、其中多少解析到了材料码（Spec §C3）。"""
+def _business_material_scope(items: list, *, map_entries: Any = None,
+                             map_available: bool = True, map_unavailable: Any = None,
+                             map_source: str = "", map_fingerprint: str = "") -> dict:
+    """这一版 BOM 的材料组行有多少来自权威清单、其中多少解析到了材料码（Spec §C3）。
+
+    既有四键（`row_total` / `resolved_total` / `unresolved_total` / `keys`）**一字不动**；
+    本批新增的是**加法**：`reason_counts`（只放非零档）、`map_hit_total` 与映射表本身的出处
+    （`map_source` / `map_fingerprint` / `map_unavailable`）。
+    """
     rows = [item for item in items
             if _text(item.get("source")) == BUSINESS_ROW_SOURCE
             and _text(item.get("bom_category")) == "material"]
     resolved = [row for row in rows if _text(row.get("material_code"))]
+    reasons: dict = {}
+    for row in rows:
+        reason = classify_material_resolution(row, map_entries=map_entries,
+                                              map_available=map_available)
+        reasons[reason] = reasons.get(reason, 0) + 1
+    if map_available:
+        unavailable: dict = {}
+    else:
+        unavailable = dict(map_unavailable or {}) or {
+            "code": packaging_material_map.MATERIAL_MAP_ERROR_CODE,
+            "message": "材料原文映射表读不到：本版 BOM 的材料码只按既有分词规则解析"}
     return {
         "row_total": len(rows),
         "resolved_total": len(resolved),
         "unresolved_total": len(rows) - len(resolved),
         "keys": sorted(_text(row.get("item_key")) for row in rows),
+        "reason_counts": {key: value for key, value in sorted(reasons.items()) if value},
+        "map_hit_total": int(reasons.get("map_hit") or 0),
+        "map_source": _text(map_source),
+        "map_fingerprint": _text(map_fingerprint),
+        "map_unavailable": unavailable,
     }
 
 
@@ -608,7 +713,7 @@ def _matched_keyword(row: dict) -> str:
 
 
 def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
-              business_parts: Any = None) -> list:
+              business_parts: Any = None, map_entries: Any = None) -> list:
     items: list = []
     box_code = expanded["box_type_code"]
 
@@ -636,7 +741,8 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
     # 3) 材料：有权威清单就按**清单里的去重原文**收（Spec
     #    `packaging-bom-business-material-rows.md` §C2），否则逐字回到模板展开的部件材料。
     materials = _material_index()
-    authority_materials = business_material_rows(business_parts, materials=materials)
+    authority_materials = business_material_rows(business_parts, materials=materials,
+                                                 map_entries=map_entries)
     if authority_materials:
         items.extend(authority_materials)
     else:
@@ -651,7 +757,9 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str, *,
                 "item_key": text,
                 "item_name": text,
                 "material": text,
-                "material_code": _resolve_material_code(text, materials),
+                # 模板展开这条分支与权威清单**同口径**（Spec §C2）：映射一样优先。
+                "material_code": resolve_material_code(text, materials,
+                                                       map_entries=map_entries),
                 "status": "computed",
                 "is_optional": 0,
                 "source": "kb_material",
@@ -1198,6 +1306,9 @@ def _stats(items: list) -> dict:
 def load_bom(project_id: str, requirement_no: str = "") -> dict:
     """读回 BOM + 缺口 + 统计；没有 BOM 行时 `built = false`、`items = []`，不报错。"""
     req_no = _resolve_requirement_no(project_id, requirement_no)
+    # 材料原文映射表的事实读一次（Spec `packaging-business-material-code-map.md` §C3）：
+    # 读不到**不抛**（BOM 结论不许因为一张映射表坏掉就整体失败），但要如实写进账里。
+    map_facts = material_map_facts()
     rows = da_repo.load_packaging_bom(project_id, req_no)
     items = [_item_out(row) for row in rows]
     box_type_code = ""
@@ -1308,7 +1419,11 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         "business_rows": _business_rows_scope(items),
         # 材料组的同一把账（Spec `packaging-bom-business-material-rows.md` §C3）：与上面的
         # 部件组**分开**，键同样**必须存在**。
-        "business_material_rows": _business_material_scope(items),
+        "business_material_rows": _business_material_scope(
+            items, map_entries=map_facts.get("entries"),
+            map_available=bool(map_facts.get("available")),
+            map_unavailable=map_facts.get("unavailable"),
+            map_source=map_facts.get("source"), map_fingerprint=map_facts.get("fingerprint")),
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
@@ -1328,6 +1443,12 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             "needs_input": needs_input,
             "missing_variables": missing_variables,
             "material_unresolved": material_unresolved,
+            # 逐条缺口 + **可执行动作**（Spec `packaging-business-material-code-map.md` §C3）：
+            # 键**必须存在**，顺序与上面那份 `material_unresolved` 一致；这是**加法**，
+            # 原来那个清单与计数键一字不动。
+            "material_unresolved_detail": material_unresolved_detail(
+                items, map_entries=map_facts.get("entries"),
+                map_available=bool(map_facts.get("available"))),
             # 尺寸质量缺口（Spec `packaging-bom-size-quality-accounting.md` §2.3）：键**必须存在**，
             # 没有包围盒行时给 `[]`。新账是**加法**，不许并进上面三个键。
             "bbox_only": bbox_only,
@@ -1683,7 +1804,8 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     # 业务部件清单（Spec `packaging-bom-business-parts-rows.md` §C2）：有清单时部件组行
     # 由清单生成（真样本 28 件），没有清单时逐字保持模板展开。
     items = _assemble(expanded, box, data, req_no,
-                      business_parts=_load_business_parts(project_id))
+                      business_parts=_load_business_parts(project_id),
+                      map_entries=material_map_facts().get("entries"))
     items, pairing_review, role_unbound, binding_error = _bind_parts(project_id, items, req_no)
     # 重算不许把人工映射算没了（Spec `packaging-part-role-manual-mapping.md` §2.8）：
     # `_bind_parts()` 只认尺寸证据、不会碰角色，映射必须在这之后**重放**回来。

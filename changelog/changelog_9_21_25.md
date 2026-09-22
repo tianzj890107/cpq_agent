@@ -17881,3 +17881,34 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
   —— 正是既有 5 条挂账（`part_role_mapping_reaches_card::A2`、`bom_part_size_provenance::B3`、
   `parse_to_downstream_seams::B4`、`quote_send_recovery::C1`、`route_bom_version_pinning::F2`）。
 - 未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 部署。
+
+## 421. 落地 `packaging-business-material-code-map`：材料原文 → 材料码的唯一映射表 + 「该补哪一条」的可执行缺口（26 OK，红基 24 红）（9-22，Codex 实现）
+
+- **缺口**：材料码只有 `packaging_bom._resolve_material_code()` 一条规则（取第一个空白分词、
+  在 `kb_material.name` 里唯一包含）—— 客户原文（`350G玖龙粉灰` / `EVA` / `磁铁`）大多解不出来，
+  而业务/采购**没有任何可维护的落点**去补映射；`gaps.material_unresolved`（`:1330`）只给
+  `item_key` 清单（不分"没有候选 / 多个候选"、没有动作），账上也不说"其中几行是映射给的"；
+  "映射表读不到"没有任何披露。
+- **C1 唯一映射表**：新增 `tech_app/agent_knowledge/rules/packaging_material_code_map.json`
+  （`rule_set=packaging_material_code_map_v1`、`review_status=draft`、**entries 空表** ——
+  不替业务填数）+ 新增 `packaging_material_map.py`：`MaterialMapError`（`.code` /
+  `.stable_error_code`）、`map_path()`（default / env override）、`read_material_map()`
+  （缺失 / 非法 JSON / `rule_set` 不对 / 条目缺键**一律抛**，不许静默回落）、
+  `normalize_material_text()`（去所有空白含全角、ASCII 转小写）、
+  `lookup_material_code()`（`hit` / `missing` / `ambiguous`）、`map_facts()`（读不到不抛但如实披露）。
+- **C2 解析优先级**：`packaging_bom.resolve_material_code(text, rows, *, map_entries=None)` ——
+  映射命中且码**真在本次材料清单里**才用；命中但码不在清单 / 同键两码 → 不给码；
+  映射没给 → 逐字回到既有分词规则（源码一行未改，护栏 E1 守）。权威清单与模板展开两条分支同口径。
+- **C3 账与缺口**：`classify_material_resolution()` 五档（`map_hit` / `legacy_hit` /
+  `map_key_missing` / `map_entry_not_applied` / `map_unknown`）；`material_unresolved_detail()`
+  逐条给 `{item_key, reason, action}`（动作点名 `packaging_material_code_map.json`）；
+  `business_material_rows` 账新增 `reason_counts` / `map_hit_total` / `map_source` /
+  `map_fingerprint` / `map_unavailable`（既有四键不动）；`load_bom()` 的 `gaps` 新增
+  `material_unresolved_detail`（`material_unresolved` 与计数一字不动）。
+- **C4 冻结面**：`_resolve_material_code()` 一行未改；`entries` 为空时解析结果与今天逐字相同；
+  `main.py` 未改（`load_bom()` 返回体原样透传）；成本侧口径未动；未加依赖。
+- **红基**：`Ran 26 … FAILED (failures=9, errors=15)` = 24 红 / 2 绿（2 绿是「既有分词规则未动 /
+  既有四键形状未变」护栏）；**实现后** `Ran 26 … OK`。
+- **不回归**：BOM / 语义 / 成本 6 个套件 `Ran 261 … OK (skipped=1)`；**packaging 全域**
+  `Ran 2158 … FAILED (failures=5, skipped=8)` —— 正是既有 5 条挂账。
+- 未连 PG / 34、未写业务数据（`entries` 留给业务签字）、未 push / MR / tag / Release / 部署。
