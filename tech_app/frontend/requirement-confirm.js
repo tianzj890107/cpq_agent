@@ -798,6 +798,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   let pcPid = '';
   let pcBusy = false;
   let pcSendBusy = false;
+  let pcRelayBusy = false;
 
   function pcEsc(value) {
     return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
@@ -958,7 +959,80 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     }
     return '';
   }
-  function pcPanel(cost, items, writable, handoff) {
+  /* 留痕欠条这一串（Spec docs/specs/packaging-handoff-audit-relay.md §C1/C2 +
+     docs/specs/packaging-handoff-audit-pending-panel.md §C1/§C2）：
+     回传成功 ≠ 留痕落下。后端把"这条留痕现在处在什么状态"写成七键披露体
+     （`ok` / `attempts` / `pending`），面板只把它翻成人话 —— 不猜、不重算、
+     不把 message 重新措辞（Spec §4）。
+     顶层风格与 boxCandidateRunnabilityNote() 一致：体内无 DOM / 无 `fetch(` /
+     无 storage，可被 `node -e` 抽出来真跑。 */
+  function pcAuditWarning(audit) {
+    const item = (audit && typeof audit === 'object') ? audit : null;
+    if (!item || item.ok !== false) return '';
+    const attempts = Number(item.attempts);
+    const tried = (Number.isFinite(attempts) && attempts > 0) ? `（试了 ${attempts} 次）` : '';
+    const message = String(item.message || '').trim();
+    const pending = String(item.pending || '');
+    const tail = pending === 'recorded'
+      ? '；已记成待补写，可在下面「补写留痕」里补'
+      : (pending === 'unavailable'
+        ? '；连待补写也没能记下，接口恢复前这条留痕只活在这次响应里'
+        : '；等接口恢复后重发一次回传即可');
+    return `这条回传的留痕没落下${tried}：${message || '后端没有给原因'}${tail}`;
+  }
+  function pcPendingRows(doc) {
+    const items = (doc && typeof doc === 'object' && Array.isArray(doc.items)) ? doc.items : [];
+    return items.filter(item => item && typeof item === 'object').map(item => {
+      const payload = (item.payload && typeof item.payload === 'object') ? item.payload : {};
+      const requirementNo = String(payload.requirement_no || '').trim() || '（未知需求单）';
+      const version = Number(payload.version_no);
+      const versionText = Number.isFinite(version) ? ` · 第 ${version} 版` : '';
+      const code = String(item.code || '').trim();
+      return {id: String(item.pending_id || ''),
+              text: `${requirementNo}${versionText}${code ? ` · ${code}` : ''}`,
+              when: String(item.recorded_at || '').trim()};
+    });
+  }
+  function pcPendingHeadline(doc) {
+    const rows = pcPendingRows(doc);
+    return rows.length ? `还欠 ${rows.length} 条留痕没落下` : '';
+  }
+  function pcRelayText(result) {
+    const item = (result && typeof result === 'object') ? result : null;
+    if (!item) return '';
+    const relayed = Number(item.relayed);
+    const remaining = Number(item.remaining);
+    const done = Number.isFinite(relayed) ? relayed : 0;
+    const left = Number.isFinite(remaining) ? remaining : 0;
+    const message = String(item.message || '').trim();
+    return `补写留痕：补上 ${done} 条，还欠 ${left} 条${message ? ` —— ${message}` : ''}`;
+  }
+  function pcAuditPendingPath(pid) {
+    return `/api/projects/${encodeURIComponent(pid)}/requirement/packaging-quote/audit-pending`;
+  }
+  function pcRelayAuditsPath(pid) {
+    return `/api/projects/${encodeURIComponent(pid)}/requirement/packaging-quote/audit-pending/relay`;
+  }
+  /* 留痕块：告警句 + 还欠几条 + 逐条 + 补写按钮。两样都没有就整块不渲染 ——
+     不许拼一个空块出来占位（Spec §C2）。 */
+  function pcAuditBlock(handoff, pending, writable) {
+    const warning = pcAuditWarning((handoff || {}).audit);
+    const rows = pcPendingRows(pending);
+    if (!warning && !rows.length) return '';
+    const head = pcPendingHeadline(pending);
+    const list = rows.length
+      ? `<ul class="pc-audit-rows">${rows.map(row => `<li data-pc-audit-id="${pcEsc(row.id)}">${pcEsc(row.text)}${row.when ? ` · ${pcEsc(row.when)}` : ''}</li>`).join('')}</ul>`
+      : '';
+    const button = (rows.length && writable)
+      ? '<button class="btn" data-pc-audit-relay="1">补写留痕</button>' : '';
+    const hint = (rows.length && !writable)
+      ? `<div class="pc-hint">补写要${PC_WRITE_HINT}，当前为只读。</div>` : '';
+    return `<div class="pc-audit" data-pc-audit="1">`
+      + `${warning ? `<div class="pc-audit-warning">${pcEsc(warning)}</div>` : ''}`
+      + `${head ? `<div class="pc-audit-headline">${pcEsc(head)}</div>` : ''}`
+      + `${list}${button}${hint}</div>`;
+  }
+  function pcPanel(cost, items, writable, handoff, pending) {
     const record = cost || {};
     const built = !!record.built;
     const gaps = record.gaps || [];
@@ -986,6 +1060,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button><button class="btn" data-pc-send-quote="1" ${built ? '' : 'disabled'}>回传销售继续报价</button></div>
       <div class="pc-hint">回传销售继续报价：把这份成本整包（行业 / 需求 / 盒型 / 参数 / BOM / 路线 / 成本 / 缺口 / 公式依据 / 来源）发回原报价卡片，卡片第 2 步的「包装：定价与报价分区」就带上它。有缺口时必须写明原因才放行（会随包留痕）；没有权限或落点认不回来时，会按后端给的原因提示。</div>
       ${writable ? '' : `<div class="pc-hint">${PC_WRITE_HINT}，当前为只读。</div>`}
+      ${pcAuditBlock(handoff, pending, writable)}
       ${tables}
     </section>`;
   }
@@ -1004,7 +1079,13 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       const sent = await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-quote`);
       handoff = (sent || {}).handoff || {};
     } catch (error) { handoff = {}; }
-    host.outerHTML = pcPanel(cost, items, pcCanWrite(), handoff);
+    // 留痕欠条（Spec `packaging-handoff-audit-pending-panel.md` §C2）：
+    // 读不到就置 null —— 读不到**不等于**「不欠」，界面上不许写成「还欠 0 条」。
+    let pending = null;
+    try {
+      pending = await pcApi(pcAuditPendingPath(pid));
+    } catch (error) { pending = null; }
+    host.outerHTML = pcPanel(cost, items, pcCanWrite(), handoff, pending);
     pcBind(pid);
   }
   function pcBind(pid) {
@@ -1012,6 +1093,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (build) build.onclick = () => pcSubmit(pid);
     const send = document.querySelector('[data-pc-send-quote]');
     if (send) send.onclick = () => pcSendQuote(pid);
+    const relay = document.querySelector('[data-pc-audit-relay]');
+    if (relay) relay.onclick = () => pcRelayAudits(pid);
   }
   async function pcSubmit(pid) {
     if (pcBusy) return;
@@ -1045,9 +1128,13 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
         try {
           const payload = await pcApi(pcPackagingSendPath(pid), {method: 'POST', body: JSON.stringify(body)});
           const handoff = (payload || {}).handoff || {};
+          /* 留痕没落下时，这句 toast 也必须说（Spec
+             `packaging-handoff-audit-pending-panel.md` §C3）：回传成功 ≠ 留痕落下。 */
+          const auditWarning = pcAuditWarning(handoff.audit);
           pcToast(`已回传销售：交接 ${handoff.handoff_no || '—'} · 第 ${handoff.version_no ?? '—'} 版`
             + (handoff.already_sent ? '（同一份成本，复用已有交接，没有重复发送）' : '')
-            + '；报价卡片第 2 步的「包装：定价与报价分区」带上这份整包。');
+            + '；报价卡片第 2 步的「包装：定价与报价分区」带上这份整包。'
+            + (auditWarning ? ` ${auditWarning}` : ''), !!auditWarning);
           await pcRefresh();
           return;
         } catch (error) {
@@ -1079,6 +1166,23 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       pcToast((error && error.message) || '包装回传失败', true);
     } finally {
       pcSendBusy = false;
+    }
+  }
+
+  /* 补写留痕（Spec `packaging-handoff-audit-pending-panel.md` §C4）：把后端欠条里
+     还欠的逐条补上 —— 成功划掉、失败留着。前端**不猜结果**，只把后端返回的五键
+     披露体翻成一句话，然后重新读一次欠条（补完还剩几条，界面当次就对上）。 */
+  async function pcRelayAudits(pid) {
+    if (pcRelayBusy) return;
+    pcRelayBusy = true;
+    try {
+      const payload = await pcApi(pcRelayAuditsPath(pid), {method: 'POST', body: JSON.stringify({})});
+      pcToast(pcRelayText(payload) || '补写留痕已完成', false);
+      await pcRefresh();
+    } catch (error) {
+      pcToast((error && error.message) || '补写留痕失败', true);
+    } finally {
+      pcRelayBusy = false;
     }
   }
 

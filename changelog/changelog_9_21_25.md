@@ -17828,3 +17828,27 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 - **不回归**：`Ran 137 … FAILED (failures=1)` —— 唯一一条是既有挂账
   `tests/test_packaging_quote_send_recovery_red.py::C1`（夹具自遮挡，本批未碰）。
 - 未改前端（面板告警是下一批）；未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 部署。
+
+## 419. 落地 `packaging-handoff-audit-pending-panel`：留痕欠条在包装成本面板上看得见、能补写（24 OK，红基 20 红）（9-22，Codex 实现）
+
+- **缺口**：`requirement-confirm.js` 的 `pcSendQuote()` 把 `handoff.audit`（`## 418` 的七键披露体）
+  整个丢掉 —— 留痕没落下时界面上一个字都没有；`pcPanel()` / `pcRefresh()` 从不请求
+  `…/packaging-quote/audit-pending`；前端源码里 `audit-pending/relay` 0 处引用（补写无入口）。
+- **C1 四个纯函数**（node 抽出来真跑、体内无 DOM / `fetch(` / storage）：
+  `pcAuditWarning(audit)`（四态互斥、`attempts` 缺失不编次数、`message` 逐字、空 message 不漏
+  `undefined`）、`pcPendingRows(doc)`（行数只由 `items` 决定，不许拿 `count` 造假行）、
+  `pcPendingHeadline(doc)`（复用 rows）、`pcRelayText(result)`（补上 / 还欠 + 失败原因逐字）。
+- **C2 面板块**：`pcAuditBlock()` 渲染 `data-pc-audit` 告警句 + 标题 + `data-pc-audit-id` 逐条 +
+  只在有写权限且有欠条时给 `data-pc-audit-relay` 按钮；两样都没有 → 整块不渲染。
+  `pcRefresh()` 读一次欠条，**读失败置 `null`**（读不到≠不欠，不许写成「还欠 0 条」）。
+- **C3 回传 toast**：成功分支追加 `pcAuditWarning(handoff.audit)` 并按警示样式弹（回传成功 ≠ 留痕落下）。
+- **C4 补写入口**：`pcRelayAudits(pid)` POST `audit-pending/relay` → `pcRelayText()` toast → 重新读欠条；
+  路径由 `pcAuditPendingPath()` / `pcRelayAuditsPath()` 拼（`encodeURIComponent(pid)`）。
+- **冻结面**：`pcSendQuote()` 的三类恢复口径、`window.CfPackagingCostPanel` 出口、`pcApi` / `pcToast`
+  一字未动；未改后端、未改 `index.html`、未加依赖；`node --check` 通过。
+- **红基**：`Ran 24 … FAILED (failures=20)` = 20 红 / 4 绿（4 绿是「回传恢复口径 / 面板出口 /
+  不自动补写 / 语法」护栏）；**实现后** `Ran 24 … OK`。
+- **不回归**：`Ran 159 … FAILED (failures=1)` —— 唯一一条是既有挂账
+  `tests/test_packaging_quote_send_recovery_red.py::C1`；另跑**所有引用 `requirement-confirm.js`
+  的 35 个套件**：`Ran 592 … OK`。
+- 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
