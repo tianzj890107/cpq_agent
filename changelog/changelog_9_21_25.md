@@ -17975,3 +17975,42 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 - **不回归**：Spec §5 点名的 9 个套件 `Ran 274 … OK`；**包装全域**
   `Ran 2210 … FAILED (failures=5, skipped=8)` —— 与实现前逐条同名的既有 5 条挂账。
 - 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 424. 落地 `packaging-bom-disclosure-panel`：BOM 面板上看得见「配对复核 / 回填失败 / 业务清单换版」三本账（29 OK，红基 24 红）（9-22，Codex 实现）
+
+- **Spec**：`docs/specs/packaging-bom-disclosure-panel.md`（唯一权威，C1–C3 + §6 边界）；
+  依存 `packaging-parse-to-downstream-seams.md` §3.2（`pairing_review` 必须**可读**；§4 明写"不动前端"）、
+  `packaging-silent-degradation-disclosure.md` §2.1/§2.5（`binding_error` / `pairing_review_unavailable`
+  的读侧披露体）、`packaging-business-parts-version-pinning.md` §2.2（`business_parts_stale` 两档原因码）。
+- **红测**：`tests/test_packaging_bom_disclosure_panel_red.py`（29 条，A–G 七组；A–D 四组用 `node -e`
+  抽闭包内具名函数**真跑**，不是 grep；G 组 `node --check`）。
+- **现状缺口（代码级）**：后端 `packaging_bom.load_bom()` 早已把四本账交到
+  `GET …/requirement/packaging-bom` 顶层（`:1391` `pairing_review` / `:1394`
+  `pairing_review_unavailable` / `:1396` `binding_error` / `:1404` `business_parts_stale`），
+  而 `app.js` + `requirement-confirm.js` 里这四个键 **0 处引用**：材料配错了看不见
+  （只能去 `items[].size_source_json` 里 `JSON.parse` 一个字符串）、
+  "配对复核读不到"与"没有不一致"长得一样、"零件回填失败"与"没有失败"长得一样、
+  业务清单换版没有落点（同一类漂移，几何零件那一本有、业务清单那一本没有）。
+- **C1 四个纯函数**（包装 BOM 面板 IIFE 内，`pbRow()` 之前，体内无 DOM / `fetch(` / `storage`）：
+  `pbPairingMismatchRows()`（只收 `material_match !== true` 的条目、空 `item_key` 跳过、四值 trim、
+  非数组 → `[]`；**不在前端再判一次材料是否相等**）、
+  `pbPairingMismatchNote()`（`unavailable` 非空 → `配对复核读不到（<code>）：…别当成「没有不一致」`；
+  否则按行数给一句；否则 `""`）、
+  `pbBindingErrorNote()`（`binding_error` 非空 → `零件回填失败（<code>）：<reason>；…`，缺字段不留空括号；
+  `{}` → `""`，`binding_error_unavailable` 走同一句、逐字带码）、
+  `pbBusinessStaleRows()`（`business_parts_reimported` / `binding_without_version` 两档闭集，
+  其余一律未知档；空行名跳过；非数组 → `[]`）。
+- **C2 面板**：`pbPanel()` 在映射备注块之后插入三块 —— `data-pb-pairing-review="<行数>"` +
+  逐条 `data-pb-pairing-mismatch="<item_key>"`（行键 / 几何件 / 两侧材料）或读不到时
+  `data-pb-pairing-review-unavailable="<code>"`；`data-pb-binding-error="<code>"`；
+  `data-pb-business-stale="<行数>"` + 逐行 `data-pb-business-stale-key="<item_key>"`。
+  既有五个 banner 与 `pbRow()` **一字未动**，四块全空时**一个节点都不多**。
+- **C3 冻结面**：三本账的唯一事实源仍是后端响应（前端不重算配对、不重判材料、不猜回填有没有失败）；
+  未新增接口、未改后端与 `index.html`、未加依赖；`pbPanel()` 里不新增请求。
+- **红基**：`Ran 29 … FAILED (failures=24)` = 24 红 / 5 绿（5 绿 = 既有 banner 未动 /
+  面板不发请求 / `pbRow()` 未变 / `index.html` 未动 / `node --check`）；**实现后** `Ran 29 … OK`。
+- **不回归**：Spec §5 点名的 6 个套件 `Ran 141 … FAILED (failures=1)`（唯一红是
+  `parse_to_downstream_seams::B4` 的 `size_quality` 键集冻结 —— `packaging-bom-size-quality-accounting.md`
+  §已记录的偏差，本批实现前后逐条同名）；同一份 `requirement-confirm.js` 上其它面板批次 7 个套件
+  `Ran 157 … OK`；`test_spec_status_truth_red` `Ran 7 … OK`；`node --check` 退出码 0。
+- 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。

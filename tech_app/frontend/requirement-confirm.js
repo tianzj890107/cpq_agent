@@ -400,6 +400,62 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const hits = Number(facts.map_hit_total || 0);
     return hits > 0 ? `材料码映射表命中 ${hits} 行。` : '';
   }
+  // 配对复核 / 零件回填失败 / 业务清单换版三本账的人话与逐行清单
+  // （Spec `packaging-bom-disclosure-panel.md` §C1）：只消费后端结论，前端不重判一次。
+  function pbPairingMismatchRows(record) {
+    const scope = (record && typeof record === 'object') ? record : {};
+    const raw = Array.isArray(scope.pairing_review) ? scope.pairing_review : [];
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const rows = [];
+    raw.forEach(entry => {
+      const item = (entry && typeof entry === 'object') ? entry : {};
+      if (item.material_match === true) return;  // 这一列的是「不一致项」，一致的不进清单。
+      const key = text(item.item_key);
+      if (!key) return;                          // 空项跳过：不许造无名行。
+      rows.push({key: key, part_code: text(item.part_code),
+                 row_material: text(item.row_material), part_material: text(item.part_material)});
+    });
+    return rows;
+  }
+  function pbPairingMismatchNote(record) {
+    const scope = (record && typeof record === 'object') ? record : {};
+    const why = (scope.pairing_review_unavailable && typeof scope.pairing_review_unavailable === 'object')
+      ? scope.pairing_review_unavailable : {};
+    if (Object.keys(why).length) {
+      const code = String(why.code || 'pairing_review_unavailable').trim();
+      // 读不到 ≠ 没有不一致：这句话必须显形。
+      return `配对复核读不到（${code}）：这一版不知道有没有材料配错，别当成「没有不一致」。`;
+    }
+    const count = pbPairingMismatchRows(scope).length;
+    return count ? `配对复核：${count} 行材料与绑定的几何件不一致，请核对后再往下算。` : '';
+  }
+  function pbBindingErrorNote(record) {
+    const scope = (record && typeof record === 'object') ? record : {};
+    const error = (scope.binding_error && typeof scope.binding_error === 'object') ? scope.binding_error : {};
+    if (!Object.keys(error).length) return '';   // {} = 没有失败，不说。
+    const code = String(error.code || '').trim();
+    const reason = String(error.reason || '').trim();
+    const head = code ? `零件回填失败（${code}）` : '零件回填失败';
+    return `${head}${reason ? `：${reason}` : ''}；这一版 BOM 的几何绑定可能不完整。`;
+  }
+  function pbBusinessStaleRows(record) {
+    const scope = (record && typeof record === 'object') ? record : {};
+    const raw = Array.isArray(scope.business_parts_stale) ? scope.business_parts_stale : [];
+    const labels = {
+      business_parts_reimported: '业务清单已重新导入（这一行还是上一版清单算的）',
+      binding_without_version: '这一行没记业务清单版本，判断不了是不是过期'
+    };
+    const rows = [];
+    raw.forEach(entry => {
+      const item = (entry && typeof entry === 'object') ? entry : {};
+      const key = String(item.item_key === undefined || item.item_key === null ? '' : item.item_key).trim();
+      if (!key) return;
+      const reason = typeof item.reason === 'string' ? item.reason : '';
+      // 闭集认两档，其余一律未知档（不许归到已知两档）。
+      rows.push({key: key, label: labels[reason] || '原因未知（后端没有给出原因档）'});
+    });
+    return rows;
+  }
   function pbRow(item, writable, staleMap, markMap) {
     const status = String(item.status || 'computed');
     const stale = (staleMap || {})[String(item.item_key || '')] || null;
@@ -498,12 +554,35 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       : '';
     const mapNote = pbMaterialMapNote(record.business_material_rows);
     const mapBlock = mapNote ? `<div class="pb-hint" data-pb-material-map="1">${pbEsc(mapNote)}</div>` : '';
+    // 三本账的界面落点（Spec `packaging-bom-disclosure-panel.md` §C2）：与既有的「几何零件文档
+    // 版本漂移」并列 —— 配对复核（逐条不一致）、零件回填失败、业务清单换版。三家空值语义不同，
+    // 空 / 读不到 / 没有 必须分得开。
+    const pairingRows = pbPairingMismatchRows(record);
+    const pairingWhy = (record && record.pairing_review_unavailable) || {};
+    const pairingBlock = Object.keys(pairingWhy || {}).length
+      ? `<div class="pb-warning" data-pb-pairing-review-unavailable="${pbEsc(pairingWhy.code || 'pairing_review_unavailable')}">${pbEsc(pbPairingMismatchNote(record))}</div>`
+      : (pairingRows.length
+        ? `<div class="pb-hint" data-pb-pairing-review="${pairingRows.length}">${pbEsc(pbPairingMismatchNote(record))}
+        <ul class="pb-list">${pairingRows.map(row => `<li class="pb-item" data-pb-pairing-mismatch="${pbEsc(row.key)}"><span class="pb-key">${pbEsc(row.key)}</span><span class="pb-name">${pbEsc(row.part_code)}</span><div class="pb-material">行材料：${pbEsc(row.row_material || '—')} · 几何件材料：${pbEsc(row.part_material || '—')}</div></li>`).join('')}</ul></div>`
+        : '');
+    const bindingNote = pbBindingErrorNote(record);
+    const bindingBlock = bindingNote
+      ? `<div class="pb-warning" data-pb-binding-error="${pbEsc(((record && record.binding_error) || {}).code || 'part_binding_failed')}">${pbEsc(bindingNote)}</div>`
+      : '';
+    const businessStaleRows = pbBusinessStaleRows(record);
+    const businessStaleBlock = businessStaleRows.length
+      ? `<div class="pb-warning" data-pb-business-stale="${businessStaleRows.length}">有 ${pbEsc(businessStaleRows.length)} 行是照上一版业务部件清单算的：
+        <ul class="pb-list">${businessStaleRows.map(row => `<li class="pb-item" data-pb-business-stale-key="${pbEsc(row.key)}"><span class="pb-key">${pbEsc(row.key)}</span><span class="pb-name">${pbEsc(row.label)}</span></li>`).join('')}</ul></div>`
+      : '';
     return `<section class="card section pb-panel" id="packagingBomPanel">
       <h2>部件展开与包装 BOM${boxTypeCode ? `（${pbEsc(boxTypeCode)}）` : ''}</h2>
       <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。`
       + `${partsHash ? `零件文档版本：${pbEsc(partsHash.slice(0, 12))}。` : ''}</div>
       ${unresolved}
       ${mapBlock}
+      ${pairingBlock}
+      ${bindingBlock}
+      ${businessStaleBlock}
       ${mixedBanner}
       ${unknownBoxBanner}
       ${bboxBanner}
