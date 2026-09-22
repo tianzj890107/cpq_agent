@@ -231,6 +231,26 @@ NoScopeCreep::test_protocol_events_unchanged（事件闭集要求里没有 `task
 node --check agent-chat.js / assembly-integration.js / cost-review.js → 通过
 ```
 
+**cache-buster**：三份 JS 的内容变了，所以 `?v=` 一并失效 —— `agent-chat.js` 从
+`20260918-fold1` → `20260922-road1`（`index.html` / `tech-workbench.html`）、
+`assembly-integration.js` 从 `ai25` → `ai26`、`cost-review.js` 从 `cr19` → `cr20`
+（Spec §7 允许清单里的那一项）。`确认需求解析结果.html` 是页内联脚本，没有 `?v=`。
+
+### 10.5 34 部署落地方式（说明白，不是绕过）
+
+34 工作区当时有**并行会话未提交**的两个文件（`cpq_agent_server.py` / `cpq_quick_quote_workspace.py`，
+对方 09:45:30 刚用它们重启过 8010，改动是活的），`scripts/deploy_34_bare.sh` 第 0 步因此拒绝执行。
+本批只同步**自己这 8 个前端文件**（`git fetch` + `git checkout FETCH_HEAD -- <文件…>`），
+**不重启服务**（前端是静态文件，按请求读盘），因此不会动到对方活着的服务端改动：
+
+```
+8012 下发 agent-chat.js / assembly-integration.js / cost-review.js → 均含本批新逻辑（HTTP 200）
+8010 下发 index.html → agent-chat.js?v=20260922-road1；确认需求解析结果.html → 含 infoSentence
+```
+
+**待办**：等那两个未提交文件落地后，跑一次正式部署
+（`bash scripts/deploy_34_bare.sh ytbz`）让 `deploy_build.json` 的 stamp 与 HEAD 对齐，并重跑第 6b 步自检。
+
 ### 10.3 边界
 
 未改 `tests/` 下任何既有文件、未改后端 `tasks.py` 的 `report_progress / process_event`、

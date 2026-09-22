@@ -11193,3 +11193,30 @@ git diff --check    干净
 未改 `tests/` 下任何既有文件与期望值、未改后端 `tasks.py` 的 `report_progress / process_event`、
 未改 SSE 载荷与 `phase` 闭集、未改任何 CSS、未新增字体、未重构渲染框架、
 未连 PG、未写生产数据。Spec `docs/specs/process-row-running-info-and-fold.md` 增加 §10 实现记录。
+
+### 部署记录（34，2026-09-22）
+
+34 的部署脚本第 0 步会拒绝「工作区有未提交的 tracked 改动」，当时 34 上有**并行会话未提交**的
+两个文件（`cpq_agent_server.py` / `cpq_quick_quote_workspace.py`），而且对方 09:45:30 刚用它们重启过
+8010（改动是活的）——所以本批**没有**做整仓部署，只按「本批自己改的文件」同步前端：
+
+```
+git fetch <gitlab> ytbz
+git checkout FETCH_HEAD -- tech_app/frontend/agent-chat.js tech_app/frontend/assembly-integration.js
+                          tech_app/frontend/cost-review.js tech_app/frontend/index.html
+                          tech_app/frontend/tech-workbench.html tech_app/frontend/assembly-integration.html
+                          tech_app/frontend/cost-review.html 确认需求解析结果.html
+```
+
+不重启服务（前端是静态文件、按请求读盘），因此不会动到对方活着的服务端改动。下发实测：
+
+```
+8012/agent-chat.js            HTTP 200，含 isInfoSentence（2 处）
+8012/assembly-integration.js  HTTP 200，含 INFO_SENTENCE（2 处）
+8012/cost-review.js           HTTP 200，含 INFO_SENTENCE（2 处）
+8012/index.html               HTTP 200，agent-chat.js?v=20260922-road1
+8010/确认需求解析结果.html     HTTP 200，含 infoSentence（2 处）
+```
+
+**接下来必须做的**（等那两个未提交文件落地后）：`bash scripts/deploy_34_bare.sh ytbz`
+—— 让 `deploy_build.json` 的 stamp 与 HEAD（`463a02c`）对齐，并重跑第 6b 步隔离自检。
