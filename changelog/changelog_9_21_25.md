@@ -14612,3 +14612,79 @@ tests.test_spec_status_truth_red                    → 7 OK
 ```
 
 未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 346. 路线重算不出来时被当成"没变"：`except RouteError` 把当前指纹顶回存的指纹，`gaps.no_process_template` 还是写死的 False（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-route-recompute-unavailable.md` +
+`tests/test_packaging_route_recompute_unavailable_red.py`（4 条：K 组；现状 **2 红 2 绿**，
+2 条绿的是"正常路径该键给空 / 重算成功且工序真变了照旧报 route_changed"的护栏）。
+本批不真跑任何服务：缺口由**读代码**定位，红测只用假仓库 + 纯函数，离线可复现。
+
+### 缺口
+
+1. `packaging_route.py:454 _stale_reasons()`：`except RouteError: current = None` 之后
+   `current_fingerprint` 被顶成**存的**指纹（`:467-469`）—— "现在排不出来"与"排出来一模一样"
+   在读回体上同形，`route_changed` 永远不可能命中。
+2. `packaging_route.py:524 load_route()` 的 `gaps.no_process_template` 写死 `False`
+   （`:353` / `:447` 同样写死），而 `build_route()` 在同样输入下会 `409 no_process_template`
+   （`:557`）：**再点一次重排会报错、读回来说没有这条缺口**。
+3. `except RouteError:` 吞掉了 `RouteError.code`，读接口说不出"排不出来的原因是什么"。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 新增必存在的键 `route_recompute_unavailable`：正常 `{}`，重算失败时给
+  `{"code": "<RouteError.code 逐字>", "reason": "<message>"}`；失败时**不许**给 `route_changed`，
+  既有三条轴的比法（成功路径）逐字不变；
+- `gaps.no_process_template` 改成读时实话实说：仅当"按当前输入重算失败且原因就是
+  `no_process_template`"时为 `True`，重算成功为 `False`，`_empty_route()`（还没排过）仍 `False`；
+- 读接口照旧把已存路线与工序返回（本批只要求**标记**），路由形状不变；
+- 禁项写死：不许把重算失败变成拒绝、不许在读接口里重排覆盖、不许折成布尔、
+  不许改 `build_route()` 三条既有 409、不许改 `packaging_match` / `packaging_bom` / 成本侧、
+  不许改 `tests/` 既有文件、不许连线上库 / 发 HTTP。
+
+### 复跑
+
+- `tests.test_packaging_route_recompute_unavailable_red`：`Ran 4, failures=2`（K1/K2 红，K3/K4 绿）。
+- 不回归：`test_packaging_process_route_red` 57 OK、`test_packaging_quote_close_loop_red` 96 OK、
+  `test_packaging_parametric_bom_red` 57 OK、`test_spec_status_truth_red` 7 OK；
+  本批同族的两份红测（`## 342` / `## 345`）保持设计中的红读数
+  （`Ran 14, failures=10, errors=1` / `Ran 7, failures=3, errors=1`）。
+- 本批只读源码 + 假仓库，`tech_app/data/` 下未新增任何测试目录（`testpid*` 计数保持 0）。
+
+## 347. 落地 `packaging-cost-content-binding-source-disclosure`：包材绑定"我没数据"不再是"没有缺口"（7 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_cost_content_binding_source_disclosure_red`（A/B 组 7 条）全绿。
+
+### 一、缺口
+
+`bound_content_codes()` 这一版故意只给空集（还没有"这一单用哪几项包材"的权威数据源），
+但**没人说出来**：`bound_gaps = []`（全部只披露）与"这一单真的没有包材缺口"在读接口上完全同形，
+就绪门也只有 `unbound_total` 这个**条数**、不回答"为什么它们没进阻断"。
+
+### 二、改了什么（只改 `packaging_cost.py`）
+
+- 新增 `bound_content_codes_detail(data, *, rows=None) -> {"codes": [...], "source": ...}`：
+  来源闭集 `CONTENT_BINDING_SOURCES = ("authoritative", "none")`，**今天老实报 `none`**；
+  `bound_content_codes()` 退成**兼容包装**（只回 `codes`，既有调用点行为不变）；
+  算这件事的地方**仍然只有这一处**。
+- `compute_project()` 结果体新增 `content_binding`：`source` / `bound_total` / `unbound_total` /
+  `bound_codes` / `unbound_codes` —— `unbound_*` **逐字来自这一趟算出的 `gaps_unbound_to_order`**
+  （不重算一份），`unbound_codes` 去重升序**逐条指名道姓**（报告要能点到具体包材项）。
+- `packaging_cost_readiness_gate()` 新增 `content_binding_source`（键**总是存在**，取不到 `""`），
+  并在 `source == "none"` 且 `unbound_total > 0` 时给一句
+  `包材绑定数据源缺失：N 条包材缺口只披露不阻断`；`authoritative` 时**不许**出现那句。
+  **`verdict` / `blocking_total` / `unbound_total` 口径一个字未改** —— 本批只加"说出来"。
+- 读侧 `_rehydrate()` 也带同一个键（`_content_binding_of()`，与 `compute_project()` 同一形状，
+  来源走同一个函数），`load_cost()` 原样透出，不吞来源。
+
+### 三、复跑
+
+```
+tests.test_packaging_cost_content_binding_source_disclosure_red → Ran 7 … OK
+tests.test_packaging_cost_gaps_scoped_to_order_contents_red    → OK（不回归）
+tests.test_packaging_cost_readiness_severity_layering_red      → OK（不回归）
+tests.test_packaging_cost_engine_red                           → 81 OK
+tests.test_spec_status_truth_red                               → 7 OK
+```
+
+未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

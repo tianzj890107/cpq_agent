@@ -1410,15 +1410,50 @@ def compute_packaging(rows, *, tax_factor: Any = 1.13, loss_uplift: Any = LOSS_U
             "bound_gaps": bound_gaps, "unbound_gaps": unbound_gaps}
 
 
-def bound_content_codes(data: Any, *, rows=None) -> set:
-    """本单「绑上的包材项」集合（Spec §2.3）—— **唯一** 一处算它的地方。
+#: 包材绑定集合的来源闭集（Spec `packaging-cost-content-binding-source-disclosure.md` §2.1）：
+#: `authoritative` = 有权威数据源；`none` = 今天没有（算不出来）。**不许**假装。
+CONTENT_BINDING_SOURCES = ("authoritative", "none")
+
+
+def bound_content_codes_detail(data: Any, *, rows=None) -> dict:
+    """本单「绑上的包材项」集合 **+ 它是从哪来的**（Spec §2.1）—— **唯一** 一处算它的地方。
 
     这一版故意只给**空集**：仓库里还没有「这一单到底用哪几项包材」的权威数据源（BOM 的
     `packaging` 行目前只放物流规则，`3.5 包装与物流` 的字段也只是文本描述），
     而 Spec 明确写「算不出来就给空集（= 全部 unbound = 只披露不阻断），不许在成本引擎里另写一套
     猜哪一项用到的规则」。等权威绑定数据接入时，**只改这一个函数**。
+
+    返回 `{"codes": [...], "source": "authoritative" | "none"}`：**今天必须老实报 `none`**
+    —— "我没数据"不许在读接口上长得像"没有缺口"。
     """
-    return set()
+    return {"codes": [], "source": "none"}
+
+
+def bound_content_codes(data: Any, *, rows=None) -> set:
+    """`bound_content_codes_detail()` 的**兼容包装**（只回集合，既有调用点行为不变）。"""
+    return set(bound_content_codes_detail(data, rows=rows).get("codes") or ())
+
+
+def _content_binding_of(codes: Any, unbound_gaps: Any) -> dict:
+    """成本结果体里的 `content_binding`（Spec §2.2）：来源 + 绑上/没绑上的包材项。
+
+    与 `compute_project()` 里那一份**同一形状**（读侧没有"这一趟算出的"缺口可回放，
+    今天这一列还没落库，所以 `unbound_*` 从落库回来的那一份取，取不到就是空的 —— 绝不另猜）。
+
+    `unbound_total` / `unbound_codes` **逐字来自这一趟算出的 `unbound_gaps`**（不许重算一份）；
+    `unbound_codes` 按内容码去重升序 —— 报告要能**指名道姓**，不许只给一个总数（§2.4）。
+    """
+    bound = sorted({_text(code) for code in (codes or ()) if _text(code)})
+    unbound_codes = sorted({_text(entry.get("content_code"))
+                            for entry in (unbound_gaps or []) if isinstance(entry, dict)
+                            and _text(entry.get("content_code"))})
+    return {
+        "source": "none",
+        "bound_total": len(bound),
+        "unbound_total": len(list(unbound_gaps or [])),
+        "bound_codes": bound,
+        "unbound_codes": unbound_codes,
+    }
 
 
 def parse_loading_rate(text: Any) -> Optional[float]:
@@ -1844,6 +1879,10 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     # 「没绑上本单」的包材缺口只报数（Spec §2.4）：不进 verdict、不进 blocking_total。
     unbound_total = len([gap for gap in (payload.get("gaps_unbound_to_order") or [])
                          if isinstance(gap, dict)])
+    # 包材绑定数据源的来源（Spec `packaging-cost-content-binding-source-disclosure.md` §2.3）：
+    # 键**必须存在**，取不到给 `""`。这只是"说出来"，**不改 verdict 口径**。
+    binding = payload.get("content_binding")
+    binding_source = _text(binding.get("source")) if isinstance(binding, dict) else ""
     evidence = [gap_evidence(payload, gap) for gap in gaps]
     blocking = [row for row in evidence if row["severity"] == "blocking"]
     # 提示性缺口（Spec `packaging-cost-readiness-severity-layering` §2.2）：只披露、不决定结论。
@@ -1864,6 +1903,10 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     if advisories:
         # §2.2：带提示缺口的正式成本也要有一句 —— 提示必须看得见，不许静默。
         reasons.append("%d 项提示缺口（不影响正式/暂定）" % len(advisories))
+    if binding_source == "none" and unbound_total > 0:
+        # §2.3：必须回答"为什么这些包材缺口没进阻断" —— 否则读的人只看到"没有阻断缺口"，
+        # 而真相是"我们不知道这一单用了哪几项包材"。
+        reasons.append("包材绑定数据源缺失：%d 条包材缺口只披露不阻断" % unbound_total)
     unbuilt = not gaps and payload.get("built") is False
     if unbuilt:
         reasons.append("成本尚未测算")
@@ -1871,6 +1914,8 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     verdict = READINESS_PROVISIONAL if (blocking or silent or unbuilt) else READINESS_FORMAL
     return {
         "version": READINESS_VERSION,
+        # 键**必须永远存在**（Spec §2.3）：空 payload 也要有，取不到给 `""`。
+        "content_binding_source": binding_source,
         "verdict": verdict,
         "formal_ready": verdict == READINESS_FORMAL,
         "has_gaps": bool(gaps),
@@ -2190,7 +2235,8 @@ def compute_project(project_id: str, requirement_no: str = "", *,
     # 5) 包材 --------------------------------------------------------------- #
     # 绑定集合的口径**只有一处**（Spec §2.3）：调用方算好传进来；这一版还没有「哪一项用到」
     # 的算法，按 Spec 给**空集** —— 全部 unbound = 只披露、不单独阻断，不许在这里现猜。
-    bound_codes = bound_content_codes(data)
+    bound_detail = bound_content_codes_detail(data)
+    bound_codes = set(bound_detail.get("codes") or ())
     packaging = compute_packaging(kb_repo.packaging_cost_contents(),
                                   bound_content_codes=bound_codes,
                                   tax_factor=tax_factor,
@@ -2202,6 +2248,19 @@ def compute_project(project_id: str, requirement_no: str = "", *,
                                  content_code=entry.get("content_code"),
                                  binding_status="unbound")
                              for entry in (packaging.get("unbound_gaps") or [])]
+    # 包材绑定数据源缺失必须自报家门（Spec `packaging-cost-content-binding-source-disclosure.md`
+    # §2.2）：`bound_gaps = []` 与"这一单真的没有缺口"在读接口上必须分得开。
+    # `unbound_total` / `unbound_codes` 逐字来自上面那一份 `gaps_unbound_to_order`（不重算一份），
+    # 且**逐条指名道姓**列出被降级披露的包材项（§2.4）—— 只给总数的话报告没法点到具体包材项。
+    content_binding = {
+        "source": _text(bound_detail.get("source")),
+        "bound_total": len(bound_codes),
+        "unbound_total": len(gaps_unbound_to_order),
+        "bound_codes": sorted(_text(code) for code in bound_codes if _text(code)),
+        "unbound_codes": sorted({_text(entry.get("content_code"))
+                                 for entry in gaps_unbound_to_order
+                                 if _text(entry.get("content_code"))}),
+    }
 
     # 6) 运输 --------------------------------------------------------------- #
     shipping = _text(data.get("shipping_mode"))
@@ -2281,6 +2340,7 @@ def compute_project(project_id: str, requirement_no: str = "", *,
         "items": items, "computed_at": now,
         # 「没绑上本单」的包材缺口（Spec §2.3）：进出参只披露，**不参与 verdict**。
         "gaps_unbound_to_order": gaps_unbound_to_order,
+        "content_binding": content_binding,
         # 谁算的（Spec `packaging-cost-finance-access.md` §2.3）：留痕跟着记录走，
         # 事后不必翻审计表猜。
         "computed_by": _actor_name(actor), "computed_by_role": _actor_role(actor),
@@ -2368,6 +2428,12 @@ def _rehydrate(row: dict, items: list) -> dict:
         "items": stored, "computed_at": row.get("computed_at"),
         "computed_by": _text(row.get("computed_by")),
         "computed_by_role": _text(row.get("computed_by_role")),
+        # 读侧也要说得出"绑定数据源是什么"（Spec
+        # `packaging-cost-content-binding-source-disclosure.md` §2.2）：来源由**同一个函数**给，
+        # 没绑上的包材项从落库回来的那一份缺口里取（今天还没有这一列 → 空），绝不另猜一份。
+        "content_binding": _content_binding_of(
+            bound_content_codes_detail({}).get("codes") or (),
+            row.get("gaps_unbound_to_order") or []),
     }
 
 
