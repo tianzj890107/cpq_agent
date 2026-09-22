@@ -872,7 +872,33 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (!flag.code) return '';
     return `<div class="pc-warning" data-pc-bom-unavailable="${pcEsc(flag.code)}">暂时读不到当前 BOM${flag.reason ? `（${pcEsc(flag.reason)}）` : ''}，无法判断这份成本是否还跟得上；这不代表输入没变。</div>`;
   }
-  function pcPanel(cost, items, writable) {
+  /* 回传记录的输入漂移（Spec `packaging-handoff-input-drift-disclosure.md` §2.3）：
+     "这一版回传是按哪一版成本发的、现在成本变了没有"必须在成本面板上说一句 —— 不许让人觉得
+     旧回传还是当前有效。 */
+  const PC_HANDOFF_STALE_LABELS = {
+    cost_recomputed: '成本已重算（这一版回传是按旧成本发的）',
+    provenance_missing: '这一版回传没记下当时的成本版本（历史数据）',
+  };
+  function pcHandoffDriftBanner(handoff) {
+    const record = handoff || {};
+    if (!record.handoff_no) return '';
+    const reasons = Array.isArray(record.stale_reasons) ? record.stale_reasons : [];
+    if (record.stale || reasons.length) {
+      const lines = reasons.length
+        ? reasons.map(code => `<li>${pcEsc(PC_HANDOFF_STALE_LABELS[code] || code)}</li>`).join('')
+        : '<li>成本已重算</li>';
+      return `<div class="pc-warning" data-pc-handoff-stale="${reasons.length}">成本已重算，`
+        + `这一版回传（第 ${pcEsc(record.version_no ?? '—')} 版）是按旧成本发的，请重新回传。`
+        + `<ul class="pc-stale-reasons">${lines}</ul></div>`;
+    }
+    // 读不到成本 = "比较不了"，不许说成"没有成本"（Spec §2.3）。
+    if (record.cost_unavailable && record.cost_unavailable.code) {
+      return '<div class="pc-warning" data-pc-handoff-cost-unavailable="1">'
+        + '当前读不到成本，无法核对这一版回传是按哪一版成本发的。</div>';
+    }
+    return '';
+  }
+  function pcPanel(cost, items, writable, handoff) {
     const record = cost || {};
     const built = !!record.built;
     const gaps = record.gaps || [];
@@ -892,6 +918,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pc-hint">逐部件 × 逐成本类别；缺料价 / 缺费率 / 缺工时一律出「待询价」缺口，合计不含该金额。本批只出成本，不出售价 / 利润（第 8 批）。</div>
       ${pcStaleBanner(record)}
       ${pcBomUnavailableBanner(record)}
+      ${pcHandoffDriftBanner(handoff)}
       ${head}${summary}${totals}
       ${gapLines}
       <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button><button class="btn" data-pc-send-quote="1" ${built ? '' : 'disabled'}>回传销售继续报价</button></div>
@@ -908,7 +935,14 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const payload = await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-cost`);
     const cost = (payload || {}).cost || {};
     const items = (cost.items || []);
-    host.outerHTML = pcPanel(cost, items, pcCanWrite());
+    // 最近一次回传记录的输入漂移（Spec `packaging-handoff-input-drift-disclosure.md` §2.3）：
+    // 读不到就不显示（不许把"读不到回传"说成"没回传过"）。
+    let handoff = {};
+    try {
+      const sent = await pcApi(`/api/projects/${encodeURIComponent(pid)}/requirement/packaging-quote`);
+      handoff = (sent || {}).handoff || {};
+    } catch (error) { handoff = {}; }
+    host.outerHTML = pcPanel(cost, items, pcCanWrite(), handoff);
     pcBind(pid);
   }
   function pcBind(pid) {

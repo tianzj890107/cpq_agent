@@ -15527,3 +15527,52 @@ node --check tech_app/frontend/app.js    # OK
 - 只加键、只加说明："候选读不到"照旧进未映射清单，`role_candidates_for()` 的既有 code / message
   与 `role_map_status()` 的清单口径一个字没改；两处 `unavailable` 不合并。
 - 未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。
+
+## 361. 落地 `packaging-handoff-input-drift-disclosure`：回传记录回答"按哪一版成本发的、现在变了没有"（7 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_handoff_input_drift_red`（J 组 7 条）全绿：J1 / J3 / J4 / J6 由红转绿，
+J2（成本没变不 stale）/ J5（没有记录逐字 `{}`）/ J7（既有键逐字不变）三条护栏保持绿。
+
+### 一、缺口
+
+`load_handoff()` 把库里那一行原样吐回去：记录里存着 `cost_result_version`（`send_to_quote()` 落的）
+与 `package_fingerprint`，但读侧从不和当前成本比 —— 成本重算之后旧回传记录照旧读得像"当前有效"，
+既没有 `stale` / `stale_reasons`，也没有一个 `source_versions` 把"这一版是按哪一版成本发的"说出来；
+`handoff_versions()` 同样只排序；"历史记录没有版本"与"版本一致"、"当前成本读不到"与"成本变了"
+在读回体上都分不出来。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_handoff.py`
+  - 新增模块级纯函数 `handoff_stale_reasons(record, cost)`（口径唯一）：`cost_recomputed`（记录版本
+    非空且 ≠ 当前 `result_version_of(cost)`）、`provenance_missing`（记录版本为空）；当前成本
+    `{}` / `built=false` 时只可能给 `provenance_missing`（"比较不了" ≠ "变了"）；
+  - 新增 `_source_versions_of()`（一律来自记录，绝不用当前值兜）、`_stored_cost()`（只读
+    `packaging_cost.load_cost(..., scenario=记录里的 scenario_code)`，不触发重算）、
+    `_with_handoff_drift()`（挂四个键，支持 `cost_cache`）；
+  - `load_handoff()`：没有记录逐字 `{}`；有记录挂 `stale` / `stale_reasons` / `source_versions` /
+    `cost_unavailable`；
+  - `handoff_versions()`：既有排序与键不动，每条挂同一口径的四个键，同一 (需求单, 场景)
+    当前成本**只读一次**。
+- `tech_app/frontend/requirement-confirm.js`：新增 `pcHandoffDriftBanner()`，成本面板顺带读最近一次
+  回传记录 —— `stale` 为真显示"成本已重算，这一版回传是按旧成本发的，请重新回传"（列原因人话），
+  `cost_unavailable` 非空显示"当前读不到成本，无法核对这一版回传是按哪一版成本发的"。
+
+### 三、复跑
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_handoff_input_drift_red
+# Ran 7 tests ... OK
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_quote_close_loop_red \
+    tests.test_packaging_cost_engine_red
+# Ran 177 tests ... OK
+node --check tech_app/frontend/requirement-confirm.js    # OK
+```
+
+### 四、边界
+
+- Spec §3.2 写的路由名（`…/packaging-handoff`）与实际路由（`…/requirement/packaging-quote`）
+  不一致：两条读路由都返回 `{"handoff": …}` / `{"versions": …}`，新键自动带出，**没有改 `main.py`**。
+  详见 Spec §6.3。
+- 只标记不拒绝：不自动重发 / 不新建版本 / 不改 `send_to_quote()` 幂等口径与 `result_version_of()`
+  算法；未 push / 未建 MR / 未 tag / 未部署 / 未连库 / 未写生产数据。

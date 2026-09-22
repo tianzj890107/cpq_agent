@@ -448,16 +448,93 @@ def _reuse_outcome(row: dict, package: dict) -> dict:
     }
 
 
+def handoff_stale_reasons(record: dict, cost: dict) -> list:
+    """回传记录的输入漂移（Spec `packaging-handoff-input-drift-disclosure.md` §2.1）。
+
+    口径唯一（读接口与列表接口共用这一处），固定顺序 `cost_recomputed` → `provenance_missing`：
+
+    - `cost_recomputed`：记录里的 `cost_result_version` 非空，且当前成本的
+      `result_version_of()` 非空、与之不同；
+    - `provenance_missing`：记录非空但 `cost_result_version` 为空（本批之前发的）；
+    - 当前成本给 `{}` / `built=false`（读不到或没算过）时只允许 `provenance_missing` ——
+      **"比较不了" ≠ "变了"**，此时绝不报 `cost_recomputed`。
+    """
+    if not isinstance(record, dict) or not record:
+        return []
+    stored = _text(record.get("cost_result_version"))
+    if not stored:
+        return ["provenance_missing"]
+    built = isinstance(cost, dict) and bool(cost.get("built"))
+    if not built:
+        return []
+    current = result_version_of(cost)
+    return ["cost_recomputed"] if current and current != stored else []
+
+
+def _source_versions_of(record: dict) -> dict:
+    """这一版回传**按哪一版输入发的**（Spec §2.1）：一律来自记录，绝不用当前值兜。"""
+    return {"cost_result_version": _text(record.get("cost_result_version")),
+            "handoff_version": _text(record.get("handoff_version")),
+            "package_fingerprint": _text(record.get("package_fingerprint"))}
+
+
+def _stored_cost(project_id: str, requirement_no: str, scenario: str) -> tuple:
+    """当前成本：`(成本, 不可用标记)`。**只读**，绝不触发重算（Spec §2.1）。"""
+    try:
+        cost = packaging_cost.load_cost(project_id, requirement_no, scenario=scenario or None)
+    except Exception as exc:                            # noqa: BLE001 - 读不到要披露，不许炸
+        return {}, {"code": "cost_unavailable", "reason": type(exc).__name__}
+    cost = cost if isinstance(cost, dict) else {}
+    if not cost.get("built"):
+        return {}, {"code": "cost_unavailable", "reason": ""}
+    return cost, {}
+
+
+def _with_handoff_drift(record: dict, project_id: str, requirement_no: str, *,
+                        cost_cache: Optional[dict] = None) -> dict:
+    """给一条交接记录挂上漂移结论（Spec §2.1）：四个键都必须存在。"""
+    item = dict(record)
+    scenario = _text(item.get("scenario_code"))
+    cache_key = (requirement_no, scenario)
+    if isinstance(cost_cache, dict) and cache_key in cost_cache:
+        cost, unavailable = cost_cache[cache_key]
+    else:
+        cost, unavailable = _stored_cost(project_id, requirement_no, scenario)
+        if isinstance(cost_cache, dict):
+            cost_cache[cache_key] = (cost, unavailable)
+    reasons = handoff_stale_reasons(item, cost)
+    item["stale"] = bool(reasons)
+    item["stale_reasons"] = reasons
+    item["source_versions"] = _source_versions_of(item)
+    item["cost_unavailable"] = unavailable
+    return item
+
+
 def load_handoff(project_id: str, requirement_no: str = "") -> dict:
-    """最近一次交接记录（没有给 ``{}``，不报错）。"""
-    row = da_repo.load_packaging_handoff(_text(project_id),
-                                         _resolve_requirement_no(project_id, requirement_no))
-    return dict(row or {})
+    """最近一次交接记录（没有给 ``{}``，不报错）。
+
+    新增四个键（Spec `packaging-handoff-input-drift-disclosure.md` §2.1）：`stale` /
+    `stale_reasons` / `source_versions` / `cost_unavailable` —— 读侧把"这一版是按哪一版成本发的"
+    与"现在成本变了没有"说出来（以前只把库里的行原样吐回去）。
+    """
+    req_no = _resolve_requirement_no(project_id, requirement_no)
+    row = da_repo.load_packaging_handoff(_text(project_id), req_no)
+    if not row:
+        return {}                                       # "还没发过"不是"过期"，逐字给 {}
+    return _with_handoff_drift(dict(row), _text(project_id), req_no)
 
 
 def handoff_versions(project_id: str, requirement_no: str = "") -> list:
-    """全部交接版本（新的在前，只增不改）。"""
-    rows = da_repo.packaging_handoffs(_text(project_id),
-                                      _resolve_requirement_no(project_id, requirement_no))
-    return sorted([dict(row) for row in rows],
-                  key=lambda item: int(item.get("version_no") or 0), reverse=True)
+    """全部交接版本（新的在前，只增不改）；每条带与 `load_handoff()` 同一口径的四个新键。
+
+    当前成本**只读一次**（同一 (需求单, 场景) 复用一份），绝不每行读一次库。
+    """
+    req_no = _resolve_requirement_no(project_id, requirement_no)
+    rows = da_repo.packaging_handoffs(_text(project_id), req_no)
+    ordered = sorted([dict(row) for row in rows],
+                     key=lambda item: int(item.get("version_no") or 0), reverse=True)
+    cache: dict = {}
+    return [_with_handoff_drift(row, _text(project_id),
+                                _text(row.get("requirement_no")) or req_no,
+                                cost_cache=cache)
+            for row in ordered]
