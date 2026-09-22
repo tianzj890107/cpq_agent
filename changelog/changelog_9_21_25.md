@@ -17762,3 +17762,42 @@ node --check tech_app/frontend/app.js && node --check tech_app/frontend/inline-a
 ```
 
 未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。
+
+## 417. 落地 `packaging-cad-plan-polyline-segments`：平面图按实体折线画（开口件不再只画包络框）（23 OK，红基 19 红）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_parts.py`：
+
+- 新增常量 `PLAN_SEGMENT_MAX = 24` / `PLAN_SEGMENT_POINTS_MAX = 64` 与**纯函数**
+  `_segment_of()`（折线 `attributes.points` → 直线 `start`+`end` → 样条 `fit_points`；坐标不齐整段丢）、
+  `_decimate()`（均匀抽稀、首尾必留）、`_component_segments()`（`entity_id` 升序、两个上限、
+  `segments_total` 记**截断前**段数、超上限 `truncated: True`）；
+- `extract()` 的 kept 行加 `segments` / `segments_total` / `segments_truncated` 三键并透传到文档行；
+  `geometry_evidence_of()` 每个分量带同样三键（老文档缺键 → `[]` / `0` / `False`）；
+  尺寸 / 角色 / 过滤 / 材料归属口径一字未动。
+
+`tech_app/frontend/app.js`：
+
+- 新增顶层纯函数 `packagingCadPlanSegmentPolylines(component)`（每段一串 `x,-y`，不足 2 点 /
+  坐标不可用的段整段丢）与 `packagingCadPlanTruncationNote(component)`（没截断一个字都不说）；
+- `packagingCadPlanComponentSvg()` 变成三段优先：闭合件 `<polygon>`（**不变**）→ 折线
+  `<polyline>`（每段一条、data 属性与方框**逐字同形**、另带 `data-segment` 与
+  `data-segments-truncated`）→ 包络 `<rect>`（原样兜底）；
+- `packagingBusinessPartOutlineHtml()` 在 `<svg>` 之后追加那句截断说明（去重、
+  `data-qqOutlineTruncated="1"`），面板上"画了一部分"不再看起来像"画全了"。
+
+唯一改到的既有测试：`tests/test_packaging_business_part_plan_click_and_bound_outline_red.py` 的
+node 抽函数**依赖清单**加两个新函数名（夹具，**断言一字未动**）。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_cad_plan_polyline_segments_red  Ran 23  FAILED (failures=19) → Ran 23  OK
+  （红基 19 条：A1–A7 / B1–B3 / C1–C6 / D1 D2 D4；护栏 B4 / D3 / D5 / D6 四条始终绿）
+node --check tech_app/frontend/app.js   OK
+不回归：business_part_plan_click_and_bound_outline + cad_plan_true_outline_polygons +
+        cad_plan_drawing_coordinates + business_parts_and_cad_plan_view + parts_outline +
+        parts_components + parts_extraction   Ran 119  OK (skipped=1)
+packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本批未引入新红
+```
+
+未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。

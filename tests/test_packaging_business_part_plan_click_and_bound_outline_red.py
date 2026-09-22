@@ -60,7 +60,10 @@ function extractConst(name) {
 const names = process.argv[3].split(",");
 const deps = ["esc", "packagingCadPlanRange", "packagingCadPlanViewBox", "packagingCadPlanComponentBox",
               "packagingCadPlanOutlinePoints", "packagingCadPlanComponentSvg",
-              "packagingBusinessPartComponents"];
+              "packagingBusinessPartComponents",
+              // `## 417` 起 `packagingCadPlanComponentSvg()` 多了一支「按实体折线画」，
+              // 依赖清单跟着补两个名字（**只加依赖名，断言一字未动**）。
+              "packagingCadPlanSegmentPolylines", "packagingCadPlanTruncationNote"];
 const bodies = {};
 for (const name of names.concat(deps)) {
   const fn = extract(name);

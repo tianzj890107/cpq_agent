@@ -1891,8 +1891,18 @@ function packagingBusinessPartOutlineHtml(binding, doc) {
   if (!range) return "";
   const drawn = components.map(packagingCadPlanComponentSvg).filter(Boolean).join("");
   if (!drawn) return "";
+  // 折线被截断时在图上补一句（Spec `packaging-cad-plan-polyline-segments.md` §C5）：
+  // 句子只由 `packagingCadPlanTruncationNote()` 产出，这里不另写文案。
+  const notes = [];
+  components.forEach(component => {
+    const note = packagingCadPlanTruncationNote(component);
+    if (note && notes.indexOf(note) < 0) notes.push(note);
+  });
+  const suffix = notes.map(text => `<div class="packaging-part-note"`
+    + ` data-qqOutlineTruncated="1">${esc(text)}</div>`).join("");
   return `<svg class="packaging-part-svg" viewBox="${esc(packagingCadPlanViewBox(range))}"`
-    + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="绑定分量的形状">${drawn}</svg>`;
+    + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="绑定分量的形状">${drawn}</svg>`
+    + suffix;
 }
 
 // SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
@@ -1950,6 +1960,36 @@ function packagingCadPlanOutlinePoints(component) {
   return points.join(" ");
 }
 
+// 件内实体的折线段（Spec `packaging-cad-plan-polyline-segments.md` §C3）：每段一串 `x,-y`
+// （平面图的 viewBox 已翻过 y 轴，与轮廓环点同口径）；不足 2 点 / 有不可用坐标的段整段丢掉。
+function packagingCadPlanSegmentPolylines(component) {
+  const row = component || {};
+  const raw = Array.isArray(row.segments) ? row.segments : [];
+  const lines = [];
+  raw.forEach(segment => {
+    if (!Array.isArray(segment) || segment.length < 2) return;
+    const points = segment.map(point => {
+      if (!Array.isArray(point) || point.length < 2) return "";
+      const x = Number(point[0]);
+      const y = Number(point[1]);
+      return (Number.isFinite(x) && Number.isFinite(y)) ? `${x},${-y}` : "";
+    });
+    if (points.some(item => !item)) return;
+    lines.push(points.join(" "));
+  });
+  return lines;
+}
+
+// 截断就不许装成画全了（Spec `packaging-cad-plan-polyline-segments.md` §C4）：没截断一个字都不说。
+function packagingCadPlanTruncationNote(component) {
+  const row = component || {};
+  if (row.segments_truncated !== true) return "";
+  const shown = packagingCadPlanSegmentPolylines(row).length;
+  const raw = Number(row.segments_total);
+  const total = (Number.isFinite(raw) && raw > 0) ? raw : shown;
+  return `这一件的折线被截断（原 ${total} 段，图上 ${shown} 段），形状仅供定位。`;
+}
+
 function packagingCadPlanComponentSvg(component) {
   const range = packagingCadPlanRange([packagingCadPlanComponentBox(component)]);
   if (!range) return "";
@@ -1966,6 +2006,15 @@ function packagingCadPlanComponentSvg(component) {
   const points = packagingCadPlanOutlinePoints(component);
   if (points) {
     return `<polygon class="packaging-cad-plan-entity" points="${esc(points)}"${attributes}></polygon>`;
+  }
+  // 没有环、但有顶点坐标 → 按实体折线画（Spec `packaging-cad-plan-polyline-segments.md` §C5）：
+  // 高亮 / 缩放 / 点选那套 data 属性与方框**逐字同形**。
+  const lines = packagingCadPlanSegmentPolylines(component);
+  if (lines.length) {
+    const flag = esc(String(component.segments_truncated === true ? 1 : 0));
+    return lines.map((line, index) => `<polyline class="packaging-cad-plan-entity"`
+      + ` points="${esc(line)}" data-segment="${index}"`
+      + ` data-segments-truncated="${flag}"${attributes}></polyline>`).join("");
   }
   return `<rect class="packaging-cad-plan-entity"${attributes}`
     + ` x="${esc(String(range.x))}" y="${esc(String(-range.y2))}"`

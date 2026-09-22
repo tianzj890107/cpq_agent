@@ -56,6 +56,11 @@ REASON_CODES = ("edge_over_max", "area_over_max", "area_under_min", "no_curve_en
 
 PART_CODE_FORMAT = "DWG-P%02d"
 
+#: 平面图折线的两个上限（Spec `packaging-cad-plan-polyline-segments.md` §C1）：超上限**截断 + 披露**。
+#: 每件最多 24 段、每段最多 64 点 —— 真样本 64 件的文档体积因此有界。
+PLAN_SEGMENT_MAX = 24
+PLAN_SEGMENT_POINTS_MAX = 64
+
 
 def _geometry_part_code(index: int) -> str:
     """几何分量的**证据编号**（`DWG-Pnn`）。
@@ -442,6 +447,70 @@ def _options(options: Any) -> Dict[str, float]:
 
 def _layer_key(name: Any) -> str:
     return _text(name).upper()
+
+
+def _segment_of(entity: Any) -> List[List[float]]:
+    """一条实体 → 一段折线点串（**纯函数**，Spec §C1）：只认**已经落盘**的顶点坐标。
+
+    折线 `attributes.points` / 直线 `start`+`end` / 样条 `fit_points` 三种；其余类型（圆、弧、
+    椭圆、填充）今天在 IR 里没有顶点坐标 —— 一段都不出，**不猜**、不拿 bbox 编点。
+    """
+    payload = entity if isinstance(entity, dict) else {}
+    attrs = payload.get("attributes") if isinstance(payload.get("attributes"), dict) else {}
+    raw: Any = None
+    for key in ("points", "fit_points"):
+        candidate = attrs.get(key)
+        if isinstance(candidate, list) and len(candidate) >= 2:
+            raw = candidate
+            break
+    if raw is None:
+        start, end = attrs.get("start"), attrs.get("end")
+        if isinstance(start, (list, tuple)) and isinstance(end, (list, tuple)):
+            raw = [start, end]
+    if not isinstance(raw, list):
+        return []
+    points: List[List[float]] = []
+    for item in raw:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return []
+        x, y = _num(item[0]), _num(item[1])
+        if x is None or y is None or not math.isfinite(x) or not math.isfinite(y):
+            return []
+        points.append([x, y])
+    return points if len(points) >= 2 else []
+
+
+def _decimate(points: List[List[float]], limit: int) -> List[List[float]]:
+    """均匀抽稀到 `limit` 点、**首尾必留**（Spec §C1）：画图用，不作尺寸依据。"""
+    if len(points) <= limit or limit < 2:
+        return points
+    step = (len(points) - 1) / float(limit - 1)
+    return [points[int(round(index * step))] for index in range(limit)]
+
+
+def _component_segments(members: Any) -> Dict[str, Any]:
+    """件内所有实体的折线段（**纯函数**，Spec §C1）：确定性、有上限、不抛错。
+
+    顺序按 `entity_id` 升序；段数 / 每段点数超上限就截断并把 `truncated` 置真 ——
+    截断了必须**说得出来**（前端据此渲染那句人话）。
+    """
+    rows = [item for item in members if isinstance(item, dict)] if isinstance(members, list) else []
+    rows.sort(key=lambda item: (_text(item.get("entity_id")), _text(item.get("handle"))))
+    segments: List[List[List[float]]] = []
+    truncated = False
+    for item in rows:
+        points = _segment_of(item)
+        if not points:
+            continue
+        if len(points) > PLAN_SEGMENT_POINTS_MAX:
+            points = _decimate(points, PLAN_SEGMENT_POINTS_MAX)
+            truncated = True
+        segments.append(points)
+    total = len(segments)
+    if total > PLAN_SEGMENT_MAX:
+        segments = segments[:PLAN_SEGMENT_MAX]
+        truncated = True
+    return {"segments": segments, "segments_total": total, "truncated": truncated}
 
 
 def _bbox_of(component: Dict[str, Any], entities: List[Dict[str, Any]]) -> Optional[List[float]]:
@@ -1674,8 +1743,13 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         refs = [str(entity.get("evidence_ref") or "") for entity in curves]
         refs += ["ev:L:%s" % name for name in layer_names]
         evidence_refs = sorted({ref for ref in refs if ref and ref in known})
+        # 平面图折线（Spec `packaging-cad-plan-polyline-segments.md` §C2）：实体顶点坐标的顺序连线。
+        plan_segments = _component_segments(members)
         kept.append({
             "component_id": component_id,
+            "segments": plan_segments["segments"],
+            "segments_total": plan_segments["segments_total"],
+            "segments_truncated": plan_segments["truncated"],
             "entity_ids": sorted(set(entity_ids)),
             "entity_total": len(entity_ids),
             "bbox": bbox,
@@ -1766,6 +1840,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "kind_index": int(kind_index_of.get(kind_key, 0)),
             "outline_status": row["outline_status"],
             "outline": row["outline"],
+            # 平面图折线（Spec §C2）：开口件据此画折线，闭合件仍优先画环点。
+            "segments": row["segments"],
+            "segments_total": row["segments_total"],
+            "segments_truncated": bool(row["segments_truncated"]),
             "outline_reason": row["outline_reason"],
             "outline_diagnosis": row["outline_diagnosis"],
             "size_source": row["size_source"],
@@ -3266,6 +3344,11 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             # 只给画多边形用；开口件这里是 None（不许拿包络编点冒充轮廓）。
             "outline_points": (row.get("outline") or {}).get("points")
                               if _text(row.get("outline_status")) == "closed" else None,
+            # 件内实体的折线段（Spec `packaging-cad-plan-polyline-segments.md` §C2）：开口件据此画
+            # 折线，不再只画包络框；闭合件仍优先画环点（`outline_points`）。
+            "segments": list(row.get("segments") or []),
+            "segments_total": int(_num(row.get("segments_total")) or 0),
+            "segments_truncated": bool(row.get("segments_truncated")),
             # 件的权威尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
             "unfolded_length_mm": row.get("unfolded_length_mm"),
             "unfolded_width_mm": row.get("unfolded_width_mm"),
