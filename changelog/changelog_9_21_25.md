@@ -13070,3 +13070,65 @@ tests/test_packaging_*.py（55 份）                              → Ran 1304 
    候选是 `BOX-BEST`（C 组），逐字比较下 C2 必然判成"没有模板"。因为"有没有模板"同时被候选
    可运行性与 BOM 展开使用、两处必须同答案，容忍放在**唯一那个取数函数**里（不是另写一套判据）。
    真实编码写法一致时这条容忍不发生作用。
+
+## 325. 行序改了、P0 评测案例还在断言旧顺序：更新那条数据案例（5 红转绿）+ 记下 CI 依赖契约的 2 条测试侧红（9-22，Codex 实现）
+
+### 一、怎么发现的
+
+把全量 `tests/`（273 份）一次跑完：`Ran 4914 tests … FAILED (failures=17, skipped=24)`。17 条里
+**10 条是此前已记录的偏差**（`## 133`/`## 226`/`## 256`/`## 262`/`## 266`/`## 272`/`## 273`/`## 316`/
+`## 324`），另外 **7 条属于 cpq_eval 评测脚手架**这一路，此前没有任何 changelog 记过：
+
+| 红 | 条数 | 真因 |
+| --- | --- | --- |
+| `test_cpq_eval_runner`（`layer_deterministic_green` / `domain_and_priority_and_case_filters` / `offline_layers_never_open_network`）+ `test_cpq_eval_business_cases`（`offline_run_never_touches_the_network` / `production_backed_cases_execute_real_production_entry`） | 5 | 全部来自**同一条**数据集案例 `history.real.legacy_project_projection_keeps_five_phases_thirteen_stages`：它断言 `stages.3.stage_id == "drawing"` —— 那是 `## 320` 之前的行序 |
+| `test_cpq_eval_ci_contract`（`dependency_closure_is_not_trivially_equal_to_declared` / `every_production_import_has_a_requirement`） | 2 | 测试侧（见 §四） |
+
+### 二、改了什么（只 2 处，都不在 `tests/` 下）
+
+1. `dataset/evals/cpq/cases/session_history/production_legacy_and_history.json`：把 index 3 的
+   `drawing` 改成 `requirement-review`，并**新增** index 1 `drawing`、index 2 `requirement-confirm`。
+   这不是放宽：改前只有一处按旧序（`stages.3 == drawing`）校验，改后把
+   `0 requirement-create → 1 drawing → 2 requirement-confirm → 3 requirement-review` 四格逐格钉死，
+   「图纸解析必须早于确认/审核」这条依赖从此在案例里显式可判。
+   依据 `docs/specs/packaging-stage-order-equals-dependency.md`（已实现；行序
+   `requirement-create → drawing → requirement-confirm → requirement-review → process → cost → summary →
+   report-review → report-publish`）。`dataset/evals/cpq/**` 是**实施侧的期望数据**（不是 `tests/`），
+   行序是它跟随的对象；`stages.4/6/7/10/11/12` 六个锚点在改序后本来就仍成立，未动。
+2. 本 changelog。
+
+### 三、实测
+
+```
+tests.test_cpq_eval_runner tests.test_cpq_eval_business_cases
+tests.test_cpq_eval_dataset_contract tests.test_cpq_eval_coverage
+tests.test_cpq_eval_executor_declaration                        → Ran 88 OK（原 5 红全绿）
+tests.test_cpq_eval_route_coverage tests.test_cpq_eval_production_backed
+tests.test_cpq_eval_pg_guard tests.test_cpq_eval_pg_schema
+tests.test_cpq_eval_ci_contract                                 → Ran 73 … 2 红（见 §四）
+```
+
+全量从此为 `12 红`（10 条已记录偏差 + 本条目 §四 的 2 条）。
+
+### 四、已记录的偏差（测试侧，不改 `tests/`）
+
+1. `test_cpq_eval_ci_contract::test_dependency_closure_is_not_trivially_equal_to_declared`：
+   `assertNotIn("numpy", closure)` 在 `requirements.txt:17` 声明 `ezdxf==1.4.4`（`## 184` 引入 ezdxf，
+   DWG 必需）之后**必红** —— `importlib.metadata.requires("ezdxf")` 返回的就是 `["numpy"]`，硬依赖，
+   与 extras 开关无关。断言原文的注解（「openai 不装 numpy / pandas」）只对 openai 成立。
+   要转绿只能改这条断言（或去掉 ezdxf），两者都不该做。
+2. `test_cpq_eval_ci_contract::test_every_production_import_has_a_requirement`：
+   `setUpClass` 用 `requirement_names()`（**只有声明名、没有 extras**）喂给 `covered_distributions()`，
+   于是 `requirements.txt:10` 的 `psycopg[binary]` 带进来的 `psycopg-binary` 被判「缺出处」；
+   本机还额外装了 root 清单**故意不声明**的可选重依赖（cadquery 及 multimethod / nlopt / typish，
+   见 `requirements.txt:43-47` 的注释）。
+   实测（把 cadquery 系列按干净镜像的形态屏蔽后重算）：`missing` 只剩
+   `[('psycopg_binary', ['psycopg-binary'])]` —— 也就是说 CI（`python:3.10-slim` + 只装
+   `requirements.txt`）里这条 extras 判定同样必红，而 cadquery 那 4 条只在本机出现。
+   **没有**为了让这两条变绿去改 `requirements.txt`（往清单里塞 cadquery / 重复声明 psycopg-binary
+   都属于绕开测试口径）或改 `tests/`。
+
+### 五、边界
+
+本批只改上述 1 个数据集文件与本 changelog；未改任何测试、未改 `tests/`、未连 PG、未写业务数据、
+未 push / MR / tag / Release、未部署。
