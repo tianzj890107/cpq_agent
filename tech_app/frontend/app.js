@@ -1727,6 +1727,8 @@ const PACKAGING_CAD_PLAN_LABEL = "CAD 平面图";
 const PACKAGING_CAD_PLAN_ALIASES = ["包装展开图", "包装刀模图"];
 const PACKAGING_CAD_PLAN_UNBOUND = "几何证据，尚未归属业务部件";
 const PACKAGING_CAD_PLAN_EMPTY = "这份图纸还没有可显示的 CAD 图元。";
+// 有图元但一个坐标都没有（证据层还没带上绘图包络）时的空态：不许留一块空白画布。
+const PACKAGING_CAD_PLAN_NO_COORDS = "这批零件还没有图纸坐标，暂时画不出平面图（坐标要等 CAD IR 把折线顶点带进来）。";
 const PACKAGING_CAD_LAYER_COLORS = {
   cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
   glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
@@ -1769,6 +1771,16 @@ function packagingCadPlanRange(boxes) {
            width: Math.max(box[2] - box[0], 1e-6), height: Math.max(box[3] - box[1], 1e-6) };
 }
 
+// 一件图元的画图框（Spec `packaging-cad-plan-drawing-coordinates.md` §C3）：
+// `drawing_bbox` 是图纸坐标系里的包络，`bbox` 只是老文档/技术链路的兜底；都没有回 null（不猜）。
+function packagingCadPlanComponentBox(component) {
+  const row = component || {};
+  const raw = row.drawing_bbox || row.bbox;
+  if (!Array.isArray(raw) || raw.length < 4) return null;
+  const values = raw.slice(0, 4).map(Number);
+  return values.some(value => !Number.isFinite(value)) ? null : values;
+}
+
 // SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
 function packagingCadPlanViewBox(range) {
   if (!range) return "0 0 1 1";
@@ -1809,7 +1821,7 @@ function highlightPackagingBusinessPart(partCode, entity_ids) {
 }
 
 function packagingCadPlanComponentSvg(component) {
-  const range = packagingCadPlanRange([component && component.bbox]);
+  const range = packagingCadPlanRange([packagingCadPlanComponentBox(component)]);
   if (!range) return "";
   const role = String((component && component.role) || "unknown");
   const color = PACKAGING_CAD_LAYER_COLORS[role] || PACKAGING_CAD_LAYER_COLORS.unknown;
@@ -1845,7 +1857,12 @@ function renderPackagingCadPlan(doc) {
     host.innerHTML = `<div class="view-3d-placeholder">${esc(gap.message || PACKAGING_CAD_PLAN_EMPTY)}</div>`;
     return null;
   }
-  currentPackagingCadPlanBox = packagingCadPlanRange(components.map(item => item.bbox));
+  currentPackagingCadPlanBox = packagingCadPlanRange(components.map(packagingCadPlanComponentBox));
+  if (!currentPackagingCadPlanBox) {
+    // Spec §C4：有分量、却一个坐标都没有 —— 说清原因，不留空白。
+    host.innerHTML = `<div class="view-3d-placeholder">${esc(PACKAGING_CAD_PLAN_NO_COORDS)}</div>`;
+    return null;
+  }
   const drawn = components.map(packagingCadPlanComponentSvg).filter(Boolean).join("");
   const total = Number(evidence.component_total || components.length) || components.length;
   const hasBusinessParts = Boolean((doc && doc.business_parts) || []).length;

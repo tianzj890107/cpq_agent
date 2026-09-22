@@ -3165,6 +3165,10 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             "component_id": _text(row.get("component_id")),
             "entity_ids": list(row.get("entity_ids") or []),
             "bbox": row.get("bbox"),
+            # 图纸坐标系里的包络（Spec `packaging-cad-plan-drawing-coordinates.md` §C1）：
+            # 闭合件取环的包络、开口件取分量包络；**只给画图**，不参与绑定尺寸（§C2）。
+            "drawing_bbox": (row.get("outline") or {}).get("bbox")
+                            if isinstance(row.get("outline"), dict) else None,
             # 件的权威尺寸（Spec §C1/C2）：闭合取环、开口退回 bbox，两者都在这两个字段上。
             "unfolded_length_mm": row.get("unfolded_length_mm"),
             "unfolded_width_mm": row.get("unfolded_width_mm"),

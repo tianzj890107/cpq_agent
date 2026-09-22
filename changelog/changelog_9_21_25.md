@@ -16026,3 +16026,51 @@ tests/test_packaging_*.py 全域（83 个模块）→ Ran 1549, failures=5, skip
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未改前端、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+## 371. 2.1 右栏「CAD 平面图」恒空白：证据层没把**绘图坐标**带出来（按分量 bbox 画，而 `parts` 行没有这个键）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_cad_plan_drawing_coordinates_red`：实现前 `Ran 12, failures=7`，
+实现后 `Ran 12 OK`。
+
+### 一、缺口（真样本实测，不是推断）
+
+1. `extract()` 的 263 件**每一件**都在 `outline.bbox` 里带着图纸坐标系的包络
+   （`263/263`）；`parts` 行**没有** `bbox` 键。
+2. `geometry_evidence_of()` 只透传 `row.get("bbox")` → 证据层 `bbox` 恒为 `null` →
+   `packagingCadPlanComponentSvg()` 每件都返回空串 → 2.1 右栏「CAD 平面图」画 **0 个矩形**：
+   既不是加载中，也不是空态，而是一块空白画布。
+3. 263 件的 `outline.bbox` 边长与 `unfolded_length_mm/width_mm` **逐件相等**（误差 > 0.01mm 的
+   0 件）—— 绘图坐标与件尺寸同源，所以"画图用绘图坐标、绑定仍用件尺寸"不会产生第二套几何。
+
+### 二、改了什么（2 个文件）
+
+- `tech_app/backend/services/packaging_parts.py`：`geometry_evidence_of()` 每件新增
+  `drawing_bbox`（取自 `row["outline"]["bbox"]`，行上没有就是 `null`）。**`bbox` 的语义不动** ——
+  它是 `## 370` 刚定的"绑定判据兜底尺寸来源"，不许被绘图坐标污染（未确认单位的行只有 `null`，
+  否则绑定会拿原始坐标去对业务尺寸）。
+- `tech_app/frontend/app.js`：新增 `packagingCadPlanComponentBox(component)` 作为"取画图框"的
+  **唯一**入口（`drawing_bbox` → `bbox` → `null`），`packagingCadPlanComponentSvg()` 与
+  `renderPackagingCadPlan()` 都改走它；新增空态常量 `PACKAGING_CAD_PLAN_NO_COORDS`
+  （有分量但一个坐标都没有时显示，不留空白）。视图翻转、缩放、按绑定分量高亮、`#viewer` 的
+  技术侧 3D 全部未动。
+
+### 三、复跑
+
+```
+tests.test_packaging_cad_plan_drawing_coordinates_red  → Ran 12 OK（实现前 Ran 12, failures=7）
+node --check tech_app/frontend/app.js                  → 通过
+本次相邻 10 个模块合计                                  → Ran 181 OK
+tests/test_packaging_*.py 全域（84 个模块）→ Ran 1561, failures=5, skipped=8
+（5 条仍是 B3 / B4 / A2 / F2 / C1 那批既有挂账，与本批无关）
+```
+
+### 四、已记录的边界（不改测试）
+
+1. 仍是**一件一个矩形**：真图 402 个连通分量 / 5598 条开放轮廓，逐段折线要等 CAD IR 把折线顶点
+   透传进证据层（`parser.py` 已落 `attributes.points`，证据层还没带）。
+2. 老文档（零件行没有 `outline.bbox`）→ `drawing_bbox` 为 `null` → 该件不画，页面按空态如实说明，
+   不猜坐标。
+3. 本批未动绑定判据/状态机/容差/原因码（`## 370` 的落点），也未动权限、路由与接口形状。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
