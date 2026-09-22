@@ -173,15 +173,39 @@ def installed_names() -> list:
     return names
 
 
+#: AppImage 形态的入口名：ODA 官方 Linux 包解包后入口就叫 `AppRun`，**文件名本身不含 "oda"**，
+#: 只能从整条路径里的安装目录名认出来（34 的部署路径就是
+#: `/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun`，见 `deploy_34_bare.sh`）。
+#: 认不出来的后果不是"更保守"，而是**假告警**：`provider_of_binary()` 回空 → 转换链把
+#: "argv 形状未经真机验证" 写进每一份解析结果的 warnings，而同一份结果里 `argv_verified` 又是 true。
+APPIMAGE_ENTRY_NAMES: Tuple[str, ...] = ("apprun",)
+
+#: 路径里出现这些标记时，AppImage 入口归到哪个驱动（顺序即优先级）。
+APPIMAGE_PATH_MARKERS: Tuple[Tuple[str, str], ...] = (
+    ("teigha", "oda_file_converter"),
+    ("oda", "oda_file_converter"),
+    ("dwgread", "libredwg_dwgread"),
+    ("libredwg", "libredwg_dwg2dxf"),
+)
+
+
 def driver_of(provider: str, binary: str) -> str:
     """确定该二进制该用哪套 argv。文件名能细化时以文件名为准。"""
-    base = Path(str(binary or "")).name.lower()
+    path = str(binary or "")
+    base = Path(path).name.lower()
     if "dwgread" in base:
         return "libredwg_dwgread"
     if "dwg2dxf" in base:
         return "libredwg_dwg2dxf"
     if "oda" in base or "teigha" in base:
         return "oda_file_converter"
+    if base in APPIMAGE_ENTRY_NAMES:
+        # 入口名没有判别力（AppRun），改用路径里的**目录名**；仍认不出才回落到显式 provider。
+        # 按"目录名以标记开头"匹配（不是无脑子串）：`oda-file-converter-27.1` ✓、`soda` ✗。
+        for part in (item.lower() for item in Path(path).parts):
+            for marker, driver in APPIMAGE_PATH_MARKERS:
+                if part.startswith(marker):
+                    return driver
     return PROVIDER_DRIVERS.get(str(provider or "").strip().lower(), "")
 
 

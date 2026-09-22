@@ -11426,3 +11426,53 @@ POST http://127.0.0.1:8012/api/file/parse   （name=酒盒.dwg，data=base64(真
 
 - 只读验证：不建项目、不写需求/零件/成本记录、不连 PG；转换产物落在统一解析服务自己的隔离解析项目目录。
 - 未改任何代码（本轮只跑 + 记录）。
+
+## 297. 34 的 ODA 是 AppImage 形态（入口 `AppRun`）：文件名认不出 → 每次 DWG 解析都带一条假告警（9-22，Codex 实现）
+
+### 缺口（34 真机实测，同一份进程里两条事实互相打架）
+
+```
+DWG_CONVERTER_PROVIDER=oda
+DWG_CONVERTER_BINARY=/home/data/cpq-tools/oda-file-converter-27.1/squashfs-root/AppRun   ← deploy_34_bare.sh 写的就是它
+primary: {"provider":"oda","driver":"oda_file_converter","argv_verified":true,
+          "note":"unknown_converter_binary：无法从 AppRun 的文件名识别转换器类型，argv 形状未经真机验证"}
+chain.warnings: ["…argv 形状未经真机验证"]
+```
+
+`local_cli.driver_of()` 只按 basename 找 `oda` / `teigha` / `dwg2dxf` / `dwgread`，而 AppImage 的入口名
+是 `AppRun`（判别信息在**安装目录名** `oda-file-converter-27.1` 里）→ `provider_of_binary()` 回空 →
+`_resolve_one()` 记一条 note → `_resolve_chain()` 收进 `warnings` → `convert_drawing()` 的 manifest →
+统一解析服务的响应 `warnings`。**用户每解析一份 DWG 都会看到它**，而且内容和同一份结果里的
+`argv_verified=true` 说反了（走的就是 ODA 那套真机验证过的 argv）。
+
+### 实现（只改路径判别）
+
+- 新 Spec `docs/specs/converter-binary-name-recognition.md`（C1–C5）；守卫
+  `tests/test_converter_binary_name_recognition_red.py`（9 条，`Ran 9 OK`）。
+- `local_cli.py`：新增 `APPIMAGE_ENTRY_NAMES=("apprun",)` 与
+  `APPIMAGE_PATH_MARKERS=(("teigha","oda_file_converter"),("oda","oda_file_converter"),
+  ("dwgread","libredwg_dwgread"),("libredwg","libredwg_dwg2dxf"))`；`driver_of()` 在 basename 没有
+  判别力时改看**路径的每一段目录名**，按「段名以标记开头」匹配（`oda-file-converter-27.1` ✓、
+  `soda` ✗），仍认不出才回落显式 provider。
+
+修完的实测（本机复现同形路径）：
+
+```
+ODA AppImage: {"provider":"oda","driver":"oda_file_converter","note":"","argv_verified":true,"warnings":[]}
+认不出的名字: {"note":"unknown_converter_binary：…未经真机验证","warnings":["…"]}   ← 仍然告警，没有静默
+```
+
+### 保护网（改完即跑）
+
+```
+test_dwg_conversion_adapter_red / test_dwg_conversion_quality_repair_red /
+test_dwg_converter_production_rollout_red / test_dwg_file_capability_preflight_red /
+test_dwg_capability_truth_red / test_quick_quote_parse_service_red
+  → Ran 180 OK（skipped=3）
+```
+
+### 边界
+
+未动 `DRIVERS` 的 argv 形状与 `argv_verified` 取值、未动 `service.py` 的 note/告警管线、未动版本探测与
+回退链判据、未动任何错误码；显式给 binary 时 `provider` 字段保留配置原值（`auto` 还是 `auto`）这条既有
+口径也不改（Spec §3 已写明）。
