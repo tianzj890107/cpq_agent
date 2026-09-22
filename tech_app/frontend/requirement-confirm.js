@@ -351,6 +351,55 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     if (key === 'dwg_outline') return '图纸自带包围盒（这一件没有可用坐标）';
     return '';
   }
+  // 材料码缺口的人话与逐行清单（Spec `packaging-material-unresolved-panel.md` §C1）：
+  // 后端给的是**闭集**三档原因，前端只翻译、绝不替后端猜行外归因。
+  function pbMaterialReasonLabel(reason) {
+    const labels = {
+      map_key_missing: '映射表里还没有这条原文',
+      map_entry_not_applied: '映射表里写了，但这一版没生效',
+      map_unknown: '映射表读不到，这次没能判定'
+    };
+    return labels[String(reason || '')] || '原因未知（后端没有给出原因档）';
+  }
+  function pbMaterialUnresolvedRows(gaps) {
+    const scope = (gaps && typeof gaps === 'object' && !Array.isArray(gaps)) ? gaps : {};
+    const detail = Array.isArray(scope.material_unresolved_detail) ? scope.material_unresolved_detail : null;
+    const rows = [];
+    if (detail) {
+      detail.forEach(entry => {
+        const item = (entry && typeof entry === 'object') ? entry : {};
+        const key = String(item.item_key || '').trim();
+        if (!key) return;  // 空项跳过：不许造无名行。
+        rows.push({key: key, label: pbMaterialReasonLabel(item.reason), action: String(item.action || '').trim()});
+      });
+      return rows;
+    }
+    const fallback = Array.isArray(scope.material_unresolved) ? scope.material_unresolved : null;
+    if (!fallback) return [];
+    fallback.forEach(value => {
+      const key = String(value || '').trim();
+      if (!key) return;
+      // 退回旧清单时**只**有行名 —— 不编原因、不编动作。
+      rows.push({key: key, label: pbMaterialReasonLabel(''), action: ''});
+    });
+    return rows;
+  }
+  function pbMaterialUnresolvedHint(gaps) {
+    const count = pbMaterialUnresolvedRows(gaps).length;
+    return count ? `解析不到材料码 ${count} 行：下面逐条给出原因与补齐办法。` : '';
+  }
+  function pbMaterialMapNote(scope) {
+    const facts = (scope && typeof scope === 'object' && !Array.isArray(scope)) ? scope : {};
+    const unavailable = (facts.map_unavailable && typeof facts.map_unavailable === 'object') ? facts.map_unavailable : null;
+    if (unavailable && Object.keys(unavailable).length) {
+      const message = String(unavailable.message || '').trim();
+      // 逐字转达后端的 message（不许换个说法），并说明这一次的解析口径没变。
+      return message ? `${message}；本次材料码只按既有规则解析。`
+        : '材料原文映射表读不到：本次材料码只按既有规则解析。';
+    }
+    const hits = Number(facts.map_hit_total || 0);
+    return hits > 0 ? `材料码映射表命中 ${hits} 行。` : '';
+  }
   function pbRow(item, writable, staleMap, markMap) {
     const status = String(item.status || 'computed');
     const stale = (staleMap || {})[String(item.item_key || '')] || null;
@@ -440,13 +489,21 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
           <ul class="pb-list">${items.filter(item => item.bom_category === category).map(item => pbRow(item, writable, staleMap, markMap)).join('')}</ul>
         </section>`).join('')
       : '<div class="pb-empty">还没有包装 BOM，先在盒型匹配里确认盒型，再点「展开部件并生成 BOM」。</div>';
-    const unresolved = (gaps.material_unresolved || []).length
-      ? `<div class="pb-hint">解析不到材料码（已在库外）：${pbEsc(gaps.material_unresolved.join('、'))}</div>` : '';
+    // 材料码缺口（Spec `packaging-material-unresolved-panel.md` §C2）：逐行给原因 + 补齐办法；
+    // `gaps.material_unresolved` 仍是"哪些行没解析出来"的**唯一**依据（这里只渲染，不重算）。
+    const unresolvedRows = pbMaterialUnresolvedRows(gaps);
+    const unresolved = unresolvedRows.length
+      ? `<div class="pb-hint" data-pb-material-unresolved="${unresolvedRows.length}">${pbEsc(pbMaterialUnresolvedHint(gaps))}
+        <ul class="pb-list">${unresolvedRows.map(row => `<li class="pb-item" data-pb-material-unresolved-key="${pbEsc(row.key)}"><span class="pb-key">${pbEsc(row.key)}</span><span class="pb-name">${pbEsc(row.label)}</span>${row.action ? `<div class="pb-missing">${pbEsc(row.action)}</div>` : ''}</li>`).join('')}</ul></div>`
+      : '';
+    const mapNote = pbMaterialMapNote(record.business_material_rows);
+    const mapBlock = mapNote ? `<div class="pb-hint" data-pb-material-map="1">${pbEsc(mapNote)}</div>` : '';
     return `<section class="card section pb-panel" id="packagingBomPanel">
       <h2>部件展开与包装 BOM${boxTypeCode ? `（${pbEsc(boxTypeCode)}）` : ''}</h2>
       <div class="pb-hint">按第 4 批确认的盒型参数化展开：共 ${pbEsc(stats.total || 0)} 行 · 已算出 ${pbEsc(stats.computed || 0)} · 缺输入 ${pbEsc(stats.needs_input || 0)} · 已锁定 ${pbEsc(stats.locked || 0)}。尺寸按公式求值，缺变量一律留空交工艺经理补。`
       + `${partsHash ? `零件文档版本：${pbEsc(partsHash.slice(0, 12))}。` : ''}</div>
       ${unresolved}
+      ${mapBlock}
       ${mixedBanner}
       ${unknownBoxBanner}
       ${bboxBanner}

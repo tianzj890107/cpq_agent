@@ -17912,3 +17912,32 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 - **不回归**：BOM / 语义 / 成本 6 个套件 `Ran 261 … OK (skipped=1)`；**packaging 全域**
   `Ran 2158 … FAILED (failures=5, skipped=8)` —— 正是既有 5 条挂账。
 - 未连 PG / 34、未写业务数据（`entries` 留给业务签字）、未 push / MR / tag / Release / 部署。
+
+## 422. 落地 `packaging-material-unresolved-panel`：BOM 面板上「解析不到材料码」逐行给原因 + 逐行给补齐办法（31 OK，红基 27 红）（9-22，Codex 实现）
+
+- **Spec**：`docs/specs/packaging-material-unresolved-panel.md`（唯一权威，C1–C3 + §6 边界）；
+  依赖 `packaging-business-material-code-map.md`（`## 421` 已在接口上给出 `reason` + `action`
+  与那把映射账，§6 边界 4 把"界面接入"记为下一批 —— 本批就是那一批）。
+- **红测**：`tests/test_packaging_material_unresolved_panel_red.py`（31 条，A–G 七组；A/B/C/D 四组用
+  `node -e` 抽闭包内具名函数**真跑**，不是 grep；G 组 `node --check`）。
+- **C1 四个纯函数**（包装 BOM 面板 IIFE 内，`pbRow()` 之前，体内无 DOM / `fetch(` / `storage`）：
+  `pbMaterialReasonLabel()`（三档原因 → 人话，闭集外一律 `原因未知（后端没有给出原因档）`，
+  未知档不许被说成已知三档）、`pbMaterialUnresolvedRows()`（`material_unresolved_detail`
+  优先：`item_key` 空项跳过、`label` 由原因档翻、`action` 逐字 trim；没有 `detail` 退回
+  `material_unresolved` 只给行名 + 未知档 + 空动作 —— **退回不等于编原因**；两键都不是数组 → `[]`；
+  行数只由真数据决定）、`pbMaterialUnresolvedHint()`（行数逐字来自真数据）、
+  `pbMaterialMapNote()`（`map_unavailable` 非空 → 后端 `message` **逐字**转达并说明本次仍按既有
+  分词规则解析；否则 `map_hit_total > 0` → `材料码映射表命中 N 行`；否则 `""`）。
+- **C2 面板**：`pbPanel()` 原 `:443-444` 那句 `解析不到材料码（已在库外）：…` 整段替换为
+  `data-pb-material-unresolved="<行数>"` 块（逐行 `data-pb-material-unresolved-key="<item_key>"`
+  + `label` + 非空 `action`）+ `data-pb-material-map="1"` 备注块（空则不渲染）；既有 banner
+  （混盒型 / 盒型未知 / 包围盒 / 过期 / 零件文档读不到）与 `pbRow()` **一字未动**。
+- **C3 冻结面**：`gaps.material_unresolved` 仍是"哪些行没解析出来"的唯一依据（前端不按
+  `material_code` 重算清单、不把 `detail` 变成新行来源）；未新增接口、未改后端与 `index.html`、
+  未加依赖；"已在库外"这句猜测从源码里彻底消失（红测 F2 全仓扫）。
+- **红基**：`Ran 31 … FAILED (failures=27)` = 27 红 / 4 绿（4 绿是「既有 banner 未动 /
+  面板不发请求 / `pbRow()` 未变 / `node --check`」护栏）；**实现后** `Ran 31 … OK`。
+- **不回归**：Spec §5 点名的 5 个套件 `Ran 140 … OK`；同一个 `requirement-confirm.js` 上的
+  其它面板批次 8 个套件 `Ran 195 … OK`；`test_spec_status_truth_red` `Ran 7 … OK`；
+  `node --check tech_app/frontend/requirement-confirm.js` 退出码 0。
+- 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
