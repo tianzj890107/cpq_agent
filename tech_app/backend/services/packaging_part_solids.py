@@ -386,6 +386,33 @@ def _load_items(project_id: str) -> List[Dict[str, Any]]:
     return [item for item in (items or []) if isinstance(item, dict)]
 
 
+#: 「这份 3D 结论还跟得上当前零件文档吗」的稳定原因码（Spec
+#: `packaging-solids-parts-version-binding.md` §2.1）：`""` = 跟得上（或不适用）。
+STALE_REASONS = ("parts_reparsed", "parts_unknown")
+
+
+def solids_stale_reason(record: Any, current_parts_id: Any) -> str:
+    """3D 结论的零件版本漂移原因 —— **唯一判据点**（Spec §2.1）。
+
+    - 记录里没有 `parts_id`（本批之前落的结论）→ `parts_unknown`；
+    - `current_parts_id` 为空（当前零件文档读不到 / 没解析过）→ `parts_unknown`；
+    - 两者都有且不同 → `parts_reparsed`；
+    - 相同 → `""`。
+
+    "比较不了"一律 `parts_unknown`，**不许**当成"过期"或"没过期"（与
+    `packaging-bom-parts-version-binding.md` / `packaging-cost-input-version-pinning.md` 同一纪律）。
+    """
+    stored = ""
+    if isinstance(record, dict):
+        stored = str(record.get("parts_id") or "")
+    current = str(current_parts_id or "")
+    if not stored or not current:
+        return "parts_unknown"
+    if stored != current:
+        return "parts_reparsed"
+    return ""
+
+
 def save_solids(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
     """落一版固体文档。版本号只增不改：同内容重复落库也长版本号（每版可回看）。"""
     if not isinstance(doc, dict):

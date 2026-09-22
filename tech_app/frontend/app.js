@@ -1662,7 +1662,30 @@ function packagingSolidCoverageText(doc) {
   const concluded = rows.filter(row => String((row && row.solid_status) || ""));
   if (!concluded.length) return "3D 覆盖率未生成（还没跑过批量挤出）。";
   const ok = concluded.filter(row => String(row.solid_status) === "ok").length;
-  return `3D 覆盖率 ${Math.round(ok / rows.length * 100)}%（${ok}/${rows.length} 件可挤出）`;
+  const text = `3D 覆盖率 ${Math.round(ok / rows.length * 100)}%（${ok}/${rows.length} 件可挤出）`;
+  // 这份 3D 是不是**当前这一版零件**算的（Spec `packaging-solids-parts-version-binding.md` §2.3）：
+  // 换版要说出来、比较不了也要说出来 —— 不许继续按"有 3D"的样式展示。
+  return text + packagingSolidsStaleText(doc);
+}
+
+//: 3D 结论的版本对账人话（Spec `packaging-solids-parts-version-binding.md` §2.3）。
+function packagingSolidsStaleText(doc) {
+  const reason = String((doc && doc.solids_stale_reason) || "");
+  if (!reason) return "";
+  if (reason === "parts_unknown") return "；无法判断这份 3D 对应哪一版零件（没有留下版本），请重新生成后再用";
+  if (doc && doc.solids_stale) {
+    return `；这份 3D 是上一版零件算的（${reason}），请重新生成后再用`;
+  }
+  return "";
+}
+
+//: 逐件行上的一句话（同上）：`stale` 为真 = 这一件的 3D 是上一版零件算的。
+function packagingPartSolidStaleText(part) {
+  const reason = String((part && part.stale_reason) || "");
+  if (!reason || !(part && part.stale)) {
+    return reason === "parts_unknown" ? "3D：无法判断对应哪一版零件" : "";
+  }
+  return `3D 是上一版零件算的（${reason}），请重新生成`;
 }
 
 // 整份零件文档一次算完：POST .../requirement/packaging-parts/solids。
@@ -2823,6 +2846,9 @@ function renderTree(ir) {
     coverage.className = "packaging-solid-coverage";
     coverage.dataset.qqSolidCoverage = "1";
     coverage.textContent = packagingSolidCoverageText(doc);
+    if (doc.solids_stale_reason) {
+      coverage.dataset.solidsStale = String(doc.solids_stale_reason);
+    }
     const batch = document.createElement("button");
     batch.id = "packagingPartsSolidBatch";
     batch.className = "btn btn-secondary";
@@ -2841,10 +2867,15 @@ function renderTree(ir) {
       row.addEventListener("click", () => openPackagingPartInBoard(part.part_code || ""));
       const layers = Array.isArray(part.layers) ? part.layers.join(" / ") : "";
       const size = packagingPartSizeText(part);
+      // 这一件的 3D 是不是当前这一版零件算的（Spec `packaging-solids-parts-version-binding.md`
+      // §2.3）：过期行必须把这句话放在行上，不许让页面照旧显示"有 3D"。
+      const solidStale = packagingPartSolidStaleText(part);
+      if (solidStale) row.dataset.solidStale = String(part.stale_reason || "");
       row.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
         + `<div class="part-info"><div class="part-name">${esc(part.part_code || "")} `
         + `${esc(part.name || "")}</div><div class="part-type">${esc(size)}`
-        + `${layers ? " · " + esc(layers) : ""}</div></div>`;
+        + `${layers ? " · " + esc(layers) : ""}</div>`
+        + `${solidStale ? `<div class="part-solid-stale">${esc(solidStale)}</div>` : ""}</div>`;
       // 材料为空的行同样必须**看得见补录入口**（Spec
       // `packaging-parts-in-card-and-material-fill.md` §2.3 第 2 条）：与补料厚同一个渲染
       // 循环、同一种控件形状（`part-material-fix` / `part-thickness-fix`）。

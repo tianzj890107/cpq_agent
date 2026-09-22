@@ -14688,3 +14688,88 @@ tests.test_spec_status_truth_red                               → 7 OK
 ```
 
 未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 348. 包装回传报价一条项目审计都不写：同仓其它包装写动作都写了，通用行业的同一动作也写了（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-handoff-audit-trail.md` +
+`tests/test_packaging_handoff_audit_red.py`（5 条：L 组；现状 **3 红 2 绿**，
+2 条绿的是"越权被拒不留痕 / 缺口未清被拒不留痕"的护栏）。
+本批不真跑任何服务：缺口由**读代码**定位（`grep -c "store.audit" packaging_handoff.py` → 0），
+红测只用假仓库 + 假业务桥 + 假审计，离线可复现。
+
+### 缺口
+
+- `tech_app/backend/services/packaging_handoff.py` 全文没有 `store.audit`：回传到报价侧之后，
+  项目审计里看不到"谁把这一版推出去的"（只能翻 `wip_packaging_handoff` 表）；
+- 对照：同仓其它包装写动作都写了 —— `packaging_bom.py:1393`（锁/解锁行）、
+  `packaging_match.py:827`（盒型匹配）、`packaging_route.py:586/637`（重排/确认）、
+  `packaging_cost.py:2388`（重算）；通用行业同一动作也有
+  `cost_flow.py:776 integration_send_to_quote`；
+- **同包重发**（`_reuse_outcome()`，`:432`）与"第一次发出"在审计上完全不可分（两边都没记录）。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `send_to_quote()` 落库后写 `workflow:packaging_handoff_sent`，载荷九个键必存在
+  （`requirement_no` / `scenario_code` / `handoff_no` / `version_no` / `already_sent` /
+  `cost_result_version` / `has_gaps` / `quote_session_id` / `by`），复用路径也要留痕且
+  `handoff_no` / `version_no` 必须是被复用那一行的值；
+- 载荷不许出现 `_FORBIDDEN_COST_KEYS` 里的售价/毛利字段，不许把整份交接包或登录凭据灌进去；
+- 拒绝路径（越权 403 / 缺口未清 409 / 没写原因 409 / 成本没算 409 / 需求单不存在 404）
+  一次都不许留这条审计（既有"被拒不留记录"口径）；审计只做留痕，不许当闸门；
+- 禁项写死：不改 `package_fingerprint` 判重与 `_reuse_outcome()` 形状、不改
+  `save_packaging_handoff()` 记录字段、不给只读的 `handoff_package()` 写审计、
+  不改通用行业的两处审计、不许改 `tests/` 既有文件、不许连线上库 / 发 HTTP。
+
+### 复跑
+
+- `tests.test_packaging_handoff_audit_red`：`Ran 5, failures=3`（L1/L2/L4 红，L3/L5 绿）。
+- 不回归：`test_packaging_quote_close_loop_red` 96 OK、`test_packaging_cost_engine_red` 81 OK、
+  `test_spec_status_truth_red` 7 OK。
+- 本批只读源码 + 假仓库，`tech_app/data/` 下未新增任何测试目录（`testpid*` 计数保持 0）。
+
+## 349. 落地 `packaging-solids-parts-version-binding`：3D 结论认零件文档版本（写入口记、索引与下载比、旧文件只标记不删）（6 OK）（9-22，Codex 实现）
+
+红测 `tests/test_packaging_solids_parts_version_binding_red`（J 组 6 条）全绿：J1–J4 红转绿，
+J5（存储层原样存取）/ J6（既有键逐字不变）两条护栏仍绿。
+
+### 一、缺口
+
+两个写入口（`POST …/{part_code}/solid` 与 `POST …/packaging-parts/solids`）的落库体都没有
+`parts_id`，而同一批的单件工艺 / 单件成本都带了；`_packaging_solids_index()` 只贴
+`solid_status` / `solid_reason` 不比对，于是零件重解析换了 `parts_id` 之后，2.1 上"这一件有 3D /
+覆盖率"照旧显示成当前零件的结论；STL 下载响应头里也没有任何版本信息；整份入口是**按件号合并写**，
+不区分版本。
+
+### 二、改了什么
+
+- `packaging_part_solids.solids_stale_reason(record, current_parts_id)`（新纯函数，**唯一判据点**）：
+  没版本 / 当前零件文档读不到 → `parts_unknown`；都有且不同 → `parts_reparsed`；相同 → `""`。
+  存储层的整份文档原样存取、版本只增、`MAX_VERSIONS` 一个字未改。
+- 写入口：两处落库体新增 `parts_id` / `parts_hash`（当前零件文档，读不到给 `""`），每件结论带
+  `parts_id`；整份入口另记 `rows_from_other_parts_id`（`part_code` 升序）。
+  **旧结论与旧 STL 一律不删**（用户要能对比）。
+- 读侧：`_packaging_solids_index()` 每项带 `parts_id` / `stale` / `stale_reason`（既有两个键逐字不变）；
+  `_packaging_parts_body()` 新增 `solids_parts_id` / `solids_stale` / `solids_stale_reason` /
+  `solids_rows_from_other_parts_id` 四个**必存在**的键。
+- STL 下载**仍 200**，响应头新增 `X-Packaging-Parts-Id` / `X-Packaging-Parts-Stale`
+  （过期时另加 `-Stale-Reason`）—— 到期只标记，不拦。
+- 前端 `app.js`：覆盖率行与逐件行都把"这份 3D 是哪一版零件算的"说出来（`parts_unknown` 说
+  "无法判断对应哪一版零件"），不再按"有 3D"的样式展示。
+
+### 三、一条已记录的偏差（不改测试）
+
+Spec §2 写「`stale = bool(stale_reason)`」，红测 J3 要求 `parts_unknown` 时 `stale` **不许**为 true。
+按红测实现：新增 `_solids_stale_flag()`，只有 `parts_reparsed` 算过期，`parts_unknown` 给 `false`
+且 `stale_reason` 照旧带出。挂账写在 Spec 的「已记录的偏差（不改测试）」段。
+
+### 四、复跑
+
+```
+tests.test_packaging_solids_parts_version_binding_red → Ran 6 … OK
+tests.test_packaging_parts_extraction_red / _solid_coverage_red / _panel_red / _list_visibility_red /
+_parts_3d_red / _coverage_truthfulness_red / _bom_parts_version_binding_red → 124 OK (skipped=2)
+node --check tech_app/frontend/app.js → 通过
+tests.test_spec_status_truth_red → 7 OK
+```
+
+未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

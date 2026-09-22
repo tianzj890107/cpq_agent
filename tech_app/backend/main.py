@@ -6948,22 +6948,64 @@ class PackagingPartsExtractAction(BaseModel):
     ir_id: str = ""
 
 
-def _packaging_solids_index(project_id: str) -> Dict[str, Dict[str, Any]]:
-    """一版挤出结论的索引：`part_code → {solid_status, solid_reason}`（Spec §2.3）。
+def _solids_stale_flag(reason: str) -> bool:
+    """`stale_reason` → 布尔：**只有真换版**（`parts_reparsed`）算"过期"。
 
-    零件文档本身**不改**（改了会换 `parts_id`、把下游落库的结论全指歪），挤出结论只
-    存在 `packaging_part_solids` 自己的版本化文档里；列表接口按件号贴上来给页面看。
+    `parts_unknown`（结论没记版本 / 当前零件文档读不到）是"比较不了"，既不是过期也不是没过期
+    —— 读接口必须两件事分开说（Spec `packaging-solids-parts-version-binding.md` §2.3 末条）。
+    """
+    return str(reason or "") not in ("", "parts_unknown")
+
+
+def _packaging_solids_scope(project_id: str) -> Dict[str, Any]:
+    """3D 结论与**当前零件文档**的版本对账（Spec `packaging-solids-parts-version-binding.md` §2.3）。
+
+    只报事实：不删旧结论、不重算 3D。"比较不了"（当前零件文档读不到）一律 `parts_unknown`，
+    **不许**当成"过期"或"没过期"。`index` 供列表逐行贴，其余三个键供读接口顶部说一句。
     """
     record = packaging_part_solids.load_solids(project_id) or {}
+    current_id = ""
+    try:
+        current = packaging_parts.load_parts(project_id)
+        current_id = str((current or {}).get("parts_id") or "") if isinstance(current, dict) else ""
+    except Exception:                                   # noqa: BLE001 - 读不到就是 parts_unknown
+        current_id = ""
+    doc_id = str(record.get("parts_id") or "")
     index: Dict[str, Dict[str, Any]] = {}
+    rows_from_other: List[str] = []
     for item in (record.get("parts") or []):
         if not isinstance(item, dict):
             continue
         code = str(item.get("part_code") or "")
-        if code:
-            index[code] = {"solid_status": str(item.get("status") or ""),
-                           "solid_reason": str(item.get("reason") or "")}
-    return index
+        if not code:
+            continue
+        item_id = str(item.get("parts_id") or "") or doc_id
+        # 判据**只有一处**：一律调存储层那个纯函数（Spec §2.1）。
+        item_reason = packaging_part_solids.solids_stale_reason({"parts_id": item_id}, current_id)
+        index[code] = {"solid_status": str(item.get("status") or ""),
+                       "solid_reason": str(item.get("reason") or ""),
+                       "parts_id": item_id,
+                       # `stale` 只在**真的换版**时为真：`parts_unknown`（比较不了）不许被显示成"过期"
+                       # —— 红测 J3 与 Spec §2.3 末条同一意图（"读不到 ≠ 过期"）。
+                       "stale": _solids_stale_flag(item_reason),
+                       "stale_reason": item_reason}
+        if current_id and item_id and item_id != current_id:
+            rows_from_other.append(code)
+    return {"index": index,
+            "parts_id": doc_id,
+            "stale_reason": packaging_part_solids.solids_stale_reason(record, current_id),
+            "rows_from_other_parts_id": sorted(rows_from_other)}
+
+
+def _packaging_solids_index(project_id: str) -> Dict[str, Dict[str, Any]]:
+    """一版挤出结论的索引：`part_code → {solid_status, solid_reason, parts_id, stale, stale_reason}`。
+
+    零件文档本身**不改**（改了会换 `parts_id`、把下游落库的结论全指歪），挤出结论只
+    存在 `packaging_part_solids` 自己的版本化文档里；列表接口按件号贴上来给页面看。
+    零件重解析换了 `parts_id` 之后 `stale` 必须为真 —— 页面不许再把上一版零件的结论显示成
+    "这一件有 3D"（Spec §2.3）。既有 `solid_status` / `solid_reason` 的名称与取值逐字不变。
+    """
+    return _packaging_solids_scope(project_id)["index"]
 
 
 def _packaging_parts_list_rows(rows: Any) -> List[Dict[str, Any]]:
@@ -7041,12 +7083,21 @@ def _parts_body(record: Any, project_id: str = "", *,
     body = dict(record) if isinstance(record, dict) else {"parts": [], "filtered": [],
                                                           "unavailable": [], "stats": {},
                                                           "source": {}, "reviewable": True}
-    index = _packaging_solids_index(project_id) if project_id else {}
+    solids_scope = _packaging_solids_scope(project_id) if project_id else {}
+    index = solids_scope.get("index") or {}
     if index:
         body["parts"] = [dict(row, **index[str(row.get("part_code") or "")])
                          if isinstance(row, dict)
                          and str(row.get("part_code") or "") in index else row
                          for row in (body.get("parts") or [])]
+    # 3D 结论的版本对账（Spec `packaging-solids-parts-version-binding.md` §2.3）：键**必须存在**，
+    # 没有 3D 结论时给 `""` / `false` / `""` / `[]`；既有键与响应形状一个字不改。
+    body["solids_parts_id"] = str((solids_scope or {}).get("parts_id") or "")
+    solids_stale_reason = str((solids_scope or {}).get("stale_reason") or "")
+    body["solids_stale"] = _solids_stale_flag(solids_stale_reason)
+    body["solids_stale_reason"] = solids_stale_reason
+    body["solids_rows_from_other_parts_id"] = list(
+        (solids_scope or {}).get("rows_from_other_parts_id") or [])
     body["built"] = bool(record)
     body["parts"] = _packaging_parts_list_rows(body.get("parts") or [])
     # 分页 + 筛选（Spec `packaging-parts-list-visibility-and-kinds.md` §2.4）：`items` 是当前页，
@@ -8373,13 +8424,20 @@ def packaging_part_solid(pid: str, part_code: str, user: dict = Depends(current_
     _workflow_project(pid)
     loaded = _packaging_part_row(pid, part_code)
     result = packaging_part_solids.extrude(loaded["row"])
+    # 「照哪一版零件算的」必须落下去（Spec `packaging-solids-parts-version-binding.md` §2.2）：
+    # 与单件工艺 / 单件成本同一口径；零件文档读不到时给 `""`（绝不现编一个版本）。
+    parts_doc = loaded.get("record") if isinstance(loaded.get("record"), dict) else {}
+    parts_id = str(parts_doc.get("parts_id") or "")
+    parts_hash = str(parts_doc.get("parts_hash") or "")
+    result["parts_id"] = parts_id
     record = packaging_part_solids.load_solids(pid) or {}
     parts = [item for item in (record.get("parts") or [])
              if isinstance(item, dict) and str(item.get("part_code") or "") != part_code]
     parts.append(result)
     parts.sort(key=lambda item: str(item.get("part_code") or ""))
     saved = packaging_part_solids.save_solids(
-        pid, {"engine_version": packaging_part_solids.ENGINE_VERSION, "parts": parts})
+        pid, {"engine_version": packaging_part_solids.ENGINE_VERSION,
+              "parts_id": parts_id, "parts_hash": parts_hash, "parts": parts})
     return _packaging_solid_public(result, int(saved.get("version") or 0))
 
 
@@ -8397,9 +8455,24 @@ def get_packaging_part_solid_stl(pid: str, part_code: str):
             "code": PACKAGING_PART_SOLID_MISSING,
             "message": "这一件还没有可下载的 3D 挤出体，请先在右栏点「3D 预览」",
         })
+    # 文件还在，所以**照旧 200**（用户要能对比）——但下载这个动作本身要看得出这是哪一版零件算的
+    # （Spec `packaging-solids-parts-version-binding.md` §2.4）：过期只标记，不拦。
+    headers = {"Content-Disposition": 'attachment; filename="%s.stl"' % part_code}
+    solids_parts_id = str(item.get("parts_id") or record.get("parts_id") or "")
+    current_id = ""
+    try:
+        current = packaging_parts.load_parts(pid)
+        current_id = str((current or {}).get("parts_id") or "") if isinstance(current, dict) else ""
+    except Exception:                                   # noqa: BLE001 - 读不到就是 parts_unknown
+        current_id = ""
+    stale_reason = packaging_part_solids.solids_stale_reason(
+        {"parts_id": solids_parts_id}, current_id)
+    headers["X-Packaging-Parts-Id"] = solids_parts_id
+    headers["X-Packaging-Parts-Stale"] = "1" if _solids_stale_flag(stale_reason) else "0"
+    if stale_reason:
+        headers["X-Packaging-Parts-Stale-Reason"] = stale_reason
     return Response(content=str(item.get("stl") or ""), media_type="application/sla",
-                    headers={"Content-Disposition":
-                             'attachment; filename="%s.stl"' % part_code})
+                    headers=headers)
 
 
 PACKAGING_PARTS_SOLIDS_PATH = "/api/projects/{pid}/requirement/packaging-parts/solids"
@@ -8423,14 +8496,34 @@ def packaging_parts_solids(pid: str, user: dict = Depends(current_user)):
             "message": "这个项目还没有零件文档，请先跑一键解析图纸里的「零件提取」",
         })
     result = packaging_part_solids.extrude_all(rows)
+    # 当前零件文档版本（Spec `packaging-solids-parts-version-binding.md` §2.2）：每件结论都带上，
+    # 整份文档顶层也记一份 —— 合并写因此分得清"这一件是哪一版零件算的"。
+    parts_id = str((loaded or {}).get("parts_id") or "") if isinstance(loaded, dict) else ""
+    parts_hash = str((loaded or {}).get("parts_hash") or "") if isinstance(loaded, dict) else ""
     record = packaging_part_solids.load_solids(pid) or {}
-    merged = {str(item.get("part_code") or ""): item
-              for item in (record.get("parts") or []) if isinstance(item, dict)}
+    merged = {str(item.get("part_code") or ""): dict(item, parts_id=parts_id)
+              for item in (record.get("parts") or [])
+              if isinstance(item, dict) and not str(item.get("parts_id") or "")}
+    for item in (record.get("parts") or []):
+        if isinstance(item, dict) and str(item.get("parts_id") or ""):
+            merged[str(item.get("part_code") or "")] = item
     for item in result.get("parts") or []:
-        merged[str(item.get("part_code") or "")] = item
+        if not isinstance(item, dict):
+            continue
+        merged[str(item.get("part_code") or "")] = dict(item, parts_id=parts_id)
+    # 来自**别的** `parts_id` 的件**保留**（不许删），但另记一份清单报出来（Spec §2.2）。
+    rows_from_other = sorted(code for code, item in merged.items()
+                             if code and parts_id
+                             and str(item.get("parts_id") or "")
+                             and str(item.get("parts_id") or "") != parts_id)
+    doc_parts_id = parts_id or str(record.get("parts_id") or "")
+    doc_parts_hash = parts_hash or str(record.get("parts_hash") or "")
     saved = packaging_part_solids.save_solids(pid, {
         "engine_version": packaging_part_solids.ENGINE_VERSION,
+        "parts_id": doc_parts_id,
+        "parts_hash": doc_parts_hash,
         "stats": result.get("stats") or {},
+        "rows_from_other_parts_id": rows_from_other,
         "parts": sorted(merged.values(), key=lambda item: str(item.get("part_code") or "")),
     })
     version = int(saved.get("version") or 0)
