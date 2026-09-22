@@ -726,6 +726,8 @@ CREATE TABLE IF NOT EXISTS wip_packaging_cost_estimate (
     has_gaps         INTEGER NOT NULL DEFAULT 0 CHECK (has_gaps IN (0, 1)),
     gaps_json        TEXT,
     assumptions_json TEXT,
+    -- 算完那一份「包材绑定」的账（Spec packaging-cost-content-binding-replay.md §C1）。
+    content_binding_json TEXT,
     -- 谁算的（Spec packaging-cost-finance-access.md §2.3）：财务可见性判定的依据也是这张表。
     computed_by      TEXT,
     computed_by_role TEXT,

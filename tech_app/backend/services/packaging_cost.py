@@ -1526,6 +1526,37 @@ def _content_binding_of(codes: Any, unbound_gaps: Any) -> dict:
     }
 
 
+def _replayed_content_binding(row: Any) -> dict:
+    """读回来的成本单里那一份**绑定账**（Spec `packaging-cost-content-binding-replay.md` §C2/§C3）。
+
+    只**回放**算的时候落库的那一份（`content_binding_json`）：不再问当前的数据源、也不按现数据源
+    重算 —— 与 `source_versions` 同一条纪律（"读的就是算时那一份"）。老成本单（本批之前落的）没有
+    这一列 → 来源报**空串**：`""` 已经是既有前端的「未知档」，而 `"none"`（"没有权威数据源"）是
+    **算的那一刻**的结论，老成本单不知道这件事，不许拿它顶上去。五个键与类型逐字不变。
+    """
+    stored = _loads(row.get("content_binding_json"), None)
+    stored = stored if isinstance(stored, dict) and stored else {}
+    if not stored:
+        return {"source": "", "bound_total": 0, "unbound_total": 0,
+                "bound_codes": [], "unbound_codes": []}
+
+    def _count(value: Any) -> int:
+        number = _num(value)
+        return int(number) if (number is not None and number > 0) else 0
+
+    def _codes(value: Any) -> list:
+        items = value if isinstance(value, (list, tuple, set)) else []
+        return sorted({_text(item) for item in items if _text(item)})
+
+    return {
+        "source": _text(stored.get("source")),
+        "bound_total": _count(stored.get("bound_total")),
+        "unbound_total": _count(stored.get("unbound_total")),
+        "bound_codes": _codes(stored.get("bound_codes")),
+        "unbound_codes": _codes(stored.get("unbound_codes")),
+    }
+
+
 def parse_loading_rate(text: Any) -> Optional[float]:
     """`≥85%` → 0.85；`92%` → 0.92；`不适用` / 解析失败 → None（Spec §2.10）。"""
     raw = _text(text)
@@ -1989,13 +2020,21 @@ def packaging_cost_readiness_gate(cost: Any) -> dict:
     """
     payload = cost if isinstance(cost, dict) else {}
     gaps = [gap for gap in (payload.get("gaps") or []) if isinstance(gap, dict)]
-    # 「没绑上本单」的包材缺口只报数（Spec §2.4）：不进 verdict、不进 blocking_total。
-    unbound_total = len([gap for gap in (payload.get("gaps_unbound_to_order") or [])
-                         if isinstance(gap, dict)])
     # 包材绑定数据源的来源（Spec `packaging-cost-content-binding-source-disclosure.md` §2.3）：
     # 键**必须存在**，取不到给 `""`。这只是"说出来"，**不改 verdict 口径**。
     binding = payload.get("content_binding")
-    binding_source = _text(binding.get("source")) if isinstance(binding, dict) else ""
+    binding = binding if isinstance(binding, dict) else {}
+    binding_source = _text(binding.get("source"))
+    # 「没绑上本单」的包材缺口只报数（Spec §2.4）：不进 verdict、不进 blocking_total。
+    unbound_rows = [gap for gap in (payload.get("gaps_unbound_to_order") or [])
+                    if isinstance(gap, dict)]
+    # 读回来的成本单没有 `gaps_unbound_to_order` 那一栏（它只在算完那一趟的结果体里）→ 退回
+    # **回放的**那一份绑定账（Spec `packaging-cost-content-binding-replay.md` §C4）：算完那一趟
+    # 两个数逐字相等（`content_binding.unbound_total` 就是它的条数），故既有口径一字不动。
+    replayed_unbound = _num(binding.get("unbound_total"))
+    unbound_total = (len(unbound_rows) if unbound_rows
+                     else (int(replayed_unbound)
+                           if (replayed_unbound is not None and replayed_unbound > 0) else 0))
     evidence = [gap_evidence(payload, gap) for gap in gaps]
     blocking = [row for row in evidence if row["severity"] == "blocking"]
     # 提示性缺口（Spec `packaging-cost-readiness-severity-layering` §2.2）：只披露、不决定结论。
@@ -2642,11 +2681,10 @@ def _rehydrate(row: dict, items: list) -> dict:
         "computed_by": _text(row.get("computed_by")),
         "computed_by_role": _text(row.get("computed_by_role")),
         # 读侧也要说得出"绑定数据源是什么"（Spec
-        # `packaging-cost-content-binding-source-disclosure.md` §2.2）：来源由**同一个函数**给，
-        # 没绑上的包材项从落库回来的那一份缺口里取（今天还没有这一列 → 空），绝不另猜一份。
-        "content_binding": _content_binding_of(
-            bound_content_codes_detail({}).get("codes") or (),
-            row.get("gaps_unbound_to_order") or []),
+        # `packaging-cost-content-binding-source-disclosure.md` §2.2）：来源由**同一个函数**给
+        # （写侧那一趟）；读回来时**逐字回放**落库的那一份（Spec
+        # `packaging-cost-content-binding-replay.md` §C2）——不再去问当前的数据源。
+        "content_binding": _replayed_content_binding(row),
     }
 
 

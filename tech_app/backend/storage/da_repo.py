@@ -942,6 +942,9 @@ def save_packaging_cost(project_id: str, requirement_no: str, scenario: str,
         "has_gaps": 1 if estimate.get("has_gaps") else 0,
         "gaps_json": _box_match_json(estimate.get("gaps") or []),
         "assumptions_json": _box_match_json(estimate.get("assumptions") or []),
+        # 算完那一份「包材绑定」的账（Spec `packaging-cost-content-binding-replay.md` §C1）：
+        # 与 gaps_json / source_versions_json 同一写法。读侧**逐字回放**这一份，不再问当前数据源。
+        "content_binding_json": _box_match_json(estimate.get("content_binding") or {}),
         # 算的那一刻照的输入版本(Spec packaging-cost-input-version-pinning.md §2.1):
         # 与 gaps_json / assumptions_json 同一写法;读接口读的就是这一份,不许读时现取。
         "source_versions_json": _box_match_json(estimate.get("source_versions") or {}),

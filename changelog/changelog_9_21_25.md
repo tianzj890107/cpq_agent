@@ -18094,3 +18094,12 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
   - `ast.parse(tech_app/backend/main.py)` 通过；`git diff --check` 干净；
   - packaging 全域 `discover -s tests -p 'test_packaging_*.py'` 与上一批同数同名单（仍是那 5 条既有挂账，本批未引入新红）。
 - 边界：未改前端、未调模型、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 432. 落地 `packaging-cost-content-binding-replay`：成本单读回来还要说得出「这一单绑了哪几项包材」（把绑定那一份落库、读侧逐字回放）（15 OK，红基 9 红）（9-22，Codex 实现）
+
+- 唯一 Spec：`docs/specs/packaging-cost-content-binding-replay.md`，红测 `tests/test_packaging_cost_content_binding_replay_red.py`（15 条，实现前 9 红 / 6 绿护栏）。
+- 缺口（本批两份 Spec 明写"另一批加列"的那一件）：`compute_project()` 算完的结果体带 `content_binding`（`{source, bound_total, unbound_total, bound_codes, unbound_codes}`），**但这一份从来没落库** —— `da_repo.save_packaging_cost()` 的 `_PACKAGING_COST_COLUMNS` 与显式键里都没有它；`_rehydrate()`（`packaging_cost.py:2647`）读回时改成**现算**：`bound_content_codes_detail({})`（喂空 payload = 去问**当前**的数据源）+ `row.get("gaps_unbound_to_order")` —— 而后者**不是** `wip_packaging_cost_estimate` 的列（`SELECT *` 读不回）。真引擎真库实测同一条成本单：算完 `unbound_total=7` / `unbound_codes` 7 项 / reasons 含「包材绑定数据源缺失：7 条包材缺口只披露不阻断」→ 读回 `0` / `[]` / reasons 里那句**消失**；把 `bound_content_codes_detail` 换成回答 `authoritative` 的桩，读一条算时是 `none` 的成本单会读到 `authoritative` + 桩给的包材项 —— 与 `packaging-cost-input-version-pinning.md` §2.2（"读的就是算时那一份，不许读时现取"）在绑定这一轴上完全相反。
+- 落点（四个文件）：`da_db._ADDED_COLUMNS` 加 `("wip_packaging_cost_estimate", "content_binding_json", "TEXT")`、`da_schema.sql` 的建表语句同步加列（新库直接有、老库 `ALTER TABLE ADD COLUMN` 补）；`da_repo.save_packaging_cost()` 加显式键 `"content_binding_json": _box_match_json(estimate.get("content_binding") or {})`（与 `gaps_json` / `source_versions_json` 同一写法，取不到存 `{}`）；新增纯函数 `_replayed_content_binding(row)`，`_rehydrate()` 改成**只回放**存的那一份（五个键逐字；老成本单 / 解不出 / 不是对象 → `source=""` + 计数 0 + 空清单，**不再**调 `bound_content_codes_detail()`）；`packaging_cost_readiness_gate()` 的 `unbound_total`：有 `gaps_unbound_to_order` 就用它的条数（既有口径逐字不动），没有才退回回放的 `content_binding.unbound_total`（算完那一趟两个数逐字相等）。
+- 冻结面：老成本单报**空串**来源而不是 `none`（"没有权威数据源"是算的那一刻的结论，老成本单不知道），也不回填、不猜；`content_binding` 的键 / 闭集 / 类型不变；写侧 `bound_content_codes_detail()` 今天仍老实报 `none` + 空集；前端**一个字没改**（空来源走既有「未知档」那句）；不加接口 / 依赖、不改成本明细表与报告口径。
+- 验证：红测 15 OK；Spec §6 不回归 6 份 `Ran 151 ... OK`；packaging 全域 `Ran 2384 ... FAILED (failures=5, skipped=8)`（仍是那 5 条既有挂账，本批未引入新红）；老库迁移演练（手工建只有 `estimate_id` / `project_id` 两列的旧表 + 一行数据 → `init_db()` 后列补上 `TEXT`、老行原样还在）；真库往返修后逐字相同；`git diff --check` 干净。
+- 边界：`bound_codes` 今天仍是空集（本批不造权威数据源）；`scenario_code` 各自回放；未改前端 / 未调模型 / 未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
