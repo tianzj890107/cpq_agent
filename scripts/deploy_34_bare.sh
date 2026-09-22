@@ -332,8 +332,16 @@ step "6b. 下游连通自检（隔离端到端：不需要项目 id，也不写�
 # "这台机器上这条链路真的能跑通"。这一步补上不需要项目的那条：把 store 的数据根目录指到临时
 # 目录（`DATA_DIR`，见 `tech_app/backend/config.py`），在隔离目录里建项目 → 建需求草稿 → 跑完整条
 # 八步 flow → 读零件文档 → 单件详情 → 挤出，跑完删掉临时目录。**生产数据目录一个字节不写。**
-# 口径见 Spec `packaging-parts-downstream-acceptance.md` §6.1。
-META_BEFORE="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
+# 口径见 Spec `packaging-parts-downstream-acceptance.md` §6.1 与 §11（根目录更正）。
+#
+# 隔离断言要盯**真正在用的运行目录**：`tech_app_launch.py` 把 `DATA_DIR` 缺省成
+# `tech_app/tech_data`（34 与容器里都是它，实测 60 个项目全在那儿）；`tech_app/data` 只是
+# 历史/杂项目录（实测 0 个项目）。只盯后者这条断言在真机上恒等于 `0 → 0` —— 看着通过，其实
+# 什么都证明不了（"少写一个 DATA_DIR 前缀就在生产目录里建了项目"正好抓不到）。
+LIVE_DATA_DIR="${DATA_DIR:-${CPQ_DATA_DIR:-$REPO/tech_app/tech_data}}"
+count_projects() { ls -1 "$1"/*/meta.json 2>/dev/null | wc -l | tr -d ' '; }
+META_BEFORE="$(count_projects "$LIVE_DATA_DIR")"
+META_INCIDENTAL_BEFORE="$(count_projects "$REPO/tech_app/data")"
 SELFCHECK_DIR="${TMPDIR:-/tmp}/cpq-parts-selfcheck.$$"
 # 知识库走"服务间内部令牌 + HTTP 快照"（技术工艺不直连 Postgres），令牌由 8010 启动时生成并
 # 只传给它的 8012 子进程 —— 外部脚本要从**正在跑的 8010 进程 environ**里取同一个值，
@@ -684,9 +692,13 @@ import sys
 shutil.rmtree(sys.argv[1], ignore_errors=True)
 print("· 已删除隔离目录 %s" % sys.argv[1])
 PY
-META_AFTER="$(ls -1 tech_app/data/*/meta.json 2>/dev/null | wc -l | tr -d ' ')"
-echo "· 生产数据目录未被写入（meta.json 数量 $META_BEFORE → $META_AFTER）"
-[ "$META_BEFORE" = "$META_AFTER" ] || fail "隔离自检动了生产数据目录（meta.json $META_BEFORE → $META_AFTER）"
+META_AFTER="$(count_projects "$LIVE_DATA_DIR")"
+META_INCIDENTAL_AFTER="$(count_projects "$REPO/tech_app/data")"
+echo "· 隔离自检未写运行目录：$LIVE_DATA_DIR 项目数 $META_BEFORE → $META_AFTER；tech_app/data $META_INCIDENTAL_BEFORE → $META_INCIDENTAL_AFTER"
+[ "$META_BEFORE" = "$META_AFTER" ] || fail "隔离自检动了运行目录（$LIVE_DATA_DIR 的 meta.json $META_BEFORE → $META_AFTER）"
+[ "$META_INCIDENTAL_BEFORE" = "$META_INCIDENTAL_AFTER" ] || fail "隔离自检动了 tech_app/data（meta.json $META_INCIDENTAL_BEFORE → $META_INCIDENTAL_AFTER）"
+# 根目录里一个项目都没有时，前后相等只是"两边都是 0"，证明不了隔离性 —— 说出来，别让它冒充通过。
+[ "$META_BEFORE" -gt 0 ] || echo "  ⚠ $LIVE_DATA_DIR 下当前 0 个项目：这条隔离断言在新机器上证明不了什么（有项目后再看才有意义）"
 # 退出码 = 三态判决（Spec `deploy-selfcheck-skip-vs-pass.md` §2.1/§2.2）：0=ok、1=failed、
 # 2=incomplete。有项没跑成（incomplete / skipped）时**绝不能**当作通过，必须非零退出（fail）
 # —— "有一项没跑"被算成"全部通过"就是这条 Spec 要消灭的那个失效模式。

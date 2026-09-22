@@ -11603,3 +11603,51 @@ POST /agents/quote/api/quick-quote/parse   （真实 酒盒.dwg，base64）
 
 只读：`library_readiness()` / `quick_quote_cases()` 是 SELECT，parse 只走统一解析服务（不建业务项目），
 未创建会话、未出价、未落业务数据；未连库写、未改代码。
+
+## 300. 部署自检的隔离断言在真机上恒等于 `0 → 0`：它数的不是运行目录（9-22，Codex 实现）
+
+### 缺口（34 实测）
+
+第 6b 步（隔离端到端自检）跑完会打印：
+
+```
+· 生产数据目录未被写入（meta.json 数量 0 → 0）
+```
+
+看着通过，实际上**什么都没证明** —— 它数的是 `tech_app/data/*/meta.json`，而 34 上：
+
+```
+tech_app/tech_data   69 个目录 / 60 个项目（7267eff7d68a、73cdcaab61fc 等活项目全在这儿）
+tech_app/data         8 个目录 / 0 个项目（cpq-unified-parse、dwg-verify-*、deploy-selfcheck…）
+```
+
+真运行目录是 `tech_app_launch.py:71` 的 `os.environ.setdefault("DATA_DIR", <tech_app>/tech_data)`
+（`tech_app/backend/config.py` 只给 `os.getenv("DATA_DIR", ROOT/"data")` 兜底）。于是这条断言
+永远 `0 → 0`，而它本来要防的正是"**少写一个 `DATA_DIR` 前缀就在生产目录里建了项目**"——
+正好抓不到。同 `deploy-selfcheck-skip-vs-pass.md` 的失效模式：**"没证明"长得像"证明了"**。
+
+### 实现
+
+- Spec `docs/specs/packaging-parts-downstream-acceptance.md` 追加 **§12 更正**（§6.1 原文不动，
+  新段说明字面路径错在哪、四项更正口径）。
+- 守卫 `tests/test_deploy_isolation_root_red.py`（8 条，`Ran 8 OK`）：断言启动器缺省仍是
+  `tech_data`、脚本按同一口径解析运行目录、旧的无意义路径已删除、两个根都前后数、输出里写出
+  被检查的路径、0 个项目时必须显式说明"证明不了什么"、`bash -n` 仍过。
+- `scripts/deploy_34_bare.sh` 第 6b 步：
+  `LIVE_DATA_DIR=${DATA_DIR:-${CPQ_DATA_DIR:-$REPO/tech_app/tech_data}}` + `count_projects()`，
+  **运行目录与 `tech_app/data` 两个根都数**，任一变化即 `fail`；输出写明绝对路径与两个计数；
+  运行目录里 0 个项目时显式打印「这条断言在新机器上证明不了什么」。
+
+### 保护网（改完即跑）
+
+```
+test_deploy_selfcheck_skip_vs_pass_red / test_packaging_parts_selfcheck_diagnostics_red /
+test_packaging_parts_downstream_gate_red / test_deploy_build_identity_red /
+test_deploy_health_wait_red / test_packaging_parts_extraction_red
+  → Ran 92 OK
+```
+
+### 边界
+
+只改第 6b 步的"数哪个目录"与该行的输出文案；不改隔离目录的用法（`DATA_DIR=$SELFCHECK_DIR/data`）、
+不改三态判决、不改任何失败判据的方向（原本该失败的仍然失败）。

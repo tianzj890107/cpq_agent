@@ -157,3 +157,21 @@
    `packaging-parts-gate`，产物 / 清单 / 审计全部重定向到临时目录，真实项目数据一个字节不动。
 4. **当前级别写在 `DEPLOYMENT.md`**：`L2（可信）`；L3 需要人工签字的 `parts_demo_script` +
    两份样本各一件可算/可挤出，未签字不得声明。
+
+## 12. 更正（2026-09-22，`## 300`）：§6.1 第 3 条的"生产数据目录"必须按运行目录解析
+
+§6.1 第 3 条原文写的是"核对 `tech_app/data/*/meta.json` 的数量前后不变"。**这个字面路径是错的**：
+`tech_app_launch.py:71` 把 `DATA_DIR` 缺省成 `tech_app/tech_data`（`os.environ.setdefault`），
+34 与容器里真正在用的就是它 —— 实测 `tech_app/tech_data` 有 **60 个项目**，而 `tech_app/data`
+只有 `cpq-unified-parse` / 几个 `dwg-*` 验证目录，**0 个项目**。
+
+后果：这条安全断言在真机上恒等于 `0 → 0` —— 输出漂亮、看着通过，却正好抓不到它要防的那件事
+（"少写一个 `DATA_DIR` 前缀就在生产目录里建了项目"）。同 `deploy-selfcheck-skip-vs-pass.md`
+要消灭的失效模式同型：**"没证明"不许长得像"证明了"**。
+
+更正后的口径（`scripts/deploy_34_bare.sh` 第 6b 步已按此实现）：
+
+1. 运行目录按启动器同一口径解析：`DATA_DIR` → `CPQ_DATA_DIR` → `$REPO/tech_app/tech_data`；
+2. 隔离前后**两个根都数**（运行目录 + `tech_app/data`），任一变化即失败；
+3. 输出里必须写出**被检查的绝对路径**与两边的数量，不能只写"未写入"；
+4. 运行目录里 0 个项目时，显式打印「这条断言在新机器上证明不了什么」——不许让它冒充通过。
