@@ -1049,6 +1049,51 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const text = typeof code === 'string' ? code.trim() : '';
     return quoted.indexOf(text) >= 0 ? '待询价' : '待补输入';
   }
+  // 包材绑定数据源（Spec `packaging-cost-content-binding-panel.md` §C1）：`source` **只**读后端
+  // payload —— 「认不出这一单用了哪几项包材」（`none`）与「拿权威绑定算的」（`authoritative`）
+  // 在读接口上同形（都是 `bound_gaps = []`），不把来源说出来，「没有阻断缺口」就会被读成
+  // 「没有缺口」；被降级披露的包材项还必须**指名道姓**（§2.4）。
+  function pcContentBinding(cost) {
+    const record = (cost && typeof cost === 'object') ? cost : {};
+    const binding = (record.content_binding && typeof record.content_binding === 'object')
+      ? record.content_binding : {};
+    const text = value => String(value === undefined || value === null ? '' : value).trim();
+    const raw = text(binding.source);
+    // 闭集外的来源一律不认：不假装权威（今天后端老实报 `none`），也不假装缺失。
+    const source = (raw === 'none' || raw === 'authoritative') ? raw : '';
+    const headlines = {
+      none: '包材绑定数据源缺失：认不出这一单用了哪几项包材，包材缺口（content_formula_error）只披露、不进阻断。',
+      authoritative: '包材绑定数据源：权威来源，这一单用哪几项包材是从权威数据里读的。'
+    };
+    const count = key => {
+      const number = Number(binding[key]);
+      return (Number.isFinite(number) && number > 0) ? number : 0;
+    };
+    const codes = (Array.isArray(binding.unbound_codes) ? binding.unbound_codes : [])
+      .map(text).filter(item => item);
+    return {
+      source: source, state: source || 'unknown',
+      headline: headlines[source]
+        || '后端没给包材绑定来源（content_binding.source），「包材没有缺口」这句话不成立。',
+      boundTotal: count('bound_total'), unboundTotal: count('unbound_total'),
+      unboundCodes: codes
+    };
+  }
+  function pcContentBindingCodesText(cost) {
+    const binding = pcContentBinding(cost);
+    if (!binding.unboundCodes.length) return '';
+    // 报告要能点到具体包材项：逐字点名，不改写 / 不截断 / 不加序号。
+    return `被降级披露的包材项：${binding.unboundCodes.join('、')}`;
+  }
+  function pcContentBindingBlock(cost) {
+    const binding = pcContentBinding(cost);
+    const codes = pcContentBindingCodesText(cost);
+    return `<div class="pc-hint" data-pc-content-binding="${pcEsc(binding.state)}">`
+      + `${pcEsc(binding.headline)} · 绑定 ${pcEsc(binding.boundTotal)} · 未绑 ${pcEsc(binding.unboundTotal)}</div>`
+      + (codes
+        ? `<div class="pc-hint" data-pc-content-binding-codes="${pcEsc(binding.unboundCodes.length)}">${pcEsc(codes)}</div>`
+        : '');
+  }
   function pcCategoryRows(cost) {
     const categories = cost.categories || {};
     const labels = cost.category_labels || {};
@@ -1282,6 +1327,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${pcRuleSnapshotBanner(record)}
       ${pcHandoffDriftBanner(handoff)}
       ${readinessBlock}
+      ${pcContentBindingBlock(cost)}
       ${head}${summary}${totals}
       ${blockingGapBlock}
       ${advisoryGapBlock}
