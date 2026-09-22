@@ -1181,6 +1181,10 @@ function pkgPartFactRow(label, value) {
 function renderPackagingPartPanel(payload) {
   const host = $("packagingPartPanel");
   if (!host) return null;
+  // 缩略图是**业务部件**的东西（Spec `packaging-authority-thumbnail-media.md` §C6）：
+  // 切到几何零件面板必须收起并清空，不许把上一件业务部件的图留在这里。
+  const thumbHost = $("packagingPartThumbnail");
+  if (thumbHost) { thumbHost.hidden = true; thumbHost.innerHTML = ""; }
   const part = (payload && payload.part) || {};
   const outline = (payload && payload.outline) || {};
   const status = String(outline.status || part.outline_status || "");
@@ -2130,6 +2134,14 @@ function packagingPartEvidenceRowsHtml(rows) {
     + `<span class="note">${esc(String(row.note || ""))}</span></div>`).join("");
 }
 
+// 业务部件图的只读端点 URL（Spec `packaging-authority-thumbnail-media.md` §C6）：纯函数，
+// 可被 node 直接执行；两段都 encode（件编码里可能出现 `/`）。
+function packagingBusinessPartThumbnailUrl(projectId, code) {
+  const pid = encodeURIComponent(String(projectId || ""));
+  const part = encodeURIComponent(String(code || ""));
+  return `${API}/api/projects/${pid}/requirement/packaging-business-parts/${part}/thumbnail`;
+}
+
 // 权威清单的两条披露（Spec `packaging-authority-disclosure-on-read.md` §C4）：部件图归属是
 // "按顺序推定"还是"逐行核对"，以及哪些行被导入器跳过（含客户原文）—— 纯函数，可被 node 直接执行。
 // 位置与 `packagingPartEvidenceRowsHtml()` 同一段：这里离 panels 远，不挤那两个源码窗口护栏。
@@ -2329,6 +2341,27 @@ function openPackagingBusinessPart(code) {
       : `<div class="view-3d-placeholder">`
         + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
         + `</div>`;
+  }
+  const thumbnailHost = $("packagingPartThumbnail");
+  if (thumbnailHost) {
+    const thumb = (row.thumbnail && typeof row.thumbnail === "object") ? row.thumbnail : {};
+    if (thumb.available) {
+      const alt = `${wanted} ${String(row.name || "")}`.trim();
+      // <img> 带不了请求头，所以走 mediaUrl()（与其它媒体一致）。
+      thumbnailHost.innerHTML = `<img class="packaging-business-thumb"`
+        + ` src="${esc(mediaUrl(packagingBusinessPartThumbnailUrl(currentProject, wanted)))}"`
+        + ` alt="${esc(alt + " 的部件图")}">`;
+      thumbnailHost.hidden = false;
+    } else {
+      const reason = String(thumb.reason || "");
+      const copy = reason === "image_bytes_unreadable"
+        ? "工作簿里的部件图读不出来（导入时就没读到字节）"
+        : (reason === "thumbnail_missing"
+          ? "这份清单里这一件没有配到部件图"
+          : "部件图还没入库（重新导入权威清单即可）");
+      thumbnailHost.innerHTML = `<div class="packaging-part-note">${esc(copy)}</div>`;
+      thumbnailHost.hidden = false;
+    }
   }
   const evidenceHost = $("packagingPartEvidence");
   if (evidenceHost) {

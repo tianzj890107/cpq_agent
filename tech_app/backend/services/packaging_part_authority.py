@@ -247,6 +247,29 @@ def _part_row(sheet: Dict[str, Any], row: int, columns: Dict[str, int], *,
     return values
 
 
+def _image_entries(sheet: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """本表图片的纯数据清单（Spec `packaging-authority-thumbnail-media.md` §C2）。
+
+    `ref` 与件级 `thumbnail_ref` **同一套写法**（`image:<表名>!<锚点行>#<序号>`）——
+    页面、文档、blob 三边靠它对齐。字节是 `xlsx_grid.image_payload()` 一次读出来的
+    base64（同一张图只许读一次，见那里的注释）。
+    """
+    title = _text((sheet or {}).get("name"))
+    out: List[Dict[str, Any]] = []
+    for image in (sheet or {}).get("images") or []:
+        index = int(image.get("index") or 0)
+        row = int(image.get("anchor_row") or 0)
+        out.append({"ref": "image:%s!%d#%d" % (title, row, index),
+                    "index": index, "anchor_row": row,
+                    "anchor_col": int(image.get("anchor_col") or 0),
+                    "media_type": _text(image.get("media_type")) or "application/octet-stream",
+                    "bytes": int(image.get("bytes") or 0),
+                    "sha256": _text(image.get("sha256")),
+                    "content_base64": _text(image.get("content_base64")),
+                    "unavailable": _text(image.get("unavailable"))})
+    return out
+
+
 def _pick_sheet(grid: Dict[str, Any], sheet: Optional[str] = None) -> Optional[Dict[str, Any]]:
     sheets = (grid or {}).get("sheets") or {}
     if sheet:
@@ -289,13 +312,14 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None) -> Dict[str, An
 
     digest = _file_hash(source)
     file_name = "" if isinstance(source, (bytes, bytearray)) else os.path.basename(os.fspath(source))
-    grid = xlsx_grid.read_grid(source)
+    grid = xlsx_grid.read_grid(source, with_images=True)
     current = _pick_sheet(grid, sheet)
     if current is None:
-        return {"engine_version": ENGINE_VERSION, "parts": [], "skipped": [],
+        return {"engine_version": ENGINE_VERSION, "parts": [], "skipped": [], "images": [],
                 "source": {"file": file_name, "sheet": "", "file_hash": digest,
                            "code_prefix": PART_CODE_PREFIX_FALLBACK},
-                "stats": {"part_total": 0, "image_total": 0, "skipped_total": 0},
+                "stats": {"part_total": 0, "image_total": 0, "skipped_total": 0,
+                          "image_bytes_total": 0},
                 "unavailable": [{"code": "authority_sheet_missing",
                                  "message": "工作簿里找不到「%s」这张业务表"
                                             % (sheet or DEFAULT_SHEET_NAME)}]}
@@ -365,17 +389,22 @@ def import_workbook(source: Any, *, sheet: Optional[str] = None) -> Dict[str, An
         for item in parts:
             item["thumbnail_source"] = "anchor_row" if item.get("thumbnail_ref") else ""
 
+    images = _image_entries(current)
     return {
         "engine_version": ENGINE_VERSION,
         "parts": parts,
         "skipped": skipped,
+        # 部件图**本体**（Spec `packaging-authority-thumbnail-media.md` §C2）：以前只有引用字符串，
+        # 字节从来没出过工具层，页面因此一张图也看不到。
+        "images": images,
         "source": {"file": file_name, "sheet": _text(current.get("name")),
                    "file_hash": digest, "code_prefix": prefix, "header_row": header_row,
                    "data_row_first": parts[0]["source"]["row"] if parts else 0,
                    "data_row_last": parts[-1]["source"]["row"] if parts else 0},
         "stats": {"part_total": len(parts), "image_total": len(current.get("images") or []),
                   "skipped_total": len(skipped),
-                  "thumbnail_bound_total": sum(1 for item in parts if item.get("thumbnail_ref"))},
+                  "thumbnail_bound_total": sum(1 for item in parts if item.get("thumbnail_ref")),
+                  "image_bytes_total": sum(item["bytes"] for item in images)},
         "unavailable": [] if parts else [{"code": "authority_rows_empty",
                                           "message": "这张业务表里没有连续序号的部件行"}],
     }

@@ -7295,8 +7295,11 @@ def import_packaging_business_parts(
     plan = packaging_parts.bind_geometry(parts,
                                         packaging_parts.geometry_evidence_of(geometry or {})["components"]) \
         if body.bind else None
+    # 部件图本体先按内容寻址落 blob（Spec `packaging-authority-thumbnail-media.md` §C3），
+    # 文档里只留引用 —— 图片字节不进 meta 文档，也不走 add_attachment（那会把派生结果标 stale）。
+    thumbnails = packaging_parts.save_authority_thumbnails(pid, authority)
     saved = packaging_parts.save_business_parts(pid, packaging_parts.business_parts_document(
-        authority, geometry, bindings=plan,
+        authority, geometry, bindings=plan, thumbnails=thumbnails,
         legacy_parts_id=(geometry or {}).get("parts_id") if isinstance(geometry, dict) else ""))
     store.audit(pid, "workflow:packaging_business_parts_imported", {
         "business_parts_id": saved.get("business_parts_id"),
@@ -7304,6 +7307,8 @@ def import_packaging_business_parts(
         "bound_total": (saved.get("stats") or {}).get("bound_total"),
         "authority_file_hash": (saved.get("source") or {}).get("authority_file_hash"),
         "skipped_total": (authority.get("stats") or {}).get("skipped_total"),
+        "thumbnail_saved_total": thumbnails.get("written"),
+        "thumbnail_reused_total": thumbnails.get("reused"),
         "by": str(user.get("username") or ""),
     })
     result = _business_parts_body(pid, saved)
@@ -7364,6 +7369,44 @@ def update_packaging_geometry_binding(
         "by": str(user.get("username") or ""),
     })
     return _business_parts_body(pid, saved)
+
+
+# 业务部件的部件图（Spec docs/specs/packaging-authority-thumbnail-media.md §C5）：**纯读**，
+# 不判写权限（与单件详情、业务部件清单同口径）；命中回图片字节，找不到回 404 + 稳定码。
+PACKAGING_BUSINESS_PART_THUMBNAIL_PATH = (
+    "/api/projects/{pid}/requirement/packaging-business-parts/{part_code}/thumbnail")
+
+#: 部件图不存在时的稳定错误码（前端据此区分"这件没图"与"接口挂了"）。
+PACKAGING_PART_THUMBNAIL_MISSING = "PACKAGING_PART_THUMBNAIL_MISSING"
+
+#: 原因码（由 packaging_parts.authority_thumbnail_of() 给）→ 人话；带 `%s` 的会填件编码。
+PACKAGING_THUMBNAIL_REASON_COPY = {
+    "business_parts_missing": "这个项目还没有业务部件清单：先导入权威清单再来看部件图",
+    "business_part_not_found": "业务部件清单里没有这件：%s",
+    "thumbnail_missing": "这份权威清单里这一件没有配到部件图",
+    "image_bytes_unreadable": "工作簿里的部件图读不出来（导入时就没读到字节）",
+    "thumbnail_not_saved": "这件有部件图引用，但字节还没入库：重新导入一次权威清单即可",
+    "thumbnail_bytes_missing": "部件图字节在存储里找不到了（可能被清理过）",
+}
+
+
+@app.get(PACKAGING_BUSINESS_PART_THUMBNAIL_PATH)
+def read_packaging_business_part_thumbnail(pid: str, part_code: str,
+                                          user: dict = Depends(current_user)):
+    """部件图本体（纯读）：blob 里的原始字节；blob 可能是 S3，统一走取字节接口。"""
+    _workflow_project(pid)
+    got = packaging_parts.authority_thumbnail_of(pid, packaging_parts.load_business_parts(pid),
+                                                part_code)
+    if not got.get("found"):
+        reason = str(got.get("reason") or "thumbnail_missing")
+        message = PACKAGING_THUMBNAIL_REASON_COPY.get(reason, "部件图读不到（%s）" % reason)
+        raise HTTPException(404, {"code": PACKAGING_PART_THUMBNAIL_MISSING, "reason": reason,
+                                  "message": message % str(part_code) if "%s" in message
+                                             else message})
+    content = got["content"]
+    return Response(content=content,
+                    media_type=str(got.get("media_type") or "application/octet-stream"),
+                    headers={"Content-Length": str(len(content))})
 
 
 # --------------------------------------------------------------------------- #

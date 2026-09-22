@@ -11,6 +11,7 @@ BOM 回填（`bind_rows`）只做行级临时口径 —— 正式口径应是「
 """
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -3278,8 +3279,110 @@ def authority_disclosure(authority: Any) -> Dict[str, Any]:
             "skipped": skipped}
 
 
+#: 部件图在 blob 里的目录（Spec `packaging-authority-thumbnail-media.md` §C3）：
+#: 内容寻址 —— 同一份字节只落一次，key 里就带着 sha256。
+THUMBNAIL_PREFIX = "packaging-authority/images"
+
+#: media_type → 文件后缀；认不出的格式用 `bin`（不猜）。
+THUMBNAIL_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpeg"}
+
+#: 件级 `thumbnail.reason` 闭集（Spec §C4）：没图 / 字节读不到 / 这次没入库。
+THUMBNAIL_REASONS = ("thumbnail_missing", "image_bytes_unreadable", "thumbnail_not_saved")
+
+
+def save_authority_thumbnails(project_id: str, authority: Any) -> Dict[str, Any]:
+    """把权威清单里的部件图字节按**内容寻址**落 blob（Spec §C3）。
+
+    为什么单独一条路：图是证据，不该让 `store.add_attachment()` 那条路把 `input_revision`
+    加一、把派生结果标 stale —— 一张部件图不该让整条工艺链重算。所以这里只写 blob，
+    文档里留引用（`key` + `sha256` + 类型 + 字节数），页面再按引用去读。
+
+    幂等：同一 `sha256` 在一次调用里去重，已在 blob 里的不重写（记 `reused`）。
+    坏图（base64 解不开 / 空）**不抛异常**，按 `available=False` + 原因记下来。
+    返回值里**没有** base64 —— 字节只进 blob，不进文档、不进读接口。
+    """
+    doc = authority if isinstance(authority, dict) else {}
+    raw_rows = doc.get("images")
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    result: Dict[str, Any] = {"written": 0, "reused": 0, "images": [], "by_ref": {}}
+    if not rows:
+        return result
+    from ..storage.blob_backend import get_blob_backend
+
+    blob = get_blob_backend()
+    seen: set = set()
+    for row in rows:
+        ref = _text(row.get("ref"))
+        media_type = _text(row.get("media_type")) or "application/octet-stream"
+        item: Dict[str, Any] = {"ref": ref, "sha256": _text(row.get("sha256")),
+                                "media_type": media_type, "bytes": _int_or(row.get("bytes"), 0),
+                                "key": "", "available": False,
+                                "unavailable": _text(row.get("unavailable"))}
+        try:
+            payload = base64.b64decode(_text(row.get("content_base64")), validate=False)
+        except Exception:                               # noqa: BLE001 - 坏图只记原因
+            payload = b""
+        if not payload:
+            item["unavailable"] = item["unavailable"] or "image_bytes_unreadable"
+        else:
+            digest = hashlib.sha256(payload).hexdigest()
+            key = "%s/%s/%s.%s" % (project_id, THUMBNAIL_PREFIX, digest,
+                                   THUMBNAIL_EXTENSIONS.get(media_type, "bin"))
+            item.update({"sha256": digest, "bytes": len(payload), "key": key,
+                         "available": True, "unavailable": ""})
+            if key in seen or blob.exists(key):
+                result["reused"] += 1
+            else:
+                blob.put_bytes(key, payload)
+                result["written"] += 1
+            seen.add(key)
+        result["images"].append(item)
+        if ref:
+            result["by_ref"][ref] = item
+    return result
+
+
+def _business_part_thumbnail(row: Any, by_ref: Dict[str, Any]) -> Dict[str, Any]:
+    """件级 `thumbnail` 引用块（Spec §C4）：只有引用与指纹，没有字节。"""
+    source = row if isinstance(row, dict) else {}
+    ref = _text(source.get("thumbnail_ref"))
+    block = {"ref": ref, "available": False, "sha256": "", "media_type": "", "bytes": 0,
+             "key": "", "source": _text(source.get("thumbnail_source")),
+             "reason": "thumbnail_missing"}
+    if not ref:
+        return block
+    saved = by_ref.get(ref) if isinstance(by_ref, dict) else None
+    if not isinstance(saved, dict):
+        block["reason"] = "thumbnail_not_saved"
+        return block
+    block.update({"sha256": _text(saved.get("sha256")),
+                  "media_type": _text(saved.get("media_type")),
+                  "bytes": _int_or(saved.get("bytes"), 0),
+                  "key": _text(saved.get("key")) if saved.get("available") else ""})
+    if saved.get("available"):
+        block.update({"available": True, "reason": ""})
+    else:
+        block["reason"] = _text(saved.get("unavailable")) or "image_bytes_unreadable"
+    # 有图且入库成功时 reason 是空串（"没有原因要报"），只有非空的才收进闭集。
+    if block["reason"] and block["reason"] not in THUMBNAIL_REASONS:
+        block["reason"] = "thumbnail_not_saved"
+    return block
+
+
+def _thumbnail_summary(business_parts: Any) -> Dict[str, Any]:
+    """部件图三笔账（Spec §C4）：能看的、缺的、字节合计。没有清单时全 0。"""
+    rows = [row for row in (business_parts or []) if isinstance(row, dict)]
+    available = sum(1 for row in rows
+                    if (row.get("thumbnail") or {}).get("available"))
+    return {"available_total": available,
+            "missing_total": len(rows) - available,
+            "bytes_total": sum(_int_or((row.get("thumbnail") or {}).get("bytes"), 0)
+                               for row in rows)}
+
+
 def business_parts_document(authority: Any, geometry: Any, *,
-                            bindings: Any = None, legacy_parts_id: str = "") -> Dict[str, Any]:
+                            bindings: Any = None, legacy_parts_id: str = "",
+                            thumbnails: Any = None) -> Dict[str, Any]:
     """组一份业务部件文档（Spec §2 的数据模型）。
 
     `authority` 是 `packaging_part_authority.import_workbook()` 的产物（**唯一**业务件
@@ -3293,6 +3396,10 @@ def business_parts_document(authority: Any, geometry: Any, *,
     plan = bindings if isinstance(bindings, dict) else bind_geometry(rows, evidence["components"])
     by_code = {_text(item.get("business_part_code")): item
                for item in (plan.get("bindings") or []) if isinstance(item, dict)}
+    # 部件图入库结果（Spec §C4）：由调用方先跑 `save_authority_thumbnails()`，这里只取引用。
+    thumbnails_doc = thumbnails if isinstance(thumbnails, dict) else {}
+    thumb_by_ref = thumbnails_doc.get("by_ref") if isinstance(
+        thumbnails_doc.get("by_ref"), dict) else {}
     business_parts: List[Dict[str, Any]] = []
     for index, row in enumerate(rows, start=1):
         code = _text(row.get("business_part_code"))
@@ -3313,6 +3420,8 @@ def business_parts_document(authority: Any, geometry: Any, *,
             # `group_hint`（部件图归属是"按顺序推定"还是"按锚点行"，只有这里说得出来）。
             "authority": _business_part_authority(row),
             "geometry_binding": binding,
+            # 部件图引用（Spec §C4）：图本体在 blob 里，这里只有 ref / sha256 / 类型 / 字节数。
+            "thumbnail": _business_part_thumbnail(row, thumb_by_ref),
         })
     stats = business_parts_stats(business_parts)
     geometry_doc = geometry if isinstance(geometry, dict) else {}
@@ -3336,6 +3445,8 @@ def business_parts_document(authority: Any, geometry: Any, *,
         # 导入响应的 `import_skipped` / `import_stats` 刷新一次就没了，页面再也说不出
         # "哪些行被跳过""部件图归属是怎么来的"。没有权威行时给 `{}`。
         "authority": authority_disclosure(authority_doc),
+        # 部件图三笔账（Spec §C4）：页面据此说"多少件有图、缺多少"。
+        "thumbnail": _thumbnail_summary(business_parts),
     }
     doc["business_parts_id"] = ""
     doc["business_parts_hash"] = ""
@@ -3484,6 +3595,44 @@ def business_part_row(doc: Any, code: Any) -> Dict[str, Any]:
             "summary": summarize_business_parts(record),
         }
     return {}
+
+
+def authority_thumbnail_of(project_id: str, doc: Any, code: Any) -> Dict[str, Any]:
+    """业务部件的部件图字节（Spec `packaging-authority-thumbnail-media.md` §C5）：**纯读**。
+
+    只要引用（`business_parts[].thumbnail`），字节从 blob 按 `key` 取 —— 不许假设本地路径
+    （blob 后端可能是 S3）。找不到就给一个稳定原因，**不抛异常**：读接口据此回 404 + 码。
+    """
+    record = doc if isinstance(doc, dict) else {}
+    raw = record.get("business_parts")
+    rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+    blank = {"found": False, "available": False, "reason": "", "media_type": "",
+             "content": b"", "bytes": 0, "key": "", "code": _text(code)}
+    if not rows:
+        blank["reason"] = "business_parts_missing"
+        return blank
+    wanted = _text(code)
+    row = next((item for item in rows
+                if _text(item.get("business_part_code")) == wanted), None)
+    if row is None:
+        blank["reason"] = "business_part_not_found"
+        return blank
+    thumb = row.get("thumbnail") if isinstance(row.get("thumbnail"), dict) else {}
+    key = _text(thumb.get("key")) if thumb.get("available") else ""
+    if not key:
+        blank["reason"] = _text(thumb.get("reason")) or "thumbnail_missing"
+        return blank
+    from ..storage.blob_backend import get_blob_backend
+
+    data = get_blob_backend().get_bytes(key)
+    if not data:
+        blank["reason"] = "thumbnail_bytes_missing"
+        blank["key"] = key
+        return blank
+    content = bytes(data)
+    return {"found": True, "available": True, "reason": "", "code": wanted,
+            "media_type": _text(thumb.get("media_type")) or "application/octet-stream",
+            "content": content, "bytes": len(content), "key": key}
 
 
 def set_geometry_binding(doc: Any, code: Any, component_ids: Any, *,

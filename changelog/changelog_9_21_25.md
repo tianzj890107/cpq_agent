@@ -16310,3 +16310,111 @@ tests/test_packaging_*.py 全域（87 个模块）→ Ran 1625, failures=5, skip
 
 未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 未部署。
+
+---
+
+## 376. 工作簿里的 28 张部件图一张也看不到：`xlsx_grid` 从不取图像字节，导入器只留一串 `image:表名!1#1`，页面没有 `<img>`（9-22，Codex 实现）
+
+Spec：`docs/specs/packaging-authority-thumbnail-media.md`（C1–C7）；
+红测：`tests/test_packaging_authority_thumbnail_media_red.py`（30 条）。
+依赖：`## 368` §3（取图与"受控媒体 / 内容寻址附件"）、`## 375` §9 边界 1（本批就是补它）。
+
+### 一、缺口（`## 375` 只把"归属"说清楚了，图本体仍然不在系统里）
+
+1. `xlsx_grid.read_grid()` 每张 image 只有 `{"index","anchor_row","anchor_col"}` —— 只记锚点，
+   **从不取字节**；`packaging_part_authority.import_workbook()` 的产物里也只有引用字符串
+   `image:零部件排版工艺!1#1`。
+2. 真样本 `裕同包装项目-待开发/酒盒 报价资料.xlsx` 表 `'零部件排版工艺 '`（注意结尾有空格）里
+   部件图 **28 张**（jpeg/png，合计 **197475** 字节，单张 1905…14875），`thumbnail_source` 全是
+   `order`；`xl/media/*` 共 30 条（28 张图 + 2 条目录项，232074 字节）。
+3. 前端 `app.js` 里 `packaging-business-parts` 相关只有清单/平面图/绑定，**没有 `<img>`**；
+   `index.html` 的 `#packagingPartPanel` 里没有缩略图节点；`main.py` 里只有
+   `.../packaging-parts/{part_code}`，没有 `.../packaging-business-parts/{code}/thumbnail`。
+4. openpyxl 陷阱（实测）：`Image._data()` 每张图**只能读一次**，第二次
+   `ValueError: I/O operation on closed file`。
+
+### 二、改了什么
+
+- `tech_app/tools/xlsx_grid.py`：新增 `IMAGE_MAGIC`（PNG `89 50 4E 47` / JPEG `FF D8 FF`）、
+  `IMAGE_UNAVAILABLE="image_bytes_unreadable"`、`media_type_of(data)`、`image_payload(image)`
+  （**唯一**取字节入口：同一次读干 + 缓存 base64，异常收敛成 `unavailable`，不抛）；
+  `_sheet_grid(ws, *, with_images=False)` / `read_grid(..., with_images=False)` ——
+  缺省路径返回的 image 仍是三键，**逐字不变**（成本规则快照等既有调用方零影响）；
+  `with_images=True` 才追加 `media_type` / `bytes` / `sha256` / `content_base64` / `unavailable`。
+- `tech_app/backend/services/packaging_part_authority.py`：新增 `_image_entries(sheet)`；
+  内部改走 `read_grid(source, with_images=True)`；产物新增 `images`（`ref` 与
+  `parts[].thumbnail_ref` 同一套写法，页面与文档靠它对齐）+ `stats.image_bytes_total`。
+- `tech_app/backend/services/packaging_parts.py`：`import base64`；新增
+  `THUMBNAIL_PREFIX="packaging-authority/images"` / `THUMBNAIL_EXTENSIONS` / `THUMBNAIL_REASONS`
+  / `save_authority_thumbnails(project_id, authority)`（内容寻址
+  `{pid}/packaging-authority/images/{sha256}.{ext}`、同 `sha256` 去重、`blob.exists` 命中记
+  `reused`、坏图跳过不抛、返回**不含 base64**）/ `_business_part_thumbnail()` /
+  `_thumbnail_summary()` / `authority_thumbnail_of(project_id, doc, code)`；
+  `business_parts_document(..., thumbnails=None)` 件级新增 `thumbnail`（`ref`/`available`/
+  `sha256`/`media_type`/`bytes`/`key`/`source`/`reason`）+ 文档级 `thumbnail` 汇总
+  （`available_total`/`missing_total`/`bytes_total`）。**只写 blob**：走函数内延迟 import 的
+  `from ..storage.blob_backend import get_blob_backend`，不碰 `store.add_attachment()` /
+  `attachments/`（那条路会把 `input_revision` +1、把派生结果标 stale）。
+- `tech_app/backend/main.py`：导入端点先 `save_authority_thumbnails(pid, authority)`、
+  再把引用交给 `business_parts_document()`，审计加 `thumbnail_written` / `thumbnail_reused` 两条计数；
+  新增 `PACKAGING_BUSINESS_PART_THUMBNAIL_PATH` / `PACKAGING_PART_THUMBNAIL_MISSING` /
+  `PACKAGING_THUMBNAIL_REASON_COPY` + 只读处理器 `read_packaging_business_part_thumbnail`
+  （不判写权限；命中回原始字节 + `Content-Length`，统一走 `get_bytes()` 以兼容 S3 blob；
+  未命中 404 + 稳定码 + 人话原因）。
+- `tech_app/frontend/app.js`：新增纯函数 `packagingBusinessPartThumbnailUrl(projectId, code)`
+  （两段都 `encodeURIComponent`，体内无 `document`/`window.`/`fetch(`）；
+  `openPackagingBusinessPart()` 渲染 `<img class="packaging-business-thumb">`（`<img>` 带不了请求头，
+  走 `mediaUrl()`），不可用走三态文案；`renderPackagingPartPanel()` 收起并清空
+  `#packagingPartThumbnail`（不许把上一件业务部件的图留在几何零件面板里）。
+- `tech_app/frontend/index.html`：`#packagingPartPanel` 内新增
+  `#packagingPartThumbnail`（`class="packaging-part-thumbnail"`，默认 `hidden`）。
+
+### 三、复跑
+
+```
+实现前（把 6 个实现文件 stash 掉）  → Ran 30 tests, FAILED (failures=11, errors=14)
+实现后                            → Ran 30 tests, OK
+node --check tech_app/frontend/app.js → 通过
+git diff --check                     → 干净
+相邻不回归（authority_disclosure_on_read + business_parts_and_cad_plan_view +
+business_part_panel_evidence + cost_rule_snapshot + cost_column_evidence）
+                                   → Ran 116, OK
+tests/test_packaging_*.py 全域（89 个模块）
+                                   → Ran 1655, failures=5, skipped=8
+                                     （5 条全是既有挂账，见下方边界 4）
+```
+
+真样本端到端（不是夹具；表 `'零部件排版工艺 '`，28 张图，临时 blob 后端）：
+
+```
+image_total=28 image_bytes_total=197475 parts=28
+written=28 reused=0 by_ref=28
+doc thumbnail summary: {'available_total': 28, 'missing_total': 0, 'bytes_total': 197475}
+first part: JWXR21-P01 左盖面纸 -> {'available': True, 'media_type': 'image/jpeg',
+                                    'bytes': 4964, 'source': 'order', 'reason': ''}
+read back: found=True bytes=4964 media_type=image/jpeg sha=3284b8454b17
+identical to workbook bytes: True
+second run: written=0 reused=28          # 幂等
+blob files: 28
+attachments dir exists: False            # 没走 add_attachment()
+```
+
+### 四、已记录的边界（不改测试，不放宽断言）
+
+1. 只做"同一版清单里的部件图"：不做部件图 OCR / 尺寸识别 / 与几何分量的图像匹配 ——
+   图只是给人看的证据，任何数值仍以权威尺寸与图纸为准。
+2. 图片按内容寻址存 blob（`{project}/packaging-authority/images/{sha256}.{ext}`），**不进** meta
+   文档；项目删除时不清理 blob（与既有 `attachments/` / `geometry/` 同口径，属另一批的运维话题）。
+3. 端点回的是原始字节（不做缩放/转码）：真样本单张最大 ~15 KB，页面按 CSS 宽度显示即可。
+4. 全域那 5 条既有挂账与本批无关（`packaging_bom_part_size_provenance::B3`、
+   `packaging_parse_to_downstream_seams::B4`、`packaging_part_manual_fill_persists::A2`、
+   `packaging_route_bom_version_pinning::F2`、`packaging_quote_send_recovery::C1`），本批前后条数不变。
+5. 红测本身校正过四处，均在**未实现的代码**上重新跑过仍是 `failures=11, errors=14`，没有把任何红测改绿：
+   ① `A4/A5` 的 `read_grid()["sheets"]` 是「表名 → 网格」字典（真样本表名带尾空格），原夹具写成 list，
+   改为 `doc["sheets"].items()`；② `E2` 的源码窗口 2600 → **1200 字**（缩略图常量块之后 1200 字内不含
+   `_require(`，再往后是包装路线段的写权限，与缩略图无关；窗口开太大反而会把无关代码扫进来）；
+   ③ `G1` 改成 AST 检查（只看 `save_authority_thumbnails()` 函数体）；④ `F1` 的 node 探针加
+   `globalThis.API = "http://probe"`（`mediaUrl()` 依赖它）。
+
+未改 `tests/` 下任何既有文件、未放宽任何断言、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 未部署。
