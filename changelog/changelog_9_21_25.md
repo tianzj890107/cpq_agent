@@ -12440,11 +12440,16 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 
 ### 部署
 
-`## 310` 提交 `765d394` 已双推 GitLab / GitHub `ytbz`，并部署到 34（脚本自检全绿）：
-`2b7fa6c → 765d394`、`8010 health=ok`、主转换器 `oda/27.1`、隔离端到端自检
-`酒盒.dwg 263 件 / closed_ratio=0.510`、`圆盘盒.dwg 312 件 / 0.817`。
+`## 310` 提交 `765d394` 已双推 GitLab / GitHub `ytbz`，随后把含 `## 311` / `## 313` 的
+`523bee8` 一并部署到 34（脚本自检全绿）：`2b7fa6c → 765d394 → 523bee8`、`8010 health=ok`、
+主转换器 `oda/27.1`、隔离端到端自检 `酒盒.dwg 263 件 / closed_ratio=0.510`、
+`圆盘盒.dwg 312 件 / 0.817`。
 推送时远端分支是 `ytbz`（本会话工作分支，34 也跑它），`scripts/push_remotes.py` 只允许从
 `20260909` 推送，所以本次走 `git push origin ytbz` + `git -c url.<IP 兜底>.push gitlab ytbz`。
+
+**「到最后再回去」这一步在 `523bee8` 上实测通了**：`## 311` 修掉报价版本读回的 500 之后，
+`GET /wf/card/step-data?session_id=566207eb006a&step_no=5` 由 `500 {"ok":false}` 变成
+`200`，并列出 `version_no=1 / cost_total=17.754993 / quote_quantity=5000`（部署前是 500）。
 
 ### 全流程实测结果（34，`酒盒.dwg`，`SM1`/`PE1`/`FI1`）
 
