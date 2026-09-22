@@ -119,6 +119,13 @@ STABLE_ERROR_CODES: Dict[str, Dict[str, Any]] = {
         "http_status": 422, "retryable": True,
         "message": "项目里没有可用的 CAD 图纸解析结果，请先重跑图纸解析",
     },
+    # 「这一趟读不到」≠「确实没有」（Spec `packaging-semantics-ir-read-failure.md` §2.1）：
+    # 文档通道抛异常时 IR 本来就在，重跑图纸解析不是正确的下一步，所以单独立一条可重试的码。
+    "PACKAGING_SEMANTICS_SOURCE_UNREADABLE": {
+        "http_status": 503, "retryable": True,
+        "message": "暂时读不到这个项目的 CAD 图纸解析结果，请稍后重试；"
+                   "这不代表这个项目还没有解析结果",
+    },
     "PACKAGING_LAYER_RULES_INVALID": {
         "http_status": 500, "retryable": False,
         "message": "包装图纸图层规则配置缺失或不可用，请联系系统管理员",

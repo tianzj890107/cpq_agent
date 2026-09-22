@@ -275,7 +275,21 @@ def analyze_conversion(project_id: str, *, ir: Any = None, ir_id: Optional[str] 
     if ir is None:
         from .. import cad_ir  # 延迟导入：只在真的要从项目里取 IR 时依赖第 3 批
 
-        ir = cad_ir.load_ir(project_id, ir_id) if ir_id else cad_ir.load_ir(project_id)
+        # 「这一趟读不到」与「确实没有」必须分家（Spec `packaging-semantics-ir-read-failure.md` §2.2）：
+        # 读通道抛异常（meta 文档挂了 / 正文坏了）时 IR 本来就在，重跑图纸解析不会有帮助，
+        # 而且必须先写一条审计（抛异常的路径此前一条都不写）。`from .. import cad_ir` 本身
+        # 失败（这条缝不存在）不算本批的读失败，仍按既有兜底走。
+        try:
+            ir = cad_ir.load_ir(project_id, ir_id) if ir_id else cad_ir.load_ir(project_id)
+        except Exception as exc:  # noqa: BLE001 - 读取故障要留痕，不许折成"没有"
+            persistence_mod.audit(project_id, ACTION_FAILED,
+                                  {"reason": "source_unreadable", "by": author})
+            raise FileCapabilityError(
+                "PACKAGING_SEMANTICS_SOURCE_UNREADABLE",
+                detected={"project_id": str(project_id or ""), "ir_id": str(ir_id or ""),
+                          "reason": type(exc).__name__, "message": str(exc)[:200]},
+                message="暂时读不到这个项目的 CAD 图纸解析结果（%s），请稍后重试；"
+                        "这不代表这个项目还没有解析结果" % type(exc).__name__) from exc
     if not isinstance(ir, dict):
         persistence_mod.audit(project_id, ACTION_FAILED,
                               {"reason": "source_missing", "by": author})

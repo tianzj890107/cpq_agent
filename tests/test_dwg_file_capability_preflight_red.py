@@ -72,6 +72,9 @@ ERROR_CODES = {
     # 以下 2 条由第 4 批「包装图纸语义」提出，第 1 批 Spec §3 已收进同一闭集。
     "PACKAGING_SEMANTICS_SOURCE_MISSING": (422, True),
     "PACKAGING_LAYER_RULES_INVALID": (500, False),
+    # 以下 1 条由 `docs/specs/packaging-semantics-ir-read-failure.md` §2.1 提出（「读不到」≠「确实没有」），
+    # 同批 Spec §3 已收进同一闭集；本表只是镜像，断言口径一个字未放宽。
+    "PACKAGING_SEMANTICS_SOURCE_UNREADABLE": (503, True),
 }
 DETECTED_FORMATS = {"dwg", "dxf", "step", "iges", "stl", "pdf", "raster_image", "text",
                     "docx", "unsupported"}

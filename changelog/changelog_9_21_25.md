@@ -17288,3 +17288,43 @@ tests.test_packaging_parts_ir_read_failure_red   Ran 8  FAILED (failures=4) → 
 
 未起服务、未发 HTTP、未连 PG / SQLite、未建项目、未写任何文件、未跑真解析、
 未 push / MR / tag / Release / 未部署。
+
+## 403. 落地 `packaging-semantics-ir-read-failure`：语义识别「读不到 CAD IR」不再说成「项目里没有解析结果，请先重跑图纸解析」（新码 `PACKAGING_SEMANTICS_SOURCE_UNREADABLE`（503, True）+ 审计 `source_unreadable`；8 OK）（9-22，Codex 实现）
+
+`tech_app/backend/services/file_preflight.py`：`STABLE_ERROR_CODES` 新增
+`"PACKAGING_SEMANTICS_SOURCE_UNREADABLE": {"http_status": 503, "retryable": True,
+"message": "暂时读不到这个项目的 CAD 图纸解析结果，请稍后重试；这不代表这个项目还没有解析结果"}`；
+既有九条（含 `PACKAGING_SEMANTICS_SOURCE_MISSING` 的 422 / True / 逐字文案、
+`PACKAGING_LAYER_RULES_INVALID` 的 500 / False）一个字没动。
+
+`tech_app/backend/services/packaging_semantics/__init__.py`：`analyze_conversion()` 把
+`cad_ir.load_ir(...)` 包进 `try/except Exception as exc` —— 先写审计
+`{"reason": "source_unreadable", "by": author}`（抛异常的路径此前**一条审计都不写**），再
+`raise FileCapabilityError("PACKAGING_SEMANTICS_SOURCE_UNREADABLE", detected={"project_id",
+"ir_id", "reason": <异常类名>, "message": <原文前 200 字>}, message="暂时读不到这个项目的 CAD
+图纸解析结果（<异常类名>），请稍后重试；这不代表这个项目还没有解析结果") from exc`。
+`from .. import cad_ir` 仍在 `try` 之外（模块本身缺 = 这条缝不存在，不算读失败）。
+`load_ir` 返回非 dict（含 `None` / list）→ 既有 `PACKAGING_SEMANTICS_SOURCE_MISSING` 分支
+（码 / `audit.reason="source_missing"` / `detected` 两键 / 文案）逐字不变。
+
+未动的：`analyze()` 既有口径、`persistence_mod.audit()` 签名、`steps.packaging_semantics()`
+的 catch 分支；未在 `analyze_conversion()` 里重试 / 缓存 / 降级成"没有 IR"继续跑。
+
+**一处既有守卫的镜像同步（已记明）**：`tests/test_dwg_file_capability_preflight_red.py::C1`
+用硬编码镜像表断言 `set(STABLE_ERROR_CODES) == set(ERROR_CODES)`；§2.1 要求新码并入权威闭集，
+就必须同步镜像。本批只在该测试的镜像表**加一行**（带 Spec 出处注释，样式同 `DWG_USE_DRAWING_FLOW`
+那一行），**未改任何断言、未放宽任何口径**（与仓库既有做法 `a2292a0`「三处旧守卫按新口径更新」一致）；
+本批自己的红测一字未改。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_semantics_ir_read_failure_red   Ran 8  FAILED (failures=5) → Ran 8  OK
+  （红基 Q1 Q2 Q5 Q6 Q8；护栏 Q3 Q4 Q7 始终绿）
+不回归：semantics + dwg_file_capability_preflight + error_taxonomy + parts_ir_read_failure +
+        semantics_ir_read_failure   Ran 118  OK (skipped=1)
+        dwg_conversion_quality_repair + dwg_capability_truth + dwg_conversion_adapter +
+        dxf_cad_ir + semantics   Ran 203  OK (skipped=3)
+```
+
+未起服务、未发 HTTP、未连 PG / SQLite、未建项目、未写任何文件、未 push / MR / tag / Release / 未部署。
