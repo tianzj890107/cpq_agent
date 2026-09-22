@@ -14023,3 +14023,103 @@ solids-parts-version-binding 4 / bom-box-type-provenance 4 / content-binding-sou
 本批只改 `packaging_parts.py` / `main.py`（两条写路由 + 一条读路由）/ `app.js` /
 `drawing-flow.css` / 本 Spec 状态行 / 本 changelog；未改任何测试、未放宽任何断言、
 未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 340. 单件工艺/成本结论的读侧不认零件文档版本：重解析后右栏照旧显示上一版零件的结论（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-parts-conclusion-version-readback.md` +
+`tests/test_packaging_parts_conclusion_version_readback_red.py`
+（6 条：K 组 6；现状 **4 红 2 绿**，2 条绿的是"同版本不标过期 / 不传版本仍读最近一版"的护栏）。
+本批不真跑任何服务：三处都由**读代码**定位，全部离线可复现（假后端 / 假文档，不发 HTTP）。
+
+### 缺口
+
+1. 写侧已经记了版本（`main.py:8123` 的工艺结论文档带 `parts_id`，成本那一路同口径），
+   但两个 GET 路由（`main.py:8273 get_packaging_part_process()` / `main.py:8294 get_packaging_part_cost()`）
+   的返回体**没有 `parts_id`、也不比对当前零件文档** —— 重跑解析换了 `parts_id` 之后，
+   右栏照旧把**上一版零件**算出的工艺/成本结论显示成当前结果。
+2. `packaging_parts.load_part_process()`（`:2329`）/ `load_part_cost()`（`:2339`）只按 `part_code`
+   取"最近一版"，**没有按 `parts_id` 读的入口** —— 文档其实按 `(part_code, parts_id)` 分段存着
+   （`_save_part_doc()` `:2298-2318`）：存得下，读不出。
+3. "没跑过" / "当前版" / "上一版零件算的"三种情形在返回体上长得完全一样。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `packaging_parts` 新增纯函数 `parts_stale_reason(stored_parts_id, current_parts_id)`
+  （唯一判据：`parts_reparsed` / `parts_unknown` / `""`）；
+- `load_part_process()` / `load_part_cost()` **新增可选** `parts_id` 参数（按版本精确读那一版；
+  不传时逐字保持今天的行为）；
+- 两个 GET 路由返回体新增 `parts_id` / `stale` / `stale_reason`（键必须存在，空态也要有，
+  当前零件文档读不到 → `parts_unknown` 且 `stale` 不许为真）；
+- 禁项写死：不许读接口自动重算、不许删过期结论、不许改 `(part_code, parts_id)` 分段与 `MAX_VERSIONS`、
+  不许改既有键与空态形状、不许改 `tests/` 既有文件。
+
+### 顺带修掉一个**我自己**的测试瑕疵（不属于业务实现）
+
+`packaging_part_solids` 与 `packaging_parts` 都是**模块级**导入 `get_backend`，而我在
+`test_packaging_solids_parts_version_binding_red.py` 的 J5 里补的是 `meta_backend.get_backend`
+—— 结果是 J5 打到真实 JSON 数据目录上，写出了 `tech_app/data/testpid00001/packaging_part_solids.json`
+（8 版，全是合成数据）。已处理：
+
+- 两个红测文件改成补**各自模块**的 `get_backend`（真正离线，跑完不再产生任何文件）；
+- 误写目录 `tech_app/data/testpid00001/` 先备份到 `/tmp/testpid00001-backup/`，
+  确认目录内只有这一个测试产物后按精确路径删除（未动任何真实项目目录，邻居 `cache-engine-test` /
+  `dwg-conv-test` 与其余 1491 个目录逐字未动）；删除后复跑两个红测，数据目录里再次出现 `testpid*` 的数量为 0。
+- 本批 6 条红测本来就只用假后端，未产生任何写入。
+
+### 复跑
+
+- `tests.test_packaging_parts_conclusion_version_readback_red`：`Ran 6, failures=3, errors=1`
+  （K1 / K2 / K3 红 + K5 因 `parts_id` 参数不存在而 ERROR；K4 / K6 绿）。
+- `tests.test_packaging_solids_parts_version_binding_red`：改补 `solids.get_backend` 后仍是
+  `Ran 6, failures=4`（J1–J4 红，J5 / J6 绿），且不再写数据目录。
+- 不回归：`test_packaging_parts_downstream_readback_red` OK、`test_packaging_parts_extraction_red` OK、
+  `test_spec_status_truth_red` OK。
+- 本批**未提交 / 未 push / 未部署**；工作区里并行会话的文件一个未动。
+
+## 340. `packaging-silent-degradation-disclosure` 落地：包装链路上五处「静默降级」改成留痕降级（读不到 ≠ 没有）（13 OK）（9-22，Codex 实现）
+
+### 一、问题（Spec §1，五处形状完全一样：失败与"空"在返回体上是同一个值）
+
+- `packaging_bom._bind_parts()` 的 `except Exception: return items, [], []` —— 与"这个项目根本没有
+  零件文档"逐字相同：现场只能看到"零件有（263 件）、BOM 没数"，没有任何地方说得出"回填这一步挂了"。
+- `_role_doc()` 读失败 `return {"by_requirement": {}}` → `build_bom()` 每次调的
+  `apply_saved_role_map()` 直接把人工确认过的角色算没（Spec §2.8 在最需要它的那一刻失效）；
+  `save_role_mapping()` 的 meta 写失败 `return` —— 接口回 200，留痕没落盘。
+- `role_candidates_for()` 的 KB 读失败 → `part_templates: []`，与"该盒型确实没有部件模板"同一个值。
+- `packaging_match._part_template_count()` 读失败折成 `0` → 候选被标 `part_template_available=False`
+  （"选了它走不下去"），`_template_warnings()` 还给出"该盒型在部件模板表里没有模板"这句**错话**。
+- `_pairing_doc()` 读失败 → `pairing_review: []`，与"这次配对没有不一致项"同一个值，可疑配对凭空消失。
+
+### 二、改了什么（Spec §2.1–§2.5）
+
+- `packaging_bom.py`：`_bind_parts()` → 4 元组（新增 `part_binding_failed` 留痕）；`build_bom()`
+  经新 `_save_bind_error()` 落 `packaging_bom_bind_error` 文档（没失败就清掉上一次的）；
+  `load_bom()` 新增 `binding_error` / `pairing_review_unavailable` / `role_unbound_unavailable`
+  三个键（没有失败时一律 `{}`，既有 `pairing_review` / `role_unbound` 键名与口径一个字不改）；
+  `_role_doc()` 读失败抛 `BomError(role_map_unavailable, 503)`；`save_role_mapping()` 的 meta 写失败
+  抛 `role_map_save_failed`；`role_candidates_for()` 读失败给 `templates_unavailable`
+  （`template_lookup_failed`）；新增 `_pairing_scope()` / `_load_role_scope()`。
+- `packaging_match.py`：新增 `_part_template_state() -> (available, total, unavailable)`；
+  `_candidate()` 的 `part_template_available` 读不到给 `None`（未知）+ `part_template_unavailable`；
+  `_template_warnings()` 读不到给 `box_type_template_lookup_failed`，不再误报"没有模板"。
+- `main.py`：`GET …/packaging-bom/role-map` 原样带出 `templates_unavailable`（键名不变），
+  映射文档读不到时按 `BomError.status_code` 回 `{code, message}`（不再 500）。
+- `frontend/app.js` + `drawing-flow.css`：新增 `role-map-warning` 两处披露
+  （`data-role-map-templates-unavailable` / `data-role-map-unavailable`），
+  "没有候选角色（模板为空）"只在**确实**没有模板时才出现。`node --check` 通过。
+
+### 三、实测
+
+```
+tests.test_packaging_silent_degradation_red  → Ran 13 … OK（原先 8 红 / 5 绿护栏）
+保护网：parse_to_downstream_seams / part_role_manual_mapping / parametric_bom /
+box_candidate_rank_and_runnability / box_type_matching / knowledge_base_seed
+        → 209 条全 OK（0 回归）
+```
+
+### 四、已记录的边界
+
+`_save_role_unbound()` / `_save_pairing_review()` 这类**披露快照**的写失败仍然只吞不抛
+（读侧每次现算，写不进去不影响结论）；影响"人工映射不被算没"的那条写路径已改成显式失败。
+报价侧同类第二份实现 `cpq_packaging_match.py` 本批未动（不在 Spec §2 允许范围内）。
+未改任何测试、未放宽任何断言、未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。

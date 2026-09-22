@@ -42,6 +42,11 @@ BOM_WRITE_ROLES = packaging_match.BOX_MATCH_DECIDE_ROLES
 #: 不改数据库 schema、不加表。
 PAIRING_DOC_KEY = "packaging_bom_pairing"
 
+#: 零件回填失败的落盘 doc key（Spec `packaging-silent-degradation-disclosure.md` §2.1）：
+#: 同一范式的**加法**披露 —— 回填失败照旧不改 BOM 结论，但读接口必须说得出来
+#: "零件文档在、回填这一步挂了"。
+BIND_ERROR_DOC_KEY = "packaging_bom_bind_error"
+
 #: 可自动绑定的变量（Spec §2.2）。
 AUTO_VARIABLES = frozenset({"L", "W", "H", "t", "c"})
 
@@ -754,18 +759,28 @@ def apply_role_mapping(items: Any, *, item_key: str, part_code: str, role: str,
 
 
 def _role_doc(project_id: str) -> dict:
-    """读映射文档（`{"by_requirement": {需求单: {行键: 记录}}}`）；读不到给空壳。"""
+    """读映射文档（`{"by_requirement": {需求单: {行键: 记录}}}`）。
+
+    **读不到必须抛**（Spec `packaging-silent-degradation-disclosure.md` §2.2）：
+    `apply_saved_role_map()` 是 `build_bom()` 每次都调的，"读不出来按没有"会让文档通道
+    抖一下就把人工确认过的角色算没（Spec `packaging-part-role-manual-mapping.md` §2.8），
+    而且没有任何留痕 —— 失败与"从来没人映射过"必须能分开。
+    """
     try:
         from ..storage.meta_backend import get_backend
         doc = get_backend().get_doc(project_id, ROLE_MAP_DOC_KEY) or {}
-    except Exception:                                   # noqa: BLE001 - 读不出来按"没有"
-        return {"by_requirement": {}}
+    except BomError:
+        raise
+    except Exception as exc:                            # noqa: BLE001 - 见 docstring：显式失败
+        raise BomError(
+            "人工角色映射读不到（文档通道不可用：%s）；别把这次当成「从来没人映射过」"
+            % type(exc).__name__, 503, "role_map_unavailable") from exc
     rows = doc.get("by_requirement") if isinstance(doc, dict) else None
     return {"by_requirement": rows if isinstance(rows, dict) else {}}
 
 
 def role_map_doc(project_id: str) -> dict:
-    """公开的读入口：映射文档（Spec §3）。读不到给 `{"by_requirement": {}}`。"""
+    """公开的读入口：映射文档（Spec §3）。读不到 → 抛 `BomError`（`role_map_unavailable`）。"""
     return _role_doc(project_id)
 
 
@@ -829,24 +844,41 @@ def save_role_mapping(project_id: str, requirement_no: str, row: dict) -> None:
             "history": history,
         }
         get_backend().put_doc(project_id, ROLE_MAP_DOC_KEY, doc)
-    except Exception:                                   # noqa: BLE001 - 留痕失败不改 BOM 结论
-        return
+    except BomError:
+        raise
+    except Exception as exc:                            # noqa: BLE001 - 见下：必须显式失败
+        # 留痕没落盘就必须抛（Spec `packaging-silent-degradation-disclosure.md` §2.2）：
+        # 以前静默 return、接口回 200，于是"我映射了、它没了"无从追起 —— 下一次重算
+        # 读到的还是上一版（或空），人工映射被静默清掉。
+        raise BomError("人工角色映射没保存成功（%s）；请重试，别把它当成已经映射过"
+                       % type(exc).__name__, 503, "role_map_save_failed") from exc
 
 
 def role_candidates_for(project_id: str, requirement_no: str = "") -> dict:
-    """当前**确认盒型**的部件模板与候选角色（读 KB；读不到给空清单，不抛）。"""
+    """当前**确认盒型**的部件模板与候选角色（读 KB；读不到给空清单 **+ 显式披露**）。
+
+    `templates_unavailable` 非空表示"这一趟没读到"（Spec
+    `packaging-silent-degradation-disclosure.md` §2.3）：它必须与"这个盒型确实没有部件模板"
+    （`{}`）分得开 —— 否则用户看到空下拉会去改盒型、以为模板没入库。
+    """
     req_no = _resolve_requirement_no(project_id, requirement_no)
     record = da_repo.load_box_match(project_id, req_no) or {}
     box_code = _text(record.get("confirmed_box_type"))
     templates: list = []
+    unavailable: dict = {}
     if box_code:
         try:
             templates = list(kb_repo.packaging_part_templates(box_code) or [])
-        except Exception:                               # noqa: BLE001 - 读不到知识库不挡人工映射
+        except Exception as exc:                        # noqa: BLE001 - 不挡人工映射，但必须披露
             templates = []
+            unavailable = {"code": "template_lookup_failed", "reason": type(exc).__name__,
+                           "message": "部件模板暂时读不到（知识库读失败：%s），"
+                                      "请稍后重试；这不代表该盒型没有部件模板"
+                                      % type(exc).__name__}
     return {"box_type_code": box_code, "requirement_no": req_no,
             "part_templates": templates,
-            "role_candidates": role_candidates(templates)}
+            "role_candidates": role_candidates(templates),
+            "templates_unavailable": unavailable}
 
 
 def apply_saved_role_map(project_id: str, requirement_no: str, items: list) -> list:
@@ -943,6 +975,9 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             material_unresolved.append(_text(item.get("item_key")))
     generated_at = _text(items[0].get("generated_at")) if items else ""
     box_record = da_repo.load_box_match(project_id, req_no) or {}
+    pairing = _pairing_scope(project_id, req_no)
+    # 走 `_role_scope()` 这个既有接缝（调用方与测试都按它打桩），键一律按可选读。
+    role_scope = _role_scope(project_id, req_no, items, box_type_code) or {}
     return {
         "built": bool(items),
         "box_type_code": box_type_code,
@@ -959,14 +994,21 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
         "items": items,
         # 「在报告里单列不一致项」（Spec `packaging-parse-to-downstream-seams.md` §3.2）：
         # 键**必须存在**，没有不一致时给 `[]`；只在 build 时算得出，所以按需求单存一份文档。
-        "pairing_review": _load_pairing_review(project_id, req_no),
+        "pairing_review": pairing["review"],
+        # 披露是**加法**（Spec `packaging-silent-degradation-disclosure.md` §2.5/§3）：
+        # 读不到配对复核文档时清单照旧给 []，但标记必须非空 —— 不许看起来"这次配对干净"。
+        "pairing_review_unavailable": pairing["unavailable"],
+        # 回填失败留痕（Spec §2.1）：键**必须存在**，没有失败时 `{}`。
+        "binding_error": _bind_error_scope(project_id, req_no),
         # 未映射清单（Spec `packaging-part-role-manual-mapping.md` §4.3）：以前
         # `_bind_parts()` 把 `bind_rows()` 算好的 `role_unbound` 丢在这里，于是
         # "还有 11 行没映射"在任何一个读接口上都看不见。现在按**当前行**现算（与清单
         # 永远一致），没有未映射行时给 `[]` / `0`，绝不省略键。
-        "role_unbound": _role_scope(project_id, req_no, items, box_type_code)["items"],
-        "role_unbound_total": _role_scope(project_id, req_no, items,
-                                          box_type_code)["unbound_total"],
+        "role_unbound": list(role_scope.get("items") or []),
+        "role_unbound_total": int(role_scope.get("unbound_total") or 0),
+        # 人工映射文档读不到时（Spec §2.2 改成显式失败）读接口**不许**按"没人映射过"渲染：
+        # 清单留空但标记非空，界面据此说"暂时读不到，请稍后重试"。
+        "role_unbound_unavailable": dict(role_scope.get("unavailable") or {}),
         "gaps": {
             "needs_input": needs_input,
             "missing_variables": missing_variables,
@@ -976,20 +1018,42 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
     }
 
 
-def _role_scope(project_id: str, requirement_no: str, items: list,
-                box_type_code: str = "") -> dict:
+def _load_role_scope(project_id: str, requirement_no: str, items: list,
+                     box_type_code: str = "", *, unavailable: Optional[dict] = None) -> dict:
     """未映射清单的**现算**入口（读接口与落库共用一处口径，不另存一份会过期的账）。
 
     候选角色取当前确认盒型的部件模板；知识库读不到时清单照出（候选为空），
     绝不因为"读不到候选"就不报"这一行还没映射"。
+
+    人工映射文档读不到时（`role_map_doc()` 现在会抛，Spec §2.2）：清单给空 + 显式标记
+    （`unavailable`），**绝不**按"没人映射过"渲染。
     """
     templates: list = []
     try:
         templates = list(role_candidates_for(project_id, requirement_no).get("part_templates") or [])
     except Exception:                                   # noqa: BLE001 - 读不到 KB 不挡披露
         templates = []
-    return role_map_status(items, box_type_code=box_type_code, part_templates=templates,
-                           role_map=role_map_doc(project_id))
+    if unavailable is None:
+        try:
+            role_map = role_map_doc(project_id)
+        except BomError as exc:
+            return {"items": [], "unbound_total": 0, "mapped_total": 0,
+                    "unavailable": {"code": exc.code or "role_map_unavailable",
+                                    "reason": "doc_channel_unavailable",
+                                    "message": str(exc)}}
+        unavailable = {}
+    else:
+        role_map = {}
+    status = role_map_status(items, box_type_code=box_type_code, part_templates=templates,
+                             role_map=role_map)
+    status["unavailable"] = dict(unavailable or {})
+    return status
+
+
+def _role_scope(project_id: str, requirement_no: str, items: list,
+                box_type_code: str = "") -> dict:
+    """`_load_role_scope()` 的兼容包装（返回体形状与既有调用方一致）。"""
+    return _load_role_scope(project_id, requirement_no, items, box_type_code)
 
 
 def _save_role_unbound(project_id: str, requirement_no: str, rows: list) -> None:
@@ -1009,19 +1073,89 @@ def _save_role_unbound(project_id: str, requirement_no: str, rows: list) -> None
 
 
 def _pairing_doc(project_id: str) -> dict:
-    """读配对复核文档（`{"by_requirement": {需求单: [...]}}`）；读不到给空壳。"""
+    """读配对复核文档（`{"by_requirement": {需求单: [...]}}`）。
+
+    **读不到必须抛**（Spec `packaging-silent-degradation-disclosure.md` §1.5/§2.5）：
+    配对复核是唯一一处把"配对后材料明显不同类"喊出来的地方，"读不到按没有"等于让一次可疑
+    配对在报告里凭空消失 —— 披露失败与"这次配对没有问题"必须分得开。
+    """
     try:
         from ..storage.meta_backend import get_backend
         doc = get_backend().get_doc(project_id, PAIRING_DOC_KEY) or {}
-    except Exception:                                   # noqa: BLE001 - 读不出来按"没有"
-        return {"by_requirement": {}}
+    except BomError:
+        raise
+    except Exception as exc:                            # noqa: BLE001 - 见 docstring：显式失败
+        raise BomError(
+            "配对复核读不到（文档通道不可用：%s）；别把这次当成「这次配对没有不一致项」"
+            % type(exc).__name__, 503, "pairing_review_unavailable") from exc
     rows = doc.get("by_requirement") if isinstance(doc, dict) else None
     return {"by_requirement": rows if isinstance(rows, dict) else {}}
 
 
+def _pairing_scope(project_id: str, requirement_no: str = "") -> dict:
+    """配对复核的**读侧**披露：`{"review": [...], "unavailable": {...}}`。
+
+    读得到 → 清单逐字带出、`unavailable = {}`；读不到 → `review = []` 但
+    `unavailable["code"] == "pairing_review_unavailable"`（既有结论键一个字不改，Spec §3）。
+    """
+    try:
+        rows = _pairing_doc(project_id)["by_requirement"].get(_text(requirement_no) or "")
+    except BomError as exc:
+        return {"review": [],
+                "unavailable": {"code": exc.code or "pairing_review_unavailable",
+                                "reason": "doc_channel_unavailable",
+                                "message": str(exc)}}
+    return {"review": [dict(row) for row in rows or [] if isinstance(row, dict)],
+            "unavailable": {}}
+
+
 def _load_pairing_review(project_id: str, requirement_no: str = "") -> list:
+    """只读清单（读不到 → 抛 `BomError`）；披露版本请用 `_pairing_scope()`。"""
     rows = _pairing_doc(project_id)["by_requirement"].get(_text(requirement_no) or "")
     return [dict(row) for row in rows or [] if isinstance(row, dict)]
+
+
+def _bind_error_scope(project_id: str, requirement_no: str = "") -> dict:
+    """回填失败的**读侧**披露（Spec `packaging-silent-degradation-disclosure.md` §2.1）。
+
+    读得到就原样带出（没有失败时 `{}`）；连这份披露文档都读不到时给
+    `code="binding_error_unavailable"` —— "查不到有没有失败"同样不许显示成"没失败"。
+    """
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, BIND_ERROR_DOC_KEY) or {}
+    except Exception as exc:                            # noqa: BLE001 - 见 docstring
+        return {"code": "binding_error_unavailable", "reason": type(exc).__name__,
+                "message": "回填失败留痕读不到（文档通道不可用：%s），"
+                           "别把这次当成「回填没有失败」" % type(exc).__name__}
+    rows = doc.get("by_requirement") if isinstance(doc, dict) else None
+    item = (rows or {}).get(_text(requirement_no) or "") if isinstance(rows, dict) else None
+    return dict(item) if isinstance(item, dict) else {}
+
+
+def _save_bind_error(project_id: str, requirement_no: str, error: Any) -> None:
+    """把回填失败留一份档；这次没失败就把上一次的留痕**清掉**（不许留下过期告警）。
+
+    写盘失败不改 BOM 结论（披露是加法）—— 读侧会以 `binding_error_unavailable` 说出来。
+    """
+    req_no = _text(requirement_no) or ""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, BIND_ERROR_DOC_KEY) or {}
+        if not isinstance(doc, dict):
+            doc = {}
+        bucket = doc.setdefault("by_requirement", {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            doc["by_requirement"] = bucket
+        record = dict(error) if isinstance(error, dict) and error else {}
+        if record:
+            bucket[req_no] = record
+        else:
+            bucket.pop(req_no, None)
+        get_backend().put_doc(project_id, BIND_ERROR_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001 - 披露写不进去不挡 BOM
+        return
 
 
 def _save_pairing_review(project_id: str, requirement_no: str, review: list) -> None:
@@ -1039,7 +1173,7 @@ def _save_pairing_review(project_id: str, requirement_no: str, review: list) -> 
 def _bind_parts(project_id: str, items: list, requirement_no: str = "") -> tuple:
     """有零件文档就自动回填（Spec `packaging-dwg-parts-extraction.md` C7）。
 
-    返回 `(items, pairing_review, role_unbound)` —— 中间那个是"配对后材料明显不同类"的
+    返回 `(items, pairing_review, role_unbound, binding_error)` —— 第二个是"配对后材料明显不同类"的
     清单，由 `build_bom()` 落一份文档，`load_bom()` 读回来（Spec
     `packaging-parse-to-downstream-seams.md` §3.2）；第三个是"零件没说自己是哪个部件、
     业务角色还没映射"的清单（Spec `packaging-part-role-manual-mapping.md` §2.1/§4.3）——
@@ -1053,15 +1187,24 @@ def _bind_parts(project_id: str, items: list, requirement_no: str = "") -> tuple
 
         doc = packaging_parts.load_parts(project_id)
         if not isinstance(doc, dict) or not doc.get("parts"):
-            return items, [], []
+            # 「没有零件文档」不是失败（Spec §2.1 第 3 条）：留痕必须是 {}。
+            return items, [], [], {}
         result = packaging_parts.bind_rows(items, doc)
         return (list(result.get("items") or items),
                 [dict(row) for row in (result.get("pairing_review") or [])
                  if isinstance(row, dict)],
                 [dict(row) for row in (result.get("role_unbound") or [])
-                 if isinstance(row, dict)])
-    except Exception:                                   # noqa: BLE001 - 回填失败不改既有结论
-        return items, [], []
+                 if isinstance(row, dict)],
+                {})
+    except Exception as exc:                            # noqa: BLE001 - 回填失败不改既有结论
+        # 失败必须**报出来**（Spec `packaging-silent-degradation-disclosure.md` §2.1）：
+        # 以前返回 3 元组，与"这个项目根本没有零件文档"逐字相同 —— 现场只能看到
+        # "零件有、BOM 没数"，没有任何地方说得出"回填这一步挂了"。
+        return items, [], [], {"code": "part_binding_failed",
+                               "reason": "%s: %s" % (type(exc).__name__, exc),
+                               "message": "零件回填这一步挂了（%s），BOM 行维持原状未改；"
+                                          "请查零件文档形状与配对口径，修好后重算"
+                                          % type(exc).__name__}
 
 
 def build_bom(project_id: str, requirement_no: str = "", *,
@@ -1082,13 +1225,16 @@ def build_bom(project_id: str, requirement_no: str = "", *,
     expanded = expand_parts(box_code, data, overrides=overrides or {})
     box = _load_box_type(box_code)
     items = _assemble(expanded, box, data, req_no)
-    items, pairing_review, role_unbound = _bind_parts(project_id, items, req_no)
+    items, pairing_review, role_unbound, binding_error = _bind_parts(project_id, items, req_no)
     # 重算不许把人工映射算没了（Spec `packaging-part-role-manual-mapping.md` §2.8）：
     # `_bind_parts()` 只认尺寸证据、不会碰角色，映射必须在这之后**重放**回来。
     items = apply_saved_role_map(project_id, req_no, items)
     da_repo.save_packaging_bom(project_id, req_no, items)
     _save_pairing_review(project_id, req_no, pairing_review)
     _save_role_unbound(project_id, req_no, role_unbound)
+    # 回填失败留痕（Spec `packaging-silent-degradation-disclosure.md` §2.1）：这次没失败就清掉
+    # 上一次的，避免过期告警；BOM 结论一个字不改。
+    _save_bind_error(project_id, req_no, binding_error)
     return load_bom(project_id, req_no)
 
 

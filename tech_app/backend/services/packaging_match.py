@@ -416,25 +416,49 @@ def _sort_key(candidate: dict):
     )
 
 
-def _part_template_count(box_type_code: str) -> int:
-    """该盒型的部件模板行数。**唯一来源**：`kb_repo.packaging_part_templates()`（与 BOM 同步）。
+def _part_template_state(box_type_code: str) -> tuple:
+    """该盒型的部件模板状态 → `(available, total, unavailable)`。
 
-    快照里没有这张表 / 读不到一律按 0 行（"没有模板"），与 BOM 那一步读不到模板时的结论一致。
+    **唯一来源**：`kb_repo.packaging_part_templates()`（与 BOM 那一步同一出处）。
+    读不到时 `available = None`（**未知**，不是"没有"）+ 显式原因（Spec
+    `packaging-silent-degradation-disclosure.md` §2.4）：把"我查不到"折成"它没有"，
+    会让一个完全可用的盒型被显示成"选了它往下走 BOM 会 409"，用户据此主动避开它。
     """
     code = _text(box_type_code)
     if not code:
-        return 0
+        return False, 0, {}
     try:
-        return len(kb_repo.packaging_part_templates(code) or [])
-    except Exception:                  # noqa: BLE001 - 见 docstring：读不到按没有模板
-        return 0
+        rows = list(kb_repo.packaging_part_templates(code) or [])
+    except Exception as exc:            # noqa: BLE001 - 见 docstring：未知不许折成"没有"
+        return None, 0, {"code": "template_lookup_failed", "reason": type(exc).__name__,
+                         "message": "部件模板暂时查不到（知识库读失败：%s），请稍后重试；"
+                                    "这不代表该盒型没有模板" % type(exc).__name__}
+    return bool(rows), len(rows), {}
+
+
+def _part_template_count(box_type_code: str) -> int:
+    """部件模板行数；**读不到给 0**（只用于"总数"这一格显示，判可用性请用 `_part_template_state()`）。"""
+    return _part_template_state(box_type_code)[1]
 
 
 def _template_warnings(box_type_code: str) -> list[dict]:
-    """确认时的可判分支警告：这个盒型还没有部件模板（Spec §2.3）。有模板就给空列表。"""
+    """确认时的可判分支警告（Spec §2.3）。有模板 / 未知都**不**给"没有模板"那句断言。
+
+    读不到知识库时说"暂时查不到，请稍后重试"（自己的码），**不许**说"该盒型没有模板"
+    —— 那是把"我查不到"说成了"它没有"（Spec `packaging-silent-degradation-disclosure.md` §2.4）。
+    """
     code = _text(box_type_code)
-    if not code or _part_template_count(code):
+    if not code:
         return []
+    available, _total, unavailable = _part_template_state(code)
+    if available:
+        return []
+    if available is None:
+        return [{"code": "box_type_template_lookup_failed",
+                 "box_type_code": code,
+                 "reason": _text(unavailable.get("reason")),
+                 "detail": "部件模板暂时查不到（知识库读失败），请稍后重试；"
+                           "这不代表该盒型没有模板"}]
     return [{"code": "box_type_without_part_template",
              "box_type_code": code,
              "detail": "该盒型在部件模板表里没有模板，下一步 BOM 会以 no_part_template 失败"}]
@@ -477,6 +501,7 @@ def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required
         status = "matched"
 
     total_score = (weighted / total_weight) if total_weight > 0 else 0.0
+    template_state = _part_template_state(_text(box.get("box_type_code")))
     return {
         "box_type_code": _text(box.get("box_type_code")),
         "name": _text(box.get("name")),
@@ -496,8 +521,11 @@ def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required
         # 「选它能不能往下走」（Spec `packaging-box-candidate-rank-and-runnability.md` §2.2）：
         # 有没有部件模板只有一个出处 —— BOM 那一步用的就是 `kb_repo.packaging_part_templates()`。
         # 没有模板**不**改 status / total_score / can_confirm：匹配质量与知识库完备度是两件事。
-        "part_template_available": bool(_part_template_count(_text(box.get("box_type_code")))),
-        "part_template_total": _part_template_count(_text(box.get("box_type_code"))),
+        # 读不到时给 `None`（未知）+ `part_template_unavailable`，**不许**折成 `False`
+        # （Spec `packaging-silent-degradation-disclosure.md` §2.4）。
+        "part_template_available": template_state[0],
+        "part_template_total": template_state[1],
+        "part_template_unavailable": dict(template_state[2]),
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
         "industry": _text(box.get("industry")),

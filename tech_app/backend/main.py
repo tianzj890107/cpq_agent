@@ -6870,10 +6870,20 @@ def get_requirement_packaging_bom_role_map(pid: str, requirement_no: str = "",
     req_no = packaging_bom._resolve_requirement_no(pid, requirement_no)
     items = [row for row in packaging_bom.load_bom(pid, req_no).get("items") or []]
     scope = packaging_bom.role_candidates_for(pid, req_no)
-    return {"role_map": packaging_bom.role_map_status(
+    # 人工映射文档读不到 → **显式报错**，不许按"没人映射过"渲染整张表
+    # （Spec `packaging-silent-degradation-disclosure.md` §2.2/§3）。
+    try:
+        role_map = packaging_bom.role_map_doc(pid)
+    except packaging_bom.BomError as exc:
+        raise HTTPException(status_code=int(getattr(exc, "status_code", 503) or 503),
+                            detail={"code": exc.code or "role_map_unavailable",
+                                    "message": str(exc)}) from exc
+    body = packaging_bom.role_map_status(
         items, box_type_code=scope.get("box_type_code") or "",
-        part_templates=scope.get("part_templates") or [],
-        role_map=packaging_bom.role_map_doc(pid))}
+        part_templates=scope.get("part_templates") or [], role_map=role_map)
+    # KB 读不到时"模板暂时读不到"必须能一路走到界面（Spec §2.3）：键名不变，原样带出。
+    body["templates_unavailable"] = dict(scope.get("templates_unavailable") or {})
+    return {"role_map": body, "templates_unavailable": body["templates_unavailable"]}
 
 
 @app.post(PACKAGING_BOM_ROLE_MAP_WRITE_PATH)

@@ -1807,14 +1807,32 @@ function packagingRoleMapUrl() {
   return `/api/projects/${currentProject}/requirement/packaging-bom/role-map`;
 }
 
+// 读不到**不许**显示成"每一行都有业务角色了"（Spec `packaging-silent-degradation-disclosure.md`
+// §2.2/§4）：接口显式报错（503 role_map_unavailable）时把真因说出来。
+function renderPackagingRoleMapUnavailable(message) {
+  const host = $("packagingRoleMap");
+  if (host) {
+    host.innerHTML = `<div class="role-map-warning" data-role-map-unavailable="1">`
+      + `人工角色映射读不到：${esc(String(message || "请稍后重试"))}</div>`;
+  }
+  return null;
+}
+
 async function loadPackagingRoleMap() {
   if (!currentProject) return null;
   try {
     const res = await fetch(API + packagingRoleMapUrl());
-    if (!res.ok) return null;
     const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = payload && payload.detail;
+      return renderPackagingRoleMapUnavailable(
+        (detail && (detail.message || detail)) || (payload && payload.message)
+        || `HTTP ${res.status}`);
+    }
     return renderPackagingRoleMap((payload && payload.role_map) || {});
-  } catch (error) { return null; }
+  } catch (error) {
+    return renderPackagingRoleMapUnavailable("网络错误，请稍后重试");
+  }
 }
 
 function renderPackagingRoleMap(roleMap) {
@@ -1823,8 +1841,17 @@ function renderPackagingRoleMap(roleMap) {
   const rows = Array.isArray(roleMap && roleMap.items) ? roleMap.items : [];
   const total = Number((roleMap && roleMap.unbound_total) || rows.length || 0);
   const summary = `<div class="role-map-summary">角色未映射 ${total} 行</div>`;
+  // 部件模板这一趟没读到 (Spec `packaging-silent-degradation-disclosure.md` §2.3/§4)：
+  // **不许**显示成"该盒型没有部件模板"，也不许把空下拉当成事实。
+  const unavailable = (roleMap && roleMap.templates_unavailable) || {};
+  const unavailableNote = unavailable.code
+    ? `<div class="role-map-warning" data-role-map-templates-unavailable="1">`
+      + `模板暂时读不到（${esc(String(unavailable.code))}），请稍后重试；`
+      + `这不代表该盒型没有部件模板。</div>`
+    : "";
   if (!total) {
-    host.innerHTML = summary + '<div class="role-map-empty">每一行都有业务角色了。</div>';
+    host.innerHTML = summary + unavailableNote
+      + '<div class="role-map-empty">每一行都有业务角色了。</div>';
     return roleMap;
   }
   const fallback = Array.isArray(roleMap.role_candidates) ? roleMap.role_candidates : [];
@@ -1835,7 +1862,9 @@ function renderPackagingRoleMap(roleMap) {
       .map(name => `<option value="${esc(String(name))}">${esc(String(name))}</option>`).join("");
     const picker = optionHtml
       ? `<select class="role-map-role" data-role-map-role="${esc(String(row.item_key))}">${optionHtml}</select>`
-      : '<span class="role-map-note">没有候选角色（确认盒型的部件模板为空）</span>';
+      : (unavailable.code
+        ? '<span class="role-map-note">候选角色暂时读不到（部件模板查询失败），请稍后重试</span>'
+        : '<span class="role-map-note">没有候选角色（确认盒型的部件模板为空）</span>');
     return '<div class="role-map-row" data-role-map-row="' + esc(String(row.item_key)) + '"'
       + ` data-part-code="${esc(String(row.part_code || ""))}">`
       + `<span class="role-map-key">${esc(String(row.item_key))}</span>`
@@ -1845,7 +1874,7 @@ function renderPackagingRoleMap(roleMap) {
       + ` data-part-code="${esc(String(row.part_code || ""))}"`
       + (optionHtml ? "" : " disabled") + ">提交</button></div>";
   }).join("");
-  host.innerHTML = summary + `<div class="role-map-rows">${body}</div>`;
+  host.innerHTML = summary + unavailableNote + `<div class="role-map-rows">${body}</div>`;
   host.querySelectorAll("[data-role-map-submit]").forEach(button => {
     button.addEventListener("click", () => { submitPackagingRoleMap(button); });
   });
