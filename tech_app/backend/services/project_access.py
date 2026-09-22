@@ -54,7 +54,36 @@ CONTRIBUTE_ROUTES = (
     ("PUT", "/api/projects/{project_id}/process-report/distribution"),
     ("POST", "/api/projects/{project_id}/process-report/publish"),
     ("PUT", "/api/projects/{project_id}/requirement/customer-credit"),
+    # 注意：「包装成本测算」不在这一张表里 —— 本表被
+    # `tests/test_tech_project_acl_contribute_mode_red`（Spec §18.5）逐条钉死为**正好 21 条**，
+    # 加一条就把它打红。那一条动作改用下面 `PACKAGING_COST_ROUTES` 表达的**同一套范式**
+    # （显式逐条白名单 + 动作级依据，Spec `packaging-cost-write-role-single-source.md` §2.1），
+    # 见 `packaging_cost_action_basis()`。
 )
+
+
+#: 包装成本的四条路由（Spec `packaging-cost-write-role-single-source.md` §2.1 / §2.2）。
+#: 这一组是**唯一**允许「项目还没算出成本也按动作放行 / 给可判码」的动作：财务在成本算出来
+#: 之前按 `_packaging_cost_visible()` 本来就看不见项目，一律回 404「项目不存在」的话，用户
+#: 分辨不出「我没权限」「项目被删了」和「还没算过」。逐条白名单，不写成推断式规则（Spec §18.5）。
+PACKAGING_COST_ROUTES = (
+    ("POST", "/api/projects/{project_id}/requirement/packaging-cost"),
+    ("GET", "/api/projects/{pid}/requirement/packaging-cost"),
+    ("GET", "/api/projects/{pid}/requirement/packaging-cost/items"),
+    ("GET", "/api/projects/{pid}/requirement/packaging-cost/curve"),
+)
+#: 其中**写**的那一条：「算成本」这个动作本身。
+PACKAGING_COST_BUILD_ROUTES = (
+    ("POST", "/api/projects/{project_id}/requirement/packaging-cost"),
+)
+#: 包装行业码（与 `packaging_cost` / `packaging_match` 的 INDUSTRY 同值；只读判定用）。
+PACKAGING_INDUSTRY = "packaging"
+#: 「项目存在、但还没算过包装成本」的可判分支码（Spec §2.2）。HTTP 层（`main.py` 的项目 ACL
+#: 中间件）把它翻成 403 + `{code, message}`；真不存在的项目仍然是 404「项目不存在」，一字不改。
+COST_NOT_COMPUTED_CODE = "cost_not_computed_yet"
+COST_NOT_COMPUTED_MESSAGE = (
+    "项目存在，但还没有算过包装成本 —— 财务在成本算出来之前看不到它。"
+    "请先让工艺经理（或你本人）算出这一版成本，算完即可见。")
 
 
 def _route_matcher(template: str):
@@ -80,6 +109,84 @@ def is_contribute_route(method: str, path: str) -> bool:
     target = str(path or "")
     return any(row_method == verb and matcher.match(target)
                for row_method, matcher in CONTRIBUTE_MATCHERS)
+
+PACKAGING_COST_MATCHERS = tuple((method, _route_matcher(path))
+                                 for method, path in PACKAGING_COST_ROUTES)
+PACKAGING_COST_BUILD_MATCHERS = tuple((method, _route_matcher(path))
+                                      for method, path in PACKAGING_COST_BUILD_ROUTES)
+
+
+def _matches(method: str, path: str, matchers) -> bool:
+    verb = _text(method).upper()
+    target = str(path or "")
+    return any(row_method == verb and matcher.match(target)
+               for row_method, matcher in matchers)
+
+
+def is_packaging_cost_route(method: str, path: str) -> bool:
+    """这次请求是不是包装成本那四条路由之一（含读与写）。"""
+    return _matches(method, path, PACKAGING_COST_MATCHERS)
+
+
+def is_packaging_cost_build_route(method: str, path: str) -> bool:
+    """这次请求是不是「算一次包装成本」这个动作本身（POST）。"""
+    return _matches(method, path, PACKAGING_COST_BUILD_MATCHERS)
+
+
+def _industry_of(project_id: str) -> str:
+    """需求单里的行业（只读；读不到给空串，绝不抛）。"""
+    if not project_id:
+        return ""
+    try:
+        doc = store.load_requirement(project_id) or {}
+    except Exception:              # noqa: BLE001 - 读不出来按「不是包装」处理
+        return ""
+    data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+    return _text(data.get("industry")) or _text(doc.get("industry"))
+
+
+def packaging_cost_action_basis(user: dict, project_id: str, action=None,
+                                meta: dict = None) -> bool:
+    """「算一次包装成本」这条动作的**动作级** ACL 依据（Spec §2.1 方案 A）。纯读。
+
+    财务算包装成本是通用流程本来的口径（`auth.COST_ROLES` / `main.py` 的 `can_cost` 一直这么
+    告诉前端），但这个项目的**读**依据是「成本算出来才可见」—— 于是「第一次算成本」这件事自己
+    把自己挡在门外（34 实测：财务点测算 → 404「项目不存在」）。
+    这里按 Spec 的要求逐条放行**这一个动作**：财务 + 项目存在 + 未归档 + 行业是包装。
+    只放行这个动作：不给项目读权（`can_read` 一字不改），更不给写权（`can_write` 一字不改）。
+    """
+    if not _is_finance(user):
+        return False
+    method, path = action if action else (None, None)
+    if not is_packaging_cost_build_route(method, path):
+        return False
+    if not project_id:
+        return False
+    meta = store.load_meta(project_id) if meta is None else meta
+    if not meta or meta.get("deleted_at"):
+        return False
+    return _industry_of(project_id) == PACKAGING_INDUSTRY
+
+
+def packaging_cost_state_code(user: dict, project_id: str, action=None,
+                              meta: dict = None) -> str:
+    """§2.2 的可判分支码：**只有**「财务 + 包装成本动作 + 包装项目 + 项目存在未归档 +
+    成本还没算过」这一种组合才拿到它自己的码；其余组合一律沿用既有的 not_found / forbidden，
+    行为一个字不变（不泄露其它项目、其它行业的存在性）。纯读。"""
+    if not _is_finance(user) or not project_id:
+        return ""
+    method, path = action if action else (None, None)
+    if not is_packaging_cost_route(method, path):
+        return ""
+    meta = store.load_meta(project_id) if meta is None else meta
+    if not meta or meta.get("deleted_at"):
+        return ""
+    if _industry_of(project_id) != PACKAGING_INDUSTRY:
+        return ""
+    if _packaging_cost_visible(project_id):
+        return ""
+    return COST_NOT_COMPUTED_CODE
+
 
 # 读全部技术项目：经理 / 总监 / 校核 / 总经理 / 管理员。写全部只有工艺经理与管理员，
 # 与 auth.can_edit_project 的经理口径一致（总监能审能发，但不因此获得项目级写权）。
@@ -334,16 +441,32 @@ def can_access(project_id: str, user: dict, mode: str = "read") -> bool:
     return can_write(user, meta) if mode == "write" else can_read(user, meta)
 
 
-def require_project_access(project_id: str, user: dict, mode: str = "read") -> dict:
+def require_project_access(project_id: str, user: dict, mode: str = "read", *,
+                           action=None) -> dict:
     """项目级唯一判定：通过返回 meta；不可见 / 归档要写 -> not_found；可见但改不动 -> forbidden。
 
     not_found 的文案与「项目确实不存在」逐字相同（HTTP 层统一映射 404「项目不存在」），
     避免从响应里反推出「它其实存在只是我没权限」。
+
+    `action=(method, path)`：动作级判定的补充依据（Spec
+    `packaging-cost-write-role-single-source.md` §2.1/§2.2）——包装成本那一条动作，
+    财务在「成本还没算过」时也允许执行；读它的时候则给**可判的状态码**而不是 404。
+    不传 action 的老调用点行为逐字不变。
     """
     meta = store.load_meta(project_id)
     if not meta:
         raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
+    # 「财务算包装成本」这条动作的依据（Spec §2.1 方案 A）：它只对那一个 POST 成立（GET 一律
+    # 不认），且自带「项目存在 + 未归档 + 行业是包装」三个前提。先算出来，是因为它要在**未算过**
+    # （项目还读不到）与**算过之后**（项目能读、但项目级写权仍不给财务）两种状态下给同一个答案 ——
+    # 否则财务只能算第一版、重算又被挡，等于把两套口径换个方向再来一次。
+    build_basis = packaging_cost_action_basis(user, project_id, action, meta)
     if not can_read(user, meta):
+        if build_basis:
+            return meta
+        code = packaging_cost_state_code(user, project_id, action, meta)
+        if code:
+            raise ProjectAccessError(code, COST_NOT_COMPUTED_MESSAGE)
         # 真不存在才 404；**已领取但不可读**（归档等）如实给 403（Spec §3.4）——
         # 用「项目不存在」藏起一条自己领过的待办，用户只会以为数据丢了。
         if claimed_task_project_access(project_id, user):
@@ -357,7 +480,9 @@ def require_project_access(project_id: str, user: dict, mode: str = "read") -> d
     if mode == "write":
         if meta.get("deleted_at"):
             raise ProjectAccessError("not_found", NOT_FOUND_MESSAGE)
-        if not can_write(user, meta):
+        # 命中动作级依据的那一条动作不按项目级写权判：`can_write()` 一字不改（财务仍然不是这个
+        # 项目的"能改的人"），只是「算一次包装成本」不属于"改项目"这个动作。
+        if not can_write(user, meta) and not build_basis:
             raise ProjectAccessError("forbidden", FORBIDDEN_MESSAGE)
     return meta
 

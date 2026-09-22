@@ -564,10 +564,17 @@ async def project_write_guard(request: Request):
     else:
         mode = "write"
     try:
-        project_access.require_project_access(match.group(1), user, mode)
+        project_access.require_project_access(match.group(1), user, mode,
+                                              action=(request.method, request.url.path))
     except project_access.ProjectAccessError as exc:
         if exc.code == "not_found":
             raise HTTPException(404, "项目不存在") from exc
+        if exc.code == project_access.COST_NOT_COMPUTED_CODE:
+            # 「项目存在、但还没算过包装成本」是自己的分支（Spec
+            # `packaging-cost-write-role-single-source.md` §2.2）：403 + 可判 code，不再复用
+            # 404「项目不存在」—— 财务据此知道「该找谁先算一次」，而不是以为项目被删了。
+            raise HTTPException(403, {"code": "cost_not_computed_yet",
+                                      "message": exc.message}) from exc
         raise HTTPException(403, exc.message or "无权访问该项目") from exc
 
 
@@ -7204,7 +7211,10 @@ def build_requirement_packaging_cost(
     user: dict = Depends(current_user),
 ):
     """逐部件 × 逐成本类别算成本并落库；重算整体替换，不许翻倍（Spec §3.2）。"""
-    _require(user, packaging_cost.COST_WRITE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    # 财务经理也在写角色里（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A：
+    # 财务与工艺侧都能算，工艺代算留痕在成本记录里）—— 文案同步，别让财务照着找不到自己的角色。
+    _require(user, packaging_cost.COST_WRITE_ROLES,
+             "需要工艺经理、工艺技术总监、财务经理或管理员权限")
     _workflow_project(project_id)
     record = _packaging_cost_flow(packaging_cost.build_cost, project_id, body.requirement_no,
                                   scenario=(body.scenario or None), actor=user)

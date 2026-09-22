@@ -12977,3 +12977,57 @@ tests.test_packaging_quote_send_recovery_red              → 1 红（存量 ## 
 - 按钮只有一颗，落在技术侧包装成本面板；卡片侧靠的正是本批的随行整包（Spec §3「任选页面」）。
 - `test_packaging_quote_send_recovery_red::CMetaRecovery::test_c1` 仍红是存量 `## 272`，
   本批不顺手改它。未改任何测试；未连 PG、未写业务数据；未 push / MR / tag / Release / 未部署。
+## 323. `## 319`/包装成本权限落地：财务能算包装成本（口径合一）+「项目存在但还没算过成本」有了自己的分支码（9-22，Codex 实现）
+
+`docs/specs/packaging-cost-write-role-single-source.md` 的 3 条红（A1/A2/B1）已转绿，
+既有冻结面（可见性 / ACL 归档 / 21 条专属动作白名单）一条没破。
+
+### 一、选了方案 A（Spec §2.1 标注「推荐，与流程口径一致」）
+
+财务经理能算包装成本。依据全是仓里既有事实：`auth.COST_ROLES = {finance_manager, admin}`、
+`main.py` 的 `can_cost`、2.3 流程归属、`cpq_sso` 的 `finance_mgr → finance_manager` 映射。
+方案 B 会连带改掉通用 2.3 的口径，超出本 Spec「两套口径合一」的范围。工艺侧代算保留，
+`computed_by` / `computed_by_role` 留痕照旧。
+
+### 二、改了什么
+
+- `tech_app/backend/services/packaging_cost.py`：`COST_WRITE_ROLES` 加 `finance_manager`
+  （工艺侧不动），注释改写成「两边都认：财务（流程归属）+ 工艺侧（代算，必须留痕）」。
+- `tech_app/backend/services/project_access.py`：新增 `PACKAGING_COST_ROUTES`（4 条）/
+  `PACKAGING_COST_BUILD_ROUTES`（那条 POST）、`is_packaging_cost_route()` /
+  `is_packaging_cost_build_route()`、动作级依据 `packaging_cost_action_basis()`、状态码
+  `packaging_cost_state_code()` + `COST_NOT_COMPUTED_CODE`；`require_project_access()` 接上
+  `action=(method, path)`（不传的老调用点行为逐字不变）。`can_read()` / `can_write()` 一字未改。
+- `tech_app/backend/main.py`：ACL 中间件把 `action` 传下去；`cost_not_computed_yet` →
+  **403 + `{code, message}`**（不再复用 404「项目不存在」；真不存在的项目仍然 404，一字不改）；
+  成本写路由的 `_require` 文案补上「财务经理」。
+
+### 三、行为复验
+
+| 场景 | 结果 |
+| --- | --- |
+| 财务 + 包装 + 成本没算过 + POST | 放行（34 上这里回的是 404「项目不存在」） |
+| 财务 + 包装 + 算过 + POST | 放行（重算不被挡） |
+| 财务 + 包装 + 没算过 + GET | `cost_not_computed_yet`（403 + 可判 code） |
+| 财务 + 非包装 / 归档 / 不存在 | `not_found`（不泄露存在性） |
+| `can_read` / `can_write`（财务） | 仍然 False / False |
+
+### 四、实测
+
+```
+tests.test_packaging_cost_write_role_single_source_red   → Ran 5 OK（原 3 红全绿）
+tests.test_packaging_cost_finance_access_red             → Ran 10 OK
+tests.test_tech_project_acl_contribute_mode_red          → Ran 28 OK
+tests.test_tech_project_acl_scope_red                    → Ran 28 OK
+tests.test_cpq_eval_route_coverage                       → Ran 14 OK
+tests.test_packaging_cost_red_closure_red                → Ran 14 OK
+tests.test_packaging_cost_engine_red                     → 1 红（存量 ## 273 J6）
+```
+
+### 五、已记录的偏差
+
+Spec §2.1 方案 A 举的落点是 `CONTRIBUTE_ROUTES`，但那张表被
+`tests/test_tech_project_acl_contribute_mode_red` 逐条钉死为**正好 21 条**，加一条就把它打红。
+本批改用 `PACKAGING_COST_ROUTES` 承载**同一套范式**（显式逐条白名单 + 动作级依据 + 可审），
+并在 `CONTRIBUTE_ROUTES` 里留注释说明。未改任何测试；未连 PG、未写业务数据；
+未 push / MR / tag / Release / 未部署。

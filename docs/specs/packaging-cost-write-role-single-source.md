@@ -1,6 +1,6 @@
 # 规格：包装成本「谁能算」只许有一个出处（现在有五处，口径互相相反）
 
-状态：Spec + 红测（未实现）
+状态：Spec + 红测（已实现）（按 §2.1 **方案 A** 落地：财务能算、工艺侧仍可代算且留痕；§2.2 给了自己的分支码；落地记录与两处已记录的偏差见 §7）
 红测：`tests/test_packaging_cost_write_role_single_source_red.py`
 
 血缘：**承接**（不取代）`packaging-cost-finance-access.md`（财务**可见性**的唯一出处）、
@@ -99,3 +99,79 @@
   选 A 还是选 B 由产品口径拍板；
 - 不放宽"成本没算出来之前财务看不见项目"这条可见性口径；
 - 不在本批动前端按钮逻辑（前端已经按 `can_cost` 放行，改后端即可对齐）。
+
+## 7. 落地记录（2026-09-22，Codex 实现）
+
+### 一、选了哪个方案
+
+**方案 A**（Spec §2.1 标为「推荐，与流程口径一致」）：财务经理能算包装成本。
+
+理由（三条都是仓里既有事实，不是新口径）：`auth.COST_ROLES = {finance_manager, admin}` 与
+`main.py` 的 `can_cost` 一直这么告诉前端；2.3「成本测算」按流程文档与 `main.py` 的文案归财务；
+`cpq_sso` 把 CPQ 的 `finance_mgr` 映射成技术工艺的 `finance_manager`。方案 B（从这三处删掉财务）
+会同时改掉通用 2.3 的口径，超出本 Spec「两套口径合一」的范围。**工艺侧代算保留**，
+`computed_by` / `computed_by_role` 留痕照旧（Spec §2.2 只要求把 `finance_manager` 加进来）。
+
+### 二、改了哪三个文件
+
+1. `tech_app/backend/services/packaging_cost.py`
+   `COST_WRITE_ROLES = {"process_manager", "process_director", "finance_manager", "admin"}`
+   —— 只**加**财务，工艺侧不动；那段解释「与 `auth.COST_ROLES` 的关系」的注释同步改写成
+   「两边都认：财务（流程归属）+ 工艺侧（代算，必须留痕）」，与 `auth.COST_ROLES` 逐字对齐。
+2. `tech_app/backend/services/project_access.py`
+   - 新增 `PACKAGING_COST_ROUTES`（4 条：POST + GET / GET items / GET curve）与
+     `PACKAGING_COST_BUILD_ROUTES`（只有那条 POST），以及配套的 `_matches` /
+     `is_packaging_cost_route()` / `is_packaging_cost_build_route()`；
+   - 新增 `packaging_cost_action_basis(user, project_id, action, meta)`：**动作级** ACL 依据，
+     只对那条 POST 成立，前提取「财务 + 项目存在 + 未归档 + 行业是包装」。它只放行**这一个动作**：
+     `can_read()` / `can_write()` 两个函数一字未改（财务仍然不是「能改这个项目的人」）；
+   - 新增 `packaging_cost_state_code(...)` + 常量 `COST_NOT_COMPUTED_CODE = "cost_not_computed_yet"`
+     与那句人话：**只有**「财务 + 包装成本动作 + 包装项目 + 项目存在未归档 + 成本还没算过」
+     这一种组合才拿到它自己的码，其余组合一律沿用既有的 `not_found` / `forbidden`；
+   - `require_project_access(project_id, user, mode, *, action=None)` 接上这两条判定；
+     不传 `action` 的老调用点行为逐字不变。
+3. `tech_app/backend/main.py`
+   - `project_write_guard` 把 `action=(request.method, request.url.path)` 传进去；
+   - 新增 HTTP 映射：`exc.code == COST_NOT_COMPUTED_CODE` → **403 + `{"code":
+     "cost_not_computed_yet", "message": …}`**（不再复用 404「项目不存在」）；
+     真不存在的项目仍然 404「项目不存在」，一字不改；
+   - 包装成本写路由的 `_require` 文案补上「财务经理」。
+
+### 三、行为复验（本机 `require_project_access` 直接跑，mock 只读口径）
+
+| 场景 | 结果 |
+| --- | --- |
+| 财务 + 包装项目 + 成本**没算过** + POST | **放行**（第一次算成本不再被自己挡住 —— 34 上就是这里回的 404） |
+| 财务 + 包装项目 + 成本**算过** + POST | **放行**（重算同样放行；不会「只能算第一版」） |
+| 财务 + 包装项目 + 算过 + GET | 放行（可见性依据本来就在） |
+| 财务 + 包装项目 + 没算过 + GET | **`cost_not_computed_yet`**（不带 `action` 的老调用点仍是 `not_found`） |
+| 财务 + 非包装项目 / 归档项目 / 项目不存在 | `not_found`（一字不改，不泄露存在性） |
+| 工艺经理 + 未算过 | 放行（既有行为不变） |
+| `can_read` / `can_write`（财务，未算过 / 算过） | 仍然 `False` / `False`（Spec §2.3 冻结面） |
+
+### 四、实测
+
+```
+tests.test_packaging_cost_write_role_single_source_red   → Ran 5 OK（原 3 红全绿）
+tests.test_packaging_cost_finance_access_red             → Ran 10 OK（A3/A4/A5 三条冻结面未破）
+tests.test_tech_project_acl_contribute_mode_red          → Ran 28 OK（21 条白名单未动）
+tests.test_tech_project_acl_scope_red                    → Ran 28 OK
+tests.test_cpq_eval_route_coverage                       → Ran 14 OK（策略表白名单条数一致）
+tests.test_packaging_cost_engine_red                     → 1 红（存量 ## 273 J6，与本批无关）
+tests.test_packaging_cost_red_closure_red                → Ran 14 OK
+```
+
+### 五、已记录的偏差（不改测试）
+
+1. Spec §2.1 方案 A 举的落点是 `project_access.CONTRIBUTE_ROUTES`，但那张表被
+   `tests/test_tech_project_acl_contribute_mode_red`（Spec §18.5）逐条钉死为**正好 21 条**，
+   加一条就把它打红。本批改用 `PACKAGING_COST_ROUTES` 表达**同一套范式**
+   （显式逐条白名单 + 动作级依据 + 可审、不写成推断式规则），并在 `CONTRIBUTE_ROUTES` 里留了
+   一行注释说明「为什么这里没有它」。口径与 Spec 一致，只是承载它的那张表换了一张。
+2. 那条动作在 `mode="write"` 下也认这条依据（`require_project_access` 不按 mode 区分）——
+   因为 POST 本来就走 write 通道；这不是放宽"项目写权"：`can_write()` 函数本身没改，
+   依据只对这一个动作、这一个行业、这一个角色成立。
+3. `tests/test_packaging_cost_engine_red::JPersistAndApi::test_j6_write_roles_reuse_batch4`
+   仍红：它要求 `COST_WRITE_ROLES is packaging_match.BOX_MATCH_DECIDE_ROLES`（同一个对象），
+   而 `packaging-cost-finance-access.md` §2.2 明确要求这两者**不许**互为别名（那是存量 `## 273`
+   的冲突，两份 Spec 打架，本批不动其中任何一方）。

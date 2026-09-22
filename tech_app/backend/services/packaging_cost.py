@@ -134,9 +134,15 @@ STEP_RATE_MAP = {
 #: `computed_by` / `computed_by_role`（§2.3），事后能回答「这一版是谁算的」。
 #:
 #: 与通用 2.3 的关系：`auth.COST_ROLES = {"finance_manager", "admin"}`（通用流程「成本只能财务改」）。
-#: 包装这条链路保留工艺代算是**显式例外**，这条注释就是那处例外本身 —— 而不是把 `COST_ROLES`
-#: 悄悄放宽成两边都认，也不是让两个口径各写一份、谁也说不清。
-COST_WRITE_ROLES = {"process_manager", "process_director", "admin"}
+#: 包装这条链路**两边都认**：财务经理（流程归属）与工艺侧（代算）都能算，但**代算必须留痕** ——
+#: 成本记录带 `computed_by` / `computed_by_role`，事后能回答「这一版是谁算的」。
+#:
+#: 为什么把财务经理**加进来**（Spec `packaging-cost-write-role-single-source.md` §2.1 方案 A）：
+#: `auth.COST_ROLES` 与 `main.py` 的 `can_cost` 一直告诉前端「财务能算」，服务端却按这里把他
+#: 挡在外面、项目 ACL 也只给他「成本算完之后的可见性」。两套口径同时活着，用户看到的是
+#: 「按钮点得动，点完告诉你项目不存在」。本批按那份 Spec 的推荐方案把口径合成一处：
+#: 财务能算，工艺侧仍可代算且留痕。
+COST_WRITE_ROLES = {"process_manager", "process_director", "finance_manager", "admin"}
 
 #: 04 `PKG-C-*` 的表达式正文（DSL 白名单内；小数常量写成整数除法，见模块头注释）。
 _MATERIAL_EXPR = ("cut_length*cut_width/1000000*gsm/1000000*ton_price/tax_factor/"
