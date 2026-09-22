@@ -12435,3 +12435,61 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 只改 `packaging_match.py` / `main.py` / `workflow.js` / `requirement-confirm.js` /
 `requirement-confirm.html` / 本批 Spec 状态行 / 追加本 changelog；未改 `tests/` 既有文件、
 未改另外四个错误类的既有码、未放宽任何门禁、未连 PG、未发 HTTP、未写业务数据、未部署。
+
+## 314. 34 全流程真跑（报价 → 图纸 → 零件 → BOM → 工艺 → 成本 → 回传 → 卡片）：链条通了，卡点全在"选型"与"财务"两头（9-22，Codex 只改 Spec / 红测 / changelog）
+
+### 部署
+
+`## 310` 提交 `765d394` 已双推 GitLab / GitHub `ytbz`，并部署到 34（脚本自检全绿）：
+`2b7fa6c → 765d394`、`8010 health=ok`、主转换器 `oda/27.1`、隔离端到端自检
+`酒盒.dwg 263 件 / closed_ratio=0.510`、`圆盘盒.dwg 312 件 / 0.817`。
+推送时远端分支是 `ytbz`（本会话工作分支，34 也跑它），`scripts/push_remotes.py` 只允许从
+`20260909` 推送，所以本次走 `git push origin ytbz` + `git -c url.<IP 兜底>.push gitlab ytbz`。
+
+### 全流程实测结果（34，`酒盒.dwg`，`SM1`/`PE1`/`FI1`）
+
+| 步 | 结果 |
+| --- | --- |
+| 报价会话（SM1）+ 建项目（PE1）+ 需求草稿 + 人工确认 | 200 |
+| 一键解析 8 步 | 8/8 `completed`（12.4s） |
+| 零件文档 | **263 件 / 101 种**，`closed_ratio=0.51`、`processable_ratio=0.51`，读接口分页正常 |
+| 盒型匹配 | 200，**14 个候选**（`missing_inputs=['fit_clearance']`） |
+| 盒型确认 | 200 |
+| BOM | 200，**31 行**，其中 `source=dwg_parts` 的行由零件回填尺寸（`binding_evidence.part_code=DWG-P01/P02/P03`） |
+| 工艺路线 + 确认 | 200，**11 道**（灰板开料 → … → 清洁包装） |
+| 成本 | **PE1 200**，`total_cost=17.754993`（材料 12.497 + 工艺 0.424 + 人工 1.518），20 个 `gaps` |
+| 回传报价 | 200，`handoff=pkghandoff:afe9e844f2ec:REQ-AFE9E844F2EC:default:1` |
+| 卡片 | `3991599111932482926`，第 1/2 步 done，走完 3–6 步后 `status=completed`，第 5 步落报价版本 `version_no=1` |
+
+卡片第 2 步的快照里带着整包事实（盒型 `YT-RB-01001-A`、31 行 BOM、成本结果版本
+`pkgcost-v1:5000.0:17.754993`），所以"回到卡片看零件/报价"这条路径本身是通的。
+
+### 卡在哪（三处，全部实测复现）
+
+1. **候选不是按相似度排序**：`matched` 组内是 0.667 / 0.767 / 0.800 / 0.800 / 0.800 / **0.900 / 0.900**，
+   `rejected` 组内是 0.533 / 0.533 / 0.663 / 0.663 / 0.663 / 0.333 —— 而
+   `packaging-box-type-matching.md` §3 的排序键明写 `total_score 降序`。落库的 `candidates_json`
+   也是这个顺序，所以"点第一个候选"必落到 0.667 的**圆型筒盒**上（它还带
+   `v_groove_required_but_unsupported`）。**这是本批最该先修的一条**。
+2. **候选取不到"有没有部件模板"**：两个 0.900 的盒型（`YT-RB-01003-A` / `YT-RB-05001-A`）
+   确认之后 `packaging-bom` 直接 **409「盒型 … 没有部件模板，无法展开」**（`no_part_template`），
+   而 0.800 的 `YT-RB-01001-A` 能出 31 行 —— 这件事实在**确认那一刻完全看不到**，也没有任何留痕。
+3. **财务点不了成本**：`FI1` 在成本没算出来之前拿到 **404「项目不存在」**（项目就在那儿），
+   算过之后再点拿到 **403「你的角色只能查看该项目，不能修改」**；同一动作 `PE1` 200。
+   根因是"谁能算包装成本"仓里有**五个出处、两个相反答案**：`auth.COST_ROLES` 与 `main.py`
+   的 `can_cost` 放行财务（前端按钮为此放行），`packaging_cost.COST_WRITE_ROLES` 与项目 ACL 拒绝财务。
+
+### 新增（Spec + 红测，均未实现）
+
+| Spec | 红测 | 现状 |
+| --- | --- | --- |
+| `packaging-box-candidate-rank-and-runnability.md` | `test_packaging_box_candidate_rank_and_runnability_red.py` | `Ran 8`，**failures=5 / errors=1**（A1–A3 排序、B1–B3 字段、C1 确认留痕）；C2「有模板的盒型不出现该警告」是护栏，本来就绿 |
+| `packaging-cost-write-role-single-source.md` | `test_packaging_cost_write_role_single_source_red.py` | `Ran 5`，**failures=3**（A1 两个角色集不同口径、A2 `can_cost` 与 `COST_WRITE_ROLES` 相反、B1 缺 `cost_not_computed_yet` 类可判分支码）；B2/B3 护栏绿 |
+
+两条红测都用受控快照 + 临时 SQLite，不连 PG、不发 HTTP。
+
+### 边界
+
+只新增 2 份 Spec、2 个红测文件、追加本 changelog；未改任何业务实现、未改既有测试、
+未改 `tests/` 下已有文件、未直接写 PG、未删除任何 34 上的项目或会话（本轮新建的
+`afe9e844f2ec` / `566207eb006a` 及上一轮的探测项目全部保留）。
