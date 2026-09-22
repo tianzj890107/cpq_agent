@@ -2187,6 +2187,30 @@ function packagingPartDetailReadProblemText(problem) {
     : "暂时读不到这一件（网络错误），请稍后重试；这不代表这一件没有数据";
 }
 
+// 单件结论的「业务部件身份」文案（Spec
+// `packaging-part-conclusion-business-identity-in-panel.md` §C1）：后端只给码
+// （`business_parts_reimported` / `business_parts_unknown`），人话只在这一处出。
+// 五态 —— `""` 什么都不说（本批之前落的结论没有业务身份） / `stale` 上一版清单算的 /
+// `unknown` 判断不了哪一版 / `info` 哪一件哪一版 / `unbound` 没绑到业务件。
+// 纯函数：无 DOM、无 `fetch(`、无 `localStorage`，可被 node 直接执行。
+function packagingPartBusinessIdentityNote(payload) {
+  const data = (payload && typeof payload === "object") ? payload : {};
+  const version = String(data.business_parts_id == null ? "" : data.business_parts_id).trim();
+  if (!version) return {text: "", level: ""};
+  if (data.business_stale === true) {
+    return {text: "这份结论是按上一版业务部件清单算的，请重跑后再用。", level: "stale"};
+  }
+  if (String(data.business_stale_reason || "") === "business_parts_unknown") {
+    return {text: "判断不了这份结论对应哪一版业务部件清单。", level: "unknown"};
+  }
+  const code = String(data.business_part_code == null ? "" : data.business_part_code).trim();
+  if (code) {
+    const short = version.length > 12 ? version.slice(0, 12) + "…" : version;
+    return {text: `业务部件 ${code}（清单 ${short}）`, level: "info"};
+  }
+  return {text: "这一件没有绑到业务部件，结论按几何零件算的。", level: "unbound"};
+}
+
 // 2.1 左栏零件文档（drawing_flow 链路）：GET .../requirement/packaging-parts。
 // 端点未上线（零件提取那批才加）时拿到 404 → 保持 null，走空态文案，不谎报"解析失败"。
 //

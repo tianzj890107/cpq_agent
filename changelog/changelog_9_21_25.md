@@ -17555,3 +17555,36 @@ packaging 全域：discover -s tests -p 'test_packaging_*.py'  Ran 1901  FAILED 
 ```
 
 未改前端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 411. 落地 `packaging-part-conclusion-business-identity-in-panel`：单件结论的业务部件身份进内嵌面板（18 OK，红基 13 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js` / `tech_app/frontend/inline-analysis.js`：
+
+- 新增顶层纯函数 `packagingPartBusinessIdentityNote(payload)`（Spec §C1）：把后端读回的四键
+  （`business_part_code` / `business_parts_id` / `business_stale` / `business_stale_reason`）
+  翻成**本地文案**五态 —— `""`（本批之前落的结论没有业务身份，什么都不说）/ `stale`
+  「这份结论是按上一版业务部件清单算的，请重跑后再用。」/ `unknown`
+  「判断不了这份结论对应哪一版业务部件清单。」/ `info` 「业务部件 <code>（清单 <前 12 字符…>）」
+  / `unbound` 「这一件没有绑到业务部件，结论按几何零件算的。」；`business_parts_reimported`
+  这类码**不贴给用户**。体内无 DOM / `fetch(` / `localStorage`，可被 `node` 直接跑。
+- `inline-analysis.js` 接线：`state.businessNote`（`load()` 里一处计算，既有的
+  `state.versionNote = …` 逐字不动）；那一行节点只有一处构造
+  `businessIdentityRow(state)`（`data-inline-business-note="<level>"`，文案为空时
+  **一个节点都不渲染**），`renderProcess()` 与 `renderCost()` 的正文最前面各调用一次。
+- 状态行**不**承载这句话：`setStatus(state, state.versionNote || …)` 一字未改，
+  零件版本那句优先级不动，两句话不互相顶掉。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_part_conclusion_business_identity_in_panel_red  Ran 18  FAILED (failures=13) → Ran 18  OK
+  （红基 13 条：A1–A10 / B1 / B2 / C3；护栏 B3/B4/C1/C2/C4 五条始终绿）
+node --check tech_app/frontend/app.js / inline-analysis.js   OK
+不回归：conclusion_version_readback + conclusion_business_identity + parts_panel +
+        parts_downstream + business_part_downstream_entry + tech_part_detail_chrome +
+        tech_cad_batch_partial_generation + chat_fused_assistant_card_style
+        Ran 152  OK
+packaging 全域：Ran 1919  FAILED (failures=5)  ← 仍是那 5 条既有挂账
+```
+
+未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
