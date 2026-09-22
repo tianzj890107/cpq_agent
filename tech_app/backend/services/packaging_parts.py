@@ -3855,3 +3855,87 @@ def business_identity_for_row(project_id: str, row: Any) -> Dict[str, str]:
     return {"business_part_code": _text(found.get("business_part_code")),
             "business_parts_id": _text(found.get("business_parts_id")),
             "business_parts_hash": _text(found.get("business_parts_hash"))}
+
+
+# --------------------------------------------------------------------------- #
+# 3c 业务部件的材料费：尺寸只认**权威尺寸**
+# （Spec `packaging-business-part-cost-by-authority-size.md` §C1/§C2）
+# --------------------------------------------------------------------------- #
+#: 业务件算材料费时的拒绝码（与几何件那三条 `PROCESS_REJECT_CODES` **分家**：两条路两种码）。
+BUSINESS_COST_REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
+                              "PACKAGING_BUSINESS_PART_SIZE_UNKNOWN",
+                              "PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN")
+
+#: 尺寸口径闭集：业务件这条路**只认权威尺寸**（几何轮廓那条路走 processability）。
+BUSINESS_COST_SIZE_SOURCES = ("authority_dimensions",)
+
+
+def _mm_text(value: Any) -> str:
+    """毫米数的人话写法：`300.0` → `300`（去掉多余小数位），取不到 → 空串。"""
+    number = _num(value)
+    if number is None:
+        return ""
+    text = ("%.3f" % float(number)).rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _gsm_of(text: Any) -> Optional[float]:
+    """材料原文里的克重（`350G玖龙粉灰` → 350）：只认"数字 + g/G"，不许猜材料。"""
+    match = re.search(r"(\d+(?:\.\d+)?)\s*[gG](?![A-Za-z])", _text(text))
+    return _num(match.group(1)) if match else None
+
+
+def business_cost_inputs(row: Any, *, requirement: Any = None,
+                         quantity: Any = 1) -> Dict[str, Any]:
+    """一件业务部件的材料费输入（**纯函数**，Spec §C1）。
+
+    尺寸只认权威尺寸（`authority.length_mm` / `width_mm`）；克重只认材料原文里的 `<数字>g`，
+    兜底需求整盒口径的 `face_paper_gsm` —— 两处都没有就**拒绝**，绝不给默认克重、
+    绝不拿包围盒或几何轮廓冒充权威尺寸。
+    """
+    record = row if isinstance(row, dict) else {}
+    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
+    code = _text(record.get("business_part_code"))
+    material_text = _text(authority.get("material_text")) or _text(record.get("material"))
+    base: Dict[str, Any] = {
+        "ok": False, "code": "", "message": "", "missing_variables": [],
+        "part_code": code, "name": _text(record.get("name")), "material_text": material_text,
+        "gsm": None, "variables": {},
+        "size_source": "", "size_source_ref": _text(authority.get("source")),
+        "size_text": _text(authority.get("product_size_text")),
+    }
+    if not code:
+        return dict(base, code=BUSINESS_COST_REJECT_CODES[0],
+                    message="这一件没有业务部件编码，不能算材料费")
+    length = _num(authority.get("length_mm"))
+    width = _num(authority.get("width_mm"))
+    if not length or not width or length <= 0 or width <= 0:
+        return dict(base, code=BUSINESS_COST_REJECT_CODES[1], missing_variables=["authority_size"],
+                    message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
+                            "或按权威清单补录尺寸后再算")
+    gsm = _gsm_of(material_text)
+    if not gsm:
+        data = requirement.get("data") if isinstance(requirement, dict) else {}
+        gsm = _num((data or {}).get("face_paper_gsm")) if isinstance(data, dict) else None
+    if not gsm:
+        return dict(base, code=BUSINESS_COST_REJECT_CODES[2], missing_variables=["gsm"],
+                    message="这一件的材料原文里没有克重（材料：%s）：补上克重，或按需求整盒口径"
+                            "填面纸克重后再算" % (material_text or "未填"))
+    wanted = int(_num(quantity) or 1)
+    return dict(base, ok=True, gsm=gsm, size_source=BUSINESS_COST_SIZE_SOURCES[0],
+                variables={"cut_length": length, "cut_width": width, "gsm": gsm,
+                           "quote_quantity": max(1, wanted)})
+
+
+def business_cost_assumption(inputs: Any, *, geometry_part_code: Any = "") -> str:
+    """结论里那句口径（**纯函数**，Spec §C2）：按权威尺寸算的、没与 CAD 几何核过。"""
+    payload = inputs if isinstance(inputs, dict) else {}
+    if not payload.get("ok"):
+        return ""
+    variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+    text = "按权威尺寸（%s×%s mm）算的材料开料，未与 CAD 几何核过" % (
+        _mm_text(variables.get("cut_length")), _mm_text(variables.get("cut_width")))
+    code = _text(geometry_part_code)
+    if code:
+        text += "；这一件另有闭合几何件（%s），本结论有意按权威尺寸算" % code
+    return text

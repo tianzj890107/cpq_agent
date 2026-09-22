@@ -8695,6 +8695,161 @@ def get_packaging_part_cost_lookup(pid: str, part_code: str,
 
 
 # --------------------------------------------------------------------------- #
+# 业务部件的材料费：没有几何也能算（Spec docs/specs/packaging-business-part-cost-by-authority-size.md §C3/§C4）
+# --------------------------------------------------------------------------- #
+# `## 368` 已声明「几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项」——
+# 这一段把那句话变成流程：权威清单里有长度/宽度/克重就按**权威尺寸**算材料开料，
+# 没几何也照样出金额；缺什么就说清缺什么（409 + missing_variables），绝不拿包围盒或默认克重硬算。
+# 尺寸与克重的判据全在 `packaging_parts.business_cost_inputs()`（纯函数），这里只做组装与落库。
+PACKAGING_BUSINESS_PART_COST_PATH = \
+    "/api/projects/{pid}/requirement/packaging-business-parts/{code}/cost"
+
+
+def _packaging_business_part_row(pid: str, code: str) -> Dict[str, Any]:
+    """取一件业务部件；清单读不到 / 没有这一件都按 404 说清（先导入权威清单）。"""
+    doc = packaging_parts.load_business_parts(pid) or {}
+    row = next((item for item in (doc.get("business_parts") or [])
+                if isinstance(item, dict)
+                and str(item.get("business_part_code") or "") == code), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail={
+            "code": packaging_parts.BUSINESS_COST_REJECT_CODES[0],
+            "message": "业务部件清单里没有这一件（%s）：先导入权威清单（Excel）再算材料费" % code,
+        })
+    return {"row": row, "doc": doc}
+
+
+def _packaging_business_geometry_label(row: Dict[str, Any]) -> str:
+    """这一件在清单里有没有绑分量（只作披露，不冒充几何结论）。
+
+    `unbound` = 没有几何可依赖（本批的主场景）；`bound:<分量引用>` = 绑了分量，
+    但本结论仍然**有意**按权威尺寸算（口径写在结论的 assumption 里）。
+    """
+    binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
+    refs = [str(item) for item in (binding.get("component_ids") or []) if str(item or "").strip()]
+    if not refs:
+        refs = [str(item) for item in (row.get("geometry_component_ref") or [])
+                if str(item or "").strip()]
+    return ("bound:%s" % refs[0]) if refs else "unbound"
+
+
+def _packaging_business_part_reject(inputs: Dict[str, Any]) -> HTTPException:
+    """前置条件不过 → 409（不可重试）+ 缺哪些变量（与几何那一路同形）。"""
+    return HTTPException(status_code=409, detail={
+        "code": str(inputs.get("code") or ""),
+        "message": str(inputs.get("message") or ""),
+        "missing_variables": list(inputs.get("missing_variables") or []),
+        "retryable": False,
+    })
+
+
+def _packaging_business_cost_analysis(inputs: Dict[str, Any], line: Dict[str, Any],
+                                      quantity: int, geometry_label: str) -> Dict[str, Any]:
+    """业务件的成本结论：复用既有 CostAnalysis 契约，只改口径那句话与归属。
+
+    数字全部来自 `packaging_cost.compute_line()`（库内公式与费率），这里只把
+    「按哪一套尺寸算的」写进去 —— 结论里的 `summary` 也必须说业务部件，不许说"图纸零件"。
+    """
+    row = {"part_code": str(inputs.get("part_code") or ""),
+           "name": str(inputs.get("name") or ""),
+           "material": str(inputs.get("material_text") or "")}
+    analysis = _packaging_part_cost_analysis(row, line, quantity, "")
+    geometry_code = geometry_label.split(":", 1)[1] if geometry_label.startswith("bound:") else ""
+    analysis["assumptions"] = [packaging_parts.business_cost_assumption(
+        inputs, geometry_part_code=geometry_code)] + list(analysis.get("assumptions") or [])
+    analysis["summary"] = "业务部件 %s 的单件材料开料成本（口径：权威尺寸 %s；%s）" % (
+        row["part_code"], str(inputs.get("size_text") or "—"), geometry_label)
+    return analysis
+
+
+@app.post(PACKAGING_BUSINESS_PART_COST_PATH)
+async def packaging_business_part_cost(
+    pid: str, code: str, quantity: int = 1,
+    note: str = Form(""),
+    attachments: List[UploadFile] = File(default=[]),
+    user: dict = Depends(current_user),
+):
+    """业务部件的单件材料费（异步任务，与既有成本路由同形状：task_id + 进度上报）。
+
+    没有几何的件也走得通 —— 尺寸只认权威尺寸；缺尺寸/克重一律 409 并说清缺什么。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    loaded = _packaging_business_part_row(pid, code)
+    row = loaded["row"]
+    doc = loaded["doc"]
+    requirement = store.load_requirement(pid) or {}
+    qty = max(1, int(quantity or 1))
+    inputs = packaging_parts.business_cost_inputs(row, requirement=requirement, quantity=qty)
+    if not inputs["ok"]:
+        raise _packaging_business_part_reject(inputs)
+    geometry_label = _packaging_business_geometry_label(row)
+    await _read_attachments(attachments)
+    expected = _digest_value({"part": row, "quantity": qty})
+
+    def job():
+        tasks.report_progress("按权威尺寸（%s）算这一件的材料开料成本"
+                              % (inputs.get("size_text") or
+                                 "%s×%s mm" % (_mm_text(inputs["variables"].get("cut_length")),
+                                               _mm_text(inputs["variables"].get("cut_width")))))
+        line = packaging_cost.compute_line("material", dict(inputs["variables"]))
+        amount = line.get("amount")
+        tasks.report_progress(
+            "  ↳ 单件 %.4f 元（批量 %d 件）" % (amount, qty) if amount is not None
+            else "  ↳ 缺输入变量，暂给不出金额：%s" % ((line.get("gap") or {}).get("code") or ""))
+        analysis = _packaging_business_cost_analysis(inputs, line, qty, geometry_label)
+        summary = cost.compute(analysis)
+        packaging_parts.save_part_cost(pid, {
+            "part_code": inputs["part_code"],
+            # 这份结论**不是**按几何零件算的：`parts_id` 必须为空，免得读侧拿它去比几何版本。
+            "parts_id": "",
+            "engine_version": packaging_parts.ENGINE_VERSION,
+            "analysis": analysis, "summary": summary,
+            # 业务件没有知识库检索依据，不装样子（Spec §C3）。
+            "lookup": {},
+            "size_source": inputs["size_source"], "size_source_ref": inputs["size_source_ref"],
+            "size_text": inputs["size_text"], "geometry": geometry_label,
+            "business_part_code": inputs["part_code"],
+            "business_parts_id": str(doc.get("business_parts_id") or ""),
+            "business_parts_hash": str(doc.get("business_parts_hash") or ""),
+            "source": {"task_id": tasks.current_task_id(),
+                       "computed_at": now_cst_str(),
+                       "actor": str(user.get("username") or "")},
+        })
+        return {"part_code": inputs["part_code"], "analysis": analysis, "summary": summary,
+                "line": line}
+
+    return {"task_id": tasks.submit(
+        pid, "packaging_business_part_cost", job,
+        dedup_key=_task_key("packaging_business_part_cost", code, expected),
+        actor=user.get("username", ""),
+    )}
+
+
+@app.get(PACKAGING_BUSINESS_PART_COST_PATH)
+def get_packaging_business_part_cost(pid: str, code: str,
+                                     user: dict = Depends(current_user)):
+    """读业务部件的单件成本结论（最近一版；未跑过 → 空态，不 404，Spec §C4）。
+
+    形状与几何零件那一路逐字同形（`part_code` / `analysis` / `summary` / `source` +
+    版本七键），另加这四键说清"这份金额是按什么尺寸算的"。
+    """
+    _workflow_project(pid)
+    _packaging_business_part_row(pid, code)
+    record = packaging_parts.load_part_cost(pid, code) or {}
+    body = {"part_code": str(record.get("part_code") or code),
+            "analysis": record.get("analysis") if record else None,
+            "summary": record.get("summary") if record else None,
+            "source": (record.get("source") if isinstance(record.get("source"), dict) else {}),
+            "size_source": str(record.get("size_source") or ""),
+            "size_source_ref": str(record.get("size_source_ref") or ""),
+            "size_text": str(record.get("size_text") or ""),
+            "geometry": str(record.get("geometry") or "")}
+    body.update(_packaging_part_conclusion_version(pid, record))
+    return body
+
+
+# --------------------------------------------------------------------------- #
 # 包装图纸零件：平板挤出与 3D 预览（包装零件第 4 层，
 # Spec docs/specs/packaging-parts-3d-extrusion.md §4）
 # --------------------------------------------------------------------------- #

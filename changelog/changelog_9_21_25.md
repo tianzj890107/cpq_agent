@@ -17588,3 +17588,36 @@ packaging 全域：Ran 1919  FAILED (failures=5)  ← 仍是那 5 条既有挂�
 ```
 
 未改后端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 412. 落地 `packaging-business-part-cost-by-authority-size`：业务部件没有几何也能按权威尺寸出材料费（25 OK，红基 21 红）（9-22，Codex 实现）
+
+`tech_app/backend/services/packaging_parts.py` / `tech_app/backend/main.py`：
+
+- 新增纯函数 `business_cost_inputs(row, *, requirement, quantity)`（Spec §C1）：把权威清单里的
+  长度 / 宽度 / 材料原文变成成本输入（`cut_length` / `cut_width` / `gsm` / `quote_quantity`）；
+  拒绝码是**业务**那一套闭集 `BUSINESS_COST_REJECT_CODES`（无编码 / 缺权威尺寸 / 缺克重），
+  与几何件的 `PROCESS_REJECT_CODES` 分家；克重只认材料原文的 `<数字>g`，兜底需求
+  `face_paper_gsm`，绝不默认、绝不猜材料；尺寸口径闭集 `BUSINESS_COST_SIZE_SOURCES =
+  ("authority_dimensions",)`。
+- 新增纯函数 `business_cost_assumption(inputs, *, geometry_part_code)`（Spec §C2）：结论里那句
+  「按权威尺寸（300×200 mm）算的材料开料，未与 CAD 几何核过」；绑了几何时追加
+  「这一件另有闭合几何件（DWG-Pxx），本结论有意按权威尺寸算」。
+- 新增两条路由（Spec §C3/§C4）：`POST/GET /api/projects/{pid}/requirement/packaging-business-parts/{code}/cost`。
+  POST 写权限沿用 `BOX_MATCH_DECIDE_ROLES`，缺前置条件 409 + `missing_variables`（不可重试），
+  过了才 `packaging_cost.compute_line("material", …)` —— 复用库内公式与费率，一行都没新写；
+  结论落进同一个单件成本文档，`parts_id` 为**空串**（不许冒充几何版本）、`lookup: {}`，
+  带 `size_source` / `size_source_ref` / `size_text` / `geometry` 与业务三键。GET 与几何那一路
+  同形 + 版本七键，未跑过回 200 空态。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_cost_by_authority_size_red  Ran 25  FAILED (failures=2, errors=19) → Ran 25  OK
+  （红基 21 条：A1–A10 / B1–B3 / C1–C5 / D1–D3；护栏 E1–E4 四条始终绿）
+不回归：parts_downstream + business_part_downstream_entry + conclusion_business_identity +
+        business_parts_and_cad_plan_view + binding_size_source + cost_engine +
+        conclusion_version_readback   Ran 178  OK
+packaging 全域：仍是那 5 条既有挂账，本批未引入新红
+```
+
+未改前端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
