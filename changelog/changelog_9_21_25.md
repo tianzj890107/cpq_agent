@@ -10424,3 +10424,57 @@ tests.test_packaging_cost_engine_red / routing / snapshot /
 ### 边界
 
 未改任何 `tests/`；未改成本表达式/费率/权重/门槛；未连 PG、未写生产数据；未 push / 未部署。
+
+
+## 282. 34 部署 `925c241` + 报价→零件全流程第三轮真跑 + 新 Spec：自检的「跳过」不许被算成「通过」（9-22，Codex 执行 + 只改 Spec / 红测 / changelog）
+
+### 提交 / 推送 / 部署
+
+- 推送 `925c241`（含并行会话 ## 273–280 的全部实现与我的 ## 269）：**GitLab 这一路是走 IP 兜底推的** —— 本机
+  DNS 解析 `gitlab.boulderaitech.com` 变成 NXDOMAIN（resolver 只剩 8.8.8.8/1.1.1.1，内网域名解析不到），
+  而 `172.16.5.150:22` 可直连，故用
+  `git -c url."git@172.16.5.150:".insteadOf="git@gitlab.boulderaitech.com:" push gitlab HEAD:refs/heads/ytbz`
+  完成推送（同一仓库同一分支，未改远端配置）；GitHub 侧直推成功。推送后两端回读均为 `925c241`；
+- 34 部署 `bash scripts/deploy_34_bare.sh ytbz`：`eecd098 → 925c241`，`build.commit=925c241`，
+  `health ok`（8010 pid 2069490），两份样本 `converter_role=primary / fallback_used=false`，第 6b 步
+  `{"isolated_downstream_selfcheck": "ok", "problems": []}`：
+  `酒盒 64 件 closed_ratio=0.938 可算 9 / 可挤 9`、`圆盘盒 9 件 0.889 可算 1 / 可挤 8`
+  （`0d8884d` 那次是 `圆盘盒 0 / 0`，本轮已修好）。
+
+### 全流程真跑（34，本轮新建）
+
+| 项 | 值 |
+| --- | --- |
+| 报价会话 / 技术项目 | `0bc3fa749c53` / `6a5a96d02aea`（PE1 上传 `酒盒.dwg` 686195 bytes） |
+| 八步解析 | **8/8 completed**（81.3s） |
+| 零件 | **64 件**，`closed_ratio=0.938`、`processable_ratio=0.938`；闭合件的 `material`/`thickness_mm` 已有值（`粉灰 350g / 2.5`、`灰板 / 2.0`） |
+| BOM | 31 行，其中 **4 行按图纸零件回填**（`RB01001-P02/P03/P07/P08`，尺寸 440.123×482.92 / 443.523×492.62 …；绑定记录在 `size_source_json`） |
+| 工艺路线 | 11 道，`confirm` 200（`engine_version=packaging_route_v1`） |
+| 成本 | PE1 200 `total_cost=15.88445769082494`、缺口 20；**FI1 GET 项目 200（看得见）**、POST 成本 403「只能查看不能修改」（按角色，## 273 的口径） |
+| 回传 | 200，`handoff_no=pkghandoff:6a5a96d02aea:REQ-6A5A96D02AEA:default:1` |
+| 卡片 | `card_id=3991432715328033822`，第 1–2 步 done、第 3 步 pending，`overall_status=handoff_pending`，`business_case_id=bc_d3f03f0ceedd` |
+
+### 本轮卡点（实测）
+
+1. **`POST /requirement/box-match` 仍然 0 候选**，`decision` 走显式 code `YT-RB-01001-A`（既有缺口，已登记）；
+2. **自检里"有一项没跑"被算成"通过"**（下面这条新 Spec 的来源）：
+
+```
+· 权威实样路线自检：读不到知识库（知识库快照接口返回 HTTP 403：{"ok": false, "error": "内部令牌校验失败"}），跳过
+{"isolated_downstream_selfcheck": "ok", "problems": []}
+隔离端到端自检通过（建项目 → 需求草稿 → 八步 flow → 零件文档 → 单件详情 → 挤出）
+```
+
+### 新增 Spec + 红测
+
+| Spec | 红测 | 现在为什么红 |
+| --- | --- | --- |
+| `docs/specs/deploy-selfcheck-skip-vs-pass.md` | `tests/test_deploy_selfcheck_skip_vs_pass_red.py`（9 例） | 要求自检三态判决 `ok / failed / incomplete` + 逐项 `checks` 清单 + 顶层 `skipped`；令牌必须"先验证再使用、403 重取一次、两次失败才 skip 且带 HTTP 状态与响应体"；有 skip 时不许打印"自检通过"、不许退出 0。**Ran 9 / failures=7**（A1–A4 + B2/B3 + C2 红，B1/C1 是护栏已绿） |
+
+### 边界
+
+- 只改 Spec + 红测 + changelog：没有写业务实现、没有改生产数据；并行会话正在改的
+  `main.py` / `packaging_bom.py` / `packaging_parts.py` / `packaging_match.py` / `cpq_packaging_match.py` /
+  `requirement_service.py` / `app.js` 与 `docs/specs/packaging-bom-part-size-provenance.md` 一个字未动；
+- 本轮**没有**创建 MR / tag / Release；34 部署是脚本成功、自检通过的这一次；
+- 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 **L2（可信）**，未签字不得声明 L3。
