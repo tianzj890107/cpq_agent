@@ -11304,3 +11304,71 @@ tests.test_quick_quote_demo_closure_red                Ran 1 OK
 - 这两处实现与两条红测**不是本轮新写的**，是并行会话在途改动（34 上与我本机都有）；本轮只做
   「验证 → 收编入库 → 让 34 重新可部署」，代码内容一字未改（逐字节照收）。
 - 未改任何既有测试的期望值；未连 PG、未写生产数据。
+
+## 295. `## 294` 入库推送 + 34 整仓部署复验 + 部署脚本健康等待窗口按冷启动实测放宽（9-22，Codex 部署与脚本修正）
+
+### 做了什么
+
+1. **推送**：`7578b36` 推双远端（GitHub `origin`、GitLab `172.16.5.150`）。
+2. **34 整仓部署**：`bash scripts/deploy_34_bare.sh ytbz`（此前 `## 292` §10.5 记的
+   "只同步前端 8 个文件、不重启服务"是过渡手段，本轮补上正式部署）。
+3. **部署脚本第 4 步的健康等待窗口**按 34 冷启动实测放宽（新 Spec + 守卫，见下）。
+
+### 部署前：先把 34 的脏工作区弄干净（说明白，不是绕过）
+
+34 上有并行会话未提交的两个文件（`cpq_agent_server.py` / `cpq_quick_quote_workspace.py`），
+脚本第 0 步因此拒绝执行。落地前**逐字节核对**了它们就是 `7578b36` 里收到的内容：
+
+```
+34:            cpq_agent_server.py f6dbccfa72d29d094c675a02b0157064
+git show 7578b36:cpq_agent_server.py      f6dbccfa72d29d094c675a02b0157064
+34:            cpq_quick_quote_workspace.py e3ad09c5454f058d3aff17bdad7fe3d9
+git show 7578b36:cpq_quick_quote_workspace.py e3ad09c5454f058d3aff17bdad7fe3d9
+```
+
+两边一致 → `git reset --hard HEAD` 清干净后部署，没有任何改动被丢掉。
+
+### 第一跑：部署其实成功了，是脚本判成失败
+
+```
+== 4. 健康检查与 PATH 核对 ==
+✗ /api/health 的 status 不是 ok；看 nohup.out
+```
+
+紧接着手工探测：`status=ok`、`build.commit=7578b36…`、8012 在位 —— 服务是好的。窗口写死
+`seq 1 40` × `sleep 2` = **80 秒**，而这次冷启动（uvicorn 首轮导入重依赖 + `/api/health` 首答
+自带能力探测）超过 80 秒。代价：第 4 步 `fail` 退出，**第 5 / 6b / 7 步全没跑**。
+
+### 修正：窗口按实测放宽 + 心跳（不是放宽判据）
+
+- 新 Spec `docs/specs/deploy-health-wait-window.md`（C1–C6）；守卫
+  `tests/test_deploy_health_wait_red.py`（8 条，`Ran 8 OK`）。
+- `scripts/deploy_34_bare.sh` 第 4 步：`CPQ_HEALTH_WINDOW_SECONDS`（缺省 180s）+
+  deadline 驱动 `while` + 每 20s 心跳 + 成功打印实际等待秒数。
+- **判据没放宽**：仍然只认 `payload["status"] == "ok"`，超时仍然 `fail`，文案同时指向
+  `nohup.out` 与窗口变量。
+
+### 第二跑（整仓部署，全绿）
+
+```
+== 4. 健康检查与 PATH 核对 ==   health：status=ok；8010 pid=2541564；PATH 含 xvfb ✓
+== 5. 真转两份样本 ==            酒盒.dwg / 圆盘盒.dwg：converter_role=primary、fallback_used=false、
+                                 version=27.1、output_version=ACAD2018、verified=true、可见 8/32 图层
+== 6.  下游连通自检 ==           skip：未提供样本项目 id（脚本语义如此，不猜项目、不拿生产项目当试验田）
+== 6b. 隔离端到端自检 ==         verdict=ok：
+                                 · 酒盒.dwg 8/8 completed；零件 64 件（closed_ratio=0.938）；可算 9 / 可挤出 9
+                                   （不可算：MATERIAL_UNKNOWN×51、NOT_CLOSED×4）
+                                 · 圆盘盒.dwg 8/8 completed；零件 9 件（closed_ratio=0.889）；可算 1 / 可挤出 8
+                                 · 权威实样路线 YT-DWG-ROUND-10PC / YT-DWG-WINE-700ML 各 pass
+                                 · 生产数据目录未被写入（meta.json 0 → 0）
+== 7. 结论 ==                    HEAD/stamp = 7578b36（/api/health 的 build.commit 一致）
+```
+
+生产门禁 `tech_app/tools/dwg_deploy_gate.py --env production`：
+`summary{ok:17, fail:0, manual:2, skip:0}`、`verdict=no_go`（manual 两项
+`converter_license` / `real_samples_e2e_passed` 未签字，与预期一致，不是回归）。
+
+### 边界
+
+- 未改任何既有测试与期望值；新增的守卫只读 `scripts/deploy_34_bare.sh` 文本。
+- 未连 PG、未写生产数据（第 6b 步在隔离临时目录里跑，跑完删除）。

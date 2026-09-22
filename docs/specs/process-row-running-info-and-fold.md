@@ -248,8 +248,13 @@ node --check agent-chat.js / assembly-integration.js / cost-review.js → 通过
 8010 下发 index.html → agent-chat.js?v=20260922-road1；确认需求解析结果.html → 含 infoSentence
 ```
 
-**待办**：等那两个未提交文件落地后，跑一次正式部署
-（`bash scripts/deploy_34_bare.sh ytbz`）让 `deploy_build.json` 的 stamp 与 HEAD 对齐，并重跑第 6b 步自检。
+**已落地（9-22，见 `## 295`）**：那两个未提交文件已按字节收编进 `7578b36` 入库并推送，34 随后跑了
+一次**整仓部署**（`bash scripts/deploy_34_bare.sh ytbz`）——部署前先核对 34 上这两个文件的 md5 与
+`git show 7578b36:<文件>` 逐字节一致（`cpq_agent_server.py f6dbccfa…`、
+`cpq_quick_quote_workspace.py e3ad09c5…`），再 `git reset --hard HEAD` 清干净工作区，才允许脚本第 0 步通过。
+结果：`HEAD/stamp = 7578b36`、`/api/health` build.commit 与 HEAD 一致、第 5 步两份样本
+`converter_role=primary / fallback_used=false`、第 6b 步隔离自检 `verdict=ok`。
+第 6 步（要真实项目 id）未跑，按脚本语义打印 skip 原因。
 
 ### 10.3 边界
 

@@ -160,8 +160,13 @@ PATH="$XVFB_BIN_DIR:$PATH" CPQ_ENV_FILE="$ENVF" CPQ_BUILD_STAMP="$STAMP_PATH" se
 
 # --------------------------------------------------------------------------- #
 step "4. 健康检查与 PATH 核对"
+# 冷启动实测可到 2 分钟以上（uvicorn 侧首轮要导入 cadquery 等重依赖，`/api/health` 首答本身也要做
+# 能力探测），所以窗口按 3 分钟给。窗口太短会出现「其实已经起来了、脚本却判失败并跳过 5~7 步」——
+# 那是脚本自己的假失败，不是部署失败。窗口内每 20s 打一次心跳（看得见是慢、还是一直没起）。
+HEALTH_WINDOW_SECONDS="${CPQ_HEALTH_WINDOW_SECONDS:-180}"
 HEALTH_OK=0
-for _ in $(seq 1 40); do
+HEALTH_STARTED="$(date +%s)"
+while [ "$(( $(date +%s) - HEALTH_STARTED ))" -lt "$HEALTH_WINDOW_SECONDS" ]; do
   if "$PY" - >/dev/null 2>&1 <<'PY'
 import json, sys, urllib.request
 try:
@@ -171,10 +176,12 @@ except Exception:
 sys.exit(0 if payload.get("status") == "ok" else 1)
 PY
   then HEALTH_OK=1; break; fi
+  ELAPSED="$(( $(date +%s) - HEALTH_STARTED ))"
+  [ "$(( ELAPSED % 20 ))" -lt 2 ] && echo "  等待 8010 就绪…已 ${ELAPSED}s / ${HEALTH_WINDOW_SECONDS}s"
   sleep 2
 done
-[ "$HEALTH_OK" = "1" ] || fail "/api/health 的 status 不是 ok；看 nohup.out"
-echo "health：status=ok"
+[ "$HEALTH_OK" = "1" ] || fail "等待 ${HEALTH_WINDOW_SECONDS}s 后 /api/health 的 status 仍不是 ok；看 nohup.out（窗口可用 CPQ_HEALTH_WINDOW_SECONDS 调整）"
+echo "health：status=ok（等待 $(( $(date +%s) - HEALTH_STARTED ))s）"
 
 PID="$(pgrep -f 'cpq_suite_server.py --host 0.0.0.0 --port 8010' | head -1)"
 [ -n "$PID" ] || fail "找不到新起的 8010 进程"
