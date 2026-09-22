@@ -11529,3 +11529,19 @@ test_packaging_parts_pipeline_time_budget_red / test_deploy_build_identity_red
 不动 `identity_digest`（`conversion_id` 与产物目录名照旧，不堆第二份目录）、不动 manifest 键集
 （不新增字段）、不动错误码与回退链判据；缓存语义仍是"同引擎同输入幂等复用"，只是多了
 「代码语义变了必须 bump 一次」这条。
+
+### `## 298` 部署与复验（34，`b2626f6`）
+
+```
+整仓部署：22b0979 → b2626f6；health ok（等待 8s）；PATH 含 xvfb ✓
+第 5 步：两份样本 converter_role=primary、fallback_used=false、verified=true、dxf+preview 齐全
+第 6b 步：隔离端到端 verdict=ok（酒盒 64 件 closed_ratio=0.938、可算 9 / 可挤出 9；圆盘盒 9 件 0.889）
+        权威实样 YT-DWG-ROUND-10PC / YT-DWG-WINE-700ML 各 pass；生产数据目录未被写入
+
+复验（真实样本经 8012 的 POST /api/file/parse）：
+  圆盘盒.dwg  ok=true  warnings: []
+  酒盒.dwg    ok=true  warnings: []
+```
+
+即：`## 297` 修的「假告警」在真机上**从此看得见**了；之前那次不是修复无效，而是旧 manifest
+把旧话接着说了一遍（本批的引擎身份段让这类缓存自然失效）。
