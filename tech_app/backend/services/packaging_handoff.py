@@ -26,6 +26,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from ..storage import da_db, da_repo, store
+from ..storage.meta_backend import get_backend
 from . import cpq_bridge, packaging_bom, packaging_cost, packaging_match, packaging_route
 
 ENGINE_VERSION = "packaging_handoff_v1"
@@ -327,6 +328,26 @@ AUDIT_SENT_ACTION = "workflow:packaging_handoff_sent"
 #: 它只描述"审计写不进去"，**不是**回传失败的码 —— 留痕失败照样回传成功。
 AUDIT_UNAVAILABLE_CODE = "PACKAGING_HANDOFF_AUDIT_UNAVAILABLE"
 
+#: 留痕写失败后的重试上界（Spec `packaging-handoff-audit-relay.md` §C1）：同步、不 sleep，
+#: 总计最多试 `1 + AUDIT_RETRY_LIMIT` 次 —— 「再试一次」是上界决定的动作，不是循环。
+AUDIT_RETRY_LIMIT = 1
+
+#: 待补写（欠条）文档：命名、上限与"连欠条都写不进去"的稳定码（Spec §C2）。
+#: 待补写文档**不是**审计记录本身 —— 它只是"这条留痕还欠着"的那张纸。
+AUDIT_PENDING_DOC_KEY = "packaging_handoff_audit_pending"
+AUDIT_PENDING_MAX = 20
+AUDIT_PENDING_UNAVAILABLE_CODE = "PACKAGING_HANDOFF_AUDIT_PENDING_UNAVAILABLE"
+
+#: 补写动作的审计名（Spec §C2）：补过几条、还欠几条、谁补的。
+AUDIT_RELAY_ACTION = "workflow:packaging_handoff_audit_relayed"
+
+
+def _exception_message(exc: BaseException) -> str:
+    """异常 → 稳定的一句话（`"<类名>: <原文>"`，原文为空时只有类名）：披露体与补写
+    失败消息共用同一个形状，人一眼能对上是同一类故障（Spec §C1/C2）。"""
+    detail = _text(exc)
+    return ("%s: %s" % (type(exc).__name__, detail)) if detail else type(exc).__name__
+
 
 def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: str,
                         handoff_no: str, version_no: int, already_sent: bool,
@@ -338,10 +359,15 @@ def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: 
     灌 `user` / `token` / 整份交接包；写审计失败**不得**改变回传结果、不得回滚已落库的
     交接记录 —— 留痕是留痕，闸门是闸门。
 
-    返回值是**留痕可用性**的稳定披露体（Spec `packaging-handoff-audit-availability.md`
-    §C1，键集固定五个）：`{"attempted", "ok", "action", "code", "message"}`。
-    写成功 `ok=True` / 空码空消息；写失败 `ok=False` / `AUDIT_UNAVAILABLE_CODE` /
-    message 含异常类名与原文本 —— 但**不抛**（留痕不是闸门）。
+    「写不进去」不再是一次就丢（Spec `packaging-handoff-audit-relay.md` §C1）：
+    当场**再试一次**（`1 + AUDIT_RETRY_LIMIT` 次、同步、不 sleep），两次都不行就把这条
+    记成**待补写**（`record_pending_audit()`，幂等、有上限）。
+
+    返回值是**留痕可用性**的稳定披露体（键集固定**七**键）：`{attempted, ok, action,
+    code, message, attempts, pending}`。`attempted` 恒 True、`action` 恒
+    `AUDIT_SENT_ACTION`；`attempts` 是**实际**尝试次数；任一次成功 → `ok=True` / 空码
+    空消息 / `pending=""`；两次都失败 → `ok=False` / `AUDIT_UNAVAILABLE_CODE` /
+    记成待补写则 `pending="recorded"`、记不上则 `pending="unavailable"` —— 但**不抛**。
     """
     payload = {
         "requirement_no": _text(requirement_no),
@@ -356,17 +382,125 @@ def _audit_handoff_sent(project_id: str, *, requirement_no: str, scenario_code: 
     }
     for key in _FORBIDDEN_COST_KEYS:
         payload.pop(key, None)
-    disclosure: Dict[str, Any] = {"attempted": True, "ok": True,
-                                  "action": AUDIT_SENT_ACTION, "code": "", "message": ""}
-    try:
-        store.audit(project_id, AUDIT_SENT_ACTION, payload)
-    except Exception as exc:  # noqa: BLE001 — 留痕失败不许把回传判成失败
-        detail = _text(exc)
+    disclosure: Dict[str, Any] = {"attempted": True, "ok": True, "action": AUDIT_SENT_ACTION,
+                                  "code": "", "message": "", "attempts": 0, "pending": ""}
+    failure: Optional[BaseException] = None
+    for attempt in range(1 + AUDIT_RETRY_LIMIT):
+        disclosure["attempts"] = attempt + 1
+        try:
+            store.audit(project_id, AUDIT_SENT_ACTION, payload)
+            failure = None
+            break
+        except Exception as exc:  # noqa: BLE001 — 留痕失败不许把回传判成失败
+            failure = exc
+    if failure is not None:
         disclosure["ok"] = False
         disclosure["code"] = AUDIT_UNAVAILABLE_CODE
-        disclosure["message"] = ("%s: %s" % (type(exc).__name__, detail)) if detail \
-            else type(exc).__name__
+        disclosure["message"] = _exception_message(failure)
+        recorded = record_pending_audit(project_id, payload, code=AUDIT_UNAVAILABLE_CODE,
+                                        message=disclosure["message"], by=by)
+        disclosure["pending"] = "recorded" if recorded.get("ok") else "unavailable"
     return disclosure
+
+
+# --------------------------------------------------------------------------- #
+# 待补写（留痕的"欠条"）与补写
+# --------------------------------------------------------------------------- #
+def _pending_id_of(payload: Any) -> str:
+    """待补写的身份：九键载荷的规范 JSON 的 sha256 前 16 位（同载荷 → 同一条）。"""
+    text = json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=False,
+                      sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _pending_items(project_id: str) -> List[dict]:
+    """读待补写清单（新的在最前）；读不到按空清单算。"""
+    doc = get_backend().get_doc(project_id, AUDIT_PENDING_DOC_KEY) or {}
+    items = doc.get("items") if isinstance(doc, dict) else None
+    return [dict(item) for item in (items or []) if isinstance(item, dict)]
+
+
+def record_pending_audit(project_id: str, payload: Any, *, code: str = "",
+                         message: str = "", by: str = "") -> Dict[str, Any]:
+    """把一条没落下的留痕记成**待补写**（Spec §C2），返回四键 `{ok, code, pending_id, count}`。
+
+    · `payload` 不是 dict → `ok=False` + `AUDIT_PENDING_UNAVAILABLE_CODE`（不抛）；
+    · 同一份留痕重复记 → 同一条（`count` 不涨，幂等）；
+    · 新记录插到最前，最多留 `AUDIT_PENDING_MAX` 条；
+    · 落库抛异常 → `ok=False` + 那个码（**不抛**、不改调用方的结果）。
+    """
+    if not isinstance(payload, dict):
+        return {"ok": False, "code": AUDIT_PENDING_UNAVAILABLE_CODE,
+                "pending_id": "", "count": 0}
+    clean = dict(payload)
+    for key in _FORBIDDEN_COST_KEYS:
+        clean.pop(key, None)
+    pending_id = _pending_id_of(clean)
+    try:
+        items = _pending_items(project_id)
+        for item in items:
+            if _text(item.get("pending_id")) == pending_id:
+                return {"ok": True, "code": "", "pending_id": pending_id, "count": len(items)}
+        items.insert(0, {"pending_id": pending_id, "payload": clean, "code": _text(code),
+                         "message": _text(message), "recorded_at": _text(da_db.now()),
+                         "by": _text(by)})
+        get_backend().put_doc(project_id, AUDIT_PENDING_DOC_KEY,
+                              {"items": items[:AUDIT_PENDING_MAX]})
+    except Exception:  # noqa: BLE001 — 欠条都写不进去也要如实说，不许抛
+        return {"ok": False, "code": AUDIT_PENDING_UNAVAILABLE_CODE,
+                "pending_id": pending_id, "count": 0}
+    return {"ok": True, "code": "", "pending_id": pending_id,
+            "count": min(len(items), AUDIT_PENDING_MAX)}
+
+
+def load_pending_audits(project_id: str) -> Dict[str, Any]:
+    """还欠几条留痕（Spec §C2）：读不到 / 没记过 → `{"items": [], "count": 0}`，不抛。"""
+    try:
+        items = _pending_items(project_id)
+    except Exception:  # noqa: BLE001 — 读不出欠条就是"读不到"，不许把读接口变成故障
+        return {"items": [], "count": 0}
+    return {"items": items, "count": len(items)}
+
+
+def relay_pending_audits(project_id: str, *, by: str = "") -> Dict[str, Any]:
+    """把欠的留痕逐条补上（Spec §C2）：成功划掉、失败留着，返回五键披露体。
+
+    `{attempted, relayed, remaining, code, message}`；有失败 → `code` 是
+    `AUDIT_UNAVAILABLE_CODE`、`message` 含第一条异常的类名（与 C1 同形）；一条都没有 →
+    `0/0/0` 空码空消息。跑过一次（且确实试了条）就写一条 `AUDIT_RELAY_ACTION` 审计 ——
+    写不进去不抛、不改返回值。
+    """
+    try:
+        items = _pending_items(project_id)
+    except Exception as exc:  # noqa: BLE001 — 读不出欠条：如实报成一次都没补
+        return {"attempted": 0, "relayed": 0, "remaining": 0,
+                "code": AUDIT_UNAVAILABLE_CODE, "message": _exception_message(exc)}
+    attempted = len(items)
+    if not attempted:
+        return {"attempted": 0, "relayed": 0, "remaining": 0, "code": "", "message": ""}
+    relayed = 0
+    message = ""
+    left: List[dict] = []
+    for item in items:
+        try:
+            store.audit(project_id, AUDIT_SENT_ACTION, item.get("payload") or {})
+        except Exception as exc:  # noqa: BLE001 — 补不上的留着，下次还能再补
+            left.append(item)
+            if not message:
+                message = _exception_message(exc)
+            continue
+        relayed += 1
+    try:
+        get_backend().put_doc(project_id, AUDIT_PENDING_DOC_KEY, {"items": left})
+    except Exception:  # noqa: BLE001 — 划不掉就下次再划，不许把这批补写判成失败
+        pass
+    try:
+        store.audit(project_id, AUDIT_RELAY_ACTION,
+                    {"relayed": relayed, "remaining": len(left), "by": _text(by)})
+    except Exception:  # noqa: BLE001 — 补写审计写不进去不许改变补写结果
+        pass
+    return {"attempted": attempted, "relayed": relayed, "remaining": len(left),
+            "code": AUDIT_UNAVAILABLE_CODE if message else "", "message": message}
 
 
 # --------------------------------------------------------------------------- #

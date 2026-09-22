@@ -17801,3 +17801,30 @@ packaging 全域：Ran 2058  failures=5（仍是那 5 条既有挂账），本�
 ```
 
 未连 PG / 34、未写生产数据、未调模型、未 push / MR / tag / Release / 未部署。
+
+## 418. 落地 `packaging-handoff-audit-relay`：留痕没落下时的重试 / 待补写 / 两条接口（28 OK，红基 21 红）（9-22，Codex 实现）
+
+- **缺口**：`_audit_handoff_sent()` 只试一次 `store.audit()`，失败即丢 —— 项目审计里查不到
+  「谁把哪一版推给了报价侧」，而五键披露体只活在那一次响应里，刷新就没了；`main.py` 也
+  没有「还欠几条留痕」的读接口与补写接口（告警与补写都无处发起）。
+- **C1 重试 + 七键**：新增 `AUDIT_RETRY_LIMIT = 1`，`_audit_handoff_sent()` 最多试
+  `1 + 1 = 2` 次（同步、不 sleep、不 while、不线程）；披露体由五键扩为**七键**
+  `{attempted, ok, action, code, message, attempts, pending}`，`attempts` 是实际尝试次数，
+  `pending ∈ "" / "recorded" / "unavailable"`；九键载荷与 `_FORBIDDEN_COST_KEYS` 的 pop 一字未动。
+- **C2 欠条与补写**：新增 `AUDIT_PENDING_DOC_KEY`（`packaging_handoff_audit_pending`）/
+  `AUDIT_PENDING_MAX = 20` / `AUDIT_PENDING_UNAVAILABLE_CODE` / `AUDIT_RELAY_ACTION`，以及
+  `record_pending_audit()`（四键、`pending_id` = 九键规范 JSON 的 sha256 前 16 位、幂等、有上限、
+  写不进去也不抛）/ `load_pending_audits()`（读不到 → 空清单，不抛）/ `relay_pending_audits()`
+  （五键；成功才划掉、失败留着；全成功空码、有失败报 `AUDIT_UNAVAILABLE_CODE` + 第一条异常类名；
+  跑过一次写 `workflow:packaging_handoff_audit_relayed`，写不进去不抛）。
+- **C3 两条路由**：`GET /api/projects/{pid}/requirement/packaging-quote/audit-pending`（纯读，
+  `{project_id, count, items}`）与 `POST …/audit-pending/relay`（写权限直接引用
+  `packaging_handoff.HANDOFF_WRITE_ROLES`，返回五键披露体 + `project_id` + 补写后再读的 `count` / `items`）。
+- **C4 重指（重指≠放宽）**：`tests/test_packaging_handoff_audit_availability_red.py` 的
+  `DISCLOSURE_KEYS` 由五键改七键（`attempts` / `pending`），原五键一个不少、语义不变，其它断言
+  一字未动；`docs/specs/packaging-handoff-audit-availability.md` §7 末尾追加一行指针，正文 §1–§6 未动。
+- **红基**：`Ran 28 … FAILED (failures=5, errors=16)` = 21 红 / 7 绿（7 绿全是「九键载荷 / 动作名 /
+  既有四条路由 / 不写审计 / 不新增依赖 / 不 sleep」护栏）；**实现后** `Ran 28 … OK`。
+- **不回归**：`Ran 137 … FAILED (failures=1)` —— 唯一一条是既有挂账
+  `tests/test_packaging_quote_send_recovery_red.py::C1`（夹具自遮挡，本批未碰）。
+- 未改前端（面板告警是下一批）；未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 部署。

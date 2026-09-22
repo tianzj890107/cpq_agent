@@ -167,3 +167,8 @@ def _audit_handoff_sent(...) -> None:          # :327 —— 返回 None
 ```
 
 未改 `tests/` 下任何文件、未改路由、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+> 后续（2026-09-22）：本 Spec §C1 的「披露体固定五键」已由
+> `docs/specs/packaging-handoff-audit-relay.md` §C1 **重指为七键**（原五键一个不少，
+> 语义不变；新增 `attempts` / `pending`），本文件正文 §1–§6 不动；同批把「只披露、不重试、
+> 不补写」升级为重试一次 + 待补写 + 两条接口。

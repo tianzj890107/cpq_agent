@@ -7674,6 +7674,10 @@ PACKAGING_QUOTE_SEND_PATH = "/api/projects/{project_id}/requirement/packaging-qu
 PACKAGING_QUOTE_READ_PATH = "/api/projects/{pid}/requirement/packaging-quote"
 PACKAGING_QUOTE_VERSIONS_PATH = "/api/projects/{pid}/requirement/packaging-quote/versions"
 PACKAGING_QUOTE_PACKAGE_PATH = "/api/projects/{pid}/requirement/packaging-quote/package"
+PACKAGING_QUOTE_AUDIT_PENDING_PATH = (
+    "/api/projects/{pid}/requirement/packaging-quote/audit-pending")
+PACKAGING_QUOTE_AUDIT_RELAY_PATH = (
+    "/api/projects/{pid}/requirement/packaging-quote/audit-pending/relay")
 
 
 def _packaging_handoff_flow(fn, *args, **kwargs):
@@ -7762,6 +7766,41 @@ def get_requirement_packaging_quote_package(pid: str, requirement_no: str = "",
     return {"project_id": pid,
             "package_fingerprint": packaging_handoff.package_fingerprint(package),
             "package": package}
+
+
+@app.get(PACKAGING_QUOTE_AUDIT_PENDING_PATH)
+def get_packaging_handoff_audit_pending(pid: str, user: dict = Depends(current_user)):
+    """还欠几条留痕（待补写清单）—— **纯读**，不判写权限（Spec
+    `packaging-handoff-audit-relay.md` §C3）。
+
+    留痕没落下时不再"刷新一次就没了"：这条接口把"欠条"摆出来，人据此决定补写。
+    读不出待补写文档时 `count=0 / items=[]`（不报错、不假装有）。
+    """
+    _workflow_project(pid)
+    doc = packaging_handoff.load_pending_audits(pid)
+    return {"project_id": pid, "count": int((doc or {}).get("count") or 0),
+            "items": (doc or {}).get("items") or []}
+
+
+@app.post(PACKAGING_QUOTE_AUDIT_RELAY_PATH)
+def relay_packaging_handoff_audit_pending(pid: str, user: dict = Depends(current_user)):
+    """把欠的留痕逐条补上（Spec §C3）：写权限与回传**同一份闭集**
+    （``packaging_handoff.HANDOFF_WRITE_ROLES``，不另抄一遍）。
+
+    返回补写披露体五键 + `project_id` + 补写后**再读一次**的 `count` / `items` ——
+    补完还剩几条，接口当次就说清楚。
+    """
+    _require(user, packaging_handoff.HANDOFF_WRITE_ROLES,
+             "需要财务经理、工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    result = packaging_handoff.relay_pending_audits(
+        pid, by=str((user or {}).get("username") or ""))
+    doc = packaging_handoff.load_pending_audits(pid)
+    out = dict(result or {})
+    out["project_id"] = pid
+    out["count"] = int((doc or {}).get("count") or 0)
+    out["items"] = (doc or {}).get("items") or []
+    return out
 
 
 def _persist_report(project_id: str, result: dict, user: dict) -> None:

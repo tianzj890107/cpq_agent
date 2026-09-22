@@ -29,7 +29,10 @@ RESULT_VERSION = "pkgcost-v1:1000:1234.500000"
 ACTION = "workflow:packaging_handoff_sent"
 AUDIT_KEYS = ("requirement_no", "scenario_code", "handoff_no", "version_no", "already_sent",
               "cost_result_version", "has_gaps", "quote_session_id", "by")
-DISCLOSURE_KEYS = ("attempted", "ok", "action", "code", "message")
+# 重指（Spec `packaging-handoff-audit-relay.md` §C1，2026-09-22）：披露体由五键扩为七键
+# —— attempts（实际试了几次）与 pending（"" / "recorded" / "unavailable"）。
+# 这是**重指不是放宽**：原五键一个不少、语义不变，只是键集跟着那条 Spec 的长大。
+DISCLOSURE_KEYS = ("attempted", "ok", "action", "code", "message", "attempts", "pending")
 
 PACKAGE = {
     "engine_version": handoff.ENGINE_VERSION,
@@ -154,7 +157,8 @@ class AHandoffAuditAvailability(unittest.TestCase):
             "`_audit_handoff_sent()` 必须返回披露体（Spec §C1）：现在是 `-> None`，"
             "调用方拿不到任何事实")
         self.assertEqual(set(DISCLOSURE_KEYS), set(out),
-                         "披露体键集固定五个（Spec §C1）：attempted/ok/action/code/message")
+                         "披露体键集七键（Spec §C1 + audit-relay §C1 重指）："
+                         "attempted/ok/action/code/message/attempts/pending")
         self.assertIs(True, bool(out.get("attempted")), "attempted 恒 True（Spec §C1）")
         self.assertIs(True, bool(out.get("ok")), "写成功时 ok 必须是 True")
         self.assertEqual(ACTION, out.get("action"), "action 逐字等于 AUDIT_SENT_ACTION")
@@ -179,7 +183,7 @@ class AHandoffAuditAvailability(unittest.TestCase):
         out = result["out"]
         self.assertIsInstance(out, dict, "失败也要给披露体（Spec §C1）")
         self.assertEqual(set(DISCLOSURE_KEYS), set(out),
-                         "失败时的披露体键集也必须只有这五个（Spec §C1/C4）")
+                         "失败时的披露体键集也是这七键（Spec §C1/C4 + audit-relay §C1）")
         for key in handoff._FORBIDDEN_COST_KEYS:
             self.assertNotIn(key, out, "披露体不许出现售价 / 毛利字段")
         self.assertNotIn("package", out, "披露体不许把整份交接包塞进去")
