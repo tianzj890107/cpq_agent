@@ -12,8 +12,21 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   const BM_DIMENSION_LABELS = {size_range: '尺寸区间', fit_clearance: '配合间隙', face_paper_gsm: '面纸克重', closure_type: '闭合方式', v_groove: 'V 槽'};
   const BM_REASON_LABELS = {closure_type_mismatch: '闭合方式无交集（硬门槛）', fit_clearance_out_of_tolerance: '配合间隙超差（硬门槛）', gsm_unparsable: '盒型克重无法解析', v_groove_required_but_unsupported: '需要 V 槽但盒型不支持', missing_input: '需求未填'};
   const BM_STATUS_LABELS = {matched: '可确认', needs_input: '缺输入', rejected: '已淘汰'};
+  /* 盒型匹配做不下去时，按后端给的稳定 code 给"下一步去哪"（Spec
+     docs/specs/packaging-downstream-block-code-parity.md §2.3）：
+       · requirement_draft_missing → 还没有需求单，去建需求草稿；
+       · industry_missing         → 需求单行业不是包装，去需求单把行业改过来；
+       · box_type_not_confirmed   → 盒型还没确认，留在本页继续确认（不给跳转）。
+     码只用来选出口，人话一律用后端返回的 message，不在前端改口径。 */
+  const BM_BLOCK_ACTIONS = {
+    requirement_draft_missing: {text: '去建需求单', page: 'requirement-create.html'},
+    industry_missing: {text: '去需求单把行业选成「包装」', page: 'requirement-create.html'},
+    // 未确认盒型是"留在本页继续确认"，不是"去别处补数据"，所以不给跳转出口。
+    box_type_not_confirmed: null,
+  };
   let bmPid = '';
   let bmBusy = false;
+  let bmBlocked = null;
 
   function bmEsc(value) {
     return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
@@ -31,9 +44,42 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     return fetch(url, {...(options || {}), headers: {'Content-Type': 'application/json', ...((options || {}).headers || {})}})
       .then(async res => {
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.detail || body.message || `请求失败（${res.status}）`);
+        if (!res.ok) {
+          const detail = body.detail;
+          const message = (typeof detail === 'string' ? detail : (detail && detail.message))
+            || body.message || `请求失败（${res.status}）`;
+          const err = new Error(message);
+          err.status = res.status;
+          err.code = (detail && detail.code) || body.code || '';
+          throw err;
+        }
         return body;
       });
+  }
+  function bmBlockAction(code) {
+    return BM_BLOCK_ACTIONS[String(code || '')] || null;
+  }
+  function bmBlockNote() {
+    if (!bmBlocked) return '';
+    const action = bmBlockAction(bmBlocked.code);
+    const link = action
+      ? `<a class="btn secondary" href="${href(action.page)}" data-bm-block-go="${bmEsc(bmBlocked.code)}">${bmEsc(action.text)}</a>`
+      : '';
+    return `<div class="box-match-block" data-bm-block="${bmEsc(bmBlocked.code)}">`
+      + `<div class="box-match-block-msg">${bmEsc(bmBlocked.message)}</div>${link}</div>`;
+  }
+  function bmPaintBlock() {
+    const host = document.querySelector('#boxMatchPanel');
+    if (!host) return;
+    const existing = host.querySelector('.box-match-block');
+    if (existing) existing.remove();
+    const html = bmBlockNote();
+    if (!html) return;
+    const box = document.createElement('div');
+    box.innerHTML = html;
+    const node = box.firstElementChild;
+    const actions = host.querySelector('.box-match-actions');
+    if (actions) host.insertBefore(node, actions); else host.appendChild(node);
   }
   function bmProjectId() {
     if (bmPid) return bmPid;
@@ -98,6 +144,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       ${confirmed}${stale}
       ${missing.length ? `<div class="box-match-missing">缺失输入：${bmEsc(missing.join('、'))}</div>` : ''}
       ${empty}
+      ${bmBlockNote()}
       <ol class="box-match-list">${candidates.map(bmCandidate).join('')}</ol>
       <div class="box-match-actions">
         <button class="btn secondary" data-bm-run="1" ${editable ? '' : 'disabled'}>运行盒型匹配</button>
@@ -112,6 +159,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const host = document.querySelector('#boxMatchPanel');
     if (!pid || !host) return;
     const record = await bmApi(`/api/projects/${encodeURIComponent(pid)}/requirement/box-match`);
+    bmBlocked = null;   // 读到了结果就说明这一轮没有被前置缺口挡下
     host.outerHTML = bmPanel(record, bmCanDecide());
     bmBind(pid);
   }
@@ -136,7 +184,11 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       await bmRefresh();
     } catch (error) {
       bmBusy = false;
-      bmToast((error && error.message) || '盒型匹配操作失败', true);
+      const code = String((error && error.code) || '');
+      bmBlocked = {code: code, message: String((error && error.message) || '') || '盒型匹配操作失败'};
+      const action = bmBlockAction(code);
+      bmToast(action ? `${bmBlocked.message}（${action.text}）` : bmBlocked.message, true);
+      bmPaintBlock();
     }
   }
 
@@ -213,7 +265,14 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
     if (!response.ok) {
       let detail = '';
-      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      try {
+        const payload = await response.json();
+        const raw = payload.detail;
+        /* 包装下游的业务错误统一回结构化 detail {code,message}（Spec
+           docs/specs/packaging-downstream-block-code-parity.md §2.2）；
+           只认字符串的话人话会被吞成 [object Object]。 */
+        detail = (typeof raw === 'string' ? raw : (raw && raw.message)) || payload.message || '';
+      } catch (error) { detail = ''; }
       throw new Error(detail || `请求失败（${response.status}）`);
     }
     return response.json();
@@ -405,7 +464,14 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
     if (!response.ok) {
       let detail = '';
-      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      try {
+        const payload = await response.json();
+        const raw = payload.detail;
+        /* 包装下游的业务错误统一回结构化 detail {code,message}（Spec
+           docs/specs/packaging-downstream-block-code-parity.md §2.2）；
+           只认字符串的话人话会被吞成 [object Object]。 */
+        detail = (typeof raw === 'string' ? raw : (raw && raw.message)) || payload.message || '';
+      } catch (error) { detail = ''; }
       throw new Error(detail || `请求失败（${response.status}）`);
     }
     return response.json();
@@ -612,7 +678,14 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
     if (!response.ok) {
       let detail = '';
-      try { const payload = await response.json(); detail = payload.detail || payload.message || ''; } catch (error) { detail = ''; }
+      try {
+        const payload = await response.json();
+        const raw = payload.detail;
+        /* 包装下游的业务错误统一回结构化 detail {code,message}（Spec
+           docs/specs/packaging-downstream-block-code-parity.md §2.2）；
+           只认字符串的话人话会被吞成 [object Object]。 */
+        detail = (typeof raw === 'string' ? raw : (raw && raw.message)) || payload.message || '';
+      } catch (error) { detail = ''; }
       throw new Error(detail || `请求失败（${response.status}）`);
     }
     return response.json();

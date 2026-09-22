@@ -37,6 +37,12 @@ function apiError(data, status) {
     if (lines.length) return `提交的数据不合法（${lines.join('；')}）`;
   }
   if (typeof detail === 'string' && detail) return detail;
+  /* 包装下游的业务错误统一回结构化 detail `{code, message}`（Spec
+     docs/specs/packaging-downstream-block-code-parity.md §2.2）：只认字符串的话
+     人话会被吞掉，屏幕上只剩"请求失败 (409)"。code 由 api() 提到 error 上。 */
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string' && detail.message) {
+    return detail.message;
+  }
   return (data && data.message) || `请求失败 (${status})`;
 }
 /* 写请求前的项目身份一致性校验（项目身份唯一来源 = tech-project-context.js）。

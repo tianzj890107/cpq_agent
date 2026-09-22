@@ -68,12 +68,19 @@ _DATA_GAP_MESSAGES = {
 
 
 class BoxMatchError(Exception):
-    """盒型匹配的业务错误；`status_code` 供接口层原样映射成 HTTP 状态码。"""
+    """盒型匹配的业务错误；`status_code` 与 `code` 供接口层原样映射。
 
-    def __init__(self, message: str, status_code: int = 409):
+    形状与 `packaging_bom.BomError` / `packaging_route.RouteError` /
+    `packaging_cost.CostError` / `packaging_handoff.HandoffError` 逐字同构
+    （Spec docs/specs/packaging-downstream-block-code-parity.md §2.1）：
+    `code` 是给前端判分支用的稳定串，`message` 仍是给人看的中文。
+    """
+
+    def __init__(self, message: str, status_code: int = 409, code: str = ""):
         super().__init__(message)
         self.message = str(message)
         self.status_code = int(status_code)
+        self.code = str(code)
 
 
 # --------------------------------------------------------------------------- #
@@ -536,10 +543,20 @@ def _industry_of(data: dict) -> str:
     return industry_templates.normalize(data.get("industry") or data.get("industry_selection"))
 
 
+#: 盒型匹配的两条前置缺口各有自己的码：没有草稿要去建需求单，行业不对要去选行业。
+#: 两者共用一句话会让用户照着一句改不好的话一直改（Spec §1.3）。
+CODE_REQUIREMENT_DRAFT_MISSING = "requirement_draft_missing"
+CODE_INDUSTRY_MISSING = "industry_missing"
+
+
 def _require_packaging(project_id: str) -> tuple[dict, dict, dict]:
     doc, data, inputs = _requirement_inputs(project_id)
+    if not doc:
+        raise BoxMatchError("还没有需求草稿，请先建需求单再匹配盒型", 409,
+                            CODE_REQUIREMENT_DRAFT_MISSING)
     if _industry_of(data) != PACKAGING_INDUSTRY:
-        raise BoxMatchError("盒型匹配只对包装行业的需求单生效", 400)
+        raise BoxMatchError("这张需求单的行业不是「包装」，请先去需求单把行业改成「包装」再匹配盒型",
+                            400, CODE_INDUSTRY_MISSING)
     return doc, data, inputs
 
 
@@ -690,16 +707,19 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
     actor = actor or {}
     role = _text(actor.get("role"))
     if role and role not in BOX_MATCH_DECIDE_ROLES:
-        raise BoxMatchError("只有工艺经理、工艺技术总监或管理员可以确认盒型", 403)
+        raise BoxMatchError("只有工艺经理、工艺技术总监或管理员可以确认盒型", 403,
+                            "forbidden_role")
 
     state = _text(decision)
     if state not in _DECISION_STATES:
-        raise BoxMatchError("未知的盒型匹配决策：%s" % state, 400)
+        raise BoxMatchError("未知的盒型匹配决策：%s" % state, 400,
+                            "unknown_decision")
 
     requirement_no = _resolve_requirement_no(project_id, requirement_no)
     record = da_repo.load_box_match(project_id, requirement_no)
     if not record:
-        raise BoxMatchError("该项目还没有盒型匹配记录，请先运行匹配", 409)
+        raise BoxMatchError("该项目还没有盒型匹配记录，请先运行匹配", 409,
+                            "box_match_not_found")
 
     code = _text(box_type_code)
     confirmed = _text(record.get("confirmed_box_type")) if _text(record.get("decision")) == "confirmed" else ""
@@ -710,7 +730,8 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
     if state == "confirmed":
         item = _candidate_of(record, code)
         if item is None:
-            raise BoxMatchError("box_type_not_confirmable：候选里没有 %s" % code, 409)
+            raise BoxMatchError("box_type_not_confirmable：候选里没有 %s" % code, 409,
+                        "box_type_not_confirmable")
         score = _score_of(record, code)
         if confirmed and confirmed != code:
             action = "switched"
@@ -718,7 +739,8 @@ def decide_box_match(project_id: str, requirement_no: str, decision: str,
         elif not confirmed and not (item.get("status") == "matched" and item.get("can_confirm")):
             reasons = "、".join(item.get("reject_reasons") or []) or _text(item.get("status"))
             raise BoxMatchError(
-                "box_type_not_confirmable：%s（%s）" % (code, reasons), 409)
+                "box_type_not_confirmable：%s（%s）" % (code, reasons), 409,
+                "box_type_not_confirmable")
     # 退回补充需求：缺失键由匹配结果如实带出（f5 用「缺闭合方式」验证），但工艺经理
     # 也可以基于分项分主观退回（h1 在没有缺失项时同样允许），所以这里不做硬拦。
 

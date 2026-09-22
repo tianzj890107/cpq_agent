@@ -12335,3 +12335,103 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 只改 `cpq_packaging_quote.py`（读写侧归一）+ 该 Spec 的状态行 + 追加本 changelog；
 未改 `cpq_wf.py` / `cpq_suite_server.py` / 版本表 DDL / 既有红测，未连 PG、未发 HTTP、
 未写业务数据、未动 34。
+
+## 312. 包装下游"做不下去"的原因要能判分支：错误码同构 + 缺草稿不再错报成"行业不对"（9-22，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-downstream-block-code-parity.md` + `tests/test_packaging_downstream_block_code_red.py`
+（7 条：A 组 2 条 + B 组 3 条红，C 组 2 条护栏绿）。起因是同一轮 34 全流程真跑里，
+"零件出来了、下游却做不下去"这件事**每一处都只回一句裸中文**，人和前端都判不出该补什么。
+
+### 现场证据（34 真跑，项目 `0f080b24c65d`）
+
+- 报价卡片 `e2e00a1b2c3d` → 建项（`entry_origin=quote`，带 `business_case_id` + `source_session_id`）
+  → `酒盒.dwg` 一键解析（ODA 27.1 → DXF，6569 实体 / 8 图层 / 单位 confirmed）
+  → 零件 64 件（真展开尺寸，如 `440.123 × 482.92`）→ 回传挂回同一张卡片 → 卡片 1→6 步走完、
+  第 5 步落报价版本 1。整条链是通的。
+- 但下游四个入口的拒绝各不相同、且没有一句带稳定码：
+  `box-match` 400「只对包装行业生效」（真实原因其实是需求草稿没写 industry）、
+  `packaging-cost` 409「工艺路线尚未确认」、再跑一次 409「报价数量缺失」、
+  链路 `downstream_prepare` 才有 `blocking[].code = field_missing`。
+- 最刺眼的一处：**需求单根本不存在**时报的还是「只对包装行业生效」——用户照它改行业永远改不好。
+- 形状也不齐：`BomError` / `RouteError` / `CostError` / `HandoffError` 都是
+  `(message, status_code, code)`，**只有 `BoxMatchError` 没有 `code`**。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `packaging_match.BoxMatchError` 与其余四个错误类**逐字同构**（补第 3 个位置参数 `code`，缺省空串）；
+- `_require_packaging()` 拆成两条判据：需求单不存在 → `requirement_draft_missing`（409），
+  行业不是包装 → `industry_missing`，两条文案必须不同；
+- 路由层把 `code` 原样带出（`detail.code`），前端按码给处置；
+- 禁项写死：不许改既有码（`box_type_not_confirmed` / `route_not_confirmed` / `quantity_missing` …）、
+  不许放宽任何门禁、不许改 `tests/` 既有文件。
+
+### 复跑
+
+- `tests.test_packaging_downstream_block_code_red`：本批红（`Ran 7, failures=5`），
+  其中 A 组 2 条 + B 组 3 条正是待实现项，C 组 2 条护栏覆盖既有码不被改掉。
+- 与 `## 311` 那条无关：那条是报价版本读回的 500（已实现），本条是包装下游阻断的**可判分支**（未实现）。
+
+## 313. `## 312` 落地：五条包装链路出口统一带 `code`，盒型匹配"缺草稿"与"行业不对"分家（9-22，Codex 实现）
+
+### 改了什么
+
+- `packaging_match.BoxMatchError`：构造签名补第 3 个位置参数 `code: str = ""`，与
+  `BomError` / `RouteError` / `CostError` / `HandoffError` 逐字同构（`message` / `status_code`
+  两个既有属性保留）。**没有改任何既有 `status_code`**。
+- `packaging_match._require_packaging()`：拆两条判据，各带自己的码 ——
+  需求单不存在 → `requirement_draft_missing`（**409**，文案"还没有需求草稿，请先建需求单再匹配盒型"）；
+  行业不是包装 → `industry_missing`（**400**，文案改成可处置动作"这张需求单的行业不是「包装」，
+  请先去需求单把行业改成「包装」再匹配盒型"）。原来两条共用同一句
+  "盒型匹配只对包装行业的需求单生效"，用户照它改行业永远改不好。
+- `packaging_match.decide_box_match()`：五个既有拒绝点补码 `forbidden_role`(403) /
+  `unknown_decision`(400) / `box_match_not_found`(409) / `box_type_not_confirmable`(409)×2
+  —— 状态码、文案、抛点位置一字未改，只加第三个参数。
+- `main._packaging_error_detail()`：新增共用出口 `{"message": str(exc), "code": exc.code}`；
+  `_box_match_flow` / `_packaging_bom_flow` / `_packaging_route_flow` / `_packaging_cost_flow`
+  / `_packaging_handoff_flow` 五条全部改走它。
+- `main.assert_industry_scoped_candidates()`："候选全部跨行业被剔除"这条 409 也补码
+  `no_industry_candidate`（盒型匹配路由上的第二类业务拒绝）。
+- `workflow.js apiError()`：结构化 detail `{code, message}` 取 `detail.message`。
+  真机后果：不改这里的话，包装下游的 409 在界面上会退化成"请求失败 (409)"——人话被吞。
+- `requirement-confirm.js`：盒型匹配面板新增 `BM_BLOCK_ACTIONS` 按 `code` 给下一步
+  （`requirement_draft_missing` / `industry_missing` → 跳该需求单页面；
+  `box_type_not_confirmed` → 留在本页继续确认，不给跳转）；`bmSubmit` 用 `error.code` 选出口；
+  `bm/pb/pr/pc` 四个 `*Api()` 的兜底也从对象 detail 取 message（原来会变成 `[object Object]`）。
+- `requirement-confirm.html`：`.box-match-block` 样式（红底 + 跳转按钮）。
+
+### 两处 Spec 与源码不符（已写进 Spec §5.2 / §5.3，不改红测）
+
+1. Spec §2.2 说"与包装 BOM / 路线 / 成本三条路由的既有出口同构"，据此只要求改
+   `_box_match_flow`。核对源码：**五条**出口当时**全部**只有
+   `HTTPException(exc.status_code, str(exc))`，一条都没带 `code`——不存在可照抄的"既有同构出口"。
+   按本批标题的意图五条一起改，不改状态码、不改文案、不放宽门禁。
+2. Spec §2.3 要求改 `tech_app/frontend/app.js`，但 `app.js` 里 `盒型匹配` / `box-match`
+   出现 **0 次**；面板实际住在 `requirement-confirm.js`（第 4 批的 `#boxMatchPanel`）。
+   §2.3 的意图落在 `requirement-confirm.js`，`app.js` 一行未改。
+
+### 出口侧护栏（新增）
+
+`## 312` 的 7 条红测只覆盖服务层。另加
+`tests/test_packaging_downstream_block_code_http_red.py`（10 条）：
+五条链路出口同构 / `apiError` 读结构化 detail / 面板按码给出口 / `403-400-409` 分布冻结 /
+两个前置各自的 `status_code + code` / `node --check` 三个 JS。**在实现之后写成，落地即绿**
+（属回归护栏，不是红测）。
+
+### 复跑（`./open-claude/.venv/bin/python -m unittest`，本机无 pytest）
+
+- `tests.test_packaging_downstream_block_code_red` → **Ran 7 OK**（落地前 `failures=5`）
+- `tests.test_packaging_downstream_block_code_http_red` → **Ran 10 OK**
+- 不回归：`test_packaging_parts_extraction_red` + `test_packaging_parametric_bom_red`
+  → Ran 96 OK；`test_packaging_box_type_matching_red` + `test_packaging_quote_close_loop_red`
+  + `test_packaging_quote_send_recovery_red` + `test_quote_first_project_entry_red`
+  → Ran 183（1 条既有红 `CMetaRecovery.test_c1`，`## 272` 已记录，与本批无关）；
+  `test_packaging_parse_to_downstream_seams_red` / `test_packaging_route_template_closure_red`
+  / `test_packaging_downstream_blockers_red` / `test_packaging_manual_field_confirmation_red`
+  / `test_packaging_process_route_red` / `test_e2e_packaging_dwg_continuity_red` → Ran 128 OK。
+- `node --check` 三个前端文件通过；`git diff --check` 干净。
+
+### 边界
+
+只改 `packaging_match.py` / `main.py` / `workflow.js` / `requirement-confirm.js` /
+`requirement-confirm.html` / 本批 Spec 状态行 / 追加本 changelog；未改 `tests/` 既有文件、
+未改另外四个错误类的既有码、未放宽任何门禁、未连 PG、未发 HTTP、未写业务数据、未部署。

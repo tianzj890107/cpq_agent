@@ -6708,17 +6708,30 @@ def assert_industry_scoped_candidates(project_id: str, candidates: Any, *,
             "industry": scoped["industry"],
         })
     if not scoped["kept"] and scoped["dropped"]:
-        raise HTTPException(409, "知识库里没有属于本行业的可用盒型：候选 %d 条全部跨行业，"
-                                 "已全部剔除（不显示别的行业的产品）"
-                            % len(scoped["dropped"]))
+        raise HTTPException(409, {
+            "message": "知识库里没有属于本行业的可用盒型：候选 %d 条全部跨行业，"
+                       "已全部剔除（不显示别的行业的产品）" % len(scoped["dropped"]),
+            "code": "no_industry_candidate",
+        })
     return scoped
+
+
+def _packaging_error_detail(exc) -> dict:
+    """包装下游的业务错误 → 结构化 HTTP detail（`code` + `message`）。
+
+    五个包装服务（盒型匹配 / BOM / 路线 / 成本 / 回传）的错误类形状本来就是同一套
+    （`message` / `status_code` / `code`），出口也必须同构：前端按 `code` 判"缺什么
+    补什么"，只回一句中文的话分支无从下手。
+    （Spec docs/specs/packaging-downstream-block-code-parity.md §2.2）
+    """
+    return {"message": str(exc), "code": str(getattr(exc, "code", "") or "")}
 
 
 def _box_match_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except packaging_match.BoxMatchError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
 
 
 @app.post(BOX_MATCH_RUN_PATH)
@@ -6791,7 +6804,7 @@ def _packaging_bom_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except packaging_bom.BomError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
 
 
 @app.post(PACKAGING_BOM_BUILD_PATH)
@@ -7115,7 +7128,7 @@ def _packaging_route_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except packaging_route.RouteError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
 
 
 @app.post(PACKAGING_ROUTE_BUILD_PATH)
@@ -7177,7 +7190,7 @@ def _packaging_cost_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except packaging_cost.CostError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
 
 
 @app.post(PACKAGING_COST_BUILD_PATH)
@@ -7350,7 +7363,7 @@ def _packaging_handoff_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except packaging_handoff.HandoffError as exc:
-        raise HTTPException(exc.status_code, str(exc)) from exc
+        raise HTTPException(exc.status_code, _packaging_error_detail(exc)) from exc
     except cpq_bridge.BridgeRejected as exc:
         # 落点冲突必须是**可操作**的 409 + 结构化 detail（code / candidates /
         # business_case_id），与报告侧 `_report_flow` 同一份出口 —— 以前它冒到全局
