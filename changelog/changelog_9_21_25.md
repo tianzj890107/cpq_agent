@@ -12214,3 +12214,19 @@ C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncate
 `docs/specs/packaging-parts-list-visibility-and-kinds.md`（状态行 + §6）并追加本 changelog；
 未改 `tests/` 下任何文件、未改 `DEFAULT_OPTIONS` / `REASON_CODES` / `PART_CODE_FORMAT` /
 `filtered_*` 口径、未改成本与工艺算法、未连 PG、未写生产数据、未动 34、未部署。
+
+## 309. 更正 `## 308` 里 `stats.kept_total` 的一处表述：按 Spec §2.1 它就是 `part_total`（9-22，Codex）
+
+`## 308` 写的是 `stats.kept_total` = `part_total + truncated`，实现却按"过滤后剩多少"（= 截断前的 kept 件数）
+落了值 —— 两处对"显式传 `options["max_parts"]`"这条历史复现路径的口径不一致。
+
+- Spec `docs/specs/packaging-parts-list-visibility-and-kinds.md` §2.1 的原文是
+  「新增 `stats.kept_total`（= `part_total`，把"过滤后剩多少"显式化）」：**两个说法只在不传
+  `max_parts` 时等价**（那时 `truncated` 恒 0）。为避免"文档一套、代码一套"，本批按 Spec 的字面量收口：
+  `kept_total = len(parts)`（= `part_total`），截断掉的那部分继续只由 `truncated` 说。
+- 改的是 `tech_app/backend/services/packaging_parts.py` 的 `extract()`：`kept_total` 取截断后的件数，
+  `stats` 里那个键仍是 `kept_total`，其余键一个不动。
+- 复跑：`tests.test_packaging_parts_list_visibility_red` + `tests.test_packaging_parts_extraction_red`
+  → `Ran 43 OK (skipped=1)`（A1 的 `kept_total == 70`、B3 的显式截断 `len(parts) == 2` / `truncated == 2`
+  两条都在）。
+- 只改 1 个实现文件的一行 + 追加本 changelog；未改任何测试、未连 PG、未动 34、未部署。

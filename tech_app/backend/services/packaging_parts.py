@@ -1508,6 +1508,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         parts = parts[:explicit_max]
     else:
         truncated = 0
+    # `kept_total` 按 Spec §2.1 与 `part_total` **同值**（缺省时它就是把"过滤后剩多少"显式化；
+    # 显式截断那一步的差值单独由 `truncated` 说）。`kind_total` 只数文档里留下的件。
+    kept_total = len(parts)
     kind_total = len({_text(row.get("kind_key")) for row in parts
                       if _text(row.get("kind_key"))})
     # 三态计数只统计**最终保留**的件（与 part_total 自洽：三者之和 == part_total）。
@@ -1576,9 +1579,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         "unavailable": unavailable,
         "stats": {"part_total": len(parts), "filtered_total": len(filtered),
                   "truncated": truncated, "by_role": by_role,
-                  # 过滤后剩多少（= `part_total` + `truncated`）与"有几种形状"（Spec §2.1/§2.2）：
+                  # 过滤后剩多少（与 `part_total` 同值）与"有几种形状"（Spec §2.1/§2.2）：
                   # 前端据此把"被过滤掉的分量 / 文档里的件数 / 还有几件未列出"三笔账分开说。
-                  "kept_total": len(kept), "kind_total": kind_total,
+                  "kept_total": kept_total, "kind_total": kind_total,
                   "closed_total": closed_total, "open_total": open_total,
                   "outline_unavailable_total": outline_unavailable_total,
                   "closed_ratio": _round(closed_ratio),
