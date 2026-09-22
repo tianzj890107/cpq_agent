@@ -1556,6 +1556,33 @@ async function refreshPackagingParts() {
   return currentPackagingParts;
 }
 
+// drawing-flow 走到终态后必须**重新拉一次**零件文档（Spec
+// `e2e-packaging-dwg-quote-tech-continuity.md` §4.1）：零件是链路跑完才产出的，
+// 不刷新的话左栏会一直停在空态占位文案上（线上那条现象：跑完了还是只有一个标题）。
+async function refreshPackagingPartsAfterDrawingFlow(flowState) {
+  if (flowState) currentDrawingFlowState = flowState;
+  const doc = await refreshPackagingParts().catch(() => null);
+  const rows = Array.isArray(doc && doc.parts) ? doc.parts.length : 0;
+  status(rows
+    ? `零件清单已刷新：${rows} 件（点一行可在右栏看这一件）`
+    : "零件文档还没有内容，详见上方步骤表与前置条件。");
+  return doc;
+}
+
+// 点一件零件：留在**当前看板**里看它（Spec §4.1「点击零件仍在看板内展开」）。
+// 不跳页、不换视图：右栏切到图纸零件面板，左栏这一行保持选中。
+function openPackagingPartInBoard(partCode) {
+  const code = String(partCode || "");
+  if (!code) return null;
+  const tree = $("tree");
+  if (tree) {
+    tree.querySelectorAll(".part-item").forEach(row => {
+      row.classList.toggle("active", String(row.dataset.partId || "") === code);
+    });
+  }
+  return selectPackagingPart(code);
+}
+
 async function runDrawingFlowParse() {
   status("正在跑图纸解析链路（DWG → DXF → CAD IR → 包装语义），稍候…", true);
   const res = await fetch(`${API}/api/projects/${currentProject}/drawing-flow/run`, {
@@ -1577,8 +1604,8 @@ async function runDrawingFlowParse() {
     ? `图纸解析完成：CAD IR 实体 ${summary.entities} · 图层 ${summary.layers}`
     : "图纸解析链路已跑完，详见下方步骤表。");
   setWorkflow("review", "DWG / DXF 已由服务端图纸解析链路处理，请核对步骤与 CAD IR 摘要。");
-  // 左栏零件文档（端点未上线时为空态，不影响链路结论）。
-  await refreshPackagingParts().catch(() => null);
+  // 左栏零件文档：链路终态后重新拉一次（端点未上线时为空态，不影响链路结论）。
+  await refreshPackagingPartsAfterDrawingFlow(currentDrawingFlowState).catch(() => null);
   return currentDrawingFlowState;
 }
 
@@ -2434,9 +2461,11 @@ function renderTree(ir) {
     rows.forEach(part => {
       const row = document.createElement("div");
       row.className = "part part-item";
-      // 点得到每一件：行自带 part_code，点击走图纸零件自己的选中路径。
+      // 点得到每一件：行自带 part_code；点击先在看板内定位（高亮这一行），再由
+      // openPackagingPartInBoard() 交给图纸零件自己的选中路径 selectPackagingPart(part_code)
+      // —— 留在当前看板里展开，既不跳页，也不会清空右栏（不走视觉链路的 selectPart）。
       row.dataset.partId = part.part_code || "";
-      row.addEventListener("click", () => selectPackagingPart(part.part_code || ""));
+      row.addEventListener("click", () => openPackagingPartInBoard(part.part_code || ""));
       const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
         ? "" : String(part.unfolded_length_mm);
       const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)

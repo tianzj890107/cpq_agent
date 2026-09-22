@@ -151,6 +151,107 @@ def _split_closure(value: Any) -> set[str]:
     return {piece for piece in parts if piece}
 
 
+#: 闭合方式的**受控同义词**（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §4.3：
+#: "磁吸" 必须能匹配 "双开门磁吸"，原始值与命中规则都要留）。
+#: 键 = 规范形，值 = 同义写法。**只允许**这张表收敛写法：不做子串包含、不做模糊匹配
+#: —— 否则 "磁吸" 会把 "磁吸+锁扣" 这类多结构也吞成一个候选。
+CLOSURE_SYNONYMS = {
+    "磁吸": ("双开门磁吸", "双开门+磁吸", "双开门 磁吸", "磁吸开合", "磁吸式",
+             "磁性闭合", "磁铁扣", "磁吸扣", "磁铁"),
+    "翻盖": ("翻盖式", "翻盖盒", "掀盖", "掀盖式"),
+    "天地盖": ("天地盒", "天盒地盒", "天地盖式"),
+    "抽屉": ("抽屉式", "抽拉", "抽拉式", "抽拉盒"),
+    "书型盒": ("书型", "书本盒", "翻书式", "对开磁吸书型"),
+    "锁扣": ("锁扣式", "搭扣", "卡扣", "扣合"),
+    "粘合": ("胶粘", "粘胶", "上胶"),
+    "插舌": ("插舌式", "扣舌", "插扣"),
+}
+
+#: 同义写法 → 规范形（由 `CLOSURE_SYNONYMS` 展开，不许另外维护第二份）。
+CLOSURE_CANONICAL = {alias: canonical
+                     for canonical, aliases in CLOSURE_SYNONYMS.items()
+                     for alias in aliases}
+for _canon_name in CLOSURE_SYNONYMS:
+    CLOSURE_CANONICAL.setdefault(_canon_name, _canon_name)
+
+
+def normalize_closure_type(value: Any) -> dict:
+    """一个闭合方式写法的受控规范化（Spec §4.3）。返回原始值 + 规范形 + 命中规则。
+
+    匹配用 `canonical`，**展示与留痕用 `value`** —— 用户写的 "双开门磁吸" 不许被改写成
+    "磁吸" 之后就看不出原本写的是什么了。
+    """
+    text = _text(value)
+    if not text:
+        return {"value": "", "canonical": "", "rule": "", "synonym_used": False}
+    canonical = CLOSURE_CANONICAL.get(text)
+    if canonical:
+        rule = "identity" if canonical == text else "synonym:%s->%s" % (text, canonical)
+        return {"value": text, "canonical": canonical, "rule": rule,
+                "synonym_used": canonical != text}
+    return {"value": text, "canonical": text, "rule": "unknown", "synonym_used": False}
+
+
+def normalize_closure_types(value: Any) -> dict:
+    """整串闭合方式（可能带分隔符）的规范化：逐段规范形 + 逐段命中规则 + 原始串。"""
+    text = _text(value)
+    pieces = []
+    rules: dict = {}
+    synonyms: list = []
+    canonicals: set = set()
+    for piece in sorted(_split_closure(text)):
+        row = normalize_closure_type(piece)
+        pieces.append(row)
+        rules[row["value"]] = row["rule"]
+        canonicals.add(row["canonical"])
+        if row["synonym_used"]:
+            synonyms.append(row["rule"])
+    return {"value": text, "canonical": sorted(canonicals), "pieces": pieces,
+            "rules": rules, "synonym_rules": synonyms,
+            "synonym_used": bool(synonyms)}
+
+
+def closure_match_evidence(inputs: dict, box: dict) -> dict:
+    """闭合方式这一维的匹配证据（Spec §4.3）：需求原始值 / 盒型原始值 / 命中规则。"""
+    wanted = normalize_closure_types(inputs.get("closure_type"))
+    available = normalize_closure_types(box.get("closure_type"))
+    hit = sorted(set(wanted["canonical"]) & set(available["canonical"]))
+    rules = [rule for key, rule in wanted["rules"].items()
+             if rule.startswith("synonym:")]
+    return {
+        "requested": wanted["value"], "requested_canonical": wanted["canonical"],
+        "box_type": available["value"], "box_type_canonical": available["canonical"],
+        "matched": hit,
+        "synonym_rules": rules,
+        "synonym_used": bool(rules),
+    }
+
+
+def industry_scoped_candidates(candidates: Any, industry: str = PACKAGING_INDUSTRY) -> dict:
+    """按数据行上的 `industry` 列筛候选（Spec §2.2）：包装项目不许出现锂电等其它行业的行。
+
+    这是**数据判据**（不是提示词里的一句提醒）：行上的 `industry` 非空且不等于本行业
+    的一律剔除并留痕；空值按通用行处理（历史数据没有 industry 列，不能因此把它们全判死）。
+    """
+    wanted = _text(industry) or PACKAGING_INDUSTRY
+    kept: list = []
+    dropped: list = []
+    for row in (candidates or []):
+        if not isinstance(row, dict):
+            continue
+        row_industry = _text(row.get("industry"))
+        if row_industry and row_industry != wanted:
+            dropped.append({
+                "box_type_code": _text(row.get("box_type_code")),
+                "industry": row_industry,
+                "reason": "candidate_out_of_industry:%s!=%s" % (row_industry, wanted),
+            })
+            continue
+        kept.append(row)
+    return {"industry": wanted, "kept": kept, "dropped": dropped,
+            "scoped": not dropped}
+
+
 def _canonical(value: Any) -> str:
     """stale 判定用的规范形：空白与缺失同形，数字按数值比较。"""
     text = _text(value)
@@ -248,8 +349,13 @@ def _dimension_gsm(inputs: dict, box: dict):
 
 
 def _dimension_closure(inputs: dict, box: dict):
-    wanted = _split_closure(inputs.get("closure_type"))
-    available = _split_closure(box.get("closure_type"))
+    """闭合方式：按受控同义词的**规范形**比较（Spec §4.3）。
+
+    "磁吸" 与 "双开门磁吸" 是同一个结构，不再因为写法不同把权威盒型淘汰掉；
+    匹配仍是硬门槛（不命中即淘汰），只是比较前先规范化。
+    """
+    wanted = set(normalize_closure_types(inputs.get("closure_type"))["canonical"])
+    available = set(normalize_closure_types(box.get("closure_type"))["canonical"])
     if not wanted:
         return 0.0, False, False, "missing_input", False
     if wanted & available:
@@ -358,6 +464,9 @@ def _candidate(box: dict, inputs: dict, dimensions: list[dict], missing_required
                       for dimension in undecidable],
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
+        "industry": _text(box.get("industry")),
+        # 闭合方式的匹配证据（Spec §4.3）：原始值 + 规范形 + 命中的同义规则。
+        "evidence": {"closure_type": closure_match_evidence(inputs, box)},
     }
 
 

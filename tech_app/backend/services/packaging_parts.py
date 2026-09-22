@@ -18,6 +18,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..storage.meta_backend import get_backend
+from . import packaging_bom
 from .cad_ir import geometry as cad_geometry
 
 ENGINE_VERSION = "packaging-parts/1"
@@ -1683,7 +1684,8 @@ def size_quality_of(size_source: Any) -> str:
             else SIZE_QUALITY_BBOX)
 
 
-def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
+def bind_rows(items: Any, parts: Any, *, options: Any = None,
+              author: str = "system") -> Dict[str, Any]:
     """把图纸零件回填进算不出尺寸的 BOM 行；纯函数：不改入参、不落库。
 
     - 只碰 `box_part` / `optional_part` 且（`needs_input` 或长宽为空）的行，锁定行绝不碰；
@@ -1697,6 +1699,12 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
       两类材料都已知且不同类时 `material_match=false` 并进 `pairing_review`
       （34 实测把 `RB02001-P08` 磁铁配到纸面板上，报告里原先没有任何地方看得出来）。
       `bound` / `unbound` / `gaps` 口径逐字不变 —— 正式对应表要业务签字后另立一批。
+
+    **角色不许自动贴**（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §4.4）：
+    尺寸是有证据的几何事实，照旧自动回填；但零件自己在图上没写业务角色（`role` 空或
+    `unknown`）时，**不能**按行号/面积顺序把模板行的角色名（"盖壁长边"…）抄上去 ——
+    该行的业务角色保持 `unbound`，等人工映射。每次绑定都留 `binding_evidence` /
+    `binding_method` / `bound_by`（`packaging_bom.binding_record()`）。
     """
     rows = [copy.deepcopy(row) for row in (items or []) if isinstance(row, dict)]
     available = [row for row in ((parts or {}).get("parts") or [])
@@ -1706,6 +1714,7 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
     bound = 0
     skipped_locked = 0
     unbound: List[str] = []
+    role_unbound: List[Dict[str, Any]] = []
     pairing_review: List[Dict[str, Any]] = []
     pair_index = 0
     for row in rows:
@@ -1740,7 +1749,13 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
         # 尺寸来源一路带到底（Spec `packaging-bom-part-size-provenance.md` §2.1）：
         # 回填行上的长宽和零件文档那一行是同一个数字，就必须带同一份来源 ——
         # 否则"未闭合零件的包围盒"和"闭合轮廓的真展开"在任何读接口上都长得一样。
-        source["dwg_binding"] = {
+        # 业务角色：只认零件图上写的；写不出来就把行标成 unbound（Spec §4.4）。
+        role_guard = packaging_bom.reject_unknown_role_autobind(part, row)
+        if not role_guard["autobind"]:
+            role_unbound.append({"item_key": item_key,
+                                 "part_code": _text(part.get("part_code")),
+                                 "reason": role_guard["reason"]})
+        size_binding = {
             "component_id": _text(part.get("component_id")),
             "part_code": _text(part.get("part_code")),
             "rule_id": BINDING_RULE_ID,
@@ -1752,6 +1767,15 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
             "outline_status": _text(part.get("outline_status")),
             "size_quality": size_quality_of(part.get("size_source")),
         }
+        record = packaging_bom.binding_record(
+            part, row, bound_by=author, method="auto_position_area",
+            evidence={"rule_id": BINDING_RULE_ID, "pairing_basis": basis,
+                      "size_quality": size_binding["size_quality"],
+                      "fallback_paired": bool(fallback)})
+        size_binding.update({"role_value": role_guard["role_value"],
+                             "role_rule": role_guard["reason"] or "role_declared",
+                             **record})
+        source["dwg_binding"] = size_binding
         if material_match is False:
             pairing_review.append({
                 "item_key": item_key,
@@ -1767,8 +1791,13 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None) -> Dict[str, Any]:
         row["missing_variables"] = []
         row["source"] = "dwg_parts"
         row["status"] = "computed"
+        # 行的业务角色跟着证据走：零件没写角色时保持 unbound，绝不照抄模板角色名。
+        row["part_role"] = role_guard["role_value"]
+        row["binding_method"] = record["binding_method"]
+        row["bound_by"] = record["bound_by"]
         bound += 1
     return {"items": rows, "bound": bound, "unbound": unbound,
             "skipped_locked": skipped_locked, "gaps": list(unbound),
             "pairing_review": pairing_review,
+            "role_unbound": role_unbound, "role_unbound_total": len(role_unbound),
             "rule_id": BINDING_RULE_ID, "engine_version": ENGINE_VERSION}

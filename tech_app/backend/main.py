@@ -1248,25 +1248,17 @@ def _check_workflow_input_change(project_id: str, user: dict) -> dict:
 
 def _reset_approved_requirement_after_input_change(
     project_id: str, requirement: dict, user: dict, reason: str,
-) -> None:
-    """审批后的工程输入发生变更时，旧审批结论自动失效并形成修订留痕。"""
+) -> dict:
+    """审批后的权威图纸被新增/替换 → 建需求修订版、旧审批失效（Spec §3.3）。
+
+    实现只有一处（`requirement_service.create_revision_for_authoritative_drawing`）：
+    修订号 +1、旧审批快照追加留档（**不覆盖**）、需求回到 draft 等重新确认审核。
+    与"已提交不许改"的可编辑闭集是两件事 —— 这里不放宽 `EDITABLE_STATUSES`。
+    """
     if requirement.get("status") != "approved":
-        return
-    doc = RequirementDoc(**requirement)
-    doc.status = "draft"
-    doc.confirmed_by = None
-    doc.confirmed_at = None
-    doc.confirmation_note = ""
-    doc.reviewed_by = None
-    doc.reviewed_at = None
-    doc.review_note = ""
-    doc.ai_check = {}
-    doc.history.append(_workflow_event("approved_requirement_reopened", user, reason))
-    doc.updated_at = _now_str()
-    store.save_requirement(project_id, doc.model_dump(), author=user.get("username", "system"))
-    store.audit(project_id, "workflow:requirement_reopened_for_input_change", {
-        "by": user.get("username", "system"), "reason": reason,
-    })
+        return {}
+    return requirement_service.create_revision_for_authoritative_drawing(
+        project_id, note=reason, user=user, reason=reason)
 
 
 @app.post("/api/projects")
@@ -1338,8 +1330,15 @@ async def upload_project(
         store.audit(project_id, "upload_additional_drawings", {
             "by": user.get("username", "system"), "files": extra_drawings,
         })
+    # 建项就把"这份图该走哪条链路"定下来（Spec §3.1）：前端不必自己猜后缀，
+    # 也不会出现 .dwg 被送进视觉解析的那条岔路。
+    dispatch = dispatch_project_drawing_parse(project_id, filename=primary.filename)
+    store.audit(project_id, "project:drawing_parse_dispatched",
+                {"route": dispatch["route"], "suffix": dispatch["suffix"],
+                 "by": author})
     return {"project_id": project_id, "source_filename": primary.filename,
-            "additional_drawings": extra_drawings, "entry_origin": entry}
+            "additional_drawings": extra_drawings, "entry_origin": entry,
+            "drawing_parse": dispatch}
 
 
 def _route(method_and_path: str):
@@ -1436,9 +1435,21 @@ async def upload_project_attachments(
     for name, data in prepared:
         store.add_attachment(project_id, name, data, author)
         saved.append(name)
-    _reset_approved_requirement_after_input_change(project_id, requirement, user, "补充输入附件")
+    # 审批后补进一张权威图纸 = 一次需求修订（Spec §3.3）：只建**一个**修订版，
+    # 旧审批快照追加留档；没有图纸附件（纯技术文档）不算修订。
+    revision = {}
+    if requirement.get("status") == "approved":
+        from pathlib import Path as _Path
+        drawing = next((name for name in saved
+                        if _Path(name).suffix.lower() in
+                        requirement_service.DRAWING_SUFFIXES), "")
+        if drawing:
+            revision = requirement_service.create_revision_for_authoritative_drawing(
+                project_id, filename=drawing, note="补充权威图纸 %s" % drawing,
+                user=user, reason="补充权威图纸")
     store.audit(project_id, "upload_workflow_attachments", {"by": user.get("username", "system"), "files": saved})
-    return {"attachments": (store.load_meta(project_id) or {}).get("attachments", [])}
+    return {"attachments": (store.load_meta(project_id) or {}).get("attachments", []),
+            "requirement_revision": revision}
 
 
 @app.post("/api/projects/{project_id}/source")
@@ -1454,8 +1465,12 @@ async def replace_project_source(
     if not content:
         raise HTTPException(400, "空文件")
     store.replace_source(project_id, file.filename or "source.png", content, user.get("username", "system"))
-    _reset_approved_requirement_after_input_change(project_id, requirement, user, "替换原始图纸")
-    return {"source_filename": (store.load_meta(project_id) or {}).get("source_filename")}
+    # 换掉权威图纸 = 一次需求修订：审批前要先解析（Spec §3.3），审批后必须建修订版，
+    # 不许静默拒绝字段写回，也不许覆盖已审批快照。
+    revision = _reset_approved_requirement_after_input_change(
+        project_id, requirement, user, "替换原始图纸 %s" % (file.filename or "source.png"))
+    return {"source_filename": (store.load_meta(project_id) or {}).get("source_filename"),
+            "requirement_revision": revision}
 
 
 @app.get("/api/projects/{project_id}/attachments")
@@ -6431,25 +6446,33 @@ def extract_requirement_documents(project_id: str, user: dict = Depends(current_
         raise HTTPException(409, "当前需求已进入确认流程，不能自动覆盖草稿")
     prepared = requirement_extract.prepare_documents(store.load_attachments(project_id))
     context_data = doc.data or {}
+    # 抽取输入是**合并证据**（Spec §2.3）：报价原文 + 附件解析 + 用户补充。
+    # 报价描述里往往已经写全包装参数，"没有附件"不等于"没有需求" —— 以前这里会因为
+    # 没有附件直接跳过，把字段全写成"待确认"。
+    evidence = requirement_service.extraction_evidence(project_id, doc=doc)
+    # 顺带纠正入口分级：报价线索随需求单进来时，项目 meta 上的 internal_test 要改成 quote。
+    requirement_service.assert_quote_origin_link(project_id, doc=doc, user=user)
     context_lines = [
         "【首页与需求表单上下文】",
         f"需求名称：{doc.title or context_data.get('title') or '未填写'}",
         f"需求描述：{context_data.get('description') or '未填写'}",
+        f"报价原文：{evidence['quote_text'] or '未提供'}",
         f"原始图纸文件：{(store.load_meta(project_id) or {}).get('source_filename') or '未上传'}",
+        f"已上传附件：{'、'.join(evidence['attachment_names']) or '无'}",
     ]
     context = "\n".join(context_lines)
-    # 即使没有可读附件，也用首页描述和图纸文件名完成轻量行业判断；不再静默跳过。
     prepared = requirement_extract.PreparedDocuments(
         text=f"{context}\n\n{prepared.text}".strip(),
         processed_files=prepared.processed_files,
         skipped_files=prepared.skipped_files,
     )
-    if not context_data.get("description") and not prepared.processed_files:
+    if not evidence["has_evidence"] and not prepared.processed_files:
         return {
             "skipped": True,
-            "reason": "未找到可提取的 TXT、Markdown、CSV、PDF 或 DOCX 技术文档",
+            "reason": "既没有报价原文、也没有可读附件与表单补充，没有可提取的证据",
             "processed_files": prepared.processed_files,
             "skipped_files": prepared.skipped_files,
+            "evidence_sources": evidence["sources"],
         }
     expected_input_revision = _input_revision(project_id)
     expected_industry = str(
@@ -6574,6 +6597,13 @@ def save_requirement(project_id: str, doc: RequirementDoc, user: dict = Depends(
     # 落盘规则（保留报价溯源键、客户信用等级校验、requirement_no / created_by /
     # status 继承、历史留痕与审计）统一在 services.requirement_service；2.1 Agent 的
     # UpdateRequirementFields 调用的是同一份实现，不另写一套写入逻辑。
+    # 报价来源线索随这次保存进来时，当场把入口分级纠正成 quote（Spec §2.1）：
+    # tech-task.js 是在建项之后才把报价溯源键写进需求单的，那之前的项目 meta 上是
+    # internal_test —— 不纠正，后面回传时服务端会因为"不是报价入口"认不回原卡片。
+    try:
+        requirement_service.assert_quote_origin_link(project_id, doc=doc, user=user)
+    except requirement_service.RequirementSaveError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     try:
         saved = requirement_service.save_requirement_draft(project_id, doc, user)
     except requirement_service.RequirementSaveError as exc:
@@ -6649,6 +6679,28 @@ BOX_MATCH_DECISION_PATH = "/api/projects/{project_id}/requirement/box-match/deci
 BOX_MATCH_READ_PATH = "/api/projects/{pid}/requirement/box-match"
 
 
+def assert_industry_scoped_candidates(project_id: str, candidates: Any, *,
+                                      requirement_no: str = "") -> dict:
+    """包装项目的盒型候选只能来自包装知识库（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §2.2）。
+
+    判据是**数据行上的 `industry` 列**，不是提示词里的一句提醒：非本行业的行一律剔除并
+    留痕（`candidate_out_of_industry`），剔除后一件不剩就按"知识库没有可用盒型"处理，
+    绝不让锂电的行混进包装的候选里被选中。纯读判定，落库仍由 service 负责。
+    """
+    scoped = packaging_match.industry_scoped_candidates(candidates)
+    if scoped["dropped"]:
+        store.audit(project_id, "workflow:box_match_candidates_scoped", {
+            "requirement_no": str(requirement_no or ""),
+            "dropped": scoped["dropped"][:20], "dropped_total": len(scoped["dropped"]),
+            "industry": scoped["industry"],
+        })
+    if not scoped["kept"] and scoped["dropped"]:
+        raise HTTPException(409, "知识库里没有属于本行业的可用盒型：候选 %d 条全部跨行业，"
+                                 "已全部剔除（不显示别的行业的产品）"
+                            % len(scoped["dropped"]))
+    return scoped
+
+
 def _box_match_flow(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -6665,6 +6717,11 @@ def run_requirement_box_match(
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
     result = _box_match_flow(packaging_match.run_box_match, project_id, body.requirement_no)
+    # 跨行业候选一律剔除（Spec §2.2）：包装项目不许出现锂电产品。
+    scoped = assert_industry_scoped_candidates(
+        project_id, result.get("candidates") or [], requirement_no=body.requirement_no)
+    result = {**result, "candidates": scoped["kept"],
+              "dropped_candidates": scoped["dropped"], "industry": scoped["industry"]}
     return {
         "result": result,
         "box_match": _box_match_flow(packaging_match.load_box_match, project_id, body.requirement_no),
@@ -6692,6 +6749,10 @@ def decide_requirement_box_match(
     """四态决策：确认推荐 / 换成别的候选 / 退回补充需求 / 新制评估。"""
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES, "需要工艺经理、工艺技术总监或管理员权限")
     _workflow_project(project_id)
+    # 确认/换型前先过行业闸门（Spec §2.2）：手工指定一个别的行业的盒型也要被挡下。
+    current = _box_match_flow(packaging_match.load_box_match, project_id, body.requirement_no)
+    assert_industry_scoped_candidates(
+        project_id, current.get("candidates") or [], requirement_no=body.requirement_no)
     record = _box_match_flow(
         packaging_match.decide_box_match, project_id, body.requirement_no, body.decision,
         body.box_type_code, actor=user, note=body.note)
@@ -6999,6 +7060,51 @@ def get_requirement_packaging_cost_curve(pid: str, requirement_no: str = "",
 # 用 {pid} 才能既不顶掉这两条基线、也不改变运行期语义 —— 项目 ACL 守卫按**具体** 12 位
 # 项目号匹配 URL，与占位符叫什么无关。
 # --------------------------------------------------------------------------- #
+#: 图纸入口的唯一分发判据（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §3）。
+DRAWING_FLOW_SUFFIXES = (".dwg", ".dxf")
+VISION_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+#: 三维交换格式：不送二维链路，也不送视觉模型 —— 交给 step_import 那条既有通路。
+THREE_D_SUFFIXES = (".step", ".stp", ".sat", ".iges", ".igs", ".sldprt", ".x_t")
+
+
+def dispatch_project_drawing_parse(project_id: str, *, filename: str = "",
+                                   user: Optional[dict] = None) -> dict:
+    """图纸入口的**唯一分发器**（Spec §3）：按原图后缀确定性地选一条链路。
+
+    现场那条：`.dwg` 先被送进通用视觉 `/parse`，报一句"不是位图…请上传 PNG"，
+    用户以为解析能力不存在 —— 其实 drawing-flow 早就能跑。判据只有后缀，不做探测、
+    不调模型、不写盘；上传完与点按钮时都走这一处，前端不必自己猜。
+
+    返回 `{"route", "reason", "suffix", "flow_available"}`：
+      · `.dwg/.dxf` → `drawing_flow`（确定性，绝不先送视觉）；
+      · 位图 → `vision`（行为与改动前逐字一致）；
+      · 三维交换格式 → `blocked_3d`；
+      · 其余 → `blocked_other`。
+    """
+    meta = store.load_meta(project_id) or {}
+    name = str(filename or meta.get("source_filename") or "")
+    suffix = ("." + name.rsplit(".", 1)[1].lower()) if "." in name else ""
+    if suffix in DRAWING_FLOW_SUFFIXES:
+        # 能力事实由运行时探测决定（第 2 批），这里只回答"该走哪条链路"。
+        available = True
+        try:
+            available = bool(file_preflight.detect_converter_availability().get("available"))
+        except Exception:                       # noqa: BLE001 - 探测失败不挡分流
+            available = True
+        return {"route": "drawing_flow", "suffix": suffix,
+                "reason": "DWG/DXF 走图纸解析链路（2.1 一键解析）",
+                "flow_available": available}
+    if suffix in VISION_SUFFIXES:
+        return {"route": "vision", "suffix": suffix,
+                "reason": "位图走通用视觉解析", "flow_available": False}
+    if suffix in THREE_D_SUFFIXES:
+        return {"route": "blocked_3d", "suffix": suffix,
+                "reason": "三维交换格式：二维链路与视觉解析都不适用",
+                "flow_available": False}
+    return {"route": "blocked_other", "suffix": suffix or "(无后缀)",
+            "reason": "无法识别的图纸格式", "flow_available": False}
+
+
 class DrawingFlowRunAction(BaseModel):
     """跑链路 / 就地重试单步的请求体（step_id 为空则跑整条链）。"""
 
@@ -7037,6 +7143,12 @@ def run_packaging_drawing_flow(
     """跑整条链路，或按 retry_of 就地重试单步（并继续跑完剩余 pending 步）。"""
     _require(user, auth.SESSION_WRITE_ROLES, "需要工程师及以上权限")
     _workflow_project(pid)
+    # 入口分发（Spec §3）：这条链路只接 DWG/DXF。位图项目走这里等于用错工具，早点说清，
+    # 而不是跑完一串步骤再报一个看不懂的失败。
+    dispatch = dispatch_project_drawing_parse(pid, user=user)
+    if dispatch["route"] != "drawing_flow":
+        raise HTTPException(400, "%s（当前原图 %s，请走 %s）"
+                            % (dispatch["reason"], dispatch["suffix"], dispatch["route"]))
     actor = str(user.get("username") or "system")
     if body.step_id:
         step = _drawing_flow_call(packaging_drawing_flow.run_step, pid,

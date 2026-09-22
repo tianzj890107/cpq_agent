@@ -38,12 +38,295 @@ RETURNABLE_TO_DRAFT_STATUSES = ("pending_confirmation", "pending_review", "appro
 # `packaging_drawing_flow.model` 按同一字面量登记前置条件与 HTTP/可重试口径。
 REQUIREMENT_NOT_EDITABLE = "REQUIREMENT_NOT_EDITABLE"
 REQUIREMENT_SAVE_REJECTED = "REQUIREMENT_SAVE_REJECTED"
+#: 报价来源线索缺失 / 图纸解析未完成（Spec `e2e-packaging-dwg-quote-tech-continuity.md`
+#: §2.1 / §3.3）。两者都是**业务拒绝**，各带稳定码。
+REQUIREMENT_QUOTE_ORIGIN_MISSING = "REQUIREMENT_QUOTE_ORIGIN_MISSING"
+REQUIREMENT_DRAWING_NOT_PARSED = "REQUIREMENT_DRAWING_NOT_PARSED"
+
+#: 报价原文在需求单里的落点（Spec §2.3）。报价建单会带过来其中一种，也可能都空 ——
+#: 空了才叫"没有需求"，**不能**因为"没有附件"就当成没有需求。
+QUOTE_TEXT_KEYS = ("quote_requirement_text", "requirement_text", "quote_text",
+                   "description", "requirement_description")
+
+#: 需求修订版在 `data` 里的键（RequirementDoc 没有 revision 列，不新增 schema）。
+REVISION_KEY = "revision"
+AUTHORITATIVE_DRAWING_KEY = "authoritative_drawing"
+APPROVAL_REVISIONS_KEY = "approval_revisions"
+
+#: 权威图纸的扩展名闭集（Spec §3）：图纸解析的输入，替换它才谈得上"修订"。
+DRAWING_SUFFIXES = (".dwg", ".dxf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def quote_requirement_text(project_id: str = "", *, data: Optional[dict] = None) -> str:
+    """这条需求单能用的**报价原文**（Spec §2.3）：报价描述是第一手证据。
+
+    报价侧建技术任务时会带过来一段报价文本（落点见 `QUOTE_TEXT_KEYS`）。没有附件时
+    它是唯一证据 —— 抽取必须用它，而不是把字段写成"待确认"。
+    """
+    payload = data
+    if payload is None:
+        payload = ((store.load_requirement(project_id) or {}).get("data") or {})
+    payload = payload if isinstance(payload, dict) else {}
+    found = [_text(payload.get(key)) for key in QUOTE_TEXT_KEYS]
+    found = [text for text in found if text]
+    if not found:
+        return ""
+    return max(found, key=len)
+
+
+def quote_source_clues(project_id: str = "", *, data: Optional[dict] = None) -> list:
+    """这一侧的报价来源线索键（非空才计入），顺序固定 `QUOTE_SOURCE_KEYS`。"""
+    payload = data
+    if payload is None:
+        payload = ((store.load_requirement(project_id) or {}).get("data") or {})
+    payload = payload if isinstance(payload, dict) else {}
+    return [key for key in QUOTE_SOURCE_KEYS if _text(payload.get(key))]
+
+
+def extraction_evidence(project_id: str, *, doc: Optional[RequirementDoc] = None,
+                        attachments: Optional[list] = None) -> dict:
+    """需求抽取的**合并证据**（Spec §2.3）：报价原文 + 附件解析 + 用户补充。
+
+    "没有附件"不等于"没有需求"：报价文本本身就是证据。这里只负责把三路证据合并成
+    一段可读文本（附件正文由 `requirement_extract.prepare_documents()` 解析后拼在前面），
+    真正调模型的仍是那一条既有通路。
+    """
+    # 直接读裸字典：老需求文档可能没有 `project_id`（早期写入路径），套模型会当场炸，
+    # 而这里只关心"有没有证据"。
+    if doc is None:
+        payload = dict(store.load_requirement(project_id) or {})
+    elif hasattr(doc, "model_dump"):
+        payload = dict(doc.model_dump())
+    else:
+        payload = dict(doc or {})
+    data = payload.get("data") or {}
+    quote_text = quote_requirement_text(project_id, data=data)
+    user_bits = [_text(payload.get("title")), _text(data.get("description"))]
+    user_bits = [bit for bit in user_bits if bit]
+    filled = []
+    for key, value in sorted(data.items()):
+        if key in QUOTE_TEXT_KEYS or key in ("field_sources", REVISION_KEY,
+                                             APPROVAL_REVISIONS_KEY,
+                                             AUTHORITATIVE_DRAWING_KEY):
+            continue
+        if key in QUOTE_SOURCE_KEYS:
+            continue
+        if not is_filled(value) or isinstance(value, (list, dict, tuple, set)):
+            continue
+        filled.append("%s=%s" % (key, _text(value)))
+    supplement = "；".join([*user_bits, *filled[:40]])
+    names = list(attachments or [])
+    if attachments is None:
+        try:
+            names = [name for name, _data in store.load_attachments(project_id)]
+        except Exception:                       # noqa: BLE001 - 读不到附件按"没有附件"
+            names = []
+    sources = []
+    if quote_text:
+        sources.append("quote_text")
+    if names:
+        sources.append("attachment")
+    if supplement:
+        sources.append("user_text")
+    lines = []
+    if quote_text:
+        lines.append("【报价原文（客户在下单时写的）】\n" + quote_text)
+    if names:
+        lines.append("【已上传附件】\n" + "、".join(names))
+    if supplement:
+        lines.append("【用户补充】\n" + supplement)
+    return {"quote_text": quote_text, "user_text": supplement,
+            "attachment_names": names, "sources": sources,
+            "text": "\n\n".join(lines).strip(),
+            "has_evidence": bool(quote_text or supplement or names)}
+
+
+def assert_quote_origin_link(project_id: str, *, doc: Optional[RequirementDoc] = None,
+                             data: Optional[dict] = None,
+                             user: Optional[dict] = None,
+                             require_quote: bool = False) -> dict:
+    """报价建的技术项目必须留住报价来源（Spec §2.1）；写成 `internal_test` 要当场纠正。
+
+    现场那条：报价侧创建的包装项目被记成 `entry_origin=internal_test`，于是后面回传时
+    服务端找不到报价卡片。判据是**线索本身**（业务实例号 / 来源任务 / 来源会话 / 来源标记），
+    不看谁先写的 flag：只要线索在，入口就该是 `quote`，并把它纠正回去（留痕）。
+    """
+    author = (user or {}).get("username", "system")
+    if data is None:
+        if doc is not None and hasattr(doc, "model_dump"):
+            data = dict(doc.model_dump().get("data") or {})
+        elif isinstance(doc, dict):
+            data = dict(doc.get("data") or {})
+        else:
+            data = (store.load_requirement(project_id) or {}).get("data") or {}
+    clue_map = {
+        "business_case_id": _text((data or {}).get("business_case_id")),
+        "source_task_id": _text((data or {}).get("source_task_id")),
+        "source_session_id": _text((data or {}).get("source_session_id")),
+        "source": _text((data or {}).get("source")),
+    }
+    try:
+        case = store.load_business_case(project_id) or {}
+    except Exception:                           # noqa: BLE001
+        case = {}
+    for key in ("business_case_id", "source_task_id", "source_session_id", "source"):
+        if not clue_map[key] and _text(case.get(key)):
+            clue_map[key] = _text(case.get(key))
+    clues = [key for key in QUOTE_SOURCE_KEYS if clue_map.get(key)]
+    origin = "quote" if clues else "internal_test"
+    repaired = False
+    stored_origin = _text(case.get("entry_origin"))
+    if clues and stored_origin != "quote" and store.load_meta(project_id):
+        # 线索在、flag 错：当场改成 quote（不覆盖已有线索键，只补 origin 与 internal_test）。
+        store.save_business_case(project_id, {
+            "entry_origin": "quote", "internal_test": False, "clues": clues,
+            **{key: clue_map[key] for key in QUOTE_SOURCE_KEYS if clue_map.get(key)},
+            "origin_repaired_by": author,
+        }, author=author)
+        store.audit(project_id, "project:entry_origin_repaired", {
+            "by": author, "from": stored_origin or "(empty)", "to": "quote", "clues": clues,
+        })
+        repaired = True
+    if not clues and require_quote:
+        raise RequirementSaveError(
+            "这条需求没有报价来源线索（业务实例号 / 来源任务 / 来源会话），"
+            "不能当作报价入口的项目继续；请从报价发起「新增工艺」",
+            409, code=REQUIREMENT_QUOTE_ORIGIN_MISSING)
+    return {"project_id": project_id, "origin": origin, "clues": clues,
+            "stored_origin": stored_origin, "repaired": repaired}
+
+
+def drawing_parse_prerequisite(project_id: str) -> dict:
+    """审批前的前置条件：`.dwg/.dxf` 的包装项目要先跑完图纸解析（Spec §3.3）。
+
+    判据只看"有没有零件"（packaging parts 文档或 legacy IR），不看谁点的按钮 ——
+    没解析就审批，后面 2.2/2.3/报告都拿不到零件，问题要到很久之后才暴露。
+    `required=False`（非包装行业 / 非 dwg-dxf 原图）时一律 `done=True`，不改其它行业口径。
+    """
+    requirement = store.load_requirement(project_id) or {}
+    data = requirement.get("data") or {}
+    industry = _text(data.get("industry") or requirement.get("industry"))
+    meta = store.load_meta(project_id) or {}
+    suffix = ""
+    filename = _text(meta.get("source_filename"))
+    if "." in filename:
+        suffix = "." + filename.rsplit(".", 1)[1].lower()
+    required = industry == "packaging" and suffix in (".dwg", ".dxf")
+    done = True
+    if required:
+        parts_total = 0
+        try:
+            from . import packaging_parts as _parts
+            doc = _parts.load_parts(project_id) or {}
+            parts_total = int((doc.get("stats") or {}).get("part_total")
+                              or len(doc.get("parts") or []))
+        except Exception:                       # noqa: BLE001 - 读不出来按"没解析"处理
+            parts_total = 0
+        if not parts_total:
+            ir = store.load_ir(project_id) or {}
+            parts_total = len(ir.get("parts") or [])
+        done = parts_total > 0
+    return {
+        "required": required, "done": done, "suffix": suffix, "industry": industry,
+        "code": "" if done else REQUIREMENT_DRAWING_NOT_PARSED,
+        "message": "" if done else
+        ("图纸还没解析完（%s）：请先跑「一键解析图纸」再审批 —— "
+         "没有零件清单，后面 2.2/2.3 与报告都拿不到数据" % (filename or "原图")),
+    }
+
+
+def requirement_revision(project_id: str, *, data: Optional[dict] = None) -> int:
+    """需求修订版号（Spec §3.3）：没有就按 1 计，绝不返回 None。"""
+    payload = data
+    if payload is None:
+        payload = ((store.load_requirement(project_id) or {}).get("data") or {})
+    try:
+        return max(1, int((payload or {}).get(REVISION_KEY) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def create_revision_for_authoritative_drawing(
+    project_id: str, *, filename: str = "", note: str = "", sha256: str = "",
+    user: Optional[dict] = None, reason: str = "",
+) -> dict:
+    """审批后新增/替换权威图纸 → 建需求修订版 + 旧审批失效（Spec §3.3）。
+
+    与 `save_requirement_draft()` 的"已提交不许改"是两件事：这里**不**放宽可编辑闭集
+    （那会让已批准需求被下一次保存静默改写），而是把"换了一张权威图纸"记成一次**修订**：
+    修订号 +1、旧审批原样留档（不覆盖已审批快照）、需求回到 `draft` 等重新确认审核。
+    """
+    author = (user or {}).get("username", "system")
+    saved = store.load_requirement(project_id)
+    if not saved:
+        raise RequirementSaveError("需求单不存在，无法创建修订版", 404,
+                                   code=REQUIREMENT_SAVE_REJECTED)
+    try:
+        doc = RequirementDoc(**saved)
+    except Exception:                           # noqa: BLE001 - 老文档缺 project_id 之类
+        payload = dict(saved)
+        payload.setdefault("project_id", project_id)
+        payload.setdefault("requirement_no", "")
+        doc = RequirementDoc(**payload)
+    data = dict(doc.data or {})
+    prior_revision = requirement_revision(project_id, data=data)
+    revision = prior_revision + 1
+    prior_status = _text(doc.status)
+    # 旧审批快照**追加**留档，不覆盖（Spec §3.3：不得覆盖已审批快照）。
+    revisions = list(data.get(APPROVAL_REVISIONS_KEY) or [])
+    revisions.append({
+        "revision": prior_revision,
+        "status": prior_status,
+        "confirmed_by": doc.confirmed_by or "",
+        "confirmed_at": doc.confirmed_at or "",
+        "reviewed_by": doc.reviewed_by or "",
+        "reviewed_at": doc.reviewed_at or "",
+        "review_note": doc.review_note or "",
+        "superseded_at": now_cst_str(),
+        "superseded_by": author,
+        "reason": reason or note or "替换权威图纸",
+    })
+    data[APPROVAL_REVISIONS_KEY] = revisions
+    data[REVISION_KEY] = revision
+    data[AUTHORITATIVE_DRAWING_KEY] = {
+        "filename": _text(filename),
+        "sha256": _text(sha256),
+        "revision": revision,
+        "added_at": now_cst_str(),
+        "added_by": author,
+        "reason": reason or note or "替换权威图纸",
+    }
+    doc.data = data
+    doc.status = "draft"
+    doc.confirmed_by = None
+    doc.confirmed_at = None
+    doc.confirmation_note = ""
+    doc.reviewed_by = None
+    doc.reviewed_at = None
+    doc.review_note = ""
+    doc.ai_check = {}
+    doc.history.append(workflow_event(
+        "requirement_revision_for_authoritative_drawing", user,
+        note or ("权威图纸 %s → 修订版 %d（旧审批已失效）" % (filename or "(未命名)", revision))))
+    doc.updated_at = now_cst_str()
+    out = doc.model_dump()
+    store.save_requirement(project_id, out, author=author)
+    store.audit(project_id, "workflow:requirement_revision_for_authoritative_drawing", {
+        "by": author, "filename": _text(filename), "revision": revision,
+        "prior_revision": prior_revision, "prior_status": prior_status,
+        "reason": reason or note,
+    })
+    return out
 
 # 字段来源（Spec 4.3）：封闭枚举，前端徽章与合并规则共用同一份口径。
 FIELD_SOURCES = ("user_text", "attachment", "ai_extract", "ai_recommend", "manual")
 # 已有的人工来源（用户原文 / 附件）不得被低优先级的 AI 来源降级。
 _MANUAL_SOURCES = ("user_text", "attachment")
 _WEAK_SOURCES = ("ai_extract", "ai_recommend")
+
+
+def _text(value) -> str:
+    return "" if value is None else str(value).strip()
 
 
 def _clean_field_sources(source_map: Optional[dict]) -> dict:
@@ -457,6 +740,20 @@ def review_requirement(project_id: str, user: Optional[dict] = None,
         raise RequirementSaveError("当前需求不在待审核状态", 409, code=REQUIREMENT_SAVE_REJECTED)
     if decision not in ("approve", "reject"):
         raise RequirementSaveError("decision 必须为 approve 或 reject", 400, code=REQUIREMENT_SAVE_REJECTED)
+    # 审批前要求完成图纸解析（Spec §3.3）：包装项目的 .dwg/.dxf 没解析完就不批 ——
+    # 但这是可豁免的业务前置（1.3 既有口径：带缺口批准只留痕，不放宽审核结论），
+    # 所以给了 waiver 就放行，并把缺口写进审计。
+    if decision == "approve":
+        prerequisite = drawing_parse_prerequisite(project_id)
+        if prerequisite["required"] and not prerequisite["done"]:
+            if not waiver:
+                raise RequirementSaveError(prerequisite["message"], 409,
+                                           code=REQUIREMENT_DRAWING_NOT_PARSED)
+            store.audit(project_id, "workflow:requirement_approved_without_drawing_parse", {
+                "by": user.get("username", "system"),
+                "code": prerequisite["code"], "suffix": prerequisite["suffix"],
+                "reason": _waiver_reason(waiver),
+            })
     # 1.3 把「业务批准」与「技术上能不能解析」分开记：带缺口批准只留痕，不放宽审核结论与权限。
     if waiver:
         gaps = requirement_gaps(project_id, doc)

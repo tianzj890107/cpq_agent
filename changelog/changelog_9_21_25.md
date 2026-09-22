@@ -10478,3 +10478,83 @@ tests.test_packaging_cost_engine_red / routing / snapshot /
   `requirement_service.py` / `app.js` 与 `docs/specs/packaging-bom-part-size-provenance.md` 一个字未动；
 - 本轮**没有**创建 MR / tag / Release；34 部署是脚本成功、自检通过的这一次；
 - 能力声明仍是 **DWG 编排能力完成，真实转换能力未验收**；零件闭环 **L2（可信）**，未签字不得声明 L3。
+
+## 284. 包装报价 → DWG → 零件/BOM 连续性：报价原文即需求证据、跨行业候选剔除、DWG 入口唯一分发、审批后换图落修订版、未知角色不再自动贴业务名（9-22，Codex 实现）
+
+红测 `tests/test_e2e_packaging_dwg_continuity_red.py`（10 条，实现前 10 红）全绿。Spec：
+`docs/specs/e2e-packaging-dwg-quote-tech-continuity.md`（已补 §6 实现记录）。
+
+### 根因（34 线上实测）
+
+- 报价侧建技术任务后 `meta.entry_origin` 是 `internal_test`（`tech-task.js` 是在建项**之后**
+  才把报价溯源键写进需求单的），而需求抽取只认附件 —— 于是"报价描述里参数齐全"的项目，
+  一键解析把字段写成待确认，回传时又因为"不是报价入口"认不回原卡片；
+- 盒型匹配拿 `磁吸` 与 `双开门磁吸` 直接相等比较 → 淘汰权威案例 `YT-DWG-WINE-700ML`、
+  反而选中通用案例；候选列表也没有行业过滤，锂电的产品能混进包装的候选；
+- `.dwg` 被送进通用视觉 `/parse` → 报"不是位图…请上传 PNG"，用户以为没有解析能力
+  （drawing-flow 早就能跑，入口 `main.py` 早已存在）；
+- 需求先审批、后补/换权威图纸：字段回写撞上不可变门禁，静默拒绝，没有修订版留痕；
+- drawing-flow 跑完前端**不重拉**零件端点，左栏停在空态；`role=unknown` 的图纸零件被
+  按行号/面积顺序贴上了模板里的业务角色名。
+
+### 落点
+
+- `requirement_service.py`：`QUOTE_TEXT_KEYS` / `quote_requirement_text()` /
+  `quote_source_clues()` / `extraction_evidence()`（报价原文 + 附件 + 用户补充合并证据）/
+  `assert_quote_origin_link()`（把 `entry_origin` 从 `internal_test` 纠正成 `quote` 并留痕）/
+  `drawing_parse_prerequisite()`（包装 + `.dwg/.dxf` 才 required）/ `requirement_revision()` /
+  `create_revision_for_authoritative_drawing()`（修订号 +1、旧审批快照**追加**留档、回 draft）；
+  新码 `REQUIREMENT_QUOTE_ORIGIN_MISSING` / `REQUIREMENT_DRAWING_NOT_PARSED`；
+  `review_requirement()` 在 `approve` 前查解析前置：缺解析且无 waiver → 409，有 waiver 放行并审计。
+- `main.py`：`dispatch_project_drawing_parse()`（图纸入口**唯一**分发：`.dwg/.dxf` → drawing_flow、
+  位图 → vision、三维交换 → blocked_3d、其余 → blocked_other），建项响应带 `drawing_parse` 并审计，
+  `/drawing-flow/run` 收到非 drawing_flow 原图直接 400；`assert_industry_scoped_candidates()`
+  接进 `/requirement/box-match` 的 run / decide 两条路由；`PUT /requirement` 保存前纠正报价来源；
+  `extract-documents` 改用合并证据（三路全空才 skipped）；`POST /attachments` / `POST /source`
+  在审批后换图时建**一个**修订版（响应带 `requirement_revision`）。
+- `packaging_match.py` / `cpq_packaging_match.py`（报价侧第二份实现逐字同步）：
+  `CLOSURE_SYNONYMS` / `normalize_closure_type()` / `closure_match_evidence()`，
+  `_dimension_closure()` 按规范形比较（原始值与命中规则留在 `evidence.closure_type`），
+  `industry_scoped_candidates()`。
+- `packaging_bom.py` / `packaging_parts.py`：`reject_unknown_role_autobind()` /
+  `binding_record()` / `BINDING_METHODS`；`role=unknown` 的件**尺寸照旧回填**（几何事实），
+  业务角色保持 `unbound`；行上带 `binding_evidence` / `binding_method` / `bound_by` / `part_role`。
+- `app.js`：`refreshPackagingPartsAfterDrawingFlow()`（链路终态重拉零件端点）、
+  `openPackagingPartInBoard()`（点击零件留在当前看板内展开）。
+
+### 实跑（本机 `./open-claude/.venv/bin/python -m unittest`）
+
+```
+tests.test_e2e_packaging_dwg_continuity_red            Ran 10 OK（实现前 10 红）
+tests.test_packaging_parts_extraction_red              Ran 32 OK
+tests.test_packaging_parts_panel_red                   Ran 19 OK
+tests.test_packaging_parts_downstream_red              Ran 20 OK
+tests.test_packaging_parts_3d_red                      Ran 18 OK
+tests.test_packaging_parts_outline_red                 Ran 20, 1 既有红（DDegrade::test_d1，Spec §9 已记）
+tests.test_packaging_box_type_matching_red             Ran 51 OK
+tests.test_quote_packaging_box_selection_red           Ran 20 OK
+tests.test_packaging_match_undecidable_and_size_guard_red Ran 23 OK
+tests.test_packaging_bom_part_size_provenance_red      Ran 15 OK
+tests.test_packaging_parametric_bom_red                Ran 57 OK
+tests.test_packaging_semantics_red                     Ran 59 OK (skipped=1)
+tests.test_packaging_parse_to_downstream_seams_red     Ran 13 OK
+tests.test_e2e_packaging_downstream_handoff_red        Ran 12 OK
+tests.test_dwg_capability_truth_red                    Ran 13 OK
+tests.test_dxf_cad_ir_red                              Ran 46 OK (skipped=1)
+tests.test_dwg_final_acceptance_red                    Ran 53 OK
+tests.test_tech_requirement_agent/confirm/review/stage_waiver_red Ran 10/11/12/24 OK
+tests.test_drawing_flow_requirement_state_red          Ran 17 OK
+tests.test_drawing_flow_frontend_wiring_red            Ran 12 OK
+tests.test_drawing_flow_parse_terminal_signal_red      Ran 30 OK
+tests.test_drawing_board_two_column_parts_and_3d_red   Ran 10 OK
+tests.test_tech_project_acl_scope_red                  Ran 28 OK
+含 app.js 的 49 个前端面模块（xargs -n 6 串行）      Ran 808 OK (skipped=1)
+tests.test_packaging_drawing_flow_red                  Ran 54, 1 既有红（CGates::test_c8，Spec 已记；skipped=1）
+node --check tech_app/frontend/app.js                  OK
+```
+
+### 边界
+
+未改任何 `tests/`；未改成本表达式/费率/权重/门槛判据；未连 PG、未写生产数据；
+「64 件分页/虚拟滚动展示」的渲染上限仍由既有零件树决定（本批只保证跑完重拉与可点击，
+不改前端渲染口径），`GET /requirement/packaging-parts` 的既有分页参数未动。

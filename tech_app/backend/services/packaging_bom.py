@@ -505,10 +505,78 @@ def _assemble(expanded: dict, box: dict, data: dict, requirement_no: str) -> lis
 # --------------------------------------------------------------------------- #
 # 落库、读回与人工锁定（Spec §3、§4）
 # --------------------------------------------------------------------------- #
+#: 图纸零件的业务角色闭集之外的取值：图上没说自己是哪个部件（Spec §4.4）。
+UNKNOWN_ROLE = "unknown"
+
+#: 绑定方式闭集（Spec §4.4）：只允许这几种，别的写法一律不算留痕。
+BINDING_METHODS = ("manual_mapping", "auto_position_area", "unbound")
+
+#: 人工映射未完成时，BOM 行的业务角色保持这个值（不许静默贴一个模板角色名上去）。
+UNBOUND_ROLE = "unbound"
+
+
+def reject_unknown_role_autobind(part: Any, row: Any = None) -> dict:
+    """`role=unknown` 的图纸零件**不许**自动贴业务角色名（Spec §4.4）。
+
+    这一条的边界要写清楚：**尺寸**照旧可以自动回填（那是有证据的几何事实），但
+    「这件的业务角色是盖壁长边」这类语义**不能**按行号/面积顺序从模板行上抄过来 ——
+    图上没说的话，抄一遍就是编造。判据只有零件自己的 `role` 与调用方声明的绑定方式：
+
+      · 零件 role 空或 `unknown` ⇒ `autobind=False`，业务角色保持 `unbound`；
+      · 侧面的 `part_role` 也空时同样拒绝；
+      · 其余情况放行，但仍要求把证据与操作者写进行上（`binding_record()`）。
+    """
+    payload = part if isinstance(part, dict) else {}
+    role = _text(payload.get("role") or payload.get("part_role"))
+    if not role or role == UNKNOWN_ROLE:
+        return {"autobind": False, "role": role or "",
+                "role_value": UNBOUND_ROLE,
+                "reason": "role_unknown:%s" % (_text(payload.get("part_code")) or "?"),
+                "message": ("图上没有写明这件的业务角色，不能按行号/面积顺序自动绑定；"
+                            "请人工映射，或让该行保持 unbound")}
+    return {"autobind": True, "role": role, "role_value": role, "reason": "", "message": ""}
+
+
+def binding_record(part: Any, row: Any = None, *, bound_by: str = "",
+                   method: str = "", evidence: Any = None) -> dict:
+    """一条绑定的审计留痕（Spec §4.4）：证据 + 方式 + 操作者。
+
+    `method` 必须落在 `BINDING_METHODS` 闭集里；不在闭集里按 `unbound` 处理 —— 宁可
+    标成"没绑"，也不留一条说不清怎么绑上的记录。
+    """
+    payload = part if isinstance(part, dict) else {}
+    target = row if isinstance(row, dict) else {}
+    method_text = _text(method)
+    if method_text not in BINDING_METHODS:
+        method_text = "unbound"
+    evidence_payload = evidence if isinstance(evidence, dict) else {}
+    body = {
+        "part_code": _text(payload.get("part_code")),
+        "component_id": _text(payload.get("component_id")),
+        "part_role": _text(payload.get("role") or payload.get("part_role")),
+        "bom_item_key": _text(target.get("item_key")),
+        "bom_part_code": _text(target.get("part_code")),
+        "outline_status": _text(payload.get("outline_status")),
+        "size_source": _text(payload.get("size_source")),
+    }
+    body.update({str(key): value for key, value in evidence_payload.items()})
+    return {"binding_evidence": body, "binding_method": method_text,
+            "bound_by": _text(bound_by) or "system"}
+
+
 def _item_out(row: dict) -> dict:
     out = dict(row)
     missing = _loads(row.get("missing_variables"), [])
     out["missing_variables"] = missing if isinstance(missing, list) else []
+    # 绑定留痕（Spec §4.4）：证据 / 方式 / 操作者从 size_source 的 dwg_binding 里读出来，
+    # 也放在明细行的顶层 —— 读接口与看板不必再钻进嵌套结构里找"这行是谁绑的"。
+    source = _loads(row.get("size_source_json"), {}) if row.get("size_source_json") else {}
+    binding = source.get("dwg_binding") if isinstance(source, dict) else None
+    if isinstance(binding, dict) and binding:
+        out.setdefault("binding_evidence", binding.get("binding_evidence") or {})
+        out.setdefault("binding_method", _text(binding.get("binding_method")))
+        out.setdefault("bound_by", _text(binding.get("bound_by")))
+        out.setdefault("part_role", _text(binding.get("part_role")))
     return out
 
 

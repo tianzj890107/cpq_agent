@@ -138,6 +138,76 @@ def _blank(value) -> bool:
     return not _text(value)
 
 
+#: 闭合方式的受控同义词（Spec `e2e-packaging-dwg-quote-tech-continuity.md` §4.3）。
+#: ⚠ 与工艺侧 `tech_app/backend/services/packaging_match.py` 的 `CLOSURE_SYNONYMS`
+#: **逐字一致**（工艺侧是唯一口径来源）：改一侧必须同步另一侧，否则报价工作台与工艺
+#: 侧会对同一个盒型给出两种结论。
+CLOSURE_SYNONYMS = {
+    "磁吸": ("双开门磁吸", "双开门+磁吸", "双开门 磁吸", "磁吸开合", "磁吸式",
+             "磁性闭合", "磁铁扣", "磁吸扣", "磁铁"),
+    "翻盖": ("翻盖式", "翻盖盒", "掀盖", "掀盖式"),
+    "天地盖": ("天地盒", "天盒地盒", "天地盖式"),
+    "抽屉": ("抽屉式", "抽拉", "抽拉式", "抽拉盒"),
+    "书型盒": ("书型", "书本盒", "翻书式", "对开磁吸书型"),
+    "锁扣": ("锁扣式", "搭扣", "卡扣", "扣合"),
+    "粘合": ("胶粘", "粘胶", "上胶"),
+    "插舌": ("插舌式", "扣舌", "插扣"),
+}
+
+CLOSURE_CANONICAL = {alias: canonical
+                     for canonical, aliases in CLOSURE_SYNONYMS.items()
+                     for alias in aliases}
+for _canon_name in CLOSURE_SYNONYMS:
+    CLOSURE_CANONICAL.setdefault(_canon_name, _canon_name)
+
+
+def normalize_closure_type(value) -> dict:
+    """一个闭合方式写法的受控规范化：原始值 + 规范形 + 命中规则（Spec §4.3）。"""
+    text = _text(value)
+    if not text:
+        return {"value": "", "canonical": "", "rule": "", "synonym_used": False}
+    canonical = CLOSURE_CANONICAL.get(text)
+    if canonical:
+        rule = "identity" if canonical == text else "synonym:%s->%s" % (text, canonical)
+        return {"value": text, "canonical": canonical, "rule": rule,
+                "synonym_used": canonical != text}
+    return {"value": text, "canonical": text, "rule": "unknown", "synonym_used": False}
+
+
+def normalize_closure_types(value) -> dict:
+    """整串闭合方式的规范化（逐段规范形 + 逐段规则 + 原始串）。"""
+    text = _text(value)
+    pieces = []
+    rules = {}
+    synonyms = []
+    canonicals = set()
+    for piece in sorted(_split_closure(text)):
+        row = normalize_closure_type(piece)
+        pieces.append(row)
+        rules[row["value"]] = row["rule"]
+        canonicals.add(row["canonical"])
+        if row["synonym_used"]:
+            synonyms.append(row["rule"])
+    return {"value": text, "canonical": sorted(canonicals), "pieces": pieces,
+            "rules": rules, "synonym_rules": synonyms,
+            "synonym_used": bool(synonyms)}
+
+
+def closure_match_evidence(inputs: dict, box: dict) -> dict:
+    """闭合方式的匹配证据（Spec §4.3）：需求原始值 / 盒型原始值 / 命中规则。"""
+    wanted = normalize_closure_types(inputs.get("closure_type"))
+    available = normalize_closure_types(box.get("closure_type"))
+    hit = sorted(set(wanted["canonical"]) & set(available["canonical"]))
+    rules = [rule for rule in wanted["rules"].values() if rule.startswith("synonym:")]
+    return {
+        "requested": wanted["value"], "requested_canonical": wanted["canonical"],
+        "box_type": available["value"], "box_type_canonical": available["canonical"],
+        "matched": hit,
+        "synonym_rules": rules,
+        "synonym_used": bool(rules),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 维度闭集 / 必填口径（必填唯一来自 industry_templates，与工艺侧同一份）
 # --------------------------------------------------------------------------- #
@@ -214,8 +284,9 @@ def _dimension_gsm(inputs: dict, box: dict):
 
 
 def _dimension_closure(inputs: dict, box: dict):
-    wanted = _split_closure(inputs.get("closure_type"))
-    available = _split_closure(box.get("closure_type"))
+    """闭合方式：按受控同义词的规范形比较（Spec §4.3，与工艺侧同步）。"""
+    wanted = set(normalize_closure_types(inputs.get("closure_type"))["canonical"])
+    available = set(normalize_closure_types(box.get("closure_type"))["canonical"])
     if not wanted:
         return 0.0, False, False, "missing_input", False
     if wanted & available:
@@ -313,6 +384,9 @@ def _candidate(box: dict, inputs: dict, dimensions: list, missing_required: list
                       for dimension in undecidable],
         "applicable_industries": box.get("applicable_industries") or "",
         "business_status": box.get("business_status") or "",
+        "industry": _text(box.get("industry")),
+        # 闭合方式的匹配证据（Spec §4.3）：与工艺侧同形状。
+        "evidence": {"closure_type": closure_match_evidence(inputs, box)},
     }
 
 
