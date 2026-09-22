@@ -12931,3 +12931,49 @@ tests/test_*.py 里 card|quote|handoff|wf_ 共 1524 条            → 4 红，�
 `test_quick_quote_case_maintenance_red::TestFPanelWiring::test_f1`（面板缺 `CASE_FIELDS_PATH`，属快速报价
 维护批次，stash 复跑确认与本批无关）。本批未改任何测试；未连 PG、未写业务数据；未 push / MR / tag /
 Release / 未部署。
+## 322. `## 318` 落地：包装整包回传补上那颗「只有前端才有」的按钮 + 成本复核页的回传正文开始带整包（9-22，Codex 实现）
+
+`docs/specs/packaging-quote-send-button-entry.md` 的 2 条红（A1/A2）已转绿，4 条护栏未动；
+没新增路由、没改 `main.py`。
+
+### 一、改了什么
+
+- `tech_app/frontend/requirement-confirm.js`：包装成本面板（1.1/1.2 页面）在「重算成本」旁边
+  新增按钮 `data-pc-send-quote`「回传销售继续报价」，POST
+  `/api/projects/{pid}/requirement/packaging-quote/send`（前端源码里从此有 `packaging-quote/send`
+  这个字面量）。成本没算出来时 disabled；**不在前端抄写权限集合**，权限一律由后端
+  `HANDOFF_WRITE_ROLES` 裁决；两类 409 按后端给的 `code` 问一句原因再重发
+  （`cost_gaps_unresolved` / `gap_reason_required` → `allow_gaps` + `reason`；
+  `no_candidate` / `multiple_candidates` → `create_new` + `create_reason`），不猜、不自动放行。
+  `pcApi()` 只多把结构化 detail 的 `code` / `candidates` / `status` 挂到错误对象上，message 逐字不变。
+- `tech_app/backend/services/cost_flow.py`：新增 `_packaging_package_of()` —— 只调
+  `packaging_handoff.handoff_package()` 取既有那份 10 段整包（**没有**第二份拼装逻辑）；
+  `integration_quote_result()` 末尾整包非空时补 `packaging_package`，为空时这个键不出现。
+  于是 `cost-review/send-to-quote` 与 `process-report/send-to-quote` 这两条既有按钮出口
+  在包装项目上也会把整包带回卡片。
+
+### 二、行为复验
+
+- 用 `tests/test_packaging_quote_close_loop_red.py` 的夹具真起临时 SQLite + meta：
+  `handoff_package(PID)` 出 10 段；`cost_flow._packaging_package_of(PID)` 出同样 10 段，
+  且 `package_fingerprint()` **与交接包相同**（同一份包，不是另拼的）；非包装项目返回 `{}`。
+
+### 三、实测
+
+```
+tests.test_packaging_quote_send_button_entry_red          → Ran 6 OK（原 2 红全绿）
+tests.test_quote_card_step_snapshot_merge_red             → Ran 5 OK
+node --check tech_app/frontend/requirement-confirm.js     → 通过
+tests.test_packaging_quote_close_loop_red                 → Ran 96 OK
+tests.test_packaging_box_type_matching_red / cost_rule_routing / process_route /
+  parametric_bom / downstream_block_code_http             → 51 / 32 / 57 / 57 / 10 OK
+tests.test_tech_handoff_atomic_idempotent_red / cost_report_handoff_continuity /
+  quote_business_case_linkage                             → 35 / 14 / 39 OK
+tests.test_packaging_quote_send_recovery_red              → 1 红（存量 ## 272，与本批无关）
+```
+
+### 四、边界
+
+- 按钮只有一颗，落在技术侧包装成本面板；卡片侧靠的正是本批的随行整包（Spec §3「任选页面」）。
+- `test_packaging_quote_send_recovery_red::CMetaRecovery::test_c1` 仍红是存量 `## 272`，
+  本批不顺手改它。未改任何测试；未连 PG、未写业务数据；未 push / MR / tag / Release / 未部署。

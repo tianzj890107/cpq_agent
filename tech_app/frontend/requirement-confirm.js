@@ -657,6 +657,7 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     '装订贴盒', '开槽', '手工', '其他费用', '包装'];
   let pcPid = '';
   let pcBusy = false;
+  let pcSendBusy = false;
 
   function pcEsc(value) {
     return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
@@ -678,6 +679,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     const response = await fetch(url, Object.assign({headers: {'Content-Type': 'application/json'}}, options || {}));
     if (!response.ok) {
       let detail = '';
+      let code = '';
+      let candidates = [];
       try {
         const payload = await response.json();
         const raw = payload.detail;
@@ -685,8 +688,16 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
            docs/specs/packaging-downstream-block-code-parity.md §2.2）；
            只认字符串的话人话会被吞成 [object Object]。 */
         detail = (typeof raw === 'string' ? raw : (raw && raw.message)) || payload.message || '';
+        code = (raw && typeof raw === 'object' && raw.code) ? String(raw.code) : '';
+        candidates = (raw && typeof raw === 'object' && raw.candidates) ? raw.candidates : [];
       } catch (error) { detail = ''; }
-      throw new Error(detail || `请求失败（${response.status}）`);
+      const failure = new Error(detail || `请求失败（${response.status}）`);
+      /* 三个键原样带出去（缺口放行 / 落点认不回来时界面要按 code 问一句、并回传原因）；
+         message 与改动前逐字一致 —— 既有调用点只看 message。 */
+      failure.status = response.status;
+      failure.code = code;
+      failure.candidates = candidates;
+      throw failure;
     }
     return response.json();
   }
@@ -755,7 +766,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
       <div class="pc-hint">逐部件 × 逐成本类别；缺料价 / 缺费率 / 缺工时一律出「待询价」缺口，合计不含该金额。本批只出成本，不出售价 / 利润（第 8 批）。</div>
       ${head}${summary}${totals}
       ${gapLines}
-      <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button></div>
+      <div class="pc-actions"><button class="btn primary" data-pc-build="1" ${writable ? '' : 'disabled'}>重算成本</button><button class="btn" data-pc-send-quote="1" ${built ? '' : 'disabled'}>回传销售继续报价</button></div>
+      <div class="pc-hint">回传销售继续报价：把这份成本整包（行业 / 需求 / 盒型 / 参数 / BOM / 路线 / 成本 / 缺口 / 公式依据 / 来源）发回原报价卡片，卡片第 2 步的「包装：定价与报价分区」就带上它。有缺口时必须写明原因才放行（会随包留痕）；没有权限或落点认不回来时，会按后端给的原因提示。</div>
       ${writable ? '' : `<div class="pc-hint">${PC_WRITE_HINT}，当前为只读。</div>`}
       ${tables}
     </section>`;
@@ -774,6 +786,8 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
   function pcBind(pid) {
     const build = document.querySelector('[data-pc-build]');
     if (build) build.onclick = () => pcSubmit(pid);
+    const send = document.querySelector('[data-pc-send-quote]');
+    if (send) send.onclick = () => pcSendQuote(pid);
   }
   async function pcSubmit(pid) {
     if (pcBusy) return;
@@ -786,6 +800,61 @@ function renderConfirm(req){const d=req.data||{};document.querySelector('#app').
     } catch (error) {
       pcBusy = false;
       pcToast((error && error.message) || '包装成本操作失败', true);
+    }
+  }
+
+  /* 包装整包回传（Spec docs/specs/packaging-quote-send-button-entry.md §2.1）：
+     这条链以前**只有 HTTP 接口、没有按钮**，只点前端按钮的人永远走不到 ——
+     卡片第 2 步的「包装：定价与报价分区」（唯一取数来源 snapshot.packaging_package）
+     因此永远空着。这里补的就是那颗按钮。
+     两类 409 是**可操作**的：缺口未清 / 落点认不回来。按后端给的 code 问一句原因再重发，
+     不猜、不自动放行、不替用户写理由（Spec §2.3：缺口放行的口径一个字不改）。 */
+  function pcPackagingSendPath(pid) {
+    return `/api/projects/${encodeURIComponent(pid)}/requirement/packaging-quote/send`;
+  }
+  async function pcSendQuote(pid) {
+    if (pcSendBusy) return;
+    pcSendBusy = true;
+    const body = {};
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const payload = await pcApi(pcPackagingSendPath(pid), {method: 'POST', body: JSON.stringify(body)});
+          const handoff = (payload || {}).handoff || {};
+          pcToast(`已回传销售：交接 ${handoff.handoff_no || '—'} · 第 ${handoff.version_no ?? '—'} 版`
+            + (handoff.already_sent ? '（同一份成本，复用已有交接，没有重复发送）' : '')
+            + '；报价卡片第 2 步的「包装：定价与报价分区」带上这份整包。');
+          await pcRefresh();
+          return;
+        } catch (error) {
+          const code = String((error && error.code) || '');
+          if (code === 'cost_gaps_unresolved' && !body.allow_gaps) {
+            const reason = window.prompt('成本仍有缺口，放行必须写明原因（会随包留痕）：');
+            if (!reason || !reason.trim()) { pcToast('没有写明原因，已取消回传', true); return; }
+            body.allow_gaps = true;
+            body.reason = reason.trim();
+            continue;
+          }
+          if (code === 'gap_reason_required' && !String(body.reason || '').trim()) {
+            const reason = window.prompt('放行必须写明原因：');
+            if (!reason || !reason.trim()) { pcToast('没有写明原因，已取消回传', true); return; }
+            body.reason = reason.trim();
+            continue;
+          }
+          if ((code === 'no_candidate' || code === 'multiple_candidates') && !body.create_new) {
+            const reason = window.prompt(`${(error && error.message) || '这张卡片认不回来'} —— 要新建一张报价卡片，请写明原因：`);
+            if (!reason || !reason.trim()) { pcToast('没有写明新建原因，已取消回传', true); return; }
+            body.create_new = true;
+            body.create_reason = reason.trim();
+            continue;
+          }
+          throw error;
+        }
+      }
+    } catch (error) {
+      pcToast((error && error.message) || '包装回传失败', true);
+    } finally {
+      pcSendBusy = false;
     }
   }
 

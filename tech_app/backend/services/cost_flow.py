@@ -466,6 +466,23 @@ def requirement_customer(requirement: dict, req_data: dict) -> str:
     return ""
 
 
+def _packaging_package_of(project_id: str) -> dict:
+    """包装项目的整包（10 段）：直接取既有交接包的装配结果，本模块**不复制**它的拼装逻辑。
+
+    从成本复核页点「回传销售经理继续报价」走的正文就是 `integration_quote_result()`，而
+    这条正文以前只有设计 IR 口径的字段 —— 包装整包不随行，报价卡片第 2 步的
+    「包装：定价与报价分区」面板就永远空着（Spec
+    `packaging-quote-send-button-entry.md` §2.2）。这里只**多带一段**：
+    非包装项目、成本还没测算一律给空 dict（不新增任何前置条件，也不改拒绝时机）。
+    """
+    try:
+        from . import packaging_handoff     # 函数级导入：只有包装链上才真的需要它
+        package = packaging_handoff.handoff_package(project_id)
+    except Exception:                       # noqa: BLE001 —— 见 docstring：绝不新增前置条件
+        return {}
+    return package if isinstance(package, dict) else {}
+
+
 def integration_quote_result(project_id: str, plan, title: str,
                              requirement: Optional[dict] = None) -> dict:
     """随「发送至报价」一起回传的整机结论（按 DA 字段拉平的参数 + 四项成本）。
@@ -480,7 +497,7 @@ def integration_quote_result(project_id: str, plan, title: str,
     snapshot = _cost_snapshot(project_id, plan)
     breakdown = cost_model.breakdown(plan.cost.model_dump()) if plan.cost else {}
     written = plan.material_writes[-1] if plan.material_writes else None
-    return {
+    result = {
         "project_id": project_id,
         # 技术项目号与报价会话号必须分开写：前者是溯源，后者才是报价卡片。
         "tech_project_id": project_id,
@@ -515,6 +532,11 @@ def integration_quote_result(project_id: str, plan, title: str,
         "assembly_cost": snapshot.get("assembly") or {},
         "params_final": bool(plan.params_final),
     }
+    # 包装项目：把既有交接包整包一起带走（非包装、无成本时这个键不出现 —— 正文与今天逐字一致）。
+    package = _packaging_package_of(project_id)
+    if package:
+        result["packaging_package"] = package
+    return result
 
 
 def process_handoff_package(project_id: str, plan, review, snapshot: dict,
