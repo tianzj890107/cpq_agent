@@ -11920,9 +11920,9 @@ docs/specs/*.md                                  232 份（含 ## 301 新增的�
   `attribution.gap_reason` 一致）；③ **取代** `packaging-parts-material-attribution.md` §4 的门槛，
   改为"三条地板 0.60 + 两条证据地板 0.15 / 0.08 必须同时成立"，证据地板只许升，
   抬高它只能靠 `packaging-parts-thickness-facts.md`。
-- 红测 `tests/test_packaging_parts_coverage_truthfulness_red.py`：`Ran 11`，带 env
-  `failures=8`、不带 env（守卫口径）`failures=5 / skipped=1`；A3（空文档全 0）与 B4（材料原因闭集）
-  是本来就该绿的护栏。
+- 红测 `tests/test_packaging_parts_coverage_truthfulness_red.py`：写的时候是 `Ran 11`、带 env
+  `failures=8`、不带 env（守卫口径）`failures=5 / skipped=1`；**同批稍后由并行会话实现并提交 `b8f0759`**，
+  现复跑为离线 `Ran 11 OK (skipped=1)`、带真样本 `Ran 11 OK` — 本 Spec 的状态行已同步改为「已实现」。
 - **修订既有 Spec / 红测各一处**（口径变化，按红测自己"口径变化请改 Spec"的约定同批处理）：
   - `docs/specs/packaging-parts-material-attribution.md` §4：门槛表标注"已由新 Spec 取代"，
     0.75/0.75/0.70 降级为历史值；`open` 件必须全空、兜底必须可见两条**继续有效**（并入新原因账）；
@@ -12069,6 +12069,12 @@ material-attribution 的三条已被该批重定基线（本机 `Ran 70` 只剩 
   C2 冻结行键是护栏本来就绿）；带 env 的真样本 E 组 `Ran 2 FAILED`
   （实测 `part_total=64` < 263、`kind_total=0` < 22）。
 
+### 编号说明
+
+同周文件里 `## 304` / `## 305` / `## 306` 各有**两条**（本会话写的 Spec 条目 + 并行会话写的实现条目，
+同一批工作被两边各记了一次）。历史周记录里 `## 226/245/254/260/261/262` 也是同样的并行撞号且都原样保留，
+所以本次**不改写**任何已提交条目的标题，只在本批 Spec 的状态行里写清"指哪一条"。
+
 ### 边界
 
 本会话只新增 1 份 Spec、1 条红测、追加本 changelog；未改任何业务实现、未改任何既有红测、
@@ -12117,3 +12123,94 @@ thickness_gap_mix = {no_closed_outline 24, no_thickness_note 0, grammage_only 0,
   重定基线消掉；仍待处理的是 `test_packaging_parts_solid_coverage_red.FRealSample::test_f1_solid_ok_ratio`
   与 `test_packaging_parts_outline_chaining_red.ERealSample` 的 `test_e1_closed_ratio` /
   `test_e2_rescue_total` / `test_e4_open_reason_mix_has_no_vague_reason`（同一根因，属测试侧基线）。
+
+## 307. 把「列表可见性 + 种类」的新口径回写到零件提取 Spec，避免两份 Spec 各说一套 `max_parts` / `repeat_of`（9-22，Codex 只改 Spec / changelog）
+
+### 为什么
+
+`## 306` 新立的 `packaging-parts-list-visibility-and-kinds.md` 明写"**取代**
+`packaging-dwg-parts-extraction.md` §5 的 `max_parts` 截断条款"，但被取代的那份文件里
+C3「上限：`max_parts`（默认 64），超出时截断并给 `stats.truncated`」与
+「重复件：`bbox` + 实体数相同的第 2 件起标 `repeat_of`」两行**原文没动** —— 于是同一件事在仓库里
+有两套口径（一边"默认截断"、一边"默认不截断"；一边按 `(长,宽,实体数)` 判重复、一边要求按 `kind_key`）。
+这正是本次几批红测反复在守的"两套数字不许并存"。
+
+### 改了什么
+
+- `docs/specs/packaging-dwg-parts-extraction.md` §C3：
+  - `max_parts` 那条标注"2026-09-22 由 `packaging-parts-list-visibility-and-kinds.md` §2.1 取代"，
+    写清默认不截断 / `truncated` 恒 0 / 只有显式传参才按历史行为截断 / "每页多少件"归读接口 `limit`
+    （缺省值仍是 `DEFAULT_OPTIONS["max_parts"] = 64`，所以那个常量字面不变）；
+  - `repeat_of` 那条标注收紧为"只允许出现在同 `kind_key` 之间"。
+- 同文件 §5 的零件树一条补上"按种类折叠 + 继续加载"（`truncated` 那句不再是唯一可见性提示），
+  与 `packaging-parts-list-visibility-and-kinds.md` §2.5 对齐。
+- 同文件状态行记下这次取代/收紧，并注明两种截断口径都不与新红测冲突。
+- 复跑 `tests.test_packaging_parts_extraction_red` → `OK`（默认 `truncated == 0`、
+  显式 `max_parts` 截断两条断言都成立，不需要改既有红测）。
+
+### 边界
+
+只改 1 份既有 Spec（C3 / §5 两处 + 状态行）+ 追加本 changelog；未改任何业务实现、
+未改任何既有红测、未连 PG、未写生产数据、未动 34、未 commit / push / MR / tag / Release / 部署。
+
+## 308. 零件列表不再按页大小丢件 + 每件带「种类」指纹 + 读接口分页/筛选 + 左栏按种类折叠（9-22，Codex 实现）
+
+`## 306`（Spec）立的 `docs/specs/packaging-parts-list-visibility-and-kinds.md` 本批落地实现，
+`## 307`（并行会话）已把被取代的 `packaging-dwg-parts-extraction.md` §C3/§5 文本对齐，两份 Spec 不再各说一套。
+
+### 现场（9-22 实测，本机 `酒盒.dwg`）
+
+`extract()` 把 263 件真零件里的 199 件丢在 `parts[:max_parts]` 上：文档里只有 64 件、
+`stats.part_total=64`、`kind_total` / `kind_key` / `kept_total` 三个键不存在；
+`repeat_of` 只按 `(长, 宽, entity_total)` 判重复，同尺寸不同轮廓会被算成同一件。
+
+### 实现
+
+| 面 | 做了什么 | 文件 |
+| --- | --- | --- |
+| 不丢件 | 缺省（未传 `options["max_parts"]`）时**全部 kept 件进文档**、`truncated` 恒 0；显式传正整数才按旧行为截断；新增 `stats.kept_total`（= `part_total + truncated`） | `packaging_parts.py` |
+| 种类指纹 | `KIND_KEY_LENGTH=12`、`kind_points_of()`（闭合件取 `outline.points`，其余取分量包围盒四角；按 `LOOP_TOLERANCE_MM` 量化 + 平移到最小点归零，**只有平移不变性**）、`kind_key_of()`（形状 + 量化长宽 + `outline_status` 的 sha256 前 12 位）；每件带 `kind_key` / `kind_index`（按"该种件数 desc, kind_key asc"、跨全量件统一），`stats.kind_total` | `packaging_parts.py` |
+| 重复件 | `repeat_of` 改为**只在同 `kind_key`** 之间、且跨全量件计算（不许退化成"只在当前页找"） | `packaging_parts.py` |
+| 指标 | `summarize()` 新增 `kept_total` / `listed_total` / `kind_total` / `repeat_total`（既有键与六条比率一个字不改） | `packaging_parts.py` |
+| 读接口 | `GET /requirement/packaging-parts` 支持 `offset`（默认 0）/ `limit`（默认 `DEFAULT_OPTIONS["max_parts"]`=64，上限 `PACKAGING_PARTS_PAGE_LIMIT_MAX`=500）/ `kind` / `role` / `outline_status` / `min_area_mm2`；响应带 `items` / `total` / `matched_total` / `has_more` / `kind_total` / `kind_counts`；`total`/`kind_total`/`kind_counts` 永远是全量真值；非法 `limit`（<=0 或 >500）与负 `offset` → **400**；`offset >= total` → 空页不报错；列表行**不含坐标**（`outline.points` 剥掉，单件详情才回） | `main.py` |
+| 面板 | 2.1 左栏按种类折叠（一种一行：`kind_index` / `kind_key` / 该种件数 / 代表件与尺寸，点开看这一种的件）；三笔账分三句（已显示 / `共 N 件（M 种形状）` / 被过滤掉的分量），"还有 N 件未列出"旁给**继续加载**（按 `offset` 翻页并累加、按 `part_code` 去重）；`total == 0` 且文档在 → 明说"这份图纸没有可用的零件。"；`patchPackagingPartRows()` 让"补料厚"在分页后仍能刷新左栏 | `app.js`、`drawing-flow.css` |
+
+### 实测
+
+- 离线：`tests.test_packaging_parts_list_visibility_red` → `Ran 11 OK (skipped=1)`。
+- 真样本（`CPQ_DWG_REAL_SAMPLES=1`）：`RealSampleList` → `Ran 2 OK`；
+  `酒盒.dwg` `part_total=263` / `truncated=0` / `kind_total=101` / `repeat_total=162`
+  （旧：`part_total=64` / `truncated=199` / 无 `kind_*`）；
+  `圆盘盒.dwg` `part_total=312` / `kind_total=136`。
+- 分页语义（`_packaging_parts_page` 直调）：`limit=3,offset=9` → 1 件 + `has_more=false`；
+  `offset=12` → 空页；`kind` 过滤后 `matched_total=3` 而 `total` 仍是全量。
+- 保护网：`packaging_parts_extraction` 32 OK、`components` 13 OK(1 skip)、
+  `thickness_facts` 15 OK(1 skip)、`coverage_truthfulness` 8 OK(1 skip)、
+  `selfcheck_diagnostics` 11 OK、`pipeline_time_budget` 13 OK、`panel` 19 OK、
+  `downstream` 20 OK、`3d` 18 OK、`semantics` 59 OK(1 skip)、`parametric_bom` 57 OK、
+  `bom_part_size_provenance` 15 OK、`part_role_manual_mapping` 21 OK、
+  `parse_to_downstream_seams` 13 OK、`process_route` 57 OK、`downstream_blockers` 20 OK、
+  `e2e_packaging_dwg_continuity` 10 OK、`dxf_cad_ir` 46 OK(1 skip)、
+  `dwg_final_acceptance` 53 OK、`drawing_flow_frontend_wiring` 12 OK、
+  `drawing_flow_error_taxonomy` 14 OK、`drawing_flow_requirement_state` 17 OK、
+  `drawing_flow_parse_terminal_signal` 30 OK（含 `node --check app.js`）。
+  既有红未动：`packaging_drawing_flow_red::CGates::test_c8`（`## 262`）。
+
+### 已记录的测试侧冲突（**未改任何断言**）
+
+分母从"前 64 件"变成全量之后，四条按旧分母标定的真样本门槛变红（分子一个都没掉：
+`酒盒` 的 `closed_total` / `material_known_total` 40 → 134，`圆盘盒` 的 `role_known_total` 8 → 9）：
+`test_packaging_parts_material_attribution_red` E1/E2/E3（0.60 → 实测 0.510）、
+`test_packaging_parts_downstream_gate_red::test_f2_disc_box_threshold`（0.10 → 实测 0.029）。
+另两条 `## 304` 已记的冲突改了量级：`solid_coverage_red::test_f1_solid_ok_ratio` 0.625 → 0.510、
+`outline_chaining_red::test_e1_closed_ratio` 0.625 → 0.510、`::test_e4` open 24 → 129；
+`::test_e2_rescue_total`（≥6）**本层转绿**。逐条修法写在
+`docs/specs/packaging-parts-list-visibility-and-kinds.md` §6。
+
+### 边界
+
+只改 `tech_app/backend/services/packaging_parts.py`、`tech_app/backend/main.py`、
+`tech_app/frontend/app.js`、`tech_app/frontend/drawing-flow.css`、
+`docs/specs/packaging-parts-list-visibility-and-kinds.md`（状态行 + §6）并追加本 changelog；
+未改 `tests/` 下任何文件、未改 `DEFAULT_OPTIONS` / `REASON_CODES` / `PART_CODE_FORMAT` /
+`filtered_*` 口径、未改成本与工艺算法、未连 PG、未写生产数据、未动 34、未部署。

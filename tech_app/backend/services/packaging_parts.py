@@ -12,6 +12,8 @@ BOM 回填（`bind_rows`）只做行级临时口径 —— 正式口径应是「
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 import re
 import time
@@ -190,6 +192,10 @@ LOOP_TOLERANCE_MM = 1.0
 
 #: 环至少 3 条边。
 MIN_LOOP_EDGES = 3
+
+#: 种类指纹的长度（Spec `packaging-parts-list-visibility-and-kinds.md` §2.2 第 3 步）：
+#: 形状 + 尺寸 + 轮廓状态的确定性指纹取 sha256 前 12 位十六进制。
+KIND_KEY_LENGTH = 12
 
 #: 轮廓三态与尺寸来源（对外可见，下游据此说清“为什么这件的尺寸不可信”）。
 OUTLINE_STATUSES = ("closed", "open", "unavailable")
@@ -1230,6 +1236,51 @@ def _open_outline_reason(*, has_curve: bool, diagnosis: Dict[str, Any],
     return "odd_endpoints"
 
 
+# --------------------------------------------------------------------------- #
+# 1a 种类指纹（Spec `packaging-parts-list-visibility-and-kinds.md` §2.2）
+# --------------------------------------------------------------------------- #
+def kind_points_of(row: Dict[str, Any]) -> List[Tuple[int, int]]:
+    """一件用于种类指纹的量化轮廓（Spec §2.2 第 1–2 步）。
+
+    闭合件取 `outline.points`（真实轮廓）；其余退回分量包围盒四角 —— 轮廓状态本身参与
+    指纹（第 4 步），所以这里只负责「取点 + 按 LOOP_TOLERANCE_MM 量化 + 平移到最小点归零」。
+    **只有平移不变性**：旋转 / 镜像的变体本批仍算不同种（宁可多一种，不许把不同刀模合成一种）。
+    """
+    outline = row.get("outline") if isinstance(row.get("outline"), dict) else {}
+    raw = outline.get("points")
+    points: List[Tuple[float, float]] = []
+    if _text(row.get("outline_status")) == "closed" and isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                x, y = _num(item[0]), _num(item[1])
+                if x is not None and y is not None:
+                    points.append((float(x), float(y)))
+    bbox = row.get("bbox")
+    if not points and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        values = [_num(item) for item in bbox]
+        if all(item is not None for item in values):
+            x0, y0, x1, y1 = (float(item) for item in values)
+            points = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    if not points:
+        return []
+    quantized = [_quant_key(point) for point in points]
+    min_x = min(item[0] for item in quantized)
+    min_y = min(item[1] for item in quantized)
+    return [(item[0] - min_x, item[1] - min_y) for item in quantized]
+
+
+def kind_key_of(row: Dict[str, Any]) -> str:
+    """形状 + 尺寸 + 轮廓状态的确定性指纹（Spec §2.2 第 1–5 步）。
+
+    只吃行上的轮廓点与长宽，不读时间 / 随机数 / 字典序 —— 同一份 IR 两次跑必须逐字相同。
+    """
+    payload = {"outline_status": _text(row.get("outline_status")),
+               "size": [_round(row.get("length")), _round(row.get("width"))],
+               "points": kind_points_of(row)}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:KIND_KEY_LENGTH]
+
+
 def extract(ir: Dict[str, Any], semantics: Any = None, *,
             options: Any = None) -> Dict[str, Any]:
     """CAD IR → 零件文档。同一份 IR 两次跑必须逐字相同（排序与编号全部确定性）。"""
@@ -1396,15 +1447,25 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     kept.sort(key=lambda row: (-(row["area"] or 0.0), row["component_id"]))
     filtered.sort(key=lambda row: row["component_id"])
 
+    # —— 种类（Spec `packaging-parts-list-visibility-and-kinds.md` §2.2）——
+    # 指纹由真实轮廓（闭合件）/ 分量包围盒（其余）算；编号**跨全量 kept 件**统一，
+    # 这样分页读到的每一页 `kind_index` 都逐字一致（`repeat_of` 也只在同 `kind_key` 之间）。
+    for row in kept:
+        row["kind_key"] = kind_key_of(row)
+    kind_sizes: Dict[str, int] = {}
+    for row in kept:
+        kind_sizes[row["kind_key"]] = kind_sizes.get(row["kind_key"], 0) + 1
+    kind_order = sorted(kind_sizes, key=lambda key: (-kind_sizes[key], key))
+    kind_index_of = {key: index for index, key in enumerate(kind_order, start=1)}
+
     parts: List[Dict[str, Any]] = []
-    seen: Dict[Tuple[float, float, int], str] = {}
+    seen: Dict[str, str] = {}
     for index, row in enumerate(kept, start=1):
         part_code = PART_CODE_FORMAT % index
-        key = (round(row["length"] or 0.0, 3), round(row["width"] or 0.0, 3),
-               row["entity_total"])
-        repeat_of = seen.get(key, "")
-        if not repeat_of or repeat_of == part_code:
-            seen[key] = part_code
+        kind_key = _text(row.get("kind_key"))
+        repeat_of = seen.get(kind_key, "")
+        if not repeat_of:
+            seen[kind_key] = part_code
         parts.append({
             "part_code": part_code,
             "part_id": part_code,
@@ -1418,6 +1479,8 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "entity_ids": row["entity_ids"],
             "evidence_refs": row["evidence_refs"],
             "repeat_of": repeat_of,
+            "kind_key": kind_key,
+            "kind_index": int(kind_index_of.get(kind_key, 0)),
             "outline_status": row["outline_status"],
             "outline": row["outline"],
             "outline_reason": row["outline_reason"],
@@ -1432,9 +1495,21 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "attribution": row.get("attribution"),
         })
 
-    max_parts = int(config["max_parts"])
-    truncated = max(0, len(parts) - max_parts)
-    parts = parts[:max_parts]
+    # —— 不再因为"页大小"丢件（Spec `packaging-parts-list-visibility-and-kinds.md` §2.1）——
+    # 缺省（未传 `options["max_parts"]`）时**全部 kept 件都进文档**；显式传正整数时才截断
+    # 并计数 —— 旧行为与旧断言都能用显式参数逐字复现。读接口的页大小由路由的 `limit` 管。
+    explicit_max = None
+    if isinstance(options, dict):
+        raw_max = _num(options.get("max_parts"))
+        if raw_max is not None and raw_max > 0:
+            explicit_max = int(raw_max)
+    if explicit_max:
+        truncated = max(0, len(parts) - explicit_max)
+        parts = parts[:explicit_max]
+    else:
+        truncated = 0
+    kind_total = len({_text(row.get("kind_key")) for row in parts
+                      if _text(row.get("kind_key"))})
     # 三态计数只统计**最终保留**的件（与 part_total 自洽：三者之和 == part_total）。
     closed_total = sum(1 for row in parts if row["outline_status"] == "closed")
     open_total = sum(1 for row in parts if row["outline_status"] == "open")
@@ -1501,6 +1576,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         "unavailable": unavailable,
         "stats": {"part_total": len(parts), "filtered_total": len(filtered),
                   "truncated": truncated, "by_role": by_role,
+                  # 过滤后剩多少（= `part_total` + `truncated`）与"有几种形状"（Spec §2.1/§2.2）：
+                  # 前端据此把"被过滤掉的分量 / 文档里的件数 / 还有几件未列出"三笔账分开说。
+                  "kept_total": len(kept), "kind_total": kind_total,
                   "closed_total": closed_total, "open_total": open_total,
                   "outline_unavailable_total": outline_unavailable_total,
                   "closed_ratio": _round(closed_ratio),
@@ -1602,6 +1680,8 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
                       "role": _text(row.get("role")),
                       "component_id": _text(row.get("component_id")),
                       "repeat_of": _text(row.get("repeat_of")),
+                      "kind_key": _text(row.get("kind_key")),
+                      "kind_index": int(_num(row.get("kind_index")) or 0),
                       "size_source": _text(row.get("size_source"))})
     total = _num(stats.get("part_total"))
     total = len(parts) if total is None else max(0, int(total))
@@ -1734,6 +1814,19 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     filtered_total = (len(filtered_rows) if filtered_total is None
                       else max(0, int(_num(filtered_total) or 0)))
 
+    # 列表可见性 + 种类的四本账（Spec `packaging-parts-list-visibility-and-kinds.md` §2.3）：
+    # `listed_total` 只能是"文档里真的有多少行"，`kept_total` 是"过滤后剩多少"（两者相差的
+    # 就是显式 `max_parts` 截断掉的件数）；`kind_total` / `repeat_total` 一律由行现算。
+    listed_total = len(rows)
+    kind_keys = {_text(row.get("kind_key")) for row in rows if _text(row.get("kind_key"))}
+    kind_total = len(kind_keys)
+    if not kind_total:
+        kind_total = max(0, int(_num(stats.get("kind_total")) or 0))
+    repeat_total = sum(1 for row in rows if _text(row.get("repeat_of")))
+    kept_total = stats.get("kept_total")
+    kept_total = (listed_total if kept_total is None
+                  else max(listed_total, int(_num(kept_total) or 0)))
+
     return {
         "engine_version": _text(payload.get("engine_version")) or ENGINE_VERSION,
         "parts_id": _text(payload.get("parts_id")),
@@ -1770,6 +1863,12 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "solid_reason_mix": solid_reason_mix,
         "open_reason_mix": open_reason_mix,
         "open_total": sum(1 for row in rows if _text(row.get("outline_status")) == "open"),
+        # 列表可见性与种类（Spec `packaging-parts-list-visibility-and-kinds.md` §2.3）：
+        # 既有键一个字不改，这里只把"文档里有多少行 / 过滤后剩多少 / 有几种 / 几种重复"显式化。
+        "kept_total": kept_total,
+        "listed_total": listed_total,
+        "kind_total": kind_total,
+        "repeat_total": repeat_total,
         "filtered_total": filtered_total,
         "filtered_reason_mix": filtered_reason_mix,
         "parts": parts,

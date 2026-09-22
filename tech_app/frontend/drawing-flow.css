@@ -148,3 +148,29 @@
   font-size: 12px;
   color: var(--text-muted, #6b7280);
 }
+
+/* 2.1 零件树的种类折叠与三笔账（Spec `packaging-parts-list-visibility-and-kinds.md` §2.5）：
+   一种一行、点开看这一种的件；截断/过滤提示各自一行，样式只做区分，不改既有设计变量。 */
+.kind-row {
+  cursor: pointer;
+}
+
+.kind-row:hover {
+  border-color: var(--color-primary);
+}
+
+.kind-parts {
+  padding-left: 14px;
+}
+
+.part-count-note,
+.part-truncated-note,
+.part-filtered-note {
+  padding: 4px 2px;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}
+
+.part-truncated-note .btn {
+  margin-left: 6px;
+}

@@ -6905,6 +6905,11 @@ def map_requirement_packaging_bom_role(
 PACKAGING_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-parts"
 PACKAGING_PARTS_EXTRACT_PATH = "/api/projects/{project_id}/requirement/packaging-parts/extract"
 
+#: 读接口一页的上限（Spec `packaging-parts-list-visibility-and-kinds.md` §2.4）：非法 `limit`
+#: （<=0 或 >500）直接 400，**不许静默夹取** —— 前端据此决定"继续加载"翻几页；
+#: `offset` / `limit` 只影响 `items`，`total` / `kind_total` 永远是全量真值。
+PACKAGING_PARTS_PAGE_LIMIT_MAX = 500
+
 
 class PackagingPartsExtractAction(BaseModel):
     """零件提取入参：留空则按项目里最新一版 CAD IR 重算。"""
@@ -6930,7 +6935,69 @@ def _packaging_solids_index(project_id: str) -> Dict[str, Dict[str, Any]]:
     return index
 
 
-def _parts_body(record: Any, project_id: str = "") -> Dict[str, Any]:
+def _packaging_parts_list_rows(rows: Any) -> List[Dict[str, Any]]:
+    """列表行的坐标剥离：列表**不含坐标**（Spec `packaging-parts-selectable-panel.md`），
+    单件详情 `.../{part_code}` 才回 `outline.points` —— 真图 263 件的点集会把页面拖死。"""
+    out: List[Dict[str, Any]] = []
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        outline = item.get("outline")
+        if isinstance(outline, dict) and outline.get("points"):
+            item["outline"] = dict(outline, points=None)
+        out.append(item)
+    return out
+
+
+def _packaging_parts_page(body: Dict[str, Any], *, offset: int, limit: int,
+                          kind: str = "", role: str = "",
+                          outline_status: str = "", min_area_mm2: float = 0.0
+                          ) -> Dict[str, Any]:
+    """零件列表的分页 + 筛选（Spec `packaging-parts-list-visibility-and-kinds.md` §2.4）。
+
+    过滤 / 分页只影响 `items`；`total`（文档里的件数）与 `kind_total`（有几种形状）
+    **永远是全量真值** —— 否则前端会把"这一页"说成"这份图纸"。
+    """
+    rows = [row for row in (body.get("parts") or []) if isinstance(row, dict)]
+    start = max(0, int(offset or 0))
+    size = int(limit or 0)
+    wanted_kind = str(kind or "").strip()
+    wanted_role = str(role or "").strip()
+    wanted_status = str(outline_status or "").strip()
+    min_area = max(0.0, float(min_area_mm2 or 0.0))
+    matched: List[Dict[str, Any]] = []
+    for row in rows:
+        if wanted_kind and str(row.get("kind_key") or "") != wanted_kind:
+            continue
+        if wanted_role and str(row.get("role") or "") != wanted_role:
+            continue
+        if wanted_status and str(row.get("outline_status") or "") != wanted_status:
+            continue
+        if min_area and float(row.get("area_mm2") or 0.0) < min_area:
+            continue
+        matched.append(row)
+    page = matched[start:start + size] if size > 0 else []
+    # `kind_counts`（`kind_key → 全量件数`）：面板按种类折叠时，"这一种共几件"必须是全量真值，
+    # 不许只数当前页 —— 否则翻页会让同一种的件数变来变去。
+    kind_counts: Dict[str, int] = {}
+    for row in rows:
+        key = str(row.get("kind_key") or "")
+        if key:
+            kind_counts[key] = kind_counts.get(key, 0) + 1
+    return {"items": _packaging_parts_list_rows(page),
+            "kind_counts": dict(sorted(kind_counts.items())),
+            "total": len(rows),
+            "matched_total": len(matched),
+            "offset": start,
+            "limit": size,
+            "has_more": (start + len(page)) < len(matched),
+            "kind_total": len({str(row.get("kind_key") or "") for row in rows
+                               if str(row.get("kind_key") or "")})}
+
+
+def _parts_body(record: Any, project_id: str = "", *,
+                page: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """零件文档的响应形状 = 文档本身（Spec §4）+ `built` / `summary` 两个附加键。
 
     刻意不套一层 `{"parts": <doc>}`：文档里已经有一个 `parts`（零件数组），再套一层
@@ -6950,6 +7017,10 @@ def _parts_body(record: Any, project_id: str = "") -> Dict[str, Any]:
                          and str(row.get("part_code") or "") in index else row
                          for row in (body.get("parts") or [])]
     body["built"] = bool(record)
+    body["parts"] = _packaging_parts_list_rows(body.get("parts") or [])
+    # 分页 + 筛选（Spec `packaging-parts-list-visibility-and-kinds.md` §2.4）：`items` 是当前页，
+    # `total` / `kind_total` 是全量真值；`parts` 仍是**整份文档**（老客户端与批量入口在用）。
+    body.update(page or _packaging_parts_page(body, offset=0, limit=len(body["parts"]) or 1))
     # 两笔账分开说（Spec `packaging-parts-component-chaining.md` §2.4）：`truncated`（因
     # `max_parts` 未列出）与 `filtered_total` / `filtered_reason_mix`（被过滤掉、根本没成为
     # 零件）不是同一件事 —— 前端据此拆成两句，读接口必须两笔都给全。唯一来源是 `summarize()`。
@@ -6968,11 +7039,34 @@ def _packaging_requirement_materials(project_id: str) -> Dict[str, Any]:
 
 
 @app.get(PACKAGING_PARTS_READ_PATH)
-def get_requirement_packaging_parts(pid: str, parts_id: str = "",
-                                    user: dict = Depends(current_user)):
-    """读零件文档与摘要（2.1 左栏零件树的数据源）；没有就 built=false、parts=[]，不报错。"""
+def get_requirement_packaging_parts(
+    pid: str,
+    parts_id: str = "",
+    offset: int = 0,
+    limit: int = int(packaging_parts.DEFAULT_OPTIONS["max_parts"]),
+    kind: str = "",
+    role: str = "",
+    outline_status: str = "",
+    min_area_mm2: float = 0.0,
+    user: dict = Depends(current_user),
+):
+    """读零件文档与摘要（2.1 左栏零件树的数据源）；没有就 built=false、parts=[]，不报错。
+
+    分页 / 筛选按 Spec `packaging-parts-list-visibility-and-kinds.md` §2.4：`items` 是当前页，
+    `total` / `kind_total` 是全量真值；`offset >= total` 回空页（404 与报错都不许）。
+    """
     _workflow_project(pid)
-    return _parts_body(packaging_parts.load_parts(pid, parts_id or None), pid)
+    if limit <= 0 or limit > PACKAGING_PARTS_PAGE_LIMIT_MAX:
+        raise HTTPException(400,
+                            "limit 必须在 1..%d 之间" % PACKAGING_PARTS_PAGE_LIMIT_MAX)
+    if offset < 0:
+        raise HTTPException(400, "offset 不许为负")
+    record = packaging_parts.load_parts(pid, parts_id or None)
+    body = _parts_body(record, pid)
+    body.update(_packaging_parts_page(body, offset=offset, limit=limit, kind=kind,
+                                      role=role, outline_status=outline_status,
+                                      min_area_mm2=min_area_mm2))
+    return body
 
 
 @app.post(PACKAGING_PARTS_EXTRACT_PATH)

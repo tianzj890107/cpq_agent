@@ -1454,15 +1454,25 @@ async function packagingPartSetThickness(partCode) {
     window.alert(`补料厚失败：${message}`);
     return null;
   }
-  const doc = currentPackagingParts || {};
-  (doc.parts || []).forEach(row => {
-    if ((row.part_code || "") === partCode) {
-      row.thickness_mm = payload.thickness_mm;
-      row.thickness_source = payload.thickness_source || row.thickness_source;
-    }
-  });
+  const patch = { thickness_mm: payload.thickness_mm };
+  if (payload.thickness_source) patch.thickness_source = payload.thickness_source;
+  patchPackagingPartRows(partCode, patch);
   renderTree(currentIR || {});
   return payload;
+}
+
+// 单件结论回填：整份文档的行、当前页的行、已累加的行都要改 —— 分页之后左栏渲染的是
+// `packagingPartsShown`（Page 1 的行），只改 `doc.parts` 会让"补料厚"按钮补完还在。
+function patchPackagingPartRows(partCode, patch) {
+  const code = String(partCode || "");
+  const lists = [(currentPackagingParts || {}).parts, (currentPackagingParts || {}).items,
+                 packagingPartsShown];
+  lists.forEach(list => {
+    if (!Array.isArray(list)) return;
+    list.forEach(row => {
+      if (row && String(row.part_code || "") === code) Object.assign(row, patch);
+    });
+  });
 }
 
 async function packagingPartAnalyze(mode) {
@@ -1577,20 +1587,82 @@ function packagingPartsEmptyText(partsDoc, preconditions) {
     if (!code && !message) return;
     segments.push("[" + code + "] " + message + (action ? " → " + action : ""));
   });
+  // 有文档、但一件可用零件都没有时（`total == 0`）必须明说（Spec
+  // `packaging-parts-list-visibility-and-kinds.md` §2.5）：空表格不等于"没有零件"。
+  const total = Number((doc && doc.total) !== undefined ? doc.total : NaN);
+  if (!segments.length && doc.built === true && total === 0) {
+    return "这份图纸没有可用的零件。";
+  }
   if (!segments.length) return "零件文档还没生成，请先跑一键解析图纸。";
   return segments.join("；");
 }
 
 // 2.1 左栏零件文档（drawing_flow 链路）：GET .../requirement/packaging-parts。
 // 端点未上线（零件提取那批才加）时拿到 404 → 保持 null，走空态文案，不谎报"解析失败"。
+//
+// 分页 + 种类折叠（Spec `packaging-parts-list-visibility-and-kinds.md` §2.4/§2.5）：读接口一次
+// 只回 `limit` 件（缺省 64），`items` 是当前页、`total` / `kind_total` 是全量真值；"继续加载"
+// 按 `offset` 往后翻，翻回来的行**累加**在 `packagingPartsShown` 上（折叠与计数都在这上面）。
 let currentPackagingParts = null;
 let currentDrawingFlowState = null;
+let packagingPartsPage = { offset: 0, limit: 64, kind: "", role: "",
+                           outline_status: "", min_area_mm2: "" };
+let packagingPartsShown = [];
+
+// 当前页的行（`items`）：老后端只给 `parts` 时退回它，但绝不许把整份文档当页用。
+function packagingPartsItems(doc) {
+  const source = Array.isArray(doc && doc.items) ? doc.items : ((doc && doc.parts) || []);
+  return source.filter(row => row && typeof row === "object");
+}
+
+function packagingPartsQueryString(page, offset) {
+  const query = new URLSearchParams();
+  query.set("offset", String(offset || 0));
+  query.set("limit", String((page && page.limit) || 64));
+  ["kind", "role", "outline_status", "min_area_mm2"].forEach(key => {
+    const value = page ? page[key] : "";
+    if (value !== "" && value !== null && value !== undefined) query.set(key, String(value));
+  });
+  return query.toString();
+}
+
 async function fetchPackagingParts() {
   if (!currentProject) return null;
   try {
-    const res = await fetch(`${API}/api/projects/${currentProject}/requirement/packaging-parts`);
+    const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
+      + `?${packagingPartsQueryString(packagingPartsPage, 0)}`;
+    const res = await fetch(url);
     if (!res.ok) return null;
-    return await res.json().catch(() => null);
+    const doc = await res.json().catch(() => null);
+    packagingPartsShown = packagingPartsItems(doc);   // 换页一律从第一页重新累加
+    return doc;
+  } catch (error) { return null; }
+}
+
+// "继续加载"：拿下一页并累加（按 part_code 去重），再重画左栏 —— 不许只能看前 64 件。
+async function loadMorePackagingParts() {
+  const doc = currentPackagingParts || {};
+  if (!currentProject || !doc.has_more) return null;
+  const offset = packagingPartsShown.length;
+  try {
+    const url = `${API}/api/projects/${currentProject}/requirement/packaging-parts`
+      + `?${packagingPartsQueryString(packagingPartsPage, offset)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const page = await res.json().catch(() => null);
+    if (!page) return null;
+    const seen = {};
+    packagingPartsShown.forEach(row => { seen[String(row.part_code || "")] = true; });
+    packagingPartsItems(page).forEach(row => {
+      const code = String(row.part_code || "");
+      if (!code || seen[code]) return;
+      seen[code] = true;
+      packagingPartsShown.push(row);
+    });
+    currentPackagingParts = Object.assign({}, doc, page,
+                                           { parts: doc.parts || packagingPartsShown });
+    renderTree(currentIR || {});
+    return page;
   } catch (error) { return null; }
 }
 async function refreshPackagingParts() {
@@ -2561,6 +2633,15 @@ const PACKAGING_FILTER_REASON_LABELS = {
   unknown: "原因未知",
 };
 
+// 一件零件的尺寸文案（展开长×宽，单位未确认时明说"待确认"）。
+function packagingPartSizeText(part) {
+  const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
+    ? "" : String(part.unfolded_length_mm);
+  const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)
+    ? "" : String(part.unfolded_width_mm);
+  return (length || width) ? `展开 ${length}×${width} mm` : "展开尺寸待确认";
+}
+
 // 零件清单树：只重建 #tree 内部（2.1 固定左栏），不碰右栏 3D 画布。
 function renderTree(ir) {
   const tree = $("tree");
@@ -2572,7 +2653,11 @@ function renderTree(ir) {
   // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
   if (currentDrawingEntry === "drawing_flow") {
     const doc = currentPackagingParts || {};
-    const rows = Array.isArray(doc.parts) ? doc.parts : [];
+    // 已经翻过页就用累加的行；否则用本页（`items`）。文档没读到时不许用上一份的累加行。
+    const rows = (currentPackagingParts && packagingPartsShown.length)
+      ? packagingPartsShown : packagingPartsItems(doc);
+    const total = Number(doc.total) || Number((doc.stats || {}).part_total) || rows.length;
+    const kindTotal = Number(doc.kind_total) || Number((doc.stats || {}).kind_total) || 0;
     const preconditions = (currentDrawingFlowState && currentDrawingFlowState.preconditions) || [];
     tree.classList.toggle("empty-state", !rows.length);
     if (!rows.length) {
@@ -2592,20 +2677,16 @@ function renderTree(ir) {
     batch.addEventListener("click", () => { packagingPartsSolidBatch(); });
     coverage.appendChild(batch);
     tree.appendChild(coverage);
-    rows.forEach(part => {
+    // 一件零件的行：自带 `dataset.partId`，点击先在看板内定位（高亮这一行），再由
+    // openPackagingPartInBoard() 交给图纸零件自己的选中路径 selectPackagingPart(part_code)
+    // —— 留在当前看板里展开，既不跳页，也不会清空右栏（不走视觉链路的 selectPart）。
+    const packagingPartRow = part => {
       const row = document.createElement("div");
       row.className = "part part-item";
-      // 点得到每一件：行自带 part_code；点击先在看板内定位（高亮这一行），再由
-      // openPackagingPartInBoard() 交给图纸零件自己的选中路径 selectPackagingPart(part_code)
-      // —— 留在当前看板里展开，既不跳页，也不会清空右栏（不走视觉链路的 selectPart）。
       row.dataset.partId = part.part_code || "";
       row.addEventListener("click", () => openPackagingPartInBoard(part.part_code || ""));
-      const length = (part.unfolded_length_mm === null || part.unfolded_length_mm === undefined)
-        ? "" : String(part.unfolded_length_mm);
-      const width = (part.unfolded_width_mm === null || part.unfolded_width_mm === undefined)
-        ? "" : String(part.unfolded_width_mm);
-      const size = (length || width) ? `展开 ${length}×${width} mm` : "展开尺寸待确认";
       const layers = Array.isArray(part.layers) ? part.layers.join(" / ") : "";
+      const size = packagingPartSizeText(part);
       row.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
         + `<div class="part-info"><div class="part-name">${esc(part.part_code || "")} `
         + `${esc(part.name || "")}</div><div class="part-type">${esc(size)}`
@@ -2623,15 +2704,66 @@ function renderTree(ir) {
         });
         row.appendChild(fix);
       }
-      tree.appendChild(row);
+      return row;
+    };
+    // —— 按种类折叠（Spec `packaging-parts-list-visibility-and-kinds.md` §2.5）——
+    // 一种一行（`kind_index` / `kind_key` / 该种件数 / 代表尺寸），点开看这一种的件；
+    // 种类**由后端的 `kind_key` 决定**，前端不自己按长宽聚类（同尺寸不同轮廓是两种）。
+    const kindCounts = (doc && doc.kind_counts) || {};
+    const groups = [];
+    const byKind = {};
+    rows.forEach(part => {
+      const key = String((part && part.kind_key) || "")
+        || ("kind-" + String((part && part.kind_index) || 0));
+      if (!byKind[key]) {
+        byKind[key] = { key: key, index: Number((part && part.kind_index) || 0), parts: [] };
+        groups.push(byKind[key]);
+      }
+      byKind[key].parts.push(part);
     });
-    // 超上限被截断时必须说清楚（Spec §5：truncated > 0 要给提示），否则用户会以为
-    // 图纸里就这么多零件。提示行用的是自己的 class，不算零件行。
-    const truncated = Number((doc.stats || {}).truncated) || 0;
-    if (truncated > 0) {
+    groups.sort((a, b) => (a.index - b.index) || (a.key < b.key ? -1 : 1));
+    groups.forEach(group => {
+      const first = group.parts[0] || {};
+      const count = Number(kindCounts[group.key]) || group.parts.length;
+      const head = document.createElement("div");
+      head.className = "part kind-row";
+      head.dataset.kindIndex = String(group.index);
+      head.dataset.kindKey = group.key;
+      head.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
+        + `<div class="part-info"><div class="part-name">第 ${group.index} 种 · 共 ${count} 件</div>`
+        + `<div class="part-type">代表件 ${esc(first.part_code || "")} · `
+        + `${esc(packagingPartSizeText(first))}</div></div>`;
+      const list = document.createElement("div");
+      list.className = "kind-parts";
+      list.dataset.kindParts = group.key;
+      list.hidden = true;
+      group.parts.forEach(part => { list.appendChild(packagingPartRow(part)); });
+      // 一种一行：点这一行展开/收起这一种的件（默认收起，否则 263 件会淹掉种类）。
+      head.addEventListener("click", () => { list.hidden = !list.hidden; });
+      tree.appendChild(head);
+      tree.appendChild(list);
+    });
+    // 三笔账分三句说（Spec §2.5 与 `packaging-parts-component-chaining.md` §2.4 同一口径）：
+    // 已显示的件数、共多少件（全量真值）、被过滤掉的分量数。第一句永远在。
+    const countNote = document.createElement("div");
+    countNote.className = "part-count-note";
+    countNote.dataset.qqPartsShown = "1";
+    countNote.textContent = `已显示 ${rows.length} 件，共 ${total} 件（${kindTotal} 种形状）`;
+    tree.appendChild(countNote);
+    // 第二句 + 继续加载：翻页拿下一页，不许只能看前 64 件。
+    const missing = Math.max(0, total - rows.length);
+    if (missing > 0) {
       const note = document.createElement("div");
       note.className = "part-truncated-note";
-      note.textContent = `还有 ${truncated} 件未列出（只显示前 ${rows.length} 件）`;
+      note.textContent = `还有 ${missing} 件未列出（只显示前 ${rows.length} 件）`;
+      const more = document.createElement("button");
+      more.id = "packagingPartsLoadMore";
+      more.className = "btn btn-secondary";
+      more.type = "button";
+      more.textContent = `继续加载（还有 ${missing} 件）`;
+      more.disabled = !doc.has_more;
+      more.addEventListener("click", () => { loadMorePackagingParts(); });
+      note.appendChild(more);
       tree.appendChild(note);
     }
     // 第三笔账（Spec `packaging-parts-component-chaining.md` §2.4）：因面积/长边超限、
