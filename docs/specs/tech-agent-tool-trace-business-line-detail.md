@@ -1,6 +1,7 @@
 # 技术工艺 Agent 工具轨迹：业务行 + 可展开详情 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_tool_trace_business_line_detail_red.py`
 
 ## 背景与目标
 

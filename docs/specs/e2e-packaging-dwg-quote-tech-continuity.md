@@ -1,6 +1,7 @@
 # 包装精准报价 → DWG → 零件/BOM 连续性 Spec
 
-状态：**已实现（2026-09-22；红测 `tests/test_e2e_packaging_dwg_continuity_red.py` 10 条全绿）**
+状态：Spec + 红测（已实现）
+红测：`tests/test_e2e_packaging_dwg_continuity_red.py`
 
 ## 1. 线上证据
 

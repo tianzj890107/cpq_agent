@@ -1,6 +1,7 @@
 # 技术工艺主页与报价助手主页统一 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_home_quote_shell_red.py`
 
 ## 背景与问题
 

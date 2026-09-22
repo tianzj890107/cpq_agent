@@ -1,6 +1,6 @@
 # Spec（批 10）：材料克重的单位与纸种口径 —— 报价侧匹配输入
 
-- 状态：Spec + 红测（已实现）（9-21 落地，见 changelog ## 252）
+- 状态：Spec + 红测（已实现）（见 changelog ## 252）
 - 覆盖：逆向快速报价「DWG/DXF → 匹配字段」里 `material_notes` → `face_paper_gsm` /
   `grey_board_gsm` 这一段（批 5 的通路，批 9 已收口尺寸侧）。
 红测：`tests/test_quick_quote_material_gsm_red.py`

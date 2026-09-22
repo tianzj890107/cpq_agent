@@ -1,6 +1,7 @@
 # 报价与技术工艺 Agent AI 消息白底统一 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_ai_message_white_surface_red.py`
 
 ## 背景与目标
 

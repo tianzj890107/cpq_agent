@@ -1,6 +1,7 @@
 # 报价 / 技术工艺输入区统一为技术工艺单行样式 + 恢复「会话绑定」说明行
 
-状态：已实现；其中技术工艺说明行条款已被 `tech-chat-composer-flush-bottom.md` 的最新产品决策取代，报价侧条款继续有效。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_unified_composer_and_caption_red.py`
 
 ## 1. 背景
 

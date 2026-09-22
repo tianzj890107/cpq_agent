@@ -1,6 +1,7 @@
 # 技术工艺五大流程导航 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_major_flow_navigation_red.py`
 
 ## 目标
 

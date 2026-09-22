@@ -1,6 +1,7 @@
 # 包装零件 → 工艺 → 成本 → 财务 → 报告闭环 Spec
 
-状态：**已实现（2026-09-22；红测 `tests/test_e2e_packaging_downstream_handoff_red.py` 12 条全绿）**
+状态：Spec + 红测（已实现）
+红测：`tests/test_e2e_packaging_downstream_handoff_red.py`
 
 ## 1. 线上证据
 

@@ -1,6 +1,7 @@
 # CPQ 主操作按钮同色系渐变 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_primary_button_blue_gradient_red.py`
 
 ## 背景
 

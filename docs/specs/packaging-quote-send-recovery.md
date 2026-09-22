@@ -3,7 +3,7 @@
 血缘：承接 `packaging-quote-close-loop.md`（第 8 批回传）、`quote-first-project-entry.md`（报告侧同类 P0）、
 `cpq_case_link.py`（落点四态：linked / multiple_candidates / create_new / no_candidate）。
 
-- 状态：**已实现**（`tests/test_packaging_quote_send_recovery_red.py` 14 条 → 13 绿 / 1 恒红，恒红那条是夹具自遮挡，见 §2.5）
+- 状态：Spec + 红测（已实现）（`tests/test_packaging_quote_send_recovery_red.py` 的 c1 属夹具自遮挡，见 changelog `## 272`；测试侧待处置）
 - 红测：`tests/test_packaging_quote_send_recovery_red.py`
 - 依赖：`tech_app/backend/main.py`（回传路由与桥接错误出口）、`packaging_handoff.py`、`cpq_bridge.py`
 

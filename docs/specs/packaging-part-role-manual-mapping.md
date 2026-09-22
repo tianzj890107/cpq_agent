@@ -3,7 +3,8 @@
 血缘：`docs/specs/e2e-packaging-dwg-quote-tech-continuity.md` §4.4（`role=unknown` 的 DWG 零件
 **不得**按行号/面积顺序自动贴 BOM 角色）落地之后暴露出来的第一道**人工**缺口。
 
-状态：**已实现**（红测 `tests/test_packaging_part_role_manual_mapping_red.py` 21 条全绿）
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_part_role_manual_mapping_red.py`
 
 ## 0. 一句话目标
 

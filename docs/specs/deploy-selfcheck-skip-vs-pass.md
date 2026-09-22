@@ -3,7 +3,7 @@
 血缘：承接 `packaging-parts-downstream-acceptance.md` §6.1（第 6b 步的隔离端到端自检）、
 `deploy-build-identity.md`（部署版本身份）、`packaging-parts-selfcheck-diagnostics.md`（自检要指着原因说话）。
 
-- 状态：**已实现**（红测 `tests/test_deploy_selfcheck_skip_vs_pass_red.py` 9 条全绿）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_deploy_selfcheck_skip_vs_pass_red.py`
 - 依赖：`scripts/deploy_34_bare.sh` 第 6b 步（隔离自检与权威实样路线自检）
 

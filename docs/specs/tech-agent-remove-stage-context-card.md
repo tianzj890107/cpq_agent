@@ -1,6 +1,7 @@
 # Spec：移除技术工艺 Agent 会话阶段上下文卡
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_remove_stage_context_card_red.py`
 
 ## 1. 问题
 

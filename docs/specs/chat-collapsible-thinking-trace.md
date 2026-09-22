@@ -1,6 +1,7 @@
 # 思考过程（思维链）：默认折叠、点击展开（报价 + 技术工艺）
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_chat_collapsible_thinking_trace_red.py`
 
 ## 1. 背景
 

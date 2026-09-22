@@ -1,6 +1,7 @@
 # 技术工艺：标题行步骤状态恢复蓝底蓝字胶囊，红色只留给失败提示
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_step_status_blue_pill_red.py`
 
 ## 1. 问题
 

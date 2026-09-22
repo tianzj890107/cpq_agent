@@ -1,6 +1,6 @@
 # 规格：Spec「状态」行与红测实际状态一致（快速报价系列）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_spec_status_consistency_red.py`
 范围：`docs/specs/quick-quote-*.md`（当前 13 份，含批 1–13；其他目录下的 Spec 不在本批范围）。
 

@@ -1,6 +1,7 @@
 # 技术工艺：右侧看板业务按钮统一搬到左侧会话操作栏（唯一入口、唯一主按钮、带 tooltip）
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_board_actions_into_left_toolbar_red.py`
 
 ## 1. 背景与问题
 

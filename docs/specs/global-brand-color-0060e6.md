@@ -1,6 +1,7 @@
 # CPQ 全局品牌色统一为 #0060E6 Spec
 
-状态：已定稿并落地（品牌主色由原 #0067D1 调整为 #0060E6）。
+状态：Spec + 红测（已实现）
+红测：`tests/test_global_brand_color_red.py`
 
 ## 结论
 

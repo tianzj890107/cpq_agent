@@ -1,6 +1,7 @@
 # 2.1 零件详情 / 工艺推荐面板收口 + 「更多功能 / 任务文件」弹卡片 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_part_detail_chrome_and_action_cards_red.py`
 
 ## 用户口径（原话，逐条编号）
 

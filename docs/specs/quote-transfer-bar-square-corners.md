@@ -1,6 +1,7 @@
 # Spec: 报价「已转交·待领取」流程提示条去倒角（直角化）
 
-状态：待实现（红测已落地）
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_transfer_bar_square_corners_red.py`
 适用分支：`20260909`
 
 ## 1. 需求

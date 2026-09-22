@@ -1,6 +1,6 @@
 # 包装图纸零件：材料与厚度的归属（覆盖率）
 
-状态：Spec + 红测（已实现；§2.2 为 2026-09-22 补档）
+状态：Spec + 红测（已实现）
 红测：`tests/test_packaging_parts_material_attribution_red.py`
 
 血缘：承接 `packaging-dwg-parts-extraction.md`（零件提取）、`packaging-parts-true-outline.md`（真实轮廓）、

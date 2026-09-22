@@ -1,6 +1,7 @@
 # 助手卡片融合风格：技术白卡 + 报价蓝色身份行 + 状态图标（技术工艺 + 报价）
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_chat_fused_assistant_card_style_red.py`
 
 取代：`docs/specs/chat-white-bubble-and-expandable-run-progress.md`（该方案把运行过程做成
 默认折叠、label 为灰色，已被本方案替换）；对应红测

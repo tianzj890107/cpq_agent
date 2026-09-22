@@ -1,6 +1,7 @@
 # Spec：成本结果与已发布报告回传工艺经理/销售经理并续接报价
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_cost_report_handoff_continuity_red.py`
 
 ## 1. 问题
 

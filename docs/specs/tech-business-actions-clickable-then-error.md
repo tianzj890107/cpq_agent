@@ -1,6 +1,7 @@
 # 技术工艺：业务动作按钮一律可点，点了再给真实原因
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_business_actions_clickable_then_error_red.py`
 
 ## 1. 问题（实测）
 

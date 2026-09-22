@@ -1,6 +1,7 @@
 # 任务文件在卡片内预览 + 修掉「请先在配置报价 CPQ 中登录」 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_file_preview_in_card_and_auth_red.py`
 
 ## 用户口径（原话）
 

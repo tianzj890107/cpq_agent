@@ -1,6 +1,7 @@
 # 技术工艺左侧会话：删掉常驻的「技术工艺评估助手」开场气泡
 
-状态：TDD Red，等待实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_chat_drop_static_intro_bubble_red.py`
 
 ## 1. 问题（实测）
 

@@ -1,6 +1,7 @@
 # 首页卡片等高：待办卡与会话卡统一高度 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_home_cards_equal_height_red.py`
 
 ## 背景与目标
 

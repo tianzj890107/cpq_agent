@@ -1,6 +1,7 @@
 # 技术会话主操作样式与全零件批量工艺/成本 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_primary_quick_actions_and_bulk_part_analysis_red.py`
 
 ## 背景
 

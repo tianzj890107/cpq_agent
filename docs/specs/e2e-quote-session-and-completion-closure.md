@@ -1,6 +1,7 @@
 # 报价会话恢复与“有价才完成”闭环 Spec
 
-状态：**已实现（2026-09-22 线上全流程验收红测；实现记录见 §7）**
+状态：Spec + 红测（已实现）
+红测：`tests/test_e2e_quote_session_completion_red.py`
 
 ## 1. 线上证据
 

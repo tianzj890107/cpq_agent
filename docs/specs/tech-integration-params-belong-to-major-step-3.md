@@ -1,6 +1,7 @@
 # Spec：整合参数归位第 3 大步，成本测算只保留成本页签
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_integration_params_step_ownership_red.py`
 
 ## 1. 问题
 

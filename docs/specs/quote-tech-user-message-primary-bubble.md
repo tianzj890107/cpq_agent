@@ -1,6 +1,7 @@
 # 报价与技术工艺 Agent 用户消息主色气泡统一 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_user_message_primary_bubble_red.py`
 
 ## 背景
 

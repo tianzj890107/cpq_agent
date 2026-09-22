@@ -1,6 +1,7 @@
 # 技术工艺 2.3「成本测算」：去掉「运行成本测算」，主按钮随测算完成度反转
 
-状态：TDD Red，等待实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_cost_review_single_primary_and_drop_run_step_red.py`
 
 ## 1. 问题（实测）
 

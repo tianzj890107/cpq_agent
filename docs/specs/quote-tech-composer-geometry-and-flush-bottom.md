@@ -1,6 +1,7 @@
 # Spec: 报价输入框对齐工艺规格 + 工艺输入区贴住会话列底部
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_composer_geometry_and_flush_bottom_red.py`
 适用分支：`20260909`
 相关页面：报价单智能体 `确认需求解析结果.html`、技术工艺统一工作台 `tech_app/frontend/tech-workbench.html`
 

@@ -1,6 +1,7 @@
 # 技术工艺会话输入框紧凑按钮与按行自增高
 
-状态：已实现，等待验收。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_chat_composer_compact_autogrow_red.py`
 
 ## 1. 目标
 

@@ -1,6 +1,7 @@
 # 报价按钮倒角 + 技术工艺三处渲染修正 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_btn_radius_and_tech_board_render_red.py`
 
 ## 用户口径（四条，原文归纳）
 

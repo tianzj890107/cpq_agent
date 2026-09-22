@@ -1,6 +1,6 @@
 # 规格：报价助手行业化（需求门禁 + 产品技术参数）—— 包装对齐第 1 批
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_agent_industry_alignment_red.py`
 
 相关规格：

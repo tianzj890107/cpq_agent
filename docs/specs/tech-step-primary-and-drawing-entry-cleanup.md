@@ -1,6 +1,7 @@
 # 技术工艺：1.1 主按钮随解析状态切换、2.1 能力入口归位到「更多功能」并自动生成 3D/2D
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_step_primary_and_drawing_entry_cleanup_red.py`
 
 ## 1. 问题（实测）
 

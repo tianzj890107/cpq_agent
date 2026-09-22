@@ -11663,3 +11663,68 @@ test_deploy_health_wait_red / test_packaging_parts_extraction_red
 改动前那一行是 `生产数据目录未被写入（meta.json 数量 0 → 0）` —— 数的是 `tech_app/data`，
 真机上恒等于 0，什么都证明不了；现在盯的是启动器真正在用的 `tech_app/tech_data`（60 个项目），
 前后相等才算真的证明了"隔离自检没写生产数据"。
+
+## 301. Spec 状态行全仓对账：107 份里 89 份不是机器读不了、就是与事实相反（9-22，Codex 只改 Spec 头 / 红测 / changelog）
+
+用户口径是「会一直有新的 Spec / 红测，你就一直做全部的实现」。`## 293` 的全库红面对账已经证明
+"没有能做而没做的"，但**读 Spec 头得到的结论恰恰相反**：对账当天实测
+
+```
+docs/specs/*.md                                  231 份
+  写了「状态：」行                                 107 份
+    写法机器读不了（TDD Red／待实现／Spec（待实现）／**未实现**）      73 份
+      其中 48 份逐字写着 `状态：TDD Red，等待 DeepSeek 实现。`
+    写着「未实现 / TDD Red / 待实现」                  65 份
+      其中 63 份的红测当前早已全绿
+    有 `红测：` 行                                   41 份（另 66 份没有）
+  完全没写状态行                                    124 份（历史存量）
+```
+
+同 `spec-status-consistency.md` §0 记的是同一种漂移，只是范围从 13 份扩到 107 份。代价不是"文档不
+好看"：`quote-home-industry-carryover.md`（`## 214` 落地）还写「未实现」、
+`quote-packaging-box-library-selection.md`（20 条早已全绿）还写「（未实现，20 条用例：18 红）」、
+`spec-status-consistency.md` 自己的守卫早已 `Ran 4 OK` 却还写「未实现」——按 Spec 头判断的人会
+把它们全部当成待办。
+
+### 本批做了什么
+
+| 项 | 数 | 说明 |
+| --- | --- | --- |
+| 状态行改成 `已实现` | 105 | 点名的红测当前全绿 |
+| 状态行保留 `未实现` | 2 | `quick-quote-12-case-maintenance.md`（F1↔E5 互斥，`## 256`）、`tech-model-call-row-merged-and-summary-detail.md`（交互已被 `## 133` 退役），都补了原因 |
+| 实际改动文件 | 89 | 66 份「状态行 + 补 `红测：` 行」，23 份「只改状态行」 |
+
+- 新增 Spec `docs/specs/spec-status-consistency-repo-wide.md`（`spec-status-consistency.md` §3 的
+  「其它系列历史存量、另批再收」就是这一批）与守卫 `tests/test_spec_status_truth_red.py`
+  （7 条，`Ran 7 OK`）：A 组字面量合法 + 份数下限防空转、B 组必须有存在的 `红测：` 行、
+  C 组声明「未实现」必须写明原因且红测当前真的失败。
+- 「声明已实现 → 必须全绿」这一方向**故意不逐份跑**（107 份里有 5 份点名的红测带着已记录的测试侧
+  冲突，逐份跑既慢又会把"冲突"误报成"没实现"），由 `## 293` 的全库红面对账流程覆盖；写进了 Spec §1.3。
+- 顺带修掉 5 份**状态行跨两行**被截断的 Spec（`tech-chat-composer-flush-bottom` /
+  `tech-home-three-tabs-and-todo-tasks` / `quick-quote-1-mode-and-case-model` /
+  `packaging-parse-to-downstream-seams` / `packaging-bom-part-size-provenance`）；其中
+  「本 Spec 取代 `tech-home-timeline-and-publish-closure.md` §7.4」这类**前提**移进状态行括号说明，
+  没有丢。
+
+### 保留的 5 条冲突（裁决权不在本批）
+
+| Spec | 声明 | 冲突来源 |
+| --- | --- | --- |
+| `quick-quote-12-case-maintenance.md` | 未实现 | F1 与 E5 断言互斥（`## 256`） |
+| `tech-model-call-row-merged-and-summary-detail.md` | 未实现 | 交互已被 `## 133` 退役 |
+| `packaging-requirement-confirm-order-guard.md` | 已实现 + 备注 | 红测 5 条 ERROR 属打桩元数冲突（`## 289`） |
+| `packaging-quote-send-recovery.md` | 已实现 + 备注 | 红测 c1 属夹具自遮挡（`## 272`） |
+| `packaging-cost-finance-access.md` / `packaging-parts-outline-chaining.md` / `packaging-manual-field-confirmation.md` 等 | 已实现 | 点名的红测里另有一条 `## 262` / `## 266` / `## 273` 记录的测试侧冲突 |
+
+### 保护网（改完即跑）
+
+```
+tests.test_spec_status_truth_red              Ran 7 OK（新守卫）
+tests.test_spec_status_consistency_red        Ran 4 OK（快速报价系列的既有守卫，未破）
+```
+
+### 边界
+
+只改 `docs/specs/*.md` 的状态行/`红测：` 行、新增一份 Spec 与一条守卫、追加本 changelog；未改任何
+业务实现、未改任何既有红测的期望值、未连 PG、未写生产数据。124 份完全没写状态行的历史存量不在
+本批（Spec §4 明写"不假装它们已对账"）。

@@ -1,6 +1,6 @@
 # 规格：第 3/4 步拿不到产品行时的可执行提示（不再单一归因）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_markup_gate_advice_red.py`
 
 相关规格：`docs/specs/quote-tech-handoff-button.md`（A 档同批：按钮区「转技术工艺」按钮）。

@@ -1,6 +1,6 @@
 # 规格：包装行业选品接到盒型库
 
-状态：Spec + 红测（**未实现**，20 条用例：18 红 / 2 绿护栏）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_packaging_box_selection_red.py`
 
 相关规格：

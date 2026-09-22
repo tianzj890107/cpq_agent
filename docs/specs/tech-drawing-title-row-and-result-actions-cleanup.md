@@ -1,6 +1,7 @@
 # 技术工艺父壳：统一标题行高度、移除嵌入页空状态行、整理 2.1 结果按钮
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_drawing_title_and_result_actions_cleanup_red.py`
 
 ## 1. 目标
 

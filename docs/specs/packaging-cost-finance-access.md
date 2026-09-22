@@ -3,7 +3,7 @@
 血缘：承接 `packaging-cost-engine.md`（第 7 批成本引擎）、`tech-project-acl-visible-scope.md` §18（项目可见性
 与角色池）、`packaging-downstream-blockers-close-loop.md` §6（那里把这条记成了「环境问题」，本批证明是产品问题）。
 
-- 状态：**已实现**（`tests/test_packaging_cost_finance_access_red.py` 10 条全绿；`tests/test_packaging_cost_engine_red.py` 由 81 绿变 80 绿 / 1 红，唯一红的是被本 Spec §2.2 取代的那条，见 §2.4）
+- 状态：Spec + 红测（已实现）
 - 红测：`tests/test_packaging_cost_finance_access_red.py`
 - 依赖：`tech_app/backend/services/project_access.py`、`packaging_cost.py`、`auth.py`
 

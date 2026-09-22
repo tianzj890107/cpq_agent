@@ -1,6 +1,7 @@
 # 技术右侧工作区统一为报价圆角卡片 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_right_workspace_quote_rounded_card_red.py`
 
 **部分被覆盖（9-16）**：§2「报价式卡片视觉」的外边距 / 边框 / 圆角，以及 §4「响应式」的
 12px / 8px 非零外间距，已被用户最新决策反转 —— 见

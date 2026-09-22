@@ -1,6 +1,6 @@
 # 规格：非标路径治理（判定 / 只读定制要求 / 允许继续 / 回写待确认 / 流程状态只读）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_nonstandard_path_red.py`
 
 相关规格：

@@ -1,6 +1,6 @@
 # 规格：样本目录与一次性脚本的归属说明（`.gitignore` + `scripts/README.md`）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_repo_leftovers_red.py`
 
 ## 0. 为什么有这一条（实测，不是推断）

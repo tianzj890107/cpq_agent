@@ -1,6 +1,7 @@
 # 2.2 / 2.3 六个页签：去掉重复的页内卡片层 + 内容卡片字号分级 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_stage_inline_card_dedup_and_font_scale_red.py`
 
 ## 决策与用户口径
 

@@ -1,6 +1,7 @@
 # 2.1 图纸解析右侧看板：零件清单 / 3D 视图固定两栏
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_drawing_board_two_column_parts_and_3d_red.py`
 
 ## 1. 产品目标
 

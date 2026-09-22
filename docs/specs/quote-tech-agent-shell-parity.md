@@ -1,6 +1,7 @@
 # 报价与技术工艺智能体工作台壳一致性 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_agent_shell_parity_red.py`
 
 ## 目标
 

@@ -4,7 +4,7 @@
 `dwg-conversion-quality-repair.md`（生效转换器身份段 §7.3）、
 `converter-binary-name-recognition.md`（同一批：告警说反话）。
 
-状态：**已实现**（守卫 `tests/test_converter_cache_engine_identity_red.py` 5 条全绿）
+状态：Spec + 红测（已实现）
 红测：`tests/test_converter_cache_engine_identity_red.py`
 依赖：`tech_app/backend/services/cad_converter/service.py` 的 `_chain_fingerprint()` / `convert_drawing()` / `_cached_manifest()`
 

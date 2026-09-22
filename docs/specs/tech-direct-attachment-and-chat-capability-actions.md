@@ -1,6 +1,7 @@
 # 技术工艺附件直传与会话能力按钮重排 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_direct_attachment_and_chat_capability_actions_red.py`
 
 ## 决策
 

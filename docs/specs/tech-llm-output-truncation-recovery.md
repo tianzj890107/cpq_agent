@@ -1,6 +1,7 @@
 # Spec: 长结构化输出截断恢复（输出 token 上限中断）
 
-状态：待实现（红测已落地）
+状态：Spec + 红测（已实现）
+红测：`tests/test_llm_output_truncation_recovery_red.py`
 适用分支：`20260909`
 相关步骤：1.1 创建需求、2.1 图纸解析、2.3 成本测算、3.1 汇总报告，以及技术工艺
 Agent 会话与报价/配置/规则三个业务 Agent 会话。

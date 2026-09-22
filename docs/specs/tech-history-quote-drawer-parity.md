@@ -1,6 +1,7 @@
 # 技术工艺历史记录统一为报价 Drawer Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_history_quote_drawer_parity_red.py`
 
 ## 决策
 

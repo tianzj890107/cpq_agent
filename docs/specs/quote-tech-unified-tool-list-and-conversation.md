@@ -1,6 +1,7 @@
 # 报价 / 技术工艺 Agent 会话统一：先用户消息、统一执行卡与 Tool List、详情与思考可折叠、Agent 消息白底（用户气泡保持蓝色）
 
-状态：TDD Red，等待实现（DS2）。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_tech_unified_tool_list_conversation_red.py`
 
 对应红测：`tests/test_quote_tech_unified_tool_list_conversation_red.py`
 

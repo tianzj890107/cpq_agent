@@ -1,6 +1,7 @@
 # 技术工艺 Agent「结果呈现」提示词口径 Spec（第一轮）
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_result_presentation_prompt_red.py`
 
 ## 背景与目标
 

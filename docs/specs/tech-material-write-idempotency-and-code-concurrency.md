@@ -1,6 +1,7 @@
 # 成品主数据写入幂等、编码取号并发与重复点击保护（批次 4）
 
-- 状态：Spec（待实现）
+- 状态：Spec + 红测（已实现）
+- 红测：`tests/test_tech_material_write_idempotency_red.py`
 - 范围：`cpq_tech_bridge.py`（写主数据命令：一个事务 + 业务幂等键 + 取号互斥）、
   `cpq_db.py`（`connect` 暴露显式事务连接）、`cpq_suite_server.py`（`/wf/tech/material` 请求体）、
   `tech_app/backend/services/cpq_bridge.py`（回调参数）、

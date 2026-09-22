@@ -1,6 +1,7 @@
 # 报价任务并存规则、原子领取与多人并发保护（批次 2）
 
-- 状态：Spec（待实现）
+- 状态：Spec + 红测（已实现）
+- 红测：`tests/test_quote_task_coexistence_and_atomic_claim_red.py`
 - 范围：`cpq_wf.py`（任务流转）、`cpq_suite_server.py`（`/wf/task*` 路由）、`报价首页.html`
   与 `tech_app/frontend/cpq-tech-inbox.js`（任务卡片渲染）、`cpq_msg.js`（消息图标）
 - 依赖：无。**不依赖批次 1**（项目身份），也不修改批次 1 的文件；批次 3（跨系统回传事务）

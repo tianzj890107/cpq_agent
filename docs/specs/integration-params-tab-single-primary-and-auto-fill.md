@@ -1,6 +1,7 @@
 # 技术工艺 2.2「参数推荐」页：只留一颗主按钮，生成即补全必填，确认后进入下一步
 
-状态：TDD Red，等待实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_integration_params_tab_single_primary_and_auto_fill_red.py`
 
 > 已更新（`tech-global-single-primary-by-state-and-nonblocking-notices.md`）：参数页收口动作
 > 的文案由「确认并进入下一步」改为「确认并进入下一页签」（组装工艺页仍叫「确认并进入下一步」），

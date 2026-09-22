@@ -1,6 +1,7 @@
 # Spec：技术工艺首页项目卡片与 Agent 完整会话恢复
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_home_project_cards_and_agent_history_red.py`
 
 ## 1. 问题
 

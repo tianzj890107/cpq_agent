@@ -1,6 +1,7 @@
 # 模型调用行：一次调用一行（返回补写回原行）+ 明细改「短摘要」 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（未实现）（该交互已被 `## 133` 退役；红测保留为冲突锚点，测试侧待处置）
+红测：`tests/test_tech_model_call_row_merged_and_summary_detail_red.py`
 
 ## 用户口径
 

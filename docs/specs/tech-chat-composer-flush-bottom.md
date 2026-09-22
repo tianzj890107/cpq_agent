@@ -1,8 +1,7 @@
 # 技术工艺 Agent 会话输入框贴底
 
-状态：已实现（输入框贴底部分仍有效）；其中「删除技术工艺说明行」条款已被
-`tech-global-single-primary-by-state-and-nonblocking-notices.md` 取代 —— 说明原文回归，
-但改为 composer 内绝对定位的不占布局高度提示，输入框底边坐标与本 Spec 一致。
+状态：Spec + 红测（已实现）（输入框贴底部分仍有效；其中「删除技术工艺说明行」条款已被 `tech-global-single-primary-by-state-and-nonblocking-notices.md` 取代 —— 说明原文回归，但改为 composer 内绝对定位的不占布局高度提示，输入框底边坐标与本 Spec 一致）
+红测：`tests/test_tech_chat_composer_flush_bottom_red.py`
 
 ## 1. 问题
 

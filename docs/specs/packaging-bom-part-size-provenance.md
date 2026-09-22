@@ -4,9 +4,11 @@
 `packaging-parametric-bom.md`（BOM 读接口与 `size_source` 形状）、
 `packaging-parse-to-downstream-seams.md`（§3.2 配对复核披露）、`packaging-cost.md`（`cut_length × cut_width`）。
 
-状态：Spec + 红测（**已实现**）—— `tests/test_packaging_bom_part_size_provenance_red.py` 实测
-`Ran 15，failures=8`（A1 / A2 / B1 / B2 / C1 / C2 / C3 / D2 红；
-A3 / A4 / B3 / D1 / D3 / D4 / D5 共 7 条为护栏绿）。
+状态：Spec + 红测（已实现）
+红测：`tests/test_packaging_bom_part_size_provenance_red.py`
+实测：**`Ran 15 OK`**（A1 / A2 / B1 / B2 / C1 / C2 / C3 / D2 由红转绿，是回归锚点；A3 / A4 / B3 / D1 / D3 / D4 / D5 七条护栏保持绿）。
+34 实测（项目 `73cdcaab61fc`）同一条 BOM 里已能同时读出两类来源：
+`RB02001-P02/P03 → size_quality=bbox_only`、`RB02001-P08/P09 → size_quality=unfolded`。
 
 ## 0. 一句话目标
 

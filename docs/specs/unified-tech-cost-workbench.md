@@ -1,6 +1,7 @@
 # 技术工艺与成本测算统一双栏工作台 Spec
 
-状态：第二轮 TDD Red。第一轮统一壳已实现，但全局入口和进度栏位置尚未满足本 Spec。
+状态：Spec + 红测（已实现）
+红测：`tests/test_unified_tech_cost_workbench_red.py`
 
 ## 背景
 

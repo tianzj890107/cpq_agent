@@ -1,6 +1,7 @@
 # Spec: 2.1 图纸解析左侧按钮清理与「已生成工艺推荐」自动展开
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_drawing_toolbar_cleanup_and_process_auto_expand_red.py`
 适用分支：`20260909`
 相关步骤：2.1 图纸解析（`tech_app/frontend/index.html` + 统一父壳 `tech-workbench.html`）
 

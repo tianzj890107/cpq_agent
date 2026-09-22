@@ -1,6 +1,6 @@
 # 规格：报价工作台按钮区新增「转技术工艺」常驻按钮
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_tech_handoff_button_red.py`
 
 相关规格：

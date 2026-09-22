@@ -1,6 +1,7 @@
 # 技术工艺 / 报价 助手卡片统一：一层边框 + 去头像 + 几何与 token 对齐
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_assistant_card_unification_red.py`
 
 取代：`docs/specs/chat-fused-assistant-card-style.md` 中「技术侧卡框用 `--oc-border-2`、报价侧用
 `--border-color`」以及「`.oc-art` / `.oc-intent-card` 各自是白底带框卡」这两处写法 —— 那两个 token

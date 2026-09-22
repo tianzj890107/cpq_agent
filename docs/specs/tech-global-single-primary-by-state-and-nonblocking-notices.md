@@ -1,6 +1,7 @@
 # 技术工艺全流程：每页签每状态唯一主按钮、贴底说明与不阻塞权限提示
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_global_single_primary_and_nonblocking_notices_red.py`
 
 ## 1. 产品目标
 

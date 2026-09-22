@@ -1,8 +1,7 @@
 # Spec：技术工艺首页三页签与待办任务口径（批次 ## 139）
 
-状态：TDD Red，等待 DeepSeek 实现。本 Spec **取代** `tech-home-timeline-and-publish-closure.md`
-§7.4 里「首页五个入口（我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档）」的产品决定；
-那个文件的其它契约（项目卡片字段、时间线、发布收口）继续有效。
+状态：Spec + 红测（已实现）（本 Spec 取代 `tech-home-timeline-and-publish-closure.md` §7.4 里「首页五个入口（我的项目 / 全部项目 / 待办任务 / 最近访问 / 已归档）」的产品决定；那个文件的其它契约（项目卡片字段、时间线、发布收口）继续有效）
+红测：`tests/test_tech_home_three_tabs_and_todo_tasks_red.py` `tests/test_tech_home_timeline_and_publish_closure_red.py`
 
 ## 1. 背景与真实问题
 

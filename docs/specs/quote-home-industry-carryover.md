@@ -1,6 +1,6 @@
 # 规格：报价建单的行业带过去（首页 → 工作台 → 卡片）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_home_industry_carryover_red.py`
 
 相关规格：

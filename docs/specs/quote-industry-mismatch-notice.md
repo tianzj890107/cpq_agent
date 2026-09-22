@@ -1,6 +1,6 @@
 # 规格：报价工作台「行业与需求不一致」的软提示
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_quote_industry_mismatch_notice_red.py`
 
 相关规格：

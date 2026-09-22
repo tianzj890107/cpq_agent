@@ -1,6 +1,6 @@
 # 规格：逆向快速报价 第 13 批 —— 权威费率的导入路径（demo 退役 + 校验 + 计划）
 
-状态：Spec + 红测（已实现）（9-22 落地，见 changelog ## 256）
+状态：Spec + 红测（已实现）（见 changelog ## 256）
 红测：`tests/test_quick_quote_authoritative_rate_import_red.py`
 依赖：批 3（`cpq_quick_quote_workspace.py` 的差异价规则表与 `RULE_KINDS`）、批 8（`rule_authority()` /
 `authority_summary()` / `cpq_quick_quote_price.is_formal()`）。

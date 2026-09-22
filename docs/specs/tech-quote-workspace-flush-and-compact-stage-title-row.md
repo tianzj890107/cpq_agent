@@ -1,6 +1,7 @@
 # 报价 / 工艺工作区去卡片 + 工艺标题行收窄 + 嵌入态去灰底 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_quote_workspace_flush_red.py` `tests/test_tech_right_workspace_quote_rounded_card_red.py`
 
 ## 决策覆盖
 

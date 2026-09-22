@@ -1,6 +1,7 @@
 # 技术工艺：Agent 主动动作的「我：…」回声 + 执行进度与助手回复合成一张卡
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py`
 
 ## 1. 用户拍板（三条）
 

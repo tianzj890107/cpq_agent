@@ -3,7 +3,7 @@
 血缘：承接 `dwg-conversion-adapter.md`（provider / driver / argv 分派）、
 `dwg-converter-production-rollout.md`（34 的转换器取值）、`dwg-capability-truth-and-audit.md`（能力事实与告警不许自相矛盾）。
 
-状态：**已实现**（守卫 `tests/test_converter_binary_name_recognition_red.py` 9 条全绿）
+状态：Spec + 红测（已实现）
 红测：`tests/test_converter_binary_name_recognition_red.py`
 依赖：`tech_app/backend/services/cad_converter/adapters/local_cli.py` 的 `driver_of()` / `provider_of_binary()`、
 `tech_app/backend/services/cad_converter/service.py` 的 `_resolve_chain()`

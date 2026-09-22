@@ -3,7 +3,7 @@
 血缘：承接 `deploy-build-identity.md`（部署版本身份与 `scripts/deploy_34_bare.sh`）、
 `deploy-selfcheck-skip-vs-pass.md`（自检三态；脚本自己不能制造假结论）。
 
-状态：**已实现**（守卫 `tests/test_deploy_health_wait_red.py` 8 条全绿）
+状态：Spec + 红测（已实现）
 红测：`tests/test_deploy_health_wait_red.py`
 依赖：`scripts/deploy_34_bare.sh` 第 4 步「健康检查与 PATH 核对」
 

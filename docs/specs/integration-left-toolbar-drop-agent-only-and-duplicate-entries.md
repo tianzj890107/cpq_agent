@@ -1,6 +1,7 @@
 # 技术工艺 2.2：左侧操作栏去掉 Agent 专用单步动作与重复的「整合图纸」入口
 
-状态：TDD Red，等待实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_integration_left_toolbar_drop_agent_only_and_duplicate_entries_red.py`
 
 ## 1. 问题（实测）
 

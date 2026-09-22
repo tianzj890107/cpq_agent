@@ -134,7 +134,8 @@
 
 ## 8. 实现记录（2026-09-22，Codex 实现；changelog `## 289`）
 
-状态：**已实现**。改动三处，全部落在 §3 允许范围内；§4 的禁止事项逐条未破。
+状态：Spec + 红测（已实现）（`tests/test_packaging_requirement_confirm_order_guard_red.py` 的 5 条 ERROR 属打桩元数冲突，见 changelog `## 289`；测试侧待处置）
+红测：`tests/test_packaging_requirement_confirm_order_guard_red.py`
 
 ### 8.1 后端（`tech_app/backend/services/requirement_service.py`）
 

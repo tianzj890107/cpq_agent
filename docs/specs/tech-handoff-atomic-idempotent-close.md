@@ -1,6 +1,7 @@
 # 技术工艺 / 成本 / 报告回传报价的原子闭环与幂等（批次 3）
 
-- 状态：Spec（待实现）
+- 状态：Spec + 红测（已实现）
+- 红测：`tests/test_tech_handoff_atomic_idempotent_red.py`
 - 范围：`cpq_tech_bridge.py`（回传业务命令）、`cpq_wf.py`（任务与步骤写入，改为支持外部事务连接）、
   `cpq_suite_server.py`（`/wf/tech/*` 路由与请求体）、`tech_app/backend/services/cpq_bridge.py`
   （回调客户端）、`tech_app/backend/services/cost_flow.py`、`tech_app/backend/services/report_workflow.py`

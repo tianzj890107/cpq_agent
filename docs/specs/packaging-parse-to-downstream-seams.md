@@ -1,8 +1,8 @@
 # 解析到下游三处未闭合的缝：人工字段被降级 / 配对复核读不到 / 放行留痕门禁不认
 
-状态：**已实现**（§3.1 由 `## 262` 落地；§3.2 / §3.3 由 `## 274` 落地）。
-`tests/test_packaging_parse_to_downstream_seams_red.py` 实测 `Ran 13 OK`（B1 / B2 / B3 / C1
-由红转绿，A 组 5 条与 C2 / C3 / C4 八条护栏保持绿）。
+状态：Spec + 红测（已实现）（见 changelog ## 262 / ## 274）
+红测：`tests/test_packaging_parse_to_downstream_seams_red.py`
+实测：`tests/test_packaging_parse_to_downstream_seams_red.py` `Ran 13 OK`（B1 / B2 / B3 / C1 由红转绿，A 组 5 条与 C2 / C3 / C4 八条护栏保持绿）。
 
 血缘：承接 `packaging-downstream-blockers-close-loop.md`（§1.3 人工来源判定、§1.4 配对披露、
 §3.1 放行留痕过桥）、`packaging-manual-field-confirmation.md`（门禁判据 + 人工确认通道）、

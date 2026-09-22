@@ -1,6 +1,7 @@
 # 技术工艺会话：报错按普通输出走会话流、refresh 类动作不再产生进度卡
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_chat_errors_inflow_and_drop_refresh_task_cards_red.py`
 
 ## 1. 问题（实测）
 

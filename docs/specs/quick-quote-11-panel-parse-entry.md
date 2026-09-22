@@ -1,6 +1,6 @@
 # Spec（批 11）：快速报价面板的图纸/文件入口 —— 「解析结果 → 匹配输入」上屏
 
-- 状态：Spec + 红测（已实现）（9-21 落地，见 changelog ## 254）
+- 状态：Spec + 红测（已实现）（见 changelog ## 254）
 - 覆盖：逆向快速报价前端 —— `tech_app/frontend/quick-quote-panel.js`、`cpq_agent_server.py`
   的 `/api/quick-quote/parse` 出参、`cpq_quick_quote_match.py` 的标签出口。
 红测：`tests/test_quick_quote_panel_parse_entry_red.py`

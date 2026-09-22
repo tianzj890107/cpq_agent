@@ -1,6 +1,7 @@
 # 技术工艺：步骤状态行去掉，文本原样并入统一工作台标题行
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_step_status_in_context_row_red.py`
 
 ## 1. 背景
 

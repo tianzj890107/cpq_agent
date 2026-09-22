@@ -1,6 +1,6 @@
 # 规格：部署版本身份（`/api/health` 暴露 build commit + 部署脚本落 stamp + 与 HEAD 对账）
 
-状态：Spec + 红测（**未实现**）
+状态：Spec + 红测（已实现）
 红测：`tests/test_deploy_build_identity_red.py`
 依赖：`tech_app/backend/main.py` 的 `/api/health`、`scripts/deploy_34_bare.sh`、`DEPLOYMENT.md`。
 现场证据（2026-09-21 实测，不是推断）：验收与复验期间，**只能靠功能差异反推 34 上跑的是哪个

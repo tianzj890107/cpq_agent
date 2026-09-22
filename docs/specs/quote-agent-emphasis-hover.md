@@ -1,6 +1,7 @@
 # 报价智能体强调控件改为悬浮选中态 Spec
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_quote_agent_emphasis_hover_red.py`
 
 ## 背景与目标
 

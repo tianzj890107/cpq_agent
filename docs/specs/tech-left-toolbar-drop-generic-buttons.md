@@ -1,6 +1,7 @@
 # 技术工艺：左侧会话操作栏只留当前步骤业务动作，去掉通用刷新与导航按钮
 
-状态：TDD Red，等待 DeepSeek 实现。
+状态：Spec + 红测（已实现）
+红测：`tests/test_tech_left_toolbar_drop_generic_buttons_red.py`
 
 ## 1. 问题
 
