@@ -17621,3 +17621,31 @@ packaging 全域：仍是那 5 条既有挂账，本批未引入新红
 ```
 
 未改前端、未改 `tests/` 下任何文件、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 413. 落地 `packaging-business-part-size-cost-entry`：业务部件「按权威尺寸算材料费」的入口能点了（14 OK，红基 10 红）（9-22，Codex 实现）
+
+`tech_app/frontend/app.js`：
+
+- 新增顶层纯函数 `packagingBusinessPartSizeCostTarget(row)`（Spec §C1）：判据 = 有业务编码 →
+  权威清单里有长度/宽度、且都 > 0 → 才给入口；缺尺寸 `authority_size_missing` 且文案说清两条
+  出路（确认几何映射 / 补录权威尺寸）。纯函数，可被 `node` 直接跑。
+- `openPackagingBusinessPart()` 的动作区（Spec §C2）：没绑几何那一支在**既有原因之后**追加
+  `data-qqBusinessSizeCost` 那行说明与 `#packagingBusinessPartCostBySize`（「成本测算（按权威尺寸）」）
+  —— 原因仍在最前面，`## 409` 的两支口径一个字不改；没有权威尺寸时什么都不加（不做假入口）。
+- 新增 `packagingBusinessPartSizeCost(partCode)`（Spec §C3）：复用既有内嵌 `CadInlineAnalysis`，
+  `endpointBase` 指到 `.../requirement/packaging-business-parts/{code}`（`## 412` 那条路由）；
+  不走 `selectPackagingPart()`（业务编码不在零件文档里），前端不算钱。
+- `## 412` 红测里 `E4` 那条**批次级冻结**按本批 Spec §C3 重指为"前端只多出那一条声明的请求"。
+
+实跑（`./open-claude/.venv/bin/python -W ignore -m unittest`）：
+
+```
+tests.test_packaging_business_part_size_cost_entry_red  Ran 14  FAILED (failures=9, errors=1) → Ran 14  OK
+  （红基 10 条：A1–A6 / B1–B4；护栏 C1–C4 四条始终绿）
+node --check tech_app/frontend/app.js   OK
+不回归：business_part_cost_by_authority_size + business_part_downstream_entry +
+        business_parts_and_cad_plan_view + parts_panel + parts_downstream   Ran 92  OK
+packaging 全域：仍是那 5 条既有挂账，本批未引入新红
+```
+
+未改后端、未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 未部署。

@@ -2477,6 +2477,30 @@ function packagingBusinessPartDownstreamTarget(row, partsDoc) {
   return {ok: true, part_code: String(closed[0].part_code || ""), code: "", message: ""};
 }
 
+// 业务部件「按权威尺寸算材料费」的入口判据（Spec
+// `packaging-business-part-size-cost-entry.md` §C1）：没有几何的件也能算，但**只有**权威清单里
+// 有长度/宽度时才给按钮 —— 否则又是一颗点了必然失败的按钮（那就是假入口）。
+// 纯函数：无 DOM、无 `fetch(`、无 `localStorage`，可被 node 直接执行。
+function packagingBusinessPartSizeCostTarget(row) {
+  const part = (row && typeof row === "object") ? row : {};
+  const code = String(part.business_part_code || "").trim();
+  const authority = (part.authority && typeof part.authority === "object") ? part.authority : {};
+  const positive = value => {
+    const number = Number(String(value === undefined || value === null ? "" : value).trim());
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  };
+  if (!code) {
+    return {ok: false, code: "business_part_missing", part_code: "",
+            message: "这一件没有业务部件编码，不能算材料费。"};
+  }
+  if (!positive(authority.length_mm) || !positive(authority.width_mm)) {
+    return {ok: false, code: "authority_size_missing", part_code: code,
+            message: "这一件没有权威尺寸（长度/宽度），先在平面图里确认几何映射，"
+              + "或补录权威尺寸后再算。"};
+  }
+  return {ok: true, code: "", message: "", part_code: code};
+}
+
 // 业务部件发起单件工艺 / 成本（Spec §C3）：解析出几何件编码 → 走既有取行与既有无分析入口，
 // **不**新写第二套接口 / 渲染。
 async function packagingBusinessPartAnalyze(mode, partCode) {
@@ -2486,6 +2510,35 @@ async function packagingBusinessPartAnalyze(mode, partCode) {
   }
   await selectPackagingPart(code);
   return packagingPartAnalyze(mode);
+}
+
+// 业务部件「按权威尺寸算材料费」（Spec `packaging-business-part-size-cost-entry.md` §C3）：
+// 端点走业务部件那条成本路由（`## 412`），复用既有内嵌面板；**不**走几何取行（业务编码不在零件
+// 文档里），也**不**在前端算钱 —— 数字仍然全部来自后端 `compute_line()`。
+function packagingBusinessPartSizeCost(partCode) {
+  const code = String(partCode || "").trim();
+  if (!code) {
+    return {ok: false, error: {code: "no-part-code", message: "这一件没有业务部件编码。"}};
+  }
+  const host = $("analysisHost");
+  if (!host || !window.CadInlineAnalysis) {
+    return {ok: false,
+            error: {code: "no-analysis-host", message: "当前看板没有可用的分析渲染区。"}};
+  }
+  const row = packagingBusinessPartRows(currentPackagingBusinessParts)
+    .find(item => String(item.business_part_code || "") === code) || {};
+  const base = `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/`
+    + encodeURIComponent(code);
+  exitBoardViewHost();
+  setRightPane("analysis", `${code} · 成本测算（按权威尺寸）`);
+  window.CadInlineAnalysis.open("cost", {
+    host,
+    projectId: currentProject,
+    part: {part_id: code, name: row.name || code},
+    endpointBase: () => base,
+    onClose: () => setRightPane("model"),
+  });
+  return {ok: true, result: {mode: "cost", partCode: code}};
 }
 
 const PACKAGING_BINDING_COPY = {
@@ -2649,6 +2702,9 @@ function openPackagingBusinessPart(code) {
     // 单件工艺 / 成本能不能发起（Spec `packaging-business-part-downstream-entry.md` §C2）：
     // 绑到闭合几何件 → 给两个按钮（点了复用几何件那套既有入口）；否则给一行原因（为什么不能算 + 下一步）。
     const target = packagingBusinessPartDownstreamTarget(row, currentPackagingParts || {});
+    // 没有几何的件那条路（Spec `packaging-business-part-size-cost-entry.md` §C2）：有权威尺寸
+    // 才给「按权威尺寸算材料费」那颗按钮，没有就还是只给原因。
+    const sizeTarget = packagingBusinessPartSizeCostTarget(row);
     const note = `<div class="packaging-part-note">单件工艺 / 成本按业务部件版本另跑；`
       + `几何没绑定只影响依赖几何的尺寸，不影响有权威尺寸的材料与采购项。</div>`;
     const downstream = target.ok
@@ -2659,7 +2715,13 @@ function openPackagingBusinessPart(code) {
         + `<button id="packagingBusinessPartCost" class="btn btn-secondary" type="button"`
         + ` data-qqBusinessDownstreamMode="cost">成本测算</button>`
       : `<div class="packaging-part-note" data-qqBusinessDownstreamReason="1">`
-        + `${esc(target.message)}</div>`;
+        + `${esc(target.message)}</div>`
+        + (sizeTarget.ok
+           ? `<div class="packaging-part-note" data-qqBusinessSizeCost="1">`
+             + `这一件没有几何：按权威清单的尺寸算材料费。</div>`
+             + `<button id="packagingBusinessPartCostBySize" class="btn btn-secondary"`
+             + ` type="button">成本测算（按权威尺寸）</button>`
+           : "");
     actions.innerHTML = downstream + note;
     const run = mode => {
       const button = $(mode === "cost" ? "packagingBusinessPartCost" : "packagingBusinessPartProcess");
@@ -2670,6 +2732,13 @@ function openPackagingBusinessPart(code) {
     if (target.ok) {
       run("process");
       run("cost");
+    } else {
+      const bySize = $("packagingBusinessPartCostBySize");
+      if (bySize && sizeTarget.ok) {
+        bySize.addEventListener("click", () => {
+          packagingBusinessPartSizeCost(sizeTarget.part_code);
+        });
+      }
     }
   }
   highlightPackagingBusinessPart(wanted, (binding.component_ids || []).concat(binding.entity_ids || []));

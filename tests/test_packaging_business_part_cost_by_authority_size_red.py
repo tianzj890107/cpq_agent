@@ -394,12 +394,16 @@ class EGuardrails(unittest.TestCase):
         self.assertNotIn("business_cost_inputs", src, "成本算法与费率一个字不改（Spec §C5）")
 
     def test_e4_no_frontend_change(self):
+        # `## 412` 是后端批：这条原本是"前端一行不许动"的**批次级冻结**；`## 413` 按
+        # Spec `packaging-business-part-size-cost-entry.md` 补上了面板入口，冻结随之**重指**
+        # 为"前端只多出那一条声明的业务件成本请求"（重指不等于放宽：新入口只许有一处）。
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
-        self.assertNotIn("packagingBusinessPartCostBySize", src,
-                         "面板入口是下一批：本批不许动前端（Spec §C5）")
-        # 既有前端里本来就有业务部件那几条路由（`## 368` 那批），这里只保证本批没加新入口。
-        self.assertEqual(2, src.count("packaging-business-parts/"),
-                         "既有前端请求逐条不变（Spec §C5）")
+        self.assertEqual(3, src.count("packaging-business-parts/"),
+                         "多出来的那一条必须指向业务部件成本路由（Spec §C3）")
+        self.assertEqual(1, src.count('id="packagingBusinessPartCostBySize"'),
+                         "面板入口的按钮只许有一处（Spec §C2）")
+        self.assertEqual(1, src.count('$("packagingBusinessPartCostBySize")'),
+                         "按钮的绑定点也只许有一处（Spec §C2）")
 
 
 if __name__ == "__main__":
