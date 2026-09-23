@@ -76,6 +76,14 @@ _POSITION_TOKEN = re.compile(r"^(左盖|右盖|左盒|右盒|顶托|底托|内�
 #: 证据面口径是版本化的（Spec §3.1：证据类别闭集与配对规则一起演进）。
 EVIDENCE_VERSION = "packaging-business-parts-evidence/1"
 
+#: 绑定链断了的稳定码（Spec `packaging-business-parts-outline-bbox-broken-link.md` §1.3）：
+#: `business_part_total > 0` 却一件都没绑上图（`bound + partial == 0`）时，`detail.outline_link`
+#: 必须带上它 —— 一整份清单一件都没绑上，不是"个别件没找到轮廓"。
+OUTLINE_LINK_BROKEN = "PACKAGING_BUSINESS_PARTS_OUTLINE_LINK_BROKEN"
+
+#: 区域记录拿不到轮廓矩形时的原因码（Spec §1.2：不许静默产出 bbox/center 全空的记录）。
+REASON_NO_OUTLINE_BBOX = "no_outline_bbox"
+
 #: 稳定原因码（Spec §3.2 第 2 条：拿不到证据的件必须逐件留痕，不许静默少报）。
 REASON_NO_OUTLINE = "no_outline_evidence"
 REASON_SIZE_UNKNOWN = "outline_size_unknown"
@@ -579,6 +587,16 @@ def build_geometry_regions(cad_ir: Any) -> List[Dict[str, Any]]:
 #: 几何零件文档的行 → 区域（Spec §3 的 `geometry_component_total` 报的是**过滤后**的分量数，
 #: 真样本 263；IR 的原始连通分量是 1163，那是过滤前的事实，别混着用）。
 def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
+    """几何零件文档 → 区域（Spec §1.1/§1.2）。
+
+    矩形必须走**唯一读法** `packaging_parts.part_outline_rect(row)`（顶层 `bbox` 否则
+    `outline.bbox`）—— 这里以前写的是 `row.get("bbox")`，而真样本 263/312 行只有
+    `outline.bbox`，于是每条 region 的 `bbox`/`center` 全空，`_assign_outlines()` 里
+    "没有中心就 continue" 把整条绑定链掐死（酒盒 26 行、圆盘盒 66 行 bind 0）。
+    拿不到矩形的行**留痕**：`excluded = no_outline_bbox` 且 `substantial = False`。
+    """
+    from . import packaging_parts as parts_module
+
     doc = geometry_parts if isinstance(geometry_parts, dict) else {}
     regions: List[Dict[str, Any]] = []
     for index, row in enumerate(doc.get("parts") or [], start=1):
@@ -586,16 +604,18 @@ def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
             continue
         component_id = _text(row.get("component_id")) or _text(row.get("part_code"))
         part_code = _text(row.get("part_code")) or str(index)
+        rect = parts_module.part_outline_rect(row)
         regions.append(_region_record(
             "region:%s" % part_code,
             [component_id] if component_id else [],
             row.get("entity_ids"),
-            row.get("bbox"),
+            rect,
             row.get("unfolded_length_mm"),
             row.get("unfolded_width_mm"),
             row.get("layers"),
             row.get("area_mm2"),
             row.get("outline_status"),
+            "" if rect else REASON_NO_OUTLINE_BBOX,
         ))
     return regions
 
@@ -1251,6 +1271,14 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
             reasons_breakdown[reason] = reasons_breakdown.get(reason, 0) + 1
     unobservable_total = len([row for row in rows
                               if set((row.get("evidence") or {}).get("kinds") or []) == {"text_anchor"}])
+    regions_with_center_total = len([region for region in regions if _region_center(region)])
+    linked_total = int(match["bound_total"]) + int(match["partial_total"])
+    outline_link: Dict[str, Any] = {
+        "business_part_total": len(rows),
+        "region_total": len(regions),
+        "regions_with_center_total": regions_with_center_total,
+        "code": OUTLINE_LINK_BROKEN if (rows and linked_total == 0) else "",
+    }
     labeled_regions = {_text((row.get("evidence") or {}).get("drawing_ref", {}).get("region_id"))
                        for row in rows if _text((row.get("evidence") or {})
                                                 .get("drawing_ref", {}).get("region_id"))}
@@ -1283,6 +1311,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "unobservable_total": unobservable_total,
         "unobservable_reason": "row_has_no_drawing_evidence_beyond_its_name",
         "unlabeled_outline_total": unlabeled_outline_total,
+        "regions_with_center_total": regions_with_center_total,
+        "outline_link": outline_link,
         "group_total": len(group_plans),
         "group_plans": group_plans,
         "size_source_counts": _count_by(rows, lambda row: _text(
@@ -1326,7 +1356,8 @@ __all__ = [
     "DRAWING_REF_KINDS", "ENGINE_VERSION", "EVIDENCE_KINDS", "EVIDENCE_VERSION",
     "GLOBAL_ASSIGNMENT_RULE_ID", "GROUP_MEMBER_MIN_AREA_MM2", "MIN_OUTLINE_AREA_MM2",
     "MIN_OUTLINE_ENTITIES", "MIN_OUTLINE_SIDE_MM", "MIRROR_DIRECTIONS",
-    "OUTLINE_MATCH_RADIUS_MM", "REASON_NO_OUTLINE", "REASON_SIZE_UNKNOWN",
+    "OUTLINE_LINK_BROKEN", "OUTLINE_MATCH_RADIUS_MM", "REASON_NO_OUTLINE",
+    "REASON_NO_OUTLINE_BBOX", "REASON_SIZE_UNKNOWN",
     "REASON_UNLABELED_OUTLINE", "RUNTIME_REFUSED_SOURCES", "SAME_SIZE_PARTS_NOT_MERGED",
     "build_geometry_regions", "dimension_rects", "extract_text_anchors", "load_seed",
     "match_authority_parts", "normalize_part_label", "plan_family_groups",

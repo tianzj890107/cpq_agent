@@ -18880,3 +18880,64 @@ Ran 2618 tests ... FAILED (failures=10, skipped=10)
 precision 直接塌），只进原因账。
 
 未 push / MR / tag / Release / 部署，未连 PG、未起服务、未改任何业务数据。
+
+## 461. 落地 `packaging-business-parts-outline-bbox-broken-link`：业务部件绑不上图的真因是字段路径 —— 轮廓矩形在 `outline.bbox` 里、区域记录却读 `row["bbox"]`，于是每条 region 的 `bbox`/`center` 全空、`_assign_outlines()` 每件都 continue；新增唯一读法 `part_outline_rect()` + 区域自证 + 断链自证（16 OK，红基 11 红 / 1 skip；不回归 225 OK）（9-23，Codex 实现）
+
+真跑现场（隔离 `DATA_DIR`，酒盒 / 圆盘盒各建一个包装行业项目跑 `run_flow()`）：八步 flow 两份都 8/8，
+来源闭集也已按新口径落地，但**一件都绑不上图** —— 酒盒 26 行 `bound+partial 0 / unbound 26`、
+圆盘盒 66 行同样 0，行级原因一律 `no_outline_evidence`，有尺寸的件 0。
+
+真因（字段级，两条证据链都实测）：`packaging_parts.extract()` 把轮廓矩形放在 `row["outline"]["bbox"]`
+（真样本 263/312 行都有），行顶层**没有** `bbox` 键；而
+`regions_from_geometry_parts()`（`packaging_business_part_resolver.py`）读的是 `row.get("bbox")`
+→ 每条 region 的 `bbox`/`center` 全空 → `_assign_outlines()` 里 `_region_center(region) is None`
+→ **每一件都 continue**。图纸流正是把这份文档交给解析器的，所以线上一模一样是 0 绑定。
+
+改了两个文件：
+
+1. `packaging_parts.py` 新增纯函数 `part_outline_rect(row)`：行顶层 `bbox` 优先，否则由
+   `outline.bbox` **明确派生**，两处都没有回 `None` —— 轮廓矩形只有这一个读法，下游不许再猜
+   字段路径（只读，不往行里塞键、不删 `outline.bbox`）。
+2. `packaging_business_part_resolver.py`：
+   - `regions_from_geometry_parts()` 改用它；**拿不到矩形的行必须自证**：`excluded="no_outline_bbox"`、
+     `substantial=False`（静默空值就是这条链断了两天没人发现的原因）；有矩形的一律给 `bbox` + `center`；
+   - 新增模块级常量 `OUTLINE_LINK_BROKEN = "PACKAGING_BUSINESS_PARTS_OUTLINE_LINK_BROKEN"`：
+     `business_part_total > 0` 且 `bound + partial == 0` 时，`detail.outline_link` 带码与三个计数
+     （`business_part_total` / `region_total` / `regions_with_center_total`）；绑定通时 `code=""`；
+   - `detail["regions_with_center_total"]` 无条件出现（页面与运维据此判断这条链是否可用）。
+
+实测（两份真样本，`regions_from_geometry_parts()` 走真几何零件文档）：
+
+```
+酒盒  ：regions 有 center 263/263；business_part_total 26；bound 26 / partial 0 / unbound 0；
+         derived 26 件（门槛 20）
+圆盘盒：regions 有 center 312/312；business_part_total 66；bound 39 / partial 0 / unbound 27；
+         derived 39 件（门槛 31）
+断链码：两份样本都不出现（绑定已通）
+提取口径不变：零件仍 263 / 312，closed_ratio 仍 0.510 / 0.817，两次提取逐字相同
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_business_parts_outline_bbox_link_red
+Ran 16 tests ... OK                    # 红基 Ran 16 ... FAILED (failures=11, skipped=1)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_extraction_red \
+    tests.test_packaging_parts_outline_red tests.test_packaging_parts_components_red \
+    tests.test_packaging_bom_business_parts_rows_red tests.test_packaging_drawing_flow_red \
+    tests.test_packaging_parts_must_come_from_the_drawing_red \
+    tests.test_packaging_business_parts_and_cad_plan_view_red \
+    tests.test_packaging_business_parts_binding_size_source_red \
+    tests.test_packaging_business_parts_must_come_from_all_drawing_evidence_red
+Ran 225 tests ... OK (skipped=2)       # 142 + 83，与 Spec §1.7 的两组逐项对上
+```
+
+边界（写进 Spec §7）：本批只钉"矩形可读 + 区域自证 + 断链自证 + 真样本绑定件数"，**没有**校验
+绑上之后尺寸对不对（`size_confirmed=false` 的几何猜测尺寸也算 `bound`）—— 那是承接的
+`packaging-business-part-size-must-be-confirmed-by-dimension.md` 管的事。
+
+注：本批 Spec 头写的是 `## 461`，同一时刻落地的 `tech-projection-step-state-must-agree-with-its-reasons.md`
+也写了 `## 461`（号撞了）；本批按自己的号提交，另一批请另取号。
+
+未 push / MR / tag / Release / 部署，未连 PG、未起服务、未写业务数据。

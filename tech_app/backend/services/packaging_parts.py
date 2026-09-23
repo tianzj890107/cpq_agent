@@ -532,6 +532,30 @@ def _bbox_of(component: Dict[str, Any], entities: List[Dict[str, Any]]) -> Optio
             max(box[2] for box in boxes), max(box[3] for box in boxes)]
 
 
+def part_outline_rect(row: Any) -> Optional[List[float]]:
+    """几何零件行的**轮廓矩形**（Spec `packaging-business-parts-outline-bbox-broken-link.md` §1.1）。
+
+    唯一的读法：行顶层 `bbox` 优先，否则由 `outline.bbox` **明确派生**；两处都没有就 `None`。
+    为什么要单独一个函数：真样本 263/312 行把矩形放在 `outline.bbox` 里，行顶层**没有** `bbox`
+    键 —— 下游各自猜字段路径的结果就是整条绑定链悄悄断掉（酒盒 26 行、圆盘盒 66 行一件都绑不上）。
+
+    冻结：本函数只**读**，不改文档（不许为了"能读到"往行里塞一个与既有口径重复的 `bbox`）。
+    """
+    if not isinstance(row, dict):
+        return None
+    candidates: List[Any] = [row.get("bbox")]
+    outline = row.get("outline")
+    if isinstance(outline, dict):
+        candidates.append(outline.get("bbox"))
+    for candidate in candidates:
+        if not isinstance(candidate, (list, tuple)) or len(candidate) < 4:
+            continue
+        values = [_num(item) for item in candidate[:4]]
+        if all(item is not None for item in values):
+            return [float(item) for item in values]
+    return None
+
+
 def _layer_roles(ir: Dict[str, Any], semantics: Any) -> Dict[str, str]:
     """图层名（大写）→ 角色。有语义文档就用它，否则现算一份（同一套规则）。
 
