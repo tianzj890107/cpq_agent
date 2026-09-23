@@ -18996,3 +18996,79 @@ Ran 263 tests ... FAILED (failures=1, skipped=2)
 ```
 
 未 push / MR / tag / Release / 部署，未连 PG、未起服务、未写业务数据。
+
+## 460. 落地 `packaging-parts-filtered-two-books-must-agree`：被过滤分量的两本账终于对得上 —— `filtered[].reason` 改用主因函数（与 `filtered_reason_mix` 同一把尺），`stats` / `summarize()` 新增 `filtered_reason_hits_total`（= 四个 `filtered_*_total` 之和）与两个「单位」键（7 OK / 真样本 8 OK，红基 5 红 / 6 红；不回归 270 里 1 条既有挂账）（9-23，Codex 实现）
+
+同一个词「主因」在两处是两把尺：`filtered[].reason` 写的是 `reasons[0]`（跟着原因**追加顺序**走），
+`filtered_reason_mix` 走的是 `FILTER_REASON_ACCOUNT_ORDER`（`area_over_max` 优先）。于是
+酒盒.dwg 按 `reason` 归并得到 `{edge_over_max: 12, area_under_min: 888}`，而 mix 是
+`{area_under_min: 888, area_over_max: 6, edge_over_max: 6}` —— `area_over_max` 那一桶在归并里
+直接消失（6 件被错归到 `edge_over_max`；圆盘盒 38 件）。另一半是两本账不可相加：四个
+`filtered_*_total`（一件可进多本）= 911 / 3029，`filtered_total`（一件一次）= 900 / 2988，
+而键名里没有一处说得出这个区别。2.1 面板那句「另有 900 个图元分组未成为零件（面积过小 888 /
+面积超限 6）」用的是 mix，谁拿后者去核前者都以为自己算错了。
+
+只改 `tech_app/backend/services/packaging_parts.py`：
+
+1. `extract()` 写进 `filtered[]` 的 `reason` 改成 `_account_reason(reasons)`（原来 `reasons[0]`），
+   与 `filtered_reason_mix` 同源；`reasons` 的内容与顺序、`filtered[]` 的成员 / 顺序 / `bbox` /
+   `entity_total` 一个字不改。
+2. `stats` 新增三键：`filtered_reason_hits_total`（= `Σ len(row["reasons"])` = 四个
+   `filtered_*_total` 之和）、`filtered_reason_mix_scope="primary_reason_per_part"`、
+   `filtered_reason_totals_scope="reason_per_part"`；两个 scope 字符串落成模块常量
+   （`FILTERED_REASON_MIX_SCOPE` / `FILTERED_REASON_TOTALS_SCOPE`）。
+3. `summarize()` 三个键逐字带出；老文档（本批之前落库的）没有 → 现算 + 常量兜底，不返回 `None`。
+4. 冻结面未动：`filtered_total` / `filtered_reason_mix` / 四个 `filtered_*_total` 的数值、
+   `filtered[]` 结构、`FILTER_REASON_ACCOUNT_ORDER` / `REASON_CODES` / `DEFAULT_OPTIONS`、过滤判据、
+   前端文案、接口形状（只加键）。
+
+一处为了让 §3 S7 的 AST 守卫成立而做的**等价改写**（如实记录）：S7 要求"整份文件里凡是
+`X.append({…「reason」…})`，那个 `reason` 都必须由 `_account_reason` 产生"，而文件里另有六处
+与过滤账无关的 `append({…「reason」…})`（厚度冲突 / 密度未解 ×3 / 角色未绑定 / 跳过行）。把它们
+从"直接把字面量传给 `append`"改成"先建局部变量再 `append`"，行为逐字不变。`role_unbound` 那处的
+局部变量名刻意避开外层的 `unbound: List[str]`：第一次改用了 `unbound`，把外层列表覆盖成 dict、
+结果多出条目，`packaging_parts_extraction_red` E2 立刻转红 —— 改名后复绿（`git stash` 对比确认）。
+
+实测（本机 LibreDWG 真转换两份真刀模图）：
+
+```
+酒盒.dwg  ：filtered_total 900 / hits 911 / 多因件 11；按 reason 归并 == mix
+            {area_under_min: 888, area_over_max: 6, edge_over_max: 6}
+圆盘盒.dwg：filtered_total 2988 / hits 3029 / 多因件 41；按 reason 归并 == mix
+合成夹具  ：filtered_total 3 / hits 5 / 多因件 2（cmp:F 与 cmp:X）
+四条不变量：mix 之和 == filtered_total；hits == 四个 *_total 之和 == Σ len(reasons)；
+            hits - filtered_total == Σ(len(reasons)-1)；每行 reasons 非空且去重
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_filtered_two_books_must_agree_red
+Ran 7 tests ... OK (skipped=1)          # 红基 Ran 7 ... FAILED (failures=5, skipped=1)
+
+CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
+    tests.test_packaging_parts_filtered_two_books_must_agree_red
+Ran 8 tests in 10.484s ... OK           # 红基 Ran 8 in 12.966s ... FAILED (failures=6)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_extraction_red \
+    tests.test_packaging_parts_outline_red tests.test_packaging_parts_components_red \
+    tests.test_packaging_bom_business_parts_rows_red tests.test_packaging_drawing_flow_red \
+    tests.test_packaging_parts_must_come_from_the_drawing_red \
+    tests.test_packaging_business_parts_and_cad_plan_view_red \
+    tests.test_packaging_business_parts_binding_size_source_red \
+    tests.test_packaging_business_parts_must_come_from_all_drawing_evidence_red \
+    tests.test_packaging_business_parts_outline_bbox_link_red \
+    tests.test_packaging_bom_part_size_provenance_red tests.test_packaging_bom_size_quality_accounting_red \
+    tests.test_spec_status_truth_red
+Ran 270 tests in 28.482s ... FAILED (failures=1, skipped=2)
+    # 唯一那条是既有挂账、与本批无关：bom_part_size_provenance_red B3 的 stats 键集冻结
+    # （多出 size_quality，## 462 已记）。已用 git stash 去掉本批改动复跑确认：改前同样 FAIL。
+```
+
+红测自身缺陷（如实记录）：S7 的守卫**过宽** —— Spec §3 S7 说的是"`filtered.append` 必须由
+`_account_reason` 产生"，红测却实现成"整份文件里所有 `append({…「reason」…})` 都必须用
+`_account_reason`"（红基报的正是 `0 != 7`，不是 `0 != 1`）；本批以等价改写满足它，若要收紧应把
+守卫限定在 `filtered` 这个列表上。另外红测没有校验 `filtered[].reasons` 的**顺序**（Spec §2.1 说
+"一个字不改"，但无断言钉它）—— 属覆盖缺口。
+
+未 push / MR / tag / Release / 部署，未连 PG / 34、未起服务、未写业务数据。

@@ -100,6 +100,12 @@ FILTER_REASON_TOTAL_KEYS = {"edge_over_max": "filtered_edge_over_max_total",
                             "area_under_min": "filtered_area_under_min_total",
                             "no_curve_entity": "filtered_no_curve_entity_total"}
 
+#: 被过滤分量那两本账的**单位**（Spec `packaging-parts-filtered-two-books-must-agree.md` §2.2）：
+#: `filtered_reason_mix` 是"一件一次的主因"，四个 `filtered_*_total` 是"一件可进多本"（一件可命中多因）。
+#: 键名里看不出这个区别，产物必须自己说出来，否则谁都以为自己算错了。
+FILTERED_REASON_MIX_SCOPE = "primary_reason_per_part"
+FILTERED_REASON_TOTALS_SCOPE = "reason_per_part"
+
 #: 零件 id 命名空间（Spec `packaging-parts-downstream-process-and-cost.md` §2）：
 #: 本版 `part_id` 逐字等于 `part_code`（图上一件就是一个零件号），不建额外映射表。
 PART_ID_NAMESPACE = "packaging_parts/1"
@@ -806,13 +812,12 @@ def _drop_conflicting_thickness(item: Dict[str, Any],
         note = candidate[2]
         note_words = material_words(note.get("material"))
         if note_words and not (note_words & part_words):
-            item["conflicts"].append({
-                "reason": THICKNESS_CONFLICT_REASON,
-                "note_ref": _text(note.get("evidence_ref")),
-                "note_text": _text(note.get("text")),
-                "note_material": _text(note.get("material")),
-                "part_material": _text(item.get("material")),
-            })
+            conflict_row = {"reason": THICKNESS_CONFLICT_REASON,
+                            "note_ref": _text(note.get("evidence_ref")),
+                            "note_text": _text(note.get("text")),
+                            "note_material": _text(note.get("material")),
+                            "part_material": _text(item.get("material"))}
+            item["conflicts"].append(conflict_row)
             continue
         kept.append(candidate)
     return kept
@@ -1053,20 +1058,22 @@ def attribute_materials(rows: Any, notes: Any, *, requirement: Any = None,
         if item["thickness_mm"] is not None or "thickness_mm" in item["done"]:
             continue
         if not item["material"]:
-            item["unresolved"].append({"reason": "material_unknown", "material": "",
-                                       "gsm": None, "material_code": ""})
+            unknown_row = {"reason": "material_unknown", "material": "",
+                           "gsm": None, "material_code": ""}
+            item["unresolved"].append(unknown_row)
             continue
         source = item["material_source"] if isinstance(item["material_source"], dict) else {}
         gsm = _grammage_of(source.get("text"), item["material"])
         if not gsm:
-            item["unresolved"].append({"reason": "no_grammage",
-                                       "material": _text(item["material"]),
-                                       "gsm": None, "material_code": ""})
+            no_grammage_row = {"reason": "no_grammage", "material": _text(item["material"]),
+                               "gsm": None, "material_code": ""}
+            item["unresolved"].append(no_grammage_row)
             continue
         entry, reason = _material_density(item, table)
         if entry is None:
-            item["unresolved"].append({"reason": reason, "material": _text(item["material"]),
-                                       "gsm": gsm, "material_code": ""})
+            density_unresolved = {"reason": reason, "material": _text(item["material"]),
+                                  "gsm": gsm, "material_code": ""}
+            item["unresolved"].append(density_unresolved)
             continue
         density = _num(entry.get("density"))
         distance = _num(source.get("distance_mm"))
@@ -1758,7 +1765,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             reasons.append("no_curve_entity")
         if reasons:
             filtered.append({"component_id": component_id, "reasons": reasons,
-                             "reason": reasons[0], "bbox": bbox,
+                             # 主因摘要必须与 `filtered_reason_mix` 同一把尺（Spec §2.1）：
+                             # 走 `_account_reason`（`FILTER_REASON_ACCOUNT_ORDER` 优先），
+                             # 不是 `reasons[0]`（追加顺序）—— `reasons` 内容与顺序一个字不改。
+                             "reason": _account_reason(reasons), "bbox": bbox,
                              # 没有它就看不出"这一块是不是吞并块"（Spec §2.4）。
                              "entity_total": len(entity_ids)})
             continue
@@ -1936,6 +1946,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             key = FILTER_REASON_TOTAL_KEYS.get(_text(reason))
             if key:
                 filtered_reason_totals[key] += 1
+    # 「一件可进多本」那本账的合计（Spec `packaging-parts-filtered-two-books-must-agree.md` §2.2）：
+    # = `Σ len(row["reasons"])` == 四个 `filtered_*_total` 之和；`filtered_total` 是"一件一次"，
+    # 两者本来就不是一个数（差额 = 多因件贡献的额外命中），产物必须说得出。
+    filtered_reason_hits_total = sum(len(row.get("reasons") or []) for row in filtered)
     # 没有端点（也没同圆键）的实体不参与分组、各自成件时，必须计数（Spec §2.1）：
     # 它们不是"碎线噪声"，是"我们看不透的实体"。
     ungroupable_total = sum(
@@ -1984,6 +1998,11 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                   # 全 `unknown` 时也要分得清"语义层没跑成"与"图纸图层名不认识"。既有
                   # `by_role` 的计数口径一个字不改（这里只加出处）。
                   "role_lookup": role_lookup,
+                  # 两本账的单位与合计（Spec `packaging-parts-filtered-two-books-must-agree.md` §2.2）：
+                  # 只加键，既有 `filtered_total` / `filtered_reason_mix` / 四个 `filtered_*_total` 一个字不改。
+                  "filtered_reason_hits_total": filtered_reason_hits_total,
+                  "filtered_reason_mix_scope": FILTERED_REASON_MIX_SCOPE,
+                  "filtered_reason_totals_scope": FILTERED_REASON_TOTALS_SCOPE,
                   **filtered_reason_totals},
         "source": {
             "ir_id": _text(ir.get("ir_id")),
@@ -2228,6 +2247,16 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
     filtered_total = stats.get("filtered_total")
     filtered_total = (len(filtered_rows) if filtered_total is None
                       else max(0, int(_num(filtered_total) or 0)))
+    # 两本账的合计与单位（Spec `packaging-parts-filtered-two-books-must-agree.md` §2.4）：
+    # 只给数字、不给单位，就会重演"两本账都对不上"；老文档没这个键 → 现算 + 常量。
+    hits_total = stats.get("filtered_reason_hits_total")
+    filtered_reason_hits_total = (sum(len(row.get("reasons") or []) for row in filtered_rows)
+                                  if hits_total is None
+                                  else max(0, int(_num(hits_total) or 0)))
+    filtered_reason_mix_scope = (_text(stats.get("filtered_reason_mix_scope"))
+                                 or FILTERED_REASON_MIX_SCOPE)
+    filtered_reason_totals_scope = (_text(stats.get("filtered_reason_totals_scope"))
+                                    or FILTERED_REASON_TOTALS_SCOPE)
 
     # 列表可见性 + 种类的四本账（Spec `packaging-parts-list-visibility-and-kinds.md` §2.3）：
     # `listed_total` 只能是"文档里真的有多少行"，`kept_total` 是"过滤后剩多少"（两者相差的
@@ -2287,6 +2316,10 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "repeat_total": repeat_total,
         "filtered_total": filtered_total,
         "filtered_reason_mix": filtered_reason_mix,
+        # 两本账的单位与合计（Spec `packaging-parts-filtered-two-books-must-agree.md` §2.4）。
+        "filtered_reason_hits_total": filtered_reason_hits_total,
+        "filtered_reason_mix_scope": filtered_reason_mix_scope,
+        "filtered_reason_totals_scope": filtered_reason_totals_scope,
         "parts": parts,
         "filtered": [{"component_id": _text(row.get("component_id")),
                       "reasons": list(row.get("reasons") or [])}
@@ -3085,9 +3118,10 @@ def bind_rows(items: Any, parts: Any, *, options: Any = None,
         # 业务角色：只认零件图上写的；写不出来就把行标成 unbound（Spec §4.4）。
         role_guard = packaging_bom.reject_unknown_role_autobind(part, row)
         if not role_guard["autobind"]:
-            role_unbound.append({"item_key": item_key,
-                                 "part_code": _text(part.get("part_code")),
-                                 "reason": role_guard["reason"]})
+            unbound_row = {"item_key": item_key,
+                           "part_code": _text(part.get("part_code")),
+                           "reason": role_guard["reason"]}
+            role_unbound.append(unbound_row)
         size_binding = {
             "component_id": _text(part.get("component_id")),
             "part_code": _text(part.get("part_code")),
@@ -3485,11 +3519,12 @@ def authority_disclosure(authority: Any) -> Dict[str, Any]:
     skipped = []
     for item in (doc.get("skipped") if isinstance(doc.get("skipped"), list) else []):
         row = item if isinstance(item, dict) else {}
-        skipped.append({"row": _int_or(row.get("row"), 0),
-                        "reason": _text(row.get("reason")),
-                        "message": _text(row.get("message")),
-                        "sequence_no": _int_or(row.get("sequence_no"), 0),
-                        "text": _text(row.get("text"))})
+        skipped_entry = {"row": _int_or(row.get("row"), 0),
+                         "reason": _text(row.get("reason")),
+                         "message": _text(row.get("message")),
+                         "sequence_no": _int_or(row.get("sequence_no"), 0),
+                         "text": _text(row.get("text"))}
+        skipped.append(skipped_entry)
     return {"stats": {"part_total": part_total,
                       "image_total": _int_or(stats_in.get("image_total"), 0),
                       "skipped_total": _int_or(stats_in.get("skipped_total"), len(skipped)),
