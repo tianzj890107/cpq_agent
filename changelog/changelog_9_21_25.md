@@ -18185,3 +18185,19 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `test_spec_status_truth_red` = `Ran 7 OK`；`git diff --check` 无空白问题。
 
 未改任何业务实现、未放宽任何断言、未连 PG / 34、未写业务数据。
+
+## 435. 上线记录：`56525f2` 部署到 34（ytbz；GitLab 与 GitHub 双远端均已推送；生产门禁 auto 17 ok / 0 fail、2 项 manual 待签字）（9-23，Codex）
+
+- **提交**：`56525f2`（本批自身是 `## 434`）。连同本地积压的提交一并上线，34 从 `6cba612` → `56525f2`。
+- **推送**：GitLab `ytbz` 与 GitHub `ytbz` 回读均为 `56525f282b62a5309f56e0d2aaa33ddae86220be`。
+  本机 DNS 解析不到 `gitlab.boulderaitech.com`（公网 DNS NXDOMAIN），本次 GitLab 推送改走 34 上
+  7890 代理的 SSH CONNECT 隧道完成（`nc -X connect -x 172.16.10.34:7890`），未改远端配置、未 force push。
+- **部署**：`bash scripts/deploy_34_bare.sh ytbz` 全绿 —— env 幂等重写、纯快进、
+  先子后父重启、`status=ok`、启动命令行 `PATH` 含 xvfb 目录；两份真实样本
+  `酒盒.dwg` / `圆盘盒.dwg` 真转且 `converter_role=primary` / `fallback_used=false`
+  （6711 / 3457 实体、图层 8 / 32）；隔离端到端自检 `verdict=ok`
+  （八步 8/8；零件 263 / 312 件；代表件 `DWG-P03` / `DWG-P02` 挤出 ok；
+  两条权威实样路线 9 / 10 道 confirm=confirmed），运行目录项目数 65 → 65（未写生产数据）。
+- **门禁**：`dwg_deploy_gate.py --env production` = auto 项 17 ok / 0 fail，剩
+  `converter_license`、`real_samples_e2e_passed` 两项 manual 待人工签字（**未代签**）。
+- 对外能力声明仍只能写：DWG 编排能力完成，真实转换能力未验收。
