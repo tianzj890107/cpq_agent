@@ -244,9 +244,12 @@ class CGuardrails(unittest.TestCase):
     def test_c4_the_412_freeze_is_repointed_not_loosened(self):
         # `## 412` 的 E4 原本锁"前端只多出那一条声明的业务件成本请求"；本批按 Spec §C4 把它
         # **重指**为"成本一条 + 工艺一条"（重指≠放宽：多出来的必须逐个点名）。
+        # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 再**重指**
+        # 一次（计数 4 → 5）：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
+        # 重指不等于放宽：计数仍精确相等，多出来的一条在这里点名。
         src = _source(APP_JS)
-        self.assertEqual(4, src.count("packaging-business-parts/"),
-                         "前端只许多出那一条声明的工艺请求（Spec §C4）")
+        self.assertEqual(5, src.count("packaging-business-parts/"),
+                         "前端只许多出那两条声明的业务件请求（工艺 + 补推导；Spec §C4 / 2.1-result §2.4b）")
         red = _source(COST_ENTRY_RED)
         self.assertIn("重指", red, "`## 412` 的 E4 必须写明重指而不是偷偷放宽（Spec §C4）")
         self.assertIn("4", red.split("test_e4_no_frontend_change")[1][:900],

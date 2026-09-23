@@ -217,6 +217,10 @@
                   <div class="role-map-summary">还没读取未映射清单。</div>
                 </div>
               </div>
+              <!-- 包装 2.1 撤掉 3D 三块之后，未选中零件时右栏只留这一句引导
+                   （Spec packaging-2-1-result-parts-and-shape-only-pane.md §2.4）：
+                   点左栏一件零件，形状直接画在右边；这里不留 300px 空画布。 -->
+              <div id="packagingShapeIdle" class="packaging-part-idle" hidden>从左栏选一件零件，这里直接看它的形状。</div>
               <div class="part-details"><div class="part-details-title">零件信息</div><div id="partDetail" class="part-detail"><div class="view-3d-placeholder">从「零件清单」中选择一项，查看模型、识别依据和生成结果。</div></div></div>
               <!-- 可收起的分区一律默认展开：收起状态会让「已经算出来的结果」看起来没算。 -->
               <details class="parameter-panel" open><summary>查看并编辑零件参数（专家模式）</summary><div id="parameterEditor">选择零件后可查看参数。</div></details>

@@ -402,9 +402,12 @@ class EGuardrails(unittest.TestCase):
         #   `## 413` 的成本入口（`id="packagingBusinessPartCostBySize"`）、
         #   `## 415` 的工艺入口（`id="packagingBusinessPartProcessByAuthority"`）；
         # 计数从 3 变 4，多出来的那一条必须指向业务部件工艺路由（Spec §C3）。
+        # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 把这条
+        # 冻结**重指**为 5：多出来的那一条是按图纸补推导（`…/packaging-business-parts/derive`）。
+        # 重指不等于放宽 —— 计数仍精确相等，多出来的那一条在这里点名。
         src = _source(ROOT / "tech_app" / "frontend" / "app.js")
-        self.assertEqual(4, src.count("packaging-business-parts/"),
-                         "多出来的两条必须指向业务部件那两条路由（Spec §C3）")
+        self.assertEqual(5, src.count("packaging-business-parts/"),
+                         "多出来的三条必须指向业务部件那三条路由（Spec §C3 + 2.1-result §2.4b）")
         self.assertEqual(1, src.count('id="packagingBusinessPartCostBySize"'),
                          "面板入口的按钮只许有一处（Spec §C2）")
         self.assertEqual(1, src.count('$("packagingBusinessPartCostBySize")'),

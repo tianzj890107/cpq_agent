@@ -7496,6 +7496,66 @@ def import_packaging_business_parts(
     return result
 
 
+#: 按图纸**就地补推导**业务部件文档（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6）。
+#: 老项目 / 只跑过旧链路的项目：零件文档在、业务部件文档不在 —— 打开 2.1 不该只看到几百行几何
+#: 占位名，也不该让人重建项目。路径写成具名常量（与上面几批同口径），路由真实存在、源码逐字可见。
+PACKAGING_BUSINESS_PARTS_DERIVE_PATH = (
+    "/api/projects/{pid}/requirement/packaging-business-parts/derive")
+
+
+@app.post(PACKAGING_BUSINESS_PARTS_DERIVE_PATH)
+def derive_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
+    """按 DWG 证据推一版业务部件清单（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6）。
+
+    与一键解析里那一步**同一条推导**：复用 `resolve_business_parts()` →
+    `business_parts_document()` → `save_business_parts()`，附件 / 知识库 / 金标一律不传
+    （那些是被拒绝的输入，解析只吃图纸）。幂等：同一份图纸重复调用得到同一个
+    `business_parts_id`，旧版本一个不删；这里**不重跑**整条链路、不改锚点 / 语义 / 零件文档。
+
+    推不出来（这张图上没有名称证据）时给稳定原因码与下一步 —— 页面据此说"为什么没有 +
+    下一步做什么"，**不**让用户重新上传图纸、也不让重建项目。
+    """
+    _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
+             "需要工艺经理、工艺技术总监或管理员权限")
+    _workflow_project(pid)
+    geometry = packaging_parts.load_parts(pid) or {}
+    components = packaging_parts.geometry_evidence_of(geometry).get("components") or []
+    if not components:
+        raise HTTPException(409, {
+            "code": "packaging_parts_missing",
+            "message": "这个项目还没有零件文档，先跑一次「一键解析图纸」再补业务部件清单。",
+            "action": "在 2.1 点「一键解析图纸」，跑完再回来。"})
+    # 解析器是依赖缝（与一键解析同一条路）：从 services 里现取，不把它绑进本模块的导入图。
+    from .services import packaging_business_part_resolver as business_resolver
+    ir = cad_ir.load_ir(pid) or {}
+    outcome = business_resolver.resolve_business_parts(pid, ir, geometry, None, None)
+    outcome = outcome if isinstance(outcome, dict) else {}
+    detail = outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {}
+    if str(detail.get("authority_source") or "") != "dwg":
+        raise HTTPException(409, {
+            "code": "business_parts_no_name_evidence",
+            "message": "这张图上没有可用的名称证据，推不出业务部件清单。",
+            "action": "确认上传的是带件名的图纸；推不出来时业务部件清单要由权威清单导入。"})
+    document = packaging_parts.business_parts_document(outcome.get("authority") or {}, geometry,
+                                                      bindings=outcome.get("match"))
+    saved = packaging_parts.save_business_parts(pid, document)
+    store.audit(pid, "workflow:packaging_business_parts_derived", {
+        "business_parts_id": saved.get("business_parts_id"),
+        "business_part_total": (saved.get("stats") or {}).get("business_part_total"),
+        "bound_total": (saved.get("stats") or {}).get("bound_total"),
+        "authority_source": str(detail.get("authority_source") or ""),
+        "by": str(user.get("username") or ""),
+    })
+    result = _business_parts_body(pid, saved)
+    result["derive"] = {
+        "authority_source": str(detail.get("authority_source") or ""),
+        "geometry_component_total": int(detail.get("geometry_component_total") or 0),
+        "name_anchor_total": int(detail.get("name_anchor_total") or 0),
+        "refused_sources": list(detail.get("refused_sources") or []),
+    }
+    return result
+
+
 @app.get(PACKAGING_BUSINESS_PARTS_READ_PATH)
 def read_packaging_business_parts(pid: str, user: dict = Depends(current_user)):
     """业务部件清单（纯读）：页面 / BOM / 工艺 / 成本的**唯一**部件集合。"""

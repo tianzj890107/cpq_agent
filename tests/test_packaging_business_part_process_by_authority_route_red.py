@@ -551,9 +551,11 @@ class FGuardrails(unittest.TestCase):
         # `packaging-business-part-process-entry.md` §C4 把工艺那颗按钮接上面板，这条冻结随之
         # **重指**为 4 —— **重指不等于放宽**：多出来的那一条只许是业务部件工艺路由那一处
         # （`## 412` 的 E4 里逐个点名了两颗按钮）。
+        # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 又**重指**
+        # 一次（4 → 5）：多出来的那一条只许是按图纸补推导那一条路由。重指不等于放宽。
         src = _source(APP_JS)
-        self.assertEqual(4, src.count("packaging-business-parts/"),
-                         "前端只许多出那一条声明的业务件工艺请求（Spec §C4）")
+        self.assertEqual(5, src.count("packaging-business-parts/"),
+                         "前端只许多出那两条声明的业务件请求（工艺 + 补推导；Spec §C4 / 2.1-result §2.4b）")
 
     def test_f5_business_cost_route_is_untouched(self):
         src = _source(MAIN_PY)

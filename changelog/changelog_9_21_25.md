@@ -20265,3 +20265,102 @@ tests.test_spec_status_truth_red / doc_path_and_root_consistency_red  Ran 17 …
 - 作者侧并行落地的 `## 480` / `## 481` 两份未实现红测（`test_packaging_2_1_result_parts_and_shape_only_red`
   18 红、`test_packaging_business_tables_are_answer_keys_only_red` 15 红）与本批无关、未碰；
 - 未 push / 未建 MR / 未 tag / 未 Release / 未部署。
+
+## 480. 落地「2.1 的结果只能是那二十多件（真件名）、点一件直接看样子、右栏 3D 整块撤掉并占满」（27 OK；红基 18 FAIL）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+用户原话（2026-09-23）：
+
+> 解析出来的结果必须要是二十多个零件，然后点击之后在右边直接看样子，就像 bom 里面那样，
+> 然后那个 3D 的区域整个就不要了 实际展示的内容直接占满右边看板就行了
+> 不是一定要 28 个 但是应该是那二十多个 然后每个零件都是正确的名字，点开之后可以是别的更多的两百多个
+
+代码级证据（HEAD 工作副本只读 + 隔离真跑）：
+
+- 业务部件文档缺失时 `app.js::renderTree()` 退回几何分量：顶层是几何账的计数、折叠诊断区里
+  263 行 `DWG-Pxx 图纸零件 Pxx`（名字是 `packaging_parts.py` 的占位名）—— 这就是"解析出来 263 个"
+  的来源；而业务部件**能**从图纸推出来（真样本 263 个分量 / 28 件业务部件）；
+- 业务部件行点不开：`263` 与 `28` 之间没有"这一件由哪几个分量构成"的入口；
+- `openPackagingBusinessPart()` 画形状时若坐标还没读回来（`currentPackagingCadPlan === null`）
+  就直接落进状态文案，之后再也不会重画 —— 没有加载态、也没有 `data-qq-part-shape`；
+- `enterDrawingFlowPanes()` 只 `viewer.hidden = true`：`.part-details`（「零件信息」）与
+  `details.parameter-panel`（「查看并编辑零件参数（专家模式）」）在没选中零件时照旧摆着，
+  `.view-3d-content` 的 `min-height:300px` 还留着一块空画布；
+- `main.py` 业务部件只有 GET / PUT binding / import（要 Excel）/ thumbnail，**没有**按图纸补推导的端点。
+
+### 二、改了什么（4 个生产文件）
+
+- `tech_app/frontend/app.js`：
+  · 两个纯函数：`packagingBusinessPartName(row)`（有名字用名字；缺失只回**唯一**兜底词
+    `未命名业务部件`，不回落成编码、更不出现 `图纸零件 P`）、`packagingBusinessPartComponentsLine(row, components)`
+    （只按证据层 `component_ids`，绑不上说"这一件还没定位到几何分量"）；
+  · `renderPackagingBusinessTree()`：行名走那个口径并给 `data-qq-name-missing="1"`；每行加展开开关
+    `data-qq-part-toggle` + 展开容器 `data-qq-part-components`（展开里的分量**不**进"业务部件 N 件"的计数）；
+  · `renderTree()` 的图纸分支给 `#tree` 打 `data-qq-parts-result="business｜unavailable"`（结果口径唯一的来源）；
+  · `openPackagingBusinessPart()` 的形状区三态 `data-qq-part-shape`：`ready`（绑定量画出 `<svg role="img">`）/
+    `loading`（坐标没到，逐字 `正在读取这一件的形状…`）/ `unavailable`（`PACKAGING_BINDING_COPY[…]`
+    或 `PACKAGING_CAD_PLAN_NO_COORDS`）；坐标没到就把件号记进 `pendingPackagingShapePartCode`；
+  · `repaintSelectedPackagingShape(pending)`：`renderPackagingCadPlan()` 与 CAD 场景两条渲染路拿到几何后
+    重画**同一件**并清标记（不再"画一次空的就结束"）；
+  · `applyPackagingShapeOnlyPanes()`（新）：`#viewer` / `#partDetail` / `#parameterEditor` 与其外层
+    `.part-details` / `.parameter-panel` **恒** hidden，`.drawing-model-column` 打 `data-qq-no-3d` + `data-qq-fill`；
+    由 `enterDrawingFlowPanes()` 调用（一进包装 2.1 就撤，不等选中零件）；
+  · `ensurePackagingBusinessParts()`（新）：有零件文档、没有业务部件文档时才跑一次
+    `POST …/packaging-business-parts/derive`，成功即按业务部件列左栏；`refreshPackagingParts()` 里接线。
+- `tech_app/frontend/index.html`：新增未选中态的引导节点 `#packagingShapeIdle`
+  （逐字 `从左栏选一件零件，这里直接看它的形状。`）。
+- `tech_app/frontend/workbench.css`：新增 `[data-qq-no-3d]` / `[data-qq-fill]` 规则（3D 不占位、形状面板占满）。
+- `tech_app/backend/main.py`：新增 `PACKAGING_BUSINESS_PARTS_DERIVE_PATH` 与 derive 端点 ——
+  只吃 DWG 证据，复用 `resolve_business_parts()` → `business_parts_document()` → `save_business_parts()`，
+  附件 / 知识库 / 金标一律不传；缺零件文档、没有名称证据各给稳定原因码与下一步；同一份图纸幂等、不删旧版本。
+
+### 三、测试侧授权：五条「前端业务件路由引用计数」冻结重指 4 → 5（断言未放宽）
+
+本批按 C6 新增 `packagingBusinessPartsDerivePath()`（前端一处字面量），计数从 4 变 5，五条既有护栏
+随事实**重指**：`test_packaging_authority_workbook_upload_red::D3`、
+`test_packaging_business_part_basis_in_panel_red::C6`、
+`test_packaging_business_part_cost_by_authority_size_red::E4`、
+`test_packaging_business_part_process_by_authority_route_red::F4`、
+`test_packaging_business_part_process_entry_red::C4`。**只改那个数字与旁边注释**：仍是 `assertEqual`
+（精确相等），仍要求"多出来的必须点名"，没有一条改成范围 / 去掉计数（先例：`## 413` / `## 415`
+对同一个冻结做过同样的重指）。授权写在 Spec §5.1。
+
+另一条如实记（不动测试，改实现）：`test_packaging_parts_downstream_red::F3` 用「第一个
+`packagingPartProcess` 之后 4000 字符」的窗口找 `CadInlineAnalysis`；本批把新增的
+`applyPackagingShapeOnlyPanes()` 挪到该窗口之外（窗口内距离 3819，余量 181）—— 没有动那条断言。
+
+### 四、反向对照（本机实测，跑完立即还原并 `md5` 核对）
+
+```text
+① 删掉 enterDrawingFlowPanes() 里的 applyPackagingShapeOnlyPanes()   ⇒ D1 单条红
+② 把 renderPackagingCadPlan() 里"重画待画的那一件"整段改回旧写法      ⇒ C3 单条红
+③ 删掉 refreshPackagingParts() 里的 ensurePackagingBusinessParts()    ⇒ E1 单条红
+```
+
+两条**如实记**：Spec §5 原写 ①/②/③ 对应 C1 / B2 / A2 —— 实测落在 D1 / C3 / E1（原文的字母写错了，
+已在 Spec §5 更正）；② 只删代码行、留着同行注释时**不转红**（C3 查的是源码里有没有
+`pendingPackagingShapePartCode` 这个名字，注释带着同一个名字就判不出来），必须连注释一起改回去。
+
+### 五、实测复跑
+
+```text
+tests.test_packaging_2_1_result_parts_and_shape_only_red     Ran 27 … OK（红基 Ran 27 … FAILED (failures=18)）
+含 app.js 的 91 个模块                                        Ran 1485 … OK (skipped=4)
+tests/test_packaging_*.py（166 模块）                         除下一批（## 481）的 15 条红测外全绿
+node --check tech_app/frontend/app.js                        退出码 0
+路由登记                                                      app.routes 269 条，derive 已登记
+tests.test_spec_status_truth_red / doc_path_and_root_consistency_red   Ran 17 … OK（Spec 状态行随事实更正）
+```
+
+### 六、边界（本批**未做**，如实记）
+
+- 不做"从业务部件行点开 3D"（3D 在包装 2.1 里整块撤掉；历史挤出结论与 STL 仍留在库里可回查）；
+- 不做部件图（authority thumbnail）与形状的合并展示；`{code}/thumbnail` 既有入口不变；
+- derive 只补"业务部件文档"这一份产物，不重跑整条链路、不改锚点 / 语义 / 零件文档；
+- 非包装项目的 3D 行为、`showPackagingPartPane()` / `hidePackagingPartPanel()` 语义、几何诊断折叠区 /
+  分页 / `## 477` 的两笔账措辞一个字未动；
+- 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；
+- 作者侧并行落地、本批**未实现**的 `## 481` 红测（`test_packaging_business_tables_are_answer_keys_only_red`
+  15 红）与本批无关、未碰；
+- 未 push / 未建 MR / 未 tag / 未 Release / 未部署。

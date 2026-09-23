@@ -300,3 +300,18 @@ body{padding-bottom:0}
 button.board-file-link{display:block;width:100%;padding:0;border:0;background:none;text-align:left;font:inherit;color:var(--oc-accent);cursor:pointer;word-break:break-all}
 button.board-file-link:hover{text-decoration:underline}
 button.oc-file-name{width:100%;padding:0;border:0;background:none;text-align:left;font-family:inherit;cursor:pointer}
+
+/* 包装 2.1 撤掉 3D 区块、右栏整块交给"看样子"（Spec
+   `packaging-2-1-result-parts-and-shape-only-pane.md` §2.3 / §2.4）：
+   这一条巷子里 `#viewer`（3D 画布）不占位 —— `.view-3d-content` 的 `min-height:300px`
+   不再参与布局，不留空画布；形状面板占满右栏。非包装项目没有 `data-qq-no-3d` /
+   `data-qq-fill` 这两个钩子，3D 行为一个字不受影响。 */
+.drawing-model-column[data-qq-no-3d] .view-3d-content{display:none}
+.drawing-model-column[data-qq-no-3d] .part-details,
+.drawing-model-column[data-qq-no-3d] .parameter-panel{display:none}
+.drawing-model-column[data-qq-fill] #modelPanes{min-height:0}
+.drawing-model-column[data-qq-fill] #packagingPartPanel{flex:1;min-height:0}
+.drawing-model-column[data-qq-fill] .packaging-part-outline{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+.drawing-model-column[data-qq-fill] .packaging-part-outline svg{width:100%;height:100%}
+.drawing-model-column[data-qq-fill] .packaging-part-idle{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;font-size:12px;color:var(--text-secondary);text-align:center}
+#packagingShapeIdle[hidden]{display:none}

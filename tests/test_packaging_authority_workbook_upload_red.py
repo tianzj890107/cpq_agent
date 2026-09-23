@@ -399,8 +399,12 @@ class DWiring(unittest.TestCase):
                          "导入路径字面量只留一处（Spec §C3）")
 
     def test_d3_route_reference_count_is_frozen(self):
-        self.assertEqual(4, self.SOURCE.count("packaging-business-parts/"),
-                         "前端业务件路由引用计数仍是 4（Spec §C4）")
+        # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 把这条
+        # 批次级冻结**重指**为 5：多出来的那一条只许是"按图纸补推导"那一条路由
+        # （`packagingBusinessPartsDerivePath()` → `…/packaging-business-parts/derive`）。
+        # 重指不等于放宽 —— 计数仍是精确相等，多出来的那一条逐个点名。
+        self.assertEqual(5, self.SOURCE.count("packaging-business-parts/"),
+                         "前端业务件路由引用计数重指为 5（`## 480`：只多出 derive 那一条；Spec §C4）")
 
     def test_d4_pure_functions_have_no_dom_or_fetch(self):
         for name in ("packagingAuthorityFileName", "packagingAuthorityBase64Of",

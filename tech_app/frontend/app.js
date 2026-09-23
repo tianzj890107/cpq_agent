@@ -1325,6 +1325,7 @@ function renderPackagingPartPanel(payload) {
 function showPackagingPartPane() {
   const panel = $("packagingPartPanel");
   if (panel) panel.hidden = false;
+  showPackagingShapeIdle(false);
   ["viewer", "partDetail", "parameterEditor"].forEach(id => {
     const node = $(id);
     if (!node) return;
@@ -1337,12 +1338,14 @@ function showPackagingPartPane() {
 function hidePackagingPartPanel() {
   const panel = $("packagingPartPanel");
   if (panel) panel.hidden = true;
+  showPackagingShapeIdle(false);
   currentSelectedPanelPart = null;
 }
 
 // 图纸项目进入时的右栏口径：右栏是零件面板，不是 3D（Spec §3.5，别留空白画布、别承诺 3D）。
 function enterDrawingFlowPanes() {
   hidePackagingPartPanel();
+  applyPackagingShapeOnlyPanes();
   const viewer = $("viewer");
   if (viewer) viewer.hidden = true;
   const plan = packagingCadPlanViewer();
@@ -1421,6 +1424,38 @@ function packagingPartProcessability(part) {
              reason: "缺材料或厚度：" + missing.join("、") + "（补全需求后重跑解析）" };
   }
   return { ok: true, missing: [], reason: "" };
+}
+
+// 包装 2.1 的右栏只留"看样子"这一件事（Spec 2.1-result §2.3）：
+// 3D 口径的三块（`#viewer` 3D 画布、「零件信息」、「查看并编辑零件参数（专家模式）」）
+// **恒**置 hidden —— 不等选中零件、也不留那 300px 的空画布；未选中零件时只留一句引导。
+// 非包装项目的 3D 行为一个字不动（这个函数只由图纸巷子调用）。
+function applyPackagingShapeOnlyPanes() {
+  ["viewer", "partDetail", "parameterEditor"].forEach(id => {
+    const node = $(id);
+    if (!node) return;
+    node.hidden = true;
+    // 「零件信息」与「专家参数」外面还有一层 .part-details / .parameter-panel：
+    // 只藏里层，标题与收缩条会留下来占位置。
+    const wrapper = node.closest(".part-details, .parameter-panel");
+    if (wrapper) wrapper.hidden = true;
+  });
+  const column = document.querySelector(".drawing-model-column");
+  if (column) {
+    // 属性名写字面量（现场 grep 得到"这块是哪来的"）；占满用同一件事的 dataset 写法
+    // （CSS 选择器 `[data-qq-fill]` 照样命中 `dataset.qqFill`）。
+    column.setAttribute("data-qq-no-3d", "1");
+    column.dataset.qqFill = "1";
+  }
+  // 未选中零件：右栏摆一句引导，而不是空白（Spec §2.4）。
+  if (!currentSelectedPanelPart && !currentPackagingBusinessPartCode) showPackagingShapeIdle(true);
+}
+
+// 未选中零件时右栏那一句引导的开 / 关（Spec 2.1-result §2.4）：只在包装 2.1 这条巷子里出现，
+// 选中一件（`showPackagingPartPane()`）或切回视觉链路（`hidePackagingPartPanel()`）都收掉。
+function showPackagingShapeIdle(shown) {
+  const idle = $("packagingShapeIdle");
+  if (idle) idle.hidden = !shown;
 }
 
 function packagingPartActionsHtml(part) {
@@ -1884,6 +1919,10 @@ const PACKAGING_CAD_LAYER_COLORS = {
 let currentPackagingCadPlan = null;
 let currentPackagingCadPlanBox = null;
 let currentPackagingBusinessPartCode = "";
+// 点在证据之前的这一件（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.2）：
+// 坐标还没读回来时先把件号记下来，`renderPackagingCadPlan()` 拿到几何后重画**同一件** ——
+// 不再"画一次空的就结束"（真图上这个竞态就是右栏一片空白）。
+let pendingPackagingShapePartCode = "";
 
 function packagingCadPlanViewer() {
   return $("packagingCadPlanViewer");
@@ -2192,7 +2231,7 @@ function renderPackagingCadScene(host, doc, scene) {
       notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
     });
   }
-  if (currentPackagingBusinessPartCode) openPackagingBusinessPart(currentPackagingBusinessPartCode);
+  repaintSelectedPackagingShape(pendingPackagingShapePartCode);
   return doc;
 }
 
@@ -2257,9 +2296,21 @@ function renderPackagingCadPlan(doc) {
       notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
     });
   }
-  // 证据后到（首点竞态）：已经选中的业务部件要用新到的证据重画轮廓与依据（Spec §C4）。
-  if (currentPackagingBusinessPartCode) openPackagingBusinessPart(currentPackagingBusinessPartCode);
+  // 证据后到（首点竞态）：已经选中的业务部件要用新到的证据重画轮廓与依据（Spec §C4），
+  // 点在证据之前的这一件（`pendingPackagingShapePartCode`，Spec 2.1-result §2.2）也要重画。
+  repaintSelectedPackagingShape(pendingPackagingShapePartCode || currentPackagingBusinessPartCode);
   return currentPackagingCadPlan;
+}
+
+// 证据后到（首点竞态，Spec 2.1-result §2.2）：`pending` 是"点在坐标之前的那一件"，
+// 坐标一到位就用新证据重画**它**；没有待画的那一件时，沿用"已选中的那一件跟着证据重画"的
+// 旧口径（Spec §C4）。两种情形都要清掉待画标记，不许反复重画。
+function repaintSelectedPackagingShape(pending) {
+  const code = String(pending || currentPackagingBusinessPartCode || "");
+  pendingPackagingShapePartCode = "";
+  if (!code) return false;
+  openPackagingBusinessPart(code);
+  return true;
 }
 
 // 平面图里点到未绑定图元的提示（Spec §6.2）：不假装它属于某个业务部件。
@@ -2633,9 +2684,17 @@ function packagingAuthorityImportBody(path, fileName, dataUrl) {
   return { content_base64: encoded, file_name: packagingAuthorityFileName(fileName) };
 }
 
-// 导入接口只有一处字面量（Spec §C3/§C4：前端业务件路由引用计数保持 4）。
+// 导入接口只有一处字面量（Spec §C3/§C4：前端业务件路由引用计数保持 4；`## 480` 按
+// `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 补上"按图纸补推导"那一条，
+// 冻结随之**重指**为 5 —— 重指不等于放宽：多出来的那一条就是下面这个 derive 路径）。
 function packagingBusinessPartsImportPath() {
   return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/import`;
+}
+
+// 按图纸就地补推导只有一处字面量（Spec 2.1-result §2.4b C6）：与读 / 导入 / 绑定 / 部件图
+// 一样，每条业务件路由在前端只出现一次。
+function packagingBusinessPartsDerivePath() {
+  return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/derive`;
 }
 
 // 路径导入与文件导入共用这一个 POST（失败一律用后端给的 message，不猜原因）。
@@ -3089,6 +3148,33 @@ function packagingTwoLedgersLine(geometryDoc, businessDoc) {
   return "";
 }
 
+// 业务部件行的件名（Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.1b）：
+// 有名字就用名字（去首尾空白）；没有名字只给**唯一**一个兜底词，绝不回落成业务编码，
+// 更不许拿几何分量那套占位名（`图纸零件 P%02d`）顶上。纯函数：吃一行 payload，不碰 DOM / fetch。
+function packagingBusinessPartName(row) {
+  const record = (row && typeof row === "object" && !Array.isArray(row)) ? row : null;
+  const raw = record ? record.name : "";
+  const name = String(raw === null || raw === undefined ? "" : raw).trim();
+  return name || "未命名业务部件";
+}
+
+// 展开一件时的那一行构成（Spec §2.1c）：分量清单只能按证据层的 `component_ids` 来，
+// 前端不另算一遍（"263 个几何分量"与"这二十多件"的对应关系是证据层给的）。
+// 没定位到分量时说清，不留白也不显示 0 件以外的任何数字。纯函数：不碰 DOM / fetch / 几何。
+function packagingBusinessPartComponentsLine(row, components) {
+  const record = (row && typeof row === "object" && !Array.isArray(row)) ? row : null;
+  if (!record) return "";
+  const binding = (record.geometry_binding && typeof record.geometry_binding === "object")
+    ? record.geometry_binding : {};
+  const ids = Array.isArray(binding.component_ids)
+    ? binding.component_ids
+        .map(id => String(id === null || id === undefined ? "" : id).trim())
+        .filter(id => id)
+    : [];
+  if (!ids.length) return "这一件还没定位到几何分量";
+  return `共 ${ids.length} 个几何分量：${ids.join(" / ")}`;
+}
+
 function renderPackagingBusinessTree(tree, rows) {
   const head = document.createElement("div");
   head.className = "packaging-business-head";
@@ -3132,6 +3218,8 @@ function renderPackagingBusinessTree(tree, rows) {
     });
     tree.appendChild(notice);
   }
+  // 展开行要用到的几何证据（与左栏外那笔几何账是**同一批**分量：同 `component_id`）。
+  const evidenceComponents = ((currentPackagingBusinessParts || {}).geometry_evidence || {}).components;
   rows.forEach(row => {
     const code = String(row.business_part_code || "");
     const binding = row.geometry_binding || {};
@@ -3142,6 +3230,10 @@ function renderPackagingBusinessTree(tree, rows) {
     line.dataset.businessPartCode = code;
     line.dataset.bindingStatus = status;
     line.addEventListener("click", () => openPackagingBusinessPart(code));
+    // 件名只有一个来源（Spec §2.1b）：缺失时用兜底词并给自己一个钩子，不许回落成编码。
+    const partName = packagingBusinessPartName(row);
+    const rawName = String(row.name === null || row.name === undefined ? "" : row.name).trim();
+    if (!rawName) line.setAttribute("data-qq-name-missing", "1");
     const size = packagingBusinessPartSizeText(row);
     const material = String(((row.authority || {}).material_text) || "");
     // 事实档标签（Spec `packaging-business-truth-state-disclosure.md` §2.6）：逐值由 payload 的
@@ -3150,11 +3242,30 @@ function renderPackagingBusinessTree(tree, rows) {
     const truthLabel = packagingBusinessPartTruthLabel(truthState);
     if (truthLabel) line.setAttribute("data-qq-truth-state", truthState);
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
-      + `<div class="part-name">${esc(code)} ${esc(String(row.name || ""))}</div>`
+      + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
       + `<div class="part-meta">${esc(size)}${material ? " · " + esc(material) : ""}</div>`
       + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`
       + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "");
+    // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
+    // 展开里的分量**不**进结果区那句"业务部件 N 件"的计数 —— 两笔账不许混。
+    const components = document.createElement("div");
+    components.className = "packaging-part-components";
+    components.setAttribute("data-qq-part-components", code);
+    components.hidden = true;
+    components.textContent = packagingBusinessPartComponentsLine(row, evidenceComponents);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "part-row-action packaging-part-toggle";
+    toggle.setAttribute("data-qq-part-toggle", code);
+    toggle.textContent = "构成";
+    toggle.addEventListener("click", event => {
+      event.stopPropagation();                 // 开关只管展开，选中仍走这一行自己的点击
+      components.hidden = !components.hidden;
+      toggle.textContent = components.hidden ? "构成" : "收起";
+    });
+    line.appendChild(toggle);
     tree.appendChild(line);
+    tree.appendChild(components);
   });
 }
 
@@ -3217,13 +3328,28 @@ function openPackagingBusinessPart(code) {
   }
   const outlineHost = $("packagingPartOutline");
   if (outlineHost) {
-    // 绑定了几何分量就把它们的形状画出来（Spec §C2）；画不出来才回到绑定状态文案。
+    // 点一件直接看样子，三态都要说清（Spec 2.1-result §2.2）：
+    // `ready` 画出绑定分量的轮廓；坐标还没到（首点竞态）给 `loading` 并把这一件记进
+    // `pendingPackagingShapePartCode`，证据一到重画同一件；其余画不出来的给 `unavailable` + 原因。
+    // 绑定了几何分量的形状画得出来才画（Spec §C2），画不出来才回到绑定状态文案。
     const outlineHtml = packagingBusinessPartOutlineHtml(binding, currentPackagingCadPlan);
-    outlineHost.innerHTML = outlineHtml
-      ? (outlineHtml + `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`)
-      : `<div class="view-3d-placeholder">`
-        + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || "")}`
+    if (outlineHtml) {
+      outlineHost.setAttribute("data-qq-part-shape", "ready");
+      pendingPackagingShapePartCode = "";
+      outlineHost.innerHTML = outlineHtml
+        + `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`;
+    } else if (!currentPackagingCadPlan) {
+      outlineHost.setAttribute("data-qq-part-shape", "loading");
+      pendingPackagingShapePartCode = wanted;
+      // 加载态文案逐字（Spec §2.2）：写成字面量，现场 grep 得到这一句。
+      outlineHost.innerHTML = `<div class="view-3d-placeholder">正在读取这一件的形状…</div>`;
+    } else {
+      outlineHost.setAttribute("data-qq-part-shape", "unavailable");
+      pendingPackagingShapePartCode = "";
+      outlineHost.innerHTML = `<div class="view-3d-placeholder">`
+        + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || PACKAGING_CAD_PLAN_NO_COORDS)}`
         + `</div>`;
+    }
   }
   const thumbnailHost = $("packagingPartThumbnail");
   if (thumbnailHost) {
@@ -3425,6 +3551,35 @@ async function fetchPackagingBusinessParts() {
   }
 }
 
+// 老项目 / 只跑过旧链路的项目：项目里已经有零件文档、却没有业务部件文档 —— 就地按**图纸**补推一份
+// （Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6）：不让人重建项目，也不拿
+// 附件 / 知识库 / 金标当输入（这件事只由服务端做，端点只吃 DWG 证据，且同一份图纸幂等）。
+// 缺零件文档时**不**补（那属于"还没有零件"，不是"缺业务部件清单"）；拿不到就回 null，
+// 左栏照旧走 `unavailable` 那条空态，不谎报。
+async function ensurePackagingBusinessParts() {
+  if (!currentProject) return null;
+  if (packagingBusinessPartRows(currentPackagingBusinessParts).length) return null;
+  const partsDoc = currentPackagingParts || {};
+  const partTotal = Number((partsDoc.stats || {}).part_total)
+    || packagingPartsItems(partsDoc).length;
+  if (!partTotal) return null;
+  try {
+    const res = await fetch(packagingBusinessPartsDerivePath(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res.ok) return null;
+    const payload = await res.json().catch(() => null);
+    if (!payload) return null;
+    if (packagingBusinessPartRows(payload).length) {
+      currentPackagingBusinessParts = payload;
+      await loadPackagingCadPlan().catch(() => null);
+    }
+    return payload;
+  } catch (error) { return null; }
+}
+
 async function refreshPackagingParts() {
   // 阶段钩子是纯展示：读回本身不许因为画不出阶段标记而失败（Spec C5）。
   const stage = (name, state) => {
@@ -3444,6 +3599,11 @@ async function refreshPackagingParts() {
   ]);
   currentPackagingParts = parts;
   currentPackagingBusinessParts = business;
+  // 有零件、没有业务部件清单 → 先按图纸补推一次（Spec §2.4b C6）：老项目打开 2.1 看到的是那
+  // 二十多件真件名，而不是几百行几何占位名。补不出来时左栏照旧走 `unavailable` 空态。
+  if (!packagingBusinessPartRows(currentPackagingBusinessParts).length) {
+    await ensurePackagingBusinessParts().catch(() => null);
+  }
   renderTree(currentIR || {});
   // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
   // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
@@ -4720,6 +4880,9 @@ function renderTree(ir) {
       return;
     }
     const business = packagingBusinessPartRows(currentPackagingBusinessParts);
+    // 结果口径钩子（Spec §2.1）：左栏"结果"只能是业务部件文档那一份 —— 有就是 `business`，
+    // 补推导也拿不到就是 `unavailable`；几何分量只进下面的折叠诊断区，不作结果呈现。
+    tree.setAttribute("data-qq-parts-result", business.length ? "business" : "unavailable");
     if (business.length) { renderPackagingBusinessTree(tree, business); return; }
     const doc = currentPackagingParts || {};
     // 行与三笔账的取数在 `packagingGeometryListing()`（分页累加优先；读不到时不许吃上一份的累加行）。
