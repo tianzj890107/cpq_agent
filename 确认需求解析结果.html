@@ -4062,13 +4062,35 @@
         problems.push('报价明细为空：至少要有 1 行（第 5 步）。');
         return { ok: false, problems: problems, rows: 0 };
       }
+      /* 报价明细那张表的列定义里根本没有「币种」（列定义来自 DA 本体、全行业共用，
+         见 Spec `packaging-quote-step5-currency-must-come-from-a-real-ui-source.md` §2.1）：
+         行里没有币种时按**同一步**「报价基本信息」（`s5_basic`）的币种兜底；
+         两处都没有才拦「第 N 行：币种为空。」。兜底只读第 5 步整步快照，不跨步、不默认成人民币。 */
+      let step5FallbackCurrency = '';
+      try {
+        const step5 = collectStepData(5) || {};
+        const basic = step5['s5_basic'] || {};
+        const form = (basic['数据'] !== undefined) ? basic['数据'] : basic['data'];
+        if (form && typeof form === 'object' && !Array.isArray(form)) {
+          step5FallbackCurrency = String(form['币种'] == null ? '' : form['币种']).trim();
+        }
+        if (!step5FallbackCurrency && Array.isArray(basic['fields'])) {
+          // 服务端快照把「报价基本信息」写成 `kind:'summary'` 的 fields 列表时也认（同一步）。
+          basic['fields'].forEach(it => {
+            if (step5FallbackCurrency || !it) return;
+            if (String(it.label || it.key || '').indexOf('币种') >= 0) {
+              step5FallbackCurrency = String(it.value == null ? '' : it.value).trim();
+            }
+          });
+        }
+      } catch (e) { step5FallbackCurrency = ''; }
       rows.forEach((row, i) => {
         const tag = '第 ' + (i + 1) + ' 行';
         const qty = _numOf(row['数量']);
         const unit = _numOf(row['报价']);
         const after = _numOf(row['折后价格']);
         const total = _numOf(row['总金额']);
-        const cur = String(row['币种'] == null ? '' : row['币种']).trim();
+        const cur = String(row['币种'] == null ? '' : row['币种']).trim() || step5FallbackCurrency;
         if (qty == null || qty <= 0) problems.push(tag + '：数量无效（' + (row['数量'] || '空') + '）。');
         if (unit == null || unit <= 0) problems.push(tag + '：单价（报价）无效（' + (row['报价'] || '空') + '）。');
         if (!cur) problems.push(tag + '：币种为空。');
@@ -4307,6 +4329,37 @@
     ];
     const PACKAGING_PARTS_SECTION = 'packaging_parts';
 
+    /* 汇总形状分区快照（`kind:'summary'`）的只读列：服务端/定价引擎已经算好（第 5 步的
+       「报价明细」是 13 行 {项目,值,来源}、「报价基本信息」是 fields 列表），卡片只读上屏，
+       不做任何判定。Spec：`packaging-quote-step5-reported-detail-must-satisfy-step-gate.md` §2.5。 */
+    const SUMMARY_ROWS_COLUMNS = [
+      { key: '项目', label: '项目' },
+      { key: '值', label: '值' },
+      { key: '来源', label: '来源' },
+      { key: '公式', label: '公式' },
+    ];
+    const SUMMARY_FIELDS_COLUMNS = [
+      { key: '字段', label: '字段' },
+      { key: '值', label: '值' },
+    ];
+
+    // `kind:'summary'` 的分区快照 → 只读表行（`rows` 是定价引擎的汇总；`fields` 是基本信息）。
+    function summarySectionRows(payload) {
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (rows.length) {
+        return { columns: SUMMARY_ROWS_COLUMNS, rows: rows.filter(r => r && typeof r === 'object') };
+      }
+      const fields = Array.isArray(payload.fields) ? payload.fields : [];
+      if (fields.length) {
+        return {
+          columns: SUMMARY_FIELDS_COLUMNS,
+          rows: fields.filter(f => f && typeof f === 'object')
+            .map(f => ({ '字段': f.label == null ? (f.key || '') : f.label, '值': f.value == null ? '' : f.value })),
+        };
+      }
+      return { columns: SUMMARY_ROWS_COLUMNS, rows: [] };
+    }
+
     function _cardPartsCell(value) {
       return (value === null || value === undefined) ? '' : String(value);
     }
@@ -4394,6 +4447,7 @@
         // `packaging-parts-in-card-and-material-fill.md` §2.1 第 1 条）。
         if (!f) {
           const unknownRows = payload['数据'] !== undefined ? payload['数据'] : payload.data;
+          const unknownSummary = summarySectionRows(payload);
           if (String(payload.kind || '') === 'table'
               && Array.isArray(unknownRows) && unknownRows.length) {
             renderTableSection({
@@ -4405,11 +4459,31 @@
               rows: sid === 'packaging_parts' ? packagingPartCardRows(unknownRows) : unknownRows,
             });
             restored = true;
+          } else if (unknownSummary.rows.length) {
+            renderTableSection({
+              action: 'render_table', step: step, section_id: sid,
+              title: payload.title || sid, editable: false,
+              columns: unknownSummary.columns, rows: unknownSummary.rows,
+            });
+            restored = true;
           }
           return;
         }
         const data = payload['数据'] !== undefined ? payload['数据'] : payload.data;
-        if (data === undefined || data === null) return;
+        if (data === undefined || data === null) {
+          // `kind:'summary'` 的分区快照没有 `数据`/`data`（第 5 步的「报价明细」「报价基本信息」
+          // 就是这种形状）。以前这一行直接 return，把整段静默丢掉（Spec §2.5），现在只读上屏。
+          const summary = summarySectionRows(payload);
+          if (summary.rows.length) {
+            renderTableSection({
+              action: 'render_table', step: f.step, section_id: sid,
+              title: payload.title || f.title, editable: false,
+              columns: summary.columns, rows: summary.rows,
+            });
+            restored = true;
+          }
+          return;
+        }
         if (Array.isArray(data)) {
           if (!data.length) return;
           renderTableSection({

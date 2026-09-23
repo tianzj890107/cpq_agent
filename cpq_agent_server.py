@@ -3783,6 +3783,74 @@ def _gate_rows(data, *section_ids):
     return []
 
 
+def _gate_detail_rows(data, *section_ids):
+    """取某个分区的**明细行**，并把两种形状分开（Spec §2.1）。
+
+    返回 ``(table_rows, summary_rows)``：
+      · 表行 = 页面/模型填的明细表行（**不带**「项目」列）；
+      · 汇总行 = 定价引擎写进第 5 步的那份汇总 —— `kind:"summary"` 的 `rows`，
+        或表信封里带「项目」列的行。汇总行**不当表行**，不参与逐行（数量/单价/复算）判据。
+    """
+    if not isinstance(data, dict):
+        return [], []
+    for sid in section_ids:
+        section = data.get(sid)
+        if not isinstance(section, dict):
+            continue
+        rows = []
+        raw = section.get("数据", section.get("data"))
+        if isinstance(raw, list):
+            rows = [row for row in raw if isinstance(row, dict)]
+        if not rows:
+            reported = section.get("rows")
+            if isinstance(reported, list):
+                rows = [row for row in reported if isinstance(row, dict)]
+        table = [row for row in rows if "项目" not in row]
+        summary = [row for row in rows if "项目" in row]
+        return table, summary
+    return [], []
+
+
+def _gate_summary_rows_are_detail(rows):
+    """汇总形状的「明细非空」口径：至少 1 行，每行「项目」与「值」都非空（Spec §2.1）。"""
+    if not rows:
+        return False
+    for row in rows:
+        if not str(row.get("项目") or "").strip():
+            return False
+        if not str(row.get("值") or "").strip():
+            return False
+    return True
+
+
+def _gate_step5_currency(data):
+    """第 5 步的币种只有一个界面来源：**同一步**「报价基本信息」（`s5_basic`）（Spec §2.1）。
+
+    报价明细表的列定义里没有「币种」（DA 本体全行业共用），所以行里没有币种时按这里兜底；
+    兜底只读同一步（不跨步、不默认成「人民币」、不把空白当有值）。
+    """
+    if not isinstance(data, dict):
+        return ""
+    section = data.get("s5_basic")
+    if not isinstance(section, dict):
+        return ""
+    form = section.get("数据", section.get("data"))
+    if isinstance(form, dict):
+        got = str(form.get("币种") or "").strip()
+        if got:
+            return got
+    fields = section.get("fields")
+    if isinstance(fields, list):
+        for item in fields:
+            if not isinstance(item, dict):
+                continue
+            if "币种" in str(item.get("label") or item.get("key") or ""):
+                got = str(item.get("value") or "").strip()
+                if got:
+                    return got
+    return ""
+
+
 def _row_number(row, *keywords):
     """按**列名关键字**取这一行里第一个能解析成数的值（列名是业务中文名，不写死具体列）。"""
     for key, value in (row or {}).items():
@@ -3839,21 +3907,17 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
                     "no_markup_evidence", "产品行没有可解释的加价结果（价格或加价依据为空）。",
                     "点「强行填满本步骤」按定价规则重算加价，或人工填写加价依据。"))
     elif step == 5:
-        rows = _gate_rows(data, "s5_detail")
-        products = _gate_rows(data, "s4_products", "s3_products", "s2_products", "s1_products")
-        if not rows:
-            blockers.append(_gate_blocker(
-                "no_detail_rows", "报价明细为空：至少要有 1 行。",
-                "回到第 4 步确认产品行后，第 5 步会自动生成报价明细。",
-                fixable_by_fill=bool(products)))
-        else:
-            for index, row in enumerate(rows, start=1):
+        table_rows, summary_rows = _gate_detail_rows(data, "s5_detail")
+        if table_rows:
+            # 币种兜底只认**同一步**「报价基本信息」（明细表的列里根本没有「币种」）。
+            basic_currency = _gate_step5_currency(data)
+            for index, row in enumerate(table_rows, start=1):
                 tag = "第 %d 行" % index
                 qty = _row_number(row, "数量")
                 unit = _row_number(row, "报价", "单价")
                 after = _row_number(row, "折后价格", "折后价")
                 total = _row_number(row, "总金额", "金额")
-                currency = str(row.get("币种") or "").strip()
+                currency = str(row.get("币种") or "").strip() or basic_currency
                 if qty is None or qty <= 0:
                     blockers.append(_gate_blocker("invalid_quantity", tag + "数量无效。",
                                                   "填写正数数量。"))
@@ -3872,12 +3936,20 @@ def quote_step_completion_gate(step_no, data, *, quote_fingerprint: str = "",
                         "total_not_recomputable",
                         tag + "总金额 %.4f ≠ 折后价格 %.4f × 数量 %s。" % (total, after, qty),
                         "点「报价方案」重算明细。"))
+        elif not _gate_summary_rows_are_detail(summary_rows):
+            # 两种形状都取不到可用行才算「没有明细」；第 5 步自己有入口（「报价方案」就是
+            # 把明细生出来的那个动作），所以不许扣 fixable_by_fill:false 把按钮当场拒掉。
+            blockers.append(_gate_blocker(
+                "no_detail_rows", "报价明细为空：至少要有 1 行。",
+                "点「报价方案」重算明细（或点「强行填满本步骤」），明细由定价引擎按第 4 步的"
+                "产品行生成；也可以点「重算明细」再试。"))
     elif step == 6:
-        rows = _gate_rows(data, "s5_detail")
-        if not rows:
+        table_rows, summary_rows = _gate_detail_rows(data, "s5_detail")
+        has_detail = bool(table_rows) or _gate_summary_rows_are_detail(summary_rows)
+        if not has_detail:
             blockers.append(_gate_blocker("no_detail_rows", "报价明细为空，不能生成报价单。",
                                           "回到第 5 步补全报价明细。"))
-        if rows and quote_fingerprint and detail_fingerprint and quote_fingerprint != detail_fingerprint:
+        if has_detail and quote_fingerprint and detail_fingerprint and quote_fingerprint != detail_fingerprint:
             blockers.append(_gate_blocker(
                 "detail_changed_after_step5_confirm",
                 "报价明细在第 5 步确认之后被改动过，不能照旧生成报价单。",

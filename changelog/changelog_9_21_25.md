@@ -18584,3 +18584,48 @@ MR / tag / Release / 部署、未连 PG、样本只读。
 `packaging_layer_name_unicode_escape_red` / `packaging_drawing_flow_red` /
 `packaging_business_parts_and_cad_plan_view_red` / `dxf_cad_ir_red`）。未 push / MR / tag /
 Release / 部署、未连 PG、样本只读。
+
+## 454. 落地 `packaging-quote-step5-*`（币种 + 汇总明细两份**同批**）：第 5 步的币种按同一步「报价基本信息」兜底、服务端自己写进快照的那 13 行汇总也算「有明细」，第 5/6 步不再永远走不出去（20 OK，红基 9 红）（9-23，Codex 实现）
+
+两份 Spec 同批落地（`## 445` 那条缺口类条目是它们的血缘）：
+
+- `docs/specs/packaging-quote-step5-currency-must-come-from-a-real-ui-source.md` /
+  `tests/test_packaging_quote_step5_currency_must_come_from_a_real_ui_source_red.py`（8 条：A1–A3 红 / B1–B5 绿）
+- `docs/specs/packaging-quote-step5-reported-detail-must-satisfy-step-gate.md` /
+  `tests/test_packaging_quote_step5_reported_detail_must_satisfy_step_gate_red.py`（12 条：A1–A6 红 / B1–B6 绿）
+
+币种（`## 445` 前半）：
+
+- `cpq_agent_server._gate_step5_currency()`（新）：第 5 步的币种只有一个界面来源 —— **同一步**
+  `s5_basic`。明细行没有币种（无该列或值为空）时按它兜底；`s5_basic.数据.币种`（页面
+  `collectStepData(5)` 的形状）与服务端快照那种 `kind:'summary'` 的 `fields`（`label`/`key` 含
+  「币种」）都认；两处都没有才拦，`invalid_currency` 的 `message` / `action` 文案逐字不变；
+- 兜底只读**同一步**（`data["s5_basic"]`）：不跨步、不默认成「人民币」、`""`/空白都不算有值；
+- `确认需求解析结果.html:assertQuoteExportable()` 同源内联同一步兜底（读不到就当没有）；
+  数量 / 单价 / 复算三条判据与文案一个字未动；`s5_detail` 的 14 列定义没加「币种」。
+
+汇总明细（`## 445` 后半）：
+
+- `cpq_agent_server._gate_detail_rows()`（新）：一个分区的明细行按**有没有「项目」列**分成表行与
+  汇总行 —— 有表行就只对表行套逐行判据（汇总行不当表行）；没有表行、只有汇总行（`kind:"summary"`
+  的 `rows`，或表信封里带「项目」的行）时，`_gate_summary_rows_are_detail()` 判「至少 1 行、每行
+  「项目」「值」都非空」即算明细非空，数量/单价/逐行复算与币种都不对汇总形状判；
+- 第 5/6 步「明细非空」都换成这个 `has_detail`；两种形状都取不到可用行才回 `no_detail_rows`；
+- 第 5 步 `no_detail_rows` 的 `action` 改成「点「报价方案」重算明细（或点「强行填满本步骤」），
+  明细由定价引擎按第 4 步的产品行生成；也可以点「重算明细」再试。」（含「报价方案」「重算明细」
+  两个第 5 步自己的入口，不再只说"回第 4 步"）；
+- 第 5 步 `no_detail_rows` 不再扣 `fixable_by_fill:false`（以前是 `bool(products)`）：第 5 步自己
+  有把明细生出来的按钮，扣 false 会让「强行填满本步骤」当场被拒；
+- `确认需求解析结果.html` 新增 `summarySectionRows()` + `SUMMARY_ROWS_COLUMNS`（项目/值/来源/公式）
+  / `SUMMARY_FIELDS_COLUMNS`（字段/值）：`wfRestoreStepData()` 对 `数据`/`data` 缺失但带
+  `rows`/`fields` 的 `kind:'summary'` 分区快照按只读表渲染（已知节与未知节都覆盖），不再整段
+  `return` 丢掉 —— 第 5 步的「报价明细」「报价基本信息」就是这种形状；
+- 未动：表形状的逐行判据与文案、第 6 步指纹判据（`detail_changed_after_step5_confirm`）、
+  第 3/4 步判据、`cpq_packaging_quote.sections()` 输出形状、`packaging_parts` 那条
+  `kind==='table'` 的通用渲染兜底。
+
+实跑：两条红测 `Ran 20 tests … OK`（红基 `Ran 8 (failures=3)` + `Ran 12 (failures=6)` = 9 红）；
+保护网 `Ran 1088 tests … FAILED (failures=1, skipped=1)`，那 1 条是**既有**挂账
+（`test_quick_quote_home_wiring_red.DReadPathHonestyRed::test_d2`，用 `git stash` 把本批两个文件
+摘掉后照样红，与本批无关）。两份 Spec 状态行已改「已实现」并各追加 §8 落地状态；
+`tests.test_spec_status_truth_red` 7 OK。未 push / MR / tag / Release / 部署、未连 PG。
