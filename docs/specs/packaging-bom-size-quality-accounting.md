@@ -141,7 +141,7 @@ GET /api/projects/{pid}/requirement/packaging-bom
   `tests.test_packaging_parts_extraction_red`（32 OK）、
   `tests.test_packaging_bom_parts_version_binding_red`（7 OK）。
 
-### 已记录的偏差（不改测试）
+### 已记录的偏差（`## 468` 已按本节写明的修法处置）
 
 本批新增 `_stats().size_quality` 与 `gaps.bbox_only` 两个**必存在的键**（§2.2 / §2.3），而两份先前的
 护栏测试把这两个键集**逐字冻结**了 —— 两者不可能同时成立，按仓库口径**不改测试**、只在此挂账：
@@ -159,3 +159,18 @@ GET /api/projects/{pid}/requirement/packaging-bom
 两条测试的其余断言（数字、绑定、配对复核、`length_mm` / `width_mm` 逐字不变）**仍然全绿**：
 本批只加账，没有改任何既有取值。要它们转绿需要测试侧把两个键集断言改成"**包含**既有六/三个键"
 （`assertLessEqual(set(FLOW), set(stats))`）—— 属测试侧动作，本层不动。
+
+### 已处置（`## 468`，Codex 测试侧；断言意图不减）
+
+上面 §「已记录的偏差」给的两条键集断言已按**本节自己写明的修法**改成包含式
+（`assertLessEqual(冻结集, 实际集)`），两套红测转绿：
+
+| 测试 | 改法 |
+| --- | --- |
+| `test_packaging_bom_part_size_provenance_red.py::B3` | `set(stats) == {total, by_category, computed, needs_input, locked, material_unresolved}` → `assertLessEqual(那六个键, set(stats))`；`gaps` 同理。同一用例里 `set(after) == set(before)` 两句**逐字未动**（同实现的文档之间仍然必须相等） |
+| `test_packaging_parse_to_downstream_seams_red.py::B4` | 同一处 `BOM_STATS_KEYS` 与 `gaps` 三条断言改成 `assertLessEqual`；`len(bound_rows) == 4` 等数字断言逐字未动 |
+
+护栏意图**不减反增**：相等式抓不到"删键"，包含式抓得到（本机反向对照：在冻结集里多塞一个
+`no_such_key` → `B3 FAIL`，说明这条断言不是空转）。本批只改这 2 个测试文件的键集断言
+（+ 1 条 A2 期望值，见 `packaging-part-role-mapping-must-reach-the-card.md` §7.4），
+未改任何业务实现。

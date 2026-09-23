@@ -242,3 +242,11 @@ DWG 里读不到 `inner_length` 这类字段时候选 `status` 就是 `missing` 
 `GET .../requirement/packaging-bom` 的顶层键里必须有 `pairing_review`；
 `GET .../drawing-flow?stage=quote_publish` 在已放行时 `blocking` 里那条
 `cost_gaps_unresolved` 必须带 `waived=True`。
+
+## 不回归的一条键集断言已按裁定收口（`## 468`，Codex 测试侧）
+
+本 Spec §3.2 的 **B5** 护栏「本批只加披露，不改既有口径」里，`stats` / `gaps` 的**键集**断言在
+`## 342`（`packaging-bom-size-quality-accounting.md`）之后不可能再逐字相等 —— 那一层新增了
+`stats.size_quality` 与 `gaps.bbox_only` 两个必存在的键。本批按该 Spec「已记录的偏差」写明的
+修法改成包含式（`assertLessEqual(BOM_STATS_KEYS, set(stats))`），
+`len(bound_rows) == 4`、`pairing_review` 等**数字与形状断言逐字未动**。

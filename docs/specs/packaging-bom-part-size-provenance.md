@@ -139,3 +139,16 @@ RB02001-P09 ← DWG-P04  {… "material_match": null}
 真样本复验（34）：跑完一键解析 + BOM 后，
 `GET .../requirement/packaging-bom` 的 4 行 `dwg_parts` 里
 `size_source_json.dwg_binding.size_quality` 必须能区分出 3 个 `bbox_only` 与 1 个 `unfolded`。
+
+## 6. B3 键集口径的裁定（`## 468`，Codex 测试侧）
+
+§3 的 **B3** 写「`length_mm` / `width_mm` / `stats` / `gaps` 与改动前逐字相同」。其中
+`stats` / `gaps` 的「逐字」在 `## 342`（`packaging-bom-size-quality-accounting.md`）之后不再可能：
+那一层给 `stats` 加了**必存在**的 `size_quality`、给 `gaps` 加了 `bbox_only`。该 Spec 的
+「已记录的偏差」已裁定修法（键集判包含），本批按它执行：
+
+- `test_b3_numbers_and_totals_are_unchanged` 的两句 `set(...) == {…六个/三个键}` →
+  `assertLessEqual({…六个/三个键}, set(...))`；**数字断言全部保留**
+  （`length_mm` / `width_mm` 四组、`bound_rows == []`、`set(after) == set(before)`）;
+- 本 Spec §3 的 B3 按此理解为「**既有键一个都不许消失、既有数字逐字不变**」，
+  「键集只允许新增」这半条由 `## 342` 的账户决定。

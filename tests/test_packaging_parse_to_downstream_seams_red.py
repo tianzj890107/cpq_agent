@@ -291,15 +291,20 @@ class BPairingReviewExposure(BomCase):
         self.save_requirement()
         self.confirm_box()
         before = self.bom().build_bom(PID, REQ_NO)
-        self.assertEqual(set(before["stats"]), BOM_STATS_KEYS,
-                         "stats 键集不许变")
+        # `## 468`：同 `test_packaging_bom_part_size_provenance_red.py::B3` —— `## 342` 之后
+        # `stats` 必含 `size_quality`、`gaps` 必含 `bbox_only`，键集改判「包含既有键」
+        # （Spec `packaging-bom-size-quality-accounting.md`「已记录的偏差」写明的修法）。
+        self.assertLessEqual(BOM_STATS_KEYS, set(before["stats"]),
+                             "stats 必须仍带这几个既有键（只允许新增，不允许消失）")
         after = self.build(magnet_first_parts())
-        self.assertEqual(set(after["stats"]), BOM_STATS_KEYS)
+        self.assertLessEqual(BOM_STATS_KEYS, set(after["stats"]),
+                             "stats 必须仍带这几个既有键（只允许新增，不允许消失）")
         bound_rows = [row for row in after["items"] if row.get("source") == "dwg_parts"]
         self.assertEqual(len(bound_rows), 4,
                          "4 个待绑行照旧全部绑定（材料不一致仍然是披露，不是拒绝）")
-        self.assertEqual(set(after["gaps"]), {"needs_input", "missing_variables",
-                                              "material_unresolved"})
+        self.assertLessEqual({"needs_input", "missing_variables", "material_unresolved"},
+                             set(after["gaps"]),
+                             "gaps 必须仍带这三个既有键（只允许新增，不允许消失）")
 
 
 # --------------------------------------------------------------------------- #

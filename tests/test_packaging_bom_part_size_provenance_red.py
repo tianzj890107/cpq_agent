@@ -235,11 +235,18 @@ class BBomDocumentCarriesProvenance(SizeProvenanceCase):
         before = self.build(None)
         before_rows = self.bound_rows(before)
         self.assertEqual(before_rows, [], "没有零件文档时 BOM 不绑任何行（照旧）")
-        self.assertEqual(set(before["stats"]),
-                         {"total", "by_category", "computed", "needs_input", "locked",
-                          "material_unresolved"})
-        self.assertEqual(set(before["gaps"]),
-                         {"needs_input", "missing_variables", "material_unresolved"})
+        # `## 468`：键集断言由「逐字相等」改为「必须**包含**本批那六个键」。
+        # `packaging-bom-size-quality-accounting.md`（`## 342`）给 `stats` 加了必存在的
+        # `size_quality`、给 `gaps` 加了 `bbox_only`，两个键集不可能再逐字相等；该 Spec 的
+        # 「已记录的偏差（不改测试）」写明修法就是 `assertLessEqual(冻结集, 实际集)`。
+        # 护栏意图（"既有键一个都不许消失"）不减反增：包含式比相等式更能抓到"删键"。
+        self.assertLessEqual({"total", "by_category", "computed", "needs_input", "locked",
+                              "material_unresolved"},
+                             set(before["stats"]),
+                             "stats 必须仍带这六个既有键（只允许新增账户，不允许消失）")
+        self.assertLessEqual({"needs_input", "missing_variables", "material_unresolved"},
+                             set(before["gaps"]),
+                             "gaps 必须仍带这三个既有键（只允许新增账户，不允许消失）")
         after = self.build(bbox_parts())
         self.assertEqual(set(after["stats"]), set(before["stats"]), "stats 键集不许变")
         self.assertEqual(set(after["gaps"]), set(before["gaps"]), "gaps 键集不许变")

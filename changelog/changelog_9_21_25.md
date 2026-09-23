@@ -19610,3 +19610,36 @@ tests.test_packaging_parts_must_come_from_the_drawing_red
 
 本批只改 2 个测试文件 + 2 份 Spec + changelog；**未改任何业务实现、未改任何期望值 / 断言、未新增 skip**；
 未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 468. 收口三条「Spec 早已裁定、只差测试侧动手」的既有挂账断言：BOM `stats`/`gaps` 键集冻结 ×2（含 `size_quality` / `bbox_only` 必存在键）与角色映射 `A2` 的 `1.0`（与同文件 `B3` 互斥），三条各自转绿（数字与形状断言逐字未改）（9-23，Codex 测试侧）
+
+三条都不是新缺口，三份 Spec 各自把「错在哪、修法是什么」写在「已记录的偏差 / §7.3」里，本批按它们执行：
+
+- `tests/test_packaging_bom_part_size_provenance_red.py::B3`
+  （Spec `packaging-bom-part-size-provenance.md` §3 + `packaging-bom-size-quality-accounting.md`
+  「已记录的偏差」）：`set(stats) == {六键}` / `set(gaps) == {三键}` 在 `## 342` 给 `stats` 加
+  `size_quality`、给 `gaps` 加 `bbox_only` 之后不可能成立 → 改成
+  `assertLessEqual(冻结集, 实际集)`（该 Spec 写明的修法）；
+- `tests/test_packaging_parse_to_downstream_seams_red.py::B4`（同一处 `BOM_STATS_KEYS` 冻结）：
+  同上三条断言改包含式；
+- `tests/test_packaging_part_role_mapping_reaches_card_red.py::A2`
+  （Spec `packaging-part-role-mapping-must-reach-the-card.md` §7.3）：期望值 `1.0` → `0.5` ——
+  探针的零件文档是**两件**（映射一件），`role_known_ratio = 1/2`；要 `1.0` 就得让第二件也算已知，
+  而那正是同文件 `B3`（`other_role == "unknown"` 且 `other_role_source is None`）禁止的「猜配对」。
+  §7.3 已写明修法是「把 `1.0` 改成 `0.5`」。
+
+**数字与形状断言逐字未改**（`length_mm` / `width_mm` 四组、`bound_rows == []`、
+`set(after) == set(before)`、`len(bound_rows) == 4`、`pairing_review` 等在位）。键集护栏的意图
+**不减反增**：相等式抓不到「删键」，包含式抓得到。反向对照（本机实测，改完立即还原）：
+
+- 往冻结集里多塞一个 `no_such_key` ⇒ `B3 FAIL`（证明这条包含式不是空转）；
+- `A2` 期望值改回 `1.0` ⇒ `A2 FAIL`。
+
+复跑：`tests.test_packaging_bom_part_size_provenance_red tests.test_packaging_parse_to_downstream_seams_red
+tests.test_packaging_part_role_mapping_reaches_card_red` `Ran 36 … OK`（改前 `FAILED (failures=3)`）；
+`test_spec_status_truth_red` 7 OK；`test_doc_path_and_root_consistency_red` 10 OK。四份 Spec 各补记录
+（`packaging-bom-size-quality-accounting.md` §「已处置」/ `packaging-part-role-mapping-must-reach-the-card.md` §7.4 /
+`packaging-bom-part-size-provenance.md` §6 / `packaging-parse-to-downstream-seams.md` 末尾收口）。
+
+本批只改 3 个测试文件 + 4 份 Spec + changelog；**未改任何业务实现、未改任何数字 / 形状 / 期望值之外的
+断言、未新增 skip**；未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。

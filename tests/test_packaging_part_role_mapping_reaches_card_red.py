@@ -150,9 +150,15 @@ class ARoleReadback(unittest.TestCase):
 
     def test_a2_role_known_ratio_moves_with_the_mapping(self):
         state = probe()
-        self.assertEqual(1.0, state["ratio"],
-                         "`summarize()[\"role_known_ratio\"]` 仍是 %r —— 这一件已经被人工映射过了，"
-                         "必须算进「已知」（Spec §2.1 第 2 条）" % state["ratio"])
+        # `## 468`：期望值由 `1.0` 改为 `0.5` —— 探针的零件文档是**两件**
+        # （`DWG-P09` 映射、`DWG-P10` 未映射），`part_total = 2`，映射落盘后已知 1/2。
+        # 要 `1.0` 就得让第二件也算已知，而那正是同文件 `B3`（`other_role == "unknown"`
+        # 且 `other_role_source is None`）禁止的「猜配对」；Spec §7.3 早已记明两条互斥并写明
+        # 修法就是「把 `1.0` 改成 `0.5`」。这条断言仍守住本层要证明的事：人工映射**真的**
+        # 把这一件从「未知」抬成了「已知」（`0.0 → 0.5`）。
+        self.assertEqual(0.5, state["ratio"],
+                         "`summarize()[\"role_known_ratio\"]` 仍是 %r —— 两件里已映射一件，"
+                         "必须从 0.0 抬到 0.5（Spec §2.1 第 2 条 / §7.3）" % state["ratio"])
 
     def test_a3_card_row_shows_the_mapped_role(self):
         state = probe()
