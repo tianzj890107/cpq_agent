@@ -18357,3 +18357,32 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 实跑：`node --check tech_app/frontend/app.js` 通过；`test_packaging_parts_solid_coverage_red` +
 `test_packaging_solids_parts_version_binding_red` = `Ran 29 OK`。
 未改后端、未改任何既有测试、未放宽任何断言、未起服务、未连 PG / 34、未 push / MR / tag / Release / 部署。
+
+## 442. 落地 `packaging-parts-entry-readback`：重新进入 2.1 读回已落库的那一版零件，空态不再催人重新解析（实现落地；红测 A1/A2 观测点问题见下）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-parts-entry-readback.md`，红测
+`tests/test_packaging_parts_entry_readback_red.py`（12 条：A1–A5 进入即读回、B1–B5 空态证据、C1/C2 服务端护栏）。
+
+- `app.js:openProject()`：`entry === "drawing_flow"` 分支改成
+  `try { await loadDrawingFlowPanel(); } catch (…)` **+** `try { await refreshPackagingParts(); } catch (…)`
+  —— 进入即读回，两条路各自兜住（链路状态读不到不牵连零件读回）；体内没有零件 URL 字面量，
+  复用的仍是唯一加载器；
+- `packagingPartsEmptyText(partsDoc, preconditions, flowState)`：新增第三个参数（省略时行为逐字不变）；
+  `parts_extract` 为 `completed` 且 `detail` 有 `parts_id` / 正的 `parts_total` 时返回
+  「这一刻读不到零件清单；链路里已经有这一版零件（parts_id X，共 N 件），请稍后重试或刷新页面 ——
+  不用重新解析图纸。」（`blocked` 不算证据；没有证据仍是原来那句）；
+  证据取法就地写在函数内（该纯函数被 `node` 单独抽出执行，不许依赖同文件其它函数）。
+
+**红测 A1/A2 的观测点缺陷（需测试侧改 1 处，实现无法绕过）**：`probe_entry()` 的沙箱把
+`refreshPackagingParts()` 换成了记录器（只 `marks.push("parts-loader")`，**不发 fetch**），
+而 A1/A2 断言的是 `urls` 里出现 `/requirement/packaging-parts` —— 该事实只可能出现在 `marks` /
+`state.loaderCalls` 里；唯一能让 `urls` 出现它的是让 `openProject()` 自己拼这条 URL，
+而那正是 A5 禁止、A4 正在守的行为。实测探针输出：
+`marks=["entry-decision","flow-panel","parts-loader"]`、`loaderCalls=1`、`loaderProject` 正确，
+`flow-fails` 变体下 `parts-loader` 依然在（A2 的语义要求已满足）。
+
+实跑：`node --check tech_app/frontend/app.js` 通过；`test_packaging_parts_extraction_red` +
+`read_failure_empty_state_red` + `list_visibility_red` + `drawing_flow_red` +
+`drawing_flow_parse_terminal_signal_red` = `Ran 136 OK (skipped=2)`；
+本批红测 12 条里 A3/B1 转绿、**没有把任何一条已绿的改红**（红基 4 红 8 绿）。
+未改服务端、未改读接口形状、未改分页口径、未放宽任何断言，未 push / MR / tag / Release / 部署。

@@ -2211,7 +2211,7 @@ async function packagingPartsSolidBatch() {
 
 /* ---------------- 2.1 左栏空态的原因文案（Spec C4） ---------------- */
 // 纯函数：有零件 → 空串；否则逐字给服务端的不可用原因 + 前置条件（带码与下一步动作）。
-function packagingPartsEmptyText(partsDoc, preconditions) {
+function packagingPartsEmptyText(partsDoc, preconditions, flowState) {
   const doc = (partsDoc && typeof partsDoc === "object") ? partsDoc : {};
   // 读失败优先于其它所有空态（Spec `packaging-parts-read-failure-empty-state.md` §2.2）：
   // "这一趟读不到零件文档"与"确实没有零件"/"还没算过"是三件事 —— 前者重跑一键解析不会有帮助
@@ -2245,6 +2245,27 @@ function packagingPartsEmptyText(partsDoc, preconditions) {
   const total = Number((doc && doc.total) !== undefined ? doc.total : NaN);
   if (!segments.length && doc.built === true && total === 0) {
     return "这份图纸没有可用的零件。";
+  }
+  // 这一刻读不到 ≠ 还没生成（Spec `packaging-parts-entry-readback.md` §4 B3）：链路里已经有
+  // 这一版零件时，必须给证据并明说"不用重新解析图纸"——「请先跑一键解析图纸」是错的下一步。
+  // 证据的取法（`parts_extract` 这一步 completed，且 `detail` 里有 `parts_id` / 正的
+  // `parts_total`；`blocked` 不算"已经产出过"）就地写在函数里：这个纯函数被 `node` 单独抽出来
+  // 执行，不许依赖同文件的其它函数（Spec `packaging-parts-entry-readback.md` §4 B3）。
+  const flow = (flowState && typeof flowState === "object") ? flowState : {};
+  const steps = Array.isArray(flow.steps) ? flow.steps : [];
+  const step = steps.find(item => String((item || {}).step_id || "") === "parts_extract");
+  const detail = (step && step.detail && typeof step.detail === "object") ? step.detail : {};
+  const evidenceId = (step && String(step.status || "") === "completed")
+    ? String(detail.parts_id || "").trim() : "";
+  const evidenceTotal = (step && String(step.status || "") === "completed")
+    ? Number(detail.parts_total) : NaN;
+  const evidenceCount = (isFinite(evidenceTotal) && evidenceTotal > 0) ? evidenceTotal : 0;
+  if (!segments.length && (evidenceId || evidenceCount)) {
+    const parts = [];
+    if (evidenceId) parts.push(`parts_id ${evidenceId}`);
+    if (evidenceCount) parts.push(`共 ${evidenceCount} 件`);
+    return `这一刻读不到零件清单；链路里已经有这一版零件（${parts.join("，")}），`
+      + "请稍后重试或刷新页面 —— 不用重新解析图纸。";
   }
   if (!segments.length) return "零件文档还没生成，请先跑一键解析图纸。";
   return segments.join("；");
@@ -3895,7 +3916,14 @@ async function openProject(pid) {
       wrap.appendChild(d);
     }
   }
-  if (entry === "drawing_flow") loadDrawingFlowPanel();
+  if (entry === "drawing_flow") {
+    // 进入即读回（Spec `packaging-parts-entry-readback.md` §4 A1–A3）：零件文档是**持久化**的
+    // （`packaging_parts.load_parts()` 不带 parts_id 就是最新一版），重新进入 2.1 必须把它读回来，
+    // 否则左栏永远走空态、还会催用户重跑一遍本来就有的解析。
+    // 两条路各自兜住：链路状态读不到**不许**牵连零件读回（§4 A2）。
+    try { await loadDrawingFlowPanel(); } catch (error) { /* 链路状态那一路自己兜 */ }
+    try { await refreshPackagingParts(); } catch (error) { /* 读不到由空态文案说清 */ }
+  }
 
   // 3D 导入项目: 几何/2D 已由原始实体生成,禁用"基于图/特征重建"的按钮,避免覆盖精确几何
   // 可用性由入口判定给结论：位图走视觉、DWG/DXF 走服务端链路，两者都可点；
@@ -4244,7 +4272,7 @@ function renderTree(ir) {
       const emptyNote = packagingBusinessImportNote(currentPackagingBusinessParts);
       if (emptyNote) tree.appendChild(emptyNote);
       const emptyText = document.createElement("div");
-      emptyText.textContent = packagingPartsEmptyText(doc, preconditions);
+      emptyText.textContent = packagingPartsEmptyText(doc, preconditions, currentDrawingFlowState);
       tree.appendChild(emptyText);
       return;
     }
