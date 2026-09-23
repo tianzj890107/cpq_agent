@@ -19872,3 +19872,86 @@ Spec §7 最后一条「页面与 API 如实展示识别 / 推断 / 待确认三
 未写业务数据、未改前端；未 push / MR / tag / Release / 部署。Spec 头部状态行由「待实现」改成
 「已实现」（并追加 §8 落地记录），`test_spec_status_truth_red` 与 `test_doc_path_and_root_consistency_red`
 26 OK。
+
+## 475. 件名里的 MTEXT 格式码必须被剥掉：圆盘盒 39/66 个件名带着 `\C1;` / `\fSimSun|…;` 出现在业务部件清单里，镜像重复件因此被当成两件（22 OK；红基 9 … FAILED (failures=9)）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+上一批（`## 474`）收尾时顺手把真样本的件名清单打出来核对，`圆盘盒.dwg` 66 个业务部件里有
+**39 个件名带 MTEXT 格式码**：`\C1;地盒内圈衬纸2`、`\C1;10PC圆盒 内托面卡`、
+`\fSimSun|b1|i0|c134|p2; BC坑`、`\fArial|b0|i0|c0|p34;\W1;402X50.5MM…`；酒盒一侧 0/28。
+用户界面上看到的就是这些码；而且同一个零件的**原图 + 镜像**排版（MTEXT run 切法不同）被当成两个件。
+
+根因：`tech_app/backend/services/packaging_business_part_resolver.py` 的 `_strip_mtext_codes()`
+只认**带花括号**的 `{\C0;…}` 那一种写法（`re.sub(r"\{\\[A-Za-z][^;]*;", …)`），
+真样本里不带花括号的写法整串留在件名里。IR 层的 `cad_ir.parser.normalize_text()` 早就剥了码
+（实测 153 条带码文本的 `normalized_text` **一条都不带码**）—— 缺的是业务件名这一层。
+
+### 二、改了什么（1 个生产文件，2 处）
+
+- 模块级新增 `_MTEXT_CODES = re.compile(r"\\(?![Pp])[A-Za-z][^;\\]*;")`：`[^;\\]*` 不许跨过另一个
+  反斜杠（`\P` 折行后面那半段不会被当成"码的一部分"），`(?![Pp])` 显式排除 `\P` / `\p`
+  （它们是**折行**，由 `_SEGMENT_SEEDS` / `LABEL_CUTS` 处理）；
+- `_strip_mtext_codes()` 改成用这条正则（带 / 不带花括号两种写法都剥）；
+- 两个调用点（`_label_head()` / `split_label_parts()`）的顺序改成
+  `_width_normalized(_strip_mtext_codes(text))` —— 与 IR 层一样，在**原样文本**上剥码。
+
+判据、排除规则、截断、别名表、`## 474` 的锚点排序、`packaging_parts` / BOM / 成本 / 门禁一个字未改。
+
+### 三、实测（两份真样本，只读）
+
+| 读数 | 酒盒（不变） | 圆盘盒 改前 | 圆盘盒 改后 |
+| --- | --- | --- | --- |
+| `authority_rows` 行数 | 28 | 66 | **65** |
+| `derived` / 有尺寸 | 26 / 26 | 39 / 39 | **38 / 38** |
+| **件名带 MTEXT 码** | 0 | **39** | **0** |
+| kept 锚点 / 其中件名带码 | 37 / 0 | 161 / 84 | 161 / **0** |
+| `material_text` / `process_text` 带码 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+66 → 65 的那一行是**镜像重复件归并**，不是丢件：`ent:model:8C665`
+（`\C240;\c2367469;1\C1;0PC圆盒 盖/地内外圈围边衬纸1/2：250g双铜 860*460mm 各排2模 2024-04-06`）
+与 `ent:model:8D60F`（`\C240;\c2367469;\C1;10PC圆盒 盖/地内外圈围边衬纸1/2：…` 同上）
+件名与材料逐字相同，只是 MTEXT run 被切在 `1` 与 `0PC` 之间；`_derived_rows()` 按件名分组，
+本来就是同一件 —— 与图纸上其它镜像对（`地盒底贴面纸` ×2、`外层倒扣内衬纸` ×2 …）处理一致。
+
+### 四、口径变化与反向对照（本批**唯一**动到的既有期望值）
+
+`tests/test_packaging_business_part_size_must_be_confirmed_by_dimension_red.py` 的
+`DERIVED_TOTAL` / `SIZED_TOTAL` 圆盘盒那一格 `39 → 38`（那一格自己写着"口径变化请改 Spec"，
+授权落在新 Spec §5）；其它组的期望值、门槛与断言结构一字未动。
+
+反向对照（本机实测）：
+
+```text
+红基（还原成 HEAD 口径）：tests.test_packaging_part_name_mtext_codes_red → Ran 22 … FAILED (failures=9)
+    红的正好是 A1–A6（件名带码 39/66、行数 66、kept 锚点 84 条带码）+ D1（`{\f…;\C1;…}` 只剥了第一段码）
+    + E1（模块里还没有 `_MTEXT_CODES`）+ E4（剥完还留控制序列）；B/C 两组 13 条绿
+反向对照 2（只去掉 `(?![Pp])`）：C1 FAIL —— 件名变成 `内托支撑折板860*500=40M`、材料被吞
+反向对照 3（把调用顺序倒回 `_strip_mtext_codes(_width_normalized(…))`）：**22 条全绿，不转红**
+    —— 两份真样本 `；` 与全角反斜杠各 0 次，顺序差异今天没有观测量。如实记录：§2.3 的理由是
+    "与 IR 层同一条口径"的自洽，不是一条可判别行为
+护栏反向对照（HEAD 代码 + 新的 38）：EGuards.test_e1 FAIL（`38 != 39`）⇒ 那个数字确实由本批改动决定
+```
+
+### 五、实测复跑
+
+```text
+tests.test_packaging_part_name_mtext_codes_red                              Ran 22 … OK
+tests.test_packaging_business_part_size_must_be_confirmed_by_dimension_red  Ran 15 … OK
+tests.test_packaging_business_parts_outline_bbox_link_red / wine truth / 28-part / must-come-from-the-drawing  OK
+全部 tests/test_packaging_*.py（161 模块）                                     Ran 2693 … OK (skipped=12)
+全量（同一份 379 模块列表）：HEAD 代码 Ran 6319 … FAILED (failures=2, skipped=28)
+                            → 本批 Ran 6348 … FAILED (failures=2, skipped=28)
+    （+22 本批新红测 +7 tests.test_oc_agent_open_claude_dir_resolved_at_load_red；
+      失败与跳过逐条不变，那 2 条是 test_cpq_eval_ci_contract 的既有环境/待裁决项，见 ## 472）
+```
+
+### 六、边界（本批**未做**）
+
+- 不碰 `_exclusion_reason()`：`402X50.5MM高/厚度2MM` / `8PCS/箱` / `30659003-10PC 装柜图纸` 这类
+  "规格 / 装箱说明"改后仍在件名里（改前也在，只是带码）—— 它们算不算件名属于
+  `packaging-parts-material-attribution.md` §2.2 那一族（那份 Spec 逐字引用过 `402X50.5MM高/厚度2MM`），
+  不在本批；
+- 不碰 `\U+XXXX` 解码（IR 层 `normalize_text()` 的活；真样本 `raw_text` 里没有这种转义）、不碰图层名；
+- 未改 `packaging_parts.py` / BOM / 成本 / 门禁 / 前端；未新增依赖；未起服务、未连 PG / 34、
+  未写业务数据；未 push / MR / tag / Release / 部署。

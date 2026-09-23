@@ -281,7 +281,7 @@ def _label_head(text: Any) -> str:
 
     只做**截断**；材料/工艺的拆分口径见 `split_label_parts()`（Spec §2.4）。
     """
-    body = _strip_mtext_codes(_width_normalized(text))
+    body = _width_normalized(_strip_mtext_codes(text))
     for marker in LABEL_CUTS:
         at = body.find(marker)
         if at > 0:
@@ -289,9 +289,25 @@ def _label_head(text: Any) -> str:
     return _text(body)
 
 
+#: MTEXT 格式码：`\\C1;`（索引色）/ `\\c2367469;`（RGB 色）/ `\\fSimSun|b0|i0|c134|p2;`（字体）/
+#: `\\W1;`（宽度因子）/ `\\H1.5x;`（字高）。`[^;\\]*` **不许跨过另一个反斜杠**：
+#: 保证 `\\P` 折行后面那半段不会被当成"码的一部分"吞掉（真样本 `内托支撑围条\\PBC坑 K=K …`）。
+#: `\\P` / `\\p` 是**折行**不是格式码，由 `_SEGMENT_SEEDS` / `LABEL_CUTS` 处理，本正则不碰它们。
+_MTEXT_CODES = re.compile(r"\\(?![Pp])[A-Za-z][^;\\]*;")
+
+
 def _strip_mtext_codes(text: Any) -> str:
-    """去掉 MTEXT 的花括号与格式码（`{\\C0;旧款大货色位不够` → `旧款大货色位不够`）。"""
-    body = re.sub(r"\{\\[A-Za-z][^;]*;", "", _text(text))
+    """去掉 MTEXT 的格式码与花括号（`{\\C0;旧款大货色位不够` → `旧款大货色位不够`）。
+
+    老写法只认 `{\\C0;…}` **带花括号**那一种，于是不带花括号的真样本
+    （`\\C1;地盒内圈衬纸2`、`\\fSimSun|b0|i0|c134|p2; BC坑`）把格式码原样留在件名里
+    （圆盘盒实测 39/66 件名带码，见 Spec `packaging-part-name-mtext-codes.md`）。
+    口径与 `cad_ir.parser.normalize_text()` 的「去 MTEXT 格式码」一致（那份实现也是在**原样文本**上剥码）。
+    调用方因此先本函数、再 `_width_normalized()`：`_width_normalized()` 会把全角 `；` 归一成半角，
+    先归一化就等于让宽度归一化参与了「什么是格式码」的判断（见 Spec §2.3；本批在两份真样本上
+    观测不到顺序差异，理由是自洽而不是回归证据）。
+    """
+    body = _MTEXT_CODES.sub("", _text(text))
     return body.replace("{", "").replace("}", "")
 
 
@@ -358,7 +374,7 @@ def split_label_parts(raw: Any) -> Tuple[str, str, str]:
       工艺 `啤面`（视图标题 `正面图` 既不进材料也不进工艺）。
     原文不在这里丢：调用方把 `raw_text` 一起留着（`source_text`）。
     """
-    body = _strip_mtext_codes(_width_normalized(raw))
+    body = _width_normalized(_strip_mtext_codes(raw))
     for seed in _SEGMENT_SEEDS:
         body = body.replace(seed, _SEGMENT_SEP)
     match = _NAME_MARKER.search(body)
