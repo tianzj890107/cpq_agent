@@ -1239,7 +1239,7 @@ function renderPackagingPartPanel(payload) {
   const title = $("packagingPartTitle");
   if (title) {
     const name = `${part.part_code || ""} ${part.name || ""}`.trim();
-    title.textContent = name || "图纸零件";
+    title.textContent = name || "几何分量";
   }
 
   // 轮廓：只把后端给的点串成 viewBox + polygon；Y 轴用 <g> 的 transform 翻转，JS 里不做坐标运算。
@@ -1333,7 +1333,7 @@ function enterDrawingFlowPanes() {
   const plan = packagingCadPlanViewer();
   if (plan) plan.hidden = !packagingCadPlanApplies();
   const label = $("viewerPartName");
-  if (label) label.textContent = "图纸零件 · 选中后看轮廓与证据";
+  if (label) label.textContent = "几何分量（图纸零件）· 选中后看轮廓与证据";
   loadPackagingCadPlan();
 }
 
@@ -3036,12 +3036,60 @@ function packagingBusinessTruthLine(doc) {
   return `识别 ${observed} · 推断 ${inferred} · 待确认 ${pending}`;
 }
 
+// 两笔账的同屏对账（Spec「两笔账同屏对账」§2.1）：只搬两个分子，
+// 不自己判定几何 —— 几何账读不到说"待确认"，业务账还没落库说"还没有业务部件清单"，两件事不许混。
+function packagingTwoLedgersLine(geometryDoc, businessDoc) {
+  const geometry = (geometryDoc && typeof geometryDoc === "object") ? geometryDoc : null;
+  const business = (businessDoc && typeof businessDoc === "object") ? businessDoc : null;
+  const num = value => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+  };
+  const problem = doc => (doc && doc.read_problem && typeof doc.read_problem === "object"
+    && String(doc.read_problem.code || "").trim()) ? doc.read_problem : null;
+  const geometryStats = (geometry && geometry.stats && typeof geometry.stats === "object")
+    ? geometry.stats : {};
+  const geometryTotal = num(geometry && geometry.total) || num(geometryStats.part_total);
+  const geometryProblem = problem(geometry);
+  const geometryKnown = geometryTotal > 0 && !geometryProblem;
+  const summary = (business && business.summary && typeof business.summary === "object")
+    ? business.summary : {};
+  const summaryStats = (summary.stats && typeof summary.stats === "object") ? summary.stats : {};
+  const flatStats = (business && business.stats && typeof business.stats === "object")
+    ? business.stats : {};
+  const pickBusiness = key => num(summaryStats[key]) || num(flatStats[key]);
+  const businessTotal = pickBusiness("business_part_total");
+  const boundTotal = pickBusiness("bound_total");
+  const businessProblem = problem(business);
+  const businessKnown = businessTotal > 0 && !businessProblem;
+  const businessChannel = businessKnown
+    ? `业务部件 ${businessTotal} 件（已定位 ${boundTotal} 件）` : "";
+  if (geometryKnown && businessKnown) return `几何区域 ${geometryTotal} 个 → ${businessChannel}`;
+  if (geometryKnown) {
+    return businessProblem
+      ? `几何区域 ${geometryTotal} 个 → 业务部件清单读不到`
+      : `几何区域 ${geometryTotal} 个 → 还没有业务部件清单`;
+  }
+  if (businessKnown) return `几何区域待确认 → ${businessChannel}`;
+  return "";
+}
+
 function renderPackagingBusinessTree(tree, rows) {
   const head = document.createElement("div");
   head.className = "packaging-business-head";
   head.dataset.qqBusinessParts = "1";
   head.textContent = `业务部件 ${rows.length} 件（${packagingBusinessPartsSourceLabel(currentPackagingBusinessParts)}）`;
   tree.appendChild(head);
+  // 同一句对账（Spec「两笔账同屏对账」§2.2）：业务账有行的这一路也要把
+  // 几何账的分子摆在旁边 —— 人在两条路上看到的口径必须一致；空串时不出现空节点。
+  const ledgerLine = packagingTwoLedgersLine(currentPackagingParts, currentPackagingBusinessParts);
+  if (ledgerLine) {
+    const ledgerNote = document.createElement("div");
+    ledgerNote.className = "packaging-ledger-reconciliation";
+    ledgerNote.setAttribute("data-qq-ledger-reconciliation", "1");
+    ledgerNote.textContent = ledgerLine;
+    tree.appendChild(ledgerNote);
+  }
   // 三档那一行（Spec `packaging-business-truth-state-disclosure.md` §2.6）：文案来自 payload，
   // 空串（工作簿来源 / 老载荷）时这一行整块不出现。
   const truthLine = packagingBusinessTruthLine(currentPackagingBusinessParts || {});
@@ -4496,6 +4544,16 @@ function renderTree(ir) {
     const total = listing.total;
     const kindTotal = listing.kindTotal;
     const preconditions = (currentDrawingFlowState && currentDrawingFlowState.preconditions) || [];
+    // 两笔账的同屏对账（Spec「两笔账同屏对账」§2.2）：几何账与业务账
+    // 摆在同一行说清关系 —— 263 是几何连通分量、28 才是业务部件；空串（两边都取不到数）不渲染。
+    const ledgerLine = packagingTwoLedgersLine(doc, currentPackagingBusinessParts);
+    if (ledgerLine) {
+      const ledgerNote = document.createElement("div");
+      ledgerNote.className = "packaging-ledger-reconciliation";
+      ledgerNote.setAttribute("data-qq-ledger-reconciliation", "1");
+      ledgerNote.textContent = ledgerLine;
+      tree.appendChild(ledgerNote);
+    }
     tree.classList.toggle("empty-state", !rows.length);
     // 写后重读失败（Spec `packaging-parts-reread-failure-after-write.md` §2.3）：这一笔已经提交
     // 成功，只是列表没能重新读回来 —— **有零件也要说**（上面/below 那些行一个都不许少）。
@@ -4663,14 +4721,14 @@ function renderTree(ir) {
     const countNote = document.createElement("div");
     countNote.className = "part-count-note";
     countNote.dataset.qqPartsShown = "1";
-    countNote.textContent = `已显示 ${rows.length} 件，共 ${total} 件（${kindTotal} 种形状）`;
+    countNote.textContent = `已显示 ${rows.length} 个几何分量，共 ${total} 个（${kindTotal} 种形状）`;
     tree.appendChild(countNote);
     // 第二句 + 继续加载：翻页拿下一页，不许只能看前 64 件。
     const missing = Math.max(0, total - rows.length);
     if (missing > 0) {
       const note = document.createElement("div");
       note.className = "part-truncated-note";
-      note.textContent = `还有 ${missing} 件未列出（只显示前 ${rows.length} 件）`;
+      note.textContent = `还有 ${missing} 个几何分量未列出（只显示前 ${rows.length} 个）`;
       const more = document.createElement("button");
       more.id = "packagingPartsLoadMore";
       more.className = "btn btn-secondary";

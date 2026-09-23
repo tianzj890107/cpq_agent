@@ -20022,3 +20022,60 @@ node --check tech_app/frontend/app.js                              退出码 0
   老载荷缺键时**不判死**）—— 往行上搬要先定"行上的值以谁为准"，那是另一份 Spec 的事；
 - 未造新的覆盖率比值、未改绑定统计与 `business_parts_id` 的生成口径、未改索引 / 路由 / 权限；
 - 未读金标、未起服务、未连 PG / 34、未写业务数据、未新增依赖；未 push / MR / tag / Release / 部署。
+
+## 477. 落地「两笔账同屏对账」：263 个几何分量与 28 件业务部件从此摆在同一行，几何分量的右栏面板不再自称「图纸零件」（17 OK；红基 14 FAIL）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+用户问「为什么还是解析出来 263 个 / 是不是要重建项目才出二十多个」。先把两笔账**各自**读出来核对：
+隔离 `DATA_DIR` 真跑 `酒盒.dwg`，一趟链路里 `packaging_parts` 文档 `kept=263 parts=263`、
+`packaging_business_parts` 清单 `total=28 bound=26 unbound=2` —— 差 235，**两笔都是真值**：
+263 是 CAD 图上的几何连通分量，28 是业务部件（BOM 口径的采购 / 加工件）。缺的不是解析，是**对账**：
+`grep` 同时出现两个分子的那一行 **0 处**，而且几何分量的右栏面板标题直接写着「图纸零件」
+（`index.html:206` / `app.js:1242` / `app.js:1336`）—— 点 `DWG-P01` 看到的就是「图纸零件 …」，
+人自然以为"解析出 263 件零件"。
+
+### 二、改了什么（2 个前端文件，纯前端；未碰后端 / 数据 / 接口）
+
+- `tech_app/frontend/app.js` 新增纯函数 `packagingTwoLedgersLine(geometryDoc, businessDoc)`：
+  只搬两个分子，四种组合逐字输出 `几何区域 263 个 → 业务部件 28 件（已定位 26 件）` /
+  `→ 还没有业务部件清单` / `几何区域待确认 → …` / `→ 业务部件清单读不到`；两边都取不到数回 `""`
+  （**不许**拼 0/0）。`typeof === "object"` 守卫让字符串 / 数字 / `null` 入参一律回 `""`、不抛异常。
+- 对账行落在**两条**渲染路上：`renderTree()` 的几何兜底路（排在 `geometry-diagnostics` 折叠区
+  **之前**，人在折叠区外就能看到）与 `renderPackagingBusinessTree()`；钩子
+  `data-qq-ledger-reconciliation="1"`，空串不建节点。
+- 措辞只改量词与限定词：`已显示 ${rows.length} 个几何分量，共 ${total} 个（${kindTotal} 种形状）`、
+  `还有 ${missing} 个几何分量未列出（只显示前 ${rows.length} 个）`；
+  `#viewerPartName` → `几何分量（图纸零件）· 选中后看轮廓与证据`（**仍含** `图纸零件` 字面量，
+  `test_packaging_parts_panel_red` 的既有契约不许破）；几何分量面板标题兜底与
+  `index.html:206` 的默认文案 → `几何分量`，`renderPackagingPartPanel()` 体内不再出现 `图纸零件`。
+- 业务部件通道的 `业务部件 ${rows.length} 件（…）` 与 `几何诊断 / 映射证据（几何区域 ${total} 个，默认收起）`
+  逐字保留；诊断行名 `图纸零件 PNN`（解析侧命名）不动。
+
+### 三、口径与反向对照（本机实测）
+
+```text
+红基（三个文件还原成 HEAD 0312614）：tests.test_packaging_two_ledgers_reconciliation_red
+     Ran 17 … FAILED (failures=14)  —— 红 L1–L8 / W1–W3 / S1–S3；绿 S4/S5/S6 三条护栏
+反向对照 1（只把纯函数里 ' 个 → ' 换成 ' 个 => '）：Ran 17 … FAILED (failures=4)
+     ⇒ L1 / L2 / L4 / L6 四条红；L3 那一句是 `几何区域待确认 → …`（不含 ' 个 → '），**不转红**，如实记
+反向对照 2（只把 index.html 的 #packagingPartTitle 改回 `图纸零件`）：S3 单条红
+```
+
+Spec 头部状态行由「未实现」改成「已实现」；§5 补红基与反向对照、§6 改成落地状态表（原红基原文保留）。
+
+### 四、实测复跑
+
+```text
+tests.test_packaging_two_ledgers_reconciliation_red                Ran 17 … OK
+node --check tech_app/frontend/app.js                              退出码 0
+app.js 相关 90 模块（本批红测除外）                                  Ran 1451 … OK (skipped=4)
+全部 tests/test_packaging_*.py（164 模块）                          Ran 2754 … OK (skipped=12)
+```
+
+### 五、边界（本批**未做**，如实记）
+
+- 不合并两笔账的数据源：几何分量仍是几何分量（263 件口径不变），业务部件仍是唯一部件集合 ——
+  本批只把"两者关系"说清楚；
+- 不改诊断行件名（`图纸零件 PNN` 来自解析侧）、不做前端几何解析、不调模型、不加依赖、不连 PG / 34；
+- 未起服务、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。
