@@ -113,6 +113,11 @@ def _merge_warnings(known: Any, upstream: Any, extra: List[Dict[str, Any]]) -> L
             "evidence_refs": model.evidence_refs_of(known, item.get("evidence_refs")
                                                     or item.get("evidence_ref")),
         }
+        # 既有警告行只有三键；**带数的警告**（截断那条的 `dropped_total`，Spec
+        # `packaging-semantics-candidate-truncation-must-be-counted.md` §2.3）原样透传，
+        # 不许在这一层被合并掉。
+        if item.get("dropped_total") is not None:
+            row["dropped_total"] = item.get("dropped_total")
         rows.setdefault((row["code"], row["message"]), row)
     return [rows[key] for key in sorted(rows)]
 
@@ -142,9 +147,16 @@ def analyze(ir: Dict[str, Any], *, template: Optional[str] = None, rules: Any = 
     box_candidates = built["box_candidates"]
     warnings = list(built["warnings"])
     if geometry.get("truncated"):
+        # 警告正文必须让人读出"上限 + 两本书各丢了多少"（Spec §2.3）：只有一句"超过上限"的话，
+        # `stats` 上那个 200 永远分不出是上限还是真值。
+        dropped_candidates = int(geometry.get("boundary_candidates_dropped") or 0)
+        dropped_holes = int(geometry.get("holes_dropped") or 0)
         warnings.append({"code": "PACKAGING_SEMANTICS_CANDIDATES_TRUNCATED",
-                         "message": "轮廓/孔位候选超过上限，已截断，请人工核对图纸",
-                         "evidence_refs": []})
+                         "message": "轮廓/孔位候选超过上限（%d）：轮廓候选丢了 %d 条、"
+                                    "孔位丢了 %d 条，已截断，请人工核对图纸"
+                                    % (max_candidates, dropped_candidates, dropped_holes),
+                         "evidence_refs": [],
+                         "dropped_total": dropped_candidates + dropped_holes})
     # Spec §2.3：有候选被排除（拼版/图框/整张）才出这条警告。
     rejected = list(geometry.get("rejected") or [])
     if rejected:
@@ -177,6 +189,11 @@ def analyze(ir: Dict[str, Any], *, template: Optional[str] = None, rules: Any = 
         "windows": geometry["windows"],
         "holes": geometry["holes"],
         "panel": geometry["panel"],
+        # 截断的两本账 + 本次**生效**的上限（Spec §2.2）：`stats.boundary_candidate_total`
+        # 仍是"列出来的条数"，但配上 `candidate_cap` 才读得出"200 是上限还是真值"。
+        "candidate_cap": max_candidates,
+        "boundary_candidates_dropped_total": int(geometry.get("boundary_candidates_dropped") or 0),
+        "holes_dropped_total": int(geometry.get("holes_dropped") or 0),
     }
     reason_overrides = {str(key): REASON_PRODUCT_OUTLINE_UNCERTAIN for key in uncertain_fields}
     unresolved = _unresolved(fields_out, unknown_layers, known,

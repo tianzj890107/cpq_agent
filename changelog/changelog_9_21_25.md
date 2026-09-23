@@ -18557,3 +18557,30 @@ B1–B7 护栏）。
 / `packaging_drawing_flow_red` / `packaging_business_parts_and_cad_plan_view_red` /
 `spec_status_truth_red` 一并复跑）。未改规则表、`cad_ir.normalize_text()`、角色闭集；未 push /
 MR / tag / Release / 部署、未连 PG、样本只读。
+
+## 453. 落地 `packaging-semantics-candidate-truncation-must-be-counted`：轮廓/孔位候选被上限截断时把"上限 + 两本书各丢多少"说出来（8 OK，红基 7 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-semantics-candidate-truncation-must-be-counted.md`，红测
+`tests/test_packaging_semantics_candidate_truncation_red.py`（8 条：T1–T5/T7/T8 默认跑，T6 真样本组
+要 `CPQ_DWG_REAL_SAMPLES=1`）。
+
+- `geometry_semantics.build_geometry()` 新增两本账 `boundary_candidates_dropped` /
+  `holes_dropped`（候选段与孔位段各记一次），`truncated` 改成两者之和 —— 既有取值与含义不变；
+  `max_candidates <= 0` 仍是"不设上限"，两个新键都为 `0`；排序与 `[:max]` 截断口径一字未改；
+- `analyze()` 的 `outline` 新增 `candidate_cap`（本次**生效**的上限，`0` = 不设上限）与两个
+  `*_dropped_total`；`stats.boundary_candidate_total` / `hole_total` **仍是 `len(...)`**（本批是加
+  披露，不是改这两个键的含义）；
+- `PACKAGING_SEMANTICS_CANDIDATES_TRUNCATED` 警告仍是"只有真被截断才出现"，新增 `dropped_total`
+  （两本书之和），正文改成"轮廓/孔位候选超过上限（200）：轮廓候选丢了 5400 条、孔位丢了 442 条，
+  已截断，请人工核对图纸"；`_merge_warnings()` 对带数的警告**原样透传**（既有警告行仍是三键）；
+- 真样本复跑（本机 LibreDWG，只读）：`酒盒.dwg` 列出 200 / 丢掉 5400 + 442（真值 5600 / 642）；
+  `圆盘盒.dwg` 列出 200 / 丢掉 5887 + 22（真值 6087 / 222）—— 与 Spec §1 的表逐字一致；
+- 未改 `stats` 键集、`REQUIRED_KEYS`、`SEMANTICS_VERSION`、警告 code 闭集、
+  `PACKAGING_SEMANTICS_MAX_CANDIDATES` 默认值、产品级候选判据、后端接口与前端。
+
+实跑：`Ran 7 OK (skipped=1)`（红基 6 红 + 1 skip）；`CPQ_DWG_REAL_SAMPLES=1` 下 `Ran 8 in 9.7s OK`
+（红基 7 红）；保护网 `Ran 239 tests … OK (skipped=6)`（`packaging_semantics_red` /
+`packaging_parts_extraction_red` / `packaging_product_outline_red` /
+`packaging_layer_name_unicode_escape_red` / `packaging_drawing_flow_red` /
+`packaging_business_parts_and_cad_plan_view_red` / `dxf_cad_ir_red`）。未 push / MR / tag /
+Release / 部署、未连 PG、样本只读。

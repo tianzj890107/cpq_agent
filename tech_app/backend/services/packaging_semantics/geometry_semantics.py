@@ -99,9 +99,11 @@ def build_geometry(ir: Dict[str, Any], layers: List[Dict[str, Any]], known: Any,
     # Spec §3：候选按 (is_closed desc, -area, outline_id) 排序 → 与输入书写顺序无关。
     candidates.sort(key=lambda row: (0 if row["is_closed"] else 1, -row["area"],
                                      row["outline_id"]))
-    truncated = 0
+    # 被上限丢掉的条数**分两本书各记一次**（Spec `packaging-semantics-candidate-truncation-must-be-counted.md`
+    # §2.1）：只留 `truncated` 的和，就分不出"是哪一本被截断"、也读不出"丢了多少"。
+    boundary_candidates_dropped = 0
     if max_candidates and len(candidates) > max_candidates:
-        truncated = len(candidates) - max_candidates
+        boundary_candidates_dropped = len(candidates) - max_candidates
         candidates = candidates[:max_candidates]
 
     holes: List[Dict[str, Any]] = []
@@ -138,8 +140,9 @@ def build_geometry(ir: Dict[str, Any], layers: List[Dict[str, Any]], known: Any,
             "evidence_refs": refs,
         })
     holes.sort(key=lambda row: (row["hole_id"], row["kind"]))
+    holes_dropped = 0
     if max_candidates and len(holes) > max_candidates:
-        truncated += len(holes) - max_candidates
+        holes_dropped = len(holes) - max_candidates
         holes = holes[:max_candidates]
 
     bleed = [{"outline_id": row["outline_id"], "bbox": row["bbox"], "area": row["area"],
@@ -162,7 +165,10 @@ def build_geometry(ir: Dict[str, Any], layers: List[Dict[str, Any]], known: Any,
         "windows": windows,
         "holes": holes,
         "panel": _panel(geometry, candidates, known),
-        "truncated": truncated,
+        # `truncated` 的取值与含义不变（两本书被丢掉的条数之和），另外**各给一本账**。
+        "boundary_candidates_dropped": boundary_candidates_dropped,
+        "holes_dropped": holes_dropped,
+        "truncated": boundary_candidates_dropped + holes_dropped,
     }
 
 
