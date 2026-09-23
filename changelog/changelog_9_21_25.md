@@ -18303,3 +18303,29 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `part_role_mapping::test_a2`（stash 掉本批改动后同一条仍红，非本批引入）；
 `test_spec_status_truth_red` = `Ran 7 OK`。未起服务、未连 PG / 34、未写业务数据、
 未 push / MR / tag / Release / 部署。
+
+## 440. 落地 `packaging-rules-audit-unparsable-formula`：规则对账「读不懂这条公式」不再判成「你抄错了」（8 OK，红基 5 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-rules-audit-unparsable-formula.md`，红测
+`tests/test_packaging_rules_audit_unparsable_formula_red.py`（8 条，实现前 U1–U5 红、U6–U8 绿护栏）。
+
+- `packaging_cost.py:verbatim_compare()` 返回体新增 `unparsable`（`[]` / `["expression"]` / `["source"]` /
+  `["expression","source"]`，顺序固定；判据 = 该侧 `_canonical_formula()` 返回 `None`）；
+  六个既有键（含 `reason` 的全部取值）逐字不变；
+- `tools/extract_packaging_rules.py`：逐字对账分支新增 **`unparsable_formula` + 退出码 1**，
+  detail 逐字「表达式与 <cell> 原文至少一侧解析不出规范串（读不懂，不是改写）：<expression|source|…>」，
+  同一处不再报 `source_cell_mismatch`；真不等价仍 `source_cell_mismatch` + 2（文案未动）；
+  `unmapped_variable` 优先级不变；
+- 来源侧的原文不只看快照 `source_formula`，**也看工作簿该格原文**（工具本来就读的那份）；
+- 工具 docstring 头部 + `docs/specs/packaging-cost-minimum-charge.md` §7 码表都补上该码（退出码列 `1`）。
+
+**红测夹具与 Spec §1/§5 的一处出入（实现按红测走，已写进 Spec §7）**：U1 的"来源原文含区间"在红测里是
+**工作簿单元格**，快照 `source_formula` 仍可解析 —— 于是 U1 改前的真实现象不是「报
+`source_cell_mismatch` / 2」，而是**什么都不报**（`ok=True`，比报错更危险）。实现据此把工作簿原文
+纳入来源侧判定；U3（快照漏字段）仍是 `source` 侧读不懂，两条现实不再共用一个码。
+
+实跑：`test_packaging_rules_audit_unparsable_formula_red` = `Ran 8 OK`（红基 `Ran 8 … failures=5`）；
+`test_packaging_cost_column_evidence_red` / `cost_engine_red` / `cost_minimum_charge_red` /
+`cost_red_closure_red` / `cost_rule_routing_red` / `cost_rule_snapshot_red` 一起 = OK (skipped=1)；
+真实工作簿 + 真实快照 `extract_packaging_rules.py --check` 仍 `exit_code=0`（未新增误报）。
+未改快照 JSON、未改工作簿、未改 `EXIT_*` 数值、未改既有文案，未 push / MR / tag / Release / 部署。

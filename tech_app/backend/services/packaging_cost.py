@@ -808,9 +808,16 @@ def _resolve_expression(expression: Any, variable_map: Any, row: str, literals: 
 
 def verbatim_compare(expression: Any, source_formula: Any, variable_map: Any, source_cell: Any,
                      literals: Any = None) -> dict:
-    """逐字等价判定（Spec §5.3）；返回 `{equivalent, unmapped, resolved, source, reason}`。"""
+    """逐字等价判定（Spec §5.3）；返回 `{equivalent, unmapped, resolved, source, reason, unparsable}`。
+
+    `unparsable`（Spec `packaging-rules-audit-unparsable-formula.md` §2.1）点名**哪一侧读不懂**
+    —— 只允许 `"expression"` / `"source"`，两侧都读不懂时顺序固定「先 expression 后 source」，
+    两侧都读得懂（等价与不等价）都是 `[]`。判据就是该侧 `_canonical_formula()` 返回 `None`；
+    它只把答案交出来，`reason` 的取值与其余六个键逐字不变。
+    """
     row = _source_row(source_cell)
-    result = {"equivalent": False, "unmapped": [], "resolved": "", "source": "", "reason": ""}
+    result = {"equivalent": False, "unmapped": [], "resolved": "", "source": "", "reason": "",
+              "unparsable": []}
     if not row:
         result["reason"] = "bad_source_cell"
         return result
@@ -823,6 +830,8 @@ def verbatim_compare(expression: Any, source_formula: Any, variable_map: Any, so
     left = _canonical_formula(resolved)
     right = _canonical_formula(source_formula)
     result["source"] = right or ""
+    result["unparsable"] = [name for name, value in (("expression", left), ("source", right))
+                            if value is None]
     if left is None or right is None:
         result["reason"] = "unparsable"
         return result

@@ -257,6 +257,7 @@ verbatim_equivalent(expression, source_formula, variable_map, source_cell, liter
 | `minimum_charge_source_missing` | `minimum_charge > 0` 但没有 `minimum_charge_source_ref` | 1 |
 | `minimum_charge_not_in_source` | `minimum_charge` 数值不在来源单元格原文里（挡 120） | 1 |
 | `source_cell_mismatch` | `expression` 与 `source_cell` 原文不逐字等价 | 2 |
+| `unparsable_formula` | `expression` 或 `source_cell` 原文至少一侧解析不出规范串（**读不懂，不是改写**） | 1 |
 | `unmapped_variable` | 表达式变量在 `variable_map` 里没有对应单元格引用 | 1 |
 | `hidden_sheet_source` | 任何来源指向隐藏 Sheet | 1 |
 

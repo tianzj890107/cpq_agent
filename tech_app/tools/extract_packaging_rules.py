@@ -26,7 +26,8 @@
   `minimum_charge_policy_unknown`、`minimum_charge_policy_golden_mismatch`、
   `mixed_source_formula`、`minimum_charge_source_missing`、`minimum_charge_not_in_source`、
   `source_cell_mismatch`（逐字等价，判定实现与运行时**同一份**）、`unmapped_variable`、
-  `hidden_sheet_source`；
+  `unparsable_formula`（`expression` 或来源原文**至少一侧解析不出规范串** —— 读不懂，
+  不是改写；Spec `packaging-rules-audit-unparsable-formula.md` §2.2）、`hidden_sheet_source`；
 · **逐列证据**（有 `categories` / `column_evidence` 时启用）：`category_evidence_missing`、
   `evidence_kind_unknown`、`evidence_cell_has_no_formula`、`formula_without_evidence`、
   `invented_formula_for_blank_column`、`column_evidence_incomplete`。
@@ -483,11 +484,27 @@ def audit_rules(cells, rules, *, workbook_sha256, workbook_name="", catalog_code
                 add("unmapped_variable", where,
                     "表达式变量 %s 既不在 variable_map 也不在 literals 里"
                     % "、".join(compare["unmapped"]), EXIT_MISMATCH)
-            elif not compare.get("equivalent"):
-                target = workbook_source or declared_source
-                if target:
-                    add("source_cell_mismatch", where,
-                        "expression 与 %s 原文不逐字等价（改写不等于等价）" % cell, EXIT_BROKEN)
+            else:
+                # 读不懂 ≠ 改写（Spec `packaging-rules-audit-unparsable-formula.md` §2.2）。
+                # 来源那一侧的原文有两处：快照申报的 `source_formula` 与**工作簿该格**——
+                # 任一处解析不出规范串，这一条就是「我没能校验」，不是「你抄错了」。
+                sides = [str(side) for side in (compare.get("unparsable") or [])]
+                if workbook_source:
+                    cell_check = verbatim_compare(str(item.get("expression") or ""),
+                                                  workbook_source,
+                                                  item.get("variable_map") or {}, cell, literals)
+                    if "source" in (cell_check.get("unparsable") or []) and "source" not in sides:
+                        sides.append("source")
+                if sides:
+                    add("unparsable_formula", where,
+                        "表达式与 %s 原文至少一侧解析不出规范串（读不懂，不是改写）：%s"
+                        % (cell, "+".join(sides)), EXIT_MISMATCH)
+                elif not compare.get("equivalent"):
+                    target = workbook_source or declared_source
+                    if target:
+                        add("source_cell_mismatch", where,
+                            "expression 与 %s 原文不逐字等价（改写不等于等价）" % cell,
+                            EXIT_BROKEN)
 
     # 5) 最低收费口径申报（Spec 修复第 3 批 §7） --------------------------- #
     if single_source:
