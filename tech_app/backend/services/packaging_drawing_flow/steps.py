@@ -79,6 +79,25 @@ def _failed(code: str, message: str, detail: Optional[dict] = None,
             "detail": dict(detail or {})}
 
 
+def _retryable_from_exception(code: str, value: Any) -> Optional[bool]:
+    """把异常自带的可重试性翻成 `_failed(retryable=…)` 的入参。
+
+    Spec `packaging-flow-step-reports-retryable-honestly.md` §2：异常这一侧是带答案的
+    （`file_preflight.FileCapabilityError` 把 `STABLE_ERROR_CODES[code]["retryable"]`
+    读进实例），照它报即可 —— 但**只有权威码表认识这个码时**才作数：不在闭集里的码上
+    那个属性只是构造函数给的默认值（`False`），照它报会把"读取故障仍可重试"说成不可
+    重试（该 Spec 的 R5 护栏）。没有答案时返回 `True`，即 `_failed()` 的既有默认。
+    """
+    if not isinstance(value, bool):
+        return True                                       # 取不到 → 既有默认
+    try:
+        from tech_app.backend.services import file_preflight
+        known = str(code) in file_preflight.STABLE_ERROR_CODES
+    except Exception:                                     # noqa: BLE001 - 探测失败按"不认识"
+        known = False
+    return bool(value) if known else True
+
+
 def _emit(project_id: str, run_id: str, key: str, text: str,
           field: Optional[dict] = None) -> dict:
     event = {"kind": "session-note", "source": "flow", "stage": "drawing",
@@ -158,7 +177,9 @@ def dwg_convert(ctx: Dict[str, Any]) -> Dict[str, Any]:
         # 真因优先：我们自己的 DrawingFlowError 的 str() 就是它带的消息，别的异常打印
         # 自身文案 —— 不再 sniff 一个多数异常都没有的 `.message`（Spec C2）。
         message = str(exc) or "图纸转换失败，请重试或联系管理员"
-        return _failed(code, message, {"reason": type(exc).__name__})
+        return _failed(code, message, {"reason": type(exc).__name__},
+                       retryable=_retryable_from_exception(
+                           code, getattr(exc, "retryable", None)))
     manifest = manifest if isinstance(manifest, dict) else {}
     status = str(manifest.get("status") or "")
     detail = {"conversion_id": str(manifest.get("conversion_id") or ""),
@@ -207,7 +228,9 @@ def cad_ir_parse(ctx: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         code = str(getattr(exc, "stable_error_code", "") or "CAD_IR_SOURCE_MISSING")
         return _failed(code, str(exc) or "CAD 矢量解析失败，请重试",
-                       {"reason": type(exc).__name__})
+                       {"reason": type(exc).__name__},
+                       retryable=_retryable_from_exception(
+                           code, getattr(exc, "retryable", None)))
     ir = ir if isinstance(ir, dict) else {}
     summary = summarize(ir) if callable(summarize) else {}
     summary = summary if isinstance(summary, dict) else {}
@@ -259,7 +282,9 @@ def packaging_semantics(ctx: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         code = str(getattr(exc, "stable_error_code", "") or "PACKAGING_SEMANTICS_FAILED")
         return _failed(code, str(exc) or "包装语义识别失败，请重试",
-                       {"reason": type(exc).__name__})
+                       {"reason": type(exc).__name__},
+                       retryable=_retryable_from_exception(
+                           code, getattr(exc, "retryable", None)))
     doc = doc if isinstance(doc, dict) else {}
     source = doc.get("source") if isinstance(doc.get("source"), dict) else {}
     stats = doc.get("stats") if isinstance(doc.get("stats"), dict) else {}

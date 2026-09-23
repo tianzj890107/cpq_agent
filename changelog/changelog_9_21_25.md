@@ -18230,3 +18230,29 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 只换刻度与读数，**没动能力**：圆盘盒 `role_known_total=9`（2.9%）仍很低，要更硬得另开一批抬角色识别率；
 `parts_demo_script` 仍是 `manual_unacknowledged`（未代签）；`--env production` 的 `skip → reasons` 与退出码逐字未动。
 未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 437. 落地 `packaging-flow-step-reports-retryable-honestly`：三步 catch 不再把「重试没用」的失败说成「（可重试）」（8 OK，红基 4 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-flow-step-reports-retryable-honestly.md`，红测
+`tests/test_packaging_flow_step_reports_retryable_honestly_red.py`（8 条，实现前 R1/R2/R3/R6 红、R4/R5/R7/R8 绿护栏）。
+
+- `packaging_drawing_flow/steps.py` 新增顶层纯函数 `_retryable_from_exception(code, value)`：
+  **只有码属于权威闭集 `file_preflight.STABLE_ERROR_CODES` 时**才照异常自带的可重试性报；
+  码不在闭集里（含只登记在**流层** `model.ERROR_CODES` 的码）或异常没有该属性 → 既有默认 `True`；
+- `dwg_convert()` / `cad_ir_parse()` / `packaging_semantics()` 三处 catch 的 `_failed(...)`
+  各加 `retryable=_retryable_from_exception(code, getattr(exc, "retryable", None))`；
+  `code` 取法（`stable_error_code` 优先 + 三个兜底码）、`message`、`{"reason": 类名}`、`status="failed"` 逐字未动；
+- 效果：`PACKAGING_LAYER_RULES_INVALID`(500,False)「请联系系统管理员」、
+  `CAD_IR_ENTITY_LIMIT_EXCEEDED`(413,False)「请拆分图纸」、`DWG_CONVERTER_BINARY_UNUSABLE`(500,False)
+  「请检查转换器安装与配置」不再被报成可重试；`DRAWING_SOURCE_UNAVAILABLE` / `DWG_CONVERSION_FAILED`
+  这类读取故障仍报可重试（R5/R4 护栏）。
+
+**口径出入（实现按红测走，已写进 Spec §5）**：Spec §1 把 `DRAWING_SOURCE_UNAVAILABLE` 记成权威闭集里的
+「(503, True)」，实测它不在 `file_preflight.STABLE_ERROR_CODES`（只在流层表），
+`FileCapabilityError("DRAWING_SOURCE_UNAVAILABLE").retryable` 是构造默认 `False` —— 无条件照异常报会踩中
+该 Spec 自己的 R5 护栏，所以实现的判据加了一道「码确实在权威闭集里」的前置。未改任何测试、未改码表数值。
+
+实跑：`test_packaging_flow_step_reports_retryable_honestly_red` = `Ran 8 OK`（红基 `Ran 8 … failures=4`）；
+`test_drawing_flow_error_taxonomy_red` + `test_packaging_semantics_red` + `test_dwg_file_capability_preflight_red`
+= `Ran 102 OK (skipped=1)`；`test_spec_status_truth_red` = `Ran 7 OK`。
+未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
