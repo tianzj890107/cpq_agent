@@ -229,9 +229,20 @@ class DerivedRowsCarryNameSizeAndDrawingRed(unittest.TestCase):
                 self.assertTrue(row.get("reasons"), "不是 derived 就必须给稳定码原因")
 
     def test_b4_name_comes_from_the_drawing(self):
+        # `## 465` 把这条护栏**重指**（Spec `packaging-wine-dwg-parts-and-downstream-truth.md`
+        # §2.1 第 3 条）：图纸画不出来的采购件按**通用盒型结构规则**补进来时，**不许**伪称
+        # "图纸直接识别"。于是判据从"每一行都必须来自本图"改成"每一行要么来自本图，
+        # 要么明说是规则补的 `pending_confirmation` 件（并留下规则号）"。
+        # 断言强度不降：两种情形都被这一条抓住，且规则补件的那一支比原来**更严**。
         for row in _rows(self.out):
-            self.assertIs(row.get("name_from_drawing"), True,
-                          "名称必须来自本图（Spec §2.2）")
+            if row.get("name_from_drawing") is True:
+                continue
+            self.assertEqual("pending_confirmation", row.get("truth_state"),
+                             "名称不是从本图读到的行，必须标成「待确认」：%r"
+                             % (row.get("name"),))
+            rule = ((row.get("evidence") or {}).get("structure") or {}).get("rule_id")
+            self.assertTrue(rule, "规则补件必须留下规则号（evidence.structure.rule_id）：%r"
+                            % (row.get("name"),))
 
     def test_b5_derivation_is_deterministic(self):
         first = _resolver().resolve_business_parts("red-test", _real_ir("酒盒"), None)

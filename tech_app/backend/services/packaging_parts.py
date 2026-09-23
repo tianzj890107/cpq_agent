@@ -4045,6 +4045,29 @@ BUSINESS_COST_REJECT_CODES = ("PACKAGING_BUSINESS_PART_NOT_FOUND",
 #: 尺寸口径闭集：业务件这条路**只认权威尺寸**（几何轮廓那条路走 processability）。
 BUSINESS_COST_SIZE_SOURCES = ("authority_dimensions",)
 
+#: 「尺寸已确认」这一档的取值（Spec
+#: `packaging-wine-dwg-parts-and-downstream-truth.md` §4.3/§5.1）：`authority.size_quality`
+#: 落在这两个值里才算**确认过的**尺寸；`bbox_only` / 其它一律是包围盒猜测。
+BUSINESS_SIZE_CONFIRMED_QUALITIES = ("confirmed", SIZE_QUALITY_UNFOLDED)
+
+#: 尺寸没确认时业务件两条路共用的稳定拒绝码（Spec §4.3）：包围盒猜测尺寸**不得**进入
+#: 工艺推荐或成本测算。它与既有三条拒绝码**分家**：那三条说"缺"，这条说"有，但不可信"。
+BUSINESS_PART_SIZE_UNCONFIRMED = "PACKAGING_BUSINESS_PART_SIZE_UNCONFIRMED"
+
+
+def business_size_unconfirmed_reason(row: Any) -> str:
+    """这一行的尺寸是不是**只有包围盒**（返回原因码，已确认 / 没说就返回空串）。
+
+    只看 `authority.size_quality`（唯一事实源）：老载荷没有这一键时**不判死**（返回空串），
+    免得把"还没接这一笔账"当成"尺寸不可信"。
+    """
+    record = row if isinstance(row, dict) else {}
+    authority = record.get("authority") if isinstance(record.get("authority"), dict) else {}
+    quality = _text(authority.get("size_quality"))
+    if not quality or quality in BUSINESS_SIZE_CONFIRMED_QUALITIES:
+        return ""
+    return BUSINESS_PART_SIZE_UNCONFIRMED
+
 
 def _mm_text(value: Any) -> str:
     """毫米数的人话写法：`300.0` → `300`（去掉多余小数位），取不到 → 空串。"""
@@ -4089,6 +4112,17 @@ def business_cost_inputs(row: Any, *, requirement: Any = None,
         return dict(base, code=BUSINESS_COST_REJECT_CODES[1], missing_variables=["authority_size"],
                     message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
                             "或按权威清单补录尺寸后再算")
+    unconfirmed = business_size_unconfirmed_reason(record)
+    if unconfirmed:
+        return dict(base, code=unconfirmed, missing_variables=["size_quality"],
+                    message="这一件的尺寸还没有标注证据（size_quality=%s）：先在平面图里用尺寸标注"
+                            "确认，或按权威清单补录确认尺寸后再算材料费"
+                            % _text(authority.get("size_quality")))
+    if not material_text:
+        # 不知道材料就是缺口（Spec §3.3/§5.2）：灰板/衬板/EVA/磁铁不许拿整盒面纸克重兜底。
+        return dict(base, code=BUSINESS_COST_REJECT_CODES[2], missing_variables=["material"],
+                    message="这一件没有材料原文（行上也没给 material）：先补材料再算材料费，"
+                            "不许拿需求里的整盒面纸克重兜底")
     gsm = _gsm_of(material_text)
     if not gsm:
         data = requirement.get("data") if isinstance(requirement, dict) else {}
@@ -4180,6 +4214,12 @@ def business_process_inputs(row: Any) -> Dict[str, Any]:
         return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[1], missing_variables=["authority_size"],
                     message="这一件没有可用的权威尺寸（长度/宽度）：先在平面图里确认几何映射，"
                             "或按权威清单补录尺寸后再排工艺")
+    unconfirmed = business_size_unconfirmed_reason(record)
+    if unconfirmed:
+        return dict(base, code=unconfirmed, missing_variables=["size_quality"],
+                    message="这一件的尺寸还没有标注证据（size_quality=%s）：先在平面图里用尺寸标注"
+                            "确认，或按权威清单补录确认尺寸后再排工艺"
+                            % _text(authority.get("size_quality")))
     if not material_text:
         return dict(base, code=BUSINESS_PROCESS_REJECT_CODES[2], missing_variables=["material"],
                     message="这一件在权威清单里没有材料原文：补上材料后再排工艺")

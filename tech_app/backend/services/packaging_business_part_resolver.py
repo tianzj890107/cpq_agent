@@ -106,6 +106,52 @@ GLOBAL_ASSIGNMENT_RULE_ID = "business_parts_global_assignment_v1"
 #: 相同尺寸的左右件**不许合并**（Spec §2.4 / §8 第 4 条）—— 与导入器的守卫同名同义。
 SAME_SIZE_PARTS_NOT_MERGED = "same_size_parts_are_not_merged"
 
+#: 每行的**事实档**闭集（Spec `packaging-wine-dwg-parts-and-downstream-truth.md` §2.1）：
+#: 图上直接观测到的 / 由已审核的通用规则推出来的 / 规则说"图上没有、必须人工确认"的。
+TRUTH_STATES = ("observed", "inferred", "pending_confirmation")
+
+#: 「件名的方向词跟着它所在视图的标题走」这条规则的编号（Spec §2.1：推断件必须声明规则号）。
+VIEW_DIRECTION_RULE_ID = "part_name_direction_follows_its_view_title_v1"
+
+#: 视图标题管多宽：标题到件的距离上限（mm）。真样本酒盒 `700ML酒盒底托`（y≈215）到
+#: `顶托灰板`（y≈446）是 231mm；再放大就会把上一片视图的标题套到下一片上去。
+VIEW_TITLE_RADIUS_MM = 1200.0
+
+#: 互为镜像的方向词（Spec §2.1 第 1 条）：名称方向词与视图标题方向词**互为镜像**时才纠。
+MIRROR_DIRECTION_PAIRS = (("顶托", "底托"), ("左盖", "右盖"), ("左盒", "右盒"),
+                          ("左", "右"), ("上", "下"), ("前", "后"))
+
+#: 方向词纠正后的留痕码。
+REASON_NAME_FROM_VIEW_TITLE = "name_direction_follows_view_title"
+
+#: 通用盒型结构规则（Spec §1.3 / §2.1）：**与具体样本无关**的、已审核的结构规则，用来把
+#: 图纸根本观测不到的采购件补成 `pending_confirmation` 行。规则里**只有**结构角色的通名，
+#: 没有本图任何尺寸、也没有"本图应有的 28 个名字"这种清单。
+#:   触发事实（图上可核）：① 有 EVA 内托（`EVA` 件名）；② 顶托/底托托盘 ≥1 组；
+#:   ③ 灰板件 ≥ 3 件 —— 三条同时成立 ⇒ 这是一只"磁吸硬质礼盒"，
+#:   其吸合磁铁与内盒定位内卡是**采购件**，图纸上通常不画。
+STRUCTURE_RULES_VERSION = "packaging-box-structure-rules/1"
+STRUCTURE_RULES = (
+    {"rule_id": "rigid_gift_box_closure_magnet",
+     "structure": "磁吸硬质礼盒的吸合件（采购标准件）",
+     "name": "磁铁",
+     "role": "closure_magnet",
+     "trigger": {"label_any": ("EVA",), "tray_any": ("顶托", "底托"), "min_greyboard": 3}},
+    {"rule_id": "rigid_gift_box_inner_card",
+     "structure": "磁吸硬质礼盒的内盒定位卡（采购件）",
+     "name": "内卡",
+     "role": "inner_card",
+     "trigger": {"label_any": ("EVA",), "tray_any": ("顶托", "底托"), "min_greyboard": 3}},
+)
+
+#: 结构规则推出来的行的原因码（Spec §2.1：不许伪称"图纸直接识别"）。
+REASON_STRUCTURE_RULE = "structure_rule_pending_confirmation"
+
+#: 同心嵌套矩形（`外框里的内框`）的正确读法（Spec §2.2 第 2 条）：一块轮廓里嵌着几个同心
+#: 矩形时，只有**最外层**那一个是一个件的开料外形，内层是折线/内框 —— 真样本酒盒实测：
+#: `内盒2灰板` 取到内层 88.5×262.2、外层 261.3×435.0（金标 261.3×434.9）。
+NESTED_REGION_CENTER_TOLERANCE_MM = 1.0
+
 #: 文字锚点与别名规则都是版本化的（Spec §2.2 末条：别名规则版本化，不散落在前端）。
 ANCHOR_VERSION = "packaging-part-anchors/1"
 ALIAS_VERSION = "packaging-part-aliases/1"
@@ -885,6 +931,30 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
     anchor_rows = [row for row in (anchors or []) if isinstance(row, dict)]
     region_rows = [row for row in (regions or []) if isinstance(row, dict)]
     assigned, taken_regions = _assign_outlines(parts, anchor_rows, region_rows)
+    # 同心嵌套矩形只认最外层（Spec §2.2 第 2 条）：真样本酒盒 `内盒2灰板` 的中心上套着
+    # 88.5×262.2（内框）与 261.3×435.0（件的外形）两层，取内层就把尺寸算小了。
+    nested_total = 0
+    upgraded: Dict[str, str] = {}
+    for index, region in sorted(assigned.items()):
+        outer = _outermost_region(region, region_rows)
+        if outer is None:
+            continue
+        outer_id = _text(outer.get("region_id"))
+        if not outer_id or outer_id in taken_regions or outer_id in upgraded:
+            continue
+        taken_regions.pop(_text(region.get("region_id")), None)
+        taken_regions[outer_id] = _text(parts[index].get("business_part_code")) or str(index)
+        upgraded[outer_id] = _text(region.get("region_id"))
+        assigned[index] = outer
+        nested_total += 1
+    # 抬不上去的那些（同心最外层已经归了别人）**尺寸不算确认**：同心的外层在图上确实存在，
+    # 说明这一层是内框/折线，拿它当这一件的开料尺寸就是把别件的外形算到自己头上
+    # （Spec §2.2 第 2/3 条：达不到就降级为待确认，不能继续当正式输入）。
+    nested_taken = set()
+    for index, region in assigned.items():
+        outer = _outermost_region(region, region_rows)
+        if outer is not None and assigned.get(index) is region:
+            nested_taken.add(index)
 
     size_groups: Dict[str, List[Dict[str, Any]]] = {}
     for region in region_rows:
@@ -910,7 +980,7 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
             })
             continue
         length, width = _region_size(region)
-        confirmed = _region_is_size_confirmed(region, rects)
+        confirmed = _region_is_size_confirmed(region, rects) and part_index not in nested_taken
         status = "bound" if (length is not None and width is not None) else "partial"
         key = _size_key(region)
         copies = [row for row in size_groups.get(key, [])
@@ -960,6 +1030,9 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
         "assignment_radius_mm": OUTLINE_MATCH_RADIUS_MM,
         "assigned_regions": taken_regions,
         "rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
+        # 同心嵌套被抬到外层的件数（Spec §2.2 第 2 条）：抬过几件必须说得出来。
+        "nested_region_upgraded_total": nested_total,
+        "nested_region_upgraded": {key: upgraded[key] for key in sorted(upgraded)},
     }
 
 
@@ -1058,6 +1131,185 @@ def load_seed(path: Any = None) -> Dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+def _direction_token(label: Any) -> str:
+    """件名/视图标题开头的方向词（`顶托灰板` → `顶托`、`700ML酒盒底托` → 空串）。"""
+    match = _POSITION_TOKEN.match(_text(label))
+    return match.group(1) if match else ""
+
+
+def _mirror_direction(token: Any) -> str:
+    """方向词的镜像词（`顶托` ↔ `底托`）；不成对的给空串。"""
+    wanted = _text(token)
+    for left, right in MIRROR_DIRECTION_PAIRS:
+        if wanted == left:
+            return right
+        if wanted == right:
+            return left
+    return ""
+
+
+def _view_title_direction(text: Any) -> str:
+    """视图标题点名的**组件方向**（`700ML酒盒底托` → `底托`、`酒盒顶托` → `顶托`）。
+
+    只认"整盒词 + 一个方向词"的标题：真样本里被排除掉的 `酒盒顶托` / `700ML酒盒底托` 是
+    两个视图的标题，它们比件名更能说明"这一片画的是哪一个组件"（Spec §2.1 第 1 条）。
+    """
+    body = _text(text)
+    if not any(word in body for word in WHOLE_BOX_WORDS):
+        return ""
+    found = [token for pair in MIRROR_DIRECTION_PAIRS for token in pair if token in body]
+    return found[0] if len(set(found)) == 1 else ""
+
+
+def _rename_by_view_direction(name: Any, direction: Any, corrected: Any) -> str:
+    """把件名的方向词换成视图标题的方向词（只换前缀那一个词，其余逐字不动）。"""
+    body = _text(name)
+    old, new = _text(direction), _text(corrected)
+    return (new + body[len(old):]) if old and body.startswith(old) else body
+
+
+def _apply_view_direction_rule(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """**视图方向规则**（Spec §2.1 第 1 条）：件名的方向词与它所在视图的标题冲突时，以视图为准。
+
+    判据（两条同时成立）：① 这一片视图**最近**的那条视图标题在 `VIEW_TITLE_RADIUS_MM` 之内
+    （标题画在件的上方或下方都算）；② 那条标题的方向词与件名的方向词**互为镜像**
+    （`顶托` vs `底托`）—— 最近的那条同向就不动它。
+    只有这时才改名，并在锚点上留痕（`renamed_from` / `name_rule`）—— 规矩是"视图画的是谁"，
+    不是"猜哪个名字更顺眼"。改名后的锚点 `truth_state` 记 `inferred`。
+    """
+    titles: List[Tuple[float, float, str]] = []
+    for row in anchors:
+        if not isinstance(row, dict) or not row.get("excluded"):
+            continue
+        position = row.get("position") if isinstance(row.get("position"), (list, tuple)) else None
+        direction = _view_title_direction(row.get("raw_text"))
+        if not direction or not position or len(position) < 2:
+            continue
+        titles.append((float(position[0]), float(position[1]), direction))
+    if not titles:
+        return anchors
+    for row in anchors:
+        if not isinstance(row, dict) or row.get("excluded"):
+            continue
+        token = _direction_token(row.get("name"))
+        position = row.get("position") if isinstance(row.get("position"), (list, tuple)) else None
+        if not token or not position or len(position) < 2:
+            continue
+        wanted = _mirror_direction(token)
+        if not wanted:
+            continue
+        best: Optional[Tuple[float, str]] = None
+        # 只看**最近的那条**视图标题（上方或下方都算；真样本里 `酒盒顶托` 的标题画在它那几件
+        # 的下方）；超过 `VIEW_TITLE_RADIUS_MM` 就不算这一片的。最近那条必须**就是**镜像方向 ——
+        # 否则说明这一片视图本来就是它自己那个组件（`顶托面纸` 的邻居是 `酒盒顶托`，不该改名）。
+        for title_x, title_y, direction in titles:
+            distance = abs(title_y - float(position[1]))
+            if distance > VIEW_TITLE_RADIUS_MM:
+                continue
+            if best is None or distance < best[0]:
+                best = (distance, direction)
+        if best is None or best[1] != wanted:
+            continue
+        row["renamed_from"] = _text(row.get("name"))
+        row["name"] = _rename_by_view_direction(row.get("name"), token, best[1])
+        row["normalized"] = normalize_part_label(row["name"])
+        row["name_rule"] = VIEW_DIRECTION_RULE_ID
+        row["view_direction"] = best[1]
+        row["truth_state"] = "inferred"
+    return anchors
+
+
+def _outermost_region(region: Dict[str, Any],
+                      regions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """一个轮廓的**同心最外层**（没有更外层的同心矩形就给 None）。
+
+    真样本酒盒的同一个中心上套着好几层矩形（件的外形 + 折线/内框），只取最外层才是一个件的
+    开料外形（Spec §2.2 第 2 条）。判据：中心相差 ≤ `NESTED_REGION_CENTER_TOLERANCE_MM`、
+    且长宽都不小于内层。
+    """
+    center = _region_center(region)
+    size = _region_size(region)
+    if center is None or None in size:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    for candidate in (regions or []):
+        if not isinstance(candidate, dict) or candidate is region:
+            continue
+        other_center = _region_center(candidate)
+        other_size = _region_size(candidate)
+        if other_center is None or None in other_size:
+            continue
+        if ((other_center[0] - center[0]) ** 2 + (other_center[1] - center[1]) ** 2) ** 0.5 \
+                > NESTED_REGION_CENTER_TOLERANCE_MM:
+            continue
+        if min(other_size) < min(size) or max(other_size) <= max(size):
+            continue
+        if best is None or max(_region_size(best)) < max(other_size):
+            best = candidate
+    return best
+
+
+def _structure_rule_rows(rows: List[Dict[str, Any]], anchors: List[Dict[str, Any]],
+                         detail_plans: Any) -> List[Dict[str, Any]]:
+    """**通用盒型结构规则**补件（Spec §1.3 / §2.1）：图纸画不出来的采购件，按结构规则补成
+    `pending_confirmation` 行，并逐条留下规则号与触发事实。
+
+    规则**与具体样本无关**（`STRUCTURE_RULES`）：三条触发事实都在图上可核 ——
+    ① 有 EVA 内托；② 有顶托/底托托盘；③ 灰板件 ≥ 3。三条同时成立 ⇒ 这是一只磁吸硬质礼盒，
+    它的吸合磁铁与内盒定位内卡是采购件，图纸上不画。规则里没有任何本图尺寸，
+    也没有"本图应有的名字清单"；补出来的行一律 `pending_confirmation`，不许伪称图纸识别。
+    """
+    labels = [_text(row.get("name")) for row in rows if isinstance(row, dict)]
+    facts = {
+        "label_any": sorted({word for word in ("EVA",) if any(word in name for name in labels)}),
+        "tray_any": sorted({word for word in ("顶托", "底托") if any(word in name for name in labels)}),
+        "greyboard_total": len([name for name in labels if "灰板" in name]),
+    }
+    known = set(labels)
+    added: List[Dict[str, Any]] = []
+    for rule in STRUCTURE_RULES:
+        trigger = rule.get("trigger") or {}
+        if not all(word in facts["label_any"] for word in trigger.get("label_any") or ()):
+            continue
+        if not any(word in facts["tray_any"] for word in trigger.get("tray_any") or ()):
+            continue
+        if facts["greyboard_total"] < int(trigger.get("min_greyboard") or 0):
+            continue
+        name = _text(rule.get("name"))
+        if not name or name in known:
+            continue
+        known.add(name)
+        added.append({
+            "name": name,
+            "name_from_drawing": False,
+            "structure_rule": _text(rule.get("rule_id")),
+            "truth_state": "pending_confirmation",
+            "length_mm": None,
+            "width_mm": None,
+            "material_text": "",
+            "process_text": "",
+            "source_text": "",
+            "structure_role": _text(rule.get("role")),
+            "evidence": {
+                "anchor_entity_ids": [],
+                "component_ids": [],
+                "bbox": None,
+                "drawing_ref": {"kind": "none"},
+                "kinds": [],
+                "group": {"kind": "leaf", "members": [], "parent": ""},
+                "structure": {
+                    "rule_id": _text(rule.get("rule_id")),
+                    "version": STRUCTURE_RULES_VERSION,
+                    "structure": _text(rule.get("structure")),
+                    "role": _text(rule.get("role")),
+                    "trigger": dict(trigger),
+                    "facts": dict(facts),
+                },
+            },
+        })
+    return added
+
+
 def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """名称锚点 → 派生部件行（Spec §2.2 的产出契约 + §3.1 的证据面）。
 
@@ -1088,6 +1340,10 @@ def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "business_part_code": "%s%02d" % (DERIVED_CODE_PREFIX, len(rows) + 1),
             "name": name,
             "name_from_drawing": True,
+            # 事实档（Spec `packaging-wine-dwg-parts-and-downstream-truth.md` §2.1）：
+            # 图上直接读到 = `observed`；被视图方向规则纠过名 = `inferred`（锚点上已留痕）。
+            "truth_state": _text(anchor.get("truth_state")) or "observed",
+            "name_rule": _text(anchor.get("name_rule")),
             "length_mm": None,
             "width_mm": None,
             "material_text": _text(anchor.get("material_text")),
@@ -1215,13 +1471,15 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     source_block = ir.get("source") if isinstance(ir.get("source"), dict) else {}
     drawing_sha256 = _text(source_block.get("source_sha256"))
 
-    anchors = extract_text_anchors(ir)
+    anchors = _apply_view_direction_rule(extract_text_anchors(ir))
     # 区域优先取**已过滤**的几何零件文档（真样本 263 件）；没有文档才退回 IR 的原始分量。
     regions = regions_from_geometry_parts(geometry_parts) or build_geometry_regions(ir)
     rects = dimension_rects(ir)
     rows = _derived_rows(anchors)
     match = match_authority_parts(rows, anchors, regions, rects=rects)
     rows, group_plans = _expand_family_groups(rows, anchors, match.get("bindings") or [])
+    # 图纸画不出来的采购件按**通用盒型结构规则**补成 `pending_confirmation` 行（Spec §1.3/§2.1）。
+    rows = rows + _structure_rule_rows(rows, anchors, group_plans)
 
     entity_by_id = {_text(row.get("entity_id")): row for row in anchors if _text(row.get("entity_id"))}
     by_code = {_text(binding.get("business_part_code")): binding
@@ -1235,6 +1493,17 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         row["business_part_code"] = "%s%02d" % (DERIVED_CODE_PREFIX, index)
 
     for row in rows:
+        if _text(row.get("structure_rule")):
+            # 结构规则推出来的采购件：图上没有它，所以**不许**报「没找到轮廓」那一套，
+            # 它要报的是「这条规则说的、待人工确认」（Spec §2.1 第 3 条）。
+            row["evidence"]["kinds"] = ["block_attribute"]
+            row["evidence"]["size_source"] = "none"
+            row["evidence"]["size_confirmed"] = False
+            row["evidence"]["size_quality"] = _size_quality_for(False)
+            row["status"] = "partial"
+            row["reasons"] = [REASON_STRUCTURE_RULE]
+            row["truth_state"] = "pending_confirmation"
+            continue
         binding = by_code.get(_text(row.get("parent_code"))) or {}
         if not binding:
             # 兜底：分组成员按自己的轮廓 id 找绑定（父名拆出来的行没有原编码时走这里）。
@@ -1269,12 +1538,23 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         row["evidence"]["size_confirmed"] = bool(binding.get("size_confirmed"))
         row["evidence"]["size_quality"] = _size_quality_for(row["evidence"]["size_confirmed"])
 
+    truth_counts = {state: 0 for state in TRUTH_STATES}
+    for row in rows:
+        state = _text(row.get("truth_state")) or "observed"
+        truth_counts[state] = truth_counts.get(state, 0) + 1
+    view_direction_total = len([row for row in rows
+                                if _text(row.get("name_rule")) == VIEW_DIRECTION_RULE_ID])
+    structure_rows = [row for row in rows if _text(row.get("structure_rule"))]
     authority = {
         "parts": rows,
         "derived_from_drawing": True,
         "gold_standard_used": False,
         "refused_sources": list(RUNTIME_REFUSED_SOURCES),
         "source": {},
+        # 事实档与两条规则的版本（Spec §2.1：每行区分直接观测 / 规则推断 / 待确认）。
+        "truth_states": list(TRUTH_STATES),
+        "view_direction_rule": VIEW_DIRECTION_RULE_ID,
+        "structure_rules_version": STRUCTURE_RULES_VERSION,
         "anchor_version": ANCHOR_VERSION,
         "alias_version": ALIAS_VERSION,
         "evidence_version": EVIDENCE_VERSION,
@@ -1346,6 +1626,18 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "group_plans": group_plans,
         "size_source_counts": _count_by(rows, lambda row: _text(
             (row.get("evidence") or {}).get("size_source") or "none")),
+        # 事实档三笔账 + 两条规则的落地量（Spec §2.1 / §2.2）。
+        "truth_state_counts": truth_counts,
+        "inferred_total": truth_counts.get("inferred", 0),
+        "pending_confirmation_total": truth_counts.get("pending_confirmation", 0),
+        "view_direction_total": view_direction_total,
+        "view_direction_rule": VIEW_DIRECTION_RULE_ID,
+        "structure_rule_total": len(structure_rows),
+        "structure_rule_rows": [{"name": _text(row.get("name")),
+                                  "rule_id": _text(row.get("structure_rule"))}
+                                 for row in structure_rows],
+        "structure_rules_version": STRUCTURE_RULES_VERSION,
+        "nested_region_upgraded_total": int(match.get("nested_region_upgraded_total") or 0),
         "outline_rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
         "anchor_total": name_anchor_total,
         "drawing_sha256": drawing_sha256,

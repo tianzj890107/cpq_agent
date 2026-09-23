@@ -19530,3 +19530,56 @@ tests.test_packaging_parts_must_come_from_the_drawing_red
 
 本批只改 1 个测试文件（2 行）+ 1 份 Spec + changelog；**未改任何业务实现、未改任何期望值 / 断言 /
 边界表、未新增 skip**；未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 466. 落地 `packaging-wine-dwg-parts-and-downstream-truth`：酒盒真样本的 28 件、事实档三档、确认尺寸经得住金标、下游两道门禁（7 OK；一处既有断言重指）（9-23，Codex 实现）
+
+- 唯一 Spec：`docs/specs/packaging-wine-dwg-parts-and-downstream-truth.md`（本批新增），红测
+  `tests/test_packaging_wine_dwg_parts_and_downstream_truth_red.py`（7 条；实现前 `Ran 7 … FAILED (failures=6)`：
+  A1 名称集合、A2 事实档、B1 确认尺寸、C1 工艺门禁、C2/C3 材料兜底）。
+- **A1 名称集合 26 → 28**（缺 `内卡`/`底托灰板`/`磁铁`，多 `顶托灰板`）：
+  - `包装解析器`（`tech_app/backend/services/packaging_business_part_resolver.py`）新增
+    `_apply_view_direction_rule()`：真样本 `顶托灰板`（y≈446）离被排除的视图标题 `700ML酒盒底托`
+    （y≈215）只差 231mm，而离 `酒盒顶托`（y≈1059）613mm —— **件名方向词与它所在视图标题的方向词
+    互为镜像时以视图为准**，于是 `顶托灰板 → 底托灰板`。最近的那条标题同向就**不动**（`顶托面纸` /
+    `顶托EVA` / `顶托忖纸` 各自挂在自己的标题上，逐字不变）。
+  - 图上完全画不出来的两件采购件由 `STRUCTURE_RULES`（`packaging-box-structure-rules/1`）补成
+    `pending_confirmation`：触发事实**都在图上可核** —— 有 EVA 内托 + 有顶托/底托托盘 + 灰板件 ≥ 3
+    ⇒ 磁吸硬质礼盒 ⇒ 其吸合磁铁与内盒定位内卡是采购件。规则里没有任何本图尺寸、也没有"本图应有的名字清单"。
+- **A2 事实档**：行上新增 `truth_state ∈ ("observed","inferred","pending_confirmation")`；
+  直接读到 = `observed`、被视图方向规则纠名 = `inferred`（锚点留 `renamed_from`/`name_rule`/`view_direction`）、
+  规则补件 = `pending_confirmation`（带 `evidence.structure.rule_id`/触发事实/`name_from_drawing=False`，
+  **不伪称图纸识别**）。
+- **B1 确认尺寸（同心嵌套只认最外层）**：`match_authority_parts()` 新增「同一中心套着两层及以上矩形时，
+  件的外形取**最外层**」。真样本三处实测：`内盒2灰板` 88.5×262.2 → 261.3×435.0（金标 261.3×434.9）、
+  `底板面纸` 126.5×268.7 → 161.2×303.9（金标 161.2×303.6）；`内盒3灰板` 的外层 184.9×146.0 已经归了
+  `贴牌`，抬不上去 ⇒ **尺寸降级为待确认**（不再冒充确认尺寸）。留痕
+  `match/detail.nested_region_upgraded_total`。
+- **两笔账分开**（§2.2 第 4 条）：`parts_with_size_total` / `size_confirmed_total` /
+  `size_unconfirmed_total`（既有）之外新增 `truth_state_counts` / `inferred_total` /
+  `pending_confirmation_total` / `view_direction_total` / `structure_rule_total` / `structure_rule_rows` /
+  `nested_region_upgraded_total`；`authority` 加 `truth_states` / `view_direction_rule` /
+  `structure_rules_version`。
+- **下游两道门禁**（`tech_app/backend/services/packaging_parts.py`）：
+  - 新增常量 `BUSINESS_PART_SIZE_UNCONFIRMED` + `BUSINESS_SIZE_CONFIRMED_QUALITIES` + 纯函数
+    `business_size_unconfirmed_reason()`；`business_process_inputs()` / `business_cost_inputs()` 在
+    `authority.size_quality` 不属于确认档时返回 `PACKAGING_BUSINESS_PART_SIZE_UNCONFIRMED`
+    （**没有这一键的老载荷不判死**）；
+  - `business_cost_inputs()`：**完全没有材料原文**时返回 `PACKAGING_BUSINESS_PART_MATERIAL_UNKNOWN`，
+    不再拿需求里的整盒面纸克重兜底 —— 真文档里名字带`灰板/衬板/EVA/磁铁`且没有材料原文的行**一件都不再被 225g 放行**。
+- **一处既有断言重指**：`tests/test_packaging_parts_must_come_from_the_drawing_red.py::B4` 原文是
+  "每一行的 `name_from_drawing` 都必须是 `True`"，与 §2.1 第 3 条**直接冲突**（规则补件必须不伪称
+  图纸识别）。改成"每一行要么来自本图、要么是带规则号的 `pending_confirmation` 件"，**强度不降**
+  （后一支比原来更严）。这一处记在 Spec §7.3。
+- **口径收窄（不改既有 Spec / 既有断言）**：§2.3 的"不得兜底灰板"按**更窄**的口径落地 —— 只有
+  "完全没有材料原文"才拒；`test_packaging_business_part_cost_by_authority_size_red.py::A5` 冻结的
+  "有材料原文（`双灰板`）但没克重 → 允许 `face_paper_gsm` 兜底"**保持不动**（要更严需先改那份 Spec 与 A5）。
+- 复跑：`tests.test_packaging_wine_dwg_parts_and_downstream_truth_red` `Ran 7 … OK`；
+  `tests.test_packaging_*.py`（159 模块）`Ran 2680 … FAILED (failures=5, skipped=12)` —— 5 条全是
+  **既有挂账**（`bom_part_size_provenance::B3` / `parse_to_downstream_seams::B4` / 既有
+  `part_role_mapping_reaches_card::A2` / `quote_send_recovery::C1` / `route_bom_version_pinning::F2`），
+  **本批没有新增任何一条失败**；`tests.test_packaging_parts_must_come_from_the_drawing_red` 36 OK；
+  `tests.test_spec_status_truth_red` 7 OK（新 Spec 的状态行同时从非法字面量
+  `状态：Spec + 红测（待实现）` 改回闭集里的 `（已实现）`）；`test_doc_path_and_root_consistency_red` 10 OK。
+- 本批只改 4 个文件（解析器 / 零件服务 / 1 个既有红测的 B4 / 新 Spec + 新红测）与 changelog；
+  未读金标、未按 sha 命中金标、未读附件 BOM、未新增依赖、未起服务、未连 PG / 34、未写业务数据、
+  未改前端与成本公式费率；未 push / MR / tag / Release / 部署。
