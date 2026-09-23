@@ -39,6 +39,8 @@ from ..config import DATA_DIR, ROOT_DIR
 from ..storage import store
 from . import llm_settings, workflow_stages
 
+#: 兼容保留（历史引用/外部读数）。**装载时**以 `open_claude_dir()` 为准 —— 导入时求值会把
+#: 「首次导入那一刻」的默认值冻住，见 Spec `tech-open-claude-dir-resolved-at-load-time.md`。
 OPEN_CLAUDE_DIR = Path(os.getenv("OPEN_CLAUDE_DIR", ROOT_DIR / "open-claude"))
 
 # 与 open-claude web 桥一致：网页会话不得改动本地文件或执行命令。
@@ -164,10 +166,24 @@ def _clamp(value: float, low: float, high: float) -> float:
 # --------------------------------------------------------------------------- #
 # open-claude 装载
 # --------------------------------------------------------------------------- #
+def open_claude_dir() -> Path:
+    """**装载时**解析 open-claude 目录（Spec `tech-open-claude-dir-resolved-at-load-time.md` §2.1）。
+
+    真实部署在进程启动前就把 `OPEN_CLAUDE_DIR` 写进环境；但在同一个解释器里（测试进程、
+    长驻服务里的后设环境）导入时求值的常量会把**首次导入**那一刻的默认值冻住
+    （`ROOT_DIR / "open-claude"` = `tech_app/open-claude`，本仓库不存在），于是
+    `_ensure_path()` 每次都抛，而 `_register_runtime_provider()` 外层又把异常静默吞掉 ——
+    表现成「路由同步了、provider 没登记」，模型被发到别的厂商且不报错。
+    """
+    raw = str(os.getenv("OPEN_CLAUDE_DIR") or "").strip()
+    return Path(raw) if raw else ROOT_DIR / "open-claude"
+
+
 def _ensure_path() -> None:
-    if not OPEN_CLAUDE_DIR.is_dir():
-        raise AgentUnavailable(f"未找到 open-claude 目录：{OPEN_CLAUDE_DIR}")
-    path = str(OPEN_CLAUDE_DIR)
+    directory = open_claude_dir()
+    if not directory.is_dir():
+        raise AgentUnavailable(f"未找到 open-claude 目录：{directory}")
+    path = str(directory)
     if path not in sys.path:
         sys.path.insert(0, path)
 

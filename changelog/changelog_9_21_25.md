@@ -19643,3 +19643,35 @@ tests.test_packaging_part_role_mapping_reaches_card_red` `Ran 36 … OK`（改�
 
 本批只改 3 个测试文件 + 4 份 Spec + changelog；**未改任何业务实现、未改任何数字 / 形状 / 期望值之外的
 断言、未新增 skip**；未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 469. 落地 `tech-open-claude-dir-resolved-at-load-time`：`oc_agent` 装载 open-claude 的目录改成**装载时解析** —— 同一进程里「谁先 `import` 本模块」再也不能决定路由有没有登记 provider（7 OK，红基 3 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/tech-open-claude-dir-resolved-at-load-time.md`（本批新增），红测
+`tests/test_oc_agent_open_claude_dir_resolved_at_load_red.py`（7 条：A1–A3 红 / B1–B4 绿）。
+
+- `oc_agent.py:42` 的 `OPEN_CLAUDE_DIR = Path(os.getenv("OPEN_CLAUDE_DIR", ROOT_DIR / "open-claude"))`
+  **导入时**求值一次，默认值是 `tech_app/open-claude`（本仓库不存在）；
+- `_ensure_path()`（`:167-172`）读那个常量 → 每次都抛 `AgentUnavailable`；
+- `_register_runtime_provider()`（`:294-311`）外层是 `except Exception: return` → 异常被**静默吞掉**：
+  `sync_route_environment()` 照旧写 `CLAUDE_MODEL` / Key / `<PROVIDER>_BASE_URL`，唯独
+  `_MODEL_PROVIDERS[model]` 没写 → `oc_config.get_model_provider("cpq-local-7b")` 回落到 `anthropic`，
+  请求发错厂商且**不报错**。
+- 本机复现（两次只差导入顺序）：`tests.test_tech_agent_provider_readiness_dynamic` 单跑 `Ran 2 … OK`；
+  与 `tests.test_packaging_authority_workbook_upload_red`（模块层 `from tech_app.backend import main`，
+  此时环境变量还没设）同进程跑 → `Ran 29 … FAILED (failures=1)`「'anthropic' != 'cpq_local'」。
+  33 个测试文件在模块层导入 `main`，全量顺序里**第一个**导入者决定成败。
+
+实现（只 1 个生产文件）：新增纯函数 `open_claude_dir()`（读环境变量、空串按未设、
+否则 `ROOT_DIR / "open-claude"`），`_ensure_path()` 每次调用它；`raise AgentUnavailable` 的契约、
+`_register_runtime_provider()` 的静默兜底、`sync_route_environment()` 的既有搬运、模块常量
+`OPEN_CLAUDE_DIR`（兼容读数）全部保留。
+
+复跑：本批红测 `Ran 7 … OK`（红基 `Ran 7 … FAILED (failures=3)`）；
+`tests.test_packaging_authority_workbook_upload_red tests.test_tech_agent_provider_readiness_dynamic`
+`Ran 29 … OK`（实现前 1 红）；tech 侧 7 个相关模块 `Ran 102 … OK`；
+`test_spec_status_truth_red` 7 OK；`test_doc_path_and_root_consistency_red` 10 OK。
+Spec 状态行已改「已实现」并追加 §6 落地记录。
+
+本批未改任何既有测试的期望值 / 断言、未新增 skip、未改部署脚本（`tech_app_launch.py` 本来就在启动前
+设好这个变量，对"环境变量已设"的路径行为等价）；未连 PG / 34、未发 HTTP、未写业务数据、
+未 push / MR / tag / Release / 部署。
