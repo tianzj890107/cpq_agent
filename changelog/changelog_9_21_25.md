@@ -18941,3 +18941,58 @@ Ran 225 tests ... OK (skipped=2)       # 142 + 83，与 Spec §1.7 的两组逐�
 也写了 `## 461`（号撞了）；本批按自己的号提交，另一批请另取号。
 
 未 push / MR / tag / Release / 部署，未连 PG、未起服务、未写业务数据。
+
+## 462. 落地 `packaging-business-part-size-must-be-confirmed-by-dimension`：业务部件的「尺寸」必须分得开 —— 有独立证据的量测（`unfolded`）vs 只有几何包络的猜测（`bbox_only`）：行级 `evidence.size_quality` + `detail` 两笔账 + `outline_size_unconfirmed` 原因码（15 OK，红基 8 红；不回归 263 里 1 条既有挂账）（9-23，Codex 实现）
+
+`## 459` 的成绩单写的是"带尺寸 26/26"，但真正有标注证据的只有 12 件 —— 这个差别在产物里
+一处都看不出来：行上没有质量档、`reasons` 里没有"尺寸未确认"、detail 里只有一笔
+`parts_with_size_total`，把"量出来的 12"与"估出来的 14"合成一个数。尺寸进了 BOM / 成本就是钱，
+一个包络猜测被当成量测值，错了没人知道是猜的。
+
+只改 `tech_app/backend/services/packaging_business_part_resolver.py`（本批只做**披露**，
+不动判定）：
+
+1. 行级质量档 `evidence.size_quality`：档名与闭集都取自 `packaging_parts`
+   （`SIZE_QUALITY_UNFOLDED` / `SIZE_QUALITY_BBOX`），本模块不另立一套字面量。
+   `size_confirmed is True` → `unfolded`；其余（只有分量/环的包络、来源缺失、没尺寸）→ `bbox_only`。
+2. 两笔账：`detail["size_confirmed_total"]` / `detail["size_unconfirmed_total"]`，
+   不变量 `confirm + unconfirm == parts_with_size_total`（没尺寸的行不进这两笔）。
+3. 未确认的行自己说出来：新模块常量 `REASON_SIZE_UNCONFIRMED = "outline_size_unconfirmed"`，
+   只有"有尺寸且未确认"的行背它，已确认的行不许带；`detail.reasons_breakdown` 里这一项
+   与 `size_unconfirmed_total` 相等。
+4. 冻结面未动：`derived`/`partial`/`unbound` 语义、`parts_with_size_total`、
+   `_region_is_size_confirmed()`/`_sizes_match()`/`dimension_rects()`、
+   `packaging_parts.size_quality_of()` 的既有映射与闭集、BOM / 成本 / 工艺公式。
+   Spec §2 那条"把未确认尺寸的行从 `derived` 降级成 `partial`"是**需要签字的口径选择**，
+   会动三处已绿期望值，本批未做。
+
+实测（两份真样本，真零件文档 + 把 `outline.bbox` 提到行顶层）：
+
+```
+酒盒  ：derived 26 / 有尺寸 26；确认 12 / 未确认 14（门槛 10 / 10）
+圆盘盒：derived 39 / 有尺寸 39；确认  8 / 未确认 31（门槛  6 / 25）
+两笔账相加 == parts_with_size_total；reasons_breakdown[outline_size_unconfirmed]
+== size_unconfirmed_total
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_business_part_size_must_be_confirmed_by_dimension_red
+Ran 15 tests ... OK                     # 红基 Ran 15 ... FAILED (failures=8)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_extraction_red \
+    tests.test_packaging_parts_outline_red tests.test_packaging_parts_components_red \
+    tests.test_packaging_bom_business_parts_rows_red tests.test_packaging_drawing_flow_red \
+    tests.test_packaging_parts_must_come_from_the_drawing_red \
+    tests.test_packaging_business_parts_and_cad_plan_view_red \
+    tests.test_packaging_business_parts_binding_size_source_red \
+    tests.test_packaging_business_parts_must_come_from_all_drawing_evidence_red \
+    tests.test_packaging_bom_part_size_provenance_red tests.test_packaging_bom_size_quality_accounting_red
+Ran 263 tests ... FAILED (failures=1, skipped=2)
+    # 唯一那条是既有挂账、与本批无关：bom_part_size_provenance_red B3 的 stats 键集冻结
+    # （多出 size_quality）。用 `git stash` 去掉本批改动复跑确认改前同样 FAIL(failures=1)。
+    # Spec §4 写的"现状全绿"与事实不符，已在 Spec §7 更正。
+```
+
+未 push / MR / tag / Release / 部署，未连 PG、未起服务、未写业务数据。

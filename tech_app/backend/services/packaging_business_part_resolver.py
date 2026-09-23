@@ -84,6 +84,11 @@ OUTLINE_LINK_BROKEN = "PACKAGING_BUSINESS_PARTS_OUTLINE_LINK_BROKEN"
 #: 区域记录拿不到轮廓矩形时的原因码（Spec §1.2：不许静默产出 bbox/center 全空的记录）。
 REASON_NO_OUTLINE_BBOX = "no_outline_bbox"
 
+#: 尺寸只是几何包络、**没有独立证据**时的原因码（Spec
+#: `packaging-business-part-size-must-be-confirmed-by-dimension.md` §1.3）：只有这类行背它，
+#: 有标注证据的行不许带 —— 尺寸进了 BOM / 成本就是钱，猜的要看得见。
+REASON_SIZE_UNCONFIRMED = "outline_size_unconfirmed"
+
 #: 稳定原因码（Spec §3.2 第 2 条：拿不到证据的件必须逐件留痕，不许静默少报）。
 REASON_NO_OUTLINE = "no_outline_evidence"
 REASON_SIZE_UNKNOWN = "outline_size_unknown"
@@ -595,8 +600,6 @@ def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
     "没有中心就 continue" 把整条绑定链掐死（酒盒 26 行、圆盘盒 66 行 bind 0）。
     拿不到矩形的行**留痕**：`excluded = no_outline_bbox` 且 `substantial = False`。
     """
-    from . import packaging_parts as parts_module
-
     doc = geometry_parts if isinstance(geometry_parts, dict) else {}
     regions: List[Dict[str, Any]] = []
     for index, row in enumerate(doc.get("parts") or [], start=1):
@@ -604,7 +607,7 @@ def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
             continue
         component_id = _text(row.get("component_id")) or _text(row.get("part_code"))
         part_code = _text(row.get("part_code")) or str(index)
-        rect = parts_module.part_outline_rect(row)
+        rect = _parts_module().part_outline_rect(row)
         regions.append(_region_record(
             "region:%s" % part_code,
             [component_id] if component_id else [],
@@ -1102,6 +1105,23 @@ def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+def _parts_module() -> Any:
+    """`packaging_parts` 按需导入（尺寸档名与闭集只有那一个仓库，本模块不另立字面量）。"""
+    from . import packaging_parts as module
+    return module
+
+
+def _size_quality_for(confirmed: Any) -> str:
+    """`size_confirmed` → 尺寸质量档（Spec §1.1 的方案 a）。
+
+    档名与闭集都取自 `packaging_parts`（`SIZE_QUALITY_UNFOLDED` / `SIZE_QUALITY_BBOX`），
+    本模块不造第二套字面量：
+    有独立尺寸证据（同形尺寸标注）→ `unfolded`；其余（只有分量/环的包络、没尺寸）→ `bbox_only`。
+    """
+    module = _parts_module()
+    return module.SIZE_QUALITY_UNFOLDED if confirmed is True else module.SIZE_QUALITY_BBOX
+
+
 def _row_evidence_kinds(row: Dict[str, Any], binding: Dict[str, Any],
                         anchor_total: int, entity_by_id: Dict[str, Dict[str, Any]]) -> List[str]:
     """一行到底用了哪几类证据（Spec §3.1 第 1/2 条）：闭集、不重复、按固定顺序。"""
@@ -1224,6 +1244,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         located = bool(binding.get("region_id"))
         row["evidence"]["component_ids"] = list(binding.get("component_ids") or [])
         row["evidence"]["bbox"] = list(binding.get("bbox") or []) or None
+        with_size = (row.get("length_mm") is not None and row.get("width_mm") is not None)
         if not located:
             row["evidence"]["drawing_ref"] = {"kind": "none"}
             row["status"] = "unbound"
@@ -1235,15 +1256,18 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                 "bbox": list(binding.get("bbox") or []) or None,
                 "region_id": _text(binding.get("region_id")),
             }
-            row["status"] = "derived" if (row["length_mm"] is not None
-                                          and row["width_mm"] is not None) else "partial"
+            row["status"] = "derived" if with_size else "partial"
             row["reasons"] = [] if row["status"] == "derived" else list(
                 binding.get("reasons") or [REASON_SIZE_UNKNOWN])
+            if with_size and binding.get("size_confirmed") is not True:
+                # 尺寸只是包络猜测：行必须自己说出来（Spec §1.3），已确认的行不许带这个码。
+                row["reasons"] = list(row["reasons"]) + [REASON_SIZE_UNCONFIRMED]
         anchor_total = len(row["evidence"].get("anchor_entity_ids") or [])
         row["evidence"]["kinds"] = _row_evidence_kinds(row, binding, anchor_total, entity_by_id)
         row["evidence"]["size_source"] = _text(binding.get("size_source")) or (
             "geometry_region" if located else "none")
         row["evidence"]["size_confirmed"] = bool(binding.get("size_confirmed"))
+        row["evidence"]["size_quality"] = _size_quality_for(row["evidence"]["size_confirmed"])
 
     authority = {
         "parts": rows,
@@ -1271,6 +1295,9 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
             reasons_breakdown[reason] = reasons_breakdown.get(reason, 0) + 1
     unobservable_total = len([row for row in rows
                               if set((row.get("evidence") or {}).get("kinds") or []) == {"text_anchor"}])
+    size_confirmed_total = len([row for row in with_size
+                               if (row.get("evidence") or {}).get("size_confirmed") is True])
+    size_unconfirmed_total = len(with_size) - size_confirmed_total
     regions_with_center_total = len([region for region in regions if _region_center(region)])
     linked_total = int(match["bound_total"]) + int(match["partial_total"])
     outline_link: Dict[str, Any] = {
@@ -1295,6 +1322,8 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "refused_sources": list(RUNTIME_REFUSED_SOURCES),
         "business_part_total": len(rows),
         "parts_with_size_total": len(with_size),
+        "size_confirmed_total": size_confirmed_total,
+        "size_unconfirmed_total": size_unconfirmed_total,
         "parts_with_drawing_ref_total": len(with_ref),
         "name_anchor_total": name_anchor_total,
         "excluded_anchor_total": excluded_anchor_total,
@@ -1357,7 +1386,7 @@ __all__ = [
     "GLOBAL_ASSIGNMENT_RULE_ID", "GROUP_MEMBER_MIN_AREA_MM2", "MIN_OUTLINE_AREA_MM2",
     "MIN_OUTLINE_ENTITIES", "MIN_OUTLINE_SIDE_MM", "MIRROR_DIRECTIONS",
     "OUTLINE_LINK_BROKEN", "OUTLINE_MATCH_RADIUS_MM", "REASON_NO_OUTLINE",
-    "REASON_NO_OUTLINE_BBOX", "REASON_SIZE_UNKNOWN",
+    "REASON_NO_OUTLINE_BBOX", "REASON_SIZE_UNCONFIRMED", "REASON_SIZE_UNKNOWN",
     "REASON_UNLABELED_OUTLINE", "RUNTIME_REFUSED_SOURCES", "SAME_SIZE_PARTS_NOT_MERGED",
     "build_geometry_regions", "dimension_rects", "extract_text_anchors", "load_seed",
     "match_authority_parts", "normalize_part_label", "plan_family_groups",
