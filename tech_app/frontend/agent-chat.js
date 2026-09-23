@@ -509,7 +509,7 @@
   // Agent 主动发起的动作会真的跑起来时补一条用户口吻的回声（「我：…」），会话里才看
   // 得出「是我让它做的」。文案来自执行方（右侧看板动作声明的 prompt），左侧只负责显示，
   // 绝不按 ui_action 或动作名兜底造句 —— 那是两套口径。
-  function echoTaskPrompt(detail) {
+  function echoTaskPrompt(detail, before) {
     // 回放期间不再补回声：气泡本身已经作为 kind:"user" 条目落库，回放按行恢复。
     if (replayingHistory) return;
     const text = String((detail && detail.prompt) || "").trim();
@@ -521,11 +521,16 @@
       || String((detail && (detail.taskId || detail.task_id)) || (detail && detail.label) || "");
     if (!key || echoedTaskPrompts.has(key)) return;
     echoedTaskPrompts.add(key);
-    const turn = activeTurnCtx;
-    const anchor = turn && turn.wrap ? turn.wrap : null;
+    // `before` 是**这一张卡**（Spec §2.3）：传进来的是卡对象时取它的 root 节点，
+    // 落位就插在它上方；没给锚点（旧调用点）时照旧退回本轮 turn 的包装节点。
+    if (before && (before.wrapper || before.box)) before = before.wrapper || before.box;
+    if (!before) {
+      const turn = activeTurnCtx;
+      before = turn && turn.wrap ? turn.wrap : null;
+    }
     // 回声也走唯一 turn helper；被既有红测单独取出执行时没有这个 helper，退回底层气泡原语。
-    if (typeof beginUserTurn === "function") beginUserTurn(text, anchor);
-    else addUser(text, anchor);
+    if (typeof beginUserTurn === "function") beginUserTurn(text, before);
+    else addUser(text, before);
     // 回声气泡本身也要落库：重进项目要按原顺序恢复成同一条用户气泡。
     persistSessionEvent({ kind: "user", text: text, stage: boardStage(),
                           key: `echo:${key}` });
@@ -596,6 +601,30 @@
   const INTERRUPTED_CODES = ["interrupted", "detached", "timeout"];
   function isInterruptedCode(code) {
     return INTERRUPTED_CODES.indexOf(String(code || "")) >= 0;
+  }
+  // 被拒回执的闭集（Spec §2.1）：这一趟**没有真的执行** —— 按钮灰着（`not-ready`）、
+  // 正在跑（`busy`）、还在装载（`loading`）、没有项目 / 目标输入框 / 导航通道、还没有解析结果。
+  // 看板自己已经就地给过提示，会话里两边都不该出现（用户原话「要没有就都没有」）。
+  // 闭集只有一个声明，判定只有这一个入口 —— `taskEchoAllowed()` 运行时也走它。
+  function isRejectedBoardCode(code) {
+    const REJECTED_BOARD_CODES = ["not-ready", "loading", "busy", "no-project", "no-part",
+                                  "no-navigation", "not-parsed"];
+    return REJECTED_BOARD_CODES.indexOf(String(code || "")) >= 0;
+  }
+  // 这一声「我：…」该不该发（Spec §2.2）：没有那句话（prompt 空）不发；这一次是**被拒回执**不发；
+  // 其余（真的开始执行）才发。纯函数：不读 DOM / 全局 / 网络，可被 node 直接 eval 跑。
+  function taskEchoAllowed(detail) {
+    const row = (detail && typeof detail === "object" && !Array.isArray(detail)) ? detail : null;
+    if (!row) return false;
+    const text = String(row.prompt === null || row.prompt === undefined ? "" : row.prompt).trim();
+    if (!text) return false;
+    const code = String(row.code === null || row.code === undefined ? "" : row.code);
+    // 判定只有一处（上面的 `isRejectedBoardCode`）；单独取出本函数执行时（红测 harness 只 eval
+    // 这一个函数，没有模块作用域）退回同一份**同值**字面量 —— 改闭集时两处必须一起改。
+    if (typeof isRejectedBoardCode === "function") return !isRejectedBoardCode(code);
+    const rejected = ["not-ready", "loading", "busy", "no-project", "no-part",
+                      "no-navigation", "not-parsed"];
+    return rejected.indexOf(code) < 0;
   }
   function isQuietBoardCode(code) {
     const value = String(code || "");
@@ -1780,8 +1809,10 @@
   }
   function renderTaskProgress(raw) {
     const detail = sanitizeTaskDetail(raw);
-    // 先出回声气泡：任务刚启动、还没蹦出第一条进度明细时，那声「我：…」也要先出现。
-    echoTaskPrompt(detail);
+    // 先判定后回声（Spec §2.3）：只有"这一次真的开始执行"才补那声「我：…」。
+    // 被拒回执（还在加载 / 正在解析 / 没有项目…）既不回声、也不建卡 —— 会话里两边都不出现，
+    // 不再留一串只有用户气泡的会话。判定结果同时参与建卡判定（见下面的 hasContent）。
+    const echoAllowed = taskEchoAllowed(detail);
     const taskId = String(detail.taskId || detail.task_id || "");
     const label = String(detail.label || "");
     const log = Array.isArray(detail.log) ? detail.log : [];
@@ -1822,9 +1853,12 @@
     const quietFailure = status === "failed" && isQuietBoardCode(detail.code);
     const existingCard = taskProgressCards.has(String(taskId || label || "task"));
     // 有真实执行明细（进度行或过程事件）才算内容；已在运行的卡不重复建。
-    const hasContent = log.length > 0 || existingCard || Boolean(blockedReason);
+    const hasContent = log.length > 0 || existingCard || Boolean(blockedReason) || echoAllowed;
     if (!hasContent && !streamLength) return;
     const card = ensureTaskCard(taskId, label);
+    // 回声与 Agent 输出成对（Spec §2.3）：卡已经建出来（或已经有卡）才补这声「我：…」，
+    // 并把它插在这张卡的上方 —— 不许出现"发了回声却没有 Agent 输出"。
+    if (echoAllowed) echoTaskPrompt(detail, card);
     if (!card.prompt) card.prompt = String(detail.prompt || "").trim();
     const freshSteps = log.length > card.cursor ? log.slice(card.cursor) : [];
     const processCursor = Number(card.processCursor) || 0;

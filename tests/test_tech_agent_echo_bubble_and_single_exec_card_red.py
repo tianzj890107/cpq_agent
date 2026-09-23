@@ -378,14 +378,27 @@ class LeftEchoBubbleContract(unittest.TestCase):
         )
 
     def test_bubble_comes_before_the_no_content_early_return(self):
+        # ## 479 重指（`docs/specs/chat-echo-must-pair-with-agent-output.md` §5.2 书面授权）：
+        # 原断言钉「echoTaskPrompt 的字面位置在 hasContent 之前」，那是"回声先落、卡后建"的
+        # 旧口径；479 改成"先判定后回声 + 回声挂在这一张卡上方"（回声要有 Agent 输出成对），
+        # 落位必然排在建卡之后。本断言保留原意图 —— 回声不被「没有明细就不建卡」吃掉 ——
+        # 改钉「回声判定排在 hasContent 之前」（判定结果参与建卡判定），并补上成对性。
+        # 未放宽：既要求判定在前，也要求回声落在 ensureTaskCard() 之后。
         body = function_body(self.js, "renderTaskProgress")
         self.assertTrue(body, "找不到 renderTaskProgress()")
+        decide_at = body.find("taskEchoAllowed(")
+        guard = re.search(r"hasContent\s*=", body)
         echo_at = body.find("echoTaskPrompt")
-        guard_at = body.find("hasContent")
+        card_at = body.find("ensureTaskCard(")
+        self.assertGreaterEqual(decide_at, 0, "renderTaskProgress 没有回声判定")
+        self.assertIsNotNone(guard, "找不到「没有明细就不建卡」的判断")
+        guard_at = guard.start()
+        self.assertLess(decide_at, guard_at,
+                        "回声判定必须发生在「没有明细就不建卡」之前：判定结果要参与建卡判定")
         self.assertGreaterEqual(echo_at, 0, "renderTaskProgress 没有调用回声实现")
-        self.assertGreaterEqual(guard_at, 0, "找不到「没有明细就不建卡」的判断")
-        self.assertLess(echo_at, guard_at,
-                        "回声必须发生在「没有明细就不建卡」之前：任务刚启动时气泡先出现")
+        self.assertGreaterEqual(card_at, 0, "找不到 ensureTaskCard()")
+        self.assertLess(card_at, echo_at,
+                        "回声要挂在这一张卡上方（回声与 Agent 输出成对，Spec 479 §2.3）")
 
     def test_replay_also_echoes_the_prompt(self):
         body = function_body(self.js, "replayTimelineTask")

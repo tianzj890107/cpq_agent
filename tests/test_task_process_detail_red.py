@@ -736,6 +736,7 @@ def detail_driver(js: str) -> str:
             function scrollDown() {}
             function taskProgressHost() { return tinner; }
             function echoTaskPrompt() {}
+            function taskEchoAllowed() { return false; }
             function refreshResultChips() {}
             function loadFiles() {}
             function renderTaskRetry() {}

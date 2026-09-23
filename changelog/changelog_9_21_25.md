@@ -20165,3 +20165,103 @@ app.js 相关 91 模块                                              Ran 1485 �
 - `duration_ms` 只用于**披露**，不进任何门禁判据；任务清单仍读 `/wf/tasks`；
 - 未改 `renderDrawingEntry()` 判定、未改既有错误码语义、未改链路步序；
 - 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；未 push / MR / tag / Release / 部署。
+
+## 479. 落地「回声与 Agent 输出成对」：按钮灰着点解析不再只落下一句「我：…」，被拒的回执两边都不出现（18 OK；红基 12 FAIL）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+用户原话（2026-09-23）：
+
+> 点击解析图纸的时候只有用户气泡没有 agent 输出气泡 要有就都要有 要没有就都没有
+> 不能一连串用户气泡没有 agent 气泡
+
+代码级证据（HEAD `0312614` 工作副本，都可指到行）：
+
+- `tech-board-runtime.js::runEntry()` 在 `entry.run()` **之前**就发 `TASK_PROGRESS`（载荷带 `prompt`），
+  动作回 `{ok:false, code:"not-ready"|"busy"}` 时再发 `TASK_FAILED`（同 `runId`）；
+- `agent-chat.js:1781 renderTaskProgress()` 第一句就是 `echoTaskPrompt(detail)` —— 不论后面会不会有
+  Agent 输出，先把用户气泡落下去；
+- 同函数 `:1825 const hasContent = log.length > 0 || existingCard || Boolean(blockedReason);`
+  + `if (!hasContent && !streamLength) return;` ⇒ 没有进度行的**被拒回执**不建卡、也不写别的 Agent 行；
+- 结果：会话里留下「我：帮我解析这张图纸。」，下面空空如也；连点几次就是一串只有用户气泡的会话。
+  `app.js:5622-5625` 的 `not-ready`（按钮灰）/ `busy`（正在解析）两类回执都走这条路。
+
+### 二、改了什么（1 个生产文件）
+
+`tech_app/frontend/agent-chat.js`：
+
+- 被拒回执闭集只有一处：`isRejectedBoardCode(code)`，函数体内
+  `const REJECTED_BOARD_CODES = ["not-ready", "loading", "busy", "no-project", "no-part",
+  "no-navigation", "not-parsed"]`（`src.count("REJECTED_BOARD_CODES = [") == 1`）；按 `String(code)`
+  精确比对，闭集外回 `false`；
+- 纯函数 `taskEchoAllowed(detail)`：非对象 / 数组 → `false`；`prompt` 去空白为空 / 缺失 → `false`；
+  `code` 落在闭集 → `false`；其余 → `true`；体内无 `document` / `window` / `fetch(` /
+  `localStorage` / `sessionStorage`。单独取出本函数执行（红测 harness 只 eval 这一个函数）时，
+  `typeof isRejectedBoardCode === "function"` 不成 ⇒ 退回**同一份同值**字面量（注释写明两处必须一起改）；
+- `renderTaskProgress()`：**先判定后回声** —— 第一句改 `const echoAllowed = taskEchoAllowed(detail);`；
+  `hasContent` 表达式带上这一声回声（`… || echoAllowed`）⇒ 不存在"发了回声却因 `!hasContent` 直接
+  return"的组合；`const card = ensureTaskCard(taskId, label);` **之后**才 `if (echoAllowed)
+  echoTaskPrompt(detail, card);`（回声插在这一张卡上方，与 Agent 输出成对）；
+- `echoTaskPrompt(detail, before)`：第二形参 `before` 是卡对象时取 `before.wrapper || before.box`
+  作锚点，没给锚点（旧调用点）时照旧退回 `activeTurnCtx.wrap`；落位仍走
+  `beginUserTurn(text, before)` / `addUser(text, before)`；`replayingHistory` 期间不补回声、
+  气泡本身照旧落库。
+
+被拒回执（`not-ready` / `loading` / `busy` / `no-project` / `no-part` / `no-navigation` /
+`not-parsed`）**既不回声也不建卡** —— 按用户原话"要没有就都没有"，会话里两边都不出现；看板按钮
+自己的灰态说明（`#btnParse.title`）与 `## 478` 的回包文案照旧。
+
+### 三、测试侧的两处书面授权（仅测试侧；断言与期望值未放宽）
+
+Spec §1 原写「本批不动它的任何断言」——**那句话不准确**，如实更正并授权如下（Spec §5.1）：
+
+1. `tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py::LeftEchoBubbleContract::test_bubble_comes_before_the_no_content_early_return`
+   **重指**。该断言原文钉的是左侧**字面顺序**（`assertLess(body.find("echoTaskPrompt"),
+   body.find("hasContent"))` = "回声先落、卡后建"的旧口径），与本批 C3「回声挂在这一张卡上方」
+   **正面对撞**（实测：落地后 `2707 not less than 191`）。重指后**意图逐条保留**：原意图「回声不被
+   『没有明细就不建卡』吃掉」⇒ 改钉「回声判定 `taskEchoAllowed(` 排在 `hasContent` 赋值之前」，
+   并补钉「`ensureTaskCard(` 排在 `echoTaskPrompt(` 之前」；`hasContent` 的位置改用
+   `re.search(r"hasContent\s*=")`（原写法命中的是注释里的同名词，不是判定本身）。其余 38 条一条未动。
+   **重指后有牙**：拿 HEAD `44fa9b1` 的 `agent-chat.js` 复跑 ⇒ 该条红（"没有回声判定"）。
+2. `tests/test_task_process_detail_red.py` 的 `detail_driver()` **补一行 collaborator stub**
+   （`function taskEchoAllowed() { return false; }`，与旁边 8 个桩同形）。它把 `renderTaskProgress()`
+   抽出来真跑并按依赖表打桩，本批新增的被调函数没进那张表 ⇒ `setUpClass` 直接
+   `ReferenceError: taskEchoAllowed is not defined`（ERROR，不是断言失败）。该文件 19 条用例的
+   断言 / 期望值 / 用例数一律未动。
+
+先例：`## 461` 重指既有守卫、`## 465` / `## 467` / `## 478` 只修测试侧 harness（都要求"授权写进
+Spec + 意图保留"）。
+
+### 四、反向对照（本机实测，跑完立即还原并 `md5` 核对）
+
+```text
+① taskEchoAllowed() 里被拒闭集那一支删掉（改成 return true;）  ⇒ E2 单条红
+② echoTaskPrompt(detail, card) 改回 echoTaskPrompt(detail)      ⇒ R3 单条红
+③ hasContent 表达式里的 echoAllowed 去掉                        ⇒ R2 单条红
+```
+
+三次逐次复跑 `tests/test_tech_agent_echo_bubble_and_single_exec_card_red.py`（39 条）均 `OK`
+⇒ 重指后的守卫与这三条各自独立。如实记一条**不符合预期**的：Spec 原写"① ⇒ E2/E3 单条红"，
+实测**只有 E2 红** —— E3 的 6 个入参 prompt 全空，没有那一支也照样回 `false`（已写进 Spec §5）。
+
+### 五、实测复跑
+
+```text
+tests.test_chat_echo_must_pair_with_agent_output_red          Ran 18 … OK（红基 Ran 18 … FAILED (failures=12)）
+tests.test_tech_agent_echo_bubble_and_single_exec_card_red     Ran 39 … OK（重指后）
+tests.test_task_process_detail_red                             Ran 19 … OK（补 stub 后）
+含 agent-chat 的 67 个模块                                     Ran 1027 … OK
+node --check tech_app/frontend/agent-chat.js                   退出码 0
+tests.test_spec_status_truth_red / doc_path_and_root_consistency_red  Ran 17 … OK（Spec 状态行随事实更正）
+```
+
+### 六、边界（本批**未做**，如实记）
+
+- **不**给被拒回执补 Agent 说明行：按用户原话"要没有就都没有"，被拒 → 两边都不出现；
+- **不**改真人输入 / 历史回放的成对性（那本来就成对）；
+- 未改 `tech-board-runtime.js` 载荷字段、未改既有 5 个动作的 `prompt` 文案与声明数量、未改
+  `QUIET_BOARD_CODES` / `INTERRUPTED_CODES`、未改业务动作错误码；
+- 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；
+- 作者侧并行落地的 `## 480` / `## 481` 两份未实现红测（`test_packaging_2_1_result_parts_and_shape_only_red`
+  18 红、`test_packaging_business_tables_are_answer_keys_only_red` 15 红）与本批无关、未碰；
+- 未 push / 未建 MR / 未 tag / 未 Release / 未部署。
