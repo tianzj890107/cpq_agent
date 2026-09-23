@@ -88,7 +88,7 @@ def function_body(name: str) -> str:
 
 
 def call_pure(name: str, cases):
-    payload = run_node(name, json.dumps(cases))
+    payload = run_node(name, json.dumps([[case] for case in cases]))
     if payload.get("missing"):
         raise AssertionError("app.js 缺少纯函数 %s()（Spec §2）" % name)
     out = []
@@ -120,7 +120,7 @@ class VBatchFacts(unittest.TestCase):
             self.assertEqual(value.get("message"), BATCH_MSG,
                              "不可用时必须给「读不到批量挤出结果」那句：%r" % value)
             self.assertEqual(value.get("headline"), "",
-                             "不可用时不许产出「3D 覆盖率 …%」这句：%r" % value)
+                             "不可用时不许产出「3D 覆盖率 …%%」这句：%r" % value)
 
     def test_v2_stats_shape_must_not_be_folded_into_zero(self):
         cases = [{"stats": {}}, {"stats": []}, {"stats": {"part_total": "N/A"}},

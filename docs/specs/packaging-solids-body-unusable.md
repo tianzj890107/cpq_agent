@@ -179,3 +179,42 @@ V1 FAIL / V2 FAIL / V3 FAIL / V4 ok / V5 FAIL / V6 FAIL / V7 ok / V8 ok
   → 红基同样的 8 条也是 7 红 1 绿（V7），所以本批**没有把任何一条已绿的改红**；
     剩下 5 条的红=§7.1 的两处测试侧缺陷，不是实现缺口。
 ```
+
+## 8. 测试侧修复：§7.1 的两处红测缺陷已按 Spec 自己给出的修法改掉（2026-09-23，Codex；本批 changelog 落地条目 `## 465`）
+
+§7.1 记的两处缺陷**不是实现缺口**（实现侧 `## 441` 已按 Spec 全部落地），且 §7.1 自己写了
+修法。本批由**测试侧**执行那两行，断言一字未改：
+
+| 缺陷（§7.1） | 改动 | 为什么不算放宽 |
+| --- | --- | --- |
+| `call_pure()` 送"取值表"、`EXTRACT_JS` 要"实参表" | `tests/test_packaging_solids_body_unusable_red.py` 的 `call_pure()` 里 `json.dumps(cases)` → `json.dumps([[case] for case in cases])`（1 行） | V1/V2/V3/V5/V6 的断言、期望值、边界表**逐字未动**；改的是"这 5 条从来没有真正执行过"这一事实 —— 它们原先 100% 抛 `args.map is not a function`，落在 `try` 之外，**任何**实现都拿不到绿 |
+| V1 断言消息是非法格式串（`…%」这句`） | 同一文件那一行 `…%」` → `…%%」`（1 行） | 只改**消息模板**的转义，不改被判的表达式与期望值；原来的写法会在**断言求值之前**抛 `ValueError`，那 5 条与实现完全无关 |
+
+### 8.1 反向对照（证明这 5 条现在真的会咬）
+
+断言"变活"了必须能被证伪，所以对 `tech_app/frontend/app.js` 做了两次**临时**变异，跑完立即
+`git checkout --` 还原（还原后 `git status --porcelain tech_app/frontend/app.js` 为空）：
+
+| 变异（只改实现，不改测试） | 结果 |
+| --- | --- |
+| 不可用分支 `headline: ""` → `headline: "3D 覆盖率 0%（0/0 件可挤出）"` | `V1 FAIL`（正是它要拦的"折成 0/0"），其余 7 条绿 |
+| 门槛 `!stats \|\| !isFinite(total) \|\| total < 0` → 去掉 `total < 0` | `V2 FAIL`（`part_total = -1` 那条），其余 7 条绿 |
+
+两次合起来说明：V1 / V2 的断言既**跑得到**、也**拦得住**；修复前它们连跑都跑不到。
+
+### 8.2 复跑（本批，实测）
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_packaging_solids_body_unusable_red
+Ran 8 tests ... OK          # 修复前同一条命令：FAILED (failures=5)
+
+node --check tech_app/frontend/app.js                 # 退出码 0
+./open-claude/.venv/bin/python -W ignore -m unittest tests.test_spec_status_truth_red
+Ran 7 tests ... OK
+```
+
+- 本批只改 `tests/test_packaging_solids_body_unusable_red.py`（2 行）与本文件 + changelog；
+  **未改** `tech_app/frontend/app.js` 及任何业务实现、未改任何期望值 / 断言 / 边界表、未新增 skip、
+  未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。
+- `## 441` §7.1 的结论（"实现侧已全部落地，这 5 条要转绿只需测试侧改这 2 行"）**由本批兑现**，
+  该节的实测记录不改（它是本批之前的时点）。

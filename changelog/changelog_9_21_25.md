@@ -19505,3 +19505,28 @@ tests.test_packaging_parts_must_come_from_the_drawing_red
   JSON 字符串与 `null` → `not_an_object`、`has_gaps` 为假与键缺席都静默。
 
 本轮只改 4 份 Spec 与 changelog，**未改任何业务代码、测试或断言**；未 push / MR / tag / Release / 部署。
+
+## 465. 修复 `packaging-solids-body-unusable` 红测自身的 2 处 harness 缺陷（5 条红转绿，断言一字未改）（9-23，Codex 测试侧）
+
+`## 441` 已经记明：批量 3D 挤出那 8 条红测里 V1/V2/V3/V5/V6 的失败**不是实现缺口**，而是红测自己的
+两处结构性缺陷，连修法都写在那份 Spec §7.1 里（"需测试侧改 2 行"）。本批由测试侧把那两行执行掉：
+
+- `tests/test_packaging_solids_body_unusable_red.py` 的 `call_pure()`：`json.dumps(cases)` →
+  `json.dumps([[case] for case in cases])` —— JS 侧的 `EXTRACT_JS` 要的是**实参表**，而 V1/V2/V3/V5/V6
+  传的是**取值表**，`{}.map` / `null.map` 直接抛 `TypeError`（而且抛在 `try` 之外），
+  于是这 5 条**从来没有执行到断言**；
+- 同一文件 V1 的断言消息 `…%」这句：%r` → `…%%」这句：%r` —— 原来的写法会先抛
+  `ValueError: unsupported format character '?' (0x300d)`。
+
+**断言、期望值、边界表逐字未改**；改掉的只是"这 5 条从来没真正跑起来"这一事实。反向对照
+（证明断言现在真的会咬；两次都只改实现，跑完立即 `git checkout --` 还原）：
+
+- 不可用分支 `headline: ""` → `"3D 覆盖率 0%（0/0 件可挤出）"` ⇒ `V1 FAIL`（正是它要拦的"折成 0/0"）；
+- 门槛 `!stats || !isFinite(total) || total < 0` 去掉 `total < 0` ⇒ `V2 FAIL`（`part_total = -1` 那条）。
+
+复跑：`tests.test_packaging_solids_body_unusable_red` `Ran 8 … OK`（修复前同一条命令是
+`FAILED (failures=5)`）；`node --check tech_app/frontend/app.js` 退出码 0；`test_spec_status_truth_red` 7 OK；
+`test_doc_path_and_root_consistency_red` 10 OK。Spec `packaging-solids-body-unusable.md` 追加 §8 记录本批。
+
+本批只改 1 个测试文件（2 行）+ 1 份 Spec + changelog；**未改任何业务实现、未改任何期望值 / 断言 /
+边界表、未新增 skip**；未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。
