@@ -1,0 +1,674 @@
+{
+  "engine_version": "packaging-part-authority/1",
+  "kind": "reviewed_business_part_authority",
+  "note": "已审核的业务部件清单快照：按盒型编码 / 图纸 SHA-256 查得到，2.1 进入时自动命中，用户不必再手工选 Excel。清单逐条沉淀自客户权威资料，尺寸与材料一个字不改。",
+  "reviewed_by": "张真",
+  "reviewed_at": "2026-09-23",
+  "sources": [
+    {
+      "authority_source": "drawing_hash",
+      "box_type_code": "YT-DWG-WINE-700ML",
+      "case_code": "WINE-BOX-700ML",
+      "drawing_sha256": "0991c8b0a9646d1fea6571d2ae6155923351c05ca2aeeb6ed544ef19df93f3e0",
+      "source_file": "裕同包装项目-待开发/酒盒 报价资料.xlsx",
+      "sheet": "零部件排版工艺",
+      "file_hash": "1358f7cd363f1d8b8e7df59a6dea460dd1a420cfc54a6a4a5cee3ba41cbc3947",
+      "code_prefix": "JWXR21",
+      "reviewed": true,
+      "business_part_total": 28,
+      "parts": [
+        {
+          "sequence_no": 1,
+          "business_part_code": "JWXR21-P01",
+          "name": "左盖面纸",
+          "product_size_text": "307.07x528.89mm",
+          "length_mm": 307.07,
+          "width_mm": 528.89,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "787x560mm=1M",
+          "process_text": "开料-UV印刷K+4专+19um即涂防刮花哑胶(佳泓）+丝印UV 1处532x275mm(SYL100)—全印莱+浮雕击凸(最高深度0.3mm—欧思通)+浮雕击凹(最高深度0.3mm—欧思通)+模切+包盒（奥加特705）",
+          "note": "丝印网版网目300",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!1#1"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 4
+          }
+        },
+        {
+          "sequence_no": 2,
+          "business_part_code": "JWXR21-P02",
+          "name": "右盖面纸",
+          "product_size_text": "307.07x528.89mm",
+          "length_mm": 307.07,
+          "width_mm": 528.89,
+          "height_mm": null,
+          "material_text": "",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!4#2"
+          ],
+          "merged_from": {
+            "material_text": "D4",
+            "layout_text": "E4",
+            "process_text": "F4"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 5
+          }
+        },
+        {
+          "sequence_no": 3,
+          "business_part_code": "JWXR21-P03",
+          "name": "左盖外盒里层灰板1",
+          "product_size_text": "217.1x482.9mm",
+          "length_mm": 217.1,
+          "width_mm": 482.9,
+          "height_mm": null,
+          "material_text": "1.8MM双灰裱225G太阳铜版底PET光银",
+          "layout_text": "889x515mm=4M 2套（PET光银）\n889x510mm=4M 2套(灰板)",
+          "process_text": "开料-印刷1专(内裱纸）-裱纸-模切",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!5#4"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 6
+          }
+        },
+        {
+          "sequence_no": 4,
+          "business_part_code": "JWXR21-P04",
+          "name": "右盖外盒里层灰板1",
+          "product_size_text": "217.1x482.9mm",
+          "length_mm": 217.1,
+          "width_mm": 482.9,
+          "height_mm": null,
+          "material_text": "1.8MM双灰裱225G太阳铜版底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!6#8"
+          ],
+          "merged_from": {
+            "layout_text": "E6",
+            "process_text": "F6"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 7
+          }
+        },
+        {
+          "sequence_no": 5,
+          "business_part_code": "JWXR21-P05",
+          "name": "左盖外盒外层衬板",
+          "product_size_text": "221.8x492.6mm",
+          "length_mm": 221.8,
+          "width_mm": 492.6,
+          "height_mm": null,
+          "material_text": "350G玖龙粉灰",
+          "layout_text": "787x525mm=3M(1.5套)",
+          "process_text": "开料-模切-粘于里层灰板",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!7#7"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 8
+          }
+        },
+        {
+          "sequence_no": 6,
+          "business_part_code": "JWXR21-P06",
+          "name": "右盖外盒外层衬板",
+          "product_size_text": "221.8x492.6mm",
+          "length_mm": 221.8,
+          "width_mm": 492.6,
+          "height_mm": null,
+          "material_text": "350G玖龙粉灰",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!8#3"
+          ],
+          "merged_from": {
+            "layout_text": "E8",
+            "process_text": "F8"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 9
+          }
+        },
+        {
+          "sequence_no": 7,
+          "business_part_code": "JWXR21-P07",
+          "name": "左盖外盒里层灰板2",
+          "product_size_text": "44.6x273.9mm",
+          "length_mm": 44.6,
+          "width_mm": 273.9,
+          "height_mm": null,
+          "material_text": "2.5MM富业双灰",
+          "layout_text": "787x570mm=（6套）",
+          "process_text": "开料-模切",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!9#5"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 10
+          }
+        },
+        {
+          "sequence_no": 8,
+          "business_part_code": "JWXR21-P08",
+          "name": "右盖外盒里层灰板2",
+          "product_size_text": "44.6x273.9mm",
+          "length_mm": 44.6,
+          "width_mm": 273.9,
+          "height_mm": null,
+          "material_text": "2.5MM富业双灰",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!10#6"
+          ],
+          "merged_from": {
+            "layout_text": "E10",
+            "process_text": "F10"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 11
+          }
+        },
+        {
+          "sequence_no": 9,
+          "business_part_code": "JWXR21-P09",
+          "name": "底板",
+          "product_size_text": "267.9x126.5mm",
+          "length_mm": 267.9,
+          "width_mm": 126.5,
+          "height_mm": null,
+          "material_text": "2.5MM富业灰板",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!11#9"
+          ],
+          "merged_from": {
+            "layout_text": "E10",
+            "process_text": "F10"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 12
+          }
+        },
+        {
+          "sequence_no": 10,
+          "business_part_code": "JWXR21-P10",
+          "name": "内皮壳衬纸",
+          "product_size_text": "269.3x221.1mm",
+          "length_mm": 269.3,
+          "width_mm": 221.1,
+          "height_mm": null,
+          "material_text": "255G太阳铜版底PET光银",
+          "layout_text": "787x580mm=6M",
+          "process_text": "开料-UV印刷1专+19um即涂防刮花哑胶(佳泓）+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!12#10"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 13
+          }
+        },
+        {
+          "sequence_no": 11,
+          "business_part_code": "JWXR21-P11",
+          "name": "底板面纸",
+          "product_size_text": "303.6x161.2mm",
+          "length_mm": 303.6,
+          "width_mm": 161.2,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "393x645mm=4M",
+          "process_text": "开料-UV印刷K+4专+19um即涂防刮花哑胶(佳泓）+丝印UV(SYL100)+浮雕击凸(最高深度0.3mm—欧思通)+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!13#28"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 14
+          }
+        },
+        {
+          "sequence_no": 12,
+          "business_part_code": "JWXR21-P12",
+          "name": "内盒1面纸",
+          "product_size_text": "540.3x510mm",
+          "length_mm": 540.3,
+          "width_mm": 510.0,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "787x570mm=1M",
+          "process_text": "开料-UV印刷1专+19um即涂防刮花哑胶（佳泓）+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!14#11"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 15
+          }
+        },
+        {
+          "sequence_no": 13,
+          "business_part_code": "JWXR21-P13",
+          "name": "内盒1灰板",
+          "product_size_text": "446.3x398.2mm",
+          "length_mm": 446.3,
+          "width_mm": 398.2,
+          "height_mm": null,
+          "material_text": "2MM单面富业滑灰板",
+          "layout_text": "787x466mm=1M",
+          "process_text": "开料-模切-V槽90度-包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!15#12"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 16
+          }
+        },
+        {
+          "sequence_no": 14,
+          "business_part_code": "JWXR21-P14",
+          "name": "内盒2灰板",
+          "product_size_text": "434.9x261.3mm",
+          "length_mm": 434.9,
+          "width_mm": 261.3,
+          "height_mm": null,
+          "material_text": "",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!16#13"
+          ],
+          "merged_from": {
+            "material_text": "D16",
+            "layout_text": "E16",
+            "process_text": "F16"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 17
+          }
+        },
+        {
+          "sequence_no": 15,
+          "business_part_code": "JWXR21-P15",
+          "name": "内盒3灰板",
+          "product_size_text": "185x146mm",
+          "length_mm": 185.0,
+          "width_mm": 146.0,
+          "height_mm": null,
+          "material_text": "2MM富业单面滑灰板",
+          "layout_text": "787x396mm=10M",
+          "process_text": "开料-模切-V槽90度-包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!17#15"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 18
+          }
+        },
+        {
+          "sequence_no": 16,
+          "business_part_code": "JWXR21-P16",
+          "name": "内盒1衬纸",
+          "product_size_text": "262x160mm",
+          "length_mm": 262.0,
+          "width_mm": 160.0,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "787x540mm=1M",
+          "process_text": "开料-UV印刷1专+19um即涂防刮花哑胶(佳泓）+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!18#18"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 19
+          }
+        },
+        {
+          "sequence_no": 17,
+          "business_part_code": "JWXR21-P17",
+          "name": "内盒3衬纸",
+          "product_size_text": "120x81mm",
+          "length_mm": 120.0,
+          "width_mm": 81.0,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!19#16"
+          ],
+          "merged_from": {
+            "layout_text": "E19",
+            "process_text": "F19"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 20
+          }
+        },
+        {
+          "sequence_no": 18,
+          "business_part_code": "JWXR21-P18",
+          "name": "内盒2面纸",
+          "product_size_text": "501.5x439.6mm",
+          "length_mm": 501.5,
+          "width_mm": 439.6,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!20#19"
+          ],
+          "merged_from": {
+            "layout_text": "E19",
+            "process_text": "F19"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 21
+          }
+        },
+        {
+          "sequence_no": 19,
+          "business_part_code": "JWXR21-P19",
+          "name": "内盒3面纸",
+          "product_size_text": "231.4x214.5mm",
+          "length_mm": 231.4,
+          "width_mm": 214.5,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!21#14"
+          ],
+          "merged_from": {
+            "layout_text": "E19",
+            "process_text": "F19"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 22
+          }
+        },
+        {
+          "sequence_no": 20,
+          "business_part_code": "JWXR21-P20",
+          "name": "贴牌",
+          "product_size_text": "226x110.3mm",
+          "length_mm": 226.0,
+          "width_mm": 110.3,
+          "height_mm": null,
+          "material_text": "325G白卡底PET光银+3层300G白卡+225G铜版底PET光银",
+          "layout_text": "393x546mm=6M（5张纸尺寸共用）",
+          "process_text": "开料-UV印刷K+4专+19um即涂防刮花哑胶(佳泓）+丝印UV(SYL100)+浮雕击凸(最高深度0.3mm,欧思通)+模切+粘",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!22#17"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 23
+          }
+        },
+        {
+          "sequence_no": 21,
+          "business_part_code": "JWXR21-P21",
+          "name": "顶托面纸",
+          "product_size_text": "145x126mm",
+          "length_mm": 145.0,
+          "width_mm": 126.0,
+          "height_mm": null,
+          "material_text": "325G白卡底PET光银",
+          "layout_text": "444x525mm=6套",
+          "process_text": "开料-UV印刷1专+19um即涂防刮花哑胶(佳泓）+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!23#20"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 24
+          }
+        },
+        {
+          "sequence_no": 22,
+          "business_part_code": "JWXR21-P22",
+          "name": "底托面纸",
+          "product_size_text": "93.1x81.5mm",
+          "length_mm": 93.1,
+          "width_mm": 81.5,
+          "height_mm": null,
+          "material_text": "325G白卡底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!24#21"
+          ],
+          "merged_from": {
+            "layout_text": "E24",
+            "process_text": "F24"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 25
+          }
+        },
+        {
+          "sequence_no": 23,
+          "business_part_code": "JWXR21-P23",
+          "name": "顶托衬纸",
+          "product_size_text": "121x60mm",
+          "length_mm": 121.0,
+          "width_mm": 60.0,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "393x490mm 各12套",
+          "process_text": "开料-UV印刷1专+19um即涂防刮花哑胶(佳泓）+模切+包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!25#24"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 26
+          }
+        },
+        {
+          "sequence_no": 24,
+          "business_part_code": "JWXR21-P24",
+          "name": "底托衬纸",
+          "product_size_text": "108x42mm",
+          "length_mm": 108.0,
+          "width_mm": 42.0,
+          "height_mm": null,
+          "material_text": "225G太阳铜版底PET光银",
+          "layout_text": "",
+          "process_text": "",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!26#22"
+          ],
+          "merged_from": {
+            "layout_text": "E26",
+            "process_text": "F26"
+          },
+          "group_hint": "同上一行",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 27
+          }
+        },
+        {
+          "sequence_no": 25,
+          "business_part_code": "JWXR21-P25",
+          "name": "底托灰板",
+          "product_size_text": "80.5x34.3mm",
+          "length_mm": 80.5,
+          "width_mm": 34.3,
+          "height_mm": null,
+          "material_text": "2MM富业双灰对裱11层共22MM厚",
+          "layout_text": "393x546mm=54M（11张纸啤11次54模）27套",
+          "process_text": "开料-模切-对裱-包盒",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!27#25"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 28
+          }
+        },
+        {
+          "sequence_no": 26,
+          "business_part_code": "JWXR21-P26",
+          "name": "内卡",
+          "product_size_text": "687.6x228mm",
+          "length_mm": 687.6,
+          "width_mm": 228.0,
+          "height_mm": null,
+          "material_text": "235G白卡底PET光银+A9（E坑）130/120",
+          "layout_text": "面纸：787x495mm=2M\n坑纸：705x488mm=2M",
+          "process_text": "开料-UV印刷1专-19um即涂防刮花哑胶(佳泓）-裱坑-模切(胶线0.6x2.7)-组装",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!28#26"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 29
+          }
+        },
+        {
+          "sequence_no": 27,
+          "business_part_code": "JWXR21-P27",
+          "name": "顶托EVA",
+          "product_size_text": "125.2x54mm",
+          "length_mm": 125.2,
+          "width_mm": 54.0,
+          "height_mm": null,
+          "material_text": "38度A级白色EVA 125×54×35MM异形",
+          "layout_text": "",
+          "process_text": "外购，用量1个",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!29#27"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 30
+          }
+        },
+        {
+          "sequence_no": 28,
+          "business_part_code": "JWXR21-P28",
+          "name": "磁铁",
+          "product_size_text": "15x5x2mm",
+          "length_mm": 15.0,
+          "width_mm": 5.0,
+          "height_mm": 2.0,
+          "material_text": "长方形镀锌双面磁铁侧吸3500GS 15×5×2MM",
+          "layout_text": "",
+          "process_text": "外购，用量8/套",
+          "note": "",
+          "thumbnail_refs": [
+            "image:零部件排版工艺!30#23"
+          ],
+          "merged_from": {},
+          "group_hint": "",
+          "source": {
+            "sheet": "零部件排版工艺",
+            "row": 31
+          }
+        }
+      ]
+    }
+  ]
+}

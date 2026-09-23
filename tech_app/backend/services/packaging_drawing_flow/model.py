@@ -16,6 +16,15 @@ STALE_VERSION = "packaging-drawing-stale/1"
 STEP_IDS = ("file_preflight", "dwg_convert", "cad_ir_parse", "packaging_semantics",
             "parts_extract", "field_write", "pending_confirm", "downstream_prepare")
 
+#: `parts_extract` 这一步内部的**子相位**（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md`
+#: §3：业务部件解析"新增或内聚"一个可见步骤）—— 这里选**内聚**：几何区域拆完之后自动跑
+#: 业务部件解析（查权威清单 + 全局映射），步骤闭集仍是八步，不许悄悄扩成第九步。
+PARTS_SUBPHASES = ("geometry_regions_extract", "business_parts_resolve")
+
+#: 业务部件权威清单的来源闭集（Spec §2.1 的优先级顺序）：`missing` = 一个来源都没有。
+BUSINESS_PART_AUTHORITY_SOURCES = ("attachment", "knowledge_base", "drawing_hash",
+                                   "dwg_candidate", "missing")
+
 STEP_TITLES = {
     "file_preflight": "文件预检",
     "dwg_convert": "DWG 转换",

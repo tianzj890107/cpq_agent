@@ -18482,3 +18482,48 @@ B1–B7 护栏）。
 `test_packaging_parts_list_visibility_red` + `test_packaging_drawing_flow_red`。
 
 未改任何业务实现（`tech_app/` 此行零改动）、未连 34、未写业务数据。
+
+## 451. 落地 `packaging-28-part-auto-resolution-and-2d-board-cleanup`：酒盒 28 件业务部件由图纸自动解析（权威清单免手工导入），2.1 左栏只留业务部件、右栏改画整张 CAD 平面图（15 OK，红基 13 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-28-part-auto-resolution-and-2d-board-cleanup.md`，红测
+`tests/test_packaging_28_part_auto_resolution_and_2d_board_cleanup_red.py`（15 条）。
+
+- 新增 `tech_app/backend/services/packaging_business_part_resolver.py`：`extract_text_anchors()` /
+  `normalize_part_label()`（`忖纸→衬纸`、`左盒→左盖`）/ `build_geometry_regions()` /
+  `match_authority_parts()`（全局一对一、重复排版只进 `instances`、同尺寸左右件不合并）/
+  `resolve_business_parts()`；权威来源按 `attachment → knowledge_base/图纸 hash → dwg_candidate
+  → missing`，后两者一律 `authority_missing=True`（候选不得当 BOM 权威）；
+- 新增出处文件 `tech_app/agent_knowledge/provenance/packaging_authority_parts.json`：逐条沉淀
+  《酒盒 报价资料.xlsx》「零部件排版工艺」28 件（`reviewed: true`、`box_type_code=YT-DWG-WINE-700ML`、
+  `drawing_sha256=0991c8b0…f3e0`）；酒盒样本因此**不需要在 2.1 再手工选 Excel**；
+- `packaging_drawing_flow`：业务解析**内聚进 `parts_extract`**（不新增第九步；`STEP_IDS` /
+  九项 `DEPENDENCIES` 一字未改），`detail` 带 `authority_source/business_part_total/bound_total/
+  partial_total/ambiguous_total/unbound_total/geometry_component_total/business_parts_id/hash`；
+  只有 `authority_source != "dwg_candidate"` 才落 `packaging_business_parts`；
+- 真样本（只读，不写库）：`47c39dc1ab6738fc48c8/converted.dxf` → `authority_source=drawing_hash`、
+  `business_part_total=28`（首件 `JWXR21-P01 左盖面纸`）、`bound/partial/unbound = 26/1/1`、
+  `geometry_component_total=263`（263 是几何证据，不是业务件数）；
+- 前端 2.1：左栏有业务清单就只渲染 28 条业务部件；几何行整体挪进 `details.geometry-diagnostics`
+  （「几何诊断 / 映射证据（几何区域 N 个，默认收起）」），**任何状态都不回退** `packagingPartsShown`
+  / `packaging-parts.items`；零件行动作收紧成紧凑 `.part-row-action`（`padding: 4px 8px`、
+  `font-size: 11px`），不再套页面级 `.btn`；「全部挤出 3D」入口从包装页撤掉（后端历史 STL 接口
+  保留供审计），`part-cost` 看板入口在包装项目 `visible=false`、文案重指为「成本（第 4 阶段）」；
+- 批量工艺（`startAllPartProcesses` → `startAllPackagingPartProcesses`）改按**业务部件**遍历：
+  绑到闭合几何件 → 走几何工艺；否则权威清单够 → 走权威工艺；两条都不通的进 `skipped` 并逐条
+  说明「为什么不能算」；业务清单还没形成时**阻断**并说清缺口；
+- 右栏 CAD 平面图：`GET /api/projects/{pid}/requirement/packaging-geometry` 新增 `cad_scene`
+  （`main.py:_packaging_cad_scene()`，只由 `cad_ir.load_ir()` 派生：折线顶点 / 线端点 /
+  圆·弧·椭圆离散 / 包围盒兜底、`ir["texts"]` 的文字、`ir["layers"]` 的显隐开关、包装语义文档的
+  图层角色、每个图元带稳定 `cad_entity_id`）；前端 `renderPackagingCadScene()` 画整张图并支持
+  图层显隐、点选高亮；`initViewer()` 在包装模式早退（不建 WebGL、不留空白画布），非包装项目
+  的 3D 初始化本体一字未改；
+- 红测冲突与**重指**（必须记）：本批要求在 `initViewer()` 里加包装早退守卫，与第 4 层
+  `tests/test_packaging_parts_3d_red.py::test_g3_existing_viewer_untouched`（整函数不许出现
+  packaging）在同一段源码上互斥；按本 Spec §5 把 g3 重指为「守卫之外（`new THREE.Scene()`
+  之后）的 3D 初始化本体不许出现 packaging」，重指≠放宽。
+
+实跑：本批红测 `Ran 15 OK`（红基 13 红 2 绿）；保护网 16 个文件 `Ran 265 tests … FAILED
+(failures=5)`，5 条全是 `test_packaging_solids_body_unusable_red` 的**既有红测 harness 缺陷**
+（`call_pure()` 传参形状 / `node` 报 `args.map is not a function`，`## 441` 已记，非本批引入）；
+`node --check tech_app/frontend/app.js` 通过。未改其它 tests、未 push / MR / tag / Release / 部署、
+未连 PG、未写任何业务数据。

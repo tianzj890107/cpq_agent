@@ -236,7 +236,16 @@ class GFrontend(SolidCase):
         source = self._js()
         start = source.index("function initViewer()")
         end = source.index("function clearViewer()", start)
-        self.assertNotIn("packaging", source[start:end],
+        # `## 451` 按 Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §5 把这条
+        # 守点**重指**了一次（重指≠放宽）：包装（drawing_flow）项目**不初始化 WebGL**，于是
+        # initViewer 最前多了一段"包装模式早退"的守卫 —— 守卫本身必须写明 packaging 且当场
+        # return / hidden；**3D 初始化本体**（`new THREE.Scene()` 之后）仍一个字不许出现 packaging。
+        scene_at = source.index("new THREE.Scene()", start)
+        guard = source[start:scene_at]
+        self.assertIn("packaging", guard,
+                      "包装模式的早退守卫必须写在 initViewer 最前（Spec §5）")
+        self.assertRegex(guard, r"packaging[\s\S]{0,250}(return|hidden)")
+        self.assertNotIn("packaging", source[scene_at:end],
                          "既有 3D 初始化不许被图纸零件逻辑污染")
 
 

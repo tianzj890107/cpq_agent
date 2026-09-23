@@ -48,6 +48,10 @@ _MODULE_PATHS = {
     "packaging_match": "tech_app.backend.services.packaging_match",
     "packaging_bom": "tech_app.backend.services.packaging_bom",
     "packaging_parts": "tech_app.backend.services.packaging_parts",
+    # 业务部件解析器（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §2）：
+    # **不在** `DEPENDENCIES` 九项里（那份闭集是部署自检的形状，不许动），但它同样走依赖缝，
+    # 缺了只让 `parts_extract` 少了"业务部件"这一半事实，不改这一步的结论。
+    "packaging_business_part_resolver": "tech_app.backend.services.packaging_business_part_resolver",
     "packaging_route": "tech_app.backend.services.packaging_route",
     "packaging_cost": "tech_app.backend.services.packaging_cost",
 }

@@ -197,7 +197,8 @@
                    包装是二维刀模/展开图 —— 这里复用同一块右栏空间显示图纸**原本的**平面图，
                    点业务部件时高亮它的图元并缩放到部件范围；不显示"3D 预览/平板挤出"。
                    非包装项目保持 #viewer 的 3D 行为不变（这块默认 hidden）。 -->
-              <div id="packagingCadPlanViewer" class="packaging-cad-plan" hidden></div>
+              <div id="packagingCadPlanViewer" class="packaging-cad-plan" role="region"
+                   aria-label="CAD 平面图" hidden></div>
               <!-- 图纸项目的右栏零件面板（包装零件第 2 层）：左栏零件行可点，
                    选中后在这里看轮廓、事实与证据。与 #viewer / #partDetail / #parameterEditor
                    互斥，未选中零件时保持 hidden，不留白。 -->

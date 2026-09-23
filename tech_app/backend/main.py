@@ -12,6 +12,7 @@ import base64
 import copy
 import json
 import hashlib
+import math
 import re
 import threading
 import time
@@ -7201,6 +7202,146 @@ PACKAGING_BUSINESS_PARTS_IMPORT_PATH = ("/api/projects/{pid}/requirement/"
                                         "packaging-business-parts/import")
 
 
+# --------------------------------------------------------------------------- #
+# 完整二维 CAD 场景（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §5）：
+# 右栏的「CAD 平面图」必须画**整张图**，而不是把过滤后的分量包围盒拼成一张图。场景只由
+# `cad_ir.load_ir()` 的实体派生（坐标一条不重算），文字取 `ir["texts"]`、图层显隐取
+# `ir["layers"]` 的开关、图层角色取包装语义文档（没有语义文档一律 `unknown`，不猜）。
+# --------------------------------------------------------------------------- #
+PACKAGING_CAD_SCENE_VERSION = "packaging-cad-scene/1"
+#: 场景最多回多少图元（真图约 6.5k 条：足够画整张图，又不给前端塞无上限的数组）。
+PACKAGING_CAD_SCENE_LIMIT = 20000
+#: 圆 / 弧 / 椭圆的离散段数：IR 只留圆心/半径/角度，折线是**画法**，不参与几何口径。
+PACKAGING_CAD_CURVE_STEPS = 64
+
+
+def _cad_scene_number(value: Any) -> Optional[float]:
+    """有限浮点（坏了回 None，绝不抛、绝不猜）。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _cad_scene_pairs(raw: Any) -> List[List[float]]:
+    """坐标序列净化：只留有限的 [x, y]，坏行丢掉（不猜、不抛）。"""
+    out: List[List[float]] = []
+    for item in raw or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        first, second = _cad_scene_number(item[0]), _cad_scene_number(item[1])
+        if first is None or second is None:
+            continue
+        out.append([first, second])
+    return out
+
+
+def _cad_scene_curve_points(kind: str, attrs: Dict[str, Any]) -> List[List[float]]:
+    """圆 / 弧 / 椭圆的折线画法（IR 只留参数；这里只做离散，不改任何几何结论）。"""
+    center = _cad_scene_pairs([attrs.get("center")])
+    if not center:
+        return []
+    cx, cy = center[0]
+    radius = _cad_scene_number(attrs.get("radius")) or 0.0
+    steps = max(8, int(PACKAGING_CAD_CURVE_STEPS))
+    if kind == "circle":
+        return [[cx + radius * math.cos(2 * math.pi * index / steps),
+                 cy + radius * math.sin(2 * math.pi * index / steps)]
+                for index in range(steps + 1)]
+    if kind == "arc":
+        start = math.radians(_cad_scene_number(attrs.get("start_angle")) or 0.0)
+        end = math.radians(_cad_scene_number(attrs.get("end_angle")) or 0.0)
+        sweep = (end - start) % (2 * math.pi) or 2 * math.pi
+        return [[cx + radius * math.cos(start + sweep * index / steps),
+                 cy + radius * math.sin(start + sweep * index / steps)]
+                for index in range(steps + 1)]
+    if kind == "ellipse":
+        major = _cad_scene_number(attrs.get("semi_major")) or 0.0
+        minor = _cad_scene_number(attrs.get("semi_minor")) or 0.0
+        return [[cx + major * math.cos(2 * math.pi * index / steps),
+                 cy + minor * math.sin(2 * math.pi * index / steps)]
+                for index in range(steps + 1)]
+    return []
+
+
+def _cad_scene_points(row: Dict[str, Any]) -> List[List[float]]:
+    """IR 一行 → 场景折线点（只搬已有坐标；都没有时退到包围盒四角，仍不猜）。"""
+    attrs = row.get("attributes") or {}
+    kind = str(row.get("kind") or "")
+    points = _cad_scene_pairs(attrs.get("points")) or _cad_scene_pairs(attrs.get("fit_points"))
+    if not points and kind == "line":
+        points = _cad_scene_pairs([attrs.get("start"), attrs.get("end")])
+    if not points:
+        points = _cad_scene_curve_points(kind, attrs)
+    if len(points) < 2:
+        box = [_cad_scene_number(value) for value in list(row.get("bbox") or [])[:4]]
+        if len(box) == 4 and all(value is not None for value in box):
+            x0, y0, x1, y1 = box
+            points = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    return points
+
+
+def _packaging_cad_layer_roles(pid: str) -> Dict[str, str]:
+    """图层 → 包装语义角色（Spec §5）：只从已落的语义文档读，读不到一律 `unknown`。"""
+    try:
+        doc = packaging_semantics.load_semantics(pid)
+    except Exception:                                    # noqa: BLE001 - 读不到不算失败
+        doc = None
+    out: Dict[str, str] = {}
+    for row in ((doc or {}).get("layers") or []):
+        if isinstance(row, dict) and str(row.get("name") or ""):
+            out[str(row["name"])] = str(row.get("role") or "unknown")
+    return out
+
+
+def _packaging_cad_scene(pid: str) -> Dict[str, Any]:
+    """由 CAD IR 派生的**完整**二维场景（Spec §5）：几何/标注图元 + 必要文字 + 图层 + 范围。"""
+    ir = cad_ir.load_ir(pid) or {}
+    roles = _packaging_cad_layer_roles(pid)
+    rows: List[Dict[str, Any]] = []
+    for row in (ir.get("entities") or []):
+        if not isinstance(row, dict):
+            continue
+        layer = str(row.get("layer") or "")
+        rows.append({"cad_entity_id": str(row.get("entity_id") or ""),
+                     "kind": str(row.get("kind") or ""), "layer": layer,
+                     "role": roles.get(layer, "unknown"),
+                     "closed": bool(row.get("closed")),
+                     "points": _cad_scene_points(row), "bbox": row.get("bbox")})
+    for row in (ir.get("texts") or []):
+        if not isinstance(row, dict):
+            continue
+        position = _cad_scene_pairs([row.get("position")])
+        text = str(row.get("normalized_text") or row.get("raw_text") or "").strip()
+        if not position or not text:
+            continue
+        layer = str(row.get("layer") or "")
+        x, y = position[0]
+        rows.append({"cad_entity_id": str(row.get("entity_id") or ""), "kind": "text",
+                     "layer": layer, "role": roles.get(layer, "unknown"),
+                     "closed": False, "points": [], "bbox": [x, y, x, y],
+                     "text": text, "x": x, "y": y,
+                     "height": _cad_scene_number(row.get("height")) or 0.0})
+    drawable = [row for row in rows
+                if len(row.get("points") or []) >= 2 or row.get("kind") == "text"]
+    entities = drawable[:PACKAGING_CAD_SCENE_LIMIT]
+    visibility: Dict[str, bool] = {}
+    for row in (ir.get("layers") or []):
+        if isinstance(row, dict) and str(row.get("name") or ""):
+            visibility[str(row["name"])] = bool(row.get("visible", True))
+    return {"scene_version": PACKAGING_CAD_SCENE_VERSION,
+            "entities": entities, "entity_total": len(drawable),
+            "truncated": len(drawable) > len(entities),
+            "layer_visibility": visibility,
+            "extents": list((ir.get("document") or {}).get("extents") or []),
+            "units": dict(ir.get("units") or {}),
+            "ir_id": str(ir.get("ir_id") or ""), "ir_hash": str(ir.get("ir_hash") or "")}
+
+
+
 def _workbook_too_large_detail(size: int, limit: int) -> str:
     """超限文案（Spec `packaging-authority-workbook-upload.md` §C2）：说清上限与实际大小。"""
     return ("工作簿太大（%.1f MB），单个工作簿上限 %.1f MB"
@@ -7360,6 +7501,8 @@ def read_packaging_geometry(pid: str, user: dict = Depends(current_user), limit:
         doc or {}, limit=max(0, int(limit or 0)))
     body["parts_built"] = bool(doc and (doc.get("parts") or []))
     body["business_parts_gap"] = body.get("gap") or {}
+    # 完整 CAD 场景（Spec §5）：右栏画整张图，而不是过滤后的分量包围盒拼图。
+    body["cad_scene"] = _packaging_cad_scene(pid)
     return body
 
 

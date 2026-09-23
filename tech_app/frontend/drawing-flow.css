@@ -266,3 +266,80 @@
   font-size: 11px;
   color: var(--text-muted, #6b7280);
 }
+
+/* 零件行里的紧凑动作（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §6.3）：
+   窄栏里不许塞页面级大按钮（`.btn` / `.btn-secondary`），同一行最多两颗也撑不出横向滚动。 */
+.part-row-action {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-primary-border, #B4D0F8);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-primary, #0060E6);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.part-row-action:hover:not(:disabled) {
+  background: var(--color-primary-light, #E6F0FD);
+}
+
+.part-row-action:disabled {
+  color: #9aa4b0;
+  border-color: #dde3ea;
+  background: #f5f7fa;
+  cursor: not-allowed;
+}
+
+/* 零件树子动作（工艺推荐 / 单件成本）：与 `.part-row-action` 同一尺寸体系，不再是页面级大按钮。 */
+.part-subaction-process,
+.part-subaction-cost {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-primary-border, #B4D0F8);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-primary, #0060E6);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.part-subaction-cost {
+  color: var(--color-green, #2f6f4f);
+}
+
+/* 几何区域只进"几何诊断 / 映射证据"折叠区，默认收起（Spec §4）：263 个分量是几何事实，
+   不是客户说的 28 件业务部件 —— 左栏不该把它们当零件列出来。 */
+.geometry-diagnostics {
+  margin: 8px 0 4px;
+  border-top: 1px dashed var(--border-light, #e2e6ea);
+  padding-top: 6px;
+}
+
+.geometry-diagnostics > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}
+
+.geometry-diagnostics-body {
+  margin-top: 6px;
+}
+
+/* 完整 CAD 场景的图层显隐条（Spec §5）：显隐只是视图，不改几何、不丢图元。 */
+.packaging-cad-layer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  padding: 2px 0 4px;
+}
+
+.packaging-cad-layer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
