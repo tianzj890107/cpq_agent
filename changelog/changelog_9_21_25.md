@@ -20782,3 +20782,34 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
   未写业务数据、未 push / MR / tag / Release / 部署。
 - 前端**不做**几何求解（单件图元与 `viewBox` 都来自后端文档），预览**不复制**第二套渲染（两处入口共用
   `window.CadFilePreview.open()`，`agent-chat.js` 里不出现 `fileDrawingPreviewHtml` / `packagingCadSceneEndpoint`）。
+
+## 488. 补记 `## 487` 的真样本复核：那块「只这一件」的图在真图上暂时是单色的（只读实测，零代码改动）（9-23，Codex）
+
+`## 487` 的两个纯函数拿真样本真跑了一遍（不是夹具）：`cad_ir.parse_dxf()` + `packaging_parts.extract()`
+→ 离线复刻 `main.py::_packaging_cad_scene()` 的整张场景（角色走同一条 `_resolve_layer_roles()`）→ 每件绑定喂给
+`node` 抽出来真跑的 `packagingPartSceneEntities()` / `packagingPartSceneSvg()`。
+
+### 成立的部分
+
+- 酒盒.dwg 28 件业务部件（26 件绑定）、圆盘盒.dwg 65 件（38 件绑定）：画出来的实体集合**逐件**等于
+  "这一件绑的分量的成员 **减掉** `annotation_filtered`"，画出条数与实体数一致、别件图元一条没进、
+  每题都带 `viewBox` —— **0 件不符**（本批 C1 / C2 / C7 在真数据上同样成立）。
+
+### 不成立的部分（本批没做到的用户诉求）
+
+- 用户要的"图里面应该也有颜色区分，就像 DWG 看图那样"在两张真图上**一件都没出现**：画出 ≥2 色的件 = **0**。
+- 根因之一在**上一层的图层角色**：`tech_app/agent_knowledge/rules/packaging_layer_rules.json` 只认
+  `全穿刀` / `压线` / `CREASE` / `CUTTER` 这类层名，真图用的是 `0` / `DESIGN` / `SAMPLE` / `轮廓线` /
+  `1轮廓实线层` / `2细线层` / `6文字层` / `7标注层` …，全部落 `unknown`：酒盒 263 个几何分量里含已知角色的 = 0；
+  圆盘盒 312 个里只有 9 个且全是单一 `cut`；跨 ≥2 个已知角色的分量 = 0。
+- 根因之二（更硬）：真图的件**大多只画在一层上** —— 绑定件里"只用一层"的：酒盒 **16/26**、圆盘盒 **38/38**；
+  跨 ≥2 层的只有酒盒 10 件（`('0','DESIGN')`8、`('DESIGN','SAMPLE')`2）。也就是说即使把层名全部补成角色，
+  两部分合计 64 件里**最多 10 件**能靠图层分色。
+- 所以要落地"分色"要两条业务口径：① 层名 → 角色（哪种层是刀线 / 压痕 / 图框）；② 只会一层的件若也要分色，
+  只能按**图元自身**分（闭合轮廓 / 件内折线 / 标注）—— 两条都不是本批能自行拍数的。读数与结论写进 Spec
+  `docs/specs/packaging-2-1-right-pane-single-part-figure.md` §7 / §7.1。
+
+### 纪律
+
+- 本次**只改 Spec 一处文字**（§7 重排 + 新增 §7.1），未改任何代码、未改任何测试、未放宽任何断言；
+  未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
