@@ -38,13 +38,21 @@
 
 ## 3. 真实样本门槛（红线，两份样本都跑）
 
-| 样本 | 门槛 |
+| 样本 | 门槛（**绝对分子地板**） |
 | --- | --- |
-| `酒盒.dwg` | `closed_ratio >= 0.10` |
-| `圆盘盒.dwg` | `closed_ratio >= 0.50` 且 `role_known_ratio >= 0.10` |
+| `酒盒.dwg` | `closed_total >= 7` |
+| `圆盘盒.dwg` | `closed_total >= 32` 且 `role_known_total >= 8` |
 | 两份 | 各自至少 **1 件** `processability.ok` 且 `extrude` 返回 `ok` |
 
 门槛值写进本 Spec，**改门槛必须改本文件**并说明依据（不许在代码里手调）。
+
+**2026-09-23 重标定**（依据 `packaging-parts-list-visibility-and-kinds.md` §6 那条裁决）：门槛的分母是
+「文档里有几件」，`## 308` 之后 kept 件从 64 涨到 263 / 312，比值跟着掉而**分子一分没掉** ——
+按比值判会把「能力没退步」判成 `no_go`（实测 `圆盘盒 role_known_ratio = 0.029`，而 `role_known_total = 9`，
+旧分母下是 8）。所以门槛一律换成绝对分子地板，数字 = `ceil(原比值 × 原分母 64)`：酒盒 `0.10 × 64 = 6.4 → 7`、
+圆盘盒 `0.50 × 64 = 32`；`role_known_total` 取 §6 已裁决的 **8**。**不许**「比值或计数」双通道 ——
+那会让「分母被压小」重新变成通过路径。细则与红测见
+`packaging-parts-gate-threshold-recalibration.md`。
 
 ## 4. 只读门禁 `tech_app/tools/packaging_parts_gate.py`
 

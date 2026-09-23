@@ -49,9 +49,16 @@ APP_JS = CPQ_DIR / "tech_app" / "frontend" / "app.js"
 INDEX_HTML = CPQ_DIR / "tech_app" / "frontend" / "index.html"
 MAIN_PY = CPQ_DIR / "tech_app" / "backend" / "main.py"
 
-#: 真实样本门槛（Spec §3，改门槛必须同时改 Spec 文件）。
-THRESHOLDS = {"酒盒.dwg": {"closed_ratio": 0.10},
-              "圆盘盒.dwg": {"closed_ratio": 0.50, "role_known_ratio": 0.10}}
+#: 真实样本门槛 = **绝对分子地板**（Spec `packaging-parts-gate-threshold-recalibration.md` §C1，
+#: 值同步写在 `packaging-parts-downstream-acceptance.md` §3 —— 改门槛必须同时改那份 Spec）。
+#:
+#: 为什么不是比值：分母是「文档里有几件」（`packaging-parts-list-visibility-and-kinds.md` §2.1），
+#: `## 308` 之后 kept 件从 64 涨到 263 / 312，比值跟着掉而**分子一分没掉** —— 按比值判会把
+#: 「能力没退步」判成 fail。数字来源：`ceil(原比值 × 原分母 64)`（酒盒 `0.10 × 64 = 6.4 → 7`、
+#: 圆盘盒 `0.50 × 64 = 32`）；`role_known_total` 取 `## 308` §6 已裁决的 8（旧分母下的实测分子）。
+#: **不许**写成「比值或计数」双通道 —— 那会让「分母被压小」重新变成通过路径。
+THRESHOLDS = {"酒盒.dwg": {"closed_total": 7},
+              "圆盘盒.dwg": {"closed_total": 32, "role_known_total": 8}}
 
 MANUAL_IDS = tuple(item_id for item_id, kind, _title in GATE_ITEMS if kind == "manual")
 
@@ -225,8 +232,40 @@ def _sample_metrics(path: Path) -> dict:
     summary["solid_total"] = sum(1 for row in rows
                                  if packaging_part_solids.extrude(row).get("status") == "ok")
     summary["part_total"] = len(rows)
+    # 角色已知件的**绝对分子**（Spec §C1）：由 `summarize()` 自己给的比值 × 分母还原 ——
+    # 口径只有一处（零件引擎），门禁不新增引擎键、也不另写一套判据。
+    summary["role_known_total"] = int(round(float(summary.get("role_known_ratio") or 0.0)
+                                           * int(summary["part_total"])))
     summary["dxf_source"] = converter
     return summary
+
+
+def _count_text(value) -> str:
+    """计数文案：整数不带小数点（`7` 而不是 `7.000`）。"""
+    number = float(value or 0.0)
+    return str(int(number)) if number.is_integer() else ("%g" % number)
+
+
+def sample_verdict(name: str, metrics: dict, floors=None) -> list:
+    """按绝对分子地板判一份真实样本，返回失败原因清单（`[]` = 过）。
+
+    Spec `packaging-parts-gate-threshold-recalibration.md` §C1/§C3：只比**计数**，不比比值
+    （分母会随分组口径变）；「比值或计数」双通道一律禁止。纯函数：不读文件、不转换、不联网。
+    """
+    wanted = dict(floors if floors is not None else (THRESHOLDS.get(name) or {}))
+    rows = metrics if isinstance(metrics, dict) else {}
+    bad = []
+    for key in sorted(wanted):
+        floor = float(wanted[key])
+        got = float(rows.get(key) or 0.0)
+        if got < floor:
+            bad.append("%s：%s=%s < 地板 %s（Spec packaging-parts-downstream-acceptance.md §3）"
+                       % (name, key, _count_text(got), _count_text(floor)))
+    if float(rows.get("processable_total") or 0.0) < 1:
+        bad.append("%s：没有一件能跑工艺（Spec §3）" % name)
+    if float(rows.get("solid_total") or 0.0) < 1:
+        bad.append("%s：没有一件能挤出 3D（Spec §3）" % name)
+    return bad
 
 
 def _check_outline_real_sample(_env: str) -> dict:
@@ -249,18 +288,15 @@ def _check_outline_real_sample(_env: str) -> dict:
         except Exception as exc:                          # noqa: BLE001 - 检查失败如实报
             bad.append("%s：跑不动（%s：%s）" % (name, type(exc).__name__, exc))
             continue
-        lines.append("%s closed_ratio=%.3f role_known_ratio=%.3f 可算 %d 可挤出 %d（%s）"
-                     % (name, metrics["closed_ratio"], metrics["role_known_ratio"],
-                        metrics["processable_total"], metrics["solid_total"],
-                        metrics.get("dxf_source") or ""))
-        for key, floor in wanted.items():
-            if float(metrics.get(key) or 0.0) < float(floor):
-                bad.append("%s：%s=%.3f < 门槛 %.2f" % (name, key,
-                                                       float(metrics.get(key) or 0.0), floor))
-        if metrics["processable_total"] < 1:
-            bad.append("%s：没有一件能跑工艺（Spec §3）" % name)
-        if metrics["solid_total"] < 1:
-            bad.append("%s：没有一件能挤出 3D（Spec §3）" % name)
+        # 读数行同时给出「比值 + 绝对分子 + 分母」（Spec §C2）：只打比值看不出
+        # 「是能力退步，还是分母变大」。
+        lines.append("%s closed_ratio=%.3f closed_total=%d/%d part_total=%d role_known_total=%d "
+                     "可算 %d 可挤出 %d（%s）"
+                     % (name, metrics["closed_ratio"], int(metrics["closed_total"]),
+                        int(metrics["part_total"]), int(metrics["part_total"]),
+                        int(metrics["role_known_total"]), metrics["processable_total"],
+                        metrics["solid_total"], metrics.get("dxf_source") or ""))
+        bad.extend(sample_verdict(name, metrics, wanted))
     if bad:
         return _result("parts_outline_real_sample", "auto", "fail", "；".join(bad),
                        {"metrics": lines})

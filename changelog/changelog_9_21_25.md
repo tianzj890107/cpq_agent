@@ -18201,3 +18201,32 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 - **门禁**：`dwg_deploy_gate.py --env production` = auto 项 17 ok / 0 fail，剩
   `converter_license`、`real_samples_e2e_passed` 两项 manual 待人工签字（**未代签**）。
 - 对外能力声明仍只能写：DWG 编排能力完成，真实转换能力未验收。
+
+## 436. 落地 `packaging-parts-gate-threshold-recalibration`：门禁的真样本门槛换成**绝对分子地板**，门禁与它自己的红测不再互相打架（12 OK，红基 7 红）（9-23，Codex 实现）
+
+`packaging-parts-gate-threshold-recalibration.md` §1 实测的三处互斥：同一台机上同一批件，
+`packaging_parts_gate.py --env local` 判 `verdict=no_go`（唯一 fail `parts_outline_real_sample`：
+「圆盘盒.dwg：`role_known_ratio=0.029 < 门槛 0.10`」），而同输入下它自己的红测
+（`test_packaging_parts_downstream_gate_red::FRealSampleThresholds`）判 pass —— 能力没退步，退的是分母
+（`role_known_total` 8 → 9，分母 64 → 312，`## 308` §6 已裁决按绝对分子标定）。
+
+- **门槛**：`tech_app/tools/packaging_parts_gate.py` 的 `THRESHOLDS` 比值键清零，换成
+  `酒盒.dwg closed_total >= 7` / `圆盘盒.dwg closed_total >= 32 且 role_known_total >= 8`，数字来源与
+  依据（`## 308` §6）写在常量注释里；
+- **分子**：`_sample_metrics()` 补 `role_known_total = round(role_known_ratio × part_total)`
+  （由 `summarize()` 自己的分母/比值还原，**不新增引擎键**）；
+- **读数**：`_check_outline_real_sample()` 的 metrics 行改成「比值 + 绝对分子 + 分母」
+  （`closed_ratio=0.817 closed_total=255/312 part_total=312 role_known_total=9 …`），分母不再被比值藏起来；
+- **裁决**：新增顶层纯函数 `sample_verdict(name, metrics, floors=None)` 只比 `*_total`（缺失按 0）并保留
+  既有两条不变式（`processable_total >= 1` / `solid_total >= 1`），`_check_outline_real_sample()` 改调它；
+- **同步**：`docs/specs/packaging-parts-downstream-acceptance.md` §3 门槛表 + `DEPLOYMENT.md` L2 行换成同一组绝对地板。
+
+实跑：`test_packaging_parts_gate_threshold_red` = `Ran 12 OK`（红基 `Ran 12 … FAILED (failures=7)`，
+5 条绿为 B3 + C1–C4 冻结守卫）；`test_packaging_parts_downstream_gate_red` + `test_deploy_isolation_root_red`
+= `Ran 25 OK`；`test_spec_status_truth_red` = `Ran 7 OK`；
+`packaging_parts_gate.py --env local` = `verdict=go` / `summary={ok:5, fail:0, manual:1}` / exit 0
+（修前 `no_go` / `{ok:4, fail:1, manual:1}`）。
+
+只换刻度与读数，**没动能力**：圆盘盒 `role_known_total=9`（2.9%）仍很低，要更硬得另开一批抬角色识别率；
+`parts_demo_script` 仍是 `manual_unacknowledged`（未代签）；`--env production` 的 `skip → reasons` 与退出码逐字未动。
+未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
