@@ -18629,3 +18629,43 @@ Release / 部署、未连 PG、样本只读。
 （`test_quick_quote_home_wiring_red.DReadPathHonestyRed::test_d2`，用 `git stash` 把本批两个文件
 摘掉后照样红，与本批无关）。两份 Spec 状态行已改「已实现」并各追加 §8 落地状态；
 `tests.test_spec_status_truth_red` 7 OK。未 push / MR / tag / Release / 部署、未连 PG。
+
+## 455. 落地 `packaging-cost-stage-must-see-the-parsed-parts` + `packaging-integration-stage-must-count-its-own-analysis`（两份同批）：成本阶段终于看得见 2.1 拆出来的零件、3.1 认自己产出的分析结果（16 OK，红基 6 红）（9-23，Codex 实现）
+
+两份 Spec 同批落地（工作区里的缺口类条目 `## 451` / `## 452` 是它们的血缘）：
+
+- `docs/specs/packaging-cost-stage-must-see-the-parsed-parts.md` /
+  `tests/test_packaging_cost_stage_must_see_the_parsed_parts_red.py`（8 条：A1–A3 红 / B1–B5 绿）
+- `docs/specs/packaging-integration-stage-must-count-its-own-analysis.md` /
+  `tests/test_packaging_integration_stage_must_count_its_own_analysis_red.py`（8 条：A1–A3 红 / B1–B5 绿）
+
+成本阶段看得见包装零件（`## 451`）：
+
+- `cost_review.ir_from_packaging_parts()`（新，**纯函数**）把 `packaging_parts` 文档折成与技术侧
+  IR 同形的零件清单（`part_code → part_id`、`name`、`quantity=1`）；
+  `cost_review.parts_source()`（新）是运行时那条兜底（IR 为空时 `packaging_parts.load_parts(pid)`，
+  读不到就沿用技术侧口径）；
+- `workflow_projection._cost_data()` 先取 IR，IR 没有零件时用 `facts["packaging_parts"]` 折一份交回
+  **同一个口径** `cost_review.summarize()`（不另算一份、不把零件复制/写进 IR、不动
+  `store.load_ir` 语义）；`summarize()` 内部也走 `parts_source()`，所以项目投影与 2.3 的成本口径
+  看到的是同一批零件；
+- `_judge_cost()` 4.1 的判据一字未改（`data["parts"]` 空才 `not_started` + 「还没有可测算的零件」）
+  —— 零件口径同源之后，263 件的项目自然落到 `in_progress` + 「还有零件未测算成本：DWG-P01、…」；
+- `_judge_cost()` 4.2 新增「零件一件都取不到 → `not_started`」：以前只判 `if not data:`
+  （`summarize()` 永远返回字典），于是一件零件都没有、成本阶段根本没开始时也报「进行中」；
+  零件在、整机成本缺仍是 `in_progress` + 「整机（组装）成本还没有测算」（B5 逐字不变）。
+
+3.1 认自己产出的分析结果（`## 452`）：
+
+- `workflow_projection._judge()` 的 `key == "3.1"`：`done` 在 `bool(plan.drawings) or bool(parts)`
+  之外加上 `plan.params is not None or plan.process is not None`（`runIntegration` 的两样产出）。
+  「装配图不是必需的」：包装项目既没有整合图纸、IR 里也没有零件（零件在 `packaging_parts`），
+  只看那两样会把真跑过的分析永远判成没跑过，3.2 / 3.3 / 4.x / 5.x 全被「请先完成 3.1 整合图纸」
+  挡着，`next_action` 每次都指回 3.1；
+- 没跑过（图纸、零件、参数、工艺四样都没有）仍是 `not_started` + `missing=["整合分析还没有执行"]`
+  （B1 逐字）；3.2 / 3.3 的判据与文案、`_phases()` 聚合规则、`runIntegration` 的动作与载荷一行未改。
+
+实跑：两条红测 `Ran 16 tests … OK`（红基 `Ran 8 (failures=3)` × 2 = 6 红）；保护网（投影 / 成本口径
+相关的 62 个模块）`Ran 1092 tests … FAILED (failures=1, skipped=1)`，那 1 条是既有挂账
+`tech_unified_workflow_projection_red.RequirementCompletionTest`（`## 320` 按设计变红），与本批无关。
+两份 Spec 状态行已改「已实现」并各追加落地状态节。未 push / MR / tag / Release / 部署、未连 PG。

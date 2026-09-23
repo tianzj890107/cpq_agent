@@ -136,9 +136,17 @@ def _ir_model(ir_dict: Optional[dict]) -> Optional[DesignIR]:
 
 
 def _cost_data(project_id: str, facts: Dict[str, Any]) -> Optional[dict]:
-    """2.3 的唯一汇总口径（cost_review.summarize），不另算一份。"""
+    """2.3 的唯一汇总口径（cost_review.summarize），不另算一份。
+
+    零件来源与技术侧同源：IR 里有零件就用 IR；包装（DWG 图纸）项目的零件在
+    `packaging_parts` 文档里（IR 为空），这一份必须一起交给同一个口径，否则
+    「零件拆出来了、成本这一步一件都看不见」（Spec §2.1）。
+    """
+    ir = _ir_model(facts.get("ir"))
+    if not (ir and ir.parts):
+        ir = cost_review.ir_from_packaging_parts(facts.get("packaging_parts")) or ir
     try:
-        return cost_review.summarize(project_id, _ir_model(facts.get("ir")), facts.get("plan"))
+        return cost_review.summarize(project_id, ir, facts.get("plan"))
     except Exception:  # noqa: BLE001
         return None
 
@@ -245,7 +253,11 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
     if key == "3.1":
         if plan is None:
             return {"status": "not_started", "completed": False}
-        done = bool(plan.drawings) or bool(parts)
+        # 这一步**自己产出的东西**就是整合分析的结果（`runIntegration`：参数推荐 + 组装工艺）。
+        # 「装配图不是必需的」—— 包装（DWG 图纸）项目既没有整合图纸、IR 里也没有零件
+        # （零件在 `packaging_parts`），只看那两样会把"真跑过的分析"永远判成没跑过。
+        done = (bool(plan.drawings) or bool(parts)
+                or plan.params is not None or plan.process is not None)
         return {"status": "generated" if done else "not_started", "completed": done,
                 "missing": [] if done else ["整合分析还没有执行"]}
 
@@ -318,7 +330,9 @@ def _judge_cost(key: str, project_id: str, facts: Dict[str, Any],
                     "missing": ["还有零件未测算成本：" + "、".join(missing)]}
         return {"status": "confirmed", "completed": True}
     if key == "4.2":
-        if not data:
+        # 同一阶段内状态要自洽：零件一件都取不到时这一步根本还没开始（4.1 判的就是
+        # 「还没有可测算的零件」），此时报「进行中」是假话（Spec §2.3）。
+        if not data or not (data.get("parts") or []):
             return {"status": "not_started", "completed": False}
         if (data.get("assembly") or {}).get("has_cost"):
             return {"status": "confirmed", "completed": True}

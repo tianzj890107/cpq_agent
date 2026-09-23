@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Tuple
 
 from ..models.cost_review import CostReview, CostReviewWaiver, merge_totals
-from ..models.ir import DesignIR
+from ..models.ir import DesignIR, Part
 from ..storage import store
 from ..time_utils import now_cst_str
 from . import cost as cost_svc
@@ -63,6 +63,46 @@ def save_review(project_id: str, review: CostReview, author: str = "system") -> 
 # --------------------------------------------------------------------------- #
 # 汇总
 # --------------------------------------------------------------------------- #
+def ir_from_packaging_parts(doc) -> Optional[DesignIR]:
+    """包装（DWG 图纸）项目的零件文档 → 与技术侧 IR **同形**的零件清单（纯函数、只读）。
+
+    包装项目不往 IR 写零件（`store.load_ir` 是空的），零件在 `packaging_parts` 文档里
+    （2.1 那一趟解析拆出来的，唯一事实源）。不认这一份，这个项目的零件在这个口径下
+    就一件都看不见 —— 判成「还没有可测算的零件」，而 2.1 明明有 263 件。
+    """
+    rows = doc.get("parts") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        return None
+    parts: List[Part] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        part_id = str(row.get("part_code") or row.get("part_id") or "").strip()
+        if not part_id:
+            continue
+        parts.append(Part(part_id=part_id, name=str(row.get("name") or ""), quantity=1))
+    if not parts:
+        return None
+    return DesignIR(device_name="包装（DWG 图纸）零件", design_intent="来自图纸解析",
+                    parts=parts)
+
+
+def parts_source(project_id: str, ir: Optional[DesignIR]) -> Optional[DesignIR]:
+    """零件来源：技术侧 IR 有零件就用它；IR 为空时退到包装解析产物（Spec §2.1）。
+
+    两条来源在**同一个口径**（本模块的 summarize）里合并，不另算一份。
+    """
+    if ir is not None and ir.parts:
+        return ir
+    try:
+        from . import packaging_parts
+
+        doc = packaging_parts.load_parts(project_id)
+    except Exception:  # noqa: BLE001 - 只读派生视图：读不到就沿用技术侧口径
+        doc = None
+    return ir_from_packaging_parts(doc) or ir
+
+
 def _part_rows(project_id: str, ir: Optional[DesignIR]) -> List[dict]:
     """逐个零件：算没算过、单件多少、单台用量多少、小计多少。"""
     rows: List[dict] = []
@@ -117,7 +157,7 @@ def summarize(project_id: str, ir: Optional[DesignIR], plan) -> dict:
                        逐个零件引过来的），再加组装工序的人工与费用。
     所以对外报价用的是 assembly，不是两者相加 —— 相加会把零件成本算两遍。
     """
-    parts = _part_rows(project_id, ir)
+    parts = _part_rows(project_id, parts_source(project_id, ir))
     assembly = _assembly_row(plan)
     parts_total = merge_totals([row["breakdown"] for row in parts
                                 for _ in range(row["quantity"])])
