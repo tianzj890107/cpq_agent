@@ -301,6 +301,10 @@ RECOMPUTE_RULE_ID = "part_outline_recompute_v1"
 MANUAL_OUTLINE_KIND = "manual_bbox"
 RECOMPUTED_OUTLINE_KIND = "recomputed_outline"
 OUTLINE_EXIT_KINDS = (MANUAL_OUTLINE_KIND, RECOMPUTED_OUTLINE_KIND)
+#: 轮廓那本账的分段键：**两条出路各自一版**（Spec
+#: `packaging-part-outline-hatches-must-coexist.md` §2.1）—— 签字与重算并存，
+#: 不是"后写的顶掉先写的"。
+OUTLINE_DOC_IDENTITY = ("part_code", "parts_id", "kind")
 MANUAL_OUTLINE_RULE_ID = "part_outline_manual_bbox_v1"
 
 #: 件级轮廓出路自己的版本化文档（Spec §2.3，与「补材料」/「补料厚」逐字同范式）：
@@ -2460,6 +2464,8 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
     合并口径只有这一处，且**只读**：
 
     - 侧档按 `part_code` 取最近一版（`_part_doc_items()` 已按新→旧排列），每件只合一次；
+      轮廓那本账例外：按 `kind` 各取最近一版，**两份都合**（Spec
+      `packaging-part-outline-hatches-must-coexist.md` §2.1）；
     - 角色账按 `part_code` 命中（`_role_mapping_overlay()` 已定好哪一条胜出）；
     - 合出来的行与逐个调 `set_manual_material()` / `set_manual_thickness()` **同一形状**
       （直接复用这两个纯函数，不另写一份写字段的逻辑）；
@@ -2467,31 +2473,42 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
     - 侧档内容坏掉（空值 / 非正数）只跳过这一条，**不许**让读路径抛错。
     """
     overlays: Dict[str, Dict[str, Any]] = {}
+    #: 轮廓那本账里的**两条出路**（Spec `packaging-part-outline-hatches-must-coexist.md`
+    #: §2.1）：一个 `part_code` 下按 `kind` 各存最近一版，读时**两份都合**、互不覆盖 ——
+    #: 以前每件每 key 只取最近一版、再按 `kind` 二选一分派，于是签字被一次重算静默抹掉。
+    outlines: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for key in (DOC_KEY_MATERIAL, DOC_KEY_THICKNESS, DOC_KEY_OUTLINE):
         for item in _part_doc_items(project_id, key):
             code = _text(item.get("part_code"))
             if not code:
                 continue
-            # 每个键只取**最近一版**（`_part_doc_items()` 已按新→旧排列），但三份侧档
-            # 要能**同时**合回同一行：材料 / 料厚 / 轮廓出路是三件事，不是三选一。
+            if key == DOC_KEY_OUTLINE:
+                bucket = (MANUAL_OUTLINE_KIND if _text(item.get("kind")) == MANUAL_OUTLINE_KIND
+                          else RECOMPUTED_OUTLINE_KIND)
+                outlines.setdefault(code, {}).setdefault(bucket, item)
+                continue
+            # 材料 / 料厚每个键只取**最近一版**（`_part_doc_items()` 已按新→旧排列），
+            # 但几份侧档要能**同时**合回同一行：材料 / 料厚 / 轮廓出路是三件事，不是三选一。
             overlays.setdefault(code, {}).setdefault(key, item)
     roles = _role_mapping_overlay(project_id)
 
     out = copy.deepcopy(record)
     parts = out.get("parts") if isinstance(out, dict) else None
-    if (not overlays and not roles) or not isinstance(parts, list):
+    if (not overlays and not outlines and not roles) or not isinstance(parts, list):
         return out if isinstance(out, dict) else record
     for row in parts:
         if not isinstance(row, dict):
             continue
         code = _text(row.get("part_code"))
         fill = overlays.get(code)
+        exits = outlines.get(code) or {}
+        manual_outline = exits.get(MANUAL_OUTLINE_KIND)
+        recomputed_outline = exits.get(RECOMPUTED_OUTLINE_KIND)
         mapped = roles.get(code)
-        if not fill and not mapped:
+        if not fill and not exits and not mapped:
             continue
         material = (fill or {}).get(DOC_KEY_MATERIAL)
         thickness = (fill or {}).get(DOC_KEY_THICKNESS)
-        outline = (fill or {}).get(DOC_KEY_OUTLINE)
         try:
             if material:
                 row.update(set_manual_material(row, material.get("spec"),
@@ -2503,14 +2520,16 @@ def _manual_fill_overlay(project_id: str, record: Dict[str, Any]) -> Dict[str, A
                                                 reason=_text(thickness.get("reason"))))
             # 件级轮廓出路（Spec `packaging-open-outline-part-needs-a-way-out.md` §2.3）：
             # 人签的字与单件重算的结论都是**侧档**，读时合回这一行 —— 只影响这一件。
-            if outline:
-                if _text(outline.get("kind")) == MANUAL_OUTLINE_KIND:
-                    row.update(set_manual_outline(row,
-                                                  bound_by=_text(outline.get("bound_by")),
-                                                  reason=_text(outline.get("reason")),
-                                                  confirmed_at=_text(outline.get("confirmed_at"))))
-                else:
-                    row.update(set_recomputed_outline(row, outline))
+            # 两条出路**并存**（Spec `packaging-part-outline-hatches-must-coexist.md` §2.1）：
+            # 先合签字（人放行），再合重算的几何结论（真算闭合时以它为准，签字只作留痕）——
+            # 两份都不许清掉另一份。
+            if manual_outline:
+                row.update(set_manual_outline(
+                    row, bound_by=_text(manual_outline.get("bound_by")),
+                    reason=_text(manual_outline.get("reason")),
+                    confirmed_at=_text(manual_outline.get("confirmed_at"))))
+            if recomputed_outline:
+                row.update(set_recomputed_outline(row, recomputed_outline))
             # 人工映射的业务角色（Spec `packaging-part-role-mapping-must-reach-the-card.md`
             # §2.1）：只有 `part_code` 命中才改这一行，配对不上**一行都不改**。
             if mapped:
@@ -2585,11 +2604,17 @@ def _load_part_doc(project_id: str, key: str, part_code: str,
     return {}
 
 
-def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any], *,
+                   identity: Tuple[str, ...] = ("part_code", "parts_id")) -> Dict[str, Any]:
     """落一版单件结论：同一 `(part_code, parts_id, 结论内容)` **幂等**、最多 20 版。
 
     幂等靠内容指纹（`record_hash`）：同一份结论重复落库**不写库、不新增版本** ——
     34 上"刷新就没了"的另一面就是"重跑一次就多一版"，两边都得治。
+
+    `identity` 是「同一份结论」的分段键（默认 `(part_code, parts_id)`，即"一件一版"）。
+    轮廓那本账一个 key 里装着**两条出路**（人工签字 / 单件重算，
+    Spec `packaging-part-outline-hatches-must-coexist.md` §2.1），所以它按
+    `(part_code, parts_id, kind)` 分段：写重算不再把同一件上的签字记录删掉。
     """
     record = copy.deepcopy(payload) if isinstance(payload, dict) else {}
     part_code = _text(record.get("part_code"))
@@ -2605,8 +2630,7 @@ def _save_part_doc(project_id: str, key: str, payload: Dict[str, Any]) -> Dict[s
             and _text(head.get("record_hash")) == record["record_hash"]):
         return head
     kept = [item for item in items
-            if not (_text(item.get("part_code")) == part_code
-                    and _text(item.get("parts_id")) == parts_id)]
+            if not all(_text(item.get(name)) == _text(record.get(name)) for name in identity)]
     kept.insert(0, record)
     get_backend().put_doc(project_id, key, {"items": kept[:MAX_VERSIONS]})
     return record
@@ -2771,7 +2795,7 @@ def save_part_outline(project_id: str, part_code: str, *, bound_by: str,
         "part_code": _text(part_code), "kind": MANUAL_OUTLINE_KIND,
         "rule_id": MANUAL_OUTLINE_RULE_ID, "bound_by": by,
         "reason": _text(reason), "confirmed_at": _text(confirmed_at),
-        "engine_version": ENGINE_VERSION})
+        "engine_version": ENGINE_VERSION}, identity=OUTLINE_DOC_IDENTITY)
 
 
 def recompute_outline(row: Any, ir: Any, *, scale: Any = RECOMPUTE_BUDGET_SCALE,
@@ -2870,7 +2894,7 @@ def save_part_outline_recompute(project_id: str, record: Any) -> Dict[str, Any]:
                  "confirmed_at"):
         if name in payload:
             saved[name] = copy.deepcopy(payload[name])
-    return _save_part_doc(project_id, DOC_KEY_OUTLINE, saved)
+    return _save_part_doc(project_id, DOC_KEY_OUTLINE, saved, identity=OUTLINE_DOC_IDENTITY)
 
 
 def load_part_outline(project_id: str, part_code: str) -> Dict[str, Any]:

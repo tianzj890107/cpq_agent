@@ -18276,3 +18276,30 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `test_drawing_flow_error_taxonomy_red` + `test_packaging_drawing_flow_red` +
 `test_dwg_file_capability_preflight_red` + `test_packaging_flow_step_reports_retryable_honestly_red`
 = `Ran 105 OK (skipped=1)`。未改任何码表数值、未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 439. 落地 `packaging-part-outline-hatches-must-coexist`：未闭合件的两条出路并存（签字不再被一次重算静默抹掉）（8 OK，红基 4 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-part-outline-hatches-must-coexist.md`，红测
+`tests/test_packaging_part_outline_hatches_coexist_red.py`（8 条，实现前 A1–A4 红、B1–B4 绿护栏）。
+
+根因两条（都在 `tech_app/backend/services/packaging_parts.py`）：① **写侧**：`_save_part_doc()`
+按 `(part_code, parts_id)` 分段，同键上的旧版本会被删掉 —— 轮廓那本账一个 key 里装着
+"人工签字"与"单件重算"两份记录，写第二份就把第一份删了；② **读侧**：`_manual_fill_overlay()`
+每件每 key 只取最近一版、再按 `kind` 二选一分派 → 行上永远不可能同时有
+`outline_confirmation` 与 `outline_recompute`。而 `processability()` 只认签字留痕，
+于是"签字 → 再点一次重算"这一件重新 409。
+
+- 新增常量 `OUTLINE_DOC_IDENTITY = ("part_code", "parts_id", "kind")`；`_save_part_doc()` 新增
+  形参 `identity`（**默认值与 process / cost / 材料 / 料厚逐字不变**），两个轮廓写入口都按
+  `(part_code, parts_id, kind)` 分段：两条出路各自落账、互不删除；
+- `_manual_fill_overlay()` 的轮廓分支改成按 `kind` 分桶、**两份都合**（先签字、再重算几何结论），
+  材料 / 料厚 / 角色三条既有合并口径未动；
+- 冻结面未动：`processability()` 判据与文案、`OUTLINE_OPEN_REASONS`、两条 rule id、
+  `CARD_COLUMNS` 10 列、`row` 的 `parts_id` / `parts_hash`。
+
+实跑：`test_packaging_part_outline_hatches_coexist_red` = `Ran 8 OK`（红基 `Ran 8 … failures=4`）；
+`test_packaging_open_outline_part_needs_a_way_out_red` 等 30 个 `test_packaging_part(s)_*_red.py`
+一起 = `Ran 448 … failures=1, skipped=4`，唯一 1 红是既有固定挂账
+`part_role_mapping::test_a2`（stash 掉本批改动后同一条仍红，非本批引入）；
+`test_spec_status_truth_red` = `Ran 7 OK`。未起服务、未连 PG / 34、未写业务数据、
+未 push / MR / tag / Release / 部署。
