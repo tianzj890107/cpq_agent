@@ -18458,3 +18458,27 @@ B1–B7 护栏）。
 `test_cpq_eval_production_backed` 21 OK (skipped=1)。未改 `workflow_stages.STAGES`、
 其余 12 步判定、`_PRIMARY_ACTIONS`、`actionable` 规则、前端，未 push / MR / tag / Release / 部署。
 红测自身无缺陷。
+
+## 448. 更正 `## 442` 的「红测 A1/A2 观测点缺陷」：A1–A3 改成观测**加载链自己发的那条请求**（12 OK）（9-23，Codex 只改红测 / changelog）
+
+`## 442` 把 Spec 落地之后，`test_packaging_parts_entry_readback_red` 仍报 A1/A2 红 —— 问题在红测自身：
+探针把 `refreshPackagingParts()` **桩掉**了，却去断言"请求列表里要有零件 URL"；桩过的加载器不会发出任何请求，
+于是这两条断言**无论实现怎么写都不可能转绿**（不是实现缺陷）。
+
+改法（只动这一个红测文件）：把**真的加载链**（`refreshPackagingParts` → `fetchPackagingParts` →
+`packagingPartsItems` / `packagingPartsQueryString`）与 `openProject()` 放进同一个 `vm` 桩上下文，
+只桩渲染与旁路（`renderTree` / `loadPackagingRoleMap` / `refreshPackagingBomRoleUnboundNote`）；
+每条请求记下"谁在什么身份下发的"，A1/A2/A3 断言的因此是加载链**自己发出来**的那条请求：
+
+- A1 进入 2.1 即读回零件文档；
+- A2 链路状态那一路抛异常时仍要读（两条路互不牵连）；
+- A3 读的时候入口已判定、`currentProject` 已是本项目。
+
+反向验证（不许是"永远绿"）：同一探针跑 `9e6aa82^` 的 `app.js`（落地前）→ 请求只有 `/api/projects/<pid>`、
+零件请求 0 条、`renderTree` 0 次 —— A1/A2/A3 都会红。
+
+实跑：`tests.test_packaging_parts_entry_readback_red` = `Ran 12 … OK`；不回归
+`test_packaging_parts_extraction_red` + `test_packaging_parts_read_failure_empty_state_red` +
+`test_packaging_parts_list_visibility_red` + `test_packaging_drawing_flow_red`。
+
+未改任何业务实现（`tech_app/` 此行零改动）、未连 34、未写业务数据。

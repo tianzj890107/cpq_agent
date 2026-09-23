@@ -14,7 +14,9 @@ Spec：`docs/specs/packaging-parts-entry-readback.md`
 服务端**没有**丢数据（Spec §2.1 本机隔离实测）：同一份 酒盒.dwg 八步 8/8、`parts_extract` completed、
 `parts_id=parts:9b0069978377e477`、263 件；**换一个进程**再读仍是同一版 263 件。
 
-纪律：`node -e` / `node` 抽具名函数体执行（前端）+ 临时 `DATA_DIR` 的纯存储读取（后端）；
+纪律：`node` + `vm` 抽具名函数体执行（前端：把 `openProject()` 与**真的**加载链
+`refreshPackagingParts → fetchPackagingParts → packagingPartsItems/QueryString` 一起放进桩上下文，
+断言的"请求"是加载链自己发出来的那条，不是桩自己记的一笔）+ 临时 `DATA_DIR` 的纯存储读取（后端）；
 不起服务、不发 HTTP、不连 PG、不写业务数据。禁止为了让红测转绿而修改本文件。
 """
 from __future__ import annotations
@@ -75,14 +77,21 @@ if (mode === "emptytxt") {
   process.exit(0);
 }
 
+const fns = ["refreshPackagingParts", "fetchPackagingParts", "packagingPartsItems",
+             "packagingPartsQueryString", "fetchPackagingBusinessParts"]
+             .map(function (name) { return extract(name); });
+if (fns.some(function (body) { return body === null; })) {
+  console.log(JSON.stringify({ missing: true }));
+  process.exit(0);
+}
 const fn = extract("openProject");
 if (!fn) { console.log(JSON.stringify({ missing: true })); process.exit(0); }
 const flowFails = process.env.CPQ_VARIANT === "flow-fails";
 const marks = [];
-const urls = [];
-const state = { loaderCalls: 0, loaderProject: null, renderTreeCalls: 0, error: "" };
+const hits = [];
+const state = { error: "" };
 let ctx = null;
-const box = function (value) {
+const box = function () {
   return { style: {}, innerHTML: "", textContent: "", disabled: false, title: "",
            remove: function () {}, appendChild: function () {},
            querySelector: function () { return null; },
@@ -94,11 +103,15 @@ const sandbox = new Proxy({
   console: console, Promise: Promise, JSON: JSON, Object: Object, Array: Array,
   Number: Number, String: String, Math: Math, RegExp: RegExp, Date: Date, Set: Set,
   Map: Map, Error: Error, setTimeout: setTimeout, clearTimeout: clearTimeout,
-  setImmediate: setImmediate, API: "",
+  setImmediate: setImmediate, URLSearchParams: URLSearchParams, API: "",
   fetch: async function (url) {
-    urls.push(String(url));
+    // 记下"谁在什么身份下发的这条请求"——加载链自己发的才算数。
+    hits.push({ url: String(url), marks: marks.slice(),
+                project: ctx ? String(ctx.currentProject || "") : "" });
     return { ok: true, status: 200,
-             json: async function () { return { meta: { source_filename: "酒盒.dwg", note: "" } }; } };
+             json: async function () { return { meta: { source_filename: "酒盒.dwg", note: "" },
+                                                items: [], parts: [], total: 0,
+                                                built: false, stats: {} }; } };
   },
   renderDrawingEntry: function () { marks.push("entry-decision"); return "drawing_flow"; },
   loadDrawingFlowPanel: async function () {
@@ -106,13 +119,9 @@ const sandbox = new Proxy({
     if (flowFails) throw new Error("flow-state-unavailable");
     return null;
   },
-  refreshPackagingParts: async function () {
-    marks.push("parts-loader");
-    state.loaderCalls += 1;
-    if (state.loaderProject === null) state.loaderProject = ctx ? ctx.currentProject : null;
-    return null;
-  },
-  renderTree: function () { marks.push("render-tree"); state.renderTreeCalls += 1; },
+  renderTree: function () { marks.push("render-tree"); },
+  loadPackagingRoleMap: async function () { return null; },
+  refreshPackagingBomRoleUnboundNote: async function () { return null; },
   $: function () { return box(); },
   document: { querySelector: function () { return box(); },
               createElement: function () { return box(); } },
@@ -129,7 +138,11 @@ const sandbox = new Proxy({
 ctx = vm.createContext(sandbox);
 vm.runInContext("var currentProject='';var currentIR=null;var currentGeometry=null;"
                 + "var currentDrawings=null;var artifact_status=null;var currentSelectedId=null;"
-                + "var diffPick=[];var currentDrawingEntry='';var currentDrawingIsImg=false;", ctx);
+                + "var diffPick=[];var currentDrawingEntry='';var currentDrawingIsImg=false;"
+                + "var currentPackagingParts=null;var currentPackagingBusinessParts=null;"
+                + "var packagingPartsPage={offset:0,limit:64,kind:'',role:'',outline_status:'',"
+                + "min_area_mm2:''};var packagingPartsShown=[];", ctx);
+fns.forEach(function (body) { vm.runInContext(body, ctx); });
 vm.runInContext(fn, ctx);
 Promise.resolve()
   .then(function () { return vm.runInContext("openProject('" + process.env.CPQ_PID + "')", ctx); })
@@ -138,7 +151,7 @@ Promise.resolve()
   })
   .then(function () { return new Promise(function (done) { setImmediate(done); }); })
   .then(function () {
-    console.log(JSON.stringify({ missing: false, urls: urls, marks: marks, state: state }));
+    console.log(JSON.stringify({ missing: false, hits: hits, marks: marks, state: state }));
   });
 """
 
@@ -167,6 +180,16 @@ def call_empty_text(cases: list) -> list:
     return payload["out"]
 
 
+def requested(out: dict) -> list:
+    return [hit["url"] for hit in out["hits"]]
+
+
+def parts_reads(out: dict) -> list:
+    """只认零件文档那一条（业务部件清单是另一条 URL，不算）。"""
+    return [hit for hit in out["hits"]
+            if PARTS_URL in hit["url"] and "business-parts" not in hit["url"]]
+
+
 def flow_with_evidence(parts_id: str = EVIDENCE_PARTS_ID, total: int = EVIDENCE_TOTAL,
                        status: str = "completed") -> dict:
     return {"run_id": "run-1", "status": "completed",
@@ -181,35 +204,34 @@ def flow_with_evidence(parts_id: str = EVIDENCE_PARTS_ID, total: int = EVIDENCE_
 # --------------------------------------------------------------------------- #
 class AEntryReadsBackTheDocument(unittest.TestCase):
     def test_a1_entering_the_board_reads_the_parts_document(self):
-        """进入 2.1 必须发起一次零件文档读取（今天：一次都没有）。"""
+        """进入 2.1 必须真的发出一次零件文档读取（今天：一条都没有）。"""
         out = probe_entry()
-        self.assertFalse(out.get("missing"), "找不到 openProject()")
-        reads = [url for url in out["urls"] if PARTS_URL in url]
-        self.assertTrue(reads,
+        self.assertFalse(out.get("missing"), "找不到 openProject() 或它的加载链")
+        self.assertTrue(parts_reads(out),
                         "进入项目后一次都没读零件文档（请求只有 %r，Spec §4 A1）—— "
                         "零件明明已经在库里，页面却只会说'还没生成，请先跑一键解析图纸'"
-                        % (out["urls"],))
+                        % (requested(out),))
 
     def test_a2_flow_state_failure_does_not_skip_the_parts_read(self):
         """链路状态那一路没读到（抛异常），零件读回仍必须发生（两条路互不牵连）。"""
         out = probe_entry(flow_fails=True)
-        reads = [url for url in out["urls"] if PARTS_URL in url]
-        self.assertTrue(reads,
+        self.assertTrue(parts_reads(out),
                         "链路状态读不到就把零件读回一起跳过了（请求 %r，错误 %r，Spec §4 A2）"
-                        % (out["urls"], out["state"]["error"]))
+                        % (requested(out), out["state"]["error"]))
 
     def test_a3_loader_runs_after_the_entry_decision_with_a_project_identity(self):
         """发起加载时入口已判定、`currentProject` 已是本项目（否则读的是别人/上一次的项目）。"""
         out = probe_entry()
-        marks = out["marks"]
-        self.assertIn("parts-loader", marks,
-                      "进入路径没有调用零件加载器 refreshPackagingParts()（Spec §4 A1/A3）")
-        self.assertLess(marks.index("entry-decision"), marks.index("parts-loader"),
-                        "零件加载发生在入口判定之前：`currentDrawingEntry` 还没就位，"
-                        "renderTree() 会把零件面板收掉（Spec §4 A1）")
-        self.assertEqual(PID, out["state"]["loaderProject"],
-                         "加载时 currentProject 不是本项目（拿到的是 %r，Spec §4 A3）"
-                         % (out["state"]["loaderProject"],))
+        hits = parts_reads(out)
+        self.assertTrue(hits,
+                        "进入路径没有读零件文档（请求 %r，Spec §4 A1/A3）" % (requested(out),))
+        hit = hits[0]
+        self.assertIn("entry-decision", hit["marks"],
+                      "零件读取发生在入口判定之前：`currentDrawingEntry` 还没就位，"
+                      "renderTree() 会把零件面板收掉（Spec §4 A1）")
+        self.assertEqual(PID, hit["project"],
+                         "读零件时 currentProject 不是本项目（是 %r，Spec §4 A3）"
+                         % (hit["project"],))
 
     def test_a4_entry_does_not_build_its_own_parts_url(self):
         """护栏：进入路径复用唯一加载器，不许自己拼第二份零件 URL。"""
