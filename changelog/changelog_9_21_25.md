@@ -18711,3 +18711,55 @@ Release / 部署、未连 PG、样本只读。
 `packaging_solids_body_unusable_red` 红测自身缺陷 5 条 + 前端沙箱缺依赖 3 条，后者用 `git stash`
 摘掉本批 app.js 改动后照样红）。`tests.test_spec_status_truth_red` 7 OK。未 push / MR / tag /
 Release / 部署、未连 PG、样本只读。
+
+## 457. 落地 `packaging-card-step6-parts-must-be-the-business-parts-list`：报价卡片第 6 步的「零件」改成业务部件清单，263 个几何连通分量退成证据（11 OK，红基 6 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-card-step6-parts-must-be-the-business-parts-list.md`，红测
+`tests/test_packaging_card_step6_parts_must_be_the_business_parts_list_red.py`（11 条）。唯一改的文件：
+`确认需求解析结果.html`（后端与本仓库其它文件零改动）。
+
+现场（34 只读 + 本机读码，写进 Spec §1）：报价会话 `1bef04f7dab3` → 技术项目 `8131f6d29d99`
+（`酒盒.dwg`）的三个读数是 `packaging-parts → total=263`、`packaging-business-parts → built=false`
+（`gap.message = 已识别几何区域 263 个，尚未形成业务部件清单`）、卡片第 6 步快照把 263 行
+`DWG-P01…DWG-P263`（`尺寸来源=component_bbox`）整表渲染成「图纸拆出来的零件（263 件）」。
+`确认需求解析结果.html` 里 `/requirement/packaging-parts` 出现 4 次、`packaging-business-parts`
+**0 次** —— 后端 `_business_parts_body()` 早就不回退成几何件，缺口只在卡片这一侧。
+
+- **业务口径优先**（Spec §2.1）：`ensureCardPackagingParts()` 先读
+  `/api/projects/{pid}/requirement/packaging-business-parts`；`built:true` 时渲染的是业务行
+  （新列集 `PACKAGING_BUSINESS_PARTS_COLUMNS` = 业务件号(`business_part_code`) / 名称 /
+  几何绑定(`geometry_binding`) / 尺寸 / 材料 / 排版 / 工艺 / 备注），映射走新增的纯函数
+  `packagingBusinessPartCardRows()`：绑定状态经 `PACKAGING_BINDING_COPY`
+  （`已在图纸中定位` / `部分定位` / `定位待人工确认` / `尚未在 CAD 图中定位`，逐字同 2.1 看板
+  `app.js`），尺寸走 `packagingBusinessPartSizeText()`（`app.js` 同名函数逐字搬过来）；
+  几何那套 `DWG-Pxx` + `尺寸来源=component_bbox` 不再进零件表；
+- **几何只当证据**（Spec §2.2/§2.3）：业务清单为空（或接口读不到）才退到几何端点，且兜底那条路的
+  标题是字面量 `图纸的几何区域（<n> 个连通分量，尚未形成业务部件清单，不是零件表）`；业务表的
+  标题挪到常量 `PACKAGING_BUSINESS_PARTS_TITLE`（`图纸拆出来的零件（业务部件清单）`），
+  `图纸拆出来的零件` 从此只挂在业务表上；
+- **两笔账 + 缺口文案**（Spec §2.2 第 1 条 / §2.3）：新增纯函数 `cardBusinessPartsAccountingText()`
+  生成表尾注脚 `几何区域（连通分量）n 个 · 业务部件 m 件` + 后端 `gap.message` + `下一步：…`
+  （`gap.action` 原文：导入权威部件清单（Excel）或人工建立业务部件后，再跑 BOM / 工艺 / 成本）；
+  几何数取 `gap.geometry_component_total` → `summary.geometry_component_total` → 本页行数三级兜底，
+  业务数取 `business_parts.length` / `summary.stats.business_part_total`，两个数分开说；
+  缺口稳定码原样引用成常量 `PACKAGING_BUSINESS_MISSING_CODE = 'business_parts_missing'`；
+- **冻结面**：`resolveCardTechProject()` 的反查两键（`source_session_id` / `quote_session_id`，
+  `## 446`）一行未改；老卡片快照里 `PACKAGING_PARTS_SECTION` + `kind==='table'` 的通用渲染路径
+  保留（只追加不迁移）；几何端点仍可达（右栏 CAD 平面图 / 绑定依赖它）；几何列定义仍照抄后端
+  `part_columns` + `packaging_parts.CARD_COLUMNS` 的 10 个中文标签；`packaging_business_part_resolver`
+  的来源优先级、几何读接口的列与 `processability()` 判据、2.1 技术看板一行未碰。
+
+真跑（不只是静态扫描）：把卡片页两个内联 `<script>` 抽出来 `node --check` 通过；另用 node 真跑
+`packagingBusinessPartCardRows()` / `cardBusinessPartsAccountingText()` / `packagingBusinessPartSizeText()`
+三个输入 —— `built:true` 一件（`YT-RB-A-01` / `外盒` / `已在图纸中定位` / `300×200 mm` / `灰板`）、
+`built:false` + `gap`（输出 `几何区域（连通分量）263 个 · 业务部件 0 件；已识别几何区域 263 个，
+尚未形成业务部件清单；下一步：导入权威部件清单（Excel）或人工建立业务部件后，再跑 BOM / 工艺 / 成本`）、
+接口整个读不到（同句 + `（business_parts_missing）`）。
+
+实跑：`Ran 11 tests … OK`（红基 6 红 = A1–A3 / B1–B2 / C1；护栏 D1–D5 未破）；保护网
+`tests.test_packaging_card_parts_lookup_link_key_parity_red`(7) +
+`tests.test_packaging_parts_in_card_and_material_fill_red`(13) +
+`tests.test_packaging_quote_step5_currency_must_come_from_a_real_ui_source_red` +
+`tests.test_packaging_quote_step5_reported_detail_must_satisfy_step_gate_red` → `Ran 40 tests … OK`；
+`tests.test_spec_status_truth_red` 7 OK。Spec 状态行已改「已实现」并追加 §8 落地状态。
+未 push / MR / tag / Release / 部署，未连 PG、未起服务。

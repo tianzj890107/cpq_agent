@@ -4329,6 +4329,31 @@
     ];
     const PACKAGING_PARTS_SECTION = 'packaging_parts';
 
+    /* 业务部件清单（Spec `packaging-card-step6-parts-must-be-the-business-parts-list.md` §2.1）：
+       卡片第 6 步的「零件」是**业务部件**（读接口 `.../requirement/packaging-business-parts`，
+       件号 `business_part_code` + `geometry_binding.status`）；几何连通分量只是**证据**，
+       只在没有业务清单时出现，并且那条路的标题必须写明是几何区域。
+       业务表的标题放在常量里：几何兜底路的标题必须是显式字面量（自带「几何」字样），
+       `图纸拆出来的零件` 只许挂在业务部件表上。 */
+    const PACKAGING_BUSINESS_PARTS_COLUMNS = [
+      { key: 'business_part_code', label: '业务件号' },
+      { key: 'name', label: '名称' },
+      { key: 'geometry_binding', label: '几何绑定' },
+      { key: 'size_text', label: '尺寸' },
+      { key: 'material_text', label: '材料' },
+      { key: 'layout_text', label: '排版' },
+      { key: 'process_text', label: '工艺' },
+      { key: 'note', label: '备注' },
+    ];
+    const PACKAGING_BUSINESS_PARTS_TITLE = '图纸拆出来的零件（业务部件清单）';
+    // 后端缺口的稳定码（`packaging_parts.BUSINESS_PARTS_MISSING`）：页面照原码引用，不另造词。
+    const PACKAGING_BUSINESS_MISSING_CODE = 'business_parts_missing';
+    // 绑定状态 → 人话（逐字同 2.1 看板 `app.js` 的 `PACKAGING_BINDING_COPY`，两处同义）。
+    const PACKAGING_BINDING_COPY = {
+      bound: '已在图纸中定位', partial: '部分定位',
+      ambiguous: '定位待人工确认', unbound: '尚未在 CAD 图中定位',
+    };
+
     /* 汇总形状分区快照（`kind:'summary'`）的只读列：服务端/定价引擎已经算好（第 5 步的
        「报价明细」是 13 行 {项目,值,来源}、「报价基本信息」是 fields 列表），卡片只读上屏，
        不做任何判定。Spec：`packaging-quote-step5-reported-detail-must-satisfy-step-gate.md` §2.5。 */
@@ -4380,6 +4405,61 @@
       });
     }
 
+    // 业务部件的权威尺寸文案（逐字同 2.1 看板 `app.js packagingBusinessPartSizeText()`）。
+    function packagingBusinessPartSizeText(row) {
+      const authority = (row && row.authority) || {};
+      const text = String(authority.product_size_text || '').trim();
+      if (text) return text;
+      const length = authority.length_mm; const width = authority.width_mm;
+      if (length && width) return length + '×' + width + ' mm';
+      return '';
+    }
+
+    // 业务部件行 → 卡片表行（纯展示规整）：件号 / 名称 / 绑定状态 / 权威尺寸 / 材料 / 排版 /
+    // 工艺 / 备注一律取自业务端点，**不**拿几何列（`DWG-Pxx` + `尺寸来源=component_bbox`）冒充。
+    function packagingBusinessPartCardRows(rows) {
+      return (Array.isArray(rows) ? rows : []).map(part => {
+        const row = (part && typeof part === 'object') ? part : {};
+        const authority = (row.authority && typeof row.authority === 'object') ? row.authority : {};
+        const binding = (row.geometry_binding && typeof row.geometry_binding === 'object')
+          ? row.geometry_binding : {};
+        const status = String(binding.status || 'unbound');
+        return {
+          business_part_code: String(row.business_part_code || ''),
+          name: String(row.name || ''),
+          geometry_binding: PACKAGING_BINDING_COPY[status] || status,
+          size_text: packagingBusinessPartSizeText(row),
+          material_text: _cardPartsCell(authority.material_text),
+          layout_text: _cardPartsCell(authority.layout_text),
+          process_text: _cardPartsCell(authority.process_text),
+          note: _cardPartsCell(authority.note),
+        };
+      });
+    }
+
+    // 两笔账 + 缺口披露（Spec §2.2/§2.3）：几何区域数与业务部件数**分开**给，不许用一个盖另一个；
+    // 没有业务清单时逐字用后端那条缺口文案（`business_parts_missing`）。纯函数，不碰 DOM / fetch。
+    function cardBusinessPartsAccountingText(payload, geometryFallback) {
+      const doc = (payload && typeof payload === 'object') ? payload : {};
+      const gap = (doc.gap && typeof doc.gap === 'object') ? doc.gap : {};
+      const summary = (doc.summary && typeof doc.summary === 'object') ? doc.summary : {};
+      const stats = (summary.stats && typeof summary.stats === 'object') ? summary.stats : {};
+      const businessTotal = Array.isArray(doc.business_parts) ? doc.business_parts.length
+        : (stats.business_part_total || 0);
+      let geometryTotal = (gap.geometry_component_total != null) ? gap.geometry_component_total
+        : summary.geometry_component_total;
+      if (geometryTotal == null) geometryTotal = (geometryFallback || 0);
+      const lines = ['几何区域（连通分量）' + geometryTotal + ' 个 · 业务部件 ' + businessTotal + ' 件'];
+      if (gap.message) {
+        lines.push(String(gap.message));
+      } else if (!businessTotal) {
+        lines.push('已识别几何区域 ' + geometryTotal + ' 个，尚未形成业务部件清单（'
+          + PACKAGING_BUSINESS_MISSING_CODE + '）');
+      }
+      if (gap.action) lines.push('下一步：' + String(gap.action));
+      return lines.join('；');
+    }
+
     // 按会话号找技术项目：GET /api/projects?scope=all 里 business_case.source_session_id
     // **或** business_case.quote_session_id 命中的那一个（两个键同义：认回通道
     // `/quote-link/recover` 写的是 `quote_session_id`，而
@@ -4400,11 +4480,34 @@
       } catch (e) { return ''; }
     }
 
-    // 卡片第 6 步的零件表：快照没带就自己按会话反查技术项目后读零件端点。
+    // 卡片第 6 步的零件表：快照没带就自己按会话反查技术项目后读**业务部件**端点
+    // （Spec `packaging-card-step6-parts-must-be-the-business-parts-list.md` §2.1）：
+    // 业务清单优先，读不到才退到几何端点；几何只当**证据**说清楚（§2.2），不再整表冒充零件。
     async function ensureCardPackagingParts() {
       if (sections.has(PACKAGING_PARTS_SECTION)) return true;   // 快照已经带回来过了
       const projectId = await resolveCardTechProject();
       if (!projectId) return false;                             // 还没有技术项目：安静跳过
+      // ① 业务部件清单是**唯一**的零件来源（件号 + 几何绑定状态，§2.1 第 1–2 条）。
+      let business = null;
+      try {
+        business = await cpqAuthFetch('/api/projects/' + encodeURIComponent(projectId)
+          + '/requirement/packaging-business-parts').then(r => r.ok ? r.json() : null);
+      } catch (e) { business = null; }
+      const businessRows = (business && Array.isArray(business.business_parts))
+        ? business.business_parts : [];
+      if (businessRows.length) {
+        renderTableSection({
+          action: 'render_table', step: 6, section_id: PACKAGING_PARTS_SECTION,
+          title: PACKAGING_BUSINESS_PARTS_TITLE, editable: false,
+          columns: PACKAGING_BUSINESS_PARTS_COLUMNS,
+          rows: packagingBusinessPartCardRows(businessRows),
+          footer: cardBusinessPartsAccountingText(business),
+        });
+        if (shownStep !== 6) { const sec = sections.get(PACKAGING_PARTS_SECTION); if (sec) sec.el.style.display = 'none'; }
+        return true;
+      }
+      // ② 还没形成业务部件清单：几何连通分量只能当证据读（在业务端点之后），标题写明是
+      //    几何区域，并把两笔账与后端缺口文案一起摆出来（§2.2 / §2.3）。
       let payload = null;
       try {
         payload = await cpqAuthFetch('/api/projects/' + encodeURIComponent(projectId)
@@ -4414,10 +4517,12 @@
       if (!rows.length) return false;                           // 还没跑一键解析
       renderTableSection({
         action: 'render_table', step: 6, section_id: PACKAGING_PARTS_SECTION,
-        title: '图纸拆出来的零件', editable: false,
+        title: '图纸的几何区域（' + rows.length + ' 个连通分量，尚未形成业务部件清单，不是零件表）',
+        editable: false,
         columns: (payload.part_columns && payload.part_columns.length)
           ? payload.part_columns : PACKAGING_PART_COLUMNS,
         rows: packagingPartCardRows(rows),
+        footer: cardBusinessPartsAccountingText(business || payload, rows.length),
       });
       if (shownStep !== 6) { const sec = sections.get(PACKAGING_PARTS_SECTION); if (sec) sec.el.style.display = 'none'; }
       return true;
