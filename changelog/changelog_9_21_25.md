@@ -20600,3 +20600,50 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 不给形状加旋转 / 测量 / 标注 / 导出；不改 `事实 / 实体证据 / BOM 业务角色` 的内容与顺序；
 - 不改后端接口、不改 `packaging-parts` 文档结构、不改 CAD IR；不为 3D 链路（非包装）加缩放拖拽；
 - 未提交前不 push、不建 MR/tag/Release、不部署。
+
+## 485. 落地「尺寸标注线不许进零件形状 + 左栏刷新句按业务部件报数 + 重进 2.1 首屏就是 2D」（13 / 10 / 9 OK；红基 11 / 8 / 2 FAIL）（9-23，Codex 实现）
+
+`## 484` 的三份 Spec + 红测在同一日由并行会话落地，本条目只记录**实现事实与复跑口径**
+（根因、实测证据与判据见那三份 Spec；此处不重复）。
+
+### 一、改了什么
+
+- `tech_app/backend/services/packaging_parts.py`（+261/-23）：新增 `annotation_entity_ids()`
+  —— `ANNOTATION_LAYERS = ("DEFPOINTS",)`、`ANNOTATION_ARROW_MAX_MM = 6.0`、
+  `ANNOTATION_TOLERANCE_MM = 0.5`、`ANNOTATION_REASONS` 闭集；按 CAD IR 的 `dimensions`
+  目标点（`point:x,y`）与尺寸界线跨度判掉**尺寸线 / 尺寸界线 / 箭头**，逐件写
+  `annotation_filtered`（`{entity_id, reason}`），`extract()` 的成员筛选与折线口径跟着走。
+  判据特意**不是**"等长就删"：5598 条 LINE 里有 1716 条与某个 `declared_value` 等长，
+  按等长删必然误伤真几何。`stats` 只加键（`annotation_filtered_total` 等），既有
+  `filtered_total` / `filtered_reason_mix` / 四个 `filtered_*_total` 一个字不改。
+- `tech_app/frontend/app.js`（+73）：
+  · `packagingPartAnnotationFilteredLine(row, partsDoc)`：零件形状面板上的"已剔除标注线 N 条"
+    披露 —— 数字**只**来自后端文档（业务行自己的 `annotation_filtered`，或它绑定的那几件几何件
+    那份），前端不自己判标注、也不猜数，`N = 0` 回空串（整块不出现，不留空节点）；
+  · `packagingPartsRefreshLine(geometryDoc, businessDoc)`：`refreshPackagingPartsAfterDrawingFlow()`
+    那句刷新提示改成**业务账优先** —— 有业务部件就报「业务部件 N 件」，没有才退几何账且必须
+    自称「几何区域 N 个」，两个账都读不到回空串（不再出现 263 与 28 同屏打架）；
+  · `openProject()`：入口判定写回 `currentDrawingEntry` 后立刻
+    `try { enterDrawingFlowPanes(); } catch {}` —— 把"进入图纸链路就切右栏"从"点了开始解析才做"
+    前移到"项目打开时就做"；切面板是纯展示，切不动也不许挡住链路状态与零件文档的读回。
+
+### 二、复跑（本机 `./open-claude/.venv/bin/python -W ignore -m unittest`；本机无 pytest）
+
+- `tests.test_packaging_dimension_annotation_not_in_part_shape_red` → `Ran 13 … OK`（红基 11 红）；
+- `tests.test_packaging_parts_refresh_line_business_count_red` → `Ran 10 … OK`（红基 8 红）；
+- `tests.test_packaging_2_1_first_paint_is_2d_not_3d_red` → `Ran 9 … OK`（红基 2 红）；
+- `tests.test_spec_status_truth_red` → `Ran 7 … OK`（三份 Spec 的状态行按事实改成「已实现」，
+  该套件 §1.3 那条「声明未实现的红测必须当前失败」不再报警）；
+- 相邻窗口：`test_packaging_2_1_parts_row_layout_and_shape_viewport_red` 32 OK、
+  `test_packaging_parts_extraction_red` 32 OK、`test_packaging_2_1_result_parts_and_shape_only_red`
+  27 OK、`test_packaging_business_parts_and_cad_plan_view_red` 14 OK、
+  `test_packaging_parts_downstream_red` 20 OK；
+- `node --check tech_app/frontend/app.js` 通过；
+- 全量（`m -m unittest` 显式列出 `tests/test_*.py` 全部 194 个套件）→ `Ran 6564 tests … FAILED (failures=2, skipped=28)`，两条都在 `test_cpq_eval_ci_contract`（`cadquery` / `multimethod` / `nlopt` / `typish` 不在 `requirements.txt` 闭包、`numpy` 出现在闭包里）——同一套件在 HEAD 的独立 worktree 里复跑同样 `failures=2`，**本批零新增失败**。
+
+### 三、本批明确没做
+
+- 不改「图上观测 / 结构规则补件」两个分子的显示口径（Spec 附录那条仍待用户拍板）；
+- 不改后端接口、不改 `packaging-parts` 文档结构、不改 CAD IR；未建 MR / tag / Release；
+- 部署按 `bash scripts/deploy_34_bare.sh ytbz` 走同一次指令，核对项（`build.commit`、8010
+  `status=ok`、两份样本 `converter_role=primary` / `fallback_used=false`）以部署脚本输出为准。

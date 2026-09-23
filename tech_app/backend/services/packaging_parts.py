@@ -1662,6 +1662,186 @@ def kind_key_of(row: Dict[str, Any]) -> str:
     return hashlib.sha256(blob).hexdigest()[:KIND_KEY_LENGTH]
 
 
+# --------------------------------------------------------------------------- #
+# 标注实体判据（Spec `packaging-dimension-annotation-must-not-enter-part-shape.md` §2.1）
+# --------------------------------------------------------------------------- #
+# 图上的尺寸线 / 尺寸界线 / 箭头**自己不带几何**（`DIMENSION` 实体只有 `declared_value`），
+# 它们画出来就是普通 LINE；而分组是端点相接连通，尺寸界线的一端正是零件角点 ⇒ 标注会
+# 和零件永久同组、进环、进折线、进而把件尺寸撑大。所以必须在**分组之后、进环之前**摘掉。
+# 判据必须窄：真样本 5598 条 LINE 里 1716 条的长度与某个 `declared_value` 相等（±0.5mm），
+# 只按"等长"删必然误伤真几何 —— 长度只作为 ② 的辅助条件。
+ANNOTATION_LAYERS = ("DEFPOINTS",)
+ANNOTATION_ARROW_MAX_MM = 6.0
+ANNOTATION_TOLERANCE_MM = 0.5
+ANNOTATION_REASONS = ("dimension_extension", "dimension_line", "dimension_arrow",
+                      "annotation_layer")
+
+
+def _annotation_target_points(ir: Dict[str, Any]) -> List[Tuple[float, float]]:
+    """`ir.dimensions[*].target_entity_ids` 里的 `point:x,y` —— 标注的"定义点"（Spec §2.1 ①）。"""
+    rows = ir.get("dimensions") if isinstance(ir.get("dimensions"), list) else []
+    points: List[Tuple[float, float]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for ref in (row.get("target_entity_ids") or []):
+            text = _text(ref)
+            if not text.startswith("point:"):
+                continue
+            parts = text[len("point:"):].split(",")
+            if len(parts) != 2:
+                continue
+            point_x, point_y = _num(parts[0]), _num(parts[1])
+            if point_x is None or point_y is None:
+                continue
+            points.append((float(point_x), float(point_y)))
+    return points
+
+
+def _annotation_dimension_spans(ir: Dict[str, Any]) -> List[Tuple[Tuple[float, float],
+                                                                  Tuple[float, float]]]:
+    """每条标注自己那一对定义点之间的连线（Spec §2.1 ① 的"两两连线"）。"""
+    spans: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    rows = ir.get("dimensions") if isinstance(ir.get("dimensions"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        points: List[Tuple[float, float]] = []
+        for ref in (row.get("target_entity_ids") or []):
+            text = _text(ref)
+            if not text.startswith("point:"):
+                continue
+            parts = text[len("point:"):].split(",")
+            if len(parts) != 2:
+                continue
+            point_x, point_y = _num(parts[0]), _num(parts[1])
+            if point_x is None or point_y is None:
+                continue
+            points.append((float(point_x), float(point_y)))
+        for index, first in enumerate(points):
+            for second in points[index + 1:]:
+                spans.append((first, second))
+    return spans
+
+
+def _point_segment_distance_mm(point: Tuple[float, float],
+                               first: Tuple[float, float],
+                               second: Tuple[float, float]) -> float:
+    """点到线段的最短距离（mm）。"""
+    point_x, point_y = float(point[0]), float(point[1])
+    first_x, first_y = float(first[0]), float(first[1])
+    second_x, second_y = float(second[0]), float(second[1])
+    span_x, span_y = second_x - first_x, second_y - first_y
+    span = span_x * span_x + span_y * span_y
+    if span <= 0.0:
+        return math.hypot(point_x - first_x, point_y - first_y)
+    ratio = ((point_x - first_x) * span_x + (point_y - first_y) * span_y) / span
+    ratio = 0.0 if ratio < 0.0 else (1.0 if ratio > 1.0 else ratio)
+    return math.hypot(point_x - (first_x + ratio * span_x),
+                      point_y - (first_y + ratio * span_y))
+
+
+def _annotation_sits_on_definition_point(point: Tuple[float, float],
+                                         target_keys: Any,
+                                         spans: List[Tuple[Tuple[float, float],
+                                                            Tuple[float, float]]],
+                                         tolerance: float) -> bool:
+    """端点是否落在某个定义点上、或某条定义点连线上（Spec §2.1 ①）。"""
+    cell = (int(round(float(point[0]) / tolerance)), int(round(float(point[1]) / tolerance)))
+    for step_x in (-1, 0, 1):
+        for step_y in (-1, 0, 1):
+            for target in target_keys.get((cell[0] + step_x, cell[1] + step_y)) or ():
+                if cad_geometry.distance(point, target) <= tolerance:
+                    return True
+    for first, second in spans:
+        # 便宜的包围盒预筛（长线上百万次点到线段的距离不允许）：端点必须落在这对定义点的框里。
+        if not (min(first[0], second[0]) - tolerance <= point[0] <= max(first[0], second[0]) + tolerance
+                and min(first[1], second[1]) - tolerance <= point[1] <= max(first[1], second[1]) + tolerance):
+            continue
+        if _point_segment_distance_mm(point, first, second) <= tolerance:
+            return True
+    return False
+
+
+def annotation_entity_ids(ir: Any, entities: Any) -> Dict[str, str]:
+    """标注实体判据（Spec §2.1）：返回 `{entity_id: reason}`，逐条留痕、确定性、不误伤几何。
+
+    顺序：① 尺寸界线（端点落在标注定义点上 / 定义点连线上）→ ② 尺寸线 / 箭头（**传染**：
+    两端除自身外只接已判定的标注、且至少一端真的接在标注上）→ ③ `DEFPOINTS` 图层。
+    只把"一根两点的线段"当候选：闭合环与多段折线是几何，不是标注。
+    `reason` 闭集 = `ANNOTATION_REASONS`；输入顺序不影响结果。
+    """
+    rows = [row for row in (entities or []) if isinstance(row, dict)]
+    geometry = ir.get("geometry") if isinstance(ir, dict) and isinstance(ir.get("geometry"), dict) else {}
+    raw_tolerance = _num(geometry.get("tolerance"))
+    tolerance = max(ANNOTATION_TOLERANCE_MM, float(raw_tolerance) if raw_tolerance is not None else 0.0)
+    result: Dict[str, str] = {}
+
+    # ③ 尺寸定义点图层：这一条对任何实体都成立，先判（它的实体不再当 ①② 的候选）。
+    for row in rows:
+        if _text(row.get("layer")).strip().upper() in ANNOTATION_LAYERS:
+            result[_text(row.get("entity_id"))] = "annotation_layer"
+
+    segments: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]] = {}
+    ends: Dict[str, Tuple[Any, Any]] = {}
+    lengths: Dict[str, float] = {}
+    for row in sorted(rows, key=lambda item: _text(item.get("entity_id"))):
+        entity_id = _text(row.get("entity_id"))
+        if not entity_id or entity_id in result:
+            continue
+        chains, natural_closed, _approximation = _entity_chains(row)
+        if not chains or natural_closed or len(chains) != 1 or len(chains[0]) != 2:
+            continue
+        first, second = chains[0][0], chains[0][1]
+        if _quant_key(first) == _quant_key(second):
+            continue
+        segments[entity_id] = (first, second)
+        ends[entity_id] = (_quant_key(first), _quant_key(second))
+        lengths[entity_id] = float(cad_geometry.distance(first, second))
+
+    # ① 尺寸界线：端点落在某个定义点上（或某对定义点连线上）。
+    extensions = set()
+    if segments:
+        target_points = _annotation_target_points(ir)
+        target_keys: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+        for point in target_points:
+            key = (int(round(point[0] / tolerance)), int(round(point[1] / tolerance)))
+            target_keys.setdefault(key, []).append(point)
+        spans = _annotation_dimension_spans(ir)
+        for entity_id in sorted(segments):
+            first, second = segments[entity_id]
+            if (_annotation_sits_on_definition_point(first, target_keys, spans, tolerance)
+                    or _annotation_sits_on_definition_point(second, target_keys, spans, tolerance)):
+                result[entity_id] = "dimension_extension"
+                extensions.add(entity_id)
+
+    # ② 尺寸线 / 箭头（传染）：端点相接表与分组同一把尺（`LOOP_TOLERANCE_MM` 量化）。
+    neighbours: Dict[Any, set] = {}
+    for entity_id in sorted(segments):
+        for key in ends[entity_id]:
+            neighbours.setdefault(key, set()).add(entity_id)
+    judged = set(result)
+    changed = True
+    while changed:
+        changed = False
+        for entity_id in sorted(segments):
+            if entity_id in result:
+                continue
+            links = [neighbours.get(key, set()) - {entity_id} for key in ends[entity_id]]
+            # 至少一端真的接在已判定的标注上（真件内线没有，所以不会被牵连）……
+            if not any(link & judged for link in links):
+                continue
+            # ……且每一端除自身外只与已判定标注相接（悬空端点算空集）。
+            if any(link - judged for link in links):
+                continue
+            arrow = (lengths[entity_id] <= ANNOTATION_ARROW_MAX_MM
+                     and any(link & extensions for link in links))
+            result[entity_id] = "dimension_arrow" if arrow else "dimension_line"
+            judged.add(entity_id)
+            changed = True
+    return {entity_id: result[entity_id] for entity_id in sorted(result)}
+
+
 def extract(ir: Dict[str, Any], semantics: Any = None, *,
             options: Any = None) -> Dict[str, Any]:
     """CAD IR → 零件文档。同一份 IR 两次跑必须逐字相同（排序与编号全部确定性）。"""
@@ -1676,6 +1856,14 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     entities = {str((row or {}).get("entity_id")): row
                 for row in (ir.get("entities") or []) if isinstance(row, dict)}
     known = _known_evidence(ir)
+    # 标注实体（Spec `packaging-dimension-annotation-must-not-enter-part-shape.md` §2.1/§2.2）：
+    # 尺寸线 / 尺寸界线 / 箭头在图上就是普通 LINE，尺寸界线的一端正好落在零件角点上 ⇒ 分组
+    # 会把它们和零件粘在一起。必须在**进环 / 进折线 / 进尺寸之前**摘出去（只摘这一趟，
+    # IR 与分组本身不动：左栏整张 CAD 平面图照旧显示图纸本来有的标注）。
+    annotations = annotation_entity_ids(ir, list(entities.values()))
+    component_member_ids = {_text(item) for component in components
+                            for item in (component.get("entity_ids") or [])}
+    annotation_filtered_total = 0   # 见循环里累加的 `annotation_removed_total`（真摘掉的那些）
     # 角色与"这一次角色是怎么查出来的"走同一趟查找（Spec
     # `packaging-parts-role-lookup-disclosure.md` §2.1）：全 unknown 时也不再与"语义层没跑成"同形。
     roles, role_lookup = _resolve_layer_roles(ir, semantics)
@@ -1684,13 +1872,46 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
     unit_status = _text(units.get("unit_status"))
     unit_ok = unit_status == "confirmed"
 
+    def _outline_pass(source: List[Dict[str, Any]], box: Optional[List[float]],
+                      ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]],
+                                 Optional[Dict[str, Any]], bool, bool]:
+        """一趟"件内实体 → 轮廓"判定（Spec `packaging-parts-true-outline.md` §3）。"""
+        found = _outline_evidence(source)
+        if not unit_ok:
+            return found, None, None, False, False
+        verdict = _largest_loop(found["loops_original"], found["edges"], found["vertices"],
+                                float(config["min_area_mm2"]))
+        got, compose_row = verdict["outline"], None
+        saw, has_coords = verdict["saw_loop"], verdict["has_coordinates"]
+        if got is None:
+            got, compose_row = _rescue_outline(found, box, float(config["min_area_mm2"]))
+            if got is not None:
+                saw, has_coords = True, True
+        return found, got, compose_row, saw, has_coords
+
     kept: List[Dict[str, Any]] = []
     filtered: List[Dict[str, Any]] = []
+    annotation_removed_total = 0
     for component in components:
         component_id = _text(component.get("component_id"))
         entity_ids = [_text(item) for item in (component.get("entity_ids") or [])]
-        members = [entities[item] for item in entity_ids if item in entities]
-        bbox = _bbox_of(component, members)
+        members_all = [entities[item] for item in entity_ids if item in entities]
+        # 这一件里被判成标注的实体：逐件留痕（升序、确定性），并且**不许**进入
+        # 求环 / 件内折线 / 件尺寸（Spec §2.2/§2.3）。
+        annotation_rows = sorted(
+            ({"entity_id": _text(member.get("entity_id")),
+              "reason": annotations[_text(member.get("entity_id"))]}
+             for member in members_all if _text(member.get("entity_id")) in annotations),
+            key=lambda row: row["entity_id"])
+        members_clean = ([member for member in members_all
+                          if _text(member.get("entity_id")) not in annotations]
+                         if annotation_rows else list(members_all))
+        # 件身份（**有没有这一件**、面积/边长门槛、角色、层名、证据）一律按**未过滤成员**判
+        # —— 与摘标注之前逐字一致：标注线只许改"画出来的形状"，不许改"有没有这一件"或
+        # "这一件是不是 CUTTER 件"。实测（圆盘盒.dwg）：摘完标注会把 8 个纯标注簇判成
+        # `area_under_min`（312 → 304 件），并让 3 件真 CUTTER 件丢掉角色（role_known 9 → 6）
+        # —— 那是拿"删对了"换"件没了"（Spec §2.2 反向判据）。
+        bbox = _bbox_of(component, members_all)
         if bbox is None:
             box_length = box_width = None
             box_area = 0.0
@@ -1698,7 +1919,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             box_length = abs(bbox[2] - bbox[0])
             box_width = abs(bbox[3] - bbox[1])
             box_area = box_length * box_width
-        curves = [entity for entity in members
+        curves = [entity for entity in members_all
                   if _text(entity.get("type")).upper() in CURVE_TYPES]
 
         # —— 真实轮廓：件内求最大闭合环（Spec `packaging-parts-true-outline.md` §3）——
@@ -1706,23 +1927,25 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         # —— 重复边折叠 + 外轮廓重判（Spec `packaging-parts-outline-chaining.md` §2）——
         # 先按**今天的口径**（未折叠图）判一次：已经判成 closed 的件必须逐字保持原样；
         # 只有判成 open 的件才走 rescue（折叠图重找环 + 外轮廓覆盖率准入）。
-        evidence = _outline_evidence(members)
-        outline: Optional[Dict[str, Any]] = None
-        compose: Optional[Dict[str, Any]] = None
-        saw_loop = False
-        has_coordinates = False
-        if unit_ok:
-            verdict = _largest_loop(evidence["loops_original"], evidence["edges"],
-                                    evidence["vertices"], float(config["min_area_mm2"]))
-            outline = verdict["outline"]
-            saw_loop = verdict["saw_loop"]
-            has_coordinates = verdict["has_coordinates"]
-            if outline is None:
-                outline, compose = _rescue_outline(evidence, bbox,
-                                                   float(config["min_area_mm2"]))
-                if outline is not None:
-                    saw_loop = True
-                    has_coordinates = True
+        evidence, outline, compose, saw_loop, has_coordinates = _outline_pass(members_all, bbox)
+        # 件身份的门槛（`area_under_min` 那一支）必须看**摘标注之前**那一趟的判定，
+        # 否则"摘完才求出环"会反过来改件的有无（Spec §2.2 反向判据）。
+        saw_loop_head = saw_loop
+        members = members_all
+        # 形状（轮廓环 / 件内折线 / 件尺寸）优先用**摘掉标注之后的成员**：标注线一端接在
+        # 零件角点上，会把环带偏（Spec §2.2）。摘完还能求出环 ⇒ 那个环才是零件的形状。
+        if annotation_rows:
+            clean_box = _bbox_of(component, members_clean) or bbox
+            clean = _outline_pass(members_clean, clean_box)
+            if clean[1] is not None:
+                evidence, outline, compose, saw_loop, has_coordinates = clean
+                members = members_clean
+            else:
+                # 回退（Spec §2.2 反向判据）：摘标注**之前**这一件是闭合的吗？是 ⇒ 摘标注
+                # 把件判成了开口 —— 那是拿"删对了"换"件坏了"。整件回退到原成员（这一件
+                # 保留它本来画着的标注线），宁可多画几条线，也不许把一件闭合件判成开口。
+                annotation_rescued = True
+                annotation_rows = []
         if not unit_ok:
             outline_status, outline_reason = "unavailable", "unit_unconfirmed"
             size_source = "dwg_outline"
@@ -1756,7 +1979,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             if box_area > float(config["max_area_mm2"]):
                 reasons.append("area_over_max")
             # 有环的件即使环比 min_area 小也要留着（Spec §3：报 loop_too_small，不许悄悄丢掉）。
-            if box_area < float(config["min_area_mm2"]) and not saw_loop:
+            if box_area < float(config["min_area_mm2"]) and not saw_loop_head:
                 reasons.append("area_under_min")
         # 「没有可制造曲线」只在**看得见实体**时才敢判：分量声明了实体却一条都查不到
         # （块引用 / 代理实体 / IR 缺条），说明这一件对我们是不透明的，宁可留着让人看，
@@ -1764,7 +1987,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         if not curves and (not entity_ids or members):
             reasons.append("no_curve_entity")
         if reasons:
+            annotation_removed_total += len(annotation_rows)
             filtered.append({"component_id": component_id, "reasons": reasons,
+                             "annotation_filtered": annotation_rows,
                              # 主因摘要必须与 `filtered_reason_mix` 同一把尺（Spec §2.1）：
                              # 走 `_account_reason`（`FILTER_REASON_ACCOUNT_ORDER` 优先），
                              # 不是 `reasons[0]`（追加顺序）—— `reasons` 内容与顺序一个字不改。
@@ -1783,6 +2008,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         evidence_refs = sorted({ref for ref in refs if ref and ref in known})
         # 平面图折线（Spec `packaging-cad-plan-polyline-segments.md` §C2）：实体顶点坐标的顺序连线。
         plan_segments = _component_segments(members)
+        annotation_removed_total += len(annotation_rows)
         kept.append({
             "component_id": component_id,
             "segments": plan_segments["segments"],
@@ -1801,6 +2027,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "outline": outline,
             "outline_reason": outline_reason,
             "outline_diagnosis": evidence["diagnosis"],
+            "annotation_filtered": annotation_rows,
             "size_source": size_source,
             # 材料/厚度归属在**整份零件表**上算（一条成组注记要覆盖多件、件级标注要看
             # 它是否同时贴多件），所以这里先留空，等 kept 收齐后统一填（Spec §2）。
@@ -1884,6 +2111,7 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
             "segments_truncated": bool(row["segments_truncated"]),
             "outline_reason": row["outline_reason"],
             "outline_diagnosis": row["outline_diagnosis"],
+            "annotation_filtered": list(row.get("annotation_filtered") or []),
             "size_source": row["size_source"],
             "thickness_mm": row["thickness_mm"],
             "material": row["material"],
@@ -1989,6 +2217,9 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                   "outline_unavailable_total": outline_unavailable_total,
                   "closed_ratio": _round(closed_ratio),
                   "collapsed_edge_total": collapsed_edge_total,
+                  # 标注剔除的账（Spec `packaging-dimension-annotation-must-not-enter-part-shape.md` §2.3）：
+                  # 只数落在分量成员里的那些 —— 它们原本会进环 / 进折线 / 撑大件尺寸。
+                  "annotation_filtered_total": annotation_removed_total,
                   "collapsed_rescue_total": collapsed_rescue_total,
                   "budget_exhausted_total": budget_exhausted_total,
                   "open_reason_mix": open_reason_mix,

@@ -3308,6 +3308,36 @@ function packagingBusinessThumbnailBytesFailureText() {
     + "刷新或重新导入权威清单可重建";
 }
 
+// 「已剔除标注线」的披露（Spec `packaging-dimension-annotation-must-not-enter-part-shape.md` §2.3）：
+// 图上那些"白线"是尺寸线 / 尺寸界线 / 箭头，不该算零件几何。数字**只**来自后端文档 ——
+// 业务行自己的 `annotation_filtered`，或它绑定的那几件几何件那份；前端不自己判标注、也不猜数。
+// `N = 0` 回空串（调用方整块不出现，不留空节点）。纯函数：不碰 DOM / fetch。
+function packagingPartAnnotationFilteredLine(row, partsDoc) {
+  const part = (row && typeof row === "object") ? row : {};
+  const rows = [];
+  if (Array.isArray(part.annotation_filtered)) rows.push(...part.annotation_filtered);
+  if (!rows.length) {
+    const binding = (part.geometry_binding && typeof part.geometry_binding === "object")
+      ? part.geometry_binding : {};
+    const wanted = new Set();
+    const add = value => {
+      const text = String(value === undefined || value === null ? "" : value).trim();
+      if (text) wanted.add(text);
+    };
+    (Array.isArray(binding.component_ids) ? binding.component_ids : []).forEach(add);
+    (Array.isArray(part.geometry_component_ref) ? part.geometry_component_ref : []).forEach(add);
+    const bound = (partsDoc && Array.isArray(partsDoc.parts)) ? partsDoc.parts : [];
+    bound.forEach(item => {
+      if (!item || typeof item !== "object") return;
+      if (!wanted.has(String(item.component_id || "").trim())) return;
+      if (Array.isArray(item.annotation_filtered)) rows.push(...item.annotation_filtered);
+    });
+  }
+  const total = rows.length;
+  if (!total) return "";
+  return `已剔除标注线 ${total} 条（尺寸线/尺寸界线/箭头，不是零件几何）`;
+}
+
 function openPackagingBusinessPart(code) {
   const wanted = String(code || "");
   const rows = packagingBusinessPartRows(currentPackagingBusinessParts);
@@ -3375,6 +3405,15 @@ function openPackagingBusinessPart(code) {
         + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || PACKAGING_CAD_PLAN_NO_COORDS)}`
         + `</div>`;
     }
+  }
+  // 剔除了标注线就说得出（Spec §2.3）：句子与数字都来自后端文档，`N = 0` 时整块不出现。
+  const annotationLine = packagingPartAnnotationFilteredLine(row, currentPackagingParts);
+  if (outlineHost && annotationLine) {
+    const annotationNote = document.createElement("div");
+    annotationNote.className = "packaging-part-note";
+    annotationNote.setAttribute("data-qq-annotation-filtered", "1");
+    annotationNote.textContent = annotationLine;
+    outlineHost.appendChild(annotationNote);
   }
   const thumbnailHost = $("packagingPartThumbnail");
   if (thumbnailHost) {
@@ -3845,13 +3884,30 @@ async function submitPackagingRoleMap(button) {
 // drawing-flow 走到终态后必须**重新拉一次**零件文档（Spec
 // `e2e-packaging-dwg-quote-tech-continuity.md` §4.1）：零件是链路跑完才产出的，
 // 不刷新的话左栏会一直停在空态占位文案上（线上那条现象：跑完了还是只有一个标题）。
+// 左栏那句刷新提示的取数口径（Spec
+// `packaging-parts-refresh-line-must-count-business-parts.md` §2.1）：**业务账优先** ——
+// 结果区那一行就是「业务部件 N 件」，同一屏不许再冒出几何分量数（`## 480` 已规定几何分量只进
+// 折叠诊断区）。没有业务部件时才退到几何账，并且必须**自称「几何区域」**（不许再叫「零件清单 N 件」）。
+// 两个账都读不到回空串，由调用方给空态文案。纯函数：不碰 DOM / `fetch(` / `localStorage`。
+function packagingPartsRefreshLine(geometryDoc, businessDoc) {
+  const business = packagingBusinessPartRows(businessDoc).length;
+  if (business > 0) {
+    return `零件清单已刷新：业务部件 ${business} 件（点一行可在右栏看这一件）`;
+  }
+  const geometry = (geometryDoc && Array.isArray(geometryDoc.parts)) ? geometryDoc.parts.length : 0;
+  if (geometry > 0) {
+    return `零件清单已刷新：几何区域 ${geometry} 个（还没推导出业务部件，点一行可查看）`;
+  }
+  return "";
+}
+
 async function refreshPackagingPartsAfterDrawingFlow(flowState) {
   if (flowState) currentDrawingFlowState = flowState;
   const doc = await refreshPackagingParts().catch(() => null);
-  const rows = Array.isArray(doc && doc.parts) ? doc.parts.length : 0;
-  status(rows
-    ? `零件清单已刷新：${rows} 件（点一行可在右栏看这一件）`
-    : "零件文档还没有内容，详见上方步骤表与前置条件。");
+  // 业务部件文档在这一步是新鲜的（`## 480` 的就地补推导保证），所以这一句按**业务账**报数；
+  // 业务账读不到时退到几何口径并说清"还没推导出业务部件"，不许硬编一个数字（Spec §2.2）。
+  const line = packagingPartsRefreshLine(doc, currentPackagingBusinessParts);
+  status(line || "零件文档还没有内容，详见上方步骤表与前置条件。");
   return doc;
 }
 
@@ -4529,7 +4585,14 @@ async function openProject(pid) {
         wrap.appendChild(d);
       }
     }
-    if (entry === "drawing_flow") {
+    if (currentDrawingEntry === "drawing_flow") {
+      // 一进 2.1 右栏就必须是 2D（Spec
+      // `packaging-2-1-first-paint-must-be-2d-not-3d.md` §2.1）：刷新 / 重进项目时右栏
+      // 不能停在 HTML 默认的那个 3D 空框上 —— 与"读回链路状态、读回零件文档"同一段、
+      // 不依赖用户点解析（切面板那一步内部**先切面板、再读坐标**，首屏不闪 3D 框）。
+      // 切面板是**纯展示**：任何一步画不出来都不许挡住"读回链路状态 / 读回零件文档"
+      // （老壳 / 沙箱里没有这套钩子时也一样 —— 与上面 markStage 同一条纪律）。
+      try { enterDrawingFlowPanes(); } catch (error) { /* 纯展示 */ }
       // 进入即读回（Spec `packaging-parts-entry-readback.md` §4 A1–A3）：零件文档是**持久化**的
       // （`packaging_parts.load_parts()` 不带 parts_id 就是最新一版），重新进入 2.1 必须把它读回来，
       // 否则左栏永远走空态、还会催用户重跑一遍本来就有的解析。
