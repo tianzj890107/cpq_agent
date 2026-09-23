@@ -19267,3 +19267,225 @@ Ran 223 tests in 3.445s ... FAILED (failures=1)
 源码守卫，不校验 reason 与形态的一一对应（由 R3/R8 的行为断言兜着）。本批红测不校验前端（人话另批）。
 
 未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、未写盘（打桩 `store` / `persistence` / 假依赖模块）。
+
+## 460. 被过滤的分量有三套口径在打架：`filtered[].reason` 归并 ≠ `filtered_reason_mix`，四个 `filtered_*_total` 还不能相加（9-23，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-parts-filtered-two-books-must-agree.md` +
+`tests/test_packaging_parts_filtered_two_books_must_agree_red.py`（8 条：S1–S5 / S7 缺口、S6 / S8 护栏；
+HEAD 工作副本实测**5 红 1 跳 2 绿**，带 `CPQ_DWG_REAL_SAMPLES=1` 时**6 红 2 绿**）。
+全部离线：合成夹具 `parts_panels()` + 两份真样本（`tech_app/tools/dwg_sample_e2e.py` 真转换，
+样本只读、产物只写临时目录）；不起服务、不发 HTTP、不连 PG / 34、不写业务数据。
+（同系列前两条 `## 452` 图层名转义、`## 453` 截断计数已落地，本条是第三条。）
+
+### 缺口（`packaging_parts.py` 同一次 `extract()` 里的三套数）
+
+```python
+ 91   #: `filtered_reason_mix` 一件只记一次：主因次序…
+ 94   FILTER_REASON_ACCOUNT_ORDER = ("area_over_max", "edge_over_max", "area_under_min",
+ 95                                 "no_curve_entity")
+139   def _account_reason(reasons):      # ← mix 用的是它（按上面那个优先级取主因）
+...
+      filtered.append({"component_id": component_id, "reasons": reasons,
+                       "reason": reasons[0],   # ← 这里却是"列表第一条"，不是主因
+                       "bbox": bbox, "entity_total": len(entity_ids)})
+...
+      filtered_reason_totals[key] += 1     # ← 一件可进多本（每条原因各记一次）
+```
+
+三套数都叫"被过滤的原因/件数"，**没有一处说得出它们不是同一把尺**：
+
+| 口径 | `酒盒.dwg` | `圆盘盒.dwg` | 合成 `parts_panels()` |
+| --- | --- | --- | --- |
+| `filtered_total` | 900 | 2988 | 3 |
+| `filtered_reason_mix`（一件一次的主因） | `{area_under_min: 888, area_over_max: 6, edge_over_max: 6}` | `{area_under_min: 2919, area_over_max: 38, edge_over_max: 31}` | `{area_under_min: 2, area_over_max: 1}` |
+| 按 `filtered[].reason` 归并 | `{edge_over_max: 12, area_under_min: 888}` | `{area_under_min: 2919, edge_over_max: 69}` | `{edge_over_max: 1, area_under_min: 2}` |
+| 两者不一致的行数 | **6** | **38** | **1**（`cmp:F`） |
+| 四个 `filtered_*_total` 之和 | **911** | **3029** | **5** |
+
+1. **`filtered[].reason` 不是主因**：它是 `reasons[0]`（跟着原因追加顺序走），而 mix 走
+   `FILTER_REASON_ACCOUNT_ORDER`（`area_over_max` 优先）→ 酒盒按 `reason` 归并得到
+   `edge_over_max 12 / area_over_max 0`，mix 是 `edge_over_max 6 / area_over_max 6`：
+   **`area_over_max` 那一桶在归并里直接消失**（圆盘盒 38 件被错归到 `edge_over_max`）。
+2. **四个 `_total` 与 `filtered_total` 不可相加**：前者一件可进多本（
+   `["edge_over_max", "area_over_max"]` 这种件各记一次），后者一件一次 —— 911 ≠ 900（11 件多因）、
+   3029 ≠ 2988（41 件多因），键名里没有一处说得出这个区别。
+3. 2.1 面板那句"另有 900 个图元分组未成为零件（面积过小 888 / 面积超限 6）"用的是 mix，
+   而同一份产物里 `filtered_edge_over_max_total` 是 12、`filtered_area_over_max_total` 是 6 ——
+   谁拿后者去核前者，都会以为自己算错了或系统坏了。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `filtered[].reason` 必须逐字等于 `_account_reason(row["reasons"])`（= mix 的分桶口径）→
+  可核对判据：**按 `filtered[].reason` 归并 == `filtered_reason_mix`**（逐键逐值）；`reasons` 的
+  内容与顺序、`filtered[]` 的成员与排序一个字不改；
+- `stats` 新增三键：`filtered_reason_hits_total`(= `Σ len(reasons)` = 四个 `_total` 之和)、
+  `filtered_reason_mix_scope = "primary_reason_per_part"`、`filtered_reason_totals_scope = "reason_per_part"`；
+- 四条不变量：mix 之和 == `filtered_total`；`hits == 四个之和 == Σ len(reasons)`；
+  `hits >= filtered_total` 且差额 == `Σ(len(reasons)-1)`；每行 `reasons` 非空且去重；
+- `summarize()` 必须透出这三个新键；
+- 冻结面：既有键名与数值口径（`filtered_total` / mix / 四个 `_total` / `filtered[]` 结构）、
+  `FILTER_REASON_ACCOUNT_ORDER` / `REASON_CODES` / `DEFAULT_OPTIONS`、过滤判据、前端文案与接口形状。
+
+### 实测
+
+```text
+tests.test_packaging_parts_filtered_two_books_must_agree_red                        Ran 7 … FAILED (failures=5, skipped=1)
+CPQ_DWG_REAL_SAMPLES=1 tests.test_packaging_parts_filtered_two_books_must_agree_red Ran 8 in 12.966s … FAILED (failures=6)
+  S1  {'area_under_min': 2, 'edge_over_max': 1} != {'area_under_min': 2, 'area_over_max': 1}（cmp:F 归错桶）  （红）
+  S2  'filtered_reason_hits_total' not found in {…}（合计与两本账单位没披露）                                  （红）
+  S3  同上：差额不变量核不了                                                                                   （红）
+  S4  summarize() 里同样没有这三个键                                                                           （红）
+  S5  真样本同样红：{'area_under_min': 888, 'edge_over_max': 12} != {'area_under_min': 888, 'area_over_max': 6,
+      'edge_over_max': 6}（酒盒）                                                                              （红）
+  S7  0 != 7：源码里写的是 `reasons[0]`，没走 `_account_reason`                                                （红）
+  S6  四个 `filtered_*_total` 仍等于用 `filtered[]` 逐原因重算                                                （护栏绿）
+  S8  reasons 非空去重 / len(filtered[]) == filtered_total / 两个常量闭集不变 / 同一份 IR 同一个 parts_hash   （护栏绿）
+```
+
+不回归（本批未改业务实现，逐条复跑）：
+
+```
+tests.test_packaging_parts_extraction_red   Ran 32 OK
+tests.test_packaging_semantics_red          Ran 59 OK (skipped=1)
+tests.test_packaging_product_outline_red    Ran 21 OK (skipped=1)
+tests.test_spec_status_truth_red            Ran 7  OK
+```
+
+未改任何业务实现、未改既有测试、未放宽任何断言、未起服务、未发 HTTP、未连 PG / 34、
+未写业务数据；未 push / MR / tag / Release / 未部署。
+
+---
+
+## 461. 业务部件绑不上图的真因：几何零件的轮廓矩形藏在 `outline.bbox` 里，区域记录却读 `row["bbox"]`（9-23，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-business-parts-outline-bbox-broken-link.md` +
+`tests/test_packaging_business_parts_outline_bbox_link_red.py`（16 条：A/B/C 组缺口 **11 红**、
+D 组护栏 4 绿、A2 随 A1 转绿；`Ran 16 … FAILED (failures=11, skipped=1)`）。
+全部离线：两份真样本用 `cad_ir.parse_dxf()` 只读复跑（缺样本自 `skip`）、
+不起服务、不发 HTTP、不连 PG / 34、不写业务数据。
+
+### 现场（本机隔离 `DATA_DIR`，包装行业需求单 + 真 DWG）
+
+八步 flow 两份都 `8/8 completed`，业务部件的来源闭集也已落地
+（`derived_from_drawing=true` / `gold_standard_used=false` / 四类来源拒收），但**一件都绑不上图**：
+
+| 项 | 酒盒 | 圆盘盒 |
+| --- | ---: | ---: |
+| 几何零件 | 263 | 312 |
+| 有 `outline.bbox` 的零件行 | 263 | 312 |
+| 行顶层有 `bbox` 的零件行 | 0 | 0 |
+| region 有 `bbox` / `center`（现状） | 0 / 0 | 0 / 0 |
+| 业务部件行 | 26 | 66 |
+| 现状 `bound + partial` / 有尺寸件 | 0 / 0 | 0 / 0 |
+| 把矩形接到 region 上之后 `bound + partial` | 26 | 39（unbound 27） |
+
+行上原因一律 `no_outline_evidence`（酒盒另有一笔 `outline_without_name_anchor = 256`）。
+
+### 缺口（一个字段路径掐死整条链）
+
+```python
+ 581  def regions_from_geometry_parts(geometry_parts):     # packaging_business_part_resolver.py
+ ...
+ 593          row.get("bbox"),                              # ← 行顶层没有这个键，恒为 None
+ ...
+ 826              center = _region_center(region)           # _assign_outlines()
+ 827              if center is None:
+ 828                  continue                              # ← 263/312 件全在这里被丢掉
+```
+
+真样本 `DWG-P01` 的矩形就在行上，只是放在 `row["outline"]["bbox"] = [3571.66, 4283.84,
+4713.23, 4748.97]`；图纸流**正是把这份零件文档**交给解析器
+（`packaging_drawing_flow/steps.py:500`），所以线上与离线同形：0 绑定、0 尺寸、
+`drawing_ref.kind` 一律 `"none"`。修这一处后本机复跑：酒盒 26/26、圆盘盒 39/66。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- `packaging_parts.part_outline_rect(row)` 成为**唯一**的轮廓矩形读法（顶层 `bbox`，否则由
+  `outline.bbox` 派生；两处都没有回 `None`），`regions_from_geometry_parts()` 必须改用它；
+  零件文档的对外键集与 `outline` 内容一个字不改；
+- 区域记录自证：有矩形 → `bbox` + `center` 必须在；没矩形 → 必须留 `excluded` 原因且
+  `substantial=False`（**禁止静默空值**——这条链断了两天没人发现就是因为它）；
+- 断链自证：`business_part_total > 0` 且 `bound + partial == 0` 时，`detail["outline_link"]` 必须给
+  `PACKAGING_BUSINESS_PARTS_OUTLINE_LINK_BROKEN` + `business_part_total` / `region_total` /
+  `regions_with_center_total` 三个计数（码是模块常量 `OUTLINE_LINK_BROKEN`，绑定通时不许出现）；
+  `detail["regions_with_center_total"]` 无条件出现；
+- `no_outline_evidence` 是**行级**原因：覆盖全部行时必须按断链报，不许静默了事；
+- 真样本门槛：酒盒 `derived ≥ 20`、圆盘盒 `derived ≥ 31`，且每件 `derived` 行尺寸齐全、
+  `drawing_ref.kind != "none"`、`component_ids` 或 `bbox` 至少一样非空；
+- 冻结点：件数 263 / 312、`closed_ratio` 0.510 / 0.817、`extract()` 确定性、区域与零件行一一对应；
+- 非目标：成本 / BOM / 工艺公式与门禁、语义层候选上限、绑定判定质量
+  （`size_confirmed=false` 的猜测尺寸）、前端文案（只给码与计数，人话另批）。
+
+### 不回归（本批未改业务实现，逐条复跑）
+
+```text
+tests.test_packaging_parts_extraction_red + packaging_parts_outline_red + packaging_parts_components_red
+  + packaging_bom_business_parts_rows_red + packaging_drawing_flow_red          Ran 142 OK (skipped=2)
+tests.test_packaging_parts_must_come_from_the_drawing_red
+  + packaging_business_parts_and_cad_plan_view_red + packaging_business_parts_binding_size_source_red
+  + packaging_business_parts_must_come_from_all_drawing_evidence_red            Ran 83 OK
+```
+
+未改任何业务实现、未改既有测试断言、未起服务、未发 HTTP、未连 PG / 34、未写业务数据；
+未 push / MR / tag / Release / 未部署。
+
+---
+
+## 462. 业务部件的「尺寸」分不开「有标注证据的量测」与「几何包络的猜测」：14 / 31 件被当成量测值（9-23，Codex 只改 Spec / 红测 / changelog）
+
+新增 `docs/specs/packaging-business-part-size-must-be-confirmed-by-dimension.md` +
+`tests/test_packaging_business_part_size_must_be_confirmed_by_dimension_red.py`
+（15 条：A/B/C 组 **8 红**、D/E 组 7 绿护栏）。在 **`HEAD 8f8b011` 的隔离副本**上实测
+`Ran 15 … FAILED (failures=8)` —— 夹具先把 `## 461` 的断链摆平（把 `outline.bbox` 提到行顶层），
+两条缺口各测各的，不许互相掩盖。
+
+### 现场（本机隔离 `DATA_DIR`，两份真样本只读复跑）
+
+| 项 | 酒盒 | 圆盘盒 |
+| --- | ---: | ---: |
+| 业务部件行 / `derived` | 26 / 26 | 66 / 39 |
+| 有尺寸的件 | 26 | 39 |
+| 尺寸有标注证据（`size_confirmed=true`） | **12** | **8** |
+| 尺寸只是几何包络（`size_confirmed=false`） | **14** | **31** |
+| 行上 `evidence.size_quality`（现状） | 不存在 | 不存在 |
+| 未确认件在 `reasons` 里说了什么（现状） | 什么都没说 | 什么都没说 |
+| detail 的尺寸账（现状） | 只有 `parts_with_size_total=26` | 只有 `parts_with_size_total=39` |
+
+`## 459` 的成绩单写"带尺寸 26/26"，但真正有标注证据的只有 12 件 —— 这个差别今天在产物里
+一处都看不出来：页面 / BOM / 成本只能看到"这件有尺寸"，分不出量测与猜测。
+
+### 本批交付（只写 Spec + 红测，业务实现不在本批）
+
+- 行级质量档 `evidence.size_quality`，取值必须落在 `packaging_parts.SIZE_QUALITIES`（导入那个闭集）：
+  `size_confirmed is True` → `unfolded`；其余（包络猜测 / 来源缺失 / 没尺寸）→ `bbox_only`；
+- 两笔账 `detail["size_confirmed_total"]` / `["size_unconfirmed_total"]`，且
+  `两者之和 == parts_with_size_total`（没尺寸的行不进这两笔）；
+- 未确认的行必须带稳定码 `REASON_SIZE_UNCONFIRMED = "outline_size_unconfirmed"`
+  （已确认的行不许带），`reasons_breakdown` 必须数得到它、件数与两笔账一致；
+- 真样本规模门槛：酒盒 确认 ≥ 10（实测 12）/ 未确认 ≥ 10（14）；圆盘盒 ≥ 6（8）/ ≥ 25（31）；
+- 冻结面：`derived` / `partial` / `unbound` 语义与 `parts_with_size_total` 一个字不改
+  （本批只做**披露**）、`_region_is_size_confirmed()` 容差与配对算法不改、
+  `packaging_parts` 侧质量档映射与闭集不扩、BOM / 成本 / 工艺公式与门禁不改、前端文案另批；
+- 需要签字的口径选择（Spec §2）：把未确认尺寸的行从 `derived` 降级为 `partial` 要同时改
+  `## 459` 的"带尺寸 26/26"、`## 461` 的 `derived ≥ 20 / 31` 门槛 —— 属产品口径决策，本批不动。
+
+### 不回归（本批未改业务实现，逐条复跑）
+
+```text
+tests.test_packaging_parts_extraction_red + packaging_parts_outline_red + packaging_parts_components_red
+  + packaging_bom_business_parts_rows_red + packaging_drawing_flow_red          Ran 142 OK (skipped=7)
+tests.test_packaging_parts_must_come_from_the_drawing_red
+  + packaging_business_parts_and_cad_plan_view_red + packaging_business_parts_binding_size_source_red
+  + packaging_business_parts_must_come_from_all_drawing_evidence_red
+  + packaging_bom_part_size_provenance_red + packaging_bom_size_quality_accounting_red
+      Ran 103 … 1 failure（`bom_part_size_provenance_red::B3` 的 stats 键集字面 ——
+      **已挂账**在 `packaging-bom-size-quality-accounting.md` §"已记录的偏差（不改测试）"，
+      要转绿属测试侧动作）+ 1 error（隔离副本缺客户 `酒盒 报价资料.xlsx`；原工作区不出现）
+```
+
+红基与不回归都在 `git archive 8f8b011` 的隔离副本上量（+ 复制工作区真样本 + 只放本批的 Spec / 红测）：
+工作区当时有并行会话正在改 `packaging_parts.py` / `packaging_business_part_resolver.py`
+（即 `## 461` 那条断链的修复），直接在原工作区量会把别人的半成品算进来。
+
+未改任何业务实现、未改既有测试断言、未起服务、未发 HTTP、未连 PG / 34、未写业务数据；
+未 push / MR / tag / Release / 未部署。
