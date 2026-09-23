@@ -180,3 +180,15 @@ codes 空 / codes 不覆盖                entry["waiver_invalid"]={code, reason
 
 未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、未写盘（打桩 `store` / `persistence` /
 假依赖模块）。
+
+### 6.4 人工复核（红测覆盖缺口之外，2026-09-23）
+
+§6.2 记的覆盖缺口（"一条留痕同时踩两条判据时按序取第一个"）直接调 `gates._waiver_verdict()` 复核：
+
+```text
+codes 空 + by 也空（同时踩 empty_codes 与 missing_fields） → missing_fields   ← 按 §2.1 的顺序
+JSON 字符串 "just a string" / JSON null                    → not_an_object
+codes: ["  ", "loss_rate_missing"]                         → 成立（空白项被剔掉，覆盖得住）
+has_gaps 为假（有留痕也不成立）                              → waiver=无、invalid=无（静默）
+键缺席                                                     → waiver=无、invalid=无（静默）
+```

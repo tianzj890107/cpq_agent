@@ -230,3 +230,20 @@ tests.test_packaging_drawing_flow_red tests.test_spec_status_truth_red
   同一撞号）。本批按自己的号写 `## 461`。
 
 未 push / MR / tag / Release / 部署，未起服务、未发 HTTP、未连 PG / 34、未写业务数据。
+
+### 6.4 人工复核（红测覆盖缺口之外，2026-09-23）
+
+§6.3 记的两条缺口（`missing` 的自由文案、`draft` 下 `_next_action()` 的指向）逐条复核。同一支判据
+（`wp._rows_for` / `wp._judge` / `wp._next_action`，包装项目 + 解析产物在场）扫五种需求状态：
+
+```text
+(无需求)              next=1.1  1.1 not_started  1.2 not_started+missing  1.3 not_started(无 missing)  2.1 generated
+draft                 next=1.1  1.1 in_progress  1.2 not_started+missing  1.3 not_started+missing
+pending_confirmation  next=1.2  1.1 confirmed    1.2 awaiting_confirmation 1.3 not_started+missing
+pending_review        next=1.3  1.2 confirmed    1.3 in_review+missing
+approved              next=3.1  1.3 approved
+通用不变量：completed=true 的行挂前置文本 → 无（§2.1 成立）
+```
+
+- 与 §2.2 表逐格对上；`missing` 文案读得出"需求单当前是「…」"；
+- `_next_action()` 不再指回 2.1，而是顺着 1.1 → 1.2 → 1.3 → 3.1 往前走（规则本身没改，只是行不再谎报）。

@@ -19489,3 +19489,19 @@ tests.test_packaging_parts_must_come_from_the_drawing_red
 
 未改任何业务实现、未改既有测试断言、未起服务、未发 HTTP、未连 PG / 34、未写业务数据；
 未 push / MR / tag / Release / 未部署。
+
+## 464. 补记 `## 460`–`## 463` 四批的「红测覆盖缺口之外」人工复核证据：过滤分量两本账的老文档兜底、投影五种需求状态的逐格对照 + `_next_action` 走向、门禁不再反推分子 + 空文档 0 口径、留痕「同时踩两条判据」的顺序守卫（只改 4 份 Spec + changelog，无代码改动）（9-23，Codex 复核）
+
+四批落地时各自在 Spec §6.3 里如实记了"红测没覆盖的点"（`reasons` 顺序、`missing` 自由文案、`draft` 下
+`_next_action()` 的指向、reason 与形态的一一对应……）。本批把这几条逐条跑一遍，把原始读数记进对应 Spec 的 §6.4：
+
+- `## 460`：老文档（`stats` 里没有三个新键）直接 `summarize()` → `filtered_reason_hits_total` **现算**为
+  `Σ len(reasons)` = 3（不是 0 / 不是 null），两个 scope 走常量兜底；
+- `## 461`：五种需求状态（无需求 / draft / pending_confirmation / pending_review / approved）逐格对上 §2.2 表；
+  通用不变量"`completed=true` 的行不挂前置文本"成立；`_next_action()` 顺着 1.1 → 1.2 → 1.3 → 3.1 往前走、不再指回 2.1；
+- `## 462`：门禁 `_sample_metrics()` 的 AST 里已无比值取数；空文档 `summarize()` 给 `role_known_total=0` /
+  `role_known_ratio=0.0`；门禁 `--env local --json` 读数 `role_known_total` 0 / 9 直读引擎；
+- `## 463`：**同时踩两条判据**时按 §2.1 的顺序取胜者（`codes` 空 + `by` 也空 → `missing_fields`）、
+  JSON 字符串与 `null` → `not_an_object`、`has_gaps` 为假与键缺席都静默。
+
+本轮只改 4 份 Spec 与 changelog，**未改任何业务代码、测试或断言**；未 push / MR / tag / Release / 部署。

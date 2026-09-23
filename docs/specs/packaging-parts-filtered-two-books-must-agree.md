@@ -188,3 +188,19 @@ S7 的 AST 守卫要求"**凡**是 `X.append({…「reason」…})` 里那个 `r
   断言钉它）；这是覆盖缺口，不是错误。
 
 未 push / MR / tag / Release / 部署，未连 PG / 34、未起服务、未写业务数据。
+
+### 6.4 人工复核（红测覆盖缺口之外，2026-09-23）
+
+§6.3 记的"没锁 `reasons` 顺序"之外的其余口径，用**老文档**（本批之前落库、`stats` 里没有这三个新键）
+直接调 `summarize()` 复核"读侧不许因缺键而空转"：
+
+```text
+legacy = {filtered: [c1:[edge_over_max, area_over_max], c2:[area_under_min]],
+          stats: {filtered_total: 2, filtered_reason_mix: {...}, 四个 *_total 都在}}
+summarize(legacy)：
+  filtered_reason_hits_total = 3        ← 由 filtered[] 现算（Σ len(reasons)），不是 0、不是 null
+  filtered_reason_mix_scope      = primary_reason_per_part
+  filtered_reason_totals_scope   = reason_per_part
+```
+
+（红测里 `filtered_total` 与四个 `*_total` 是逐字带出的既有口径，本批只补"合计 + 单位"两件事。）

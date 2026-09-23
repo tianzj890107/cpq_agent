@@ -161,3 +161,14 @@ tests.test_packaging_drawing_flow_red tests.test_spec_status_truth_red
   本批按自己的号写 `## 462`。
 
 未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、样本只读（只在临时目录产出 DXF）。
+
+### 6.4 人工复核（红测覆盖缺口之外，2026-09-23）
+
+§6.2 记的两条缺口复核：
+
+```text
+门禁源码：_sample_metrics() 的 AST unparse 里还出现 "role_known_ratio" 吗 → False（已不再反推）
+引擎：summarize({"parts": [], "stats": {}}) → role_known_total=0、role_known_ratio=0.0
+      （没有零件时分子是 0、比值仍是 0.0，Spec §2.1 的 `part_total == 0` 分支）
+门禁读数：--env local --json → verdict=go，酒盒 role_known_total=0 / 圆盘盒=9（引擎直给的值）
+```
