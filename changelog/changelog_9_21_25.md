@@ -18411,3 +18411,25 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 红测自身无缺陷（八条只靠"纯函数真跑 + 源码守卫"，一次落地全绿）。
 未改 `fetchPackagingParts()` / `loadMorePackagingParts()` / `patchPackagingPartRows()` 的既有契约，
 未起服务、未发 HTTP、未连 PG、未写业务数据，未 push / MR / tag / Release / 部署。
+
+## 446. 落地 `packaging-card-parts-lookup-must-accept-recovered-link`：卡片第 6 步的零件反查认得「认回（recover）过」的技术项目（7 OK，红基 3 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-card-parts-lookup-must-accept-recovered-link.md`，红测
+`tests/test_packaging_card_parts_lookup_link_key_parity_red.py`（7 条：A1–A3 认回的项目、B1–B4 护栏）。
+
+- `确认需求解析结果.html` `resolveCardTechProject()`：会话命中判据从
+  `bc.source_session_id || (p && p.source_session_id)` 扩成
+  `bc.source_session_id || bc.quote_session_id || (p && (p.source_session_id || p.quote_session_id))`
+  —— 认回通道 `/quote-link/recover` 写的是 `quote_session_id`，而回传通道 `packaging_handoff`
+  读的时候又把它映射成 `source_session_id`，两个键说的是同一件事，读侧却只认一个；
+- 34 实测（只读）：SM1 会话 `1bef04f7dab3` 认回到 PE1 技术项目 `8131f6d29d99`
+  （`酒盒.dwg`，该文档有 263 件零件），其 `business_case` 是
+  `source_session_id=""` + `quote_session_id="1bef04f7dab3"` —— 旧判据永远落空，兜底读件
+  不触发，卡片第 6 步看不到拆出来的零件；
+- 命中之后的行为逐字不变（仍读 `/requirement/packaging-parts`、仍按后端 `part_columns`
+  渲染、读不到仍安静跳过）；函数头两处口径注释同步补上 `quote_session_id`。
+
+实跑：本批红测 `Ran 7 OK`（红基 3 红 4 绿）；`test_packaging_parts_in_card_and_material_fill_red`
+`Ran 13 OK`。未改 `/quote-link/recover` 的线索键集合与落点语义、未改 `tech-task.js` 写侧键、
+未改零件端点与 `CARD_COLUMNS`、未在服务端补第二个身份字段，未 push / MR / tag / Release / 部署。
+红测自身无缺陷。

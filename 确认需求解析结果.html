@@ -4287,7 +4287,8 @@
     /* ================= 第 6 步：图纸拆出来的零件（Spec
        `packaging-parts-in-card-and-material-fill.md` §2.1） =================
        零件只在技术侧的零件文档里，报价卡片快照不一定带。这里按会话号自己找技术项目
-       （`business_case.source_session_id === currentSessionId`）再读零件端点；命中不到
+       （`business_case.source_session_id === currentSessionId` 或
+       `business_case.quote_session_id === currentSessionId`）再读零件端点；命中不到
        （卡片还没有技术项目）就什么都不画，**不报错、不阻塞其它步骤**。
        列定义的唯一来源是后端 `packaging_parts.CARD_COLUMNS`（随读接口 `part_columns`
        下发）；「可算 / 不可算原因」也一律用后端 `processability()` 的同一判据同文案 ——
@@ -4327,7 +4328,10 @@
     }
 
     // 按会话号找技术项目：GET /api/projects?scope=all 里 business_case.source_session_id
-    // 命中的那一个。找不到就回空串（调用方据此安静跳过）。
+    // **或** business_case.quote_session_id 命中的那一个（两个键同义：认回通道
+    // `/quote-link/recover` 写的是 `quote_session_id`，而
+    // `packaging_handoff` 读的时候又把它映射成 `source_session_id`）。
+    // 找不到就回空串（调用方据此安静跳过）。
     async function resolveCardTechProject() {
       try {
         const d = await cpqAuthFetch('/api/projects?scope=all').then(r => r.ok ? r.json() : null);
@@ -4335,7 +4339,8 @@
           || (d && (d.projects || d.items || d.data)) || [];
         const hit = list.find(p => {
           const bc = (p && p.business_case) || {};
-          const sid = bc.source_session_id || (p && p.source_session_id) || '';
+          const sid = bc.source_session_id || bc.quote_session_id
+            || (p && (p.source_session_id || p.quote_session_id)) || '';
           return String(sid) === String(currentSessionId || '');
         });
         return (hit && (hit.project_id || hit.id)) || '';
