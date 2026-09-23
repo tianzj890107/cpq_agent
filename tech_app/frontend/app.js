@@ -4703,6 +4703,13 @@ async function openProject(pid) {
       throw new Error("项目不存在");
     }
     localStorage.setItem("lastProject", pid);  // 记住,供刷新/返回时恢复
+    // 「本次解析的图纸」留档（Spec `packaging-drawing-preview-ownership-note-source.md` §C2）：
+    // 任务文件预览里点附件中的另一份 DWG 时，要靠它说清"哪一张才是本次解析用的"。
+    // 取值走纯函数；`## 448` 那类把 `openProject()` 单独放进 vm 桩跑的红测里没有这个函数，
+    // 用 `typeof` 守卫 + **同值**兜底（既有依赖注入口径），桩里退回直接读 `meta.source_filename`。
+    currentRequirementSourceFilename = (typeof requirementSourceFilename === "function")
+      ? requirementSourceFilename(data)
+      : String((data && data.meta && data.meta.source_filename) || "").trim();
     currentIR = data.ir;
     currentGeometry = data.geometry;
     currentDrawings = data.drawings;
@@ -6494,6 +6501,19 @@ function releaseFilePreviewUrl() {
   if (filePreviewUrl) { URL.revokeObjectURL(filePreviewUrl); filePreviewUrl = null; }
 }
 
+// 「本次解析的图纸」的名字（Spec `packaging-drawing-preview-ownership-note-source.md` §C1）：
+// 打开项目时那一次 `GET /api/projects/{pid}` 的 `meta.source_filename` 就是它（与 `/files` 里
+// 「需求原图（解析依据）」那一行同名）。读不到一律 `""` —— 不编名字、不回落别的字段。
+function requirementSourceFilename(projectBody) {
+  const body = (projectBody && typeof projectBody === "object") ? projectBody : {};
+  const meta = (body.meta && typeof body.meta === "object") ? body.meta : {};
+  const name = meta.source_filename;
+  return (typeof name === "string") ? name.trim() : "";
+}
+
+//: 当前打开项目的「本次解析的图纸名」，由 `openProject()` 留档（Spec §C2）。
+let currentRequirementSourceFilename = "";
+
 //: 预览里的「图纸」分类（Spec `packaging-task-file-dwg-opens-the-whole-plan.md` §C1）：只按
 //: **文件名后缀**判（`.dwg` / `.dxf`，大小写不敏感；`P01 面板 · DXF` 这种没有点的写法也算），
 //: **不看** `file.kind` —— 后端 `/files` 把需求原图标成 `kind:"image"`，照着当位图就是一张碎图。
@@ -6691,8 +6711,11 @@ async function openFilePreview(file, container, onBack) {
     const figureHtml = payload ? fileDrawingPreviewHtml(payload) : "";
     if (figureHtml) {
       figure.innerHTML = figureHtml;
-      const sourceName = String((payload && (payload.source_filename
-        || (payload.source && payload.source.filename))) || "");
+      // 响应里若带名字就用它（当前没有）；否则用打开项目时留档的那一份
+      // （Spec `packaging-drawing-preview-ownership-note-source.md` §C3）。
+      const payloadName = String((payload && (payload.source_filename
+        || (payload.source && (payload.source.filename || payload.source.source_filename)))) || "").trim();
+      const sourceName = payloadName || currentRequirementSourceFilename;
       const ownership = fileDrawingOwnershipNote(file, sourceName);
       note.textContent = ownership;
       content.replaceChildren(figure);

@@ -20813,3 +20813,50 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 
 - 本次**只改 Spec 一处文字**（§7 重排 + 新增 §7.1），未改任何代码、未改任何测试、未放宽任何断言；
   未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 489. 落地「任务文件预览里那句『哪一张图纸』的归属说明」：`## 487` 的 §C5 其实是死代码，源名字一直喂不进去（13 OK；红基 7 FAIL；反向对照 1 / 1 / 2）（9-23，Codex 实现）
+
+`## 487` 之后点 DWG 已经能看到整张平面图，但那句「本次解析的图纸：xxx；这一份不是本次解析用的图纸。」
+**任何情况下都不出现** —— 纯函数与红测都是绿的，缺的是"喂"：`openFilePreview()` 的 drawing 分支读的是
+`payload.source_filename || payload.source.filename`，而 `GET /requirement/packaging-geometry` 的 `source` 块
+实测只有 `ir_id` / `ir_hash` / `authority_file_hash` / `authority_sheet`（离线跑同一条
+`packaging_parts.business_parts_document()` 逐字核过）⇒ 两个取值恒为 `""`。
+
+### 改了什么
+
+- `app.js` 新增纯函数 `requirementSourceFilename(projectBody)`：只认 `projectBody.meta.source_filename`
+  （是字符串才要、`trim()` 后返回），其余（缺 / 非对象 / 非字符串 / 空串）一律 `""` —— 不编名字、不回落别的字段。
+- `openProject()` 拿到 `GET /api/projects/{pid}` 的响应后写模块级 `currentRequirementSourceFilename`：
+  这份数据前端本来就拉过（`meta.source_filename` 就是 `/files` 里「需求原图（解析依据）」那一行的 `name`），
+  以前只拿来判链路、没留档。
+- `openFilePreview()` 的 drawing 分支：响应里若真有名字（`payload.source_filename` /
+  `payload.source.filename` / `payload.source.source_filename`）优先用它，否则退到留档值，再交给既有的
+  `fileDrawingOwnershipNote(file, sourceName)` —— 同名仍 `""`、异名仍逐字那句，口径一个字没改。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-drawing-preview-ownership-note-source.md`（§C1–C4 + §5 落地表 + §5.1 反向对照 + §6 与既有 Spec 的关系）。
+- 红测：新增 `tests/test_packaging_drawing_preview_ownership_note_source_red.py`（13 条：A 纯函数 / B 接线 / C 护栏），
+  A 组用 `node` 抽单函数真跑。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测 `Ran 13 … OK`；红基（实现前）`Ran 13 … FAILED (failures=7)`（A1–A4、B1–B3；6 条绿护栏：B4、C1–C5）。
+- 反向对照：① drawing 分支不再喂留档值 ⇒ 1 红（B3）；② `openProject()` 去掉留档那一行 ⇒ 1 红（B1）；
+  ③ 纯函数改成 `String(meta.source_filename || "")`（不 trim、不判类型）⇒ 2 红（A2/A3）。
+  还原后 `app.js` `md5 0190e44198f53ae777e60b3fa163b15e` 一致。
+- 点名保护网（本批 + 图纸预览 + 卡片预览 + 右栏单件图 / 结果件 / 面板）→ `Ran 139 tests … OK`。
+- 全量（397 个模块）→ `Ran 6644 … FAILED (failures=2, skipped=28)`：两条失败都是既有
+  `test_cpq_eval_ci_contract` 的环境 / 待裁决项，本批**零新增失败**。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+- 全量第一次跑抓到一处**只靠点名保护网抓不到**的连带：`tests/test_packaging_parts_entry_readback_red.py`
+  （`## 448`）把 `openProject()` 单独放进 `vm` 桩跑，桩里没有本批新函数 ⇒ 直接调它就是 `ReferenceError`，
+  那条红测 A1–A3 立刻转红（`Ran 6644 … FAILED (failures=5)`）。改成
+  `typeof requirementSourceFilename === "function" ? … : String(data.meta.source_filename || "").trim()`
+  （注入 + 同值兜底，既有口径）后转绿；点名保护网也把这条模块加进来（`Ran 151 … OK`）。详见 Spec §5.2。
+
+### 纪律
+
+- 只改 `app.js` 一个文件；**不动后端**（`main.py`、`/files` 的 `"kind": "image"`、`/requirement/packaging-geometry`
+  的返回口径都不变）、不新开接口、不为了这句话多发请求；不动几何 / 成本 / 工艺 / 需求任何口径；
+  未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
