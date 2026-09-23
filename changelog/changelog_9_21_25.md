@@ -19583,3 +19583,30 @@ tests.test_packaging_parts_must_come_from_the_drawing_red
 - 本批只改 4 个文件（解析器 / 零件服务 / 1 个既有红测的 B4 / 新 Spec + 新红测）与 changelog；
   未读金标、未按 sha 命中金标、未读附件 BOM、未新增依赖、未起服务、未连 PG / 34、未写业务数据、
   未改前端与成本公式费率；未 push / MR / tag / Release / 部署。
+
+## 467. 修掉两条既有挂账的**红测夹具缺陷**（`packaging_quote_send_recovery::C1` 夹具自遮挡、`packaging_route_bom_version_pinning::F2` 哨兵指纹），两条各自转绿（断言 / 期望值逐字未改）（9-23，Codex 测试侧）
+
+这两条都不是业务实现缺口，且两份 Spec 早就把「连修法都写好」——本批由测试侧把那两处执行掉：
+
+- `tests/test_packaging_quote_send_recovery_red.py`（Spec `packaging-quote-send-recovery.md` §2.5 记明）：
+  测试体**外层** `with mock.patch.object(HANDOFF.store, "load_business_case", lambda pid: {…create_new…})`
+  被 `send()` **内层**同一个打桩（`lambda pid: {}`，后 start 者赢）在调用期间遮成空字典 ——
+  C1 断言的那份 meta **从来没进过被测代码**。改法：`SendRecoveryCase.send()` 增 `meta=None` 形参、
+  内层桩改 `lambda pid: dict(meta or {})`，C1/C2 把 meta 交给夹具、删掉测试体外层那两处 `with`。
+- `tests/test_packaging_route_bom_version_pinning_red.py`（Spec `packaging-route-bom-version-pinning.md` §6.3 记明）：
+  F2 存的是哨兵 `OLD_BOM_HASH = "bom-hash-v1-old"`（注释自己写明「真 sha256 永远不会等于它」），
+  于是「行没变 → 不算 drift」这一支**永远成立不了**。改法：F2 存**同一批行算出来的真指纹**
+  `stored_versions(bom_hash=route.bom_input_hash(bom_rows()))`。
+
+**断言、期望值、比较方式逐字未改**；改的只是"被断言的事实从没送到被测代码"。反向对照（证明断言现在真的会咬；
+两次都只改夹具、跑完立即还原）：
+
+- C1 换回 `self.send(meta=None)`（空默认）⇒ `Ran 14 … FAILED (failures=1)`，只红 C1（`create_new` 读不到）；
+- F2 换回 `stored_versions()`（哨兵）⇒ `Ran 14 … FAILED (failures=1)`，只红 F2。
+
+复跑：`tests.test_packaging_quote_send_recovery_red tests.test_packaging_route_bom_version_pinning_red`
+`Ran 28 … OK`（修复前是 2 failures）；`test_spec_status_truth_red` 7 OK；`test_doc_path_and_root_consistency_red` 10 OK。
+两份 Spec 各追加落地记录（`packaging-quote-send-recovery.md` §2.6 / `packaging-route-bom-version-pinning.md` §6.3.1）。
+
+本批只改 2 个测试文件 + 2 份 Spec + changelog；**未改任何业务实现、未改任何期望值 / 断言、未新增 skip**；
+未连 PG / 34、未发 HTTP、未写业务数据、未 push / MR / tag / Release / 部署。

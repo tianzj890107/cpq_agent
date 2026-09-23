@@ -278,7 +278,9 @@ class FReadDoesNotReFetchAndReportsDrift(unittest.TestCase):
                          "读的时候不许现取（现在读到的是新 BOM 的版本）")
 
     def test_f2_same_rows_with_new_timestamp_is_not_drift(self):
-        stored = stored_versions()
+        # `## 467` 起夹具存的是**同一批行算出来的真指纹**（不再是哨兵 `bom-hash-v1-old`）：
+        # F1/F2 都没传 `hash_value`，哨兵让"行没变"这一支永远成立不了（Spec §6.3 记的夹具缺陷）。
+        stored = stored_versions(bom_hash=route.bom_input_hash(bom_rows()))
         result = _load(route_row(provenance=stored), rows=bom_rows(),
                        doc=bom_doc(generated_at=NEW_BOM_VERSION))
         self.assertNotIn("bom_rebuilt", result.get("stale_reasons") or [],

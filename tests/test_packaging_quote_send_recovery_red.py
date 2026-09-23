@@ -97,8 +97,14 @@ PACKAGE = {"engine_version": "packaging_handoff_v1", "handoff_version": "pkg-quo
 class SendRecoveryCase(unittest.TestCase):
     maxDiff = None
 
-    def send(self, **kwargs):
-        """真跑一次 `send_to_quote`，依赖全部打桩，返回交给桥的入参。"""
+    def send(self, meta=None, **kwargs):
+        """真跑一次 `send_to_quote`，依赖全部打桩，返回交给桥的入参。
+
+        `meta` 是**项目 meta 里已有的恢复留痕**（`/quote-link/recover` 写过的那次"明确新建"）：
+        `## 467` 起由这个参数交给夹具。以前 C1/C2 用 `with mock.patch...` 在**外面**替换
+        `load_business_case`，而本函数在**里面**又把它打桩成 `{}` —— 后启动的打桩赢，
+        于是 C1 断言的那份 meta 从来没进过被测代码（Spec §2.5 记的"夹具自遮挡"）。
+        """
         captured = {}
 
         def fake_bridge(*args, **kw):
@@ -115,7 +121,8 @@ class SendRecoveryCase(unittest.TestCase):
             mock.patch.object(HANDOFF.da_repo, "packaging_handoffs", lambda *a, **k: []),
             mock.patch.object(HANDOFF.da_repo, "save_packaging_handoff", lambda row: None),
             mock.patch.object(HANDOFF.da_db, "now", lambda: "2026-09-22T00:30:00+08:00"),
-            mock.patch.object(HANDOFF.store, "load_business_case", lambda pid: {}),
+            mock.patch.object(HANDOFF.store, "load_business_case",
+                              lambda pid: dict(meta or {})),
             mock.patch.object(HANDOFF.store, "audit", lambda *a, **k: None),
             mock.patch.object(BRIDGE, "send_to_quote", fake_bridge),
             mock.patch.object(HANDOFF.cpq_bridge, "send_to_quote", fake_bridge),
@@ -192,17 +199,14 @@ class BTransparency(SendRecoveryCase):
 class CMetaRecovery(SendRecoveryCase):
 
     def test_c1_meta_create_new_is_reused_without_asking_again(self):
-        with mock.patch.object(HANDOFF.store, "load_business_case",
-                               lambda pid: {"create_new": True, "create_reason": CREATE_REASON}):
-            captured = self.send()
+        captured = self.send(meta={"create_new": True, "create_reason": CREATE_REASON})
         self.assertTrue(captured.get("create_new"),
                         "项目 meta 里已有「明确新建」留痕时必须复用，不要求用户再填一次（Spec §2.2）")
         self.assertEqual(captured.get("create_reason"), CREATE_REASON)
 
     def test_c2_explicit_request_wins_over_meta(self):
-        with mock.patch.object(HANDOFF.store, "load_business_case",
-                               lambda pid: {"create_new": True, "create_reason": "旧原因"}):
-            captured = self.send(create_reason="新原因")
+        captured = self.send(meta={"create_new": True, "create_reason": "旧原因"},
+                             create_reason="新原因")
         self.assertEqual(captured.get("create_reason"), "新原因",
                          "本次请求里写明的原因优先（Spec §2.2）")
 

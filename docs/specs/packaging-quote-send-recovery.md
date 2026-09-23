@@ -3,7 +3,7 @@
 血缘：承接 `packaging-quote-close-loop.md`（第 8 批回传）、`quote-first-project-entry.md`（报告侧同类 P0）、
 `cpq_case_link.py`（落点四态：linked / multiple_candidates / create_new / no_candidate）。
 
-- 状态：Spec + 红测（已实现）（`tests/test_packaging_quote_send_recovery_red.py` 的 c1 属夹具自遮挡，见 changelog `## 272`；测试侧待处置）
+- 状态：Spec + 红测（已实现）（`tests/test_packaging_quote_send_recovery_red.py` 的 c1 曾属夹具自遮挡，见 changelog `## 272`；测试侧已修，见 §2.6）
 - 红测：`tests/test_packaging_quote_send_recovery_red.py`
 - 依赖：`tech_app/backend/main.py`（回传路由与桥接错误出口）、`packaging_handoff.py`、`cpq_bridge.py`
 
@@ -100,6 +100,17 @@ POST /api/projects/f1417060ae9d/requirement/packaging-quote/send  → 500，逐�
 `SendRecoveryCase.setUp()`**（`p = mock.patch.object(...); p.start(); self.addCleanup(p.stop)`）。
 `setUp` 先于测试体执行，于是测试体的 `with` 变成内层、恢复成"可被覆盖"的默认值 —— 此时 B 组仍拿到
 `{}`（空默认），C1 拿到 `{"create_new": True}`（外层生效），C2 仍绿，14 条全绿。
+
+### 2.6 夹具自遮挡已修（`## 467`，Codex 测试侧；断言与期望值逐字未改）
+
+§2.5 记的 C1 夹具自遮挡已在测试侧修好，`tests/test_packaging_quote_send_recovery_red.py` 14 条全绿。
+
+| 项 | 内容 |
+| --- | --- |
+| 改了什么 | `SendRecoveryCase.send()` 增 `meta=None` 形参，内部那条 `load_business_case` 桩由 `lambda pid: {}` 改成 `lambda pid: dict(meta or {})`；C1 传 `meta={"create_new": True, "create_reason": CREATE_REASON}`、C2 传 `meta={"create_new": True, "create_reason": "旧原因"}`，并删掉测试体**外层**那两处 `with mock.patch.object(...)` |
+| 为什么不算放宽 | 三条断言的文本、期望值与比较方式逐字未动（C1 的 `assertTrue(captured.get("create_new"))` 与 `assertEqual(captured.get("create_reason"), CREATE_REASON)`、C2 的 `"新原因"`）。改的只是「夹具从没把被断言的事实送进被测代码」这件事：以前调用期间生效的是 `send()` 内层那个空桩，外层那份 meta 被遮成 `{}` |
+| 为什么不用 §2.5 建议的「挪到 setUp()」 | 那一条靠 `mock.patch` 的「后 start 者赢」嵌套顺序兜住 —— 而正是这层顺序语义造成了本次自遮挡。把 meta 变成显式形参后，夹具不再依赖任何打桩顺序，读代码就能看出这条用例喂的是什么 |
+| 反向对照（本机实测） | 同一改动下把 C1 换成 `self.send(meta=None)`（回到空默认）→ `Ran 14 … FAILED (failures=1)`，只红 C1（`create_new` 读不到）；还原即 `Ran 28 … OK`（含本文件 14 条） |
 
 ## 3. 验收（红测逐条对应）
 

@@ -256,6 +256,18 @@ Spec §4 的 F2 口径（指纹为准：`generated_at` 变了、行没变就不�
 `stale_reasons=[]`，而把行内容改掉（`length_mm=120`）得到 `["bom_rebuilt"]` —— 与 F1/F2 的意图
 逐条一致。本批按 §2.2 实现，不改红测；F2 那一条断言作为已知的夹具缺陷挂账。
 
+### 6.3.1 该夹具缺陷已修（`## 467`，Codex 测试侧；断言与期望值逐字未改）
+
+`## 467` 把 F2 的夹具从哨兵指纹换成**同一批行算出来的真指纹**，
+`tests/test_packaging_route_bom_version_pinning_red.py` 14 条全绿。
+
+| 项 | 内容 |
+| --- | --- |
+| 改了什么 | F2 由 `stored = stored_versions()` 改成 `stored = stored_versions(bom_hash=route.bom_input_hash(bom_rows()))`（只改夹具存的那份指纹，`assertNotIn("bom_rebuilt", ...)` 与 `assertEqual(stored, result.get("source_versions"))` 逐字未动） |
+| 为什么不算放宽 | F2 的两条断言与期望值一字未改。原来存的是哨兵 `OLD_BOM_HASH = "bom-hash-v1-old"`（注释写明「真 sha256 永远不会等于它」），于是「行没变」这一支在判据下**永远成立不了** —— 夹具从没把「和当前行同指纹」这个事实喂给被测代码 |
+| 与 F1 的分工 | F1 存哨兵 + 行改了（`length_mm=120.0`）→ 仍要求 `bom_rebuilt`，逐字未动；F2 存真指纹 + 行没改、只有 `generated_at` 变 → 要求不报 drift。两条现在各自成立且互不遮挡 |
+| 反向对照（本机实测） | F2 换回 `stored_versions()`（哨兵）→ `Ran 14 … FAILED (failures=1)`，只红 F2；还原即 `Ran 28 … OK`（含本文件 14 条） |
+
 ### 6.4 落地后的一处收紧（与 `packaging-route-box-type-drift.md` 交叉）
 
 `provenance_missing` 的判据在落地 `## 343`（`packaging-route-box-type-drift.md`）时收紧为
