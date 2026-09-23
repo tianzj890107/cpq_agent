@@ -288,7 +288,24 @@ def iter_step_ids(start: str = "") -> Iterator[str]:
 
 
 def error_meta(code: str) -> Tuple[int, bool]:
-    return ERROR_CODES.get(str(code), (500, False))
+    """码 → `(http_status, retryable)`：流层表优先，其次权威闭集，最后才是默认值。
+
+    Spec `packaging-flow-non-exception-retryable.md` §2.1：`file_preflight.STABLE_ERROR_CODES`
+    是**权威闭集**（每条都带 `http_status` + `retryable`），只认流层表会把
+    `DWG_CONVERSION_TIMEOUT`(504, True) 说成 (500, False) —— 方向也能说反。
+    延迟导入避免模块级循环（`file_preflight` 不依赖本包）。
+    """
+    key = str(code)
+    if key in ERROR_CODES:
+        return ERROR_CODES[key]
+    try:
+        from tech_app.backend.services import file_preflight
+        spec = file_preflight.STABLE_ERROR_CODES.get(key)
+    except Exception:                                     # noqa: BLE001 - 探测失败按"不认识"
+        spec = None
+    if isinstance(spec, dict):
+        return (int(spec.get("http_status", 500)), bool(spec.get("retryable", False)))
+    return (500, False)
 
 
 def note_dependency_state(name: str, state: str, *, reason: str = "",

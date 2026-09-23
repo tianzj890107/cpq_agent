@@ -18256,3 +18256,23 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `test_drawing_flow_error_taxonomy_red` + `test_packaging_semantics_red` + `test_dwg_file_capability_preflight_red`
 = `Ran 102 OK (skipped=1)`；`test_spec_status_truth_red` = `Ran 7 OK`。
 未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 438. 落地 `packaging-flow-non-exception-retryable`：转换"跑完了但结果不合格"的 retryable 也不再说反（取值口认全权威闭集）（8 OK，红基 3 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-flow-non-exception-retryable.md`，红测
+`tests/test_packaging_flow_non_exception_retryable_red.py`（8 条，实现前 S1/S3/S7 红、S2/S4/S5/S6/S8 绿护栏）。
+
+- `packaging_drawing_flow/model.py:error_meta()`：查找顺序改成**流层 `ERROR_CODES` 优先 → 权威闭集
+  `file_preflight.STABLE_ERROR_CODES`（按 `http_status` / `retryable` 两键）→ 默认 `(500, False)`**；
+  `file_preflight` 延迟导入（它只依赖 stdlib，无循环）；流层既有键一个没动 ——
+  `DWG_CONVERSION_TIMEOUT` 从 `(500, False)` 修正为 `(504, True)`，方向也修了；
+- `steps.py:dwg_convert()` 两条**非异常**失败路径（manifest `status` 不成功、质量门槛未过）加上
+  `retryable=model.error_meta(code)[1]`：`DWG_CONVERTER_UNSAFE_PATH` / `FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION`
+  / `DWG_CONVERTER_BINARY_UNUSABLE` 这类 `False` 的码不再被说成「（可重试）」；
+  `code` 取法（含 `DWG_CONVERSION_FAILED` 兜底）、`message`、detail 八键逐字不变；
+- `_failed()` / `_blocked()` 签名与默认值、`## 437` 管的三处异常路径、`field_write` 的 catch 均未动。
+
+实跑：`test_packaging_flow_non_exception_retryable_red` = `Ran 8 OK`（红基 `Ran 8 … failures=3`）；
+`test_drawing_flow_error_taxonomy_red` + `test_packaging_drawing_flow_red` +
+`test_dwg_file_capability_preflight_red` + `test_packaging_flow_step_reports_retryable_honestly_red`
+= `Ran 105 OK (skipped=1)`。未改任何码表数值、未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。

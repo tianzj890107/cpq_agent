@@ -191,12 +191,17 @@ def dwg_convert(ctx: Dict[str, Any]) -> Dict[str, Any]:
               "converter_version": str(manifest.get("converter_version") or ""),
               "drawing_version": model._as_int(manifest.get("drawing_version"), 1)}
     if status not in ("ok", "success_with_warnings"):
-        return _failed(str(manifest.get("error_code") or "DWG_CONVERSION_FAILED"),
-                       "图纸转换未成功，请重试或联系管理员", detail)
+        # Spec `packaging-flow-non-exception-retryable.md` §2.2：转换器报回来的码要按码表定
+        # 「能不能重试」（`DWG_CONVERTER_UNSAFE_PATH` / `FAKE_CONVERTER_FORBIDDEN_IN_PRODUCTION`
+        # 这类是 False），不许一律吃 `_failed()` 的默认 True。
+        code = str(manifest.get("error_code") or "DWG_CONVERSION_FAILED")
+        return _failed(code, "图纸转换未成功，请重试或联系管理员", detail,
+                       retryable=model.error_meta(code)[1])
     quality = manifest.get("quality") if isinstance(manifest.get("quality"), dict) else {}
     if quality and not quality.get("verified"):
         return _failed("DWG_CONVERTER_OUTPUT_INVALID",
-                       "转换产物未通过质量门槛，请重试或联系管理员", detail)
+                       "转换产物未通过质量门槛，请重试或联系管理员", detail,
+                       retryable=model.error_meta("DWG_CONVERTER_OUTPUT_INVALID")[1])
     return {"status": "completed", "detail": detail,
             "anchor_updates": {"conversion_id": detail["conversion_id"],
                                "converter_version": detail["converter_version"],
