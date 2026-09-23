@@ -20860,3 +20860,59 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 只改 `app.js` 一个文件；**不动后端**（`main.py`、`/files` 的 `"kind": "image"`、`/requirement/packaging-geometry`
   的返回口径都不变）、不新开接口、不为了这句话多发请求；不动几何 / 成本 / 工艺 / 需求任何口径；
   未起服务、未连 PG / 34、未写业务数据、未 push / MR / tag / Release / 部署。
+
+## 490. 落地「预览里那个『去 2.1 跑图纸解析』按钮」：点了不真的去 2.1 —— 只刷了面板、没切面板（15 OK；红基 4 FAIL；反向对照 4 红）（9-23，Codex 实现）
+
+`## 487` 给那张整张平面图留了一个「还没有解析结果」的出口，按钮文字逐字承诺「去 2.1 跑图纸解析」，
+但它的 `click` 回调只有两行：`window.CadFilePreview.close(); loadDrawingFlowPanel();`。而
+`loadDrawingFlowPanel()` 的**全部内容**就是 `fetchDrawingFlowState()` + `renderDrawingFlowPanel(state)`
+—— 它只把 `#drawingFlowPanel` 填上并 `hidden = false`，**不隐藏别的内容、不切面板**。于是预览关了、
+用户停在原地：右栏还是那个 3D 空框（或上一个项目留下的状态），看不到图纸链路的面板，也找不到解析按钮。
+把右栏切成 2D 的既有口径本来就有 —— `enterDrawingFlowPanes()`（`hidePackagingPartPanel()` +
+`applyPackagingShapeOnlyPanes()` + 隐 `#viewer` + 让出 `#packagingCadPlanViewer` + 换掉「3D 视图」
+那句承诺 + `loadPackagingCadPlan()`），一键解析与 `openProject()` 两处都在用，只是这个出口没接上。
+
+### 改了什么（只一个文件、6 行插入、零删改）
+
+- `app.js::openFilePreview()` 的 drawing 分支、`goto.addEventListener("click", …)`：在
+  `window.CadFilePreview.close();` 之后、`loadDrawingFlowPanel();` 之前插入
+  `try { if (currentDrawingEntry === "drawing_flow") enterDrawingFlowPanes(); } catch (error) { /* 纯展示 */ }`
+  —— 顺序是「先关预览、再切面板、再读回」，与 `openProject()` / 一键解析**同一处口径**。
+- 带上既有守卫（`docs/specs/packaging-2-1-first-paint-must-be-2d-not-3d.md` §2.3）是**必须**的：
+  那条红测 `test_packaging_2_1_first_paint_is_2d_not_3d_red.py::a3` 要求全文件**每一处**
+  `enterDrawingFlowPanes();` 调用点往前 400 字符内都出现 `currentDrawingEntry === "drawing_flow"`。
+  第一版没加守卫 ⇒ 点名保护网立刻 1 红，补上后 100 OK。项目 `meta.source_filename` 是 DWG / DXF 时
+  `openProject()` 已经把这个变量定成 `drawing_flow`（`renderDrawingEntry()` 一处判定），
+  所以这个出口在目标场景里就是真切过去。
+- `try/catch` 是纯展示口径：沙箱 / 老壳里没有这套钩子也不许挡住"读回链路状态"。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-preview-goto-2-1-jump.md`（§C1 走既有跳转口径 + 既有守卫 /
+  §C2 先切再读、纯展示不挡读回 / §C3 文案与判定一字不改 / §3 边界 / §4 验收 + 反向对照 /
+  §5 落地表 + §5.1 实测 + §5.2 两条已知缺口）。
+- 红测：新增 `tests/test_packaging_preview_goto_2_1_jump_red.py`（15 条：A 接线 5 条 / B 护栏 7 条 /
+  C 护栏 3 条）。A 组用 `node -e` 抽 `openFilePreview()` 函数体、再做花括号配对取出那个 `click`
+  回调体真跑断言（不是 grep 全文）。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测 `Ran 15 … OK`；红基（实现前）`Ran 15 … FAILED (failures=4)`（A1 / A2 / A3 / A5；
+  11 条绿护栏：A4、B1–B7、C1–C3）。
+- 反向对照（把新加那一整块删掉、其余一字不动）⇒ `Ran 15 … FAILED (failures=4)`，红的正好是
+  A1（没有跳转调用）、A2（没有 `try` 包住且没有守卫）、A3（顺序缺"切"）、A5（全文件调用点退回 2 处）；
+  B / C 组 11 条护栏仍绿。还原后 `app.js` `md5 c16679d12c973df6dd46e1a0f0bb58f9` 与实现版一致
+  （实现前 `md5 94b61248e4a2736bc0e3294c8f96c677`，即 `## 489` 提交后的状态）。
+- 点名保护网（本批 + 任务文件 DWG 整张图 + 卡片预览 + 2.1 首屏 2D + 零件读回 + 归属说明 + 右栏单件图）
+  ⇒ `Ran 100 tests … OK`。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+- 全量（398 个模块）⇒ `Ran 6659 tests … FAILED (failures=2, skipped=28)`：两条失败都是既有
+  `test_cpq_eval_ci_contract`（`test_dependency_closure_is_not_trivially_equal_to_declared` /
+  `test_every_production_import_has_a_requirement`，环境 / 待裁决项），本批**零新增失败**。
+
+### 明确没做
+
+- 不改 `enterDrawingFlowPanes()` 自身（口径、切哪几块、顺手读坐标，全不动）；
+- 不改后端 / 接口 / 路由；不动几何、成本、工艺、需求任何口径；
+- 不改"还没有解析结果"这个判定的条件，不给预览加"带项目 id 跳转"这类新参数；
+- 不发 HTTP、不起服务、不连 PG / 34、不写业务数据、不 push / 不部署。

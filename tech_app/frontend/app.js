@@ -6729,6 +6729,12 @@ async function openFilePreview(file, container, onBack) {
     goto.textContent = "去 2.1 跑图纸解析";
     goto.addEventListener("click", () => {
       window.CadFilePreview.close();
+      // 真的"去 2.1"：走既有跳转口径（与 `openProject()` / 一键解析同一处、同一条
+      // `currentDrawingEntry === "drawing_flow"` 守卫），不是只刷面板；视觉链路一个字不动。
+      // 切面板是纯展示：沙箱 / 老壳里没有这套钩子也不许挡住下一步（Spec §C1/§C2）。
+      try {
+        if (currentDrawingEntry === "drawing_flow") enterDrawingFlowPanes();
+      } catch (error) { /* 纯展示 */ }
       loadDrawingFlowPanel();
     });
     content.replaceChildren(note, goto);
