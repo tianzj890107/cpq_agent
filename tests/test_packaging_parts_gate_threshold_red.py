@@ -141,7 +141,11 @@ class BRealSamples(unittest.TestCase):
         self.assertTrue(line, "门禁必须给出读数行（Spec §C2）")
         for token in ("closed_ratio=", "closed_total=", "part_total=", "role_known_total="):
             self.assertIn(token, line, "读数行缺 %s（Spec §C2）" % token)
-        expected = int(round(float(metrics["role_known_ratio"]) * int(metrics["part_total"])))
+        # `## 473`：期望值直读**引擎给的分子**（Spec
+        # `packaging-parts-role-known-numerator-must-not-be-reconstructed.md` §2.1/§2.2 已把
+        # 「由 summarize() 的分母与比值还原」这句话 supersede）。断言的语义与期望值口径一字未改
+        # （读数行必须逐字给出引擎的绝对分子），改的只是这个数从哪来 —— 反推在分母变大时会偏 ±1。
+        expected = int(metrics["role_known_total"])
         self.assertIn("role_known_total=%d" % expected, line,
                       "绝对分子逐字（Spec §C2）：%s" % expected)
         self.assertIn("part_total=%d" % int(metrics["part_total"]), line,
@@ -152,8 +156,9 @@ class BRealSamples(unittest.TestCase):
             metrics = _sample_metrics(name)
             if metrics is None:
                 self.skipTest("本机没有真实样本或没有可用转换器")
-            role_known = int(round(float(metrics["role_known_ratio"]) * int(metrics["part_total"])))
-            got = {"closed_total": int(metrics["closed_total"]), "role_known_total": role_known}
+            # `## 473`：同上，地板比的是**引擎给的分子**，不是反推值（Spec §2.1/§2.2）。
+            got = {"closed_total": int(metrics["closed_total"]),
+                   "role_known_total": int(metrics["role_known_total"])}
             for key, floor in floors.items():
                 self.assertGreaterEqual(got[key], floor,
                                         "%s 的 %s 不许低于地板 %d（Spec §C1/§6）：实测 %d"

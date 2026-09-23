@@ -19770,3 +19770,48 @@ missing(新闭包): [('cadquery', …), ('multimethod', …), ('nlopt', …), ('
 
 本批只改 1 个测试文件 + changelog；未改任何业务实现、未改任何断言 / 期望值、未新增 skip；
 未连 PG / 34、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。
+
+## 473. 门禁的「角色已知件数」分子补一条**真跑**的行为护栏，并清掉另一份红测里残留的反推口径（4 OK / 12 OK；反向对照 5 红）（9-23，Codex 测试侧）
+
+### 一、怎么发现的
+
+`packaging-parts-role-known-numerator-must-not-be-reconstructed.md` §6.2 自己记着一条覆盖缺口：
+「R5 是源码守卫；它不证明门禁在**所有**调用路径上都拿到了分子」。往下一层对账时发现：真把
+`_sample_metrics()` 执行起来的用例只有 R4 与门禁自己的 B 组，而两组都要求**真样本 + 转换器**（默认 `skip`），
+于是「分子到底从哪来」这条判据在**默认跑**里一次都没被执行过。顺着这条线又查到第二处：
+
+- `tests/test_packaging_parts_gate_threshold_red.py` 的 B2 / B3 仍按**旧口径**造期望值
+  （`int(round(role_known_ratio × part_total))`）—— 它测的是**门禁的真样本读数**，却用 `## 462` 已作废的
+  反推公式算期望值。两份真样本恰好整除（酒盒 0/263、圆盘盒 9/312）所以同值、看不出；任何比值被舍入到
+  偏 ±1 的样本上，它会红在**门禁正确的那一侧**。
+
+### 二、改了什么（2 个测试文件 + 2 份 Spec）
+
+1. 新增 `tests/test_packaging_parts_gate_numerator_provenance_red.py`（4 条，全离线、不读样本）：把转换 /
+   解析 / 零件 / 挤出打成桩，**真跑**门禁自己的取数与读数逻辑 —— P1 分子必须来自 `summarize()` 的键；
+   P2 读数行必须打同一个数、且不出现反推值；P3 样例「1500 件 / 分子 7」交给 `sample_verdict()` 必须 fail
+   （反推 `round(0.005 × 1500) = 8` 恰好够地板 8 ⇒ 反推口径会假 go）；P4 自检两个口径必须不等
+   （夹具失去判别力即红）。
+2. `tests/test_packaging_parts_gate_threshold_red.py` 的 B2 / B3：期望值来源改成直读
+   `int(metrics["role_known_total"])`。断言文本、地板数字、比较方式**一字未改**；改前改后都是绿的（12 条），
+   没有把任何一条红测改绿。
+3. 两份 Spec 追加记录：role-known §6.5、threshold-recalibration §8（把 §7 表里「分子由比值还原」那行标作
+   已被 `## 462` supersede）。
+
+### 三、实测（`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+```text
+tests.test_packaging_parts_gate_numerator_provenance_red                     Ran 4  ... OK
+tests.test_packaging_parts_gate_threshold_red                                Ran 12 ... OK（含 B 组真样本真跑）
+tests.test_packaging_parts_role_known_numerator_red                          Ran 9  ... OK (skipped=1)
+CPQ_DWG_REAL_SAMPLES=1（12 个真样本模块）                                     Ran 213 ... OK (skipped=2)
+反向对照：门禁 `_sample_metrics()` 换回反推 ⇒ 新文件 Ran 4 ... FAILED (failures=5)；还原即 OK
+```
+
+未做成反向对照的一处（如实记）：B2 / B3 改回反推**也不会红**（两份真样本同值），判别力由新文件的合成
+样例钉住 —— 与 §6.2 里「R3 只在合成夹具上复现」是同一条思路。
+
+### 四、边界
+
+本批只改上述 2 个测试文件 + 2 份 Spec + 本 changelog；未改任何业务实现、未改任何期望值 / 断言、未新增
+skip；未连 PG / 34、未发 HTTP、未写业务数据、未读金标；未 push / MR / tag / Release / 部署。

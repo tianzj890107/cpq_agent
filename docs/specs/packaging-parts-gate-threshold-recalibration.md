@@ -177,3 +177,20 @@ Ran 25 tests ... OK
 （2.9%），要更硬得另开一批把角色识别率抬上去（那批会同时抬高分子与比值）；`parts_demo_script` 仍是
 `manual_unacknowledged`（本批未代签、未改 `manual` 语义）；`--env production` 的 `skip → reasons` 与退出码
 逐字未动；未连 PG / 34、未写生产数据、未 push / MR / tag / Release / 部署。
+
+## 8. §C1 的「分子由比值还原」已被 supersede，红测 B2 / B3 的期望值同步直读引擎键（2026-09-23，`## 473`，Codex 测试侧）
+
+§7 表里那行「§C1 分子：补 `role_known_total = round(role_known_ratio × part_total)`（由 `summarize()` 自己的
+分母 / 比值还原，**不新增引擎键**）」在 `## 462`（`packaging-parts-role-known-numerator-must-not-be-reconstructed.md`）
+落地后**已作废**：引擎 `summarize()` 现在自己给 `role_known_total`，门禁 §2.2 明确**不许**再拿比值乘分母反推
+（比值只有三位小数，反推在分母变大时会偏 ±1，而它比的是 go/no-go 的**地板**）。
+
+`## 473` 只做「这一处期望值从哪来」的对齐，不碰任何判据：
+
+| 项 | 内容 |
+| --- | --- |
+| 改了什么 | `tests/test_packaging_parts_gate_threshold_red.py` 的 B2 / B3：期望值由 `int(round(role_known_ratio × part_total))` 改成 `int(metrics["role_known_total"])`（引擎给的键）。断言文本、地板数字、比较方式一字未改 |
+| 为什么不算放宽 | B2 仍要求读数行**逐字**给出绝对分子、B3 仍要求 `closed_total` / `role_known_total` 各自不低于地板；改的只是「这个数从哪来」—— 从旧口径的反推改成引擎直给（`## 462` §2.2 的唯一口径）。本文件头部那句「禁止为了让红测转绿而修改本文件」针对的是放宽判据换绿：本次改动**改前改后都是绿的**（12 条），没有把任何一条红测改绿 |
+| 为什么今天看不出这条残留 | 两份真样本恰好整除（酒盒 0/263、圆盘盒 9/312），两个口径同值。它不是「今天红了」，而是「门禁已经正确、测试却按旧口径造期望值」，任何比值被舍入到偏 ±1 的样本上都会红在门禁正确的那一侧 |
+| 反向对照为什么做不成（如实记） | 正因为同值，把 B2 / B3 改回反推**也不会红**。判别力只能靠合成样本：`## 473` 新增的 `tests/test_packaging_parts_gate_numerator_provenance_red.py` 用「3000 件 / 分子 2（反推 3）」与「1500 件 / 分子 7（反推 8 = 地板 8）」两条样例把口径钉死（P1–P4；把门禁换回反推 ⇒ 该文件 5 条红） |
+| 边界 | 未改 `THRESHOLDS` / `GATE_ITEMS` / `sample_verdict()` / 退出码语义 / `_round` 精度；未改门禁源码一个字；未连 PG / 34、未写业务数据 |

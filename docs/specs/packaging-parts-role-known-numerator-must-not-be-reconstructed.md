@@ -172,3 +172,14 @@ tests.test_packaging_drawing_flow_red tests.test_spec_status_truth_red
       （没有零件时分子是 0、比值仍是 0.0，Spec §2.1 的 `part_total == 0` 分支）
 门禁读数：--env local --json → verdict=go，酒盒 role_known_total=0 / 圆盘盒=9（引擎直给的值）
 ```
+
+### 6.5 §6.2 的覆盖缺口收口 + 另一份红测里残留的反推口径（`## 473`，Codex 测试侧；业务实现一个字未动）
+
+| 项 | 内容 |
+| --- | --- |
+| 新增行为护栏 | `tests/test_packaging_parts_gate_numerator_provenance_red.py`（4 条，全离线、不读样本）：把 `_sample_metrics()` 的重活（转换 / 解析 / 零件 / 挤出）打桩，**真跑**门禁自己的取数与读数逻辑 —— P1 分子必须来自 `summarize()` 给的键；P2 读数行必须打同一个数、且**不出现**反推值；P3 样例「1500 件 / 分子 7」交给 `sample_verdict()` 必须 fail（反推 `round(0.005 × 1500) = 8` 恰好够地板 8 ⇒ 反推口径会假 go）；P4 自检两个口径必须不等，否则用例退化成空转 |
+| 为什么这条跑得起来、而 §6.2 那条跑不起来 | §6.2 记的是「R5 只是源码守卫，不证明所有调用路径都拿到分子」，而真把 `_sample_metrics()` 执行起来的 R4 与门禁 B 组都要求真样本 + 转换器（默认 `skip`）。P1–P4 一次都不读样本、不转换，因此在**默认跑**里就真的执行了那段代码 |
+| 反向对照（本机实测） | 把门禁 `_sample_metrics()` 那一句换回 `int(round(float(summary.get("role_known_ratio") or 0.0) * int(summary["part_total"])))` ⇒ `Ran 4 … FAILED (failures=5)`（P1/P2/P3/P4 全红）；还原即 `Ran 4 … OK` |
+| 顺带修掉的**另一份**红测里的反推残留 | `tests/test_packaging_parts_gate_threshold_red.py` 的 B2 / B3 原先把期望值算成 `int(round(role_known_ratio × part_total))` —— 它测的是**门禁的真样本读数**，却用旧口径造期望值。`## 473` 把期望值来源改成直读 `metrics["role_known_total"]`：断言形状、文本与地板口径一字未改 |
+| 那条残留为什么今天看不出 | 两份真样本恰好整除（酒盒 0/263、圆盘盒 9/312），两个口径**同值** —— 所以它不是"今天红了"，而是"门禁正确、测试却按旧口径造期望值"，任何一份比值被舍入到偏 ±1 的样本上都会**红在门禁正确的那一侧**。判别力由本节的 P1/P4 用合成样本钉住（§6.2 里"R3 只在合成夹具上复现"是同一条思路） |
+| 边界 | 未改 `THRESHOLDS` / `GATE_ITEMS` / `sample_verdict()` / 退出码 / `_round` 精度 / 其它比率；门禁源码一个字未动；未连 PG / 34、未写业务数据 |
