@@ -18763,3 +18763,56 @@ Release / 部署、未连 PG、样本只读。
 `tests.test_packaging_quote_step5_reported_detail_must_satisfy_step_gate_red` → `Ran 40 tests … OK`；
 `tests.test_spec_status_truth_red` 7 OK。Spec 状态行已改「已实现」并追加 §8 落地状态。
 未 push / MR / tag / Release / 部署，未连 PG、未起服务。
+
+## 458. 修复 `## 451` 的一处回归：业务部件面板的轮廓回到「逐件渲染」，让 `## 373` / `## 417` 的三条沙箱红测转绿（5 套件 78 OK；整套红测 16 → 13 条既有挂账 + 新批 9 条）（9-23，Codex 实现）
+
+没有新 Spec：本批修的是 `## 451`（`4ddcbff`）引入的一处**实现回归**，红测与 Spec 一字未改。
+
+根因（`git log -L` 可复现）：`tech_app/frontend/app.js` 的 `packagingBusinessPartOutlineHtml()`
+原先把绑定分量**逐件**渲染再拼（`components.map(packagingCadPlanComponentSvg).filter(Boolean).join("")`，
+`## 373` 落地、`## 417` 沿用），`## 451` 把它改成整组渲染 `packagingCadPlanComponentsSvg(components)`。
+两种写法输出逐字相同，但把本函数的依赖从"单件渲染"放大到"整组渲染"——而
+`tests/test_packaging_business_part_plan_click_and_bound_outline_red.py`（`## 373` C3/C4）与
+`tests/test_packaging_cad_plan_polyline_segments_red.py`（`## 417` D4）用 `node -e` 抽具名函数真跑，
+依赖清单（`deps` 数组，Spec 里写明是**夹具**）里只有单件那一个，于是
+`packagingBusinessPartOutlineHtml() 抛错：packagingCadPlanComponentsSvg is not defined` —— 三条红。
+
+修法（一处，`tech_app/frontend/app.js`）：回到逐件渲染，但**不**写成
+`components.map(packagingCadPlanComponentSvg)` 那个形状 —— `## 451` 的守卫
+（`test_packaging_28_part_auto_resolution_and_2d_board_cleanup_red.py::test_cad_plan_uses_full_cad_scene_not_filtered_component_boxes`，
+`assertNotRegex(APP, r"components\.map\(packagingCadPlanComponentSvg\)")`）把那个形状读成"拿分量盒拼左栏大图"，
+全文件不许再出现（左栏一律整张 CAD 图）。改成显式累加：
+
+```
+let drawn = "";
+components.forEach(component => { drawn += packagingCadPlanComponentSvg(component); });
+if (!drawn) return "";
+```
+
+输出与整组渲染逐字相同（`packagingCadPlanComponentSvg()` 对画不出的件本来就回空串），
+`packagingCadPlanComponentsSvg()` 与左栏的整张图渲染一行未动。
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -W ignore -m unittest \\
+    tests.test_packaging_28_part_auto_resolution_and_2d_board_cleanup_red \\
+    tests.test_packaging_cad_plan_drawing_coordinates_red \\
+    tests.test_packaging_cad_plan_true_outline_polygons_red \\
+    tests.test_packaging_business_part_plan_click_and_bound_outline_red \\
+    tests.test_packaging_cad_plan_polyline_segments_red
+Ran 78 tests ... OK          # 修前：Ran 78 ... FAILED (failures=1: ## 451 守卫) ——
+                             # 三条 C3/C4/D4 已绿，本轮再让 `## 451` 的守卫也绿
+
+node --check tech_app/frontend/app.js   # 退出码 0
+```
+
+整套红测（`tests/*_red.py`，354 个模块）：修前 `Ran 6035 … FAILED (failures=16, skipped=24)`；
+修后 `Ran 6049 … FAILED (failures=22, skipped=24)` —— 22 条 = **13 条既有挂账**（`packaging_solids_body_unusable_red`
+V1/V2/V3/V5/V6 夹具 `args.map` 崩溃 5 条、`bom_part_size_provenance` B3 与 `parse_to_downstream_seams` B4 的
+`stats` 键集冻结 2 条、`part_role_mapping` A2 的 `1.0` vs 冻结口径 `0.5` 1 条、`quote_send_recovery` C1 夹具自遮挡
+1 条、`route_bom_version_pinning` F2 夹具哨兵指纹 1 条、`quick_quote_home_wiring` D2 与新契约机制互斥 1 条 +
+它的下游 `spec_status_consistency` C1 1 条、`tech_unified_workflow_projection` 1 条，全部已记 Spec / changelog）
++ **本批新出现的 9 条**（作者的 `packaging-business-parts-must-come-from-all-drawing-evidence`，另批实现）。
+
+未 push / MR / tag / Release / 部署，未连 PG、未起服务。

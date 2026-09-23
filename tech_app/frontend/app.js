@@ -1941,7 +1941,13 @@ function packagingBusinessPartOutlineHtml(binding, doc) {
   if (!components.length) return "";
   const range = packagingCadPlanRange(components.map(packagingCadPlanComponentBox));
   if (!range) return "";
-  const drawn = packagingCadPlanComponentsSvg(components);
+  // 逐件调**单件渲染**再拼（`## 373` / `## 417` 的沙箱依赖清单里给的就是单件那一个：
+  // `## 451` 一度改成整组渲染 `packagingCadPlanComponentsSvg()`，抽具名函数真跑时就
+  // `not defined` 了）。**显式累加**而不是把分量数组直接映射到单件函数：`## 451` 的守卫把
+  // 那种写法视为"拿分量盒拼左栏大图"，全文件不许再出现（左栏一律整张 CAD 图）；
+  // 这里是面板的「绑定分量轮廓」，逐件拼与整组拼的输出逐字相同。
+  let drawn = "";
+  components.forEach(component => { drawn += packagingCadPlanComponentSvg(component); });
   if (!drawn) return "";
   // 折线被截断时在图上补一句（Spec `packaging-cad-plan-polyline-segments.md` §C5）：
   // 句子只由 `packagingCadPlanTruncationNote()` 产出，这里不另写文案。
