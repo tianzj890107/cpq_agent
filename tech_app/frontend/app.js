@@ -3004,12 +3004,55 @@ function packagingBusinessPartsSourceLabel(doc) {
   return derived ? "从图纸推导（待人工确认）" : "来自权威清单";
 }
 
+/* ---------------- 业务部件的事实档三档（Spec packaging-business-truth-state-disclosure.md §2.6） ----------------
+   三档**怎么判**只在解析器里（`packaging_business_part_resolver.TRUTH_STATES`）：页面只照 payload 说，
+   不猜、也绝不把"没给档位"渲染成"图上识别"。两条都是纯函数（体内无 DOM / 全局 / 网络调用）。 */
+function packagingBusinessPartTruthLabel(truthState) {
+  const state = (truthState === null || truthState === undefined) ? "" : String(truthState).trim();
+  if (state === "observed") return "图上识别";
+  if (state === "inferred") return "规则纠名（推断）";
+  if (state === "pending_confirmation") return "结构规则补件（待确认）";
+  return "";
+}
+
+// 三档那一行（`识别 a · 推断 b · 待确认 c`）：三个分子都取 payload 的真值 —— 先看
+// `summary.stats.truth_state_counts`，老载荷回落到扁平的三个 `*_total`。合计为 0 就回空串
+// （工作簿来源的清单没有这三档，不许凭空显示一行"识别 0 / 推断 0 / 待确认 0"）。
+function packagingBusinessTruthLine(doc) {
+  const body = (doc && typeof doc === "object") ? doc : {};
+  const summary = (body.summary && typeof body.summary === "object") ? body.summary : {};
+  const stats = (summary.stats && typeof summary.stats === "object") ? summary.stats : {};
+  const counts = (stats.truth_state_counts && typeof stats.truth_state_counts === "object")
+    ? stats.truth_state_counts : {};
+  const num = value => {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
+  };
+  const pick = (state, flat) => num(counts[state] === undefined ? stats[flat] : counts[state]);
+  const observed = pick("observed", "observed_total");
+  const inferred = pick("inferred", "inferred_total");
+  const pending = pick("pending_confirmation", "pending_confirmation_total");
+  if (!observed && !inferred && !pending) return "";
+  return `识别 ${observed} · 推断 ${inferred} · 待确认 ${pending}`;
+}
+
 function renderPackagingBusinessTree(tree, rows) {
   const head = document.createElement("div");
   head.className = "packaging-business-head";
   head.dataset.qqBusinessParts = "1";
   head.textContent = `业务部件 ${rows.length} 件（${packagingBusinessPartsSourceLabel(currentPackagingBusinessParts)}）`;
   tree.appendChild(head);
+  // 三档那一行（Spec `packaging-business-truth-state-disclosure.md` §2.6）：文案来自 payload，
+  // 空串（工作簿来源 / 老载荷）时这一行整块不出现。
+  const truthLine = packagingBusinessTruthLine(currentPackagingBusinessParts || {});
+  if (truthLine) {
+    const truth = document.createElement("div");
+    truth.className = "packaging-truth-line";
+    // 属性名写字面量（同 `data-qq-authority-skip` 的约定）：现场 grep 得到"这一行是哪来的"。
+    truth.setAttribute("data-qq-truth-line", "1");
+    truth.textContent = truthLine;
+    tree.appendChild(truth);
+  }
   // 权威清单的披露（Spec `packaging-authority-disclosure-on-read.md` §C5）：部件图归属与
   // 被跳过的行必须看得见 —— 跳过的行里可能有"影响报价"的客户原话。纯文本渲染，不拼 HTML。
   const disclosures = packagingAuthorityDisclosureLines(currentPackagingBusinessParts || {});
@@ -3038,10 +3081,16 @@ function renderPackagingBusinessTree(tree, rows) {
     line.addEventListener("click", () => openPackagingBusinessPart(code));
     const size = packagingBusinessPartSizeText(row);
     const material = String(((row.authority || {}).material_text) || "");
+    // 事实档标签（Spec `packaging-business-truth-state-disclosure.md` §2.6）：逐值由 payload 的
+    // `truth_state` 决定；空串 / 缺键的行**不**加属性、也不加这一行。
+    const truthState = String(row.truth_state || "").trim();
+    const truthLabel = packagingBusinessPartTruthLabel(truthState);
+    if (truthLabel) line.setAttribute("data-qq-truth-state", truthState);
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
       + `<div class="part-name">${esc(code)} ${esc(String(row.name || ""))}</div>`
       + `<div class="part-meta">${esc(size)}${material ? " · " + esc(material) : ""}</div>`
-      + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`;
+      + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`
+      + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "");
     tree.appendChild(line);
   });
 }

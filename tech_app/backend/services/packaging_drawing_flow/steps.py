@@ -396,7 +396,12 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
                     "partial_total", "ambiguous_total", "unbound_total",
                     "geometry_component_total", "derived_from_drawing", "gold_standard_used",
                     "refused_sources", "name_anchor_total", "excluded_anchor_total",
-                    "parts_with_size_total", "parts_with_drawing_ref_total")
+                    "parts_with_size_total", "parts_with_drawing_ref_total",
+                    # 事实档三档（Spec `packaging-business-truth-state-disclosure.md` §2.4）：
+                    # 跑完这一次就要能说出"图上识别几件 / 规则纠名几件 / 结构规则补件几件"，
+                    # 不必等页面再读一次接口。值取解析器 detail 的同名键（判定仍在解析器里）。
+                    "truth_state_counts", "observed_total", "inferred_total",
+                    "pending_confirmation_total")
                    if key in resolved})
     if str(detail.get("authority_source")) != "dwg":
         # 连推导都做不出来（这张图上没有可用的名称锚点）：**不落库**，只把件数与来源报出去

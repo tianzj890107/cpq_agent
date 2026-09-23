@@ -3208,6 +3208,11 @@ BUSINESS_BINDING_STATUSES = ("bound", "partial", "unbound", "ambiguous")
 #: 绑定来源闭集：自动判定 / 人工确认（人工的覆盖自动的，且必须留痕）。
 BUSINESS_BINDING_BY = ("deterministic", "manual")
 
+#: 业务部件的「事实档」闭集（Spec `packaging-business-truth-state-disclosure.md` §2.3）：
+#: 与 `packaging_business_part_resolver.TRUTH_STATES` **逐字相同** —— 判定只有那一处
+#: （视图方向规则 / 结构规则），本模块只负责把它搬上文档行、数出三档计数。
+BUSINESS_TRUTH_STATES = ("observed", "inferred", "pending_confirmation")
+
 #: 缺权威清单的稳定缺口码与文案（Spec §2 第 5 条 / §8 第 1 条）。
 BUSINESS_PARTS_MISSING = "business_parts_missing"
 BUSINESS_PARTS_MISSING_MESSAGE = "已识别几何区域 %d 个，尚未形成业务部件清单"
@@ -3663,6 +3668,8 @@ def business_parts_document(authority: Any, geometry: Any, *,
     thumb_by_ref = thumbnails_doc.get("by_ref") if isinstance(
         thumbnails_doc.get("by_ref"), dict) else {}
     business_parts: List[Dict[str, Any]] = []
+    # 图纸来源的清单缺档位时兜 `observed`（解析器自己就是这么兜的）；工作簿来源的一律 `""`。
+    derived_default = "observed" if bool(authority_doc.get("derived_from_drawing")) else ""
     for index, row in enumerate(rows, start=1):
         code = _text(row.get("business_part_code"))
         if not code:
@@ -3677,6 +3684,10 @@ def business_parts_document(authority: Any, geometry: Any, *,
         business_parts.append({
             "business_part_code": code,
             "name": _text(row.get("name")),
+            # 事实档（Spec `packaging-business-truth-state-disclosure.md` §2.1）：三档判定仍在
+            # 解析器里，这里只搬运。**不是**从图纸推导的清单给 `""` —— 那种行没有
+            # "识别 / 推断 / 待确认"可言，不许伪称"图上识别"。
+            "truth_state": _business_truth_state(row, derived_default),
             # 件级权威资料（Spec `packaging-authority-disclosure-on-read.md` §C2）：既有 13 键
             # 逐字留，另加导入器早就有、以前被丢掉的 `thumbnail_refs` / `thumbnail_source` /
             # `group_hint`（部件图归属是"按顺序推定"还是"按锚点行"，只有这里说得出来）。
@@ -3729,10 +3740,27 @@ def _fallback_business_code(authority_doc: Dict[str, Any], index: int) -> str:
     return BUSINESS_PART_CODE_FORMAT % (prefix, index)
 
 
+def _business_truth_state(row: Any, derived_default: str = "") -> str:
+    """权威行的 `truth_state` → 文档行上的档位（Spec §2.1）。
+
+    闭集内的值逐字照抄；闭集外 / 没给 ⇒ 走 `derived_default`（图纸来源是 `observed`，
+    工作簿来源是 `""`）。纯函数，不抛异常。
+    """
+    state = _text(row.get("truth_state")) if isinstance(row, dict) else ""
+    if state in BUSINESS_TRUTH_STATES:
+        return state
+    return derived_default if derived_default in BUSINESS_TRUTH_STATES else ""
+
+
 def business_parts_stats(business_parts: Any) -> Dict[str, Any]:
-    """业务部件五笔账（Spec §2 `stats`）：`part_total = 0` 时全 0，不返回 null。"""
+    """业务部件五笔账（Spec §2 `stats`）+ 事实档三档计数：`part_total = 0` 时全 0，不返回 null。
+
+    三档计数按 `packaging-business-truth-state-disclosure.md` §2.2：键**必须都在**（缺的给 `0`，
+    不许 `null`）、三档之和 ≤ `business_part_total`（闭集外的行只进总件数）、既有五笔账取值不变。
+    """
     rows = [row for row in (business_parts or []) if isinstance(row, dict)]
     counts = {key: 0 for key in BUSINESS_BINDING_STATUSES}
+    truth = {key: 0 for key in BUSINESS_TRUTH_STATES}
     for row in rows:
         binding = row.get("geometry_binding") if isinstance(row.get("geometry_binding"), dict) else {}
         status = _text(binding.get("status"))
@@ -3740,9 +3768,16 @@ def business_parts_stats(business_parts: Any) -> Dict[str, Any]:
             counts[status] += 1
         else:
             counts["unbound"] += 1
+        state = _text(row.get("truth_state"))
+        if state in truth:
+            truth[state] += 1
     return {"business_part_total": len(rows), "bound_total": counts["bound"],
             "partial_total": counts["partial"], "unbound_total": counts["unbound"],
-            "ambiguous_total": counts["ambiguous"]}
+            "ambiguous_total": counts["ambiguous"],
+            "truth_state_counts": dict(truth),
+            "observed_total": truth["observed"],
+            "inferred_total": truth["inferred"],
+            "pending_confirmation_total": truth["pending_confirmation"]}
 
 
 def business_parts_gap(geometry: Any = None) -> Dict[str, Any]:

@@ -19955,3 +19955,70 @@ tests.test_packaging_business_parts_outline_bbox_link_red / wine truth / 28-part
 - 不碰 `\U+XXXX` 解码（IR 层 `normalize_text()` 的活；真样本 `raw_text` 里没有这种转义）、不碰图层名；
 - 未改 `packaging_parts.py` / BOM / 成本 / 门禁 / 前端；未新增依赖；未起服务、未连 PG / 34、
   未写业务数据；未 push / MR / tag / Release / 部署。
+
+## 476. 业务部件的「识别 / 推断 / 待确认」三档走到读接口与页面：解析器早就分好了三档，读接口一个字不带、页面一个字不显示（22 OK；红基 16 FAIL + 2 ERROR）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+`## 474` 收尾时按 `packaging-dwg-generalization-and-downstream-trust.md` §8.4 的挂账逐条复核，确认
+§7 最后一条（页面和 API 如实展示识别、推断、待确认及下游可用覆盖率）**一件事都没落地**：
+三档的判定与计数（`## 466`）只活在 `packaging_business_part_resolver.resolve_business_parts()` 的
+返回值里 —— `packaging_parts.business_parts_document()` 的行形状是**固定五键**
+（`business_part_code` / `name` / `authority` / `geometry_binding` / `thumbnail`），不带 `truth_state`；
+`summarize_business_parts()` 没有三档计数；流程 `detail` 的复制清单没有三档；
+`tech_app/frontend/app.js` 全文 **0 处** `truth_state`。
+
+后果：页面上「从图纸推导（待人工确认）」是一句笼统提示 —— 客户看不出**哪几件是图上有的、哪几件是
+结构规则补出来的**，而真样本里补出来的恰好是 `内卡` / `磁铁` 这两件采购件（最不该被当成"图纸识别"）。
+
+### 二、改了什么（3 个生产文件）
+
+- `tech_app/backend/services/packaging_parts.py`：新增闭集常量 `BUSINESS_TRUTH_STATES`（与
+  `packaging_business_part_resolver.TRUTH_STATES` 逐字相同）+ 纯函数 `_business_truth_state()`；
+  `business_parts_document()` 的行新增 `truth_state`（图纸来源逐字照抄、缺档位兜 `observed`；
+  **工作簿来源给 `""`**，不许伪称"图上识别"）；`business_parts_stats()` 新增
+  `truth_state_counts`（三档键都在）+ `observed_total` / `inferred_total` /
+  `pending_confirmation_total`（文档 `stats` 与 `summarize_business_parts()` 因此一起有）。
+- `tech_app/backend/services/packaging_drawing_flow/steps.py`：`_resolve_business_parts()` 的复制清单
+  +4 个键 —— 跑完那一次就能说出三档，不必等页面再读一次接口。
+- `tech_app/frontend/app.js`：新增两条纯函数 `packagingBusinessPartTruthLabel(truth_state)`
+  （`observed`→`图上识别` / `inferred`→`规则纠名（推断）` / `pending_confirmation`→`结构规则补件（待确认）` /
+  其余→`""`）与 `packagingBusinessTruthLine(doc)`（`识别 a · 推断 b · 待确认 c`，合计为 0 回 `""`）；
+  业务部件树上多一行 `data-qq-truth-line`，每一行按档位加 `data-qq-truth-state` 与标签（空档不加）。
+
+三档**怎么判**仍只在解析器里（视图方向规则 / 结构规则同一字未改），本批只搬运与显示。
+
+### 三、为什么不算放宽 + 反向对照
+
+- 「下游可用覆盖率」**不新造**：本机复核实测，`packaging_parts.summarize()` 早就有
+  `processable_total` / `processable_ratio` / `solid_ok_ratio`，页面也早有
+  `packagingSolidCoverageText()` 的「3D 覆盖率 …%（k/n 件可挤出）」；红测只钉"它们仍可从读载荷取到"；
+- 反向对照（本机实测）：
+
+```text
+红基（三个生产文件还原成 HEAD）：Ran 22 … FAILED (failures=16, errors=2)
+    18 红 = A1/A2/A3/A5（行上没档位）+ B1/B2/B4（没有三档计数）+ B3/B5（ERROR: KeyError —
+    断言直接读 truth_state_counts）+ C1（闭集常量还没加）+ D1 + E1/E2/E3 + F1/F2/F3/F4；
+    4 绿是护栏：A4（既有五键）、B6（既有五笔账）、C2（解析器判定不许被本批改）、E4（读接口既有披露键）
+反向对照 1（只还原 packaging_parts.py）        ⇒ Ran 22 … FAILED (failures=11, errors=2)
+反向对照 2（只去掉流程 detail 的四个键）        ⇒ D1 单条红
+反向对照 3（只把 inferred 文案改成「推断」）     ⇒ F2 单条红
+```
+
+### 四、实测复跑
+
+```text
+tests.test_packaging_business_truth_state_disclosure_red            Ran 22 … OK
+tests.test_spec_status_truth_red + test_doc_path_and_root_consistency_red + 本批   Ran 39 … OK
+全部 tests/test_packaging_*.py（161 模块，改前的那份清单）           Ran 2693 … OK (skipped=12)
+node --check tech_app/frontend/app.js                              退出码 0
+```
+
+### 五、边界（本批**未做**，如实记）
+
+- **`size_quality` 未上行走**：`packaging-wine-dwg-parts-and-downstream-truth.md` §7.4 把它与
+  `truth_state` 并列挂账，但它的下游门禁读的是 `authority.size_quality`
+  （`business_process_inputs()` / `business_cost_inputs()` 里 `_text(authority.get("size_quality"))`，
+  老载荷缺键时**不判死**）—— 往行上搬要先定"行上的值以谁为准"，那是另一份 Spec 的事；
+- 未造新的覆盖率比值、未改绑定统计与 `business_parts_id` 的生成口径、未改索引 / 路由 / 权限；
+- 未读金标、未起服务、未连 PG / 34、未写业务数据、未新增依赖；未 push / MR / tag / Release / 部署。
