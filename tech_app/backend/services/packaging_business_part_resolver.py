@@ -511,7 +511,12 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
         item["normalized"] = normalize_part_label(name)
         item["alias_version"] = ALIAS_VERSION
         anchors.append(item)
-    return anchors
+    # 遍历顺序不许决定结果（Spec `packaging-dwg-generalization-and-downstream-trust.md` §2.2 第 4 条）：
+    # 锚点按**图纸自己的稳定标识**排一遍再交出去。`entity_id` 由句柄生成（`cad_ir.blocks.entity_id_of()`），
+    # `cad_ir` 解析文本时也已按它排过；这里再排一次是为了让「调用方拿到的 IR 列表顺序」不影响任何下游判定 ——
+    # 同一件名在图上出现两次（真样本是"原图 + 镜像"两套排版），`_derived_rows()` 的"取第一条"因此有了确定含义：
+    # 取**句柄序最小**的那一条，与传进来的 `texts` 是否被倒序无关（原来是"谁先被遍历到算谁"）。
+    return sorted(anchors, key=lambda item: (_text(item.get("entity_id")), _text(item.get("raw_text"))))
 
 
 def _bbox_size(bbox: Any) -> Optional[Tuple[float, float]]:

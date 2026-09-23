@@ -19815,3 +19815,60 @@ CPQ_DWG_REAL_SAMPLES=1（12 个真样本模块）                               
 
 本批只改上述 2 个测试文件 + 2 份 Spec + 本 changelog；未改任何业务实现、未改任何期望值 / 断言、未新增
 skip；未连 PG / 34、未发 HTTP、未写业务数据、未读金标；未 push / MR / tag / Release / 部署。
+
+## 474. 落地 `packaging-dwg-generalization-and-downstream-trust`：件名在两套排版里出现两次时，代表锚点改成按图纸稳定标识取（顺序不再决定答案）（9 OK；红基 9 … FAILED (failures=1)，只红 A3）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+新红测 `tests/test_packaging_dwg_generalization_and_downstream_trust_red.py` 的红基是
+`Ran 9 … FAILED (failures=1)`：八条已经绿（生产侧无样本指纹、金标注入零影响、消融证据会降级、
+金标只做度量、`truth_state` 闭集、确认尺寸过误差线、bbox 尺寸不进工艺、面纸克重不兜灰板），
+唯一红的是 §2.2 第 4 条「实体 / 文字 / 尺寸 / 证据字典仅换遍历顺序，语义结果不变」。
+
+逐条对账后，真因不在"比较方式"，而在**同一件名出现两次时"取第一条"＝谁先被遍历到算谁**：
+真样本酒盒是"原图 + 镜像"两套排版，11 个件名各出现两次；`_derived_rows()` 取的那一条换了，
+锚点位置就换，`_assign_outlines()` 的"最近轮廓"跟着换，于是尺寸、证据类目与父子分组全部连坐。
+实测倒序后 7 处语义漂移：`内盒3衬纸` 119.9×81.0（带 `size_dimension`）→ 绑不上只剩 `text_anchor`；
+`右盖外盒外层衬板` 221.762×492.62 → 443.523×492.62（镜像锚点最近的那块轮廓跨了两件）；
+`左盖外盒外层衬板` 221.762 → 222.062；`右盖外盒里层灰板1/2` 的族名漂移成 `…里层灰板` / `…盒背灰板`。
+
+### 二、改了什么（1 个生产文件，1 处）
+
+`tech_app/backend/services/packaging_business_part_resolver.py` 的 `extract_text_anchors()`：
+返回前把锚点按**图纸自己的稳定标识**排一遍
+（`sorted(anchors, key=lambda item: (entity_id, raw_text))`；`entity_id` 由实体句柄生成，
+`cad_ir` 解析文本时本来就按它排过）。判据、半径、规则号、闭集一个字未改 ——
+变的只是"锚点以什么顺序交出去"，`_derived_rows()` 的"取第一条"从此有确定含义（句柄序最小那条）。
+
+### 三、为什么不算放宽 + 反向对照
+
+- 期望值与断言一字未改：本批**没有**碰 `tests/` 下任何文件（新红测由作者侧提供，逐字未动），也没有新增 skip；
+- plain 运行输出与改前**逐字节相同**：同一份 IR 的完整 `resolve_business_parts()` JSON（`sort_keys=True`）
+  `diff` 为空 —— 因为 `cad_ir` 本来就按 `entity_id` 排文本，这一处只是把隐含前提变成函数自己的契约；
+- 反向对照（本机实测）：还原成 `return anchors` ⇒ `Ran 9 … FAILED (failures=1)`，只红 A3；加回即 9 OK。
+
+### 四、实测
+
+```text
+tests.test_packaging_dwg_generalization_and_downstream_trust_red                 Ran 9   … OK
+wine truth + 28-part + business_part_*_red(10) + business_parts_*_red(7)          Ran 290 … OK
+（另做超出 A3 的加强验证：geometry.components 也倒序 → 语义相同；
+  6 组随机 shuffle（entities/texts/dimensions/layers/evidence/geometry.components）→ 6/6 相同）
+```
+
+### 五、本批**未做**的 Spec 条款（如实记）
+
+Spec §7 最后一条「页面与 API 如实展示识别 / 推断 / 待确认三档 + 下游可用覆盖率」**不在红测覆盖内、本批
+也未做**：本机只读核对，`truth_state` 只活在 `packaging_business_part_resolver` 的返回值里 ——
+`packaging_parts.business_parts_document()` 的行形状是固定五键、不带 `truth_state`，
+`packaging_drawing_flow/steps.py` 的 `detail` 复制清单也没有 `truth_state_counts`，前端全文没有
+`truth_state` 渲染位（现成读数在 `resolve_business_parts()["detail"]`：`truth_state_counts` /
+`inferred_total` / `pending_confirmation_total`）。改文档行形状属于「另起一批」
+（`packaging-wine-dwg-parts-and-downstream-truth.md` §7.4 已挂账），要新的红测 + 落地，本批不擅自扩面。
+
+### 六、边界
+
+未读金标进生产（金标只在测试侧对答案）、未改任何判据与规则号、未新增依赖、未起服务、未连 PG / 34、
+未写业务数据、未改前端；未 push / MR / tag / Release / 部署。Spec 头部状态行由「待实现」改成
+「已实现」（并追加 §8 落地记录），`test_spec_status_truth_red` 与 `test_doc_path_and_root_consistency_red`
+26 OK。
