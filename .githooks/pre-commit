@@ -1,0 +1,16 @@
+#!/bin/sh
+# 守卫：提交署名不许是自动化占位身份（记录见 changelog `## 482`）。
+#
+# 这些身份来自 Codex 会话的显式覆盖（`git -c user.name=Codex -c user.email=codex@local commit …`），
+# 本仓库的规范身份是 `张真 <zhangzhen@boulderaitech.com>`（`git config user.name/user.email` 已是它）。
+# 覆盖身份绕得过 config，但绕不过钩子 —— 除非 `--no-verify`，那一路由 pre-push 兜住。
+ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)"
+email="$(printf '%s' "$ident" | sed -n 's/.*<\(.*\)>.*/\1/p')"
+case "$email" in
+  codex@*|*@local|*@localhost|*@example.com)
+    echo "✗ 提交被拒：作者邮箱是自动化占位身份 <$email>。" >&2
+    echo "  请用规范身份提交（不要再用 -c user.email=codex@local 之类的覆盖）。" >&2
+    exit 1
+    ;;
+esac
+exit 0

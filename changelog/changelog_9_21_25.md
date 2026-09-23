@@ -20462,3 +20462,54 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 解析层 `## 453` 闭集（`RUNTIME_REFUSED_SOURCES` / `AUTHORITY_SOURCES` / `gold_standard_used` /
   `DEFAULT_SEED_PATH`）、几何与业务部件身份、成本公式与费率、规则 JSON 一个字未动；
 - 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；未 push / 未建 MR / 未 tag / 未 Release / 未部署。
+
+## 482. 署名治理：`ytbz` 线上 139 条 `Codex <codex@local>` / `Codex <codex@boulderaitech.com>` 全部改写为规范身份，并加两道守卫（9-23）
+
+用户原话：
+
+> 现在 gitlab 上怎么会有这么多推送署名是 codex@local 和 codex@boulderaitech.com，这不对
+> 之前的那些署名也都要修改
+> 不要让 gitlab 上显示这种东西
+
+### 事实（改写前实测）
+
+- 本仓库/全局 git 身份本来就是 `张真 <zhangzhen@boulderaitech.com>`；
+- 两串署名来自会话的**显式覆盖**：`git -c user.name=Codex -c user.email=codex@local commit …`
+  （日志里逐字可见）。它们是**两个不同身份**，不是同一个的重复：
+  `codex@local` 137 条（9-21 → 9-23）+ `codex@boulderaitech.com` 2 条（9-20 / 9-21），显示名都叫 `Codex`；
+- 范围只在 `ytbz` 这条线上（`ytbz` = `gitlab/ytbz` = `origin/ytbz`），`master` / `20260909` / `main` 干净。
+
+### 处置（用户当轮明确授权改写历史）
+
+- 备份：`git clone --mirror` + `git bundle --all` 存到 `/Users/sher/Boulderaitech/backup_cpq_agent_20260923-154504`
+  （93M，`ytbz` 指针 = 改写前 `3c59596`）；`filter-branch` 的 `refs/original/refs/heads/ytbz` 保留可回滚；
+- 改写：`git filter-branch --env-filter` 只覆盖 `ytbz` 可达提交，把
+  `codex@local` / `codex@boulderaitech.com` 的**作者与提交者**一并换成 `张真 <zhangzhen@boulderaitech.com>`；
+- 校验：改写后 `ytbz` 上 codex 署名 **0** 条；提交数 474 → 474；`git log --format=%T` 逐条 tree 比对
+  `TREES_IDENTICAL`；`git diff 旧tip 新tip` 为空 —— **内容一字未变，只改署名**；
+- 推送：双远端 `--force-with-lease`（GitLab / GitHub 回读同为 `ecbbc9d`）；
+- 34：先 `git fetch gitlab ytbz` + `git reset --hard FETCH_HEAD`（改写后不能快进，部署脚本按纪律拒绝非快进），
+  再按 `bash scripts/deploy_34_bare.sh ytbz` 重新部署。
+
+### 34 复验（2026-09-23）
+
+- `部署完成：ecbbc9d → ecbbc9d（ref=ytbz）`；`build.commit=ecbbc9d…`；8010 `status=ok`；启动命令行 `PATH` 含 xvfb 目录；
+- 两份真实样本真转且 `converter_role=primary` / `fallback_used=false`（酒盒 6711 实体 / 8 层，圆盘盒 3457 / 32 层）；
+- 隔离端到端自检 `verdict=ok`（两份样本八步 8/8、零件 263 / 312，两条权威实样路线 9 / 10 道 confirmed；
+  运行目录项目数 67 → 67，未写生产数据）；
+- 生产门禁 `dwg_deploy_gate.py --env production`：auto **17 ok / 0 fail**，剩 `converter_license`、
+  `real_samples_e2e_passed` 两项 **manual 待人工签字（未代签）**。
+
+### 防复发（本批新增）
+
+- `.githooks/pre-commit`：作者邮箱落在占位身份闭集（`codex@*` / `*@local` / `*@localhost` / `*@example.com`）
+  时直接拒绝提交 —— 身份覆盖绕得过 config，绕不过钩子；
+- `.githooks/pre-push`：要推的区间里只要还有占位署名（作者或提交者）就拒绝推送（`--no-verify` 那一路由它兜住）；
+- `git config core.hooksPath .githooks`（本地已设）。两条钩子本机实测：codex 身份提交被拒、旧 codex 区间推送被拒、
+  当前区间通过。
+
+### 影响与边界（如实记）
+
+- 改写后 **旧 SHA 不复存在**：changelog 里此前按旧 SHA 记的提交号（如 `3c59596` / `a102558`）只作历史事实保留，不再是当前提交；
+- 其他 clone（其他同事、34 之外的环境）**必须**重新克隆，或 `git fetch && git reset --hard origin/ytbz`；直接 `git pull` 会被拒；
+- 本次只动 `ytbz` 的署名，未改任何文件内容、未改 tag（仓库无 tag）、未改 `master` / `20260909`。

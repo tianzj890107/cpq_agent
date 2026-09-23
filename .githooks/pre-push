@@ -1,0 +1,19 @@
+#!/bin/sh
+# 守卫：要推的提交里不许出现自动化占位署名（作者或提交者；记录见 changelog `## 482`）。
+ZERO=0000000000000000000000000000000000000000
+bad=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue                 # 删除分支：没有新提交要看
+  if [ "$remote_sha" = "$ZERO" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
+  hits="$(git log --format='%h %ae %ce' "$range" 2>/dev/null \
+          | grep -Ei 'codex@|@local$|@localhost$|@example\.com' || true)"
+  [ -n "$hits" ] && bad="$bad$hits
+"
+done
+if [ -n "$bad" ]; then
+  echo "✗ 推送被拒：待推提交里有自动化占位署名（作者/提交者）：" >&2
+  printf '%s' "$bad" >&2
+  echo "  先改署名再推（例如 git filter-branch --env-filter …）；不许把占位身份强推上去。" >&2
+  exit 1
+fi
+exit 0
