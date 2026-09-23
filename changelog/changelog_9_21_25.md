@@ -18329,3 +18329,31 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `cost_red_closure_red` / `cost_rule_routing_red` / `cost_rule_snapshot_red` 一起 = OK (skipped=1)；
 真实工作簿 + 真实快照 `extract_packaging_rules.py --check` 仍 `exit_code=0`（未新增误报）。
 未改快照 JSON、未改工作簿、未改 `EXIT_*` 数值、未改既有文案，未 push / MR / tag / Release / 部署。
+
+## 441. 落地 `packaging-solids-body-unusable`：批量 3D 的"正文读不到"不再渲染成「3D 覆盖率 0%（0/0 件可挤出）」（实现落地；红测自身 2 处缺陷见下）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-solids-body-unusable.md`，红测
+`tests/test_packaging_solids_body_unusable_red.py`（8 条：V1/V2/V3/V5/V6 是纯函数用例，V4/V7/V8 是源码守卫）。
+
+- `tech_app/frontend/app.js` 新增两个顶层纯函数：
+  `packagingSolidsBatchFacts(payload)`（`available` 只认「`stats` 是对象且 `part_total` 是可解析的非负数字」，
+  可用时 `headline` 逐字 `3D 覆盖率 X%（ok/part_total 件可挤出）`，不可用时给「这一次读不到批量挤出结果…」）
+  与 `packagingSolidBodyProblemText(payload)`（`status` 不是非空字符串 → 「这一次读不到这一件的挤出结果…」，
+  有结论 → 空串）；
+- `packagingPartsSolidBatch()`：正文不可用 → `status(facts.message)` + `{ok:false, error:{code:"solids_body_unexpected"}}`，
+  删掉 `Number(stats.solid_ok_ratio) || 0` 那种「缺就是 0」的渲染；可用路径（`await refreshPackagingParts()`、
+  `status(facts.headline)`、`return { ok: true, result: payload }`）逐字不变；
+- `packagingPartSolidPreview()`：新增正文不可用分支；`packagingPartSolidReason()`、「正在计算 3D 挤出体…」、
+  `loadSTL(…)` 三条既有路径一字未动；后端与 `PACKAGING_SOLID_COPY` 未改；`node --check app.js` 通过。
+
+**红测自身两处缺陷（实现无法绕过，需测试侧改 2 行；不许改 `tests/`，因此这 5 条在仓库里仍红）**：
+① `call_pure()` 传的是**取值表**（`[{}, null, "nope", [], 0]`），而 `EXTRACT_JS` 要的是**实参表**
+（`args.map(…)`）→ `{}.map is not a function`，抛在 `try` 之外，这 5 条只会得到「node 执行失败」；
+② V1 的断言消息 `"…「3D 覆盖率 …%」这句：%r" % value` 里 `%` 后面跟中文引号 → 构造消息时
+`ValueError: unsupported format character`，**先于**断言求值。
+证据：在 `/tmp` 放一份临时副本、把 `call_pure()` 包一层 `[[c] for c in cases]` 后，本批实现下 **7/8 绿**
+（只剩 V1 的 `ValueError`）；仓库未改前这 5 条同样是红 —— **本批没有把任何一条已绿的改红**。
+
+实跑：`node --check tech_app/frontend/app.js` 通过；`test_packaging_parts_solid_coverage_red` +
+`test_packaging_solids_parts_version_binding_red` = `Ran 29 OK`。
+未改后端、未改任何既有测试、未放宽任何断言、未起服务、未连 PG / 34、未 push / MR / tag / Release / 部署。

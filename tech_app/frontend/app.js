@@ -1446,6 +1446,17 @@ function packagingPartSolidReason(reason) {
   return PACKAGING_SOLID_COPY[String(reason || "")] || "";
 }
 
+// 单件 3D 正文可用性（纯函数，Spec `packaging-solids-body-unusable.md` §2.2）：
+// `res.ok` 只说明 HTTP 成功 —— 网关 HTML / 空正文时 `status` 是空的，那不是"这一件挤不出来"，
+// 而是"这一次没读到"。有结论（ok / unsupported / 别的）→ 空串，结论仍由既有路径渲染。
+function packagingSolidBodyProblemText(payload) {
+  const doc = (payload && typeof payload === "object") ? payload : {};
+  const status = typeof doc.status === "string" ? doc.status.trim() : "";
+  return status
+    ? ""
+    : "这一次读不到这一件的挤出结果（正文里没有结论），请稍后重试；这不代表这一件挤不出来。";
+}
+
 // 3D 预览：先让后端现算一版（unsupported 也是结论），再复用 loadSTL 把它画出来。
 async function packagingPartSolidPreview() {
   const part = currentSelectedPanelPart;
@@ -1470,6 +1481,11 @@ async function packagingPartSolidPreview() {
     const message = String((error && error.message) || error);
     notePackagingPartSolid(message);
     return { ok: false, error: { code: "solid-failed", message: message } };
+  }
+  const bodyProblem = packagingSolidBodyProblemText(payload);
+  if (bodyProblem) {
+    notePackagingPartSolid(bodyProblem);
+    return { ok: false, error: { code: "solid_body_unexpected", message: bodyProblem } };
   }
   if (String(payload.status || "") !== "ok") {
     const message = packagingPartSolidReason(payload.reason)
@@ -2139,6 +2155,31 @@ function packagingPartSolidStaleText(part) {
 
 // 整份零件文档一次算完：POST .../requirement/packaging-parts/solids。
 // 单件 unsupported 是结论不是错误（后端回 200），跑完把左栏与覆盖率一起刷新。
+// 批量 3D 正文可用性（纯函数，Spec `packaging-solids-body-unusable.md` §2.1）：
+// 正文不可用时**不许**按"0 件可挤出"渲染 —— `part_total` 是"这批一共几件"的唯一来源，
+// 读不到就是读不到（分母为 0 的"0%（0/0）"看起来完全像一个合法结论）。
+function packagingSolidsBatchFacts(payload) {
+  const doc = (payload && typeof payload === "object" && !Array.isArray(payload)) ? payload : {};
+  const stats = (doc.stats && typeof doc.stats === "object" && !Array.isArray(doc.stats))
+    ? doc.stats : null;
+  const raw = stats ? stats.part_total : undefined;
+  const total = (typeof raw === "number" || (typeof raw === "string" && raw.trim() !== ""))
+    ? Number(raw) : NaN;
+  if (!stats || !isFinite(total) || total < 0) {
+    return { available: false, ok_total: 0, part_total: 0, ratio: 0, unsupported_total: 0,
+             headline: "",
+             message: "这一次读不到批量挤出结果（正文里没有覆盖率），请稍后重试；"
+               + "这不代表一件都挤不出来。" };
+  }
+  const ok = Number(stats.ok_total) || 0;
+  const ratio = Number(stats.solid_ok_ratio) || 0;
+  const unsupported = Number(stats.unsupported_total) || 0;
+  return { available: true, ok_total: ok, part_total: total, ratio: ratio,
+           unsupported_total: unsupported,
+           headline: `3D 覆盖率 ${Math.round(ratio * 100)}%（${ok}/${total} 件可挤出）`,
+           message: "" };
+}
+
 async function packagingPartsSolidBatch() {
   if (!currentProject) return { ok: false, error: { code: "no-project", message: "还没有打开项目。" } };
   status("正在批量计算 3D 挤出体…", true);
@@ -2157,10 +2198,14 @@ async function packagingPartsSolidBatch() {
     status(message);
     return { ok: false, error: { code: "solids-failed", message: message } };
   }
+  const facts = packagingSolidsBatchFacts(payload);
+  if (!facts.available) {
+    status(facts.message);
+    return { ok: false, error: { code: "solids_body_unexpected", message: facts.message } };
+  }
   await refreshPackagingParts();
-  const stats = (payload && payload.stats) || {};
-  status(`3D 覆盖率 ${Math.round((Number(stats.solid_ok_ratio) || 0) * 100)}%`
-    + `（${stats.ok_total || 0}/${stats.part_total || 0} 件可挤出）`);
+  // 可用正文才渲染「3D 覆盖率 …%」这句（逐字由 packagingSolidsBatchFacts().headline 给出）。
+  status(facts.headline);
   return { ok: true, result: payload };
 }
 
