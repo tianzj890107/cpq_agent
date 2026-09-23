@@ -46,6 +46,41 @@ DERIVED_STATUSES = ("derived", "partial", "unbound")
 #: 图纸证据块的类型闭集（Spec §2.2）。
 DRAWING_REF_KINDS = ("geometry_evidence", "part_view", "none")
 
+#: 推件用到的**证据类别**闭集（`## 458` Spec §3.1 第 1 条）：文字只是其中一类。
+EVIDENCE_KINDS = ("text_anchor", "geometry_region", "size_dimension", "leader_callout",
+                  "block_attribute", "layer_role", "spatial_relation", "repetition_mirror")
+
+#: 名称锚点 ↔ 部件轮廓的配对半径（mm）：真样本酒盒实测 27 个唯一件名全部在 650mm 内
+#: 找到自己那块轮廓（最远 506mm），再放大就跨到邻件上。
+OUTLINE_MATCH_RADIUS_MM = 650.0
+
+#: 一条"像零件"的轮廓下限（Spec §3.1：几何轮廓是主证据之一，但不是任何一条碎线都能当件）。
+#: 真样本酒盒 1163 个连通分量里绝大多数是标注引线/图框碎片（边长 0.00mm），过滤后 261 条。
+MIN_OUTLINE_SIDE_MM = 5.0
+MIN_OUTLINE_AREA_MM2 = 2000.0
+MIN_OUTLINE_ENTITIES = 2
+
+#: 分组判定（Spec §3.3）：只有"父子分组"的成员轮廓要这么"像一件"，避免把碎片算成成员。
+GROUP_MEMBER_MIN_AREA_MM2 = 10000.0
+
+#: 尺寸标注矩形 ↔ 轮廓的相符容差（与 `packaging_match` 同口径量级）。
+CONFIRM_TOLERANCE_MM = 2.0
+
+#: 方向词（Spec §3.3 第 3 条）：**镜像类**方向词才参与父子分组判定（左/右、上/下、前/后）；
+#: `内盒N` 这类序号由 `_position_token()` 与方向词一起构成族键，独立成族。
+MIRROR_DIRECTIONS = ("左盖", "右盖", "左盒", "右盒", "左", "右", "上", "下", "前", "后")
+
+#: 族键 = （方向词/容器词，部件尾词）；`内盒1灰板` 与 `内盒2灰板` 靠序号分开。
+_POSITION_TOKEN = re.compile(r"^(左盖|右盖|左盒|右盒|顶托|底托|内盒\d+|左|右|上|下|前|后|内|外)")
+
+#: 证据面口径是版本化的（Spec §3.1：证据类别闭集与配对规则一起演进）。
+EVIDENCE_VERSION = "packaging-business-parts-evidence/1"
+
+#: 稳定原因码（Spec §3.2 第 2 条：拿不到证据的件必须逐件留痕，不许静默少报）。
+REASON_NO_OUTLINE = "no_outline_evidence"
+REASON_SIZE_UNKNOWN = "outline_size_unknown"
+REASON_UNLABELED_OUTLINE = "outline_without_name_anchor"
+
 #: 名称锚点落在几何区域上的容差（mm）：锚点文字压着轮廓线是常态。
 ANCHOR_TOLERANCE_MM = 1.0
 
@@ -209,12 +244,41 @@ def _split_segments(text: Any) -> List[str]:
     return [segment.strip() for segment in body.split(_SEGMENT_SEP)]
 
 
+#: 半角/全角冒号后的"规格串"（`底板:2.5MM灰板`）——`## 453` §2.4 只覆盖了全角 `名称：…\P材料：…`。
+_COLON_SPEC = re.compile(r"^\s*\d+(?:\.\d+)?\s*(?:mm|MM|g|G|克|度|张|层)")
+
+#: 冒号后面出现这些词，也判成材料（`底盒底板灰板内衬裱卡：衬纸250g白卡裱1200g双灰`）。
+MATERIAL_HINTS = ("灰板", "衬纸", "面纸", "裱卡", "白卡", "粉灰", "双灰", "铜版", "单粉",
+                  "哑胶", "牛皮", "纸", "卡纸", "EVA", "磁铁", "坑")
+
+
+def _looks_like_material(tail: str) -> bool:
+    """冒号后的那半段是不是材料/规格（是 → 前半段才是件名）。"""
+    body = _text(tail)
+    if not body:
+        return False
+    if _COLON_SPEC.match(body):
+        return True
+    return any(hint in body for hint in MATERIAL_HINTS)
+
+
 def _cut_material_marker(segment: str) -> Tuple[str, str]:
-    """段内 `材料：X` / `材质 X` / `规格:Y` → `(标记之前, 标记之后)`（没有标记就原样返回）。"""
+    """段内 `材料：X` / `材质 X` / `规格:Y` / `件名:材料` → `(标记之前, 标记之后)`。
+
+    `## 458` 补上了**冒号直连**那种写法（真样本 `底板：2.5MM灰板` / `底板面纸：225G铜版底PET光银`）：
+    冒号前的半段是件名、后半段像材料/规格，才拆；不像材料（`盒型：YT-RB-01`）就原样保留。
+    """
     for marker in MATERIAL_MARKERS:
         at = segment.find(marker)
         if at >= 0:
             return segment[:at], segment[at + len(marker):]
+    for colon in ("：", ":"):
+        at = segment.find(colon)
+        if at <= 0:
+            continue
+        head, tail = _text(segment[:at]), _text(segment[at + 1:])
+        if head and tail and _looks_like_material(tail):
+            return head, tail
     return segment, ""
 
 
@@ -316,9 +380,23 @@ def _exclusion_reason(raw: Any, name: Any, layer: Any = "") -> str:
         return "annotation_or_frame"
     if not _CJK.search(name_text):
         return "not_a_name_anchor"
+    if len(_squeeze(name_text)) < 2:
+        # 真样本里的 `刀`：一个字的整词是刀模标记/碎片，不是件名（Spec §2「多件」清单第 1 条）。
+        return "single_character_label"
     if _SPEC_LIKE.match(name_text):
         return "spec_like_text"
     return ""
+
+
+def _is_excluded_layer(layer: Any) -> bool:
+    """只判**图层名**（`图框`/`TITLE`/`DEFPOINTS` …）。
+
+    为什么单独来一条：`_is_excluded_text("", layer)` 会因为"空文本没有汉字"而对**任何**图层
+    返回 True（真样本 1163 个分量因此全被 marked 成 `annotation_or_frame`）。只判图层名才
+    是这条规则的本意。
+    """
+    upper = _text(layer).upper()
+    return any(hint.upper() in upper for hint in EXCLUDED_LAYER_HINTS)
 
 
 def _is_excluded_text(text: Any, layer: Any = "") -> bool:
@@ -377,12 +455,96 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
     return anchors
 
 
-def build_geometry_regions(cad_ir: Any) -> List[Dict[str, Any]]:
-    """CAD IR → 部件区域（Spec §2.3）：一个区域可以包含多个分量/图元。
+def _bbox_size(bbox: Any) -> Optional[Tuple[float, float]]:
+    """包围盒 → `(长, 宽)`（都是非负；拿不到就 None）。"""
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    try:
+        return abs(float(bbox[2]) - float(bbox[0])), abs(float(bbox[3]) - float(bbox[1]))
+    except (TypeError, ValueError):
+        return None
 
-    分量来自 IR 的 `geometry.components`（连通分量），区域即"一个分量及其图元集合"。
-    图框 / 标题栏 / 图例 / 尺寸线不进部件区域 —— 它们没有可制造曲线时分量本身就已被剔除，
-    这里再按图层名挡一道并留痕 `annotation_or_frame`。
+
+def _bbox_center(bbox: Any) -> Optional[List[float]]:
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    try:
+        return [(float(bbox[0]) + float(bbox[2])) / 2.0, (float(bbox[1]) + float(bbox[3])) / 2.0]
+    except (TypeError, ValueError):
+        return None
+
+
+def _region_center(region: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    center = region.get("center")
+    if isinstance(center, (list, tuple)) and len(center) >= 2:
+        try:
+            return float(center[0]), float(center[1])
+        except (TypeError, ValueError):
+            return None
+    fallback = _bbox_center(region.get("bbox"))
+    return (fallback[0], fallback[1]) if fallback else None
+
+
+def _region_area(region: Dict[str, Any]) -> float:
+    area = _num(region.get("area_mm2"))
+    length, width = _region_size(region)
+    if area is None and length is not None and width is not None:
+        area = length * width
+    return float(area or 0.0)
+
+
+def _is_substantial(region: Dict[str, Any]) -> bool:
+    """这条轮廓像不像"一件东西"（Spec §3.1：几何轮廓是主证据之一）。
+
+    真样本酒盒 1163 个连通分量里绝大多数是引线/图框碎片：边长 0.00mm、面积 0、只含 1 个图元。
+    过不了这道门的分量**只做位置参考，不当候选件**。
+    """
+    if region.get("excluded"):
+        return False
+    length, width = _region_size(region)
+    if length is None or width is None:
+        return False
+    if min(length, width) < MIN_OUTLINE_SIDE_MM:
+        return False
+    if length * width < MIN_OUTLINE_AREA_MM2:
+        return False
+    return int(region.get("entity_total") or 0) >= MIN_OUTLINE_ENTITIES
+
+
+def _region_record(region_id: str, component_ids: Any, entity_ids: Any, bbox: Any,
+                   length: Any, width: Any, layers: Any, area: Any,
+                   outline_status: Any = None, excluded: str = "") -> Dict[str, Any]:
+    """一条轮廓的规范形状（IR 分量与几何零件文档两条来源共用一份）。"""
+    size = _bbox_size(bbox)
+    record: Dict[str, Any] = {
+        "region_id": _text(region_id),
+        "component_ids": [_text(value) for value in (component_ids or []) if _text(value)],
+        "entity_ids": [_text(value) for value in (entity_ids or []) if _text(value)],
+        "entity_total": len(entity_ids or []),
+        "bbox": list(bbox) if isinstance(bbox, (list, tuple)) and len(bbox) >= 4 else None,
+        "center": _bbox_center(bbox),
+        "layers": [_text(value) for value in (layers or []) if _text(value)],
+        "area_mm2": _num(area),
+        "outline_status": _text(outline_status),
+    }
+    if size is not None:
+        record["length_mm"], record["width_mm"] = size[0], size[1]
+    else:
+        record["length_mm"], record["width_mm"] = _num(length), _num(width)
+    if not record["component_ids"]:
+        record["component_ids"] = [record["region_id"]] if record["region_id"] else []
+    if excluded:
+        record["excluded"] = excluded
+    record["substantial"] = _is_substantial(record)
+    return record
+
+
+def build_geometry_regions(cad_ir: Any) -> List[Dict[str, Any]]:
+    """CAD IR → 部件区域（Spec §2.3/§3.1）：一个区域 = 一个连通分量及其图元集合。
+
+    分量来自 IR 的 `geometry.components`；图框 / 标题栏 / 图例自带 `annotation_or_frame` 留痕。
+    每条区域都带上 `center`（配对用）、`area_mm2` 与 `substantial`（像不像一件，见
+    `_is_substantial()`）——**位置**是"这条名称锚点压在哪一块轮廓上"的判据。
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
     geometry = ir.get("geometry") if isinstance(ir.get("geometry"), dict) else {}
@@ -397,22 +559,20 @@ def build_geometry_regions(cad_ir: Any) -> List[Dict[str, Any]]:
         entity_ids = [_text(value) for value in (component.get("entity_ids") or []) if _text(value)]
         layers = sorted({_text((by_id.get(eid) or {}).get("layer"))
                          for eid in entity_ids if _text((by_id.get(eid) or {}).get("layer"))})
-        frame_only = bool(layers) and all(_is_excluded_text("", layer) for layer in layers)
-        region = {
-            "region_id": "region:%s" % (_text(component.get("component_id")) or index),
-            "component_ids": [_text(component.get("component_id")) or str(index)],
-            "entity_ids": entity_ids,
-            "entity_total": len(entity_ids),
-            "bbox": list(component.get("bbox") or []) or None,
-            "length_mm": _num(component.get("unfolded_length_mm")),
-            "width_mm": _num(component.get("unfolded_width_mm")),
-            "layers": layers,
-            "area_mm2": _num(component.get("area_mm2")),
-            "outline_status": _text(component.get("outline_status")),
-        }
-        if frame_only:
-            region["excluded"] = "annotation_or_frame"
-        regions.append(region)
+        frame_only = bool(layers) and all(_is_excluded_layer(layer) for layer in layers)
+        component_id = _text(component.get("component_id")) or str(index)
+        regions.append(_region_record(
+            "region:%s" % component_id,
+            [component_id],
+            entity_ids,
+            component.get("bbox"),
+            component.get("unfolded_length_mm"),
+            component.get("unfolded_width_mm"),
+            layers,
+            component.get("area_mm2"),
+            component.get("outline_status"),
+            "annotation_or_frame" if frame_only else "",
+        ))
     return regions
 
 
@@ -425,19 +585,18 @@ def regions_from_geometry_parts(geometry_parts: Any) -> List[Dict[str, Any]]:
         if not isinstance(row, dict):
             continue
         component_id = _text(row.get("component_id")) or _text(row.get("part_code"))
-        regions.append({
-            "region_id": "region:%s" % (_text(row.get("part_code")) or index),
-            "part_code": _text(row.get("part_code")),
-            "component_ids": [component_id] if component_id else [],
-            "entity_ids": [_text(value) for value in (row.get("entity_ids") or []) if _text(value)],
-            "entity_total": len(row.get("entity_ids") or []),
-            "bbox": list(row.get("bbox") or []) or None,
-            "length_mm": _num(row.get("unfolded_length_mm")),
-            "width_mm": _num(row.get("unfolded_width_mm")),
-            "area_mm2": _num(row.get("area_mm2")),
-            "layers": [_text(value) for value in (row.get("layers") or []) if _text(value)],
-            "outline_status": _text(row.get("outline_status")),
-        })
+        part_code = _text(row.get("part_code")) or str(index)
+        regions.append(_region_record(
+            "region:%s" % part_code,
+            [component_id] if component_id else [],
+            row.get("entity_ids"),
+            row.get("bbox"),
+            row.get("unfolded_length_mm"),
+            row.get("unfolded_width_mm"),
+            row.get("layers"),
+            row.get("area_mm2"),
+            row.get("outline_status"),
+        ))
     return regions
 
 
@@ -453,6 +612,93 @@ def _region_size(region: Dict[str, Any]) -> Tuple[Optional[float], Optional[floa
         except (TypeError, ValueError):
             return None, None
     return None, None
+
+
+def _dimension_point(target: Any) -> Optional[Tuple[float, float]]:
+    """`point:1501.715760,3388.310285` → `(1501.715760, 3388.310285)`。"""
+    body = _text(target)
+    if ":" not in body:
+        return None
+    body = body.split(":", 1)[1]
+    pieces = body.split(",")
+    if len(pieces) != 2:
+        return None
+    try:
+        return float(pieces[0]), float(pieces[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def dimension_rects(cad_ir: Any) -> List[Dict[str, Any]]:
+    """CAD IR 的线性标注 → "矩形"尺寸证据（Spec §3.1 的 `size_dimension`）。
+
+    真样本酒盒 316 条标注里 277 条是水平/垂直线性标注（两个 `target_entity_ids` 是两个
+    `point:x,y` 串）。一条水平（y 相等）与一条垂直（x 相等）标注若互相交成矩形
+    （竖标注的 x 落在横标注的区间里、横标注的 y 落在竖标注的区间里），就给出一个
+    `(长, 宽)` 候选 —— 这是"图上标了这个尺寸"的直接证据，与几何轮廓是**两笔独立的账**。
+    """
+    ir = cad_ir if isinstance(cad_ir, dict) else {}
+    horizontal: List[Tuple[float, float, float]] = []
+    vertical: List[Tuple[float, float, float]] = []
+    for row in (ir.get("dimensions") or []):
+        if not isinstance(row, dict) or _text(row.get("dim_type")) != "linear":
+            continue
+        targets = row.get("target_entity_ids") or []
+        if len(targets) != 2:
+            continue
+        first, second = _dimension_point(targets[0]), _dimension_point(targets[1])
+        if first is None or second is None:
+            continue
+        value = _num(row.get("measured_value"))
+        if value is None:
+            value = _num(row.get("declared_value"))
+        if value is None or value <= 0:
+            continue
+        (x1, y1), (x2, y2) = first, second
+        if abs(y1 - y2) <= 0.01 and abs(x1 - x2) > 0.01:
+            horizontal.append((min(x1, x2), max(x1, x2), y1))
+        elif abs(x1 - x2) <= 0.01 and abs(y1 - y2) > 0.01:
+            vertical.append((min(y1, y2), max(y1, y2), x1))
+    rects: List[Dict[str, Any]] = []
+    for hx0, hx1, hy in horizontal:
+        for vy0, vy1, vx in vertical:
+            if hx0 - 1.0 <= vx <= hx1 + 1.0 and vy0 - 1.0 <= hy <= vy1 + 1.0:
+                rects.append({
+                    "length_mm": abs(hx1 - hx0),
+                    "width_mm": abs(vy1 - vy0),
+                    "center": [(hx0 + hx1) / 2.0, (vy0 + vy1) / 2.0],
+                })
+    return rects
+
+
+def _sizes_match(left_length: Any, left_width: Any, right: Any) -> bool:
+    """两个尺寸是否同形（长宽可对调；容差 `CONFIRM_TOLERANCE_MM`）。"""
+    length, width = _num(left_length), _num(left_width)
+    other_length, other_width = _region_size(right) if isinstance(right, dict) else (None, None)
+    if None in (length, width, other_length, other_width):
+        return False
+
+    def _close(a: float, b: float) -> bool:
+        return abs(a - b) <= max(CONFIRM_TOLERANCE_MM, min(abs(a), abs(b)) * 0.02)
+
+    return ((_close(length, other_length) and _close(width, other_width))
+            or (_close(length, other_width) and _close(width, other_length)))
+
+
+def _size_key(region: Any) -> str:
+    length, width = _region_size(region) if isinstance(region, dict) else (None, None)
+    if length is None or width is None:
+        return ""
+    long_side, short_side = max(length, width), min(length, width)
+    return "%.3f:%.3f" % (round(long_side, 3), round(short_side, 3))
+
+
+def _region_is_size_confirmed(region: Dict[str, Any], rects: Any) -> bool:
+    """这条轮廓的尺寸有没有**标注证据**（Spec §3.1 的 `size_dimension`）。"""
+    for rect in (rects or []):
+        if isinstance(rect, dict) and _sizes_match(rect.get("length_mm"), rect.get("width_mm"), region):
+            return True
+    return False
 
 
 def _close_enough(left: Optional[float], right: Optional[float]) -> bool:
@@ -533,87 +779,124 @@ def _fingerprint(region: Dict[str, Any]) -> str:
                              _text(region.get("area_mm2")))
 
 
-def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
-                          thumbnails: Any = None) -> Dict[str, Any]:
-    """业务部件行 ↔ 几何区域：按**名称锚点在图上的位置**做全局一对一绑定（Spec §2.2/§2.4）。
+def _anchor_of(part: Dict[str, Any], by_entity: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    evidence = part.get("evidence") if isinstance(part.get("evidence"), dict) else {}
+    for entity_id in (evidence.get("anchor_entity_ids") or []):
+        hit = by_entity.get(_text(entity_id))
+        if hit is not None:
+            return hit
+    return by_entity.get(_text(part.get("anchor_entity_id")))
 
-    为什么按位置：解析只吃 DWG，行里的尺寸就是从几何来的 —— 先把"这条名称锚点压在哪一块几何上"
-    定下来，尺寸与图纸证据才有出处。绑定是**全局一对一**（不许各行各自贪心），同分按
-    （区域面积、件序、区域 id）排序，保证与 dict 迭代顺序、时间无关；
-    重复排版的区域只记进 `instances`，**不合并**同名同尺寸的件。
+
+def _part_position(part: Dict[str, Any], by_entity: Dict[str, Dict[str, Any]]) -> Optional[Tuple[float, float]]:
+    point = (_anchor_of(part, by_entity) or {}).get("position")
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return None
+    try:
+        return float(point[0]), float(point[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _point_in_bbox(point: Optional[Tuple[float, float]], bbox: Any, tolerance: float) -> bool:
+    if point is None or not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return False
+    try:
+        x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+    except (TypeError, ValueError):
+        return False
+    low_x, high_x = min(x0, x1), max(x0, x1)
+    low_y, high_y = min(y0, y1), max(y0, y1)
+    return (low_x - tolerance <= point[0] <= high_x + tolerance
+            and low_y - tolerance <= point[1] <= high_y + tolerance)
+
+
+def _assign_outlines(parts: List[Dict[str, Any]], anchors: List[Dict[str, Any]],
+                     regions: List[Dict[str, Any]]) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, str]]:
+    """部件行 ↔ 轮廓区域的**全局一对一**指派（Spec §2.4 / §3.1）。
+
+    判据只有一条：**这条名称锚点离哪块轮廓最近**（真样本酒盒实测 27 个唯一件名全部在
+    `OUTLINE_MATCH_RADIUS_MM` 内找到自己那块）。候选只收 `substantial` 的轮廓 —— 引线、
+    图框碎片（边长 0.00mm）不当候选件；同分按（距离、件序、区域 id）排，与 dict 顺序、
+    时间无关。左右件同尺寸**不合并**：一块轮廓只派给一行。
+    """
+    by_entity = {_text(row.get("entity_id")): row for row in anchors if _text(row.get("entity_id"))}
+    scored: List[Tuple[float, int, str, int, Dict[str, Any]]] = []
+    for part_index, part in enumerate(parts):
+        point = _part_position(part, by_entity)
+        if point is None:
+            continue
+        for region in regions:
+            if not region.get("substantial"):
+                continue
+            center = _region_center(region)
+            if center is None:
+                continue
+            distance = ((center[0] - point[0]) ** 2 + (center[1] - point[1]) ** 2) ** 0.5
+            if distance > OUTLINE_MATCH_RADIUS_MM:
+                continue
+            scored.append((round(distance, 6), part_index, _text(region.get("region_id")),
+                           len(scored), region))
+    scored.sort(key=lambda row: (row[0], row[1], row[2]))
+    taken_regions: Dict[str, str] = {}
+    assigned: Dict[int, Dict[str, Any]] = {}
+    for distance, part_index, region_id, _order, region in scored:
+        if region_id in taken_regions or part_index in assigned:
+            continue
+        taken_regions[region_id] = _text(parts[part_index].get("business_part_code")) or str(part_index)
+        assigned[part_index] = region
+    return assigned, taken_regions
+
+
+def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
+                          thumbnails: Any = None, *, rects: Any = None) -> Dict[str, Any]:
+    """业务部件行 ↔ 几何轮廓：按名称锚点的**图上位置**做全局一对一配对（Spec §2.4 / §3.1）。
+
+    与 `## 456` 那版的关键差别：候选不再要求"锚点压在图框 bbox 里"（真样本里图框 bbox
+    吞掉全图，锚点全都"压在里面"，于是配到了整张图框：5 件 `derived` 的尺寸是 3927×967
+    这种荒唐值），而是按**轮廓中心到锚点的距离**配对，且只收 `substantial` 的轮廓；
+    轮廓的尺寸另有一笔独立的账（`rects` = 尺寸标注矩形）：标注与轮廓同形 → 记
+    `size_dimension` 证据（Spec §3.1）。
     """
     parts = [row for row in (authority_parts or []) if isinstance(row, dict)]
     anchor_rows = [row for row in (anchors or []) if isinstance(row, dict)]
     region_rows = [row for row in (regions or []) if isinstance(row, dict)]
-    by_entity = {_text(row.get("entity_id")): row for row in anchor_rows
-                 if _text(row.get("entity_id"))}
+    assigned, taken_regions = _assign_outlines(parts, anchor_rows, region_rows)
 
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    size_groups: Dict[str, List[Dict[str, Any]]] = {}
     for region in region_rows:
-        groups.setdefault(_fingerprint(region), []).append(region)
-
-    def _anchor_of(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        evidence = part.get("evidence") if isinstance(part.get("evidence"), dict) else {}
-        for entity_id in (evidence.get("anchor_entity_ids") or []):
-            hit = by_entity.get(_text(entity_id))
-            if hit is not None:
-                return hit
-        return by_entity.get(_text(part.get("anchor_entity_id")))
-
-    scored: List[Tuple[int, float, int, Dict[str, Any], Dict[str, Any]]] = []
-    for part_index, part in enumerate(parts):
-        point = (_anchor_of(part) or {}).get("position")
-        if not isinstance(point, (list, tuple)) or len(point) < 2:
-            continue
-        try:
-            x, y = float(point[0]), float(point[1])
-        except (TypeError, ValueError):
-            continue
-        for region in region_rows:
-            bbox = region.get("bbox")
-            if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
-                continue
-            try:
-                x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
-            except (TypeError, ValueError):
-                continue
-            if not (x0 - ANCHOR_TOLERANCE_MM <= x <= x1 + ANCHOR_TOLERANCE_MM):
-                continue
-            if not (y0 - ANCHOR_TOLERANCE_MM <= y <= y1 + ANCHOR_TOLERANCE_MM):
-                continue
-            area = abs(x1 - x0) * abs(y1 - y0)
-            # 面积 > 0 的区域排在前面，再按面积升序：大图框套小件时取那个小件。
-            scored.append((0 if area > 0 else 1, area, part_index, part, region))
-
-    scored.sort(key=lambda row: (row[0], row[1], row[2], _text(row[4].get("region_id"))))
-    taken_regions: Dict[str, str] = {}
-    assigned: Dict[int, Dict[str, Any]] = {}
-    for _flag, _area, part_index, part, region in scored:
-        region_id = _text(region.get("region_id"))
-        if region_id in taken_regions or part_index in assigned:
-            continue
-        taken_regions[region_id] = _text(part.get("business_part_code")) or str(part_index)
-        assigned[part_index] = region
+        key = _size_key(region)
+        if key:
+            size_groups.setdefault(key, []).append(region)
 
     bindings: List[Dict[str, Any]] = []
     instances: List[Dict[str, Any]] = []
     for part_index, part in enumerate(parts):
         code = _text(part.get("business_part_code")) or ("%s%02d" % (DERIVED_CODE_PREFIX,
                                                                      part_index + 1))
+        point = _part_position(part, {_text(row.get("entity_id")): row for row in anchor_rows})
         region = assigned.get(part_index)
         if region is None:
             bindings.append({
                 "business_part_code": code, "status": "unbound",
                 "component_ids": [], "entity_ids": [], "bbox": None,
                 "length_mm": None, "width_mm": None,
-                "confidence": 0.0, "reasons": ["no_geometry_region_at_anchor"],
+                "confidence": 0.0, "reasons": [REASON_NO_OUTLINE],
                 "rule_id": GLOBAL_ASSIGNMENT_RULE_ID, "region_id": "", "candidates": [],
+                "evidence_kinds": ["text_anchor"],
             })
             continue
         length, width = _region_size(region)
+        confirmed = _region_is_size_confirmed(region, rects)
         status = "bound" if (length is not None and width is not None) else "partial"
-        copies = [row for row in groups.get(_fingerprint(region), [])
+        key = _size_key(region)
+        copies = [row for row in size_groups.get(key, [])
                   if _text(row.get("region_id")) != _text(region.get("region_id"))]
+        kinds = ["text_anchor", "geometry_region"]
+        if confirmed:
+            kinds.append("size_dimension")
+        if _point_in_bbox(point, region.get("bbox"), ANCHOR_TOLERANCE_MM):
+            kinds.append("spatial_relation")
         bindings.append({
             "business_part_code": code, "status": status,
             "component_ids": list(region.get("component_ids") or []),
@@ -621,9 +904,15 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
             "bbox": list(region.get("bbox") or []) or None,
             "length_mm": length, "width_mm": width,
             "confidence": 0.6 if status == "bound" else 0.4,
-            "reasons": [] if status == "bound" else ["size_unknown"],
+            "reasons": [] if status == "bound" else [REASON_SIZE_UNKNOWN],
             "rule_id": GLOBAL_ASSIGNMENT_RULE_ID, "region_id": _text(region.get("region_id")),
-            "anchor_entity_id": _text((_anchor_of(part) or {}).get("entity_id")),
+            "size_source": "size_dimension" if confirmed else "geometry_region",
+            "size_confirmed": bool(confirmed),
+            "region_area_mm2": _region_area(region),
+            "region_layers": list(region.get("layers") or []),
+            "anchor_entity_id": _text((_anchor_of(part, {_text(row.get("entity_id")): row
+                                                         for row in anchor_rows}) or {}).get("entity_id")),
+            "evidence_kinds": kinds,
             "instances": [_text(row.get("region_id")) for row in copies],
         })
         for copy in copies:
@@ -645,8 +934,85 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
         "merge_guard": SAME_SIZE_PARTS_NOT_MERGED,
         "global_assignment": True,
         "same_size_parts_are_not_merged": True,
+        "assignment_radius_mm": OUTLINE_MATCH_RADIUS_MM,
+        "assigned_regions": taken_regions,
         "rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
     }
+
+
+def _position_token(label: Any) -> str:
+    """族键里的**方向词/容器词**（Spec §3.3 第 3 条）：`内盒1灰板` → `内盒1`（序号参与）。"""
+    match = _POSITION_TOKEN.match(_text(label))
+    return match.group(1) if match else ""
+
+
+def _tail_noun(label: Any) -> str:
+    """族键里的**部件尾词**：末尾 2 个汉字（`…里层灰板` → `灰板`）；没有汉字就取 ASCII 尾段。"""
+    body = _text(label)
+    match = re.search(r"([\u3400-\u9fff]{1,2})$", body)
+    if match:
+        return match.group(1)
+    match = re.search(r"([A-Za-z0-9+\-/]+)$", body)
+    return match.group(1) if match else body
+
+
+def _family_key(label: Any) -> Tuple[str, str]:
+    return _position_token(label), _tail_noun(label)
+
+
+def plan_family_groups(rows: Any, bindings: Any) -> List[Dict[str, Any]]:
+    """父子分组判定（Spec §3.3）：把"一条父名 = 一件"改成"一条父名 = 拆出来的 N 件"。
+
+    判据（三条同时成立，缺一不拆）：
+    1. 同一**族**（方向词/容器词 + 部件尾词相同，`内盒N` 这类序号参与族键）里有 ≥2 条名称锚点；
+    2. 族键的方向词是**镜像类**方向词（`左/右`、`上/下`、`前/后`）—— 真样本酒盒上，
+       `左盒外盒里层灰板` 与 `左盒盒背灰板` 指的是同一族的两件，而 `内托加强灰板` 与
+       `内托支撑围条灰板` 只是碰巧共尾词，不是一件的上下半（Spec §3.3 第 2/3 条）；
+    3. 每个成员的**最近轮廓**互不相同、都够"像一件"（面积 ≥ `GROUP_MEMBER_MIN_AREA_MM2`）。
+
+    成立时：父名 = 持有最大轮廓的那个成员，成员按轮廓面积降序编号（`…1` 是大的那件），
+    逐件带上各自的轮廓与材料 —— 父名本身不再单独占一行（真样本实测 `左盖外盒里层灰板1`
+    217.06×482.92、`…2` 44.60×273.92，与金标逐字对得上）。
+    """
+    by_code = {_text(binding.get("business_part_code")): binding
+               for binding in (bindings or []) if isinstance(binding, dict)}
+    families: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for row in (rows or []):
+        if isinstance(row, dict):
+            families.setdefault(_family_key(row.get("name")), []).append(row)
+    plans: List[Dict[str, Any]] = []
+    for key in sorted(families):
+        members = families[key]
+        if len(members) < 2 or key[0] not in MIRROR_DIRECTIONS:
+            continue
+        candidates: List[Tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+        seen_regions = set()
+        for row in members:
+            binding = by_code.get(_text(row.get("business_part_code"))) or {}
+            region_id = _text(binding.get("region_id"))
+            area = float(binding.get("region_area_mm2") or 0.0)
+            if not region_id or region_id in seen_regions:
+                candidates = []
+                break
+            if area < GROUP_MEMBER_MIN_AREA_MM2:
+                candidates = []
+                break
+            seen_regions.add(region_id)
+            candidates.append((area, row, binding))
+        if len(candidates) < 2:
+            continue
+        candidates.sort(key=lambda item: (-item[0], _text(item[1].get("name"))))
+        base_name = _text(candidates[0][1].get("name"))
+        plans.append({
+            "family": "%s|%s" % (key[0], key[1]),
+            "base_name": base_name,
+            # Spec §3.3 第 2 条：成员名 = **父名**+序号（`左盒外盒里层灰板` → `…1` / `…2`），
+            # 不是"各自的名字+序号"——同族兄弟名（`盒背灰板`）只是族里那一件的**图上写法**。
+            "members": [{"name": "%s%d" % (base_name, index), "source_name": _text(row.get("name")),
+                         "row": row, "binding": binding}
+                        for index, (_area, row, binding) in enumerate(candidates, start=1)],
+        })
+    return plans
 
 
 # --------------------------------------------------------------------------- #
@@ -670,22 +1036,30 @@ def load_seed(path: Any = None) -> Dict[str, Any]:
 
 
 def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """名称锚点 → 派生部件行（Spec §2.2 的产出契约）。
+    """名称锚点 → 派生部件行（Spec §2.2 的产出契约 + §3.1 的证据面）。
 
-    件数由**图纸名称证据**决定：每个规范化名称一件（按 IR 顺序取第一条，去重是确定性的），
-    不许硬凑成某个数字，也不许从资料里补进来。
+    件数由**图纸证据**决定：先按规范化名称去重（按 IR 顺序取第一条），每条名称锚点先给一行；
+    "一条锚点 = 一件"只是**起点** —— 父子分组（`plan_family_groups()`）与轮廓/尺寸证据会在
+    后面把父名拆开、把尺寸与位置补齐。
     """
     rows: List[Dict[str, Any]] = []
     seen = set()
+    index_by_name: Dict[str, int] = {}
     for anchor in anchors:
         if anchor.get("excluded"):
             continue
         name = _text(anchor.get("name"))
         normalized = _text(anchor.get("normalized"))
-        if not name or not normalized or normalized in seen:
+        if not name or not normalized:
+            continue
+        entity_id = _text(anchor.get("entity_id"))
+        if normalized in seen:
+            # 同一件名在图上出现多次（真样本是"原图 + 镜像"两套排版）：留痕，不另立行。
+            if entity_id:
+                rows[index_by_name[normalized]]["evidence"]["anchor_entity_ids"].append(entity_id)
             continue
         seen.add(normalized)
-        entity_id = _text(anchor.get("entity_id"))
+        index_by_name[normalized] = len(rows)
         rows.append({
             "sequence_no": len(rows) + 1,
             "business_part_code": "%s%02d" % (DERIVED_CODE_PREFIX, len(rows) + 1),
@@ -701,9 +1075,83 @@ def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "component_ids": [],
                 "bbox": None,
                 "drawing_ref": {"kind": "none"},
+                "kinds": ["text_anchor"],
+                "group": {"kind": "leaf", "members": [], "parent": ""},
             },
         })
     return rows
+
+
+def _row_evidence_kinds(row: Dict[str, Any], binding: Dict[str, Any],
+                        anchor_total: int, entity_by_id: Dict[str, Dict[str, Any]]) -> List[str]:
+    """一行到底用了哪几类证据（Spec §3.1 第 1/2 条）：闭集、不重复、按固定顺序。"""
+    kinds = ["text_anchor"]
+    if _text(binding.get("region_id")):
+        kinds.append("geometry_region")
+    if binding.get("size_confirmed"):
+        kinds.append("size_dimension")
+    if anchor_total >= 2:
+        kinds.append("repetition_mirror")
+    point = _part_position(row, entity_by_id)
+    if _point_in_bbox(point, binding.get("bbox"), ANCHOR_TOLERANCE_MM):
+        kinds.append("spatial_relation")
+    if any(layer and layer != "0" for layer in (binding.get("region_layers") or [])):
+        kinds.append("layer_role")
+    unique = set(kinds)
+    return [kind for kind in EVIDENCE_KINDS if kind in unique]
+
+
+def _expand_family_groups(rows: List[Dict[str, Any]], anchors: List[Dict[str, Any]],
+                          bindings: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """父子分组（Spec §3.3）：父名换成编号成员行，父名本身不再单独占一行。"""
+    plans = plan_family_groups(rows, bindings)
+    if not plans:
+        return rows, []
+    replaced: Dict[int, List[Dict[str, Any]]] = {}
+    consumed: set = set()
+    detail_plans: List[Dict[str, Any]] = []
+    by_identity = {id(row): index for index, row in enumerate(rows)}
+    for plan in plans:
+        member_names = [member["name"] for member in plan["members"]]
+        anchors_at = sorted(by_identity[id(member["row"])] for member in plan["members"])
+        expanded: List[Dict[str, Any]] = []
+        for member in plan["members"]:
+            source = member["row"]
+            child = json.loads(json.dumps(source, ensure_ascii=False, default=str))
+            child["name"] = member["name"]
+            child["name_from_drawing"] = True
+            child["parent_name"] = plan["base_name"]
+            child["parent_code"] = _text(source.get("business_part_code"))
+            child["source_text"] = _text(source.get("source_text"))
+            child["evidence"]["group"] = {
+                "kind": "group",
+                "members": list(member_names),
+                "parent": plan["base_name"],
+                "family": plan["family"],
+                "drawing_label": _text(member.get("source_name")),
+                "leaf_count": len(member_names),
+            }
+            child["evidence"]["member_region_id"] = _text((member["binding"] or {}).get("region_id"))
+            expanded.append(child)
+        # 同族的**每一条**成员行都被拆进成员里（不是只收基准名那一条），父名/兄弟名不再单独占行。
+        replaced[anchors_at[0]] = expanded
+        consumed.update(anchors_at)
+        detail_plans.append({
+            "family": plan["family"],
+            "parent": plan["base_name"],
+            "members": member_names,
+            "drawing_labels": [_text(member.get("source_name")) for member in plan["members"]],
+            "rule": "same_family_direction_and_tail_noun_with_distinct_outlines",
+        })
+    ordered: List[Dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if index in replaced:
+            ordered.extend(replaced[index])
+        elif index in consumed:
+            continue
+        else:
+            ordered.append(row)
+    return ordered, detail_plans
 
 
 def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
@@ -714,6 +1162,10 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
 
     参数里的 `attachments` / `kb` / `seed_path` / `import_workbook` **一律不读、不用**（它们是
     被拒绝的来源，只记进 `detail.refused_sources`）：客户资料只用来最后对答案。
+
+    `## 458` 起，推件的输入是**整张 DWG 的全部证据**：文字锚点给名称，几何轮廓给尺寸与位置，
+    尺寸标注给尺寸的第二笔账，重复的锚点给"这件在排版里出现多次"，同族方向词给父子分组判定；
+    `## 453` 的"名称文字上限"只是名称这一条证据的命中率，不是件数上限。
 
     返回 `{"authority_source", "authority", "authority_rows", "match", "detail"}`；
     `authority_source` ∈ (`dwg`, `missing`)。**不落库**：调用方拿到行之后自己调
@@ -726,21 +1178,36 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     anchors = extract_text_anchors(ir)
     # 区域优先取**已过滤**的几何零件文档（真样本 263 件）；没有文档才退回 IR 的原始分量。
     regions = regions_from_geometry_parts(geometry_parts) or build_geometry_regions(ir)
+    rects = dimension_rects(ir)
     rows = _derived_rows(anchors)
-    match = match_authority_parts(rows, anchors, regions)
+    match = match_authority_parts(rows, anchors, regions, rects=rects)
+    rows, group_plans = _expand_family_groups(rows, anchors, match.get("bindings") or [])
+
+    entity_by_id = {_text(row.get("entity_id")): row for row in anchors if _text(row.get("entity_id"))}
     by_code = {_text(binding.get("business_part_code")): binding
                for binding in (match.get("bindings") or []) if isinstance(binding, dict)}
 
+    # 分组展开后编码重排（保证唯一 + 连续；`## 453` §2.2 的派生前缀不变）。
+    # 绑定是按**展开前**的编码配出来的，先把原名留在 `parent_code` 上再重排。
+    for index, row in enumerate(rows, start=1):
+        row.setdefault("parent_code", _text(row.get("business_part_code")))
+        row["sequence_no"] = index
+        row["business_part_code"] = "%s%02d" % (DERIVED_CODE_PREFIX, index)
+
     for row in rows:
-        binding = by_code.get(_text(row.get("business_part_code"))) or {}
+        binding = by_code.get(_text(row.get("parent_code"))) or {}
+        if not binding:
+            # 兜底：分组成员按自己的轮廓 id 找绑定（父名拆出来的行没有原编码时走这里）。
+            binding = _binding_for_expanded_row(row, by_code, match)
         row["length_mm"] = _num(binding.get("length_mm"))
         row["width_mm"] = _num(binding.get("width_mm"))
-        located = bool(binding.get("bbox") or binding.get("component_ids"))
+        located = bool(binding.get("region_id"))
         row["evidence"]["component_ids"] = list(binding.get("component_ids") or [])
         row["evidence"]["bbox"] = list(binding.get("bbox") or []) or None
         if not located:
             row["evidence"]["drawing_ref"] = {"kind": "none"}
             row["status"] = "unbound"
+            row["reasons"] = list(binding.get("reasons") or [REASON_NO_OUTLINE])
         else:
             row["evidence"]["drawing_ref"] = {
                 "kind": "geometry_evidence",
@@ -750,8 +1217,13 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
             }
             row["status"] = "derived" if (row["length_mm"] is not None
                                           and row["width_mm"] is not None) else "partial"
-        row["reasons"] = [] if row["status"] == "derived" else list(
-            binding.get("reasons") or ["no_geometry_region_at_anchor"])
+            row["reasons"] = [] if row["status"] == "derived" else list(
+                binding.get("reasons") or [REASON_SIZE_UNKNOWN])
+        anchor_total = len(row["evidence"].get("anchor_entity_ids") or [])
+        row["evidence"]["kinds"] = _row_evidence_kinds(row, binding, anchor_total, entity_by_id)
+        row["evidence"]["size_source"] = _text(binding.get("size_source")) or (
+            "geometry_region" if located else "none")
+        row["evidence"]["size_confirmed"] = bool(binding.get("size_confirmed"))
 
     authority = {
         "parts": rows,
@@ -761,6 +1233,7 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "source": {},
         "anchor_version": ANCHOR_VERSION,
         "alias_version": ALIAS_VERSION,
+        "evidence_version": EVIDENCE_VERSION,
     }
     name_anchor_total = len([row for row in anchors if not row.get("excluded")])
     excluded_anchor_total = len([row for row in anchors if row.get("excluded")])
@@ -769,6 +1242,24 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     with_ref = [row for row in rows
                 if _text((row.get("evidence") or {}).get("drawing_ref", {}).get("kind"))
                 not in ("", "none")]
+    used_kinds = set()
+    for row in rows:
+        used_kinds |= set((row.get("evidence") or {}).get("kinds") or [])
+    reasons_breakdown: Dict[str, int] = {}
+    for row in rows:
+        for reason in (row.get("reasons") or []):
+            reasons_breakdown[reason] = reasons_breakdown.get(reason, 0) + 1
+    unobservable_total = len([row for row in rows
+                              if set((row.get("evidence") or {}).get("kinds") or []) == {"text_anchor"}])
+    labeled_regions = {_text((row.get("evidence") or {}).get("drawing_ref", {}).get("region_id"))
+                       for row in rows if _text((row.get("evidence") or {})
+                                                .get("drawing_ref", {}).get("region_id"))}
+    unlabeled_outline_total = len([region for region in regions
+                                   if region.get("substantial")
+                                   and _text(region.get("region_id")) not in labeled_regions])
+    if unlabeled_outline_total:
+        reasons_breakdown[REASON_UNLABELED_OUTLINE] = (
+            reasons_breakdown.get(REASON_UNLABELED_OUTLINE, 0) + unlabeled_outline_total)
     detail = {
         "authority_source": "dwg" if rows else "missing",
         "derived_from_drawing": True,
@@ -784,6 +1275,19 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
         "ambiguous_total": int(match["ambiguous_total"]),
         "unbound_total": int(match["unbound_total"]),
         "geometry_component_total": len(regions),
+        "substantial_outline_total": len([region for region in regions if region.get("substantial")]),
+        "dimension_rect_total": len(rects),
+        "evidence_kinds": [kind for kind in EVIDENCE_KINDS if kind in used_kinds],
+        "evidence_version": EVIDENCE_VERSION,
+        "reasons_breakdown": reasons_breakdown,
+        "unobservable_total": unobservable_total,
+        "unobservable_reason": "row_has_no_drawing_evidence_beyond_its_name",
+        "unlabeled_outline_total": unlabeled_outline_total,
+        "group_total": len(group_plans),
+        "group_plans": group_plans,
+        "size_source_counts": _count_by(rows, lambda row: _text(
+            (row.get("evidence") or {}).get("size_source") or "none")),
+        "outline_rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
         "anchor_total": name_anchor_total,
         "drawing_sha256": drawing_sha256,
         "engine_version": ENGINE_VERSION,
@@ -791,14 +1295,40 @@ def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
     }
     return {"authority_source": detail["authority_source"], "authority": authority,
             "authority_rows": rows, "anchors": anchors, "regions": regions,
-            "match": match, "detail": detail}
+            "rects": rects, "match": match, "detail": detail}
+
+
+def _count_by(rows: Any, key_of: Callable[[Dict[str, Any]], str]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for row in (rows or []):
+        if not isinstance(row, dict):
+            continue
+        key = key_of(row)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _binding_for_expanded_row(row: Dict[str, Any], by_code: Dict[str, Dict[str, Any]],
+                              match: Dict[str, Any]) -> Dict[str, Any]:
+    """分组成员行 → 它自己那条轮廓的绑定（成员行是父名拆出来的，编码已重排）。"""
+    region_id = _text((row.get("evidence") or {}).get("member_region_id"))
+    if not region_id:
+        return {}
+    for binding in (match.get("bindings") or []):
+        if isinstance(binding, dict) and _text(binding.get("region_id")) == region_id:
+            return binding
+    return {}
 
 
 __all__ = [
     "ALIASES", "ANCHOR_TOLERANCE_MM", "ANCHOR_VERSION", "ALIAS_VERSION", "AUTHORITY_SOURCES",
     "BINDING_STATUSES", "DERIVED_CODE_PREFIX", "DERIVED_STATUSES", "DOC_KEY",
-    "DRAWING_REF_KINDS", "ENGINE_VERSION", "GLOBAL_ASSIGNMENT_RULE_ID",
-    "RUNTIME_REFUSED_SOURCES", "SAME_SIZE_PARTS_NOT_MERGED", "build_geometry_regions",
-    "extract_text_anchors", "load_seed", "match_authority_parts", "normalize_part_label",
+    "DRAWING_REF_KINDS", "ENGINE_VERSION", "EVIDENCE_KINDS", "EVIDENCE_VERSION",
+    "GLOBAL_ASSIGNMENT_RULE_ID", "GROUP_MEMBER_MIN_AREA_MM2", "MIN_OUTLINE_AREA_MM2",
+    "MIN_OUTLINE_ENTITIES", "MIN_OUTLINE_SIDE_MM", "MIRROR_DIRECTIONS",
+    "OUTLINE_MATCH_RADIUS_MM", "REASON_NO_OUTLINE", "REASON_SIZE_UNKNOWN",
+    "REASON_UNLABELED_OUTLINE", "RUNTIME_REFUSED_SOURCES", "SAME_SIZE_PARTS_NOT_MERGED",
+    "build_geometry_regions", "dimension_rects", "extract_text_anchors", "load_seed",
+    "match_authority_parts", "normalize_part_label", "plan_family_groups",
     "regions_from_geometry_parts", "resolve_business_parts", "split_label_parts",
 ]

@@ -18816,3 +18816,67 @@ V1/V2/V3/V5/V6 夹具 `args.map` 崩溃 5 条、`bom_part_size_provenance` B3 �
 + **本批新出现的 9 条**（作者的 `packaging-business-parts-must-come-from-all-drawing-evidence`，另批实现）。
 
 未 push / MR / tag / Release / 部署，未连 PG、未起服务。
+
+## 459. 落地 `packaging-business-parts-must-come-from-all-drawing-evidence`：业务部件由 DWG 的**全部证据**推出来（文字 + 几何轮廓 + 尺寸标注 + 空间关系 + 重复/镜像 + 同族父子分组），名称文字只是其中一类 —— 真样本 recall 19/28 → 25/28、precision 0.704 → 0.962、带尺寸 5/27 → 26/26（14 OK，红基 9 红）（9-23，Codex 实现）
+
+`## 453`/`## 456` 把推件收缩成"一条名称锚点 = 一件"，真样本酒盒实测 27 行、对 28 件金标
+recall 19/28、precision 19/27、只有 5 件带尺寸、22 件 `unbound`，漏 9 件、多 8 条。
+本批把"件数由**名称证据**决定"换成"件数由**全部证据**决定"，闭集与"金标零影响"两条不动。
+
+改了一个文件：`tech_app/backend/services/packaging_business_part_resolver.py`。
+
+主要落点：
+
+1. **证据面**：`EVIDENCE_KINDS` 八类闭集 + `evidence.kinds`（闭集顺序、去重）+ `detail.evidence_kinds`
+   （= 各行 kinds 并集，真值）。真样本实际用上 `text_anchor / geometry_region / size_dimension /
+   layer_role / spatial_relation / repetition_mirror` 六类。
+2. **轮廓候选**：新增"像一件"的门 `MIN_OUTLINE_SIDE_MM=5` / `MIN_OUTLINE_AREA_MM2=2000` /
+   `MIN_OUTLINE_ENTITIES=2`（1163 个连通分量 → 261 条候选），配对改成**轮廓中心到锚点的最近距离**
+   （`OUTLINE_MATCH_RADIUS_MM=650`，全局一对一）。旧口径是"锚点压在图框 bbox 里"，真样本上图框
+   bbox 吞掉全图，于是 5 件 `derived` 的尺寸是 3927×967 这种整张图的荒唐值。
+3. **尺寸的第二笔账**：新增 `dimension_rects()` —— 水平 × 垂直线性标注交成矩形（316 条标注 → 107 个
+   矩形），与轮廓同形（容差 2mm/2%）就记 `size_dimension`。真样本 52 条被确认。
+4. **父子分组**（Spec §3.3）：`plan_family_groups()` 族键 =（方向词/容器词，部件尾词），`内盒N` 的
+   序号参与族键；只对**镜像类**方向词（左/右、上/下、前/后）分组，且要求成员轮廓互不相同、都够
+   "像一件"（面积 ≥ 10000mm²）。真样本上只有 `左/右盒外盒里层灰板` 这一族成立 → 拆成
+   `左盖外盒里层灰板1` 217.06×482.92 / `…2` 44.60×273.92（右盖同形），父名与同族兄弟名
+   `盒背灰板` 都不再单独占行；圆盘盒 `内托加强灰板` / `内托支撑围条灰板` 这种共尾词不分组。
+5. **原因账**（Spec §3.2）：`detail.reasons_breakdown`（逐行稳定码）+ `unobservable_total`
+   （只有名字、观测不到几何）+ `unlabeled_outline_total`（有轮廓但没有任何名称锚点，真样本 235 条）。
+6. 名称拆分补了**冒号直连**那种写法（`底板：2.5MM灰板` → `底板` + 材料），并排除单字整词（`刀`）。
+7. 顺手修一处老 bug：`_is_excluded_text("", layer)` 对**任何**图层都返回 True（空文本必然没有汉字），
+   `build_geometry_regions()` 因此把 1163 个分量全标成 `annotation_or_frame`；新增只判图层名的
+   `_is_excluded_layer()`，本批的候选门才站得住。
+
+真样本实测（酒盒，`酒盒.dwg` sha `0991c8b0a964…`，只读）：
+
+```
+business_part_total = 26 / recall 25/28（门槛 ≥22）/ precision 0.962（门槛 ≥0.85）
+parts_with_size_total = 26/26（门槛 ≥0.5）；group_total = 2；漏件 3 = 内卡 / 底托灰板 / 磁铁
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_business_parts_must_come_from_all_drawing_evidence_red
+Ran 14 tests ... OK                       # 红基 Ran 14 ... FAILED (failures=9)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_must_come_from_the_drawing_red \
+    tests.test_packaging_28_part_auto_resolution_and_2d_board_cleanup_red \
+    tests.test_packaging_business_parts_and_cad_plan_view_red
+Ran 65 tests ... OK
+
+./open-claude/.venv/bin/python -m unittest <全部 tests.test_packaging_*.py>
+Ran 2618 tests ... FAILED (failures=10, skipped=10)
+    # 10 条全是既有挂账：solids_body_unusable V1/V2/V3/V5/V6（`## 441` 夹具）、
+    # bom_part_size_provenance B3 + parse_to_downstream_seams B4（stats 键集冻结）、
+    # part_role_mapping A2（1.0 vs 0.5）、quote_send_recovery C1（夹具自遮挡）、
+    # route_bom_version_pinning F2（哨兵指纹）—— 与本批无关，未动。
+```
+
+边界（写进 Spec §7，不遮）：尺寸是**位置配对**不是尺寸校对 —— 26 行都拿到长宽，其中 13 行与金标
+逐字相符（±3%），其余是"最近那块轮廓"的尺寸（例：`贴牌` 184.9×146，金标 226×110.3）；红测验收的
+是"尺寸是主证据之一"，不是"尺寸必然等于 BOM"。图上那 235 条没有名称锚点的轮廓**没有**当件（否则
+precision 直接塌），只进原因账。
+
+未 push / MR / tag / Release / 部署，未连 PG、未起服务、未改任何业务数据。

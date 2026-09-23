@@ -41,7 +41,10 @@ WINE_NON_PART_TEXTS = ("角  度", "批 准", "日 期", "单 位", "比 例", "
 ROUND_NON_PART_TEXTS = ("侧视图", "后视图", "俯视图上往下", "示意图", "面纸转越南",
                         "旧款大货色位不够", "内托方案1", "内托方案2")
 
-#: 金标里**图纸名称锚点没有**的件（派生清单不许凭空出现这几项，Spec §2.1/§5）。
+#: 金标里**图纸名称锚点直接命中不到**的件（`## 453` §5 实测 9 件里的一部分）。
+#:
+#: `## 458` 收窄：这几件**不是**"不许出现"，而是"名称文字这一条证据说不出它们" —— 它们应当由
+#: 几何 / 尺寸 / 引线 / 父子分组推出来。本常量只用于说明，不再作为断言里的黑名单。
 GOLD_ONLY_NAMES = ("磁铁", "内卡", "底板", "底板面纸", "底托灰板")
 
 
@@ -378,7 +381,15 @@ class DerivedListAnswersAgainstTheGoldRed(unittest.TestCase):
     对答案只在测试里发生：生产运行时读不到金标。
     """
 
-    def test_f1_wine_names_cover_the_gold_without_borrowing_it(self):
+    def test_f1_wine_name_evidence_hits_the_gold_without_borrowing_it(self):
+        """名称文字这**一条**证据对金标的命中率（下限 18 件），不是识别能力上限。
+
+        `## 458` 收窄（`packaging-business-parts-must-come-from-all-drawing-evidence.md`）：
+        本用例原来还断言「金标有、图上没有同名文字的件**不得出现**」与「图纸有、金标没有的
+        `右盖外盒里层灰板` / `顶托灰板`**必须**作为独立件出现」—— 那两句都把"抄不到名字"当成了
+        "识别不出来"，并且把可能是**父节点名**的整串钉成了第 29 件，故一并去掉。
+        这里只保留两条仍然成立的事实：名称直接命中 ≥ 18；派生清单里存在金标没有的行（没抄金标）。
+        """
         _require_sample(self, "酒盒")
         module = _resolver()
         names = _names(_derive("酒盒"))
@@ -386,13 +397,11 @@ class DerivedListAnswersAgainstTheGoldRed(unittest.TestCase):
         gold_names = [row.get("name") for row in ((gold.get("sources") or [{}])[0].get("parts") or [])]
         normalized = {module.normalize_part_label(name) for name in names if name}
         hit = [name for name in gold_names if module.normalize_part_label(name) in normalized]
-        self.assertGreaterEqual(len(hit), 18,
-                                "图纸名称证据实测能覆盖金标 18 件（Spec §0/§5）")
-        for borrowed in GOLD_ONLY_NAMES:
-            self.assertNotIn(borrowed, names,
-                             "金标有、图纸名称锚点里没有的件不许出现（说明借了金标）")
-        self.assertTrue({"右盖外盒里层灰板", "顶托灰板"} & set(names),
-                        "图纸名称锚点里有、金标里没有的件必须出现在派生清单里（证明确实从图推）")
+        self.assertGreaterEqual(
+            len(hit), 18,
+            "名称文字这条单一证据实测能直接命中金标 18 件（Spec §0/§5 的**下限**，不是上限）")
+        self.assertTrue(set(names) - set(gold_names),
+                        "派生清单里必须存在金标没有的行（证明确实从图推、没抄金标）")
 
     def test_f2_every_wine_row_is_sized_or_explicitly_unbound(self):
         _require_sample(self, "酒盒")
