@@ -20698,3 +20698,87 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 本批红测是**新写的**，落地时修掉两处**测试自身**的缺陷（第 215 行的引号语法错；D1 的 `assertIn`
   实参与容器写反、B5 核了一个公开行没有的键）—— 都是"让断言真的能判"，**没有**放宽任何期望值或跳过用例。
 - 未提交生产数据、未连 PG / 34、未起服务、未 push / MR / tag / Release / 部署。
+
+## 487. 落地「2.1 右栏只画这一件」+「任务文件点 DWG 看整张平面图」（31 + 20 OK；红基 20 + 14 FAIL；反向对照 4 / 6 / 2 + 2；全量 6631 零新增失败）（9-23，Codex 实现）
+
+两条用户现场，一条根因：
+
+- 右栏被拆成**上下两块各自能滚**（`workbench.css` 的列 + `drawing-flow.css` 的 `.packaging-cad-plan`
+  与 `.packaging-part-panel` 共三个滚动容器）；上面那块是**整张** CAD 平面图，选中一件只是把别的图元
+  `is-dimmed` + `fitPackagingCadPlan()` 缩放定位（"旁边还有别的零件"）；下面那块是**绑定分量的轮廓环**
+  （闭合件只有 `outline_points` 那一圈，就是用户说的"只有最外面一圈的零件"）。
+- 任务文件里点 `酒盒.dwg` 看到的是一张碎图：后端 `/files` 把需求原图标成 `kind:"image"`
+  （`main.py:1533-1535`），`filePreviewKind()` 先判 `file.kind === "image"` ⇒ 直接 `createObjectURL` + `<img>`
+  把 DXF 字节当位图。
+
+### 改了什么
+
+- 右栏**只剩一块图**：`openPackagingBusinessPart()` 的图从下栏 `#packagingPartOutline` 挪到上面那一块
+  `#packagingCadPlanViewer`，画的是**只这一件**（下栏只留一句 `PACKAGING_BOUND_OUTLINE_NOTE` 文字披露，
+  不再出第二块 svg）。新增两个纯函数：`packagingPartSceneEntities(binding, doc)`（按 `component_ids`
+  从 `geometry_evidence.components[].entity_ids` 收这一件的成员，再**减掉**同一分量的
+  `annotation_filtered`，最后按**场景顺序**去重）与 `packagingPartSceneSvg(binding, doc, options)`
+  （`viewBox` 由件内坐标产出、`stroke` 取 `PACKAGING_CAD_LAYER_COLORS[role]`、闭合环 `<polygon>`、
+  件内折线 `<polyline>`、文字 `<text>`）。`renderPackagingCadScene()` / `renderPackagingCadPlan()` 末尾
+  按 `pendingPackagingShapePartCode || currentPackagingBusinessPartCode` 重画 ⇒ 场景后到或重拉后仍是
+  当前选中的这一件，不会被重画成整图。
+- 后端**只透传一个已有的键**：`packaging_parts.geometry_evidence_of()` 的每个分量新增
+  `annotation_filtered`（键名与形状跟 `packaging-parts` 文档逐字一致；没有标注给 `[]`，**不是** `None`、
+  **不是**缺键），`entity_ids` 一个成员没少。没有它，"画这一件"就会把上一批（`## 485`/`## 486`）刚摘掉的
+  尺寸线又画回来。
+- 滚动收归一处：`.packaging-cad-plan` 删 `height:100%` 与 `overflow:auto`，`.packaging-part-panel` 删
+  `overflow:auto`，`.packaging-cad-plan-svg` 删 `height:100%`（图高度改成**上限**）；滚动权仍归
+  `workbench.css` 的 `.drawing-model-column[data-qq-fill]{overflow-y:auto}` 一处，`.packaging-part-shape-viewport`
+  仍 `overflow:hidden`（裸滚轮留给整栏滚动）。拖拽 / `ctrl` 缩放 / `适应窗口` 复用既有
+  `bindPackagingPartShapeInteractions()`，口径一字未改。
+- 任务文件点图纸：`filePreviewKind()` 在 image 判定**之前**先走新增的 `fileIsDrawing(file)`
+  （只按后缀 `/(^|[^A-Za-z0-9])(dwg|dxf)$/i`，不看 `kind`），命中回 `"drawing"`；`openFilePreview()` 的
+  `drawing` 分支**不**建 object URL、**不**建 `<img>`/`<iframe>`，图来自既有
+  `GET /api/projects/{pid}/requirement/packaging-geometry`（同一份数据、同一套画法：新增纯函数
+  `fileDrawingPreviewHtml(doc)`，取框与 `viewBox` 与 2.1 未选中态同一条口径，输出不带 `is-highlighted` /
+  `is-dimmed`）；还没有解析结果时逐字给「这份图纸还没有解析结果，请先到 2.1 跑一次图纸解析。」+ 一个
+  「去 2.1 跑图纸解析」出口。归属由纯函数 `fileDrawingOwnershipNote(file, sourceName)` 决定：同名不啰嗦，
+  不同名写清「本次解析的图纸：`<sourceName>`；这一份不是本次解析用的图纸。」`URL.createObjectURL`
+  挪进 `if (kind === "image" || kind === "pdf")`（全文件只剩 1 处）。
+
+### 产物
+
+- Spec：新增 `docs/specs/packaging-2-1-right-pane-single-part-figure.md`、
+  `docs/specs/packaging-task-file-dwg-opens-the-whole-plan.md`（两份状态行按事实改为「已实现」，
+  各自带落地表 / 反向对照表 / 已知缺口）。
+- 红测：新增 `tests/test_packaging_2_1_right_pane_single_part_figure_red.py`（31 条，A 证据 / B 单件图元 /
+  C 单件图 / D 接线 / E CSS / F 护栏）、`tests/test_packaging_task_file_dwg_opens_the_whole_plan_red.py`
+  （20 条，A 分类与渲染 / B 接线 / C 护栏）；B / C 两组用 `node` 抽出**单个**纯函数真跑，不是 grep。
+- 既有红测 `tests/test_packaging_business_part_plan_click_and_bound_outline_red.py` 的 B3/C3/C4/C5 按
+  本 Spec §5.1 **重指**（改成断言"单件图画的是这一件的全部图元、颜色 ≥ 2 种、不是一圈"），**断言未放宽**：
+  仍核颜色种类、仍是 `node` 真跑抽出来的纯函数、`PACKAGING_BOUND_OUTLINE_NOTE` 那句文字口径保留。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -W ignore -m unittest`）
+
+- 本批红测 `Ran 31 … OK` 与 `Ran 20 … OK`（一起跑 `Ran 51 … OK`）；红基（只把 `app.js` / `drawing-flow.css` /
+  `packaging_parts.py` 退回 HEAD）`Ran 51 … FAILED (failures=34)`：右栏 20 红（A1、A3、B1–B6、C1–C7、D1、D2、
+  E1–E3）+ 图纸预览 14 红（A1–A10、B1–B4），17 条绿护栏（A2、D3–D6、E4、E5、F1–F4、B5、B6、C1–C4）。
+- 反向对照（每组跑完还原 + `md5` 核对）：① 关掉"标注减除"⇒ `failures=4`（B1/B2/B3 + C1）；② 关掉"这一件的
+  成员扩展"⇒ `failures=6`（B1/B3 + C1/C2/C3/C5）；③ `.packaging-cad-plan` 加回 `height:100%` +
+  `overflow:auto` ⇒ `failures=2`（E1/E2）；④ `filePreviewKind()` 删掉 `return "drawing"` ⇒ `failures=2`（A1/A2）。
+  还原后 `app.js` `md5 0b0b2988b57d7ed10c69b2d7f2177593`、`drawing-flow.css` `md5 9acf7829165792b76536a1578b660750`、
+  `packaging_parts.py` `md5 4538ac278e7073895f5d665febb07cd4` 三处与改动后一致。
+- 保护网点名（本批两条 + 既有八条）→ `Ran 195 tests … OK`。
+- 全量（396 个模块）→ `Ran 6631 … FAILED (failures=2, skipped=28)`：两条失败都是既有
+  `test_cpq_eval_ci_contract` 的环境/待裁决项（与基线 `Ran 6580` 的 2 条同一条），本批**零新增失败**。
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净。
+
+### 一处测试侧管道事实（只记录，不改断言）
+
+本批图纸预览红测想把 `IMAGE_FILE_PATTERN` / `TEXT_FILE_PATTERN` 用 `const` 写进 `EXTRACT_JS` 的 prelude
+"注入"给抽出来的单函数；`eval()` 里的 `const` **不外泄**到外层作用域（只有 `var` / 函数声明会），那两条
+注入实际不可见。因此实现侧把这两条**同值**判据按既有依赖注入口径写进 `filePreviewKind()` 自身
+（真源在就用模块级常量，否则用**同一个字面量**），红测期望值与断言一个字未动。
+
+### 纪律
+
+- 只动前端 `app.js` / `drawing-flow.css` / `workbench.css`（仅新增样式）与后端 `packaging_parts.py` 的一个
+  透传键；接口、CAD IR、盒型匹配、成本 / 工艺 / 需求 / 知识库口径一个字未动；未起服务、未连 PG / 34、
+  未写业务数据、未 push / MR / tag / Release / 部署。
+- 前端**不做**几何求解（单件图元与 `viewBox` 都来自后端文档），预览**不复制**第二套渲染（两处入口共用
+  `window.CadFilePreview.open()`，`agent-chat.js` 里不出现 `fileDrawingPreviewHtml` / `packagingCadSceneEndpoint`）。

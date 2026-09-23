@@ -294,6 +294,12 @@ body{padding-bottom:0}
 .file-preview-frame{display:block;width:100%;height:50vh;border:0}
 .file-preview-text{margin:0;padding:10px 12px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--text-primary)}
 .file-preview-note{padding:14px 12px;font-size:12px;color:var(--text-secondary)}
+/* 任务文件里点 DWG/DXF：预览画的就是 2.1 未选中态那张整张平面图（Spec
+   `packaging-task-file-dwg-opens-the-whole-plan.md` §C2/§C4）：svg 复用
+   `.packaging-cad-plan-svg` 的既有画法，这里只给容器与「去 2.1」出口加样式。 */
+.file-preview-drawing{padding:8px}
+.file-preview-drawing .packaging-cad-plan-svg{max-height:46vh;min-height:0}
+.file-preview-goto{margin:0 12px 12px;padding:4px 10px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-card);color:var(--color-primary);font-size:11px;cursor:pointer}
 
 /* 任务文件行由 <a> 改成 <button>（取文件必须走带 Authorization 的 fetch，不能裸链接新开页），
    外观仍是"可点的链接"：清掉按钮默认边框 / 底色 / 内边距。 */

@@ -3773,6 +3773,12 @@ def geometry_evidence_of(parts_doc: Any, *, limit: int = 0) -> Dict[str, Any]:
             "area_mm2": row.get("area_mm2"),
             "layers": list(row.get("layers") or []),
             "role": _text(row.get("role")),
+            # 这一件里被判成标注的实体（Spec `packaging-2-1-right-pane-single-part-figure.md` §C2）：
+            # `entity_ids` 是**全量成员**，前端要画"只这一件"时必须能减掉标注，否则上一批刚摘掉的
+            # 尺寸线又会被画回来。键名与形状跟 `packaging-parts` 文档**逐字一致**（升序，逐条
+            # `entity_id` + `reason`），没有标注时给空清单（不是 `None`、不是缺键）。
+            "annotation_filtered": [dict(item) for item in (row.get("annotation_filtered") or [])
+                                    if isinstance(item, dict)],
             "geometry_component_ref": _text(row.get("geometry_component_ref"))
                                     or _text(row.get("component_id")),
         })

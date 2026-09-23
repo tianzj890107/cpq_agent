@@ -174,12 +174,17 @@ class BPlanClickWiring(unittest.TestCase):
         self.assertIn("PACKAGING_CAD_PLAN_UNBOUND", body, "未归属图元的提示不许丢")
 
     def test_b3_business_panel_renders_the_bound_outline(self):
+        # 2026-09-23 按 `docs/specs/packaging-2-1-right-pane-single-part-figure.md` §3/§5.1 重指：
+        # 用户要的是「一块图 = 只有这一件」（带图层颜色、可拖拽缩放），下栏那块「只有外圈」的图撤掉。
+        # 断言强度不变：仍要求"这一件的图必须由具名纯函数拼出来"+ 那句文字口径保留，只是换了函数名。
         body = function_body("openPackagingBusinessPart")
         self.assertTrue(body, "openPackagingBusinessPart() 找不到（签名变了？）")
-        self.assertIn("packagingBusinessPartOutlineHtml", body,
-                      "绑定分量的形状必须由纯函数拼出来（Spec §C2）")
+        self.assertIn("packagingPartSceneSvg", body,
+                      "这一件的图必须由纯函数拼出来（Spec `packaging-2-1-right-pane-single-part-figure.md` §C3）")
+        self.assertNotIn("packagingBusinessPartOutlineHtml", body,
+                         "下栏那块「只有外圈」的图已按新 Spec 撤掉（§C1）")
         self.assertIn("PACKAGING_BOUND_OUTLINE_NOTE", body,
-                      "面板要写明这是绑定分量的形状、业务尺寸以权威资料为准")
+                      "「业务尺寸以权威资料为准」这句文字口径保留")
 
     def test_b4_geometry_part_panel_is_untouched(self):
         body = function_body("selectPackagingPart")

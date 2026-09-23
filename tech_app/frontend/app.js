@@ -2017,6 +2017,155 @@ function packagingBusinessPartOutlineHtml(binding, doc) {
     + suffix;
 }
 
+// —— 「只这一件」的图（Spec `packaging-2-1-right-pane-single-part-figure.md` §C2/§C3/§C4）——
+// 用户要的是"只有这一个东西的图"：一块图、件内真实几何、按图层着色、可拖拽缩放 —— 既不是
+// "整张图 + 缩放到这一件"（旁边还有别的零件），也不是只有外面一圈的分量轮廓。
+//
+// 依赖注入（Spec §5.1）：红测的 harness 只抽**一个**函数、不注入任何依赖，所以这两个纯函数既
+// 接受显式注入，也自带一份同值兜底；浏览器路径不传 `options`，一律优先吃真源
+// `PACKAGING_CAD_LAYER_COLORS` 与 `packagingCadSceneEntitySvg()`（`typeof` 守卫），兜底只在
+// 没有全局时（node 单函数抽跑）生效。
+function packagingPartSceneEntities(binding, doc) {
+  const row = (binding && typeof binding === "object") ? binding : {};
+  const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+  const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
+    ? doc.geometry_evidence : {};
+  const bound = {};
+  (Array.isArray(row.component_ids) ? row.component_ids : []).forEach(id => {
+    bound[String(id || "")] = true;
+  });
+  const ids = {};
+  (Array.isArray(row.entity_ids) ? row.entity_ids : []).forEach(id => { ids[String(id || "")] = true; });
+  const annotations = {};
+  (Array.isArray(evidence.components) ? evidence.components : []).forEach(raw => {
+    const component = (raw && typeof raw === "object") ? raw : {};
+    if (!bound[String(component.component_id || "")]) return;
+    (Array.isArray(component.entity_ids) ? component.entity_ids : []).forEach(id => {
+      ids[String(id || "")] = true;
+    });
+    (Array.isArray(component.annotation_filtered) ? component.annotation_filtered : []).forEach(raw2 => {
+      const entry = (raw2 && typeof raw2 === "object") ? raw2 : {};
+      const marked = String(entry.entity_id || "");
+      if (marked) annotations[marked] = true;
+    });
+  });
+  const seen = {};
+  const rows = [];
+  (Array.isArray(scene.entities) ? scene.entities : []).forEach(raw => {
+    const id = String(((raw && raw.cad_entity_id) || ""));
+    if (!id || !ids[id] || annotations[id] || seen[id]) return;
+    seen[id] = true;
+    rows.push(raw);
+  });
+  return rows;
+}
+
+function packagingPartSceneSvg(binding, doc, options) {
+  const opts = (options && typeof options === "object") ? options : {};
+  const colours = opts.colours
+    || ((typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
+      || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
+         glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+         hole: "#cf222e", unknown: "#8b949e"});
+  const plain = (typeof esc === "function")
+    ? esc
+    : value => String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // 兜底的选择口径（与 `packagingPartSceneEntities()` 逐字同一条）：只在没有全局时生效。
+  function sceneRows() {
+    const bind = (binding && typeof binding === "object") ? binding : {};
+    const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+    const evidence = (doc && doc.geometry_evidence && typeof doc.geometry_evidence === "object")
+      ? doc.geometry_evidence : {};
+    const bound = {};
+    const list = value => (Array.isArray(value) ? value : []);
+    list(bind.component_ids).forEach(id => { bound[String(id || "")] = true; });
+    const ids = {};
+    list(bind.entity_ids).forEach(id => { ids[String(id || "")] = true; });
+    const annotations = {};
+    list(evidence.components).forEach(raw => {
+      const component = (raw && typeof raw === "object") ? raw : {};
+      if (!bound[String(component.component_id || "")]) return;
+      list(component.entity_ids).forEach(id => { ids[String(id || "")] = true; });
+      list(component.annotation_filtered).forEach(raw2 => {
+        const marked = String(((raw2 || {}).entity_id) || "");
+        if (marked) annotations[marked] = true;
+      });
+    });
+    const seen = {};
+    const rows = [];
+    list(scene.entities).forEach(raw => {
+      const id = String(((raw || {}).cad_entity_id) || "");
+      if (!id || !ids[id] || annotations[id] || seen[id]) return;
+      seen[id] = true;
+      rows.push(raw);
+    });
+    return rows;
+  }
+  const rows = (typeof packagingPartSceneEntities === "function")
+    ? packagingPartSceneEntities(binding, doc)
+    : sceneRows();
+  if (!rows.length) return "";
+  // 兜底的单件画法（与 `packagingCadSceneEntitySvg()` 同一条口径）：只在没有全局时生效。
+  function sceneEntitySvg(entity, visibility) {
+    const row = (entity && typeof entity === "object") ? entity : {};
+    const layer = String(row.layer || "");
+    if (visibility && visibility[layer] === false) return "";
+    const colour = colours[row.role] || colours.unknown;
+    const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
+    const data = ` data-cad-entity-id="${plain(String(row.cad_entity_id || ""))}"`
+      + ` data-layer="${plain(layer)}" data-bbox="${plain(bbox)}"`
+      + ` data-business-part="${plain(String(row.business_part_code || ""))}"`;
+    if (String(row.kind || "") === "text") {
+      const text = String(row.text || "");
+      const x = Number(row.x);
+      const y = Number(row.y);
+      if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return "";
+      const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
+      return `<text class="packaging-cad-scene-text"${data} fill="${plain(colour)}"`
+        + ` x="${plain(String(x))}" y="${plain(String(-y))}"`
+        + ` font-size="${plain(String(size))}">${plain(text)}</text>`;
+    }
+    const points = (Array.isArray(row.points) ? row.points : []).map(pair => {
+      const values = Array.isArray(pair) ? pair : [];
+      const px = Number(values[0]);
+      const py = Number(values[1]);
+      return (Number.isFinite(px) && Number.isFinite(py)) ? `${px},${-py}` : "";
+    }).filter(Boolean);
+    if (points.length < 2) return "";
+    const attributes = data + ` fill="none" stroke="${plain(colour)}" stroke-width="1"`;
+    if (row.closed === true && points.length >= 3) {
+      return `<polygon class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+        + `${attributes}></polygon>`;
+    }
+    return `<polyline class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+      + `${attributes}></polyline>`;
+  }
+  const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+  const visibility = (scene.layer_visibility && typeof scene.layer_visibility === "object")
+    ? scene.layer_visibility : {};
+  const draw = (typeof packagingCadSceneEntitySvg === "function") ? packagingCadSceneEntitySvg : sceneEntitySvg;
+  const drawn = rows.map(row => draw(row, visibility)).filter(Boolean).join("");
+  if (!drawn) return "";
+  // 取框与 viewBox 与整图同一条口径（`packagingCadPlanRange()` + `packagingCadPlanViewBox()`：
+  // 命中图元的 bbox 并集、2% 留白、y 轴翻一次）。
+  const boxes = rows.map(row => ((row || {}).bbox)).filter(Boolean);
+  let box = null;
+  boxes.forEach(raw => {
+    if (!Array.isArray(raw) || raw.length < 4) return;
+    const values = raw.slice(0, 4).map(Number);
+    if (values.some(value => !Number.isFinite(value))) return;
+    if (!box) { box = values.slice(); return; }
+    box[0] = Math.min(box[0], values[0]); box[1] = Math.min(box[1], values[1]);
+    box[2] = Math.max(box[2], values[2]); box[3] = Math.max(box[3], values[3]);
+  });
+  if (!box) return "";
+  const pad = Math.max(box[2] - box[0], box[3] - box[1]) * 0.02;
+  const viewBox = `${box[0] - pad} ${-box[3] - pad} ${(box[2] - box[0]) + pad * 2} ${(box[3] - box[1]) + pad * 2}`;
+  return `<svg class="packaging-part-scene-svg" viewBox="${plain(viewBox)}"`
+    + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="这一件的图">${drawn}</svg>`;
+}
+
 // SVG 的 y 轴向下、DWG 的 y 轴向上：翻一次，图纸方向才与 CAD 里一致。
 function packagingCadPlanViewBox(range) {
   if (!range) return "0 0 1 1";
@@ -2231,7 +2380,9 @@ function renderPackagingCadScene(host, doc, scene) {
       notePackagingPartPanel(PACKAGING_CAD_PLAN_UNBOUND);
     });
   }
-  repaintSelectedPackagingShape(pendingPackagingShapePartCode);
+  // 场景后到（首点竞态）或场景被重新拉取：那块图仍是**当前选中的这一件**，
+  // 不许被重画成整图（Spec `packaging-2-1-right-pane-single-part-figure.md` §C8）。
+  repaintSelectedPackagingShape(pendingPackagingShapePartCode || currentPackagingBusinessPartCode);
   return doc;
 }
 
@@ -3370,41 +3521,46 @@ function openPackagingBusinessPart(code) {
         ? "材料/排版/工艺与上一行同组（合并单元格）" : ""),
     ].join("");
   }
-  const outlineHost = $("packagingPartOutline");
-  if (outlineHost) {
-    // 点一件直接看样子，三态都要说清（Spec 2.1-result §2.2）：
-    // `ready` 画出绑定分量的轮廓；坐标还没到（首点竞态）给 `loading` 并把这一件记进
-    // `pendingPackagingShapePartCode`，证据一到重画同一件；其余画不出来的给 `unavailable` + 原因。
-    // 绑定了几何分量的形状画得出来才画（Spec §C2），画不出来才回到绑定状态文案。
-    const outlineHtml = packagingBusinessPartOutlineHtml(binding, currentPackagingCadPlan);
-    if (outlineHtml) {
-      outlineHost.setAttribute("data-qq-part-shape", "ready");
+  // 点一件直接看样子：右栏**唯一**的图形区是上面那一块 `#packagingCadPlanViewer`
+  // （Spec `packaging-2-1-right-pane-single-part-figure.md` §C1/§C3）。未选中态它画整张平面图
+  // （点图选件的入口不变），选中一件就换成**只这一件**的图 —— 不再"整图 + 缩放到这一件"，
+  // 也不再在下栏并排画第二块「只有外圈」的图（整个右栏同时至多一个 `svg`）。
+  const figureHost = packagingCadPlanViewer();
+  if (figureHost) {
+    figureHost.hidden = false;
+    const figureHtml = packagingPartSceneSvg(binding, currentPackagingCadPlan);
+    if (figureHtml) {
+      // 三态与首点竞态跟着这块图走（Spec §C7）：`ready` 出视口 + 缩放控件（§C5：高度是**上限**，
+      // 不吃满整栏）；坐标还没到（首点竞态）给 `loading` 并把这一件记进
+      // `pendingPackagingShapePartCode`，证据一到重画同一件；其余给原因文案（§C7）。
+      figureHost.setAttribute("data-qq-part-shape", "ready");
       pendingPackagingShapePartCode = "";
-      // 形状画得出来时外面包一层视口（Spec §2.2/§2.3）：裁剪 + 高度上限，缩放/平移只改
-      // `transform`（`viewBox` 仍由后端坐标范围产出）；右边一颗「适应窗口」复位。
-      // `loading` / `unavailable` 两态**不**出视口、不出缩放控件（上面三态口径不动）。
-      outlineHost.innerHTML = `<div class="packaging-part-shape-viewport"`
+      figureHost.innerHTML = `<div class="packaging-part-shape-viewport"`
         + ` data-qq-shape-viewport="1">`
-        + outlineHtml
+        + figureHtml
         + `<div class="packaging-part-shape-bar">`
         + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
         + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
         + `</div>`
-        + `</div>`
-        + `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`;
-      bindPackagingPartShapeInteractions(outlineHost);
+        + `</div>`;
+      bindPackagingPartShapeInteractions(figureHost);
     } else if (!currentPackagingCadPlan) {
-      outlineHost.setAttribute("data-qq-part-shape", "loading");
+      figureHost.setAttribute("data-qq-part-shape", "loading");
       pendingPackagingShapePartCode = wanted;
-      // 加载态文案逐字（Spec §2.2）：写成字面量，现场 grep 得到这一句。
-      outlineHost.innerHTML = `<div class="view-3d-placeholder">正在读取这一件的形状…</div>`;
+      // 加载态文案逐字（Spec §C7）：写成字面量，现场 grep 得到这一句。
+      figureHost.innerHTML = `<div class="view-3d-placeholder">正在读取这一件的形状…</div>`;
     } else {
-      outlineHost.setAttribute("data-qq-part-shape", "unavailable");
+      figureHost.setAttribute("data-qq-part-shape", "unavailable");
       pendingPackagingShapePartCode = "";
-      outlineHost.innerHTML = `<div class="view-3d-placeholder">`
+      figureHost.innerHTML = `<div class="view-3d-placeholder">`
         + `${esc(PACKAGING_BINDING_COPY[String(binding.status || "")] || PACKAGING_CAD_PLAN_NO_COORDS)}`
         + `</div>`;
     }
+  }
+  const outlineHost = $("packagingPartOutline");
+  if (outlineHost) {
+    // 下栏只留文字披露：图上已经是"只这一件"了，不再出第二块图（Spec §C1/§C3）。
+    outlineHost.innerHTML = `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`;
   }
   // 剔除了标注线就说得出（Spec §2.3）：句子与数字都来自后端文档，`N = 0` 时整块不出现。
   const annotationLine = packagingPartAnnotationFilteredLine(row, currentPackagingParts);
@@ -6338,12 +6494,33 @@ function releaseFilePreviewUrl() {
   if (filePreviewUrl) { URL.revokeObjectURL(filePreviewUrl); filePreviewUrl = null; }
 }
 
+//: 预览里的「图纸」分类（Spec `packaging-task-file-dwg-opens-the-whole-plan.md` §C1）：只按
+//: **文件名后缀**判（`.dwg` / `.dxf`，大小写不敏感；`P01 面板 · DXF` 这种没有点的写法也算），
+//: **不看** `file.kind` —— 后端 `/files` 把需求原图标成 `kind:"image"`，照着当位图就是一张碎图。
+function fileIsDrawing(file) {
+  const name = String((file && file.name) || "").trim();
+  return /(^|[^A-Za-z0-9])(dwg|dxf)$/i.test(name);
+}
+
 function filePreviewKind(file) {
   const name = String((file && file.name) || "");
-  if ((file && file.kind === "image") || IMAGE_FILE_PATTERN.test(name)) return "image";
+  // 图纸先判（Spec §C1）：DWG/DXF 不是位图，哪怕后端把 kind 写成了 image。
+  // `fileIsDrawing()` 是同文件里的真源；node 单函数抽跑（只 eval 本函数、不带任何依赖）时
+  // 取不到它，走**同值**兜底 —— 既有依赖注入口径（Spec §5.1），两处判据必须一模一样。
+  const isDrawing = (typeof fileIsDrawing === "function")
+    ? fileIsDrawing(file)
+    : /(^|[^A-Za-z0-9])(dwg|dxf)$/i.test(name);
+  // 其余三类也走同一条注入口径：浏览器里吃模块级常量（唯一真源），node 单函数抽跑时
+  // 用**同值**字面量兜底 —— 判据一个字符都不许变。
+  const imagePattern = (typeof IMAGE_FILE_PATTERN !== "undefined")
+    ? IMAGE_FILE_PATTERN : /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+  const textPattern = (typeof TEXT_FILE_PATTERN !== "undefined")
+    ? TEXT_FILE_PATTERN : /\.(txt|md|csv|json|log|yaml|yml)$/i;
+  if (isDrawing) return "drawing";
+  if ((file && file.kind === "image") || imagePattern.test(name)) return "image";
   if (/\.pdf$/i.test(name)) return "pdf";
   if ((file && file.kind === "model") || /\.(stl|step|stp)$/i.test(name)) return "model";
-  if ((file && file.kind === "table") || TEXT_FILE_PATTERN.test(name)) return "text";
+  if ((file && file.kind === "table") || textPattern.test(name)) return "text";
   return "other";
 }
 
@@ -6388,6 +6565,89 @@ function renderPreviewShell(file) {
   return { wrap, content };
 }
 
+// 任务文件里点 DWG/DXF → 预览里画的就是 2.1 未选中态那张**整张平面图**
+// （Spec `packaging-task-file-dwg-opens-the-whole-plan.md` §C2）：同一份 `packaging-geometry`
+// 数据、同一套画法与同一张配色表 —— 不在浏览器端解析 DWG、不新开接口、不复制第二套渲染。
+// 依赖注入口径与 `packagingPartSceneSvg()` 相同（Spec §5.1）：真源优先，node 单函数抽跑走同值兜底。
+function fileDrawingPreviewHtml(doc) {
+  const scene = (doc && doc.cad_scene && typeof doc.cad_scene === "object") ? doc.cad_scene : {};
+  const rows = Array.isArray(scene.entities) ? scene.entities.slice() : [];
+  if (!rows.length) return "";
+  const colours = (typeof PACKAGING_CAD_LAYER_COLORS !== "undefined" && PACKAGING_CAD_LAYER_COLORS)
+    || {cut: "#1f6feb", half_cut: "#2ea043", crease: "#d29922", v_groove: "#a371f7",
+       glue_flap: "#0a3069", print: "#57606a", bleed: "#8b949e", frame: "#6e7781",
+       hole: "#cf222e", unknown: "#8b949e"};
+  const plain = (typeof esc === "function")
+    ? esc
+    : value => String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // 兜底的单件画法（与 `packagingCadSceneEntitySvg()` 同一条口径）：只在没有全局时生效。
+  function sceneEntitySvg(entity, visibility) {
+    const row = (entity && typeof entity === "object") ? entity : {};
+    const layer = String(row.layer || "");
+    if (visibility && visibility[layer] === false) return "";
+    const colour = colours[row.role] || colours.unknown;
+    const bbox = Array.isArray(row.bbox) && row.bbox.length >= 4 ? row.bbox.slice(0, 4).join(",") : "";
+    const data = ` data-cad-entity-id="${plain(String(row.cad_entity_id || ""))}"`
+      + ` data-layer="${plain(layer)}" data-bbox="${plain(bbox)}"`
+      + ` data-business-part="${plain(String(row.business_part_code || ""))}"`;
+    if (String(row.kind || "") === "text") {
+      const text = String(row.text || "");
+      const x = Number(row.x);
+      const y = Number(row.y);
+      if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return "";
+      const size = Number(row.height) > 0 ? Number(row.height) : 2.5;
+      return `<text class="packaging-cad-scene-text"${data} fill="${plain(colour)}"`
+        + ` x="${plain(String(x))}" y="${plain(String(-y))}"`
+        + ` font-size="${plain(String(size))}">${plain(text)}</text>`;
+    }
+    const points = (Array.isArray(row.points) ? row.points : []).map(pair => {
+      const values = Array.isArray(pair) ? pair : [];
+      const px = Number(values[0]);
+      const py = Number(values[1]);
+      return (Number.isFinite(px) && Number.isFinite(py)) ? `${px},${-py}` : "";
+    }).filter(Boolean);
+    if (points.length < 2) return "";
+    const attributes = data + ` fill="none" stroke="${plain(colour)}" stroke-width="1"`;
+    if (row.closed === true && points.length >= 3) {
+      return `<polygon class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+        + `${attributes}></polygon>`;
+    }
+    return `<polyline class="packaging-cad-scene-entity" points="${plain(points.join(" "))}"`
+      + `${attributes}></polyline>`;
+  }
+  const visibility = (scene.layer_visibility && typeof scene.layer_visibility === "object")
+    ? scene.layer_visibility : {};
+  const draw = (typeof packagingCadSceneEntitySvg === "function") ? packagingCadSceneEntitySvg : sceneEntitySvg;
+  const drawn = rows.map(row => draw(row, visibility)).filter(Boolean).join("");
+  if (!drawn) return "";
+  // 取框与 viewBox 与 2.1 未选中态那张整图同一条口径（`packagingCadPlanRange()` +
+  // `packagingCadPlanViewBox()`：全部图元的 bbox 并集、2% 留白、y 轴翻一次）。
+  let box = null;
+  rows.forEach(row => {
+    const raw = (row || {}).bbox;
+    if (!Array.isArray(raw) || raw.length < 4) return;
+    const values = raw.slice(0, 4).map(Number);
+    if (values.some(value => !Number.isFinite(value))) return;
+    if (!box) { box = values.slice(); return; }
+    box[0] = Math.min(box[0], values[0]); box[1] = Math.min(box[1], values[1]);
+    box[2] = Math.max(box[2], values[2]); box[3] = Math.max(box[3], values[3]);
+  });
+  if (!box) return "";
+  const pad = Math.max(box[2] - box[0], box[3] - box[1]) * 0.02;
+  const viewBox = `${box[0] - pad} ${-box[3] - pad} ${(box[2] - box[0]) + pad * 2} ${(box[3] - box[1]) + pad * 2}`;
+  return `<svg class="packaging-cad-plan-svg" viewBox="${plain(viewBox)}"`
+    + ` preserveAspectRatio="xMidYMid meet" role="img" aria-label="图纸平面图">${drawn}</svg>`;
+}
+
+// 归属说清是哪一张（Spec §C5）：点的就是本次解析那张图纸时不啰嗦；点的是别的 DWG/DXF 时点名。
+function fileDrawingOwnershipNote(file, sourceName) {
+  const name = String((file && file.name) || "").trim();
+  const source = String(sourceName || "").trim();
+  if (!source || name === source) return "";
+  return `本次解析的图纸：${source}；这一份不是本次解析用的图纸。`;
+}
+
 async function openFilePreview(file, container, onBack) {
   if (!container || !file) return;
   releaseFilePreviewUrl();
@@ -6412,8 +6672,46 @@ async function openFilePreview(file, container, onBack) {
     content.textContent = mapFilePreviewError(response.status);
     return;
   }
-  filePreviewUrl = URL.createObjectURL(blob);
   const kind = filePreviewKind(file);
+  if (kind === "drawing") {
+    // 图纸分支（Spec §C2/§C3/§C4）：**不**建 object URL、**不**建 `<img>`/`<iframe>`；图来自既有
+    // `/requirement/packaging-geometry`（= 2.1 未选中态那张整张平面图）；还没有解析结果时逐字给出
+    // 下一步 + 一个去 2.1 的出口，不留白、不给碎图、不假装画出来了。
+    const figure = document.createElement("div");
+    figure.className = "file-preview-drawing";
+    const note = document.createElement("div");
+    note.className = "file-preview-note";
+    let payload = null;
+    try {
+      const planResponse = await fetch(packagingCadSceneEndpoint());
+      payload = (planResponse && planResponse.ok) ? await planResponse.json().catch(() => null) : null;
+    } catch (error) {
+      payload = null;
+    }
+    const figureHtml = payload ? fileDrawingPreviewHtml(payload) : "";
+    if (figureHtml) {
+      figure.innerHTML = figureHtml;
+      const sourceName = String((payload && (payload.source_filename
+        || (payload.source && payload.source.filename))) || "");
+      const ownership = fileDrawingOwnershipNote(file, sourceName);
+      note.textContent = ownership;
+      content.replaceChildren(figure);
+      if (ownership) content.append(note);
+      return;
+    }
+    note.textContent = "这份图纸还没有解析结果，请先到 2.1 跑一次图纸解析。";
+    const goto = document.createElement("button");
+    goto.type = "button";
+    goto.className = "file-preview-goto";
+    goto.textContent = "去 2.1 跑图纸解析";
+    goto.addEventListener("click", () => {
+      window.CadFilePreview.close();
+      loadDrawingFlowPanel();
+    });
+    content.replaceChildren(note, goto);
+    return;
+  }
+  if (kind === "image" || kind === "pdf") filePreviewUrl = URL.createObjectURL(blob);
   if (kind === "image") {
     const img = document.createElement("img");
     img.className = "file-preview-image";

@@ -5,6 +5,10 @@
 （闭合件画多边形、开口件画包络矩形；形状渲染与取框入口）。
 
 状态：Spec + 红测（已实现）（点选分流走纯函数；面板画绑定分量的形状；15 条红测转绿）
+**2026-09-23 变更**：§C2「面板画绑定分量的形状」已被
+`docs/specs/packaging-2-1-right-pane-single-part-figure.md`（右栏只画「这一件」的图）取代 ——
+右栏那块图改成这一件的全部图元（按图层着色、可拖拽缩放），`packagingBusinessPartOutlineHtml`
+作为纯函数保留但不再是右栏那块图的来源；本文件 §C1 / §C3 不变。
 红测：`tests/test_packaging_business_part_plan_click_and_bound_outline_red.py`
 
 ## 1. 目标与验收主路径

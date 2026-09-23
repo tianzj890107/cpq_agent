@@ -35,13 +35,15 @@
 }
 
 /* 2.1 右栏零件面板（Spec docs/specs/packaging-parts-selectable-panel.md）
-   只服务 #packagingPartPanel：轮廓（后端坐标 + viewBox）+ 事实 + 证据。*/
+   只服务 #packagingPartPanel：轮廓（后端坐标 + viewBox）+ 事实 + 证据。
+   滚动权收归 `.drawing-model-column[data-qq-fill]` 一处（Spec
+   `packaging-2-1-right-pane-single-part-figure.md` §C6）：面板不再自持滚动条，
+   整栏一起滚（用户要的「完整地滑」）。 */
 .packaging-part-panel {
   border: 1px solid var(--border-color, #e7e7ea);
   border-radius: 8px;
   background: #fff;
   padding: 10px 12px;
-  overflow: auto;
 }
 .packaging-part-panel[hidden] { display: none; }
 .packaging-part-head { margin-bottom: 8px; }
@@ -230,16 +232,17 @@
 }
 
 /* 包装 DWG 的 CAD 平面图（Spec `packaging-business-parts-and-cad-plan-view.md` §6.2）：
-   右栏显示图纸原本的平面图，选中业务部件时其它图元降权、绑定图元高亮。
+   右栏显示图纸原本的平面图；未选中任何一件时是整张平面图（点图选件的入口），
+   选中一件业务部件时这块图改成只画这一件（Spec
+   `packaging-2-1-right-pane-single-part-figure.md` §C1）。
+   滚动权收归 `.drawing-model-column[data-qq-fill]` 一处（同上 §C6，本块不吃满整栏）。
    只新增样式，不新增设计变量 —— 颜色沿用既有 var(...) 兜底写法。 */
 .packaging-cad-plan {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
-  height: 100%;
   padding: 6px 8px;
-  overflow: auto;
 }
 
 .packaging-cad-plan-hint {
@@ -254,7 +257,6 @@
 
 .packaging-cad-plan-svg {
   width: 100%;
-  height: 100%;
   min-height: 220px;
   background: var(--surface, #fff);
   border: 1px solid var(--border, #e5e7eb);
