@@ -304,14 +304,34 @@ button.oc-file-name{width:100%;padding:0;border:0;background:none;text-align:lef
 /* 包装 2.1 撤掉 3D 区块、右栏整块交给"看样子"（Spec
    `packaging-2-1-result-parts-and-shape-only-pane.md` §2.3 / §2.4）：
    这一条巷子里 `#viewer`（3D 画布）不占位 —— `.view-3d-content` 的 `min-height:300px`
-   不再参与布局，不留空画布；形状面板占满右栏。非包装项目没有 `data-qq-no-3d` /
-   `data-qq-fill` 这两个钩子，3D 行为一个字不受影响。 */
+   不再参与布局，不留空画布。非包装项目没有 `data-qq-no-3d` / `data-qq-fill` 这两个钩子，
+   3D 行为一个字不受影响。
+
+   2.1 的纵向滚动权**只有一处**（Spec
+   `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.3）：原先
+   `#packagingPartPanel{flex:1}` → `.packaging-part-outline{flex:1}` → `svg{height:100%}`
+   把形状块钉在中间吃掉全部剩余高度 —— 图片永远不参与滚动，面板里只剩下面一点缝能滚。
+   现在滚动权交给 `.drawing-model-column`（`overflow-y:auto`），内层让出：
+   `#modelPanes` 不再自己滚、面板与形状块都不再 `flex:1`、svg 不再 `height:100%`；
+   形状视口的高度是**上限**（`.packaging-part-shape-viewport`，见 drawing-flow.css）。 */
 .drawing-model-column[data-qq-no-3d] .view-3d-content{display:none}
 .drawing-model-column[data-qq-no-3d] .part-details,
 .drawing-model-column[data-qq-no-3d] .parameter-panel{display:none}
 .drawing-model-column[data-qq-fill] #modelPanes{min-height:0}
-.drawing-model-column[data-qq-fill] #packagingPartPanel{flex:1;min-height:0}
-.drawing-model-column[data-qq-fill] .packaging-part-outline{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
-.drawing-model-column[data-qq-fill] .packaging-part-outline svg{width:100%;height:100%}
+.drawing-model-column[data-qq-fill] #packagingPartPanel{min-height:0}
+.drawing-model-column[data-qq-fill] .packaging-part-outline{min-height:0}
 .drawing-model-column[data-qq-fill] .packaging-part-idle{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;font-size:12px;color:var(--text-secondary);text-align:center}
 #packagingShapeIdle[hidden]{display:none}
+.drawing-model-column[data-qq-fill]{overflow-y:auto;overflow-x:hidden}
+.drawing-model-column[data-qq-fill] #modelPanes{overflow-y:visible}
+
+/* 2.1 左栏业务部件行（Spec `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.1）：
+   `.part-item` 是单行 flex（`align-items:center`），四个块平铺就会挤在一行、长的那串尺寸
+   再被 `.drawing-parts-column` 的 `overflow-x:hidden` 直接裁掉（用户看到的"文字没渲染"）。
+   这里把三行文字装进 `.part-body` 文本容器，靠容器排版；三行字号是闭集：件名 12px、
+   尺寸/状态 ≤11px。`.part-meta` 原先一条规则都没有 ⇒ 落回浏览器默认 16px，比件名还大。 */
+.part-item.packaging-business-part{flex-wrap:wrap;align-items:flex-start;row-gap:2px}
+.part-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere;word-break:break-word}
+.part-item.packaging-business-part .part-name{font-size:12px}
+.part-item.packaging-business-part .part-meta{font-size:11px;line-height:1.45;color:var(--text-secondary)}
+.part-item.packaging-business-part .part-note{font-size:11px}

@@ -20513,3 +20513,90 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 改写后 **旧 SHA 不复存在**：changelog 里此前按旧 SHA 记的提交号（如 `3c59596` / `a102558`）只作历史事实保留，不再是当前提交；
 - 其他 clone（其他同事、34 之外的环境）**必须**重新克隆，或 `git fetch && git reset --hard origin/ytbz`；直接 `git pull` 会被拒；
 - 本次只动 `ytbz` 的署名，未改任何文件内容、未改 tag（仓库无 tag）、未改 `master` / `20260909`。
+
+## 483. 落地「2.1 左栏零件行版式（标题一行 / 尺寸另起一行 / 不出卡片）+ 右栏零件形状可缩放拖拽 + 右栏整块可滚」（32 OK；红基 26 FAIL；红测 B1 的 `NaN` 序列化缺陷按 Spec §5.1 只修管道、断言未放宽）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+用户原话（2026-09-23）：
+
+> 现在零件清单里面文字没渲染 应该标题一行然后尺寸换行 注意文字大小不要超出来卡片
+> 然后右边显示的这个零件本身也没有做缩放或者拖拽功能看起来有点奇怪
+> 然后滚动应该是图片也能向上滚动，就是右侧看板应该全都能滚动，现在除开零件视图下面只剩一点点能滚动了
+
+代码级证据（HEAD `872898b` 工作副本只读实测）：
+
+- `app.js:3251-3255`（`renderPackagingBusinessTree()`）把 `.part-icon` / `.part-name` /
+  `.part-meta` / `.part-note` **平铺**在同一层，而 `workbench.css:46` 的
+  `.part-item{display:flex;align-items:center;…}` 是单行 flex ⇒ 四块挤一行；
+  对照 `app.js:4694-4699`（`renderNode()`）那条视觉 IR 的路是对的：`.part-icon` +
+  `.part-info{flex:1;min-width:0}` 包住三行 —— 版式靠容器，不靠平铺；
+- **全库 0 条 `.part-meta` 规则**（`grep -rn "part-meta" tech_app/frontend/` 只有产出没有样式）
+  ⇒ 尺寸行落回浏览器默认 16px、比同一行的件名（12px）还大；最长的一行
+  `展开 443.523×492.62 mm · DESIGN / SAMPLE` 必然撑破行宽，再被
+  `workbench.css:138` 的 `.drawing-parts-column{…;overflow-x:hidden}` **直接裁掉** ——
+  用户看到的"文字没渲染"；
+- `app.js:3342-3350`（`openPackagingBusinessPart()`）的 `ready` 分支只写 `innerHTML`：
+  形状是一张**死图**，没有视口、没有事件、没有复位；`grep -n "pointerdown\|wheel\|ctrlKey" app.js`
+  = **0 命中**；
+- 滚动是三层三套权：`workbench.css:139` 列 `overflow:hidden` → `:239` `#modelPanes{overflow-y:auto}`
+  → `drawing-flow.css:39-44` 面板 `overflow:auto`；且 `workbench.css:312-316` 在 `[data-qq-fill]`
+  下让 `#packagingPartPanel{flex:1}` → `.packaging-part-outline{flex:1}` → `svg{height:100%}`，
+  形状块把全部剩余高度吃掉、永远不参与滚动 —— 这就是"除开零件视图下面只剩一点点能滚动了"。
+
+本批另查实一处**红测自身的缺陷**（写进 Spec §5.1）：`B1` 的 `float("nan")` 过不了 JSON ——
+`json.dumps` 写成裸 `NaN`、node 的 `JSON.parse` 抛 `SyntaxError`，这条用例在**调用被测函数之前**
+就失败（红基 26 FAIL 里含着它，任何实现都到不了 31 OK）。
+
+### 二、改了什么（只有前端 3 个文件；后端 / 接口 / 数据口径一字未动）
+
+- `tech_app/frontend/app.js`：
+  · `renderPackagingBusinessTree()`：四个块平铺改成 `.part-icon` + **`.part-body`** 文本容器，
+    `.part-name` / `.part-meta` / `.part-note` 进容器；行上给完整 `title="编号 件名 尺寸"`
+    （属性值要过 `&quot;` —— 既有 `esc()` 不管引号，直接用会在带引号的件名上撑破标签）；
+    结果口径那句 `业务部件 ${rows.length} 件（…）` 与 `data-qq-part-toggle` 一字不动；
+  · `openPackagingBusinessPart()` 的 `ready` 分支：形状外面包一层
+    `.packaging-part-shape-viewport`（裁剪 + 高度上限）与右上角 `#packagingPartReset`（`适应窗口`）
+    倍数标签，再调 `bindPackagingPartShapeInteractions(outlineHost)`；`loading` / `unavailable`
+    两态照旧（不出视口、不出控件），`data-qq-part-shape` 三态值与
+    `正在读取这一件的形状…` 逐字不变；
+  · 文件末尾新增 4 个纯函数 `packagingPartShapeZoomClamp()`（夹 `[0.2, 8]`，非有限数 / 非数字 → 1）、
+    `packagingPartShapeNextState()`（归一化 + `pan` / `zoom` / `reset`；放大按**实际生效**倍数
+    `r = k2 / k` 挪锚点，夹到边界锚点不跳）、`packagingPartShapeTransformCss()`
+    （`translate(txpx, typx) scale(k)`，两位小数去多余 0）、`packagingPartShapeZoomLabel()`
+    （`100%` / `800%`），外加 `packagingPartShapeNumberText()` 与
+    `bindPackagingPartShapeInteractions()`（`pointerdown`/`pointermove`/`pointerup`/`pointercancel`
+    + `setPointerCapture`；**`ctrlKey` 的 `wheel` 才缩放**、裸滚轮放行给整栏滚动；宿主写
+    `data-qq-shape-zoom` / `data-qq-shape-pan`，拖拽期 `data-qq-shape-dragging`）。
+    四个纯函数的函数体**各自自带**所需数学：红测是"单函数抽出来 `eval`"真跑，引用模块级常量
+    或互相调用就会 `not defined`（重复的只是十几行归一化，换来"能被真跑"）。
+    缩放 / 平移**只**写 `transform`，`viewBox` 仍由 `packagingCadPlanViewBox(range)` 产出。
+- `tech_app/frontend/workbench.css`：`.part-item.packaging-business-part{flex-wrap:wrap;align-items:flex-start;row-gap:2px}`、
+  `.part-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere;word-break:break-word}`、
+  `.part-meta{font-size:11px}`（补上全库第一条）、`.part-note{font-size:11px}`；
+  `[data-qq-fill]` 四条改成：列 `.drawing-model-column{overflow-y:auto;overflow-x:hidden}`、
+  `#modelPanes{overflow-y:visible}`、`#packagingPartPanel` / `.packaging-part-outline` 撤 `flex:1`、
+  删掉 `.packaging-part-outline svg{height:100%}`（原来那三条就是"图片被钉住 + 下面就剩一条缝"的根因）。
+- `tech_app/frontend/drawing-flow.css`：新增 `.packaging-part-shape-viewport{position:relative;height:min(46vh,420px);overflow:hidden;touch-action:none}`、
+  视口内 svg 撑满（`max-height:none`，免得撞上基础规则的 `260px`）、右上角 `.packaging-part-shape-bar` 倍数 / 复位条、
+  拖拽态光标。
+
+### 三、复跑（本机 `./open-claude/.venv/bin/python -W ignore -m unittest`；本机无 pytest）
+
+- `tests.test_packaging_2_1_parts_row_layout_and_shape_viewport_red` → **`Ran 32 tests … OK`**（红基 `Ran 32 … FAILED (failures=26)`）；
+- 保护网一（前端 91 模块）→ `Ran 1485 tests … OK (skipped=4)`；保护网二（包装 166 模块）→ `Ran 2802 tests … OK (skipped=12)`；
+- 点名复跑 14 个窗口敏感模块（`test_packaging_2_1_result_parts_and_shape_only_red`、
+  `test_packaging_business_parts_and_cad_plan_view_red`、`test_packaging_authority_disclosure_on_read_red`、
+  `test_packaging_parts_3d_red`、`test_packaging_business_part_plan_click_and_bound_outline_red`、
+  `test_packaging_cad_plan_polyline_segments_red`、`test_packaging_parts_downstream_red`、
+  `test_packaging_parts_panel_red` 等）→ `Ran 267 tests … OK`；
+- `node --check tech_app/frontend/app.js` 通过；`git diff --check` 干净；
+- 反向对照 4 条（Spec §5.2）：删接线 ⇒ 只 `C1` 红；删 `.part-meta` 规则 ⇒ 只 `A2` 红；
+  恢复 `flex:1` ⇒ 只 `D3` 红；`clamp` 非有限数分支改 `0.3` ⇒ 只 `B1` 红。跑完全部还原，
+  三个文件 `md5` 与改动后一致。
+
+### 四、本批明确没做
+
+- 不给形状加旋转 / 测量 / 标注 / 导出；不改 `事实 / 实体证据 / BOM 业务角色` 的内容与顺序；
+- 不改后端接口、不改 `packaging-parts` 文档结构、不改 CAD IR；不为 3D 链路（非包装）加缩放拖拽；
+- 未提交前不 push、不建 MR/tag/Release、不部署。

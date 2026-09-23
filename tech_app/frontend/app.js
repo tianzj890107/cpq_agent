@@ -3248,11 +3248,18 @@ function renderPackagingBusinessTree(tree, rows) {
     const truthState = String(row.truth_state || "").trim();
     const truthLabel = packagingBusinessPartTruthLabel(truthState);
     if (truthLabel) line.setAttribute("data-qq-truth-state", truthState);
+    // 版式（Spec `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.1）：标题一行、
+    // 尺寸另起一行、状态一行 —— 三行文字装进一个 `.part-body` 文本容器（对照视觉 IR 那条
+    // 路的 `.part-info`），靠容器排版，不再把四个块平铺在单行 flex 里挤成一行；容器上给完整
+    // 「编号 件名 + 尺寸」的 title，行再窄也 hover 得到全文（`esc()` 不管引号，这里补一层）。
+    const rowTitle = `${code} ${partName} ${size}`.replace(/\s+/g, " ").trim();
     line.innerHTML = `<div class="part-icon part-icon-box" aria-hidden="true"></div>`
+      + `<div class="part-body" title="${esc(rowTitle).replace(/"/g, "&quot;")}">`
       + `<div class="part-name">${esc(code)} ${esc(partName)}</div>`
       + `<div class="part-meta">${esc(size)}${material ? " · " + esc(material) : ""}</div>`
       + `<div class="part-note">${esc(PACKAGING_BINDING_COPY[status] || status)}</div>`
-      + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "");
+      + (truthLabel ? `<div class="part-note packaging-truth-label">${esc(truthLabel)}</div>` : "")
+      + `</div>`;
     // 点开一件就能看到它的构成（Spec §2.1c）：那两百多个几何分量按件归属。
     // 展开里的分量**不**进结果区那句"业务部件 N 件"的计数 —— 两笔账不许混。
     const components = document.createElement("div");
@@ -3343,8 +3350,19 @@ function openPackagingBusinessPart(code) {
     if (outlineHtml) {
       outlineHost.setAttribute("data-qq-part-shape", "ready");
       pendingPackagingShapePartCode = "";
-      outlineHost.innerHTML = outlineHtml
+      // 形状画得出来时外面包一层视口（Spec §2.2/§2.3）：裁剪 + 高度上限，缩放/平移只改
+      // `transform`（`viewBox` 仍由后端坐标范围产出）；右边一颗「适应窗口」复位。
+      // `loading` / `unavailable` 两态**不**出视口、不出缩放控件（上面三态口径不动）。
+      outlineHost.innerHTML = `<div class="packaging-part-shape-viewport"`
+        + ` data-qq-shape-viewport="1">`
+        + outlineHtml
+        + `<div class="packaging-part-shape-bar">`
+        + `<span class="packaging-part-shape-zoom" data-qq-shape-zoom-label="1">100%</span>`
+        + `<button id="packagingPartReset" class="part-row-action" type="button">适应窗口</button>`
+        + `</div>`
+        + `</div>`
         + `<div class="packaging-part-note">${esc(PACKAGING_BOUND_OUTLINE_NOTE)}</div>`;
+      bindPackagingPartShapeInteractions(outlineHost);
     } else if (!currentPackagingCadPlan) {
       outlineHost.setAttribute("data-qq-part-shape", "loading");
       pendingPackagingShapePartCode = wanted;
@@ -6726,4 +6744,217 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       getState: () => ({ visible: false }),
     },
   });
+}
+
+/* 右栏零件形状的缩放视口（Spec
+ * `packaging-2-1-parts-row-layout-and-shape-viewport.md` §2.2）：数学部分是纯函数，
+ * `node -e` 能直接抽出来真跑；只有 `bindPackagingPartShapeInteractions()` 碰 DOM。
+ * 缩放 / 平移**只**改 `transform` —— `viewBox` 仍由 `packagingCadPlanViewBox(range)`
+ * 产出，这里不做任何几何求解；裸滚轮**不**缩放，那一路留给整栏滚动（Spec §2.3）。 */
+const PACKAGING_PART_SHAPE_VIEWPORT_CLASS = "packaging-part-shape-viewport";
+const PACKAGING_PART_SHAPE_RESET_ID = "packagingPartReset";
+const PACKAGING_PART_SHAPE_MIN_ZOOM = 0.2;
+const PACKAGING_PART_SHAPE_MAX_ZOOM = 8;
+
+// 这四个纯函数会被红测用 `node -e` **单函数**抽出来真跑（`eval(单个函数体)`），所以每个
+// 函数体自带它要的那点数学 —— 不许引用模块级常量、也不许互相调用，否则抽出来就
+// `not defined`。重复的只是十几行归一化，换来的是"能被真跑"。
+function packagingPartShapeZoomClamp(k) {
+  const minZoom = 0.2;
+  const maxZoom = 8;
+  if (k === null || k === undefined || k === "" || typeof k === "boolean") return 1;
+  const value = Number(k);
+  if (!Number.isFinite(value)) return 1;
+  if (value < minZoom) return minZoom;
+  if (value > maxZoom) return maxZoom;
+  return value;
+}
+
+// 状态归一化 + 应用动作（Spec §2.2）。放大时按**实际生效**的倍数挪锚点：夹到边界那一刻
+// （`k2 ≠ k * factor`）指针下的那一点仍然不许跳，所以 `r` 取自 `k2 / k` 而不是 `factor`。
+// 归一化口径：不是对象、或 k/tx/ty 有任何一个算不出来（含 `null` / `""` / 非数字串）→ 初始态。
+function packagingPartShapeNextState(state, action) {
+  const minZoom = 0.2;
+  const maxZoom = 8;
+  const asNumber = value => {
+    if (value === null || value === undefined || value === "" || typeof value === "boolean") return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  };
+  const clampZoom = value => {
+    if (Number.isNaN(value)) return 1;
+    if (value < minZoom) return minZoom;
+    if (value > maxZoom) return maxZoom;
+    return value;
+  };
+  const source = (state && typeof state === "object") ? state : null;
+  const rawK = source ? asNumber(source.k) : NaN;
+  const rawTx = source ? asNumber(source.tx) : NaN;
+  const rawTy = source ? asNumber(source.ty) : NaN;
+  const current = (Number.isNaN(rawK) || Number.isNaN(rawTx) || Number.isNaN(rawTy))
+    ? { k: 1, tx: 0, ty: 0 }
+    : { k: clampZoom(rawK), tx: rawTx, ty: rawTy };
+  const move = (action && typeof action === "object") ? action : null;
+  if (!move) return current;
+  if (move.type === "reset") return { k: 1, tx: 0, ty: 0 };
+  if (move.type === "pan") {
+    const dx = asNumber(move.dx);
+    const dy = asNumber(move.dy);
+    return { k: current.k,
+             tx: current.tx + (Number.isNaN(dx) ? 0 : dx),
+             ty: current.ty + (Number.isNaN(dy) ? 0 : dy) };
+  }
+  if (move.type === "zoom") {
+    const factor = asNumber(move.factor);
+    if (Number.isNaN(factor)) return current;
+    const at = (move.at && typeof move.at === "object") ? move.at : {};
+    const rawX = asNumber(at.x);
+    const rawY = asNumber(at.y);
+    const anchorX = Number.isNaN(rawX) ? 0 : rawX;
+    const anchorY = Number.isNaN(rawY) ? 0 : rawY;
+    const nextK = clampZoom(current.k * factor);
+    const ratio = nextK / current.k;
+    return { k: nextK,
+             tx: anchorX - (anchorX - current.tx) * ratio,
+             ty: anchorY - (anchorY - current.ty) * ratio };
+  }
+  return current;
+}
+
+// 只写 `transform`（Spec §2.2）：`translate(txpx, typx) scale(k)`；数值两位小数、去掉多余的 0
+// （`-100.00` → `-100`、`0.20` → `0.2`）。初始态逐字是 `translate(0px, 0px) scale(1)`。
+function packagingPartShapeTransformCss(state) {
+  const minZoom = 0.2;
+  const maxZoom = 8;
+  const asNumber = value => {
+    if (value === null || value === undefined || value === "" || typeof value === "boolean") return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  };
+  const source = (state && typeof state === "object") ? state : null;
+  let k = source ? asNumber(source.k) : NaN;
+  let tx = source ? asNumber(source.tx) : NaN;
+  let ty = source ? asNumber(source.ty) : NaN;
+  if (Number.isNaN(k) || Number.isNaN(tx) || Number.isNaN(ty)) { k = 1; tx = 0; ty = 0; }
+  if (k < minZoom) k = minZoom;
+  if (k > maxZoom) k = maxZoom;
+  const text = value => {
+    if (Number.isNaN(value)) return "0";
+    const rounded = Math.round(value * 100) / 100;
+    const printed = rounded.toFixed(2).replace(/\.?0+$/, "");
+    return (printed === "" || printed === "-" || printed === "-0") ? "0" : printed;
+  };
+  return `translate(${text(tx)}px, ${text(ty)}px) scale(${text(k)})`;
+}
+
+// 倍数文案（Spec §2.2）：`1` → `100%`、`8` → `800%`。
+function packagingPartShapeZoomLabel(state) {
+  const minZoom = 0.2;
+  const maxZoom = 8;
+  const asNumber = value => {
+    if (value === null || value === undefined || value === "" || typeof value === "boolean") return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  };
+  const source = (state && typeof state === "object") ? state : null;
+  let k = source ? asNumber(source.k) : NaN;
+  const tx = source ? asNumber(source.tx) : NaN;
+  const ty = source ? asNumber(source.ty) : NaN;
+  if (Number.isNaN(k) || Number.isNaN(tx) || Number.isNaN(ty)) k = 1;
+  if (k < minZoom) k = minZoom;
+  if (k > maxZoom) k = maxZoom;
+  return `${Math.round(k * 100)}%`;
+}
+
+// 视口接线要用的数字 → 文案（同 `packagingPartShapeTransformCss` 的口径，给 `data-qq-shape-*` 用）。
+function packagingPartShapeNumberText(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") return "0";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  const rounded = Math.round(number * 100) / 100;
+  const printed = rounded.toFixed(2).replace(/\.?0+$/, "");
+  return (printed === "" || printed === "-" || printed === "-0") ? "0" : printed;
+}
+
+// 视口接线（Spec §2.2）：`pointerdown` / `pointermove` / `pointerup` / `pointercancel`
+// 拖拽（`setPointerCapture` 抓指针，拖出视口不丢事件；拖拽期间宿主标 `data-qq-shape-dragging`），
+// `ctrlKey` 的 `wheel` 才缩放（触控板捏合同样给 `ctrlKey`），视口里的「适应窗口」复位。
+// 宿主的 `data-qq-shape-zoom` / `data-qq-shape-pan` 让现场 grep 得出"这块现在是几倍、挪到哪"。
+function bindPackagingPartShapeInteractions(host) {
+  if (!host || typeof host.querySelector !== "function") return null;
+  const viewport = host.querySelector("." + PACKAGING_PART_SHAPE_VIEWPORT_CLASS);
+  if (!viewport) return null;
+  const shape = viewport.querySelector("svg");
+  if (!shape) return null;
+  let state = packagingPartShapeNextState(null, null);
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+  const paint = () => {
+    viewport.setAttribute("data-qq-shape-zoom", packagingPartShapeNumberText(state.k));
+    viewport.setAttribute("data-qq-shape-pan",
+      packagingPartShapeNumberText(state.tx) + "," + packagingPartShapeNumberText(state.ty));
+    shape.style.transform = packagingPartShapeTransformCss(state);
+    const label = viewport.querySelector("[data-qq-shape-zoom-label]");
+    if (label) label.textContent = packagingPartShapeZoomLabel(state);
+  };
+  const onBar = (event) => {
+    const target = event && event.target;
+    return !!(target && typeof target.closest === "function" && target.closest(".packaging-part-shape-bar"));
+  };
+  const number = (value) => (typeof value === "number" && Number.isFinite(value)) ? value : 0;
+  viewport.addEventListener("pointerdown", event => {
+    if (onBar(event)) return;                       // 复位按钮不参与拖拽
+    if (typeof event.button === "number" && event.button > 0) return;
+    dragging = true;
+    lastX = number(event.clientX);
+    lastY = number(event.clientY);
+    viewport.setAttribute("data-qq-shape-dragging", "1");
+    if (typeof viewport.setPointerCapture === "function" && event.pointerId !== undefined) {
+      try { viewport.setPointerCapture(event.pointerId); } catch (error) { /* 环境不支持捕获：照常拖 */ }
+    }
+    if (typeof event.preventDefault === "function") event.preventDefault();
+  });
+  const stopDragging = event => {
+    if (!dragging) return;
+    dragging = false;
+    viewport.removeAttribute("data-qq-shape-dragging");
+    if (typeof viewport.releasePointerCapture === "function"
+        && event && event.pointerId !== undefined) {
+      try { viewport.releasePointerCapture(event.pointerId); } catch (error) { /* 已经放开了 */ }
+    }
+  };
+  viewport.addEventListener("pointermove", event => {
+    if (!dragging) return;
+    const x = number(event.clientX);
+    const y = number(event.clientY);
+    state = packagingPartShapeNextState(state, { type: "pan", dx: x - lastX, dy: y - lastY });
+    lastX = x;
+    lastY = y;
+    paint();
+  });
+  viewport.addEventListener("pointerup", stopDragging);
+  viewport.addEventListener("pointercancel", stopDragging);
+  viewport.addEventListener("wheel", event => {
+    if (!event.ctrlKey) return;                     // 裸滚轮留给整栏滚动（Spec §2.3）
+    if (typeof event.preventDefault === "function") event.preventDefault();
+    const box = viewport.getBoundingClientRect();
+    state = packagingPartShapeNextState(state, {
+      type: "zoom",
+      factor: Math.pow(1.0015, -number(event.deltaY)),
+      at: { x: number(event.clientX) - number(box.left), y: number(event.clientY) - number(box.top) },
+    });
+    paint();
+  }, { passive: false });
+  const reset = viewport.querySelector("#" + PACKAGING_PART_SHAPE_RESET_ID);
+  if (reset) {
+    reset.addEventListener("click", event => {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      state = packagingPartShapeNextState(state, { type: "reset" });
+      paint();
+    });
+  }
+  paint();
+  return state;
 }
