@@ -231,14 +231,21 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
         if req_status == "pending_confirmation":
             return {"status": "awaiting_confirmation", "completed": False,
                     "missing": ["需求确认尚未提交"]}
-        return {"status": "in_progress", "completed": False}
+        # 草稿（含退回后的 `rejected`）走这里：这一步**根本没开始**，不许报"进行中"，
+        # 还要说清卡在哪（Spec `tech-projection-step-state-must-agree-with-its-reasons.md` §2.2）。
+        return {"status": "not_started", "completed": False,
+                "missing": ["需求单当前是「%s」，还没提交确认" % req_status]}
 
     if key == "1.3":
         if req_status == "approved":
             return {"status": "approved", "completed": True}
         if req_status == "pending_review":
             return {"status": "in_review", "completed": False, "missing": ["需求审核尚未给出结论"]}
-        return {"status": "not_started" if not req_status else "in_progress", "completed": False}
+        if not req_status:
+            return {"status": "not_started", "completed": False}
+        # 草稿 / 已退回 / 只走到"待确认"：审核一步都没开始，不许报"进行中"（Spec §2.2）。
+        return {"status": "not_started", "completed": False,
+                "missing": ["需求单当前是「%s」，还没送审" % req_status]}
 
     if key == "2.1":
         if ir is None:
@@ -378,11 +385,15 @@ def _rows_for(project_id: str, facts: Dict[str, Any], role: str) -> List[dict]:
         blockers = list(verdict.get("blockers") or [])
 
         # 前置步骤（本子步骤之前的全部子步骤）没完成 → 逐条说清缺哪一步。
-        for prior in keys[:index]:
-            if not done_by_key.get(prior):
-                prior_spec = next(row for row in stages_table.STAGES if row["sub"] == prior)
-                blockers.append(f"请先完成 {prior} {prior_spec['sub_title']}")
-                break
+        # 已完成的子步骤**跨过了**这道门（`actionable = completed || 前置步骤已完成`）：
+        # 再挂「请先完成 X」就是自相矛盾 —— 正常首次流程里 2.1 会 8/8 完成却挂着
+        # 「请先完成 1.1」（Spec `tech-projection-step-state-must-agree-with-its-reasons.md` §2.1）。
+        if not completed:
+            for prior in keys[:index]:
+                if not done_by_key.get(prior):
+                    prior_spec = next(row for row in stages_table.STAGES if row["sub"] == prior)
+                    blockers.append(f"请先完成 {prior} {prior_spec['sub_title']}")
+                    break
 
         # 权限：不足时不可执行并写明所需角色（不影响 viewable）。
         role_label, _ = _role_names(key)

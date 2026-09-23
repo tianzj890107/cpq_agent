@@ -19072,3 +19072,75 @@ Ran 270 tests in 28.482s ... FAILED (failures=1, skipped=2)
 "一个字不改"，但无断言钉它）—— 属覆盖缺口。
 
 未 push / MR / tag / Release / 部署，未连 PG / 34、未起服务、未写业务数据。
+
+## 461. 落地 `tech-projection-step-state-must-agree-with-its-reasons`：投影里每一步的 `status` / `completed` 与它自己的原因字段不再打架 —— 已完成的行不再挂「请先完成 1.1」，草稿期的 1.2 / 1.3 不再报「进行中」（10 OK，红基 6 红；不回归 214 里 1 条既有挂账；重指 1 条既有守卫，断言未放宽）（9-23，Codex 实现）
+
+用户看到"顺序全乱了"的那一眼，是两步自述在打架：
+
+1. **已完成的行挂着"请先完成 1.1"** —— `_rows_for()` 的前置循环对**每一行**都追加
+   `请先完成 {prior} {sub_title}`，不看本行 `completed`。按 `packaging-stage-order-equals-dependency.md`
+   §2.1 的行序（1.1 → 2.1 → 1.2 → 1.3），2.1 的"前置"就是 1.1 —— 于是正常首次流程
+   （1.1 存草稿 → 2.1 解析 8/8）里，2.1 每一眼都是 `generated / completed=true` 却挂着
+   `["请先完成 1.1 创建需求"]`。而 §5 明说 `blocked_reasons` 是**不可执行**的原因、
+   `actionable = completed || 前置步骤已完成`：已完成的行不存在"前置没做完"这件事。
+2. **需求还是草稿，1.2 / 1.3 就都写着"进行中"且一个字不说缺什么** —— `_judge()` 里 1.2 / 1.3 的
+   兜底分支是 `in_progress` + `missing=[]`，于是 `draft` 时三行并排显示"进行中"（1.1 / 1.2 / 1.3），
+   既看不出先后，也看不出"卡在哪、缺什么"。
+
+只改 `tech_app/backend/services/workflow_projection.py` 两处兜底：
+
+1. `_rows_for()`：前置循环包进 `if not completed:` —— 已成完的行不挂前置文本；
+   **未完成的行逐字保留**原来那句（仍是"第一个没完成的前置步"，`draft` 时 1.2 / 1.3 仍写
+   `["请先完成 1.1 创建需求"]`、`pending_confirmation` 时 1.3 仍写 `["请先完成 1.2 确认需求"]`）。
+2. `_judge()`：1.2 的兜底（草稿 / 已退回）改成 `not_started` +
+   `missing=["需求单当前是「draft」，还没提交确认"]`；1.3 的兜底改成"无需求单 → `not_started`（无
+   `missing`，逐字不变）、其余未送审状态 → `not_started` + `missing=["需求单当前是「…」，还没送审"]"。
+   `pending_confirmation` 的 `awaiting_confirmation`、`pending_review` 的 `in_review`、
+   `approved` 的 `approved / completed`、以及 1.1 的四种口径逐字不变。
+
+冻结点未动：行序与子步骤号（**本批不改顺序** —— 图纸解析第 8 步 `field_write` 要把字段回写进需求单，
+必须落在「1.1 存草稿」之后、「1.2 确认」之前）、`actionable` 算法、权限、`viewable` / `stale` /
+`primary_action` / `next_stage`、`_phases()` / `_next_action()`、接口形状与 `STATUS_ENUM`
+（`not_started` 早就在枚举里，没加新值）。
+
+一处既有测试的重指（如实记录，**没有放宽断言**）：`test_packaging_tech_projection_2_1_must_see_drawing_flow_red`
+的 B6 原来在 `pending_review` 的 fixture 上断言 `1.2`（此时已完成）挂着「请先完成 2.1 图纸解析」——
+那正是本批要修的自相矛盾（旧实现不分完成与否一律追加，`## 447` 写它时只是"碰巧"绿）。把它重指到同一份
+fixture 里真正未完成的 `1.3`，断言强度不变；该文件其余 11 条一个字没动，仍全绿。
+
+实测：
+
+```
+需求=draft            ：1.1 in_progress / 1.2 not_started / 1.3 not_started（都带 missing）
+需求=pending_confirmation：1.1 confirmed / 1.2 awaiting_confirmation / 1.3 not_started
+需求=pending_review   ：1.2 confirmed(completed) / 1.3 in_review
+需求=approved         ：1.3 approved(completed)
+任意 completed=true 的行：blocked_reasons 里没有「请先完成 …」
+未完成的行：前置文案逐字仍是「请先完成 2.1 图纸解析」/「请先完成 1.2 确认需求」
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_tech_projection_step_state_must_agree_with_its_reasons_red
+Ran 10 tests ... OK                     # 红基 Ran 10 ... FAILED (failures=6)
+
+./open-claude/.venv/bin/python -m unittest tests.test_tech_unified_workflow_projection_red \
+    tests.test_packaging_tech_projection_2_1_must_see_drawing_flow_red \
+    tests.test_packaging_integration_stage_must_count_its_own_analysis_red \
+    tests.test_packaging_cost_stage_must_see_the_parsed_parts_red \
+    tests.test_tech_empty_ir_parse_completion_red \
+    tests.test_tech_home_timeline_and_publish_closure_red \
+    tests.test_tech_project_acl_scope_red tests.test_packaging_parts_downstream_red \
+    tests.test_packaging_drawing_flow_red tests.test_spec_status_truth_red
+Ran 214 tests in 80.555s ... FAILED (failures=1, skipped=1)
+    # 唯一那条是既有挂账、与本批无关：tech_unified_workflow_projection_red 的
+    # RequirementCompletionTest.test_confirmed_requirement_completes_confirm_and_opens_review
+    # 按"1.3 排在 2.1 之前"的老行序断言 actionable=true（changelog ## 455 已记）。改前改后同一条。
+```
+
+红测自身缺陷（如实记录）：红测没锁 `missing` 的自由文案（Spec §2.2 明说只要求非空可读），也没钉
+`_next_action()` 在 `draft` 下的具体指向。另：本 Spec 头部写的 changelog 号是 `## 461`，与同批落地的
+`packaging-business-parts-outline-bbox-broken-link.md`（也是 `## 461`）撞号，本批按自己的号写。
+
+未 push / MR / tag / Release / 部署，未起服务、未发 HTTP、未连 PG / 34、未写业务数据。

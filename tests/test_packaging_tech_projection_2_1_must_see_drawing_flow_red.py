@@ -201,11 +201,23 @@ class PackagingProjection21Test(unittest.TestCase):
                          "统一状态枚举是冻结面")
 
     def test_b6_prior_block_template_unchanged(self):
+        """2.1 真没完成时，**还没完成**的行仍要逐字说「请先完成 2.1 图纸解析」。
+
+        `## 461`（`tech-projection-step-state-must-agree-with-its-reasons.md` §2.1）之后，
+        `completed=true` 的行不再挂前置文本 —— 本 fixture 的需求是 `pending_review`，
+        `1.2` 因此已 `confirmed / completed=true`（原来它挂了这句，是因为旧实现**不分完成与否**
+        一律追加，属"已完成的步骤挂着前置提示"那个自相矛盾）。这里改看同一份 `rows_none` 里真正
+        未完成的 `1.3`：断言本身（前置文案逐字不变）没有被放宽，`2.1` 不完成时的提示一个词不改。
+        """
         rows = {row["key"]: row for row in self.out["rows_none"]}
         self.assertFalse(rows["2.1"]["completed"], repr(rows["2.1"]))
-        self.assertIn(PRIOR_BLOCK_TEMPLATE, rows["1.2"]["blocked_reasons"],
+        self.assertTrue(rows["1.2"]["completed"],
+                        "本 fixture 里 1.2 在 pending_review 下已完成：%r" % (rows["1.2"],))
+        row = rows["1.3"]
+        self.assertFalse(row["completed"], "1.3 在本 fixture 里还没完成：%r" % (row,))
+        self.assertIn(PRIOR_BLOCK_TEMPLATE, row["blocked_reasons"],
                       "2.1 真没完成时，前置阻断仍必须逐字说「请先完成 2.1 图纸解析」：%r"
-                      % (rows["1.2"],))
+                      % (row,))
 
     def test_b7_source_of_truth_is_the_projection_module(self):
         source = PROJECTION_PY.read_text(encoding="utf-8")
