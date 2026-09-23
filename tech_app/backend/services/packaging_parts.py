@@ -3646,6 +3646,12 @@ def business_parts_document(authority: Any, geometry: Any, *,
         "authority": authority_disclosure(authority_doc),
         # 部件图三笔账（Spec §C4）：页面据此说"多少件有图、缺多少"。
         "thumbnail": _thumbnail_summary(business_parts),
+        # 解析产出的来源披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6）：
+        # 从图纸推导出来的清单必须自己说清楚，页面据此说"从图纸推导（待人工确认）"，
+        # 不许用"权威清单 / 已审核 BOM"描述它。老文档没有这几把键就是 False/[]。
+        "derived_from_drawing": bool(authority_doc.get("derived_from_drawing")),
+        "gold_standard_used": bool(authority_doc.get("gold_standard_used")),
+        "refused_sources": [str(item) for item in (authority_doc.get("refused_sources") or [])],
     }
     doc["business_parts_id"] = ""
     doc["business_parts_hash"] = ""

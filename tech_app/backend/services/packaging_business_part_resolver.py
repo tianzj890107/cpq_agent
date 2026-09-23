@@ -1,26 +1,23 @@
 # -*- coding: utf-8 -*-
-"""业务部件自动解析器（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md` §2）。
+"""业务部件自动解析器（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2）。
 
 为什么单独一层：`packaging_parts.extract()` 拆出来的是 CAD **连通分量**（真样本酒盒 263 个），
-那是几何事实，不是客户物料清单里的**业务部件**（28 件）。一张刀模图里一个业务部件可能由多个
-互不连通的分量组成、也可能在排版里出现多个副本；反过来，"一种几何指纹 = 一个业务零件"同样
-不成立（左右件同尺寸不同件）。所以业务清单只能来自**权威资料**，几何只负责"这一件在图上哪里"。
+那是几何事实，不是客户物料清单里的**业务部件**。业务部件清单的**唯一输入是 DWG 本身**：
+图纸文字锚点给名称与材料/工艺，几何分量给尺寸与位置，两者绑在一起就是「名称 + 尺寸 + 图纸证据」。
 
-本模块是**确定性**的：只读 CAD IR 的文字/标注/图层/分量与已有权威清单，
+BOM / 报价资料 / 已审核快照 / 人工导入清单**都不参与解析产出** —— 它们只能用来最后对答案
+（放在测试与离线验收里，生产运行时读不到）。把答案当输入，等于把「验收金标」变成「运行时事实」：
+真样本实测，按 SHA 命中仓库里的快照时，"酒盒 28 件"是查表查出来的，不是从图里推出来的。
+
+本模块是**确定性**的：只读 CAD IR 的文字/标注/图层/分量，
 不调模型、不联网、不落盘（落库由调用方 `packaging_parts.save_business_parts()` 做），
 也不 import 任何几何/建模库（几何一律走已经解析好的 CAD IR）。
 
-权威清单来源优先级（Spec §2.1，顺序即判据，先命中先用）：
-  1. `attachment`      —— 本项目附件里的权威 BOM/报价资料工作簿；
-  2. `knowledge_base`  —— 按 `box_type_code / case_code` 查已审核的业务部件清单；
-  3. `drawing_hash`    —— 按 DWG SHA-256 查已审核的图纸权威快照；
-  4. `dwg_candidate`   —— 以上都没有时，用图纸文字锚点生成**候选**部件（`authority_missing`）；
-  5. `missing`         —— 连候选都构不出来（没有文字锚点、没有几何区域）。
-
-无论哪种来源，`business_part_total` 都是**权威清单的件数**（酒盒样本 = 28），
-几何绑定成功与否只改 `bound/partial/ambiguous/unbound`，**不许因为只定位到 20 件就把另外
-8 件从清单里删掉**（Spec §2.1 末段）。
+来源闭集（Spec §2.1）：`dwg` = 从图纸自身证据推导出来的清单；`missing` = 连推导都做不出来。
+被拒绝的来源（`attachment` / `knowledge_base` / `drawing_hash` / `manual_import`）按固定顺序
+记进 `detail.refused_sources`；`detail.gold_standard_used` 恒为 `False`。
 """
+
 from __future__ import annotations
 
 import json
@@ -34,7 +31,23 @@ ENGINE_VERSION = "packaging-business-part-resolver/1"
 DOC_KEY = "packaging_business_parts"
 
 #: 权威清单来源闭集（Spec §2.1 + §3 的 `authority_source`）。
-AUTHORITY_SOURCES = ("attachment", "knowledge_base", "drawing_hash", "dwg_candidate", "missing")
+AUTHORITY_SOURCES = ("dwg", "missing")
+
+#: 运行时**拒绝**的来源（固定顺序、去重；Spec §2.1 第 2 条）：客户资料 / 已审核快照 /
+#: 人工导入清单都不参与解析产出，只在 `detail.refused_sources` 里留痕。
+RUNTIME_REFUSED_SOURCES = ("attachment", "knowledge_base", "drawing_hash", "manual_import")
+
+#: 派生编码前缀（Spec §2.2）：派生件必须与客户编码（`JWXR21-P01`）可区分。
+DERIVED_CODE_PREFIX = "DWG-BP"
+
+#: 每行的派生态闭集（Spec §2.2）：名称+尺寸+图纸三件套齐 / 缺一样 / 定位不到。
+DERIVED_STATUSES = ("derived", "partial", "unbound")
+
+#: 图纸证据块的类型闭集（Spec §2.2）。
+DRAWING_REF_KINDS = ("geometry_evidence", "part_view", "none")
+
+#: 名称锚点落在几何区域上的容差（mm）：锚点文字压着轮廓线是常态。
+ANCHOR_TOLERANCE_MM = 1.0
 
 #: 几何绑定状态闭集（与 `packaging_parts.BUSINESS_BINDING_STATUSES` 同形）。
 BINDING_STATUSES = ("bound", "partial", "ambiguous", "unbound")
@@ -55,6 +68,13 @@ NAME_PATTERNS = (
     re.compile(r"^(?P<name>[^\n\r：:]{2,24})$"),
 )
 
+#: 与 `NAME_PATTERNS[0]` 同口径，但把分隔符也算终止符（`名称：X\P材料：Y` 里的 `\P` 已经是分隔符）。
+_NAME_MARKER = re.compile(r"(?:零件名称|部件名称|名称)\s*[：:]\s*(?P<name>[^\n\r\x1f]+)")
+
+#: 段分隔符（Spec §2.4）：MTEXT 换行 `\P`、真实换行、半角/全角逗号都算。
+_SEGMENT_SEEDS = ("\\P", "\\p", "\r\n", "\r", "\n", "，", ",")
+_SEGMENT_SEP = "\x1f"
+
 #: 排除：标题栏 / 图例 / 坐标网格 / 审批栏 / 尺寸公差文字（Spec §2.2 第 3 条）。
 EXCLUDED_LAYER_HINTS = ("图框", "标题", "图例", "审批", "签名", "网格", "轴网",
                         "TITLE", "FRAME", "LEGEND", "BORDER", "GRID", "VIEWPORT", "DEFPOINTS")
@@ -66,8 +86,29 @@ EXCLUDED_TEXT_HINTS = ("公差", "±", "制表", "审核", "批准", "校对", "
                        "更改说明", "参考线", "正面图", "半穿", "V槽", "Flute", "两组为1套",
                        "单位", "角度", "纸盒", "刀模图")
 
+#: 视图/示意标题（Spec §2.3 第 1 条）：含这些词的整串不是件名。
+VIEW_MARKERS = ("视图", "示意图", "剖视", "轴测", "局部放大")
+#: 产地/版本/状态备注（Spec §2.3 第 2 条）。
+NOTE_MARKERS = ("转越南", "旧款", "新款", "大货", "色位", "不够", "待定", "暂不")
+#: 标题栏**栏位**（Spec §2.3 第 4 条）：整串等于其中之一就不算件名。
+TITLE_BLOCK_FIELDS = ("单位", "审核", "批准", "日期", "比例", "设计", "制图", "校对",
+                      "角度", "图号", "版次", "签名")
+#: 材料/说明表头（Spec §2.3 第 5 条）：对**原文**判一次、对拆出来的件名再判一次
+#: （`包装材料` 被截成 `包装` 就是这条抓的）。
+HEADER_MARKERS = ("包装材料", "材质说明", "技术要求")
+#: 整盒自称（Spec §2.3 第 6 条）：`酒盒顶托`、`700ML酒盒底托` 是装配称呼，不是构成件。
+WHOLE_BOX_WORDS = ("酒盒", "圆盘盒", "礼盒", "包装盒")
+#: 方案名（Spec §2.3 第 3 条）。
+_OPTION_NAME = re.compile(r"方案\s*\d")
+
 #: 「名称」后面的第二段往往是材料/规格（`左盖面纸\P材料:225G铜版底PET光银`）——取第一段。
 LABEL_CUTS = ("材料", "规格", "材质", "\\P", "\n", "\r", "{", "}")
+
+#: 段内的材料标记（Spec §2.4）：标记之后是材料，之前是件名或其它。
+MATERIAL_MARKERS = ("材料", "材质", "规格")
+
+#: 工艺词（Spec §2.2 的 `process_text`）：拆得出就填，拆不出就是空串。
+PROCESS_MARKERS = ("啤", "烫", "印", "UV", "uv", "覆膜", "过油", "裱", "粘", "压", "切", "丝印")
 
 #: 规格串（`1.8mm灰板裱光银纸` / `2.5mm灰板` / `350g粉灰`）：以数值+单位开头的是**材料**，不是件名。
 _SPEC_LIKE = re.compile(r"^\s*\d+(?:\.\d+)?\s*(?:mm|MM|g|G|克|度|张|层)")
@@ -84,9 +125,8 @@ ALIASES: Tuple[Tuple[str, str], ...] = (
 #: 方向/序号词（Spec §2.4 的判据之一）：匹配时用来区分同尺寸的左右件。
 DIRECTION_WORDS = ("左", "右", "顶", "底", "内", "外", "上", "下")
 
-#: 默认已审核权威清单落点（按图纸 hash / 盒型编码查的快照）。
-DEFAULT_SEED_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "agent_knowledge", "provenance", "packaging_authority_parts.json")
+#: 生产默认**不读任何已审核快照**（Spec §2.1 第 4 条）：解析的输入只有 DWG。
+DEFAULT_SEED_PATH = ""
 
 
 def _text(value: Any) -> str:
@@ -143,8 +183,11 @@ _CJK = re.compile(r"[\u3400-\u9fff]")
 
 
 def _label_head(text: Any) -> str:
-    """取名称锚点的"件名那一段"（`左盖面纸\P材料:225G…` → `左盖面纸`），并去掉 MTEXT 花括号。"""
-    body = _width_normalized(text)
+    """取名称锚点的"件名那一段"（`左盖面纸\P材料:225G…` → `左盖面纸`），并去掉 MTEXT 花括号。
+
+    只做**截断**；材料/工艺的拆分口径见 `split_label_parts()`（Spec §2.4）。
+    """
+    body = _strip_mtext_codes(_width_normalized(text))
     for marker in LABEL_CUTS:
         at = body.find(marker)
         if at > 0:
@@ -152,26 +195,155 @@ def _label_head(text: Any) -> str:
     return _text(body)
 
 
-def _is_excluded_text(text: str, layer: str) -> bool:
+def _strip_mtext_codes(text: Any) -> str:
+    """去掉 MTEXT 的花括号与格式码（`{\\C0;旧款大货色位不够` → `旧款大货色位不够`）。"""
+    body = re.sub(r"\{\\[A-Za-z][^;]*;", "", _text(text))
+    return body.replace("{", "").replace("}", "")
+
+
+def _split_segments(text: Any) -> List[str]:
+    """把锚点原文切成段（Spec §2.4）：`\\P` / 真实换行 / 半角逗号 / 全角逗号都算分隔。"""
+    body = _text(text)
+    for seed in _SEGMENT_SEEDS:
+        body = body.replace(seed, _SEGMENT_SEP)
+    return [segment.strip() for segment in body.split(_SEGMENT_SEP)]
+
+
+def _cut_material_marker(segment: str) -> Tuple[str, str]:
+    """段内 `材料：X` / `材质 X` / `规格:Y` → `(标记之前, 标记之后)`（没有标记就原样返回）。"""
+    for marker in MATERIAL_MARKERS:
+        at = segment.find(marker)
+        if at >= 0:
+            return segment[:at], segment[at + len(marker):]
+    return segment, ""
+
+
+def _is_view_title(text: Any) -> bool:
+    return any(marker in _text(text) for marker in VIEW_MARKERS + ("正面图", "侧视图", "后视图", "俯视图"))
+
+
+def _is_process_text(text: Any) -> bool:
+    return any(marker in _text(text) for marker in PROCESS_MARKERS)
+
+
+def split_label_parts(raw: Any) -> Tuple[str, str, str]:
+    """锚点原文 → `(name, material_text, process_text)`（Spec §2.4）。
+
+    - `名称：左盖面纸\\P材料：225G铜版底PET光银` → 名称 `左盖面纸`、材料 `225G铜版底PET光银`；
+    - `面卡，300G白卡/哑PP`（半角逗号同口径）→ 名称 `面卡`、材料 `300G白卡/哑PP`；
+    - `内托支撑围条灰板\\P650G灰板\\P正面图，啤面` → 名称 `内托支撑围条灰板`、材料 `650G灰板`、
+      工艺 `啤面`（视图标题 `正面图` 既不进材料也不进工艺）。
+    原文不在这里丢：调用方把 `raw_text` 一起留着（`source_text`）。
+    """
+    body = _strip_mtext_codes(_width_normalized(raw))
+    for seed in _SEGMENT_SEEDS:
+        body = body.replace(seed, _SEGMENT_SEP)
+    match = _NAME_MARKER.search(body)
+    if match:
+        # 只丢掉「名称：」这个前缀，件名与它后面那几段（材料/工艺）都留着。
+        body = group_concat(match.group("name"), body[match.end():])
+    segments = [segment for segment in _split_segments(body) if _text(segment)]
+    name = ""
+    rest: List[str] = []
+    for segment in segments:
+        head, tail = _cut_material_marker(segment)
+        head = _text(head).strip("：: ")
+        if not name:
+            if head:
+                name = head
+                if tail:
+                    rest.append(tail)
+                continue
+            if tail:
+                rest.append(tail)
+            continue
+        if head:
+            rest.append(head)
+        if tail:
+            rest.append(tail)
+    if not name:
+        name = _label_head(raw)          # 兜底：老口径的截断
+    material: List[str] = []
+    process: List[str] = []
+    for segment in rest:
+        piece = _text(segment).strip("：: ")
+        if not piece or _is_view_title(piece):
+            continue
+        if _is_process_text(piece):
+            process.append(piece)
+        else:
+            material.append(piece)
+    return name, "/".join(material), "、".join(process)
+
+
+def group_concat(head: Any, tail: Any) -> str:
+    """把 `名称：X` 的件名与它后面那段接回去（中间补一个段分隔符）。"""
+    head_text = _text(head)
+    tail_text = _text(tail)
+    if not tail_text:
+        return head_text
+    return head_text + _SEGMENT_SEP + tail_text
+
+
+def _exclusion_reason(raw: Any, name: Any, layer: Any = "") -> str:
+    """件名排除（Spec §2.3）：先对**原文**判、再对拆出来的**件名**判，命中就返回稳定原因码。"""
+    upper_layer = _text(layer).upper()
+    for hint in EXCLUDED_LAYER_HINTS:
+        if hint.upper() in upper_layer:
+            return "annotation_or_frame"
+    name_text = _text(name)
+    if not name_text:
+        return "not_a_name_anchor"
+    for probe in dict.fromkeys((name_text, _squeeze(name_text))):
+        if any(marker in probe for marker in VIEW_MARKERS):
+            return "view_or_diagram_title"
+        if any(marker in probe for marker in NOTE_MARKERS):
+            return "origin_or_status_note"
+        if _OPTION_NAME.search(probe):
+            return "option_name"
+        if probe in TITLE_BLOCK_FIELDS:
+            return "title_block_field"
+        if any(marker in probe for marker in HEADER_MARKERS):
+            return "material_table_header"
+        if any(word in probe for word in WHOLE_BOX_WORDS):
+            return "whole_box_self_reference"
+    for probe in dict.fromkeys((_text(raw), _squeeze(raw))):
+        if any(marker in probe for marker in HEADER_MARKERS):
+            return "material_table_header"
+        if any(marker in probe for marker in VIEW_MARKERS):
+            return "view_or_diagram_title"
+    if _is_excluded_text(name_text, layer):
+        return "annotation_or_frame"
+    if not _CJK.search(name_text):
+        return "not_a_name_anchor"
+    if _SPEC_LIKE.match(name_text):
+        return "spec_like_text"
+    return ""
+
+
+def _is_excluded_text(text: Any, layer: Any = "") -> bool:
+    """老口径的整词排除（图例/公差/材质说明/纯 ASCII 标签）：用于**件名**这一层。"""
     upper_layer = _text(layer).upper()
     for hint in EXCLUDED_LAYER_HINTS:
         if hint.upper() in upper_layer:
             return True
+    body = _text(text)
     for hint in EXCLUDED_TEXT_HINTS:
-        if hint in text:
+        if hint in body:
             return True
-    if not _CJK.search(text):
+    if not _CJK.search(body):
         return True      # 图例 `Cut` / `Crease` 这类纯 ASCII 标签不是部件名
-    if _SPEC_LIKE.match(text):
+    if _SPEC_LIKE.match(body):
         return True      # `1.8mm灰板裱光银纸` 是材料规格文字，不是件名
     return False
 
 
 def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
-    """CAD IR → 名称锚点（Spec §2.2 第 1 条）。
+    """CAD IR → 名称锚点（Spec §2.2/§2.3）。
 
     只读 IR 里已经解析好的 `texts`（TEXT/MTEXT 的原文、插入点、图层、entity id），
-    **不重解析 DXF**；标题栏 / 图例 / 坐标网格 / 审批栏 / 尺寸公差文字一律排除（原因留痕）。
+    **不重解析 DXF**；名称与材料/工艺在同一处拆开（`split_label_parts()`），
+    视图标题 / 产地备注 / 方案名 / 标题栏栏位 / 材料表头 / 整盒自称一律排除（原因留痕）。
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
     anchors: List[Dict[str, Any]] = []
@@ -182,12 +354,7 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
         if not raw:
             continue
         layer = _text(row.get("layer"))
-        name = ""
-        for pattern in NAME_PATTERNS:
-            match = pattern.search(raw)
-            if match:
-                name = _label_head(match.group("name"))
-                break
+        name, material, process = split_label_parts(raw)
         item = {
             "entity_id": _text(row.get("entity_id")),
             "handle": _text(row.get("handle")),
@@ -196,15 +363,14 @@ def extract_text_anchors(cad_ir: Any) -> List[Dict[str, Any]]:
             "position": list(row.get("position") or []) or None,
             "anchor_version": ANCHOR_VERSION,
         }
-        if not name:
-            item["excluded"] = "not_a_name_anchor"
-            anchors.append(item)
-            continue
-        if _is_excluded_text(name, layer):
-            item["excluded"] = "annotation_or_frame"
+        reason = _exclusion_reason(raw, name, layer)
+        if reason:
+            item["excluded"] = reason
             anchors.append(item)
             continue
         item["name"] = name
+        item["material_text"] = material
+        item["process_text"] = process
         item["normalized"] = normalize_part_label(name)
         item["alias_version"] = ALIAS_VERSION
         anchors.append(item)
@@ -369,86 +535,101 @@ def _fingerprint(region: Dict[str, Any]) -> str:
 
 def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
                           thumbnails: Any = None) -> Dict[str, Any]:
-    """权威 28 件 ↔ 几何区域：**全局一对一**匹配（Spec §2.4）。
+    """业务部件行 ↔ 几何区域：按**名称锚点在图上的位置**做全局一对一绑定（Spec §2.2/§2.4）。
 
-    为什么必须全局：按 28 行各自贪心取"最近的分量"时，相同尺寸的左右件会抢同一个分量、
-    另一些件被挤掉。这里先算全部 `(件, 区域)` 分数，再按分数降序做**一次**全局指派，
-    每个区域至多被一件占用；占用冲突导致没有可用区域时才退回 `ambiguous`。
-
-    相同尺寸的左右件**不合并**：每件各占一行，各自去找自己的区域（找不到就是 `unbound`），
-    重复排版的副本归到同一件的 `instances[]`，**不新增业务件**。
+    为什么按位置：解析只吃 DWG，行里的尺寸就是从几何来的 —— 先把"这条名称锚点压在哪一块几何上"
+    定下来，尺寸与图纸证据才有出处。绑定是**全局一对一**（不许各行各自贪心），同分按
+    （区域面积、件序、区域 id）排序，保证与 dict 迭代顺序、时间无关；
+    重复排版的区域只记进 `instances`，**不合并**同名同尺寸的件。
     """
     parts = [row for row in (authority_parts or []) if isinstance(row, dict)]
-    anchor_rows = [row for row in (anchors or []) if isinstance(row, dict) and not row.get("excluded")]
-    region_rows = [row for row in (regions or []) if isinstance(row, dict) and not row.get("excluded")]
+    anchor_rows = [row for row in (anchors or []) if isinstance(row, dict)]
+    region_rows = [row for row in (regions or []) if isinstance(row, dict)]
+    by_entity = {_text(row.get("entity_id")): row for row in anchor_rows
+                 if _text(row.get("entity_id"))}
 
-    # 同一张图的排版副本：几何指纹相同 → 同一区域组（一个区域 + 若干实例）。
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for region in region_rows:
         groups.setdefault(_fingerprint(region), []).append(region)
 
-    scored: List[Tuple[int, int, Dict[str, Any], Dict[str, Any], Optional[str], Optional[Dict[str, Any]]]] = []
+    def _anchor_of(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        evidence = part.get("evidence") if isinstance(part.get("evidence"), dict) else {}
+        for entity_id in (evidence.get("anchor_entity_ids") or []):
+            hit = by_entity.get(_text(entity_id))
+            if hit is not None:
+                return hit
+        return by_entity.get(_text(part.get("anchor_entity_id")))
+
+    scored: List[Tuple[int, float, int, Dict[str, Any], Dict[str, Any]]] = []
     for part_index, part in enumerate(parts):
+        point = (_anchor_of(part) or {}).get("position")
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            x, y = float(point[0]), float(point[1])
+        except (TypeError, ValueError):
+            continue
         for region in region_rows:
-            total, name_score, reason, anchor = _candidate_score(part, region, anchor_rows)
-            if total <= 0:
+            bbox = region.get("bbox")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
                 continue
-            scored.append((total, part_index, part, region, reason, anchor))
-    # 全局指派：分数降序（同分按件序、区域 id 升序，保证确定性），每个区域至多一件。
-    scored.sort(key=lambda row: (-row[0], row[1], _text(row[3].get("region_id"))))
+            try:
+                x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            except (TypeError, ValueError):
+                continue
+            if not (x0 - ANCHOR_TOLERANCE_MM <= x <= x1 + ANCHOR_TOLERANCE_MM):
+                continue
+            if not (y0 - ANCHOR_TOLERANCE_MM <= y <= y1 + ANCHOR_TOLERANCE_MM):
+                continue
+            area = abs(x1 - x0) * abs(y1 - y0)
+            # 面积 > 0 的区域排在前面，再按面积升序：大图框套小件时取那个小件。
+            scored.append((0 if area > 0 else 1, area, part_index, part, region))
+
+    scored.sort(key=lambda row: (row[0], row[1], row[2], _text(row[4].get("region_id"))))
     taken_regions: Dict[str, str] = {}
     assigned: Dict[int, Dict[str, Any]] = {}
-    contested: Dict[int, List[Dict[str, Any]]] = {}
-    for total, part_index, part, region, reason, anchor in scored:
+    for _flag, _area, part_index, part, region in scored:
         region_id = _text(region.get("region_id"))
-        owner = taken_regions.get(region_id)
-        if owner is not None:
-            # 已经被更高分的件占用：这一件只能记成"争用"（同名/同尺寸的候选会有多个）。
-            if total >= 5:
-                contested.setdefault(part_index, []).append(region)
-            continue
-        if part_index in assigned:
+        if region_id in taken_regions or part_index in assigned:
             continue
         taken_regions[region_id] = _text(part.get("business_part_code")) or str(part_index)
-        assigned[part_index] = {"region": region, "score": total, "anchor": anchor, "reason": reason}
+        assigned[part_index] = region
 
     bindings: List[Dict[str, Any]] = []
     instances: List[Dict[str, Any]] = []
     for part_index, part in enumerate(parts):
-        code = _text(part.get("business_part_code")) or ("P%02d" % (part_index + 1))
-        hit = assigned.get(part_index)
-        rivals = contested.get(part_index) or []
-        if hit is None:
-            status = "ambiguous" if rivals else "unbound"
-            binding = {
-                "business_part_code": code, "status": status,
+        code = _text(part.get("business_part_code")) or ("%s%02d" % (DERIVED_CODE_PREFIX,
+                                                                     part_index + 1))
+        region = assigned.get(part_index)
+        if region is None:
+            bindings.append({
+                "business_part_code": code, "status": "unbound",
                 "component_ids": [], "entity_ids": [], "bbox": None,
-                "confidence": 0.0,
-                "reasons": ["equivalent_candidates"] if rivals else ["no_authority_binding"],
-                "rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
-                "candidates": [_text(row.get("region_id")) for row in rivals],
-            }
-        else:
-            region = hit["region"]
-            copies = [row for row in groups.get(_fingerprint(region), [])
-                      if _text(row.get("region_id")) != _text(region.get("region_id"))]
-            status = "bound" if hit["score"] >= 10 else "partial"
-            binding = {
-                "business_part_code": code, "status": status,
-                "component_ids": list(region.get("component_ids") or []),
-                "entity_ids": list(region.get("entity_ids") or []),
-                "bbox": list(region.get("bbox") or []) or None,
-                "confidence": 0.6 if status == "bound" else 0.4,
-                "reasons": [] if status == "bound" else ["one_axis_only"],
-                "rule_id": GLOBAL_ASSIGNMENT_RULE_ID,
-                "anchor_entity_id": _text((hit.get("anchor") or {}).get("entity_id")),
-                "instances": [_text(row.get("region_id")) for row in copies],
-            }
-            for copy in copies:
-                instances.append({"business_part_code": code,
-                                  "region_id": _text(copy.get("region_id")),
-                                  "reason": SAME_SIZE_PARTS_NOT_MERGED})
-        bindings.append(binding)
+                "length_mm": None, "width_mm": None,
+                "confidence": 0.0, "reasons": ["no_geometry_region_at_anchor"],
+                "rule_id": GLOBAL_ASSIGNMENT_RULE_ID, "region_id": "", "candidates": [],
+            })
+            continue
+        length, width = _region_size(region)
+        status = "bound" if (length is not None and width is not None) else "partial"
+        copies = [row for row in groups.get(_fingerprint(region), [])
+                  if _text(row.get("region_id")) != _text(region.get("region_id"))]
+        bindings.append({
+            "business_part_code": code, "status": status,
+            "component_ids": list(region.get("component_ids") or []),
+            "entity_ids": list(region.get("entity_ids") or []),
+            "bbox": list(region.get("bbox") or []) or None,
+            "length_mm": length, "width_mm": width,
+            "confidence": 0.6 if status == "bound" else 0.4,
+            "reasons": [] if status == "bound" else ["size_unknown"],
+            "rule_id": GLOBAL_ASSIGNMENT_RULE_ID, "region_id": _text(region.get("region_id")),
+            "anchor_entity_id": _text((_anchor_of(part) or {}).get("entity_id")),
+            "instances": [_text(row.get("region_id")) for row in copies],
+        })
+        for copy in copies:
+            instances.append({"business_part_code": code,
+                              "region_id": _text(copy.get("region_id")),
+                              "reason": SAME_SIZE_PARTS_NOT_MERGED})
 
     counts = {key: 0 for key in BINDING_STATUSES}
     for binding in bindings:
@@ -472,8 +653,14 @@ def match_authority_parts(authority_parts: Any, anchors: Any, regions: Any,
 # 权威清单来源：attachment → knowledge_base → drawing_hash → dwg_candidate
 # --------------------------------------------------------------------------- #
 def load_seed(path: Any = None) -> Dict[str, Any]:
-    """读已审核权威清单快照（只读；读不到就是空，不抛、不编）。"""
-    target = _text(path) or DEFAULT_SEED_PATH
+    """读一份**离线**的已审核快照（只读；读不到就是空，不抛、不编）。
+
+    生产默认读不到任何快照（`DEFAULT_SEED_PATH == ""`，Spec §2.1 第 4 条）：解析的输入只有 DWG。
+    显式给路径时只给离线工具/验收用 —— **解析器自己不调它**。
+    """
+    target = _text(path)
+    if not target:
+        return {}
     try:
         with open(target, "r", encoding="utf-8") as handle:
             doc = json.load(handle)
@@ -482,193 +669,136 @@ def load_seed(path: Any = None) -> Dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
-def _seed_entries(seed: Dict[str, Any]) -> List[Dict[str, Any]]:
-    entries = seed.get("sources") if isinstance(seed, dict) else None
-    return [row for row in (entries or []) if isinstance(row, dict)]
+def _derived_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """名称锚点 → 派生部件行（Spec §2.2 的产出契约）。
 
-
-def authority_from_seed(seed: Dict[str, Any], *, box_type_code: str = "",
-                        case_code: str = "", drawing_sha256: str = "") -> Optional[Dict[str, Any]]:
-    """按 DWG hash / 盒型编码 / 案例号在快照里找已审核清单（先 hash、后盒型、再案例号）。"""
-    wanted_hash = _text(drawing_sha256).lower()
-    wanted_box = _text(box_type_code).upper()
-    wanted_case = _text(case_code).upper()
-    for entry in _seed_entries(seed):
-        if not entry.get("reviewed"):
-            continue          # 没审过的不是权威来源（Spec §2.1 第 4 条）
-        if wanted_hash and _text(entry.get("drawing_sha256")).lower() == wanted_hash:
-            return entry
-    for entry in _seed_entries(seed):
-        if not entry.get("reviewed"):
-            continue
-        if wanted_box and _text(entry.get("box_type_code")).upper() == wanted_box:
-            return entry
-    for entry in _seed_entries(seed):
-        if not entry.get("reviewed"):
-            continue
-        if wanted_case and _text(entry.get("case_code")).upper() == wanted_case:
-            return entry
-    return None
-
-
-def _entry_rows(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
-    rows = entry.get("parts") if isinstance(entry, dict) else None
-    out: List[Dict[str, Any]] = []
-    for index, row in enumerate(rows or [], start=1):
-        if not isinstance(row, dict):
-            continue
-        out.append({
-            "sequence_no": int(row.get("sequence_no") or index),
-            "business_part_code": _text(row.get("business_part_code")) or ("%s-P%02d" % (
-                _text(entry.get("code_prefix")) or "PART", index)),
-            "name": _text(row.get("name")),
-            "length_mm": _num(row.get("length_mm")),
-            "width_mm": _num(row.get("width_mm")),
-            "material_text": _text(row.get("material_text")),
-            "process_text": _text(row.get("process_text")),
-            "product_size_text": _text(row.get("product_size_text")),
-            "quantity_text": _text(row.get("quantity_text")),
-            "purchase_text": _text(row.get("purchase_text")),
-            "note": _text(row.get("note")),
-        })
-    return out
-
-
-def _candidate_rows(anchors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """没有权威清单时的候选：用图纸文字锚点生成，**状态必须是 `authority_missing`**。"""
+    件数由**图纸名称证据**决定：每个规范化名称一件（按 IR 顺序取第一条，去重是确定性的），
+    不许硬凑成某个数字，也不许从资料里补进来。
+    """
     rows: List[Dict[str, Any]] = []
     seen = set()
     for anchor in anchors:
         if anchor.get("excluded"):
             continue
-        label = _text(anchor.get("name"))
+        name = _text(anchor.get("name"))
         normalized = _text(anchor.get("normalized"))
-        if not label or not normalized or normalized in seen:
+        if not name or not normalized or normalized in seen:
             continue
         seen.add(normalized)
+        entity_id = _text(anchor.get("entity_id"))
         rows.append({
             "sequence_no": len(rows) + 1,
-            "business_part_code": "CAND-P%02d" % (len(rows) + 1),
-            "name": label,
-            "raw_text": _text(anchor.get("raw_text")),
-            "anchor_entity_id": _text(anchor.get("entity_id")),
+            "business_part_code": "%s%02d" % (DERIVED_CODE_PREFIX, len(rows) + 1),
+            "name": name,
+            "name_from_drawing": True,
+            "length_mm": None,
+            "width_mm": None,
+            "material_text": _text(anchor.get("material_text")),
+            "process_text": _text(anchor.get("process_text")),
+            "source_text": _text(anchor.get("raw_text")),
+            "evidence": {
+                "anchor_entity_ids": [entity_id] if entity_id else [],
+                "component_ids": [],
+                "bbox": None,
+                "drawing_ref": {"kind": "none"},
+            },
         })
     return rows
-
-
-def _default_import_workbook(source: Any, *, sheet: str = "",
-                             file_name: str = "") -> Dict[str, Any]:
-    """默认的权威工作簿读取器（读表库只在工具侧，这里**惰性**导入，后端平时不依赖它）。"""
-    from . import packaging_part_authority
-    kwargs: Dict[str, Any] = {"file_name": file_name}
-    if sheet:
-        kwargs["sheet"] = sheet
-    return packaging_part_authority.import_workbook(source, **kwargs)
-
-
-def _attachment_items(attachments: Any) -> List[Dict[str, Any]]:
-    """附件参数的三种写法都收（`(name, bytes)` 元组 / `{"path": …}` / `{"name","bytes"}`）。"""
-    out: List[Dict[str, Any]] = []
-    for item in (attachments or []):
-        if isinstance(item, (tuple, list)) and len(item) == 2:
-            out.append({"name": _text(item[0]), "bytes": item[1]})
-        elif isinstance(item, dict):
-            out.append(dict(item))
-        elif item:
-            out.append({"path": _text(item)})
-    return out
-
-
-def _attachment_rows(attachments: Any, import_workbook: Any) -> Optional[Dict[str, Any]]:
-    """来源 1：本项目附件里的权威工作簿。工作簿本体读不了就返回 None（换下一条来源）。"""
-    importer = import_workbook if callable(import_workbook) else _default_import_workbook
-    for item in _attachment_items(attachments):
-        name = _text(item.get("name"))
-        path = _text(item.get("path")) or (name if not item.get("bytes") else "")
-        payload = item.get("bytes")
-        if payload is None and (not path or not path.lower().endswith((".xlsx", ".xlsm"))):
-            continue
-        sheet = _text(item.get("sheet"))
-        try:
-            if payload is not None:
-                result = importer(bytes(payload), sheet=sheet, file_name=name)
-            else:
-                result = importer(path, sheet=sheet)
-        except Exception:                                # noqa: BLE001 - 这份附件读不成，换下一份
-            continue
-        if isinstance(result, dict) and (result.get("parts") or []):
-            return result
-    return None
 
 
 def resolve_business_parts(project_id: str, cad_ir: Any, geometry_parts: Any,
                            attachments: Any = None, kb: Any = None,
                            *, seed_path: Any = None,
                            import_workbook: Callable[..., Any] = None) -> Dict[str, Any]:
-    """一次业务部件解析（Spec §2.1 的优先级顺序 + §2.4 的全局匹配）。
+    """一次业务部件解析：**只吃 DWG**（Spec §2.1 的闭集 + §2.2 的产出契约 + §2.4 的全局匹配）。
 
-    返回 `{"authority_source", "authority", "business_parts", "match", "detail"}`：
-    `authority_source` 是命中来源（`missing` = 一个来源都没有），`detail` 直接可进流程步骤详情。
-    **不落库**：调用方拿到 `business_parts` 后自己调 `packaging_parts.save_business_parts()`。
+    参数里的 `attachments` / `kb` / `seed_path` / `import_workbook` **一律不读、不用**（它们是
+    被拒绝的来源，只记进 `detail.refused_sources`）：客户资料只用来最后对答案。
+
+    返回 `{"authority_source", "authority", "authority_rows", "match", "detail"}`；
+    `authority_source` ∈ (`dwg`, `missing`)。**不落库**：调用方拿到行之后自己调
+    `packaging_parts.save_business_parts()`。
     """
     ir = cad_ir if isinstance(cad_ir, dict) else {}
     source_block = ir.get("source") if isinstance(ir.get("source"), dict) else {}
     drawing_sha256 = _text(source_block.get("source_sha256"))
-    box_type_code = _text((kb or {}).get("box_type_code")
-                          if isinstance(kb, dict) else "") or _text(ir.get("box_type_code"))
-    case_code = _text((kb or {}).get("case_code") if isinstance(kb, dict) else "")
-    seed = load_seed(seed_path)
 
     anchors = extract_text_anchors(ir)
     # 区域优先取**已过滤**的几何零件文档（真样本 263 件）；没有文档才退回 IR 的原始分量。
     regions = regions_from_geometry_parts(geometry_parts) or build_geometry_regions(ir)
-
-    authority: Optional[Dict[str, Any]] = None
-    authority_source = "missing"
-    attachment = _attachment_rows(attachments, import_workbook)
-    if attachment:
-        authority, authority_source = attachment, "attachment"
-    else:
-        entry = authority_from_seed(seed, box_type_code=box_type_code, case_code=case_code,
-                                    drawing_sha256=drawing_sha256)
-        if entry is not None:
-            authority = dict(entry)
-            authority["parts"] = _entry_rows(entry)
-            authority_source = _text(entry.get("authority_source")) or "drawing_hash"
-            if authority_source not in AUTHORITY_SOURCES:
-                authority_source = "drawing_hash"
-    if authority is None:
-        candidates = _candidate_rows(anchors)
-        if candidates:
-            authority = {"parts": candidates, "authority_missing": True,
-                         "source": {"kind": "dwg_candidate", "anchor_version": ANCHOR_VERSION,
-                                    "alias_version": ALIAS_VERSION}}
-            authority_source = "dwg_candidate"
-
-    rows = list((authority or {}).get("parts") or [])
+    rows = _derived_rows(anchors)
     match = match_authority_parts(rows, anchors, regions)
+    by_code = {_text(binding.get("business_part_code")): binding
+               for binding in (match.get("bindings") or []) if isinstance(binding, dict)}
+
+    for row in rows:
+        binding = by_code.get(_text(row.get("business_part_code"))) or {}
+        row["length_mm"] = _num(binding.get("length_mm"))
+        row["width_mm"] = _num(binding.get("width_mm"))
+        located = bool(binding.get("bbox") or binding.get("component_ids"))
+        row["evidence"]["component_ids"] = list(binding.get("component_ids") or [])
+        row["evidence"]["bbox"] = list(binding.get("bbox") or []) or None
+        if not located:
+            row["evidence"]["drawing_ref"] = {"kind": "none"}
+            row["status"] = "unbound"
+        else:
+            row["evidence"]["drawing_ref"] = {
+                "kind": "geometry_evidence",
+                "component_ids": list(binding.get("component_ids") or []),
+                "bbox": list(binding.get("bbox") or []) or None,
+                "region_id": _text(binding.get("region_id")),
+            }
+            row["status"] = "derived" if (row["length_mm"] is not None
+                                          and row["width_mm"] is not None) else "partial"
+        row["reasons"] = [] if row["status"] == "derived" else list(
+            binding.get("reasons") or ["no_geometry_region_at_anchor"])
+
+    authority = {
+        "parts": rows,
+        "derived_from_drawing": True,
+        "gold_standard_used": False,
+        "refused_sources": list(RUNTIME_REFUSED_SOURCES),
+        "source": {},
+        "anchor_version": ANCHOR_VERSION,
+        "alias_version": ALIAS_VERSION,
+    }
+    name_anchor_total = len([row for row in anchors if not row.get("excluded")])
+    excluded_anchor_total = len([row for row in anchors if row.get("excluded")])
+    with_size = [row for row in rows
+                 if row.get("length_mm") is not None and row.get("width_mm") is not None]
+    with_ref = [row for row in rows
+                if _text((row.get("evidence") or {}).get("drawing_ref", {}).get("kind"))
+                not in ("", "none")]
     detail = {
-        "authority_source": authority_source,
-        "business_part_total": int(match["business_part_total"]),
+        "authority_source": "dwg" if rows else "missing",
+        "derived_from_drawing": True,
+        "gold_standard_used": False,
+        "refused_sources": list(RUNTIME_REFUSED_SOURCES),
+        "business_part_total": len(rows),
+        "parts_with_size_total": len(with_size),
+        "parts_with_drawing_ref_total": len(with_ref),
+        "name_anchor_total": name_anchor_total,
+        "excluded_anchor_total": excluded_anchor_total,
         "bound_total": int(match["bound_total"]),
         "partial_total": int(match["partial_total"]),
         "ambiguous_total": int(match["ambiguous_total"]),
         "unbound_total": int(match["unbound_total"]),
         "geometry_component_total": len(regions),
-        "anchor_total": len([row for row in anchors if not row.get("excluded")]),
+        "anchor_total": name_anchor_total,
         "drawing_sha256": drawing_sha256,
         "engine_version": ENGINE_VERSION,
-        "authority_missing": authority_source in ("dwg_candidate", "missing"),
+        "authority_missing": not rows,
     }
-    return {"authority_source": authority_source, "authority": authority or {},
+    return {"authority_source": detail["authority_source"], "authority": authority,
             "authority_rows": rows, "anchors": anchors, "regions": regions,
             "match": match, "detail": detail}
 
 
 __all__ = [
-    "ALIASES", "ANCHOR_VERSION", "ALIAS_VERSION", "AUTHORITY_SOURCES",
-    "BINDING_STATUSES", "DOC_KEY", "ENGINE_VERSION", "GLOBAL_ASSIGNMENT_RULE_ID",
-    "SAME_SIZE_PARTS_NOT_MERGED", "authority_from_seed", "build_geometry_regions",
-    "extract_text_anchors", "load_seed", "match_authority_parts",
-    "normalize_part_label", "regions_from_geometry_parts", "resolve_business_parts",
+    "ALIASES", "ANCHOR_TOLERANCE_MM", "ANCHOR_VERSION", "ALIAS_VERSION", "AUTHORITY_SOURCES",
+    "BINDING_STATUSES", "DERIVED_CODE_PREFIX", "DERIVED_STATUSES", "DOC_KEY",
+    "DRAWING_REF_KINDS", "ENGINE_VERSION", "GLOBAL_ASSIGNMENT_RULE_ID",
+    "RUNTIME_REFUSED_SOURCES", "SAME_SIZE_PARTS_NOT_MERGED", "build_geometry_regions",
+    "extract_text_anchors", "load_seed", "match_authority_parts", "normalize_part_label",
+    "regions_from_geometry_parts", "resolve_business_parts", "split_label_parts",
 ]

@@ -2989,11 +2989,20 @@ function packagingBusinessPartSizeText(row) {
   return "";
 }
 
+// 业务部件清单的来源标签（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6 第 2 条）：
+// 从图纸推导出来的清单要说成"从图纸推导（待人工确认）"，不许用"权威清单 / 已审核 BOM"描述它。
+function packagingBusinessPartsSourceLabel(doc) {
+  const record = doc || {};
+  const derived = record.derived_from_drawing === true
+    || (record.authority && record.authority.derived_from_drawing === true);
+  return derived ? "从图纸推导（待人工确认）" : "来自权威清单";
+}
+
 function renderPackagingBusinessTree(tree, rows) {
   const head = document.createElement("div");
   head.className = "packaging-business-head";
   head.dataset.qqBusinessParts = "1";
-  head.textContent = `业务部件 ${rows.length} 件（来自权威清单）`;
+  head.textContent = `业务部件 ${rows.length} 件（${packagingBusinessPartsSourceLabel(currentPackagingBusinessParts)}）`;
   tree.appendChild(head);
   // 权威清单的披露（Spec `packaging-authority-disclosure-on-read.md` §C5）：部件图归属与
   // 被跳过的行必须看得见 —— 跳过的行里可能有"影响报价"的客户原话。纯文本渲染，不拼 HTML。

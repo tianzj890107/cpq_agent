@@ -7386,6 +7386,10 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
                 "source": {},
                 # 没有清单就没有披露：给空对象，不许编"部件图归属"（Spec §C3）。
                 "authority": {},
+                # 没有清单就没有来源可披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6）。
+                "derived_from_drawing": False,
+                "gold_standard_used": False,
+                "refused_sources": [],
                 "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
     return {"built": bool(record.get("business_parts")),
             "engine_version": record.get("engine_version") or packaging_parts.BUSINESS_ENGINE_VERSION,
@@ -7403,6 +7407,15 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             # `packaging-authority-disclosure-on-read.md` §C3）：文档里落了什么就透传什么，
             # 老文档没有就给 `{}` —— 页面据此说"部件图归属是推定的""哪些行被跳过"。
             "authority": dict(record.get("authority") or {}),
+            # 来源披露（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.6 第 1 条）：
+            # 文档里落了什么就原样透传什么 —— 页面据此说"从图纸推导（待人工确认）"。
+            "derived_from_drawing": bool(record.get("derived_from_drawing")
+                                         or (record.get("authority") or {}).get("derived_from_drawing")),
+            "gold_standard_used": bool(record.get("gold_standard_used")
+                                       or (record.get("authority") or {}).get("gold_standard_used")),
+            "refused_sources": [str(item) for item in (record.get("refused_sources")
+                                                       or (record.get("authority") or {}).get("refused_sources")
+                                                       or [])],
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
 
 

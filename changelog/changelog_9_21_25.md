@@ -18669,3 +18669,45 @@ Release / 部署、未连 PG、样本只读。
 相关的 62 个模块）`Ran 1092 tests … FAILED (failures=1, skipped=1)`，那 1 条是既有挂账
 `tech_unified_workflow_projection_red.RequirementCompletionTest`（`## 320` 按设计变红），与本批无关。
 两份 Spec 状态行已改「已实现」并各追加落地状态节。未 push / MR / tag / Release / 部署、未连 PG。
+
+## 456. 落地 `packaging-parts-must-be-derived-from-the-drawing`：解析只吃 DWG —— 业务部件清单从图纸证据推导（名称+尺寸+图纸证据），BOM / 已审核快照只做最后对答案（51 OK，红基 34 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-parts-must-be-derived-from-the-drawing.md`，红测
+`tests/test_packaging_parts_must_come_from_the_drawing_red.py`（36 条）+ 按新口径改写的
+`tests/test_packaging_28_part_auto_resolution_and_2d_board_cleanup_red.py` 两条用例。
+
+- **来源闭集收成 `dwg` / `missing`**（Spec §2.1）：`AUTHORITY_SOURCES`、`RUNTIME_REFUSED_SOURCES`
+  （`attachment`/`knowledge_base`/`drawing_hash`/`manual_import`，固定顺序去重）、`DEFAULT_SEED_PATH = ""`；
+  `resolve_business_parts()` 的 `attachments`/`kb`/`seed_path`/`import_workbook` **一律不读**，
+  只记 `detail.refused_sources` 与 `gold_standard_used=False` —— 给了金标与不给金标，输出逐字相同；
+- **图纸流同步**（`packaging_drawing_flow/steps.py`）：`AUTHORITY_PRECEDENCE = ("dwg", "missing")`，
+  `_resolve_business_parts()` 里 `store.load_attachments` 与 `ctx["kb"]` 全部拿掉；
+  `authority_source != "dwg"` 时不落库，只报件数与来源。`model.BUSINESS_PART_AUTHORITY_SOURCES` 同步收窄；
+- **产出契约**（Spec §2.2）：每行带 `business_part_code`（前缀 `DWG-BP`，与 `JWXR21-P01` 可区分）、
+  `name`、`name_from_drawing=True`、`length_mm`/`width_mm`（来自几何）、`material_text`/`process_text`、
+  `source_text`（原文不丢）、`evidence{anchor_entity_ids, component_ids, bbox, drawing_ref}`、
+  `status ∈ (derived, partial, unbound)` 与稳定码 `reasons`；`detail` 带
+  `derived_from_drawing`/`gold_standard_used`/`refused_sources`/`parts_with_size_total`/
+  `parts_with_drawing_ref_total`/`name_anchor_total`/`excluded_anchor_total`（都是实算，不是估的）；
+- **绑定改成按名称锚点在图上的位置**（`match_authority_parts()` 重写）：可容纳该锚点的区域里取
+  面积最小者（大图框套小件时取小件），全局一对一、同分按（面积、件序、区域 id）排序 ——
+  确定性；重复排版只记 `instances`，同名同尺寸的件**不合并**（`same_size_parts_are_not_merged`）；
+- **排除规则六条**（Spec §2.3）：视图/示意标题、产地/版本/状态备注、方案名、标题栏栏位、
+  材料/说明表头、整盒自称；**对原文判一次、对拆出来的件名再判一次**（`包装材料` 被截成 `包装`
+  就是原文那一次抓的），`角  度` / `批 准` 走 squeeze 后的整词比对；
+- **名称/材料拆分**（Spec §2.4）：`名称：X` + `\P` + `材料：Y`、全角/半角逗号、多行 `\P` 后跟
+  `，啤面` 都拆得开（`split_label_parts()`），材料/工艺各自成键、原文整串留 `source_text`；
+- **金标搬到测试侧**（Spec §2.5）：`git mv tech_app/agent_knowledge/provenance/packaging_authority_parts.json
+  tests/fixtures/gold/packaging_authority_parts.json`，生产 `.py` 里不再出现金标路径；
+- **披露**（Spec §2.6）：文档与读接口透传 `derived_from_drawing`/`gold_standard_used`/`refused_sources`，
+  左栏标题改成「业务部件 N 件（从图纸推导（待人工确认））」。
+
+真样本（只读）：酒盒名称锚点 127 条 → 去掉标题栏/表头/整盒自称后 26 条、去重 20 件，
+与金标同名 18 件，另有 `右盖外盒里层灰板`/`顶托灰板`（金标没有、图纸有），
+`磁铁`/`内卡`/`底板`/`底板面纸`/`底托灰板` 一件都不出现；圆盘盒的视图标题/产地备注/方案名 8 条全不进清单。
+
+实跑：`Ran 51 tests … OK`（红基 34 红）；保护网（全部 packaging 系列 151 个模块）
+`Ran 2593 tests … FAILED (failures=13, skipped=10)` —— 13 条全部是既有挂账（固定挂账 5 条 +
+`packaging_solids_body_unusable_red` 红测自身缺陷 5 条 + 前端沙箱缺依赖 3 条，后者用 `git stash`
+摘掉本批 app.js 改动后照样红）。`tests.test_spec_status_truth_red` 7 OK。未 push / MR / tag /
+Release / 部署、未连 PG、样本只读。

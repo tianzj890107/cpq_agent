@@ -63,19 +63,36 @@ class AutoBusinessPartResolutionRed(unittest.TestCase):
         self.assertIn("authority_source", FLOW)
         self.assertIn("business_part_total", FLOW)
 
-    def test_authority_lookup_precedence_is_explicit(self):
-        combined = FLOW + MAIN
-        for token in ("attachment", "knowledge_base", "drawing_hash", "dwg_candidate"):
-            self.assertIn(token, combined)
+    def test_runtime_authority_sources_are_drawing_only(self):
+        """`## 453` 收窄口径：解析只吃 DWG，BOM / 已审核快照只做最后对答案。
 
-    def test_known_wine_case_has_reviewed_28_part_authority_seed(self):
-        seeds = "\n".join(path.read_text(encoding="utf-8", errors="ignore")
-                          for path in ROOT.glob("**/*packaging*authority*.json"))
-        combined = seeds + MAIN + FLOW
-        self.assertIn("YT-DWG-WINE-700ML", combined)
-        self.assertIn("0991c8b0a9646d1fea6571d2ae6155923351c05ca2aeeb6ed544ef19df93f3e0",
-                      combined)
-        self.assertRegex(combined, r'(?s)business_part_total.{0,120}28')
+        本用例原先是 `test_authority_lookup_precedence_is_explicit`，断言
+        `attachment → knowledge_base → drawing_hash → dwg_candidate` 这条优先级链存在。
+        那条链已被业务侧否掉（等于把答案当输入），因此改为断言来源闭集只剩图纸自身。
+        """
+        self.assertRegex(FLOW, r'AUTHORITY_PRECEDENCE\s*=\s*\(\s*"dwg"\s*,\s*"missing"\s*,?\s*\)')
+        self.assertNotIn("attachment", self._precedence_line())
+
+    def _precedence_line(self):
+        match = re.search(r"AUTHORITY_PRECEDENCE\s*=\s*\([^)]*\)", FLOW)
+        return match.group(0) if match else ""
+
+    def test_wine_gold_standard_lives_on_the_test_side_only(self):
+        """`## 453`：酒盒 28 件那份金标只允许落在测试侧，生产树里不许再有它。
+
+        本用例原先是 `test_known_wine_case_has_reviewed_28_part_authority_seed`，
+        断言仓库里存着按图纸 SHA 命中的已审核快照 —— 那正是"把答案当运行时输入"。
+        """
+        self.assertFalse(
+            (ROOT / "tech_app/agent_knowledge/provenance/packaging_authority_parts.json").exists(),
+            "生产树里不许再有业务部件金标快照")
+        gold = ROOT / "tests/fixtures/gold/packaging_authority_parts.json"
+        self.assertTrue(gold.exists(), "金标搬到 tests/fixtures/gold/")
+        if gold.exists():
+            text = gold.read_text(encoding="utf-8")
+            self.assertIn("YT-DWG-WINE-700ML", text)
+            self.assertIn("0991c8b0a9646d1fea6571d2ae6155923351c05ca2aeeb6ed544ef19df93f3e0", text)
+            self.assertRegex(text, r'(?s)business_part_total.{0,120}28')
 
     def test_repeated_layouts_are_instances_not_business_parts(self):
         resolver = ROOT / "tech_app/backend/services/packaging_business_part_resolver.py"

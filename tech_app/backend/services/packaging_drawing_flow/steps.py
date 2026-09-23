@@ -351,10 +351,10 @@ def _packaging_material_requirement(ctx: Dict[str, Any], module: Any) -> Dict[st
     return {name: data.get(name) for name in fields if data.get(name) not in (None, "")}
 
 
-#: 业务部件权威清单的来源优先级（Spec `packaging-28-part-auto-resolution-and-2d-board-cleanup.md`
-#: §2.1）：附件工作簿 → 知识库（按盒型/案例号）→ 图纸 SHA-256 快照 → 图纸文字锚点候选。
-AUTHORITY_PRECEDENCE = ("attachment", "knowledge_base", "drawing_hash", "dwg_candidate",
-                        "missing")
+#: 业务部件清单的来源闭集（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.1 第 5 条）：
+#: 解析只吃 DWG —— `dwg` = 从图纸自身证据推导，`missing` = 连推导都做不出来。
+#: 附件工作簿 / 知识库 / 已审核快照 / 人工导入清单都不再是清单来源（等于把答案当输入）。
+AUTHORITY_PRECEDENCE = ("dwg", "missing")
 
 #: 业务部件解析的稳定缺口码（拿不到解析器 / 这一趟解析失败时登记，不改本步结论）。
 BUSINESS_PARTS_RESOLVER_MISSING = "business_parts_resolver_missing"
@@ -368,11 +368,13 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
     业务部件清单是**新增事实**，不是门禁：解析器缺失、附件读不成、清单查不到都只登记进
     detail（`authority_source="missing"` + 原因），**不改这一步的 status**——否则"没有权威
     清单"会把字段写入 / 待确认 / 后续准备一起判死（与零件提取同一条纪律）。
-    返回 `{"detail": {...}, "document": doc|None}`；只有拿到**已审核**权威清单才落库。
+    返回 `{"detail": {...}, "document": doc|None}`；拿到从图纸推导出来的清单就落库（页面据此
+    说"从图纸推导（待人工确认）"）。
     """
     detail: Dict[str, Any] = {"authority_source": "missing", "business_part_total": 0,
                               "bound_total": 0, "partial_total": 0, "ambiguous_total": 0,
-                              "unbound_total": 0}
+                              "unbound_total": 0, "derived_from_drawing": False,
+                              "gold_standard_used": False, "refused_sources": []}
     module = _resolve(ctx, "packaging_business_part_resolver")
     resolve = getattr(module, "resolve_business_parts", None) if module is not None else None
     if not callable(resolve):
@@ -380,13 +382,9 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
                                   "message": "业务部件解析器当前不可用，业务部件清单暂不可生成"}]
         return {"detail": detail, "document": None}
     project_id = str(ctx.get("project_id") or "")
-    attachments: Any = None
     try:
-        attachments = store.load_attachments(project_id)
-    except Exception:                                    # noqa: BLE001 - 附件读不到不是这一步的失败
-        attachments = None
-    try:
-        outcome = resolve(project_id, ir, geometry_parts, attachments, ctx.get("kb"))
+        # 附件 / 知识库一律不传：解析只吃 DWG（Spec §2.1 第 5 条）。
+        outcome = resolve(project_id, ir, geometry_parts, None, None)
     except Exception as exc:                             # noqa: BLE001 - 解析器自己坏了也要留痕
         detail["unavailable"] = [{"code": BUSINESS_PARTS_RESOLVE_FAILED,
                                   "message": "业务部件解析失败（%s）" % type(exc).__name__}]
@@ -396,10 +394,13 @@ def _resolve_business_parts(ctx: Dict[str, Any], ir: Dict[str, Any], geometry_pa
     detail.update({key: resolved[key] for key in
                    ("authority_source", "business_part_total", "bound_total",
                     "partial_total", "ambiguous_total", "unbound_total",
-                    "geometry_component_total") if key in resolved})
-    if str(detail.get("authority_source")) == "dwg_candidate":
-        # 图纸文字锚点只够做**候选**：不许当成 BOM / 成本的权威事实（Spec §2.1 第 4 条），
-        # 因此这一趟**不落库**，只把件数与来源报出去（页面据此说"还没有权威清单"）。
+                    "geometry_component_total", "derived_from_drawing", "gold_standard_used",
+                    "refused_sources", "name_anchor_total", "excluded_anchor_total",
+                    "parts_with_size_total", "parts_with_drawing_ref_total")
+                   if key in resolved})
+    if str(detail.get("authority_source")) != "dwg":
+        # 连推导都做不出来（这张图上没有可用的名称锚点）：**不落库**，只把件数与来源报出去
+        # （页面据此说"这张图上没有名称证据"），不拿客户资料补进来（Spec §2.1/§2.3）。
         detail["authority_missing"] = True
         return {"detail": detail, "document": None}
     build = getattr(parts_module, "business_parts_document", None)
@@ -507,7 +508,7 @@ def parts_extract(ctx: Dict[str, Any]) -> Dict[str, Any]:
               % (detail["parts_total"], detail["filtered_total"]))
     if business["document"] is not None:
         _emit(str(ctx.get("project_id")), str(ctx.get("run_id")), "parts",
-              "业务部件：%d 件（已定位 %d 件，权威来源：%s）"
+              "业务部件：%d 件（已定位 %d 件，来源：%s）"
               % (model._as_int(detail.get("business_part_total")),
                  model._as_int(detail.get("bound_total")),
                  str(detail.get("authority_source") or "")))

@@ -22,8 +22,9 @@ STEP_IDS = ("file_preflight", "dwg_convert", "cad_ir_parse", "packaging_semantic
 PARTS_SUBPHASES = ("geometry_regions_extract", "business_parts_resolve")
 
 #: 业务部件权威清单的来源闭集（Spec §2.1 的优先级顺序）：`missing` = 一个来源都没有。
-BUSINESS_PART_AUTHORITY_SOURCES = ("attachment", "knowledge_base", "drawing_hash",
-                                   "dwg_candidate", "missing")
+#: 业务部件清单的来源闭集（Spec `packaging-parts-must-be-derived-from-the-drawing.md` §2.1）：
+#: 解析只吃 DWG。
+BUSINESS_PART_AUTHORITY_SOURCES = ("dwg", "missing")
 
 STEP_TITLES = {
     "file_preflight": "文件预检",
