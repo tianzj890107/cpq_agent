@@ -141,3 +141,12 @@ C2（`EDITABLE_STATUSES` 未放宽）、C3（`approved` 仍退得回草稿）。
    `assert_requirement_drawing_parsed()` 门禁在做的事。该用例给的是一个**已确认但没解析过图纸**的
    合成状态（`confirmed_1_2/confirmed_1_3`），在新顺序下它本就不该可执行（真按这个顺序点下去，
    1.1 提交确认会被门禁 409 挡下）。旧断言编码的正是被本 Spec 判定为 bug 的那条顺序，所以不动它。
+
+   已处置（`## 471`，Codex 测试侧；断言与期望值一字未改）：难点不在断言，在**夹具**——那条用例给的是
+   `ir=False` 的合成态（"已确认但没解析过图纸"），而在本 Spec 的顺序下这个状态**点不出来**
+   （`## 313` 的 `assert_requirement_drawing_parsed()` 会把没有图纸的提交确认 409 挡下），
+   于是断言的对象变成了旧行序。本批把夹具补成**可达**状态：
+   `tests/test_tech_unified_workflow_projection_red.py` 里 `confirmed` 那个项目改成 `ir=True`
+   （"已确认"必然意味着图纸已经解析过），`assertTrue(review.get("actionable"))` 与
+   `assertFalse(review.get("completed"))` 两句逐字未动。反向对照：把 `ir` 改回 `False` ⇒ 该用例立刻
+   `FAIL`（`blocked_reasons=['请先完成 2.1 图纸解析']`），恢复即 `Ran 30 … OK`。

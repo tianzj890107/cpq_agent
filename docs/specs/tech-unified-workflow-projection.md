@@ -182,3 +182,11 @@
 * 每个 stage 独立的 `page_context` 与「查不到不退回」的既有约定。
 * 权限门禁强度（含 1.3 / 5.2 的审核权限、阶段 4 的财务归属）。
 * 既有阶段跳转、URL 恢复、iframe 嵌入与看板协议。
+
+## 17. 本 Spec 点名的红测里唯一曾失败的用例已收口（`## 471`）
+
+`tests/test_tech_unified_workflow_projection_red.py::RequirementCompletionTest::test_confirmed_requirement_completes_confirm_and_opens_review`
+从 `## 320`（阶段行序 = 依赖顺序）起按设计变红，`packaging-stage-order-equals-dependency.md` §7.3 第 3 条
+记的就是这一条。`## 471` 把它收口：红的是**夹具**（`ir=False` 的合成态在新顺序下不可达），
+断言与期望值一字未改，`confirmed` 那个探针项目改成 `ir=True`。该文件 `Ran 30 … OK`。
+本 Spec 的 5 阶段 × 13 子步骤口径、`actionable` 规则、`blocked_reasons` 文案都没有变。

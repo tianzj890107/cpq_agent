@@ -19702,3 +19702,30 @@ Spec `quick-quote-home-wiring-and-read-diagnostics.md` 追加 §6.7 记录本批
 
 本批只改 1 个测试文件（+ 1 份 Spec）+ changelog；未改任何业务实现、未改任何期望值 / 断言、未新增 skip；
 未连 PG / 34、未发 HTTP、未写业务数据（探针污染已清）；未 push / MR / tag / Release / 部署。
+
+## 471. 处置 `packaging-stage-order-equals-dependency.md` §7.3 第 3 条记的夹具偏差：投影红测的 `confirmed` 探针给的是**新顺序下不可达**的合成态（`Ran 30 … OK`；断言与期望值一字未改，带反向对照）（9-23，Codex 测试侧）
+
+`## 320`（阶段行序 = 依赖顺序）之后，`tests/test_tech_unified_workflow_projection_red.py` 的
+`RequirementCompletionTest::test_confirmed_requirement_completes_confirm_and_opens_review` 按设计变红
+（`actionable=False`、`blocked_reasons=['请先完成 2.1 图纸解析']`），一直作为既有挂账记在
+`packaging-stage-order-equals-dependency.md` §7.3 第 3 条里。本批收口：
+
+- 红的是**夹具**不是断言：探针造的 `confirmed` 项目是 `ir=False` + `requirement_status="pending_review"`
+  的合成态（"已确认但没解析过图纸"）。新顺序下这个状态**点不出来** —— `## 313` 的
+  `assert_requirement_drawing_parsed()` 会把没有图纸的那次"提交确认"409 挡下，所以"已确认"必然意味着
+  图纸已经解析过；
+- 改法（只 1 行夹具）：`confirmed = new_project("confirmed", ir=True, requirement_status="pending_review")`，
+  并写明它是"可达状态"的理由；
+- `assertTrue(review.get("actionable"))` / `assertFalse(review.get("completed"))` /
+  `assertTrue(self.stage("confirmed_1_2").get("completed"))` 三句**逐字未动**；
+- 反向对照：把 `ir` 改回 `False` ⇒ 该用例立刻 `FAIL`（就是上面那条 `blocked_reasons`），恢复即 `Ran 30 … OK`。
+
+复跑：`tests.test_tech_unified_workflow_projection_red` `Ran 30 … OK`（改前 `Ran 30 … FAILED (failures=1)`）；
+不回归 `tests.test_packaging_stage_order_red` + `tests.test_tech_workflow_five_phase_naming_red` +
+`tests.test_tech_home_timeline_and_publish_closure_red` `Ran 95 … OK`；
+`test_spec_status_truth_red` 7 OK；`test_doc_path_and_root_consistency_red` 10 OK。
+两份 Spec 各追加记录（`packaging-stage-order-equals-dependency.md` §7.3 第 3 条 / 
+`tech-unified-workflow-projection.md` §17）。
+
+本批只改 1 个测试文件（1 行夹具 + 注释）+ 2 份 Spec + changelog；未改任何业务实现、未改任何期望值 / 断言、
+未新增 skip；未连 PG / 34、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。

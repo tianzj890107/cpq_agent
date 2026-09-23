@@ -155,7 +155,13 @@ out["draft_1_2"] = stage(draft, "1.2")
 # 2. 提交确认 / 确认完成 / 审核通过三个状态。
 submitted = new_project("submitted", ir=False, requirement_status="pending_confirmation")
 out["submitted_1_1"] = stage(submitted, "1.1")
-confirmed = new_project("confirmed", ir=False, requirement_status="pending_review")
+# `## 471`：`confirmed` 要给一个**可达**的状态 —— 依赖顺序是「1.1 存草稿 → 2.1 图纸解析 →
+# 1.1 提交确认 → 1.2 通过确认 → 1.3 审核」（`packaging-stage-order-equals-dependency.md` §2.1，
+# `## 313` 的 `assert_requirement_drawing_parsed()` 会把没有解析过图纸的提交确认 409 挡下），
+# 所以"已确认"必然意味着图纸已经解析过。以前这里 `ir=False` 造的是一个真实点不出来的合成态，
+# 于是 `confirmed_1_3` 的前置里含着「请先完成 2.1 图纸解析」，那条 `actionable` 断言断言的对象
+# 变成了旧行序。断言与期望值一字未改，只把夹具补成可达状态。
+confirmed = new_project("confirmed", ir=True, requirement_status="pending_review")
 out["confirmed_1_2"] = stage(confirmed, "1.2")
 out["confirmed_1_3"] = stage(confirmed, "1.3")
 approved = new_project("approved", ir=False, requirement_status="approved")
