@@ -20916,3 +20916,42 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 不改后端 / 接口 / 路由；不动几何、成本、工艺、需求任何口径；
 - 不改"还没有解析结果"这个判定的条件，不给预览加"带项目 id 跳转"这类新参数；
 - 不发 HTTP、不起服务、不连 PG / 34、不写业务数据、不 push / 不部署。
+
+## 491. 补记 `## 490` 的两条「已知缺口」核对：两条都**不是缺陷**（只读实测，零代码改动）（9-23，Codex 核对）
+
+`## 490` 的 Spec §5.2 当时记了两条"另批核对"的候选，本批只读实测把它们收口，避免以后有人当成缺陷去"修"、
+把已经钉住的口径改坏（先例：`## 488` 的真样本复核补记，同样零代码改动）。
+
+### 候选一：`enterDrawingFlowPanes()` 那句右栏标签 —— **刻意口径、有守卫钉住**
+
+`app.js:1354` 把 `#viewerPartName` 写成 `几何分量（图纸零件）· 选中后看轮廓与证据`，看着像把两条账
+（几何分量 / 业务部件）的术语串在一起。实测结论：**这是刻意写的，且被一条现绿的守卫逐字钉住** ——
+`tests/test_packaging_two_ledgers_reconciliation_red.py::SWording::test_s2_viewer_label_keeps_the_business_words_apart`
+要求 `enterDrawingFlowPanes()` 函数体内出现 `几何分量（图纸零件）· 选中后看轮廓与证据`，并且仍要有
+`图纸零件` 字面量，理由写的是"右栏标签必须点明这是几何分量"（Spec §2.3）。
+⇒ 改这句话要先拿书面授权（脚本不能自己拍），本批**不动**。
+
+### 候选二：后端 `/files` 给需求原图标 `kind:"image"`（DWG 源行也照标）—— **用户看不到**
+
+`main.py:1534` 给 `meta["source_filename"]` 那一行硬写 `kind: "image"`（DWG 源文件也是这个值）。
+实测结论：**它没有任何用户可见面** —— 任务文件行只渲染 `file.name`（`app.js::renderFileList()`，`file.note`
+只作 tooltip 标题），`kind` 全文件**没有一处**被渲染：`row.kind` 的三处命中分别在
+`packagingPartEvidenceRowsHtml()`（证据行的 kind，另一回事）、待办任务行筛选、以及预览自己的分类判定，
+全部与文件行无关。预览侧本来就按**后缀**纠偏（`fileIsDrawing()`，`app.js:6520-6531`）兜住了，
+所以"照 kind 当位图"这条老风险也已关掉。另外 `main.py:1555` 给"生成的 2D 视图"标 `kind:"image"`
+本来就是对的。
+⇒ 只是潜在不一致、不是可验收缺陷；**不改后端**（改它就得同时处理 1555 行那条真 image，收益为零）。
+
+### 顺带把 §5.2 收窄成 1 条真待办
+
+留在 Spec 里的真缺口现在只有一条：**视觉项目里挂了一份 DWG** —— 那个出口在既有守卫
+（`currentDrawingEntry === "drawing_flow"`，`packaging-2-1-first-paint` Spec §2.3 要求）下什么也不切（只关预览），
+而那两句话（"还没有解析结果" / "去 2.1 跑图纸解析"）对视觉项目本身也不准。要么改判定、要么在视觉链路里
+换成别的说法，属 §3.4 明说不改的范围，留后续批次。
+
+### 产物与实测
+
+- 只改 `docs/specs/packaging-preview-goto-2-1-jump.md`：§5.2 收窄为 1 条待办 + 新增 §5.3 只读核对表。
+- 零代码改动（`git diff --stat` 只有那 1 份 Spec）；`grep -n` 逐条复核行号见上，全部只读。
+- 保护网：`Ran 6659 tests … FAILED (failures=2, skipped=28)`（`## 490` 那次的读数，本批没动代码，
+  两条失败仍是既有 `test_cpq_eval_ci_contract` 环境 / 待裁决项）；`test_spec_status_truth_red` 7 OK。

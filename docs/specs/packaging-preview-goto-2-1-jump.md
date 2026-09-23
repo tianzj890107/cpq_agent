@@ -86,10 +86,16 @@ A2（没有 try 包住 + 没有守卫）、A3（顺序缺"切"）、A5（全文�
   `test_packaging_2_1_right_pane_single_part_figure_red` ⇒ `Ran 100 tests … OK`；
 - `node --check tech_app/frontend/app.js` 通过。
 
-### 5.2 已知缺口（不在本批，记着别当已修）
+### 5.2 已知缺口（不在本批，记为待办）—— 1 条
 
-1. 项目 `meta.source_filename` 不是 DWG / DXF（视觉项目）但任务文件里挂了一份 DWG 时，这个出口
-   在现有守卫下**什么也不切**（只关预览）—— 那句"请先到 2.1 跑一次图纸解析"对视觉项目本身就不准，
-   属于 §3.4 明说不改的判定条件，留给后续批次（要么改判定，要么这个出口在视觉链路里换成别的说法）；
-2. `enterDrawingFlowPanes()` 里 `$("viewerPartName").textContent = "几何分量（图纸零件）· 选中后看轮廓与证据"`
-   把"整张图纸上的几何分量"摆成"图纸零件"（几何通道 vs 业务件两条账），另批核对。
+1. **视觉项目里挂了一份 DWG**：项目 `meta.source_filename` 不是 DWG / DXF（`currentDrawingEntry !== "drawing_flow"`）
+   而任务文件里有 DWG 时，这个出口在既有守卫下**什么也不切**（只关预览）；而且那句"这份图纸还没有解析结果，
+   请先到 2.1 跑一次图纸解析。"对视觉项目本身就不准（视觉项目不走图纸链路）。属 §3.4 明说不改的判定条件，
+   留给后续批次（要么改判定，要么这个出口在视觉链路里换成别的说法）。
+
+### 5.3 只读核对（`## 491` 补记，零代码改动）：另两条候选都**不是缺陷**
+
+| 候选 | 核对结果（只读实测） |
+| --- | --- |
+| `enterDrawingFlowPanes()` 里那句右栏标签把"几何分量"和"图纸零件"摆在一起，像术语串味 | **是刻意口径、且有守卫钉住**：`tests/test_packaging_two_ledgers_reconciliation_red.py::SWording::test_s2_viewer_label_keeps_the_business_words_apart` 逐字要求 `enterDrawingFlowPanes()` 体内出现 `几何分量（图纸零件）· 选中后看轮廓与证据`，并且仍要有 `图纸零件` 字面量（它的理由写的是"右栏标签必须点明这是几何分量"，Spec §2.3）。该条现绿 ⇒ 改这句话要先拿书面授权，本批不动。 |
+| 后端 `/files` 把需求原图（含 DWG 源）标成 `kind:"image"`（`main.py:1534`） | **用户看不到**：任务文件行只渲染 `file.name`（`app.js::renderFileList()`，`file.note` 只当 tooltip 标题），`kind` 全文件**没有一处**被渲染 —— `row.kind` 的三处命中分别在证据行（`packagingPartEvidenceRowsHtml`）、待办任务行、预览分类，与文件行无关 ⇒ 这只是潜在不一致，不是可验收缺陷；预览侧本来就按后缀纠偏（`fileIsDrawing()`，`app.js:6520-6531`）兜住了。另：`main.py:1555` 给"生成的 2D 视图"标 `kind:"image"` 本来就是对的。 |
