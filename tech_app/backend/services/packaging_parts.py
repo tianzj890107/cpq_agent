@@ -1374,6 +1374,13 @@ def _outline_evidence(members: List[Dict[str, Any]], *,
     }
     return {"edges": edges, "unique": unique, "vertices": vertices,
             "loops_original": loops_original, "loops_collapsed": loops_collapsed,
+            # 环的下标活在**哪一张边表**里，必须成对使用：`loops_original` ← `original_edges`，
+            # `loops_collapsed` ← `unique`。没有重复边时 `original_edges` 就是 `unique`（此时
+            # `loops_original` 与 `loops_collapsed` 是同一份结果），**不是**未排序的 `edges` ——
+            # 两张表条数相同但顺序不同（`unique` 按边键排序），下标混用会把 `outline.entity_ids`
+            # 指到别的实体上：实测酒盒 `cmp:139` 的环是 `54C7/54C8/54C9/54CA` 那 4 条，却报成
+            # 尺寸框那几条（Spec `packaging-dimension-frame-must-not-be-the-part-ring.md` §2.2）。
+            "original_edges": edges if duplicated else unique,
             "diagnosis": diagnosis}
 
 
@@ -1675,6 +1682,13 @@ ANNOTATION_ARROW_MAX_MM = 6.0
 ANNOTATION_TOLERANCE_MM = 0.5
 ANNOTATION_REASONS = ("dimension_extension", "dimension_line", "dimension_arrow",
                       "annotation_layer")
+#: 尺寸箭头对（Spec `packaging-dimension-frame-must-not-be-the-part-ring.md` §2.1 ④）：
+#: 真图上手工画的尺寸箭头就是**两段** ≤ `ANNOTATION_ARROW_MAX_MM` 的短段，共用一个顶点、
+#: 远端近似反向（夹角 ≥ 约 154°）。单独一条短段**不算**证据 —— 长度不是判据（§2.1 第 4 条）。
+DIMENSION_ARROW_PAIR_COS = -0.9
+#: 但**完全共线**的两段（cos = -1.0）不算箭头：那更像被 CAD 拆成两笔的**同一条线**（或小零件
+#: 的 5mm 边），真样本箭头都带一个 0.5mm 的折角（cos ≈ -0.980）。
+DIMENSION_ARROW_PAIR_STRAIGHT = -0.999
 
 
 def _annotation_target_points(ir: Dict[str, Any]) -> List[Tuple[float, float]]:
@@ -1763,11 +1777,63 @@ def _annotation_sits_on_definition_point(point: Tuple[float, float],
     return False
 
 
+def _short_pair_is_arrow(first: Tuple[Tuple[float, float], Tuple[float, float]],
+                         second: Tuple[Tuple[float, float], Tuple[float, float]],
+                         shared: Any) -> bool:
+    """两段短段共用顶点 `shared`，且各自的远端近似反向（Spec §2.1 ④）。纯函数。"""
+    first_far = first[1] if _quant_key(first[0]) == shared else first[0]
+    second_far = second[1] if _quant_key(second[0]) == shared else second[0]
+    if _quant_key(first_far) == shared or _quant_key(second_far) == shared:
+        return False
+    origin = first[0] if _quant_key(first[0]) == shared else first[1]
+    vector_one = (float(first_far[0]) - float(origin[0]), float(first_far[1]) - float(origin[1]))
+    vector_two = (float(second_far[0]) - float(origin[0]), float(second_far[1]) - float(origin[1]))
+    length_one = math.hypot(vector_one[0], vector_one[1])
+    length_two = math.hypot(vector_two[0], vector_two[1])
+    if length_one <= 0.0 or length_two <= 0.0:
+        return False
+    cosine = ((vector_one[0] * vector_two[0] + vector_one[1] * vector_two[1])
+              / (length_one * length_two))
+    return DIMENSION_ARROW_PAIR_STRAIGHT < cosine <= DIMENSION_ARROW_PAIR_COS
+
+
+def _arrow_pair_ids(components: Any,
+                    segments: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]],
+                    ends: Dict[str, Tuple[Any, Any]],
+                    lengths: Dict[str, float]) -> Dict[str, str]:
+    """同分量内"两段短段共点 + 远端近似反向" → 两段都算 `dimension_arrow`（Spec §2.1 ④）。
+
+    只在**同一个连通分量**里配对（相邻两张图共用一个角点时不许跨件连坐）；输入顺序不影响结果。
+    """
+    marked: Dict[str, str] = {}
+    for component in components or []:
+        if not isinstance(component, dict):
+            continue
+        short = sorted({_text(item) for item in (component.get("entity_ids") or [])}
+                       & {entity_id for entity_id in segments
+                          if 0.0 < lengths.get(entity_id, 0.0) <= ANNOTATION_ARROW_MAX_MM})
+        if len(short) < 2:
+            continue
+        buckets: Dict[Any, List[str]] = {}
+        for entity_id in short:
+            for key in ends[entity_id]:
+                buckets.setdefault(key, []).append(entity_id)
+        for key in sorted(buckets, key=lambda item: (float(item[0]), float(item[1]))):
+            rows = sorted(set(buckets[key]))
+            for index, first in enumerate(rows):
+                for second in rows[index + 1:]:
+                    if _short_pair_is_arrow(segments[first], segments[second], key):
+                        marked[first] = "dimension_arrow"
+                        marked[second] = "dimension_arrow"
+    return marked
+
+
 def annotation_entity_ids(ir: Any, entities: Any) -> Dict[str, str]:
     """标注实体判据（Spec §2.1）：返回 `{entity_id: reason}`，逐条留痕、确定性、不误伤几何。
 
     顺序：① 尺寸界线（端点落在标注定义点上 / 定义点连线上）→ ② 尺寸线 / 箭头（**传染**：
-    两端除自身外只接已判定的标注、且至少一端真的接在标注上）→ ③ `DEFPOINTS` 图层。
+    两端除自身外只接已判定的标注、且至少一端真的接在标注上）→ ③ `DEFPOINTS` 图层 →
+    ④ 尺寸箭头对（两段 ≤ `ANNOTATION_ARROW_MAX_MM` 的短段共点 + 远端近似反向）。
     只把"一根两点的线段"当候选：闭合环与多段折线是几何，不是标注。
     `reason` 闭集 = `ANNOTATION_REASONS`；输入顺序不影响结果。
     """
@@ -1839,6 +1905,13 @@ def annotation_entity_ids(ir: Any, entities: Any) -> Dict[str, str]:
             result[entity_id] = "dimension_arrow" if arrow else "dimension_line"
             judged.add(entity_id)
             changed = True
+
+    # ④ 尺寸箭头对：手工画的箭头不落在任何定义点上（真样本 `cmp:139` 的端点到最近定义点
+    # 46.9–170.0mm），① ② 一条都不命中 ⇒ 再补一条**形态**判据（两段短段共点 + 远端反向）。
+    # 先判定的 ① ② ③ 优先（`setdefault`）：箭头对只补漏，不覆盖已有的留痕。
+    components = (ir.get("geometry") or {}).get("components") if isinstance(ir, dict) else None
+    for entity_id, reason in sorted(_arrow_pair_ids(components, segments, ends, lengths).items()):
+        result.setdefault(entity_id, reason)
     return {entity_id: result[entity_id] for entity_id in sorted(result)}
 
 
@@ -1879,8 +1952,8 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         found = _outline_evidence(source)
         if not unit_ok:
             return found, None, None, False, False
-        verdict = _largest_loop(found["loops_original"], found["edges"], found["vertices"],
-                                float(config["min_area_mm2"]))
+        verdict = _largest_loop(found["loops_original"], found["original_edges"],
+                                found["vertices"], float(config["min_area_mm2"]))
         got, compose_row = verdict["outline"], None
         saw, has_coords = verdict["saw_loop"], verdict["has_coordinates"]
         if got is None:
@@ -1934,7 +2007,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
         members = members_all
         # 形状（轮廓环 / 件内折线 / 件尺寸）优先用**摘掉标注之后的成员**：标注线一端接在
         # 零件角点上，会把环带偏（Spec §2.2）。摘完还能求出环 ⇒ 那个环才是零件的形状。
-        if annotation_rows:
+        # **只许改形状，不许改闭合状态**：这一件本来就求出环（`outline is not None`）才走这一趟；
+        # 本来就求不出环的件不许因为"摘掉几条线"就变成闭合件（Spec
+        # `packaging-dimension-frame-must-not-be-the-part-ring.md` §2.3）。
+        if annotation_rows and outline is not None:
             clean_box = _bbox_of(component, members_clean) or bbox
             clean = _outline_pass(members_clean, clean_box)
             if clean[1] is not None:
@@ -1946,6 +2022,10 @@ def extract(ir: Dict[str, Any], semantics: Any = None, *,
                 # 保留它本来画着的标注线），宁可多画几条线，也不许把一件闭合件判成开口。
                 annotation_rescued = True
                 annotation_rows = []
+        elif annotation_rows:
+            # 这一件本来就求不出环：不许因为"摘掉几条线"就变成闭合件（那是改件的闭合状态，
+            # 不是改形状），也不许声称摘过（Spec `packaging-dimension-frame-must-not-be-the-part-ring.md` §2.3）。
+            annotation_rows = []
         if not unit_ok:
             outline_status, outline_reason = "unavailable", "unit_unconfirmed"
             size_source = "dwg_outline"

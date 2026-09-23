@@ -20647,3 +20647,54 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 不改后端接口、不改 `packaging-parts` 文档结构、不改 CAD IR；未建 MR / tag / Release；
 - 部署按 `bash scripts/deploy_34_bare.sh ytbz` 走同一次指令，核对项（`build.commit`、8010
   `status=ok`、两份样本 `converter_role=primary` / `fallback_used=false`）以部署脚本输出为准。
+
+## 486. 落地「手画的尺寸框不许当零件轮廓」（16 OK；红基 9 FAIL；酒盒环变 2 件 / 圆盘盒零附带）（9-23，Codex 实现）
+
+用户现场：点开 2.1 那一件，形状里仍带着外面那圈"白线"（手画的尺寸框）。上一批（`## 485`）按"尺寸
+实体"摘标注只挡住了一部分 —— 真正的毛病是**选环选错了**：`_largest_loop()` 按面积最大挑，挑了尺寸框的
+19 边环（`cmp:139`：117 846.31mm²、件尺寸被撑成 308.834 × 446.32），真件是里面那个 4 元矩形
+（219.643 × 267.94、58 851.004mm²）。
+
+### 改了什么
+
+- `tech_app/backend/services/packaging_parts.py`：`annotation_entity_ids()` 增第 ④ 条判据"**尺寸箭头对**"
+  （`DIMENSION_ARROW_PAIR_COS = -0.9`、`DIMENSION_ARROW_PAIR_STRAIGHT = -0.999`、长度上界复用
+  `ANNOTATION_ARROW_MAX_MM = 6.0`；新纯函数 `_short_pair_is_arrow()` / `_arrow_pair_ids()`：**同分量内**
+  两段 ≤ 6mm 短段共用顶点、远端近似反向（cos ∈ (-0.999, -0.9]）才算箭头，**完全共线不算**、单独一条短段
+  不算 —— 长度只是辅助，不是判据）。摘掉箭头对之后尺寸框不再闭合，选环自然回到真件。
+- `extract()` 的形状替换收紧为「**只在一进一出都是闭合件**上生效」：本来就求不出环的件一律回退且**不留痕**
+  （不许把开口件"摘"成闭合件）。
+- 顺带修掉 `_outline_evidence()` 的**证据归属缺陷**：`loops_original` 的下标活在按边键排序的 `unique` 里，
+  却被拿去索引未排序的 `edges`，导致 `outline.entity_ids` 指到别的实体上（酒盒 374 处、圆盘盒 538 处）。
+  新增 `original_edges` 让环下标与边表成对使用；**只改证据**，形状 / 尺寸 / 状态 / 统计一个字段没动。
+- 新增 Spec `docs/specs/packaging-dimension-frame-must-not-be-the-part-ring.md`（§2.1 ④ 判据、§2.2 环与
+  证据、§2.3 只许改形状、§5.1 三处更严的授权、§6 落地表、§7 四条已知缺口）与红测
+  `tests/test_packaging_dimension_frame_not_part_ring_red.py`（16 条：A 判据 / B 形状 / C 真样本 / D 护栏）。
+
+### 实测（本机只读，`./open-claude/.venv/bin/python -m unittest`）
+
+- 本批红测 `Ran 16 … OK`；红基（HEAD 工作副本 + 本红测）`FAILED (failures=9)`（A1、A6、B1–B4、C1、D1、D2）。
+- 反向对照 A（④ 停用 → `{}`）6 红（A1、B1–B4、C1），酒盒 `annotation_filtered_total 43 → 3`、`cmp:139`
+  环回 19 点 / 117 846.31 / 308.834 × 446.32；B（放开完全共线）1 红（A4）；C（退回旧守卫
+  `if annotation_rows:`）本红测 2 红 + 既有 `test_packaging_business_parts_outline_bbox_link_red` D1 红
+  （酒盒 `closed 134 → 137 / open 129 → 126 / closed_ratio 0.51 → 0.521`、`cmp:115` 被"摘"成闭合件）。
+- 保护网：`dimension_annotation_not_in_shape` + `refresh_line_business_count` + `2_1_first_paint_is_2d_not_3d`
+  + `parts_extraction` = `Ran 64 OK`；outline 家族 8 模块 = `Ran 121 OK (skipped=1)`；真样本门禁 7 模块
+  = `Ran 110 OK`。
+- 逐件对照（HEAD → 本批）：酒盒 `263 / 134 / 129 / closed_ratio 0.51` **逐字不变**，环与尺寸只变 **2 件**
+  （`cmp:139`、`cmp:47`，都是"框 → 真件"）；只有证据 `entity_ids` 变 47 件；只有编号/名字变 32 件；
+  `annotation_filtered_total 3 → 43`（6 件带留痕）；另 4 件（`cmp:130/138/64/801`）环不变、只是画出来的
+  形状里不再画标注（`segments_total` 82→74 / 54→46 / 41→37 / 42→38）。
+- 全量：`Ran 6580 … FAILED (failures=2, skipped=28)` —— 两条失败都是既有
+  `test_cpq_eval_ci_contract` 的环境/待裁决项（与基线 `Ran 6564` 的 2 条同一条），本批**零新增失败**。
+- 圆盘盒.dwg（门禁样本）**零附带**：`312 / 255 / role_known 9 / closed_ratio 0.817 /
+  annotation_filtered_total 0` 与 HEAD 逐字一致。
+
+### 纪律
+
+- 本批**只**动 `packaging_parts.py` 与新增的 Spec / 红测；未动 `MAX_LOOP_STATES` / `MAX_LOOP_CYCLES` /
+  `MIN_LOOP_EDGES` / `LOOP_TOLERANCE_MM` / `OUTLINE_BBOX_COVER_RATIO` / `_find_cycles` 的枚举口径，
+  未动前端 / 语义层 / 成本 / 工艺 / 需求 / 知识库。
+- 本批红测是**新写的**，落地时修掉两处**测试自身**的缺陷（第 215 行的引号语法错；D1 的 `assertIn`
+  实参与容器写反、B5 核了一个公开行没有的键）—— 都是"让断言真的能判"，**没有**放宽任何期望值或跳过用例。
+- 未提交生产数据、未连 PG / 34、未起服务、未 push / MR / tag / Release / 部署。
