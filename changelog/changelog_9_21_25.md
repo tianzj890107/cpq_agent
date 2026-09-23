@@ -18433,3 +18433,28 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `Ran 13 OK`。未改 `/quote-link/recover` 的线索键集合与落点语义、未改 `tech-task.js` 写侧键、
 未改零件端点与 `CARD_COLUMNS`、未在服务端补第二个身份字段，未 push / MR / tag / Release / 部署。
 红测自身无缺陷。
+
+## 447. 落地 `packaging-tech-projection-2-1-must-see-drawing-flow`：包装项目的 2.1 流程投影不再永远是「图纸还没有解析」（12 OK，红基 5 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-tech-projection-2-1-must-see-drawing-flow.md`，红测
+`tests/test_packaging_tech_projection_2_1_must_see_drawing_flow_red.py`（12 条：A1–A5 包装项目、
+B1–B7 护栏）。
+
+- `workflow_projection._LOADERS` 新增两个包装取数项：`packaging_cad_ir`（`cad_ir.load_ir`）与
+  `packaging_parts`（`packaging_parts.load_parts`）—— 包装 DWG 项目把解析产物写在**另外两份
+  文档**里，一份都不登记就等于"看不见这趟解析"；
+- `_judge("2.1")` 在技术侧 `ir is None` 时再看包装来源（新纯函数 `_packaging_drawing_done(facts)`）：
+  有包装 IR 且零件非空（`parts` 或 `stats.part_total > 0`）→ `generated` + `completed=True`，
+  与技术侧逐字一致；只有 IR、零件 0 → 交新抽出的 `_no_parts_verdict(facts)`（技术侧与包装侧
+  共用同一支，既有文案逐字不变）；两条都不满足 → 逐字保持今天的 `not_started` +「图纸还没有解析」；
+- 34 实测（只读）：项目 `8131f6d29d99`（`酒盒.dwg`）解析 8/8、零件 263 件，投影却报
+  2.1 `not_started` /「图纸还没有解析」，1.2/1.3/3.1… 全被追加「请先完成 2.1 图纸解析」，
+  `next_action` 恒指回 2.1 —— 下游 12 步全部 `actionable=false`；
+- 前置阻断由 `_rows_for()` 从 2.1 的完成态自然推出，`_rows_for()` / `_next_action()` 一字未改。
+
+实跑：本批红测 `Ran 12 OK`（红基 5 红 7 绿）；`test_tech_unified_workflow_projection_red`
+`Ran 30 tests … FAILED (failures=1)`（仍是 Spec §1 记的那条既有挂账：夹具项目连图纸都没上传，
+非本批引入、本批不改）；`test_tech_home_timeline_and_publish_closure_red` 35 OK；
+`test_cpq_eval_production_backed` 21 OK (skipped=1)。未改 `workflow_stages.STAGES`、
+其余 12 步判定、`_PRIMARY_ACTIONS`、`actionable` 规则、前端，未 push / MR / tag / Release / 部署。
+红测自身无缺陷。

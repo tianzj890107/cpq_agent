@@ -22,8 +22,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..models.ir import DesignIR
 from ..storage import store
 from . import auth
+from . import cad_ir as packaging_cad_ir
 from . import cost_review
 from . import integration
+from . import packaging_parts
 from . import workflow_stages as stages_table
 from ..time_utils import now_cst_str
 
@@ -105,6 +107,11 @@ _LOADERS = (
     ("summary", lambda pid: store.load_summary(pid)),
     ("report", lambda pid: store.load_process_report(pid)),
     ("audit", lambda pid: store.list_audit(pid)),
+    # 包装（DWG 图纸）项目的解析产物写在另外两份文档里（不经 `store.load_ir`）：
+    # `cad_ir.load_ir` 是图纸解析的 IR 快照（`meta.cad_ir_rev` 就是它的版本号），
+    # `packaging_parts.load_parts` 是同一趟解析拆出来的零件文档（唯一事实源）。
+    ("packaging_cad_ir", lambda pid: packaging_cad_ir.load_ir(pid)),
+    ("packaging_parts", lambda pid: packaging_parts.load_parts(pid)),
 )
 
 
@@ -144,6 +151,45 @@ def _excluded_parts(facts: Dict[str, Any]) -> set:
         if isinstance(value, (list, tuple, set)):
             excluded.update(str(item) for item in value)
     return excluded
+
+
+#: 2.1「有 IR 但一件零件都没识别出来」时的既有文案（技术侧与包装侧逐字共用）。
+NO_PARTS_MISSING = "本次没有识别出零件，需人工确认无零件结果后方可继续"
+
+
+def _no_parts_verdict(facts: Dict[str, Any]) -> dict:
+    """有解析产物、但零件为 0：审计里有过 `parse_no_parts_confirmed` → 算完成。
+
+    技术侧与包装侧逐字共用同一支（Spec §3.2 第 2 条要求两侧同形）。
+    """
+    confirmed = any(str((item or {}).get("action") or "") == "parse_no_parts_confirmed"
+                    for item in (facts.get("audit") or []))
+    if confirmed:
+        return {"status": "confirmed", "completed": True}
+    return {"status": "generated", "completed": False, "missing": [NO_PARTS_MISSING]}
+
+
+def _packaging_drawing_done(facts: Dict[str, Any]) -> Optional[dict]:
+    """包装（DWG 图纸）项目的 2.1 判据；没有包装解析产物时返回 None（沿用技术侧口径）。
+
+    包装项目把解析产物写在两份文档里（`packaging_cad_ir` / `packaging_parts`），
+    不经 `store.load_ir`：只认其中一份会把"真跑过的解析"误判成"图纸还没有解析"。
+    """
+    if not facts.get("packaging_cad_ir"):
+        return None
+    pack = facts.get("packaging_parts")
+    parts: List[Any] = list(pack.get("parts") or []) if isinstance(pack, dict) else []
+    total = 0
+    if isinstance(pack, dict):
+        stats = pack.get("stats")
+        if isinstance(stats, dict):
+            try:
+                total = int(stats.get("part_total") or 0)
+            except (TypeError, ValueError):
+                total = 0
+    if parts or total > 0:
+        return {"status": "generated", "completed": True}
+    return _no_parts_verdict(facts)
 
 
 # --------------------------------------------------------------------------- #
@@ -188,15 +234,13 @@ def _judge(key: str, project_id: str, facts: Dict[str, Any]) -> dict:
 
     if key == "2.1":
         if ir is None:
+            packaged = _packaging_drawing_done(facts)
+            if packaged is not None:
+                return packaged
             return {"status": "not_started", "completed": False, "missing": ["图纸还没有解析"]}
         if parts:
             return {"status": "generated", "completed": True}
-        confirmed = any(str((item or {}).get("action") or "") == "parse_no_parts_confirmed"
-                        for item in (facts.get("audit") or []))
-        if confirmed:
-            return {"status": "confirmed", "completed": True}
-        return {"status": "generated", "completed": False,
-                "missing": ["本次没有识别出零件，需人工确认无零件结果后方可继续"]}
+        return _no_parts_verdict(facts)
 
     if key == "3.1":
         if plan is None:
