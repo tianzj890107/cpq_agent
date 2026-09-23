@@ -1553,15 +1553,13 @@ async function packagingPartSetThickness(partCode) {
     window.alert(`补料厚失败：${message}`);
     return null;
   }
-  // 与「补材料」逐字同范式（Spec §2.6）：先按服务端重读，读不到才退回回显补丁。
+  // 与「补材料」逐字同范式（Spec §2.6）：先按服务端重读，读不到才退回回显补丁 —— 三态处置
+  // 走共用入口（`reread.read_problem` 非空 = 读失败，保住已列出的零件）。
   const reread = await fetchPackagingParts();
-  if (reread) {
-    currentPackagingParts = reread;
-  } else {
-    const patch = { thickness_mm: payload.thickness_mm };
-    if (payload.thickness_source) patch.thickness_source = payload.thickness_source;
-    patchPackagingPartRows(partCode, patch);
-  }
+  // 三态（Spec §2.2）：`reread.read_problem` 非空 = 读失败，不换文档、保住已列出的零件。
+  const patch = { thickness_mm: payload.thickness_mm };
+  if (payload.thickness_source) patch.thickness_source = payload.thickness_source;
+  applyPackagingPartsReread(reread, partCode, patch);
   renderTree(currentIR || {});
   return payload;
 }
@@ -1602,13 +1600,10 @@ async function packagingPartSetMaterial(partCode) {
   // 来自**服务端重读**（补录落回零件行之后，读回的值才是真实的、刷新后一致）；重读失败才退回
   // 用 POST 的回显打内存补丁（立刻可用，但不再是唯一来源）。
   const reread = await fetchPackagingParts();
-  if (reread) {
-    currentPackagingParts = reread;
-  } else {
-    const patch = { material: payload.material };
-    if (payload.material_source) patch.material_source = payload.material_source;
-    patchPackagingPartRows(partCode, patch);
-  }
+  // 三态（Spec §2.2）：`reread.read_problem` 非空 = 读失败，不换文档、保住已列出的零件。
+  const patch = { material: payload.material };
+  if (payload.material_source) patch.material_source = payload.material_source;
+  applyPackagingPartsReread(reread, partCode, patch);
   renderTree(currentIR || {});
   return payload;
 }
@@ -1655,9 +1650,36 @@ async function packagingPartOutlineExitPost(partCode, action) {
       + `${payload.message || ""}`);
   }
   const reread = await fetchPackagingParts();
-  if (reread) currentPackagingParts = reread;
+  // 同上三态（`reread.read_problem` 非空 = 这一笔成功了但列表没读回来）：轮廓出路这条没有回显补丁。
+  applyPackagingPartsReread(reread, partCode, null);
   renderTree(currentIR || {});
   return payload;
+}
+
+// 写后重读的三态处置（Spec `packaging-parts-reread-failure-after-write.md` §2.2）—— 三处
+// 「补料厚 / 补材料 / 轮廓出路」共用这一个入口：
+//   · `null`（404，端点未上线）→ 既有回显补丁路径，`currentPackagingParts` 一字不改；
+//   · `reread.read_problem` 非空（读失败）→ **不许**替换文档、**不许**碰 `packagingPartsShown`，
+//     打回显补丁并把读问题记在 `reread_problem` 上交给渲染（列表继续显示刚才那些零件）；
+//   · 读到 → 既有 `currentPackagingParts = reread`，并清掉上一次的 `reread_problem`。
+function applyPackagingPartsReread(reread, partCode, patch) {
+  if (reread === null) {
+    if (patch) patchPackagingPartRows(partCode, patch);
+    return;
+  }
+  const problem = (reread && typeof reread === "object"
+    && reread.read_problem && typeof reread.read_problem === "object")
+    ? reread.read_problem : null;
+  if (problem) {
+    if (patch) patchPackagingPartRows(partCode, patch);
+    currentPackagingParts = Object.assign({}, currentPackagingParts || {},
+                                           { reread_problem: problem });
+    return;
+  }
+  currentPackagingParts = reread;
+  if (currentPackagingParts && typeof currentPackagingParts === "object") {
+    currentPackagingParts.reread_problem = null;
+  }
 }
 
 // 单件结论回填：整份文档的行、当前页的行、已累加的行都要改 —— 分页之后左栏渲染的是
@@ -2282,6 +2304,19 @@ function packagingPartsPageReadProblemText(problem) {
   return status > 0
     ? `这一页零件没读出来（HTTP ${status}），已列出的零件不受影响；点"继续加载"重试`
     : '这一页零件没读出来（网络错误），已列出的零件不受影响；点"继续加载"重试';
+}
+
+// 写后重读失败的那句话（纯函数，Spec `packaging-parts-reread-failure-after-write.md` §2.1）：
+// 一笔补录**已经提交成功**，只是列表没能重新读回来 —— 不许说成"补录失败"，也不许假装列表已刷新。
+// 只认零件文档那两条读失败码；表外码 / 空对象 / null 都不拼这句话。码表就地写进函数体
+// （证据取法用 `node -e` 单独抽这一个函数执行，不许依赖同文件其它常量）。
+function packagingPartsRereadProblemText(problem) {
+  const row = (problem && typeof problem === "object") ? problem : null;
+  const code = row ? String(row.code || "").trim() : "";
+  if (code !== "parts_unavailable" && code !== "business_parts_unavailable") return "";
+  const status = Number(row.status) || 0;
+  return `刚才这一笔已经提交成功，但列表没能重新读回来（${status > 0 ? "HTTP " + status : "网络错误"}），`
+    + "下面显示的是本地回显；刷新页面即可核对服务端的值";
 }
 
 // 单件详情「读不到」/「没这件」的文案（Spec
@@ -4268,6 +4303,16 @@ function renderTree(ir) {
     const kindTotal = Number(doc.kind_total) || Number((doc.stats || {}).kind_total) || 0;
     const preconditions = (currentDrawingFlowState && currentDrawingFlowState.preconditions) || [];
     tree.classList.toggle("empty-state", !rows.length);
+    // 写后重读失败（Spec `packaging-parts-reread-failure-after-write.md` §2.3）：这一笔已经提交
+    // 成功，只是列表没能重新读回来 —— **有零件也要说**（上面/below 那些行一个都不许少）。
+    const rereadProblemText = packagingPartsRereadProblemText(doc.reread_problem);
+    if (rereadProblemText) {
+      const rereadNote = document.createElement("div");
+      rereadNote.className = "part-reread-problem-note";
+      rereadNote.dataset.qqPartsRereadProblem = "1";
+      rereadNote.textContent = rereadProblemText;
+      tree.appendChild(rereadNote);
+    }
     if (!rows.length) {
       const emptyNote = packagingBusinessImportNote(currentPackagingBusinessParts);
       if (emptyNote) tree.appendChild(emptyNote);

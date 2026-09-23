@@ -18386,3 +18386,28 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 `drawing_flow_parse_terminal_signal_red` = `Ran 136 OK (skipped=2)`；
 本批红测 12 条里 A3/B1 转绿、**没有把任何一条已绿的改红**（红基 4 红 8 绿）。
 未改服务端、未改读接口形状、未改分页口径、未放宽任何断言，未 push / MR / tag / Release / 部署。
+
+## 445. 落地 `packaging-parts-reread-failure-after-write`：补料厚 / 补材料 / 轮廓放行**成功之后**列表读不回来，左栏不再被整份换成"读不到"（8 OK，红基 6 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-parts-reread-failure-after-write.md`，红测
+`tests/test_packaging_parts_reread_failure_after_write_red.py`（8 条：T1–T4 纯函数、T5/T6 源码守卫、T7/T8 护栏）。
+
+- `app.js` 新增纯函数 `packagingPartsRereadProblemText(problem)`：只认零件文档那两条读失败码
+  （`parts_unavailable` / `business_parts_unavailable`），`status > 0` → 「（HTTP <status>）」、
+  否则「（网络错误）」；码表**就地写进函数体**（该纯函数被 `node -e` 单独 `eval` 抽出执行，
+  依赖同文件 const 会 `is not defined` —— 同一坑在 `packagingPartsEmptyText` 上已踩过）；
+- `app.js` 新增共用入口 `applyPackagingPartsReread(reread, partCode, patch)`，三处"写后重读"
+  （补料厚 / 补材料 / 轮廓出路）都改用它，三态处置：`null`（404）→ 既有回显补丁、文档一字不改；
+  `read_problem` 非空 → **不换文档**、打回显补丁、把 `reread_problem` 记在文档上（`packagingPartsShown`
+  一个都不丢）；读到 → 既有 `currentPackagingParts = reread` 并清掉 `reread_problem`；
+- `renderTree()`：`reread_problem` 非空时在零件列表**上方**渲染 `part-reread-problem-note`
+  （`dataset.qqPartsRereadProblem = "1"`），位置在空态分支之前（有零件也要显示）；
+  没有 `reread_problem` 时一个节点都不加。
+
+实跑：`node --check tech_app/frontend/app.js` 通过；本批红测 `Ran 8 OK`（红基 6 红 2 绿）；
+`test_packaging_parts_read_failure_empty_state_red` + `pagination_read_failure_red` +
+`part_manual_fill_persists_red` + `drawing_flow_parse_terminal_signal_red` 合计 `Ran 61 OK`；
+`test_spec_status_truth_red` 7 OK（状态行由「未实现」改为「已实现 + 原状」）。
+红测自身无缺陷（八条只靠"纯函数真跑 + 源码守卫"，一次落地全绿）。
+未改 `fetchPackagingParts()` / `loadMorePackagingParts()` / `patchPackagingPartRows()` 的既有契约，
+未起服务、未发 HTTP、未连 PG、未写业务数据，未 push / MR / tag / Release / 部署。
