@@ -19144,3 +19144,69 @@ Ran 214 tests in 80.555s ... FAILED (failures=1, skipped=1)
 `packaging-business-parts-outline-bbox-broken-link.md`（也是 `## 461`）撞号，本批按自己的号写。
 
 未 push / MR / tag / Release / 部署，未起服务、未发 HTTP、未连 PG / 34、未写业务数据。
+
+## 462. 落地 `packaging-parts-role-known-numerator-must-not-be-reconstructed`：`role_known_ratio` 是唯一一个只能靠比值反推的分子 —— `summarize()` 补出 `role_known_total`，门禁直读引擎的分子、不再"比值 × 分母"，go/no-go 的「角色已知件数」地板不再被三位小数的舍入左右（9 OK / 真样本 10 OK，红基 7 红 / 8 红）（9-23，Codex 实现）
+
+`summarize()` 早把 `closed_total` / `material_known_total` / `thickness_known_total` /
+`thickness_unknown_total` / `processable_total` 这些**绝对分子**给了出来，唯独 `role_known_ratio`
+只有比值（三位小数）。门禁为了比"角色已知件数"的地板，只能把比值乘回分母：
+`int(round(ratio × part_total))` —— 舍入过的比值反推会偏 ±1：合成 3000 件里 2 件角色已知
+（`2/3000 = 6.67e-04` 舍成 `0.001`）反推得 **3**（多报 1，地板 3 被悄悄放行）；合成 16000 件里
+1 件（`6.25e-05` 舍成 `0.0`）反推得 **0**（少报 1）。两份真图今天恰好整除（0 与 9）才没出事 ——
+这是"再大四倍的图纸就翻车"的结构性隐患，而且它决定的是 go/no-go。
+
+只改两处，都只动"这个数从哪来"：
+
+1. `tech_app/backend/services/packaging_parts.py`：`summarize()` 返回字典新增
+   `"role_known_total": role_known` —— 与 `"role_known_ratio": _ratio(role_known)` 出自**同一次遍历的
+   同一个计数变量**（R8 用 AST 钉住：两者名字集相同、分子里不出现 `ratio`、计数语句仍判
+   `role` 不是 `""`/`unknown`）。
+2. `tech_app/tools/packaging_parts_gate.py`：`_sample_metrics()` 里那句
+   `int(round(ratio × part_total))` 换成 `int(summary.get("role_known_total") or 0)`；函数体里不再出现
+   比值取数（R5 用 AST 钉住：既不读也不提）。
+
+冻结面未动：`_round` 精度（3 位）、`role_known_ratio` 与其它比率的取值、`summarize()` 既有键、
+`extract()` 的零件内容、`THRESHOLDS`（酒盒 `closed_total 7`；圆盘盒 `closed_total 32` /
+`role_known_total 8`）、`GATE_ITEMS` 六项与顺序、`sample_verdict()` 的"只比计数、等于地板算过"与退出码
+语义、前端。
+
+实测：
+
+```
+合成 3 件（1 件角色已知）        ：role_known_total=1，role_known_ratio=0.333（口径不变）
+合成 3000 件（2 件已知）        ：分子 2（反推会得 3）—— 地板不再被舍入放行
+合成 16000 件（1 件已知）       ：分子 1（反推会得 0）
+酒盒.dwg  ：part_total=263 角色已知 0  ratio 0.0
+圆盘盒.dwg：part_total=312 角色已知 9  ratio 0.029
+门禁现场：tech_app/tools/packaging_parts_gate.py --env local --json
+          → verdict=go  summary={ok:5, fail:0, manual:1}，读数行里的 role_known_total 现在直读引擎
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_role_known_numerator_red
+Ran 9 tests ... OK (skipped=1)          # 红基 Ran 9 ... FAILED (failures=7, skipped=1)
+
+CPQ_DWG_REAL_SAMPLES=1 ./open-claude/.venv/bin/python -m unittest \
+    tests.test_packaging_parts_role_known_numerator_red
+Ran 10 tests in 10.206s ... OK          # 红基 Ran 10 in 12.210s ... FAILED (failures=8)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_parts_downstream_gate_red \
+    tests.test_packaging_parts_gate_threshold_red tests.test_packaging_parts_extraction_red \
+    tests.test_packaging_parts_outline_red tests.test_packaging_parts_components_red \
+    tests.test_packaging_parts_filtered_two_books_must_agree_red \
+    tests.test_packaging_parts_ir_read_failure_red tests.test_packaging_parts_role_lookup_disclosure_red \
+    tests.test_packaging_parts_list_visibility_red tests.test_packaging_parts_thickness_facts_red \
+    tests.test_packaging_bom_size_quality_accounting_red \
+    tests.test_packaging_business_part_size_must_be_confirmed_by_dimension_red \
+    tests.test_packaging_drawing_flow_red tests.test_spec_status_truth_red
+Ran 230 tests in 66.657s ... OK (skipped=5)
+```
+
+红测自身缺陷（如实记录）：R3 只在合成夹具上复现"反推偏 ±1"（3000 / 16000 件），真样本今天恰好整除，
+R4 只复核"分子 == 从零件行重算 + 比值口径不变"，没在真图上钉"反推必错"（需要一份 16000 件级真图）。
+另：本 Spec 头部写的 changelog 号是 `## 462`，与已落地的
+`packaging-business-part-size-must-be-confirmed-by-dimension.md`（也是 `## 462`）撞号，本批按自己的号写。
+
+未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、样本只读（只在临时目录产出 DXF）。

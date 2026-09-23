@@ -2277,6 +2277,10 @@ def summarize(doc: Any, *, solids: Any = None) -> Dict[str, Any]:
         "parts_hash": _text(payload.get("parts_hash")),
         "closed_ratio": _ratio(closed_total),
         "role_known_ratio": _ratio(role_known),
+        # 「角色已知件数」的**绝对分子**（Spec `packaging-parts-role-known-numerator-must-not-be-reconstructed.md` §2.1）：
+        # `role_known_ratio` 只有三位小数，门禁拿它乘分母反推会偏 ±1、把 go/no-go 的地板交给舍入决定。
+        # 分子与比值出自**同一次遍历的同一个计数变量**，本批只加这一个键，比值口径一个字不改。
+        "role_known_total": role_known,
         "solid_ok_ratio": _ratio(solid_ok),
         "processable_ratio": _ratio(processable),
         "size_source_mix": mix,

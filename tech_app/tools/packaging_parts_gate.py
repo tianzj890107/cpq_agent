@@ -232,10 +232,10 @@ def _sample_metrics(path: Path) -> dict:
     summary["solid_total"] = sum(1 for row in rows
                                  if packaging_part_solids.extrude(row).get("status") == "ok")
     summary["part_total"] = len(rows)
-    # 角色已知件的**绝对分子**（Spec §C1）：由 `summarize()` 自己给的比值 × 分母还原 ——
-    # 口径只有一处（零件引擎），门禁不新增引擎键、也不另写一套判据。
-    summary["role_known_total"] = int(round(float(summary.get("role_known_ratio") or 0.0)
-                                           * int(summary["part_total"])))
+    # 角色已知件的**绝对分子**（Spec §C1）：引擎已经把它自己数出来的分子给出来了，直读 ——
+    # 口径仍然只有一处（零件引擎）；门禁**不**再拿三位小数的比值乘分母反推（那个反推会偏 ±1，
+    # 把 go/no-go 的地板交给舍入决定，Spec `packaging-parts-role-known-numerator-must-not-be-reconstructed.md` §2.2）。
+    summary["role_known_total"] = int(summary.get("role_known_total") or 0)
     summary["dxf_source"] = converter
     return summary
 
