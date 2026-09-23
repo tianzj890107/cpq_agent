@@ -277,6 +277,13 @@ class CiDependencyCoverageTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.requirements = ci_contract_mod.requirement_names()
+        # `## 472`：依赖闭包按**含 extras** 的声明算 —— `covered_distributions()` 自己的 docstring
+        # 就是「requirements.txt 直接声明的包 + 它们（含已启用 extras）的传递依赖闭包」，而
+        # `requirement_names()` 按定义（"去掉 extras 与版本号"）会把 `psycopg[binary]` /
+        # `uvicorn[standard]` 的 extras 一起丢掉，于是 `psycopg-binary` 被判「缺出处」——
+        # 干净镜像（CI 只装 requirements.txt）里同样必红。不传 `names` 时它内部走 `requirement_specs()`
+        # （保留 extras），声明名集合仍用 `requirement_names()` 单独校验。
+        cls.closure = ci_contract_mod.covered_distributions()
         cls.modules = ci_contract_mod.production_third_party_modules()
 
     def test_requirements_file_is_non_empty(self):
@@ -288,7 +295,7 @@ class CiDependencyCoverageTest(unittest.TestCase):
         dist_map = md.packages_distributions()
         # requirements.txt 直接声明的包 + 它们（含已启用 extras）的传递依赖闭包。
         # pip 只装直接依赖，其余由被声明的包带进来，所以按闭包判定「有出处」。
-        covered = ci_contract_mod.covered_distributions(self.requirements)
+        covered = self.closure
         missing = []
         for module in self.modules:
             dists = {ci_contract_mod._norm(name) for name in (dist_map.get(module) or [])}
@@ -302,7 +309,7 @@ class CiDependencyCoverageTest(unittest.TestCase):
                          f"生产入口 import 的第三方模块不在 requirements.txt 闭包里：{missing}")
 
     def test_dependency_closure_is_not_trivially_equal_to_declared(self):
-        closure = ci_contract_mod.covered_distributions(self.requirements)
+        closure = self.closure
         self.assertTrue(self.requirements <= closure,
                         sorted(self.requirements - closure))
         # 传递依赖确实被展开了，否则上面的断言就会退化成「必须逐字声明」。

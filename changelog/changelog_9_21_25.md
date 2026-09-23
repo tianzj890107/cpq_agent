@@ -19729,3 +19729,44 @@ Spec `quick-quote-home-wiring-and-read-diagnostics.md` 追加 §6.7 记录本批
 
 本批只改 1 个测试文件（1 行夹具 + 注释）+ 2 份 Spec + changelog；未改任何业务实现、未改任何期望值 / 断言、
 未新增 skip；未连 PG / 34、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。
+
+## 472. 修掉 `CiDependencyCoverageTest` 的一处**假阳性**：依赖闭包按丢了 extras 的声明名算，`psycopg[binary]` / `uvicorn[standard]` 带进来的发行包被判「缺出处」（CI 干净镜像里同样必红）（9-23，Codex 测试侧）
+
+`tests/test_cpq_eval_ci_contract.py::CiDependencyCoverageTest.setUpClass` 用
+`ci_contract_mod.requirement_names()` 喂 `covered_distributions()` —— 而 `requirement_names()` 的口径逐字是
+「发行包名（小写、`_`→`-`、**去掉 extras 与版本号**）」，于是：
+
+- `requirements.txt:10 psycopg[binary]==3.3.4` 的 extras 被丢掉 → `psycopg-binary` 不在闭包里 →
+  生产入口 import 的 `psycopg_binary` 被判「缺出处」；
+- `requirements.txt:32 uvicorn[standard]==0.34.0` 的 extras 同理（`httptools` / `uvloop` / `watchfiles` /
+  `websockets` / `pyyaml` / `colorama` 六项一起漏掉）。
+
+这两处都与**被测口径自述**矛盾：`covered_distributions()` 的 docstring 就是「requirements.txt 直接声明的包
++ 它们（**含已启用 extras**）的传递依赖闭包」，用例自己的注释也写着「按闭包判定『有出处』」。
+因为 extras 是**声明侧**的语义（不是本机环境），所以干净镜像（CI 只 `pip install -r requirements.txt`）里
+这条 extras 判定同样必红 —— 这是假阳性，不是环境差异。
+
+改法（只 1 个测试文件、3 处）：`setUpClass` 里改用 `covered_distributions()`（不传 `names` 时它内部走
+`requirement_specs()`，保留 extras），缓存成 `cls.closure`；两条用例改读 `self.closure`；
+`self.requirements`（`requirement_names()`）仍用于「声明名非空」与「声明名 ⊆ 闭包」的校验。
+**没有任何断言被改、被放宽或删除。**
+
+实测（本机，同一份生产入口模块清单）：
+
+```text
+missing(旧闭包): [('cadquery', …), ('multimethod', …), ('nlopt', …), ('psycopg_binary', …), ('typish', …)]
+missing(新闭包): [('cadquery', …), ('multimethod', …), ('nlopt', …), ('typish', …)]
+闭包新增（都是 extras 带进来的）: colorama / httptools / psycopg-binary / pyyaml / uvloop / watchfiles / websockets
+```
+
+也就是说：CI（干净镜像里没有 cadquery 这一族）里这条用例由 **红 → 绿**；本机仍会红在那 4 条
+**本机装了、而 root 清单故意不声明**的重依赖上（`requirements.txt:43-47` 的注释写明 cadquery 是可选项）——
+本批**不**为了让本机转绿去动 `requirements.txt`，也不改断言。
+
+复跑：`tests.test_cpq_eval_ci_contract` `Ran 23 … FAILED (failures=2)`（与本批之前同样是 2 条：
+`test_every_production_import_has_a_requirement` 本机只剩 cadquery 一族；
+`test_dependency_closure_is_not_trivially_equal_to_declared` 的 `assertNotIn("numpy", closure)` 来自
+`ezdxf==1.4.4` 的**硬依赖** `numpy`，属已记录偏差，见 `## 325` 的四、1）。
+
+本批只改 1 个测试文件 + changelog；未改任何业务实现、未改任何断言 / 期望值、未新增 skip；
+未连 PG / 34、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。
