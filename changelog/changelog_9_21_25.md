@@ -19210,3 +19210,60 @@ R4 只复核"分子 == 从零件行重算 + 比值口径不变"，没在真图�
 `packaging-business-part-size-must-be-confirmed-by-dimension.md`（也是 `## 462`）撞号，本批按自己的号写。
 
 未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、样本只读（只在临时目录产出 DXF）。
+
+## 463. 落地 `packaging-gap-waiver-record-must-not-silently-disappear`：有人签过的成本缺口放行留痕，读不出来时不再悄悄消失 —— `gates._waiver_verdict()` 把"从来没签过"与"签过但这份留痕用不了"拆成两态，给出稳定原因码（8 OK，红基 9 红；不回归 223 里 1 条既有挂账）（9-23，Codex 实现）
+
+`gates._gap_waiver()` 原来只有两种返回：`dict`（留痕成立）与 `None`（其余**全部**）。于是六种"留痕
+其实存在但没被采用"的交接记录 —— 损坏 JSON / 不是对象 / `by|at|reason` 有空 / `codes: []` /
+`codes` 不覆盖当前缺口 —— 和 `PE1` **从来没签过**，在门禁返回体、行上的键、`blocking_message()` 的
+用户文案上**逐字相同**（连文案都是「成本仍存在缺口，缺口清零后才能生成正式报价」）。签过字的人看不到
+自己那份留痕去哪了；同一文件的 `_READ_SEVERITY` / `_finish()` 早就为"上游读不到"单独披露过
+（`reads` / `reads_unavailable`），这条链漏了同样的处理。
+
+只改 `tech_app/backend/services/packaging_drawing_flow/gates.py`，把"二值"改成"三态"：
+
+1. 新常量 `WAIVER_INVALID_REASONS = ("unreadable_json", "not_an_object", "missing_fields",
+   "empty_codes", "codes_not_covering")`（五值逐字冻结，判定按此顺序取第一个命中的）。
+2. `_gap_waiver()` → `_waiver_verdict(handoff, gap_codes)`，返回
+   `(摘要, None)` / `(None, 披露)` / `(None, None)`：第三态是**根本没有留痕**（键缺席 / `None` / 空白串），
+   静默（不许"读不到就报异常"造成噪音）；`_gap_waiver()` 保留成一行包装，既有调用方口径逐字不变。
+3. 披露形状（只加不减）：`entry["waiver_invalid"] = {"code": "cost_gap_waiver_unusable",
+   "reason": <五选一>, "codes": [<留痕里读到的码，读不到给 []>]}`，行上新增
+   `waiver_unusable=<reason>`；**不进 `blocking`**（免得把 go/no-go 与退出码一起改了）。
+4. 四条判据本身、`_gap_codes()` 取数口径、`waived` 不为 `true`、`cost_gaps_unresolved` 仍在 `blocking`、
+   `status="blocked"`、行 `message` 与 `blocking_message()` 文案、前端与人话 —— 一个字没改（`## 440`
+   C3"不合法不许当放行"仍冻结）。
+
+两态对照（本批修的就是这两态原来逐字相同）：
+
+```
+无留痕（键缺席 / None / "" / "   "）  waiver_invalid 缺席（静默）
+损坏 JSON / 不是对象 / 缺字段 /
+codes 空 / codes 不覆盖                entry["waiver_invalid"]={code,reason,codes} + 行上 waiver_unusable
+合法留痕                              waived=true + entry["waiver"] 四项逐字，waiver_invalid 缺席
+```
+
+实跑：
+
+```
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_gap_waiver_record_disclosure_red
+Ran 8 tests ... OK                      # 红基 Ran 8 in 0.002s ... FAILED (failures=9)
+
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_downstream_blockers_red \
+    tests.test_packaging_drawing_source_read_failure_red tests.test_packaging_flow_dependency_probe_truth_red \
+    tests.test_packaging_flow_non_exception_retryable_red tests.test_packaging_gate_read_failure_disclosure_red \
+    tests.test_packaging_handoff_input_drift_red tests.test_packaging_manual_field_confirmation_red \
+    tests.test_packaging_parse_to_downstream_seams_red tests.test_packaging_parts_ir_read_failure_red \
+    tests.test_packaging_preconditions_requirement_read_failure_red tests.test_packaging_quote_close_loop_red \
+    tests.test_packaging_quote_send_button_entry_red tests.test_packaging_stage_chain_read_failure_red \
+    tests.test_spec_status_truth_red
+Ran 223 tests in 3.445s ... FAILED (failures=1)
+    # 唯一那条是既有挂账、与本批无关：parse_to_downstream_seams_red B4 的 stats 键集冻结（## 462 已记）。
+    # 已用 git stash 去掉本批改动复跑确认：改前同样 FAIL。
+```
+
+红测自身缺陷（如实记录）：R8 的"闭集不空转"只覆盖五种形态各触发一次，没覆盖"一条留痕同时踩两条判据
+时按序取第一个"（例如 `codes` 空且 `by` 也空 → 必须报 `missing_fields` 而不是 `empty_codes`）；R6 是
+源码守卫，不校验 reason 与形态的一一对应（由 R3/R8 的行为断言兜着）。本批红测不校验前端（人话另批）。
+
+未 push / MR / tag / Release / 部署，未起服务、未连 PG / 34、未写盘（打桩 `store` / `persistence` / 假依赖模块）。

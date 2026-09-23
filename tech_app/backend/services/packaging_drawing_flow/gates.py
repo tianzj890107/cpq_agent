@@ -96,6 +96,16 @@ READ_SOURCES = ("engine", "absent", "unavailable")
 #: `load_cost` 读挂了、随后的 `minimum_charge_policy` 恰好读到，就会把读失败盖掉。
 _READ_SEVERITY = {"engine": 0, "absent": 1, "unavailable": 2}
 
+#: 放行留痕"存在但用不了"的**拒绝原因闭集**（Spec
+#: `packaging-gap-waiver-record-must-not-silently-disappear.md` §2.1）：判定按此顺序取第一个命中的
+#: —— 同一条留痕可能同时踩两条，顺序不定就不可复核。
+WAIVER_INVALID_REASONS = ("unreadable_json", "not_an_object", "missing_fields",
+                          "empty_codes", "codes_not_covering")
+
+#: 留痕不可用的稳定披露码（Spec §2.2）：这是**披露**不是门禁 —— 不许进 `blocking`，
+#: 免得把 go/no-go 与退出码一起改了。
+WAIVER_UNUSABLE_CODE = "cost_gap_waiver_unusable"
+
 
 def _read(resolve: Resolver, name: str, function: str, *args: Any) -> Tuple[Dict[str, Any], str, str]:
     """读一个上游结果，返回 `(行, source, reason)`。**绝不把异常抛给调用方。**"""
@@ -136,42 +146,55 @@ def _gap_codes(cost: Dict[str, Any], handoff: Dict[str, Any]) -> List[str]:
     return codes
 
 
-def _gap_waiver(handoff: Dict[str, Any], gap_codes: List[str]) -> Optional[Dict[str, Any]]:
-    """合法放行留痕 → 摘要对象；否则 `None`（Spec `packaging-parse-to-downstream-seams.md` §2.3）。
+def _waiver_verdict(handoff: Dict[str, Any], gap_codes: List[str]
+                    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """`(合法留痕摘要, 不可用披露)` —— 三条出路，**两态可分**（Spec `packaging-parse-to-downstream-seams.md` §2.3 +
+    `packaging-gap-waiver-record-must-not-silently-disappear.md` §2.1/§2.2/§2.3）：
 
-    四条都要成立：
+      · `(摘要, None)`：留痕成立（四条判据全过，口径一个字不改）；
+      · `(None, 披露)`：留痕**存在**但用不了 —— `{"code": WAIVER_UNUSABLE_CODE, "reason": <闭集里那一个>,
+        "codes": [<留痕里读到的码，读不到给 []>]}`；
+      · `(None, None)`：**根本没有留痕**（键缺席 / `None` / 空白串）—— 静默，不许"读不到就报异常"造成噪音。
 
-      ① 交接记录自证这次交接**带着缺口**（`has_gaps`）—— 没缺口的记录里出现放行留痕本身就不成立；
-      ② `by` / `at` / `reason` 都非空（谁、什么时候、为什么）；
-      ③ `codes` 非空且每一项都是有效码；
-      ④ 读得到的当前缺口码必须被 `codes` **全覆盖**（漏一个就不算这条留痕放行了它）。
-
-    这是**披露**不是放宽：调用方仍然把 `cost_gaps_unresolved` 留在 `blocking` 里。
+    `has_gaps` 为假时一律 `(None, None)`（没缺口的记录里出现留痕本身就不成立）。
     """
     if not handoff.get("has_gaps"):
-        return None
+        return None, None
     raw = handoff.get("gap_waiver_json")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None                       # 从来没有留痕：静默（Spec §2.3）
+
+    def unusable(reason: str, codes: Any = ()) -> Tuple[None, Dict[str, Any]]:
+        read = [str(code).strip() for code in (codes if isinstance(codes, list) else [])
+                if str(code or "").strip()]
+        return None, {"code": WAIVER_UNUSABLE_CODE, "reason": reason, "codes": read}
+
     if isinstance(raw, str):
         try:
             waiver: Any = json.loads(raw) if raw.strip() else None
-        except Exception:           # noqa: BLE001 - 留痕损坏按"没有合法留痕"处理
-            waiver = None
+        except Exception:                       # noqa: BLE001 - 损坏不再塌成一个 None：说得出是 JSON 坏了
+            return unusable("unreadable_json")
     else:
         waiver = raw
     if not isinstance(waiver, dict):
-        return None
+        return unusable("not_an_object")
+    codes = [str(code).strip() for code in (waiver.get("codes") or [])
+             if str(code or "").strip()]
     by = str(waiver.get("by") or "").strip()
     at = str(waiver.get("at") or "").strip()
     reason = str(waiver.get("reason") or "").strip()
     if not (by and at and reason):
-        return None
-    codes = [str(code).strip() for code in (waiver.get("codes") or [])
-             if str(code or "").strip()]
+        return unusable("missing_fields", codes)
     if not codes:
-        return None
+        return unusable("empty_codes")
     if gap_codes and not set(gap_codes) <= set(codes):
-        return None
-    return {"by": by, "at": at, "reason": reason, "codes": codes}
+        return unusable("codes_not_covering", codes)
+    return {"by": by, "at": at, "reason": reason, "codes": codes}, None
+
+
+def _gap_waiver(handoff: Dict[str, Any], gap_codes: List[str]) -> Optional[Dict[str, Any]]:
+    """合法放行留痕 → 摘要对象；否则 `None`（既有调用方的口径，逐字不变）。"""
+    return _waiver_verdict(handoff, gap_codes)[0]
 
 
 def _stage_entry(stage: str, project_id: str, resolve: Resolver,
@@ -183,6 +206,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
     blocking: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
     waived: Optional[Dict[str, Any]] = None
+    waiver_invalid: Optional[Dict[str, Any]] = None
     # 这一段**实际读过**的依赖与读取三态（Spec `packaging-gate-read-failure-disclosure.md` §2.1）。
     # 判据与结论一个字不改，只是把"我到底读到没有"一并交出去 —— 否则"读不到"与"确实没做"
     # 在返回体与用户文案上逐字相同。
@@ -238,7 +262,7 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
             # 就把那份留痕一并披露出来 —— 否则界面上只有一句"缺口清零后才能生成正式报价"，
             # 看不出这条缺口其实已经被人按什么原因放行了（34 实测两边说法相反）。
             handoff = read("packaging_handoff", "load_handoff", project_id)
-            waiver = _gap_waiver(handoff, _gap_codes(cost, handoff))
+            waiver, invalid = _waiver_verdict(handoff, _gap_codes(cost, handoff))
             row: Dict[str, Any] = {"code": "cost_gaps_unresolved",
                                    "message": "成本仍存在缺口，缺口清零后才能生成正式报价",
                                    "source": "packaging_cost"}
@@ -246,6 +270,11 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
                 row["waived"] = True
                 row["waiver"] = waiver
                 waived = waiver
+            elif invalid:
+                # 披露不是放宽（Spec §2.2/§2.3）：留痕**存在**但用不了，必须与"从来没签过"分得开 ——
+                # 只走行上的键与返回体，**不**进 `blocking`（结论与退出码一个字不改）。
+                row["waiver_unusable"] = invalid["reason"]
+                waiver_invalid = invalid
             blocking.append(row)
         policy = read("packaging_cost", "minimum_charge_policy")
         if str(policy.get("status") or "") != "chosen":
@@ -264,6 +293,8 @@ def _stage_entry(stage: str, project_id: str, resolve: Resolver,
              "snapshot": {"requirement_snapshot_version": snapshot}}
     if waived:
         entry["waiver"] = waived
+    if waiver_invalid:
+        entry["waiver_invalid"] = waiver_invalid
     return _finish(entry)
 
 
