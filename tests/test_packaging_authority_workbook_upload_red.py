@@ -395,8 +395,12 @@ class DWiring(unittest.TestCase):
     def test_d2_server_path_entry_is_kept(self):
         body = function_body("packagingAuthorityImportBody")
         self.assertIn("workbook_path", body, "服务器路径那条路必须保留（Spec §C3/§C4）")
-        self.assertEqual(1, self.SOURCE.count("packaging-business-parts/import"),
-                         "导入路径字面量只留一处（Spec §C3）")
+        # `## 481` 按 Spec `packaging-business-tables-are-answer-keys-only.md` §5.1 把这条冻结
+        # **重指**到参照那一条路径：业务的表只用来对答案，接口从 `…/packaging-business-parts/import`
+        # 改名为 `…/packaging-business-parts/reference`。重指不等于放宽 —— 计数仍是精确相等，
+        # 仍只许留一处路径字面量（`…/import` 那份旧字面量一条都不许留在前端）。
+        self.assertEqual(1, self.SOURCE.count("packaging-business-parts/reference"),
+                         "对答案参照的路径字面量只留一处（Spec §2.2）")
 
     def test_d3_route_reference_count_is_frozen(self):
         # `## 480` 按 Spec `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 把这条

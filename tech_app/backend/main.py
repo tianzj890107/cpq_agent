@@ -7198,6 +7198,12 @@ PACKAGING_BUSINESS_PARTS_READ_PATH = "/api/projects/{pid}/requirement/packaging-
 PACKAGING_GEOMETRY_READ_PATH = "/api/projects/{pid}/requirement/packaging-geometry"
 PACKAGING_BINDING_WRITE_PATH = ("/api/projects/{pid}/requirement/packaging-business-parts/"
                                 "{part_code}/geometry-binding")
+#: 「对答案参照」的唯一路径常量（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）：
+#: 客户工作簿进来之后落的**只是参照**，所以接口名字也从"导入权威清单"改成"导入对答案参照"。
+PACKAGING_BUSINESS_PARTS_REFERENCE_PATH = ("/api/projects/{pid}/requirement/"
+                                           "packaging-business-parts/reference")
+#: 旧的导入路径：**逐字保留**（老客户端还在打这条），但换成了同一条参照处理器 ——
+#: 打哪条都一样，产物都是参照文档，绝不写结果文档（Spec §2.2）。
 PACKAGING_BUSINESS_PARTS_IMPORT_PATH = ("/api/projects/{pid}/requirement/"
                                         "packaging-business-parts/import")
 
@@ -7419,17 +7425,21 @@ def _business_parts_body(pid: str, doc: Any = None) -> dict:
             "binding_statuses": list(packaging_parts.BUSINESS_BINDING_STATUSES)}
 
 
+@app.post(PACKAGING_BUSINESS_PARTS_REFERENCE_PATH)
 @app.post(PACKAGING_BUSINESS_PARTS_IMPORT_PATH)
 def import_packaging_business_parts(
     pid: str,
     body: PackagingBusinessPartsImportAction = Body(default=PackagingBusinessPartsImportAction()),
     user: dict = Depends(current_user),
 ):
-    """导入权威清单 → 生成一版业务部件文档（Spec §3/§5）。
+    """把客户工作簿落成一份「对答案参照」（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）。
 
-    这是业务部件层的**入口**：没有它，`business_parts` 永远不会出现，页面只能显示
-    "尚未形成业务部件清单"。导入是确定性的（不调模型），可以重复跑：同一份资料 → 同一个
-    `business_parts_id`（幂等）；换了资料 → 换 id，下游据此判 stale，旧几何/成本结果不删。
+    业务的表**不是输入**：这个端点**不**再写业务部件结果文档，产物是另一份只读参照文档
+    （doc key `packaging_business_parts_reference`，自报"只用来对答案"），给人拿它跟系统从
+    图纸推出来的零件逐行对答案。参照文档一个字节都不进 2.1 的结果、BOM、工艺与成本。
+
+    导入本身仍是确定性的（不调模型）、可重复跑：同一份资料 → 同一个 `reference_id`（幂等），
+    换资料换 id；旧参照版本留在文档里，结果文档与旧几何/成本结果**一个都不动**。
     """
     _require(user, packaging_match.BOX_MATCH_DECIDE_ROLES,
              "需要工艺经理、工艺技术总监或管理员权限")
@@ -7474,20 +7484,24 @@ def import_packaging_business_parts(
     # 部件图本体先按内容寻址落 blob（Spec `packaging-authority-thumbnail-media.md` §C3），
     # 文档里只留引用 —— 图片字节不进 meta 文档，也不走 add_attachment（那会把派生结果标 stale）。
     thumbnails = packaging_parts.save_authority_thumbnails(pid, authority)
-    saved = packaging_parts.save_business_parts(pid, packaging_parts.business_parts_document(
-        authority, geometry, bindings=plan, thumbnails=thumbnails,
-        legacy_parts_id=(geometry or {}).get("parts_id") if isinstance(geometry, dict) else ""))
-    store.audit(pid, "workflow:packaging_business_parts_imported", {
-        "business_parts_id": saved.get("business_parts_id"),
+    # 产物落**参照**那一份（Spec §2.2）：客户工作簿不许再写 `business_parts` 结果文档。
+    saved = packaging_parts.save_business_parts_reference(
+        pid, packaging_parts.business_parts_reference_document(
+            authority, geometry, bindings=plan, thumbnails=thumbnails))
+    store.audit(pid, "workflow:packaging_business_parts_reference_imported", {
+        "reference_id": saved.get("reference_id"),
         "business_part_total": (saved.get("stats") or {}).get("business_part_total"),
         "bound_total": (saved.get("stats") or {}).get("bound_total"),
         "authority_file_hash": (saved.get("source") or {}).get("authority_file_hash"),
         "skipped_total": (authority.get("stats") or {}).get("skipped_total"),
         "thumbnail_saved_total": thumbnails.get("written"),
         "thumbnail_reused_total": thumbnails.get("reused"),
+        "purpose": packaging_parts.BUSINESS_REFERENCE_KIND,
         "by": str(user.get("username") or ""),
     })
     result = _business_parts_body(pid, saved)
+    result["reference_id"] = saved.get("reference_id")
+    result["purpose"] = dict(saved.get("purpose") or {})
     result["import_stats"] = dict(authority.get("stats") or {})
     result["import_skipped"] = list(authority.get("skipped") or [])
     result["authority"] = {"file": (authority.get("source") or {}).get("file", ""),

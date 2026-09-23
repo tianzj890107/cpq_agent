@@ -3199,6 +3199,18 @@ BUSINESS_ENGINE_VERSION = "packaging-business-parts/1"
 #: 业务部件文档在项目存储里的 doc key（与几何零件文档分开存：两者版本与权限都不同）。
 BUSINESS_DOC_KEY = "packaging_business_parts"
 
+#: 「对答案参照」文档的 doc key（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）：
+#: 客户的表 / 已审核快照 / 知识库业务表**只能对答案**，所以它们落进**另一份**文档 —— 与结果
+#: 文档（`BUSINESS_DOC_KEY`）分开存，任何下游（BOM / 工艺 / 成本）都不许读这一份。
+BUSINESS_REFERENCE_DOC_KEY = "packaging_business_parts_reference"
+BUSINESS_REFERENCE_ENGINE_VERSION = "packaging-business-parts-reference/1"
+#: 参照文档的用途码与**逐字**说明（读接口与页面直接引用这一句，不许各写一套措辞）。
+BUSINESS_REFERENCE_KIND = "answer_key"
+BUSINESS_REFERENCE_PURPOSE = ("只用来对答案：把业务的表跟系统从图纸推出来的零件逐行比，"
+                              "不进入结果 / BOM / 工艺 / 成本")
+#: 参照文档**明确**不喂给任何下游（闭集为空即是契约）。
+BUSINESS_REFERENCE_FEEDS = ()
+
 #: 业务编码形状：`<权威资料前缀>-P<两位序号>`（前缀由导入器从标题派生，不许硬编码）。
 BUSINESS_PART_CODE_FORMAT = "%s-P%02d"
 
@@ -3216,7 +3228,9 @@ BUSINESS_TRUTH_STATES = ("observed", "inferred", "pending_confirmation")
 #: 缺权威清单的稳定缺口码与文案（Spec §2 第 5 条 / §8 第 1 条）。
 BUSINESS_PARTS_MISSING = "business_parts_missing"
 BUSINESS_PARTS_MISSING_MESSAGE = "已识别几何区域 %d 个，尚未形成业务部件清单"
-BUSINESS_PARTS_MISSING_ACTION = "导入权威部件清单（Excel）或人工建立业务部件后，再跑 BOM / 工艺 / 成本"
+BUSINESS_PARTS_MISSING_ACTION = ("先跑「一键解析图纸」把零件从图纸里推出来"
+                                    "（业务的表只用来对答案），或人工建立业务部件后"
+                                    "再跑 BOM / 工艺 / 成本")
 
 #: 业务部件手写两件左右件时也**不许合并**（Spec §9 第 5 条）：相同尺寸的左右件各占一行。
 BUSINESS_PART_MERGE_GUARD = "same_size_parts_are_not_merged"
@@ -3851,6 +3865,81 @@ def load_business_parts(project_id: str,
     """读一版业务部件文档；缺省读最近一版（读不到回 None，不回退成几何零件）。"""
     for item in _business_items(project_id):
         if business_parts_id is None or _text(item.get("business_parts_id")) == str(business_parts_id):
+            return item
+    return None
+
+
+def business_parts_reference_document(authority: Any, geometry: Any, *,
+                                      bindings: Any = None,
+                                      thumbnails: Any = None) -> Dict[str, Any]:
+    """组一份「对答案参照」文档（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2）。
+
+    与结果文档（`business_parts_document()`）**同一份内容构造**（所以人来对答案时行对得上），
+    但落**另一个 doc key**、并自带 `purpose` 说明"只用来对答案"。参照文档**不是**结果：
+    下游（BOM / 工艺 / 成本）读的永远是 `BUSINESS_DOC_KEY` 那一份，谁也不许读这一份。
+    """
+    doc = business_parts_document(authority, geometry, bindings=bindings, thumbnails=thumbnails)
+    doc["engine_version"] = BUSINESS_REFERENCE_ENGINE_VERSION
+    # 结果文档的版本锚点不许留在参照文档上 —— 否则"我拿到的是不是结果"只能靠猜测。
+    doc.pop("business_parts_id", None)
+    doc.pop("business_parts_hash", None)
+    doc["purpose"] = {
+        "kind": BUSINESS_REFERENCE_KIND,
+        "message": BUSINESS_REFERENCE_PURPOSE,
+        "read_only": True,
+        "feeds_results": False,
+        "feeds": list(BUSINESS_REFERENCE_FEEDS),
+    }
+    doc["reference_id"] = ""
+    doc["reference_hash"] = ""
+    doc["reference_id"], doc["reference_hash"] = _reference_identity(doc)
+    return doc
+
+
+def _reference_identity(doc: Dict[str, Any]) -> Tuple[str, str]:
+    """参照文档的版本锚点：同一份内容 → 同一个 id（落库幂等，范式与业务部件文档同源）。"""
+    from .packaging_semantics import model as sem_model
+
+    body = {key: value for key, value in doc.items()
+            if key not in ("reference_id", "reference_hash")}
+    digest = sem_model.sha256_hex(sem_model.canonical_json(sem_model.json_safe(body)))
+    return "business-parts-reference:" + digest[:16], digest
+
+
+def _reference_items(project_id: str) -> List[Dict[str, Any]]:
+    doc = get_backend().get_doc(project_id, BUSINESS_REFERENCE_DOC_KEY) or {}
+    items = doc.get("items") if isinstance(doc, dict) else None
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def save_business_parts_reference(project_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """落一版「对答案参照」文档（同一 `reference_id` 覆盖，最多 `MAX_VERSIONS` 版）。
+
+    **写这一份不算"业务表变成输入"**：它不喂任何下游，也不动结果文档一个字节。
+    """
+    if not isinstance(doc, dict):
+        raise ValueError("save_business_parts_reference() 需要一份参照文档")
+    record = copy.deepcopy(doc)
+    reference_id, reference_hash = _reference_identity(record)
+    record["reference_id"] = reference_id
+    record["reference_hash"] = reference_hash
+    items = [item for item in _reference_items(project_id)
+             if _text(item.get("reference_id")) != reference_id]
+    items.insert(0, record)
+    get_backend().put_doc(project_id, BUSINESS_REFERENCE_DOC_KEY,
+                          {"items": items[:MAX_VERSIONS]})
+    return record
+
+
+def load_business_parts_reference(project_id: str,
+                                  reference_id: Optional[str] = None
+                                  ) -> Optional[Dict[str, Any]]:
+    """读一版「对答案参照」文档；缺省读最近一版（读不到回 None，不回退成结果文档）。
+
+    **下游一律不许调它**（Spec §2.2）：这是给人对答案看的，不是给 BOM / 工艺 / 成本吃的。
+    """
+    for item in _reference_items(project_id):
+        if reference_id is None or _text(item.get("reference_id")) == str(reference_id):
             return item
     return None
 

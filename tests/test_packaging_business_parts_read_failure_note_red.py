@@ -35,6 +35,13 @@ NETWORK_TEXT = ("暂时读不到业务部件清单（网络错误），请稍后
                 "这不代表这个项目还没导入权威清单")
 LEGACY_SENTENCE = "已识别的几何区域还不是业务部件清单：下面列的是几何分量，不是业务零件。"
 LEGACY_ACTION = "导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本"
+#: `## 481`（Spec `packaging-business-tables-are-answer-keys-only.md` §2.4/§5.1）**重指**过的
+#: 两条入口文案：业务的表只用来对答案，所以"导入权威部件清单（Excel）…再跑 BOM"那句邀请与
+#: 按钮名都换成了对答案参照的说法。重指不等于放宽 —— 下列断言仍是逐字 `assertIn`，只是指向
+#: 新文案；旧那句 "把业务表当输入" 的邀请句改由 `assertNotIn` 守住不许回潮。
+ACTION_481 = ("业务的表只用来对答案：先跑「一键解析图纸」把零件从图纸里推出来，"
+              "再拿业务表逐行对答案（业务表不进入结果 / BOM / 工艺 / 成本）。")
+BUTTON_481 = "导入对答案参照（业务表）"
 
 EXTRACT_JS = r"""
 const fs = require("fs");
@@ -170,10 +177,15 @@ class UWiring(unittest.TestCase):
 class UExistingNoteUnchanged(unittest.TestCase):
     def test_u6_legacy_note_literals_are_verbatim(self):
         src = read_text(APP_JS)
-        for literal in (LEGACY_SENTENCE, LEGACY_ACTION, "packaging-business-missing",
-                        "dataset.qqBusinessMissing", "导入权威清单（业务部件）"):
+        for literal in (LEGACY_SENTENCE, "packaging-business-missing",
+                        "dataset.qqBusinessMissing", BUTTON_481, "对答案参照"):
             self.assertIn(literal, src,
-                          "既有'确实没有权威清单'的提示与导入按钮逐字不变：%s" % literal)
+                          "既有'确实没有权威清单'的提示与入口文案逐字不变：%s" % literal)
+        # `## 481` 重指的那一句空态引导（Spec §2.4）：逐字是新文案。
+        self.assertIn(ACTION_481, src, "空态引导句要逐字换成'只用来对答案'（Spec §2.4）")
+        # 旧那句请人把业务表当输入的引导句**不许回潮**（Spec §2.4）。
+        self.assertNotIn(LEGACY_ACTION, src,
+                         "旧的'导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本'不许回潮")
 
     def test_u7_business_rows_tolerate_null_and_empty(self):
         self.assertEqual([], rows_of(None), "null 文档仍是 []（护栏）")

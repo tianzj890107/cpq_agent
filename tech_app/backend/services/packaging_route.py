@@ -94,6 +94,14 @@ SURFACE_STATIONS = {
 #: 生成/确认是工艺侧写权限：**直接引用**第 4 批的角色常量（同一对象，不另抄一份）。
 ROUTE_WRITE_ROLES = packaging_match.BOX_MATCH_DECIDE_ROLES
 
+#: 工艺模板表缺位时的披露 doc key 与披露码（Spec
+#: `packaging-business-tables-are-answer-keys-only.md` §2.3）：模板表是**答案纸、不是输入** ——
+#: 项目里有零件文档时它缺位只作披露，不许把路线判死成 `no_process_template`。
+TEMPLATE_GAP_DOC_KEY = "packaging_route_template_gap"
+TEMPLATE_GAP_CODE = "process_templates_unavailable"
+TEMPLATE_GAP_MESSAGE = ("这张表是答案纸、不是输入：工艺模板表里没有这个盒型的模板，"
+                        "本版路线只由需求表面字段与 BOM 里已展开的工序推出")
+
 #: 聚合工序：模板里的 `表面处理`（「覆膜 → 烫金 → 局部UV（选配）」）。
 AGGREGATE_STEP = "表面处理"
 
@@ -325,6 +333,12 @@ def build_route_steps(box_type_code: str, inputs: dict) -> dict:
             continue
         steps.append(_synthetic_step(name, _field_for(name, data)))
 
+    return _finalize_route_steps(code, data, steps, required, aggregate_steps)
+
+
+def _finalize_route_steps(code: str, data: dict, steps: list, required: list,
+                          aggregate_steps: list) -> dict:
+    """排位次 / 编 step_no / 算工时与批量 —— `build_route_steps()` 与模板缺位那条路共用一处。"""
     steps.sort(key=lambda row: (row["rank"] if row["rank"] is not None else 999,
                                 row["step_name"]))
     for index, row in enumerate(steps):
@@ -334,7 +348,7 @@ def build_route_steps(box_type_code: str, inputs: dict) -> dict:
     seconds = [row["standard_seconds"] for row in steps
                if row["standard_seconds"] is not None]
     total = round(sum(seconds), 1)
-    quantity = _num(data.get("quote_quantity"))
+    quantity = _num((data or {}).get("quote_quantity"))
     batch = round(total * quantity, 1) if (quantity is not None and quantity > 0) else None
     needs_time = [row["step_name"] for row in steps if row["needs_standard_time"]]
     return {
@@ -353,6 +367,57 @@ def build_route_steps(box_type_code: str, inputs: dict) -> dict:
             "no_process_template": False,
         },
     }
+
+
+def _template_rows_from_bom(bom_rows: Any) -> dict:
+    """模板表缺位时的工序来源（Spec §2.3）：BOM 里已经展开过的 `process` 行**就是**那一版工序
+    清单（它当初也是从模板出的），所以路线照 BOM 重排 —— 不凭空编工序、不去猜工时。"""
+    rows: dict = {}
+    order = 0
+    for row in bom_rows or []:
+        if not isinstance(row, dict) or _text(row.get("bom_category")) != "process":
+            continue
+        name = _text(row.get("item_key"))
+        if not name or name in rows:
+            continue
+        order += 1
+        rows[name] = (float(order), {"step_name": name,
+                                     "workstation": _text(row.get("component")),
+                                     "work_content": _text(row.get("item_name")),
+                                     "standard_seconds": None,
+                                     "automation": None, "control_point": None,
+                                     "parallel_ok": 0})
+    return rows
+
+
+def _build_route_steps_from_bom(box_type_code: str, inputs: dict, bom_rows: Any) -> dict:
+    """模板表缺位时的路线（Spec §2.3）：与 `build_route_steps()` 同一套排位次逻辑，
+    只是工序来源换成 BOM 里已展开的 `process` 行。"""
+    code = _text(box_type_code)
+    data = dict(inputs or {})
+    templates = _template_rows_from_bom(bom_rows)
+    required = required_surface_steps(data)
+    steps: list = []
+    seen_names: set = set()
+    for name, row in templates.items():
+        targets = normalize_step_name(name)
+        if not targets:
+            targets = (name,)
+        for index, target in enumerate(targets):
+            if target in seen_names:
+                continue
+            seen_names.add(target)
+            step = _template_step(target, row)
+            if index:
+                step.update({"standard_seconds": None, "needs_standard_time": True,
+                             "source": "template:%s" % name})
+            steps.append(step)
+    aggregate_steps: list = []
+    for name in required:
+        if any(row["step_name"] == name for row in steps):
+            continue
+        steps.append(_synthetic_step(name, _field_for(name, data)))
+    return _finalize_route_steps(code, data, steps, required, aggregate_steps)
 
 
 def validate_order(steps) -> list:
@@ -536,6 +601,8 @@ def _empty_route(requirement_no: str, confirmed_versions: int) -> dict:
         "has_incomplete_time": False,
         "steps": [],
         "required_surface": [],
+        # 还没排过路线：模板缺位披露也给空（Spec §2.3）——"还没排"不是"模板缺了"。
+        "process_templates_unavailable": {},
         "gaps": {"needs_standard_time": [], "order_violations": [],
                  "aggregate_steps": [], "no_process_template": False},
         "stats": {"step_count": 0, "template_steps": 0, "synthetic_steps": 0,
@@ -639,6 +706,10 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
         "has_incomplete_time": bool(row.get("has_incomplete_time")),
         "steps": steps,
         "required_surface": list(required_surface or []),
+        # 工艺模板表缺位披露（Spec `packaging-business-tables-are-answer-keys-only.md` §2.3）：
+        # 模板表是**答案纸、不是输入** —— 有零件文档时它缺位只作披露。键**必须存在**；
+        # 这一版没有这段披露时给 `{}`（与 `bom_unavailable` 同一范式，加法）。
+        "process_templates_unavailable": _load_template_gap(project_id, req_no),
         "gaps": {
             "needs_standard_time": needs_time,
             "order_violations": validate_order(steps),
@@ -663,6 +734,46 @@ def load_route(project_id: str, requirement_no: str = "") -> dict:
     }
 
 
+def _template_gap_detail(box_type_code: str) -> dict:
+    """工艺模板缺位的披露（Spec §2.3）：一句话说清"这张表是答案纸、不是输入"。"""
+    return {"code": TEMPLATE_GAP_CODE, "message": TEMPLATE_GAP_MESSAGE,
+            "box_type_code": _text(box_type_code)}
+
+
+def _load_template_gap(project_id: str, requirement_no: str = "") -> dict:
+    """模板缺位披露的**读侧**：没有这段披露就回 `{}`（读不到 ≠ 没问题，Spec §2.3）。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, TEMPLATE_GAP_DOC_KEY) or {}
+        rows = doc.get("by_requirement") if isinstance(doc, dict) else None
+        item = (rows or {}).get(_text(requirement_no) or "") if isinstance(rows, dict) else None
+        return dict(item) if isinstance(item, dict) else {}
+    except Exception:                                   # noqa: BLE001 - 见 docstring
+        return {}
+
+
+def _save_template_gap(project_id: str, requirement_no: str, gap: Any) -> None:
+    """落一份模板缺位披露；这次没有就清掉上一次的（不许留过期告警）。写盘失败不改路线结论。"""
+    req_no = _text(requirement_no) or ""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, TEMPLATE_GAP_DOC_KEY) or {}
+        if not isinstance(doc, dict):
+            doc = {}
+        bucket = doc.setdefault("by_requirement", {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            doc["by_requirement"] = bucket
+        record = dict(gap) if isinstance(gap, dict) and gap else {}
+        if record:
+            bucket[req_no] = record
+        else:
+            bucket.pop(req_no, None)
+        get_backend().put_doc(project_id, TEMPLATE_GAP_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001 - 披露写不进去不挡路线
+        return
+
+
 def build_route(project_id: str, requirement_no: str = "") -> dict:
     """读确认盒型 + 第 5 批 BOM → 生成路线 → 整体替换落库（确认态回到 draft）。"""
     data = _requirement_data(project_id)
@@ -676,10 +787,23 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
         raise RouteError("尚未确认盒型，无法生成工艺路线（Spec §2.1）", 409,
                          "box_type_not_confirmed")
 
-    # 没有工艺模板就没有"路线"可言：这条缺口先报，与 BOM 是否建过无关（Spec §2.7）。
+    # 判死之前**先**读零件 / 业务部件文档（Spec `packaging-business-tables-are-answer-keys-only.md`
+    # §2.3）：判据是"这个项目有没有零件文档"，不是"业务表（工艺模板表）里有没有模板"。
+    from . import packaging_parts
+    parts_doc = packaging_parts.load_parts(project_id) or {}
+    business_parts_doc = packaging_parts.load_business_parts(project_id) or {}
+    has_result_document = bool([row for row in (parts_doc.get("parts") or [])
+                                if isinstance(row, dict)]) \
+        or bool([row for row in (business_parts_doc.get("business_parts") or [])
+                 if isinstance(row, dict)])
+    template_gap: dict = {}
     if not kb_repo.packaging_process_templates(box_type_code=box_code):
-        raise RouteError("盒型 %s 没有工艺模板，无法生成工艺路线" % box_code, 409,
-                         "no_process_template")
+        if not has_result_document:
+            # 没有零件文档、也没有工艺模板：照旧的 `no_process_template` 409，读数与文案一字不改。
+            raise RouteError("盒型 %s 没有工艺模板，无法生成工艺路线" % box_code, 409,
+                             "no_process_template")
+        # 有零件文档：工艺模板缺位只作披露（Spec §2.3），路线照 BOM 里已展开的工序重排。
+        template_gap = _template_gap_detail(box_code)
 
     bom_rows = da_repo.load_packaging_bom(project_id, req_no)
     if not bom_rows or not any(_text(row.get("bom_category")) == "process"
@@ -687,7 +811,9 @@ def build_route(project_id: str, requirement_no: str = "") -> dict:
         raise RouteError("包装 BOM 尚未建立，请先展开部件（Spec §2.1）", 409,
                          "bom_not_built")
 
-    result = build_route_steps(box_code, data)
+    _save_template_gap(project_id, req_no, template_gap)
+    result = (_build_route_steps_from_bom(box_code, data, bom_rows) if template_gap
+              else build_route_steps(box_code, data))
     fingerprint, surface_json, quantity = route_fingerprint(box_code, result["steps"], data)
     # **排产那一刻**那一版 BOM 的身份（Spec `packaging-route-bom-version-pinning.md` §2.2）：
     # 指纹取刚读到的行、版本与盒型取同一份 BOM 文档，随主表一起落库 —— 事后才回答得出

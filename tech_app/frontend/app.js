@@ -1795,7 +1795,7 @@ function startAllPackagingPartProcesses(rows) {
     const detail = skipped.map(item => `${item.part_code}（${item.reason}）`).join("；");
     return { ok: false, error: { code: "no-parts",
       message: list.length ? `没有可算的业务部件：${detail}`
-        : "还没有业务部件清单，请先导入权威清单或人工建立。" } };
+        : "还没有业务部件清单：先跑「一键解析图纸」把零件从图纸里推出来，或人工建立。" } };
   }
   // 逐件串行：一次只跑一件，右栏分析的标题与结论始终对得上。
   const queue = ready.slice();
@@ -2626,12 +2626,13 @@ function packagingBusinessImportNote(doc) {
     || "已识别的几何区域还不是业务部件清单：下面列的是几何分量，不是业务零件。";
   const action = document.createElement("div");
   action.className = "packaging-business-missing-action";
-  action.textContent = gap.action || "导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本";
+  action.textContent = gap.action
+    || "业务的表只用来对答案：先跑「一键解析图纸」把零件从图纸里推出来，再拿业务表逐行对答案（业务表不进入结果 / BOM / 工艺 / 成本）。";
   const button = document.createElement("button");
   button.id = "packagingBusinessImport";
   button.className = "btn btn-secondary";
   button.type = "button";
-  button.textContent = "导入权威清单（业务部件）";
+  button.textContent = "导入对答案参照（业务表）";
   button.addEventListener("click", () => { importPackagingBusinessParts(); });
   // 客户工作簿入口（Spec `packaging-authority-workbook-upload.md` §C3）：客户给的 xlsx
   // 不必先放上服务器 —— 选中文件即走同一条导入接口（只搬字节，前端不解析）。
@@ -2644,7 +2645,7 @@ function packagingBusinessImportNote(doc) {
   upload.id = "packagingBusinessImportFile";
   upload.className = "btn btn-secondary";
   upload.type = "button";
-  upload.textContent = "选择客户工作簿…";
+  upload.textContent = "选择客户工作簿（只对答案）…";
   upload.addEventListener("click", () => { if (fileInput) fileInput.click(); });
   if (fileInput) {
     fileInput.addEventListener("change", () => {
@@ -2661,7 +2662,9 @@ function packagingBusinessImportNote(doc) {
   return wrap;
 }
 
-// 导入权威清单的三条路（Spec docs/specs/packaging-authority-workbook-upload.md §C3）：
+// 导入**对答案参照**的三条路（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2：
+// 业务的表只用来对答案，不进入结果 / BOM / 工艺 / 成本；原 Spec
+// docs/specs/packaging-authority-workbook-upload.md §C3 的三条路逐字保留）：
 //   ① 服务器路径（部署机上直接指一个路径，原样保留）；
 //   ② 客户工作簿（选文件 → FileReader 读成 data URL → 只搬字节，前端**不**解析 xlsx）；
 //   ③ 都没有 → null（不猜、不编空载荷）。
@@ -2684,11 +2687,12 @@ function packagingAuthorityImportBody(path, fileName, dataUrl) {
   return { content_base64: encoded, file_name: packagingAuthorityFileName(fileName) };
 }
 
-// 导入接口只有一处字面量（Spec §C3/§C4：前端业务件路由引用计数保持 4；`## 480` 按
-// `packaging-2-1-result-parts-and-shape-only-pane.md` §2.4b C6 补上"按图纸补推导"那一条，
-// 冻结随之**重指**为 5 —— 重指不等于放宽：多出来的那一条就是下面这个 derive 路径）。
+// 对答案参照接口只有一处字面量（Spec `packaging-business-tables-are-answer-keys-only.md` §2.2：
+// 业务的表只用来对答案，接口从 `…/import` 改名为 `…/reference`；`## 481` 按该 Spec §5.1 把
+// `tests/test_packaging_authority_workbook_upload_red.py::D2` 的路径字面量**重指**到这一条 ——
+// 重指不等于放宽：计数仍是精确相等）。路由引用计数（5）不变：只是把 import 换成 reference。
 function packagingBusinessPartsImportPath() {
-  return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/import`;
+  return `${API}/api/projects/${currentProject}/requirement/packaging-business-parts/reference`;
 }
 
 // 按图纸就地补推导只有一处字面量（Spec 2.1-result §2.4b C6）：与读 / 导入 / 绑定 / 部件图
@@ -2698,6 +2702,7 @@ function packagingBusinessPartsDerivePath() {
 }
 
 // 路径导入与文件导入共用这一个 POST（失败一律用后端给的 message，不猜原因）。
+// 产物是**对答案参照**（Spec §2.2）：不再落业务部件结果文档。
 async function importPackagingBusinessPartsData(path, fileName, dataUrl) {
   if (!currentProject) return null;
   const body = packagingAuthorityImportBody(path, fileName, dataUrl);
@@ -2711,7 +2716,7 @@ async function importPackagingBusinessPartsData(path, fileName, dataUrl) {
     if (!res.ok) {
       const detail = (payload && payload.detail) || {};
       const message = typeof detail === "string" ? detail : String(detail.message || "");
-      throw new Error(message || `导入权威清单失败（HTTP ${res.status}）`);
+      throw new Error(message || `导入对答案参照失败（HTTP ${res.status}）`);
     }
     currentPackagingBusinessParts = payload;
     renderTree(currentIR || {});
@@ -2723,10 +2728,12 @@ async function importPackagingBusinessPartsData(path, fileName, dataUrl) {
   }
 }
 
-// 导入权威清单 → 落一版业务部件文档（Spec §3/§5）：确定性解析，可重复跑（同资料同 id）。
+// 导入业务表 → 只落一版「对答案参照」文档（Spec
+// `packaging-business-tables-are-answer-keys-only.md` §2.2）：确定性解析，可重复跑（同资料同 id），
+// **不**写业务部件结果文档。
 async function importPackagingBusinessParts() {
   if (!currentProject) return null;
-  const path = window.prompt("权威清单工作簿在服务器上的路径（.xlsx）", "");
+  const path = window.prompt("业务表（对答案参照）在服务器上的路径（.xlsx）", "");
   if (!path) return null;
   return importPackagingBusinessPartsData(path, "", "");
 }
@@ -5951,7 +5958,7 @@ async function startAllPartProcesses(options) {
     const businessRows = packagingBusinessPartRows(currentPackagingBusinessParts);
     if (!businessRows.length) {
       return { ok: false, error: { code: "no-business-parts",
-        message: "还没有业务部件清单，无法批量生成工艺推荐；请先导入权威清单或人工建立。" } };
+        message: "还没有业务部件清单，无法批量生成工艺推荐；请先跑「一键解析图纸」把零件从图纸里推出来，或人工建立。" } };
     }
     return startAllPackagingPartProcesses(businessRows);
   }

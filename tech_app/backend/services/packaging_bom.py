@@ -48,6 +48,14 @@ PAIRING_DOC_KEY = "packaging_bom_pairing"
 #: "零件文档在、回填这一步挂了"。
 BIND_ERROR_DOC_KEY = "packaging_bom_bind_error"
 
+#: 部件模板表缺位时的披露 doc key（Spec `packaging-business-tables-are-answer-keys-only.md` §2.3）：
+#: 与上面两份同范式走 meta 文档通道。模板表是**答案纸、不是输入** —— 项目里有零件文档时，
+#: 它缺位只作披露，不许把 BOM 判死成 `no_part_template`。
+TEMPLATE_GAP_DOC_KEY = "packaging_bom_template_gap"
+#: 披露码（读侧 `gaps` 里的键名同此）。
+TEMPLATE_GAP_CODE = "part_templates_unavailable"
+TEMPLATE_GAP_MESSAGE = "这张表是答案纸、不是输入：部件模板表里没有这个盒型的模板，本版 BOM 的部件组行改由零件文档生成"
+
 #: 可自动绑定的变量（Spec §2.2）。
 AUTO_VARIABLES = frozenset({"L", "W", "H", "t", "c"})
 
@@ -684,6 +692,74 @@ def _load_business_parts(project_id: str) -> Any:
         return packaging_parts.load_business_parts(project_id)
     except Exception:                                   # noqa: BLE001 - 见 docstring
         return None
+
+
+def _has_result_document(project_id: str, business_parts_doc: Any = None) -> bool:
+    """这个项目有没有零件文档（几何零件文档或业务部件文档）—— Spec §2.3 的**统一判据**。
+
+    "能不能往下走"只看这一条：业务表（部件模板 / 工艺模板）里有没有模板不算判据。
+    """
+    doc = business_parts_doc
+    if doc is None:
+        doc = _load_business_parts(project_id)
+    if [row for row in ((doc or {}).get("business_parts") or []) if isinstance(row, dict)]:
+        return True
+    try:
+        from . import packaging_parts
+        geometry = packaging_parts.load_parts(project_id) or {}
+    except Exception:                                   # noqa: BLE001 - 读不到就是"没有"
+        return False
+    return bool([row for row in (geometry.get("parts") or []) if isinstance(row, dict)])
+
+
+def _empty_expansion(box_type_code: str) -> dict:
+    """模板表缺位但有零件文档时的空展开壳（Spec §2.3）。
+
+    部件组行由零件 / 业务部件文档出（`_assemble()` 的权威清单分支），模板展开一个不参与；
+    这里只给 `_assemble()` 需要的那几个键。
+    """
+    return {"engine_version": ENGINE_VERSION, "box_type_code": _text(box_type_code),
+            "variables": {}, "parts": [], "expanded_count": 0, "needs_input_count": 0}
+
+
+def _template_gap_detail(box_type_code: str) -> dict:
+    """模板缺位的披露（Spec §2.3）：一句话说清"这张表是答案纸、不是输入"。"""
+    return {"code": TEMPLATE_GAP_CODE, "message": TEMPLATE_GAP_MESSAGE,
+            "box_type_code": _text(box_type_code)}
+
+
+def _load_template_gap(project_id: str, requirement_no: str = "") -> dict:
+    """模板缺位披露的**读侧**：没有这段披露就回 `{}`（读不到 ≠ 没问题，见 §2.3）。"""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, TEMPLATE_GAP_DOC_KEY) or {}
+        rows = doc.get("by_requirement") if isinstance(doc, dict) else None
+        item = (rows or {}).get(_text(requirement_no) or "") if isinstance(rows, dict) else None
+        return dict(item) if isinstance(item, dict) else {}
+    except Exception:                                   # noqa: BLE001 - 见 docstring
+        return {}
+
+
+def _save_template_gap(project_id: str, requirement_no: str, gap: Any) -> None:
+    """落一份模板缺位披露；这次没有就清掉上一次的（不许留过期告警）。写盘失败不改 BOM 结论。"""
+    req_no = _text(requirement_no) or ""
+    try:
+        from ..storage.meta_backend import get_backend
+        doc = get_backend().get_doc(project_id, TEMPLATE_GAP_DOC_KEY) or {}
+        if not isinstance(doc, dict):
+            doc = {}
+        bucket = doc.setdefault("by_requirement", {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            doc["by_requirement"] = bucket
+        record = dict(gap) if isinstance(gap, dict) and gap else {}
+        if record:
+            bucket[req_no] = record
+        else:
+            bucket.pop(req_no, None)
+        get_backend().put_doc(project_id, TEMPLATE_GAP_DOC_KEY, doc)
+    except Exception:                                   # noqa: BLE001 - 披露写不进去不挡 BOM
+        return
 
 
 def _business_rows_scope(items: list) -> dict:
@@ -1456,6 +1532,10 @@ def load_bom(project_id: str, requirement_no: str = "") -> dict:
             # 尺寸质量缺口（Spec `packaging-bom-size-quality-accounting.md` §2.3）：键**必须存在**，
             # 没有包围盒行时给 `[]`。新账是**加法**，不许并进上面三个键。
             "bbox_only": bbox_only,
+            # 部件模板表缺位披露（Spec `packaging-business-tables-are-answer-keys-only.md` §2.3）：
+            # 模板表是**答案纸、不是输入** —— 这一版 BOM 的部件组行是从零件文档出的。键**必须
+            # 存在**；这一版没有这段披露时给 `{}`（与 `binding_error` 同一范式，加法）。
+            "part_templates_unavailable": _load_template_gap(project_id, req_no),
         },
         "stats": _stats(items),
     }
@@ -1803,12 +1883,26 @@ def build_bom(project_id: str, requirement_no: str = "", *,
         raise BomError("尚未确认盒型，无法展开部件（Spec §2.1）", 409,
                        "box_type_not_confirmed")
 
-    expanded = expand_parts(box_code, data, overrides=overrides or {})
+    # 判死之前**先**读零件 / 业务部件文档（Spec `packaging-business-tables-are-answer-keys-only.md`
+    # §2.3）：判据是"这个项目有没有零件文档"，不是"业务表（部件模板表）里有没有模板"。
+    business_parts_doc = _load_business_parts(project_id)
+    if kb_repo.packaging_part_templates(box_code) or not _has_result_document(project_id,
+                                                                             business_parts_doc):
+        # 模板在（照旧展开）；或模板不在、项目里也没有零件文档 —— 照旧的 `no_part_template` 409，
+        # 读数与文案一个字不改（护栏）。
+        template_gap: dict = {}
+        expanded = expand_parts(box_code, data, overrides=overrides or {})
+    else:
+        # 模板表缺位但项目里有零件文档：业务表不是判死门槛（Spec §2.3），只作披露，
+        # 部件组行与材料组行一律从零件 / 业务部件文档出（`_assemble()` 的权威清单分支）。
+        template_gap = _template_gap_detail(box_code)
+        expanded = _empty_expansion(box_code)
+    _save_template_gap(project_id, req_no, template_gap)
     box = _load_box_type(box_code)
     # 业务部件清单（Spec `packaging-bom-business-parts-rows.md` §C2）：有清单时部件组行
     # 由清单生成（真样本 28 件），没有清单时逐字保持模板展开。
     items = _assemble(expanded, box, data, req_no,
-                      business_parts=_load_business_parts(project_id),
+                      business_parts=business_parts_doc,
                       map_entries=material_map_facts().get("entries"))
     items, pairing_review, role_unbound, binding_error = _bind_parts(project_id, items, req_no)
     # 重算不许把人工映射算没了（Spec `packaging-part-role-manual-mapping.md` §2.8）：

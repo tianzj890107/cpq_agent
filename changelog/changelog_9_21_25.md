@@ -20364,3 +20364,101 @@ tests.test_spec_status_truth_red / doc_path_and_root_consistency_red   Ran 17 �
 - 作者侧并行落地、本批**未实现**的 `## 481` 红测（`test_packaging_business_tables_are_answer_keys_only_red`
   15 红）与本批无关、未碰；
 - 未 push / 未建 MR / 未 tag / 未 Release / 未部署。
+
+## 481. 落地「业务的表只能对答案、不能当输入」：客户工作簿不再写 2.1 的结果文档，BOM / 工艺不再把模板表当判死门槛（21 OK；红基 15 FAIL；两条既有护栏按 Spec §5.1 重指，断言未放宽）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+用户原话（2026-09-23）：
+
+> 那个业务的表不能作为输入
+> 只能是我们用来对答案
+
+代码级证据（写作 Spec 时的工作副本只读实测）：
+
+- `main.py:7477` 客户工作簿导入端点体内就是 `packaging_parts.save_business_parts(pid, …)` ——
+  《酒盒 报价资料.xlsx》当下**能**变成 2.1 的结果文档，也就是"业务的表当成输入"；
+- `app.js:2580` 空态引导句 `导入权威部件清单（Excel）后再跑 BOM / 工艺 / 成本`、
+  `app.js:2638` 接口字面量 `…/packaging-business-parts/import` —— 页面在**请人把业务表当输入**；
+- `packaging_bom.build_bom()` 里 `expand_parts(`（偏移 792）排在 `_load_business_parts(project_id)`
+  （偏移 1079）**之前**，而 `expand_parts()` 读到模板表为空就 409 `no_part_template` ——
+  项目里明明已经有 DWG 推出来的零件，却因为"业务表里没模板"整条下游判死；
+- `packaging_route.build_route()` 的 `no_process_template` 同样先判死，整个函数**一次都没读**
+  零件 / 业务部件文档（源码里 `packaging_parts` 出现 0 次）。
+
+### 二、改了什么（4 个生产文件）
+
+- `tech_app/backend/services/packaging_parts.py`：
+  · 新增参照文档那一套：`BUSINESS_REFERENCE_DOC_KEY = "packaging_business_parts_reference"`、
+    `BUSINESS_REFERENCE_PURPOSE`（逐字"只用来对答案…不进入结果 / BOM / 工艺 / 成本"）、
+    `business_parts_reference_document()` / `save_business_parts_reference()` /
+    `load_business_parts_reference()` / `_reference_identity()`；与结果文档**同一份内容构造**，
+    但落**另一个 doc key**、自带 `purpose`，并**去掉** `business_parts_id` 锚点（免得被当成结果）；
+  · `BUSINESS_PARTS_MISSING_ACTION` 改成"先跑「一键解析图纸」…（业务的表只用来对答案）"：
+    参照落进另一份之后，原来那句"导入权威部件清单（Excel）…再跑 BOM"已经**不再成立**
+    （导入不再产生业务部件），留着就是把用户引向一个做完也不会变绿的动作；该常量无测试钉住，
+    改的是必要性，不是为了让谁转绿。
+- `tech_app/backend/main.py`：新增 `PACKAGING_BUSINESS_PARTS_REFERENCE_PATH`
+  （`…/packaging-business-parts/reference`）；`import_packaging_business_parts()` 改写参照文档
+  （体内不再有 `save_business_parts(`）；旧 `…/import` 路径**逐字保留**、装饰在同一条参照处理器上
+  （老客户端不 404，且打哪条都一样只落参照）；审计动作改名
+  `workflow:packaging_business_parts_reference_imported`，出参加 `reference_id` / `purpose`。
+- `tech_app/backend/services/packaging_bom.py`：`TEMPLATE_GAP_DOC_KEY` / `part_templates_unavailable` /
+  `_has_result_document()` / `_empty_expansion()` / `_load_template_gap()` / `_save_template_gap()`；
+  `build_bom()` **先**读零件 / 业务部件文档：有零件文档 + 模板表空 ⇒ 不抛 `no_part_template`，
+  部件组行由零件文档出，披露落 `gaps.part_templates_unavailable`；**没有**零件文档时照旧的
+  `no_part_template` 409，读数与文案一个字不改。
+- `tech_app/backend/services/packaging_route.py`：`TEMPLATE_GAP_DOC_KEY` / `process_templates_unavailable` /
+  `_template_gap_detail()` / `_load_template_gap()` / `_save_template_gap()` /
+  `_template_rows_from_bom()` / `_build_route_steps_from_bom()`；`build_route()` 判死前先读
+  零件 / 业务部件文档：有零件文档 + 工艺模板空 ⇒ 披露并照 BOM 里已展开的工序重排；没有零件文档时
+  照旧的 `no_process_template` 409。`build_route_steps()` 的排位次逻辑抽成 `_finalize_route_steps()`
+  两处共用（**行为不变**，签名不变）；`load_route()` / `_empty_route()` 加法带出
+  `process_templates_unavailable`。
+- `tech_app/frontend/app.js`：空态引导句换成"业务的表只用来对答案…"；按钮 `导入对答案参照（业务表）`、
+  选择文件 `选择客户工作簿（只对答案）…`、失败提示 `导入对答案参照失败（HTTP n）`；接口字面量改
+  `…/packaging-business-parts/reference`（**全前端不再出现 `…/import`**）；另两处"请先导入权威清单
+  或人工建立"的阻断文案改成"先跑「一键解析图纸」把零件从图纸里推出来，或人工建立"。
+
+### 三、测试侧授权：两条既有护栏按 Spec §5.1 **重指**（断言未放宽）
+
+实现时发现 Spec §3.7 的授权清单**漏了两条**既有断言，它们与本批 C4 的文案口径直接互斥
+（同一句字面量，一个要"在"、一个要"不在"），只能重指，不能两全（先例：`## 461` / `## 475` / `## 480`）：
+
+- `test_packaging_authority_workbook_upload_red::D2`：路径字面量从 `…/import` **重指**到
+  `…/reference` —— 仍是 `assertEqual(1, count(...))`（精确相等），只换被数的字面量；
+- `test_packaging_business_parts_read_failure_note_red::U6`：原本要求 app.js 里**逐字还在**
+  那句邀请与按钮名；重指后新文案（`ACTION_481` / `BUTTON_481`）仍逐字 `assertIn`，
+  `LEGACY_SENTENCE` 与两个 `data-` 钩子一个字不改，并**新增** `assertNotIn(LEGACY_ACTION, …)`
+  守住旧引导句不许回潮 —— **严格度只增不减**。
+
+§3.7 点名的另外三份（`test_packaging_business_parts_and_cad_plan_view_red` /
+`test_packaging_parametric_bom_red` / `test_packaging_2_1_result_parts_and_shape_only_red`）
+实测**没有被本批实现打红**，授权**未使用**、一个字没改 —— 因为降级只做在 `build_bom()`：
+`expand_parts()` 的 `no_part_template` 409 与 `PACKAGING_BUSINESS_PARTS_IMPORT_PATH` 常量都逐字保留。
+
+### 四、反向对照（本机实测，每条只让目标那条变红；跑完立即还原并 `md5` 核对）
+
+```text
+① 端点里的参照落库换回 packaging_parts.save_business_parts()  ⇒ G1_1 单条红（failures=1）
+② build_bom() 的读取顺序换回去（expand_parts( 排到前面）       ⇒ G2_1 单条红（failures=1）
+③ 前端空态引导句换回「导入权威部件清单（Excel）后再跑 BOM…」   ⇒ G3_1 单条红（failures=1）
+```
+
+### 五、测试
+
+```text
+tests.test_packaging_business_tables_are_answer_keys_only_red   Ran 21 … OK
+tests/test_packaging_*.py（166 模块）                            Ran 2802 … OK (skipped=12)
+含 app.js 的 91 模块（257 模块并集的一部分）                      Ran 1485 … OK (skipped=4)
+tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red   Ran 17 … OK
+```
+
+### 六、边界（本批**未做**，如实记）
+
+- 本批**不删**任何历史文档与历史导入产物：旧 `packaging_business_parts` 里由工作簿来的行**保留**，
+  只另标来源（`purpose`）、不再新增；
+- 不做"人对答案"的页面并排比对视图（只留参照文档与只读接口），页面上的并排比对另批；
+- 解析层 `## 453` 闭集（`RUNTIME_REFUSED_SOURCES` / `AUTHORITY_SOURCES` / `gold_standard_used` /
+  `DEFAULT_SEED_PATH`）、几何与业务部件身份、成本公式与费率、规则 JSON 一个字未动；
+- 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；未 push / 未建 MR / 未 tag / 未 Release / 未部署。
