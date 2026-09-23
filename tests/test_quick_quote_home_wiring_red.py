@@ -24,14 +24,18 @@ token（`assertTrue("selectQuickQuoteBaseline" in PANEL)`），函数写在面�
 它一样绿 —— 本层把验收换成**调用点与行为**。
 
 禁止为了让红测转绿而修改本文件。
+（唯一的例外记在 Spec `quick-quote-home-wiring-and-read-diagnostics.md` §6.6：`## 470` 只给
+D1/D2 两条探针补了「会话必须先存在」这一步夹具，断言与期望值一字未改。）
 """
 from __future__ import annotations
 
 import ast
+import contextlib
 import pathlib
 import re
 import sys
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -136,6 +140,25 @@ class DReadPathHonestyRed(unittest.TestCase):
             self.fail("cpq_agent_server 没有模块级绑定 cpq_quick_quote_price"
                       "（`## 287` 已收口过，属回退；Spec §C7）")
 
+    @contextlib.contextmanager
+    def _existing_session(self, session_id: str):
+        """让读路径看到一个**只活在内存里**的实例（不落盘、不写业务数据）。
+
+        Spec `quick-quote-home-wiring-and-read-diagnostics.md` §6.6（`## 470` 处置）：C5 的后半句
+        「正常读到空时不许出现诊断键」说的是**存在的实例里还没落过卡**。`_qq_state()` 早已不许
+        `setdefault` 造幽灵实例（`quick-quote-full-flow-state-and-recovery.md` §6：不存在的 session 一律
+        404 `session_not_found`，错误体必然带 `error`），所以探针必须先给出「这个实例存在」这件事；
+        而会话仓储是**落盘**的（`_JsonDocRepository`），真去建实例会把探针 id 写进数据目录 ——
+        于是这里只替换进程内的存在性判定，一个字都不落盘。
+        """
+        state = {"quote_mode": "quick", "industry": "packaging", "owner_user_id": "",
+                 "participants": [], "inputs": {}, "match": {}, "baseline": {},
+                 "workspace": {}, "diff": [], "revision": 0, "card": {}, "transfer": {},
+                 "quote": {}, "updated_at": "2026-09-23T00:00:00+08:00"}
+        with mock.patch.object(self.server, "_qq_existing",
+                               lambda sid: dict(state) if str(sid) == session_id else None):
+            yield
+
     def test_d1_broken_store_is_surfaced_not_swallowed(self):
         original = self.price.find_quote
 
@@ -144,7 +167,8 @@ class DReadPathHonestyRed(unittest.TestCase):
 
         self.price.find_quote = boom
         try:
-            out = self.server._handle_quick_quote_read("wiring-probe-xyz")
+            with self._existing_session("wiring-probe-xyz"):
+                out = self.server._handle_quick_quote_read("wiring-probe-xyz")
         finally:
             self.price.find_quote = original
         self.assertTrue(
@@ -157,7 +181,8 @@ class DReadPathHonestyRed(unittest.TestCase):
         original = self.price.find_quote
         self.price.find_quote = lambda *args, **kwargs: {}
         try:
-            out = self.server._handle_quick_quote_read("wiring-probe-empty")
+            with self._existing_session("wiring-probe-empty"):
+                out = self.server._handle_quick_quote_read("wiring-probe-empty")
         finally:
             self.price.find_quote = original
         self.assertEqual(

@@ -19675,3 +19675,30 @@ Spec 状态行已改「已实现」并追加 §6 落地记录。
 本批未改任何既有测试的期望值 / 断言、未新增 skip、未改部署脚本（`tech_app_launch.py` 本来就在启动前
 设好这个变量，对"环境变量已设"的路径行为等价）；未连 PG / 34、未发 HTTP、未写业务数据、
 未 push / MR / tag / Release / 部署。
+
+## 470. 处置 `quick-quote-home-wiring-and-read-diagnostics.md` §6.6 记的夹具偏差：D1/D2 的探针给不出「实例存在」这件事，断言的对象变成了 404 契约（`Ran 12 … OK`；断言与期望值一字未改，带反向对照）（9-23，Codex 测试侧）
+
+§6.6 早已把根因写清：C5 的后半句「正常读到空时不许出现诊断键」说的是**存在的实例里还没落过卡**，而红测
+`DReadPathHonestyRed` 的 D2 用一个**从未存在**的 id `wiring-probe-empty` 冒充"正常空值" —— 按
+`quick-quote-full-flow-state-and-recovery.md` §6，不存在的 session 一律 404 `session_not_found`
+（禁止 `setdefault` 造幽灵实例），错误体**必然**带 `error` 键，于是那条断言在机制上不可能同时成立，
+`test_spec_status_consistency_red::C1`（声明已实现但点名的红测仍失败）也随之常红。本批把夹具补齐：
+
+- `DReadPathHonestyRed` 新增 `_existing_session()` 上下文管理器：`mock.patch.object(cpq_agent_server,
+  "_qq_existing", …)` 只在**进程内**给出一个实例状态，D1 / D2 在它里面读；
+- **不落盘**：会话仓储 `_JsonDocRepository` 是持久化的，真去 `_qq_state(..., create=True)` 会把探针 id
+  写进数据目录（违反本文件"不写业务数据"的纪律）。调试过程中落下的
+  `tech_app/data/cpq/quick_quote_sessions.json` / `quick_quote_idempotency.json`
+  （内容只有两条探针 id）已移出仓库数据目录，`tech_app/data/cpq/` 目录不复存在；
+- **D1 顺带被修实**：它原来读的也是不存在的 id，404 错误体必然带 `error` —— 那条断言一直是**空转**
+  （`find_quote` 的 `NameError` 根本没跑到）。现在实例存在，D1 才真的在测"仓库坏了必须说出来"。
+
+**断言与期望值一字未改**（D1 的"必须有 error/diagnostic 键"、D2 的"不许有"、键名判据全部原文）。
+
+复跑：`tests.test_quick_quote_home_wiring_red` `Ran 12 … OK`（改前 `Ran 12 … FAILED (failures=1)`，只红 D2）；
+`tests.test_quick_quote_home_wiring_red tests.test_spec_status_consistency_red` `Ran 16 … OK`；
+反向对照（把存在性判定改回"不存在"）⇒ `D2 FAIL`，只红这一条，恢复即全绿。
+Spec `quick-quote-home-wiring-and-read-diagnostics.md` 追加 §6.7 记录本批处置。
+
+本批只改 1 个测试文件（+ 1 份 Spec）+ changelog；未改任何业务实现、未改任何期望值 / 断言、未新增 skip；
+未连 PG / 34、未发 HTTP、未写业务数据（探针污染已清）；未 push / MR / tag / Release / 部署。

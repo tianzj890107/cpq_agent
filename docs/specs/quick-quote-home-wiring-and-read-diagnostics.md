@@ -159,3 +159,21 @@ node 打桩 `fetch` 指向面板模块：空 session 调 `selectQuickQuoteBaseli
 于是本层红测 `DReadPathHonestyRed::test_d2`（用一个从未存在的 id `wiring-probe-empty` 冒充"正常空值"）与新契约
 **在机制上互斥**：旧契约下 `_qq_state()` 会把该 id 建成幽灵实例所以读得到 200 空值，新契约下同一 id 必须是 404 错误体，
 而错误体必然带 `error` 键。这条偏差已记在 `quick-quote-full-flow-state-and-recovery.md` §12，**不改任何测试**。
+
+### 6.7 该偏差已处置（`## 470`，Codex 测试侧；断言与期望值一字未改）
+
+§6.6 已把根因说清：后半句讲的是**存在的实例里还没落过卡**，而探针从来没把「实例存在」这件事给出来 ——
+于是它断言的对象变成了 `quick-quote-full-flow-state-and-recovery.md` §6 那条 404 契约。本批按本节措辞把它补上：
+
+| 项 | 内容 |
+| --- | --- |
+| 改了什么 | `tests/test_quick_quote_home_wiring_red.py` 的 `DReadPathHonestyRed` 新增 `_existing_session()` 上下文管理器：只替换**进程内的存在性判定**（`mock.patch.object(cpq_agent_server, "_qq_existing", …)` 给一个内存里的实例状态），D1 / D2 在它里面读 |
+| 为什么不落盘 | 实例仓储 `_JsonDocRepository` 是**持久化**的，真去 `_qq_state(..., create=True)` 会把探针 id 写进数据目录（违反本文件"不写业务数据"的纪律）；本批只替换存在性判定，一个字都不落盘 |
+| 为什么不算放宽 | 三条断言逐字未动：D1 的「必须有 `error` / `diagnostic` 键」、D2 的「不许有」、键名判据。改掉的只是"夹具没把被断言的事实给出来" |
+| D1 顺带被修实 | D1 原来读的也是一个不存在的 id → 404 错误体**必然**带 `error`，那条断言一直是**空转**（`find_quote` 的 `NameError` 根本没跑到）。现在实例存在，D1 才真的在测"仓库坏了必须说出来" |
+| 反向对照 | 把存在性判定改回"不存在" ⇒ `D2 FAIL`（`Ran 12 … FAILED (failures=1)`）；恢复 ⇒ `Ran 12 … OK` |
+| 连带 | 系列守卫 `tests/test_spec_status_consistency_red::C1`（"声明已实现、但点名的红测仍失败"）随之转绿 |
+
+同批把此前调试时落下的探针污染收干净：`tech_app/data/cpq/quick_quote_sessions.json` /
+`quick_quote_idempotency.json`（内容只有 `wiring-probe-xyz` / `wiring-probe-empty` 两条探针 id）
+已移出仓库数据目录，`tech_app/data/cpq/` 整个目录不复存在。
