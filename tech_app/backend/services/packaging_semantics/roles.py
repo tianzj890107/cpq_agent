@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 from . import model
@@ -45,12 +46,38 @@ def _clamp01(value: Any) -> float:
     return round(max(0.0, min(1.0, number)), 4)
 
 
+#: 图层名的转义写法（Spec `packaging-layer-name-unicode-escape.md` §2.1）：LibreDWG 把非 ASCII
+#: 的层名写成 `_U+XXXX`（下划线前缀、大小写不敏感、可连续多个、可带尾随文字），AutoCAD 那套
+#: 是 `\U+XXXX` —— 两种都先还原成真名字再去匹配规则。只认**完整 4 位**十六进制码位：残缺写法
+#: （`_U+ZZZZ` / `_U+56F` / 结尾孤立的 `_U+`）一律逐字保留，不猜半个码位、也绝不抛异常。
+_LAYER_ESCAPE = re.compile(r"[_\\][Uu]\+([0-9A-Fa-f]{4})")
+
+
+def normalize_layer_name(value: Any) -> str:
+    r"""层名里的 `_U+XXXX` / `\U+XXXX` 还原成真字符；其余字符（空格 / `$` / 中文 / ASCII）逐字不动。
+
+    纯函数：不读文件、不连库、不联网、不打日志（Spec §2.1）。
+    """
+    text = str(value if value is not None else "")
+    if not text or ("U+" not in text and "u+" not in text):
+        return text
+    return _LAYER_ESCAPE.sub(lambda match: _codepoint_of(match.group(1)), text)
+
+
+def _codepoint_of(hex_text: str) -> str:
+    try:
+        return chr(int(hex_text, 16))
+    except (TypeError, ValueError, OverflowError):     # pragma: no cover - 4 位十六进制不会溢出
+        return "U+%s" % hex_text
+
+
 def _normalized(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
 def _match_rule(layer: Dict[str, Any], rule: Dict[str, Any]) -> bool:
-    name = _normalized(layer.get("name"))
+    # 匹配用**还原后**的名字（Spec §2.2）：规则表里写的仍是可读的中文层名，不在表里加转义别名。
+    name = _normalized(normalize_layer_name(layer.get("name")))
     if not name:
         return False
     for candidate in rule.get("names") or ():
@@ -70,12 +97,15 @@ def _match_rule(layer: Dict[str, Any], rule: Dict[str, Any]) -> bool:
 def resolve_layer(layer: Dict[str, Any], template: Dict[str, Any],
                   known_evidence: Any) -> Dict[str, Any]:
     name = str(layer.get("name") or "")
+    # `name` 仍是**图上的原名**（证据引用与界面要对回它），另给 `name_normalized` 披露还原结果
+    # （Spec §2.2）：没有转义时两键逐字相同。
+    normalized_name = normalize_layer_name(name)
     refs = model.evidence_refs_of(known_evidence, "ev:L:%s" % name)
 
     for rule in template.get("layers") or []:
         if _match_rule(layer, rule):
             return {
-                "name": name, "role": rule["role"],
+                "name": name, "name_normalized": normalized_name, "role": rule["role"],
                 "role_confidence": _clamp01(rule.get("confidence")),
                 "evidence_level": rule.get("evidence_level") or "MODERATE",
                 "matched_rule_id": rule.get("rule_id") or "",
@@ -89,7 +119,7 @@ def resolve_layer(layer: Dict[str, Any], template: Dict[str, Any],
     color_role = (template.get("colors") or {}).get(color_key) if color_key else None
     if color_role:
         return {
-            "name": name, "role": color_role,
+            "name": name, "name_normalized": normalized_name, "role": color_role,
             "role_confidence": _clamp01(COLOR_CONFIDENCE),
             "evidence_level": "MODERATE",
             "matched_rule_id": "color:%s" % color_key,
@@ -103,7 +133,7 @@ def resolve_layer(layer: Dict[str, Any], template: Dict[str, Any],
     line_role = (template.get("line_types") or {}).get(line_key) if line_key else None
     if line_role:
         return {
-            "name": name, "role": line_role,
+            "name": name, "name_normalized": normalized_name, "role": line_role,
             "role_confidence": _clamp01(LINE_TYPE_CONFIDENCE),
             "evidence_level": "WEAK",
             "matched_rule_id": "line_type:%s" % line_key,
@@ -114,7 +144,7 @@ def resolve_layer(layer: Dict[str, Any], template: Dict[str, Any],
         }
 
     return {
-        "name": name, "role": "unknown",
+        "name": name, "name_normalized": normalized_name, "role": "unknown",
         "role_confidence": UNKNOWN_CONFIDENCE,
         "evidence_level": "NONE",
         "matched_rule_id": "",

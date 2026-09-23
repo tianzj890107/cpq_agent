@@ -18527,3 +18527,33 @@ B1–B7 护栏）。
 （`call_pure()` 传参形状 / `node` 报 `args.map is not a function`，`## 441` 已记，非本批引入）；
 `node --check tech_app/frontend/app.js` 通过。未改其它 tests、未 push / MR / tag / Release / 部署、
 未连 PG、未写任何业务数据。
+
+## 452. 落地 `packaging-layer-name-unicode-escape`：图层名里的 `_U+XXXX` / `\U+XXXX` 转义还原后再匹配角色（8 OK，红基 6 红）（9-23，Codex 实现）
+
+唯一 Spec：`docs/specs/packaging-layer-name-unicode-escape.md`，红测
+`tests/test_packaging_layer_name_unicode_escape_red.py`（8 条：W1–W5 + W8 默认跑，W6/W7 真样本组
+要 `CPQ_DWG_REAL_SAMPLES=1`）。
+
+- `packaging_semantics/roles.py` 新增纯函数 `normalize_layer_name()`：`_U+XXXX`（LibreDWG 的下划线
+  写法，大小写不敏感、可连续多个、可带尾随文字）与 `\U+XXXX`（AutoCAD 那套）一起还原；
+  只认**完整 4 位**十六进制码位 —— 残缺写法（`_U+ZZZZ` / `_U+56F` / 结尾孤立 `_U+`）与
+  `None` / 空串一律逐字返回、绝不抛；其余字符（空格 / `$` / 中文 / ASCII）一字不动；
+- `roles._match_rule()` 改用**还原后**的名字匹配（`names` / `name_prefix` / `name_contains`
+  三条口径与规则表都一字未改）；`resolve_layer()` 的四类行都新增 `name_normalized`，
+  `name` 仍是图上原名逐字、`evidence_refs` 仍是 `ev:L:<原名>`、未命中名单与 `stats` 口径不变；
+- 真实样本读数（本机 LibreDWG，`酒盒.dwg` 8 层 / `圆盘盒.dwg` 32 层）：`_U+56FE_U+5C42 1` 与
+  明文 `图层 2` 同图并存 → 还原成 `图层 1`；被转义的规则层写法
+  （`_U+5168_U+7A7F_U+5200` / `_U+538B_U+7EBF Crease` / `_U+56FE_U+6846_U+5C42`）现在分别判
+  `cut` / `crease` / `frame`（改前一律 `unknown`）；
+- §2.4 那条判据问题同期收口：`tests/test_packaging_product_outline_red.py::test_d1` 按本 Spec
+  **重指**为"按该份图**真实存在**的层判"（`Make2D$可见线$普通线` 是圆盘盒的层，酒盒里没有它；
+  "层不在图里"是前置条件不满足，不再 `self.fail()` 冒充"角色判错"），层只要在图里角色仍逐个
+  断言 —— 重指≠放宽；新增只读辅助 `layers_of()`，`role()` 的 fail-fast 未动。
+
+实跑：`tests.test_packaging_layer_name_unicode_escape_red` 默认 `Ran 6 OK (skipped=1)`（红基
+5 红 + 1 skip）；`CPQ_DWG_REAL_SAMPLES=1` 下 `Ran 8 in 9.4s OK`（红基 6 红）；
+`CPQ_DWG_REAL_SAMPLES=1 tests.test_packaging_product_outline_red` `Ran 27 OK`（红基 26 OK + 1 红）；
+保护网 `Ran 193 tests … OK (skipped=4)`（`packaging_semantics_red` / `packaging_parts_extraction_red`
+/ `packaging_drawing_flow_red` / `packaging_business_parts_and_cad_plan_view_red` /
+`spec_status_truth_red` 一并复跑）。未改规则表、`cad_ir.normalize_text()`、角色闭集；未 push /
+MR / tag / Release / 部署、未连 PG、样本只读。

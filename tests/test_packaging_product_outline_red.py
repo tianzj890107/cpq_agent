@@ -538,14 +538,25 @@ class RealSampleProductOutline(ProductOutlineCase):
                 return str(item.get("role") or "")
         self.fail("%s 里没有图层 %s" % (name, layer))
 
+    def layers_of(self, name):
+        return {str(item.get("name") or "") for item in (self.semantics[name].get("layers") or [])}
+
     def test_d1_real_layer_roles_are_recognised(self):
+        # `## 452` 按 Spec `packaging-layer-name-unicode-escape.md` §2.4 把「不得误判」这一半的
+        # 判据**重指**为"按该份图**真实存在**的层判"：`Make2D$可见线$普通线` 是 `圆盘盒.dwg`
+        # 才有的层，`酒盒.dwg` 里没有它 —— "这一份图里没有这一层"是**前置条件不满足**，不是
+        # "角色判错"，再拿它 `self.fail()` 会让真样本 D 组恒红、验收信号失效（重指≠放宽：
+        # 层只要在图里，角色该是什么仍逐个断言）。
         for layer in ("全穿刀", "压线 Crease", "图框层", "排图层"):
             self.assertEqual(self.role(ROUND_BOX, layer),
                              "cut" if layer == "全穿刀" else ("crease" if "压线" in layer else "frame"),
                              "圆盘盒的 `%s` 角色（Spec §1.1）" % layer)
         self.assertEqual(self.role(WINE_BOX, "CUTTER"), "cut")
         for name in (WINE_BOX, ROUND_BOX):
+            present = self.layers_of(name)
             for layer in ("DESIGN", "Defpoints", "Make2D$可见线$普通线"):
+                if layer not in present:
+                    continue
                 self.assertNotIn(self.role(name, layer), ("cut", "crease"),
                                  "%s 的 `%s` 不得被误判成刀线/压线（Spec §1.2）" % (name, layer))
 
