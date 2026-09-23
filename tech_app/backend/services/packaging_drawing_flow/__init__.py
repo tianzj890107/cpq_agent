@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from tech_app.backend.storage import store
@@ -426,6 +427,15 @@ def _context(project_id: str, step_id: str, flow: Dict[str, Any], *, run_id: str
     return context
 
 
+def _monotonic_ms() -> int:
+    """单调时钟的毫秒读数（只用来披露"这一步花了多久"）。
+
+    挂钟（`now_iso()`）会被对时 / 夏令时拨动，量时长不靠它；`started_at` / `finished_at`
+    的既有 ISO 形状一个字不改（Spec `tech-load-states-and-progressive-load.md` §2.7）。
+    """
+    return int(time.monotonic() * 1000)
+
+
 def _execute_step(project_id: str, step_id: str, *, run_id: str, actor: str,
                   resolver: Callable[[str], Optional[Any]],
                   retry_of: str = "") -> Dict[str, Any]:
@@ -436,6 +446,7 @@ def _execute_step(project_id: str, step_id: str, *, run_id: str, actor: str,
     previous_attempt = model._as_int(record.get("attempt"), 0)
     attempt = previous_attempt + 1 if is_retry else max(1, previous_attempt)
     started_at = steps_mod.now_iso()
+    started_tick = _monotonic_ms()
     store.append_session_event(project_id, {
         "kind": "task", "source": "flow", "stage": "drawing", "key": key,
         "task": {"id": key, "label": model.STEP_TITLES[step_id], "status": "running",
@@ -464,6 +475,7 @@ def _execute_step(project_id: str, step_id: str, *, run_id: str, actor: str,
     record = {"step_id": step_id, "title": model.STEP_TITLES[step_id], "status": status,
               "attempt": attempt, "key": key, "seq": model._as_int(stored.get("seq")),
               "started_at": started_at, "finished_at": now,
+              "duration_ms": max(0, _monotonic_ms() - started_tick),
               "error_code": str(outcome.get("error_code") or ""),
               "error_message": message,
               "retryable": bool(outcome.get("retryable")),

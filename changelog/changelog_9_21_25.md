@@ -20079,3 +20079,89 @@ app.js 相关 90 模块（本批红测除外）                                 
   本批只把"两者关系"说清楚；
 - 不改诊断行件名（`图纸零件 PNN` 来自解析侧）、不做前端几何解析、不调模型、不加依赖、不连 PG / 34；
 - 未起服务、未发 HTTP、未写业务数据；未 push / MR / tag / Release / 部署。
+
+## 478. 落地「装载态 / 分阶段加载 / 慢请求反馈」：按钮灰着点解析不再被告知「没有可解析的图纸」，任务清单读失败不再伪装成「暂时没有分派给你的任务」（34 OK；红基 32 FAIL）（9-23，Codex 实现）
+
+### 一、怎么发现的
+
+两条都是"把还没发生的事说成了结论"：
+
+- 2.1 的 `#btnParse` 初始就是灰的（`index.html:147`），只有整份项目读回来才按入口置位；
+  而灰着点一下的回包是写死的一句 `not-ready：当前没有可解析的图纸，请先上传 2D 工程图。`
+  —— 「还在加载 / 项目打不开 / 3D 导入项目」三种处境同一句话，3D 的真实原因只写在
+  `#btnParse.title` 里，回包一个字都不带；
+- 任务清单 `loadTasks()` 的 `catch (e) { tasks = []; }` + `loaded = true` ⇒ 读失败直接渲染
+  `暂时没有分派给你的任务。`（读数失败伪装成空态），而且没有重试入口。
+
+链路本身也没有时长：步记录只有秒级 `started_at` / `finished_at`，真跑一次酒盒.dwg 端到端
+8.9 s，用户看不到"跑了多久、跑到哪一步"。
+
+### 二、改了什么（3 个生产文件）
+
+- `tech_app/frontend/app.js`：
+  · 顶层 `pageLoadState`（`idle|loading|ready|failed`）+ `pageLoadStartedAt`（唯一来源，
+    `openProject()` 第一个请求**之前**置 `loading`、`finally` 收口 `ready` / `failed`）；
+  · 纯函数 `parseActionReadiness({state, startedAt, disabled, reason, now})`：装载中回
+    `loading`（`图纸信息还在加载中（已用 8s），请稍候。`；量不出开始时间说"不到 1s"）、
+    装完之后被拒**逐字取 `#btnParse.title`**（3D 项目因此说得真原因）、可点回 `null`、
+    未知状态按 `loading` 处理；`parseDrawing.run()` 的第一句判定走它，被拒时**不进**后台任务；
+    `getState()` 新增 `state`（`enabled` 仍以 `#btnParse.disabled` 为准）；
+  · 纯函数 `pageLoadElapsedText()`（`已用不到 1s` / `已用 8s` / `已用 1 分 8 秒`）+ 首屏占位
+    `data-qq-page-skeleton="1"`（"正在读取项目…" + 已用时长；`finally` 两条路清掉）；
+    `renderTree()` 在 `pageLoadState === "loading"` 时只画"正在读取零件文档…"，
+    终态文案（`packagingPartsEmptyText()` / `packagingBusinessImportNote()`）不进 DOM；
+  · 四段分阶段（`core` / `flow` / `geometry_parts` / `business_parts`）：`data-qq-stage` +
+    `data-qq-stage-state`、纯函数 `loadStagesLine()`；`refreshPackagingParts()` 里几何分量与
+    业务部件改成 **`Promise.all(` 并发**开始，单段失败只让自己那一段 `failed`；
+  · 纯函数 `drawingFlowStepDurationText()`（`1.2 s` / `1 分 2 秒`；没量到回空串，**不许** `0.0 s`）
+    进步骤表。
+- `tech_app/frontend/cpq-tech-inbox.js`：`loadTasks()` 的 `catch` 记 `inboxError`（成功即清空）；
+  `renderTaskCards()` 在 `inboxError` 非空时渲染 `data-qq-inbox-error="1"` +
+  `这一次读不到待办任务（HTTP 500），请稍后重试；这不代表没有分派给你的任务。`
+  （没有状态码写`（网络错误）`）+ `#cpqInboxRetry` 重试按钮；`暂时没有分派给你的任务。` 只在
+  `inboxError` 为空时出现。
+- `tech_app/backend/services/packaging_drawing_flow/__init__.py`：`_execute_step()` 的步记录新增
+  `duration_ms`（`time.monotonic()` 单调时钟；`started_at` / `finished_at` 的 ISO 形状一个字不改）。
+
+### 三、测试侧修正（harness 缺陷；断言 / 期望值 / 用例数一字未改）
+
+`tests/test_tech_load_states_and_progressive_load_red.py` 的 `EXTRACT_JS` 有两处缺陷，
+**P1–P7 对任何实现都不可能通过**：① `readiness(**kwargs)` 传的是单个对象，而 harness 的
+`args.map(...)` 只认位置参数数组 —— 未进 `try` 就抛 `TypeError: args.map is not a function`；
+② P2 的 `float("nan")` 被 `json.dumps` 写成 `NaN`，`JSON.parse` 解不开。修正只动这两处调用管道
+（单对象按一个位置参数调用、`NaN` 按"缺少"解析），授权写在 Spec §5.1。用 HEAD 代码 + 修好的
+harness 复跑：P 组 8 条全部以「`app.js` 缺少纯函数 `parseActionReadiness()`」失败 ——
+证明修正让调用发得出去，不是放宽断言（先例 `## 465` / `## 467`）。
+
+### 四、反向对照（本机实测）
+
+```text
+② Promise.all( 改回两个串行 await                  ⇒ G5 单条红
+④ 删掉 renderTree() 的装载态闸门                   ⇒ N4 单条红
+①' 删掉 openProject() 的首屏占位块                 ⇒ N2 + N3 两条红
+③' 删掉 renderTaskCards() 的读失败分支             ⇒ I2 + I3 + I5 三条红
+```
+
+如实记两条**判不出来**的：Spec §5 原写的 ①（把 `pageLoadState = "loading"` 改成 `"ready"`）
+与 ③（把 `loadTasks()` 的 `catch` 里 `inboxError` 去掉）**都不转红** —— N/I 两组是源码守卫，
+只查字面量是否出现、不执行那两个函数。已在 Spec §5.2 写明并改用"删掉这一支"的对照。
+
+### 五、实测复跑
+
+```text
+tests.test_tech_load_states_and_progressive_load_red             Ran 34 … OK
+node --check tech_app/frontend/app.js / cpq-tech-inbox.js        退出码 0
+app.js 相关 91 模块                                              Ran 1485 … OK (skipped=4)
+全部 tests/test_packaging_*.py（166 模块）                        Ran 2802 … FAILED (failures=33, skipped=12)
+    ↑ 33 条全部来自作者侧**本批之后新增**的两份未实现红测
+      （test_packaging_2_1_result_parts_and_shape_only_red 18 + test_packaging_business_tables_are_answer_keys_only_red 15）；
+      把本批三个生产文件 stash 回 HEAD 复跑：同样 Ran 48 … FAILED (failures=33) ⇒ 与本批无关
+```
+
+### 六、边界（本批**未做**，如实记）
+
+- 占位只要求节点 / 文案 / 清理时机正确，**没做**骨架屏视觉设计（样式留空）；
+- 阶段块只在装载期出现，装载收口后由正文自己说话（不常驻左栏）；
+- `duration_ms` 只用于**披露**，不进任何门禁判据；任务清单仍读 `/wf/tasks`；
+- 未改 `renderDrawingEntry()` 判定、未改既有错误码语义、未改链路步序；
+- 未起服务、未发 HTTP、未连 PG / 34、未写业务数据、未新增依赖；未 push / MR / tag / Release / 部署。

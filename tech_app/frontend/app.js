@@ -1048,9 +1048,11 @@ function renderDrawingFlowPanel(payload) {
     // 失败必须看得见原因：稳定错误码 + 服务端原文，不许收敛成"解析失败，请重试"。
     const err = (code || message)
       ? `<div class="drawing-flow-error">${esc((code ? "[" + code + "] " : "") + message)}</div>` : "";
+    const duration = drawingFlowStepDurationText(s);
     return `<tr class="drawing-flow-row drawing-flow-${esc(status)}">`
       + `<td class="drawing-flow-step">${esc(DRAWING_FLOW_STEP_LABEL[id] || id)}</td>`
-      + `<td class="drawing-flow-status">${esc(DRAWING_FLOW_STATUS_LABEL[status] || status)}</td>`
+      + `<td class="drawing-flow-status">${esc(DRAWING_FLOW_STATUS_LABEL[status] || status)}`
+      + `${duration ? `<span class="drawing-flow-duration">${esc(duration)}</span>` : ""}</td>`
       + `<td class="drawing-flow-detail">${err || esc(String((s && s.title) || ""))}</td></tr>`;
   }).join("");
   const types = Object.keys(summary.counts).sort()
@@ -1063,6 +1065,19 @@ function renderDrawingFlowPanel(payload) {
   panel.innerHTML = '<div class="drawing-flow-title">图纸解析链路（DWG / DXF）</div>'
     + (rows ? `<table class="drawing-flow-table"><tbody>${rows}</tbody></table>` : "")
     + cadIr;
+}
+
+// 每一步花了多久（Spec C7）：服务端给 `duration_ms`（单调时钟），前端只做展示换算。
+// 没量到（缺失 / 0 / 负数 / 非数字）一律回空串 —— 不许显示 `0.0 s`，那是把"没量到"说成"用了 0 秒"。
+function drawingFlowStepDurationText(step) {
+  const raw = (step && typeof step === "object") ? step.duration_ms : null;
+  const value = (raw === null || raw === undefined) ? NaN : Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value >= 60000) {
+    const total = Math.round(value / 1000);
+    return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
+  }
+  return `${(value / 1000).toFixed(1)} s`;
 }
 
 // 链路状态「读不到」的文案（Spec `packaging-drawing-flow-read-failure.md` §C1）：
@@ -3411,10 +3426,24 @@ async function fetchPackagingBusinessParts() {
 }
 
 async function refreshPackagingParts() {
-  currentPackagingParts = await fetchPackagingParts();
-  // 业务部件清单与几何零件文档一起读：页面 / BOM / 工艺 / 成本都以业务部件为唯一集合
-  // （读不到就保持 null，左栏退回几何分量并说明原因，不假装有权威清单）。
-  currentPackagingBusinessParts = await fetchPackagingBusinessParts();
+  // 阶段钩子是纯展示：读回本身不许因为画不出阶段标记而失败（Spec C5）。
+  const stage = (name, state) => {
+    try { setLoadStage(name, state); } catch (error) { /* 纯展示 */ }
+  };
+  stage("geometry_parts", "loading");
+  stage("business_parts", "loading");
+  // 几何零件文档与业务部件清单**并发**开始读（Spec C5）：一段慢不许拖住另一段先出来；
+  // 读不到只把自己那一段记成 failed（左栏退回几何分量并说明原因，不假装有权威清单）。
+  const [parts, business] = await Promise.all([
+    fetchPackagingParts().then(
+      value => { stage("geometry_parts", "ready"); return value; },
+      error => { stage("geometry_parts", "failed"); return null; }),
+    fetchPackagingBusinessParts().then(
+      value => { stage("business_parts", "ready"); return value; },
+      error => { stage("business_parts", "failed"); return null; }),
+  ]);
+  currentPackagingParts = parts;
+  currentPackagingBusinessParts = business;
   renderTree(currentIR || {});
   // BOM 业务角色的人工映射入口（Spec packaging-part-role-manual-mapping.md §4.5）：
   // 零件文档出来了就把「角色未映射 n 行」一并读出来 —— 不读，用户看不到还有几行没映射。
@@ -4146,83 +4175,227 @@ async function runTask(projectId, submitPath, label) {
 // --------------------------------------------------------------------------- //
 // 打开历史项目
 // --------------------------------------------------------------------------- //
+/* ---------------- 2.1 的装载态与分阶段加载（Spec tech-load-states-and-progressive-load.md） ----
+   装载态只有一个来源（C1）：`openProject()` 进来置 `loading`、`finally` 收口 `ready` / `failed`，
+   别处只读 —— 这样"还在加载"才不会被告知成"没有可解析的图纸"。
+   四段各自的可见性（C5）：`core` / `flow` / `geometry_parts` / `business_parts`，每段闭集
+   `loading | ready | failed`；阶段块只在装载期出现（装载结束后由正文自己说话）。 */
+const PAGE_LOAD_STAGE_NAMES = ["core", "flow", "geometry_parts", "business_parts"];
+const PAGE_LOAD_STAGE_LABELS = {
+  core: "项目本体", flow: "图纸解析链路", geometry_parts: "几何分量", business_parts: "业务部件",
+};
+const PAGE_LOAD_STAGE_STATE_LABELS = { loading: "读取中", ready: "已就绪", failed: "读取失败" };
+let pageLoadState = "idle";
+let pageLoadStartedAt = 0;
+let pageLoadStages = {
+  core: "ready", flow: "ready", geometry_parts: "ready", business_parts: "ready",
+};
+
+// 已用时长（C4）：不足 1 秒说"不到 1s"、秒级说整数秒、超过一分钟说分和秒；量不出（含倒退）回空串。
+function pageLoadElapsedText(startedAt, now) {
+  const start = (startedAt === null || startedAt === undefined) ? NaN : Number(startedAt);
+  const stamp = (now === null || now === undefined) ? NaN : Number(now);
+  if (!Number.isFinite(start) || !Number.isFinite(stamp) || stamp < start) return "";
+  const elapsed = stamp - start;
+  if (elapsed < 1000) return "已用不到 1s";
+  const seconds = Math.floor(elapsed / 1000);
+  if (elapsed < 60000) return `已用 ${seconds}s`;
+  return `已用 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+// 分阶段加载的那句话（C5）：先报失败、再报在途，全就绪才说 4/4；认不出的入参回空串。
+function loadStagesLine(stages) {
+  const rows = Array.isArray(stages)
+    ? stages.map(item => (item && typeof item === "object")
+        ? { name: String(item.name || item.stage || ""), state: String(item.state || "") }
+        : { name: "", state: "" })
+    : ((stages && typeof stages === "object")
+        ? Object.keys(stages).map(name => ({ name: name, state: String(stages[name]) }))
+        : []);
+  const known = rows.filter(row => row.name
+    && (row.state === "loading" || row.state === "ready" || row.state === "failed"));
+  if (!known.length) return "";
+  const total = known.length;
+  const count = state => known.filter(row => row.state === state).length;
+  const ready = count("ready");
+  const loading = count("loading");
+  const failed = count("failed");
+  if (failed && loading) return `已就绪 ${ready}/${total} 段，${failed} 段读取失败`;
+  if (loading) return `已就绪 ${ready}/${total} 段，${loading} 段读取中`;
+  if (failed) return `已就绪 ${ready}/${total} 段，${failed} 段读取失败`;
+  return `已就绪 ${ready}/${total} 段`;
+}
+
+// 阶段块：四段各自的钩子（C5）。装载期才画（节点在首屏占位里），装载结束后不残留。
+function renderPageLoadStages() {
+  if (typeof document === "undefined" || !document.querySelector) return null;
+  const host = document.querySelector("[data-qq-page-stages]");
+  if (!host) return null;
+  host.innerHTML = PAGE_LOAD_STAGE_NAMES.map(name => {
+    const state = pageLoadStages[name] || "loading";
+    return `<div class="page-load-stage" data-qq-stage="${name}"`
+      + ` data-qq-stage-state="${state}">`
+      + `${PAGE_LOAD_STAGE_LABELS[name] || name}：${PAGE_LOAD_STAGE_STATE_LABELS[state] || state}</div>`;
+  }).join("") + `<div class="page-load-stages-line">${loadStagesLine(pageLoadStages)}</div>`;
+  return host;
+}
+
+// 每一段状态变化都只从这里进（唯一来源：`openProject` 与 `refreshPackagingParts`）。
+function setLoadStage(name, state) {
+  if (PAGE_LOAD_STAGE_NAMES.indexOf(name) < 0) return null;
+  pageLoadStages[name] = (state === "ready" || state === "failed") ? state : "loading";
+  return renderPageLoadStages();
+}
+
+// 看板动作的三态判定（C2）：纯函数，不读 DOM —— `run()` 里读按钮 / 装载态后调用它。
+// "还不知道 / 还在读"一律回 loading，**不许**说成"没有可解析的图纸"。
+function parseActionReadiness(input) {
+  const row = (input && typeof input === "object") ? input : {};
+  const state = (row.state === null || row.state === undefined) ? "" : String(row.state);
+  const disabled = Boolean(row.disabled);
+  const reason = (row.reason === null || row.reason === undefined) ? "" : String(row.reason).trim();
+  if (state !== "ready" && state !== "failed") {
+    const started = (row.startedAt === null || row.startedAt === undefined)
+      ? NaN : Number(row.startedAt);
+    if (!Number.isFinite(started)) {
+      return { code: "loading", message: "图纸信息还在加载中（已用不到 1s），请稍候。" };
+    }
+    const stamp = (row.now === null || row.now === undefined) ? Date.now() : Number(row.now);
+    const seconds = Number.isFinite(stamp) ? Math.floor((stamp - started) / 1000) : 0;
+    return { code: "loading", message: `图纸信息还在加载中（已用 ${seconds}s），请稍候。` };
+  }
+  if (!disabled) return null;
+  if (reason) return { code: "not-ready", message: reason };
+  return { code: "not-ready", message: "当前没有可解析的图纸，请先上传 2D 工程图。" };
+}
+
 async function openProject(pid) {
   currentProject = pid;
   currentSelectedId = null;
   diffPick = []; $("diffView").innerHTML = "";
-  const data = await fetch(`${API}/api/projects/${pid}`).then(r => r.json());
-  if (!data || !data.meta) {  // 项目不存在(可能已删)
-    localStorage.removeItem("lastProject");
-    throw new Error("项目不存在");
-  }
-  localStorage.setItem("lastProject", pid);  // 记住,供刷新/返回时恢复
-  currentIR = data.ir;
-  currentGeometry = data.geometry;
-  currentDrawings = data.drawings;
-  artifact_status = data.artifact_status || null;
+  // 装载态与首屏占位（Spec C1 / C4）：进函数第一件事就说"在读"，并在**发第一个请求之前**
+  // 把占位画进 #tree —— 之前这段时间里 #tree 是空的、按钮灰着、状态栏还没字。
+  pageLoadState = "loading";
+  pageLoadStartedAt = Date.now();
+  // 阶段推进是纯展示：任何一步画不出来都不许挡住加载本身（沙箱 / 老壳里没有这套钩子也一样）。
+  const markStage = (name, state) => {
+    try { setLoadStage(name, state); } catch (error) { /* 纯展示 */ }
+  };
+  let loadFailed = false;
+  try {
+    PAGE_LOAD_STAGE_NAMES.forEach(name => { pageLoadStages[name] = "loading"; });
+    const treeHost = $("tree");
+    if (treeHost) {
+      treeHost.classList.remove("empty-state");
+      treeHost.innerHTML = "";
+      const skeleton = document.createElement("div");
+      skeleton.className = "page-load-skeleton";
+      skeleton.setAttribute("data-qq-page-skeleton", "1");
+      skeleton.textContent = `正在读取项目…${pageLoadElapsedText(pageLoadStartedAt, Date.now())}`;
+      const stageHost = document.createElement("div");
+      stageHost.setAttribute("data-qq-page-stages", "1");
+      skeleton.appendChild(stageHost);
+      treeHost.appendChild(skeleton);
+      renderPageLoadStages();
+    }
+  } catch (error) { /* 占位与阶段块都是纯展示：画不出来也不许挡住加载本身 */ }
+  try {
+    const data = await fetch(`${API}/api/projects/${pid}`).then(r => r.json());
+    if (!data || !data.meta) {  // 项目不存在(可能已删)
+      localStorage.removeItem("lastProject");
+      throw new Error("项目不存在");
+    }
+    localStorage.setItem("lastProject", pid);  // 记住,供刷新/返回时恢复
+    currentIR = data.ir;
+    currentGeometry = data.geometry;
+    currentDrawings = data.drawings;
+    artifact_status = data.artifact_status || null;
+    markStage("core", "ready");
 
-  // 原图区: 图片项目显示原图; 3D 导入项目无 2D 原图,显示占位
-  const fname = (data.meta && data.meta.source_filename) || "";
-  const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(fname);
-  const is3d = /\.(step|stp|iges|igs|stl)$/i.test(fname);
-  currentIsImg = isImg;
-  // 走哪条链路由 renderDrawingEntry() 一处判定；这里只把结论翻译成界面事实。
-  const entry = renderDrawingEntry(fname);
-  currentDrawingEntry = entry;
-  const blockedReason = (entry === "vision" || entry === "drawing_flow") ? ""
-    : entry === "blocked_3d"
-      ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
-      : `「${fname}」既不是位图也不是 DWG / DXF。2.1 支持 PNG / JPG / WEBP / GIF / BMP（走视觉模型）`
-        + "与 DWG / DXF（走服务端图纸解析链路）；其它格式请先转成 PNG / JPG（或另存 DXF）再上传。";
-  const img = $("sourceImg");
-  const wrap = document.querySelector(".image-wrap");
-  const ph = wrap.querySelector(".placeholder");
-  if (isImg) {
-    img.style.display = "";
-    img.src = mediaUrl(`${API}/api/projects/${pid}/source?t=${Date.now()}`);
-    if (ph) ph.remove();
-  } else {
-    img.style.display = "none";
-    if (ph) ph.remove();
-    // drawing_flow 项目有链路状态可看，不该落进"为什么不能解析"的占位分支；
-    // 占位只服务 blocked_3d / blocked_other。
-    if (blockedReason) {
-      const d = document.createElement("div");
-      d.className = "placeholder";
-      d.textContent = blockedReason;
-      wrap.appendChild(d);
+    // 原图区: 图片项目显示原图; 3D 导入项目无 2D 原图,显示占位
+    const fname = (data.meta && data.meta.source_filename) || "";
+    const isImg = /\.(png|jpe?g|webp|gif|bmp)$/i.test(fname);
+    const is3d = /\.(step|stp|iges|igs|stl)$/i.test(fname);
+    currentIsImg = isImg;
+    // 走哪条链路由 renderDrawingEntry() 一处判定；这里只把结论翻译成界面事实。
+    const entry = renderDrawingEntry(fname);
+    currentDrawingEntry = entry;
+    const blockedReason = (entry === "vision" || entry === "drawing_flow") ? ""
+      : entry === "blocked_3d"
+        ? `这是 3D 模型导入项目（${fname}）：几何已由原始实体生成，无需也不应再按图纸重建。`
+        : `「${fname}」既不是位图也不是 DWG / DXF。2.1 支持 PNG / JPG / WEBP / GIF / BMP（走视觉模型）`
+          + "与 DWG / DXF（走服务端图纸解析链路）；其它格式请先转成 PNG / JPG（或另存 DXF）再上传。";
+    const img = $("sourceImg");
+    const wrap = document.querySelector(".image-wrap");
+    const ph = wrap.querySelector(".placeholder");
+    if (isImg) {
+      img.style.display = "";
+      img.src = mediaUrl(`${API}/api/projects/${pid}/source?t=${Date.now()}`);
+      if (ph) ph.remove();
+    } else {
+      img.style.display = "none";
+      if (ph) ph.remove();
+      // drawing_flow 项目有链路状态可看，不该落进"为什么不能解析"的占位分支；
+      // 占位只服务 blocked_3d / blocked_other。
+      if (blockedReason) {
+        const d = document.createElement("div");
+        d.className = "placeholder";
+        d.textContent = blockedReason;
+        wrap.appendChild(d);
+      }
+    }
+    if (entry === "drawing_flow") {
+      // 进入即读回（Spec `packaging-parts-entry-readback.md` §4 A1–A3）：零件文档是**持久化**的
+      // （`packaging_parts.load_parts()` 不带 parts_id 就是最新一版），重新进入 2.1 必须把它读回来，
+      // 否则左栏永远走空态、还会催用户重跑一遍本来就有的解析。
+      // 两条路各自兜住：链路状态读不到**不许**牵连零件读回（§4 A2）。
+      // 两段各自的阶段状态跟着走（Spec C5）：单段读失败只让自己那一段 failed。
+      try { await loadDrawingFlowPanel(); markStage("flow", "ready"); }
+      catch (error) { markStage("flow", "failed"); /* 链路状态那一路自己兜 */ }
+      try { await refreshPackagingParts(); } catch (error) { /* 读不到由空态文案说清 */ }
+    } else {
+      // 非图纸项目没有这三段要读（视觉链路 / 3D 导入）：如实记成就绪，不许挂着"读取中"。
+      ["flow", "geometry_parts", "business_parts"].forEach(name => { markStage(name, "ready"); });
+    }
+
+    // 3D 导入项目: 几何/2D 已由原始实体生成,禁用"基于图/特征重建"的按钮,避免覆盖精确几何
+    // 可用性由入口判定给结论：位图走视觉、DWG/DXF 走服务端链路，两者都可点；
+    // 3D 与未知格式置灰并写明原因（灰按钮必须自己说明为什么灰）。
+    $("btnParse").disabled = !(entry === "vision" || entry === "drawing_flow");
+    $("btnParse").title = blockedReason || (entry === "drawing_flow"
+      ? "DWG / DXF 图纸：走服务端图纸解析链路（DWG → DXF → CAD IR → 包装语义）"
+      : "");
+    syncActionSheet(currentIR);
+    if (data.ir) renderIR(data.ir);
+    loadModelLookup(pid);
+    loadVerification(pid);
+    updateChatContext();
+    renderChat();
+    loadVersions();
+    const note = data.meta && data.meta.note ? data.meta.note : "";
+    const atts = data.meta && data.meta.attachments ? data.meta.attachments.length : 0;
+    // 不能解析时，状态栏说的是"为什么不能"，而不是一句无用的"已打开项目"——
+    // 这条必须放在最后，前面写了也会被这里覆盖掉。
+    status(blockedReason
+      || `已打开项目 ${pid}（补充说明${note ? "✓" : "—"}，佐证文件 ${atts} 个）`);
+    setWorkflow(data.geometry ? "generate" : data.ir ? "review" : "parse");
+  } catch (error) {
+    loadFailed = true;
+    throw error;
+  } finally {
+    pageLoadState = loadFailed ? "failed" : "ready";
+    markStage("core", pageLoadState);
+    // 占位必须在两条路都被清掉（成功路径上正文会替换它，但"这个项目没有正文"时必须自己收）。
+    try {
+      const skeleton = document.querySelector("[data-qq-page-skeleton]");
+      if (skeleton && typeof skeleton.remove === "function") skeleton.remove();
+    } catch (error) { /* 占位清理是纯展示 */ }
+    // 装载期的 renderTree() 只画了"正在读取零件文档…"（C4），装载收口后要按真结果重画一次；
+    // 视觉链路本来就已经画过了，不重复（重复会丢掉选中态的高亮）。
+    if (!loadFailed && currentDrawingEntry === "drawing_flow") {
+      try { renderTree(currentIR || {}); } catch (error) { /* 重画失败不影响加载结果 */ }
     }
   }
-  if (entry === "drawing_flow") {
-    // 进入即读回（Spec `packaging-parts-entry-readback.md` §4 A1–A3）：零件文档是**持久化**的
-    // （`packaging_parts.load_parts()` 不带 parts_id 就是最新一版），重新进入 2.1 必须把它读回来，
-    // 否则左栏永远走空态、还会催用户重跑一遍本来就有的解析。
-    // 两条路各自兜住：链路状态读不到**不许**牵连零件读回（§4 A2）。
-    try { await loadDrawingFlowPanel(); } catch (error) { /* 链路状态那一路自己兜 */ }
-    try { await refreshPackagingParts(); } catch (error) { /* 读不到由空态文案说清 */ }
-  }
-
-  // 3D 导入项目: 几何/2D 已由原始实体生成,禁用"基于图/特征重建"的按钮,避免覆盖精确几何
-  // 可用性由入口判定给结论：位图走视觉、DWG/DXF 走服务端链路，两者都可点；
-  // 3D 与未知格式置灰并写明原因（灰按钮必须自己说明为什么灰）。
-  $("btnParse").disabled = !(entry === "vision" || entry === "drawing_flow");
-  $("btnParse").title = blockedReason || (entry === "drawing_flow"
-    ? "DWG / DXF 图纸：走服务端图纸解析链路（DWG → DXF → CAD IR → 包装语义）"
-    : "");
-  syncActionSheet(currentIR);
-  if (data.ir) renderIR(data.ir);
-  loadModelLookup(pid);
-  loadVerification(pid);
-  updateChatContext();
-  renderChat();
-  loadVersions();
-  const note = data.meta && data.meta.note ? data.meta.note : "";
-  const atts = data.meta && data.meta.attachments ? data.meta.attachments.length : 0;
-  // 不能解析时，状态栏说的是"为什么不能"，而不是一句无用的"已打开项目"——
-  // 这条必须放在最后，前面写了也会被这里覆盖掉。
-  status(blockedReason
-    || `已打开项目 ${pid}（补充说明${note ? "✓" : "—"}，佐证文件 ${atts} 个）`);
-  setWorkflow(data.geometry ? "generate" : data.ir ? "review" : "parse");
 }
 
 function avgConfidence(ir) {
@@ -4535,6 +4708,17 @@ function renderTree(ir) {
   // DWG / DXF 链路的左栏是零件文档（不是视觉 IR）：行数 = stats.part_total，
   // 空态必须说清"为什么没有零件 + 下一步"（Spec C4）。
   if (currentDrawingEntry === "drawing_flow") {
+    // 装载期间不许画终态文案（Spec C4）： "还没有零件 / 还没有权威清单"是**读完之后**的结论，
+    // 读回来之前只能是"正在读"—— 否则一次慢读就被说成"这个项目没有零件"。
+    if (pageLoadState === "loading") {
+      const loadingNote = document.createElement("div");
+      loadingNote.className = "parts-loading-note";
+      loadingNote.setAttribute("data-qq-parts-loading", "1");
+      loadingNote.textContent = `正在读取零件文档…`
+        + `${pageLoadElapsedText(pageLoadStartedAt, Date.now())}`;
+      tree.appendChild(loadingNote);
+      return;
+    }
     const business = packagingBusinessPartRows(currentPackagingBusinessParts);
     if (business.length) { renderPackagingBusinessTree(tree, business); return; }
     const doc = currentPackagingParts || {};
@@ -5678,8 +5862,17 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
       prompt:"帮我解析这张图纸。",
       run: () => {
         const button = $("btnParse");
-        if (button && button.disabled) {
-          return { ok: false, error: { code: "not-ready", message: "当前没有可解析的图纸，请先上传 2D 工程图。" } };
+        // 「还在加载 / 项目打不开 / 3D 导入项目」三种处境必须说得出各自的原因：
+        // 判定只有 `parseActionReadiness()` 这一处（Spec C2），灰按钮的理由就是它的 `title`。
+        const parseState = {
+          state: pageLoadState,
+          startedAt: pageLoadStartedAt,
+          disabled: Boolean(button && button.disabled),
+          reason: button ? button.title : "",
+        };
+        const readiness = parseActionReadiness(parseState);
+        if (readiness) {
+          return { ok: false, error: readiness };
         }
         if (parseDrawingBusy) {
           return { ok: false, error: { code: "busy", message: "正在解析图纸，请稍候。" } };
@@ -5696,6 +5889,9 @@ if (window.TechBoardRuntime && typeof window.TechBoardRuntime.registerActions ==
           visible: true,
           enabled: Boolean(button) && !button.disabled,
           busy: Boolean(button && button.getAttribute("aria-busy") === "true"),
+          // 装载态原样报到看板（Spec C3）：按钮灰着是"还在读"还是"读完了但不能解析"，
+          // 看板据此决定提示语；`enabled` 仍以 #btnParse.disabled 为准（不许换来源）。
+          state: pageLoadState,
           role: drawingParsed() ? "aux" : "primary",
         };
       },

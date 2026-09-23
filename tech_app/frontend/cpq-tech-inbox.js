@@ -22,6 +22,9 @@
   const POLL_MS = 30000;
   let tasks = [];
   let loaded = false;
+  // 这一趟读待办失败了（`{code, status}`）：读失败**不是**"没有分派给你的任务"（Spec §2.6），
+  // 所以它必须自己活在一个状态里，不许和 `tasks = []` 挤在同一个含义上。
+  let inboxError = null;
   // 自己记「当前是不是待办任务页签」，不借用 home.js 的 activeTab：
   // 那是经典脚本里的顶层 let，只存在于脚本作用域，window 上根本读不到也改不了。
   let showingTasks = false;
@@ -72,6 +75,7 @@
   async function loadTasks(quiet) {
     if (!window.cpqAuth || !window.cpqAuth.user()) {
       tasks = [];
+      inboxError = null;
       loaded = true;
       if (!quiet) refreshUi();
       return;
@@ -79,8 +83,14 @@
     try {
       const data = await cpqApi('/wf/tasks');
       tasks = data.tasks || [];
+      inboxError = null;   // 读成功一次就清掉上一趟的失败态。
     } catch (e) {
+      // 读失败不许静默折成空数组（Spec §2.6）：记下这一趟读不到（带状态码，没有就给 0 = 网络错误）。
       tasks = [];
+      inboxError = {
+        code: String((e && (e.code || e.error_code)) || 'tasks_unavailable'),
+        status: Number((e && (e.status || e.statusCode)) || 0),
+      };
     }
     loaded = true;
     refreshUi();
@@ -151,6 +161,22 @@
     }
     if (!loaded) {
       grid.innerHTML = '<div class="empty-grid">正在读取待办任务…</div>';
+      return;
+    }
+    if (inboxError) {
+      // 读失败不许伪装成空态（Spec §2.6）：两句话逐字如下 ——
+      //   有状态码：`这一次读不到待办任务（HTTP 500），请稍后重试；这不代表没有分派给你的任务。`
+      //   没有状态码：`这一次读不到待办任务（网络错误），请稍后重试；这不代表没有分派给你的任务。`
+      const code = Number(inboxError.status) || 0;
+      const message = code > 0
+        ? `这一次读不到待办任务（HTTP ${code}），请稍后重试；这不代表没有分派给你的任务。`
+        : '这一次读不到待办任务（网络错误），请稍后重试；这不代表没有分派给你的任务。';
+      grid.innerHTML = '<div class="empty-grid" data-qq-inbox-error="1">'
+        + `<div>${esc(message)}</div>`
+        + '<button id="cpqInboxRetry" class="cpq-inbox-retry" type="button">重试</button></div>';
+      const retry = grid.querySelector('#cpqInboxRetry');
+      if (retry) retry.onclick = () => loadTasks();
+      if (info) info.textContent = '';
       return;
     }
     grid.innerHTML = tasks.length ? tasks.map(taskCard).join('')
