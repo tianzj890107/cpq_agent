@@ -171,7 +171,17 @@ tests.test_packaging_cost_red_closure_red                → Ran 14 OK
 2. 那条动作在 `mode="write"` 下也认这条依据（`require_project_access` 不按 mode 区分）——
    因为 POST 本来就走 write 通道；这不是放宽"项目写权"：`can_write()` 函数本身没改，
    依据只对这一个动作、这一个行业、这一个角色成立。
-3. `tests/test_packaging_cost_engine_red::JPersistAndApi::test_j6_write_roles_reuse_batch4`
-   仍红：它要求 `COST_WRITE_ROLES is packaging_match.BOX_MATCH_DECIDE_ROLES`（同一个对象），
-   而 `packaging-cost-finance-access.md` §2.2 明确要求这两者**不许**互为别名（那是存量 `## 273`
-   的冲突，两份 Spec 打架，本批不动其中任何一方）。
+3. **已裁决、测试侧已收口**（原「两份 Spec 打架、本批不动」的挂账关闭）：
+   `tests/test_packaging_cost_engine_red::JPersistAndApi::test_j6_write_roles_reuse_batch4`
+   原来要求 `COST_WRITE_ROLES is packaging_match.BOX_MATCH_DECIDE_ROLES`（同一个对象），
+   与 `packaging-cost-finance-access.md` §2.2「不许互为别名」结构上不可能同时成立。
+
+   **裁决**：以 `packaging-cost-finance-access.md` §2.2 的**机制**（不许共享对象、不许派生，
+   否则"排盒型的人"与"算成本的人"绑死、单边调整静默漂移）为准，值域按其 §2.2 的两种写法之一取
+   **方案 A**（财务能算）：`COST_WRITE_ROLES = {"process_manager", "process_director",
+   "finance_manager", "admin"}`，写成显式字面量；与 `auth.COST_ROLES` 的关系写在
+   `packaging_cost.py` 的注释里。`packaging-cost-engine.md` §4 那句"直接引用
+   `packaging_match.BOX_MATCH_DECIDE_ROLES`"按本裁决取代（值与工艺侧三个相同，但不再共享对象）。
+
+   j6 已按上式改写为三条断言一起守：值域逐字钉死（含 `finance_manager`）、`assertIsNot`
+   钉住"不是别名"、赋值行不许出现 `BOX_MATCH_DECIDE_ROLES`（不许派生）。见 changelog `## 330`。

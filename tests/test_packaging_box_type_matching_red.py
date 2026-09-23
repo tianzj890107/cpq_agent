@@ -182,9 +182,16 @@ class AWeightsComeFromTheTable(MatchCase):
         self.assertFalse(echoed["size_range"]["hard_gate"])
 
     def test_a3_weights_are_not_hardcoded(self):
+        """顺序必须跟着权重变（用例原意），但**不许**把方向写死。
+
+        旧断言「默认权重下 BOX-P 第一」只有在**总分升序**下成立，与
+        `packaging-box-type-matching.md` §3 和
+        `packaging-box-candidate-rank-and-runnability.md` §2.1 的「总分降序」冲突
+        （两份 Spec 都要求降序）。这里保留"分数一变、名次就变"这个真正要守的东西：
+        · 两条结果各自的**首条都必须是该次得分最高的那一条**（降序不变量）；
+        · 两次的首条必须**不同** —— 这才证明权重是读表算的，不是写死的。
+        """
         default = self.match_with([BOX_P, BOX_Q])
-        self.assertEqual(default["candidates"][0]["box_type_code"], "BOX-P",
-                         "默认权重下 BOX-P（克重差/V 槽好）应领先")
         flipped = self.match_with([BOX_P, BOX_Q], weights=[
             {"dimension": "size_range", "weight": 0.30, "hard_gate": 0},
             {"dimension": "fit_clearance", "weight": 0.25, "hard_gate": 1},
@@ -192,9 +199,16 @@ class AWeightsComeFromTheTable(MatchCase):
             {"dimension": "closure_type", "weight": 0.20, "hard_gate": 1},
             {"dimension": "v_groove", "weight": 0.90, "hard_gate": 0},
         ])
-        self.assertEqual(flipped["candidates"][0]["box_type_code"], "BOX-Q",
-                         "改了 kb_packaging_match_weight 的权重后排序必须跟着变"
-                         "（说明代码里写死了权重）")
+        for label, result in (("默认权重", default), ("换权重", flipped)):
+            rows = result["candidates"]
+            top = float(rows[0]["total_score"])
+            self.assertEqual(top, max(float(row["total_score"]) for row in rows),
+                             "%s下首条必须是得分最高的那一条（Spec §3 总分降序）：%r"
+                             % (label, [(r["box_type_code"], r["total_score"]) for r in rows]))
+        self.assertNotEqual(default["candidates"][0]["box_type_code"],
+                            flipped["candidates"][0]["box_type_code"],
+                            "改了 kb_packaging_match_weight 的权重后排序必须跟着变"
+                            "（说明代码里写死了权重）")
 
     def test_a4_total_score_is_normalised(self):
         result = self.match_with([BOX_A], weights=[

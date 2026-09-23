@@ -114,7 +114,7 @@ docs/specs/*.md                                  232 份（含本批新增的本
 | --- | --- | --- |
 | `quick-quote-12-case-maintenance.md` | 未实现 | F1 与 E5 断言互斥、不可同时成立（`## 256`），已上报测试侧 |
 | `tech-model-call-row-merged-and-summary-detail.md` | 未实现 | 该交互已被 `## 133` 退役，红测保留为冲突锚点 |
-| `packaging-requirement-confirm-order-guard.md` | 已实现 + 备注 | 该红测 5 条 ERROR 是打桩元数冲突（`## 289`），实现已落地 |
+| `packaging-requirement-confirm-order-guard.md` | 已实现（13 OK） | 原 5 条 ERROR 是打桩元数冲突（`## 289`），夹具元数已于 9-22 补齐，现 13 条全绿 |
 | `packaging-quote-send-recovery.md` | 已实现 + 备注 | 该红测 c1 是夹具自遮挡（`## 272`），实现已落地 |
 | `packaging-cost-finance-access.md` / `packaging-parts-outline-chaining.md` / `packaging-manual-field-confirmation.md` 等 | 已实现 | 点名的红测里另有一条 `## 262` / `## 266` / `## 273` 记录的测试侧冲突 |
 

@@ -73,7 +73,7 @@ def js_status_sets(source: str):
 RETURNABLE = ("pending_confirmation", "pending_review", "approved")
 
 
-def blocked_prerequisite():
+def blocked_prerequisite(project_id=""):
     """图纸还没解析（1.3 已经在用的那份判据，在这里打桩成同一形状）。"""
     return {"required": True, "done": False, "suffix": ".dwg", "industry": "packaging",
             "code": CODE,
@@ -81,7 +81,7 @@ def blocked_prerequisite():
                        "没有零件清单，后面 2.2/2.3 与报告都拿不到数据"}
 
 
-def parsed_prerequisite():
+def parsed_prerequisite(project_id=""):
     return {"required": True, "done": True, "suffix": ".dwg", "industry": "packaging",
             "code": "", "message": ""}
 
@@ -120,7 +120,8 @@ class ASubmitConfirmationGuard(unittest.TestCase):
                 RS.submit_requirement_confirmation("p-order", {"username": "PE1"})
         self.assertEqual(int(ctx.exception.status_code), 409,
                          "1.1 必须先挡在图纸解析之前（Spec §2.3）")
-        self.assertEqual(ctx.exception.code, CODE, "错误码必须与 1.3 那条一致（Spec §2.3）")
+        self.assertEqual(ctx.exception.stable_error_code, CODE,
+                         "错误码必须与 1.3 那条一致（Spec §2.3）")
         self.assertEqual(fake.saved_statuses(), [],
                          "被挡住时不许落盘（Spec §2.3）")
 
@@ -141,7 +142,7 @@ class BConfirmGuard(unittest.TestCase):
             with self.assertRaises(RS.RequirementSaveError) as ctx:
                 RS.confirm_requirement("p-order", {"username": "PE1"})
         self.assertEqual(int(ctx.exception.status_code), 409, "1.2 也必须挡住（Spec §2.3）")
-        self.assertEqual(ctx.exception.code, CODE)
+        self.assertEqual(ctx.exception.stable_error_code, CODE)
         self.assertEqual(fake.saved_statuses(), [], "被挡住时不许落盘（Spec §2.3）")
 
     def test_b2_confirm_unchanged_when_drawing_is_parsed(self):

@@ -1136,9 +1136,31 @@ class JPersistAndApi(CostCase):
             self.assertTrue(suffix in source, "main.py 缺路由 %s" % suffix)
 
     def test_j6_write_roles_reuse_batch4(self):
+        """写角色口径的**裁决**（`packaging-cost-write-role-single-source.md` §7 第 3 条）。
+
+        本条原来断言 `assertIs(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES)`
+        —— 要求两者是**同一个对象**。这与 `packaging-cost-finance-access.md` §2.2 直接冲突
+        （§2.2 明令 `COST_WRITE_ROLES` 不许再当 `BOX_MATCH_DECIDE_ROLES` 的别名：跨批次共用同一个
+        对象会让"排盒型的人"和"算成本的人"永久绑死、任何一边调整都静默漂移），而
+        `packaging-cost-write-role-single-source.md` §2.1 方案 A 又已落地「财务也能算」。
+
+        裁决（已写进上面那份 Spec §7）：值域 = 工艺侧三个 + 财务；写成**显式字面量**
+        （既不共享对象、也不从别处派生），与 `auth.COST_ROLES` 的关系写在 `packaging_cost.py`
+        的注释里。断言按裁决表达，三条一起守：值域、不许别名、不许派生。
+        """
         module = self.cost_mod()
-        self.assertIs(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES,
-                      "写权限常量必须直接引用第 4 批那一份（Spec §4）")
+        self.assertEqual({"process_manager", "process_director", "finance_manager", "admin"},
+                         set(module.COST_WRITE_ROLES),
+                         "写角色值域（裁决）：工艺侧三个 + 财务（方案 A）")
+        self.assertIn("finance_manager", set(module.COST_WRITE_ROLES),
+                      "财务能算 —— 方案 A 落地后不许被回退")
+        self.assertIsNot(module.COST_WRITE_ROLES, packaging_match.BOX_MATCH_DECIDE_ROLES,
+                         "不许再是 BOX_MATCH_DECIDE_ROLES 的别名（finance-access §2.2）")
+        assignment = [line for line in inspect.getsource(module).splitlines()
+                      if line.startswith("COST_WRITE_ROLES")]
+        self.assertTrue(assignment, "找不到 COST_WRITE_ROLES 的赋值行")
+        self.assertNotIn("BOX_MATCH_DECIDE_ROLES", assignment[0],
+                         "值域必须显式写死，不许从别处派生（§2.2：跨批次共用会静默漂移）")
 
     def test_j7_rebuild_writes_the_project_audit(self):
         module = self.cost_mod()

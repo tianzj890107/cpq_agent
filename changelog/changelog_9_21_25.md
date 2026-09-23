@@ -18139,3 +18139,49 @@ packaging 全域 `discover -s tests -p 'test_packaging_*.py'` = `Ran 2402 … FA
 （仍是那 5 条既有挂账，本批未引入新红）；`node --check tech_app/frontend/requirement-confirm.js` OK。
 
 未起服务、未发 HTTP、未连 PG / 34、未改公式 / 费率 / 最低收费、未 push / MR / tag / Release / 未部署。
+
+## 434. 测试侧收口：8 条「两条断言结构上不可能同时成立」的冲突按裁决改写 + 6 份 Spec 状态行同步（只改 `tests/` 与 `docs/specs/`，未改一行业务实现）（9-23，Codex）
+
+每条冲突都在对应 Spec 里落成唯一口径后，才改断言；`E5`、`B3`、`STATS_KEYS` 这类护栏一个字未动。
+
+- `test_packaging_box_type_matching_red.py::A3`：原「默认权重下 BOX-P 第一」只在**升序**下成立，
+  与 `packaging-box-type-matching.md` §3 / `packaging-box-candidate-rank-and-runnability.md` §2.1 的
+  「总分降序」冲突 → 改守「首条必须是本次得分最高者（降序不变量）」+「换权重后首条必须不同」。
+- `test_quick_quote_case_maintenance_red.py::F1`：原要求 `var NAME = "<字面量>"`，与同模块
+  E5「不许第二份 `/api/quick-quote/cases/...` 字面量」结构上互斥（`## 256`）→ 改成对
+  **求值结果**断言（`CASES_PATH + "/{case_code}/fields"` 这类拼接是允许写法）。
+- `test_packaging_cost_engine_red.py::J6`：原 `assertIs(COST_WRITE_ROLES, BOX_MATCH_DECIDE_ROLES)`
+  与 `packaging-cost-finance-access.md` §2.2「不许互为别名／不许派生」冲突 → 按
+  `packaging-cost-write-role-single-source.md` §7 第 3 条裁决表达：值域显式写死
+  （工艺侧三个 + `finance_manager`）、`assertIsNot` 钉「不是别名」、赋值行不许出现
+  `BOX_MATCH_DECIDE_ROLES`（不许派生）。
+- `test_packaging_drawing_flow_red.py::C8`：夹具喂的是 `confirmed_sem()`（三字段 `confirmed`），
+  按 `packaging-manual-field-confirmation.md` §1.2 本来就该开门禁 —— 这条断言测的不是它名字里说的
+  「字段还没人工确认」→ 改用默认语义文档。
+- `test_packaging_part_manual_fill_persists_red.py`：探针里两件（缺材料的 P01、缺料厚的 P03）落在
+  **同一个**原因桶 `PACKAGING_PART_MATERIAL_UNKNOWN`，补录后该桶必须**空掉**，而不是「减一」。
+- `test_packaging_parts_outline_red.py`：`no_closed_loop` 已被 `packaging-parts-outline-chaining.md`
+  §2.5 退役（笼统值不许再出现在服务端源码里）→ 改成守「落在 `OUTLINE_OPEN_REASONS` 闭集内且
+  不再是那个笼统值」，用例原意（求不出环 → 显式降级）不变。
+- `test_packaging_requirement_confirm_order_guard_red.py`：打桩函数签名收 `project_id=""`
+  （与实现侧三处同源调用对齐）；被挡时断言 `stable_error_code` 而不只是 `code`。
+- `test_tech_model_call_row_merged_and_summary_detail_red.py`：折叠详情块 `oc-process-detail` 已被
+  `## 133`/`## 226` 两批取代（`tech_app/frontend` 全文 0 处渲染）→ 用例方向反过来，**锚定它的缺席**
+  （新旧数据一致地不长这个折叠，也不许再塞输入/输出 JSON）；短摘要那半仍由本模块既有用例守着。
+- `test_tech_params_autofill_and_soft_gates_red.py`：事件闭集补上已登记的 `task-blocked`
+  （一键解析被阻断是「成功以外的第三种终态」，`## 226`）；
+  既有 7 个事件一个未增删。
+- Spec 状态行同步为「已实现」：`quick-quote-12-case-maintenance.md`、
+  `tech-model-call-row-merged-and-summary-detail.md`、`packaging-requirement-confirm-order-guard.md`、
+  `spec-status-consistency-repo-wide.md`（表格内该行的备注）、
+  `packaging-solids-parts-version-binding.md` §6（§2 与 §3/J3 的自相矛盾收口）、
+  `packaging-cost-write-role-single-source.md` §7 第 3 条（挂账关闭）。
+
+实跑：`test_quick_quote_case_maintenance_red` + `test_packaging_box_type_matching_red` +
+`test_packaging_requirement_confirm_order_guard_red` + `test_tech_model_call_row_merged_and_summary_detail_red`
+= `Ran 110 OK`；`test_packaging_cost_engine_red` + `test_packaging_drawing_flow_red` +
+`test_packaging_part_manual_fill_persists_red` + `test_packaging_parts_outline_red` +
+`test_tech_params_autofill_and_soft_gates_red` = `Ran 176 OK (skipped=1)`；
+`test_spec_status_truth_red` = `Ran 7 OK`；`git diff --check` 无空白问题。
+
+未改任何业务实现、未放宽任何断言、未连 PG / 34、未写业务数据。

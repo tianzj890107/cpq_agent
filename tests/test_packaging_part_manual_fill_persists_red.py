@@ -167,11 +167,16 @@ class AWhenFilled(unittest.TestCase):
                          metrics["known_material_after"],
                          "`material_known_total` 没跟着 +1（%r → %r）（Spec §2.1 第 3 条）"
                          % (metrics["known_material_before"], metrics["known_material_after"]))
-        self.assertEqual((metrics["unknown_mix_before"] or 0) - 1,
-                         metrics["unknown_mix_after"],
-                         "`unprocessable_reason_mix` 里缺材料的件数没跟着 −1（%r → %r）"
-                         "（Spec §2.1 第 3 条）"
-                         % (metrics["unknown_mix_before"], metrics["unknown_mix_after"]))
+        # 探针里两件（只缺材料的 P01、只缺料厚的 P03）落在**同一个**原因桶
+        # `PACKAGING_PART_MATERIAL_UNKNOWN`（`processability()` 对缺料厚也用这个码），
+        # 所以补完两件之后这一桶必须**空掉**，而不是"减一"。
+        # （2026-09-22 由实现轮记为测试侧偏差，此处按事实修正断言；Spec §2.1 第 3 条不变。）
+        self.assertEqual(2, metrics["unknown_mix_before"],
+                         "测试前提失效：补录前应当是 2 件落在缺材料/料厚这一桶")
+        self.assertFalse(
+            metrics["unknown_mix_after"],
+            "补完材料与料厚之后，`unprocessable_reason_mix` 里不该还剩缺材料/料厚的件"
+            "（现在是 %r）（Spec §2.1 第 3 条）" % (metrics["unknown_mix_after"],))
 
     def test_a3_filled_thickness_lands_on_the_row(self):
         metrics = probe()

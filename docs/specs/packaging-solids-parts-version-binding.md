@@ -161,3 +161,19 @@ Spec §2 的措辞写「`stale = bool(stale_reason)`」，而本批红测 **J3**
 但 `stale_reason` 照旧带出来（页面据此说"无法判断"）。未改任何测试、未放宽任何断言。
 
 未连 34、未写生产数据、未 push / MR / tag / Release / 未部署。
+
+## 6 更正（2026-09-22，`## 349`）：§2 那句 `stale = bool(stale_reason)` 以 §3 与红测 J3 为准
+
+§2 第 2 条写「每个索引项新增 `parts_id` / `stale` / `stale_reason`（`stale = bool(stale_reason)`）」，
+与本 Spec §3 第 4 条（"不许把'读不到当前零件文档'当成'过期'或'没过期' —— 一律 `parts_unknown`"）
+以及红测 **J3**（`stale_reason == "parts_unknown"` 时 `stale` 必须为 `false`）自相矛盾。
+**收口口径（唯一口径，按 §3 / J3）：**
+
+- `stale_reason == "parts_reparsed"` → `stale = true`；
+- `stale_reason == "parts_unknown"` → `stale = false`，但 `stale_reason` 照旧带出来
+  （页面据此说"无法判断这份 3D 对应哪一版零件"，不是"没问题"）；
+- `stale_reason == ""` → `stale = false`。
+
+即 `stale` 只对**真换版**为真 —— "比较不了"不是"过期"，与本仓
+`packaging-bom-parts-version-binding.md` / `packaging-cost-input-version-pinning.md`
+的同一条纪律一致。§2 原文保留（历史事实），以本节为准。

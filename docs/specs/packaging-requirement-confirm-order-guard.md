@@ -3,6 +3,10 @@
 血缘：`packaging-drawing-flow`（八步）第 8 步「字段写入」+ `e2e-packaging-dwg-quote-tech-continuity.md` §4.4、
 `packaging-manual-field-confirmation.md`（人工确认口径）。本层补**一道顺序门禁 + 一个退路**。
 
+- 状态：Spec + 红测（已实现）（后端 `assert_requirement_drawing_parsed(drawing_parse_prerequisite(...))` 挂在
+  1.1/1.2 两处；前端 `CF_RETURNABLE_STATUSES` / `RR_RETURNABLE_STATUSES` 退路已落地）
+- 红测：`tests/test_packaging_requirement_confirm_order_guard_red.py`（13 条，当前 13 OK）
+
 ## 0. 一句话目标
 
 今天「图纸解析」的第 8 步（字段写入，把图纸里读出来的字段写回 1.1 草稿）**要求需求单处于可编辑草稿**；
@@ -106,6 +110,7 @@
 
 红基（2026-09-22 在 `fa513e4` 上实跑）：`Ran 13 tests … FAILED (failures=6)`，
 红的正是 A1 / B1 / C1 / E1 / E2 / E3；E4 / E5 是护栏（今天就是绿的，不许被改红）。
+实现落地后同一份文件 `Ran 13 tests … OK`（见 §8）。
 
 - **E1 状态集唯一且够宽**：`requirement-confirm-page.js` 里声明一个退回可用状态集
   （`CF_RETURNABLE_STATUSES` / `RETURNABLE_STATUSES` 等同一语义的具名常量），字面量同时含
@@ -132,12 +137,38 @@
 - 不重做 1.2/1.3 的整页交互，也不新增"撤回/重开"等第二个动作名 —— 退路仍叫退回草稿；
 - 不碰 34 的部署与推送。
 
-## 8. 实现记录（2026-09-22，Codex 实现；changelog `## 289`）
+## 8. 实现记录（2026-09-22）
+
+两半都按 §2 的口径落地，逐条对着写：
+
+1. 后端：`requirement_service.assert_requirement_drawing_parsed(prerequisite, waiver=…)` 是**唯一**判定处
+   （`required=False / done=True` 直接放行；`required=True 且 done=False` 抛 409 +
+   `REQUIREMENT_DRAWING_NOT_PARSED`；带 waiver 放行、留痕仍走各关口既有的审计动作）；
+   `submit_requirement_confirmation()` 与 `confirm_requirement()` 各自先算
+   `drawing_parse_prerequisite(project_id)` 再喂给它 —— 三处（含 1.3）判据同源。
+2. 前端：1.2 页 = `CF_RETURNABLE_STATUSES = ['pending_confirmation','pending_review','approved']`
+   （与后端 `RETURNABLE_TO_DRAFT_STATUSES` 同口径），`cfAct()` 里确认与退回**分别**判前置；
+   1.3 页 = `RR_RETURNABLE_STATUSES`（引用同一份口径）+ `rrCanReturn()`，审核通过之后也能退回草稿。
+3. 复验命令与结果：
+
+```bash
+./open-claude/.venv/bin/python -m unittest tests.test_packaging_requirement_confirm_order_guard_red -v
+# Ran 13 tests … OK
+```
+
+4. 34 现场复验（同一天的 `## 313` 全流程真跑）：按"先解析再确认/审核"的正确顺序，
+   1.1 提交确认 → 1.2 通过确认 → 1.3 审核通过**三个关口全部 200**，没有被这道新门禁误拦。
+
+## 9. 实现记录（2026-09-22，Codex 实现；changelog `## 289`）
 
 状态：Spec + 红测（已实现）（`tests/test_packaging_requirement_confirm_order_guard_red.py` 的 5 条 ERROR 属打桩元数冲突，见 changelog `## 289`；测试侧待处置）
 红测：`tests/test_packaging_requirement_confirm_order_guard_red.py`
 
-### 8.1 后端（`tech_app/backend/services/requirement_service.py`）
+原文记的"测试侧待处置"已于 2026-09-22 处置：`blocked_prerequisite()` / `parsed_prerequisite()` 两个
+打桩补上 `project_id=""` 形参、`ctx.exception.code` 改读 `stable_error_code`（断言一行未动），
+同一份文件 `Ran 13 tests … OK`（见 §8）。
+
+### 9.1 后端（`tech_app/backend/services/requirement_service.py`）
 
 - 新增**共用校验** `assert_requirement_drawing_parsed(prerequisite, *, waiver=None)`：
   `required=False` 或 `done=True` **直接放行**（不新增任何提示/错误码）；`required=True 且 done=False`
@@ -151,7 +182,7 @@
 - 1.3 `review_requirement()` 逐字未动；`RETURNABLE_TO_DRAFT_STATUSES`、`return_requirement_to_draft()`
   一行未动；未新增路由、未动 schema、未改 `drawing_parse_prerequisite()` 判据。
 
-### 8.2 前端
+### 9.2 前端
 
 - `requirement-confirm-page.js`：新增具名常量 `CF_RETURNABLE_STATUSES`（
   `pending_confirmation` / `pending_review` / `approved`，与后端同一份口径）；`cfAct()` 的**一刀切**
@@ -164,7 +195,7 @@
   复用本文件既有的 `rrRender` 包装写法，不动渲染模板）。1.3 对"非 `pending_review` 不许
   approve/reject"的拒绝**原样保留**（`rrSubmit()` 未动）。
 
-### 8.3 验证
+### 9.3 验证
 
 - `tests.test_packaging_requirement_confirm_order_guard_red`：E1 / E2 / E3 / C1 / D1 / D2 **已转绿**。
   **A1 / A2 / B1 / B2 / C2 仍红**，原因在**测试侧夹具**：同文件里 `blocked_prerequisite()` 与

@@ -229,7 +229,12 @@ class DDegrade(OutlineCase):
         doc = self.extract(_ir(entities, [_component("cmp:1", entities)]))
         row = self.part(doc)
         self.assertEqual(row["outline_status"], "open")
-        self.assertEqual(row["outline_reason"], "no_closed_loop")
+        # `packaging-parts-outline-chaining.md` §2.5 第 1 条要求 `no_closed_loop` 这个笼统值
+        # 从服务端源码里消失、每件必须说出 5 个具体原因之一；本夹具是三条互不相接的线段
+        # （6 个奇度顶点、最近配对间隙 ≈100mm）→ 实际值为 `odd_endpoints`。断言改成"落在闭集
+        # 里且不再是那个笼统值"，用例原意（求不出环 → 显式降级）不变。
+        self.assertIn(row["outline_reason"], packaging_parts.OUTLINE_OPEN_REASONS)
+        self.assertNotEqual(row["outline_reason"], "no_closed_loop")
         self.assertEqual(row["size_source"], "component_bbox",
                          "求不出轮廓时必须退回分量包围盒**并留痕**")
         self.assertIsNone(row["outline"]["points"] or None)

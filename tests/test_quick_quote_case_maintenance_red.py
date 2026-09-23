@@ -374,6 +374,31 @@ class TestEServerRoutes(Base):
 # F 组：前端动作接线
 # --------------------------------------------------------------------------- #
 class TestFPanelWiring(Base):
+    def panel_const_path(self, src, name):
+        """取面板常量 `var NAME = <expr>;` 的**求值结果**（只认字面量与 `CASES_PATH + 后缀`）。
+
+        本用例原来要求 `var NAME = "<模板>";` 是**一份字面量赋值**，而同模块 E5 明令
+        「面板不许再手写第二份 `/api/quick-quote/cases/...` 字面量」——两条结构上不可能同时成立
+        （changelog `## 256` 已记录）。这里按 Spec §2.5 的**本意**（"值与后端模板同值"）
+        改成对求值结果断言：`CASES_PATH + "/{case_code}/fields"` 这种拼接是允许的写法。
+        """
+        match = re.search(r"var\s+%s\s*=\s*([^;]+);" % name, src)
+        if not match:
+            return None
+        literal = re.search(r'var\s+CASES_PATH\s*=\s*"([^"]+)"', src)
+        cases_path = literal.group(1) if literal else None
+        out = []
+        for part in [item.strip() for item in match.group(1).split("+")]:
+            if part == "CASES_PATH":
+                if cases_path is None:
+                    return None
+                out.append(cases_path)
+            elif len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'":
+                out.append(part[1:-1])
+            else:
+                return None
+        return "".join(out)
+
     def test_f1_panel_action_constants_match_backend(self):
         expected_by_name = {
             "CASE_FIELDS_PATH": self.attr("QUICK_QUOTE_CASE_FIELDS_PATH", "Spec 批 12 §2.1"),
@@ -381,9 +406,9 @@ class TestFPanelWiring(Base):
         }
         src = self.panel_source()
         for name, expected in expected_by_name.items():
-            found = re.findall(r'var\s+%s\s*=\s*"([^"]+)"' % name, src)
-            self.assertTrue(found, "面板缺 %s 常量（Spec §2.5）" % name)
-            self.assertEqual(expected, found[0], "%s 必须与后端模板同值" % name)
+            value = self.panel_const_path(src, name)
+            self.assertIsNotNone(value, "面板缺 %s 常量（Spec §2.5）" % name)
+            self.assertEqual(expected, value, "%s 的求值结果必须与后端模板同值" % name)
 
     def test_f2_open_accepts_on_action(self):
         src = self.panel_source()

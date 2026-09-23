@@ -949,10 +949,15 @@ class CGates(FlowCase):
         self.assertIn("ev:E:10", payload)
 
     def test_c8_user_confirmation_opens_the_blocked_stages(self):
+        # 夹具要表达的是「字段还没人工确认」，所以用**默认**语义文档
+        # （inner_height 缺失、inner_width 只到 needs_confirmation、closure_type 没有）——
+        # 之前这里喂的是 `confirmed_sem()`（三个字段 `confirmed_from_cad / status=confirmed`），
+        # 那种状态按 `packaging-manual-field-confirmation.md` §1.2 本来就该开门禁，
+        # 于是这句断言测的不是它名字里说的东西。
         store_mod, meta, blob, tmp = self.memory_store()
         pid = self.project(store_mod=store_mod)
         module = self.module()
-        self.start(pid, sem=self.confirmed_sem(), engines=self.engines())
+        self.start(pid, engines=self.engines())
         before = module.gates(pid, stage="box_match")
         self.assertEqual(before.get("status"), "blocked",
                          "字段还没人工确认时不许开放盒型匹配（要求 8）")

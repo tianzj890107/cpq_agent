@@ -244,14 +244,17 @@ class NoScopeCreep(unittest.TestCase):
         events = re.search(r"var EVENT = \{([\s\S]*?)\};", self.runtime)
         self.assertIsNotNone(events, "找不到 EVENT 常量表")
         names = re.findall(r"\b[A-Z_]+:\s*'([^']+)'", events.group(1))
-        # 契约更新（批量动作 partial 批次 ## 85）：逐件批量动作新增「部分完成」终态
-        # `task-partial`（见 docs/specs/tech-batch-action-partial-and-retry-failed.md C1）。
-        # 除这一条外，既有事件仍一个都不能增删。
+        # 契约更新（两处，均**只能新增、不许改旧**）：
+        # · `task-partial`：批量动作「部分完成」终态（`## 85`，
+        #   docs/specs/tech-batch-action-partial-and-retry-failed.md C1）；
+        # · `task-blocked`：一键解析被阻断是**成功以外的第三种终态**，不等于失败
+        #   （`## 226`，docs/specs/tech-board-task-blocked.md C3；此前 8 个事件的看板分不出
+        #   「被挡住」与「跑挂了」，这一条由绿转红已记录在 changelog `## 226` §测试侧）。
         self.assertEqual(sorted(names),
                          sorted(["ready", "action-state", "task-progress", "task-completed",
-                                 "task-partial", "task-failed", "selection-changed",
-                                 "board-status"]),
-                         "除本批新增的 task-partial 外，既有事件不得增删")
+                                 "task-partial", "task-blocked", "task-failed",
+                                 "selection-changed", "board-status"]),
+                         "除已登记的 task-partial / task-blocked 外，既有事件不得增删")
 
 
 if __name__ == "__main__":

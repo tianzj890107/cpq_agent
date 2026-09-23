@@ -633,13 +633,23 @@ class ModelRowMergeFrontendTest(unittest.TestCase):
         self.assertIn("调用模型", text, "行文字被换掉了：%s" % text)
         self.assertNotIn("模型返回", text, "「模型返回」这个题目还在：%s" % text)
 
-    def test_details_show_input_and_output(self):
+    def test_details_fold_is_retired(self):
+        """折叠「详情」块（`oc-process-detail`）已被后续批次退役 —— 这里锚定它的**缺席**。
+
+        本模块原来断言模型行会长出 `oc-process-detail` 折叠、里面放输入的 JSON；该交互随后被
+        `## 133`/`## 226` 两批的过程行口径取代：`tech_app/frontend/*.js` 全文已不再渲染
+        `oc-process-detail`（`grep -rn oc-process-detail tech_app/frontend` → 0 处），
+        输入的"问的是什么 / 返回的是什么"改由**后端事件明细的短摘要**承载
+        （本模块 §2 的 `_model_detail()` 短摘要用例仍在守，全部绿）。
+
+        所以这条用例的方向反过来：既有的 8+2 过程行不得再长出那个折叠块，
+        免得有人把退役掉的交互悄悄加回来。
+        """
         merged = self.out["merged"]
-        self.assertTrue(merged["has_details"], "模型行没有「详情」：%s" % merged)
-        self.assertIn("图纸解析 SOP", merged["input"], "详情里看不到问的是什么：%s" % merged)
-        self.assertIn("parts", merged["output"], "详情里看不到返回的是什么：%s" % merged)
-        self.assertNotEqual("{}", merged["input"].strip(), "输入还是空的：%s" % merged)
-        self.assertNotEqual("{}", merged["output"].strip(), "输出还是空的：%s" % merged)
+        self.assertFalse(merged["has_details"],
+                         "过程行又长出了已退役的 `oc-process-detail` 折叠：%s" % merged)
+        self.assertEqual("", merged["input"].strip(), "详情块退役后不许再塞输入 JSON")
+        self.assertEqual("", merged["output"].strip(), "详情块退役后不许再塞输出 JSON")
 
     def test_two_different_calls_stay_two_rows(self):
         self.assertEqual(2, self.out["two_calls_rows"],
@@ -648,13 +658,13 @@ class ModelRowMergeFrontendTest(unittest.TestCase):
     def test_legacy_rows_without_call_keep_todays_shape(self):
         self.assertEqual(2, self.out["legacy_rows"],
                          "旧数据（没有 call）必须逐字保持今天的行为：%s" % self.out)
-        # 旧数据没有 call，逐字沿用今天的行为：仍会长出详情块，但输入/输出都是空 {}，
-        # 既不能被合并逻辑改写，也不能凭空补出内容。
-        self.assertTrue(self.out["legacy_first"]["has_details"],
-                        "旧数据的结构被本批改动了：%s" % self.out["legacy_first"])
-        self.assertEqual("{}", self.out["legacy_first"]["input"].strip(),
+        # 旧数据没有 call：行数照旧、行文字照旧，也不许凭空补出内容
+        # （`oc-process-detail` 折叠已退役 —— 新旧数据一致地不长它，见上一条用例）。
+        self.assertFalse(self.out["legacy_first"]["has_details"],
+                         "旧数据被合并逻辑改出了折叠块：%s" % self.out["legacy_first"])
+        self.assertEqual("", self.out["legacy_first"]["input"].strip(),
                          "旧数据的输入被改写了：%s" % self.out["legacy_first"])
-        self.assertEqual("{}", self.out["legacy_first"]["output"].strip(),
+        self.assertEqual("", self.out["legacy_first"]["output"].strip(),
                          "旧数据的输出被改写了：%s" % self.out["legacy_first"])
 
     def test_failure_stays_one_row_and_stays_visible(self):
