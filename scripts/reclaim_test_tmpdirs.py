@@ -3,7 +3,7 @@
 """系统 TMPDIR 里的本地测试垃圾：报告 / 真删。
 
 背景（2026-09-24 本机只读实测）：全量一次在系统 TMPDIR 里新建 1371 个临时目录，攒了
-335 349 个条目 / 123 GB。运行期的修法在 `tests/_tmp_guard.py`（一次运行一个
+335 349 个条目 / 123 GB。运行期的修法在 `tests/` 下的临时目录闸门模块（一次运行一个
 `cpq-testrun-XXXX` 根，退出整根删）。本脚本管**没人删的那些**：
 
   · 被 SIGKILL / 断电打断的运行留下的 `cpq-testrun-*` 根；
@@ -167,7 +167,7 @@ def verdict(name, *, family_list, now, older_than, is_dir, is_symlink, mtime,
             payload=False, allow_empty=False):
     """纯判据：返回 `(家族, 原因)`；家族非空 = 可以删。
 
-    分开成纯函数是为了让 `tests/test_local_tmp_cleanup_guard.py` 直接钉住这几条边界，
+    分开成纯函数是为了让 `tests/` 里的临时目录护栏直接钉住这几条边界，
     不用真的去动文件系统。
     """
     if is_symlink:

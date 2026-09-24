@@ -21286,3 +21286,20 @@ tests.test_spec_status_truth_red + tests.test_doc_path_and_root_consistency_red 
 - 单件图补画绑定包围内的内部线条，排除明确归属其他零件的图元；没有实际点坐标的实体不再拿 bbox 伪造矩形轮廓。
 - 回归（本轮提交前复跑）：`tests.test_packaging_part_figure_fidelity_red` 20 OK、`tests.test_packaging_2_1_right_pane_single_part_figure_red` 31 OK、`tests.test_packaging_cad_scene_entity_colours` 3 OK，共 54 条通过。
 - 状态：随本轮提交推送（GitLab + GitHub `ytbz`）与 34 部署一并上线。
+
+## 500. 补 `## 497` 的两条全量红：AGENTS.md 里那个写错的示例路径 + 新脚本 docstring 里引用了 `tmp_*.py` 的名字（措辞修正，零行为改动）（9-24，Codex 实现）
+
+`## 497` 当时只跑了单模块与 11 个模块的保护网；全量 404 个模块跑出来两条自己踩的守卫，
+两条都只在「文字」这一层。
+
+- `tests/test_doc_path_and_root_consistency_red` 的 `test_a1`：新写进 AGENTS.md 的那句
+  「直接用 `python tests/test_x.py`…」被文档路径扫描器当成**真实路径**（反引号里以 `tests/` 开头、
+  以 `.py` 结尾），报「文档点名的路径不存在」。那句话本意是「不走 `-m unittest` 就碰不到闸门」，
+  改成不落地具体文件名的写法。
+- `tests/test_repo_leftovers_red` 的 `test_c1`：新脚本 `scripts/reclaim_test_tmpdirs.py` 的
+  docstring 与 `verdict()` 注释里写了闸门模块的**文件名**，命中「入库脚本不许引用 `tmp_*.py`
+  一次性脚本」的正则；改成只提 `tests/` 下的闸门 / 护栏，不再写那个文件名。
+
+实测：`tests.test_doc_path_and_root_consistency_red` + `tests.test_repo_leftovers_red` +
+`tests.test_local_tmp_cleanup_guard` → `Ran 28 tests in 0.9s … OK`。行为零改动：只动了 AGENTS.md
+的一句话与一个脚本的两处注释（闸门的逻辑、判据、家族清单一个字没动）。

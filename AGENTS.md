@@ -25,7 +25,7 @@
 
 - 跑测试统一用 `./open-claude/.venv/bin/python -W ignore -m unittest tests.test_xxx`：`tests/__init__.py`
   会在这次运行下面铺一个 `cpq-testrun-*` 根（`tests/_tmp_guard.py`），`tempfile.tempdir` 与 `TMPDIR`
-  都指过去，退出时整根删掉。直接用 `python tests/test_x.py` 走不到这个闸门。
+  都指过去，退出时整根删掉。直接用 `python` 单独执行某个测试文件（不走 `-m unittest`）走不到这个闸门。
 - 调试红测要看临时目录：`CPQ_TEST_KEEP_TMP=1 <同一条命令>`（现场留在打印出来的 `cpq-testrun-*` 根里，
   看完自己删）；不想要那行收尾提示用 `CPQ_TEST_TMP_QUIET=1`。
 - 收历史垃圾与被打断的运行：`python3 scripts/reclaim_test_tmpdirs.py`（默认只报告）→
